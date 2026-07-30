@@ -52,6 +52,8 @@
  * the logged-in user's DbClient; a later login reconnects saved credentials.
  */
 
+import path from 'node:path';
+
 import { ipcMain, BrowserWindow, dialog, type IpcMainEvent } from 'electron';
 import { and, eq, like, ne, sql } from 'drizzle-orm';
 
@@ -455,9 +457,17 @@ async function reconcileOwnerScopedImWorkingDirs(): Promise<void> {
       for (const row of rows) {
         if (!row.botContextId) continue;
         // /project 切到项目目录是用户显式选择, 重连不得覆盖回托管目录 —
-        // 本归一只服务"跨 owner 命名空间迁移的旧托管路径", 因此仅当现值
-        // 本来就是托管 im-working-dir 路径(或为空)时才改写。
-        if (row.workingDir && !row.workingDir.includes('im-working-dir')) continue;
+        // 本归一只服务"跨 owner 命名空间迁移的旧托管路径"。判定用完整尾段
+        // `…/im-working-dir/telegram-<botId>`(而非子串), 用户项目路径碰巧
+        // 含 'im-working-dir' 字样不会被误判(review P1)。
+        const managedTail = path.join('im-working-dir', `telegram-${row.botContextId}`);
+        if (
+          row.workingDir &&
+          !row.workingDir.endsWith(`${path.sep}${managedTail}`) &&
+          !row.workingDir.endsWith(`/${managedTail}`)
+        ) {
+          continue;
+        }
         const scoped = telegramAdapter.sessions.ensureWorkingDir(row.botContextId);
         if (row.workingDir === scoped) continue;
         await db.update(sessions).set({ workingDir: scoped }).where(eq(sessions.id, row.id));

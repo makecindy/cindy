@@ -194,8 +194,10 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   /** 相册聚合缓冲 — key `${chatId}:${mediaGroupId}`。 */
   private readonly pendingAlbums = new Map<
     string,
-    { messages: TgMessage[]; timer: ReturnType<typeof setTimeout> }
+    { messages: TgMessage[]; timer: ReturnType<typeof setTimeout>; firstUpdateId: number }
   >();
+  /** 本连接见过的最大 offset(update_id+1) — 相册 flush 后补写持久化游标用。 */
+  private lastSeenOffset = 0;
   /**
    * 待配对的回挂触发队列(laneUserId → 原生 message_id FIFO): 多条消息在上一
    * 轮还没出话时先后触发同一 lane, 各自的答案必须挂回各自的提问 — 单值会被
@@ -384,6 +386,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   }
 
   async sendMarkdownText(userId: string, markdown: string): Promise<{ messageId: string }> {
+    // 与 sendText/卡片同口径: 独立 markdown 输出(slash 命令回复等)也要
+    // 认领回挂目标, 否则命令回复不挂回、队列残留错配到下一轮。
+    this.claimTurnReplyTargetIfIdle(userId);
     const chunks = chunkTelegramSource(markdown);
     let firstMessageId = '';
     const allImageUrls: string[] = [];
@@ -663,6 +668,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     generation: number,
   ): Promise<void> {
     let offset = this.readPersistedOffset();
+    this.lastSeenOffset = offset;
     let retryDelay = POLL_RETRY_BASE_MS;
     while (!abort.signal.aborted && this.configVersion === generation) {
       try {
@@ -681,6 +687,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         }
         for (const update of updates) {
           offset = Math.max(offset, update.update_id + 1);
+          this.lastSeenOffset = offset;
           if (abort.signal.aborted || this.configVersion !== generation) return;
           try {
             await this.handleUpdate(update);
@@ -689,7 +696,10 @@ export class TelegramIM extends BaseIM implements ChannelIM {
             this.log.warn(`telegram update handling failed: ${msg}`);
           }
         }
-        if (updates.length > 0) this.persistOffset(offset);
+        // 持久化游标不越过仍在缓冲的相册成员: settle 窗口内断开/换 token 时,
+        // 下次连接从相册首条重放, 不丢用户的图(getUpdates 的内存 offset 照常
+        // 前进, 本连接内不重复拉取)。flush 完成后由 persistOffsetCapped 补写。
+        if (updates.length > 0) this.persistOffsetCapped();
       } catch (err) {
         if (abort.signal.aborted || this.configVersion !== generation) return;
         if (err instanceof TelegramApiError && err.errorCode === 409) {
@@ -741,7 +751,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       if (m.chat.type === 'group' || m.chat.type === 'supergroup') {
         this.emitGroupWindow(groupWindowEntryOf(m));
       }
-      this.bufferAlbumMessage(m);
+      this.bufferAlbumMessage(m, update.update_id);
       return;
     }
 
@@ -749,7 +759,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   }
 
   /** 相册成员缓冲 + 静默窗到期后合并处理。 */
-  private bufferAlbumMessage(m: TgMessage): void {
+  private bufferAlbumMessage(m: TgMessage, updateId: number): void {
     const key = `${m.chat.id}:${m.media_group_id}`;
     const generation = this.configVersion;
     const existing = this.pendingAlbums.get(key);
@@ -758,6 +768,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       clearTimeout(existing.timer);
     }
     const messages = existing?.messages ?? [m];
+    const firstUpdateId = existing?.firstUpdateId ?? updateId;
     const timer = setTimeout(() => {
       this.pendingAlbums.delete(key);
       if (this.disposing || this.configVersion !== generation) return;
@@ -766,14 +777,17 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         messages.find((x) => (x.text ?? x.caption ?? '') !== '' || x.reply_to_message) ??
         messages[0];
       const siblings = messages.filter((x) => x !== primary);
-      void this.processInboundMessage(primary, siblings, { skipGroupWindow: true }).catch(
-        (err) => {
+      void this.processInboundMessage(primary, siblings, { skipGroupWindow: true })
+        .catch((err) => {
           const msg = err instanceof Error ? err.message : String(err);
           this.log.warn(`telegram album handling failed: ${msg}`);
-        },
-      );
+        })
+        .finally(() => {
+          // 相册已处理(或确定失败) — 持久化游标此刻才允许越过它。
+          if (!this.disposing && this.configVersion === generation) this.persistOffsetCapped();
+        });
     }, ALBUM_SETTLE_MS);
-    this.pendingAlbums.set(key, { messages, timer });
+    this.pendingAlbums.set(key, { messages, timer, firstUpdateId });
   }
 
   private clearPendingAlbums(): void {
@@ -1033,15 +1047,25 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     if (this.richSendDisabled || !markdown.trim()) return null;
     const api = this.api;
     if (!api) return null;
+    // 只读取不消耗: rich 失败(404 latch/400 解析/网络)回落经典路径时,
+    // 目标必须还在, 否则定稿消息丢掉回挂。成功后才按档位消耗。
+    const pendingTarget = this.turnReplyTargets.get(userId);
     try {
       const target = this.targetOf(userId);
-      const replyParams = this.consumeReplyParams(userId);
       const sent = await this.callSend<TgMessage>('sendRichMessage', {
         ...target,
-        ...replyParams,
+        ...(pendingTarget
+          ? {
+              reply_parameters: {
+                message_id: Number(pendingTarget),
+                allow_sending_without_reply: true,
+              },
+            }
+          : {}),
         rich_message: { markdown },
         message_effect_id: DM_DONE_EFFECT_ID,
       });
+      if (pendingTarget) this.consumeReplyParams(userId); // 成功才消耗('all' 档语义由它处理)
       this.recordOwnEcho(userId, markdown, sent);
       return encodeMessageId(String(sent.chat.id), String(sent.message_id));
     } catch (err) {
@@ -1176,7 +1200,15 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private async uploadImages(messageId: string, imageRefs: string[]): Promise<void> {
     const api = this.api;
     if (!api || imageRefs.length === 0) return;
-    const { chatId } = decodeMessageId(messageId);
+    // 图片以 reply 挂回答案锚点消息: 论坛 topic 内自动跟随该 topic(裸发会
+    // 落进 General), 视觉上也和答案连成一体; 锚点被删则降级普通发送。
+    const { chatId, messageId: anchorNativeId } = decodeMessageId(messageId);
+    const anchorReply = {
+      reply_parameters: {
+        message_id: Number(anchorNativeId),
+        allow_sending_without_reply: true as const,
+      },
+    };
     const seen = new Set<string>();
     const absPaths: string[] = [];
     for (const ref of imageRefs) {
@@ -1195,14 +1227,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       absPaths.push(absPath);
     }
     if (absPaths.length === 1) {
-      await this.sendSinglePhoto(chatId, absPaths[0]);
+      await this.sendSinglePhoto(chatId, absPaths[0], anchorReply);
       return;
     }
     for (let i = 0; i < absPaths.length; i += 10) {
       const group = absPaths.slice(i, i + 10);
-      const albumSent = group.length > 1 && (await this.sendPhotoAlbum(chatId, group));
+      const albumSent = group.length > 1 && (await this.sendPhotoAlbum(chatId, group, anchorReply));
       if (!albumSent) {
-        for (const absPath of group) await this.sendSinglePhoto(chatId, absPath);
+        for (const absPath of group) await this.sendSinglePhoto(chatId, absPath, anchorReply);
       }
     }
   }
@@ -1272,12 +1304,17 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       });
   }
 
-  private async sendSinglePhoto(chatId: string, absPath: string): Promise<void> {
+  private async sendSinglePhoto(
+    chatId: string,
+    absPath: string,
+    anchorReply?: { reply_parameters: { message_id: number; allow_sending_without_reply: true } },
+  ): Promise<void> {
     const api = this.api;
     if (!api) return;
     try {
       const form = new FormData();
       form.set('chat_id', chatId);
+      if (anchorReply) form.set('reply_parameters', JSON.stringify(anchorReply.reply_parameters));
       form.set('photo', new Blob([fs.readFileSync(absPath)]), path.basename(absPath));
       await api.callForm('sendPhoto', form);
     } catch (err) {
@@ -1287,12 +1324,17 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   }
 
   /** 多图原生相册(attach:// 多部分上传)。返回 false = 整组失败, 调用方回落逐张。 */
-  private async sendPhotoAlbum(chatId: string, absPaths: string[]): Promise<boolean> {
+  private async sendPhotoAlbum(
+    chatId: string,
+    absPaths: string[],
+    anchorReply?: { reply_parameters: { message_id: number; allow_sending_without_reply: true } },
+  ): Promise<boolean> {
     const api = this.api;
     if (!api) return false;
     try {
       const form = new FormData();
       form.set('chat_id', chatId);
+      if (anchorReply) form.set('reply_parameters', JSON.stringify(anchorReply.reply_parameters));
       form.set(
         'media',
         JSON.stringify(absPaths.map((_, i) => ({ type: 'photo', media: `attach://photo${i}` }))),
@@ -1361,6 +1403,20 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     } catch {
       /* best-effort — 丢失只是退化回 at-least-once 重放 */
     }
+  }
+
+  /**
+   * 持久化游标, 但不越过仍在 settle 缓冲的相册成员(取各缓冲相册最早
+   * update_id 为上限) — settle 窗口内进程退出/换 token 时, 下次连接从该
+   * 相册重放而不是永久丢弃。at-least-once 语义: flush 后崩溃且游标未及
+   * 补写时相册会重放一次, 比丢图可取。
+   */
+  private persistOffsetCapped(): void {
+    let floor = Number.POSITIVE_INFINITY;
+    for (const album of this.pendingAlbums.values()) {
+      floor = Math.min(floor, album.firstUpdateId);
+    }
+    this.persistOffset(Math.min(this.lastSeenOffset, floor));
   }
 
   /** 非 owner 显式召唤的礼貌回应(fire-and-forget, per-user 冷却)。 */

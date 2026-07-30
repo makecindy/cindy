@@ -337,7 +337,11 @@ async function downloadTelegramFile(
         });
         return { kind, absPath: promoted.absPath, originalName, mimeType, url: promoted.url };
       } catch {
-        // host 仓拒收(白名单外 mime / DB 未就绪): 回落老目录。
+        // 图片新写入必须留在 cindy-media 总仓(内容寻址/引用记账/统一回收,
+        // 媒体规则 25) — host 仓拒收/未就绪时丢弃该附件, 不落无治理的
+        // legacy 目录; 消息正文照常送达。非图类文件走下方 legacy 目录,
+        // 与 feishu/discord 通道同口径(cindy-media 目前只收图)。
+        return null;
       }
     }
 

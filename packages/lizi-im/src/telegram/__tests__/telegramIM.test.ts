@@ -721,11 +721,13 @@ describe('TelegramIM', () => {
     api.pushUpdates([groupMessage({ text: '/new', fromId: 111, messageId: 51 })]);
     await new Promise((r) => setTimeout(r, 100));
     expect(events).toHaveLength(1);
-    // NO_REPLY 哨兵: 经典流式 finalize 删掉占位消息, 不发正文
-    const handle = await im.startStreamingText('g/-100200/u222');
+    // NO_REPLY 哨兵: 惰性占位下从头到尾零消息(不发送、无需删除 — 真零痕迹)
+    const sendsBefore = api.calls.filter((c) => c.method === 'sendMessage').length;
+    const handle = await im.startStreamingText('g/-100200');
     handle.replace('NO_REPLY');
     await handle.finalize('NO_REPLY');
-    expect(api.calls.some((c) => c.method === 'deleteMessage')).toBe(true);
+    expect(api.calls.filter((c) => c.method === 'sendMessage').length).toBe(sendsBefore);
+    expect(api.calls.some((c) => c.method === 'deleteMessage')).toBe(false);
     expect(
       api.calls.some(
         (c) => c.method === 'editMessageText' || c.method === 'sendRichMessage',
