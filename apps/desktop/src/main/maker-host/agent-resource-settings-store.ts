@@ -59,8 +59,8 @@ const DEFAULTS: AgentResourceSettings = {
   capToolchainThreads: false,
 };
 
-/** 上限的上限:超过这个值的并发治理已无意义,防手滑写进天文数字。 */
-const MAX_CONCURRENT_COMMANDS_CAP = 64;
+/** 上限的上限:超过这个值的并发治理已无意义,防手滑写进天文数字。IPC 写路径复用同一常量。 */
+export const MAX_CONCURRENT_COMMANDS_CAP = 64;
 
 function settingsFilePath(): string {
   return path.join(app.getPath('userData'), 'agent-resource-settings.json');

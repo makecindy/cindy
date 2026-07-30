@@ -43,6 +43,7 @@ export function computeToolchainThreadCapEnv(
   settings: Pick<AgentResourceSettings, 'capToolchainThreads' | 'processPriority'>,
   baseEnv: NodeJS.ProcessEnv,
   cores?: number,
+  platform: NodeJS.Platform = process.platform,
 ): Record<string, string> {
   if (!settings.capToolchainThreads) return {};
   const threads = recommendedToolchainThreads(settings.processPriority, cores);
@@ -50,11 +51,15 @@ export function computeToolchainThreadCapEnv(
     // vitest: forks 池(默认)与 threads 池各有独立上限变量,都设
     VITEST_MAX_FORKS: String(threads),
     VITEST_MAX_THREADS: String(threads),
-    // make 系(node-gyp / 原生依赖构建等)
-    MAKEFLAGS: `-j${threads}`,
     // cargo build 并行度
     CARGO_BUILD_JOBS: String(threads),
   };
+  if (platform !== 'win32') {
+    // make 系(node-gyp / 原生依赖构建等)。Windows 跳过:MSVC 工具链下 cmake/qmake
+    // 可能生成 NMake Makefiles,nmake 不认 GNU Make 的 -j 语法,继承到会直接报错
+    // 中止构建,而不是静默忽略(对抗式预审发现)。
+    desired.MAKEFLAGS = `-j${threads}`;
+  }
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(desired)) {
     if (baseEnv[key] === undefined) out[key] = value;

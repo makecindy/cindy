@@ -232,9 +232,11 @@ function resolveSubagentModelForRoute(
  * developerInstructions 注入 codex 子进程 (见 codex/index.ts)。
  */
 export const desktopCodexRuntimeConfig: AgentRuntimeConfig = {
-  // 工具链限核 env(agent 资源占用治理)。codex env-builder 只在本机 spawn 时
-  // 执行(远端 daemon 不走 buildCodexEnv),无需再按 spawnMode 分流。
-  behaviorFlags: () => toolchainThreadCapEnv(),
+  // 工具链限核 env(agent 资源占用治理)。注意:远端 codex spawn 也会执行
+  // buildCodexEnv(其产物随后被远端 transport 整体丢弃,见 codex/index.ts:1917
+  // 附近注释),所以这里仍按 spawnMode 分流让代码自证,不依赖"远端不走本函数"
+  // 这种会过期的假设(对抗式预审发现)。
+  behaviorFlags: (ctx) => (ctx.spawnMode === 'remote' ? {} : toolchainThreadCapEnv()),
   // host 共用段 (host-system-prompt.md) + Codex 专属段 (codex-system-prompt.md)。
   systemPrompt: composeHostPrompt(codexSystemPrompt),
   pathPrepends: [bundledRipgrepDir()],
