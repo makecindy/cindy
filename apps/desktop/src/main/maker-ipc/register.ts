@@ -3876,7 +3876,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // 自定义供应商的发现结果 additions-only 持久化进配置（重启后仍在）;内置供应商走
         // 内存 augment（静态目录 first-wins）。任何一步失败都只降级为纯静态,不影响登录结果。
         try {
-          const fetched = new Map<string, { id: string; name: string }[] | null>();
+          const fetched = new Map<
+            string,
+            { id: string; name: string; contextWindow?: number }[] | null
+          >();
           let customChanged = false;
           for (const agent of provider.agents) {
             if (!isCurrent()) break;
@@ -3908,7 +3911,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 models.map((m) => ({
                   id: m.id,
                   name: m.name,
-                  contextWindow: 200_000,
+                  // 端点上报的窗口值优先,缺省才落 200K 保守默认(review P1):
+                  // 之前无条件写死 200K,发现的 1M 模型仍会显示并按 200K 压缩。
+                  contextWindow: m.contextWindow ?? 200_000,
                   efforts: [],
                   defaultEffort: null,
                   group: `custom:${providerId}`,
