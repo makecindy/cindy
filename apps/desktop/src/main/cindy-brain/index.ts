@@ -190,7 +190,7 @@ import {
   markGhostRecentlyUsed,
 } from './ghostRecentUsageStore.js';
 import { getCindyProxyMediaService } from '../mcp-integrations/cindyProxyMedia.js';
-import { ImageChannelRegistry } from './imageChannelRegistry.js';
+import { ImageChannelRegistry, decodeImageResponse } from './imageChannelRegistry.js';
 import { createGeminiImageChannel } from './geminiImageClient.js';
 import { createGatewayImageClient } from '../cindy-proxy-media/api/gatewayImageClient.js';
 import * as blobStore from '../cindy-media/blobStore.js';
@@ -1927,20 +1927,6 @@ function resolveImageChannelForModel(model: string, operation: 'generate' | 'edi
     throw new Error(`图像来源 ${entry.providerId} 不支持图像编辑,请在设置中选择支持编辑的来源`);
   }
   return getImageChannelRegistry().resolve(entry.providerId);
-}
-
-/** XD Gateway 图片响应 → 字节 + mime(gen / edit 同一解码口径)。 */
-function decodeImageResponse(res: {
-  data: Array<{ b64_json?: string }>;
-  output_format?: string;
-}): { buffer: Buffer; mimeType: string } {
-  const first = res.data[0];
-  if (!first?.b64_json) throw new Error('图片通道返回为空');
-  const buffer = Buffer.from(first.b64_json, 'base64');
-  const format = (res.output_format ?? 'png').toLowerCase();
-  const mimeType =
-    format === 'webp' ? 'image/webp' : format === 'jpeg' || format === 'jpg' ? 'image/jpeg' : 'image/png';
-  return { buffer, mimeType };
 }
 
 export function getGhostCindySlot(): GhostCindySlot {
