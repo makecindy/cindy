@@ -155,7 +155,8 @@ const DANGEROUS_PATTERNS: readonly RegExp[] = [
   // 执行影响型环境变量赋值(env NAME=val cmd 或裸 NAME=val cmd):加载器注入 / 分页器 / 外部 diff /
   // PATH 劫持 / 解释器启动钩子 —— 让"看似只读"的命令跑任意程序。unwrapWrappers 会剥掉 NAME=val,故在此
   // 整条命令上先拦(env PAGER=./x git log、env LD_PRELOAD=./x true、PATH=./bin ls 等)。IFS= 太常见(read 循环)不列。
-  /(?:^|\s)(?:LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD_[A-Z_]+|GIT_PAGER|PAGER|GIT_SSH(?:_COMMAND)?|GIT_EXTERNAL_DIFF|GIT_CONFIG_(?:GLOBAL|SYSTEM)|BASH_ENV|PROMPT_COMMAND|PS4|PERL5LIB|PYTHONPATH|PYTHONSTARTUP|PYTHONINSPECT|NODE_OPTIONS|RUBYOPT|PATH)=/,
+  // GIT_ALLOW_PROTOCOL / GIT_PROTOCOL_FROM_USER 放开 ext:: 等远程助手协议(RCE 面);GIT_PROXY_COMMAND / GIT_SSH 直接跑外部程序。
+  /(?:^|\s)(?:LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD_[A-Z_]+|GIT_PAGER|PAGER|GIT_SSH(?:_COMMAND)?|GIT_PROXY_COMMAND|GIT_ALLOW_PROTOCOL|GIT_PROTOCOL_FROM_USER|GIT_EXTERNAL_DIFF|GIT_CONFIG_(?:GLOBAL|SYSTEM)|BASH_ENV|PROMPT_COMMAND|PS4|PERL5LIB|PYTHONPATH|PYTHONSTARTUP|PYTHONINSPECT|NODE_OPTIONS|RUBYOPT|PATH)=/,
   /\bgit\b[^|;&]*\bpush\b[^|;&]*(?:--force\b|--force-with-lease\b|\s-f\b|\+)/, // 强推
   /\bgit\b[^|;&]*\breset\b[^|;&]*--hard/,                 // git reset --hard
   /\bgit\b[^|;&]*\bclean\b[^|;&]*\s-\w*f/,                // git clean -f
@@ -179,6 +180,22 @@ function stripExpansions(s: string): string {
   return s
     .replace(/\$\{[^}]*\}/g, '') // ${VAR} / ${UNSET}
     .replace(/\$\d+/g, '');      // $1 位置参数(单字符,可无花括号嵌入词中)
+}
+
+/**
+ * 带**运算符/替换文本**的花括号展开:`${X:-ec}`(默认值)、`${X:+y}`(替代值)、`${X/a/b}`(替换)、
+ * `${X#p}`/`${X%s}`(裁剪)等。stripExpansions 把整段抹成空,会漏掉替换文本 —— `-ex${UNSET:-ec}` 抹空后
+ * 是 `-ex`,但 bash 代入默认值 `ec` 拼成 `-exec`(codex 报)。这类展开静态不可求值,出现在"本要放行"的段里
+ * 一律升级。纯变量名 `${VAR}`(无运算符)不匹配 —— 那个由 stripExpansions 的空值变体处理,值注入属残口。
+ */
+const SUBSTITUTION_EXPANSION = /\$\{[^}]*[-+=:?/#%^,!*@][^}]*\}/;
+
+/**
+ * 把带默认/替代值的展开代入其文本,得到"展开后可能的形态":`${UNSET:-ec}`→`ec`、`${X:=sudo}`→`sudo`。
+ * 供危险模式扫描,让藏在默认值里的危险关键词(sudo/rm 等)也现形。只抽 `:-`/`:=`/`:+`/`-`/`+`/`=` 后的文本。
+ */
+function substituteDefaults(s: string): string {
+  return s.replace(/\$\{[A-Za-z0-9_]*:?[-+=]([^}]*)\}/g, '$1');
 }
 
 /**
@@ -400,6 +417,9 @@ function isSafeFetch(bin: string, segment: string, tokens: string[]): boolean {
   const positional = tokens.slice(1).filter((t) => !t.startsWith('-'));
   // 非 http(s) scheme(file:// 读本地文件、scp://sftp:// 外发、ftp/dict/gopher 等)超出"命令行浏览器"面 → 升级。
   if (positional.some((t) => /^[a-z][\w+.-]*:\/\//i.test(t) && !/^https?:\/\//i.test(t))) return false;
+  // URL 内嵌凭证(`https://user:pass@host`):curl 会把 userinfo 作为 Basic auth 外发 → 凭证泄漏面 → 升级
+  // (codex 报;host 判定处会剥掉 userinfo,故必须在此先拦)。匹配 authority 段(首个 `/` 前)出现的 `@`。
+  if (positional.some((t) => /^https?:\/\/[^/?#]*@/i.test(t))) return false;
   if (positional.some((t) => t.includes('?'))) return false; // 查询串外发面(含无 scheme 的 host?query)
   // curl URL glob(默认开启):`{a,b}` 列表 / `[1-9]`·`[a-z]` 范围会展开成多个 URL,字面 token 静态
   // 无法预判展开后的 host → `curl 'http://{example.com,169.254.169.254}/…'` 会连 metadata 一起抓
@@ -434,6 +454,9 @@ function classifyGit(tokens: string[], segment: string): ReviewVerdict {
     const name = stripExpansions(tok.split('=')[0].replace(/['"\\]/g, ''));
     if (name.length >= 3 && DANGEROUS_GIT_LONG_OPTS.some((full) => full.startsWith(name))) return 'prompt';
   }
+  // 远程助手传输 `ext::<cmd>` / `fd::` 会把 URL 里的命令交给 shell 执行(RCE);即便 ls-remote 最终报错,
+  // 命令也已跑(codex 报:`git ls-remote 'ext::sh -c …'`)。任何 git 命令带 ext::/fd:: 传输 → 升级。
+  if (/(?:^|[\s'"=])(?:ext|fd)::/.test(segment)) return 'prompt';
   const rest = tokens.slice(1); // 'git' 之后
   // 子命令**之前**的内联 config(git -c core.pager=… / -c diff.external=… / --config-env[=…])可执行任意程序(RCE)→ 升级。
   // `--config-env` 的等号形式 `--config-env=core.pager=…` 是单 token,不等于裸 `--config-env`,用 startsWith 一并拦。
@@ -478,10 +501,15 @@ function classifyShellSegment(segment: string): ReviewVerdict {
   // 输出重定向(写文件)/ 命令替换(执行任意内容):任何命令带它都不能算只读放行,统一升级。
   // 必须挡在 git/fetch/readonly 判定之前 —— 否则 `curl x > ~/.bashrc`、`cat f > /etc/y` 会被误放行。
   if (OUTPUT_REDIRECTION.test(redirectScan) || COMMAND_SUBSTITUTION.test(segment)) return 'prompt';
+  // 带替换/默认值的参数展开(${X:-ec} 等)可代入任意文本、拼出危险 flag/命令,静态不可求值 → 升级
+  // (codex 报:`-ex${UNSET:-ec}` 抹空后是 -ex、bash 代入 ec 成 -exec)。挡在 readonly/git/fetch 放行前。
+  if (SUBSTITUTION_EXPANSION.test(segment)) return 'prompt';
   // 显式路径的可执行文件(./ls、/tmp/ls、bin/ls)不是白名单里的系统工具,不能靠 basename 放行 ——
-  // 只信任绝对路径下的系统 bin 目录(/usr/bin 等);其余含 `/` 的命令一律 fail-closed 升级。
+  // 只信任 **OS 自有**、非特权用户不可写的 bin 目录(/usr/bin、/bin、/usr/sbin、/sbin)。/usr/local/bin 与
+  // /opt/homebrew/bin 在 macOS/Homebrew 下当前用户可写(可被替换成木马),不再算可信系统 bin(codex 报);
+  // 其余含 `/` 的命令一律 fail-closed 升级。
   const cmd0 = tokens[0].replace(/\\/g, '');
-  if (cmd0.includes('/') && !/^\/(?:usr\/local\/bin|usr\/s?bin|s?bin|opt\/homebrew\/bin)\//.test(cmd0)) return 'prompt';
+  if (cmd0.includes('/') && !/^\/(?:usr\/s?bin|s?bin)\//.test(cmd0)) return 'prompt';
   if (bin === 'git') return classifyGit(tokens, deQuoted);
   if (isSafeFetch(bin, deQuoted, tokens)) return 'auto-approve';
   if (isSafeReadonlyBin(bin, deQuoted, tokens)) return 'auto-approve';
@@ -514,8 +542,10 @@ export function classifyShellCommand(command: string, _workspaceRoots: string[])
   // deExpandedGlob:再叠加去 glob,覆盖 `${X}` 与 `[h]` 混用的组合变形。
   const deExpanded = stripExpansions(deEscaped);
   const deExpandedGlob = deExpanded.replace(/[[\]{}*?]/g, '');
+  // deSubstituted:把 `${X:-sudo}` 等默认值代入,让藏在展开默认值里的危险关键词现形(codex 报)。
+  const deSubstituted = substituteDefaults(deEscaped);
   for (const re of DANGEROUS_PATTERNS) {
-    if (re.test(deEscaped) || re.test(quotesOnly) || re.test(deGlobbed) || re.test(deExpanded) || re.test(deExpandedGlob)) return 'prompt-each-time';
+    if (re.test(deEscaped) || re.test(quotesOnly) || re.test(deGlobbed) || re.test(deExpanded) || re.test(deExpandedGlob) || re.test(deSubstituted)) return 'prompt-each-time';
   }
   const segments = splitTopLevelSegments(command);
   if (segments.length === 0) return 'prompt';
