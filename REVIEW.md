@@ -39,9 +39,16 @@ P1／P2。按下表转换，**不要**把仓库口径的 P2 改写成评论里�
 - scheduler 反向依赖、cron 三方库、scheduler renderer 色值白名单
   （`ci:scheduler-guard`）。
 - mobile 的 Issue Confirm 范围守门（`mobile test:scope`）。
-- typecheck、单测、DCO 签名、PR 模板结构、PR 正文「引用的设计规范」字段。
+- typecheck、单测、DCO 签名、PR 正文「引用的设计规范」字段（`pr-design-basis`，
+  仅在变更命中 UI 路径时校验该字段）。
 
-同理，**不要**因为「PR 正文没写清楚」「commit message 格式」这类流程问题开评论。
+另外，**不要**因为「PR 正文没写清楚」「commit message 格式」这类流程问题开评论。
+注意这一条与上面那张清单的理由不同：它**不是**因为有机器门禁覆盖。`pr-template-rules`
+只校验 `.github/PULL_REQUEST_TEMPLATE.md` 这个模板文件本身的二级标题，且只在模板、
+校验脚本或该 workflow 自身变动时触发，从不读取任何具体 PR 的正文；也就是说「摘要、
+怎么验证的、风险」这些必填段落缺失时，机器不会拦。这里仍然让自动 reviewer 略过，
+是因为 PR 叙述质量属于人工 review 的范围，不该占用有限的 finding 名额——这是范围
+划分，不是覆盖声明。
 
 ## 4. 重点看机器查不到的部分
 
