@@ -2,6 +2,10 @@
   "ipcError": {
     "SESSION_RUNNING": "当前对话正在执行任务，请稍后再试。",
     "CREDENTIAL_SWITCH_BUSY": "其他 Codex 任务正在运行，本次来源切换未生效（对话仍使用原来源）。等其他任务结束后再试。",
+    "REMOTE_MODEL_SWITCH_ROUTE_CHANGE": "目标模型或来源需要不同的远端路由，请关闭并重新创建远程对话后生效。",
+    "REMOTE_PROVIDER_UPDATING": "供应商凭证正在更新，请稍后重试",
+    "REMOTE_PROVIDER_UNSUPPORTED": "该供应商不支持 SSH 远程会话，请更换来源",
+    "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "未连接 Claude.ai 订阅，请先连接或选择网关模型",
     "REMOTE_WORKDIR_INVALID": "远程项目目录无效，请重新选择项目目录。",
     "REMOTE_WORKDIR_NOT_FOUND": "远程项目目录不存在，请重新选择项目目录。",
     "REMOTE_WORKDIR_NOT_DIRECTORY": "远程项目路径不是文件夹，请重新选择项目目录。",
@@ -876,11 +880,16 @@
         "recording": "按下新的快捷键",
         "none": "未设置",
         "clear": "清除",
+        "fnNeedsInputMonitoring": "Fn 相关快捷键需要监听权限，其余快捷键可正常录制。",
+        "awaitingInputMonitoring": "当前快捷键待授权监听权限，授权后生效。",
         "toast": {
           "needsModifier": "请使用组合键、F1-F24 单键，或左/右 Command、Option、Control、Fn。",
           "fnUnavailable": "请使用组合键、F1-F24 单键，或左/右 Command、Option、Control、Fn。",
           "systemReserved": "这个快捷键会和系统或常用编辑快捷键冲突",
-          "registrationFailed": "无法注册此快捷键：{{error}}"
+          "registrationFailed": "无法注册此快捷键：{{error}}",
+          "recordingFailed": "无法开始录制快捷键：{{error}}",
+          "listenerUnavailable": "无法启动快捷键监听器，请重启 Cindy 后再试",
+          "pendingInputMonitoring": "快捷键已保存，授权监听权限后生效"
         }
       },
       "permissions": {
@@ -4141,6 +4150,11 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "此模型需先在设置里配置 API key 才能使用",
+      "subscriptionDirectDisabled": {
+        "chatgpt": "订阅直连的 GPT 模型协议暂不支持 SSH 远程会话",
+        "xai": "订阅直连的 Grok 模型协议暂不支持 SSH 远程会话",
+        "generic": "订阅直连模型协议暂不支持 SSH 远程会话"
+      },
       "effortLabel": "推理强度",
       "edit": "编辑",
       "options": "选项",
@@ -5326,6 +5340,9 @@
     },
     "draft": {
       "createSessionFailed": "创建对话失败，请重试",
+      "remoteProviderUpdating": "供应商凭证正在更新，请稍后重试",
+      "remoteProviderUnsupported": "该供应商不支持 SSH 远程会话，请更换来源",
+      "remoteNativeOauthUnavailable": "未连接 Claude.ai 订阅，请先连接或选择网关模型",
       "deviceStillLoading": "远程设备仍在加载中，请稍候",
       "worktreeMissingRepo": "无法开 worktree：缺少当前目录的仓库根",
       "worktreeRepoHint": "可尝试重新选一次工作目录，等右下角文件夹标识刷新后再试",
@@ -7535,7 +7552,7 @@
     }
   },
   "billing": {
-    "sidebar": "点数与订阅",
+    "sidebar": "余额与订阅",
     "settings": {
       "title": "用量和计费",
       "subscriptionCard": {
@@ -7546,14 +7563,17 @@
         "unavailable": "暂时无法获取订阅状态，请刷新后重试。",
         "action": "查看套餐",
         "changeAction": "更改套餐",
+        "manageAction": "管理订阅",
+        "portalAction": "Stripe 管理",
+        "portalFailed": "无法打开 Stripe 订阅管理页，请稍后重试。",
         "priceInterval": "{{price}} / {{interval}}",
-        "includedCredits": "每{{interval}}包含 {{amount}} 点数",
+        "includedCredits": "每{{interval}}包含 {{amount}}",
         "renewsAt": "下次续费 {{date}}",
         "endsAt": "套餐将于 {{date}} 结束",
         "cancelAction": "取消订阅",
         "cancelConfirmTitle": "取消当前订阅？",
-        "cancelConfirmDescription": "本次操作不会退款，也不会立即调整点数。当前套餐权益可继续使用至 {{date}}，之后不再续费。取消后无法在应用内恢复，本计费周期结束前也无法购买新套餐。",
-        "cancelConfirmDescriptionWithoutDate": "本次操作不会退款，也不会立即调整点数。当前套餐权益可继续使用至本计费周期结束，之后不再续费。取消后无法在应用内恢复，本计费周期结束前也无法购买新套餐。",
+        "cancelConfirmDescription": "本次操作不会退款，也不会立即调整余额。当前套餐权益可继续使用至 {{date}}，之后不再续费。取消后无法在应用内恢复，本计费周期结束前也无法购买新套餐。",
+        "cancelConfirmDescriptionWithoutDate": "本次操作不会退款，也不会立即调整余额。当前套餐权益可继续使用至本计费周期结束，之后不再续费。取消后无法在应用内恢复，本计费周期结束前也无法购买新套餐。",
         "cancelConfirmAction": "确认取消",
         "cancelSuccess": "已取消自动续费，当前套餐可使用至 {{date}}。",
         "cancelSuccessWithoutDate": "已取消自动续费，当前套餐将在本计费周期结束后到期。",
@@ -7561,36 +7581,34 @@
         "cancelFailed": "取消订阅失败，请稍后重试。"
       },
       "topupCard": {
-        "action": "购买点数"
+        "action": "余额充值"
       }
     },
     "balance": {
       "title": "可用余额",
-      "creditParityCny": "1 点 = 1 元，用于 Cindy AI 用量结算；支付由第三方渠道处理。",
-      "creditParityUsd": "1 点 = 1 美元，用于 Cindy AI 用量结算；支付由第三方渠道处理。",
-      "plan": "订阅点数",
-      "purchased": "已购点数",
-      "promotional": "赠送点数",
-      "notProvisioned": "当前账户尚未开通点数。",
+      "plan": "订阅余额",
+      "purchased": "充值余额",
+      "promotional": "赠送余额",
+      "notProvisioned": "当前账户尚未开通余额。",
       "notSupported": "当前账户暂不支持余额查询。",
       "unavailable": "暂时无法获取余额，请刷新后重试。"
     },
     "usage": {
-      "title": "点数用量",
+      "title": "余额用量",
       "observedAt": "余额更新于 {{date}}",
       "poolDetail": "已用 {{used}} · 总额 {{total}}",
       "remaining": "剩余",
       "progressLabel": "{{label}}使用进度",
-      "noPlanCredits": "当前无生效订阅，因此没有订阅点数。",
+      "noPlanCredits": "当前无生效订阅，因此没有订阅余额。",
       "historyUnavailable": "历史记录不完整，暂时仅显示剩余余额。",
       "detailsUnavailable": "用量明细暂时不可用，当前仅显示各类余额。",
       "promotionalDetails": {
-        "title": "赠送点数明细",
+        "title": "赠送余额明细",
         "count": "{{count}} 笔",
-        "empty": "当前没有赠送点数记录。",
+        "empty": "当前没有赠送记录。",
         "incomplete": "赠送记录较多，当前仅显示最近的 {{count}} 笔。",
-        "unnamed": "赠送点数",
-        "original": "原始点数",
+        "unnamed": "赠送余额",
+        "original": "原始金额",
         "used": "已用",
         "remaining": "剩余",
         "expiresAt": "有效期至 {{date}}",
@@ -7607,7 +7625,7 @@
         "title": "选择订阅套餐"
       },
       "topup": {
-        "title": "购买点数"
+        "title": "余额充值"
       }
     },
     "steps": {
@@ -7644,7 +7662,7 @@
       "MONTH": "月",
       "YEAR": "年"
     },
-    "credits": "{{amount}} 点数",
+    "credits": "含 {{amount}}",
     "confirm": {
       "channel": "通过 {{provider}} 支付"
     },
@@ -7677,7 +7695,7 @@
       "failedTitle": "暂时无法完成",
       "expiredTitle": "支付已过期",
       "canceledTitle": "支付已取消",
-      "topupSubtitle": "点数充值",
+      "topupSubtitle": "余额充值",
       "subscriptionSubtitle": "订阅套餐",
       "creatingBody": "正在向支付服务确认订单…",
       "qrAlt": "支付二维码",

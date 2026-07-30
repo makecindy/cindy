@@ -64,7 +64,8 @@ export interface AgentSkillCommand {
 export type UnifiedCommand = DesktopCommandMeta | AgentBuiltinCommand | AgentSkillCommand;
 
 export interface ListAgentSkillsOptions {
-  workingDir: string;
+  /** Omit to list only agent-global skills without a project scope. */
+  workingDir?: string;
   forceReload?: boolean;
 }
 

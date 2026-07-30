@@ -49,6 +49,12 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
 
   it('centers the CREATE AGENT content group without reintroducing route chrome', () => {
     expect(source).toContain('items-center justify-start');
+    const shellBlock = source.slice(
+      source.indexOf('data-testid="create-agent-shell"'),
+      source.indexOf('data-testid="create-agent-main"'),
+    );
+    expect(shellBlock).toContain('overflow-x-hidden overflow-y-auto');
+    expect(shellBlock).not.toContain('overflow-hidden');
     // 用户改稿 2026-07-21:摘掉 268px 封顶(Figma 定稿画框高度的遗留),大窗口下顶距随 28vh
     // 等比增长,内容组不再"偏高";96px 下限保留,小窗口行为不变。比例为可调参数。
     // 用户改稿 2026-07-21 二连:①摘 268px 封顶(顶距随 28vh 等比);②叠加 --content-header-h

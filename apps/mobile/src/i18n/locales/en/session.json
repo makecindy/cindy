@@ -160,6 +160,7 @@
     "chipArchived": "Archived",
     "chipReadOnly": "Read-only",
     "titleFallback": "Remote session",
+    "unnamedTitle": "Untitled session",
     "renameAction": "Rename Chat",
     "copyLinkAction": "Copy Chat Link",
     "unpin": "Unpin",

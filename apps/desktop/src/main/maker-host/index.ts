@@ -86,6 +86,7 @@ import {
   desktopCodexRuntimeConfig,
 } from './runtime-configs.js';
 import { getClaudeEndpoint, setClaudeProxyGatewayKeyReader, setClaudeProxyOAuthSpawnChecker } from './anthropic-compat-proxy-host.js';
+import { resolveRemoteClaudeRoute } from './remote-claude-route.js';
 import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
 import { notifyAutoPermissionClassifierUnavailable } from './claude-auto-permission-fallback.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
@@ -691,6 +692,10 @@ export function getMaker(): Maker {
       },
       registerClaudeSubagentTask: (task) => claudeSubagentUsageBridge.registerTask(task),
       getClaudeSubagentTaskUsage: (taskId) => claudeSubagentUsageBridge.getTaskUsage(taskId),
+      // 远端 Claude 会话的路由 materialization:把该会话真实上游 + 鉴权 + 定制头解析成 cc
+      // env(native OAuth 订阅 / 自定义 Claude Code 供应商),覆盖「远端恒用网关」旧行为。
+      // 返回 null = 有效路由是 XD 网关,maker-core 维持既有网关远端路径。见 remote-claude-route.ts。
+      resolveRemoteClaudeRoute,
       // Phase 4.3: 远端 cc 路由 — 当 session 标了 remoteHostId, ClaudeCodeAgent
       // 调这个 factory 拿一个连远端 cc-mgr daemon 的 Query (替代本地 sdkQuery
       // 起 cc 子进程)。详见 packages/maker-core/src/agents/base-agent.ts 的
@@ -699,7 +704,7 @@ export function getMaker(): Maker {
       // RemoteQuery 实现 SDK Query interface 的子集 (ClaudeCodeAgent 实际只调
       // for-await / interrupt / setModel / setPermissionMode / applyFlagSettings),
       // factory 返回时直接 `as unknown as Query` cast 即可。
-      remoteCcQueryFactory: async ({ remoteHostId, sessionId, startParams, vendorOptions, onApprovalRequest, makerMemoryEnabled }) => {
+      remoteCcQueryFactory: async ({ remoteHostId, sessionId, startParams, vendorOptions, onApprovalRequest, onOAuthRefresh, makerMemoryEnabled }) => {
         const host = getRemoteSshPool().get(remoteHostId);
         if (host?.getStatus() !== 'ready') {
           throw new Error(`remote ssh host not ready: ${remoteHostId}`);
@@ -818,6 +823,7 @@ export function getMaker(): Maker {
               startParams: startParamsWithProxy as unknown as Parameters<typeof openCcManagerSession>[0]['startParams'],
               claudeBinaryPath,
               onApprovalRequest: onApprovalRequest as Parameters<typeof openCcManagerSession>[0]['onApprovalRequest'],
+              onOAuthRefresh: onOAuthRefresh as Parameters<typeof openCcManagerSession>[0]['onOAuthRefresh'],
               forceFreshQuery,
             });
           } catch (err) {

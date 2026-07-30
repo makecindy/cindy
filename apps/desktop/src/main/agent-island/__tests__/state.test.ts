@@ -641,6 +641,32 @@ describe('Agent Island display state', () => {
     expect(display.pillSnapshot.priorityCompactTitle).not.toBe('codex');
   });
 
+  it('哨兵标题不进 pillSnapshot —— meaningfulSessionTitle 先把它过滤掉', () => {
+    // review 曾担心 priorityCompactTitle 会把原始哨兵带给 native(Swift 侧的 compactTitle
+    // 优先读这个字段)。事实是取值链第一步 meaningfulSessionTitle 就按大小写无关过滤掉
+    // 'new maker' / 'untitled' / 'codex' 等泛化串,pill 因此回落到项目名 —— 小尺寸胶囊里
+    // 项目名本来也比「未命名对话」有信息量。这条断言把该事实钉住,免得日后有人放宽过滤
+    // 又把哨兵漏给 native(PR #1031 review 第 13 轮)。
+    const state = createAgentIslandState();
+
+    applyAgentIslandEvent(
+      state,
+      {
+        sessionId: 's1',
+        title: 'New Maker',
+        agentKind: 'codex',
+        workingDir: '/repo/cindy',
+      },
+      statusEvent(true, 'Thinking'),
+      1_000,
+    );
+    const display = buildAgentIslandDisplayState(state, 1_050);
+
+    expect(display.pillSnapshot.priorityCompactTitle).toBe('cindy');
+    expect(display.pillSnapshot.priorityCompactTitle).not.toBe('New Maker');
+    expect(display.pillSnapshot.priorityMicroTitle).not.toBe('New Maker');
+  });
+
   it('prefers a bounded conversation title over the project name for the compact title', () => {
     const state = createAgentIslandState();
 

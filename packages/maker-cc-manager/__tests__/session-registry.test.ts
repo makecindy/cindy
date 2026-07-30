@@ -227,6 +227,79 @@ describe('SessionRegistry', () => {
 
 });
 
+describe('SessionRegistry getOAuthToken (subscription token refresh)', () => {
+  /** 包一层捕获 factory 实际收到的 SdkQueryFactoryOptions。 */
+  function captureFactory(): {
+    factory: SdkQueryFactory;
+    captured: SdkQueryFactoryOptions[];
+  } {
+    const { factory: base } = buildFakeFactory();
+    const captured: SdkQueryFactoryOptions[] = [];
+    return {
+      factory: (opts) => {
+        captured.push(opts);
+        return base(opts);
+      },
+      captured,
+    };
+  }
+
+  const OAUTH_ENV = { CLAUDE_CODE_OAUTH_TOKEN: 'tok-stale' };
+
+  it('env 带订阅 token + onOAuthRefresh → SDK options 拿到 getOAuthToken,转发含 sessionId', async () => {
+    const { factory, captured } = captureFactory();
+    const forwarder = vi.fn(async () => ({ token: 'tok-fresh' }));
+    const registry = new SessionRegistry({ sdkQueryFactory: factory, onOAuthRefresh: forwarder });
+    registry.create({ sessionId: 's1', cwd: '/x', model: 'm', env: { ...OAUTH_ENV } });
+    registry.attach('s1', () => undefined);
+
+    expect(captured[0]?.getOAuthToken).toBeDefined();
+    await expect(captured[0]!.getOAuthToken!()).resolves.toBe('tok-fresh');
+    expect(forwarder).toHaveBeenCalledWith('s1', { sessionId: 's1' });
+  });
+
+  it('无 attached client → 不转发,直接 null', async () => {
+    const { factory, captured } = captureFactory();
+    const forwarder = vi.fn(async () => ({ token: 'tok-fresh' }));
+    const registry = new SessionRegistry({ sdkQueryFactory: factory, onOAuthRefresh: forwarder });
+    registry.create({ sessionId: 's1', cwd: '/x', model: 'm', env: { ...OAUTH_ENV } });
+
+    await expect(captured[0]!.getOAuthToken!()).resolves.toBeNull();
+    expect(forwarder).not.toHaveBeenCalled();
+  });
+
+  it('转发抛错(旧 desktop UNKNOWN_METHOD / RPC 超时)→ null,不上抛', async () => {
+    const { factory, captured } = captureFactory();
+    const forwarder = vi.fn(async () => {
+      throw new Error('UNKNOWN_METHOD');
+    });
+    const registry = new SessionRegistry({ sdkQueryFactory: factory, onOAuthRefresh: forwarder });
+    registry.create({ sessionId: 's1', cwd: '/x', model: 'm', env: { ...OAUTH_ENV } });
+    registry.attach('s1', () => undefined);
+
+    await expect(captured[0]!.getOAuthToken!()).resolves.toBeNull();
+  });
+
+  it('env 不带订阅 token(网关 key 会话)→ 不接 getOAuthToken', () => {
+    const { factory, captured } = captureFactory();
+    const registry = new SessionRegistry({
+      sdkQueryFactory: factory,
+      onOAuthRefresh: vi.fn(async () => ({ token: null })),
+    });
+    registry.create({ sessionId: 's1', cwd: '/x', model: 'm', env: { ANTHROPIC_API_KEY: 'gw' } });
+
+    expect(captured[0]?.getOAuthToken).toBeUndefined();
+  });
+
+  it('registry 未配置 onOAuthRefresh → 不接 getOAuthToken', () => {
+    const { factory, captured } = captureFactory();
+    const registry = new SessionRegistry({ sdkQueryFactory: factory });
+    registry.create({ sessionId: 's1', cwd: '/x', model: 'm', env: { ...OAUTH_ENV } });
+
+    expect(captured[0]?.getOAuthToken).toBeUndefined();
+  });
+});
+
 /* ============================== helpers ============================== */
 
 async function waitFor(

@@ -160,6 +160,7 @@
     "chipArchived": "보관됨",
     "chipReadOnly": "읽기 전용",
     "titleFallback": "원격 세션",
+    "unnamedTitle": "이름 없는 대화",
     "renameAction": "대화 이름 변경",
     "copyLinkAction": "대화 링크 복사",
     "unpin": "고정 해제",

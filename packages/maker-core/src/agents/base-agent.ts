@@ -469,7 +469,62 @@ export interface AgentDeps {
      * 调不存在的工具。缺省视为 false。
      */
     makerMemoryEnabled?: boolean;
+    /**
+     * Callback for daemon-side subscription OAuth refresh (remote cc hit 401
+     * mid-turn). ClaudeCodeAgent wires it to auth.getFreshSubscriptionToken —
+     * only when the remote env actually carries CLAUDE_CODE_OAUTH_TOKEN
+     * (native OAuth route), never for gateway-key sessions.
+     *
+     * Params/Result follow `@cindy/maker-cc-manager` OAuthRefreshParams/Result
+     * ({ sessionId } → { token: string | null }), typed as unknown
+     * to avoid cross-package dependency.
+     */
+    onOAuthRefresh?: (params: unknown) => Promise<unknown>;
   }) => Promise<Query>;
+
+  /**
+   * 远端 Claude Code 会话的「路由 materialization」(host 注入)。
+   *
+   * 背景:本地会话按模型在「订阅直连 / 网关 / 自定义供应商」之间分流的逻辑活在本机
+   * loopback compat-proxy 里(按请求覆盖 upstream + 鉴权头)。远端 cc-mgr 会话够不到这个
+   * proxy,因此必须把「该会话应走的上游 + 鉴权 + 定制请求头」在 spawn 前解析好,直接烤进
+   * 远端 cc 子进程的 env(ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY | ANTHROPIC_AUTH_TOKEN /
+   * ANTHROPIC_CUSTOM_HEADERS / CLAUDE_CODE_OAUTH_TOKEN…)。host 层用当前生效目录的
+   * RoutingDescriptor + 本地凭证读取器解析(catalog / safeStorage 都在 host 侧),
+   * maker-core 只负责把结果覆盖进远端 env。
+   *
+   * 返回值:
+   *   - 非 null:用 `endpoint` 作 ANTHROPIC_BASE_URL,`env` 覆盖鉴权 / 定制头字段
+   *     (native OAuth 订阅、自定义 Claude Code 供应商都走这条)。
+   *   - null:该会话的有效路由就是 XD 网关(或默认回落网关)—— ClaudeCodeAgent 把远端
+   *     credentialMode 回落 'gateway-key',env 走网关 key + remoteEndpoint,与升级前
+   *     「远端恒用网关」字节级一致。**不回落会出现凭证形态漂移**:getAuthEnv 按本地
+   *     fallback 注入订阅 token / 占位 key,却打网关 endpoint(泄漏或 401)。
+   *   - throw:显式选定的供应商在远端无法表达(如声明了自定义 requestPath / modelIdRewrite,
+   *     cc env 无对应旋钮),host 抛出明确错误,由 startSession 透传给 renderer,不静默错路由。
+   *
+   * 缺省 / undefined(旧 host)→ ClaudeCodeAgent 同样回落 'gateway-key',保持既有
+   * 「远端恒用网关」行为。
+   */
+  resolveRemoteClaudeRoute?: (opts: {
+    providerId?: string | null;
+    model: string;
+  }) => Promise<RemoteClaudeRoute | null>;
+}
+
+/**
+ * 远端 Claude Code 会话解析出的上游 + 鉴权 env(见 AgentDeps.resolveRemoteClaudeRoute)。
+ */
+export interface RemoteClaudeRoute {
+  /** 远端 cc 子进程 ANTHROPIC_BASE_URL 的最终取值(供应商真上游,绝不是本机 loopback)。 */
+  endpoint: string;
+  /**
+   * 覆盖进远端 env 的鉴权 / 定制头字段。恰好携带一个鉴权门(ANTHROPIC_API_KEY 或
+   * ANTHROPIC_AUTH_TOKEN 或 CLAUDE_CODE_OAUTH_TOKEN),其余需要下发的请求头(含另一个
+   * 鉴权头、供应商定制头)统一放进 ANTHROPIC_CUSTOM_HEADERS —— 避免同时设两个鉴权 env
+   * 触发 cc 的 shouldDisableAuth(见 claude-code/index.ts 远端分支实测记录)。
+   */
+  env: Record<string, string>;
 }
 
 export interface OneShotOptions {
@@ -830,7 +885,7 @@ export interface AgentSessionHandle {
   setInteractionResolver(resolver: InteractionResolver): void;
 
   /** 运行时切换模型 —— 不支持时抛 NotSupportedError */
-  setModel?(model: string): Promise<void>;
+  setModel?(model: string, opts?: { providerId?: string | null }): Promise<void>;
 
   /** 运行时切换 effort */
   setEffort?(effort: Effort): Promise<void>;

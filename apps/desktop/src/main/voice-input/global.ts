@@ -8,7 +8,7 @@ import {
   shell,
   systemPreferences,
 } from 'electron';
-import type { Display, NativeImage, Point, Rectangle, WebContents } from 'electron';
+import type { Display, IpcMainInvokeEvent, NativeImage, Point, Rectangle, WebContents } from 'electron';
 import path from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -21,6 +21,7 @@ import { createLogger } from '../logger.js';
 import { scheduleMainAppPresenceRestore } from '../appPresence.js';
 import { openMainWindowVoiceSettings } from '../deepLink.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { prewarmVoiceInputProvider } from './index.js';
 import {
   VOICE_INPUT_DICTIONARY_LEARNING_TRACK_TIMEOUT_MS,
@@ -52,10 +53,65 @@ const log = createLogger('voice-input-global');
 type GlobalVoiceInputShortcutPhase = 'start' | 'tap' | 'end';
 
 const modifierShortcutRecordingWebContentsIds = new Set<number>();
+/**
+ * 正在录制快捷键的 renderer —— 与上面那个「keys 转发名单」是两件事。
+ *
+ * 转发名单在 capture 起不来时会被清掉（起不来就没有 keys 可转发），但**录制框还开着**：
+ * 缺监听权限时用户照样在录裸修饰键。拿转发名单当「有没有在录制」用，就会在这种状态下判成
+ * 「没在录」，于是兜底恢复把已保存的全局快捷键装回去 —— 用户按键试录会真的触发语音输入。
+ *
+ * 所以录制会话单独记账：只在显式 stop 或 renderer 销毁时才移除。
+ */
+const modifierShortcutRecordingSessionIds = new Set<number>();
 const activeInlineVoiceInputWebContentsIds = new Set<number>();
+
+/**
+ * 有任何窗口的快捷键录制框开着时，全局快捷键的**新激活**一律丢弃。
+ *
+ * 录制期由 renderer 主动挂起（suspend）是第一道；这条是投递层的兜底，因为「注册」和「录制」
+ * 在多窗口下必然会有交叠：两个设置页可以同时开着录制框，一边提交的那一刻另一边还在录。把危险
+ * 堵在投递而不是堵在注册，就不必为了避开交叠去推迟注册 —— 推迟会让注册失败（比如 F16 被别的
+ * 应用占了）没法在提交时报给用户，界面和存盘留着一个永远不生效的快捷键。
+ *
+ * 转发给录制页的 keys 不受影响：录制本身就靠它。
+ *
+ * `end` 是例外，必须照常投递：按住说话的会话可能在录制框打开**之前**就已经 start 了，而挂起
+ * （或替换）listener 会调 endActiveTriggerIfNeeded() 补发一次 end。把这个 end 也丢掉，那个
+ * 会话就永远停不下来 —— listener 已经停了，它还在录。所以只挡新激活（start / tap）。
+ *
+ * 但「照常投递」要按**配对**来判，不是按「此刻还在不在录制」，见 nativeActivationStartDelivered。
+ */
+function hasActiveShortcutRecordingSession(): boolean {
+  return modifierShortcutRecordingSessionIds.size > 0;
+}
+
+/**
+ * 上一次 native 激活的 start 有没有真的投递到下游。
+ *
+ * listener 的 triggered / end 是它自己的内部时序，与这里的投递层抑制无关：被上面那条守卫挡掉的
+ * start，用户按住超过阈值再松手时照样会给出一条 end（endActiveTriggerIfNeeded 补发的那条同理）。
+ * 而 end 在下游就是「停止并提交」—— 一个正在跑的 inline 语音输入会话会被这条**没有配对 start**
+ * 的 end 直接提交掉，而用户只是按了一下本该被吞掉的键。
+ *
+ * 所以 end 的投递条件是「配对的 start 投递过没有」。这也覆盖了录制框已经关掉、end 才姗姗来迟的
+ * 情形 —— 那时录制守卫早就不生效了，只有配对关系还算数。
+ */
+let nativeActivationStartDelivered = false;
 
 const macModifierShortcutListener = new MacModifierShortcutListener({
   onTrigger: (phase) => {
+    if (phase !== 'end' && hasActiveShortcutRecordingSession()) {
+      // 挡掉 start 就等于这次激活在下游不存在，它后面那条配对的 end 也必须一起挡掉。
+      if (phase === 'start') nativeActivationStartDelivered = false;
+      log.debug('ignoring native global shortcut activation while recording', { phase });
+      return;
+    }
+    if (phase === 'end' && !nativeActivationStartDelivered) {
+      log.debug('ignoring native global shortcut end without a delivered start');
+      return;
+    }
+    // tap 没有配对的 end；end 到这里就算消费掉了。两种都把配对状态清干净。
+    nativeActivationStartDelivered = phase === 'start';
     log.debug('native global shortcut triggered', { phase });
     if (phase === 'tap') {
       handleGlobalVoiceInputShortcutTap();
@@ -83,14 +139,34 @@ type VoiceInputGlobalResult =
   | { ok: false; error: string; errorCode?: VoiceInputGlobalErrorCode };
 
 type VoiceInputSettingsUpdateResult =
-  | { ok: true; settings: VoiceInputSettings }
+  // `pendingInputMonitoring` = 设置已存下来，但 macOS 监听权限还没给，所以快捷键暂不生效。
+  // 这不是失败：不把用户的选择存住，设置页那个「去授权」入口就永远出不来（它的显示条件
+  // 依赖已保存的 shortcut），用户会被锁在「要授权得先设快捷键、设快捷键得先授权」里。
+  | { ok: true; settings: VoiceInputSettings; pendingInputMonitoring?: boolean }
   | { ok: false; error: string; errorCode?: VoiceInputGlobalErrorCode };
 
-type VoiceInputGlobalErrorCode = 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed';
+type VoiceInputGlobalErrorCode =
+  | 'empty'
+  | 'unavailable'
+  | 'unconfirmed'
+  | 'permission'
+  | 'failed'
+  /**
+   * 这次调用在启动 listener 期间被更晚的一轮顶掉了。既不是故障也不该清理状态，
+   * renderer 收到后静默丢弃即可——真正的结果由顶掉它的那一轮给出。
+   */
+  | 'superseded';
 
 export type VoiceInputPermissionSnapshot =
   | { ok: true; status: string }
   | { ok: false; status: string; error: string };
+
+/**
+ * 请求监听权限的结果。只回状态枚举、不回 error 字符串：真故障已经在 handler 里抛成
+ * 统一 IPC 错误，而 helper 的原始 error 含内部绝对路径，不能过桥（见
+ * `docs/dev-rules/electron-security-and-process-boundaries.md` §5）。
+ */
+type VoiceInputInputMonitoringRequestResult = { ok: true; status: string };
 
 type ClipboardSnapshot = {
   formats: string[];
@@ -447,6 +523,93 @@ export async function refreshVoiceInputInputMonitoringPermissionSnapshot(): Prom
   return cachedInputMonitoringPermission;
 }
 
+/**
+ * 交给 renderer 的统一失败文案。listener 自己的 error 可能是 swiftc stderr、
+ * `Modifier shortcut listener source missing at <绝对路径>` 或 `spawn <绝对路径> ENOENT`,
+ * 都带内部路径，按 electron-security §5 不能原样过桥；细节只进主进程日志。
+ */
+const MAC_NATIVE_LISTENER_FAILURE_MESSAGE = 'Could not start the voice input shortcut listener.';
+
+type MacNativeListenerStartResult =
+  | { ok: true }
+  | { ok: false; error: string; superseded?: true };
+
+/**
+ * 包一层 try/catch 再调 listener。
+ *
+ * setShortcut / startKeyCapture 不只会返回 { ok: false }，还会**抛**：dev 下
+ * resolveMacModifierShortcutListenerBinary 在源码缺失时直接 throw，swiftc 失败时
+ * execFile 的 reject 会带 stderr，而 startChildProcess 里那个 await 没有 try/catch。
+ * 不接住的话 IPC handler 直接 reject，原始消息（含内部绝对路径）会过桥给 renderer，
+ * 而且调用方精心分好的 errorCode 分支根本走不到。
+ */
+/**
+ * 被顶掉的那一轮 capture 启动，顺着「接手链」等出一个确定结果。
+ *
+ * 为什么需要：两个窗口的录制框可以同时开着。A 的 startKeyCapture 还没 spawn 时 B 又来一次，A 就
+ * 拿到 superseded。原来到这里就返回了，理由是「更晚那轮在负责」—— 但那只在 B **成功**时成立。
+ * B 失败或被取消时，A 仍留在转发名单里、只拿到一个 renderer 会静默丢弃的 superseded：没有 helper
+ * 给它送 Fn，界面上既没有「需要监听权限」的说明、也没有故障提示。那正是本 PR 要消灭的那种沉默。
+ *
+ * 判据只读共享状态，不猜：在飞的启动就等它；没有在飞的就看此刻是否真的就绪。
+ */
+const MAX_SUPERSEDED_START_HANDOFFS = 5;
+
+async function resolveSupersededRecordingStart(
+  superseded: MacNativeListenerStartResult,
+): Promise<MacNativeListenerStartResult> {
+  for (let handoff = 0; handoff < MAX_SUPERSEDED_START_HANDOFFS; handoff += 1) {
+    const pending = macModifierShortcutListener.pendingStartResult();
+    if (!pending) {
+      // 没有在飞的启动了：接手那轮已经落定。就绪 = 有 helper 在监听，这个录制框照样收得到 keys。
+      if (macModifierShortcutListener.isReady()) return { ok: true };
+      return { ok: false, error: 'Modifier shortcut listener did not start.' };
+    }
+    let result: MacNativeListenerStartResult;
+    try {
+      result = await pending;
+    } catch (error) {
+      // 解析/编译 helper 抛出来的（dev 下 swiftc 失败）。当成故障往下走，让调用方去分类。
+      log.warn('shared listener start threw while a superseded recorder was waiting', {
+        error: stringifyError(error),
+      });
+      return { ok: false, error: MAC_NATIVE_LISTENER_FAILURE_MESSAGE };
+    }
+    // 接手那轮自己又被顶掉了：跟着下一轮继续等。代次只增不减，所以这个循环必然推进。
+    if (result.ok || !result.superseded) return result;
+  }
+  log.warn('gave up following superseded listener start handoffs');
+  return superseded;
+}
+
+async function startMacNativeListener(
+  start: () => Promise<MacNativeListenerStartResult>,
+): Promise<MacNativeListenerStartResult> {
+  try {
+    return await start();
+  } catch (error) {
+    log.warn('native shortcut listener threw while starting', { error: stringifyError(error) });
+    return { ok: false, error: MAC_NATIVE_LISTENER_FAILURE_MESSAGE };
+  }
+}
+
+/**
+ * 判定 native listener 起不来是「缺监听权限」还是别的故障。
+ *
+ * 两者必须分开：缺权限是可引导的正常状态（存下设置、请用户授权），而 swiftc 编译失败、
+ * 二进制缺失、启动超时是真故障（不该把设置存成「待授权」骗用户）。listener 自己的
+ * `ListenerStartResult` 只有一句 error 字符串，分不出来，所以这里补查一次权限。
+ *
+ * 用 preflight（`CGPreflightListenEventAccess`）而不是 request：它只查不弹窗，放在失败
+ * 路径上不会给用户额外的系统弹窗。只有明确 denied 才算权限问题——status 为 unknown 时
+ * 说明连权限都没查出来（helper 本身有问题），归 failed 更诚实。
+ */
+async function classifyMacNativeListenerFailure(): Promise<VoiceInputGlobalErrorCode> {
+  if (process.platform !== 'darwin') return 'failed';
+  const snapshot = await refreshVoiceInputInputMonitoringPermissionSnapshot();
+  return snapshot.ok || snapshot.status !== 'denied' ? 'failed' : 'permission';
+}
+
 export function registerActiveInlineVoiceInputWebContents(sender: WebContents): void {
   if (isGlobalVoiceInputOverlaySender(sender)) return;
   if (activeInlineVoiceInputWebContentsIds.has(sender.id)) return;
@@ -460,46 +623,519 @@ export function unregisterActiveInlineVoiceInputWebContents(webContentsId: numbe
   activeInlineVoiceInputWebContentsIds.delete(webContentsId);
 }
 
-export function registerGlobalVoiceInputIpc(): void {
+export type GlobalVoiceInputIpcDeps = {
+  /** 主窗口访问器。 */
+  getMainWindow: () => BrowserWindow | null;
+  /**
+   * 是不是「Open in New Window」开出来的会话副窗口。
+   *
+   * 副窗口跑的是同一套路由，设置页在里面照样打得开，所以弹系统授权窗那两条 IPC 必须认它 ——
+   * 否则用户在副窗口里点授权入口只会得到失败，存盘后的自动请求也会静默失效。
+   *
+   * 用这个而不是 appContentWindows：那个 WeakSet 还包含右侧栏与 Ghost 面板，它们不承载
+   * 路由、也就不该拿到弹系统授权窗的能力。
+   */
+  isSecondaryAppWindow: (win: BrowserWindow) => boolean;
+};
+
+/**
+ * 把「会弹 macOS 输入监控授权窗」的两条 IPC 锁到**当前聚焦的应用外壳窗口**的顶层 frame。
+ *
+ * 三层判据，每层挡的是不同的东西：
+ *
+ * 1. `assertTrustedAppRendererEvent` —— senderFrame 必须是顶层 frame 且 URL 属于 Cindy
+ *    自有 renderer，挡掉子 frame / WebView / 导航到别处的页面。
+ * 2. 必须是**承载应用外壳（router / MainLayout）的窗口**：主窗口，或 secondary-windows
+ *    登记的会话副窗口。不能只用 appContentWindows —— 那个注册表还含右侧栏与 Ghost 面板，
+ *    后者装的是插件内容，信任级别与我们自己的外壳完全不同，却同样带着完整 preload。
+ *    也不能只认主窗口：设置页在会话副窗口里照样打得开（`/settings` 与 `/cc-agent` 是同一
+ *    个 router 下的兄弟路由），只认主窗口会让用户在副窗口里点授权入口直接失败。
+ * 3. 必须是**当前聚焦的**那个窗口。这一层针对的正是「外壳窗口里的会话内容被 XSS 拿下」：
+ *    窗口身份挡不住它（主窗口同样承载会话内容），但后台/被遮住的窗口凭此再也弹不出系统权限
+ *    窗——而合法路径（点徽章、录完快捷键）永远发生在用户正看着的那个窗口里。这是在 Electron
+ *    不向 ipcMain 暴露 user-activation 的前提下，最接近「必须由用户手势触发」的判据；仓库里
+ *    已有同类先例（windowFocusClassifier 的 isFocusedAppContentWindow）。
+ *
+ * 能查的就这些：路由 / 页面无从可靠断言（hash 路由随手就能改），所以措辞和日志都只说窗口，
+ * 不说「设置页」——写成设置页会让日志读起来像做了更强的检查（对齐 billing 的口径）。
+ */
+function appShellTopLevelSenderWindow(
+  event: IpcMainInvokeEvent,
+  deps: GlobalVoiceInputIpcDeps,
+): BrowserWindow | null {
+  const senderWindow = BrowserWindow.fromWebContents(event.sender);
+  // 必须是某个窗口自己的顶层 webContents + 顶层 frame，而不是它内嵌的什么东西。
+  const isWindowTopLevelSender = Boolean(
+    senderWindow &&
+    !senderWindow.isDestroyed() &&
+    event.sender === senderWindow.webContents &&
+    event.senderFrame === senderWindow.webContents.mainFrame,
+  );
+  if (!senderWindow || !isWindowTopLevelSender) return null;
+  const mainWindow = deps.getMainWindow();
+  const isMainWindow = Boolean(mainWindow && !mainWindow.isDestroyed() && senderWindow === mainWindow);
+  if (!isMainWindow && !deps.isSecondaryAppWindow(senderWindow)) return null;
+  return senderWindow;
+}
+
+/**
+ * 把录制期那两条**会改动全局监听状态**的 IPC 锁到应用外壳窗口的顶层 frame。
+ *
+ * 不要求聚焦（那是弹系统授权窗才需要的第三层）。这里挡的是**信任级别**：右侧栏与 Ghost 面板
+ * 同样带着完整 preload，但 Ghost 面板装的是插件内容。少了这道闸，那种 renderer 一次调用就能：
+ *
+ * - `setGlobalShortcut(null, { suspend: true })` —— 把自己登记成「正在录制」。这个登记只在它
+ *   自己发 stop 或窗口销毁时才摘掉，期间快捷键被注销、触发被丢弃、同步与兜底恢复都会被
+ *   「录制中」守卫拒掉：一次调用就能让语音快捷键在那个窗口的整个生命周期里失效。
+ * - `startModifierShortcutRecording()` —— 把自己登记进 keys 转发名单。而 helper 的 keys 事件
+ *   不止修饰键：非修饰键会以 `KeyCode:<n>` 一起发出来（helper 的 handleNonModifierKey），
+ *   也就是一路系统级按键流。这条比上面那条严重得多。
+ *
+ * 为什么这里不要求聚焦：合法录制确实发生在聚焦窗口里，但把聚焦也算进来会让「系统授权窗关闭后
+ * 焦点异步回到窗口」这类时序把 Fn capture 静默挡掉（用户只看到录制框对 Fn 没反应）。而对
+ * 「外壳窗口内容被 XSS 拿下」这一档威胁，聚焦在这里也换不来什么：那种 renderer 本来就能直接
+ * 调 update-shortcut 把快捷键改掉。收益在于挡住低信任 renderer，那部分与聚焦无关。
+ */
+function assertVoiceShortcutRecordingSender(
+  event: IpcMainInvokeEvent,
+  deps: GlobalVoiceInputIpcDeps,
+): void {
+  assertTrustedAppRendererEvent(event);
+  if (appShellTopLevelSenderWindow(event, deps) === null) {
+    throwIpcError(
+      'PERMISSION_DENIED',
+      'Shortcut recording is only available to app shell windows',
+    );
+  }
+}
+
+function assertVoiceSettingsWindowSender(
+  event: IpcMainInvokeEvent,
+  deps: GlobalVoiceInputIpcDeps,
+): void {
+  // 先过通用闸：它额外校验 senderFrame 是顶层 frame 且 URL 属于 Cindy 自有 renderer，
+  // 挡掉子 frame / WebView / 导航到别处的页面。下面再收窄到承载应用外壳的窗口。
+  assertTrustedAppRendererEvent(event);
+  const senderWindow = appShellTopLevelSenderWindow(event, deps);
+  if (senderWindow === null || !senderWindow.isFocused()) {
+    // 与本模块其它 throwIpcError 一致用英文：这句是给日志/调试看的，renderer 侧要展示
+    // 时走 code → i18n 映射，不消费这里的原文。
+    //
+    // 措辞只说「应用外壳窗口」、不说「设置页」：闸能校验的就是窗口与顶层 frame，路由/页面
+    // 无从可靠断言，写成设置页会让日志读起来像做了更强的检查（对齐 billing 的口径）。
+    throwIpcError(
+      'PERMISSION_DENIED',
+      'Input Monitoring permission is only available to the focused app shell window',
+    );
+  }
+}
+
+/**
+ * 快捷键变更的串行队列。
+ *
+ * 两个变更 handler 内部都有多个 await（起 helper、失败后补查权限），而 Electron 不替我们
+ * 排队；录制按钮在第一次提交 await 期间仍可点，所以两次提交真的能交错。交错之后旧的那次
+ * 会拿着过时的选择继续往下走：注销掉新那次刚注册成功的 accelerator，再把自己存盘覆盖掉
+ * 用户最新的选择——用户看到的是「我明明改成了 F16，怎么变回右 Option 且什么都不响应」。
+ *
+ * 串行化让「最后提交的赢」成为确定行为。相比给每次变更编代次再让旧的中途放弃，这里不需要
+ * 判断「放弃到哪一步算干净」：每次变更都在前一次完整收尾后才开始，没有中间态可踩。
+ */
+let shortcutMutationChain: Promise<unknown> = Promise.resolve();
+
+function queueShortcutMutation<T>(task: () => Promise<T>): Promise<T> {
+  const run = shortcutMutationChain.then(task, task);
+  // 链上存的是吞掉异常的版本：某次变更抛了不该让后面所有变更跟着 reject。异常本身照常
+  // 交给它自己的调用方。
+  shortcutMutationChain = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+/**
+ * 「待授权」快捷键的兜底恢复：用户在设置页外拿到监听权限后，把它重新注册上。
+ *
+ * 为什么必须放在 main：原来这条恢复挂在设置页的权限 effect 上，而设置页是条件渲染的 ——
+ * 用户切走 tab（甚至关掉设置页）再去系统设置里打开开关，那个 effect 压根不会跑，快捷键就
+ * 一直不生效，直到他再进一次语音输入 tab 或重启 Cindy。而我们给用户的说法是「授权后自动
+ * 生效」，所以这条恢复不能依赖某个界面还开着。
+ *
+ * 用 preflight（只查不弹窗）判断，且只在明确 granted 时才起 helper —— 不会给用户凭空多出
+ * 一个系统弹窗。
+ */
+const PENDING_SHORTCUT_RECOVERY_MIN_INTERVAL_MS = 5_000;
+let lastPendingShortcutRecoveryAt = 0;
+let pendingShortcutRecoveryRunning = false;
+
+/**
+ * 兜底恢复此刻该做什么。
+ *
+ * 预筛和队列内都调它，**队列内那次才是判据**：preflight 与队列排队都要 await，那段时间里
+ * 用户可能已经改了快捷键、也可能已经开始录制。所有条件都收在这个函数里，就不会出现「预筛
+ * 查了、队列内漏查」的偏差。
+ *
+ * `wait-for-pending-start` 是必要的第三态：`isRunning()` 在 spawn 之后立刻为 true，**早于**
+ * helper 报 ready。启动期间来一次聚焦，只看 isRunning 会判成「已经在跑、没事可做」直接返回；
+ * 而那次启动随后可能超时或起来就退（它的调用方只写一行日志），于是快捷键一直不生效、连那条
+ * 可行动的提示都不会有 —— 要等下一个 focus 事件。所以这里排个尾跑，等那次启动落定再看。
+ */
+type PendingShortcutRecoveryTarget =
+  | { kind: 'nothing-to-do' }
+  | { kind: 'wait-for-pending-start' }
+  | { kind: 'register'; shortcut: VoiceInputShortcut };
+
+function pendingNativeShortcutRecoveryTarget(): PendingShortcutRecoveryTarget {
+  // 录制期间全局快捷键是刻意挂起的，这里注册会把它顶回来：用户正在按键试录就会真的触发
+  // 一次语音输入，并发的 listener 启动还会把 Fn capture 顶掉。
+  if (modifierShortcutRecordingSessionIds.size > 0) return { kind: 'nothing-to-do' };
+  const shortcut = voiceInputDataStore.getSettings().shortcut;
+  if (!shortcut || !voiceInputShortcutNeedsMacNativeListener(shortcut, process.platform)) {
+    return { kind: 'nothing-to-do' };
+  }
+  if (macModifierShortcutListener.isRunning()) {
+    const shortcutKey = stableVoiceInputShortcutKey(shortcut);
+    // 已经为这个快捷键注册成功、helper 也**报过 ready**：真的没事可做。
+    //
+    // 必须看 ready 而不只看 isRunning：helper 退出后 scheduleRestart 会起一个替补，那段时间
+    // isRunning 已是 true、而 registeredNativeShortcutKey 还是旧的（重启不经过 setShortcut），
+    // 只看这两个就会把「替补正在起」误判成一切正常。替补及其重试全失败时只写日志，这次聚焦
+    // 恢复又被丢掉，快捷键就一直不生效、也没有提示。
+    if (registeredNativeShortcutKey === shortcutKey) {
+      return macModifierShortcutListener.isReady()
+        ? { kind: 'nothing-to-do' }
+        : { kind: 'wait-for-pending-start' };
+    }
+    // 一个字都还没登记 = 有一次启动正在飞（见上）。并发再起一次没意义，等它落定。
+    if (registeredNativeShortcutKey === null) return { kind: 'wait-for-pending-start' };
+    // 登记的是另一个快捷键（存盘已经变了）：存盘才是权威，直接重注册。
+  }
+  return { kind: 'register', shortcut };
+}
+
+/**
+ * 「自动恢复失败」的待通知状态。
+ *
+ * 只推不记状态是不行的：恢复可能发生在 MainLayout 还没挂载的时候（登录门、数据库门还在
+ * 前面），此时 fan-out 没有订阅者，这一推就没了。所以状态留在 main，由 renderer 挂载后
+ * 主动 consume —— **状态在被真正取走时才清**，推送只是「已经挂着的 renderer 早点收到」。
+ *
+ * 一次 App 运行只提示一次（consume 后清零、后续失败不再置位）：触发点是窗口聚焦，helper
+ * 真坏掉会每次切回来都失败一遍，反复弹同一条只会变成骚扰 —— 用户此刻并没有在做这件事。
+ */
+let pendingShortcutRecoveryFailure = false;
+/**
+ * 已经取过这条通知的 renderer。
+ *
+ * 不能取一次就全局清掉：每个应用窗口（含会话副窗口）都挂着 MainLayout，都会来取。谁先到谁
+ * 拿走的话，一个在后台、被挡住的副窗口就可能吞掉这唯一一次提示，用户正看着的窗口反而拿到
+ * `{ failed: false }` —— 那条提示就等于没有。按 renderer 记账：每个窗口最多提示一次，用户
+ * 看着哪个窗口都能看到，也不会在同一个窗口里被弹第二次。
+ */
+const shortcutRecoveryFailureConsumers = new Set<number>();
+
+/**
+ * 清掉待通知状态。
+ *
+ * 除了「恢复成功」，**用户自己改了快捷键**同样要清：他把快捷键换成 F16 或干脆清空之后，兜底
+ * 恢复再也不会跑（没有需要监听权限的快捷键了），这条失败就永远挂着 —— 此后每开一个应用外壳
+ * 窗口都会取到它，弹一条「重启 Cindy 再试」，而当前快捷键其实工作正常或已被关掉。
+ *
+ * 连消费账本一起清：清完之后若又失败，那是一件新事，每个窗口都值得再被提示一次。
+ */
+function clearPendingShortcutRecoveryFailure(): void {
+  if (!pendingShortcutRecoveryFailure && shortcutRecoveryFailureConsumers.size === 0) return;
+  pendingShortcutRecoveryFailure = false;
+  shortcutRecoveryFailureConsumers.clear();
+}
+
+function notifyPendingShortcutRecoveryFailed(): void {
+  pendingShortcutRecoveryFailure = true;
+  for (const window of BrowserWindow.getAllWindows()) {
+    try {
+      window.webContents.send('voice-input:shortcut-recovery-failed');
+    } catch {
+      /* renderer 已销毁 */
+    }
+  }
+}
+
+let pendingShortcutRecoveryRetryTimer: NodeJS.Timeout | null = null;
+
+function schedulePendingShortcutRecoveryRetry(delayMs: number): void {
+  // 已经排了就不再叠：尾跑只需要一个。
+  if (pendingShortcutRecoveryRetryTimer) return;
+  pendingShortcutRecoveryRetryTimer = setTimeout(() => {
+    pendingShortcutRecoveryRetryTimer = null;
+    void recoverPendingNativeShortcutRegistration();
+  }, Math.max(0, delayMs));
+}
+
+async function recoverPendingNativeShortcutRegistration(): Promise<void> {
+  if (process.platform !== 'darwin') return;
+  if (pendingShortcutRecoveryRunning) {
+    // 同限流那条的道理：在飞的那次可能刚好在用户点开开关**之前**读到了 denied，而这次聚焦
+    // 正是他授权完切回来的那一次。丢掉就没有下一次了（应用此后一直在前台）。排个尾跑，
+    // 等在飞那次收尾、限流窗口也过去之后再查一遍。
+    schedulePendingShortcutRecoveryRetry(PENDING_SHORTCUT_RECOVERY_MIN_INTERVAL_MS);
+    return;
+  }
+  // 这里只是「值不值得往下走」的预筛。真正要注册的那个必须在队列里现读，见下。
+  const target = pendingNativeShortcutRecoveryTarget();
+  if (target.kind === 'nothing-to-do') return;
+  if (target.kind === 'wait-for-pending-start') {
+    schedulePendingShortcutRecoveryRetry(PENDING_SHORTCUT_RECOVERY_MIN_INTERVAL_MS);
+    return;
+  }
+  // preflight 每次都要起一个 helper 进程，而窗口聚焦事件很密集，必须限流。
+  const now = Date.now();
+  if (now - lastPendingShortcutRecoveryAt < PENDING_SHORTCUT_RECOVERY_MIN_INTERVAL_MS) {
+    // 但不能就这么丢掉：这次聚焦可能正是「用户刚授权完切回来」的那一次，而应用此后就一直
+    // 在前台，不会再有第二个 focus 事件 —— 快捷键会一直不生效，直到他切走再切回或重启。
+    // 所以补一个尾跑，等限流窗口过去再试一次。
+    schedulePendingShortcutRecoveryRetry(PENDING_SHORTCUT_RECOVERY_MIN_INTERVAL_MS - (now - lastPendingShortcutRecoveryAt));
+    return;
+  }
+  lastPendingShortcutRecoveryAt = now;
+  pendingShortcutRecoveryRunning = true;
+  try {
+    const snapshot = await refreshVoiceInputInputMonitoringPermissionSnapshot();
+    // 连权限状态都查不出来（unknown）= helper 本身有问题：preflight 走的就是同一个 helper，
+    // 二进制缺失、spawn 失败、swiftc 编译失败都落在这里。这是真故障，不是「还没授权」——
+    // 与 classifyMacNativeListenerFailure 的 denied / unknown 分界保持一致。
+    //
+    // 少了这条：用户在设置页之外授权完，快捷键起不来且**一句提示都没有**（下面那条通知只在
+    // preflight 成功后才够得着），而「待授权」说明又随权限转已授权一起消失了。
+    if (!snapshot.ok && snapshot.status !== 'denied') {
+      // 发这条通知之前必须重新看一眼该恢复什么：preflight 那次 await 期间用户完全可能把快捷键
+      // 换成 F16 或干脆清掉（那次成功的 update-shortcut 已经清掉过期失败态了）。无条件发就会
+      // 凭一个已经不存在的目标重新造出一条「重启 Cindy 再试」，而当前快捷键其实工作正常。
+      const revalidated = pendingNativeShortcutRecoveryTarget();
+      if (revalidated.kind === 'wait-for-pending-start') {
+        // 有一次启动正在飞：它可能成功（那就什么都不用报），也可能超时/起来就退（它的调用方
+        // 只写一行日志）。两种都不该在这里下结论，排个尾跑等它落定 —— 与预筛那条同一个处理。
+        schedulePendingShortcutRecoveryRetry(PENDING_SHORTCUT_RECOVERY_MIN_INTERVAL_MS);
+        return;
+      }
+      if (revalidated.kind !== 'register') {
+        log.debug('pending native shortcut recovery target changed while checking permission');
+        return;
+      }
+      log.warn('pending native shortcut recovery failed: permission status unavailable', {
+        status: snapshot.status,
+      });
+      notifyPendingShortcutRecoveryFailed();
+      return;
+    }
+    // denied = 用户还没在系统设置里打开，正常等待，不提示。
+    if (!snapshot.ok || snapshot.status !== 'granted') return;
+    // 快捷键在队列里现读、现校验：preflight 那次 await 期间用户完全可能改成别的（比如
+    // F16）。用 await 之前抓的那份，就会在用户的新变更之后把旧的修饰键注册回去 ——
+    // 存盘和界面停在 F16，实际生效的却是旧那个。
+    const result = await queueShortcutMutation(async () => {
+      const queued = pendingNativeShortcutRecoveryTarget();
+      if (queued.kind !== 'register') return null;
+      return setVoiceInputGlobalShortcut(queued.shortcut);
+    });
+    if (!result) {
+      log.debug('pending native shortcut recovery skipped: settings changed while checking permission');
+      return;
+    }
+    if (result.ok) {
+      log.info('pending native shortcut re-registered after permission was granted');
+      clearPendingShortcutRecoveryFailure();
+      return;
+    }
+    if (result.errorCode === 'superseded') return;
+    // 'permission' = 授权在 preflight 之后、注册完成之前又被撤了。那仍然是「等授权」这个正常
+    // 状态：此刻能修好它的只有重新授权，而 listenerUnavailable 让用户去重启 Cindy —— 指错了
+    // 方向，而且这条通知一旦记下来，之后新开的窗口还会重复这个错误建议。与 preflight 读到
+    // denied 那条路一视同仁：静默等授权，待授权说明与徽章会把状态和入口摆在那。
+    if (result.errorCode === 'permission') {
+      log.info('pending native shortcut still awaiting Input Monitoring after a granted preflight');
+      return;
+    }
+    log.warn('pending native shortcut recovery failed', { errorCode: result.errorCode });
+    // 这条恢复存在的前提就是设置页不在（它的 toast 也就不在），只写日志等于用户被告知
+    // 「授权后自动生效」之后什么都没发生、也无处得知。推给常挂载的 renderer 去提示。
+    notifyPendingShortcutRecoveryFailed();
+  } catch (error) {
+    log.warn('pending native shortcut recovery threw', { error: stringifyError(error) });
+  } finally {
+    pendingShortcutRecoveryRunning = false;
+  }
+}
+
+/**
+ * 登记「这个 renderer 正在录制快捷键」。
+ *
+ * 两个入口都调它：显式挂起（录制真正的起点）与 recording:start（capture 尝试）。销毁清理挂在
+ * 这里，所以哪个先到都不会漏 —— 录制框关掉不发 stop 就崩了的窗口也会被收掉。
+ */
+function markModifierShortcutRecordingSession(sender: WebContents): void {
+  if (modifierShortcutRecordingSessionIds.has(sender.id)) return;
+  modifierShortcutRecordingSessionIds.add(sender.id);
+  sender.once('destroyed', () => {
+    modifierShortcutRecordingSessionIds.delete(sender.id);
+  });
+}
+
+export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void {
   if (registered) return;
   registered = true;
 
+  // 从系统设置切回 Cindy 就会走到这里 —— 这正是用户刚打开开关的那一刻，且与设置页开着
+  // 没关系。设置页自己那条权限 effect 保留：它还负责录制期只补 Fn capture 那条路。
+  app.on('browser-window-focus', () => {
+    void recoverPendingNativeShortcutRegistration();
+  });
+
+  /**
+   * 这条 channel 只有两种正当用途：**挂起**（录制期，显式带 options.suspend）和**让运行期
+   * 对上存盘**（录制结束恢复、授权后重新注册、renderer 收到设置变更后的回声）。
+   *
+   * 所以：带 suspend 的请求直接放行；不带的一律与当前存盘比对，不一致就是过时的回声，丢掉。
+   *
+   * 为什么需要这道闸：`useVoiceInputSettings` 里有个 effect，settings.shortcut 一变就调
+   * syncVoiceInputGlobalShortcut(settings.shortcut) —— 每个挂载着它的窗口都会回声一次。
+   * 两次提交交错时，先落地那次会广播**旧**快捷键（清空提交广播的就是 null），某个后台窗口
+   * （渲染被节流，effect 跑得晚）的回声就可能排在更晚那次提交之后，把旧的重新注册上、或者
+   * 把新注册好的直接关掉：存盘和界面显示新的，实际生效的却不是。
+   *
+   * null 必须一起校验 —— 只放行非 null 的话，「清空快捷键」那次的 null 回声照样能迟到落地。
+   * 这也是为什么挂起要显式带 intent：它传的 null 恰恰故意与存盘不同，靠值本身分不出来。
+   */
   ipcMain.handle(
     'voice-input:global-shortcut:set',
-    async (_event, shortcut: VoiceInputShortcut | null | undefined): Promise<VoiceInputGlobalResult> => {
-      return setVoiceInputGlobalShortcut(shortcut ?? null);
+    async (
+      event,
+      shortcut: VoiceInputShortcut | null | undefined,
+      options?: { suspend?: true },
+    ): Promise<VoiceInputGlobalResult> => {
+      const nextShortcut = shortcut ?? null;
+      const suspending = options?.suspend === true;
+      // 显式挂起就等于「这个 renderer 的录制开始了」——在入队之前就登记。
+      //
+      // 录制 effect 是先等挂起返回、再发 recording:start 的（顺序反过来的话，挂起里的
+      // listener.stop() 会把 capture 刚起的 helper 一起杀掉）。那两步之间有个窗口：兜底
+      // 恢复排在挂起之后执行时，录制会话还没登记，于是它照常把已保存的快捷键注册上；随后
+      // startKeyCapture 看见 child 已在跑就直接返回成功、不会清掉那个 shortcut —— 用户在
+      // 录制框里按键会真的触发一次语音输入。用挂起这个 intent 当会话起点，窗口就消失了。
+      //
+      // 登记之前先校验 sender：这个登记会让快捷键在该窗口的整个生命周期里失效，是低信任
+      // renderer 一次调用就能造成的持久影响。**只校验挂起**——不带 suspend 的同步是
+      // 「让运行期对上存盘」的回声，每个挂载 useVoiceInputSettings 的窗口（含右侧栏里的
+      // ChatInput、overlay）都会发，且已经按存盘值校验过、落不下任何新状态。
+      if (suspending) {
+        assertVoiceShortcutRecordingSender(event, deps);
+        markModifierShortcutRecordingSession(event.sender);
+      }
+      return queueShortcutMutation(async () => {
+        if (!suspending) {
+          const storedShortcut = voiceInputDataStore.getSettings().shortcut;
+          // 用已有的 stableVoiceInputShortcutKey 比对：它把 trigger / code / key / 五个
+          // modifier 全铺进去，就是一个快捷键的完整身份，比 JSON 串比较更不受字段顺序影响。
+          const storedKey = storedShortcut ? stableVoiceInputShortcutKey(storedShortcut) : null;
+          const nextKey = nextShortcut ? stableVoiceInputShortcutKey(nextShortcut) : null;
+          if (storedKey !== nextKey) {
+            log.debug('ignoring stale global shortcut sync', { code: nextShortcut?.code ?? null });
+            return { ok: true };
+          }
+          // 录制期间是刻意挂起的。别的窗口的回声在这时把它装回来，用户按键试录就会真的
+          // 触发一次语音输入 —— 与兜底恢复那条守卫同理。
+          if (modifierShortcutRecordingSessionIds.size > 0) {
+            log.debug('ignoring global shortcut sync while a recording is in progress');
+            return { ok: true };
+          }
+        }
+        const result = await setVoiceInputGlobalShortcut(nextShortcut);
+        // 与存盘一致的同步注册成功 = 快捷键此刻是活的（或用户本来就清空了），之前那条「自动
+        // 恢复失败」就过期了。挂起不算：那是录制期的临时状态，失败态还得留着。
+        //
+        // 少了这步：早期一次瞬时 helper 故障之后，即便后来注册成功了，此后每开一个应用外壳
+        // 窗口都会取到那条陈旧失败、弹一次「重启 Cindy 再试」。
+        if (!suspending && result.ok) clearPendingShortcutRecoveryFailure();
+        return result;
+      });
     },
   );
 
   ipcMain.handle(
     'voice-input:settings:update-shortcut',
     async (_event, shortcut: VoiceInputShortcut | null | undefined): Promise<VoiceInputSettingsUpdateResult> => {
-      const nextShortcut = shortcut ?? null;
-      const registration = await setVoiceInputGlobalShortcut(nextShortcut);
-      if (!registration.ok) return registration;
-      return {
-        ok: true,
-        settings: voiceInputDataStore.updateSettings({ shortcut: nextShortcut }),
-      };
+      return queueShortcutMutation(async () => {
+        const nextShortcut = shortcut ?? null;
+        const registration = await setVoiceInputGlobalShortcut(nextShortcut);
+        // 只缺监听权限时仍然存盘：用户的选择要留住，快捷键等授权后自动生效（设置页在
+        // 权限转为已授权时会重新 sync）。真故障（冲突、不支持、helper 坏了）照旧不存。
+        if (!registration.ok && registration.errorCode !== 'permission') return registration;
+        if (!registration.ok) {
+          // 存盘意味着「当前快捷键就是这个新的、只是等授权」，所以旧的必须当场停掉。
+          //
+          // setVoiceInputGlobalShortcut 注销旧 accelerator 只发生在成功路径上，缺权限时
+          // 它在那之前就返回了。少了这步：原本绑 F16，改成右 Option 而权限被拒 → 设置页
+          // 显示「右 Option 待授权」，但按 F16 这一整个会话里仍会触发语音输入。
+          //
+          // 交给 setVoiceInputGlobalShortcut(null) 统一收口，别在这里手抠 registered*
+          // 那几个模块级变量：注销 accelerator、清 native 状态、停 helper 三件事都在那条
+          // 已有路径里，重抄一遍迟早漏一样。
+          await setVoiceInputGlobalShortcut(null);
+        }
+        // 用户自己定下了新状态（注册成功 / 换成不需要权限的快捷键 / 清空），之前那条「自动
+        // 恢复失败」就过期了：留着只会让之后新开的窗口弹一条与当前状态无关的故障提示。
+        clearPendingShortcutRecoveryFailure();
+        return {
+          ok: true,
+          settings: voiceInputDataStore.updateSettings({ shortcut: nextShortcut }),
+          ...(registration.ok ? {} : { pendingInputMonitoring: true }),
+        };
+      });
     },
   );
 
   ipcMain.handle(
     'voice-input:modifier-shortcut-recording:start',
     async (event): Promise<VoiceInputGlobalResult> => {
+      // 授权先于一切：这条 IPC 会把 sender 登记进 keys 转发名单，而转发出去的不止修饰键
+      // （helper 对非修饰键发 `KeyCode:<n>`），等于一路系统级按键流。平台判断放在它后面。
+      assertVoiceShortcutRecordingSender(event, deps);
       if (process.platform !== 'darwin') {
         return { ok: false, error: 'Modifier shortcut recording is only available on macOS.' };
       }
       modifierShortcutRecordingWebContentsIds.add(event.sender.id);
+      // 录制会话在**尝试之前**就登记：capture 起不起来都不影响「用户正在录」这个事实。
+      // （显式挂起时其实已经登记过了，这里幂等补一次，不依赖调用顺序。）
+      markModifierShortcutRecordingSession(event.sender);
       event.sender.once('destroyed', () => {
         modifierShortcutRecordingWebContentsIds.delete(event.sender.id);
         if (modifierShortcutRecordingWebContentsIds.size === 0) {
           macModifierShortcutListener.stopKeyCapture();
         }
       });
-      const result = await macModifierShortcutListener.startKeyCapture();
+      // 走 startMacNativeListener：startKeyCapture 也会抛（helper 源码缺失 / swiftc
+      // 失败）。不接住的话下面的清理与 errorCode 分类都跑不到，本 renderer 会留在
+      // 转发名单里、原始路径还会过桥给它。
+      const started = await startMacNativeListener(() => macModifierShortcutListener.startKeyCapture());
+      // 被更晚的一轮顶掉时不能就此收工：helper 是共享的，接手那一轮的落点就是这个录制框的落点。
+      // 接手成功 → 这里也算成功（名单没动过，keys 照样送到）；接手失败 → 这个录制框同样需要
+      // 知道，否则它收不到 Fn 却一句解释都没有（renderer 对 'superseded' 是静默丢弃的）。
+      const result = !started.ok && started.superseded
+        ? await resolveSupersededRecordingStart(started)
+        : started;
+      if (!result.ok && result.superseded) {
+        // 顺着接手链也没等出确定结果（罕见：连着好几轮互相顶）。维持原来的静默语义，且绝不动
+        // 名单 —— 录制登记按 sender id 记账，同一个设置页连续两轮录制用的是同一个 id，在这里
+        // 删就等于把新一轮刚登记的那条删掉，helper 起来了却没人收 keys。
+        return { ok: false, error: result.error, errorCode: 'superseded' };
+      }
       if (!result.ok) {
         modifierShortcutRecordingWebContentsIds.delete(event.sender.id);
+        // 录制期的 key capture 只服务 Fn 检测（macOS 不把 Fn 派发成普通 DOM keydown）。
+        // 起不来时 renderer 要靠 errorCode 区分「缺权限所以 Fn 录不了」和真故障，
+        // 前者不该当成错误弹出来——裸修饰键走 DOM 事件，此时照样能正常录。
+        return {
+          ok: false,
+          error: MAC_NATIVE_LISTENER_FAILURE_MESSAGE,
+          errorCode: await classifyMacNativeListenerFailure(),
+        };
       }
       return result;
     },
@@ -509,6 +1145,7 @@ export function registerGlobalVoiceInputIpc(): void {
     'voice-input:modifier-shortcut-recording:stop',
     (event): VoiceInputGlobalResult => {
       modifierShortcutRecordingWebContentsIds.delete(event.sender.id);
+      modifierShortcutRecordingSessionIds.delete(event.sender.id);
       if (modifierShortcutRecordingWebContentsIds.size === 0) {
         macModifierShortcutListener.stopKeyCapture();
       }
@@ -706,7 +1343,34 @@ export function registerGlobalVoiceInputIpc(): void {
     }
   });
 
-  ipcMain.handle('voice-input:open-input-monitoring-settings', async (): Promise<VoiceInputGlobalResult> => {
+  /**
+   * renderer 挂载后来取「有没有一条自动恢复失败要提示」。
+   *
+   * 有它才能保证不漏：失败可能发生在 MainLayout 挂载之前（登录门 / 数据库门还在前面），
+   * 那时推送没有订阅者。状态留在 main、按 renderer 记账，所以推送丢了也补得回来。
+   *
+   * 按 renderer 而不是全局记一次：每个应用窗口（含会话副窗口）都挂着 MainLayout，都会来取。
+   * 全局清的话，一个后台副窗口就可能吞掉这唯一一次提示。
+   *
+   * 闸用通用的可信 renderer 校验（不是应用外壳窗口那道收窄闸）：这条只读一个布尔、不触发
+   * 任何系统弹窗。
+   */
+  ipcMain.handle('voice-input:consume-shortcut-recovery-failure', (event): { failed: boolean } => {
+    assertTrustedAppRendererEvent(event);
+    if (!pendingShortcutRecoveryFailure) return { failed: false };
+    const senderId = event.sender.id;
+    if (shortcutRecoveryFailureConsumers.has(senderId)) return { failed: false };
+    shortcutRecoveryFailureConsumers.add(senderId);
+    event.sender.once('destroyed', () => {
+      shortcutRecoveryFailureConsumers.delete(senderId);
+    });
+    return { failed: true };
+  });
+
+  ipcMain.handle('voice-input:open-input-monitoring-settings', async (event): Promise<VoiceInputGlobalResult> => {
+    // 同下面的 request handler：这条也会触发 CGRequestListenEventAccess 弹系统授权窗，
+    // 攻击面完全相同，所以一并上闸——只给新 handler 加等于没关洞。
+    assertVoiceSettingsWindowSender(event, deps);
     if (process.platform !== 'darwin') {
       return {
         ok: false,
@@ -726,6 +1390,40 @@ export function registerGlobalVoiceInputIpc(): void {
       };
     }
   });
+
+  // 与上面 open-input-monitoring-settings 的区别：这条只弹系统授权请求，不顺手打开
+  // 「系统设置」面板。用户刚设完快捷键时该请求授权，但把设置面板怼到脸上就太重了——
+  // CGRequestListenEventAccess 弹的窗自带「打开系统设置」按钮，想去自己会点。
+  //
+  // 这是特权动作（会弹系统级授权窗），所以：
+  // - 必须过 sender 闸，并且收窄到主窗口顶层 frame。语音浮窗、词典 toast、右侧栏窗口、
+  //   Ghost 面板装的都是同一份 preload；后两者还会 markAppContentWindow，所以只过
+  //   assertTrustedAppRendererEvent 仍然放得进来。见
+  //   assertVoiceSettingsWindowSender 的注释。
+  // - 失败走 throwIpcError 而不是 return { ok: false }：这是动作型 handler，renderer
+  //   不需要失败时的结构化 fallback（它随后会重新查权限），按 IPC 错误协议应当抛。
+  ipcMain.handle(
+    'voice-input:request-input-monitoring-permission',
+    async (event): Promise<VoiceInputInputMonitoringRequestResult> => {
+      assertVoiceSettingsWindowSender(event, deps);
+      if (process.platform !== 'darwin') {
+        throwIpcError('UNSUPPORTED_CAPABILITY', 'Input Monitoring permission is only required on macOS.');
+      }
+      const snapshot = await requestMacInputMonitoringPermission();
+      cachedInputMonitoringPermission = snapshot;
+      // denied 是正常结果（用户还没在系统设置里打开），不是故障；只有连权限状态都问不出来
+      // 才是真故障——helper 编译/spawn 失败时它的 error 里带 swiftc / execFile 的内部
+      // 绝对路径，不能原样回传 renderer，只留在日志里。
+      if (!snapshot.ok && snapshot.status !== 'denied') {
+        log.warn('input monitoring permission request failed', {
+          status: snapshot.status,
+          error: snapshot.error,
+        });
+        throwIpcError('INTERNAL', 'Could not request the Input Monitoring permission.');
+      }
+      return { ok: true, status: snapshot.status };
+    },
+  );
 
   ipcMain.handle(
     'voice-input:dictionary-toast-show',
@@ -801,6 +1499,22 @@ export function registerGlobalVoiceInputIpc(): void {
   });
 }
 
+/**
+ * 停掉 native 快捷键监听 —— 但还有窗口在录制时，只放弃快捷键、保住 capture。
+ *
+ * 同一个 helper 既服务常驻监听也服务录制页的 Fn 检测。两个设置页同时开着录制框时，一边提交
+ * F16（或清空快捷键）会走到 stop()，把另一边的 keys 来源一起杀掉：那个窗口的录制框还开着，
+ * 却再也收不到 Fn，只能关掉重开。判据用转发名单而不是录制会话集合 —— 需要 helper 的正是
+ * 「capture 真的起来了」的那些窗口。
+ */
+function stopNativeShortcutListenerPreservingCapture(): void {
+  if (modifierShortcutRecordingWebContentsIds.size > 0) {
+    macModifierShortcutListener.releaseShortcutKeepingCapture();
+    return;
+  }
+  macModifierShortcutListener.stop();
+}
+
 async function setVoiceInputGlobalShortcut(shortcut: VoiceInputShortcut | null): Promise<VoiceInputGlobalResult> {
   if (process.platform === 'linux' && shortcut) {
     return {
@@ -818,7 +1532,7 @@ async function setVoiceInputGlobalShortcut(shortcut: VoiceInputShortcut | null):
     registeredShortcut = null;
     registeredNativeShortcutLabel = null;
     registeredNativeShortcutKey = null;
-    macModifierShortcutListener.stop();
+    stopNativeShortcutListenerPreservingCapture();
     destroyOverlayWindow();
     log.info('global shortcut disabled');
     return { ok: true };
@@ -829,20 +1543,65 @@ async function setVoiceInputGlobalShortcut(shortcut: VoiceInputShortcut | null):
       return { ok: false, error: 'Function/modifier voice input shortcuts are only available on macOS.' };
     }
     const nativeShortcutKey = stableVoiceInputShortcutKey(shortcut);
-    if (registeredNativeShortcutKey === nativeShortcutKey && macModifierShortcutListener.isRunning()) {
+    // 复用已注册的那次要求**已就绪**,不是「进程在跑」。scheduleRestart 起的替补不经过
+    // setShortcut,所以 registeredNativeShortcutKey 一直是旧值:替补还没报 ready 时用 isRunning
+    // 判断就会在这里返回成功,而此刻没人在监听。两处后果:
+    //
+    // - 调用方(renderer)被告知快捷键是活的;
+    // - handler 会据此 clearPendingShortcutRecoveryFailure() 把持久失败态清掉。而替补及其重试
+    //   全失败时只写日志、**不会**重新发布失败态(scheduleRestart 耗尽重试那一支),于是快捷键
+    //   静静地不工作,唯一能提示用户的那条通知也被提前擦掉了。
+    //
+    // 落到这里之后走 setShortcut:child 还在但没就绪时它会等那次启动的真实落点
+    // （MacModifierShortcutListener.awaitInFlightChild）,所以这里不会凭空多 spawn 一个 helper。
+    // 兜底恢复的 pendingNativeShortcutRecoveryTarget 用的也是 isReady,两条路口径至此一致。
+    if (registeredNativeShortcutKey === nativeShortcutKey && macModifierShortcutListener.isReady()) {
       return { ok: true };
     }
-    const result = await macModifierShortcutListener.setShortcut(shortcut);
+    const result = await startMacNativeListener(() => macModifierShortcutListener.setShortcut(shortcut));
+    if (!result.ok && result.superseded) {
+      // 被更晚的一轮顶掉：那一轮才决定最终注册结果，这里既不回滚（会踩掉它刚建立的
+      // 状态）也不报故障（这次调用已经过时）。调用方按 'superseded' 静默丢弃即可。
+      log.debug('native global shortcut registration superseded', { code: shortcut.code });
+      return { ok: false, error: result.error, errorCode: 'superseded' };
+    }
     if (!result.ok) {
-      if (registeredShortcut && voiceInputShortcutNeedsMacNativeListener(registeredShortcut, process.platform)) {
-        await macModifierShortcutListener.setShortcut(registeredShortcut);
+      // 先落成局部常量：registeredShortcut 是模块级 let，装进闭包后 TS 不再认那层
+      // narrowing（延迟执行期间它可能被改），语义上回滚也该锁定进入分支时的那一个。
+      const previousShortcut = registeredShortcut;
+      if (previousShortcut && voiceInputShortcutNeedsMacNativeListener(previousShortcut, process.platform)) {
+        // 回滚同样可能抛（helper 已经坏掉），不能让它把整个 handler 掀了。
+        const restored = await startMacNativeListener(
+          () => macModifierShortcutListener.setShortcut(previousShortcut),
+        );
+        // 回滚目标与本次请求是**同一个**快捷键时（对得上存盘的同步就是这种：previousShortcut
+        // 正是用户当前那个），这次「回滚」其实是同键重试。它成功了就意味着请求的快捷键此刻真的
+        // 在监听，再报失败会让调用方不去清持久失败态、界面还弹一句「重启 Cindy 再试」——而快捷键
+        // 本身是好的。
+        //
+        // 只在 key 相同时这样收：真回滚到**另一个**快捷键时，用户请求的那个确实没注册上，必须
+        // 照旧报失败，否则他会以为换成功了。
+        if (restored.ok && stableVoiceInputShortcutKey(previousShortcut) === nativeShortcutKey) {
+          log.info('native global shortcut recovered by retrying the same shortcut', {
+            code: shortcut.code,
+          });
+          // 这一路不重跑 prewarm：那是首次注册时做的事，同键重试没有新东西要预热。
+          registeredShortcut = shortcut;
+          registeredNativeShortcutLabel = getNativeShortcutLogLabel(shortcut);
+          registeredNativeShortcutKey = nativeShortcutKey;
+          return { ok: true };
+        }
       }
+      const errorCode = await classifyMacNativeListenerFailure();
       log.warn('native global shortcut registration failed', {
         code: shortcut.code,
         modifiers: shortcut.modifiers,
         error: result.error,
+        errorCode,
       });
-      return result;
+      // 原始 error 只进日志：它可能是 swiftc stderr 或 `spawn <绝对路径> ENOENT`，
+      // 带着 helper 源码/二进制的内部路径，不能过 IPC 边界。
+      return { ok: false, error: MAC_NATIVE_LISTENER_FAILURE_MESSAGE, errorCode };
     }
     if (registeredAccelerator) {
       globalShortcut.unregister(registeredAccelerator);
@@ -884,7 +1643,7 @@ async function setVoiceInputGlobalShortcut(shortcut: VoiceInputShortcut | null):
   registeredShortcut = shortcut;
   registeredNativeShortcutLabel = null;
   registeredNativeShortcutKey = null;
-  macModifierShortcutListener.stop();
+  stopNativeShortcutListenerPreservingCapture();
   log.info('global shortcut registered', { accelerator });
   // First-press warmup: read auth.json now so the very first shortcut press
   // does not pay for it on the critical path.
@@ -910,6 +1669,11 @@ function stableVoiceInputShortcutKey(shortcut: VoiceInputShortcut): string {
 }
 
 function handleGlobalVoiceInputShortcut(phase?: Extract<GlobalVoiceInputShortcutPhase, 'start'>): void {
+  // Electron accelerator 那条路的同一道兜底（native 那条在 onTrigger 里挡）。
+  if (hasActiveShortcutRecordingSession()) {
+    log.debug('ignoring global shortcut trigger while recording');
+    return;
+  }
   const invokedAt = Date.now();
   const overlay = getOverlayWindow();
   const overlayOpen = isOverlayPresentationOpen(overlay);

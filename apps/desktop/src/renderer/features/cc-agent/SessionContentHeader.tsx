@@ -52,7 +52,11 @@ import { WINDOW_NO_DRAG_STYLE, useManualWindowDrag } from '@/components/layout/w
 import { recentWorkdirsStore } from '@/lib/recentWorkdirsStore';
 import { useRegisterContentHeader } from '../feature-context';
 import { useSessionLifecycleActions } from './hooks/useSessionLifecycleActions';
-import { getAutomationSessionDisplayTitle } from './lib/scheduledSessionGrouping';
+import {
+  getSessionDisplayTitle,
+  isEmptyDraftSession,
+  toStoredSessionTitle,
+} from './lib/sessionDisplayTitle';
 import {
   getVisibleSidebarSessionIds,
   pickSessionIdAfterRemoval,
@@ -140,8 +144,8 @@ export function SessionContentHeader({
 
   const isPinned = session.pinnedAt != null;
   const isArchived = session.status === 'archived';
-  // Draft 判定与 SessionItem 同口径:未改名的 New Maker 且无消息。
-  const isEmpty = session.title === 'New Maker' && (session._count?.messages ?? 0) === 0;
+  // Draft 判定与 SessionItem 同口径:标题仍是默认哨兵且无消息。
+  const isEmpty = isEmptyDraftSession(session);
   const remoteWritesBlocked =
     remoteSessionUnavailable || isRemoteSessionWriteBlocked(session);
   // 「移动到项目」/「导出会话…」可见性与 SessionItem 同条件。
@@ -153,7 +157,8 @@ export function SessionContentHeader({
   // heartbeat schedule 绑定标识,与 SessionItem 同源数据;删除/过期后自动消失。
   const boundSchedules = useSessionBoundSchedules(session.id);
   const displayTitle =
-    getAutomationSessionDisplayTitle(session)?.trim() || t('ccAgent.sessionHeader.untitled');
+    getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'))?.trim() ||
+    t('ccAgent.sessionHeader.untitled');
   const remoteIconKind = session.deviceLinkDeviceId ? 'device-link' : session.remoteHostId ? 'ssh' : null;
   const remoteIconConnectionStatus = session.deviceLinkDeviceId
     ? session.deviceLinkConnectionStatus ?? 'connected'
@@ -175,15 +180,13 @@ export function SessionContentHeader({
       showRemoteWriteBlockedToast();
       return;
     }
-    setEditValue(session.title?.trim() || displayTitle);
+    // 预填用 displayTitle,不是原始 session.title —— 后者在未起名的会话上是英文
+    // 哨兵,会把 "New Maker" 填进重命名输入框。commitTitle 的 `unchanged` 判据同步
+    // 把 displayTitle 也算作「没改」,否则原样回车会把兜底文案写进库冲掉哨兵。
+    setEditValue(displayTitle);
     committedRef.current = false;
     setIsEditing(true);
-  }, [
-    displayTitle,
-    remoteWritesBlocked,
-    session.title,
-    showRemoteWriteBlockedToast,
-  ]);
+  }, [displayTitle, remoteWritesBlocked, showRemoteWriteBlockedToast]);
 
   // 标题文字是 no-drag(否则 onDoubleClick 收不到,见 span 处注释),
   // 拖窗习惯由手动拖拽补回:按住标题移动超过死区即拖动窗口。
@@ -196,17 +199,26 @@ export function SessionContentHeader({
       committedRef.current = true;
       const trimmed = raw.trim();
       setIsEditing(false);
+      // 「没改」= 与原始标题相同,**或**与预填的显示标题相同。后者不可省:未起名的
+      // 会话预填的是本地化兜底文案(「未命名对话」),它不等于库里的英文哨兵 —— 只比
+      // session.title 的话,用户双击后原样回车就会把兜底文案写进库、把哨兵冲掉,
+      // 自动起名从此永久跳过这个会话(标题永远停在「未命名对话」)。
+      const unchanged = !trimmed || trimmed === session.title || trimmed === displayTitle;
       if (remoteWritesBlocked) {
-        if (trimmed && trimmed !== session.title) showRemoteWriteBlockedToast();
+        if (!unchanged) showRemoteWriteBlockedToast();
         return;
       }
-      if (!trimmed || trimmed === session.title) return;
+      if (unchanged) return;
+      // 预填是**显示标题**(legacy automation 会话已剥掉 `[Schedule] ` 前缀),落库前还原,
+      // 否则 isAutomationGeneratedSession 认不出它、会话从 automation 分组消失
+      // (PR #1031 review P1)。
+      const stored = toStoredSessionTitle(session, trimmed);
       const oldTitle = session.title;
-      patchLocal(session.id, { title: trimmed });
+      patchLocal(session.id, { title: stored });
       try {
         // 远程会话:patch-meta 经隧道写被控端 → 广播 sessions:patched → applyPatch 更新远程分片
         // (纯镜像,无需重拉);本机会话 patchLocal 已乐观反映。
-        await sessionService.patchMeta(session.id, { title: trimmed });
+        await sessionService.patchMeta(session.id, { title: stored });
       } catch (err) {
         log.error('[session rename]', err);
         toast.error(t('ccAgent.sidebar.renameFailed'));
@@ -214,6 +226,7 @@ export function SessionContentHeader({
       }
     },
     [
+      displayTitle,
       remoteWritesBlocked,
       session.id,
       session.title,

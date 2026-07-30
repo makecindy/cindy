@@ -68,6 +68,7 @@ import { requestNewWorkerFromShortcut } from '@/features/cc-agent/lib/newWorkerS
 import { useCorruptionRestoredToast } from '@/hooks/useCorruptionRestoredToast';
 // #37 schema-drift release-side toast
 import { useSchemaDriftWarningToast } from '@/hooks/useSchemaDriftWarningToast';
+import { useVoiceInputShortcutRecoveryToast } from '@/hooks/useVoiceInputShortcutRecoveryToast';
 import { requestProjectFocus } from '@/state/pendingProjectFocus';
 import { patchDraft } from '@/state/newMakerDraft';
 import { cn } from '@/lib/utils';
@@ -464,6 +465,8 @@ export function MainLayout() {
   useCorruptionRestoredToast();
   // #37：release 端未知 schema drift 一次性 toast(提示用户升级或联系支持)
   useSchemaDriftWarningToast();
+  // 语音快捷键在设置页之外自动恢复失败 —— 那时设置页的 toast 不在,只能由常挂载的这里提示。
+  useVoiceInputShortcutRecoveryToast();
   // device-link 跨设备远程控制:同账号在线 + 开了被控的设备,其项目自动并入侧边栏
   useDeviceLinkRemoteProjects();
 

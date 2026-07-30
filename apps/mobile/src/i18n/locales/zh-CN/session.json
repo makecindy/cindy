@@ -160,6 +160,7 @@
     "chipArchived": "已归档",
     "chipReadOnly": "只读",
     "titleFallback": "远程对话",
+    "unnamedTitle": "未命名对话",
     "renameAction": "重命名对话",
     "copyLinkAction": "复制对话链接",
     "unpin": "取消置顶",

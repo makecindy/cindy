@@ -4,9 +4,10 @@
  * UpdateNoticeDialog 的 auto 布局契约。
  *
  * 装完后的自动公告走这条布局,UpdateBanner 的「装前预览」也刻意复用它(见 useUpdateNotice
- * 的 onOpenVersion)。所以这个文件既是既有行为的回归护栏,也是新入口渲染形态的说明:
- *   - 单版本:右上角是该版本日期,徽标 v<版本>
- *   - 跨版本:右上角是版本数,徽标 v<旧> → v<新>
+ * 的 onOpenVersion)。所以这个文件既是既有行为的回归护栏,也是新入口渲染形态的说明
+ * (#956 单栏版式之后,版本徽标与日期都在各版本自己的 block 里,header 不再有 range 徽标):
+ *   - 单版本:block 徽标 v<版本> + 日期,header 右侧无版本数
+ *   - 跨版本:header 右侧是版本数,每个 block 各有自己的 v<版本> 徽标
  * 两种情况都没有版本跳转器、没有懒加载占位块。
  *
  * 弹窗本身在本次改动里一行未改;这里锁住的是「预览入口依赖的那部分不能被顺手清理掉」。
@@ -82,11 +83,15 @@ describe('UpdateNoticeDialog auto layout', () => {
     ).toBeTruthy();
   });
 
-  it('multiple versions: version count on the right, range badge, span aria', () => {
+  it('multiple versions: version count on the right, per-block badges, span aria', () => {
     renderAuto([NEWEST, OLDER]);
 
     expect(screen.getByText('update.notice.versionsSpan(count=2)')).toBeTruthy();
-    expect(screen.getByText('v0.1.20 → v0.1.21')).toBeTruthy();
+    // #956 的单栏版式把 header 的「v<旧> → v<新>」range 徽标撤掉了:版本身份
+    // 落在每个版本自己的 block 徽标上,header 右侧只剩版本数。
+    expect(screen.getByText('v0.1.21')).toBeTruthy();
+    expect(screen.getByText('v0.1.20')).toBeTruthy();
+    expect(screen.queryByText('v0.1.20 → v0.1.21')).toBeNull();
     expect(
       screen.getByText('update.notice.ariaDescriptionSpan(from=0.1.20,count=2)'),
     ).toBeTruthy();

@@ -27,6 +27,7 @@
  */
 
 import { useSyncExternalStore } from 'react';
+import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import type { DeviceLinkConnectionStatus, Session } from '@/lib/ccAgent.types';
 
 /** 单台被控设备的内存分片。 */
@@ -127,8 +128,13 @@ function sameDeviceList(a: RemoteDeviceSummary[], b: RemoteDeviceSummary[]): boo
   return true;
 }
 
-/** 被控端建会话时的默认标题;权威标题仍等于它 = 还没起过名。 */
-const DEFAULT_REMOTE_SESSION_TITLE = 'New Maker';
+/**
+ * 被控端建会话时的默认标题;权威标题仍等于它 = 还没起过名。
+ *
+ * 复用跨端共享常量:这串要与**被控端**(可能是另一个版本的客户端)写进 DB 的默认值
+ * 逐字一致,不能本地化、也不能与 main 侧各写一份。
+ */
+const DEFAULT_REMOTE_SESSION_TITLE = DEFAULT_DRAFT_SESSION_TITLE;
 /**
  * fork 会话的占位标题前缀("[Fork] …" / "[Fork·已剥离] …",非 i18n 串)。
  * 与被控端 `localDb/ipc/sessions.ts` 的 FORK_PLACEHOLDER_TITLE_PREFIX 同源;两边

@@ -11,6 +11,11 @@ import path from 'node:path';
 import { ipcMain, app, BrowserWindow } from 'electron';
 import { eq, ne, and, desc, count, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 
+import {
+  DEFAULT_DRAFT_SESSION_TITLE,
+  normalizeAutoTitle,
+} from '@cindy/maker-shared/session-title';
+
 import { getDbClient } from '../client/current';
 import type { DbClient } from '../client/DbClient';
 import { sessions, messages } from '../schema';
@@ -51,7 +56,6 @@ import { dismissErrorMessage, rebroadcastAgentSwitchBoundary } from './messages'
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
 
 const log = createLogger('sessions');
-const DEFAULT_DRAFT_SESSION_TITLE = 'New Maker';
 const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt']);
 
 /**
@@ -490,14 +494,6 @@ export async function touchUserSendInDb(id: string, atMs?: number): Promise<void
     userSendAt: new Date(updated[0].userSendAt!).toISOString(),
     updatedAt: new Date(updated[0].updatedAt).toISOString(),
   });
-}
-
-/**
- * 自动标题的统一归一化:折叠空白 → trim → 截断 40 字。先 trim 再截断,避免前导
- * 大量空白吃满长度得到空标题。落库出口与占位覆写方都用它算出同一个串。
- */
-export function normalizeAutoTitle(text: string): string {
-  return text.replace(/\s+/g, ' ').trim().slice(0, 40).trimEnd();
 }
 
 /** fork 出来的会话的占位标题前缀("[Fork] …" / "[Fork·已剥离] …")。 */
