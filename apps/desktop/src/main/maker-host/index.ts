@@ -106,6 +106,7 @@ import {
   unregister as unregisterCodexProxyPrompt,
 } from './codex-proxy-host.js';
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
+import { readContactsSettings } from './contacts-settings-store.js';
 import {
   registerCustomMcpArrays,
   refreshCustomMcpProviders,
@@ -656,6 +657,9 @@ export function getMaker(): Maker {
       resolveCcDebugFile: resolveSessionCcDebugFile,
       mcpProviders: claudeMcpProviders,
       makerMemory: makerMemoryManager,
+      // 智能通讯录两态 prompt 段的开关快照来源(session start 求值一次), 与
+      // mcp-providers.ts 的 contacts.isEnabled 同一读数, 保证工具面与 prompt 不分叉。
+      isContactsEnabled: () => readContactsSettings().enabled,
       // 第一方只读工具走 SDK allowedTools, 避免 auto 模式为 discovery/read-only
       // 操作额外调用远程安全分类器; 列表按精确工具名维护, 不放行动态 call_tool。
       claudeAllowedTools: getDesktopClaudeReadOnlyAllowedTools(),
@@ -883,6 +887,8 @@ export function getMaker(): Maker {
       // 起 streamable-HTTP bridge 把 instance 通过 -c 'mcp_servers...=...' 注入。
       mcpProviders: codexMcpProviders,
       makerMemory: makerMemoryManager,
+      // 同 claude 侧: 通讯录两态 prompt 段的开关快照(session start 求值一次)。
+      isContactsEnabled: () => readContactsSettings().enabled,
       // 模型清单 SSoT = 目录（providers.json，OSS 运行时真源 / bundled 兜底）。maker-core 的
       // CODEX_MODELS 已删、availableModels 起始为空；host 从账号可选目录派生 codex 列表注入
       // （gpt 原生 + codex/ 折扣网关路由）。「折扣GPT」codex/ 仍是「XD 网关来源」,渲染层按

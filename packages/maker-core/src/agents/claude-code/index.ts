@@ -53,6 +53,10 @@ import {
 } from '../base-agent.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
 import { MAKER_MEMORY_RULES } from '../../memory/system-prompt.js';
+import {
+  CONTACTS_RULES_DISABLED,
+  CONTACTS_RULES_ENABLED,
+} from '../../contacts/system-prompt.js';
 import { MemoryFlushController } from '../../memory/flush-controller.js';
 import { buildMemoryScopeKey } from '../../memory/storage.js';
 import type {
@@ -955,6 +959,15 @@ export class ClaudeCodeAgent extends BaseAgent {
         });
       }
     }
+
+    // ── 智能通讯录 prompt 段: 开关在 session 启动时求值一次(两态), host 未注入
+    // isContactsEnabled 则整段缺省 — 语义与 makerMemoryRules 同(会话内恒定,
+    // 不破坏前缀缓存; 详见 contacts/system-prompt.ts)。
+    const contactsRules = this.deps.isContactsEnabled
+      ? this.deps.isContactsEnabled()
+        ? CONTACTS_RULES_ENABLED
+        : CONTACTS_RULES_DISABLED
+      : '';
 
     const mcpProviders = this.deps.mcpProviders ?? [];
     // host-owned 只读白名单在 session 启动时快照; 与 hooks / MCP 注册同样保持整条
@@ -1921,6 +1934,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             const appendText = [
               MAKER_SYSTEM_PROMPT_APPEND,
               makerMemoryRules,
+              contactsRules,
               hostSystemPrompt,
               makerMemoryIndex,
               opts.userPrompt,
@@ -2220,16 +2234,19 @@ export class ClaudeCodeAgent extends BaseAgent {
           //   [2] MAKER_SYSTEM_PROMPT_APPEND — maker engine (system-prompt-append.md)
           //   [3] makerMemoryRules           — maker memory 写入规范 (条件式: makerMemoryEnabled
           //                                    且 manager 注入成功才注入)
-          //   [4] hostSystemPrompt           — host runtime (runtimeConfig.systemPrompt)
-          //   [5] makerMemoryIndex           — 当前 workdir MEMORY.md 内容 (条件式, 紧邻 userPrompt
+          //   [4] contactsRules              — 智能通讯录两态段 (条件式: host 注入了
+          //                                    isContactsEnabled 才有, 开/关各一份静态文案)
+          //   [5] hostSystemPrompt           — host runtime (runtimeConfig.systemPrompt)
+          //   [6] makerMemoryIndex           — 当前 workdir MEMORY.md 内容 (条件式, 紧邻 userPrompt
           //                                    高优先级, 启动时快照 — 跟 userPrompt 同语义)
-          //   [6] opts.userPrompt            — per-call 用户级 (renderer 本地 storage,
+          //   [7] opts.userPrompt            — per-call 用户级 (renderer 本地 storage,
           //                                    每次 startSession 透传, 优先级最高)
           // 空段被 .filter 跳过 (.md 文件为空 / userPrompt 为空 = 不 append).
           systemPrompt: (() => {
             const appendText = [
               MAKER_SYSTEM_PROMPT_APPEND,
               makerMemoryRules,
+              contactsRules,
               hostSystemPrompt,
               makerMemoryIndex,
               opts.userPrompt,

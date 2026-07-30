@@ -306,6 +306,17 @@ export interface AgentDeps {
   makerMemory?: MakerMemoryManager;
 
   /**
+   * 智能通讯录开关快照 (host 注入, desktop = readContactsSettings().enabled)。
+   * startSession 时求值一次决定注入哪段 contacts prompt(开 = 使用规范,
+   * 关 = 可选功能告示, 见 contacts/system-prompt.ts), 会话内不再重读 —
+   * 与 MCP provider isEnabled 的 session-start 评估语义一致, 保证同一会话里
+   * prompt 状态与 cindy_contacts 工具可用性不分叉, 也不破坏前缀缓存稳定性。
+   *
+   * 缺省 / undefined → 两段都不注入 (host 未接线, 与改造前行为一致)。
+   */
+  isContactsEnabled?: () => boolean;
+
+  /**
    * Host-side MCP approval policy, shared by **both** agents. `auto-approve`
    * skips the permission prompt; `prompt` preserves the normal approval UI and
    * its optional session grant; `prompt-each-time` always asks and never
