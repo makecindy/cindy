@@ -357,6 +357,14 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
   let generation = 0;
 
   /**
+   * 仅 `clearAll` 自增的代际。`clearDevice` 的列表重写要能被**登出清理**作废(否则它可能在
+   * 整棵目录被删之后把 session-list.json 重建出来),但**不能**被另一个并发的 `clearDevice`
+   * 作废 —— 后者也是清理动作,两者应当依次落地而不是互相顶掉(否则先清的那台设备会被
+   * 后清的那次写回列表)。所以清理之间用这个更粗的闸,与 `generation` 分开。
+   */
+  let purgeAllEpoch = 0;
+
+  /**
    * 同一文件的写入串行化(文件路径 → 尾部 promise)。
    *
    * 不串行化会让指纹失真:两次并发写入在 `await` 处交错时,最后落盘的内容与最后登记的
@@ -364,6 +372,53 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
    * 显示旧消息(review: greptile P1)。串成链后「落盘 → 登记指纹」始终成对且有序。
    */
   const writeChains = new Map<string, Promise<unknown>>();
+
+  /**
+   * 列表快照的实际写入体。**不自己加锁** —— 由调用方在 `serializeWrite(sessionListPath(), …)`
+   * 内调用,这样 `clearDevice` 能把「读快照 → 去掉自己 → 写回」整段放进同一条链里(否则两台
+   * 设备同时被收掉时,两次 read-modify-write 各自读到同一份旧快照、各自写「除我之外的全部」,
+   * 后写的那次把另一台已删设备恢复回来,review: codex P1)。
+   *
+   * 返回值让调用方能**核实**结果:隐私清理必须知道自己到底写成没写成。
+   */
+  async function writeSessionListLocked(
+    devices: readonly unknown[],
+    epoch: number,
+  ): Promise<'written' | 'removed' | 'skipped' | 'stale' | 'failed'> {
+    const file = sessionListPath();
+    if (epoch !== generation) return 'stale';
+    for (const perDeviceLimit of SESSION_LIST_SHRINK_STEPS) {
+      const normalized = normalizeDeviceSessions(devices, perDeviceLimit);
+      if (normalized.length === 0) {
+        lastWritten.delete(file);
+        try {
+          await fsp.rm(file, { force: true });
+          return 'removed';
+        } catch {
+          return 'failed';
+        }
+      }
+      const payload: StoredSessionList = { version: 1, updatedAt: Date.now(), devices: normalized };
+      const serialized = JSON.stringify(payload);
+      if (Buffer.byteLength(serialized, 'utf8') > MAX_SESSION_LIST_BYTES) continue;
+      // 指纹只算 devices,不含 updatedAt。10 秒一轮的 anti-entropy 绝大多数时候内容没变,
+      // 这里直接跳过落盘。
+      const body = JSON.stringify(normalized);
+      if (unchanged(file, body)) return 'skipped';
+      await ensureDir(path.dirname(file));
+      if (epoch !== generation) return 'stale';
+      if (!(await writeFileAtomic(file, serialized))) return 'failed';
+      if (epoch !== generation) {
+        lastWritten.delete(file);
+        await fsp.rm(file, { force: true }).catch(() => undefined);
+        return 'stale';
+      }
+      rememberWritten(file, body);
+      return 'written';
+    }
+    // 缩到最小档仍超上限:保留旧快照,不写入。
+    return 'skipped';
+  }
 
   function serializeWrite<T>(file: string, task: () => Promise<T>): Promise<T> {
     const prev = writeChains.get(file) ?? Promise.resolve();
@@ -438,43 +493,10 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     },
 
     async writeSessionList(devices) {
-      const file = sessionListPath();
       // 同 writeMessages:代际在请求发起时捕获(排队期间的清理必须能作废这笔)。
       const epoch = generation;
       // 与 writeMessages 同款:同一文件的写入串成链,保证「落盘 → 登记指纹」成对有序。
-      return serializeWrite(file, async () => {
-        if (epoch !== generation) return;
-        for (const perDeviceLimit of SESSION_LIST_SHRINK_STEPS) {
-          const normalized = normalizeDeviceSessions(devices, perDeviceLimit);
-          if (normalized.length === 0) {
-            lastWritten.delete(file);
-            await fsp.rm(file, { force: true }).catch(() => undefined);
-            return;
-          }
-          const payload: StoredSessionList = {
-            version: 1,
-            updatedAt: Date.now(),
-            devices: normalized,
-          };
-          const serialized = JSON.stringify(payload);
-          if (Buffer.byteLength(serialized, 'utf8') > MAX_SESSION_LIST_BYTES) continue;
-          // 同 writeMessages:指纹只算 devices,不含 updatedAt。10 秒一轮的 anti-entropy
-          // 绝大多数时候内容没变,这里直接跳过落盘。
-          const body = JSON.stringify(normalized);
-          if (unchanged(file, body)) return;
-          await ensureDir(path.dirname(file));
-          if (epoch !== generation) return;
-          if (!(await writeFileAtomic(file, serialized))) return;
-          if (epoch !== generation) {
-            lastWritten.delete(file);
-            await fsp.rm(file, { force: true }).catch(() => undefined);
-            return;
-          }
-          rememberWritten(file, body);
-          return;
-        }
-        // 缩到最小档仍超上限:保留旧快照,不写入。
-      });
+      await serializeWrite(sessionListPath(), () => writeSessionListLocked(devices, epoch));
     },
 
     /**
@@ -486,28 +508,57 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       const id = deviceId.trim();
       if (!id) return;
       generation += 1;
+      const epochAll = purgeAllEpoch;
       const dir = messagesDir();
       const prefix = `${safeSegment(id)}-${shortHash(id)}-`;
-      const names = await listFiles(dir);
       const stuck: string[] = [];
-      await Promise.all(
-        names
-          .filter((name) => name.startsWith(prefix))
-          .map(async (name) => {
-            const file = path.join(dir, name);
-            // 指纹一起清:文件删了却留着指纹,下次写同样内容会被去重跳过 → 文件回不来。
-            lastWritten.delete(file);
-            try {
-              await fsp.rm(file, { force: true });
-            } catch {
-              stuck.push(file);
-            }
-          }),
-      );
-      const others = (await this.readSessionList()).filter((device) => device.deviceId !== id);
-      await this.writeSessionList(others);
-      // 删不掉的文件(文件锁 / 权限)同样是隐私问题:被撤销的对端正文会留在盘上直到本账号
-      // 生命周期结束。抛出来让调用方登记重试,而不是把失败咽下去(review: codex P1)。
+
+      // 枚举必须 fail-closed:`listFiles` 是 fail-open 的(读不了就返回 []),用它的话
+      // messages/ 因 EACCES / EPERM / 锁而枚举失败时,这里会「一个文件都没删」却报成功,
+      // 于是 IPC 也不会登记重试,正文在权限恢复后照样能被读回(review: greptile + codex P1)。
+      const listing = await listMessageFileNames(dir);
+      if (listing.unreadable) {
+        // 数不出来 ≠ 里面没有。把目录本身计入待重试,删除留给下一次。
+        stuck.push(dir);
+      } else {
+        await Promise.all(
+          listing.names
+            .filter((name) => name.startsWith(prefix))
+            .map(async (name) => {
+              const file = path.join(dir, name);
+              // 指纹一起清:文件删了却留着指纹,下次写同样内容会被去重跳过 → 文件回不来。
+              lastWritten.delete(file);
+              try {
+                await fsp.rm(file, { force: true });
+              } catch {
+                stuck.push(file);
+              }
+            }),
+        );
+      }
+
+      // 「读快照 → 去掉这台设备 → 写回」整段进同一条串行化链:两台设备同时被收掉时,
+      // 各自读同一份旧快照再各写「除我之外的全部」,后写的那次会把另一台恢复回来
+      // (review: codex P1)。链内不能再调公开的 writeSessionList(同链嵌套会自锁),
+      // 因此直接用 writeSessionListLocked。
+      const listFile = sessionListPath();
+      const outcome = await serializeWrite(listFile, async () => {
+        // 只有 clearAll 能作废这段(它会把整棵目录删掉,这里不该再把列表写回来);
+        // 另一个并发的 clearDevice 不作废它 —— 两者依次落地才对。
+        if (epochAll !== purgeAllEpoch) return 'stale' as const;
+        const parsed = await readJson(listFile);
+        const devices = isRecord(parsed) && Array.isArray(parsed.devices) ? parsed.devices : [];
+        const others = normalizeDeviceSessions(devices).filter((device) => device.deviceId !== id);
+        // 传当前 generation:这笔写的是链内刚读到的最新盘上状态(不是"清理前的旧数据"),
+        // 不该被别的 clearDevice 自增出来的代际判成 stale。
+        return writeSessionListLocked(others, generation);
+      });
+      // 列表快照重写失败(Windows 上被占用 / owner 目录只读)同样要能被重试 —— 否则消息文件
+      // 删掉了、会话元数据还在盘上,下次冷启动照样把这台被撤销的设备画回侧边栏(review: codex P1)。
+      if (outcome === 'failed') stuck.push(listFile);
+
+      // 删不掉 / 数不出来的东西都是隐私问题:被撤销的对端正文会留在盘上直到本账号生命周期
+      // 结束。抛出来让调用方登记重试,而不是把失败咽下去。
       if (stuck.length > 0) throw new MirrorCachePurgeError(resolveRoot(), stuck, null);
     },
 
@@ -524,6 +575,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
      */
     async clearAll() {
       generation += 1;
+      purgeAllEpoch += 1;
       lastWritten.clear();
       const root = resolveRoot();
       try {
@@ -574,6 +626,30 @@ async function evictMessagesIfNeeded(
     await fsp.rm(file, { force: true }).catch(() => undefined);
     count -= 1;
     totalBytes -= entry.size;
+  }
+}
+
+/**
+ * 枚举 messages/ 下的缓存文件,**区分「空」与「数不出来」**。
+ *
+ * `listFiles` 是 fail-open 的(读不了就当空),那对纯优化路径(LRU 逐出)没问题;但隐私清理
+ * 不能用它 —— 目录因权限 / 锁枚举失败时会被当成「里面没东西」,于是一个文件都不删却报成功。
+ * 只有 `ENOENT` 能推出「真的没有」。
+ */
+async function listMessageFileNames(
+  dir: string,
+): Promise<{ names: string[]; unreadable: boolean }> {
+  try {
+    const entries = await fsp.readdir(dir, { withFileTypes: true });
+    return {
+      names: entries
+        .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+        .map((entry) => entry.name),
+      unreadable: false,
+    };
+  } catch (err) {
+    if (errnoCode(err) === 'ENOENT') return { names: [], unreadable: false };
+    return { names: [], unreadable: true };
   }
 }
 

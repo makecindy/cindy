@@ -519,6 +519,90 @@ describe('clearDevice / clearAll', () => {
     },
   );
 
+  // review(greptile + codex P1):枚举失败被当成「里面没东西」→ 一个文件都不删却报成功,
+  // IPC 也就不会登记重试,正文在权限恢复后照样能被读回。
+  it.skipIf(!canTestUnwritableDir)(
+    'clearDevice 在 messages 目录数不出内容时抛错(不静默成功)',
+    async () => {
+      const c = cache();
+      await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+      const dir = messagesDir();
+      await fsp.chmod(dir, 0o000);
+      try {
+        await c.clearDevice('dev-1').then(
+          () => expect.unreachable('clearDevice should have rejected'),
+          (err: unknown) => {
+            expect(err).toBeInstanceOf(MirrorCachePurgeError);
+            expect((err as MirrorCachePurgeError).remaining).toContain(dir);
+          },
+        );
+      } finally {
+        await fsp.chmod(dir, 0o700);
+      }
+    },
+  );
+
+  it('clearDevice 对不存在的 messages 目录正常完成(ENOENT = 真的没有)', async () => {
+    const c = cache();
+    await expect(c.clearDevice('dev-1')).resolves.toBeUndefined();
+  });
+
+  // review(codex P1):两台设备同时被收掉时,各自「读快照 → 写除我之外的全部」会互相覆盖。
+  it('clearAll 期间在途的 clearDevice 不会把列表快照重建出来', async () => {
+    const c = cache();
+    await c.writeSessionList([
+      { deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] },
+      { deviceId: 'dev-2', deviceName: 'PC', sessions: [{ id: 's2', status: 'active' }] },
+    ]);
+
+    const inFlight = c.clearDevice('dev-1');
+    await c.clearAll();
+    await inFlight.catch(() => undefined); // 清理失败与否不是这条断言的重点
+
+    expect(await c.readSessionList()).toEqual([]);
+    expect(fs.existsSync(path.join(root, __testing.sessionListFileName))).toBe(false);
+  });
+
+  it('并发 clearDevice 不会把彼此从列表快照里恢复回来', async () => {
+    const c = cache();
+    await c.writeSessionList([
+      { deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] },
+      { deviceId: 'dev-2', deviceName: 'PC', sessions: [{ id: 's2', status: 'active' }] },
+      { deviceId: 'dev-3', deviceName: 'Keep', sessions: [{ id: 's3', status: 'active' }] },
+    ]);
+
+    await Promise.all([c.clearDevice('dev-1'), c.clearDevice('dev-2')]);
+
+    expect((await c.readSessionList()).map((d) => d.deviceId)).toEqual(['dev-3']);
+  });
+
+  // review(codex P1):消息文件删掉了、会话元数据却还在盘上 → 下次冷启动照样把这台
+  // 被撤销的设备画回侧边栏。
+  it.skipIf(!canTestUnwritableDir)(
+    'clearDevice 在列表快照写不下去时抛错并带上该文件',
+    async () => {
+      const cacheRoot = path.join(root, 'ro-list');
+      const c = createMirrorCache(() => cacheRoot);
+      await c.writeSessionList([
+        { deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] },
+        { deviceId: 'dev-2', deviceName: 'PC', sessions: [{ id: 's2', status: 'active' }] },
+      ]);
+      const listFile = path.join(cacheRoot, __testing.sessionListFileName);
+      await fsp.chmod(cacheRoot, 0o500); // 目录只读:原子 rename 落不进去
+      try {
+        await c.clearDevice('dev-1').then(
+          () => expect.unreachable('clearDevice should have rejected'),
+          (err: unknown) => {
+            expect(err).toBeInstanceOf(MirrorCachePurgeError);
+            expect((err as MirrorCachePurgeError).remaining).toContain(listFile);
+          },
+        );
+      } finally {
+        await fsp.chmod(cacheRoot, 0o700);
+      }
+    },
+  );
+
   // review(codex P1):撤销设备时删不掉的文件会留到本账号生命周期结束,必须能被重试。
   it.skipIf(!canTestUnwritableDir)(
     'clearDevice 有文件删不掉时抛 MirrorCachePurgeError 并带上那些路径',
