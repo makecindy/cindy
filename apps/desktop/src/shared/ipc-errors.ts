@@ -23,6 +23,8 @@ export type IpcErrorCode =
   | 'REMOTE_PROVIDER_UPDATING'
   | 'REMOTE_PROVIDER_UNSUPPORTED'
   | 'REMOTE_NATIVE_OAUTH_UNAVAILABLE'
+  // 远端切模/切来源需要不同路由(claude-code setModel 守卫):提示重建会话。
+  | 'REMOTE_MODEL_SWITCH_ROUTE_CHANGE'
   | 'NO_LIVE_QUERY'
   // 智能通讯录: (platform, value) 身份已属于另一个联系人 — message 里带占用者 id
   | 'IDENTITY_CONFLICT'
@@ -159,6 +161,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'REMOTE_PROVIDER_UPDATING',
   'REMOTE_PROVIDER_UNSUPPORTED',
   'REMOTE_NATIVE_OAUTH_UNAVAILABLE',
+  'REMOTE_MODEL_SWITCH_ROUTE_CHANGE',
   'NO_LIVE_QUERY',
   'STALE_DIFF',
   'PUSH_LEASE_EXPIRED',

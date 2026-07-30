@@ -3894,25 +3894,40 @@ export class ClaudeCodeAgent extends BaseAgent {
                 //   401,必须拒绝(Greptile 六轮)。存在性(在/不在)同样比对(路由类型)。
                 const SUBSCRIPTION_TOKEN_KEY = 'CLAUDE_CODE_OAUTH_TOKEN';
                 const PROVIDER_KEY_KEYS = new Set(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']);
+                // 订阅身份元数据(scopes/subscriptionType/rateLimitTier)与 token 同源,
+                // 会在用户零操作下漂移(登录后 backfill 补齐 / 订阅计划变更刷新)——
+                // 与 token 同组按存在性比对,不按值(Fable 5 评估 B1:值比对会误拒)。
+                const SUBSCRIPTION_METADATA_KEYS = new Set([
+                  'CLAUDE_CODE_OAUTH_TOKEN',
+                  'CLAUDE_CODE_OAUTH_SCOPES',
+                  'CLAUDE_CODE_SUBSCRIPTION_TYPE',
+                  'CLAUDE_CODE_RATE_LIMIT_TIER',
+                ]);
                 const routeKeys = new Set([
                   ...Object.keys(remoteRoute.env),
                   ...Object.keys(nextRoute.env),
                 ]);
-                // 非订阅-token 字段的值(含自定义供应商 key + 定制头)+ 订阅 token 的存在性。
-                const pick = (env: Record<string, string>): Record<string, string> => {
-                  const out: Record<string, string> = {};
-                  for (const k of routeKeys) {
-                    if (k === SUBSCRIPTION_TOKEN_KEY) {
-                      if (env[k] !== undefined) out[k] = '<present>';
-                    } else if (env[k] !== undefined) {
-                      out[k] = env[k];
-                    }
-                  }
-                  return out;
-                };
+                // 非订阅字段的值(含自定义供应商 key + 定制头)按全并集比对;
+                // 订阅字段(token + 元数据)只按「spawn 时声明过的字段」(remoteRoute.env
+                // 的 key 集)比存在性 —— nextRoute 新增的元数据字段(backfill 后才有)
+                // 不算变化,remoteEnv 烤的是 spawn 时快照(Fable 5 B1 修正)。
+                const nonSubscriptionPick = (env: Record<string, string>): Record<string, string> =>
+                  Object.fromEntries(
+                    [...routeKeys]
+                      .filter((k) => !SUBSCRIPTION_METADATA_KEYS.has(k) && env[k] !== undefined)
+                      .map((k) => [k, env[k]]),
+                  );
+                const spawnDeclares = new Set(Object.keys(remoteRoute.env));
+                const subscriptionPresenceOf = (env: Record<string, string>): string[] =>
+                  [...spawnDeclares]
+                    .filter((k) => SUBSCRIPTION_METADATA_KEYS.has(k) && env[k] !== undefined)
+                    .sort();
                 return (
                   nextRoute.endpoint !== remoteRoute.endpoint ||
-                  JSON.stringify(pick(nextRoute.env)) !== JSON.stringify(pick(remoteEnv ?? {}))
+                  JSON.stringify(nonSubscriptionPick(nextRoute.env)) !==
+                    JSON.stringify(nonSubscriptionPick(remoteEnv ?? {})) ||
+                  JSON.stringify(subscriptionPresenceOf(nextRoute.env)) !==
+                    JSON.stringify(subscriptionPresenceOf(remoteEnv ?? {}))
                 );
               })()) ||
             // 网关路径(route null):切模时重新读当前网关 key,与 remoteEnv 里 spawn 时

@@ -5,7 +5,8 @@
     "REMOTE_WORKDIR_INVALID": "원격 프로젝트 경로가 올바르지 않습니다. 프로젝트 폴더를 다시 선택하세요.",
     "REMOTE_WORKDIR_NOT_FOUND": "원격 프로젝트 폴더가 없습니다. 프로젝트 폴더를 다시 선택하세요.",
     "REMOTE_WORKDIR_NOT_DIRECTORY": "원격 프로젝트 경로가 폴더가 아닙니다. 프로젝트 폴더를 다시 선택하세요.",
-    "REMOTE_WORKDIR_UNAVAILABLE": "원격 프로젝트 폴더에 접근할 수 없습니다. 네트워크 드라이브를 다시 연결한 후 재시도하세요."
+    "REMOTE_WORKDIR_UNAVAILABLE": "원격 프로젝트 폴더에 접근할 수 없습니다. 네트워크 드라이브를 다시 연결한 후 재시도하세요.",
+    "REMOTE_MODEL_SWITCH_ROUTE_CHANGE": "대상 모델 또는 소스에 다른 원격 라우트가 필요합니다. 원격 세션을 닫고 다시 생성하세요."
   },
   "providerError": {
     "AUTH_INVALID": "API 키가 유효하지 않거나 만료되었습니다(401). 키를 확인한 후 다시 시도하세요",

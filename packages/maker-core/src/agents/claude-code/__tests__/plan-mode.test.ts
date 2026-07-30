@@ -621,6 +621,48 @@ describe('ClaudeCodeAgent plan mode', () => {
     await handle.close();
   });
 
+  it('remote setModel allows same-route switch despite subscription metadata drift', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const fakeQuery = createFakeQuery();
+    const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async () =>
+      fakeQuery as never;
+    // 登录后 backfill 补齐 subscriptionType/rateLimitTier(用户零操作)—— 与 token 同组
+    // 按存在性比对,不按值,不误拒(Fable 5 评估 B1)。
+    let callCount = 0;
+    const resolveRemoteClaudeRoute = vi.fn(async () => {
+      callCount += 1;
+      return {
+        endpoint: 'https://api.anthropic.com',
+        env:
+          callCount === 1
+            ? { CLAUDE_CODE_OAUTH_TOKEN: 'tok' }
+            : {
+                CLAUDE_CODE_OAUTH_TOKEN: 'tok',
+                CLAUDE_CODE_SUBSCRIPTION_TYPE: 'max',
+                CLAUDE_CODE_RATE_LIMIT_TIER: 'tier-1',
+              },
+      };
+    });
+    const agent = new ClaudeCodeAgent(createDeps({
+      runtimeConfig: { remoteEndpoint: 'https://gw.example/claude' },
+      remoteCcQueryFactory,
+      resolveRemoteClaudeRoute,
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-metadata-drift',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+
+    await handle.setModel?.('claude-sonnet-5');
+    expect(fakeQuery.setModel).toHaveBeenCalled();
+    await handle.close();
+  });
+
   it('remote setModel rejects when a custom provider key changes (no refresh channel)', async () => {
     const configDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;
