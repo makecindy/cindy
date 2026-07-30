@@ -66,7 +66,9 @@ const invoke = vi.fn(async (_deviceId: string, channel: string, args: unknown[])
       contextTokens: 0, contextWindow: 0, totalCostUsd: 0,
     };
   }
-  if (channel === 'maker:input:get-projection') {
+  if (channel === 'maker:input:get-projection' || channel === 'maker:input:clear-session') {
+    // clear-session 必须返回合法 projection:返回 null 会让 applyInputProjection 抛出
+    // 未捕获拒绝(那条链在 clearSessionAfterGuard 里没有 catch),整轮 vitest 会因此失败。
     return emptyProjection(String(args[0]));
   }
   return null;
@@ -542,6 +544,38 @@ describe('remoteProjectsStore.hydrateFromCache', () => {
       { deviceId: 'dev-empty', deviceName: 'Empty', sessions: [] },
     ]);
     expect(remoteProjectsStore.hasDevice('dev-empty')).toBe(false);
+  });
+});
+
+describe('权威侧删消息 → 缓存一起清', () => {
+  // review(codex P1):/clear 与 messages:deleted 都**不会**触发"最新页"重拉(唯一的写缓存
+  // 路径),盘上那份仍是删除前的正文;此刻退出 app,下次离线冷启动就把它 hydrate 回来。
+  it('远程会话 /clear → 清掉该会话的缓存文件', async () => {
+    const s = sid();
+    registerRemote(s);
+    remoteList = [dbMessage(s, 'm1', 'x', '2026-01-01T00:00:00.000Z')];
+    makerChatStore.ensureInitialMessages(s);
+    await flush(30);
+    putMessages.mockClear();
+
+    makerChatStore.clearSession(s);
+    await flush(40);
+
+    expect(putMessages).toHaveBeenCalledWith(DEVICE_ID, s, []);
+  });
+
+  it('删消息(菜单删除 / messages:deleted 推送)→ 清掉该会话的缓存文件', async () => {
+    const s = sid();
+    registerRemote(s);
+    remoteList = [dbMessage(s, 'm1', 'x', '2026-01-01T00:00:00.000Z')];
+    makerChatStore.ensureInitialMessages(s);
+    await flush(30);
+    putMessages.mockClear();
+
+    makerChatStore.removeMessagesByClientIds(s, ['client-m1']);
+    await flush(20);
+
+    expect(putMessages).toHaveBeenCalledWith(DEVICE_ID, s, []);
   });
 });
 

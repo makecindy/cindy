@@ -518,13 +518,21 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       if (normalized.length === 0) {
         return serializeWrite(file, async () => {
           lastWritten.delete(file);
+          // 同名 `.tmp` 兄弟一起删:上一次落位崩在 writeFile 与 rename 之间时,那里是
+          // 完整明文,而 /clear、rewind 正是"这些消息必须消失"的场合(review: copilot)。
+          const tmpStuck = await removeTmpSiblings(dir, path.basename(file));
           try {
-            await fsp.rm(file, { force: true });
+            // recursive:目标位置若因异常变成目录,非递归 rm 会永远失败。
+            await fsp.rm(file, { recursive: true, force: true });
+            if (tmpStuck.length > 0) {
+              throw new MirrorCachePurgeError(rootAtStart, tmpStuck, null);
+            }
           } catch (err) {
+            if (err instanceof MirrorCachePurgeError) throw err;
             // 这条路径服务的是被控端 /clear、rewind、会话删除 —— 权威侧已经确认"这个会话没有
             // 可见消息了",本机却还留着旧正文,下次离线冷启动照样 hydrate 出来。删不掉要能被
             // 重试,不能咽下去(review: codex P1)。
-            throw new MirrorCachePurgeError(rootAtStart, [file], err);
+            throw new MirrorCachePurgeError(rootAtStart, [file, ...tmpStuck], err);
           }
         });
       }
@@ -532,8 +540,20 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       const payload: StoredMessages = { version: 1, updatedAt: Date.now(), messages: normalized };
       const serialized = JSON.stringify(payload);
       if (Buffer.byteLength(serialized, 'utf8') > MAX_MESSAGE_FILE_BYTES) {
-        // 单会话超限:放弃本次写入,保留旧文件(缓存只是首屏加速)。
-        return;
+        // 单会话超限:新页写不下 —— 但旧正本此刻可能是 rewind / 删消息**之前**的窗口,
+        // 而同一个超限页每次对账都会走到这里,永远不会有第二次机会更新它。所以**作废**
+        // 旧缓存,而不是留一份会骗人的旧页(review: codex P1)。
+        return serializeWrite(file, async () => {
+          if (unchanged(file, body)) return; // 内容没变(旧页就是它)→ 无需作废
+          lastWritten.delete(file);
+          try {
+            await fsp.rm(file, { recursive: true, force: true });
+          } catch {
+            if (await pathExists(file)) {
+              throw new MirrorCachePurgeError(rootAtStart, [file], null);
+            }
+          }
+        });
       }
       // 代际必须在**请求发起时**(排队之前)捕获,不能等任务开始执行才读:
       // 「发起 → 排队 → 清理自增 → 任务开始」这个序列里,任务读到的是清理后的新代际,
@@ -576,7 +596,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
           // (review: codex P1)。抛出去让 IPC 登记进 purge 队列。
           lastWritten.delete(file);
           try {
-            await fsp.rm(file, { force: true });
+            await fsp.rm(file, { recursive: true, force: true });
           } catch (err) {
             throw new MirrorCachePurgeError(rootAtStart, [file], err);
           }
@@ -782,6 +802,36 @@ async function listRootTmpFiles(root: string): Promise<{ files: string[]; unread
     if (errnoCode(err) === 'ENOENT') return { files: [], unreadable: false };
     return { files: [], unreadable: true };
   }
+}
+
+/**
+ * 删掉某个缓存文件的 `.tmp` 兄弟(`<file>.<hex>.tmp`)。返回仍然删不掉的路径。
+ * 那些 tmp 里是完整明文,`/clear` / rewind / 逐设备清理都必须把它们一起带走。
+ */
+async function removeTmpSiblings(dir: string, baseName: string): Promise<string[]> {
+  const stuck: string[] = [];
+  let names: string[];
+  try {
+    names = (await fsp.readdir(dir, { withFileTypes: true }))
+      .filter(
+        (entry) =>
+          entry.isFile() && entry.name.startsWith(`${baseName}.`) && entry.name.endsWith('.tmp'),
+      )
+      .map((entry) => entry.name);
+  } catch (err) {
+    // 数不出来 ≠ 里面没有:只有 ENOENT 能推出"真的没有"。
+    if (errnoCode(err) !== 'ENOENT') stuck.push(dir);
+    return stuck;
+  }
+  for (const name of names) {
+    const file = path.join(dir, name);
+    try {
+      await fsp.rm(file, { force: true });
+    } catch {
+      stuck.push(file);
+    }
+  }
+  return stuck;
 }
 
 async function pathExists(file: string): Promise<boolean> {

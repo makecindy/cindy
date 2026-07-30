@@ -216,14 +216,40 @@ describe('readMessages / writeMessages', () => {
     }
   });
 
-  it('单文件超体积上限 → 放弃写入并保留旧文件(宁缺毋滥)', async () => {
+  // review(codex P1):旧断言是"超限则保留旧文件"。但同一个超限页每次对账都会走到这条
+  // 分支,旧正本永远不会被更新 —— 若它是 rewind / 删消息**之前**的窗口,离线冷启动会
+  // 无限期显示已经不存在的消息。所以超限时**作废**旧缓存(宁缺毋滥的对象是"骗人的旧页")。
+  it('单文件超体积上限 → 作废旧缓存(不留一份永远不会被更新的旧页)', async () => {
     const c = cache();
     await c.writeMessages('dev-1', 'sess-1', [row('keep', '2026-01-01T00:00:00.000Z')]);
+    const file = path.join(messagesDir(), messageFileName('dev-1', 'sess-1'));
+    expect(fs.existsSync(file)).toBe(true);
+
     const huge = [
       row('huge', '2026-02-01T00:00:00.000Z', { content: 'x'.repeat(MAX_MESSAGE_FILE_BYTES + 1) }),
     ];
     await c.writeMessages('dev-1', 'sess-1', huge);
-    expect((await c.readMessages('dev-1', 'sess-1')).map((m) => m.id)).toEqual(['keep']);
+
+    expect(fs.existsSync(file)).toBe(false);
+    expect(await c.readMessages('dev-1', 'sess-1')).toEqual([]);
+  });
+
+  // review(copilot):`.tmp` 里是完整明文,而 /clear、rewind 正是"这些消息必须消失"的场合。
+  it('空写把同名 .tmp 兄弟一起删掉(上次落位崩在 rename 之前的残留)', async () => {
+    const c = cache();
+    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+    const file = path.join(messagesDir(), messageFileName('dev-1', 'sess-1'));
+    const orphanTmp = `${file}.beef.tmp`;
+    await fsp.writeFile(orphanTmp, '{"messages":[{"content":"明文"}]}', 'utf8');
+    // 别的会话的残留不该被这次清理带走。
+    const otherTmp = path.join(messagesDir(), `${messageFileName('dev-1', 'sess-2')}.cafe.tmp`);
+    await fsp.writeFile(otherTmp, '{}', 'utf8');
+
+    await c.writeMessages('dev-1', 'sess-1', []);
+
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.existsSync(orphanTmp)).toBe(false);
+    expect(fs.existsSync(otherTmp)).toBe(true);
   });
 
   it('空 deviceId / sessionId 一律 no-op(不在缓存根乱建文件)', async () => {

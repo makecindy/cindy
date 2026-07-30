@@ -75,7 +75,10 @@ import {
   requestRemoteReseed,
 } from '@/features/device-link/remoteProjectsStore';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
-import { readCachedMessages } from '@/features/device-link/mirrorCacheClient';
+import {
+  clearCachedMessages,
+  readCachedMessages,
+} from '@/features/device-link/mirrorCacheClient';
 import {
   noteRemoteSessionSyncCompleted,
   noteRemoteSessionSyncStarted,
@@ -5507,6 +5510,14 @@ function removeMessagesByClientIds(
 ): void {
   const deletedClientIds = new Set(clientIds.filter(Boolean));
   if (deletedClientIds.size === 0) return;
+  // 远程会话:删消息(菜单删除镜像 / 被控端 messages:deleted 推送)**不会**触发"最新页"
+  // 重拉 —— 那是唯一的写缓存路径。盘上那份还带着刚被删掉的行,此刻退出 app,下次离线冷
+  // 启动就把它 hydrate 回来(review: codex P1)。缓存是纯优化,清掉即可(下一次成功的
+  // 最新页拉取会重新写上)。
+  {
+    const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
+    if (deviceId) clearCachedMessages(deviceId, sessionId);
+  }
   discardPendingTextDelta(sessionId);
   // 作废删除提交前发起的历史分页，避免旧页响应把已经清除的行重新 merge 回来。
   if (options.invalidateHistory !== false) bumpMessagesEpoch(sessionId);
@@ -7642,6 +7653,13 @@ function clearSession(sessionId: string): void {
 
 async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Promise<void> {
   noteRendererClearBoundary(sessionId, clearedAt);
+  // 远程会话:/clear 之后**不会**再有一次"最新页"拉取(唯一写缓存的那条路径),盘上那份
+  // 仍是清空前的正文 —— 此刻退出 app,下次离线冷启动就把已经被清掉的对话 hydrate 回来
+  // (review: codex P1)。放在守卫之前:无论守卫成功、失败还是超时,缓存都必须消失。
+  {
+    const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
+    if (deviceId) clearCachedMessages(deviceId, sessionId);
+  }
   // Arm main-side clear guards before closing the CLI and clearing renderer state.
   let guardTimeoutId: ReturnType<typeof setTimeout> | undefined;
   let guardResult:
