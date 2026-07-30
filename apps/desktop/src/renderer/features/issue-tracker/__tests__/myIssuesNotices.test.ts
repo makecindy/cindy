@@ -38,7 +38,7 @@ describe('selectMyIssuesNotices', () => {
     expect(selectMyIssuesNotices(result({ items: [item()] }))).toEqual([]);
   });
 
-  it('平台接口未就绪:确有「状态未知」条目时才解释原因', () => {
+  it('平台接口未就绪 + 列表只有本机账本:说「只显示本机记录」成立', () => {
     expect(
       selectMyIssuesNotices(
         result({ degraded: 'platform-unavailable', items: [item({ state: 'unknown' })] }),
@@ -46,12 +46,15 @@ describe('selectMyIssuesNotices', () => {
     ).toEqual(['issueTracker.mine.platformUnavailableHint']);
   });
 
-  it('平台接口未就绪 + 一条都没有:不提示 —— 用户没问,也没有可见损失', () => {
-    expect(selectMyIssuesNotices(result({ degraded: 'platform-unavailable' }))).toEqual([]);
+  it('平台接口未就绪 + 一条都没有:**必须**提示 —— 空的本机兜底不能证明远端历史为空', () => {
+    // 曾经这里返回 [](想省掉接口上线前的常驻横幅),但那会让新设备 / 重装 / 提交早于
+    // 账本功能的用户直接看到「还没有提交过 Issue」,把「暂时查不到」说成「你从未提交」。
+    expect(selectMyIssuesNotices(result({ degraded: 'platform-unavailable' }))).toEqual([
+      'issueTracker.mine.platformUnavailableHint',
+    ]);
   });
 
-  it('平台接口未就绪但列表全部有真实状态(纯 GitHub 增强来源):不提示', () => {
-    // 判据若写成 items.length > 0,这里会错误地说「只显示本机记录」——文案也不成立。
+  it('平台接口未就绪但列表全部来自远端:提示历史可能不全,但不说「只显示本机记录」', () => {
     expect(
       selectMyIssuesNotices(
         result({
@@ -62,10 +65,14 @@ describe('selectMyIssuesNotices', () => {
           ],
         }),
       ),
-    ).toEqual([]);
+    ).toEqual(['issueTracker.mine.platformUnavailablePartialHint']);
   });
 
-  it('混合列表里只要有一条状态未知就提示', () => {
+  it('混合列表(增强有内容 + 账本里一条平台代发):不得谎称「只显示本机记录」', () => {
+    // 这正是读接口未上线时最常见的真实场景:平台 404、GitHub 增强并回几十条、账本里
+    // 有一条平台代发记录(作者是 cindy-issue App,不出现在 author: 搜索里 → 保持
+    // unknown)。旧判据 some(state === 'unknown') 在这里为真,于是推出「只显示本机
+    // 记录」——而同一页明明列着一堆 GitHub 账号名下的 issue。
     expect(
       selectMyIssuesNotices(
         result({
@@ -76,7 +83,7 @@ describe('selectMyIssuesNotices', () => {
           ],
         }),
       ),
-    ).toEqual(['issueTracker.mine.platformUnavailableHint']);
+    ).toEqual(['issueTracker.mine.platformUnavailablePartialHint']);
   });
 
   it('未登录 / 取数失败无条件提示,空列表时也要说清是「没查到」而不是「没有」', () => {

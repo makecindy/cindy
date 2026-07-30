@@ -6623,9 +6623,10 @@
       "commentCount_other": "{{count}} comments",
       "openOnGithub": "Open on GitHub",
       "viewerGithub": "GitHub account @{{login}}",
-      "platformUnavailableHint": "Showing only submissions recorded on this device. Live status for these issues isn't available in the app yet.",
+      "platformUnavailableHint": "Showing only submissions recorded on this device. Issues you filed on other devices, and their live status on GitHub, aren't available in the app yet.",
+      "platformUnavailablePartialHint": "Issues you filed on other devices aren't available in the app yet, so this list may be incomplete.",
       "notSignedInHint": "Sign in to your Cindy account to see every issue you've filed, along with its current status.",
-      "fetchFailedHint": "Couldn't load the latest status. Showing only submissions recorded on this device.",
+      "fetchFailedHint": "Couldn't load the latest status. Showing only submissions recorded on this device, so this list may be incomplete.",
       "fetchFailedPartialHint": "Couldn't load the latest status, so some issues may show incomplete status.",
       "truncatedHint": "There are more issues than shown here — open GitHub for the full list."
     },

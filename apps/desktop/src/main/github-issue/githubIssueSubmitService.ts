@@ -15,6 +15,7 @@ import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import { CINDY_REGION_CODE } from '../../shared/regionCode.js';
 import { normalizeIssuePublicName } from '../../shared/issuePublicName.js';
 import type { SubmittedIssueRecord } from '../../shared/myIssues.js';
+import { myIssueUrl } from '../../shared/myIssues.js';
 import type {
   IssueConfirmDecision,
   IssueDraft,
@@ -184,7 +185,6 @@ export async function submitGithubIssueWithConfirm(
     }));
     recordSubmission(deps, submissionIdentity, {
       number: result.githubIssue.number,
-      url: result.githubIssue.url,
       title: finalTitle,
       type: decision.type,
       publicName: confirmedPublicName,
@@ -207,7 +207,6 @@ function recordSubmission(
   submissionIdentity: IssueSubmissionIdentity,
   submitted: {
     number: number;
-    url: string;
     title: string;
     type: 'bug' | 'feature';
     publicName: string | null;
@@ -217,7 +216,11 @@ function recordSubmission(
   try {
     deps.onSubmitted({
       number: submitted.number,
-      url: submitted.url,
+      // 派生而不是存 postIssue 返回的原值:账本**读取**侧用 isMyIssueUrl 强校验
+      // (必须指向本仓这一号 issue)。写入侧存原值就会两侧口径不一 —— 返回的是 API
+      // 链接或别的 host 时,这条记录写得进去、读出来却被当坏数据过滤掉,平台读接口
+      // 未就绪 / 离线时用户看不到自己刚提交的那条。url 在系统里只有这一个产出方式。
+      url: myIssueUrl(submitted.number),
       title: submitted.title,
       type: submitted.type,
       submittedAt: new Date().toISOString(),

@@ -311,6 +311,21 @@ describe('submitGithubIssueWithConfirm', () => {
     expect(record).not.toHaveProperty('publicName');
   });
 
+  it('记账的 url 由 issue 号派生,不采纳 postIssue 返回的原值', async () => {
+    // 账本**读取**侧用 isMyIssueUrl 强校验(必须指向本仓这一号 issue)。写入侧存原值
+    // 就两侧口径不一:返回 API 链接或别的 host 时,这条记录写得进去、读出来却被当坏
+    // 数据过滤掉 —— 平台读接口未就绪 / 离线时,用户看不到自己刚提交的那条。
+    const onSubmitted = vi.fn();
+    const { deps } = makeDeps({
+      postIssue: vi.fn(async () => ({
+        githubIssue: { number: 80, url: 'https://api.github.com/repos/makecindy/cindy/issues/80' },
+      })),
+      onSubmitted,
+    });
+    await expect(submitGithubIssueWithConfirm(deps, REQ)).resolves.toMatchObject({ ok: true });
+    expect(onSubmitted.mock.calls[0]![0].url).toBe('https://github.com/makecindy/cindy/issues/80');
+  });
+
   it('记账用的是用户确认版标题与类型,不是 agent 传入的', async () => {
     const onSubmitted = vi.fn();
     const { deps } = makeDeps({

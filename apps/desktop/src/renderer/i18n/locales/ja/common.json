@@ -6612,9 +6612,10 @@
       "commentCount_other": "コメント {{count}} 件",
       "openOnGithub": "GitHub で開く",
       "viewerGithub": "GitHub アカウント @{{login}}",
-      "platformUnavailableHint": "この端末に記録された送信分のみを表示しています。これらの Issue の最新ステータスはまだアプリ内で表示できません。",
+      "platformUnavailableHint": "この端末に記録された送信分のみを表示しています。他の端末から送信した Issue と GitHub 上の最新ステータスは、まだアプリ内で表示できません。",
+      "platformUnavailablePartialHint": "他の端末から送信した Issue はまだアプリ内で表示できないため、一覧が不完全な場合があります。",
       "notSignedInHint": "Cindy アカウントにサインインすると、送信したすべての Issue と最新のステータスを表示できます。",
-      "fetchFailedHint": "最新ステータスを取得できませんでした。この端末に記録された送信分のみを表示しています。",
+      "fetchFailedHint": "最新ステータスを取得できませんでした。この端末に記録された送信分のみを表示しているため、一覧が不完全な場合があります。",
       "fetchFailedPartialHint": "最新ステータスを取得できませんでした。一部の Issue はステータスが不完全な場合があります。",
       "truncatedHint": "Issue が多いため一部のみ表示しています。全件は GitHub で確認してください。"
     },
