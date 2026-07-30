@@ -260,6 +260,7 @@ import {
   installVoiceInputPowerRelease,
 } from './voice-input/powerReleaseNotifier';
 import { reapClaudeOrphansSync } from './claude-orphan-reaper';
+import { startAgentProcessPriorityWatcher } from './agent-process-priority';
 import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService';
 import { initNotificationService } from './notificationService';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
@@ -970,6 +971,15 @@ try {
   // and logs to debug. This only fires on truly unexpected throws (e.g. module
   // load failure) and must never abort bootstrap.
   createLogger('claude-orphan-reaper').warn('initial reap threw', { error: String(err) });
+}
+
+// ── agent 进程优先级降档 watcher(agent 资源占用治理)─────────────────────
+// 设置(processPriority)为 normal 且无欠恢复进程时,每 tick 零成本(不扫进程表);
+// interval 已 unref,进程退出不被它拖住。所有失败 best-effort,不影响启动。
+try {
+  startAgentProcessPriorityWatcher();
+} catch (err) {
+  createLogger('agent-process-priority').warn('watcher start threw', { error: String(err) });
 }
 
 // ── 启动诊断 (issue #758) ────────────────────────────────────────────────
