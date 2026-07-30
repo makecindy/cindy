@@ -34,6 +34,7 @@ import { stripTerminalControlSequences } from '../shared/terminal-output.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import { formatOverloadRetryMessage, parseOverloadError } from '../shared/overload-error.js';
 import { commandExecutionDisplayInput, type CommandExecutionDisplayInput } from './command-display.js';
+import { codexErrorInfoTag } from './app-server/protocol.js';
 import type {
   ItemCompletedNotification,
   ItemStartedNotification,
@@ -250,10 +251,15 @@ export function translateErrorNotification(
   const signals = extractNonSecretErrorSignals(message);
   const errorStatus =
     signals.errorStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
+  // 结构化错误标识。过载判定优先吃它(见下方 capacity 分支), 同时透出到 error data
+  // 供诊断与下游归因。**不参与上面的 errorStatus 推断** —— 那条链路上挂着
+  // renderer 的 401 banner 与 auth 修复 UX, 改推断依据会连带改这些行为。
+  const errorInfoTag = codexErrorInfoTag(params.error?.codexErrorInfo);
   const safeErrorData = {
     message: safeMessage,
     ...(errorStatus !== undefined ? { errorStatus } : {}),
     ...(signals.usageLimit ? { usageLimit: true } : {}),
+    ...(errorInfoTag !== undefined ? { codexErrorInfo: errorInfoTag } : {}),
   };
   // willRetry=true 的暂时错误 (transient API blip / 5xx blip), server 自己会重试 — 默认
   // 不 emit error event 给 UI,否则会把瞬时错误暴露成用户可见失败。**但** auth 缺失
@@ -319,7 +325,7 @@ export function translateErrorNotification(
   // 时 tryTakeOverOverload 返回 null, 落回下面的终止错误路径。
   if (
     !params.willRetry &&
-    parseOverloadError(safeMessage, signals.errorStatus)?.kind === 'capacity'
+    parseOverloadError(safeMessage, signals.errorStatus, errorInfoTag)?.kind === 'capacity'
   ) {
     const progress = ctx.tryTakeOverOverload?.();
     if (progress) {

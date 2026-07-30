@@ -119,6 +119,7 @@ import {
 } from '../credential-mode.js';
 import {
   Method,
+  codexErrorInfoTag,
   type AskForApproval,
   type ApprovalsReviewer,
   type ApprovalDecision,
@@ -5970,12 +5971,15 @@ export class CodexAgent extends BaseAgent {
         // 不认 → 落到既有的 `stale codex terminal error ignored` 分支被丢掉, 这是安全的:
         // 真属于某个 turn 的话, server 随后会为那个 turn 发权威的 turn/completed(failed),
         // 收口由它完成。
+        // 判定同样优先吃结构化 codexErrorInfo, 文案只作老 daemon 兜底: 这条判据决定
+        // 空 id 的容量拒绝能不能被归属到在飞的 turn/start, 漏判 = 整轮重投预算白给。
         const idLessCapacityError =
           params.turnId === ''
           && isTerminalError
           && parseOverloadError(
             params.error?.message ?? '',
             extractNonSecretErrorSignals(params.error?.message ?? '').errorStatus,
+            codexErrorInfoTag(params.error?.codexErrorInfo),
           ) !== null;
         const idLessAttributable = inFlightStarts.size === 1;
         const targetsIdLessPendingStart =
