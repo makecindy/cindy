@@ -30,7 +30,7 @@ import { createHash, randomBytes } from 'node:crypto';
 
 import { createLogger } from '../logger';
 import { withCrossProcessLock } from './crossProcessLock';
-import { bumpClearedCounter, CLEARED_ACCOUNT } from './mirrorCacheBarrier';
+import { bumpClearedCounter, cacheLockPath, CLEARED_ACCOUNT } from './mirrorCacheBarrier';
 
 const log = createLogger('device-link:mirror-cache-purge');
 
@@ -324,9 +324,14 @@ function compactEntries(entries: readonly PurgeEntry[]): PurgeEntry[] {
   for (const entry of entries) {
     const key = path.resolve(entry.root);
     const existing = byRoot.get(key);
+    // barriers 取并集:折叠成整根条目不代表"不用补屏障了" —— 消化时若没有具体 key,
+    // 就只能退回账号级,而账号基线是 put 开始时才采样的,救不了会话级那个洞
+    // (review: codex P1)。整根删除是路径的超集,屏障却必须逐个保留。
+    const barriers = safeBarrierKeys([...(existing?.barriers ?? []), ...(entry.barriers ?? [])]);
     byRoot.set(key, {
       root: entry.root,
       paths: undefined,
+      ...(barriers.length > 0 ? { barriers } : {}),
       since: existing ? Math.min(existing.since, entry.since) : entry.since,
       attempts: Math.max(existing?.attempts ?? 0, entry.attempts),
     });
@@ -580,29 +585,44 @@ async function drainPurgeQueueLocked(
       // 优先自增**当初失败的那些 key**(会话级 / 设备级);没有登记时(整根条目、老版本条目)
       // 退回账号级 —— 它是 clearAll 失败那条路径的正解。
       const barrierKeys = safeBarrierKeys(entry.barriers);
-      for (const key of barrierKeys.length > 0 ? barrierKeys : [CLEARED_ACCOUNT]) {
-        await bumpClearedCounter(entry.root, key);
-      }
-      if (!classified.wholeRoot && entry.paths && entry.paths.length > 0) {
-        // 逐个删成功才算清掉;剩下的继续留在队列里。
-        //
-        // `recursive: true` 是必需的:清理路径可能登记的是**目录** —— `clearDevice` 在
-        // `messages/` 因权限而枚举失败时登记的就是那个目录本身。非递归的 `rm` 对非空目录会
-        // 报 ERR_FS_EISDIR,于是权限恢复后这条重试也永远失败,已撤销设备的正文长期残留
-        // (review: greptile + codex P1)。目标已被 isPurgablePath 限制在自己的 root 之内,
-        // 递归不会越界。
-        const stuck: string[] = [];
-        for (const target of targets) {
-          try {
-            await fsp.rm(target, { recursive: true, force: true });
-          } catch {
-            stuck.push(target);
-          }
+      const keysToBump = barrierKeys.length > 0 ? barrierKeys : [CLEARED_ACCOUNT];
+      // 整段补删拿着**镜像缓存自己那把跨进程锁**跑(队列锁只互斥队列簿记,管不到缓存写入)。
+      // 否则另一个实例的最新页写入可以在"自增之后、删除之前"发起:它读到的是新计数,提交时也
+      // 一致,于是在 rm 之后把被撤销的正文重建出来,而这里照样把队列条目扔掉(review: codex P1)。
+      // 拿不到锁也照删(删除是安全方向),那种情况由收尾的第二次自增兜住。
+      // 锁文件要能建出来:控制面目录可能还不存在(store 侧同样先 ensureDir)。
+      const lockFile = cacheLockPath(entry.root);
+      await fsp.mkdir(path.dirname(lockFile), { recursive: true }).catch(() => undefined);
+      await withCrossProcessLock(lockFile, { label: 'mirror-cache' }, async (status) => {
+        if (!status.held) {
+          log.warn(`purging ${entry.root} without the mirror-cache lock; relying on barriers`);
         }
-        if (stuck.length > 0) throw new Error(`${stuck.length} path(s) still undeletable`);
-      } else {
-        await fsp.rm(entry.root, { recursive: true, force: true });
-      }
+        for (const key of keysToBump) await bumpClearedCounter(entry.root, key);
+        if (!classified.wholeRoot && entry.paths && entry.paths.length > 0) {
+          // 逐个删成功才算清掉;剩下的继续留在队列里。
+          //
+          // `recursive: true` 是必需的:清理路径可能登记的是**目录** —— `clearDevice` 在
+          // `messages/` 因权限而枚举失败时登记的就是那个目录本身。非递归的 `rm` 对非空目录会
+          // 报 ERR_FS_EISDIR,于是权限恢复后这条重试也永远失败,已撤销设备的正文长期残留
+          // (review: greptile + codex P1)。目标已被 isPurgablePath 限制在自己的 root 之内,
+          // 递归不会越界。
+          const stuck: string[] = [];
+          for (const target of targets) {
+            try {
+              await fsp.rm(target, { recursive: true, force: true });
+            } catch {
+              stuck.push(target);
+            }
+          }
+          if (stuck.length > 0) throw new Error(`${stuck.length} path(s) still undeletable`);
+        } else {
+          await fsp.rm(entry.root, { recursive: true, force: true });
+        }
+        // 收尾再自增一次(同 clearDevice / clearAll 的前后两次):挡住"内容取自补删**进行中**"
+        // 的写入 —— 它入口读到的已是第一次自增之后的值,只靠第一次挡不住它。自增失败即视为
+        // 没清完,整条留着重试。
+        for (const key of keysToBump) await bumpClearedCounter(entry.root, key);
+      });
       purged += 1;
       purgedKeys.add(key);
       memoryQueue.delete(key);
@@ -645,6 +665,7 @@ export const __testing = {
   pendingDirName: QUEUE_PENDING_DIR,
   maxEntries: MAX_ENTRIES,
   readQueue,
+  compactEntries,
   resetMemoryQueue(): void {
     memoryQueue.clear();
   },

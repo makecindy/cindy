@@ -46,6 +46,11 @@ export function controlDir(root: string): string {
   return `${root}${CACHE_CONTROL_SUFFIX}`;
 }
 
+/** 镜像缓存的跨进程锁文件(store 的写入 / 清理与 purge 队列的补删都用它互斥)。 */
+export function cacheLockPath(root: string): string {
+  return path.join(controlDir(root), 'lock');
+}
+
 export function clearedMarkPath(root: string, key: string): string {
   return path.join(controlDir(root), CLEARED_DIR, key);
 }

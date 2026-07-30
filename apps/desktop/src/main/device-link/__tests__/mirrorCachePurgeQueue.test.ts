@@ -241,7 +241,8 @@ describe('文件级条目(clearDevice 删不掉时用)', () => {
     }
 
     expect(fs.existsSync(target)).toBe(false);
-    expect(Number.parseInt(await fsp.readFile(accountMark, 'utf8'), 10)).toBe(4);
+    // 前后各自增一次(同 clearDevice / clearAll):3 → 4(删除前)→ 5(收尾)。
+    expect(Number.parseInt(await fsp.readFile(accountMark, 'utf8'), 10)).toBe(5);
     expect(barrierAtFirstDelete).toEqual([4]);
   });
 
@@ -259,7 +260,8 @@ describe('文件级条目(clearDevice 删不掉时用)', () => {
     expect((await __testing.readQueue())[0]?.barriers).toEqual(['sess-key']);
     expect(await drainPurgeQueue()).toEqual({ purged: 1, pending: 0 });
 
-    expect(Number.parseInt(await fsp.readFile(path.join(cleared, 'sess-key'), 'utf8'), 10)).toBe(6);
+    // 前后各自增一次:5 → 6(删除前)→ 7(收尾,挡住"取自补删进行中"的写入)。
+    expect(Number.parseInt(await fsp.readFile(path.join(cleared, 'sess-key'), 'utf8'), 10)).toBe(7);
     // 账号级不该被顺带改动(它不是这条记录要修的东西)。
     expect(Number.parseInt(await fsp.readFile(path.join(cleared, '_account'), 'utf8'), 10)).toBe(3);
   });
@@ -524,6 +526,52 @@ describe('条目数超上限', () => {
     expect(result.purged).toBe(40);
     for (const root of roots) expect(fs.existsSync(root)).toBe(false);
   }, 30_000);
+
+  // review(codex P1):折叠成整根条目时把 barriers 丢掉,消化就只能退回账号级 ——
+  // 而账号基线是 put 开始时才采样的,救不了会话级那个洞。
+  it('折叠时保留 barriers 并集(同一 root 的多条文件级记录)', async () => {
+    const root = await makeOwnerCache('owner-1');
+    const many = Array.from({ length: 40 }, (_, i) => path.join(root, 'messages', `m${i}.json`));
+    // 同一个 root 下的 40 条独立记录(每条一个文件 + 一个待修 key),超过条目上限触发折叠。
+    for (const [i, file] of many.entries()) {
+      await enqueuePurge(root, [file], [`sess-${i}`]);
+    }
+    const collapsed = __testing.compactEntries(await __testing.readQueue());
+    const forRoot = collapsed.filter((e) => path.resolve(e.root) === path.resolve(root));
+    expect(forRoot).toHaveLength(1);
+    // 折叠后是整根条目,但每个待修 key 都还在(受 MAX_BARRIERS_PER_ENTRY 上限约束)。
+    expect(forRoot[0]?.paths).toBeUndefined();
+    expect(forRoot[0]?.barriers?.length ?? 0).toBeGreaterThan(0);
+    expect(forRoot[0]?.barriers).toContain('sess-0');
+  }, 30_000);
+});
+
+describe('补删与缓存写入的互斥', () => {
+  // review(codex P1):队列锁只互斥队列簿记。另一个实例的最新页写入可以在"自增之后、删除之前"
+  // 发起(它读到的是新计数),然后在 rm 之后提交,把被撤销的正文重建出来 —— 而这里照样把条目
+  // 扔掉。两道:整段补删拿着**镜像缓存那把锁**、以及收尾再自增一次。
+  it('补删期间持有镜像缓存的跨进程锁', async () => {
+    const root = await makeOwnerCache('owner-1');
+    const lock = path.join(`${root}.control`, 'lock');
+    const target = path.join(root, 'messages', 'a.json');
+
+    let lockHeldDuringDelete = false;
+    const originalRm = fsp.rm;
+    const spy = vi.spyOn(fsp, 'rm').mockImplementation((async (t: unknown, ...rest: unknown[]) => {
+      if (typeof t === 'string' && t === target) lockHeldDuringDelete = fs.existsSync(lock);
+      return (originalRm as (...args: unknown[]) => Promise<unknown>)(t, ...rest);
+    }) as unknown as typeof fsp.rm);
+    try {
+      await enqueuePurge(root, [target], ['sess-key']);
+      expect(await drainPurgeQueue()).toEqual({ purged: 1, pending: 0 });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(lockHeldDuringDelete).toBe(true);
+    // 锁在收尾释放(不留残骸挡住后续实例)。
+    expect(fs.existsSync(lock)).toBe(false);
+  });
 });
 
 describe('溢写失败', () => {

@@ -39,6 +39,7 @@ import { withCrossProcessLock } from './crossProcessLock';
 // 作废屏障(持久计数器)与 purge 队列共用一份实现 —— 队列在补删残留后要顺手把屏障修好。
 import {
   bumpClearedCounter,
+  cacheLockPath,
   controlDir,
   numericCounter,
   readClearCounter,
@@ -74,7 +75,6 @@ const MESSAGES_DIR = 'messages';
  * 而 clearAll 照报成功(review: codex P1)。所以它们放在缓存根的**兄弟**目录里,
  * 仍在 owner 命名空间内(切账号照样隔离),但不在被删的子树中。
  */
-const CACHE_LOCK_FILE = 'lock';
 const SESSION_LIST_FILE = 'session-list.json';
 
 /** 缓存快照里的单台设备(deviceName 供种入时重新 stamp)。 */
@@ -697,10 +697,6 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     const now = await readClearCounter(root, key);
     if (typeof now !== 'number') return true;
     return now !== before;
-  }
-
-  function cacheLockPath(root: string): string {
-    return path.join(controlDir(root), CACHE_LOCK_FILE);
   }
 
   /**
