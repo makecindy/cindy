@@ -3107,8 +3107,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // bridge 的 localHandler 刚记的 true 覆写回 false(PR review P1)。terminal
       // error 事件的 agentMeta.model 反映 SDK 消息里那次调用真实用的模型
       // (translator.ts extractAssistantMeta 读 msg.message.model,不是会话
-      // 静态选择),按它判断才对;拿不到 agentMeta(极少数无 envelope 的兜底
-      // 错误分支)时宁可跳过、不覆写——没有可靠信号时不应该断言分类。
+      // 静态选择),按它判断才对;拿不到 agentMeta 时(极少数无 envelope 的
+      // 兜底错误分支,SDKAPIRetryMessage 本身不带 parent_tool_use_id)translator
+      // 已经在"本 session 从未启动过 subagent"这一无歧义场景下用
+      // lastAssistantMeta 兜底填了 agentMeta(见 translator.ts api_retry 分支
+      // 注释,PR review P1);仍然拿不到(并发 subagent 场景,归因给哪个 lane
+      // 有歧义)时才真正跳过、不覆写——没有可靠信号时不应该断言分类。
       const failingModel = (event as { agentMeta?: { model?: string } | null }).agentMeta?.model;
       if (
         event.source === 'claude-code' &&

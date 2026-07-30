@@ -735,6 +735,20 @@ function handleSystem(
     // 已有 envelope 时保留其中的人话文案与 transcript metadata，只补 retry 元数据。
     const previous = ctx.turn.pendingApiError;
     const hasAssistantEnvelope = previous?.agentMeta !== undefined;
+    // 完全没有 envelope(纯连接失败、SDK 从没吐过一条 assistant 消息)时,
+    // agentMeta 缺位会让下游(register.ts 计费归因)只能跳过、不覆写(见其
+    // 注释)。SDKAPIRetryMessage 本身不带 parent_tool_use_id,无法判断这次
+    // retry 属于哪个并发 subagent(round 20-23 已验证：按 lastAssistantMeta
+    // 猜并发场景下的 lane 会把归因导向错误模型,不能赌)。但当本 session
+    // 从未启动过任何 subagent(resolvedSubagentModelByParentToolUseId 为空、
+    // 且从未被写入过)时不存在这个歧义 —— 迄今唯一活跃的 lane 只能是主
+    // agent,ctx.rt.lastAssistantMeta 就是它自己的 meta,可以安全借用
+    // (PR review P1:不应把"拿不到 agentMeta"一律等同于"必须跳过")。
+    const noSubagentEverLaunched = ctx.rt.resolvedSubagentModelByParentToolUseId.size === 0
+      && ctx.rt.subagentParentToolUseIdByTaskId.size === 0;
+    const fallbackMeta = !hasAssistantEnvelope && noSubagentEverLaunched
+      ? ctx.rt.lastAssistantMeta ?? undefined
+      : undefined;
     const sdkError = redactSensitiveText(hasAssistantEnvelope ? previous.sdkError : (msg.error || 'unknown'));
     const statusLabel = msg.error_status == null ? 'connection error' : `HTTP ${msg.error_status}`;
     const retryLabel = typeof msg.attempt === 'number' && typeof msg.max_retries === 'number'
@@ -745,7 +759,11 @@ function handleSystem(
         ? previous.message
         : `SDK API request failed: ${sdkError} (${statusLabel}${retryLabel})`,
       sdkError,
-      ...(hasAssistantEnvelope ? { agentMeta: previous.agentMeta } : {}),
+      ...(hasAssistantEnvelope
+        ? { agentMeta: previous.agentMeta }
+        : fallbackMeta
+          ? { agentMeta: fallbackMeta }
+          : {}),
       errorStatus: msg.error_status,
       retryAttempt: msg.attempt,
       maxRetries: msg.max_retries,

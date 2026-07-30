@@ -443,6 +443,56 @@ describe('Claude Code translator is_error result guard', () => {
     expect(events.some((e) => e.type === 'done'), 'done tail remains available for usage accounting').toBe(true);
   });
 
+  it('falls back to lastAssistantMeta for a no-envelope api_retry when no subagent has ever launched', async () => {
+    // 本 session 从未启动过 subagent 时,当前活跃 lane 只能是主 agent —— 一条
+    // 完全没有 assistant.error envelope 的 api_retry 可以安全借用
+    // ctx.rt.lastAssistantMeta,不会像并发 subagent 场景那样猜错 lane
+    // (PR review P1:不应把"拿不到 agentMeta"一律等同于"必须跳过")。
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker);
+
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        uuid: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        message: { model: 'codex/gpt-5.5', content: [{ type: 'text', text: 'hi' }] },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 3,
+        max_retries: 3,
+        retry_delay_ms: 4_000,
+        error_status: null,
+        error: 'unknown',
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'result',
+        is_error: true,
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        usage: { input_tokens: 100, output_tokens: 0 },
+        modelUsage: { 'codex/gpt-5.5': { inputTokens: 100, outputTokens: 0, costUSD: 0, contextWindow: 272_000 } },
+      },
+      queue,
+      ctx,
+    );
+
+    const events = await drain(queue);
+    const errors = events.filter((e) => e.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.agentMeta).toMatchObject({ uuid: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', model: 'codex/gpt-5.5' });
+  });
+
   // SDK 自带退避重试（529 overloaded / 429 / 连接错误都走它）。这组用例锁住
   // "透出进度但绝不自己重投"：客户端再叠一层重试会把一次上游过载放大成指数级
   // 请求，而失败请求照扣额度。
