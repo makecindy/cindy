@@ -85,9 +85,26 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain("(providerId == null || providerId === 'openai')");
     expect(source).toContain('modelId.startsWith(XAI_MODEL_PREFIX)');
     expect(source).toContain("providerId === 'xai'");
+    // 本地 oauth-bearer 子句整体等 codexRouteResolved 才提交分类,不先按 env-key
+    // 占位值渲染再闪切(PR review P1)。
+    expect(source).toContain(
+      "codexRouteResolved\n      && codexAuthInjection === 'oauth-bearer'\n      && !isCodexGatewayBudgetModel\n      && (providerId == null || providerId === 'openai')",
+    );
     expect(source).toContain('const isCodexSubscription = isCodexOauth || isCodexXaiProvider;');
-    expect(source).toContain("const isCodexApi = vendorKey === 'codex' && !isCodexSubscription");
+    expect(source).toContain(
+      "const isCodexApi = vendorKey === 'codex' && !isCodexSubscription && !codexBillingFormPending;",
+    );
     expect(source).not.toContain("codexAuthState.authSource === 'oauth'");
+  });
+
+  it('keeps the whole local codex billing form pending until the runtime route resolves', () => {
+    // 整张 codex 计费 form(isCodexOauth / isCodexApi 及其驱动的 dashboard 链接、
+    // API 空态/token 兜底展示)都据 codexBillingFormPending 等 resolved,不能先按
+    // env-key 占位渲染一种形态再闪切(PR review P1)。远端 / xAI 由 remoteHostId /
+    // modelId 直接判定,不受本门控。
+    expect(source).toContain(
+      "const codexBillingFormPending =\n    vendorKey === 'codex' && !isRemoteCodexSession && !isDeviceLinkRemote\n    && !isCodexXaiProvider && !codexRouteResolved;",
+    );
   });
 
   it('renders device-link remote sessions data-driven without local-account classification', () => {

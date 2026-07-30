@@ -1134,13 +1134,23 @@ export function TodaySpendChip({
   const isCodexOauth = vendorKey === 'codex' && !isCodexXaiProvider && (
     isRemoteCodexSession ||
     (
-      codexAuthInjection === 'oauth-bearer'
+      codexRouteResolved
+      && codexAuthInjection === 'oauth-bearer'
       && !isCodexGatewayBudgetModel
       && (providerId == null || providerId === 'openai')
     )
   );
   const isCodexSubscription = isCodexOauth || isCodexXaiProvider;
-  const isCodexApi = vendorKey === 'codex' && !isCodexSubscription;
+  // 本地 codex 会话在 runtime route 真值回来前形态未定:env-key 占位可能把 OAuth
+  // 订阅会话误判成 API/网关计费(下方 codexApiHasTokenFallback / EmptyState 与
+  // dashboard 链接都据 isCodexApi/isCodexOauth 分流),切会话瞬间也可能残留上一个
+  // 会话的 oauth-bearer 分类——整张 codex 计费 form 必须等 resolved 才提交分类,
+  // 不能先渲染一种形态再闪切(PR review P1)。远端 / xAI 由 remoteHostId / modelId
+  // 直接判定,不依赖 runtime route,不受本门控。
+  const codexBillingFormPending =
+    vendorKey === 'codex' && !isRemoteCodexSession && !isDeviceLinkRemote
+    && !isCodexXaiProvider && !codexRouteResolved;
+  const isCodexApi = vendorKey === 'codex' && !isCodexSubscription && !codexBillingFormPending;
   const isPiGateway =
     vendorKey === 'pi'
     && !remoteHostId
