@@ -491,7 +491,7 @@ export function UnifiedModelList({
     <div className="flex min-h-0 flex-1 flex-col">
       {/* 工具行:标题(开关语义的唯一说明,**常驻**,不被搜索框挤掉 —— 2026-07-28 用户
           反馈)+ 搜索 + 刷新(自定义) + 分别调整(双 agent) + 全部开关 */}
-      <div className="flex items-center gap-3 px-5 py-2.5">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-2.5">
         <span className="shrink-0 text-13 font-medium" style={{ color: 'var(--text-secondary)' }}>
           {t('settings.providers.models.available')}
         </span>
@@ -561,7 +561,7 @@ export function UnifiedModelList({
             {provider.agents.map((a) => (
               <span
                 key={a}
-                className="w-[88px] text-center text-11 font-medium uppercase"
+                className="w-20 text-center text-11 font-medium uppercase"
                 style={{ color: 'var(--text-tertiary)', letterSpacing: '0.5px' }}
               >
                 {AGENT_LABEL[a]}
@@ -701,20 +701,25 @@ export function UnifiedModelList({
                       )}
                       {/* 固定 44px 右对齐列:上下扫读时数字齐成一条线;合成媒体行
                           (专属清单下发)没有上下文窗口元数据(=0),留空占位保持列对齐。 */}
-                      <span
-                        className="w-11 shrink-0 text-right text-12 tabular-nums"
-                        style={{ color: 'var(--text-tertiary)' }}
-                        title={ctxTitle}
-                      >
-                        {rep.contextWindow > 0 ? formatContextWindow(rep.contextWindow) : ''}
-                      </span>
+                      {/* 分别调整模式隐藏上下文列:两列开关 + 菜单在最小窗口
+                          (右栏 ~275px)下必须完整可见,上下文是次要元数据,
+                          普通模式仍展示(PR #1102 review 第二轮)。 */}
+                      {!splitMode && (
+                        <span
+                          className="w-11 shrink-0 text-right text-12 tabular-nums"
+                          style={{ color: 'var(--text-tertiary)' }}
+                          title={ctxTitle}
+                        >
+                          {rep.contextWindow > 0 ? formatContextWindow(rep.contextWindow) : ''}
+                        </span>
+                      )}
                       {rowMenu(row)}
                       {/* 能力模型行没有显示轴 ⇒ 没有开关(全页开关语义唯一 = 显示);
                           占同宽空位,保证开关/上下文列跨行对齐。 */}
                       {capability && (
                         <span
                           className="shrink-0"
-                          style={{ width: splitMode ? provider.agents.length * 88 : 36 }}
+                          style={{ width: splitMode ? provider.agents.length * 80 : 36 }}
                         />
                       )}
                       {!capability &&
@@ -723,7 +728,7 @@ export function UnifiedModelList({
                             {provider.agents.map((a) => {
                               const m = row.byAgent[a];
                               return (
-                                <span key={a} className="flex w-[88px] items-center justify-center">
+                                <span key={a} className="flex w-20 items-center justify-center">
                                   {m ? (
                                     <Switch
                                       checked={isModelEnabled(a, provider.id, m)}
