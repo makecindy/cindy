@@ -22,7 +22,7 @@
  *          任何态可被 exit 打断回 off。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { WebviewTag } from 'electron';
 
@@ -147,7 +147,7 @@ export function useBrowserComment(
   tRef.current = t;
   const getPageUrlRef = useRef(getPageUrl);
   getPageUrlRef.current = getPageUrl;
-  const webviewRef = useRef<WebviewTag | null>(null);
+  const webviewRef = useRef<WebviewTag | null>(webview);
   const requestSequenceRef = useRef(0);
   const pendingCommandsRef = useRef(new Map<string, PendingBrowserCommentCommand>());
   /**
@@ -515,9 +515,11 @@ export function useBrowserComment(
 
   /**
    * 当前 WebView 代际的唯一事件绑定点。useBrowserWebview 在延迟创建、LRU
-   * 淘汰和崩溃重建时都会发布新对象，因此 effect 会精确拆旧挂新。
+   * 淘汰和崩溃重建时都会发布新对象，因此 layout effect 会在浏览器可交互
+   * 之前精确拆旧挂新并更新 send target，消除普通 effect 前 ref 仍指向旧
+   * generation 的点击窗口。
    */
-  useEffect(() => {
+  useLayoutEffect(() => {
     const previousWebview = webviewRef.current;
     webviewRef.current = webview;
     if (previousWebview && previousWebview !== webview) {

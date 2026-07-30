@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, render, waitFor } from '@testing-library/react';
-import { createElement } from 'react';
+import { createElement, useLayoutEffect, useRef } from 'react';
 import type { WebviewTag } from 'electron';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -119,6 +119,26 @@ function HookProbe({
 }) {
   const result = useBrowserComment('tab-a', 'session-a', webview, () => 'https://example.com/');
   onResult(result);
+  return null;
+}
+
+function LayoutToggleProbe({
+  webview,
+  armed,
+  onResult,
+}: {
+  webview: WebviewTag | null;
+  armed: boolean;
+  onResult: (result: UseBrowserCommentResult) => void;
+}) {
+  const result = useBrowserComment('tab-a', 'session-a', webview, () => 'https://example.com/');
+  const toggledRef = useRef(false);
+  onResult(result);
+  useLayoutEffect(() => {
+    if (!armed || toggledRef.current) return;
+    toggledRef.current = true;
+    result.toggle();
+  }, [armed, result]);
   return null;
 }
 
@@ -271,6 +291,35 @@ describe('useBrowserComment', () => {
     expect(result!.mode).toBe('off');
     expect(lastCommand(webview).command).toBe(BROWSER_COMMENT_EXIT_MODE_CHANNEL);
     expect(toastMocks.error).not.toHaveBeenCalled();
+  });
+
+  it('uses the replacement WebView for commands issued from the same layout commit', () => {
+    const first = makeWebview();
+    const second = makeWebview();
+    let result: UseBrowserCommentResult | null = null;
+    const view = render(
+      createElement(LayoutToggleProbe, {
+        webview: first.value,
+        armed: false,
+        onResult: (next) => {
+          result = next;
+        },
+      }),
+    );
+
+    view.rerender(
+      createElement(LayoutToggleProbe, {
+        webview: second.value,
+        armed: true,
+        onResult: (next) => {
+          result = next;
+        },
+      }),
+    );
+
+    expect(result!.mode).toBe('starting');
+    expect(first.send).not.toHaveBeenCalled();
+    expect(lastCommand(second).command).toBe(BROWSER_COMMENT_ENTER_MODE_CHANNEL);
   });
 
   it('preserves an existing text selection emitted before the enter ACK', async () => {

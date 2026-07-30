@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { BrowserCommentDesignBaseline } from '../../../../../../shared/browserComment';
 import type { BrowserCommentEditorDraft } from '../browserCommentEditorDraft';
 import { BrowserCommentPopover } from '../BrowserCommentPopover';
 
@@ -16,6 +18,38 @@ const EMPTY_DRAFT: BrowserCommentEditorDraft = {
   textEdit: null,
 };
 
+function ControlledPopover({
+  initialDraft = EMPTY_DRAFT,
+  designBaseline = null,
+  onEditorDraftChange = vi.fn(),
+  onPreviewDesign = vi.fn(),
+}: {
+  initialDraft?: BrowserCommentEditorDraft;
+  designBaseline?: BrowserCommentDesignBaseline | null;
+  onEditorDraftChange?: (draft: BrowserCommentEditorDraft) => void;
+  onPreviewDesign?: (payload: { styles: Record<string, string>; text: string | null }) => void;
+}) {
+  const [draft, setDraft] = useState(initialDraft);
+  return (
+    <div>
+      <BrowserCommentPopover
+        anchor={{ x: 120, y: 80 }}
+        submitting={false}
+        designBaseline={designBaseline}
+        editorDraft={draft}
+        onEditorDraftChange={(next) => {
+          onEditorDraftChange(next);
+          setDraft(next);
+        }}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+        onPreviewDesign={onPreviewDesign}
+        onResetDesign={vi.fn()}
+      />
+    </div>
+  );
+}
+
 describe('BrowserCommentPopover', () => {
   afterEach(() => {
     cleanup();
@@ -24,21 +58,7 @@ describe('BrowserCommentPopover', () => {
 
   it('writes comment text into the controlled Host draft', () => {
     const onEditorDraftChange = vi.fn();
-    render(
-      <div>
-        <BrowserCommentPopover
-          anchor={{ x: 120, y: 80 }}
-          submitting={false}
-          designBaseline={null}
-          editorDraft={EMPTY_DRAFT}
-          onEditorDraftChange={onEditorDraftChange}
-          onSubmit={vi.fn()}
-          onCancel={vi.fn()}
-          onPreviewDesign={vi.fn()}
-          onResetDesign={vi.fn()}
-        />
-      </div>,
-    );
+    render(<ControlledPopover onEditorDraftChange={onEditorDraftChange} />);
 
     fireEvent.change(screen.getByPlaceholderText('rightSidebar.browser.commentPlaceholder'), {
       target: { value: 'Preserve this comment across WebView replacement' },
@@ -55,23 +75,15 @@ describe('BrowserCommentPopover', () => {
     const onEditorDraftChange = vi.fn();
     const onPreviewDesign = vi.fn();
     render(
-      <div>
-        <BrowserCommentPopover
-          anchor={{ x: 120, y: 80 }}
-          submitting={false}
-          designBaseline={{
-            styles: {},
-            editableText: 'Save',
-            provenance: {},
-          }}
-          editorDraft={EMPTY_DRAFT}
-          onEditorDraftChange={onEditorDraftChange}
-          onSubmit={vi.fn()}
-          onCancel={vi.fn()}
-          onPreviewDesign={onPreviewDesign}
-          onResetDesign={vi.fn()}
-        />
-      </div>,
+      <ControlledPopover
+        designBaseline={{
+          styles: {},
+          editableText: 'Save',
+          provenance: {},
+        }}
+        onEditorDraftChange={onEditorDraftChange}
+        onPreviewDesign={onPreviewDesign}
+      />,
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.browser.styleTweaks' }));
@@ -87,6 +99,32 @@ describe('BrowserCommentPopover', () => {
     expect(onPreviewDesign).toHaveBeenCalledWith({
       styles: {},
       text: 'Save changes',
+    });
+  });
+
+  it('replays restored design edits when it binds to a replacement target', async () => {
+    const onPreviewDesign = vi.fn();
+    render(
+      <ControlledPopover
+        initialDraft={{
+          text: 'Keep the host comment',
+          styleEdits: { color: '#ff0000' },
+          textEdit: 'Save changes',
+        }}
+        designBaseline={{
+          styles: { color: 'rgb(0, 0, 0)' },
+          editableText: 'Save',
+          provenance: {},
+        }}
+        onPreviewDesign={onPreviewDesign}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onPreviewDesign).toHaveBeenCalledWith({
+        styles: { color: '#ff0000' },
+        text: 'Save changes',
+      });
     });
   });
 });

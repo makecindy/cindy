@@ -21,7 +21,7 @@
  * useLayoutEffect(paint 前),不会闪一帧再跳位(规则 7)。
  */
 
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { SlidersHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -189,6 +189,15 @@ export function BrowserCommentPopover({
     [designBaseline, onPreviewDesign],
   );
 
+  /**
+   * 预览由受控草稿派生，而不是只在 input handler 内发送。这样 WebView LRU
+   * 换代后，Popover 绑定新 target 的首次挂载也会自动重放恢复的文本 / CSS
+   * 编辑，保证页面截图与最终提交的 styleChanges 始终一致。
+   */
+  useEffect(() => {
+    pushPreview(styleEdits, textEdit);
+  }, [pushPreview, styleEdits, textEdit]);
+
   const setStyleEdit = useCallback(
     (property: string, value: string) => {
       const next = { ...styleEdits, [property]: value };
@@ -196,17 +205,15 @@ export function BrowserCommentPopover({
         ...editorDraft,
         styleEdits: next,
       });
-      pushPreview(next, textEdit);
     },
-    [editorDraft, onEditorDraftChange, pushPreview, styleEdits, textEdit],
+    [editorDraft, onEditorDraftChange, styleEdits],
   );
 
   const handleTextEdit = useCallback(
     (value: string) => {
       onEditorDraftChange({ ...editorDraft, textEdit: value });
-      pushPreview(styleEdits, value);
     },
-    [editorDraft, onEditorDraftChange, pushPreview, styleEdits],
+    [editorDraft, onEditorDraftChange],
   );
 
   const handleResetStyles = useCallback(() => {
