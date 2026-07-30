@@ -51,6 +51,7 @@ import { keepAwakeController } from './power-blocker';
 import {
   wireInboundDispatch,
   setControllersChangedListener,
+  setRemoteInvokeBusyChangedListener,
   dropAllControllers,
   handleControllerOffline,
 } from './dispatch';
@@ -91,6 +92,9 @@ export function deviceLinkApiBase(): string {
 
 let client: DeviceLinkClient | null = null;
 let arbiter: DeviceLinkOwnershipArbiter | null = null;
+let observedAuthRealm: ReturnType<typeof authManager.getActiveAuthRealm> | null = null;
+let authRealmReconnectGeneration = 0;
+let unsubscribeAuthState: (() => void) | null = null;
 /** ownership store 按 DbClient 实例缓存(避免每 tick 建对象);换库(换账号)自动重建 */
 let ownershipStoreCache: { db: unknown; store: OwnershipStore } | null = null;
 /**
@@ -215,7 +219,12 @@ function wsUrl(): string {
   return deviceLinkApiBase().replace(/^http/, 'ws') + WS_PATH;
 }
 
-export function initDeviceLinkService(): void {
+/** Host integrations that consume device-link lifecycle state. */
+export interface DeviceLinkServiceOptions {
+  onUpdateRelaunchBusyChanged?: (busy: boolean) => void;
+}
+
+export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): void {
   // 「保持电脑唤醒」按持久化偏好在启动时应用(与登录 / relay 无关,幂等)。
   const initialKeepAwake = readDeviceLinkSettings().keepAwake;
   keepAwakeController.apply(initialKeepAwake);
@@ -307,13 +316,25 @@ export function initDeviceLinkService(): void {
     }
   });
 
+  let updateRelaunchControllersBusy = false;
+  let remoteInvokeBusy = false;
+  const notifyUpdateRelaunchBusy = (): void => {
+    options.onUpdateRelaunchBusyChanged?.(updateRelaunchControllersBusy || remoteInvokeBusy);
+  };
+
+  // 先注册远程活动监听，再接线入站帧；否则首个 subscribe / invoke 可能落在空窗期。
+  setControllersChangedListener((controllers, updateRelaunchControllers) => {
+    broadcast(DEVICE_LINK_PUSH.CONTROLLED_STATE, { controllers });
+    updateRelaunchControllersBusy = updateRelaunchControllers.length > 0;
+    notifyUpdateRelaunchBusy();
+  });
+  setRemoteInvokeBusyChangedListener((busy) => {
+    remoteInvokeBusy = busy;
+    notifyUpdateRelaunchBusy();
+  });
+
   // 被控端:接线入站隧道(link-open / invoke / link-close → 本机 handler dispatch)
   wireInboundDispatch(client);
-
-  // 被控端可见性:控制端集合变化 → 广播给 renderer 状态条
-  setControllersChangedListener((controllers) => {
-    broadcast(DEVICE_LINK_PUSH.CONTROLLED_STATE, { controllers });
-  });
 
   // busy presence:每 5s 探一次本机是否有 turn 在跑,变化才上报(dedupe by value)
   startBusyReporting();
@@ -410,11 +431,19 @@ export function initDeviceLinkService(): void {
   });
 
   // 登录态驱动仲裁:已登录即参与认领(控制端列表/被控端可达都依赖这条 WS)
+  observedAuthRealm = authManager.getActiveAuthRealm();
   syncWithAuthState(authManager.getAuthState().isAuthenticated);
-  authManager.onAuthStateChange((state) => {
-    syncWithAuthState(state.isAuthenticated);
+  unsubscribeAuthState = authManager.onAuthStateChange((state) => {
+    const nextRealm = authManager.getActiveAuthRealm();
+    const realmChanged = observedAuthRealm !== null && observedAuthRealm !== nextRealm;
+    observedAuthRealm = nextRealm;
+    syncWithAuthState(state.isAuthenticated, realmChanged);
   });
   onQuit('device-link', () => {
+    authRealmReconnectGeneration += 1;
+    unsubscribeAuthState?.();
+    unsubscribeAuthState = null;
+    observedAuthRealm = null;
     if (busyTimer) {
       clearInterval(busyTimer);
       busyTimer = null;
@@ -429,6 +458,7 @@ export function initDeviceLinkService(): void {
     // 已由上面 stop() 的 onDemote 执行过一次,linkTornDown 标记拦截重复清理。
     teardownActiveLink();
     setControllersChangedListener(null);
+    setRemoteInvokeBusyChangedListener(null);
     client = null;
   });
 
@@ -444,14 +474,44 @@ export function initDeviceLinkService(): void {
   log.info(`device-link service initialized → ${wsUrl()}`);
 }
 
-function syncWithAuthState(isAuthenticated: boolean): void {
+function syncWithAuthState(isAuthenticated: boolean, realmChanged = false): void {
   if (!client || !arbiter) return;
   if (isAuthenticated) {
+    if (realmChanged) {
+      restartDeviceLinkForAuthRealmChange();
+      return;
+    }
     // 不直接 client.start():先参与仲裁,认领成功由 onAcquire 启动连接
     arbiter.start();
   } else {
+    authRealmReconnectGeneration += 1;
     stopArbitrationAndTeardown();
   }
+}
+
+/**
+ * 同账号被另一 shared-userData 实例切到其它区域时，登录态仍是 authenticated，
+ * 普通 arbiter.start() 会幂等早退，旧 WS 因而不会换区。先完整释放持有权并拆掉
+ * 旧 client，再以最新 realm/token 重新参与仲裁；generation 防止等待释放期间登出
+ * 或再次切区后把过期连接复活。
+ */
+function restartDeviceLinkForAuthRealmChange(): void {
+  const generation = ++authRealmReconnectGeneration;
+  const targetRealm = authManager.getActiveAuthRealm();
+  void stopArbitrationAndTeardown()
+    .catch((error) => {
+      log.warn('device-link ownership release during auth realm switch failed', error);
+    })
+    .then(() => {
+      if (
+        generation !== authRealmReconnectGeneration ||
+        !authManager.getAuthState().isAuthenticated ||
+        authManager.getActiveAuthRealm() !== targetRealm
+      ) {
+        return;
+      }
+      arbiter?.start();
+    });
 }
 
 /**

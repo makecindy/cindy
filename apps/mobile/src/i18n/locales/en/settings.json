@@ -16,7 +16,7 @@
     "currentLabel": "Current Version",
     "bundleVersion": "App package {{version}}",
     "otaVersion": "OTA version {{version}}",
-    "desktopVersion": "Desktop {{version}}",
+    "pairedDesktopVersion": "Matching desktop release {{version}}",
     "devNoOta": "Development build; OTA updates unavailable",
     "checkAction": "Check for Updates",
     "testFlightCheckAction": "Check for Content Updates",

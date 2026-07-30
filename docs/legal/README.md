@@ -18,6 +18,8 @@
 
 - [微信 Open SDK 合规记录](./wechat-open-sdk-compliance.md)：版本、隐私披露、用户
   同意和发布前复核记录。
+- [个人微信 IM 合规与发布记录](./wechat-personal-im-compliance.md)：iLink 协议来源、
+  数据处理、腾讯接入授权与 GA 门禁。
 
 ### 第三方许可、受限组件与 SBOM
 

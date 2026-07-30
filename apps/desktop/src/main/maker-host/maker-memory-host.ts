@@ -29,6 +29,7 @@ import {
 } from '@cindy/maker-core';
 
 import { desktopMakerLogger } from './logger-adapter.js';
+import { isAgentOneShotRouteDisabled } from './model-route-guard-live.js';
 import { readMemorySettings } from './memory-settings-store.js';
 import { createBetterSqliteDatabase } from '../localDb/betterSqliteFactory.js';
 import { dataOwnerStorageKey, getActiveAppSession } from '../appSessionState.js';
@@ -62,6 +63,9 @@ export function createDesktopMakerMemoryManager(): MakerMemoryManager {
     // 持久化 store 读 — 重启后保持用户上次设置，新用户默认开启。
     initialEnabled: readMemorySettings({ rootPath: basePath }).maker,
     reviewAgent: 'claude-code', // memory_review 用 claude haiku 最便宜
+    // 停用轴:review 的 oneShot 是新的付费调用,默认 one-shot 路由被停用时不派发
+    // (PR #744 review 第十六轮)。
+    isOneShotRouteDisabled: (agent) => isAgentOneShotRouteDisabled(agent),
   });
 }
 

@@ -187,7 +187,7 @@ export function createBillingHandlers(
         timeoutMs: BILLING_REQUEST_TIMEOUT_MS,
         ...options,
         redactErrorDetails: true,
-        baseUrl: getBaseUrl(),
+        baseUrl: getBaseUrl,
       });
     } catch (error) {
       throwBillingFetchError(error);
@@ -211,7 +211,7 @@ export function createBillingHandlers(
         response = await fetch<unknown>('/api/model-access/balance', {
           timeoutMs: BILLING_REQUEST_TIMEOUT_MS,
           redactErrorDetails: true,
-          baseUrl: getBaseUrl(),
+          baseUrl: getBaseUrl,
         });
       } catch (error) {
         throwBalanceFetchError(error);
@@ -227,7 +227,7 @@ export function createBillingHandlers(
         response = await fetch<unknown>('/api/model-access/credit-usage', {
           timeoutMs: BILLING_REQUEST_TIMEOUT_MS,
           redactErrorDetails: true,
-          baseUrl: getBaseUrl(),
+          baseUrl: getBaseUrl,
         });
       } catch (error) {
         throwBalanceFetchError(error);

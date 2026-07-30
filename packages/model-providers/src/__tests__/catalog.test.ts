@@ -147,6 +147,45 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     expect(presets.map((p) => p.id)).toContain('openrouter');
   });
 
+  it('DeepSeek 预设携带厂商文档确认的 1M contextWindow (#735)', () => {
+    // 官方 V4 起全线 1M(api-docs.deepseek.com news260424);预设不带时
+    // buildUserProvider 回落 200K 保守默认,长上下文模型被错误降级。
+    const presets = BUNDLED_CATALOG.presets ?? [];
+    const deepseek = presets.find((p) => p.id === 'deepseek');
+    expect(deepseek).toBeDefined();
+    for (const [agent, rt] of Object.entries(deepseek!.runtimes)) {
+      for (const id of ['deepseek-v4-flash', 'deepseek-v4-pro']) {
+        const m = rt!.models.find((x) => x.id === id);
+        expect(m?.contextWindow, `${agent}/${id}`).toBe(1_000_000);
+      }
+    }
+    // OpenRouter 托管的同款模型页面同样标注 1,048,576,取与仓库口径一致的 1M。
+    const openrouter = presets.find((p) => p.id === 'openrouter');
+    expect(
+      openrouter?.runtimes['claude-code']?.models.find((m) => m.id === 'deepseek/deepseek-v4-pro')
+        ?.contextWindow,
+    ).toBe(1_000_000);
+  });
+
+  it('Kimi Code(编程计划)预设的每个模型都带 contextWindow(k3 缺失曾回落 200K)', () => {
+    // k3 此前没带 contextWindow → buildUserProvider 回落 200K 保守默认:选择器
+    // 显示 200K 且压缩阈值过早触发(用户反馈「动不动就压缩」)。取 262144 与同
+    // 套餐 kimi-for-coding 口径一致(K3 开放平台规格 1M,但编程计划端点是否限窗
+    // 无公开文档,保守取值;实测放开后可上调)。
+    const presets = BUNDLED_CATALOG.presets ?? [];
+    const kimiCode = presets.find((p) => p.id === 'moonshot-kimi-code');
+    expect(kimiCode).toBeDefined();
+    for (const [agent, rt] of Object.entries(kimiCode!.runtimes)) {
+      for (const m of rt!.models) {
+        expect(
+          Number.isFinite(m.contextWindow) && (m.contextWindow ?? 0) > 0,
+          `${agent}/${m.id} 缺 contextWindow`,
+        ).toBe(true);
+      }
+      expect(rt!.models.find((m) => m.id === 'k3')?.contextWindow, `${agent}/k3`).toBe(262_144);
+    }
+  });
+
   it('ships Codex support metadata for the current XD gateway model set', () => {
     const metadata = BUNDLED_CATALOG.cindyModelMeta as {
       version?: unknown;

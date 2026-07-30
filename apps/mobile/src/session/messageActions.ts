@@ -1,6 +1,10 @@
 import type { NormalizedRemoteMessage } from '@/session/messageNormalize';
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import { i18n } from '@/i18n';
+import {
+  remoteMoneySymbol,
+  type RemoteMoney,
+} from '@/session/remoteMoney';
 
 export type CopyMessageStatus = 'copied' | 'empty' | 'failed';
 
@@ -107,10 +111,12 @@ export function formatMessageAbsoluteTime(createdAt: string): string {
   ].join(' ');
 }
 
-export function formatMessageTurnCostUsd(costUsd: number, isEstimate = false): string {
-  if (!Number.isFinite(costUsd) || costUsd <= 0) return '';
-  const value = formatTurnCostUsd(costUsd);
-  return isEstimate ? i18n.t('message.actions.turnCostValue', { value }) : value;
+export function formatMessageTurnCost(money: RemoteMoney | undefined): string {
+  if (!money || !Number.isFinite(money.amount) || money.amount <= 0) return '';
+  const value = formatTurnCost(money);
+  return money.kind === 'value-estimate'
+    ? i18n.t('message.actions.turnCostValue', { value })
+    : value;
 }
 
 /**
@@ -137,14 +143,16 @@ function pad2(value: number): string {
   return String(value).padStart(2, '0');
 }
 
-function formatTurnCostUsd(value: number): string {
-  if (value >= 10) return formatCompactUsd(value);
-  if (value >= 0.01) return `$${value.toFixed(2)}`;
-  if (value >= 0.001) return `$${value.toFixed(3)}`;
-  return '<$0.001';
+function formatTurnCost(money: RemoteMoney): string {
+  const symbol = remoteMoneySymbol(money.currency);
+  if (money.amount >= 10) return formatCompactMoney(money);
+  if (money.amount >= 0.01) return `${symbol}${money.amount.toFixed(2)}`;
+  if (money.amount >= 0.001) return `${symbol}${money.amount.toFixed(3)}`;
+  return `<${symbol}0.001`;
 }
 
-function formatCompactUsd(value: number): string {
-  if (value >= 1000) return `$${(value / 1000).toFixed(1)}k`;
-  return `$${Math.round(value)}`;
+function formatCompactMoney(money: RemoteMoney): string {
+  const symbol = remoteMoneySymbol(money.currency);
+  if (money.amount >= 1000) return `${symbol}${(money.amount / 1000).toFixed(1)}k`;
+  return `${symbol}${Math.round(money.amount)}`;
 }

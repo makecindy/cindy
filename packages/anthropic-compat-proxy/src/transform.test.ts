@@ -3,15 +3,18 @@ import { describe, expect, it } from 'vitest';
 import { createThreadStripController } from './thread-strip-controller.js';
 import {
   createActiveStripTransform,
+  createEmptyAssistantMessageRecoveryRule,
   createEmptyTextRecoveryRule,
   createEmptyThinkingRecoveryRule,
   createEncryptedContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
+  stripEmptyAssistantMessagesFromBody,
   stripEmptyTextFromBody,
   stripEmptyThinkingFromBody,
   stripEncryptedContentFromBody,
   stripImageGenerationItemsWithoutIdFromBody,
+  stripNonAnthropicFields,
   stripToolUseProviderSpecificFields,
   stripToolUseProviderSpecificFieldsFromBody,
 } from './transform.js';
@@ -68,6 +71,124 @@ describe('stripEncryptedContentFromBody', () => {
 
   it('returns null for non-JSON body', () => {
     expect(stripEncryptedContentFromBody(Buffer.from('not json', 'utf8'))).toBeNull();
+  });
+
+  // 回归 (2026-07 Grok 会话卡死): 压缩块的 encrypted_content 是压缩 blob 本体,
+  // 剥掉只会留下上游无法解码的空壳 → xAI 400 "Could not decode the compaction blob"。
+  it('keeps the compaction blob intact while stripping reasoning blobs', () => {
+    const body = buf({
+      model: 'grok-4.5',
+      input: [
+        { type: 'compaction', id: 'cmp_abc', encrypted_content: 'BLOB' },
+        { type: 'reasoning', encrypted_content: 'gAAAAABxyz...', summary: [] },
+        { type: 'message', role: 'user', content: 'hi' },
+      ],
+    });
+    const out = stripEncryptedContentFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.input).toEqual([
+      { type: 'compaction', id: 'cmp_abc', encrypted_content: 'BLOB' },
+      { type: 'message', role: 'user', content: 'hi' },
+    ]);
+  });
+
+  it('keeps context_compaction blobs intact too', () => {
+    const body = buf({
+      model: 'grok-4.5',
+      input: [
+        { type: 'context_compaction', id: 'cc_1', encrypted_content: 'BLOB' },
+        { type: 'reasoning', encrypted_content: 'ENC' },
+      ],
+    });
+    const out = stripEncryptedContentFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.input).toEqual([{ type: 'context_compaction', id: 'cc_1', encrypted_content: 'BLOB' }]);
+  });
+
+  it('returns null when the only encrypted_content belongs to a compaction item', () => {
+    const body = buf({
+      model: 'grok-4.5',
+      input: [
+        { type: 'compaction', id: 'cmp_abc', encrypted_content: 'BLOB' },
+        { type: 'message', role: 'user', content: 'hi' },
+      ],
+    });
+    expect(stripEncryptedContentFromBody(body)).toBeNull();
+  });
+
+  it('keeps summary-only reasoning items when nothing was stripped this round', () => {
+    const body = buf({
+      model: 'grok-4.5',
+      input: [
+        { type: 'compaction', id: 'cmp_abc' },
+        { type: 'reasoning', summary: [{ type: 'summary_text', text: 's' }] },
+      ],
+    });
+    const out = stripEncryptedContentFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    // 压缩空壳必丢;没剥过密文时,只带 summary 的 reasoning 是合法形态,保留。
+    expect(parsed.input).toEqual([{ type: 'reasoning', summary: [{ type: 'summary_text', text: 's' }] }]);
+  });
+
+  it('drops a compaction shell that already arrived without its blob', () => {
+    const body = buf({
+      model: 'grok-4.5',
+      input: [
+        { type: 'compaction', id: 'cmp_abc' },
+        { type: 'message', role: 'user', content: 'hi' },
+      ],
+    });
+    const out = stripEncryptedContentFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.input).toEqual([{ type: 'message', role: 'user', content: 'hi' }]);
+  });
+
+  // codex wire: Compaction.encrypted_content 必填、ContextCompaction 可选 —— 不带密文的
+  // context_compaction 是合法的可读压缩变体,不是空壳,删掉等于静默丢上下文。
+  it('preserves a blob-less context_compaction (legitimate readable variant)', () => {
+    const body = buf({
+      model: 'grok-4.5',
+      input: [
+        { type: 'context_compaction', id: 'cc_1', summary: 'earlier turns' },
+        { type: 'reasoning', encrypted_content: 'ENC' },
+      ],
+    });
+    const out = stripEncryptedContentFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.input).toEqual([{ type: 'context_compaction', id: 'cc_1', summary: 'earlier turns' }]);
+  });
+
+  // 空壳判定锚在协议层顶层 input[];嵌套结构里同名的 input 数组是别人的业务数据,
+  // 不能按 type 形状猜着删(删密文键仍然全树递归,那是定向删键)。
+  it('does not touch nested input arrays that are not protocol history', () => {
+    const body = buf({
+      model: 'grok-4.5',
+      input: [
+        { type: 'reasoning', encrypted_content: 'ENC' },
+        {
+          type: 'message',
+          role: 'user',
+          content: 'hi',
+          payload: { input: [{ type: 'compaction' }, { type: 'reasoning' }] },
+        },
+      ],
+    });
+    const out = stripEncryptedContentFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.input).toEqual([
+      {
+        type: 'message',
+        role: 'user',
+        content: 'hi',
+        payload: { input: [{ type: 'compaction' }, { type: 'reasoning' }] },
+      },
+    ]);
   });
 });
 
@@ -345,6 +466,159 @@ describe('stripEmptyTextFromBody', () => {
   });
 });
 
+describe('stripEmptyAssistantMessagesFromBody', () => {
+  it('drops a thinking-only empty assistant message (moonshot/kimi interrupted placeholder)', () => {
+    // 线上污染形态(2026-07-28): 流首包空 thinking 占位被中断持久化。
+    const body = buf({
+      model: 'moonshot/kimi-k3',
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: [{ type: 'thinking', thinking: '', signature: '' }] },
+        { role: 'user', content: 'continue' },
+      ],
+    });
+    const out = stripEmptyAssistantMessagesFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.messages).toHaveLength(2);
+    expect(parsed.messages.map((m: { role: string }) => m.role)).toEqual(['user', 'user']);
+  });
+
+  it('drops a native empty content-array assistant message', () => {
+    const body = buf({
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: [] },
+      ],
+    });
+    const out = stripEmptyAssistantMessagesFromBody(body);
+    expect(out).not.toBeNull();
+    expect(JSON.parse(out!.toString('utf8')).messages).toHaveLength(1);
+  });
+
+  it('drops a blank string-content assistant message, keeps a non-blank one', () => {
+    const body = buf({
+      messages: [
+        { role: 'assistant', content: '   ' },
+        { role: 'assistant', content: 'real answer' },
+      ],
+    });
+    const out = stripEmptyAssistantMessagesFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.messages).toHaveLength(1);
+    expect(parsed.messages[0].content).toBe('real answer');
+  });
+
+  it('strips empty thinking but keeps sibling text / tool_use blocks', () => {
+    const body = buf({
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: '', signature: '' },
+            { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } },
+          ],
+        },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: '', signature: '' },
+            { type: 'text', text: 'done' },
+          ],
+        },
+      ],
+    });
+    const out = stripEmptyAssistantMessagesFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.messages).toHaveLength(2);
+    expect(parsed.messages[0].content).toEqual([
+      { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } },
+    ]);
+    expect(parsed.messages[1].content).toEqual([{ type: 'text', text: 'done' }]);
+  });
+
+  it('keeps a content-bearing thinking block (empty signature is tolerated)', () => {
+    const body = buf({
+      messages: [
+        { role: 'assistant', content: [{ type: 'thinking', thinking: 'real reasoning', signature: '' }] },
+      ],
+    });
+    expect(stripEmptyAssistantMessagesFromBody(body)).toBeNull();
+  });
+
+  it('never touches user messages, even empty ones', () => {
+    const body = buf({
+      messages: [
+        { role: 'user', content: [] },
+        { role: 'user', content: 'hi' },
+      ],
+    });
+    expect(stripEmptyAssistantMessagesFromBody(body)).toBeNull();
+  });
+
+  it('returns null for a clean body (cache-safe no-op)', () => {
+    const body = buf({
+      model: 'moonshot/kimi-k3',
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+      ],
+    });
+    expect(stripEmptyAssistantMessagesFromBody(body)).toBeNull();
+  });
+
+  it('drops a text-only empty-block assistant message (bridge cleanup path shape)', () => {
+    // PR #821 review: bridge 清理路径产出的 text-only 空块同样命中 moonshot 空消息校验,
+    // 只剥 thinking 会让 strip 返回 null、重试被跳过。
+    const body = buf({
+      model: 'moonshot/kimi-k3',
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: [{ type: 'text', text: '' }] },
+        { role: 'user', content: 'continue' },
+      ],
+    });
+    const out = stripEmptyAssistantMessagesFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.messages).toHaveLength(2);
+    expect(parsed.messages.map((m: { role: string }) => m.role)).toEqual(['user', 'user']);
+  });
+
+  it('drops a mixed empty thinking + empty text assistant message, keeps real content siblings', () => {
+    const body = buf({
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: '', signature: '' },
+            { type: 'text', text: '' },
+          ],
+        },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: '' },
+            { type: 'text', text: 'real' },
+          ],
+        },
+      ],
+    });
+    const out = stripEmptyAssistantMessagesFromBody(body);
+    expect(out).not.toBeNull();
+    const parsed = JSON.parse(out!.toString('utf8'));
+    expect(parsed.messages).toHaveLength(1);
+    expect(parsed.messages[0].content).toEqual([{ type: 'text', text: 'real' }]);
+  });
+
+  it('returns null for non-JSON / missing messages', () => {
+    expect(stripEmptyAssistantMessagesFromBody(Buffer.from('not json', 'utf8'))).toBeNull();
+    expect(stripEmptyAssistantMessagesFromBody(buf({ model: 'x' }))).toBeNull();
+  });
+});
+
 describe('createThreadStripController', () => {
   it('marks active threads and clears them when model changes', () => {
     const controller = createThreadStripController();
@@ -368,6 +642,31 @@ describe('createActiveStripTransform', () => {
     const out = transform({ model: 'gpt-5.5', input: [{ encrypted_content: 'gAAA' }] }, ctx);
 
     expect(out).toEqual({ model: 'gpt-5.5', input: [{}] });
+  });
+
+  // 主动剥离排在 codex-proxy transform 链首位, 跨来源压缩兼容 transform 排在其后并以
+  // "encrypted_content 非空" 为触发条件。这里先把压缩 blob 剥掉, 那条兼容路径就再也
+  // 认不出压缩块, 空壳会一路打到上游 → xAI 400 "Could not decode the compaction blob"。
+  it('leaves the compaction blob for the downstream cross-provider transform', () => {
+    const controller = createThreadStripController();
+    controller.markActive('thread-a', 'grok-4.5');
+    const transform = createActiveStripTransform({ controller, enabled: () => true, strip: stripEncryptedContentFromBody });
+
+    const out = transform(
+      {
+        model: 'grok-4.5',
+        input: [
+          { type: 'compaction', id: 'cmp_abc', encrypted_content: 'BLOB' },
+          { type: 'reasoning', encrypted_content: 'gAAA' },
+        ],
+      },
+      ctx,
+    );
+
+    expect(out).toEqual({
+      model: 'grok-4.5',
+      input: [{ type: 'compaction', id: 'cmp_abc', encrypted_content: 'BLOB' }],
+    });
   });
 
   it('strips active thread empty thinking blocks', () => {
@@ -505,6 +804,35 @@ describe('recovery rule factories', () => {
     ).not.toBeNull();
   });
 
+  it('empty-assistant-message rule matches the moonshot error text, is always-on by default, and strips empty assistant messages', () => {
+    const rule = createEmptyAssistantMessageRecoveryRule();
+    expect(rule.id).toBe('empty_assistant_message');
+    expect(rule.enabled()).toBe(true);
+    // 线上实测 moonshot 400 原文(2026-07-28,经 LiteLLM passthrough,两个独立会话):
+    expect(
+      rule.matches(
+        'Invalid request: the message at position 693 with role \'assistant\' must not be empty',
+      ),
+    ).toBe(true);
+    expect(
+      rule.matches(
+        JSON.stringify({
+          error: {
+            type: 'invalid_request_error',
+            message: "Invalid request: the message at position 275 with role 'assistant' must not be empty",
+          },
+        }),
+      ),
+    ).toBe(true);
+    expect(rule.matches('each thinking block must contain thinking')).toBe(false);
+    expect(rule.matches('invalid_encrypted_content')).toBe(false);
+    expect(
+      rule.strip(
+        buf({ messages: [{ role: 'assistant', content: [{ type: 'thinking', thinking: '', signature: '' }] }] }),
+      ),
+    ).not.toBeNull();
+  });
+
   it('image-generation-id rule matches only its error text, is always-on by default, and strips malformed items', () => {
     const rule = createImageGenerationIdRecoveryRule();
     expect(rule.id).toBe('image_generation_id');
@@ -529,5 +857,72 @@ describe('recovery rule factories', () => {
     expect(
       rule.strip(buf({ messages: [{ role: 'assistant', content: [{ type: 'tool_use', provider_specific_fields: null }] }] })),
     ).not.toBeNull();
+  });
+});
+
+describe('stripNonAnthropicFields · glm-5.2 tool_result 图像降级 (#794)', () => {
+  const imageBlock = {
+    type: 'image',
+    source: { type: 'base64', media_type: 'image/png', data: 'AAAABBBB' },
+  };
+  const makeBody = (model: string): Record<string, unknown> => ({
+    model,
+    messages: [
+      { role: 'user', content: 'read the scan' },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 't1',
+            content: [{ type: 'text', text: 'scan follows' }, imageBlock],
+          },
+        ],
+      },
+    ],
+  });
+
+  it.each(['glm-5.2', 'z-ai/glm-5.2', 'glm-5.2[1m]', 'z-ai/glm-5.2[1m]'])(
+    '%s:tool_result 图像替换为说明性占位文本,图像字节不外泄',
+    (model) => {
+      const out = stripNonAnthropicFields(makeBody(model), ctx) as Record<string, unknown> | null;
+      expect(out).not.toBeNull();
+      const json = JSON.stringify(out);
+      expect(json).not.toContain('AAAABBBB');
+      expect(json).toContain('[image omitted:');
+      expect(json).toContain('Do NOT guess');
+      // 同一 tool_result 的文本块保留,块结构仍是 tool_result。
+      expect(json).toContain('scan follows');
+      expect(json).toContain('tool_result');
+    },
+  );
+
+  it('glm-5.2 无图像时返回 null(cache 安全契约,字节透传)', () => {
+    const body = {
+      model: 'glm-5.2',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 't1', content: [{ type: 'text', text: 'ok' }] },
+          ],
+        },
+      ],
+    };
+    expect(stripNonAnthropicFields(body, ctx)).toBeNull();
+  });
+
+  it('未登记的 model 不受影响(字节透传)', () => {
+    expect(
+      stripNonAnthropicFields(makeBody('claude-opus-5'), ctx),
+    ).toBeNull();
+  });
+
+  it('user 消息里的图像不动,只处理 tool_result 内嵌图像', () => {
+    const body = {
+      model: 'glm-5.2',
+      messages: [{ role: 'user', content: [imageBlock] }],
+    };
+    expect(stripNonAnthropicFields(body, ctx)).toBeNull();
   });
 });

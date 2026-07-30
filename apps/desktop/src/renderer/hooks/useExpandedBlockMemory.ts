@@ -27,14 +27,6 @@ const store = createExpandedBlockStore({
   onSubscriberError: (err) => log.warn('subscriber error:', err),
 });
 
-/**
- * 命令式设置某个 block 的展开态(供 /workflows 这类外部入口用,无需持有 hook 实例)。
- * 走同一个 module-level store + pub/sub,所有挂载的 useExpandedBlockMemory 会同步。
- */
-export function setBlockExpanded(blockId: string, expanded: boolean): void {
-  store.setExpanded(blockId, expanded);
-}
-
 export interface UseExpandedBlockMemoryReturn {
   /** Whether this block is currently expanded. Default: false (collapsed). */
   expanded: boolean;

@@ -53,6 +53,7 @@ import {
   terminateCodexLoginProcess,
 } from './codex-auth-state.js';
 import { CODEX_GATEWAY_ENV_KEY, CODEX_PROVIDER_OAUTH_PLACEHOLDER_KEY } from './codex-gateway-config.js';
+import { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY } from './claude-gateway-config.js';
 import {
   clearClaudeAiOAuth,
   hasClaudeAiOAuth,
@@ -89,8 +90,10 @@ const log = createLogger('auth-adapters');
  * Host-injected provider sessions only need a non-empty credential to pass Claude Code's
  * local auth preflight. The loopback proxy replaces it with the selected provider's real
  * API key / OAuth token before forwarding the request.
+ * 定义已下沉到 claude-gateway-config.ts(proxy-host 路由识别占位 key 需要它,而本
+ * 文件 import 了 proxy-host,反向 import 会成环);这里 re-export 保持既有消费点。
  */
-export const CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY = 'xdt-provider-auth-placeholder-key';
+export { CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY } from './claude-gateway-config.js';
 
 /** Codex CLI 的 HOME 目录, auth.json 放在根, sessions 子目录放会话 jsonl。 */
 function getCodexHome(): string {
@@ -201,7 +204,7 @@ export function readCodexOneShotCreds(): { accessToken: string; accountId: strin
   }
 }
 
-/** 删除 XDMaker 自管且无法按账号归属的 Codex 模型 cache。 */
+/** 删除 Cindy 自管且无法按账号归属的 Codex 模型 cache。 */
 async function removeDesktopCodexModelsCache(codexHome: string): Promise<boolean> {
   const cachePath = path.join(codexHome, 'models_cache.json');
   try {

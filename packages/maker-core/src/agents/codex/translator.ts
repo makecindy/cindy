@@ -31,7 +31,8 @@ import type { AgentEvent, AgentTaskStatus, AgentTaskUpdateEventData } from '../.
 import { normalizeAccountRateLimitSnapshot } from '../../types/account-rate-limits.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
 import { stripTerminalControlSequences } from '../shared/terminal-output.js';
-import { isNetworkishErrorMessage } from '../shared/network-error.js';
+import { parseReconnectAttemptMessage } from '../shared/network-error.js';
+import { formatOverloadRetryMessage, parseOverloadError } from '../shared/overload-error.js';
 import { commandExecutionDisplayInput, type CommandExecutionDisplayInput } from './command-display.js';
 import type {
   ItemCompletedNotification,
@@ -59,6 +60,10 @@ export interface CodexRuntimeState {
   itemTextLen: Map<string, number>;
   /** 已经 emit 过 tool_use 的 item.id (避免 started + 第一次 updated 重复)。 */
   emittedToolUse: Set<string>;
+  /** 尚未 emit 的 Web Search 候选输入，供跨 started/updated/completed 快照补全。 */
+  pendingWebSearchInput: Map<string, WebSearchInput>;
+  /** 已 emit 的 Web Search 输入，用于判断 completed 是否带来权威参数更新。 */
+  emittedWebSearchInput: Map<string, WebSearchInput>;
   /**
    * Auth retry-loop dedupe key (`<threadId>|<turnId>`)。daemon 撞 401 时
    * willRetry=true 通知会按 retry 频率 (~每秒) 持续发, 不 dedupe 会让
@@ -84,6 +89,8 @@ export function newCodexRuntimeState(): CodexRuntimeState {
     reasoningTextLen: new Map(),
     itemTextLen: new Map(),
     emittedToolUse: new Set(),
+    pendingWebSearchInput: new Map(),
+    emittedWebSearchInput: new Map(),
     lastAuthErrorKey: null,
     networkRetryNotice: null,
   };
@@ -106,6 +113,17 @@ export interface CodexTranslateContext {
    * 缺省 = 不回调 (makerMemoryEnabled 关时 agent 不注入)。
    */
   onCompactBoundary?: () => void;
+  /**
+   * 服务过载错误的重投接管钩子 (由 agent 层注入)。
+   *
+   * 返回进度 = agent 层已排好退避重投, 这条错误必须透成**非终止**状态并带上
+   * 进度; 否则 UI 会先收口成失败再重投, 用户看到一次假失败闪烁。返回 null =
+   * 没有重投预算或不满足重投条件, 按原路径当终止错误报。
+   *
+   * 分工原因: 能否重投只有 agent 层知道 (要看本 turn 有没有产出、预算还剩多少、
+   * 会话是否已关), 而错误脱敏与 error 事件构造在 translator。缺省 = 不接管。
+   */
+  tryTakeOverOverload?: () => { attempt: number; maxAttempts: number } | null;
 }
 
 // ── 主入口: 三个 item.* notification 的统一分发 ────────────────────────────────
@@ -184,6 +202,38 @@ export function translateItemNotification(
   }
 }
 
+/**
+ * auth 缺失 (401/Unauthorized/Missing bearer) 判定 — daemon 怎么 retry 也不可能
+ * 自愈, 必须用户介入。收紧 pattern: 避开非 HTTP-auth 错误误伤 (eg. 工具执行报错
+ * "Unauthorized file system access" 含 Unauthorized 字面但不是 401)。要求带
+ * \b401\b 边界, 或 Missing bearer 精确短语 (OpenAI 401 message 标准措辞)。
+ *
+ * 从 translateErrorNotification 抽出成 export — codex/index.ts 的 retry 升级
+ * 逻辑要排除这一类 (auth 缺失走自己「同步登录态」的等待式 UX, 不应被升级成
+ * 终态 backend-unreachable)。
+ */
+export function isAuthMissingErrorMessage(message: string, errorStatus?: number): boolean {
+  return errorStatus === 401 || /\b401\b|Missing bearer/i.test(message);
+}
+
+/**
+ * auth 相关错误 (缺失 OR 无效) 的更宽判定 — translator 会把
+ * authentication_error / authentication_failed / invalid_api_key /
+ * api key not valid 这些 marker 同样推断成 errorStatus=401 走 auth UX
+ * (translateErrorNotification 的 hasAuthErrorMarker)。retry-loop 升级判定
+ * 必须排除同一集合, 否则这些真 auth 错误会被升级成「后端不可达」终态,
+ * 抢走 auth 修复路径并误导排查方向 (review: PR #715 五轮审核 P1)。
+ *
+ * 与 isAuthMissingErrorMessage 的分工: Missing 版只认「没给凭证」
+ * (401 / Missing bearer), 用于触发「同步登录态」等待式 UX; Related 版
+ * 额外认「凭证无效」类 marker, 只用于「不要按网络不可达处理」的排除判断。
+ */
+export function isAuthRelatedErrorMessage(message: string, errorStatus?: number): boolean {
+  if (isAuthMissingErrorMessage(message, errorStatus)) return true;
+  return /\bauthentication_(?:error|failed)\b|\binvalid[\s_-]*api[\s_-]*key\b|\bapi key not valid\b/i
+    .test(message);
+}
+
 /** error notification (顶层非 item.*) → AgentEvent error。 */
 export function translateErrorNotification(
   params: ErrorNotification['params'],
@@ -213,32 +263,40 @@ export function translateErrorNotification(
   // 透出来并标记 isTerminal=false → renderer 端 ErrorBanner 的 401 识别会触发 →
   // 显示「同步登录态」button；main 端 active-turn keepalive 继续保持,等待 daemon
   // retry 或用户修复登录态后的后续事件。
-  // 收紧 pattern: 避开非 HTTP-auth 错误误伤 (eg. 工具执行报错 "Unauthorized file
-  // system access" 含 Unauthorized 字面但不是 401)。要求带 \b401\b 边界, 或
-  // Missing bearer 精确短语 (OpenAI 401 message 标准措辞)。
-  const isAuthMissing =
-    errorStatus === 401 || /\b401\b|Missing bearer/i.test(safeMessage);
+  const isAuthMissing = isAuthMissingErrorMessage(safeMessage, errorStatus);
   if (params.willRetry && !isAuthMissing) {
     ctx.log.warn('codex error (will retry)', { message: safeMessage, threadId: params.threadId, turnId: params.turnId });
-    // 网络类错误(502/连接失败等)持续重试 = 网络可能断了,daemon 卡在 retry-loop
-    // 里 turn 无限转圈。同 turn 第 2 次时透出**一条**非终止提示(isTerminal:false,
-    // renderer 走 recoverableError → "网络异常,正在自动重试…" banner,恢复后随
-    // 正常事件自动清;不结束 turn、不落 error 行)。第 1 次不透出:单次抖动 daemon
-    // 一次重试就过,提示只会闪一下徒增噪音。
-    if (isNetworkishErrorMessage(message)) {
-      const key = `${params.threadId ?? ''}|${params.turnId ?? ''}`;
-      const notice = ctx.rt.networkRetryNotice;
-      const count = notice?.key === key ? notice.count + 1 : 1;
-      const emitted = notice?.key === key ? notice.emitted : false;
-      ctx.rt.networkRetryNotice = { key, count, emitted };
-      if (count >= 2 && !emitted) {
-        ctx.rt.networkRetryNotice = { key, count, emitted: true };
-        queue.push({
-          type: 'error',
-          data: { ...safeErrorData, isTerminal: false, willRetry: true },
-          source: 'codex',
-        });
-      }
+    // Codex 自带明确的有限重连进度时，每档都透出，让 UI 从 1/5 持续更新到 5/5。
+    // 这是非终止状态：turn 仍由 app-server 继续，不结束也不另起一次不安全的请求重放。
+    if (parseReconnectAttemptMessage(safeMessage)) {
+      queue.push({
+        type: 'error',
+        data: { ...safeErrorData, isTerminal: false, willRetry: true },
+        source: 'codex',
+      });
+      return;
+    }
+    // 持续重试的错误 = daemon 卡在 retry-loop 里 turn 无限转圈。同 turn 第 2 次时
+    // 透出**一条**非终止提示 (isTerminal:false, renderer 走 recoverableError →
+    // "正在自动重试…" banner, 恢复后随正常事件自动清; 不结束 turn、不落 error 行)。
+    // 第 1 次不透出: 单次抖动 daemon 一次重试就过, 提示只会闪一下徒增噪音。
+    //
+    // 不限定 networkish pattern (issue #677): 远端后端不可达的典型文案
+    // ("unexpected status 403 Forbidden" / "failed to connect to websocket:
+    // Network unreachable") 不命中 networkish, 但同样是「daemon 在空转」的信号,
+    // 用户必须看得到。终局收口由 codex/index.ts 的 TurnRetryTracker 升级负责。
+    const key = `${params.threadId ?? ''}|${params.turnId ?? ''}`;
+    const notice = ctx.rt.networkRetryNotice;
+    const count = notice?.key === key ? notice.count + 1 : 1;
+    const emitted = notice?.key === key ? notice.emitted : false;
+    ctx.rt.networkRetryNotice = { key, count, emitted };
+    if (count >= 2 && !emitted) {
+      ctx.rt.networkRetryNotice = { key, count, emitted: true };
+      queue.push({
+        type: 'error',
+        data: { ...safeErrorData, isTerminal: false, willRetry: true },
+        source: 'codex',
+      });
     }
     return;
   }
@@ -254,6 +312,29 @@ export function translateErrorNotification(
       return;
     }
     ctx.rt.lastAuthErrorKey = key;
+  }
+  // 服务过载 (`Selected model is at capacity`): OpenAI 侧不重试就把 turn 判死,
+  // 由 agent 层接管退避重投。接管成功时透成非终止状态并带进度后缀, renderer
+  // 显示"模型繁忙, 正在重试 (N/M)"; 预算耗尽或条件不满足 (本 turn 已有产出)
+  // 时 tryTakeOverOverload 返回 null, 落回下面的终止错误路径。
+  if (
+    !params.willRetry &&
+    parseOverloadError(safeMessage, signals.errorStatus)?.kind === 'capacity'
+  ) {
+    const progress = ctx.tryTakeOverOverload?.();
+    if (progress) {
+      queue.push({
+        type: 'error',
+        data: {
+          ...safeErrorData,
+          message: formatOverloadRetryMessage(safeMessage, progress.attempt, progress.maxAttempts),
+          isTerminal: false,
+          willRetry: true,
+        },
+        source: 'codex',
+      });
+      return;
+    }
   }
   ctx.log.warn('codex turn error', { message: safeMessage, willRetry: params.willRetry, isAuthMissing, threadId: params.threadId, turnId: params.turnId });
   queue.push({
@@ -420,8 +501,8 @@ interface McpToolCallItem {
 
 type WebSearchAction =
   | { type: 'search'; query?: string | null; queries?: string[] | null }
-  | { type: 'openPage'; url?: string | null }
-  | { type: 'findInPage'; url?: string | null; pattern?: string | null }
+  | { type: 'open_page' | 'openPage'; url?: string | null }
+  | { type: 'find_in_page' | 'findInPage'; url?: string | null; pattern?: string | null }
   | { type: string; [k: string]: unknown };
 
 interface WebSearchItem {
@@ -429,6 +510,11 @@ interface WebSearchItem {
   id: string;
   query: string;
   action?: WebSearchAction | null;
+}
+
+interface WebSearchInput {
+  query: string;
+  action?: WebSearchAction;
 }
 
 type PatchApplyStatus = 'inProgress' | 'completed' | 'failed' | 'declined';
@@ -871,7 +957,89 @@ function mcpContentTextParts(content: unknown[] | undefined): string[] {
 }
 
 // ── webSearch → tool_use + tool_result_full + tool_result ────────────────────
-// v2 加了 action 字段 (Search/OpenPage/FindInPage), 用 query 兜底显示。
+// v2 的 legacy query 可能为空，真实动作优先在 action 中；归一成 query 供现有
+// maker-shared / Desktop / Mobile 展示链路消费，同时保留 action 供展开详情核验。
+
+function nonEmptyWebSearchText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function quoteWebSearchText(value: string): string {
+  return `'${value.replace(/['\\]/g, (char) => `\\${char}`)}'`;
+}
+
+function webSearchActionDetail(action: WebSearchAction | null | undefined): string {
+  if (!action) return '';
+  switch (action.type) {
+    case 'search': {
+      const query = nonEmptyWebSearchText(action.query);
+      if (query) return query;
+      const queries = Array.isArray(action.queries)
+        ? action.queries.map(nonEmptyWebSearchText).filter(Boolean)
+        : [];
+      if (queries.length === 0) return '';
+      return queries.length > 1 ? `${queries[0]} ...` : queries[0];
+    }
+    case 'open_page':
+    case 'openPage':
+      return nonEmptyWebSearchText(action.url);
+    case 'find_in_page':
+    case 'findInPage': {
+      const url = nonEmptyWebSearchText(action.url);
+      const pattern = nonEmptyWebSearchText(action.pattern);
+      if (pattern && url) return `${quoteWebSearchText(pattern)} in ${url}`;
+      if (pattern) return quoteWebSearchText(pattern);
+      return url;
+    }
+    default:
+      return '';
+  }
+}
+
+function webSearchInput(
+  item: WebSearchItem,
+  actionDetail = webSearchActionDetail(item.action),
+): WebSearchInput {
+  const query = actionDetail || nonEmptyWebSearchText(item.query);
+  return {
+    query,
+    ...(item.action ? { action: item.action } : {}),
+  };
+}
+
+function rememberWebSearchInput(
+  item: WebSearchItem,
+  input: WebSearchInput,
+  actionDetail: string,
+  ctx: CodexTranslateContext,
+): WebSearchInput {
+  const pending = ctx.rt.pendingWebSearchInput.get(item.id);
+  // 真实 action 优先级最高；在它到达前，保留最新的非空 legacy query 作为兜底。
+  if (input.query && (actionDetail || !webSearchActionDetail(pending?.action))) {
+    ctx.rt.pendingWebSearchInput.set(item.id, input);
+    return input;
+  }
+  return pending ?? input;
+}
+
+function emitWebSearchToolUse(
+  item: WebSearchItem,
+  input: WebSearchInput,
+  queue: AsyncQueue<AgentEvent>,
+  ctx: CodexTranslateContext,
+): void {
+  ctx.rt.emittedToolUse.add(item.id);
+  ctx.rt.emittedWebSearchInput.set(item.id, input);
+  queue.push({
+    type: 'tool_use',
+    data: {
+      toolUseId: item.id,
+      toolName: 'web_search',
+      input,
+    },
+    source: 'codex',
+  });
+}
 
 function handleWebSearch(
   phase: ItemPhase,
@@ -879,24 +1047,44 @@ function handleWebSearch(
   queue: AsyncQueue<AgentEvent>,
   ctx: CodexTranslateContext,
 ): void {
+  const actionDetail = webSearchActionDetail(item.action);
+  const currentInput = webSearchInput(item, actionDetail);
+  const input = rememberWebSearchInput(item, currentInput, actionDetail, ctx);
+
   if (phase === 'started') {
     if (ctx.rt.emittedToolUse.has(item.id)) return;
-    ctx.rt.emittedToolUse.add(item.id);
-    queue.push({
-      type: 'tool_use',
-      data: {
-        toolUseId: item.id,
-        toolName: 'web_search',
-        input: { query: item.query, action: item.action ?? undefined },
-      },
-      source: 'codex',
-    });
+    // started 的 legacy query 可能为空或只是占位符，updated 才补真实 action；
+    // 延迟到 action 到达或 completed，避免旧参数先落库后无法无损更新。
+    if (!actionDetail) return;
+    emitWebSearchToolUse(item, input, queue, ctx);
     return;
   }
-  if (phase === 'updated') return;
+  if (phase === 'updated') {
+    if (ctx.rt.emittedToolUse.has(item.id) || !actionDetail) return;
+    emitWebSearchToolUse(item, input, queue, ctx);
+    return;
+  }
 
   // completed
+  const toolUseEmitted = ctx.rt.emittedToolUse.has(item.id);
+  const emittedInput = ctx.rt.emittedWebSearchInput.get(item.id);
   ctx.rt.emittedToolUse.delete(item.id);
+  ctx.rt.pendingWebSearchInput.delete(item.id);
+  ctx.rt.emittedWebSearchInput.delete(item.id);
+  // 防御缺失 started/updated 的历史或异常事件序列，保持 tool_use → result 顺序。
+  if (!toolUseEmitted) {
+    // completed 仍无可展示参数时整条忽略，避免补发空白 tool_use 和孤立 result。
+    if (!input.query) return;
+    emitWebSearchToolUse(item, input, queue, ctx);
+    ctx.rt.emittedToolUse.delete(item.id);
+    ctx.rt.emittedWebSearchInput.delete(item.id);
+  } else if (input.query && JSON.stringify(input) !== JSON.stringify(emittedInput)) {
+    // started/updated 用于实时展示；completed 可能补充权威 URL、pattern 或修正后的
+    // query。沿用同一 toolUseId 补发，由 Desktop 持久层与 renderer 原位更新。
+    emitWebSearchToolUse(item, input, queue, ctx);
+    ctx.rt.emittedToolUse.delete(item.id);
+    ctx.rt.emittedWebSearchInput.delete(item.id);
+  }
   queue.push({
     type: 'tool_result_full',
     data: { toolUseId: item.id, fullText: '', isError: false },

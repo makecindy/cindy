@@ -109,8 +109,8 @@ export interface ModelGroupTieredPricing {
 /**
  * model-access-server 从 AIGateway /model-groups 白名单透传的价格字段。
  * 字段名和数值保持 Gateway 原样（per token）；Desktop 在构建 quote 时才转
- * per-million-token。币种以条目声明的 currency 为准，未声明按 Gateway 原生
- * USD——绝不按构建区域改标或折算。
+ * per-million-token。Cindy AI Gateway 的缺省币种由运行区域决定：CN 为 CNY，
+ * Global 为 USD。
  */
 export interface ModelGroupPricing {
   costDiscount?: number;
@@ -154,12 +154,8 @@ export interface ModelGroupPricing {
 export interface ModelAccessGatewayModel extends ModelGroupPricing {
   id: string;
   /**
-   * 本条目价格字段的计费币种声明(透传 Gateway)。缺省表示 Gateway 原生口径
-   * USD;客户端不得按构建区域改标或折算——单位永远跟随下发数据。
-   * 注意:本地记账账本是单币种的,只有**每个会产生报价**的条目都显式声明同一
-   * 非 USD 币种时目录才整体切换(免费/无价条目不参与裁决);与目录币种冲突的
-   * 声明条目不出报价(费用退回 SDK 实报 USD 兜底),见
-   * modelPriceQuote.resolveGatewayCatalogCurrency。
+   * Gateway 可选的币种声明。当前 Cindy AI 价格目录仍以构建 region 的渠道契约
+   * 为准；该字段仅保留 wire 兼容，不能让同一构建产生混合币种目录。
    */
   currency?: 'USD' | 'CNY';
   /** 进哪些 runtime tab;缺省 = 仅 claude-code(网关 /v1/messages 翻译覆盖面最广)。 */

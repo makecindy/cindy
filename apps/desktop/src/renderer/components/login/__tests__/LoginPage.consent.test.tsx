@@ -216,23 +216,29 @@ describe('consent guard(未勾选拦截个人登录链路)', () => {
     });
   });
 
-  it('游客圆钮未勾选 → 弹窗;同意 → 进入本地模式(authEnterLocal)', async () => {
+  // 2026-07-27 拍板(推翻同年 07-24「游客也先过协议门」):跳过登录不创建账号、不上报
+  // 数据,radio 未勾选也直接进本地模式,不弹协议弹窗。旧游客圆钮入口已删除。
+  it('「跳过登录」未勾选也豁免协议门 → 无弹窗,直接进入本地模式(authEnterLocal)', async () => {
     mount(await identifierState('providers:cn-social'));
-    fireEvent.click(screen.getByTestId('login-social-guest'));
-    expect(screen.getByTestId('login-consent-dialog')).toBeTruthy();
-    expect(authEnterLocal).not.toHaveBeenCalled();
+    expect(screen.getByTestId('login-consent-radio').getAttribute('aria-checked')).toBe('false');
     await act(async () => {
-      fireEvent.click(screen.getByTestId('login-consent-agree'));
+      fireEvent.click(screen.getByTestId('login-skip-entry'));
     });
+    expect(screen.queryByTestId('login-consent-dialog')).toBeNull();
     expect(authEnterLocal).toHaveBeenCalledTimes(1);
   });
 
-  it('游客圆钮不同意 → 停在登录主界面,不进本地模式', async () => {
+  it('「跳过登录」不写入「已同意隐私政策」记录(未明示同意 → 采集闸保持关闭)', async () => {
     mount(await identifierState('providers:cn-social'));
-    fireEvent.click(screen.getByTestId('login-social-guest'));
-    fireEvent.click(screen.getByTestId('login-consent-disagree'));
-    expect(authEnterLocal).not.toHaveBeenCalled();
-    expect(screen.getByTestId('login-panel-identifier')).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('login-skip-entry'));
+    });
+    expect(acceptPrivacyConsent).not.toHaveBeenCalled();
+  });
+
+  it('旧游客圆钮入口已删除(圆钮行不再渲染 login-social-guest)', async () => {
+    mount(await identifierState('providers:cn-social'));
+    expect(screen.queryByTestId('login-social-guest')).toBeNull();
   });
 
   it('企业 SSO 入口豁免:未勾选点 SSO 圆钮 → 直接进组织标识子视图,无弹窗', async () => {

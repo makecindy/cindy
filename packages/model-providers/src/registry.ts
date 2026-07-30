@@ -14,6 +14,11 @@
 
 import type { Catalog, Provider, CatalogModel, AgentKind, RoutingDescriptor } from './types.js';
 import type { ProviderLogoKind } from './providerBranding.js';
+import {
+  isModelDisabled,
+  isProviderDisabled,
+  type ModelDisableOverrides,
+} from './disableOverrides.js';
 
 /** 各供应商是否已连接，由 host 注入。 */
 export type ConnectionState = Record<string, boolean>;
@@ -89,6 +94,20 @@ export interface ProviderView extends Provider {
   logoKind?: ProviderLogoKind;
   /** 动态清单发现的最近一次失败（已剥掉 detail）；成功或从未失败时缺席。 */
   modelDiscoveryFailure?: ProviderModelDiscoveryFailureView;
+  /**
+   * 用户把该供应商整体「停用」(凭证保留;见 disableOverrides.ts)。`connected` 保持真实
+   * 连接态(设置页要如实展示凭证状态),但 `connectedProvidersForAgent` /
+   * `sourcesForModel` 会把 suspended 供应商从一切可路由集合里剔除 —— 对所有
+   * 选择器 / 路由 / IM / device-link 消费方,停用 ≙ 不可用。
+   */
+  suspended?: boolean;
+  /**
+   * 该供应商名下的停用 override 总数(供应商级标志 + 全部逐模型条目)。与烘进模型
+   * 条目的 `disabled` 标志不同,它**包含指向已下架模型的陈旧条目**。设置页据此在
+   * 「目录里已无对应行」时仍展示组级「全部启用」恢复入口(configuration-and-
+   * overrides.md §4;PR #744 review 第二十六轮)。0 时缺席(纯附加字段,老端忽略)。
+   */
+  disableOverrideCount?: number;
 }
 
 /**
@@ -104,20 +123,57 @@ function stripDiscoveryFailureDetail(
   return view;
 }
 
-/** 把目录与连接状态合成 registry。 */
+/** 把目录与连接状态合成 registry。`access` = 用户的停用 override(见 disableOverrides.ts)。 */
 export function buildRegistry(
   catalog: Catalog,
   connected: ConnectionState,
   discoveryFailures: ModelDiscoveryFailureState = {},
+  access?: ModelDisableOverrides,
 ): ProviderView[] {
+  const disabledKeys = access?.disabledModels ? Object.keys(access.disabledModels) : [];
   return catalog.providers.map((p) => {
     const failure = discoveryFailures[p.id];
     // 剥掉 detail 再下发:它可能是上游原始响应体,而这份视图会过 IPC 到 renderer、
     // 再经 device-link 投影给配对控制端。UI 只用 kind。
     const failureView = failure ? stripDiscoveryFailureDetail(failure) : null;
+    const suspended = isProviderDisabled(access, p.id);
+    // 该供应商名下的停用 override 总数(供应商级标志 + 全部逐模型条目)。与烘进
+    // 模型条目的 disabled 标志不同,它**包含指向已下架模型的陈旧条目** —— 设置页
+    // 据此决定是否展示「全部启用」组级恢复入口:目录漂移后 override 仍在、却没有
+    // 任何行可渲染时,恢复入口不能消失(PR #744 review 第二十六轮)。
+    const disableOverrideCount =
+      (suspended ? 1 : 0) + disabledKeys.filter((k) => k.startsWith(`${p.id}:`)).length;
+    // 停用标志烘焙进模型条目(视图层字段,见 CatalogModel.disabled):renderer 与
+    // device-link 控制端直接消费,不需要各自再查一份 override 表。**只有确实带停用
+    // 条目的供应商**才重建 models(按 key 前缀判;listProviders 是热路径,其余供应商
+    // 原引用透传零分配 —— PR #744 review)。前缀误命中(如 'a:' 命中 'a:b:model')只
+    // 多做一次无害映射,不影响正确性。
+    let models = p.models;
+    let mediaOverrides: Pick<Provider, 'imageModels' | 'videoModels'> = {};
+    if (disabledKeys.length > 0 && disabledKeys.some((k) => k.startsWith(`${p.id}:`))) {
+      const mapped: Provider['models'] = {};
+      for (const agent of Object.keys(p.models) as AgentKind[]) {
+        mapped[agent] = (p.models[agent] ?? []).map((m) =>
+          isModelDisabled(access, p.id, m.id) ? { ...m, disabled: true } : m,
+        );
+      }
+      models = mapped;
+      // 专属媒体清单(imageModels/videoModels,不挂 agent)同样烘焙停用标志:
+      // 设置页据此渲染/切换只经媒体清单下发的图像、视频型号(PR #744 review)。
+      const mapMedia = (list: NonNullable<Provider['imageModels']>) =>
+        list.map((m) => (isModelDisabled(access, p.id, m.id) ? { ...m, disabled: true } : m));
+      mediaOverrides = {
+        ...(p.imageModels ? { imageModels: mapMedia(p.imageModels) } : {}),
+        ...(p.videoModels ? { videoModels: mapMedia(p.videoModels) } : {}),
+      };
+    }
     return {
       ...p,
+      models,
+      ...mediaOverrides,
       connected: connected[p.id] ?? false,
+      ...(suspended ? { suspended: true } : {}),
+      ...(disableOverrideCount > 0 ? { disableOverrideCount } : {}),
       ...(failureView ? { modelDiscoveryFailure: failureView } : {}),
     };
   });
@@ -134,9 +190,25 @@ export function providersForAgent(views: ProviderView[], agent: AgentKind): Prov
   return views.filter((p) => hasEnabledAgentRuntime(p, agent));
 }
 
-/** 该 agent 已连接的供应商 —— 模型选择器「来源栏」用。 */
-export function connectedProvidersForAgent(views: ProviderView[], agent: AgentKind): ProviderView[] {
-  return views.filter((p) => p.connected && hasEnabledAgentRuntime(p, agent));
+/**
+ * 该 agent 已连接的供应商 —— 模型选择器「来源栏」用。停用(suspended)的供应商不可
+ * 作为新路由,默认一并剔除。`includeSuspended` 保留 suspended 来源 —— 给**已建会话**
+ * 的鉴权/发送门禁用(运行中会话不因停用打断,门禁只回答「凭证还连着吗」,把停用当
+ * 未鉴权会误禁发送;PR #744 review 第十轮)。新路由消费方不要传。
+ */
+export function connectedProvidersForAgent(
+  views: ProviderView[],
+  agent: AgentKind,
+  opts: { includeSuspended?: boolean } = {},
+): ProviderView[] {
+  // 两道正交的剔除:runtime 级 disabled(目录 routing 声明,上游 #526)与用户的
+  // 供应商级停用(suspended,model-disable-store)—— 任一命中都不可路由。
+  return views.filter(
+    (p) =>
+      p.connected &&
+      (opts.includeSuspended === true || !p.suspended) &&
+      hasEnabledAgentRuntime(p, agent),
+  );
 }
 
 /** 该供应商是否在某 agent 下提供某 model id。 */
@@ -162,14 +234,23 @@ export function sourcesForModel(
   views: ProviderView[],
   modelId: string,
   agent: AgentKind,
-  opts: { onlyConnected?: boolean } = {},
+  opts: { onlyConnected?: boolean; includeDisabled?: boolean } = {},
 ): ProviderView[] {
   const onlyConnected = opts.onlyConnected ?? true;
+  // suspended 供应商与**该来源下被停用的模型条目**默认出局:本函数的产出是
+  // 「可路由来源」(选择器 activeSourceId / effectiveSourceIdForModel / Fast 门控),
+  // 停用的那份拷贝即便凭证在场也不允许被路由到 —— 同 id 模型在 A 家停用、B 家
+  // 启用时,默认来源解析必须落到 B,而不是继续把 A 当候选(PR #744 review)。
+  // `includeDisabled` 保留停用条目(suspended / model.disabled)—— 给准入守卫
+  // (model-route-guard)推演「不考虑停用时会路由到谁」用,普通消费方不要传。
+  const includeDisabled = opts.includeDisabled === true;
   return views.filter(
     (p) =>
+      (includeDisabled || !p.suspended) &&
       (!onlyConnected || p.connected) &&
       hasEnabledAgentRuntime(p, agent) &&
-      providerOffersModel(p, modelId, agent),
+      providerOffersModel(p, modelId, agent) &&
+      (includeDisabled || getModel(p, modelId, agent)?.disabled !== true),
   );
 }
 
@@ -202,6 +283,25 @@ export function effectiveSourceIdForModel(
   agent: AgentKind,
 ): string | null {
   const sources = sourcesForModel(views, modelId, agent);
+  if (providerId && sources.some((provider) => provider.id === providerId)) return providerId;
+  return nativeDefaultSourceId(sources, agent);
+}
+
+/**
+ * 「实际路由口径」的来源解析:选择规则与 effectiveSourceIdForModel 相同,但**不**
+ * 剔除停用拷贝(includeDisabled rail)。给「展示一个已在运行的会话」用:运行中的
+ * 会话不因停用打断,实际路由层对隐式来源仍落原生默认、对显式来源仍用会话存的值 ——
+ * 图标 / 价格 / Fast / 选中行豁免必须跟实际路由一致,不能显示成准入过滤后的替代
+ * 来源(PR #744 review 第五轮)。**新路由选择**(新会话 / 切模型 / worker / schedule)
+ * 一律用 effectiveSourceIdForModel,不要用本函数。
+ */
+export function actualSourceIdForModel(
+  views: ProviderView[],
+  providerId: string | null | undefined,
+  modelId: string,
+  agent: AgentKind,
+): string | null {
+  const sources = sourcesForModel(views, modelId, agent, { includeDisabled: true });
   if (providerId && sources.some((provider) => provider.id === providerId)) return providerId;
   return nativeDefaultSourceId(sources, agent);
 }

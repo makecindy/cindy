@@ -24,6 +24,10 @@
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { applyCodexPlanSnapshotOnDone } from '@cindy/maker-shared/message-render';
+import {
+  normalizeWorkflowProgressEntries,
+  type WorkflowProgressEntry,
+} from '@cindy/maker-shared/agent-task';
 import type { MessageRole, Message, MessageAutomationOrigin } from '@/lib/ccAgent.types';
 import type { AttachedFile, MentionedResource, SerializedAttachedFile } from '@/lib/fileTypes';
 import type {
@@ -90,6 +94,7 @@ import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
 import { buildUserMessageAttachmentPayload } from '@/lib/messageAttachmentPayload';
 import {
   parseIssueEnvRegion,
+  parseIssueSuggestedPublicName,
   parseIssueSubmissionIdentity,
   type IssueSubmissionIdentity,
 } from '@/lib/issueConfirmPayload';
@@ -189,6 +194,11 @@ import {
   stringifyUserContent,
 } from '@/lib/imageRef';
 import { saveDraft as saveComposerDraft, plainTextToTiptapDoc } from '@/lib/composerDraftStore';
+import {
+  clearIssueConfirmDraft,
+  clearIssueConfirmDraftsForSession,
+  type IssueConfirmDraft,
+} from '@/lib/issueConfirmDraftStore';
 import {
   canStartComposerSteer,
   canStartQueuedSteer,
@@ -439,6 +449,12 @@ export interface AgentTaskUpdate {
   model?: string;
   reasoningEffort?: string;
   receiverThreadIds?: string[];
+  /**
+   * workflow 逐 agent 进度树(taskType=local_workflow 时由 task_progress 事件携带)。
+   * CLI 对纯心跳帧节流省略本字段,merge 必须沿用上一帧,绝不能清空。
+   * 与 `@cindy/maker-shared/agent-task` 的 AgentTaskUpdate 保持 lockstep。
+   */
+  workflowProgress?: WorkflowProgressEntry[];
   createdAt?: string;
   updatedAt?: string;
 }
@@ -573,7 +589,7 @@ export interface PendingPlanReview {
  */
 export interface PendingIssueConfirm {
   requestId: string;
-  draft: { title: string; body: string; type: 'bug' | 'feature' };
+  draft: IssueConfirmDraft;
   /**
    * 只读展示的环境信息(main 会附进 issue body)。`region` 是本构建的区域身份
    * (中国版 / 国际版 / 开发版);main 侧 payload 未带时按 undefined 处理,卡片
@@ -588,6 +604,8 @@ export interface PendingIssueConfirm {
   };
   /** main 已经选定、确认后不会自动切换的实际 GitHub 作者身份。 */
   submissionIdentity: IssueSubmissionIdentity;
+  /** 平台代发的建议公开署名；缺失时卡片使用本地化“匿名”。 */
+  suggestedPublicName?: string;
 }
 
 /**
@@ -772,6 +790,26 @@ export interface SessionChatState {
   continuationInFlightClientId: string | null;
   isLoadingMore: boolean;
   hasMoreMessages: boolean;
+  /**
+   * 窗口里是否掺进过"孤岛" —— 跳转补齐失败时 merge 的 around 窗口,它与已加载的尾部窗口
+   * 之间隔着没加载的历史。
+   *
+   * 为什么需要它:补齐的快速通道原来只判 `messages.some(clientId === target)`,那是**成员**
+   * 判定而不是**连续覆盖**判定。孤岛一旦落进窗口,再跳同一个目标就会命中 some()、直接返回
+   * covered 而不补齐,于是"中间缺失"再也修不好(#676 review)。有孤岛时快速通道失效,
+   * 每次跳转都重新从最新翻页,让这个状态可自愈。
+   *
+   * 只由**把窗口清空、从最新重新拉起**的路径清回 false:reloadMessages(rewind / origin
+   * 漂移重载)、clearSessionAfterGuard(/clear)、_demoteIdleSessions(空闲降级)、
+   * _purgeSession(整条移除,重建后回到默认 false)。
+   *
+   * 反过来,这几处**刻意不清**(都在 #676 review 里逐条确认过):
+   *  - `covered`:到达本次目标只证明"尾部 → 本目标"连续,不证明更早的孤岛都被跨过;
+   *  - `_trimMessagesIfNeeded`:`slice(-TRIM_TARGET)` 只保证"最新 200 行",不保证连续;
+   *  - 首拉落地:它只是把最新一页 merge 进来,孤岛与尾段之间的洞还在(游标交还给最新页
+   *    下沿,好让往上翻能穿过去)。
+   */
+  historyWindowHasIsland?: boolean;
   isFirstMessage: boolean;
   streamingClientId: string | null;
   streamingText: string;
@@ -996,6 +1034,7 @@ function createInitialState(): SessionChatState {
     continuationInFlightClientId: null,
     isLoadingMore: false,
     hasMoreMessages: true,
+    historyWindowHasIsland: false,
     isFirstMessage: true,
     streamingClientId: null,
     streamingText: '',
@@ -1058,6 +1097,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   continuationInFlightClientId: null,
   isLoadingMore: false,
   hasMoreMessages: false,
+  historyWindowHasIsland: false,
   isFirstMessage: true,
   streamingClientId: null,
   streamingText: '',
@@ -1192,6 +1232,7 @@ function isBeforeOrAtRendererClearBoundary(sessionId: string, createdAt: string)
  */
 function _purgeSession(sessionId: string): void {
   discardPendingTextDelta(sessionId);
+  clearIssueConfirmDraftsForSession(sessionId);
   // 代际递增(bump 而非 delete,原因见 _messagesEpoch 注释):作废 in-flight 翻页,
   // 避免其提交把旧窗口 merge 进 purge 后重建的空 slice。
   bumpMessagesEpoch(sessionId);
@@ -1271,13 +1312,34 @@ function _trimMessagesIfNeeded(sessionId: string): void {
   if (_isSessionBusy(sessionId, state)) return;
   if (_activeViewSessions.has(sessionId)) return;
 
+  // 裁剪等于一次代际重置:它砍掉窗口中段、把 oldestMessageId 清空,in-flight 的翻页 /
+  // 跳转补齐若仍按 pre-trim 游标提交,就会把更老的一页直接接到保留的尾部上 —— 中间被裁掉
+  // 的区间成了新的空洞,而补齐还可能据此判 covered 并清掉孤岛标记(#676 review)。
+  // 所以照 reloadMessages / clear / edit-last 同一规矩:bump epoch 作废 in-flight,并由
+  // 本次重置自己释放分页锁。
+  bumpMessagesEpoch(sessionId);
   setState(sessionId, (s) => {
-    if (s.messages.length <= TRIM_THRESHOLD) return s;
+    // 兜底早返(当前不可达:上面三道守卫都在 bump 之前,而 setState 是同步的、拿到的就是
+    // 同一份 state)。仍然要放锁:epoch 已经 bump 掉,in-flight 的翻页 / 补齐已被作废且
+    // 刻意不自清,漏这一处就会让行首守卫把该会话的翻页永久卡住(#676 review greptile)。
+    if (s.messages.length <= TRIM_THRESHOLD) {
+      return s.isLoadingMore ? { ...s, isLoadingMore: false } : s;
+    }
     return {
       ...s,
       messages: s.messages.slice(-TRIM_TARGET),
       hasMoreMessages: true,
       oldestMessageId: null,
+      isLoadingMore: false,
+      // 孤岛标记**保持原值**:`slice(-TRIM_TARGET)` 只保证"取最新的 200 行",不保证这 200 行
+      // 连续 —— 若先前几次深跳留下多个孤岛、而真正连续的尾段不足 200 行,裁剪结果里就还夹着
+      // 孤岛。清掉标记会让 canFocusWithoutJumpLoad 把命中孤岛当成已覆盖直接 focus,而从孤岛
+      // 边界往上翻又取不到那段更新的缺失区间 → 洞永久固化,直到整会话重载(#676 review)。
+      //
+      // 代价是出现过孤岛的会话在裁剪后仍会多做补齐尝试;方向上是安全的那一侧。
+      // 真正清零只发生在"整窗从最新重建"的路径(reloadMessages / clear / demote / purge)。
+      // 注意游标被清成 null:此时补齐会从最新页重新起翻(见 backfillHistoryUntil 的首页分支),
+      // 恰好能穿过缺失区间自愈。
     };
   });
 }
@@ -1352,6 +1414,11 @@ function _demoteIdleSessions(): void {
     toDemote.push(sessionId);
   }
   for (const sessionId of toDemote) {
+    // 与 reloadMessages / clear / edit-last / grouped-delete / trim 同一规矩:清空窗口
+    // 等于代际重置,必须 bump epoch 作废 in-flight 的翻页 / 跳转补齐,并由本次重置释放
+    // 分页锁。漏 bump 的后果是 in-flight 那一页按 demote 前的游标提交,把一段脱离上下文
+    // 的旧历史 merge 进空切片(或重开后的新切片),最近的消息反而缺席(#676 review)。
+    bumpMessagesEpoch(sessionId);
     setState(sessionId, (s) => ({
       ...s,
       messages: [],
@@ -1359,6 +1426,8 @@ function _demoteIdleSessions(): void {
       historyLoaded: false,
       oldestMessageId: null,
       hasMoreMessages: true,
+      isLoadingMore: false,
+      historyWindowHasIsland: false,
     }));
   }
 }
@@ -1392,6 +1461,10 @@ function setState(sessionId: string, updater: (prev: SessionChatState) => Sessio
   const prev = getOrCreateState(sessionId);
   const next = updater(prev);
   if (next === prev) return;
+  const previousIssueRequestId = prev.pendingIssueConfirm?.requestId;
+  if (previousIssueRequestId && next.pendingIssueConfirm?.requestId !== previousIssueRequestId) {
+    clearIssueConfirmDraft(sessionId, previousIssueRequestId);
+  }
   sessions.set(sessionId, next);
   // running-status 快照缓存失效(getRunningSnapshot 纯 getter 契约:只有
   // mutation 才允许让下一次读重算)。必须在 notify 之前置位。
@@ -1763,6 +1836,7 @@ function normalizeAgentTaskUpdate(
         ...(typeof usageRaw.durationMs === 'number' ? { durationMs: usageRaw.durationMs } : {}),
       }
     : undefined;
+  const workflowProgress = normalizeWorkflowProgressEntries(raw.workflowProgress);
   return {
     provider,
     taskId: taskId ?? parentToolUseId!,
@@ -1793,6 +1867,7 @@ function normalizeAgentTaskUpdate(
           ),
         }
       : {}),
+    ...(workflowProgress ? { workflowProgress } : {}),
     ...(typeof raw.createdAt === 'string' && raw.createdAt ? { createdAt: raw.createdAt } : {}),
     ...(typeof raw.updatedAt === 'string' && raw.updatedAt ? { updatedAt: raw.updatedAt } : {}),
   };
@@ -1812,6 +1887,8 @@ function mergeAgentTaskUpdate(
     summary: next.summary ?? prev.summary,
     outputFile: next.outputFile ?? prev.outputFile,
     lastToolName: next.lastToolName ?? prev.lastToolName,
+    // CLI 节流帧不带 workflowProgress(undefined = 沿用旧树),必须保留上一帧。
+    workflowProgress: next.workflowProgress ?? prev.workflowProgress,
     createdAt: prev.createdAt ?? next.createdAt,
     updatedAt: next.updatedAt ?? prev.updatedAt,
   };
@@ -2245,17 +2322,17 @@ export function handleStreamEvent(
       const finalized = finalizeStreamingInState(state);
       const clientId = event.persistId ?? crypto.randomUUID();
 
-      const existingUpdatePlanIdx =
-        toolName === 'update_plan'
+      const existingUpdatableToolIdx =
+        toolName === 'update_plan' || toolName === 'web_search'
           ? finalized.messages.findIndex(
               (m) =>
-                m.role === 'tool_use' && m.toolName === 'update_plan' && m.toolUseId === toolUseId,
+                m.role === 'tool_use' && m.toolName === toolName && m.toolUseId === toolUseId,
             )
           : -1;
-      if (existingUpdatePlanIdx >= 0) {
+      if (existingUpdatableToolIdx >= 0) {
         const messages = finalized.messages.slice();
-        messages[existingUpdatePlanIdx] = {
-          ...messages[existingUpdatePlanIdx],
+        messages[existingUpdatableToolIdx] = {
+          ...messages[existingUpdatableToolIdx],
           content: formatToolUseSummary(toolName, input),
           toolInput: input,
         };
@@ -3813,6 +3890,10 @@ function initGlobalListeners(): void {
         | undefined;
       const submissionIdentity = parseIssueSubmissionIdentity(request.submissionIdentity);
       if (!draft || !rawEnv || !submissionIdentity) return;
+      const suggestedPublicName =
+        submissionIdentity.kind === 'platform'
+          ? parseIssueSuggestedPublicName(request.suggestedPublicName)
+          : undefined;
       // region 过一遍白名单:非法值宁可不展示区域,也不能把 CN 版说成默认版。
       const env = { ...rawEnv, region: parseIssueEnvRegion(rawEnv.region) };
       setState(sessionId, (s) => ({
@@ -3822,6 +3903,7 @@ function initGlobalListeners(): void {
           draft,
           env,
           submissionIdentity,
+          suggestedPublicName,
         },
       }));
       return;
@@ -5026,13 +5108,19 @@ const _historyLoadOrigin = new Map<string, string | undefined>();
 
 /**
  * 会话消息切片的代际号:整体重置切片的路径递增——reloadMessages(rewind / origin
- * 漂移重载)、clearSessionAfterGuard(/clear)、_purgeSession(删除 / 归档 / LRU 驱逐)。
+ * 漂移重载)、clearSessionAfterGuard(/clear)、_purgeSession(删除 / 归档 / LRU 驱逐)、
+ * dropMessagesFromClientId(edit-last 截断)、removeMessagesByClientIds(分组删除)、
+ * _trimMessagesIfNeeded(超长裁剪)、_demoteIdleSessions(空闲降级)、
+ * reconcileRemoteMessages 的权威重建分支(远程对账翻满上限仍未接回已知区段)。
+ * 判据只有一条:**这次改动是否换掉了窗口整体或 oldestMessageId** —— 换了就必须 bump,
+ * 并由这条路径自己释放分页锁(被作废的请求分辨不出锁属于哪一代,不会代清)。
  * loadOlderMessages 的追页循环在发起时快照代际,提交前比对——不一致说明
  * 追页期间切片已被整体重置,拉回的窗口作废(只复位 spinner,不把可能已软删的行
  * merge 回刚清空的 slice)。追页循环把竞态窗口从 1 次 RTT 拉长到最多 10 次
  * (隧道下可达数秒),这层守卫随之补上(subagent review 记录的既有竞态类别)。
- * purge 时保留条目(bump 而非 delete):删掉会让"捕获 0 → purge → 重建后仍是 0"
- * 的路径误判为未变;条目仅一个 number,不清理无泄漏压力。
+ * purge 时保留条目(bump 而非 delete)是**有意**的:删掉会让"捕获 0 → purge → 重建后仍是 0"
+ * 的路径误判为未变。代价是这张表随本进程见过的 sessionId 单调增长(每条一个 number),
+ * 上界是历史会话数 —— 拿不回来,但也换不掉:删条目就等于放弃这层守卫。
  */
 const _messagesEpoch = new Map<string, number>();
 
@@ -5201,9 +5289,24 @@ function ensureInitialMessages(sessionId: string): void {
         // preserves slice invariants).
         messages: mergeMessages(mapped, s.messages, {}, 'newest-first'),
         isFirstMessage: false,
+        // 窗口里掺着跳转孤岛时,**本页的下沿**接管游标,不再取"两者中更老的那个"。
+        //
+        // 序列(#676 review codex P1):会话刚打开就直接深跳,首拉还没回来 → 补齐无从下手、
+        // 退回 around 孤岛并用孤岛下沿播种游标(那时窗口里只有孤岛,只能这么播)。随后首拉
+        // 的最新页落地,若仍保留更老的孤岛游标,缺失区间恰好比它**更新**:普通向上翻页与
+        // 孤岛感知重试都只会请求比孤岛更老的行,那段洞永远拉不回来,除非整会话重载。
+        // 换成最新页下沿后,往上翻会一页页穿过那段洞,补齐也能真正命中目标并自愈。
+        //
+        // 孤岛标记**不清**:洞还在,直到翻页真的把它填上。
         oldestMessageId:
-          oldestServerMessageIdForWindow(merged, s.messages, s.oldestMessageId, 'newest-first') ??
-          oldestId,
+          s.historyWindowHasIsland === true
+            ? oldestId
+            : (oldestServerMessageIdForWindow(
+                merged,
+                s.messages,
+                s.oldestMessageId,
+                'newest-first',
+              ) ?? oldestId),
         hasMoreMessages: hasMore,
       }));
       if (import.meta.env.DEV) {
@@ -5248,6 +5351,12 @@ function reloadMessages(sessionId: string): void {
     hasMoreMessages: false,
     oldestMessageId: null,
     isStreaming: false,
+    // 窗口从最新重新拉起 → 不再有孤岛。
+    historyWindowHasIsland: false,
+    // 分页锁归本次重置释放:窗口和游标都清了,in-flight 的翻页 / 跳转补齐也已被上面的
+    // bumpMessagesEpoch 作废,锁再留着只会让行首守卫卡住下一次翻页。由这里清而不是
+    // 让被作废的请求代清 —— 它们无法分辨锁是自己那一代的还是重置后新代际的(#676 review)。
+    isLoadingMore: false,
   }));
   ensureInitialMessages(sessionId);
 }
@@ -5288,14 +5397,23 @@ function removeMessagesByClientIds(
       }
       if (changed) taskUpdates = nextTaskUpdates;
     }
+    // 第四条 epoch-reset 路径:上面 invalidateHistory 时已 bump epoch 作废 in-flight
+    // 的翻页 / 跳转补齐,锁同样由本次重置释放。被作废的请求不会代清(它们分辨不出锁
+    // 属于哪一代),漏清会让行首守卫把该会话的翻页永久卡住 —— 既有回归
+    // 「discards an in-flight paging window after grouped deletion」正守着这条。
+    const lockReset = options.invalidateHistory !== false ? { isLoadingMore: false } : {};
     if (messages.length === s.messages.length && taskUpdates === s.taskUpdates) {
-      return s;
+      // 删除推送只涉及本渲染层窗口之外的行(典型:另一个窗口 / 设备删的消息)时,本地
+      // 没有任何行要移除 —— 但 epoch 已经 bump 了,in-flight 请求照样被作废。这条早退
+      // 路径同样必须放锁,否则该会话的翻页与跳转会永久卡住(#676 review)。
+      return s.isLoadingMore && options.invalidateHistory !== false ? { ...s, ...lockReset } : s;
     }
     return {
       ...s,
       messages,
       taskUpdates,
       isFirstMessage: !messages.some((message) => message.role === 'user'),
+      ...lockReset,
     };
   });
 }
@@ -5316,9 +5434,17 @@ function removeMessageByClientId(sessionId: string, clientId: string): void {
  */
 function dropMessagesFromClientId(sessionId: string, clientId: string): void {
   discardPendingTextDelta(sessionId);
+  // 代际递增:这是与 reloadMessages / _purgeSession 并列的第三条"切片被本地截断"
+  // 路径,同样必须作废 in-flight 的分页 / 跳转补齐。漏 bump 的后果是它们把 rewind
+  // 刚软删掉的行当作有效响应 merge 回渲染层(#676 review)。clientId 不在列表时
+  // 也照 bump:代价只是让 in-flight 分页重新取一次,比漏作废安全。
+  bumpMessagesEpoch(sessionId);
   setState(sessionId, (s) => {
     const idx = s.messages.findIndex((m) => m.clientId === clientId);
-    if (idx < 0) return s;
+    // 目标已经不在切片里(reload / 重开把它清掉了)也必须放锁:上面 bump 过 epoch,
+    // in-flight 请求已被作废,而它们刻意不自清 —— 漏这条早退路径同样会让翻页永久卡住
+    // (#676 review,与 removeMessagesByClientIds 的 unchanged-state 早退同一形状)。
+    if (idx < 0) return s.isLoadingMore ? { ...s, isLoadingMore: false } : s;
     // taskUpdates 必须随裁剪一起重置(对齐 reloadMessages):buildRenderItems
     // 会把「没有匹配到已渲染 tool_use」的 task update 兜底渲染成独立任务卡片,
     // 被裁 turn 的残留 update 会以孤儿卡片的形式回到消息流(bot review P1)。
@@ -5329,6 +5455,10 @@ function dropMessagesFromClientId(sessionId: string, clientId: string): void {
       messages: s.messages.slice(0, idx),
       taskUpdates: new Map(),
       isStreaming: false,
+      // 同 reloadMessages / clearSessionAfterGuard:本地截断也是 epoch-reset 路径,
+      // 锁由它自己释放。上面已 bump epoch 作废 in-flight 请求,而它们的 finally 会
+      // 因 epoch 变化跳过清理(避免误解锁新代际),漏清就会让翻页永久卡住(#676 review)。
+      isLoadingMore: false,
     };
   });
 }
@@ -5373,9 +5503,65 @@ function reconcileOpenSessionOrigins(): void {
  *    此时 isStreaming 是「卡死残留」而非真在串,必须能补回丢失的终态/消息。
  *  - 无新 clientId → no-op(不产生新数组引用,避免无谓重渲染)。
  */
+/**
+ * 同一会话的对账**单飞 + 尾随重跑**:已有一次在飞就不再并发第二次,只把"期间又被触发过"记下来,
+ * 等这次收尾后补跑一次。
+ *
+ * 为什么必须单飞:两次对账重叠会产生一整族只有并发才成立的错况 —— 旧那次拿过期的 existingIds
+ * 覆盖新窗口、用陈旧快照 hydrate 更新的行、bump 代际清掉别人刚拿到的分页锁、浅重叠的后继把深翻
+ * 的前驱整段丢掉、以及"谁解释了这次代际 bump"的出处追踪。#676 的 review 连着七八轮都在这族里:
+ * 每加一道谓词(seq / rebuilt / rebuildEpoch / superseded 补交)就长出新的角落。单飞把这族问题
+ * 从根上消掉,而不是继续加谓词。
+ *
+ * 为什么不是"排队":排队会让最新的触发等一次可能长达数秒的隧道翻页。这里是**合并**:第二次触发
+ * 不自己跑,而是保证当前这次结束后再跑一次最新的 —— 触发不丢,也不并发。
+ *
+ * 交互面板重建(reconcilePendingInteractions)照旧立刻跑:它幂等,而 turn 内的权限 / ask / plan
+ * 提示必须尽快重建,不能被合并推迟。
+ */
+const _remoteReconcileInFlight = new Map<
+  string,
+  { run: Promise<void>; rerun: boolean; rerunForce: boolean }
+>();
+
 function reconcileRemoteMessages(sessionId: string, opts?: { force?: boolean }): Promise<void> {
   // 返回完成 promise 供调用方需要时等待;既有调用方均按 fire-and-forget 使用。
   if (!sessionId || !isRemoteSession(sessionId)) return Promise.resolve();
+  const inFlight = _remoteReconcileInFlight.get(sessionId);
+  if (inFlight) {
+    inFlight.rerun = true;
+    if (opts?.force) inFlight.rerunForce = true;
+    void reconcilePendingInteractions(sessionId).catch(() => undefined);
+    return inFlight.run;
+  }
+  const entry: { run: Promise<void>; rerun: boolean; rerunForce: boolean } = {
+    run: Promise.resolve(),
+    rerun: false,
+    rerunForce: false,
+  };
+  _remoteReconcileInFlight.set(sessionId, entry);
+  entry.run = (async () => {
+    try {
+      await runRemoteReconcile(sessionId, opts);
+    } finally {
+      const rerun = entry.rerun;
+      const rerunForce = entry.rerunForce;
+      // 先摘掉在飞标记,再补跑 —— 补跑会自己建新的 entry,期间来的触发继续被那一份合并。
+      _remoteReconcileInFlight.delete(sessionId);
+      if (rerun && sessions.has(sessionId)) {
+        await reconcileRemoteMessages(sessionId, rerunForce ? { force: true } : undefined);
+      }
+    }
+  })();
+  // 显式挂一个吞掉的 rejection handler:返回的 promise 语义不变(仍然会 reject,需要的调用方照样
+  // 能 await 到),但 Node / renderer 不再把它当成 unhandled rejection —— 绝大多数调用方是
+  // `void makerChatStore.reconcileRemoteMessages(...)` 这种 fire-and-forget(#676 review copilot)。
+  // 旧实现靠 `run.then(onOk, onErr)` 顺带完成了这件事,单飞包装接手后必须自己补上。
+  void entry.run.catch(() => undefined);
+  return entry.run;
+}
+
+function runRemoteReconcile(sessionId: string, opts?: { force?: boolean }): Promise<void> {
   // 挂起交互面板重建**无条件先行**,不受下方 isStreaming 守卫约束:turn 内弹出的
   // permission / ask / plan 正是 isStreaming=true 的常见态(pendingPermission 与
   // isRunning 共存),断连重连 / 聚焦时若被守卫吞掉,交互面板不重建、用户无法回应,
@@ -5405,6 +5591,16 @@ function reconcileRemoteMessages(sessionId: string, opts?: { force?: boolean }):
     );
   }
   const existingIds = new Set(state.messages.map((m) => m.clientId));
+  // 起始快照的**对象引用**表:提交时用它区分"这一行期间被 live push 动过没有"。ChatMessage 不可变,
+  // 只有内容真变了才会换新对象,所以引用相同 ⇒ 没被动过 ⇒ 可以用权威快照 hydrate;引用变了就只补
+  // 不改,免得几秒前取的页把更新的内容盖回去(#676 review codex P1)。
+  const rowsAtStart = new Map(state.messages.map((m) => [m.clientId, m]));
+  // 代际快照:对账要翻最多 10 页(隧道下可达数秒),这期间窗口可能已被别的路径整体重建
+  // ——包括**另一次对账**:CCAgentSessionView 会直接发起一次,而 useRemoteSessionSync
+  // 独立地 fire-and-forget 再排一次,两次可以重叠。旧的那次若不比对代际就落地,会拿着
+  // 过期的 existingIds 覆盖新窗口,还会 bump 代际、把新一次跳转刚拿到的分页锁清掉
+  // (那次跳转随即被作废,同时放开了另一个请求去抢游标)(#676 review codex P1)。
+  const reconcileEpochAtStart = _messagesEpoch.get(sessionId) ?? 0;
   // 远程回执新鲜度括号:启动记代、成功完成上报(失败不报)。回执只被「入队之后
   // 才启动且成功完成」的对账放行,见 sessionAttentionStore 的门槛说明。
   const syncToken = noteRemoteSessionSyncStarted(sessionId);
@@ -5446,7 +5642,43 @@ function reconcileRemoteMessages(sessionId: string, opts?: { force?: boolean }):
         before = oldest.id;
       }
       if (collected.length === 0) return;
+      // 本次对账整体作废的两种情形:
+      //  1. 代际已变:窗口被 rewind / clear / trim / demote / 另一次对账重建过;
+      //  2. 已经有一次**更晚启动**的对账成功落地过:它读到的是更新的真相,本次的 existingIds
+      //     与拉回的行都过期了。判据刻意放在提交点而不是启动点 —— 后启动那次可能中途 reject,
+      //     那时旧那次拉回的缺失窗口还是有效的,丢掉它等于把这次 heal 整个作废,而对账都是
+      //     fire-and-forget、空闲会话没有保证的重试(#676 review codex P1)。
+      // 两种都不能落地(会覆盖新窗口、用过期字段 hydrate 更新的行),更不能 bump 代际去清掉
+      // 新代际的分页锁。不上报同步完成,交给下一轮触发。
+      //
+      // 代际比对是唯一一道:同一会话的对账已经单飞(见 reconcileRemoteMessages 的包装),
+      // 所以"代际变了"必然来自真正的窗口重置(rewind / clear / trim / demote / purge),
+      // 不可能是另一次对账。本次拉回的行与 existingIds 都属于旧代际 → 整体作废,不上报同步完成,
+      // 交给下一轮触发(单飞的尾随重跑也会补上)。
+      const epochNow = _messagesEpoch.get(sessionId) ?? 0;
+      if (epochNow !== reconcileEpochAtStart) {
+        windowApplied = false;
+        return;
+      }
       const mapped = mapServerMessages(collected);
+      // 翻满上限仍没接回已知区段 → 下面走权威重建分支:整片旧窗口被换掉、oldestMessageId
+      // 也被改写。这是第八条"整体重建窗口"的路径,必须 bump epoch 作废 in-flight 的翻页 /
+      // 跳转补齐 —— 否则那些请求会带着**重建前**的游标返回,把一段脱离上下文的旧历史接到
+      // 新窗口上;更坏的是若那一页里有跳转目标,补齐会判 covered、连孤岛标记都不留,退化成
+      // 本 PR 要修的那个静默空洞(#676 review codex P1)。
+      //
+      // 取舍:被作废的跳转会返回 null,用户那次搜索跳转落空、需要再点一次。反过来(让跳转
+      // 赢、把对账推到下一轮触发)会让被控端权威内容继续缺着,而走到这个分支本身就说明本地
+      // 窗口已经严重过期。所以让权威重建赢。
+      //
+      // historyWindowHasIsland 按"是否保留了晚到的本地行"决定清不清,见下方 lateArrivals。
+      const isContiguous = reachedKnownWindow;
+      // 代际 bump 与分页锁释放都**只在重建真正提交后**才做。原先在 setState 之前先 bump:
+      // 一旦更新器里的 isStreaming 守卫(分页期间开始了新 turn)否掉这次重建,窗口没换、
+      // 却已经作废掉一个无关的 in-flight 跳转 / 翻页、还替它放了锁;更晚启动的对账也会
+      // 因为这个白 bump 被当成陈旧丢掉(#676 review codex P1)。setState 是同步的,
+      // 把 bump 挪到它之后不引入任何可观察的中间态。
+      let didRebuild = false;
       setState(sessionId, (s) => {
         // promise 期间可能已开始新 turn(streaming)→ 放弃本次合并,turn 结束会再触发。
         // force 时(stall 看门狗已确认被控端 not-running)放行:此处 isStreaming 是卡死残留。
@@ -5456,24 +5688,89 @@ function reconcileRemoteMessages(sessionId: string, opts?: { force?: boolean }):
           windowApplied = false;
           return s;
         }
-        const isContiguous = reachedKnownWindow;
+        // 权威重建时保留下来的"快照之后新到的本地行"(典型:分页期间的 remote push,也可能是
+        // 并发跳转刚 merge 进来的孤岛)。
+        const lateArrivals = isContiguous
+          ? []
+          : s.messages.filter((message) => !existingIds.has(message.clientId));
+        // 只给"启动到现在没被动过"的行开 hydrate 口子:其余只补不改。单飞之后,期间唯一可能动过
+        // 这些行的就是 live push(messages:created),它比本次快照更新,不该被旧快照盖回去。
+        const untouchedSinceStart = new Set<string>();
+        for (const message of s.messages) {
+          if (rowsAtStart.get(message.clientId) === message) {
+            untouchedSinceStart.add(message.clientId);
+          }
+        }
         const messages = isContiguous
-          ? mergeMessages(mapped, s.messages, {}, 'newest-first')
-          : mergeAuthoritativeRemoteWindow(
+          ? mergeMessages(
               mapped,
-              s.messages.filter((message) => !existingIds.has(message.clientId)),
+              s.messages,
+              { addOnly: true, addOnlyExcept: untouchedSinceStart },
               'newest-first',
-            );
-        if (messages === s.messages) return s; // 无缺失且无权威字段变化 → 不换引用(视同已应用)
+            )
+          : mergeAuthoritativeRemoteWindow(mapped, lateArrivals, 'newest-first');
+        // 无缺失且无权威字段变化 → 不换引用(视同已应用)。
+        if (messages === s.messages) return s;
         if (isContiguous) return { ...s, messages };
+        didRebuild = true;
         const oldestRow = oldestMessageRow(collected, 'newest-first');
+        // 保留下来的晚到行是否**可证明**与新窗口连续:
+        //  - 比权威窗口最新一行还新 → 就是分页期间的 live push,接在尾部,连续;
+        //  - 落在权威窗口时间范围之内 → 那段范围本身是连续拉回来的,不产生洞;
+        //  - 比权威窗口最老一行还老 → 与新窗口之间隔着没加载的历史,**是孤岛**。
+        // 第三种典型来源:搜索补齐在 existingIds 快照之后落地,它相对旧窗口是 covered、
+        // 所以标记还是 false,重建把旧窗口换掉之后它就成了孤岛(#676 review codex P1)。
+        // 所以这里必须**按事实赋值**,而不是"没有晚到行才清、否则沿用旧值"。
+        //
+        // 判据只认"落在权威窗口的时间范围**之内**":那段范围是本次连续翻回来的,所以范围内
+        // 的行不可能在它与新窗口之间留洞。范围**之外**的一律按孤岛处理,包括比最新一行还新的
+        // —— device-link 的实时推送是有损的(fire-and-forget),被控端连产多行时可能只送到
+        // 最后一行,"比权威窗口更新"只证明它来得更晚,不证明中间那几行也送到了
+        // (#676 review codex P1)。代价是分页期间来过 push 的会话会多做一次补齐尝试,
+        // 换来的是不会把有损通道造成的缺口当成连续。
+        // 比较必须走 (createdAt, rowid) 这条完整时间线,不能只比毫秒:同一毫秒里插入的两行
+        // 靠 rowid 定序(messages 表与分页都用它),只比时间戳会把"与权威窗口最新行同毫秒、
+        // 但 rowid 更大"的晚到行判成范围内,而它与权威窗口之间那一行可能正好被有损推送丢了
+        // (#676 review codex P1)。
+        const newestRow = newestMessageRowForWindow(collected);
+        const authoritativeClientIds = new Set(collected.map((row) => row.clientId));
+        const hasDetachedArrival =
+          oldestRow !== null &&
+          newestRow !== null &&
+          lateArrivals.some((message) => {
+            // 本次权威页里就带着它 → 必然连续。
+            if (authoritativeClientIds.has(message.clientId)) return false;
+            // thinking 行要换回**落库那条时间线**再比:mapServerMessages 把它的 createdAt 改写成
+            // `finishedAt - durationMs`(块的开始时刻,渲染层算时长用),而 oldestRow / newestRow
+            // 是原始 DB 行。混着比会让一个"想了很久"的 thinking 落在页范围里,而它与权威窗口之间
+            // 那一行可能正好被有损推送丢了(#676 review codex P1)。换算不出来就保守判脱离。
+            const timelineRow = thinkingSafeTimelineRow(message);
+            if (timelineRow === null) return true;
+            const cmpOldest = compareMessageTimeline(timelineRow, oldestRow);
+            if (cmpOldest < 0) return true;
+            const cmpNewest = compareMessageTimeline(timelineRow, newestRow);
+            if (cmpNewest > 0) return true;
+            // 与某个边界打平 ⇒ 同毫秒且至少一侧没有 rowid(rowid 唯一,都有则不会打平)。
+            // 生产的 local-db:messages:created 广播走 messageToCamel,**不带 rowid**
+            // (list 结果才带),所以 live push 与边界同毫秒时根本排不出先后 —— 中间那一行
+            // 可能正好被有损推送丢了。这种无法判定的情况保守按脱离处理(#676 review codex P1)。
+            //
+            // 另一条路是"让广播也带上 rowid",但那要改 IPC / 隧道 payload 形状(跨端 wire),
+            // 为一个边界精度换协议改动不值当;保守判脱离的代价只是多做一次补齐尝试。
+            return cmpOldest === 0 || cmpNewest === 0;
+          });
         return {
           ...s,
           messages,
           oldestMessageId: oldestRow?.id ?? s.oldestMessageId,
           hasMoreMessages: !reachedHistoryStart,
+          // 锁归本次重置释放(与 reloadMessages / clear / trim / demote 同规矩):被作废的
+          // 请求不会代清,漏清会让行首守卫把该会话的翻页永久卡住。
+          isLoadingMore: false,
+          historyWindowHasIsland: hasDetachedArrival,
         };
       });
+      if (didRebuild) bumpMessagesEpoch(sessionId);
     } finally {
       // 消息路径的早返 / 异常都要等交互重建落定;交互失败会让 run reject(替换原结果),
       // 语义正确:本代不完成。
@@ -5586,13 +5883,16 @@ function loadOlderMessages(sessionId: string): void {
         log.warn('loadOlderMessages page fetch failed', { sessionId, err: String(err) });
       }
 
-      // 代际比对:追页期间切片被整体重置(rewind reloadMessages / /clear / purge)
-      // → 本次窗口作废,只复位 spinner(reload 的 setState 不清 isLoadingMore,这里
-      // 不复位会让行首守卫永久卡住翻页)。此点之后到 setState 提交全程同步,无新竞态窗口。
-      if ((_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart) {
-        setState(sessionId, (s) => ({ ...s, isLoadingMore: false }));
-        return;
-      }
+      // 代际比对:追页期间切片被整体重置(reloadMessages / /clear / edit-last 截断 /
+      // purge)→ 本次窗口作废,直接退出且**不碰 isLoadingMore**。
+      //
+      // 早先这里会顺手复位 spinner,理由是"reload 的 setState 不清 isLoadingMore"。
+      // 那条前提已经不成立:三条 epoch-reset 路径(reloadMessages /
+      // clearSessionAfterGuard / dropMessagesFromClientId)现在各自显式释放锁。而在
+      // 重置之后,新代际很可能已经开始自己的分页并重新置了锁 —— 这里再无条件清一次,
+      // 就是把别人的锁放掉,让后续滚动 / 跳转并发去抢同一个游标,重新制造游标回退与
+      // 重复分页(#676 review)。谁重置谁释放,被作废的请求一律不碰。
+      if ((_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart) return;
 
       if (collected.length === 0) {
         setState(sessionId, (s) => ({
@@ -5616,9 +5916,423 @@ function loadOlderMessages(sessionId: string): void {
       // map/merge/commit 阶段兜底(subagent review P1):任何异常都必须复位
       // isLoadingMore,否则行首守卫会让该会话永久无法再翻页(spinner 卡死)。
       log.warn('loadOlderMessages commit failed', { sessionId, err: String(err) });
-      setState(sessionId, (s) => ({ ...s, isLoadingMore: false }));
+      // 但只放**自己那一代**的锁。当前代码里这条 catch 只可能在代际比对**之后**触发
+      // (所有 await 都在内层 try 里,fetch reject 被它吞掉、随后照常走比对),所以这道守卫
+      // 今天不可达;加上它是为了让"谁重置谁释放、被作废的请求一律不碰锁"这条不变式
+      // 不依赖调用顺序 —— 将来若有人在比对之前插入 await,不至于又变成"误放别人的锁"
+      // (#676 review greptile)。
+      if ((_messagesEpoch.get(sessionId) ?? 0) === epochAtStart) {
+        setState(sessionId, (s) => ({ ...s, isLoadingMore: false }));
+      }
     }
   })();
+}
+
+/**
+ * 跳转补齐的预算:按**行数**计,并把它当作 render item 数的保守上界。
+ *
+ * 为什么要有预算:MessageStream 的锚定渲染窗口(visibleRenderItems 的
+ * firstVisibleItemKey 分支)是 `slice(startIdx)` —— 从锚点一直切到末尾、没有上界。
+ * 补齐把 messages 变长后,跳转到很早的位置就会一次挂载"锚点 → 末尾"的全部 item。
+ *
+ * 为什么不再按 role / 工具名折算:折算模型必须逐一追平 buildRenderItems 的每种 item
+ * 展开规则,而那套规则会持续演化。#676 的 review 连着四轮各挖出一种被低估的展开路径:
+ * agent_task 卡(每个 Agent/Task/Workflow 调用 1:1)、按空洞切段后的孤立单行调用、
+ * ghost_call 配卡后的独立 ghost_card、TodoWrite / update_plan 的 agent_plan 卡、
+ * 以及结果含媒体时额外产出的 tool_media —— 每次都是"某行额外产生 item",而折算恰恰
+ * 假设"多行合成一个 item"。低估预算的方向是危险的那一侧(放进更多实际渲染量),所以
+ * 不再猜比例:一行最多产出一个可见 item 的量级,直接按行数当上界。
+ *
+ * 代价说清楚:工具密集的会话补齐能力因此下降(600 行而不是折算后的两千多行),更早
+ * 退回不连续的 around 窗口 —— 那时由渲染层的 HISTORY_GAP_SPLIT_MS 守卫兜底,不会折出
+ * 跨空洞的假组或谎报时长。这条取舍的根因仍是锚定窗口没有上界:只要它在,补齐规模就得
+ * 受渲染体量牵制。彻底的解法是把锚定窗口做成双向有界 + 配套向下扩窗(与滚到顶时的
+ * expandWindow 对称),它要联动改 MessageStream 的 startIdx / windowAtTop /
+ * isNearBottom / expandWindow / handleScroll 五处派生,且滚动手感必须实机验证,
+ * 故留作独立改动。
+ *
+ * 600 是 RENDER_WINDOW_INITIAL_ITEMS(80)的 7.5 倍量级:可感知但不冻结。预算对照的是
+ * **窗口总行数**(s.messages.length),不是单次跳转的新增量 —— 否则连续几次向更早处跳转
+ * 会各自重新起算,把挂载树累积到几千行。
+ */
+const JUMP_BACKFILL_MAX_ITEMS = 600;
+const JUMP_BACKFILL_PAGE_SIZE = 100;
+
+/**
+ * 请求次数安全上限,与行预算分开计。
+ *
+ * 不能只按"页数"计预算:device-link 会话的 messages:list 结果超过 relay 帧上限时,
+ * sliceRemoteMessageWindowForChannel 只返回一个很短的前缀并打 remoteRowsTrimmed。
+ * 那种分片每次只带回几行,若和整页共用同一个计数器,远程会话会在远未取到 2000 行时
+ * 就耗尽预算、退回不连续的 around 窗口(#676 review)。所以体量走
+ * JUMP_BACKFILL_MAX_ITEMS,请求次数只作为防死循环的独立兜底。
+ */
+const JUMP_BACKFILL_MAX_REQUESTS = 80;
+
+/**
+ * 补齐结果。每一态对应一套 fallback 处置,合并任意两态都会踩坑:
+ *
+ * - `covered`    已补齐,窗口连续。游标 / hasMore 归 backfill 维护,fallback 不得回退。
+ * - `exhausted`  沿旧游标翻到历史起点仍未命中(目标已被 rewind 软删等)。backfill 自己已
+ *                把 hasMoreMessages 置 false,但 fallback 随后**要**把它改回 true —— 它
+ *                merge 进来的 around 行可能比旧游标更早,"旧游标之上没有更多"这个结论对
+ *                合并后的新边界不成立;钉死 false 会让向上翻页永久停在孤岛上沿。
+ * - `busy`       让位给正在飞行的 loadOlderMessages。锁是别人的,fallback **不能**写
+ *                isLoadingMore —— 提前释放会让下一次滚动/跳转从同一游标再开一个请求,
+ *                正是这把锁要防的游标竞态。
+ * - `unavailable` 超页数上限或请求异常。同 `exhausted`:fallback 置 hasMore=true,
+ *                因为 merge 进来的 around 行会把窗口上沿推到旧游标之外。
+ * - `cancelled`  切片被 rewind / clear / purge 故意重置。调用方**不能**再 merge 之前
+ *                抓到的 around 行,否则会把刚被移除的消息(甚至已 purge 的切片)塞回窗口。
+ */
+type JumpBackfillOutcome = 'covered' | 'exhausted' | 'busy' | 'unavailable' | 'cancelled';
+
+/**
+ * 把当前窗口从最新连续向上补齐,直到 `covered` 判定命中目标。
+ *
+ * 为什么要补:跳转到历史消息如果只把目标附近的窗口 merge 进来,它与已加载的尾部
+ * 窗口之间会隔着一段没加载的历史——渲染层看到两段"相邻"item,中间的 user 行(唯一
+ * 的 turn 边界)全部缺席,整段被折成一个「已工作 Xs」,用户看到的就是"中间掉了很多
+ * 条消息"(实测一条组吞掉 47 小时、40 条 user 消息)。补齐后窗口始终是"某点 → 最新"
+ * 的连续区间:没有空洞,向下滚也一定能回到最新。
+ *
+ * 用现有 `before` 游标向上翻页实现,不需要给 messages:list 加 `after` 方向,
+ * 因而不触碰 device-link 隧道的跨端 wire protocol。远程会话经 listMessagesFor
+ * 自动走 origin-aware 路由。
+ */
+async function backfillHistoryUntil(
+  sessionId: string,
+  /**
+   * 要连上的目标行 clientId。
+   *
+   * 判定"已覆盖"只能看**本次翻页真正取回来的行**里有没有它,不能看合并后的 messages 里
+   * 有没有:退回 around 窗口时目标本来就以孤岛形式躺在 messages 里,拿合并后的数组判定,
+   * 重试的第一页(哪怕内容完全无关)就会让判定成立、进而把孤岛标记清掉,"中间缺失"于是
+   * 永远补不回来(#676 review)。翻页是从最新连续向上的,所以"本页取到目标"等价于
+   * "从最新到目标已经连续"。
+   */
+  targetClientId: string,
+  /**
+   * 跳转发起时(**around 请求之前**)的 epoch 快照。必须由调用方传入:在这里才取
+   * 就会漏掉 around 请求自己那个 await —— 若 /clear、rewind、purge 发生在 around
+   * 请求飞行期间,函数内取到的已经是重置后的值,epochChanged() 永远为 false,陈旧的
+   * around 行会被当成新代际 merge 回窗口,复活刚被移除的消息。
+   */
+  epochAtStart: number,
+): Promise<{ outcome: JumpBackfillOutcome; ownsPagingLock: boolean }> {
+  const epochChanged = () => (_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart;
+  // ownsPagingLock 随 outcome 一起交回调用方:提交时只有**自己置过锁**的那次才可以清它、
+  // 才可以写游标。锁优先的守卫与成员快速通道都在置锁之前返回,它们没有所有权
+  // (#676 review codex P1)。
+  if (epochChanged()) return { outcome: 'cancelled', ownsPagingLock: false };
+
+  // 锁优先,连"目标已在窗口内"这种零成本情况也不例外(#676 review)。
+  //
+  // 与 loadOlderMessages 共用 isLoadingMore 这把锁:它已在飞行中时不抢游标。两个流程
+  // 并发读写同一个 oldestMessageId,响应乱序会让游标回退、重复拉页并耗尽上限;让位后
+  // 退回 around 窗口(窗口可能不连续,由渲染层的空洞守卫兜底)比制造游标错乱更安全。
+  // 反向由下面立刻置位 isLoadingMore 挡住后续 loadOlderMessages。
+  //
+  // 为什么不能先判 covered:covered 会让 commitAroundWindow 去写 oldestMessageId,
+  // 那在别人持锁期间同样破坏游标单调性。busy 分支只做权威 merge、不碰任何分页状态,
+  // 所以锁被占用时一律 busy —— 返回 busy 而不是 unavailable,是因为锁是别人的,
+  // fallback 路径不得代为释放。
+  if (getOrCreateState(sessionId).isLoadingMore) return { outcome: 'busy', ownsPagingLock: false };
+  // 快速通道只在窗口没有孤岛时可信:some(clientId) 是成员判定,不是连续覆盖判定。窗口里
+  // 掺过孤岛(补齐失败时 merge 的 around 窗口)时,目标可能正是那座孤岛上的行 —— 直接返回
+  // covered 就等于承认"中间缺失"永久修不好。有孤岛时一律走下面的翻页补齐,让它自愈。
+  const stateBeforeFetch = getOrCreateState(sessionId);
+  if (
+    stateBeforeFetch.historyWindowHasIsland !== true &&
+    stateBeforeFetch.messages.some((message) => message.clientId === targetClientId)
+  ) {
+    // 窗口本身连续(无孤岛)时,成员判定就等于覆盖判定,可以零成本短路。
+    // 注意 ownsPagingLock=false:这条路一个请求都没发、也没置锁,所以提交时不得清锁、
+    // 不得写游标 —— 否则两个 around 响应同时落地时,这一次会把另一次刚拿到的锁清掉、
+    // 并覆写它的游标(#676 review codex P1)。
+    return { outcome: 'covered', ownsPagingLock: false };
+  }
+
+  setState(sessionId, (s) => ({ ...s, isLoadingMore: true }));
+
+  // 页面**累积到本地**,循环结束才发布一次 state。
+  //
+  // 逐页 setState 的代价:device-link 帧裁剪会把每次响应压到只有几行,于是这个循环可能跑
+  // 接近 80 次,每次都发布一个新的 messages 数组 —— 订阅者被通知 80 次、每次都重建一棵
+  // 越来越大的消息树,还伴随反复的滚动锚定 churn,整体 O(请求数 × 窗口大小)。跳转期间
+  // 用户等的是落点,中间态没有价值(#676 review)。一次性发布还顺带缩小了"半成品窗口被
+  // trim / demote 等逻辑观察到"的窗口。
+  //
+  // 预算对照**窗口总量**(已有窗口 + 本次累积),不是本次跳转的新增量:先前跳转 merge 进来
+  // 的行还留在 s.messages 里,只看新增量会让连续几次深跳各加一整份预算。
+  const baseWindowSize = getOrCreateState(sessionId).messages.length;
+  const collected: Message[] = [];
+  const collectedIds = new Set<string>();
+  let cursorId: string | null = getOrCreateState(sessionId).oldestMessageId;
+  let hasMoreAtEnd = true;
+
+  /**
+   * 把累积的页一次性并入窗口。
+   *
+   * collected 为空时直接 return、**不改任何 state** —— 包括 hasMoreMessages:一页都没取到
+   * 时该改成什么值取决于为何结束(触顶 / 异常 / 超预算),只有调用点知道,所以由调用点各自
+   * setState(#676 review)。
+   */
+  const publishCollected = (): void => {
+    if (collected.length === 0) return;
+    const mapped = mapServerMessages(collected);
+    setState(sessionId, (s) => ({
+      ...s,
+      // addOnly:这些页可能是几秒前取到的,期间 live push 可能已经更新过其中某行;
+      // 用旧快照 hydrate 会把 live 更新盖回去(见 mergeMessages 的 addOnly 说明)。
+      messages: mergeMessages(mapped, s.messages, { addOnly: true }, 'newest-first'),
+      historyLoaded: true,
+      isFirstMessage: false,
+      oldestMessageId: cursorId ?? s.oldestMessageId,
+      hasMoreMessages: hasMoreAtEnd,
+      isLoadingMore: true,
+    }));
+  };
+
+  try {
+    for (
+      let request = 0;
+      request < JUMP_BACKFILL_MAX_REQUESTS &&
+      baseWindowSize + collected.length < JUMP_BACKFILL_MAX_ITEMS;
+      request++
+    ) {
+      // 本次能再取多少行:预算按**窗口总量**算,而每页最多带回 PAGE_SIZE 行。只在循环条件里
+      // 判"还没到上限"的话,最后一次请求可以把窗口顶出上限近一整页(#676 review copilot),
+      // 所以把 limit 夹到剩余额度上,让上限真正是上限。
+      const remainingBudget = JUMP_BACKFILL_MAX_ITEMS - (baseWindowSize + collected.length);
+      const pageLimit = Math.min(JUMP_BACKFILL_PAGE_SIZE, remainingBudget);
+      // 首页(窗口为空)不带游标 —— messages:list 默认返回最新一页。
+      const opts: { limit: number; before?: string } = { limit: pageLimit };
+      if (cursorId) opts.before = cursorId;
+
+      const rows = await listMessagesFor(sessionId, opts);
+      // 代际比对:追页期间 rewind / clear / purge 重置了切片 → 本次跳转整体作废,
+      // 累积的页一并丢弃(它们属于旧代际)。
+      if (epochChanged()) return { outcome: 'cancelled', ownsPagingLock: true };
+      if (rows.length === 0) {
+        hasMoreAtEnd = false;
+        publishCollected();
+        setState(sessionId, (s) => ({ ...s, hasMoreMessages: false }));
+        return { outcome: 'exhausted', ownsPagingLock: true };
+      }
+
+      // 跨页按 clientId 去重:游标异常(如远端排序不稳)返回重叠页时,不去重会灌多份。
+      for (const row of rows) {
+        if (collectedIds.has(row.clientId)) continue;
+        collectedIds.add(row.clientId);
+        collected.push(row);
+      }
+      const oldestRow = oldestMessageRow(rows, 'newest-first');
+      // 游标必须真的往更早处推进。远端排序 / 游标异常(before 没被正确消费、重复返回同一页)
+      // 时,不检测就会打满 80 个请求而 collected 几乎不增长(#676 review copilot)。
+      if (!oldestRow || oldestRow.id === opts.before) {
+        publishCollected();
+        return { outcome: 'unavailable', ownsPagingLock: true };
+      }
+      cursorId = oldestRow.id;
+      // 满页判定要对照**本次实际请求的 limit**:预算收尾时 limit 被夹小了,拿 PAGE_SIZE 去比
+      // 会把一页满页误判成"历史到底了"、错误地把 hasMoreMessages 关掉。
+      hasMoreAtEnd = serverMessagePageHasMore(rows, pageLimit);
+
+      // 只认"本页真的取到了目标" —— 窗口里有它可能只是先前 fallback 留下的孤岛。
+      if (rows.some((row) => row.clientId === targetClientId)) {
+        publishCollected();
+        return { outcome: 'covered', ownsPagingLock: true };
+      }
+      // 已翻到历史起点仍没命中:目标不在本会话可见历史里(例如被 rewind 软删)。
+      if (!hasMoreAtEnd) {
+        publishCollected();
+        return { outcome: 'exhausted', ownsPagingLock: true };
+      }
+    }
+    // 触到窗口预算或请求上限:上方还有历史,hasMore 保持 true 让用户继续向上翻。
+    publishCollected();
+    return { outcome: 'unavailable', ownsPagingLock: true };
+  } catch (err) {
+    log.warn('backfillHistoryUntil failed', { sessionId, err: String(err) });
+    // 半程失败:已拉到的页照常提交(与 loadOlderMessages 同口径,游标推进、内容不丢)。
+    // 但请求 reject 也可能发生在切片被重置之后(典型:远程会话在 /clear 期间断链),
+    // 那种情况不能当成"可重试的失败"交回调用方 —— 它会 merge 陈旧的 around 行、把重置
+    // 刚移除的消息复活,purge 后还会把已删的切片重新 materialize 出来(#676 review)。
+    // 注意 cancelled 也要报"持有过锁":重置路径会自己清锁,但若它先于本次置锁发生过…
+    // 实际上 epoch 变了就一律由重置路径收口,调用方不会提交,ownsPagingLock 不被使用。
+    if (epochChanged()) return { outcome: 'cancelled', ownsPagingLock: true };
+    publishCollected();
+    return { outcome: 'unavailable', ownsPagingLock: true };
+  }
+  // 注意:这里**不释放**分页锁 —— 它一路持有到调用方的 commitAroundWindow(见那里的
+  // isLoadingMore 处置)。
+  //
+  // 原先在 finally 里释放,于是"backfill 返回"与"调用方提交"之间多出一个 microtask 空档:
+  // 另一次跳转(隧道响应的 continuation 尤其容易排在这里)可以在空档里抢到锁,随后旧那次的
+  // exhausted / unavailable 提交又把 isLoadingMore 清掉 —— 新持有者的游标就暴露给并发分页了
+  // (#676 review codex P1)。改为持有到提交:backfill 返回后到 commitAroundWindow 之间全是
+  // 同步代码,没有可插入的空档。
+  //
+  // 被作废(cancelled)那条路不释放:epoch 已变说明重置路径接管了,而重置路径自己会清锁 ——
+  // 被作废的请求不该代劳(它分辨不出锁属于哪一代)。
+}
+
+/**
+ * 跳转入口的收尾:把 around 行 merge 进窗口,并按补齐结果决定游标 / 锁怎么落。
+ * 两个入口(按 message id / 按 clientId)共用,避免五态处置在两处漂移。
+ *
+ * around 行是权威内容,除 `cancelled` 外每条路径都要 merge —— 重复跳转同一条消息
+ * 时靠它把本地旧内容 hydrate 成最新(典型:tool_result 由 verbose 收敛成权威短内容)。
+ */
+/**
+ * around 快照能否 hydrate 跳转目标那一行 —— 只有"跳转期间它没被动过"才可以。
+ *
+ * 目标行的 hydrate 是 around 提交的目的(重复跳转把本地 verbose 的 tool_result 收敛成权威
+ * 内容),但 around 是在补齐循环**之前**取的:若这期间 local-db:messages:created 把目标行更新
+ * 过,拿旧快照 hydrate 就会把更新的内容 / 元数据盖回去(#676 review codex P1)。
+ *
+ * 判据用**对象引用**:store 里的 ChatMessage 是不可变的,只有内容真的变了才会被换成新对象
+ * (mergeMessages / hydratePersistedMessage 都有 shallowEqual 短路)。引用没变 ⇒ 没被动过。
+ * 这样不需要给每条消息加修订号(messages 表没有 updatedAt)。
+ *
+ * 跳转前窗口里本来就没有这一行(before === undefined)时照常放行:那一行是被 merge **新增**
+ * 进来的,不存在"盖掉更新"的问题。
+ */
+function hydrateTargetIfUntouched(
+  sessionId: string,
+  targetClientId: string | null,
+  before: ChatMessage | undefined,
+): string | null {
+  if (!targetClientId) return null;
+  const now = getOrCreateState(sessionId).messages.find(
+    (message) => message.clientId === targetClientId,
+  );
+  // 一条判据同时覆盖两种情形:
+  //  - 跳转前就有这一行:引用没变 ⇒ 期间没被 live push 动过 → 可以 hydrate;
+  //  - 跳转前没有这一行(before === undefined):现在仍然没有才放行。若期间被 push 补进来了,
+  //    那份内容比 around 快照**更新**,拿旧快照 hydrate 就是回退(#676 review codex P1)。
+  return now === before ? targetClientId : null;
+}
+
+function commitAroundWindow(
+  sessionId: string,
+  rows: Message[],
+  mapped: ChatMessage[],
+  outcome: JumpBackfillOutcome,
+  /**
+   * 本次跳转是否**自己置过**分页锁(backfillHistoryUntil 一路持有到这里)。
+   *
+   * 不持有时(锁被 loadOlderMessages 占着 → busy;或成员快速通道零成本短路 → covered)
+   * 一律只做权威 merge:游标 / hasMore / isLoadingMore 全都不碰。碰了就是改别人的分页状态
+   * —— 清掉别人刚拿到的锁、或把游标覆写成"更新的值"破坏单调性(#676 review codex P1)。
+   */
+  ownsPagingLock: boolean,
+  /**
+   * 本次跳转的目标 clientId —— around 快照只被允许 hydrate 这一行。
+   *
+   * around 是在整个补齐循环**之前**取的,隧道下可能已经陈旧好几秒;期间 live push 可能已经把
+   * 窗口里某行更新过。默认 hydrate 是 persisted 赢,于是陈旧的 around 快照会把更新的内容 /
+   * 元数据盖回去(#676 review codex P1)。
+   *
+   * 但对**目标那一行**,hydrate 恰恰是这次提交的目的:重复跳转同一条消息时靠它把本地
+   * verbose 的 tool_result 收敛成权威内容(既有回归 makerChatStoreAroundClientId 守着)。
+   * 所以只给目标开口子,其余一律只补缺行。
+   */
+  hydrateClientId: string | null,
+): void {
+  setState(sessionId, (s) => {
+    const messages = mergeMessages(
+      mapped,
+      s.messages,
+      {
+        addOnly: true,
+        ...(hydrateClientId ? { addOnlyExcept: new Set([hydrateClientId]) } : {}),
+      },
+      'oldest-first',
+    );
+    if (!ownsPagingLock) {
+      // mergeMessages 只增不减 → "长度没变"等价于"没引入可能不连续的行"。
+      const addedRows = messages.length !== s.messages.length;
+      // busy 意味着补齐**根本没跑**(让位给正在飞行的分页),这次 merge 进来的 around 行与
+      // 尾部窗口之间可能隔着没加载的历史 → 记上孤岛,否则下次跳同一目标会命中成员快速通道、
+      // 永远修不回连续。
+      //
+      // covered 且不持锁 = 成员快速通道:它成立的前提就是"窗口无孤岛且目标在窗口里",
+      // 所以 radius 内的邻居与目标同处连续区间,不产生孤岛,标记不动。
+      const marksIsland = outcome === 'busy' && addedRows;
+      if (marksIsland) return { ...s, messages, historyWindowHasIsland: true };
+      // 真正的 no-op(merge 没换引用、也不用记孤岛)直接返回原 state:setState 只要
+      // next !== prev 就通知订阅者,白发一次会让整棵消息树重渲染(#676 review copilot)。
+      return messages === s.messages ? s : { ...s, messages };
+    }
+    // 已补齐:hasMore 归 backfill 维护,不能被 around 窗口的边界回退。
+    // 但游标要取两侧更早的那个:radius 决定的 around 窗口可能含比"命中那一页的
+    // oldestMessageId"更早的行(目标落在该页靠旧的一侧时),只 merge 不推进游标会让
+    // 下一次向上翻页重复已加载区间、连翻几次都看不到新内容(#676 review)。
+    // oldestServerMessageIdForWindow 本身就是"取更早者"的语义。
+    if (outcome === 'covered') {
+      return {
+        ...s,
+        messages,
+        // 锁由本次提交释放(backfill 一路持有到这里,见那里的说明)。
+        isLoadingMore: false,
+        // 与其它 outcome 同口径:跳转成功也意味着历史已经加载过、不再是空会话。
+        // 漏掉会让依赖这两个标志的 UI / 副作用判定在"只经跳转建立窗口"的路径上不一致
+        // (#676 review copilot)。
+        historyLoaded: true,
+        isFirstMessage: false,
+        // 注意这里**不清**孤岛标记。补齐到达目标只证明"尾部 → 本次目标"连续,不证明更早的
+        // 孤岛都被跨过:先前一次失败的深跳留下孤岛 A,之后跳一个更近的目标 B 并补齐成功,
+        // B↔A 之间的洞和 A 自己的行都还在。清掉唯一的 boolean 会让之后跳回 A 走成员快速
+        // 通道、永不修复(#676 review 给的两孤岛序列)。
+        oldestMessageId: oldestServerMessageIdForWindow(
+          rows,
+          s.messages,
+          s.oldestMessageId,
+          'oldest-first',
+        ),
+      };
+    }
+    // mergeMessages 只增不减 → "长度没变"等价于"这次 merge 没引入任何新行"。
+    const addedRows = messages.length !== s.messages.length;
+    return {
+      ...s,
+      messages,
+      historyLoaded: true,
+      isFirstMessage: false,
+      // 游标:已有连续窗口时**留在它的边缘**,不跟着孤岛前移(#676 review)。
+      //
+      // 退回 around 窗口时,缺失的区间比那座孤岛更新。若把 oldestMessageId 推到孤岛上,
+      // 之后正常的向上翻页只会取比孤岛更老的行 —— 缺失区间再也拉不回来,而重试也救不了
+      // (窗口已经吃满预算,补齐一个请求都不会发)。保留在连续段最老处,向上翻页就会
+      // 一页页填补连续段与孤岛之间的空档。
+      //
+      // 但窗口还没有游标时(会话首次打开就直接跳转,尾部窗口尚未建立)必须用 around 窗口的
+      // 边界播种,否则游标为 null 会让下一次翻页从最新重新开始、把跳转位置顶掉 ——
+      // 既有回归「hands the cursor back to the latest page when initial history resolves after
+      // a jump」与「keeps search result windows in chronological order across jumps」守着这条。
+      oldestMessageId:
+        s.oldestMessageId ??
+        oldestServerMessageIdForWindow(rows, s.messages, null, 'oldest-first'),
+      // hasMoreMessages:**merge 真的加进了行**时置 true,否则保持原值。
+      //
+      // 置 true 的理由:那些新行比旧游标更早(否则早就 covered 了),窗口最老边界因此前移,
+      // "从旧游标往上没有更多"这个结论对新边界不成立,而 around 行之上是否还有历史是未知的。
+      // 锁成 false 会让用户再也翻不动这段历史(makerChatStoreActiveView 的 loadOlder 系列
+      // 8 个用例覆盖这个语义)。
+      //
+      // 但一行都没加进来时,窗口边界没动,旧结论仍然成立:此时若把已经确证为 false 的
+      // hasMoreMessages 翻回 true,已经完整翻到历史起点的会话会重新亮起"还有更多历史",
+      // 每次窗口内搜索都会把它重新亮一次(#676 review codex P1)。
+      hasMoreMessages: addedRows ? true : s.hasMoreMessages,
+      // 锁由本次提交释放。
+      isLoadingMore: false,
+      // 退回 around 窗口 = 窗口里多了一座孤岛(它与尾部窗口之间隔着没加载的历史)。
+      // 同理:没加进任何行就没有新孤岛,保持原值。
+      historyWindowHasIsland: addedRows ? true : s.historyWindowHasIsland,
+    };
+  });
 }
 
 async function loadAroundMessage(
@@ -5626,6 +6340,10 @@ async function loadAroundMessage(
   messageId: string,
   opts?: { radius?: number },
 ): Promise<ChatMessage | null> {
+  // epoch 必须在 around 请求**之前**快照:这个 await 本身也是竞态窗口,若
+  // /clear、rewind、purge 发生在它飞行期间,之后再取就已经是重置后的值,陈旧的
+  // around 行会被当成新代际 merge 回窗口。
+  const epochAtStart = _messagesEpoch.get(sessionId) ?? 0;
   // 按来源路由:远程会话经隧道 local-db:messages:around(直连本机会查控制端空库,跳转必失败)。
   const rows = await aroundMessagesFor(sessionId, messageId, opts);
   if (rows.length === 0) return null;
@@ -5633,27 +6351,62 @@ async function loadAroundMessage(
   const mapped = mapServerMessages(rows);
   const targetRow = rows.find((row) => row.id === messageId) ?? null;
   const targetClientId = targetRow?.clientId ?? null;
-  setState(sessionId, (s) => {
-    const messages = mergeMessages(mapped, s.messages, {}, 'oldest-first');
-    const oldestMessageId = oldestServerMessageIdForWindow(
-      rows,
-      s.messages,
-      s.oldestMessageId,
-      'oldest-first',
-    );
-    return {
-      ...s,
-      messages,
-      historyLoaded: true,
-      isFirstMessage: false,
-      oldestMessageId,
-      hasMoreMessages: true,
-      isLoadingMore: false,
-    };
-  });
+  // 补齐可能跑好几秒;先记下目标行**当前的对象引用**,提交时据此判断它有没有被 live push 动过
+  // (见 hydrateTargetIfUntouched)。
+  const targetRowBeforeBackfill = targetClientId
+    ? getOrCreateState(sessionId).messages.find((message) => message.clientId === targetClientId)
+    : undefined;
+
+
+  // 优先把窗口从最新连续补齐到目标,不留历史空洞(见 backfillHistoryUntil)。
+  // 补不到(超上限 / 翻完 / 让位并发分页)则退回 around 窗口 merge:此时窗口仍不
+  // 连续,由渲染层的 HISTORY_GAP_SPLIT_MS 守卫兜底,不至于把两段折成一个工作组。
+  const { outcome, ownsPagingLock } = targetClientId
+    ? await backfillHistoryUntil(sessionId, targetClientId, epochAtStart)
+    : {
+        outcome: ((_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart
+          ? 'cancelled'
+          : 'unavailable') as JumpBackfillOutcome,
+        // 没有 targetClientId 时根本没调 backfill,也就没有锁。
+        ownsPagingLock: false,
+      };
+
+  // 切片在跳转期间被 rewind / clear / purge 重置:整个跳转作废。绝不能再 merge
+  // 之前抓到的 around 行,那会把刚被移除的消息重新塞回窗口。
+  //
+  // outcome 只反映 backfill **返回那一刻**的代际。它 return 之后、本函数从 await 恢复
+  // 之前还有一个 microtask 间隙:重置的延续可能正好插在这里,于是 backfill 用旧代际算出
+  // 的 covered / exhausted 仍是"有效"的,而切片已经清空。所以 merge 前再校验一次
+  // (#676 review)。
+  //
+  // exhausted **不**在作废条件里:它仍会走下面的 around merge,让跳转能定位到目标。这是一个
+  // 已知取舍 —— exhausted 意味着一路翻到历史起点都没见到目标,而 around 与 list 两个
+  // handler 的可见性过滤同口径(都过滤 rewind_at 与 clearedAt),所以这种矛盾态只能是两次
+  // 查询之间目标被别处删除 / rewound,此时 around 快照已陈旧。把它一并作废在正确性上更
+  // 干净,但会反转十几处既有测试的 mock 前提(它们用 around 播种窗口而 list 默认返回空页),
+  // 故留作独立改动;陈旧行的生命周期止于会话重建(reload / clear / demote / trim),
+  // 不持久化、不跨会话(#676 review)。
+  if (
+    outcome === 'cancelled' ||
+    (_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart
+  )
+    return null;
+
+  commitAroundWindow(
+    sessionId,
+    rows,
+    mapped,
+    outcome,
+    ownsPagingLock,
+    hydrateTargetIfUntouched(sessionId, targetClientId, targetRowBeforeBackfill),
+  );
 
   if (!targetClientId) return null;
-  return mapped.find((message) => message.clientId === targetClientId) ?? null;
+  return (
+    getOrCreateState(sessionId).messages.find(
+      (message) => message.clientId === targetClientId,
+    ) ?? null
+  );
 }
 
 async function loadAroundMessageClientId(
@@ -5661,30 +6414,48 @@ async function loadAroundMessageClientId(
   clientId: string,
   opts?: { radius?: number },
 ): Promise<ChatMessage | null> {
+  // 同 loadAroundMessage:epoch 在 around 请求之前快照,覆盖该请求自身的竞态窗口。
+  const epochAtStart = _messagesEpoch.get(sessionId) ?? 0;
   const rows = await aroundMessagesByClientIdFor(sessionId, clientId, opts);
   if (rows.length === 0) return null;
 
   const mapped = mapServerMessages(rows);
-  setState(sessionId, (s) => {
-    const messages = mergeMessages(mapped, s.messages, {}, 'oldest-first');
-    const oldestMessageId = oldestServerMessageIdForWindow(
-      rows,
-      s.messages,
-      s.oldestMessageId,
-      'oldest-first',
-    );
-    return {
-      ...s,
-      messages,
-      historyLoaded: true,
-      isFirstMessage: false,
-      oldestMessageId,
-      hasMoreMessages: true,
-      isLoadingMore: false,
-    };
-  });
 
-  return mapped.find((message) => message.clientId === clientId) ?? null;
+  // 同 loadAroundMessage:先连续补齐,避免跳转窗口与尾部窗口之间留下历史空洞。
+  // 同 loadAroundMessage:补齐之前记下目标行的对象引用,提交时判断它有没有被 live push 动过。
+  const targetRowBeforeBackfill = getOrCreateState(sessionId).messages.find(
+    (message) => message.clientId === clientId,
+  );
+
+  const { outcome, ownsPagingLock } = await backfillHistoryUntil(
+    sessionId,
+    clientId,
+    epochAtStart,
+  );
+
+  // 切片被重置 → 跳转作废,不 merge 旧的 around 行。merge 前再校验一次 epoch:outcome
+  // 只反映 backfill 返回那一刻的代际,它 return 之后到这里恢复之间还有一个 microtask
+  // 间隙(见 loadAroundMessage 同款注释)。
+  //
+  // exhausted 不作废,取舍见 loadAroundMessage 的同款注释。
+  if (
+    outcome === 'cancelled' ||
+    (_messagesEpoch.get(sessionId) ?? 0) !== epochAtStart
+  )
+    return null;
+
+  commitAroundWindow(
+    sessionId,
+    rows,
+    mapped,
+    outcome,
+    ownsPagingLock,
+    hydrateTargetIfUntouched(sessionId, clientId, targetRowBeforeBackfill),
+  );
+
+  return (
+    getOrCreateState(sessionId).messages.find((message) => message.clientId === clientId) ?? null
+  );
 }
 
 function buildQueuedMessage(
@@ -5799,7 +6570,6 @@ function buildCreateOptsForCurrentSession(
 ): AgentInputCreateOpts {
   const current = getOrCreateState(sessionId);
   const deviceLinkRemote = isRemoteSession(sessionId);
-  const sshRemote = Boolean(current.remoteHostId);
   return {
     agentKind: current.agentKind,
     workingDir,
@@ -5810,12 +6580,12 @@ function buildCreateOptsForCurrentSession(
     planMode: current.planModeEnabled,
     displayReasoning: 'summarized',
     userPrompt: getUserPrompt(),
-    // device-link routes to the target desktop, so omit the controller setting;
-    // SSH still starts the agent through this process and must not inherit the
-    // controller's default-enabled Maker Memory for a remote working directory.
-    ...(deviceLinkRemote
-      ? {}
-      : { makerMemoryEnabled: sshRemote ? false : getMakerMemoryEnabled() }),
+    // device-link routes to the target desktop, so omit the controller setting.
+    // SSH remote follows the controller's global setting like local sessions:
+    // memory lives on this machine, scoped per hostId+remote path
+    // (maker-core buildMemoryScopeKey), and reaches the remote agent via the
+    // host HTTP MCP bridge.
+    ...(deviceLinkRemote ? {} : { makerMemoryEnabled: getMakerMemoryEnabled() }),
     ...(current.remoteHostId ? { remoteHostId: current.remoteHostId } : {}),
     ...(opts?.vendorOptions ? { vendorOptions: opts.vendorOptions } : {}),
     ...(current.sdkSessionId ? { resumeSessionId: current.sdkSessionId } : {}),
@@ -6680,17 +7450,36 @@ function continueAfterSilentStop(sessionId: string): void {
  * dismissErrorMessageFor 按会话来源路由:远程会话经隧道写到被控端 DB(allowlist
  * 窄口径写),重连/历史重拉后不复活;老被控端不识别该 channel 时 catch 吞错,
  * 退化为本视图内存隐藏。
+ *
+ * 返回值 = **是否落库成功**(不会 reject):红点是告警查询的派生投影,调用方必须
+ * 等落库完成再重算,否则重算会与这次异步写竞态 —— 读到旧状态就仍判定告警存在,
+ * 横幅已消失而红点卡住。远程会话的调用方还要靠这个布尔决定是否发 explicit ack:
+ * 隧道写失败时不能清红点,否则横幅已回滚重现而红点没了(PR #879 review P1)。
+ *
+ * 落库失败时**回滚乐观更新**(errorDismissed 置回 false):否则横幅已被乐观隐藏、
+ * 而库里的告警仍在,重算会把红点恢复,用户看到「红点在但没有横幅可处置」,只能重载
+ * 才恢复。回滚后横幅重新出现,与红点重新一致,用户可以再试。
  */
-function dismissErrorTailMessage(sessionId: string, clientId: string): void {
-  if (!sessionId || !clientId) return;
-  setState(sessionId, (s) => ({
-    ...s,
-    messages: s.messages.map((m) =>
-      m.clientId === clientId && m.role === 'error' ? { ...m, errorDismissed: true } : m,
-    ),
-  }));
-  dismissErrorMessageFor(sessionId, clientId).catch((err) =>
-    log.warn('persist error dismiss failed:', err),
+function dismissErrorTailMessage(sessionId: string, clientId: string): Promise<boolean> {
+  if (!sessionId || !clientId) return Promise.resolve(false);
+  const setDismissed = (dismissed: boolean): void => {
+    setState(sessionId, (s) => ({
+      ...s,
+      messages: s.messages.map((m) =>
+        m.clientId === clientId && m.role === 'error' ? { ...m, errorDismissed: dismissed } : m,
+      ),
+    }));
+  };
+  setDismissed(true);
+  // 收敛成 Promise<boolean>:dismissErrorMessageFor 返回 Promise<unknown>(IPC 结果),
+  // 调用方只关心「写成功了没有」。
+  return dismissErrorMessageFor(sessionId, clientId).then(
+    () => true,
+    (err: unknown) => {
+      log.warn('persist error dismiss failed, rolling back optimistic dismiss:', err);
+      setDismissed(false);
+      return false;
+    },
   );
 }
 
@@ -6770,6 +7559,17 @@ async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Pro
       streamingClientId: null,
       streamingText: '',
       isStreaming: false,
+      // 窗口清空 → 按构造没有孤岛,标记必须一起清零(与 reloadMessages / trim / demote
+      // 同规矩)。漏清的后果不是数据错而是永久降级:covered 刻意保留孤岛标记(到达本次
+      // 目标不证明更早的洞都补上了),于是 /clear 之后这个会话永远被判为"不连续",
+      // canFocusWithoutJumpLoad 拒绝每一次窗口内命中,每次搜索跳转都白跑一轮补齐
+      // (#676 review)。
+      historyWindowHasIsland: false,
+      // 分页锁归本次重置释放(与 reloadMessages / dropMessagesFromClientId 同规矩):
+      // 上面刚 bump epoch 作废了 in-flight 的翻页 / 跳转补齐,而被作废的请求不会(也不该)
+      // 代清这把锁 —— 它们分辨不出锁属于哪一代。漏清会让行首守卫把该会话的翻页永久
+      // 卡住(#676 review)。
+      isLoadingMore: false,
       error: null,
       errorReason: null,
       recoverableError: null,
@@ -6786,6 +7586,7 @@ async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Pro
       // F-AUQ-DRAFT: Clear session also wipes any in-progress draft.
       askUserDraft: null,
       pendingPlanReview: null,
+      pendingIssueConfirm: null,
       pendingQueue: [],
       steeringQueueClientIds: [],
       queuePaused: false,
@@ -7094,13 +7895,20 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
 
 /**
  * issue_confirm: 把确认卡片结果回给 main(IssueConfirmBridge)并清 pendingIssueConfirm。
- * confirmed=true 时携带卡片当前的 title/body/type(用户编辑版,main 以此为准)
- * 和 renderer 界面语言(uiLanguage,main 附进 issue body 的环境块)。
+ * confirmed=true 时携带卡片当前的 title/body/type(用户编辑版,main 以此为准)、
+ * 平台代发公开署名(publicName)和 renderer 界面语言(uiLanguage)。
  */
 function respondToIssueConfirm(
   sessionId: string,
   result:
-    | { confirmed: true; title: string; body: string; type: 'bug' | 'feature'; uiLanguage: string }
+    | {
+        confirmed: true;
+        title: string;
+        body: string;
+        type: 'bug' | 'feature';
+        publicName?: string;
+        uiLanguage: string;
+      }
     | { confirmed: false },
 ): void {
   if (!sessionId) return;
@@ -7733,10 +8541,9 @@ function sendUiTrigger(sessionId: string, prompt: string): Promise<void> {
         ...((session.sdkSessionId ?? state.sdkSessionId)
           ? { resumeSessionId: (session.sdkSessionId ?? state.sdkSessionId) as string }
           : {}),
-        // buildQueuedMessage may have used a pre-hydration store snapshot.
-        // The DB row is authoritative here: SSH lazy-create must not inherit
-        // controller-local Cindy Memory. Device-link keeps target ownership.
-        ...(session.remoteHostId && !deviceLinkRemote ? { makerMemoryEnabled: false } : {}),
+        // SSH remote 与本地同语义: Maker Memory 跟随控制端全局开关 (scope 由
+        // maker-core 按 remoteHostId+workingDir 隔离), 这里不再强制关闭;
+        // device-link 仍由目标端自己的设置决定 (buildQueuedMessage 已省略)。
         // 远端 SSH 会话:重启后 lazy-create 缺它会把远端 workingDir 当本地路径。
         ...(session.remoteHostId ? { remoteHostId: session.remoteHostId } : {}),
       };
@@ -8121,7 +8928,20 @@ type RemoteRowsOrder = 'newest-first' | 'oldest-first';
 function mergeMessages(
   serverMsgs: ChatMessage[],
   existing: ChatMessage[],
-  options: HydratePersistedMessageOptions = {},
+  /**
+   * addOnly:只补窗口里缺的行,**不**用 server 快照去 hydrate 已有的行。
+   *
+   * 给"取回来很久之后才发布"的来源用(跳转补齐的多页循环:第一页可能在几秒前就取到了,
+   * 期间 local-db:messages:created 可能已经把某行更新过)。默认的 hydrate 是
+   * `{...existing, ...persisted}`,persisted 赢 —— 那时旧快照会把 live 更新盖回去
+   * (#676 review codex P1)。彻底解法需要每条消息的修订号,而 messages 表没有 updatedAt,
+   * 属于跨层改动;这里先把"发布延迟最长"的那个来源摘出去。
+   */
+  options: HydratePersistedMessageOptions & {
+    addOnly?: boolean;
+    /** addOnly 的白名单:这些 clientId 仍然照常 hydrate。 */
+    addOnlyExcept?: ReadonlySet<string>;
+  } = {},
   rowsOrder: RemoteRowsOrder = 'oldest-first',
 ): ChatMessage[] {
   const serverOrder = new Map(serverMsgs.map((message, index) => [message.clientId, index]));
@@ -8133,6 +8953,9 @@ function mergeMessages(
     seen.add(message.clientId);
     const persisted = serverByClientId.get(message.clientId);
     if (!persisted) return message;
+    if (options.addOnly === true && options.addOnlyExcept?.has(message.clientId) !== true) {
+      return message;
+    }
     const hydrated = hydratePersistedMessage(message, persisted, options);
     if (hydrated !== message) changed = true;
     return hydrated;
@@ -8157,7 +8980,9 @@ function mergeAuthoritativeRemoteWindow(
   rowsOrder: RemoteRowsOrder,
 ): ChatMessage[] {
   if (serverMsgs.length === 0) return lateArrivals;
-  return mergeMessages(serverMsgs, lateArrivals, {}, rowsOrder);
+  // addOnly:lateArrivals 全是"快照之后才到"的行,它们比 serverMsgs 更新,不能被旧快照 hydrate
+  // (#676 review codex P1)。权威行本身是新增,不受影响。
+  return mergeMessages(serverMsgs, lateArrivals, { addOnly: true }, rowsOrder);
 }
 
 function sortMessagesChronologically(
@@ -8203,6 +9028,41 @@ function oldestServerMessageIdForWindow(
     return previousOldestId;
   }
   return compareMessageTimeline(oldestRow, existingOldest) < 0 ? oldestRow.id : previousOldestId;
+}
+
+/**
+ * 把一条窗口内消息换算回"落库那条时间线"上的可比对象(与原始 DB 行同口径)。
+ *
+ * 只有 thinking 需要换算:mapServerMessages 会把它的 createdAt 改写成 `finishedAt - durationMs`
+ * (渲染层拿它当块的开始时刻算时长)。拿改写后的值去跟原始 DB 行比大小,就是在混两条时间线。
+ * 换算不出来(没有 thinkingFinishedAtMs)时返回 null,调用方按"无法判定 ⇒ 保守判脱离"处理。
+ */
+function thinkingSafeTimelineRow(
+  message: ChatMessage,
+): { createdAt?: string; rowid?: number } | null {
+  if (message.role !== 'thinking') return message;
+  if (typeof message.thinkingFinishedAtMs !== 'number') return null;
+  if (!Number.isFinite(message.thinkingFinishedAtMs)) return null;
+  return {
+    createdAt: new Date(message.thinkingFinishedAtMs).toISOString(),
+    rowid: message.rowid,
+  };
+}
+
+/**
+ * 权威窗口里最新的一行(判"晚到的行是否落在权威范围内"用)。
+ *
+ * 用 compareMessageTimeline 取最大,而不是只比毫秒:同毫秒的多行靠 rowid 定序,只比毫秒可能
+ * 挑到 rowid 更小的那行当"最新边界",于是把同毫秒、rowid 更大的**范围内**晚到行误判成脱离
+ * (#676 review copilot)。与 oldestMessageRow 同口径。
+ */
+function newestMessageRowForWindow(rows: Message[]): Message | null {
+  let newest: Message | null = null;
+  for (const row of rows) {
+    if (!Number.isFinite(messageTime(row.createdAt))) continue;
+    if (newest === null || compareMessageTimeline(row, newest) > 0) newest = row;
+  }
+  return newest;
 }
 
 function oldestMessageRow(

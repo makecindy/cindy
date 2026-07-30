@@ -6,7 +6,7 @@ import { promises as fs } from 'node:fs';
 import { CodexAgent } from './index.js';
 import { Method } from './app-server/protocol.js';
 import type { ThreadEventHandlers } from './app-server/host.js';
-import type { AgentDeps } from '../base-agent.js';
+import type { AgentDeps, AgentSessionHandle, TurnPermissionPolicy } from '../base-agent.js';
 import type { AuthAdapter } from '../../interfaces/auth-adapter.js';
 import type { AgentEvent, InteractionDecision, InteractionRequest } from '../../types/events.js';
 import type { Logger } from '../../interfaces/logger.js';
@@ -20,6 +20,8 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
     static threadSeq = 1;
     static failThreadStart = false;
     static dropThreadUnsubscribe = false;
+    static dropModelList = false;
+    static dropInitialize = false;
     static beforeThreadStartResponse: ((transport: MockCodexTransport) => Promise<void> | void) | null = null;
     static onCreate: ((transport: MockCodexTransport) => void) | null = null;
 
@@ -49,6 +51,7 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
         return;
       }
       if (req.method === 'initialize') {
+        if (MockCodexTransport.dropInitialize) return;
         this.emitLine({
           id: req.id,
           result: {
@@ -134,6 +137,7 @@ const { MockCodexTransport, createdTransports } = vi.hoisted(() => {
         return;
       }
       if (req.method === 'model/list') {
+        if (MockCodexTransport.dropModelList) return;
         this.emitLine({ id: req.id, result: { data: [], nextCursor: null } });
         return;
       }
@@ -228,6 +232,8 @@ beforeEach(() => {
   MockCodexTransport.threadSeq = 1;
   MockCodexTransport.failThreadStart = false;
   MockCodexTransport.dropThreadUnsubscribe = false;
+  MockCodexTransport.dropModelList = false;
+  MockCodexTransport.dropInitialize = false;
   MockCodexTransport.beforeThreadStartResponse = null;
   MockCodexTransport.onCreate = null;
 });
@@ -357,11 +363,14 @@ function installFakeHost(
     threadHandlers = handlers;
     return { release: vi.fn() };
   });
-  const unsubscribeThread = vi.fn(async (_threadId: string) => {});
+  const unsubscribeThread = vi.fn(async () => {});
   const isCodexProxyActive = vi.fn(() => opts.codexProxyActive === true);
   const getRemoteCompactionProviderId = vi.fn(() => opts.remoteCompactionProviderId ?? null);
   const host = {
     ensureStarted,
+    // startSession 的 initialize 直调走限时变体 (codex R13 P1): fake 里
+    // 直接委托 ensureStarted (超时语义由 host.test.ts 的真 transport 覆盖)。
+    ensureStartedWithTimeout: vi.fn(async (_timeoutMs: number, _label: string) => ensureStarted()),
     request,
     subscribeThread,
     unsubscribeThread,
@@ -398,13 +407,124 @@ describe('CodexAgent permissions', () => {
       'bypassPermissions',
     ]);
     expect(agent.capabilities.extraDirs).toEqual({ supported: true });
+    expect(agent.capabilities.turnPermissionPolicy).toEqual({
+      supported: { supported: true },
+      unsupportedPermissionModes: ['bypassPermissions'],
+    });
+  });
+
+  it('makes policy turns host-observable and only prompts for forced Auto actions', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        return { turn: { id: 'turn-wechat-policy' } };
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-wechat-policy',
+      model: 'gpt-5.5',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+    const policy: TurnPermissionPolicy = {
+      origin: { kind: 'im', channel: 'wechat', taskId: 'task-codex' },
+      confirmationSurface: 'desktop',
+      forceConfirmToolCall: (_toolName, input) =>
+        JSON.stringify(input).includes('rm -rf'),
+    };
+    const resolver = vi.fn(async () => ({
+      kind: 'permission' as const,
+      behavior: 'allow' as const,
+    }));
+    handle.setInteractionResolver(resolver);
+
+    await handle.send(
+      { type: 'user', content: 'clean old output if needed' },
+      { turnPermissionPolicy: policy },
+    );
+    const turnParams = host.request.mock.calls.find(
+      ([method]) => method === Method.TurnStart,
+    )?.[1] as Record<string, unknown>;
+    expect(turnParams).toMatchObject({
+      approvalPolicy: 'untrusted',
+      sandboxPolicy: { type: 'readOnly' },
+    });
+    expect(turnParams).not.toHaveProperty('approvalsReviewer');
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval) {
+      throw new Error('expected commandExecutionApproval handler');
+    }
+    await expect(
+      handlers.commandExecutionApproval({
+        threadId: 'start-thread-id',
+        turnId: 'turn-wechat-policy',
+        itemId: 'cmd-safe',
+        command: 'pwd',
+        cwd: '/repo',
+      }),
+    ).resolves.toEqual({ decision: 'accept' });
+    expect(resolver).not.toHaveBeenCalled();
+
+    await expect(
+      handlers.commandExecutionApproval({
+        threadId: 'start-thread-id',
+        turnId: 'turn-wechat-policy',
+        itemId: 'cmd-risky',
+        command: 'rm -rf build',
+        cwd: '/repo',
+      }),
+    ).resolves.toEqual({ decision: 'accept' });
+    expect(resolver).toHaveBeenCalledOnce();
+    expect(resolver.mock.calls[0]?.[0]).toMatchObject({
+      kind: 'permission',
+      toolName: 'exec',
+      input: { command: 'rm -rf build' },
+      suggestions: undefined,
+    });
+    if (!handle.setPermissionMode) throw new Error('expected setPermissionMode');
+    await handle.setPermissionMode('ask');
+    expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, {
+      threadId: 'start-thread-id',
+      turnId: 'turn-wechat-policy',
+    });
+    await handle.close();
+  });
+
+  it('rejects Full Access policy turns instead of silently downgrading them', async () => {
+    const agent = new CodexAgent(createDeps());
+    installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-wechat-full-access',
+      model: 'gpt-5.5',
+      workingDir: '/repo',
+      permissionMode: 'bypassPermissions',
+    });
+    const policy: TurnPermissionPolicy = {
+      origin: { kind: 'im', channel: 'wechat', taskId: 'task-full' },
+      confirmationSurface: 'desktop',
+      forceConfirmToolCall: () => true,
+    };
+
+    await expect(
+      handle.send(
+        { type: 'user', content: 'remove old output' },
+        { turnPermissionPolicy: policy },
+      ),
+    ).rejects.toMatchObject({
+      name: 'TurnPermissionPolicyUnsupportedError',
+      code: 'TURN_PERMISSION_POLICY_UNSUPPORTED',
+      permissionMode: 'bypassPermissions',
+    });
+    await handle.close();
   });
 });
 
 describe('CodexAgent reference directories', () => {
   const profileName = 'cindy-readonly-references';
 
-  it('keeps reference roots read-only on thread/start and every turn', async () => {
+  it('keeps the thread-level reference profile active without repeating it on turn/start', async () => {
     const agent = new CodexAgent(createDeps());
     let turnSeq = 0;
     const host = installFakeHost(
@@ -458,7 +578,7 @@ describe('CodexAgent reference directories', () => {
     );
     const [, firstTurn] = turnCalls()[0] as [string, Record<string, unknown>];
     expect(firstTurn.runtimeWorkspaceRoots).toEqual(['/repo', '/shared-a']);
-    expect(firstTurn.permissions).toBe(profileName);
+    expect('permissions' in firstTurn).toBe(false);
     expect('sandboxPolicy' in firstTurn).toBe(false);
 
     const handlers = host.getThreadHandlers();
@@ -472,7 +592,8 @@ describe('CodexAgent reference directories', () => {
     await handle.send({ type: 'user', content: 'use the replacement reference' });
     const [, secondTurn] = turnCalls()[1] as [string, Record<string, unknown>];
     expect(secondTurn.runtimeWorkspaceRoots).toEqual(['/repo', '/shared-b']);
-    expect(secondTurn.permissions).toBe(profileName);
+    expect('permissions' in secondTurn).toBe(false);
+    expect('sandboxPolicy' in secondTurn).toBe(false);
     handlers.turnCompleted?.({
       threadId: 'start-thread-id',
       turn: { id: 'turn-2', status: 'completed' },
@@ -499,6 +620,615 @@ describe('CodexAgent reference directories', () => {
       type: 'workspaceWrite',
       writableRoots: ['/tmp/mock-codex-home/memories'],
     });
+    await handle.close();
+  });
+
+  it('replaces an unused thread instead of resuming before its first rollout exists', async () => {
+    const agent = new CodexAgent(createDeps());
+    let threadStartSeq = 0;
+    const host = installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.ThreadStart) {
+          return {
+            thread: { id: `start-thread-${++threadStartSeq}` },
+            model: 'gpt-5.4',
+            modelProvider: 'openai',
+            cwd: '/repo',
+          };
+        }
+        if (method === Method.ThreadResume) {
+          throw new Error('no rollout found for thread id');
+        }
+        if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
+        return undefined;
+      },
+      { codexHome: '/tmp/mock-codex-home' },
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-add-extra-dirs-before-first-turn',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      userPrompt: 'STABLE USER PROMPT',
+    });
+
+    await handle.setExtraDirs?.(['/shared-before-first-turn']);
+    await handle.send(
+      { type: 'user', content: 'use the reference on the first turn' },
+      { throwOnStartFailure: true },
+    );
+
+    const startCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadStart,
+    );
+    expect(startCalls).toHaveLength(2);
+    const [, initialStart] = startCalls[0] as [string, Record<string, unknown>];
+    const [, replacementStart] = startCalls[1] as [string, Record<string, unknown>];
+    expect(replacementStart.runtimeWorkspaceRoots).toEqual([
+      '/repo',
+      '/shared-before-first-turn',
+    ]);
+    expect(replacementStart.permissions).toBe(profileName);
+    expect(replacementStart.config).toHaveProperty(`permissions.${profileName}`);
+    expect(replacementStart.developerInstructions).toBe(initialStart.developerInstructions);
+    expect(replacementStart.dynamicTools).toEqual(initialStart.dynamicTools);
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(0);
+    expect(handle.id).toBe('start-thread-2');
+    expect(host.subscribeThread).toHaveBeenLastCalledWith('start-thread-2', expect.any(Object));
+
+    const [, turnParams] = host.request.mock.calls.find(
+      ([method]) => method === Method.TurnStart,
+    ) as [string, Record<string, unknown>];
+    expect(turnParams.threadId).toBe('start-thread-2');
+    expect('permissions' in turnParams).toBe(false);
+    expect('sandboxPolicy' in turnParams).toBe(false);
+    await handle.close();
+  });
+
+  it('preserves a Fast mode toggle made while replacing an unused thread', async () => {
+    const agent = new CodexAgent(createDeps());
+    let threadStartCount = 0;
+    const replacementGate = deferred<{
+      thread: { id: string };
+      model: string;
+      modelProvider: string;
+      cwd: string;
+      serviceTier: null;
+    }>();
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadStart) {
+        threadStartCount += 1;
+        if (threadStartCount === 2) return replacementGate.promise;
+      }
+      if (method === Method.ThreadSettingsUpdate) return {};
+      if (method === Method.TurnStart) return { turn: { id: 'turn-fast-replacement' } };
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-fast-during-replacement',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    await handle.setExtraDirs?.(['/shared-fast-replacement']);
+    const sendPromise = handle.send({ type: 'user', content: 'use fast mode' });
+    await waitForExpectation(() => {
+      expect(host.request.mock.calls.filter(
+        ([method]) => method === Method.ThreadStart,
+      )).toHaveLength(2);
+    });
+    const bindingLeases = (
+      agent as unknown as { hostSessionBindingLeases: Map<string, number> }
+    ).hostSessionBindingLeases;
+    expect(bindingLeases.get('local')).toBe(1);
+
+    await handle.setFastMode?.(true);
+    replacementGate.resolve({
+      thread: { id: 'start-thread-2' },
+      model: 'gpt-5.4',
+      modelProvider: 'openai',
+      cwd: '/repo',
+      serviceTier: null,
+    });
+    await sendPromise;
+
+    expect(handle.getFastMode?.()).toBe(true);
+    const settingsCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadSettingsUpdate,
+    );
+    expect(settingsCalls.map(([, params]) => params)).toEqual([
+      { threadId: 'start-thread-id', serviceTier: 'fast' },
+      { threadId: 'start-thread-2', serviceTier: 'fast' },
+    ]);
+    const turnCall = host.request.mock.calls.find(
+      ([method]) => method === Method.TurnStart,
+    );
+    expect(turnCall?.[1]).toMatchObject({
+      threadId: 'start-thread-2',
+      serviceTier: 'fast',
+    });
+    expect(bindingLeases.has('local')).toBe(false);
+    await handle.close();
+  });
+
+  it('cancels a pending unused-thread replacement before turn/start', async () => {
+    const agent = new CodexAgent(createDeps());
+    let threadStartCount = 0;
+    const replacementGate = deferred<{
+      thread: { id: string };
+      model: string;
+      modelProvider: string;
+      cwd: string;
+    }>();
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadStart) {
+        threadStartCount += 1;
+        if (threadStartCount === 2) return replacementGate.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-cancel-unused-replacement',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    await handle.setExtraDirs?.(['/shared-cancel-replacement']);
+    const controller = new AbortController();
+    const sendPromise = handle.send(
+      { type: 'user', content: 'cancel unused replacement' },
+      { signal: controller.signal, throwOnStartFailure: true },
+    );
+    await waitForExpectation(() => {
+      expect(host.request.mock.calls.filter(
+        ([method]) => method === Method.ThreadStart,
+      )).toHaveLength(2);
+    });
+    controller.abort();
+
+    await expect(sendPromise).rejects.toThrow(/send cancelled before acceptance/i);
+    replacementGate.resolve({
+      thread: { id: 'start-thread-2' },
+      model: 'gpt-5.4',
+      modelProvider: 'openai',
+      cwd: '/repo',
+    });
+    await waitForExpectation(() => {
+      expect(host.unsubscribeThread).toHaveBeenCalledWith('start-thread-2');
+    });
+    expect(host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnStart,
+    )).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('times out an unused-thread replacement before turn/start', async () => {
+    const agent = new CodexAgent(createDeps());
+    let threadStartCount = 0;
+    const replacementGate = deferred<{
+      thread: { id: string };
+      model: string;
+      modelProvider: string;
+      cwd: string;
+    }>();
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadStart) {
+        threadStartCount += 1;
+        if (threadStartCount === 2) return replacementGate.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-timeout-unused-replacement',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    await handle.setExtraDirs?.(['/shared-timeout-replacement']);
+
+    vi.useFakeTimers();
+    try {
+      const sendPromise = handle.send(
+        { type: 'user', content: 'time out unused replacement' },
+        { throwOnStartFailure: true },
+      );
+      const failure = expect(sendPromise).rejects.toThrow(
+        /profile replacement did not acknowledge within 10000ms/i,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(host.request.mock.calls.filter(
+        ([method]) => method === Method.ThreadStart,
+      )).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await failure;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    replacementGate.resolve({
+      thread: { id: 'start-thread-2' },
+      model: 'gpt-5.4',
+      modelProvider: 'openai',
+      cwd: '/repo',
+    });
+    await waitForExpectation(() => {
+      expect(host.unsubscribeThread).toHaveBeenCalledWith('start-thread-2');
+    });
+    expect(host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnStart,
+    )).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('discards an unused replacement when close races with subscription release', async () => {
+    const agent = new CodexAgent(createDeps());
+    let threadStartSeq = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadStart) {
+        return {
+          thread: { id: `start-thread-${++threadStartSeq}` },
+          model: 'gpt-5.4',
+          modelProvider: 'openai',
+          cwd: '/repo',
+        };
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-unused-replacement-close-race',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    let resolveRelease: (() => void) | undefined;
+    const releaseGate = new Promise<void>((resolve) => {
+      resolveRelease = resolve;
+    });
+    const initialSubscription = host.subscribeThread.mock.results[0]?.value;
+    const release = initialSubscription?.release;
+    if (!release) throw new Error('expected initial subscription');
+    release.mockImplementation(() => releaseGate);
+
+    await handle.setExtraDirs?.(['/shared-before-first-turn']);
+    const sendPromise = handle.send(
+      { type: 'user', content: 'use the reference on the first turn' },
+      { throwOnStartFailure: true },
+    );
+    await waitForExpectation(() => expect(release).toHaveBeenCalledTimes(1));
+    const closePromise = handle.close();
+    await waitForExpectation(() => expect(release).toHaveBeenCalledTimes(2));
+    resolveRelease?.();
+
+    await expect(sendPromise).rejects.toThrow(
+      /closed during read-only reference profile replacement/i,
+    );
+    await closePromise;
+    expect(host.subscribeThread).toHaveBeenCalledTimes(1);
+    expect(host.unsubscribeThread).toHaveBeenCalledWith('start-thread-2');
+  });
+
+  it('restores the thread-level profile before using references added after an earlier turn', async () => {
+    const agent = new CodexAgent(createDeps());
+    let turnSeq = 0;
+    const host = installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+        return undefined;
+      },
+      { codexHome: '/tmp/mock-codex-home' },
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-add-extra-dirs',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    await handle.send({ type: 'user', content: 'start without references' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+
+    await handle.setExtraDirs?.(['/shared-added']);
+    await handle.send({ type: 'user', content: 'use the new reference' });
+
+    const resumeCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadResume,
+    );
+    expect(resumeCalls).toHaveLength(1);
+    const [, resumeParams] = resumeCalls[0] as [string, Record<string, unknown>];
+    expect(resumeParams.runtimeWorkspaceRoots).toEqual(['/repo', '/shared-added']);
+    expect(resumeParams.permissions).toBe(profileName);
+    expect(resumeParams.config).toHaveProperty(`permissions.${profileName}`);
+
+    const turnCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnStart,
+    );
+    const [, turnParams] = turnCalls[1] as [string, Record<string, unknown>];
+    expect(turnParams.runtimeWorkspaceRoots).toEqual(['/repo', '/shared-added']);
+    expect('permissions' in turnParams).toBe(false);
+    expect('sandboxPolicy' in turnParams).toBe(false);
+    await handle.close();
+  });
+
+  it('restores the thread-level profile after Full access before the next reference turn', async () => {
+    const agent = new CodexAgent(createDeps());
+    let turnSeq = 0;
+    const host = installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+        return undefined;
+      },
+      {
+        codexHome: '/tmp/mock-codex-home',
+        remoteCompactionProviderId: 'cindy_openai',
+      },
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-restore-after-bypass',
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      fastMode: true,
+      workingDir: '/repo',
+      extraDirs: ['/shared-a'],
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    await handle.setPermissionMode?.('bypassPermissions');
+    await handle.send({ type: 'user', content: 'run with full access' });
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+
+    await handle.setPermissionMode?.('ask');
+    await handle.send({ type: 'user', content: 'return to read-only references' });
+
+    const resumeCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadResume,
+    );
+    expect(resumeCalls).toHaveLength(1);
+    const [, resumeParams] = resumeCalls[0] as [string, Record<string, unknown>];
+    expect(resumeParams.permissions).toBe(profileName);
+    expect(resumeParams.runtimeWorkspaceRoots).toEqual(['/repo', '/shared-a']);
+    expect(resumeParams.modelProvider).toBe('cindy_openai');
+    expect(resumeParams.model).toBe('gpt-5.4');
+    expect(resumeParams.serviceTier).toBe('fast');
+
+    const turnCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnStart,
+    );
+    const [, askTurn] = turnCalls[1] as [string, Record<string, unknown>];
+    expect('permissions' in askTurn).toBe(false);
+    expect('sandboxPolicy' in askTurn).toBe(false);
+    await handle.close();
+  });
+
+  it('preserves a Fast mode toggle made while profile resume is pending', async () => {
+    const agent = new CodexAgent(createDeps());
+    const profileResumeGate = deferred<{
+      thread: { id: string };
+      model: string;
+      modelProvider: string;
+      cwd: string;
+      serviceTier: null;
+    }>();
+    let turnSeq = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+      if (method === Method.ThreadResume) return profileResumeGate.promise;
+      if (method === Method.ThreadSettingsUpdate) return {};
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-fast-during-profile-resume',
+      model: 'gpt-5.4',
+      fastMode: false,
+      workingDir: '/repo',
+      extraDirs: ['/shared-profile-resume'],
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    await handle.setPermissionMode?.('bypassPermissions');
+    await handle.send({ type: 'user', content: 'run with full access' });
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+
+    await handle.setPermissionMode?.('ask');
+    const sendPromise = handle.send({ type: 'user', content: 'restore with fast mode' });
+    await waitForExpectation(() => {
+      expect(host.request.mock.calls.filter(
+        ([method]) => method === Method.ThreadResume,
+      )).toHaveLength(1);
+    });
+    await handle.setFastMode?.(true);
+    profileResumeGate.resolve({
+      thread: { id: 'start-thread-id' },
+      model: 'gpt-5.4',
+      modelProvider: 'openai',
+      cwd: '/repo',
+      serviceTier: null,
+    });
+    await sendPromise;
+
+    expect(handle.getFastMode?.()).toBe(true);
+    const settingsCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadSettingsUpdate,
+    );
+    expect(settingsCalls.map(([, params]) => params)).toEqual([
+      { threadId: 'start-thread-id', serviceTier: 'fast' },
+      { threadId: 'start-thread-id', serviceTier: 'fast' },
+    ]);
+    const turnCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnStart,
+    );
+    expect(turnCalls[1]?.[1]).toMatchObject({
+      threadId: 'start-thread-id',
+      serviceTier: 'fast',
+    });
+    await handle.close();
+  });
+
+  it('cancels a pending profile refresh before turn/start', async () => {
+    const agent = new CodexAgent(createDeps());
+    const profileResumeGate = deferred<{
+      thread: { id: string };
+      model: string;
+      modelProvider: string;
+      cwd: string;
+    }>();
+    let turnSeq = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+      if (method === Method.ThreadResume) return profileResumeGate.promise;
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-cancel-profile-resume',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      extraDirs: ['/shared-cancel-resume'],
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    await handle.setPermissionMode?.('bypassPermissions');
+    await handle.send({ type: 'user', content: 'run with full access' });
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+
+    await handle.setPermissionMode?.('ask');
+    const controller = new AbortController();
+    const sendPromise = handle.send(
+      { type: 'user', content: 'cancel profile refresh' },
+      { signal: controller.signal, throwOnStartFailure: true },
+    );
+    await waitForExpectation(() => {
+      expect(host.request.mock.calls.filter(
+        ([method]) => method === Method.ThreadResume,
+      )).toHaveLength(1);
+    });
+    controller.abort();
+
+    await expect(sendPromise).rejects.toThrow(/send cancelled before acceptance/i);
+    expect(host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnStart,
+    )).toHaveLength(1);
+    profileResumeGate.resolve({
+      thread: { id: 'start-thread-id' },
+      model: 'gpt-5.4',
+      modelProvider: 'openai',
+      cwd: '/repo',
+    });
+    await handle.close();
+  });
+
+  it('times out a profile refresh before turn/start', async () => {
+    const agent = new CodexAgent(createDeps());
+    const profileResumeGate = deferred<never>();
+    let turnSeq = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+      if (method === Method.ThreadResume) return profileResumeGate.promise;
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-timeout-profile-resume',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      extraDirs: ['/shared-timeout-resume'],
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    await handle.setPermissionMode?.('bypassPermissions');
+    await handle.send({ type: 'user', content: 'run with full access' });
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+    await handle.setPermissionMode?.('ask');
+
+    vi.useFakeTimers();
+    try {
+      const sendPromise = handle.send(
+        { type: 'user', content: 'time out profile refresh' },
+        { throwOnStartFailure: true },
+      );
+      const failure = expect(sendPromise).rejects.toThrow(
+        /profile refresh did not acknowledge within 10000ms/i,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(host.request.mock.calls.filter(
+        ([method]) => method === Method.ThreadResume,
+      )).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await failure;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnStart,
+    )).toHaveLength(1);
+    await handle.close();
+  });
+
+  it('refreshes the profile after thread/rollback replaces the active thread', async () => {
+    const agent = new CodexAgent(createDeps());
+    let turnSeq = 0;
+    const host = installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+        return undefined;
+      },
+      { codexHome: '/tmp/mock-codex-home' },
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-reference-dirs-rollback',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      extraDirs: ['/shared-rollback'],
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    await handle.send({ type: 'user', content: 'create a persisted rollout' });
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+    await commitRewindFiles('', '', { tailTurnsToDrop: 1 });
+
+    await handle.send({ type: 'user', content: 'continue after rollback' });
+
+    const resumeCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.ThreadResume,
+    );
+    expect(resumeCalls).toHaveLength(1);
+    const [, resumeParams] = resumeCalls[0] as [string, Record<string, unknown>];
+    expect(resumeParams.threadId).toBe('rollback-thread-id');
+    expect(resumeParams.permissions).toBe(profileName);
+    expect(resumeParams.runtimeWorkspaceRoots).toEqual(['/repo', '/shared-rollback']);
+
+    const turnCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnStart,
+    );
+    const [, turnParams] = turnCalls[1] as [string, Record<string, unknown>];
+    expect(turnParams.threadId).toBe('rollback-thread-id');
+    expect('permissions' in turnParams).toBe(false);
     await handle.close();
   });
 
@@ -558,9 +1288,77 @@ describe('CodexAgent reference directories', () => {
     expect(turnCalls).toHaveLength(2);
     for (const [, params] of turnCalls as Array<[string, Record<string, unknown>]>) {
       expect(params.runtimeWorkspaceRoots).toEqual(['/repo', '/shared-retry']);
-      expect(params.permissions).toBe(profileName);
+      expect('permissions' in params).toBe(false);
       expect('sandboxPolicy' in params).toBe(false);
     }
+    await handle.close();
+  });
+
+  it('retries a stale reference turn with its frozen permission profile', async () => {
+    const agent = new CodexAgent(createDeps());
+    const firstTurnGate = deferred<never>();
+    let turnStartCount = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        turnStartCount += 1;
+        if (turnStartCount === 1) return firstTurnGate.promise;
+        return { turn: { id: 'turn-frozen-reference-retry' } };
+      }
+      if (method === Method.ThreadResume) {
+        return {
+          thread: { id: 'start-thread-id' },
+          model: 'gpt-5.4',
+          modelProvider: 'openai',
+          cwd: '/repo',
+        };
+      }
+      if (method === Method.ThreadSettingsUpdate) return {};
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-frozen-reference-retry',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      extraDirs: ['/shared-frozen-turn'],
+    });
+
+    const sendPromise = handle.send({ type: 'user', content: 'retry safely' });
+    await waitForExpectation(() => {
+      expect(host.request.mock.calls.filter(
+        ([method]) => method === Method.TurnStart,
+      )).toHaveLength(1);
+    });
+    await handle.setExtraDirs?.([]);
+    await handle.setModel?.('gpt-5.5');
+    await handle.setFastMode?.(true);
+    firstTurnGate.reject(new Error('thread not found'));
+    await sendPromise;
+
+    const [, resumeParams] = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadResume,
+    ) as [string, Record<string, unknown>];
+    expect(resumeParams).toMatchObject({
+      threadId: 'start-thread-id',
+      runtimeWorkspaceRoots: ['/repo', '/shared-frozen-turn'],
+      permissions: profileName,
+      approvalPolicy: 'on-request',
+      model: 'gpt-5.5',
+      serviceTier: 'fast',
+    });
+    expect('sandbox' in resumeParams).toBe(false);
+
+    const turnCalls = host.request.mock.calls.filter(
+      ([method]) => method === Method.TurnStart,
+    );
+    expect(turnCalls).toHaveLength(2);
+    for (const [, params] of turnCalls as Array<[string, Record<string, unknown>]>) {
+      expect(params.runtimeWorkspaceRoots).toEqual(['/repo', '/shared-frozen-turn']);
+      expect('sandboxPolicy' in params).toBe(false);
+    }
+    expect(turnCalls[1]?.[1]).toMatchObject({
+      model: 'gpt-5.5',
+      serviceTier: 'fast',
+    });
     await handle.close();
   });
 
@@ -632,6 +1430,61 @@ describe('CodexAgent.listCustomizations', () => {
 });
 
 describe('CodexAgent.refreshLocalModels', () => {
+  it('uses an isolated OpenAI control-plane host without closing provider-oauth sessions', async () => {
+    const onCodexLocalModelsListed = vi.fn().mockResolvedValue(undefined);
+    const prepareCodexLocalCredentialModeSwitch = vi.fn(async () => {});
+    const prepareCodexExtraSpawnConfig = vi.fn(async (_providers, ctx) => ({
+      extraArgs: [],
+      extraEnv: {},
+      codexProxyActive: ctx.credentialMode === 'provider-oauth',
+    }));
+    const agent = new CodexAgent(createDeps({}, {
+      onCodexLocalModelsListed,
+      prepareCodexLocalCredentialModeSwitch,
+      prepareCodexExtraSpawnConfig,
+    }));
+    const xaiHandle = await agent.startSession({
+      sessionId: 'session-provider-oauth-before-openai-refresh',
+      providerId: 'xai',
+      model: 'xai/grok-4.3',
+      workingDir: '/repo-xai',
+    });
+
+    await expect(
+      agent.refreshLocalModels({ credentialMode: 'oauth-bearer' }),
+    ).resolves.toBe(true);
+
+    expect(createdTransports).toHaveLength(2);
+    expect(createdTransports[0].closed).toBe(false);
+    expect(prepareCodexLocalCredentialModeSwitch).not.toHaveBeenCalled();
+    expect(createdTransports[0].lines.some((line) => (
+      (JSON.parse(line) as { method?: string }).method === Method.ModelList
+    ))).toBe(false);
+    expect(createdTransports[1].lines.some((line) => (
+      (JSON.parse(line) as { method?: string }).method === Method.ModelList
+    ))).toBe(true);
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(1, [], {
+      remoteHostId: undefined,
+      credentialMode: 'provider-oauth',
+    });
+    expect(prepareCodexExtraSpawnConfig).toHaveBeenNthCalledWith(2, [], {
+      remoteHostId: undefined,
+      credentialMode: 'oauth-bearer',
+      hostPurpose: 'control-plane',
+    });
+    expect(onCodexLocalModelsListed).toHaveBeenCalledOnce();
+    expect(Array.from(
+      (agent as unknown as { hosts: Map<string, unknown> }).hosts.keys(),
+    )).toEqual(['local', 'local-control:oauth-bearer']);
+    await xaiHandle.close();
+    await agent.forceDisposeLocalHostForAuthChange('test account boundary');
+    expect(createdTransports.every((transport) => transport.closed)).toBe(true);
+    expect(
+      (agent as unknown as { hosts: Map<string, unknown> }).hosts.size,
+    ).toBe(0);
+    await agent.dispose();
+  });
+
   it('reads every model/list page and publishes one complete snapshot', async () => {
     const onCodexLocalModelsListed = vi.fn().mockResolvedValue(undefined);
     const agent = new CodexAgent(createDeps({}, { onCodexLocalModelsListed }));
@@ -654,8 +1507,16 @@ describe('CodexAgent.refreshLocalModels', () => {
 
     await expect(agent.refreshLocalModels()).resolves.toBe(true);
     expect(host.request.mock.calls.filter(([method]) => method === Method.ModelList)).toEqual([
-      [Method.ModelList, { cursor: null, limit: 100, includeHidden: false }],
-      [Method.ModelList, { cursor: 'page-2', limit: 100, includeHidden: false }],
+      [
+        Method.ModelList,
+        { cursor: null, limit: 100, includeHidden: false },
+        { timeoutMs: 20_000 },
+      ],
+      [
+        Method.ModelList,
+        { cursor: 'page-2', limit: 100, includeHidden: false },
+        { timeoutMs: 20_000 },
+      ],
     ]);
     expect(onCodexLocalModelsListed).toHaveBeenCalledOnce();
     expect(onCodexLocalModelsListed.mock.calls[0][0].map((model: { id: string }) => model.id))
@@ -690,6 +1551,62 @@ describe('CodexAgent.refreshLocalModels', () => {
 
     await expect(agent.refreshLocalModels()).resolves.toBe(false);
     expect(onCodexLocalModelsListed).not.toHaveBeenCalled();
+  });
+
+  it('retires a wedged control-plane host after the model/list deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      MockCodexTransport.dropModelList = true;
+      const agent = new CodexAgent(createDeps());
+      const refresh = agent.refreshLocalModels({ credentialMode: 'oauth-bearer' });
+      const refreshExpectation = expect(refresh).rejects.toThrow(
+        'codex app-server model refresh timed out after 20000ms',
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      await refreshExpectation;
+      expect(createdTransports).toHaveLength(1);
+      expect(createdTransports[0].closed).toBe(true);
+      expect(Array.from(
+        (agent as unknown as { hosts: Map<string, unknown> }).hosts.keys(),
+      )).not.toContain('local-control:oauth-bearer');
+      await agent.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('bounds initialize with the control-plane deadline and rebuilds on retry', async () => {
+    vi.useFakeTimers();
+    try {
+      MockCodexTransport.dropInitialize = true;
+      const agent = new CodexAgent(createDeps({}, {
+        onCodexLocalModelsListed: vi.fn().mockResolvedValue(undefined),
+      }));
+      const refresh = agent.refreshLocalModels({ credentialMode: 'oauth-bearer' });
+      const refreshExpectation = expect(refresh).rejects.toThrow(
+        'codex app-server model refresh timed out after 20000ms',
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      await refreshExpectation;
+      expect(createdTransports).toHaveLength(1);
+      expect(createdTransports[0].closed).toBe(true);
+      expect(Array.from(
+        (agent as unknown as { hosts: Map<string, unknown> }).hosts.keys(),
+      )).not.toContain('local-control:oauth-bearer');
+
+      MockCodexTransport.dropInitialize = false;
+      await expect(
+        agent.refreshLocalModels({ credentialMode: 'oauth-bearer' }),
+      ).resolves.toBe(true);
+      expect(createdTransports).toHaveLength(2);
+      await agent.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -747,7 +1664,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
     });
 
     await waitForExpectation(() => {
-      expect(host.request).toHaveBeenCalledWith(Method.ThreadStart, expect.anything());
+      expect(host.request).toHaveBeenCalledWith(Method.ThreadStart, expect.anything(), expect.objectContaining({ timeoutMs: expect.any(Number) }));
     });
 
     const guard = await agent.beginLocalHostCredentialChange('test credential change');
@@ -1042,6 +1959,7 @@ describe('CodexAgent.startSession developerInstructions', () => {
       expect.objectContaining({
         threadId: '123e4567-e89b-12d3-a456-426614174000',
       }),
+      expect.objectContaining({ timeoutMs: expect.any(Number) }),
     );
     const resumeParams = host.request.mock.calls.find(([method]) => method === Method.ThreadResume)?.[1] as {
       developerInstructions?: string;
@@ -1488,6 +2406,7 @@ describe('CodexAgent send', () => {
       expect.objectContaining({
         effort: 'low',
       }),
+      expect.objectContaining({ timeoutMs: expect.any(Number) }),
     );
     await handle.close();
   });
@@ -1511,6 +2430,7 @@ describe('CodexAgent send', () => {
         expect.objectContaining({
           effort: 'minimal',
         }),
+        expect.objectContaining({ timeoutMs: expect.any(Number) }),
       );
       await handle.close();
     },
@@ -1533,6 +2453,7 @@ describe('CodexAgent send', () => {
       expect.objectContaining({
         effort: 'medium',
       }),
+      expect.objectContaining({ timeoutMs: expect.any(Number) }),
     );
     await handle.close();
   });
@@ -1554,6 +2475,7 @@ describe('CodexAgent send', () => {
       expect.objectContaining({
         effort: 'max',
       }),
+      expect.objectContaining({ timeoutMs: expect.any(Number) }),
     );
     await handle.close();
   });
@@ -1575,6 +2497,7 @@ describe('CodexAgent send', () => {
       expect.objectContaining({
         effort: 'ultra',
       }),
+      expect.objectContaining({ timeoutMs: expect.any(Number) }),
     );
     await handle.close();
   });
@@ -1598,6 +2521,7 @@ describe('CodexAgent send', () => {
       expect.objectContaining({
         effort: 'low',
       }),
+      expect.objectContaining({ timeoutMs: expect.any(Number) }),
     );
     await handle.close();
   });
@@ -1627,6 +2551,7 @@ describe('CodexAgent send', () => {
         expect.objectContaining({
           effort: 'minimal',
         }),
+        expect.objectContaining({ timeoutMs: expect.any(Number) }),
       );
       await handle.close();
     },
@@ -3292,7 +4217,3740 @@ describe('CodexAgent MCP thread context hooks', () => {
     }
   });
 
-  it('skips Codex MCP thread context registration for remote sessions', async () => {
+  // ── 服务过载（模型容量不足）退避重投 ──────────────────────────────────────
+  //
+  // `Selected model is at capacity` 是 OpenAI 侧的服务槽位不足：app-server 不做
+  // 任何重试就把 turn 判死（openai/codex#22390 至今 open）。这组用例锁三件事：
+  //  1. 无产出的 turn 被容量拒绝时自动重投，且期间不收口成失败；
+  //  2. 重投预算不会被"重投自己开出的新 turn"续满（否则容量故障期烧光额度）；
+  //  3. 已有产出的 turn 绝不自动重放（会让模型重做已完成的工作）。
+  describe('overload auto-retry', () => {
+    /** 只让 turn/start 计数并返回递增 turn id，便于断言重投次数。 */
+    function installCapacityHost(agent: CodexAgent): ReturnType<typeof installFakeHost> {
+      let turnSeq = 0;
+      return installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) {
+          turnSeq += 1;
+          return { turn: { id: `turn-${turnSeq}` } };
+        }
+        return undefined;
+      });
+    }
+
+    const CAPACITY_MESSAGE = 'Selected model is at capacity. Please try a different model.';
+
+    function turnStartCount(host: ReturnType<typeof installFakeHost>): number {
+      return host.request.mock.calls.filter(([method]) => method === Method.TurnStart).length;
+    }
+
+    /**
+     * 让**当前**这个 turn 被容量拒绝，然后走完一档退避。
+     *
+     * 必须取实时的 currentTurnId：重投会开出新 turn（由 handleTurnStartResp 装上），
+     * 写死 id 的话第二次之后的 error 会被 `stale codex terminal error ignored`
+     * 挡掉，测试就测不到重投链。
+     *
+     * 刻意不手动补发 turnStarted：重投响应已经维护好 currentTurnId，多补一次会命中
+     * 歧义 started 的缓冲对账路径（issue #677 引入），把 error 排进缓冲队列。
+     * "turnStarted 不得重置重投预算"这条不变量由下面的预算用例本身兜住——一旦被
+     * 重置，预算就永远续满，那些用例会跑不完。
+     */
+    async function rejectCurrentTurnForCapacity(
+      handle: AgentSessionHandle,
+      handlers: ThreadEventHandlers,
+    ): Promise<void> {
+      const turnId = handle.getCurrentTurnId?.() ?? '';
+      handlers.error?.({
+        threadId: 'start-thread-id',
+        turnId,
+        willRetry: false,
+        error: { message: CAPACITY_MESSAGE },
+      } as never);
+      await vi.advanceTimersByTimeAsync(40_000);
+    }
+
+    it('retries turn/start after a capacity rejection without ending the turn', async () => {
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-retry',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+        expect(turnStartCount(host)).toBe(1);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        // 让事件队列的 for-await 消费者跑起来；0ms 不足以触发退避计时器（最短
+        // 一档 1.5s），所以此刻断言到的必须是"重试中"而不是重投结果。
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 透出的必须是非终止状态 + 进度，且**没有** isRunning:false 的收口。
+        const errorEvents = events.filter((e) => e.type === 'error');
+        expect(errorEvents).toHaveLength(1);
+        expect(errorEvents[0].data).toMatchObject({ isTerminal: false, willRetry: true });
+        expect((errorEvents[0].data as { message: string }).message).toContain('auto-retry 1/4');
+        expect(
+          events.some((e) => e.type === 'status' && (e.data as { isRunning?: boolean }).isRunning === false),
+        ).toBe(false);
+
+        // 退避（首档 2s ±25%）后重投同一份 turnParams。
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStartCount(host)).toBe(2);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('stops after the retry budget and only then reports a terminal error', async () => {
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-budget',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnStarted) throw new Error('expected handlers');
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+
+        // 每次重投都又被容量拒绝。前 4 次各消耗一档预算，第 5 次预算已空 →
+        // 落回终止错误。
+        for (let i = 0; i < 5; i += 1) {
+          await rejectCurrentTurnForCapacity(handle, handlers);
+        }
+
+        // 1 次原始投递 + 最多 4 次重投 = 5 次 turn/start，绝不能更多。
+        expect(turnStartCount(host)).toBe(1 + 4);
+        // 预算耗尽后必须落回终止错误 + Done，让上层能收口。
+        const terminal = events.filter(
+          (e) => e.type === 'error' && (e.data as { isTerminal?: boolean }).isTerminal === true,
+        );
+        expect(terminal).toHaveLength(1);
+        expect(
+          events.some((e) => e.type === 'status' && (e.data as { isRunning?: boolean }).isRunning === false),
+        ).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not auto-retry once the turn has produced output', async () => {
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-partial-output',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnStarted) throw new Error('expected handlers');
+        handlers.turnStarted({ turn: { id: 'turn-1' } } as never);
+        // 模型已经开始写东西 → 整体重放不再等价于原请求。
+        handlers.reasoningTextDelta?.({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          delta: 'thinking...',
+        } as never);
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(40_000);
+
+        expect(turnStartCount(host)).toBe(1);
+        expect(
+          events.some((e) => e.type === 'error' && (e.data as { isTerminal?: boolean }).isTerminal === true),
+        ).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('cancels a pending overload retry when the user stops the turn', async () => {
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-abort',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+
+        // Stop 必须在重投等待期间也生效（此时 turn 已死、currentTurnId 为 null）。
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStartCount(host)).toBe(1);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('skips the retry when the send was cancelled during the backoff wait', async () => {
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-signal-abort',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const controller = new AbortController();
+        await handle.send({ type: 'user', content: 'hello' }, { signal: controller.signal });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+
+        // 退避等待期间上层撤单（coordinator 撤回 / 超时）。这条路径不经过
+        // handle.abort()，重投前必须自己再确认一次取消信号。
+        controller.abort();
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStartCount(host)).toBe(1);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('interrupts the turn when cancellation lands while the retry RPC is in flight', async () => {
+      // RPC 在途期间的取消是最危险的窗口：计时器已清，cancelOverloadRetry 无从
+      // 取消；abort() 又因 currentTurnId 仍是 null 而直接返回。若照常激活，一个
+      // 已被用户撤销的 turn 会真的跑起来并执行工具（review #844 P1）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<unknown>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            // 第一次正常返回；重投那次挂住，制造"RPC 在途"窗口。
+            return turnStarts === 1 ? { turn: { id: 'turn-1' } } : retryStart.promise;
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-inflight-cancel',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+
+        // 退避到点 → 重投 RPC 发出并挂住。
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2);
+
+        // 此刻用户点 Stop，然后 server 才回包。
+        await handle.abort?.();
+        retryStart.resolve({ turn: { id: 'turn-late' } });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 迟到的 turn 必须被 interrupt，而不是被激活。
+        expect(
+          host.request.mock.calls.some(
+            ([method, params]) =>
+              method === Method.TurnInterrupt &&
+              (params as { turnId?: string }).turnId === 'turn-late',
+          ),
+        ).toBe(true);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reports the session as busy while an overload retry is pending', async () => {
+      // Session.send() 用 isTurnRunning() 做并发守卫。退避窗口里若报 idle，新的
+      // send 会被接受，而 send() 开头的 cancelOverloadRetry 会静默丢掉原消息
+      // （review #844 P1）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-busy-guard',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // app-server 侧已经没有活着的 turn，但这一轮逻辑上没结束。
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        expect(handle.isTurnRunning?.()).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('closes the logical turn when Stop lands during the backoff', async () => {
+      // 退避窗口里 server 侧没有 turn 可 interrupt，但上层（SessionTurnActivityTracker /
+      // Codex coordinator / hook runner）都在等一个终态事件才释放派发闩。不发会让
+      // 会话永久忙、后续消息无法派发（review #844 codex P1）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-abort-closes-turn',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(
+          events.some(
+            (e) =>
+              e.type === 'error' &&
+              (e.data as { isTerminal?: boolean; reason?: string }).isTerminal === true &&
+              (e.data as { reason?: string }).reason === 'codex-overload-retry-aborted',
+          ),
+        ).toBe(true);
+        expect(
+          events.some((e) => e.type === 'status' && (e.data as { isRunning?: boolean }).isRunning === false),
+        ).toBe(true);
+        // 计时器已废：不得再发出重投。
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStartCount(host)).toBe(1);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('drops a pending retry when the original turn/start ultimately fails', async () => {
+      // 容量通知可能先于原始 turn/start 响应到达（协议允许的乱序），此时重投计时器
+      // 已排上。原始请求随后终失败会推 terminal error + Done，若不废掉重投，计时器
+      // 到点会重投一条已判失败的消息（review #844 codex P1）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<unknown>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            return turnStarts === 1 ? firstStart.promise : { turn: { id: `turn-${turnStarts}` } };
+          }
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-original-start-fails',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const sendPromise = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 容量错误抢在 turn/start 响应之前到达 → 排上重投计时器。
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-pending',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 原始请求终失败。
+        firstStart.reject(new Error('transport dropped'));
+        await sendPromise;
+        await vi.advanceTimersByTimeAsync(40_000);
+
+        // 重投必须被废掉，不能再发一次 turn/start。
+        expect(turnStarts).toBe(1);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('defers a capacity failure that arrives while the retry RPC is in flight', async () => {
+      // inFlight 守卫不能用「判死逻辑 turn」来防重复请求：那样 translator 会报终态、
+      // UI 收口，而在途那次 RPC 随后还可能成功激活 turn（review #844 codex P1）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<unknown>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            return turnStarts === 1 ? { turn: { id: 'turn-1' } } : retryStart.promise;
+          }
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-defer-inflight',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2);
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        // 在途期间再来一条容量错误。turnId 非空才会走到 inFlight 守卫：空 turnId
+        // 在这个状态下（isTurnInFlight 为 false）会先被既有的 stale 判定挡掉。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-inflight',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 必须仍是非终止（延后给在途那次），不得判死。
+        const after = events.slice(before).filter((e) => e.type === 'error');
+        expect(after).toHaveLength(1);
+        expect(after[0].data).toMatchObject({ isTerminal: false, willRetry: true });
+
+        retryStart.resolve({ turn: { id: 'turn-2' } });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reschedules a capacity failure that was deferred while the RPC was in flight', async () => {
+      // 延后本身不够：那条失败的 turn 会被落墓碑，响应因此拒绝激活，finally 又清掉
+      // inFlight —— 没有计时器也没有终态事件，逻辑 send 会永久悬空
+      // （review #844 codex P1）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return { turn: { id: 'turn-1' } };
+            if (turnStarts === 2) return retryStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-deferred-reschedule',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2); // 第一次重投，RPC 挂住
+
+        // 在途期间新 turn 也撞容量 → 当时只被延后（不排计时器、不收口）。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-inflight',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+
+        // RPC 回来（该 turn 已被落墓碑，不会激活）→ finally 必须补排。
+        retryStart.resolve({ turn: { id: 'turn-inflight' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        // 补排生效：又发出一次 turn/start，逻辑 send 没有悬空。
+        expect(turnStarts).toBe(3);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('resets the output guard on a new send even if turnStarted has not arrived yet', async () => {
+      // 产出标记原本只在 turnStarted 里清。新 turn 的响应与容量错误都可能先于它的
+      // turnStarted 到达(本文件多处支持这种乱序), 那时读到的是**上一个 turn** 的产出
+      // 状态 → 一次本来安全的自动重投被判成"有产出, 不重投"(review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-output-guard-reset',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+
+        // 第一轮：turn 有产出并正常结束 → currentTurnProducedOutput 被置 true。
+        await handle.send({ type: 'user', content: 'first' });
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        if (!handlers.itemStarted) throw new Error('expected itemStarted handler');
+        if (!handlers.turnCompleted) throw new Error('expected turnCompleted handler');
+        handlers.itemStarted({
+          turnId: 'turn-1',
+          item: { id: 'item-1', type: 'commandExecution', command: 'echo hi' },
+        });
+        handlers.turnCompleted({ turn: { id: 'turn-1' } });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 第二轮：容量错误在它的 turnStarted 之前就到（乱序），且本轮零产出。
+        await handle.send({ type: 'user', content: 'second' });
+        expect(turnStartCount(host)).toBe(2);
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-2',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+
+        // 重投必须照常发生（不被上一轮的产出标记误挡）。
+        expect(turnStartCount(host)).toBe(3);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    // 注: 曾有一条 'does not settle twice when two stopped sends both have pending start
+    // RPCs' 的用例, 覆盖"两轮 send 各自被 Stop 且两个 RPC 都在飞时, 后一次 Stop 覆盖前一次
+    // 的收口标记"。第二十五轮把"空 id 容量拒绝在无法归属时不接管"落地后, 那个场景不再可达:
+    // 第一轮的 RPC 还在飞时, 第二轮拿不到挂起重投, Stop 也就不会为它推终态。per-request 的
+    // 收口标记(inFlightStarts[*].terminalSettled)本身仍由下面那条单轮用例把住; 与其把用例
+    // 拧成一个够不着的形状, 不如把这段来历记在这里。
+    it('does not discard the next send retry state when the stopped send fails', async () => {
+      // Stop 之后下一轮 send 可能已经装上了自己的 overloadRetry。旧 send 的失败尾巴若无条件
+      // discardOverloadRetry, 会把它连同它记账的延后失败一起清掉 —— 那一轮既不重投也不收口
+      // (review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-keep-next-retry-state',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const firstSend = handle.send({ type: 'user', content: 'first' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 下一轮 send 接管并装上自己的重投状态(它的 turn 被容量拒绝)。
+        await handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-2',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 旧 send 的 RPC 现在才失败 —— 不得把新一轮的重投状态清掉。
+        firstStart.reject(new Error('turn/start timed out'));
+        await firstSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 新一轮的重投照常发生。
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(turnStarts).toBe(3);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not settle twice when Stop is followed by the start RPC rejecting', async () => {
+      // Stop 已经推过 terminal error + Done。旧 RPC 随后 reject 时若照常按 finalErr 再推
+      // 一组, 取消会被改报成"启动失败", 且 coordinator / 活动状态 / goal 对同一个 turn
+      // 收口两次(review #844 greptile P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) return firstStart.promise;
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-no-double-settle',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const sending = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+        // Stop 自己推了一组终态。
+        expect(
+          events.slice(before).filter((e) => e.type === 'error' && e.data?.isTerminal === true),
+        ).toHaveLength(1);
+
+        // 旧 RPC 现在才失败 —— 不得再推第二组。
+        firstStart.reject(new Error('turn/start timed out'));
+        await sending.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        const terminal = events
+          .slice(before)
+          .filter((e) => e.type === 'error' && e.data?.isTerminal === true);
+        expect(terminal).toHaveLength(1);
+        // 而且那一条仍是"已停止", 不能被改述成 turn/start 失败。
+        expect(String((terminal[0].data as { message?: string }).message)).toContain('stopped');
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not let a late turnStarted revive a quarantined start after Stop', async () => {
+      // 隔离只标了登记表, 而 turnStarted handler 只看 turnStartFailedWithoutTurnId ——
+      // 迟到的 started 会把这个"已判定不许运行"的 turn 激活, 工具在 Stop 之后继续跑
+      // (review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) return firstStart.promise;
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-late-started-after-stop',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const sending = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnStarted) throw new Error('expected handlers');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // Stop 之后、响应之前才到的 turnStarted。
+        handlers.turnStarted({ turn: { id: 'turn-late' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        expect(handle.isTurnRunning?.()).toBe(false);
+
+        firstStart.reject(new Error('turn/start timed out'));
+        await sending.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        // 会话不得被这条迟到的 started 拉回 running。
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        expect(handle.isTurnRunning?.()).toBe(false);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not let a stopped send kill the next send active turn on failure cleanup', async () => {
+      // Stop 放行了下一轮 send, 它已经激活自己的 turn; 旧 send 的 RPC 随后 reject 时,
+      // 失败清理若无条件把 currentTurnId 当自己的孤儿收掉, 就会墓碑 + interrupt 一个
+      // **合法在跑**的新 turn(review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-stale-cleanup-scope',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const firstSend = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 下一轮 send 接管会话并激活自己的 turn。
+        await handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+
+        // 旧 send 的 RPC 现在才失败 —— 不得动新 turn。
+        firstStart.reject(new Error('turn/start timed out'));
+        await firstSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+        expect(
+          host.request.mock.calls.some(
+            ([method, params]) =>
+              method === Method.TurnInterrupt &&
+              (params as { turnId?: string }).turnId === 'turn-2',
+          ),
+        ).toBe(false);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('ignores an unattributable id-less capacity error instead of settling the new send', async () => {
+      // 无法归属时"不接管"还不够: 若让它照常走终态, 就是拿别人的错误把当前这一轮判死, 而
+      // 那一轮的响应随后照样被激活 —— UI 已收口、工具还在跑(review #844 codex P1)。
+      // 安全做法是当 stale 丢掉: 真属于某个 turn 的话, server 会为那个 turn 发权威的
+      // turn/completed(failed)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        const secondStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            if (turnStarts === 2) return secondStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-ignore-unattributable',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const firstSend = handle.send({ type: 'user', content: 'first' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        // 第一轮: 空 id 容量拒绝(此时只有它在飞, 归属唯一)+ Stop。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        const secondSend = handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        // 两个 start 在飞时再来一条空 id 容量拒绝 → 无法归属 → 必须整条忽略。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(events.slice(before).filter((e) => e.type === 'error')).toHaveLength(0);
+
+        // 新一轮照常活下来。
+        secondStart.resolve({ turn: { id: 'turn-second' } });
+        await secondSend;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-second');
+
+        firstStart.reject(new Error('turn/start timed out'));
+        await firstSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-second');
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not drop the next send deferred failure when the stopped send settles', async () => {
+      // 被取消的旧 send 的 finally 会把**当前**(属于新 send 的)重投状态传给补排函数。
+      // 补排此前一进函数就清掉延后标记, 任一 early return 都会把新 send 的延后失败丢掉
+      // (review #844 greptile P1)。
+      //
+      // 如实标注: 这条用例在修复前后**都通过** —— 可达的那条路(还有 start 在飞)在上一轮
+      // 已经加了"把标记放回去"的补救, 所以它拦不住本轮这个更根本的形状问题。留着是当不变量
+      // 锁("新一轮的重投必须照常发生"), 不作为本轮修复的证据。本轮的修法是把"没真正接手
+      // 就不清标记"变成结构性保证, 而不是逐个 early return 打补丁。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-keep-next-deferred',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const firstSend = handle.send({ type: 'user', content: 'first' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 新一轮接管并激活自己的 turn, 然后它自己的 turn 被容量拒绝 → 因旧 RPC 仍在飞
+        // 而只被记账(延后)。
+        await handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-2',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 旧 RPC 现在才失败: 它的 finally 不得把新一轮的延后失败丢掉。
+        firstStart.reject(new Error('turn/start timed out'));
+        await firstSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        // 新一轮的重投照常发生。
+        expect(turnStarts).toBe(3);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps the next send buffered turn alive when the stopped start finally rejects', async () => {
+      // Stop 会武装孤儿守卫, 于是下一轮 send 的 turnStarted 也先进**会话级共享**的缓冲集
+      // 等对账。被 Stop 的旧 turn/start 随后失败时, 隔离流程曾无条件把整个缓冲集坐实成
+      // 孤儿(墓碑 + interrupt + 清空) —— 连新一轮那条合法的 started 一起清掉, 它的
+      // turn/start 响应因此拒绝激活, 那一轮既没有活跃 turn 也没有终态, 永久卡 generating。
+      // ownsSession 守卫拦不住这条: 它只护 currentTurnId(review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        const secondStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            if (turnStarts === 2) return secondStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-keep-buffered-turn',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const firstSend = handle.send({ type: 'user', content: 'first' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnStarted) throw new Error('expected handlers');
+        // 第一轮: 空 id 容量拒绝 → 挂起重投; Stop → 武装孤儿守卫(旧 RPC 仍在飞)。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 第二轮放行, 它的 turnStarted 先于自己的响应到达 → 归属不明 → 进缓冲。
+        const secondSend = handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+        handlers.turnStarted({ turn: { id: 'turn-second' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.() ?? null).toBeNull(); // 仍在缓冲, 尚未激活
+
+        // 旧 RPC 现在才失败: 它的隔离不得动新一轮那条缓冲中的 started。
+        firstStart.reject(new Error('turn/start timed out'));
+        await firstSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 新一轮的响应回来 → 对账放行 → 正常激活。
+        secondStart.resolve({ turn: { id: 'turn-second' } });
+        await secondSend;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-second');
+        expect(handle.isTurnRunning?.()).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('ignores a late id-less capacity error while a foreign start is still pending', async () => {
+      // Stop 留下的旧 turn/start 仍在飞, 新一轮已经激活了自己的 turn。这时旧请求那边迟到的
+      // **空 id** 容量拒绝会因为"有 turn 在跑"被认在活跃 turn 头上, scheduleOverloadRetry
+      // 于是拿 currentTurnId 当死 turn: 一个正常在跑的 turn 被落墓碑、它的输入被重放, 而
+      // server 侧那个 turn 还在跑 —— 副作用执行两遍(review #844 codex P1)。
+      // 既有的 inFlightStarts.size > 1 守卫拦不住: deadTurnId 走了 currentTurnId 兜底、非空,
+      // 且登记表里只剩那一个陌生 start。判据改成"活跃 turn 的归属方之外还有 start 在飞"。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-foreign-pending-start',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const firstSend = handle.send({ type: 'user', content: 'first' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 新一轮的 start 立即回包 → 它的 turn 正常激活(登记表里此后只剩被 Stop 那个旧 start)。
+        await handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        // 旧请求那边迟到的空 id 容量拒绝: 无法归属 → 整条忽略, 不得动新一轮的 turn。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+        // 没有重投(不得重放新一轮的输入), 也没有把这一轮判死。
+        expect(turnStarts).toBe(2);
+        expect(events.slice(before)).toHaveLength(0);
+
+        firstStart.reject(new Error('turn/start timed out'));
+        await firstSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not let a stopped orphan turn buffered output block the next send retry', async () => {
+      // 产出标记曾是**会话级标量**: 被 Stop 的旧 start 带着缓冲事件回包时(那要按"有产出"
+      // 处理, 因为 daemon 那边命令早跑了), 标量写的是当前这一轮的账 —— 而新一轮的
+      // turnStarted 进过缓冲, 不会把它清掉, 于是新消息一次本来安全的零产出容量重投被误判
+      // 成"有产出, 不重投", 自动重试静默失效(review #844 codex P1)。改为按 turn id 记账。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        const secondStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            if (turnStarts === 2) return secondStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-orphan-output',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const firstSend = handle.send({ type: 'user', content: 'first' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnStarted || !handlers.itemStarted) {
+          throw new Error('expected handlers');
+        }
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        const secondSend = handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+        // 新一轮的 started 归属不明 → 进缓冲。
+        handlers.turnStarted({ turn: { id: 'turn-b' } });
+        // 被 Stop 那个 turn 在 server 上真的跑过命令, 事件同样先进缓冲(id 我们还不知道)。
+        handlers.itemStarted({
+          turnId: 'turn-stopped',
+          item: { id: 'item-1', type: 'commandExecution', command: 'rm -rf build' },
+        } as never);
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 旧 RPC 回包 → 认领这具尸体, 它有缓冲事件 → 按"有产出"记账(记在 turn-stopped 上)。
+        firstStart.resolve({ turn: { id: 'turn-stopped' } });
+        await firstSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 新一轮激活自己的 turn。
+        secondStart.resolve({ turn: { id: 'turn-b' } });
+        await secondSend;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-b');
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        // 基线: 队列里已有被 Stop 那一轮的终态事件, 只看这条容量错误之后新增的。
+        const before = events.length;
+
+        // 新一轮自己零产出撞容量 → 必须照常自动重投(不得被孤儿的账拖累)。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-b',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStarts).toBe(3);
+        const added = events.slice(before);
+        expect(added.filter((e) => e.type === 'error' && e.data.isTerminal)).toHaveLength(0);
+        // 透出的是非终止的重试进度横幅。
+        expect(added.filter((e) => e.type === 'error' && !e.data.isTerminal).length).toBeGreaterThan(0);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps the next send buffered turn alive when the stopped start finally resolves', async () => {
+      // 与"旧 start 最终 reject"同源的另一半: 被 Stop 的旧 turn/start 若是**resolve**回来,
+      // 它照样走 handleTurnStartResp 的对账循环 —— 循环把"不是我的 id"一律坐实成孤儿, 于是
+      // 把下一轮 send 那条合法的缓冲 started 落墓碑 + interrupt, 它自己的响应随后拒绝激活,
+      // 那一轮永久卡 generating(review #844 codex P1)。
+      // 判据统一为"没有别的 start 在飞时才算权威对账者"。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        const secondStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            if (turnStarts === 2) return secondStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-stopped-start-resolves',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const firstSend = handle.send({ type: 'user', content: 'first' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnStarted) throw new Error('expected handlers');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        const secondSend = handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+        handlers.turnStarted({ turn: { id: 'turn-second' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.() ?? null).toBeNull();
+
+        // 旧 RPC 现在才**成功**回包(server 早就接受了它, 只是响应慢)。它带回的是自己的
+        // turn id, 不得据此把新一轮那条缓冲 started 判成孤儿。
+        firstStart.resolve({ turn: { id: 'turn-stopped' } });
+        await firstSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        // 被 Stop 的那个 turn 自己照旧不许活。
+        expect(handle.getCurrentTurnId?.() ?? null).not.toBe('turn-stopped');
+
+        secondStart.resolve({ turn: { id: 'turn-second' } });
+        await secondSend;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-second');
+        expect(handle.isTurnRunning?.()).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not treat buffered control events as produced output when adopting a dead turn', async () => {
+      // 认领"空 id 容量拒绝"指向的死 turn 时, 判"它有没有产出"曾用**队列非空**当证据。
+      // 但队列里 turn/completed、userMessage echo、tokenUsage 都算一条 —— 一次真正零产出的
+      // 容量拒绝于是被误判成"已有产出, 不重投", 对用户报硬失败, 而那一轮什么副作用都没发生
+      // (review #844 codex P1)。判据要与非缓冲路径一致, 走 itemRepresentsModelWork。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-buffered-control-events',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const send = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.itemStarted) throw new Error('expected handlers');
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 空 id 容量拒绝落在 turn/start 还在飞的窗口里 → 记账延后 + 隔离这次 start。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(1);
+
+        // 随后到达的只是 SDK 的 userMessage echo(不是模型产出), 归属未定 → 进缓冲。
+        handlers.itemStarted({
+          turnId: 'turn-1',
+          item: { id: 'item-echo', type: 'userMessage', text: 'hello' },
+        } as never);
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 响应回来 → 认领这具尸体。缓冲里只有 echo, 不算产出 → 补排照常重投。
+        firstStart.resolve({ turn: { id: 'turn-1' } });
+        await send.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(40_000);
+
+        expect(turnStarts).toBe(2);
+        expect(events.filter((e) => e.type === 'error' && e.data.isTerminal)).toHaveLength(0);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('ignores an id-less capacity error once the active turn is past admission', async () => {
+      // 空 turnId 这个形状的含义是"server 还没能告诉你是哪个 turn"——即容量在 admission 阶段
+      // 被拒。活跃 turn 的 turn/start 若已回包, 它早过了 admission, 之后真为它发的容量错误
+      // 一定带得上 turnId。所以此时的空 id 通知只可能来自别处(典型: 被 Stop 的旧 send, 它的
+      // turn id 我们从没学到), 认在活跃 turn 头上就会把一个正常在跑的 turn 落墓碑并重放它的
+      // 输入(review #844 codex/greptile P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-idless-after-admission',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+        expect(turnStartCount(host)).toBe(1);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-1'); // 已回包 = 过了 admission
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        // 迟到的空 id 容量拒绝(来自别处)→ 必须整条忽略。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(40_000);
+
+        // 活跃 turn 照常活着; 既不重投也不收口。
+        expect(handle.getCurrentTurnId?.()).toBe('turn-1');
+        expect(handle.isTurnRunning?.()).toBe(true);
+        expect(turnStartCount(host)).toBe(1);
+        expect(events.slice(before)).toHaveLength(0);
+
+        // 带 turnId 的容量拒绝仍照常接管(没有把正常路径一起收紧)。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStartCount(host)).toBe(2);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('quarantines the pending start when declining a capacity failure for a cancelled send', async () => {
+      // "已取消 → 不接管"不等于什么都不用做: 在飞的 start 必须一起隔离。这条错误随后走终态
+      // 路径, 而在飞那次 RPC 若 resolve, 取消边界会在 quarantineTurnsAfterStartFailure 之前
+      // 就把异常抛出去 —— 迟到的 turnStarted 于是既没有隔离也没有墓碑, 会把这个已被取消的
+      // turn 激活并执行工具(review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const interrupted: string[] = [];
+        const host = installFakeHost(agent, (method, params) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) {
+            interrupted.push((params as { turnId?: string })?.turnId ?? '');
+            return {};
+          }
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-cancelled-quarantine',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const controller = new AbortController();
+        const send = handle.send(
+          { type: 'user', content: 'hello' },
+          { signal: controller.signal },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(1);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnStarted) throw new Error('expected handlers');
+        controller.abort();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 空 id 容量拒绝 → 因已取消而不接管, 但必须顺手隔离在飞的 start。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 响应回来: 隔离生效 → 落墓碑 + 补 interrupt, 不得激活。
+        firstStart.resolve({ turn: { id: 'turn-1' } });
+        await send.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(interrupted).toContain('turn-1');
+        expect(handle.getCurrentTurnId?.() ?? null).toBeNull();
+
+        // 迟到的 turnStarted 同样不得把它激活。
+        handlers.turnStarted({ turn: { id: 'turn-1' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.() ?? null).toBeNull();
+        expect(handle.isTurnRunning?.()).toBe(false);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not settle twice when the cancelled send pending start finally rejects', async () => {
+      // 上一条只覆盖了"在飞 RPC 最终 resolve"那条尾巴。**reject** 那条尾巴还需要一份收口记账:
+      // 取消分支已经把这条错误以终态形式发出去了, 若不同时记 terminalSettled, finalErr 分支
+      // 看到 initialStartSettledByCancel 为 false 会再推一组 terminal error + Done —— 同一轮
+      // 收口两次, 而事件不带 send 世代, 期间若已有新一轮 send, 这份过期收口会落到它头上
+      // (review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-cancelled-reject-tail',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const controller = new AbortController();
+        const send = handle.send(
+          { type: 'user', content: 'hello' },
+          { signal: controller.signal },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(1);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        controller.abort();
+        await vi.advanceTimersByTimeAsync(0);
+        // 空 id 容量拒绝 → 已取消, 不接管 → 这条错误自己以终态发出(恰好一条)。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        const afterCapacity = events.slice(before).filter(
+          (e) => e.type === 'error' && e.data?.isTerminal === true,
+        );
+        expect(afterCapacity).toHaveLength(1);
+
+        // 在飞的 RPC 最终 reject: 不得再推第二组终态。
+        firstStart.reject(new Error('turn/start timed out'));
+        await send.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        const terminals = events.slice(before).filter(
+          (e) => e.type === 'error' && e.data?.isTerminal === true,
+        );
+        expect(terminals).toHaveLength(1);
+        expect(handle.isTurnRunning?.()).toBe(false);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('settles a deferred capacity failure when the signal aborted before it was recorded', async () => {
+      // signal 在"初始 turn/start 还在飞、容量通知尚未到达"时 abort: 那个 {once} 监听器因为
+      // 当时无事可做而被消费掉。随后到达的空 id 容量拒绝若照样建出 deferredCapacityFailure,
+      // 补排会在 isCancelled() 上静默退出 —— 标记留着, overloadRetryPending() 恒真,
+      // isTurnRunning() 永远为真, 上层派发闩不释放(review #844 codex P1)。
+      //
+      // **如实标注: 这条用例修复前后都通过**, 不构成修复证据。本文件构造的这个序列里,
+      // 第二十六轮加的 `!rpcSettledOk → 清标记` 分支恰好先一步兜住了(取消边界抛出 ⇒
+      // initialStartSettledOk 为 false)。要真正走到 isCancelled() 那条路, 需要标记属于
+      // **另一轮**仍活着的 send(那时 rpcSettledOk 被传 true), 而那个组合在本轮另一条修复
+      // (空 id 容量拒绝不得算在已过 admission 的活跃 turn 头上)之后不再可达。
+      // 留着是当不变量锁: 已取消的 send 必须回到 idle 且不得被重投。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-abort-before-defer',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const controller = new AbortController();
+        const send = handle.send(
+          { type: 'user', content: 'hello' },
+          { signal: controller.signal },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(1);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        // 先 abort: 此刻既没有计时器也没有延后标记, 监听器无事可做并被消费。
+        controller.abort();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 再来空 id 容量拒绝。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 响应随后回来(取消边界会抛)。
+        firstStart.resolve({ turn: { id: 'turn-1' } });
+        await send.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(40_000);
+
+        // 会话必须回到 idle: 不得因为一条留着的延后标记而永远"忙"。
+        expect(handle.isTurnRunning?.()).toBe(false);
+        // 也不得替这条已取消的 send 重投。
+        expect(turnStarts).toBe(1);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('interrupts an idle orphan turn even when an item arrives before its late turnStarted', async () => {
+      // 取消隔离了挂起重投 → 它的 RPC 随后失败 → server 其实已经建了 turn。此时若 item/started
+      // 之类的事件**先于**迟到的 turnStarted 到达: stale 闸的 idle 孤儿路径只落墓碑, 而
+      // turnStarted 的孤儿分支显式跳过已落墓碑的 id —— 两边各自以为对方会发 interrupt, 谁都
+      // 没发, 被 server 接受的那个 turn 在 Stop 已终态收口 UI 之后继续执行工具
+      // (review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const interrupted: string[] = [];
+        const host = installFakeHost(agent, (method, params) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return { turn: { id: 'turn-1' } };
+            if (turnStarts === 2) return retryStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) {
+            interrupted.push((params as { turnId?: string })?.turnId ?? '');
+            return {};
+          }
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-idle-orphan-interrupt',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+        expect(turnStarts).toBe(1);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.itemStarted || !handlers.turnStarted) {
+          throw new Error('expected handlers');
+        }
+        // 容量拒绝 → 退避到点 → 重投 RPC 在飞。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStarts).toBe(2);
+
+        // Stop: 隔离在飞的重投 start 并推终态。
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+        // 重投 RPC 随后失败 —— 但 server 其实已经建了 turn-retry。
+        retryStart.reject(new Error('turn/start timed out'));
+        await vi.advanceTimersByTimeAsync(0);
+        interrupted.length = 0;
+
+        // 它的 item 先到(turnStarted 还在路上)。
+        handlers.itemStarted({
+          turnId: 'turn-retry',
+          item: { id: 'item-1', type: 'commandExecution', command: 'rm -rf build' },
+        } as never);
+        await vi.advanceTimersByTimeAsync(0);
+        // 必须当场 interrupt, 不能等 turnStarted(它会因为已落墓碑而跳过)。
+        expect(interrupted).toContain('turn-retry');
+
+        // 迟到的 turnStarted 不得把它激活, 也不重复发 interrupt。
+        const afterEvent = interrupted.length;
+        handlers.turnStarted({ turn: { id: 'turn-retry' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.() ?? null).toBeNull();
+        expect(interrupted).toHaveLength(afterEvent);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps the foreign-terminal guard when the retry already activated its turn', async () => {
+      // 上一条守的是"退避中(无活跃 turn)"那个时序。归属校验若还要求 currentTurnId === null,
+      // 则"重投 RPC 在飞 + 它的 turnStarted 已先到"这种状态(活跃 turn 存在、重投仍挂着)整段
+      // 绕过校验 —— 陌生 turn 的迟到终态照样撤销这一轮的重投并把它报成失败, 而它的 turn
+      // 还在跑(review #844 greptile P1)。所以判据只看归属, 不看有没有活跃 turn。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return { turn: { id: 'turn-1' } };
+            if (turnStarts === 2) return retryStart.promise; // 重投的 RPC 挂住 → inFlight
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-foreign-vs-active-turn',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+        expect(turnStarts).toBe(1);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnStarted || !handlers.turnCompleted) {
+          throw new Error('expected handlers');
+        }
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 容量拒绝 → 排退避 → 到点发出重投, 它的 RPC 挂住(inFlight)。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStarts).toBe(2);
+
+        // 重投的 turnStarted 先于它的响应到达 → 活跃 turn 存在, 而重投仍算挂着。
+        handlers.turnStarted({ turn: { id: 'turn-retry' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-retry');
+        const before = events.length;
+
+        // 陌生 turn 的迟到失败终态: 既不许替本轮收口, 也不许撤销本轮的重投。
+        handlers.turnCompleted({
+          threadId: 'start-thread-id',
+          turn: { id: 'turn-foreign', status: 'failed', error: { message: 'boom' } },
+        } as never);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(events.slice(before).filter((e) => e.type === 'done')).toHaveLength(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-retry');
+        expect(handle.isTurnRunning?.()).toBe(true);
+
+        // 重投的响应随后正常回来, 这一轮照常继续。
+        retryStart.resolve({ turn: { id: 'turn-retry' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-retry');
+        expect(handle.isTurnRunning?.()).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not let a foreign late turn/completed settle or cancel a pending retry', async () => {
+      // 两条不变量在同一个窗口里打架, 这里钉住正确的那一条。
+      //
+      // 第二十七轮先立了"收口即撤销重投资格"(否则 UI 已报失败、原消息还在背后重投 =
+      // 重复副作用)。但 handleTurnCompleted 在 currentTurnId 为 null 时会把**任何** turn 的
+      // 终态当成"收口当前这一轮"(既有行为), 而退避窗口恰好就是这个状态 —— 于是被 Stop 的
+      // 旧 turn 的迟到 completed 既把新一轮报成失败, 又顺手撤销了它的重投, 那一轮白白丢掉
+      // 自动重试(review #844 greptile P1)。
+      //
+      // 正确的处理是在**收口之前**校验归属: 不属于挂着重投的那一轮 send 的 turn, 既不许
+      // 出 UI 也不许撤销。所以本用例的断言与第二十七轮相反 —— 那时它期待"收口 + 撤销",
+      // 现在期待"两件都不做, 重投照常发生"。收口侧的撤销本身仍在(error 通知的终态分支和
+      // 归属相符的 completed 都会走), 只是不再让陌生 turn 触发它。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-foreign-completed',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+        expect(turnStartCount(host)).toBe(1);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnCompleted) throw new Error('expected handlers');
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 容量拒绝 → 排上退避计时器(还没到点)。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStartCount(host)).toBe(1);
+        expect(handle.isTurnRunning?.()).toBe(true);
+
+        // 退避途中, 一个不属于本轮 send 的 turn(我们从未见过它的 id)报出失败终态。
+        handlers.turnCompleted({
+          threadId: 'start-thread-id',
+          turn: { id: 'turn-foreign', status: 'failed', error: { message: 'boom' } },
+        } as never);
+        await vi.advanceTimersByTimeAsync(0);
+        // 不得替本轮收口。
+        expect(events.filter((e) => e.type === 'done')).toHaveLength(0);
+        expect(handle.isTurnRunning?.()).toBe(true);
+
+        // 也不得撤销本轮的重投 —— 到点照常重投。
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStartCount(host)).toBe(2);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps the stopped start quarantined and lets the new turn live when an id-less failure is unattributable', async () => {
+      // Stop 之后旧 RPC 仍在飞, 新 send 又被放行, 此时又来一条**空 id** 容量拒绝 ——
+      // 它既不带 turnId 也不带请求关联, 无法归属。两条不变量:
+      //  1. 被 Stop 的旧 start 必须**保持**隔离(不得被这条新错误的记账覆盖掉);
+      //  2. 不猜它属于谁 —— 猜错就会把已经在 server 上跑过工具的新 turn 落墓碑并重放,
+      //     副作用执行两遍。所以这一条不接管, 新 turn 照常活着。
+      // (两条都是 review #844 codex P1; 第 2 条推翻了本用例最初"两个都隔离"的写法。)
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        const secondStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            if (turnStarts === 2) return secondStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-two-quarantines',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const firstSend = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        // 第一次: 空 id 容量拒绝 + Stop → 旧 start 被隔离。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 新 send 被放行(Stop 让会话 idle), 旧 RPC 仍在飞。
+        const secondSend = handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+
+        // 又来一条空 id 容量拒绝: 两个 start 在飞 → 无法归属 → 不接管。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        firstStart.resolve({ turn: { id: 'turn-stopped' } });
+        secondStart.resolve({ turn: { id: 'turn-second' } });
+        await firstSend.catch(() => undefined);
+        await secondSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 旧的(被 Stop 那次)仍然被隔离: 不激活 + interrupt。
+        expect(
+          host.request.mock.calls.some(
+            ([method, params]) =>
+              method === Method.TurnInterrupt &&
+              (params as { turnId?: string }).turnId === 'turn-stopped',
+          ),
+        ).toBe(true);
+        // 新的活下来, 且没有被误 interrupt —— 不猜归属的收益就在这里。
+        expect(handle.getCurrentTurnId?.()).toBe('turn-second');
+        expect(
+          host.request.mock.calls.some(
+            ([method, params]) =>
+              method === Method.TurnInterrupt &&
+              (params as { turnId?: string }).turnId === 'turn-second',
+          ),
+        ).toBe(false);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps the stopped turn quarantined even after a new message is sent', async () => {
+      // Stop 之后旧 RPC 仍在飞, 而 Stop 让 handle 变 idle —— 用户可以马上发下一条消息,
+      // 于是两个 start 同时在飞。隔离若是个布尔标记: 新 send 的重置会把它清掉(放过已停止
+      // 的旧 turn), 或者谁先回谁消费(可能误杀新 turn)。按请求序号绑定后两者都不会发生
+      // (review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-quarantine-survives-new-send',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const firstSend = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        // 空 id 容量拒绝（初始 RPC 仍在飞）→ 延后 + 武装隔离。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 响应还没回来就 Stop。
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.isTurnRunning?.()).toBe(false);
+
+        // Stop 让会话变 idle → 用户马上发下一条消息(此时旧 RPC 仍在飞)。
+        await handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+        // 新 turn 必须正常激活, 不能被上一轮的隔离误杀。
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+
+        // 现在旧 RPC 才回来: 那个被 Stop 的 turn 必须落墓碑 + interrupt, 不得激活,
+        // 也不得把新 turn 顶掉。
+        firstStart.resolve({ turn: { id: 'turn-stale' } });
+        await firstSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+        expect(
+          host.request.mock.calls.some(
+            ([method, params]) =>
+              method === Method.TurnInterrupt &&
+              (params as { turnId?: string }).turnId === 'turn-stale',
+          ),
+        ).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('drops the pending-start quarantine when that turn/start fails', async () => {
+      // 隔离标记是针对**某一次在途 turn/start 响应**的。那次请求失败后标记若留着, 下一条
+      // 用户消息的成功响应会被它当成"该落墓碑的 turn"消费掉: 既不激活也不收口, 新消息
+      // 直接悬空(review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-quarantine-cleared-on-failure',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const firstSend = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        // 空 id 容量拒绝（初始 RPC 仍在飞）→ 武装隔离标记。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 这次 RPC 自己失败：不会再有响应走到认领逻辑，标记必须一起解除。
+        firstStart.reject(new Error('turn/start timed out'));
+        await firstSend.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.isTurnRunning?.()).toBe(false);
+
+        // 下一条消息必须正常激活，不能被上一轮的隔离标记吞掉。
+        await handle.send({ type: 'user', content: 'second' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(2);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+        expect(handle.isTurnRunning?.()).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('quarantines the pending initial turn when Stop lands during a deferred failure', async () => {
+      // Stop 会 discardOverloadRetry 把重投状态整个置空。隔离标记若挂在那个状态里就会
+      // 跟着消失, 于是随后回来的 turn/start 响应不再被认领成死 turn, handleTurnStartResp
+      // 照常激活它 —— 用户已经收到「已停止」的终态, 工具却还在跑
+      // (review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-stop-during-deferral',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const sending = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        // 空 id 容量拒绝（初始 RPC 仍在飞）→ 只延后。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        // 响应与 turnStarted 都还没到就按 Stop。
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(
+          events.slice(before).filter((e) => e.type === 'error' && e.data?.isTerminal === true),
+        ).toHaveLength(1);
+
+        // 响应现在才回来：不得激活，且要 best-effort interrupt 把它停掉。
+        firstStart.resolve({ turn: { id: 'turn-1' } });
+        await sending.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        expect(handle.isTurnRunning?.()).toBe(false);
+        expect(
+          host.request.mock.calls.some(
+            ([method, params]) =>
+              method === Method.TurnInterrupt &&
+              (params as { turnId?: string }).turnId === 'turn-1',
+          ),
+        ).toBe(true);
+
+        // Stop 之后也不得再补排重投。
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStarts).toBe(1);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('stays busy and settles on cancel while a capacity failure is only deferred', async () => {
+      // "失败已延后、等在途 turn/start settle 后补排"这个状态既没有计时器也没有
+      // inFlight。两处后果: Session.send() 会把会话当 idle 接受第二条消息并丢掉第一条
+      // 的重投状态(而它的原始 RPC 还在飞); signal 取消也会被当成"没什么要收口的"直接
+      // 返回, 派发闩永久不释放(review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-deferred-busy',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const controller = new AbortController();
+        const sending = handle.send({ type: 'user', content: 'hello' }, { signal: controller.signal });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 延后态也必须算忙 —— 否则并发 send 会把这一轮挤掉。
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        expect(handle.isTurnRunning?.()).toBe(true);
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        // 延后态里取消 → 必须立刻收口, 不能等谁来补排。
+        controller.abort();
+        await vi.advanceTimersByTimeAsync(0);
+        const after = events.slice(before);
+        expect(after.filter((e) => e.type === 'error' && e.data?.isTerminal === true)).toHaveLength(1);
+        expect(after.some((e) => e.type === 'status' && e.data?.isRunning === false)).toBe(true);
+        expect(handle.isTurnRunning?.()).toBe(false);
+
+        // 取消之后不得再补排。
+        firstStart.resolve({ turn: { id: 'turn-1' } });
+        await sending.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStarts).toBe(1);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('interrupts a turn the retry already activated when the signal aborts', async () => {
+      // 计时器已消费、inFlight 已清、重投的 turn 已激活 —— 此时 abort 若直接 return,
+      // 取消既不落墓碑也不 interrupt, 那个 turn 会继续执行命令与文件改动
+      // (review #844 greptile P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-abort-after-retry-active',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const controller = new AbortController();
+        await handle.send({ type: 'user', content: 'hello' }, { signal: controller.signal });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        // 退避到点 → 重投成功并激活 turn-2（inFlight 已清、计时器已消费）。
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStartCount(host)).toBe(2);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+
+        controller.abort();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        expect(handle.isTurnRunning?.()).toBe(false);
+        expect(
+          host.request.mock.calls.some(
+            ([method, params]) =>
+              method === Method.TurnInterrupt &&
+              (params as { turnId?: string }).turnId === 'turn-2',
+          ),
+        ).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps a deferred retry under a tightening that lands before the initial response', async () => {
+      // 失败在初始 turn/start 还在飞时被延后 → 那个状态既没计时器也没 inFlight。此时
+      // 收紧权限, 延迟中断标记会先被原始 turn 的响应消费掉, 补排出去的重投带着冻结的
+      // 宽松策略、且没有任何东西能拦它 —— 工具在权限已被撤销后执行
+      // (review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-deferred-tighten',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+          permissionMode: 'bypassPermissions',
+        });
+        const sending = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        // 空 id 容量拒绝（初始 RPC 仍在飞）→ 只延后，不排计时器。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 用户在这个窗口里收紧到 Ask（Full access → Ask）。
+        await handle.setPermissionMode?.('ask');
+
+        // 初始响应回来：它会消费掉延迟中断标记，随后补排重投。
+        firstStart.resolve({ turn: { id: 'turn-1' } });
+        await sending;
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(turnStarts).toBe(2);
+
+        // 重投带的是冻结的 Full access → 必须被补中断，不能让它继续跑工具。
+        expect(
+          host.request.mock.calls.some(
+            ([method, params]) =>
+              method === Method.TurnInterrupt &&
+              (params as { turnId?: string }).turnId === 'turn-2',
+          ),
+        ).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('clears an adopted dead turn that turnStarted had already activated', async () => {
+      // 空 id 容量拒绝 → turnStarted(带出真实 id) → turn/start 响应 的顺序下, 认领只落
+      // 墓碑、不清活跃态的话: 补排会因为"看起来还有 turn 在跑"而放弃(且清掉延后标记),
+      // 而那个 turn 的 turn/completed 又被墓碑压掉 —— 逻辑 send 永久悬空
+      // (review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-adopt-clears-active',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const sending = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        if (!handlers.turnStarted || !handlers.turnCompleted) throw new Error('expected handlers');
+
+        // 空 id 容量拒绝（初始 RPC 仍在飞）。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 随后 turnStarted 带出真实 id。隔离已武装通知级孤儿守卫, 所以这条 started 会被
+        // **缓冲**而不是直接激活 —— 这个 turn 早已被判定不许运行, 不该先激活再收拾
+        // (第二十三轮把 quarantine 与孤儿守卫接上后的行为; 之前是先激活再由响应清理)。
+        handlers.turnStarted({ turn: { id: 'turn-1' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+
+        // 响应回来 → 认领 turn-1 为死 turn, 活跃态必须仍是空。
+        firstStart.resolve({ turn: { id: 'turn-1' } });
+        await sending;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+
+        // 补排必须发生（不能既不重投也不收口）。
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(turnStarts).toBe(2);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('interrupts an already-started retry turn when only the send signal aborts', async () => {
+      // 重投的 turnStarted 可能先于它的响应到达, 那时 currentTurnId 指着一个真实在跑的
+      // server turn。只推终态事件、不动它, 那个 turn 会在调用方已按"已取消"处理之后
+      // 继续执行工具(review #844 codex P1)。与 handle.abort() 同款处理。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return { turn: { id: 'turn-1' } };
+            if (turnStarts === 2) return retryStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-signal-abort-active-turn',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const controller = new AbortController();
+        await handle.send({ type: 'user', content: 'hello' }, { signal: controller.signal });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        if (!handlers.turnStarted) throw new Error('expected turnStarted handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2);
+
+        // 重投的 started 先于响应到达 → 有一个真实在跑的 turn。
+        handlers.turnStarted({ turn: { id: 'turn-2' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+
+        // 只 abort signal（coordinator 撤单），不走 handle.abort()。
+        controller.abort();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 活跃 turn 必须被收掉并 interrupt，不能留着继续跑工具。
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        expect(handle.isTurnRunning?.()).toBe(false);
+        expect(
+          host.request.mock.calls.some(
+            ([method, params]) =>
+              method === Method.TurnInterrupt &&
+              (params as { turnId?: string }).turnId === 'turn-2',
+          ),
+        ).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('quarantines a turn the server may have accepted when the retry RPC rejects', async () => {
+      // 重投 RPC 失败不代表 server 没建 turn。不做孤儿隔离时: 先于 reject 到达的
+      // turnStarted 会让 isTurnRunning() 在 UI 收口后永真(下一条 send 被并发守卫挡死),
+      // 晚到的那种则会把一个没人消费的 turn 激活并执行工具(review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return { turn: { id: 'turn-1' } };
+            if (turnStarts === 2) return retryStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-retry-reject-quarantine',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        if (!handlers.turnStarted) throw new Error('expected turnStarted handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2);
+
+        // started 先于 reject 到达：server 确实建了 turn。
+        handlers.turnStarted({ turn: { id: 'turn-2' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+
+        retryStart.reject(new Error('turn/start timed out'));
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 活跃 turn 必须被收掉 + interrupt，会话不能永远 busy。
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        expect(handle.isTurnRunning?.()).toBe(false);
+        expect(
+          host.request.mock.calls.some(
+            ([method, params]) =>
+              method === Method.TurnInterrupt &&
+              (params as { turnId?: string }).turnId === 'turn-2',
+          ),
+        ).toBe(true);
+
+        // 孤儿守卫已武装：更晚到的 started 不得把会话拉回 running。
+        handlers.turnStarted({ turn: { id: 'turn-late' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('settles the logical turn when Stop races with the retry turnStarted', async () => {
+      // 重投的 turnStarted 先于它的响应到达时 currentTurnId 非空, 普通 Stop 会把收口
+      // 交给 turn/completed —— 但随后到达的重投响应会把同一个 id 落墓碑, 那条完成事件
+      // 因此被压掉, 派发闩永远不释放(review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return { turn: { id: 'turn-1' } };
+            if (turnStarts === 2) return retryStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-stop-races-started',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        if (!handlers.turnStarted || !handlers.turnCompleted) throw new Error('expected handlers');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2);
+
+        handlers.turnStarted({ turn: { id: 'turn-2' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        // 用户点 Stop（此时 currentTurnId 非空）。
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+
+        const after = events.slice(before);
+        expect(
+          after.filter((e) => e.type === 'error' && e.data?.isTerminal === true),
+        ).toHaveLength(1);
+        expect(after.some((e) => e.type === 'status' && e.data?.isRunning === false)).toBe(true);
+        expect(handle.isTurnRunning?.()).toBe(false);
+
+        // 随后到达的重投响应 + turn/completed 都不得再收口一次。
+        retryStart.resolve({ turn: { id: 'turn-2' } });
+        handlers.turnCompleted({
+          threadId: 'start-thread-id',
+          turn: { id: 'turn-2', status: 'interrupted' },
+        } as never);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(
+          events.slice(before).filter((e) => e.type === 'error' && e.data?.isTerminal === true),
+        ).toHaveLength(1);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not count the SDK userMessage echo as produced output', async () => {
+      // app-server 会在 turn 开头把用户输入 echo 成一个 userMessage item(translator 明确
+      // 不消费它)。把它算进产出, 产出守卫会在**正常事件序**下立刻生效 —— 自动重投整体
+      // 失效(review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-usermessage-echo',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        if (!handlers.itemCompleted) throw new Error('expected itemCompleted handler');
+        // 只有用户输入的回声, 模型一个字都没出。
+        handlers.itemCompleted({
+          turnId: 'turn-1',
+          item: { id: 'item-echo', type: 'userMessage', text: 'hello' },
+        } as never);
+        await vi.advanceTimersByTimeAsync(0);
+
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+
+        // 重投必须照常发生。
+        expect(turnStartCount(host)).toBe(2);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('waits for the initial turn/start to settle before firing the retry', async () => {
+      // 首档退避只有 1.5-2.5s。初始 RPC 慢一点, 计时器就会在它还在飞时抢跑出第二个
+      // turn/start —— 两个 start 同时在飞时谁的响应先到就会被认领成那条空 id 失败的
+      // turn, 把合法的那个落墓碑, 真正已死的那个随后被激活(review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-serialize-initial-start',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const sending = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(1);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+
+        // 远超首档退避也不得抢跑: 初始 RPC 还在飞。
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStarts).toBe(1);
+
+        // 初始响应回来后才补排。
+        firstStart.resolve({ turn: { id: 'turn-1' } });
+        await sending;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(turnStarts).toBe(2);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not replay a retried turn that already produced output before its response settled', async () => {
+      // 重投出来的 turn 完全可能在自己的 turn/start 响应 settle 之前就发出 item ——
+      // 那时 state.inFlight 仍为 true, 若延后分支先于产出守卫执行, 这个已有产出的
+      // turn 会被落墓碑并重放原消息, 已执行过的命令与文件改动跑第二遍
+      // (review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return { turn: { id: 'turn-1' } };
+            if (turnStarts === 2) return retryStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-inflight-partial-output',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        if (!handlers.turnStarted) throw new Error('expected turnStarted handler');
+        if (!handlers.itemStarted) throw new Error('expected itemStarted handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2);
+
+        // 重投的 turn 先激活并**产出**内容, 响应仍在飞。
+        handlers.turnStarted({ turn: { id: 'turn-2' } });
+        handlers.itemStarted({
+          turnId: 'turn-2',
+          item: { id: 'item-1', type: 'commandExecution', command: 'echo hi' },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-2',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 必须判成终态交回用户, 不得延后重放。
+        const surfaced = events.slice(before).filter((e) => e.type === 'error');
+        expect(surfaced).toHaveLength(1);
+        expect(surfaced[0].data).toMatchObject({ isTerminal: true });
+
+        retryStart.resolve({ turn: { id: 'turn-2' } });
+        await vi.advanceTimersByTimeAsync(60_000);
+        // 原消息没有被第二次投出去。
+        expect(turnStarts).toBe(2);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('settles the logical turn when only the send signal is aborted mid-backoff', async () => {
+      // signal 原本只是**受理前**的取消边界, 受理后没人再读它 —— 过载重投是第一个
+      // 在受理后读 signal.aborted 的地方。读到就静默 return 的话上层永远等不到终态:
+      // SessionTurnActivityTracker 的派发闩、Codex coordinator、hook runner 都靠终态
+      // 事件释放(review #844 greptile P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-signal-only-abort',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const controller = new AbortController();
+        await handle.send({ type: 'user', content: 'hello' }, { signal: controller.signal });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStartCount(host)).toBe(1); // 还在退避等待
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        // 只 abort signal, **不**调 handle.abort()。
+        controller.abort();
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        // 不得重投, 且必须收口: 终态 error + Done 都要有。
+        expect(turnStartCount(host)).toBe(1);
+        const after = events.slice(before);
+        expect(after.filter((e) => e.type === 'error' && e.data?.isTerminal === true)).toHaveLength(1);
+        expect(
+          after.filter((e) => e.type === 'status' && e.data?.isRunning === false),
+        ).not.toHaveLength(0);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('takes over an id-less capacity failure that lands while the initial turn/start is pending', async () => {
+      // 初始投递的 turn/start 在飞时 overloadRetry.inFlight 永远是 false(那个标记只由
+      // 重投路径设置), 所以判据必须用 isTurnStartPending。否则这个窗口里的空 id 容量
+      // 拒绝会被 stale 判定丢掉, 响应随后激活一个已被拒的 turn, 整轮自动重投预算白给
+      // (review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return firstStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          if (method === Method.TurnInterrupt) return {};
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-idless-initial-start',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        // 初始 turn/start 挂住 → send 不 resolve, 制造 "pending start" 窗口。
+        const sending = handle.send({ type: 'user', content: 'hello' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(turnStarts).toBe(1);
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 必须接管: 透成非终止 + 进度, 不判死。
+        const surfaced = events.filter((e) => e.type === 'error');
+        expect(surfaced).toHaveLength(1);
+        expect(surfaced[0].data).toMatchObject({ isTerminal: false, willRetry: true });
+
+        // 响应回来: 这个 turn 已被认领成死 turn, 不得激活。
+        firstStart.resolve({ turn: { id: 'turn-1' } });
+        await sending;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+
+        // 重投照常发生（原消息只投第二次，不是"一边跑一边重投"）。
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(turnStarts).toBe(2);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('settles immediately when the send signal aborts, without waiting out the backoff', async () => {
+      // isCancelled() 是轮询式的, 只在 retry() 里被读到。只 abort signal(不走
+      // handle.abort())时, 若不订阅 abort 事件, 会话会在剩余退避里继续 busy ——
+      // 最多 30s 内后续排队消息全被挡住(review #844 greptile P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-signal-immediate-settle',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const controller = new AbortController();
+        await handle.send({ type: 'user', content: 'hello' }, { signal: controller.signal });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.isTurnRunning?.()).toBe(true); // 退避等待中
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        // 只 abort signal，然后**不推进计时器**：收口必须已经发生。
+        controller.abort();
+        await vi.advanceTimersByTimeAsync(0);
+
+        const after = events.slice(before);
+        expect(after.filter((e) => e.type === 'error' && e.data?.isTerminal === true)).toHaveLength(1);
+        expect(after.some((e) => e.type === 'status' && e.data?.isRunning === false)).toBe(true);
+        expect(handle.isTurnRunning?.()).toBe(false);
+
+        // 后续也不得再重投。
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStartCount(host)).toBe(1);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('takes over an id-less capacity failure that lands while the retry RPC is pending', async () => {
+      // 空 turnId 的容量拒绝在"重投 RPC 在飞 + turnStarted 未到"的窗口里, 既不匹配
+      // currentTurnId(null) 也不匹配 isTurnInFlight(false) —— 会被 stale 判定整条丢掉,
+      // 于是没有墓碑也没有记账, 响应把这个已死的 turn 激活成活跃 turn, 剩余重投预算
+      // 被绕过(review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return { turn: { id: 'turn-1' } };
+            if (turnStarts === 2) return retryStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-idless-capacity',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2);
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        // 空 turnId + RPC 在飞 + 还没 turnStarted：必须被认作"针对这一轮"。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 透成非终止（延后给在途那次），不得判死。
+        const surfaced = events.slice(before).filter((e) => e.type === 'error');
+        expect(surfaced).toHaveLength(1);
+        expect(surfaced[0].data).toMatchObject({ isTerminal: false, willRetry: true });
+
+        // 响应回来：这个 turn 已被认领成死 turn，不得激活。
+        retryStart.resolve({ turn: { id: 'turn-2' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+
+        // 剩余预算照常用上：补排发出第三次 turn/start。
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(turnStarts).toBe(3);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not arm a new retry when the in-flight retry RPC rejects', async () => {
+      // finally 先于外层 state.retry().catch 执行。若延后的容量失败在 RPC 已经 reject
+      // 的情况下还照样补排，紧随其后的 catch 会推终态 error + Done 把 UI 收口，而那个
+      // 计时器没人取消 —— 会话已经关掉，原消息却在稍后被静默重投并真的跑工具
+      // （review #844 codex P1）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return { turn: { id: 'turn-1' } };
+            if (turnStarts === 2) return retryStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-reject-no-rearm',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2);
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 在途期间又撞容量 → 被延后。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-inflight',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 这次 RPC 自己失败（超时 / 传输错）。
+        retryStart.reject(new Error('turn/start timed out'));
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        // 唯一一条终态由外层 catch 推出，且**没有**残留计时器把原消息重投。
+        expect(turnStarts).toBe(2);
+        const terminal = events.filter((e) => e.type === 'error' && e.data?.isTerminal === true);
+        expect(terminal).toHaveLength(1);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reschedules a deferred failure even when turnStarted arrived before the response', async () => {
+      // 事件顺序 turnStarted → 容量错误 → turn/start 响应：currentTurnId 在 finally
+      // 里还挂着那具已被落墓碑的尸体 → 补排条件不成立，而随后被压掉的 turn/completed
+      // 只清 currentTurnId、不排任何东西 —— 逻辑 send 永久悬空（review #844 codex P1）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            if (turnStarts === 1) return { turn: { id: 'turn-1' } };
+            if (turnStarts === 2) return retryStart.promise;
+            return { turn: { id: `turn-${turnStarts}` } };
+          }
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-started-before-resp',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        if (!handlers.turnStarted) throw new Error('expected turnStarted handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2);
+
+        // 重投的 turn 先把 started 推回来：currentTurnId 被置成 turn-inflight。
+        handlers.turnStarted({ turn: { id: 'turn-inflight' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-inflight');
+
+        // 紧接着它自己也撞容量（RPC 仍在飞）→ 延后，同时必须当场摘掉这个死 turn。
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-inflight',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+
+        retryStart.resolve({ turn: { id: 'turn-inflight' } });
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        // 补排生效：第三次 turn/start 发了出去，send 没有悬空。
+        expect(turnStarts).toBe(3);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('interrupts the retry when a Guardian failure downgrades Auto to Ask mid-backoff', async () => {
+      // Guardian 不可用时的内部降级(switchAutoRuntimeToAskImmediately)绕开了公开的
+      // setPermissionMode, 原本只判 currentTurnId / isTurnStartPending —— 退避计时器
+      // 正在等的窗口两者都不成立, 重投一到点就会以已被撤销的 Auto 档执行工具
+      // (review #844 codex P1)。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-guardian-downgrade',
+          model: 'gpt-5.5',
+          providerId: 'openai',
+          workingDir: '/repo',
+          permissionMode: 'auto',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        if (!handlers.autoApprovalReviewCompleted) {
+          throw new Error('expected autoApprovalReviewCompleted');
+        }
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        // 退避等待中: 没有活跃 turn, 也没有在飞的 turn/start。
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        expect(turnStartCount(host)).toBe(1);
+
+        // Guardian 超时 → 运行期降到 Ask（不经过 setPermissionMode）。
+        handlers.autoApprovalReviewCompleted({
+          threadId: 'start-thread-id',
+          turnId: 'turn-guardian',
+          startedAtMs: 1,
+          completedAtMs: 2,
+          reviewId: 'review-overload-downgrade',
+          targetItemId: 'item-x',
+          decisionSource: 'agent',
+          review: { status: 'timedOut', riskLevel: null, userAuthorization: null, rationale: null },
+          action: {
+            type: 'networkAccess',
+            target: 'https://example.com',
+            host: 'example.com',
+            protocol: 'https',
+            port: 443,
+          },
+        } as never);
+        await vi.advanceTimersByTimeAsync(3_000);
+
+        // 重投照常发出（它带的是冻结的 Auto 策略），但必须紧跟一个 interrupt——
+        // 冻结档比当前的 Ask 宽，不能让它以被撤销的权限继续跑工具。
+        expect(turnStartCount(host)).toBe(2);
+        expect(
+          host.request.mock.calls.some(
+            ([method, params]) =>
+              method === Method.TurnInterrupt &&
+              (params as { turnId?: string }).turnId === 'turn-2',
+          ),
+        ).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('interrupts the retry when an intermediate mode change leaves the frozen policy looser', async () => {
+      // Full access → Ask（arm 标记）→ Auto（Ask→Auto 不算收紧，会清标记），而重投
+      // 持的仍是 Full access 的冻结策略（review #844 codex P1）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-intermediate-mode',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+          permissionMode: 'bypassPermissions',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        await handle.setPermissionMode?.('ask');
+        await handle.setPermissionMode?.('auto'); // 中间态：不算收紧，但冻结策略仍更宽
+        await vi.advanceTimersByTimeAsync(3_000);
+
+        expect(turnStartCount(host)).toBe(2);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(
+          host.request.mock.calls.some(([method]) => method === Method.TurnInterrupt),
+        ).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('never schedules a second retry while one turn/start is still in flight', async () => {
+      // cancelOverloadRetry 只能清计时器、取消不了在途 RPC。若在途时又排一个，
+      // 两个 turn/start 都可能被 server 接受，同一条用户输入的工具副作用执行两遍
+      // （review #844 codex P1）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<unknown>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            return turnStarts === 1 ? { turn: { id: 'turn-1' } } : retryStart.promise;
+          }
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-no-double-start',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        const capacityError = {
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        };
+        handlers.error(capacityError);
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2); // 首次投递 + 第一次重投（RPC 挂住）
+
+        // 在途期间再来一条容量错误：不得排第二个重投。
+        handlers.error({ ...capacityError, turnId: '' });
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStarts).toBe(2);
+
+        retryStart.resolve({ turn: { id: 'turn-2' } });
+        await vi.advanceTimersByTimeAsync(0);
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('bounds the retry turn/start RPC with the critical thread timeout', async () => {
+      // 无超时的话 daemon 卡住时 RPC 永久在飞，而 inFlight 被算作忙 → 会话永久
+      // 卡死且无人可解（review #844 codex P1）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-rpc-timeout',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+
+        const retryCall = host.request.mock.calls
+          .filter(([method]) => method === Method.TurnStart)
+          .at(-1);
+        expect(retryCall?.[2]).toMatchObject({ timeoutMs: expect.any(Number) });
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps the partial-output guard across a duplicate turnStarted for the same turn', async () => {
+      // 同一 turn 的重复 / 迟到 started（buffered item 重放后补发）不得把产出标记
+      // 清零，否则随后的容量错误会被误判零产出并重放整条消息，重复已执行的命令与
+      // 文件改动（review #844 codex P1）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-duplicate-started',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnStarted) throw new Error('expected handlers');
+        // 模型已产出，然后同一 turn 的 started 又到一次。
+        handlers.reasoningTextDelta?.({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          delta: 'thinking...',
+        } as never);
+        handlers.turnStarted({ turn: { id: 'turn-1' } } as never);
+
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(40_000);
+
+        // 仍算「已有产出」→ 不重投。
+        expect(turnStartCount(host)).toBe(1);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('interrupts the retried turn when permissions were tightened during the backoff', async () => {
+      // 退避窗口里既没有 currentTurnId 也不一定有 isTurnStartPending，但重投持着
+      // 收紧之前冻结的宽松 turnParams。不补中断，权限撤销后仍会执行工具
+      // （review #844 codex P1，安全边界）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-tighten',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+          permissionMode: 'bypassPermissions',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 退避等待中收紧到 Ask。
+        await handle.setPermissionMode?.('ask');
+        await vi.advanceTimersByTimeAsync(3_000);
+
+        // 重投照常发出，但拿到 turn id 的瞬间必须被中断。
+        expect(turnStartCount(host)).toBe(2);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(
+          host.request.mock.calls.some(([method]) => method === Method.TurnInterrupt),
+        ).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not emit a status event that would wipe the overload banner', async () => {
+      // renderer 在每个非 error 事件上清 recoverableError，紧跟其后的 status 会把
+      // 刚透出的本地化过载横幅冲掉（review #844 codex P1）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-no-status',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+        // 先把 send() 的 turn-start status 等既有事件消费掉，只观察容量错误之后。
+        await vi.advanceTimersByTimeAsync(0);
+        const before = events.length;
+
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 接管后只该有那条非终止 error，后面不跟任何 status。
+        const after = events.slice(before);
+        expect(after.filter((e) => e.type === 'error')).toHaveLength(1);
+        expect(after.filter((e) => e.type === 'status')).toHaveLength(0);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not surface a failure when the retry RPC rejects after cancellation', async () => {
+      // 取消之后 RPC 才 reject 时，reject 会绕过成功路径的取消复检直接落到 catch。
+      // 那里若无条件收口，用户主动 Stop 会被误报成「重投失败」并二次收口
+      // （review #844 greptile）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<unknown>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            return turnStarts === 1 ? { turn: { id: 'turn-1' } } : retryStart.promise;
+          }
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-reject-after-cancel',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2);
+
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+
+        // 先取消：abort 自己会推一条终态收口（上层要靠它释放派发闩）。
+        await handle.abort?.();
+        await vi.advanceTimersByTimeAsync(0);
+        const terminalAfterAbort = events.filter(
+          (e) => e.type === 'error' && (e.data as { isTerminal?: boolean }).isTerminal === true,
+        );
+        expect(terminalAfterAbort).toHaveLength(1);
+        expect(terminalAfterAbort[0].data).toMatchObject({
+          reason: 'codex-overload-retry-aborted',
+        });
+
+        // 随后在途的重投 RPC 失败：**不得**再补第二条 terminal error / Done。
+        retryStart.reject(new Error('connection reset during retry'));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(
+          events.filter((e) => e.type === 'error' && (e.data as { isTerminal?: boolean }).isTerminal === true),
+        ).toHaveLength(1);
+        expect(
+          events.filter((e) => e.type === 'status' && (e.data as { isRunning?: boolean }).isRunning === false),
+        ).toHaveLength(1);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('stays busy while the retry turn/start RPC is still in flight', async () => {
+      // 退避计时器到点后 timer 已清空、turn 尚未激活，中间那段 RPC 在途窗口若报
+      // idle，并发 send 会被接受并把原消息静默丢掉（review #844 copilot）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const retryStart = deferred<unknown>();
+        let turnStarts = 0;
+        const host = installFakeHost(agent, (method) => {
+          if (method === Method.TurnStart) {
+            turnStarts += 1;
+            return turnStarts === 1 ? { turn: { id: 'turn-1' } } : retryStart.promise;
+          }
+          return undefined;
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-inflight-busy',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+
+        // 退避到点：计时器已清，RPC 在途，turn 还没激活。
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStarts).toBe(2);
+        expect(handle.getCurrentTurnId?.()).toBeNull();
+        expect(handle.isTurnRunning?.()).toBe(true);
+
+        retryStart.resolve({ turn: { id: 'turn-2' } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(handle.isTurnRunning?.()).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('marks the dead turn as terminally handled so its late turn/completed cannot close the UI', async () => {
+      // app-server 在容量错误后还会为该 turn 发正常的 turn/completed(failed)。
+      // 没有墓碑，handleTurnCompleted 会 emit terminal error + done，把刚透出的
+      // 非终止重试状态直接收口掉（review #844 P1）。
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-tombstone',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnCompleted) throw new Error('expected handlers');
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+        // 紧随其后的失败终态通知。
+        handlers.turnCompleted({
+          threadId: 'start-thread-id',
+          turn: { id: 'turn-1', status: 'failed' },
+        } as never);
+        await vi.advanceTimersByTimeAsync(0);
+
+        // 不得出现 terminal error，也不得推 isRunning:false / done。
+        expect(
+          events.some((e) => e.type === 'error' && (e.data as { isTerminal?: boolean }).isTerminal === true),
+        ).toBe(false);
+        expect(
+          events.some((e) => e.type === 'status' && (e.data as { isRunning?: boolean }).isRunning === false),
+        ).toBe(false);
+        expect(events.some((e) => e.type === 'done')).toBe(false);
+
+        // 重投照常发生。
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(turnStartCount(host)).toBe(2);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('cancels a pending overload retry when the session closes', async () => {
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-close',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: { message: CAPACITY_MESSAGE },
+        });
+
+        await handle.close();
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(turnStartCount(host)).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('resets the retry budget when the user sends a new message', async () => {
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-overload-budget-reset',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'first' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        // 烧掉第一轮的全部预算。
+        for (let i = 0; i < 5; i += 1) {
+          await rejectCurrentTurnForCapacity(handle, handlers);
+        }
+        const afterFirst = turnStartCount(host);
+        expect(afterFirst).toBe(1 + 4);
+
+        // 新消息是新一轮工作，重新获得完整预算。
+        await handle.send({ type: 'user', content: 'second' });
+        await rejectCurrentTurnForCapacity(handle, handlers);
+        // 第二次 send + 它的第一次重投。
+        expect(turnStartCount(host)).toBe(afterFirst + 2);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it('registers Codex MCP thread context for remote sessions (SSH remote-forward MCP bridge)', async () => {
+    // 远端 daemon 经 SSH remote-forward 直连本机 HTTP MCP bridge 后,tool call
+    // 同样按 params._meta.threadId 路由,remote thread 也必须注册 context。
     const registerCodexMcpThreadContext = vi.fn();
     const unregisterCodexMcpThreadContext = vi.fn();
     const agent = new CodexAgent(createDeps({}, {
@@ -3308,9 +7966,18 @@ describe('CodexAgent MCP thread context hooks', () => {
       remoteHostId: 'remote-host-1',
     });
 
-    expect(registerCodexMcpThreadContext).not.toHaveBeenCalled();
+    expect(registerCodexMcpThreadContext).toHaveBeenCalledTimes(1);
+    expect(registerCodexMcpThreadContext).toHaveBeenCalledWith({
+      threadId: 'start-thread-id',
+      sessionId: 'session-remote-codex-mcp-context',
+      workingDir: '/repo',
+      // remote thread 的 ctx 带 hostId — cindy_memory 据此把远端路径隔离到
+      // ssh:<hostId>:<path> 的独立 store。
+      remoteHostId: 'remote-host-1',
+      vendorOptions: {},
+    });
     await handle.close();
-    expect(unregisterCodexMcpThreadContext).not.toHaveBeenCalled();
+    expect(unregisterCodexMcpThreadContext).toHaveBeenCalledWith('start-thread-id');
   });
 
   it('passes MCP tool params to host policy and auto-approves safe inner calls', async () => {
@@ -3346,6 +8013,70 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(policy).toHaveBeenCalledWith({
       serverName: 'cindy_contacts',
       toolParams: { name: 'contacts_search', args: { query: 'Carol' } },
+    });
+    await handle.close();
+  });
+
+  it('runs the turn policy before trusted MCP auto-approval', async () => {
+    const agent = new CodexAgent(createDeps({}, {
+      getMcpToolApprovalPolicy: () => 'auto-approve',
+    }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        return { turn: { id: 'turn-wechat-mcp' } };
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-wechat-mcp',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+    const resolver = vi.fn(async () => ({
+      kind: 'permission' as const,
+      behavior: 'deny' as const,
+    }));
+    handle.setInteractionResolver(resolver);
+    await handle.send(
+      { type: 'user', content: 'delete duplicate contact' },
+      {
+        turnPermissionPolicy: {
+          origin: { kind: 'im', channel: 'wechat', taskId: 'task-mcp' },
+          confirmationSurface: 'desktop',
+          forceConfirmToolCall: (_toolName, input) =>
+            JSON.stringify(input).includes('contacts_delete'),
+        },
+      },
+    );
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.mcpServerElicitation) {
+      throw new Error('expected mcpServerElicitation handler');
+    }
+    const result = await handlers.mcpServerElicitation({
+      threadId: 'start-thread-id',
+      turnId: 'turn-wechat-mcp',
+      serverName: 'cindy_contacts',
+      mode: 'form',
+      _meta: {
+        codex_approval_kind: 'mcp_tool_call',
+        persist: ['session'],
+        tool_params: {
+          name: 'contacts_delete',
+          args: { id: 'contact-1' },
+        },
+      },
+      message: 'Allow tool call',
+      requestedSchema: {},
+    });
+
+    expect(result).toEqual({ action: 'decline', content: null, _meta: null });
+    expect(resolver).toHaveBeenCalledOnce();
+    expect(resolver.mock.calls[0]?.[0]).toMatchObject({
+      kind: 'permission',
+      toolName: 'mcp:cindy_contacts',
+      suggestions: undefined,
     });
     await handle.close();
   });
@@ -3499,6 +8230,83 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('enables the built-in reviewer for remote OAuth-subscription sessions (Auto)', async () => {
+    // 远程 daemon 用的是 auth sync 推过去的同一份订阅凭证, reviewer 调用
+    // 发生在 daemon 本地 — 订阅下与本地同构, 不再一律回退 untrusted。
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-oauth-auto',
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+      remoteHostId: 'gpu-box',
+    });
+
+    const startParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
+      approvalPolicy?: string;
+      approvalsReviewer?: string;
+    };
+    expect(startParams).toMatchObject({
+      approvalPolicy: 'on-request',
+      approvalsReviewer: 'auto_review',
+    });
+    await handle.close();
+  });
+
+  it('falls back to user approvals for remote non-subscription sessions (Auto)', async () => {
+    // gateway / 第三方 provider 的 reviewer 模型路由仍未验证 — 远程同样回退。
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-gateway-auto',
+      model: 'codex/gpt-5.5',
+      providerId: 'xd',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+      remoteHostId: 'gpu-box',
+    });
+
+    const startParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
+      approvalPolicy?: string;
+      approvalsReviewer?: string;
+    };
+    expect(startParams).toMatchObject({
+      approvalPolicy: 'on-request',
+      approvalsReviewer: 'user',
+    });
+    await handle.close();
+  });
+
+  it('preserves the reviewer route for default remote sessions via the host effective mode (codex R17 P1)', async () => {
+    // Settings 创建的默认远程 session: 无 providerId + 无前缀 model,
+    // resolveAgentCredentialMode 解析为 undefined — 必须兜底到 host 创建时
+    // 登记的 effective mode (auth fallback 的实际钥匙), 否则远程订阅用户
+    // 的 reviewer 仍被回退 (默认值路径正是大多数用户的路径)。
+    const agent = new CodexAgent(createDeps());
+    (agent as unknown as { hostEffectiveCredentialModes: Map<string, string> })
+      .hostEffectiveCredentialModes.set('remote:gpu-box', 'oauth-bearer');
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-default-auto',
+      model: 'gpt-5.5-codex',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+      remoteHostId: 'gpu-box',
+    });
+
+    const startParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
+      approvalPolicy?: string;
+      approvalsReviewer?: string;
+    };
+    expect(startParams).toMatchObject({
+      approvalPolicy: 'on-request',
+      approvalsReviewer: 'auto_review',
+    });
+    await handle.close();
+  });
+
   it('maps auto permission mode to Codex built-in automatic approval review', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method) => {
@@ -3542,7 +8350,48 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
-  it('falls back to untrusted approvals on XD and interrupts the active turn when tightened to Ask', async () => {
+  it('maps Ask to the explicit user reviewer on a supported app-server', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        return { turn: { id: 'turn-user-approval-policy' } };
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-user-approval-policy',
+      model: 'gpt-5.5',
+      providerId: 'openai',
+      workingDir: '/repo',
+      permissionMode: 'ask',
+    });
+
+    const startParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
+      approvalPolicy?: string;
+      approvalsReviewer?: string;
+      sandbox?: string;
+    };
+    expect(startParams).toMatchObject({
+      approvalPolicy: 'on-request',
+      approvalsReviewer: 'user',
+      sandbox: 'workspace-write',
+    });
+
+    await handle.send({ type: 'user', content: 'hello' });
+    const turnParams = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as {
+      approvalPolicy?: string;
+      approvalsReviewer?: string;
+      sandboxPolicy?: { type?: string };
+    };
+    expect(turnParams).toMatchObject({
+      approvalPolicy: 'on-request',
+      approvalsReviewer: 'user',
+      sandboxPolicy: { type: 'workspaceWrite' },
+    });
+    await handle.close();
+  });
+
+  it('falls back to user approvals on XD without interrupting when the UI switches to Ask', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method) => {
       if (method === Method.TurnStart) {
@@ -3564,10 +8413,10 @@ describe('CodexAgent MCP thread context hooks', () => {
       sandbox?: string;
     };
     expect(startParams).toMatchObject({
-      approvalPolicy: 'untrusted',
+      approvalPolicy: 'on-request',
+      approvalsReviewer: 'user',
       sandbox: 'workspace-write',
     });
-    expect(startParams).not.toHaveProperty('approvalsReviewer');
 
     await handle.send({ type: 'user', content: 'hello' });
     const turnParams = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as {
@@ -3576,20 +8425,51 @@ describe('CodexAgent MCP thread context hooks', () => {
       sandboxPolicy?: { type?: string };
     };
     expect(turnParams).toMatchObject({
-      approvalPolicy: 'untrusted',
+      approvalPolicy: 'on-request',
+      approvalsReviewer: 'user',
       sandboxPolicy: { type: 'workspaceWrite' },
     });
-    expect(turnParams).not.toHaveProperty('approvalsReviewer');
-    if (!handle.setPermissionMode) throw new Error('expected setPermissionMode');
-    await handle.setPermissionMode('ask');
-    expect(host.request).toHaveBeenCalledWith(Method.TurnInterrupt, {
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval handler');
+    await expect(handlers.commandExecutionApproval({
       threadId: 'start-thread-id',
       turnId: 'turn-xd-auto-fallback',
+      itemId: 'cmd-no-resolver',
+      command: 'curl https://example.com',
+      cwd: '/repo',
+    })).resolves.toEqual({ decision: 'decline' });
+    if (!handle.setPermissionMode) throw new Error('expected setPermissionMode');
+    await handle.setPermissionMode('ask');
+    expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt)).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('overrides a resumed thread with the user reviewer when Auto falls back on XD', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-xd-auto-fallback-resume',
+      model: 'gpt-5.5',
+      providerId: 'xd',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
+    });
+
+    const resumeParams = host.request.mock.calls.find(([method]) => method === Method.ThreadResume)?.[1] as {
+      approvalPolicy?: string;
+      approvalsReviewer?: string;
+      sandbox?: string;
+    };
+    expect(resumeParams).toMatchObject({
+      approvalPolicy: 'on-request',
+      approvalsReviewer: 'user',
+      sandbox: 'workspace-write',
     });
     await handle.close();
   });
 
-  it('falls back to untrusted approvals without reviewer fields on an older app-server', async () => {
+  it('falls back to on-request approvals without reviewer fields on an older app-server', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method) => {
       if (method === Method.TurnStart) {
@@ -3609,7 +8489,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       approvalPolicy?: string;
       approvalsReviewer?: string;
     };
-    expect(startParams.approvalPolicy).toBe('untrusted');
+    expect(startParams.approvalPolicy).toBe('on-request');
     expect(startParams).not.toHaveProperty('approvalsReviewer');
 
     await handle.send({ type: 'user', content: 'hello' });
@@ -3617,7 +8497,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       approvalPolicy?: string;
       approvalsReviewer?: string;
     };
-    expect(turnParams.approvalPolicy).toBe('untrusted');
+    expect(turnParams.approvalPolicy).toBe('on-request');
     expect(turnParams).not.toHaveProperty('approvalsReviewer');
     await handle.close();
   });
@@ -3777,7 +8657,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       approvalsReviewer?: string;
     };
     expect(turnParams.approvalPolicy).toBe('on-request');
-    expect(turnParams).not.toHaveProperty('approvalsReviewer');
+    expect(turnParams.approvalsReviewer).toBe('user');
     expect(classifierUnavailable).toHaveBeenCalledWith({
       sessionId: 'session-guardian-timeout-runtime',
       agentKind: 'codex',
@@ -5293,6 +10173,1415 @@ describe('CodexAgent rewind', () => {
 });
 
 describe('CodexAgent turn lifecycle', () => {
+  it('escalates a persistent willRetry retry-loop to a terminal error (issue #677)', async () => {
+    // 远端摸不到 Codex 后端时 daemon 无限发 willRetry=true — 升级逻辑应在阈值处
+    // 合成终态错误并复位 turn (isTurnRunning=false + Done status), 消息里带原始
+    // 末次错误与 SSH 代理隧道提示 (session 带 remoteHostId)。
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-retry-escalation',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      remoteHostId: 'gpu-box',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    expect(handlers).toBeDefined();
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1' },
+    });
+    expect(handle.isTurnRunning?.()).toBe(true);
+
+    const willRetryError = {
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      willRetry: true,
+      error: { message: 'unexpected status 403 Forbidden, url: https://chatgpt.com/backend-api/codex/responses' },
+    } as const;
+    // 第 1 次 silent, 第 2 次透一条非终止提示, 之后静默直到升级阈值 (30 次)。
+    handlers.error?.(willRetryError);
+    handlers.error?.(willRetryError);
+    const notice = await nextEvent(iterator);
+    expect(notice).toMatchObject({
+      type: 'error',
+      data: { isTerminal: false, willRetry: true },
+    });
+    expect(handle.isTurnRunning?.()).toBe(true);
+
+    for (let i = 0; i < 28; i += 1) {
+      handlers.error?.(willRetryError);
+    }
+    // 第 30 次触发升级: 终态 error + Done status, turn 复位。
+    const terminalError = await nextEvent(iterator);
+    expect(terminalError.type).toBe('error');
+    const terminalData = terminalError.data as { message: string; isTerminal: boolean };
+    expect(terminalData.isTerminal).toBe(true);
+    expect(terminalData.message).toContain('Codex backend unreachable');
+    expect(terminalData.message).toContain('gpu-box');
+    expect(terminalData.message).toContain('403 Forbidden');
+    expect(terminalData.message).toContain('Route agent traffic via local proxy');
+    const statusEvent = await nextEvent(iterator);
+    expect(statusEvent).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    // 升级时补 turn/interrupt (review: PR #715 五轮审核 P1) — daemon 侧原 turn
+    // 不得继续空转烧远端资源 / 撞下一轮 send 的新 turn。
+    await vi.waitFor(() => {
+      expect(host.request).toHaveBeenCalledWith(
+        Method.TurnInterrupt,
+        expect.objectContaining({ threadId: 'start-thread-id', turnId: 'turn-1' }),
+      );
+    });
+
+    // 升级后晚到的 turnCompleted 不得重复发终态事件 (墓碑路径)。
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'failed', error: { message: 'x' } },
+    });
+    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+    await handle.close();
+  });
+
+  it('does NOT escalate an invalid-credential retry-loop either (auth-related, review P1)', async () => {
+    // invalid_api_key / authentication_error 这类「凭证无效」错误没有 401 字面,
+    // 但 translator 同样按 auth UX 分类 — 升级判定必须排除同一集合, 否则会被
+    // 误升级成「后端不可达」(提示用户去查网络/代理, 方向全错)。
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-auth-related-no-escalation',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1' },
+    });
+    const invalidKeyError = {
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      willRetry: true,
+      error: { message: 'authentication_error: invalid_api_key — key revoked' },
+    } as const;
+    for (let i = 0; i < 35; i += 1) {
+      handlers.error?.(invalidKeyError);
+    }
+    // auth UX 透出 (isTerminal:false), 但不升级终态、不发 interrupt。
+    const first = await nextEvent(iterator);
+    expect(first).toMatchObject({
+      type: 'error',
+      data: { isTerminal: false },
+    });
+    expect(handle.isTurnRunning?.()).toBe(true);
+    expect(host.request).not.toHaveBeenCalledWith(
+      Method.TurnInterrupt,
+      expect.anything(),
+    );
+    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+    await handle.close();
+  });
+
+  it('does NOT escalate an auth-missing retry-loop (has its own sync-auth UX)', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-auth-no-escalation',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      remoteHostId: 'gpu-box',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1' },
+    });
+    const authError = {
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      willRetry: true,
+      error: { message: 'unexpected status 401 Unauthorized: Missing bearer' },
+    } as const;
+    // auth retry-loop: 第一条透出 (等待式 sync UX), 其余 dedupe; 超阈值也不升级。
+    for (let i = 0; i < 35; i += 1) {
+      handlers.error?.(authError);
+    }
+    const first = await nextEvent(iterator);
+    expect(first).toMatchObject({
+      type: 'error',
+      data: { isTerminal: false, willRetry: true },
+    });
+    expect(handle.isTurnRunning?.()).toBe(true);
+    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+    await handle.close();
+  });
+
+  it('ignores an orphan turnStarted after a failed turn/start and interrupts it server-side (greptile P1)', async () => {
+    // turn/start RPC 失败 (超时/拒绝) 不代表 server 没建 turn — daemon 实际
+    // 建了的 turn 迟到的 started 不得重新激活已报终态错误的会话。
+    let failTurnStart = true;
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        if (failTurnStart) {
+          throw new Error('codex app-server turn/start timed out after 60000ms');
+        }
+        return { turn: { id: 'turn-2' } };
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-orphan-turnstarted',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    await handle.send({ type: 'user', content: 'hello' });
+    // send 开头先推 status isRunning:true, 然后才是 turn/start 失败的终态序列。
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { isRunning: true },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'error',
+      data: { isTerminal: true },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+
+    // daemon 实际建了 turn → 迟到 started: 立墓碑 + 补 interrupt, 不重新激活。
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'orphan-turn-id' },
+    });
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(handle.getCurrentTurnId?.()).toBeNull();
+    await vi.waitFor(() => {
+      expect(host.request).toHaveBeenCalledWith(
+        Method.TurnInterrupt,
+        expect.objectContaining({ turnId: 'orphan-turn-id' }),
+      );
+    });
+    // 孤儿事件不再产生任何 UI 事件。
+    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+
+    // 守卫不挡后续正常发送: 下一次 turn/start 成功后 turn 正常激活
+    // (handleTurnStartResp 清守卫标记并置 currentTurnId)。
+    failTurnStart = false;
+    await handle.send({ type: 'user', content: 'again' });
+    expect(handle.isTurnRunning?.()).toBe(true);
+    expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+    await handle.close();
+  });
+
+  it('clears an accepted started-before-resp turn when turn/start later fails (greptile R6 P1)', async () => {
+    // started-before-resp 是协议允许的乱序: turnStarted 先于响应到达并被接受
+    // (currentTurnId/isTurnInFlight 置位) — 随后 turn/start RPC 失败时, 失败收口
+    // 必须把这个活跃 turn 一起收掉, 否则 UI 已 Done 但 isTurnRunning() 永真,
+    // 下一条 send 被 in-flight guard 挡死。
+    const turnStart = deferred<unknown>();
+    let failTurnStart = true;
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        if (failTurnStart) return turnStart.promise;
+        return { turn: { id: 'turn-2' } };
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-started-before-resp-failure',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    const sendPromise = handle.send({ type: 'user', content: 'hello' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+      await Promise.resolve();
+    }
+    expect(host.request.mock.calls.filter(([method]) => method === Method.TurnStart)).toHaveLength(1);
+
+    // started-before-resp: turnStarted 先于响应到达并被接受, turn 状态置位。
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'early-turn' } });
+    expect(handle.isTurnRunning?.()).toBe(true);
+    expect(handle.getCurrentTurnId?.()).toBe('early-turn');
+
+    // turn/start 随后失败 → 失败收口把活跃 turn 一起收掉: 清状态 + 补 interrupt。
+    turnStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await sendPromise;
+
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'error', data: { isTerminal: true } });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(handle.getCurrentTurnId?.()).toBeNull();
+    await vi.waitFor(() => {
+      expect(host.request).toHaveBeenCalledWith(
+        Method.TurnInterrupt,
+        expect.objectContaining({ threadId: 'start-thread-id', turnId: 'early-turn' }),
+      );
+    });
+
+    // 该 turn 已立墓碑: 迟到的 turnCompleted 被挡, 不产生 UI 事件。
+    handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: { id: 'early-turn', status: 'completed' } });
+    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+
+    // 下一条 send 不被 in-flight guard 挡死, turn 正常激活。
+    failTurnStart = false;
+    await handle.send({ type: 'user', content: 'again' });
+    expect(handle.isTurnRunning?.()).toBe(true);
+    expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+    await handle.close();
+  });
+
+  it('buffers an ambiguous turnStarted during a retry-pending window and interrupts it once the response proves it an orphan (codex R9 P2)', async () => {
+    // 第一次 turn/start 失败立孤儿守卫; 第二次 send 的 turn/start 在飞期间
+    // 第一次的迟到 started 到达 — 归属不明 (协议不带 request id), 必须缓冲
+    // 隔离而不是接受 (否则孤儿 item 事件渲染到第二次 send 下)。响应到了按
+    // turnId 对账: 不一致 → interrupt + 墓碑; 响应的 turn 正常激活。
+    const firstStart = deferred<unknown>();
+    const secondStart = deferred<unknown>();
+    let attempt = 0;
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        attempt += 1;
+        if (attempt === 1) return firstStart.promise;
+        return secondStart.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-buffered-orphan-started',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    // 第一次 send → turn/start 悬挂 → 失败 (立孤儿守卫)。
+    const send1 = handle.send({ type: 'user', content: 'first' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+      await Promise.resolve();
+    }
+    firstStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await send1;
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'error', data: { isTerminal: true } });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+
+    // 第二次 send → turn/start 在飞 → 第一次的迟到 started 到达: 缓冲隔离,
+    // 既不激活也不立即 interrupt (归属未定)。
+    const send2 = handle.send({ type: 'user', content: 'second' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.filter(([method]) => method === Method.TurnStart).length >= 2) break;
+      await Promise.resolve();
+    }
+    // send2 开头的 turn-start status 先消费掉, 后续事件流才只反映通知路径。
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'orphan-turn' } });
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(handle.getCurrentTurnId?.()).toBeNull();
+    expect(
+      host.request.mock.calls.some(
+        ([method, params]) =>
+          method === Method.TurnInterrupt && (params as { turnId?: string }).turnId === 'orphan-turn',
+      ),
+    ).toBe(false);
+
+    // 缓冲期间孤儿 turn 的 item/error 事件不得穿透到本次 send 的事件流
+    // (greptile R10 P1): stale guard 把 buffered id 一并隔离。
+    handlers.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'orphan-turn',
+      item: { type: 'agentMessage', id: 'orphan-item', text: 'orphan output' },
+    });
+    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+
+    // 第二次响应 turn-2 ≠ orphan-turn → 孤儿坐实: interrupt + 墓碑; turn-2 激活。
+    secondStart.resolve({ turn: { id: 'turn-2' } });
+    await send2;
+    await vi.waitFor(() => {
+      expect(host.request).toHaveBeenCalledWith(
+        Method.TurnInterrupt,
+        expect.objectContaining({ threadId: 'start-thread-id', turnId: 'orphan-turn' }),
+      );
+    });
+    expect(handle.isTurnRunning?.()).toBe(true);
+    expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+    await handle.close();
+  });
+
+  it('activates a buffered turnStarted when the turn/start response returns the same id (codex R9 P2)', async () => {
+    // 同款 pending 窗口, 但到达的 started 就是在飞 RPC 自己的 (合法
+    // started-before-resp 与孤儿守卫共存): 缓冲期间不激活; 响应 id 一致 →
+    // 正常激活, 不发 interrupt。
+    const firstStart = deferred<unknown>();
+    const secondStart = deferred<unknown>();
+    let attempt = 0;
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        attempt += 1;
+        if (attempt === 1) return firstStart.promise;
+        return secondStart.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-buffered-started-accepted',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+
+    const send1 = handle.send({ type: 'user', content: 'first' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+      await Promise.resolve();
+    }
+    firstStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await send1;
+
+    const send2 = handle.send({ type: 'user', content: 'second' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.filter(([method]) => method === Method.TurnStart).length >= 2) break;
+      await Promise.resolve();
+    }
+    // 在飞 RPC 自己的 started 先到: 缓冲, 不立即激活。
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'early-turn' } });
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(handle.getCurrentTurnId?.()).toBeNull();
+
+    // 响应 id 一致 → 激活, 全程无 interrupt。
+    secondStart.resolve({ turn: { id: 'early-turn' } });
+    await send2;
+    expect(handle.isTurnRunning?.()).toBe(true);
+    expect(handle.getCurrentTurnId?.()).toBe('early-turn');
+    expect(
+      host.request.mock.calls.some(([method]) => method === Method.TurnInterrupt),
+    ).toBe(false);
+    await handle.close();
+  });
+
+  it('replays a buffered terminal error on reconcile so the send settles instead of hanging (greptile R11 P1)', async () => {
+    // 合法 turn 的 started 先于响应到达并进缓冲, 缓冲期间 daemon 直接发了
+    // terminal error: 直接丢弃会把尸体 turn 激活成 in-flight, send 永久卡
+    // generating — 终态必须缓存, 对账确认合法后重放收口。
+    const firstStart = deferred<unknown>();
+    const secondStart = deferred<unknown>();
+    let attempt = 0;
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        attempt += 1;
+        if (attempt === 1) return firstStart.promise;
+        return secondStart.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-buffered-terminal-error',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    // 第一次 send 失败立孤儿守卫。
+    const send1 = handle.send({ type: 'user', content: 'first' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+      await Promise.resolve();
+    }
+    firstStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await send1;
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'error', data: { isTerminal: true } });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+
+    // 第二次 send: 自己的 started 先到进缓冲; 缓冲期间 daemon 直接 terminal error。
+    const send2 = handle.send({ type: 'user', content: 'second' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.filter(([method]) => method === Method.TurnStart).length >= 2) break;
+      await Promise.resolve();
+    }
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } });
+    handlers.error?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-2',
+      scope: 'turn',
+      willRetry: false,
+      error: { message: 'instant backend failure' },
+    });
+    // 缓冲期间终态不出事件 (缓存等响应)。
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    // 响应 id 一致 → 合法: 重放 terminal error → send 收口 (error + Done),
+    // 尸体 turn 不被激活, 也不吃 interrupt。
+    secondStart.resolve({ turn: { id: 'turn-2' } });
+    await send2;
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'error',
+      data: { message: 'instant backend failure', isTerminal: true },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(handle.getCurrentTurnId?.()).toBeNull();
+    expect(host.request.mock.calls.some(([method]) => method === Method.TurnInterrupt)).toBe(false);
+    await handle.close();
+  });
+
+  it('replays a buffered turnCompleted on reconcile so the send settles instead of hanging (greptile R11 P1)', async () => {
+    // 合法 turn 缓冲期间 daemon 直接完成 (极快 turn / started-before-resp 后
+    // 立即 completed): completed 缓存, 对账一致后重放 — send 收 Done+done
+    // 收口, 尸体 turn 不被激活 (重放自动记墓碑挡住激活路径)。
+    const firstStart = deferred<unknown>();
+    const secondStart = deferred<unknown>();
+    let attempt = 0;
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        attempt += 1;
+        if (attempt === 1) return firstStart.promise;
+        return secondStart.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-buffered-completed',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    const send1 = handle.send({ type: 'user', content: 'first' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+      await Promise.resolve();
+    }
+    firstStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await send1;
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'error', data: { isTerminal: true } });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+
+    const send2 = handle.send({ type: 'user', content: 'second' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.filter(([method]) => method === Method.TurnStart).length >= 2) break;
+      await Promise.resolve();
+    }
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } });
+    handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2', status: 'completed' } });
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    secondStart.resolve({ turn: { id: 'turn-2' } });
+    await send2;
+    // 重放 completed → status Done + done 事件收口; 尸体 turn 不激活。
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'done' });
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(handle.getCurrentTurnId?.()).toBeNull();
+    await handle.close();
+  });
+
+  it('discards buffered terminal events once the response proves the turn an orphan (greptile R11 P1)', async () => {
+    // 缓冲期间孤儿 turn 的 terminal error + completed 都进缓存; 响应 id 不同
+    // → 缓存丢弃 + 墓碑 + interrupt; send2 不被孤儿终态收口, 响应的 turn
+    // 正常激活 (R10 隔离语义不被重放机制破坏)。
+    const firstStart = deferred<unknown>();
+    const secondStart = deferred<unknown>();
+    let attempt = 0;
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        attempt += 1;
+        if (attempt === 1) return firstStart.promise;
+        return secondStart.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-buffered-orphan-terminal',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    const send1 = handle.send({ type: 'user', content: 'first' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+      await Promise.resolve();
+    }
+    firstStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await send1;
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'error', data: { isTerminal: true } });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+
+    const send2 = handle.send({ type: 'user', content: 'second' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.filter(([method]) => method === Method.TurnStart).length >= 2) break;
+      await Promise.resolve();
+    }
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'orphan-turn' } });
+    handlers.error?.({
+      threadId: 'start-thread-id',
+      turnId: 'orphan-turn',
+      scope: 'turn',
+      willRetry: false,
+      error: { message: 'orphan failure' },
+    });
+    handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: { id: 'orphan-turn', status: 'failed' } });
+    // 孤儿终态全在缓存里, 事件流无输出。
+    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+
+    // 响应 turn-2 ≠ orphan-turn → 孤儿终态随缓存一并丢弃: 墓碑 + interrupt,
+    // turn-2 正常激活, send2 不被提前收口。
+    secondStart.resolve({ turn: { id: 'turn-2' } });
+    await send2;
+    await vi.waitFor(() => {
+      expect(host.request).toHaveBeenCalledWith(
+        Method.TurnInterrupt,
+        expect.objectContaining({ threadId: 'start-thread-id', turnId: 'orphan-turn' }),
+      );
+    });
+    expect(handle.isTurnRunning?.()).toBe(true);
+    expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+    await handle.close();
+  });
+
+  it('replays early item events of a valid buffered turn after the response accepts it (codex R12 P1)', async () => {
+    // 合法 turn 的 started 先于响应进缓冲, 缓冲期间 daemon 已开始产出
+    // (itemStarted): 事件进队列, 响应 id 一致 → 激活后按序重放 — 早期输出
+    // 不永久丢失 (只缓存终态会把 turn 的开头段丢掉)。
+    const firstStart = deferred<unknown>();
+    const secondStart = deferred<unknown>();
+    let attempt = 0;
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        attempt += 1;
+        if (attempt === 1) return firstStart.promise;
+        return secondStart.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-buffered-early-events',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    const send1 = handle.send({ type: 'user', content: 'first' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+      await Promise.resolve();
+    }
+    firstStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await send1;
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'error', data: { isTerminal: true } });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+
+    const send2 = handle.send({ type: 'user', content: 'second' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.filter(([method]) => method === Method.TurnStart).length >= 2) break;
+      await Promise.resolve();
+    }
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } });
+    handlers.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-2',
+      item: { type: 'agentMessage', id: 'early-item', text: 'early output' },
+    });
+    // 缓冲期间不进事件流 (R10 隔离语义保持)。
+    expect(handle.isTurnRunning?.()).toBe(false);
+
+    secondStart.resolve({ turn: { id: 'turn-2' } });
+    await send2;
+    // 激活后重放: 早期 item 事件出现在事件流, turn 正常在跑。
+    expect(handle.isTurnRunning?.()).toBe(true);
+    expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Generating...' },
+    });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'text',
+      data: { text: 'early output', isFinal: false },
+    });
+    await handle.close();
+  });
+
+  it('holds a buffered turn approval request and declines it once the response proves the turn an orphan (codex R12 P1)', async () => {
+    // 孤儿 turn 在对账前发审批请求: 请求挂起不上 UI; 响应证明孤儿 →
+    // 按 decline 释放 — 用户不能为隐藏 turn 批准操作。
+    const firstStart = deferred<unknown>();
+    const secondStart = deferred<unknown>();
+    let attempt = 0;
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        attempt += 1;
+        if (attempt === 1) return firstStart.promise;
+        return secondStart.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-buffered-approval',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const interactionResolver = vi.fn(() => new Promise<never>(() => {}));
+    handle.setInteractionResolver(interactionResolver);
+
+    const send1 = handle.send({ type: 'user', content: 'first' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+      await Promise.resolve();
+    }
+    firstStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await send1;
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'error', data: { isTerminal: true } });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+
+    const send2 = handle.send({ type: 'user', content: 'second' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.filter(([method]) => method === Method.TurnStart).length >= 2) break;
+      await Promise.resolve();
+    }
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'orphan-turn' } });
+    const approvalPromise = handlers.commandExecutionApproval?.({
+      threadId: 'start-thread-id',
+      turnId: 'orphan-turn',
+      itemId: 'orphan-item',
+      command: 'rm -rf /tmp/x',
+      cwd: '/repo',
+    });
+    // 挂起期间不上 UI。
+    await Promise.resolve();
+    expect(interactionResolver).not.toHaveBeenCalled();
+
+    // 响应证明孤儿 → 审批按 decline 释放, UI 自始至终没被调用。
+    secondStart.resolve({ turn: { id: 'turn-2' } });
+    await send2;
+    await expect(approvalPromise).resolves.toEqual({ decision: 'decline' });
+    expect(interactionResolver).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('settles a held user-input request as empty when the server resolves it during the reconcile window (greptile R13 P1)', async () => {
+    // buffered turn 的 requestUserInput 挂起到对账; 挂起期间服务端发
+    // serverRequest/resolved 取消该请求 (broker 未注册, cancel 不命中) —
+    // 对账放行后 handler 必须直接回空响应, 不上 UI 等一个已结束的交互
+    // (否则用户提交会向已结束请求发迟到响应)。
+    const firstStart = deferred<unknown>();
+    const secondStart = deferred<unknown>();
+    let attempt = 0;
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        attempt += 1;
+        if (attempt === 1) return firstStart.promise;
+        return secondStart.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-buffered-resolved-input',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const interactionResolver = vi.fn(() => new Promise<never>(() => {}));
+    handle.setInteractionResolver(interactionResolver);
+
+    const send1 = handle.send({ type: 'user', content: 'first' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+      await Promise.resolve();
+    }
+    firstStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await send1;
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'error', data: { isTerminal: true } });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+
+    const send2 = handle.send({ type: 'user', content: 'second' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.filter(([method]) => method === Method.TurnStart).length >= 2) break;
+      await Promise.resolve();
+    }
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } });
+    const inputPromise = handlers.requestUserInput?.(
+      {
+        threadId: 'start-thread-id',
+        turnId: 'turn-2',
+        itemId: 'item-1',
+        questions: [{
+          id: 'q1',
+          header: 'Mode',
+          question: 'Which mode should Codex use?',
+          isOther: false,
+          isSecret: false,
+          options: [{ label: 'Fast', description: 'Move quickly' }],
+        }],
+      },
+      { requestId: 'req-held' },
+    );
+    // 挂起期间服务端取消该请求 (broker 未注册 → cancel 不命中, 记入 resolved 集合)。
+    handlers.serverRequestResolved?.({ threadId: 'start-thread-id', requestId: 'req-held' });
+
+    // 对账合法 → gate 放行 → handler 发现请求已被服务端取消 → 直接空响应,
+    // 全程不上 UI。
+    secondStart.resolve({ turn: { id: 'turn-2' } });
+    await send2;
+    await expect(inputPromise).resolves.toEqual({ answers: {} });
+    expect(interactionResolver).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('rejects a held server request when the accepted turn was tombstoned by a replayed terminal event (codex R13 P2)', async () => {
+    // 合法 buffered turn 的 server request 挂起到对账, 但队列里还有该 turn
+    // 的 turnCompleted: 对账先 settle(true) 再重放 — 重放把 turn 当场收口,
+    // waiter 恢复时必须复查墓碑, 拒绝为一个刚死的 turn 上 UI。
+    const firstStart = deferred<unknown>();
+    const secondStart = deferred<unknown>();
+    let attempt = 0;
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        attempt += 1;
+        if (attempt === 1) return firstStart.promise;
+        return secondStart.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-buffered-request-tombstoned',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const interactionResolver = vi.fn(() => new Promise<never>(() => {}));
+    handle.setInteractionResolver(interactionResolver);
+
+    const send1 = handle.send({ type: 'user', content: 'first' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+      await Promise.resolve();
+    }
+    firstStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await send1;
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'error', data: { isTerminal: true } });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+
+    const send2 = handle.send({ type: 'user', content: 'second' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.filter(([method]) => method === Method.TurnStart).length >= 2) break;
+      await Promise.resolve();
+    }
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } });
+    const inputPromise = handlers.requestUserInput?.(
+      {
+        threadId: 'start-thread-id',
+        turnId: 'turn-2',
+        itemId: 'item-1',
+        questions: [{
+          id: 'q1',
+          header: 'Mode',
+          question: 'Which mode should Codex use?',
+          isOther: false,
+          isSecret: false,
+          options: [{ label: 'Fast', description: 'Move quickly' }],
+        }],
+      },
+      { requestId: 'req-tombstoned' },
+    );
+    // 同一 turn 的 completed 也进缓冲 — 对账时重放会把 turn 收口。
+    handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2', status: 'completed' } });
+
+    // 对账: 激活 → settle(true) → 重放 completed (turn 收口) → waiter 恢复
+    // 复查墓碑 → 空响应拒绝, UI 不上; send 被重放的 completed 正常收口。
+    secondStart.resolve({ turn: { id: 'turn-2' } });
+    await send2;
+    await expect(inputPromise).resolves.toEqual({ answers: {} });
+    expect(interactionResolver).not.toHaveBeenCalled();
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    expect(handle.isTurnRunning?.()).toBe(false);
+    await handle.close();
+  });
+
+  it('quarantines an orphan terminal error that arrives before its turnStarted (codex R14 P1)', async () => {
+    // 孤儿 turn 的终态 error 可以比它的 turnStarted 先到: id 尚未入 buffer,
+    // 若只按 buffered 集合拦截会穿透 (targetsPendingTurn=true 被按在飞 send
+    // 的终态处理, 终结合法的新 send) — 孤儿守卫 + pending + 无活跃 turn 时
+    // 未知 id 的 error 视同 started 预缓冲, 等对账。
+    const firstStart = deferred<unknown>();
+    const secondStart = deferred<unknown>();
+    let attempt = 0;
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        attempt += 1;
+        if (attempt === 1) return firstStart.promise;
+        return secondStart.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-orphan-error-first',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    const send1 = handle.send({ type: 'user', content: 'first' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+      await Promise.resolve();
+    }
+    firstStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await send1;
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'error', data: { isTerminal: true } });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+
+    const send2 = handle.send({ type: 'user', content: 'second' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.filter(([method]) => method === Method.TurnStart).length >= 2) break;
+      await Promise.resolve();
+    }
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    // 孤儿 turn 的 terminal error 先于它的 turnStarted 到达: 预缓冲, 不穿透。
+    handlers.error?.({
+      threadId: 'start-thread-id',
+      turnId: 'orphan-turn',
+      scope: 'turn',
+      willRetry: false,
+      error: { message: 'orphan turn died server-side' },
+    });
+    // send2 不被终结: 事件流安静, 无 error / Done 出来。
+    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+
+    // 响应 turn-2 ≠ orphan-turn → 孤儿坐实: 墓碑 + interrupt; turn-2 激活。
+    secondStart.resolve({ turn: { id: 'turn-2' } });
+    await send2;
+    await vi.waitFor(() => {
+      expect(host.request).toHaveBeenCalledWith(
+        Method.TurnInterrupt,
+        expect.objectContaining({ threadId: 'start-thread-id', turnId: 'orphan-turn' }),
+      );
+    });
+    expect(handle.isTurnRunning?.()).toBe(true);
+    expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+    await handle.close();
+  });
+
+  it('keeps the orphan guard after a successful turn so a late orphan turnStarted is tombstoned (codex R14 P1)', async () => {
+    // 失败 RPC 的 turnStarted 可能在新 turn 完成后才到 (currentTurnId 已回
+    // null, 无 pending): 守卫若在成功响应时解除, 迟到的孤儿 started 会被
+    // 正常激活成假 running (会话永久卡) — 守卫保持, 按孤儿墓碑 + interrupt。
+    const firstStart = deferred<unknown>();
+    const secondStart = deferred<unknown>();
+    let attempt = 0;
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        attempt += 1;
+        if (attempt === 1) return firstStart.promise;
+        return secondStart.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-late-orphan-started',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    const send1 = handle.send({ type: 'user', content: 'first' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+      await Promise.resolve();
+    }
+    firstStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await send1;
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'error', data: { isTerminal: true } });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+
+    // 第二次 send 正常完成: started 缓冲 → 响应激活 → completed 收口。
+    const send2 = handle.send({ type: 'user', content: 'second' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.filter(([method]) => method === Method.TurnStart).length >= 2) break;
+      await Promise.resolve();
+    }
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } });
+    secondStart.resolve({ turn: { id: 'turn-2' } });
+    await send2;
+    expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+    handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2', status: 'completed' } });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+    await nextEvent(iterator); // done 事件
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(handle.getCurrentTurnId?.()).toBeNull();
+
+    // 失败 RPC 的孤儿 started 此刻才迟到: 守卫保持 → 墓碑 + interrupt,
+    // 不得激活成假 running。
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'orphan-turn' } });
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(handle.getCurrentTurnId?.()).toBeNull();
+    await vi.waitFor(() => {
+      expect(host.request).toHaveBeenCalledWith(
+        Method.TurnInterrupt,
+        expect.objectContaining({ threadId: 'start-thread-id', turnId: 'orphan-turn' }),
+      );
+    });
+    await handle.close();
+  });
+
+  it('quarantines idle orphan turn events after a failed turn/start (codex R15 P1)', async () => {
+    // 守卫立 + 无新 send (idle: 无 pending, currentTurnId===null): 孤儿 turn 的
+    // item/completed 到达 — 预缓冲只对 pending 窗口生效, idle 时未知 id 必须
+    // 直接当孤儿拦 (立墓碑), 否则 item 穿透渲染 / completed 走
+    // currentTurnId===null 的收口分支 emit 假 done。
+    const firstStart = deferred<unknown>();
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return firstStart.promise;
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-idle-orphan-events',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    const send1 = handle.send({ type: 'user', content: 'first' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+      await Promise.resolve();
+    }
+    firstStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await send1;
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'error', data: { isTerminal: true } });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+
+    // idle 状态 (无 send 在飞): 孤儿 item/completed 到达, 全部被拦。
+    handlers.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'orphan-turn',
+      item: { type: 'agentMessage', id: 'o-item', text: 'orphan output' },
+    });
+    handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: { id: 'orphan-turn', status: 'completed' } });
+    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(handle.getCurrentTurnId?.()).toBeNull();
+    await handle.close();
+  });
+
+  it('holds a server request that arrives before the orphan turnStarted (codex R15 P1)', async () => {
+    // 孤儿 turn 的审批请求先于它的 turnStarted 到达: id 未入 buffer, gate
+    // 不得放行上 UI — 与 notification 预缓冲同款, 挂起到对账, 证明孤儿后
+    // 按 decline 释放。
+    const firstStart = deferred<unknown>();
+    const secondStart = deferred<unknown>();
+    let attempt = 0;
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        attempt += 1;
+        if (attempt === 1) return firstStart.promise;
+        return secondStart.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-early-orphan-request',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const interactionResolver = vi.fn(() => new Promise<never>(() => {}));
+    handle.setInteractionResolver(interactionResolver);
+
+    const send1 = handle.send({ type: 'user', content: 'first' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+      await Promise.resolve();
+    }
+    firstStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await send1;
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'error', data: { isTerminal: true } });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+
+    const send2 = handle.send({ type: 'user', content: 'second' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.filter(([method]) => method === Method.TurnStart).length >= 2) break;
+      await Promise.resolve();
+    }
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    // 孤儿 approval 先到 (它的 turnStarted 尚未到达): 挂起不上 UI。
+    const approvalPromise = handlers.commandExecutionApproval?.({
+      threadId: 'start-thread-id',
+      turnId: 'orphan-turn',
+      itemId: 'o-item',
+      command: 'rm -rf /tmp/x',
+      cwd: '/repo',
+    });
+    await Promise.resolve();
+    expect(interactionResolver).not.toHaveBeenCalled();
+
+    // 响应 turn-2 ≠ orphan-turn → 孤儿坐实: 审批按 decline 释放。
+    secondStart.resolve({ turn: { id: 'turn-2' } });
+    await send2;
+    await expect(approvalPromise).resolves.toEqual({ decision: 'decline' });
+    expect(interactionResolver).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('rejects an idle orphan server request after a failed turn/start (greptile R16 P1)', async () => {
+    // 守卫立 + 无新 send (idle: 无 pending, currentTurnId===null): 孤儿 turn
+    // 的审批请求到达 — 没有 RPC 在飞可等对账, 直接拒 (不挂起), 不上 UI;
+    // 用户响应若放行会发往旧 turn, interrupt 输竞态时操作真实执行。
+    const firstStart = deferred<unknown>();
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return firstStart.promise;
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-idle-orphan-request',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const interactionResolver = vi.fn(() => new Promise<never>(() => {}));
+    handle.setInteractionResolver(interactionResolver);
+
+    const send1 = handle.send({ type: 'user', content: 'first' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+      await Promise.resolve();
+    }
+    firstStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await send1;
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'error', data: { isTerminal: true } });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+
+    // idle: 孤儿 approval 到达 → 直接 decline, UI 未被调。
+    await expect(
+      handlers.commandExecutionApproval?.({
+        threadId: 'start-thread-id',
+        turnId: 'orphan-turn',
+        itemId: 'o-item',
+        command: 'rm -rf /tmp/x',
+        cwd: '/repo',
+      }),
+    ).resolves.toEqual({ decision: 'decline' });
+    expect(interactionResolver).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('rejects a late orphan server request after the replacement turn was accepted (codex R17 P1)', async () => {
+    // 替换 turn 已被接受 (currentTurnId 非 null): 孤儿迟到的审批请求既不是
+    // idle 也不是 buffered, gate 必须直接拒 — 否则为隐藏孤儿 turn 上 UI。
+    const firstStart = deferred<unknown>();
+    const secondStart = deferred<unknown>();
+    let attempt = 0;
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        attempt += 1;
+        if (attempt === 1) return firstStart.promise;
+        return secondStart.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-late-orphan-request-accepted',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const interactionResolver = vi.fn(() => new Promise<never>(() => {}));
+    handle.setInteractionResolver(interactionResolver);
+
+    const send1 = handle.send({ type: 'user', content: 'first' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+      await Promise.resolve();
+    }
+    firstStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await send1;
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'error', data: { isTerminal: true } });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+
+    // send2 正常激活 turn-2 (started 缓冲 → 响应一致 → 激活)。
+    const send2 = handle.send({ type: 'user', content: 'second' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.filter(([method]) => method === Method.TurnStart).length >= 2) break;
+      await Promise.resolve();
+    }
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } });
+    secondStart.resolve({ turn: { id: 'turn-2' } });
+    await send2;
+    expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+
+    // 孤儿 approval 迟到 (currentTurnId=turn-2 非 null): 直接拒, UI 未被调。
+    await expect(
+      handlers.commandExecutionApproval?.({
+        threadId: 'start-thread-id',
+        turnId: 'orphan-turn',
+        itemId: 'o-item',
+        command: 'rm -rf /tmp/x',
+        cwd: '/repo',
+      }),
+    ).resolves.toEqual({ decision: 'decline' });
+    expect(interactionResolver).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('settles a held server request when the send is cancelled at the after-turn/start boundary (codex R17 P2)', async () => {
+    // 挂起的 waiter 在 send 本地取消边界 (turn/start 响应到了但 session 已
+    // closed) 必须被统一释放 — 否则 handler 永远悬挂, dispatchServerRequest
+    // 永不返回。
+    const firstStart = deferred<unknown>();
+    const secondStart = deferred<unknown>();
+    let attempt = 0;
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        attempt += 1;
+        if (attempt === 1) return firstStart.promise;
+        return secondStart.promise;
+      }
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-held-request-cancelled',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const interactionResolver = vi.fn(() => new Promise<never>(() => {}));
+    handle.setInteractionResolver(interactionResolver);
+
+    const send1 = handle.send({ type: 'user', content: 'first' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.some(([method]) => method === Method.TurnStart)) break;
+      await Promise.resolve();
+    }
+    firstStart.reject(new Error('codex app-server turn/start timed out after 60000ms'));
+    await send1;
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'error', data: { isTerminal: true } });
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'status',
+      data: { status: 'Done', isRunning: false },
+    });
+
+    // send2 在飞 + buffered started + 审批挂起。
+    const send2 = handle.send({ type: 'user', content: 'second' });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.filter(([method]) => method === Method.TurnStart).length >= 2) break;
+      await Promise.resolve();
+    }
+    expect(await nextEvent(iterator)).toMatchObject({ type: 'status', data: { isRunning: true } });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } });
+    const approvalPromise = handlers.commandExecutionApproval?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-2',
+      itemId: 'item-1',
+      command: 'ls',
+      cwd: '/repo',
+    });
+    await Promise.resolve();
+    expect(interactionResolver).not.toHaveBeenCalled();
+
+    // session close → turn/start 响应才到: 本地取消边界命中, 挂起请求按
+    // decline 统一释放 (不再悬挂)。
+    await handle.close();
+    secondStart.resolve({ turn: { id: 'turn-2' } });
+    await send2;
+    await expect(approvalPromise).resolves.toEqual({ decision: 'decline' });
+    expect(interactionResolver).not.toHaveBeenCalled();
+  });
+
+  it('does not escalate rate-limit backoff retries to a terminal backend-unreachable error (codex R12 P2)', async () => {
+    // 429 / usage-limit 的 willRetry 是 provider 退避窗口, daemon 会在窗口后
+    // 自己成功 — 不得计入 retry 升级, 否则可恢复的限流被误杀成「后端不可达」。
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-rate-limit-backoff',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      remoteHostId: 'gpu-box',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<[string, ThreadEventHandlers]>;
+    const handlers = subscribeCalls[0]?.[1];
+    const iterator = handle.events()[Symbol.asyncIterator]();
+
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1' },
+    });
+    expect(handle.isTurnRunning?.()).toBe(true);
+
+    // 超过升级阈值 (30 次) 的 429 willRetry — 不升级, turn 持续在跑。
+    const rateLimited = {
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      willRetry: true,
+      error: { message: 'unexpected status 429 Too Many Requests, url: https://chatgpt.com/backend-api/codex/responses' },
+    } as const;
+    for (let i = 0; i < 32; i += 1) {
+      handlers.error?.(rateLimited);
+    }
+    // 第 2 次仍会透出一条非终态提示 (networkRetryNotice 机制不受排除影响)。
+    const notice = await nextEvent(iterator);
+    expect(notice).toMatchObject({
+      type: 'error',
+      data: { isTerminal: false, willRetry: true },
+    });
+    // 无终态事件 — 事件流安静, turn 仍在跑。
+    await expect(nextEvent(iterator)).rejects.toThrow('timed out waiting for event');
+    expect(handle.isTurnRunning?.()).toBe(true);
+    await handle.close();
+  });
+
   it('clears running state and emits done status after terminal error notification', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
@@ -6619,6 +12908,40 @@ describe('CodexAgent plan mode', () => {
     });
   }
 
+  it('keeps a stored proposed plan across a duplicate turnStarted for the same turn (codex R15 P1)', async () => {
+    // plan item 已被 intercept 存 proposedPlanText 后, 同 id 的晚到/重复
+    // turnStarted 不得清空 (wasSameTurn) — 否则 turnCompleted 时 plan_review
+    // 丢失 (buffered turn 的 item 先重放、started 后到的乱序会踩中)。
+    const agent = new CodexAgent(createDeps());
+    const host = installTurnHost(agent);
+    const handle = await startPlanSession(agent, host, 'session-plan-dup-started');
+    const seen: unknown[] = [];
+    handle.setInteractionResolver(async (req) => {
+      seen.push(req);
+      return { kind: 'plan_review', behavior: 'allow' };
+    });
+    await handle.send({ type: 'user', content: 'make a plan' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } });
+    handlers.itemCompleted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      item: { type: 'plan', id: 'turn-1-plan', text: '1. do X\n2. do Y' },
+    } as never);
+    // 同 id 的重复 started (晚到): 不得清掉已存的 plan。
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } });
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+    await vi.waitFor(() => {
+      expect(seen.length).toBeGreaterThan(0);
+    });
+    expect(seen[0]).toMatchObject({ kind: 'plan_review', plan: '1. do X\n2. do Y' });
+    await handle.close();
+  });
+
   it('carries collaborationMode plan on turn/start and omits it for normal sessions', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installTurnHost(agent);
@@ -7044,39 +13367,59 @@ describe('CodexAgent plan mode', () => {
     await handle.close();
   });
 
-  it('emits a terminal event and ends the plan cycle when the revision turn cannot start', async () => {
+  it('emits a terminal event and ends the plan cycle when revision profile restoration fails', async () => {
     const agent = new CodexAgent(createDeps());
     let turnSeq = 0;
+    let resumeSeq = 0;
     const host = installFakeHost(agent, (method) => {
       if (method === Method.TurnStart) {
         turnSeq += 1;
-        if (turnSeq === 2) {
-          throw new Error('Codex send cannot be accepted: stale host before turn/start');
-        }
         return { turn: { id: `turn-${turnSeq}` } };
+      }
+      if (method === Method.ThreadResume) {
+        resumeSeq += 1;
+        if (resumeSeq === 1) throw new Error('profile refresh failed');
+        return {
+          thread: { id: 'start-thread-id' },
+          model: 'gpt-5.4',
+          modelProvider: 'openai',
+          cwd: '/repo',
+        };
       }
       return undefined;
     });
-    const handle = await startPlanSession(agent, host, 'session-plan-revision-start-fails');
+    const handle = await agent.startSession({
+      sessionId: 'session-plan-revision-profile-refresh-fails',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      extraDirs: ['/shared-plan-refresh'],
+      planMode: true,
+    });
     const iterator = handle.events()[Symbol.asyncIterator]();
-    handle.setInteractionResolver(async () => ({
-      kind: 'plan_review',
-      behavior: 'deny',
-      reason: '先补测试',
-    }));
+    handle.setInteractionResolver(async () => {
+      await handle.setPermissionMode?.('ask');
+      return {
+        kind: 'plan_review',
+        behavior: 'deny',
+        reason: '先补测试',
+      };
+    });
 
+    await handle.setPermissionMode?.('bypassPermissions');
     await handle.send({ type: 'user', content: 'make a plan' });
     runPlanTurn(host, 'turn-1', '1. do X');
 
     await vi.waitFor(() => {
-      expect(turnStartCalls(host)).toHaveLength(2);
+      expect(host.request.mock.calls.filter(
+        ([method]) => method === Method.ThreadResume,
+      )).toHaveLength(1);
     });
     let sawTerminalError = false;
     for (let i = 0; i < 30 && !sawTerminalError; i++) {
       const ev = await nextEvent(iterator);
       if (ev.type === 'error') {
         expect(ev.data).toMatchObject({
-          message: expect.stringContaining('plan revision turn failed to start'),
+          message: expect.stringContaining('Failed to restore Codex read-only reference permissions'),
           isTerminal: true,
         });
         sawTerminalError = true;
@@ -7089,7 +13432,7 @@ describe('CodexAgent plan mode', () => {
     });
 
     await handle.send({ type: 'user', content: 'continue normally' });
-    const [, nextParams] = turnStartCalls(host)[2] as [string, Record<string, unknown>];
+    const [, nextParams] = turnStartCalls(host)[1] as [string, Record<string, unknown>];
     expect((nextParams.collaborationMode as { mode?: string } | undefined)?.mode).not.toBe('plan');
     await handle.close();
   });
@@ -7539,5 +13882,503 @@ describe('CodexAgent plan mode', () => {
     }
     expect(sawPlanModeChanged).toBe(true);
     await handle.close();
+  });
+});
+
+// ── upstream-response-idle watchdog ──────────────────────────────────────────
+// codex 此前只有 willRetry 风暴的终局升级(retry-escalation),覆盖不到 daemon **静默**
+// 卡死(后端连接半开 / 内部死锁 / app-server 不再投递任何通知)—— turn 会永远转圈。
+// 计时语义与 claude-code 侧一致:只在"球在上游"期间走表,工具执行期间停表。
+describe('CodexAgent upstream-response-idle watchdog', () => {
+  const IDLE_MS = 60_000;
+
+  beforeEach(() => {
+    vi.stubEnv('XDT_CODEX_IDLE_TIMEOUT_MS', String(IDLE_MS));
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function installIdleHost(agent: CodexAgent) {
+    let turnSeq = 0;
+    return installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+      if (method === Method.TurnInterrupt) return {};
+      return undefined;
+    });
+  }
+
+  async function startIdleSession(agent: CodexAgent, sessionId: string) {
+    return agent.startSession({ sessionId, model: 'gpt-5.4', workingDir: '/repo' });
+  }
+
+  function collectEvents(handle: Awaited<ReturnType<CodexAgent['startSession']>>): AgentEvent[] {
+    const seen: AgentEvent[] = [];
+    void (async () => {
+      for await (const ev of handle.events()) seen.push(ev);
+    })();
+    return seen;
+  }
+
+  it('turn 开始后上游持续静默 → 推终态 error 并 interrupt turn', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installIdleHost(agent);
+      const handle = await startIdleSession(agent, 'session-idle-trip');
+      const seen = collectEvents(handle);
+      await handle.send({ type: 'user', content: 'go' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+
+      await vi.advanceTimersByTimeAsync(IDLE_MS + 1);
+
+      const terminal = seen.find(
+        (ev) =>
+          ev.type === 'error' &&
+          (ev.data as { reason?: string } | null)?.reason === 'upstream_response_idle_timeout',
+      );
+      expect(terminal).toBeDefined();
+      expect((terminal!.data as { isTerminal?: boolean }).isTerminal).toBe(true);
+      expect(
+        host.request.mock.calls.some(
+          ([method, params]) =>
+            method === Method.TurnInterrupt &&
+            (params as { turnId?: string }).turnId === 'turn-1',
+        ),
+      ).toBe(true);
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('工具执行期间停表:长命令不会被误杀', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installIdleHost(agent);
+      const handle = await startIdleSession(agent, 'session-idle-tool');
+      const seen = collectEvents(handle);
+      await handle.send({ type: 'user', content: 'run a long build' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+      handlers.itemStarted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        item: { id: 'item-1', type: 'commandExecution', command: 'make build' },
+      } as never);
+
+      await vi.advanceTimersByTimeAsync(IDLE_MS * 5);
+
+      expect(
+        seen.some(
+          (ev) =>
+            ev.type === 'error' &&
+            (ev.data as { reason?: string } | null)?.reason === 'upstream_response_idle_timeout',
+        ),
+      ).toBe(false);
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('工具收工后恢复计时(停表不能变成永久豁免)', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installIdleHost(agent);
+      const handle = await startIdleSession(agent, 'session-idle-tool-done');
+      const seen = collectEvents(handle);
+      await handle.send({ type: 'user', content: 'run then think' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+      handlers.itemStarted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        item: { id: 'item-1', type: 'commandExecution', command: 'make build' },
+      } as never);
+      await vi.advanceTimersByTimeAsync(IDLE_MS * 2);
+      handlers.itemCompleted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        item: { id: 'item-1', type: 'commandExecution', command: 'make build' },
+      } as never);
+
+      // 球回到上游,再静默满一个阈值 → 该触发
+      await vi.advanceTimersByTimeAsync(IDLE_MS + 1);
+
+      expect(
+        seen.some(
+          (ev) =>
+            ev.type === 'error' &&
+            (ev.data as { reason?: string } | null)?.reason === 'upstream_response_idle_timeout',
+        ),
+      ).toBe(true);
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('interrupt 两次都超时也要收干净本地 turn 状态,会话保持可发(review 第二轮)', async () => {
+    // app-server 彻底哑火时 interruptTurnForPermissionTighten 会两次 ack 超时后放弃,
+    // 而它按设计不动 isTurnInFlight —— 若 watchdog 只依赖它,会话 isTurnRunning() 恒 true,
+    // 之后每条 send 都被 in-flight guard 拒掉,watchdog 报告"已恢复"实际彻底不可用。
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      let turnSeq = 0;
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+        // interrupt 永不响应 → 触发两次 ack 超时
+        if (method === Method.TurnInterrupt) return new Promise(() => {}) as never;
+        return undefined;
+      });
+      const handle = await startIdleSession(agent, 'session-idle-interrupt-dead');
+      const seen = collectEvents(handle);
+      await handle.send({ type: 'user', content: 'go' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+      expect(handle.isTurnRunning?.()).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(IDLE_MS + 1);
+
+      // 终态 error 照常推出
+      expect(
+        seen.some(
+          (ev) =>
+            ev.type === 'error' &&
+            (ev.data as { reason?: string } | null)?.reason === 'upstream_response_idle_timeout',
+        ),
+      ).toBe(true);
+      // 关键:本地 turn 状态必须已收干净,不等 interrupt 的结果
+      expect(handle.isTurnRunning?.()).toBe(false);
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('interrupt 始终不 ack → 作废 host(否则坏 daemon 会被下一条 send 复用)', async () => {
+    // watchdog 会先合成一次本地 turn 收口好让会话立刻可发,代价是 isTurnRunning() 变
+    // false —— Session 层的 recoverIfTurnStillRunning 正以它为判据,于是会认为"中断
+    // 生效了、会话仍可用"而放过这个 host。若中断其实从未被确认,这个已经哑火整个阈值
+    // 周期的 app-server 就留给下一条 send 复用:要么再超时,要么撞上服务端那个还在跑
+    // 的 turn(review #944 第五轮 P1)。确诊不可用就自己 close,让上层重建。
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      let turnSeq = 0;
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+        // app-server 彻底哑火:中断请求永不返回,两次 ack 都会超时
+        if (method === Method.TurnInterrupt) return new Promise<never>(() => {});
+        return undefined;
+      });
+      const handle = await startIdleSession(agent, 'session-idle-interrupt-dead');
+      let eventsEnded = false;
+      void (async () => {
+        for await (const ev of handle.events()) void ev;
+        eventsEnded = true;
+      })();
+      await handle.send({ type: 'user', content: 'go' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+
+      await vi.advanceTimersByTimeAsync(IDLE_MS + 1);
+      // 中断结果还没出来(两次 ack 各 10s)—— 此时不许提前作废 host
+      expect(eventsEnded).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(10_000 * 2 + 10);
+      // close() → eventQueue.end() → 上层 for-await 自然收尾,Session 据此
+      // setStatus('closed'),下一条 send 走 Maker 的 lazy create 重建 handle。
+      expect(eventsEnded).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('interrupt 始终不 ack → 连共享 app-server host 一起退役', async () => {
+    // handle.close() 只放掉本 thread 的订阅并结束自己的事件队列,共享的 AppServerHost 仍
+    // 留在缓存里 —— 下一次 lazy create 会连回同一个已确诊无响应的 app-server,立刻再卡
+    // 一遍,等于没恢复(review #944 第八轮 P1)。
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      let turnSeq = 0;
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+        if (method === Method.TurnInterrupt) return new Promise<never>(() => {});
+        return undefined;
+      });
+      const retireHostKey = vi
+        .spyOn(
+          agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+          'retireHostKey',
+        )
+        .mockResolvedValue(undefined);
+      const handle = await startIdleSession(agent, 'session-idle-retire-host');
+      void (async () => {
+        for await (const ev of handle.events()) void ev;
+      })();
+      await handle.send({ type: 'user', content: 'go' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+
+      await vi.advanceTimersByTimeAsync(IDLE_MS + 10_000 * 2 + 10);
+      // 两次 ack 都超时 → 必须把 host 缓存条目退役,下一个会话才会重建一个新的 app-server。
+      // failIfActive:false —— 别的会话可能还挂在这个 host 上,退役要广播强制退役的终态
+      // transport error 让它们各自收口,而不是抛错放着不管。
+      expect(retireHostKey).toHaveBeenCalledTimes(1);
+      expect(retireHostKey.mock.calls[0]?.[2]).toMatchObject({ failIfActive: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('等 interrupt 期间用户起了新 turn → 不关 handle、不退役 host', async () => {
+    // 合成收口把 isTurnInFlight 清成 false,所以两次 ack 的 20s 里新 send 不会被拒。
+    // 无条件 close 会掐死这条健康的新 turn,紧随的 host 退役还会连带终止同 host 上的
+    // 其它会话(review #944 第十七轮 P1)。
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      let turnSeq = 0;
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+        if (method === Method.TurnInterrupt) return new Promise<never>(() => {});
+        return undefined;
+      });
+      const retireHostKey = vi
+        .spyOn(
+          agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+          'retireHostKey',
+        )
+        .mockResolvedValue(undefined);
+      const handle = await startIdleSession(agent, 'session-idle-newer-turn');
+      let eventsEnded = false;
+      void (async () => {
+        for await (const ev of handle.events()) void ev;
+        eventsEnded = true;
+      })();
+      await handle.send({ type: 'user', content: 'go' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+
+      // 看门狗开火 → 合成本地收口(isTurnInFlight 清空),interrupt 挂住
+      await vi.advanceTimersByTimeAsync(IDLE_MS + 1);
+      // 用户在两次 ack 的窗口里起了新 turn
+      await handle.send({ type: 'user', content: 'next' });
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } } as never);
+
+      await vi.advanceTimersByTimeAsync(10_000 * 2 + 10);
+
+      // 新 turn 必须活着:既不关 handle,也不退役 host
+      expect(eventsEnded).toBe(false);
+      expect(retireHostKey).not.toHaveBeenCalled();
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('等 interrupt 期间新 turn 起了又正常结束 → 依然不关 handle、不退役 host', async () => {
+    // 上一个用例里新 turn 在窗口结束时**仍在跑**,所以看瞬时的 isTurnInFlight /
+    // currentTurnId 就够。但新 turn 完全可能在这 20s 里跑完:handleTurnCompleted 把两个
+    // 瞬时量双双复位,只看它们就会误判成"没人用了",照样关掉一个刚刚证明自己健康的 host,
+    // 并连带退役同 host 上的其它会话(review #944 第十八轮 P1)。判据必须是单调的
+    // turnStartGeneration:它答得了"期间有没有发生过新活儿"。
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      let turnSeq = 0;
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+        if (method === Method.TurnInterrupt) return new Promise<never>(() => {});
+        return undefined;
+      });
+      const retireHostKey = vi
+        .spyOn(
+          agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+          'retireHostKey',
+        )
+        .mockResolvedValue(undefined);
+      const handle = await startIdleSession(agent, 'session-idle-newer-turn-done');
+      let eventsEnded = false;
+      void (async () => {
+        for await (const ev of handle.events()) void ev;
+        eventsEnded = true;
+      })();
+      await handle.send({ type: 'user', content: 'go' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+
+      // 看门狗开火 → 合成本地收口,interrupt 挂住
+      await vi.advanceTimersByTimeAsync(IDLE_MS + 1);
+      // 窗口里起了新 turn,并且**在窗口内就正常结束**
+      await handle.send({ type: 'user', content: 'next' });
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } } as never);
+      handlers.turnCompleted?.({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-2', status: 'completed' },
+      });
+      expect(handle.isTurnRunning?.()).toBe(false); // 瞬时量已被复位,只看它就会误判
+
+      await vi.advanceTimersByTimeAsync(10_000 * 2 + 10);
+
+      expect(eventsEnded).toBe(false);
+      expect(retireHostKey).not.toHaveBeenCalled();
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('等 interrupt 期间 host 已被换掉 → 不退役那个新的健康 host', async () => {
+    // 两次 interrupt ack 要等 20s,期间别的路径(auth / 凭证重启)完全可能已经把这个 key
+    // 下的 host 换成新实例。retireHostKey 只按 key 查删,不加身份闸就会把新 host 退役、
+    // 连带终止它名下正在干活的会话(review #944 第九轮 P1)。
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      let turnSeq = 0;
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+        if (method === Method.TurnInterrupt) return new Promise<never>(() => {});
+        return undefined;
+      });
+      const retireHostKey = vi
+        .spyOn(
+          agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
+          'retireHostKey',
+        )
+        .mockResolvedValue(undefined);
+      const handle = await startIdleSession(agent, 'session-idle-host-replaced');
+      void (async () => {
+        for await (const ev of handle.events()) void ev;
+      })();
+      await handle.send({ type: 'user', content: 'go' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+
+      // 看门狗开火,但在两次 ack 超时之前,别的路径(auth / 凭证重启)已经在这个 key 下
+      // 放了一个**新的** host —— isCurrentHost 由此判假。
+      await vi.advanceTimersByTimeAsync(IDLE_MS + 1);
+      (agent as unknown as { hosts: Map<string, unknown> }).hosts.set('local', {
+        replacement: true,
+      });
+      await vi.advanceTimersByTimeAsync(10_000 * 2 + 10);
+
+      expect(retireHostKey).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('interrupt 被 ack 时不作废 host(daemon 还活着,会话继续可用)', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installIdleHost(agent); // TurnInterrupt 正常返回 {}
+      const handle = await startIdleSession(agent, 'session-idle-interrupt-ok');
+      let eventsEnded = false;
+      void (async () => {
+        for await (const ev of handle.events()) void ev;
+        eventsEnded = true;
+      })();
+      await handle.send({ type: 'user', content: 'go' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+
+      await vi.advanceTimersByTimeAsync(IDLE_MS + 10_000 * 2 + 10);
+      expect(eventsEnded).toBe(false);
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('系统挂起期间不计额度,醒来不立刻开火', async () => {
+    // 与 Session 层同源的问题:一个 30 分钟的长定时器在唤醒后到期就立刻开火,一次午休
+    // 足以中断一条完全健康的 turn(review #944 第十二轮 P1)。
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installIdleHost(agent);
+      const handle = await startIdleSession(agent, 'session-idle-suspend');
+      const seen = collectEvents(handle);
+      await handle.send({ type: 'user', content: 'go' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+
+      // 合盖睡 8 小时:壁钟前进,但定时器没有按比例推进
+      vi.setSystemTime(Date.now() + 8 * 3_600_000);
+      await vi.advanceTimersByTimeAsync(IDLE_MS);
+      expect(
+        seen.some(
+          (ev) =>
+            ev.type === 'error' &&
+            (ev.data as { reason?: string } | null)?.reason === 'upstream_response_idle_timeout',
+        ),
+      ).toBe(false);
+
+      // 吸收不等于豁免:醒来后继续静默满一个阈值,照常开火
+      await vi.advanceTimersByTimeAsync(IDLE_MS + 1);
+      expect(
+        seen.some(
+          (ev) =>
+            ev.type === 'error' &&
+            (ev.data as { reason?: string } | null)?.reason === 'upstream_response_idle_timeout',
+        ),
+      ).toBe(true);
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('turn 正常收口后不再计时', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installIdleHost(agent);
+      const handle = await startIdleSession(agent, 'session-idle-completed');
+      const seen = collectEvents(handle);
+      await handle.send({ type: 'user', content: 'go' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+      handlers.turnCompleted?.({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: 'completed' },
+      } as never);
+
+      await vi.advanceTimersByTimeAsync(IDLE_MS * 5);
+
+      expect(
+        seen.some(
+          (ev) =>
+            ev.type === 'error' &&
+            (ev.data as { reason?: string } | null)?.reason === 'upstream_response_idle_timeout',
+        ),
+      ).toBe(false);
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

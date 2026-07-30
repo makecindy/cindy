@@ -99,8 +99,12 @@ export function SessionStatusIcon({
       {isArchived ? (
         <Archive
           size={size ?? 12}
-          strokeWidth={1.5}
-          className={isActive ? 'text-[var(--sidebar-item-active-foreground)]' : 'text-[var(--cmd-palette-item-meta)]'}
+          strokeWidth={1.75}
+          className={
+            isActive
+              ? 'text-[var(--sidebar-item-active-foreground)]'
+              : 'text-[var(--cmd-palette-item-meta)]'
+          }
         />
       ) : isOrcaLead ? (
         // 常驻呼吸动画挂 HTML wrapper,SVG 保持静态(AGENTS 规则 7 SVG 动画红线,PR#226 review)

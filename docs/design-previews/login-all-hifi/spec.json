@@ -1,0 +1,4657 @@
+{
+  "meta": {
+    "name": "cindy-login-all-hifi",
+    "pr": 908,
+    "summary": {
+      "what": "全端(桌面/移动 phone·pad)全状态登录 demo,追平当前产品:移动端无「跳过登录」入口(该功能未进 main,桌面 SKIP_ENTRY 仍在)、面板回 440/组 560、功能区落位取 figma 新稿标注值(短屏 622 / 长屏 827)且窄屏分支钳到 622 不压盖字标、键盘停靠锚回面板底、桌面区域徽标翻转为「global 不标 / cn·dev 才标」且宽度由 paddingX 撑开。",
+      "how": "truth 全部由 extract.mjs 从产品源码机械提取(布局常量/四语文案/色 token/协议链接/SVG path/品牌位图 sha);布局 oracle = 产品公式本体(loginScale / resolveLoginSurface / computeLoginKeyboardShift)编译后预计算;demo 侧用镜像公式独立算一遍,由门 D/F 比对。",
+      "accept": "A-D/F 门自动验收:extractor 零漂移 / 状态覆盖 100% / 交互鲁棒(截断·输入·持久化) / 渲染绑定(含区域徽标 hug 宽、移动四形态几何、键盘位移与模式) / 适配采样(10 个尺寸,含断点两侧)。像素层无基准,如实标注未比对。"
+    }
+  },
+  "matrix": {
+    "platforms": [
+      "desk",
+      "phone",
+      "pad"
+    ],
+    "regions": [
+      "cn",
+      "global"
+    ],
+    "systems": [
+      "mac",
+      "ios",
+      "android"
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "langs": [
+      "zh-CN",
+      "en",
+      "ja",
+      "ko"
+    ]
+  },
+  "states": [
+    {
+      "id": "desk.identifier",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "expect": "desk.identifier"
+        }
+      ]
+    },
+    {
+      "id": "desk.identifier.formatError",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "abc"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "desk.identifier.formatError"
+        }
+      ]
+    },
+    {
+      "id": "desk.consent.dialog",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-social-google"
+        },
+        {
+          "expect": "desk.consent.dialog"
+        }
+      ]
+    },
+    {
+      "id": "desk.sso-org",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": ".lp-social-sso"
+        },
+        {
+          "expect": "desk.sso-org"
+        }
+      ]
+    },
+    {
+      "id": "desk.method-choice",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "desk.method-choice"
+        }
+      ]
+    },
+    {
+      "id": "desk.method-choice.fromSsoOrg",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": ".lp-social-sso"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "acme"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "desk.method-choice.fromSsoOrg"
+        }
+      ]
+    },
+    {
+      "id": "desk.method-choice.personalOnly",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "user@plain.dev"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "desk.method-choice.personalOnly"
+        }
+      ]
+    },
+    {
+      "id": "desk.method-choice.ssoRequired",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "ceo@ssoonly.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "desk.method-choice.ssoRequired"
+        }
+      ]
+    },
+    {
+      "id": "desk.verify.counting",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "13800138000"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "desk.verify.counting"
+        }
+      ]
+    },
+    {
+      "id": "desk.verify.resend",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "13800138000"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".qa-sim-ff"
+        },
+        {
+          "expect": "desk.verify.resend"
+        }
+      ]
+    },
+    {
+      "id": "desk.verify.error",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "13800138000"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "type": {
+            "sel": ".lp-code-input",
+            "text": "000000"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "desk.verify.error"
+        }
+      ]
+    },
+    {
+      "id": "desk.browser-redirect",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "expect": "desk.browser-redirect"
+        }
+      ]
+    },
+    {
+      "id": "desk.account-selection",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "click": ".qa-sim-cb-accounts"
+        },
+        {
+          "expect": "desk.account-selection"
+        }
+      ]
+    },
+    {
+      "id": "desk.sso-verification.request",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "click": ".qa-sim-cb-sso-verify"
+        },
+        {
+          "expect": "desk.sso-verification.request"
+        }
+      ]
+    },
+    {
+      "id": "desk.sso-verification.code",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "click": ".qa-sim-cb-sso-verify"
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "desk.sso-verification.code"
+        }
+      ]
+    },
+    {
+      "id": "desk.binding.request",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "click": ".qa-sim-cb-binding"
+        },
+        {
+          "expect": "desk.binding.request"
+        }
+      ]
+    },
+    {
+      "id": "desk.binding.code",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "click": ".qa-sim-cb-binding"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "qa@cindy.dev"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "desk.binding.code"
+        }
+      ]
+    },
+    {
+      "id": "desk.binding.request.phone",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        },
+        {
+          "click": ".lp-social-wechat"
+        },
+        {
+          "click": ".lp-dialog-agree"
+        },
+        {
+          "click": ".qa-sim-cb-binding"
+        },
+        {
+          "expect": "desk.binding.request.phone"
+        }
+      ]
+    },
+    {
+      "id": "desk.binding.code.phone",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        },
+        {
+          "click": ".lp-social-wechat"
+        },
+        {
+          "click": ".lp-dialog-agree"
+        },
+        {
+          "click": ".qa-sim-cb-binding"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "13800138000"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "desk.binding.code.phone"
+        }
+      ]
+    },
+    {
+      "id": "desk.deletion.pending",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": ".qa-sim-deletion"
+        },
+        {
+          "expect": "desk.deletion.pending"
+        }
+      ]
+    },
+    {
+      "id": "desk.deletion.processing",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": ".qa-sim-deletion"
+        },
+        {
+          "click": ".qa-sim-deletion"
+        },
+        {
+          "expect": "desk.deletion.processing"
+        }
+      ]
+    },
+    {
+      "id": "desk.deletion.completed",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": ".qa-sim-deletion"
+        },
+        {
+          "click": ".qa-sim-deletion"
+        },
+        {
+          "click": ".qa-sim-deletion"
+        },
+        {
+          "expect": "desk.deletion.completed"
+        }
+      ]
+    },
+    {
+      "id": "desk.error",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "click": ".qa-sim-cb-fail"
+        },
+        {
+          "expect": "desk.error"
+        }
+      ]
+    },
+    {
+      "id": "desk.main",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "13800138000"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "type": {
+            "sel": ".lp-code-input",
+            "text": "123456"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "desk.main"
+        }
+      ]
+    },
+    {
+      "id": "desk.main.email",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-personal"
+        },
+        {
+          "type": {
+            "sel": ".lp-code-input",
+            "text": "123456"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "desk.main.email"
+        }
+      ]
+    },
+    {
+      "id": "desk.main.sso",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "click": ".qa-sim-cb-ok"
+        },
+        {
+          "expect": "desk.main.sso"
+        }
+      ]
+    },
+    {
+      "id": "desk.main.sso.accounts",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "click": ".qa-sim-cb-accounts"
+        },
+        {
+          "click": ".lp-account-row"
+        },
+        {
+          "expect": "desk.main.sso.accounts"
+        }
+      ]
+    },
+    {
+      "id": "desk.main.sso.verification",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "click": ".qa-sim-cb-sso-verify"
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "type": {
+            "sel": ".lp-code-input",
+            "text": "123456"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "desk.main.sso.verification"
+        }
+      ]
+    },
+    {
+      "id": "desk.main.binding",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "click": ".qa-sim-cb-binding"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "qa@cindy.dev"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "type": {
+            "sel": ".lp-code-input",
+            "text": "123456"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "desk.main.binding"
+        }
+      ]
+    },
+    {
+      "id": "desk.main.social",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-social-google"
+        },
+        {
+          "click": ".lp-dialog-agree"
+        },
+        {
+          "click": ".qa-sim-cb-ok"
+        },
+        {
+          "expect": "desk.main.social"
+        }
+      ]
+    },
+    {
+      "id": "desk.main.skip",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": ".lp-skip-entry"
+        },
+        {
+          "expect": "desk.main.skip"
+        }
+      ],
+      "note": "跳过登录链路终点:点面板内「跳过登录」→ 无协议弹窗、radio 未勾选 → 直达主界面(2026-07-27 拍板)"
+    },
+    {
+      "id": "desk.skip.hitzone",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": ".qa-sim-skip-hitzone"
+        },
+        {
+          "expect": "desk.skip.hitzone"
+        }
+      ],
+      "note": "「跳过登录」热区语义自检:真浏览器 elementFromPoint 命中测试(680×60 容器死区不可点 / 文字+左右 30 扩展区可点)+ 热区实测宽度,jsdom 单测覆盖不到"
+    },
+    {
+      "id": "desk.preparing",
+      "via": null,
+      "tab": "状态补齐",
+      "note": "loginState 就绪前的启动中间帧(figma §5.2),真实链路是应用启动瞬间的瞬态,静态 demo 无法经交互稳定到达(时序竞态)"
+    },
+    {
+      "id": "mob.identifier",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "expect": "mob.identifier"
+        }
+      ]
+    },
+    {
+      "id": "mob.identifier.formatError",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "abc"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.identifier.formatError"
+        }
+      ]
+    },
+    {
+      "id": "mob.identifier.ssoOrg",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": ".lp-social-sso"
+        },
+        {
+          "expect": "mob.identifier.ssoOrg"
+        }
+      ]
+    },
+    {
+      "id": "mob.consent.dialog",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "13800138000"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.consent.dialog"
+        }
+      ]
+    },
+    {
+      "id": "mob.method-choice",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.method-choice"
+        }
+      ]
+    },
+    {
+      "id": "mob.method-choice.fromSsoOrg",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": ".lp-social-sso"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "acme"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.method-choice.fromSsoOrg"
+        }
+      ]
+    },
+    {
+      "id": "mob.method-choice.personalOnly",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "user@plain.dev"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.method-choice.personalOnly"
+        }
+      ]
+    },
+    {
+      "id": "mob.method-choice.ssoRequired",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "ceo@ssoonly.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.method-choice.ssoRequired"
+        }
+      ]
+    },
+    {
+      "id": "mob.verify.counting",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "13800138000"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.verify.counting"
+        }
+      ]
+    },
+    {
+      "id": "mob.verify.resend",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "13800138000"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".qa-sim-ff"
+        },
+        {
+          "expect": "mob.verify.resend"
+        }
+      ]
+    },
+    {
+      "id": "mob.verify.error",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "13800138000"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "type": {
+            "sel": ".lp-code-input",
+            "text": "000000"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.verify.error"
+        }
+      ]
+    },
+    {
+      "id": "mob.browser-redirect",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "expect": "mob.browser-redirect"
+        }
+      ]
+    },
+    {
+      "id": "mob.account-selection",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "click": ".qa-sim-cb-accounts"
+        },
+        {
+          "expect": "mob.account-selection"
+        }
+      ]
+    },
+    {
+      "id": "mob.sso-verification.request",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "click": ".qa-sim-cb-sso-verify"
+        },
+        {
+          "expect": "mob.sso-verification.request"
+        }
+      ]
+    },
+    {
+      "id": "mob.sso-verification.code",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "click": ".qa-sim-cb-sso-verify"
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.sso-verification.code"
+        }
+      ]
+    },
+    {
+      "id": "mob.binding.request",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "click": ".qa-sim-cb-binding"
+        },
+        {
+          "expect": "mob.binding.request"
+        }
+      ]
+    },
+    {
+      "id": "mob.binding.code",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "click": ".qa-sim-cb-binding"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "qa@cindy.dev"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.binding.code"
+        }
+      ]
+    },
+    {
+      "id": "mob.binding.request.phone",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        },
+        {
+          "click": ".lp-social-sso"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "acme"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "click": ".qa-sim-cb-binding"
+        },
+        {
+          "expect": "mob.binding.request.phone"
+        }
+      ]
+    },
+    {
+      "id": "mob.binding.code.phone",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        },
+        {
+          "click": ".lp-social-sso"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "acme"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "click": ".qa-sim-cb-binding"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "13800138000"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.binding.code.phone"
+        }
+      ]
+    },
+    {
+      "id": "mob.deletion.pending",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": ".qa-sim-deletion"
+        },
+        {
+          "expect": "mob.deletion.pending"
+        }
+      ]
+    },
+    {
+      "id": "mob.deletion.processing",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": ".qa-sim-deletion"
+        },
+        {
+          "click": ".qa-sim-deletion"
+        },
+        {
+          "expect": "mob.deletion.processing"
+        }
+      ]
+    },
+    {
+      "id": "mob.deletion.completed",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": ".qa-sim-deletion"
+        },
+        {
+          "click": ".qa-sim-deletion"
+        },
+        {
+          "click": ".qa-sim-deletion"
+        },
+        {
+          "expect": "mob.deletion.completed"
+        }
+      ]
+    },
+    {
+      "id": "mob.error",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "click": ".qa-sim-cb-fail"
+        },
+        {
+          "expect": "mob.error"
+        }
+      ]
+    },
+    {
+      "id": "mob.main",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "13800138000"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "type": {
+            "sel": ".lp-code-input",
+            "text": "123456"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.main"
+        }
+      ]
+    },
+    {
+      "id": "mob.main.email",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-personal"
+        },
+        {
+          "type": {
+            "sel": ".lp-code-input",
+            "text": "123456"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.main.email"
+        }
+      ]
+    },
+    {
+      "id": "mob.main.sso",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "click": ".qa-sim-cb-ok"
+        },
+        {
+          "expect": "mob.main.sso"
+        }
+      ]
+    },
+    {
+      "id": "mob.main.sso.accounts",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "click": ".qa-sim-cb-accounts"
+        },
+        {
+          "click": ".lp-account-row"
+        },
+        {
+          "expect": "mob.main.sso.accounts"
+        }
+      ]
+    },
+    {
+      "id": "mob.main.sso.verification",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "click": ".qa-sim-cb-sso-verify"
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "type": {
+            "sel": ".lp-code-input",
+            "text": "123456"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.main.sso.verification"
+        }
+      ]
+    },
+    {
+      "id": "mob.main.binding",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "click": ".lp-method-sso"
+        },
+        {
+          "click": ".qa-sim-cb-binding"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "qa@cindy.dev"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "type": {
+            "sel": ".lp-code-input",
+            "text": "123456"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.main.binding"
+        }
+      ]
+    },
+    {
+      "id": "mob.main.social",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-social-google"
+        },
+        {
+          "click": ".lp-dialog-agree"
+        },
+        {
+          "expect": "mob.main.social"
+        }
+      ]
+    },
+    {
+      "id": "mob.main.social.apple",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"os:ios\"]"
+        },
+        {
+          "click": ".lp-social-apple"
+        },
+        {
+          "click": ".lp-dialog-agree"
+        },
+        {
+          "expect": "mob.main.social.apple"
+        }
+      ]
+    },
+    {
+      "id": "mob.keyboard.phone-se.docked",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"phone-se\"]"
+        },
+        {
+          "click": ".lp-panel-identifier .lp-input"
+        },
+        {
+          "expect": "mob.keyboard.phone-se.docked"
+        }
+      ],
+      "note": "phone-se 形态 · 点帧内输入框获得焦点 → 弹 iOS 常规停靠键盘(真机 keyboardDidShow 路径;键盘顶 = 屏高 - 336):锚 面板底 440 + 10px 贴附;失焦 / 点帧内空白即收键盘(位移回 0)"
+    },
+    {
+      "id": "mob.keyboard.phone-se.clamped",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"phone-se\"]"
+        },
+        {
+          "click": ".qa-sim-kb-clamped"
+        },
+        {
+          "expect": "mob.keyboard.phone-se.clamped"
+        }
+      ],
+      "note": "phone-se 形态 · 极端键盘高触发 safe-top 上限 → clamped-fallback:面板优先,品牌/标题被挤出帧顶(产品定义的兜底,不满足「输入框+主按钮完整可见」断言)"
+    },
+    {
+      "id": "mob.keyboard.phone-se.androidNoResize",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"phone-se\"]"
+        },
+        {
+          "click": ".qa-sim-kb-android"
+        },
+        {
+          "expect": "mob.keyboard.phone-se.androidNoResize"
+        }
+      ],
+      "note": "phone-se 形态 · Android edge-to-edge 未缩窗:screenY 退化为 viewportHeight,引擎改走「全高 - 键盘高 - 系统栏底 48」兜底,位移比 iOS 路径多一个系统栏"
+    },
+    {
+      "id": "mob.keyboard.phone-std.docked",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": ".lp-panel-identifier .lp-input"
+        },
+        {
+          "expect": "mob.keyboard.phone-std.docked"
+        }
+      ],
+      "note": "phone-std 形态 · 点帧内输入框获得焦点 → 弹 iOS 常规停靠键盘(真机 keyboardDidShow 路径;键盘顶 = 屏高 - 336):锚 面板底 440 + 10px 贴附;失焦 / 点帧内空白即收键盘(位移回 0)"
+    },
+    {
+      "id": "mob.keyboard.phone-std.clamped",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": ".qa-sim-kb-clamped"
+        },
+        {
+          "expect": "mob.keyboard.phone-std.clamped"
+        }
+      ],
+      "note": "phone-std 形态 · 极端键盘高触发 safe-top 上限 → clamped-fallback:面板优先,品牌/标题被挤出帧顶(产品定义的兜底,不满足「输入框+主按钮完整可见」断言)"
+    },
+    {
+      "id": "mob.keyboard.phone-std.androidNoResize",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": ".qa-sim-kb-android"
+        },
+        {
+          "expect": "mob.keyboard.phone-std.androidNoResize"
+        }
+      ],
+      "note": "phone-std 形态 · Android edge-to-edge 未缩窗:screenY 退化为 viewportHeight,引擎改走「全高 - 键盘高 - 系统栏底 48」兜底,位移比 iOS 路径多一个系统栏"
+    },
+    {
+      "id": "mob.keyboard.pad-portrait.docked",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": ".lp-panel-identifier .lp-input"
+        },
+        {
+          "expect": "mob.keyboard.pad-portrait.docked"
+        }
+      ],
+      "note": "pad-portrait 形态 · 点帧内输入框获得焦点 → 弹 iOS 常规停靠键盘(真机 keyboardDidShow 路径;键盘顶 = 屏高 - 336):锚 面板底 440 + 10px 贴附;失焦 / 点帧内空白即收键盘(位移回 0)"
+    },
+    {
+      "id": "mob.keyboard.pad-portrait.clamped",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": ".qa-sim-kb-clamped"
+        },
+        {
+          "expect": "mob.keyboard.pad-portrait.clamped"
+        }
+      ],
+      "note": "pad-portrait 形态 · 极端键盘高触发 safe-top 上限 → clamped-fallback:面板优先,品牌/标题被挤出帧顶(产品定义的兜底,不满足「输入框+主按钮完整可见」断言)"
+    },
+    {
+      "id": "mob.keyboard.pad-portrait.androidNoResize",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": ".qa-sim-kb-android"
+        },
+        {
+          "expect": "mob.keyboard.pad-portrait.androidNoResize"
+        }
+      ],
+      "note": "pad-portrait 形态 · Android edge-to-edge 未缩窗:screenY 退化为 viewportHeight,引擎改走「全高 - 键盘高 - 系统栏底 48」兜底,位移比 iOS 路径多一个系统栏"
+    },
+    {
+      "id": "mob.keyboard.pad-landscape.docked",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"pad-landscape\"]"
+        },
+        {
+          "click": ".lp-panel-identifier .lp-input"
+        },
+        {
+          "expect": "mob.keyboard.pad-landscape.docked"
+        }
+      ],
+      "note": "pad-landscape 形态 · 点帧内输入框获得焦点 → 弹 iOS 常规停靠键盘(真机 keyboardDidShow 路径;键盘顶 = 屏高 - 336):锚 面板底 440 + 10px 贴附;失焦 / 点帧内空白即收键盘(位移回 0)"
+    },
+    {
+      "id": "mob.keyboard.pad-landscape.clamped",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"pad-landscape\"]"
+        },
+        {
+          "click": ".qa-sim-kb-clamped"
+        },
+        {
+          "expect": "mob.keyboard.pad-landscape.clamped"
+        }
+      ],
+      "note": "pad-landscape 形态 · 极端键盘高触发 safe-top 上限 → clamped-fallback:面板优先,品牌/标题被挤出帧顶(产品定义的兜底,不满足「输入框+主按钮完整可见」断言)"
+    },
+    {
+      "id": "mob.keyboard.pad-landscape.androidNoResize",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"pad-landscape\"]"
+        },
+        {
+          "click": ".qa-sim-kb-android"
+        },
+        {
+          "expect": "mob.keyboard.pad-landscape.androidNoResize"
+        }
+      ],
+      "note": "pad-landscape 形态 · Android edge-to-edge 未缩窗:screenY 退化为 viewportHeight,引擎改走「全高 - 键盘高 - 系统栏底 48」兜底,位移比 iOS 路径多一个系统栏"
+    },
+    {
+      "id": "mob.preparing",
+      "via": null,
+      "tab": "状态补齐",
+      "note": "auth 初始化前的准备伪态(figma §5.2 loading @193),真实链路是应用启动瞬间的瞬态,静态 demo 无法经交互稳定到达"
+    },
+    {
+      "id": "mob.no-login-state",
+      "via": null,
+      "tab": "状态补齐",
+      "note": "loginState 缺失但已初始化的兜底单按钮态,需状态机异常才出现,交互不可达"
+    },
+    {
+      "id": "mob.config-issues",
+      "via": null,
+      "tab": "状态补齐",
+      "note": "EXPO_PUBLIC_* 构建期配置非法的闸门屏(configIssueAuthBaseUrl),运行时不可达,需错误构建"
+    }
+  ],
+  "verify": {
+    "cases": [
+      {
+        "id": "desk-cn-mac-light-zh",
+        "prefs": {
+          "plat": "desk",
+          "region": "cn",
+          "os": "mac",
+          "mode": "light",
+          "lang": "zh-CN"
+        }
+      },
+      {
+        "id": "desk-global-mac-dark-en",
+        "prefs": {
+          "plat": "desk",
+          "region": "global",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "en"
+        }
+      },
+      {
+        "id": "phone-cn-android-light-ja",
+        "prefs": {
+          "plat": "phone",
+          "region": "cn",
+          "os": "android",
+          "mode": "light",
+          "lang": "ja"
+        }
+      },
+      {
+        "id": "phone-global-ios-dark-ko",
+        "prefs": {
+          "plat": "phone",
+          "region": "global",
+          "os": "ios",
+          "mode": "dark",
+          "lang": "ko"
+        }
+      },
+      {
+        "id": "pad-global-android-light-en",
+        "prefs": {
+          "plat": "pad",
+          "region": "global",
+          "os": "android",
+          "mode": "light",
+          "lang": "en"
+        }
+      },
+      {
+        "id": "pad-cn-ios-dark-zh",
+        "prefs": {
+          "plat": "pad",
+          "region": "cn",
+          "os": "ios",
+          "mode": "dark",
+          "lang": "zh-CN"
+        }
+      }
+    ],
+    "noClip": [
+      ".lp-title, .lp-subtitle"
+    ],
+    "inputs": [
+      {
+        "via": [
+          {
+            "click": "[data-qa-pref=\"plat:desk\"]"
+          },
+          {
+            "click": "[data-qa-pref=\"region:cn\"]"
+          },
+          {
+            "click": ".lp-consent-radio"
+          },
+          {
+            "type": {
+              "sel": ".lp-input",
+              "text": "13800138000"
+            }
+          },
+          {
+            "click": ".lp-primary-btn"
+          },
+          {
+            "expect": "desk.verify.counting"
+          }
+        ],
+        "sel": ".lp-code-input",
+        "text": "123456",
+        "tickMs": 1000,
+        "tickWitness": "#resend-countdown"
+      },
+      {
+        "via": [
+          {
+            "click": "[data-qa-pref=\"plat:phone\"]"
+          },
+          {
+            "click": "[data-qa-pref=\"region:cn\"]"
+          },
+          {
+            "click": ".lp-consent-radio"
+          },
+          {
+            "type": {
+              "sel": ".lp-input",
+              "text": "13800138000"
+            }
+          },
+          {
+            "click": ".lp-primary-btn"
+          },
+          {
+            "expect": "mob.verify.counting"
+          }
+        ],
+        "sel": ".lp-code-input",
+        "text": "123456",
+        "tickMs": 1000,
+        "tickWitness": "#resend-countdown"
+      }
+    ],
+    "persistence": {
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:dark\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"lang:ko\"]"
+        }
+      ],
+      "expected": {
+        "plat": "pad",
+        "region": "cn",
+        "os": "mac",
+        "mode": "dark",
+        "lang": "ko"
+      },
+      "storageKey": "qa-hifi:cindy-login-all-hifi:prefs",
+      "reloads": 2,
+      "initialState": "mob.identifier"
+    }
+  },
+  "bindings": [
+    {
+      "sel": ".lp-panel",
+      "prop": "background-color",
+      "truth": "desk.colors.panelBg.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-panel",
+      "prop": "background-color",
+      "truth": "desk.colors.panelBg.dark",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:dark\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".frame",
+      "prop": "background-color",
+      "truth": "desk.colors.bgBase.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".frame",
+      "prop": "background-color",
+      "truth": "desk.colors.bgBase.dark",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:dark\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-title",
+      "prop": "color",
+      "truth": "desk.colors.titleText.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-title",
+      "prop": "font-size",
+      "truth": "desk.geometry.title.fontSize",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-subtitle",
+      "prop": "color",
+      "truth": "desk.colors.secondaryText.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-subtitle",
+      "prop": "font-size",
+      "truth": "desk.geometry.subtitle.fontSize",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-input",
+      "prop": "border-radius",
+      "truth": "desk.geometry.control.radius",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-input",
+      "prop": "font-size",
+      "truth": "desk.geometry.control.fontSize",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-input",
+      "prop": "color",
+      "pseudo": "::placeholder",
+      "truth": "desk.colors.controlPlaceholder.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-input",
+      "prop": "color",
+      "pseudo": "::placeholder",
+      "truth": "desk.colors.controlPlaceholder.dark",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:dark\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-primary-btn",
+      "prop": "background-color",
+      "truth": "desk.colors.primaryButtonBg.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-primary-btn",
+      "prop": "background-color",
+      "truth": "desk.colors.primaryButtonBg.dark",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:dark\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-primary-btn",
+      "prop": "border-radius",
+      "truth": "desk.geometry.control.radius",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-error-text",
+      "prop": "color",
+      "truth": "desk.colors.errorFg.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "abc"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "desk.identifier.formatError"
+        }
+      ]
+    },
+    {
+      "sel": ".hero",
+      "prop": "src",
+      "truth": "desk.assets.hero.sha256",
+      "kind": "asset-sha",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-del-banner",
+      "prop": "background-color",
+      "truth": "desk.colors.genericSurfaceChip.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        },
+        {
+          "click": ".qa-sim-deletion"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-del-banner",
+      "prop": "background-color",
+      "truth": "desk.colors.genericSurfaceChip.dark",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:dark\"]"
+        },
+        {
+          "click": ".qa-sim-deletion"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-region-pill",
+      "prop": "background-color",
+      "truth": "desk.colors.brandAccent.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-region-pill",
+      "prop": "padding-left",
+      "truth": "desk.geometry.regionPill.paddingX",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".wordmark",
+      "prop": "src",
+      "truth": "desk.assets.wordmarkLight.sha256",
+      "kind": "asset-sha",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".wordmark",
+      "prop": "src",
+      "truth": "desk.assets.wordmarkDark.sha256",
+      "kind": "asset-sha",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:dark\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".slogan",
+      "prop": "src",
+      "truth": "desk.assets.sloganLight.sha256",
+      "kind": "asset-sha",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".slogan",
+      "prop": "src",
+      "truth": "desk.assets.sloganDark.sha256",
+      "kind": "asset-sha",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:dark\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-panel",
+      "prop": "background-color",
+      "truth": "mobile.colors.panelBg.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-panel",
+      "prop": "background-color",
+      "truth": "mobile.colors.panelBg.dark",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:dark\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-panel",
+      "prop": "border-radius",
+      "truth": "mobile.geometry.loginSizes.panelRadius",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-title",
+      "prop": "font-size",
+      "truth": "mobile.geometry.title.font",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-title",
+      "prop": "color",
+      "truth": "mobile.colors.titleText.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-title",
+      "prop": "color",
+      "truth": "mobile.colors.titleText.dark",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:dark\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-subtitle",
+      "prop": "font-size",
+      "truth": "mobile.geometry.subtitle.font",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "13800138000"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.verify.counting"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-subtitle",
+      "prop": "color",
+      "truth": "mobile.colors.secondaryText.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "13800138000"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.verify.counting"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-input",
+      "prop": "border-radius",
+      "truth": "mobile.geometry.control.radius",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-input",
+      "prop": "height",
+      "truth": "mobile.geometry.control.height",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-input",
+      "prop": "font-size",
+      "truth": "mobile.geometry.control.font",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-input",
+      "prop": "background-color",
+      "truth": "mobile.colors.controlBg.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-input",
+      "prop": "color",
+      "pseudo": "::placeholder",
+      "truth": "mobile.colors.controlPlaceholder.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-primary-btn",
+      "prop": "background-color",
+      "truth": "mobile.colors.primaryButtonBg.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-primary-btn",
+      "prop": "background-color",
+      "truth": "mobile.colors.primaryButtonBg.dark",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:dark\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-primary-btn",
+      "prop": "border-radius",
+      "truth": "mobile.geometry.control.radius",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-primary-btn",
+      "prop": "color",
+      "truth": "mobile.colors.primaryButtonText.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-phone-shell",
+      "prop": "border-radius",
+      "truth": "mobile.geometry.control.radius",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-back",
+      "prop": "background-color",
+      "truth": "mobile.colors.actionControlBg.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "13800138000"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.verify.counting"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-back",
+      "prop": "border-radius",
+      "truth": "mobile.geometry.back.radius",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "13800138000"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.verify.counting"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-method-sso",
+      "prop": "border-radius",
+      "truth": "mobile.geometry.methodRow.radius",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.method-choice"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-method-sso",
+      "prop": "height",
+      "truth": "mobile.geometry.methodRow.height",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "lead@acme.com"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.method-choice"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-social-apple",
+      "prop": "background-color",
+      "truth": "mobile.colors.appleCircleBg.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"os:ios\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-social-apple",
+      "prop": "background-color",
+      "truth": "mobile.colors.appleCircleBg.dark",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"os:ios\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:dark\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-social-sso",
+      "prop": "background-color",
+      "truth": "mobile.colors.primaryButtonBg.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-error-text",
+      "prop": "color",
+      "truth": "mobile.colors.loginError.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "13800138000"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "type": {
+            "sel": ".lp-code-input",
+            "text": "000000"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.verify.error"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-consent-ring",
+      "prop": "background-color",
+      "truth": "mobile.colors.consentRadioBg.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-consent-ring",
+      "prop": "background-color",
+      "truth": "mobile.colors.consentRadioCheckedBg.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        },
+        {
+          "click": ".lp-consent-radio"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-dialog",
+      "prop": "background-color",
+      "truth": "mobile.colors.panelBg.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "13800138000"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.consent.dialog"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-dialog",
+      "prop": "border-radius",
+      "truth": "mobile.geometry.consentDialog.radius",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:cn\"]"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "13800138000"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.consent.dialog"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-hero",
+      "prop": "src",
+      "truth": "mobile.assets.hero.sha256",
+      "kind": "asset-sha",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-del-title",
+      "prop": "color",
+      "truth": "mobile.theme.textPrimary.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        },
+        {
+          "click": ".qa-sim-deletion"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-del-title",
+      "prop": "color",
+      "truth": "mobile.theme.textPrimary.dark",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:dark\"]"
+        },
+        {
+          "click": ".qa-sim-deletion"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-word",
+      "prop": "src",
+      "truth": "mobile.assets.wordmarkLight.sha256",
+      "kind": "asset-sha",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-word",
+      "prop": "src",
+      "truth": "mobile.assets.wordmarkDark.sha256",
+      "kind": "asset-sha",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:dark\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-slogan",
+      "prop": "src",
+      "truth": "mobile.assets.sloganLight.sha256",
+      "kind": "asset-sha",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-slogan",
+      "prop": "src",
+      "truth": "mobile.assets.sloganDark.sha256",
+      "kind": "asset-sha",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:dark\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "left",
+      "truth": "mobile.frames.phone-std.physical.groupX",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "top",
+      "truth": "mobile.frames.phone-std.physical.groupY",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "width",
+      "truth": "mobile.frames.phone-std.physical.groupW",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-hero",
+      "prop": "left",
+      "truth": "mobile.frames.phone-std.physical.hero.x",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-hero",
+      "prop": "top",
+      "truth": "mobile.frames.phone-std.physical.hero.y",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-hero",
+      "prop": "width",
+      "truth": "mobile.frames.phone-std.physical.hero.w",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "left",
+      "truth": "mobile.frames.phone-se.physical.groupX",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"phone-se\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "top",
+      "truth": "mobile.frames.phone-se.physical.groupY",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"phone-se\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "width",
+      "truth": "mobile.frames.phone-se.physical.groupW",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"phone-se\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-hero",
+      "prop": "left",
+      "truth": "mobile.frames.phone-se.physical.hero.x",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"phone-se\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-hero",
+      "prop": "top",
+      "truth": "mobile.frames.phone-se.physical.hero.y",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"phone-se\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-hero",
+      "prop": "width",
+      "truth": "mobile.frames.phone-se.physical.hero.w",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"phone-se\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "left",
+      "truth": "mobile.frames.pad-portrait.physical.groupX",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "top",
+      "truth": "mobile.frames.pad-portrait.physical.groupY",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "width",
+      "truth": "mobile.frames.pad-portrait.physical.groupW",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-hero",
+      "prop": "left",
+      "truth": "mobile.frames.pad-portrait.physical.hero.x",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-hero",
+      "prop": "top",
+      "truth": "mobile.frames.pad-portrait.physical.hero.y",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-hero",
+      "prop": "width",
+      "truth": "mobile.frames.pad-portrait.physical.hero.w",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "left",
+      "truth": "mobile.frames.pad-landscape.physical.groupX",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"pad-landscape\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "top",
+      "truth": "mobile.frames.pad-landscape.physical.groupY",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"pad-landscape\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "width",
+      "truth": "mobile.frames.pad-landscape.physical.groupW",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"pad-landscape\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-hero",
+      "prop": "left",
+      "truth": "mobile.frames.pad-landscape.physical.hero.x",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"pad-landscape\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-hero",
+      "prop": "top",
+      "truth": "mobile.frames.pad-landscape.physical.hero.y",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"pad-landscape\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-hero",
+      "prop": "width",
+      "truth": "mobile.frames.pad-landscape.physical.hero.w",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"pad-landscape\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-panel",
+      "prop": "height",
+      "truth": "desk.geometry.panel.height",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-panel",
+      "prop": "height",
+      "truth": "mobile.geometry.loginSizes.panelHeight",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-social-row",
+      "prop": "top",
+      "truth": "desk.geometry.social.y",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-social-row",
+      "prop": "top",
+      "truth": "mobile.geometry.social.y",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-consent-row",
+      "prop": "top",
+      "truth": "desk.geometry.consentRow.y",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-error-text",
+      "prop": "top",
+      "truth": "desk.geometry.errorText.y",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "abc"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "desk.identifier.formatError"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-error-text",
+      "prop": "height",
+      "truth": "desk.geometry.errorText.height",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "abc"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "desk.identifier.formatError"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-error-text",
+      "prop": "top",
+      "truth": "mobile.geometry.errorText.y",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "abc"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.identifier.formatError"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-error-text",
+      "prop": "height",
+      "truth": "mobile.geometry.errorText.height",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "abc"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "mob.identifier.formatError"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-skip-entry-slot",
+      "prop": "top",
+      "truth": "desk.geometry.skipEntry.y",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-skip-entry-slot",
+      "prop": "height",
+      "truth": "desk.geometry.skipEntry.height",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-skip-entry-slot",
+      "prop": "width",
+      "truth": "desk.geometry.skipEntry.width",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-skip-entry",
+      "prop": "font-size",
+      "truth": "desk.geometry.skipEntry.fontSize",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-skip-entry",
+      "prop": "padding-left",
+      "truth": "desk.geometry.skipEntry.hitPaddingX",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-skip-entry",
+      "prop": "padding-right",
+      "truth": "desk.geometry.skipEntry.hitPaddingX",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-skip-entry",
+      "prop": "color",
+      "truth": "desk.colors.secondaryText.light",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:light\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-skip-entry",
+      "prop": "color",
+      "truth": "desk.colors.secondaryText.dark",
+      "kind": "color",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"mode:dark\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-skip-entry-slot",
+      "prop": "top",
+      "truth": "desk.geometry.skipEntry.y",
+      "kind": "length",
+      "scaled": true,
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"region:global\"]"
+        },
+        {
+          "type": {
+            "sel": ".lp-input",
+            "text": "abc"
+          }
+        },
+        {
+          "click": ".lp-primary-btn"
+        },
+        {
+          "expect": "desk.identifier.formatError"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-skip-entry",
+      "prop": "content",
+      "truth": "desk.copy.zh-CN.localModeEntry",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"lang:zh-CN\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-skip-entry",
+      "prop": "content",
+      "truth": "desk.copy.en.localModeEntry",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"lang:en\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-skip-entry",
+      "prop": "content",
+      "truth": "desk.copy.ja.localModeEntry",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"lang:ja\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-skip-entry",
+      "prop": "content",
+      "truth": "desk.copy.ko.localModeEntry",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": "[data-qa-pref=\"lang:ko\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-hp-dead",
+      "prop": "content",
+      "truth": "desk.constants.skipEntry.hitDeadZone",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": ".qa-sim-skip-hitzone"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-hp-dead2",
+      "prop": "content",
+      "truth": "desk.constants.skipEntry.hitDeadZone",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": ".qa-sim-skip-hitzone"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-hp-text",
+      "prop": "content",
+      "truth": "desk.constants.skipEntry.hitTextZone",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": ".qa-sim-skip-hitzone"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-hp-edge",
+      "prop": "content",
+      "truth": "desk.constants.skipEntry.hitTextZone",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": ".qa-sim-skip-hitzone"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-hp-pad",
+      "prop": "content",
+      "truth": "desk.geometry.skipEntry.hitPaddingX",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": ".qa-sim-skip-hitzone"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-hp-slot-pe",
+      "prop": "content",
+      "truth": "desk.constants.skipEntry.slotPointerEvents",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": ".qa-sim-skip-hitzone"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-hp-btn-pe",
+      "prop": "content",
+      "truth": "desk.constants.skipEntry.buttonPointerEvents",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:desk\"]"
+        },
+        {
+          "click": ".qa-sim-skip-hitzone"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "left",
+      "truth": "mobile.frames.pad-portrait.physical.groupX",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-panel",
+      "prop": "height",
+      "truth": "mobile.frames.pad-portrait.physical.panelH",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".lp-panel",
+      "prop": "height",
+      "truth": "mobile.frames.phone-se.physical.panelH",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"phone-se\"]"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.phone-se.docked.groupTopShifted",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"phone-se\"]"
+        },
+        {
+          "click": ".lp-panel-identifier .lp-input"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-keyboard",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.phone-se.docked.keyboardTopY",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"phone-se\"]"
+        },
+        {
+          "click": ".lp-panel-identifier .lp-input"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-kb-mode",
+      "prop": "content",
+      "truth": "mobile.keyboardSim.phone-se.docked.mode",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"phone-se\"]"
+        },
+        {
+          "click": ".lp-panel-identifier .lp-input"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.phone-se.clamped.groupTopShifted",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"phone-se\"]"
+        },
+        {
+          "click": ".qa-sim-kb-clamped"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-keyboard",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.phone-se.clamped.keyboardTopY",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"phone-se\"]"
+        },
+        {
+          "click": ".qa-sim-kb-clamped"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-kb-mode",
+      "prop": "content",
+      "truth": "mobile.keyboardSim.phone-se.clamped.mode",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"phone-se\"]"
+        },
+        {
+          "click": ".qa-sim-kb-clamped"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.phone-se.androidNoResize.groupTopShifted",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"phone-se\"]"
+        },
+        {
+          "click": ".qa-sim-kb-android"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-keyboard",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.phone-se.androidNoResize.keyboardTopY",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"phone-se\"]"
+        },
+        {
+          "click": ".qa-sim-kb-android"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-kb-mode",
+      "prop": "content",
+      "truth": "mobile.keyboardSim.phone-se.androidNoResize.mode",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"phone-se\"]"
+        },
+        {
+          "click": ".qa-sim-kb-android"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.phone-std.docked.groupTopShifted",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": ".lp-panel-identifier .lp-input"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-keyboard",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.phone-std.docked.keyboardTopY",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": ".lp-panel-identifier .lp-input"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-kb-mode",
+      "prop": "content",
+      "truth": "mobile.keyboardSim.phone-std.docked.mode",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": ".lp-panel-identifier .lp-input"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.phone-std.clamped.groupTopShifted",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": ".qa-sim-kb-clamped"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-keyboard",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.phone-std.clamped.keyboardTopY",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": ".qa-sim-kb-clamped"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-kb-mode",
+      "prop": "content",
+      "truth": "mobile.keyboardSim.phone-std.clamped.mode",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": ".qa-sim-kb-clamped"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.phone-std.androidNoResize.groupTopShifted",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": ".qa-sim-kb-android"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-keyboard",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.phone-std.androidNoResize.keyboardTopY",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": ".qa-sim-kb-android"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-kb-mode",
+      "prop": "content",
+      "truth": "mobile.keyboardSim.phone-std.androidNoResize.mode",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:phone\"]"
+        },
+        {
+          "click": ".qa-sim-kb-android"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.pad-portrait.docked.groupTopShifted",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": ".lp-panel-identifier .lp-input"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-keyboard",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.pad-portrait.docked.keyboardTopY",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": ".lp-panel-identifier .lp-input"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-kb-mode",
+      "prop": "content",
+      "truth": "mobile.keyboardSim.pad-portrait.docked.mode",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": ".lp-panel-identifier .lp-input"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.pad-portrait.clamped.groupTopShifted",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": ".qa-sim-kb-clamped"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-keyboard",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.pad-portrait.clamped.keyboardTopY",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": ".qa-sim-kb-clamped"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-kb-mode",
+      "prop": "content",
+      "truth": "mobile.keyboardSim.pad-portrait.clamped.mode",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": ".qa-sim-kb-clamped"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.pad-portrait.androidNoResize.groupTopShifted",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": ".qa-sim-kb-android"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-keyboard",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.pad-portrait.androidNoResize.keyboardTopY",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": ".qa-sim-kb-android"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-kb-mode",
+      "prop": "content",
+      "truth": "mobile.keyboardSim.pad-portrait.androidNoResize.mode",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": ".qa-sim-kb-android"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.pad-landscape.docked.groupTopShifted",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"pad-landscape\"]"
+        },
+        {
+          "click": ".lp-panel-identifier .lp-input"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-keyboard",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.pad-landscape.docked.keyboardTopY",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"pad-landscape\"]"
+        },
+        {
+          "click": ".lp-panel-identifier .lp-input"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-kb-mode",
+      "prop": "content",
+      "truth": "mobile.keyboardSim.pad-landscape.docked.mode",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"pad-landscape\"]"
+        },
+        {
+          "click": ".lp-panel-identifier .lp-input"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.pad-landscape.clamped.groupTopShifted",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"pad-landscape\"]"
+        },
+        {
+          "click": ".qa-sim-kb-clamped"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-keyboard",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.pad-landscape.clamped.keyboardTopY",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"pad-landscape\"]"
+        },
+        {
+          "click": ".qa-sim-kb-clamped"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-kb-mode",
+      "prop": "content",
+      "truth": "mobile.keyboardSim.pad-landscape.clamped.mode",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"pad-landscape\"]"
+        },
+        {
+          "click": ".qa-sim-kb-clamped"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-group",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.pad-landscape.androidNoResize.groupTopShifted",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"pad-landscape\"]"
+        },
+        {
+          "click": ".qa-sim-kb-android"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-keyboard",
+      "prop": "top",
+      "truth": "mobile.keyboardSim.pad-landscape.androidNoResize.keyboardTopY",
+      "kind": "length",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"pad-landscape\"]"
+        },
+        {
+          "click": ".qa-sim-kb-android"
+        }
+      ]
+    },
+    {
+      "sel": ".mp-kb-mode",
+      "prop": "content",
+      "truth": "mobile.keyboardSim.pad-landscape.androidNoResize.mode",
+      "kind": "text",
+      "via": [
+        {
+          "click": "[data-qa-pref=\"plat:pad\"]"
+        },
+        {
+          "click": "[data-qa-frame=\"pad-landscape\"]"
+        },
+        {
+          "click": ".qa-sim-kb-android"
+        }
+      ]
+    }
+  ],
+  "adaptive": {
+    "min": {
+      "w": 800,
+      "h": 600
+    },
+    "sampleSizes": [
+      [
+        800,
+        600
+      ],
+      [
+        800,
+        601
+      ],
+      [
+        900,
+        620
+      ],
+      [
+        1024,
+        640
+      ],
+      [
+        1280,
+        720
+      ],
+      [
+        1280,
+        800
+      ],
+      [
+        1280,
+        801
+      ],
+      [
+        1440,
+        900
+      ],
+      [
+        1680,
+        1050
+      ],
+      [
+        800,
+        1200
+      ]
+    ],
+    "probes": [
+      {
+        "id": "panel",
+        "sel": ".lp-stage"
+      },
+      {
+        "id": "hero",
+        "sel": ".hero"
+      },
+      {
+        "id": "slogan",
+        "sel": ".slogan"
+      }
+    ],
+    "tolerancePx": 1
+  }
+}

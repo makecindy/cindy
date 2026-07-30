@@ -4,6 +4,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 
 import type { AgentKind, CustomProviderConfig, ProviderView } from '@cindy/model-providers';
 
+import { BUILTIN_REFRESHABLE_PROVIDER_IDS } from '../../../shared/providerModelRefresh.js';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import * as schema from '../../localDb/schema.js';
@@ -16,6 +17,23 @@ import { IpcHarness } from './helpers/ipcHarness.js';
 /** 最小 ProviderView 桩（只放断言要用的字段；handler 不解读结构，原样透传）。 */
 function fakeView(id: string, connected: boolean): ProviderView {
   return { id, connected } as unknown as ProviderView;
+}
+
+/** 目录成员校验用的视图桩:models[agent] ∪ imageModels ∪ videoModels 只放 id。 */
+function catalogView(
+  id: string,
+  models: Partial<Record<AgentKind, string[]>>,
+  media: { image?: string[]; video?: string[] } = {},
+): ProviderView {
+  return {
+    id,
+    connected: true,
+    models: Object.fromEntries(
+      Object.entries(models).map(([agent, ids]) => [agent, (ids ?? []).map((m) => ({ id: m }))]),
+    ),
+    imageModels: (media.image ?? []).map((m) => ({ id: m, name: m })),
+    videoModels: (media.video ?? []).map((m) => ({ id: m, name: m })),
+  } as unknown as ProviderView;
 }
 
 const CREATE_SQL = `
@@ -67,6 +85,8 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
     testConnection: vi.fn(async () => ({ ok: true, latencyMs: 1 })),
     fetchModels: vi.fn(async () => ({ ok: true, models: [{ id: 'm1', name: 'M1' }] })),
     rediscoverModels: vi.fn(async () => null),
+    refreshBuiltinModels: vi.fn(async () => {}),
+    requestModelsAutoRefresh: vi.fn(async () => {}),
     // 生产恒定接线（register.ts）。默认桩 = 已接线且信任，好让其余用例只关心自己的分支；
     // 「漏接线」是独立用例，显式不传这个 dep。
     assertTrustedSender: vi.fn(() => {}),
@@ -78,6 +98,8 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
     storeCustomProviderKey: vi.fn(() => true),
     removeCustomProviderKey: vi.fn(() => ({ success: true })),
     scanLocalCli: vi.fn(async () => []),
+    setModelsDisabled: vi.fn(() => {}),
+    setProviderDisabled: vi.fn(() => {}),
     ...over,
   };
 }
@@ -116,6 +138,271 @@ describe('provider:list IPC handler', () => {
       }),
     );
     await expect(harness.invoke(MAKER_INVOKE.PROVIDER_LIST)).rejects.toThrow('boom');
+  });
+});
+
+describe('model-disable:set handler', () => {
+  /** 停用写入(disabled=true)按目录成员校验,fixture 提供 xd 的真实清单。 */
+  const xdCatalog = () => [
+    catalogView(
+      'xd',
+      { 'claude-code': ['claude-opus-5'], codex: ['chatgpt/gpt-5.5'] },
+      { image: ['seedream-5'], video: ['seedance-2'] },
+    ),
+  ];
+
+  it('model 形态:写停用 override 并广播 PROVIDER_CHANGED', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({ listProviders: async () => xdCatalog() });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, {
+        kind: 'model',
+        providerId: 'xd',
+        modelIds: ['claude-opus-5', 'chatgpt/gpt-5.5'],
+        disabled: true,
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(deps.setModelsDisabled).toHaveBeenCalledWith('xd', ['claude-opus-5', 'chatgpt/gpt-5.5'], true);
+    expect(deps.broadcastChanged).toHaveBeenCalledOnce();
+  });
+
+  it('专属媒体清单(imageModels/videoModels)的 id 同样是合法停用目标', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({ listProviders: async () => xdCatalog() });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, {
+        kind: 'model', providerId: 'xd', modelIds: ['seedream-5', 'seedance-2'], disabled: true,
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(deps.setModelsDisabled).toHaveBeenCalledWith('xd', ['seedream-5', 'seedance-2'], true);
+  });
+
+  it('停用按目录成员校验:未知 providerId / 未知 modelId → INVALID_PARAMS,不写', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({ listProviders: async () => xdCatalog() });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, {
+        kind: 'model', providerId: 'ghost', modelIds: ['claude-opus-5'], disabled: true,
+      }),
+    ).rejects.toThrow(/INVALID_PARAMS/);
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, {
+        kind: 'model', providerId: 'xd', modelIds: ['claude-opus-5', 'not-in-catalog'], disabled: true,
+      }),
+    ).rejects.toThrow(/INVALID_PARAMS/);
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, {
+        kind: 'provider', providerId: 'ghost', disabled: true,
+      }),
+    ).rejects.toThrow(/INVALID_PARAMS/);
+    expect(deps.setModelsDisabled).not.toHaveBeenCalled();
+    expect(deps.setProviderDisabled).not.toHaveBeenCalled();
+    expect(deps.broadcastChanged).not.toHaveBeenCalled();
+  });
+
+  it('恢复启用(disabled=false)不校验成员:目录漂移后仍能清掉陈旧 override', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({ listProviders: async () => [] });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, {
+        kind: 'model', providerId: 'retired', modelIds: ['gone-model'], disabled: false,
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(deps.setModelsDisabled).toHaveBeenCalledWith('retired', ['gone-model'], false);
+  });
+
+  it('写入串行:先到的停用(等目录校验)不被后到的启用超车,最后一次操作赢', async () => {
+    const harness = new IpcHarness();
+    const order: string[] = [];
+    let releaseCatalog!: () => void;
+    const catalogGate = new Promise<void>((resolve) => {
+      releaseCatalog = resolve;
+    });
+    const deps = makeDeps({
+      // 停用请求要等目录校验;启用(删条目)不查目录 —— 不串行时启用会先落盘。
+      listProviders: async () => {
+        await catalogGate;
+        return xdCatalog();
+      },
+      setModelsDisabled: vi.fn((_p: string, _ids: readonly string[], disabled: boolean) => {
+        order.push(disabled ? 'disable' : 'enable');
+      }),
+    });
+    registerProviderHandlers(harness, deps);
+
+    const disableReq = harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, {
+      kind: 'model', providerId: 'xd', modelIds: ['claude-opus-5'], disabled: true,
+    });
+    const enableReq = harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, {
+      kind: 'model', providerId: 'xd', modelIds: ['claude-opus-5'], disabled: false,
+    });
+    await Promise.resolve();
+    expect(order).toEqual([]); // 启用被队列挡在停用后面,而不是抢先落盘
+    releaseCatalog();
+    await Promise.all([disableReq, enableReq]);
+    expect(order).toEqual(['disable', 'enable']);
+  });
+
+  it('异步窗口内切账号 → INTERNAL 拒写:A 的点击不落进 B 的 owner-scoped 偏好', async () => {
+    const harness = new IpcHarness();
+    let owner = 'owner-a';
+    const deps = makeDeps({
+      currentOwnerId: () => owner,
+      // 目录校验的 await 窗口内发生账号切换。
+      listProviders: async () => {
+        owner = 'owner-b';
+        return xdCatalog();
+      },
+    });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, {
+        kind: 'model', providerId: 'xd', modelIds: ['claude-opus-5'], disabled: true,
+      }),
+    ).rejects.toThrow(/INTERNAL/);
+    expect(deps.setModelsDisabled).not.toHaveBeenCalled();
+    expect(deps.broadcastChanged).not.toHaveBeenCalled();
+
+    // 账号稳定时照常放行。
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, {
+        kind: 'model', providerId: 'xd', modelIds: ['claude-opus-5'], disabled: true,
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(deps.setModelsDisabled).toHaveBeenCalledOnce();
+  });
+
+  it('落盘异常 → 结构化 INTERNAL,不把文件系统细节透过 IPC 边界', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      listProviders: async () => xdCatalog(),
+      setModelsDisabled: vi.fn(() => {
+        throw new Error('EACCES: permission denied, rename /Users/x/userData/model-disable-prefs.json');
+      }),
+    });
+    registerProviderHandlers(harness, deps);
+
+    const req = harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, {
+      kind: 'model', providerId: 'xd', modelIds: ['claude-opus-5'], disabled: true,
+    });
+    await expect(req).rejects.toThrow(/INTERNAL/);
+    await req.catch((err: unknown) => {
+      expect(String(err)).not.toContain('EACCES');
+      expect(String(err)).not.toContain('userData');
+    });
+    expect(deps.broadcastChanged).not.toHaveBeenCalled();
+  });
+
+  it('reset 形态:恢复默认删除整组 override(不做目录成员校验)并广播', async () => {
+    // 恢复默认要能清掉指向已下架模型的陈旧条目 —— 与「恢复启用」同语义,故意不查目录
+    // (configuration-and-overrides.md §4;R24)。
+    const harness = new IpcHarness();
+    const listProviders = vi.fn(async () => [] as ProviderView[]);
+    const deps = makeDeps({
+      listProviders,
+      clearProviderDisableOverrides: vi.fn(() => {}),
+    });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'reset', providerId: 'gone-provider' }),
+    ).resolves.toEqual({ ok: true });
+    expect(deps.clearProviderDisableOverrides).toHaveBeenCalledWith('gone-provider');
+    expect(listProviders).not.toHaveBeenCalled();
+    expect(deps.broadcastChanged).toHaveBeenCalledOnce();
+
+    // 未接线时结构化 INTERNAL,不静默吞掉。
+    const harness2 = new IpcHarness();
+    const deps2 = makeDeps({ clearProviderDisableOverrides: undefined });
+    registerProviderHandlers(harness2, deps2);
+    await expect(
+      harness2.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'reset', providerId: 'xd' }),
+    ).rejects.toThrow(/INTERNAL/);
+  });
+
+  it('provider 形态:写供应商级停用并广播', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider', providerId: 'xd', disabled: false }),
+    ).resolves.toEqual({ ok: true });
+    expect(deps.setProviderDisabled).toHaveBeenCalledWith('xd', false);
+    expect(deps.broadcastChanged).toHaveBeenCalledOnce();
+  });
+
+  it('入参非法(缺 modelIds / 未知 kind)→ INVALID_PARAMS,不写不广播', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'model', providerId: 'xd', modelIds: [], disabled: true }),
+    ).rejects.toThrow(/INVALID_PARAMS/);
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'nope', providerId: 'xd', disabled: true }),
+    ).rejects.toThrow(/INVALID_PARAMS/);
+    expect(deps.setModelsDisabled).not.toHaveBeenCalled();
+    expect(deps.setProviderDisabled).not.toHaveBeenCalled();
+    expect(deps.broadcastChanged).not.toHaveBeenCalled();
+  });
+
+  it('入参超限(超长 id / 超大数组)→ INVALID_PARAMS,不落盘(本通道同步序列化写文件)', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerProviderHandlers(harness, deps);
+
+    const hugeId = 'x'.repeat(300);
+    const hugeList = Array.from({ length: 600 }, (_v, i) => `m-${i}`);
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, {
+        kind: 'model', providerId: hugeId, modelIds: ['m1'], disabled: true,
+      }),
+    ).rejects.toThrow(/INVALID_PARAMS/);
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, {
+        kind: 'model', providerId: 'xd', modelIds: [hugeId], disabled: true,
+      }),
+    ).rejects.toThrow(/INVALID_PARAMS/);
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, {
+        kind: 'model', providerId: 'xd', modelIds: hugeList, disabled: true,
+      }),
+    ).rejects.toThrow(/INVALID_PARAMS/);
+    expect(deps.setModelsDisabled).not.toHaveBeenCalled();
+    expect(deps.broadcastChanged).not.toHaveBeenCalled();
+  });
+
+  it('设置类写操作:不可信 sender / 守卫未接线一律拒绝', async () => {
+    const harness = new IpcHarness();
+    const rejecting = makeDeps({
+      assertTrustedSender: vi.fn(() => {
+        throwIpcError('PERMISSION_DENIED', '此操作只能从 Cindy 主页面发起');
+      }),
+    });
+    registerProviderHandlers(harness, rejecting);
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider', providerId: 'xd', disabled: true }),
+    ).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(rejecting.setProviderDisabled).not.toHaveBeenCalled();
+
+    const harness2 = new IpcHarness();
+    const unwired = makeDeps({ assertTrustedSender: undefined });
+    registerProviderHandlers(harness2, unwired);
+    await expect(
+      harness2.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, { kind: 'provider', providerId: 'xd', disabled: true }),
+    ).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(unwired.setProviderDisabled).not.toHaveBeenCalled();
   });
 });
 
@@ -193,6 +480,141 @@ describe('provider:models-rediscover handler', () => {
     await expect(
       harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REDISCOVER, 'anthropic'),
     ).rejects.toThrow(/INTERNAL/);
+  });
+});
+
+describe('provider:models-refresh handler', () => {
+  it('guards the sender, validates the built-in id, and forwards the refresh', async () => {
+    const harness = new IpcHarness();
+    const assertTrustedSender = vi.fn();
+    const refreshBuiltinModels = vi.fn(async () => {});
+    registerProviderHandlers(
+      harness,
+      makeDeps({ assertTrustedSender, refreshBuiltinModels }),
+    );
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REFRESH, 'anthropic'),
+    ).resolves.toEqual({ ok: true, providerId: 'anthropic' });
+    expect(assertTrustedSender).toHaveBeenCalledOnce();
+    expect(refreshBuiltinModels).toHaveBeenCalledWith('anthropic');
+  });
+
+  it('rejects unsupported ids before refreshing', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REFRESH, 'custom-provider'),
+    ).rejects.toThrow(
+      `[INVALID_PARAMS] providerId must be one of: ${BUILTIN_REFRESHABLE_PROVIDER_IDS.join(', ')}`,
+    );
+    expect(deps.refreshBuiltinModels).not.toHaveBeenCalled();
+  });
+
+  it('does not run the refresh when the sender guard rejects', async () => {
+    const harness = new IpcHarness();
+    const refreshBuiltinModels = vi.fn(async () => {});
+    registerProviderHandlers(
+      harness,
+      makeDeps({
+        assertTrustedSender: () => {
+          throw new Error('[PERMISSION_DENIED] untrusted sender');
+        },
+        refreshBuiltinModels,
+      }),
+    );
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REFRESH, 'openai'),
+    ).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(refreshBuiltinModels).not.toHaveBeenCalled();
+  });
+
+  it('maps source refresh failures to a generic IPC error', async () => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(
+      harness,
+      makeDeps({
+        refreshBuiltinModels: async () => {
+          throw new Error('/secret/path should stay in main logs');
+        },
+      }),
+    );
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REFRESH, 'xai'),
+    ).rejects.toThrow("[INTERNAL] model list refresh failed for 'xai'");
+  });
+
+  it('preserves structured IPC errors from provider-specific refreshers', async () => {
+    const harness = new IpcHarness();
+    registerProviderHandlers(
+      harness,
+      makeDeps({
+        refreshBuiltinModels: async () => {
+          throwIpcError('MODEL_ACCESS_FAILED', 'Cindy AI model list refresh failed.');
+        },
+      }),
+    );
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_REFRESH, 'xd'),
+    ).rejects.toMatchObject({
+      code: 'MODEL_ACCESS_FAILED',
+      message: '[MODEL_ACCESS_FAILED] Cindy AI model list refresh failed.',
+    });
+  });
+});
+
+describe('provider:models-auto-refresh handler', () => {
+  it('guards the sender and forwards an allowed renderer trigger', async () => {
+    const harness = new IpcHarness();
+    const assertTrustedSender = vi.fn();
+    const requestModelsAutoRefresh = vi.fn(async () => {});
+    registerProviderHandlers(
+      harness,
+      makeDeps({ assertTrustedSender, requestModelsAutoRefresh }),
+    );
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_AUTO_REFRESH, 'model-selector-open'),
+    ).resolves.toEqual({ ok: true });
+    expect(assertTrustedSender).toHaveBeenCalledOnce();
+    expect(requestModelsAutoRefresh).toHaveBeenCalledWith('model-selector-open');
+  });
+
+  it('rejects foreground and unknown renderer triggers', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_AUTO_REFRESH, 'foreground'),
+    ).rejects.toThrow(
+      '[INVALID_PARAMS] trigger must be one of: providers-open, model-selector-open',
+    );
+    expect(deps.requestModelsAutoRefresh).not.toHaveBeenCalled();
+  });
+
+  it('does not forward when the trusted sender guard rejects', async () => {
+    const harness = new IpcHarness();
+    const requestModelsAutoRefresh = vi.fn(async () => {});
+    registerProviderHandlers(
+      harness,
+      makeDeps({
+        assertTrustedSender: () => {
+          throw new Error('[PERMISSION_DENIED] untrusted sender');
+        },
+        requestModelsAutoRefresh,
+      }),
+    );
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_AUTO_REFRESH, 'providers-open'),
+    ).rejects.toThrow(/PERMISSION_DENIED/);
+    expect(requestModelsAutoRefresh).not.toHaveBeenCalled();
   });
 });
 
@@ -881,6 +1303,57 @@ describe('provider:custom:* CRUD handlers', () => {
     ).rejects.toThrow(/INTERNAL.*failed to remove existing OAuth credentials/);
     expect(await listCustomProviders()).toHaveLength(1);
     expect(keys.get('codex')).toBe('must-survive');
+  });
+
+  it('删除事务持 disable 写队列直到目录刷新:并发停用写排在刷新后,按成员校验拒绝', async () => {
+    // R22:只把清理入队的话,清理落盘后队列即释放,「删除完成前」的窗口里并发
+    // MODEL_DISABLE_SET 仍能从未刷新的 listProviders() 里找到该 provider、预埋新
+    // override,同 id 重建复活停用状态。整体持锁后,并发写必须排到 afterChange 刷完
+    // 目录之后 —— 那时成员校验已看不到该 provider,自然 INVALID_PARAMS 拒绝。
+    mountDb();
+    const harness = new IpcHarness();
+    let catalogHasProvider = true;
+    const deps = makeDeps({
+      listProviders: async () =>
+        catalogHasProvider ? [catalogView('openrouter', { codex: ['meta/llama-4'] })] : [],
+      stageClearProviderDisableOverrides: vi.fn(() => () => true),
+    });
+    registerProviderHandlers(harness, deps);
+    // create 的收尾也调 refreshCatalog(makeDeps 默认无门闩,直接放行);create 完成后
+    // 再把 refreshCatalog 换成带门闩的实现给删除用。
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig, { codex: 'k' });
+    let releaseDeleteRefresh!: () => void;
+    const deleteRefreshGate = new Promise<void>((resolve) => {
+      releaseDeleteRefresh = resolve;
+    });
+    let deleteRefreshEntered!: () => void;
+    const deleteRefreshEnteredGate = new Promise<void>((resolve) => {
+      deleteRefreshEntered = resolve;
+    });
+    (deps.refreshCatalog as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      deleteRefreshEntered();
+      await deleteRefreshGate;
+      catalogHasProvider = false;
+    });
+
+    const del = harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, 'openrouter');
+    // 等删除事务推进到 afterChange(此刻配置已删、队列仍被删除事务持有)。
+    await deleteRefreshEnteredGate;
+    const set = harness.invoke(MAKER_INVOKE.MODEL_DISABLE_SET, {
+      kind: 'model', providerId: 'openrouter', modelIds: ['meta/llama-4'], disabled: true,
+    });
+    let setSettled = false;
+    void set.then(() => { setSettled = true; }, () => { setSettled = true; });
+    await Promise.resolve();
+    await Promise.resolve();
+    // 队列被删除事务持有 —— 并发停用写不得在目录刷新前落盘或返回。
+    expect(setSettled).toBe(false);
+    expect(deps.setModelsDisabled).not.toHaveBeenCalled();
+
+    releaseDeleteRefresh();
+    await expect(del).resolves.toEqual({ ok: true });
+    await expect(set).rejects.toThrow(/INVALID_PARAMS.*unknown providerId/);
+    expect(deps.setModelsDisabled).not.toHaveBeenCalled();
   });
 });
 

@@ -9,6 +9,15 @@ import manifest, {
 	desktopUnitWorkerCount,
 } from "../test-workspaces.config.mjs";
 import {
+	acquireTestGateLock,
+	classifyTestGateLockProbeError,
+	decideTestGateLock,
+	resolveTestGateCommonDir,
+	shouldUseTestGateLock,
+	TEST_GATE_LOCK_TIMEOUT_EXIT_CODE,
+	testGateLockIdentity,
+} from "../test-gate-lock.mjs";
+import {
 	buildPnpmArgs,
 	checkIncludeCoverage,
 	checkTestFiles,
@@ -28,6 +37,7 @@ import {
 	parseWorkspaceSelectorValue,
 	planRuns,
 	printSummary,
+	readAllFiles,
 	resolvePnpmInvocation,
 	resolveOutputStream,
 	runCommand,
@@ -79,10 +89,27 @@ test("root unit and all scripts run runner self-tests before workspace sweep", (
 test("root db and guard delegate to the workspace runner", () => {
 	const scripts = readRootScripts();
 	assert.equal(
+		scripts["test:git-integration"],
+		"pnpm test:runner && node scripts/test-workspaces.mjs --tier git-integration",
+	);
+	assert.equal(
 		scripts["test:db"],
 		"pnpm test:runner && node scripts/test-workspaces.mjs --tier db",
 	);
 	assert.equal(scripts["test:guard"], "node scripts/test-workspaces.mjs --tier guard");
+});
+
+test("client CI owns the complete Desktop Git integration tier", () => {
+	const workflow = fs.readFileSync(
+		path.join(ROOT, ".github", "workflows", "ci.yml"),
+		"utf8",
+	).replace(/\r\n/g, "\n");
+	const job = workflow.match(/\n  git-integration:\n([\s\S]*)$/);
+	assert.ok(job, "client CI must define an independent git-integration job");
+	assert.match(
+		job[1],
+		/^\s{6}- name: Run Desktop Git integration tests\n\s{8}run: pnpm test:git-integration$/m,
+	);
 });
 
 test("help groups copyable desktop, binary, and Mobile workflows", async () => {
@@ -289,6 +316,7 @@ test("desktop unit excludes migration, direct db-tier, and source-contract guard
 	const tier = {
 		status: "required",
 		exclude: [
+			"**/*.git-integration.test.ts",
 			"src/main/localDb/**",
 			"src/main/__tests__/*Migration.test.ts",
 			"src/main/__tests__/schemaDriftRepair.test.ts",
@@ -304,6 +332,7 @@ test("desktop unit excludes migration, direct db-tier, and source-contract guard
 	};
 	assert.deepEqual(
 		selectFilesForTier(workspace, tier, [
+			"apps/desktop/src/main/git-review/__tests__/stageOps.git-integration.test.ts",
 			"apps/desktop/src/main/localDb/ipc/messages.test.ts",
 			"apps/desktop/src/main/__tests__/sessionWorkspaceKindMigration.test.ts",
 			"apps/desktop/src/main/__tests__/codexProjectlessMigration.test.ts",
@@ -324,6 +353,71 @@ test("desktop unit excludes migration, direct db-tier, and source-contract guard
 			"apps/desktop/src/main/__tests__/lifecycle.test.ts",
 		],
 	);
+});
+
+test("desktop real-Git coverage is an explicit coordinated tier outside default unit", () => {
+	const desktopPackage = readWorkspacePackageJson("apps/desktop");
+	const desktop = manifest.workspaces.find(
+		(workspace) => workspace.cwd === "apps/desktop",
+	);
+	const tier = desktop.tiers["git-integration"];
+
+	assert.equal(tier.status, "manual");
+	assert.equal(tier.execution, "exclusive");
+	assert.equal(tier.coverage, "allowlist");
+	assert.deepEqual(tier.include, ["src/main/**/*.git-integration.test.ts"]);
+	assert.deepEqual(tier.command, {
+		type: "packageBin",
+		bin: "vitest",
+		args: ["run", `--maxWorkers=${desktopUnitWorkerCount()}`],
+	});
+	assert.match(
+		desktopPackage.scripts["test:git-integration"],
+		/test-workspaces\.mjs --tier git-integration/,
+	);
+
+	const files = [
+		"apps/desktop/src/main/git-review/__tests__/stageOps.git-integration.test.ts",
+		"apps/desktop/src/main/__tests__/gitSnapshotService.git-integration.test.ts",
+		"apps/desktop/src/main/git-review/__tests__/gitReviewSmoke.test.ts",
+	];
+	assert.deepEqual(selectFilesForTier(desktop, desktop.tiers.unit, files), [
+		"apps/desktop/src/main/git-review/__tests__/gitReviewSmoke.test.ts",
+	]);
+	assert.deepEqual(selectFilesForTier(desktop, tier, files), files.slice(0, 2));
+});
+
+test("default desktop unit keeps real Git subprocess coverage to one smoke", () => {
+	const files = discoverTestFiles(readAllFiles(ROOT))
+		.filter((file) =>
+			file.startsWith("apps/desktop/src/main/") &&
+			file.endsWith(".test.ts") &&
+			!file.endsWith(".git-integration.test.ts"),
+		)
+		.filter((file) => /\b(?:runGit|gitExec)\(/.test(
+			fs.readFileSync(path.join(ROOT, file), "utf8"),
+		));
+
+	assert.deepEqual(files, [
+		"apps/desktop/src/main/git-review/__tests__/gitReviewSmoke.test.ts",
+		// This file mocks child_process.spawn and tests the adapter itself.
+		"apps/desktop/src/main/git-review/__tests__/gitRunner.test.ts",
+	]);
+});
+
+test("tests never bind a fixed numeric port", () => {
+	const violations = [];
+	for (const file of discoverTestFiles(readAllFiles(ROOT))) {
+		const source = fs.readFileSync(path.join(ROOT, file), "utf8");
+		const directPort = /\.listen\s*\(\s*(\d+)/g;
+		const objectPort = /\.listen\s*\(\s*\{[\s\S]{0,300}?\bport\s*:\s*(\d+)/g;
+		for (const pattern of [directPort, objectPort]) {
+			for (const match of source.matchAll(pattern)) {
+				if (Number(match[1]) !== 0) violations.push(`${file}:${match[1]}`);
+			}
+		}
+	}
+	assert.deepEqual(violations, []);
 });
 
 test("desktop guard selects source-contract tests only", () => {
@@ -619,6 +713,7 @@ test("parseCliOptions rejects --tier without a value", () => {
 		workspaces: [],
 		excludeWorkspaces: [],
 		workspaceConcurrency: undefined,
+		noLock: false,
 	});
 });
 
@@ -640,6 +735,7 @@ test("parseCliOptions supports workspace include and exclude selectors", () => {
 			workspaces: ["desktop", "apps/server", "@cindy/maker-core"],
 			excludeWorkspaces: ["packages/orca-workflow"],
 			workspaceConcurrency: undefined,
+			noLock: false,
 		},
 	);
 	assert.deepEqual(parseWorkspaceSelectorValue(" desktop, apps/server "), [
@@ -676,6 +772,283 @@ test("workspace concurrency defaults to a bounded CPU count and accepts both CLI
 		() => parseCliOptions(["--workspace-concurrency"]),
 		/requires a positive integer/,
 	);
+	assert.equal(parseCliOptions(["--no-lock"]).noLock, true);
+});
+
+test("test gate lock covers heavy local tiers but skips guard, CI, and explicit bypass", () => {
+	for (const tier of ["unit", "db", "git-integration"]) {
+		assert.equal(shouldUseTestGateLock({ tier, env: {} }), true);
+	}
+	assert.equal(shouldUseTestGateLock({ all: true, env: {} }), true);
+	assert.equal(shouldUseTestGateLock({ tier: "guard", env: {} }), false);
+	assert.equal(
+		shouldUseTestGateLock({ tier: "unit", noLock: true, env: {} }),
+		false,
+	);
+	for (const env of [{ CI: "1" }, { CI: "true" }, { GITHUB_ACTIONS: "true" }]) {
+		assert.equal(shouldUseTestGateLock({ tier: "unit", env }), false);
+	}
+	assert.equal(
+		shouldUseTestGateLock({ tier: "unit", env: { CI: "false" } }),
+		true,
+	);
+});
+
+test("test gate lock identity is stable per clone and normalizes Windows case", () => {
+	assert.equal(
+		testGateLockIdentity("C:\\Repo\\.git", "win32"),
+		testGateLockIdentity("c:\\repo\\.git", "win32"),
+	);
+	assert.notEqual(
+		testGateLockIdentity("/repo-a/.git", "linux"),
+		testGateLockIdentity("/repo-b/.git", "linux"),
+	);
+});
+
+test("test gate common-dir resolver joins worktrees from one clone without joining separate roots", async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "test-gate-common-dir-"));
+	try {
+		const commonDir = path.join(root, "common.git");
+		const firstGitDir = path.join(commonDir, "worktrees", "first");
+		const secondGitDir = path.join(commonDir, "worktrees", "second");
+		const firstWorktree = path.join(root, "first");
+		const secondWorktree = path.join(root, "second");
+		const separateRoot = path.join(root, "separate");
+		for (const directory of [
+			firstGitDir,
+			secondGitDir,
+			firstWorktree,
+			secondWorktree,
+			separateRoot,
+		]) {
+			fs.mkdirSync(directory, { recursive: true });
+		}
+		fs.writeFileSync(path.join(firstWorktree, ".git"), `gitdir: ${firstGitDir}\n`);
+		fs.writeFileSync(
+			path.join(secondWorktree, ".git"),
+			`gitdir: ${secondGitDir}\n`,
+		);
+		for (const gitDir of [firstGitDir, secondGitDir]) {
+			fs.writeFileSync(path.join(gitDir, "commondir"), "../..\n");
+		}
+
+		const firstResolved = await resolveTestGateCommonDir(firstWorktree);
+		const secondResolved = await resolveTestGateCommonDir(secondWorktree);
+		const separateResolved = await resolveTestGateCommonDir(separateRoot);
+		assert.equal(firstResolved, secondResolved);
+		assert.notEqual(firstResolved, separateResolved);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("test gate lock decision prefers an existing owner over an earlier free port", () => {
+	const owner = { pid: 42, tier: "unit", cwd: "/repo/worktree-a" };
+	assert.deepEqual(
+		decideTestGateLock([
+			{ port: 50_000, result: "available" },
+			{ port: 50_001, result: "owner", owner },
+		]),
+		{ type: "wait", owner },
+	);
+	assert.deepEqual(
+		decideTestGateLock([
+			{ port: 50_000, result: "collision" },
+			{ port: 50_001, result: "available" },
+		]),
+		{ type: "acquire", port: 50_001 },
+	);
+	assert.deepEqual(
+		decideTestGateLock([{ port: 50_000, result: "collision" }]),
+		{ type: "unavailable" },
+	);
+	assert.equal(classifyTestGateLockProbeError("ECONNREFUSED"), "available");
+	assert.equal(classifyTestGateLockProbeError("ETIMEDOUT"), "collision");
+});
+
+test("test gate lock reports the holder, waits, and acquires after release", async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "test-gate-lock-"));
+	let probeRound = 0;
+	let now = 0;
+	let listenedPort;
+	const output = [];
+	try {
+		const lock = await acquireTestGateLock({
+			repoRoot: root,
+			owner: { pid: 99, tier: "db", cwd: root },
+			timeoutMs: 1_000,
+			retryDelayMs: 100,
+			now: () => now,
+			sleep: async (durationMs) => {
+				now += durationMs;
+			},
+			probeCandidatesImpl: async (ports) => {
+				probeRound += 1;
+				if (probeRound === 1) {
+					return [
+						{ port: ports[0], result: "available" },
+						{
+							port: ports[1],
+							result: "owner",
+							owner: {
+								pid: 42,
+								tier: "unit",
+								cwd: "/repo/worktree-a",
+							},
+						},
+					];
+				}
+				return [{ port: ports[0], result: "available" }];
+			},
+			listenImpl: async (port) => {
+				listenedPort = port;
+				return { port, release: async () => {} };
+			},
+			output: (message) => output.push(message),
+		});
+		assert.equal(probeRound, 2);
+		assert.equal(lock.port, listenedPort);
+		assert.match(output.join("\n"), /pid 42, tier unit, cwd \/repo\/worktree-a/);
+		await lock.release();
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+// A real probe round connects to every candidate port, and a port that accepts
+// the connection without answering only resolves once the probe socket times
+// out. So the window that waits for the WAIT report has to be far wider than a
+// single probe round, otherwise a slow round loses the race and the assertion
+// fails for reasons unrelated to the lock protocol.
+const REAL_LOCK_WAIT_WINDOW_MS = 30_000;
+const REAL_LOCK_ACQUIRE_TIMEOUT_MS = 60_000;
+
+function raceWithDeadline(candidates, deadlineMs, deadlineValue) {
+	let timer;
+	const deadline = new Promise((resolve) => {
+		timer = setTimeout(() => resolve(deadlineValue), deadlineMs);
+	});
+	return Promise.race([...candidates, deadline]).finally(() => {
+		clearTimeout(timer);
+	});
+}
+
+test("two real test gate lock holders serialize on the same identity", async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "test-gate-real-lock-"));
+	let firstLock;
+	let secondLockPromise;
+	let reportWaiting;
+	const waiting = new Promise((resolve) => {
+		reportWaiting = resolve;
+	});
+	try {
+		firstLock = await acquireTestGateLock({
+			repoRoot: root,
+			owner: { pid: 41, tier: "unit", cwd: path.join(root, "first") },
+			output: () => {},
+		});
+		secondLockPromise = acquireTestGateLock({
+			repoRoot: root,
+			owner: { pid: 42, tier: "db", cwd: path.join(root, "second") },
+			timeoutMs: REAL_LOCK_ACQUIRE_TIMEOUT_MS,
+			retryDelayMs: 10,
+			output: reportWaiting,
+		});
+		// A failing assertion below jumps straight to `finally` while this
+		// acquisition is still running. Attach a no-op handler so an eventual
+		// rejection is never unhandled; the real await and release happen in
+		// `finally`, otherwise a lock bound after the failure keeps its listener
+		// open and `node --test` never exits.
+		secondLockPromise.catch(() => {});
+
+		const outcome = await raceWithDeadline(
+			[waiting.then(() => "waiting"), secondLockPromise.then(() => "acquired")],
+			REAL_LOCK_WAIT_WINDOW_MS,
+			"timed-out",
+		);
+		assert.equal(outcome, "waiting");
+
+		await firstLock.release();
+		firstLock = undefined;
+		const secondLock = await secondLockPromise;
+		assert.ok(secondLock.port >= 49_152);
+	} finally {
+		// Order matters: releasing the first lock lets the second acquisition
+		// settle immediately instead of waiting out its own timeout.
+		await firstLock?.release();
+		await secondLockPromise?.then(
+			(lock) => lock.release(),
+			() => {},
+		);
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("test gate lock skips ports denied at bind time", async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "test-gate-bind-denied-"));
+	const attemptedPorts = [];
+	try {
+		const lock = await acquireTestGateLock({
+			repoRoot: root,
+			owner: { pid: 99, tier: "unit", cwd: root },
+			probeCandidatesImpl: async (ports) =>
+				ports.map((port) => ({ port, result: "available" })),
+			listenImpl: async (port) => {
+				attemptedPorts.push(port);
+				if (attemptedPorts.length === 1) {
+					throw Object.assign(new Error("bind denied"), { code: "EACCES" });
+				}
+				return { port, release: async () => {} };
+			},
+			output: () => {},
+		});
+
+		assert.equal(attemptedPorts.length, 2);
+		assert.notEqual(attemptedPorts[0], attemptedPorts[1]);
+		assert.equal(lock.port, attemptedPorts[1]);
+		await lock.release();
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("test gate lock timeout uses a distinct temporary-failure exit code", async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "test-gate-timeout-"));
+	let now = 0;
+	try {
+		await assert.rejects(
+			() =>
+				acquireTestGateLock({
+					repoRoot: root,
+					owner: { pid: 99, tier: "unit", cwd: root },
+					timeoutMs: 100,
+					retryDelayMs: 100,
+					now: () => now,
+					sleep: async (durationMs) => {
+						now += durationMs;
+					},
+					probeCandidatesImpl: async (ports) => [
+						{
+							port: ports[0],
+							result: "owner",
+							owner: {
+								pid: 42,
+								tier: "unit",
+								cwd: "/repo/worktree-a",
+							},
+						},
+					],
+					output: () => {},
+				}),
+			(error) => {
+				assert.equal(error.exitCode, TEST_GATE_LOCK_TIMEOUT_EXIT_CODE);
+				assert.match(error.message, /tests did not run/);
+				return true;
+			},
+		);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("resolvePnpmInvocation uses current pnpm through node when npm_execpath is present on any platform", () => {

@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createElement, createRef } from 'react';
 
+import tailwindConfig from '../../../../../../../tailwind.config';
 import { BrowserChrome, type BrowserChromeHandle } from '../BrowserChrome';
 
 vi.mock('react-i18next', () => ({
@@ -44,7 +45,12 @@ vi.mock('@/components/ui/dropdown-menu', () => {
 
 function renderChrome(
   url = 'https://www.taptap.cn/',
-  extra: { commentSupported?: boolean } = {},
+  extra: {
+    commentSupported?: boolean;
+    isLoading?: boolean;
+    onReload?: () => void;
+    onStop?: () => void;
+  } = {},
 ) {
   const onNavigate = vi.fn();
   const onOpenInSystemBrowser = vi.fn();
@@ -54,12 +60,12 @@ function renderChrome(
     createElement(BrowserChrome, {
       ref,
       url,
-      isLoading: false,
+      isLoading: extra.isLoading ?? false,
       canGoBack: false,
       canGoForward: false,
       onNavigate,
-      onReload: vi.fn(),
-      onStop: vi.fn(),
+      onReload: extra.onReload ?? vi.fn(),
+      onStop: extra.onStop ?? vi.fn(),
       onGoBack: vi.fn(),
       onGoForward: vi.fn(),
       onCaptureScreenshot: vi.fn(),
@@ -67,7 +73,7 @@ function renderChrome(
       onToggleComment: vi.fn(),
       onOpenInSystemBrowser,
       onCopyLink,
-      ...extra,
+      commentSupported: extra.commentSupported,
     }),
   );
   return { onNavigate, onOpenInSystemBrowser, onCopyLink, ref };
@@ -104,6 +110,57 @@ describe('BrowserChrome', () => {
     expect(
       screen.queryByRole('button', { name: 'rightSidebar.browser.comment' }),
     ).toBeNull();
+  });
+
+  it('shows a compositor-friendly refresh animation while loading and stops on click', () => {
+    const onReload = vi.fn();
+    const onStop = vi.fn();
+    renderChrome('https://www.taptap.cn/', {
+      isLoading: true,
+      onReload,
+      onStop,
+    });
+
+    const button = screen.getByRole('button', { name: 'rightSidebar.browser.stop' });
+    const spinner = button.querySelector('span');
+    expect(button.getAttribute('aria-busy')).toBe('true');
+    expect(spinner?.classList.contains('animate-spinner')).toBe(true);
+    expect(spinner?.classList.contains('animate-spin')).toBe(false);
+    expect(spinner?.classList.contains('motion-reduce:hidden')).toBe(true);
+    expect(button.querySelector('.lucide-rotate-cw')).toBeTruthy();
+    expect(
+      button.querySelector('.lucide-x')?.parentElement?.classList.contains(
+        'motion-reduce:inline-flex',
+      ),
+    ).toBe(true);
+
+    fireEvent.click(button);
+    expect(onStop).toHaveBeenCalledOnce();
+    expect(onReload).not.toHaveBeenCalled();
+  });
+
+  it('keeps the idle refresh icon static and reloads on click', () => {
+    const onReload = vi.fn();
+    const onStop = vi.fn();
+    renderChrome('https://www.taptap.cn/', { onReload, onStop });
+
+    const button = screen.getByRole('button', { name: 'rightSidebar.browser.reload' });
+    expect(button.hasAttribute('aria-busy')).toBe(false);
+    expect(button.querySelector('span')?.classList.contains('animate-spinner')).toBe(false);
+
+    fireEvent.click(button);
+    expect(onReload).toHaveBeenCalledOnce();
+    expect(onStop).not.toHaveBeenCalled();
+  });
+
+  it('routes the refresh spinner through the approved semantic cycle token', () => {
+    const animation = (
+      tailwindConfig.theme?.extend?.animation as Record<string, string> | undefined
+    )?.spinner;
+
+    expect(animation).toContain('var(--motion-spinner-cycle, 1000ms)');
+    expect(animation).not.toContain('--motion-enter');
+    expect(animation).not.toContain('spin 1s');
   });
 
   it('fires open-in-system-browser and copy-link from the more menu when the link is valid', () => {

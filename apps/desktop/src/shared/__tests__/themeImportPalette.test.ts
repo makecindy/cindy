@@ -86,10 +86,15 @@ const SOLARIZED_LIGHT_PALETTE: ThemePalette = {
   accentPrimary: rgb('#859900'),
   accentSoft: rgb('#5e6a00'),
   accentDeep: rgb('#5e6a00'),
+  // Solarized 惯例：卡片 / 输入框用 base2 压暗一档（solarized-light.ts 头部注释）。
+  inputBg: rgb('#eee8d5'),
 };
 
-/** 值为 HSL 三元组的 token → 它应当换算自哪个色板角色。 */
-const HSL_TOKEN_ROLE: Record<string, keyof ThemePalette> = {
+/** 值为 HSL 三元组的 token → 它应当换算自哪个色板角色（仅必填角色，可选的 inputBg 不在此列）。 */
+type RequiredPaletteRole = {
+  [K in keyof ThemePalette]-?: undefined extends ThemePalette[K] ? never : K;
+}[keyof ThemePalette];
+const HSL_TOKEN_ROLE: Record<string, RequiredPaletteRole> = {
   'surface-hsl': 'surface',
   'surface-hover-hsl': 'hover',
   'border-default-hsl': 'border',
@@ -112,7 +117,7 @@ const HSL_TOKEN_ROLE: Record<string, keyof ThemePalette> = {
 };
 
 /** light / dark 取值不同、且 light 侧是固定字面量的 HSL token。 */
-const HSL_TOKEN_ROLE_BY_TYPE: Record<string, { dark: keyof ThemePalette; light: keyof ThemePalette }> = {
+const HSL_TOKEN_ROLE_BY_TYPE: Record<string, { dark: RequiredPaletteRole; light: RequiredPaletteRole }> = {
   'primary-foreground': { dark: 'surface', light: 'surface' },
   secondary: { dark: 'elevated', light: 'chip' },
 };

@@ -22,6 +22,7 @@ const workerLink: OrcaWorkerLinkRecord = {
     fastMode: false,
     sdkSessionId: 'sdk-lead-1',
     title: 'Lead session',
+    remoteHostId: 'host-remote-1',
   },
 };
 
@@ -63,6 +64,8 @@ describe('maker host orca team store adapter', () => {
         fastMode: false,
         sdkSessionId: 'sdk-lead-1',
         title: 'Lead session',
+        // DB 带出的 host id 必须透传进 bridge 快照 (rehydrate 要用)。
+        remoteHostId: 'host-remote-1',
       },
     });
     expect(deps.markKnownOrcaWorkerSession).toHaveBeenCalledWith('worker-session-1');

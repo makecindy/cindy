@@ -364,6 +364,46 @@ describe('BillingPage remote catalog rendering', () => {
     expect(screen.getByText('billing.usage.detailsUnavailable')).toBeTruthy();
   });
 
+  it('does not describe missing plan credits as incomplete history when there is no subscription', async () => {
+    window.electronAPI.billing.getCreditUsage = vi.fn(async () => ({
+      available: '3',
+      plan: { remaining: '0', used: null, total: null },
+      purchased: { remaining: '0', used: '0', total: '0' },
+      promotional: { remaining: '3', used: '0', total: '3' },
+      promotionalGrants: [],
+      promotionalGrantsComplete: true,
+      promotionalGrantConsistency: 'OBSERVED' as const,
+      ledgerUpdatedAt: null,
+      scale: 9 as const,
+      observedAt: '2026-07-23T12:00:00Z',
+    }));
+
+    render(<BillingPage />);
+
+    expect(await screen.findByText('billing.usage.noPlanCredits')).toBeTruthy();
+    expect(screen.queryByText('billing.usage.historyUnavailable')).toBeNull();
+  });
+
+  it('keeps nonzero plan balances truthful when there is no subscription', async () => {
+    window.electronAPI.billing.getCreditUsage = vi.fn(async () => ({
+      available: '3',
+      plan: { remaining: '3', used: null, total: null },
+      purchased: { remaining: '0', used: '0', total: '0' },
+      promotional: { remaining: '0', used: '0', total: '0' },
+      promotionalGrants: [],
+      promotionalGrantsComplete: true,
+      promotionalGrantConsistency: 'OBSERVED' as const,
+      ledgerUpdatedAt: null,
+      scale: 9 as const,
+      observedAt: '2026-07-23T12:00:00Z',
+    }));
+
+    render(<BillingPage />);
+
+    expect(await screen.findByText('billing.usage.historyUnavailable')).toBeTruthy();
+    expect(screen.queryByText('billing.usage.noPlanCredits')).toBeNull();
+  });
+
   it('shows current plan price, included credits, status, and renewal date', async () => {
     i18n.resolvedLanguage = 'ja';
     window.electronAPI.billing.getCurrentSubscription = vi.fn(async () => ({

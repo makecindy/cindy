@@ -5,8 +5,8 @@
  *
  * `renderer/themes/builtin/` 下 7 个社区主题(one-dark-pro / github-dark /
  * eclipse / material-ocean-hc / monokai-pro / atom-one-light / solarized-light)
- * 都是人工从 VSCode 主题移植的,它们 `colors` 的 key 集合**逐字相同**(91 个
- * token = 35 个 Tier1 slot + 56 个 alias / singleton),值全部由同一组 13 个色板
+ * 都是人工从 VSCode 主题移植的,它们 `colors` 的 key 集合**逐字相同**(108 个
+ * token = 35 个 Tier1 slot + 73 个 alias / singleton),值全部由同一组 13 个色板
  * 常量派生。本文件就是那套派生规则的代码化:
  *
  *   - 5 个 dark 主题逐 key 一致(唯一例外:github-dark 把 4 个 on-accent 前景
@@ -16,7 +16,7 @@
  *
  * ## 为什么用 allow-list
  *
- * 模板产出这 91 个基础 key（源主题提供 Markdown 色时额外追加 `md-h1-fg`…
+ * 模板产出这 108 个基础 key（源主题提供 Markdown 色时额外追加 `md-h1-fg`…
  * `md-h6-fg` / `md-strong-fg`）。这 7 个主题都没有 override `--login-*`、品牌红、
  * `--destructive`、`--warning-accent`、`--status-bar-accent`、`--focus-ring`、
  * `--diff-*`(DESIGN.md §10 / §16 的语义豁免族),照抄它们的 key 列表就自动守住了
@@ -57,6 +57,10 @@ export interface ThemePalette {
   accentSoft: Rgb;
   /** accent 压暗档（pressed；light 主题的链接色也走这档的 primary/deep 组合）。 */
   accentDeep: Rgb;
+  /** light 主题可选：CREATE AGENT 卡片 / 输入框底色压暗一档（如 Solarized base2）。
+   *  不传时与 surface 同值（chat-input-bg / quick-card / control / segment 底）；
+   *  icon 圆底、hover、pressed 的取值见下方收敛规则，均不随 inputBg 变化。 */
+  inputBg?: Rgb;
 }
 
 /** Markdown 标题 / 加粗色——源主题提供时才产出对应 token（Obsidian `--hN-color`）。 */
@@ -76,7 +80,7 @@ const MARKDOWN_HEADING_TOKENS = [
 ] as const;
 
 /**
- * 模板产出的 91 个 token id。导出供测试断言"与 builtin 主题 key 集合一致"，
+ * 模板产出的 108 个 token id。导出供测试断言"与 builtin 主题 key 集合一致"，
  * 以及供 importer 统计命中数量。
  */
 export const TEMPLATE_TOKEN_IDS: readonly string[] = [
@@ -133,6 +137,20 @@ export const TEMPLATE_TOKEN_IDS: readonly string[] = [
   'confirm-btn-secondary-hover',
   'confirm-btn-secondary-text',
   'confirm-title',
+  'create-agent-control-bg',
+  'create-agent-control-bg-hover',
+  'create-agent-control-bg-pressed',
+  'create-agent-control-border',
+  'create-agent-control-icon',
+  'create-agent-control-text',
+  'create-agent-quick-card-bg',
+  'create-agent-quick-card-bg-hover',
+  'create-agent-quick-card-border',
+  'create-agent-quick-card-icon',
+  'create-agent-quick-card-icon-bg',
+  'create-agent-quick-card-text',
+  'create-agent-segment-inactive-text',
+  'create-agent-segment-track-bg',
   'drop-overlay-bg',
   'file-chip-bg',
   'file-remove-bg',
@@ -154,6 +172,8 @@ export const TEMPLATE_TOKEN_IDS: readonly string[] = [
   'primary-foreground',
   'search-match-fg',
   'secondary',
+  'send-btn-bg',
+  'send-btn-icon',
   'settings-btn-primary-text',
   'settings-btn-secondary-hover-bg',
   'text-placeholder',
@@ -230,6 +250,19 @@ export function buildThemeColorsFromPalette(
   const linkColor = pick(accentSoft, accentPrimary);
   /** 弱化前景:dark 用 disabled 档,light 用 tertiary(浅底上 disabled 太淡)。 */
   const mutedIcon = pick(textDisabled, textTertiary);
+  /** CREATE AGENT / 输入框底色：light 可用 inputBg 压暗一档（Solarized 惯例）。 */
+  const inputBg = toHex(palette.inputBg ?? palette.surface);
+  /** CREATE AGENT hover / icon 圆底 / pressed 收敛规则：
+   *  card hover 提亮到「lift 档」（light 传了与 surface 不同的 inputBg，如 Solarized
+   *  base2 卡片，则 lift 到 surface，否则用通用 hover）；icon 圆底取「比 hover 卡片
+   *  更深一档」的层——lift 主题用 chip（压在提亮卡片上），其余 dark 用 border、
+   *  其余 light 用 chip——保证三态可分。pressed 恒 pick(chip, hover)。 */
+  const liftsOffSurface = palette.inputBg !== undefined
+    && toHex(palette.inputBg).toLowerCase() !== toHex(palette.surface).toLowerCase();
+  const quickHover = toHex(liftsOffSurface ? palette.surface : palette.hover);
+  const quickIconBg = liftsOffSurface
+    ? toHex(palette.surface)
+    : pick(toHex(palette.border), toHex(palette.chip));
 
   const colors: Record<string, string> = {
     // ── Tier1 语义 slot ──
@@ -290,6 +323,20 @@ export function buildThemeColorsFromPalette(
     ),
     'confirm-btn-secondary-text': textPrimary,
     'confirm-title': textPrimary,
+    'create-agent-control-bg': inputBg,
+    'create-agent-control-bg-hover': quickHover,
+    'create-agent-control-bg-pressed': pick(chip, hover),
+    'create-agent-control-border': border,
+    'create-agent-control-icon': textPrimary,
+    'create-agent-control-text': textPrimary,
+    'create-agent-quick-card-bg': inputBg,
+    'create-agent-quick-card-bg-hover': quickHover,
+    'create-agent-quick-card-border': border,
+    'create-agent-quick-card-icon': textPrimary,
+    'create-agent-quick-card-icon-bg': quickIconBg,
+    'create-agent-quick-card-text': textPrimary,
+    'create-agent-segment-inactive-text': pick(textTertiary, textSecondary),
+    'create-agent-segment-track-bg': inputBg,
     'drop-overlay-bg': toRgbaString(palette.accentPrimary, 0.1),
     'file-chip-bg': pick(border, chip),
     'file-remove-bg': mutedIcon,
@@ -311,6 +358,11 @@ export function buildThemeColorsFromPalette(
     'primary-foreground': pick(surfaceHsl, '0 0% 100%'),
     'search-match-fg': textPrimaryHsl,
     secondary: pick(elevatedHsl, chipHsl),
+    // send 底用反相中性而非 accent:共享 send token 还渲染 10-12px 文本
+    // (VoiceInputOverlay / CollaborationModeToggle / SessionHandoffCard),accent 底
+    // 配白/黑字难稳定过 4.5:1 小字线,反相中性双模式均满足。
+    'send-btn-bg': pick(textPrimary, surface),
+    'send-btn-icon': pick(surface, textPrimary),
     'settings-btn-primary-text': onAccent,
     'settings-btn-secondary-hover-bg': hover,
     // placeholder 必须"读着像空",两个模式都取比 tertiary 更淡的 disabled 档。

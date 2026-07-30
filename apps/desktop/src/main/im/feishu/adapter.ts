@@ -40,6 +40,7 @@ export function buildFeishuAdapter(
   return {
     channel: 'feishu',
     im: feishuIm,
+    output: { kind: 'rich-card', im: feishuIm },
     config,
     ui,
     sessions: {

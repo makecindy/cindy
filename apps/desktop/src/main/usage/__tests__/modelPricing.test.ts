@@ -57,7 +57,6 @@ import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import {
   __resetModelPricingCacheForTesting,
   clearGatewayModelPricing,
-  getCodexBudgetEffectiveCostMultiplier,
   getCodexSubscriptionValuePrice,
   getModelPricing,
   getModelPricingForModel,
@@ -69,6 +68,8 @@ import {
 } from '../modelPricing';
 
 let tempUserDataDir: string | null = null;
+const EXPECTED_GATEWAY_CURRENCY =
+  CURRENT_CINDY_REGION === 'global' ? 'USD' : 'CNY';
 
 function userDataPath(...segments: string[]): string {
   if (!tempUserDataDir) throw new Error('temp userData is not initialized');
@@ -118,6 +119,7 @@ describe('gateway model pricing projection', () => {
         outputCostPerToken: 0.000015,
         cacheReadInputTokenCost: 0.0000003,
         cacheCreationInputTokenCost: 0.00000375,
+        costDiscount: 0.4,
       },
       {
         id: 'codex/gpt-5.5',
@@ -132,23 +134,24 @@ describe('gateway model pricing projection', () => {
         'claude-sonnet-4': {
           providerId: 'xd',
           modelId: 'claude-sonnet-4',
-          currency: 'USD',
+          currency: EXPECTED_GATEWAY_CURRENCY,
           source: 'gateway',
           approximate: false,
           inputPerMtok: 3,
           outputPerMtok: 15,
           cacheReadPerMtok: 0.3,
           cacheCreatePerMtok: 3.75,
+          costDiscount: 0.4,
         },
         'codex/gpt-5.5': {
           providerId: 'xd',
           modelId: 'codex/gpt-5.5',
-          currency: 'USD',
+          currency: EXPECTED_GATEWAY_CURRENCY,
           source: 'gateway',
           approximate: false,
-          inputPerMtok: 0.3,
-          outputPerMtok: 1.2,
-          cacheReadPerMtok: expect.closeTo(0.03),
+          inputPerMtok: 2,
+          outputPerMtok: 8,
+          cacheReadPerMtok: expect.closeTo(0.2),
         },
       },
     });
@@ -232,13 +235,14 @@ describe('pricing cache lifecycle', () => {
         id: 'gpt-5.5',
         inputCostPerToken: 0.000005,
         outputCostPerToken: 0.00003,
+        costDiscount: 0.2,
       },
     ]);
 
     await vi.waitFor(async () => {
       const raw = JSON.parse(await readFile(userDataPath('cache', 'model-pricing.json'), 'utf8'));
       expect(raw).toMatchObject({
-        version: 4,
+        version: 6,
         scope: expectedScope(),
         pricing,
       });
@@ -280,7 +284,7 @@ describe('pricing cache lifecycle', () => {
     await writeFile(
       userDataPath('cache', 'model-pricing.json'),
       JSON.stringify({
-        version: 4,
+        version: 6,
         scope: expectedScope(),
         fetchedAt: Date.now(),
         pricing: {
@@ -335,7 +339,7 @@ describe('pricing cache lifecycle', () => {
     await writeFile(
       userDataPath('cache', 'model-pricing.json'),
       JSON.stringify({
-        version: 4,
+        version: 6,
         scope: expectedScope(),
         fetchedAt: Date.now(),
         pricing: {
@@ -420,10 +424,5 @@ describe('reference pricing helpers', () => {
       source: 'subscription-reference',
     });
     expect(getSubscriptionDirectValuePrice('unknown')).toBeUndefined();
-  });
-
-  it('keeps codex budget multiplier isolated to codex/ routes', () => {
-    expect(getCodexBudgetEffectiveCostMultiplier('codex/gpt-5.5')).toBe(0.15);
-    expect(getCodexBudgetEffectiveCostMultiplier('gpt-5.5')).toBe(1);
   });
 });

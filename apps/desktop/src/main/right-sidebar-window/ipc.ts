@@ -94,6 +94,18 @@ function parseCommand(raw: unknown): RsbWindowCommand {
   if (r.type === 'close-orca-workers-tab') {
     return { type: 'close-orca-workers-tab', sessionId: r.sessionId };
   }
+  if (r.type === 'open-background-tasks-tab') {
+    const hasFocusTaskId =
+      Object.prototype.hasOwnProperty.call(r, 'focusTaskId') && r.focusTaskId !== undefined;
+    if (hasFocusTaskId && r.focusTaskId !== null && typeof r.focusTaskId !== 'string') {
+      throwIpcError('INVALID_PARAMS', 'command.focusTaskId must be string | null');
+    }
+    return {
+      type: 'open-background-tasks-tab',
+      sessionId: r.sessionId,
+      ...(hasFocusTaskId ? { focusTaskId: r.focusTaskId as string | null } : {}),
+    };
+  }
   if (r.type === 'open-file-browser') {
     if (r.targetKind === 'external-file') {
       if (typeof r.absPath !== 'string' || r.absPath.length === 0) {

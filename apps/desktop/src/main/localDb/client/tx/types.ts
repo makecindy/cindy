@@ -20,6 +20,23 @@ export type DbTxName =
   | 'message.delete'
   | 'im.deleteBindings'
   | 'im.replaceBinding'
+  | 'wechatActivateBindingEpoch'
+  | 'wechatCommitPollBatch'
+  | 'wechatLeaseNextTask'
+  | 'wechatReleaseDispatch'
+  | 'wechatMarkAccepted'
+  | 'wechatSetWaitingDesktop'
+  | 'wechatCommitPreDispatchFailure'
+  | 'wechatCancelForCommand'
+  | 'wechatCommitInterrupted'
+  | 'wechatCommitTerminal'
+  | 'wechatMarkOutboxDelivered'
+  | 'wechatRecordOutboxFailure'
+  | 'wechatStopAll'
+  | 'wechatCloseBindingEpoch'
+  | 'wechatPromoteTaskAttachments'
+  | 'wechatRefreshOutboxContexts'
+  | 'wechatUnbindCleanup'
   | 'session.importShare';
 
 export interface CodexImportMessagesArgs {
@@ -181,7 +198,10 @@ export interface OrcaReserveWorkerCreationArgs {
 
 export type OrcaReserveWorkerCreationResult =
   | { ok: true; occupiedSlotsBefore: number }
-  | { ok: false; errorCode: 'DUPLICATE_LABEL' | 'WORKER_CREATION_IN_PROGRESS' | 'WORKER_LIMIT_HARD_EXCEEDED' };
+  | {
+      ok: false;
+      errorCode: 'DUPLICATE_LABEL' | 'WORKER_CREATION_IN_PROGRESS' | 'WORKER_LIMIT_HARD_EXCEEDED';
+    };
 
 export interface OrcaReleaseWorkerCreationReservationArgs {
   reservationId: string;
@@ -356,6 +376,285 @@ export interface ImDeleteBindingsArgs {
   }>;
 }
 
+export type WechatInboxStatus =
+  | 'pending'
+  | 'dispatching'
+  | 'accepted_running'
+  | 'waiting_desktop'
+  | 'delivery_pending'
+  | 'completed'
+  | 'interrupted'
+  | 'cancelled'
+  | 'expired'
+  | 'failed_terminal'
+  | 'rejected_overload';
+
+export type WechatOutboxKind = 'final' | 'error' | 'interrupted' | 'overload';
+
+export interface WechatEncryptedContext {
+  nonce: string;
+  ciphertext: string;
+  tag: string;
+}
+
+export interface WechatActivateBindingEpochArgs {
+  bindingEpoch: string;
+  expectedActiveEpoch: string | null;
+  initialCursor: string;
+  now: number;
+}
+
+export interface WechatActivateBindingEpochResult {
+  activated: boolean;
+  previousActiveEpoch: string | null;
+  activeBindingEpoch: string | null;
+}
+
+export interface WechatPollInboxInput {
+  id: string;
+  platformMessageId: string;
+  platformSeq: number;
+  peerId: string;
+  receivedAt: number;
+  platformCreatedAt: number;
+  expiresAt: number;
+  sessionId: string;
+  conversationEpoch: number;
+  payloadJson: string;
+  context: WechatEncryptedContext;
+  overloadReply?: {
+    outboxId: string;
+    clientId: string;
+    text: string;
+  };
+}
+
+export interface WechatPollMediaBlobInput {
+  hash: string;
+  ext: string;
+  mimeType: string;
+  bytes: number;
+  isCache: boolean;
+  createdAt: number;
+  lastAccessAt: number;
+}
+
+export interface WechatPollMediaRefInput {
+  id: string;
+  hash: string;
+  taskId: string;
+  label: string | null;
+  createdAt: number;
+}
+
+export interface WechatPollFileAttachmentInput {
+  id: string;
+  taskId: string;
+  sessionId: string;
+  absPath: string;
+  originalName: string;
+  mimeType: string;
+  bytes: number;
+  createdAt: number;
+}
+
+export interface WechatCommitPollBatchArgs {
+  bindingEpoch: string;
+  expectedCursor: string;
+  nextCursor: string;
+  now: number;
+  messages: WechatPollInboxInput[];
+  mediaBlobs: WechatPollMediaBlobInput[];
+  mediaRefs: WechatPollMediaRefInput[];
+  fileAttachments: WechatPollFileAttachmentInput[];
+  maxQueuedTasks?: number;
+}
+
+export type WechatCommitPollBatchResult =
+  | {
+      committed: true;
+      insertedTaskIds: string[];
+      duplicateTaskIds: string[];
+      rejectedTaskIds: string[];
+    }
+  | {
+      committed: false;
+      reason: 'stale-epoch' | 'stale-cursor';
+      activeBindingEpoch: string | null;
+      currentCursor: string | null;
+    };
+
+export interface WechatLeaseNextTaskArgs {
+  bindingEpoch: string;
+  now: number;
+  leaseUntil: number;
+}
+
+export interface WechatLeasedTask {
+  id: string;
+  bindingEpoch: string;
+  peerId: string;
+  sessionId: string;
+  conversationEpoch: number;
+  payloadJson: string;
+  context: WechatEncryptedContext;
+  attempts: number;
+  receivedAt: number;
+  expiresAt: number;
+}
+
+export interface WechatMarkAcceptedArgs {
+  bindingEpoch: string;
+  taskId: string;
+}
+
+export interface WechatReleaseDispatchArgs {
+  bindingEpoch: string;
+  taskId: string;
+}
+
+export interface WechatSetWaitingDesktopArgs {
+  bindingEpoch: string;
+  taskId: string;
+  waiting: boolean;
+}
+
+export interface WechatOutboxChunkInput {
+  id: string;
+  clientId: string;
+  kind: WechatOutboxKind;
+  chunkIndex: number;
+  text: string;
+  mediaJson?: string;
+}
+
+export interface WechatCommitInterruptedArgs {
+  bindingEpoch: string;
+  taskId: string;
+  now: number;
+  errorCode: string;
+  outbox?: WechatOutboxChunkInput[];
+  context?: WechatEncryptedContext;
+}
+
+export interface WechatCommitPreDispatchFailureArgs {
+  bindingEpoch: string;
+  taskId: string;
+  now: number;
+  errorCode: string;
+  outbox: WechatOutboxChunkInput[];
+}
+
+export interface WechatCancelForCommandArgs {
+  bindingEpoch: string;
+  commandTaskId: string;
+  peerId?: string;
+  now: number;
+}
+
+export interface WechatCancelForCommandResult {
+  cancelled: number;
+  interrupted: number;
+}
+
+export interface WechatCommitTerminalArgs {
+  bindingEpoch: string;
+  taskId: string;
+  now: number;
+  outbox: WechatOutboxChunkInput[];
+}
+
+export interface WechatCommitTerminalResult {
+  committed: boolean;
+  alreadyCommitted: boolean;
+}
+
+export interface WechatMarkOutboxDeliveredArgs {
+  bindingEpoch: string;
+  outboxId: string;
+  deliveredAt: number;
+}
+
+export interface WechatMarkOutboxDeliveredResult {
+  changed: boolean;
+  taskId: string | null;
+  taskCompleted: boolean;
+}
+
+export interface WechatRecordOutboxFailureArgs {
+  bindingEpoch: string;
+  outboxId: string;
+  nextRetryAt: number;
+  terminal: boolean;
+  errorCode: string;
+}
+
+export interface WechatRecordOutboxFailureResult {
+  changed: boolean;
+  taskId: string | null;
+  taskFailed: boolean;
+}
+
+export interface WechatStopAllArgs {
+  bindingEpoch: string;
+  now: number;
+  errorCode: string;
+}
+
+export interface WechatStopAllResult {
+  requeued: number;
+  interrupted: number;
+  expired: number;
+  repaired: number;
+}
+
+export interface WechatCloseBindingEpochArgs {
+  bindingEpoch: string;
+  now: number;
+}
+
+export interface WechatCloseBindingEpochResult {
+  closed: boolean;
+}
+
+export interface WechatPromoteTaskAttachmentsArgs {
+  bindingEpoch: string;
+  taskId: string;
+  sessionId: string;
+  now: number;
+}
+
+export interface WechatPromoteTaskAttachmentsResult {
+  eligible: boolean;
+  promotedMediaRefs: number;
+  promotedFiles: number;
+}
+
+export interface WechatRefreshOutboxContextsArgs {
+  bindingEpoch: string;
+  peerId: string;
+  now: number;
+  contexts: Array<{
+    taskId: string;
+    context: WechatEncryptedContext;
+  }>;
+}
+
+export interface WechatRefreshOutboxContextsResult {
+  refreshedTasks: number;
+  outboxWoken: number;
+}
+
+export interface WechatUnbindCleanupArgs {
+  bindingEpoch: string;
+}
+
+export interface WechatUnbindCleanupResult {
+  deletedTasks: number;
+  deletedMediaRefs: number;
+  filePaths: string[];
+}
+
 export type DbTxArgsByName = {
   'codex.importMessages': CodexImportMessagesArgs;
   'claude.importMessages': ClaudeImportMessagesArgs;
@@ -378,6 +677,23 @@ export type DbTxArgsByName = {
   'message.delete': MessageDeleteArgs;
   'im.deleteBindings': ImDeleteBindingsArgs;
   'im.replaceBinding': ImReplaceBindingArgs;
+  wechatActivateBindingEpoch: WechatActivateBindingEpochArgs;
+  wechatCommitPollBatch: WechatCommitPollBatchArgs;
+  wechatLeaseNextTask: WechatLeaseNextTaskArgs;
+  wechatReleaseDispatch: WechatReleaseDispatchArgs;
+  wechatMarkAccepted: WechatMarkAcceptedArgs;
+  wechatSetWaitingDesktop: WechatSetWaitingDesktopArgs;
+  wechatCommitPreDispatchFailure: WechatCommitPreDispatchFailureArgs;
+  wechatCancelForCommand: WechatCancelForCommandArgs;
+  wechatCommitInterrupted: WechatCommitInterruptedArgs;
+  wechatCommitTerminal: WechatCommitTerminalArgs;
+  wechatMarkOutboxDelivered: WechatMarkOutboxDeliveredArgs;
+  wechatRecordOutboxFailure: WechatRecordOutboxFailureArgs;
+  wechatStopAll: WechatStopAllArgs;
+  wechatCloseBindingEpoch: WechatCloseBindingEpochArgs;
+  wechatPromoteTaskAttachments: WechatPromoteTaskAttachmentsArgs;
+  wechatRefreshOutboxContexts: WechatRefreshOutboxContextsArgs;
+  wechatUnbindCleanup: WechatUnbindCleanupArgs;
   'session.importShare': SessionImportShareArgs;
 };
 
@@ -403,5 +719,22 @@ export type DbTxResultByName = {
   'message.delete': MessageDeleteResult;
   'im.deleteBindings': undefined;
   'im.replaceBinding': undefined;
+  wechatActivateBindingEpoch: WechatActivateBindingEpochResult;
+  wechatCommitPollBatch: WechatCommitPollBatchResult;
+  wechatLeaseNextTask: WechatLeasedTask | null;
+  wechatReleaseDispatch: boolean;
+  wechatMarkAccepted: boolean;
+  wechatSetWaitingDesktop: boolean;
+  wechatCommitPreDispatchFailure: boolean;
+  wechatCancelForCommand: WechatCancelForCommandResult;
+  wechatCommitInterrupted: boolean;
+  wechatCommitTerminal: WechatCommitTerminalResult;
+  wechatMarkOutboxDelivered: WechatMarkOutboxDeliveredResult;
+  wechatRecordOutboxFailure: WechatRecordOutboxFailureResult;
+  wechatStopAll: WechatStopAllResult;
+  wechatCloseBindingEpoch: WechatCloseBindingEpochResult;
+  wechatPromoteTaskAttachments: WechatPromoteTaskAttachmentsResult;
+  wechatRefreshOutboxContexts: WechatRefreshOutboxContextsResult;
+  wechatUnbindCleanup: WechatUnbindCleanupResult;
   'session.importShare': { messageCount: number };
 };

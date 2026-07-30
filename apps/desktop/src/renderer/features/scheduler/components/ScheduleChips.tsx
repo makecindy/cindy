@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { useState, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ExternalLink, Folder, MessageCircle, Timer, SlidersHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
@@ -1087,6 +1087,25 @@ export function ModelEffortChip({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const openRef = useRef(false);
+  const setOpenWithoutAutoRefresh = useCallback((next: boolean): void => {
+    openRef.current = next;
+    setOpen(next);
+  }, []);
+  const handleOpenChange = useCallback(
+    (next: boolean): void => {
+      const nextOpen = disabled ? false : next;
+      const wasOpen = openRef.current;
+      openRef.current = nextOpen;
+      if (nextOpen && !wasOpen) {
+        void window.electronAPI.maker
+          .requestProviderModelsAutoRefresh('model-selector-open')
+          .catch(() => undefined);
+      }
+      setOpen(nextOpen);
+    },
+    [disabled],
+  );
   const caps = useAgentCapabilities(agentKind);
   // 触发器(trigger)展示用:仍按 codex/ 折扣模型的 XD 网关来源可见性过滤,算出当前
   // 选中模型名。下拉内容本体改用聊天的 ModelSelectorContent(它内部按来源/api-key 自行
@@ -1143,7 +1162,7 @@ export function ModelEffortChip({
   const activeProvider = providers.find((p) => p.id === activeSourceId);
 
   return (
-    <Popover open={open} onOpenChange={(v) => !disabled && setOpen(v)}>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <ChipButton
           icon={
@@ -1190,7 +1209,7 @@ export function ModelEffortChip({
           onEffortChange={(e) => onChangeEffort(e as EffortValue)}
           fastMode={fastMode}
           onFastModeChange={onChangeFast}
-          onDismiss={() => setOpen(false)}
+          onDismiss={() => setOpenWithoutAutoRefresh(false)}
           currentProviderId={providerId || null}
           onProviderChange={(pid, reconciledModelId, reconciledEffort) => {
             onChangeProviderId(pid && pid !== nativeDefault ? pid : '');

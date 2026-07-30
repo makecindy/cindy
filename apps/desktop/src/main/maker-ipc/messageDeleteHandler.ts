@@ -49,7 +49,10 @@ export interface MessageDeleteHandlerDeps {
     clientIds: string[],
     handoff: string,
   ): Promise<MessageDeleteCommittedPayload>;
-  setPendingHandoff(sessionId: string, handoff: string): void;
+  /** 见 sessionAgentSwitchHandler 同名字段:带代次写,防 /clear 竞态。 */
+  setPendingHandoff(sessionId: string, handoff: string, expectedGeneration?: number): void;
+  /** 读交接注册表的当前代次(在读历史之前取一次)。 */
+  readPendingHandoffGeneration?(sessionId: string): number;
   onCommitted(
     payload: MessageDeleteCommittedPayload,
     requestedClientId: string,
@@ -95,6 +98,9 @@ export async function performMessageDeletion(
     throwIpcError('SESSION_RUNNING', `Session ${sessionId} has background activity`);
   }
 
+  // 代次在读历史之前取:下面到 setPendingHandoff 之间有异步活,期间 /clear 过的话
+  // 这份按删除前历史算出的交接必须作废(见 registry.set 的 expectedGeneration)。
+  const handoffGeneration = deps.readPendingHandoffGeneration?.(sessionId);
   const source = await deps.listMessagesForContext(sessionId);
   const deletedClientIds = new Set(target.deletedClientIds);
   const remaining = source.filter((message) => !deletedClientIds.has(message.clientId));
@@ -123,7 +129,7 @@ export async function performMessageDeletion(
       target.deletedClientIds,
       handoff,
     );
-    deps.setPendingHandoff(sessionId, handoff);
+    deps.setPendingHandoff(sessionId, handoff, handoffGeneration);
     await deps.onCommitted(committed, clientId);
     deps.log.info('message delete committed; native context will rebuild on next send', {
       sessionId,

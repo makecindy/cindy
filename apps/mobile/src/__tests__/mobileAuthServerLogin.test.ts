@@ -34,7 +34,7 @@ describe('mobile auth-server login', () => {
     expect(loginSource).toContain('nonAppleProviders.length');
     expect(loginSource).not.toContain('react-native-webview');
     expect(authSource).toContain(
-      'client.exchangeNativeSocial(action.provider, credential)',
+      'authClientFor(did, BUILD_AUTH_REGION).exchangeNativeSocial(',
     );
     expect(authSource).toContain("clientType: 'mobile'");
     expect(nativeSource).toContain("import('expo-apple-authentication')");
@@ -117,11 +117,11 @@ describe('mobile auth-server login', () => {
     const authSource = readFileSync(
       resolve(process.cwd(), 'src/auth/AuthContext.tsx'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
     const envSource = readFileSync(
       resolve(process.cwd(), 'src/config/env.ts'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
 
     expect(authSource).toContain("kind: 'sso'");
     expect(authSource).toMatch(
@@ -140,7 +140,56 @@ describe('mobile auth-server login', () => {
     // scheme 派生 2026-07-20 起为三区域查表(cn/global/dev),断言仍锚定
     // 「按区域取回调 scheme」这一形状。
     expect(envSource).toContain(
-      "{ cn: 'cindycn', global: 'cindy', dev: 'cindydev' }[AUTH_REGION]",
+      "{ cn: 'cindycn', global: 'cindy', dev: 'cindydev' }",
+    );
+    expect(envSource).toContain('AUTH_REGION\n];');
+  });
+
+  it('clears a stale organization realm before personal login or a new organization lookup', () => {
+    const authSource = readFileSync(
+      resolve(process.cwd(), 'src/auth/AuthContext.tsx'),
+      'utf8',
+    ).replace(/\r\n/g, '\n');
+    expect(authSource).toContain("action.type === 'discover' ||");
+    expect(authSource).toContain("action.type === 'request-code' ||");
+    expect(authSource).toContain("action.type === 'verify-code' ||");
+    expect(authSource).toContain("action.type === 'native-social'");
+    expect(authSource).toContain(
+      'if (startsBuildRealmFlow) {\n            pendingAuthRealmRef.current = null;',
+    );
+
+    const discoveryStart = authSource.indexOf(
+      "if (action.type === 'discover-sso-org') {",
+    );
+    const discoveryBody = authSource.slice(
+      discoveryStart,
+      authSource.indexOf(
+        'const realmConfig = getMobileEndpointRealmConfig();',
+        discoveryStart,
+      ),
+    );
+    expect(discoveryBody).toContain('pendingAuthRealmRef.current = null;');
+  });
+
+  it('asks for confirmation only when enterprise discovery crosses the build region', () => {
+    const authSource = readFileSync(
+      resolve(process.cwd(), 'src/auth/AuthContext.tsx'),
+      'utf8',
+    );
+
+    expect(authSource).toContain(
+      'if (discovery.region !== BUILD_AUTH_REGION) {',
+    );
+    expect(authSource).toContain("type: 'realm-switch-required'");
+    expect(authSource).toContain(
+      "if (action.type === 'confirm-sso-realm') {",
+    );
+    expect(authSource).toContain(
+      "if (action.type === 'cancel-sso-realm') {",
+    );
+    expect(authSource).toContain('methods: confirmation.methods');
+    expect(authSource).toContain(
+      "previousState?.step !== 'method-choice' ||",
     );
   });
 

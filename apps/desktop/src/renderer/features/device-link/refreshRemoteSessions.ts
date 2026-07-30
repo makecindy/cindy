@@ -18,6 +18,7 @@
 import type { Session } from '@/lib/ccAgent.types';
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
+import { DEVICE_LINK_RECONCILIATION_PROBE_MARKER } from '@cindy/maker-shared/device-link-contract';
 import { remoteProjectsStore } from './remoteProjectsStore';
 import { removeRemoteSessionActivityEntry } from './remoteSessionActivityStore';
 
@@ -200,7 +201,7 @@ async function probeMissingSessionStatuses(
         const value = await window.electronAPI.deviceLink.invoke(
           deviceId,
           'local-db:sessions:get',
-          [sessionId],
+          [sessionId, DEVICE_LINK_RECONCILIATION_PROBE_MARKER],
         );
         return { sessionId, value };
       } catch (error) {

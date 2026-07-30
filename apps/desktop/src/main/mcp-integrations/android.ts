@@ -147,7 +147,7 @@ export function setServerPreExistedForTest(value: boolean | null): void {
  * 已有 server),fire-and-forget 一个 `adb kill-server` 收掉它。detached + unref,
  * 绝不阻塞退出。
  *
- * 如果用户在 XDMaker 之前已有 server 在跑(Android Studio / SDK 等),我们的
+ * 如果用户在 Cindy 之前已有 server 在跑(Android Studio / SDK 等),我们的
  * bundled adb 只是复用了它,此时 kill-server 会杀掉用户的 server、中断其 logcat
  * / 设备连接——这种情况不触发 kill。判断依据是首次使用前对 5037 端口的探活结果,
  * 记录在 serverPreExistedBeforeUs 中(一次检测,整个会话生效)。

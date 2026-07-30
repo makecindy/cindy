@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { parseLegalSegments } from '../LoginControls';
+import { CONSENT_DIALOG } from '../loginDesignTokens';
 
 /**
  * 协议文案 catalog 严校验(codex 审查 P2):parseLegalSegments 对坏标记 fail-open
@@ -49,5 +50,34 @@ describe('consent 文案 catalog 严校验(4 语 × statement/body)', () => {
     expect(parseLegalSegments('<terms>A<privacy>B</privacy></terms>')).toEqual([
       { kind: 'terms', text: 'A<privacy>B</privacy>' },
     ]);
+  });
+});
+
+describe('区域确认文案排版预算(标准 26/40，最多 3 行)', () => {
+  const maxEstimatedUnits =
+    (CONSENT_DIALOG.body.width * 0.95 * 3) /
+    CONSENT_DIALOG.body.fontSize;
+  const estimatedUnits = (value: string) =>
+    [...value].reduce(
+      (sum, character) =>
+        sum + ((character.codePointAt(0) ?? 0) <= 0xff ? 0.5 : 1),
+      0,
+    );
+
+  it.each(LOCALES)('%s:CN / Global 正文固定两行且每行无需二次折行', (locale) => {
+    const realmConsent = loadLogin(locale).realmConsent as {
+      bodyCn: string;
+      bodyGlobal: string;
+    };
+    for (const body of [realmConsent.bodyCn, realmConsent.bodyGlobal]) {
+      const lines = body.split('\n');
+      expect(lines, `${locale}: ${body}`).toHaveLength(2);
+      for (const line of lines) {
+        expect(
+          estimatedUnits(line),
+          `${locale}: ${line}`,
+        ).toBeLessThanOrEqual(maxEstimatedUnits / 3);
+      }
+    }
   });
 });

@@ -87,7 +87,18 @@ export function formatMobileSystemCard(
   data: Record<string, unknown> | undefined,
 ): MobileSystemCardPresentation {
   if (type === 'goal-complete') return formatGoalCompleteCard(data);
-  if (type === 'goal-resumed') return { title: i18n.t('message.systemCard.goalResumed'), rows: [] };
+  if (type === 'goal-resumed') {
+    // 两种续跑原因共用这张卡, 但说法必须分开(与桌面 GoalResumedCard 同口径):
+    // 上游过载那条只是干等了 60s、**没有**任何容量探测, 说「用量已恢复」是假信息;
+    // 账号限流那条的重置时刻来自账号额度信息, 有依据(review #844 codex P1)。
+    const isCapacity = data?.kind === 'capacity-resumed';
+    return {
+      title: i18n.t(
+        isCapacity ? 'message.systemCard.goalCapacityRetry' : 'message.systemCard.goalResumed',
+      ),
+      rows: [],
+    };
+  }
   if (type === 'auto-resume') return { title: i18n.t('message.systemCard.autoResume'), rows: [] };
   if (type === 'agent-switch') return formatAgentSwitchCard(data);
   if (type === 'learn') return formatLearnCard(data);

@@ -15,6 +15,7 @@ import {
   METHOD_ROW,
   PANEL,
   REGION_PILL,
+  SKIP_ENTRY,
   SOCIAL,
   SPINNER,
   SUBTITLE,
@@ -40,15 +41,29 @@ const overlayBase = cn(
   'after:opacity-0 after:transition-opacity after:content-[""]',
 );
 
-/** 面板(680×440 r36 #FBFBFB + wave4 1px inside 描边 368:1383)。 */
-export function LoginPanel({ children, testId }: { children: ReactNode; testId?: string }) {
+/**
+ * 面板(680×500 r36 + wave4 1px inside 描边 368:1383)。
+ *
+ * height 默认取 PANEL.height(登录全步骤共用,恒定不跳变);仅 Splash 借用本组件时
+ * 传 SPLASH_PANEL.height 保持 440(见 loginDesignTokens SPLASH_PANEL 注释)。
+ */
+export function LoginPanel({
+  children,
+  testId,
+  height = PANEL.height,
+}: {
+  children: ReactNode;
+  testId?: string;
+  /** 面板高度覆写(设计px);仅 Splash 使用,登录侧一律用默认值。 */
+  height?: number;
+}) {
   return (
     <div
       data-testid={testId ?? 'login-panel'}
       className="absolute left-0 top-0 overflow-hidden"
       style={{
         width: PANEL.width,
-        height: PANEL.height,
+        height,
         borderRadius: PANEL.radius,
         background: LOGIN_COLORS.panelBg,
         boxShadow: `inset 0 0 0 1px ${LOGIN_COLORS.panelBorder}`,
@@ -392,8 +407,9 @@ function LoginSpinnerGlyph({ size }: { size: number }) {
 }
 
 /**
- * 第三方圆钮行(§4.5:80×80 r50 #2A2828/#434343,icon 48,gap 70,y=480;
- * 行内水平居中 = demo socialRow left 公式)。SSO = 行内最后一颗(329:243)。
+ * 第三方圆钮行(§4.5:80×80 r50 #2A2828/#434343,icon 48,gap 70,y=540 = 面板底 +40;
+ * 行内水平居中 = demo socialRow left 公式)。SSO = 行内最后一颗(游客圆钮已随
+ * 「跳过登录」文字入口移入面板内而删除)。
  */
 export function LoginSocialRow({ children, count }: { children: ReactNode; count: number }) {
   const left = Math.max(
@@ -540,6 +556,9 @@ export function LoginBackButton({
  * - countdown/info 变体:#D4D4D4 无 underline 不可交互(247:1614);
  *   binding code 子态「验证码已发送至 X」提示复用本变体(demo bindingPanel)。
  * 色变全走 CSS 类(hover:/active:),不改布局(design §2.3-1)。
+ *
+ * ⚠ 与「跳过登录」文字**按钮**(LoginSkipEntry)是两种组件:本组件是文字**链接**
+ * (hover/pressed 变色 link 族语义),跳过登录不变色、自适应热区,不要混用。
  */
 export function LoginTextLink({
   children,
@@ -593,6 +612,73 @@ export function LoginTextLink({
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * 「跳过登录」文字按钮(新稿容器 705:1068/700:910;用户拍板 2026-07-27)。
+ *
+ * **与 LoginTextLink 是两种组件**:那个是文字链接(link 族 hover/pressed 变色),
+ * 本组件是文字按钮——颜色 light/dark 统一 `--login-secondary-text`(#6F6F6F 双模同值),
+ * hover/pressed **不变色**,只靠下划线与指针形状给反馈。
+ *
+ * 热区(用户拍板):**不全宽**。680×60(SKIP_ENTRY)只是布局容器且自身不可点
+ * (pointer-events:none),真正可点的是内层 button = 当前语言实际文字渲染宽度
+ * + 左右各 30 设计px(hitPaddingX,shrink-to-fit 随语言自适应),高度占满 60 槽;
+ * 文字仍相对 680 容器水平居中(容器 justify-center + button 左右 padding 对称)。
+ */
+export function LoginSkipEntry({
+  children,
+  onClick,
+  disabled,
+  testId,
+}: {
+  children: ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  testId?: string;
+}) {
+  return (
+    <div
+      data-testid="login-skip-entry-slot"
+      className="absolute flex items-center justify-center"
+      style={{
+        left: SKIP_ENTRY.x,
+        top: SKIP_ENTRY.y,
+        width: SKIP_ENTRY.width,
+        height: SKIP_ENTRY.height,
+        // 容器只负责居中定位,不承接点击:热区收敛到内层 button(用户拍板 2026-07-27)
+        pointerEvents: 'none',
+      }}
+    >
+      <button
+        data-testid={testId ?? 'login-skip-entry'}
+        type="button"
+        disabled={disabled}
+        onClick={onClick}
+        className={cn(
+          'flex items-center justify-center overflow-hidden whitespace-nowrap',
+          'border-0 bg-transparent underline',
+          'cursor-pointer disabled:cursor-not-allowed',
+        )}
+        style={{
+          // 宽度不写死:shrink-to-fit 文字宽 + 左右 hitPaddingX,随语言自适应
+          height: SKIP_ENTRY.height,
+          // 防御性上界(非设计许可,DESIGN.md 单行槽兜底):按钮含 padding 不越 680 容器,
+          // 避免超长译文两侧被面板 overflow-hidden 静默裁掉。可见截断 = 文案 bug,改文案不改布局。
+          maxWidth: SKIP_ENTRY.width,
+          paddingLeft: SKIP_ENTRY.hitPaddingX,
+          paddingRight: SKIP_ENTRY.hitPaddingX,
+          fontSize: SKIP_ENTRY.fontSize,
+          fontWeight: 400,
+          color: LOGIN_COLORS.secondaryText,
+          textOverflow: 'ellipsis',
+          pointerEvents: 'auto',
+        }}
+      >
+        {children}
+      </button>
+    </div>
   );
 }
 
@@ -892,7 +978,7 @@ export function LoginConsentDialog({
         </div>
         <div
           id="login-consent-dialog-body"
-          className="absolute text-center"
+          className="absolute whitespace-pre-line text-center"
           style={{
             left: CONSENT_DIALOG.body.x,
             top: CONSENT_DIALOG.body.y,

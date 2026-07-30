@@ -27,6 +27,7 @@ import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-m
 
 import { createLogger } from '../../logger';
 import { getMaker } from '../../maker-host';
+import { resolveLenientSessionRoute } from '../../maker-host/model-route-guard-live';
 import {
   getSessionProvider,
   normalizeSessionProviderId,
@@ -816,6 +817,45 @@ export function createCardActionHandler(
     );
 
     const desktopPrefs = getDesktopCcPrefs() ?? DESKTOP_CC_DEFAULTS;
+    // 停用轴准入(PR #744 review 第五轮):IM 新建会话是新的付费路由,desktop 偏好里
+    // 保存的 model/provider 可能已被用户停用 —— 宽松降级:被停用的显式来源/模型逐级
+    // 丢弃(退回 agent 默认路由),隐式默认被停用时显式落替代来源;不因停用让 IM
+    // 新建流程整体失败。
+    const route = await resolveLenientSessionRoute(
+      'claude-code',
+      desktopPrefs.model,
+      desktopPrefs.providerId ?? null,
+      // 入口默认模型同走裁决阶梯:它自己也可能被停用,不能作为未经裁决的兜底
+      // (PR #744 review 第六轮);desiredEffort 让换模型时的 effort 按解析出的
+      // 模型条目 reconcile(第十一轮)。
+      {
+        fallbackModel: DESKTOP_CC_DEFAULTS.model,
+        desiredEffort: desktopPrefs.effort,
+        desiredFastMode: desktopPrefs.fastMode === true,
+      },
+    );
+    // 换了模型时 effort 用 reconcile 结果(保存档可能超出兜底模型的支持集,原样透传
+    // 会被上游拒);模型未换则保持用户保存档。route.effort 缺席 = 条目无 effort 概念,
+    // 不携带交给 agent 默认。
+    // Fast 同理:路由被改动时按落地拷贝 reconcile(不支持 ⇒ false),原样保持保存值。
+    const routeFastMode = route.fastMode ?? desktopPrefs.fastMode;
+    const routeEffort: Effort | undefined =
+      route.model === desktopPrefs.model
+        ? (desktopPrefs.effort as Effort)
+        : (route.effort as Effort | undefined);
+    if (route.degraded) {
+      log.warn(
+        `control:new saved route degraded (disabled in settings): model=${desktopPrefs.model} providerId=${desktopPrefs.providerId ?? 'null'}`,
+      );
+    }
+    // route.model 缺席 = 目录里一个启用的对话模型都没有:失败收口,绝不拿未经
+    // 裁决的模型直建付费会话。
+    const requireRouteModel = (): string => {
+      if (!route.model) {
+        throw new Error('control:new has no enabled chat model (all models disabled in settings)');
+      }
+      return route.model;
+    };
     const closeCreatedSessionAfterSetupFailure = async (sessionId: string): Promise<void> => {
       try {
         await getMaker().closeSession(sessionId);
@@ -824,15 +864,17 @@ export function createCardActionHandler(
         log.warn(`control:new cleanup created session failed: ${msg}`);
       }
     };
-    const persistCreatedSessionProvider = async (sessionId: string): Promise<void> => {
-      const providerId = desktopPrefs.providerId ?? null;
+    const persistCreatedSessionProvider = async (session: {
+      id: string;
+      model: string;
+    }): Promise<void> => {
       await updateModelEffort(
-        sessionId,
-        desktopPrefs.model,
-        desktopPrefs.effort as Effort,
-        providerId,
+        session.id,
+        route.model ?? session.model,
+        routeEffort ?? ('medium' as Effort),
+        route.providerId,
       );
-      setSessionProvider(sessionId, providerId);
+      setSessionProvider(session.id, route.providerId);
     };
 
     // ── threadScoped: 新建 + 接管 → 顶层 root 卡 + thread ────────────────────
@@ -843,15 +885,15 @@ export function createCardActionHandler(
         const newSession = await getMaker().createSession({
           agentKind: 'claude-code',
           workingDir,
-          model: desktopPrefs.model,
-          providerId: desktopPrefs.providerId ?? undefined,
-          effort: desktopPrefs.effort as Effort,
+          model: requireRouteModel(),
+          providerId: route.providerId ?? undefined,
+          ...(routeEffort ? { effort: routeEffort } : {}),
           permissionMode: desktopPrefs.permissionMode as PermissionMode,
-          fastMode: desktopPrefs.fastMode,
+          fastMode: routeFastMode,
           title: FBOT_DRAFT_TITLE,
         });
         created = newSession.id;
-        await persistCreatedSessionProvider(newSession.id);
+        await persistCreatedSessionProvider(newSession);
         await touchUserSent(newSession.id);
         broadcastSessionCreated(newSession.id);
       } catch (err) {
@@ -925,15 +967,15 @@ export function createCardActionHandler(
       const newSession = await getMaker().createSession({
         agentKind: 'claude-code',
         workingDir,
-        model: desktopPrefs.model,
-        providerId: desktopPrefs.providerId ?? undefined,
-        effort: desktopPrefs.effort as Effort,
+        model: requireRouteModel(),
+        providerId: route.providerId ?? undefined,
+        ...(routeEffort ? { effort: routeEffort } : {}),
         permissionMode: desktopPrefs.permissionMode as PermissionMode,
-        fastMode: desktopPrefs.fastMode,
+        fastMode: routeFastMode,
         title: FBOT_DRAFT_TITLE,
       });
       newSessionId = newSession.id;
-      await persistCreatedSessionProvider(newSession.id);
+      await persistCreatedSessionProvider(newSession);
       // bump userSendAt = now, 让 sidebar 直接把这条 session 落到 workingDir
       // 对应的 Project group 下, 而不是判定成"草稿"挂在 Projects 这一级根。
       // 草稿规则 (projectGrouping.ts): workingDir 缺失 OR (userSendAt == null

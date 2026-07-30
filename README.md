@@ -130,6 +130,7 @@ servers.
 
 - [`DESIGN.md`](DESIGN.md) — visual design system, color tokens, and UI conventions
 - [`docs/README.md`](docs/README.md) — complete documentation and rules index
+- [`docs/auth-realm-routing.md`](docs/auth-realm-routing.md) — organization SSO region discovery and session endpoint routing
 - [`CONTRIBUTING.en.md`](CONTRIBUTING.en.md) — contributor setup, validation, and submission workflow
 - [`AGENTS.md`](AGENTS.md) — engineering rules, launch/runtime contracts, and module boundaries
 - [`docs/dev-rules/`](docs/dev-rules/) — deep-dive architecture docs (e.g. Orca multi-agent orchestration)

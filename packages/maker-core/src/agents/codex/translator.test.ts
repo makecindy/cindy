@@ -2,8 +2,9 @@
  * translator.translateErrorNotification — auth retry-loop dedupe + isAuthMissing 触发。
  *
  * 覆盖 fix(desktop,maker-core): 远端 codex daemon 重启 / auth 状态异常的端到端恢复
- * 这一 commit 里 ❶+❹ 修法的核心 invariant:
- *   1. willRetry=true + transient (非 auth) → silent (不 push error event)
+ * 这一 commit 里 ❶+❹ 修法的核心 invariant (❶ 后经 issue #677 泛化):
+ *   1. willRetry=true + transient (非 auth) → 第 1 次 silent; 同 turn 第 2 次透出
+ *      **一条**非终止提示 (#677 起不再限定 networkish pattern), 之后静默
  *   2. willRetry=true + auth 关键字 → push 第一条, 同 thread+turn 后续 dedupe
  *   3. willRetry=true + auth + 不同 turn → key reset, 又能 push
  *   4. willRetry=false → 不论 auth 与否都 push
@@ -292,10 +293,159 @@ describe('translateErrorNotification', () => {
     expect(events[0].data).toMatchObject({ isTerminal: true, willRetry: false });
   });
 
+  it('willRetry=false 模型容量不足 + agent 层接管 → 非终止 + 带重投进度', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const calls: number[] = [];
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message: 'Selected model is at capacity. Please try a different model.',
+      }),
+      q,
+      {
+        ...makeCtx(rt),
+        tryTakeOverOverload: () => {
+          calls.push(1);
+          return { attempt: 2, maxAttempts: 4 };
+        },
+      },
+    );
+    const events = await collect(q);
+    expect(calls).toHaveLength(1);
+    expect(events).toHaveLength(1);
+    // 必须是非终止：终止会让 UI 先收口成失败，用户看到假失败闪烁。
+    expect(events[0].data).toMatchObject({ isTerminal: false, willRetry: true });
+    // 原始错误原文保留（renderer 折叠可查），进度以后缀编码。
+    expect((events[0].data as { message: string }).message).toBe(
+      'Selected model is at capacity. Please try a different model. (auto-retry 2/4)',
+    );
+  });
+
+  it('willRetry=false 模型容量不足 + agent 层不接管 → 落回终止错误', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({ willRetry: false, message: 'Selected model is at capacity.' }),
+      q,
+      // 预算耗尽 / 本 turn 已有产出 / 会话已关时 agent 层返回 null。
+      { ...makeCtx(rt), tryTakeOverOverload: () => null },
+    );
+    const events = await collect(q);
+    expect(events).toHaveLength(1);
+    expect(events[0].data).toMatchObject({ isTerminal: true, willRetry: false });
+    // 没接管就不能挂进度后缀，否则 renderer 会把已放弃的错误显示成"正在重试"。
+    expect((events[0].data as { message: string }).message).not.toContain('auto-retry');
+  });
+
+  it('没有注入接管钩子时容量错误按原终止路径报', async () => {
+    // 非 codex/index.ts 的调用方（既有测试、其它宿主）不受本分支影响。
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({ willRetry: false, message: 'Selected model is at capacity.' }),
+      q,
+      makeCtx(rt),
+    );
+    const events = await collect(q);
+    expect(events).toHaveLength(1);
+    expect(events[0].data).toMatchObject({ isTerminal: true, willRetry: false });
+  });
+
+  it('willRetry=true 的容量错误不走接管（server 自己还在重试）', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    let takeOverCalled = false;
+    translateErrorNotification(
+      makeParams({ willRetry: true, message: 'Selected model is at capacity.' }),
+      q,
+      {
+        ...makeCtx(rt),
+        tryTakeOverOverload: () => {
+          takeOverCalled = true;
+          return { attempt: 1, maxAttempts: 4 };
+        },
+      },
+    );
+    const events = await collect(q);
+    // 双层重试是反模式：server 说自己会重试时我们绝不插手。
+    expect(takeOverCalled).toBe(false);
+    expect(events).toHaveLength(0);
+  });
+
+  it('非容量类的终止错误不触发接管', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    let takeOverCalled = false;
+    translateErrorNotification(
+      makeParams({ willRetry: false, message: 'context window exceeded' }),
+      q,
+      {
+        ...makeCtx(rt),
+        tryTakeOverOverload: () => {
+          takeOverCalled = true;
+          return { attempt: 1, maxAttempts: 4 };
+        },
+      },
+    );
+    const events = await collect(q);
+    expect(takeOverCalled).toBe(false);
+    expect(events[0].data).toMatchObject({ isTerminal: true });
+  });
+
   it('newCodexRuntimeState() 初始 lastAuthErrorKey 为 null', () => {
     const rt = newCodexRuntimeState();
     expect(rt.lastAuthErrorKey).toBeNull();
     expect(rt.networkRetryNotice).toBeNull();
+  });
+
+  it('willRetry=true Codex 重连进度 → 每一档都透出为非终止状态', async () => {
+    const rt = newCodexRuntimeState();
+    const ctx = makeCtx(rt);
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({ willRetry: true, message: 'Reconnecting... 1/5' }),
+      q,
+      ctx,
+    );
+    translateErrorNotification(
+      makeParams({
+        willRetry: true,
+        message: 'Reconnecting... 2/5 (stream disconnected before completion)',
+      }),
+      q,
+      ctx,
+    );
+    const events = await collect(q);
+    expect(events).toHaveLength(2);
+    expect(events.map((event) => event.data)).toEqual([
+      expect.objectContaining({
+        message: 'Reconnecting... 1/5',
+        isTerminal: false,
+        willRetry: true,
+      }),
+      expect.objectContaining({
+        message: 'Reconnecting... 2/5 (stream disconnected before completion)',
+        isTerminal: false,
+        willRetry: true,
+      }),
+    ]);
+  });
+
+  it('仅按脱敏后的可见文案识别重连进度', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({
+        willRetry: true,
+        message: 'Authorization: Bearer secret-token Reconnecting... 1/5',
+      }),
+      q,
+      makeCtx(rt),
+    );
+
+    const events = await collect(q);
+    expect(events).toHaveLength(0);
   });
 
   it('willRetry=true 网络类错误同 turn 第 2 次 → 透出一条非终止提示,之后不再发', async () => {
@@ -347,7 +497,10 @@ describe('translateErrorNotification', () => {
     expect(events).toHaveLength(2);
   });
 
-  it('willRetry=true 非网络非 auth 错误 → 依旧全部静默', async () => {
+  it('willRetry=true 非网络非 auth 错误 → 第 2 次同样透出一条(issue #677 泛化),之后静默', async () => {
+    // #677 之前只透 networkish pattern; 但 "rate limit backing off" / 403 /
+    // websocket unreachable 这类持续性重试同样是「daemon 空转」信号, 用户必须
+    // 能看到一条非终止提示。终局收口由 TurnRetryTracker 升级负责 (不在这里)。
     const rt = newCodexRuntimeState();
     const ctx = makeCtx(rt);
     const q = createAsyncQueue<AgentEvent>();
@@ -359,7 +512,30 @@ describe('translateErrorNotification', () => {
       );
     }
     const events = await collect(q);
-    expect(events).toHaveLength(0);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('error');
+    expect(events[0].data).toMatchObject({ isTerminal: false, willRetry: true });
+  });
+
+  it('willRetry=true 远端后端不可达文案 (403 / websocket unreachable) → 第 2 次透出提示', async () => {
+    // issue #677 的原始断链面: 这两类文案不匹配旧的 networkish pattern,
+    // 远端 daemon retry-loop 时 UI 一条事件都收不到。
+    const rt = newCodexRuntimeState();
+    const ctx = makeCtx(rt);
+    const q = createAsyncQueue<AgentEvent>();
+    const messages = [
+      'unexpected status 403 Forbidden, url: https://chatgpt.com/backend-api/codex/responses',
+      'failed to connect to websocket: Network unreachable',
+    ];
+    for (let round = 0; round < 2; round += 1) {
+      for (const message of messages) {
+        translateErrorNotification(makeParams({ willRetry: true, message }), q, ctx);
+      }
+    }
+    const events = await collect(q);
+    // 同 thread+turn 只透一条 (第 2 次触发时), 与其余重试风暴隔离。
+    expect(events).toHaveLength(1);
+    expect(events[0].data).toMatchObject({ isTerminal: false, willRetry: true });
   });
 });
 

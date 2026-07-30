@@ -18,7 +18,13 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AgentDeps, McpToolApprovalContext, McpToolApprovalPolicy } from '../../base-agent.js';
+import type {
+  AgentDeps,
+  McpToolApprovalContext,
+  McpToolApprovalPolicy,
+  TurnPermissionPolicy,
+} from '../../base-agent.js';
+import type { PermissionMode } from '../../../types/common.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { InteractionDecision, InteractionRequest } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
@@ -139,6 +145,7 @@ async function startSession(
     decide?: (req: InteractionRequest) => InteractionDecision | undefined;
     /** true 时不注入 resolver，用于验证 fail-closed 分支。 */
     bare?: boolean;
+    permissionMode?: PermissionMode;
   },
 ) {
   const configDir = await makeTempDir();
@@ -153,7 +160,7 @@ async function startSession(
     sessionId: 'session-mcp-policy',
     model: 'claude-opus-4-6',
     workingDir,
-    permissionMode: 'default',
+    permissionMode: options?.permissionMode ?? 'default',
   });
   const queryOptions = sdkMock.query.mock.calls.at(-1)?.[0]?.options as
     | { canUseTool?: CanUseToolFn }
@@ -194,6 +201,63 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () => {
+  it('runs the per-turn policy before MCP auto-approval and drops session grants', async () => {
+    const { handle, canUseTool, seen } = await startSession(
+      () => 'auto-approve',
+      {
+        decide: () => ({
+          kind: 'permission',
+          behavior: 'allow',
+          permissionUpdates: SESSION_SUGGESTION,
+        }),
+      },
+    );
+    const turnPermissionPolicy: TurnPermissionPolicy = {
+      origin: { kind: 'im', channel: 'wechat', taskId: 'task-claude' },
+      confirmationSurface: 'desktop',
+      forceConfirmToolCall: (toolName) => toolName.includes('contacts'),
+    };
+    await handle.send(
+      { type: 'user', content: 'delete the duplicate contact' },
+      { turnPermissionPolicy },
+    );
+
+    const result = await canUseTool(
+      'mcp__cindy_contacts__call_tool',
+      { name: 'contacts_delete' },
+      { toolUseID: 't-policy', suggestions: SESSION_SUGGESTION },
+    );
+
+    expect(permissionRequests(seen)).toHaveLength(1);
+    expect(permissionRequests(seen)[0]?.suggestions).toBeUndefined();
+    expect(result.behavior).toBe('allow');
+    expect(result.updatedPermissions).toBeUndefined();
+    await handle.close();
+  });
+
+  it('rejects a per-turn policy in permission modes that can skip canUseTool', async () => {
+    const { handle } = await startSession(undefined, {
+      permissionMode: 'bypassPermissions',
+    });
+    const policy: TurnPermissionPolicy = {
+      origin: { kind: 'im', channel: 'wechat', taskId: 'task-full' },
+      confirmationSurface: 'desktop',
+      forceConfirmToolCall: () => true,
+    };
+
+    await expect(
+      handle.send(
+        { type: 'user', content: 'remove it' },
+        { turnPermissionPolicy: policy },
+      ),
+    ).rejects.toMatchObject({
+      name: 'TurnPermissionPolicyUnsupportedError',
+      code: 'TURN_PERMISSION_POLICY_UNSUPPORTED',
+      permissionMode: 'bypassPermissions',
+    });
+    await handle.close();
+  });
+
   it('auto-approves trusted MCP tools without prompting the user', async () => {
     const { handle, canUseTool, seen } = await startSession(() => 'auto-approve');
 
@@ -403,7 +467,8 @@ describe('prompt-each-time never turns into a persisted grant', () => {
     // 让 canUseTool 跑到 dispatchInteraction 并登记 pending。
     await new Promise((resolve) => setImmediate(resolve));
 
-    await handle.setPermissionMode('bypassPermissions');
+    // CC agent 实现了 setPermissionMode (接口上可选是因为其他 agent 可缺省)。
+    await handle.setPermissionMode!('bypassPermissions');
 
     // 切到 Full access 也不能替用户批准这一次高风险调用。
     expect((await pending).behavior).toBe('deny');
@@ -420,7 +485,7 @@ describe('prompt-each-time never turns into a persisted grant', () => {
     });
     await new Promise((resolve) => setImmediate(resolve));
 
-    await handle.setPermissionMode('bypassPermissions');
+    await handle.setPermissionMode!('bypassPermissions');
 
     expect((await pending).behavior).toBe('allow');
     await handle.close();
@@ -566,6 +631,59 @@ describe('remote sessions share the same permission semantics', () => {
 
     expect(result.behavior).toBe('allow');
     expect(seen).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('attributes factory-injected http MCP servers to the MCP policy (collab bridge)', async () => {
+    // cc-2a 回归:maker-host remoteCcQueryFactory 会把 cindy_orca /
+    // orca_worker_bridge 追加进 startParams.mcpServers (远端协同恢复通道)。
+    // 审批归属快照必须在 factory 调用之后按最终清单定稿,否则注入 server 的
+    // 工具调用 resolveMcpToolTarget 返回 null、绕过 MCP 策略走原权限链弹窗。
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+
+    const seenContexts: McpToolApprovalContext[] = [];
+    const deps = createDeps((context) => {
+      seenContexts.push(context);
+      return 'auto-approve';
+    });
+    deps.mcpProviders = [];
+    let onApprovalRequest: ((raw: unknown) => Promise<{ behavior?: string }>) | undefined;
+    deps.remoteCcQueryFactory = (async (args: {
+      startParams: Record<string, unknown>;
+      onApprovalRequest: (raw: unknown) => Promise<{ behavior?: string }>;
+    }) => {
+      const params = args.startParams as { mcpServers?: Record<string, unknown> };
+      params.mcpServers = {
+        ...(params.mcpServers ?? {}),
+        cindy_orca: { type: 'http', url: 'http://127.0.0.1:47921/mcp/cindy_orca?session=s1' },
+      };
+      onApprovalRequest = args.onApprovalRequest;
+      return createFakeQuery() as never;
+    }) as NonNullable<AgentDeps['remoteCcQueryFactory']>;
+
+    const agent = new ClaudeCodeAgent(deps);
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-injected-mcp',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'default',
+    });
+    handle.setInteractionResolver(() => Promise.resolve({ kind: 'permission', behavior: 'allow' }));
+    if (!onApprovalRequest) throw new Error('expected remote onApprovalRequest');
+
+    const result = await onApprovalRequest({
+      requestId: 'r-injected',
+      kind: 'permission',
+      toolName: 'mcp__cindy_orca__list_workers',
+      input: {},
+    });
+
+    expect(result.behavior).toBe('allow');
+    // 关键:MCP 策略确实按 cindy_orca 归属被调用,而不是归属 miss 走原权限链。
+    expect(seenContexts.some((c) => c.serverName === 'cindy_orca')).toBe(true);
     await handle.close();
   });
 

@@ -11,6 +11,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Session } from '@/lib/ccAgent.types';
+import { DEVICE_LINK_RECONCILIATION_PROBE_MARKER } from '@cindy/maker-shared/device-link-contract';
 
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -188,7 +189,10 @@ describe('refreshRemoteDeviceSessions retry', () => {
     expect(merged).toHaveLength(201);
     expect(merged.map((s) => s.id)).toContain('outside-window');
     expect(merged[0].title).toBe('new');
-    expect(invoke).toHaveBeenNthCalledWith(2, d, 'local-db:sessions:get', ['outside-window']);
+    expect(invoke).toHaveBeenNthCalledWith(2, d, 'local-db:sessions:get', [
+      'outside-window',
+      DEVICE_LINK_RECONCILIATION_PROBE_MARKER,
+    ]);
   });
 
   it('默认事件重拉也按有界快照 merge，保留 200 条窗口外的有效会话', async () => {

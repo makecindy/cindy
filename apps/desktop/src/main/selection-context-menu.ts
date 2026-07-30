@@ -2,7 +2,7 @@
  * App-owned BrowserWindow text-selection context menu.
  *
  * Electron does not expose Chromium's full native menu as a safe reusable
- * default, so we intentionally build the small platform set XDMaker needs:
+ * default, so we intentionally build the small platform set Cindy needs:
  * macOS gets Copy / Look Up; Windows gets Copy / web search. Browser-only
  * actions such as reload, view source, and inspect are never included.
  */
@@ -130,7 +130,7 @@ export function buildSelectionContextMenuTemplate(
   ];
 }
 
-/** Keep custom context-menu labels aligned with XDMaker's effective UI locale. */
+/** Keep custom context-menu labels aligned with Cindy's effective UI locale. */
 export function setSelectionContextMenuLocale(locale: SupportedLocale): void {
   currentLocale = locale;
 }

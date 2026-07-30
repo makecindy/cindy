@@ -5,6 +5,7 @@ import type { AgentKind, Maker, OneShotOptions } from '@cindy/maker-core';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 import { createLogger } from '../logger.js';
+import { isAgentOneShotRouteDisabled } from '../maker-host/model-route-guard-live.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
@@ -127,7 +128,13 @@ async function routeHelpTopics(
       timeoutMs: 12_000,
     });
     let raw = utility.ok ? utility.text : '';
-    if (!raw && target.agentKind) {
+    // 停用轴:agent one-shot 兜底同样是新的付费调用,目标模型/默认路由被停用时
+    // 不派发(help 是 best-effort,静默降级到 summary-only,PR #744 review)。
+    if (
+      !raw &&
+      target.agentKind &&
+      !(await isAgentOneShotRouteDisabled(target.agentKind, target.options.model))
+    ) {
       raw = await maker.oneShot(target.agentKind, prompt, {
         ...target.options,
         maxTokens: 30,
@@ -319,7 +326,12 @@ export function registerMakerHelpIpc(maker: Maker): void {
           ...target.options,
         });
         let raw = utility.ok ? utility.text : '';
-        if (!raw && target.agentKind) {
+        // 停用轴:同上,兜底一击的目标路由被停用则不派发(回落既有的失败文案路径)。
+        if (
+          !raw &&
+          target.agentKind &&
+          !(await isAgentOneShotRouteDisabled(target.agentKind, target.options.model))
+        ) {
           raw = await maker.oneShot(target.agentKind, prompt, target.options);
         }
         if (utility.ok) {

@@ -1,4 +1,7 @@
+import type { AuthRegion } from '@cindy/auth-client';
+
 import type { ModelAccessStatus } from '../../shared/modelAccess.js';
+import { hasAuthSessionIdentityChanged } from './authSessionIdentity.js';
 import type { ModelAccessCredentialsStore } from './credentialsStore.js';
 
 /**
@@ -94,11 +97,14 @@ export interface CredentialsSync {
   rotate(): Promise<ModelAccessStatus>;
   /**
    * 登录/登出/切账号入口(authManager.onAuthStateChange)。
-   * userId 用于账号边界:runtime refresh 换号**不经过** isAuthenticated:false,
-   * 只有携带身份才能作废旧账号的在途请求(PR review P1:A 的在途凭据请求
-   * 不得在切到 B 后写回)。
+   * userId + realm 构成身份边界:runtime refresh 换号或同账号跨区都可能
+   * **不经过** isAuthenticated:false,只有携带完整身份才能作废旧请求。
    */
-  handleAuthChange(state: { isAuthenticated: boolean; userId?: string | null }): void;
+  handleAuthChange(state: {
+    isAuthenticated: boolean;
+    userId?: string | null;
+    realm?: AuthRegion | null;
+  }): void;
   /** 手填保存成功(safe-storage IPC 层通知):source 翻 manual。 */
   noteManualKeySaved(): void;
   /** 手填 key 被删除:清来源标记。 */
@@ -114,15 +120,15 @@ export function createCredentialsSync(deps: CredentialsSyncDeps): CredentialsSyn
   let status: ModelAccessStatus = snapshot('idle');
   let inflight: Promise<ModelAccessStatus> | null = null;
   /**
-   * 认证世代号:登出/**换账号**(userId 变化)自增。所有写盘(key/endpoint/状态)
-   * 都以发起时捕获的世代为闸——旧账号的在途请求在世代变更后一律作废,绝不写回
-   * (PR review P1:runtime refresh 换号不经过 isAuthenticated:false)。
+   * 认证世代号:登出、换账号或同账号跨区时自增。所有写盘(key/endpoint/状态)
+   * 都以发起时捕获的世代为闸——旧身份的在途请求在世代变更后一律作废。
    */
   let epoch = 0;
   /** 在途同步所属的世代;世代变更后旧 inflight 不再被复用。 */
   let inflightEpoch = -1;
   /** 当前登录身份(handleAuthChange 维护),null = 未登录/未知。 */
   let currentUserId: string | null = null;
+  let currentRealm: AuthRegion | null = null;
 
   function snapshot(
     state: ModelAccessStatus['state'],
@@ -269,16 +275,24 @@ export function createCredentialsSync(deps: CredentialsSyncDeps): CredentialsSyn
     handleAuthChange(state) {
       if (state.isAuthenticated) {
         const userId = state.userId ?? null;
-        if (userId !== null && currentUserId !== null && userId !== currentUserId) {
-          // runtime refresh 换号(A→B 不经过登出):作废 A 的在途请求与终态。
+        const realm = state.realm ?? null;
+        if (
+          hasAuthSessionIdentityChanged(
+            { userId: currentUserId, realm: currentRealm },
+            { userId, realm },
+          )
+        ) {
+          // runtime refresh 换号或同账号跨区(均可能不经过登出):作废旧请求与终态。
           epoch++;
         }
         if (userId !== null) currentUserId = userId;
+        if (realm !== null) currentRealm = realm;
         void startSync().catch(() => undefined);
       } else {
         // 登出/会话失效:复位状态机(含 unsupported 终态),不动本地 key/元数据。
         epoch++;
         currentUserId = null;
+        currentRealm = null;
         setStatus('idle');
       }
     },

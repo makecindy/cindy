@@ -82,6 +82,7 @@ import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopov
 import { RemoteProjectIcon } from './RemoteProjectIcon';
 import { SessionShareExportDialog } from './SessionShareExportDialog';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
+import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
@@ -342,6 +343,14 @@ export const SessionItem = memo(function SessionItem({
   const [archivePending, setArchivePending] = useState(false);
   // confirm 胶囊 DOM 引用——outside-mousedown 用它判断点击是否落在自己身上。
   const confirmPillRef = useRef<HTMLButtonElement>(null);
+
+  // 归档/删除前那次 dirty-worktree 预检要在 main 侧跑 git status,是"点了归档、
+  // 行还没消失"里剩下的最大一块等待。每个入口真正执行前都隔着一次人类操作
+  // (亮出 Confirm 胶囊后再点一下 / 打开菜单后再点条目),在那一刻先发出去,
+  // 执行时命中缓存即可。TTL 与去重都在 worktreeRemovalWarning 里。
+  const prefetchRemovalPreflight = useCallback(() => {
+    prefetchDirtyWorktreeForRemoval(session.id, session.deviceLinkDeviceId);
+  }, [session.id, session.deviceLinkDeviceId]);
 
   // 行容器 ref:在 isActive 切到 true 时把当前行滚进 viewport。
   //
@@ -614,6 +623,7 @@ export const SessionItem = memo(function SessionItem({
         if (isEditing) return;
         e.preventDefault();
         e.stopPropagation();
+        prefetchRemovalPreflight();
         setMenuPos({ x: e.clientX, y: e.clientY });
       }}
       className={cn(
@@ -888,6 +898,7 @@ export const SessionItem = memo(function SessionItem({
                 label={t('ccAgent.sidebar.sessionMenu.moreActions')}
                 onClick={(e) => {
                   const rect = e.currentTarget.getBoundingClientRect();
+                  prefetchRemovalPreflight();
                   setMenuPos({ x: rect.left, y: rect.bottom + 2 });
                 }}
                 isActive={isActive}
@@ -905,7 +916,12 @@ export const SessionItem = memo(function SessionItem({
               ) : canQuickArchive ? (
                 <SessionAction
                   label={t('ccAgent.sidebar.sessionMenu.archived')}
-                  onClick={() => setArchivePending(true)}
+                  onClick={() => {
+                    // 第一步:亮出 Confirm 胶囊,同时把 dirty 预检发出去。用户抬手
+                    // 再点第二下的间隔足够那次 git status 跑完 → 归档零等待。
+                    prefetchRemovalPreflight();
+                    setArchivePending(true);
+                  }}
                   isActive={isActive}
                 >
                   <Archive size={14} strokeWidth={2} />

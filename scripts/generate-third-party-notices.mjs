@@ -793,6 +793,20 @@ function buildDesktopCommonEntries(apacheText, sharpPackageNames) {
     }),
   );
 
+  // Tencent's public iLink client is the pinned protocol reference for the
+  // Cindy-owned, host-agnostic implementation under packages/wechat-ilink.
+  entries.push(
+    bundledComponent({
+      name: "Tencent openclaw-weixin protocol sources (adapted)",
+      version: "2.4.6",
+      license: "MIT",
+      url: "https://github.com/Tencent/openclaw-weixin/tree/v2.4.6",
+      licenseText: readBundledLicense(
+        "packages/wechat-ilink/LICENSE.tencent-openclaw-weixin",
+      ),
+    }),
+  );
+
   // ProviderLogoMark / MobileProviderMark 共享的上游 SVG path，桌面与移动端均随包分发。
   entries.push(...buildProviderBrandingEntries());
 

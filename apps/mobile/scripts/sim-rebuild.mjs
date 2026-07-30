@@ -51,7 +51,7 @@ import {
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mobileClientBuildEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
+import { mobileClientBundleEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
 import { ensureMobileEnv, formatMobileEnvStatus } from './ensure-mobile-env.mjs';
 import { computeFingerprintReport, parseFingerprintCliOutput } from './ci-fingerprint.mjs';
 import {
@@ -83,7 +83,7 @@ const localConfigResult = ensureMobileLocalRegionConfig({ mobileDir });
 const localConfigStatus = formatMobileLocalConfigStatus(localConfigResult, worktreeRoot);
 if (localConfigStatus) console.log(localConfigStatus);
 const buildEnv = withLocalMobileRegionConfig(
-  mobileClientBuildEnv({ authRegion: region }),
+  mobileClientBundleEnv({ authRegion: region }),
 );
 const devProcessEnv = { ...process.env, ...buildEnv };
 

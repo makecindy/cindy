@@ -26,6 +26,7 @@ const SESSION_SOURCES = [
   'slack',
   'telegram',
   'discord',
+  'wechat',
   'scheduler',
   'learn',
   'shared',
@@ -187,10 +188,11 @@ export const sessions = sqliteTable(
     extraDirs: text('extra_dirs').notNull().default('[]'),
     /**
      * 远端目标 host id (`@cindy/maker-remote-ssh` ConnectionPool 里的 alias)。
-     * 非空 = 这个 session 跑在远端机器上 (codex agent 在远端、workingDir 是远端路径)。
+     * 非空 = 这个 session 跑在远端机器上 (agent 在远端、workingDir 是远端路径)。
      * 应用重启 / session 切换都能恢复远端目标; 本地 session 字段为 null,
      * 跟历史行为兼容 (老 session 没这列, sqlite default null 即可)。
-     * 仅 Codex 支持; Claude session 此列恒为 null (capability 未接通)。
+     * Codex 与 Claude Code 均支持 (cc 经 cc-mgr daemon, codex 经 app-server
+     * daemon);两端 in-process MCP 都经 SSH remote-forward 回本机 HTTP bridge。
      */
     remoteHostId: text('remote_host_id'),
     /**
@@ -509,6 +511,148 @@ export const imBindings = sqliteTable(
   (t) => ({
     pk: primaryKey({ columns: [t.channel, t.botContextId, t.userId, t.scopeKey] }),
     idxTarget: index('idx_im_bindings_target').on(t.targetSessionId),
+  }),
+);
+
+/**
+ * Personal WeChat reliable-ingress state.
+ *
+ * Credentials never enter SQLite. The binding epoch is an opaque generation id
+ * that lets late poll/pump callbacks fail closed after reconnect or unbind.
+ */
+export const wechatSyncState = sqliteTable(
+  'wechat_sync_state',
+  {
+    bindingEpoch: text('binding_epoch').primaryKey(),
+    isActive: integer('is_active', { mode: 'boolean' }).notNull().default(false),
+    syncCursor: text('sync_cursor').notNull().default(''),
+    lastPollAt: integer('last_poll_at'),
+    lastErrorCode: text('last_error_code'),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    oneActiveEpoch: uniqueIndex('uniq_wechat_sync_active')
+      .on(t.isActive)
+      .where(sql`${t.isActive} = 1`),
+  }),
+);
+
+export const wechatInbox = sqliteTable(
+  'wechat_inbox',
+  {
+    id: text('id').primaryKey(),
+    bindingEpoch: text('binding_epoch')
+      .notNull()
+      .references(() => wechatSyncState.bindingEpoch, { onDelete: 'cascade' }),
+    platformMessageId: text('platform_message_id').notNull(),
+    platformSeq: integer('platform_seq').notNull(),
+    peerId: text('peer_id').notNull(),
+    receivedAt: integer('received_at').notNull(),
+    platformCreatedAt: integer('platform_created_at').notNull(),
+    expiresAt: integer('expires_at').notNull(),
+    status: text('status', {
+      enum: [
+        'pending',
+        'dispatching',
+        'accepted_running',
+        'waiting_desktop',
+        'delivery_pending',
+        'completed',
+        'interrupted',
+        'cancelled',
+        'expired',
+        'failed_terminal',
+        'rejected_overload',
+      ],
+    })
+      .notNull()
+      .default('pending'),
+    leaseUntil: integer('lease_until'),
+    sessionId: text('session_id').references(() => sessions.id, { onDelete: 'set null' }),
+    conversationEpoch: integer('conversation_epoch').notNull().default(0),
+    payloadJson: text('payload_json').notNull(),
+    /** AES-256-GCM fields. The data key is owner-scoped and kept in safeStorage. */
+    contextNonce: text('context_nonce').notNull(),
+    contextCiphertext: text('context_ciphertext').notNull(),
+    contextTag: text('context_tag').notNull(),
+    attempts: integer('attempts').notNull().default(0),
+    lastErrorCode: text('last_error_code'),
+  },
+  (t) => ({
+    platformMessage: uniqueIndex('uniq_wechat_inbox_platform_message').on(
+      t.bindingEpoch,
+      t.platformMessageId,
+    ),
+    byQueue: index('idx_wechat_inbox_queue').on(t.bindingEpoch, t.status, t.receivedAt),
+    byLease: index('idx_wechat_inbox_lease').on(t.bindingEpoch, t.leaseUntil),
+    byConversation: index('idx_wechat_inbox_conversation').on(
+      t.bindingEpoch,
+      t.peerId,
+      t.conversationEpoch,
+    ),
+    oneRunningPerSession: uniqueIndex('uniq_wechat_inbox_running_session')
+      .on(t.bindingEpoch, t.sessionId)
+      .where(
+        sql`${t.sessionId} IS NOT NULL AND ${t.status} IN ('dispatching', 'accepted_running', 'waiting_desktop', 'delivery_pending')`,
+      ),
+  }),
+);
+
+export const wechatOutbox = sqliteTable(
+  'wechat_outbox',
+  {
+    id: text('id').primaryKey(),
+    bindingEpoch: text('binding_epoch')
+      .notNull()
+      .references(() => wechatSyncState.bindingEpoch, { onDelete: 'cascade' }),
+    taskId: text('task_id')
+      .notNull()
+      .references(() => wechatInbox.id, { onDelete: 'cascade' }),
+    clientId: text('client_id').notNull(),
+    kind: text('kind', { enum: ['final', 'error', 'interrupted', 'overload'] }).notNull(),
+    chunkIndex: integer('chunk_index').notNull(),
+    text: text('text').notNull(),
+    mediaJson: text('media_json').notNull().default('[]'),
+    status: text('status', {
+      enum: ['pending', 'sending', 'delivered', 'failed_terminal'],
+    })
+      .notNull()
+      .default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    nextRetryAt: integer('next_retry_at').notNull(),
+    createdAt: integer('created_at').notNull(),
+    deliveredAt: integer('delivered_at'),
+  },
+  (t) => ({
+    clientId: uniqueIndex('uniq_wechat_outbox_client_id').on(t.bindingEpoch, t.clientId),
+    byDelivery: index('idx_wechat_outbox_delivery').on(t.bindingEpoch, t.status, t.nextRetryAt),
+    byTask: index('idx_wechat_outbox_task').on(t.bindingEpoch, t.taskId, t.chunkIndex),
+  }),
+);
+
+export const wechatFileAttachments = sqliteTable(
+  'wechat_file_attachments',
+  {
+    id: text('id').primaryKey(),
+    bindingEpoch: text('binding_epoch')
+      .notNull()
+      .references(() => wechatSyncState.bindingEpoch, { onDelete: 'cascade' }),
+    taskId: text('task_id')
+      .notNull()
+      .references(() => wechatInbox.id, { onDelete: 'cascade' }),
+    sessionId: text('session_id').references(() => sessions.id, { onDelete: 'set null' }),
+    absPath: text('abs_path').notNull(),
+    originalName: text('original_name').notNull(),
+    mimeType: text('mime_type').notNull(),
+    bytes: integer('bytes').notNull(),
+    status: text('status', { enum: ['staged', 'promoted', 'released'] })
+      .notNull()
+      .default('staged'),
+    promotedAt: integer('promoted_at'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    byTask: index('idx_wechat_file_attachments_task').on(t.bindingEpoch, t.taskId),
   }),
 );
 
@@ -1248,7 +1392,11 @@ export const mediaBlobs = sqliteTable('media_blobs', {
  * refKind/refId 是多态引用(消息 id / 会话 id / 意识 id),不设 FK——
  * 删除会话/卸载意识时由对应业务代码删自己名下的 ref(回收器对账兜底)。
  * origin* 记出生:意识面板供图的归属校验即查「该指纹是否有 origin 为本意识
- * 的行或 ghost-gallery ref」(ghostCanRead,见 main/cindy-media/ledger.ts)。
+ * 的行,或 ghost-gallery / ghost-grant / ghost-deposit ref」(ghostCanRead,
+ * 见 main/cindy-media/ledger.ts)。
+ *
+ * refKind 是无约束的 text 列:新增引用类型只改 ledger.ts 的联合类型,
+ * 不需要 migration。
  */
 export const mediaRefs = sqliteTable(
   'media_refs',
@@ -1257,7 +1405,7 @@ export const mediaRefs = sqliteTable(
     hash: text('hash')
       .notNull()
       .references((): AnySQLiteColumn => mediaBlobs.hash, { onDelete: 'cascade' }),
-    /** 'message' | 'session-attachment' | 'ghost-gallery' | 'import'(联合类型见 ledger.ts)。 */
+    /** 'message' | 'session-attachment' | 'ghost-gallery' | 'ghost-deposit' | 'import'…(联合类型见 ledger.ts)。 */
     refKind: text('ref_kind').notNull(),
     /** 引用方 id:消息 clientId / 会话 id / 意识 id。 */
     refId: text('ref_id').notNull(),
@@ -1308,5 +1456,48 @@ export const ghostCards = sqliteTable(
   (t) => ({
     /** GC 按最旧淘汰的扫描路径。 */
     byUpdatedAt: index('ghost_cards_updated_at_idx').on(t.updatedAt),
+  }),
+);
+
+/**
+ * IM 群消息本地窗口(group-relay-v1)。
+ *
+ * 一行 = hook server 实时中继(group.message 帧)的一条群消息。这是
+ * 「服务端零内容驻留」架构下群上下文的唯一存储方:窗口长在用户自己的
+ * 设备上(与其 Telegram 客户端本地缓存同性质)。派发 hook 任务时按
+ * (provider, chatId, threadId) 取最近条目拼进 agent 上下文,并按
+ * source.triggerMessageId 剔除当前消息。行数由插入时的 GC 控制
+ * (每个键保最新 N 行 + TTL),thread_id 用空串表示主群流(保证唯一
+ * 索引对"无 topic"生效,SQLite 的 NULL 互不相等)。
+ */
+export const hookGroupMessages = sqliteTable(
+  'hook_group_messages',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    provider: text('provider').notNull(),
+    chatId: text('chat_id').notNull(),
+    /** forum topic / thread id;空串 = 主群流。 */
+    threadId: text('thread_id').notNull().default(''),
+    messageId: text('message_id').notNull(),
+    chatName: text('chat_name'),
+    author: text('author').notNull(),
+    isBot: integer('is_bot').notNull().default(0),
+    text: text('text').notNull(),
+    /** JSON string[];无附件为空。 */
+    fileNames: text('file_names'),
+    /** IM 平台侧发送时刻(unix ms)。 */
+    sentAt: integer('sent_at').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    /** 同一条消息(重放/重连)幂等去重的键(冲突即忽略, 不更新)。 */
+    byMessage: uniqueIndex('hook_group_messages_msg_idx').on(
+      t.provider,
+      t.chatId,
+      t.threadId,
+      t.messageId,
+    ),
+    /** 窗口查询与 GC 的扫描路径。 */
+    byWindow: index('hook_group_messages_window_idx').on(t.provider, t.chatId, t.threadId, t.id),
   }),
 );

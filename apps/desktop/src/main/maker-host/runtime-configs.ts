@@ -9,7 +9,13 @@ import { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
+
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
+import { getActiveCatalog } from './active-catalog.js';
+import { readModelDisableOverrides } from './model-disable-store.js';
+import { claudeBehaviorFlagsForSpawn } from './claude-behavior-flags.js';
+import { hasClaudeAiOAuth } from './claude-credentials-store.js';
 import claudeSystemPrompt from './claude-system-prompt.md?raw';
 import codexSystemPrompt from './codex-system-prompt.md?raw';
 import hostSystemPrompt from './host-system-prompt.md?raw';
@@ -75,13 +81,9 @@ function readMakerMemoryEnabled(): boolean {
   return readMemorySettings().maker;
 }
 
-const staticClaudeBehaviorFlags = {
-  CLAUDE_CODE_SKIP_FAST_MODE_NETWORK_ERRORS: '1',
-  CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
-  // 网关 upstream 透传 tool_reference 块, 显式开启 ToolSearch
-  // 否则 CC 看到非 first-party host 默认 disable, 每次请求都全量塞工具定义。
-  ENABLE_TOOL_SEARCH: 'auto',
-};
+// behaviorFlags 拆到 claude-behavior-flags.ts(零依赖,可单测)。attribution 归因块
+// 按 spawn 形态决定 —— oauth-spawn 禁用 '0' 会让订阅直连的 Auto 分类器子请求被上游
+// 429,auto 模式所有写操作 fail-closed(issue #758),详见该模块头注释。
 
 /**
  * Claude Code 真正的上游 endpoint —— 既给本地 anthropic-compat-proxy 做 upstream,
@@ -122,9 +124,15 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
   // 这样 AgentRuntimeConfig 接口(endpoint?: string)在结构类型上仍然成立 ——
   // 每次访问 runtimeConfig.endpoint 都会执行 endpointFn, 拿到当时最新的兼容模式状态。
   const config: AgentRuntimeConfig = {
-    // behaviorFlags 现在全是静态值 (压缩阈值已拆到 autoCompactThresholdPct getter),
-    // 直接当普通属性挂; 引用共享无妨 —— env-builder 只读不改。
-    behaviorFlags: staticClaudeBehaviorFlags,
+    // behaviorFlags 用函数形态:env-builder 在每次 spawn 时以该 spawn 的 credentialMode
+    // 调用 —— gateway-key spawn(显式 XD source / SSH remote)保持禁归因且不读钥匙串,
+    // 其余形态按**当时**的 Claude.ai 订阅连接态决定(判据与 proxy 同源)。会话中途
+    // 连/断订阅只影响新 spawn —— 与 cc 子进程凭证冻结语义一致。
+    behaviorFlags: (ctx) =>
+      claudeBehaviorFlagsForSpawn({
+        credentialMode: ctx.credentialMode,
+        oauthConnected: hasClaudeAiOAuth,
+      }),
     // xdt-maker 产品级 system prompt 注入：host 共用段 (host-system-prompt.md)
     // + Claude 专属段 (claude-system-prompt.md)，按顺序拼接后给 maker-core append。
     systemPrompt: composeHostPrompt(claudeSystemPrompt),
@@ -158,11 +166,59 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
     configurable: false,
   });
   Object.defineProperty(config, 'subagentModel', {
-    get: () => readSubagentModelSettings().claudeCode ?? undefined,
+    // 无路由上下文的兜底口径(subagentModelForRoute 缺席的消费方用):目录里该模型
+    // 的所有拷贝都被停用才丢弃覆写。
+    get: () => resolveSubagentModelForRoute(undefined),
     enumerable: true,
     configurable: false,
   });
+  // 停用轴(PR #744 review 第十六、十九轮):保存的 subagent 覆写
+  // (CLAUDE_CODE_SUBAGENT_MODEL)是每次 Agent 工具调用的新付费请求路由,而子代理
+  // 跑在**父会话来源**上 —— 判定必须按该来源的那份拷贝:父会话钉 XD、XD 拷贝被停用
+  // 时,Anthropic 家有启用拷贝也不能豁免。env-builder 每次 spawn 传入会话来源。
+  // 同步热路径,只用同步源(active catalog + override store)。
+  config.subagentModelForRoute = (providerId, credentialMode) =>
+    resolveSubagentModelForRoute(providerId, credentialMode);
   return config;
+}
+
+/**
+ * providerId:string = 显式来源;null = 隐式默认 —— 按 spawn 已解析的凭证形态映射
+ * 实际落点(gateway-key = xd / oauth-bearer = Anthropic 直连;静态猜 xd 会在 XD 未
+ * 连接、走 Anthropic 订阅时判错,PR #744 review 第二十轮);undefined = 完全无路由
+ * 上下文(退回「全部拷贝停用才丢弃」的保守判)。
+ */
+function resolveSubagentModelForRoute(
+  providerId: string | null | undefined,
+  credentialMode?: string,
+): string | undefined {
+  const saved = readSubagentModelSettings().claudeCode ?? undefined;
+  if (!saved) return undefined;
+  const overrides = readModelDisableOverrides();
+  const offering = getActiveCatalog().providers.filter((p) =>
+    (p.models['claude-code'] ?? []).some((m) => m.id === saved),
+  );
+  if (offering.length === 0) return saved; // 目录不认识 → 不新增拒绝面
+  const copyDisabled = (id: string) =>
+    isProviderDisabled(overrides, id) || isModelDisabled(overrides, id, saved);
+  if (providerId !== undefined) {
+    const implicitRouteId =
+      credentialMode === 'gateway-key'
+        ? 'xd'
+        : credentialMode === 'oauth-bearer'
+          ? 'anthropic'
+          : null;
+    const routeProvider = providerId
+      ? offering.find((p) => p.id === providerId)
+      : implicitRouteId
+        ? offering.find((p) => p.id === implicitRouteId)
+        : undefined;
+    // 显式/映射来源不提供该模型(跨来源 subagent 覆写)或凭证形态未知:实际落点
+    // 不明,落到下方保守判。
+    if (routeProvider) return copyDisabled(routeProvider.id) ? undefined : saved;
+  }
+  const allDisabled = offering.every((p) => copyDisabled(p.id));
+  return allDisabled ? undefined : saved;
 }
 
 /**

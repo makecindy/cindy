@@ -468,6 +468,46 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
     await expect(fsp.access(cache)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('HTTP 刷新落盘期间换号时返回未应用,不向设置页误报成功', async () => {
+    oauthRefreshMock.getValidClaudeAiOAuth.mockResolvedValue({ accessToken: 'test-token' });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          data: [{ id: 'claude-opus-4-8', display_name: 'Account A Opus', type: 'model' }],
+          has_more: false,
+        }),
+      })),
+    );
+
+    const originalWriteFile = fsp.writeFile.bind(fsp);
+    let releaseWrite!: () => void;
+    let signalWriteStarted!: () => void;
+    const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    const writeStarted = new Promise<void>((resolve) => { signalWriteStarted = resolve; });
+    const writeSpy = vi.spyOn(fsp, 'writeFile').mockImplementationOnce(async (...args) => {
+      signalWriteStarted();
+      await writeGate;
+      return originalWriteFile(...args);
+    });
+
+    try {
+      const refreshPromise = refreshAnthropicModelsFromHttp();
+      await writeStarted;
+      authState.loggedIn = false;
+      const clearPromise = clearAnthropicDiscoveredModels();
+      releaseWrite();
+
+      await expect(refreshPromise).resolves.toBe(false);
+      await clearPromise;
+      expect(anthropicIds()).toEqual([]);
+    } finally {
+      releaseWrite();
+      writeSpy.mockRestore();
+    }
+  });
+
   it('登出删除排在旧 SDK 在途持久化之后,缓存不会死灰复燃(review P1 回归)', async () => {
     const originalWriteFile = fsp.writeFile.bind(fsp);
     let releaseWrite!: () => void;
@@ -1308,7 +1348,7 @@ describe('HTTP 发现失败的归因与选择性重试', () => {
     });
     try {
       vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')));
-      await expect(refreshAnthropicModelsFromHttp()).resolves.toBeUndefined();
+      await expect(refreshAnthropicModelsFromHttp()).resolves.toBe(false);
       expect(getAnthropicModelDiscoveryFailure()?.kind).toBe('network');
     } finally {
       setAnthropicDiscoveryFailureListener(null);

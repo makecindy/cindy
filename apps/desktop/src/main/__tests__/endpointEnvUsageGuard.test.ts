@@ -21,8 +21,9 @@ import { describe, expect, it } from 'vitest';
 const SRC_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 const ENDPOINT_ENV_KEYS = [
-  // 现役:端点清单自举基址(唯一烘焙远程 URL)。
+  // 现役:本区与对端的两份端点清单自举基址。
   'VITE_ENDPOINT_MANIFEST_BASE_URL',
+  'VITE_ENDPOINT_MANIFEST_PEER_BASE_URL',
   // 以下为已退役键(2026-07 端点清单重构后不再注入)——保留在名单里防复活:
   // 谁重新读它们,拿到的永远是空串/漂移值。
   'VITE_API_BASE_URL',

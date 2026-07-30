@@ -262,6 +262,62 @@ describe('pendingTaskWake (唤醒桥接标记)', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// workflowProgress(workflow 逐 agent 进度树):CLI 对纯心跳帧节流省略该字段 =
+// 沿用上一帧;store 侧 merge 不得清树,入口必须防御收窄坏条目。
+// ---------------------------------------------------------------------------
+
+describe('agent_task_update workflowProgress', () => {
+  it('第一帧带 workflowProgress、第二帧不带(节流)→ store 保留上一帧的树', () => {
+    const first = handleStreamEvent(
+      baseState(),
+      taskEvent({
+        taskId: 'wf-1',
+        status: 'running',
+        taskType: 'local_workflow',
+        workflowProgress: [
+          { type: 'workflow_phase', index: 0, title: 'Phase A' },
+          { type: 'workflow_agent', index: 1, label: 'worker-a', state: 'progress' },
+        ],
+      }),
+    );
+    expect(first.taskUpdates?.get('wf-1')?.workflowProgress).toHaveLength(2);
+
+    const second = handleStreamEvent(
+      first,
+      taskEvent({ taskId: 'wf-1', status: 'running', lastToolName: 'Bash' }),
+    );
+    const task = second.taskUpdates?.get('wf-1');
+    expect(task?.lastToolName).toBe('Bash');
+    expect(task?.workflowProgress).toEqual([
+      { type: 'workflow_phase', index: 0, title: 'Phase A' },
+      { type: 'workflow_agent', index: 1, label: 'worker-a', state: 'progress' },
+    ]);
+  });
+
+  it('坏条目在入口被收窄:词表外 type / 非有限 index 丢弃,超长 lastToolSummary 截断', () => {
+    const state = handleStreamEvent(
+      baseState(),
+      taskEvent({
+        taskId: 'wf-2',
+        status: 'running',
+        taskType: 'local_workflow',
+        workflowProgress: [
+          null,
+          { type: 'workflow_step', index: 0 },
+          { type: 'workflow_agent', index: Number.NaN },
+          { type: 'workflow_agent', index: 0, label: 'ok', lastToolSummary: 'S'.repeat(500) },
+        ],
+      }),
+    );
+    const entries = state.taskUpdates?.get('wf-2')?.workflowProgress;
+    expect(entries).toHaveLength(1);
+    expect(entries?.[0]).toMatchObject({ type: 'workflow_agent', index: 0, label: 'ok' });
+    expect(entries?.[0]?.lastToolSummary).toHaveLength(160);
+    expect(entries?.[0]?.lastToolSummary?.endsWith('…')).toBe(true);
+  });
+});
+
 describe('getRunningSnapshot 后台 subagent 折算(真 store)', () => {
   const statusUpdate = (
     sessionId: string,

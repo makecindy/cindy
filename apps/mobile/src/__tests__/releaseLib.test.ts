@@ -82,6 +82,8 @@ describe('release-lib assertPublicEnv', () => {
   const baked = {
     EXPO_PUBLIC_CINDY_AUTH_REGION: 'cn',
     EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL: 'https://cdn.example.com',
+    EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL:
+      'https://cdn-peer.example.com',
     EXPO_PUBLIC_XDT_OTA_SELFHOST: '1',
   };
 
@@ -98,7 +100,7 @@ describe('release-lib assertPublicEnv', () => {
         { requiredKeys: SELF_HOST_PUBLIC_ENV_KEYS },
       ),
     ).toThrow(
-      'EXPO_PUBLIC_CINDY_AUTH_REGION, EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL, EXPO_PUBLIC_XDT_OTA_SELFHOST',
+      'EXPO_PUBLIC_CINDY_AUTH_REGION, EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL, EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL, EXPO_PUBLIC_XDT_OTA_SELFHOST',
     );
   });
 

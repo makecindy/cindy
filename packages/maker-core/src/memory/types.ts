@@ -71,12 +71,25 @@ export interface WriteOptions {
 
 export type WriteWarning = 'shard-size-exceeded' | 'index-size-exceeded';
 
+/** 软警告的数值明细: 让调用方判断超了多少, 而不是盲目瘦身 (见 #891) */
+export interface WriteWarningDetail {
+  kind: WriteWarning;
+  /** 超限对象当前字节数 (分片 body 或 MEMORY.md 索引) */
+  sizeBytes: number;
+  /** 软上限 (默认分片 2048 / 索引 4096) */
+  softLimitBytes: number;
+  /** 分片硬上限 (默认 8192, 超过将被 reject); 索引警告无硬上限, 不带此字段 */
+  hardLimitBytes?: number;
+}
+
 export interface WriteResult {
   ok: true;
   /** 写入后文件相对 storage dir 的名字 (e.g. 'feedback_xxx.md') */
   filename: string;
   /** 软警告: 调用方按 prompt 引导 consolidate */
   warning?: WriteWarning;
+  /** 软警告数值明细, 与 warning 同生同灭 */
+  warningDetail?: WriteWarningDetail;
 }
 
 export interface MemoryConfig {

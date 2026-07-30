@@ -1,0 +1,9 @@
+{
+  "site": "scrapethissite.com",
+  "auth": "无需登录:公开的抓取练习沙盒站",
+  "entry": {
+    "forms": "https://www.scrapethissite.com/pages/forms/"
+  },
+  "recipes": ["hockey-search"],
+  "notes": "抓取练习沙盒,hockey-search 是交互步(type+submit → extract)的示例配方,也可用作端到端验证配方引擎是否正常的探针站。"
+}

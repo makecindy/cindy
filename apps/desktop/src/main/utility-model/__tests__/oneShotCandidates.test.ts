@@ -43,6 +43,10 @@ vi.mock('../../maker-host/provider-route.js', () => ({
   isProviderRouteMutationInProgress: vi.fn(() => false),
 }));
 
+vi.mock('../../maker-host/model-disable-store.js', () => ({
+  readModelDisableOverrides: vi.fn(() => ({ disabledModels: {}, disabledProviders: {} })),
+}));
+
 vi.mock('../../secrets/providerSecretStore.js', () => ({
   readCustomProviderKey: vi.fn(),
 }));
@@ -67,6 +71,7 @@ import { getValidClaudeAiOAuth } from '../../maker-host/claude-oauth-refresh.js'
 import { getGrokAccessToken } from '../../maker-host/grok-oauth-login.js';
 import { readCachedGenericOAuthAccessToken } from '../../maker-host/generic-oauth.js';
 import { getActiveCatalog } from '../../maker-host/active-catalog.js';
+import { readModelDisableOverrides } from '../../maker-host/model-disable-store.js';
 import { isProviderRouteMutationInProgress } from '../../maker-host/provider-route.js';
 import { readCustomProviderKey } from '../../secrets/providerSecretStore.js';
 import { getUtilityModelChainProfiles } from '../UtilityModelSelection.js';
@@ -80,6 +85,7 @@ const readGrokToken = vi.mocked(getGrokAccessToken);
 const readGenericOAuthToken = vi.mocked(readCachedGenericOAuthAccessToken);
 const fetchMock = vi.mocked(undiciFetch);
 const activeCatalog = vi.mocked(getActiveCatalog);
+const readDisableOverrides = vi.mocked(readModelDisableOverrides);
 const providerRouteMutationInProgress = vi.mocked(isProviderRouteMutationInProgress);
 const readCustomKey = vi.mocked(readCustomProviderKey);
 
@@ -101,6 +107,7 @@ describe('utility one-shot candidates', () => {
     readGenericOAuthToken.mockReturnValue(null);
     providerRouteMutationInProgress.mockReturnValue(false);
     readCustomKey.mockReturnValue(null);
+    readDisableOverrides.mockReturnValue({ disabledModels: {}, disabledProviders: {} });
     activeCatalog.mockReturnValue({ providers: [] } as never);
     getProfiles.mockReturnValue([
       {
@@ -444,6 +451,52 @@ describe('utility one-shot candidates', () => {
         model: 'legacy-model',
         status: 'skipped',
         reason: 'endpoint_missing',
+      }],
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('R22:显式候选执行前按真实来源重查停用,不做 transport 推断', async () => {
+    // 显式自定义 codex 供应商 → transport codex-responses。旧的 transport 推断会把
+    // 重查错映射到 'openai' 的 override 上;真实来源 'my-custom' 在凭证等待期被停用
+    // 时照旧下单。新逻辑按 (candidate.providerId, candidate.model) 重查 → 跳过。
+    activeCatalog.mockReturnValue({
+      providers: [{
+        id: 'my-custom',
+        name: 'My Custom',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'none' },
+        routing: {
+          codex: {
+            upstream: 'https://custom.example/v1',
+            authStrategy: 'none',
+          },
+        },
+        models: {
+          codex: [{ id: 'local-model', name: 'Local Model', contextWindow: 100_000 }],
+        },
+      }],
+    } as never);
+    // 第一次读 = 入口裁决(未停用,放行);随后的读 = executeCandidates 派发前重查
+    // (此刻 'my-custom' 已被供应商级停用)。
+    readDisableOverrides
+      .mockReturnValueOnce({ disabledModels: {}, disabledProviders: {} })
+      .mockReturnValue({ disabledModels: {}, disabledProviders: { 'my-custom': true } });
+
+    const result = await requestUtilityText(makerMock(false), 'generate', {
+      providerId: 'my-custom',
+      agentKind: 'codex',
+      model: 'local-model',
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      attempts: [{
+        providerId: 'my-custom',
+        model: 'local-model',
+        status: 'skipped',
+        reason: 'model_unavailable',
       }],
     });
     expect(fetchMock).not.toHaveBeenCalled();

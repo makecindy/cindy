@@ -9,6 +9,8 @@ import {
   draftHasContent,
   getDraft,
   getDraftPresence,
+  plainTextToTiptapDoc,
+  quickStartTextToTiptapDoc,
   saveDraft,
   setComposerDraftOwner,
   subscribeDraft,
@@ -284,5 +286,68 @@ describe('draft presence subscription', () => {
     expect(tiptapDocHasContent(null)).toBe(false);
     expect(tiptapDocHasContent(textDoc)).toBe(true);
     expect(tiptapDocHasContent(mentionDoc)).toBe(true);
+  });
+});
+
+describe('quickStartTextToTiptapDoc', () => {
+  it('returns empty doc for empty string', () => {
+    expect(quickStartTextToTiptapDoc('')).toEqual(emptyDoc);
+  });
+
+  it('wraps single-line text with quickStartPill mark', () => {
+    const doc = quickStartTextToTiptapDoc('探索并理解代码');
+    expect(doc.type).toBe('doc');
+    expect(doc.content).toHaveLength(1);
+    const para = doc.content![0];
+    expect(para.type).toBe('paragraph');
+    expect(para.content).toHaveLength(1);
+    const textNode = para.content![0];
+    expect(textNode.type).toBe('text');
+    expect(textNode.text).toBe('探索并理解代码');
+    expect(textNode.marks).toEqual([{ type: 'quickStartPill' }]);
+  });
+
+  it('applies mark to each line in multi-line text', () => {
+    const doc = quickStartTextToTiptapDoc('line1\nline2');
+    expect(doc.content).toHaveLength(2);
+    for (const para of doc.content!) {
+      if (para.content) {
+        for (const node of para.content) {
+          expect(node.marks).toEqual([{ type: 'quickStartPill' }]);
+        }
+      }
+    }
+  });
+
+  it('preserves empty lines as empty paragraphs (no mark)', () => {
+    const doc = quickStartTextToTiptapDoc('a\n\nb');
+    expect(doc.content).toHaveLength(3);
+    expect(doc.content![1].content).toBeUndefined();
+  });
+
+  it('differs from plainTextToTiptapDoc by having marks', () => {
+    const plain = plainTextToTiptapDoc('hello');
+    const marked = quickStartTextToTiptapDoc('hello');
+    const plainText = plain.content![0].content![0];
+    const markedText = marked.content![0].content![0];
+    expect(plainText.marks).toBeUndefined();
+    expect(markedText.marks).toEqual([{ type: 'quickStartPill' }]);
+  });
+
+  it('goes through plainText normalization (lists become bulletList nodes) and marks leaf text', () => {
+    const doc = quickStartTextToTiptapDoc('- item1\n- item2');
+    // Walk tree to find every text node; they must all carry quickStartPill mark.
+    const textNodes: { text?: string; marks?: unknown[] }[] = [];
+    const walk = (n: JSONContent) => {
+      if (n.type === 'text') textNodes.push({ text: n.text, marks: n.marks });
+      (n.content ?? []).forEach(walk);
+    };
+    walk(doc);
+    expect(textNodes.length).toBeGreaterThanOrEqual(2);
+    for (const tn of textNodes) {
+      expect(tn.marks).toEqual(
+        expect.arrayContaining([{ type: 'quickStartPill' }]),
+      );
+    }
   });
 });

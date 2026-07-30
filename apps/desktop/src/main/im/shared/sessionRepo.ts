@@ -315,6 +315,10 @@ export async function resetSessionToDefaults(
       providerId: defaults.providerId,
       permissionMode: defaults.permissionMode,
       fastMode: defaults.fastMode,
+      // Personal WeChat exposes a user-selected channel working directory.
+      // It applies only at the explicit `/new` boundary; existing context is
+      // never moved silently.
+      ...(channel === 'wechat' && defaults.workingDir ? { workingDir: defaults.workingDir } : {}),
       sdkSessionId: null,
       clearedAt: Date.now(),
       updatedAt: Date.now(),

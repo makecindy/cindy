@@ -17,6 +17,6 @@ export function skillhubApiFetch<T>(
   requireAppCapability('canUseSkillHubCloud', 'SkillHub cloud requires a Cindy account.');
   return serverApiFetch<T>(apiPath, {
     ...opts,
-    baseUrl: getClientEndpoint('skillhubApiBaseUrl'),
+    baseUrl: () => getClientEndpoint('skillhubApiBaseUrl'),
   });
 }

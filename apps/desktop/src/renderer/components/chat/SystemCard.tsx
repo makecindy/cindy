@@ -711,10 +711,18 @@ function GoalCompleteCard({ data }: { data?: Record<string, unknown> }) {
  * /goal 提示分隔条(目前:usageLimited 到点自动续跑的"用量已恢复,继续目标")。
  * 同 GoalCompleteCard 复用 CompactBoundaryCard 的分隔条语言。
  */
-function GoalResumedCard() {
+function GoalResumedCard({ data }: { data?: { kind?: string } }) {
   const { t } = useTranslation();
-  // 目前只有 'usage-resumed' 一种 notice;未来多 kind 再分支。
-  const label = t('goal.usageResumeNotice');
+  // 两种续跑原因共用同一张分隔条,但说法必须分开:
+  //   - 账号限流续跑:重置时刻来自账号额度信息, 说「用量已恢复」有依据;
+  //   - 上游过载续跑:只是干等了 60s, **没有**任何容量探测。因此文案只能说
+  //     「正在重试目标」—— 说「模型服务已恢复」在持续故障期会在每次重试前插一条
+  //     假恢复通知, 紧接着又是一次容量失败(review #844 codex P1)。
+  // 存档里的 kind 仍是 'capacity-resumed'(已落库的卡片按这个值渲染), 只有文案改。
+  const label =
+    data?.kind === 'capacity-resumed'
+      ? t('goal.capacityRetryNotice')
+      : t('goal.usageResumeNotice');
   return (
     <div className="flex w-full items-center gap-3 py-2 select-none" role="separator" aria-label={label}>
       <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
@@ -746,6 +754,23 @@ function AutoResumeCard() {
       <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
     </div>
   );
+}
+
+/**
+ * 交接正文是否为英文格式。
+ *
+ * `content.handoff` 是持久化数据:英文化之前落库的行仍是中文正文,升级后展开老卡片
+ * 看到的就是中文。标题里"原文为英文"那句只能对新格式说,否则会自相矛盾。判据取英文
+ * 结束标记的公共尾巴——三种英文标记(handoff / rebuild / fork)都含它,旧中文标记不含。
+ * main 侧对应常量见 maker-ipc/agentHandoff.ts 的 *_TERMINATOR。
+ */
+const ENGLISH_HANDOFF_TERMINATOR_TAIL = "; the user's new message follows ==";
+
+function isEnglishSourceHandoff(handoff: string): boolean {
+  // 锚在**尾部**而不是 includes:交接正文里嵌着用户与助手的历史原文,里面完全可能
+  // 出现这段尾串(比如聊过这段代码),那样旧中文交接会被误判成英文。结束标记只可能
+  // 在整段的最末尾。
+  return handoff.trimEnd().endsWith(ENGLISH_HANDOFF_TERMINATOR_TAIL);
 }
 
 /**
@@ -814,7 +839,11 @@ function AgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
             )}
           >
             <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">
-              {t('chat.systemCard.agentSwitch.handoffTitle')}
+              {t(
+                isEnglishSourceHandoff(handoff)
+                  ? 'chat.systemCard.agentSwitch.handoffTitleEnglishSource'
+                  : 'chat.systemCard.agentSwitch.handoffTitle',
+              )}
             </div>
             <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-[1.55] text-[var(--msg-tool-text)]">
               {handoff}
@@ -845,7 +874,7 @@ export function SystemCard({ cardType, data, sessionId }: SystemCardProps) {
     case 'goal-complete':
       return <GoalCompleteCard data={data} />;
     case 'goal-resumed':
-      return <GoalResumedCard />;
+      return <GoalResumedCard data={data as { kind?: string } | undefined} />;
     case 'auto-resume':
       return <AutoResumeCard />;
     case 'agent-switch':

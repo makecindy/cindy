@@ -19,6 +19,7 @@ import { createLogger } from '../logger.js';
 import { detectCwd } from '../worktree/WorktreeManager.js';
 import { isWorktreeDirty } from '../worktree/dirty.js';
 import { readGitSafetySettings } from './git-safety-settings-store.js';
+import { isAgentOneShotRouteDisabled } from './model-route-guard-live.js';
 
 const log = createLogger('git-snapshot');
 const ONESHOT_MAX_TOKENS = 80;
@@ -121,11 +122,18 @@ export function createGitSnapshotCoordinator(
     getLastUserPrompt: async (sessionId) => (await getLatestUserMessageOnce(sessionId))?.text,
     createSnapshot: deps.createSnapshot ?? createSnapshot,
     createSnapshotMarker: deps.createSnapshotMarker ?? createSnapshotMarker,
-    oneShot: (agentKind, prompt) =>
-      maker.oneShot(agentKind, prompt, {
+    oneShot: async (agentKind, prompt) => {
+      // 停用轴:快照标签是新的付费 one-shot,该 agent 的默认路由被停用时不派发 ——
+      // 抛错让 labeler 走既有的确定性兜底标签(gitSnapshotLabeler:oneShot 失败即
+      // fallback,PR #744 review 第十一轮)。
+      if (await isAgentOneShotRouteDisabled(agentKind)) {
+        throw new Error('snapshot label one-shot skipped: route disabled in settings');
+      }
+      return maker.oneShot(agentKind, prompt, {
         maxTokens: ONESHOT_MAX_TOKENS,
         timeoutMs: ONESHOT_TIMEOUT_MS,
-      }),
+      });
+    },
     logger,
   });
 }

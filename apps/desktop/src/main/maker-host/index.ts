@@ -15,6 +15,7 @@ import {
   ClaudeCodeAgent,
   CodexAgent,
   configureDefaultImageResizer,
+  type McpProvider,
 } from '@cindy/maker-core';
 import {
   getActiveCatalog,
@@ -58,8 +59,13 @@ import {
 } from './session-storage.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 import { resolveSessionCcDebugFile } from '../logger.js';
+import { resetProviderModelAutoRefreshCooldowns } from './provider-model-auto-refresh.js';
 import { createSshDaemonTransport } from './codex-remote-transport.js';
 import { getRemoteSshPool } from '../remote-ssh/index.js';
+import {
+  getRemoteAgentProxyEnv,
+  reconcileCodexAgentProxyEnv,
+} from '../remote-ssh/agent-proxy.js';
 import { openCcManagerSession } from './cc-manager-client.js';
 import { getRemoteClaudeBinaryPath } from '../remote-ssh/cc-manager-install.js';
 import { createReadImageHook } from './claude-hooks/read-image-hook.js';
@@ -67,6 +73,7 @@ import { deriveAvailableModels, refreshCatalogDerivedModels } from './catalog-to
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
 import {
   getDesktopSelectableCatalog,
+  reloadActiveCatalogForEndpointChange,
   refreshDiscoveredCodexModels,
   setNativeProviderClaimListener,
 } from './createDesktopProviderService.js';
@@ -84,9 +91,13 @@ import { notifyAutoPermissionClassifierUnavailable } from './claude-auto-permiss
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
 import {
   clearCodexProxyAuthInjection,
+  ensureCodexControlPlaneProxyReady,
   ensureCodexProxyReady,
+  getCodexControlPlaneProxyEndpoint,
   getCodexProxyAuthInjectionState,
   getCodexProxyEndpoint,
+  getCodexThreadUpstreamOrigin,
+  isCodexControlPlaneProxyHandleReady,
   isCodexProxyHandleReady,
   setCodexProxyAuthInjection,
   setCodexProxyGatewayKeyReader,
@@ -104,10 +115,27 @@ import { createPluginRegistry, resetPluginRegistry } from './plugins/index.js';
 import {
   getCodexExtraSpawnConfig,
   registerCodexMcpThreadContext,
+  setCodexEnvironmentShutdownHook,
   unregisterCodexMcpThreadContext,
 } from '../mcp-integrations/codexEnvironment.js';
+import type { CodexHttpBridge } from '../mcp-integrations/codexHttpBridge.js';
+import { setRemoteMcpBridgeTokenRotatedHook } from '../mcp-integrations/remoteMcpBridgeToken.js';
+import { ensureRemoteMcpForward, setRemoteMcpForwardRearmedHook, stripRemoteCodexMcpConfig } from '../remote-ssh/codex-remote-mcp.js';
+import {
+  buildCcRemoteHttpMcpServers,
+  CC_MCP_DISABLED_FINGERPRINT,
+  readCcAppliedFingerprint,
+  writeCcAppliedFingerprint,
+} from './cc-remote-mcp.js';
+import { getRemoteSessionStartEnsure, getRemoteCodexLiveTurnChecker, setRemoteCcTurnSettledHandler, setRemoteCcStaleQuery } from './remote-session-start-ensure.js';
+import {
+  refreshRemoteCodexMcpAfterBridgeRecreate,
+  invalidateRemoteCcQueriesForMcpGenerationChange,
+  maybeDetachStaleRemoteCcQuery,
+} from './remote-codex-mcp-recovery.js';
 import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../mcp-integrations/codexBuiltinToolPolicy.js';
 import { buildCodexProxySpawnArgs, CODEX_OPENAI_COMPACT_PROVIDER_ID } from './codex-gateway-config.js';
+import { getOutboundPathSnapshotFor } from './outbound-proxy-resolver.js';
 import {
   createDesktopMakerMemoryManager,
   attachAgentsToMakerMemory,
@@ -189,6 +217,7 @@ setAnthropicDiscoveryFailureListener(() => {
  * anthropic 那条链路碰巧能在清单变化时顺带广播，xAI 则完全没有出口 —— 统一在这里补。
  */
 setNativeProviderClaimListener(() => {
+  resetProviderModelAutoRefreshCooldowns();
   try {
     refreshSelectableModelsAndBroadcast({});
   } catch (error) {
@@ -200,6 +229,16 @@ setNativeProviderClaimListener(() => {
 
 /** Re-project provider/model availability after the Cindy auth session changes. */
 export function refreshProviderAccessAfterAuthChange(): void {
+  resetProviderModelAutoRefreshCooldowns();
+  void reloadActiveCatalogForEndpointChange()
+    .then(() => {
+      refreshSelectableModelsAndBroadcast({});
+    })
+    .catch((error) => {
+      desktopMakerLogger.warn('provider catalog reload after auth realm change failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   try {
     refreshSelectableModelsAndBroadcast({});
   } catch (error) {
@@ -213,6 +252,30 @@ export function refreshProviderAccessAfterAuthChange(): void {
  * api_key 变更时 dispose 重建 app-server。getMaker() 构造后回填,resetMaker() 清空。
  */
 let _codexAgent: CodexAgent | null = null;
+/**
+ * codexMcpProviders 的模块级引用 —— 供 ensureCodexMcpBridgeStartedForRemote()
+ * 在远端 daemon MCP 注入链路里懒启动 bridge 时取用。getMaker() 构造后回填。
+ */
+let _codexMcpProviders: McpProvider[] | null = null;
+/**
+ * 本进程已对哪些 cc session 做过 bridge MCP 的强制 fresh start。bridge 是
+ * 进程内存态, 随 app 重启清空 — 重启后首轮注入重新强制 fresh; SSH 断线
+ * 重连 (bridge 表还在) 不重复 kill。见 remoteCcQueryFactory 注释。
+ */
+const forcedFreshCcBridgeSessions = new Set<string>();
+/**
+ * 被 invalidate 判定为「MCP 代际已过期」的远端 CC session (bridge 重建 /
+ * 端口重绑 / bridge shutdown / collab 禁用)。下次 lazy-resume 重建时无论
+ * 本次能否注入都必须 forceFresh kill 旧 query — 否则 attach 回带旧 URL
+ * 的 query (codex-connector R22 P2)。open 成功后从集合移除。
+ */
+const staleInvalidatedCcSessions = new Set<string>();
+/**
+ * 本进程见过的 bridge 实例 — ensureCodexMcpBridgeStartedForRemote 据此检测
+ * bridge 重建并清空 forcedFreshCcBridgeSessions (旧 bridge 的
+ * mcp-session-id 随重建全部失效)。
+ */
+let _lastBridgeForForcedFresh: CodexHttpBridge | null = null;
 /** getMaker() 首次构造时发起的自定义 MCP 初始加载 promise，供 bootstrap 在注册会话 IPC 前 await。 */
 let _initialCustomMcpRefresh: Promise<void> | undefined;
 type CodexLocalCredentialChangeGuard = Awaited<ReturnType<CodexAgent['beginLocalHostCredentialChange']>>;
@@ -228,6 +291,170 @@ let _codexCredentialChangeGuard: CodexLocalCredentialChangeGuard | null = null;
 let _beforeLocalCodexSessionStartHook: (() => Promise<void>) | null = null;
 export function setBeforeLocalCodexSessionStartHook(hook: (() => Promise<void>) | null): void {
   _beforeLocalCodexSessionStartHook = hook;
+}
+
+/**
+ * detach 某 host 上活跃的远端 codex session (跳过 turn 中的)。
+ * 使用点:daemon 被 (重) bootstrap 后 (bridge 重建恢复 / shutdown strip) —
+ * 旧 transport 已死, detach 让下次 send 走 lazy-resume 重建
+ * (codex-connector R26 P1)。
+ */
+function detachActiveRemoteCodexSessions(hostId: string, reason: string): void {
+  for (const s of _maker?.listActiveSessions() ?? []) {
+    if (s.agentKind !== 'codex' || s.remoteHostId !== hostId) continue;
+    if (s.isTurnRunning()) continue;
+    void s.detach().catch((err) => {
+      desktopMakerLogger.warn('remote codex session detach after daemon rebootstrap failed', {
+        sessionId: s.id,
+        hostId,
+        reason,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+}
+
+/**
+ * bridge 重建 / forward 端口重绑后的远端 CC query 失效 (装配版)。
+ * fresh 标记无条件删 (下次注入重新 forceFresh);无 turn 的直接 detach,
+ * 有 turn 的由 turn-done holder 补 detach — 不打断进行中的 turn。
+ */
+function invalidateActiveRemoteCcQueries(opts: { hostId?: string; reason: string }): void {
+  invalidateRemoteCcQueriesForMcpGenerationChange(
+    {
+      listRemoteCcSessions: () =>
+        (_maker?.listActiveSessions() ?? []).filter((s) => s.agentKind === 'claude-code'),
+      // invalidate 的语义是「该 query 的 MCP 代际已过期」— 除清 fresh 标记
+      // 外记入 stale 集合:下次重建 (lazy-resume) 无论本次是否注入 (例如
+      // collab 已禁用 → 无 server 可注) 都必须 forceFresh kill 旧 query,
+      // 否则 attach 回带旧 collab URL 的 query (codex-connector R22 P2)。
+      clearFreshMark: (sessionId) => {
+        forcedFreshCcBridgeSessions.delete(sessionId);
+        staleInvalidatedCcSessions.add(sessionId);
+      },
+      log: desktopMakerLogger,
+    },
+    opts,
+  );
+}
+
+/**
+ * bridge shutdown 时的远端即时失效 (codex-connector R21 P1):插件/全局
+ * 设置变更触发 shutdownCodexEnvironment 后, 远端 session 的 MCP URL /
+ * session id 都指向已停 bridge — 等 lazy 重建会让窗口期内 send 持续
+ * 404 / connection-refused。这里立刻:
+ *   - 远端 CC:fresh 失效 + 无 turn query detach (下次 send 触发 lazy
+ *     重建并重注入, 全链路自愈);
+ *   - 远端 codex:逐 host strip 受管段 + 清 daemon env (404 MCP 当场降级
+ *     为无 MCP);lazy 重建后恢复遍历重新注入。
+ * 挂在 shutdownCodexEnvironment 的各调用点 (hook-control / 账号切换)。
+ */
+export function handleCodexEnvironmentShutdownForRemote(): void {
+  invalidateActiveRemoteCcQueries({ reason: 'bridge-shutdown' });
+  const hostIds = new Set<string>();
+  for (const s of _maker?.listActiveSessions() ?? []) {
+    if (s.remoteHostId && s.agentKind === 'codex') hostIds.add(s.remoteHostId);
+  }
+  const liveTurnChecker = getRemoteCodexLiveTurnChecker();
+  for (const hostId of hostIds) {
+    const host = getRemoteSshPool().get(hostId);
+    if (host?.getStatus() !== 'ready') continue;
+    void stripRemoteCodexMcpConfig(host, {
+      hasLiveTurnOnHost: liveTurnChecker ?? undefined,
+    })
+      .then((result) => {
+        if (!result.daemonRebootstrapped) return;
+        // strip 的 bootstrap (清 env 重启 daemon) 同样杀死旧 transport —
+        // live-turn 豁免内已在 strip 里跳过, 这里 detach 剩余活跃 session
+        // (codex-connector R26 P1 同源)。
+        detachActiveRemoteCodexSessions(hostId, 'bridge-shutdown-strip');
+      })
+      .catch((err) => {
+        desktopMakerLogger.warn('remote codex MCP strip on bridge shutdown failed', {
+          hostId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+  }
+}
+
+/**
+ * 远端 codex daemon / cc query 经 SSH remote-forward 直连本机 MCP bridge 的
+ * 注入链路 (remote-ssh/codex-remote-mcp.ts、cc-remote-mcp 调用) 调用:确保
+ * HTTP bridge 已启动并返回端口、server 名单与 bridge 实例 (per-session
+ * token 注册需要)。与 prepareCodexExtraSpawnConfig 共用
+ * getCodexExtraSpawnConfig 的 lazy+cached 单例,不重复起 server;providers
+ * 未装配或 bridge 启动失败时返回 null (调用方按"远端无 MCP"降级放行 session)。
+ */
+export async function ensureCodexMcpBridgeStartedForRemote(): Promise<{
+  port: number;
+  serverNames: string[];
+  bridgeInstanceId: string;
+  bridge: CodexHttpBridge;
+} | null> {
+  if (!_codexMcpProviders) return null;
+  try {
+    const cfg = await getCodexExtraSpawnConfig({
+      mcpProviders: _codexMcpProviders,
+      logger: desktopMakerLogger,
+    });
+    if (!cfg.bridge) return null;
+    if (cfg.bridge !== _lastBridgeForForcedFresh) {
+      // bridge 重建 (custom MCP CRUD / 全局插件开关触发
+      // shutdownCodexEnvironment 后的 lazy 重建):旧 bridge 的
+      // mcp-session-id 全部失效, 之前 fresh 过的 session 必须重新
+      // forceFresh — 否则 reconnect attach 回持旧 id 的 query, 协同 MCP
+      // 404 (review P2 回归)。首次调用 (null → 实例) 也走这里, 对空 Set
+      // clear 无害。
+      forcedFreshCcBridgeSessions.clear();
+      const isRecreate = _lastBridgeForForcedFresh !== null;
+      _lastBridgeForForcedFresh = cfg.bridge;
+      if (isRecreate) {
+        // 远端 codex 侧同步恢复:session 的 SSH forward 仍指旧 bridge 端口、
+        // daemon 持旧 MCP session — 对活跃 remote codex host 补一次
+        // best-effort ensure 全链路自愈 (codex-connector R18 P1)。
+        refreshRemoteCodexMcpAfterBridgeRecreate({
+          listRemoteCodexHostIds: () => {
+            const ids = new Set<string>();
+            for (const s of _maker?.listActiveSessions() ?? []) {
+              if (s.remoteHostId && s.agentKind === 'codex') ids.add(s.remoteHostId);
+            }
+            return [...ids];
+          },
+          getReadyHost: (hostId) => {
+            const host = getRemoteSshPool().get(hostId);
+            return host?.getStatus() === 'ready' ? host : null;
+          },
+          ensureBridgeStarted: ensureCodexMcpBridgeStartedForRemote,
+          getLiveTurnChecker: getRemoteCodexLiveTurnChecker,
+          // 恢复路径同闸门 (codex-connector R21 P1):collab 全局禁用时
+          // ensure 走清理而非重注入。
+          isCollabEnabled: () => getPluginRegistry().isEnabled('collab'),
+          // Maker Memory 同源闸门:开着时补刀不得把 cindy_memory 剥掉。
+          isMakerMemoryEnabled: () => _maker?.makerMemory?.isEnabled() ?? false,
+          detachRemoteCodexSessionsOnHost: (hostId) =>
+            detachActiveRemoteCodexSessions(hostId, 'bridge-recreate-rebootstrap'),
+          log: desktopMakerLogger,
+        });
+        // 远端 CC 侧同源恢复 (codex-connector R19 P2):活跃 query 持旧
+        // bridge 的 mcpServers URL / mcp-session-id — fresh 标记失效 +
+        // 无 turn 的 detach (下次 send 重新注入);有 turn 的只删标记,
+        // turn-done 经 maybeDetachStaleRemoteCcQuery 补 detach。
+        invalidateActiveRemoteCcQueries({ reason: 'bridge-recreate' });
+      }
+    }
+    return {
+      port: cfg.bridge.port,
+      serverNames: cfg.bridgeServerNames,
+      bridgeInstanceId: cfg.bridge.instanceId,
+      bridge: cfg.bridge,
+    };
+  } catch (err) {
+    desktopMakerLogger.error('ensureCodexMcpBridgeStartedForRemote failed', {
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
 }
 
 export async function readCodexRuntimeRoute(): Promise<{
@@ -325,6 +552,42 @@ export function getMaker(): Maker {
       broadcastOrcaWorkerChanged,
       logger: desktopMakerLogger,
     });
+    // bridge shutdown 后的远端失效统一折进 shutdownCodexEnvironment 内部
+    // (codex-connector R22 P1):插件开关 / custom MCP CRUD / contacts /
+    // Slack provider / 账号切换等所有 shutdown 路径自动覆盖, 不靠逐点调用。
+    setCodexEnvironmentShutdownHook(handleCodexEnvironmentShutdownForRemote);
+    // bridge token 轮换 (账号切换 secrets 清空) 时同步失效远端 CC query —
+    // 旧 Authorization header 在新 bridge 上持续 401;独立于 shutdown 路径
+    // (本地 turn 忙时 shutdown 会被跳过, codex-connector R24 P2)。
+    setRemoteMcpBridgeTokenRotatedHook(() => {
+      invalidateActiveRemoteCcQueries({ reason: 'bridge-token-rotated' });
+    });
+    // forward 端口重绑 (SSH 重连 onRearmed) 时, 该 host 上活跃远端 CC
+    // query 的 mcpServers URL 还指旧端口 — fresh 失效 + detach 促重建
+    // (codex-connector R19 P2)。
+    setRemoteMcpForwardRearmedHook((hostId, remotePort) => {
+      desktopMakerLogger.info('remote MCP forward re-armed — invalidating remote CC queries on host', {
+        hostId,
+        remotePort,
+      });
+      invalidateActiveRemoteCcQueries({ hostId, reason: 'forward-rearmed' });
+    });
+    // register.ts 的 turn 收口经 holder 回调:远端 CC 的 fresh 已失效且
+    // 无 turn 时 detach 旧 query (bridge 重建 / 端口重绑的补刀路径)。
+    setRemoteCcStaleQuery((sessionId) => staleInvalidatedCcSessions.has(sessionId));
+    setRemoteCcTurnSettledHandler((sessionId) => {
+      maybeDetachStaleRemoteCcQuery(
+        {
+          getSession: (id) => {
+            const s = _maker?.getSession(id);
+            return s && s.agentKind === 'claude-code' ? s : null;
+          },
+          hasStaleMark: (id) => staleInvalidatedCcSessions.has(id),
+          log: desktopMakerLogger,
+        },
+        sessionId,
+      );
+    });
     const orcaBridgeDeps = {
       getMaker: () => {
         if (!_maker) throw new Error('maker not initialized');
@@ -340,6 +603,22 @@ export function getMaker(): Maker {
       wireSession: wireSessionToIpc,
       hydrateSessionRoute: (sessionId: string, providerId: string | null) =>
         hydrateSessionProvider(sessionId, providerId),
+      // bridge rehydrate remote lead/worker 时经 holder 调 register.ts 的
+      // ensureRemoteReadyForSessionStart (SSH 重连 / agent install / codex
+      // MCP 注入) — 与 IPC create/send 路径同一 preflight。holder 在 IPC
+      // 注册时填入 (晚于本 deps 构造, 早于任何 bridge 回调)。
+      ensureRemoteSessionStart: async (params) => {
+        // ensure 会在 createOpts 上就地归一化 makerMemoryEnabled (全局设置
+        // backfill + stale-bridge 钳制) — 这里是临时对象, 必须把结果读回
+        // 交给 bridge 的真实 createSession (review R6 P2)。
+        const createOpts: { id: string; agentKind: typeof params.agentKind; remoteHostId: string; makerMemoryEnabled?: boolean } = {
+          id: params.sessionId,
+          agentKind: params.agentKind,
+          remoteHostId: params.remoteHostId,
+        };
+        await getRemoteSessionStartEnsure()?.({ createOpts });
+        return { makerMemoryEnabled: createOpts.makerMemoryEnabled === true };
+      },
       orcaTeamStore: orcaTeamStoreAdapter,
       dispatchInterAgentMessage,
     } satisfies OrcaBridgeMcpDeps;
@@ -419,23 +698,147 @@ export function getMaker(): Maker {
       // RemoteQuery 实现 SDK Query interface 的子集 (ClaudeCodeAgent 实际只调
       // for-await / interrupt / setModel / setPermissionMode / applyFlagSettings),
       // factory 返回时直接 `as unknown as Query` cast 即可。
-      remoteCcQueryFactory: async ({ remoteHostId, sessionId, startParams, onApprovalRequest }) => {
+      remoteCcQueryFactory: async ({ remoteHostId, sessionId, startParams, vendorOptions, onApprovalRequest, makerMemoryEnabled }) => {
         const host = getRemoteSshPool().get(remoteHostId);
         if (host?.getStatus() !== 'ready') {
           throw new Error(`remote ssh host not ready: ${remoteHostId}`);
         }
+        // 「Agent 流量走本地 Proxy」: pref 开启时确保 SSH 反向隧道就绪, 把代理
+        // env 合入 startParams.env — cc-mgr daemon 按 session spawn SDK, 每次
+        // 会话都吃到当前配置, 无需像 codex daemon 那样重启。隧道 arm 失败
+        // (sshd 拒 remote forwarding 等) 直接抛错, 不静默回落直连。
+        const proxyEnv = await getRemoteAgentProxyEnv(host);
         // SDK can't self-locate its native CLI binary on remote (bundled-into-cc-mgr
         // optional-dep resolver is frozen to desktop build platform). Probe + cache
         // the path here and pass it down; cc-manager-client merges it into the SDK
         // options via `pathToClaudeCodeExecutable`. First call ~200ms, cache hit instant.
         const claudeBinaryPath = await getRemoteClaudeBinaryPath(host);
-        const { remoteQuery, dispose, detach } = await openCcManagerSession({
-          host,
-          sessionId,
-          startParams: startParams as unknown as Parameters<typeof openCcManagerSession>[0]['startParams'],
-          claudeBinaryPath,
-          onApprovalRequest: onApprovalRequest as Parameters<typeof openCcManagerSession>[0]['onApprovalRequest'],
-        });
+
+        // 远端 cc 的协同 MCP 恢复通道:bridge + remote-forward + per-session
+        // token,把 cindy_orca / orca_worker_bridge 以 http 形态追加进
+        // startParams.mcpServers (cc remote 过滤器本来就放行 http transport)。
+        // 注入失败降级为"远端无协同 MCP"(历史行为),不阻塞 session 建立。
+        let mcpCleanup: () => void = () => {};
+        let injectedServerCount = 0;
+        let mcpNeedsFreshStart = false;
+        let mcpInjectFingerprint: string | undefined;
+        try {
+          const injected = await buildCcRemoteHttpMcpServers(
+            {
+              host,
+              sessionId,
+              workingDir: typeof startParams.cwd === 'string' ? startParams.cwd : '',
+              vendorOptions,
+              // per-session Maker Memory 开关 (maker-core 归一后透传)。
+              makerMemoryEnabled,
+            },
+            {
+              ensureBridgeStarted: ensureCodexMcpBridgeStartedForRemote,
+              ensureForward: ensureRemoteMcpForward,
+              // collab 全局禁用 (Tier 4) 时整个不注入 — bridge 名单不反映
+              // 开关 (codex-connector R20 P2, 与 codex daemon 侧同闸门)。
+              isCollabEnabled: () => pluginRegistry.isEnabled('collab'),
+            },
+          );
+          mcpCleanup = injected.cleanup;
+          mcpNeedsFreshStart = injected.needsFreshStart === true;
+          mcpInjectFingerprint = injected.fingerprint;
+          if (Object.keys(injected.servers).length > 0) {
+            injectedServerCount = Object.keys(injected.servers).length;
+            const mutableParams = startParams as { mcpServers?: Record<string, unknown> };
+            mutableParams.mcpServers = { ...(mutableParams.mcpServers ?? {}), ...injected.servers };
+          }
+        } catch (err) {
+          desktopMakerLogger.warn('cc remote MCP injection skipped', {
+            remoteHostId,
+            sessionId,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+
+        // app 重启后首轮 bridge MCP 注入:daemon 侧旧 query 若还 alive, 其
+        // SDK 持有的 mcp-session-id 在新 bridge 已不存在, attach 会让协同
+        // MCP 每次调用 404 且 SDK 不自动重新 initialize。本进程首次注入该
+        // session 时强制 fresh start (startParams 带 resumeSdkSessionId,
+        // 上下文经远端 cc CLI session 文件恢复)。SSH 断线重连 (app 未重启,
+        // bridge 内存表还在) 不触发 — 本 Set 随进程生命周期。
+        // 状态只在 open 成功后提交:open 失败 (daemon 未起等) 时下次重试
+        // 仍要 forceFresh, 否则 attach 到旧 query 上协同 MCP 永久 404。
+        // token 失效 (mcpNeedsFreshStart) 同样强制 fresh:attach 回带旧
+        // token header 的 alive query 会持续 401 (codex-connector R21 P2)。
+        // 被 invalidate 过 (staleInvalidatedCcSessions) 也一样:collab 禁用
+        // 等场景重建时无 server 可注, 不 forceFresh 会 attach 回带旧 collab
+        // URL 的 query (codex-connector R22 P2)。
+        // 持久代际指纹 drift (codex-connector R23 P2):collab 开→关 /
+        // token 轮换 / bridge 代际 / 端口重绑后跨 app 重启, 进程内集合
+        // 清空也能判出存活 query 的 MCP 配置属旧代际。
+        const ccAppliedFingerprint = readCcAppliedFingerprint(sessionId);
+        const ccGenerationDrift =
+          mcpInjectFingerprint !== undefined &&
+          ccAppliedFingerprint !== null &&
+          mcpInjectFingerprint !== ccAppliedFingerprint;
+        // 注入失败 / bridge 不可用时没有 desired 指纹,但旧 alive query 可能
+        // 仍带着上一代 MCP 配置 (老版本/首次注入尚无 applied 记录时也成立),
+        // attach 会复用失效 Authorization / URL / mcp-session-id。此时
+        // forceFresh 成无 MCP 的干净 query,并在 open 成功后把 applied 收敛
+        // 为 disabled,避免故障期间每次 open 都重复 kill + fresh
+        // (Greptile R29 P1)。
+        const ccMissingDesiredStale =
+          mcpInjectFingerprint === undefined &&
+          ccAppliedFingerprint !== CC_MCP_DISABLED_FINGERPRINT;
+        // 持久代际 drift (ccGenerationDrift) 不受 fresh 集合豁免:
+        // token/bridge/端口变化后 applied 指纹 ≠ desired 时, 已 fresh 过的
+        // session 也必须重新 forceFresh — 否则豁免让 drift 判定只在「从未
+        // fresh 过」时生效, attach 回持旧 Authorization/URL 的 query
+        // (codex-connector R27 P1)。fresh 集合只豁免「同代际的重复注入」。
+        const forceFreshQuery =
+          ((injectedServerCount > 0 || mcpNeedsFreshStart || staleInvalidatedCcSessions.has(sessionId)) &&
+            !forcedFreshCcBridgeSessions.has(sessionId)) ||
+          ccGenerationDrift ||
+          ccMissingDesiredStale;
+
+        // 协同 MCP 已 mutate 进 startParams.mcpServers;这里再把 proxy env 合入
+        // 得到最终 startParams (mcpServers 与 env 都带上)。
+        const startParamsWithProxy = proxyEnv
+          ? {
+              ...(startParams as Record<string, unknown>),
+              env: {
+                ...((startParams as { env?: Record<string, string> }).env ?? {}),
+                ...proxyEnv,
+              },
+            }
+          : startParams;
+
+        const { remoteQuery, dispose, detach } = await (async () => {
+          try {
+            return await openCcManagerSession({
+              host,
+              sessionId,
+              startParams: startParamsWithProxy as unknown as Parameters<typeof openCcManagerSession>[0]['startParams'],
+              claudeBinaryPath,
+              onApprovalRequest: onApprovalRequest as Parameters<typeof openCcManagerSession>[0]['onApprovalRequest'],
+              forceFreshQuery,
+            });
+          } catch (err) {
+            // openCcManagerSession 失败时上面注册的 per-session ctx / forward
+            // intent 必须清掉,否则残留到同 session 下一次重建或应用退出。
+            try {
+              mcpCleanup();
+            } catch { /* cleanup 失败不掩盖原始错误 */ }
+            throw err;
+          }
+        })();
+        if (forceFreshQuery) {
+          forcedFreshCcBridgeSessions.add(sessionId);
+          staleInvalidatedCcSessions.delete(sessionId);
+        }
+        // 注入/禁用代际随 open 成功落盘 (attach 也算 — 它确认了该 query
+        // 的 MCP 代际);下次 open 前据此判 drift。
+        const appliedFingerprintToWrite =
+          mcpInjectFingerprint ?? (ccMissingDesiredStale ? CC_MCP_DISABLED_FINGERPRINT : undefined);
+        if (appliedFingerprintToWrite) {
+          writeCcAppliedFingerprint(sessionId, appliedFingerprintToWrite);
+        }
 
         // 把 ssh transport disposer 串进 remoteQuery.close — maker-core 不知道
         // ssh / RpcClient / nc 这层 transport, 只会调它认得的 Query.close()。
@@ -444,8 +847,21 @@ export function getMaker(): Maker {
         // RpcClient, 再 handle.kill() 关 ssh exec。所以 close 直接重定向到
         // dispose 即可, 不需要分两步。漏接这个 hook 会让 ClaudeCodeAgent close
         // 时 ssh exec 一直挂着, 远端 nc 子进程也不退, 文件描述符泄漏。
+        // close 同时注销 per-session MCP token (detach 不清:detach 是断传输
+        // 保 session, 重连时 factory 会重新注册)。
+        const disposeWithMcpCleanup = async (): Promise<void> => {
+          try {
+            mcpCleanup();
+          } catch (err) {
+            desktopMakerLogger.warn('cc remote MCP token cleanup failed', {
+              sessionId,
+              message: err instanceof Error ? err.message : String(err),
+            });
+          }
+          await dispose();
+        };
         const remoteQueryWithDispose = Object.assign(remoteQuery, {
-          close: dispose,
+          close: disposeWithMcpCleanup,
           detach,
         });
         return remoteQueryWithDispose as unknown as RemoteCcQuery;
@@ -455,6 +871,7 @@ export function getMaker(): Maker {
       ...createDesktopMcpProviders(makerMemoryProviderDeps),
       orcaWorkerBridgeProvider,
     ];
+    _codexMcpProviders = codexMcpProviders;
     const codexAgent = new CodexAgent({
       auth: desktopCodexAuthAdapter,
       runtimeConfig: desktopCodexRuntimeConfig,
@@ -474,6 +891,23 @@ export function getMaker(): Maker {
       },
       onCodexLocalModelsListed: (models) => {
         setDiscoveredCodexModels(mapCodexAppServerModelsToCatalog(models));
+      },
+      // 「后端不可达」终局升级时读一次本次请求的出站路径判定,把通用猜测换成实测事实。
+      // 快照的 proxy 字段在 resolver 侧已脱敏,可直接进用户可见的错误消息。
+      //
+      // 两步定位,缺一不可:
+      //  1. codex-proxy-host 记的 threadId → 本次实际出口 origin。codex 的出口随会话
+      //     选定的 provider 变(订阅直连 ChatGPT、网关、xAI、自定义供应商),猜候选或
+      //     按时间戳挑最新都会把别的会话的判定报到本次故障上。
+      //  2. 该 origin 在 resolver 侧的判定。resolver 是共享的(anthropic-compat proxy、
+      //     通用 outbound-fetch 也在调),按 origin 取才不会串到别的消费方。
+      // 任一步查不到就返回 null,退回通用文案 —— 尤其 gateway-key fallback 下
+      // codexProxyActive=false、codex 直连不经本 proxy 时,这里必然查不到映射,
+      // 于是不会报出一条本次根本没走过的路径。
+      getOutboundPathFact: ({ threadId }) => {
+        if (!threadId) return null;
+        const origin = getCodexThreadUpstreamOrigin(threadId);
+        return origin ? getOutboundPathSnapshotFor([origin]) : null;
       },
       onAutoPermissionClassifierUnavailable: notifyAutoPermissionClassifierUnavailable,
       prepareCodexLocalCredentialModeSwitch: async (ctx) => {
@@ -524,14 +958,23 @@ export function getMaker(): Maker {
               ? 'provider-oauth'
               : 'env-key';
         const useOAuthBearer = authInjection === 'oauth-bearer';
-        setCodexProxyAuthInjection(authInjection);
-        await broadcastCodexRuntimeRoute();
+        const isControlPlane = ctx.hostPurpose === 'control-plane';
+        if (!isControlPlane) {
+          setCodexProxyAuthInjection(authInjection);
+          await broadcastCodexRuntimeRoute();
+        }
         setCodexProxyGatewayKeyReader(readClaudeApiKey);
 
         // 这个点在 CodexAgent.createHost() 内。返回的 codexProxyActive 会被冻到 AppServerHost 实例上,
         // 后续 startSession 只读 host 自己的事实,不再 live 读全局 flag。
-        await ensureCodexProxyReady();
-        const ready = isCodexProxyHandleReady();
+        if (isControlPlane) {
+          await ensureCodexControlPlaneProxyReady(authInjection);
+        } else {
+          await ensureCodexProxyReady();
+        }
+        const ready = isControlPlane
+          ? isCodexControlPlaneProxyHandleReady(authInjection)
+          : isCodexProxyHandleReady();
         if ((useOAuthBearer || authInjection === 'provider-oauth') && !ready) {
           const error = new Error(
             authInjection === 'provider-oauth'
@@ -543,7 +986,9 @@ export function getMaker(): Maker {
           throw error;
         }
         // gateway-key 模式下 proxy 挂了仍可 fallback 到 gateway base_url(codex 直连 gateway, 不裸奔)。
-        const endpoint = getCodexProxyEndpoint();
+        const endpoint = isControlPlane
+          ? getCodexControlPlaneProxyEndpoint(authInjection)
+          : getCodexProxyEndpoint();
         return {
           extraArgs: [...mcpExtraArgs, ...buildCodexProxySpawnArgs(endpoint, authInjection)],
           extraEnv: mcpExtraEnv,
@@ -555,7 +1000,7 @@ export function getMaker(): Maker {
             : {}),
         };
       },
-      registerCodexMcpThreadContext: ({ threadId, sessionId, workingDir, vendorOptions }) => {
+      registerCodexMcpThreadContext: ({ threadId, sessionId, workingDir, remoteHostId, vendorOptions }) => {
         // Codex shares one app-server across sessions. Freeze the effective
         // ordinary-tool policy at thread creation so later Settings changes do
         // not mutate a runtime that is already running.
@@ -564,6 +1009,8 @@ export function getMaker(): Maker {
           agentKind: 'codex',
           sessionId,
           workingDir,
+          // remote thread ctx: scope key 语义见 buildMemoryScopeKey。
+          ...(remoteHostId ? { remoteHostId } : {}),
           vendorOptions: {
             ...vendorOptions,
             [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: disabledPluginIds,
@@ -602,6 +1049,21 @@ export function getMaker(): Maker {
         return createSshDaemonTransport({
           remoteHost,
           logger: desktopMakerLogger,
+          // 「Agent 流量走本地 Proxy」: pref 开启时先建 SSH 反向隧道 + 对账
+          // codex daemon 的 env marker (漂移 → 重写 + 重启 daemon), 然后才让
+          // transport 探活/拉起 daemon。pref 关闭时 reconcile 是幂等 no-op。
+          beforeDaemonProbe: async () => {
+            // markerChanged && !daemonRestarted = 旧 daemon 活着跑旧 env —
+            // 继续 probe 会 attach 到 stale daemon, UI 报 tunnel active 而
+            // codex 流量走旧路由 (codex R10 P1): 按 bootstrap 失败抛出, 让
+            // session start 显式报错, 而不是静默复用。
+            const reconciled = await reconcileCodexAgentProxyEnv(remoteHost);
+            if (reconciled.markerChanged && !reconciled.daemonRestarted) {
+              throw new Error(
+                'codex daemon survived pkill after agent-proxy env change; refusing to attach the stale daemon (retry or restart the host)',
+              );
+            }
+          },
         });
       },
     });
@@ -632,6 +1094,7 @@ export function getMaker(): Maker {
     // dispose 幂等: 没 spawn 过就 no-op。
     //
     desktopCodexAuthAdapter.setOnLogoutSuccess(async () => {
+      resetProviderModelAutoRefreshCooldowns('openai');
       await codexAgent.forceDisposeLocalHostForAuthChange('Codex desktop auth logout');
       clearCodexProxyAuthInjection();
       await broadcastCodexRuntimeRoute();
@@ -641,6 +1104,7 @@ export function getMaker(): Maker {
     // 不重启则隐式会话继续复用旧钥匙形态,新登录不生效(codex review 2026-07-03 P2)。
     // 下次 getHost 会按新 fallback(oauth-bearer)重建并重设 proxy 注入。
     desktopCodexAuthAdapter.setOnLoginSuccess(async () => {
+      resetProviderModelAutoRefreshCooldowns('openai');
       // 必须在新 app-server 首次 model/list / Responses 请求之前清：bridge 的旧账号
       // accessToken/accountId 有 30s 内存缓存，晚清会让新 host 短暂带旧账号凭证请求。
       clearChatgptBridgeCredentialCache();
@@ -652,6 +1116,7 @@ export function getMaker(): Maker {
     // UI 弹 "请重新登录" — 否则错误只会反复埋在后台日志里。payload 字段对齐
     // maker-ipc/auth.ts logout handler 的 broadcast 形态。
     desktopCodexAuthAdapter.setOnInvalidatedBroadcast(async (reason) => {
+      resetProviderModelAutoRefreshCooldowns('openai');
       // 运行中 401/token invalidation 不经过 maker:auth:logout IPC，必须在这里做同一套
       // auth-boundary catalog 收口；否则磁盘 cache 已删但内存 discovered/capabilities 仍旧。
       try {
@@ -676,6 +1141,7 @@ export function getMaker(): Maker {
     // Claude 同款:订阅 refresh token 被服务端作废(invalid_grant)时,adapter.invalidate()
     // 清态后经这里广播,UI 立刻进「请重新登录」而不是连环 401 的假连接状态。
     desktopClaudeAuthAdapter.setOnInvalidatedBroadcast((reason) => {
+      resetProviderModelAutoRefreshCooldowns('anthropic');
       // 凭证已失效 = anthropic 动态清单失去可用性证明,与登出同款收口(清单+磁盘缓存)。
       void clearAnthropicDiscoveredModels().catch(() => { /* 清理失败不阻断失效广播 */ });
       const payload = {

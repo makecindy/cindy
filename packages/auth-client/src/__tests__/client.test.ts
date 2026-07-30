@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  AuthApiError,
   CindyAuthClient,
+  discoverSsoOrgRealm,
+  parseAccountDeletionReceiptRecord,
+  parseAuthSessionRecord,
   reduceAuthFlow,
+  serializeAccountDeletionReceiptRecord,
   ssoOrgDiscoveryToMethods,
+  serializeAuthSessionRecord,
   type AuthFetch,
   type AuthFetchResponse,
 } from "../index.js";
@@ -178,7 +184,8 @@ describe("CindyAuthClient", () => {
     await expect(
       auth.getAccountDeletionAvailability("access-token"),
     ).resolves.toMatchObject({ available: true });
-    const challenge = await auth.requestAccountDeletionChallenge("access-token");
+    const challenge =
+      await auth.requestAccountDeletionChallenge("access-token");
     await expect(
       auth.confirmAccountDeletion("access-token", {
         challengeId: challenge.challengeId,
@@ -271,6 +278,7 @@ describe("CindyAuthClient", () => {
   it("discovers enterprise SSO connections by org id and maps to login methods", async () => {
     const fetch = vi.fn(async () =>
       response(200, {
+        region: "cn",
         orgName: "Disco Corp",
         connections: [
           { connectionId: "conn-1", protocol: "saml", connectionName: "Okta" },
@@ -296,11 +304,43 @@ describe("CindyAuthClient", () => {
 
   it("maps an empty SSO connection list to the precise ORG_SSO_NOT_FOUND error", async () => {
     const fetch = vi.fn(async () =>
-      response(200, { orgName: "Empty Corp", connections: [] }),
+      response(200, { region: "cn", orgName: "Empty Corp", connections: [] }),
     );
     await expect(
       client(fetch).discoverSsoOrg("empty-corp"),
     ).rejects.toMatchObject({ code: "ORG_SSO_NOT_FOUND" });
+  });
+
+  it("fails closed when SSO discovery responds from the wrong region", async () => {
+    const fetch = vi.fn(async () =>
+      response(200, {
+        region: "global",
+        orgName: "Disco Corp",
+        connections: [
+          { connectionId: "conn-1", protocol: "saml", connectionName: "Okta" },
+        ],
+      }),
+    );
+    await expect(
+      client(fetch).discoverSsoOrg("disco-corp"),
+    ).rejects.toMatchObject({
+      code: "REGION_MISMATCH",
+    });
+  });
+
+  it("checks the response region before treating an empty connection list as not found", async () => {
+    const fetch = vi.fn(async () =>
+      response(200, {
+        region: "global",
+        orgName: "Misrouted Corp",
+        connections: [],
+      }),
+    );
+    await expect(
+      client(fetch).discoverSsoOrg("misrouted-corp"),
+    ).rejects.toMatchObject({
+      code: "REGION_MISMATCH",
+    });
   });
 
   it("builds PKCE authorize URLs for social and SSO", () => {
@@ -320,7 +360,159 @@ describe("CindyAuthClient", () => {
   });
 });
 
+describe("discoverSsoOrgRealm", () => {
+  const discovery = (region: "cn" | "global") => ({
+    region,
+    orgName: `${region} Corp`,
+    connections: [
+      {
+        connectionId: `${region}-1`,
+        protocol: "oidc" as const,
+        connectionName: "SSO",
+      },
+    ],
+  });
+  const found = (region: "cn" | "global") => ({
+    discoverSsoOrg: vi.fn(async () => discovery(region)),
+  });
+  const notFound = () => ({
+    discoverSsoOrg: vi.fn(async () => {
+      throw new AuthApiError("ORG_SSO_NOT_FOUND", 404, "not found");
+    }),
+  });
+  const unavailable = () => ({
+    discoverSsoOrg: vi.fn(async () => {
+      throw new AuthApiError("NETWORK_ERROR", 0, "offline");
+    }),
+  });
+
+  it.each([
+    ["cn", found("cn"), notFound()],
+    ["global", notFound(), found("global")],
+  ] as const)(
+    "selects %s only when the peer explicitly reports not found",
+    async (region, cn, global) => {
+      await expect(
+        discoverSsoOrgRealm("corp", { cn, global }),
+      ).resolves.toMatchObject({
+        region,
+        discovery: { region },
+      });
+    },
+  );
+
+  it("rejects an identifier present in both regions as ambiguous", async () => {
+    await expect(
+      discoverSsoOrgRealm("corp", { cn: found("cn"), global: found("global") }),
+    ).rejects.toMatchObject({ code: "ORG_REALM_AMBIGUOUS" });
+  });
+
+  it("preserves not-found only when both regions explicitly report it", async () => {
+    await expect(
+      discoverSsoOrgRealm("corp", { cn: notFound(), global: notFound() }),
+    ).rejects.toMatchObject({ code: "ORG_SSO_NOT_FOUND" });
+  });
+
+  it("fails closed when either region is unavailable, even if the other succeeds", async () => {
+    await expect(
+      discoverSsoOrgRealm("corp", { cn: found("cn"), global: unavailable() }),
+    ).rejects.toMatchObject({ code: "ORG_REALM_UNAVAILABLE" });
+  });
+});
+
+describe("auth session realm record", () => {
+  it("round-trips realm and refresh token as one versioned record", () => {
+    const raw = serializeAuthSessionRecord("global", "refresh-secret");
+    expect(parseAuthSessionRecord(raw)).toEqual({
+      version: 1,
+      realm: "global",
+      refreshToken: "refresh-secret",
+    });
+  });
+
+  it.each([
+    null,
+    "not-json",
+    JSON.stringify({ version: 2, realm: "cn", refreshToken: "token" }),
+    JSON.stringify({ version: 1, realm: "us", refreshToken: "token" }),
+    JSON.stringify({ version: 1, realm: "cn", refreshToken: "" }),
+  ])("rejects malformed records without throwing", (raw) => {
+    expect(parseAuthSessionRecord(raw)).toBeNull();
+  });
+
+  it("keeps an account-deletion receipt bound to its realm after logout", () => {
+    const raw = serializeAccountDeletionReceiptRecord(
+      "global",
+      "receipt-secret",
+      "passport-1",
+    );
+    expect(parseAccountDeletionReceiptRecord(raw)).toEqual({
+      version: 2,
+      realm: "global",
+      receiptToken: "receipt-secret",
+      authIdentity: "passport-1",
+    });
+    expect(
+      parseAccountDeletionReceiptRecord(
+        serializeAccountDeletionReceiptRecord("cn", "legacy-receipt"),
+      ),
+    ).toEqual({
+      version: 1,
+      realm: "cn",
+      receiptToken: "legacy-receipt",
+    });
+    expect(parseAccountDeletionReceiptRecord("legacy-receipt")).toBeNull();
+  });
+});
+
 describe("reduceAuthFlow", () => {
+  it("keeps a cross-region discovery pending until the user confirms", () => {
+    const providers = {
+      region: "global" as const,
+      attribution: "email" as const,
+      email: true,
+      phone: false,
+      social: [],
+    };
+    const methods = [
+      {
+        type: "sso" as const,
+        connectionId: "cn-sso",
+        protocol: "oidc" as const,
+        orgName: "CN Corp",
+        connectionName: "Enterprise SSO",
+        ssoRequired: false,
+      },
+    ];
+    const confirmation = reduceAuthFlow(null, {
+      type: "realm-switch-required",
+      targetRegion: "cn",
+      providers,
+      methods,
+    });
+    expect(confirmation).toEqual({
+      step: "realm-confirmation",
+      targetRegion: "cn",
+      providers,
+      methods,
+    });
+    if (confirmation.step !== "realm-confirmation") {
+      throw new Error("expected realm confirmation");
+    }
+
+    expect(
+      reduceAuthFlow(confirmation, {
+        type: "discovery-loaded",
+        email: "",
+        methods: confirmation.methods,
+      }),
+    ).toEqual({
+      step: "method-choice",
+      email: "",
+      methods,
+    });
+  });
+
   it("projects secret-bearing outcomes into public states", () => {
     const state = reduceAuthFlow(null, {
       type: "outcome",

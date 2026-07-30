@@ -103,8 +103,7 @@ export function subscribe(
   name?: string,
   capabilities?: readonly string[],
 ): void {
-  // Empty/fully-filtered subscribe frames must not create a registry entry:
-  // getSubscribedControllers() treats every entry as update-relaunch busy.
+  // Empty/fully-filtered subscribe frames must not create a phantom remote viewer.
   if (topics.length === 0) return;
   const e = getOrCreate(deviceId, name);
   if (capabilities) {
@@ -113,6 +112,20 @@ export function subscribe(
   for (const t of topics) e.topics.add(t as StoredTopic);
   // 幂等重放也通知(控制端断链重连后 replay subscribe → 消费方按幂等语义恢复 watch)。
   notifySubscribed(topics);
+}
+
+/** 更新已有控制端元数据；不为尚无 topic 的连接创建 phantom registry entry。 */
+export function updateControllerMetadata(
+  deviceId: string,
+  name: string,
+  capabilities?: readonly string[],
+): void {
+  const e = registry.get(deviceId);
+  if (!e) return;
+  e.name = name;
+  if (capabilities) {
+    e.capabilities = new Set(capabilities.filter((value) => typeof value === 'string'));
+  }
 }
 
 /** 取消订阅指定 topics;该控制端 topic 清空后整条移除。空 topics 为 no-op。 */
@@ -152,14 +165,6 @@ export function getControllerIds(): string[] {
   return [...registry.keys()];
 }
 
-/** All subscribed controllers, including lightweight `sessions` viewers. */
-export function getSubscribedControllers(): ActiveController[] {
-  return [...registry].map(([deviceId, entry]) => ({
-    deviceId,
-    name: entry.name,
-  }));
-}
-
 /** 持有该 topic(或 legacy `'*'`)的控制端 deviceId 列表 —— topic-scoped fan-out 依据。 */
 export function getControllersForTopic(topic: Topic): string[] {
   const out: string[] = [];
@@ -178,21 +183,30 @@ function isControlTopic(t: StoredTopic): boolean {
   return t === LEGACY_TOPIC || t.startsWith('session:');
 }
 
-/**
- * 持有任意 `session:<id>` 或 legacy `'*'` 的控制端 —— 被控横幅展示这些(=活跃控制)。
- * 纯 `sessions`(只看列表)订阅者**不**触发横幅。
- */
-export function getControlControllers(): ActiveController[] {
+function collectControllers(matches: (topic: StoredTopic) => boolean): ActiveController[] {
   const out: ActiveController[] = [];
   for (const [id, e] of registry) {
     for (const t of e.topics) {
-      if (isControlTopic(t)) {
+      if (matches(t)) {
         out.push({ deviceId: id, name: e.name });
         break;
       }
     }
   }
   return out;
+}
+
+/** 持有具体 session 或 legacy `'*'` 的控制端；只用于被控横幅与 `controlledBy`。 */
+export function getControlControllers(): ActiveController[] {
+  return collectControllers(isControlTopic);
+}
+
+/**
+ * 会阻止无人值守更新重启的远程活动。
+ * `fs-watch` 虽不触发被控横幅，但代表有人正在实时浏览文件树，重启仍应延后。
+ */
+export function getUpdateRelaunchControllers(): ActiveController[] {
+  return collectControllers((topic) => isControlTopic(topic) || topic.startsWith('fs-watch:'));
 }
 
 export const __testing = {
