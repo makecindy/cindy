@@ -19,6 +19,21 @@ export const MAX_TREE_DEPTH = 8;
 /** panelKind 字符串长度上限(防御性,存档里出现超长字符串按损坏处理)。 */
 const MAX_PANEL_KIND_LENGTH = 128;
 
+/**
+ * 单个 split child 的份额下限:低于它的份额转移一律整单拒绝(不收窄),
+ * 插入新面板时的初始份额也按它夹取。调用方(缝把手)应预先把 amount 夹到
+ * 这条线以内 —— 拒绝会让拖动的整段位移作废,界面弹回原宽。
+ */
+export const MIN_SPLIT_CHILD_FRACTION = 0.05;
+
+/**
+ * 份额比较容差。夹取到下限的调用方算出的 amount 会带浮点残差
+ * (`0.4589135021784424 - 0.05` 再减回去 = `0.04999999999999999`),
+ * 裸比较 `< 0.05` 会把**恰好夹到边界**的合法转移判成非法 → 整单拒绝 → 松手回弹
+ * (2026-07-29 Lizi 实测右栏拖到最大松手回弹的直接原因之一)。
+ */
+const FRACTION_TOLERANCE = 1e-9;
+
 /** 内置面板类型。未来意识面板使用 `ghost:<id>` 前缀,不在此枚举内。 */
 export const BUILTIN_PANEL_KINDS = ['session-list', 'chat-main', 'right-tabs'] as const;
 export type BuiltinPanelKind = (typeof BUILTIN_PANEL_KINDS)[number];
@@ -400,7 +415,7 @@ export function insertRootSplitPane(
   if (layout.content.type !== 'split') {
     return { layout, applied: false, reason: 'content is not a split' };
   }
-  const fraction = Math.min(0.8, Math.max(0.05, opts.fraction ?? 0.2));
+  const fraction = Math.min(0.8, Math.max(MIN_SPLIT_CHILD_FRACTION, opts.fraction ?? 0.2));
   const next = structuredClone(layout);
   const split = next.content as SplitNode;
   const index = Math.min(split.children.length, Math.max(0, opts.index ?? split.children.length));
@@ -466,7 +481,8 @@ export function swapRootSplitChildrenByKind(
  * 在分割内把 amount 份额从 fromIndex child 转移给 toIndex child(引擎分割线
  * 拖宽的提交操作 —— 只动缝两侧的邻居,其余 children 份额不受影响;与
  * setSplitChildFraction 的"全体按比例重分"语义不同)。
- * 双方转移后都必须仍 ≥ 0.05,否则拒绝(调用方应预先按像素下限夹取 amount)。
+ * 双方转移后都必须仍 ≥ MIN_SPLIT_CHILD_FRACTION,否则拒绝(调用方应预先按像素
+ * 下限夹取 amount);恰好夹到边界的转移**必须放行**,判定带浮点容差。
  */
 export function transferSplitFraction(
   layout: Layout,
@@ -492,8 +508,14 @@ export function transferSplitFraction(
   }
   const from = split.children[fromIndex];
   const to = split.children[toIndex];
-  if (from.fraction - amount < 0.05 || to.fraction + amount < 0.05) {
-    return { layout, applied: false, reason: 'transfer would shrink a child below 0.05' };
+  // 容差:夹到下限的合法转移不能被浮点残差判死(见 FRACTION_TOLERANCE)。
+  const floor = MIN_SPLIT_CHILD_FRACTION - FRACTION_TOLERANCE;
+  if (from.fraction - amount < floor || to.fraction + amount < floor) {
+    return {
+      layout,
+      applied: false,
+      reason: `transfer would shrink a child below ${MIN_SPLIT_CHILD_FRACTION}`,
+    };
   }
   from.fraction -= amount;
   to.fraction += amount;

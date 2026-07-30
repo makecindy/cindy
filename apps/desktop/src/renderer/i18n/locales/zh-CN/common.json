@@ -582,11 +582,11 @@
       "fallbackName": "用户",
       "avatarAlt": "{{name}} 的头像",
       "local": {
-        "exitFailed": "退出本地模式失败，请重试",
-        "name": "本地模式",
+        "exitFailed": "退出未登录状态失败，请重试",
+        "name": "未登录",
         "description": "数据仅保存在本机，不使用 Cindy 账号服务",
         "signIn": "登录 Cindy",
-        "exit": "退出本地模式"
+        "exit": "退出未登录状态"
       },
       "copyUserId": {
         "action": "复制用户 ID",
@@ -756,7 +756,7 @@
       "serviceSource": {
         "label": "语音服务",
         "hint": "默认使用 Cindy 语音服务；也可以连接支持实时 ASR 的服务，并使用独立的语音凭证。",
-        "localHint": "本地模式不使用 Cindy 账号服务；请连接支持实时 ASR 的服务并配置独立语音凭证。",
+        "localHint": "未登录状态不使用 Cindy 账号服务；请连接支持实时 ASR 的服务并配置独立语音凭证。",
         "ariaLabel": "语音服务来源选择",
         "options": {
           "cindy": "Cindy 官方服务",
@@ -876,11 +876,16 @@
         "recording": "按下新的快捷键",
         "none": "未设置",
         "clear": "清除",
+        "fnNeedsInputMonitoring": "Fn 相关快捷键需要监听权限，其余快捷键可正常录制。",
+        "awaitingInputMonitoring": "当前快捷键待授权监听权限，授权后生效。",
         "toast": {
           "needsModifier": "请使用组合键、F1-F24 单键，或左/右 Command、Option、Control、Fn。",
           "fnUnavailable": "请使用组合键、F1-F24 单键，或左/右 Command、Option、Control、Fn。",
           "systemReserved": "这个快捷键会和系统或常用编辑快捷键冲突",
-          "registrationFailed": "无法注册此快捷键：{{error}}"
+          "registrationFailed": "无法注册此快捷键：{{error}}",
+          "recordingFailed": "无法开始录制快捷键：{{error}}",
+          "listenerUnavailable": "无法启动快捷键监听器，请重启 Cindy 后再试",
+          "pendingInputMonitoring": "快捷键已保存，授权监听权限后生效"
         }
       },
       "permissions": {
@@ -2650,6 +2655,8 @@
         "cindyImageEdit": "图像编辑(请 Cindy 代办，仅限它自己生成的图)",
         "cindyVideoGenerate": "视频生成(请 Cindy 代办)",
         "cindyVideoEdit": "图生视频(请 Cindy 代办，参考图仅限它名下的图)",
+        "cindyMediaDeposit": "可将它手中的图片、视频或音频存入你的媒体库",
+        "cindyMediaDepositDetail": "用于让你在插件里粘贴或拖入的素材也能被 AI 加工。存入的内容记在这个插件名下，最多占用 {{quota}}，卸载插件时一并清理。",
         "agentUserAction": "用户点击插件卡片后，可让 Agent 开始新一轮工作",
         "agentUserActionDetail": "每次点击只允许启动一次，并且只能使用这张卡所属的对话。",
         "agentBackground": "可在后台自动让 Agent 开始新一轮工作",
@@ -3134,7 +3141,7 @@
     "ssoRequired": "该企业要求通过 SSO 登录",
     "ssoEntry": "使用企业 SSO 登录",
     "localModeEntry": "跳过登录",
-    "localModeOpening": "正在打开本地模式…",
+    "localModeOpening": "正在跳过登录…",
     "localModeDescription": "无需 Cindy 账号，数据保存在本机。云模型、跨设备与市场服务不可用。",
     "consentStatement": "我已阅读并同意 <terms>服务条款</terms> 和 <privacy>隐私协议</privacy>",
     "consentDialog": {
@@ -3847,6 +3854,8 @@
     "banner": {
       "title": "已更新到 {{version}}",
       "subtitle": "重启以应用更新",
+      "viewNotes": "查看更新公告",
+      "viewNotesAria": "查看 {{version}} 的更新公告",
       "button": "立即重启",
       "tooltipReady": "更新已就绪 — 点击重启{{versionSuffix}}",
       "ariaCollapsed": "更新已就绪，点击重启到版本 {{version}}",
@@ -3876,6 +3885,7 @@
       "ariaDescription": "版本 {{version}} 的更新说明",
       "ariaDescriptionSpan": "自 v{{from}} 起累计 {{count}} 个版本的更新说明",
       "versionsSpan": "{{count}} 个版本",
+      "versionJumpAria": "跳转到版本，共 {{count}} 个版本，当前 v{{version}}",
       "loading": "加载中",
       "loadFailed": "加载失败",
       "retry": "重试"
@@ -3905,6 +3915,8 @@
     "user": {
       "settingsLink": "设置，当前用户：{{name}}",
       "canaryBadge": "灰度用户",
+      "regionCodeCn": "CN",
+      "regionCodeDev": "Dev",
       "viewReleaseNotes": "查看版本日志",
       "reopenUpdateBanner": "有更新待重启，点击查看",
       "downloadMobile": "下载 Cindy 移动端"
@@ -4125,7 +4137,9 @@
         "addFailed": "添加项目失败",
         "pathEmpty": "请输入项目路径",
         "pathIsFile": "{{path}} 是文件，不是目录"
-      }
+      },
+      "selectTargetPlaceholder": "请选择目标…",
+      "requestedDeviceUnavailable": "指定的设备当前不可用，请选择其它目标"
     },
     "projectPicker": {
       "addRemoteProject": "添加远程项目"
@@ -4448,6 +4462,14 @@
       "alwaysAllowScopedHint": "作用于整个对话，且只限这里列出的范围。",
       "alwaysAllowSessionHint": "作用于整个对话，不只是这一次请求。",
       "ruleSeparator": "、"
+    },
+    "deviceSwitcher": {
+      "label": "设备",
+      "localHint": "在这台电脑上运行",
+      "onlineHint": "已连接，可在其上创建",
+      "offlineHint": "离线 · 连上后可用",
+      "attachmentsDropped": "已移除 {{count}} 个附件：它们是上一台设备上的文件",
+      "attachmentsRemoteUnsupported": "远程设备暂不支持文件附件，已跳过 {{count}} 个（图片可以）"
     }
   },
   "onboarding": {
@@ -4651,6 +4673,9 @@
       "networkUnreachableNoRetry": "网络异常，服务暂时不可达。",
       "networkAutoRetrying": "网络异常，正在自动重试…",
       "networkReconnecting": "网络连接中断，正在重新连接（{{attempt}}/{{maxAttempts}}）…",
+      "overloadRetrying": "模型服务繁忙，正在自动重试（{{attempt}}/{{maxAttempts}}）…",
+      "overloadBusy": "模型服务繁忙，上游暂时没有可用容量。可点击「重试」，或换一个模型。",
+      "overloadBusyNoRetry": "模型服务繁忙，上游暂时没有可用容量。可稍后重试，或换一个模型。",
       "networkShowRaw": "查看原始错误",
       "networkHideRaw": "收起原始错误",
       "silentStopContinue": "继续",
@@ -5307,7 +5332,8 @@
       "worktreeMissingRepo": "无法开 worktree：缺少当前目录的仓库根",
       "worktreeRepoHint": "可尝试重新选一次工作目录，等右下角文件夹标识刷新后再试",
       "sessionInactive": "对话已不再处于活跃状态",
-      "remoteProjectBanner": "在 {{device}} 的 {{project}} 中新建对话"
+      "remoteProjectBanner": "在 {{device}} 的 {{project}} 中新建对话",
+      "remoteDialogueBanner": "在 {{device}} 上新建对话（不绑定项目）"
     },
     "jumpSession": {
       "emptyId": "请输入要跳转的对话 ID",
@@ -5804,7 +5830,7 @@
         "activityDesc": "最近活跃",
         "activityAsc": "最早活跃"
       },
-      "filterAria": "搜索筛选（状态：{{status}}，Agent：{{agent}}，最近活跃：{{lastActivity}}，项目：{{projects}}）",
+      "filterAria": "搜索筛选与排序（排序：{{sort}}，状态：{{status}}，Agent：{{agent}}，最近活跃：{{lastActivity}}，项目：{{projects}}）",
       "filter": {
         "label": "筛选",
         "active": "筛选 {{count}}",
@@ -5914,6 +5940,7 @@
     "cell": {
       "subtitlePaused": "已暂停",
       "subtitleWaitingForResources": "等待执行资源（当前 {{inFlight}}/{{max}}）",
+      "subtitleQueuedForSession": "排队等待对话空闲",
       "subtitleManual": "手动",
       "subtitleOnce": "一次",
       "tagOnce": "一次",
@@ -7184,7 +7211,9 @@
       "registrationFailed": "创建失败，请稍后重试",
       "silentStopExhausted": "模型连续多次返回空响应，自动续跑已暂停。点击「继续」恢复任务。",
       "permissionTightenInterruptFailed": "收紧权限时未能停止正在运行的任务，它可能会继续免确认执行直到结束；如有需要请手动停止。",
-      "codexAutoReviewUnavailable": "自动审批暂时不可用，当前操作已阻止并切换为默认权限。请重试，需要时会询问你。"
+      "codexAutoReviewUnavailable": "自动审批暂时不可用，当前操作已阻止并切换为默认权限。请重试，需要时会询问你。",
+      "upstreamResponseIdleTimeout": "模型长时间没有任何响应，本轮已自动中断以免无限等待。已完成的工具调用都保留，可以直接发下一条消息继续。",
+      "turnNoEventTimeout": "本轮长时间没有任何进展（模型、工具与后台进程都没有动静），已自动中断以免无限等待。可以直接发下一条消息继续。"
     },
     "validation": {
       "feishuFieldsRequired": "App ID 和 App Secret 都需要填写",
@@ -7318,7 +7347,8 @@
       "blocked": "已受阻",
       "complete": "已完成",
       "budgetLimited": "已达上限",
-      "usageLimited": "用量受限"
+      "usageLimited": "用量受限",
+      "capacityLimited": "模型服务繁忙"
     },
     "turns": "{{used}} 轮",
     "turnsWithMax": "{{used}} / {{max}} 轮",
@@ -7338,10 +7368,13 @@
       "start": "开始",
       "starting": "创建中…",
       "cancel": "取消",
-      "failed": "新建目标失败"
+      "failed": "新建目标失败",
+      "busy": "已有创建正在进行，请稍候再试"
     },
     "usageLimitedUntil": "{{time}} 恢复",
+    "capacityRetryAt": "{{time}} 重试",
     "usageResumeNotice": "用量已恢复，继续目标",
+    "capacityRetryNotice": "模型服务繁忙，正在重试目标",
     "complete": {
       "record": "目标已达成 · {{turns}} 轮 · 耗时 {{duration}}"
     },
@@ -7515,6 +7548,9 @@
         "unavailable": "暂时无法获取订阅状态，请刷新后重试。",
         "action": "查看套餐",
         "changeAction": "更改套餐",
+        "manageAction": "管理订阅",
+        "portalAction": "Stripe 管理",
+        "portalFailed": "无法打开 Stripe 订阅管理页，请稍后重试。",
         "priceInterval": "{{price}} / {{interval}}",
         "includedCredits": "每{{interval}}包含 {{amount}} 点数",
         "renewsAt": "下次续费 {{date}}",
@@ -7550,6 +7586,7 @@
       "poolDetail": "已用 {{used}} · 总额 {{total}}",
       "remaining": "剩余",
       "progressLabel": "{{label}}使用进度",
+      "noPlanCredits": "当前无生效订阅，因此没有订阅点数。",
       "historyUnavailable": "历史记录不完整，暂时仅显示剩余余额。",
       "detailsUnavailable": "用量明细暂时不可用，当前仅显示各类余额。",
       "promotionalDetails": {
@@ -7593,8 +7630,7 @@
     "catalog": {
       "errorTitle": "暂时无法获取套餐",
       "errorDescription": "请检查网络后重试。不会使用本地套餐替代。",
-      "emptyTitle": "当前暂无套餐",
-      "emptyDescription": "服务端尚未配置公开的套餐。",
+      "emptyTitle": "即将上线，敬请期待",
       "currentPlan": "当前套餐",
       "unavailableReasons": {
         "OFFER_COMING_SOON": "敬请期待",

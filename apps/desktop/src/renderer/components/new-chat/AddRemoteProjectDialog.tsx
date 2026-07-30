@@ -53,11 +53,22 @@ type RemoteTarget =
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * 打开本弹窗的设备。**指名了就只认这一台**:它不在可选目标里(离线 / 撤销被控)时选中项留空,
+   * 不回落到别的目标 —— 静默换机器会让用户在以为是 A 的界面里把项目建到 B 上。
+   * 未指名(从通用入口打开)时才由用户自己在下拉里选。
+   */
+  initialDeviceId?: string | null;
   /** vendor 不在 dialog 里选 —— 由父层根据当前 draft / segmented switcher 决定。 */
   onProjectAdded: (target: RemoteProjectTarget) => void | Promise<void>;
 }
 
-export function AddRemoteProjectDialog({ open, onOpenChange, onProjectAdded }: Props) {
+export function AddRemoteProjectDialog({
+  open,
+  onOpenChange,
+  initialDeviceId,
+  onProjectAdded,
+}: Props) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   // 打开时把焦点交给主输入(目标选择器),不落在关闭 X 上(DESIGN §14.2)。
@@ -149,8 +160,24 @@ export function AddRemoteProjectDialog({ open, onOpenChange, onProjectAdded }: P
       return;
     }
     if (selectedKey && targets.some((tg) => tg.key === selectedKey)) return;
+    const preferredKey = initialDeviceId ? `device:${initialDeviceId}` : null;
+    if (preferredKey) {
+      // 调用方**指名**了设备(从该设备的工作区 picker 点进来的)。此时绝不能回落到别的目标:
+      // targets 只含在线设备,被指名的那台一旦离线就匹配不到,静默落到 targets[0](可能是某台
+      // SSH 主机或另一台设备)会让用户以为在浏览 A、实际把 B 的路径加进草稿,把草稿切到意外的机器。
+      // 匹配不到就保持未选中,由目标选择器显示空态 —— 宁可让用户自己再选一次。
+      setSelectedKey(targets.some((target) => target.key === preferredKey) ? preferredKey : null);
+      return;
+    }
     setSelectedKey(targets[0]?.key ?? null);
-  }, [open, targets, selectedKey]);
+  }, [open, targets, selectedKey, initialDeviceId]);
+
+  /**
+   * 调用方指名了设备、但它不在可选目标里(离线 / 撤销被控)。用于给「未选中」这个状态一个解释 ——
+   * 上一轮刻意不回落到别的目标,代价就是必须把原因说出来。
+   */
+  const requestedDeviceUnavailable =
+    initialDeviceId != null && !targets.some((tg) => tg.key === `device:${initialDeviceId}`);
 
   const refreshList = useCallback(
     async (browseApi: RemoteBrowseAdapter, targetPath: string) => {
@@ -368,6 +395,16 @@ export function AddRemoteProjectDialog({ open, onOpenChange, onProjectAdded }: P
                       color: 'var(--text-primary)',
                     }}
                   >
+                    {/* 未选中时必须有一个 value="" 的项供受控 select 显示(Codex review P1)。
+                        缺了它,浏览器会去显示第一个真实 option,而 selectedTarget 仍是 null ——
+                        「添加」保持 disabled;若只有一个备选目标,点那个已显示的项也不产生 change
+                        事件,弹窗就此卡死。disabled 让它只能被显示、不能被重新选回。
+                        这个空态是上一轮「指名设备离线时不静默回落到别的目标」带来的,得配一个占位。 */}
+                    {selectedKey === null && (
+                      <option value="" disabled>
+                        {t('newChat.addRemoteProject.selectTargetPlaceholder')}
+                      </option>
+                    )}
                     {sshTargets.length > 0 && (
                       <optgroup label={t('newChat.addRemoteProject.sourceGroupSsh')}>
                         {sshTargets.map((tg) => (
@@ -387,6 +424,13 @@ export function AddRemoteProjectDialog({ open, onOpenChange, onProjectAdded }: P
                       </optgroup>
                     )}
                   </select>
+                  {/* 指名的设备不在可选目标里(离线 / 撤销被控)→ 说明原因,否则用户只看到一个
+                      未选中的下拉,不知道为什么要自己重选。 */}
+                  {selectedKey === null && requestedDeviceUnavailable && (
+                    <span className="text-12" style={{ color: 'var(--text-secondary)' }}>
+                      {t('newChat.addRemoteProject.requestedDeviceUnavailable')}
+                    </span>
+                  )}
                 </label>
 
                 {/* Mode toggle — 默认「已有项目」,「浏览文件夹」为次要入口 */}

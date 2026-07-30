@@ -23,12 +23,22 @@ import {
 } from '@cindy/model-providers';
 
 import { getDesktopProviderService } from './createDesktopProviderService.js';
+import { getActiveCatalog } from './active-catalog.js';
 import { readModelDisableOverrides } from './model-disable-store.js';
 import {
   checkModelRoute,
   resolveLenientRoute,
   type ModelRouteVerdict,
 } from './model-route-guard.js';
+
+/**
+ * Route admission must retain capability entries that selectable build-region
+ * projections intentionally hide. Otherwise an old controller can name a
+ * hidden media model and make checkModelRoute treat it as catalog-unknown.
+ */
+async function listRouteGuardProviders(): Promise<ProviderView[]> {
+  return getDesktopProviderService().listProviders({ catalog: getActiveCatalog() });
+}
 
 /** 该 agent 的静态原生默认来源偏好(nativeDefaultSourceId 的无 rail 近似)。 */
 function staticNativeDefaults(agent: AgentKind): readonly string[] {
@@ -82,7 +92,7 @@ export async function verdictForModelRoute(
 ): Promise<ModelRouteVerdict> {
   let views: ProviderView[];
   try {
-    views = await getDesktopProviderService().listProviders();
+    views = await listRouteGuardProviders();
   } catch {
     return overrideOnlyVerdict(agent, model, providerId);
   }
@@ -108,7 +118,7 @@ export async function resolveLenientSessionRoute(
 }> {
   let views: ProviderView[];
   try {
-    views = await getDesktopProviderService().listProviders();
+    views = await listRouteGuardProviders();
   } catch {
     // 目录故障降级:override-only 保守裁决(同 overrideOnlyVerdict 语义)。命中即
     // 逐级丢弃;目录不可得时没有 pick 兜底可用,model 置空由调用方失败收口。
@@ -161,7 +171,7 @@ export async function resolveRouteCopyCapabilities(
 } | null> {
   let views: ProviderView[];
   try {
-    views = await getDesktopProviderService().listProviders();
+    views = await listRouteGuardProviders();
   } catch {
     return null;
   }
@@ -206,7 +216,7 @@ export async function isAgentOneShotRouteDisabled(
   }
   let views: ProviderView[];
   try {
-    views = await getDesktopProviderService().listProviders();
+    views = await listRouteGuardProviders();
   } catch {
     // 目录故障降级:静态原生默认来源被 override 停用即视为不可发(同
     // overrideOnlyVerdict 的隐式近似;override 也读不了则按无停用证据放行)。

@@ -7,7 +7,7 @@ import { normalizeIssuePublicName } from '../../shared/issuePublicName';
  *
  * 写成字面量比较而非「数组 + includes + as CindyRegion」：narrowing 直接得出
  * `CindyRegion`，不需要类型断言，也就不会在 `CindyRegion` 改动后继续静默通过。
- * 新增区域时的漏改由同族的 `shared/issueRegionCode.ts` 兜住——那里的
+ * 新增区域时的漏改由同族的 `shared/regionCode.ts` 兜住——那里的
  * `Record<CindyRegion, …>` 会编译报错，改它时会一并看到本函数。
  */
 export function parseIssueEnvRegion(raw: unknown): CindyRegion | undefined {

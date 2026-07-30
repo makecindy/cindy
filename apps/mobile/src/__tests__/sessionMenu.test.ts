@@ -168,21 +168,21 @@ describe('sessionMenu navigation', () => {
 describe('sessionMenu ai rename failure text', () => {
   it('maps outdated controlled devices to an upgrade hint', () => {
     expect(aiRenameFailureText(new Error("[CHANNEL_NOT_ALLOWED] channel 'maker:regenerate-title' not allowed")))
-      .toBe('被控电脑版本过旧，暂不支持自动起名。');
+      .toBe('被控设备版本过旧，暂不支持自动起名。');
     const coded = new Error('rejected');
     (coded as { code?: string }).code = 'DEVICE_LINK_VERSION_MISMATCH';
-    expect(aiRenameFailureText(coded)).toBe('被控电脑版本过旧，暂不支持自动起名。');
+    expect(aiRenameFailureText(coded)).toBe('被控设备版本过旧，暂不支持自动起名。');
   });
 
   it('maps offline links by exact device-link codes and falls back to a generic failure', () => {
     expect(aiRenameFailureText(new Error('[DEVICE_OFFLINE] target device offline')))
-      .toBe('被控电脑不在线，稍后再试。');
+      .toBe('被控设备不在线，稍后再试。');
     expect(aiRenameFailureText(new Error('[LINK_NOT_OPEN] link not open')))
-      .toBe('被控电脑不在线，稍后再试。');
+      .toBe('被控设备不在线，稍后再试。');
     expect(aiRenameFailureText(new Error('[NOT_CONNECTED] relay not connected')))
-      .toBe('被控电脑不在线，稍后再试。');
+      .toBe('被控设备不在线，稍后再试。');
     expect(aiRenameFailureText(new Error('[INVOKE_TIMEOUT] no invoke-result within 15000ms')))
-      .toBe('被控电脑不在线，稍后再试。');
+      .toBe('被控设备不在线，稍后再试。');
     // 非链路类全大写超时码不允许误判为离线(review P2 反馈的误命中场景)。
     expect(aiRenameFailureText(new Error('[DB_QUERY_TIMEOUT] query slow'))).toBe('自动起名失败，请重试。');
     expect(aiRenameFailureText(new Error('boom'))).toBe('自动起名失败，请重试。');

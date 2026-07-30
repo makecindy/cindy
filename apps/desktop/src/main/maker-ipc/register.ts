@@ -81,7 +81,8 @@ import {
   getBrowserAvailability,
   openBrowserForLogin,
 } from '../mcp-integrations/browser.js';
-import { getActiveCodexBridgeInstanceId, shutdownCodexEnvironment } from '../mcp-integrations/codexEnvironment.js';
+import { getActiveCodexBridgeInstanceId, getActiveCodexBridgeServerNames, shutdownCodexEnvironment } from '../mcp-integrations/codexEnvironment.js';
+import { REMOTE_MEMORY_SERVER_NAME } from '../mcp-integrations/codexHttpBridge.js';
 import { getRemoteMcpBridgeToken } from '../mcp-integrations/remoteMcpBridgeToken.js';
 import {
   checkComputerDriverUpdate,
@@ -695,6 +696,28 @@ function memorySettingsWire() {
  * 文本裸曝给 renderer(review P1 2026-07-23)。执行体见
  * runMemoryChangeWithCodexRestart。
  */
+/**
+ * Maker Memory 开关翻转后的 codex bridge 失效 (review R1 P2)。cindy_memory
+ * provider 的 isEnabled 在 bridge 启动时冻结 (codexEnvironment doStart 快照
+ * provider 集合), 不重建的话老 bridge 缺/多 cindy_memory server — 远端 CC
+ * 会出现 prompt 注入了 memory rules 但工具面没有 server 的失配, codex 远端
+ * 漂移判定永不收敛。与 contacts / 全局插件开关同机制:best-effort shutdown,
+ * 下一次使用 lazy 重建出与新开关一致的 bridge;远端失效与重注入由
+ * shutdownCodexEnvironment 的既有 hook 链自愈。调用方须放在 applyRuntime
+ * (prepare 已停 app-server / 延迟路径全员空闲) 满足「先停 app-server 再关
+ * bridge」的顺序约束, 并用翻转守卫包住 (同值调用不白杀 bridge)。失败只记
+ * warn — 设置已落盘, 旧 bridge 的失配窗口由下一次 bridge 重建收敛。
+ */
+async function shutdownCodexEnvironmentBestEffort(reason: string): Promise<void> {
+  try {
+    await shutdownCodexEnvironment();
+  } catch (err) {
+    log.warn(`shutdownCodexEnvironment on ${reason} failed — cached bridge still stale`, {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 async function applyMemoryChangeWithCodexRestart<T extends object>(
   parts: MemoryChangeParts<T>,
 ): Promise<T & { codexRestartDeferred: boolean }> {
@@ -4321,6 +4344,41 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // DB 异常不缓存 null)。
   const readSessionRemoteHostIdCached = createSessionRemoteHostIdReader();
 
+  /**
+   * stale-bridge 谓词 (review R2 P2):bridge 的 provider 集合在启动时冻结;
+   * Maker Memory 开关翻转而 codex busy 时, bridge 重建被
+   * DeferredCodexRestartService 推迟, 窗口内活跃 bridge 缺 cindy_memory。
+   * 远端链路 (per-session flag 钳制 / drift 判定) 必须以它为准 — 否则
+   * prompt 注入与工具面失配、drift 追一个注不进去的 server 永不收敛。
+   * 无活跃 bridge 时返回 false (接下来的 lazy 重建会产出与 manager 现值
+   * 一致的新 bridge, 不构成缺失)。
+   */
+  function activeBridgeMissingMemory(): boolean {
+    const bridgeServers = getActiveCodexBridgeServerNames();
+    return bridgeServers !== null && !bridgeServers.includes(REMOTE_MEMORY_SERVER_NAME);
+  }
+
+  /** 远端会话视角的 Maker Memory 有效开关 = manager 现值 + stale-bridge 钳制。 */
+  function remoteMakerMemoryEnabledForBridge(): boolean {
+    return (maker.makerMemory?.isEnabled() ?? false) && !activeBridgeMissingMemory();
+  }
+
+  /**
+   * live-send 轻量漂移判定 (hasPendingRemoteMcpDrift) 的 opts。函数而非常量:
+   * 第二次判定发生在 ensure 之后, bridge 可能已 lazy 重建, 四个成分都要现读。
+   */
+  function codexRemoteDriftOpts() {
+    return {
+      collabEnabled: getPluginRegistry().isEnabled('collab'),
+      // desired 集合要跟 ensure 实际能注入的集合同源 (stale-bridge 钳制),
+      // 不能只看 manager 现值 — 否则旧 bridge 缺 cindy_memory 时 drift 永不
+      // 收敛, 每次 live send 白跑完整 ensure。
+      makerMemoryEnabled: remoteMakerMemoryEnabledForBridge(),
+      token: getRemoteMcpBridgeToken(),
+      bridgeInstanceId: getActiveCodexBridgeInstanceId(),
+    };
+  }
+
   async function ensureRemoteReadyForSessionStart(params: {
     session?: { agentKind: AgentKind; remoteHostId: string | null } | null;
     createOpts?: unknown;
@@ -4354,7 +4412,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (createOpts && typeof createOpts === 'object') {
       const mutableCreateOpts = createOpts as { remoteHostId?: string; makerMemoryEnabled?: boolean };
       mutableCreateOpts.remoteHostId = remoteHostIdToEnsure;
-      mutableCreateOpts.makerMemoryEnabled = false;
+      // SSH remote 与本地同语义:Maker Memory 跟随控制端设置 (scope 由
+      // maker-core 按 remoteHostId+workingDir 隔离)。调用方显式给的值优先
+      // (renderer 已按全局设置填);main 侧发起、快照缺该字段的路径 (Orca
+      // worker 派活 / scheduler / lazy-resume 等) 按全局开关补齐 — 这里
+      // 不得再强制 false (review R1 P1:此前的强制覆盖让远端会话永远
+      // 拿不到记忆注入)。
+      mutableCreateOpts.makerMemoryEnabled ??= maker.makerMemory?.isEnabled() ?? false;
+      // stale-bridge 钳制 (见 activeBridgeMissingMemory):窗口内本会话统一
+      // 按关闭注入 (prompt 与工具面同源), bridge 重建后新会话自然恢复。
+      if (mutableCreateOpts.makerMemoryEnabled && activeBridgeMissingMemory()) {
+        mutableCreateOpts.makerMemoryEnabled = false;
+      }
     }
 
     await ensureRemoteHostReady(remoteHostIdToEnsure);
@@ -4406,6 +4475,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           // collab 全局禁用 (Tier 4) 时按清理路径剥远端受管段 — bridge
           // 名单不反映开关 (codex-connector R20 P2)。
           isCollabEnabled: () => getPluginRegistry().isEnabled('collab'),
+          // Maker Memory 全局开着时把 cindy_memory 一并注入远端 daemon config。
+          isMakerMemoryEnabled: () => maker.makerMemory?.isEnabled() ?? false,
         });
         if (result.ok && result.daemonRebootstrapped && !codexRemoteHasLiveTurn(remoteHostIdToEnsure)) {
           await detachIdleRemoteCodexSessionsOnHost(remoteHostIdToEnsure, 'codex-mcp-daemon-rebootstrap');
@@ -4472,6 +4543,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ensureBridgeStarted: ensureCodexMcpBridgeStartedForRemote,
         hasLiveTurnOnHost: codexRemoteHasLiveTurn,
         isCollabEnabled: () => getPluginRegistry().isEnabled('collab'),
+        isMakerMemoryEnabled: () => maker.makerMemory?.isEnabled() ?? false,
       }).then(async (result) => {
         if (result.ok && result.daemonRebootstrapped && !codexRemoteHasLiveTurn(remoteHostId)) {
           await detachIdleRemoteCodexSessionsOnHost(remoteHostId, 'codex-mcp-turn-settled-rebootstrap');
@@ -5229,11 +5301,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (
           live.remoteHostId &&
           live.agentKind === 'codex' &&
-          hasPendingRemoteMcpDrift(live.remoteHostId, {
-            collabEnabled: getPluginRegistry().isEnabled('collab'),
-            token: getRemoteMcpBridgeToken(),
-            bridgeInstanceId: getActiveCodexBridgeInstanceId(),
-          })
+          hasPendingRemoteMcpDrift(live.remoteHostId, codexRemoteDriftOpts())
         ) {
           const ensureResult = await ensureRemoteReadyForSessionStart({ session: live });
           // ensure 完整生效 ⇒ daemon 已 (重) bootstrap ⇒ 长命 transport
@@ -5245,11 +5313,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           if (ensureResult?.remoteCodexDaemonRebootstrapped) {
             live = undefined;
           } else {
-            const driftCleared = !hasPendingRemoteMcpDrift(live.remoteHostId, {
-              collabEnabled: getPluginRegistry().isEnabled('collab'),
-              token: getRemoteMcpBridgeToken(),
-              bridgeInstanceId: getActiveCodexBridgeInstanceId(),
-            });
+            const driftCleared = !hasPendingRemoteMcpDrift(live.remoteHostId, codexRemoteDriftOpts());
             if (driftCleared) {
               try {
                 await live.detach();
@@ -7892,6 +7956,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 立刻按新值注入);native setMemory 的 live-host RPC 热推放 applyRuntime ——
     // Codex busy 的延迟路径把它挪到所有会话空闲后执行,不 mid-turn 热更正在跑的
     // 任务(review P1 2026-07-23)。
+    const wasEnabled = makerMemory.isEnabled();
     let persistedSettings: MemorySettings | null = null;
     return applyMemoryChangeWithCodexRestart({
       persist: async () => {
@@ -7922,6 +7987,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         } else if (persistedSettings && !persistedSettings.maker) {
           await maker.setAgentMemory('codex', persistedSettings.codex);
         }
+        // 开关翻转 ⇒ 重建 codex bridge, 理由与约束见
+        // shutdownCodexEnvironmentBestEffort 文档 (review R1 P2)。
+        if (wasEnabled !== enabled) {
+          await shutdownCodexEnvironmentBestEffort('maker-memory toggle');
+        }
       },
     });
   });
@@ -7931,6 +8001,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // registerIpcHandlers() 里, 见那里的注释。
   ipcMain.handle(MAKER_INVOKE.MEMORY_RESET_SETTINGS, async () => {
     // 同 MAKER_MEMORY_SET_ENABLED 的 persist / applyRuntime 拆分。
+    const wasMakerEnabled = maker.makerMemory?.isEnabled() ?? false;
     let resetSettings_: MemorySettings | null = null;
     return applyMemoryChangeWithCodexRestart({
       persist: async () => {
@@ -7957,6 +8028,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           await maker.makerMemory?.syncNativeAgentsOff(['codex']);
         } else {
           await maker.setAgentMemory('codex', resetSettings_.codex);
+        }
+        // maker 开关随 reset 翻转时同样要重建 codex bridge — 见
+        // shutdownCodexEnvironmentBestEffort 文档 (review R1 P2)。
+        if (wasMakerEnabled !== resetSettings_.maker) {
+          await shutdownCodexEnvironmentBestEffort('memory settings reset');
         }
       },
     });

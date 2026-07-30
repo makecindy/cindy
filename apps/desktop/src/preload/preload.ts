@@ -155,10 +155,15 @@ type VoiceInputShortcutWire = {
 };
 type VoiceInputGlobalResult =
   | { ok: true }
-  | { ok: false; error: string; errorCode?: 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed' };
+  | { ok: false; error: string; errorCode?: 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed' | 'superseded' };
 type VoiceInputSettingsUpdateResult =
-  | { ok: true; settings: import('../shared/voiceInputData').VoiceInputSettings }
-  | { ok: false; error: string; errorCode?: 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed' };
+  | {
+    ok: true;
+    settings: import('../shared/voiceInputData').VoiceInputSettings;
+    /** 已存盘但 macOS 监听权限未授权，快捷键要等授权后才生效。 */
+    pendingInputMonitoring?: boolean;
+  }
+  | { ok: false; error: string; errorCode?: 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed' | 'superseded' };
 type VoiceInputReadinessWire = {
   ok: boolean;
   serviceMode: 'cindy' | 'byok';
@@ -295,6 +300,9 @@ const fanOutComputerPermissionGuideStatusChanged = createIpcFanOut(
   'maker:computer:permission-guide-status-changed',
 );
 const fanOutAppUpdateProgress = createIpcFanOut('app-update-progress');
+// worktree 回收(归档/删除后的异步链)真正跑完 —— renderer 据此重拉 worktree 快照,
+// 否则徽标会停在回收前的旧条目上。只在本机窗口内广播。
+const fanOutWorktreeChanged = createIpcFanOut('worktree:changed');
 const fanOutAuthStateChange = createIpcFanOut('auth:state-change');
 const fanOutAuthSessionExpired = createIpcFanOut('auth:session-expired');
 // 使用统计(TapDB)的同意状态 / 开关变化;renderer 据此即时 init 或 opt-out
@@ -420,6 +428,9 @@ const fanOutGhostNotify = createIpcFanOut('ghosts:notify');
 // 插件预览开页(preview 槽:renderer 在右侧栏开 web-browser 标签)。
 const fanOutGhostPreviewOpen = createIpcFanOut('ghosts:preview-open');
 const fanOutVoiceInputModifierShortcutKeys = createIpcFanOut('voice-input:modifier-shortcut-keys');
+// 「待授权」快捷键在设置页之外自动恢复失败（helper 起不来）。设置页不在,它的 toast 也就
+// 不在,所以由常挂载的 MainLayout 接这条并提示。main 侧一次 App 运行只推一次。
+const fanOutVoiceInputShortcutRecoveryFailed = createIpcFanOut('voice-input:shortcut-recovery-failed');
 // Remote SSH (Phase A) — host status fan-out. Channel literal kept in
 // sync with REMOTE_SSH_PUSH.STATUS_CHANGED in main/remote-ssh/index.ts;
 // preload can't import from main due to vite chunking.
@@ -997,6 +1008,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('voice-input:open-microphone-settings'),
     openInputMonitoringSettings: (): Promise<VoiceInputGlobalResult> =>
       ipcRenderer.invoke('voice-input:open-input-monitoring-settings'),
+    // 失败走统一 IPC 错误协议（reject），所以成功路径只有 ok:true + 权限状态。
+    // status 沿用 VoiceInputPermissionSnapshot 的 string 形状（granted / denied / …）：
+    // 那是 microphone、accessibility 共用的既有类型，单独在这里收成字面量联合会与它们
+    // 不一致，收紧要整条一起动，超出本次改动范围。
+    requestInputMonitoringPermission: (): Promise<{ ok: true; status: string }> =>
+      ipcRenderer.invoke('voice-input:request-input-monitoring-permission'),
     muteSystemAudio: (): Promise<{ ok: true } | { ok: false; error: string }> =>
       ipcRenderer.invoke('voice-input:mute-system-audio'),
     restoreSystemAudio: (): Promise<{ ok: true } | { ok: false; error: string }> =>
@@ -1084,13 +1101,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
       throwVoiceInputSyncError(result);
     },
     onDataChanged: fanOutVoiceInputDataChanged,
-    setGlobalShortcut: (shortcut: VoiceInputShortcutWire | null): Promise<VoiceInputGlobalResult> =>
-      ipcRenderer.invoke('voice-input:global-shortcut:set', shortcut),
+    // options.suspend 表示「录制期挂起」这个意图。main 侧会丢掉与存盘不一致的同步请求
+    // (过时的广播回声),而挂起传的 null 恰恰故意与存盘不同,必须能区分开。
+    setGlobalShortcut: (
+      shortcut: VoiceInputShortcutWire | null,
+      options?: { suspend?: true },
+    ): Promise<VoiceInputGlobalResult> =>
+      ipcRenderer.invoke('voice-input:global-shortcut:set', shortcut, options),
     startModifierShortcutRecording: (): Promise<VoiceInputGlobalResult> =>
       ipcRenderer.invoke('voice-input:modifier-shortcut-recording:start'),
     stopModifierShortcutRecording: (): Promise<VoiceInputGlobalResult> =>
       ipcRenderer.invoke('voice-input:modifier-shortcut-recording:stop'),
     onModifierShortcutKeys: fanOutVoiceInputModifierShortcutKeys,
+    onShortcutRecoveryFailed: fanOutVoiceInputShortcutRecoveryFailed,
+    consumeShortcutRecoveryFailure: () =>
+      ipcRenderer.invoke('voice-input:consume-shortcut-recovery-failure'),
     onGlobalShortcutTrigger: fanOutVoiceInputGlobalShortcutTrigger,
     claimGlobalShortcutTrigger: (id: string): void =>
       ipcRenderer.send('voice-input:global-shortcut-claim', { id }),
@@ -1666,6 +1691,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     refreshPlanChange: (payload) =>
       ipcRenderer.invoke(BILLING_INVOKE.REFRESH_PLAN_CHANGE, payload),
     cancelPlanChange: (payload) => ipcRenderer.invoke(BILLING_INVOKE.CANCEL_PLAN_CHANGE, payload),
+    openSubscriptionPortal: () => ipcRenderer.invoke(BILLING_INVOKE.OPEN_SUBSCRIPTION_PORTAL),
     openPaymentRedirect: (payload) =>
       ipcRenderer.invoke(BILLING_INVOKE.OPEN_PAYMENT_REDIRECT, payload),
   } satisfies BillingRendererApi,
@@ -2394,7 +2420,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // payload 形态在 vite-env.d.ts 上声明:
   //   - { type: 'session', id, messageClientId? } : 跳路由到指定 session(可带消息锚点)
   //   - { type: 'project', workingDir }    : 聚焦已有 project 节点
-  //   - { type: 'new-session', workingDir }: 新建对话且预填 workingDir (右键 "通过 XDMaker 打开")
+  //   - { type: 'new-session', workingDir }: 新建对话且预填 workingDir (右键 "通过 Cindy 打开")
   //   - { type: 'share-import', filePath } : 打开 .cshare/.xdtshare 会话导入向导
   onDeepLinkNavigate: (
     callback: (
@@ -3180,6 +3206,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('worktree:restore-status', sessionId),
   worktreeRestoreForSession: (sessionId: string): Promise<{ ok: boolean; snapshotApplied?: boolean; message?: string }> =>
     ipcRenderer.invoke('worktree:restore-for-session', sessionId),
+  /**
+   * 订阅「worktree 回收链已跑完」。payload: { sessionId }。
+   * 归档/删除后 main 侧的回收是 fire-and-forget 的异步链,store 条目移除远晚于状态
+   * IPC 返回;renderer 只在动作里刷一次会拿到旧快照,徽标就一直陈旧。
+   */
+  onWorktreeChanged: fanOutWorktreeChanged,
 
   // ── Slack Hook(公司中心 slack-hook-server 接入, 单内置连接) ─────────────
   // 通道名与 shared/hookControlIpc.ts 保持一致(preload 因 vite chunking 不
@@ -4772,7 +4804,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       } | UtilityTextFailure> => ipcRenderer.invoke('maker:schedule:generate-pre-run-hook', params),
       listRuns: (id: string, limit?: number): Promise<unknown[]> =>
         ipcRenderer.invoke('maker:schedule:list-runs', id, limit),
-      listSidebarIndexRuns: (): Promise<unknown[]> =>
+      // 回传 { runs, inflightRunIds }:后者是引擎内存里的权威 in-flight 集合,renderer 的
+      // 通知抑制标记对账靠它区分「runs 里查不到 = 跑完了」与「= 自删除后行已级联删除、
+      // run 仍在跑」。两者不是原子快照,不一致由消费方重查收口(见 main 侧 handler 注释)。
+      // runId 不是特权数据(renderer 的标记里就存着它)。
+      listSidebarIndexRuns: (): Promise<unknown> =>
         ipcRenderer.invoke('maker:schedule:list-sidebar-index-runs'),
       listCostSummaries: (): Promise<unknown[]> =>
         ipcRenderer.invoke('maker:schedule:list-cost-summaries'),

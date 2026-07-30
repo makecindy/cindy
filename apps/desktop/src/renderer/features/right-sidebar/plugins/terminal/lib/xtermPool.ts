@@ -24,6 +24,10 @@ import { Terminal, type ITerminalOptions } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('terminal');
+
 export interface XtermEntry {
   terminal: Terminal;
   fitAddon: FitAddon;
@@ -68,7 +72,11 @@ export function getOrCreateXterm(tabId: string): XtermEntry {
   if (entry) return entry;
   const terminal = new Terminal(DEFAULT_OPTIONS);
   const fitAddon = new FitAddon();
-  const webLinks = new WebLinksAddon();
+  // xterm's default link handler uses `window.open()`. In an Electron
+  // renderer that creates a popup window, which is intentionally blocked by
+  // the app's window policy and leaves terminal links inert. Route the click
+  // through the existing main-process URL allowlist instead.
+  const webLinks = new WebLinksAddon(openTerminalExternalLink);
   terminal.loadAddon(fitAddon);
   terminal.loadAddon(webLinks);
   attachSelectionCopyShortcut(terminal);
@@ -80,6 +88,27 @@ export function getOrCreateXterm(tabId: string): XtermEntry {
   };
   pool.set(tabId, entry);
   return entry;
+}
+
+/**
+ * Open a link detected in the terminal through the privileged host bridge.
+ *
+ * The main-process `shell:open-external` handler validates the URL protocol
+ * before delegating to the operating system, so the renderer never opens
+ * arbitrary terminal output directly.
+ */
+export function openTerminalExternalLink(_event: MouseEvent, uri: string): void {
+  void window.electronAPI
+    .openExternal(uri)
+    .then((result) => {
+      if (!result.success) {
+        // Do not log the URL: terminal output may contain sensitive query parameters.
+        log.warn('terminal link open rejected or failed');
+      }
+    })
+    .catch(() => {
+      log.warn('terminal link open IPC failed');
+    });
 }
 
 /**

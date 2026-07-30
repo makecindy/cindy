@@ -96,11 +96,13 @@ import {
   getCodexControlPlaneProxyEndpoint,
   getCodexProxyAuthInjectionState,
   getCodexProxyEndpoint,
+  getCodexThreadUpstreamOrigin,
   isCodexControlPlaneProxyHandleReady,
   isCodexProxyHandleReady,
   setCodexProxyAuthInjection,
   setCodexProxyGatewayKeyReader,
   registerComposed as registerCodexProxyComposed,
+  registerReviewerRouteContext as registerCodexReviewerRouteContext,
   unregister as unregisterCodexProxyPrompt,
 } from './codex-proxy-host.js';
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
@@ -134,6 +136,7 @@ import {
 } from './remote-codex-mcp-recovery.js';
 import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../mcp-integrations/codexBuiltinToolPolicy.js';
 import { buildCodexProxySpawnArgs, CODEX_OPENAI_COMPACT_PROVIDER_ID } from './codex-gateway-config.js';
+import { getOutboundPathSnapshotFor } from './outbound-proxy-resolver.js';
 import {
   createDesktopMakerMemoryManager,
   attachAgentsToMakerMemory,
@@ -428,6 +431,8 @@ export async function ensureCodexMcpBridgeStartedForRemote(): Promise<{
           // 恢复路径同闸门 (codex-connector R21 P1):collab 全局禁用时
           // ensure 走清理而非重注入。
           isCollabEnabled: () => getPluginRegistry().isEnabled('collab'),
+          // Maker Memory 同源闸门:开着时补刀不得把 cindy_memory 剥掉。
+          isMakerMemoryEnabled: () => _maker?.makerMemory?.isEnabled() ?? false,
           detachRemoteCodexSessionsOnHost: (hostId) =>
             detachActiveRemoteCodexSessions(hostId, 'bridge-recreate-rebootstrap'),
           log: desktopMakerLogger,
@@ -604,13 +609,16 @@ export function getMaker(): Maker {
       // MCP 注入) — 与 IPC create/send 路径同一 preflight。holder 在 IPC
       // 注册时填入 (晚于本 deps 构造, 早于任何 bridge 回调)。
       ensureRemoteSessionStart: async (params) => {
-        await getRemoteSessionStartEnsure()?.({
-          createOpts: {
-            id: params.sessionId,
-            agentKind: params.agentKind,
-            remoteHostId: params.remoteHostId,
-          },
-        });
+        // ensure 会在 createOpts 上就地归一化 makerMemoryEnabled (全局设置
+        // backfill + stale-bridge 钳制) — 这里是临时对象, 必须把结果读回
+        // 交给 bridge 的真实 createSession (review R6 P2)。
+        const createOpts: { id: string; agentKind: typeof params.agentKind; remoteHostId: string; makerMemoryEnabled?: boolean } = {
+          id: params.sessionId,
+          agentKind: params.agentKind,
+          remoteHostId: params.remoteHostId,
+        };
+        await getRemoteSessionStartEnsure()?.({ createOpts });
+        return { makerMemoryEnabled: createOpts.makerMemoryEnabled === true };
       },
       orcaTeamStore: orcaTeamStoreAdapter,
       dispatchInterAgentMessage,
@@ -691,7 +699,7 @@ export function getMaker(): Maker {
       // RemoteQuery 实现 SDK Query interface 的子集 (ClaudeCodeAgent 实际只调
       // for-await / interrupt / setModel / setPermissionMode / applyFlagSettings),
       // factory 返回时直接 `as unknown as Query` cast 即可。
-      remoteCcQueryFactory: async ({ remoteHostId, sessionId, startParams, vendorOptions, onApprovalRequest }) => {
+      remoteCcQueryFactory: async ({ remoteHostId, sessionId, startParams, vendorOptions, onApprovalRequest, makerMemoryEnabled }) => {
         const host = getRemoteSshPool().get(remoteHostId);
         if (host?.getStatus() !== 'ready') {
           throw new Error(`remote ssh host not ready: ${remoteHostId}`);
@@ -722,6 +730,8 @@ export function getMaker(): Maker {
               sessionId,
               workingDir: typeof startParams.cwd === 'string' ? startParams.cwd : '',
               vendorOptions,
+              // per-session Maker Memory 开关 (maker-core 归一后透传)。
+              makerMemoryEnabled,
             },
             {
               ensureBridgeStarted: ensureCodexMcpBridgeStartedForRemote,
@@ -883,6 +893,23 @@ export function getMaker(): Maker {
       onCodexLocalModelsListed: (models) => {
         setDiscoveredCodexModels(mapCodexAppServerModelsToCatalog(models));
       },
+      // 「后端不可达」终局升级时读一次本次请求的出站路径判定,把通用猜测换成实测事实。
+      // 快照的 proxy 字段在 resolver 侧已脱敏,可直接进用户可见的错误消息。
+      //
+      // 两步定位,缺一不可:
+      //  1. codex-proxy-host 记的 threadId → 本次实际出口 origin。codex 的出口随会话
+      //     选定的 provider 变(订阅直连 ChatGPT、网关、xAI、自定义供应商),猜候选或
+      //     按时间戳挑最新都会把别的会话的判定报到本次故障上。
+      //  2. 该 origin 在 resolver 侧的判定。resolver 是共享的(anthropic-compat proxy、
+      //     通用 outbound-fetch 也在调),按 origin 取才不会串到别的消费方。
+      // 任一步查不到就返回 null,退回通用文案 —— 尤其 gateway-key fallback 下
+      // codexProxyActive=false、codex 直连不经本 proxy 时,这里必然查不到映射,
+      // 于是不会报出一条本次根本没走过的路径。
+      getOutboundPathFact: ({ threadId }) => {
+        if (!threadId) return null;
+        const origin = getCodexThreadUpstreamOrigin(threadId);
+        return origin ? getOutboundPathSnapshotFor([origin]) : null;
+      },
       onAutoPermissionClassifierUnavailable: notifyAutoPermissionClassifierUnavailable,
       prepareCodexLocalCredentialModeSwitch: async (ctx) => {
         const maker = _maker;
@@ -974,7 +1001,7 @@ export function getMaker(): Maker {
             : {}),
         };
       },
-      registerCodexMcpThreadContext: ({ threadId, sessionId, workingDir, vendorOptions }) => {
+      registerCodexMcpThreadContext: ({ threadId, sessionId, workingDir, remoteHostId, vendorOptions }) => {
         // Codex shares one app-server across sessions. Freeze the effective
         // ordinary-tool policy at thread creation so later Settings changes do
         // not mutate a runtime that is already running.
@@ -983,6 +1010,8 @@ export function getMaker(): Maker {
           agentKind: 'codex',
           sessionId,
           workingDir,
+          // remote thread ctx: scope key 语义见 buildMemoryScopeKey。
+          ...(remoteHostId ? { remoteHostId } : {}),
           vendorOptions: {
             ...vendorOptions,
             [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: disabledPluginIds,
@@ -993,6 +1022,8 @@ export function getMaker(): Maker {
       prepareCodexResumeSession: prepareExternalCodexSessionForResume,
       registerCodexSystemPromptForThread: ({ sessionId, threadId, text }) =>
         registerCodexProxyComposed(sessionId, threadId, text),
+      registerCodexReviewerRouteContext: ({ sessionId, threadId, model }) =>
+        registerCodexReviewerRouteContext(sessionId, threadId, model),
       // host 自家、用户已通过 OAuth/账号授权过且完成权限 review 的 MCP server,
       // 按精确 server name 自动通过 Codex MCP elicitation，避免每次可信写操作都弹
       // PermissionPrompt。`cindy_` 只是 namespace，不构成信任边界；新 provider

@@ -16,7 +16,7 @@
 
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -31,17 +31,72 @@ const SERVER_HEADER = 'Lizi_MCPS/1.0';
 const MCP_PATH_PREFIX = '/mcp/';
 const SHUTDOWN_TIMEOUT_MS = 5_000;
 /**
- * 远端 (SSH remote-forward) 允许暴露的 server 白名单 — additionalBearerTokens
- * (persistent token) 认证的请求只能访问这些 server。这是 codex/cc 两条远端
- * 注入路径共享的唯一真源 (remote-ssh/codex-remote-mcp.ts 与
- * maker-host/cc-remote-mcp.ts 都引用它, 不要各自另立常量):只放协同必需的
- * cindy_orca / orca_worker_bridge;拿到 persistent token 的远端进程不得经
- * bridge 初始化 cindy_ssh / cindy_memory 等本机 server。
+ * 协同 MCP 的远端 server 名单 — codex/cc 两条远端注入路径共享的唯一真源
+ * (remote-ssh/codex-remote-mcp.ts 与 maker-host/cc-remote-mcp.ts 都引用它,
+ * 不要各自另立常量)。协同注入随 collab 全局开关走, 与 Maker Memory 的
+ * cindy_memory 注入 (随 Maker Memory 开关走) 互相独立。
  */
 export const REMOTE_COLLAB_SERVER_NAMES: ReadonlySet<string> = new Set([
   'cindy_orca',
   'orca_worker_bridge',
 ]);
+/**
+ * Maker Memory 的远端 server 名。SSH remote 会话的记忆读写经 bridge 回到
+ * 本机 store (per hostId+远端路径 分区, 见 maker-core buildMemoryScopeKey)。
+ */
+export const REMOTE_MEMORY_SERVER_NAME = 'cindy_memory';
+/**
+ * 远端 (SSH remote-forward) 允许暴露的 server 全集 — additionalBearerTokens
+ * (persistent token) 认证的请求只能访问这些 server, 鉴权层按它 scope。
+ * 只放协同 (cindy_orca / orca_worker_bridge) 与 Maker Memory (cindy_memory,
+ * 2026-07 放行: 工具面固定、只触达本机 maker-memory 目录, 与协同同威胁模型);
+ * 拿到 persistent token 的远端进程仍不得经 bridge 初始化 cindy_ssh 等其余
+ * 本机 server。
+ */
+export const REMOTE_ALLOWED_SERVER_NAMES: ReadonlySet<string> = new Set([
+  ...REMOTE_COLLAB_SERVER_NAMES,
+  REMOTE_MEMORY_SERVER_NAME,
+]);
+
+/**
+ * 「gate 集合 → 远端注入名单」的唯一合成规则:协同段 = available ∩ 协同白名单
+ * (collab 开时);memory 段 = cindy_memory (memory 开且 available 含它时)。
+ * cc 注入 (cc-remote-mcp) / codex ensure (codex-remote-mcp) / codex drift 的
+ * desired 集合 (available 传白名单全集, 保留「provider 恒注册」假设) 三处
+ * 必须同走本函数 — drift 与 ensure 的集合靠构造同源, 不靠注释人肉维持
+ * (simplify R4)。新增远端 server 时:加常量 + 在这里加一个 gate 分支。
+ */
+export function selectRemoteInjectableServerNames(
+  available: readonly string[],
+  gates: { collabEnabled: boolean; memoryEnabled: boolean },
+): string[] {
+  return [
+    ...(gates.collabEnabled ? available.filter((n) => REMOTE_COLLAB_SERVER_NAMES.has(n)) : []),
+    ...(gates.memoryEnabled && available.includes(REMOTE_MEMORY_SERVER_NAME)
+      ? [REMOTE_MEMORY_SERVER_NAME]
+      : []),
+  ];
+}
+
+/**
+ * 远端 MCP 注入代际指纹的唯一公式 (sha256 前 12 hex)。cc 的 per-session
+ * applied 指纹与 codex 的 desired/applied 指纹共用 — 成分或格式要变只改
+ * 这里, drift 判定与 ensure 落盘天然同构 (simplify R4)。
+ */
+export function computeRemoteMcpFingerprint(opts: {
+  token: string;
+  bridgeInstanceId: string;
+  remotePort: number;
+  serverNames: readonly string[];
+}): string {
+  return createHash('sha256')
+    .update(
+      `${opts.token}|${opts.bridgeInstanceId}|${opts.remotePort}|${[...opts.serverNames].sort().join(',')}`,
+      'utf8',
+    )
+    .digest('hex')
+    .slice(0, 12);
+}
 /**
  * init request body 上限 (1MB)。codex MCP init payload 实际 < 1KB,
  * 1MB 给极端情况留余量。超限直接 413 拒绝 — 防巨大 body 在 JSON.parse
@@ -141,8 +196,8 @@ export async function startCodexHttpBridge(
 
       // bearer token 鉴权:主 token (per-run, 本地 codex 子进程) / 额外 token
       // (persistent, 远端常驻 codex daemon 与远端 cc 共用)。两类 token 权限
-      // 不同:主 token 全通;额外 token 只允许访问 REMOTE_COLLAB_SERVER_NAMES
-      // 白名单 (远端进程拿到 token 也不得初始化本机非协同 server)。
+      // 不同:主 token 全通;额外 token 只允许访问 REMOTE_ALLOWED_SERVER_NAMES
+      // 白名单 (协同 + cindy_memory; 远端进程拿到 token 也不得初始化其余本机 server)。
       const auth = req.headers['authorization'];
       const presented =
         typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : null;
@@ -192,10 +247,10 @@ export async function startCodexHttpBridge(
         res.end();
         return;
       }
-      // scoped (persistent) token 仅限协同白名单 server:同一 remote-forward
-      // 能摸到完整 /mcp/<name> 路由, 不得经它初始化本机非协同 server
-      // (cindy_ssh / cindy_memory 等) — codex-connector P1。
-      if (isScopedRemoteToken && !REMOTE_COLLAB_SERVER_NAMES.has(serverName)) {
+      // scoped (persistent) token 仅限远端白名单 server (协同 + cindy_memory):
+      // 同一 remote-forward 能摸到完整 /mcp/<name> 路由, 不得经它初始化
+      // cindy_ssh 等其余本机 server — codex-connector P1。
+      if (isScopedRemoteToken && !REMOTE_ALLOWED_SERVER_NAMES.has(serverName)) {
         res.statusCode = 403;
         res.end();
         log.warn('rejected scoped remote token for non-collab server', { serverName });

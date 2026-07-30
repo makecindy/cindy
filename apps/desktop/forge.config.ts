@@ -1165,8 +1165,8 @@ const config: ForgeConfig = {
       // 双 scheme 注册:cindy:// 主 + xdt-maker:// 永久兼容(存量分享链接不死)。
       { name: 'Cindy Deep Link', schemes: [...allDeepLinkSchemes()] },
     ],
-    // macOS 文件夹右键 "打开方式 → XDMaker" 入口:
-    //   声明 app 能接受 public.folder, Finder 自动把 XDMaker 出现在 "打开方式" 列表。
+    // macOS 文件夹右键 "打开方式 → Cindy" 入口:
+    //   声明 app 能接受 public.folder, Finder 自动把 Cindy 出现在 "打开方式" 列表。
     //   LSHandlerRank=Alternate: 不抢 Finder 默认 handler, 仅作为可选项之一。
     //   CFBundleTypeRole=Editor: 用户对该类型有 "打开+操作" 能力 (而非 Viewer 只看)。
     //   触发后 macOS 通过 app.on('open-file') 事件把目录路径推给 main 进程,

@@ -3,7 +3,7 @@
  *
  * `describeImageFile` (LLM screenshot description for text-only models) is only
  * referenced by the dropped `sdk-setup-tools` bridge re-export and is never
- * called on the in-process dispatcher path. XDMaker performs its own image
+ * called on the in-process dispatcher path. Cindy performs its own image
  * understanding upstream of this runtime, so this is a host-injectable hook
  * that defaults to a clear "not configured" result.
  */
@@ -11,7 +11,7 @@ export type DescribeImageFn = (filePath: string, prompt?: string) => Promise<str
 
 let describeImpl: DescribeImageFn | null = null;
 
-/** Host hook: wire XDMaker image-understanding here if screenshot description is wanted. */
+/** Host hook: wire Cindy image-understanding here if screenshot description is wanted. */
 export function setDescribeImageFile(fn: DescribeImageFn | null): void {
   describeImpl = fn;
 }

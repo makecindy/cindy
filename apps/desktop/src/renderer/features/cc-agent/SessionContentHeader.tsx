@@ -30,7 +30,10 @@ import type { Session } from '@/lib/ccAgent.types';
 import * as sessionService from '@/lib/sessionService';
 import { buildSessionDeepLink } from '@/lib/deepLink';
 import { createLogger } from '@/lib/logger';
-import { fetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
+import {
+  prefetchDirtyWorktreeForRemoval,
+  resolveWorktreeRemovalPreflight,
+} from '@/lib/worktreeRemovalWarning';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
@@ -380,28 +383,41 @@ export function SessionContentHeader({
       toast.warning(t('ccAgent.sidebar.archiveBlocked.running'));
       return;
     }
-    try {
-      const binding = await window.electronAPI.binding.resolveSession(session.id);
-      if (binding.attached) {
-        toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
-        return;
-      }
-    } catch {
-      // resolveSession 失败时不阻断归档
+    // 接管查询先发不 await,让它与菜单打开时那次 prefetch 在链路上重叠;
+    // resolveSession 失败降级为「未接管」,不阻断归档(与 sidebar 同口径)。
+    const attachedPromise = window.electronAPI.binding
+      .resolveSession(session.id)
+      .then((binding) => binding.attached)
+      .catch(() => false);
+    if (await attachedPromise) {
+      toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
+      return;
     }
-    const dirtyWorktree = await fetchDirtyWorktreeForRemoval(
+    // **worktree 预检必须是最后一个前置条件**(codex review):原来这里用 Promise.all
+    // 一起等,dirty 先返回 clean、接管查询还在飞的那段时间就是 clean 结论的失效窗口。
+    // 改成接管结算之后再 resolve —— clean 一律重查(见 worktreeRemovalWarning),
+    // 拿到的是此刻的结论;菜单打开时的 prefetch 仍然热了 git cache。
+    const preflight = await resolveWorktreeRemovalPreflight(
       session.id,
       session.deviceLinkDeviceId,
     );
-    const ok = await confirmDialog({
-      title: t('ccAgent.sidebar.confirmArchive.title'),
-      description:
-        t('ccAgent.sidebar.confirmArchive.description') +
-        (dirtyWorktree ? ' ' + t('ccAgent.sidebar.confirmArchive.dirtyWorktreeWarning') : ''),
-      confirmText: t('ccAgent.sidebar.confirmArchive.confirm'),
-      cancelText: t('ccAgent.sidebar.confirmArchive.cancel'),
-    });
-    if (!ok) return;
+    // 归档不弹确认框 —— 可逆操作(菜单里就有「恢复」),与 sidebar 同口径。
+    // 免确认的判据是「**确认**干净」:worktree 脏、或预检失败拿不到结论('unknown')
+    // 都要确认 —— 归档会顺带回收 worktree,不能静默带走改动(greptile review)。
+    // 'unknown' 只弹普通归档确认,不摆 dirty 警告文案(那会谎称有未提交改动)。
+    if (preflight !== 'clean') {
+      const ok = await confirmDialog({
+        title: t('ccAgent.sidebar.confirmArchive.title'),
+        description:
+          t('ccAgent.sidebar.confirmArchive.description') +
+          (preflight === 'dirty'
+            ? ' ' + t('ccAgent.sidebar.confirmArchive.dirtyWorktreeWarning')
+            : ''),
+        confirmText: t('ccAgent.sidebar.confirmArchive.confirm'),
+        cancelText: t('ccAgent.sidebar.confirmArchive.cancel'),
+      });
+      if (!ok) return;
+    }
     await runSessionAction(session.id, 'archive', { activeSessionId: session.id });
   }, [
     confirmDialog,
@@ -427,11 +443,10 @@ export function SessionContentHeader({
       showRemoteWriteBlockedToast();
       return;
     }
-    // P1 预检:worktree 有未提交更改时确认文案追加警告(查询失败降级为不提示)
-    const dirtyWorktree = await fetchDirtyWorktreeForRemoval(
-      session.id,
-      session.deviceLinkDeviceId,
-    );
+    // P1 预检:worktree 有未提交更改时确认文案追加警告。删除始终弹确认框,所以
+    // 用不到三态 —— 预检失败时少一行警告文案,不会变成静默放行。
+    const dirtyWorktree =
+      (await resolveWorktreeRemovalPreflight(session.id, session.deviceLinkDeviceId)) === 'dirty';
     const ok = await confirmDialog({
       title: t('ccAgent.sidebar.confirmDelete.title'),
       description:
@@ -529,7 +544,13 @@ export function SessionContentHeader({
       )}
 
       {!isEditing && (
-        <DropdownMenu>
+        // 菜单打开就把归档/删除的 dirty 预检发出去:用户从展开菜单到点条目至少
+        // 一次反应时间,足够这次 git status 跑完,点下去时命中缓存、零等待。
+        <DropdownMenu
+          onOpenChange={(open) => {
+            if (open) prefetchDirtyWorktreeForRemoval(session.id, session.deviceLinkDeviceId);
+          }}
+        >
           <DropdownMenuTrigger asChild>
             <button
               className={cn(

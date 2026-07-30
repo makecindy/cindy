@@ -52,6 +52,47 @@ describe('remoteProjectsStore', () => {
     setRemoteReseedImpl(null);
     remoteProjectsStore.clear();
     remoteProjectsStore.__resetPendingTitlePreviewForTest();
+    // 钉子刻意不随 clear() 消失(见 pinnedOrigins),所以测试间必须显式清,否则会串用例。
+    remoteProjectsStore.__resetPinnedOriginsForTest();
+  });
+
+  describe('origin 钉子(pinSessionOrigin)', () => {
+    it('远程新建会话后 origin 立刻可判定,即使权威快照还没到', () => {
+      remoteProjectsStore.pinSessionOrigin('dev-B', 'new-1');
+      // 传输层据此走隧道 —— 没有钉子时它返回 undefined,首条消息就发给本机 maker。
+      expect(getSessionDeviceId('new-1')).toBe('dev-B');
+    });
+
+    it('钉子只影响 origin 判定,不伪造会话行', () => {
+      remoteProjectsStore.pinSessionOrigin('dev-B', 'new-1');
+      // 会话进列表仍等权威快照:侧边栏不该出现一条字段全靠猜的行。
+      expect(remoteProjectsStore.getMergedRemoteSessions()).toHaveLength(0);
+      expect(remoteProjectsStore.getDeviceSessions('dev-B')).toHaveLength(0);
+    });
+
+    it('权威快照到达后归属不变,且该会话正常进入列表', () => {
+      remoteProjectsStore.pinSessionOrigin('dev-B', 'new-1');
+      remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('new-1'), mk('s2')]);
+      expect(getSessionDeviceId('new-1')).toBe('dev-B');
+      expect(remoteProjectsStore.getMergedRemoteSessions()).toHaveLength(2);
+    });
+
+    it('钉子跨 clear() 存活:relay 瞬时重连不该让远程会话看起来像本机会话', () => {
+      remoteProjectsStore.pinSessionOrigin('dev-B', 'new-1');
+      remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('new-1')]);
+      remoteProjectsStore.clear();
+      // 分片没了(镜像随链路重建),但归属仍然成立 —— 否则重建窗口里的操作会落到本机执行。
+      expect(remoteProjectsStore.getMergedRemoteSessions()).toHaveLength(0);
+      expect(getSessionDeviceId('new-1')).toBe('dev-B');
+    });
+
+    it('重复钉同一条是幂等的', () => {
+      remoteProjectsStore.pinSessionOrigin('dev-B', 'new-1');
+      const before = remoteProjectsStore.getMergedRemoteSessions();
+      remoteProjectsStore.pinSessionOrigin('dev-B', 'new-1');
+      expect(remoteProjectsStore.getMergedRemoteSessions()).toBe(before);
+      expect(getSessionDeviceId('new-1')).toBe('dev-B');
+    });
   });
 
   it('stamps device-link origin, merges sessions, and registers sessionId→deviceId', () => {

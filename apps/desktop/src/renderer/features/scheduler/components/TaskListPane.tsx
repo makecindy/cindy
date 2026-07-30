@@ -97,6 +97,17 @@ export function TaskListPane({
     () => new Set(runtimeSnapshot?.waitingSchedules.map((waiting) => waiting.scheduleId) ?? []),
     [runtimeSnapshot],
   );
+  // 已触发但 prompt 还排在目标会话队列里等派发的任务（引擎 phase 'queued'）。
+  // 它们不占执行槽，副标题也要与"没抢到槽"区分开。
+  const queuedScheduleIds = useMemo(
+    () =>
+      new Set(
+        (runtimeSnapshot?.inFlightRuns ?? [])
+          .filter((run) => run.phase === 'queued')
+          .map((run) => run.scheduleId),
+      ),
+    [runtimeSnapshot],
+  );
   const groups = useMemo(() => {
     const grouped = new Map<string, Schedule[]>();
     for (const schedule of schedules) {
@@ -257,11 +268,14 @@ export function TaskListPane({
                         waitingForResources={
                           waitingScheduleIds.has(s.id) && runtimeSnapshot
                             ? {
-                                inFlight: runtimeSnapshot.inFlight,
+                                // 分子用 slotsInUse 而不是 inFlight:后者含排队中的纯
+                                // 等待项,拿它显示会出现"8/8 满负荷"却没人在跑的错觉。
+                                inFlight: runtimeSnapshot.slotsInUse,
                                 maxConcurrentRuns: runtimeSnapshot.maxConcurrentRuns,
                               }
                             : undefined
                         }
+                        queuedForSession={queuedScheduleIds.has(s.id)}
                       />
                     </li>
                   ))}

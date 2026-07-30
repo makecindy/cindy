@@ -582,6 +582,13 @@
       "when": 1785150667133,
       "tag": "0082_daffy_calypso",
       "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "6",
+      "when": 1785287922480,
+      "tag": "0083_gray_katie_power",
+      "breakpoints": true
     }
   ]
 }

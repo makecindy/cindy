@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import manifest, {
 	desktopUnitWorkerCount,
 } from "../test-workspaces.config.mjs";
+import { nodeWebstorageEnabled } from "../shared/node-webstorage.mjs";
 import {
 	acquireTestGateLock,
 	classifyTestGateLockProbeError,
@@ -151,7 +152,7 @@ test("orca workflow unit tier uses its own declared test runner", () => {
 	assert.deepEqual(orcaWorkspace.tiers.unit.command, {
 		type: "packageBin",
 		bin: "vitest",
-		args: ["run", "--maxWorkers=1"],
+		args: ["run", "--pool=threads", "--maxWorkers=1"],
 	});
 });
 
@@ -168,6 +169,9 @@ test("unit workspace concurrency reserves the full worker budget for heavy works
 	assert.equal(desktop.tiers.unit.execution, "exclusive");
 	assert.deepEqual(desktop.tiers.unit.command.args, [
 		"run",
+		// win32 pins forks: threads segfaults the desktop suite there, and the
+		// LaunchServices churn that threads exists to avoid is macOS-only.
+		`--pool=${nodeWebstorageEnabled() || process.platform === "win32" ? "forks" : "threads"}`,
 		`--maxWorkers=${desktopUnitWorkerCount()}`,
 	]);
 	assert.equal(desktopUnitWorkerCount(1), 1);
@@ -175,13 +179,63 @@ test("unit workspace concurrency reserves the full worker budget for heavy works
 	assert.equal(desktopUnitWorkerCount(32), 8);
 	assert.equal(desktopUnitWorkerCount(Number.NaN), 1);
 	assert.equal(mobile.tiers.unit.execution, "exclusive");
-	assert.deepEqual(mobile.tiers.unit.command.args, ["run", "--maxWorkers=4"]);
+	assert.deepEqual(mobile.tiers.unit.command.args, [
+		"run",
+		"--pool=threads",
+		"--maxWorkers=4",
+	]);
 	assert.equal(makerCore.tiers.unit.execution, undefined);
 	assert.deepEqual(makerCore.tiers.unit.command, {
 		type: "packageBin",
 		bin: "vitest",
-		args: ["run", "--maxWorkers=1"],
+		args: ["run", "--pool=forks", "--maxWorkers=1"],
 	});
+});
+
+test("unit tier pins an explicit vitest pool, forks only by documented exception", () => {
+	// The default forks pool recycles one child process per test file, which on
+	// 2026-07-30 sustained ~21 LaunchServices check-ins/second and took down
+	// macOS 27.0 beta's launchservicesd mid-gate (empty running-application
+	// registry -> no frontmost app -> dead keyboard, no menu bar, vanishing Dock
+	// tiles). A workspace added later must not silently inherit that churn, and
+	// opting back into forks must be a deliberate edit to this list.
+	// Desktop's entry is conditional: it stays on forks on a Node whose
+	// webstorage globals force the execArgv that worker threads cannot take,
+	// and on win32, where threads segfaults the suite outright (native addon
+	// finalizers crashing in isolate teardown) and no launchservicesd exists
+	// for the churn to hurt.
+	const forksByException = [
+		...(nodeWebstorageEnabled() || process.platform === "win32"
+			? ["apps/desktop"]
+			: []),
+		"packages/maker-core",
+	];
+	const unpinned = [];
+	const onForks = [];
+	for (const workspace of manifest.workspaces) {
+		const tier = workspace.tiers?.unit;
+		if (!tier || (tier.status !== "required" && tier.status !== "manual"))
+			continue;
+		if (tier.command?.type !== "packageBin" || tier.command.bin !== "vitest")
+			continue;
+		const args = tier.command.args ?? [];
+		if (args.includes("--pool=forks")) onForks.push(workspace.cwd);
+		else if (!args.includes("--pool=threads")) unpinned.push(workspace.cwd);
+	}
+	assert.deepEqual(unpinned, []);
+	assert.deepEqual(onForks.sort(), [...forksByException].sort());
+});
+
+test("nodeWebstorageEnabled detects the globals that force the webstorage flag", () => {
+	assert.equal(nodeWebstorageEnabled({}), false);
+	assert.equal(nodeWebstorageEnabled({ localStorage: undefined }), false);
+	assert.equal(nodeWebstorageEnabled({ localStorage: {} }), true);
+	// Node 25's stub is an object whose methods are all missing; presence is what
+	// matters here, because that alone displaces jsdom's implementation.
+	assert.equal(
+		nodeWebstorageEnabled({ localStorage: Object.create(null) }),
+		true,
+	);
 });
 
 test("normalizeRelPath makes path matching independent of host path separators", () => {
@@ -915,10 +969,28 @@ test("test gate lock reports the holder, waits, and acquires after release", asy
 	}
 });
 
+// A real probe round connects to every candidate port, and a port that accepts
+// the connection without answering only resolves once the probe socket times
+// out. So the window that waits for the WAIT report has to be far wider than a
+// single probe round, otherwise a slow round loses the race and the assertion
+// fails for reasons unrelated to the lock protocol.
+const REAL_LOCK_WAIT_WINDOW_MS = 30_000;
+const REAL_LOCK_ACQUIRE_TIMEOUT_MS = 60_000;
+
+function raceWithDeadline(candidates, deadlineMs, deadlineValue) {
+	let timer;
+	const deadline = new Promise((resolve) => {
+		timer = setTimeout(() => resolve(deadlineValue), deadlineMs);
+	});
+	return Promise.race([...candidates, deadline]).finally(() => {
+		clearTimeout(timer);
+	});
+}
+
 test("two real test gate lock holders serialize on the same identity", async () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "test-gate-real-lock-"));
 	let firstLock;
-	let secondLock;
+	let secondLockPromise;
 	let reportWaiting;
 	const waiting = new Promise((resolve) => {
 		reportWaiting = resolve;
@@ -929,30 +1001,39 @@ test("two real test gate lock holders serialize on the same identity", async () 
 			owner: { pid: 41, tier: "unit", cwd: path.join(root, "first") },
 			output: () => {},
 		});
-		const secondLockPromise = acquireTestGateLock({
+		secondLockPromise = acquireTestGateLock({
 			repoRoot: root,
 			owner: { pid: 42, tier: "db", cwd: path.join(root, "second") },
-			timeoutMs: 2_000,
+			timeoutMs: REAL_LOCK_ACQUIRE_TIMEOUT_MS,
 			retryDelayMs: 10,
 			output: reportWaiting,
-		}).then((lock) => {
-			secondLock = lock;
-			return lock;
 		});
-		const outcome = await Promise.race([
-			waiting.then(() => "waiting"),
-			secondLockPromise.then(() => "acquired"),
-			new Promise((resolve) => setTimeout(() => resolve("timed-out"), 1_000)),
-		]);
+		// A failing assertion below jumps straight to `finally` while this
+		// acquisition is still running. Attach a no-op handler so an eventual
+		// rejection is never unhandled; the real await and release happen in
+		// `finally`, otherwise a lock bound after the failure keeps its listener
+		// open and `node --test` never exits.
+		secondLockPromise.catch(() => {});
+
+		const outcome = await raceWithDeadline(
+			[waiting.then(() => "waiting"), secondLockPromise.then(() => "acquired")],
+			REAL_LOCK_WAIT_WINDOW_MS,
+			"timed-out",
+		);
 		assert.equal(outcome, "waiting");
 
 		await firstLock.release();
 		firstLock = undefined;
-		await secondLockPromise;
+		const secondLock = await secondLockPromise;
 		assert.ok(secondLock.port >= 49_152);
 	} finally {
-		await secondLock?.release();
+		// Order matters: releasing the first lock lets the second acquisition
+		// settle immediately instead of waiting out its own timeout.
 		await firstLock?.release();
+		await secondLockPromise?.then(
+			(lock) => lock.release(),
+			() => {},
+		);
 		fs.rmSync(root, { recursive: true, force: true });
 	}
 });

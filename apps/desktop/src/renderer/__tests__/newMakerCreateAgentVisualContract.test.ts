@@ -99,10 +99,16 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
       'onPermissionModeDidChange={handlePermissionModeDidChange}',
       'onProviderDidChange={handleProviderDidChange}',
       'vendorKey={draft.vendor ===',
-      'attachmentState={attachmentState}',
+      // #807 第二十二轮:仍然由调用方显式持有(ChatInput 不 fallback 内部一份),但远程草稿下
+      // 包了一层闸门 —— 拒绝路径型附件,因为那是控制端绝对路径,发到对端读不到或读到无关文件。
+      'attachmentState={guardedAttachmentState}',
       'draftKey={NEW_MAKER_DRAFT_KEY}',
       'extraDirs={effectiveExtraDirs}',
-      'onExtraDirsChange={handleExtraDirsChange}',
+      // #807 第二十二轮**刻意收窄**原来「+ 始终能加引用目录」这条:远程草稿不下传 onChange,
+      // ExtraDirsButton 据此不渲染引用目录段。原因是它开的是控制端原生目录对话框,选出的本机
+      // 路径发到对端会被 validateExtraDirs 静默丢掉、或撞上对端同名的无关目录 —— chip 显示的
+      // 并非真实授予的上下文。本机草稿行为不变;把 picker 路由到对端后恢复,见 issue #1012。
+      'onExtraDirsChange={isDeviceLinkDraft ? undefined : handleExtraDirsChange}',
       'onNewGoal={(text) =>',
       'rememberedEffortByModel={isDeviceLinkDraft ? undefined : draft.effortByModel}',
       'onRememberedEffortChange={',

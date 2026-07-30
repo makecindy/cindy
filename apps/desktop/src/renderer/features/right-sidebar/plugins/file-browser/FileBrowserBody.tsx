@@ -708,8 +708,8 @@ function TreeHeader({
   onRefresh: () => void;
 }) {
   const { t } = useTranslation();
-  // workdir basename:POSIX 用最后一段(/Users/sam/Documents/XDMaker → XDMaker);
-  // Windows 'C:\\Users\\sam\\XDMaker' 也按 / 和 \ 切。空值兜底空串。
+  // workdir basename:POSIX 用最后一段(/Users/sam/Documents/Cindy → Cindy);
+  // Windows 'C:\\Users\\sam\\Cindy' 也按 / 和 \ 切。空值兜底空串。
   const displayName = workdir.split(/[/\\]/).filter(Boolean).pop() ?? '';
 
   return (

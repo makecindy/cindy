@@ -72,7 +72,18 @@ export interface CodexMcpThreadContextArgs {
   threadId: string;
   sessionId: string;
   workingDir: string;
+  /**
+   * SSH remote 会话的 host id。cindy_memory 的 store 定位键要靠它区分
+   * 「远端路径」与「本地同名路径」(buildMemoryScopeKey), 缺省 = 本地会话。
+   */
+  remoteHostId?: string;
   vendorOptions: Record<string, unknown>;
+}
+
+export interface CodexReviewerRouteContextArgs {
+  threadId: string;
+  sessionId: string;
+  model: string;
 }
 
 /**
@@ -264,6 +275,26 @@ export interface AgentDeps {
   getRemoteCodexTransport?: (remoteHostId: string) => import('./codex/app-server/transport.js').Transport;
 
   /**
+   * Codex 专用:读**这个 thread 本次实际出口**的出站代理路径判定,用于把「后端不可达」
+   * 的通用猜测换成实测事实(走了哪个代理 / 确认直连 / 配了但用不了 / 判定没问出来)。
+   *
+   * 必须传 threadId:codex 的出口随会话选定的 provider 变(订阅直连、网关、xAI、
+   * 自定义供应商),host 侧要靠它定位本次请求真正打的上游。拿不到对应记录时**必须**
+   * 返回 null(例:本次请求没经过 loopback proxy),而不是回退到「最近一条」——
+   * 报一条本次没走过的路径比不报更糟。
+   *
+   * 只在**本地** session 的 retry-loop 终局升级时读一次,不进任何热路径;实现必须是
+   * 同步、只读、不抛的内存快照读取(desktop 侧 = outbound-proxy-resolver 的快照 +
+   * codex-proxy-host 的 thread→上游映射)。返回的 proxy 字段必须已脱敏 —— 它会进
+   * 用户可见的错误消息。
+   *
+   * 缺省 / undefined / 返回 null → 保留原有的通用排查文案,不降级任何行为。
+   */
+  getOutboundPathFact?: (
+    ctx: { threadId?: string },
+  ) => import('./codex/retry-escalation.js').OutboundPathFact | null;
+
+  /**
    * Maker Memory 顶层单例 (host 注入). 当 runtimeConfig.makerMemoryEnabled === true 时,
    * agent.startSession 会从这里拉当前 workdir 的 MEMORY.md 索引拼进 system prompt;
    * cindy_memory MCP server 也通过 host 端的 createDesktopMcpProviders({ memory: { getManager } })
@@ -326,6 +357,18 @@ export interface AgentDeps {
     threadId: string;
     text: string;
   }) => void;
+
+  /**
+   * Codex 专用：登记 Guardian 子线程回到父业务 session 时应使用的主模型。
+   *
+   * Codex app-server 的模型目录由共享进程持有，不能代表单个 session 的实际
+   * Provider。host/proxy 通过 Guardian 请求的 x-codex-parent-thread-id 找回
+   * 此上下文，在非 OpenAI 路由把隐藏 codex-auto-review 改写为当前主模型。
+   *
+   * 只有明确返回 true 才表示路由已就绪；缺省、false 或抛错都必须继续使用
+   * user reviewer，不能让未知路由进入无人值守审批。
+   */
+  registerCodexReviewerRouteContext?: (args: CodexReviewerRouteContextArgs) => boolean;
 
   /**
    * Claude 专用: host 明确认定可无提示执行的只读工具名, 透传到 SDK
@@ -418,6 +461,14 @@ export interface AgentDeps {
      * but typed as unknown here to avoid cross-package dependency.
      */
     onApprovalRequest?: (params: unknown) => Promise<unknown>;
+    /**
+     * 本 session 的 Maker Memory 注入开关 (startSession 时已按 per-session flag
+     * + manager 就绪归一)。host 据此决定是否把 cindy_memory 以 http 形态经
+     * bridge 注进远端 startParams.mcpServers — prompt 段 (rules + MEMORY.md
+     * index) 由 maker-core 自己拼, 两侧必须同源同值, 否则模型被 rules 引导去
+     * 调不存在的工具。缺省视为 false。
+     */
+    makerMemoryEnabled?: boolean;
   }) => Promise<Query>;
 }
 

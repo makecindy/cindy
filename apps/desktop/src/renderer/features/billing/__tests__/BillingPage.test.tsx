@@ -2,7 +2,10 @@
 
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BillingSubscription } from '../../../../shared/billing';
+import type {
+  BillingSubscription,
+  BillingSubscriptionPortalResult,
+} from '../../../../shared/billing';
 
 const i18n = {
   language: 'en',
@@ -76,6 +79,7 @@ vi.mock('qrcode', () => ({
 }));
 
 import { BillingPage } from '../BillingPage';
+import * as QRCode from 'qrcode';
 
 beforeEach(() => {
   uiMocks.confirm.mockReset().mockResolvedValue(false);
@@ -83,6 +87,20 @@ beforeEach(() => {
   uiMocks.toastSuccess.mockReset();
   authState.dataOwnerId = 'account-fixture';
 });
+
+async function openSubscriptionManagementMenu() {
+  const trigger = await screen.findByText('billing.settings.subscriptionCard.manageAction');
+  fireEvent.pointerDown(
+    trigger.closest('button')!,
+    { button: 0, ctrlKey: false },
+  );
+  await screen.findByRole('menu');
+}
+
+async function selectSubscriptionManagementAction(action: string) {
+  await openSubscriptionManagementMenu();
+  fireEvent.click(await screen.findByRole('menuitem', { name: action }));
+}
 
 describe('BillingPage remote catalog rendering', () => {
   beforeEach(() => {
@@ -364,6 +382,46 @@ describe('BillingPage remote catalog rendering', () => {
     expect(screen.getByText('billing.usage.detailsUnavailable')).toBeTruthy();
   });
 
+  it('does not describe missing plan credits as incomplete history when there is no subscription', async () => {
+    window.electronAPI.billing.getCreditUsage = vi.fn(async () => ({
+      available: '3',
+      plan: { remaining: '0', used: null, total: null },
+      purchased: { remaining: '0', used: '0', total: '0' },
+      promotional: { remaining: '3', used: '0', total: '3' },
+      promotionalGrants: [],
+      promotionalGrantsComplete: true,
+      promotionalGrantConsistency: 'OBSERVED' as const,
+      ledgerUpdatedAt: null,
+      scale: 9 as const,
+      observedAt: '2026-07-23T12:00:00Z',
+    }));
+
+    render(<BillingPage />);
+
+    expect(await screen.findByText('billing.usage.noPlanCredits')).toBeTruthy();
+    expect(screen.queryByText('billing.usage.historyUnavailable')).toBeNull();
+  });
+
+  it('keeps nonzero plan balances truthful when there is no subscription', async () => {
+    window.electronAPI.billing.getCreditUsage = vi.fn(async () => ({
+      available: '3',
+      plan: { remaining: '3', used: null, total: null },
+      purchased: { remaining: '0', used: '0', total: '0' },
+      promotional: { remaining: '0', used: '0', total: '0' },
+      promotionalGrants: [],
+      promotionalGrantsComplete: true,
+      promotionalGrantConsistency: 'OBSERVED' as const,
+      ledgerUpdatedAt: null,
+      scale: 9 as const,
+      observedAt: '2026-07-23T12:00:00Z',
+    }));
+
+    render(<BillingPage />);
+
+    expect(await screen.findByText('billing.usage.historyUnavailable')).toBeTruthy();
+    expect(screen.queryByText('billing.usage.noPlanCredits')).toBeNull();
+  });
+
   it('shows current plan price, included credits, status, and renewal date', async () => {
     i18n.resolvedLanguage = 'ja';
     window.electronAPI.billing.getCurrentSubscription = vi.fn(async () => ({
@@ -403,7 +461,10 @@ describe('BillingPage remote catalog rendering', () => {
     expect(
       screen.getByText('billing.settings.subscriptionCard.renewsAt:{"date":"2026/08/01"}'),
     ).toBeTruthy();
-    expect(screen.getByText('billing.settings.subscriptionCard.changeAction')).toBeTruthy();
+    await openSubscriptionManagementMenu();
+    expect(
+      screen.getByRole('menuitem', { name: 'billing.settings.subscriptionCard.changeAction' }),
+    ).toBeTruthy();
   });
 
   it('preserves the server order for offers within the same product', async () => {
@@ -666,7 +727,12 @@ describe('BillingPage remote catalog rendering', () => {
 
     const view = render(<BillingPage />);
     // 服务端仍下发的动作以服务端为准展示，不用本地时钟提前藏码。
-    expect(await screen.findByAltText('billing.checkout.qrAlt')).toBeTruthy();
+    const qrCode = await screen.findByAltText('billing.checkout.qrAlt');
+    expect(qrCode.parentElement?.querySelectorAll('img')).toHaveLength(2);
+    expect(vi.mocked(QRCode.toDataURL)).toHaveBeenCalledWith(
+      order.paymentAction.value,
+      expect.objectContaining({ errorCorrectionLevel: 'H', margin: 4, width: 320 }),
+    );
     expect(screen.queryByText('billing.checkout.actionExpiredBody')).toBeNull();
 
     // 服务端判定过期后轮询响应把动作置空：切换为过期提示，不再显示二维码。
@@ -833,8 +899,13 @@ describe('BillingPage remote catalog rendering', () => {
 
     render(<BillingPage />);
 
-    expect(await screen.findByText('billing.settings.subscriptionCard.action')).toBeTruthy();
-    expect(screen.queryByText('billing.settings.subscriptionCard.changeAction')).toBeNull();
+    await openSubscriptionManagementMenu();
+    expect(
+      await screen.findByRole('menuitem', { name: 'billing.settings.subscriptionCard.action' }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole('menuitem', { name: 'billing.settings.subscriptionCard.changeAction' }),
+    ).toBeNull();
     expect(checkout.startSubscription).not.toHaveBeenCalled();
   });
 
@@ -865,7 +936,7 @@ describe('BillingPage remote catalog rendering', () => {
     }));
 
     render(<BillingPage />);
-    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
+    await selectSubscriptionManagementAction('billing.settings.subscriptionCard.action');
 
     const dialog = await screen.findByRole('dialog');
     const currentPlan = within(dialog).getByRole('button', { name: /Configured subscription/ });
@@ -1308,6 +1379,7 @@ describe('BillingPage plan change', () => {
     refreshPlanChange: vi.fn(),
     cancelPlanChange: vi.fn(),
     openPaymentRedirect: vi.fn(async () => ({ success: true })),
+    openSubscriptionPortal: vi.fn(),
   });
 
   const install = (billing: ReturnType<typeof billingMocks>) => {
@@ -1334,6 +1406,90 @@ describe('BillingPage plan change', () => {
     });
   });
 
+  it('refreshes when Cindy regains focus before the Stripe portal launch resolves', async () => {
+    const billing = install(billingMocks());
+    let resolvePortal!: (result: BillingSubscriptionPortalResult) => void;
+    billing.openSubscriptionPortal.mockImplementation(
+      () => new Promise<BillingSubscriptionPortalResult>((resolve) => {
+        resolvePortal = resolve;
+      }),
+    );
+
+    render(<BillingPage />);
+    await openSubscriptionManagementMenu();
+    expect(
+      screen.getByRole('menuitem', { name: 'billing.settings.subscriptionCard.changeAction' }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('menuitem', { name: 'billing.settings.subscriptionCard.portalAction' }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('menuitem', { name: 'billing.settings.subscriptionCard.cancelAction' }),
+    ).toBeTruthy();
+    const portalAction = screen.getByRole('menuitem', {
+      name: 'billing.settings.subscriptionCard.portalAction',
+    });
+    await act(async () => {
+      fireEvent.click(portalAction);
+      fireEvent.click(portalAction);
+    });
+
+    expect(billing.openSubscriptionPortal).toHaveBeenCalledWith();
+    expect(billing.openSubscriptionPortal).toHaveBeenCalledTimes(1);
+
+    const catalogCalls = billing.getCatalog.mock.calls.length;
+    const subscriptionCalls = billing.getCurrentSubscription.mock.calls.length;
+    const balanceCalls = billing.getBalance.mock.calls.length;
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    await waitFor(() => {
+      expect(billing.getCatalog).toHaveBeenCalledTimes(catalogCalls + 1);
+      expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(subscriptionCalls + 1);
+      expect(billing.getBalance).toHaveBeenCalledTimes(balanceCalls + 1);
+    });
+
+    await act(async () => resolvePortal({ success: true }));
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(subscriptionCalls + 1);
+  });
+
+  it('refreshes billing after a timed-out Stripe portal launch', async () => {
+    const billing = install(billingMocks());
+    billing.openSubscriptionPortal.mockResolvedValue({ success: false, timedOut: true });
+
+    render(<BillingPage />);
+    await selectSubscriptionManagementAction('billing.settings.subscriptionCard.portalAction');
+    await waitFor(() => {
+      expect(uiMocks.toastError).toHaveBeenCalledWith('billing.settings.subscriptionCard.portalFailed');
+    });
+
+    const catalogCalls = billing.getCatalog.mock.calls.length;
+    const subscriptionCalls = billing.getCurrentSubscription.mock.calls.length;
+    const balanceCalls = billing.getBalance.mock.calls.length;
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    await waitFor(() => {
+      expect(billing.getCatalog).toHaveBeenCalledTimes(catalogCalls + 1);
+      expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(subscriptionCalls + 1);
+      expect(billing.getBalance).toHaveBeenCalledTimes(balanceCalls + 1);
+    });
+  });
+
+  it('does not show Stripe management in the menu for an Alipay subscription', async () => {
+    const billing = billingMocks();
+    billing.getCurrentSubscription = vi.fn(async () => ({
+      subscription: { ...activeSubscription(), provider: 'alipay' },
+    }));
+    install(billing);
+
+    render(<BillingPage />);
+
+    await screen.findByText('Plus plan');
+    await openSubscriptionManagementMenu();
+    expect(
+      screen.queryByRole('menuitem', { name: 'billing.settings.subscriptionCard.portalAction' }),
+    ).toBeNull();
+    expect(billing.openSubscriptionPortal).not.toHaveBeenCalled();
+  });
+
   it('confirms provider-neutral cancellation and keeps credits unchanged until period end', async () => {
     const billing = install(billingMocks());
     billing.cancelCurrentSubscription.mockResolvedValue({
@@ -1344,7 +1500,7 @@ describe('BillingPage plan change', () => {
     uiMocks.confirm.mockResolvedValueOnce(true);
 
     render(<BillingPage />);
-    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.cancelAction'));
+    await selectSubscriptionManagementAction('billing.settings.subscriptionCard.cancelAction');
 
     await waitFor(() => expect(billing.cancelCurrentSubscription).toHaveBeenCalledWith());
     expect(uiMocks.confirm).toHaveBeenCalledWith(
@@ -1360,7 +1516,10 @@ describe('BillingPage plan change', () => {
     expect(
       screen.getByText((text) => text.startsWith('billing.settings.subscriptionCard.endsAt')),
     ).toBeTruthy();
-    expect(screen.queryByText('billing.settings.subscriptionCard.cancelAction')).toBeNull();
+    await openSubscriptionManagementMenu();
+    expect(
+      screen.queryByRole('menuitem', { name: 'billing.settings.subscriptionCard.cancelAction' }),
+    ).toBeNull();
   });
 
   it.each(['INCOMPLETE', 'CANCELED', 'INCOMPLETE_EXPIRED'] as const)(
@@ -1404,7 +1563,7 @@ describe('BillingPage plan change', () => {
     view.rerender(<BillingPage />);
 
     await waitFor(() => expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(2));
-    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.changeAction'));
+    await selectSubscriptionManagementAction('billing.settings.subscriptionCard.changeAction');
     expect(await screen.findByText('Alipay-only Max')).toBeTruthy();
     expect(screen.queryByText('Max plan')).toBeNull();
   });
@@ -1435,7 +1594,10 @@ describe('BillingPage plan change', () => {
     await waitFor(() => expect(billing.getCurrentSubscription).toHaveBeenCalledTimes(2));
     expect(await screen.findByText('billing.subscriptionStatus.ACTIVE')).toBeTruthy();
     expect(screen.queryByText('billing.settings.subscriptionCard.unavailable')).toBeNull();
-    expect(screen.getByText('billing.settings.subscriptionCard.changeAction')).toBeTruthy();
+    await openSubscriptionManagementMenu();
+    expect(
+      screen.getByRole('menuitem', { name: 'billing.settings.subscriptionCard.changeAction' }),
+    ).toBeTruthy();
   });
 
   it('locks cancellation before confirmation resolves', async () => {
@@ -1448,9 +1610,8 @@ describe('BillingPage plan change', () => {
     );
 
     render(<BillingPage />);
-    const cancelButton = await screen.findByText('billing.settings.subscriptionCard.cancelAction');
-    fireEvent.click(cancelButton);
-    fireEvent.click(cancelButton);
+    await selectSubscriptionManagementAction('billing.settings.subscriptionCard.cancelAction');
+    await selectSubscriptionManagementAction('billing.settings.subscriptionCard.cancelAction');
 
     expect(uiMocks.confirm).toHaveBeenCalledTimes(1);
     expect(billing.cancelCurrentSubscription).not.toHaveBeenCalled();
@@ -1468,21 +1629,24 @@ describe('BillingPage plan change', () => {
     );
 
     const view = render(<BillingPage />);
-    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.cancelAction'));
+    await selectSubscriptionManagementAction('billing.settings.subscriptionCard.cancelAction');
     expect(uiMocks.confirm).toHaveBeenCalledTimes(1);
 
     // 弹窗还开着时账号被换掉:section 按 dataOwnerId 重挂,但弹窗挂在 AuthProvider
     // 之外仍然存活。此时确认不能落到新账号的订阅上。
     authState.dataOwnerId = 'account-switched';
     view.rerender(<BillingPage />);
-    await screen.findByText('billing.settings.subscriptionCard.cancelAction');
+    await openSubscriptionManagementMenu();
+    expect(
+      screen.getByRole('menuitem', { name: 'billing.settings.subscriptionCard.cancelAction' }),
+    ).toBeTruthy();
 
     await act(async () => resolveConfirm(true));
 
     expect(billing.cancelCurrentSubscription).not.toHaveBeenCalled();
   });
 
-  it('keeps the loading cancellation accessible and disables competing actions', async () => {
+  it('disables subscription management while cancellation is pending', async () => {
     const billing = billingMocks();
     billing.getCurrentSubscription = vi.fn(async () => ({
       subscription: activeSubscription({
@@ -1508,12 +1672,12 @@ describe('BillingPage plan change', () => {
     uiMocks.confirm.mockResolvedValueOnce(true);
 
     render(<BillingPage />);
-    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.cancelAction'));
+    await selectSubscriptionManagementAction('billing.settings.subscriptionCard.cancelAction');
 
     await waitFor(() => expect(billing.cancelCurrentSubscription).toHaveBeenCalledTimes(1));
     expect(
       screen
-        .getByRole('button', { name: 'billing.settings.subscriptionCard.cancelAction' })
+        .getByRole('button', { name: 'billing.settings.subscriptionCard.manageAction' })
         .hasAttribute('disabled'),
     ).toBe(true);
     const refreshButton = screen.getByRole('button', { name: 'billing.actions.refreshCatalog' });
@@ -1536,7 +1700,7 @@ describe('BillingPage plan change', () => {
     uiMocks.confirm.mockResolvedValueOnce(true);
 
     render(<BillingPage />);
-    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.cancelAction'));
+    await selectSubscriptionManagementAction('billing.settings.subscriptionCard.cancelAction');
 
     await waitFor(() =>
       expect(uiMocks.toastError).toHaveBeenCalledWith(
@@ -1545,7 +1709,10 @@ describe('BillingPage plan change', () => {
     );
     expect(billing.cancelCurrentSubscription).toHaveBeenCalledWith();
     expect(billing.getBalance).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('billing.settings.subscriptionCard.cancelAction')).toBeTruthy();
+    await openSubscriptionManagementMenu();
+    expect(
+      screen.getByRole('menuitem', { name: 'billing.settings.subscriptionCard.cancelAction' }),
+    ).toBeTruthy();
   });
 
   it('offers same-provider monthly plans in upgrade, same-tier, downgrade order', async () => {
@@ -1562,7 +1729,7 @@ describe('BillingPage plan change', () => {
     });
 
     render(<BillingPage />);
-    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.changeAction'));
+    await selectSubscriptionManagementAction('billing.settings.subscriptionCard.changeAction');
 
     await screen.findByText('billing.planChange.targetTitle');
     const dialog = screen.getByRole('dialog');
@@ -1643,7 +1810,7 @@ describe('BillingPage plan change', () => {
     });
 
     render(<BillingPage />);
-    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.changeAction'));
+    await selectSubscriptionManagementAction('billing.settings.subscriptionCard.changeAction');
     fireEvent.click((await screen.findByText('Max plan')).closest('button')!);
     fireEvent.click(await screen.findByText('billing.planChange.confirm'));
 
@@ -1671,7 +1838,7 @@ describe('BillingPage plan change', () => {
     install(billing);
 
     render(<BillingPage />);
-    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.changeAction'));
+    await selectSubscriptionManagementAction('billing.settings.subscriptionCard.changeAction');
 
     const dialog = await screen.findByRole('dialog');
     const currentButton = within(dialog)
@@ -1694,8 +1861,13 @@ describe('BillingPage plan change', () => {
     render(<BillingPage />);
 
     await screen.findByText('Plus plan');
-    expect(screen.queryByText('billing.settings.subscriptionCard.changeAction')).toBeNull();
-    expect(screen.getByText('billing.settings.subscriptionCard.action')).toBeTruthy();
+    await openSubscriptionManagementMenu();
+    expect(
+      screen.queryByRole('menuitem', { name: 'billing.settings.subscriptionCard.changeAction' }),
+    ).toBeNull();
+    expect(
+      screen.getByRole('menuitem', { name: 'billing.settings.subscriptionCard.action' }),
+    ).toBeTruthy();
     expect(billing.quotePlanChange).not.toHaveBeenCalled();
   });
 
@@ -1708,7 +1880,7 @@ describe('BillingPage plan change', () => {
 
     render(<BillingPage />);
 
-    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.changeAction'));
+    await selectSubscriptionManagementAction('billing.settings.subscriptionCard.changeAction');
     expect(await screen.findByText('billing.planChange.emptyTitle')).toBeTruthy();
     expect(screen.queryByText('Max plan')).toBeNull();
     expect(billing.quotePlanChange).not.toHaveBeenCalled();
@@ -1726,8 +1898,13 @@ describe('BillingPage plan change', () => {
       render(<BillingPage />);
 
       await screen.findByText('Plus plan');
-      expect(screen.queryByText('billing.settings.subscriptionCard.changeAction')).toBeNull();
-      expect(screen.getByText('billing.settings.subscriptionCard.action')).toBeTruthy();
+      await openSubscriptionManagementMenu();
+      expect(
+        screen.queryByRole('menuitem', { name: 'billing.settings.subscriptionCard.changeAction' }),
+      ).toBeNull();
+      expect(
+        screen.getByRole('menuitem', { name: 'billing.settings.subscriptionCard.action' }),
+      ).toBeTruthy();
     },
   );
 
@@ -1741,8 +1918,13 @@ describe('BillingPage plan change', () => {
     render(<BillingPage />);
 
     await screen.findByText('Plus plan');
-    expect(screen.queryByText('billing.settings.subscriptionCard.changeAction')).toBeNull();
-    expect(screen.getByText('billing.settings.subscriptionCard.action')).toBeTruthy();
+    await openSubscriptionManagementMenu();
+    expect(
+      screen.queryByRole('menuitem', { name: 'billing.settings.subscriptionCard.changeAction' }),
+    ).toBeNull();
+    expect(
+      screen.getByRole('menuitem', { name: 'billing.settings.subscriptionCard.action' }),
+    ).toBeTruthy();
   });
 
   it('keeps new selection enabled when no current subscription exists (no INCOMPLETE task)', async () => {
@@ -1817,7 +1999,7 @@ describe('BillingPage plan change', () => {
 
     render(<BillingPage />);
 
-    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.action'));
+    await selectSubscriptionManagementAction('billing.settings.subscriptionCard.action');
     fireEvent.click((await screen.findAllByText('Plus plan'))[0].closest('button')!);
     fireEvent.click(screen.getByText('stripe').closest('button')!);
     expect(screen.getByText('billing.actions.pay').closest('button')).toHaveProperty(
@@ -1834,7 +2016,7 @@ describe('BillingPage plan change', () => {
     );
 
     render(<BillingPage />);
-    fireEvent.click(await screen.findByText('billing.settings.subscriptionCard.changeAction'));
+    await selectSubscriptionManagementAction('billing.settings.subscriptionCard.changeAction');
     fireEvent.click(await screen.findByText('Max plan'));
 
     expect(await screen.findByText('billing.planChange.quoteRejected')).toBeTruthy();
@@ -1923,7 +2105,7 @@ describe('BillingPage plan change', () => {
     ).toBeNull();
     expect(screen.queryByText('billing.planChange.undo')).toBeNull();
 
-    fireEvent.click(screen.getByText('billing.settings.subscriptionCard.changeAction'));
+    await selectSubscriptionManagementAction('billing.settings.subscriptionCard.changeAction');
     expect(await screen.findByText('billing.planChange.targetTitle')).toBeTruthy();
     expect(billing.refreshPlanChange).not.toHaveBeenCalled();
   });

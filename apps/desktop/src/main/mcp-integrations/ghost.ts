@@ -611,7 +611,11 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         return {
           ok: false,
           errorCode: 'GHOST_NOT_FOUND',
-          message: '该插件需要 Cindy 账号，本地模式不可用；不要重试，改用本地可用方式。',
+          // 这条 message 是 model-visible 的 tool result,会被模型读到并可能回显进对话,
+          // 所以按用户可见口径写「未登录」而不是已废弃的「本地模式」(见
+          // i18n/glossary.json 的 not-signed-in 条目)。句尾的「本地可用方式」保留:
+          // 那个「本地」描述的是能力落在本机,不是账号状态名。
+          message: '该插件需要 Cindy 账号，未登录状态不可用；不要重试，改用本地可用方式。',
         };
       }
       // 用户图片过户:attachments 里的地址逐张落媒体总仓 + 记

@@ -140,6 +140,10 @@
 
 指不更换 TestFlight 或商店安装包、可通过 OTA 下发的 JS 与资源更新。当前先采用四语直译并登记为待讨论术语，避免与整包更新或测试版本更新混称。
 
+### Device
+
+device-link 里「可以选择在哪台机器上运行」这一维度，两端统一叫「设备」。desktop 的 machineSwitcher 本来就是 This device / このデバイス / 이 기기，mobile 原先用 computer 系（选择电脑 / パソコンを選択 / 컴퓨터 선택），2026-07 裁决为向 device 系对齐，与既有 device-code（设备码 / デバイスコード / 기기 코드）同口径。alsoAllowed 保留「电脑」系：指代桌面端物理机的文案（安装、导出、等待确认）换成「设备」反而不通中文，那是 desktop/PC 的意思，不是这里的目标维度。
+
 ### Device Code
 
 OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入的一次性代码。当前先采用各语言直译，作为待产品裁决术语登记，避免后续界面出现“设备代码／配对码／认证码”等多套说法。
@@ -151,6 +155,10 @@ OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入�
 ### Erika
 
 灵动岛角色皮肤名(设置页「图标皮肤」列表)。角色专名,四语统一保留拉丁原词,不做音译(避免「艾莉卡 / エリカ / 에리카」多套写法)。
+
+### Not signed in
+
+跳过登录后应用内的账号状态名（侧边栏账号胶囊、设置页资料卡、语音服务提示，以及 main 侧不走 locale 的 model-visible 文案——已知 mcp-integrations/ghost.ts 的 GHOST_NOT_FOUND tool result，它会被模型读到并可能回显进对话，#907 review 补上）。**约束范围不限于 locale JSON**：guard 只扫 locale 文件，这类硬编码文案要人工找（见 engineering-conventions §5.1「Slack / IM 侧的文案不在任何 locale 文件里」同类问题）。2026-07-29 产品口径：面向用户只说「未登录」，不再叫「本地模式」——后者听起来像另一种服务端连接方式，实际只是没有登录 Cindy 账号。「本地」仅用于描述数据落在本机（如资料卡副文案「数据仅保存在本机」），不作为状态名。代码内部标识（AuthState mode='local'、authEnterLocal IPC、data owner）不受本条约束，仍用 local。en 侧统一走 not signed in 一种说法（含 settings.userProfile.local 的 exit / exitFailed 两条当前无引用的文案：the not-signed-in state），不与 unauthenticated 混用——PR #907 review 指出过同一状态两种英文说法会让日后启用这些文案时 UI 自相矛盾。status 仍为 proposed：Not signed in 作为状态名尚未与设计侧正式过一遍。
 
 ### OpenClaw
 
@@ -166,15 +174,25 @@ OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入�
 
 ### CN
 
-中国大陆版登录页区域徽标上的标签值（DESIGN.md §16.3）。四语同值、**不翻译**——它是区域代号不是可译文案，所以把 en 原样写进各语言 translations（同 Agent 条目的做法），这让 caseStandardFor 生效、guard 能挡住 cn／Cn 之类的大小写漂移。forbidden 用条件形态（whenEn=CN）补另一半：大小写规则挡不住“被整体译走”，条件形态又能把拦截精确限定在英文源为 CN 的 key 上，不误伤别处正当的“国内”“中国版”表述。列的是最可能的自造说法，不求穷举。status 取 proposed 与 region-badge 一致：产品尚未拍板是否改用可译文案，改判后本条应随之作废而非沿用。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeCn`），口径与徽标完全一致：global 不标。
+中国大陆版登录页区域徽标上的标签值（DESIGN.md §16.3）。四语同值、**不翻译**——它是区域代号不是可译文案，所以把 en 原样写进各语言 translations（同 Agent 条目的做法），这让 caseStandardFor 生效、guard 能挡住 cn／Cn 之类的大小写漂移。forbidden 用条件形态（whenEn=CN）补另一半：大小写规则挡不住“被整体译走”，条件形态又能把拦截精确限定在英文源为 CN 的 key 上，不误伤别处正当的“国内”“中国版”表述。列的是最可能的自造说法，不求穷举。status 取 proposed 与 region-badge 一致：产品尚未拍板是否改用可译文案，改判后本条应随之作废而非沿用。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeCn`）与侧栏用户卡片版本行（`sidebar.user.regionCodeCn`），口径与徽标完全一致：global 不标；「哪些区域要标」的唯一事实源是 `apps/desktop/src/shared/regionCode.ts`。
 
 已确定禁用：`中国版（仅当英文含 CN）`（zh-CN）、`国内版（仅当英文含 CN）`（zh-CN）、`中国版（仅当英文含 CN）`（ja）、`중국판（仅当英文含 CN）`（ko）
 
 ### Dev
 
-dev 版登录页区域徽标上的标签值（DESIGN.md §16.3），四语同值、不翻译，理由同 region-code-cn。与 CN 不同的是 dev 还是个普通技术词：豁免的两条文案里“Always on in dev mode.”“dev builds may be authorized…”“dev 模式下始终开启”指的是开发模式而非本区域标签，小写本就正确（四语同 key 一并覆盖）。用 exempt 精确豁免这两条、而不是整条关掉 checkCase，是为了保住徽标值本身的大小写约束——这正是本条存在的意义。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeDev`），口径与徽标完全一致：global 不标。
+dev 版登录页区域徽标上的标签值（DESIGN.md §16.3），四语同值、不翻译，理由同 region-code-cn。与 CN 不同的是 dev 还是个普通技术词：豁免的两条文案里“Always on in dev mode.”“dev builds may be authorized…”“dev 模式下始终开启”指的是开发模式而非本区域标签，小写本就正确（四语同 key 一并覆盖）。用 exempt 精确豁免这两条、而不是整条关掉 checkCase，是为了保住徽标值本身的大小写约束——这正是本条存在的意义。2026-07-28 起同一代号也用于 submit_github_issue 的提交确认卡片与 issue 正文（`issueAgent.confirm.regionCodeDev`）与侧栏用户卡片版本行（`sidebar.user.regionCodeDev`），口径与徽标完全一致：global 不标；「哪些区域要标」的唯一事实源是 `apps/desktop/src/shared/regionCode.ts`。
 
 已确定禁用：`开发版（仅当英文含 Dev）`（zh-CN）、`開発版（仅当英文含 Dev）`（ja）、`개발판（仅当英文含 Dev）`（ko）
+
+### shortcut listener permission
+
+macOS TCC 的 kTCCServiceListenEvent(系统设置里叫「输入监控」)在 Cindy 内的对外称法。产品侧只按用途讲: 这个权限只服务语音输入快捷键的监听, 不讲系统实现, 所以 zh-CN 沿用设置页权限项已有的「监听权限」(settings.voiceInput.permissions.inputMonitoring.label), 不引入「输入监控」这个直译——后者听起来像 Cindy 在监控用户的全部输入, 与实际能力(只识别快捷键按键组合)不符, 反而制造隐私误解。禁用项都挂 whenEn 条件: 要引用 macOS 系统设置面板名本身时那是 OS 的 UI 名称, 不受本条约束。四语的比喻不统一(en listener / ja 監視 / ko 감지)是现状登记而非裁决——各语言内部一致但跨语言不同, 保持 proposed 等产品拍板, 先把清单摆出来防止继续在 listener / monitoring / detection 之间漂移。
+
+已确定禁用：`输入监控（仅当英文含 shortcut listener permission）`（zh-CN）、`入力監視（仅当英文含 shortcut listener permission）`（ja）、`입력 모니터링（仅当英文含 shortcut listener permission）`（ko）
+
+### Skip Sign-In
+
+登录页免账号入口的动作名（面板内文字按钮 + 登录服务不可用时的 error 步逃生按钮，#697 起取代原游客圆钮）。与 not-signed-in 成对：动作叫「跳过登录」，进入后的状态叫「未登录」。历史说法「本地模式」「游客登录」已废弃——前者暗示另一种服务端连接方式，后者在本产品里没有对应的 guest 账号概念（代码里 GuestRoute 等内部标识不受本条约束）。先登记 proposed：en 的 Title Case 形态（Skip Sign-In）与本仓其它按钮的句首大写风格不一致，待随登录页文案统一时裁决。
 
 ### Voice dictionary
 

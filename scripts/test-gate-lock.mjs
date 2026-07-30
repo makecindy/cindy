@@ -188,6 +188,11 @@ async function listenForLock(port, banner) {
 		socket.end(`${banner}\n`);
 	});
 	await listen(server, port);
+	// The lock lives only as long as its holder has real work in flight (a child
+	// test process, a timer, a pending file operation). Keeping the listener
+	// unref'd means a holder that forgets to release still exits instead of
+	// hanging its runner until the CI job times out.
+	server.unref();
 	return {
 		port,
 		release: () => close(server),

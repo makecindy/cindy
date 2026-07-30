@@ -8,7 +8,8 @@
  *   - addRef:加引用行(含出生信息);
  *   - removeRefs:业务删除自己名下引用(删会话/卸载意识);
  *   - ghostCanRead:意识面板供图的归属校验——该指纹是否「出生自本意识」或
- *     「在本意识的画廊引用里」。指纹只当查账钥匙,查无此账即拒。
+ *     「在本意识的画廊/引渡/寄存引用里」。指纹只当查账钥匙,查无此账即拒;
+ *   - ghostDepositUsageBytes / removeGhostDepositRef:寄存配额的计量与释放口。
  *
  * 所有函数接受可注入的 db。生产默认走 DbClient 的 drizzle 代理——本地库真身
  * 在独立 DB 工作线程,主进程侧的终结方法(run/all)经 RPC 返回 Promise,
@@ -35,6 +36,15 @@ function defaultDb(): LedgerDb {
  * 'ghost-grant':用户显式引渡给某意识的图(随 ghost_call attachments
  * 过户 / 拖进面板)——授权按张、永久,refId = 意识 id;与画廊 ref 一样计入
  * 归属校验(ghostCanRead)与"不被回收"。
+ * 'ghost-deposit':意识经 cindy 槽 deposit_media 寄存的媒体(用户在插件面板里
+ * 粘贴/拖入的图等,makecindy/cindy#784),refId = 意识 id。与 gallery / grant
+ * 一样计入归属校验与"不被回收",但**刻意独立成一类**,原因有三:
+ *   (a) 配额要单独算 —— 寄存有每意识字节上限(GHOST_CINDY_DEPOSIT_QUOTA_BYTES),
+ *       混进画廊就会让"出图多"挤掉"能存参考图";
+ *   (b) 画廊要干净 —— listGhostGallery 是意识的**作品**清单(面板重启回放),
+ *       用户粘进来的参考图不是作品;
+ *   (c) 生命周期要能收 —— 卸载意识时按本 refKind 精确清理寄存物
+ *       (uninstallGhostAndCleanup),不牵连画廊与引渡的既有语义。
  * 'integration-cache':集成下载缓存的 token→指纹索引行,
  * refId = `<集成名>:<token>`——(a) 回答"这个 token 下过没有"(指纹制下文件名
  * 不再是 token,没这行就只能重下);(b) 标明该 blob 归缓存策略管(总量上限 +
@@ -50,6 +60,7 @@ export type MediaRefKind =
   | 'im-inbox'
   | 'ghost-gallery'
   | 'ghost-grant'
+  | 'ghost-deposit'
   | 'import'
   | 'integration-cache'
   | 'profile-avatar';
@@ -185,8 +196,9 @@ export async function hasRef(
  *   - session-attachment / import:refId 就是会话 id,直接删;
  *   - message:refId 是消息 id,按出生会话(originSessionId)连坐删——
  *     会话没了,它名下消息的引用自然一起走;
- *   - **绝不**碰 ghost-gallery / ghost-grant:画廊/引渡是跨会话的持久引用,
- *     "删会话作品不陪葬"正是靠这两类 ref 存活。
+ *   - **绝不**碰 ghost-gallery / ghost-grant / ghost-deposit:画廊/引渡/寄存
+ *     是跨会话的持久引用,"删会话作品不陪葬"正是靠这几类 ref 存活
+ *     (寄存物同理:画布上的图不该因为删了某个会话就变得不能改)。
  * 引用删完后引用归零的 blob 交回收器,本函数不动字节仓。
  */
 export async function removeSessionRefs(
@@ -243,9 +255,13 @@ export async function removeRefs(
 }
 
 /**
- * 意识面板供图归属校验:该指纹「出生自本意识」「挂在本意识画廊」或「用户
- * 显式引渡给本意识(ghost-grant)」才放行。查无此账 = 拒(不区分"不存在"
- * 与"不属于你",不给探测空间)。
+ * 意识面板供图归属校验:该指纹「出生自本意识」「挂在本意识画廊」「用户
+ * 显式引渡给本意识(ghost-grant)」或「本意识寄存的(ghost-deposit)」才放行。
+ * 查无此账 = 拒(不区分"不存在"与"不属于你",不给探测空间)。
+ *
+ * 寄存计入本校验正是 #784 要买的东西:用户粘进面板的图寄存后与生成图同权,
+ * 面板取件、edit_image / edit_video 的源图校验(resolveOwnedMedia 走本函数)
+ * 一并成立 —— "画布上的图 = AI 能加工的图"。
  */
 export async function ghostCanRead(
   hash: string,
@@ -262,12 +278,57 @@ export async function ghostCanRead(
           and(eq(mediaRefs.originKind, 'ghost'), eq(mediaRefs.originId, ghostId)),
           and(eq(mediaRefs.refKind, 'ghost-gallery'), eq(mediaRefs.refId, ghostId)),
           and(eq(mediaRefs.refKind, 'ghost-grant'), eq(mediaRefs.refId, ghostId)),
+          and(eq(mediaRefs.refKind, 'ghost-deposit'), eq(mediaRefs.refId, ghostId)),
         ),
       ),
     )
     .limit(1)
     .all();
   return row.length > 0;
+}
+
+/**
+ * 某意识寄存物的账面字节占用(deposit 配额判定唯一依据)。
+ *
+ * 按**去重后的指纹**求和(DISTINCT hash 再 join blob 字节):同一张图被寄存
+ * 两次只有一行 ref(addRef 前有 hasRef 幂等挡),但即便历史数据里出现重复行,
+ * 这里也只算一份 —— 配额口径必须与"磁盘上真实多占了多少字节"一致,内容
+ * 寻址下同指纹只占一份磁盘。
+ */
+export async function ghostDepositUsageBytes(
+  ghostId: string,
+  db: LedgerDb = defaultDb(),
+): Promise<number> {
+  const rows = await db
+    .select({ bytes: sql<number>`COALESCE(SUM(${mediaBlobs.bytes}), 0)` })
+    .from(mediaBlobs)
+    .where(
+      sql`EXISTS (SELECT 1 FROM ${mediaRefs} WHERE ${mediaRefs.hash} = ${mediaBlobs.hash} AND ${mediaRefs.refKind} = 'ghost-deposit' AND ${mediaRefs.refId} = ${ghostId})`,
+    )
+    .all();
+  return rows[0]?.bytes ?? 0;
+}
+
+/**
+ * 删除某意识对某指纹的寄存引用(release_media 的账本口)。返回是否真的删掉了
+ * 行(false = 本就没有,幂等)。**只删本 refKind + 本 refId**:画廊、引渡、
+ * 聊天消息的引用一概不碰,字节交回收器按引用归零统一处理。
+ */
+export async function removeGhostDepositRef(
+  params: { hash: string; ghostId: string },
+  db: LedgerDb = defaultDb(),
+): Promise<boolean> {
+  const result = await db
+    .delete(mediaRefs)
+    .where(
+      and(
+        eq(mediaRefs.hash, params.hash),
+        eq(mediaRefs.refKind, 'ghost-deposit'),
+        eq(mediaRefs.refId, params.ghostId),
+      ),
+    )
+    .run();
+  return result.changes > 0;
 }
 
 /** 查某指纹的落盘元数据(改图代办等"手里只有指纹"的调用方用);无账即 null。 */
@@ -444,7 +505,8 @@ export interface GhostGalleryItem {
 /**
  * 某意识画廊里的全部引用(新的在前,回放上限截断防失控)。
  * 只查 ghost-gallery ref——这正是"挂墙 = 不被回收"的同一本账,回放与
- * 生死判定天然一致。
+ * 生死判定天然一致。寄存物(ghost-deposit)**不在此列**:用户粘进面板的
+ * 参考图不是这个意识的作品,面板自己知道画布上有什么,不靠画廊回放。
  */
 export async function listGhostGallery(
   ghostId: string,

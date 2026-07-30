@@ -13,7 +13,6 @@
  * 端口, 与 codex daemon 共用同一条) 与 codex 路径完全一致。
  */
 
-import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -21,18 +20,12 @@ import { app } from 'electron';
 import type { RemoteHost } from '@cindy/maker-remote-ssh';
 
 import type { CodexHttpBridge } from '../mcp-integrations/codexHttpBridge.js';
-import { REMOTE_COLLAB_SERVER_NAMES } from '../mcp-integrations/codexHttpBridge.js';
+import {
+  computeRemoteMcpFingerprint,
+  selectRemoteInjectableServerNames,
+} from '../mcp-integrations/codexHttpBridge.js';
 import { getRemoteMcpBridgeToken } from '../mcp-integrations/remoteMcpBridgeToken.js';
 import { getSessionOrcaRole, getWorkerLink } from '../localDb/orcaTeamStore.js';
-
-/**
- * cc 远端允许经 remote-forward 暴露的 server 白名单 — 唯一真源在
- * codexHttpBridge.ts (REMOTE_COLLAB_SERVER_NAMES, bridge 鉴权层对
- * persistent token 也按它 scope):只放协同必需的 cindy_orca /
- * orca_worker_bridge;其余 in-process server (cindy_memory 远端本就显式
- * 禁用、cindy_ssh 的 exec 从本机发起等) 维持"远端不可用"现状,收窄影响面。
- */
-const CC_REMOTE_HTTP_MCP_SERVER_NAMES = REMOTE_COLLAB_SERVER_NAMES;
 
 /**
  * cc remote 的 MCP session ctx 合成:与 synthesizeOrcaVendorOptionsFromDb
@@ -112,6 +105,13 @@ export async function buildCcRemoteHttpMcpServers(
     workingDir: string;
     /** session 自己的 vendorOptions (maker-core startSession 透传); 优先于 DB 合成。 */
     vendorOptions?: Record<string, unknown>;
+    /**
+     * per-session Maker Memory 开关 (maker-core startSession 归一后透传)。
+     * true 时把 cindy_memory 一并注入 — 必须与 maker-core 的 prompt 注入
+     * (rules + MEMORY.md index) 同源同值, 否则模型被 rules 引导去调不存在
+     * 的工具。缺省 false。
+     */
+    makerMemoryEnabled?: boolean;
   },
   deps: CcRemoteHttpMcpDeps,
 ): Promise<{
@@ -140,11 +140,13 @@ export async function buildCcRemoteHttpMcpServers(
   const started = await deps.ensureBridgeStarted();
   if (!started) return empty;
   // collab 全局禁用时 bridge 名单不反映开关 (keepOrcaProviderStable) —
-  // 远端注入以同一闸门为准, 整个不注入 (codex-connector R20 P2)。
-  const collabEnabled = deps.isCollabEnabled?.() ?? true;
-  const names = collabEnabled
-    ? started.serverNames.filter((n) => CC_REMOTE_HTTP_MCP_SERVER_NAMES.has(n))
-    : [];
+  // 远端注入以同一闸门为准, 协同段整个不注入 (codex-connector R20 P2)。
+  // cindy_memory 独立走 per-session Maker Memory 开关, 与 collab 互不牵连。
+  // 合成规则唯一真源在 selectRemoteInjectableServerNames (codexHttpBridge.ts)。
+  const names = selectRemoteInjectableServerNames(started.serverNames, {
+    collabEnabled: deps.isCollabEnabled?.() ?? true,
+    memoryEnabled: args.makerMemoryEnabled === true,
+  });
   if (names.length === 0) {
     // 无注入也是一代 (collab 禁用 / 白名单空):指纹常量 'disabled',
     // 开→关的重启后 drift 判定成立 (R23 P2);不含 instanceId, 一直禁用
@@ -171,6 +173,8 @@ export async function buildCcRemoteHttpMcpServers(
     agentKind: 'claude-code' as const,
     sessionId: args.sessionId,
     workingDir: args.workingDir,
+    // remote ctx: scope key 语义见 maker-core buildMemoryScopeKey。
+    remoteHostId: args.host.id,
     vendorOptions: args.vendorOptions ?? (await synthesize(args.sessionId)),
   };
   // 同 session 重建 (resume/rebuild/reattach) 直接覆盖注册,注册表以 sessionId
@@ -190,10 +194,11 @@ export async function buildCcRemoteHttpMcpServers(
     return {
       servers,
       cleanup: () => started.bridge.unregisterSessionCtx(args.sessionId, ctx),
-      fingerprint: computeCcRemoteMcpFingerprint({
+      fingerprint: computeRemoteMcpFingerprint({
         token: bridgeToken,
         bridgeInstanceId: started.bridge.instanceId,
         remotePort,
+        serverNames: names,
       }),
     };
   } catch (err) {
@@ -213,25 +218,17 @@ export async function buildCcRemoteHttpMcpServers(
  * stale 集合清空, 没有它 factory 会 attach 回带旧 collab URL 的 query
  * (codex-connector R23 P2)。
  *
- * 成分:token|bridgeInstanceId|remotePort (注入代际);无注入代际用常量
- * 'disabled' (collab 禁用 / 白名单为空) — 不含 instanceId, 避免「collab
- * 一直禁用」的健康 query 在每次 bridge 重建后被误判 drift 白杀。
- * bridge 不在 (shutdown) 时不产指纹 — 判定方跳过 (forceFresh 也无 bridge
- * 可用, 恢复由 lazy 重建路径负责)。
+ * 成分:token|bridgeInstanceId|remotePort|serverNames (注入代际; server 名单
+ * 进指纹 — cc 的注入集合随 per-session Maker Memory 开关变化, 开关翻转后
+ * attach 回旧集合的 alive query 必须判为 drift 重建), 公式唯一真源在
+ * computeRemoteMcpFingerprint (codexHttpBridge.ts, 与 codex 侧共用);无注入
+ * 代际用常量 'disabled' (collab 与 memory 都关 / 白名单为空) — 不含
+ * instanceId, 避免「一直禁用」的健康 query 在每次 bridge 重建后被误判
+ * drift 白杀。bridge 不在 (shutdown) 时不产指纹 — 判定方跳过 (forceFresh
+ * 也无 bridge 可用, 恢复由 lazy 重建路径负责)。
  */
 
 const CC_DISABLED_GENERATION = 'disabled';
-
-export function computeCcRemoteMcpFingerprint(opts: {
-  token: string;
-  bridgeInstanceId: string;
-  remotePort: number;
-}): string {
-  return createHash('sha256')
-    .update(`${opts.token}|${opts.bridgeInstanceId}|${opts.remotePort}`, 'utf8')
-    .digest('hex')
-    .slice(0, 12);
-}
 
 export const CC_MCP_DISABLED_FINGERPRINT = CC_DISABLED_GENERATION;
 

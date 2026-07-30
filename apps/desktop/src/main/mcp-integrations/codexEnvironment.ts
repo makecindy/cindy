@@ -51,6 +51,7 @@ export interface GetCodexExtraSpawnConfigOptions {
 
 let cached: Promise<CodexExtraSpawnConfig> | null = null;
 let activeBridge: CodexHttpBridge | null = null;
+let activeBridgeServerNames: string[] | null = null;
 const disabledPluginIdsByThread = new Map<string, unknown>();
 
 /**
@@ -96,6 +97,20 @@ export function getActiveCodexBridgeInstanceId(): string | null {
   return activeBridge?.instanceId ?? null;
 }
 
+/**
+ * 当前活跃 bridge 上实际挂出的 server 名 (不触发 lazy 启动;未启动 / 已
+ * shutdown 时 null)。provider 集合在 bridge 启动时冻结 (isEnabled 快照) —
+ * Maker Memory 等开关翻转后、bridge 重建前的窗口里, 远端注入 / 漂移判定 /
+ * per-session flag 钳制必须以本快照为准, 不能只看 manager 现值, 否则
+ * prompt 注入与工具面失配、drift 永不收敛 (review R2 P2)。
+ */
+export function getActiveCodexBridgeServerNames(): string[] | null {
+  // 与 activeBridge 同生共死 (doStart 同步赋值 / shutdown finally 同步清空)。
+  // 返回防御性拷贝: 内部数组同时是 drift 判定 / stale-bridge 钳制的数据源,
+  // 调用方误改不得污染快照。
+  return activeBridgeServerNames ? [...activeBridgeServerNames] : null;
+}
+
 export async function shutdownCodexEnvironment(): Promise<void> {
   const cur = cached;
   if (!cur) return;
@@ -108,7 +123,10 @@ export async function shutdownCodexEnvironment(): Promise<void> {
   } catch {
     /* 启动本身失败的 cached promise — shutdown 无 op */
   } finally {
-    if (!bridge || activeBridge === bridge) activeBridge = null;
+    if (!bridge || activeBridge === bridge) {
+      activeBridge = null;
+      activeBridgeServerNames = null;
+    }
   }
   // bridge 实际 shutdown 后失效远端 (URL/session id 必然指向已停实例)。
   // cached 为空 (从未启动) 时 early return 不调 — 彼时本就不存在指向
@@ -166,6 +184,10 @@ async function doStart(
       return {
         agentKind: active.agentKind,
         workingDir: active.workingDir,
+        // SSH remote 会话的 ctx 字段必须透传 — cindy_memory 用它算 scope key
+        // (buildMemoryScopeKey);丢掉的话远端工具会落到本地路径 key 的 store,
+        // 与 agent prompt 注入读的 ssh:<hostId>:<path> store 分家 (review R4 P1)。
+        ...(active.remoteHostId ? { remoteHostId: active.remoteHostId } : {}),
         vendorOptions: active.vendorOptions,
         sessionId: active.sessionId,
         getSessionContext: ctx.getSessionContext,
@@ -267,7 +289,9 @@ async function doStart(
         logger: opts.logger,
       })
     : null;
+  const bridgeServerNames = Object.keys(serverFactories);
   activeBridge = bridge;
+  activeBridgeServerNames = bridge ? bridgeServerNames : null;
 
   const extraArgs: string[] = [];
   // 远程 MCP server：直接把 codex 指向远端 URL，token 走 env (bearer_token_env_var)。
@@ -287,7 +311,7 @@ async function doStart(
     extraArgs.push('-c', `mcp_servers.${name}.startup_timeout_sec=${MCP_TIMEOUT_SEC}`);
     extraArgs.push('-c', `mcp_servers.${name}.tool_timeout_sec=${MCP_TIMEOUT_SEC}`);
   }
-  for (const name of Object.keys(serverFactories)) {
+  for (const name of bridgeServerNames) {
     const url = bridge!.url(name);
     // TOML 字符串值必须带双引号 (codex `-c` 解析时按 TOML literal)；
     // bearer_token_env_var 让 codex 从 env 读 token，不暴露在 process args。
@@ -299,7 +323,7 @@ async function doStart(
 
   log.info('codex MCP bridge wired', {
     port: bridge?.port ?? null,
-    servers: [...Object.keys(serverFactories), ...Object.keys(remoteHttpServers)],
+    servers: [...bridgeServerNames, ...Object.keys(remoteHttpServers)],
     remoteHttpServers: Object.keys(remoteHttpServers),
     extraArgsCount: extraArgs.length,
   });
@@ -311,6 +335,6 @@ async function doStart(
       ...(bridge ? { [TOKEN_ENV]: bridge.token } : {}),
     },
     bridge,
-    bridgeServerNames: Object.keys(serverFactories),
+    bridgeServerNames,
   };
 }

@@ -72,8 +72,12 @@ import {
 } from './grok-oauth-login.js';
 import { getAuthState } from '../authManager.js';
 import { getActiveAppSession } from '../appSessionState.js';
-import { filterProviderCatalogForAccount } from './provider-access-policy.js';
+import {
+  filterProviderCatalogForAccount,
+  projectProviderCatalogForBuildRegion,
+} from './provider-access-policy.js';
 import { getAppCapabilities } from '../appCapabilities.js';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
   claimDetectedNativeProviderAuth,
   migrateLegacyNativeProviderAuthBindings,
@@ -432,7 +436,11 @@ let singleton: ProviderService | null = null;
  * Cindy account session keeps the full active catalog.
  */
 export function getDesktopSelectableCatalog(): Catalog {
-  return filterProviderCatalogForAccount(getActiveCatalog(), {
+  const regionCatalog = projectProviderCatalogForBuildRegion(
+    getActiveCatalog(),
+    CURRENT_CINDY_REGION,
+  );
+  return filterProviderCatalogForAccount(regionCatalog, {
     canUseCindyGateway: getAppCapabilities().canUseCindyGateway,
   });
 }

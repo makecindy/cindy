@@ -70,6 +70,11 @@ function renderBrowserTab(
   stateUrl: string,
   patchState = vi.fn(),
   active = true,
+  statePatch: Partial<{
+    title: string;
+    favicon: string | null;
+    isAudible: boolean;
+  }> = {},
 ): ReactElement {
   const ctx: TabKindHostContext = {
     tabId: 'tab-browser',
@@ -88,6 +93,7 @@ function renderBrowserTab(
       title: '',
       favicon: null,
       isAudible: false,
+      ...statePatch,
     },
   });
 }
@@ -224,6 +230,34 @@ describe('BrowserTabBody navigation', () => {
     view.rerender(renderBrowserTab('https://www.google.com/', patchState));
 
     expect(browserNavigate).not.toHaveBeenCalled();
+  });
+
+  it('keeps a persisted favicon while the new webview has not observed one yet', () => {
+    browserState = makeBrowserState({ favicon: null });
+    const patchState = vi.fn();
+
+    render(renderBrowserTab(
+      'https://www.taptap.cn/',
+      patchState,
+      true,
+      { favicon: 'https://www.taptap.cn/favicon.ico' },
+    ));
+
+    expect(patchState).not.toHaveBeenCalledWith({ favicon: null });
+  });
+
+  it('clears a persisted favicon after the webview explicitly reports none', () => {
+    browserState = makeBrowserState({ favicon: '' });
+    const patchState = vi.fn();
+
+    render(renderBrowserTab(
+      'https://www.taptap.cn/',
+      patchState,
+      true,
+      { favicon: 'https://www.taptap.cn/favicon.ico' },
+    ));
+
+    expect(patchState).toHaveBeenCalledWith({ favicon: null });
   });
 
   it('does not run browser shortcuts while an editable target has focus', () => {

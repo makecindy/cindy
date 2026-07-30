@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -218,5 +220,33 @@ describe('canOpenChatPathChip', () => {
   it('目录仅 workdir 内可开(文件浏览器以 workdir 为根)', () => {
     expect(canOpenChatPathChip('directory', 'src/components')).toBe(true);
     expect(canOpenChatPathChip('directory', null)).toBe(false);
+  });
+});
+
+describe('路径 chip 的可点信号(源码级守卫)', () => {
+  // 行内 code 走压暗档,而路径 chip 的样式**总是**叠在 markdownInlineCode 之后:
+  //   chipStyle={[baseStyle, styles.markdownInlineCode, styles.markdownPathChip]}
+  // markdownPathChip 一旦不自带 color,就会继承那份压暗色 —— 可点的反而比不可点的
+  // 更淡,正好把「看不出可点」这个问题做反。RN 里这类静默继承没有类型保护,只能
+  // 在源码层钉住。
+  it('markdownPathChip 显式钉回正文色,不继承行内 code 的压暗', () => {
+    const src = readFileSync(
+      join(process.cwd(), 'src/session/MessageRenderer.tsx'),
+      'utf8',
+    );
+    const block = /markdownPathChip:\s*\{([^}]*)\}/.exec(src);
+    expect(block, '未找到 markdownPathChip 样式定义').not.toBeNull();
+    expect(block![1]).toMatch(/color:\s*colors\.textPrimary/);
+
+    // 叠加顺序也一并钉住:若将来有人把 markdownPathChip 挪到 markdownInlineCode
+    // 之前,上面那条 color 就会被压暗色覆盖回去。
+    const sites = src.match(/chipStyle=\{\[[^\]]*\]\}/g) ?? [];
+    expect(sites.length).toBeGreaterThan(0);
+    for (const site of sites) {
+      const inline = site.indexOf('markdownInlineCode');
+      const chip = site.indexOf('markdownPathChip');
+      if (inline === -1 || chip === -1) continue;
+      expect(chip, `叠加顺序反了:${site}`).toBeGreaterThan(inline);
+    }
   });
 });
