@@ -276,10 +276,10 @@ describe('installDeferredPopupRouter', () => {
     expect(popupWindow.close).toHaveBeenCalledTimes(1);
   });
 
-  it('carries opener attribution through to the routed payload when resolvable', () => {
+  it('carries opener attribution through to the routed payload when resolvable', async () => {
     // popup 归属修复:payload 带 openerTabId / openerSessionId 时,renderer 端
     // 才能把 popup tab 落进发起方 session 的 bucket,而不是用户正在看的 session。
-    vi.useFakeTimers();
+    // 归属反查现在在 popup 创建时就发起(异步),所以断言要等 promise 落定。
     const { childContents, hostContents, popupWindow } = makePopupHarness();
     setRsbPopupOpenerResolver((id) =>
       id === 42 ? { tabId: 'tab-1', sessionId: 'session-a' } : null,
@@ -294,6 +294,38 @@ describe('installDeferredPopupRouter', () => {
 
     childContents.emit('will-navigate', {}, 'https://accounts.example.com/oauth');
 
+    await vi.waitFor(() => expect(hostContents.send).toHaveBeenCalledTimes(1));
+    expect(hostContents.send).toHaveBeenCalledWith(RSB_BROWSER_POPUP_CHANNEL, {
+      url: 'https://accounts.example.com/oauth',
+      disposition: 'foreground-tab',
+      openerTabId: 'tab-1',
+      openerSessionId: 'session-a',
+    });
+  });
+
+  it('retains opener attribution even if opener tab is released before real URL arrives', async () => {
+    // Greptile 指出的竞态:about:blank 中转期间 opener tab 被关闭,registry release
+    // 后反查落空,popup 会落进当前活跃会话。修复后在 popup 创建时就捕获归属。
+    const { childContents, hostContents, popupWindow } = makePopupHarness();
+    let registered: { tabId: string; sessionId: string } | null = {
+      tabId: 'tab-1',
+      sessionId: 'session-a',
+    };
+    setRsbPopupOpenerResolver((id) => (id === 42 ? registered : null));
+
+    installDeferredPopupRouter(
+      hostContents,
+      popupWindow as unknown as BrowserWindow,
+      'foreground-tab',
+      42,
+    );
+
+    // opener tab 在 about:blank → 真实 URL 之间被关闭 / registry release
+    registered = null;
+
+    childContents.emit('will-navigate', {}, 'https://accounts.example.com/oauth');
+
+    await vi.waitFor(() => expect(hostContents.send).toHaveBeenCalledTimes(1));
     expect(hostContents.send).toHaveBeenCalledWith(RSB_BROWSER_POPUP_CHANNEL, {
       url: 'https://accounts.example.com/oauth',
       disposition: 'foreground-tab',

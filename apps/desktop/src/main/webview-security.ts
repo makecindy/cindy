@@ -391,9 +391,10 @@ function sendBrowserPopup(
 }
 
 /**
- * @param openerWebContentsId 发起 popup 的 guest webContentsId。归属反查推迟到
- *   真实 URL 出现时才做(此时距 guest 上报又过了一段时间,命中率更高),缺省则
- *   照常路由、只是没有 opener 归属字段。
+ * @param openerWebContentsId 发起 popup 的 guest webContentsId。归属反查在
+ *   popup 创建时立即发起,不推迟到真实 URL 出现时——这样即使 opener tab 在
+ *   about:blank → 真实 URL 期间被关闭, release 发生前的归属信息已被捕获,
+ *   不会回退到当前活跃会话。缺省则照常路由、只是没有 opener 归属字段。
  */
 export function installDeferredPopupRouter(
   hostContents: WebContents,
@@ -402,6 +403,14 @@ export function installDeferredPopupRouter(
   openerWebContentsId?: number,
 ): void {
   let routed = false;
+
+  // 在 popup 创建时就发起 opener 反查。resolver 未就绪（启动早期/单测）或
+  // openerWebContentsId 缺省时不启动轮询，沿用同步直发路径。
+  const openerAttrPromise: Promise<ResolvedPopupOpener | null> | null =
+    openerWebContentsId !== undefined && popupOpenerResolver !== null
+      ? waitForPopupOpener(openerWebContentsId)
+      : null;
+
   const closeTimer = setTimeout(() => {
     if (routed || popupWindow.isDestroyed()) return;
     popupWindow.close();
@@ -415,12 +424,16 @@ export function installDeferredPopupRouter(
     if (routed || !isRoutablePopupUrl(url)) return;
     routed = true;
     cleanup();
-    // 先收掉隐藏窗口再路由 —— routeBrowserPopup 在归属反查落空时会有界等待,
-    // 不能让这个不可见的中转 BrowserWindow 跟着一起多活那段时间。
     if (!popupWindow.isDestroyed()) {
       popupWindow.close();
     }
-    routeBrowserPopup(hostContents, openerWebContentsId, { url, disposition });
+    if (openerAttrPromise !== null) {
+      void openerAttrPromise.then((opener) => {
+        sendBrowserPopup(hostContents, { url, disposition, ...(opener ?? {}) });
+      });
+    } else {
+      sendBrowserPopup(hostContents, { url, disposition });
+    }
   };
 
   const childContents = popupWindow.webContents;
