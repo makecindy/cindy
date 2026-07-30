@@ -607,6 +607,16 @@ function isOfficialAnthropicUpstream(value: string): boolean {
   }
 }
 
+function anthropicBridgeUpstreamBase(
+  route: NonNullable<Awaited<ReturnType<typeof resolveSessionRoute>>>,
+): string {
+  const isXdGatewayBridge =
+    route.providerId === 'xd' && route.routing.authStrategy === 'gateway-key';
+  return isXdGatewayBridge
+    ? claudeUpstreamEndpoint().trim()
+    : route.routing.upstream;
+}
+
 function appendCommaSeparatedHeaderToken(
   headers: Record<string, string>,
   name: string,
@@ -671,9 +681,7 @@ function createAnthropicBridgeDecision(
   const isXdGatewayBridge =
     route.providerId === 'xd' && route.routing.authStrategy === 'gateway-key';
   const gatewayKey = isXdGatewayBridge ? _readGatewayKey() : null;
-  const upstreamBase = isXdGatewayBridge
-    ? claudeUpstreamEndpoint().trim()
-    : route.routing.upstream;
+  const upstreamBase = anthropicBridgeUpstreamBase(route);
   if (isXdGatewayBridge && (!gatewayKey || !upstreamBase)) {
     return {
       localHandler: async ({ res }) => {
@@ -1906,13 +1914,21 @@ export function createModelRoutingTransform(
         });
       }
       if (selectedRouting?.wireProtocol === 'anthropic-messages' && ctx.method === 'POST' && model) {
-        return resolveSessionRoute(sessionId, 'codex', model).then((localRoute) =>
-          createAnthropicBridgeDecision(
+        return resolveSessionRoute(sessionId, 'codex', model).then((localRoute) => {
+          const decision = createAnthropicBridgeDecision(
             localRoute,
             threadId ? registry.get(threadId) : undefined,
             model,
             model !== requestModel ? model : undefined,
-          ));
+          );
+          if (decision && localRoute) {
+            recordCodexThreadUpstreamForDiagnostics(
+              threadId,
+              anthropicBridgeUpstreamBase(localRoute),
+            );
+          }
+          return decision;
+        });
       }
       // model 传给 scope 门(空串 = 控制面 GET,不受范围限制);声明了 modelPrefixes 的
       // 供应商(如 xai)只捕获自家命名空间的请求,其余回落默认路由。

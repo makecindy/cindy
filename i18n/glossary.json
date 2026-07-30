@@ -55,6 +55,17 @@
       "note": "远端主机上由 Cindy 管理的 Codex 凭证目录（~/.xdt-server/v1/codex-home/），与用户本机 ~/.codex 相区分。四语统一保留英文原词（home 小写），避免各语言自造「Codex 主目录」等不同说法；syncAuth 与 codexAuthMissing 等远端登录态文案使用。"
     },
     {
+      "id": "anthropic-messages",
+      "status": "proposed",
+      "en": "Anthropic Messages",
+      "translations": {
+        "zh-CN": "Anthropic Messages",
+        "ja": "Anthropic Messages",
+        "ko": "Anthropic Messages"
+      },
+      "note": "Anthropic Messages API / wire protocol 的用户可见名称。四语统一保留官方英文名称，避免与普通的“消息”概念混译；先登记为 proposed，待产品术语评审后固化。"
+    },
+    {
       "id": "wechat",
       "status": "proposed",
       "en": "WeChat",

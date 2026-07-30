@@ -293,6 +293,32 @@ describe('createResponsesAnthropicHandler', () => {
     expect(body.output[0]?.content?.[0]?.text).toBe('json without a content type');
   });
 
+  it('cancels an oversized unmarked body before buffering it for a non-streaming caller', async () => {
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('x'.repeat(1024 * 1024 + 1)));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const fetchImpl = vi.fn(async () => new Response(stream, { status: 200 })) as typeof fetch;
+    const handler = createResponsesAnthropicHandler({
+      upstreamBase: 'https://provider.example',
+      buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({
+      parsedBody: { model: 'claude', stream: false, input: 'hi' },
+      ctx,
+      res: res as never,
+    });
+    expect(cancelled).toBe(true);
+    expect(res.status).toBe(502);
+    expect(res.chunks.join('')).toContain('upstream response exceeds 1 MiB');
+  });
+
   it('retries one OAuth request after a provider 401 with refreshed headers', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response('expired', { status: 401 }))

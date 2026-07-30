@@ -1279,14 +1279,16 @@
         "wireProtocol": {
           "responses": "OpenAI Responses（原生）",
           "chat": "Chat Completions（Cindy 桥接）",
+          "anthropic": "Anthropic Messages（Cindy 桥接）",
           "responsesHelp": "供应商原生支持 Responses API，Cindy 透明转发完整事件。",
-          "chatHelp": "适用于仅提供 Chat Completions 的供应商。Cindy 转换流式文本和函数工具调用；部分高级 Responses 能力不可用。"
+          "chatHelp": "适用于仅提供 Chat Completions 的供应商。Cindy 转换流式文本和函数工具调用；部分高级 Responses 能力不可用。",
+          "anthropicHelp": "适用于提供 Anthropic Messages API 的供应商。Cindy 转换 Responses 消息、图片、工具、推理内容与流式事件。"
         },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code 遵循 Anthropic 协议(用 x-api-key 鉴权)。填该来源用于 Claude Code 的 baseURL、密钥与模型，留空则此来源不提供 Claude Code。",
           "codex": "Codex",
-          "codexDesc": "Codex 使用 OpenAI Responses 协议。上游可选择原生 Responses，或由 Cindy 桥接仅支持 Chat Completions 的供应商。填该来源用于 Codex 的 baseURL、密钥与模型，留空则此来源不提供 Codex。"
+          "codexDesc": "Codex 使用 OpenAI Responses 协议。上游可选择原生 Responses，或由 Cindy 桥接 Chat Completions、Anthropic Messages。填该来源用于 Codex 的 baseURL、密钥与模型，留空则此来源不提供 Codex。"
         },
         "errors": {
           "nameRequired": "请填写显示名称",

@@ -101,6 +101,38 @@ async function readBody(response: Response): Promise<string> {
   }
 }
 
+async function readBodyWithLimit(
+  response: Response,
+  limitBytes: number,
+  limitMessage: string,
+): Promise<string> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let body = '';
+  let bytesRead = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytesRead += value.byteLength;
+      if (bytesRead > limitBytes) throw new Error(limitMessage);
+      body += decoder.decode(value, { stream: true });
+    }
+    body += decoder.decode();
+    return body;
+  } catch (error) {
+    try {
+      await reader.cancel();
+    } catch {
+      // Best effort only: preserve the original parse/limit failure.
+    }
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 function parseSseBlock(block: string): unknown | null {
   const data: string[] = [];
   let eventName = '';
@@ -349,13 +381,23 @@ export function createResponsesAnthropicHandler(
 
       try {
         if (contentType.includes('application/json')) {
-          const json = await upstream.json() as unknown;
+          const body = await readBodyWithLimit(
+            upstream,
+            MAX_STREAM_BUFFER_CHARS,
+            'upstream JSON response exceeds 1 MiB',
+          );
+          const json = JSON.parse(body) as unknown;
           for (const event of translator.pushJson(json)) emit(event);
         } else if (incoming.stream === false) {
           // Some Anthropic-compatible gateways omit Content-Type. Buffering is already
           // required for a non-streaming caller, so sniff JSON first and otherwise
-          // aggregate the unmarked Anthropic SSE body.
-          const body = await upstream.text();
+          // aggregate the unmarked Anthropic SSE body, with the same hard cap used
+          // while sniffing streaming responses.
+          const body = await readBodyWithLimit(
+            upstream,
+            MAX_STREAM_BUFFER_CHARS,
+            'upstream response exceeds 1 MiB',
+          );
           const trimmed = body.trimStart();
           if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
             const json = JSON.parse(body) as unknown;

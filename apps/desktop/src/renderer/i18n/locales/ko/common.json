@@ -1279,14 +1279,16 @@
         "wireProtocol": {
           "responses": "OpenAI Responses(네이티브)",
           "chat": "Chat Completions(Cindy 브리지)",
+          "anthropic": "Anthropic Messages(Cindy 브리지)",
           "responsesHelp": "제공자가 Responses API를 네이티브로 지원하므로 Cindy가 이벤트 스트림을 그대로 전달합니다.",
-          "chatHelp": "Chat Completions만 제공하는 업체용입니다. Cindy가 스트리밍 텍스트와 함수 도구 호출을 변환하며 일부 고급 Responses 기능은 사용할 수 없습니다."
+          "chatHelp": "Chat Completions만 제공하는 업체용입니다. Cindy가 스트리밍 텍스트와 함수 도구 호출을 변환하며 일부 고급 Responses 기능은 사용할 수 없습니다.",
+          "anthropicHelp": "Anthropic Messages API를 제공하는 업체용입니다. Cindy가 Responses 메시지, 이미지, 도구, 추론 내용 및 스트리밍 이벤트를 변환합니다."
         },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code는 Anthropic 프로토콜을 따릅니다(x-api-key 인증). 이 제공자의 Claude Code용 baseURL・키・모델을 입력하세요. 비워 두면 이 제공자는 Claude Code를 제공하지 않습니다.",
           "codex": "Codex",
-          "codexDesc": "Codex는 OpenAI Responses 프로토콜을 사용합니다. Responses를 네이티브로 지원하는 업스트림이나 Chat Completions만 지원하는 제공자를 Cindy로 브리지하는 방식을 선택할 수 있습니다. 이 제공자의 Codex용 기본 URL, 키와 모델을 입력하세요. 비워 두면 Codex에서 사용하지 않습니다."
+          "codexDesc": "Codex는 OpenAI Responses 프로토콜을 사용합니다. Responses를 네이티브로 사용하거나 Chat Completions 또는 Anthropic Messages를 Cindy로 브리지하는 방식을 선택할 수 있습니다. 이 제공자의 Codex용 기본 URL, 키와 모델을 입력하세요. 비워 두면 Codex에서 사용하지 않습니다."
         },
         "errors": {
           "nameRequired": "표시 이름을 입력하세요",

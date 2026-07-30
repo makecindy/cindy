@@ -232,6 +232,51 @@ describe('withCodexUpstreamRecording', () => {
     }
   });
 
+  it('records the Anthropic bridge upstream even though it routes through a localHandler', async () => {
+    const host = await freshCodexProxyHost();
+    host.resetCodexThreadUpstreamForTest();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'anthropic-compatible',
+        name: 'Anthropic Compatible',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://messages.provider.example/v1',
+            wireProtocol: 'anthropic-messages',
+            models: [{ id: 'claude-compatible', name: 'Claude Compatible' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'provider-key');
+    host.registerComposed('session-anthropic-diag', 'thread-anthropic-diag', 'PRODUCT_PROMPT');
+    setSessionProvider('session-anthropic-diag', 'anthropic-compatible');
+    host.setCodexProxyAuthInjection('env-key');
+
+    try {
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'claude-compatible' },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/responses',
+          headers: { 'thread-id': 'thread-anthropic-diag' },
+        },
+      ));
+      expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+      expect(host.getCodexThreadUpstreamOrigin('thread-anthropic-diag')).toBe(
+        'https://messages.provider.example',
+      );
+    } finally {
+      clearSessionProvider('session-anthropic-diag');
+      setCustomProviders([]);
+    }
+  });
+
   it('never lets a recording failure affect forwarding', async () => {
     // 诊断旁路:默认上游取值抛错也不能影响 decision。
     const host = await freshCodexProxyHost();
