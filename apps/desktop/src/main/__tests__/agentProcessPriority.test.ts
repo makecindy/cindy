@@ -279,16 +279,30 @@ describe('agent process discovery', () => {
   it('maps setPriority errno to apply results (default implementation)', async () => {
     const applyPriority = __testing.makeDefaultApplyPriority(fakeLog);
     const errWith = (code: string) => Object.assign(new Error(code), { code });
+    // Node 真实形态:libuv 失败被包成 SystemError,顶层 code 恒为 ERR_SYSTEM_ERROR,
+    // 真 errno 在 info.code
+    const systemErrWith = (code: string) =>
+      Object.assign(new Error(`A system error occurred: uv_os_setpriority returned ${code}`), {
+        code: 'ERR_SYSTEM_ERROR',
+        info: { code, errno: -1, syscall: 'uv_os_setpriority' },
+      });
 
-    osMock.setPriority.mockImplementationOnce(() => {
-      throw errWith('ESRCH');
-    });
-    await expect(applyPriority(11, 'low', undefined)).resolves.toBe('process-gone');
+    for (const make of [errWith, systemErrWith]) {
+      osMock.setPriority.mockImplementationOnce(() => {
+        throw make('ESRCH');
+      });
+      await expect(applyPriority(11, 'low', undefined)).resolves.toBe('process-gone');
 
-    osMock.setPriority.mockImplementationOnce(() => {
-      throw errWith('EPERM');
-    });
-    await expect(applyPriority(11, 'low', undefined)).resolves.toBe('nice-raise-refused');
+      osMock.setPriority.mockImplementationOnce(() => {
+        throw make('EPERM');
+      });
+      await expect(applyPriority(11, 'low', undefined)).resolves.toBe('nice-raise-refused');
+
+      osMock.setPriority.mockImplementationOnce(() => {
+        throw make('EACCES');
+      });
+      await expect(applyPriority(11, 'low', undefined)).resolves.toBe('nice-raise-refused');
+    }
 
     osMock.setPriority.mockImplementationOnce(() => {});
     await expect(applyPriority(11, 'low', undefined)).resolves.toBe('applied');
