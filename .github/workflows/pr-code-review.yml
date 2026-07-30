@@ -35,11 +35,15 @@ jobs:
     # 只有 client-ci 与人工 review 把关,这是有意的取舍。
     #
     # 排除 dependabot:它的分支在本仓,同仓判断拦不住,但 GitHub 把 Dependabot 触发的
-    # pull_request 当 fork 处理——GITHUB_TOKEN 只读、Actions secrets 一律不可见(只有
-    # Dependabot secrets 可见)。于是 job 会照常启动然后必然失败:拿不到
-    # ANTHROPIC_API_KEY,也拿不到 pull-requests:write 去发评论。本仓 dependabot 每周
-    # 巡检 github-actions 与 npm 两个生态(上限 5 个 PR,见 .github/dependabot.yml),
-    # 不排除就是每周固定几条红。
+    # pull_request 当 fork 处理——Actions secrets 一律不可见,只有 Dependabot secrets
+    # 可见。于是 job 会照常启动,然后在拿不到 ANTHROPIC_API_KEY 这一步必然失败。
+    # 本仓 dependabot 每周巡检 github-actions 与 npm 两个生态(上限 5 个 PR,见
+    # .github/dependabot.yml),不排除就是每周固定几条红。
+    #
+    # 注意别把这里的原因记成「拿不到 pull-requests:write」:GITHUB_TOKEN 对 Dependabot
+    # 触发的 run 确实默认只读,但那只是**默认值**——自 2021-10 起这类 run 会遵循
+    # workflow 的 permissions key,而本文件上面已经声明了 pull-requests:write。
+    # 也就是说唯一真正卡住的是 secrets,不是权限。
     #
     # 被调用 workflow 的 allowed_bots 输入解决不了这个:它管的是 claude-code-action
     # 自己的 bot 作者校验,与 GitHub 扣发 secrets 是两层;上游注释也明确写了要禁 bot
@@ -50,7 +54,9 @@ jobs:
     # 都正常,那次 review 应该照跑——用 user.login 会把这种情况一并误杀。
     #
     # 若以后希望 dependabot PR 也过 review,把 ANTHROPIC_API_KEY 以同名加到
-    # Dependabot secrets,再删掉这一行条件。
+    # Dependabot secrets,再删掉这一行条件。上面那段说明了权限侧不需要额外动作,
+    # 但这条链路(Dependabot + reusable workflow + permissions key)没有实机验证过,
+    # 真要恢复时先拿一个 dependabot PR 实跑确认,别只依赖文档推断。
     if: >-
       github.event.pull_request &&
       !github.event.pull_request.draft &&
