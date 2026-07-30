@@ -62,7 +62,8 @@ interface PlanReviewBubbleProps {
  * 代码块或表格中间会让语法失效,所以整段照常解析,只在容器上限高 + 底部渐隐。
  *
  *   approved  ≈ 一个标题 + 两三行正文,足够认出"这是哪份计划"。
- *   expired / cancelled 是失效痕迹,给更浅的一瞥,且不提供展开。
+ *   expired / cancelled 是失效痕迹,只给更浅的一瞥(展开入口三态都有,见
+ *   PlanMarkdownBody —— 被裁的内容必须给得出揭示途径)。
  */
 const APPROVED_COLLAPSED_MAX_HEIGHT = 120;
 const INACTIVE_COLLAPSED_MAX_HEIGHT = 56;
@@ -157,7 +158,6 @@ export function PlanReviewBubble({
           localFileRefs={localFileRefs}
           plan={plan}
           collapsedMaxHeight={APPROVED_COLLAPSED_MAX_HEIGHT}
-          expandable
         />
       )}
 
@@ -202,6 +202,10 @@ export function PlanReviewBubble({
  * 折叠不按源码行数,而是按渲染结果的实际高度:标题、列表、表格、代码块各自的
  * 行高与外边距差得很远,行数和视觉高度没有稳定关系,而"能否展开"必须和用户
  * 真正看到的有没有被切掉一致 —— 否则会出现按钮点了没变化(或该给按钮时没给)。
+ *
+ * 折叠态整块 inert(见下方注释):裁掉的部分只是视觉上不见了,DOM 里仍在 tab 序
+ * 与 a11y 树里。所以任何会被裁的状态都必须给得出展开入口 —— 三态共用同一个
+ * 折叠+展开机制,只有折叠高度不同。
  */
 function PlanMarkdownBody({
   workingDir,
@@ -210,7 +214,6 @@ function PlanMarkdownBody({
   localFileRefs,
   plan,
   collapsedMaxHeight,
-  expandable = false,
 }: {
   workingDir: string;
   currentSessionId?: string;
@@ -218,7 +221,6 @@ function PlanMarkdownBody({
   localFileRefs?: readonly KnownLocalFileRef[];
   plan: string;
   collapsedMaxHeight: number;
-  expandable?: boolean;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
@@ -248,6 +250,15 @@ function PlanMarkdownBody({
     <div className="flex flex-col gap-[8px]">
       <div
         className={cn('min-w-0', collapsed && 'overflow-hidden')}
+        // 折叠态整块 inert。overflow-hidden 与 mask 只挡住"看得见",被裁掉的
+        // Markdown 链接、文件 chip、代码块按钮仍留在 tab 序与 a11y 树里:键盘
+        // 用户能聚焦并激活一个看不见的控件,而且焦点一进去浏览器就会滚动这个
+        // overflow-hidden 容器,把折叠预览顶掉、露出本该藏起来的下半部分。
+        // inert 一次解决聚焦、点击和 a11y 三条路径,唯一入口收敛到下方的展开
+        // 按钮(它在本容器之外,不受影响)。
+        // 代价:inert 子树内的文字不能选中,所以折叠预览无法复制 —— 这也是三态
+        // 都必须给展开按钮的原因,展开后完整可选可交互。
+        inert={collapsed}
         style={
           collapsed
             ? ({
@@ -280,9 +291,10 @@ function PlanMarkdownBody({
           />
         </div>
       </div>
-      {expandable && overflowing && (
+      {overflowing && (
         <button
           type="button"
+          aria-expanded={expanded}
           onClick={() => setExpanded((v) => !v)}
           className={cn(
             'inline-flex w-fit items-center gap-[4px] text-12',
