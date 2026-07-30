@@ -1881,11 +1881,15 @@ describe('CodexAgent.startSession developerInstructions', () => {
 
   it('reports Codex child and descendant threads to the host-owned proxy route registry', async () => {
     const registerCodexChildThreadForParent = vi.fn();
+    const registerCodexMcpThreadContext = vi.fn();
+    const unregisterCodexMcpThreadContext = vi.fn();
     const agent = new CodexAgent(createDeps(
       { systemPrompt: 'HOST PRODUCT PROMPT' },
       {
         registerCodexSystemPromptForThread: vi.fn(),
         registerCodexChildThreadForParent,
+        registerCodexMcpThreadContext,
+        unregisterCodexMcpThreadContext,
       },
     ));
     const host = installFakeHost(agent, undefined, { codexProxyActive: true });
@@ -1920,8 +1924,23 @@ describe('CodexAgent.startSession developerInstructions', () => {
       parentThreadId: 'child-thread-id',
       childThreadId: 'grandchild-thread-id',
     });
+    expect(registerCodexMcpThreadContext).toHaveBeenNthCalledWith(2, {
+      threadId: 'child-thread-id',
+      sessionId: 'session-child-route',
+      workingDir: '/repo',
+      vendorOptions: {},
+    });
+    expect(registerCodexMcpThreadContext).toHaveBeenNthCalledWith(3, {
+      threadId: 'grandchild-thread-id',
+      sessionId: 'session-child-route',
+      workingDir: '/repo',
+      vendorOptions: {},
+    });
 
     await handle.close();
+    expect(unregisterCodexMcpThreadContext).toHaveBeenCalledWith('start-thread-id');
+    expect(unregisterCodexMcpThreadContext).toHaveBeenCalledWith('child-thread-id');
+    expect(unregisterCodexMcpThreadContext).toHaveBeenCalledWith('grandchild-thread-id');
   });
 
   it('omits thread/resume developerInstructions and registers prompt when codex proxy is active', async () => {
