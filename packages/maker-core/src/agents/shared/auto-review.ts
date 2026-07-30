@@ -447,9 +447,14 @@ function toForwardSlashes(p: string): string {
   return p.replace(/\\/g, '/');
 }
 
-/** 绝对路径判定(平台无关):POSIX `/…` 或 Windows 盘符 `C:/…`。入参须已 toForwardSlashes。 */
+/**
+ * 绝对路径判定(平台无关):POSIX `/…` 或任意 Windows 盘符前缀 `C:…`。入参须已 toForwardSlashes。
+ * 盘符相对路径(`C:..\Windows`、`C:file` —— 合法但**非**绝对)也算在内:目的不是判"绝对",而是
+ * 判"不可安全地拼到 cwd"——盘符前缀一旦拼 cwd 再折叠 `..`,可能字符串前缀误命中工作区而误放行。
+ * 故任何 `^[A-Za-z]:` 都不拼 cwd,交 normalizeSlashes/isInsideWorkspace 判,盘符相对路径 fail-closed 到 prompt。
+ */
 function isAbsolutePath(p: string): boolean {
-  return p.startsWith('/') || /^[A-Za-z]:\//.test(p);
+  return p.startsWith('/') || /^[A-Za-z]:/.test(p);
 }
 
 /** 归一化路径:去包裹引号、统一分隔符,相对路径挂到第一个 workspace root(cwd)。 */

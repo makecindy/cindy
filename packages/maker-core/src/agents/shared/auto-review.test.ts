@@ -203,6 +203,13 @@ describe('reviewAction — Windows 绝对路径边界(盘符路径不再被当�
   it('.. 逃出 Windows 工作区 → prompt', () => {
     expect(reviewAction({ kind: 'file-write', path: 'C:\\Users\\me\\project\\..\\other\\x' }, winRoots)).toBe('prompt');
   });
+  it('盘符相对路径(C:..\\ / C:file,合法但非绝对)不再被拼进工作区 → prompt', () => {
+    // 盘符相对路径若被当相对路径拼 cwd,再折叠 .. 可能字符串前缀误命中工作区 → 误放行。
+    expect(reviewAction({ kind: 'file-write', path: 'C:..\\Windows\\System32\\evil.exe' }, winRoots)).toBe('prompt');
+    expect(reviewAction({ kind: 'file-write', path: 'C:evil.txt' }, winRoots)).toBe('prompt');
+    // POSIX 工作区下盘符相对路径同样 fail-closed 升级(不拼进 /repo)。
+    expect(reviewAction({ kind: 'file-write', path: 'C:..\\..\\etc\\passwd' }, ['/repo'])).toBe('prompt');
+  });
 });
 
 // 第三轮护栏:PR #964 上 copilot/greptile/codex bot 挖出的 8 项(凭证读取、上传/落盘/查询串外发、
