@@ -509,23 +509,32 @@ export async function addTab(
     // 必须跟着回滚,否则没有任何 closeTab 成功分支会来清它。
     forgetClosedTab(sessionId, id);
     // rowCommitted=true 说明 upsert 已成功、SQLite 有这一行,但 addTab 整体失败
-    // (通常是 setActive 抛错)。cache 已回滚且没有调用方会再发 closeTab —— 做一次
-    // best-effort close 把孤儿行清掉,否则下次 hydrate / 重启该 tab 会"幽灵复活"。
-    // [NOT_FOUND] 视为清理成功(另一个路径先删了);其它错误只记 warn,不影响抛出原始 err。
+    // (通常是 setActive 抛错)。cache 已回滚且没有调用方会再发 closeTab —— 等待并
+    // 重试 close 清掉孤儿行,否则下次 hydrate / 重启该 tab 会"幽灵复活"。
+    // 对齐 closeTab 孤儿清理逻辑:有限重试(DB overload),终失败记 error 留痕;
+    // [NOT_FOUND] 视为清理成功(另一个路径先删了)。
     if (rowCommitted) {
       const ipc = ipcApi();
       if (ipc && shouldPersist(sessionId)) {
-        void settleTabStateWrites(sessionId, id).then(() =>
-          ipc.close({ id }).catch((cleanupErr) => {
-            if (!isTabRowMissingError(cleanupErr)) {
-              log.warn('addTab rollback: orphan-row cleanup failed', {
-                sessionId,
-                id,
-                err: cleanupErr,
-              });
+        await settleTabStateWrites(sessionId, id);
+        for (let attempt = 0; ; attempt += 1) {
+          try {
+            await ipc.close({ id });
+            break;
+          } catch (cleanupErr) {
+            if (isTabRowMissingError(cleanupErr)) break;
+            if (attempt < STATE_WRITE_OVERLOAD_RETRY_DELAYS_MS.length) {
+              await wait(STATE_WRITE_OVERLOAD_RETRY_DELAYS_MS[attempt]);
+              continue;
             }
-          }),
-        );
+            log.error('addTab rollback: orphan-row cleanup failed after retries', {
+              sessionId,
+              id,
+              err: cleanupErr,
+            });
+            break;
+          }
+        }
       }
     }
     throw err;
