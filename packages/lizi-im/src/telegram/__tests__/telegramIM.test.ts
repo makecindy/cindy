@@ -239,7 +239,72 @@ describe('TelegramIM', () => {
     ]);
     await vi.waitFor(() => expect(windowEntries).toHaveLength(3));
     await vi.waitFor(() => expect(events).toHaveLength(1));
-    expect(events[0]).toMatchObject({ senderId: 'g/-100200', text: '部署一下' });
+    // 裸 @ = 以触发消息为 root 的新 reply 链 lane(官方群会话模型)
+    expect(events[0]).toMatchObject({ senderId: 'g/-100200/r12', text: '部署一下' });
+    // 第三方显式召唤收到礼貌回应(挂回 TA 的消息)
+    const notice = api.calls.find(
+      (c) => c.method === 'sendMessage' && (c.params.reply_parameters as { message_id?: number })?.message_id === 11,
+    );
+    expect(notice).toBeTruthy();
+  });
+
+  it('reply bot 的回答续接同一条链; 裸 @ 开新链', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([groupMessage({ text: '先看这个', fromId: 111, messageId: 70, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const lane = events[0].senderId;
+    expect(lane).toBe('g/-100200/r70');
+
+    // bot 回答(出站登记 reply 链路由)
+    const sent = await im.sendText(lane, '答案在此');
+    const answerNativeId = Number(sent.messageId.split('|')[1]);
+
+    // owner 回复 bot 的回答(无 @) → 续接同一 lane
+    api.pushUpdates([
+      {
+        update_id: 72,
+        message: {
+          message_id: 72,
+          from: { id: 111, is_bot: false, first_name: 'U' },
+          chat: { id: -100200, type: 'supergroup', title: 'Ops' },
+          date: 1_753_000_100,
+          text: '继续深入',
+          reply_to_message: {
+            message_id: answerNativeId,
+            from: { id: BOT.id, is_bot: true, first_name: 'Cindy' },
+            chat: { id: -100200, type: 'supergroup' },
+            date: 1_753_000_050,
+            text: '答案在此',
+          },
+        },
+      },
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    expect(events[1].senderId).toBe(lane);
+
+    // 另一条裸 @ → 全新链
+    api.pushUpdates([groupMessage({ text: '换个话题', fromId: 111, messageId: 80, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(3));
+    expect(events[2].senderId).toBe('g/-100200/r80');
+  });
+
+  it('陌生人私聊收到礼貌回应且 60s 内不重复', async () => {
+    await connect();
+    api.pushUpdates([privateMessage('hello?', 222, 90)]);
+    await vi.waitFor(() => {
+      expect(
+        api.calls.some(
+          (c) => c.method === 'sendMessage' && c.params.chat_id === '222',
+        ),
+      ).toBe(true);
+    });
+    const before = api.calls.filter((c) => c.method === 'sendMessage' && c.params.chat_id === '222').length;
+    api.pushUpdates([privateMessage('still there?', 222, 91)]);
+    await new Promise((r) => setTimeout(r, 200));
+    const after = api.calls.filter((c) => c.method === 'sendMessage' && c.params.chat_id === '222').length;
+    expect(after).toBe(before); // 冷却期内不再回
   });
 
   it('topic 消息的 lane 带 threadId, 出站解码回 message_thread_id', async () => {

@@ -247,6 +247,36 @@ describe('IM slash commands', () => {
     expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.agent.apiKeyMissing);
   });
 
+  it('/stop 与 !stop 同语义 — 中止当前 turn 并回执', async () => {
+    const stopActiveTurn = vi.fn(async () => ({ stopped: true, droppedQueued: 2 }));
+    const turnRunner = makeTurnRunner({ stopActiveTurn } as Partial<ImTurnRunner>);
+    const { handlers } = makeHarness({ turnRunner });
+
+    await handlers.handleSlashCommand('/stop', { botContextId: 'bot', userId: 'ou_user' });
+
+    expect(stopActiveTurn).toHaveBeenCalledWith({ botContextId: 'bot', userId: 'ou_user' });
+    expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', ui.agent.stopDone(2));
+  });
+
+  it('/start 有欢迎语的渠道回欢迎语, 否则回未知命令', async () => {
+    const { handlers } = makeHarness({
+      adapterOverrides: {
+        ui: { ...ui, slash: { ...ui.slash, start: 'WELCOME' } },
+      } as Partial<ImChannelAdapter>,
+    });
+    await handlers.handleSlashCommand('/start', { botContextId: 'bot', userId: 'ou_user' });
+    expect(mocks.sendMarkdownText).toHaveBeenCalledWith('ou_user', 'WELCOME');
+
+    vi.clearAllMocks();
+    mocks.sendMarkdownText.mockResolvedValue(undefined);
+    const { handlers: plain } = makeHarness();
+    await plain.handleSlashCommand('/start', { botContextId: 'bot', userId: 'ou_user' });
+    expect(mocks.sendMarkdownText).toHaveBeenCalledWith(
+      'ou_user',
+      ui.slash.unknownCommand('/start'),
+    );
+  });
+
   describe('/project (projectSwitching channels)', () => {
     const projectUi = {
       title: 'P',

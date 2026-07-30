@@ -97,6 +97,12 @@ export interface ImChannelAdapter {
   /** "已收到" ack 的 emoji(feishu: emoji_type 枚举名;slack: emoji 名)。 */
   processingEmoji: string;
   /**
+   * turn 终态时把 ack 表情替换成结果表情(官方 Telegram bot 习惯:
+   * 成功 👍 / 失败 👎)。返回 null = 该终态不放表情(按默认撤掉 ack);
+   * 缺省 = 全部按默认撤掉。仅真正跑过的 turn 生效, pre-dispatch 失败不放。
+   */
+  terminalReactionEmoji?(kind: 'done' | 'aborted' | 'error'): string | null;
+  /**
    * `/project` 项目切换开关(个人 Telegram: true)。开启后 slash 层放行
    * /project 命令: 列出 desktop 端项目工作区, 选中后把当前 (bot, user/lane)
    * 会话行切到该项目目录并重开上下文(bot 原生会话, 非接管)。开启时
@@ -158,6 +164,11 @@ export interface ImUiTextPack {
   slash: {
     new: string;
     help: string;
+    /**
+     * `/start` 欢迎语(Telegram 私聊首次必发 /start — 点 START 按钮)。
+     * 提供则 /start 回它, 缺省渠道回 unknownCommand。
+     */
+    start?: string;
     unknownCommand: (cmd: string) => string;
     detachedBySlash: string;
     detachedByRevoke: string;
@@ -258,6 +269,17 @@ export interface ImUiTextPack {
     control: {
       title: string;
       emptyBody: string;
+      /**
+       * `/session` 最近会话直达卡(可选;提供才放行 /session 命令)。
+       * 与 /ctr 的差异: 不按工作区分步, 直接列跨工作区最近 N 条。
+       */
+      recentSessions?: {
+        title: string;
+        hint: string;
+        emptyBody: string;
+        /** 按钮 label: `标题 · 目录名`(目录未知只有标题)。 */
+        optionLabel: (title: string, workspaceName: string | null) => string;
+      };
       hint: string;
       attachedSwitchHint: (sessionTitle: string) => string;
       btnExit: string;

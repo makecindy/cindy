@@ -209,6 +209,24 @@ async function collectMedia(
   }
 }
 
+/** 被引消息的媒体(仅 photo/document, 上限 3)并入本 turn — 官方 bot 同款语义。 */
+const MAX_REPLY_ATTACHMENTS = 3;
+
+async function collectReplyMedia(
+  replied: TgMessage,
+  ctx: NormalizeContext,
+  attachments: IMAttachment[],
+): Promise<number> {
+  const before = attachments.length;
+  const sink: IMAttachment[] = [];
+  const discard: IMUnsupportedEntry[] = []; // 被引消息的不可用类型静默丢, 不打扰用户
+  await collectMedia(replied, ctx, sink, discard);
+  for (const attachment of sink.slice(0, MAX_REPLY_ATTACHMENTS)) {
+    attachments.push(attachment);
+  }
+  return attachments.length - before;
+}
+
 /** 私聊消息/群触发消息 → IMMessageEvent(下载图片与文档附件, 相册成员并入)。 */
 export async function normalizeMessage(m: TgMessage, ctx: NormalizeContext): Promise<IMMessageEvent> {
   const attachments: IMAttachment[] = [];
@@ -220,6 +238,9 @@ export async function normalizeMessage(m: TgMessage, ctx: NormalizeContext): Pro
     await collectMedia(sibling, ctx, attachments, unsupported);
   }
   const reply = replyContextOf(m);
+  const replyAttachmentCount = m.reply_to_message
+    ? await collectReplyMedia(m.reply_to_message, ctx, attachments)
+    : 0;
 
   return {
     channelName: 'telegram',
@@ -232,7 +253,14 @@ export async function normalizeMessage(m: TgMessage, ctx: NormalizeContext): Pro
     unsupported,
     threadTs: undefined,
     scopeKey: undefined,
-    ...(reply ? { replyContext: reply } : {}),
+    ...(reply
+      ? {
+          replyContext: {
+            ...reply,
+            ...(replyAttachmentCount > 0 ? { attachmentCount: replyAttachmentCount } : {}),
+          },
+        }
+      : {}),
     raw: m,
   };
 }

@@ -79,6 +79,11 @@ const OWNER_NOTICE_TIMEOUT_MS = 4_500;
 const SECRET_WRITE_FAILED_REASON = '无法安全保存凭证(系统安全存储不可用)';
 const DEFAULT_EXPIRED_CARD_NOTICE = '卡片已过期';
 
+/** 非 owner 显式召唤(私聊/群 @/reply)的礼貌回应 — per-user 冷却防刷屏。 */
+const STRANGER_NOTICE_COOLDOWN_MS = 60_000;
+const DEFAULT_STRANGER_NOTICE =
+  '👋 我是一位主人的个人 Cindy 助理，只响应主人本人的指令~\nI am a personal Cindy assistant and only respond to my owner.';
+
 const DEFAULT_OWNER_NOTICES = {
   linked: '✅ All linked. Just send a message when you are ready.',
   disconnected: '🔌 Unlinked. Link again whenever you need me.',
@@ -101,6 +106,8 @@ export interface TelegramIMOptions {
   ownerNoticeText?:
     | Partial<Record<OwnerNoticePhase, string>>
     | ((phase: OwnerNoticePhase) => string);
+  /** 非 owner 显式召唤时的礼貌回应文案(缺省用内置中英双语一句)。 */
+  strangerNotice?: string;
   /** 测试注入: 替换真实 Bot API 客户端。 */
   apiFactory?: (token: string) => TelegramApiClient;
 }
@@ -136,6 +143,15 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    * /卡片不重复回挂; DM 不回挂。
    */
   private readonly laneReplyTargets = new Map<string, string>();
+  /** 非 owner 礼貌回应的 per-user 冷却(userId → 上次回应 ts)。 */
+  private readonly strangerNoticeAt = new Map<string, number>();
+  /**
+   * 出站消息 → 所属 lane(`${chatId}|${messageId}` → laneUserId)。
+   * 官方 bot 的普通群会话模型: 裸 @ = 每条独立新会话(per-root lane),
+   * reply bot 的回答 = 续接那条链 — 本表就是"reply 命中哪条链"的路由依据。
+   * 内存态 FIFO 上限 2000; 重启丢失时 reply 降级为开新链(不丢消息)。
+   */
+  private readonly outboundLanes = new Map<string, string>();
 
   constructor(
     host: IMHost,
@@ -630,7 +646,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   ): Promise<void> {
     if (!m.from) return;
     if (m.chat.type === 'private') {
-      if (String(m.from.id) !== this.ownerUserId) return; // 非 owner 私聊直接忽略
+      if (String(m.from.id) !== this.ownerUserId) {
+        // 非 owner 私聊: 礼貌回应一句(官方 bot unbound 提示的个人版语义),
+        // per-user 冷却防刷屏; 不进任何业务链路。
+        this.maybeSendStrangerNotice(String(m.from.id), String(m.chat.id), m.message_id);
+        return;
+      }
       // 附件下载可达数秒 — 快照受理时的配置, 完成后配置已换代就丢弃
       // (与 Discord 的 acceptedContext 模式同口径)。
       const acceptedConfigVersion = this.configVersion;
@@ -655,8 +676,16 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
       const trigger = detectGroupTrigger(m, this.botId, this.botUsername);
       if (!trigger) return;
-      if (String(m.from.id) !== this.ownerUserId) return; // 仅 owner 可触发
-      const laneUserId = laneUserIdOf(m);
+      if (String(m.from.id) !== this.ownerUserId) {
+        // 第三方在群里显式召唤(@/reply): 礼貌回应(挂回 TA 的消息), 带冷却。
+        this.maybeSendStrangerNotice(String(m.from.id), String(m.chat.id), m.message_id, {
+          ...(m.is_topic_message === true && m.message_thread_id !== undefined
+            ? { messageThreadId: m.message_thread_id }
+            : {}),
+        });
+        return;
+      }
+      const laneUserId = this.resolveGroupLane(m);
       this.laneReplyTargets.set(laneUserId, String(m.message_id));
       const acceptedConfigVersion = this.configVersion;
       const event = await normalizeMessage(m, {
@@ -719,13 +748,40 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   // ── outbound helpers ───────────────────────────────────────────────────────
 
+  /**
+   * 群消息 → lane 归属(官方 bot 同款会话模型):
+   *   - forum topic 消息: 每 topic 一条持久 lane(等价私聊);
+   *   - 普通群 reply 到 bot 出站消息且路由表命中: 续接那条链的 lane;
+   *   - 其余(裸 @ / 路由表重启丢失): 以触发消息自身为 root 开新链
+   *     `g/{chatId}/r{rootId}`。
+   */
+  private resolveGroupLane(m: TgMessage): string {
+    const chatId = String(m.chat.id);
+    const topicThreadId = laneThreadIdOf(m);
+    if (topicThreadId) return encodeLaneUserId(chatId, topicThreadId);
+    const repliedId = m.reply_to_message?.message_id;
+    if (repliedId !== undefined) {
+      const continued = this.outboundLanes.get(`${chatId}|${repliedId}`);
+      if (continued) return continued;
+    }
+    return encodeLaneUserId(chatId, `r${m.message_id}`);
+  }
+
+  /** lane threadId 段是否为 root 标记(`r<msgId>` — 普通群 reply 链, 非 topic)。 */
+  private static isRootLaneThread(threadId: string): boolean {
+    return threadId.startsWith('r');
+  }
+
   /** userId → sendMessage 目标参数(私聊 chat_id = user id; lane 解码回群)。 */
   private targetOf(userId: string): { chat_id: string; message_thread_id?: number } {
     const lane = decodeLaneUserId(userId);
     if (!lane) return { chat_id: userId };
     return {
       chat_id: lane.chatId,
-      ...(lane.threadId ? { message_thread_id: Number(lane.threadId) } : {}),
+      // root 标记不是 forum topic id, 不下发 message_thread_id。
+      ...(lane.threadId && !TelegramIM.isRootLaneThread(lane.threadId)
+        ? { message_thread_id: Number(lane.threadId) }
+        : {}),
     };
   }
 
@@ -896,9 +952,17 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   ): void {
     const lane = decodeLaneUserId(userId);
     if (!lane) return;
+    // reply 链路由: 记住这条出站属于哪条 lane, 用户 reply 它即续接该链。
+    this.outboundLanes.set(`${lane.chatId}|${sent.message_id}`, userId);
+    if (this.outboundLanes.size > 2000) {
+      const oldest = this.outboundLanes.keys().next().value;
+      if (oldest !== undefined) this.outboundLanes.delete(oldest);
+    }
     this.emitGroupWindow({
       chatId: lane.chatId,
-      threadId: lane.threadId,
+      // root 标记是会话身份, 不是窗口维度 — 窗口按 (chat, topic) 聚,
+      // 普通群 reply 链共享主群流窗口。
+      threadId: TelegramIM.isRootLaneThread(lane.threadId) ? '' : lane.threadId,
       messageId: String(sent.message_id),
       chatName: sent.chat.title ?? null,
       author: { name: this.botName, isBot: true },
@@ -936,6 +1000,38 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     } catch {
       /* best-effort — 丢失只是退化回 at-least-once 重放 */
     }
+  }
+
+  /** 非 owner 显式召唤的礼貌回应(fire-and-forget, per-user 冷却)。 */
+  private maybeSendStrangerNotice(
+    userId: string,
+    chatId: string,
+    replyToMessageId: number,
+    opts: { messageThreadId?: number } = {},
+  ): void {
+    const now = Date.now();
+    const last = this.strangerNoticeAt.get(userId) ?? 0;
+    if (now - last < STRANGER_NOTICE_COOLDOWN_MS) return;
+    this.strangerNoticeAt.set(userId, now);
+    if (this.strangerNoticeAt.size > 500) {
+      const oldest = this.strangerNoticeAt.keys().next().value;
+      if (oldest !== undefined) this.strangerNoticeAt.delete(oldest);
+    }
+    const api = this.api;
+    if (!api) return;
+    void api
+      .call('sendMessage', {
+        chat_id: chatId,
+        text: this.opts.strangerNotice?.trim() || DEFAULT_STRANGER_NOTICE,
+        reply_parameters: { message_id: replyToMessageId, allow_sending_without_reply: true },
+        ...(opts.messageThreadId !== undefined
+          ? { message_thread_id: opts.messageThreadId }
+          : {}),
+      })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.log.warn(`stranger notice failed (non-fatal): ${msg}`);
+      });
   }
 
   private markRuntimeActive(): void {

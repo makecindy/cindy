@@ -27,7 +27,7 @@ import type { Schedule, ScheduleRun } from '@cindy/maker-scheduler';
 import type { InteractiveCardSpec } from '@cindy/im';
 
 import type { ImUiTextPack } from './types';
-import type { ControlProject, ControlSession } from './controlProjects';
+import type { ControlProject, ControlSession, RecentControlSession } from './controlProjects';
 
 const MAX_PLAN_LEN = 1500;
 const MAX_INPUT_PREVIEW = 800;
@@ -97,6 +97,11 @@ export interface ImCardBuilders {
     projects: ControlProject[];
     /** 当前会话所在目录的显示名(项目名或 ui.cards.project.dialogueName)。 */
     currentName: string;
+  }): InteractiveCardSpec;
+  /** `/session` 跨工作区最近会话直达卡(选中走 control:session-pick 接管)。 */
+  buildRecentSessionPickerCard(args: {
+    botAppId: string;
+    sessions: RecentControlSession[];
   }): InteractiveCardSpec;
   buildResolvedCard(label: string): InteractiveCardSpec;
 }
@@ -414,6 +419,49 @@ export function createCardBuilders(
           })),
           newBtn,
           backBtn,
+          exitBtn,
+        ],
+      };
+    },
+
+    /**
+     * `/session` 跨工作区最近会话直达卡 — 选中即接管(control:session-pick
+     * 同一终态路径), 与 /ctr 的分步选择互补。
+     */
+    buildRecentSessionPickerCard(args) {
+      const recentUi = ui.cards.control.recentSessions;
+      if (!recentUi) {
+        throw new Error('buildRecentSessionPickerCard requires ui.cards.control.recentSessions');
+      }
+      const { botAppId, sessions } = args;
+      const exitBtn = {
+        id: 'control:exit',
+        label: ui.cards.control.btnExit,
+        type: 'danger' as const,
+        payload: { requestId: 'control-exit', botAppId },
+      };
+      if (sessions.length === 0) {
+        return { title: recentUi.title, body: recentUi.emptyBody, buttons: [exitBtn] };
+      }
+      return {
+        title: recentUi.title,
+        body: recentUi.hint,
+        buttons: [
+          ...sessions.map((s) => ({
+            id: 'control:session-pick',
+            label: truncate(
+              recentUi.optionLabel(s.title || s.id.slice(-8), s.workspaceDisplayName || null),
+              30,
+            ),
+            type: 'default' as const,
+            payload: {
+              requestId: `control-session-pick:${s.id}`,
+              botAppId,
+              sessionId: s.id,
+              sessionTitle: s.title,
+              displayName: s.workspaceDisplayName,
+            },
+          })),
           exitBtn,
         ],
       };

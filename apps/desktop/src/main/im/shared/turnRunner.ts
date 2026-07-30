@@ -1432,13 +1432,26 @@ export function createTurnRunner(
    * 早已 resolve,也可能仍在飞行中),拿到 reaction token 后调 removeReaction。
    * 任何环节失败都吞掉，这是 ack 的清理动作，不能影响 turn 结束流程。
    */
-  async function cancelAckReaction(turn: TurnState): Promise<void> {
+  async function cancelAckReaction(
+    turn: TurnState,
+    opts: { terminal?: boolean } = {},
+  ): Promise<void> {
     if (!turn.ackReactionIdPromise || !turn.userMessageId) return;
     const promise = turn.ackReactionIdPromise;
     turn.ackReactionIdPromise = null;
     try {
       const reactionId = await promise;
       if (!reactionId) return;
+      // 真正跑完的 turn 可把"已收到"替换成结果表情(telegram: 👍/👎;
+      // setMessageReaction 整组替换, 旧 ack 一并被顶掉)。
+      const terminalEmoji =
+        opts.terminal && adapter.terminalReactionEmoji
+          ? adapter.terminalReactionEmoji(turn.terminalKind)
+          : null;
+      if (terminalEmoji) {
+        await im.reactToMessage?.(turn.userMessageId, terminalEmoji);
+        return;
+      }
       await im.removeMessageReaction?.(turn.userMessageId, reactionId);
     } catch {
       /* 忽略失败：表情清理是尽力而为。 */
@@ -1895,8 +1908,9 @@ export function createTurnRunner(
     releaseAttachedImTurnHeadless(turn);
     // terminal done/error 的普通收口路径。撤 ack 是不等待的尽力清理，
     // 失败由 cancelAckReaction 内部吞掉；pre-dispatch failure 需要更严格
-    // 顺序，走 completeTurnCallbackAfterAck。
-    void cancelAckReaction(turn);
+    // 顺序，走 completeTurnCallbackAfterAck(不带 terminal — 没跑过的 turn
+    // 不放结果表情)。
+    void cancelAckReaction(turn, { terminal: true });
     invokeTurnCompleteCallback(turn);
   }
 

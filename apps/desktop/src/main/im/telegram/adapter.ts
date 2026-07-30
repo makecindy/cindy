@@ -66,6 +66,8 @@ export function buildTelegramAdapter(
       }),
     },
     processingEmoji: PROCESSING_EMOJI,
+    // 官方 bot 的结果表情习惯: 成功 👍 / 失败 👎; 中止不放(撤回 👀 即可)。
+    terminalReactionEmoji: (kind) => (kind === 'done' ? '👍' : kind === 'error' ? '👎' : null),
     // /project: 从 Telegram 把当前会话切到 desktop 项目目录(bot 原生会话)。
     projectSwitching: true,
     buildVendorOptions: (userId) => ({ telegramChatId: userId, source: 'telegram' }),
@@ -81,10 +83,14 @@ export function buildTelegramAdapter(
         return { agentText: `${replyBlock}${event.text}` };
       }
       const { messageId: triggerMessageId } = decodeTelegramMessageId(event.messageId);
+      // 普通群的 per-root reply 链(threadId 段 `r<msgId>`): 共享主群流窗口,
+      // 但各链独立游标 — 与官方 externalKey 含 rootMessageId 的语义对齐。
+      const isRootLane = lane.threadId.startsWith('r');
       const assembly = await buildTelegramGroupContextPrefix({
         botId: event.contextId,
         chatId: lane.chatId,
-        threadId: lane.threadId,
+        threadId: isRootLane ? '' : lane.threadId,
+        cursorScope: lane.threadId,
         triggerMessageId,
       });
       // 顺序: 群窗口(较远的背景) → 引用块(直接相关) → 用户正文。

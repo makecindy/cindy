@@ -159,7 +159,13 @@ export interface IMMessageEvent {
    * 编排层可据此在送模型正文前拼引用上下文块;落库仍是渠道原文。
    * 不支持引用语义的渠道恒 undefined。
    */
-  replyContext?: { author: string; text: string; isBot?: boolean };
+  replyContext?: {
+    author: string;
+    text: string;
+    isBot?: boolean;
+    /** 被引消息的附件数(已并入本事件 attachments;0/缺省 = 无)。 */
+    attachmentCount?: number;
+  };
   /** Channel-specific raw event for debug. */
   raw?: unknown;
 }

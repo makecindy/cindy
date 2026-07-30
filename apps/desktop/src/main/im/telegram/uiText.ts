@@ -16,18 +16,21 @@ export const telegramUiText = {
 
 export const ui = {
   slash: {
+    start:
+      '👋 你好，我是你的个人 Cindy 助理~\n\n私聊直接发消息就行；群里 @ 我或回复我的消息才会触发。发 /help 看全部命令。',
     new: '🌱 新对话已开 — 之前的上下文清掉了，从头聊~',
     help: `🤖 我能帮你做这些：
 
 /new         开个新对话（清掉当前上下文；群里发就重置这个群话题的上下文）
 /project     切到某个项目目录干活（bot 原生会话，不接管 desktop）
+/session     列最近的 desktop 会话，点一个直接接管续聊
 /model       换个模型上场
 /permission  调一下权限模式（auto / bypass / ask 等）
 /ctr         远程接管 desktop 上的某个工作区（接管中再发可直接换会话）
 /exctr       结束接管，回到 Telegram 对话
 /help        看看我会啥
 
-任务跑着想让它停？直接发 \`!stop\`，我会立刻中止当前任务、把排队的消息也撤掉，会话保留可继续。
+任务跑着想让它停？发 /stop（或 \`!stop\`），我会立刻中止当前任务、把排队的消息也撤掉，会话保留可继续。
 
 私聊直接发消息就行；群里 @ 我或回复我的消息才会触发，我也会记住群里最近的聊天做上下文~`,
     unknownCommand: (cmd: string) =>
@@ -151,6 +154,13 @@ export const ui = {
     control: {
       title: '🎮 挑个工作区上号',
       emptyBody: '_暂时还没有可接管的工作区~ 在 desktop 端打开/创建一个会话再来_',
+      recentSessions: {
+        title: '🕑 最近的会话',
+        hint: '点一个直接接管续聊（跨工作区按时间排）· 想按工作区挑用 /ctr · 🚪 退出取消',
+        emptyBody: '_desktop 端还没有活跃会话~ 先在 desktop 里开一个再来_',
+        optionLabel: (title: string, workspaceName: string | null) =>
+          workspaceName ? `${title} · ${workspaceName}` : title,
+      },
       hint: '点工作区往下走；点 🚪 退出 取消这次',
       attachedSwitchHint: (sessionTitle: string) =>
         `🎮 当前接管中：**${sessionTitle}**\n选个新会话直接换乘；点 🚪 退出则保持现状`,
