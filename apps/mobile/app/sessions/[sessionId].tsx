@@ -588,6 +588,15 @@ const ENQUEUE_RECONNECT_BACKOFF_MS = 300;
  */
 const COMPOSER_ACTIVITY_SETTLE_MS = 600;
 
+/** 落定集合 / 基线的空值(模块级常量:引用稳定,不让 memo 每帧失效)。 */
+const EMPTY_SETTLING_ITEMS: readonly QueuedRemoteMessage[] = [];
+const EMPTY_SETTLING_BASELINE: {
+  sessionId: string;
+  queue: readonly QueuedRemoteMessage[];
+  steeringSource: readonly string[];
+  steeringClientIds: ReadonlySet<string>;
+} = { sessionId: '', queue: [], steeringSource: [], steeringClientIds: new Set() };
+
 /**
  * 「这个会话在被控端还不存在」——所有**需要远端会话**的入口共用的唯一判据。
  *
@@ -900,7 +909,26 @@ export default function SessionScreen() {
   // 后落库推送,device-link 下两者相隔可感知——此间继续渲染半透明气泡(转圈徽标),
   // 消息回流(clientId 进入 queueHiddenClientIds)或超时后移除,保证「原位变实」
   // 不闪断。用户主动删除的条目经 locallyRemoved 集合排除,不产生幽灵气泡。
-  const [settlingQueueItems, setSettlingQueueItems] = useState<readonly QueuedRemoteMessage[]>([]);
+  // 状态本体带归属会话:同一个 SessionScreen 实例会原地从会话 A 切到 B,而清理是**被动**
+  // effect(layout effect 先跑、它后跑),清理落地前 B 的首帧会照着 A 的残留画气泡 ——
+  // 用户会在 B 里看到一瞬间 A 的消息内容(review P1)。带上 sessionId 后读侧一律先核身份,
+  // 不匹配即视为空,时序不再影响正确性;被动清理只剩释放内存的作用。
+  const [settlingState, setSettlingState] = useState<{
+    sessionId: string;
+    items: readonly QueuedRemoteMessage[];
+  }>(() => ({ sessionId, items: [] }));
+  const settlingQueueItems = settlingState.sessionId === sessionId ? settlingState.items : EMPTY_SETTLING_ITEMS;
+  /** 更新本会话的落定集合;跨会话残留一律先丢掉再算(不把 A 的条目并进 B)。 */
+  const setSettlingQueueItems = useCallback((
+    updater: (current: readonly QueuedRemoteMessage[]) => readonly QueuedRemoteMessage[],
+  ) => {
+    setSettlingState((current) => {
+      const base = current.sessionId === sessionId ? current.items : EMPTY_SETTLING_ITEMS;
+      const next = updater(base);
+      if (next === base && current.sessionId === sessionId) return current;
+      return { sessionId, items: next };
+    });
+  }, [sessionId]);
   const settlingAddedAtRef = useRef<Map<string, number>>(new Map());
   /**
    * 「附件 ossRef → 发送时刻的本地预览 file://」。
@@ -958,11 +986,17 @@ export default function SessionScreen() {
    * 转圈永不停。放 state 后 memo 的依赖 = 它的全部输入,这类错误在结构上不可能再出现。
    * 存 projection 的原数组引用(不拷贝)是为了让「本帧是否已处理过」可用身份判定。
    */
-  const [settlingBaseline, setSettlingBaseline] = useState<{
+  const [settlingBaselineState, setSettlingBaseline] = useState<{
+    sessionId: string;
     queue: readonly QueuedRemoteMessage[];
     steeringSource: readonly string[];
     steeringClientIds: ReadonlySet<string>;
-  }>(() => ({ queue: [], steeringSource: [], steeringClientIds: new Set() }));
+  }>(() => ({ sessionId, queue: [], steeringSource: [], steeringClientIds: new Set() }));
+  // 基线同样按会话核身份:切到 B 的首帧若拿 A 的队列当基线,A 里有、B 里没有的条目会被
+  // 判成「刚出队」,当场把 A 的消息画进 B(review P1)。不匹配 → 空基线 = 判不出消失。
+  const settlingBaseline = settlingBaselineState.sessionId === sessionId
+    ? settlingBaselineState
+    : EMPTY_SETTLING_BASELINE;
   /** 用户本地主动删除的排队条目(同上:落定判定的输入,必须对 memo 可见)。 */
   const [locallyRemovedQueueClientIds, setLocallyRemovedQueueClientIds] = useState<ReadonlySet<string>>(new Set());
   const [pendingHistoryExpanded, setPendingHistoryExpanded] = useState(false);
@@ -2209,9 +2243,9 @@ export default function SessionScreen() {
     // effect body 之前完成,这里再清 ref 是幂等的,保证两者时刻一致。
     queueEditingRef.current = null;
     setQueueEditing(null);
-    setSettlingQueueItems([]);
+    setSettlingQueueItems(() => EMPTY_SETTLING_ITEMS);
     settlingAddedAtRef.current.clear();
-    setSettlingBaseline({ queue: [], steeringSource: [], steeringClientIds: new Set() });
+    setSettlingBaseline({ ...EMPTY_SETTLING_BASELINE, sessionId });
     setLocallyRemovedQueueClientIds(new Set());
   }, [sessionId]);
 
@@ -3348,6 +3382,7 @@ export default function SessionScreen() {
     const currentIds = new Set(inputProjection.pendingQueue.map((item) => item.clientId));
     const currentSteering = new Set(inputProjection.steeringQueueClientIds);
     setSettlingBaseline({
+      sessionId,
       queue: inputProjection.pendingQueue,
       steeringSource: inputProjection.steeringQueueClientIds,
       steeringClientIds: currentSteering,
@@ -3378,6 +3413,8 @@ export default function SessionScreen() {
     inputProjection.steeringQueueClientIds,
     locallyRemovedQueueClientIds,
     queueHiddenClientIds,
+    sessionId,
+    setSettlingQueueItems,
     settlingBaseline,
   ]);
   // 「这一条不该再画落定气泡」的唯一判据:已回流(正式消息进流里)或用户本地删除。
@@ -3402,7 +3439,7 @@ export default function SessionScreen() {
       }
       return next;
     });
-  }, [settlingRetired]);
+  }, [setSettlingQueueItems, settlingRetired]);
   // render 阶段现算的落定项:上面那个 layout effect 的 setState 要多走一次 render 才落地
   // (RN 下不保证在绘制前 flush,实测 trace 里 queue=0 settling=0 会先亮一帧),队列减少的
   // 同一帧屏幕上就没有气泡了。这里用同一份纯判定在 render 时直接算出来补上,与 state 版
@@ -3453,7 +3490,7 @@ export default function SessionScreen() {
       }));
     }, SETTLE_TIMEOUT_MS + 500);
     return () => clearTimeout(timer);
-  }, [settlingQueueItems]);
+  }, [setSettlingQueueItems, settlingQueueItems]);
   // session-tail-banner「忽略」过的错误行(本地乐观集合;持久化 dismiss 另发,老被控端
   // 降级本视图隐藏)。声明在 renderItems 之前——errorTailClientId 过滤要用;banner 相关
   // 的其余状态与 handler 在下方 queue handler 区。
@@ -5943,6 +5980,11 @@ export default function SessionScreen() {
     nextIntent: NonNullable<RemoteSession['agentSwitchIntent']>,
   ): Promise<boolean> => {
     if (!deviceId || controlBusy) return false;
+    // 会话建成前不写切换意图:被控端的 switch handler 要求会话行已存在,合成行阶段
+    // 一律 NOT_FOUND。这里是**全部** agent-switch 写入的唯一出口(换模型 / 换 effort /
+    // 换 fast 三条路都经它),门放在这里而不是各调用点,新增入口不会漏(review P1:
+    // 换模型那条路不走 runControlAction,只在那儿加锁就漏了它)。
+    if (sessionSettingsLocked) return false;
     const seq = ++agentSwitchWriteSeqRef.current;
     const previousIntent = normalizeSessionAgentSwitchIntent(
       remoteSessionStore.getSessions().find((item) => item.id === sessionId)?.agentSwitchIntent,
@@ -6001,7 +6043,7 @@ export default function SessionScreen() {
     } finally {
       if (agentSwitchWriteSeqRef.current === seq) setControlBusy(false);
     }
-  }, [controlBusy, deviceId, maker, sessionId]);
+  }, [controlBusy, deviceId, maker, sessionId, sessionSettingsLocked]);
 
   // Context 面板「计划模式」开关,双路径(#494 迁移):
   //  - 新协议(capabilities.planMode.supported):maker:set-plan-mode 开关一级 flag,

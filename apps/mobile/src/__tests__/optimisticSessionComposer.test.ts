@@ -132,7 +132,7 @@ describe('mobile optimistic composer while session is not ready', () => {
     // 消化时,10s 超时把条目移出 settlingQueueItems 后过期缓存又把它加回来,转圈永不停
     // (review P1)。所以基线与「本地已删」都必须是 state。
     const screen = readSource(SCREEN);
-    expect(screen).toContain('const [settlingBaseline, setSettlingBaseline] = useState<{');
+    expect(screen).toContain('const [settlingBaselineState, setSettlingBaseline] = useState<{');
     expect(screen).toContain('const [locallyRemovedQueueClientIds, setLocallyRemovedQueueClientIds]');
     expect(screen).not.toContain('prevPendingQueueRef');
     expect(screen).not.toContain('locallyRemovedQueueClientIdsRef');
@@ -154,6 +154,43 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(screen).toContain('const settlingRetired = useCallback(');
     expect(screen).toContain('const next = current.filter((item) => !settlingRetired(item.clientId));');
     expect(screen).toContain('settlingQueueItems.filter((item) => !settlingRetired(item.clientId)),');
+  });
+
+  it('never renders the previous session\'s settling bubbles after an in-place switch', () => {
+    // 同一个 SessionScreen 实例会原地从会话 A 切到 B,而清理是**被动** effect(layout
+    // effect 先跑、它后跑):清理落地前 B 的首帧会照着 A 的基线与残留画气泡,用户会在 B 里
+    // 看到一瞬间 A 的消息内容(review P1)。落定集合与基线都带归属会话,读侧先核身份,
+    // 时序不再影响正确性。
+    const screen = readSource(SCREEN);
+    // 状态本体带 sessionId。
+    expect(screen).toContain('const [settlingState, setSettlingState] = useState<{\n    sessionId: string;');
+    expect(screen).toContain('const [settlingBaselineState, setSettlingBaseline] = useState<{\n    sessionId: string;');
+    // 读侧核身份,不匹配即视为空。
+    expect(screen).toContain('const settlingQueueItems = settlingState.sessionId === sessionId ? settlingState.items : EMPTY_SETTLING_ITEMS;');
+    expect(screen).toContain('const settlingBaseline = settlingBaselineState.sessionId === sessionId\n    ? settlingBaselineState\n    : EMPTY_SETTLING_BASELINE;');
+    // 写侧同样先核身份:不把 A 的条目并进 B。
+    expect(screen).toContain('const base = current.sessionId === sessionId ? current.items : EMPTY_SETTLING_ITEMS;');
+    // 空值是模块级常量:引用稳定,不让 memo 每帧失效。
+    expect(screen).toContain('const EMPTY_SETTLING_ITEMS: readonly QueuedRemoteMessage[] = [];');
+    // 写入器按 sessionId 记账,必须进各 effect 依赖,否则切会话那帧可能用旧写入器
+    // 把新会话的集合覆盖掉。
+    const writerDeps = screen.split('setSettlingQueueItems,').length - 1;
+    expect(writerDeps).toBeGreaterThanOrEqual(3);
+  });
+
+  it('locks the agent-switch writer, not just the runControlAction callers', () => {
+    // 换模型走的是 selectComposerModelRow → writeSessionAgentSwitchIntent,不经
+    // runControlAction:只在后者加锁就漏了它,而被控端的 switch handler 要求会话行已存在,
+    // 合成行阶段一律 NOT_FOUND(review P1)。门放在唯一出口,新增入口不会再漏。
+    const screen = readSource(SCREEN);
+    const fnStart = screen.indexOf('const writeSessionAgentSwitchIntent = useCallback(async (');
+    expect(fnStart).toBeGreaterThan(-1);
+    const fnEnd = screen.indexOf('  }, [controlBusy, deviceId, maker, sessionId', fnStart);
+    expect(fnEnd).toBeGreaterThan(fnStart);
+    const fn = screen.slice(fnStart, fnEnd);
+    expect(fn).toContain('if (sessionSettingsLocked) return false;');
+    // 锁进依赖,回调不会停留在「未锁」那一帧。
+    expect(screen).toContain('}, [controlBusy, deviceId, maker, sessionId, sessionSettingsLocked]);');
   });
 
   it('binds sticky/locked derived state to the thing it belongs to', () => {
