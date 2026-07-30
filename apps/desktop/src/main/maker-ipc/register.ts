@@ -2130,9 +2130,12 @@ function handleAgentIslandInteractionDismissedByRequestId(requestId: string): vo
   }
 }
 
-function handleAgentIslandSessionClosedAfterCleanup(sessionId: string): void {
+function handleAgentIslandSessionClosedAfterCleanup(
+  sessionId: string,
+  reason: 'discarded' | 'process-closed' = 'discarded',
+): void {
   try {
-    getAgentIslandService()?.handleSessionClosed(sessionId);
+    getAgentIslandService()?.handleSessionClosed(sessionId, { reason });
   } catch (error) {
     log.warn('Agent Island session close cleanup failed after mandatory session cleanup', {
       sessionId,
@@ -3418,7 +3421,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // 后台活动检测:会话进程已关闭(closeSession / 删除),清账并广播横幅熄灭。
       clearClaudeSessionBackgroundActivity(session.id);
       clearSessionPersistState(session.id);
-      handleAgentIslandSessionClosedAfterCleanup(session.id);
+      // 进程关闭 ≠ 通知作废:临时会话调度(非 heartbeat / 非 persistentSession)在 run
+      // 终态后立刻 closeSession,此刻完成卡片刚在灵动岛上弹出来。硬删条目会让它当场
+      // 消失,所以这条路径保留仍在展示的卡片,由 dwell 到期或用户 ack 收掉。
+      handleAgentIslandSessionClosedAfterCleanup(session.id, 'process-closed');
     }
   }));
 

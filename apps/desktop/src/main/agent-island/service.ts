@@ -68,6 +68,7 @@ import {
   applyAgentIslandUserPrompt,
   buildAgentIslandDisplayState,
   buildAllSessionActivitySnapshots,
+  closeAgentIslandSessionPreservingUnread,
   completeAgentIslandSessionWithoutAttention,
   createAgentIslandUserPromptRollbackToken,
   createAgentIslandState,
@@ -977,7 +978,18 @@ export class AgentIslandService {
     }
   }
 
-  handleSessionClosed(sessionId: string): void {
+  /**
+   * @param options.reason
+   *   `'discarded'`(默认)= 这条记录不该再存在(会话归档 / 删除、Orca worker 被策略
+   *   清除),条目硬删。
+   *   `'process-closed'` = 只是 agent 进程收了(典型:临时会话调度 run 终态后的
+   *   closeSession),仍在展示的完成 / 错误卡片必须留着走完 dwell,否则刚弹出的卡片会
+   *   当场消失。见 `closeAgentIslandSessionPreservingUnread`。
+   */
+  handleSessionClosed(
+    sessionId: string,
+    options: { reason?: 'discarded' | 'process-closed' } = {},
+  ): void {
     this.stoppedSessionIds.delete(sessionId);
     this.replacementTurnPendingSessionIds.delete(sessionId);
     this.replacementTurnDispatchingSessionIds.delete(sessionId);
@@ -993,7 +1005,11 @@ export class AgentIslandService {
     this.deferredCompletions.delete(sessionId);
     // Remote auth retry closes the failed session before the renderer reports
     // whether its replacement turn started, so keep that deferred error here.
-    removeAgentIslandSession(this.state, sessionId);
+    if (options.reason === 'process-closed') {
+      closeAgentIslandSessionPreservingUnread(this.state, sessionId, Date.now());
+    } else {
+      removeAgentIslandSession(this.state, sessionId);
+    }
     this.deletePermissionRequestsForSession(sessionId);
     this.publish();
   }

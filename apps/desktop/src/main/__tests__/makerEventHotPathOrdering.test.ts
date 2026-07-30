@@ -191,11 +191,11 @@ describe('maker:event hot path ordering', () => {
       /ipcMain\.handle\(MAKER_INVOKE\.CLOSE_SESSION,[\s\S]*?\n {2}\}\);/,
     )?.[0];
 
-    expect(closedBlock).toContain('handleAgentIslandSessionClosedAfterCleanup(session.id);');
+    expect(closedBlock).toContain("handleAgentIslandSessionClosedAfterCleanup(session.id, 'process-closed');");
     expectOrder(
       closedBlock,
       "cleanupPendingInteractionsForSession(session.id, 'session_closed');",
-      'handleAgentIslandSessionClosedAfterCleanup(session.id);',
+      "handleAgentIslandSessionClosedAfterCleanup(session.id, 'process-closed');",
     );
     expect(source).toContain('Agent Island session close cleanup failed after mandatory session cleanup');
     expect(closeSessionHandler).toBeTruthy();

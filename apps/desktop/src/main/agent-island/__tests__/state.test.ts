@@ -11,9 +11,11 @@ import {
   applyAgentIslandMetadata,
   applyAgentIslandUserPrompt,
   AGENT_ISLAND_COMPLETION_DWELL_MS,
+  AGENT_ISLAND_COMPLETION_REVEAL_DWELL_MS,
   AGENT_ISLAND_MESSAGE_PREVIEW_MIN_DWELL_MS,
   AGENT_ISLAND_UNREAD_TRANSIENT_TTL_MS,
   buildAgentIslandDisplayState,
+  closeAgentIslandSessionPreservingUnread,
   createAgentIslandState,
   dismissAgentIslandActiveReveal,
   getNextAgentIslandTimerAt,
@@ -2136,5 +2138,69 @@ describe('Agent Island 未读驻留 TTL(避免几小时前完成的任务无限�
 
     const display = buildAgentIslandDisplayState(state, afterExpiry);
     expect(display.totalCount).toBe(0);
+  });
+});
+
+describe('会话进程关闭不该抹掉正在展示的通知', () => {
+  it('临时会话 run 收尾 closeSession 后,完成卡片仍能走完 dwell', () => {
+    const state = createAgentIslandState();
+    // 临时会话调度(非 heartbeat、非 persistentSession)的真实时序:done 之后 runner 的
+    // fire finally 立刻 closeSession,两者只隔毫秒级。
+    applyAgentIslandEvent(state, { sessionId: 'ephemeral', title: '每周巡检' }, doneEvent(), 2_000);
+    closeAgentIslandSessionPreservingUnread(state, 'ephemeral', 2_050);
+
+    const justAfterClose = buildAgentIslandDisplayState(state, 2_100);
+    expect(justAfterClose.totalCount).toBe(1);
+    expect(justAfterClose.mode).toBe('expanded');
+    expect(justAfterClose.displaySurface).toBe('completionCard');
+
+    // dwell 走完后照常收起,但未读条目保留(与普通完成一致)。
+    const afterDwell = buildAgentIslandDisplayState(state, 2_000 + AGENT_ISLAND_COMPLETION_REVEAL_DWELL_MS + 500);
+    expect(afterDwell.mode).toBe('compact');
+    expect(afterDwell.pillSnapshot.unreadCompletedCount).toBe(1);
+  });
+
+  it('进程关闭会落下运行态,不让 pill 一直转', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'running', title: '跑着' }, statusEvent(true, '思考中'), 1_000);
+    // 运行中的会话本来是可见的(isSessionVisible 对 running 直接放行)。
+    expect(buildAgentIslandDisplayState(state, 1_100).totalCount).toBe(1);
+
+    closeAgentIslandSessionPreservingUnread(state, 'running', 1_200);
+
+    // 没有未读终态也没有 dwell 需要保留 → 条目照常清掉。
+    expect(buildAgentIslandDisplayState(state, 1_300).totalCount).toBe(0);
+  });
+
+  it('进程关闭时还挂着 pending 交互 → 整条删掉,不留一张点不动的审批卡片', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandInteractionRequest(
+      state,
+      { sessionId: 'perm', title: '等审批' },
+      {
+        kind: 'permission',
+        requestId: 'r1',
+        toolName: 'Bash',
+        input: { command: 'rm -rf dist' },
+      },
+      1_000,
+    );
+    expect(buildAgentIslandDisplayState(state, 1_100).totalCount).toBe(1);
+
+    // 进程一关,这个权限请求永远不会再被响应(service 侧同时删掉了 permissionRequests)。
+    closeAgentIslandSessionPreservingUnread(state, 'perm', 1_200);
+
+    expect(buildAgentIslandDisplayState(state, 1_300).totalCount).toBe(0);
+  });
+
+  it('已经没有展示需求的会话,进程关闭时照常删除', () => {
+    const state = createAgentIslandState();
+    applyAgentIslandEvent(state, { sessionId: 'read', title: '已读' }, doneEvent(), 2_000);
+    // 用户已经看过 → 未读清零,条目不再需要展示。
+    acknowledgeAgentIslandSessionRead(state, 'read', 3_000, { source: 'explicit' });
+
+    closeAgentIslandSessionPreservingUnread(state, 'read', 3_100);
+
+    expect(buildAgentIslandDisplayState(state, 3_200).totalCount).toBe(0);
   });
 });

@@ -4264,3 +4264,49 @@ describe('AgentIslandService session attention cleared bridge (error read semant
     expect(publishSpy.mock.calls.length).toBeGreaterThan(publishCountAfterError);
   });
 });
+
+describe('会话关闭原因决定条目去留', () => {
+  it('进程关闭保留仍在展示的完成卡片,归档/删除照常硬删', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+    syncEnabledForTest(service, publish);
+    const sessions = (
+      service as unknown as { state: { sessions: Map<string, unknown> } }
+    ).state.sessions;
+
+    // 临时会话调度的真实时序:done 之后 runner 的 fire finally 立刻 closeSession。
+    // 此刻完成卡片刚弹出来,硬删条目会让它当场消失(用户看到「弹一下就收起」)。
+    service.handleAgentEvent({ sessionId: 'ephemeral' }, doneEvent());
+    expect(sessions.has('ephemeral')).toBe(true);
+    service.handleSessionClosed('ephemeral', { reason: 'process-closed' });
+    expect(sessions.has('ephemeral')).toBe(true);
+
+    // 会话被归档 / 删除(默认 reason)语义是「这条记录不该再存在」→ 照常硬删。
+    service.handleSessionClosed('ephemeral');
+    expect(sessions.has('ephemeral')).toBe(false);
+  });
+
+  it('进程关闭时若已无展示需求,条目照常删除', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+    syncEnabledForTest(service, publish);
+    const sessions = (
+      service as unknown as { state: { sessions: Map<string, unknown> } }
+    ).state.sessions;
+
+    // 只是跑起来、没有任何终态未读 → 进程一关就没有保留价值。
+    service.handleUserPrompt({ sessionId: 'plain', agentKind: 'codex' }, 'hi');
+    expect(sessions.has('plain')).toBe(true);
+
+    service.handleSessionClosed('plain', { reason: 'process-closed' });
+    expect(sessions.has('plain')).toBe(false);
+  });
+});
