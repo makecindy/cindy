@@ -168,6 +168,7 @@ import { uploadPublicAsset } from './ossPublicUpload';
 import { removeRefs as removeMediaRefs } from './cindy-media/ledger';
 import {
   installWebviewHardener,
+  setRsbPopupHostResolver,
   setRsbPopupOpenerReportSubscriber,
   setRsbPopupOpenerResolver,
 } from './webview-security';
@@ -1108,6 +1109,10 @@ setRsbPopupOpenerResolver((webContentsId) => {
 setRsbPopupOpenerReportSubscriber((listener) =>
   getRsbBrowserBridge().onReport((record) => listener(record.webContentsId)),
 );
+// popup 路由目标 host 动态解析:异步等待(归属反查 / deferred URL 捕获)期间用户
+// detach 侧边栏或切视图后,捕获时的 hostContents 已过时 —— 发送时刻按当前宿主
+// 形态解析(与 tab-op bridge 同一来源),消息才能落到活着的订阅者。
+setRsbPopupHostResolver(() => rsbWindowController.getHostWebContents());
 // Tab-op result handler for the main → renderer request/response bridge —
 // RsbWebviewBackend (Phase 3) uses this to drive `open` / `focus` / `close`
 // against the renderer's RSB store.

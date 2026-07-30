@@ -432,12 +432,36 @@ function isRoutablePopupUrl(url: string): boolean {
   }
 }
 
+/**
+ * popup 路由目标 host 的动态解析钩子(bootstrap 注入 rsbWindowController 的
+ * getHostWebContents,与 tab-op bridge 同一来源)。popup 路由可能经过异步等待
+ * (归属反查 / deferred URL 捕获),期间用户 detach 侧边栏或切换视图会让捕获时的
+ * hostContents 过时 —— 旧 renderer 的 Shell 已退订,fanOut 不缓冲,消息发过去
+ * 就是丢弃。发送时刻动态解析当前 host 才能落到活着的订阅者。
+ */
+let popupHostResolver: (() => WebContents | null) | null = null;
+
+export function setRsbPopupHostResolver(resolver: (() => WebContents | null) | null): void {
+  popupHostResolver = resolver;
+}
+
 function sendBrowserPopup(
   hostContents: WebContents,
   payload: RsbBrowserPopupPayload,
 ): void {
-  if (hostContents.isDestroyed()) return;
-  hostContents.send(RSB_BROWSER_POPUP_CHANNEL, payload);
+  // 优先发给"当前"host(detach / 视图切换后是新 renderer);解析失败或未注入
+  // (启动早期 / 单测)回落到调用方捕获的 hostContents。
+  let current: WebContents | null = null;
+  if (popupHostResolver) {
+    try {
+      current = popupHostResolver();
+    } catch {
+      current = null;
+    }
+  }
+  const target = current && !current.isDestroyed() ? current : hostContents;
+  if (target.isDestroyed()) return;
+  target.send(RSB_BROWSER_POPUP_CHANNEL, payload);
 }
 
 /**

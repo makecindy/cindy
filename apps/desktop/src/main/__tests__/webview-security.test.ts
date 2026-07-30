@@ -28,6 +28,7 @@ import {
   DEFERRED_POPUP_ROUTE_TIMEOUT_MS,
   POPUP_OPENER_EVENT_WAIT_TIMEOUT_MS,
   POPUP_OPENER_WAIT_TIMEOUT_MS,
+  setRsbPopupHostResolver,
   setRsbPopupOpenerReportSubscriber,
   RSB_BROWSER_POPUP_CHANNEL,
   applyGhostWebviewHardening,
@@ -207,6 +208,7 @@ describe('installDeferredPopupRouter', () => {
     vi.useRealTimers();
     setRsbPopupOpenerResolver(null);
     setRsbPopupOpenerReportSubscriber(null);
+    setRsbPopupHostResolver(null);
   });
 
   function makePopupHarness() {
@@ -405,6 +407,64 @@ describe('installDeferredPopupRouter', () => {
     });
     // 路由完成后订阅已退订,不泄漏 listener。
     expect(reportListeners.size).toBe(0);
+  });
+
+  it('延迟路由发送时按当前宿主形态动态解析 host,不发给捕获时的旧 renderer', async () => {
+    // 归属等待期间用户 detach 侧边栏 / 切视图:捕获的 hostContents 的 Shell 已
+    // 退订(fanOut 不缓冲),发过去就是丢 popup。发送时刻经 host resolver 取当前
+    // renderer(与 tab-op bridge 同源),消息落到活着的订阅者。
+    const { childContents, hostContents, popupWindow } = makePopupHarness();
+    let registered: { tabId: string; sessionId: string } | null = null;
+    const reportListeners = new Set<(id: number) => void>();
+    setRsbPopupOpenerResolver((id) => (id === 42 ? registered : null));
+    setRsbPopupOpenerReportSubscriber((listener) => {
+      reportListeners.add(listener);
+      return () => reportListeners.delete(listener);
+    });
+    // 等待期间宿主形态切换:resolver 现在解析到"新窗口"的 webContents。
+    const newHost = {
+      isDestroyed: vi.fn(() => false),
+      send: vi.fn(),
+    } as unknown as WebContents & { send: ReturnType<typeof vi.fn> };
+    setRsbPopupHostResolver(() => newHost);
+
+    installDeferredPopupRouter(
+      hostContents,
+      popupWindow as unknown as BrowserWindow,
+      'foreground-tab',
+      42,
+    );
+    childContents.emit('will-navigate', {}, 'https://accounts.example.com/oauth');
+
+    registered = { tabId: 'tab-1', sessionId: 'session-a' };
+    for (const l of [...reportListeners]) l(42);
+
+    await vi.waitFor(() => expect(newHost.send).toHaveBeenCalledTimes(1));
+    expect(newHost.send).toHaveBeenCalledWith(RSB_BROWSER_POPUP_CHANNEL, {
+      url: 'https://accounts.example.com/oauth',
+      disposition: 'foreground-tab',
+      openerTabId: 'tab-1',
+      openerSessionId: 'session-a',
+    });
+    // 旧 host 不再收到 —— 它的 Shell 已退订,发它就是丢消息。
+    expect(hostContents.send).not.toHaveBeenCalled();
+  });
+
+  it('host resolver 解析失败或返回已销毁 host 时回落捕获的 hostContents', () => {
+    const { childContents, hostContents, popupWindow } = makePopupHarness();
+    setRsbPopupHostResolver(() => null);
+
+    installDeferredPopupRouter(
+      hostContents,
+      popupWindow as unknown as BrowserWindow,
+      'foreground-tab',
+    );
+    childContents.emit('will-navigate', {}, 'https://accounts.example.com/oauth');
+
+    expect(hostContents.send).toHaveBeenCalledWith(RSB_BROWSER_POPUP_CHANNEL, {
+      url: 'https://accounts.example.com/oauth',
+      disposition: 'foreground-tab',
+    });
   });
 
   it('event-driven wait: 兜底超时后无归属路由(report 永不来的极端场景)', async () => {
