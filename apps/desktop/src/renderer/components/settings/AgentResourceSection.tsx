@@ -110,8 +110,9 @@ export function AgentResourceSection() {
     void window.electronAPI.maker
       .agentResourceSettingsSet(key, value)
       .then((next) => setSettings(next))
-      .catch((err) => {
-        toast.error(err instanceof Error ? err.message : String(err));
+      .catch(() => {
+        // IPC 错误统一显示本地化文案,不透出原始异常(可能含内部路径)
+        toast.error(t('settings.agentResource.saveFailed'));
         refetchAuthoritative();
       });
   };
@@ -135,9 +136,9 @@ export function AgentResourceSection() {
         values.capToolchainThreads,
       );
       setSettings(next);
-    } catch (err) {
+    } catch {
       // 中途失败 = 只落了部分字段;拉回权威状态,不让乐观值假装写成功了
-      toast.error(err instanceof Error ? err.message : String(err));
+      toast.error(t('settings.agentResource.saveFailed'));
       refetchAuthoritative();
     } finally {
       setApplyingPreset(false);
@@ -169,10 +170,8 @@ export function AgentResourceSection() {
                 setSettings(next);
                 toast.success(t('settings.defaults.restored'));
               })
-              .catch((err) => {
-                toast.error(
-                  err instanceof Error ? err.message : t('settings.defaults.restoreFailed'),
-                );
+              .catch(() => {
+                toast.error(t('settings.defaults.restoreFailed'));
               });
           }}
         />

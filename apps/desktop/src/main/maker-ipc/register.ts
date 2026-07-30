@@ -6438,16 +6438,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('INVALID_PARAMS', `unknown key: ${b.key}`);
     }
     const value = validateAgentResourceSettingValue(b.key, b.value);
-    writeAgentResourceSetting(
-      b.key as keyof AgentResourceSettings,
-      value as AgentResourceSettings[keyof AgentResourceSettings],
-    );
+    try {
+      writeAgentResourceSetting(
+        b.key as keyof AgentResourceSettings,
+        value as AgentResourceSettings[keyof AgentResourceSettings],
+      );
+    } catch {
+      // 落盘失败(只读目录/磁盘满等):按 IPC 错误协议包装,不把原始 fs 异常
+      // (含内部绝对路径)透给 renderer。
+      throwIpcError('INTERNAL', 'agent resource settings write failed');
+    }
     return agentResourceSettingsWire();
   });
 
   ipcMain.handle(MAKER_INVOKE.AGENT_RESOURCE_SETTINGS_RESET, async (e) => {
     assertTrustedAppRendererEvent(e);
-    resetAgentResourceSettings();
+    try {
+      resetAgentResourceSettings();
+    } catch {
+      throwIpcError('INTERNAL', 'agent resource settings reset failed');
+    }
     return agentResourceSettingsWire();
   });
 
