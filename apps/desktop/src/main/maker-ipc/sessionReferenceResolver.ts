@@ -16,6 +16,7 @@ import {
   type AgentInputSessionRef,
   type AgentInputSessionReferenceContext,
   type AgentInputSessionReferenceMessage,
+  type AgentInputSessionReferenceTerminal,
 } from '../../shared/agentInputQueue.js';
 
 export const MAX_SESSION_REFERENCES = 8;
@@ -75,6 +76,53 @@ function timestampToMs(value: unknown): number | undefined {
     if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
+}
+
+/**
+ * Return only a non-sensitive terminal hint for a local snapshot.
+ *
+ * Error rows intentionally stay out of the quoted message list: their
+ * structured body may contain provider details or echoed request data.  The
+ * marker is enough to explain why the last assistant text can be incomplete.
+ */
+async function readLatestLocalTerminal(
+  ref: AgentInputSessionRef,
+  clearedAt: number | null,
+): Promise<AgentInputSessionReferenceTerminal | undefined> {
+  const db = getDbClient().drizzle;
+  const where: SQL<unknown>[] = [
+    eq(messages.sessionId, ref.sessionId),
+    isNull(messages.rewindAt),
+  ];
+  if (clearedAt !== null) where.push(gt(messages.createdAt, clearedAt));
+  const [latest] = await db
+    .select({ role: messages.role, content: messages.content, createdAt: messages.createdAt })
+    .from(messages)
+    .where(and(...where))
+    .orderBy(desc(messages.createdAt), desc(messageRowid))
+    .limit(1);
+  if (latest?.role !== 'error') return undefined;
+  // An ignored error remains in the database for audit/history, but should no
+  // longer make a fresh quote look like an active failed turn.
+  if (typeof latest.content === 'string') {
+    try {
+      const parsed = JSON.parse(latest.content) as unknown;
+      if (
+        parsed &&
+        typeof parsed === 'object' &&
+        !Array.isArray(parsed) &&
+        (parsed as Record<string, unknown>).dismissed === true
+      ) {
+        return undefined;
+      }
+    } catch {
+      // Legacy non-JSON error content is treated as an undismissed error.
+    }
+  }
+  return {
+    status: 'error',
+    ...(Number.isFinite(latest.createdAt) ? { createdAt: latest.createdAt } : {}),
+  };
 }
 
 /** 保守 token 估算：CJK/非 ASCII 按 1 token，ASCII 按约 4 字符 1 token。 */
@@ -365,6 +413,19 @@ async function resolveLocal(
     .limit(1);
   if (!session) throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `找不到本机会话 ${ref.sessionId}`);
   const loaded = await readLocalRows(ref, messageLimit, session.clearedAt ?? null);
+  // A recent local snapshot may legitimately end at a partial assistant
+  // message when the turn failed.  Preserve only a safe status marker; never
+  // inject the persisted error body into the quoted context.
+  let terminal: AgentInputSessionReferenceTerminal | undefined;
+  if (!ref.messageClientId) {
+    try {
+      terminal = await readLatestLocalTerminal(ref, session.clearedAt ?? null);
+    } catch {
+      // Terminal status is diagnostic metadata; a transient read failure must
+      // not make an otherwise valid session reference fail closed.
+      terminal = undefined;
+    }
+  }
   const mappedWithAnchor = loaded.rows
     .map((row) => ({ message: toReferenceMessage(row), isAnchor: row.clientId === ref.messageClientId }))
     .filter((entry): entry is { message: AgentInputSessionReferenceMessage; isAnchor: boolean } => entry.message !== null);
@@ -389,6 +450,7 @@ async function resolveLocal(
       range: ref.messageClientId ? 'around-anchor' : 'recent',
       messageCount: fitted.messages.length,
       truncated: loaded.sourceTruncated || fitted.truncated,
+      ...(terminal ? { terminal } : {}),
     },
     usedTokens: fitted.usedTokens,
   };

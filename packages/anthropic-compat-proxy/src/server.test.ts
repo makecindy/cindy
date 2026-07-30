@@ -1687,6 +1687,7 @@ describe('anthropic-compat-proxy 客户端中断传播', () => {
   it('客户端在流式响应中途断开时,同步掐掉上游请求(费用泄漏止血)', async () => {
     let sawAbort!: () => void;
     const upstreamAborted = new Promise<void>((r) => { sawAbort = r; });
+    const errorLogs: string[] = [];
     const upstream = await startFakeUpstream((_idx, _body, res) => {
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       res.write('event: message_start\ndata: {}\n\n');
@@ -1695,7 +1696,11 @@ describe('anthropic-compat-proxy 客户端中断传播', () => {
       res.on('close', () => sawAbort());
     });
     upstreamClose = upstream.close;
-    proxy = await createAnthropicCompatProxy({ upstream: upstream.url, transformRequest: [] });
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      logger: { error: (msg) => { errorLogs.push(msg); } },
+    });
 
     const controller = new AbortController();
     const res = await fetch(`${proxy.url}/v1/messages`, {
@@ -1710,6 +1715,92 @@ describe('anthropic-compat-proxy 客户端中断传播', () => {
     await reader.read();
     controller.abort();
     await upstreamAborted;
+    expect(errorLogs.filter((m) => m.includes('upstream response stream error'))).toHaveLength(0);
+  });
+
+  it('透明重试后的上游 2xx SSE 中断时,立即收口且旧 listener 不误报客户端断开', async () => {
+    const errorLogs: Array<{ msg: string; ctx?: Record<string, unknown> }> = [];
+    const infoLogs: string[] = [];
+    const observerErrors: string[] = [];
+    let observerEnds = 0;
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(ENC_ERROR_BODY);
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('event: message_start\ndata: {}\n\n');
+      // 不发送 end,模拟上游生成过程中连接被对端掐断。Node 可能发
+      // `aborted`、`error`、`close` 中的一个或多个,代理必须幂等收口。
+      setTimeout(() => res.destroy(), 50);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true })],
+      logger: {
+        info: (msg) => infoLogs.push(msg),
+        error: (msg, ctx) => errorLogs.push({ msg, ctx }),
+      },
+      responseObserver: () => ({
+        onEnd: () => { observerEnds += 1; },
+        onError: (err) => { observerErrors.push(err.message); },
+      }),
+    });
+
+    const controller = new AbortController();
+    let responseStatus: number | null = null;
+    let clientError: unknown = null;
+    const operation = fetch(`${proxy.url}/v1/messages?api_key=must-not-appear-in-logs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'test-model',
+        input: [{ type: 'reasoning', encrypted_content: 'gAAAsecret' }],
+      }),
+      signal: controller.signal,
+    }).then(async (res) => {
+      responseStatus = res.status;
+      await res.text();
+    }).catch((err: unknown) => {
+      // destroy() 后 undici 通常会以 body read error 收口,这正是期望的
+      // “立即失败”语义;测试只关心它不能悬挂到 watchdog。
+      clientError = err;
+    });
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const outcome = await Promise.race([
+      operation.then(() => 'settled' as const),
+      new Promise<'timeout'>((resolve) => {
+        timeoutHandle = setTimeout(() => resolve('timeout'), 1000);
+      }),
+    ]);
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+    if (outcome === 'timeout') controller.abort();
+
+    expect(outcome).toBe('settled');
+    expect(responseStatus).toBe(200);
+    expect(clientError).toBeInstanceOf(Error);
+    expect(upstream.bodies).toHaveLength(2);
+    expect(infoLogs.filter((m) => m.includes('client disconnected'))).toHaveLength(0);
+    const responseFailures = errorLogs.filter((entry) => entry.msg === 'upstream response stream error');
+    expect(responseFailures).toHaveLength(1);
+    expect(responseFailures[0].ctx).toMatchObject({
+      status: 200,
+      reason: expect.stringMatching(/^(error|aborted|close)$/),
+      bytes: expect.any(Number),
+      lastChunkBytes: expect.any(Number),
+      lastChunkAt: expect.any(Number),
+    });
+    expect(responseFailures[0].ctx?.path).toBe('/v1/messages');
+    expect(JSON.stringify(responseFailures[0].ctx)).not.toContain('must-not-appear-in-logs');
+    expect(Number(responseFailures[0].ctx?.bytes)).toBeGreaterThan(0);
+    expect(responseFailures[0].ctx).not.toHaveProperty('body');
+    expect(responseFailures[0].ctx).not.toHaveProperty('requestBody');
+    expect(responseFailures[0].ctx).not.toHaveProperty('chunk');
+    expect(observerErrors).toHaveLength(1);
+    expect(observerEnds).toBe(0);
   });
 
   it('正常完成的响应不受影响:不误判为客户端断开,连接复用下后续请求照常', async () => {
@@ -1722,10 +1813,15 @@ describe('anthropic-compat-proxy 客户端中断传播', () => {
     // "client disconnected mid-response" 的中断传播路径(否则每笔请求都会对
     // 完成态上游请求调 destroy 并刷一条误导日志)。
     const infoLogs: string[] = [];
+    const errorLogs: string[] = [];
     proxy = await createAnthropicCompatProxy({
       upstream: upstream.url,
       transformRequest: [],
-      logger: { info: (msg) => { infoLogs.push(msg); } },
+      // 此测试同时确保 upstream end 后迟到的 request/response error 不会重复收口。
+      logger: {
+        info: (msg) => { infoLogs.push(msg); },
+        error: (msg) => { errorLogs.push(msg); },
+      },
     });
 
     const r1 = await post(proxy.url, { model: 'test-model' });
@@ -1734,6 +1830,7 @@ describe('anthropic-compat-proxy 客户端中断传播', () => {
     expect(r2.status).toBe(200);
     expect(upstream.bodies).toHaveLength(2);
     expect(infoLogs.filter((m) => m.includes('client disconnected'))).toHaveLength(0);
+    expect(errorLogs.filter((m) => m.includes('upstream response stream error'))).toHaveLength(0);
   });
 });
 

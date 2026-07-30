@@ -61,6 +61,19 @@ export interface AgentInputSessionReferenceMessage {
   createdAt?: number;
 }
 
+/**
+ * Safe terminal-state hint for a quoted session.
+ *
+ * The actual persisted error row is intentionally not copied into the quote:
+ * it may contain provider-specific or user-sensitive details.  This additive
+ * marker lets the receiving agent distinguish a genuinely interrupted turn
+ * from a response that simply ended at the last visible text.
+ */
+export interface AgentInputSessionReferenceTerminal {
+  status: 'error';
+  createdAt?: number;
+}
+
 export interface AgentInputSessionReferenceContext {
   sessionId: string;
   title?: string;
@@ -71,6 +84,8 @@ export interface AgentInputSessionReferenceContext {
   range: 'recent' | 'around-anchor';
   messageCount: number;
   truncated: boolean;
+  /** Present only when the recent local snapshot ends in a persisted turn error. */
+  terminal?: AgentInputSessionReferenceTerminal;
 }
 
 export interface AgentInputImageRef {

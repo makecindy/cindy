@@ -7254,6 +7254,28 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ) {
         throwIpcError('SESSION_REFERENCE_UNAVAILABLE', 'remote session reference snapshot does not match the request');
       }
+      if (context.terminal !== undefined) {
+        const terminal = context.terminal;
+        if (
+          !terminal ||
+          typeof terminal !== 'object' ||
+          Array.isArray(terminal) ||
+          terminal.status !== 'error' ||
+          (
+            terminal.createdAt !== undefined &&
+            (typeof terminal.createdAt !== 'number' || !Number.isFinite(terminal.createdAt))
+          )
+        ) {
+          throwIpcError('SESSION_REFERENCE_UNAVAILABLE', 'remote session reference terminal status is invalid');
+        }
+        // Strip unknown fields at this trust boundary. The marker is
+        // intentionally status-only; provider error details must not cross
+        // into the model prompt through a crafted remote snapshot.
+        context.terminal = {
+          status: 'error',
+          ...(terminal.createdAt !== undefined ? { createdAt: terminal.createdAt } : {}),
+        };
+      }
       totalMessages += context.messages.length;
       for (const message of context.messages) {
         if (!message || (message.role !== 'user' && message.role !== 'assistant') || typeof message.content !== 'string') {
