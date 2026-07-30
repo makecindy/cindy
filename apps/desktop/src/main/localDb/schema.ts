@@ -188,10 +188,11 @@ export const sessions = sqliteTable(
     extraDirs: text('extra_dirs').notNull().default('[]'),
     /**
      * 远端目标 host id (`@cindy/maker-remote-ssh` ConnectionPool 里的 alias)。
-     * 非空 = 这个 session 跑在远端机器上 (codex agent 在远端、workingDir 是远端路径)。
+     * 非空 = 这个 session 跑在远端机器上 (agent 在远端、workingDir 是远端路径)。
      * 应用重启 / session 切换都能恢复远端目标; 本地 session 字段为 null,
      * 跟历史行为兼容 (老 session 没这列, sqlite default null 即可)。
-     * 仅 Codex 支持; Claude session 此列恒为 null (capability 未接通)。
+     * Codex 与 Claude Code 均支持 (cc 经 cc-mgr daemon, codex 经 app-server
+     * daemon);两端 in-process MCP 都经 SSH remote-forward 回本机 HTTP bridge。
      */
     remoteHostId: text('remote_host_id'),
     /**
@@ -1391,7 +1392,11 @@ export const mediaBlobs = sqliteTable('media_blobs', {
  * refKind/refId 是多态引用(消息 id / 会话 id / 意识 id),不设 FK——
  * 删除会话/卸载意识时由对应业务代码删自己名下的 ref(回收器对账兜底)。
  * origin* 记出生:意识面板供图的归属校验即查「该指纹是否有 origin 为本意识
- * 的行或 ghost-gallery ref」(ghostCanRead,见 main/cindy-media/ledger.ts)。
+ * 的行,或 ghost-gallery / ghost-grant / ghost-deposit ref」(ghostCanRead,
+ * 见 main/cindy-media/ledger.ts)。
+ *
+ * refKind 是无约束的 text 列:新增引用类型只改 ledger.ts 的联合类型,
+ * 不需要 migration。
  */
 export const mediaRefs = sqliteTable(
   'media_refs',
@@ -1400,7 +1405,7 @@ export const mediaRefs = sqliteTable(
     hash: text('hash')
       .notNull()
       .references((): AnySQLiteColumn => mediaBlobs.hash, { onDelete: 'cascade' }),
-    /** 'message' | 'session-attachment' | 'ghost-gallery' | 'import'(联合类型见 ledger.ts)。 */
+    /** 'message' | 'session-attachment' | 'ghost-gallery' | 'ghost-deposit' | 'import'…(联合类型见 ledger.ts)。 */
     refKind: text('ref_kind').notNull(),
     /** 引用方 id:消息 clientId / 会话 id / 意识 id。 */
     refId: text('ref_id').notNull(),
@@ -1451,5 +1456,48 @@ export const ghostCards = sqliteTable(
   (t) => ({
     /** GC 按最旧淘汰的扫描路径。 */
     byUpdatedAt: index('ghost_cards_updated_at_idx').on(t.updatedAt),
+  }),
+);
+
+/**
+ * IM 群消息本地窗口(group-relay-v1)。
+ *
+ * 一行 = hook server 实时中继(group.message 帧)的一条群消息。这是
+ * 「服务端零内容驻留」架构下群上下文的唯一存储方:窗口长在用户自己的
+ * 设备上(与其 Telegram 客户端本地缓存同性质)。派发 hook 任务时按
+ * (provider, chatId, threadId) 取最近条目拼进 agent 上下文,并按
+ * source.triggerMessageId 剔除当前消息。行数由插入时的 GC 控制
+ * (每个键保最新 N 行 + TTL),thread_id 用空串表示主群流(保证唯一
+ * 索引对"无 topic"生效,SQLite 的 NULL 互不相等)。
+ */
+export const hookGroupMessages = sqliteTable(
+  'hook_group_messages',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    provider: text('provider').notNull(),
+    chatId: text('chat_id').notNull(),
+    /** forum topic / thread id;空串 = 主群流。 */
+    threadId: text('thread_id').notNull().default(''),
+    messageId: text('message_id').notNull(),
+    chatName: text('chat_name'),
+    author: text('author').notNull(),
+    isBot: integer('is_bot').notNull().default(0),
+    text: text('text').notNull(),
+    /** JSON string[];无附件为空。 */
+    fileNames: text('file_names'),
+    /** IM 平台侧发送时刻(unix ms)。 */
+    sentAt: integer('sent_at').notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => ({
+    /** 同一条消息(重放/重连)幂等去重的键(冲突即忽略, 不更新)。 */
+    byMessage: uniqueIndex('hook_group_messages_msg_idx').on(
+      t.provider,
+      t.chatId,
+      t.threadId,
+      t.messageId,
+    ),
+    /** 窗口查询与 GC 的扫描路径。 */
+    byWindow: index('hook_group_messages_window_idx').on(t.provider, t.chatId, t.threadId, t.id),
   }),
 );

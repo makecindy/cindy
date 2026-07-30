@@ -91,7 +91,9 @@ import {
   pushThinkingStep,
   pushToolStep,
   renderActivity,
+  setActivityNotice,
 } from '../im/shared/turnActivity.js';
+import { overloadFailureNotice, overloadRetryNotice } from '../im/shared/turnRetryNotice.js';
 import { beginHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInteractionSurface.js';
 
 import type { HookRunOutcome, HookSessionRunner } from './dispatcher.js';
@@ -660,10 +662,29 @@ export function createMakerHookSessionRunner(deps: {
         }
       }
 
-      // turn 收口监听 —— 语义与 scheduler runner 第 5 步同源:
-      // text isFinal 替换 / delta 追加; done 时若有在途后台任务则延迟定格,
-      // 事件静默超时兜底; terminal error 即失败。
+      // turn 收口监听 —— done 时若有在途后台任务则延迟定格, 事件静默超时
+      // 兜底; terminal error 即失败。
+      //
+      // 文本累积语义(2026-07-28 修订): translator 的 isFinal 是**逐条**
+      // agent_message 的完成信号(每条完成都携带该条全文), 不是整个 turn 的
+      // 终稿 —— 用它整体替换累积文本, 会让"先回一句 → 思考 → 终答"的多消息
+      // turn 只剩最后被替换的那条(实踩: Telegram 群里最终答案丢失)。
+      // 正确姿势: isFinal 把该条追加进已定稿段, 流式增量走尾部缓冲。
+      let finalizedText = '';
+      let streamTail = '';
       let assistantText = '';
+      /** 最近一次定稿段所属的 claude 消息 uuid(同消息相邻块连拼用)。 */
+      let lastFinalUuid: string | undefined;
+      const recomputeAssistantText = (): void => {
+        // trim 只用于判空(纯空白尾巴不该拼出悬空分隔), 拼接用原文 ——
+        // 首行缩进/换行是内容(markdown 代码块等), 不得被裁掉。
+        const hasTail = streamTail.trim().length > 0;
+        assistantText = hasTail
+          ? finalizedText
+            ? `${finalizedText}\n\n${streamTail}`
+            : streamTail
+          : finalizedText;
+      };
       // tool_result 旁路收集的出站图片 absPath(收口时随 turn.end 附件外发)
       const extraImageAbsPaths: string[] = [];
       // 进度快照(turn.progress 链路): 过程区时间线与 IM 流式卡同一套纯逻辑
@@ -671,14 +692,18 @@ export function createMakerHookSessionRunner(deps: {
       // 上正文在下, done/error 后 stop, 不再发射。
       const activity = createTurnActivity(Date.now());
       const isTelegram = req.source?.im === 'telegram';
+      // Telegram DM 的 Rich draft 是"部分终稿"动画, 过程时间线反复重排会导致
+      // 整段清空重播 —— DM 保持只流正文。群/topic 的进度载体是可编辑消息
+      // (无 draft 动画), 与 Slack 过程卡同款: 时间线在上正文在下, 让群成员
+      // 看到"正在干什么"而不是盯着一句旧话干等(2026-07-28 实踩)。
+      const answerOnlyProgress = isTelegram && req.laneKind !== 'group';
       const progress = req.onProgress
         ? createProgressEmitter(req.onProgress, () => {
-            // Telegram Rich Message drafts are the partial final answer, not
-            // an editable process card. turnActivity can reorder/fold as
-            // thinking and tool events arrive, which makes Telegram animate
-            // repeated full clears. Keep Slack's established process card,
-            // while Telegram streams only the monotonically growing answer.
-            if (isTelegram) return assistantText;
+            // 只流正文的唯一例外: 还没有任何正文、而 agent 正在自动重试(上游过载)
+            // 时, 草稿本来就是空的 —— 此时给出那一行状态说明, 否则用户在整个退避
+            // 窗口里完全看不到任何反馈。有正文后仍只发正文, 不掺过程区。
+            // (群/topic 走上面的完整过程卡, notice 已在那条路径里渲染。)
+            if (answerOnlyProgress) return assistantText || (activity.notice ?? '');
             const act = renderActivity(activity, Date.now());
             if (!act) return assistantText;
             return assistantText ? `${act}\n\n${assistantText}` : act;
@@ -726,8 +751,40 @@ export function createMakerHookSessionRunner(deps: {
           if (ev.type === 'text') {
             const data = ev.data as { text?: string; isFinal?: boolean } | null;
             if (data && typeof data.text === 'string') {
-              if (data.isFinal) assistantText = data.text;
-              else assistantText += data.text;
+              if (data.isFinal) {
+                // isFinal 形态按 translator 契约区分, 不做内容猜测(前缀
+                // 启发式在"尾段恰好以已流增量开头"时会误判丢正文):
+                // ① claude 块终稿(带 agentMeta): data.text 是该块全文, 覆盖
+                //   已流增量; 同一条消息(同 uuid)的相邻文本块按原文连拼
+                //   (renderer 同款 raw concat), 不同消息之间空行分隔。
+                // ② claude result 兜底 fallbackTail(刻意不带 agentMeta):
+                //   只含 UI 缺的尾段, 与已流增量原样接上。
+                // ③ codex item.completed: 该条全文, 覆盖已流增量。
+                // ④ 未知 source: 保守用前缀启发式。
+                const src = (ev as { source?: string }).source;
+                const meta = (ev as { agentMeta?: { uuid?: unknown } }).agentMeta;
+                const claudeTail = src === 'claude-code' && meta === undefined;
+                const segment = claudeTail
+                  ? streamTail + data.text
+                  : src === 'claude-code' || src === 'codex'
+                    ? data.text
+                    : data.text.startsWith(streamTail)
+                      ? data.text
+                      : streamTail + data.text;
+                const uuid =
+                  src === 'claude-code' && typeof meta?.uuid === 'string'
+                    ? meta.uuid
+                    : undefined;
+                const sameMessage = uuid !== undefined && uuid === lastFinalUuid;
+                finalizedText = finalizedText
+                  ? `${finalizedText}${sameMessage ? '' : '\n\n'}${segment}`
+                  : segment;
+                lastFinalUuid = uuid;
+                streamTail = '';
+              } else {
+                streamTail += data.text;
+              }
+              recomputeAssistantText();
               markActivityWriting(activity);
               progress?.schedule();
             }
@@ -755,6 +812,19 @@ export function createMakerHookSessionRunner(deps: {
                 data.input,
                 typeof data.toolUseId === 'string' ? data.toolUseId : undefined,
               );
+              progress?.ensureTicker();
+              progress?.schedule();
+            }
+            return;
+          }
+          if (ev.type === 'error' && !isTerminalAgentErrorEvent(ev)) {
+            // 非终止 error = agent 正在自愈(当前只透过载类的自动重试)。turn 没
+            // 结束, 不收口; 但必须在过程区留一行, 否则零产出的退避窗口里渠道那
+            // 条消息整段静止(见 turnRetryNotice.ts 的模块注释)。
+            const notice = overloadRetryNotice(ev.data);
+            if (notice !== null && setActivityNotice(activity, notice)) {
+              // ticker 让"第 N 步 · 42s"与这行状态一起走时间, 重试期间没有任何
+              // 新事件也能看出还在动。
               progress?.ensureTicker();
               progress?.schedule();
             }
@@ -808,8 +878,19 @@ export function createMakerHookSessionRunner(deps: {
             progress?.stop();
             off();
             stopListening = undefined;
-            const data = ev.data as { message?: string } | null;
-            reject(new Error(data?.message ?? 'agent terminal error'));
+            const data = ev.data as
+              | { message?: string; errorStatus?: number; codexErrorInfo?: string }
+              | null;
+            const raw = data?.message ?? 'agent terminal error';
+            // 过载重试耗尽: 渠道里发裸英文原文(server 侧再前缀成 "Task failed:")
+            // 等于把内部串丢给用户, 且没说清"怎么才能真的重试"。换成可读说明,
+            // 原文留在本地日志里供排查。结构化 tag 一并传: 只认文案时 codex 改措辞
+            // 会让这条终态说明退回裸英文原文。
+            const friendly = overloadFailureNotice(raw, data?.errorStatus, data?.codexErrorInfo);
+            if (friendly !== null) {
+              log.warn(`hook turn failed (upstream overload): ${raw}`);
+            }
+            reject(new Error(friendly ?? raw));
           }
         });
         stopListening = (): void => {

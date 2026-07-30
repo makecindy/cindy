@@ -22,10 +22,10 @@ import { describe, expect, it } from 'vitest';
  * 只把静默半死改成明确弹重登(正确的报警),没有堵住 passive 的写入权。
  */
 describe('passive shared-userData instance auth isolation', () => {
-  const authSource = readFileSync(resolve(process.cwd(), 'src/main/authManager.ts'), 'utf8').replace(
-    /\r\n/g,
-    '\n',
-  );
+  const authSource = readFileSync(
+    resolve(process.cwd(), 'src/main/authManager.ts'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
 
   const sliceBody = (startAnchor: string, endAnchor: string): string => {
     const start = authSource.indexOf(startAnchor);
@@ -58,7 +58,9 @@ describe('passive shared-userData instance auth isolation', () => {
     expect(body.indexOf('removeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);')).toBeGreaterThan(
       passiveIdx,
     );
-    expect(body.indexOf('removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);')).toBeGreaterThan(passiveIdx);
+    expect(body.indexOf('removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);')).toBeGreaterThan(
+      passiveIdx,
+    );
     expect(body.indexOf('removeSafe(LEGACY_REFRESH_TOKEN_KEY);')).toBeGreaterThan(passiveIdx);
   });
 
@@ -202,16 +204,21 @@ describe('passive shared-userData instance auth isolation', () => {
 
     // passive 冷启动拿到 INVALID_REFRESH_TOKEN，最常见的原因就是 primary 刚轮换过它。
     expect(body).toContain('if (isPassiveSharedUserDataInstance()) {');
-    // 非 passive 也不能无条件删：判定与删除之间另一个实例可能写入了替换凭证。
-    expect(body).toContain(
-      'const expectedSession = serializeAuthSessionRecord(storedRealm, storedToken);',
-    );
-    expect(body).toContain('removeSafeIfUnchanged(AUTH_SESSION_KEY, expectedSession)');
+    // 删除本身抽到了 clearConfirmedDeadRefreshTokens（它同时清 v1 与 legacy 从属副本，
+    // 并逐一比对本轮被拒过的每一枚 token）。这里只守住「非 passive 分支才调它、且分支内
+    // 不出现任何无条件删除」。
+    expect(body).toContain('clearConfirmedDeadRefreshTokens(storedRealm,');
     expect(body).not.toContain('removeSafe(AUTH_SESSION_KEY);');
+    const cleanup = sliceBody('function clearConfirmedDeadRefreshTokens(', '\n}\n');
+    // 非 passive 也不能无条件删：判定与删除之间另一个实例可能写入了替换凭证。
+    // 断言分段写：prettier 会按行宽把这个调用拆成多行。
+    expect(cleanup).toContain('removeSafeIfUnchanged(');
+    expect(cleanup).toContain('serializeAuthSessionRecord(realm, token)');
+    expect(cleanup).not.toContain('removeSafe(AUTH_SESSION_KEY);');
     // 三种结果各自如实记日志，尤其 'failed' 不得报成已清理。
-    expect(body).toContain("case 'deleted':");
-    expect(body).toContain("case 'changed':");
-    expect(body).toContain("case 'failed':");
+    expect(cleanup).toContain("case 'deleted':");
+    expect(cleanup).toContain("case 'changed':");
+    expect(cleanup).toContain("case 'failed':");
 
     // compare-and-delete 读不出磁盘内容时不得删（宁留失效 token 也不误删有效凭证），
     // 并且要在内容比对前后各校验一次文件身份，收紧 read→unlink 之间的 TOCTOU。
@@ -235,7 +242,9 @@ describe('passive shared-userData instance auth isolation', () => {
     // 删除失败必须如实回报：removeSafe() 吞掉所有 unlink 错误，用它会让调用方把
     // 「没删成」当成「已清理」并据此打日志。ENOENT 例外——目标状态已达成。
     expect(helper).not.toContain('removeSafe(key);');
-    expect(helper).toContain("if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return 'deleted';");
+    expect(helper).toContain(
+      "if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return 'deleted';",
+    );
     expect(helper).toContain("return 'failed';");
   });
 

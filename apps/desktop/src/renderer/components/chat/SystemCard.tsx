@@ -711,10 +711,18 @@ function GoalCompleteCard({ data }: { data?: Record<string, unknown> }) {
  * /goal 提示分隔条(目前:usageLimited 到点自动续跑的"用量已恢复,继续目标")。
  * 同 GoalCompleteCard 复用 CompactBoundaryCard 的分隔条语言。
  */
-function GoalResumedCard() {
+function GoalResumedCard({ data }: { data?: { kind?: string } }) {
   const { t } = useTranslation();
-  // 目前只有 'usage-resumed' 一种 notice;未来多 kind 再分支。
-  const label = t('goal.usageResumeNotice');
+  // 两种续跑原因共用同一张分隔条,但说法必须分开:
+  //   - 账号限流续跑:重置时刻来自账号额度信息, 说「用量已恢复」有依据;
+  //   - 上游过载续跑:只是干等了 60s, **没有**任何容量探测。因此文案只能说
+  //     「正在重试目标」—— 说「模型服务已恢复」在持续故障期会在每次重试前插一条
+  //     假恢复通知, 紧接着又是一次容量失败(review #844 codex P1)。
+  // 存档里的 kind 仍是 'capacity-resumed'(已落库的卡片按这个值渲染), 只有文案改。
+  const label =
+    data?.kind === 'capacity-resumed'
+      ? t('goal.capacityRetryNotice')
+      : t('goal.usageResumeNotice');
   return (
     <div className="flex w-full items-center gap-3 py-2 select-none" role="separator" aria-label={label}>
       <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
@@ -866,7 +874,7 @@ export function SystemCard({ cardType, data, sessionId }: SystemCardProps) {
     case 'goal-complete':
       return <GoalCompleteCard data={data} />;
     case 'goal-resumed':
-      return <GoalResumedCard />;
+      return <GoalResumedCard data={data as { kind?: string } | undefined} />;
     case 'auto-resume':
       return <AutoResumeCard />;
     case 'agent-switch':

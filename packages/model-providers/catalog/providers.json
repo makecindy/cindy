@@ -193,7 +193,8 @@
             },
             {
               "id": "deepseek/deepseek-v4-pro",
-              "name": "DeepSeek V4 Pro (OpenRouter)"
+              "name": "DeepSeek V4 Pro (OpenRouter)",
+              "contextWindow": 1000000
             }
           ]
         },
@@ -222,11 +223,13 @@
           "models": [
             {
               "id": "deepseek-v4-flash",
-              "name": "DeepSeek V4 Flash"
+              "name": "DeepSeek V4 Flash",
+              "contextWindow": 1000000
             },
             {
               "id": "deepseek-v4-pro",
-              "name": "DeepSeek V4 Pro"
+              "name": "DeepSeek V4 Pro",
+              "contextWindow": 1000000
             }
           ],
           "modelsUrl": "https://api.deepseek.com/models"
@@ -237,11 +240,13 @@
           "models": [
             {
               "id": "deepseek-v4-flash",
-              "name": "DeepSeek V4 Flash"
+              "name": "DeepSeek V4 Flash",
+              "contextWindow": 1000000
             },
             {
               "id": "deepseek-v4-pro",
-              "name": "DeepSeek V4 Pro"
+              "name": "DeepSeek V4 Pro",
+              "contextWindow": 1000000
             }
           ],
           "modelsUrl": "https://api.deepseek.com/models"
@@ -437,7 +442,8 @@
             },
             {
               "id": "k3",
-              "name": "Kimi K3"
+              "name": "Kimi K3",
+              "contextWindow": 262144
             }
           ]
         },
@@ -447,15 +453,18 @@
           "models": [
             {
               "id": "kimi-for-coding",
-              "name": "Kimi for Coding"
+              "name": "Kimi for Coding",
+              "contextWindow": 262144
             },
             {
               "id": "kimi-for-coding-highspeed",
-              "name": "Kimi for Coding 高速版"
+              "name": "Kimi for Coding 高速版",
+              "contextWindow": 262144
             },
             {
               "id": "k3",
-              "name": "Kimi K3"
+              "name": "Kimi K3",
+              "contextWindow": 262144
             }
           ]
         }
@@ -805,6 +814,34 @@
               "id": "mimo-v2.5",
               "name": "MiMo V2.5",
               "contextWindow": 1000000
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "volcengine-agent-plan",
+      "name": "火山方舟 Agent Plan",
+      "nameEn": "Volcengine Ark Agent Plan",
+      "docsUrl": "https://docs.volcengine.com/docs/82379/2373738",
+      "regionHint": "cn",
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://ark.cn-beijing.volces.com/api/plan",
+          "models": [
+            {
+              "id": "ark-code-latest",
+              "name": "Ark Code Latest"
+            }
+          ]
+        },
+        "codex": {
+          "baseUrl": "https://ark.cn-beijing.volces.com/api/plan/v3",
+          "wireProtocol": "openai-chat",
+          "models": [
+            {
+              "id": "ark-code-latest",
+              "name": "Ark Code Latest"
             }
           ]
         }

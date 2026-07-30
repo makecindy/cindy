@@ -22,6 +22,7 @@ import { cacheSessionMessages, getCachedSessionMessages } from '@/session/mobile
 import { contentToPreview } from '@/utils/contentPreview';
 import type { MobileSystemCardType } from '@/session/systemCard';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
+import { normalizeRemoteMoney } from '@/session/remoteMoney';
 
 interface DeviceShard {
   deviceId: string;
@@ -56,6 +57,14 @@ export interface RemoteSessionRunStatus {
 export interface RemoteSessionReconnectAttempt {
   attempt: number;
   maxAttempts: number;
+  /**
+   * 重试原因。`'overload'` = 上游模型没有可用容量、agent 正在退避重投
+   * (maker-core 的 `(auto-retry N/M)` 标记); 缺省 / `'reconnect'` = 传输层重连。
+   *
+   * 刻意复用同一个字段而不是新加一个: 这个 attempt 有 6 处清理点(turn 边界 / 快照 /
+   * 收口 / 活动流), 拆成两个字段就得在每处各清一次, 漏一处就会残留一个假状态。
+   */
+  kind?: 'reconnect' | 'overload';
 }
 
 interface SessionMessageSyncMarker {
@@ -1703,8 +1712,15 @@ export const remoteSessionStore = {
     if (channel === 'usage:message-turn-cost' && isRecord(payload)) {
       const sessionId = readString(payload, 'sessionId');
       const clientId = readString(payload, 'clientId');
+      const turnMoney = normalizeRemoteMoney(payload.turnMoney);
       const turnCostUsd = readNumber(payload, 'turnCostUsd');
-      if (sessionId && clientId && turnCostUsd !== null && turnCostUsd > 0) {
+      if (sessionId && clientId && turnMoney && turnMoney.amount > 0) {
+        this.patchMessageAgentMeta(sessionId, clientId, {
+          turnCost: turnMoney,
+          ...(turnMoney.currency === 'USD' ? { turnCostUsd: turnMoney.amount } : {}),
+          turnCostIsEstimate: turnMoney.kind === 'value-estimate',
+        });
+      } else if (sessionId && clientId && turnCostUsd !== null && turnCostUsd > 0) {
         this.patchMessageAgentMeta(sessionId, clientId, {
           turnCostUsd,
           turnCostIsEstimate: payload.turnCostIsEstimate === true,
@@ -1717,8 +1733,14 @@ export const remoteSessionStore = {
       // sessions:patched,这条(sessions topic,列表订阅常开)是唯一更新通道;不处理则
       // 会话菜单用量摘要停在旧值直到 reseed。readNumber 已挡 NaN,负数不入镜像。
       const sessionId = readString(payload, 'sessionId');
+      const totalMoney = normalizeRemoteMoney(payload.totalMoney);
       const totalCostUsd = readNumber(payload, 'totalCostUsd');
-      if (sessionId && totalCostUsd !== null && totalCostUsd >= 0) {
+      if (sessionId && totalMoney) {
+        this.applySessionPatch(deviceId, sessionId, {
+          totalMoney,
+          ...(totalMoney.currency === 'USD' ? { totalCostUsd: totalMoney.amount } : {}),
+        });
+      } else if (sessionId && totalCostUsd !== null && totalCostUsd >= 0) {
         this.applySessionPatch(deviceId, sessionId, { totalCostUsd });
       }
       return;
@@ -2275,8 +2297,9 @@ function markSessionMakerActivity(sessionId: string): void {
   sessionMakerActivityEpochs.set(sessionId, makerActivityEpoch);
 }
 
-function parseReconnectAttemptMessage(message: string): RemoteSessionReconnectAttempt | null {
-  const match = /\bReconnecting(?:\.{3}|…)\s*(\d+)\s*\/\s*(\d+)\b/i.exec(message);
+function parseAttemptPair(
+  match: RegExpExecArray | null,
+): { attempt: number; maxAttempts: number } | null {
   if (!match) return null;
   const attempt = Number(match[1]);
   const maxAttempts = Number(match[2]);
@@ -2289,6 +2312,31 @@ function parseReconnectAttemptMessage(message: string): RemoteSessionReconnectAt
     return null;
   }
   return { attempt, maxAttempts };
+}
+
+/**
+ * 非终止 error 的 message → 重试进度。
+ *
+ * 两类各有自己的标记:
+ *  - 传输层重连: `Reconnecting... N/M`;
+ *  - 上游过载退避重投: `(auto-retry N/M)`(maker-core 的
+ *    agents/shared/overload-error.ts 统一后缀, Codex 与 Claude 两侧同款)。
+ *
+ * 后者不认的话, 整个退避窗口(交互式最长约 30s)手机端只显示笼统的「思考中」, 用户看不出
+ * 是在等上游容量(review #844 codex P1)。这里刻意在 mobile 侧独立实现一份判定, 与
+ * renderer 的 utils/overloadError.ts 同规 —— maker-core 是 desktop/node 侧包, 不跨
+ * bundle 共享。
+ */
+function parseReconnectAttemptMessage(message: string): RemoteSessionReconnectAttempt | null {
+  const reconnect = parseAttemptPair(
+    /\bReconnecting(?:\.{3}|…)\s*(\d+)\s*\/\s*(\d+)\b/i.exec(message),
+  );
+  // 重连保持不带 kind: 既有投影/用例把它当 { attempt, maxAttempts } 精确比较, 而
+  // 「缺省即 reconnect」本来就是这个字段的语义(见类型注释)。
+  if (reconnect) return reconnect;
+  const overload = parseAttemptPair(/\(auto-retry\s+(\d+)\s*\/\s*(\d+)\)\s*$/i.exec(message));
+  if (overload) return { ...overload, kind: 'overload' };
+  return null;
 }
 
 // 写 maker turn 边界,返回是否实际变化——变化必须参与调用方的 emit 判定(宽 run status

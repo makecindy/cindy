@@ -54,6 +54,10 @@ interface TextLightboxProps {
 // IPC response also carries `limitMb` so dynamic copy stays single-sourced.
 const OVERSIZE_LIMIT_MB = 10;
 const OVERSIZE_LIMIT = OVERSIZE_LIMIT_MB * 1024 * 1024;
+const TEXT_LIGHTBOX_OVERLAY_Z_INDEX = 9999;
+const TEXT_LIGHTBOX_TOOLTIP_STYLE = {
+  zIndex: TEXT_LIGHTBOX_OVERLAY_Z_INDEX + 1,
+} as const;
 
 /**
  * Format a byte count for display in the toolbar (`3.4 MB`, `812 KB`, `73 B`).
@@ -373,7 +377,7 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 9999,
+        zIndex: TEXT_LIGHTBOX_OVERLAY_Z_INDEX,
         background: 'var(--overlay-lightbox)',
         display: 'flex',
         flexDirection: 'column',
@@ -467,7 +471,9 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
                 )}
               </button>
             </Tooltip.Trigger>
-            <Tooltip.Content>{t('chat.lightbox.clickToCopyPath')}</Tooltip.Content>
+            <Tooltip.Content style={TEXT_LIGHTBOX_TOOLTIP_STYLE}>
+              {t('chat.lightbox.clickToCopyPath')}
+            </Tooltip.Content>
           </Tooltip.Root>
 
           {/* Right — Show in folder + Copy content + Close (Open in System moved to Oversize CTA only). */}
@@ -490,7 +496,7 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
                   <Folder size={18} className="text-[var(--msg-tool-card-chevron)]" />
                 </button>
               </Tooltip.Trigger>
-              <Tooltip.Content>
+              <Tooltip.Content style={TEXT_LIGHTBOX_TOOLTIP_STYLE}>
                 {remoteOrigin ? t('chat.remoteFile.revealLocalCopy') : t('chat.lightbox.openInExplorer')}
               </Tooltip.Content>
             </Tooltip.Root>
@@ -511,7 +517,9 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
                   <Copy size={18} className="text-[var(--msg-tool-card-chevron)]" />
                 </button>
               </Tooltip.Trigger>
-              <Tooltip.Content>{t('chat.textLightbox.copyAll')}</Tooltip.Content>
+              <Tooltip.Content style={TEXT_LIGHTBOX_TOOLTIP_STYLE}>
+                {t('chat.textLightbox.copyAll')}
+              </Tooltip.Content>
             </Tooltip.Root>
             <Tooltip.Root>
               <Tooltip.Trigger asChild>
@@ -527,7 +535,9 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
                   <X size={20} className="text-[var(--msg-tool-card-chevron)]" />
                 </button>
               </Tooltip.Trigger>
-              <Tooltip.Content>{t('chat.lightbox.close')}</Tooltip.Content>
+              <Tooltip.Content style={TEXT_LIGHTBOX_TOOLTIP_STYLE}>
+                {t('chat.lightbox.close')}
+              </Tooltip.Content>
             </Tooltip.Root>
           </div>
         </div>

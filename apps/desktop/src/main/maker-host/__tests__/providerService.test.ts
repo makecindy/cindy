@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 import { BUNDLED_CATALOG, connectedProvidersForAgent } from '@cindy/model-providers';
 
+import { checkModelRoute } from '../model-route-guard.js';
 import { createProviderService } from '../provider-service.js';
 
 /** 注入内置 bundled 目录作为「当前生效目录」(桌面端真实注入的是 active-catalog 的 getActiveCatalog)。 */
@@ -31,6 +32,65 @@ describe('createProviderService', () => {
     expect((await svc.listProviders()).find((p) => p.id === 'xd')!.connected).toBe(true);
     // 目录每次现读(active-catalog 已持有进程级单例,零额外 IO);连接态实时反映。
     expect(getCatalog).toHaveBeenCalledTimes(2);
+  });
+
+  it('accepts an internal full-catalog override for route-guard capability rejection', async () => {
+    const xd = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xd')!;
+    const agent = xd.agents[0]!;
+    const capabilityModel = {
+      ...xd.models[agent]![0]!,
+      id: 'route-only-image',
+      name: 'Route-only image',
+      group: 'image',
+    };
+    const fullCatalog = {
+      ...BUNDLED_CATALOG,
+      providers: BUNDLED_CATALOG.providers.map((provider) =>
+        provider.id === 'xd'
+          ? {
+              ...provider,
+              models: {
+                ...provider.models,
+                [agent]: [...(provider.models[agent] ?? []), capabilityModel],
+              },
+            }
+          : provider,
+      ),
+    };
+    const selectable = {
+      ...fullCatalog,
+      providers: fullCatalog.providers.map((provider) =>
+        provider.id === 'xd'
+          ? {
+              ...provider,
+              models: Object.fromEntries(
+                Object.entries(provider.models).map(([agent, models]) => [
+                  agent,
+                  models.filter((model) => model.id !== capabilityModel.id),
+                ]),
+              ),
+            }
+          : provider,
+      ),
+    };
+    const svc = createProviderService({
+      getCatalog: () => selectable,
+      connection: { xd: () => true, anthropic: () => false, openai: () => false, xai: () => false },
+    });
+
+    const selectableXd = (await svc.listProviders()).find((provider) => provider.id === 'xd');
+    const routingXd = (
+      await svc.listProviders({ catalog: fullCatalog })
+    ).find((provider) => provider.id === 'xd');
+
+    expect(
+      Object.values(selectableXd?.models ?? {}).flat().some((model) => model.id === capabilityModel.id),
+    ).toBe(false);
+    expect(
+      Object.values(routingXd?.models ?? {}).flat().some((model) => model.id === capabilityModel.id),
+    ).toBe(true);
+    expect(checkModelRoute(await svc.listProviders({ catalog: fullCatalog }), agent, capabilityModel.id, 'xd'))
+      .toEqual({ kind: 'reject', reason: 'capability-model' });
   });
 
   it('supports async connection readers (codex oauth)', async () => {

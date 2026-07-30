@@ -2517,7 +2517,7 @@ interface ElectronAPI {
       force?: boolean;
       /** 完整安装目标路径。不传 → global scope 默认路径。*/
       installPath?: string;
-      /** force 覆盖时跳过 XDMaker 持久备份,直接 rmrf 旧目录(完整替换)。 */
+      /** force 覆盖时跳过 Cindy 持久备份,直接 rmrf 旧目录(完整替换)。 */
       skipBackup?: boolean;
     }) => Promise<
       | { success: true; name: string; version: string; absolutePath: string }
@@ -2950,6 +2950,13 @@ interface ElectronAPI {
     reason?: 'gone' | 'no-worktree' | 'git-error';
     detail?: string;
   }>;
+  /**
+   * 「worktree 回收链已跑完」推送。归档/删除后 main 侧的回收是 fire-and-forget 的
+   * 异步链，store 条目移除远晚于状态 IPC 返回，renderer 必须等这条才能拿到真实快照。
+   */
+  onWorktreeChanged: (
+    callback: (payload: { sessionId: string }) => void,
+  ) => () => void;
 
   // ── Slack Hook(中心 slack-hook-server 接入) ── 类型正本在 shared/hookControlIpc.ts
   hookControl: {
@@ -3502,9 +3509,10 @@ interface ElectronAPI {
   };
 
   /**
-   * Browser backend toggle (Phase 5): 切换 MCP `browser` 工具实际控制的浏览器。
-   * - `external`: vendored Playwright + 独立 Chrome(老行为)
-   * - `rsb-webview`: 右侧栏内置 webview tab(新默认)
+   * Browser backend toggle: 切换 MCP `browser` 工具实际控制的浏览器。
+   * - `external`: vendored Playwright + 独立 Chrome(**系统默认**)
+   * - `rsb-webview`: 右侧栏内置 webview tab
+   * 默认值口径与两次翻转的 override 语义见 main/browser-backend-settings-store.ts。
    */
   browserBackend: {
     getState: () => Promise<{
@@ -4557,7 +4565,8 @@ interface ElectronAPI {
         };
       } | UtilityTextFailure>;
       listRuns: (id: string, limit?: number) => Promise<unknown[]>;
-      listSidebarIndexRuns: () => Promise<unknown[]>;
+      /** { runs, inflightRunIds } —— 形态见 features/scheduler/lib/scheduleSidebarIndexRuns。 */
+      listSidebarIndexRuns: () => Promise<unknown>;
       listCostSummaries: () => Promise<unknown[]>;
       deleteRun: (runId: string) => Promise<void>;
       getInflightCount: (id: string) => Promise<number>;

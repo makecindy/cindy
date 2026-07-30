@@ -40,6 +40,7 @@ import {
   resolveVoiceInputReplacementRange,
   type VoiceInputReplacementRange,
 } from './VoiceInputDraftDecoration';
+import { hasCjkContextPunctuation } from './CjkPunctuationUtils';
 
 const TAB_SIZE = 8;
 
@@ -56,7 +57,6 @@ const PLUGIN_STATE_KEY = new PluginKey<ListDecorationPluginState>(
 
 /** 行内一个非文本 inline 节点(mention chip 等)的占位符,与 applyListContinuation 一致。 */
 const ATOM_PLACEHOLDER = '\uFFFC';
-const CJK_PUNCTUATION_RE = /[\u3000-\u303f\uff00-\uffef]/;
 // 只有正文整体是一个没有自然断点的数字/字母串时才拆成 marker/body。
 // 普通句子里偶然出现长 token 时，交给 overflow-wrap:anywhere，保留空格
 // 的自然断词行为，避免把整句变成逐字断行。
@@ -217,7 +217,7 @@ export function buildListIndentDecorations(
         voiceReplacementRange !== null &&
         voiceReplacementRange.from < contentBase + line.end &&
         voiceReplacementRange.to > contentBase + line.start;
-      const hasCjkPunctuation = CJK_PUNCTUATION_RE.test(line.text);
+      const hasCjkPunctuation = hasCjkContextPunctuation(line.text);
       return (
         line.hasInlineAtom ||
         overlapsSlashCommandPill ||
@@ -249,7 +249,7 @@ export function buildListIndentDecorations(
       const match = compatibilityMatch(line);
       if (!match) {
         if (hasFallbackLine && lines.length > 1 && line.end > line.start) {
-          const hasCjkPunctuation = CJK_PUNCTUATION_RE.test(line.text);
+          const hasCjkPunctuation = hasCjkContextPunctuation(line.text);
           decorations.push(
             Decoration.inline(contentBase + line.start, contentBase + line.end, {
               class: [
@@ -268,7 +268,8 @@ export function buildListIndentDecorations(
       const prefix = line.text.slice(0, match.prefixLength);
       const body = line.text.slice(match.prefixLength);
       const hasTabPrefix = prefix.includes('\t');
-      const prefixHasCjkPunctuation = CJK_PUNCTUATION_RE.test(prefix);
+      const prefixHasCjkPunctuation =
+        match !== null && hasCjkContextPunctuation(line.text, 0, match.prefixLength);
       const lineClass = hasTabPrefix ? 'composer-list-tab-indent' : '';
       if (hasFallbackLine) {
         // The paragraph-level fallback supplies the available line width. The
@@ -324,7 +325,8 @@ export function buildListIndentDecorations(
       const body = line && match ? line.text.slice(match.prefixLength) : '';
       const from = line ? contentBase + line.start : contentBase;
       const hasLongAlphanumericBody = LONG_ALPHANUMERIC_BODY_RE.test(body);
-      const prefixHasCjkPunctuation = CJK_PUNCTUATION_RE.test(prefix);
+      const prefixHasCjkPunctuation =
+        match !== null && hasCjkContextPunctuation(line.text, 0, match.prefixLength);
       const hasTabPrefix = prefix.includes('\t');
       // A node decoration stays on the paragraph even when CjkPunctDecoration
       // adds nested inline spans, so punctuation cannot split the list wrapper.

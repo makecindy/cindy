@@ -67,6 +67,7 @@ import {
 import { quoteSegmentsToComposerDocument } from '@/lib/composerQuoteDocument';
 import { ChatImageView } from './ChatImageView';
 import { TextLightbox } from './TextLightbox';
+import { ToolPayloadLightbox } from './ToolPayloadLightbox';
 import { MessageActionBar } from './MessageActionBar';
 import { ErrorMessageCard } from './ErrorMessageCard';
 import { useForkAtMessage, textToTiptapDoc } from './useForkAtMessage';
@@ -564,6 +565,28 @@ export function buildSentInlineTokens(
   return tokens;
 }
 
+/**
+ * 收起态渲染与镜像测量共用的纯文本投影:粘贴段折叠成它自己的胶囊文案。
+ *
+ * 展开态里粘贴段是一个胶囊(点击看全文),收起态却按原文纯文本裁剪 —— 用户看到的
+ * 是"收起还能看到日志前 10 行、展开只剩一个胶囊"的反向落差(issue #946)。两侧共用
+ * 同一份投影后,收起与展开只差一个 line-clamp,内容形状一致;测量也不再被折叠掉的
+ * 几百行原文顶穿阈值,「只粘一段」的消息直接以胶囊呈现,不再多套一层收起。
+ *
+ * 只在 range 偏移确定精确时调用(见 UserMessage 的 collapseMeasureBody):
+ * buildSentInlineTokens 本身会丢弃越界 / 逆序的 range,偏移不准最坏退化成"不折叠",
+ * 不会截断或错位正文。
+ */
+export function projectSentPastedPlainText(
+  content: string,
+  pastedTextRanges: readonly PastedTextRange[] = [],
+): string {
+  if (pastedTextRanges.length === 0) return content;
+  return buildSentInlineTokens(content, pastedTextRanges)
+    .map((token) => (token.kind === 'pasted' ? token.display : token.text))
+    .join('');
+}
+
 /** Locate each parsed text island in the original quote wire text. */
 export function locateChatQuoteTextSegmentStarts(
   content: string,
@@ -612,6 +635,11 @@ function renderContent(
   pastedTextRanges: readonly PastedTextRange[] = [],
   slashCommandRanges?: readonly SlashCommandRange[],
   sessionReferences?: readonly PersistedSessionReferenceMetadata[],
+  /**
+   * 粘贴段胶囊的点击入口(issue #946)。不传时胶囊退回不可交互,只剩 hover
+   * tooltip —— 那正是"发出去就再也看不到全文"的旧行为,新调用点都应该传。
+   */
+  onPastedTextChipClick?: (text: string, chip: HTMLElement) => void,
 ): React.ReactNode[] {
   const tokens = buildSentInlineTokens(content, pastedTextRanges, slashCommandRanges ?? []);
   const useLegacySlashHeuristic = slashCommandRanges === undefined;
@@ -637,6 +665,15 @@ function renderContent(
           tooltipContentClassName="max-h-64 w-80 max-w-[70vw] overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere]"
           ariaLabel={token.display}
           className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
+          // 点击打开只读全文(与 composer 侧 pastedTextChip → ToolPayloadLightbox
+          // 对齐)。hover tooltip 是 320×256 的小浮层,几百行日志在里面读不了,
+          // 也无法选中复制,不能当作查看全文的唯一出口(issue #946)。
+          {...(onPastedTextChipClick
+            ? {
+                onClick: (event) =>
+                  onPastedTextChipClick(token.text, event.currentTarget),
+              }
+            : {})}
         />
       );
     }
@@ -724,9 +761,18 @@ export function UserMessage({
   } | null>(null);
   const [orcaExpanded, setOrcaExpanded] = useState(false);
   const [longMessageExpanded, setLongMessageExpanded] = useState(false);
+  // issue #946: 已发送消息里点粘贴段胶囊 → 只读全文 lightbox(无文件路径可给
+  // TextLightbox,与 composer 侧一样走 ToolPayloadLightbox 的 text 模式)。
+  const [pastedTextPreview, setPastedTextPreview] = useState<string | null>(null);
   // text-lightbox F6: ref to the chip currently driving the lightbox so
   // close can return focus to it (only one lightbox at a time per message).
   const activeFileChipRef = useRef<HTMLElement | null>(null);
+  // 与 file chip 共用 activeFileChipRef 的"最近一次触发者胜出"语义:同一条消息
+  // 同时只会开一个 lightbox,关闭后焦点回到真正点过的那个胶囊。
+  const handlePastedTextChipClick = useCallback((text: string, chip: HTMLElement) => {
+    activeFileChipRef.current = chip;
+    setPastedTextPreview(text);
+  }, []);
 
   // text-lightbox F1 replaces the old `@path` inline prepend. Files are now
   // rendered as a dedicated Chip-Row above the text bubble (per cc-agent-view
@@ -832,12 +878,30 @@ export function UserMessage({
   const collapseThreshold = automationOrigin
     ? AUTOMATION_USER_MESSAGE_VISUAL_LINE_THRESHOLD
     : LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD;
+  // 粘贴段在气泡展示正文(displayBubbleBody)局部坐标下的 range(与下方
+  // 富渲染同一份投影;硬指令剥 $token 后起点用 displayBubbleSourceStart)。
+  const bubblePastedRanges = useMemo(
+    () =>
+      projectSentRanges(pastedTextRanges ?? [], displayBubbleSourceStart, displayBubbleBody.length),
+    [displayBubbleBody.length, displayBubbleSourceStart, pastedTextRanges],
+  );
+  // 测量与收起态渲染共用的投影正文:粘贴段按胶囊文案计量,不再拿被折叠掉的
+  // 几百行原文去撞收起阈值(issue #946)。偏移只在 bubbleBody 与 ghostBody 同源
+  // (无引用交错)时精确 —— quote 块被 join 掉的消息偏移会整体前移,保持原文
+  // 测量;硬指令剥 $token 不影响精确性(displayBubbleSourceStart 已重定位)。
+  const collapseMeasureBody = useMemo(
+    () =>
+      bubbleBody === ghostBody
+        ? projectSentPastedPlainText(displayBubbleBody, bubblePastedRanges)
+        : displayBubbleBody,
+    [bubbleBody, ghostBody, displayBubbleBody, bubblePastedRanges],
+  );
   const collapseMeasureEnabled =
     !orcaCommunication &&
     !hookSource &&
-    mayExceedVisualLineThreshold(displayBubbleBody, collapseThreshold);
+    mayExceedVisualLineThreshold(collapseMeasureBody, collapseThreshold);
   const { mirrorRef: collapseMirrorRef, shouldCollapse: shouldCollapseLongMessage } =
-    useUserMessageAutoCollapse(displayBubbleBody, collapseMeasureEnabled, collapseThreshold);
+    useUserMessageAutoCollapse(collapseMeasureBody, collapseMeasureEnabled, collapseThreshold);
   const longMessageCollapsed = shouldCollapseLongMessage && !longMessageExpanded;
 
   // message-actions hover state — raw hover boolean, no debounce here.
@@ -1271,7 +1335,7 @@ export function UserMessage({
                           'whitespace-pre-wrap [overflow-wrap:anywhere]',
                         )}
                       >
-                        {displayBubbleBody}
+                        {collapseMeasureBody}
                       </div>
                     )}
                     {inlineQuoteCount > 0 ? (
@@ -1334,6 +1398,7 @@ export function UserMessage({
                                           segment.text.length,
                                         ),
                                     sessionReferences,
+                                    handlePastedTextChipClick,
                                   )}
                             </span>
                           ),
@@ -1350,7 +1415,9 @@ export function UserMessage({
                           ? // Collapsed chips render as plain text on purpose: otherwise
                             // clipped links/file chips can remain focusable behind the
                             // visual clamp. Expanding restores the rich chip rendering.
-                            displayBubbleBody
+                            // 粘贴段用胶囊文案(而非原文)投影:与展开态同形状,
+                            // 且与上方测量镜像同一份文本(issue #946)。
+                            collapseMeasureBody
                           : renderContent(
                               displayBubbleBody,
                               workingDir,
@@ -1367,11 +1434,7 @@ export function UserMessage({
                               t,
                               sessionId,
                               isRemoteFileOrigin(sessionFileCtx.origin),
-                              projectSentRanges(
-                                pastedTextRanges ?? [],
-                                displayBubbleSourceStart,
-                                displayBubbleBody.length,
-                              ),
+                              bubblePastedRanges,
                               slashCommandRanges === undefined
                                 ? undefined
                                 : projectSentRanges(
@@ -1380,6 +1443,7 @@ export function UserMessage({
                                     displayBubbleBody.length,
                                   ),
                               sessionReferences,
+                              handlePastedTextChipClick,
                             )}
                       </div>
                     ) : null}
@@ -1461,6 +1525,20 @@ export function UserMessage({
           fileName={textLightboxFile.name}
           triggerRef={activeFileChipRef}
           onClose={() => setTextLightboxFile(null)}
+        />
+      )}
+      {/* issue #946: 粘贴段全文(只读)。不传 textEdit —— 已发送的消息不可改。
+          标题用当前语言的 previewTitle,不复用随消息落库的 display(那是发送时刻
+          的语言,切换界面语言后会变成旧语种);行数仍在胶囊标签上可见。 */}
+      {pastedTextPreview !== null && (
+        <ToolPayloadLightbox
+          payload={{
+            kind: 'text',
+            title: t('newChat.pastedText.previewTitle'),
+            text: pastedTextPreview,
+          }}
+          triggerRef={activeFileChipRef}
+          onClose={() => setPastedTextPreview(null)}
         />
       )}
       {/* rewind-session: Preview Dialog. Only mounted while open so dryRun

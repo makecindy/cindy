@@ -59,10 +59,26 @@ Desktop safeStorage 和 Mobile SecureStore 都只保存一个加密的原子记�
 
 旧版裸 refresh token 只在一次性迁移时按 `buildRegion` 解释。冷启动先加载并核验记录中
 区域的端点清单，再向该区域 refresh；对端清单暂不可用时保留记录供重试，禁止退回
-`buildRegion` 发送 token。登出会清除记录和 `sessionRealm`，业务端点恢复安装包区域。
+`buildRegion` 发送 token。Desktop 在 refresh 返回组织 membership 后才允许激活跨区业务
+端点；个人 membership 只有在 `sessionRealm === buildRegion` 时才能恢复。跨区个人
+session 被拒绝时，Desktop 仍把轮换后的 refresh token 写回原 realm，但保持未登录且不
+删除记录，避免破坏共享 userData 中另一实例仍在使用的会话。登出会清除记录和
+`sessionRealm`，业务端点恢复安装包区域。
 
 Mobile 的 Pending OAuth 同时保存 `realm`，但 redirect scheme 始终使用当前安装包的
 scheme。个人验证码和社交登录不做跨区域发现，也不合并两区 passport。
+
+## 模型访问与媒体目录边界
+
+Desktop 的 model-access 身份由 `(userId, sessionRealm)` 共同确定。登出、换账号或
+同账号切换 realm 时，客户端立即清空旧 XD 动态模型清单，作废旧身份在途的凭据与
+`/models` 响应，并从当前 realm 重新同步；迟到响应不得写回凭据或覆盖新区域模型。
+
+XD 媒体能力属于 `buildRegion` 产品能力，不随组织 `sessionRealm` 跨区扩张。
+Global 构建保留目录中的完整图像与视频清单；中国大陆和 dev 构建会同时投影动态
+agent 清单里的媒体能力组与静态媒体清单：不暴露图像模型，视频仅暴露
+`seedance-fast` 与 `seedance-pro`。设置页、模型停用成员校验和 Cindy 媒体运行时
+都消费 main 侧同一投影策略，Renderer 不另做隐藏。
 
 ## Mobile 推送撤销
 

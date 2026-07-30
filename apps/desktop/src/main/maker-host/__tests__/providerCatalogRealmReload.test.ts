@@ -77,6 +77,7 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
   genericOAuthSecretIo: {},
   readCustomProviderKey: () => null,
   setProviderSecretsClearedListener: () => undefined,
+  addProviderSecretsClearedListener: () => undefined,
 }));
 vi.mock('../provider-route.js', () => ({
   setCustomProviderKeyReader: () => undefined,

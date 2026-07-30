@@ -362,6 +362,29 @@ describe('scaffoldGhostDir', () => {
 });
 
 describe('FORGE_GUIDE', () => {
+  it('分章体量守卫:每个 ## 章节须留在单次工具结果安全体量内(#890 分章投递的不变量)', () => {
+    // 手册"随主机版本演进"持续增长;任一章越过单次 MCP 结果上限会静默复现 #890 于该章。
+    // 上限取 32KB:当前最大章 ~22KB,余量 ~45%,越线即该拆小节。
+    const CHAPTER_BYTE_LIMIT = 32 * 1024;
+    const sections = new Map<string, number>();
+    let current = '(开场白)';
+    let size = 0;
+    for (const line of FORGE_GUIDE.split('\n')) {
+      if (line.startsWith('## ')) {
+        sections.set(current, size);
+        current = line;
+        size = 0;
+      }
+      size += Buffer.byteLength(line, 'utf8') + 1;
+    }
+    sections.set(current, size);
+    for (const [header, bytes] of sections) {
+      expect(bytes, `${header} 超出分章安全体量,请拆小节`).toBeLessThanOrEqual(
+        CHAPTER_BYTE_LIMIT,
+      );
+    }
+  });
+
   it('手册覆盖关键章节(身份卡/工具面/管子/聊天卡片/订阅拦截/网络代发/系统提示/沙箱红线/打包)', () => {
     for (const marker of [
       'ghost.json',
@@ -510,6 +533,19 @@ describe('FORGE_GUIDE', () => {
       '发布到官方插件仓的额外门禁',
       'makecindy/cindy-official-plugins',
       '四语言 locale 缺一不可',
+      // 2026-07-29 寄存通道(#784):§2 的 media 类目 + §4.0.1 章节,
+      // 以及 §6 沙箱红线里"改图只认名下媒体"的口径更新。
+      "kind: 'deposit_media'",
+      "kind: 'release_media'",
+      '"cindy": { "media": ["deposit"] }',
+      '每意识配额 1GB',
+      '寄存物不是产物',
+      // 2026-07-29 媒体代办画面参数:edit_image 放开 aspectRatio,视频四参数
+      // (ratio/resolution/duration/fps)+ 实际生效参数回执 videoParams。
+      '图像可选画幅 aspectRatio',
+      '视频画面参数(四项全可选',
+      'videoParams',
+      '各型号支持集不同',
     ]) {
       expect(FORGE_GUIDE).toContain(marker);
     }

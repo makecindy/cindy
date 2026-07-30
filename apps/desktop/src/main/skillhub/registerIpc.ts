@@ -429,7 +429,7 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   );
 
   // 读取单个 skill 的本地真实使用表现。只返回派生统计;原始 transcript 内容仍留在
-  // Claude/Codex 自己的 JSONL 文件里,不复制进 XDMaker DB。
+  // Claude/Codex 自己的 JSONL 文件里,不复制进 Cindy DB。
   ipcMain.handle(
     'skillhub:get-usage-summary',
     async (_event, { name, mdPath }: { name: string; mdPath?: string }) => {

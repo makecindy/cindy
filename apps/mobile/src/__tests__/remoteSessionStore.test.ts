@@ -143,7 +143,7 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getSessionDeviceId('s1')).toBe('dev-1');
   });
 
-  it('mirrors session-level usage pushes into totalCostUsd / totalTokenUsage', () => {
+  it('mirrors structured session money and legacy USD usage pushes', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
 
     // 被控端裸 UPDATE 不发 sessions:patched,这两条(sessions topic)是唯一更新通道。
@@ -159,6 +159,22 @@ describe('remoteSessionStore', () => {
       id: 's1',
       totalCostUsd: 1.23,
       totalTokenUsage: 45_000,
+    });
+
+    remoteSessionStore.applyRemotePush('dev-1', 'usage:session-spend-changed', {
+      sessionId: 's1',
+      totalMoney: {
+        amount: 8.24,
+        currency: 'CNY',
+        approximate: false,
+        kind: 'actual-cost',
+      },
+    });
+    expect(remoteSessionStore.getSessions()[0]).toMatchObject({
+      totalMoney: {
+        amount: 8.24,
+        currency: 'CNY',
+      },
     });
 
     // 跨设备 payload 防御:NaN / 负数不入镜像。
@@ -1320,6 +1336,58 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  it('projects the overload auto-retry marker as an overload attempt', () => {
+    // 上游过载退避与传输层重连共用同一个 attempt 字段, 但必须能分辨: 不认
+    // `(auto-retry N/M)` 的话, 整个退避窗口(最长约 30s)手机端只显示笼统的「思考中」
+    // (review #844 codex P1)。
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: {
+        type: 'error',
+        data: {
+          message:
+            'Selected model is at capacity. Please try a different model. (auto-retry 2/4)',
+          isTerminal: false,
+          willRetry: true,
+        },
+      },
+    });
+    expect(remoteSessionStore.isSessionRunning('s1')).toBe(true);
+    expect(remoteSessionStore.getSessionRunStatus('s1').reconnectAttempt).toEqual({
+      attempt: 2,
+      maxAttempts: 4,
+      kind: 'overload',
+    });
+
+    // Claude 侧的 529 走同一后缀。
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: {
+        type: 'error',
+        data: {
+          message: 'SDK API request failed: overloaded (HTTP 529) (auto-retry 3/10)',
+          isTerminal: false,
+          willRetry: true,
+        },
+      },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1').reconnectAttempt).toEqual({
+      attempt: 3,
+      maxAttempts: 10,
+      kind: 'overload',
+    });
+
+    // 重连仍是老形状(不带 kind), 既有投影与用例不受影响。
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
+      sessionId: 's1',
+      event: { type: 'error', data: { message: 'Reconnecting... 1/5', willRetry: true } },
+    });
+    expect(remoteSessionStore.getSessionRunStatus('s1').reconnectAttempt).toEqual({
+      attempt: 1,
+      maxAttempts: 5,
+    });
+  });
+
   it('tracks session running state from maker event push boundaries', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:10.000Z'));
@@ -1867,13 +1935,20 @@ describe('remoteSessionStore', () => {
     remoteSessionStore.applyRemotePush('dev-1', 'usage:message-turn-cost', {
       sessionId: 's1',
       clientId: 'm1',
-      turnCostUsd: 0.042,
-      turnCostIsEstimate: true,
+      turnMoney: {
+        amount: 0.29,
+        currency: 'CNY',
+        approximate: false,
+        kind: 'actual-cost',
+      },
     });
 
     expect(remoteSessionStore.getMessages('s1')[0].agentMeta).toMatchObject({
-      turnCostUsd: 0.042,
-      turnCostIsEstimate: true,
+      turnCost: {
+        amount: 0.29,
+        currency: 'CNY',
+      },
+      turnCostIsEstimate: false,
     });
   });
 

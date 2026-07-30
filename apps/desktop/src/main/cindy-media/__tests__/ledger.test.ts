@@ -210,6 +210,17 @@ describe('ghostCanRead(供图归属校验)', () => {
     await expect(ledger.ghostCanRead(HASH_A, 'other-ghost', db)).resolves.toBe(false);
   });
 
+  it('本意识寄存(ghost-deposit)→ 放行本意识,别的意识仍拒(#784)', async () => {
+    await seedBlob(HASH_A);
+    await ledger.addRef(
+      { hash: HASH_A, refKind: 'ghost-deposit', refId: 'art', originKind: 'user' },
+      db,
+    );
+    // 这条正是 "画布上的图 = AI 能改的图":resolveOwnedMedia 走 ghostCanRead。
+    await expect(ledger.ghostCanRead(HASH_A, 'art', db)).resolves.toBe(true);
+    await expect(ledger.ghostCanRead(HASH_A, 'other-ghost', db)).resolves.toBe(false);
+  });
+
   it('别的意识 / 未知指纹一律拒(不区分不存在与不属于你)', async () => {
     await seedBlob(HASH_A);
     await ledger.addRef(
@@ -288,6 +299,85 @@ describe('listGhostGallery(画廊清单:重启回放数据源)', () => {
     const items = await ledger.listGhostGallery('art', db, 1);
     expect(items).toHaveLength(1);
     expect(items[0].label).toBe('新');
+  });
+});
+
+describe('寄存计量与释放(ghostDepositUsageBytes / removeGhostDepositRef,#784)', () => {
+  async function deposit(hash: string, ghostId: string, bytes: number): Promise<void> {
+    await ledger.recordBlob({ hash, ext: '.png', mimeType: 'image/png', bytes }, db);
+    await ledger.addRef({ hash, refKind: 'ghost-deposit', refId: ghostId, originKind: 'user' }, db);
+  }
+
+  it('按意识累加寄存字节,别的意识与别的 refKind 都不计入', async () => {
+    await deposit(HASH_A, 'art', 100);
+    await deposit(HASH_B, 'art', 250);
+    const HASH_C = 'c'.repeat(64);
+    await deposit(HASH_C, 'other-ghost', 999);
+    // 画廊(生成产物)不占寄存配额 —— 否则"出图多"会挤掉"存参考图"。
+    const HASH_D = 'd'.repeat(64);
+    await ledger.recordBlob({ hash: HASH_D, ext: '.png', mimeType: 'image/png', bytes: 500 }, db);
+    await ledger.addRef({ hash: HASH_D, refKind: 'ghost-gallery', refId: 'art' }, db);
+
+    await expect(ledger.ghostDepositUsageBytes('art', db)).resolves.toBe(350);
+    await expect(ledger.ghostDepositUsageBytes('other-ghost', db)).resolves.toBe(999);
+    await expect(ledger.ghostDepositUsageBytes('nobody', db)).resolves.toBe(0);
+  });
+
+  it('同指纹重复入账只算一份(内容寻址下磁盘也只占一份)', async () => {
+    await deposit(HASH_A, 'art', 100);
+    // 历史数据里可能出现重复 ref 行,计量口径必须与真实磁盘占用一致。
+    await ledger.addRef({ hash: HASH_A, refKind: 'ghost-deposit', refId: 'art' }, db);
+    await expect(ledger.ghostDepositUsageBytes('art', db)).resolves.toBe(100);
+  });
+
+  it('撤回只删本意识的寄存引用:画廊/消息/别人的引用一概不动', async () => {
+    await deposit(HASH_A, 'art', 100);
+    await ledger.addRef({ hash: HASH_A, refKind: 'ghost-gallery', refId: 'art' }, db);
+    await ledger.addRef({ hash: HASH_A, refKind: 'ghost-deposit', refId: 'other-ghost' }, db);
+    await ledger.addRef(
+      { hash: HASH_A, refKind: 'message', refId: 'msg-1', originSessionId: 'sess-1' },
+      db,
+    );
+
+    await expect(ledger.removeGhostDepositRef({ hash: HASH_A, ghostId: 'art' }, db)).resolves.toBe(true);
+    await expect(ledger.ghostDepositUsageBytes('art', db)).resolves.toBe(0);
+    // 别人的寄存、自己的画廊、聊天消息都还在(字节不会被连带清掉)。
+    await expect(ledger.ghostDepositUsageBytes('other-ghost', db)).resolves.toBe(100);
+    const kinds = db.select().from(schema.mediaRefs).all().map((r) => `${r.refKind}:${r.refId}`);
+    expect(kinds.sort()).toEqual([
+      'ghost-deposit:other-ghost',
+      'ghost-gallery:art',
+      'message:msg-1',
+    ]);
+    // 撤回后字节仍在账(recycler 按引用归零判生死,不由本函数删)。
+    await expect(ledger.getBlobInfo(HASH_A, db)).resolves.toMatchObject({ bytes: 100 });
+  });
+
+  it('撤回不存在的寄存引用 → false(幂等,不报错)', async () => {
+    await seedBlob(HASH_A);
+    await expect(ledger.removeGhostDepositRef({ hash: HASH_A, ghostId: 'art' }, db)).resolves.toBe(false);
+  });
+
+  it('卸载意识时按 refKind 清空自己的寄存物(removeRefs 口)', async () => {
+    await deposit(HASH_A, 'art', 100);
+    await deposit(HASH_B, 'art', 250);
+    await ledger.addRef({ hash: HASH_A, refKind: 'ghost-gallery', refId: 'art' }, db);
+    const removed = await ledger.removeRefs({ refKind: 'ghost-deposit', refId: 'art' }, db);
+    expect(removed).toBe(2);
+    await expect(ledger.ghostDepositUsageBytes('art', db)).resolves.toBe(0);
+    // 画廊留存语义不在本改动范围内改动。
+    await expect(ledger.listGhostGallery('art', db)).resolves.toHaveLength(1);
+  });
+
+  it('删会话不碰寄存物(画布上的图不因删会话变得不能改)', async () => {
+    await deposit(HASH_A, 'art', 100);
+    await ledger.addRef(
+      { hash: HASH_A, refKind: 'message', refId: 'msg-1', originSessionId: 'sess-1' },
+      db,
+    );
+    await ledger.removeSessionRefs('sess-1', db);
+    await expect(ledger.ghostDepositUsageBytes('art', db)).resolves.toBe(100);
+    await expect(ledger.ghostCanRead(HASH_A, 'art', db)).resolves.toBe(true);
   });
 });
 

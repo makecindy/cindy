@@ -2,14 +2,15 @@
  * useSessionSpend — 订阅当前 session 的"终身累计 cost"。
  *
  * 数据来源：
- *   - 调用方传入 initialCostUsd（一般来自 sessionService.get 拿到的 totalCostUsd）作为初始值
- *   - 订阅 main 推的 `usage:session-spend-changed`，按 sessionId 过滤
- *   - sessionId 切换时重置为新的 initialCostUsd（避免显示上一个会话残留）
+ *   - 调用方传入 session snapshot 作为首屏初值
+ *   - 先订阅 main 推的 `usage:session-spend-changed`，再补拉一次权威 session 账本
+ *   - 若补拉期间收到实时事件，以事件为准，避免旧查询覆盖新累计
  *
- * 故意不在这里再 fetch 一次 session — 调用方已经有 session 对象，避免重复 IPC。
+ * 新会话首轮可能在视图挂载前就完成；只依赖初值 + 广播会永久漏掉这笔费用。
  */
 
 import { useEffect, useState } from 'react';
+import { getSessionFor } from '@/lib/makerTransport';
 import {
   legacyUsdMoney,
   normalizeRegionalMoney,
@@ -30,29 +31,48 @@ export function useSessionSpend(
     initial,
   );
 
-  // sessionId 切换时, 用新初始值复位 —— 否则会带着上一个 session 的累计串台
+  // 初值只是首屏快照：仅切 session 时使用。同一 session 后到的旧 snapshot
+  // 不能覆盖实时事件或下方权威补拉。
   useEffect(() => {
-    setMoney(
-      normalizeRegionalMoney(initialMoney) ??
-        (typeof initialCostUsd === 'number'
-          ? legacyUsdMoney(initialCostUsd)
-          : null),
-    );
-  }, [sessionId, initialMoney, initialCostUsd]);
+    setMoney(initial);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 初值不拥有同一 session 的后续更新
+  }, [sessionId]);
 
   useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId) return undefined;
+    let cancelled = false;
+    let receivedCurrentEvent = false;
+    const applyMoney = (
+      totalMoney: unknown,
+      totalCostUsd: number | null | undefined,
+    ): void => {
+      if (cancelled) return;
+      setMoney(
+        normalizeRegionalMoney(totalMoney) ??
+          (typeof totalCostUsd === 'number'
+            ? legacyUsdMoney(totalCostUsd)
+            : null),
+      );
+    };
     const unsubscribe = window.electronAPI.onUsageSessionSpendChanged((res) => {
       if (res.sessionId === sessionId) {
-        setMoney(
-          normalizeRegionalMoney(res.totalMoney) ??
-            (typeof res.totalCostUsd === 'number'
-              ? legacyUsdMoney(res.totalCostUsd)
-              : null),
-        );
+        receivedCurrentEvent = true;
+        applyMoney(res.totalMoney, res.totalCostUsd);
       }
     });
-    return unsubscribe;
+    void getSessionFor(sessionId)
+      .then((session) => {
+        if (!receivedCurrentEvent) {
+          applyMoney(session.totalMoney, session.totalCostUsd);
+        }
+      })
+      .catch(() => {
+        // 初值与实时广播仍可工作；远端离线或旧被控端不阻断展示。
+      });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, [sessionId]);
 
   return money;

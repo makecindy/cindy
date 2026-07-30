@@ -144,7 +144,7 @@ export interface CcMeta {
    * "用量已恢复,继续目标")。同 goalCompletion,renderer 据此渲成 system card 分隔条,
    * 不进 prompt。
    */
-  goalNotice?: 'usage-resumed';
+  goalNotice?: 'usage-resumed' | 'capacity-resumed';
 
   /**
    * Host-side marker:这条 user 消息是一个 /goal 目标的设定 / 更新(goal-host 在新建或

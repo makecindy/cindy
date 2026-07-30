@@ -582,11 +582,11 @@
       "fallbackName": "User",
       "avatarAlt": "{{name}} avatar",
       "local": {
-        "exitFailed": "Failed to exit local mode, please try again",
-        "name": "Local mode",
+        "exitFailed": "Failed to exit the not-signed-in state, please try again",
+        "name": "Not signed in",
         "description": "Data stays on this device without Cindy account services",
         "signIn": "Sign in to Cindy",
-        "exit": "Exit local mode"
+        "exit": "Exit the not-signed-in state"
       },
       "copyUserId": {
         "action": "Copy user ID",
@@ -756,7 +756,7 @@
       "serviceSource": {
         "label": "Voice service",
         "hint": "Uses the Cindy voice service by default. You can instead connect a realtime ASR service with separate voice credentials.",
-        "localHint": "Local mode does not use Cindy account services; connect a realtime ASR service with separate voice credentials.",
+        "localHint": "Cindy account services are unavailable while not signed in; connect a realtime ASR service with separate voice credentials.",
         "ariaLabel": "Voice service source",
         "options": {
           "cindy": "Cindy official service",
@@ -2500,7 +2500,7 @@
         "addPlugin": "Add plugin",
         "addPluginAria": "Plugin add options",
         "createWithCindy": "Create with Cindy",
-        "createPrompt": "I want to create a Cindy plugin. First call ghost_forge_guide to read the full specification; do not start implementing yet. Begin by asking questions, focusing on one key decision at a time, and work with me to define the problem, target users, interaction flow, required tools and connections, permission boundaries, and acceptance criteria. After I confirm the design, implement and validate it according to the specification, then call ghost_forge_pack to package and install the plugin.",
+        "createPrompt": "I want to create a Cindy plugin. First call ghost_forge_guide to get the handbook's table of contents, then read the relevant chapters via the section parameter (at minimum the sandbox red-lines and packaging chapters) before writing any code; do not start implementing yet. Begin by asking questions, focusing on one key decision at a time, and work with me to define the problem, target users, interaction flow, required tools and connections, permission boundaries, and acceptance criteria. After I confirm the design, implement and validate it according to the specification, then call ghost_forge_pack to package and install the plugin.",
         "installedTitle": "Installed Plugins",
         "installedExpand": "Show {{count}} more installed plugins",
         "installedCollapse": "Hide additional installed plugins",
@@ -2651,6 +2651,8 @@
         "cindyImageEdit": "Image editing (delegated to Cindy, its own images only)",
         "cindyVideoGenerate": "Video generation (delegated to Cindy)",
         "cindyVideoEdit": "Image-to-video (delegated to Cindy, reference images from its own media only)",
+        "cindyMediaDeposit": "Can save images, video or audio it holds into your media library",
+        "cindyMediaDepositDetail": "This lets AI work on material you paste or drop into the plugin. Saved items are recorded under this plugin, use at most {{quota}}, and are cleaned up when you uninstall it.",
         "agentUserAction": "Can start a new Agent turn after you click a plugin card",
         "agentUserActionDetail": "Each click permits one turn only, and only in the session that owns the card.",
         "agentBackground": "Can automatically start new Agent turns in the background",
@@ -3135,7 +3137,7 @@
     "ssoRequired": "This organization requires SSO sign-in",
     "ssoEntry": "Sign in with enterprise SSO",
     "localModeEntry": "Skip Sign-In",
-    "localModeOpening": "Opening local mode…",
+    "localModeOpening": "Skipping sign-in…",
     "localModeDescription": "No Cindy account required. Data stays on this device; cloud models, cross-device access, and marketplace services are unavailable.",
     "consentStatement": "I have read and agree to the <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>",
     "consentDialog": {
@@ -3848,6 +3850,8 @@
     "banner": {
       "title": "Updated to {{version}}",
       "subtitle": "Relaunch to apply",
+      "viewNotes": "See What's New",
+      "viewNotesAria": "See what's new in {{version}}",
       "button": "Relaunch",
       "tooltipReady": "Update ready – click to relaunch{{versionSuffix}}",
       "ariaCollapsed": "Update ready, click to relaunch to version {{version}}",
@@ -3877,6 +3881,7 @@
       "ariaDescription": "Release notes for version {{version}}",
       "ariaDescriptionSpan": "Release notes for {{count}} versions since v{{from}}",
       "versionsSpan": "{{count}} versions",
+      "versionJumpAria": "Jump to a version — {{count}} versions, currently on v{{version}}",
       "loading": "Loading",
       "loadFailed": "Load failed",
       "retry": "Retry"
@@ -3906,6 +3911,8 @@
     "user": {
       "settingsLink": "Settings, current user: {{name}}",
       "canaryBadge": "Canary user",
+      "regionCodeCn": "CN",
+      "regionCodeDev": "Dev",
       "viewReleaseNotes": "View release notes",
       "reopenUpdateBanner": "Update ready — click to review",
       "downloadMobile": "Download Cindy Mobile"
@@ -4126,7 +4133,9 @@
         "addFailed": "Failed to add project",
         "pathEmpty": "Please enter a project path",
         "pathIsFile": "{{path}} is a file, not a directory"
-      }
+      },
+      "selectTargetPlaceholder": "Choose a target…",
+      "requestedDeviceUnavailable": "The requested device isn't available right now — pick another target"
     },
     "projectPicker": {
       "addRemoteProject": "Add remote project"
@@ -4449,6 +4458,14 @@
       "alwaysAllowScopedHint": "Applies to the whole session, and only to what is listed here.",
       "alwaysAllowSessionHint": "Applies to the whole session, not just this one request.",
       "ruleSeparator": ", "
+    },
+    "deviceSwitcher": {
+      "label": "Device",
+      "localHint": "Runs on this computer",
+      "onlineHint": "Connected — available",
+      "offlineHint": "Offline — available once connected",
+      "attachmentsDropped": "Removed {{count}} attachment(s) — they live on the previous device",
+      "attachmentsRemoteUnsupported": "File attachments aren't supported on a remote device — skipped {{count}} (images are fine)"
     }
   },
   "onboarding": {
@@ -4652,6 +4669,9 @@
       "networkUnreachableNoRetry": "Network error: the service is temporarily unreachable.",
       "networkAutoRetrying": "Network error — retrying automatically…",
       "networkReconnecting": "Connection interrupted — reconnecting ({{attempt}}/{{maxAttempts}})…",
+      "overloadRetrying": "The model service is busy — retrying automatically ({{attempt}}/{{maxAttempts}})…",
+      "overloadBusy": "The model service is busy — the upstream has no capacity right now. Click \"Retry\", or switch to another model.",
+      "overloadBusyNoRetry": "The model service is busy — the upstream has no capacity right now. Try again later, or switch to another model.",
       "networkShowRaw": "Show raw error",
       "networkHideRaw": "Hide raw error",
       "silentStopContinue": "Continue",
@@ -5321,7 +5341,8 @@
       "worktreeMissingRepo": "Cannot create worktree: missing repository root for the current directory",
       "worktreeRepoHint": "Try re-selecting the working directory and wait for the folder badge to refresh, then retry",
       "sessionInactive": "Session is no longer active",
-      "remoteProjectBanner": "New session in {{project}} on {{device}}"
+      "remoteProjectBanner": "New session in {{project}} on {{device}}",
+      "remoteDialogueBanner": "New dialogue on {{device}} (no project)"
     },
     "jumpSession": {
       "emptyId": "Enter a sessionId to jump to",
@@ -5818,7 +5839,7 @@
         "activityDesc": "Recently active",
         "activityAsc": "Oldest active"
       },
-      "filterAria": "Search filters (Status: {{status}}, Agent: {{agent}}, Last activity: {{lastActivity}}, Projects: {{projects}})",
+      "filterAria": "Search filters and sort (Sort: {{sort}}, Status: {{status}}, Agent: {{agent}}, Last activity: {{lastActivity}}, Projects: {{projects}})",
       "filter": {
         "label": "Filters",
         "active": "{{count}} filters",
@@ -5928,6 +5949,7 @@
     "cell": {
       "subtitlePaused": "Paused",
       "subtitleWaitingForResources": "Waiting for a slot ({{inFlight}}/{{max}})",
+      "subtitleQueuedForSession": "Queued until the session is idle",
       "subtitleManual": "Manual",
       "subtitleOnce": "Once",
       "tagOnce": "Once",
@@ -7198,7 +7220,9 @@
       "registrationFailed": "Creation failed, please retry later",
       "silentStopExhausted": "The model returned empty responses repeatedly; auto-resume is paused. Click \"Continue\" to resume the task.",
       "permissionTightenInterruptFailed": "Failed to stop the running task while tightening permissions; it may keep running without approval prompts until it finishes. Stop it manually if needed.",
-      "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed."
+      "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed.",
+      "upstreamResponseIdleTimeout": "The model stopped responding for a long time, so this turn was interrupted to avoid hanging forever. Completed tool calls are preserved — send the next message to continue.",
+      "turnNoEventTimeout": "This turn showed no activity for a long time (model, tools and background processes were all silent), so it was interrupted to avoid hanging forever. Send the next message to continue."
     },
     "validation": {
       "feishuFieldsRequired": "App ID and App Secret are both required",
@@ -7333,7 +7357,8 @@
       "blocked": "Blocked",
       "complete": "Completed",
       "budgetLimited": "Limit reached",
-      "usageLimited": "Usage limited"
+      "usageLimited": "Usage limited",
+      "capacityLimited": "Model service busy"
     },
     "turns": "{{used}} turns",
     "turnsWithMax": "{{used}} / {{max}} turns",
@@ -7353,10 +7378,13 @@
       "start": "Start",
       "starting": "Starting…",
       "cancel": "Cancel",
-      "failed": "Failed to create goal"
+      "failed": "Failed to create goal",
+      "busy": "Another creation is already in progress. Please try again in a moment."
     },
     "usageLimitedUntil": "resumes {{time}}",
+    "capacityRetryAt": "Retrying at {{time}}",
     "usageResumeNotice": "Usage limit reset — resuming the goal",
+    "capacityRetryNotice": "Model service was busy — retrying the goal",
     "complete": {
       "record": "Goal achieved · {{turns}} turns · {{duration}}"
     },
@@ -7565,6 +7593,7 @@
       "poolDetail": "Used {{used}} · Total {{total}}",
       "remaining": "Remaining",
       "progressLabel": "{{label}} usage",
+      "noPlanCredits": "No subscription credits because there is no active subscription.",
       "historyUnavailable": "Usage history is incomplete. Only the remaining balance is available.",
       "detailsUnavailable": "Usage details are temporarily unavailable. Current balances are shown instead.",
       "promotionalDetails": {
@@ -7608,8 +7637,7 @@
     "catalog": {
       "errorTitle": "Plans are temporarily unavailable",
       "errorDescription": "Check your connection and retry. Local fallback plans will not be used.",
-      "emptyTitle": "No Plans Available",
-      "emptyDescription": "The server has not published any plans yet.",
+      "emptyTitle": "Coming soon. Stay tuned.",
       "currentPlan": "Current Plan",
       "unavailableReasons": {
         "OFFER_COMING_SOON": "Coming Soon",

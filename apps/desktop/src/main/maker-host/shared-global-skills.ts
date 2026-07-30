@@ -308,7 +308,7 @@ async function linkEntriesIntoRoot(
  * Makes global skills usable from both Claude Code and Codex without moving user data.
  *
  * Rules:
- * - ~/.agents/skills is the shared index that XDMaker Codex already scans.
+ * - ~/.agents/skills is the shared index that Cindy Codex already scans.
  * - Existing ~/.claude/skills entries are linked into ~/.agents/skills so Codex can see them.
  * - ~/.agents/skills and ~/.codex/skills entries are linked into ~/.claude/skills so Claude can see them.
  * - Existing non-symlink paths are never overwritten.

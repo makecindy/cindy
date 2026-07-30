@@ -4,6 +4,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+	acquireTestGateLock,
+	shouldUseTestGateLock,
+} from "./test-gate-lock.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const IGNORED_PARTS = new Set([
@@ -46,12 +50,17 @@ export function parseCliOptions(args) {
 		workspaces: [],
 		excludeWorkspaces: [],
 		workspaceConcurrency: undefined,
+		noLock: false,
 	};
 	for (let index = 0; index < args.length; index += 1) {
 		const arg = args[index];
 		if (arg === "--") continue;
 		if (arg === "--all") {
 			options.all = true;
+			continue;
+		}
+		if (arg === "--no-lock") {
+			options.noLock = true;
 			continue;
 		}
 		if (arg === "--tier") {
@@ -903,20 +912,36 @@ async function main() {
 		workspaces,
 		excludeWorkspaces,
 		workspaceConcurrency,
+		noLock,
 	} = parseCliOptions(process.argv.slice(2));
-	const manifest = (await import("./test-workspaces.config.mjs")).default;
-	const results = await runPlannedTests({
-		root: ROOT,
-		manifest,
-		tier,
-		all,
-		workspaces,
-		excludeWorkspaces,
-		workspaceConcurrency,
-		reporter: createWorkspaceRunReporter(),
-	});
-	printSummary(results, manifest);
-	if (results.some((result) => result.exitCode !== 0)) process.exitCode = 1;
+	const lock = shouldUseTestGateLock({ all, tier, noLock })
+		? await acquireTestGateLock({
+				repoRoot: ROOT,
+				owner: {
+					pid: process.pid,
+					tier: all ? "all" : tier,
+					cwd: ROOT,
+					startedAt: new Date().toISOString(),
+				},
+			})
+		: null;
+	try {
+		const manifest = (await import("./test-workspaces.config.mjs")).default;
+		const results = await runPlannedTests({
+			root: ROOT,
+			manifest,
+			tier,
+			all,
+			workspaces,
+			excludeWorkspaces,
+			workspaceConcurrency,
+			reporter: createWorkspaceRunReporter(),
+		});
+		printSummary(results, manifest);
+		if (results.some((result) => result.exitCode !== 0)) process.exitCode = 1;
+	} finally {
+		await lock?.release();
+	}
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -930,6 +955,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 	}
 	main().catch((error) => {
 		console.error(error);
-		process.exitCode = 1;
+		process.exitCode = error?.exitCode ?? 1;
 	});
 }

@@ -34,7 +34,7 @@ import {
   type RoutingTransform,
 } from '@cindy/anthropic-compat-proxy';
 
-import { ANTHROPIC_DIRECT_UPSTREAM, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
+import { ANTHROPIC_DIRECT_UPSTREAM, CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
 import { getActiveCatalog } from './active-catalog.js';
 import { getResponsesBridgeHandler } from './anthropic-responses-bridge-host.js';
 import { getSessionEffort, getSessionFastMode } from './session-effort-store.js';
@@ -118,13 +118,13 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-/** 大小写不敏感地判断请求是否带某 header(且非空)。 */
-function hasHeader(headers: Readonly<Record<string, string>>, name: string): boolean {
+/** 大小写不敏感取 header 值;缺失或空串 → null。 */
+function headerValue(headers: Readonly<Record<string, string>>, name: string): string | null {
   const lower = name.toLowerCase();
   for (const [k, v] of Object.entries(headers)) {
-    if (k.toLowerCase() === lower && typeof v === 'string' && v.length > 0) return true;
+    if (k.toLowerCase() === lower && typeof v === 'string' && v.length > 0) return v;
   }
-  return false;
+  return null;
 }
 
 /**
@@ -207,7 +207,15 @@ export function createModelRoutingTransform(): RoutingTransform {
     // providerId=null 时读)——显式选了供应商但被 scope 门放下来的辅助请求(如 xai 会话
     // 的 claude-* 分类器调用)不该往表里写死记录。
     const recordDefaultRoute = sessionId !== null && getSessionProvider(sessionId) == null;
-    if (hasHeader(ctx.headers, 'x-api-key')) {
+    // provider-oauth spawn 的占位 key **不是可用凭证**:scope 门放下来的辅助请求
+    // (如 openai / xai 来源 cc 会话里 CLI 自发的 claude-* 权限分类器调用)带着它
+    // passthrough 会在网关吃确定性 401 → 误触发 auto→ask 降级(#831)。与 codex
+    // ①.5 段 #890 修复同语义:占位 key 按「无可用凭证」处理,走下方换网关 key 的
+    // 默认路由;真实 key(gateway-spawn)照旧 passthrough。
+    const apiKeyHeader = headerValue(ctx.headers, 'x-api-key');
+    const hasUsableApiKey =
+      apiKeyHeader !== null && apiKeyHeader !== CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY;
+    if (hasUsableApiKey) {
       // gateway-spawn:自带网关 key,passthrough。
       if (recordDefaultRoute) recordClaudeSessionRoute(sessionId, 'gateway');
       return null;
@@ -217,6 +225,12 @@ export function createModelRoutingTransform(): RoutingTransform {
       // oauth-spawn 默认:全量换网关 key(防订阅 token 泄漏到网关)。
       if (recordDefaultRoute) recordClaudeSessionRoute(sessionId, 'gateway');
       return decision;
+    }
+    if (apiKeyHeader !== null) {
+      // 占位 key 且无网关 key:保持改动前行为(passthrough,上游 401)——下方的
+      // Anthropic 直连支路是给 oauth-spawn 订阅 token 准备的,占位 key 不适用。
+      log.warn('provider-oauth cc spawn 占位 key 且无网关 key; passthrough (预期 401)', { wireModel });
+      return null;
     }
     // 没网关 key:Anthropic 模型只能直连(唯一出路),其余 passthrough + 记一条诊断。
     // 判据 = 前缀地板 ∪ 目录 anthropic 供应商模型集合(新家族改 OSS 目录即可,无需发版)。

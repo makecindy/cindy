@@ -72,12 +72,17 @@ export default defineConfig({
     // --localstorage-file 时方法全缺的残缺对象:node 环境下骗过
     // `typeof localStorage !== 'undefined'` 探测,jsdom 环境下又因 key 已存在
     // 顶掉 jsdom 注入的可用实现(vitest 填充全局时跳过已存在的 key)。统一在
-    // worker 进程关掉该全局(flag 自 Node 22 起有效),恢复两种环境的原语义;
-    // CI(Node 22,webstorage 默认关)上本为 no-op。配置放这里(而非 test 脚本
-    // 注 NODE_OPTIONS)是因为根 test-workspaces runner 走 `exec vitest run`
-    // 直调、不经 package.json 脚本,只有 config 层对所有入口一致生效。
+    // worker 里关掉该全局(flag 自 Node 22 起有效),恢复两种环境的原语义。
+    // 配置放这里(而非 test 脚本注 NODE_OPTIONS)是因为根 test-workspaces runner
+    // 走 `exec vitest run` 直调、不经 package.json 脚本,只有 config 层对所有
+    // 入口一致生效。
+    //
+    // 只给 forks 池配这个 execArgv,threads 池一律不配:给 worker thread 传自定义
+    // execArgv 会让 isolate 销毁时段错误(实测数据见 scripts/shared/node-webstorage.mjs),
+    // 所以哪怕有人手动 `--pool=threads` 也不该拿到这份配置。需要这个 flag 的 Node 上,
+    // 根 manifest 会用同一个 nodeWebstorageEnabled() 判据把 unit tier 留在 forks,
+    // 两者不会同时生效;不需要 flag 的 Node(本机与 CI 的 22)上压根没有 webstorage 全局。
     poolOptions: {
-      threads: { execArgv: ['--no-experimental-webstorage'] },
       forks: { execArgv: ['--no-experimental-webstorage'] },
     },
     // Main-process code is pure Node — no DOM needed. Renderer tests (if/when

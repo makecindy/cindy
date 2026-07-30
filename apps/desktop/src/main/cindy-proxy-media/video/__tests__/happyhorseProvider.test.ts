@@ -133,6 +133,40 @@ describe('happyhorse provider · submit body shape', () => {
     expect(body.parameters.resolution).toBe('1080P');
   });
 
+  it('任何比例的像素量都不超过该档 16:9 基准(不偷偷升档)', async () => {
+    // 回归:4:3 曾拿 longSide 当宽再推高(720p → 1280*960 = 基准的 1.33 倍),
+    // 等于升档出片并计费。cindy 槽放开 ratio 后这条分支才可达。
+    const cases: Array<{ resolution: string; ratio: string; size: string }> = [
+      { resolution: '720p', ratio: '4:3', size: '960*720' },
+      { resolution: '1080p', ratio: '4:3', size: '1440*1080' },
+      { resolution: '480p', ratio: '4:3', size: '640*480' },
+      { resolution: '720p', ratio: '3:4', size: '540*720' },
+      { resolution: '720p', ratio: '1:1', size: '720*720' },
+      { resolution: '720p', ratio: '16:9', size: '1280*720' },
+      { resolution: '1080p', ratio: '9:16', size: '1080*1920' },
+    ];
+    const baseline: Record<string, number> = {
+      '480p': 854 * 480,
+      '720p': 1280 * 720,
+      '1080p': 1920 * 1080,
+    };
+    for (const c of cases) {
+      const fetchMock = vi.fn(async () =>
+        new Response(
+          JSON.stringify({ output: { task_id: 't', task_status: 'PENDING' } }),
+          { status: 200 },
+        ),
+      ) as unknown as typeof fetch;
+      const p = makeProvider(fetchMock);
+      await p.submit({ prompt: 'x', resolution: c.resolution, ratio: c.ratio }, 'happyhorse');
+      const init = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit;
+      const body = JSON.parse(init.body as string);
+      expect(body.parameters.size, `${c.resolution} ${c.ratio}`).toBe(c.size);
+      const [w, h] = (body.parameters.size as string).split('*').map(Number);
+      expect(w * h, `${c.resolution} ${c.ratio} 像素量`).toBeLessThanOrEqual(baseline[c.resolution]);
+    }
+  });
+
   it('rejects unknown alias before sending', async () => {
     const fetchMock = vi.fn(async () =>
       new Response('{}', { status: 200 }),

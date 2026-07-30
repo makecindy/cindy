@@ -32,7 +32,13 @@ import { normalizeAccountRateLimitSnapshot } from '../../types/account-rate-limi
 import type { AsyncQueue } from '../shared/async-queue.js';
 import { stripTerminalControlSequences } from '../shared/terminal-output.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
+import {
+  UPSTREAM_OVERLOAD_REASON,
+  formatOverloadRetryMessage,
+  parseOverloadError,
+} from '../shared/overload-error.js';
 import { commandExecutionDisplayInput, type CommandExecutionDisplayInput } from './command-display.js';
+import { codexErrorInfoTag } from './app-server/protocol.js';
 import type {
   ItemCompletedNotification,
   ItemStartedNotification,
@@ -112,6 +118,17 @@ export interface CodexTranslateContext {
    * 缺省 = 不回调 (makerMemoryEnabled 关时 agent 不注入)。
    */
   onCompactBoundary?: () => void;
+  /**
+   * 服务过载错误的重投接管钩子 (由 agent 层注入)。
+   *
+   * 返回进度 = agent 层已排好退避重投, 这条错误必须透成**非终止**状态并带上
+   * 进度; 否则 UI 会先收口成失败再重投, 用户看到一次假失败闪烁。返回 null =
+   * 没有重投预算或不满足重投条件, 按原路径当终止错误报。
+   *
+   * 分工原因: 能否重投只有 agent 层知道 (要看本 turn 有没有产出、预算还剩多少、
+   * 会话是否已关), 而错误脱敏与 error 事件构造在 translator。缺省 = 不接管。
+   */
+  tryTakeOverOverload?: () => { attempt: number; maxAttempts: number } | null;
 }
 
 // ── 主入口: 三个 item.* notification 的统一分发 ────────────────────────────────
@@ -238,10 +255,15 @@ export function translateErrorNotification(
   const signals = extractNonSecretErrorSignals(message);
   const errorStatus =
     signals.errorStatus ?? (hasMissingBearer || hasAuthErrorMarker ? 401 : undefined);
+  // 结构化错误标识。过载判定优先吃它(见下方 capacity 分支), 同时透出到 error data
+  // 供诊断与下游归因。**不参与上面的 errorStatus 推断** —— 那条链路上挂着
+  // renderer 的 401 banner 与 auth 修复 UX, 改推断依据会连带改这些行为。
+  const errorInfoTag = codexErrorInfoTag(params.error?.codexErrorInfo);
   const safeErrorData = {
     message: safeMessage,
     ...(errorStatus !== undefined ? { errorStatus } : {}),
     ...(signals.usageLimit ? { usageLimit: true } : {}),
+    ...(errorInfoTag !== undefined ? { codexErrorInfo: errorInfoTag } : {}),
   };
   // willRetry=true 的暂时错误 (transient API blip / 5xx blip), server 自己会重试 — 默认
   // 不 emit error event 给 UI,否则会把瞬时错误暴露成用户可见失败。**但** auth 缺失
@@ -301,10 +323,43 @@ export function translateErrorNotification(
     }
     ctx.rt.lastAuthErrorKey = key;
   }
+  // 服务过载 (`Selected model is at capacity`): OpenAI 侧不重试就把 turn 判死,
+  // 由 agent 层接管退避重投。接管成功时透成非终止状态并带进度后缀, renderer
+  // 显示"模型繁忙, 正在重试 (N/M)"; 预算耗尽或条件不满足 (本 turn 已有产出)
+  // 时 tryTakeOverOverload 返回 null, 落回下面的终止错误路径。
+  const isCapacityError =
+    parseOverloadError(safeMessage, signals.errorStatus, errorInfoTag)?.kind === 'capacity';
+  // 过载错误一律带上稳定 reason key。renderer 隔着 IPC 投影拿不到 codexErrorInfo,
+  // 靠这个 key 判定"是否过载"(ErrorBanner 的本地化文案 + 重试进度 + hideRetry 都由它
+  // 驱动)。不带的话 renderer 只能回退到文案匹配 —— codex 改一次措辞, 用户就会在整段
+  // 重试窗口里看到英文原文, 也就是本次改动要消除的那个依赖在 UI 侧原样残留。
+  const overloadReason = isCapacityError ? { reason: UPSTREAM_OVERLOAD_REASON } : {};
+  if (!params.willRetry && isCapacityError) {
+    const progress = ctx.tryTakeOverOverload?.();
+    if (progress) {
+      queue.push({
+        type: 'error',
+        data: {
+          ...safeErrorData,
+          ...overloadReason,
+          message: formatOverloadRetryMessage(safeMessage, progress.attempt, progress.maxAttempts),
+          isTerminal: false,
+          willRetry: true,
+        },
+        source: 'codex',
+      });
+      return;
+    }
+  }
   ctx.log.warn('codex turn error', { message: safeMessage, willRetry: params.willRetry, isAuthMissing, threadId: params.threadId, turnId: params.turnId });
   queue.push({
     type: 'error',
-    data: { ...safeErrorData, isTerminal: !params.willRetry, willRetry: params.willRetry },
+    data: {
+      ...safeErrorData,
+      ...overloadReason,
+      isTerminal: !params.willRetry,
+      willRetry: params.willRetry,
+    },
     source: 'codex',
   });
 }

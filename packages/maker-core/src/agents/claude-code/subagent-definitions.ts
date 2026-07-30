@@ -51,7 +51,7 @@
  *     prompt 的合法定义,同样退化成上一条那个 bug。
  */
 
-import type { Dirent } from 'node:fs';
+import type { Dirent, Stats } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -224,6 +224,37 @@ async function readDirEntriesBounded(dir: string, budget: ScanBudget): Promise<D
   return entries;
 }
 
+type EntryKind = 'directory' | 'file' | 'other';
+
+/**
+ * 把目录条目按跟随软链后的目标分类。
+ *
+ * `statEntry` 可注入是为了让 Windows 在未开启 Developer Mode、无法创建文件软链时，
+ * 仍能真实覆盖 Dirent 的软链分支；目录 junction 则继续走端到端测试。
+ */
+export async function classifySubagentEntry(
+  ent: Pick<Dirent, 'isDirectory' | 'isFile' | 'isSymbolicLink'>,
+  fullPath: string,
+  statEntry: (entryPath: string) => Promise<Pick<Stats, 'isDirectory' | 'isFile'>> = (entryPath) =>
+    fs.stat(entryPath),
+): Promise<EntryKind | undefined> {
+  let isDir = ent.isDirectory();
+  let isFile = ent.isFile();
+  if (ent.isSymbolicLink()) {
+    // follow: stat 走目标。悬空 / 无权限的链直接跳过这一条。
+    try {
+      const st = await statEntry(fullPath);
+      isDir = st.isDirectory();
+      isFile = st.isFile();
+    } catch {
+      return undefined;
+    }
+  }
+  if (isDir) return 'directory';
+  if (isFile) return 'file';
+  return 'other';
+}
+
 /**
  * 递归收集目录下的 .md 文件。单个坏目录只跳过它自己,不影响其余扫描;超预算则整趟抛出。
  *
@@ -270,24 +301,14 @@ async function collectMarkdownFiles(
     // 以为「有人声明了 model」从而删掉 env —— 用户配的默认值对真正的 agent 反而失效了。
     if (ent.name.startsWith('.') || /\.bak\.\d+$/.test(ent.name)) continue;
     const full = path.join(dir, ent.name);
-    let isDir = ent.isDirectory();
-    let isFile = ent.isFile();
-    if (ent.isSymbolicLink()) {
-      // follow: stat 走目标。悬空 / 无权限的链直接跳过这一条。
-      try {
-        const st = await fs.stat(full);
-        isDir = st.isDirectory();
-        isFile = st.isFile();
-      } catch {
-        continue;
-      }
-    }
-    if (isDir) {
+    const kind = await classifySubagentEntry(ent, full);
+    if (kind === undefined) continue;
+    if (kind === 'directory') {
       files.push(...(await collectMarkdownFiles(full, budget, visitedDirs, depth + 1)));
       // 扩展名大小写不敏感:`reviewer.MD` 在大小写保留的文件系统上照样是一份定义,
       // 本仓既有的 customization-scanner 也是 `toLowerCase().endsWith('.md')`。
       // 大小写敏感地漏掉一份声明了 model 的定义 = 又把覆盖用的 env 设回去。
-    } else if (isFile && ent.name.toLowerCase().endsWith('.md')) {
+    } else if (kind === 'file' && ent.name.toLowerCase().endsWith('.md')) {
       budget.countFile();
       files.push(full);
     }

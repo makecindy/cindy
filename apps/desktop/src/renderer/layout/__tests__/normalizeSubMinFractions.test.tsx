@@ -55,4 +55,41 @@ describe('normalizeSubMinFractions · 布局自愈(120px 兜底语义)', () => {
     const fixed = normalizeSubMinFractions(treeWithStarvedHello(), avail, (k) => k !== 'ghost:hello');
     expect(fixed).toBeNull();
   });
+
+  /**
+   * 在场份额口径(2026-07-29):隐藏 pane(卸载残留 / 抽离 / 气泡)占着的份额
+   * 不算在在场面板头上 —— 判定和写回都按 `fraction / Σ在场 fraction`。
+   */
+  describe('在场份额口径', () => {
+    /** chat 0.45 + 已卸载残留 0.43(隐藏) + right 0.12。 */
+    function treeWithResidue(rightFraction: number, residue: number): Layout {
+      const layout = createDefaultLayout();
+      const split = layout.content as SplitNode;
+      split.children[0].fraction = 1 - rightFraction - residue;
+      split.children[1].fraction = rightFraction;
+      split.children.splice(1, 0, {
+        fraction: residue,
+        node: { type: 'pane', id: 'demo-gone', panelKind: 'ghost:gone', minWidth: 240 },
+      });
+      return layout;
+    }
+    const hideGone = (k: string) => k !== 'ghost:gone';
+
+    it('账面吃不饱但画面够宽(隐藏残留吃掉了份额)→ 不误判、不写盘', () => {
+      // right 账面 0.12×900 = 108 < 120,但在场份额 0.12/0.57 = 0.21 → 189px,够宽。
+      expect(normalizeSubMinFractions(treeWithResidue(0.12, 0.43), 900, hideGone)).toBeNull();
+    });
+
+    it('画面真的吃不饱 → 按在场份额抬到 120px,隐藏残留的份额一字不动', () => {
+      const avail = 1400;
+      const fixed = normalizeSubMinFractions(treeWithResidue(0.05, 0.4), avail, hideGone);
+      expect(fixed).not.toBeNull();
+      const children = (fixed!.content as SplitNode).children;
+      const scale = children[0].fraction + children[2].fraction; // 在场两块
+      expect((children[2].fraction / scale) * avail).toBeCloseTo(120, 5); // right 兜底宽
+      expect(children[1].fraction).toBe(0.4); // 隐藏残留不被改写
+      expect((children[0].fraction / scale) * avail).toBeGreaterThanOrEqual(400); // chat 仍够
+      expect(children.reduce((s, c) => s + c.fraction, 0)).toBeCloseTo(1, 5);
+    });
+  });
 });

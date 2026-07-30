@@ -32,6 +32,20 @@ export interface TurnActivityState {
   startedAt: number;
   /** True only when the most recent visible event is assistant progress text. */
   writing: boolean;
+  /**
+   * 一行临时状态说明(当前只用于「上游过载, 正在自动重试」), 不占 step 槽位、
+   * 不计入 totalSteps —— 它描述的是"这一刻卡在哪", 而不是已完成的工作项。
+   *
+   * 为什么必须与 step 分开: 过载自动重试只在本 turn **零产出**时发生
+   * (maker-core 的 currentTurnProducedOutput 守卫), 那时 totalSteps 恒为 0、
+   * 正文也是空 —— 若走 step 通道, 它会在重试成功后永久留在时间线里冒充一项
+   * 工作; 而若不渲染, 渠道那条占位消息在整个退避窗口(~22-38s)内一个字都不
+   * 变, 用户看到的就是"卡住了"。所以它是可覆盖、可清除的单行状态。
+   *
+   * 清除时机: 任何正常进展事件(工具 / 思考 / 正文)到达即置 null, 与 renderer
+   * ErrorBanner「恢复后由后续正常事件自动清除」同口径。
+   */
+  notice: string | null;
 }
 
 /** Replay/delta bookkeeping stays private and is never serialized with card state. */
@@ -55,6 +69,7 @@ export function createTurnActivity(startedAt: number): TurnActivityState {
     totalSteps: 0,
     startedAt,
     writing: false,
+    notice: null,
   };
   internalStateByActivity.set(activity, {
     seenKeys: new Set(),
@@ -79,6 +94,22 @@ function appendStep(activity: TurnActivityState, step: TurnActivityStep): boolea
   return true;
 }
 
+/**
+ * 设置 / 清除单行状态说明。返回是否真的变了 —— 调用方据此决定要不要触发一帧
+ * 渠道刷新, 同 push*Step 的返回值语义(重复内容不浪费 chat.update 配额)。
+ */
+export function setActivityNotice(activity: TurnActivityState, notice: string | null): boolean {
+  const next = notice && notice.trim().length > 0 ? truncate(notice, STEP_LABEL_MAX) : null;
+  if (activity.notice === next) return false;
+  activity.notice = next;
+  return true;
+}
+
+/** 有真实进展 = 上一条状态说明(如"正在重试")已过期。 */
+function clearNotice(activity: TurnActivityState): void {
+  activity.notice = null;
+}
+
 /** Raw tool_use -> desktop/mobile-compatible readable title. */
 export function formatToolStep(toolName: string, input: unknown): string {
   return truncate(summarizeToolUseText(toolName, input).label || toolName, STEP_LABEL_MAX);
@@ -98,6 +129,7 @@ export function pushToolStep(
   const key = toolUseId ? `tool:${toolUseId}` : `tool:auto:${++internal.sequence}`;
   if (internal.seenKeys.has(key)) return false;
   activity.writing = false;
+  clearNotice(activity);
   return appendStep(activity, {
     key,
     kind: 'tool',
@@ -143,6 +175,7 @@ export function pushThinkingStep(activity: TurnActivityState, data: unknown): bo
   const existing = activity.recentSteps.find((step) => step.key === key);
   if (existing) {
     activity.writing = false;
+    clearNotice(activity);
     existing.label = label;
     return true;
   }
@@ -150,12 +183,14 @@ export function pushThinkingStep(activity: TurnActivityState, data: unknown): bo
   // back into the latest-five window.
   if (internal.seenKeys.has(key)) return false;
   activity.writing = false;
+  clearNotice(activity);
   return appendStep(activity, { key, kind: 'thinking', label });
 }
 
 /** Assistant progress text stays visible below the activity list. */
 export function markActivityWriting(activity: TurnActivityState): void {
   activity.writing = true;
+  clearNotice(activity);
 }
 
 function formatElapsed(ms: number): string {
@@ -165,17 +200,29 @@ function formatElapsed(ms: number): string {
   return `${min}m${sec % 60 ? `${sec % 60}s` : ''}`;
 }
 
-/** Render the running-only markdown block. Final channel messages omit it. */
+/**
+ * Render the running-only markdown block. Final channel messages omit it.
+ *
+ * 只有状态说明、没有任何工作项时同样要渲染: 过载自动重试恰好发生在零产出的
+ * turn 上, 那是渠道消息唯一可能整段静止的窗口(见 TurnActivityState.notice)。
+ * 此时省掉"N 项"段 —— 报"0 项"没有信息量。
+ */
 export function renderActivity(activity: TurnActivityState, now: number): string {
-  if (activity.totalSteps === 0) return '';
+  if (activity.totalSteps === 0 && activity.notice === null) return '';
+  const elapsed = formatElapsed(now - activity.startedAt);
   const lines = [
-    `⚙️ 工作中 · ${activity.totalSteps} 项 · ${formatElapsed(now - activity.startedAt)}`,
+    activity.totalSteps > 0
+      ? `⚙️ 工作中 · ${activity.totalSteps} 项 · ${elapsed}`
+      : `⚙️ 工作中 · ${elapsed}`,
   ];
   const last = activity.recentSteps.length - 1;
   activity.recentSteps.forEach((step, index) => {
-    const marker = index === last && !activity.writing ? '▸' : '✓';
+    // 有状态说明时它才是"当前在做的事", 已完成的工作项一律收成 ✓。
+    const isTail = index === last && !activity.writing && activity.notice === null;
+    const marker = isTail ? '▸' : '✓';
     const prefix = step.kind === 'thinking' ? '✦ ' : '';
     lines.push(`> ${marker} ${prefix}${step.label}`);
   });
+  if (activity.notice !== null) lines.push(`> ⏳ ${activity.notice}`);
   return lines.join('\n');
 }

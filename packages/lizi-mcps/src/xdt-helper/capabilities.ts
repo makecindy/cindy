@@ -1,7 +1,7 @@
 /**
  * xdt-helper/capabilities.ts
  * ---------------------------------------------------------------------------
- * XDMaker 用户视角能力清单的"单一事实源"。
+ * Cindy 用户视角能力清单的"单一事实源"。
  *
  * 编辑规则:
  *  - one-liner 给模型用,要让模型一眼判断要不要拉 detail。控制在 ~50 字。
@@ -14,7 +14,7 @@
  *  - "用户产品功能" 一类一个 bucket(ai-chat / session-management / scheduler 等)
  *  - "外部数据源 / 服务的 MCP 接入" 各自独立 bucket(jira / confluence / google-sheets / ai-art)
  *  - 飞书较特殊:"基础接入(登录/通知/MCP 文档表格等)" 与 "移动办公接管 session" 拆两个 bucket,
- *    因为后者是 XDMaker 最差异化的能力,值得独立索引项让模型一眼能查到。
+ *    因为后者是 Cindy 最差异化的能力,值得独立索引项让模型一眼能查到。
  */
 
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
