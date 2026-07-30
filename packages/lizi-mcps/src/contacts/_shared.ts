@@ -42,7 +42,7 @@ export async function withContacts(
           ok: false,
           code: 'CONTACTS_NOT_READY',
           message:
-            'smart contacts is disabled — the user can turn it on in ' +
+            'Smart Contacts is disabled — the user can turn it on in ' +
             'Settings → Personalization → Smart Contacts (设置 → 个性化 → 智能通讯录)',
         },
         true,
