@@ -7231,17 +7231,35 @@ export class CodexAgent extends BaseAgent {
       async setModel(newModel: string, setOpts?: { providerId?: string | null }) {
         // provider 可能在 model 不变时单独切换(同一 id 换路由), 所以先记 provider 再做 model 去重。
         // 窗口上限按 (provider, model) 解析, 漏掉这一步会让后续 turn 拿新模型去问旧路由。
+        const prevProviderId = mutableProviderId;
         if (setOpts && Object.hasOwn(setOpts, 'providerId')) mutableProviderId = setOpts.providerId;
         if (newModel === mutableModel) return; // 去重: 值没变不重推 (renderer 单次切换会全量重调 set*)
+        const prevModel = mutableModel;
+        const prevCatalogModel = mutableCatalogModel;
         log.debug('setModel', { from: mutableModel, to: newModel, providerId: mutableProviderId ?? null });
         mutableModel = newModel;
         // 用户显式选的一定是目录 id(选择器就是从目录渲染的)。
         mutableCatalogModel = newModel;
-        registerCodexReviewerRouteContext(threadId);
-        // thread 已启动 → 立即经 thread/settings/update 推给 server (sticky); 未启动则由
-        // 首个 thread/start 携带。沿用 turn/start 的 'gpt-5'=server 默认哨兵约定 (省略),
-        // 避免把占位 model id 发给 server。失败时 turn/start 透传仍是兜底。
-        if (newModel && newModel !== 'gpt-5') await pushThreadSettings({ model: newModel });
+        try {
+          registerCodexReviewerRouteContext(threadId);
+          // thread 已启动 → 立即经 thread/settings/update 推给 server (sticky); 未启动则由
+          // 首个 thread/start 携带。沿用 turn/start 的 'gpt-5'=server 默认哨兵约定 (省略),
+          // 避免把占位 model id 发给 server。失败时 turn/start 透传仍是兜底。
+          if (newModel && newModel !== 'gpt-5') await pushThreadSettings({ model: newModel });
+        } catch (e) {
+          // 抛回调用方前把三个快照恢复原值。host 的 applyRuntimeSetModelChange 在异常分支
+          // 会把 session 的 provider route 恢复成旧值; 我们这边若留着新值, 下一 turn 就会
+          // 走旧路由却按新 (provider, model) 解析窗口上限 —— 两边分叉正是收敛出错的根源。
+          //
+          // 当前**走不到这里**: 上面两个调用各自内部都已 catch(registerCodexReviewer…
+          // 落 warn 后保留安全路由; pushThreadSettings 吞掉 RPC 失败, 靠 turn/start 透传
+          // 兜底)。留这层是结构性防御 —— 以后有人往这段加会抛的步骤时, 快照不会悄悄与
+          // 实际路由分叉。也因为当前不可达, 没有对应单测能触发它。
+          mutableProviderId = prevProviderId;
+          mutableModel = prevModel;
+          mutableCatalogModel = prevCatalogModel;
+          throw e;
+        }
       },
 
       async setEffort(newEffort: Effort) {
