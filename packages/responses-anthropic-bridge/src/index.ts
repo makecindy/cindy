@@ -8,7 +8,10 @@
  * direction in its own package prevents provider auth/routing concerns from leaking
  * into either wire translator.
  */
-export { createResponsesAnthropicHandler } from './handler.js';
+export {
+  createResponsesAnthropicHandler,
+  joinAnthropicMessagesUrl,
+} from './handler.js';
 export {
   translateResponsesRequest,
   encodeThinkingBlock,

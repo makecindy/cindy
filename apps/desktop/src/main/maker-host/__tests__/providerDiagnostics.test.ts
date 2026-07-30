@@ -107,6 +107,29 @@ describe('buildProbeRequest', () => {
     });
   });
 
+  it('Codex Anthropic Messages probe matches runtime joining for a versioned base URL', () => {
+    const { url } = buildProbeRequest({
+      agent: 'codex',
+      wireProtocol: 'anthropic-messages',
+      baseUrl: 'https://provider.example/v1',
+      modelId: 'claude-sonnet-4-6',
+    });
+    expect(url).toBe('https://provider.example/v1/messages');
+  });
+
+  it('Codex Anthropic Messages probe preserves custom path and query joining', () => {
+    const { url } = buildProbeRequest({
+      agent: 'codex',
+      wireProtocol: 'anthropic-messages',
+      baseUrl: 'https://provider.example/api/v1?tenant=alpha',
+      requestPath: '/tenant/messages?beta=true',
+      modelId: 'claude-sonnet-4-6',
+    });
+    expect(url).toBe(
+      'https://provider.example/api/v1/tenant/messages?tenant=alpha&beta=true',
+    );
+  });
+
   it('cc wire：/v1/messages + anthropic-version + 双鉴权头（与 api-key-header 路由分支对齐）', () => {
     const { url, init } = buildProbeRequest({
       agent: 'claude-code',

@@ -20,6 +20,7 @@ import {
   type AgentKind,
   type ProviderWireProtocol,
 } from '@cindy/model-providers';
+import { joinAnthropicMessagesUrl } from '@cindy/responses-anthropic-bridge';
 
 import {
   classifyProviderError,
@@ -114,7 +115,7 @@ export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init:
       if (spec.agent === 'claude-code') headers['authorization'] = `Bearer ${spec.apiKey}`;
     }
     return {
-      url: appendProviderRequestPath(spec.baseUrl, spec.requestPath ?? '/v1/messages'),
+      url: joinAnthropicMessagesUrl(spec.baseUrl, spec.requestPath ?? '/v1/messages'),
       init: {
         method: 'POST',
         headers,

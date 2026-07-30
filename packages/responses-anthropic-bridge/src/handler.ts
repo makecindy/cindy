@@ -25,7 +25,7 @@ function trimTrailingSlashes(value: string): string {
   return value.slice(0, end);
 }
 
-function joinUrl(base: string, requestPath: string): string {
+export function joinAnthropicMessagesUrl(base: string, requestPath: string): string {
   const url = new URL(base);
   if (
     (url.protocol !== 'http:' && url.protocol !== 'https:')
@@ -228,7 +228,7 @@ export function createResponsesAnthropicHandler(
 
       let upstreamUrl: string;
       try {
-        upstreamUrl = joinUrl(upstreamBase, provider.requestPath ?? '/v1/messages');
+        upstreamUrl = joinAnthropicMessagesUrl(upstreamBase, provider.requestPath ?? '/v1/messages');
       } catch (error) {
         log.error?.('responses-anthropic bridge invalid upstream configuration', {
           model: incoming.model,
