@@ -113,7 +113,7 @@ export function createGeminiImageChannel(opts: CreateGeminiImageChannelOptions):
   const doFetch = opts.fetchImplementation ?? fetch;
 
   function requireApiKey(): string {
-    const key = opts.getApiKey();
+    const key = opts.getApiKey()?.trim() ?? '';
     if (!key) {
       throw new Error('Gemini API key 未配置,请到「设置 → 模型供应商 → Google Gemini」填入后重试');
     }
@@ -157,7 +157,7 @@ export function createGeminiImageChannel(opts: CreateGeminiImageChannelOptions):
   }
 
   return {
-    ready: () => opts.getApiKey() !== null,
+    ready: () => (opts.getApiKey()?.trim() ?? '') !== '',
     generateImage: ({ model, prompt, aspectRatio }) =>
       callGenerateContent({ model, prompt, aspectRatio }),
     editImage: ({ model, prompt, imagePaths, aspectRatio }) =>

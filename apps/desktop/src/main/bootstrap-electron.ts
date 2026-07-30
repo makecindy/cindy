@@ -432,8 +432,14 @@ import {
   resetSilentEncryptedRetrySettings,
   writeSilentEncryptedRetryEnabled,
 } from './maker-host/silent-encrypted-retry-store.js';
-import { resolveOwnerScopedSecretStorageKey } from './secrets/providerSecretStore.js';
-import { isRendererAccessibleSafeStorageKey } from '../shared/providerSecrets.js';
+import {
+  resolveOwnerScopedSecretStorageKey,
+  getProviderSecretStore,
+} from './secrets/providerSecretStore.js';
+import {
+  isRendererAccessibleSafeStorageKey,
+  type ProviderSecretId,
+} from '../shared/providerSecrets.js';
 import {
   readCompactionPct,
   readCompactionState,
@@ -3448,6 +3454,50 @@ const registerIpcHandlers = () => {
           success: false,
           error: 'remove_failed',
         };
+      }
+    },
+  );
+
+  // 内置 API-key 供应商专用 IPC(写/删,永不回读明文)。
+  // 这些键在 MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS 里,通用 safeStorage IPC 已拦截;
+  // 此处是唯一合法的 renderer 写入通道。
+  const BUILTIN_API_KEY_PROVIDER_IDS = new Set<ProviderSecretId>(['gemini']);
+
+  ipcMain.handle(
+    'builtin-api-key-store',
+    async (event: Electron.IpcMainInvokeEvent, providerId: string, value: string): Promise<boolean> => {
+      try {
+        assertTrustedAppRendererEvent(event);
+        if (!BUILTIN_API_KEY_PROVIDER_IDS.has(providerId as ProviderSecretId)) return false;
+        const trimmed = value.trim();
+        if (!trimmed) return false;
+        const ok = getProviderSecretStore().set(providerId as ProviderSecretId, trimmed);
+        if (ok) notifyProviderKeyChanged(providerId);
+        return ok;
+      } catch (err) {
+        console.error('[builtin-api-key-store]', err);
+        return false;
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'builtin-api-key-remove',
+    async (
+      event: Electron.IpcMainInvokeEvent,
+      providerId: string,
+    ): Promise<{ success: boolean; error?: string }> => {
+      try {
+        assertTrustedAppRendererEvent(event);
+        if (!BUILTIN_API_KEY_PROVIDER_IDS.has(providerId as ProviderSecretId)) {
+          return { success: false, error: 'invalid_provider' };
+        }
+        const result = getProviderSecretStore().remove(providerId as ProviderSecretId);
+        if (result.success) notifyProviderKeyChanged(providerId);
+        return result;
+      } catch (err) {
+        console.error('[builtin-api-key-remove]', err);
+        return { success: false, error: 'remove_failed' };
       }
     },
   );

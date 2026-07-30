@@ -39,11 +39,7 @@ import {
   updateCustomProvider,
 } from '@/lib/customProviders';
 import { providerMonogram } from '@/lib/providerModels';
-import {
-  providerSecretStorageKey,
-  PROVIDER_SECRET_IDS,
-  type ProviderSecretId,
-} from '../../../shared/providerSecrets';
+
 import {
   customProviderSubtitleForDisplay,
   providerSubtitleForDisplay,
@@ -742,17 +738,12 @@ function BuiltinApiKeyHeader({
   const [editing, setEditing] = useState(false);
   const [draftKey, setDraftKey] = useState('');
 
-  const storageKey = (PROVIDER_SECRET_IDS as readonly string[]).includes(provider.id)
-    ? providerSecretStorageKey(provider.id as ProviderSecretId)
-    : null;
-
   const handleSave = useCallback(async () => {
-    if (!storageKey) return;
     const key = draftKey.trim();
     if (!key) return;
     setBusy(true);
     try {
-      const ok = await window.electronAPI.safeStorageStore(storageKey, key);
+      const ok = await window.electronAPI.builtinApiKeyStore(provider.id, key);
       if (!ok) {
         toast.error(t('settings.providers.builtinApiKey.toast.saveFailed', { name: provider.name }));
         return;
@@ -766,10 +757,9 @@ function BuiltinApiKeyHeader({
     } finally {
       setBusy(false);
     }
-  }, [draftKey, onChanged, provider.name, storageKey, t]);
+  }, [draftKey, onChanged, provider.id, provider.name, t]);
 
   const handleDisconnect = useCallback(async () => {
-    if (!storageKey) return;
     const confirmed = await confirm({
       title: t('settings.providers.builtinApiKey.disconnectConfirm.title', { name: provider.name }),
       description: t('settings.providers.builtinApiKey.disconnectConfirm.description', {
@@ -781,7 +771,13 @@ function BuiltinApiKeyHeader({
     if (!confirmed) return;
     setBusy(true);
     try {
-      await window.electronAPI.safeStorageRemove(storageKey);
+      const result = await window.electronAPI.builtinApiKeyRemove(provider.id);
+      if (!result.success) {
+        toast.error(
+          t('settings.providers.builtinApiKey.toast.disconnectFailed', { name: provider.name }),
+        );
+        return;
+      }
       toast.success(
         t('settings.providers.builtinApiKey.toast.disconnected', { name: provider.name }),
       );
@@ -793,7 +789,7 @@ function BuiltinApiKeyHeader({
     } finally {
       setBusy(false);
     }
-  }, [confirm, onChanged, provider.name, storageKey, t]);
+  }, [confirm, onChanged, provider.id, provider.name, t]);
 
   const trailing = (
     <div className="flex shrink-0 items-center gap-2.5">

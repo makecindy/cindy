@@ -1305,6 +1305,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('safe-storage-read', key),
   safeStorageRemove: (key: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('safe-storage-remove', key),
+  // 内置 API-key 供应商专用 IPC(对应 MAIN_ONLY 键,通用 IPC 已阻断)
+  builtinApiKeyStore: (providerId: string, value: string): Promise<boolean> =>
+    ipcRenderer.invoke('builtin-api-key-store', providerId, value),
+  builtinApiKeyRemove: (providerId: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('builtin-api-key-remove', providerId),
 
   // ── 网关凭据自动下发(model-access,shared/modelAccess.ts) ──
   modelAccess: {
