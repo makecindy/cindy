@@ -135,6 +135,84 @@ describe('createResponsesAnthropicHandler', () => {
     expect(wire).toContain('event: response.completed');
   });
 
+  it('sniffs a complete JSON body for a streaming caller when Content-Type is wrong', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      id: 'msg_stream_json',
+      type: 'message',
+      model: 'claude',
+      content: [{ type: 'text', text: 'buffered JSON' }],
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 1, output_tokens: 2 },
+    }), {
+      status: 200,
+      headers: { 'content-type': 'text/plain' },
+    })) as typeof fetch;
+    const handler = createResponsesAnthropicHandler({
+      upstreamBase: 'https://provider.example',
+      buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: { model: 'claude', input: 'hi' }, ctx, res: res as never });
+    const wire = res.chunks.join('');
+    expect(wire).toContain('event: response.output_text.delta');
+    expect(wire).toContain('"delta":"buffered JSON"');
+    expect(wire).toContain('event: response.completed');
+    expect(wire).not.toContain('stream_truncated');
+  });
+
+  it('preserves an unmarked JSON error envelope for a streaming caller', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      type: 'error',
+      error: { type: 'overloaded_error', message: 'busy' },
+    }), { status: 200 })) as typeof fetch;
+    const handler = createResponsesAnthropicHandler({
+      upstreamBase: 'https://provider.example',
+      buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: { model: 'claude', input: 'hi' }, ctx, res: res as never });
+    const wire = res.chunks.join('');
+    expect(wire).toContain('event: response.failed');
+    expect(wire).toContain('busy');
+    expect(wire).not.toContain('stream_truncated');
+  });
+
+  it('uses the SSE event name when the data object omits type', async () => {
+    const body = [
+      'event: message_start',
+      'data: {"message":{"id":"msg_event_name","model":"claude"}}',
+      '',
+      'event: content_block_start',
+      'data: {"index":0,"content_block":{"type":"text","text":""}}',
+      '',
+      'event: content_block_delta',
+      'data: {"index":0,"delta":{"type":"text_delta","text":"fallback"}}',
+      '',
+      'event: content_block_stop',
+      'data: {"index":0}',
+      '',
+      'event: message_delta',
+      'data: {"delta":{"stop_reason":"end_turn"}}',
+      '',
+      'event: message_stop',
+      'data: {}',
+      '',
+    ].join('\n');
+    const fetchImpl = vi.fn(async () => new Response(body, {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    })) as typeof fetch;
+    const handler = createResponsesAnthropicHandler({
+      upstreamBase: 'https://provider.example',
+      buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: { model: 'claude', input: 'hi' }, ctx, res: res as never });
+    const wire = res.chunks.join('');
+    expect(wire).toContain('"delta":"fallback"');
+    expect(wire).toContain('event: response.completed');
+  });
+
   it('returns a JSON Responses object when the caller requests stream:false', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
       id: 'msg_json_non_stream',

@@ -69,6 +69,47 @@ class DelayedTransport implements Transport {
   }
 }
 
+class NotificationTransport implements Transport {
+  private readonly lineHandlers = new Set<LineHandler>();
+  private readonly closeHandlers = new Set<CloseHandler>();
+
+  async writeLine(line: string): Promise<void> {
+    const msg = JSON.parse(line) as { id?: unknown; method?: string };
+    if (msg.id == null) return;
+    const result = msg.method === 'initialize'
+      ? {
+          userAgent: 'mock-codex/test',
+          codexHome: '/tmp/codex-home',
+          platformOs: 'linux',
+        }
+      : {};
+    this.emit({ id: msg.id, result });
+  }
+
+  onLine(handler: LineHandler): () => void {
+    this.lineHandlers.add(handler);
+    return () => this.lineHandlers.delete(handler);
+  }
+
+  onClose(handler: CloseHandler): () => void {
+    this.closeHandlers.add(handler);
+    return () => this.closeHandlers.delete(handler);
+  }
+
+  onStderr(_handler: StderrHandler): () => void {
+    return () => {};
+  }
+
+  async close(reason = 'test close'): Promise<void> {
+    for (const handler of this.closeHandlers) handler({ reason });
+  }
+
+  emit(message: unknown): void {
+    const line = JSON.stringify(message);
+    for (const handler of this.lineHandlers) handler(line);
+  }
+}
+
 const logger: Logger = {
   trace: vi.fn(),
   debug: vi.fn(),
@@ -161,6 +202,69 @@ describe('AppServerHost.ensureStartedWithTimeout', () => {
       userAgent: 'mock-codex/test',
     });
     expect(createTransport).toHaveBeenCalledTimes(1);
+
+    await host.shutdown();
+  });
+});
+
+describe('AppServerHost descendant thread routing', () => {
+  it('routes child and grandchild thread/started events to the root subscription', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    const descendantThreadStarted = vi.fn();
+    const subscription = host.subscribeThread('root-thread', {
+      descendantThreadStarted,
+    });
+
+    transport.emit({
+      method: 'thread/started',
+      params: {
+        thread: {
+          id: 'child-thread',
+          parentThreadId: 'root-thread',
+        },
+      },
+    });
+    transport.emit({
+      method: 'thread/started',
+      params: {
+        thread: {
+          id: 'grandchild-thread',
+          parentThreadId: 'child-thread',
+        },
+      },
+    });
+
+    expect(descendantThreadStarted).toHaveBeenNthCalledWith(1, {
+      thread: {
+        id: 'child-thread',
+        parentThreadId: 'root-thread',
+      },
+    });
+    expect(descendantThreadStarted).toHaveBeenNthCalledWith(2, {
+      thread: {
+        id: 'grandchild-thread',
+        parentThreadId: 'child-thread',
+      },
+    });
+
+    await subscription.release();
+    transport.emit({
+      method: 'thread/started',
+      params: {
+        thread: {
+          id: 'great-grandchild-thread',
+          parentThreadId: 'grandchild-thread',
+        },
+      },
+    });
+    expect(descendantThreadStarted).toHaveBeenCalledTimes(2);
 
     await host.shutdown();
   });

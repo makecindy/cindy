@@ -103,13 +103,19 @@ async function readBody(response: Response): Promise<string> {
 
 function parseSseBlock(block: string): unknown | null {
   const data: string[] = [];
+  let eventName = '';
   for (const line of block.split(/\r?\n/)) {
     if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
+    else if (line.startsWith('event:')) eventName = line.slice(6).trim();
   }
   if (data.length === 0) return null;
   const payload = data.join('\n').trim();
   if (!payload || payload === '[DONE]') return null;
-  return JSON.parse(payload) as unknown;
+  const parsed = JSON.parse(payload) as unknown;
+  if (eventName && isObject(parsed) && typeof parsed.type !== 'string') {
+    return { ...parsed, type: eventName };
+  }
+  return parsed;
 }
 
 export interface ResponsesAnthropicHandlerOptions {
@@ -141,6 +147,7 @@ export function createResponsesAnthropicHandler(
           supportsAdaptiveThinking: provider.supportsAdaptiveThinking,
           promptCaching: provider.promptCaching,
           automaticPromptCaching: provider.automaticPromptCaching,
+          strictTools: provider.strictTools,
           authMode: provider.authMode,
         });
       } catch (error) {
@@ -196,6 +203,7 @@ export function createResponsesAnthropicHandler(
             supportsAdaptiveThinking: provider.supportsAdaptiveThinking,
             promptCaching: provider.promptCaching,
             automaticPromptCaching: provider.automaticPromptCaching,
+            strictTools: provider.strictTools,
             authMode: provider.authMode,
           });
         }
@@ -382,6 +390,7 @@ export function createResponsesAnthropicHandler(
           const decoder = new TextDecoder();
           let buffer = '';
           let terminal = false;
+          let bodyKind: 'unknown' | 'json' | 'sse' = 'unknown';
           const consume = (block: string): void => {
             let event: unknown;
             try {
@@ -397,6 +406,17 @@ export function createResponsesAnthropicHandler(
             const { done, value } = await reader.read();
             if (done) break;
             buffer += decoder.decode(value, { stream: true });
+            if (bodyKind === 'unknown') {
+              const trimmed = buffer.trimStart();
+              if (trimmed.startsWith('{') || trimmed.startsWith('[')) bodyKind = 'json';
+              else if (trimmed.length > 0) bodyKind = 'sse';
+            }
+            if (bodyKind === 'json') {
+              if (buffer.length > MAX_STREAM_BUFFER_CHARS) {
+                throw new Error('upstream JSON response exceeds 1 MiB');
+              }
+              continue;
+            }
             let boundary: number;
             while ((boundary = buffer.search(/\r?\n\r?\n/)) >= 0) {
               const block = buffer.slice(0, boundary);
@@ -410,11 +430,24 @@ export function createResponsesAnthropicHandler(
             if (buffer.length > MAX_STREAM_BUFFER_CHARS) throw new Error('upstream SSE frame exceeds 1 MiB');
           }
           buffer += decoder.decode();
-          if (buffer.length > MAX_STREAM_BUFFER_CHARS) {
-            throw new Error('upstream SSE frame exceeds 1 MiB');
+          if (bodyKind === 'unknown') {
+            const trimmed = buffer.trimStart();
+            if (trimmed.startsWith('{') || trimmed.startsWith('[')) bodyKind = 'json';
+            else if (trimmed.length > 0) bodyKind = 'sse';
           }
-          if (buffer.trim()) consume(buffer);
-          if (!terminal) for (const output of translator.finish()) emit(output);
+          if (bodyKind === 'json') {
+            if (buffer.length > MAX_STREAM_BUFFER_CHARS) {
+              throw new Error('upstream JSON response exceeds 1 MiB');
+            }
+            const json = JSON.parse(buffer) as unknown;
+            for (const output of translator.pushJson(json)) emit(output);
+          } else {
+            if (buffer.length > MAX_STREAM_BUFFER_CHARS) {
+              throw new Error('upstream SSE frame exceeds 1 MiB');
+            }
+            if (buffer.trim()) consume(buffer);
+            if (!terminal) for (const output of translator.finish()) emit(output);
+          }
         }
       } catch (error) {
         if (!abort.signal.aborted) {

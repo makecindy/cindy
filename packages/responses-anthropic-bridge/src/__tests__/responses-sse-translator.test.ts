@@ -107,6 +107,51 @@ describe('Anthropic SSE → Responses translation', () => {
     ))).toBe(false);
   });
 
+  it('restores tool_search with the Responses object shape and no function-call deltas', () => {
+    const t = new AnthropicSseTranslator('claude', {
+      byWireName: new Map([[
+        'tool_search',
+        { wireName: 'tool_search', name: 'tool_search', kind: 'tool_search' },
+      ]]),
+      byResponseName: new Map(),
+    });
+    const events = [
+      ...t.push({ type: 'message_start', message: { id: 'msg_search', model: 'claude' } }),
+      ...t.push({
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'tool_use', id: 'search_1', name: 'tool_search' },
+      }),
+      ...t.push({
+        type: 'content_block_delta',
+        index: 0,
+        delta: {
+          type: 'input_json_delta',
+          partial_json: '{"query":"bridge tests","limit":3}',
+        },
+      }),
+      ...t.push({ type: 'content_block_stop', index: 0 }),
+      ...t.push({ type: 'message_delta', delta: { stop_reason: 'tool_use' } }),
+      ...t.push({ type: 'message_stop' }),
+    ];
+    const done = events.find((event) => (
+      (event as { type?: string }).type === 'response.output_item.done'
+      && (event as { item?: { type?: string } }).item?.type === 'tool_search_call'
+    )) as { item: Record<string, unknown> };
+    expect(done.item).toMatchObject({
+      type: 'tool_search_call',
+      call_id: 'search_1',
+      execution: 'client',
+      status: 'completed',
+      arguments: { query: 'bridge tests', limit: 3 },
+    });
+    expect(done.item).not.toHaveProperty('name');
+    expect(events.some((event) => (
+      (event as { type?: string }).type === 'response.function_call_arguments.delta'
+      || (event as { type?: string }).type === 'response.function_call_arguments.done'
+    ))).toBe(false);
+  });
+
   it('drops an empty pages argument from the Read tool after streaming completes', () => {
     const t = new AnthropicSseTranslator('claude', {
       byWireName: new Map([[
@@ -161,6 +206,42 @@ describe('Anthropic SSE → Responses translation', () => {
       thinking: 'hmm',
       signature: 'sig_123456789',
     }));
+  });
+
+  it('treats reasoning blocks as reasoning in both streaming and JSON responses', () => {
+    const streamed = translator();
+    const streamEvents = [
+      ...streamed.push({ type: 'message_start', message: { id: 'msg_reasoning', model: 'claude' } }),
+      ...streamed.push({ type: 'content_block_start', index: 0, content_block: { type: 'reasoning' } }),
+      ...streamed.push({
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'reasoning_delta', reasoning: 'working' },
+      }),
+      ...streamed.push({ type: 'content_block_stop', index: 0 }),
+      ...streamed.push({ type: 'message_stop' }),
+    ];
+    expect(streamEvents).toContainEqual(expect.objectContaining({
+      type: 'response.reasoning_summary_text.delta',
+      delta: 'working',
+    }));
+    expect(streamEvents.some((event) => (
+      (event as { type?: string; item?: { type?: string } }).type === 'response.output_item.added'
+      && (event as { item?: { type?: string } }).item?.type === 'message'
+    ))).toBe(false);
+
+    const jsonEvents = translator().pushJson({
+      id: 'msg_reasoning_json',
+      type: 'message',
+      model: 'claude',
+      content: [{ type: 'reasoning', reasoning: 'json reasoning' }],
+      stop_reason: 'end_turn',
+    });
+    const jsonDone = jsonEvents.find((event) => (
+      (event as { type?: string }).type === 'response.output_item.done'
+      && (event as { item?: { type?: string } }).item?.type === 'reasoning'
+    )) as { item: { summary: Array<{ text: string }> } };
+    expect(jsonDone.item.summary).toEqual([{ type: 'summary_text', text: 'json reasoning' }]);
   });
 
   it('turns a JSON response into the same SSE lifecycle', () => {

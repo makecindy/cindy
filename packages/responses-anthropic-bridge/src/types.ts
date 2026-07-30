@@ -69,6 +69,8 @@ export interface ResponsesAnthropicProviderConfig {
   promptCaching?: boolean;
   /** Native Anthropic endpoints support top-level automatic prompt caching. */
   automaticPromptCaching?: boolean;
+  /** Preserve Responses `strict` on tools only when the upstream Messages schema supports it. */
+  strictTools?: boolean;
   /** Optional native image codec; limits still apply when no codec is available. */
   imageCodec?: AnthropicImageCodec;
   /** Called after a non-2xx response, before the translated error is returned. */
@@ -98,6 +100,7 @@ export interface ResponsesRequest {
   prompt_cache_key?: string;
   temperature?: number;
   top_p?: number;
+  stop?: string | string[] | null;
   [key: string]: unknown;
 }
 
@@ -113,6 +116,7 @@ export interface AnthropicRequest {
   output_config?: { effort: string };
   temperature?: number;
   top_p?: number;
+  stop_sequences?: string[];
   cache_control?: CacheControl;
   [key: string]: unknown;
 }

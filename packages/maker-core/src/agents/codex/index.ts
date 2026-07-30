@@ -5736,6 +5736,15 @@ export class CodexAgent extends BaseAgent {
           eventQueue.push({ type: 'session_id', data: sdkSessionId, source: 'codex' });
         }
       },
+      descendantThreadStarted: (params) => {
+        const childThreadId = params.thread.id;
+        const parentThreadId = params.thread.parentThreadId;
+        if (!parentThreadId || childThreadId === parentThreadId) return;
+        this.deps.registerCodexChildThreadForParent?.({
+          parentThreadId,
+          childThreadId,
+        });
+      },
       turnStarted: (params) => {
         // turn/start RPC 已失败(超时/拒绝)但 daemon 实际已建 turn — 迟到的孤儿
         // turnStarted 不得重新激活已报终态错误的会话 (greptile P1): 立墓碑 +

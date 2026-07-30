@@ -585,6 +585,7 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     const anthropicHandlerCalls = mockState.createResponsesAnthropicHandler.mock.calls as unknown as Array<[
       {
         automaticPromptCaching: boolean;
+        strictTools: boolean;
         buildHeaders: () => Promise<Record<string, string>>;
       },
     ]>;
@@ -593,6 +594,7 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     if (!config) throw new Error('Anthropic bridge config was not captured');
     expect(await config.buildHeaders()).toEqual({ 'x-api-key': 'anthropic-key' });
     expect(config.automaticPromptCaching).toBe(true);
+    expect(config.strictTools).toBe(true);
 
     clearSessionProvider('session-anthropic');
     setCustomProviderKeyReader(() => null);
@@ -694,19 +696,51 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     ));
 
     expect(bridgeDecision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+    expect(host.registerChildThread('thread-xd-bridge', 'thread-xd-child')).toBe(true);
+    const childBridgeDecision = await Promise.resolve(host.createModelRoutingTransform()(
+      {
+        model: 'claude-bridge',
+        input: [{ role: 'user', content: 'child hello' }],
+      },
+      {
+        reqId: 2,
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': 'thread-xd-child' },
+      },
+    ));
+    expect(childBridgeDecision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+
+    expect(host.registerChildThread('thread-xd-child', 'thread-xd-grandchild')).toBe(true);
+    const grandchildBridgeDecision = await Promise.resolve(host.createModelRoutingTransform()(
+      {
+        model: 'claude-bridge',
+        input: [{ role: 'user', content: 'grandchild hello' }],
+      },
+      {
+        reqId: 3,
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': 'thread-xd-grandchild' },
+      },
+    ));
+    expect(grandchildBridgeDecision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+
     const anthropicHandlerCalls = mockState.createResponsesAnthropicHandler.mock.calls as unknown as Array<[
       {
         upstreamBase: string;
         automaticPromptCaching: boolean;
+        strictTools: boolean;
         buildHeaders: () => Promise<Record<string, string>>;
         rewriteModel: (model: string) => string;
       },
     ]>;
-    const config = anthropicHandlerCalls.at(-1)?.[0];
+    const config = anthropicHandlerCalls[0]?.[0];
     expect(config).toBeDefined();
     if (!config) throw new Error('XD Anthropic bridge config was not captured');
     expect(config.upstreamBase).toBe(XD_GATEWAY_BASE_URL);
     expect(config.automaticPromptCaching).toBe(false);
+    expect(config.strictTools).toBe(false);
     expect(await config.buildHeaders()).toEqual({
       'x-api-key': 'xd-gateway-key',
       authorization: 'Bearer xd-gateway-key',
@@ -720,18 +754,50 @@ describe('chatBridgeCapabilitiesForRoute', () => {
         input: [{ role: 'user', content: 'hello' }],
       },
       {
-        reqId: 2,
+        reqId: 4,
         method: 'POST',
         url: '/responses',
-        headers: { 'thread-id': 'thread-xd-bridge' },
+        headers: { 'thread-id': 'thread-xd-grandchild' },
       },
     ));
     expect(nativeDecision).toBeNull();
-    expect(mockState.createResponsesAnthropicHandler).toHaveBeenCalledTimes(1);
+    expect(mockState.createResponsesAnthropicHandler).toHaveBeenCalledTimes(3);
+
+    host.unregister('session-xd-bridge');
+    expect(host.registerChildThread('thread-xd-bridge', 'thread-after-close')).toBe(false);
+    expect(host.registerChildThread('thread-xd-child', 'thread-after-child-close')).toBe(false);
+    expect(host.registerChildThread('thread-xd-grandchild', 'thread-after-grandchild-close')).toBe(false);
+    const closedChildDecision = await Promise.resolve(host.createModelRoutingTransform()(
+      {
+        model: 'claude-bridge',
+        input: [{ role: 'user', content: 'closed child' }],
+      },
+      {
+        reqId: 5,
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': 'thread-xd-child' },
+      },
+    ));
+    expect(closedChildDecision).toBeNull();
+    expect(mockState.createResponsesAnthropicHandler).toHaveBeenCalledTimes(3);
 
     clearSessionProvider('session-xd-bridge');
     setXdGatewayModels([]);
     host.setCodexProxyGatewayKeyReader(() => null);
+  });
+
+  it('does not overwrite a child thread that is already owned by another session', async () => {
+    const host = await freshCodexProxyHost();
+    host.registerComposed('session-parent', 'thread-parent', 'PARENT_PROMPT');
+    host.registerComposed('session-owner', 'thread-owned', 'OWNER_PROMPT');
+
+    expect(host.registerChildThread('thread-parent', 'thread-owned')).toBe(false);
+
+    host.unregister('session-parent');
+    expect(host.registerChildThread('thread-owned', 'thread-owned-child')).toBe(true);
+
+    host.unregister('session-owner');
   });
 
   it('fails an XD bridged model locally when the gateway key is unavailable', async () => {

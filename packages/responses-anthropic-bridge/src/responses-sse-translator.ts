@@ -81,6 +81,17 @@ function customToolInputFromArguments(argumentsText: string): string {
   return argumentsText;
 }
 
+function toolSearchArgumentsFromText(argumentsText: string): JsonObject {
+  if (argumentsText.trim().length === 0) return {};
+  try {
+    const parsed = JSON.parse(argumentsText) as unknown;
+    if (isObject(parsed)) return parsed;
+  } catch {
+    // Preserve free-form search text from permissive Anthropic-compatible gateways.
+  }
+  return { query: argumentsText };
+}
+
 function sanitizeToolArguments(
   argumentsText: string,
   mapping: ToolCallMapping,
@@ -120,8 +131,8 @@ function outputCallItem(
       type: 'tool_search_call',
       status,
       call_id: state.callId,
-      name: mapping.name,
-      arguments: state.args,
+      execution: 'client',
+      arguments: toolSearchArgumentsFromText(state.args),
     };
   }
   return {
@@ -197,6 +208,7 @@ export class AnthropicSseTranslator {
       const startBlock = { ...block };
       delete startBlock.text;
       delete startBlock.thinking;
+      delete startBlock.reasoning;
       delete startBlock.signature;
       output.push(...this.push({
         type: 'content_block_start',
@@ -209,14 +221,22 @@ export class AnthropicSseTranslator {
           index,
           delta: { type: 'text_delta', text: block.text },
         }));
-      } else if (block.type === 'thinking' && text(block.thinking)) {
+      } else if (
+        (block.type === 'thinking' && text(block.thinking))
+        || (block.type === 'reasoning' && text(block.reasoning))
+      ) {
         output.push(...this.push({
           type: 'content_block_delta',
           index,
-          delta: { type: 'thinking_delta', thinking: block.thinking },
+          delta: block.type === 'reasoning'
+            ? { type: 'reasoning_delta', reasoning: block.reasoning }
+            : { type: 'thinking_delta', thinking: block.thinking },
         }));
       }
-      if (block.type === 'thinking' && text(block.signature)) {
+      if (
+        (block.type === 'thinking' || block.type === 'reasoning')
+        && text(block.signature)
+      ) {
         output.push(...this.push({
           type: 'content_block_delta',
           index,
@@ -301,20 +321,46 @@ export class AnthropicSseTranslator {
     const index = number(raw.index);
     const block = isObject(raw.content_block) ? raw.content_block : {};
     const kind = text(block.type);
+    const reasoning = kind === 'thinking' || kind === 'reasoning';
+    const toolMapping = kind === 'tool_use'
+      ? mappingFor(this.toolContext, text(block.name))
+      : null;
     const outputIndex = this.nextOutputIndex++;
-    const itemId = deterministicId(kind === 'tool_use' ? 'fc' : kind === 'thinking' || kind === 'redacted_thinking' ? 'rs' : 'msg', this.responseId || this.wireModel, outputIndex);
+    const itemPrefix = toolMapping?.kind === 'tool_search'
+      ? 'tsc'
+      : toolMapping?.kind === 'custom'
+        ? 'ctc'
+        : kind === 'tool_use'
+          ? 'fc'
+          : reasoning || kind === 'redacted_thinking'
+            ? 'rs'
+            : 'msg';
+    const source = kind === 'reasoning'
+      ? {
+          ...block,
+          type: 'thinking',
+          thinking: text(block.reasoning),
+        }
+      : { ...block };
+    const itemId = deterministicId(itemPrefix, this.responseId || this.wireModel, outputIndex);
     const state: BlockState = {
-      kind: kind === 'tool_use' ? 'tool_use' : kind === 'thinking' ? 'thinking' : kind === 'redacted_thinking' ? 'redacted_thinking' : 'text',
+      kind: kind === 'tool_use'
+        ? 'tool_use'
+        : reasoning
+          ? 'thinking'
+          : kind === 'redacted_thinking'
+            ? 'redacted_thinking'
+            : 'text',
       outputIndex,
       itemId,
       callId: text(block.id),
       wireName: text(block.name),
-      text: text(block.text) || text(block.thinking),
+      text: text(block.text) || text(block.thinking) || text(block.reasoning),
       args: '',
       signature: text(block.signature),
-      source: { ...block },
+      source,
       startInput: isObject(block.input) ? JSON.stringify(block.input) : '',
-      visibleSummary: kind === 'thinking',
+      visibleSummary: reasoning,
       done: false,
     };
     this.blocks.set(index, state);
@@ -407,7 +453,11 @@ export class AnthropicSseTranslator {
       // Anthropic represents custom-tool free-form input as a compatibility JSON
       // object. Read also needs its arguments sanitized after the complete JSON has
       // arrived. Emitting either partial form would poison Codex before the done event.
-      if (mapping.kind === 'custom' || mapping.name === 'Read') return [];
+      if (
+        mapping.kind === 'custom'
+        || mapping.kind === 'tool_search'
+        || mapping.name === 'Read'
+      ) return [];
       return [{
         type: 'response.function_call_arguments.delta',
         response_id: this.responseId,
@@ -456,7 +506,7 @@ export class AnthropicSseTranslator {
       const mapping = mappingFor(this.toolContext, state.wireName);
       state.args = sanitizeToolArguments(state.args, mapping);
       const item = outputCallItem(state, this.toolContext, terminalStatus);
-      if (terminalStatus === 'completed') {
+      if (terminalStatus === 'completed' && mapping.kind !== 'tool_search') {
         out.push({
           type: mapping.kind === 'custom'
             ? 'response.custom_tool_call_input.done'

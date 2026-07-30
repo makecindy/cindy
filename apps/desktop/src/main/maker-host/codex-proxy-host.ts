@@ -79,6 +79,7 @@ const log = createMakerLogger('codex-proxy');
 
 const registry = createInstructionsRegistry();
 const sessionToThread = new Map<string, string>();
+const sessionToThreads = new Map<string, Set<string>>();
 const threadToSession = new Map<string, string>();
 const reviewerModelBySession = new Map<string, string>();
 
@@ -782,6 +783,7 @@ function createAnthropicBridgeDecision(
     rewriteModel: (model) => rewriteAnthropicBridgeModel(model, stripPrefix),
     promptCaching: true,
     automaticPromptCaching: isOfficialAnthropicUpstream(upstreamBase),
+    strictTools: isOfficialAnthropicUpstream(upstreamBase),
     imageCodec: desktopAnthropicImageCodec,
     ...(onUpstreamError ? { onUpstreamError } : {}),
   }, {
@@ -2266,17 +2268,18 @@ export function registerComposed(sessionId: string, threadId: string, text: stri
 function bindThreadToSession(sessionId: string, threadId: string): void {
   const previousThreadId = sessionToThread.get(sessionId);
   if (previousThreadId && previousThreadId !== threadId) {
-    registry.delete(previousThreadId);
-    threadToSession.delete(previousThreadId);
+    clearSessionThreads(sessionId);
   }
 
   const previousSessionId = threadToSession.get(threadId);
   if (previousSessionId && previousSessionId !== sessionId) {
-    sessionToThread.delete(previousSessionId);
-    reviewerModelBySession.delete(previousSessionId);
+    clearSessionThreads(previousSessionId);
   }
 
   sessionToThread.set(sessionId, threadId);
+  const threads = sessionToThreads.get(sessionId) ?? new Set<string>();
+  threads.add(threadId);
+  sessionToThreads.set(sessionId, threads);
   threadToSession.set(threadId, sessionId);
 }
 
@@ -2297,19 +2300,71 @@ export function registerReviewerRouteContext(
 }
 
 /**
+ * 让 Codex 子 Agent thread 继承父 thread 的业务 session、桥接路由和产品 prompt。
+ * app-server 的 thread/started 通知在子 thread 首个请求前同步调用这里。
+ */
+export function registerChildThread(parentThreadId: string, childThreadId: string): boolean {
+  if (!parentThreadId || !childThreadId || parentThreadId === childThreadId) return false;
+
+  const sessionId = threadToSession.get(parentThreadId);
+  const text = registry.get(parentThreadId);
+  if (!sessionId || text === undefined) {
+    log.warn('cannot inherit codex child thread route from unknown parent', {
+      parentThreadId,
+      childThreadId,
+    });
+    return false;
+  }
+
+  const previousSessionId = threadToSession.get(childThreadId);
+  if (previousSessionId && previousSessionId !== sessionId) {
+    log.warn('refusing to overwrite codex child thread owned by another session', {
+      parentThreadId,
+      childThreadId,
+      sessionId,
+      previousSessionId,
+    });
+    return false;
+  }
+
+  const threads = sessionToThreads.get(sessionId) ?? new Set<string>();
+  threads.add(childThreadId);
+  sessionToThreads.set(sessionId, threads);
+  threadToSession.set(childThreadId, sessionId);
+  registry.set(childThreadId, text);
+  log.debug('registered codex child thread route', {
+    sessionId,
+    parentThreadId,
+    childThreadId,
+    registrySize: registry.size,
+  });
+  return true;
+}
+
+function clearSessionThreads(sessionId: string): string[] {
+  const threadIds = Array.from(sessionToThreads.get(sessionId) ?? []);
+  sessionToThreads.delete(sessionId);
+  sessionToThread.delete(sessionId);
+  reviewerModelBySession.delete(sessionId);
+  for (const threadId of threadIds) {
+    if (threadToSession.get(threadId) === sessionId) {
+      threadToSession.delete(threadId);
+      registry.delete(threadId);
+    }
+  }
+  return threadIds;
+}
+
+/**
  * 清理业务 session 对应的 thread prompt。由后续 Layer 4 接到 onClose 调用。
  */
 export function unregister(sessionId: string): void {
-  const threadId = sessionToThread.get(sessionId);
-  if (!threadId) return;
+  const threadIds = clearSessionThreads(sessionId);
+  if (threadIds.length === 0) return;
 
-  sessionToThread.delete(sessionId);
-  threadToSession.delete(threadId);
-  registry.delete(threadId);
-  reviewerModelBySession.delete(sessionId);
   log.debug('unregistered codex prompt for session', {
     sessionId,
-    threadId,
+    threadIds,
     registrySize: registry.size,
   });
 }
@@ -2330,10 +2385,11 @@ export function isCodexProxyHandleReady(): boolean {
 export async function disposeCodexProxy(): Promise<void> {
   _disposeGeneration += 1;
   dumpSeq = 0;
-  for (const threadId of sessionToThread.values()) {
+  for (const threadId of threadToSession.keys()) {
     registry.delete(threadId);
   }
   sessionToThread.clear();
+  sessionToThreads.clear();
   threadToSession.clear();
   reviewerModelBySession.clear();
 

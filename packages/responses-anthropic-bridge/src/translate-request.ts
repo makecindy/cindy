@@ -413,6 +413,7 @@ function wireToolName(
 function flattenTools(
   tools: unknown[] | undefined,
   oauth: boolean,
+  strictTools: boolean,
 ): { tools?: unknown[]; context: ToolContext } {
   if (!tools?.length) {
     return { context: { byWireName: new Map(), byResponseName: new Map() } };
@@ -461,7 +462,7 @@ function flattenTools(
       name: wireName,
       ...(description ? { description } : {}),
       input_schema: inputSchema,
-      ...(strict !== undefined ? { strict } : {}),
+      ...(strictTools && strict !== undefined ? { strict } : {}),
     });
   };
 
@@ -877,6 +878,16 @@ function forcedToolChoice(value: unknown): boolean {
   );
 }
 
+function stopSequences(value: ResponsesRequest['stop']): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  const values = typeof value === 'string' ? [value] : value;
+  if (!Array.isArray(values) || values.some((entry) => typeof entry !== 'string')) {
+    throw new InvalidResponsesRequestError('Responses stop must be a string or an array of strings');
+  }
+  const nonEmpty = values.filter((entry) => entry.length > 0);
+  return nonEmpty.length > 0 ? nonEmpty : undefined;
+}
+
 function applyPromptCaching(
   body: AnthropicRequest,
   enabled: boolean,
@@ -924,6 +935,7 @@ export interface TranslateResponsesRequestOptions {
   supportsAdaptiveThinking?: (model: string) => boolean;
   promptCaching?: boolean;
   automaticPromptCaching?: boolean;
+  strictTools?: boolean;
   authMode?: 'api-key' | 'oauth';
 }
 
@@ -955,7 +967,7 @@ export function translateResponsesRequest(
         ...(needsToolSearch ? [{ type: 'tool_search', name: 'tool_search' }] : []),
       ]
     : undefined;
-  const context = flattenTools(declaredTools, oauth);
+  const context = flattenTools(declaredTools, oauth, options.strictTools === true);
   const input = raw.input;
   const items = typeof input === 'string'
     ? [{ role: 'user', content: input }]
@@ -1148,6 +1160,8 @@ export function translateResponsesRequest(
     if (numberValue(raw.temperature) !== undefined) anth.temperature = raw.temperature;
     if (numberValue(raw.top_p) !== undefined) anth.top_p = raw.top_p;
   }
+  const mappedStopSequences = stopSequences(raw.stop);
+  if (mappedStopSequences) anth.stop_sequences = mappedStopSequences;
   applyPromptCaching(
     anth,
     options.promptCaching !== false

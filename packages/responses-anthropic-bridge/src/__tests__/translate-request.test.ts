@@ -307,6 +307,22 @@ describe('Responses → Anthropic request translation', () => {
     expect(result.request.top_p).toBe(0.8);
   });
 
+  it('maps Responses stop strings and arrays to Anthropic stop_sequences', () => {
+    const single = translateResponsesRequest({
+      model: 'claude',
+      input: 'hi',
+      stop: 'DONE',
+    });
+    expect(single.request.stop_sequences).toEqual(['DONE']);
+
+    const multiple = translateResponsesRequest({
+      model: 'claude',
+      input: 'hi',
+      stop: ['DONE', 'HALT'],
+    });
+    expect(multiple.request.stop_sequences).toEqual(['DONE', 'HALT']);
+  });
+
   it('disables thinking when a forced tool choice must be preserved', () => {
     const result = translateResponsesRequest({
       model: 'claude-sonnet-5',
@@ -377,7 +393,7 @@ describe('Responses → Anthropic request translation', () => {
     });
   });
 
-  it('preserves strict tool definitions and drops incomplete historical tool turns', () => {
+  it('preserves strict tool definitions only for capable upstreams and drops incomplete historical tool turns', () => {
     const result = translateResponsesRequest({
       model: 'claude',
       tools: [{
@@ -397,10 +413,23 @@ describe('Responses → Anthropic request translation', () => {
         { type: 'function_call_output', call_id: 'bad', output: 'partial' },
         { role: 'user', content: 'continue safely' },
       ],
-    });
+    }, { strictTools: true });
     expect(result.request.tools?.[0]).toMatchObject({ name: 'read', strict: true });
     expect(JSON.stringify(result.request.messages)).not.toContain('bad');
     expect(JSON.stringify(result.request.messages)).not.toContain('partial');
+
+    const compatibleGateway = translateResponsesRequest({
+      model: 'claude',
+      tools: [{
+        type: 'function',
+        name: 'read',
+        strict: true,
+        parameters: { type: 'object' },
+      }],
+      input: [{ role: 'user', content: 'read safely' }],
+    });
+    expect(compatibleGateway.request.tools?.[0]).toMatchObject({ name: 'read' });
+    expect(compatibleGateway.request.tools?.[0]).not.toHaveProperty('strict');
   });
 
   it('filters whitespace-only text blocks that Anthropic rejects', () => {

@@ -122,6 +122,7 @@ function extractThreadId(method: string, params: unknown): string | null {
 
 export interface ThreadEventHandlers {
   threadStarted?: (params: ThreadStartedNotification['params']) => void;
+  descendantThreadStarted?: (params: ThreadStartedNotification['params']) => void;
   turnStarted?: (params: TurnStartedNotification['params']) => void;
   turnCompleted?: (params: TurnCompletedNotification['params']) => void;
   /** 每次 turn 都会推一次 (turn 完成前), 与 turn/completed 在同 turnId 下成对出现。 */
@@ -252,6 +253,8 @@ export class AppServerHost {
   private startPromise: Promise<InitializeResponse> | null = null;
 
   private readonly subscribers = new Map<string, ThreadEventHandlers>();
+  /** root / descendant threadId → 当前拥有该子树订阅的 root threadId。 */
+  private readonly lineageRoots = new Map<string, string>();
   /** 找不到 subscriber 时按 threadId 暂存的 notification, drain on subscribe。 */
   private readonly buffered = new Map<string, BufferedNotification[]>();
   /**
@@ -589,6 +592,7 @@ export class AppServerHost {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
     this.subscribers.clear();
+    this.lineageRoots.clear();
     this.buffered.clear();
     const c = this.client;
     this.client = null;
@@ -651,6 +655,7 @@ export class AppServerHost {
       this.logger.warn('overwriting thread subscription', { threadId });
     }
     this.subscribers.set(threadId, handlers);
+    this.lineageRoots.set(threadId, threadId);
 
     // 排空缓存 (thread/started 比 subscribe 早到的固有竞争)
     const buf = this.buffered.get(threadId);
@@ -686,6 +691,7 @@ export class AppServerHost {
             return Promise.resolve();
           }
           this.subscribers.delete(threadId);
+          this.deleteLineageForRoot(threadId);
           this.buffered.delete(threadId);
           localReleased = true;
         } else if (this.subscribers.has(threadId)) {
@@ -745,6 +751,9 @@ export class AppServerHost {
       this.logger.warn('notification missing threadId', { method });
       return;
     }
+    if (method === 'thread/started') {
+      this.routeDescendantThreadStarted(params as ThreadStartedNotification['params']);
+    }
     const handlers = this.subscribers.get(threadId);
     if (handlers) {
       this.dispatchToHandlers(handlers, method, params);
@@ -753,6 +762,40 @@ export class AppServerHost {
     // subscribe 还没到 — 暂存 + TTL 清理。Codex 协议保证 server 内同 thread 顺序,
     // drain 时按到达顺序 dispatch 不会乱。
     this.bufferNotification(threadId, method, params);
+  }
+
+  private routeDescendantThreadStarted(params: ThreadStartedNotification['params']): void {
+    const childThreadId = params.thread.id;
+    const parentThreadId = params.thread.parentThreadId;
+    if (!parentThreadId || parentThreadId === childThreadId) return;
+
+    const rootThreadId = this.lineageRoots.get(parentThreadId)
+      ?? (this.subscribers.has(parentThreadId) ? parentThreadId : null);
+    if (!rootThreadId) return;
+
+    const handlers = this.subscribers.get(rootThreadId);
+    if (!handlers) return;
+
+    this.lineageRoots.set(childThreadId, rootThreadId);
+    if (!handlers.descendantThreadStarted) return;
+    try {
+      handlers.descendantThreadStarted(params);
+    } catch (e) {
+      this.logger.error('descendant thread handler threw', {
+        rootThreadId,
+        parentThreadId,
+        childThreadId,
+        message: (e as Error).message,
+      });
+    }
+  }
+
+  private deleteLineageForRoot(rootThreadId: string): void {
+    for (const [threadId, ownerRootThreadId] of this.lineageRoots) {
+      if (ownerRootThreadId === rootThreadId) {
+        this.lineageRoots.delete(threadId);
+      }
+    }
   }
 
   private dispatchToHandlers(handlers: ThreadEventHandlers, method: string, params: unknown): void {
