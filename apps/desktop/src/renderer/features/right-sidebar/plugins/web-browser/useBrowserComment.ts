@@ -53,6 +53,7 @@ import {
 import { composerDraftKeyForRightSidebarSession } from '@/features/cc-agent/newMakerDraftRightSidebar';
 import {
   createEmptyBrowserCommentEditorDraft,
+  hasBrowserCommentEditorDraft,
   type BrowserCommentEditorDraft,
 } from './browserCommentEditorDraft';
 
@@ -146,6 +147,8 @@ export function useBrowserComment(
   const [mode, setMode] = useState<BrowserCommentMode>('off');
   const [pendingTarget, setPendingTarget] = useState<BrowserCommentTargetInfo | null>(null);
   const [editorDraft, setEditorDraft] = useState(createEmptyBrowserCommentEditorDraft);
+  const editorDraftRef = useRef(editorDraft);
+  editorDraftRef.current = editorDraft;
   const modeRef = useRef(mode);
   modeRef.current = mode;
   const pendingTargetRef = useRef(pendingTarget);
@@ -470,12 +473,16 @@ export function useBrowserComment(
   doSubmitRef.current = doSubmit;
 
   const acceptSelectedTarget = useCallback((info: BrowserCommentTargetInfo) => {
-    if (info.immediate) {
+    if (info.immediate && !hasBrowserCommentEditorDraft(editorDraftRef.current)) {
       // Cmd/Ctrl+点击「立即添加」:跳过气泡,空评论文本直接提交。
       doSubmitRef.current(info, '');
       return;
     }
-    setPendingTarget(info);
+    // 生命周期恢复后若仍有 Host 草稿，即使用户 Cmd/Ctrl+点击也必须重新打开
+    // Popover，让恢复的正文 / 样式明确绑定当前 target；不能提交空评论后清空。
+    // 同时归一化为普通 pending，后续截图失败应保留 Popover，而不是走 immediate
+    // 的无编辑器取消路径。
+    setPendingTarget(info.immediate ? { ...info, immediate: false } : info);
     setMode('pending');
   }, []);
 

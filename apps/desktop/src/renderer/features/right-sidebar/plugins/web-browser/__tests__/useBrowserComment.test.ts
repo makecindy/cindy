@@ -537,6 +537,48 @@ describe('useBrowserComment', () => {
     expect(toastMocks.error).toHaveBeenCalledWith('rightSidebar.browser.commentFailed');
   });
 
+  it('opens the Popover instead of discarding a recovered draft on immediate selection', async () => {
+    const webview = makeWebview();
+    let result: UseBrowserCommentResult | null = null;
+    render(
+      createElement(HookProbe, {
+        webview: webview.value,
+        onResult: (next) => {
+          result = next;
+        },
+      }),
+    );
+    act(() =>
+      result!.updateEditorDraft({
+        text: 'Recovered comment',
+        styleEdits: { color: '#ff0000' },
+        textEdit: null,
+      }),
+    );
+    await enterSelecting(webview, () => result!);
+    const callsBeforeSelection = webview.send.mock.calls.length;
+
+    act(() =>
+      webview.dispatchIpc(BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL, {
+        ...TARGET,
+        immediate: true,
+      }),
+    );
+
+    expect(result!.mode).toBe('pending');
+    expect(result!.pendingTarget).toEqual({
+      ...TARGET,
+      immediate: false,
+    });
+    expect(result!.editorDraft).toEqual({
+      text: 'Recovered comment',
+      styleEdits: { color: '#ff0000' },
+      textEdit: null,
+    });
+    expect(webview.send).toHaveBeenCalledTimes(callsBeforeSelection);
+    expect(draftMocks.append).not.toHaveBeenCalled();
+  });
+
   it('writes the Composer draft once and waits for guest commit acknowledgement', async () => {
     const webview = makeWebview();
     let result: UseBrowserCommentResult | null = null;
