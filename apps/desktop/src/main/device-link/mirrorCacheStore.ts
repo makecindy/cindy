@@ -478,8 +478,20 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       rememberWritten(file, body);
       return { outcome: 'written' };
     }
-    // 缩到最小档仍超上限:保留旧快照,不写入。
-    return { outcome: 'skipped' };
+    // 缩到最小档仍超上限:新快照写不下。旧快照此刻可能还带着刚被归档 / 删除的会话,而同一份
+    // 超限状态每次对账都会走到这里 —— 永远不会有第二次机会更新它。所以**作废**旧快照,
+    // 除非它的内容与最小档快照一致(那就是同一份,没什么可作废的)(review: codex P1)。
+    const smallestBody = JSON.stringify(
+      normalizeDeviceSessions(devices, SESSION_LIST_SHRINK_STEPS[SESSION_LIST_SHRINK_STEPS.length - 1]),
+    );
+    if (unchanged(file, smallestBody)) return { outcome: 'skipped' };
+    lastWritten.delete(file);
+    try {
+      await fsp.rm(file, { recursive: true, force: true });
+    } catch {
+      if (await pathExists(file)) return { outcome: 'purge-failed', stuck: file };
+    }
+    return { outcome: 'invalidated' };
   }
 
   function serializeWrite<T>(file: string, task: () => Promise<T>): Promise<T> {

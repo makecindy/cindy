@@ -547,6 +547,38 @@ describe('remoteProjectsStore.hydrateFromCache', () => {
   });
 });
 
+describe('作废式重载 → 缓存一起清', () => {
+  // review(codex P1):粘滞抑制标记只活在本进程里。rewind 后权威首拉失败、用户直接退出 app,
+  // 重启后标记没了而盘上那份还是 rewind 之前的窗口 —— 照样 hydrate 出已被软删的消息。
+  it('rewind 重载(不允许借缓存)→ 同时清掉盘上那份', async () => {
+    const s = sid();
+    registerRemote(s);
+    remoteList = [dbMessage(s, 'm1', 'x', '2026-01-01T00:00:00.000Z')];
+    makerChatStore.ensureInitialMessages(s);
+    await flush(30);
+    putMessages.mockClear();
+
+    makerChatStore.reloadMessages(s);
+    await flush(20);
+
+    expect(putMessages).toHaveBeenCalledWith(DEVICE_ID, s, []);
+  });
+
+  it('origin 首次解析的重载(允许借缓存)不清盘', async () => {
+    const s = sid();
+    makerChatStore.ensureInitialMessages(s); // 本机空库(mapping 未注入)
+    await flush(20);
+    registerRemote(s);
+    remoteListPromise = new Promise<Message[]>(() => {});
+    putMessages.mockClear();
+
+    makerChatStore.reloadMessages(s, { allowCacheHydrate: true });
+    await flush(20);
+
+    expect(putMessages).not.toHaveBeenCalledWith(DEVICE_ID, s, []);
+  });
+});
+
 describe('权威侧删消息 → 缓存一起清', () => {
   // review(codex P1):/clear 与 messages:deleted 都**不会**触发"最新页"重拉(唯一的写缓存
   // 路径),盘上那份仍是删除前的正文;此刻退出 app,下次离线冷启动就把它 hydrate 回来。

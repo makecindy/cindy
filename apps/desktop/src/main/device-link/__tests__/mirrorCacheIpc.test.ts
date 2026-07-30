@@ -179,6 +179,28 @@ describe('payload 有界校验', () => {
   });
 });
 
+describe('标量 id 长度上界', () => {
+  // review(codex P1):数组与单条字节预算管不到标量字段,而 store 会对**完整字符串**做
+  // trim + 正则改写 + sha256(同步)—— 一次调用就能拖住 main。
+  it('超长 deviceId / sessionId → INVALID_PARAMS,不碰 store', async () => {
+    const long = 'x'.repeat(300);
+    await expect(handleMirrorCacheGetMessages(cache, long, 'sess-1')).rejects.toThrow(
+      /INVALID_PARAMS/,
+    );
+    await expect(handleMirrorCachePutMessages(cache, 'dev-1', long, [])).rejects.toThrow(
+      /INVALID_PARAMS/,
+    );
+    await expect(handleMirrorCacheClear(cache, long)).rejects.toThrow(/INVALID_PARAMS/);
+    expect(cache.readMessages).not.toHaveBeenCalled();
+    expect(cache.writeMessages).not.toHaveBeenCalled();
+    expect(cache.clearDevice).not.toHaveBeenCalled();
+  });
+
+  it('正常长度的 id 照常放行', async () => {
+    await expect(handleMirrorCacheGetMessages(cache, 'dev-1', 'sess-1')).resolves.toBeTruthy();
+  });
+});
+
 describe('清理失败登记重试', () => {
   it('空写删除失败 → 登记进 purge 队列,IPC 仍返回 ok', async () => {
     const stuck = ['/data/owners/x/device-link-mirror-cache/messages/a.json'];

@@ -719,13 +719,29 @@ async function awaitMirrorCacheReadGate(): Promise<void> {
   await mirrorCacheReadGate;
 }
 
+/**
+ * 缓存 id 的长度上界。renderer 被 XSS 时可以塞进任意长的 deviceId / sessionId,而 store 随后
+ * 会对**完整字符串**做 trim + 正则改写 + sha256(messageFileName / clearDevice),这些都是同步
+ * 的 —— 一次调用就能拖住 main(数组与单条字节预算管不到标量字段)(review: codex P1)。
+ * 真实 id 是 cuid / uuid 量级(≤ 64),给到 256 已经宽松得离谱。
+ */
+const MIRROR_CACHE_MAX_ID_LENGTH = 256;
+
+function requireCacheId(value: unknown, name: string): string {
+  const id = requireString(value, name);
+  if (id.length > MIRROR_CACHE_MAX_ID_LENGTH) {
+    throwIpcError('INVALID_PARAMS', `${name} is too long`);
+  }
+  return id;
+}
+
 export async function handleMirrorCacheGetMessages(
   cache: MirrorCache,
   deviceId: unknown,
   sessionId: unknown,
 ): Promise<{ messages: Record<string, unknown>[] }> {
-  const device = requireString(deviceId, 'deviceId');
-  const session = requireString(sessionId, 'sessionId');
+  const device = requireCacheId(deviceId, 'deviceId');
+  const session = requireCacheId(sessionId, 'sessionId');
   await awaitMirrorCacheReadGate();
   return { messages: await cache.readMessages(device, session) };
 }
@@ -737,8 +753,8 @@ export async function handleMirrorCachePutMessages(
   messages: unknown,
   enqueueRetry: (root: string, paths?: readonly string[]) => Promise<void> = enqueuePurge,
 ): Promise<{ ok: true }> {
-  const device = requireString(deviceId, 'deviceId');
-  const session = requireString(sessionId, 'sessionId');
+  const device = requireCacheId(deviceId, 'deviceId');
+  const session = requireCacheId(sessionId, 'sessionId');
   if (!Array.isArray(messages)) throwIpcError('INVALID_PARAMS', 'messages must be an array');
   const bounded = boundedItems(messages, MIRROR_CACHE_MAX_INBOUND_MESSAGES, 'messages');
   try {
@@ -821,7 +837,7 @@ export async function handleMirrorCacheClear(
   deviceId: unknown,
   enqueueRetry: (root: string, paths?: readonly string[]) => Promise<void> = enqueuePurge,
 ): Promise<{ ok: true }> {
-  const device = requireString(deviceId, 'deviceId');
+  const device = requireCacheId(deviceId, 'deviceId');
   try {
     await cache.clearDevice(device);
   } catch (err) {

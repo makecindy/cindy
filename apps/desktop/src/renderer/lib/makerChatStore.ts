@@ -5482,6 +5482,12 @@ function reloadMessages(sessionId: string, opts?: { allowCacheHydrate?: boolean 
     _cacheHydrateStarted.add(sessionId);
     // 粘滞:即使紧随的权威首拉失败(被控端离线),重挂会话也不许再借那份过期缓存。
     _cacheHydrateSuppressed.add(sessionId);
+    // 但粘滞标记只活在**本进程**里:rewind 之后权威首拉失败、用户直接退出 app,重启后
+    // 标记没了而盘上那份还是 rewind 之前的窗口 —— 下次离线冷启动照样 hydrate 出已被软删
+    // 的消息(review: codex P1)。所以同时把盘上那份清掉:缓存是纯优化,重载后的首拉
+    // 成功时会重新写上。
+    const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
+    if (deviceId) clearCachedMessages(deviceId, sessionId);
   }
   setState(sessionId, (s) => ({
     ...s,
