@@ -134,4 +134,24 @@ describe('useClaudeSessionRoute session binding', () => {
     });
     expect(result.current).toEqual({ route: 'gateway', lastFailedRequestBridge: false, resolved: true });
   });
+
+  it('discards a stale in-flight GET that resolves after a push already landed', async () => {
+    // GET 在途期间 push 先落地(如终止 bridge 失败推 true):push 是更新的事实,
+    // 随后才 resolve 的 GET 结果(取值早于 push、仍是旧值)不得覆盖它——否则
+    // 横幅会被这条迟到的快照错误地重新放行余额恢复引导(PR review P1)。
+    const { result } = renderHook(() => useClaudeSessionRoute('s1', true));
+
+    act(() => {
+      pushListener?.({ sessionId: 's1', route: 'gateway', lastFailedRequestBridge: true });
+    });
+    expect(result.current).toEqual({ route: 'gateway', lastFailedRequestBridge: true, resolved: true });
+
+    // mount 时发起的 GET 直到此刻才 resolve,携带 push 之前的旧值。
+    await act(async () => {
+      pending[0].resolve({ route: 'gateway', lastFailedRequestBridge: false });
+      await pending[0].promise;
+    });
+    // 旧 GET 结果被丢弃,push 落下的 true 保持不变。
+    expect(result.current).toEqual({ route: 'gateway', lastFailedRequestBridge: true, resolved: true });
+  });
 });

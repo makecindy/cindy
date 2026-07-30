@@ -374,6 +374,12 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     let eventsWritten = 0;
     let rawPrefix = '';
     const RAW_PREFIX_LIMIT = 500;
+    // 零事件兜底与断流(catch 分支的 translator.fail())都靠 translator 自己的
+    // errored 状态被 wasBridgeStreamFailure 感知;但零事件这条 error 是 handler
+    // 手写、绕过 translator 直接 writeOut 的合成事件,translator 不知道它的存在,
+    // errored 不会被置位。没有这个独立标志,零事件路径若恰好携带配额错误正文,
+    // host 侧的失败归因会把它当成功流(PR review P1)。
+    let synthesizedFailure = false;
     const writeOut = (ev: AnthropicSseEvent): void => {
       eventsWritten += 1;
       writeSseEvent(res, ev);
@@ -387,6 +393,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
         contentType: upstreamContentType || '(missing)',
         bodyPrefix,
       });
+      synthesizedFailure = true;
       writeOut({
         event: 'error',
         data: {
@@ -443,7 +450,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
         for (const outEv of translator.fail(`upstream stream error: ${errMsg}`)) writeOut(outEv);
       }
     } finally {
-      streamFailureMarkers.set(res, translator.failed);
+      streamFailureMarkers.set(res, translator.failed || synthesizedFailure);
       res.end();
     }
   }

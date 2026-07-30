@@ -138,6 +138,10 @@ describe('createResponsesHandler', () => {
     expect(r.text).toContain('prompt too large for context window');
     expect(warns).toContain('upstream 2xx with non-SSE content-type');
     expect(warns).toContain('upstream stream yielded no translatable events');
+    // 这条 error 事件是 handler 手写、绕过 translator 直接 writeOut 的合成事件,
+    // translator 自己的 errored 状态感知不到它;host 侧的失败归因必须仍然能
+    // 查到这是一次失败(PR review P1)。
+    expect(wasBridgeStreamFailure(r.serverRes)).toBe(true);
   });
 
   it('content-type 判定大小写不敏感:Text/Event-Stream 不触发 non-SSE warn', async () => {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export type ClaudeSessionBillingRoute = 'gateway' | 'subscription';
 
@@ -59,19 +59,30 @@ export function useClaudeSessionRoute(
     setObservation(null);
   }
 
+  // 单调票据(与 useCodexRuntimeRoute 同法):GET 在途期间若 push 先落地,
+  // push 是更新的事实,随后才 resolve 的 GET 结果已经过期,不能覆盖它——
+  // 否则终止 bridge 失败刚 push 的 true 会被这条迟到的 GET 快照(取值早于
+  // push、仍是 false)冲回去,横幅错误地重新放行余额恢复引导(PR review P1)。
+  // push 每次落地都自增票据并直接提交,让在途的 GET 之后一律作废。
+  const ticketRef = useRef(0);
+
   useEffect(() => {
     if (!enabled || !sessionId) return undefined;
     let cancelled = false;
+    const myTicket = ++ticketRef.current;
     void window.electronAPI.maker
       .claudeSessionRouteGet(sessionId)
       .then((value) => {
-        if (!cancelled && value != null) setObservation({ sessionId, ...value });
+        if (!cancelled && value != null && ticketRef.current === myTicket) {
+          setObservation({ sessionId, ...value });
+        }
       })
       .catch(() => {
         /* 读不到保持空状态 → 消费方回落启发式 */
       });
     const off = window.electronAPI.maker.onClaudeSessionRouteChanged((payload) => {
       if (payload.sessionId === sessionId) {
+        ticketRef.current += 1;
         setObservation({
           sessionId,
           route: payload.route,
