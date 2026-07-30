@@ -655,8 +655,8 @@ describe('classifyShellCommand — 第三轮 bot 审查回归护栏', () => {
   it('git ls-remote/fetch 的 --upload-pack/--receive-pack/--exec(远程执行器)→ 升级(codex P1)', () => {
     expect(classifyShellCommand("git ls-remote --upload-pack='sh payload' repo", roots)).toBe('prompt');
     expect(classifyShellCommand('git ls-remote --upload-pack=./x repo', roots)).toBe('prompt');
-    // 反例:普通 ls-remote 仍放行。
-    expect(classifyShellCommand('git ls-remote origin', roots)).toBe('auto-approve');
+    // 注:普通 git ls-remote 也已一律升级(网络操作 + config 劫持面,见第八批用例)。
+    expect(classifyShellCommand('git ls-remote origin', roots)).toBe('prompt');
   });
 
   it('curl URL glob({}/[])未关 glob 时 → 升级(codex P1,防展开出 metadata)', () => {
@@ -716,11 +716,10 @@ describe('classifyShellCommand — 第三轮 bot 审查回归护栏', () => {
     expect(classifyShellCommand("git ls-remote --upload-p='sh payload' repo", roots)).toBe('prompt');
     expect(classifyShellCommand("git ls-remote --u='sh payload' repo", roots)).toBe('prompt');
     expect(classifyShellCommand('git ls-remote --upl${X}oad-pack=sh repo', roots)).toBe('prompt');
-    // 反例:与危险选项不构成前缀关系的只读选项仍放行。
-    expect(classifyShellCommand('git ls-remote --tags origin', roots)).toBe('auto-approve');
-    expect(classifyShellCommand('git ls-remote --refs origin', roots)).toBe('auto-approve');
+    // 反例:与危险选项不构成前缀关系的只读长选项在**安全子命令**上仍放行(前缀匹配不过度)。
     expect(classifyShellCommand('git log --oneline', roots)).toBe('auto-approve');
     expect(classifyShellCommand('git log --format=%h notes', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('git diff --stat', roots)).toBe('auto-approve');
   });
 
   // ─── 第六批评审(#964):替换值展开 / git ext 协议 / curl 内嵌凭证 / 用户可写 bin 目录 ───
@@ -742,8 +741,6 @@ describe('classifyShellCommand — 第三轮 bot 审查回归护栏', () => {
     // 裸 ext:: 传输(无 env):classifyGit 拦 → prompt。
     expect(classifyShellCommand("git ls-remote 'ext::sh -c payload'", roots)).toBe('prompt');
     expect(classifyShellCommand("git fetch 'fd::17/foo'", roots)).toBe('prompt');
-    // 反例:普通 ls-remote 仍放行。
-    expect(classifyShellCommand('git ls-remote https://example.com/r.git', roots)).toBe('auto-approve');
   });
 
   it('curl URL 内嵌凭证(user:pass@host)→ 升级(codex P1,防 Basic auth 外发)', () => {
@@ -760,5 +757,32 @@ describe('classifyShellCommand — 第三轮 bot 审查回归护栏', () => {
     expect(classifyShellCommand('/usr/bin/ls -la', roots)).toBe('auto-approve');
     expect(classifyShellCommand('/bin/cat f', roots)).toBe('auto-approve');
     expect(classifyShellCommand('/usr/sbin/ifconfig', roots)).toBe('prompt'); // ifconfig 非只读白名单 → prompt(路径可信但工具需判)
+  });
+
+  // ─── 第八批评审(#964):花括号展开出的 flag / reflog 写模式 / ls-remote 网络 ───
+
+  it('花括号展开出现在命令名/flag 里 → 升级(codex P1)', () => {
+    // -ex{e..e}c 展开成 -exec → find 执行任意命令(flag 里的 brace)。
+    expect(classifyShellCommand("find . -maxdepth 0 -ex{e..e}c sh -c payload {} +", roots)).toBe('prompt');
+    // 命令名被花括号拆开(藏 sudo 无法识别 → 升级到 prompt,不是 prompt-each-time)。
+    expect(classifyShellCommand('s{u..u}do rm x', roots)).toBe('prompt');
+    expect(classifyShellCommand('{c..c}at notes.txt', roots)).toBe('prompt');
+    // 反例:位置参数里的 brace 只影响文件名 → 不升级;find 占位符 {} 不算展开。
+    expect(classifyShellCommand('ls dir/{a,b}', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('grep -rn foo src/{a,b}', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('find . -maxdepth 0 -print', roots)).toBe('auto-approve'); // {} 占位符另测,这里确认普通 find 放行
+  });
+
+  it('git reflog 破坏性写模式(expire/delete/drop)→ 升级;show/exists/裸 reflog 放行(codex P1)', () => {
+    expect(classifyShellCommand('git reflog expire --expire=now --all', roots)).toBe('prompt');
+    expect(classifyShellCommand('git reflog delete HEAD@{1}', roots)).toBe('prompt');
+    expect(classifyShellCommand('git reflog', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('git reflog show HEAD', roots)).toBe('auto-approve');
+  });
+
+  it('git ls-remote 是网络操作 + 可被 .git/config(ext::/insteadOf)劫持 → 一律升级(codex P1)', () => {
+    expect(classifyShellCommand('git ls-remote origin', roots)).toBe('prompt');
+    expect(classifyShellCommand('git ls-remote https://example.com/r.git', roots)).toBe('prompt');
+    expect(classifyShellCommand('git ls-remote --tags origin', roots)).toBe('prompt');
   });
 });

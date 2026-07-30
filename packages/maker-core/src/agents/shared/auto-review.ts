@@ -191,6 +191,14 @@ function stripExpansions(s: string): string {
 const SUBSTITUTION_EXPANSION = /\$\{[^}]*[-+=:?/#%^,!*@][^}]*\}/;
 
 /**
+ * bash 花括号展开:列表 `{a,b}` 或序列 `{x..y}`。**在分词前**展开,故能把关键词/flag 拆开
+ * (`-ex{e..e}c`→`-exec`、`s{u..u}do`→`sudo`,codex 报),静态不可预测其展开结果。需含逗号或 `..`
+ * 才是展开(find 占位符 `{}`、`{foo}` 不是)。仅当它出现在**命令名或 flag**里才升级(位置参数里的
+ * `ls a/{b,c}` 只影响文件名,不升级;curl URL glob 另由 isSafeFetch 处理)。
+ */
+const BRACE_EXPANSION = /\{[^}]*(?:,|\.\.)[^}]*\}/;
+
+/**
  * 把带默认/替代值的展开代入其文本,得到"展开后可能的形态":`${UNSET:-ec}`→`ec`、`${X:=sudo}`→`sudo`。
  * 供危险模式扫描,让藏在默认值里的危险关键词(sudo/rm 等)也现形。只抽 `:-`/`:=`/`:+`/`-`/`+`/`=` 后的文本。
  */
@@ -239,10 +247,15 @@ const CURL_REDIRECT_FLAGS = /(?:^|\s)(?:-[a-zA-Z]*L|--location(?:-trusted)?)\b/;
 // curl 无布尔短选项用 u/b/x/K,不误伤(-k insecure 是小写 k,不在内)。长选项与鉴权头单列。
 const CURL_SENSITIVE_FLAGS = /(?:^|\s)-[a-zA-Z]*[ubxK]|(?:^|\s)--(?:user|netrc\S*|config|cookie\S*|resolve|connect-to|unix-socket|proxy\S*|interface|variable|expand[\w-]*)\b|(?:-H|--header)[=\s]*['"]?\s*(?:[Aa]uthorization|[Cc]ookie|[Xx]-[Aa]pi-[Kk]ey|[Xx]-[Aa]uth|[Pp]roxy-[Aa]uthorization)/;
 
-/** git 只读子命令 → 放行。 */
+/**
+ * git 只读子命令 → 放行。
+ * `ls-remote` **不在此列**:它是网络操作(联系远端),且 `remote.<name>.url=ext::…` / `url.<x>.insteadOf`
+ * 这类 `.git/config` 可把看似无害的 `git ls-remote origin`(甚至显式 URL)重定向到执行型传输 → argv 无痕迹
+ * 却跑 payload(codex 报)。无法只凭 argv 判定安全,一律升级(与 fetch/clone 等网络子命令同档)。
+ */
 const SAFE_GIT_SUBCOMMANDS: ReadonlySet<string> = new Set([
   'status', 'log', 'diff', 'show', 'branch', 'remote', 'rev-parse', 'describe',
-  'blame', 'shortlog', 'tag', 'ls-files', 'ls-remote', 'cat-file', 'reflog',
+  'blame', 'shortlog', 'tag', 'ls-files', 'cat-file', 'reflog',
   'whatchanged', 'grep',
 ]);
 
@@ -488,6 +501,12 @@ function classifyGit(tokens: string[], segment: string): ReviewVerdict {
     if (sub === 'config' && /--(?:get|list|get-all)\b/.test(segment)) return 'auto-approve';
     return 'prompt';
   }
+  // reflog 有破坏性写模式:expire / delete / drop 删除恢复历史(不可逆);只放行 show/exists/裸 reflog(默认 show)。
+  if (sub === 'reflog') {
+    const next = rest.slice(rest.indexOf(sub) + 1).find((t) => !t.startsWith('-'));
+    if (next && /^(?:expire|delete|drop)$/.test(next)) return 'prompt';
+    return 'auto-approve'; // 裸 / show / exists
+  }
   // branch/tag/remote 的子命令名相同但有写变体:只放行读形态,写变体升级。
   if (sub === 'branch' || sub === 'tag') {
     // 删除/改名/复制/强制 flag,或子命令后带位置参数(= 新建分支/标签)→ 写。
@@ -523,6 +542,9 @@ function classifyShellSegment(segment: string): ReviewVerdict {
   // 带替换/默认值的参数展开(${X:-ec} 等)可代入任意文本、拼出危险 flag/命令,静态不可求值 → 升级
   // (codex 报:`-ex${UNSET:-ec}` 抹空后是 -ex、bash 代入 ec 成 -exec)。挡在 readonly/git/fetch 放行前。
   if (SUBSTITUTION_EXPANSION.test(segment)) return 'prompt';
+  // 花括号展开出现在命令名(tokens[0])或某个 flag(-… )里 → 可拼出任意命令/flag,静态不可预测 → 升级
+  // (codex 报 `-ex{e..e}c`→-exec)。位置参数里的 brace 只影响文件名、curl URL glob 另处理,不在此。
+  if (tokens.some((t, i) => (i === 0 || t.startsWith('-')) && BRACE_EXPANSION.test(t))) return 'prompt';
   // 显式路径的可执行文件(./ls、/tmp/ls、bin/ls)不是白名单里的系统工具,不能靠 basename 放行 ——
   // 只信任 **OS 自有**、非特权用户不可写的 bin 目录(/usr/bin、/bin、/usr/sbin、/sbin)。/usr/local/bin 与
   // /opt/homebrew/bin 在 macOS/Homebrew 下当前用户可写(可被替换成木马),不再算可信系统 bin(codex 报);
