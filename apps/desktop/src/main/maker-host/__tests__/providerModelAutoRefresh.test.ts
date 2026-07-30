@@ -129,6 +129,62 @@ describe('provider model auto-refresh coordinator', () => {
     expect(refreshProvider).toHaveBeenCalledTimes(2);
   });
 
+  it('lets the startup trigger bypass the cooldown so a first run is not stuck on a stale snapshot', async () => {
+    // 回归全新机器首启：splash 期那次自动刷新跑在「owner 绑定还没认领、网关凭证还没下发」
+    // 之前，什么都发现不到，却已经吃掉 30 分钟冷却。账号就绪后的 startup 触发必须强制放行，
+    // 否则清单要等用户去打开设置页 / 模型选择器才更新。
+    let now = 1_000;
+    const refreshProvider =
+      vi.fn<(providerId: BuiltinRefreshableProviderId) => Promise<void>>();
+    refreshProvider.mockResolvedValue(undefined);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [view('openai', true), view('xd', true)],
+      refreshProvider,
+      now: () => now,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+
+    await coordinator.requestAutoRefresh('foreground');
+    expect(refreshProvider.mock.calls.map(([id]) => id)).toEqual(['xd', 'openai']);
+
+    // 冷却内的普通触发照旧被挡。
+    await coordinator.requestAutoRefresh('model-selector-open');
+    expect(refreshProvider).toHaveBeenCalledTimes(2);
+
+    await coordinator.requestAutoRefresh('startup');
+    expect(refreshProvider.mock.calls.map(([id]) => id)).toEqual([
+      'xd',
+      'openai',
+      'xd',
+      'openai',
+    ]);
+  });
+
+  it('still merges concurrent startup work instead of spawning one refresh per trigger', async () => {
+    // 强制放行不等于放弃 in-flight 合并 —— openai 的刷新会起 codex app-server，
+    // 启动期几个触发同时到达时绝不能各起一个。
+    const first = deferred();
+    const refreshProvider = vi
+      .fn<(providerId: BuiltinRefreshableProviderId) => Promise<void>>()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue(undefined);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [view('openai', true)],
+      refreshProvider,
+      now: () => 5_000,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+
+    const a = coordinator.requestAutoRefresh('startup');
+    await vi.waitFor(() => expect(refreshProvider).toHaveBeenCalledOnce());
+    const b = coordinator.requestAutoRefresh('startup');
+    expect(refreshProvider).toHaveBeenCalledOnce();
+
+    first.resolve();
+    await Promise.all([a, b]);
+    expect(refreshProvider).toHaveBeenCalledOnce();
+  });
+
   it('swallows and logs automatic listing/source failures', async () => {
     const warn = vi.fn();
     let now = 0;

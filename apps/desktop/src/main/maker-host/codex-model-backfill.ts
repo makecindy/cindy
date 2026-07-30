@@ -1,5 +1,5 @@
 /**
- * codex-model-backfill —— 启动时为「已登录但无模型」的存量 Codex 用户主动补拉一次 live 模型。
+ * codex-model-backfill —— 为「已登录但无模型」的 Codex 用户主动补拉一次 live 模型。
  *
  * 背景:`ba831a9e` 让 Codex **OAuth 新登录动作**在收口时主动调 `model/list`(不跑 session)
  * 发现模型。但它只覆盖「登录那一下」——存量已登录用户(app 启动即是登录态、从不重新登录)
@@ -7,9 +7,16 @@
  * 该 cache,于是「已登录 + 从没跑过 codex 会话」的用户 discoveredCodex 恒空,OpenAI 供应商
  * 无任何模型,直到手动跑一次会话。
  *
- * 本模块补上这个缺口:maker 首次就绪时,若 Codex 已登录且当前无 codex 模型,fire-and-forget
- * 触发一次和登录收口同源的 live 拉取(`maker.refreshAgentLocalModels('codex')`),成功即广播
- * PROVIDER_CHANGED 让设置页刷新。纯函数 + 注入 deps,不碰 maker-core 热路径(启动一次性)。
+ * 本模块补上这个缺口:若 Codex 已登录且当前无 codex 模型,fire-and-forget 触发一次和登录
+ * 收口同源的 live 拉取(`maker.refreshAgentLocalModels('codex')`),成功即广播 PROVIDER_CHANGED
+ * 让设置页刷新。纯函数 + 注入 deps,不碰 maker-core 热路径。
+ *
+ * **为什么需要 coordinator 而不只是一次性调用**:补拉原先只挂在 maker 首次构造后,而首启那
+ * 一刻「本机已有 ChatGPT 凭证」的 owner 绑定往往还没认领完(绑定自愈挂在异步 reconcile 收口),
+ * `hasCodexLogin()` 返回 false → 一次性机会被 `skipped-unauthed` 消费掉,此后再无补拉,
+ * ChatGPT 订阅的模型清单要等用户打开设置页 / 模型选择器才出现(全新机器首启的实际表现)。
+ * coordinator 把「没试过」与「试过没成」分开记账:未授权不消费机会,授权就绪后由 auth 事件
+ * 再次驱动;真跑过 app-server 的失败才计入尝试次数并最终封顶,避免无授权抖动导致反复 spawn。
  */
 
 export interface CodexBackfillDeps {
@@ -29,7 +36,9 @@ export type CodexBackfillOutcome =
   | 'skipped-has-models'
   | 'applied'
   | 'not-applied'
-  | 'error';
+  | 'error'
+  /** 真跑过 app-server 但连续失败到封顶,交给用户手动刷新 / 跑一次会话。 */
+  | 'skipped-exhausted';
 
 /**
  * 补拉决策:未登录 / 已有模型直接跳过;否则 live 拉取,applied 则广播。任何异常吞掉记日志
@@ -55,4 +64,60 @@ export async function maybeBackfillCodexModels(deps: CodexBackfillDeps): Promise
     });
     return 'error';
   }
+}
+
+/** 真跑过 app-server 的失败尝试上限;未授权跳过不计入。 */
+export const CODEX_MODEL_BACKFILL_MAX_LIVE_ATTEMPTS = 3;
+
+export interface CodexModelBackfillCoordinator {
+  /**
+   * 评估并(必要时)执行一次补拉。并发调用复用同一次在途拉取——补拉会 spawn
+   * codex app-server,几个 auth 事件同时到达时绝不能各起一个。
+   */
+  request(): Promise<CodexBackfillOutcome>;
+  /**
+   * 重置失败计数。**只在 auth 边界真的变了时调**(登录 / 登出 / 换账号 / 凭证失效):
+   * 新边界下「上个账号试过几次都不成」这个结论不再适用。
+   */
+  reset(): void;
+}
+
+/**
+ * 把一次性的补拉包成可按事件重试的收口。
+ *
+ * 只记一件事:`liveAttempts` —— 真起过(或试图起过)app-server 的失败次数,封顶后停手,
+ * 避免反复 spawn。刻意**不缓存「已经拉到了」**:清单在场与否每次都现查 catalog
+ * (`hasCodexModels`),因为它随时会被 auth 边界收口清空(登出、cache miss 回退),缓存成
+ * 终态会让清空之后再也拉不回来。`skipped-unauthed` 不计入失败 —— 它意味着「还没资格试」,
+ * 不该消费任何重试额度,这正是首启那次被白白跳过的原因。
+ */
+export function createCodexModelBackfillCoordinator(
+  deps: CodexBackfillDeps,
+  maxLiveAttempts = CODEX_MODEL_BACKFILL_MAX_LIVE_ATTEMPTS,
+): CodexModelBackfillCoordinator {
+  let liveAttempts = 0;
+  let inflight: Promise<CodexBackfillOutcome> | null = null;
+
+  return {
+    request(): Promise<CodexBackfillOutcome> {
+      if (liveAttempts >= maxLiveAttempts) return Promise.resolve('skipped-exhausted');
+      if (inflight) return inflight;
+      const flight = maybeBackfillCodexModels(deps)
+        .then((outcome) => {
+          // not-applied / error 都真起过(或试图起过)app-server,计入封顶;
+          // applied / has-models 是成功路径;skipped-unauthed 根本没试。
+          if (outcome === 'not-applied' || outcome === 'error') liveAttempts += 1;
+          return outcome;
+        })
+        .finally(() => {
+          if (inflight === flight) inflight = null;
+        });
+      inflight = flight;
+      return flight;
+    },
+    reset(): void {
+      liveAttempts = 0;
+      inflight = null;
+    },
+  };
 }

@@ -13,6 +13,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import {
   BUILTIN_REFRESHABLE_PROVIDER_IDS,
   isBuiltinRefreshableProviderId,
+  isForcedProviderModelAutoRefreshTrigger,
   type BuiltinRefreshableProviderId,
   type ProviderModelAutoRefreshTrigger,
 } from '../../shared/providerModelRefresh.js';
@@ -171,7 +172,10 @@ export function createProviderModelRefreshCoordinator(
       }
 
       const ids = BUILTIN_REFRESHABLE_PROVIDER_IDS.filter((id) => connectedIds.has(id));
-      const results = await Promise.allSettled(ids.map((id) => refresh(id, false)));
+      // 启动期无视冷却（见 `'startup'` trigger 注释）；in-flight 合并仍生效，所以并发的
+      // 启动触发与手动刷新不会各起一次 codex app-server。
+      const force = isForcedProviderModelAutoRefreshTrigger(trigger);
+      const results = await Promise.allSettled(ids.map((id) => refresh(id, force)));
       results.forEach((result, index) => {
         if (result.status === 'fulfilled') return;
         deps.log.warn('provider model auto-refresh failed', {

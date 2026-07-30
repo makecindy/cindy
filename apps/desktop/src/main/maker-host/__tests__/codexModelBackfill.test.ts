@@ -4,7 +4,12 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { maybeBackfillCodexModels, type CodexBackfillDeps } from '../codex-model-backfill.js';
+import {
+  CODEX_MODEL_BACKFILL_MAX_LIVE_ATTEMPTS,
+  createCodexModelBackfillCoordinator,
+  maybeBackfillCodexModels,
+  type CodexBackfillDeps,
+} from '../codex-model-backfill.js';
 
 function makeDeps(over: Partial<CodexBackfillDeps> = {}): CodexBackfillDeps {
   return {
@@ -70,5 +75,94 @@ describe('maybeBackfillCodexModels', () => {
       'startup codex model backfill threw',
       expect.objectContaining({ error: 'app-server spawn failed' }),
     );
+  });
+});
+
+describe('createCodexModelBackfillCoordinator', () => {
+  it('未授权不消费重试额度,授权就绪后仍能补拉', async () => {
+    // 回归全新机器首启：maker 构造那一刻「本机已有 ChatGPT 凭证」的 owner 绑定还没认领完,
+    // hasCodexLogin() 返回 false。旧实现在这里用掉了唯一一次机会,ChatGPT 订阅的模型清单
+    // 要等用户打开设置页 / 模型选择器才出现。
+    let authed = false;
+    const refreshLive = vi.fn(async () => true);
+    const onApplied = vi.fn();
+    const coordinator = createCodexModelBackfillCoordinator(
+      makeDeps({ hasCodexLogin: async () => authed, refreshLive, onApplied }),
+    );
+
+    await expect(coordinator.request()).resolves.toBe('skipped-unauthed');
+    expect(refreshLive).not.toHaveBeenCalled();
+
+    // 绑定认领完成 → auth 事件再驱动一次。
+    authed = true;
+    await expect(coordinator.request()).resolves.toBe('applied');
+    expect(onApplied).toHaveBeenCalledOnce();
+  });
+
+  it('清单在场与否每次现查,被 auth 边界收口清空后还能重新拉回来', async () => {
+    // 不缓存「已经拉到了」:登出 / cache miss 回退都会清空 discovered 快照,
+    // 把成功记成终态会让清空之后再也拉不回来。
+    let hasModels = false;
+    const refreshLive = vi.fn(async () => {
+      hasModels = true;
+      return true;
+    });
+    const coordinator = createCodexModelBackfillCoordinator(
+      makeDeps({ hasCodexModels: () => hasModels, refreshLive }),
+    );
+
+    await expect(coordinator.request()).resolves.toBe('applied');
+    await expect(coordinator.request()).resolves.toBe('skipped-has-models');
+    expect(refreshLive).toHaveBeenCalledOnce();
+
+    // 边界收口把快照清空(不重置 coordinator)—— 下一次请求必须真的再拉一次。
+    hasModels = false;
+    await expect(coordinator.request()).resolves.toBe('applied');
+    expect(refreshLive).toHaveBeenCalledTimes(2);
+  });
+
+  it('并发请求合并成一次拉取,不各起一个 app-server', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const refreshLive = vi.fn(async () => {
+      await gate;
+      return true;
+    });
+    const coordinator = createCodexModelBackfillCoordinator(makeDeps({ refreshLive }));
+
+    const a = coordinator.request();
+    const b = coordinator.request();
+    release();
+    await expect(Promise.all([a, b])).resolves.toEqual(['applied', 'applied']);
+    expect(refreshLive).toHaveBeenCalledOnce();
+  });
+
+  it('真跑过 app-server 的失败到封顶就停手,reset 后恢复额度', async () => {
+    const refreshLive = vi.fn(async () => false);
+    const coordinator = createCodexModelBackfillCoordinator(makeDeps({ refreshLive }));
+
+    for (let i = 0; i < CODEX_MODEL_BACKFILL_MAX_LIVE_ATTEMPTS; i += 1) {
+      await expect(coordinator.request()).resolves.toBe('not-applied');
+    }
+    await expect(coordinator.request()).resolves.toBe('skipped-exhausted');
+    expect(refreshLive).toHaveBeenCalledTimes(CODEX_MODEL_BACKFILL_MAX_LIVE_ATTEMPTS);
+
+    coordinator.reset();
+    await expect(coordinator.request()).resolves.toBe('not-applied');
+    expect(refreshLive).toHaveBeenCalledTimes(CODEX_MODEL_BACKFILL_MAX_LIVE_ATTEMPTS + 1);
+  });
+
+  it('未授权抖动不会耗尽额度', async () => {
+    const refreshLive = vi.fn(async () => true);
+    const coordinator = createCodexModelBackfillCoordinator(
+      makeDeps({ hasCodexLogin: async () => false, refreshLive }),
+    );
+
+    for (let i = 0; i < CODEX_MODEL_BACKFILL_MAX_LIVE_ATTEMPTS + 2; i += 1) {
+      await expect(coordinator.request()).resolves.toBe('skipped-unauthed');
+    }
+    expect(refreshLive).not.toHaveBeenCalled();
   });
 });

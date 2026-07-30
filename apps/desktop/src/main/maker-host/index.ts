@@ -22,7 +22,10 @@ import {
   setActiveCatalogChangedListener,
   setDiscoveredCodexModels,
 } from './active-catalog.js';
-import { maybeBackfillCodexModels } from './codex-model-backfill.js';
+import {
+  createCodexModelBackfillCoordinator,
+  type CodexModelBackfillCoordinator,
+} from './codex-model-backfill.js';
 import {
   createOrcaWorkerBridgeMcpProvider,
   type OrcaBridgeMcpDeps,
@@ -161,6 +164,13 @@ type RemoteCcQuery = Awaited<
 >;
 
 let _maker: Maker | null = null;
+
+/**
+ * Codex 模型补拉 coordinator —— 随 maker 一起创建(需要 maker 实例做 live 拉取)、随
+ * resetMaker 一起作废(它闭包捕获了那个 maker,换账号后绝不能再对旧实例发拉取请求)。
+ * null = maker 尚未构造:那时既没有 agent 也没有会话,没有任何东西在等模型清单。
+ */
+let _codexModelBackfill: CodexModelBackfillCoordinator | null = null;
 
 /** Refresh selectable model capabilities, then notify every local/remote renderer. */
 function refreshSelectableModelsAndBroadcast(payload: Record<string, unknown>): void {
@@ -1104,6 +1114,8 @@ export function getMaker(): Maker {
     //
     desktopCodexAuthAdapter.setOnLogoutSuccess(async () => {
       resetProviderModelAutoRefreshCooldowns('openai');
+      // auth 边界变了:「清单已在场」和「试过几次」都不再适用于下一个账号。
+      resetCodexModelBackfillState();
       await codexAgent.forceDisposeLocalHostForAuthChange('Codex desktop auth logout');
       clearCodexProxyAuthInjection();
       await broadcastCodexRuntimeRoute();
@@ -1114,11 +1126,22 @@ export function getMaker(): Maker {
     // 下次 getHost 会按新 fallback(oauth-bearer)重建并重设 proxy 注入。
     desktopCodexAuthAdapter.setOnLoginSuccess(async () => {
       resetProviderModelAutoRefreshCooldowns('openai');
+      resetCodexModelBackfillState();
       // 必须在新 app-server 首次 model/list / Responses 请求之前清：bridge 的旧账号
       // accessToken/accountId 有 30s 内存缓存，晚清会让新 host 短暂带旧账号凭证请求。
       clearChatgptBridgeCredentialCache();
       await codexAgent.forceDisposeLocalHostForAuthChange('Codex desktop auth login');
       await broadcastCodexRuntimeRoute();
+      // 这里刻意**不**补拉:登录路径的清单收口在 maker-ipc/auth.ts,它会在 live 拉取没
+      // applied 时回退读 models_cache（cache miss 即清空,防串号）。在这里并发补拉会与那次
+      // 清空交错,刚拉到的清单可能被空 cache 覆盖。补拉挂在那条收口之后,顺序确定。
+    });
+    // 「本机已有 ChatGPT 凭证被自动认领」这条路径不走 OAuth 登录动作,拿不到上面那个收口。
+    // 不在这里补拉,新机器首启就会停在「已连接 + 零模型」,直到用户打开设置页或模型选择器
+    // 才由 auto-refresh 兜住 —— 这正是首启 Codex tab 只剩少数模型的直接原因。
+    desktopCodexAuthAdapter.setOnOAuthBindingClaimed(async () => {
+      resetProviderModelAutoRefreshCooldowns('openai');
+      await requestCodexModelBackfill();
     });
     // codex CLI 在 stderr 报 refresh_token 失效时, agent 会调 auth.invalidate() →
     // logout + 这里这个 broadcast, 让 useCodexAuth hook 立刻进 'unauthenticated' 状态,
@@ -1126,6 +1149,7 @@ export function getMaker(): Maker {
     // maker-ipc/auth.ts logout handler 的 broadcast 形态。
     desktopCodexAuthAdapter.setOnInvalidatedBroadcast(async (reason) => {
       resetProviderModelAutoRefreshCooldowns('openai');
+      resetCodexModelBackfillState();
       // 运行中 401/token invalidation 不经过 maker:auth:logout IPC，必须在这里做同一套
       // auth-boundary catalog 收口；否则磁盘 cache 已删但内存 discovered/capabilities 仍旧。
       try {
@@ -1237,8 +1261,12 @@ export function getMaker(): Maker {
     // 存量已登录用户补拉:maker 首次就绪后,若 Codex 已登录但当前无 codex 模型
     // (从没跑过会话、models_cache 未生成),fire-and-forget 触发一次 live model/list。
     // 不阻塞 getMaker 返回 / 启动(类比 refreshAnthropicModelsFromHttp 的后台刷新)。
+    //
+    // coordinator 而非一次性调用:首启这一刻 owner 绑定常常还没认领完,此时 hasCodexLogin()
+    // 为 false —— 一次性调用会被 skipped-unauthed 白白消费掉唯一机会。授权就绪后的重试
+    // 由 codex auth 事件驱动(见下方 requestCodexModelBackfill 的调用点)。
     const makerRef = _maker;
-    void maybeBackfillCodexModels({
+    _codexModelBackfill = createCodexModelBackfillCoordinator({
       hasCodexLogin: () => desktopCodexAuthAdapter.hasCodexOAuthLogin(),
       hasCodexModels: () =>
         (getActiveCatalog().providers.find((p) => p.id === 'openai')?.models.codex?.length ?? 0) > 0,
@@ -1246,8 +1274,35 @@ export function getMaker(): Maker {
       onApplied: () => refreshSelectableModelsAndBroadcast({}),
       log: desktopMakerLogger,
     });
+    void _codexModelBackfill.request();
   }
   return _maker;
+}
+
+/**
+ * 按 auth 事件请求一次 Codex 模型补拉(幂等 + 并发去重 + 失败封顶,见 coordinator 注释)。
+ * maker 未构造时是 no-op —— 它的补拉会在构造时自己跑第一轮。
+ */
+export async function requestCodexModelBackfill(): Promise<void> {
+  const coordinator = _codexModelBackfill;
+  if (!coordinator) return;
+  try {
+    const outcome = await coordinator.request();
+    desktopMakerLogger.debug('codex model backfill request settled', { outcome });
+  } catch (err) {
+    // coordinator 内部已吞异常并转成 outcome;这里只兜住理论上的意外,绝不让 auth 收口抛穿。
+    desktopMakerLogger.warn('codex model backfill request threw', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * 重置补拉的失败计数 —— 只在 codex auth 边界真的变了时调(登录 / 登出 / 凭证失效 / 换账号)。
+ * 新边界下「上个账号试过几次都不成」这个结论不再适用。
+ */
+export function resetCodexModelBackfillState(): void {
+  _codexModelBackfill?.reset();
 }
 
 /**
@@ -1266,6 +1321,9 @@ export function resetMaker(): void {
   cancelCodexAuthModeChange();
   _maker = null;
   _codexAgent = null;
+  // coordinator 闭包捕获了刚作废的那个 maker —— 不清掉的话,换账号窗口期内到达的 auth
+  // 事件会拿旧实例去拉模型清单(串号)。下次 getMaker() 会带着干净记账重建它。
+  _codexModelBackfill = null;
   _initialCustomMcpRefresh = undefined;
   resetPluginRegistry();
   resetCustomMcpRegistry();
@@ -1371,6 +1429,10 @@ export async function finalizeCodexAfterAuthModeChange(): Promise<void> {
   // 重读 codex models_cache 刷新规范化模型快照 —— active-catalog 会同时投影 Codex 与
   // Claude bridge;放在 auth 广播前,renderer refetch 即见最新。
   await refreshDiscoveredCodexModels();
+  // auth 模式变了,上一条边界下的失败计数不再适用;随后补一次 live 拉取兜住
+  // 「已登录 + models_cache 还没落盘」——必须排在上面的 cache 重读之后,否则被空快照覆盖。
+  resetCodexModelBackfillState();
+  await requestCodexModelBackfill();
   await broadcastCodexAuthStateChanged();
 }
 

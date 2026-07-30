@@ -5582,6 +5582,13 @@ app.on('ready', async () => {
             });
           }
         }
+        // 账号数据就绪 = 启动链路上最早能确定「owner 绑定已认领、网关凭证已下发」的时机，
+        // 也是模型清单该被刷新到最新的时机。在这里强制跑一遍（无视冷却），别再等用户去打开
+        // 设置页或模型选择器把清单逼出来 —— 那是全新机器首启只看到少数模型的直接原因。
+        //
+        // 必须排在上面 codex 重启序列**之后**：那条序列末尾会按 auth 边界重读
+        // models_cache（cache miss 即清空防串号），并发跑会让刚发现的清单被空快照覆盖。
+        void requestProviderModelAutoRefresh('startup');
       })();
       void sweepStartupDraftImages({
         dbClient: getDbClient(),
