@@ -1575,7 +1575,9 @@ export function NewMakerDraftRoute() {
             );
             const remoteSessionId = (createResult as { sessionId?: string } | null)?.sessionId;
             if (!remoteSessionId) {
-              toastCreateSessionFailed();
+              // device-link 创建失败:错误来自被控端 RPC,与 useCCSessions().error 无关,
+              // 不应读 state 里的 REMOTE_* code(copilot review #1035)。
+              toast.error(t('ccAgent.draft.createSessionFailed'));
               return;
             }
             // 重拉该设备会话列表(含字段完整的新会话)→ 注册 origin + 出现在项目下。

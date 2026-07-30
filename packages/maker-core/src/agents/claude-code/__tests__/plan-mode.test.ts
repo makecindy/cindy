@@ -547,4 +547,41 @@ describe('ClaudeCodeAgent plan mode', () => {
     expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
     await handle.close();
   });
+
+  it('remote setModel rejects route-changing model switches', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const fakeQuery = createFakeQuery();
+    const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async () =>
+      fakeQuery as never;
+    const resolveRemoteClaudeRoute = vi.fn(async (args: { model: string }) =>
+      args.model.startsWith('claude-')
+        ? { endpoint: 'https://api.anthropic.com', env: { CLAUDE_CODE_OAUTH_TOKEN: 'tok' } }
+        : null,
+    );
+    const agent = new ClaudeCodeAgent(createDeps({
+      runtimeConfig: { remoteEndpoint: 'https://gw.example/claude' },
+      remoteCcQueryFactory,
+      resolveRemoteClaudeRoute,
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-setmodel',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+
+    // 同一路由(native OAuth)→ 放行,SDK setModel 被调。
+    await handle.setModel?.('claude-sonnet-5');
+    expect(fakeQuery.setModel).toHaveBeenCalled();
+
+    // 路由变化(native OAuth → 网关 null)→ 拒绝,不更新模型。
+    await expect(handle.setModel?.('deepseek/deepseek-v4-flash')).rejects.toThrow(
+      /REMOTE_MODEL_SWITCH_ROUTE_CHANGE/,
+    );
+    expect(resolveRemoteClaudeRoute).toHaveBeenCalledTimes(3); // startSession + 两次 setModel
+    await handle.close();
+  });
 });

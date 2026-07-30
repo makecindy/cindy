@@ -817,7 +817,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     //     endpoint 并存:订阅 token 被发往网关(凭证泄漏)或网关收到占位 key(401)。
     //   - throw:显式选定的供应商在远端无法表达(自定义 requestPath / modelIdRewrite 等),
     //     透传报错,不静默错路由。
-    const remoteRoute =
+    let remoteRoute =
       opts.remoteHostId && this.deps.resolveRemoteClaudeRoute
         ? await this.deps.resolveRemoteClaudeRoute({
             providerId: opts.providerId,
@@ -847,6 +847,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 箭头别名捕获 this —— 下方 replayRuntimeDrift(普通 function)与 handle 对象
     // 字面量方法里没有类实例 this,统一经它取 wire 串。
     const sdkModelFor = (model: string): string => this.sdkModelFor(model);
+    const resolveRemoteClaudeRoute = this.deps.resolveRemoteClaudeRoute?.bind(this.deps);
     const sdkModel = sdkModelFor(opts.model);
     const initialSdkEffort = this.sdkEffortForModel(opts.model, opts.effort ?? 'high');
     const binaryPath = this.deps.binaryPath;
@@ -3862,6 +3863,25 @@ export class ClaudeCodeAgent extends BaseAgent {
       // effectiveSdkPermissionMode() 的最新值, 新设置会自然带上。
 
       async setModel(newModel: string) {
+        // 远端会话切换模型:远端 env 在 spawn 时已烤进 daemon,无法热改。若新模型
+        // 解析出的路由与当前不一致(如订阅直连 ↔ 网关 / 自定义供应商),继续用旧
+        // env 会以错误 endpoint/凭证打新模型(401/404)。重新解析比对,不一致则拒绝
+        // 并提示重建会话;一致(同一路由类型)才放行。
+        if (opts.remoteHostId && resolveRemoteClaudeRoute) {
+          const nextRoute = await resolveRemoteClaudeRoute({
+            providerId: opts.providerId,
+            model: newModel,
+          });
+          const routeChanged =
+            (nextRoute === null) !== (remoteRoute === null) ||
+            (nextRoute !== null && remoteRoute !== null && nextRoute.endpoint !== remoteRoute.endpoint);
+          if (routeChanged) {
+            throw new Error(
+              `[REMOTE_MODEL_SWITCH_ROUTE_CHANGE] switching to "${newModel}" requires a different remote route; close and recreate the remote session to apply it`,
+            );
+          }
+          remoteRoute = nextRoute;
+        }
         const sdkModel = sdkModelFor(newModel);
         const isControlBlocked = controlRequestsBlocked();
         log.debug('setModel', { from: mutableModel, to: newModel, sdk: sdkModel, controlRequestsBlocked: isControlBlocked });
