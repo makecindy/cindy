@@ -672,6 +672,32 @@ describe('TelegramIM', () => {
     expect(api.calls.some((c) => c.method === 'deleteMyCommands')).toBe(true);
   });
 
+  it('行为配置: emoji off 不放任何表情; DM replyQuote=first 首条回复挂回', async () => {
+    await im.dispose();
+    im = new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      behavior: () => ({ emojiReactions: 'off', replyQuoteGroup: 'first', replyQuoteDm: 'first' }),
+    });
+    im.registerIpc();
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    // emoji off: reactToMessage 直接返回 null, 不发 setMessageReaction
+    expect(await im.reactToMessage('111|5', '👍')).toBeNull();
+    expect(api.calls.some((c) => c.method === 'setMessageReaction')).toBe(false);
+    // DM replyQuote=first: 首条回复挂回触发消息, 第二条不挂
+    api.pushUpdates([privateMessage('问个事', 111, 95)]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    await im.sendText(OWNER_ID, '第一条');
+    await im.sendText(OWNER_ID, '第二条');
+    const dmSends = api.calls.filter(
+      (c) => c.method === 'sendMessage' && c.params.chat_id === OWNER_ID,
+    );
+    const withReply = dmSends.filter((c) => c.params.reply_parameters !== undefined);
+    expect(withReply).toHaveLength(1);
+    expect((withReply[0].params.reply_parameters as { message_id: number }).message_id).toBe(95);
+  });
+
   it('disconnect 清空凭证并回 idle', async () => {
     await connect();
     await ctx.handlers.get('telegramBot:disconnect')!();

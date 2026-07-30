@@ -101,6 +101,30 @@ type CardActionHandler = (e: IMCardActionEvent) => void;
 type StatusHandler = (s: IMStatus) => void;
 type GroupWindowHandler = (entry: TelegramGroupWindowEntry) => void;
 
+/** 行为配置(设置卡可视化, 实时生效 — host 以 getter 注入, transport 每次使用时读)。 */
+export interface TelegramBehaviorConfig {
+  /**
+   * emoji 回应等级:
+   *   off = 完全不放表情(含 👀 ack 与终态);
+   *   minimal = 👀 ack → 👍/👎 终态(默认);
+   *   expressive = 终态用丰富变体池(👍🎉💯 / 👎😱), ack 保持 👀。
+   */
+  emojiReactions: 'off' | 'minimal' | 'expressive';
+  /** 群回复引用: off=不挂 / first=每次触发首条挂回(默认) / all=每条都挂。 */
+  replyQuoteGroup: 'off' | 'first' | 'all';
+  /** DM 回复引用: off(默认) / first=首条回复挂回触发消息。 */
+  replyQuoteDm: 'off' | 'first';
+}
+
+export const TELEGRAM_DEFAULT_BEHAVIOR: TelegramBehaviorConfig = {
+  emojiReactions: 'minimal',
+  replyQuoteGroup: 'first',
+  replyQuoteDm: 'off',
+};
+
+const EXPRESSIVE_DONE_POOL = ['👍', '🎉', '💯'] as const;
+const EXPRESSIVE_ERROR_POOL = ['👎', '😱'] as const;
+
 export interface TelegramIMOptions {
   /** cindy-media:// / xdt-image:// → 本地绝对路径(出站图片上传用)。 */
   resolveImageUrl?: (url: string) => string;
@@ -117,6 +141,8 @@ export interface TelegramIMOptions {
   commandMenu?: ReadonlyArray<{ command: string; description: string }>;
   /** 测试注入: 替换真实 Bot API 客户端。 */
   apiFactory?: (token: string) => TelegramApiClient;
+  /** 行为配置 getter(缺省 = TELEGRAM_DEFAULT_BEHAVIOR)。 */
+  behavior?: () => TelegramBehaviorConfig;
 }
 
 export class TelegramIM extends BaseIM implements ChannelIM {
@@ -455,15 +481,27 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     const api = this.api;
     if (!api) return null;
     try {
+      const behavior = this.behaviorOf();
+      if (behavior.emojiReactions === 'off') return null;
+      let effective = emoji;
+      if (behavior.emojiReactions === 'expressive') {
+        // 终态用变体池(生动档); ack(👀)保持稳重不随机。
+        if (emoji === '👍') {
+          effective = EXPRESSIVE_DONE_POOL[Math.floor(Math.random() * EXPRESSIVE_DONE_POOL.length)];
+        } else if (emoji === '👎') {
+          effective =
+            EXPRESSIVE_ERROR_POOL[Math.floor(Math.random() * EXPRESSIVE_ERROR_POOL.length)];
+        }
+      }
       const { chatId, messageId: nativeId } = decodeMessageId(messageId);
       await api.call('setMessageReaction', {
         chat_id: chatId,
         message_id: Number(nativeId),
-        reaction: [{ type: 'emoji', emoji }],
+        reaction: [{ type: 'emoji', emoji: effective }],
         // 终态表情放大动画; 过程 ack(👀)保持安静。
         ...(emoji === '👍' || emoji === '👎' ? { is_big: true } : {}),
       });
-      return emoji;
+      return effective;
     } catch {
       return null;
     }
@@ -692,6 +730,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         ...(this.host.media ? { media: this.host.media } : {}),
       });
       if (this.disposing || this.configVersion !== acceptedConfigVersion) return;
+      if (this.behaviorOf().replyQuoteDm === 'first') {
+        this.laneReplyTargets.set(String(m.from.id), String(m.message_id));
+      }
       this.emitMessage(event);
       return;
     }
@@ -713,7 +754,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         if (probe.startsWith('/') || probe.startsWith('!')) return;
       }
       const laneUserId = this.resolveGroupLane(m, isOwner);
-      this.laneReplyTargets.set(laneUserId, String(m.message_id));
+      if (this.behaviorOf().replyQuoteGroup !== 'off') {
+        this.laneReplyTargets.set(laneUserId, String(m.message_id));
+      }
       // 被召唤即出 typing(5s 自动消失, 首条输出到达时客户端自动清):
       // 群里没有 DM 的草稿占位, 这是"收到了, 在干活"的第一反馈。
       this.sendTypingAction(
@@ -868,12 +911,16 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     userId: string,
   ): { reply_parameters: { message_id: number; allow_sending_without_reply: true } } | Record<string, never> {
     const target = this.laneReplyTargets.get(userId);
-    if (target === undefined) return {};
-    this.laneReplyTargets.delete(userId);
+    if (!target) return {};
+    // 群 'all' 档: 目标保留到下一次触发覆盖, 本次 turn 的每条出站都挂回。
+    const keepForAll =
+      decodeLaneUserId(userId) !== null && this.behaviorOf().replyQuoteGroup === 'all';
+    if (!keepForAll) this.laneReplyTargets.delete(userId);
     return {
       reply_parameters: { message_id: Number(target), allow_sending_without_reply: true },
     };
   }
+
 
   private requireApi(): TelegramApiClient {
     if (!this.api) throw new Error('telegram api is not connected');
@@ -1077,6 +1124,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       if (!albumSent) {
         for (const absPath of group) await this.sendSinglePhoto(chatId, absPath);
       }
+    }
+  }
+
+  private behaviorOf(): TelegramBehaviorConfig {
+    try {
+      return this.opts.behavior?.() ?? TELEGRAM_DEFAULT_BEHAVIOR;
+    } catch {
+      return TELEGRAM_DEFAULT_BEHAVIOR;
     }
   }
 

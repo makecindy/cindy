@@ -34,6 +34,7 @@ import { pinBlob } from '../cindy-media/ledger';
 import { t } from '../i18n';
 import { discordUiText } from './discord/uiText';
 import { telegramUiText } from './telegram/uiText';
+import { readTelegramBehavior } from './telegram/behaviorStore';
 import { imHostAccountScope } from './accountScopeBridge';
 import { ownerScopedImSecrets } from './ownerScopedStorage';
 import { captureImAccountGeneration, isImAccountGenerationCurrent } from './accountBoundary';
@@ -139,6 +140,8 @@ export const telegramIm = createTelegramIM(host, {
   resolveImageUrl: resolveManagedImageAbsPath,
   expiredCardNotice: telegramUiText.expiredCardNotice,
   ownerNoticeText: (phase) => t(`settings.telegramBot.ownerNotice.${phase}`),
+  // 行为配置 getter: transport 每次使用时现读 → 设置卡改动即生效。
+  behavior: readTelegramBehavior,
   // owner 私聊的 "/" 命令菜单(BotCommandScopeChat 只发 owner, 其他人不可见)。
   commandMenu: ['start', 'new', 'help', 'stop', 'session', 'project', 'model', 'permission', 'ctr', 'exctr'].map(
     (command) => ({
