@@ -817,7 +817,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     //     endpoint 并存:订阅 token 被发往网关(凭证泄漏)或网关收到占位 key(401)。
     //   - throw:显式选定的供应商在远端无法表达(自定义 requestPath / modelIdRewrite 等),
     //     透传报错,不静默错路由。
-    let remoteRoute =
+    const remoteRoute =
       opts.remoteHostId && this.deps.resolveRemoteClaudeRoute
         ? await this.deps.resolveRemoteClaudeRoute({
             providerId: opts.providerId,
@@ -3944,7 +3944,10 @@ export class ClaudeCodeAgent extends BaseAgent {
               `[REMOTE_MODEL_SWITCH_ROUTE_CHANGE] switching to "${newModel}" requires a different remote route; close and recreate the remote session to apply it`,
             );
           }
-          remoteRoute = nextRoute;
+          // 放行后**不**更新 remoteRoute:它是「spawn 时的路由指纹」,spawnDeclares
+          // 永远用初次 spawn 的 key 集 —— nextRoute 新增的元数据字段(backfill 后
+          // 才有)若被当成 spawn 声明,下次切模会与仍烤着旧快照的 remoteEnv 比对
+          // 误拒(codex P2 #1035)。
         }
         const sdkModel = sdkModelFor(newModel);
         const isControlBlocked = controlRequestsBlocked();

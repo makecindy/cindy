@@ -726,6 +726,7 @@
         "desktop:newChat.modelSelector.subscriptionDirectDisabled.xai",
         "desktop:newChat.modelSelector.subscriptionDirectDisabled.generic",
         "desktop:ccAgent.draft.remoteProviderUnsupported",
+        "desktop:ipcError.REMOTE_PROVIDER_UNSUPPORTED",
         "mobile/composer:voice.invalidSession",
         "mobile/composer:voice.missingConnectionProvider",
         "mobile/composer:voice.missingRefinerTargetProvider",
