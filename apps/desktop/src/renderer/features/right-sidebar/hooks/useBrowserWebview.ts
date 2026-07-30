@@ -55,6 +55,12 @@ function isSameNavigationUrl(a: string, b: string): boolean {
 export interface UseBrowserWebviewResult {
   /** webview 外层 wrapper DOM;caller appendChild 到自己的 body slot。 */
   wrapper: HTMLDivElement | null;
+  /**
+   * 当前 Pool entry 的 WebView 代际句柄。隐藏但仍由 Pool 保活时保持非空；
+   * entry 被淘汰 / 释放时变 null，重建后变为新的对象。依赖 guest 事件或
+   * 通信的功能必须以它为 effect dependency，不能只按 tabId 绑定。
+   */
+  webview: WebviewTag | null;
   /** 当前页面 URL(`did-navigate` / `did-navigate-in-page` 同步)。 */
   url: string;
   /** 当前页面 title(`page-title-updated`)。 */
@@ -485,11 +491,14 @@ export function useBrowserWebview(
     }
   }, []);
   const dismissResourceAlert = useCallback(() => setResourceAlert(null), []);
+  const currentEntry = browserWebviewPool.peek(tabId);
+  const currentWebview = currentEntry?.wrapper === wrapper ? currentEntry.webview : null;
 
   return {
     // 隐藏时仍观察已有 entry 的 guest 生命周期，但不把 wrapper 交给 caller，
     // 避免隐藏 Body 把它移出停车区并触发首次导航。
     wrapper: visible === true ? wrapper : null,
+    webview: currentWebview,
     url,
     title,
     favicon,

@@ -28,9 +28,8 @@ vi.mock('../../../hooks/useBrowserWebview', () => ({
 vi.mock('../../../lib/browserWebviewPool', () => ({
   browserWebviewPool: {
     release: vi.fn(),
-    // BrowserTabBody 还会调用 useBrowserComment；该 hook 经 peek 获取 webview
-    // 并监听 ipc-message。导航测试没有真 webview，wrapper 仅用于验证 layout
-    // cleanup 的 Pool 代际归属。
+    // Navigation tests do not create a real WebView. The wrapper is only used
+    // to verify that layout cleanup respects the current Pool generation.
     peek: vi.fn(() => poolMocks.currentWrapper
       ? { wrapper: poolMocks.currentWrapper, webview: null }
       : null),
@@ -47,6 +46,7 @@ function makeBrowserState(
 ): UseBrowserWebviewResult {
   return {
     wrapper: sharedWrapper,
+    webview: null,
     url: 'https://www.taptap.cn/',
     title: '',
     favicon: '',
@@ -365,7 +365,6 @@ describe('BrowserTabBody navigation', () => {
 
     expect(patchState).toHaveBeenCalledWith({ url: 'https://www.google.com/' });
   });
-
 
   it('does not patch about:blank back over a user-entered navigation before loading flips true', () => {
     browserState = makeBrowserState({

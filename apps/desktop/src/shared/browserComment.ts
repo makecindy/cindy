@@ -50,14 +50,38 @@ export const BROWSER_COMMENT_DESIGN_RESET_CHANNEL = 'browser-comment:design-rese
 
 // ── guest → host ───────────────────────────────────────────────────────────
 
+/**
+ * 关键 host → guest 命令的统一完成回执。host 只在收到当前 WebView 代际发回的
+ * matching requestId 后推进评论状态机，避免 `webview.send()` 丢失时两端状态分叉。
+ */
+export const BROWSER_COMMENT_COMMAND_RESULT_CHANNEL = 'browser-comment:command-result';
 /** 用户在页面里点选了一个元素。payload: {@link BrowserCommentTargetInfo} */
 export const BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL = 'browser-comment:element-selected';
-/** prepare-screenshot 完成(交互层已隐藏、marker 已渲染稳定)。无 payload。 */
-export const BROWSER_COMMENT_SCREENSHOT_PREPARED_CHANNEL = 'browser-comment:screenshot-prepared';
 /** guest 侧主动退出评论模式(用户在页面里按 Esc)。无 payload。 */
 export const BROWSER_COMMENT_MODE_EXITED_CHANNEL = 'browser-comment:mode-exited';
 
 // ── payload 类型 ────────────────────────────────────────────────────────────
+
+/** 需要确认完成的 host → guest 命令集合。高频样式预览仍走无回执通知。 */
+export type BrowserCommentCommandChannel =
+  | typeof BROWSER_COMMENT_ENTER_MODE_CHANNEL
+  | typeof BROWSER_COMMENT_EXIT_MODE_CHANNEL
+  | typeof BROWSER_COMMENT_CANCEL_PENDING_CHANNEL
+  | typeof BROWSER_COMMENT_PREPARE_SCREENSHOT_CHANNEL
+  | typeof BROWSER_COMMENT_COMMIT_PENDING_CHANNEL;
+
+/** host 包裹关键命令的传输信封；requestId 在单个评论控制器生命周期内唯一。 */
+export interface BrowserCommentCommandEnvelope<T = unknown> {
+  requestId: string;
+  payload?: T;
+}
+
+/** guest 执行关键命令后的统一结果；不把第三方页面异常细节跨边界返回 host。 */
+export interface BrowserCommentCommandResult {
+  requestId: string;
+  command: BrowserCommentCommandChannel;
+  ok: boolean;
+}
 
 /** host → guest enter-mode 的参数。 */
 export interface BrowserCommentEnterModePayload {

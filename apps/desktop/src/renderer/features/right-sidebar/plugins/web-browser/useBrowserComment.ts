@@ -5,17 +5,17 @@
  *  - 模式开关:toggle 后向 guest 发 enter-mode / exit-mode(经 `webview.send`,
  *    guest 是 webview-security 强制注入的 browserCommentPreload)。
  *  - 订阅 webview `ipc-message`:element-selected(弹输入气泡;`immediate` 标记
- *    时跳过气泡直接空评论提交)、screenshot-prepared(截图前置回执)、
+ *    时跳过气泡直接空评论提交)、command-result(关键命令回执)与
  *    mode-exited(guest 内 Esc)。
  *  - 提交流程:prepare-screenshot → main capturePage 拿 PNG 字节 →
  *    cacheImageFromBuffer 进会话图片缓存 → 组 BrowserCommentDraftItem 追加进
  *    ComposerDraft.browserComments(browser-comment-chip:ChatInput 渲染为
  *    「N 条注释」胶囊,发送时才序列化文本块 + 截图并入 filesToSend)。
  *  - Phase 2 多评论:提交成功后**不退出模式**,发 commit-pending 让 pending
- *    marker 转常驻、编号推进,可连续标注;失败则 cancel-pending 回点选态。
+ *    marker 转常驻、编号推进,可连续标注;提交点之前失败则保留气泡供重试。
  *  - 导航 / 页面刷新时 guest 上下文销毁,host 侧同步退出评论模式。
  *
- * 状态机:off → selecting(点选中)→ pending(已选定,气泡打开)→
+ * 状态机:off → starting(等待 guest 确认)→ selecting(点选中)→ pending(气泡打开)→
  *          submitting(截图 + 入草稿)→ selecting(连续标注)。
  *          immediate 路径:selecting → submitting → selecting(不经 pending)。
  *          任何态可被 exit 打断回 off。
@@ -23,6 +23,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { WebviewTag } from 'electron';
 
 import type { BrowserCommentDraftItem } from '@/lib/browserComments';
 import { appendBrowserCommentToDraft, getDraft } from '@/lib/composerDraftStore';
@@ -31,6 +32,7 @@ import { toast } from '@/lib/toast';
 
 import {
   BROWSER_COMMENT_CANCEL_PENDING_CHANNEL,
+  BROWSER_COMMENT_COMMAND_RESULT_CHANNEL,
   BROWSER_COMMENT_COMMIT_PENDING_CHANNEL,
   BROWSER_COMMENT_DESIGN_PREVIEW_CHANNEL,
   BROWSER_COMMENT_DESIGN_RESET_CHANNEL,
@@ -39,17 +41,17 @@ import {
   BROWSER_COMMENT_EXIT_MODE_CHANNEL,
   BROWSER_COMMENT_MODE_EXITED_CHANNEL,
   BROWSER_COMMENT_PREPARE_SCREENSHOT_CHANNEL,
-  BROWSER_COMMENT_SCREENSHOT_PREPARED_CHANNEL,
+  type BrowserCommentCommandChannel,
+  type BrowserCommentCommandEnvelope,
+  type BrowserCommentCommandResult,
   type BrowserCommentDesignPreviewPayload,
   type BrowserCommentStyleChange,
   type BrowserCommentTargetInfo,
 } from '../../../../../shared/browserComment';
 import { composerDraftKeyForRightSidebarSession } from '@/features/cc-agent/newMakerDraftRightSidebar';
 
-import { browserWebviewPool } from '../../lib/browserWebviewPool';
-
-/** guest 回执 screenshot-prepared 的等待上限;超时按失败处理(guest 可能已导航走)。 */
-const PREPARE_SCREENSHOT_TIMEOUT_MS = 2000;
+/** 关键 guest 命令的完成回执等待上限；超时保持用户输入并允许重试。 */
+const COMMAND_TIMEOUT_MS = 2_000;
 
 /**
  * 下一个 marker 编号 = 草稿里已有 marker 编号的最大值 + 1。
@@ -57,14 +59,20 @@ const PREPARE_SCREENSHOT_TIMEOUT_MS = 2000;
  * 编号脱节(如删了 ②,剩 ①③ 时 length=2 → 会复用 ③),导致重复的 marker 与
  * `## Comment N` 块。取 max 保证编号单调、永不重号。
  */
-function computeNextMarkerNumber(
-  items: readonly { markerNumber: number }[] | undefined,
-): number {
+function computeNextMarkerNumber(items: readonly { markerNumber: number }[] | undefined): number {
   if (!items || items.length === 0) return 1;
   return items.reduce((max, item) => Math.max(max, item.markerNumber), 0) + 1;
 }
 
-export type BrowserCommentMode = 'off' | 'selecting' | 'pending' | 'submitting';
+export type BrowserCommentMode = 'off' | 'starting' | 'selecting' | 'pending' | 'submitting';
+
+interface PendingBrowserCommentCommand {
+  webview: WebviewTag;
+  command: BrowserCommentCommandChannel;
+  timer: ReturnType<typeof setTimeout>;
+  resolve: () => void;
+  reject: (reason: Error) => void;
+}
 
 export interface UseBrowserCommentResult {
   /** 当前状态;BrowserChrome 按钮 active 态 = mode !== 'off'。 */
@@ -86,6 +94,8 @@ export interface UseBrowserCommentResult {
 export function useBrowserComment(
   tabId: string,
   sessionId: string | undefined,
+  /** useBrowserWebview 暴露的当前 WebView 代际句柄。 */
+  webview: WebviewTag | null,
   /** 提交时刻的页面 URL 取值器(immediate 路径由 hook 自己触发提交,拿不到
    *  调用方参数,统一走 getter;需引用稳定或由调用方 useCallback 包裹)。 */
   getPageUrl: () => string,
@@ -100,10 +110,15 @@ export function useBrowserComment(
   const [pendingTarget, setPendingTarget] = useState<BrowserCommentTargetInfo | null>(null);
   const modeRef = useRef(mode);
   modeRef.current = mode;
+  const pendingTargetRef = useRef(pendingTarget);
+  pendingTargetRef.current = pendingTarget;
+  const tRef = useRef(t);
+  tRef.current = t;
   const getPageUrlRef = useRef(getPageUrl);
   getPageUrlRef.current = getPageUrl;
-  /** screenshot-prepared 回执的一次性 resolver(提交流程挂起等待用)。 */
-  const prepareResolverRef = useRef<(() => void) | null>(null);
+  const webviewRef = useRef<WebviewTag | null>(null);
+  const requestSequenceRef = useRef(0);
+  const pendingCommandsRef = useRef(new Map<string, PendingBrowserCommentCommand>());
   /**
    * 提交纪元:每次退出模式 / 导航 / guest 内 Esc 都自增,使正在挂起的异步提交
    * (prepare → capture → cache)在恢复后察觉自己已被作废并静默中止,避免把一个
@@ -111,27 +126,95 @@ export function useBrowserComment(
    */
   const submitEpochRef = useRef(0);
 
-  const sendToGuest = useCallback(
-    (channel: string, payload?: unknown) => {
-      const webview = browserWebviewPool.peek(tabId)?.webview;
-      if (!webview) return;
+  const rejectCommandsForWebview = useCallback((target: WebviewTag) => {
+    for (const [requestId, pending] of pendingCommandsRef.current) {
+      if (pending.webview !== target) continue;
+      clearTimeout(pending.timer);
+      pendingCommandsRef.current.delete(requestId);
+      pending.reject(new Error('browser comment WebView changed'));
+    }
+  }, []);
+
+  /**
+   * 向当前 WebView 发送一条必须确认完成的命令。requestId resolver 与具体
+   * WebView 对象绑定，旧代际回执不可能推进新代际的状态机。
+   */
+  const sendCommand = useCallback(
+    <T>(command: BrowserCommentCommandChannel, payload?: T): Promise<void> => {
+      const target = webviewRef.current;
+      if (!target) return Promise.reject(new Error('browser comment WebView unavailable'));
+      const requestId = `${tabId}:${++requestSequenceRef.current}`;
+      const envelope: BrowserCommentCommandEnvelope<T> = { requestId, payload };
+
+      return new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          const pending = pendingCommandsRef.current.get(requestId);
+          if (!pending) return;
+          pendingCommandsRef.current.delete(requestId);
+          reject(new Error(`browser comment command timed out: ${command}`));
+        }, COMMAND_TIMEOUT_MS);
+        pendingCommandsRef.current.set(requestId, {
+          webview: target,
+          command,
+          timer,
+          resolve,
+          reject,
+        });
+
+        try {
+          void target.send(command, envelope).catch((reason: unknown) => {
+            const pending = pendingCommandsRef.current.get(requestId);
+            if (!pending) return;
+            clearTimeout(pending.timer);
+            pendingCommandsRef.current.delete(requestId);
+            reject(reason instanceof Error ? reason : new Error('browser comment send failed'));
+          });
+        } catch (reason) {
+          const pending = pendingCommandsRef.current.get(requestId);
+          if (!pending) return;
+          clearTimeout(pending.timer);
+          pendingCommandsRef.current.delete(requestId);
+          reject(reason instanceof Error ? reason : new Error('browser comment send failed'));
+        }
+      });
+    },
+    [tabId],
+  );
+
+  /** 无需等待状态推进的通知；仍使用信封，guest 可统一执行同一套命令 handler。 */
+  const sendBestEffortCommand = useCallback(
+    <T>(command: BrowserCommentCommandChannel, payload?: T) => {
+      const target = webviewRef.current;
+      if (!target) return;
+      const envelope: BrowserCommentCommandEnvelope<T> = {
+        requestId: `${tabId}:${++requestSequenceRef.current}`,
+        payload,
+      };
       try {
-        void webview.send(channel, payload);
+        void target.send(command, envelope).catch(() => undefined);
       } catch {
-        // webContents 未 attach / 已销毁时 send 抛错 —— 评论模式对这类窗口期
-        // 一律静默(用户看到的是按钮点了没进入模式,可重试)。
+        // WebView 正在 detach / destroy；host 仍可安全完成本地退出。
       }
     },
     [tabId],
   );
 
+  const sendNotification = useCallback((channel: string, payload?: unknown) => {
+    const target = webviewRef.current;
+    if (!target) return;
+    try {
+      void target.send(channel, payload).catch(() => undefined);
+    } catch {
+      // 实时预览是非关键通知；关键状态转换全部走 sendCommand。
+    }
+  }, []);
+
   const exitMode = useCallback(() => {
     submitEpochRef.current += 1; // 作废任何挂起中的提交
-    sendToGuest(BROWSER_COMMENT_EXIT_MODE_CHANNEL);
+    sendBestEffortCommand(BROWSER_COMMENT_EXIT_MODE_CHANNEL);
     setMode('off');
     setPendingTarget(null);
-    prepareResolverRef.current = null;
-  }, [sendToGuest]);
+  }, [sendBestEffortCommand]);
   const exitModeRef = useRef(exitMode);
   exitModeRef.current = exitMode;
 
@@ -142,18 +225,40 @@ export function useBrowserComment(
     }
     if (!composerDraftKey) return;
     // 编号 = 草稿里已有 marker 编号的最大值 + 1(删 chip 后长度与最大编号会脱节)。
-    sendToGuest(BROWSER_COMMENT_ENTER_MODE_CHANNEL, {
+    const epoch = submitEpochRef.current;
+    setMode('starting');
+    void sendCommand(BROWSER_COMMENT_ENTER_MODE_CHANNEL, {
       markerNumber: computeNextMarkerNumber(getDraft(composerDraftKey)?.browserComments),
-    });
-    setMode('selecting');
-  }, [composerDraftKey, exitMode, sendToGuest]);
+    }).then(
+      () => {
+        if (submitEpochRef.current !== epoch) return;
+        setMode('selecting');
+      },
+      () => {
+        if (submitEpochRef.current !== epoch) return;
+        setMode('off');
+        toast.error(tRef.current('rightSidebar.browser.commentFailed'));
+      },
+    );
+  }, [composerDraftKey, exitMode, sendCommand]);
 
   const cancelPending = useCallback(() => {
     if (modeRef.current !== 'pending') return;
-    sendToGuest(BROWSER_COMMENT_CANCEL_PENDING_CHANNEL);
-    setPendingTarget(null);
-    setMode('selecting');
-  }, [sendToGuest]);
+    const epoch = submitEpochRef.current;
+    void sendCommand(BROWSER_COMMENT_CANCEL_PENDING_CHANNEL).then(
+      () => {
+        if (submitEpochRef.current !== epoch) return;
+        setPendingTarget(null);
+        setMode('selecting');
+      },
+      () => {
+        if (submitEpochRef.current !== epoch) return;
+        // 无法确认 guest 已撤掉 pending 时整体退出；下次 enter 会先幂等拆旧 overlay。
+        exitMode();
+        toast.error(tRef.current('rightSidebar.browser.commentFailed'));
+      },
+    );
+  }, [exitMode, sendCommand]);
 
   /**
    * 提交主流程(气泡提交与 immediate 共用)。commentText 允许为空(immediate:
@@ -177,27 +282,17 @@ export function useBrowserComment(
       const isStale = () => submitEpochRef.current !== epoch;
 
       void (async () => {
+        let draftCommitted = false;
         try {
-          // 1) guest 隐藏交互层只留标注,回执后再截图。
-          const prepared = new Promise<void>((resolve, reject) => {
-            const timer = setTimeout(
-              () => reject(new Error('prepare-screenshot timeout')),
-              PREPARE_SCREENSHOT_TIMEOUT_MS,
-            );
-            prepareResolverRef.current = () => {
-              clearTimeout(timer);
-              resolve();
-            };
-          });
-          // 随 prepare 下发草稿现存 marker 编号白名单:chip 单删 / 清空 / 发送
+          // 1) guest 隐藏交互层只留标注，并明确确认两帧渲染已经完成。
+          // 随命令下发草稿现存 marker 编号白名单:chip 单删 / 清空 / 发送
           // 清草稿都是 silent 写入无法事件通知,截图前对账是唯一可靠时机 ——
           // guest 据此剪除已无对应 `## Comment N` 块的常驻 marker。
-          sendToGuest(BROWSER_COMMENT_PREPARE_SCREENSHOT_CHANNEL, {
+          await sendCommand(BROWSER_COMMENT_PREPARE_SCREENSHOT_CHANNEL, {
             validMarkerNumbers: (getDraft(composerDraftKey)?.browserComments ?? []).map(
               (c) => c.markerNumber,
             ),
           });
-          await prepared;
           if (isStale()) return; // 已退出 / 导航,放弃本次提交
 
           // 2) main capturePage → PNG 字节(标注是页内 DOM,天然在图里)。
@@ -244,28 +339,37 @@ export function useBrowserComment(
             ...(styleChanges && styleChanges.length > 0 ? { styleChanges } : {}),
           };
           appendBrowserCommentToDraft(composerDraftKey, item);
+          draftCommitted = true;
 
           // 5) Phase 2 连续标注:pending marker 转常驻,编号按草稿最大编号推进,
           //    回点选态继续标注(不退出模式,与 Codex 一致)。
-          sendToGuest(BROWSER_COMMENT_COMMIT_PENDING_CHANNEL, {
+          await sendCommand(BROWSER_COMMENT_COMMIT_PENDING_CHANNEL, {
             nextMarkerNumber: computeNextMarkerNumber(getDraft(composerDraftKey)?.browserComments),
           });
+          if (isStale()) return;
           setPendingTarget(null);
           setMode('selecting');
           toast.success(t('rightSidebar.browser.commentAdded'));
         } catch {
           // 已退出 / 导航:模式与 marker 已由打断方复位,静默(不报错、不拨回)。
           if (isStale()) return;
-          // 真失败:撤掉本条 pending 标注、回点选态(模式保持,可直接重试)。
-          prepareResolverRef.current = null;
-          sendToGuest(BROWSER_COMMENT_CANCEL_PENDING_CHANNEL);
-          setPendingTarget(null);
-          setMode('selecting');
+          if (draftCommitted) {
+            // Composer 已经是用户数据的提交点。guest 收尾失败时不能把同一条评论
+            // 留在气泡里让用户重试并重复 append；退出本次 overlay，保留已写草稿。
+            sendBestEffortCommand(BROWSER_COMMENT_EXIT_MODE_CHANNEL);
+            setPendingTarget(null);
+            setMode('off');
+            toast.success(t('rightSidebar.browser.commentAdded'));
+            return;
+          }
+          // 截图 / 缓存 / guest 准备失败：pendingTarget 与 Popover 实例都保留，
+          // 用户输入不会卸载丢失，可直接修订后重试或主动取消。
+          setMode('pending');
           toast.error(t('rightSidebar.browser.commentFailed'));
         }
       })();
     },
-    [composerDraftKey, sendToGuest, t, tabId],
+    [composerDraftKey, sendBestEffortCommand, sendCommand, t, tabId],
   );
   const doSubmitRef = useRef(doSubmit);
   doSubmitRef.current = doSubmit;
@@ -284,21 +388,60 @@ export function useBrowserComment(
   const previewDesign = useCallback(
     (payload: BrowserCommentDesignPreviewPayload) => {
       if (modeRef.current !== 'pending') return;
-      sendToGuest(BROWSER_COMMENT_DESIGN_PREVIEW_CHANNEL, payload);
+      sendNotification(BROWSER_COMMENT_DESIGN_PREVIEW_CHANNEL, payload);
     },
-    [sendToGuest],
+    [sendNotification],
   );
   const resetDesign = useCallback(() => {
-    sendToGuest(BROWSER_COMMENT_DESIGN_RESET_CHANNEL);
-  }, [sendToGuest]);
+    sendNotification(BROWSER_COMMENT_DESIGN_RESET_CHANNEL);
+  }, [sendNotification]);
 
-  // guest → host 消息:webview `ipc-message` 按 channel 分发。webview DOM 节点
-  // 由 pool 保活,监听挂在节点上、按 tabId 重挂。
+  /**
+   * 当前 WebView 代际的唯一事件绑定点。useBrowserWebview 在延迟创建、LRU
+   * 淘汰和崩溃重建时都会发布新对象，因此 effect 会精确拆旧挂新。
+   */
   useEffect(() => {
-    const webview = browserWebviewPool.peek(tabId)?.webview;
+    const previousWebview = webviewRef.current;
+    webviewRef.current = webview;
+    if (previousWebview && previousWebview !== webview) {
+      submitEpochRef.current += 1;
+      if (
+        modeRef.current === 'pending' ||
+        modeRef.current === 'submitting' ||
+        pendingTargetRef.current
+      ) {
+        toast.error(tRef.current('rightSidebar.browser.commentFailed'));
+      }
+      setMode('off');
+      setPendingTarget(null);
+    }
     if (!webview) return;
+
     const onIpcMessage = (e: Electron.IpcMessageEvent) => {
       switch (e.channel) {
+        case BROWSER_COMMENT_COMMAND_RESULT_CHANNEL: {
+          const result = e.args[0] as BrowserCommentCommandResult | undefined;
+          if (
+            !result ||
+            typeof result.requestId !== 'string' ||
+            typeof result.command !== 'string' ||
+            typeof result.ok !== 'boolean'
+          ) {
+            return;
+          }
+          const pending = pendingCommandsRef.current.get(result.requestId);
+          if (!pending || pending.webview !== webview || pending.command !== result.command) {
+            return;
+          }
+          clearTimeout(pending.timer);
+          pendingCommandsRef.current.delete(result.requestId);
+          if (result.ok) {
+            pending.resolve();
+          } else {
+            pending.reject(new Error(`browser comment guest rejected: ${result.command}`));
+          }
+          return;
+        }
         case BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL: {
           if (modeRef.current !== 'selecting') return;
           const info = e.args[0] as BrowserCommentTargetInfo | undefined;
@@ -312,52 +455,30 @@ export function useBrowserComment(
           setMode('pending');
           return;
         }
-        case BROWSER_COMMENT_SCREENSHOT_PREPARED_CHANNEL: {
-          prepareResolverRef.current?.();
-          prepareResolverRef.current = null;
-          return;
-        }
         case BROWSER_COMMENT_MODE_EXITED_CHANNEL: {
           // guest 内按了 Esc,overlay 已自拆 —— host 只同步状态。
           submitEpochRef.current += 1; // 作废任何挂起中的提交
           setMode('off');
           setPendingTarget(null);
-          prepareResolverRef.current = null;
           return;
         }
         default:
       }
     };
-    webview.addEventListener('ipc-message', onIpcMessage);
-    return () => {
-      webview.removeEventListener('ipc-message', onIpcMessage);
-    };
-  }, [tabId]);
-
-  // 页面导航 / 刷新 → host 状态必须复位,否则气泡悬在已失效的 marker 上。
-  // did-navigate 与 did-navigate-in-page 都算,但两者对 guest overlay 的影响不同:
-  //  - did-navigate(整页导航 / 刷新):guest 文档连同 overlay 一起销毁重建,
-  //    只复位 host 状态即可;
-  //  - did-navigate-in-page(SPA / hash 路由):guest 文档**存活**,注入的
-  //    blocker / marker 不会自动消失。若只清 host 状态,overlay 会一直趴在页面上
-  //    (工具栏已 inactive、element-selected 因 mode=off 被忽略),页面卡死直到 reload。
-  // 故统一走 exitMode() —— 它在复位 host 状态之外还向 guest 发 exit-mode 拆 overlay;
-  // 对整页导航,新文档的 guest 默认休眠,exitMode 是幂等 no-op(guest 侧 `if (!state) return`),
-  // 无副作用。
-  useEffect(() => {
-    const webview = browserWebviewPool.peek(tabId)?.webview;
-    if (!webview) return;
     const onNavigate = () => {
       if (modeRef.current === 'off') return;
       exitModeRef.current();
     };
+    webview.addEventListener('ipc-message', onIpcMessage);
     webview.addEventListener('did-navigate', onNavigate);
     webview.addEventListener('did-navigate-in-page', onNavigate);
     return () => {
+      webview.removeEventListener('ipc-message', onIpcMessage);
       webview.removeEventListener('did-navigate', onNavigate);
       webview.removeEventListener('did-navigate-in-page', onNavigate);
+      rejectCommandsForWebview(webview);
     };
-  }, [tabId]);
+  }, [rejectCommandsForWebview, webview]);
 
   // tab 卸载 / 切走时若模式仍开着,通知 guest 拆 overlay(webview 被 pool 保活,
   // 不通知的话 overlay 会一直趴在页面上)。
