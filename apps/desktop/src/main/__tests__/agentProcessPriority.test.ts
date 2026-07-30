@@ -44,6 +44,7 @@ import {
   classifyAgentCommandLine,
   createAgentProcessPriorityWatcher,
   parsePosixAgentProcesses,
+  registerUserDataMarkers,
   type AgentProcessRow,
   type ApplyPriorityResult,
 } from '../agent-process-priority';
@@ -250,6 +251,29 @@ describe('agent process discovery', () => {
     ).toBe('codex');
     // 外部安装(不带 userData 目录)仍不认领
     expect(classifyAgentCommandLine('/home/u/.local/bin/claude')).toBeNull();
+  });
+
+  it('classifies redirected userData layouts after registerUserDataMarkers (XDG/--user-data-dir)', () => {
+    // XDG_CONFIG_HOME 重定向后 userData 不在 ~/.config 下,静态品牌 marker 失配
+    const redirected = '/mnt/data/xdg-alt/CindyCustom';
+    expect(
+      classifyAgentCommandLine(`${redirected.toLowerCase()}/agent-runtime/claude-code/bin/claude`),
+    ).toBeNull(); // 注册前:不认识
+    registerUserDataMarkers(redirected);
+    expect(
+      classifyAgentCommandLine(`${redirected.toLowerCase()}/agent-runtime/claude-code/bin/claude`),
+    ).toBe('claude');
+    expect(
+      classifyAgentCommandLine(`${redirected.toLowerCase()}/agent-runtime/codex/bin/codex`),
+    ).toBe('codex');
+    expect(
+      classifyAgentCommandLine(`${redirected.toLowerCase()}/claude-code/2.1.219/claude`),
+    ).toBe('claude');
+    // 重复注册整组替换(幂等):旧路径不残留
+    registerUserDataMarkers('/somewhere/else/Cindy2');
+    expect(
+      classifyAgentCommandLine(`${redirected.toLowerCase()}/agent-runtime/claude-code/bin/claude`),
+    ).toBeNull();
   });
 
   it('maps setPriority errno to apply results (default implementation)', async () => {

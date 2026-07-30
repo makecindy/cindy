@@ -28,6 +28,8 @@ import { execFile } from 'node:child_process';
 import os from 'node:os';
 import { promisify } from 'node:util';
 
+import { app } from 'electron';
+
 import { allUserDataDirNames } from '@cindy/maker-shared/brand-identity';
 
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
@@ -131,10 +133,47 @@ const CODEX_MARKERS = [
   'apps/codex-bin/',
 ];
 
+/**
+ * 运行时 userData 派生 marker:Linux 的 userData 可被 XDG_CONFIG_HOME /
+ * --user-data-dir 重定向,静态 ~/.config/<brand>/ 形态的 marker 会整体失配,
+ * watcher 静默失明(bot review fresh evidence)。以 app.getPath('userData') 的
+ * 实际解析值补一组 marker;静态品牌 marker 仍保留(覆盖历史目录名与另一实例
+ * 的标准布局)。start 入口注册,重复调用整组替换(幂等)。
+ */
+const runtimeUserDataMarkers: { claude: string[]; codex: string[] } = { claude: [], codex: [] };
+
+export function registerUserDataMarkers(userDataPath: string): void {
+  const markersFor = (kind: 'claude-code' | 'codex'): string[] => {
+    const lower = userDataPath.toLowerCase();
+    // 命令行里的分隔符形态可能与 app.getPath 返回值不同(Windows 下 / 与 \ 混用),
+    // 两种形态都登记;非本平台形态的变体永不命中,无害。
+    const variants = new Set([lower.replace(/\\/g, '/'), lower.replace(/\//g, '\\')]);
+    const out: string[] = [];
+    for (const v of variants) {
+      const sep = v.includes('\\') ? '\\' : '/';
+      out.push(`${v}${sep}${kind}${sep}`);
+      out.push(`${v}${sep}agent-runtime${sep}${kind}${sep}`);
+    }
+    return out;
+  };
+  runtimeUserDataMarkers.claude = markersFor('claude-code');
+  runtimeUserDataMarkers.codex = markersFor('codex');
+}
+
 /** 命令行(已小写)→ agent 种类;不命中任何 marker = 不是我们的 agent 进程。 */
 export function classifyAgentCommandLine(cmdLineLower: string): 'claude' | 'codex' | null {
-  if (CLAUDE_MARKERS.some((m) => cmdLineLower.includes(m))) return 'claude';
-  if (CODEX_MARKERS.some((m) => cmdLineLower.includes(m))) return 'codex';
+  if (
+    CLAUDE_MARKERS.some((m) => cmdLineLower.includes(m)) ||
+    runtimeUserDataMarkers.claude.some((m) => cmdLineLower.includes(m))
+  ) {
+    return 'claude';
+  }
+  if (
+    CODEX_MARKERS.some((m) => cmdLineLower.includes(m)) ||
+    runtimeUserDataMarkers.codex.some((m) => cmdLineLower.includes(m))
+  ) {
+    return 'codex';
+  }
   return null;
 }
 
@@ -351,6 +390,14 @@ export const __testing = { makeDefaultApplyPriority };
 /** 生产入口:默认依赖(设置 store + 平台扫描 + os.setPriority/taskpolicy)组装并启动。 */
 export function startAgentProcessPriorityWatcher(): AgentProcessPriorityWatcher {
   const log = createLogger('agent-process-priority');
+  try {
+    // userData 实际值派生 marker(XDG_CONFIG_HOME / --user-data-dir 重定向场景)。
+    registerUserDataMarkers(app.getPath('userData'));
+  } catch (err) {
+    log.warn('userData marker registration failed; static brand markers only', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
   const watcher = createAgentProcessPriorityWatcher({
     readPriority: () => readAgentResourceSettings().processPriority,
     scanAgentProcesses: defaultScanAgentProcesses,
