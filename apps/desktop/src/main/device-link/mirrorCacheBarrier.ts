@@ -55,6 +55,59 @@ export function clearedMarkPath(root: string, key: string): string {
   return path.join(controlDir(root), CLEARED_DIR, key);
 }
 
+/**
+ * 「清理已经开始、还没确认完成」的**持久墓碑**目录。
+ *
+ * 计数器只记"清过几代",记不住"这一代清到一半就崩了":进程在第一次自增之后、扫描 / 列表重写
+ * 之前退出时,被撤销设备的正文还在盘上,而计数前后一致 —— 重启后读路径照样命中,离线时更是
+ * 一直显示那批本该消失的消息(review: codex P1)。所以清理开始前先落一个墓碑,**清完才删**;
+ * 墓碑存在期间该 root 的读一律不命中(fail-closed)。
+ *
+ * 与 purge 队列的分工:队列负责"把删不掉的东西继续删",墓碑负责"没确认删完之前不许读"。
+ * 崩溃残留的墓碑会让缓存对该 root 保持关闭,直到下一次成功的清理(设备撤销是粘滞的,
+ * 下次启动仍会重新发起 clearDevice;登出走 clearAll)把它清掉。
+ */
+const PENDING_DIR = 'pending';
+
+export function pendingClearDir(root: string): string {
+  return path.join(controlDir(root), PENDING_DIR);
+}
+
+/** 落墓碑。**失败会抛** —— 落不下去就不该开始删(等于没有"没删完"的痕迹)。 */
+export async function markClearPending(root: string, scope: string): Promise<void> {
+  const dir = pendingClearDir(root);
+  await fsp.mkdir(dir, { recursive: true });
+  const file = path.join(dir, scope);
+  const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    await fsp.writeFile(tmp, String(Date.now()), 'utf8');
+    await fsp.rename(tmp, file);
+  } catch (err) {
+    await fsp.rm(tmp, { force: true }).catch(() => undefined);
+    throw err;
+  }
+}
+
+/** 清理确认完成后撤墓碑。删不掉不算致命(只是读继续被挡),记日志由调用方决定。 */
+export async function clearPendingMark(root: string, scope: string): Promise<void> {
+  await fsp.rm(path.join(pendingClearDir(root), scope), { force: true });
+}
+
+/**
+ * 该 root 是否有"没确认清完"的墓碑。**fail-closed**:目录读不出来(EACCES / EMFILE…)一律
+ * 按"有"处理 —— 读不出来时放行等于在最需要挡的场合放行。
+ */
+export async function hasPendingClears(root: string): Promise<boolean> {
+  try {
+    const names = await fsp.readdir(pendingClearDir(root));
+    return names.some((name) => !name.endsWith('.tmp'));
+  } catch (err) {
+    const code = errnoCode(err);
+    if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+    return true;
+  }
+}
+
 /** 对外暴露的计数值:非数字(denied / unknown)一律用 -1 表示"不可比对"。 */
 export function numericCounter(value: ClearCounter): number {
   return typeof value === 'number' ? value : -1;

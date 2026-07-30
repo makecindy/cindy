@@ -1274,6 +1274,84 @@ describe('跨进程互斥(锁 + 清理完成标记)', () => {
     }
   });
 
+  describe('「清理没确认完成」墓碑', () => {
+    // review(codex P1):计数只记"清过几代",记不住"这一代清到一半就崩了"。进程在自增之后、
+    // 扫描之前退出时,正文还在盘上而计数前后一致 —— 重启后读路径照样命中,离线时更是一直
+    // 显示那批本该消失的消息。
+    /** 让第一轮扫描失败(枚举 EACCES → fail-closed 抛错),等价于"删除阶段没跑完"。 */
+    async function clearDeviceCrashingAtSweep(c: MirrorCache, id: string): Promise<void> {
+      const original = fsp.readdir;
+      const spy = vi.spyOn(fsp, 'readdir').mockImplementation((async (target: unknown) => {
+        if (typeof target === 'string' && target === messagesDir()) {
+          throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+        }
+        return (original as (...args: unknown[]) => Promise<unknown>)(target);
+      }) as unknown as typeof fsp.readdir);
+      try {
+        await expect(c.clearDevice(id)).rejects.toBeInstanceOf(MirrorCachePurgeError);
+      } finally {
+        spy.mockRestore();
+      }
+    }
+
+    it('清理没做完 → 墓碑留在盘上,消息读与列表读一律不命中', async () => {
+      const c = cache();
+      await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+      await c.writeSessionList([
+        { deviceId: 'dev-9', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] },
+      ]);
+
+      await clearDeviceCrashingAtSweep(c, 'dev-1');
+
+      const mark = path.join(
+        `${root}.control`,
+        'pending',
+        `${__testing.safeSegment('dev-1')}-${__testing.shortHash('dev-1')}`,
+      );
+      expect(fs.existsSync(mark)).toBe(true);
+      // 同一个 root 下的读全部不命中(哪台设备、哪条会话都一样 —— 我们不知道少删了什么)。
+      expect((await c.readMessagesWithInvalidation('dev-1', 'sess-1')).messages).toEqual([]);
+      expect((await c.readMessagesWithInvalidation('dev-2', 'sess-2')).messages).toEqual([]);
+      expect(await c.readSessionList()).toEqual([]);
+    });
+
+    it('后一次清理做完了 → 墓碑撤掉,读恢复正常', async () => {
+      const c = cache();
+      await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+      await clearDeviceCrashingAtSweep(c, 'dev-1');
+      await c.clearDevice('dev-1'); // 这次真的清完了
+
+      const pendingDir = path.join(`${root}.control`, 'pending');
+      expect(fs.existsSync(pendingDir) ? await fsp.readdir(pendingDir) : []).toEqual([]);
+      await c.writeMessages('dev-2', 'sess-2', [row('m2', '2026-02-01T00:00:00.000Z')]);
+      expect(
+        (await c.readMessagesWithInvalidation('dev-2', 'sess-2')).messages.map((m) => m.id),
+      ).toEqual(['m2']);
+    });
+
+    it('clearAll 同样先落墓碑,清完才撤', async () => {
+      const c = cache();
+      await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+      const mark = path.join(`${root}.control`, 'pending', '_account');
+      const seen: boolean[] = [];
+      const originalRm = fsp.rm;
+      const spy = vi.spyOn(fsp, 'rm').mockImplementation((async (
+        t: unknown,
+        ...rest: unknown[]
+      ) => {
+        if (typeof t === 'string' && t === root) seen.push(fs.existsSync(mark));
+        return (originalRm as (...args: unknown[]) => Promise<unknown>)(t, ...rest);
+      }) as unknown as typeof fsp.rm);
+      try {
+        await c.clearAll();
+      } finally {
+        spy.mockRestore();
+      }
+      expect(seen).toEqual([true]); // 删整棵时墓碑已经在
+      expect(fs.existsSync(mark)).toBe(false); // 清完撤掉
+    });
+  });
+
   it('清理意图先落盘:第一次删除动作发生时,屏障已经在盘上', async () => {
     // review(codex P1):bump 原先排在两轮扫描与列表重写**之后**。清理途中进程退出 → 盘上既
     // 没有屏障也没有 purge 记录,锁被接管后另一个实例那笔"取自清理之前"的写照样能提交。

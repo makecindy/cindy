@@ -40,6 +40,9 @@ import { withCrossProcessLock } from './crossProcessLock';
 import {
   bumpClearedCounter,
   cacheLockPath,
+  clearPendingMark,
+  hasPendingClears,
+  markClearPending,
   controlDir,
   numericCounter,
   readClearCounter,
@@ -760,6 +763,16 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // 收尾再 bump 一次(挡住"内容取自清理进行中"的写入),两次都失败即视为没清完。
       let barrierPersisted = true;
       const stuckBarriers: string[] = [];
+      // 墓碑与计数一起落在删除之前:计数只记"清过几代",记不住"这一代清到一半就崩了" ——
+      // 进程在自增之后、扫描之前退出时,正文还在盘上而计数前后一致,重启后读路径照样命中
+      // (review: codex P1)。墓碑存在期间该 root 的读一律不命中,清完才撤。
+      try {
+        await markClearPending(rootAtStart, deviceClearKey(id));
+      } catch (err) {
+        log.error(`mirror cache: failed to mark clear pending for ${id.slice(0, 8)}`, err);
+        stuck.push(rootAtStart);
+        stuckBarriers.push(deviceClearKey(id), CLEARED_ANY);
+      }
       try {
         await bumpClearCounters(rootAtStart, id);
       } catch (err) {
@@ -865,8 +878,13 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // 去重:两轮扫描会把同一个删不掉的文件报两次。
       const remaining = [...new Set(stuck)];
       if (remaining.length > 0) {
+        // 有东西没清掉 → **保留墓碑**:读继续被挡,直到某次清理真的做完。
         throw new MirrorCachePurgeError(rootAtStart, remaining, null, [...new Set(stuckBarriers)]);
       }
+      // 确认清完了才撤墓碑。撤不掉不致命(只是这台设备的缓存读继续被挡)。
+      await clearPendingMark(rootAtStart, deviceClearKey(id)).catch((err: unknown) => {
+        log.warn(`mirror cache: failed to drop pending clear mark for ${id.slice(0, 8)}`, err);
+      });
     });
   }
 
@@ -882,6 +900,9 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // 夹住的不只是会话级计数:`clearDevice` 只动设备级与 `_any`、`clearAll` 只动 `_account`,
       // 会话级计数在这两种清理里根本不变 —— 只比它的话,"文件读拿到旧字节、随后整台设备被撤销"
       // 这一路会把已撤销设备的正文照样返回(review: codex P1)。
+      // "清理开始了但没确认清完"(崩在删除途中)→ 一律不命中:计数前后一致挡不住这一种
+      // (review: codex P1)。
+      if (await hasPendingClears(root)) return { messages: [], invalidation: -1 };
       const keys = [key, deviceClearKey(deviceId), CLEARED_ACCOUNT];
       const before = await readCounters(root, keys);
       const messages = await this.readMessages(deviceId, sessionId);
@@ -1063,6 +1084,8 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // 夹住这次读 —— 否则"读到旧快照字节 → 期间设备被撤销 / 账号被清 → 照样返回"会把已经离场的
       // 设备连同会话标题画回侧边栏(review: codex P1)。
       const root = resolveRoot();
+      // 同 readMessagesWithInvalidation:有"没确认清完"的墓碑就不命中。
+      if (await hasPendingClears(root)) return [];
       const keys = [CLEARED_ANY, CLEARED_ACCOUNT];
       const before = await readCounters(root, keys);
       const parsed = await readJson(sessionListPath());
@@ -1148,7 +1171,10 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         // 账号级作废计数器住在缓存根之外,先自增:发起时读到旧值的写入提交时会被挡掉,
         // 即使它们排在整棵目录删除之后(review: codex P1)。落不下去同样不能当成清理成功 ——
         // 抛出去让账号边界登记整根重试(见 teardownAuthAccountBoundary)。
+        // 墓碑与计数一起落在删除之前(同 clearDevice):崩在删除途中时,重启后读路径不能因为
+        // "计数前后一致"就把上一个账号的残留当成有效缓存(review: codex P1)。
         try {
+          await markClearPending(root, CLEARED_ACCOUNT);
           await bumpClearedCounter(root, CLEARED_ACCOUNT);
         } catch (err) {
           purgeAllInFlight -= 1; // 下面的 finally 不会执行(还没进 try)
@@ -1179,7 +1205,10 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         } catch (err) {
           failure ??= new MirrorCachePurgeError(root, [root], err, [CLEARED_ACCOUNT]);
         }
-        if (failure) throw failure;
+        if (failure) throw failure; // 没清完 → 保留墓碑,读继续被挡
+        await clearPendingMark(root, CLEARED_ACCOUNT).catch((err: unknown) => {
+          log.warn('mirror cache: failed to drop pending clear mark after clearAll', err);
+        });
       });
     },
   };
