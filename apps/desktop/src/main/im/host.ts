@@ -39,7 +39,9 @@ import {
   patchTelegramPersona,
   readTelegramBehavior,
   readTelegramPersona,
+  setTelegramGroupActivation,
 } from './telegram/behaviorStore';
+import { listTelegramKnownGroups } from './telegram/groupWindow';
 import { imHostAccountScope } from './accountScopeBridge';
 import { ownerScopedImSecrets } from './ownerScopedStorage';
 import { captureImAccountGeneration, isImAccountGenerationCurrent } from './accountBoundary';
@@ -161,6 +163,26 @@ ipcMain.handle('telegramBot:get-behavior', () => readTelegramBehavior());
 ipcMain.handle('telegramBot:set-behavior', (_e, patch) =>
   patchTelegramBehavior((patch ?? {}) as Parameters<typeof patchTelegramBehavior>[0]),
 );
+// 群聊节: 已知群列表(窗口表 distinct chat)+ per-chat 参与模式读写。
+ipcMain.handle('telegramBot:list-groups', async () => {
+  const groups = await listTelegramKnownGroups();
+  const activation = readTelegramBehavior().groupActivation ?? {};
+  return {
+    groups: groups.map((g) => ({
+      chatId: g.chatId,
+      chatName: g.chatName,
+      activation: activation[g.chatId] ?? 'mention',
+    })),
+  };
+});
+ipcMain.handle('telegramBot:set-group-activation', (_e, payload) => {
+  const p = (payload ?? {}) as { chatId?: string; mode?: string };
+  const chatId = typeof p.chatId === 'string' && /^-?\d+$/.test(p.chatId) ? p.chatId : null;
+  const mode = p.mode === 'always' ? 'always' : 'mention';
+  if (!chatId) return readTelegramBehavior();
+  return setTelegramGroupActivation(chatId, mode);
+});
+
 // 人格配置(soul + 名字); 保存后可选把名字同步到 Telegram 资料页(setMyName)。
 ipcMain.handle('telegramBot:get-persona', () => readTelegramPersona());
 ipcMain.handle('telegramBot:set-persona', async (_e, payload) => {

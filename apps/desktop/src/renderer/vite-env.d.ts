@@ -1701,6 +1701,10 @@ interface ElectronAPI {
     checkSessionAuth: () => Promise<DiscordBotSessionAuthCheckResult>;
     getBehavior: () => Promise<TelegramBotBehavior>;
     setBehavior: (patch: Partial<TelegramBotBehavior>) => Promise<TelegramBotBehavior>;
+    listGroups: () => Promise<{
+      groups: Array<{ chatId: string; chatName: string | null; activation: 'mention' | 'always' }>;
+    }>;
+    setGroupActivation: (payload: { chatId: string; mode: 'mention' | 'always' }) => Promise<unknown>;
     getPersona: () => Promise<{ botName: string; soul: string }>;
     setPersona: (payload: {
       botName?: string;

@@ -222,3 +222,79 @@ export function TelegramPersonaSettings() {
     </div>
   );
 }
+
+
+/** 「群聊」节: bot 进过的群逐行切换参与模式(仅@ / 全响应·自主判断)。 */
+export function TelegramGroupActivationSettings() {
+  const { t } = useTranslation();
+  const [groups, setGroups] = useState<
+    Array<{ chatId: string; chatName: string | null; activation: 'mention' | 'always' }> | null
+  >(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.electronAPI.telegramBot.listGroups().then((result) => {
+      if (!cancelled) setGroups(result.groups);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!groups) return null;
+
+  const setMode = (chatId: string, mode: 'mention' | 'always') => {
+    setGroups(groups.map((g) => (g.chatId === chatId ? { ...g, activation: mode } : g)));
+    void window.electronAPI.telegramBot.setGroupActivation({ chatId, mode });
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="text-13 font-medium text-[var(--settings-section-title)]">
+        {t('settings.telegramBot.groups.title')}
+      </div>
+      <div className="text-11 leading-[1.5] text-[var(--settings-section-desc)] opacity-80">
+        {t('settings.telegramBot.groups.hint')}
+      </div>
+      {groups.length === 0 ? (
+        <div className="text-12 text-[var(--settings-section-desc)]">
+          {t('settings.telegramBot.groups.empty')}
+        </div>
+      ) : (
+        groups.map((group) => (
+          <div key={group.chatId} className="flex items-center justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-12 font-medium text-[var(--settings-section-title)]">
+                {group.chatName || group.chatId}
+              </div>
+              <div className="text-11 text-[var(--settings-section-desc)] opacity-70">
+                {group.chatId}
+              </div>
+            </div>
+            <div className="flex shrink-0 gap-1.5">
+              {(['mention', 'always'] as const).map((mode) => {
+                const active = group.activation === mode;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setMode(group.chatId, mode)}
+                    aria-pressed={active}
+                    className={cn(
+                      'h-[28px] rounded-full border px-3 text-11 font-medium transition-colors',
+                      active
+                        ? 'border-[var(--settings-input-border-focus)] bg-[var(--settings-badge-bg)] text-[var(--settings-section-title)]'
+                        : 'border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)] text-[var(--settings-btn-secondary-text)]',
+                    )}
+                  >
+                    {t(`settings.telegramBot.groups.mode.${mode}`)}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}

@@ -17,7 +17,7 @@
  *     (调试期的常态)两套窗口互不污染。
  */
 
-import { and, desc, eq, gt, lt } from 'drizzle-orm';
+import { and, desc, eq, gt, lt, sql } from 'drizzle-orm';
 
 import type { TelegramGroupWindowEntry } from '@cindy/im';
 
@@ -259,4 +259,26 @@ export async function buildTelegramGroupContextPrefix(args: {
 export function resetTelegramGroupContextCursors(): void {
   contextCursors.clear();
   lastGlobalSweepAt = 0;
+}
+
+
+/**
+ * 设置卡「群聊」节的数据源: bot 见过的群(窗口表 distinct chat), 按最近活跃
+ * 排序。窗口行不带 botId 列 — provider='telegram-personal' 在单桌面上即单 bot。
+ */
+export async function listTelegramKnownGroups(): Promise<
+  Array<{ chatId: string; chatName: string | null }>
+> {
+  const db = getDbClient().drizzle;
+  const rows = await db
+    .select({
+      chatId: hookGroupMessages.chatId,
+      chatName: sql<string | null>`max(${hookGroupMessages.chatName})`,
+    })
+    .from(hookGroupMessages)
+    .where(eq(hookGroupMessages.provider, TELEGRAM_PERSONAL_WINDOW_PROVIDER))
+    .groupBy(hookGroupMessages.chatId)
+    .orderBy(sql`max(${hookGroupMessages.sentAt}) desc`)
+    .limit(50);
+  return rows.map((r) => ({ chatId: r.chatId, chatName: r.chatName }));
 }

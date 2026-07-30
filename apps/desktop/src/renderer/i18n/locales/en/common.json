@@ -1837,6 +1837,15 @@
           "done": "Synced ✓",
           "failed": "Sync failed, try again later"
         }
+      },
+      "groups": {
+        "title": "Group participation",
+        "hint": "Groups the bot has seen appear here. \"Active\" = it reads every message and decides on its own whether to chime in (each message costs tokens).",
+        "empty": "No groups yet. Add the bot to a group and it will appear here once someone speaks.",
+        "mode": {
+          "mention": "@ only",
+          "always": "Active"
+        }
       }
     },
     "logout": {

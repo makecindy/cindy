@@ -1535,6 +1535,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       syncProfile?: boolean;
     }): Promise<{ persona: { botName: string; soul: string }; profileSynced?: boolean }> =>
       ipcRenderer.invoke('telegramBot:set-persona', payload),
+    // 群聊节: 已知群 + per-chat 参与模式(仅@ / 全响应·自主判断)。
+    listGroups: (): Promise<{
+      groups: Array<{ chatId: string; chatName: string | null; activation: 'mention' | 'always' }>;
+    }> => ipcRenderer.invoke('telegramBot:list-groups'),
+    setGroupActivation: (payload: {
+      chatId: string;
+      mode: 'mention' | 'always';
+    }): Promise<unknown> => ipcRenderer.invoke('telegramBot:set-group-activation', payload),
     onStatusChange: fanOutTelegramBotStatusChange,
   },
 
