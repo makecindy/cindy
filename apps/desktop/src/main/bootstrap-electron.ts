@@ -988,9 +988,14 @@ initStartupDiagnostics();
 //
 // packaged 下绝不开 — 任何带 9222 端口的 Chromium 进程都能被本机其他程序
 // 注入 JS, 是远程代码执行口子。dev 机器自然不在 attack surface 内。
+//
+// 端口可用 XDT_CDP_PORT 覆写(仅数字生效):并行多开沙箱时 9222 只有先起的
+// 实例能绑上, 后起实例要保住 CDP 调试面就换个端口。
 
 if (!app.isPackaged) {
-  app.commandLine.appendSwitch('remote-debugging-port', '9222');
+  const cdpPortOverride = process.env.XDT_CDP_PORT;
+  const cdpPort = cdpPortOverride && /^\d{2,5}$/.test(cdpPortOverride) ? cdpPortOverride : '9222';
+  app.commandLine.appendSwitch('remote-debugging-port', cdpPort);
 }
 
 // ── Webview hardener (RSB Phase 4) ──────────────────────────────────────

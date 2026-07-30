@@ -29,7 +29,9 @@ export function buildDesktopRestartSteps(argv, root = rootDir) {
     ...(preserveRunning ? [] : [{
       label: 'stop existing desktop dev processes',
       command: process.execPath,
-      args: [restartScript, ...modeArgs, '--kill-only'],
+      // 用户参数(尤其 --isolated)必须跟进 kill 阶段:userData 冲突门要在
+      // 杀任何进程之前就按目标沙箱判定,不能等到最终启动阶段才发现冲突。
+      args: [restartScript, ...modeArgs, ...forwarded, '--kill-only'],
     }]),
     {
       label: 'verify desktop dependencies',
