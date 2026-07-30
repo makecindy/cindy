@@ -1891,7 +1891,7 @@
     },
     "agentResource": {
       "loading": "Loading Agent resource settings…",
-      "saveFailed": "Failed to save. Please try again.",
+      "saveFailed": "Failed to save. Try again.",
       "title": "Agent Resource Usage",
       "description": "Limit how much system capacity Agent command-line work can consume, so parallel tests or builds don't freeze your machine. Defaults to full speed (no intervention). The concurrency limit and priority lowering take effect immediately (including running Agent processes); raising priority back to Normal and toolchain thread caps only apply to newly started Agent processes. Applies to local Agents only; Agents on remote (SSH) machines are not governed by these settings.",
       "preset": "Profile",
@@ -1901,7 +1901,7 @@
         "background": "Background"
       },
       "presetHints": {
-        "full": "No limits (default). Agents use the machine at full speed.",
+        "full": "No limits (default). Agents use the machine at full speed; when switching back from another profile, Agents already running only fully recover after they restart.",
         "balanced": "Command queueing + lower priority + toolchain thread caps: Agents keep working while foreground apps always come first.",
         "background": "Lowest priority (efficiency cores on macOS) + a strict concurrency limit: quiet and responsive, but Agents run noticeably slower.",
         "custom": "Custom combination. Adjust the fields below directly."
