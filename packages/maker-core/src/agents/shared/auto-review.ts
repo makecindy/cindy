@@ -122,6 +122,7 @@ const CREDENTIAL_PATH_PATTERNS: readonly RegExp[] = [
   /\bapplication_default_credentials\b/i,                 // gcloud 默认凭证文件
   /\bcredentials\.json\b/i,                               // Claude 等的 OAuth 凭证文件(.credentials.json)
   /[\\/](?:codex|claude|gcloud|containers)[\\/]auth\.json\b/i, // agent/registry 认证文件(~/.config/codex|containers/auth.json 等)
+  /[\\/]\.config[\\/](?:gh|hub|glab|op)\b/i,                  // GitHub/GitLab/Op CLI 的 OAuth/Token 凭证目录(~/.config/gh/hosts.yml 等)
   /\/proc\/[^/\s]*\/environ\b/i,                          // procfs 环境变量(读 /proc/self/environ 即 dump 含凭证的环境)
   /\bid_rsa\b|\bid_ed25519\b|\bid_ecdsa\b|\bid_dsa\b|\.pem\b|\.p12\b/i, // 私钥文件
 ];
@@ -245,7 +246,7 @@ const CURL_REDIRECT_FLAGS = /(?:^|\s)(?:-[a-zA-Z]*L|--location(?:-trusted)?)\b/;
 //    也能把 provider 凭证塞进 URL 外发,故 --variable/--expand* 一律敏感。
 // 短选项 -u/-b/-x/-K 同样用簇匹配(`-[a-zA-Z]*[ubxK]`)捕获贴合 `-uuser:pass` / 捆绑 `-su user`;
 // curl 无布尔短选项用 u/b/x/K,不误伤(-k insecure 是小写 k,不在内)。长选项与鉴权头单列。
-const CURL_SENSITIVE_FLAGS = /(?:^|\s)-[a-zA-Z]*[ubxK]|(?:^|\s)--(?:user|netrc\S*|config|cookie\S*|resolve|connect-to|unix-socket|proxy\S*|interface|variable|expand[\w-]*)\b|(?:-H|--header)[=\s]*['"]?\s*(?:[Aa]uthorization|[Cc]ookie|[Xx]-[Aa]pi-[Kk]ey|[Xx]-[Aa]uth|[Pp]roxy-[Aa]uthorization)/;
+const CURL_SENSITIVE_FLAGS = /(?:^|\s)-[a-zA-Z]*[ubxK]|(?:^|\s)--(?:user|netrc\S*|config|cookie\S*|resolve|connect-to|unix-socket|proxy\S*|interface|variable|expand[\w-]*|oauth2-bearer)\b|(?:-H|--header)[=\s]*['"]?\s*(?:[Aa]uthorization|[Cc]ookie|[Xx]-[Aa]pi-[Kk]ey|[Xx]-[Aa]uth|[Pp]roxy-[Aa]uthorization)/;
 
 /**
  * git 只读子命令 → 放行。
@@ -510,7 +511,8 @@ function classifyGit(tokens: string[], segment: string): ReviewVerdict {
   // branch/tag/remote 的子命令名相同但有写变体:只放行读形态,写变体升级。
   if (sub === 'branch' || sub === 'tag') {
     // 删除/改名/复制/强制 flag,或子命令后带位置参数(= 新建分支/标签)→ 写。
-    if (/\s-(?:d|D|m|M|c|C)\b|\s--(?:delete|move|copy|force)\b/.test(segment)) return 'prompt';
+    // --edit-description invokes $EDITOR(可执行任意外部程序)→ 升级(copilot P1)。
+    if (/\s-(?:d|D|m|M|c|C)\b|\s--(?:delete|move|copy|force|edit-description)\b/.test(segment)) return 'prompt';
     const after = rest.slice(rest.indexOf(sub) + 1).filter((t) => !t.startsWith('-'));
     if (after.length > 0) return 'prompt';
     return 'auto-approve';
@@ -549,7 +551,21 @@ function classifyShellSegment(segment: string): ReviewVerdict {
   // 只信任 **OS 自有**、非特权用户不可写的 bin 目录(/usr/bin、/bin、/usr/sbin、/sbin)。/usr/local/bin 与
   // /opt/homebrew/bin 在 macOS/Homebrew 下当前用户可写(可被替换成木马),不再算可信系统 bin(codex 报);
   // 其余含 `/` 的命令一律 fail-closed 升级。
-  const cmd0 = tokens[0].replace(/\\/g, '');
+  const cmd0Raw = tokens[0].replace(/\\/g, '');
+  // `..` セグメント正規化でパストラバーサルを遮断 — `/usr/bin/../local/bin/ls` → `/usr/local/bin/ls`(信頼できない)。
+  // 注:中文注释: `..` 归一化防路径穿越(/usr/bin/../local/bin/ls 穿越出可信 bin 目录)(copilot 报)。
+  const cmd0 = cmd0Raw.startsWith('/')
+    ? '/' +
+      cmd0Raw
+        .split('/')
+        .slice(1)
+        .reduce<string[]>((parts, seg) => {
+          if (seg === '..') parts.pop();
+          else if (seg !== '' && seg !== '.') parts.push(seg);
+          return parts;
+        }, [])
+        .join('/')
+    : cmd0Raw;
   if (cmd0.includes('/') && !/^\/(?:usr\/s?bin|s?bin)\//.test(cmd0)) return 'prompt';
   if (bin === 'git') return classifyGit(tokens, deQuoted);
   if (isSafeFetch(bin, deQuoted, tokens)) return 'auto-approve';
