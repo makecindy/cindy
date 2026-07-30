@@ -142,6 +142,54 @@ describe('AgentResourceSection', () => {
     }
   });
 
+  it('refetches authoritative state when a preset write fails mid-sequence', async () => {
+    const api = installElectronApi(DEFAULT_WIRE);
+    // 第 2 键(processPriority)写失败 → 只落了 maxConcurrentCommands
+    api.settingsSet.mockImplementationOnce(async (key: string, value: number | string | boolean) => {
+      return { ...DEFAULT_WIRE, [key]: value, isCustomized: true };
+    });
+    api.settingsSet.mockImplementationOnce(async () => {
+      throw new Error('write failed');
+    });
+    render(<AgentResourceSection />);
+    await waitFor(() => screen.getByText('settings.agentResource.presets.background'));
+    const getCallsBefore = api.settingsGet.mock.calls.length;
+
+    fireEvent.click(screen.getByText('settings.agentResource.presets.background'));
+
+    // 失败后必须重新拉权威状态,不能让乐观值假装写成功
+    await waitFor(() => {
+      expect(api.settingsGet.mock.calls.length).toBeGreaterThan(getCallsBefore);
+    });
+  });
+
+  it('ignores a second preset click while the first three-key sequence is in flight', async () => {
+    const api = installElectronApi(DEFAULT_WIRE);
+    let releaseFirstWrite: (() => void) | null = null;
+    api.settingsSet.mockImplementationOnce(
+      (key: string, value: number | string | boolean) =>
+        new Promise((resolve) => {
+          releaseFirstWrite = () =>
+            resolve({ ...DEFAULT_WIRE, [key]: value, isCustomized: true });
+        }),
+    );
+    render(<AgentResourceSection />);
+    await waitFor(() => screen.getByText('settings.agentResource.presets.background'));
+
+    fireEvent.click(screen.getByText('settings.agentResource.presets.background'));
+    fireEvent.click(screen.getByText('settings.agentResource.presets.full')); // in-flight 期间的点击被闸掉
+
+    releaseFirstWrite!();
+    await waitFor(() => {
+      expect(api.settingsSet).toHaveBeenCalledTimes(3); // 只有第一次点击的三键序列
+    });
+    expect(api.settingsSet.mock.calls.map((c) => c[0])).toEqual([
+      'maxConcurrentCommands',
+      'processPriority',
+      'capToolchainThreads',
+    ]);
+  });
+
   it('persists single-field edits through the settings IPC', async () => {
     const api = installElectronApi(DEFAULT_WIRE);
     render(<AgentResourceSection />);

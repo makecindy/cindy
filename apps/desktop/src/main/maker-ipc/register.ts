@@ -178,6 +178,7 @@ import {
   writeCollaborationSetting,
 } from '../maker-host/collaboration-settings-store.js';
 import {
+  MAX_CONCURRENT_COMMANDS_CAP,
   readAgentResourceSettingsState,
   resetAgentResourceSettings,
   writeAgentResourceSetting,
@@ -683,7 +684,6 @@ const AGENT_RESOURCE_SETTING_KEYS = [
   'capToolchainThreads',
 ] as const;
 type AgentResourceSettingKey = typeof AGENT_RESOURCE_SETTING_KEYS[number];
-const AGENT_RESOURCE_MAX_CONCURRENT_CAP = 64;
 const AGENT_RESOURCE_PRIORITIES = ['normal', 'low', 'lowest'] as const;
 
 function isAgentResourceSettingKey(key: unknown): key is AgentResourceSettingKey {
@@ -701,8 +701,8 @@ function validateAgentResourceSettingValue(
       throwIpcError('INVALID_PARAMS', `${key} must be an integer`);
     }
     if (value < 0) throwIpcError('INVALID_PARAMS', `${key} must be >= 0`);
-    if (value > AGENT_RESOURCE_MAX_CONCURRENT_CAP) {
-      throwIpcError('INVALID_PARAMS', `${key} must be <= ${AGENT_RESOURCE_MAX_CONCURRENT_CAP}`);
+    if (value > MAX_CONCURRENT_COMMANDS_CAP) {
+      throwIpcError('INVALID_PARAMS', `${key} must be <= ${MAX_CONCURRENT_COMMANDS_CAP}`);
     }
     return value;
   }

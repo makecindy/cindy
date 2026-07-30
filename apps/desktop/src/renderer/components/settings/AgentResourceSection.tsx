@@ -64,6 +64,8 @@ function matchPreset(s: Pick<Wire, SettingKey>): PresetId | null {
 export function AgentResourceSection() {
   const { t } = useTranslation();
   const [settings, setSettings] = useState<Wire | null>(null);
+  // 预设三键写入的 in-flight 闸:防并发点击交错出"杂交档位"落盘。
+  const [applyingPreset, setApplyingPreset] = useState(false);
 
   useEffect(() => {
     void window.electronAPI.maker
@@ -90,6 +92,14 @@ export function AgentResourceSection() {
 
   const activePreset = useMemo(() => (settings ? matchPreset(settings) : null), [settings]);
 
+  /** 写失败后从 main 重新拉权威状态,替换乐观值 —— UI 与磁盘不留分叉。 */
+  const refetchAuthoritative = () => {
+    void window.electronAPI.maker
+      .agentResourceSettingsGet()
+      .then((s) => setSettings(s))
+      .catch(() => {});
+  };
+
   const persist = (key: SettingKey, value: number | string | boolean) => {
     setSettings((prev) => (prev ? { ...prev, [key]: value, isCustomized: true } : prev));
     void window.electronAPI.maker
@@ -97,10 +107,13 @@ export function AgentResourceSection() {
       .then((next) => setSettings(next))
       .catch((err) => {
         toast.error(err instanceof Error ? err.message : String(err));
+        refetchAuthoritative();
       });
   };
 
   const applyPreset = async (id: PresetId) => {
+    if (applyingPreset) return; // 三键序列非原子,靠 in-flight 闸禁止交错
+    setApplyingPreset(true);
     const values = presetValues(id);
     setSettings((prev) => (prev ? { ...prev, ...values } : prev));
     try {
@@ -108,14 +121,21 @@ export function AgentResourceSection() {
         'maxConcurrentCommands',
         values.maxConcurrentCommands,
       );
-      await window.electronAPI.maker.agentResourceSettingsSet('processPriority', values.processPriority);
+      await window.electronAPI.maker.agentResourceSettingsSet(
+        'processPriority',
+        values.processPriority,
+      );
       const next = await window.electronAPI.maker.agentResourceSettingsSet(
         'capToolchainThreads',
         values.capToolchainThreads,
       );
       setSettings(next);
     } catch (err) {
+      // 中途失败 = 只落了部分字段;拉回权威状态,不让乐观值假装写成功了
       toast.error(err instanceof Error ? err.message : String(err));
+      refetchAuthoritative();
+    } finally {
+      setApplyingPreset(false);
     }
   };
 
@@ -173,12 +193,14 @@ export function AgentResourceSection() {
                 type="button"
                 role="radio"
                 aria-checked={active}
+                disabled={applyingPreset}
                 onClick={() => void applyPreset(id)}
                 className={cn(
                   'rounded-md px-2.5 py-1 text-xs transition-colors',
                   active
                     ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
                     : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',
+                  applyingPreset && 'opacity-60',
                 )}
               >
                 {t(`settings.agentResource.presets.${id}`)}
