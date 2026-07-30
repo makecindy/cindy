@@ -32,6 +32,13 @@ export interface ModelDescriptor {
   effortDisplayNames?: Partial<Record<Effort, string>>;
   defaultEffort: Effort | null;
   supportsFastMode?: boolean;
+  /** 目录展示排序权重;缺省排末尾。 */
+  sortOrder?: number;
+  /**
+   * 选择器里默认是否可见(源自目录 defaultEnabled,缺省 ⇒ 可见)。
+   * 消费点见 modelDefinitions.getDefaultModelForVendor:种子默认只从默认可见的模型里取。
+   */
+  defaultEnabled?: boolean;
 }
 
 export interface EffortDescriptor {

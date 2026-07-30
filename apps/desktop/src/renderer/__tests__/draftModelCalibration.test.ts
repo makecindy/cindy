@@ -14,7 +14,7 @@ import {
   pickConnectedModelForAgent,
 } from '../lib/draftModelCalibration';
 
-function model(id: string): CatalogModel {
+function model(id: string, over: Partial<CatalogModel> = {}): CatalogModel {
   return {
     id,
     name: id,
@@ -25,6 +25,7 @@ function model(id: string): CatalogModel {
     defaultEffort: null,
     supportsFastMode: false,
     status: 'active',
+    ...over,
   } as CatalogModel;
 }
 
@@ -32,6 +33,8 @@ function provider(
   id: string,
   connected: boolean,
   models: Record<string, CatalogModel[]>,
+  /** 供应商准入类型；'subscription' 参与「优先订阅」排序（见 providersByPreference）。 */
+  access: 'subscription' | 'managed' | 'api' = 'managed',
 ): ProviderView {
   const agents = Object.keys(models);
   return {
@@ -48,6 +51,7 @@ function provider(
       ]),
     ),
     auth: { method: 'oauth' },
+    access: access === 'subscription' ? { kind: 'subscription', product: id } : { kind: access },
     connected,
   } as unknown as ProviderView;
 }
@@ -97,6 +101,110 @@ describe('pickConnectedModelForAgent', () => {
     expect(
       pickConnectedModelForAgent([disconnectedAnthropic], 'claude-code', 'claude-opus-4-8'),
     ).toBeNull();
+  });
+
+  it('取该供应商模型里排序第一个,而不是清单里排前面的那个', () => {
+    // 产品定稿：「可用的里面选第一个」= 目录排序第一，不是数组顺序第一。
+    const gateway = provider('xd', true, {
+      'claude-code': [
+        model('claude-haiku-4-5', { sortOrder: 9 }),
+        model('claude-opus-5', { sortOrder: 0 }),
+        model('claude-sonnet-5', { sortOrder: 6 }),
+      ],
+    });
+    expect(pickConnectedModelForAgent([gateway], 'claude-code', 'claude-opus-4-8')).toBe(
+      'claude-opus-5',
+    );
+  });
+
+  it('供应商优先订阅的 —— 网关折扣路由排得再靠前也不当默认', () => {
+    // 折扣路由（codex/ 前缀）在目录里 sortOrder 比官方原版小。拍平所有模型排序会让默认
+    // 落到它：那要网关已连接才可用，计费也走网关而不是用户已经付过钱的订阅额度。
+    const subscription = provider(
+      'openai',
+      true,
+      { codex: [model('gpt-5.6-sol', { sortOrder: 18 }), model('gpt-5.6-luna', { sortOrder: 17 })] },
+      'subscription',
+    );
+    const gateway = provider('xd', true, {
+      codex: [model('codex/gpt-5.6-sol', { sortOrder: 8, group: 'gpt-budget' })],
+    });
+
+    expect(pickConnectedModelForAgent([gateway, subscription], 'codex', 'gpt-nonexistent')).toBe(
+      'gpt-5.6-luna',
+    );
+  });
+
+  it('多个订阅供应商时按目录序 —— Claude 订阅在场时 cc tab 落 Claude 系', () => {
+    const anthropic = provider(
+      'anthropic',
+      true,
+      { 'claude-code': [model('claude-opus-5', { sortOrder: 0 })] },
+      'subscription',
+    );
+    const openai = provider(
+      'openai',
+      true,
+      { 'claude-code': [model('chatgpt/gpt-5.6-sol', { sortOrder: 18 })] },
+      'subscription',
+    );
+
+    // 目录序 anthropic → openai，两家都是订阅 → 取 anthropic。
+    expect(
+      pickConnectedModelForAgent([anthropic, openai], 'claude-code', 'claude-opus-4-8'),
+    ).toBe('claude-opus-5');
+  });
+
+  it('没有订阅供应商时才落到网关等非订阅来源', () => {
+    const gateway = provider('xd', true, {
+      codex: [model('codex/gpt-5.6-sol', { sortOrder: 8 }), model('gpt-5.6-sol', { sortOrder: 18 })],
+    });
+    expect(pickConnectedModelForAgent([gateway], 'codex', 'gpt-nonexistent')).toBe(
+      'codex/gpt-5.6-sol',
+    );
+  });
+
+  it('默认收起的模型不当默认 —— 用户在清单里看不到它', () => {
+    // 这正是旧代码写死 gpt-5.5 / gpt-5.4 的实际后果：两个值不一致，且都是目录里
+    // defaultEnabled:false 的条目，于是种子默认模型压根不在选择器里。
+    const gateway = provider('xd', true, {
+      codex: [
+        model('gpt-5.4', { sortOrder: 1, defaultEnabled: false }),
+        model('gpt-5.6-sol', { sortOrder: 18 }),
+      ],
+    });
+    expect(pickConnectedModelForAgent([gateway], 'codex', 'gpt-nonexistent')).toBe('gpt-5.6-sol');
+  });
+
+  it('整组都默认收起时退回纯排序第一,不让该供应商落空', () => {
+    const gateway = provider('xd', true, {
+      codex: [
+        model('gpt-5.4-mini', { sortOrder: 22, defaultEnabled: false }),
+        model('gpt-5.4', { sortOrder: 21, defaultEnabled: false }),
+      ],
+    });
+    expect(pickConnectedModelForAgent([gateway], 'codex', 'gpt-nonexistent')).toBe('gpt-5.4');
+  });
+
+  it('默认模型可用时,排序与订阅优先都不得抢走它', () => {
+    // 第 1 步的优先级不能被择优逻辑破坏 —— 否则首屏会莫名换模型。
+    const gateway = provider('xd', true, {
+      'claude-code': [
+        model('claude-opus-4-8', { sortOrder: 2 }),
+        model('claude-opus-5', { sortOrder: 0 }),
+      ],
+    });
+    expect(pickConnectedModelForAgent([gateway], 'claude-code', 'claude-opus-4-8')).toBe(
+      'claude-opus-4-8',
+    );
+  });
+
+  it('不修改传入 provider 的清单顺序（排序必须走副本）', () => {
+    const models = [model('b', { sortOrder: 9 }), model('a', { sortOrder: 0 })];
+    const gateway = provider('xd', true, { codex: models });
+    pickConnectedModelForAgent([gateway], 'codex', 'nonexistent');
+    // 展示层依赖 ProviderView 里的原始顺序，原地 sort 会把选择器的分组顺序搅乱。
+    expect(models.map((m) => m.id)).toEqual(['b', 'a']);
   });
 });
 
