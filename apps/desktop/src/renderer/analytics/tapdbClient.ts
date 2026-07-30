@@ -35,20 +35,22 @@
  *     page_hide 由 reportPageHide 自行守闸
  *   - 重新打开 → optInTracking() 并补一次 app_start
  *
- * 活跃口径(2026-07-28 起,交互驱动):
- *   活跃事件(page_view #tag=app_engaged)只由用户对 Cindy 窗口的真实动作触发:
- *   窗口获得焦点 / 窗口内按键 / 窗口内按下指针,10 分钟内存节流。TapDB 的活跃
- *   指标按天与小时去重,事件时间戳因此落在真实使用时刻;账号口径的 setUser
- *   (→ user_login,TapDB 账号 DAU 的唯一触发源)跟随当天首条活跃事件发出。
- *   桌面端同类先例:Firefox active ticks(近期输入 + 聚焦才计使用)。
+ * 活跃口径(2026-07-30 起,交互 + 工作驱动):
+ *   活跃事件(page_view #tag=app_engaged)由两类真实使用信号触发:
+ *   - 用户对 Cindy 窗口的动作:窗口获得焦点 / 窗口内按键 / 窗口内按下指针;
+ *   - Cindy 会话确实处于 makerChatStore 的 running 状态。
+ *   两类信号共用 30 分钟节流。running 期间保留一条只在工作时存在的滚动 timer,
+ *   避免长工具调用没有 renderer 事件时整小时缺数;工作停止或统计关闭即取消。
+ *   TapDB 的活跃指标按天与小时去重,账号口径的 setUser(→ user_login,TapDB
+ *   账号 DAU 的唯一触发源)跟随当天首条活跃事件发出。
  *
  *   刻意不做的事:
  *   - 不监听 mousemove(高频)与 wheel(高频且涉及滚动合成路径);纯滚动阅读
  *     超过节流窗口且全程不点不敲的场景,由下一次 focus / 点击 / 按键兜住
- *   - 不用定时器、不做跨天检测:第二天的首条事件由用户当天第一次动作自然触发,
- *     曾经的 0 点定时续报(main 的 tapdbTimer → tapdb:daily-active 广播)已删,
- *     它把所有过夜挂机设备的活跃压在 00:00-00:01,制造小时趋势的 0 点尖峰,
- *     且把「进程活着」误报成「用户活跃」
+ *   - 不做整点/跨天定时续报:第二天首条真人操作会自然触发;持续 running 则按
+ *     上次活跃时刻滚动 30 分钟,不对齐 0 点。曾经 main 的 tapdbTimer →
+ *     tapdb:daily-active 广播会把所有过夜挂机设备压在 00:00-00:01,且把
+ *     「进程活着」误报成「用户活跃」,该机制仍保持删除
  *   - 节流状态不持久化:窗口 reload 后最多提前一条,服务端按天去重,无害
  *
  *   SDK 发送层已核实(vendored 1.0.0):未配置 batch 时无 BatchConsumer,每条
@@ -60,6 +62,7 @@
 
 import TapDBAPI from '@/vendor/tapdb/tapdb.esm.min.js';
 import { createLogger } from '@/lib/logger';
+import { makerChatStore } from '@/lib/makerChatStore';
 import { TAPDB_EVENT_URL } from '../../shared/endpoints';
 
 const log = createLogger('tapdb');
@@ -99,8 +102,8 @@ let lastSetUserDate: string | null = null;
 
 // ── Engagement throttle ─────────────────────────────────────────────────────
 
-/** 交互活跃上报的节流窗口。远大于单次输入间隔,一天上限 144 条。 */
-const ENGAGED_REPORT_INTERVAL_MS = 10 * 60 * 1000;
+/** 活跃上报的统一节流窗口。真人交互与 working 共用,一天上限 48 条。 */
+const ENGAGED_REPORT_INTERVAL_MS = 30 * 60 * 1000;
 /**
  * 跨窗口共享的「上次 app_engaged 上报时刻」localStorage key。detached 侧栏等
  * 窗口跑同一 renderer 入口,module 态各窗口独立 —— 只靠内存窗口,多窗口交替
@@ -115,25 +118,68 @@ const ENGAGED_SHARED_LAST_REPORT_KEY = 'tapdb.lastEngagedReportAt';
 let nextEngagedReportAt = 0;
 /**
  * 上次上报那天的本地午夜(epoch ms)。跨过它意味着换日:即便还在节流窗口内
- * (如 23:55 报过、00:03 再交互),也放行补报,否则新一天头 10 分钟的活跃
+ * (如 23:55 报过、00:03 再交互),也放行补报,否则新一天头 30 分钟的活跃
  * (连同当日 setUser)会被前一天的窗口整个吞掉。
  */
 let engagedDayEndsAt = 0;
+/** 只在至少一个会话 running 时存在;不对齐整点,避免重造 0 点尖峰。 */
+let workingReportTimer: ReturnType<typeof setTimeout> | null = null;
+/** makerChatStore 全会话 running 快照订阅。 */
+let unsubscribeWorkingState: (() => void) | null = null;
 
 /**
- * 交互信号统一入口(focus / keydown / pointerdown)。绝大多数调用在第一行的
- * 数值比较后返回 —— 高频输入路径上零分配、不足 1μs,不碰输入管线。
- * 闸检查放在节流窗口推进之前:未放行期间的交互不消耗窗口,放行后首次交互立报。
+ * 活跃信号统一入口。真人操作允许跨日首条立即上报,保留原有「不吞次日首次
+ * 交互」语义;working 只按滚动窗口上报,避免 0 点后的 progress notify 重造尖峰。
+ * 闸检查放在节流窗口推进之前:未放行期间的信号不消耗窗口。
  */
-function onEngagedSignal(): void {
+function reportEngagedIfDue(allowNewDay: boolean): void {
   const now = Date.now();
-  if (now < nextEngagedReportAt && now < engagedDayEndsAt) return;
+  if (now < nextEngagedReportAt && (!allowNewDay || now < engagedDayEndsAt)) return;
   if (!sdkInitialized || !reportingAllowed) return;
   try {
     reportActive('app_engaged');
   } catch (err) {
     log.error('engaged report failed (non-fatal)', err);
   }
+}
+
+/** 真人交互(focus / keydown / pointerdown)入口。 */
+function onEngagedSignal(): void {
+  reportEngagedIfDue(true);
+}
+
+function hasWorkingSession(): boolean {
+  for (const info of makerChatStore.getRunningSnapshot().values()) {
+    if (info.isRunning) return true;
+  }
+  return false;
+}
+
+function clearWorkingReportTimer(): void {
+  if (workingReportTimer === null) return;
+  clearTimeout(workingReportTimer);
+  workingReportTimer = null;
+}
+
+/**
+ * 把 working 状态接入既有 app_engaged 路径。状态翻起时立即尝试一次;若被
+ * app_start / 真人操作的共享窗口挡住,定时器直接对齐该窗口终点,不会顺延。
+ */
+function syncWorkingReport(): void {
+  if (!sdkInitialized || !reportingAllowed || !hasWorkingSession()) {
+    clearWorkingReportTimer();
+    return;
+  }
+
+  reportEngagedIfDue(false);
+  // makerChatStore 会随 text/tool progress 高频 notify。已有 timer 时保持原定时点,
+  // 不在每一帧 clear + 重建;真人操作若推进了窗口,旧 timer 到点后会自行重新对齐。
+  if (workingReportTimer !== null) return;
+  const delayMs = Math.max(1, nextEngagedReportAt - Date.now());
+  workingReportTimer = setTimeout(() => {
+    workingReportTimer = null;
+    syncWorkingReport();
+  }, delayMs);
 }
 
 // ── Gate ────────────────────────────────────────────────────────────────────
@@ -212,6 +258,16 @@ export function initTapdb(): void {
     log.error('engagement listeners failed (non-fatal)', err);
   }
 
+  // 复用 Sidebar/通知的全会话 running 真相源。这里不使用
+  // sessionBackgroundActivityStore:它的契约明确是纯视觉且接受短暂 stale,不能升级
+  // 为统计行为依据,否则一次漏掉 false push 就会产生持续假活跃。
+  try {
+    unsubscribeWorkingState = makerChatStore.subscribeAll(syncWorkingReport);
+    syncWorkingReport();
+  } catch (err) {
+    log.error('working-state subscription failed (non-fatal)', err);
+  }
+
   // page_hide 由本模块自己发,不走 SDK 的 autoTrack —— SDK 的 trackPageHideEvent
   // 内部用 trackWithBeacon,而那个方法**没有** _isCollectData() 闸(见 vendored
   // tapdb.esm.min.js)。沿用 SDK 自动上报的话,用户关掉统计后每次切走窗口仍会发出
@@ -280,7 +336,10 @@ function applyReportingAllowed(next: boolean): void {
 
   // 关闭是用户的明确意图:**先立刻停掉我们自己的上报**,再去管 SDK。这一步不放在
   // try 里,因为它不可能失败,也绝不该因为后面 SDK 抛异常而回退(fail closed)。
-  if (!next) reportingAllowed = false;
+  if (!next) {
+    reportingAllowed = false;
+    clearWorkingReportTimer();
+  }
 
   try {
     if (!next) {
@@ -307,6 +366,7 @@ function applyReportingAllowed(next: boolean): void {
       if (!sdkInitialized) return;
       reportingAllowed = true;
       sdkAppliedAllowed = true;
+      syncWorkingReport();
       return;
     }
 
@@ -317,6 +377,7 @@ function applyReportingAllowed(next: boolean): void {
     reportingAllowed = true;
     sdkAppliedAllowed = true;
     reportActive('app_start');
+    syncWorkingReport();
     log.info('reporting re-enabled (opt-in)');
   } catch (err) {
     // sdkAppliedAllowed 没提交 = 下一次同值广播不会被 guard 挡掉,会重新尝试。
@@ -384,7 +445,7 @@ function applySuperProperties(): void {
 }
 
 function reportActive(tag: 'app_start' | 'app_engaged'): void {
-  // 先推进节流窗口再上报:即便 pvEvent 抛异常,10 分钟内也不再重试(fire-and-forget,
+  // 先推进节流窗口再上报:即便 pvEvent 抛异常,30 分钟内也不再重试(fire-and-forget,
   // 防止持续输入在 SDK 故障时反复触发)。app_start 同样消耗窗口,避免启动瞬间双发。
   const now = Date.now();
   nextEngagedReportAt = now + ENGAGED_REPORT_INTERVAL_MS;
@@ -402,8 +463,8 @@ function reportActive(tag: 'app_start' | 'app_engaged'): void {
         now - sharedLast < ENGAGED_REPORT_INTERVAL_MS &&
         getLocalDateKey(new Date(sharedLast)) === getLocalDateKey(new Date(now))
       ) {
-        // 让位时本窗口的下一次尝试对齐共享窗口终点,而不是从现在顺延满 10 分钟 ——
-        // 否则两窗口交替交互会把实际上报间隔拉长到近 20 分钟。
+        // 让位时本窗口的下一次尝试对齐共享窗口终点,而不是从现在顺延满 30 分钟 ——
+        // 否则两窗口交替交互会把实际上报间隔拉长到近 60 分钟。
         nextEngagedReportAt = sharedLast + ENGAGED_REPORT_INTERVAL_MS;
         return;
       }
@@ -457,6 +518,9 @@ export const __testing = {
     lastSetUserDate = null;
     nextEngagedReportAt = 0;
     engagedDayEndsAt = 0;
+    clearWorkingReportTimer();
+    unsubscribeWorkingState?.();
+    unsubscribeWorkingState = null;
     try {
       window.localStorage.removeItem(ENGAGED_SHARED_LAST_REPORT_KEY);
     } catch {
