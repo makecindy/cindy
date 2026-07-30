@@ -92,7 +92,9 @@ function renderTextSegment(segment: string, imageUrls: string[]): string {
 
 /** 行级形态: 标题→粗体行, 引用→blockquote, 列表符号保留(Telegram 无列表标签)。 */
 function renderLine(line: string): string {
-  const heading = line.match(/^(#{1,6})\s+(.*)$/);
+  // [ \t] 有界量词(CodeQL polynomial-redos): \s+ 与后随 .* 都能吃空白,
+  // 歧义边界在长空白串上被判多项式回溯; 行内已无 \n, 8 格之外不算标题。
+  const heading = line.match(/^(#{1,6})[ \t]{1,8}(.*)$/);
   if (heading) return `<b>${renderInline(heading[2])}</b>`;
   const quote = line.match(/^>\s?(.*)$/);
   if (quote) return `<blockquote>${renderInline(quote[1])}</blockquote>`;
