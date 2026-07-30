@@ -20,7 +20,7 @@ interface RuntimeSetModelSession {
   remoteHostId?: string | null;
   codexProxyActive?: boolean | null;
   model: string;
-  setModel: (model: string) => Promise<void>;
+  setModel: (model: string, opts?: { providerId?: string | null }) => Promise<void>;
 }
 
 interface RuntimeSetModelActiveSession {
@@ -262,7 +262,7 @@ export async function applyRuntimeSetModelChange(
     return { status: 'applied' };
   }
   try {
-    await sess.setModel(model);
+    await sess.setModel(model, { providerId: nextProviderId });
   } catch (err) {
     if (providerId !== undefined) {
       setSessionProvider(sessionId, currentProviderId);

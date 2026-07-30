@@ -3862,19 +3862,24 @@ export class ClaudeCodeAgent extends BaseAgent {
       // buildQuery 重建时读的就是 mutableModel / mutableEffort / mutableFastMode /
       // effectiveSdkPermissionMode() 的最新值, 新设置会自然带上。
 
-      async setModel(newModel: string) {
-        // 远端会话切换模型:远端 env 在 spawn 时已烤进 daemon,无法热改。若新模型
-        // 解析出的路由与当前不一致(如订阅直连 ↔ 网关 / 自定义供应商),继续用旧
-        // env 会以错误 endpoint/凭证打新模型(401/404)。重新解析比对,不一致则拒绝
-        // 并提示重建会话;一致(同一路由类型)才放行。
+      async setModel(newModel: string, setModelOpts?: { providerId?: string | null }) {
+        // 远端会话切换模型/来源:远端 env 在 spawn 时已烤进 daemon,无法热改。若新
+        // 模型/来源解析出的路由与当前不一致(路由类型或 env 内容变化),继续用旧
+        // env 会以错误 endpoint/凭证打新模型(401/404/错租户)。重新解析比对,
+        // 不一致则拒绝并提示重建会话;完全一致才放行。
+        // providerId 用调用方给的目标来源(可能正在切 provider),缺省回落会话启动值。
         if (opts.remoteHostId && resolveRemoteClaudeRoute) {
+          const targetProviderId = setModelOpts?.providerId !== undefined ? setModelOpts.providerId : opts.providerId;
           const nextRoute = await resolveRemoteClaudeRoute({
-            providerId: opts.providerId,
+            providerId: targetProviderId,
             model: newModel,
           });
           const routeChanged =
             (nextRoute === null) !== (remoteRoute === null) ||
-            (nextRoute !== null && remoteRoute !== null && nextRoute.endpoint !== remoteRoute.endpoint);
+            (nextRoute !== null &&
+              remoteRoute !== null &&
+              (nextRoute.endpoint !== remoteRoute.endpoint ||
+                JSON.stringify(nextRoute.env) !== JSON.stringify(remoteRoute.env)));
           if (routeChanged) {
             throw new Error(
               `[REMOTE_MODEL_SWITCH_ROUTE_CHANGE] switching to "${newModel}" requires a different remote route; close and recreate the remote session to apply it`,

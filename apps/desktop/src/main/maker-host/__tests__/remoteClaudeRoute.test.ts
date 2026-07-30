@@ -142,6 +142,25 @@ describe('resolveRemoteClaudeRoute — 显式供应商', () => {
     expect(custom['x-custom-tenant']).toBe('acme');
   });
 
+  it('custom headers 值含换行 → sanitize 防注入(copilot review)', async () => {
+    resolveProviderRouteDecision.mockResolvedValue({
+      providerId: 'my-anthropic',
+      routing: { upstream: 'https://api.myprovider.com/v1', authStrategy: 'api-key-header' },
+      decision: {
+        upstreamOverride: 'https://api.myprovider.com/v1',
+        headerOverride: {
+          'x-api-key': 'k-user',
+          'x-evil': 'line1\ninjected-header: bad\r\nline2',
+        },
+      },
+    });
+    const route = await resolveRemoteClaudeRoute({ providerId: 'my-anthropic', model: 'claude-opus-5' });
+    const custom = parseCustomHeaders(route!.env.ANTHROPIC_CUSTOM_HEADERS);
+    // 换行被剥成单行,不产生注入的头行
+    expect(custom['x-evil']).toBe('line1 injected-header: bad line2');
+    expect(route!.env.ANTHROPIC_CUSTOM_HEADERS!.split('\n')).toHaveLength(1);
+  });
+
   it('通用 oauth-token 供应商 → ANTHROPIC_AUTH_TOKEN 当门', async () => {
     resolveProviderRouteDecision.mockResolvedValue({
       providerId: 'generic-oauth',

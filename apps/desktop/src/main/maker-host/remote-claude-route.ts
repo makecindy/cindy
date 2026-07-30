@@ -194,9 +194,11 @@ function stripBearer(value: string): string {
   return m ? m[1] : value;
 }
 
-/** cc 的 ANTHROPIC_CUSTOM_HEADERS 格式:每行 `Name: Value`,换行分隔(header-echo 探测确认)。 */
+/** cc 的 ANTHROPIC_CUSTOM_HEADERS 格式:每行 `Name: Value`,换行分隔(header-echo 探测确认)。
+ *  头名/值里的 \r \n 会注入额外头行,剥掉防串行(copilot review #1035)。 */
 function serializeCustomHeaders(headers: Record<string, string>): string {
+  const sanitize = (s: string): string => s.replace(/[\r\n]+/g, ' ').trim();
   return Object.entries(headers)
-    .map(([name, value]) => `${name}: ${value}`)
+    .map(([name, value]) => `${sanitize(name)}: ${sanitize(value)}`)
     .join('\n');
 }
