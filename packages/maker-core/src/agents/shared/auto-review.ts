@@ -58,6 +58,9 @@ export function reviewAction(action: ReviewableAction, workspaceRoots: string[])
       return 'auto-approve';
     case 'file-write':
       if (!action.path) return 'prompt';
+      // 写凭证文件必问、不可记住 —— 即便落在工作区内(如 /repo/.aws/credentials、/repo/.codex/auth.json):
+      // 把 secret 写进 git-tracked checkout 与写区外同样危险,凭证性优先于工作区边界。
+      if (isSensitiveCredentialPath(action.path)) return 'prompt-each-time';
       return isInsideWorkspace(normalizeTarget(action.path, workspaceRoots), workspaceRoots)
         ? 'auto-approve'
         : 'prompt';
@@ -165,7 +168,7 @@ const OUTPUT_REDIRECTION = /(?<!-)>>?(?!&)/;
 // 贴合的 value 照样命中。大小写敏感(不加 /i):`-d/-F/-T` 是上传,`-D`(dump-header,只读)不能误伤。
 // `-[a-zA-Z]*[dFT]`:短选项簇里含值取向的 -d/-F/-T(curl 无布尔短选项用 d/F/T),捕获贴合 `-dDATA`、
 // 捆绑 `-sdsecret`、独立 `-d`;curl 大小写敏感,不误伤只读的 -D。
-const CURL_UPLOAD_FLAGS = /(?:^|\s)-[a-zA-Z]*[dFT]|(?:^|\s)--(?:data|form|upload-file|json)[\w-]*/;
+const CURL_UPLOAD_FLAGS = /(?:^|\s)-[a-zA-Z]*[dFT]|(?:^|\s)--(?:data|form|upload-file|json|url-query)[\w-]*/;
 // 非 GET 方法(-X/--request POST 等)单列且**大小写不敏感**:curl 接受小写 `-X post` / `--request post`。
 // 不能给上面的短选项簇整体加 /i —— 那会让 `[dFT]` 匹配到只读的 -f/-D,把 `curl -f` 误判成上传。
 const CURL_NONGET_METHOD = /(?:^|\s)(?:-X|--request)[=\s]*(?:POST|PUT|DELETE|PATCH)\b/i;
@@ -423,10 +426,14 @@ function classifyShellSegment(segment: string): ReviewVerdict {
  */
 export function classifyShellCommand(command: string, _workspaceRoots: string[]): ReviewVerdict {
   if (typeof command !== 'string' || command.trim().length === 0) return 'prompt';
-  // 去引号标记 + 去反斜杠转义后再匹配危险模式:防 su'do' / su\do / rm -r'f' / cat ~/.ss\h/id_rsa 绕过关键词。
-  const deQuotedCommand = command.replace(/['"\\]/g, '');
+  // 匹配危险模式时跑**两个变体**,任一命中即 prompt-each-time:
+  //  - deEscaped(去引号 + 去反斜杠转义):防 su'do' / su\do / rm -r'f' 这类把关键词拆开的绕过。
+  //  - quotesOnly(只去引号、保留 `\`):Windows `\` 路径的凭证检测 —— `cat C:\Users\me\.ssh\id_rsa`
+  //    里反斜杠是分隔符,若一并去掉会让凭证正则(前缀含 `\`)失配(copilot 报)。
+  const deEscaped = command.replace(/['"\\]/g, '');
+  const quotesOnly = command.replace(/['"]/g, '');
   for (const re of DANGEROUS_PATTERNS) {
-    if (re.test(deQuotedCommand)) return 'prompt-each-time';
+    if (re.test(deEscaped) || re.test(quotesOnly)) return 'prompt-each-time';
   }
   const segments = splitTopLevelSegments(command);
   if (segments.length === 0) return 'prompt';
