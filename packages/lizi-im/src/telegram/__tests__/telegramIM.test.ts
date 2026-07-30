@@ -279,6 +279,33 @@ describe('TelegramIM', () => {
     });
   });
 
+  it('批次处理后持久化 offset, 重启从游标续读(不重放已处理消息)', async () => {
+    await connect();
+    api.pushUpdates([privateMessage('hi', 111, 41)]);
+    await vi.waitFor(() => {
+      expect(ctx.secrets.get('telegram-updates-offset')).toBe(`${BOT.id}:42`);
+    });
+    // 模拟重启: 同一 host secrets 上起新实例
+    await im.dispose();
+    const api2 = createFakeApi();
+    const im2 = new TelegramIM(ctx.host, { apiFactory: () => api2 });
+    await im2.init();
+    await vi.waitFor(() => {
+      const poll = api2.calls.find((c) => c.method === 'getUpdates');
+      expect(poll?.params.offset).toBe(42);
+    });
+    await im2.dispose();
+  });
+
+  it('dispose 送达离线通知后清 runtime 标记(正常重启不再误发离线致歉)', async () => {
+    await connect();
+    expect(ctx.secrets.has('telegram-bot-runtime-active')).toBe(true);
+    await im.dispose();
+    expect(ctx.secrets.has('telegram-bot-runtime-active')).toBe(false);
+    const offline = api.calls.filter((c) => c.method === 'sendMessage').at(-1);
+    expect(offline?.params.chat_id).toBe(OWNER_ID);
+  });
+
   it('disconnect 清空凭证并回 idle', async () => {
     await connect();
     await ctx.handlers.get('telegramBot:disconnect')!();

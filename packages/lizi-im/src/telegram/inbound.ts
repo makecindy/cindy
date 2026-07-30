@@ -18,6 +18,8 @@ import { encodeLaneUserId, encodeMessageId } from './codec.js';
 
 /** Bot API getFile 的官方下载上限(20MB), 超过标注 oversize 不下载。 */
 const MAX_INBOUND_FILE_BYTES = 20 * 1024 * 1024;
+/** 附件下载超时 — 与 Discord 通道同参数。 */
+const DOWNLOAD_TIMEOUT_MS = 30_000;
 
 export interface TelegramGroupWindowEntry {
   chatId: string;
@@ -209,7 +211,10 @@ async function downloadTelegramFile(
     }
     const file = await ctx.api.call<TgFile>('getFile', { file_id: fileId });
     if (!file.file_path) return null;
-    const res = await fetch(ctx.api.fileUrl(file.file_path));
+    // 下载在轮询循环内 await — 必须带超时, 否则一个悬死连接会卡住全部入站。
+    const res = await fetch(ctx.api.fileUrl(file.file_path), {
+      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+    });
     if (!res.ok) return null;
     const buffer = Buffer.from(await res.arrayBuffer());
 

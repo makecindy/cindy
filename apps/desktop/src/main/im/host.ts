@@ -138,6 +138,7 @@ export const discordIm = createDiscordIM(host, {
 export const telegramIm = createTelegramIM(host, {
   resolveImageUrl: resolveManagedImageAbsPath,
   expiredCardNotice: telegramUiText.expiredCardNotice,
+  ownerNoticeText: (phase) => t(`settings.telegramBot.ownerNotice.${phase}`),
 });
 export const wechatCompatibilityPolicy = new WechatCompatibilityPolicyService({
   ...WECHAT_COMPATIBILITY_POLICY_PRODUCTION_CONFIG,

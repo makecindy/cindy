@@ -57,6 +57,12 @@ import { startTelegramStreaming } from './streamingText.js';
 const TOKEN_SECRET_KEY = 'telegram-bot-token';
 const OWNER_USER_ID_SECRET_KEY = 'telegram-owner-user-id';
 const RUNTIME_ACTIVE_SECRET_KEY = 'telegram-bot-runtime-active';
+/**
+ * getUpdates 游标持久化(`${botId}:${offset}`)。offset 只有在下一次 getUpdates
+ * 送达服务器时才被确认 — 强杀落在"批次处理完 → 下一次请求送达"窗口会导致
+ * 重放, 而下游 turn 无 messageId 幂等; 落盘让重启从上次处理完的位置续读。
+ */
+const UPDATES_OFFSET_SECRET_KEY = 'telegram-updates-offset';
 
 const POLL_TIMEOUT_SEC = 50;
 const POLL_RETRY_BASE_MS = 1_000;
@@ -146,7 +152,16 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.disposing = true;
     this.configVersion += 1;
     if (this.status.kind === 'connected' && this.ownerUserId) {
-      await this.sendOwnerNoticeWithTimeout(this.ownerUserId, 'offline', OWNER_NOTICE_TIMEOUT_MS);
+      const sent = await this.sendOwnerNoticeWithTimeout(
+        this.ownerUserId,
+        'offline',
+        OWNER_NOTICE_TIMEOUT_MS,
+      );
+      // 离线通知已送达 → 清 runtime 标记, 下次启动走正常 online 通知;
+      // 没送出去才保留标记, 让下次启动补一条"期间消息可能没收到"。
+      if (sent && !this.pendingOfflineNotice) {
+        this.host.secrets.remove(RUNTIME_ACTIVE_SECRET_KEY);
+      }
     }
     await this.stopPolling();
     this.setStatus({ kind: 'idle' });
@@ -240,6 +255,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       this.host.secrets.remove(TOKEN_SECRET_KEY);
       this.host.secrets.remove(OWNER_USER_ID_SECRET_KEY);
       this.host.secrets.remove(RUNTIME_ACTIVE_SECRET_KEY);
+      this.host.secrets.remove(UPDATES_OFFSET_SECRET_KEY);
       this.pendingOfflineNotice = false;
       this.runtimeOnlineAnnounced = false;
       await this.stopPolling();
@@ -470,7 +486,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     abort: AbortController,
     generation: number,
   ): Promise<void> {
-    let offset = 0;
+    let offset = this.readPersistedOffset();
     let retryDelay = POLL_RETRY_BASE_MS;
     while (!abort.signal.aborted && this.configVersion === generation) {
       try {
@@ -497,6 +513,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
             this.log.warn(`telegram update handling failed: ${msg}`);
           }
         }
+        if (updates.length > 0) this.persistOffset(offset);
       } catch (err) {
         if (abort.signal.aborted || this.configVersion !== generation) return;
         if (err instanceof TelegramApiError && err.errorCode === 409) {
@@ -544,12 +561,16 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
     if (m.chat.type === 'private') {
       if (String(m.from.id) !== this.ownerUserId) return; // 非 owner 私聊直接忽略
+      // 附件下载可达数秒 — 快照受理时的配置, 完成后配置已换代就丢弃
+      // (与 Discord 的 acceptedContext 模式同口径)。
+      const acceptedConfigVersion = this.configVersion;
       const event = await normalizeMessage(m, {
         api: this.requireApi(),
         contextId: String(this.botId),
         mediaDir: this.mediaDir,
         ...(this.host.media ? { media: this.host.media } : {}),
       });
+      if (this.disposing || this.configVersion !== acceptedConfigVersion) return;
       this.emitMessage(event);
       return;
     }
@@ -562,6 +583,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       if (!trigger) return;
       if (String(m.from.id) !== this.ownerUserId) return; // 仅 owner 可触发
       const laneUserId = laneUserIdOf(m);
+      const acceptedConfigVersion = this.configVersion;
       const event = await normalizeMessage(m, {
         api: this.requireApi(),
         contextId: String(this.botId),
@@ -570,6 +592,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         laneUserId,
         ...(this.host.media ? { media: this.host.media } : {}),
       });
+      if (this.disposing || this.configVersion !== acceptedConfigVersion) return;
       this.emitMessage(event);
     }
     // channel 消息不支持(bot 作为频道管理员的广播场景不在个人助理语义内)。
@@ -798,6 +821,26 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       return;
     }
     this.host.secrets.write(key, previousValue);
+  }
+
+  /** 持久化游标按 botId 命名空间 — 换 bot(token)后旧 offset 无意义, 归零。 */
+  private readPersistedOffset(): number {
+    const raw = this.host.secrets.read(UPDATES_OFFSET_SECRET_KEY);
+    if (!raw) return 0;
+    const separator = raw.indexOf(':');
+    if (separator <= 0) return 0;
+    if (raw.slice(0, separator) !== String(this.botId)) return 0;
+    const n = Number(raw.slice(separator + 1));
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
+  private persistOffset(offset: number): void {
+    try {
+      if (!this.host.secrets.isAvailable()) return;
+      this.host.secrets.write(UPDATES_OFFSET_SECRET_KEY, `${this.botId}:${offset}`);
+    } catch {
+      /* best-effort — 丢失只是退化回 at-least-once 重放 */
+    }
   }
 
   private markRuntimeActive(): void {
