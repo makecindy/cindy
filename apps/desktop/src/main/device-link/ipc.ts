@@ -740,17 +740,20 @@ export async function handleMirrorCachePutSessionList(
   // 顺序很重要:`map` 之前必须先 slice —— 否则一次超长 devices 数组会让 main 同步遍历全量
   // 并再分配一份等长的新数组(含对象展开),64 台的上限要等 boundedItems 才生效,那时内存
   // 已经吃进去了。截断之后才是「设备数不多但某台带着几十万个 session」这一层(review: codex P1)。
-  const trimmed = devices.slice(0, MIRROR_CACHE_MAX_INBOUND_DEVICES).map((device) =>
-    device && typeof device === 'object' && Array.isArray((device as { sessions?: unknown }).sessions)
-      ? {
-          ...(device as Record<string, unknown>),
-          sessions: ((device as { sessions: unknown[] }).sessions).slice(
-            0,
-            MIRROR_CACHE_MAX_INBOUND_SESSIONS_PER_DEVICE,
-          ),
-        }
-      : device,
-  );
+  // 逐台**只挑需要的三个字段**,不做对象展开:一台设备对象可以带上几十万个自有属性,
+  // 展开会让 main 先枚举 + 复制整份,结构 / 字节预算要等 boundedItems 才生效(review: codex P1)。
+  // main 侧的 normalizeDeviceSessions 也只消费这三个字段,别的原本就会被白名单丢掉。
+  const trimmed = devices.slice(0, MIRROR_CACHE_MAX_INBOUND_DEVICES).map((device) => {
+    if (!device || typeof device !== 'object') return device;
+    const source = device as { deviceId?: unknown; deviceName?: unknown; sessions?: unknown };
+    return {
+      deviceId: source.deviceId,
+      deviceName: source.deviceName,
+      sessions: Array.isArray(source.sessions)
+        ? source.sessions.slice(0, MIRROR_CACHE_MAX_INBOUND_SESSIONS_PER_DEVICE)
+        : [],
+    };
+  });
   try {
     await cache.writeSessionList(
       boundedItems(trimmed, MIRROR_CACHE_MAX_INBOUND_DEVICES, 'session-list'),

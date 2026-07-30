@@ -275,6 +275,55 @@ describe('冷缓存 hydrate', () => {
 
   // review(codex P1):整页无可见渲染锚点时,种入会让 messages 非空(于是 loading 覆盖层
   // 被收起)但 MessageStream 渲染 0 项 —— 被控端离线时就是一片永久空白。
+  // review(codex P1):rewind 之后紧随的权威首拉若失败(被控端离线),原先 catch 会把
+  // hydrate 守卫整个放开 —— 重挂会话就把 rewind 之前的旧缓存(已被软删的消息)画回来。
+  it('rewind 重载后首拉失败 → 重挂会话仍不借那份过期缓存', async () => {
+    const s = sid();
+    cachedMessages.set(`${DEVICE_ID}::${s}`, [
+      dbMessage(s, 'pre-rewind', '被 rewind 截掉的消息', '2026-01-01T00:00:00.000Z') as unknown as Record<
+        string,
+        unknown
+      >,
+    ]);
+    registerRemote(s);
+    // 先正常加载一次(权威页有内容),再 rewind。
+    remoteList = [dbMessage(s, 'kept', 'kept', '2026-01-02T00:00:00.000Z')];
+    makerChatStore.ensureInitialMessages(s);
+    await flush(30);
+
+    // rewind 之后的重载:权威首拉失败(被控端离线)。
+    remoteListPromise = Promise.reject(new Error('DEVICE_OFFLINE'));
+    makerChatStore.reloadMessages(s);
+    await flush(30);
+    expect(makerChatStore.getSnapshot(s).messages).toHaveLength(0);
+
+    // 重挂会话(remount)→ 仍然不许把 rewind 之前的缓存种回来。
+    makerChatStore.ensureInitialMessages(s);
+    await flush(30);
+    expect(makerChatStore.getSnapshot(s).messages).toHaveLength(0);
+  });
+
+  it('权威页落地后粘滞抑制解除:再一次重挂可以照常借缓存', async () => {
+    const s = sid();
+    registerRemote(s);
+    remoteList = [dbMessage(s, 'fresh', 'fresh', '2026-01-02T00:00:00.000Z')];
+    makerChatStore.reloadMessages(s); // 作废式重载 → 置抑制
+    await flush(30);
+    expect(makerChatStore.getSnapshot(s).historyLoaded).toBe(true);
+
+    // 权威已落地 → 抑制解除。清掉切片后再借缓存应当成功。
+    cachedMessages.set(`${DEVICE_ID}::${s}`, [
+      dbMessage(s, 'cold', 'cold', '2026-01-03T00:00:00.000Z') as unknown as Record<
+        string,
+        unknown
+      >,
+    ]);
+    remoteListPromise = new Promise<Message[]>(() => {}); // 隧道挂起,缓存是屏上唯一内容
+    makerChatStore.reloadMessages(s, { allowCacheHydrate: true });
+    await flush(30);
+    expect(makerChatStore.getSnapshot(s).messages.map((m) => m.clientId)).toEqual(['client-cold']);
+  });
+
   it('缓存页整页都是 orphan tool_result → 不种入,留给 loading 覆盖层', async () => {
     const s = sid();
     cachedMessages.set(`${DEVICE_ID}::${s}`, [

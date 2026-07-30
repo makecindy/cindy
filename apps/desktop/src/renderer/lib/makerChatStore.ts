@@ -1253,6 +1253,9 @@ function _purgeSession(sessionId: string): void {
   titleUpdateCallbacks.delete(sessionId);
   _historyFetchInFlight.delete(sessionId);
   _historyLoadOrigin.delete(sessionId);
+  // 冷缓存 hydrate 的两个守卫随会话一起收掉(会话都没了,守卫留着只是无用条目)。
+  _cacheHydrateStarted.delete(sessionId);
+  _cacheHydrateSuppressed.delete(sessionId);
   _lastViewedAt.delete(sessionId);
   _lastInboundEventAt.delete(sessionId);
   rendererClearBoundaryBySession.delete(sessionId);
@@ -5158,6 +5161,16 @@ function dbAgentKindToMakerKind(
 const _cacheHydrateStarted = new Set<string>();
 
 /**
+ * 「这个会话的盘上缓存已经过期,在权威数据回来之前一律不许 hydrate」。
+ *
+ * 与 `_cacheHydrateStarted` 的区别是**粘滞**:rewind 之类的作废式重载之后,如果紧随的
+ * 权威首拉失败(被控端离线),`_cacheHydrateStarted` 会被放开以便下次重试,而缓存本身仍是
+ * rewind 之前的旧窗口 —— 那时重挂会话就会把已经被软删的消息重新画上去(review: codex P1)。
+ * 只有权威响应真正落地(它同时会刷新盘上缓存)才解除。
+ */
+const _cacheHydrateSuppressed = new Set<string>();
+
+/**
  * 远程会话:从本地冷缓存乐观 hydrate 最近一页(并行于 fresh 首拉)。
  *
  * 只在**切片仍为空且 fresh 还没落地**时种入,种入的行打 `cacheHydrated` 标记,
@@ -5171,6 +5184,8 @@ const _cacheHydrateStarted = new Set<string>();
 function hydrateRemoteMessagesFromCache(sessionId: string): void {
   const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
   if (!deviceId) return;
+  // 作废式重载(rewind)之后盘上那份是过期窗口:权威数据没落地之前一律不借。
+  if (_cacheHydrateSuppressed.has(sessionId)) return;
   if (_cacheHydrateStarted.has(sessionId)) return;
   _cacheHydrateStarted.add(sessionId);
   void readCachedMessages(deviceId, sessionId).then((rows) => {
@@ -5202,8 +5217,20 @@ function hydrateRemoteMessagesFromCache(sessionId: string): void {
   });
 }
 
-/** fresh 首拉落地:放开 hydrate 守卫(切片此后由权威数据主导)。 */
+/**
+ * fresh 首拉**落地**:放开 hydrate 守卫(切片此后由权威数据主导),粘滞抑制也一并解除 ——
+ * 权威响应到达时缓存已被同一条链刷新过(见 makerTransport 的写点),不再是过期窗口。
+ */
 function settleCacheHydration(sessionId: string): void {
+  _cacheHydrateStarted.delete(sessionId);
+  _cacheHydrateSuppressed.delete(sessionId);
+}
+
+/**
+ * fresh 首拉**失败**(典型:被控端离线):只放开「本轮已发起」的守卫以便下次重试,
+ * **不解除**粘滞抑制 —— 缓存过期这件事不会因为一次失败的请求而改变。
+ */
+function releaseCacheHydrationAfterFailure(sessionId: string): void {
   _cacheHydrateStarted.delete(sessionId);
 }
 
@@ -5413,9 +5440,10 @@ function ensureInitialMessages(sessionId: string): void {
     .catch(() => {
       // Allow retry on next mount
       _historyFetchInFlight.delete(sessionId);
-      // 首拉失败(典型:被控端离线)→ 也放开 hydrate 守卫,不留条目。屏上已 hydrate 的
+      // 首拉失败(典型:被控端离线)→ 放开「本轮已发起」的守卫以便下次重试,但**不解除**
+      // rewind 之类的粘滞抑制(见 releaseCacheHydrationAfterFailure)。屏上已 hydrate 的
       // 缓存行**保持不动**:离线时它是用户唯一能看到的历史,清掉纯属倒退。
-      settleCacheHydration(sessionId);
+      releaseCacheHydrationAfterFailure(sessionId);
       setState(sessionId, (s) => ({ ...s, historyLoaded: false }));
     });
 }
@@ -5440,8 +5468,14 @@ function reloadMessages(sessionId: string, opts?: { allowCacheHydrate?: boolean 
   // 过期,反而是这个会话**第一次**知道自己是远程会话。压着不 hydrate 的话,被控端离线时
   // 首拉必然失败,屏上就只剩空白 + spinner —— 而离线可见正是这份缓存的存在理由
   // (review: codex P1)。调用方据此显式放开(见 reconcileOpenSessionOrigins)。
-  if (opts?.allowCacheHydrate) _cacheHydrateStarted.delete(sessionId);
-  else _cacheHydrateStarted.add(sessionId);
+  if (opts?.allowCacheHydrate) {
+    _cacheHydrateStarted.delete(sessionId);
+    _cacheHydrateSuppressed.delete(sessionId);
+  } else {
+    _cacheHydrateStarted.add(sessionId);
+    // 粘滞:即使紧随的权威首拉失败(被控端离线),重挂会话也不许再借那份过期缓存。
+    _cacheHydrateSuppressed.add(sessionId);
+  }
   setState(sessionId, (s) => ({
     ...s,
     messages: [],
