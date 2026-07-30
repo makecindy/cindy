@@ -1593,6 +1593,9 @@ interface ElectronAPI {
   safeStorageStore: (key: string, value: string) => Promise<boolean>;
   safeStorageRead: (key: string) => Promise<string | null>;
   safeStorageRemove: (key: string) => Promise<{ success: boolean; error?: string }>;
+  /** 内置 API-key 供应商专用 IPC(写/删,永不回读明文;对应 MAIN_ONLY 键)。 */
+  builtinApiKeyStore: (providerId: string, value: string) => Promise<boolean>;
+  builtinApiKeyRemove: (providerId: string) => Promise<{ success: boolean; error?: string }>;
   /** CC 网络调试日志开关 (admin experimental). main 端 mutate process.env.XDT_CC_DEBUG_NET。 */
   ccSetDebugNet: (enabled: boolean) => Promise<{ ok: true }>;
   /** 网关凭据自动下发(model-access,类型见 shared/modelAccess.ts)。 */
