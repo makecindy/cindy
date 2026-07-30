@@ -55,17 +55,51 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(source).toContain('if (!dispatchBlockedAtSend && !currentSession.workingDir) {');
   });
 
-  it('holds back queued messages when the first message failed to enqueue', () => {
+  it('recovers the first message and the follow-ups together, in order', () => {
+    // 「首条回输入框 + 后续留在 outbox」是不可恢复的:重试失败的 outbox 条目会把后续消息
+    // 发到首条前面,重发首条又会追加到失败条目之后被挡住,原顺序拼不回来(review P1)。
+    // 两者必须一起、按序进同一份草稿,首条在前。
     const source = readSource(SCREEN);
     const branchStart = source.indexOf("if (status === 'enqueue-failed') {");
     const branchEnd = source.indexOf('void load();', branchStart);
     const branch = source.slice(branchStart, branchEnd);
 
-    // 失败标记必须落在 dismiss 之前:dismiss 会解禁 pump。
-    expect(branch).toContain('outboxItemWithEnqueueFailure(item, heldBackReason)');
-    expect(branch).toContain("t('session.screen.queuedAfterFirstMessageFailed')");
-    expect(branch.indexOf('outboxItemWithEnqueueFailure'))
+    expect(branch).toContain('const followUps = takeOutboxForSession(sessionId);');
+    expect(branch).toContain('restoreRecoverableItemsToDraft(sessionId, recoverables)');
+    // 首条排在后续消息之前。
+    expect(branch.indexOf('text: restoredText,')).toBeLessThan(branch.indexOf('...followUps,'));
+    // 取走 outbox 必须发生在 dismiss 之前:dismiss 会解禁派发门。
+    expect(branch.indexOf('takeOutboxForSession'))
       .toBeLessThan(branch.indexOf('dismissNewSessionCreation(sessionId)'));
+    // 附件也要一起回来(按 id 去重 + 受托盘上限截断)。
+    expect(branch).toContain('mergeAttachmentsWithinLimit(');
+  });
+
+  it('carries follow-ups back to the new-session screen when creation itself failed', () => {
+    // create-failed 的「返回编辑」会连合成会话行一起删掉:不把 outbox 一并 stash,
+    // unmount cleanup 会把那些消息写进一个即将消失的会话草稿,用户再也找不回(review P1)。
+    const source = readSource(SCREEN);
+    const stashCall = source.indexOf('stashNewSessionDraftForEdit(creationTask,');
+    expect(stashCall).toBeGreaterThan(-1);
+    const backToEditStart = source.indexOf("text: t('session.screen.backToEdit')");
+    const backToEditEnd = source.indexOf("text: t('session.screen.retry')", backToEditStart);
+    const branch = source.slice(backToEditStart, backToEditEnd);
+    expect(branch).toContain('const followUps = takeOutboxForSession(sessionId);');
+    expect(branch.indexOf('takeOutboxForSession'))
+      .toBeLessThan(branch.indexOf('dismissNewSessionCreation(sessionId, { removeSyntheticRow: true })'));
+    expect(branch).toContain('outboxItemDraftText');
+  });
+
+  it('binds sticky/locked derived state to the thing it belongs to', () => {
+    // 同一族的两处泄漏:活动条粘滞态跨会话、缩略图锁定跨附件变更 —— 派生状态不带身份,
+    // 切换目标时旧值会顶着新目标(review P1/P2)。
+    const screen = readSource(SCREEN);
+    expect(screen).toContain('const showComposerActivity = isSessionStreaming || streamingSticky === sessionId;');
+
+    const bubble = readSource('src/session/PendingSendBubble.tsx');
+    expect(bubble).toContain("const identity = `${thumb.uri ?? ''}|${thumb.ossRef ?? ''}`;");
+    expect(bubble).toContain("const shown = shownRef.current?.identity === identity ? shownRef.current.uri : null;");
+    expect(bubble).toContain('remoteState?.identity === identity ? remoteState.uri : null');
   });
 
   it('still blocks session-settings RPCs until the session exists remotely', () => {

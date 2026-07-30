@@ -312,12 +312,22 @@ export interface StashedNewSessionDraft {
 
 let stashedDraft: StashedNewSessionDraft | null = null;
 
-export function stashNewSessionDraftForEdit(task: NewSessionCreationTask): void {
+/**
+ * override 用于把「创建期间攒下的后续消息」并进带回新建页的草稿:那些消息此刻在会话页的
+ * outbox 里,而合成会话行紧接着就被删掉,不并进来就再也找不回(review P1)。
+ */
+export function stashNewSessionDraftForEdit(
+  task: NewSessionCreationTask,
+  override?: {
+    draft?: NewSessionDraft;
+    attachments?: readonly RemoteSerializedAttachment[];
+  },
+): void {
   stashedDraft = {
     deviceId: task.deviceId,
     deviceName: task.deviceName,
-    draft: task.draft,
-    attachments: task.attachments,
+    draft: override?.draft ?? task.draft,
+    attachments: override?.attachments ?? task.attachments,
   };
 }
 

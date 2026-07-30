@@ -209,7 +209,7 @@ import {
   useSessionQuotes,
 } from '@/session/chatQuoteStore';
 import { QuoteCapsule } from '@/session/QuoteCapsule';
-import { formatQuotesForSend } from '@cindy/maker-shared/chat-quotes';
+import { formatQuotesForSend, stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { confirmFullAccessChange } from '@/session/fullAccessConfirmation';
@@ -287,6 +287,7 @@ import {
   recoverOutboxItemsToComposerDraft,
   replaceOutboxItem,
   type MobileOutboxItem,
+  type MobileRecoverableDraftItem,
 } from '@/session/sessionOutbox';
 import {
   AT_RESOURCE_QUERY_DEBOUNCE_MS,
@@ -585,6 +586,25 @@ const ENQUEUE_RECONNECT_BACKOFF_MS = 300;
  */
 const COMPOSER_ACTIVITY_SETTLE_MS = 600;
 
+/** 附件按 id 去重合并,前者优先,受托盘上限截断(信息不静默丢,上限内保全)。 */
+function mergeAttachmentsWithinLimit(
+  preferred: readonly RemoteSerializedAttachment[],
+  extra: readonly RemoteSerializedAttachment[],
+): RemoteSerializedAttachment[] {
+  const merged = [...preferred];
+  for (const attachment of extra) {
+    if (merged.length >= MOBILE_MAX_ATTACHMENTS) break;
+    if (merged.some((item) => item.id === attachment.id)) continue;
+    merged.push(attachment);
+  }
+  return merged;
+}
+
+/** 恢复进「只有一个输入框」的新建页时,气泡文本要剥掉产品私有 marker。 */
+function outboxItemDraftText(item: MobileOutboxItem): string {
+  return (item.quotesEncoded ? stripChatQuoteMarkerLines(item.text) : item.text).trim();
+}
+
 /** 编辑保存的降级判定:附件集合(按 id,顺序不敏感)未变时可退回 update-text。 */
 function attachmentIdSetsEqual(
   a: readonly { id: string }[] | undefined,
@@ -606,8 +626,23 @@ function restoreOutboxItemsToDraft(items: readonly MobileOutboxItem[]): void {
     sessionItems.push(item);
     itemsBySession.set(item.sessionId, sessionItems);
   }
-
   for (const [draftSessionId, sessionItems] of itemsBySession) {
+    restoreRecoverableItemsToDraft(draftSessionId, sessionItems);
+  }
+}
+
+/**
+ * 把一组待发条目按给定顺序合并回某个会话的草稿。
+ *
+ * 显式收 sessionId(而不是从条目上读)是为了让**不属于 outbox 的消息**也能参与同一次
+ * 合并:新建会话 enqueue 失败时,首条消息来自 creationTask.draft,必须排在创建期间攒下
+ * 的后续消息前面,否则用户无法恢复原始顺序(重试后续会超到首条前面)。
+ */
+function restoreRecoverableItemsToDraft(
+  draftSessionId: string,
+  sessionItems: readonly MobileRecoverableDraftItem[],
+): void {
+  {
     const existingVisibleText = readComposerDraftSync(draftSessionId)?.trim() ?? '';
     const existingQuotes = [...getQuotes(draftSessionId)];
     const existingOrderedDraft = resolveOrderedQuoteDraft(
@@ -2862,7 +2897,26 @@ export default function SessionScreen() {
           style: 'cancel',
           onPress: () => {
             if (!creationTask) return;
-            stashNewSessionDraftForEdit(creationTask);
+            // 创建期间发出的后续消息必须一起带回新建页(review P1):它们此刻在 outbox 里,
+            // 而下一行 dismiss 会连同合成会话行一起删掉——会话页 unmount 时 cleanup 会把它们
+            // 写进那个已经不存在的会话的草稿,用户在新建页看不到、也再也找不回来。
+            // 新建页只有一个首条消息输入框,所以按序拼成文本、附件按 id 去重合并后一起 stash。
+            const followUps = takeOutboxForSession(sessionId);
+            stashNewSessionDraftForEdit(creationTask, followUps.length > 0
+              ? {
+                  draft: {
+                    ...creationTask.draft,
+                    firstMessage: [
+                      creationTask.draft.firstMessage,
+                      ...followUps.map(outboxItemDraftText),
+                    ].filter(Boolean).join('\n\n'),
+                  },
+                  attachments: mergeAttachmentsWithinLimit(
+                    creationTask.attachments,
+                    followUps.flatMap(outboxItemAttachments),
+                  ),
+                }
+              : undefined);
             dismissNewSessionCreation(sessionId, { removeSyntheticRow: true });
             router.replace({ pathname: '/sessions/new', params: { deviceId, deviceName } });
           },
@@ -2878,45 +2932,43 @@ export default function SessionScreen() {
       return;
     }
     if (status === 'enqueue-failed') {
-      // 首条消息要回输入框,而 failTask 已清掉 pendingLocalCreation、这里紧接着
-      // dismiss task —— 派发门随即解禁。此刻若 outbox 里还攒着创建期间发出的消息,
-      // pump 会把它们先发出去,顺序变成「第二条在前」。标成 enqueue 失败挡在队首
-      // (outboxItemReady=false),气泡保留在流里带既有的「重试 / 删除」。
-      // 必须在同一 effect 回调里、dismiss 之前落这一笔:解禁 pump 由下一帧的
-      // outboxDispatchBlocked 变化驱动,那时失败标记已经就位。
-      if (outboxRef.current.some((item) => item.sessionId === sessionId)) {
-        const heldBackReason = t('session.screen.queuedAfterFirstMessageFailed');
-        updateOutbox((items) => items.map((item) => (
-          item.sessionId === sessionId && item.phase !== 'failed'
-            ? outboxItemWithEnqueueFailure(item, heldBackReason)
-            : item
-        )));
-      }
+      // 首条消息没发出,而创建期间用户可能已经发了后续消息(composer 全程可用)。
+      //
+      // 「首条回输入框 + 后续留在 outbox」是不可恢复的:重试失败的 outbox 条目会把后续
+      // 消息发到首条前面,而重发首条又会追加到失败条目之后被挡住,原始顺序无论怎么操作
+      // 都拼不回来(review P1)。所以两者必须一起交回 —— 全部按序合并进同一份草稿,
+      // 首条在前,用户重发一次即恢复原顺序。
+      const followUps = takeOutboxForSession(sessionId);
       if (creationTask) {
-        // 等待窗口内 composer 全程可用(会话未就绪只让派发排队,不再进只读档),
-        // 用户可能已经打了下一段草稿 / 加了新附件——回填不能覆盖(codex review
-        // P2)。文本:空则回填,非空则把首条消息按时间序前置合并;附件:按 id
-        // 去重合并,回填的首条附件在前,超限截断(信息不静默丢,上限内保全)。
+        // 等待窗口内用户可能已经打了下一段草稿 / 加了新附件——回填不能覆盖(codex review
+        // P2)。文本:首条 + 后续消息按序前置到现有草稿之前(引用块与富文本结构由
+        // recoverOutboxItemsToComposerDraft 保留);附件:按 id 去重合并,回填的在前,
+        // 超限截断(信息不静默丢,上限内保全)。
         const restoredText = creationTask.draft.firstMessage;
-        if (restoredText) {
-          setComposerDraft((current) => {
-            const existing = current.trim();
-            if (!existing) return restoredText;
-            if (existing === restoredText.trim()) return current;
-            return `${restoredText}\n\n${current}`;
-          });
+        const recoverables: MobileRecoverableDraftItem[] = [
+          ...(restoredText
+            ? [{
+                text: restoredText,
+                // draft.firstMessage 是发送文本,可能含产品引用 marker:剥离前后不同即说明有。
+                quotesEncoded: stripChatQuoteMarkerLines(restoredText) !== restoredText,
+                pastedTextRanges: [],
+                slashCommandRanges: [],
+                agentReferences: [],
+              }]
+            : []),
+          ...followUps,
+        ];
+        if (recoverables.length > 0) restoreRecoverableItemsToDraft(sessionId, recoverables);
+        const restoredAttachments = mergeAttachmentsWithinLimit(
+          creationTask.attachments,
+          followUps.flatMap(outboxItemAttachments),
+        );
+        if (restoredAttachments.length > 0) {
+          setAttachments((current) => mergeAttachmentsWithinLimit(restoredAttachments, current));
         }
-        if (creationTask.attachments.length > 0) {
-          setAttachments((current) => {
-            const merged = [...creationTask.attachments];
-            for (const attachment of current) {
-              if (merged.length >= MOBILE_MAX_ATTACHMENTS) break;
-              if (merged.some((item) => item.id === attachment.id)) continue;
-              merged.push(attachment);
-            }
-            return merged;
-          });
-        }
+      } else if (followUps.length > 0) {
+        // task 已被消费(极端竞态):后续消息仍然要回草稿,不能随 outbox 清空蒸发。
+        restoreRecoverableItemsToDraft(sessionId, followUps);
       }
       setError(creationTask?.error ?? t('session.screen.firstMessageNotSent'));
       dismissNewSessionCreation(sessionId);
@@ -3156,19 +3208,19 @@ export default function SessionScreen() {
   // ——实测日志里 streaming 1→0→1,活动条跟着闪一下、计时还被重置回 0s。
   // 上升沿立即生效(「跑起来了」要第一时间说),下降沿延后熄灭:真停了这点延迟无感,
   // 交接空隙则被吃掉。换会话立即复位,不让上一会话的粘滞态泄漏过来。
-  const [streamingSticky, setStreamingSticky] = useState(false);
+  // 粘滞态绑定它属于哪个会话:切会话若正好落在去抖窗口内,清零要等提交后的 effect 才跑,
+  // 新会话首帧会顶着上一个会话残留的「思考中」(review P2)。带上 sessionId 后,渲染阶段
+  // 直接判定粘滞态是否属于当前会话,不依赖 effect 的执行时机。
+  const [streamingSticky, setStreamingSticky] = useState<string | null>(null);
   useEffect(() => {
     if (isSessionStreaming) {
-      setStreamingSticky(true);
+      setStreamingSticky(sessionId);
       return undefined;
     }
-    const timer = setTimeout(() => setStreamingSticky(false), COMPOSER_ACTIVITY_SETTLE_MS);
+    const timer = setTimeout(() => setStreamingSticky(null), COMPOSER_ACTIVITY_SETTLE_MS);
     return () => clearTimeout(timer);
-  }, [isSessionStreaming]);
-  useEffect(() => {
-    setStreamingSticky(false);
-  }, [sessionId]);
-  const showComposerActivity = isSessionStreaming || streamingSticky;
+  }, [isSessionStreaming, sessionId]);
+  const showComposerActivity = isSessionStreaming || streamingSticky === sessionId;
   useEffect(() => {
     // 计时起点跟着去抖后的信号走:否则空隙一过 startedAt 被重置,活动条从 0s 重新数。
     setComposerActivityStartedAt(showComposerActivity ? Date.now() : null);
@@ -4407,6 +4459,23 @@ export default function SessionScreen() {
   };
 
   const outboxDisplayItems = useMemo(() => outboxItems.map(outboxDisplayItem), [outboxItems]);
+
+  /**
+   * 取出并清空某会话的 outbox 条目(创建失败的两条收尾路径都要用)。
+   *
+   * 必须同步取走:调用方紧接着会 dismiss task / 删合成会话行,留在 ref 里的条目会被
+   * unmount cleanup 写进一个即将消失的会话草稿里,等于丢消息。
+   */
+  const takeOutboxForSession = (targetSessionId: string): MobileOutboxItem[] => {
+    const taken = outboxRef.current.filter((item) => item.sessionId === targetSessionId);
+    if (taken.length === 0) return [];
+    updateOutbox((items) => items.filter((item) => item.sessionId !== targetSessionId));
+    // 在途上传任务丢弃;已就绪附件的中转对象由调用方决定是否随草稿保留,不在这里回收。
+    for (const item of taken) {
+      for (const localId of [...item.waitingIds, ...item.failedIds]) removePendingUpload(localId);
+    }
+    return taken;
+  };
 
   // 待发送气泡(排队 / 落定 / 本地 outbox)作为消息流末尾的渲染项。
   //

@@ -1311,7 +1311,9 @@ const RenderItemView = memo(function RenderItemView({
       node = <ForkOriginMarker onOpenForkOrigin={actions.onOpenForkOrigin} />;
       break;
     case 'pending_send':
-      // 待发送气泡:actions 缺失(理论上不会——会话页恒传)时降级为纯展示,不崩列。
+      // 待发送气泡。actions.pendingSend 由会话页恒传;真缺失时**跳过这一项**(不渲染),
+      // 而不是渲染一个点不动的气泡 —— 没有回调的气泡无法取消 / 编辑 / 重试,画出来只会
+      // 让用户对着死气泡操作。渲染路径无 ErrorBoundary,这里也不抛,免得整列崩掉。
       node = actions.pendingSend
         ? (
           <PendingSendBubble

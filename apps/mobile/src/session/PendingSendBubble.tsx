@@ -75,14 +75,15 @@ function useThumbCellUri(
   thumb: MobileOutboxThumb,
   resolveRemoteMedia?: ResolveRemoteMediaFn,
 ): string | null {
+  // 「这一格现在指的是哪张图」。排队消息被编辑、同一附件下标换成另一张图时,ThumbCell 的
+  // key(clientId-file-index)不变、hook 实例被复用 —— 所有缓存都必须绑定这个身份,否则旧图
+  // 会一直压住新图直到整行卸载,编辑后的气泡显示的是已被移除的附件(review P1)。
+  const identity = `${thumb.uri ?? ''}|${thumb.ossRef ?? ''}`;
   const durableUri = thumb.ossRef ? getSentAttachmentThumbUri(thumb.ossRef) : null;
   const localUri = durableUri ?? thumb.uri ?? null;
-  const [remoteUri, setRemoteUri] = useState<string | null>(null);
+  const [remoteState, setRemoteState] = useState<{ uri: string; identity: string } | null>(null);
+  const remoteUri = remoteState?.identity === identity ? remoteState.uri : null;
   const remoteCandidate = localUri ? null : thumb.ossRef;
-  // 已经显示出来的 uri 就锁住:三条来源的可用时机不同(本地底片要等 store hydrate、远端
-  // 取件更晚),按「更可靠的来源出现就换」会让 Image 重新加载,中间露出底色——就是那下
-  // 「闪白」。图是同一张,先到先用、到了不换。
-  const shownUriRef = useRef<string | null>(null);
   useEffect(() => {
     if (!remoteCandidate || !resolveRemoteMedia || !isDesktopLocalMediaUrl(remoteCandidate)) {
       return undefined;
@@ -95,7 +96,7 @@ function useThumbCellUri(
           { kind: 'image', url: remoteCandidate, previewable: false, thumbnail: true },
           { signal: controller.signal },
         );
-        if (!cancelled && resolved.url) setRemoteUri(resolved.url);
+        if (!cancelled && resolved.url) setRemoteState({ uri: resolved.url, identity });
       } catch {
         // 取不到就回落占位格:待发气泡的图是增强,不能因为取件失败妨碍发送流程。
       }
@@ -104,13 +105,20 @@ function useThumbCellUri(
       cancelled = true;
       controller.abort();
     };
-  }, [remoteCandidate, resolveRemoteMedia]);
+  }, [identity, remoteCandidate, resolveRemoteMedia]);
   const candidate = localUri ?? remoteUri;
-  // 锁定在 layout effect 里写(render 阶段不碰 ref:Concurrent 下被丢弃的 render 会污染它)。
+  // 已显示出来的 uri 锁住,不为「更可靠的来源出现」而换:三条来源可用时机不同(本地底片要
+  // 等 store hydrate、远端取件更晚),换 uri 会让 Image 重新加载、中间露出底色(闪白)。
+  // 锁同样绑身份:身份变了就解锁,重新按新图取。
+  const shownRef = useRef<{ uri: string; identity: string } | null>(null);
+  const shown = shownRef.current?.identity === identity ? shownRef.current.uri : null;
+  // 写 ref 放 layout effect(render 阶段不碰 ref:Concurrent 下被丢弃的 render 会污染它)。
   useLayoutEffect(() => {
-    if (!shownUriRef.current && candidate) shownUriRef.current = candidate;
-  }, [candidate]);
-  return shownUriRef.current ?? candidate;
+    if (candidate && shownRef.current?.identity !== identity) {
+      shownRef.current = { uri: candidate, identity };
+    }
+  }, [candidate, identity]);
+  return shown ?? candidate;
 }
 
 function ThumbCell({
