@@ -3472,7 +3472,14 @@ const registerIpcHandlers = () => {
         const trimmed = value.trim();
         if (!trimmed) return false;
         const ok = getProviderSecretStore().set(providerId as ProviderSecretId, trimmed);
-        if (ok) notifyProviderKeyChanged(providerId);
+        if (ok) {
+          notifyProviderKeyChanged(providerId);
+          for (const win of BrowserWindow.getAllWindows()) {
+            if (!win.isDestroyed()) {
+              try { win.webContents.send(MAKER_PUSH.PROVIDER_CHANGED, {}); } catch { /* no-op */ }
+            }
+          }
+        }
         return ok;
       } catch (err) {
         console.error('[builtin-api-key-store]', err);
@@ -3493,7 +3500,14 @@ const registerIpcHandlers = () => {
           return { success: false, error: 'invalid_provider' };
         }
         const result = getProviderSecretStore().remove(providerId as ProviderSecretId);
-        if (result.success) notifyProviderKeyChanged(providerId);
+        if (result.success) {
+          notifyProviderKeyChanged(providerId);
+          for (const win of BrowserWindow.getAllWindows()) {
+            if (!win.isDestroyed()) {
+              try { win.webContents.send(MAKER_PUSH.PROVIDER_CHANGED, {}); } catch { /* no-op */ }
+            }
+          }
+        }
         return result;
       } catch (err) {
         console.error('[builtin-api-key-remove]', err);
