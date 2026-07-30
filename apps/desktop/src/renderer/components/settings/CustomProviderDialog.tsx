@@ -440,6 +440,11 @@ export function CustomProviderDialog({
         return next;
       });
       setTest({ 'claude-code': IDLE_TEST, codex: IDLE_TEST });
+      // 预设整体替换所有 runtime 的 models 数组(含清空未声明的 runtime),旧行号
+      // 全部失效——不清空的话陈旧草稿(如 -5)会挂在无关的新行、或挂在被预设清空
+      // 的 runtime 上,handleSave 的守卫拦不住"用户已经看不到"的这条草稿,表单
+      // 卡死报错却找不到对应输入框(review P1)。
+      setWindowDrafts({});
       const first = AGENTS.find((a) => p.runtimes[a]);
       if (first) setActiveTab(first);
     },
