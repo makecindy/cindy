@@ -26,9 +26,11 @@ export const BROWSER_COMMENT_EXIT_MODE_CHANNEL = 'browser-comment:exit-mode';
 export const BROWSER_COMMENT_CANCEL_PENDING_CHANNEL = 'browser-comment:cancel-pending';
 /**
  * 截图前置:guest 隐藏交互层与 hover 高亮,只保留蓝色 marker(含已提交的常驻
- * marker)与当前 pending 的区域框 / 文本高亮,待页面完成两帧渲染后回
- * `screenshot-prepared`。host 收到后再调 main capturePage,保证截图里只有
- * 标注、没有交互 UI。无 payload。
+ * marker)与当前 pending 的区域框 / 文本高亮,并继续保留透明 blocker 隔离
+ * 页面输入。页面完成两帧渲染后,guest 通过统一的
+ * {@link BROWSER_COMMENT_COMMAND_RESULT_CHANNEL} 回执当前 requestId；host
+ * 收到 matching ACK 后再调 main capturePage,保证截图里只有标注、没有可见
+ * 交互 UI。
  */
 export const BROWSER_COMMENT_PREPARE_SCREENSHOT_CHANNEL = 'browser-comment:prepare-screenshot';
 /**
