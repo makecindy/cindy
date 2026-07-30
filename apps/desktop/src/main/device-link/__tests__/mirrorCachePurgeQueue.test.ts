@@ -214,6 +214,49 @@ describe('文件级条目(clearDevice 删不掉时用)', () => {
     expect(fs.existsSync(root)).toBe(false);
   });
 
+  // review(codex P1):登记进队列的成因之一正是"作废计数自增失败"。那种条目只带着消息文件
+  // 路径 —— 若消化时只删文件、记录一扔,盘上的计数仍是清理**之前**的值,另一个进程那笔迟到的
+  // 最新页(握着同一个旧计数)会在消化之后通过比对,把已清掉的正文重建回来。
+  it('消化时顺手把作废屏障修好(账号级计数自增),且排在删除之前', async () => {
+    const root = await makeOwnerCache('owner-1');
+    const target = path.join(root, 'messages', 'a.json');
+    const accountMark = path.join(`${root}.control`, 'cleared', '_account');
+    await fsp.mkdir(path.dirname(accountMark), { recursive: true });
+    await fsp.writeFile(accountMark, '3', 'utf8');
+
+    // 顺序判据:第一次删除动作发生时,计数必须已经自增(意图先落盘,同 clearDevice)。
+    const barrierAtFirstDelete: number[] = [];
+    const originalRm = fsp.rm;
+    const spy = vi.spyOn(fsp, 'rm').mockImplementation((async (t: unknown, ...rest: unknown[]) => {
+      if (typeof t === 'string' && t === target) {
+        barrierAtFirstDelete.push(Number.parseInt(fs.readFileSync(accountMark, 'utf8'), 10));
+      }
+      return (originalRm as (...args: unknown[]) => Promise<unknown>)(t, ...rest);
+    }) as unknown as typeof fsp.rm);
+    try {
+      await enqueuePurge(root, [target]);
+      expect(await drainPurgeQueue()).toEqual({ purged: 1, pending: 0 });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(fs.existsSync(target)).toBe(false);
+    expect(Number.parseInt(await fsp.readFile(accountMark, 'utf8'), 10)).toBe(4);
+    expect(barrierAtFirstDelete).toEqual([4]);
+  });
+
+  it('屏障修不好(计数读不出数字)→ 条目留着重试,不当成清干净了', async () => {
+    const root = await makeOwnerCache('owner-1');
+    const target = path.join(root, 'messages', 'a.json');
+    const accountMark = path.join(`${root}.control`, 'cleared', '_account');
+    await fsp.mkdir(path.dirname(accountMark), { recursive: true });
+    await fsp.writeFile(accountMark, 'corrupted', 'utf8');
+
+    await enqueuePurge(root, [target]);
+    expect(await drainPurgeQueue()).toEqual({ purged: 0, pending: 1 });
+    expect(await hasPendingPurgeRecords()).toBe(true);
+  });
+
   it('文件级条目与整根条目互不覆盖', async () => {
     const root = await makeOwnerCache('owner-1');
     await enqueuePurge(root);

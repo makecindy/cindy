@@ -30,6 +30,7 @@ import { createHash, randomBytes } from 'node:crypto';
 
 import { createLogger } from '../logger';
 import { withCrossProcessLock } from './crossProcessLock';
+import { bumpClearedCounter, CLEARED_ACCOUNT } from './mirrorCacheBarrier';
 
 const log = createLogger('device-link:mirror-cache-purge');
 
@@ -524,6 +525,15 @@ async function drainPurgeQueueLocked(
     const classified = classifyPurgePaths(entry.root, entry.paths);
     const targets = classified.paths;
     try {
+      // 补删之前先把**作废屏障**修好(账号级计数自增一次)。
+      //
+      // 为什么必须在这里做:登记进队列的成因之一正是"作废计数自增失败"(见 mirrorCacheStore
+      // 空写路径)。那种条目只带着消息文件路径 —— 如果这里只把文件删掉、记录一扔,盘上的计数
+      // 仍是清理**之前**的值,于是另一个共享 userData 的进程那笔迟到的最新页(它握着同一个旧
+      // 计数)会在消化之后通过比对,把已清掉的正文重建回来(review: codex P1)。
+      // 顺序同 clearDevice:意图先落盘、再删数据 —— 自增之后才捕获内容的写入拿的是新值,
+      // 而"内容取自自增之前"的写入一律失配。修不好就整条留着重试(读路径同时保持被挡)。
+      await bumpClearedCounter(entry.root, CLEARED_ACCOUNT);
       if (!classified.wholeRoot && entry.paths && entry.paths.length > 0) {
         // 逐个删成功才算清掉;剩下的继续留在队列里。
         //

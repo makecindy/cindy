@@ -36,6 +36,16 @@ import { createHash, randomBytes } from 'node:crypto';
 
 import { ownerScopedUserDataPath } from '../appSessionState';
 import { withCrossProcessLock } from './crossProcessLock';
+// 作废屏障(持久计数器)与 purge 队列共用一份实现 —— 队列在补删残留后要顺手把屏障修好。
+import {
+  bumpClearedCounter,
+  controlDir,
+  numericCounter,
+  readClearCounter,
+  CLEARED_ACCOUNT,
+  CLEARED_ANY,
+  type ClearCounter,
+} from './mirrorCacheBarrier';
 import { createLogger } from '../logger';
 
 const log = createLogger('device-link:mirror-cache');
@@ -64,10 +74,7 @@ const MESSAGES_DIR = 'messages';
  * 而 clearAll 照报成功(review: codex P1)。所以它们放在缓存根的**兄弟**目录里,
  * 仍在 owner 命名空间内(切账号照样隔离),但不在被删的子树中。
  */
-const CACHE_CONTROL_SUFFIX = '.control';
 const CACHE_LOCK_FILE = 'lock';
-/** clearAll 的账号级作废计数器(与逐设备计数器同机制,只是全局一份)。 */
-const CLEARED_ACCOUNT = '_account';
 const SESSION_LIST_FILE = 'session-list.json';
 
 /** 缓存快照里的单台设备(deviceName 供种入时重新 stamp)。 */
@@ -647,14 +654,6 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
    * 之前",丢弃这次写。用计数而不是时间戳:毫秒精度下"清理在同一毫秒内跑完"时时间戳挡不住,
    * 计数没有精度问题。读不出来时保守跳过写(缓存是纯优化,少写一次无所谓)。
    */
-  const CLEARED_DIR = 'cleared';
-  /** 列表快照是整份写,任何设备被清都可能让它变陈旧 → 用一个共享计数器。 */
-  const CLEARED_ANY = '_any';
-
-  function clearedMarkPath(root: string, key: string): string {
-    return path.join(controlDir(root), CLEARED_DIR, key);
-  }
-
   /** 每会话的作废计数 key(与消息文件同名派生,天然跟着 trim / 消毒规则)。 */
   function sessionClearKey(deviceId: string, sessionId: string): string {
     return messageFileName(deviceId, sessionId).replace(/\.json$/, '');
@@ -663,65 +662,6 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
   function deviceClearKey(id: string): string {
     const trimmed = id.trim();
     return `${safeSegment(trimmed)}-${shortHash(trimmed)}`;
-  }
-
-  /**
-   * 读作废计数。三态,理由见 clearedSince:
-   *  - number:计数(缺文件 = 0,从未清过);
-   *  - `'denied'`:文件在那儿但**没权限**读(EACCES / EPERM)—— 屏障可能是真的,fail-closed;
-   *  - `'unknown'`:资源类失败(EMFILE / EBUSY…)或内容不是数字 —— **无法比对**,写入侧一律
-   *    按"可能清过"处理(fail-closed)。取舍很不对称:少写一次缓存只是少一次首屏加速,而放行
-   *    一笔可能取自清理之前的内容,等于把被撤销设备 / 上个账号的正文重建到盘上(review: codex
-   *    P1)。计数文件是原子落位的,所以"内容不是数字"只会来自外部损坏,那时更不该信它。
-   */
-  type ClearCounter = number | 'denied' | 'unknown';
-
-  /** 对外暴露的计数值:非数字(denied / unknown)一律用 -1 表示"不可比对"。 */
-  function numericCounter(value: ClearCounter): number {
-    return typeof value === 'number' ? value : -1;
-  }
-
-  async function readClearCounter(root: string, key: string): Promise<ClearCounter> {
-    try {
-      const raw = await fsp.readFile(clearedMarkPath(root, key), 'utf8');
-      const value = Number.parseInt(raw, 10);
-      return Number.isFinite(value) ? value : 'unknown';
-    } catch (err) {
-      const code = errnoCode(err);
-      if (code === 'ENOENT' || code === 'ENOTDIR') return 0;
-      if (code === 'EACCES' || code === 'EPERM') return 'denied';
-      return 'unknown';
-    }
-  }
-
-  /**
-   * 自增作废计数。**失败会抛** —— 这是跨进程唯一的持久屏障:另一个实例可能已经读到旧计数
-   * 并在锁上等着,自增落不下去却报"清干净了"的话,它会在清理之后把被撤销设备 / 上一个账号的
-   * 正文重建出来(review: codex P1)。落不下去就让调用方把这次清理当成"没清完",登记重试。
-   */
-  async function bumpClearedCounter(root: string, key: string): Promise<void> {
-    const file = clearedMarkPath(root, key);
-    const read = await readClearCounter(root, key);
-    // 旧值读不出来时**不能**当 0 重来:曾经读到合法值 1 的写入,会在"清理后又被写成 1"的计数上
-    // 比对成功,把刚删掉的正文重建出来。既然这是唯一的持久屏障,读不出旧值就让自增失败 ——
-    // 调用方会把这次清理登记成"没清完"(purge 队列),而 purge 记录挂着期间缓存读一律被挡掉,
-    // 于是失效方向是"缓存关掉",不是"旧明文回来"(review: codex P1)。
-    if (typeof read !== 'number') {
-      throw new Error(`mirror cache: clear counter unreadable (${read}) for ${key}`);
-    }
-    const current = read;
-    await ensureDir(path.dirname(file));
-    // 原子落位:直接 writeFile 会有"截断了、新内容还没写完"的窗口,那一刻读出来是空串 →
-    // `'unknown'`,而 unknown 现在是 fail-closed,损坏一次就会把这个 key 的缓存写入长期挡住。
-    // 计数文件里只有一个数字,tmp 残留不含正文,清理失败可忽略。
-    const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
-    try {
-      await fsp.writeFile(tmp, String(current + 1), 'utf8');
-      await fsp.rename(tmp, file);
-    } catch (err) {
-      await fsp.rm(tmp, { force: true }).catch(() => undefined);
-      throw err;
-    }
   }
 
   async function bumpClearCounters(root: string, id: string): Promise<void> {
@@ -747,11 +687,6 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     const now = await readClearCounter(root, key);
     if (typeof now !== 'number') return true;
     return now !== before;
-  }
-
-  /** 控制面目录:`<cache-root>.control/`(与缓存根同级,clearAll 不会删它)。 */
-  function controlDir(root: string): string {
-    return `${root}${CACHE_CONTROL_SUFFIX}`;
   }
 
   function cacheLockPath(root: string): string {
