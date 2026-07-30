@@ -3844,6 +3844,7 @@ export class CodexAgent extends BaseAgent {
         const requestId = String(meta.requestId);
         if (dismissed.has(requestId)) continue;
         dismissed.add(requestId);
+        forgetPendingUserInputRequest(requestId);
         eventQueue.push({
           type: 'interaction_dismissed',
           data: { requestId, reason, resolvedAs: 'deny' },

@@ -10133,6 +10133,78 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('does not cache a late user-input answer after local turn interruption', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
+      if (method === Method.TurnInterrupt) return {};
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-user-input-local-interrupt',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    await handle.send({ type: 'user', content: 'ask me a question' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.requestUserInput) throw new Error('expected requestUserInput handler');
+    const interruptedDecision = deferred<InteractionDecision>();
+    const replacementDecision = deferred<InteractionDecision>();
+    let requestCount = 0;
+    handle.setInteractionResolver(async () => {
+      requestCount += 1;
+      return requestCount === 1
+        ? interruptedDecision.promise
+        : replacementDecision.promise;
+    });
+
+    const question = {
+      id: 'q1',
+      header: 'Question',
+      question: 'Pick one',
+      isOther: false,
+      isSecret: false,
+      options: null,
+    };
+    const interruptedResponsePromise = handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'item-interrupted',
+      questions: [question],
+    }, { requestId: 'req-interrupted' });
+
+    await handle.abort();
+    await expect(interruptedResponsePromise).resolves.toEqual({ answers: {} });
+
+    interruptedDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': 'late' },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const replacementResponsePromise = handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'item-replacement',
+      questions: [question],
+    }, { requestId: 'req-replacement' });
+    expect(requestCount).toBe(2);
+    replacementDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': 'fresh' },
+    });
+    await expect(replacementResponsePromise).resolves.toEqual({
+      answers: { q1: { answers: ['fresh'] } },
+    });
+
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'interrupted' },
+    });
+    await handle.close();
+  });
+
   it('reassigns a joined duplicate when the interaction owner is cancelled', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
