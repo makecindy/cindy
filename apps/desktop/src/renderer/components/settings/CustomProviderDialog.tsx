@@ -709,6 +709,11 @@ export function CustomProviderDialog({
     mergedModels.forEach((m, i) => {
       if (!newIndexById.has(m.id)) newIndexById.set(m.id, i);
     });
+    // 每个新行号只认领一次:空 id(未填完的手填行)没有稳定身份可追踪,直接丢弃
+    // 草稿(该行本就会在保存时因 id/name 为空被过滤掉);多条旧行共享同一个非空 id
+    // 时(picker 合并对重复 id 本就只保留第一条落进 merged),只让第一条旧草稿
+    // 认领对应新行,避免后一行的草稿被错配、顶替掉别的模型的草稿(review P1)。
+    const claimedNewIndices = new Set<number>();
     setWindowDrafts((drafts) => {
       const next: Record<string, string> = {};
       for (const [key, text] of Object.entries(drafts)) {
@@ -721,8 +726,11 @@ export function CustomProviderDialog({
         // 仍保留的行(id 未变)把草稿迁到新行号;被 picker 移出的行(取消勾选)
         // 丢弃草稿——不合法草稿只应因它对应的行真的消失才清除。
         const id = oldIndexToId.get(Number(key.slice(sep + 1)));
-        const newIdx = id !== undefined ? newIndexById.get(id) : undefined;
-        if (newIdx !== undefined) next[`${agent}:${newIdx}`] = text;
+        if (!id) continue;
+        const newIdx = newIndexById.get(id);
+        if (newIdx === undefined || claimedNewIndices.has(newIdx)) continue;
+        claimedNewIndices.add(newIdx);
+        next[`${agent}:${newIdx}`] = text;
       }
       return next;
     });
@@ -741,8 +749,20 @@ export function CustomProviderDialog({
     // 改掉用户显式输入(review P1 ×2)。定位到首个问题 tab 并报错拦下。
     for (const [draftKey, draftText] of Object.entries(windowDrafts)) {
       if (isCommittableWindowText(draftText)) continue;
-      const draftAgent = draftKey.split(':')[0] as AgentKind;
-      if (VISIBLE_AGENTS.includes(draftAgent)) setActiveTab(draftAgent);
+      const sep = draftKey.lastIndexOf(':');
+      const draftAgent = draftKey.slice(0, sep) as AgentKind;
+      if (!VISIBLE_AGENTS.includes(draftAgent)) continue;
+      // 该 runtime 未配置 baseUrl、或该行 id/name 为空:两者都会在下面序列化时
+      // 被丢弃,不会写进最终配置,草稿再非法也不该挡住一个原本有效的保存
+      // (review P1)。
+      const rf = rt[draftAgent];
+      if (!rf.baseUrl.trim()) continue;
+      const row = rf.models[Number(draftKey.slice(sep + 1))];
+      if (!row || !row.id.trim() || !row.name.trim()) continue;
+      setActiveTab(draftAgent);
+      // OAuth 鉴权模式下模型列表(含窗口输入)折在「高级」里;不展开的话用户看不到
+      // 需要修的这个输入框,报错后无从下手,只能瞎猜着点开(review P1)。
+      if (authMode === 'oauth' && !showAdvanced) setShowAdvanced(true);
       toast.error(t('settings.providers.custom.errors.contextWindowInvalid'));
       return;
     }
@@ -919,6 +939,7 @@ export function CustomProviderDialog({
     existingIds,
     onSaved,
     windowDrafts,
+    showAdvanced,
     t,
   ]);
 
