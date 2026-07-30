@@ -43,6 +43,20 @@ function cacheFile(): string {
   return path.join(dir, ENDPOINT_MANIFEST_CACHE_FILE_NAME);
 }
 
+// Windows 上创建 symlink 需要管理员或开发者模式;拿不到权限时(EPERM)跳过相关
+// 用例,与下面 mkfifo 不可用时的处理一致。探测一次,别让每个用例各炸一遍。
+const canSymlink = (() => {
+  const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-symlink-probe-'));
+  try {
+    fs.symlinkSync(path.join(probeDir, 'target'), path.join(probeDir, 'link'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(probeDir, { recursive: true, force: true });
+  }
+})();
+
 describe('endpointManifestCache', () => {
   it('写入后可原样读回', () => {
     expect(writeEndpointManifestCache(dir, ENTRY)).toBe(true);
@@ -84,7 +98,7 @@ describe('endpointManifestCache', () => {
 
   it('多字节 UTF-8 内容按字节而非字符数判断', () => {
     // 每个汉字 3 字节:字符数远小于上限,字节数刚好越界。用 string.length 判断会放行。
-    const cjk = '配'.repeat(128 * 1024 / 3 + 10);
+    const cjk = '配'.repeat((128 * 1024) / 3 + 10);
     expect(Buffer.byteLength(cjk, 'utf8')).toBeGreaterThan(128 * 1024);
     expect(cjk.length).toBeLessThan(128 * 1024);
     fs.writeFileSync(cacheFile(), cjk, 'utf8');
@@ -111,7 +125,10 @@ describe('endpointManifestCache', () => {
   it('写得进的一定读得回(读写共用同一上限)', () => {
     // 贴着上限:序列化后不超过 128KiB 就必须写成功且原样读回。
     let text = 'y'.repeat(100 * 1024);
-    while (Buffer.byteLength(JSON.stringify({ ...ENTRY, manifestText: text }, null, 2), 'utf8') > 128 * 1024) {
+    while (
+      Buffer.byteLength(JSON.stringify({ ...ENTRY, manifestText: text }, null, 2), 'utf8') >
+      128 * 1024
+    ) {
       text = text.slice(0, -1024);
     }
     const big = { ...ENTRY, manifestText: text };
@@ -131,8 +148,14 @@ describe('缓存端点的受信任域约束(安全边界)', () => {
   const CN_BASE = 'https://hotfix.cindy.com.cn/cindy';
   const TRUSTED = Object.values(REGION_ENDPOINT_DOMAIN);
   /** CN 构建的策略:非跨区端点锁 cindy.com.cn,slack/telegram hook 才允许 cindy.app。 */
-  const CN_POLICY = { regionDomain: REGION_ENDPOINT_DOMAIN.cn, crossRegionDomain: REGION_ENDPOINT_DOMAIN.global };
-  const GLOBAL_POLICY = { regionDomain: REGION_ENDPOINT_DOMAIN.global, crossRegionDomain: REGION_ENDPOINT_DOMAIN.global };
+  const CN_POLICY = {
+    regionDomain: REGION_ENDPOINT_DOMAIN.cn,
+    crossRegionDomain: REGION_ENDPOINT_DOMAIN.global,
+  };
+  const GLOBAL_POLICY = {
+    regionDomain: REGION_ENDPOINT_DOMAIN.global,
+    crossRegionDomain: REGION_ENDPOINT_DOMAIN.global,
+  };
 
   it('区域域名是显式写死的(不从基址推导)', () => {
     // 上一版从自举基址「去掉最左一段」推导,在多段公共后缀上会**放宽**信任:
@@ -254,7 +277,8 @@ describe('缓存端点的受信任域约束(安全边界)', () => {
 });
 
 describe('缓存读取只接受常规文件(阻断路径不能被挂住)', () => {
-  it('symlink 指向合法缓存也拒绝(statSync 会跟随,lstatSync 不会)', () => {
+  // skipIf: 无 symlink 权限时报告为 skipped 而不是假 passed
+  it.skipIf(!canSymlink)('symlink 指向合法缓存也拒绝(statSync 会跟随,lstatSync 不会)', () => {
     const real = path.join(dir, 'real-cache.json');
     fs.writeFileSync(real, JSON.stringify(ENTRY), 'utf8');
     fs.symlinkSync(real, cacheFile());
@@ -314,7 +338,8 @@ describe('缓存写入的临时文件必须唯一且独占创建', () => {
     expect(readEndpointManifestCache(dir)).toEqual(ENTRY);
   });
 
-  it('target 被换成 symlink 时 rename 替换掉它本身,不写穿到链接目标', () => {
+  // skipIf: 无 symlink 权限时报告为 skipped 而不是假 passed
+  it.skipIf(!canSymlink)('target 被换成 symlink 时 rename 替换掉它本身,不写穿到链接目标', () => {
     const outside = path.join(dir, 'outside.txt');
     fs.writeFileSync(outside, 'untouched', 'utf8');
     fs.symlinkSync(outside, cacheFile());
