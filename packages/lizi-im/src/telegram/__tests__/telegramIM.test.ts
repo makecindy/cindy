@@ -562,6 +562,29 @@ describe('TelegramIM', () => {
     expect(api.calls.filter((c) => c.method === 'sendMessageDraft').length).toBe(1);
   });
 
+  it('多图出站合成原生相册(sendMediaGroup), 单图仍走 sendPhoto', async () => {
+    await connect();
+    const img = (name: string) => {
+      const p = path.join(tmpDir, name);
+      fs.writeFileSync(p, 'fake-png');
+      return p;
+    };
+    // 多图: 相册一条
+    const handle = await im.startStreamingText(OWNER_ID);
+    handle.addExtraImageAbsPath?.(img('a.png'));
+    handle.addExtraImageAbsPath?.(img('b.png'));
+    handle.addExtraImageAbsPath?.(img('c.png'));
+    await handle.finalize('三张图的回答');
+    expect(api.calls.filter((c) => c.method === 'sendMediaGroup').length).toBe(1);
+    expect(api.calls.filter((c) => c.method === 'sendPhoto').length).toBe(0);
+    // 单图: 不动用相册
+    const handle2 = await im.startStreamingText(OWNER_ID);
+    handle2.addExtraImageAbsPath?.(img('d.png'));
+    await handle2.finalize('一张图的回答');
+    expect(api.calls.filter((c) => c.method === 'sendMediaGroup').length).toBe(1);
+    expect(api.calls.filter((c) => c.method === 'sendPhoto').length).toBe(1);
+  });
+
   it('disconnect 清空凭证并回 idle', async () => {
     await connect();
     await ctx.handlers.get('telegramBot:disconnect')!();

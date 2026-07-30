@@ -935,12 +935,18 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     }
   }
 
-  /** 受管图片(cindy-media/xdt-image url 或 `abs:` 前缀绝对路径)→ sendPhoto。 */
+  /**
+   * 受管图片(cindy-media/xdt-image url 或 `abs:` 前缀绝对路径)出站。
+   * 2 张起自动合成原生相册(sendMediaGroup, 每组 ≤10 — Telegram 上限),
+   * 客户端渲染为整齐的图集而不是刷屏的一串独立消息; 单张走 sendPhoto;
+   * 相册整组失败回落逐张(部分文件缺失/超限时不拖累其余)。
+   */
   private async uploadImages(messageId: string, imageRefs: string[]): Promise<void> {
     const api = this.api;
     if (!api || imageRefs.length === 0) return;
     const { chatId } = decodeMessageId(messageId);
     const seen = new Set<string>();
+    const absPaths: string[] = [];
     for (const ref of imageRefs) {
       let absPath: string | null = null;
       if (ref.startsWith('abs:')) {
@@ -954,15 +960,55 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       }
       if (!absPath || seen.has(absPath)) continue;
       seen.add(absPath);
-      try {
-        const form = new FormData();
-        form.set('chat_id', chatId);
-        form.set('photo', new Blob([fs.readFileSync(absPath)]), path.basename(absPath));
-        await api.callForm('sendPhoto', form);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.log.warn(`telegram image upload failed: ${msg}`);
+      absPaths.push(absPath);
+    }
+    if (absPaths.length === 1) {
+      await this.sendSinglePhoto(chatId, absPaths[0]);
+      return;
+    }
+    for (let i = 0; i < absPaths.length; i += 10) {
+      const group = absPaths.slice(i, i + 10);
+      const albumSent = group.length > 1 && (await this.sendPhotoAlbum(chatId, group));
+      if (!albumSent) {
+        for (const absPath of group) await this.sendSinglePhoto(chatId, absPath);
       }
+    }
+  }
+
+  private async sendSinglePhoto(chatId: string, absPath: string): Promise<void> {
+    const api = this.api;
+    if (!api) return;
+    try {
+      const form = new FormData();
+      form.set('chat_id', chatId);
+      form.set('photo', new Blob([fs.readFileSync(absPath)]), path.basename(absPath));
+      await api.callForm('sendPhoto', form);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(`telegram image upload failed: ${msg}`);
+    }
+  }
+
+  /** 多图原生相册(attach:// 多部分上传)。返回 false = 整组失败, 调用方回落逐张。 */
+  private async sendPhotoAlbum(chatId: string, absPaths: string[]): Promise<boolean> {
+    const api = this.api;
+    if (!api) return false;
+    try {
+      const form = new FormData();
+      form.set('chat_id', chatId);
+      form.set(
+        'media',
+        JSON.stringify(absPaths.map((_, i) => ({ type: 'photo', media: `attach://photo${i}` }))),
+      );
+      absPaths.forEach((absPath, i) => {
+        form.set(`photo${i}`, new Blob([fs.readFileSync(absPath)]), path.basename(absPath));
+      });
+      await api.callForm('sendMediaGroup', form);
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(`telegram album upload failed, fallback to singles: ${msg}`);
+      return false;
     }
   }
 
