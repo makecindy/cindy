@@ -469,6 +469,73 @@ describe('TelegramIM', () => {
     expect(api2.calls.filter((c) => c.method === 'sendMessage')).toHaveLength(0);
   });
 
+  it('DM 流式走 sendMessageDraft: 空占位→draft 更新→定稿真消息(不 edit)', async () => {
+    await connect();
+    const sendsBefore = api.calls.filter((c) => c.method === 'sendMessage').length;
+    const handle = await im.startStreamingText(OWNER_ID);
+    // 构造即推空 draft = 客户端原生 Thinking 占位
+    await vi.waitFor(() => {
+      expect(
+        api.calls.some((c) => c.method === 'sendMessageDraft' && c.params.text === ''),
+      ).toBe(true);
+    });
+    handle.replace('部分回答');
+    await vi.waitFor(
+      () => {
+        expect(
+          api.calls.some((c) => c.method === 'sendMessageDraft' && c.params.text === '部分回答'),
+        ).toBe(true);
+      },
+      { timeout: 3_000, interval: 50 },
+    );
+    // 同一 draft_id 连续更新(客户端动画的前提)
+    const draftIds = new Set(
+      api.calls.filter((c) => c.method === 'sendMessageDraft').map((c) => c.params.draft_id),
+    );
+    expect(draftIds.size).toBe(1);
+    expect([...draftIds][0]).not.toBe(0);
+
+    await handle.finalize('最终回答');
+    const sends = api.calls.filter((c) => c.method === 'sendMessage');
+    expect(sends.length).toBe(sendsBefore + 1);
+    expect(api.calls.some((c) => c.method === 'editMessageText')).toBe(false);
+  });
+
+  it('群 lane 流式仍走 send+edit 经典路径, 不用 draft', async () => {
+    await connect();
+    const handle = await im.startStreamingText('g/-100200/r7');
+    handle.replace('进行中');
+    await handle.finalize('群里的最终回答');
+    expect(api.calls.some((c) => c.method === 'sendMessageDraft')).toBe(false);
+    expect(api.calls.some((c) => c.method === 'sendMessage')).toBe(true);
+  });
+
+  it('draft 400 失败: 本 turn 落回经典路径, 本实例后续 turn 不再尝试 draft', async () => {
+    await connect();
+    const originalCall = api.call.bind(api);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'sendMessageDraft') {
+        api.calls.push({ method, params: params ?? {} });
+        throw new TelegramApiError('sendMessageDraft', 400, 'Bad Request: method not available');
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    const handle = await im.startStreamingText(OWNER_ID);
+    // 首次 pushDraft 失败 → latch 到经典 handle(会先 send 一条占位消息)
+    await vi.waitFor(() => {
+      expect(api.calls.filter((c) => c.method === 'sendMessageDraft').length).toBe(1);
+    });
+    handle.replace('落回后的内容');
+    await handle.finalize('落回后的最终回答');
+    expect(api.calls.some((c) => c.method === 'sendMessage')).toBe(true);
+
+    // 400 = 能力性失败, 实例级 latch: 新 turn 不再发 draft
+    await im.startStreamingText(OWNER_ID);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(api.calls.filter((c) => c.method === 'sendMessageDraft').length).toBe(1);
+  });
+
   it('disconnect 清空凭证并回 idle', async () => {
     await connect();
     await ctx.handlers.get('telegramBot:disconnect')!();

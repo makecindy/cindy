@@ -128,6 +128,10 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private pollAbort: AbortController | null = null;
   private pollLoop: Promise<void> | null = null;
   private disposing = false;
+  /** DM 流式草稿的 draft_id 单调计数(非零; 同 id 连续更新触发客户端动画)。 */
+  private draftIdCounter = 0;
+  /** sendMessageDraft 能力性失败后的永久 latch(本实例生命周期内)。 */
+  private draftStreamingDisabled = false;
   private readonly mediaDir: string;
   /** 相册聚合缓冲 — key `${chatId}:${mediaGroupId}`。 */
   private readonly pendingAlbums = new Map<
@@ -349,6 +353,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   }
 
   async startStreamingText(userId: string, initial?: string): Promise<StreamingTextHandle> {
+    // DM(非 lane 合成 id)走 sendMessageDraft 原生流式草稿: turn 开始即原生
+    // "Thinking…" 占位动画, 中间态无真实消息、定稿才落聊天记录(#848 的
+    // answerOnly 补丁由该通道取代; draft 一旦失败 handle 内部 latch 回
+    // send+edit 经典路径, 且本实例后续 turn 不再尝试 draft)。
+    const isDm = decodeLaneUserId(userId) === null;
+    const useDraft = isDm && !this.draftStreamingDisabled;
+    if (useDraft) this.draftIdCounter += 1;
+    const draftId = this.draftIdCounter;
     return startTelegramStreaming(
       {
         send: async (markdown) => {
@@ -363,6 +375,26 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         uploadImages: (messageId, imageUrls) => this.uploadImages(messageId, imageUrls),
         chunk: chunkTelegramSource,
         extractImageUrls: (markdown) => markdownToTelegramHtml(markdown).imageUrls,
+        ...(useDraft
+          ? {
+              sendDraft: async (plainText: string) => {
+                try {
+                  await this.requireApi().call('sendMessageDraft', {
+                    chat_id: Number(userId),
+                    draft_id: draftId,
+                    text: plainText,
+                  });
+                } catch (err) {
+                  // 能力性失败(旧 Bot API server / 客户端不支持)永久 latch,
+                  // 不再逐 turn 白付一次往返; 瞬时失败(限流等)只影响本 turn。
+                  if (err instanceof TelegramApiError && err.errorCode === 400) {
+                    this.draftStreamingDisabled = true;
+                  }
+                  throw err;
+                }
+              },
+            }
+          : {}),
       },
       initial,
     );
