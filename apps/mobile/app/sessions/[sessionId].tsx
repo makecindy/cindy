@@ -464,6 +464,7 @@ import {
 } from '@/session/sessionOverview';
 import {
   buildMobileSystemCardData,
+  commandNeedsRemoteSession,
   mergeMobileLocalSlashCommands,
   parseMobileLocalSystemCommand,
 } from '@/session/systemCard';
@@ -586,6 +587,23 @@ const ENQUEUE_RECONNECT_BACKOFF_MS = 300;
  * 闪一下、计时还被重置回 0s。真停了推迟这点时间熄灭无感,交接空隙则被吃掉。
  */
 const COMPOSER_ACTIVITY_SETTLE_MS = 600;
+
+/**
+ * 「这个会话在被控端还不存在」——所有**需要远端会话**的入口共用的唯一判据。
+ *
+ * 新建乐观管线的合成会话行在 create 成功前带 `pendingLocalCreation`,此刻任何以
+ * sessionId 打过去的 RPC 都会失败。三类入口都要看它(review 收敛检查点:这个语义
+ * 原先只在会话设置那一处写了,slash 命令那条路漏了,于是创建窗口内发 `/context`
+ * 会消费掉草稿再糊一张错误卡):
+ *  - 消息派发:由 outboxDispatchBlockedNow 复合(它还要求字段权威、管线已收口);
+ *  - 会话设置类 RPC(model / effort / fast / permission / plan);
+ *  - 需要远端的 slash 命令(/context 取用量、/learn 打蒸馏)。
+ *
+ * 行不存在也算「不存在」:那种状态下这些 RPC 同样无处可去。
+ */
+function isRemoteSessionMissing(row: RemoteSession | null | undefined): boolean {
+  return !row || row.pendingLocalCreation === true;
+}
 
 /** 恢复进「只有一个输入框」的新建页时,气泡文本要剥掉产品私有 marker。 */
 function outboxItemDraftText(item: MobileOutboxItem): string {
@@ -1414,7 +1432,9 @@ export default function SessionScreen() {
   // 会话设置类动作(model / effort / fast / permission / plan)在会话建成前不可用:
   // 它们是打到被控端会话的 RPC。cacheSeeded 不锁——那种会话在被控端是存在的,只是
   // 本地行还是瘦身缓存。硬门在 runControlAction 里,这里供按钮表达灰态。
-  const sessionSettingsLocked = currentSession?.pendingLocalCreation === true;
+  // 判据与命令式路径共用 isRemoteSessionMissing(见其注释):这里是渲染需要的
+  // reactive 形态,send / runControlAction 用读 store 的 Now 形态。
+  const sessionSettingsLocked = isRemoteSessionMissing(currentSession);
   // 这两条理由**不再**进 composer 的 readOnlyReason:共享模型会据此把整个输入框换成
   // 「只读模式」卡片,而它们表达的只是「会话参数还没就绪」——每次新建会话都必然经过,
   // 用户看到的是「刚发出消息就变只读」。改为:composer 全程正常,这期间发出的消息压进
@@ -4470,6 +4490,9 @@ export default function SessionScreen() {
     }
   };
 
+  /** 会话行的同步真源(store);命令式路径不能读可能落后一帧的 render 快照。 */
+  const readSessionRowNow = () => remoteSessionStore.getSessions().find((item) => item.id === sessionId) ?? null;
+
   /**
    * 「会话参数还没就绪,现在不能 enqueue」——outbox 只排队不派发的判据。
    *
@@ -4482,10 +4505,10 @@ export default function SessionScreen() {
    * 读 store 而非 render 快照:pump 是异步循环,每轮都要看当下的真相。
    */
   const outboxDispatchBlockedNow = () => {
-    const row = remoteSessionStore.getSessions().find((item) => item.id === sessionId);
-    if (!row) return true;
-    if (row.cacheSeeded) return true;
-    if (row.pendingLocalCreation) return true;
+    const row = readSessionRowNow();
+    // 「会话在被控端还不存在」是子集;派发还额外要求字段权威、创建管线已收口。
+    if (isRemoteSessionMissing(row)) return true;
+    if (row?.cacheSeeded) return true;
     return getNewSessionCreationTask(sessionId) !== null;
   };
 
@@ -4717,6 +4740,23 @@ export default function SessionScreen() {
       && pendingSkillAtSend.name === parsedDesktopCommandAtSend.name
         ? null
         : parsedDesktopCommandAtSend;
+    // 需要远端会话的命令在会话建成前必须挡住(review P1)。
+    //
+    // 命令走的是下方「豁免 outbox」的原路径:/context 直接向被控端取用量、/learn 直接
+    // 打蒸馏管线。合成行此刻在被控端还不存在,执行的唯一结果是把草稿消费掉、再糊一张
+    // 错误卡。排队也不成立——outbox 的派发动作是「enqueue 一条消息」,命令原样入队
+    // agent 只会当普通文本忽略。所以挡住 + 明说:草稿此刻还没被乐观清空(清空在下面
+    // 几行),原文留在输入框,几秒后重试即可。纯本地卡不受影响(判据见
+    // commandNeedsRemoteSession)。
+    if (
+      commandNeedsRemoteSession(earlyLocalCommand, earlyDesktopCommand)
+      && isRemoteSessionMissing(readSessionRowNow())
+    ) {
+      setError(t('session.screen.commandWaitsForSession'));
+      sendInFlightRef.current = false;
+      setSending(false);
+      return;
+    }
     const sessionRefsAtSend = outboxEligible && !earlyLocalCommand && !earlyDesktopCommand
       ? extractMobileSessionReferences(text, remoteSessionStore.getSessionDeviceId)
       : [];
@@ -5846,6 +5886,8 @@ export default function SessionScreen() {
     // 失败并弹错,把「一切正常」的乐观观感打碎。静默忽略(不发 RPC、不写乐观 patch、
     // 不报错),对应入口的按钮同期也是灰的;窗口只有几秒。
     // composer 与发送不受此限:那条路径改走 outbox 排队(见 outboxDispatchBlockedNow)。
+    // 判据与 send 里的命令门同源(sessionSettingsLocked = isRemoteSessionMissing);
+    // 这里用 reactive 形态就够:按钮就是按这一帧的快照渲染的,点击不跨帧竞争。
     if (sessionSettingsLocked) return;
     setControlBusy(true);
     setError(null);

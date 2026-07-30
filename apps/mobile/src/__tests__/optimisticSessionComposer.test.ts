@@ -35,8 +35,10 @@ describe('mobile optimistic composer while session is not ready', () => {
     const source = readSource(SCREEN);
 
     expect(source).toContain('const outboxDispatchBlockedNow = () => {');
-    expect(source).toContain('if (row.cacheSeeded) return true;');
-    expect(source).toContain('if (row.pendingLocalCreation) return true;');
+    // 「会话在被控端还不存在」走共用判据(见下方的入口收敛测试);派发还额外要求字段
+    // 权威(cacheSeeded 行被瘦身截断过)与创建管线已收口。
+    expect(source).toContain('if (isRemoteSessionMissing(row)) return true;');
+    expect(source).toContain('if (row?.cacheSeeded) return true;');
     expect(source).toContain('return getNewSessionCreationTask(sessionId) !== null;');
     // pump 循环每轮都看当下真相,blocked 时留住条目(不标失败)。
     expect(source).toContain('if (outboxDispatchBlockedNow()) return;');
@@ -166,12 +168,38 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(bubble).toContain('remoteState?.identity === identity ? remoteState.uri : null');
   });
 
-  it('still blocks session-settings RPCs until the session exists remotely', () => {
+  it('routes every remote-session-dependent entry through one judgement', () => {
+    // 「会话在被控端还不存在」原先只在会话设置那一处写了,slash 命令那条路漏了:创建
+    // 窗口内发 /context 会直接打 RPC,消费掉草稿再糊一张错误卡(review P1)。判据收敛
+    // 成一个纯函数,三类入口共用——渲染用 reactive 形态,命令式路径读 store 同步真源。
     const source = readSource(SCREEN);
 
-    expect(source).toContain('const sessionSettingsLocked = currentSession?.pendingLocalCreation === true;');
-    // 硬门在统一入口,覆盖全部 runControlAction 调用点。
-    expect(source).toContain('if (sessionSettingsLocked) return;\n    setControlBusy(true);');
+    expect(source).toContain('function isRemoteSessionMissing(row: RemoteSession | null | undefined): boolean {');
+    expect(source).toContain('return !row || row.pendingLocalCreation === true;');
+    // 1) 渲染:按钮灰态。
+    expect(source).toContain('const sessionSettingsLocked = isRemoteSessionMissing(currentSession);');
     expect(source).toContain('disabled={!canUseComposer || controlBusy || sessionSettingsLocked}');
+    // 2) 会话设置 RPC 的硬门(统一入口,覆盖全部 runControlAction 调用点)。
+    expect(source).toContain('if (sessionSettingsLocked) return;\n    setControlBusy(true);');
+    // 3) 消息派发:复合判据,「不存在」是它的子集。
+    expect(source).toContain('if (isRemoteSessionMissing(row)) return true;');
+    expect(source).not.toContain('const sessionSettingsLocked = currentSession?.pendingLocalCreation === true;');
+  });
+
+  it('blocks remote-backed slash commands before the draft is consumed', () => {
+    // 挡住而不是排队:outbox 的派发动作是「enqueue 一条消息」,命令原样入队 agent 只会
+    // 当普通文本忽略。而且必须挡在乐观清空**之前**,否则草稿已经没了,提示再准确也
+    // 救不回用户打的字(review P1)。
+    const source = readSource(SCREEN);
+    const gate = source.indexOf('commandNeedsRemoteSession(earlyLocalCommand, earlyDesktopCommand)');
+    expect(gate).toBeGreaterThan(-1);
+    const clear = source.indexOf('if (text) applyComposerDocument(documentAfterOptimisticClear);');
+    expect(gate).toBeLessThan(clear);
+    const branch = source.slice(gate, clear);
+    expect(branch).toContain('isRemoteSessionMissing(readSessionRowNow())');
+    expect(branch).toContain("setError(t('session.screen.commandWaitsForSession'));");
+    // 早退必须自己解掉发送锁(这一段在 try/finally 之前)。
+    expect(branch).toContain('sendInFlightRef.current = false;');
+    expect(branch).toContain('setSending(false);');
   });
 });

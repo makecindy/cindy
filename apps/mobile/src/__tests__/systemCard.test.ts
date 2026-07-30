@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MOBILE_LOCAL_SYSTEM_COMMANDS,
   buildMobileSystemCardData,
+  commandNeedsRemoteSession,
   formatMobileSystemCard,
   mergeMobileLocalSlashCommands,
   parseMobileLocalSystemCommand,
@@ -136,5 +138,31 @@ describe('formatMobileSystemCard — goal 续跑卡按原因分说法', () => {
     expect(formatMobileSystemCard('goal-resumed', undefined).title).toBe(
       i18n.t('message.systemCard.goalResumed'),
     );
+  });
+});
+
+describe('commandNeedsRemoteSession', () => {
+  // 新建会话的几秒窗口里 composer 全程可用(本 PR 的目的),于是用户可以在会话还没
+  // 在被控端建成时发出 slash 命令。要远端的必须挡住(执行只会消费草稿再糊错误卡,
+  // 而排队不成立——outbox 的派发动作是 enqueue 一条消息,命令原样入队 agent 会当
+  // 普通文本忽略);纯本地卡不该挡,挡了反而破坏「一切正常」的观感。review P1。
+  it('只有真正要打被控端的本地命令算(/context)', () => {
+    expect(commandNeedsRemoteSession('context', null)).toBe(true);
+    for (const name of ['help', 'cost', 'pwd', 'status'] as const) {
+      expect(commandNeedsRemoteSession(name, null), name).toBe(false);
+    }
+  });
+
+  it('desktop 命令一律算(手机端白名单只有 /learn,它就是打被控端的)', () => {
+    expect(commandNeedsRemoteSession(null, { name: 'learn' })).toBe(true);
+    // 同名 agent-skill 让行时 parse 会返回 null,那条路是普通消息,走 outbox。
+    expect(commandNeedsRemoteSession(null, null)).toBe(false);
+  });
+
+  it('本地命令清单新增项必须显式归类(防止漏挡)', () => {
+    // 这条是清单守卫:以后往 DEFAULT_LOCAL_SYSTEM_COMMANDS 里加命令时,如果它要打
+    // 被控端却忘了进 MOBILE_REMOTE_BACKED_LOCAL_COMMANDS,至少这里会提醒有新成员。
+    expect(MOBILE_LOCAL_SYSTEM_COMMANDS.map((command) => command.name).sort())
+      .toEqual(['context', 'cost', 'help', 'pwd', 'status']);
   });
 });
