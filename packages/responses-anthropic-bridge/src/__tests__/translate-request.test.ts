@@ -322,6 +322,26 @@ describe('Responses → Anthropic request translation', () => {
     expect(result.request.tool_choice).toEqual({ type: 'any' });
   });
 
+  it('rejects a required tool choice when no bridge-compatible tools remain', () => {
+    expect(() => translateResponsesRequest({
+      model: 'claude',
+      tool_choice: 'required',
+      input: [{ role: 'user', content: 'search the web' }],
+      tools: [{ type: 'web_search' }],
+    })).toThrowError('tool_choice requires a bridge-compatible tool');
+
+    expect(() => translateResponsesRequest({
+      model: 'claude',
+      tool_choice: {
+        type: 'allowed_tools',
+        mode: 'required',
+        tools: [{ type: 'function', name: 'missing' }],
+      },
+      input: [{ role: 'user', content: 'use the missing tool' }],
+      tools: [{ type: 'function', name: 'available', parameters: {} }],
+    })).toThrowError('tool_choice requires a bridge-compatible tool');
+  });
+
   it('keeps allowed_tools filtering specific to same-named tool kinds', () => {
     const result = translateResponsesRequest({
       model: 'claude',

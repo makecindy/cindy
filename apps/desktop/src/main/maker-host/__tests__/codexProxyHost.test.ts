@@ -271,6 +271,12 @@ describe('withCodexUpstreamRecording', () => {
       expect(host.getCodexThreadUpstreamOrigin('thread-anthropic-diag')).toBe(
         'https://messages.provider.example',
       );
+      const anthropicHandlerCalls = mockState.createResponsesAnthropicHandler.mock.calls as unknown as Array<[
+        { promptCaching: boolean; automaticPromptCaching: boolean },
+      ]>;
+      const config = anthropicHandlerCalls.at(-1)?.[0];
+      expect(config?.promptCaching).toBe(false);
+      expect(config?.automaticPromptCaching).toBe(false);
     } finally {
       clearSessionProvider('session-anthropic-diag');
       setCustomProviders([]);
@@ -629,6 +635,7 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     );
     const anthropicHandlerCalls = mockState.createResponsesAnthropicHandler.mock.calls as unknown as Array<[
       {
+        promptCaching: boolean;
         automaticPromptCaching: boolean;
         strictTools: boolean;
         buildHeaders: () => Promise<Record<string, string>>;
@@ -641,6 +648,7 @@ describe('chatBridgeCapabilitiesForRoute', () => {
       'x-api-key': 'anthropic-key',
       authorization: 'Bearer anthropic-key',
     });
+    expect(config.promptCaching).toBe(true);
     expect(config.automaticPromptCaching).toBe(true);
     expect(config.strictTools).toBe(true);
 
@@ -777,6 +785,7 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     const anthropicHandlerCalls = mockState.createResponsesAnthropicHandler.mock.calls as unknown as Array<[
       {
         upstreamBase: string;
+        promptCaching: boolean;
         automaticPromptCaching: boolean;
         strictTools: boolean;
         buildHeaders: () => Promise<Record<string, string>>;
@@ -787,6 +796,7 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     expect(config).toBeDefined();
     if (!config) throw new Error('XD Anthropic bridge config was not captured');
     expect(config.upstreamBase).toBe(XD_GATEWAY_BASE_URL);
+    expect(config.promptCaching).toBe(true);
     expect(config.automaticPromptCaching).toBe(false);
     expect(config.strictTools).toBe(false);
     expect(await config.buildHeaders()).toEqual({

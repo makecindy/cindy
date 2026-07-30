@@ -759,6 +759,8 @@ function createAnthropicBridgeDecision(
   const providerId = route.providerId;
   const providerName = getActiveCatalog().providers.find((p) => p.id === providerId)?.name ?? providerId;
   const stripPrefix = route.routing.modelIdRewrite?.stripPrefix;
+  const supportsPromptCaching =
+    isXdGatewayBridge || isOfficialAnthropicUpstream(upstreamBase);
   const onUpstreamError = route.providerSource === 'user'
     ? ({ status, body }: { status: number; body: string }): void => {
         reportProviderUpstreamError({ agent: 'codex', providerId, providerName, status, bodyText: body });
@@ -789,7 +791,7 @@ function createAnthropicBridgeDecision(
         }
       : {}),
     rewriteModel: (model) => rewriteAnthropicBridgeModel(model, stripPrefix),
-    promptCaching: true,
+    promptCaching: supportsPromptCaching,
     automaticPromptCaching: isOfficialAnthropicUpstream(upstreamBase),
     strictTools: isOfficialAnthropicUpstream(upstreamBase),
     imageCodec: desktopAnthropicImageCodec,

@@ -898,6 +898,15 @@ function filterToolsForChoice(
   ));
 }
 
+function requiresToolCall(value: unknown): boolean {
+  if (value === 'required') return true;
+  if (!isObject(value)) return false;
+  return value.type === 'function'
+    || value.type === 'custom'
+    || value.type === 'tool_search'
+    || (value.type === 'allowed_tools' && value.mode === 'required');
+}
+
 function forcedToolChoice(value: unknown): boolean {
   if (!isObject(value)) return false;
   return value.type === 'any' || value.type === 'tool' || (
@@ -1167,6 +1176,11 @@ export function translateResponsesRequest(
       : [{ type: 'text', text: systemParts.join('\n\n') }];
   }
   const selectedTools = filterToolsForChoice(context.tools, raw.tool_choice, context.context, oauth);
+  if ((!selectedTools || selectedTools.length === 0) && requiresToolCall(raw.tool_choice)) {
+    throw new UnsupportedResponsesFeatureError(
+      'tool_choice requires a bridge-compatible tool',
+    );
+  }
   if (selectedTools && selectedTools.length > 0) anth.tools = selectedTools;
   if (anth.tools && raw.tool_choice !== undefined && raw.tool_choice !== 'none') {
     anth.tool_choice = mapToolChoice(raw.tool_choice, context.context, oauth);
