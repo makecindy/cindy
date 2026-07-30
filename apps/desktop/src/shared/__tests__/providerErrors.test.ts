@@ -56,6 +56,17 @@ describe('classifyProviderError — quota patterns', () => {
     expect(result.retryable).toBe(true);
   });
 
+  it('keeps abbreviated slash-form rate quotas as retryable RATE_LIMITED (not billing)', () => {
+    // 缩写斜杠单位(/min、/sec)同样是速率配额,不得判成不可重试并触发购买
+    // 引导(review P1 ×3)。
+    const result = classifyProviderError({
+      status: 429,
+      bodyText: 'Quota exceeded: 100 requests/min',
+    });
+    expect(result.code).toBe('RATE_LIMITED');
+    expect(result.retryable).toBe(true);
+  });
+
   it('keeps plain 429 as retryable RATE_LIMITED', () => {
     const result = classifyProviderError({
       status: 429,
@@ -92,6 +103,9 @@ describe('isQuotaExceededMessage — message-level matcher (ErrorBanner 消费)'
     // 紧凑斜杠写法(review P1 ×2)。
     'Quota exceeded: 100 requests/minute',
     'quota exceeded: 1M tokens/day',
+    // 缩写斜杠写法(review P1 ×3)。
+    'Quota exceeded: 100 requests/min',
+    'quota exceeded: 500 tokens/sec',
   ])('does not match non-quota errors: %s', (text) => {
     expect(isQuotaExceededMessage(text)).toBe(false);
   });
