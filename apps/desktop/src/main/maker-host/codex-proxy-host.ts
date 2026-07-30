@@ -812,6 +812,12 @@ function createAnthropicBridgeDecision(
     promptCaching: supportsPromptCaching,
     automaticPromptCaching: isOfficialAnthropicUpstream(upstreamBase),
     strictTools: isOfficialAnthropicUpstream(upstreamBase),
+    supportsThinking: isOfficialAnthropicUpstream(upstreamBase) || isXdGatewayBridge
+      ? undefined
+      : () => false,
+    supportsAdaptiveThinking: isOfficialAnthropicUpstream(upstreamBase) || isXdGatewayBridge
+      ? undefined
+      : () => false,
     imageCodec: desktopAnthropicImageCodec,
     ...(onUpstreamError ? { onUpstreamError } : {}),
   }, {

@@ -204,6 +204,7 @@ export function createResponsesAnthropicHandler(
           model: realModel,
           defaultMaxTokens: provider.defaultMaxTokens,
           supportsAdaptiveThinking: provider.supportsAdaptiveThinking,
+          supportsThinking: provider.supportsThinking,
           promptCaching: provider.promptCaching,
           automaticPromptCaching: provider.automaticPromptCaching,
           strictTools: provider.strictTools,
@@ -260,6 +261,7 @@ export function createResponsesAnthropicHandler(
             model: realModel,
             defaultMaxTokens: provider.defaultMaxTokens,
             supportsAdaptiveThinking: provider.supportsAdaptiveThinking,
+            supportsThinking: provider.supportsThinking,
             promptCaching: provider.promptCaching,
             automaticPromptCaching: provider.automaticPromptCaching,
             strictTools: provider.strictTools,
@@ -368,10 +370,19 @@ export function createResponsesAnthropicHandler(
         const body = await readBody(upstream);
         await reportUpstreamError(upstream.status, body);
         res.off('close', abortUpstream);
+        const status = upstream.ok ? 502 : upstream.status;
         writeJson(
           res,
-          upstream.status,
-          responsesError(upstream.status, 'upstream_error', body || `provider returned HTTP ${upstream.status}`),
+          status,
+          responsesError(
+            status,
+            upstream.ok ? 'upstream_empty_response' : 'upstream_error',
+            body || (
+              upstream.ok
+                ? 'provider returned a successful response without a body'
+                : `provider returned HTTP ${upstream.status}`
+            ),
+          ),
         );
         return;
       }

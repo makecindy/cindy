@@ -236,11 +236,24 @@ function mediaBlockFromToolPart(part: JsonObject): JsonObject | null {
   if (type === 'document' && isObject(part.source)) {
     const source = part.source;
     if (source.type === 'base64' && stringValue(source.data) && stringValue(source.media_type)) {
+      const mediaType = stringValue(source.media_type)!.toLowerCase();
+      if (mediaType === 'text/plain') {
+        return {
+          type: 'document',
+          source: {
+            type: 'text',
+            media_type: 'text/plain',
+            data: Buffer.from(stringValue(source.data)!, 'base64').toString('utf8'),
+          },
+          ...(stringValue(part.title) ? { title: part.title } : {}),
+        };
+      }
+      if (!ANTHROPIC_BASE64_DOCUMENT_MEDIA_TYPES.has(mediaType)) return null;
       return {
         type: 'document',
         source: {
           type: 'base64',
-          media_type: source.media_type,
+          media_type: mediaType,
           data: source.data,
         },
         ...(stringValue(part.title) ? { title: part.title } : {}),
@@ -273,6 +286,13 @@ function hasMediaBlocks(value: unknown): boolean {
 }
 
 function toolOutputBlocks(output: unknown, depth = 0): unknown {
+  if (depth > MAX_TOOL_OUTPUT_JSON_DEPTH) {
+    try {
+      return JSON.stringify(output) ?? '(empty tool output)';
+    } catch {
+      return String(output);
+    }
+  }
   if (typeof output === 'string') {
     // MCP servers commonly serialize an Anthropic/OpenAI content array into the
     // function output string. Parse only bounded, JSON-looking strings and keep the
@@ -1038,6 +1058,7 @@ export interface TranslateResponsesRequestOptions {
   model?: string;
   defaultMaxTokens?: number;
   supportsAdaptiveThinking?: (model: string) => boolean;
+  supportsThinking?: (model: string) => boolean;
   promptCaching?: boolean;
   automaticPromptCaching?: boolean;
   strictTools?: boolean;
@@ -1217,11 +1238,12 @@ export function translateResponsesRequest(
   const effort = stringValue(raw.reasoning?.effort);
   const explicitlyDisabled = ['none', 'off', 'disabled'].includes((effort ?? '').toLowerCase());
   const budget = effortBudget(effort);
+  const thinkingSupported = options.supportsThinking?.(model) ?? true;
   const adaptiveSupported =
     options.supportsAdaptiveThinking?.(model) ?? supportsAdaptiveThinkingByModel(model);
   const adaptive = adaptiveSupported
     && (adaptiveThinkingByDefault(model) || budget !== null);
-  const cannotDisableThinking = thinkingCannotBeDisabled(model);
+  const cannotDisableThinking = thinkingSupported && thinkingCannotBeDisabled(model);
   const anth: AnthropicRequest = {
     model,
     messages: normalizedMessages,
@@ -1249,23 +1271,30 @@ export function translateResponsesRequest(
     const choice = isObject(anth.tool_choice) ? anth.tool_choice : { type: 'auto' };
     anth.tool_choice = { ...choice, disable_parallel_tool_use: true };
   }
-  if (explicitlyDisabled && cannotDisableThinking) {
-    anth.thinking = { type: 'adaptive' };
-    anth.output_config = { effort: 'low' };
-  } else if (explicitlyDisabled) {
-    anth.thinking = { type: 'disabled' };
-  } else if (adaptive) {
-    anth.thinking = { type: 'adaptive' };
-    const normalized = normalizedEffort(effort);
-    if (normalized) anth.output_config = { effort: normalized };
-    if (numberValue(raw.max_output_tokens) === undefined) {
-      anth.max_tokens = Math.max(anth.max_tokens, (budget ?? 8192) + OUTPUT_HEADROOM);
+  if (thinkingSupported) {
+    if (explicitlyDisabled && cannotDisableThinking) {
+      anth.thinking = { type: 'adaptive' };
+      anth.output_config = { effort: 'low' };
+    } else if (explicitlyDisabled) {
+      anth.thinking = { type: 'disabled' };
+    } else if (adaptive) {
+      anth.thinking = { type: 'adaptive' };
+      const normalized = normalizedEffort(effort);
+      if (normalized) anth.output_config = { effort: normalized };
+      if (numberValue(raw.max_output_tokens) === undefined) {
+        anth.max_tokens = Math.max(anth.max_tokens, (budget ?? 8192) + OUTPUT_HEADROOM);
+      }
+    } else if (budget !== null) {
+      const thinkingBudget = Math.max(MIN_THINKING_BUDGET, Math.min(budget, Math.max(MIN_THINKING_BUDGET, anth.max_tokens - OUTPUT_HEADROOM)));
+      if (thinkingBudget >= MIN_THINKING_BUDGET && anth.max_tokens > thinkingBudget) {
+        anth.thinking = { type: 'enabled', budget_tokens: thinkingBudget };
+      }
     }
-  } else if (budget !== null) {
-    const thinkingBudget = Math.max(MIN_THINKING_BUDGET, Math.min(budget, Math.max(MIN_THINKING_BUDGET, anth.max_tokens - OUTPUT_HEADROOM)));
-    if (thinkingBudget >= MIN_THINKING_BUDGET && anth.max_tokens > thinkingBudget) {
-      anth.thinking = { type: 'enabled', budget_tokens: thinkingBudget };
-    }
+  }
+  if (thinkingSupported && budget !== null && !explicitlyDisabled && !anth.thinking) {
+    throw new InvalidResponsesRequestError(
+      'Responses reasoning effort cannot fit within max_output_tokens for the Anthropic bridge',
+    );
   }
   if (
     anth.thinking

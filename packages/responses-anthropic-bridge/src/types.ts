@@ -69,6 +69,8 @@ export interface ResponsesAnthropicProviderConfig {
   defaultMaxTokens?: number;
   /** Whether this model family accepts `thinking: {type:"adaptive"}`. */
   supportsAdaptiveThinking?: (model: string) => boolean;
+  /** Whether the upstream accepts Anthropic thinking fields at all. */
+  supportsThinking?: (model: string) => boolean;
   /** Disable prompt cache breakpoints for a provider that does not implement them. */
   promptCaching?: boolean;
   /** Native Anthropic endpoints support top-level automatic prompt caching. */

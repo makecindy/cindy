@@ -782,6 +782,84 @@ describe('Responses → Anthropic request translation', () => {
     expect(result.request.thinking).toEqual({ type: 'adaptive' });
   });
 
+  it('rejects a requested reasoning budget that cannot fit in max_output_tokens', () => {
+    expect(() => translateResponsesRequest({
+      model: 'claude-sonnet-4-6',
+      max_output_tokens: 1024,
+      reasoning: { effort: 'high' },
+      input: [{ role: 'user', content: 'hi' }],
+    })).toThrow('reasoning effort cannot fit');
+  });
+
+  it('can disable thinking policy for generic Anthropic-compatible endpoints', () => {
+    const result = translateResponsesRequest({
+      model: 'custom-model',
+      max_output_tokens: 1024,
+      reasoning: { effort: 'high' },
+      input: [{ role: 'user', content: 'hi' }],
+    }, { supportsThinking: () => false });
+    expect(result.request.thinking).toBeUndefined();
+    expect(result.request.max_tokens).toBe(1024);
+  });
+
+  it('normalizes text and rejects unsupported tool-result document MIME types', () => {
+    const text = translateResponsesRequest({
+      model: 'claude',
+      input: [
+        { type: 'function_call', call_id: 'c1', name: 'inspect', arguments: '{}' },
+        {
+          type: 'function_call_output',
+          call_id: 'c1',
+          output: [{
+            type: 'document',
+            source: { type: 'base64', media_type: 'text/plain', data: 'SGk=' },
+          }],
+        },
+      ],
+    });
+    const textResult = text.request.messages
+      .flatMap((message) => message.content as Array<Record<string, unknown>>)
+      .find((block) => block.type === 'tool_result');
+    expect(textResult).toMatchObject({
+      type: 'tool_result',
+      content: [{ type: 'document', source: { type: 'text', data: 'Hi' } }],
+    });
+    const unsupported = translateResponsesRequest({
+      model: 'claude',
+      input: [
+        { type: 'function_call', call_id: 'c1', name: 'inspect', arguments: '{}' },
+        {
+          type: 'function_call_output',
+          call_id: 'c1',
+          output: [{
+            type: 'document',
+            source: { type: 'base64', media_type: 'application/json', data: 'e30=' },
+          }],
+        },
+      ],
+    });
+    const unsupportedResult = unsupported.request.messages
+      .flatMap((message) => message.content as Array<Record<string, unknown>>)
+      .find((block) => block.type === 'tool_result');
+    expect(unsupportedResult).toMatchObject({
+      type: 'tool_result',
+      content: [{ type: 'text' }],
+    });
+  });
+
+  it('bounds deeply nested structured tool output', () => {
+    let nested: unknown = { type: 'text', text: 'leaf' };
+    for (let index = 0; index < 20; index += 1) nested = { content: [nested] };
+    const result = translateResponsesRequest({
+      model: 'claude',
+      input: [
+        { type: 'function_call', call_id: 'c1', name: 'inspect', arguments: '{}' },
+        { type: 'function_call_output', call_id: 'c1', output: nested },
+      ],
+    });
+    expect(result.request.messages).toHaveLength(3);
+  });
+
   it('does not enable optional adaptive thinking without a requested effort', () => {
     const result = translateResponsesRequest({
       model: 'claude-opus-4-8',

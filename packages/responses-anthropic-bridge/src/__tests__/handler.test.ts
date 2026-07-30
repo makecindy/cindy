@@ -202,6 +202,18 @@ describe('createResponsesAnthropicHandler', () => {
     expect(wire).not.toContain('stream_truncated');
   });
 
+  it('maps a bodyless successful upstream response to a 502 bridge error', async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 204 })) as typeof fetch;
+    const handler = createResponsesAnthropicHandler({
+      upstreamBase: 'https://provider.example',
+      buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: { model: 'claude', input: 'hi' }, ctx, res: res as never });
+    expect(res.status).toBe(502);
+    expect(res.chunks.join('')).toContain('upstream_empty_response');
+  });
+
   it('uses the SSE event name when the data object omits type', async () => {
     const body = [
       'event: message_start',
