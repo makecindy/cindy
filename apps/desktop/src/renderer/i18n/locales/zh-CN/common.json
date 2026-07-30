@@ -1949,6 +1949,24 @@
           "failed": "ADB 状态检查失败：{{message}}",
           "unknownIssue": "ADB 状态异常：{{issue}}"
         },
+        "connectionGuide": {
+          "connect": {
+            "title": "如何连接 Android 手机",
+            "adbNote": "Cindy 会自动准备 ADB，无需安装 Android SDK；自定义 ADB 路径仅供高级设置使用。",
+            "step1": "使用支持数据传输的 USB 数据线连接手机和电脑。",
+            "step2": "在手机「设置 → 关于手机」中连续点击版本号，开启开发者选项。",
+            "step3": "在「开发者选项」中开启「USB 调试」。",
+            "step4": "保持手机解锁，回到 Cindy 点击「重新检查」。"
+          },
+          "unauthorized": {
+            "title": "请允许 USB 调试",
+            "body": "请在手机弹出的「允许 USB 调试」窗口中点击「允许」，建议勾选「始终允许使用这台电脑」，然后回到 Cindy 点击「重新检查」。"
+          },
+          "offline": {
+            "title": "设备处于 offline 状态",
+            "body": "请重新插拔 USB 数据线，保持手机解锁，然后回到 Cindy 点击「重新检查」。"
+          }
+        },
         "device": {
           "title": "设备",
           "ariaLabel": "选择默认 Android 设备",

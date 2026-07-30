@@ -8,6 +8,8 @@
 import type { TFunction } from 'i18next';
 import { extractIpcError } from '@/utils/ipcError';
 
+export type AndroidConnectionGuideKind = 'connect' | 'unauthorized' | 'offline';
+
 export function androidStatusFallback(err: unknown): AndroidStatusSummary {
   const ipcError = extractIpcError(err);
   return {
@@ -85,6 +87,28 @@ export function describeAndroidStatus(status: AndroidStatusSummary, t: TFunction
   return t('settings.computerUse.android.status.unknownIssue', {
     issue: status.issue,
   });
+}
+
+/**
+ * Return the actionable connection guide for a device state.
+ *
+ * A configured default can be stale while another ready device is available;
+ * that case should keep the device picker visible without telling the user to
+ * reconnect a phone. The guide is therefore limited to states where no ready
+ * device exists.
+ */
+export function getAndroidConnectionGuideKind(
+  status: AndroidStatusSummary | null,
+): AndroidConnectionGuideKind | null {
+  if (!status?.adb_available) return null;
+
+  const hasReadyDevice = status.devices.some((device) => device.state === 'device');
+  if (hasReadyDevice) return null;
+
+  if (status.issue === 'DEVICE_UNAUTHORIZED') return 'unauthorized';
+  if (status.issue === 'DEVICE_OFFLINE') return 'offline';
+  if (status.issue === 'NO_DEVICE' || !status.issue) return 'connect';
+  return null;
 }
 
 export function describeAndroidDeviceStatus(
