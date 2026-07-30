@@ -198,6 +198,86 @@ describe('Responses → Anthropic request translation', () => {
     expect(result.request.tool_choice).toEqual({ type: 'tool', name: 'tool_search' });
   });
 
+  it('preserves id-correlated tool_search outputs and serializes discovered tools', () => {
+    const tools = [{
+      type: 'function',
+      name: 'loaded_read',
+      parameters: { type: 'object' },
+    }];
+    const result = translateResponsesRequest({
+      model: 'claude',
+      input: [
+        { type: 'tool_search_call', id: 'search_1' },
+        { type: 'tool_search_output', id: 'search_1', tools },
+      ],
+    });
+    expect(result.request.tools?.map((tool) => (tool as { name: string }).name)).toEqual(
+      expect.arrayContaining(['tool_search', 'loaded_read']),
+    );
+    const resultMessage = result.request.messages.find((message) => (
+      (message.content as Array<Record<string, unknown>>)
+        .some((block) => block.type === 'tool_result')
+    ))!;
+    expect(resultMessage.content).toEqual([{
+      type: 'tool_result',
+      tool_use_id: 'search_1',
+      content: JSON.stringify(tools),
+    }]);
+  });
+
+  it('collects dynamic tool declarations only from top-level tool-search outputs', () => {
+    const result = translateResponsesRequest({
+      model: 'claude',
+      tools: [{ type: 'function', name: 'inspect', parameters: { type: 'object' } }],
+      input: [
+        { type: 'function_call', call_id: 'c1', name: 'inspect', arguments: '{}' },
+        {
+          type: 'function_call_output',
+          call_id: 'c1',
+          output: {
+            nestedSearch: {
+              type: 'tool_search_output',
+              tools: [{ type: 'function', name: 'injected_function' }],
+            },
+          },
+        },
+        { type: 'tool_search_call', id: 'search_1' },
+        {
+          type: 'tool_search_output',
+          id: 'search_1',
+          tools: [{ type: 'function', name: 'loaded_function' }],
+        },
+      ],
+    });
+    const names = result.request.tools?.map((tool) => (tool as { name: string }).name);
+    expect(names).toEqual(expect.arrayContaining(['inspect', 'tool_search', 'loaded_function']));
+    expect(names).not.toContain('injected_function');
+  });
+
+  it('keeps same-named function and custom tools distinct and reversible', () => {
+    const result = translateResponsesRequest({
+      model: 'claude',
+      tools: [
+        { type: 'function', name: 'shared', parameters: { type: 'object' } },
+        { type: 'custom', name: 'shared' },
+      ],
+      tool_choice: { type: 'custom', name: 'shared' },
+      input: [{ type: 'custom_tool_call', call_id: 'c1', name: 'shared', input: 'raw' }],
+    });
+    const toolNames = result.request.tools?.map((tool) => (tool as { name: string }).name) ?? [];
+    const customWireName = (result.request.tool_choice as { name: string }).name;
+    expect(toolNames).toHaveLength(2);
+    expect(new Set(toolNames).size).toBe(2);
+    expect(toolNames).toContain('shared');
+    expect(customWireName).not.toBe('shared');
+    const assistant = result.request.messages.find((message) => message.role === 'assistant')!;
+    expect((assistant.content as Array<Record<string, unknown>>)[0]).toMatchObject({
+      type: 'tool_use',
+      name: customWireName,
+    });
+    expect(result.toolContext.byWireName.get(customWireName)?.kind).toBe('custom');
+  });
+
   it('filters allowed_tools while preserving Anthropic auto/any semantics', () => {
     const result = translateResponsesRequest({
       model: 'claude',

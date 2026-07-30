@@ -474,18 +474,7 @@ describe('createResponsesAnthropicHandler', () => {
       parsedBody: {
         model: 'claude',
         input: 'hi',
-        tools: [
-          {
-            type: 'namespace',
-            name: 'a',
-            tools: [{ type: 'function', name: 'b__c', parameters: {} }],
-          },
-          {
-            type: 'namespace',
-            name: 'a__b',
-            tools: [{ type: 'function', name: 'c', parameters: {} }],
-          },
-        ],
+        stop: [123],
       },
       ctx,
       res: res as never,

@@ -306,24 +306,24 @@ function toolOutputBlocks(output: unknown, depth = 0): unknown {
   return blocks.length > 0 ? blocks : '(empty tool output)';
 }
 
-function collectToolSearchTools(value: unknown, output: unknown[] = []): unknown[] {
-  if (Array.isArray(value)) {
-    for (const item of value) collectToolSearchTools(item, output);
-    return output;
+function collectToolSearchTools(value: unknown): unknown[] {
+  if (!Array.isArray(value)) return [];
+  const output: unknown[] = [];
+  for (const item of value) {
+    if (
+      isObject(item)
+      && (item.type === 'tool_search_output' || item.type === 'tool_search_call_output')
+      && Array.isArray(item.tools)
+    ) {
+      output.push(...item.tools);
+    }
   }
-  if (!isObject(value)) return output;
-  if (value.type === 'tool_search_output' && Array.isArray(value.tools)) {
-    output.push(...value.tools);
-  }
-  for (const child of Object.values(value)) collectToolSearchTools(child, output);
   return output;
 }
 
-function containsItemType(value: unknown, expected: string): boolean {
-  if (Array.isArray(value)) return value.some((item) => containsItemType(item, expected));
-  if (!isObject(value)) return false;
-  if (value.type === expected) return true;
-  return Object.values(value).some((child) => containsItemType(child, expected));
+function containsTopLevelItemType(value: unknown, expected: string): boolean {
+  return Array.isArray(value)
+    && value.some((item) => isObject(item) && item.type === expected);
 }
 
 const SCHEMA_NAME_BAGS = new Set(['properties', 'patternProperties', '$defs', 'definitions']);
@@ -393,6 +393,44 @@ function wireToolName(
   return clampToolName(prefixed);
 }
 
+function responseToolIdentity(
+  kind: ToolCallKind,
+  name: string,
+  namespace?: string,
+): string {
+  const identityKind = kind === 'namespace' ? 'function' : kind;
+  return `${identityKind}\0${namespace ?? ''}\0${name}`;
+}
+
+function sameResponseToolKind(left: ToolCallKind, right: ToolCallKind): boolean {
+  const normalizedLeft = left === 'namespace' ? 'function' : left;
+  const normalizedRight = right === 'namespace' ? 'function' : right;
+  return normalizedLeft === normalizedRight;
+}
+
+function reserveWireToolName(
+  preferred: string,
+  mapping: ToolCallMapping,
+  existingByWireName: ReadonlyMap<string, ToolCallMapping>,
+): string {
+  const identity = responseToolIdentity(mapping.kind, mapping.name, mapping.namespace);
+  const existing = existingByWireName.get(preferred);
+  if (!existing || responseToolIdentity(existing.kind, existing.name, existing.namespace) === identity) {
+    return preferred;
+  }
+  for (let attempt = 0; ; attempt += 1) {
+    const suffix = `__${shortHash(attempt === 0 ? identity : `${identity}\0${attempt}`)}`;
+    const candidate = `${preferred.slice(0, TOOL_NAME_MAX_LENGTH - suffix.length)}${suffix}`;
+    const occupant = existingByWireName.get(candidate);
+    if (
+      !occupant
+      || responseToolIdentity(occupant.kind, occupant.name, occupant.namespace) === identity
+    ) {
+      return candidate;
+    }
+  }
+}
+
 function flattenTools(
   tools: unknown[] | undefined,
   oauth: boolean,
@@ -414,21 +452,21 @@ function flattenTools(
     strict?: boolean,
   ): void => {
     const responseName = safeToolName(name, 'tool');
-    const wireName = wireToolName(responseName, namespace, oauth);
-    const mapping: ToolCallMapping = { wireName, name: responseName, ...(namespace ? { namespace } : {}), kind };
-    const existing = byWireName.get(wireName);
-    if (existing) {
-      if (
-        existing.name === mapping.name
-        && existing.namespace === mapping.namespace
-        && existing.kind === mapping.kind
-      ) return;
-      throw new InvalidResponsesRequestError(
-        `Anthropic tool name collision after normalization: '${wireName}'`,
-      );
-    }
+    const baseMapping = {
+      wireName: '',
+      name: responseName,
+      ...(namespace ? { namespace } : {}),
+      kind,
+    } satisfies ToolCallMapping;
+    const wireName = reserveWireToolName(
+      wireToolName(responseName, namespace, oauth),
+      baseMapping,
+      byWireName,
+    );
+    const mapping: ToolCallMapping = { ...baseMapping, wireName };
+    if (byWireName.has(wireName)) return;
     byWireName.set(wireName, mapping);
-    byResponseName.set(`${namespace ?? ''}\0${responseName}`, mapping);
+    byResponseName.set(responseToolIdentity(kind, responseName, namespace), mapping);
     const inputSchema = kind === 'custom'
       ? {
           type: 'object',
@@ -539,21 +577,26 @@ function responseNameForMapping(
   context: ToolContext,
   name: string,
   namespace?: string,
+  kind: ToolCallKind = 'function',
   oauth = false,
 ): ToolCallMapping {
   const normalizedNamespace = namespace?.trim();
-  const exact = normalizedNamespace
-    ? context.byResponseName.get(`${normalizedNamespace}\0${name}`)
-      ?? context.byWireName.get(`${normalizedNamespace}__${name}`)
-    : context.byWireName.get(name)
-      ?? [...context.byResponseName.values()].find((candidate) => (
-        !candidate.namespace && candidate.name === name
-      ));
+  const byIdentity = context.byResponseName.get(
+    responseToolIdentity(kind, name, normalizedNamespace),
+  );
+  const byWireName = context.byWireName.get(
+    normalizedNamespace ? `${normalizedNamespace}__${name}` : name,
+  );
+  const exact = byIdentity ?? (
+    byWireName && sameResponseToolKind(byWireName.kind, kind)
+      ? byWireName
+      : undefined
+  );
   return exact ?? {
     wireName: wireToolName(name, normalizedNamespace, oauth),
     name,
     ...(normalizedNamespace ? { namespace: normalizedNamespace } : {}),
-    kind: 'function',
+    kind: kind === 'function' && normalizedNamespace ? 'namespace' : kind,
   };
 }
 
@@ -803,12 +846,13 @@ function mapToolChoice(value: unknown, context: ToolContext, oauth: boolean): un
       context,
       name,
       stringValue(value.namespace),
+      value.type === 'custom' ? 'custom' : 'function',
       oauth,
     );
     return { type: 'tool', name: mapping.wireName };
   }
   if (value.type === 'tool_search') {
-    const mapping = responseNameForMapping(context, 'tool_search', undefined, oauth);
+    const mapping = responseNameForMapping(context, 'tool_search', undefined, 'tool_search', oauth);
     return { type: 'tool', name: mapping.wireName };
   }
   if (value.type === 'allowed_tools') {
@@ -830,7 +874,7 @@ function filterToolsForChoice(
   for (const raw of choice.tools) {
     if (typeof raw === 'string' && raw.trim()) {
       const name = raw.trim();
-      const mapping = responseNameForMapping(context, name, undefined, oauth);
+      const mapping = responseNameForMapping(context, name, undefined, 'function', oauth);
       allowed.add(mapping.wireName);
       allowed.add(name);
       continue;
@@ -840,7 +884,12 @@ function filterToolsForChoice(
       ?? (isObject(raw.function) ? stringValue(raw.function.name) : undefined);
     const namespace = stringValue(raw.namespace);
     if (name) {
-      const mapping = responseNameForMapping(context, name, namespace, oauth);
+      const kind = raw.type === 'custom'
+        ? 'custom'
+        : raw.type === 'tool_search'
+          ? 'tool_search'
+          : 'function';
+      const mapping = responseNameForMapping(context, name, namespace, kind, oauth);
       allowed.add(mapping.wireName);
       allowed.add(name);
     }
@@ -942,7 +991,7 @@ export function translateResponsesRequest(
   if (oauth) systemParts.unshift(CLAUDE_CODE_SYSTEM_INSTRUCTION);
   const messages: Array<{ role: 'user' | 'assistant'; content: JsonObject[] }> = [];
   const dynamicTools = collectToolSearchTools(raw.input);
-  const needsToolSearch = containsItemType(raw.input, 'tool_search_call')
+  const needsToolSearch = containsTopLevelItemType(raw.input, 'tool_search_call')
     || (isObject(raw.tool_choice) && raw.tool_choice.type === 'tool_search');
   const declaredTools = raw.tools?.length || dynamicTools.length || needsToolSearch
     ? [
@@ -990,6 +1039,11 @@ export function translateResponsesRequest(
         context.context,
         rawName,
         stringValue(rawItem.namespace),
+        type === 'custom_tool_call'
+          ? 'custom'
+          : type === 'tool_search_call'
+            ? 'tool_search'
+            : 'function',
         oauth,
       );
       assistant ??= { role: 'assistant', content: [] };
@@ -1025,7 +1079,12 @@ export function translateResponsesRequest(
     }
     // A tool_search_output carrying discovered definitions is a control/history item,
     // not a tool result. Only the call-correlated form becomes tool_result content.
-    if (type === 'tool_search_output' && !stringValue(rawItem.call_id) && Array.isArray(rawItem.tools)) {
+    if (
+      type === 'tool_search_output'
+      && !stringValue(rawItem.call_id)
+      && !stringValue(rawItem.id)
+      && Array.isArray(rawItem.tools)
+    ) {
       continue;
     }
     if (
@@ -1038,7 +1097,14 @@ export function translateResponsesRequest(
       const callId = stringValue(rawItem.call_id) ?? stringValue(rawItem.id);
       if (!callId) throw new UnsupportedResponsesFeatureError(`${type}.call_id`);
       if (incompleteCallIds.has(callId)) continue;
-      const output = rawItem.output ?? rawItem.content ?? '';
+      const output = rawItem.output
+        ?? rawItem.content
+        ?? (
+          (type === 'tool_search_output' || type === 'tool_search_call_output')
+          && Array.isArray(rawItem.tools)
+            ? JSON.stringify(rawItem.tools)
+            : ''
+        );
       appendMessage(messages, 'user', [{
         type: 'tool_result',
         tool_use_id: callId,
