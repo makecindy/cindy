@@ -513,6 +513,7 @@ import {
 } from './window-behavior-settings-store.js';
 import {
   hideWindowToWindowsTray,
+  popUpWindowsTrayMenu,
   requestWindowsCloseBehavior,
   requestWindowsTrayQuit,
 } from './windowsTrayLifecycle.js';
@@ -1511,7 +1512,7 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   if (mainWindow) {
     installApplicationMenu(mainWindow, currentApplicationMenuLocale);
   }
-  updateWindowsTrayMenu();
+  invalidateWindowsTrayMenu();
   getAgentIslandService()?.refreshLocalization();
   return { ok: true };
 });
@@ -1610,23 +1611,52 @@ const updatePresentationRecovery = isUpdateRelaunchCandidate
 // 让窗口 close handler 放行真正的销毁。
 let isQuitting = false;
 let windowsTray: Tray | null = null;
+// 当前的托盘菜单。我们自己 popUp(见 popUpWindowsTrayMenu 的注释),菜单对象必须由
+// JS 侧持有,不能只作为实参交出去。语言切换时置 null,下一次右键按新语言重建。
+let windowsTrayMenu: Menu | null = null;
+const windowsTrayLog = createLogger('windows-tray');
 const WINDOWS_CLOSE_PROMPT_FALLBACK_DELAY_MS = 2_000;
 
-function updateWindowsTrayMenu(): void {
-  if (!windowsTray || windowsTray.isDestroyed()) return;
-  windowsTray.setContextMenu(
-    Menu.buildFromTemplate([
-      {
-        label: t('settings.windowBehavior.trayMenu.show'),
-        click: () => focusMainWindow(),
-      },
-      { type: 'separator' },
-      {
-        label: t('settings.windowBehavior.trayMenu.quit'),
-        click: () => quitFromWindowsTray(),
-      },
-    ]),
-  );
+function buildWindowsTrayMenu(): Menu {
+  return Menu.buildFromTemplate([
+    {
+      label: t('settings.windowBehavior.trayMenu.show'),
+      click: () => focusMainWindow(),
+    },
+    { type: 'separator' },
+    {
+      label: t('settings.windowBehavior.trayMenu.quit'),
+      click: () => quitFromWindowsTray(),
+    },
+  ]);
+}
+
+/** 语言切换后丢弃缓存的菜单,下一次右键按新语言重建。 */
+function invalidateWindowsTrayMenu(): void {
+  windowsTrayMenu = null;
+}
+
+function openWindowsTrayMenu(): void {
+  // 这条 debug 日志是长期诊断留的,不是临时排查: 上游那条弹不出的 bug 是静默失败
+  // (不抛错),所以日志里有没有这一行,是区分 "右键事件没到" 与 "事件到了但菜单没弹"
+  // 的唯一依据。再有用户报 "右键没反应" 时,先让他看这行。
+  windowsTrayLog.debug('tray right-click received, opening tray menu');
+  popUpWindowsTrayMenu<Menu>({
+    tray: windowsTray,
+    menu: windowsTrayMenu,
+    buildMenu: buildWindowsTrayMenu,
+    retainMenu: (menu) => {
+      windowsTrayMenu = menu;
+    },
+    onUnavailable: (reason) => {
+      windowsTrayLog.warn('tray menu requested without a live tray icon', { reason });
+    },
+    onError: (error) => {
+      windowsTrayLog.error('failed to open Windows tray menu', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  });
 }
 
 function quitFromWindowsTray(): void {
@@ -1657,30 +1687,39 @@ function quitFromWindowsTray(): void {
 function destroyWindowsTray(): void {
   windowsTray?.destroy();
   windowsTray = null;
+  windowsTrayMenu = null;
 }
 
 function ensureWindowsTray(): boolean {
-  if (windowsTray && !windowsTray.isDestroyed()) {
-    updateWindowsTrayMenu();
-    return true;
-  }
+  if (windowsTray && !windowsTray.isDestroyed()) return true;
 
+  let tray: Tray | null = null;
   try {
     const iconPath = app.isPackaged
       ? path.join(process.resourcesPath, 'icon.png')
       : path.join(__dirname, '../../resources/icon.png');
     const icon = nativeImage.createFromPath(iconPath);
     if (icon.isEmpty()) throw new Error(`tray icon is empty: ${iconPath}`);
-    windowsTray = new Tray(icon.resize({ width: 16, height: 16 }));
-    windowsTray.setToolTip(BRAND_NAME);
-    windowsTray.on('click', () => focusMainWindow());
-    updateWindowsTrayMenu();
+    tray = new Tray(icon.resize({ width: 16, height: 16 }));
+    tray.setToolTip(BRAND_NAME);
+    tray.on('click', () => focusMainWindow());
+    tray.on('right-click', () => openWindowsTrayMenu());
+    windowsTray = tray;
+    windowsTrayMenu = null;
     return true;
   } catch (err) {
-    createLogger('windows-tray').error('failed to create Windows tray icon', {
+    // 图标可能已经进了通知区域: 只置 null 会留下一个仍响应左键、却再也引用不到的
+    // 僵尸图标(destroyWindowsTray 摸不到它,右键也没有菜单可弹)。
+    try {
+      tray?.destroy();
+    } catch {
+      /* 已经没了,忽略 */
+    }
+    windowsTrayLog.error('failed to create Windows tray icon', {
       error: err instanceof Error ? err.message : String(err),
     });
     windowsTray = null;
+    windowsTrayMenu = null;
     return false;
   }
 }

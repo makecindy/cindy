@@ -480,7 +480,7 @@
       "closePrompt": {
         "title": "Close Cindy",
         "message": "What should happen when you close the main window?",
-        "detail": "Tasks keep running when Cindy is minimized to the system tray. You can change this later in Settings."
+        "detail": "Tasks keep running when Cindy is minimized to the system tray; right-click the tray icon to quit. You can change this later in Settings."
       },
       "trayMenu": {
         "show": "Open Cindy",
