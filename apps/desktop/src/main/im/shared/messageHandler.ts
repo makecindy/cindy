@@ -177,12 +177,15 @@ export function createMessageHandler(
         log.warn(`prepareAgentTurnText failed (degraded to raw text): ${msg}`);
       }
     }
+    // 按事件挂 per-turn 权限策略(telegram 群成员触发 → 破坏性调用强确认)。
+    const turnPermissionPolicy = adapter.turnPermissionPolicyFor?.(event);
     try {
       await turnRunner.runAgentTurn({
         botContextId: event.contextId,
         userId: event.senderId,
         userMessageId: event.messageId,
         text: event.text,
+        ...(turnPermissionPolicy ? { turnPermissionPolicy } : {}),
         ...(prepared ? { agentText: prepared.agentText } : {}),
         ...(prepared?.commit
           ? {

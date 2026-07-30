@@ -23,6 +23,7 @@ import type {
   InteractionDecision,
   InteractionRequest,
   PermissionMode,
+  TurnPermissionPolicy,
 } from '@cindy/maker-core';
 import type { ChannelIM, ImOutputDriver, IMMessageEvent, IMUnsupportedEntry } from '@cindy/im';
 
@@ -160,6 +161,13 @@ export interface ImChannelAdapter {
     agentText: string;
     commit?: () => void;
   } | null>;
+  /**
+   * 按入站事件给该轮挂 per-turn 权限策略(telegram 群成员触发 → 破坏性调用
+   * 强制确认卡, 卡片只认 owner 点击)。返回 undefined = 本轮不挂策略。
+   * 会话权限档不支持 turn 策略(acceptEdits/bypassPermissions)时 maker 拒跑
+   * 该轮(fail-closed), 不会静默放开。
+   */
+  turnPermissionPolicyFor?(event: IMMessageEvent): TurnPermissionPolicy | undefined;
 }
 
 // ── UI 文案包 ─────────────────────────────────────────────────────────────────

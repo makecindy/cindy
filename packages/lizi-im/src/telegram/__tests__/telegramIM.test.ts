@@ -226,7 +226,7 @@ describe('TelegramIM', () => {
     });
   });
 
-  it('群多人: 全员 @bot 可触发; 成员走 guest lane, owner 走 reply 链; 命令仍 owner 专属', async () => {
+  it('群多人: 全员 @bot 可触发且共享同一条群 lane; 命令仍 owner 专属', async () => {
     const events: IMMessageEvent[] = [];
     const windowEntries: TelegramGroupWindowEntry[] = [];
     im.onMessage((e) => events.push(e));
@@ -240,16 +240,16 @@ describe('TelegramIM', () => {
     ]);
     await vi.waitFor(() => expect(windowEntries).toHaveLength(4));
     await vi.waitFor(() => expect(events).toHaveLength(2));
-    // 成员 @ → 每人每群一条 guest lane, speaker 标记非 owner
+    // 一群一 lane(OpenClaw 模型): 成员与 owner 的触发进同一条会话,
+    // speaker 标签区分发言人 — 群公共上下文连续。
     expect(events[0]).toMatchObject({
-      senderId: 'g/-100200/u222',
+      senderId: 'g/-100200',
       text: 'ping',
       speaker: { id: '222', isOwner: false },
     });
     // 成员发命令(消息 13)被静默丢弃 — 只有两个事件
-    // owner 裸 @ = 以触发消息为 root 的新 reply 链 lane(官方群会话模型)
     expect(events[1]).toMatchObject({
-      senderId: 'g/-100200/r12',
+      senderId: 'g/-100200',
       text: '部署一下',
       speaker: { id: '111', isOwner: true },
     });
@@ -262,14 +262,14 @@ describe('TelegramIM', () => {
     expect(notice).toBeUndefined();
   });
 
-  it('群多人: 成员回复 bot 只续自己的 guest lane; owner 回复 guest 链不进 guest 会话', async () => {
+  it('群 lane 恒定: 成员/owner 回复 bot、反复裸 @ 都续同一条群会话(上下文连续)', async () => {
     const events: IMMessageEvent[] = [];
     im.onMessage((e) => events.push(e));
     await connect();
     api.pushUpdates([groupMessage({ text: '这是啥项目', fromId: 222, messageId: 40, mentionBot: true })]);
     await vi.waitFor(() => expect(events).toHaveLength(1));
-    expect(events[0].senderId).toBe('g/-100200/u222');
-    const sent = await im.sendText('g/-100200/u222', '这是 Cindy 呀');
+    expect(events[0].senderId).toBe('g/-100200');
+    const sent = await im.sendText('g/-100200', '这是 Cindy 呀');
     const answerId = Number(sent.messageId.split('|')[1]);
     const replyTo = {
       message_id: answerId,
@@ -278,7 +278,7 @@ describe('TelegramIM', () => {
       date: 1_753_000_050,
       text: '这是 Cindy 呀',
     };
-    // 成员回复 bot → 续自己的 guest lane
+    // 成员回复 bot → 同一条群 lane
     api.pushUpdates([
       {
         update_id: 41,
@@ -293,8 +293,8 @@ describe('TelegramIM', () => {
       },
     ]);
     await vi.waitFor(() => expect(events).toHaveLength(2));
-    expect(events[1].senderId).toBe('g/-100200/u222');
-    // owner 回复 guest 链的 bot 消息 → 不进 guest 会话, 按 owner 新链
+    expect(events[1].senderId).toBe('g/-100200');
+    // owner 回复同一条 bot 消息 → 也是同一条群 lane(接得上成员刚才的话头)
     api.pushUpdates([
       {
         update_id: 42,
@@ -309,49 +309,11 @@ describe('TelegramIM', () => {
       },
     ]);
     await vi.waitFor(() => expect(events).toHaveLength(3));
-    expect(events[2].senderId).toBe('g/-100200/r42');
-  });
-
-  it('reply bot 的回答续接同一条链; 裸 @ 开新链', async () => {
-    const events: IMMessageEvent[] = [];
-    im.onMessage((e) => events.push(e));
-    await connect();
-    api.pushUpdates([groupMessage({ text: '先看这个', fromId: 111, messageId: 70, mentionBot: true })]);
-    await vi.waitFor(() => expect(events).toHaveLength(1));
-    const lane = events[0].senderId;
-    expect(lane).toBe('g/-100200/r70');
-
-    // bot 回答(出站登记 reply 链路由)
-    const sent = await im.sendText(lane, '答案在此');
-    const answerNativeId = Number(sent.messageId.split('|')[1]);
-
-    // owner 回复 bot 的回答(无 @) → 续接同一 lane
-    api.pushUpdates([
-      {
-        update_id: 72,
-        message: {
-          message_id: 72,
-          from: { id: 111, is_bot: false, first_name: 'U' },
-          chat: { id: -100200, type: 'supergroup', title: 'Ops' },
-          date: 1_753_000_100,
-          text: '继续深入',
-          reply_to_message: {
-            message_id: answerNativeId,
-            from: { id: BOT.id, is_bot: true, first_name: 'Cindy' },
-            chat: { id: -100200, type: 'supergroup' },
-            date: 1_753_000_050,
-            text: '答案在此',
-          },
-        },
-      },
-    ]);
-    await vi.waitFor(() => expect(events).toHaveLength(2));
-    expect(events[1].senderId).toBe(lane);
-
-    // 另一条裸 @ → 全新链
+    expect(events[2].senderId).toBe('g/-100200');
+    // 换话题裸 @ → 仍是同一条 lane(群公共上下文不切碎; 要重开用 /new)
     api.pushUpdates([groupMessage({ text: '换个话题', fromId: 111, messageId: 80, mentionBot: true })]);
-    await vi.waitFor(() => expect(events).toHaveLength(3));
-    expect(events[2].senderId).toBe('g/-100200/r80');
+    await vi.waitFor(() => expect(events).toHaveLength(4));
+    expect(events[3].senderId).toBe('g/-100200');
   });
 
   it('陌生人私聊收到礼貌回应且 60s 内不重复', async () => {
@@ -717,7 +679,7 @@ describe('TelegramIM', () => {
     api.pushUpdates([groupMessage({ text: '今天天气不错', fromId: 222, messageId: 50 })]);
     await vi.waitFor(() => expect(events).toHaveLength(1));
     expect(events[0].ambient).toBe(true);
-    expect(events[0].senderId).toBe('g/-100200/u222');
+    expect(events[0].senderId).toBe('g/-100200');
     // ambient 触发的表情回应被抑制
     expect(await im.reactToMessage('-100200|50', '👀')).toBeNull();
     // ambient 路径不消费命令(即使 owner)

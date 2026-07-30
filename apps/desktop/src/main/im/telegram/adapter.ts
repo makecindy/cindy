@@ -26,6 +26,7 @@ import { ownerScopedImUserDataPath } from '../ownerScopedStorage';
 import { buildTelegramGroupContextPrefix, buildTelegramReplyContextBlock } from './groupWindow';
 import { readTelegramPersona } from './behaviorStore';
 import { autoRegisterTelegramSpeaker } from './contactsAutoRegister';
+import { createTelegramGuestTurnPermissionPolicy } from './permissionPolicy';
 import { ui, PROCESSING_EMOJI } from './uiText';
 
 function ensureWorkingDir(botId: string): string {
@@ -83,13 +84,6 @@ export function buildTelegramAdapter(
         imBotContextId: botId,
         imUserId: userId,
       }),
-      // guest lane(群成员会话, threadId 段 u<uid>[t<topic>]) → 只读探索档:
-      // 能搜索/读文件回答问题, 不能改文件/执行风险命令(D1/D2, 2026-07-30)。
-      // owner 可在桌面端对具体会话行手动放开 — 那是显式动作, 不给默认。
-      permissionModeFor: (userId) => {
-        const lane = decodeTelegramLaneUserId(userId);
-        return lane && lane.threadId.startsWith('u') ? 'plan' : null;
-      },
     },
     processingEmoji: PROCESSING_EMOJI,
     // 官方 bot 的结果表情习惯: 成功 👍 / 失败 👎; 中止不放(撤回 👀 即可)。
@@ -98,6 +92,12 @@ export function buildTelegramAdapter(
     projectSwitching: true,
     buildVendorOptions: (userId) => ({ telegramChatId: userId, source: 'telegram' }),
     answerOnlyProgress: (userId) => decodeTelegramLaneUserId(userId) === null,
+    // 一群一会话下的成员权限收紧(D1): 群成员触发的轮次挂强确认策略 —
+    // 读/搜自由, 破坏性操作弹确认卡且只有 owner 能点。owner 自己的轮次不挂。
+    turnPermissionPolicyFor: (event) =>
+      event.speaker && !event.speaker.isOwner
+        ? createTelegramGuestTurnPermissionPolicy(event.messageId)
+        : undefined,
     prepareAgentTurnText: async (event) => {
       const lane = decodeTelegramLaneUserId(event.senderId);
       const replyBlock = event.replyContext
@@ -110,17 +110,12 @@ export function buildTelegramAdapter(
         return { agentText: `${persona}${replyBlock}${event.text}` };
       }
       const { messageId: triggerMessageId } = decodeTelegramMessageId(event.messageId);
-      // 合成 lane 标记: `r<msgId>` = owner per-root reply 链; `u<uid>[t<topic>]`
-      // = guest lane(群成员)。两者都共享所在群流的窗口(guest 在 topic 里则共享
-      // 该 topic 窗口), 但各自独立游标。
-      const isRootLane = lane.threadId.startsWith('r');
-      const isGuestLane = lane.threadId.startsWith('u');
-      const guestTopic = isGuestLane ? (/t(\d+)$/.exec(lane.threadId)?.[1] ?? '') : '';
-      const windowThreadId = isRootLane ? '' : isGuestLane ? guestTopic : lane.threadId;
+      // 一群一 lane: 窗口维度与会话维度重合((chat, topic) 即 lane), 游标单条 —
+      // 会话上下文本身连续, 窗口前缀只补"两轮之间群里别人说了什么"。
       const assembly = await buildTelegramGroupContextPrefix({
         botId: event.contextId,
         chatId: lane.chatId,
-        threadId: windowThreadId,
+        threadId: lane.threadId,
         cursorScope: lane.threadId,
         triggerMessageId,
       });

@@ -205,13 +205,6 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private readonly laneReplyTargets = new Map<string, string>();
   /** 非 owner 礼貌回应的 per-user 冷却(userId → 上次回应 ts)。 */
   private readonly strangerNoticeAt = new Map<string, number>();
-  /**
-   * 出站消息 → 所属 lane(`${chatId}|${messageId}` → laneUserId)。
-   * 官方 bot 的普通群会话模型: 裸 @ = 每条独立新会话(per-root lane),
-   * reply bot 的回答 = 续接那条链 — 本表就是"reply 命中哪条链"的路由依据。
-   * 内存态 FIFO 上限 2000; 重启丢失时 reply 降级为开新链(不丢消息)。
-   */
-  private readonly outboundLanes = new Map<string, string>();
   /** ambient 触发的原生 messageId(`chatId|msgId`) — 表情回应抑制名单(FIFO 512)。 */
   private readonly ambientTriggerIds = new Set<string>();
   /** 进行中的 typing 续命循环(`chatId:threadId` → 状态)。 */
@@ -835,7 +828,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         // 对标 OpenClaw/Hermes); ambient 路径不消费任何人的命令。
         if (isCommand && (!isOwner || ambient)) return;
       }
-      const laneUserId = this.resolveGroupLane(m, isOwner);
+      const laneUserId = this.resolveGroupLane(m);
       if (this.behaviorOf().replyQuoteGroup !== 'off') {
         this.laneReplyTargets.set(laneUserId, String(m.message_id));
       }
@@ -925,58 +918,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   // ── outbound helpers ───────────────────────────────────────────────────────
 
   /**
-   * 群消息 → lane 归属(官方 bot 同款会话模型):
-   *   - forum topic 消息: 每 topic 一条持久 lane(等价私聊);
-   *   - 普通群 reply 到 bot 出站消息且路由表命中: 续接那条链的 lane;
-   *   - 其余(裸 @ / 路由表重启丢失): 以触发消息自身为 root 开新链
-   *     `g/{chatId}/r{rootId}`。
+   * 群消息 → lane 归属(OpenClaw 同款会话模型, Chris 2026-07-30 拍板):
+   * **一个群一条持久 lane** `g/{chatId}` — 群公共上下文连续, 所有成员(含
+   * owner)共享同一条会话, bot 靠发言人标签区分谁在说话。仅论坛型群组真带
+   * message_thread_id 的消息按 topic 分流(普通群完全无感)。
    */
-  private resolveGroupLane(m: TgMessage, isOwner: boolean): string {
-    if (!isOwner) {
-      // 群成员: 每人每群(每 topic)一条 guest lane —— 会话彼此隔离、与 owner
-      // 的链隔离; 建行时权限档固定收紧(desktop 侧 permissionModeFor)。
-      // 成员回复 bot 消息也只续自己的 guest lane, 永远进不了 owner 的会话。
-      const chatId = String(m.chat.id);
-      const uid = String(m.from!.id);
-      const topicId =
-        m.is_topic_message === true && m.message_thread_id !== undefined
-          ? String(m.message_thread_id)
-          : '';
-      return encodeLaneUserId(chatId, topicId ? `u${uid}t${topicId}` : `u${uid}`);
-    }
-    return this.resolveOwnerGroupLane(m);
-  }
-
-  private resolveOwnerGroupLane(m: TgMessage): string {
-    const chatId = String(m.chat.id);
-    const topicThreadId = laneThreadIdOf(m);
-    if (topicThreadId) return encodeLaneUserId(chatId, topicThreadId);
-    const repliedId = m.reply_to_message?.message_id;
-    if (repliedId !== undefined) {
-      const continued = this.outboundLanes.get(`${chatId}|${repliedId}`);
-      // owner 回复到 guest lane 的 bot 消息 → 不进 guest 会话(那是收紧权限的
-      // 成员会话), 按 owner 新链处理。
-      const continuedLane = continued ? decodeLaneUserId(continued) : null;
-      if (continued && !(continuedLane && continuedLane.threadId.startsWith('u'))) {
-        return continued;
-      }
-    }
-    return encodeLaneUserId(chatId, `r${m.message_id}`);
-  }
-
-  /**
-   * lane threadId 段是否为合成标记(非 forum topic id):
-   *   `r<msgId>` = owner 普通群 reply 链; `u<uid>[t<topicId>]` = guest lane。
-   */
-  private static isSyntheticLaneThread(threadId: string): boolean {
-    return threadId.startsWith('r') || threadId.startsWith('u');
-  }
-
-  /** guest lane 的 `u<uid>t<topicId>` 标记 → forum topic id(无 topic 返回 null)。 */
-  private static guestLaneTopicId(threadId: string): number | null {
-    if (!threadId.startsWith('u')) return null;
-    const match = /t(\d+)$/.exec(threadId);
-    return match ? Number(match[1]) : null;
+  private resolveGroupLane(m: TgMessage): string {
+    return encodeLaneUserId(String(m.chat.id), laneThreadIdOf(m));
   }
 
   /** userId → sendMessage 目标参数(私聊 chat_id = user id; lane 解码回群)。 */
@@ -984,13 +932,6 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     const lane = decodeLaneUserId(userId);
     if (!lane) return { chat_id: userId };
     if (!lane.threadId) return { chat_id: lane.chatId };
-    if (TelegramIM.isSyntheticLaneThread(lane.threadId)) {
-      const guestTopic = TelegramIM.guestLaneTopicId(lane.threadId);
-      return {
-        chat_id: lane.chatId,
-        ...(guestTopic !== null ? { message_thread_id: guestTopic } : {}),
-      };
-    }
     return { chat_id: lane.chatId, message_thread_id: Number(lane.threadId) };
   }
 
@@ -1336,19 +1277,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   ): void {
     const lane = decodeLaneUserId(userId);
     if (!lane) return;
-    // reply 链路由: 记住这条出站属于哪条 lane, 用户 reply 它即续接该链。
-    this.outboundLanes.set(`${lane.chatId}|${sent.message_id}`, userId);
-    if (this.outboundLanes.size > 2000) {
-      const oldest = this.outboundLanes.keys().next().value;
-      if (oldest !== undefined) this.outboundLanes.delete(oldest);
-    }
     this.emitGroupWindow({
       chatId: lane.chatId,
-      // 合成标记(r 链/u guest)是会话身份, 不是窗口维度 — 窗口按 (chat, topic)
-      // 聚; guest-in-topic 的回流归位到该 topic 窗口。
-      threadId: TelegramIM.isSyntheticLaneThread(lane.threadId)
-        ? String(TelegramIM.guestLaneTopicId(lane.threadId) ?? '')
-        : lane.threadId,
+      threadId: lane.threadId,
       messageId: String(sent.message_id),
       chatName: sent.chat.title ?? null,
       author: { name: this.botName, isBot: true },
