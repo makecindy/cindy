@@ -25,6 +25,7 @@ import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
 import { ownerScopedImUserDataPath } from '../ownerScopedStorage';
 import { buildTelegramGroupContextPrefix, buildTelegramReplyContextBlock } from './groupWindow';
 import { readTelegramPersona } from './behaviorStore';
+import { autoRegisterTelegramSpeaker } from './contactsAutoRegister';
 import { ui, PROCESSING_EMOJI } from './uiText';
 
 function ensureWorkingDir(botId: string): string {
@@ -123,6 +124,10 @@ export function buildTelegramAdapter(
         cursorScope: lane.threadId,
         triggerMessageId,
       });
+      // 记住每个人①: 群里说话的人自动登记进智能通讯录(尽力而为, 零阻塞)。
+      if (event.speaker) {
+        autoRegisterTelegramSpeaker(event.speaker, { chatName: null });
+      }
       // 全响应·自主判断(ambient): 安静上下文指令 — 值得说才说, 否则 NO_REPLY
       // 哨兵沉默(transport 在流式 finalize 吞掉哨兵并撤占位)。
       const ambientBlock = event.ambient
