@@ -547,6 +547,52 @@ describe('remoteProjectsStore.hydrateFromCache', () => {
   });
 });
 
+describe('在途 hydrate 遇上权威删除', () => {
+  // review(codex P1):删消息 / clear 会清盘,但在途的缓存读回调仍可能把刚被删掉的行
+  // 插回空切片 —— 这两条路径都不触发最新页重拉,没有"权威接管"来纠正。
+  it('删消息期间的在途缓存读 → 不把已删的行插回来', async () => {
+    const s = sid();
+    cachedMessages.set(`${DEVICE_ID}::${s}`, [
+      dbMessage(s, 'gone', '已被删掉', '2026-01-01T00:00:00.000Z') as unknown as Record<
+        string,
+        unknown
+      >,
+    ]);
+    registerRemote(s);
+    remoteListPromise = new Promise<Message[]>(() => {}); // 首拉挂起
+    let resolveRead: (value: { messages: Record<string, unknown>[] }) => void = () => {};
+    getMessages.mockImplementationOnce(
+      () =>
+        new Promise<{ messages: Record<string, unknown>[] }>((resolve) => {
+          resolveRead = resolve;
+        }),
+    );
+
+    makerChatStore.ensureInitialMessages(s);
+    await flush();
+    makerChatStore.removeMessagesByClientIds(s, ['client-gone']);
+    resolveRead({ messages: cachedMessages.get(`${DEVICE_ID}::${s}`) ?? [] });
+    await flush(20);
+
+    expect(makerChatStore.getSnapshot(s).messages).toHaveLength(0);
+    expect(putMessages).toHaveBeenCalledWith(DEVICE_ID, s, []);
+  });
+
+  it('edit-last 截断(dropMessagesFromClientId)也清缓存', async () => {
+    const s = sid();
+    registerRemote(s);
+    remoteList = [dbMessage(s, 'm1', 'x', '2026-01-01T00:00:00.000Z')];
+    makerChatStore.ensureInitialMessages(s);
+    await flush(30);
+    putMessages.mockClear();
+
+    makerChatStore.dropMessagesFromClientId(s, 'client-m1');
+    await flush(20);
+
+    expect(putMessages).toHaveBeenCalledWith(DEVICE_ID, s, []);
+  });
+});
+
 describe('作废式重载 → 缓存一起清', () => {
   // review(codex P1):粘滞抑制标记只活在本进程里。rewind 后权威首拉失败、用户直接退出 app,
   // 重启后标记没了而盘上那份还是 rewind 之前的窗口 —— 照样 hydrate 出已被软删的消息。

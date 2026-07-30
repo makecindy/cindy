@@ -458,7 +458,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         try {
           await fsp.rm(file, { recursive: true, force: true });
         } catch {
-          if (await pathExists(file)) return { outcome: 'purge-failed', stuck: file };
+          if (await pathMaybeExists(file)) return { outcome: 'purge-failed', stuck: file };
         }
         return written.leftoverTmp
           ? { outcome: 'purge-failed', stuck: written.leftoverTmp }
@@ -489,7 +489,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     try {
       await fsp.rm(file, { recursive: true, force: true });
     } catch {
-      if (await pathExists(file)) return { outcome: 'purge-failed', stuck: file };
+      if (await pathMaybeExists(file)) return { outcome: 'purge-failed', stuck: file };
     }
     return { outcome: 'invalidated' };
   }
@@ -561,7 +561,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
           try {
             await fsp.rm(file, { recursive: true, force: true });
           } catch {
-            if (await pathExists(file)) {
+            if (await pathMaybeExists(file)) {
               throw new MirrorCachePurgeError(rootAtStart, [file], null);
             }
           }
@@ -594,7 +594,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
           } catch {
             // 只有旧正本**确实还在**才算残留:messages/ 位置被占成普通文件这类情况下
             // rm 也会失败,但盘上本来就没有那份缓存(同 writeFileAtomic 的 tmp 判定)。
-            if (await pathExists(file)) stuck.push(file);
+            if (await pathMaybeExists(file)) stuck.push(file);
           }
           if (written.leftoverTmp) stuck.push(written.leftoverTmp);
           // 作废也失败 → 登记重试(明文留在盘上是隐私问题,不能咽下去)。
@@ -846,11 +846,22 @@ async function removeTmpSiblings(dir: string, baseName: string): Promise<string[
   return stuck;
 }
 
-async function pathExists(file: string): Promise<boolean> {
-  return fsp.stat(file).then(
-    () => true,
-    () => false,
-  );
+/**
+ * 「这个路径可能还在盘上」——**fail-closed**:只有 ENOENT 能推出"真的没了"。
+ * EACCES / EPERM 下 stat 也会失败,当成"不存在"就会让作废失败的那份明文既不进 purge 队列
+ * 也没人重试(review: codex P1)。
+ */
+async function pathMaybeExists(file: string): Promise<boolean> {
+  try {
+    await fsp.stat(file);
+    return true;
+  } catch (err) {
+    const code = errnoCode(err);
+    // ENOENT / ENOTDIR 都能证明"这个路径上没有文件"(后者:路径里某一段根本不是目录,
+    // 比如 messages/ 位置被占成普通文件 —— 那时 tmp 也从未被创建)。其余(EACCES /
+    // EPERM / EIO…)读不出来,一律按"可能还在"处理。
+    return code !== 'ENOENT' && code !== 'ENOTDIR';
+  }
 }
 
 /** 超过这个年龄的 `.tmp` 一定不是在写的那笔(单次写盘是毫秒级),可以安全清掉。 */
@@ -953,12 +964,10 @@ async function writeFileAtomic(
   } catch (err) {
     log.debug(`mirror cache write failed: ${file}`, err);
     await fsp.rm(tmp, { force: true }).catch(() => undefined);
-    // 只有「tmp 真的还在盘上」才算残留:tmp 根本没建出来时(比如 messages/ 位置被占成
-    // 普通文件,writeFile 直接 ENOTDIR),rm 也会失败,但盘上并没有明文。
-    const leftover = await fsp.stat(tmp).then(
-      () => true,
-      () => false,
-    );
+    // 只有「tmp 真的没了」才不算残留(ENOENT):tmp 根本没建出来时(比如 messages/ 位置被
+    // 占成普通文件,writeFile 直接 ENOTDIR)确实没有明文;而 EACCES / EPERM 这类读不出来的
+    // 情况一律按"可能还在"处理(fail-closed,见 pathMaybeExists)。
+    const leftover = await pathMaybeExists(tmp);
     return leftover ? { ok: false, leftoverTmp: tmp } : { ok: false };
   }
 }

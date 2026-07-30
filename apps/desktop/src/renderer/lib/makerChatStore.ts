@@ -5228,6 +5228,22 @@ function hydrateRemoteMessagesFromCache(sessionId: string): void {
  * fresh 首拉**落地**:放开 hydrate 守卫(切片此后由权威数据主导),粘滞抑制也一并解除 ——
  * 权威响应到达时缓存已被同一条链刷新过(见 makerTransport 的写点),不再是过期窗口。
  */
+/**
+ * 权威侧作废了这个远程会话的历史(/clear、删消息、rewind 与 edit-last 截断):
+ *  1. 置粘滞抑制 —— 在途的 `readCachedMessages` 回调会在落地前再查一次它,不会把刚被删掉
+ *     的行插回空切片。这些路径都**不会**触发最新页重拉,没有"权威接管"来纠正
+ *     (review: codex P1);
+ *  2. 清盘 —— 进程内标记跨重启就没了,盘上那份必须一起消失。
+ * 本机会话没有缓存,直接 no-op。
+ */
+function invalidateRemoteMessageCache(sessionId: string): void {
+  const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
+  if (!deviceId) return;
+  _cacheHydrateStarted.add(sessionId);
+  _cacheHydrateSuppressed.add(sessionId);
+  clearCachedMessages(deviceId, sessionId);
+}
+
 function settleCacheHydration(sessionId: string): void {
   _cacheHydrateStarted.delete(sessionId);
   _cacheHydrateSuppressed.delete(sessionId);
@@ -5486,8 +5502,7 @@ function reloadMessages(sessionId: string, opts?: { allowCacheHydrate?: boolean 
     // 标记没了而盘上那份还是 rewind 之前的窗口 —— 下次离线冷启动照样 hydrate 出已被软删
     // 的消息(review: codex P1)。所以同时把盘上那份清掉:缓存是纯优化,重载后的首拉
     // 成功时会重新写上。
-    const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
-    if (deviceId) clearCachedMessages(deviceId, sessionId);
+    invalidateRemoteMessageCache(sessionId);
   }
   setState(sessionId, (s) => ({
     ...s,
@@ -5520,10 +5535,7 @@ function removeMessagesByClientIds(
   // 重拉 —— 那是唯一的写缓存路径。盘上那份还带着刚被删掉的行,此刻退出 app,下次离线冷
   // 启动就把它 hydrate 回来(review: codex P1)。缓存是纯优化,清掉即可(下一次成功的
   // 最新页拉取会重新写上)。
-  {
-    const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
-    if (deviceId) clearCachedMessages(deviceId, sessionId);
-  }
+  invalidateRemoteMessageCache(sessionId);
   discardPendingTextDelta(sessionId);
   // 作废删除提交前发起的历史分页，避免旧页响应把已经清除的行重新 merge 回来。
   if (options.invalidateHistory !== false) bumpMessagesEpoch(sessionId);
@@ -5588,6 +5600,9 @@ function removeMessageByClientId(sessionId: string, clientId: string): void {
  * selectRewindMessageIds(createdAt >= target)对齐。clientId 不在列表时 no-op。
  */
 function dropMessagesFromClientId(sessionId: string, clientId: string): void {
+  // edit-last 已经在权威侧提交了 rewind,而"重发"可能失败(受支持的失败路径)—— 那时不会有
+  // 任何最新页拉取来刷新缓存,盘上仍是 rewind 之前的尾巴(review: codex P1)。
+  invalidateRemoteMessageCache(sessionId);
   discardPendingTextDelta(sessionId);
   // 代际递增:这是与 reloadMessages / _purgeSession 并列的第三条"切片被本地截断"
   // 路径,同样必须作废 in-flight 的分页 / 跳转补齐。漏 bump 的后果是它们把 rewind
@@ -7662,10 +7677,7 @@ async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Pro
   // 远程会话:/clear 之后**不会**再有一次"最新页"拉取(唯一写缓存的那条路径),盘上那份
   // 仍是清空前的正文 —— 此刻退出 app,下次离线冷启动就把已经被清掉的对话 hydrate 回来
   // (review: codex P1)。放在守卫之前:无论守卫成功、失败还是超时,缓存都必须消失。
-  {
-    const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
-    if (deviceId) clearCachedMessages(deviceId, sessionId);
-  }
+  invalidateRemoteMessageCache(sessionId);
   // Arm main-side clear guards before closing the CLI and clearing renderer state.
   let guardTimeoutId: ReturnType<typeof setTimeout> | undefined;
   let guardResult:
