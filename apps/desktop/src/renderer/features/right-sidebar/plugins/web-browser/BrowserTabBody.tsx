@@ -49,6 +49,7 @@ import type { TabKindHostContext } from '../../types';
 import { BrowserChrome, type BrowserChromeHandle } from './BrowserChrome';
 import { BrowserCommentPopover } from './BrowserCommentPopover';
 import { useBrowserComment } from './useBrowserComment';
+import { useLocalHtmlAutoReload } from './useLocalHtmlAutoReload';
 import type { WebBrowserState } from './index';
 
 const log = createLogger('rightSidebar.browserTabBody');
@@ -100,6 +101,16 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
   stateUrlRef.current = state.url;
   browserUrlRef.current = browser.url;
   navigateRef.current = browser.navigate;
+
+  // 当前会话一轮结束后，如果该轮产物修改了正在预览的本地 HTML，则刷新一次。
+  // 不监听磁盘；非激活 tab 与 SSH 远程会话不参与。
+  useLocalHtmlAutoReload({
+    sessionId,
+    workdir: ctx.workdir,
+    url: browser.url || state.url,
+    reload: browser.reload,
+    enabled: active === true && ctx.remoteHostId === null && !browser.crash,
+  });
 
   // 把 pool 的 wrapper 挂进 slot —— useLayoutEffect(在 paint 前移 DOM,避免闪)。
   // 卸载时把 wrapper 挪回 pool 的 off-screen container 保活 webContents。

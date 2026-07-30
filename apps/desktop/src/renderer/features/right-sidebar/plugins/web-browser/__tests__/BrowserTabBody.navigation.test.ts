@@ -25,6 +25,10 @@ vi.mock('../../../hooks/useBrowserWebview', () => ({
   useBrowserWebview: () => browserState,
 }));
 
+vi.mock('../useLocalHtmlAutoReload', () => ({
+  useLocalHtmlAutoReload: vi.fn(),
+}));
+
 vi.mock('../../../lib/browserWebviewPool', () => ({
   browserWebviewPool: {
     release: vi.fn(),
