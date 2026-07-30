@@ -709,11 +709,15 @@ export function CustomProviderDialog({
     mergedModels.forEach((m, i) => {
       if (!newIndexById.has(m.id)) newIndexById.set(m.id, i);
     });
-    // 每个新行号只认领一次:空 id(未填完的手填行)没有稳定身份可追踪,直接丢弃
-    // 草稿(该行本就会在保存时因 id/name 为空被过滤掉);多条旧行共享同一个非空 id
-    // 时(picker 合并对重复 id 本就只保留第一条落进 merged),只让第一条旧草稿
-    // 认领对应新行,避免后一行的草稿被错配、顶替掉别的模型的草稿(review P1)。
-    const claimedNewIndices = new Set<number>();
+    // 合并逻辑(上面的 latestById / 第二个 for 循环)对重复 id 都是「先遇到的旧行
+    // 赢」——按 x.models(= previousModels)的原始顺序扫到的第一条。存活进 merged
+    // 的就是那一条,不是随便哪条同 id 旧行。草稿重映射必须认准同一条,否则会把
+    // 已被丢弃的重复行的草稿错配到存活行上(review P1 ×2)。
+    const survivingOldIndexById = new Map<string, number>();
+    previousModels.forEach((m, i) => {
+      const id = m.id.trim();
+      if (id && !survivingOldIndexById.has(id)) survivingOldIndexById.set(id, i);
+    });
     setWindowDrafts((drafts) => {
       const next: Record<string, string> = {};
       for (const [key, text] of Object.entries(drafts)) {
@@ -725,11 +729,14 @@ export function CustomProviderDialog({
         }
         // 仍保留的行(id 未变)把草稿迁到新行号;被 picker 移出的行(取消勾选)
         // 丢弃草稿——不合法草稿只应因它对应的行真的消失才清除。
-        const id = oldIndexToId.get(Number(key.slice(sep + 1)));
-        if (!id) continue;
+        const oldIdx = Number(key.slice(sep + 1));
+        const id = oldIndexToId.get(oldIdx);
+        // 空 id(未填完的手填行)没有稳定身份可追踪,直接丢弃;非空 id 只有
+        // 「合并时实际存活的那条旧行」的草稿才允许迁移——同 id 的其它旧行本就
+        // 在合并时被丢弃,它们的草稿也该丢弃,不能顶替到存活行上。
+        if (!id || survivingOldIndexById.get(id) !== oldIdx) continue;
         const newIdx = newIndexById.get(id);
-        if (newIdx === undefined || claimedNewIndices.has(newIdx)) continue;
-        claimedNewIndices.add(newIdx);
+        if (newIdx === undefined) continue;
         next[`${agent}:${newIdx}`] = text;
       }
       return next;
