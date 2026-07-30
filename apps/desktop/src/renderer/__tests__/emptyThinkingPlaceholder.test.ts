@@ -44,6 +44,41 @@ describe('isOmittedThinkingPlaceholder', () => {
   });
 });
 
+describe('isNonAnchorHistoryRow — 历史初始页 backfill 判定', () => {
+  const isNonAnchor = makerChatStore.__isNonAnchorHistoryRowForTest;
+
+  it('被隐藏的 thinking 行算无锚点(否则整页被过滤后不会触发补页)', () => {
+    // 一轮搜索密集、产出可见正文前就失败的会话,最新 50 行可能全是加密推理:
+    // 映射结果为空 → MessageStream 不自动翻页 → 更老的消息再也拉不回来。
+    expect(isNonAnchor(thinkingRow('t-red', { kind: 'thinking', text: '', durationMs: 0, isRedacted: true }))).toBe(true);
+    expect(isNonAnchor(thinkingRow('t-empty', { kind: 'thinking', text: '', durationMs: 0, isRedacted: false }))).toBe(true);
+  });
+
+  it('有明文或有时长的 thinking 行是可见锚点,不触发补页', () => {
+    expect(isNonAnchor(thinkingRow('t-text', { kind: 'thinking', text: 'real reasoning', durationMs: 0, isRedacted: false }))).toBe(false);
+    expect(isNonAnchor(thinkingRow('t-dur', { kind: 'thinking', text: '', durationMs: 900, isRedacted: false }))).toBe(false);
+  });
+
+  it('tool_result 仍算无锚点(orphan 会被丢弃),普通消息不算', () => {
+    const row = (role: string): Message =>
+      ({ id: 'r', clientId: 'c', sessionId: SESSION_ID, role, content: 'hi', createdAt: '2026-07-02T00:00:00.000Z' } as unknown as Message);
+    expect(isNonAnchor(row('tool_result'))).toBe(true);
+    expect(isNonAnchor(row('assistant'))).toBe(false);
+    expect(isNonAnchor(row('user'))).toBe(false);
+  });
+
+  it('合成指令行算无锚点(渲染 null),否则混进一条就会提前停止回填', () => {
+    // 与 loadOlderMessages 的可见锚点判定同口径。string 与 {text} 两种 content 形态都要覆盖。
+    const synthetic = (content: unknown): Message =>
+      ({ id: 'r', clientId: 'c', sessionId: SESSION_ID, role: 'user', content, createdAt: '2026-07-02T00:00:00.000Z' } as unknown as Message);
+    expect(isNonAnchor(synthetic('[UI_ACTION_TRIGGER] retry'))).toBe(true);
+    expect(isNonAnchor(synthetic({ text: '[UI_ACTION_TRIGGER] retry' }))).toBe(true);
+    // 真实用户消息仍是锚点。
+    expect(isNonAnchor(synthetic('帮我查一下'))).toBe(false);
+    expect(isNonAnchor(synthetic({ text: '帮我查一下' }))).toBe(false);
+  });
+});
+
 describe('handleStreamEvent — omitted thinking placeholder (live)', () => {
   it('drops a final-only empty thinking block (no start, durationMs=0)', () => {
     const next = handleStreamEvent(EMPTY_SESSION_STATE, {
@@ -95,19 +130,32 @@ describe('handleStreamEvent — omitted thinking placeholder (live)', () => {
     expect(msg?.isStreaming).toBe(false);
   });
 
-  it('keeps redacted thinking (independent stage, untouched by the filter)', () => {
+  it('drops redacted thinking (加密推理无明文可读,不进渲染列表)', () => {
     const next = handleStreamEvent(EMPTY_SESSION_STATE, {
       sessionId: SESSION_ID,
       type: 'thinking',
       data: { stage: 'redacted', blockId: 'tb-red' },
     });
-    const msg = next.messages.find((m) => m.role === 'thinking');
-    expect(msg?.thinkingRedacted).toBe(true);
+    expect(next.messages.find((m) => m.role === 'thinking')).toBeUndefined();
+    // 不产生任何消息,也不改动既有 state。
+    expect(next.messages).toEqual(EMPTY_SESSION_STATE.messages);
+  });
+
+  it('redacted 事件带 agentMeta 时仍刷新 lastAgentMeta(不展示 ≠ 丢事件)', () => {
+    const next = handleStreamEvent(EMPTY_SESSION_STATE, {
+      sessionId: SESSION_ID,
+      type: 'thinking',
+      data: { stage: 'redacted', blockId: 'tb-red-meta' },
+      agentMeta: { model: 'xai/grok-4.5', parentUuid: 'parent-1' },
+    });
+    // 消息列表仍不新增,但 mid-turn 抢救用的 lastAgentMeta 不能被静默吞掉。
+    expect(next.messages).toEqual(EMPTY_SESSION_STATE.messages);
+    expect(next.lastAgentMeta).toEqual({ model: 'xai/grok-4.5', parentUuid: 'parent-1' });
   });
 });
 
 describe('mapServerMessages — omitted thinking placeholder (restore)', () => {
-  it('filters empty+zero-duration rows, keeps content / duration / redacted rows', () => {
+  it('filters empty+zero-duration rows 与 redacted 行,keeps content / duration 行', () => {
     const mapped = makerChatStore.__mapServerMessagesForTest([
       thinkingRow('t-empty', { kind: 'thinking', text: '', durationMs: 0, isRedacted: false }),
       thinkingRow('t-text', { kind: 'thinking', text: 'real reasoning', durationMs: 0, isRedacted: false }),
@@ -118,8 +166,8 @@ describe('mapServerMessages — omitted thinking placeholder (restore)', () => {
     expect(ids).not.toContain('t-empty');
     expect(ids).toContain('t-text');
     expect(ids).toContain('t-dur');
-    expect(ids).toContain('t-red');
-    expect(mapped.find((m) => m.clientId === 't-red')?.thinkingRedacted).toBe(true);
+    // 历史里的加密推理行同样不复原(与 live 路径同判定);DB 行本身保留不动。
+    expect(ids).not.toContain('t-red');
   });
 
   it('legacy rows without text/durationMs fields are treated as placeholders', () => {

@@ -199,7 +199,7 @@ function makeHarness(overrides: HarnessOverrides = {}): Harness {
     waitForStatus: async (runId, status) => {
       await vi.waitFor(() => {
         expect(store.get(runId)?.status).toBe(status);
-      });
+      }, { interval: 1 });
       return store.get(runId)!;
     },
   };

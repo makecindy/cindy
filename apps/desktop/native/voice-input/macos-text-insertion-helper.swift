@@ -34,6 +34,12 @@ struct Options {
   var targetPid: pid_t?
   var targetBundleId = ""
   var targetName = ""
+  /// Only collect the focused window frame when the caller actually needs it.
+  /// On a single-display Mac the answer cannot change which display the overlay
+  /// opens on, and on an AX-slow target these extra requests each cost up to the
+  /// configured messaging timeout — that would delay the paste target capture for
+  /// nothing.
+  var withFocusedFrame = false
 }
 
 struct Snapshot {
@@ -140,6 +146,8 @@ func parseOptions() throws -> Options {
     case "--target-name":
       guard let value = iterator.next() else { throw HelperError.missingValue(arg) }
       options.targetName = value
+    case "--with-focused-frame":
+      options.withFocusedFrame = true
     default:
       throw HelperError.invalidArgument("Unknown argument: \(arg)")
     }
@@ -441,13 +449,55 @@ let AX_SELECTED_TEXT_MARKER_RANGE = "AXSelectedTextMarkerRange" as CFString
 let AX_TEXT_MARKER_RANGE_FOR_UI_ELEMENT = "AXTextMarkerRangeForUIElement" as CFString
 let AX_STRING_FOR_TEXT_MARKER_RANGE = "AXStringForTextMarkerRange" as CFString
 
-func captureTargetPayload() -> [String: Any] {
+func captureTargetPayload(withFocusedFrame: Bool) -> [String: Any] {
   guard let app = NSWorkspace.shared.frontmostApplication else {
     return [
       "ok": false,
       "error": "No frontmost application"
     ]
   }
+  // Read the focused window frame FIRST, before any AX mutation below: it must
+  // describe the same frontmostApplication snapshot as the paste target, and it
+  // must not observe a layout perturbed by the AXEnhancedUserInterface flip.
+  // Deriving both from one helper run is what keeps "which display do we open
+  // on" and "which app do we paste into" from disagreeing — two separate helper
+  // processes would each read frontmostApplication at a slightly different
+  // moment.
+  // Two frames, streamed in cost order, each on its own line before the
+  // (potentially slow) context capture below:
+  //
+  // 1. CGWindowList — an in-process window-server query with no Accessibility
+  //    grant and no per-request timeout. It always lands inside the caller's
+  //    ~90 ms display-selection deadline, but z-order is only an approximation of
+  //    focus: an app's unfocused always-on-top palette can sit in front of the
+  //    focused document.
+  // 2. AX kAXFocusedWindow — authoritative about focus, but each request can burn
+  //    a messaging timeout against an unresponsive target, so it may miss the
+  //    deadline entirely.
+  //
+  // Emitting both lets the caller use the accurate answer whenever it arrives in
+  // time and still have a usable one when it does not. The final payload carries
+  // the best available frame so buffered callers keep working.
+  var bestFrame: (frame: [String: Any], source: String)? = nil
+  if withFocusedFrame {
+    if let listFrame = frontWindowFrameFromWindowList(pid: app.processIdentifier) {
+      bestFrame = (listFrame, "window-list")
+      emitLine([
+        "event": "focused-window-frame",
+        "frame": listFrame,
+        "frameSource": "window-list"
+      ])
+    }
+    if let axFrame = axFocusedWindowFrame(for: app) {
+      bestFrame = (axFrame, "ax")
+      emitLine([
+        "event": "focused-window-frame",
+        "frame": axFrame,
+        "frameSource": "ax"
+      ])
+    }
+  }
+  let focusedFrame = bestFrame
   var context = captureFocusedElementContext(for: app)
   var enhancedAxAttempted = false
   var enhancedAxHelped = false
@@ -488,7 +538,104 @@ func captureTargetPayload() -> [String: Any] {
   if let context = context {
     payload["context"] = context
   }
+  if let focusedFrame = focusedFrame {
+    payload["frame"] = focusedFrame.frame
+    payload["frameSource"] = focusedFrame.source
+  }
   return payload
+}
+
+// Reports the frontmost window's frame so the global voice overlay can open on
+// the display the user is actually working on.
+//
+// Coordinates are AX/CGWindow screen coordinates: origin at the top-left of the
+// primary display, y growing downwards, in points. That matches Electron's DIP
+// screen coordinate space on macOS, so main can feed the frame straight into
+// screen.getDisplayMatching().
+
+func axFocusedWindowFrame(for app: NSRunningApplication) -> [String: Any]? {
+  guard AXIsProcessTrusted() else { return nil }
+  let axApp = AXUIElementCreateApplication(app.processIdentifier)
+  AXUIElementSetMessagingTimeout(axApp, 0.2)
+  guard let windowValue = copyAttribute(axApp, kAXFocusedWindowAttribute as CFString),
+        CFGetTypeID(windowValue) == AXUIElementGetTypeID() else {
+    return nil
+  }
+  let window = windowValue as! AXUIElement
+  AXUIElementSetMessagingTimeout(window, 0.2)
+  guard let origin = axPointAttribute(window, kAXPositionAttribute as CFString),
+        let size = axSizeAttribute(window, kAXSizeAttribute as CFString) else {
+    return nil
+  }
+  return [
+    "x": Double(origin.x),
+    "y": Double(origin.y),
+    "width": Double(size.width),
+    "height": Double(size.height)
+  ]
+}
+
+func axPointAttribute(_ element: AXUIElement, _ attribute: CFString) -> CGPoint? {
+  guard let value = copyAttribute(element, attribute),
+        CFGetTypeID(value) == AXValueGetTypeID() else {
+    return nil
+  }
+  var point = CGPoint.zero
+  guard AXValueGetValue(value as! AXValue, .cgPoint, &point) else { return nil }
+  return point
+}
+
+func axSizeAttribute(_ element: AXUIElement, _ attribute: CFString) -> CGSize? {
+  guard let value = copyAttribute(element, attribute),
+        CFGetTypeID(value) == AXValueGetTypeID() else {
+    return nil
+  }
+  var size = CGSize.zero
+  guard AXValueGetValue(value as! AXValue, .cgSize, &size) else { return nil }
+  return size
+}
+
+func frontWindowFrameFromWindowList(pid: pid_t) -> [String: Any]? {
+  let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+  guard let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+    return nil
+  }
+  // This is the deadline-safe approximation only; AX kAXFocusedWindow is what
+  // actually knows where focus is, and the caller prefers it whenever it arrives
+  // in time (see captureTargetPayload).
+  //
+  // Within that role, prefer the frontmost layer-0 window: an app's document
+  // windows live on layer 0, while higher layers hold palettes, tooltips and
+  // always-on-top helpers that are commonly NOT focused. Only if the app exposes
+  // no layer-0 window at all do we fall back to its frontmost window on any layer
+  // (some apps are panel-only).
+  var fallbackAnyLayer: [String: Any]? = nil
+  for window in windows {
+    // 这些值是 NSNumber。不要写 `as? pid_t`：NSNumber 只桥接到 Int，条件转换到
+    // Int32 会一律失败，整条兜底就变成永远返回 nil。
+    guard let ownerPid = (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+          ownerPid == pid else { continue }
+    // 完全透明的窗口不是用户在看的东西（点击穿透层、隐藏的辅助窗口）。
+    if let alpha = (window[kCGWindowAlpha as String] as? NSNumber)?.doubleValue, alpha <= 0 {
+      continue
+    }
+    guard let boundsDict = window[kCGWindowBounds as String] as? [String: Any],
+          let rect = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) else {
+      continue
+    }
+    // 退化尺寸同样跳过：1x1 之类的占位窗口没法用来判断用户在哪块屏。
+    if rect.width <= 1 || rect.height <= 1 { continue }
+    let frame: [String: Any] = [
+      "x": Double(rect.origin.x),
+      "y": Double(rect.origin.y),
+      "width": Double(rect.width),
+      "height": Double(rect.height)
+    ]
+    let layer = (window[kCGWindowLayer as String] as? NSNumber)?.intValue
+    if layer == 0 { return frame }
+    if fallbackAnyLayer == nil { fallbackAnyLayer = frame }
+  }
+  return fallbackAnyLayer
 }
 
 // Extracts before/selected/after text around the cursor in the focused element.
@@ -1238,6 +1385,23 @@ func buildPasteResult(
   ]
 }
 
+/**
+ Writes one JSON line and flushes it immediately.
+
+ stdout is a pipe here, so libc buffers it fully — without the explicit flush an
+ early "progress" line would not reach the parent until the process exits, which
+ would defeat the whole point of streaming it. The parent treats the LAST JSON
+ line as the command result and earlier lines as tagged progress events.
+ */
+func emitLine(_ payload: [String: Any]) {
+  guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+        let text = String(data: data, encoding: .utf8) else {
+    return
+  }
+  print(text)
+  fflush(stdout)
+}
+
 func emit(_ payload: [String: Any]) {
   do {
     let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
@@ -1269,7 +1433,7 @@ do {
   let options = try parseOptions()
   switch options.command {
   case "capture-target":
-    emit(captureTargetPayload())
+    emit(captureTargetPayload(withFocusedFrame: options.withFocusedFrame))
   case "paste-verified":
     emit(pasteVerifiedPayload(options: options))
   default:

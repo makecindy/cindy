@@ -14,7 +14,7 @@ import path from 'node:path';
 
 import { BrowserWindow } from 'electron';
 
-import type { Maker } from '@cindy/maker-core';
+import type { Effort, Maker } from '@cindy/maker-core';
 import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
 
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
@@ -27,11 +27,13 @@ import { getDbClient } from '../localDb/client/current';
 import { and, desc, eq, isNull, inArray } from 'drizzle-orm';
 import { messages as messagesTable, sessions as sessionsTable } from '../localDb/schema';
 import { getSessionProvider, setSessionProvider } from '../maker-host/session-provider-store.js';
+import { resolveLenientSessionRoute } from '../maker-host/model-route-guard-live.js';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton.js';
 import { readMemorySettings } from '../maker-host/memory-settings-store.js';
 import { visibleMessageTextForConversationSearch } from '../localDb/conversationSearch.pure';
 import { searchChatHistoryHybrid } from '../localDb/chatHistorySearch';
 import { backfillSessionMeta } from '../scheduler-host/runners/_shared';
+import { defaultModelFor } from '../scheduler-host/model-defaults';
 import { computeTwoDirDiff } from '../skillhub/snapshot';
 import type { LearnEventPayload } from '../../shared/learnTypes';
 import { LearnController, type LearnSessionLike } from './controller';
@@ -97,29 +99,66 @@ export function startLearnHost(deps: StartLearnHostDeps): LearnController {
       // 在会话构造期就查路由,事后 set 已经太晚(register.ts 的
       // hydrateProviderIdBeforeSessionStart 同款时序,Codex review ×2)。
       // 读取顺序:内存 store(用户刚切的最新值)→ DB sessions.provider_id。
+      let inheritedProviderId: string | null = null;
       if (opts.originSessionId) {
-        let providerId = getSessionProvider(opts.originSessionId);
-        if (!providerId) {
+        inheritedProviderId = getSessionProvider(opts.originSessionId);
+        if (!inheritedProviderId) {
           try {
             const rows = await getDbClient()
               .drizzle.select({ providerId: sessionsTable.providerId })
               .from(sessionsTable)
               .where(eq(sessionsTable.id, opts.originSessionId))
               .limit(1);
-            providerId = rows[0]?.providerId ?? null;
+            inheritedProviderId = rows[0]?.providerId ?? null;
           } catch {
-            providerId = null;
+            inheritedProviderId = null;
           }
         }
-        if (providerId) setSessionProvider(opts.id, providerId);
       }
+      // 停用轴准入(PR #744 review 第五轮):蒸馏会话是新的付费路由,继承的
+      // model/provider 可能已被用户停用 —— 宽松降级(丢弃被停用的来源/模型,
+      // 退回默认路由),不让 /learn 因停用整体失败。
+      const agentKind = originMeta?.agentKind ?? 'claude-code';
+      const desiredModel = originMeta?.model ?? defaultModelFor(agentKind);
+      const route = await resolveLenientSessionRoute(
+        agentKind,
+        desiredModel,
+        inheritedProviderId,
+        // 保守默认模型同走裁决阶梯:它自己也可能被停用,不能作为未经裁决的兜底
+        // (PR #744 review 第六轮);desiredEffort 让换模型时的 effort 按解析出的
+        // 模型条目 reconcile(第十一轮)。
+        {
+          fallbackModel: defaultModelFor(agentKind),
+          desiredEffort: originMeta?.effort,
+          desiredFastMode: originMeta?.fastMode === true,
+        },
+      );
+      if (route.degraded) {
+        logger.warn('learn session inherited route degraded (disabled in settings)', {
+          originSessionId: opts.originSessionId,
+          model: originMeta?.model,
+          providerId: inheritedProviderId,
+        });
+      }
+      // 目录里一个启用的对话模型都没有:失败收口,绝不拿未经裁决的模型直建付费会话。
+      const routeModel = route.model;
+      if (!routeModel) {
+        throw new Error('learn session has no enabled chat model (all models disabled in settings)');
+      }
+      if (route.providerId) setSessionProvider(opts.id, route.providerId);
+      // 换了模型时 effort 用 reconcile 结果(继承档可能超出兜底模型支持集);未换则
+      // 保持继承档。route.effort 缺席 = 条目无 effort 概念,不携带交给 agent 默认。
+      const routeEffort =
+        routeModel === desiredModel ? originMeta?.effort : (route.effort as Effort | undefined);
       const session = await deps.maker.createSession({
         id: opts.id,
-        agentKind: originMeta?.agentKind ?? 'claude-code',
+        agentKind,
         workingDir: opts.workingDir,
-        model: originMeta?.model ?? 'claude-sonnet-4-6',
-        ...(originMeta?.effort ? { effort: originMeta.effort } : {}),
-        ...(originMeta?.fastMode != null ? { fastMode: originMeta.fastMode } : {}),
+        model: routeModel,
+        ...(routeEffort ? { effort: routeEffort } : {}),
+        ...((route.fastMode ?? originMeta?.fastMode) != null
+          ? { fastMode: route.fastMode ?? originMeta?.fastMode }
+          : {}),
         // 权限收敛到工作区(Codex review ×2,安全红线):蒸馏输入含第三方 hub
         // 内容/自由文本,prompt 注入可诱导越权 —— 绝不能静默提到 bypass(Codex
         // 映射 danger-full-access、Claude 全放行)。acceptEdits 下:Claude 自动

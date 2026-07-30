@@ -302,6 +302,16 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // CHANNEL_NOT_ALLOWED → 控制端按生成失败提示。
   'maker:regenerate-title',
   'maker:get-context-usage',
+  // workflow 逐 agent 进度树(只读):handler 纯 fs 读 Claude Code workflow 记录文件,
+  // 无 event.sender 依赖、无副作用;记录文件真相在被控端 HOME(控制端本机读必落空)。
+  // 老被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端降级为无数据(回退 workflow 级
+  // 卡片)。不进 INVOKE_TIMEOUT_OVERRIDES_MS:读小 JSON,默认 30s 足够。
+  'maker:get-workflow-progress',
+  // 会话仍在运行的后台任务快照(只读):handler 只查活跃会话内存句柄的任务列表,
+  // 无 event.sender 依赖、无副作用;任务真身在被控端(控制端 main 无该会话 handle,
+  // 本机查必空)。后台任务面板挂载水合用。老被控端无此 channel → CHANNEL_NOT_ALLOWED
+  // → 控制端降级空表(面板退化为事件流 + 消息扫描两源)。
+  'maker:session-background-tasks:list',
   // —— Goal(目标模式;goal 状态机在被控端 GoalController 执行才有意义)——
   'maker:goal:set',
   'maker:goal:clear',

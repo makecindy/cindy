@@ -1,15 +1,13 @@
 import { Extension, type Editor } from '@tiptap/core';
-import {
-  Plugin,
-  PluginKey,
-  TextSelection,
-  type EditorState,
-  type Transaction,
-} from '@tiptap/pm/state';
+import { Plugin, PluginKey, type EditorState, type Transaction } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import type { Node as PMNode } from '@tiptap/pm/model';
 import type { VoiceInputDraftSource } from '@cindy/voice-input-core';
 
+import {
+  clampEditorTextRangeToDoc,
+  clampToInlinePosition,
+} from '../../voice-input/editorRangeMapping';
 import { MIC_WAVE_ICON_SVG } from '../../voice-input/VoiceInputMicWaveIcon';
 
 /**
@@ -45,33 +43,12 @@ export type VoiceInputReplacementRangeUpdate = {
   range: VoiceInputReplacementRange | null;
 };
 
-function clampPosition(doc: PMNode, position: number): number {
-  return Math.max(0, Math.min(position, doc.content.size));
-}
-
-/**
- * Snap a position onto the nearest place that can hold inline content.
- *
- * The draft/caret widgets are inline: rendered at a position whose parent is
- * NOT a textblock (0 or a boundary between blocks), ProseMirror puts them in
- * the doc-level DOM — an inline span between two `<p>`s, which the browser then
- * gives its own line. That reads as a stray blank line above the dictation
- * caret. Anchors reach such a position whenever the composer document is
- * rebuilt wholesale while dictation is live (external draft restore does a
- * `replace(0, size)`), because mapping a collapsed anchor across a full
- * replacement pushes it out to the block boundary.
- */
-function clampToInlinePosition(doc: PMNode, position: number): number {
-  const clamped = clampPosition(doc, position);
-  const $pos = doc.resolve(clamped);
-  if ($pos.parent.isTextblock) return clamped;
-  return TextSelection.near($pos, 1).from;
-}
-
+// 折叠锚点吸附到「能承载 inline 内容」的位置(见 clampToInlinePosition):落在 block
+// 边界上时 ProseMirror 会把 inline widget 渲染到段落之外,浏览器给它单独一行 ——
+// 就是听写时凭空多出的那个空行。非折叠区间保留两端(全选后听写要替换整篇),widget
+// 的渲染位置在 createDecorations 里单独吸附。
 function clampRange(doc: PMNode, from: number, to: number): { from: number; to: number } {
-  const safeFrom = clampToInlinePosition(doc, Math.min(from, to));
-  const safeTo = clampToInlinePosition(doc, Math.max(from, to));
-  return safeFrom <= safeTo ? { from: safeFrom, to: safeTo } : { from: safeFrom, to: safeFrom };
+  return clampEditorTextRangeToDoc({ from, to }, doc);
 }
 
 /**
@@ -137,6 +114,12 @@ function createDecorations(
 ): DecorationSet {
   if (!text && !caretState) return DecorationSet.empty;
   const range = clampRange(doc, from, to);
+  // The replaced range keeps its own endpoints (a dictation started over
+  // AllSelection must still replace the whole document), but the inline widgets
+  // have to sit at a position that can hold inline content: at a block boundary
+  // ProseMirror renders them at doc level, where the browser gives the span its
+  // own line — a stray blank line above the caret.
+  const widgetPosition = clampToInlinePosition(doc, range.from);
   const decorations: Decoration[] = [];
   if (text && range.to > range.from) {
     decorations.push(
@@ -155,7 +138,7 @@ function createDecorations(
     // browser only repaints the glyphs that actually changed.
     decorations.push(
       Decoration.widget(
-        range.from,
+        widgetPosition,
         () => {
           const node = document.createElement('span');
           node.dataset.voiceDraftInline = 'true';
@@ -164,7 +147,7 @@ function createDecorations(
           return node;
         },
         {
-          key: `voice-input-draft:${range.from}:${range.to}`,
+          key: `voice-input-draft:${widgetPosition}:${range.to}`,
           side: 1,
         },
       ),
@@ -178,10 +161,10 @@ function createDecorations(
     // the next text will land.
     decorations.push(
       Decoration.widget(
-        range.from,
+        widgetPosition,
         () => createCaretElement(caretState),
         {
-          key: `voice-input-caret:${caretState}:${range.from}`,
+          key: `voice-input-caret:${caretState}:${widgetPosition}`,
           side: 2,
         },
       ),

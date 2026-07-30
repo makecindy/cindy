@@ -34,14 +34,26 @@ type ProjectRefreshTracker = {
 /**
  * Reads the effective project-scoped collab plugin state for renderer gating.
  * Main IPC authorization remains authoritative for every create request.
+ *
+ * `skipQuery`: 远端 (SSH) 会话的 workingDir 是远端路径, 本机 fs 的项目级
+ * 查询既无意义又会误拒 — 跳过项目级覆盖, 但仍查用户级/全局级 collab 开关
+ * (与 main 侧 assertCollabProjectEnabled 的 remote 分支同口径): 用户全局
+ * 禁用 Collab 时 UI toggle 同样置灰, 而不是放行到 enableOrca 才撞
+ * PRECONDITION_FAILED。
  */
 export function useCollabProjectPolicy(
   workingDir: string | null | undefined,
   eligible: boolean,
+  opts?: { skipQuery?: boolean },
 ): CollabProjectPolicy {
+  const skipQuery = opts?.skipQuery === true;
+  // skipQuery 用 '' 作查询键:state 机围绕 workingDir key 构造, '' 占位表示
+  // "跳过项目级、只查用户级" 那一档。
   const requestedWorkingDir =
     eligible && typeof workingDir === 'string'
-      ? normalizeWorkingDirForProjectSettings(workingDir)
+      ? skipQuery
+        ? ''
+        : normalizeWorkingDirForProjectSettings(workingDir)
       : null;
   const [state, setState] = useState<PolicyState>({
     workingDir: null,
@@ -54,7 +66,9 @@ export function useCollabProjectPolicy(
   );
   const refresh = useCallback((): Promise<PolicyResult> => {
     const requestId = ++requestIdRef.current;
-    if (!requestedWorkingDir) {
+    // 注意用 == null 而非 falsy 判断:skipQuery 的 '' 哨兵是合法查询键
+    // (跳过项目级、只查用户级), 不能落进"无 workingDir"早退。
+    if (requestedWorkingDir == null) {
       setState({ workingDir: null, enabled: false, unavailable: false });
       return Promise.resolve({ enabled: false, unavailable: false });
     }
@@ -67,7 +81,12 @@ export function useCollabProjectPolicy(
           : { workingDir: requestedWorkingDir, enabled: null, unavailable: false },
       );
       try {
-        const next = await window.electronAPI.maker.plugins.getState('collab', requestedWorkingDir);
+        // '' (skipQuery) → 不传 workingDir: getEnableState 跳过项目级覆盖,
+        // 落用户级/全局级 — 与 main 侧 remote 分支同语义。
+        const next = await window.electronAPI.maker.plugins.getState(
+          'collab',
+          requestedWorkingDir === '' ? undefined : requestedWorkingDir,
+        );
         const result = { enabled: next.effectiveEnabled, unavailable: false };
         if (requestId !== requestIdRef.current) {
           const latest =

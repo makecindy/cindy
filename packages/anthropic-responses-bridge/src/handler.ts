@@ -253,6 +253,10 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     // Fast 模式:prefs.fast × provider.fastServiceTier(codex='priority')。
     const serviceTier = prefs?.fast === true && provider.fastServiceTier ? provider.fastServiceTier : undefined;
 
+    // 上游服务端工具(如 xAI x_search):只由 provider 按 model 静态声明,不受会话态影响,
+    // 保证同一会话逐轮请求带同一份工具列表(前缀稳定)。
+    const serverSideTools = provider.serverSideTools?.(realModel);
+
     const responsesReq = translateRequest(parsed, {
       model: realModel,
       promptCacheKey: sessionId,
@@ -260,6 +264,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
       reasoningEffort,
       serviceTier,
       providerPrefix: provider.prefix,
+      serverSideTools,
     });
 
     const abort = new AbortController();

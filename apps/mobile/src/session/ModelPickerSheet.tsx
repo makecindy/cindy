@@ -87,6 +87,8 @@ export interface ModelPickerSheetProps {
   };
   capabilities: MobileAgentCapabilities | null;
   activeModelId: string;
+  /** 已建会话的选择器传 true:当前来源按实际路由口径解析(见 buildMobileModelSections)。 */
+  existingSessionRoute?: boolean;
   /** 显式选中的来源 id(null = 跟随被控端默认路由;内部据此算高亮来源)。 */
   selectedProviderId: string | null;
   selectedEffort: string;
@@ -125,6 +127,7 @@ export function ModelPickerSheet({
   capabilities,
   activeModelId,
   selectedProviderId,
+  existingSessionRoute,
   selectedEffort,
   selectedFastMode,
   loading = false,
@@ -196,8 +199,9 @@ export function ModelPickerSheet({
         selectedProviderId,
         query,
         visibilityOverrides: modelVisibilityOverrides,
+        existingSessionRoute,
       }),
-    [providers, modelVisibilityOverrides, agentKind, activeModelId, selectedProviderId, query],
+    [providers, modelVisibilityOverrides, agentKind, activeModelId, selectedProviderId, query, existingSessionRoute],
   );
   const providerRows = useMemo(() => flattenProviderSections(sections.sections), [sections]);
   // 二级 options 目标行按**未过滤**行集现查(搜索 query 不应让已打开的二级视图失效)。
@@ -209,8 +213,9 @@ export function ModelPickerSheet({
         selectedModelId: activeModelId,
         selectedProviderId,
         visibilityOverrides: modelVisibilityOverrides,
+        existingSessionRoute,
       }),
-    [providers, modelVisibilityOverrides, agentKind, activeModelId, selectedProviderId],
+    [providers, modelVisibilityOverrides, agentKind, activeModelId, selectedProviderId, existingSessionRoute],
   );
   const allRows = useMemo(() => flattenProviderSections(allSections.sections), [allSections]);
   const filteredFlatOptions = useMemo(

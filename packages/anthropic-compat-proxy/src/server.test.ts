@@ -10,6 +10,7 @@ import {
 } from './server.js';
 import {
   createActiveStripTransform,
+  createEmptyAssistantMessageRecoveryRule,
   createEmptyThinkingRecoveryRule,
   createEncryptedContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
@@ -1306,6 +1307,167 @@ describe('anthropic-compat-proxy empty-thinking recovery', () => {
     expect(r.status).toBe(200);
     expect(upstream.bodies).toHaveLength(1);
     expect(upstream.bodies[0]).toBe(JSON.stringify(clean));
+  });
+});
+
+// moonshot 线上 400 原文(2026-07-28,经 LiteLLM passthrough;request_id 取自真实捕获)。
+const MOONSHOT_EMPTY_ASSISTANT_ERROR_BODY = JSON.stringify({
+  error: {
+    type: 'invalid_request_error',
+    message: "Invalid request: the message at position 395 with role 'assistant' must not be empty",
+  },
+  request_id: 'f1b34454-8a63-11f1-bf3c-9ac780b5488d',
+  type: 'error',
+});
+
+// moonshot/kimi-k3 线上污染会话形态(2026-07-28): 完整 tool_use/tool_result 上下文里
+// 夹着一条 thinking-only 空 assistant(流中断后客户端持久化的未完成占位 block)。
+function kimiBodyWithEmptyAssistant(): unknown {
+  return {
+    model: 'moonshot/kimi-k3',
+    messages: [
+      { role: 'user', content: 'run ls' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_01', name: 'Bash', input: { command: 'ls' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_01', content: 'ok' }] },
+      { role: 'assistant', content: [{ type: 'thinking', thinking: '', signature: '' }] },
+      { role: 'user', content: 'continue' },
+    ],
+  };
+}
+
+describe('anthropic-compat-proxy empty-assistant-message recovery (moonshot/kimi)', () => {
+  it('drops the empty assistant message and retries once on the moonshot 400', async () => {
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(MOONSHOT_EMPTY_ASSISTANT_ERROR_BODY);
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      }
+    });
+    upstreamClose = upstream.close;
+    let marked: { threadId: string; model: string } | null = null;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEmptyAssistantMessageRecoveryRule({
+        enabled: () => true,
+        onRetry: (threadId, model) => { marked = { threadId, model }; },
+      })],
+    });
+
+    const r = await post(proxy.url, kimiBodyWithEmptyAssistant());
+
+    expect(r.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+    expect(upstream.bodies[0]).toContain('"thinking":""');
+    // 重发 body: 空 thinking-only assistant 整条被丢(5 → 4 条),tool_use/tool_result 配对保留。
+    const retried = JSON.parse(upstream.bodies[1]);
+    expect(retried.messages).toHaveLength(4);
+    expect(retried.messages.map((m: { role: string }) => m.role)).toEqual([
+      'user', 'assistant', 'user', 'user',
+    ]);
+    expect(upstream.bodies[1]).not.toContain('"thinking":""');
+    expect(marked).toEqual({ threadId: 'thread-a', model: 'moonshot/kimi-k3' });
+  });
+
+  it('does not retry when there is no empty assistant message to drop', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(MOONSHOT_EMPTY_ASSISTANT_ERROR_BODY);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEmptyAssistantMessageRecoveryRule({ enabled: () => true })],
+    });
+
+    const r = await post(proxy.url, {
+      model: 'moonshot/kimi-k3',
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: [{ type: 'thinking', thinking: 'real reasoning', signature: '' }, { type: 'text', text: 'ok' }] },
+      ],
+    });
+
+    expect(r.status).toBe(400);
+    expect(upstream.bodies).toHaveLength(1);
+  });
+
+  it('does not retry a second time after the retry still returns the moonshot 400', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(MOONSHOT_EMPTY_ASSISTANT_ERROR_BODY);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEmptyAssistantMessageRecoveryRule({ enabled: () => true })],
+    });
+
+    const r = await post(proxy.url, kimiBodyWithEmptyAssistant());
+
+    expect(r.status).toBe(400);
+    expect(upstream.bodies).toHaveLength(2);
+  });
+
+  it('also recovers when the stale assistant carries an empty text block instead of empty thinking', async () => {
+    // PR #821 review 实测反馈形态: bridge 清理路径的 text-only 空块。
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(MOONSHOT_EMPTY_ASSISTANT_ERROR_BODY);
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      }
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEmptyAssistantMessageRecoveryRule({ enabled: () => true })],
+    });
+
+    const r = await post(proxy.url, {
+      model: 'moonshot/kimi-k3',
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: [{ type: 'text', text: '' }] },
+        { role: 'user', content: 'continue' },
+      ],
+    });
+
+    expect(r.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+    expect(JSON.parse(upstream.bodies[1]).messages).toHaveLength(2);
+  });
+
+  it('decodes a gzip-encoded moonshot 400 and still triggers the retry', async () => {
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(400, { 'content-type': 'application/json', 'content-encoding': 'gzip' });
+        res.end(gzipSync(Buffer.from(MOONSHOT_EMPTY_ASSISTANT_ERROR_BODY, 'utf8')));
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end('{}');
+      }
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [createEmptyAssistantMessageRecoveryRule({ enabled: () => true })],
+    });
+
+    const r = await post(proxy.url, kimiBodyWithEmptyAssistant());
+
+    expect(r.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+    expect(upstream.bodies[1]).not.toContain('"thinking":""');
   });
 });
 

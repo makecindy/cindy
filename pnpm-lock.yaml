@@ -116,6 +116,9 @@ importers:
       '@cindy/voice-input-core':
         specifier: workspace:*
         version: link:../../packages/voice-input-core
+      '@cindy/wechat-ilink':
+        specifier: workspace:*
+        version: link:../../packages/wechat-ilink
       '@codemirror/commands':
         specifier: ^6.10.3
         version: 6.10.4
@@ -371,6 +374,9 @@ importers:
       sharp:
         specifier: ^0.35.0
         version: 0.35.3(@types/node@25.9.5)
+      silk-wasm:
+        specifier: ^3.7.1
+        version: 3.7.1
       smol-toml:
         specifier: ^1.6.1
         version: 1.7.0
@@ -695,11 +701,29 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
 
+  cindy-protocol/packages/content-moderation-protocol:
+    devDependencies:
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
+
   cindy-protocol/packages/device-link-protocol:
     devDependencies:
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
+
+  cindy-protocol/packages/model-access-protocol:
+    devDependencies:
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
 
   cindy-protocol/packages/plugin-protocol:
     devDependencies:
@@ -1310,6 +1334,18 @@ importers:
       typescript-eslint:
         specifier: ^8.0.0
         version: 8.64.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
+
+  packages/wechat-ilink:
+    devDependencies:
+      '@types/node':
+        specifier: '*'
+        version: 25.9.5
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
       vitest:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
@@ -9370,6 +9406,10 @@ packages:
     resolution: {integrity: sha512-bzyZ1e88w9O1iNJbKnOlvYTrWPDl46O1bG0D3XInv+9tkPrxrN8jUUTiFlDkkmKWgn1M6CfIA13SuGqOa9Korw==}
     engines: {node: '>=14'}
 
+  silk-wasm@3.7.1:
+    resolution: {integrity: sha512-mXPwLRtZxrYV3TZx41jMAeKc80wvmyrcXIcs8HctFxK15Ahz2OJQENYhNgEPeCEOdI6Mbx1NxQsqxzwc3DKerw==}
+    engines: {node: '>=16.11.0'}
+
   simple-concat@1.0.1:
     resolution: {integrity: sha512-cSFtAPtRhljv69IK0hTVZQ+OfE9nePi/rtJmw5UjHeVyVroEqJXP1sFztKUy1qU+xvz3u/sfYJLa947b7nAN2Q==}
 
@@ -14162,7 +14202,7 @@ snapshots:
 
   '@types/mute-stream@0.0.4':
     dependencies:
-      '@types/node': 22.20.1
+      '@types/node': 25.9.5
 
   '@types/node@18.19.130':
     dependencies:
@@ -20082,6 +20122,8 @@ snapshots:
   signal-exit@3.0.7: {}
 
   signal-exit@4.1.0: {}
+
+  silk-wasm@3.7.1: {}
 
   simple-concat@1.0.1: {}
 

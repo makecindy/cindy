@@ -27,7 +27,6 @@ import { useLocation, useNavigate, useOutletContext, useParams } from 'react-rou
 import { useTranslation } from 'react-i18next';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
-import { setBlockExpanded } from '@/hooks/useExpandedBlockMemory';
 import {
   Activity,
   AlertCircle,
@@ -78,7 +77,7 @@ import {
   CONTINUE_AFTER_APP_EXIT_PROMPT,
   CONTINUE_AFTER_ERROR_PROMPT,
 } from '../../../shared/interruptedTurn';
-import { clearInterruptedAttentionIfOwned } from '@/hooks/useInterruptedSessionsAttention';
+import { refreshPendingAlerts } from '@/hooks/usePendingAlertAttention';
 import { CredentialSwitchWaitBanner } from '@/components/chat/CredentialSwitchWaitBanner';
 import { UpgradeBanner } from '@/components/chat/UpgradeBanner';
 import { WorktreeRestoreBanner } from '@/components/chat/WorktreeRestoreBanner';
@@ -91,7 +90,7 @@ import { RightSidebarToggle } from '@/components/layout/RightSidebarToggle';
 import { TopRightChipStack, TopRightChipStackProvider } from '@/components/chat/TopRightChipStack';
 import { ChatDisplaySnapshotProvider } from '@/components/chat/ChatDisplaySnapshotContext';
 import { useCCAgentChat } from '@/hooks/useCCAgentChat';
-import { ackErrorRead, useErrorReadAck } from '@/hooks/useErrorReadAck';
+import { ackErrorAlertHandled } from '@/lib/errorAlertAck';
 import { useAttachments } from '@/hooks/useAttachments';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { SessionContentHeaderRegistration } from './SessionContentHeader';
@@ -120,8 +119,12 @@ import { toast } from '@/lib/toast';
 import {
   decodeRemoteErrorMessage,
   makerChatStore,
+  type AgentTaskUpdate,
   type MessageDeliveryMode,
 } from '@/lib/makerChatStore';
+import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
+import { subscribeChatTaskFocus } from '@/features/right-sidebar/plugins/background-tasks/chatTaskFocusIntent';
+import { canFocusWithoutJumpLoad } from '@/lib/searchJumpTargeting';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
 import { useWorktreeCreation, worktreeCreationStore } from '@/lib/worktreeCreationStore';
 import { useWorktreeForSession } from '@/contexts/WorktreeContext';
@@ -149,6 +152,11 @@ import {
   getGhostMediaUriFromDataTransfer,
 } from '@/cindy-brain/ghostMediaHandover';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
+import {
+  classifyUnclassifiedDroppedItems,
+  getDroppedFileItems,
+  type DroppedFileItems,
+} from '@/lib/fileDrop';
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
 import { useCollabProjectPolicy } from './hooks/useCollabProjectPolicy';
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
@@ -298,8 +306,9 @@ interface CCAgentSessionViewProps {
   showRsbToggle?: boolean;
   /**
    * 本视图当前是否真实可见(挂载 ≠ 可见)。workdir 文件页的聊天 rail 折叠时
-   * 视图仍挂载但宽度为 0,报错 banner 看不见 —— 报错「真实已读」判定
-   * (useErrorReadAck)依赖此标记,不可见时绝不 ack。默认 true。
+   * 视图仍挂载但宽度为 0。默认 true。
+   * 注:红点不再依赖它 —— 展示与否都不影响「告警未处理」的判定(2026-07 统一);
+   * 仍用于远程回执的 display-ready 门槛与其它按可见性收敛的逻辑。
    */
   viewVisible?: boolean;
   /**
@@ -389,27 +398,28 @@ function RightSidebarWorkdirRegistration({
 }
 
 /**
- * /workflows 命中卡片时的短暂描边高亮(模块级单例)。
- *
- * 只保留「当前正在高亮的那张卡 + 它的定时器」:起新高亮前先清掉上一次(无论同张还是另一张),
- * 并把上一张恢复成无 inline boxShadow('' → 回落到样式表)。恢复值恒为 '' 而非「上次读到的
- * boxShadow」,因此快速连按 /workflows 也不会把高亮值当原值存回去、造成描边永久残留。
+ * /workflows:从任务表挑最近的 local_workflow 任务。taskUpdates 里同一任务按
+ * taskId / parentToolUseId 存多个别名键(指向同一 merged 对象),先按引用去重,
+ * 再取 updatedAt/createdAt 最新的一个;时间缺失按 0 参与比较(平局取遍历靠后者)。
  */
-let activeWorkflowFlash: { el: HTMLElement; timer: ReturnType<typeof setTimeout> } | null = null;
-
-function flashWorkflowCard(el: HTMLElement): void {
-  if (activeWorkflowFlash) {
-    clearTimeout(activeWorkflowFlash.timer);
-    activeWorkflowFlash.el.style.boxShadow = '';
-    activeWorkflowFlash = null;
+function findLatestWorkflowTask(
+  taskUpdates: ReadonlyMap<string, AgentTaskUpdate>,
+): AgentTaskUpdate | undefined {
+  let latest: AgentTaskUpdate | undefined;
+  let latestTs = Number.NEGATIVE_INFINITY;
+  const seen = new Set<AgentTaskUpdate>();
+  for (const update of taskUpdates.values()) {
+    if (update.taskType !== 'local_workflow' || seen.has(update)) continue;
+    seen.add(update);
+    const raw = update.updatedAt ?? update.createdAt;
+    const parsed = raw ? Date.parse(raw) : Number.NaN;
+    const ts = Number.isFinite(parsed) ? parsed : 0;
+    if (ts >= latestTs) {
+      latest = update;
+      latestTs = ts;
+    }
   }
-  el.style.transition = 'box-shadow 0.25s ease';
-  el.style.boxShadow = '0 0 0 2px var(--focus-ring)';
-  const timer = setTimeout(() => {
-    el.style.boxShadow = '';
-    if (activeWorkflowFlash?.el === el) activeWorkflowFlash = null;
-  }, 1200);
-  activeWorkflowFlash = { el, timer };
+  return latest;
 }
 
 export function CCAgentSessionView({
@@ -836,14 +846,35 @@ export function CCAgentSessionView({
     }
     let cancelled = false;
     const currentState = makerChatStore.getSnapshot(sessionId);
-    const existing = currentState.messages.find(
-      (message) => message.clientId === searchJump.messageClientId,
-    );
-    if (existing) {
+    // "目标已在 messages 里"不等于"窗口连续覆盖到它":先前一次补齐失败的跳转会把目标以
+    // 孤岛形式 merge 进窗口(它与已加载的尾部之间隔着没加载的历史)。这时若直接 focus 就
+    // 返回,store 侧的自愈补齐永远不会被触发,中间缺失一直修不回来(#676 review)。
+    // 判定逻辑抽在 canFocusWithoutJumpLoad,由 searchJumpTargeting.test.ts 直接覆盖。
+    if (canFocusWithoutJumpLoad(currentState, searchJump.messageClientId)) {
       requestFocusMessage(searchJump.messageClientId);
       clearSearchJumpState();
       return;
     }
+    // 加载失败(取不到权威行 / 请求 reject)时的收口:目标只要**此刻**还渲染在窗口里,就直接
+    // focus 它、不报错 —— 导航到一行已经在屏上的消息根本不需要网络(被控端临时离线时
+    // invokeRemote 会 reject)。孤岛标记保留,留给下一次跳转再试修复。
+    //
+    // 必须查**实时**快照,不能用进 effect 时捕获的布尔值:请求飞行期间远程权威重建可能已经把
+    // 那一行移除(并 bump 代际,正是 loadAround 返回 null 的原因之一),那时照旧 focus 一个已
+    // 不存在的 clientId 会白吞掉这次跳转 —— 既不导航也不报错,MessageStream 还会在后续每次
+    // 渲染里线性扫描这个找不到的 id(#676 review codex P1 + copilot)。
+    const targetStillInWindow = (): boolean =>
+      makerChatStore
+        .getSnapshot(sessionId)
+        .messages.some((message) => message.clientId === searchJump.messageClientId);
+    const finishWithFallback = (): void => {
+      if (targetStillInWindow()) {
+        requestFocusMessage(searchJump.messageClientId);
+      } else {
+        toast.error(t('ccAgent.search.jumpFailed'));
+      }
+      clearSearchJumpState();
+    };
     const loadAround =
       searchJump.messageIdKind === 'clientId'
         ? makerChatStore.loadAroundMessageClientId
@@ -851,17 +882,17 @@ export function CCAgentSessionView({
     void loadAround(sessionId, searchJump.messageId, { radius: 60 })
       .then((message) => {
         if (cancelled) return;
-        requestFocusMessage(message?.clientId ?? searchJump.messageClientId);
-        if (!message) {
-          toast.error(t('ccAgent.search.jumpFailed'));
+        if (message) {
+          requestFocusMessage(message.clientId);
+          clearSearchJumpState();
+          return;
         }
-        clearSearchJumpState();
+        finishWithFallback();
       })
       .catch((err) => {
         if (!cancelled) {
           log.warn('Failed to load search hit context:', err);
-          toast.error(t('ccAgent.search.jumpFailed'));
-          clearSearchJumpState();
+          finishWithFallback();
         }
       });
     return () => {
@@ -877,6 +908,39 @@ export function CCAgentSessionView({
     sessionId,
     t,
   ]);
+
+  // 后台任务面板行点击 → 聊天流定位对应任务卡:sessionId 匹配当前会话才消费;
+  // 消息不在已加载窗口时先 loadAround 补上下文再定位(与搜索跳转同一收口)。
+  useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+    const unsubscribe = subscribeChatTaskFocus((focusSessionId, clientId) => {
+      if (cancelled || focusSessionId !== sessionId) return;
+      const existing = makerChatStore
+        .getSnapshot(sessionId)
+        .messages.some((message) => message.clientId === clientId);
+      if (existing) {
+        requestFocusMessage(clientId);
+        return;
+      }
+      void makerChatStore
+        .loadAroundMessageClientId(sessionId, clientId, { radius: 60 })
+        .then((message) => {
+          if (cancelled) return;
+          requestFocusMessage(message?.clientId ?? clientId);
+          if (!message) toast.error(t('ccAgent.search.jumpFailed'));
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          log.warn('Failed to load chat task focus context:', err);
+          toast.error(t('ccAgent.search.jumpFailed'));
+        });
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [requestFocusMessage, sessionId, t]);
 
   // 选中一个 Worker session 时,如果当前是普通单 session 路由,自动跳到 Lead
   // 普通路由并用 worker query 作为协同 tab 的初始 hint。doc 模式 (`/cc-agent/files/...`) 下不跳——doc 应该一直
@@ -1163,15 +1227,10 @@ export function CCAgentSessionView({
   const providers = remoteDeviceId ? deviceProviders : localProviders;
   // 该会话 agent 的能力(agent 级 hasFastMode + 旧被控端拍平回退用 availableModels);按 remoteDeviceId 作用域。
   const { capabilities: sessionCaps } = useAgentCapabilities(displayAgentKind, remoteDeviceId);
-  // 报错「真实已读」:终止错误的 ErrorBanner 在本视图内固定展示,视图真实可见 +
-  // 窗口聚焦驻留后经 badge 桥接 ack 灵动岛 / 清红角标。`error` 合并了 recoverable
-  // 错误(agent 仍在跑,不算已读),再用 store 的 terminal 判定过滤;渲染由同一
-  // store 状态驱动,同步读取不会拿到过期值。
-  const hasTerminalErrorForReadAck =
-    Boolean(error) &&
-    !agentStatus?.isRunning &&
-    (sessionId ? makerChatStore.hasSessionTerminalError(sessionId) : false);
-  useErrorReadAck(sessionId, hasTerminalErrorForReadAck, viewVisible);
+  // 这里曾有 useErrorReadAck:ErrorBanner 在视图内聚焦驻留 1.5s 即 explicit 清红点。
+  // 2026-07 统一后展示不再产生已读 —— 横幅还在就说明告警未处理,红点必须留着。
+  // 红角标现在只由用户处置横幅(handleRetry / handleSilentStopContinue /
+  // handleDismissError 调 ackErrorAlertHandled)或 pending-alerts 派生收敛来清。
 
   // 后台子任务活动:turn 已结束但该会话的 CC 子进程仍在调模型(后台子 agent 持续
   // 消耗用量)。main 侧按 proxy 活动信号判定并推送;消费点是 RunningStatusBar 的
@@ -1260,6 +1319,14 @@ export function CCAgentSessionView({
           ? CONTINUE_AFTER_APP_EXIT_PROMPT
           : CONTINUE_AFTER_ERROR_PROMPT,
       );
+      // sendUiTrigger 在 enqueue 成功后就 resolve,续跑消息**还没落库** —— 此刻重算
+      // 仍会把原 error 行判为尾行并保留红点,而 syntheticContinuationPending 已经把
+      // 横幅隐藏了(排队被暂停 / 阻塞时可能持续很久)。所以先临时清点让两者一致;
+      // 排队项被取消或拒绝时,下方的 effect 会在 pending 落回 false 时重算恢复
+      // (PR #879 review P1)。
+      // 本机会话才清:远程会话的红点靠隧道回执清被控端,而本机库里没有它的行,
+      // 重算恢复不了 —— 那条腿延后到 pending 落回 false 且横幅确实消失后再 ack。
+      if (!remoteDeviceId) ackErrorAlertHandled(sessionId);
     } catch (err) {
       setErrorTailBannerHiddenFor(null);
       toast.error(err instanceof Error ? err.message : String(err));
@@ -1268,9 +1335,22 @@ export function CCAgentSessionView({
   const handleErrorTailDismiss = useCallback(() => {
     if (!sessionId || !errorTailMsg) return;
     // store 乐观置 errorDismissed(banner 即刻熄灭、切会话回来不复现)+ 持久化
-    // (main 侧 merge dismissed:true,不丢 sdkError 等原字段;远程会话仅内存态)。
-    makerChatStore.dismissErrorTailMessage(sessionId, errorTailMsg.clientId);
-  }, [errorTailMsg, sessionId]);
+    // (main 侧 merge dismissed:true,不丢 sdkError 等原字段)。落库失败会回滚乐观态。
+    // 必须**等落库完成**再重算:dismiss 落库无广播,而告警查询是纯 DB 读,
+    // 抢在写入前读会仍判定告警存在 —— 横幅已熄灭、红点却卡住。
+    void makerChatStore
+      .dismissErrorTailMessage(sessionId, errorTailMsg.clientId)
+      .then((persisted) => {
+        // device-link 远程会话:dismiss 经隧道写到**被控端** DB,控制端本机库里没有
+        // 这个会话的行,派生腿查不到、也从未认领它 —— 必须显式 ack(explicit 清本机
+        // 角标 + 隧道回执清被控端未读)。删掉展示型 ack 后这是唯一的清除路径。
+        // **只在落库成功时 ack**:隧道写失败时 store 已回滚乐观态、横幅重新出现,
+        // 此时清红点会再造成「横幅在、红点没」(PR #879 review P1)。
+        // 本机会话由下面的重算收敛,不重复 ack。
+        if (persisted && remoteDeviceId) ackErrorAlertHandled(sessionId);
+        return refreshPendingAlerts();
+      });
+  }, [errorTailMsg, remoteDeviceId, sessionId]);
   // interrupted-turn-resume(简化版):「疑似中断」由 session 行的双时间戳驱动
   // (startedAt > endedAt 且未被 /clear 越过,见 sessionActiveTurn.ts 文件头),
   // 不再依赖持久化中断消息行。判定是打开会话时的一次性快照:本窗口 turn 一旦
@@ -1312,13 +1392,42 @@ export function CCAgentSessionView({
     sessionInterruptAcked,
     remoteTurnActive,
   ]);
-  // 兜底清启动红点:打开会话且中断判定不成立(peer 已忽略 / 续跑已完成 / 用户已
-  // 操作)时,banner 不会 mount、useAckErrorAttention 没有清除时机 —— 这里清掉
-  // useInterruptedSessionsAttention 打的红点(只清 hook 自有的,不误伤任务失败红点)。
+  // 打开会话且中断判定不成立(peer 已忽略 / 续跑已完成 / 用户已操作)时重算告警:
+  // 红点是 pending-alerts 的派生,这里只触发重查,由差分决定清不清 —— 不直接清点,
+  // 否则会抹掉同一会话上仍未处理的错误尾行告警。
   useEffect(() => {
-    if (sessionId && session && !interruptedFromSession)
-      clearInterruptedAttentionIfOwned(sessionId);
+    if (sessionId && session && !interruptedFromSession) refreshPendingAlerts();
   }, [sessionId, session, interruptedFromSession]);
+  // 排队中的续跑项消失(dispatch 成功 → 消息落库,或被取消 / 被拒绝 → 原横幅重现)
+  // 时重算告警:两种结局都需要重新对账 —— 成功时原 error 已不是尾行、红点该灭;
+  // 取消时告警仍在、红点该回来(本机会话的点在 enqueue 成功时被临时清掉了)。
+  // 只在挂起状态由 true 落回 false 的边沿触发,不在挂起期间反复重算。
+  // 边沿状态必须**连 sessionId 一起记**:本组件在会话间复用,若只记布尔值,「A 有排队项
+  // (true)→ 切到 B(false)」会被误判成 A 的完成边沿,进而对 B 发 ack / 远程回执,
+  // 清掉用户从未处置的 B 的红点(PR #879 review P1)。
+  const prevSyntheticPendingRef = useRef<{ sessionId: string | undefined; pending: boolean }>({
+    sessionId: undefined,
+    pending: false,
+  });
+  // 边沿处理要读「横幅此刻是否还在」,但把这些值写进 deps 会让 effect 在挂起期间反复
+  // 重跑;用 ref 持有最新值,effect 只由挂起状态驱动。
+  const alertStillPresentRef = useRef(false);
+  alertStillPresentRef.current = Boolean(errorTailMsg) || interruptedFromSession;
+  useEffect(() => {
+    const prev = prevSyntheticPendingRef.current;
+    prevSyntheticPendingRef.current = { sessionId, pending: syntheticContinuationPending };
+    // 跨会话不构成边沿:上一次记录属于别的会话,直接重新定基。
+    if (prev.sessionId !== sessionId) return;
+    const was = prev.pending;
+    if (!was || syntheticContinuationPending) return;
+    // 远程会话的 ack 延后到这里:本机库里没有它的行,重算无法恢复红点,所以必须先
+    // 确认横幅**真的消失了**(dispatch 成功、续跑已落库)才发隧道回执;若横幅重现
+    // (排队被取消 / 拒绝)就什么都不做,红点原样留着与横幅一致(review P1)。
+    if (remoteDeviceId && sessionId && !alertStillPresentRef.current) {
+      ackErrorAlertHandled(sessionId);
+    }
+    void refreshPendingAlerts();
+  }, [syntheticContinuationPending, remoteDeviceId, sessionId]);
   const handleSessionInterruptContinue = useCallback(async () => {
     if (!sessionId) return;
     setSessionInterruptAcked(true);
@@ -1328,6 +1437,10 @@ export function CCAgentSessionView({
       // 续跑 turn 真正启动时会写更新的 started；若再次被 app 退出打断，仍会产生新提示。
       // 本视图先靠内存 acked 即时熄灭，peer 视图靠 dispatch 后的 ack 广播收敛。
       await makerChatStore.sendUiTrigger(sessionId, CONTINUE_AFTER_APP_EXIT_PROMPT);
+      // 同 handleErrorTailContinue:enqueue 成功但续跑还没落库、durable ack 也要等
+      // dispatch 成功,而横幅已隐藏 —— 先临时清点保持一致,排队被取消时由 pending
+      // 落回 false 的 effect 重算恢复。远程会话同样延后(见那里的说明)。
+      if (!remoteDeviceId) ackErrorAlertHandled(sessionId);
     } catch (err) {
       setSessionInterruptAcked(false);
       toast.error(err instanceof Error ? err.message : String(err));
@@ -1336,8 +1449,21 @@ export function CCAgentSessionView({
   const handleSessionInterruptDismiss = useCallback(() => {
     if (!sessionId) return;
     setSessionInterruptAcked(true);
-    void ackInterruptedTurnFor(sessionId).catch(() => undefined);
-  }, [sessionId]);
+    void ackInterruptedTurnFor(sessionId)
+      .then(() => {
+        // 远程会话同 handleErrorTailDismiss:ack 落的是被控端 DB,控制端本机库里没有
+        // 这个会话,派生腿管不到它的红点 —— 显式 ack。本机会话靠 ended 落库广播的
+        // sessions:patched(lastTurnEndedAt)收敛,不重复 ack。
+        if (remoteDeviceId) ackErrorAlertHandled(sessionId);
+      })
+      .catch((err) => {
+        // 落库失败(典型:device-link 断连时忽略远程中断)必须复位闩锁 —— 否则横幅
+        // 永久隐藏而中断并未被确认,红点还挂着,用户不离开再重进就没法重试
+        // (PR #879 review P1)。与 handleSessionInterruptContinue 的失败处理一致。
+        setSessionInterruptAcked(false);
+        toast.error(err instanceof Error ? err.message : String(err));
+      });
+  }, [remoteDeviceId, sessionId]);
   // device-link 远程会话首屏:历史/元数据经隧道往返(网络),慢网下 historyLoaded=false
   // 期间消息区空白。仅远程 + 延迟防闪后给「正在从被控端加载」提示(本机会话恒 false)。
   const showRemoteLoading = useRemoteSessionLoading(remoteDeviceId, historyLoaded);
@@ -1458,6 +1584,13 @@ export function CCAgentSessionView({
     });
   }, [getHelpCommandsSnapshot, insertSystemCard]);
 
+  // /workflows 要在命令 handler 里读"当下"的任务表;走 ref 镜像,避免 taskUpdates
+  // 高频变化把 IPC 命令监听反复重订阅。
+  const taskUpdatesRef = useRef(taskUpdates);
+  useEffect(() => {
+    taskUpdatesRef.current = taskUpdates;
+  }, [taskUpdates]);
+
   useEffect(() => {
     const unsub = window.electronAPI.maker.onDesktopCommandTriggered((payload) => {
       if (payload.sessionId && payload.sessionId !== sessionId) return;
@@ -1511,26 +1644,16 @@ export function CCAgentSessionView({
         return;
       }
       if (payload.command === 'workflows') {
-        // workflow 进度内联在消息流里(Workflow 工具调用 → workflow 进度卡,AgentTaskCard 带
-        // data-workflow-card / data-workflow-session / data-workflow-expandkey)。/workflows 在
-        // **本会话作用域内**定位最近一张 workflow 卡:展开它 → 滚动到视野中央 → 短暂描边高亮;
-        // 无卡时 toast。数据/展现全在本地,不回 SDK(原生 /workflows 在非交互 SDK 模式下不可用)。
-        // 作用域限定:多个 CCAgentSessionView 可能同挂 DOM(Orca split view / workdir 浏览栏),
-        // 全局 querySelectorAll 会选到别的会话的卡,故按 data-workflow-session 限定当前会话。
-        const scopeSelector = sessionId
-          ? `[data-workflow-session="${CSS.escape(sessionId)}"][data-workflow-card]`
-          : '[data-workflow-card]';
-        const cards = document.querySelectorAll<HTMLElement>(scopeSelector);
-        const last = cards.item(cards.length - 1);
-        if (!last) {
-          toast.warning(t('workflows.toast.none'));
-          return;
-        }
-        // 展开卡片:逐 agent 进度树只在展开区渲染,命令语义是「打开并展开最近一张 workflow 卡」。
-        const expandKey = last.getAttribute('data-workflow-expandkey');
-        if (expandKey) setBlockExpanded(expandKey, true);
-        last.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        flashWorkflowCard(last);
+        // workflow 的主视图在右栏「后台任务」面板:有 live workflow 任务则打开面板
+        // 并定位其详情;没有(如重载后任务表已清空)也打开面板列表 —— 列表基于消息
+        // 扫描,历史 workflow 行仍可见,比 toast「暂无」更符合命令语义。数据/展现
+        // 全在本地,不回 SDK(原生 /workflows 在非交互 SDK 模式下不可用)。
+        if (!sessionId) return;
+        const latest = findLatestWorkflowTask(taskUpdatesRef.current);
+        void openBackgroundTasksTab(
+          sessionId,
+          latest ? { focusTaskId: latest.taskId } : {},
+        );
         return;
       }
       // 'issue' 命令由下方独立 effect 处理(需要 handleSend,其声明在本 effect 之后)。
@@ -1684,8 +1807,9 @@ export function CCAgentSessionView({
     shouldFirstFrameRevealOrcaWorkers,
   ]);
   // Lead 允许 Claude / Codex 本地项目会话走 toggle。Codex 的 MCP bridge 通过
-  // threadId -> business sessionId 映射在工具调用时恢复 per-session ctx。
-  // 远端协同还没有 worker remoteHostId 继承链,继续隐藏入口。
+  // threadId -> business sessionId 映射在工具调用时恢复 per-session ctx;
+  // 远端会话 (codex / cc) 经 SSH remote-forward 直连本机 MCP bridge,worker
+  // 创建继承 remoteHostId,两端协同均已接通。
   // 注意:doc rail (isCompactRail) 也允许显示 toggle —— WorkdirBrowseRoute 已经
   // 针对 Lead session 接入了 OrcaSplitView toggle 布局,普通 session 必须能从
   // ChatInput 工具行启用协同变成 Lead,否则 doc 模式下首次开启入口完全没有。
@@ -1693,10 +1817,15 @@ export function CCAgentSessionView({
   const collabPolicyEligible =
     !orcaMode &&
     session?.orcaRole !== 'worker' &&
-    session?.remoteHostId == null &&
+    // 远端会话 codex 与 cc 都已接通协同(worker 创建继承 remoteHostId,
+    // 远端 agent 经 SSH remote-forward 直连本机 MCP bridge),不再按 agent 限流。
     session?.workspaceKind === 'project' &&
     !!session?.workingDir;
-  const collabPolicy = useCollabProjectPolicy(session?.workingDir, collabPolicyEligible);
+  const collabPolicy = useCollabProjectPolicy(session?.workingDir, collabPolicyEligible, {
+    // 远端会话的 workingDir 是远端路径, 跳过项目级查询; 用户级/全局级 collab
+    // 开关仍生效 (与 main 侧 remote 分支同口径)。
+    skipQuery: !!session?.remoteHostId,
+  });
   const allowCollabToggle = !orcaMode && collabPolicyEligible;
   // 把 sessionId 抽出来给 useEffect 用 (linter 偏好稳定的标量依赖)
   const collabSessionId = sessionId;
@@ -2095,13 +2224,10 @@ export function CCAgentSessionView({
             permissionMode: session.permissionMode,
             userPrompt: getUserPrompt(),
             // device-link executes on the target desktop, so let that runtime
-            // own the setting. SSH still lazy-starts through this process and
-            // must explicitly disable controller-local Cindy Memory.
-            ...(remoteDeviceId
-              ? {}
-              : {
-                  makerMemoryEnabled: session.remoteHostId ? false : getMakerMemoryEnabled(),
-                }),
+            // own the setting. SSH remote follows the controller's global
+            // setting like local sessions (memory scoped per hostId+remote
+            // path on this machine, see maker-core buildMemoryScopeKey).
+            ...(remoteDeviceId ? {} : { makerMemoryEnabled: getMakerMemoryEnabled() }),
             extraDirs: session.extraDirs ?? [],
             displayReasoning: 'summarized' as const,
             ...(session.remoteHostId ? { remoteHostId: session.remoteHostId } : {}),
@@ -2180,6 +2306,9 @@ export function CCAgentSessionView({
       // maker:agent:status);本地会话 remoteDeviceId 为 undefined → 走本机检查(行为不变)。
       const { proceed } = await vendorAuthGate.checkAndConfirm(isCodex ? 'codex' : 'cc', {
         deviceId: remoteDeviceId,
+        // 已建会话:suspended 来源计入(停用不打断运行中会话,门禁只看凭证连接态,
+        // PR #744 review 第十七轮)。
+        existingSessionRoute: true,
       });
       if (!proceed) return false;
 
@@ -2365,21 +2494,23 @@ export function CCAgentSessionView({
   // interrupted-turn-resume:main 判定失败 turn 已有 assistant 产出时,会用隐藏的
   // 规范化续跑指令(CONTINUE_AFTER_ERROR_PROMPT)替代重发原文;零产出仍重发原文。
   // 判定与文案都在 main(规则 9),renderer 只发意图。
+  // Retry / silent-stop 继续都**不在这里 ack 红点**(PR #879 review P1):这两个 store
+  // 方法内部吞掉异步失败,点击时就清点会在恢复失败(retry 被拒 / 续跑入队失败)时留下
+  // 「横幅还在、红点没了」,而 live-only 的错误没有任何重算能把它恢复。
+  // 成功路径已经有更可靠的收敛点:turn 真正跑起来 → store 清掉终止错误 →
+  // useSessionRunningStatus 在 running 上升沿把 orphan 的 error 角标 explicit 清掉。
+  // 失败路径则天然保留红点,与仍在展示的横幅一致。
   const handleRetry = useCallback(() => {
-    // 点击 Retry 即已读:用户操作了报错 banner,无需等驻留计时。
-    if (sessionId) ackErrorRead(sessionId);
     retryLastError();
-  }, [retryLastError, sessionId]);
+  }, [retryLastError]);
 
-  // silent-stop 耗尽横幅「继续」:同 Retry 计已读,动作走 store(清横幅 + 隐藏续跑指令)。
   const handleSilentStopContinue = useCallback(() => {
-    if (sessionId) ackErrorRead(sessionId);
     continueAfterSilentStop();
-  }, [continueAfterSilentStop, sessionId]);
+  }, [continueAfterSilentStop]);
 
-  // 点击 Cancel 关闭报错 banner 同样算已读(操作了 banner 本身)。
+  // 点击 Cancel 关闭报错 banner 同样是处置(用户选择不管它了)。
   const handleDismissError = useCallback(() => {
-    if (sessionId) ackErrorRead(sessionId);
+    if (sessionId) ackErrorAlertHandled(sessionId);
     clearError();
   }, [clearError, sessionId]);
 
@@ -2726,30 +2857,26 @@ export function CCAgentSessionView({
             if (sessionId) void attachGhostMediaToSession(ghostMediaUri, sessionId, t);
             return;
           }
-          if (e.dataTransfer.files.length > 0) {
-            const files: File[] = [];
-            for (let i = 0; i < e.dataTransfer.items.length; i++) {
-              const item = e.dataTransfer.items[i];
-              const entry = item.webkitGetAsEntry?.();
-              const file = e.dataTransfer.files[i];
-              if (!file) continue;
-              if (entry?.isDirectory) {
-                let folderPath = '';
-                try {
-                  folderPath = window.electronAPI.getFilePath(file);
-                } catch {
-                  /* ignore */
-                }
-                if (folderPath) attachmentState.addFolderPath(folderPath);
-              } else {
-                files.push(file);
+          const attachDroppedItems = (items: Pick<DroppedFileItems, 'files' | 'directories'>) => {
+            for (const directory of items.directories) {
+              let folderPath = '';
+              try {
+                folderPath = window.electronAPI.getFilePath(directory);
+              } catch {
+                /* ignore */
               }
+              if (folderPath) attachmentState.addFolderPath(folderPath);
             }
-            if (files.length > 0) {
-              const dt = new DataTransfer();
-              for (const f of files) dt.items.add(f);
-              attachmentState.addFiles(dt.files);
-            }
+            if (items.files.length > 0) attachmentState.addFiles(items.files);
+          };
+          const droppedItems = getDroppedFileItems(e.dataTransfer);
+          attachDroppedItems(droppedItems);
+          if (droppedItems.unclassified.length > 0) {
+            void classifyUnclassifiedDroppedItems(droppedItems.unclassified, {
+              getFilePath: (file) => window.electronAPI.getFilePath(file),
+              classifyPath: (path) =>
+                window.electronAPI.localDb.sessionShare.classifyPath({ path }),
+            }).then(attachDroppedItems);
           }
         }}
       >
@@ -2914,22 +3041,18 @@ export function CCAgentSessionView({
               sessionId &&
               (errorTailKind === 'interrupted' ? (
                 <InterruptedTurnBanner
-                  sessionId={sessionId}
                   onContinue={handleErrorTailContinue}
                   onDismiss={handleErrorTailDismiss}
-                  viewVisible={viewVisible}
                   style={{ width: inputWidth }}
                   className="py-1"
                 />
               ) : (
                 <ErrorTailErrorBanner
-                  sessionId={sessionId}
                   errorText={errorTailText}
                   errorReason={errorTailMsg?.errorReason}
                   onContinue={handleErrorTailContinue}
                   onDismiss={handleErrorTailDismiss}
                   onSilentStopContinue={handleSilentStopContinue}
-                  viewVisible={viewVisible}
                   agentKind={session?.agentKind}
                   remoteHostId={session?.remoteHostId ?? undefined}
                   deviceLinkDeviceId={remoteDeviceId}
@@ -2954,10 +3077,8 @@ export function CCAgentSessionView({
               !agentStatus.isRunning &&
               sessionId && (
                 <InterruptedTurnBanner
-                  sessionId={sessionId}
                   onContinue={handleSessionInterruptContinue}
                   onDismiss={handleSessionInterruptDismiss}
-                  viewVisible={viewVisible}
                   style={{ width: inputWidth }}
                   className="py-1"
                 />
@@ -3094,8 +3215,10 @@ export function CCAgentSessionView({
                     onViewerStateChange={setPluginSetupViewerState}
                     onCommand={respondToPluginSetup}
                   />
-                ) : pendingIssueConfirm ? (
+                ) : pendingIssueConfirm && sessionId ? (
                   <IssueConfirmCard
+                    key={`${sessionId}:${pendingIssueConfirm.requestId}`}
+                    sessionId={sessionId}
                     pending={pendingIssueConfirm}
                     onRespond={respondToIssueConfirm}
                   />
@@ -3144,6 +3267,15 @@ export function CCAgentSessionView({
                   onSend={handleSend}
                   onBeforeVoiceInputStart={handleBeforeVoiceInputStart}
                   sessionId={sessionId}
+                  // session=null 是冷启动 / 直链 GET 尚未回流的合法首帧；显式传 null，
+                  // 让 ChatInput 暂不显示 Agent 身份，不能跟随 displayAgentKind 的 cc 回退。
+                  runtimeAgentKind={
+                    session
+                      ? session.agentKind === 'codex'
+                        ? 'codex'
+                        : 'claude-code'
+                      : null
+                  }
                   initialWorkingDir={session?.workingDir}
                   remoteHostId={session?.remoteHostId ?? null}
                   deviceLinkDeviceId={remoteDeviceId}
@@ -3441,6 +3573,10 @@ export function CCAgentSessionView({
       <SessionNavigationModeProvider
         mode={navigationMode}
         sidebarTargetSessionId={sidebarTargetSessionId}
+        // 只有声明右栏在场的路由主实例(ownsRoute)才是面板宿主:右栏当前显示的
+        // 就是它的 bucket。内嵌实例(worker 面板 / 文件浏览窄 rail / Orca split)
+        // 传 undefined → 面板类入口自行降级,见 useSidebarPanelReachable。
+        sidebarPanelHostSessionId={ownsRoute ? sessionId : undefined}
       >
         <ChatDisplaySnapshotProvider value={chatDisplaySnapshot}>
           <TopRightChipStackProvider>{content}</TopRightChipStackProvider>
@@ -3453,6 +3589,10 @@ export function CCAgentSessionView({
         title={t('orca.createWorker.enableCollabTitle')}
         submitLabel={t('orca.createWorker.enableCollabSubmit')}
         deviceId={remoteDeviceId}
+        // SSH 远程 Lead:worker 在远端 spawn,模型清单按 SSH 口径过滤(订阅直连 /
+        // openai-chat 桥接 Codex 只挂在本地 proxy),与 main 侧 remote-worker
+        // guard 同规则(codex review R28)。
+        sshRemote={!!session?.remoteHostId}
       />
 
       {/* 来自 Automations 的入口浮动返回按钮：固定在聊天区左上角，

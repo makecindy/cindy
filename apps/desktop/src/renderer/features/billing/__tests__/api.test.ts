@@ -11,6 +11,7 @@ describe('billing renderer API', () => {
     listOrders: vi.fn(),
     createTopup: vi.fn(),
     cancelCurrentSubscription: vi.fn(),
+    openSubscriptionPortal: vi.fn(),
     openPaymentRedirect: vi.fn(),
   };
 
@@ -23,6 +24,7 @@ describe('billing renderer API', () => {
       subscriptionId: 'subscription_fixture',
       cancelAtPeriodEnd: true,
     });
+    billing.openSubscriptionPortal.mockReset().mockResolvedValue({ success: true });
     billing.openPaymentRedirect.mockReset().mockResolvedValue({ success: true });
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
@@ -61,6 +63,11 @@ describe('billing renderer API', () => {
   it('cancels the current subscription without exposing provider or request parameters', async () => {
     await billingApi.cancelCurrentSubscription();
     expect(billing.cancelCurrentSubscription).toHaveBeenCalledWith();
+  });
+
+  it('opens the subscription portal without exposing a provider URL or request parameters', async () => {
+    await billingApi.openSubscriptionPortal();
+    expect(billing.openSubscriptionPortal).toHaveBeenCalledWith();
   });
 
   it('uses the dedicated billing redirect method', async () => {

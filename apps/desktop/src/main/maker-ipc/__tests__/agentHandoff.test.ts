@@ -188,6 +188,20 @@ describe('composeForkOriginHandoff', () => {
     expect(composeForkOriginHandoff('sess-p', null)).toBe(buildForkOriginHandoff('sess-p'));
   });
 
+  it('legacy 中文结束标记同样被保留:老会话裁剪后不丢边界', () => {
+    // 升级前落库的 agent_switch 行仍是旧中文格式;识别不了就会在裁剪时把老会话
+    // 唯一的边界连同检索指引尾巴一起削掉。
+    const legacyTerminator = '== 交接说明结束,以下是用户的新消息 ==';
+    const capped = `${'x'.repeat(16_000 - legacyTerminator.length - 2)}\n\n${legacyTerminator}`;
+    expect(capped.length).toBe(16_000);
+
+    const text = composeForkOriginHandoff('sess-legacy', capped);
+
+    expect(text.length).toBeLessThanOrEqual(16_000);
+    expect(text).toContain('sess-legacy');
+    expect(text.endsWith(`\n\n${legacyTerminator}`)).toBe(true);
+  });
+
   it('已顶到上限的交接:组合后仍不超限,且结束标记前保有空行分隔', () => {
     const terminator = "== End of handoff note; the user's new message follows ==";
     const capped = `${'x'.repeat(16_000 - terminator.length - 2)}\n\n${terminator}`;
@@ -279,6 +293,30 @@ describe('createAgentHandoffPendingRegistry', () => {
     expect(decorate).toHaveBeenCalledTimes(1);
   });
 
+  it('decorate 抛错期间该交接已被 consume:不退回过期值', async () => {
+    // consume / set 不推进 clear 纪元(它只由 /clear 推进),所以失败路径不能只看纪元
+    // ——退回已被消费的那份,accepted 后的无条件 consume 还会抹掉更新的交接。
+    let reg: ReturnType<typeof createAgentHandoffPendingRegistry>;
+    const decorate = vi.fn(async () => {
+      reg.consume('s1');
+      throw new Error('db down');
+    });
+    reg = createAgentHandoffPendingRegistry(async () => null, undefined, decorate);
+    reg.set('s1', 'CONSUMED-HANDOFF');
+    expect(await reg.peek('s1')).toBeNull();
+  });
+
+  it('decorate 抛错期间该交接已被新的 set 替换:不退回旧值', async () => {
+    let reg: ReturnType<typeof createAgentHandoffPendingRegistry>;
+    const decorate = vi.fn(async () => {
+      reg.set('s1', 'NEWER-HANDOFF');
+      throw new Error('db down');
+    });
+    reg = createAgentHandoffPendingRegistry(async () => null, undefined, decorate);
+    reg.set('s1', 'OLD-HANDOFF');
+    expect(await reg.peek('s1')).toBeNull();
+  });
+
   it('decorate 失败不写缓存,下次 peek 仍重试组合', async () => {
     let fail = true;
     const decorate = vi.fn(async (_sid: string, handoff: string) => {
@@ -290,6 +328,96 @@ describe('createAgentHandoffPendingRegistry', () => {
     expect(await reg.peek('s1')).toBe('SWITCH-HANDOFF');
     fail = false;
     expect(await reg.peek('s1')).toBe('FORK\n\nSWITCH-HANDOFF');
+  });
+
+  it('过期的 set 被丢弃:期间 /clear 过,按旧历史算出的交接不得盖掉墓碑', async () => {
+    const reg = createAgentHandoffPendingRegistry(async () => null);
+    // agent-switch / 消息删除在读历史之前取纪元
+    const gen = reg.readGeneration('s1');
+    // 期间用户 /clear:立墓碑 → cleared_at 落库 → 封边界(handler 的真实顺序)
+    reg.invalidate('s1');
+    reg.sealClearBoundary('s1');
+    // 异步活干完才写回——这份交接算的是 clear 前的历史
+    reg.set('s1', 'STALE-PRE-CLEAR-HANDOFF', gen);
+    expect(await reg.peek('s1')).toBeNull();
+  });
+
+  it('纪元晚于 DB 边界:invalidate 本身不推进纪元,墓碑却已同步生效', async () => {
+    // /clear handler 里 invalidate 与 cleared_at 落库之间有个 await 窗口。纪元若在
+    // invalidate 就推进,窗口内启动的切换会同时拿到「clear 后的纪元」和「clear 前的
+    // DB 历史」——校验通过,旧交接盖掉墓碑。所以纪元必须留到落库之后。
+    const query = vi.fn(async () => 'FROM-DB-PRE-CLEAR');
+    const reg = createAgentHandoffPendingRegistry(query);
+    reg.set('s1', 'OLD-HANDOFF');
+    const genBeforeClear = reg.readGeneration('s1');
+
+    reg.invalidate('s1');
+    // 契约本体:墓碑立了,纪元还没动——窗口内启动的切换只可能取到 clear 前的值
+    expect(reg.readGeneration('s1')).toBe(genBeforeClear);
+    const genInWindow = reg.readGeneration('s1');
+    // 与此同时,窗口内到达的 send 已经拿不到旧交接(墓碑同步生效,且不回落 DB)
+    expect(await reg.peek('s1')).toBeNull();
+    expect(query).not.toHaveBeenCalled();
+
+    // cleared_at 落库完成 → 封边界(重立墓碑 + 推进纪元)
+    reg.sealClearBoundary('s1');
+    expect(reg.readGeneration('s1')).not.toBe(genBeforeClear);
+    // 那个窗口内启动、按 clear 前历史算出的交接写回时被丢弃
+    reg.set('s1', 'STALE-PRE-CLEAR-HANDOFF', genInWindow);
+    expect(await reg.peek('s1')).toBeNull();
+  });
+
+  it('封边界要重立墓碑:窗口内用 clear 前纪元挤进来的交接必须被清掉', async () => {
+    // 纪元推迟到落库之后,窗口里就有一段「纪元还是 clear 前的值」的时间。此刻写回的
+    // 切换 / 删除校验会通过,墓碑被换成按 clear 前历史算出的交接;只推进纪元不会把
+    // 已经写进去的那份清掉,下次发送照样把清空前的上下文灌回模型(#738 review)。
+    const reg = createAgentHandoffPendingRegistry(async () => null);
+    reg.set('s1', 'OLD-HANDOFF');
+    const gen = reg.readGeneration('s1');
+
+    reg.invalidate('s1');
+    // 窗口内写回:纪元此刻确实还没推进,所以它进得来
+    reg.set('s1', 'STALE-PRE-CLEAR-HANDOFF', gen);
+    expect(await reg.peek('s1')).toBe('STALE-PRE-CLEAR-HANDOFF');
+
+    // 落库完成 → 封边界,把它清掉
+    reg.sealClearBoundary('s1');
+    expect(await reg.peek('s1')).toBeNull();
+  });
+
+  it('纪元只由 /clear 推进:consume 不得误伤正在途中的新交接', async () => {
+    // 最常见的并发,根本不需要用户 /clear:旧交接被 accepted 消费的同时,一个新的
+    // 引擎切换正等着读历史/写库。若 consume 也推进纪元,新交接回来就被无辜丢弃,
+    // 新引擎反而拿不到上下文。
+    const reg = createAgentHandoffPendingRegistry(async () => null);
+    reg.set('s1', 'OLD-HANDOFF');
+    const genForNewSwitch = reg.readGeneration('s1');
+    reg.consume('s1');
+    reg.set('s1', 'NEW-SWITCH-HANDOFF', genForNewSwitch);
+    expect(await reg.peek('s1')).toBe('NEW-SWITCH-HANDOFF');
+  });
+
+  it('纪元只由 /clear 推进:同一流程内的二次写入不被自己先前那次挡掉', async () => {
+    const reg = createAgentHandoffPendingRegistry(async () => null);
+    const gen = reg.readGeneration('s1');
+    reg.set('s1', 'DELTA-HANDOFF', gen);
+    // resume 回落:用全量交接覆盖自己刚写的增量交接,仍用最初那个纪元
+    reg.set('s1', 'FULL-HANDOFF', gen);
+    expect(await reg.peek('s1')).toBe('FULL-HANDOFF');
+  });
+
+  it('代次未变时 set 正常生效(无 /clear 干扰的常规路径)', async () => {
+    const reg = createAgentHandoffPendingRegistry(async () => null);
+    const gen = reg.readGeneration('s1');
+    reg.set('s1', 'SWITCH-HANDOFF', gen);
+    expect(await reg.peek('s1')).toBe('SWITCH-HANDOFF');
+  });
+
+  it('不传代次的 set 保持既有语义(无条件写入)', async () => {
+    const reg = createAgentHandoffPendingRegistry(async () => null);
+    reg.invalidate('s1');
+    reg.set('s1', 'UNCONDITIONAL');
+    expect(await reg.peek('s1')).toBe('UNCONDITIONAL');
   });
 
   it('invalidate 留墓碑:后续 peek 直接返回 null,不回落 DB(/clear 的 cleared_at 尚未落库)', async () => {

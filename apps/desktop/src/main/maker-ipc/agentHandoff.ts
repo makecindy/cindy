@@ -296,10 +296,31 @@ function handoffTerminator(opts: BuildHandoffOptions): string {
   return opts.reason === 'message-deletion' ? REBUILD_TERMINATOR : HANDOFF_TERMINATOR;
 }
 
-/** 拆出已有文本尾部的结束标记(含其前置空行),供二次裁剪时原样保留。 */
+/**
+ * 升级前已持久化在 agent_switch / context_rebuild 行里的中文结束标记。
+ *
+ * 这些行的 `content.handoff` 是**存量数据**,不会因为本次英文化而改写;老会话在升级后
+ * 仍可能把它们取出来当 pending handoff 用。裁剪时若认不出这些标记,就会把它们连同
+ * "以下是用户的新消息" 这个唯一边界一起截掉——所以识别列表必须包含旧格式。
+ */
+const LEGACY_HANDOFF_TERMINATOR = '== 交接说明结束,以下是用户的新消息 ==';
+const LEGACY_REBUILD_TERMINATOR = '== 上下文重建说明结束,以下是用户的新消息 ==';
+
+/**
+ * 拆出已有文本尾部的结束标记,供二次裁剪时原样保留。
+ *
+ * 返回的 `tail` **从标记本身起算**,不含它前面的空行——分隔空行由
+ * composeForkOriginHandoff 自己补,这样正文被从中部裁开后仍能保证标记前有空行。
+ */
 function splitTrailingTerminator(text: string): [body: string, tail: string] {
-  for (const terminator of [HANDOFF_TERMINATOR, REBUILD_TERMINATOR, FORK_TERMINATOR]) {
-    const trimmed = text.trimEnd();
+  const trimmed = text.trimEnd();
+  for (const terminator of [
+    HANDOFF_TERMINATOR,
+    REBUILD_TERMINATOR,
+    FORK_TERMINATOR,
+    LEGACY_HANDOFF_TERMINATOR,
+    LEGACY_REBUILD_TERMINATOR,
+  ]) {
     if (!trimmed.endsWith(terminator)) continue;
     const tailStart = trimmed.length - terminator.length;
     return [text.slice(0, tailStart), text.slice(tailStart)];
@@ -543,21 +564,67 @@ export function prependHandoffToUserMessage(
  *    pending 下次重试。
  */
 export interface AgentHandoffPendingRegistry {
-  set(sessionId: string, handoff: string): void;
+  /**
+   * 写入待注入交接。
+   *
+   * `expectedGeneration` 给"读历史 → 一堆异步活 → 才写回"的调用方(引擎切换、消息
+   * 删除)用:它们在读历史之前用 `readGeneration()` 取一次,写回时带上;期间若发生
+   * `/clear`,这次写就被丢弃。没有它,一个基于 clear 前历史算出来的交接会盖掉
+   * `/clear` 刚立的墓碑,把已清空的上下文重新灌回去。
+   *
+   * 比较的是 **clear 纪元**,只由 `/clear`(invalidate / clear)推进——`set` 与
+   * `consume` 都不推进它,所以同一流程内的二次写入、以及与别处 consume 的并发,
+   * 都不会被误拒。
+   */
+  set(sessionId: string, handoff: string, expectedGeneration?: number): void;
+  /** 取当前 clear 纪元(只由 `/clear` 推进),配合 `set` 的 `expectedGeneration` 使用。 */
+  readGeneration(sessionId: string): number;
   peek(sessionId: string): Promise<string | null>;
   consume(sessionId: string): void;
-  /** session 删除 / 关闭清理,避免 Map 泄漏。 */
+  /**
+   * 丢弃内存里的待注入交接并推进 clear 纪元,**允许后续 peek 回落 DB 重建**。
+   *
+   * 给 rewind 提交用:回退之后 DB 历史本身就变了,回落重建出来的是回退后的正确
+   * 结果,不需要墓碑。
+   *
+   * 注意纪元条目是**故意留着**的,不随本次调用删除:纪元缺省值是 0,删掉就等于把
+   * 它退回 0,而绝大多数会话在首次 clear 之前取到的快照正是 0——那些正在读历史的
+   * 切换 / 删除流程写回时会重新校验通过,基于回退前历史算出的交接照样盖回来,这个
+   * 保护就白做了。留下的是每个被 clear 过的 session 一个 `string -> number`,与
+   * `pending` 自身同量级。
+   */
   clear(sessionId: string): void;
   /**
    * 墓碑式失效:留下 null 条目,后续 peek 直接返回 null,**不回落 DB**。
    *
-   * 给 `/clear` 用。本地 `/clear` 的 `cleared_at` 是 renderer 侧 fire-and-forget 写入
-   * 的(main 只在 device-link 远程调用时自己落库),handler 返回到那次写入提交之间有
-   * 个窗口;若此刻用 `clear()` 删掉条目,恰好撞上 hook / scheduler 等直发路径的 send,
-   * peek 会回落到**尚未更新 cleared_at** 的 DB 行,把旧交接重建出来并缓存,而后来的
-   * DB 更新不会让那份缓存失效。留墓碑就没有这个窗口——真有新交接时 `set()` 会覆盖它。
+   * 给 `/clear` 用。`cleared_at` 现在由 clear handler 内同步落库(见 register.ts 的
+   * `INPUT_CLEAR_SESSION`),DB 回落本身已经能过滤掉 clear 之前的交接;但落库失败
+   * 或 DB 侧过滤有缺口时,`clear()` 的回落语义会把旧交接重建出来并缓存,而后来的
+   * DB 更新不会让那份缓存失效。墓碑不依赖 DB 状态,是这里更硬的保证——真有新交接时
+   * `set()` 会覆盖它。
+   *
+   * **不推进 clear 纪元**:纪元一旦推进,就等于向在途的切换 / 删除宣告「DB 边界已
+   * 就位」,而此刻 `cleared_at` 还没落库。推进动作交给 `sealClearBoundary`,由 handler
+   * 在落库尝试结束之后调用。墓碑本身是同步生效的,先立不影响。
    */
   invalidate(sessionId: string): void;
+  /**
+   * 封上 clear 边界:**重立墓碑 + 推进 clear 纪元**,作废所有在此之前取过纪元的在途
+   * 写入。必须在 `/clear` 的 `cleared_at` 落库尝试**结束之后**调用(成功或失败都要调)。
+   *
+   * 两件事都不能省,因为 `invalidate` 与本调用之间那段 await 是双向漏的:
+   *  - 纪元若在 `invalidate` 就推进,窗口内**启动**的切换 / 删除会同时拿到「clear 之后
+   *    的纪元」和「clear 之前的 DB 历史」——校验通过,基于已清空历史算出的交接盖掉墓碑;
+   *  - 纪元推迟到这里,窗口内**写回**的那批(纪元是 clear 前取的、此刻还没被推进)校验
+   *    同样通过,一样盖掉墓碑,而单纯推进纪元并不会把已经写进去的那份清掉。
+   *
+   * 所以是「先重立墓碑清掉窗口内挤进来的,再推进纪元挡住后面写回的」。落库失败也要调:
+   * 在途那批算的仍是过期历史,宁可一并丢弃。
+   *
+   * 代价是窗口内启动、读到的却是**已清空**历史的那一批也会被误伤——丢掉一份本来正确
+   * 的交接,方向保守,可接受。
+   */
+  sealClearBoundary(sessionId: string): void;
 }
 
 export function createAgentHandoffPendingRegistry(
@@ -579,22 +646,36 @@ export function createAgentHandoffPendingRegistry(
   /** 值由 queryPending 产出(已含组合结果)的 session,decorate 必须跳过它们。 */
   const composedByQuery = new Set<string>();
   /**
-   * 每个 session 的状态代次。peek 里两处 await 之后都要写回 Map,而 `/clear` 与
-   * `set` 可能正好落在那个窗口里——不带代次校验地写回,会把 clear 掉的旧交接原样
-   * 塞回缓存并标成已组合,下一次 send 就绕过 `cleared_at` 把旧上下文灌进用户刚
-   * 清空的会话。任何改变状态的入口都递增它,await 后代次不符就丢弃本次结果。
+   * 每个 session 的 **clear 纪元**:只有 `/clear`(invalidate / clear)递增它。
+   *
+   * 它回答的问题只有一个——"我手上这份按某时刻历史算出来的东西,期间有没有被用户
+   * 清空作废过"。所以 `set` / `consume` **不**递增:
+   *  - `consume` 递增会误伤正在途中的新交接:旧交接被 accepted 消费的同时,一个新的
+   *    引擎切换可能正等着读历史/写库,它带着更早的纪元回来就被无辜丢弃,新引擎反而
+   *    拿不到上下文(这是最常见的一种并发,根本不需要用户 /clear);
+   *  - `set` 递增会让同一流程内的第二次写入(resume 回落用全量交接覆盖增量交接)
+   *    被自己先前那次挡掉。
+   *
+   * peek 写回时除了纪元,还要确认缓存值仍是自己读到的那一份——纪元不变但被别的
+   * `set` 换过内容时,不能拿旧值盖回去。
    */
-  const generation = new Map<string, number>();
-  const bump = (sessionId: string): void => {
-    generation.set(sessionId, (generation.get(sessionId) ?? 0) + 1);
+  const clearEpoch = new Map<string, number>();
+  const bumpClearEpoch = (sessionId: string): void => {
+    clearEpoch.set(sessionId, (clearEpoch.get(sessionId) ?? 0) + 1);
   };
-  const genOf = (sessionId: string): number => generation.get(sessionId) ?? 0;
+  const genOf = (sessionId: string): number => clearEpoch.get(sessionId) ?? 0;
   return {
-    set(sessionId, handoff) {
+    set(sessionId, handoff, expectedGeneration) {
+      // 调用方带了 clear 纪元就校验:它是在读历史之前取的,不符说明期间用户 /clear 过,
+      // 这份交接算的是已作废的历史,丢弃而不是盖回去。纪元只由 clear 推进,所以同一
+      // 流程内的二次写入、以及与别处 consume 的并发,都不会被误拒。
+      if (expectedGeneration !== undefined && genOf(sessionId) !== expectedGeneration) return;
       pending.set(sessionId, handoff);
       // 外部直接塞进来的交接没经过 queryPending 的组合,重新纳入 decorate 范围。
       composedByQuery.delete(sessionId);
-      bump(sessionId);
+    },
+    readGeneration(sessionId) {
+      return genOf(sessionId);
     },
     async peek(sessionId) {
       if (pending.has(sessionId)) {
@@ -603,9 +684,11 @@ export function createAgentHandoffPendingRegistry(
         const gen = genOf(sessionId);
         try {
           const decorated = await decorateCached(sessionId, cached);
-          // 期间被 clear / set:本次结果基于已作废的状态,既不写回也不返回——
-          // 返回它等于把 clear 掉的交接注入这一次发送。
+          // 期间被 /clear:本次结果基于已作废的状态,既不写回也不返回——返回它等于
+          // 把 clear 掉的交接注入这一次发送。
           if (genOf(sessionId) !== gen) return null;
+          // 纪元没变但值被别的 set 换过:别拿旧值盖回去,让下一次 peek 处理新值。
+          if (pending.get(sessionId) !== cached) return null;
           // 组合结果回写并标记为已组合:同一条待注入交接在 consume 之前可能被 peek
           // 多次(首发被拒后的重试),没有这步每次都要重跑一遍 decorate 的 DB 查询,
           // 而且要靠 decorate 自身幂等才不会叠加。
@@ -613,9 +696,11 @@ export function createAgentHandoffPendingRegistry(
           composedByQuery.add(sessionId);
           return decorated;
         } catch {
-          // 失败路径同样要看代次:decorate 抛错(如查询瞬时失败)期间若发生 /clear,
-          // 退回 cached 等于把已作废的交接注入这次发送——那正是代次校验要拦的事。
+          // 失败路径与成功路径同一套校验:decorate 抛错期间若发生 /clear,或这份交接
+          // 已被别处 consume / 被新交接替换,退回 cached 都等于把过期内容注入这次发送
+          // ——尤其 consume 之后再注入,accepted 后的无条件 consume 还会抹掉更新的那份。
           if (genOf(sessionId) !== gen) return null;
+          if (pending.get(sessionId) !== cached) return null;
           // 组合失败不能吞掉本来就该注入的交接——退回未组合的原值,且不写缓存,
           // 下次 peek 仍会重试组合。
           return cached;
@@ -629,7 +714,8 @@ export function createAgentHandoffPendingRegistry(
         // 查询失败按无 pending 处理(不阻塞发送);下次 send 重查。
         return null;
       }
-      if (genOf(sessionId) !== gen) return null;
+      // 期间 /clear 或有人写入了新交接:这份 DB 重建结果已过时,不写回也不返回。
+      if (genOf(sessionId) !== gen || pending.has(sessionId)) return null;
       pending.set(sessionId, fromDb);
       composedByQuery.add(sessionId);
       return fromDb;
@@ -637,18 +723,28 @@ export function createAgentHandoffPendingRegistry(
     consume(sessionId) {
       pending.set(sessionId, null);
       composedByQuery.delete(sessionId);
-      bump(sessionId);
+      // 不推进 clear 纪元:消费的是"这一份"交接,不代表别处正在构造的新交接作废。
       onConsume?.(sessionId);
     },
     clear(sessionId) {
       pending.delete(sessionId);
       composedByQuery.delete(sessionId);
-      bump(sessionId);
+      // 不要"顺手"改成 clearEpoch.delete():缺省值 0 会让 clear 前取到 0 的在途写入
+      // 重新校验通过。理由见接口声明处。
+      bumpClearEpoch(sessionId);
     },
     invalidate(sessionId) {
       pending.set(sessionId, null);
       composedByQuery.delete(sessionId);
-      bump(sessionId);
+      // 纪元不在这里推进,见接口声明:要等 cleared_at 落库尝试结束。
+    },
+    sealClearBoundary(sessionId) {
+      // 重立墓碑再推进纪元,顺序不能反过来也不能省。落库这段 await 里,一份用
+      // clear 前纪元的 set 是能挤进来的(那时纪元还没推进,校验通过),它算的是
+      // clear 前的历史;只推进纪元不会把它清掉。
+      pending.set(sessionId, null);
+      composedByQuery.delete(sessionId);
+      bumpClearEpoch(sessionId);
     },
   };
 }

@@ -226,4 +226,38 @@ describe('useCollabProjectPolicy', () => {
     });
     expect(getState).toHaveBeenCalledTimes(1);
   });
+
+  it('skipQuery (remote) skips the project lookup but still honors the user/global setting', async () => {
+    // codex-connector P1 回归:远端会话跳过项目级查询 (getState 不带
+    // workingDir), 但用户级/全局级 collab 开关仍生效 — 此前 skipQuery 直接
+    // 按 enabled: eligible 静态放行, 全局禁用时 UI toggle 可用, 直到
+    // enableOrca 撞 main 的 PRECONDITION_FAILED。
+    const getState = vi.fn().mockResolvedValue({ effectiveEnabled: false });
+    (window as unknown as { electronAPI: { maker: { plugins: { getState: typeof getState } } } }).electronAPI = {
+      maker: { plugins: { getState } },
+    };
+
+    const { result } = renderHook(() =>
+      useCollabProjectPolicy('/remote/repo', true, { skipQuery: true }),
+    );
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.enabled).toBe(false);
+    expect(result.current.unavailable).toBe(false);
+    expect(getState).toHaveBeenCalledWith('collab', undefined);
+  });
+
+  it('skipQuery (remote) enables the toggle when the user/global setting is on', async () => {
+    const getState = vi.fn().mockResolvedValue({ effectiveEnabled: true });
+    (window as unknown as { electronAPI: { maker: { plugins: { getState: typeof getState } } } }).electronAPI = {
+      maker: { plugins: { getState } },
+    };
+
+    const { result } = renderHook(() =>
+      useCollabProjectPolicy('/remote/repo', true, { skipQuery: true }),
+    );
+
+    await waitFor(() => expect(result.current.enabled).toBe(true));
+    expect(getState).toHaveBeenCalledWith('collab', undefined);
+  });
 });

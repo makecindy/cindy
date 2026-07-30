@@ -59,6 +59,7 @@ describe('turn cost routing regression', () => {
       {
         providerId: 'xd',
         billingRoute: 'xd-gateway',
+        region: 'global',
       },
     );
 
@@ -75,7 +76,7 @@ describe('turn cost routing regression', () => {
     expect(result.turnMoney?.amount).toBeCloseTo(7.216596, 5);
   });
 
-  it('provider API route keeps the SDK USD total exact in USD', () => {
+  it('provider API USD cost converts at 6.7 only when entering the CN ledger', () => {
     const result = resolveClaudeTurnCostSinks(
       [
         delta({ model: 'claude-opus-4-8', costUsdDelta: 1.5 }),
@@ -85,14 +86,15 @@ describe('turn cost routing regression', () => {
       {
         providerId: 'anthropic',
         billingRoute: 'provider-api',
+        region: 'cn',
       },
     );
 
     expect(result.turnMoney).toMatchObject({
-      currency: 'USD',
+      currency: 'CNY',
       approximate: false,
     });
-    expect(result.turnMoney?.amount).toBeCloseTo(3.5);
+    expect(result.turnMoney?.amount).toBeCloseTo(23.45);
     expect(result.perModel.map((item) => item.source)).toEqual(['sdk', 'sdk']);
   });
 });

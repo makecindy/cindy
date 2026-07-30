@@ -27,6 +27,7 @@ function makeDeps(over: Partial<GithubIssueSubmitServiceDeps> = {}) {
       title: REQ.title,
       body: REQ.body,
       type: REQ.type,
+      publicName: 'Carol',
       uiLanguage: 'zh-CN',
     }),
   );
@@ -39,6 +40,7 @@ function makeDeps(over: Partial<GithubIssueSubmitServiceDeps> = {}) {
     postIssue,
     getAppVersion: () => '0.0.112',
     getOsInfo: () => ({ platform: 'darwin', arch: 'arm64', osVersion: '25.5.0' }),
+    getRegion: () => 'cn',
     getFallbackLocale: () => 'en',
     getSubmitterName: () => 'Carol',
     ...over,
@@ -69,6 +71,7 @@ describe('submitGithubIssueWithConfirm', () => {
       title: '用户改过的标题',
       body: '用户改过的正文',
       type: 'feature',
+      publicName: '公开昵称',
       uiLanguage: 'ja',
     }));
     const { deps, postIssue } = makeDeps({ confirm });
@@ -76,8 +79,15 @@ describe('submitGithubIssueWithConfirm', () => {
     expect(confirm).toHaveBeenCalledWith(
       'sess-1',
       { title: REQ.title, body: REQ.body, type: 'bug' },
-      { appVersion: '0.0.112', platform: 'darwin', arch: 'arm64', osVersion: '25.5.0' },
+      {
+        appVersion: '0.0.112',
+        platform: 'darwin',
+        arch: 'arm64',
+        osVersion: '25.5.0',
+        region: 'cn',
+      },
       PLATFORM_IDENTITY,
+      'Carol',
     );
     expect(postIssue).toHaveBeenCalledTimes(1);
     expect(postIssue.mock.calls[0]![0]).toEqual(PLATFORM_IDENTITY);
@@ -85,8 +95,9 @@ describe('submitGithubIssueWithConfirm', () => {
     expect(posted.title).toBe('用户改过的标题');
     expect(posted.type).toBe('feature');
     expect(posted.appVersion).toBe('0.0.112');
-    expect(posted.userName).toBe('Carol');
+    expect(posted.userName).toBe('公开昵称');
     expect(posted.description).toContain('用户改过的正文');
+    expect(posted.description).toContain('**版本区域**: CN');
     expect(posted.description).toContain('**OS**: darwin arm64 (25.5.0)');
     expect(posted.description).toContain('**界面语言**: ja');
     expect(res).toEqual({
@@ -96,6 +107,32 @@ describe('submitGithubIssueWithConfirm', () => {
       finalTitle: '用户改过的标题',
       editedByUser: true,
     });
+  });
+
+  it('env 块只标注非默认区域: cn → CN / dev → Dev,global 省略该行', async () => {
+    for (const [region, label] of [
+      ['cn', '**版本区域**: CN'],
+      ['dev', '**版本区域**: Dev'],
+    ] as const) {
+      const { deps, confirm, postIssue } = makeDeps({ getRegion: () => region });
+      await expect(submitGithubIssueWithConfirm(deps, REQ)).resolves.toMatchObject({ ok: true });
+      // 卡片展示的区域必须与最终写进 issue 的是同一个值。
+      expect(confirm.mock.calls[0]![2]).toMatchObject({ region });
+      expect(postIssue.mock.calls[0]![1]().description).toContain(label);
+    }
+  });
+
+  it('global 是默认区域: 不写版本区域行,「没有这一行」即国际版', async () => {
+    const { deps, confirm, postIssue } = makeDeps({ getRegion: () => 'global' });
+    await expect(submitGithubIssueWithConfirm(deps, REQ)).resolves.toMatchObject({ ok: true });
+    // 区域本身照常传给卡片(卡片自己决定不渲染),但正文里不能出现这一行。
+    expect(confirm.mock.calls[0]![2]).toMatchObject({ region: 'global' });
+    const description = postIssue.mock.calls[0]![1]().description!;
+    expect(description).not.toContain('版本区域');
+    expect(description).not.toContain('global');
+    // 其余 env 行不受影响,不能因为省略区域行把 env 块整段搞坏。
+    expect(description).toContain('**OS**: darwin arm64 (25.5.0)');
+    expect(description).toContain('**界面语言**: zh-CN');
   });
 
   it('身份解析收到当前 session workingDir', async () => {
@@ -112,6 +149,7 @@ describe('submitGithubIssueWithConfirm', () => {
         title: REQ.title,
         body: REQ.body,
         type: REQ.type,
+        publicName: 'Carol',
       })),
     });
     const res = await submitGithubIssueWithConfirm(deps, REQ);
@@ -119,29 +157,68 @@ describe('submitGithubIssueWithConfirm', () => {
     expect(postIssue.mock.calls[0]![1]().description).toContain('**界面语言**: en');
   });
 
-  it('membership 没有展示名时省略 userName,由 server 回退到 membership id', async () => {
-    const { deps, postIssue } = makeDeps({ getSubmitterName: () => undefined });
+  it('membership 没有展示名时不提供建议值，仍使用用户确认的匿名署名', async () => {
+    const confirm = vi.fn<GithubIssueSubmitServiceDeps['confirm']>(
+      async (): Promise<IssueConfirmDecision> => ({
+        confirmed: true,
+        title: REQ.title,
+        body: REQ.body,
+        type: REQ.type,
+        publicName: '匿名',
+        uiLanguage: 'zh-CN',
+      }),
+    );
+    const { deps, postIssue } = makeDeps({ getSubmitterName: () => undefined, confirm });
     const res = await submitGithubIssueWithConfirm(deps, REQ);
     expect(res).toMatchObject({ ok: true });
-    expect(postIssue.mock.calls[0]![1]()).not.toHaveProperty('userName');
+    expect(confirm.mock.calls[0]![4]).toBeUndefined();
+    expect(postIssue.mock.calls[0]![1]().userName).toBe('匿名');
   });
 
-  it('网络重试重建 body 时重新读取当前 membership 展示名', async () => {
+  it('网络重试重建 body 时锁定用户确认的公开署名，不重新读取 membership 展示名', async () => {
     const getSubmitterName = vi
       .fn<() => string | undefined>()
       .mockReturnValueOnce('Account A')
       .mockReturnValueOnce('Account B');
+    const confirm = vi.fn<GithubIssueSubmitServiceDeps['confirm']>(
+      async (): Promise<IssueConfirmDecision> => ({
+        confirmed: true,
+        title: REQ.title,
+        body: REQ.body,
+        type: REQ.type,
+        publicName: '用户确认的昵称',
+        uiLanguage: 'zh-CN',
+      }),
+    );
     const postIssue = vi.fn<GithubIssueSubmitServiceDeps['postIssue']>(
       async (_identity, bodyFactory) => {
-        expect(bodyFactory().userName).toBe('Account A');
-        expect(bodyFactory().userName).toBe('Account B');
+        expect(bodyFactory().userName).toBe('用户确认的昵称');
+        expect(bodyFactory().userName).toBe('用户确认的昵称');
         return { githubIssue: { number: 80, url: 'https://example.com/issues/80' } };
       },
     );
-    const { deps } = makeDeps({ getSubmitterName, postIssue });
+    const { deps } = makeDeps({ getSubmitterName, confirm, postIssue });
     const res = await submitGithubIssueWithConfirm(deps, REQ);
     expect(res).toMatchObject({ ok: true });
-    expect(getSubmitterName).toHaveBeenCalledTimes(2);
+    expect(confirm.mock.calls[0]![4]).toBe('Account A');
+    expect(getSubmitterName).toHaveBeenCalledTimes(1);
+  });
+
+  it('平台代发没有确认有效公开署名时不提交', async () => {
+    for (const publicName of [undefined, '', 'line 1\nline 2']) {
+      const { deps, postIssue } = makeDeps({
+        confirm: vi.fn(async () => ({
+          confirmed: true as const,
+          title: REQ.title,
+          body: REQ.body,
+          type: REQ.type,
+          publicName,
+        })),
+      });
+      const res = await submitGithubIssueWithConfirm(deps, REQ);
+      expect(res).toMatchObject({ ok: false, errorCode: 'USER_CANCELLED' });
+      expect(postIssue).not.toHaveBeenCalled();
+    }
   });
 
   it('clamp: 超长 body 被裁但 env 块完整保留;超长 title 裁到 200', async () => {
@@ -153,6 +230,7 @@ describe('submitGithubIssueWithConfirm', () => {
         title: longTitle,
         body: longBody,
         type: 'bug' as const,
+        publicName: 'Carol',
         uiLanguage: 'zh-CN',
       })),
     });
@@ -160,6 +238,7 @@ describe('submitGithubIssueWithConfirm', () => {
     expect(res).toMatchObject({ ok: true, finalTitle: 't'.repeat(200) });
     const posted = postIssue.mock.calls[0]![1]();
     expect(posted.description!.length).toBeLessThanOrEqual(5000);
+    expect(posted.description).toContain('**版本区域**: CN');
     expect(posted.description).toContain('**界面语言**: zh-CN');
   });
 
@@ -184,7 +263,9 @@ describe('submitGithubIssueWithConfirm', () => {
     const res = await submitGithubIssueWithConfirm(deps, REQ);
     expect(res).toMatchObject({ ok: true });
     expect(confirm.mock.calls[0]![3]).toEqual(identity);
+    expect(confirm.mock.calls[0]![4]).toBeUndefined();
     expect(postIssue.mock.calls[0]![0]).toEqual(identity);
+    expect(postIssue.mock.calls[0]![1]()).not.toHaveProperty('userName');
   });
 
   it('身份解析失败时不弹确认卡、不提交', async () => {

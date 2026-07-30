@@ -20,6 +20,7 @@ import {
   sessionToCamel,
   sessionCreateToRow,
   sessionPatchToRow,
+  normalizeRemoteHostId,
   type SessionRowWithCount,
 } from '../mapper';
 import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace';
@@ -28,6 +29,7 @@ import { ensureProjectGitInitialized } from '../../git-snapshot/projectGitBootst
 import { readGitSafetySettings } from '../../maker-host/git-safety-settings-store';
 import * as imageCacheStore from '../../imageCacheStore';
 import { removeSessionRefs as removeSessionMediaRefs } from '../../cindy-media/ledger';
+import { removeWechatSessionAttachmentDir } from '../../im/wechat/mediaStaging';
 import { upsertRecentWorkdir } from './recentWorkdirs';
 import { createLogger } from '../../logger';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../../shared/sessionSource.js';
@@ -38,10 +40,15 @@ import { notifyAgentIslandSessionPatch } from '../agentIslandSessionPatch';
 import { noteSessionClearBoundary } from '../../messagePersistBroadcaster';
 import {
   ackSessionTurnEndedDurable,
+  ackSessionTurnEndedIfUnchanged,
+  listErrorTailPendingRows,
+  listErrorTailPendingSessionIds,
+  listInterruptedPendingRows,
   listInterruptedPendingSessionIds,
   setOnSessionTurnEndedPersisted,
 } from '../sessionActiveTurn';
-import { rebroadcastAgentSwitchBoundary } from './messages';
+import { dismissErrorMessage, rebroadcastAgentSwitchBoundary } from './messages';
+import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
 
 const log = createLogger('sessions');
 const DEFAULT_DRAFT_SESSION_TITLE = 'New Maker';
@@ -59,6 +66,24 @@ export function broadcastSessionPatched(sessionId: string, patch: Record<string,
 }
 
 /**
+ * worktree 回收真正跑完后通知本机所有窗口重拉 worktree 快照。
+ *
+ * 没有这条推送,renderer 只能在归档/删除动作里"顺手"刷一次 worktree map,而回收
+ * 是下面 fire-and-forget 的异步链(动态 import → 关子进程 → git worktree remove →
+ * 文件系统清理),store 条目被移除的时刻远晚于状态 IPC 返回。renderer 那次刷新会
+ * 快照到仍然存在的旧条目,归档列表上的 worktree 徽标就一直陈旧,直到某次无关的
+ * 刷新才纠正(codex review P1)。
+ *
+ * 只广播给本机窗口、不进 device-link tap:控制端(手机/另一台桌面)的远程会话
+ * worktree 元数据走 device-link 自己的镜像链路,不经本机 WorktreeContext。
+ */
+function broadcastWorktreeChanged(sessionId: string): void {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send('worktree:changed', { sessionId });
+  }
+}
+
+/**
  * 会话 status 显式变为 deleted / archived 后的 worktree 回收调度(P0 重构:回收
  * 唯一驱动点,从 Maker onClose 迁到这里——close 是进程生命周期事件,/clear、鉴权
  * 重连、CLI 崩溃都会触发,不能当"用户不要工作区了"的信号)。
@@ -67,6 +92,9 @@ export function broadcastSessionPatched(sessionId: string, patch: Record<string,
  * 先关子进程再回收——Windows 下 CLI 子进程 cwd 在 worktree 内会锁目录。
  * 动态 import 避免 localDb → maker-host / worktree 的静态模块环(worktreeStore
  * 反向 import 本文件的 setWorktreePathInDb)。
+ *
+ * 回收链结束后(无论成功、跳过还是失败)都广播一次 worktree:changed —— 失败/跳过
+ * 时条目仍在 store 里,重拉拿到的就是"徽标还在"这个真实状态,同样是对的。
  */
 function scheduleWorktreeRecycleForStatusChange(sessionId: string, status: unknown): void {
   if (status !== 'deleted' && status !== 'archived') return;
@@ -85,12 +113,16 @@ function scheduleWorktreeRecycleForStatusChange(sessionId: string, status: unkno
         .catch(() => undefined);
     });
     await recycle.recycleWorktreeForRemovedSession(sessionId);
-  })().catch((err) => {
-    log.warn('worktree recycle after session status change failed', {
-      sessionId,
-      err: err instanceof Error ? err.message : String(err),
+  })()
+    .catch((err) => {
+      log.warn('worktree recycle after session status change failed', {
+        sessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    })
+    .finally(() => {
+      broadcastWorktreeChanged(sessionId);
     });
-  });
 }
 
 /**
@@ -301,6 +333,36 @@ const LATEST_MSG_ROLE_SQL = sql<string | null>`(
  * Resume 路径(scheduler runner / send_to_session)用它做归档/删除兜底和展示元数据返回。
  * 失败 swallow 返 null 而非抛 —— 调用方应当把 null 视作 NOT_FOUND, 由业务自己决定 fallback。
  */
+/**
+ * sessionId → remoteHostId 的进程内缓存 reader:session 的 remoteHostId 创建后
+ * 不变,lazy resume 路径每次 send 都经过 ensureRemoteReadyForSessionStart,避免
+ * 重复查库。查询成功(含行不存在)才缓存;DB 异常返回 null 但**不缓存** ——
+ * 一次瞬时 DB 失败不该永久关闭该 session 的 remote ensure 兜底(否则远端
+ * session 会被按本地会话处理远端 workingDir)。
+ */
+export function createSessionRemoteHostIdReader(): (sessionId: string) => Promise<string | null> {
+  const cache = new Map<string, string | null>();
+  return async (sessionId) => {
+    if (cache.has(sessionId)) {
+      return cache.get(sessionId) ?? null;
+    }
+    let value: string | null;
+    try {
+      const db = getDbClient().drizzle;
+      const [row] = await db
+        .select({ remoteHostId: sessions.remoteHostId })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      value = normalizeRemoteHostId(row?.remoteHostId ?? null);
+    } catch {
+      return null;
+    }
+    cache.set(sessionId, value);
+    return value;
+  };
+}
+
 export async function getSessionRowSnapshot(id: string): Promise<{
   status: string;
   title: string | null;
@@ -312,6 +374,8 @@ export async function getSessionRowSnapshot(id: string): Promise<{
   remoteHostId?: string | null;
   /** Hook exact-takeover must reject internal Orca worker sessions. */
   orcaRole?: 'lead' | 'worker' | null;
+  /** Collab policy gate: remote session 的 codex / claude-code 均放行。 */
+  agentKind?: string | null;
 } | null> {
   try {
     const db = getDbClient().drizzle;
@@ -327,6 +391,7 @@ export async function getSessionRowSnapshot(id: string): Promise<{
         providerId: sessions.providerId,
         remoteHostId: sessions.remoteHostId,
         orcaRole: sessions.orcaRole,
+        agentKind: sessions.agentKind,
       })
       .from(sessions)
       .where(eq(sessions.id, id))
@@ -740,10 +805,89 @@ export function registerSessionIpc(): void {
     return sessionToCamel({ ...row, messageCount: 0 });
   });
 
-  // interrupted-turn-resume:启动红点数据源 —— 「疑似中断」(startedAt > endedAt)
-  // 的 active 会话 id 列表,纯读查询。renderer 启动时拉取一次,补 'error' 红点。
+  // interrupted-turn-resume:「疑似中断」(startedAt > endedAt)的 active 会话 id。
+  // ⚠️ 只在**启动首拉**时消费:该判定对正在跑的 turn 天然成立,只有启动时刻才能
+  // 断定飞行中的 turn 来自上一个进程。周期性重跑会把运行中的会话误判为中断。
   ipcMain.handle('local-db:sessions:interrupted-pending', async () => {
     return listInterruptedPendingSessionIds();
+  });
+
+  // 「尾部停在未 dismissed 错误行」的 active 会话 id —— 红点派生的周期性重算源。
+  // 与中断腿不同,这条判定与 turn 是否在跑无关(turn 一跑起来就会插入新的 user 行,
+  // error 行不再是尾行,自然不命中),因此可以在每个收敛触发点安全重跑。
+  // 故意**不**进 device-link allowlist:renderer 只查本机(远程会话的告警由被控端
+  // 自己的派生收敛负责,控制端的处置动作经既有 ack-interrupted / dismiss-error 窄写
+  // 落被控端 DB 后触发)。没有跨端调用方就不扩协议面。
+  // sender guard:新增 handler 一律验证来源(electron-security-and-process-boundaries.md
+  // §5 —— 存量未迁完不构成新 handler 省略校验的理由)。这两个 channel 都**不在**
+  // device-link allowlist 里,只由本机顶层 renderer 调用,所以 guard 不会挡掉隧道
+  // dispatch;将来若要放行跨端,必须连这道 guard 一起重新设计。
+  ipcMain.handle('local-db:sessions:error-tail-pending', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return listErrorTailPendingSessionIds();
+  });
+
+  // 批量处置未处理告警(自动化分组右键「全部标为已读」)。红点是告警的派生投影,
+  // 光清角标会被下一次重算打回来 —— 所以这个入口必须做真正的处置,与用户在横幅上
+  // 点「忽略」等价:错误尾行 merge dismissed:true(复用 dismissErrorMessage,带 peer
+  // 广播),中断态写 last_turn_ended_at 消化掉。
+  // 只处置**当前真的命中告警**的会话:一次全量查询后按传入集合取交集,避免对
+  // 无告警会话空写 lastTurnEndedAt 造成无意义的 patch 广播。
+  // 输入有界(review 反馈):不接受无上限数组,也不静默吞掉畸形元素 —— 越界或元素
+  // 不合法直接 INVALID_PARAMS 拒绝,避免异常调用方让 main 侧分配任意大的集合并跑
+  // 一轮数据库写。上限取 sidebar 可能的自动化会话量级的宽松倍数。
+  const MAX_DISMISS_SESSION_IDS = 500;
+  // 单个 id 也要有界:session id 是 UUID / cuid(≤ 36 字符),128 是宽松上限。
+  // 只限数组长度不够 —— 500 个超长字符串同样能让 main 侧白留一大块内存并做无谓比较。
+  const MAX_SESSION_ID_LENGTH = 128;
+  ipcMain.handle('local-db:sessions:dismiss-pending-alerts', async (event, ids: unknown) => {
+    // 认证来源再做任何写:payload 有界 ≠ 来源可信(见上方 guard 说明)。
+    assertTrustedAppRendererEvent(event);
+    if (!Array.isArray(ids)) throwIpcError('INVALID_PARAMS', 'sessionIds 必须是数组');
+    if (ids.length > MAX_DISMISS_SESSION_IDS) {
+      throwIpcError('INVALID_PARAMS', `sessionIds 超过上限 ${MAX_DISMISS_SESSION_IDS}`);
+    }
+    for (const id of ids) {
+      const sid = requireString(id, 'sessionId');
+      if (sid.length > MAX_SESSION_ID_LENGTH) {
+        throwIpcError('INVALID_PARAMS', `sessionId 超过长度上限 ${MAX_SESSION_ID_LENGTH}`);
+      }
+    }
+    const wanted = new Set(ids as string[]);
+    if (wanted.size === 0) return { dismissed: 0, processed: [], failed: [] };
+    const [tailRows, interruptedRows] = await Promise.all([
+      listErrorTailPendingRows(),
+      listInterruptedPendingRows(),
+    ]);
+    // 回报**确切处置成功的 id**(processed),不让调用方用「不在 failed 里」推断成功:
+    // 请求集合里可能有本 handler 根本不处理的告警来源(典型是 WorktreeRestoreBanner
+    // 打的红点 —— 它不进错误尾行/中断查询),那些会话既不成功也不失败。按「非 failed
+    // 即成功」清点会抹掉它们的红点,而 worktree 告警又不在重算范围内、恢复不了
+    // (PR #879 review P1)。
+    const processed = new Set<string>();
+    const failed = new Set<string>();
+    for (const row of tailRows) {
+      if (!wanted.has(row.sessionId)) continue;
+      try {
+        const updated = await dismissErrorMessage(row.sessionId, row.clientId);
+        if (updated) processed.add(row.sessionId);
+        else failed.add(row.sessionId);
+      } catch {
+        failed.add(row.sessionId);
+      }
+    }
+    for (const row of interruptedRows) {
+      if (!wanted.has(row.sessionId)) continue;
+      // CAS 写:带上快照里的 startedAt。快照之后若该会话已启动新 turn,条件不匹配、
+      // 不写入 —— 否则会把刚启动的活跃 turn 记成已收尾,它真被中断时下次启动检测不到
+      // (PR #879 review P1)。返回值已含读回校验。
+      const landed = await ackSessionTurnEndedIfUnchanged(row.sessionId, row.startedAt);
+      if (landed) processed.add(row.sessionId);
+      else failed.add(row.sessionId);
+    }
+    // 同一会话两条腿都命中时,任一失败即整体算失败(它仍有未处置的告警)。
+    for (const id of failed) processed.delete(id);
+    return { dismissed: processed.size, processed: [...processed], failed: [...failed] };
   });
 
   // interrupted-turn-resume:用户对「疑似中断」提示点「忽略」/「继续」——写一次
@@ -1110,6 +1254,12 @@ export async function patchSessionMetaInDb(
           err: err instanceof Error ? err.message : String(err),
         });
       });
+    void removeWechatSessionAttachmentDir(sessionId).catch((err) => {
+      log.warn('WeChat session attachment cleanup failed', {
+        sessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
   }
   removeHookAttachmentDir(sessionId, patch.status);
   scheduleWorktreeRecycleForStatusChange(sessionId, patch.status);

@@ -27,7 +27,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { useCCSessions } from '@/hooks/useCCSessions';
-import { useInterruptedSessionsAttention } from '@/hooks/useInterruptedSessionsAttention';
+import { refreshPendingAlerts, usePendingAlertAttention } from '@/hooks/usePendingAlertAttention';
 import { useSidebarCollapsedState } from '../feature-context';
 import { stripTrailingPathSeparators } from '../../../shared/pathText';
 import { useRefreshWorktrees } from '@/contexts/WorktreeContext';
@@ -47,7 +47,7 @@ import { clearDraft as clearComposerDraft } from '@/lib/composerDraftStore';
 import { cleanupSessionLayoutPrefs } from '@/lib/sessionLayoutPrefs';
 import {
   countDirtyWorktreesForRemoval,
-  fetchDirtyWorktreeForRemoval,
+  resolveWorktreeRemovalPreflight,
 } from '@/lib/worktreeRemovalWarning';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
 import { useBackgroundActivitySessionIds } from '@/lib/sessionBackgroundActivityStore';
@@ -162,6 +162,12 @@ import {
 } from './lib/pinnedSidebarOrder';
 import { createLogger } from '@/lib/logger';
 import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
+import { evictDeviceCapabilities, prefetchDeviceCapabilities } from '@/hooks/useAgentCapabilities';
+import { evictDeviceProviders, prefetchDeviceProviders } from '@/hooks/useDeviceProviders';
+import {
+  evictDeviceGitSafetySettings,
+  prefetchDeviceGitSafetySettings,
+} from '@/hooks/useGitSafetySettings';
 import { recentWorkdirsStore } from '@/lib/recentWorkdirsStore';
 import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
 import {
@@ -235,8 +241,9 @@ function cutoffForLastActivity(
 export function CCAgentSidebarUpper() {
   const { t } = useTranslation();
   const isCollapsed = useSidebarCollapsedState();
-  // interrupted-turn-resume:启动时拉取「尾部停在中断标记行」的会话,补 'error' 红点。
-  useInterruptedSessionsAttention();
+  // 错误红点的派生真源:拉取存在未处理告警(中断 ∪ 未 dismissed 错误尾行)的会话
+  // 并在收敛触发点重算 —— 横幅不被处置,红点就不消失。
+  usePendingAlertAttention();
   // F-PJ-10：filter.status 决定后端 fetch 时是否带 ?status=archived|all
   const filter = useSidebarFilter();
   const includeArchived = filter.status;
@@ -290,8 +297,28 @@ export function CCAgentSidebarUpper() {
   }, []);
   const handleMarkAllAutomationsRead = useCallback(async () => {
     setAutomationsMenuPos(null);
-    // 用户显式「全部标为已读」:explicit,允许连未读 error 一起清。
-    clearSessionAttentionMany(automationAttentionSessionIds, { intent: 'explicit' });
+    // 先清 done / awaiting(passive,store 对 error 免疫):这部分是纯未读标记,
+    // 展示过就算已读,不需要落库处置。
+    clearSessionAttentionMany(automationAttentionSessionIds);
+    // error 红点是未处理告警的派生投影,**必须先落库处置再清点**:此前是乐观先清、
+    // 失败只记日志,一旦 dismissPendingAlerts 拒绝或只处理了部分会话,横幅仍在库里
+    // 而红点已经消失(还连带发了 explicit 桥接 / 远程回执),正是本 PR 要消灭的割裂。
+    // 现在成功才 explicit 清,失败则重算把仍存在的告警点恢复回来。
+    try {
+      const { processed, failed } = await window.electronAPI.localDb.sessions.dismissPendingAlerts(
+        automationAttentionSessionIds,
+      );
+      // 只清 main 侧**确切回报处置成功**的会话。不能用「不在 failed 里」推断成功:
+      // 请求集合里可能有本 IPC 根本不处理的告警来源(如 WorktreeRestoreBanner 打的
+      // 红点),那些会话既不成功也不失败,误清后重算也恢复不了(worktree 告警不进
+      // 那条查询)。
+      clearSessionAttentionMany(processed, { intent: 'explicit' });
+      if (failed.length > 0) log.warn('some pending alerts were not dismissed', failed);
+    } catch (e) {
+      log.warn('dismiss pending alerts failed', e);
+    }
+    // 成功与失败都重算一次:成功路径收敛掉残留,失败路径把红点恢复成库里的真实告警。
+    void refreshPendingAlerts();
     try {
       const updated = await markAllScheduleRunsReadAndSync();
       if (updated > 0) {
@@ -1276,6 +1303,10 @@ function ExpandedView({
   // 重建自身 —— 否则 SessionItem 的 memo 会被整表打穿(SessionItem.tsx 不变量第 3 条)。
   const sessionsByIdRef = useRef(sessionsById);
   sessionsByIdRef.current = sessionsById;
+  // 同理:归档预检只在点击那一刻查一次 attached 集合。每次 binding:changed 都会
+  // 换一个新 Set 引用,放进 handleActionClick 的 deps 会让整表行 handler 重建。
+  const attachedSessionIdsRef = useRef(attachedSessionIds);
+  attachedSessionIdsRef.current = attachedSessionIds;
   const selectedSessions = useMemo(
     () =>
       [...selectedSessionIds]
@@ -1467,6 +1498,36 @@ function ExpandedView({
       // device-link 远程项目:与本地一致先跳草稿页(主页)。草稿带上 deviceLink 目标
       // (workingDir + deviceId),草稿页显示"为远程设备新建"横幅,首条消息发出时再经
       // 隧道在被控端建会话(NewMakerDraftRoute 的 handleSend 远程分支)。
+      // 与创建页两条换设备路径同口径:被控端的能力 / 供应商 / Git safety 快照「拉一次、无 TTL、
+      // 只在设备下线才 evict」,它一直在线期间装了新模型或改了供应商,控制端不会知道 —— 草稿页
+      // 挂载时 hook 直接命中旧缓存,composer 会显示并向它提交可能已不支持的 model / provider。
+      // 这条路径是既有的(#807 未改动它),但缺口同类,一并补上,免得只有创建页那两条是对的。
+      //
+      // **evict 必须配对一次 fetch**(Codex review 第 32 轮 P1)。evict 不是幂等清理:
+      // evictDeviceCapabilities / evictDeviceProviders 会 notify `{ status: 'loading' }`,好让已挂载
+      // 的 hook 立刻知道旧快照失效。而两个 hook 的 fetch effect deps 是 `[agentKind, deviceId]` ——
+      // 用户**已经在** /cc-agent/new 且目标就是这台设备时,patchNewMakerDraft 保持同一 deviceId、
+      // navigate 到同一路由,deps 都不变,于是没有任何东西会去重拉:capabilitiesLoading 永久为真,
+      // 发送与新建目标的 gate 永久拒绝创建,用户只能切设备或重进路由才能恢复。
+      //
+      // 这里选 prefetch 而不是「同设备就跳过 evict」:刷新本身正是这条路径想要的(见上一段),
+      // 只是刷新 = 作废 + 重取,不能只做前一半。同款做法见 useDeviceLinkRemoteProjects 处理
+      // `maker:provider:changed` push 的那段(evict 紧跟 prefetch),那是本仓这条规则的既有范例。
+      //
+      // gitSafety 的 evict 不 notify loading,所以它不会卡住发送;但它的 effect deps 也是
+      // `[deviceId]`、同样不会自动重拉,不 prefetch 会让 Codex Rewind 的入口一直隐藏,
+      // 所以三个一并补齐。fire-and-forget:三个 prefetch 内部都自行 swallow 错误。
+      if (project.deviceLinkDeviceId) {
+        const targetDeviceId = project.deviceLinkDeviceId;
+        evictDeviceCapabilities(targetDeviceId);
+        evictDeviceProviders(targetDeviceId);
+        evictDeviceGitSafetySettings(targetDeviceId);
+        void Promise.all([
+          prefetchDeviceCapabilities(targetDeviceId),
+          prefetchDeviceProviders(targetDeviceId),
+          prefetchDeviceGitSafetySettings(targetDeviceId),
+        ]);
+      }
       patchNewMakerDraft({
         workingDir: project.workingDir,
         remoteHostId: project.deviceLinkDeviceId ? null : project.remoteHostId,
@@ -1767,9 +1828,11 @@ function ExpandedView({
   );
 
   /* ---- Delete / Archive / Unarchive action handlers ----
-   * delete & archive（菜单触发）走 ConfirmDialog（不可逆 / 移出当前列表）；
-   * archive-now（行内 Confirm 触发）走 runSessionAction，跳过弹窗 —— 等价于
-   *   用户在快捷按钮上完成了两步行内确认，不再二次弹窗；
+   * delete 走 ConfirmDialog —— 不可逆，必须确认；
+   * archive / archive-now 都直接执行，不弹确认框：归档可逆（菜单里就有「恢复」），
+   *   行内入口本身已经是两步确认，菜单入口再弹一次纯属多余摩擦。唯一例外是
+   *   worktree 有未提交改动 —— 归档会顺带回收 worktree，这时升级到 ConfirmDialog
+   *   展示 dirty warning；
    * unarchive 是 archive 的反向操作，无副作用，直接 patch 即可，不弹确认。
    *
    * 执行序列（关子进程 / 写库 / 乐观补丁 / 释放内存 / refresh / 跳转）抽在
@@ -1795,27 +1858,63 @@ function ExpandedView({
         toast.warning(t('ccAgent.sidebar.archiveBlocked.running'));
         return;
       }
-      // 被 IM 接管中的 session 不允许归档 —— 接管方还在操控，先收回再归档
-      if (isArchiveLike) {
-        try {
-          const binding = await window.electronAPI.binding.resolveSession(sessionId);
-          if (binding.attached) {
-            toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
-            return;
-          }
-        } catch {
-          // resolveSession 失败时不阻断归档，直接继续
-        }
+      // 被 IM 接管中的 session 不允许归档 —— 接管方还在操控，先收回再归档。
+      // sidebar 常驻订阅的 attached 集合与 binding:resolve-session 同源
+      // (binding:list-attached = 全量 resolve, binding:changed 驱动 refresh),
+      // 命中就直接拦，连 IPC 都不用发。
+      if (isArchiveLike && attachedSessionIdsRef.current.has(sessionId)) {
+        toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
+        return;
       }
-      // 行内 Confirm 触发：干净 worktree 保持两步快捷确认；若有未提交改动，
-      // 升级到现有确认弹窗展示 dirty warning，避免绕过归档预检。
-      if (action === 'archive-now') {
-        const dirtyWorktree = await fetchDirtyWorktreeForRemoval(
+      // 本地集合没命中仍问一次 main 兜底(刚 attach 而 binding:changed 尚未到达
+      // 时不能漏拦)。**先发不 await**:它与下面的 dirty 预检互不依赖,让两次 IPC
+      // 在链路上重叠,归档前的等待从 sum(两次往返) 降到 max —— dirty 预检要在
+      // main 侧跑 git status,串行叠加会明显拖长"点了归档、列表还没反应"的时间。
+      // 失败降级为「未接管」(与改造前 catch 后继续归档同口径)。
+      const attachedPromise = isArchiveLike
+        ? window.electronAPI.binding
+            .resolveSession(sessionId)
+            .then((binding) => binding.attached)
+            .catch(() => false)
+        : null;
+      const blockedByAttachment = async (): Promise<boolean> => {
+        if (!(await attachedPromise)) return false;
+        toast.warning(t('ccAgent.sidebar.archiveBlocked.attached'));
+        return true;
+      };
+      // 归档一律不弹确认框:它是可逆的(菜单里就有「恢复」),菜单入口与行内
+      // 快捷按钮同一口径直接执行 —— 行内那个本身已经是两步确认。
+      // 唯一例外是 worktree 有未提交改动:归档会顺带回收 worktree,这时升级到
+      // 确认弹窗展示 dirty warning,不让改动被静默带走。
+      if (isArchiveLike) {
+        // 接管拦截先结算:被接管时不该弹任何归档确认。
+        if (await blockedByAttachment()) return;
+        // **worktree 预检必须是最后一个前置条件**(codex review):它之后再 await
+        // 任何东西(比如原来排在后面的接管查询),都会给「clean 结论」留一段失效
+        // 窗口 —— 编辑器或收尾中的 agent 在那段时间写脏工作区,归档就不带警告地
+        // 过去了。并行没有丢:菜单打开 / 亮出 Confirm 胶囊时的 prefetch 已经把查询
+        // 发出去并热了 git cache,而这里 resolve 对 clean 一律重查(见
+        // worktreeRemovalWarning 的非对称复用),拿到的是此刻的结论。
+        //
+        // 窗口不可能压到零 —— 从这次查询返回到 main 侧真正 `git worktree remove`
+        // 之间还有写库和回收链;那一段由 main 在删除前重新检测 + auto-stash 兜住
+        // (WorktreeManager.removeWorktreeForSession),renderer 这层负责的是「别拿
+        // 明显过期的结论免掉确认」。
+        const preflight = await resolveWorktreeRemovalPreflight(
           sessionId,
           session?.deviceLinkDeviceId,
         );
-        if (dirtyWorktree) {
-          setConfirm({ open: true, sessionId, action: 'archive', dirtyWorktree: true });
+        // 免确认的判据是「**确认**干净」,不是「不是脏的」:'unknown'(预检失败)
+        // 同样要弹确认框,否则归档会静默回收可能带着未提交改动的 worktree
+        // (greptile review)。'unknown' 时不摆 dirty 警告文案 —— 那会谎称有改动,
+        // 走的是普通归档确认。
+        if (preflight !== 'clean') {
+          setConfirm({
+            open: true,
+            sessionId,
+            action: 'archive',
+            dirtyWorktree: preflight === 'dirty',
+          });
           return;
         }
         // 重定向判定用 viewedSessionId:files 路由下归档「正在浏览的会话」也要
@@ -1826,12 +1925,13 @@ function ExpandedView({
         });
         return;
       }
-      if (action !== 'unarchive') {
+      if (action === 'delete') {
+        // 删除不可逆,始终弹确认框 —— 所以这里用不到三态:预检失败时少一行警告文案,
+        // 不会变成静默放行。
         // P1 预检:worktree 有未提交更改时确认文案追加警告(查询失败降级为不提示)
-        const dirtyWorktree = await fetchDirtyWorktreeForRemoval(
-          sessionId,
-          session?.deviceLinkDeviceId,
-        );
+        const dirtyWorktree =
+          (await resolveWorktreeRemovalPreflight(sessionId, session?.deviceLinkDeviceId)) ===
+          'dirty';
         setConfirm({ open: true, sessionId, action, dirtyWorktree });
         return;
       }

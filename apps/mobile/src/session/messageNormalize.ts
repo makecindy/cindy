@@ -33,6 +33,10 @@ import {
   readAgentInputReferences,
   type AgentInputReference,
 } from '@cindy/maker-shared/agent-input-projection';
+import {
+  normalizeRemoteMoney,
+  type RemoteMoney,
+} from '@/session/remoteMoney';
 
 export type NormalizedRemoteMessageKind =
   | 'user'
@@ -71,6 +75,8 @@ export interface NormalizedRemoteMessage {
   isStreaming?: boolean;
   /** Host 在 SDK done 边界写入；后台自动续跑时每个 sealed assistant 都是正式回复。 */
   turnCompleted?: boolean;
+  turnMoney?: RemoteMoney;
+  /** 旧 Desktop 消息兼容字段。 */
   turnCostUsd?: number;
   turnCostIsEstimate?: boolean;
   /** assistant 专用:本轮模型降级标记(agentMeta.modelMismatch,桌面 main 在 turn 结束检测命中时落库)。 */
@@ -336,6 +342,7 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
     const rawBody = userContent ? userContent.text : contentToPreview(message.content);
     const hookSource = message.role === 'user' ? readHookSource(message, rawBody) : undefined;
     const body = hookSource?.userText ?? rawBody;
+    const turnCost = readTurnCost(message);
     result.push({
       key: messageNormalizeKey(message),
       source: message,
@@ -360,11 +367,11 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
       isStreaming: readMessageStreaming(message) || undefined,
       ...(message.role === 'assistant' && (
         message.agentMeta?.turnCompleted === true ||
-        (readNumber(message.agentMeta?.turnCostUsd) ?? 0) > 0
+        (turnCost.turnMoney?.amount ?? 0) > 0
       )
         ? { turnCompleted: true }
         : {}),
-      ...readTurnCost(message),
+      ...turnCost,
       ...readModelMismatch(message),
       ...(message.role === 'user' ? readAutomationOrigin(message) : {}),
       ...(hookSource ? { hookSource } : {}),
@@ -675,13 +682,30 @@ function readTimestamp(value: unknown): number | null {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
-function readTurnCost(message: RemoteMessage): Pick<NormalizedRemoteMessage, 'turnCostUsd' | 'turnCostIsEstimate'> {
+function readTurnCost(
+  message: RemoteMessage,
+): Pick<NormalizedRemoteMessage, 'turnMoney' | 'turnCostUsd' | 'turnCostIsEstimate'> {
   if (message.role !== 'assistant') return {};
+  const money = normalizeRemoteMoney(message.agentMeta?.turnCost);
+  if (money && money.amount > 0) {
+    return {
+      turnMoney: money,
+      ...(money.currency === 'USD' ? { turnCostUsd: money.amount } : {}),
+      turnCostIsEstimate: money.kind === 'value-estimate',
+    };
+  }
   const cost = readNumber(message.agentMeta?.turnCostUsd);
   if (cost === null || cost <= 0) return {};
+  const isEstimate = message.agentMeta?.turnCostIsEstimate === true;
   return {
+    turnMoney: {
+      amount: cost,
+      currency: 'USD',
+      approximate: isEstimate,
+      kind: isEstimate ? 'value-estimate' : 'actual-cost',
+    },
     turnCostUsd: cost,
-    turnCostIsEstimate: message.agentMeta?.turnCostIsEstimate === true,
+    turnCostIsEstimate: isEstimate,
   };
 }
 

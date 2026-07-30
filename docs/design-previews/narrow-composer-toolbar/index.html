@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>窄 composer 工具栏溢出修复预览</title>
+  <style>
+    * { box-sizing: border-box; }
+    :root {
+      color-scheme: light;
+      --page: #f4f4f2; --frame: #fff; --card: #fff; --border: #d7d7d4;
+      --text: #3c3f43; --muted: #8c8e94; --pill: #f5f5f3; --send: #3c3f43;
+    }
+    [data-theme="dark"] {
+      color-scheme: dark;
+      --page: #181817; --frame: #222220; --card: #2c2c2a; --border: #484846;
+      --text: #d4d4d4; --muted: #6f6f6f; --pill: #393838; --send: #eee;
+    }
+    body { margin: 0; padding: 28px; background: var(--page); color: var(--text);
+      font: 13px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; }
+    h1 { margin: 0 0 6px; font-size: 18px; }
+    .intro { margin: 0 0 18px; max-width: 780px; color: var(--muted); }
+    .switch { display: flex; gap: 8px; margin-bottom: 20px; }
+    button { font: inherit; }
+    .theme { border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px;
+      color: var(--text); background: var(--frame); cursor: pointer; }
+    .theme.active { background: var(--send); color: var(--card); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 18px; }
+    .case { min-width: 0; }
+    .label { margin: 0 0 7px; font-size: 12px; font-weight: 600; }
+    .label.before { color: #c35b67; } .label.after { color: #41935c; }
+    .frame { min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: 14px;
+      background: var(--frame); }
+    .composer { width: 380px; max-width: 100%; min-height: 142px; padding: 14px 12px 10px;
+      border: 1px solid var(--border); border-radius: 16px; background: var(--card);
+      display: flex; flex-direction: column; justify-content: space-between; }
+    .draft { min-height: 74px; color: var(--muted); }
+    .toolbar { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .toolbar.before { overflow: visible; }
+    .toolbar.after { gap: 8px; overflow: hidden; }
+    .left, .right { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .left.before { flex-shrink: 0; } .right.before { flex-shrink: 0; margin-left: auto; }
+    .left.after { flex-shrink: 0; gap: 4px; } .right.after { flex-shrink: 0; gap: 4px; margin-left: auto; }
+    .plus { width: 26px; text-align: center; font-size: 22px; line-height: 30px; }
+    .permission, .model { display: inline-flex; align-items: center; gap: 5px; min-width: 0;
+      height: 30px; padding: 0 10px; border-radius: 999px; white-space: nowrap; }
+    .permission { color: #c76519; }
+    .before .permission { min-width: 142px; }
+    .model { color: var(--text); }
+    .before .model { min-width: 218px; }
+    .after .permission { width: 34px; min-width: 34px; justify-content: center; padding: 0; }
+    .after .model { width: 64px; min-width: 64px; justify-content: flex-start; padding: 0 10px; }
+    .model-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .after .model-name { display: none; }
+    .meta { color: var(--muted); flex-shrink: 0; }
+    .action { width: 30px; height: 30px; display: inline-flex; align-items: center; justify-content: center;
+      flex: 0 0 30px; border: 1px solid var(--border); border-radius: 50%; color: var(--text); }
+    .send { border: 0; background: var(--send); color: var(--card); }
+    .note { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
+    @media (max-width: 480px) { body { padding: 18px; } .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body data-theme="light">
+  <h1>窄 composer 工具栏：长模型名不再挤压固定动作</h1>
+  <p class="intro">复现尺寸为 380px CSS 宽度，对应侧栏 + 会话 + 浏览器 split-pane。修复后权限入口保留为图标，
+    模型入口固定 64px 并隐藏次要 effort/Fast 信息，语音、Stop、发送始终占固定动作位。</p>
+  <div class="switch">
+    <button class="theme active" data-theme-choice="light">Light</button>
+    <button class="theme" data-theme-choice="dark">Dark</button>
+  </div>
+  <div class="grid">
+    <section class="case">
+      <p class="label before">修复前 · max-content flex 相互争抢</p>
+      <div class="frame">
+        <div class="composer">
+          <div class="draft">输入任务……</div>
+          <div class="toolbar before">
+            <div class="left before"><span class="plus">＋</span><span class="permission">⚠ 完全访问</span></div>
+            <div class="right before"><span class="model">⚙ <span class="model-name">GPT-5.6-Solution-Long-Context</span> · High</span>
+              <span class="action">♩</span><span class="action send">■</span></div>
+          </div>
+        </div>
+      </div>
+      <p class="note">左侧权限与右侧模型均按内容占宽，窄容器下会侵入语音 / 发送动作区。</p>
+    </section>
+    <section class="case">
+      <p class="label after">修复后 · compact / ultra-compact</p>
+      <div class="frame">
+        <div class="composer">
+          <div class="draft">输入任务……</div>
+          <div class="toolbar after">
+            <div class="left after"><span class="plus">＋</span><span class="permission">⚠</span></div>
+            <div class="right after"><span class="model">⚙ <span class="model-name">GPT-5.6-Solution-Long-Context</span></span>
+              <span class="action">♩</span><span class="action send">■</span></div>
+          </div>
+        </div>
+      </div>
+      <p class="note">权限 / 模型共享窄态策略，模型文字可截断或隐藏；固定动作区不收缩、不换行。</p>
+    </section>
+  </div>
+  <script>
+    document.querySelectorAll('[data-theme-choice]').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.body.dataset.theme = button.dataset.themeChoice;
+        document.querySelectorAll('[data-theme-choice]').forEach((item) =>
+          item.classList.toggle('active', item === button));
+      });
+    });
+  </script>
+</body>
+</html>

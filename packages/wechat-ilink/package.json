@@ -1,0 +1,27 @@
+{
+  "name": "@cindy/wechat-ilink",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Electron-agnostic Tencent iLink protocol client for Cindy personal WeChat IM.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "author": {
+    "name": "X.D. Network Inc.",
+    "email": "feedback@cindy.app"
+  },
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@types/node": "*",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4"
+  }
+}

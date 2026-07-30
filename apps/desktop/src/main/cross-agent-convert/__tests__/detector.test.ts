@@ -132,6 +132,66 @@ describe('detect — agents', () => {
     expect(agents!.subItems).toHaveLength(1);
     expect(agents!.subItems![0].targetPath).toMatch(/\.codex[\\/]agents[\\/]foo\.toml$/);
   });
+
+  it('to-codex: 普通 Markdown 不应被误报为可迁移 agent', async () => {
+    await fs.mkdir(path.join(tmpDir, '.claude', 'agents'), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, '.claude', 'agents', 'codebase-explorer.md'),
+      '# 代码库探索代理',
+    );
+
+    const r = await detect({ workingDir: tmpDir, agentKind: 'codex' });
+
+    expect(r.items.find((i) => i.kind === 'agents')).toBeUndefined();
+  });
+
+  it('to-codex: 缺少 name 元数据的 Claude agent 不应被误报', async () => {
+    await fs.mkdir(path.join(tmpDir, '.claude', 'agents'), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, '.claude', 'agents', 'without-name.md'),
+      '---\ndescription: only description\n---\nbody',
+    );
+
+    const r = await detect({ workingDir: tmpDir, agentKind: 'codex' });
+
+    expect(r.items.find((i) => i.kind === 'agents')).toBeUndefined();
+  });
+
+  it('to-codex: name 不是字符串的 Claude agent 不应被误报', async () => {
+    await fs.mkdir(path.join(tmpDir, '.claude', 'agents'), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, '.claude', 'agents', 'numeric-name.md'),
+      '---\nname: 1\n---\nbody',
+    );
+
+    const r = await detect({ workingDir: tmpDir, agentKind: 'codex' });
+
+    expect(r.items.find((i) => i.kind === 'agents')).toBeUndefined();
+  });
+
+  it('to-codex: name 只有空白的 Claude agent 不应被误报', async () => {
+    await fs.mkdir(path.join(tmpDir, '.claude', 'agents'), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, '.claude', 'agents', 'blank-name.md'),
+      '---\nname: "   "\n---\nbody',
+    );
+
+    const r = await detect({ workingDir: tmpDir, agentKind: 'codex' });
+
+    expect(r.items.find((i) => i.kind === 'agents')).toBeUndefined();
+  });
+
+  it('to-codex: frontmatter YAML 无法解析的 Claude agent 不应被误报', async () => {
+    await fs.mkdir(path.join(tmpDir, '.claude', 'agents'), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, '.claude', 'agents', 'invalid-frontmatter.md'),
+      '---\nname: [unterminated\n---\nbody',
+    );
+
+    const r = await detect({ workingDir: tmpDir, agentKind: 'codex' });
+
+    expect(r.items.find((i) => i.kind === 'agents')).toBeUndefined();
+  });
 });
 
 describe('detect — mcp', () => {

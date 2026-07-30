@@ -23,6 +23,7 @@ import {
   type GhostManifest,
   type GhostSetupAllowedAction,
   type GhostSetupAssessment,
+  type GhostVideoResultParams,
   type InstalledGhost,
 } from '../../shared/ghost.js';
 import { getAppCapabilities } from '../appCapabilities.js';
@@ -131,7 +132,11 @@ import { runAssistantReplyHook } from './assistantReplyHook.js';
 import { submitAndAwaitVideo } from '../cindy-proxy-media/video/run.js';
 
 import { deriveCindyMediaConfig, type CindyMediaCatalogConfig } from './cindyMediaCatalog.js';
-import { GhostCindySlot } from './cindySlot.js';
+import {
+  GhostCindySlot,
+  type CindyVideoCapabilities,
+  type CindyVideoParams,
+} from './cindySlot.js';
 import { GhostAgentSlot, type GhostAgentTurnRunner } from './agentSlot.js';
 import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
 import { GhostPickSlot } from './pickSlot.js';
@@ -162,6 +167,9 @@ import {
   storeGhostSecret,
 } from '../secrets/providerSecretStore.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { projectProviderCatalogForBuildRegion } from '../maker-host/provider-access-policy.js';
+import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
+import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import {
   CINDY_CAPABILITY_KEYS,
@@ -185,6 +193,7 @@ import type { GatewayImageModel } from '../cindy-proxy-media/types.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { ingestMedia, supportedMime } from '../cindy-media/ingest.js';
+import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 import { recordGhostCallMedia } from './ghostMediaLedger.js';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
 import { ghostSetupNavigationForAction } from './ghostSetupNavigation.js';
@@ -1670,7 +1679,20 @@ export function getGhostPreviewSlot(): GhostPreviewSlot {
  */
 function getCatalogMediaConfig(kind: 'image' | 'video'): CindyMediaCatalogConfig {
   try {
-    return deriveCindyMediaConfig(getActiveCatalog().providers, kind);
+    // 停用过滤:用户在 设置 → 模型供应商 停用的媒体模型 / 供应商不进候选清单
+    // (与对话模型的准入口径同源,见 model-disable-store)。
+    const access = readModelDisableOverrides();
+    const catalog = projectProviderCatalogForBuildRegion(
+      getActiveCatalog(),
+      CURRENT_CINDY_REGION,
+    );
+    return deriveCindyMediaConfig(
+      catalog.providers,
+      kind,
+      (providerId, modelId) =>
+        isProviderDisabled(access, providerId) ||
+        isModelDisabled(access, providerId, modelId),
+    );
   } catch (err) {
     // 目录读取异常 = 拿不到可用性证明,同「空清单」处理(不静默顶一份旧名单)。
     log.warn(`read catalog ${kind} config failed, treating capability as unavailable`, {
@@ -1682,6 +1704,22 @@ function getCatalogMediaConfig(kind: 'image' | 'video'): CindyMediaCatalogConfig
 
 const getCatalogImageConfig = (): ReturnType<typeof getCatalogMediaConfig> => getCatalogMediaConfig('image');
 const getCatalogVideoConfig = (): ReturnType<typeof getCatalogMediaConfig> => getCatalogMediaConfig('video');
+
+/**
+ * 派发前重查(PR #744 review 第二十轮):cindySlot 从白名单校验到实际下单之间隔着
+ * 归属查账、参考图准备等长 await,期间该媒体模型 / 供应商可能被用户停用 —— 在
+ * generateImage / editImage / 视频提交边界按**当前** override 重算启用候选再验一次,
+ * 不在册即拒,这次付费请求不发出(与 scheduler 派发前重裁决同语义)。
+ */
+function assertMediaModelStillEnabled(kind: 'image' | 'video', model: string): void {
+  if (!getCatalogMediaConfig(kind).models.some((m) => m.id === model)) {
+    throw new Error(
+      kind === 'image'
+        ? '图像模型已在设置中停用,本次生成已取消'
+        : '视频模型已在设置中停用,本次生成已取消',
+    );
+  }
+}
 
 /**
  * 把图片通道的底层报错翻译成用户可行动的话术(意识交卷失败时 AI 会原样
@@ -1718,17 +1756,51 @@ async function readImageFileAsDataUri(absPath: string): Promise<string> {
  * submit→轮询→下载一条龙在 @cindy/mcps submitAndAwaitVideo(原 lizi_art 工具层
  * 的执行链,工具壳已退役);分钟级长任务,期间 cindySlot 在途名额持续占用。
  */
-async function runGhostVideo(params: {
-  alias: string;
-  prompt: string;
-  imageDataUris?: string[];
-}): Promise<{ buffer: Buffer; mimeType: string }> {
+async function runGhostVideo(
+  params: {
+    alias: string;
+    prompt: string;
+    imageDataUris?: string[];
+  } & CindyVideoParams,
+): Promise<{ buffer: Buffer; mimeType: string; videoParams: GhostVideoResultParams }> {
   const registry = getCindyProxyMediaService().backend.videoRegistry;
   if (!registry || !registry.hasAny()) {
     throw new Error('视频能力不可用:主机未配置视频通道');
   }
+  // 提交紧前重查(第二十一轮):参考图 data URI 准备是 await,窗口内被停用即拒。
+  assertMediaModelStillEnabled('video', params.alias);
   const r = await submitAndAwaitVideo(registry, params);
-  return { buffer: r.buffer, mimeType: r.mimeType };
+  return {
+    buffer: r.buffer,
+    mimeType: r.mimeType,
+    // 实际生效参数回执(执行器已把上游上报值与提交值合并过)。
+    videoParams: {
+      durationSeconds: r.effectiveParams.duration,
+      resolution: r.effectiveParams.resolution,
+      ratio: r.effectiveParams.ratio,
+      fps: r.effectiveParams.fps,
+    },
+  };
+}
+
+/**
+ * 某视频型号的画面参数支持集(cindySlot 按型号二次校验用)。registry 缺席
+ * 或 alias 查无 → null,cindySlot 据此跳过按型号校验(值仍会被执行器兜底拦下)。
+ */
+function getGhostVideoCapabilities(model: string): CindyVideoCapabilities | null {
+  try {
+    const registry = getCindyProxyMediaService().backend.videoRegistry;
+    if (!registry || !registry.hasAny()) return null;
+    const caps = registry.resolveByAlias(model).provider.capabilities;
+    return {
+      durations: caps.supportedDurations,
+      resolutions: caps.supportedResolutions,
+      ratios: caps.supportedRatios,
+      fps: caps.supportedFps,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -1765,6 +1837,7 @@ export function getGhostCindySlot(): GhostCindySlot {
       // 这里收窄类型是安全的。
       generateImage: async ({ prompt, model, aspectRatio }) => {
         try {
+          assertMediaModelStillEnabled('image', model);
           return decodeImageResponse(
             await getCindyProxyMediaService().backend.generateImage({
               model: model as GatewayImageModel,
@@ -1777,30 +1850,42 @@ export function getGhostCindySlot(): GhostCindySlot {
           humanizeImageChannelError(err);
         }
       },
-      editImage: async ({ prompt, model, imagePaths }) => {
+      editImage: async ({ prompt, model, imagePaths, aspectRatio }) => {
         try {
+          assertMediaModelStillEnabled('image', model);
           return decodeImageResponse(
-            await getCindyProxyMediaService().backend.editImage({ model: model as GatewayImageModel, prompt, imagePaths }),
+            await getCindyProxyMediaService().backend.editImage({
+              model: model as GatewayImageModel,
+              prompt,
+              imagePaths,
+              // 同 generateImage:不带画幅意图时不传 size,网关缺省 'auto'
+              // (改图的 auto 语义 = 跟随源图画幅,与放开之前行为一致)。
+              ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
+            }),
           );
         } catch (err) {
           humanizeImageChannelError(err);
         }
       },
-      generateVideo: async ({ prompt, model }) => {
+      generateVideo: async ({ prompt, model, ...videoParams }) => {
         try {
-          return await runGhostVideo({ alias: model, prompt });
+          assertMediaModelStillEnabled('video', model);
+          return await runGhostVideo({ alias: model, prompt, ...videoParams });
         } catch (err) {
           humanizeImageChannelError(err);
         }
       },
-      editVideo: async ({ prompt, model, imagePaths }) => {
+      editVideo: async ({ prompt, model, imagePaths, ...videoParams }) => {
         try {
+          assertMediaModelStillEnabled('video', model);
           const imageDataUris = await Promise.all(imagePaths.map(readImageFileAsDataUri));
-          return await runGhostVideo({ alias: model, prompt, imageDataUris });
+          return await runGhostVideo({ alias: model, prompt, imageDataUris, ...videoParams });
         } catch (err) {
           humanizeImageChannelError(err);
         }
       },
+      // 画面参数按型号二次校验的数据源(registry capabilities)。
+      videoCapabilities: getGhostVideoCapabilities,
       getOverride: (ghostId, capability) => {
         return readGhostCindyOverrides(ghostId)[capability as CindyCapabilityKey] ?? null;
       },
@@ -1860,6 +1945,39 @@ export function getGhostCindySlot(): GhostCindySlot {
         recordGhostCallMedia(ghostId, callId, written.url);
         return { url: written.url, hash: written.hash, ext: written.ext };
       },
+      // ── deposit_media 接线(#784)────────────────────────────────────────
+      // 真实类型只认字节:与 network as:'media' 同一魔数实现,再过一道 blobStore
+      // 白名单(识别范围与白名单可能不同步时以白名单为准)。
+      sniffDepositMime: (buffer) => {
+        const sniffed = sniffMediaMime(buffer);
+        return sniffed && supportedMime(sniffed) ? sniffed : null;
+      },
+      // 寄存落仓:走统一入库助手(规则 25),挂 ghost-deposit 引用。
+      // originKind 记 'user' 而非 'ghost'——字节是用户的(粘贴/拖入),意识只是
+      // 管道;记成 'ghost' 会让 ghostCanRead 的 origin 分支把它当作该意识的
+      // 出生物,与"作品"混为一谈。引用方(refId)才是意识,归属由此成立。
+      depositMedia: async ({ ghostId, buffer, mimeType, label }) => {
+        const r = await ingestMedia({
+          buffer,
+          mimeType,
+          isCache: false,
+          refs: [{
+            refKind: 'ghost-deposit',
+            refId: ghostId,
+            originKind: 'user',
+            ...(label ? { label } : {}),
+          }],
+        });
+        return {
+          url: r.url,
+          hash: r.hash,
+          ext: r.ext,
+          bytes: r.bytes,
+          deduplicated: r.deduplicated,
+        };
+      },
+      depositUsageBytes: (ghostId) => ledger.ghostDepositUsageBytes(ghostId),
+      releaseDeposit: ({ ghostId, hash }) => ledger.removeGhostDepositRef({ hash, ghostId }),
       log,
     });
   }
@@ -1902,7 +2020,7 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
           return serverApiFetch(path, {
             method: 'POST',
             body,
-            baseUrl: getClientEndpoint('oauthBrokerApiBaseUrl'),
+            baseUrl: () => getClientEndpoint('oauthBrokerApiBaseUrl'),
           });
         },
         hasLoginToken: () => getAccessToken() !== null,
@@ -2057,6 +2175,9 @@ export async function executeGhostSetupAction(args: {
       args.ghostId,
       secretKey,
       decl,
+      runtimeManifest.network?.hosts?.length
+        ? { deliveryHosts: runtimeManifest.network.hosts }
+        : undefined,
     );
     return connected.ok
       ? { ok: true }
@@ -2505,6 +2626,21 @@ export async function uninstallGhostAndCleanup(
         });
       }
     }
+    // 寄存物(#784)随意识回收:删掉本意识的 ghost-deposit 引用行,字节由
+    // recycler 按"引用归零"统一处理(用户已发进聊天的那几张有 message ref
+    // 兜着,不会被连带清掉)。只清寄存这一类——画廊/引渡的留存语义是既有
+    // 产品行为,不在本改动的范围内改。
+    // 卸载是用户明确动作,失败只记日志:包已经收走了,不能因为清账失败把
+    // 卸载报成失败(与上面 ghost-fs / kv 清理同纪律)。
+    try {
+      const removed = await ledger.removeRefs({ refKind: 'ghost-deposit', refId: id });
+      if (removed > 0) log.info('ghost deposit media refs removed', { id, removed });
+    } catch (err) {
+      log.warn('ghost deposit media refs 清理失败', {
+        id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     if (listBuiltinSeedIds(builtinSeedRootDirs()).includes(id)) {
       recordBuiltinTombstone(brainRootDir(), id, log);
     }
@@ -2693,6 +2829,7 @@ export function registerGhostIpc(): void {
       pathname,
       readBodyText,
       oauthSecrets,
+      networkHosts: runtimeManifest.network?.hosts,
       manager: getGhostOauthAccountManager(),
       ghostId,
       onChanged: (secretKey) => {

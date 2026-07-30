@@ -24,15 +24,20 @@ describe('hasPersistedSessionHint', () => {
     expect(hasPersistedSessionHint(makeDeps({}))).toBe(false);
   });
 
-  it('存在持久化 refresh token → true(cloud 会话冷启动可恢复,非首启)', () => {
+  it('存在原子 auth session → true(cloud 会话冷启动可恢复,非首启)', () => {
     expect(
       hasPersistedSessionHint(
-        makeDeps({ 'safe-storage/cindy_auth_refresh_token.enc': true }),
+        makeDeps({ 'safe-storage/cindy_auth_session_v1.enc': true }),
       ),
     ).toBe(true);
   });
 
   it('legacy token 文件同样算存量会话', () => {
+    expect(
+      hasPersistedSessionHint(
+        makeDeps({ 'safe-storage/cindy_auth_refresh_token.enc': true }),
+      ),
+    ).toBe(true);
     expect(
       hasPersistedSessionHint(makeDeps({ 'safe-storage/refresh_token.enc': true })),
     ).toBe(true);

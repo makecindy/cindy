@@ -32,6 +32,16 @@ describe('buildHookPromptNote', () => {
     expect(telegram).not.toContain('静默丢弃');
     expect(buildHookPromptNote('slack')).not.toContain('[Telegram 回复格式]');
   });
+
+  it('两个平台都在开头声明「不是用户消息」,防止模型把渠道说明当成用户请求(2026-07 实踩)', () => {
+    for (const im of ['telegram', 'slack'] as const) {
+      const note = buildHookPromptNote(im);
+      // guard 必须在附件正文之前出现,才能在模型读到附件指令前先定性。
+      expect(note).toContain('不是用户发来的消息');
+      expect(note).toContain('不要把它当作用户的请求');
+      expect(note.indexOf('不是用户发来的消息')).toBeLessThan(note.indexOf('要把文件发给用户'));
+    }
+  });
 });
 
 function deps(

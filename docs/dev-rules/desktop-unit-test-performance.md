@@ -60,6 +60,39 @@ workers），说明存在资源争用；但墙钟仍持续下降。综合速度�
 因此分池优先按“真实 Git／子进程长尾”和“其余测试”隔离，而不是只按 node/jsdom 环境
 机械拆分。
 
+## 多 worktree 资源协调
+
+Desktop 测试按成本拆成默认层与显式层：
+
+- `standard`：普通单测，以及一条代表性的真实 Git smoke；默认 `test:unit` 只运行这一层。
+- `git-integration`：文件名为 `*.git-integration.test.ts` 的完整真实 Git 覆盖，由
+  `pnpm test:git-integration` 显式运行，并通过 global setup 获取以 Git common-dir
+  派生的本机回环端口锁。
+
+远端 `client-ci` 以独立并行 job 在每个 PR、`main` push 和手动触发时运行完整
+`git-integration` 层；本地提交前门禁仍只要求默认 `test:unit`，修改真实 Git 行为时可按需
+显式补跑完整层。
+
+因此同一仓库的多个 worktree 可以并行完成默认单测；只有显式运行完整 Git 集成层时才排队：
+
+- 同一主仓的 worktree 共享 common-dir，因此只有重型层排队执行。
+- 独立仓库不共享锁，不会互相阻塞。
+- 锁只监听 `127.0.0.1`，不发起业务网络请求；测试进程退出后由操作系统自动释放，不产生
+  stale lock 文件。
+- 无 `.git` 的源码归档按 checkout 实际路径派生锁，不因缺少 Git 元数据而启动失败。
+- 两个 project 的 include/exclude 必须互补；默认层以低成本 smoke 守住主链路，完整层保留
+  index、patch、hook、ref、worktree 等组合语义。
+- Vitest 3.2 的 inline project 不会自动继承根 CLI 的 `--exclude`；配置必须把这些排除项
+  显式传入两个 project，确保 unit、DB、migration 等 tier 的测试边界保持不变。
+
+真实 Git 测试的 fixture 还应优先复用 `src/test/vitest/testDirectoryTemplate.ts`：每个测试
+文件初始化一次不可变基准仓库，再为每个用例复制独立目录。默认层不复制完整矩阵；完整层
+不得为了提速把需要验证 Git index、patch、hook 或 ref 语义的集成覆盖全部 mock 掉。
+
+2026-07-28 在 Windows 上测得旧 `resource-intensive` 范围为 22 files、219 passed /
+3 skipped，墙钟 252.07s；其中 15 个真实 Git 文件的测试耗时合计占主要长尾。该数据是拆层
+前基线，后续比较必须分别报告默认 smoke 与显式完整层，不能把两者相加后宣称默认层变快。
+
 ## 分池评估
 
 分池把 21 个 Git／子进程长尾文件放入 `git-io`，其余文件放入 `standard`；两个池并发，

@@ -11,6 +11,11 @@ import { normalizeExtraDirs } from '@/session/newSession';
 import { buildMobileSessionDeepLink } from '@/session/sessionLinks';
 import { sessionWorktreeInfo } from '@/session/sessionWorktree';
 import type { RemoteSession } from '@/session/types';
+import {
+  normalizeRemoteMoney,
+  remoteMoneySymbol,
+  type RemoteMoney,
+} from '@/session/remoteMoney';
 
 /** 菜单 sheet 的两级视图:一级操作菜单 / 二级会话信息。 */
 export type SessionMenuView = 'menu' | 'info';
@@ -25,7 +30,7 @@ export interface SessionMenuHeaderModel {
   chips: SessionMenuChip[];
   /** agent 名 + 工作目录 / worktree 名,如「Claude · xdt-maker」。 */
   metaLine: string;
-  /** 「$2.31 · 上下文 45%」;两项都缺时为 null(隐藏用量行)。 */
+  /** 「¥2.31 · 上下文 45%」;两项都缺时为 null(隐藏用量行)。 */
   usageSummary: string | null;
 }
 
@@ -204,8 +209,20 @@ function buildSessionMenuMetaLine(session: RemoteSession): string {
 
 function buildSessionMenuUsageSummary(session: RemoteSession): string | null {
   const parts: string[] = [];
-  const cost = readPositiveNumber(session.totalCostUsd);
-  if (cost !== null) parts.push(formatUsd(cost));
+  const totalMoney = normalizeRemoteMoney(session.totalMoney);
+  const legacyCostUsd = readPositiveNumber(session.totalCostUsd);
+  const displayMoney =
+    totalMoney && totalMoney.amount > 0
+      ? totalMoney
+      : legacyCostUsd === null
+        ? null
+        : {
+            amount: legacyCostUsd,
+            currency: 'USD' as const,
+            approximate: false,
+            kind: 'actual-cost' as const,
+          };
+  if (displayMoney) parts.push(formatMoney(displayMoney));
   const contextTokens = readPositiveNumber(session.contextTokens);
   const contextWindow = readPositiveNumber(session.contextWindow);
   if (contextTokens !== null && contextWindow !== null) {
@@ -229,8 +246,9 @@ function readPositiveNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
 }
 
-function formatUsd(value: number): string {
-  if (value >= 10) return `$${Math.round(value)}`;
-  if (value >= 0.01) return `$${value.toFixed(2)}`;
-  return '<$0.01';
+function formatMoney(money: RemoteMoney): string {
+  const symbol = remoteMoneySymbol(money.currency);
+  if (money.amount >= 10) return `${symbol}${Math.round(money.amount)}`;
+  if (money.amount >= 0.01) return `${symbol}${money.amount.toFixed(2)}`;
+  return `<${symbol}0.01`;
 }

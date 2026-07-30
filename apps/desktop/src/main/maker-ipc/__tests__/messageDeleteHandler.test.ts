@@ -76,7 +76,8 @@ describe('performMessageDeletion', () => {
     expect(handoff).toContain('keep after');
     expect(handoff).not.toContain('delete me');
     expect(handoff).toContain('treat only these records as the prior conversation');
-    expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', handoff);
+    // 第三参数是写入前取的代次(mock deps 未提供 readPendingHandoffGeneration → undefined)
+    expect(deps.setPendingHandoff).toHaveBeenCalledWith('s1', handoff, undefined);
     expect(deps.onCommitted).toHaveBeenCalledWith(
       {
         sessionId: 's1',

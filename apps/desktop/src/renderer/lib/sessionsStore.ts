@@ -20,7 +20,9 @@
  * 写策略：
  *   - patchLocal(id, patch)        遍历所有桶就地合并字段，保留排序与位置；
  *                                   _count 浅合并，避免 { messages: 1 } 把
- *                                   同级计数清掉。
+ *                                   同级计数清掉。patch.status 会顺带修正桶
+ *                                   归属：该移出的桶就地移除（不 drop，见
+ *                                   patchLocal 注释），该补进的桶才重拉。
  *   - prependCreated(session)      新建时本地插入：active / all 桶头部插入；
  *                                   archived 桶按业务永远不应包含新建项，跳过。
  *                                   保留旧 createSession 的"省一次 IPC"优化。
@@ -193,13 +195,20 @@ export const sessionsStore = {
    * "字段变化"全部走这里）。遍历所有桶：命中即合并字段，保留位置不重排序。
    *
    * 跨桶迁移特例：当 patch.status 出现时，session 的桶归属可能变化。
-   * deleted 的归属是确定的，直接从所有已加载桶移除，不依赖后台重拉；
-   * active ↔ archived 既要移出旧桶、又可能加入已加载的新桶，仍需 drop 不一致的桶重拉。
    * 如果只就地改字段而不修正归属，会导致：
    *   1. 旧桶里"假活着"（status 已变但条目仍在）
    *   2. 新桶 cache 命中但缺这一条（用户切桶后看不到）
-   * 因此 status 变更后,把所有桶归属判定与实际不符的桶 drop 掉,下次
-   * ensureByFilter 重拉获取一致的数据。'all' 桶仅排除 deleted。
+   *
+   * 两种不一致的修正方式**不对称**，别退回"一律 drop 重拉"：
+   *   - 「在桶里但已不该在」（归档时的 active 桶）→ **就地移除**。归属判定是
+   *     确定的（status 已经变了），本地就能得出正确结果，无需等 IPC。
+   *     这里 drop 桶是曾经的性能陷阱：桶变 null 后 useCCSessions 的
+   *     `next !== null` 守卫会跳过 setState，视图停在**仍含该行**的陈旧快照，
+   *     一直等到重拉的 sessions:list 回来才更新 —— 表现为"点归档后半秒对话
+   *     才消失"，把调用方 useSessionLifecycleActions 的乐观更新整段抵消掉。
+   *   - 「不在桶里但该在」（归档时的 archived 桶）→ drop + 重拉。本地没有这条
+   *     的完整 row，构造不出来，只能问 DB。这类桶通常不是当前可见桶。
+   * deleted 走前面的独立分支：归属确定，从所有桶移除即可。'all' 桶仅排除 deleted。
    */
   patchLocal(id: string, patch: Partial<Session>): void {
     if (!id || !patch) return;
@@ -253,16 +262,32 @@ export const sessionsStore = {
         if (filter === 'all') return true;
         return filter === newStatus;
       };
+      // 进行中的 list 请求发起于本次 status 变更之前,回来会把旧归属整桶写回
+      // (cache.set 覆盖,连就地移除也会被撤销)。先解除这些 request 对桶的认领,
+      // 循环后统一重发 —— 与 deleted 分支同口径。稳态下 inflight 为空:桶进
+      // cache 时 ensureByFilter 会同时清掉 inflight,故与下面的 cache 循环无交集。
+      for (const filter of Array.from(inflight.keys())) {
+        inflight.delete(filter);
+        toRefetch.push(filter);
+      }
       for (const filter of Array.from(cache.keys())) {
         const list = cache.get(filter);
         if (!list) continue;
         const has = list.some((s) => s.id === id);
-        if (has !== belongsIn(filter)) {
+        if (has === belongsIn(filter)) continue;
+        if (has) {
+          // 已不该在本桶:本地即可得出正确结果,就地移除,桶保持非 null,
+          // 订阅者当帧就能拿到不含该行的新快照(见上方注释的性能陷阱)。
+          cache.set(
+            filter,
+            list.filter((session) => session.id !== id),
+          );
+        } else {
+          // 本桶缺这一条且本地没有它的 row → 只能 drop 后问 DB。
           cache.delete(filter);
-          inflight.delete(filter);
           toRefetch.push(filter);
-          touched = true;
         }
+        touched = true;
       }
     }
     if (touched) notify();

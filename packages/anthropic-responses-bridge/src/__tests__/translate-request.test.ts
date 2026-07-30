@@ -179,6 +179,196 @@ describe('translateRequest', () => {
     expect(out.input).toEqual([{ type: 'function_call_output', call_id: 'c1', output: 'r1\nr2' }]);
   });
 
+  it('tool_result 图像块降级为带说明的占位文案,图像数据不外泄 (#795)', () => {
+    const req: AnthropicMessagesRequest = {
+      model: 'gpt-5.5',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'c1',
+              content: [
+                { type: 'text', text: 'screenshot below' },
+                { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAABBBB' } },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const out = translateRequest(req, { model: 'gpt-5.5' });
+    // 先断言长度再取元素:input 缺失时给出清晰断言失败而不是 TypeError。
+    expect(out.input).toHaveLength(1);
+    const item = out.input![0] as { type: string; output: string };
+    expect(item.type).toBe('function_call_output');
+    expect(item.output).toContain('screenshot below');
+    // 占位文案要素:确认有图、说明送不到是路由限制、禁止臆测、给出改走 user 消息的出路。
+    expect(item.output).toContain('[image omitted:');
+    expect(item.output).toContain('Do NOT guess');
+    expect(item.output).toContain('attach the image');
+    // 图像字节与旧版裸占位符都不应出现。
+    expect(item.output).not.toContain('AAAABBBB');
+    expect(item.output).not.toContain('[image]');
+  });
+
+  it('serverSideTools 恒定追加在 function tools 之后(位置固定 → 前缀稳定)', () => {
+    const req: AnthropicMessagesRequest = {
+      model: 'xai/grok-4.5',
+      tools: [{ name: 'f', description: 'd', input_schema: { type: 'object', properties: {} } }],
+      tool_choice: { type: 'auto' },
+      messages: [],
+    };
+    const out = translateRequest(req, { model: 'grok-4.5', serverSideTools: [{ type: 'x_search' }] });
+
+    expect(out.tools).toEqual([
+      { type: 'function', name: 'f', description: 'd', strict: false, parameters: { type: 'object', properties: {} } },
+      { type: 'x_search' },
+    ]);
+    // 本地 function tool 仍在 → 调用策略字段照发。
+    expect(out.parallel_tool_calls).toBe(true);
+    expect(out.tool_choice).toBe('auto');
+  });
+
+  it('tool_choice:any + 唯一 function tool → 收窄成指名该 function,工具声明不动', () => {
+    // required 作用于整个 tools 数组:带上 x_search 的话上游可以只跑搜索就满足 required,
+    // 调用方强制要的那次本地 function call 永远不发生。解法是收窄 tool_choice,
+    // 而不是摘掉服务端工具——后者会让 tools 前缀在会话中途变动、prompt 缓存全程失效。
+    const out = translateRequest(
+      {
+        model: 'xai/grok-4.5',
+        tools: [{ name: 'f', input_schema: { type: 'object', properties: {} } }],
+        tool_choice: { type: 'any' },
+        messages: [],
+      },
+      { model: 'grok-4.5', serverSideTools: [{ type: 'x_search' }] },
+    );
+    expect(out.tool_choice).toEqual({ type: 'function', name: 'f' });
+    // 服务端工具照常声明:它只由 model 决定,不因某一轮的 tool_choice 增删。
+    expect(out.tools?.at(-1)).toEqual({ type: 'x_search' });
+  });
+
+  it('tool_choice:any + 多个 function tool → 保留 required,工具声明仍不动(前缀稳定优先)', () => {
+    // Responses 无法表达「required 但只限这几个」;此时保留 required 并接受残余风险,
+    // 不为它牺牲 tools 声明的跨轮稳定性。
+    const out = translateRequest(
+      {
+        model: 'xai/grok-4.5',
+        tools: [
+          { name: 'f1', input_schema: { type: 'object', properties: {} } },
+          { name: 'f2', input_schema: { type: 'object', properties: {} } },
+        ],
+        tool_choice: { type: 'any' },
+        messages: [],
+      },
+      { model: 'grok-4.5', serverSideTools: [{ type: 'x_search' }] },
+    );
+    expect(out.tool_choice).toBe('required');
+    expect(out.tools?.at(-1)).toEqual({ type: 'x_search' });
+  });
+
+  it('没有服务端工具时 tool_choice:any 原样保持 required(不做多余收窄)', () => {
+    const out = translateRequest(
+      {
+        model: 'chatgpt/gpt-5.5',
+        tools: [{ name: 'f', input_schema: { type: 'object', properties: {} } }],
+        tool_choice: { type: 'any' },
+        messages: [],
+      },
+      { model: 'gpt-5.5' },
+    );
+    expect(out.tool_choice).toBe('required');
+  });
+
+  it('tool_choice 指名具体 function / auto 时仍附加服务端工具(不会被顶替)', () => {
+    const named = translateRequest(
+      {
+        model: 'xai/grok-4.5',
+        tools: [{ name: 'f', input_schema: { type: 'object', properties: {} } }],
+        tool_choice: { type: 'tool', name: 'f' },
+        messages: [],
+      },
+      { model: 'grok-4.5', serverSideTools: [{ type: 'x_search' }] },
+    );
+    expect(named.tool_choice).toEqual({ type: 'function', name: 'f' });
+    expect(named.tools?.at(-1)).toEqual({ type: 'x_search' });
+
+    const auto = translateRequest(
+      {
+        model: 'xai/grok-4.5',
+        tools: [{ name: 'f', input_schema: { type: 'object', properties: {} } }],
+        tool_choice: { type: 'auto' },
+        messages: [],
+      },
+      { model: 'grok-4.5', serverSideTools: [{ type: 'x_search' }] },
+    );
+    expect(auto.tools?.at(-1)).toEqual({ type: 'x_search' });
+  });
+
+  it('tool_choice:none 且没有 function tool → 仍下发 none(否则等于放开服务端工具)', () => {
+    // none 是调用方显式禁止用工具;我们仍会声明 x_search(声明只由 model 决定),
+    // 不把 none 传下去就等于把调用方的禁令反过来。
+    const out = translateRequest(
+      { model: 'xai/grok-4.5', tool_choice: { type: 'none' }, messages: [] },
+      { model: 'grok-4.5', serverSideTools: [{ type: 'x_search' }] },
+    );
+    expect(out.tools).toEqual([{ type: 'x_search' }]);
+    expect(out.tool_choice).toBe('none');
+    // parallel_tool_calls 只描述本地 function tool 的并行策略,纯服务端工具轮不发。
+    expect(out.parallel_tool_calls).toBeUndefined();
+  });
+
+  it('tool_choice:none 且有 function tool → 照常下发 none', () => {
+    const out = translateRequest(
+      {
+        model: 'xai/grok-4.5',
+        tools: [{ name: 'f', input_schema: { type: 'object', properties: {} } }],
+        tool_choice: { type: 'none' },
+        messages: [],
+      },
+      { model: 'grok-4.5', serverSideTools: [{ type: 'x_search' }] },
+    );
+    expect(out.tool_choice).toBe('none');
+  });
+
+  it('tool_choice:{type:tool} 但没有 function tool → 不下发(会指向不存在的 function)', () => {
+    const out = translateRequest(
+      { model: 'xai/grok-4.5', tool_choice: { type: 'tool', name: 'ghost' }, messages: [] },
+      { model: 'grok-4.5', serverSideTools: [{ type: 'x_search' }] },
+    );
+    expect(out.tool_choice).toBeUndefined();
+  });
+
+  it('tool_choice:any 但请求没带 function tool → 服务端工具照常下发,且不发 tool_choice', () => {
+    const out = translateRequest(
+      { model: 'xai/grok-4.5', tool_choice: { type: 'any' }, messages: [] },
+      { model: 'grok-4.5', serverSideTools: [{ type: 'x_search' }] },
+    );
+    expect(out.tools).toEqual([{ type: 'x_search' }]);
+    expect(out.tool_choice).toBeUndefined();
+  });
+
+  it('纯服务端工具轮(请求没带 function tool)也下发 tools,但不发 tool_choice / parallel_tool_calls', () => {
+    const out = translateRequest(
+      { model: 'xai/grok-4.5', messages: [] },
+      { model: 'grok-4.5', serverSideTools: [{ type: 'x_search' }] },
+    );
+
+    expect(out.tools).toEqual([{ type: 'x_search' }]);
+    // tool_choice 只描述本地 function tool 的调用策略;没有 function tool 时发它会指向不存在的工具。
+    expect(out.tool_choice).toBeUndefined();
+    expect(out.parallel_tool_calls).toBeUndefined();
+  });
+
+  it('不传 serverSideTools 时 tools 行为与改造前一致(空数组不落 tools 字段)', () => {
+    const out = translateRequest({ model: 'gpt-5.5', messages: [] }, { model: 'gpt-5.5' });
+    expect(out.tools).toBeUndefined();
+
+    const empty = translateRequest({ model: 'gpt-5.5', messages: [] }, { model: 'gpt-5.5', serverSideTools: [] });
+    expect(empty.tools).toBeUndefined();
+  });
+
   it('maps thinking budget → reasoning effort', () => {
     const low = translateRequest(
       { model: 'gpt-5.5', messages: [], thinking: { type: 'enabled', budget_tokens: 2000 } },

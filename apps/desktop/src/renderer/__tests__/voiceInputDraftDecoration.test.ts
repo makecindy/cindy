@@ -276,6 +276,31 @@ describe('voice input draft decoration anti-flicker contract', () => {
     expect(rebuilt.doc.resolve(anchor!.from).parent.isTextblock).toBe(true);
   });
 
+  // 全选(AllSelection)后开始听写:替换区间就是 0..content.size,两端必须原样保留,
+  // 否则外层节点(列表包装等)留在替换范围外、上屏文字塞进列表项而不是替换整篇。
+  // 但 widget 是 inline 的,渲染位置要单独吸附回段落内,不然又变成段落外的裸 span。
+  it('keeps a whole-document replacement range while rendering widgets inline', () => {
+    const { plugin, state } = makeState('已经上屏的文字');
+    const full = { from: 0, to: state.doc.content.size };
+    const listening = applyDraftMeta(state, {
+      text: '新的听写文字',
+      source: 'partial',
+      ...full,
+      caretState: 'listening',
+    });
+
+    expect(plugin.getState(listening)).toMatchObject(full);
+    const decorations = plugin.getState(listening)!.decorations.find();
+    const replaced = decorations.find(
+      (deco) => (deco.spec as { key?: string }).key === undefined,
+    );
+    expect({ from: replaced!.from, to: replaced!.to }).toEqual(full);
+    for (const deco of decorations.filter((d) => (d.spec as { key?: string }).key)) {
+      expect(deco.from).toBe(1);
+      expect(listening.doc.resolve(deco.from).parent.isTextblock).toBe(true);
+    }
+  });
+
   it('deduplicates identical setVoiceInputDraftDecoration calls without dispatching', () => {
     const { state } = makeState('前文');
     let current = state;

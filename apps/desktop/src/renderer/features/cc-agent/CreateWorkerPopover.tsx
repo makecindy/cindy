@@ -16,6 +16,7 @@ import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSw
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useProviders } from '@/hooks/useProviders';
+import { filterChatBridgedCodexProviders } from '@/lib/providerModels';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { cn } from '@/lib/utils';
 import { isModelEnabled, useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
@@ -106,6 +107,13 @@ export interface CreateWorkerPopoverProps {
   className?: string;
   /** device-link controlled device; omitted for a local Lead session. */
   deviceId?: string;
+  /**
+   * SSH 远程 Lead(session.remoteHostId 非空):模型清单按 SSH 口径过滤 ——
+   * 订阅直连(chatgpt/ / xai/)与 openai-chat 桥接 Codex 供应商的桥只挂在本地
+   * proxy,远端不经翻译,选了必被 main 侧 remote-worker guard 拒绝
+   * (codex review R28)。提交前就在面板里藏掉,与 ChatInput 同口径。
+   */
+  sshRemote?: boolean;
 }
 
 export function CreateWorkerPopover({
@@ -116,6 +124,7 @@ export function CreateWorkerPopover({
   submitLabel,
   className,
   deviceId,
+  sshRemote,
 }: CreateWorkerPopoverProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -152,6 +161,8 @@ export function CreateWorkerPopover({
       providers,
       providersLoading,
       providersError,
+      excludeSubscriptionDirect: sshRemote === true,
+      excludeChatBridgedCodex: sshRemote === true,
       isVisible: deviceId
         ? undefined
         : (providerId, catalogModel) => isModelEnabled(agent, providerId, catalogModel),
@@ -163,26 +174,35 @@ export function CreateWorkerPopover({
     providers,
     providersError,
     providersLoading,
+    sshRemote,
     visibilityVersion,
   ]);
   const currentModel = activeModels.find((m) => m.id === model);
   const modelCatalogLoading = activeCapabilitiesState.loading || providersLoading;
 
-  // 显式来源仅在「已连接、确实提供该模型、且该 (来源, 模型) 未被可见性开关隐藏」时
-  // 有效;其余(断开/下架/被隐藏/换了模型)收窄为 null 交回默认路由解析。可见性判据
-  // 与 activeModels 的 isVisible 同源(codex review:同模型多来源时,用户隐藏了记忆
-  // 来源的那份条目后,面板已不显示该行,不能仍显式路由过去)。device-link 恒 null。
+  // 显式来源仅在「已连接、确实提供该模型、且该 (来源, 模型) 未被**停用**」时有效;
+  // 其余(断开/下架/停用/换了模型)收窄为 null 交回默认路由解析。停用判据 =
+  // buildRegistry 烘焙的 model.disabled(供应商级 suspended 已被
+  // connectedProvidersForAgent 剔除)。「隐藏」不再收窄 —— 隐藏只是陈列过滤,
+  // 记忆来源被隐藏仍然合法可路由(2026-07 启用/显示双轴拆分)。device-link 恒 null。
+  const routableProviders = useMemo(
+    () =>
+      filterChatBridgedCodexProviders(
+        connectedProvidersForAgent(providers, agent),
+        agent,
+        sshRemote === true && !deviceId,
+      ),
+    [agent, deviceId, providers, sshRemote],
+  );
   const narrowProviderSource = useCallback(
     (candidate: string | null, modelId: string): string | null => {
       if (!candidate || deviceId) return null;
-      const provider = connectedProvidersForAgent(providers, agent).find(
-        (p) => p.id === candidate,
-      );
+      const provider = routableProviders.find((p) => p.id === candidate);
       if (!provider || !providerOffersModel(provider, modelId, agent)) return null;
       const catalogModel = getModel(provider, modelId, agent);
-      return catalogModel && isModelEnabled(agent, candidate, catalogModel) ? candidate : null;
+      return catalogModel && catalogModel.disabled !== true ? candidate : null;
     },
-    [agent, deviceId, providers],
+    [agent, deviceId, routableProviders],
   );
 
   // per-provider Fast 能力:同一 model id 在不同来源下 supportsFastMode 可不同(见
@@ -194,18 +214,17 @@ export function CreateWorkerPopover({
   const providerFastSupported = useCallback(
     (candidate: string | null, modelId: string): boolean => {
       // device-link 面板无来源维度,candidate 恒 null,走默认来源解析。
-      const sourceId = candidate ?? effectiveSourceIdForModel(providers, null, modelId, agent);
+      const sourceId =
+        candidate ?? effectiveSourceIdForModel(routableProviders, null, modelId, agent);
       if (!sourceId) {
         return deviceId
           ? !!activeModels.find((m) => m.id === modelId)?.supportsFastMode
           : false;
       }
-      const provider = connectedProvidersForAgent(providers, agent).find(
-        (p) => p.id === sourceId,
-      );
+      const provider = routableProviders.find((p) => p.id === sourceId);
       return modelSupportsFastMode(provider, modelId, agent);
     },
-    [activeModels, agent, deviceId, providers],
+    [activeModels, agent, deviceId, routableProviders],
   );
   // Fast 判定先对 providerSource 收窄:记忆来源刚失效(断开/掉模型/被隐藏)而收敛
   // effect 尚未把 state 置 null 的同一渲染里,直接用旧值会得到 false 并把记忆的
@@ -227,14 +246,24 @@ export function CreateWorkerPopover({
       const sourceId = deviceId
         ? effectiveSourceIdForModel(providers, null, modelId, agent)
         : narrowProviderSource(providerSource, modelId)
-          ?? effectiveSourceIdForModel(providers, null, modelId, agent);
+          ?? effectiveSourceIdForModel(routableProviders, null, modelId, agent);
       const provider = sourceId
-        ? connectedProvidersForAgent(providers, agent).find((p) => p.id === sourceId)
+        ? (deviceId ? connectedProvidersForAgent(providers, agent) : routableProviders).find(
+            (p) => p.id === sourceId,
+          )
         : undefined;
       const entry = provider ? getModel(provider, modelId, agent) : undefined;
       return entry?.efforts ? entry : flat;
     },
-    [activeModels, agent, deviceId, narrowProviderSource, providerSource, providers],
+    [
+      activeModels,
+      agent,
+      deviceId,
+      narrowProviderSource,
+      providerSource,
+      providers,
+      routableProviders,
+    ],
   );
   const noAvailableLocalModels =
     prefsRestored &&
@@ -370,7 +399,7 @@ export function CreateWorkerPopover({
       // (显式值,未显式时为解析出的默认来源),不能只看模型是否相同。
       const effectiveBefore = deviceId
         ? null
-        : providerSource ?? effectiveSourceIdForModel(providers, null, model, agent);
+        : providerSource ?? effectiveSourceIdForModel(routableProviders, null, model, agent);
       setProviderSource(narrowed);
       if (!modelId) return;
       if (modelId === model && narrowed !== null && narrowed === effectiveBefore) {
@@ -392,9 +421,9 @@ export function CreateWorkerPopover({
       // 未收窄出显式来源时取生效默认来源的条目;来源条目缺失或无档位元数据时
       // 回落拍平条目(device-link 无本地目录,handleProviderChange 本就不接线)。
       const effortSourceId =
-        narrowed ?? effectiveSourceIdForModel(providers, null, modelId, agent);
+        narrowed ?? effectiveSourceIdForModel(routableProviders, null, modelId, agent);
       const effortSourceProvider = effortSourceId
-        ? connectedProvidersForAgent(providers, agent).find((p) => p.id === effortSourceId)
+        ? routableProviders.find((p) => p.id === effortSourceId)
         : undefined;
       const sourceEntry = effortSourceProvider
         ? getModel(effortSourceProvider, modelId, agent)
@@ -447,7 +476,7 @@ export function CreateWorkerPopover({
       narrowProviderSource,
       providerFastSupported,
       providerSource,
-      providers,
+      routableProviders,
     ],
   );
 
@@ -461,7 +490,7 @@ export function CreateWorkerPopover({
   const activeMemorySourceId = deviceId
     ? null
     : narrowProviderSource(providerSource, model)
-      ?? effectiveSourceIdForModel(providers, null, model, agent);
+      ?? effectiveSourceIdForModel(routableProviders, null, model, agent);
   const updateEffort = useCallback(
     (next: Effort) => {
       setEffort(next);
@@ -672,8 +701,19 @@ export function CreateWorkerPopover({
               onEffortChange={updateEffort}
               vendorKey={vendorKey}
               deviceId={deviceId}
+              // SSH 远程 Lead:与 ChatInput 同口径藏掉仅本地可桥接的模型/来源
+              // (订阅直连接本地 compat-proxy,openai-chat 桥接 Codex 接本地
+              // codex-proxy,远端都不经翻译)—— 否则提交才被 main 侧 guard 拒绝。
+              excludeSubscriptionDirect={sshRemote === true}
+              excludeChatBridgedCodex={sshRemote === true}
               popoverSide="bottom"
-              currentProviderId={deviceId ? undefined : providerSource}
+              currentProviderId={
+                deviceId
+                  ? undefined
+                  : sshRemote === true
+                    ? narrowProviderSource(providerSource, model)
+                    : providerSource
+              }
               onProviderChange={deviceId ? undefined : handleProviderChange}
               // providerSource=null 时面板高亮的是**解析出来的生效默认来源**,点它的
               // 语义是「把默认来源钉成显式偏好」,必须照常回调(codex review)——否则

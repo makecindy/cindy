@@ -107,6 +107,7 @@ function makeManager(
     deviceInfo: () => ({ deviceId: 'dev-1', deviceName: 'TestBox' }),
     agents: ['claude-code', 'codex'],
     notifyStatus: () => {},
+    autoBindDeferMs: 5,
     log: noopLog,
     ...overrides,
   });
@@ -3193,7 +3194,7 @@ describe('多 workspace 绑定(multi-team)', () => {
     });
     manager.armAutoBind();
     sock.send(serializeHookMessage(makeBindState({ bindings: [] })));
-    // 延迟窗(300ms)后发起
+    // 测试注入 5ms 延迟窗后发起；生产默认仍为 300ms。
     const bind = await server.waitFor('bind.start');
     expect(bind.type).toBe('bind.start');
     const authorizeUrl = 'https://slack.example.com/authorize?state=first';
@@ -3213,41 +3214,57 @@ describe('多 workspace 绑定(multi-team)', () => {
 
   it('armAutoBind + 空 bind.state 后紧跟 pending 回放: 重新发起换新链接, 不用旧链接弹浏览器', async () => {
     const opened: string[] = [];
-    const { manager, sock, server } = await connectMulti({
-      managerOverrides: { openExternalUrl: (u) => opened.push(u) },
+    let resolveOpened!: () => void;
+    const openedPromise = new Promise<void>((resolve) => {
+      resolveOpened = resolve;
     });
-    manager.armAutoBind();
-    sock.send(serializeHookMessage(makeBindState({ bindings: [] })));
-    // server 回放旧的进行中授权(旧链接) —— 在延迟窗内先到
-    sock.send(
-      serializeHookMessage(
-        makeBindUpdate({
-          state: 'pending',
-          slackUserId: null,
-          slackUserName: null,
-          message: null,
-          authorizeUrl: 'https://slack.example.com/authorize?state=stale',
-        }),
-      ),
-    );
-    await server.waitFor('bind.start');
-    expect(opened).toEqual([]); // 旧链接不弹
-    const freshUrl = 'https://slack.example.com/authorize?state=fresh';
-    sock.send(
-      serializeHookMessage(
-        makeBindUpdate({
-          state: 'pending',
-          slackUserId: null,
-          slackUserName: null,
-          message: null,
-          authorizeUrl: freshUrl,
-        }),
-      ),
-    );
-    await expect.poll(() => opened, { timeout: 3000 }).toEqual([freshUrl]);
-    // 延迟窗过去后也不会再多发一次 bind.start(意图已消费)
-    await new Promise((r) => setTimeout(r, 400));
-    expect(server.frames.filter((f) => f.type === 'bind.start')).toHaveLength(1);
+    const { manager, sock, server } = await connectMulti({
+      managerOverrides: {
+        openExternalUrl: (u) => {
+          opened.push(u);
+          resolveOpened();
+        },
+      },
+    });
+    vi.useFakeTimers();
+    try {
+      manager.armAutoBind();
+      sock.send(serializeHookMessage(makeBindState({ bindings: [] })));
+      // server 回放旧的进行中授权(旧链接) —— 在延迟窗内先到
+      sock.send(
+        serializeHookMessage(
+          makeBindUpdate({
+            state: 'pending',
+            slackUserId: null,
+            slackUserName: null,
+            message: null,
+            authorizeUrl: 'https://slack.example.com/authorize?state=stale',
+          }),
+        ),
+      );
+      await server.waitFor('bind.start');
+      expect(opened).toEqual([]); // 旧链接不弹
+      const freshUrl = 'https://slack.example.com/authorize?state=fresh';
+      sock.send(
+        serializeHookMessage(
+          makeBindUpdate({
+            state: 'pending',
+            slackUserId: null,
+            slackUserName: null,
+            message: null,
+            authorizeUrl: freshUrl,
+          }),
+        ),
+      );
+      await openedPromise;
+      expect(opened).toEqual([freshUrl]);
+      // 精确推进测试注入的延迟窗；旧 timer 已在 pending 回放路径清除,
+      // 因此不会再发第二个 bind.start。
+      await vi.advanceTimersByTimeAsync(5);
+      expect(server.frames.filter((f) => f.type === 'bind.start')).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('首绑终止态(denied): 开关弹回后快照保留 pendingBind 终止态(设置页兜底行数据源)', async () => {

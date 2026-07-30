@@ -68,6 +68,8 @@ interface RightSidebarProps {
   isMaximized?: boolean;
   /** 左侧栏完全收起且 RSB maximize 时，为顶栏左上角浮动 ChromeActions 让位。 */
   reserveLeftChromeActions?: boolean;
+  /** 工具面板位于最左且左侧栏为 rail 时，顶栏承接 ChromeActions 的 no-drag 命中区。 */
+  railChromeActionsHitHole?: boolean;
   /** 「在新窗口中打开侧边栏」:开偏好 + 弹出子窗口。Win 端 TabBar 内渲染按钮
    *  (Mac 走 MainLayout 浮层,不经此 prop)。 */
   onDetach?: () => void;
@@ -87,6 +89,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
     onMaximize,
     isMaximized,
     reserveLeftChromeActions = false,
+    railChromeActionsHitHole = false,
     sessionId,
     workdir,
     remoteHostId,
@@ -258,6 +261,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
           onMaximize={onMaximize}
           isMaximized={isMaximized}
           reserveLeftChromeActions={reserveLeftChromeActions}
+          railChromeActionsHitHole={railChromeActionsHitHole}
           onDetach={onDetach}
           // B3:主窗口内嵌形态 Tab 条空白处 = 拖面板手势面(窗口拖动走左栏顶行)。
           chromeWindowDrag={false}

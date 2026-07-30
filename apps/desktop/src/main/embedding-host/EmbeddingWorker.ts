@@ -47,6 +47,12 @@ export interface EmbeddingWorkerOptions {
   getClient: () => EmbeddingClient;
   /** sqlite-vec 加载失败 → 返回 false; Worker 不打 tick, 仅 warn 一次 */
   isVecAvailable: () => boolean;
+  /**
+   * 停用轴(PR #744 review 第十六轮):embedding 批是经 XD 网关的自主付费调用,
+   * 用户停用该供应商时 worker 必须停批(job 保持 pending,恢复启用后自然续跑)。
+   * host 注入(= 查 model-disable override 的供应商级停用);缺席 = 不查。
+   */
+  isRouteSuspended?: (modelId?: string) => boolean;
   log: ReturnType<typeof createLogger>;
 }
 
@@ -62,6 +68,7 @@ export class EmbeddingWorker {
   private lastTickAt: number | null = null;
   private lastTickProcessed: number | null = null;
   private vecWarned = false;
+  private suspendedWarned = false;
   // 关闭 / 切账号时由 stop() 置 true。in-flight tick 在每个 await 点之后检查它,
   // 一旦为 true 就立刻放弃后续写库直接返回 —— 那批 job 保持 status='pending',
   // 下次启动自动续跑 (零丢失)。目的是退出时让 worker 立即让出 SQLite 写连接,
@@ -150,6 +157,23 @@ export class EmbeddingWorker {
       this.lastTickProcessed = 0;
       return;
     }
+    if (this.opts.isRouteSuspended?.()) {
+      // 供应商被用户停用:本轮不取批不下单,job 全部保持 pending;恢复启用后
+      // 下一个 tick 自然续跑。warn 一次防刷屏。
+      if (!this.suspendedWarned) {
+        this.opts.log.warn(
+          JSON.stringify({
+            event: 'embeddingWorker.tick.skip.providerSuspended',
+            reason: 'embedding provider disabled in settings; jobs stay pending',
+          }),
+        );
+        this.suspendedWarned = true;
+      }
+      this.lastTickAt = Date.now();
+      this.lastTickProcessed = 0;
+      return;
+    }
+    this.suspendedWarned = false;
 
     const now = Date.now();
 
@@ -242,6 +266,18 @@ export class EmbeddingWorker {
       // 4. 按 model_id 分组调 embed
       const byModel = groupBy(liveJobs, (j) => j.model_id);
       for (const [modelId, modelJobs] of byModel.entries()) {
+        // 逐模型停用(PR #744 review 第十九轮):该 embedding 模型被点名停用时本组
+        // 不下单,job 保持 pending,恢复启用后续跑。
+        if (this.opts.isRouteSuspended?.(modelId as string)) {
+          this.opts.log.warn(
+            JSON.stringify({
+              event: 'embeddingWorker.tick.skip.modelDisabled',
+              modelId,
+              count: modelJobs.length,
+            }),
+          );
+          continue;
+        }
         const inputs = modelJobs.map((j) => textByRowid.get(j.rowid) as string);
         try {
           const res = await this.opts.getClient().embed({ texts: inputs, model: modelId as never });

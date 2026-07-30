@@ -45,16 +45,16 @@ export function CollaborationSection() {
 
   if (!settings) {
     return (
-      <div className="px-1 py-8 text-center text-13 text-[var(--text-tertiary)]">
+      <div className="py-8 text-center text-13 text-[var(--text-tertiary)]">
         {t('settings.collaboration.loading')}
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-6 px-1">
+    <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-15 font-medium text-[var(--text-primary)]">
+        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
           {t('settings.collaboration.title')}
         </h2>
         <DefaultOverrideControls

@@ -20,7 +20,13 @@ import type { AgentEvent } from '@cindy/maker-core';
 import { buildContinuationDirective, buildFirstTurnDirective } from './directive';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton';
 import { prependHandoffToUserMessage } from '../maker-ipc/agentHandoff';
-import { classifyTurnUsageLimit } from './usageLimit';
+import {
+  MAX_CONSECUTIVE_OVERLOAD_TURNS,
+  OVERLOAD_LAST_REASON,
+  OVERLOAD_RESUME_DELAY_MS,
+  classifyTurnOverload,
+  classifyTurnUsageLimit,
+} from './usageLimit';
 import { parseVerdict, type GoalVerdict } from './verdict';
 import {
   TERMINAL_GOAL_STATUSES,
@@ -131,8 +137,12 @@ export interface TurnOutcome {
   /** 本轮是否以终止型 error 收尾。 */
   errored: boolean;
   errorMessage?: string;
-  /** 错误归类:'usage_limit' = 账号限流(→ usageLimited);否则按 abort/真错处理。 */
-  errorKind?: 'usage_limit';
+  /**
+   * 错误归类:'usage_limit' = 账号限流,'overload' = 上游模型没容量。两者都置
+   * usageLimited(可恢复、到点自动续),区别只在等多久——限额等账号周期重置,
+   * 过载等一分钟(见 usageLimit.ts)。其它错误按 abort/真错处理。
+   */
+  errorKind?: 'usage_limit' | 'overload';
 }
 
 export interface GoalDecision {
@@ -189,11 +199,13 @@ export function decideNextGoalState(prev: GoalCounters, outcome: TurnOutcome): G
   //  - 其它错误 → blocked(止损,避免反复撞错空转),用户处理后可重起。
   if (outcome.errored) {
     const msg = outcome.errorMessage ?? 'unknown error';
-    // 账号限流 → usageLimited(可恢复、到点自动续;resetAt 由 finalizeTurn 读快照补)。
-    if (outcome.errorKind === 'usage_limit') {
+    // 账号限流 / 上游过载 → usageLimited(可恢复、到点自动续;resetAt 由 finalizeTurn
+    // 按 errorKind 分别补:限额读账号快照,过载用固定短窗口)。
+    if (outcome.errorKind === 'usage_limit' || outcome.errorKind === 'overload') {
       return {
         status: 'usageLimited',
-        lastReason: 'usage limit reached',
+        lastReason:
+          outcome.errorKind === 'overload' ? OVERLOAD_LAST_REASON : 'usage limit reached',
         turnsUsed,
         tokensUsed,
         noProgressStreak: prev.noProgressStreak,
@@ -315,6 +327,16 @@ export class GoalController {
   /** usageLimited 到点自动续跑 timer,按 sessionId。**stopSession 不清它**(它要熬到限额重置),
    *  只在 clearGoal / resumeGoal / dispose 取消。 */
   private readonly usageResumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * 连续以"上游没容量"收尾的轮数,按 sessionId。
+   *
+   * 存在理由:三道预算护栏(budgetTokens / maxTurns / noProgressLimit)**都只在用户
+   * 设了对应上限时生效**,而过载轮既不产出 token 也不动 noProgressStreak。没有这个
+   * 计数器时,一个没设任何上限的目标遇上持续容量故障就会每分钟自动续一轮、永不停止。
+   * 只在内存里记:进程重启本身就打断了循环,重启后重新计数最多多跑几轮,不值得为它
+   * 动 schema。有产出的一轮(或手动 resume)即清零。
+   */
+  private readonly consecutiveOverloadTurns = new Map<string, number>();
   private readonly now: () => number;
   private readonly debounceMs: number;
 
@@ -332,6 +354,10 @@ export class GoalController {
     if (!objective) throw new GoalControllerInputError('objective must not be empty');
     // 新建 / 编辑目标 → 重置"已澄清"闸门(新目标允许重新澄清改写一次)。
     this.clarificationApplied.delete(sessionId);
+    // 连续过载计数是 per-goal 状态：换目标(含替换既有目标的编辑路径)必须清零，
+    // 否则上一个目标撞过载上限变 blocked 后，新目标会继承耗尽的计数，第一次容量
+    // 错误就直接 blocked、拿不到自己的重试预算。
+    this.consecutiveOverloadTurns.delete(sessionId);
     const existing = await this.deps.storage.get(sessionId);
     const ts = this.now();
 
@@ -499,6 +525,7 @@ export class GoalController {
   /** 清除目标(用户主动)。删行 + 停止一切续跑 + 取消 usage 自动续 + 通知 renderer 隐藏指示器。 */
   async clearGoal(sessionId: string): Promise<void> {
     this.clarificationApplied.delete(sessionId);
+    this.consecutiveOverloadTurns.delete(sessionId);
     this.cancelUsageResume(sessionId);
     this.stopSession(sessionId);
     await this.deps.storage.clear(sessionId);
@@ -528,7 +555,7 @@ export class GoalController {
    * (与 setGoal 全清零相反),重挂 listener,空闲则立即续一轮。终态(complete/budgetLimited)
    * /已 active 不处理。
    */
-  async resumeGoal(sessionId: string): Promise<void> {
+  async resumeGoal(sessionId: string, opts?: { auto?: boolean }): Promise<void> {
     const state = await this.deps.storage.get(sessionId);
     if (
       !state ||
@@ -537,6 +564,11 @@ export class GoalController {
       return;
     }
     this.cancelUsageResume(sessionId); // 早恢复 / 手动恢复 → 取消挂着的自动续 timer
+    // 用户显式恢复 = 给一次干净的重来机会,连续过载计数清零(否则上次被过载掐停
+    // 的目标一恢复就立刻又撞上限)。
+    // **自动续跑(opts.auto)绝不清零**:到点自动续跑正是过载循环的一环,在这里清
+    // 等于让计数永远回到 0,止损闸门形同不存在。
+    if (!opts?.auto) this.consecutiveOverloadTurns.delete(sessionId);
     const updated = await this.deps.storage.update(sessionId, {
       status: 'active',
       noProgressStreak: 0, // 给一次干净续跑机会(原暂停可能正是空轮触顶)
@@ -668,6 +700,7 @@ export class GoalController {
     for (const sessionId of [...this.usageResumeTimers.keys()]) {
       this.cancelUsageResume(sessionId);
     }
+    this.consecutiveOverloadTurns.clear();
   }
 
   // ── 内部 ───────────────────────────────────────────────────────────────────
@@ -802,6 +835,28 @@ export class GoalController {
 
     const origin: 'goal' | 'other' = event.turnOrigin?.kind === 'goal' ? 'goal' : 'other';
     const errorMessage = errored ? extractErrorMessage(event.data) : undefined;
+    // 连续过载计数:自动续跑的止损闸门。三道预算护栏都可能没设,过载轮又不产出
+    // token、不推进 noProgressStreak,所以必须有一个不依赖用户配置的上限。
+    // 本轮不是过载(成功、真错、或用户 Stop)→ 立刻清零,只掐"连续"过载。
+    const isOverloadTurn = errored && classifyTurnOverload(event.data);
+    if (!isOverloadTurn) {
+      this.consecutiveOverloadTurns.delete(sessionId);
+    }
+    const overloadStreak = isOverloadTurn
+      ? (this.consecutiveOverloadTurns.get(sessionId) ?? 0) + 1
+      : 0;
+    if (isOverloadTurn) this.consecutiveOverloadTurns.set(sessionId, overloadStreak);
+    // `>=`：streak 达到上限的那一轮就停。用 `>` 会让 1/2/3 各续一轮、直到第 4 轮
+    // 才判死，实际变成 4 轮 ≈ 20 次上游请求，与承诺的 3 轮 15 次不符
+    // （review #844 codex P1）。
+    const overloadBudgetExhausted = overloadStreak >= MAX_CONSECUTIVE_OVERLOAD_TURNS;
+    if (overloadBudgetExhausted) {
+      this.deps.logger.warn('[goal] consecutive overload turns exhausted — stopping auto-resume', {
+        sessionId,
+        overloadStreak,
+        max: MAX_CONSECUTIVE_OVERLOAD_TURNS,
+      });
+    }
     const outcome: TurnOutcome = {
       origin,
       sawToolUse: turn?.sawToolUse ?? false,
@@ -809,8 +864,20 @@ export class GoalController {
       verdict: origin === 'goal' ? parseVerdict(turn?.text ?? '') : null,
       errored,
       errorMessage,
-      // 被动检测:本轮以"账号限流"型 error 收尾 → 标记,decideNextGoalState 据此置 usageLimited。
-      ...(errored && classifyTurnUsageLimit(event.data) ? { errorKind: 'usage_limit' as const } : {}),
+      // 被动检测:本轮以"账号限流"或"上游没容量"型 error 收尾 → 标记,
+      // decideNextGoalState 据此置 usageLimited(非终态、到点自动续)。
+      // **过载优先判**:529 同时命中两条判定,但只有过载分支能拿到可用的 resetAt
+      // ——走限额分支会因 getAccountLimit 不报 limited 而停在原地等人手动 resume。
+      // 连续过载超上限后不再当可恢复态:命中过载但预算已耗尽时留空 errorKind,
+      // 落回真错分支(blocked)。注意这只收紧过载——真账号限流不受本计数影响,
+      // 它有自己的 resetAt 恢复路径。
+      ...(errored && isOverloadTurn
+        ? overloadBudgetExhausted
+          ? {}
+          : { errorKind: 'overload' as const }
+        : errored && classifyTurnUsageLimit(event.data)
+          ? { errorKind: 'usage_limit' as const }
+          : {}),
     };
     if (origin === 'goal') this.goalTurnsInFlight.delete(sessionId);
 
@@ -858,7 +925,13 @@ export class GoalController {
     let lastReason = decision.lastReason;
     let shouldFire = decision.shouldFire;
     let usageResetAt: number | null = null;
-    if (status === 'usageLimited' || shouldFire) {
+    // 过载改判:上游没容量与账号限流是两种恢复时机。这里用固定短窗口,不去查
+    // getAccountLimit——账号并没有被限流,那个接口不会给出可用的 resetAt,查了只会
+    // 让目标停在 usageLimited 等人手动 resume。
+    if (status === 'usageLimited' && outcome.errorKind === 'overload') {
+      usageResetAt = this.now() + OVERLOAD_RESUME_DELAY_MS;
+      shouldFire = false;
+    } else if (status === 'usageLimited' || shouldFire) {
       const limit = this.deps.getAccountLimit
         ? await this.deps.getAccountLimit(state.agentKind).catch(() => null)
         : null;
@@ -951,19 +1024,65 @@ export class GoalController {
     }
   }
 
-  /** 限额重置时刻到了:若仍 usageLimited,落一条"用量已恢复"提示后 resume 续跑。 */
+  /**
+   * 退避窗口到点了:若仍 usageLimited,落一条提示后 resume 续跑。
+   *
+   * 注意这里**没有任何探测**:账号限流用的是账号额度给的重置时刻,过载用的是固定
+   * 60s 干等。所以过载那条提示只能说"正在重试",不能说"已恢复"(见 noticeKind)。
+   */
   private async autoResumeFromUsageLimit(sessionId: string): Promise<void> {
     this.usageResumeTimers.delete(sessionId);
     const state = await this.deps.storage.get(sessionId).catch(() => null);
     if (!state || state.status !== 'usageLimited') return; // 用户可能已 clear / 手动 resume
-    if (this.deps.persistGoalNotice) {
+    // 预算已经用尽时一条都不该说：下面的 resumeGoal → fireTurn 有 preflight 预算守卫，
+    // 会立刻把目标转成 budgetLimited、一轮都不发，而这张卡片已经落库，会在会话里永久
+    // 留下一句「正在重试目标 / 用量已恢复」——那次重试根本没发生（review #844 codex P1）。
+    // 判据与 fireTurn 用的是同一个 exceedsGoalBudget，结论必然一致；仍照常走 resumeGoal，
+    // 由它把状态转成 budgetLimited。
+    const budgetAlreadyExhausted = exceedsGoalBudget(state);
+    // 同理的第二种"这条重试根本没发生":会话此刻拿不到 live session(已关闭 / 暂时 hydrate
+    // 不出来)。resumeGoal 忽略 ensureSession 的结果、照样把目标转 active,而 fireTurn 拿不到
+    // session 就直接 return —— 既没有 listener 也没有续跑 timer,目标停在 active 不动,而卡片
+    // 已经落库说"正在重试目标"(review #844 codex P1)。
+    //
+    // 这里先探一次:拿不到就**原样留在 usageLimited**(可恢复态)——存档里 usageResetAt 还在,
+    // 用户手动 resume 或下次启动的 usageLimited 重排(见 start() 里按 listUsageLimited 补排
+    // timer)都会再试一次;既不落假卡片,也不把目标推进一个停滞的 active。
+    // 刻意不在这里重排 timer:hydrate 不出来通常不是几十秒能自愈的,循环重排只会空转。
+    // ensureSession 是幂等的 ensure 语义,下面 resumeGoal 再调一次拿到的是同一个 session。
+    // **预算已耗尽的目标不需要 live session 就能收口**: fireTurn 的预算 preflight 跑在
+    // ensureSession 之前, 会把状态转成 budgetLimited(终态)并 stopSession。把下面的
+    // hydrate 守卫排在它前面, 会让这种目标停在 usageLimited + 已过期的 usageResetAt,
+    // 直到手动 resume 或进程重启才收口(review #844 codex P1)。
+    const liveSession = budgetAlreadyExhausted
+      ? null
+      : await this.deps.ensureSession(sessionId).catch(() => null);
+    if (!budgetAlreadyExhausted && !liveSession) {
+      this.deps.logger.warn('[goal] skipped auto resume — no live session; staying usageLimited', {
+        sessionId,
+        lastReason: state.lastReason ?? null,
+      });
+      return;
+    }
+    if (this.deps.persistGoalNotice && !budgetAlreadyExhausted) {
+      // 过载与账号限流共用 usageLimited 状态和这同一个 timer，但说法必须分开：
+      // 账号从没被限流时报「额度已重置」是假信息（review #844 codex P1）。
+      // 判据用存档的 lastReason 而不是内存计数——后者在进程重启后会丢，而
+      // usageLimited 目标恰好会在重启后按存档的 usageResetAt 重排 timer。
+      const noticeKind =
+        state.lastReason === OVERLOAD_LAST_REASON ? 'capacity-resumed' : 'usage-resumed';
       try {
-        await this.deps.persistGoalNotice(sessionId, 'usage-resumed');
+        await this.deps.persistGoalNotice(sessionId, noticeKind);
       } catch (e) {
         this.deps.logger.warn('[goal] persistGoalNotice failed', { sessionId, error: String(e) });
       }
+    } else if (budgetAlreadyExhausted) {
+      this.deps.logger.info('[goal] skipped resume notice — budget already exhausted', {
+        sessionId,
+      });
     }
-    await this.resumeGoal(sessionId);
+    // auto:true —— 这是到点自动续跑，不是用户显式恢复，不得清零连续过载计数。
+    await this.resumeGoal(sessionId, { auto: true });
   }
 
   private async fireTurn(sessionId: string): Promise<void> {

@@ -1,6 +1,7 @@
 import type { CindyProxyMediaBackendDeps } from './types.js';
 import type { CindyProxyMediaService, CindyProxyMediaServiceOptions } from './types.js';
 import { createGatewayImageClient } from './api/gatewayImageClient.js';
+import { isProviderModelRouteDisabled } from '../utility-model/oneShotCandidates.js';
 import { VideoProviderRegistry } from './video/registry.js';
 
 /**
@@ -14,6 +15,13 @@ export function createCindyProxyMediaService(opts: CindyProxyMediaServiceOptions
     proxy: opts.imageApi.proxy,
     fetchImplementation: opts.imageApi.fetchImplementation,
     logger: opts.logger,
+    // 停用轴:XD 图像通道的提交紧前重查(凭证/读图 await 窗口内被停用即拒,
+    // PR #744 review 第二十一轮)。
+    beforeDispatch: (model) => {
+      if (isProviderModelRouteDisabled('xd', model)) {
+        throw new Error('图像模型已在设置中停用,本次生成已取消');
+      }
+    },
   });
 
   // Build the video provider registry only when we actually have providers

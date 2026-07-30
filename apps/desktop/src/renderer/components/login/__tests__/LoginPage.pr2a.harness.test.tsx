@@ -143,7 +143,7 @@ describe('method-choice', () => {
     expect(screen.getByTestId('login-back-button')).toBeTruthy();
   });
 
-  it('多 connection:双企业行 158/278,个人行按 demo 仲裁抑制(440 面板仅容两行)', async () => {
+  it('多 connection:双企业行 158/278,个人行按 demo 仲裁抑制(方式行只排两行)', async () => {
     mount(await methodChoiceState('sso:multi'));
     expect(screen.getByTestId('login-method-sso-scenario-conn-1').style.top).toBe('158px');
     expect(screen.getByTestId('login-method-sso-scenario-conn-2').style.top).toBe('278px');

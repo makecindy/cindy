@@ -81,6 +81,7 @@ const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
   'xiaomi-mimo-api-cn': 'xiaomimimo',
   'xiaomi-mimo-token-plan-cn': 'xiaomimimo',
   'volcengine-coding-plan': 'volcengine',
+  'volcengine-agent-plan': 'volcengine',
   'tencentcloud-coding-plan': 'tencentcloud',
   'opencode-go': 'opencode',
   'vercel-ai-gateway': 'vercel',

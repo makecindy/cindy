@@ -6,6 +6,7 @@
  *   messages[]                → input[](按 block 顺序拆成 message / function_call /
  *                               function_call_output / reasoning 四种 item)
  *   tools[].input_schema      → function tools[].parameters
+ *   (provider 声明)            → 追加在 function tools 之后的上游服务端工具(如 xAI x_search)
  *   tool_choice               → tool_choice
  *   thinking.budget_tokens    → reasoning.effort
  *   max_tokens                → max_output_tokens
@@ -24,8 +25,10 @@ import type {
   AnthropicMessagesRequest,
   AnthropicToolChoice,
   ResponsesContentPart,
+  ResponsesFunctionTool,
   ResponsesInputItem,
   ResponsesRequest,
+  ResponsesServerTool,
   ResponsesTool,
   ResponsesToolChoice,
 } from './types.js';
@@ -55,7 +58,19 @@ function toolResultToString(content: unknown): string {
           if (rec.type === 'text' && typeof rec.text === 'string') return rec.text;
           // 工具结果里嵌图片等非文本内容:Responses 的 function_call_output 只吃字符串,
           // 退化成占位描述,不丢整条(模型仍知道该工具产出过内容)。
-          if (rec.type === 'image') return '[image]';
+          // 占位文案必须说明「有图但送不到、不要猜」:字符串限制是协议层的,与模型
+          // 是否具备视觉能力无关;不带说明的 '[image]' 会被模型当作空结果,诱发反复
+          // 重读或臆测图像内容。图像走 user 消息路径仍可正常送达(input_image)。
+          if (rec.type === 'image') {
+            return (
+              '[image omitted: this tool returned an image, but tool results on this '
+              + 'provider route are delivered as plain text only, so the image data could '
+              + 'not be included. Do NOT guess or fabricate what the image contains. '
+              + 'Tell the user the image could not be delivered on the current route, and '
+              + 'ask them to paste the relevant content as text or attach the image '
+              + 'directly to a chat message instead.]'
+            );
+          }
           return JSON.stringify(rec);
         }
         return String(b);
@@ -238,6 +253,31 @@ function budgetToEffort(thinking: AnthropicMessagesRequest['thinking']): 'low' |
   return 'high';
 }
 
+/**
+ * 解析最终下发的 `tool_choice`,在**不动摇工具声明**的前提下尽量保住「强制调用本地工具」语义。
+ *
+ * Anthropic `tool_choice:{type:'any'}` → Responses `required`,意为「必须调用所提供工具之一」。
+ * 但 Responses 的 required 作用于**整个** tools 数组:同时声明了服务端工具(如 x_search)时,
+ * 上游可以靠跑一次搜索就满足 required,调用方强制要的那次本地 function call 永远不发生。
+ *
+ * 处理方式是收窄 tool_choice、而不是把服务端工具摘掉(摘掉会破坏 tools 前缀的跨轮稳定性):
+ *   - 恰好只有一个 function tool → 直接指名它,语义完全等价且不可能被服务端工具顶替;
+ *   - 有多个 function tool → Responses 无法表达「required 但只限这几个」,保留 required。
+ *     残余风险:模型可能用服务端工具满足 required。相比让 tools 声明在会话中途变动(缓存全程
+ *     失效、且违反 §3.1),这里选择保留声明稳定性并接受该残余风险。
+ *   - `{type:'tool',name}` / `auto` / `none` 本就不会被服务端工具顶替,原样透传。
+ */
+function resolveToolChoice(
+  raw: AnthropicToolChoice | undefined,
+  functionTools: ResponsesFunctionTool[],
+  hasServerSideTools: boolean,
+): ResponsesToolChoice | undefined {
+  const choice = toolChoiceToResponses(raw);
+  if (choice !== 'required' || !hasServerSideTools) return choice;
+  if (functionTools.length === 1) return { type: 'function', name: functionTools[0].name };
+  return choice;
+}
+
 /** Responses 端点接受的 reasoning effort 档(codex / api.x.ai 通用)。 */
 export type ResponsesReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
 
@@ -270,6 +310,12 @@ export interface TranslateRequestOptions {
    * 省略 = 不回放任何带 signature 的 reasoning(保守:无法证明出处即不回放)。
    */
   providerPrefix?: string;
+  /**
+   * 上游自带的服务端工具声明(如 xAI 的 `{ type: 'x_search' }`),由 provider 配置按 model 决定。
+   * 恒定追加在 function tools **之后**,顺序稳定,保证请求前缀在会话内逐轮一致。
+   * 请求本身没有任何 function tool 时也会单独下发(纯服务端工具轮)。
+   */
+  serverSideTools?: ResponsesServerTool[];
 }
 
 /**
@@ -290,13 +336,24 @@ export function translateRequest(
     input.push(...messageToInputItems(msg, reasoningReplay));
   }
 
-  const tools: ResponsesTool[] | undefined = req.tools?.map((t) => ({
+  // 显式用 ResponsesFunctionTool(而非放宽后的 ResponsesTool 联合):function tool 的
+  // name / parameters 等必填字段要在编译期被校验,别被服务端工具那个 `type: string`
+  // 兜底分支放过去。
+  const functionTools: ResponsesFunctionTool[] = (req.tools ?? []).map((t) => ({
     type: 'function',
     name: t.name,
     description: t.description,
     strict: false,
     parameters: t.input_schema ?? { type: 'object', properties: {} },
   }));
+  // 服务端工具的声明**只由 model 决定**,不受任何单轮请求态(含 tool_choice)影响 ——
+  // 这是 BridgeProviderConfig.serverSideTools 的契约,也是 prompt 前缀稳定性的前提:
+  // 若某一轮因 tool_choice 把它摘掉、下一轮又装回来,同一会话的 tools 前缀就会来回变化,
+  // 缓存全程失效(见 docs/dev-rules/maker-core-and-agent-behavior.md §3.1)。
+  // 恒定排在 function tools 之后,位置固定。
+  const serverSideTools = opts.serverSideTools ?? [];
+  const tools: ResponsesTool[] = [...functionTools, ...serverSideTools];
+  const toolChoice = resolveToolChoice(req.tool_choice, functionTools, serverSideTools.length > 0);
 
   const out: ResponsesRequest = {
     model: opts.model,
@@ -316,11 +373,17 @@ export function translateRequest(
 
   const instructions = systemToInstructions(req.system);
   if (instructions) out.instructions = instructions;
-  if (tools && tools.length > 0) {
-    out.tools = tools;
-    out.parallel_tool_calls = true;
-    const tc = toolChoiceToResponses(req.tool_choice);
-    if (tc) out.tool_choice = tc;
+  if (tools.length > 0) out.tools = tools;
+  // parallel_tool_calls 只描述**本地 function tool** 的并行策略,纯服务端工具轮不发。
+  if (functionTools.length > 0) out.parallel_tool_calls = true;
+  // tool_choice:
+  //   - 有 function tool → 原样下发(含 required / 指名 function / auto / none);
+  //   - 没有 function tool → 只下发 `none`。`none` 是调用方**显式禁止用工具**,而我们仍会
+  //     声明服务端工具(声明只由 model 决定,见上),不把 none 传下去就等于放开 x_search、
+  //     把调用方的禁令反过来了。其余档在无 function tool 时不发:指名 function 会指向不存在
+  //     的工具;required 则会把「必须用工具」落到服务端工具上,等于替调用方决定去搜一次。
+  if (toolChoice && (functionTools.length > 0 || toolChoice === 'none')) {
+    out.tool_choice = toolChoice;
   }
   if (opts.maxOutputTokensSupported && typeof req.max_tokens === 'number' && req.max_tokens > 0) {
     out.max_output_tokens = req.max_tokens;

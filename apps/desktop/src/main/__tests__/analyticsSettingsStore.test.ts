@@ -63,6 +63,7 @@ describe('analytics settings store', () => {
     expect(store.readAnalyticsSettings()).toEqual({
       privacyConsentAccepted: false,
       analyticsEnabled: true,
+      legacyConsentMigrationClosed: false,
     });
     expect(store.isAnalyticsAllowed()).toBe(false);
     expect(fs.existsSync(settingsFile())).toBe(false);
@@ -92,6 +93,7 @@ describe('analytics settings store', () => {
     expect(store.readAnalyticsSettings()).toEqual({
       privacyConsentAccepted: true,
       analyticsEnabled: false,
+      legacyConsentMigrationClosed: false,
     });
     expect(store.isAnalyticsAllowed()).toBe(false);
 
@@ -145,15 +147,25 @@ describe('analytics settings store', () => {
     expect(store.__testing.normalize(null)).toEqual({
       privacyConsentAccepted: false,
       analyticsEnabled: true,
+      legacyConsentMigrationClosed: false,
     });
     // 字符串 'true' 不是布尔,不得被当成同意。
     expect(store.__testing.normalize({ privacyConsentAccepted: 'true' })).toEqual({
       privacyConsentAccepted: false,
       analyticsEnabled: true,
+      legacyConsentMigrationClosed: false,
     });
     expect(store.__testing.normalize({ analyticsEnabled: 0 })).toEqual({
       privacyConsentAccepted: false,
       analyticsEnabled: true,
+      legacyConsentMigrationClosed: false,
+    });
+    // 字符串 'true' 同样不得把迁移窗口当成已关闭(损坏内容一律回到默认 false,
+    // 后续由冷启动判定重新落盘;fail open 到「可迁移」侧的风险由 probe 闸兜底)。
+    expect(store.__testing.normalize({ legacyConsentMigrationClosed: 'true' })).toEqual({
+      privacyConsentAccepted: false,
+      analyticsEnabled: true,
+      legacyConsentMigrationClosed: false,
     });
   });
 
@@ -230,6 +242,66 @@ describe('analytics settings store', () => {
 });
 
 /**
+ * 存量迁移窗口的持久关闭 —— 2026-07-28 review P1。
+ *
+ * 攻击链:「跳过登录」与企业 SSO 都被协议门刻意豁免、一份记录都不写,于是
+ * 「跳过登录 → 从本地模式走登录入口 → 完成 SSO」之后的那次冷启动会看到
+ * 「真实账号 + 零记录」,与真正的改版前存量账号无法区分,被静默迁移成已同意。
+ * 防线:冷启动一旦明确判定「无存量登录态」,就把结论落盘,本机永久退出迁移窗口。
+ */
+describe('legacy consent migration window closure', () => {
+  it('blocks migration on the next cold start after the window is closed (skip → SSO chain)', async () => {
+    // ① 首次冷启动:跳过登录(本地模式),service 判定「无存量登录态」→ 关窗落盘。
+    const first = await importStore();
+    expect(first.closeLegacyConsentMigration()).toBe(true);
+
+    // ② 用户随后从本地模式走登录入口完成企业 SSO(免协议门,依然零同意记录)。
+    // ③ 下一次冷启动恢复出真实账号:重新加载模块 = 模拟重启,结论必须从磁盘恢复。
+    const restarted = await importStore();
+    expect(restarted.migrateExistingLoginAsConsented(true)).toBe(false);
+    expect(restarted.isAnalyticsAllowed()).toBe(false);
+    expect(
+      JSON.parse(fs.readFileSync(settingsFile(), 'utf-8')) as Record<string, unknown>,
+    ).not.toHaveProperty('privacyConsentAccepted', true);
+  });
+
+  it('is idempotent and does not touch consent or the toggle', async () => {
+    const store = await importStore();
+
+    expect(store.closeLegacyConsentMigration()).toBe(true);
+    expect(store.closeLegacyConsentMigration()).toBe(false);
+
+    // 关窗是内部标记,不是同意、也不是用户动过开关。
+    expect(store.readAnalyticsSettings()).toEqual({
+      privacyConsentAccepted: false,
+      analyticsEnabled: true,
+      legacyConsentMigrationClosed: true,
+    });
+    expect(store.isAnalyticsAllowed()).toBe(false);
+    expect(store.isAnalyticsEnabledCustomized()).toBe(false);
+  });
+
+  it('does not affect a genuine legacy user whose window was never closed', async () => {
+    // 真存量用户:改版后第一次冷启动就恢复出真实账号,从未经历「无登录态」冷启动。
+    const store = await importStore();
+
+    expect(store.migrateExistingLoginAsConsented(true)).toBe(true);
+    expect(store.isAnalyticsAllowed()).toBe(true);
+  });
+
+  it('keeps blocking even if a later write rewrites the record file', async () => {
+    // 关窗后用户在设置里动了开关 —— 文件被重写,标记必须还在。
+    const first = await importStore();
+    first.closeLegacyConsentMigration();
+    first.setAnalyticsEnabled(false);
+
+    const restarted = await importStore();
+    expect(restarted.migrateExistingLoginAsConsented(true)).toBe(false);
+    expect(restarted.readAnalyticsSettings().legacyConsentMigrationClosed).toBe(true);
+  });
+});
+
+/**
  * 构建闸 —— dev 构建绝不上报。
  *
  * dev 的 renderer 从 http://localhost:<vite 端口> 加载、每条 --isolated 沙箱各有独立
@@ -248,6 +320,7 @@ describe('analytics build gate', () => {
     expect(store.readAnalyticsSettings()).toEqual({
       privacyConsentAccepted: true,
       analyticsEnabled: true,
+      legacyConsentMigrationClosed: false,
     });
     expect(JSON.parse(fs.readFileSync(settingsFile(), 'utf-8'))).toMatchObject({
       privacyConsentAccepted: true,

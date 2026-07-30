@@ -101,11 +101,13 @@ const MANAGED_CDP_PORT = 18800;
  * Default ("managed") config: a single playwright-launched Chrome profile, headed,
  * with a STABLE persistent user-data-dir (logins survive across sessions). This is
  * the product default — a "dedicated persistent login automation browser".
+ * (`browser-backend-settings-store` resolves `'external'` as the system default,
+ * so this config is what a user who never touched the toggle gets.)
  *
  * SECURITY POSTURE (intentional, owner-decided 2026-06):
  *  - No `ssrfPolicy` is set → the strict browser-side DNS-rebinding gate +
  *    redirect-chain inspection stay OFF, so the agent CAN navigate to
- *    localhost / private-network hosts. This is deliberate: XDMaker is an internal
+ *    localhost / private-network hosts. This is deliberate: Cindy is an internal
  *    tool and users need the agent to drive local dev servers / internal sites.
  *    (Private-IP *literals* are still classified by the vendored resolver; what's
  *    intentionally allowed is hostname→private navigation.) Do not arm
@@ -224,9 +226,11 @@ const rsbBackend = new RsbWebviewBackend({
 });
 
 /**
- * Initial backend selection — driven by the persisted Phase 5 settings file.
- * On first launch (no override) the system default `'rsb-webview'` is applied
- * so users see the new behavior out of the box.
+ * Initial backend selection — driven by the persisted settings file. On first
+ * launch (no override) the system default from `browser-backend-settings-store`
+ * is applied; that default is `'external'` (the managed Chrome below). Users
+ * who explicitly picked a backend keep their choice — see the DEFAULT HISTORY
+ * note in that store for the override semantics behind the two flips.
  */
 function backendForKind(kind: BackendKind): BrowserBackend {
   switch (kind) {
@@ -368,8 +372,8 @@ export async function getBrowserAvailability(): Promise<BrowserAvailability> {
 }
 
 /**
- * Read the currently-active backend kind. Phase 1 always returns `'external'`;
- * Phase 5 wires this to a Settings-driven toggle.
+ * Read the currently-active backend kind. Reflects the Settings-driven toggle
+ * (persisted override) merged over the system default, not a fixed value.
  */
 export function getActiveBrowserBackendKind(): BackendKind {
   return router.getCurrentBackendKind();
@@ -444,7 +448,7 @@ export async function openBrowserForLogin(): Promise<void> {
   //
   // **Always** goes to the vendored runtime, NOT the router — "打开 Agent 专用浏
   // 览器" is the external Chrome workflow: user clicks it to log into sites in
-  // the dedicated XDMaker profile. If the user picked the rsb-webview backend
+  // the dedicated `Cindy` profile. If the user picked the rsb-webview backend
   // they don't need this button at all (logins go through the sidebar webview);
   // routing through router would either no-op (rsb backend's `start` is a
   // no-op) or open the wrong thing.

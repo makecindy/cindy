@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   GHOST_CARD_ACTION_ID_RE,
+  GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
   deriveGhostSessionContext,
   diffGhostPermissionItems,
   ghostContentKeys,
@@ -598,6 +599,33 @@ describe('ghost · 清单校验', () => {
     }, parsed.manifest).ok).toBe(false);
   });
 
+  it('locale 外部 key 累加器使用无原型字典，JSON 自有 __proto__ 属性不会丢失', () => {
+    const manifest: GhostManifest = {
+      schemaVersion: 2,
+      id: 'defensive-locale',
+      name: 'Defensive locale',
+      version: '1.0.0',
+      kind: 'chip',
+      entry: 'main.js',
+      slots: ['panel'],
+      panel: { html: 'panel.html' },
+      setup: {
+        requires: [{ anyOf: [{ kind: 'kv', key: '__proto__', label: 'Base label' }] }],
+      },
+    };
+    const rawLocale = JSON.parse('{"setup":{"kv":{"__proto__":{"label":"Localized label"}}}}');
+    const resource = validateGhostManifestLocaleResource(rawLocale, manifest);
+    expect(resource.ok).toBe(true);
+    if (!resource.ok) return;
+    expect(Object.getPrototypeOf(resource.resource.setup?.kv)).toBeNull();
+    expect(Object.prototype.hasOwnProperty.call(resource.resource.setup?.kv, '__proto__')).toBe(true);
+    expect(resolveGhostManifestLocale(manifest, resource.resource).setup?.requires[0]?.anyOf[0]).toEqual({
+      kind: 'kv',
+      key: '__proto__',
+      label: 'Localized label',
+    });
+  });
+
   it('icon:可选包内相对路径,扩展名白名单;非法路径/扩展名 → 拒', () => {
     const base = validateGhostManifest({ ...goodManifest(), icon: 'assets/icon.png' });
     expect(base.ok && (base as { ok: true; manifest: GhostManifest }).manifest.icon).toBe('assets/icon.png');
@@ -933,6 +961,70 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     ).toBe(false);
   });
 
+  it('会进入 locale 对象索引的清单 key 统一拒绝对象保留键名', () => {
+    const reservedKeys = ['__proto__', 'constructor', 'prototype'];
+    const withoutPanel = (manifest: Record<string, unknown>) => {
+      const result = { ...manifest };
+      delete result.panel;
+      return result;
+    };
+
+    for (const key of reservedKeys) {
+      expect(validateGhostManifest(withoutPanel({
+        ...goodManifest(),
+        slots: ['tool'],
+        tools: [{ name: key, description: 'Reserved tool' }],
+      })).ok, `tool ${key}`).toBe(false);
+
+      expect(validateGhostManifest({
+        ...goodManifest(),
+        settingsHtml: 'settings.html',
+        slots: ['panel', 'network'],
+        network: {
+          hosts: ['api.example.com'],
+          secrets: [{
+            key,
+            label: 'Reserved secret',
+            inject: { header: 'Authorization', format: 'Bearer {value}' },
+          }],
+        },
+      }).ok, `network secret ${key}`).toBe(false);
+
+      expect(validateGhostManifest({
+        ...goodManifest(),
+        settingsHtml: 'settings.html',
+        slots: ['panel', 'network'],
+        network: {
+          hosts: [],
+          connections: [{
+            key,
+            label: 'Reserved connection',
+            inject: { header: 'Authorization', format: 'Bearer {value}' },
+          }],
+        },
+      }).ok, `network connection ${key}`).toBe(false);
+
+      expect(validateGhostManifest({
+        ...goodManifest(),
+        settingsHtml: 'settings.html',
+        slots: ['panel', 'node'],
+        node: {
+          entry: 'node/worker.cjs',
+          protocol: 'json-rpc-stdio',
+          secretBindings: [{ key, label: 'Reserved node secret', methods: ['run'] }],
+        },
+      }).ok, `node secret ${key}`).toBe(false);
+
+      expect(validateGhostManifest(JSON.parse(JSON.stringify({
+        ...goodManifest(),
+        settingsHtml: 'settings.html',
+        setup: {
+          requires: [{ anyOf: [{ kv: key, label: 'Reserved setup value' }] }],
+        },
+      }))).ok, `setup kv ${key}`).toBe(false);
+    }
+  });
+
   it('panel.html 与 panel 槽必须成对出现', () => {
     // 有 html 无 panel 槽
     expect(validateGhostManifest({ ...goodChipManifest(), slots: ['model'] }).ok).toBe(false);
@@ -1095,12 +1187,34 @@ describe('ghost · cindy 能力详单校验(字段旧名 model 别名兼容)', (
       {},
       { image: ['generate', 'generate'] },
       'image',
+      { media: ['upload'] }, // media 类目只有 deposit
+      { media: [] },
     ]) {
       const v = validateGhostManifest(chipWithModel(bad));
       expect(v.ok, JSON.stringify(bad)).toBe(false);
     }
   });
 
+  // #784:media 类目落位必须独立成键——曾经的 `else cindy.video = …` 兜底
+  // 分支会把新类目的动作静默塞进 video,校验层还照样放行。
+  it('media 类目落进 cindy.media,不串到 video', () => {
+    const v = validateGhostManifest(chipWithModel({ media: ['deposit'] }));
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    expect(v.ok && v.manifest.cindy).toEqual({ media: ['deposit'] });
+    expect(v.ok && v.manifest.cindy?.video).toBeUndefined();
+  });
+
+  it('三类目可同时声明', () => {
+    const v = validateGhostManifest(
+      chipWithModel({ image: ['generate', 'edit'], video: ['edit'], media: ['deposit'] }),
+    );
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    expect(v.ok && v.manifest.cindy).toEqual({
+      image: ['generate', 'edit'],
+      video: ['edit'],
+      media: ['deposit'],
+    });
+  });
 });
 
 describe('ghost · model → cindy 旧名兼容(2026-07-11 更名)', () => {
@@ -1305,10 +1419,34 @@ describe('ghost · cindy 详单 video 类目', () => {
     expect(validateGhostManifest(withCindy({ video: ['generate', 'generate'] })).ok).toBe(false);
   });
 
-  it('未知类目报错列出全部支持类目(image / video)', () => {
+  it('未知类目报错列出全部支持类目(image / video / media)', () => {
     const bad = validateGhostManifest(withCindy({ audio: ['generate'] }));
     expect(bad.ok).toBe(false);
     expect(!bad.ok && bad.reason).toContain('video');
+    expect(!bad.ok && bad.reason).toContain('media');
+  });
+
+  // #784:寄存是唯一"不花钱就写用户媒体库"的能力,确认框必须单独列一行,
+  // 并带上主机固定说明(内含字节上限,由常量插值,不在 locale 里写死数字)。
+  it('权限清单推导:media.deposit 单独成行且带上限说明', () => {
+    const v = validateGhostManifest(withCindy({ media: ['deposit'] }));
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    if (!v.ok) return;
+    const items = ghostPermissionItems(v.manifest).filter((i) => i.kind === 'cindy');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      key: 'cindy:media.deposit',
+      labelKey: 'cindyMediaDeposit',
+      detailKey: 'cindyMediaDepositDetail',
+    });
+    // 数字与单位都从常量算出来(locale 里只有 {{quota}} 占位):反解回字节
+    // 必须等于常量本身 —— 上限调成 GB 量级时,写死 "MB" 的文案就是错的。
+    const quota = items[0].detailArgs?.quota ?? '';
+    expect(quota).toMatch(/^\d+ (MB|GB)$/);
+    const [amount, unit] = quota.split(' ');
+    expect(Number(amount) * 1024 * 1024 * (unit === 'GB' ? 1024 : 1)).toBe(
+      GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
+    );
   });
 
   it('权限清单推导:video 详单产出对应权限项(确认框自动吃到)', () => {

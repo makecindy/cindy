@@ -225,12 +225,12 @@ export function RemoteControlSection() {
   const sshSum = sshSummary(hosts, t);
 
   return (
-    <div className="flex flex-col gap-2 px-1">
+    <div className="flex flex-col gap-2">
       <div className="flex flex-col gap-1">
-        <h2 className="text-15 font-medium text-[var(--text-primary)]">
+        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
           {t('settings.remoteControl.title')}
         </h2>
-        <p className="text-12 text-[var(--text-tertiary)]">
+        <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
           {t('settings.remoteControl.description')}
         </p>
       </div>

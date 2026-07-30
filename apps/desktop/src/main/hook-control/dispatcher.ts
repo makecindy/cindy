@@ -11,11 +11,12 @@
  *      - 带 sessionId(接管): session 必须存在且其工作目录落在本连接注册的
  *        别名路径内(白名单不因接管放松), 通过后把 externalKey 重绑到它;
  *      - 不带(默认): 别名解析(映射即白名单)-> binding 查 externalKey ->
- *        复用(且重校验白名单)或新建并落绑定; 白名单重校验失败时看绑定上的
- *        目录快照与授权来源: 目录相对快照变过 = 用户在桌面端把对话移出了
- *        映射(目录是本地用户亲手选的, 不是远端指定的)-> 跟随并记 local-move;
- *        目录没再变但已记过 local-move -> 继续认这份授权(否则跟随只生效一
- *        次); 两者都不满足 = 映射被改/删的撤权语义 -> 丢绑定重建;
+ *        复用或新建并落绑定。复用与否**每条消息现场重算**, 唯一依据是会话
+ *        当前的工作目录是否仍落在工作目录映射(或内置对话根)内 —— 映射是
+ *        「远端能驱动哪些本地目录」的唯一边界, 判定不带任何**持久化授权**状态
+ *        (进程内仍有 awaitingPersist 这类短生命周期记账, 但它们只是收窄判定,
+ *        本身不构成放行依据)。移出映射(被移到别处 / 映射被改删)= 丢绑定重建,
+ *        并回一条说明怎么恢复;
  *   3. 排队: 目标 session 正在跑 turn 时 FIFO 排队, ack 回 queued + 位置;
  *      turn 收口后自动 drain;
  *   4. 回推: turn.end 经当前连接发送; 连接不在线时缓存, 重连(onConnected)
@@ -49,8 +50,9 @@ import {
 } from '@cindy/slack-hook-protocol';
 
 import { HOOK_CHAT_WORKSPACE_ALIAS } from '../../shared/hookControlIpc.js';
+import { isPathWithin } from './paths.js';
 import type { HookConnectionConfig } from './store.js';
-import type { HookBindingAuthority, HookBindingStore } from './bindings.js';
+import type { HookBindingStore } from './bindings.js';
 
 /** 会话执行器抽象 —— 生产实现 session-runner.ts(包 maker), 测试注入假的。 */
 export interface HookSessionRunner {
@@ -67,6 +69,12 @@ export interface HookSessionRunner {
 
 export interface HookRunRequest {
   sessionId: string;
+  /**
+   * IM lane 形态(externalKey 派生): 'group' = 群/topic, 'dm' = 私聊。
+   * runner 据此决定进度快照是否携带过程时间线(群内可编辑消息适合过程卡,
+   * DM 的 Rich draft 动画不适合反复重排)。缺省按 'dm' 保守处理。
+   */
+  laneKind?: 'dm' | 'group';
   /** true = 新建 session(workingDir/title 生效); false = 复用/接管已有。 */
   isNew: boolean;
   workingDir: string;
@@ -120,6 +128,14 @@ export interface HookRunRequest {
   }) => void;
   /** 交互已在本端收口(超时默认 / turn 结束), 通知 server 改写卡片。 */
   onInteractionCancel?: (interactionId: string, reason: string) => void;
+  /**
+   * "这个目录此刻还在本连接的工作目录映射内吗" —— dispatcher 注入(只有它查得到
+   * 映射)。runner 用它校验**真正要跑的那个 live session 的 workDir**: maker 对
+   * 已活着的 session id 会忽略传入的 workingDir 直接返回旧实例, 那个实例的目录
+   * 可能已被移出映射, 且实例不换就一直错配(PR #733 review 指出)。
+   * 省略 = 不校验(测试与旧调用方)。
+   */
+  isDirAuthorized?: (dir: string) => boolean;
 }
 
 export interface HookRunOutcome {
@@ -146,6 +162,16 @@ export interface HookDispatcherDeps {
    * 回退共享工作区目录, 不拒单(非 git 目录天然走回退)。
    */
   prepareWorktree?: (workingDir: string) => Promise<PrepareWorktreeResult>;
+  /**
+   * 可选: 为派发组装本地群上下文前缀(group-relay-v1 窗口, 生产为
+   * groupWindow.buildGroupContextPrefix)。只影响发给 agent 的 prompt,
+   * 不影响会话标题与 UI 渲染(二者用 source.userText / 原始 prompt);
+   * 失败或空装配 = 无前缀, 绝不因上下文拒单。commit 在任务被受理
+   * (accepted/queued)后由本模块调用, 拒单不推进窗口游标。
+   */
+  buildContextPrefix?: (
+    payload: TaskDispatchPayload,
+  ) => Promise<{ prefix: string; commit: () => void }>;
   /**
    * 可选: 内置「对话」伪目录(chat 保留别名)的解析面。rootDir 在每次
    * dispatch 时解析当前 data owner 的 app 托管目录根，allocateDir 为新会话
@@ -217,43 +243,32 @@ const MAX_QUEUE_PER_SESSION = 20;
 /** 单连接离线 turn.end 缓存上限(FIFO 丢最老)。 */
 const MAX_PENDING_TURN_ENDS = 100;
 
-/** 路径比较前的规范化。Windows 大小写不敏感(规则 15)。 */
-function normalizePathForCompare(p: string): string {
-  const resolved = path.resolve(p);
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-}
-
-/** target 是否落在 base 目录内(含相等)。Windows 大小写不敏感(规则 15)。 */
-export function isPathWithin(base: string, target: string): boolean {
-  const rel = path.relative(normalizePathForCompare(base), normalizePathForCompare(target));
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
-}
-
-/** 两个路径是否指向同一目录(同 isPathWithin 的规范化口径)。 */
-export function isSamePath(a: string, b: string): boolean {
-  return normalizePathForCompare(a) === normalizePathForCompare(b);
-}
-
 /**
- * 会话被用户移出工作目录映射后, 回给渠道的一次性说明(Slack / Telegram 侧文案
- * 不进 locale, 与 interactions.ts 的卡片按钮同规硬编码中文)。
- */
-const NOTICE_SESSION_MOVED = 'ℹ️ 这个对话已被移动到新的工作目录，后续消息都在新目录里执行。';
-/**
- * 重建说明必须如实: 旧绑定被丢弃后同一个 externalKey 立刻指向新会话, 光把
- * 老目录加回映射**不会**自动接回原对话(那条 thread 已经绑到新的了), 只有先
- * 恢复目录、再用会话选择重新指定原对话才接得回来 —— 两步缺一不可。
+ * 原对话不再落在工作目录映射内时(被移到映射外的项目, 或映射本身被改/删),
+ * 回给渠道的一次性说明(Slack / Telegram 侧文案不进 locale, 与 interactions.ts
+ * 的卡片按钮同规硬编码中文)。
+ *
+ * 必须如实: 旧绑定被丢弃后同一个 externalKey 立刻指向新对话, 光把目录加进映射
+ * **不会**自动接回原对话(那条 thread 已经绑到新的了), 只有先让目录进映射、再用
+ * 对话选择重新指定原对话才接得回来 —— 两步缺一不可。
  */
 const NOTICE_SESSION_RECREATED =
   'ℹ️ 原对话已不在可用的工作目录里，这条消息起换用了新对话，原对话的上下文不会带过来。' +
-  '想接回原对话：先到 Cindy 的 设置 → 远程连接 → 工作目录映射 把它所在的目录加回来，' +
+  '想接回原对话：先到 Cindy 的 设置 → 远程连接 → 工作目录映射 把它所在的目录加进来，' +
   '再在这里用对话选择重新指定它。';
-const NOTICE_SESSION_GONE = 'ℹ️ 原对话已被归档或删除，这条消息起换用了新对话。';
+/**
+ * 查不到原对话时的说明。措辞刻意留了余地: inspect 返回 null 是多义的 ——
+ * 会话真的没了是 null, meta / DB 读取瞬时失败也被吞成 null(session-runner
+ * 两路都 catch)。一口咬定"已被归档或删除"会在读库抖动时误导用户
+ * (PR #733 review 指出)。
+ */
+const NOTICE_SESSION_GONE = 'ℹ️ 原对话现在读不到（可能已被归档或删除），这条消息起换用了新对话。';
 
 /** 标题里消息摘要的最大长度(字符), 超出截断加省略号。 */
 const TITLE_SNIPPET_MAX = 24;
 /** Server-controlled source metadata is persisted and rendered, so keep it bounded locally too. */
 const SOURCE_USER_TEXT_MAX = 20_000;
+const SOURCE_TRIGGER_MESSAGE_ID_MAX = 64;
 const SOURCE_CHANNEL_NAME_MAX = 160;
 const SOURCE_TEAM_ID_MAX = 128;
 const SOURCE_TEAM_NAME_MAX = 160;
@@ -292,6 +307,14 @@ export function normalizeTaskSource(source: TaskSource): TaskSource {
     ...(threadContext !== undefined ? { threadContext } : {}),
     ...(source.userText !== undefined
       ? { userText: source.userText.slice(0, SOURCE_USER_TEXT_MAX) }
+      : {}),
+    ...(source.triggerMessageId !== undefined
+      ? {
+          triggerMessageId:
+            source.triggerMessageId === null
+              ? null
+              : source.triggerMessageId.slice(0, SOURCE_TRIGGER_MESSAGE_ID_MAX),
+        }
       : {}),
   };
 }
@@ -336,6 +359,13 @@ interface PendingTask {
   accountGeneration: number;
   /** 会话定位阶段产生的一次性说明, 前置到本次 turn.end 的 finalText。 */
   notice?: string;
+  /**
+   * 本次定位为新会话预建的 worktree 的回收句柄。**只在这个任务最终没能进
+   * runner 时调用** —— 正常执行时 worktree 归会话所有, 不能回收。少了它,
+   * 执行前的映射收口一旦拦下任务, 刚建好的 worktree 目录与分支就成了没有会话
+   * 认领的孤儿, 反复改映射会累积(PR #733 review 指出)。
+   */
+  cleanupWorktree?: () => Promise<void>;
 }
 
 export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
@@ -344,6 +374,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     bindings,
     runner,
     prepareWorktree,
+    buildContextPrefix,
     dialogue,
     abortSession,
     archiveSessionRow,
@@ -402,6 +433,22 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   const pendingTurnEnds = new Map<string, HookMessage[]>();
   /** 正在执行 turn 的 session(本模块发起的)。 */
   const running = new Set<string>();
+  /**
+   * 本 dispatcher 刚新建、但**还没被确认落库**的 session -> 建它时用的目录。
+   * 免检快路径只认这张表(见 resolveTarget)—— `inspect()` 返回 null 是多义的:
+   * session 不存在是 null, meta / DB 读取瞬时失败也被吞成 null(session-runner
+   * 两路都 catch)。只凭 null 放行, 一次读库抖动就能让已落库、已被移出映射的
+   * session 继续收消息, 绕过映射边界(PR #733 review 指出)。
+   *
+   * 存目录而不只是 id: 会话还没落库的这段时间里别名映射可能已被改指, 免检时
+   * 要拿它跟当前映射重新比一次 —— 否则那条消息会排进一个建在已撤权目录里的
+   * 会话(同一轮 review 指出)。它不是"授权凭据", 只是 dispatcher 自己刚用过的
+   * 目录的进程内记账, 每次都要重新过映射校验才算数。
+   *
+   * 出表的两个口子: 任何一次 inspect 成功查到它(说明已落库), 或它的 turn
+   * 收口(run 返回时 session 必已建好)。因此表的规模 ≤ 并发新建数, 不会泄漏。
+   */
+  const awaitingPersist = new Map<string, string>();
   /** 每 session 的 FIFO 等待队列。 */
   const queues = new Map<string, PendingTask[]>();
   /** connectionId + requestId -> 正在执行它的 session(cancel 定位与归属校验用, 收口即清)。 */
@@ -487,15 +534,50 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     };
 
     let outcome: HookRunOutcome;
-    try {
-      outcome = await runner.run({ ...task.run, onProgress, onInteraction, onInteractionCancel });
-    } catch (err) {
+    /**
+     * 开跑前按当前映射再确认一次(见 dirStillAllowed)。resolveTarget 到这里之间
+     * 隔着排队与若干 await(新建路径还要等 worktree 预建 / 对话目录分配), 映射
+     * 随时可能被改/删; 这是"每条消息按映射现场重算"在执行侧的收口。
+     *
+     * workingDir 就是这一轮要跑的目录(复用/接管路径是 dispatcher 刚校验过的
+     * 那个, 新建路径是刚算出来的 runDir)。用 `||` 而非 `??`: 它可能是空串占位,
+     * 而空串过 isPathWithin 会 resolve 成 cwd, 那就成了一条假放行。
+     */
+    const guardDir = task.run.workingDir || null;
+    if (guardDir !== null && !dirStillAllowed(task.connectionId, guardDir)) {
+      // 路径不进日志(规则: 用集中 PII helper, 而 dispatcher 是不碰 Electron 的
+      // 纯逻辑模块, 拿不到它)—— requestId 足够定位。
+      log.info(
+        `hook task ${task.requestId} aborted before execution: its directory is no longer authorized`,
+      );
+      // 任务没能进 runner, 刚预建的 worktree 不会有会话来认领 —— 就地回收
+      if (task.cleanupWorktree) void task.cleanupWorktree().catch(() => undefined);
       outcome = {
         status: 'error',
         finalText: '',
-        errorMessage: err instanceof Error ? err.message : String(err),
+        errorMessage:
+          '这个对话所在的目录已不在工作目录映射里，本条消息没有执行。把它所在的目录加进 设置 → 远程连接 → 工作目录映射 后再发一次。',
         durationMs: 0,
       };
+    } else {
+      try {
+        outcome = await runner.run({
+          ...task.run,
+          onProgress,
+          onInteraction,
+          onInteractionCancel,
+          // runner 建/取到 session 后, 拿它真正要跑的那个目录回来问一次 ——
+          // 那个目录可能与这里校验过的不是同一个(见 isDirAuthorized 的说明)。
+          isDirAuthorized: (dir) => dirStillAllowed(task.connectionId, dir),
+        });
+      } catch (err) {
+        outcome = {
+          status: 'error',
+          finalText: '',
+          errorMessage: err instanceof Error ? err.message : String(err),
+          durationMs: 0,
+        };
+      }
     }
     runningByRequest.delete(requestKey);
     if (!isCurrentGeneration(task.accountGeneration)) {
@@ -532,6 +614,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       }),
     );
     running.delete(sessionId);
+    // 本次执行收口, 免检窗口到此为止。注意**不能**断言"session 一定已落库":
+    // 上面可能因映射撤权根本没进 runner, runner 也可能在 createSession 之前就
+    // 失败(PR #733 review 指出)。这里删掉只是让后续消息回到正常判定 —— 那两种
+    // 情况下 inspect 查不到会话, 走的是丢绑定重建的保守侧, 方向正确。
+    awaitingPersist.delete(sessionId);
     const queue = queues.get(sessionId);
     const next = queue?.shift();
     if (!queue || queue.length === 0) queues.delete(sessionId);
@@ -539,6 +626,23 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       running.add(sessionId);
       startExecution(next);
     }
+  }
+
+  /**
+   * 这个目录**此刻**还落在该连接的工作目录映射(或内置对话根)内吗。
+   *
+   * 每次真正开跑之前都要问一遍: 排队期间用户可能把映射改了或删了, 而队列
+   * drain 不再走 resolveTarget, 而会话目录本身没变 —— 变的只是"映射还认不认
+   * 它", 所以必须在这里重新查一次当前映射, 否则排着的消息会在已撤权的目录里
+   * 执行(PR #733 review 指出)。连接本身没了或被停用, 同样按撤权处理。
+   */
+  function dirStillAllowed(connectionId: string, dir: string): boolean {
+    const config = getConnection(connectionId);
+    // 连接被停用 = 用户已经切断了这条远端通道。handleDispatch 入口就这么判,
+    // 排队中的任务同样不能因为"目录还在映射里"就照跑(PR #733 review 指出)。
+    if (!config || !config.enabled) return false;
+    if (Object.values(config.workspaces).some((root) => isPathWithin(root, dir))) return true;
+    return dialogue !== undefined && isPathWithin(dialogue.rootDir(), dir);
   }
 
   function startExecution(task: PendingTask): void {
@@ -557,7 +661,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     config: HookConnectionConfig,
     payload: TaskDispatchPayload,
     generation: number,
-  ): Promise<{ run: HookRunRequest; notice?: string } | { reject: TaskRejectReason }> {
+  ): Promise<
+    | { run: HookRunRequest; notice?: string; cleanupWorktree?: () => Promise<void> }
+    | { reject: TaskRejectReason }
+  > {
     // options 四元组原样透传给 runner —— 空值由 runner 按桌面端草稿默认落值
     // (取值链: Slack 按目录偏好 > 草稿默认, 权限缺省 bypass; 见
     // hook-control/defaults.ts)。复用/接管路径也照传, 消费与否由 runner 决定
@@ -574,6 +681,17 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     const whitelistDirs = Object.values(config.workspaces);
     const inWhitelist = (dir: string | null): boolean =>
       dir !== null && whitelistDirs.some((base) => isPathWithin(base, dir));
+    /**
+     * 同上, 但每次都重读连接配置 —— 撤权判定必须用**此刻**的映射: `config` 是
+     * 消息进来那一刻的快照, 而下面要 await `runner.inspect()`。用快照判定的话,
+     * 用户在这段时间里刚把目录加回映射(或改回别名)时, 一条此刻完全合法的绑定
+     * 会被当成越界删掉, 那条 thread 就白白换了新对话(PR #733 review 指出)。
+     */
+    const inWhitelistNow = (dir: string | null): boolean =>
+      dir !== null &&
+      Object.values(getConnection(connectionId)?.workspaces ?? config.workspaces).some((base) =>
+        isPathWithin(base, dir),
+      );
     /** app 托管对话目录(dialogues 根)内的路径 —— chat 伪目录会话的白名单等价物。 */
     const inDialogueRoot = (dir: string | null): boolean =>
       dir !== null && dialogue !== undefined && isPathWithin(dialogue.rootDir(), dir);
@@ -582,6 +700,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     /** 旧绑定作废、本次不得不新建会话时, 随 turn.end 回给渠道的说明。 */
     let recreatedNotice: string | null = null;
 
+    const laneKind: 'dm' | 'group' =
+      /^telegram:(group|topic):/.test(payload.externalKey) ? 'group' : 'dm';
     // 接管路径: server 显式指定已有 session(对话会话同样可接管)
     if (payload.sessionId !== null) {
       const info = await runner.inspect(payload.sessionId);
@@ -592,17 +712,12 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       }
       // 接管路径刚校验过白名单, 授权来源恒为 workspace(远端不能凭接管把会话
       // 带出映射 —— 越界的 sessionId 在上面就被 workspace_not_allowed 打回)
-      bindings.set(
-        connectionId,
-        payload.externalKey,
-        payload.sessionId,
-        info.workingDir,
-        'workspace',
-      );
+      bindings.set(connectionId, payload.externalKey, payload.sessionId);
       return {
         run: {
           sessionId: payload.sessionId,
           isNew: false,
+          laneKind,
           workingDir: info.workingDir as string,
           agentKind,
           model,
@@ -630,31 +745,51 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     // account/provider namespace may read it only as a candidate; it is moved
     // after current-account DB existence + workspace allowlist checks pass.
     const legacyNamespace = connectionId.endsWith(':slack') ? 'slack' : null;
-    const namespacedEntry = bindings.getEntry(connectionId, payload.externalKey);
-    const legacyEntry =
-      namespacedEntry === null && legacyNamespace !== null
-        ? bindings.getEntry(legacyNamespace, payload.externalKey)
+    const namespacedBound = bindings.get(connectionId, payload.externalKey);
+    const legacyBound =
+      namespacedBound === null && legacyNamespace !== null
+        ? bindings.get(legacyNamespace, payload.externalKey)
         : null;
-    const namespacedBound = namespacedEntry?.sessionId ?? null;
-    const legacyBound = legacyEntry?.sessionId ?? null;
-    const boundEntry = namespacedEntry ?? legacyEntry;
-    const bound = boundEntry?.sessionId ?? null;
-    const migrateLegacyBinding = (
-      workingDir: string | null,
-      authority: HookBindingAuthority | null,
-    ): void => {
+    const bound = namespacedBound ?? legacyBound;
+    const migrateLegacyBinding = (): void => {
       if (!legacyBound || !legacyNamespace) return;
-      bindings.set(connectionId, payload.externalKey, legacyBound, workingDir, authority);
+      bindings.set(connectionId, payload.externalKey, legacyBound);
       bindings.remove(legacyNamespace, payload.externalKey);
     };
     if (bound) {
-      // 关键竞态防护: 绑定的 session 正在本模块跑/排队(首次派发尚未落库,
-      // inspect 会查不到)时直接复用 —— 否则同 key 的连发消息会各开新 session,
-      // 破坏「同 key 同 session」铁律。
-      // 已声明的取舍: 该快路径不重校验白名单 —— 窗口仅限「用户改别名映射」与
-      // 「旧任务在跑」重叠的瞬间, 且此 session 本就是本连接刚创建的; 常规
-      // 复用路径(下方 inspect 分支)每次都重校验。
+      const info = await runner.inspect(bound);
+      if (!isCurrentGeneration(generation)) return { reject: 'disabled' };
+      // 查得到 = 已落库, 此后一律走映射校验
+      if (info !== null) awaitingPersist.delete(bound);
+      /**
+       * 免检窗口里那个会话建在哪 —— 必须拿它跟**当前**映射再比一次: 会话还没
+       * 落库的这段时间里用户可能已经把别名改指走了(撤权), 只认 id 的话那条消息
+       * 会排进一个建在已撤权目录里的会话(PR #733 review 指出)。
+       */
+      const pendingDir = awaitingPersist.get(bound) ?? null;
+      // 同下方的 inAllowedRoot: 用当前映射而不是入口快照 —— inspect 期间用户可能
+      // 刚把这个目录加回来(PR #733 review 指出)。
+      const pendingStillAllowed =
+        pendingDir !== null && (isChat ? inDialogueRoot(pendingDir) : inWhitelistNow(pendingDir));
+      /**
+       * 关键竞态防护: 绑定的 session 是本 dispatcher 刚建、**尚未落库**的
+       * (inspect 查不到)且正在跑/排队时直接复用 —— 否则同 key 的后续消息会各开
+       * 新 session, 破坏「同 key 同 session」铁律。
+       *
+       * 两层收窄, 都是为了不让免检变成绕过映射边界的口子:
+       * - 早期版本把「在跑/排队」整个当成免检快路径, 且放在 inspect 之前。用户在
+       *   一轮任务执行期间把对话移出映射时, 新消息仍会排进这个 session —— 而
+       *   session-runner 的复用路径以 session meta 的 workDir 为权威(会覆盖这里
+       *   传的目录), 那条消息就真的在映射外执行了。
+       * - 只判 `info === null` 也不够: 这个 null 是多义的, session 不存在是 null,
+       *   meta / DB 读取瞬时失败也被吞成 null。一次读库抖动就能让已落库、已被移出
+       *   映射的 session 继续收消息。所以改判 awaitingPersist —— 只有本 dispatcher
+       *   刚在映射内建出来、还没确认落库的 session 才免检。
+       * 两条都由 PR #733 review 指出。
+       */
       if (
+        info === null &&
+        pendingStillAllowed &&
         namespacedBound !== null &&
         (running.has(bound) || (queues.get(bound)?.length ?? 0) > 0)
       ) {
@@ -662,9 +797,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           run: {
             sessionId: bound,
             isNew: false,
-            // 复用路径 workingDir 仅供参考(runner 以 session meta 为权威);
-            // chat 伪目录无别名映射, 给 dialogues 根占位
-            workingDir: dir ?? dialogue?.rootDir() ?? '',
+            laneKind,
+            // 尚未落库, 没有 meta 可查 —— 用建它时那个刚重新过完映射校验的目录
+            workingDir: pendingDir!,
             agentKind,
             model,
             effort,
@@ -676,57 +811,33 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           },
         };
       }
-      const info = await runner.inspect(bound);
-      if (!isCurrentGeneration(generation)) return { reject: 'disabled' };
       // 复用条件: 仍存在、可用、且仍在白名单内(别名映射可能已被用户改过);
       // chat 伪目录的会话住在 dialogues 根下, 按对话根校验
+      // 用 inWhitelistNow 而不是入口快照: 见其定义处 —— inspect 期间映射可能刚
+      // 被改回来, 拿旧快照判撤权会误杀一条此刻合法的绑定。
       const inAllowedRoot =
-        info !== null && (isChat ? inDialogueRoot(info.workingDir) : inWhitelist(info.workingDir));
+        info !== null &&
+        (isChat ? inDialogueRoot(info.workingDir) : inWhitelistNow(info.workingDir));
       const usable = info?.usable === true && info.workingDir !== null;
-      /** 会话目录与绑定快照一致 = 自上次确认以来它没被动过。 */
-      const sameAsSnapshot =
-        usable &&
-        boundEntry?.workingDir != null &&
-        isSamePath(boundEntry.workingDir, info!.workingDir!);
       /**
-       * 白名单外但**目录相对快照变过** = 用户在桌面端把这条会话「移动到项目」了。
-       * 目录是本地用户亲手选的(不是远端指定的 —— 远端只能在接管路径里选白名单
-       * 内的会话), 属本地授权, 跟随即可; 否则同一个 thread 每条消息都会重开新
-       * 会话, 破坏「同 key 同 session」。
+       * 复用与否只看这一条: 会话当前的工作目录仍落在工作目录映射(或内置对话根)
+       * 内。判定完全无状态 —— 绑定里不存快照也不存授权, 每条消息现场重算。
+       *
+       * 刻意**不**支持「被移出映射后继续跟随」: 那需要在映射之外发放一条例外,
+       * 而例外必须跨「绑定文件」与「会话库」两次无事务的写保持一致, 中间还夹着
+       * 随时可能到达的 IM 消息 —— PR #653 / #669 为此叠了在途标记、TTL、回滚、
+       * CAS、补偿五层状态, 十轮 review 仍在出新的组合边界。现在的语义是: 移出
+       * 映射 = 断开绑定, 并向渠道说明怎么恢复(见 NOTICE_SESSION_RECREATED)。
+       * 在映射**内**换目录仍然无感跟随, 因为那本就在边界内。
        */
-      const movedNow =
-        !inAllowedRoot && usable && boundEntry?.workingDir != null && !sameAsSnapshot;
-      /**
-       * 上一条消息已按本地移动放行过, 且此后目录没再变 —— 必须继续认这份授权。
-       * 少了这一条, 跟随只在移动后的第一条消息生效: 那次会把快照更新成新目录,
-       * 下一条消息 movedNow 就变回 false, 绑定又被丢掉(PR #653 review 实测)。
-       */
-      const stillLocallyAuthorized =
-        !inAllowedRoot && usable && boundEntry?.authority === 'local-move' && sameAsSnapshot;
-      // 目录没变、也没有本地移动授权而校验失败, 才是「工作目录映射被改/删」的
-      // 撤权语义, 仍丢绑定重建。老绑定没有快照时同样走保守侧(正常复用会回填)。
-      if (usable && (inAllowedRoot || movedNow || stillLocallyAuthorized)) {
+      if (usable && inAllowedRoot) {
         const workingDir = info!.workingDir!;
-        const authority: HookBindingAuthority = inAllowedRoot ? 'workspace' : 'local-move';
-        migrateLegacyBinding(workingDir, authority);
-        // 快照回填 / 跟随: 只在目录或授权来源变化时落盘, 常规复用不产生写。
-        if (
-          namespacedEntry !== null &&
-          (namespacedEntry.workingDir === null ||
-            !isSamePath(namespacedEntry.workingDir, workingDir) ||
-            namespacedEntry.authority !== authority)
-        ) {
-          bindings.set(connectionId, payload.externalKey, bound, workingDir, authority);
-        }
-        if (movedNow) {
-          log.info(
-            `hook session ${bound} followed a desktop-side move to ${workingDir} (outside the workspace map)`,
-          );
-        }
+        migrateLegacyBinding();
         return {
           run: {
             sessionId: bound,
             isNew: false,
+            laneKind,
             workingDir,
             agentKind,
             model,
@@ -737,8 +848,6 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             attachments: payload.attachments,
             origin,
           },
-          // 只在"这次刚发现被移动"时说明一次; 之后的消息静默沿用该授权
-          ...(movedNow ? { notice: NOTICE_SESSION_MOVED } : {}),
         };
       }
       bindings.remove(connectionId, payload.externalKey);
@@ -771,6 +880,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     } else {
       runDir = dir as string;
     }
+    /** 预建成功的 worktree 回收句柄, 随任务带下去(见 PendingTask.cleanupWorktree)。 */
+    let cleanupWorktree: (() => Promise<void>) | undefined;
     if (prepareWorktree && !isChat && dir !== undefined) {
       const prep = await prepareWorktreeSerial(dir);
       if (!isCurrentGeneration(generation)) {
@@ -780,6 +891,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       if (prep.ok && isPathWithin(dir, prep.path)) {
         sessionId = prep.sessionId;
         runDir = prep.path;
+        cleanupWorktree = () => prep.cleanup();
         log.info(`hook session ${sessionId} gets dedicated worktree: ${prep.path}`);
       } else {
         const why = prep.ok
@@ -790,8 +902,12 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         if (prep.ok) void prep.cleanup().catch(() => undefined);
       }
     }
-    // 新建会话跑在别名目录(或对话根)里, 授权随映射走
-    bindings.set(connectionId, payload.externalKey, sessionId, runDir, 'workspace');
+    // 新建会话跑在别名目录(或对话根)里, 是否还能复用每次现场按映射判定
+    bindings.set(connectionId, payload.externalKey, sessionId);
+    // 落库前的免检窗口从这里开始(见 awaitingPersist 声明处): 此刻这个 session
+    // 必定建在映射内, inspect 还查不到它, 同 key 的后续消息要能认出它。记下它
+    // 建在哪 —— 免检时要拿这个目录跟当时的映射再比一次。
+    awaitingPersist.set(sessionId, runDir);
     // 标题带 provider 名: externalKey 约定为 `<providerId>:<渠道内标识>`,
     // 取前缀作 provider 名(如 team-slack), 比连接名(desktop 侧命名)更能
     // 说明"这条会话是谁驱动的"; 无前缀(非常规 key)时回退连接名
@@ -803,6 +919,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       run: {
         sessionId,
         isNew: true,
+        laneKind,
         workingDir: runDir,
         agentKind,
         model,
@@ -822,6 +939,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         origin,
       },
       ...(recreatedNotice ? { notice: recreatedNotice } : {}),
+      ...(cleanupWorktree ? { cleanupWorktree } : {}),
     };
   }
 
@@ -857,6 +975,17 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     // 同 key 串行化(见 keyChains 注释) —— 定位+入队作为一个原子段执行
     serializeByKey(`${connectionId} ${payload.externalKey}`, async () => {
       try {
+        let contextPrefix = '';
+        let commitContextCursor: () => void = () => undefined;
+        if (buildContextPrefix) {
+          try {
+            const assembly = await buildContextPrefix(dispatchPayload);
+            contextPrefix = assembly.prefix;
+            commitContextCursor = assembly.commit;
+          } catch (error) {
+            log.warn(`group context prefix failed, dispatching without it: ${String(error)}`);
+          }
+        }
         const resolved = await resolveTarget(
           connectionId,
           config,
@@ -877,9 +1006,14 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           connectionId,
           requestId: payload.requestId,
           externalKey: payload.externalKey,
-          run: { ...resolved.run, ...(source ? { source } : {}) },
+          run: {
+            ...resolved.run,
+            ...(contextPrefix ? { prompt: `${contextPrefix}${resolved.run.prompt}` } : {}),
+            ...(source ? { source } : {}),
+          },
           accountGeneration: admittedGeneration,
           ...(resolved.notice ? { notice: resolved.notice } : {}),
+          ...(resolved.cleanupWorktree ? { cleanupWorktree: resolved.cleanupWorktree } : {}),
         };
         const sessionId = resolved.run.sessionId;
         const queue = queues.get(sessionId) ?? [];
@@ -892,6 +1026,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           }
           queue.push(task);
           queues.set(sessionId, queue);
+          commitContextCursor();
           reply(connectionId, send, {
             requestId: payload.requestId,
             result: 'queued',
@@ -906,6 +1041,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         }
 
         running.add(sessionId);
+        commitContextCursor();
         reply(connectionId, send, {
           requestId: payload.requestId,
           result: 'accepted',
@@ -999,6 +1135,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         running.clear();
         runningByRequest.clear();
         cancelRequested.clear();
+        // 切账号时 execute() 会在代际检查处提前 return, 走不到收口那行删除 ——
+        // 不在这里清的话, 每次切账号都永久留下一条 sessionId + 完整工作目录路径
+        // (PR #733 review 指出)。这些会话属于上一个账号, 新账号下本就不该免检。
+        awaitingPersist.clear();
         keyChains.clear();
       })();
       accountDeactivation = drain.finally(() => {
@@ -1013,6 +1153,29 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       // 归档并发穿插 —— 归档排在其后, 能看到刚落下的绑定。
       serializeByKey(`${connectionId} ${externalKey}`, async () => {
         if (!isCurrentGeneration(admittedGeneration)) return;
+        /**
+         * 这个会话此刻还归远端管吗 —— 归档同样要过工作目录映射这道边界。
+         * 会话已被移出映射(或映射被改/删)时, 远端的 `/new` 不该还能归档它并
+         * 触发 worktree 清理: 那是对一个它已无权驱动的本地会话动手
+         * (PR #733 review 指出)。
+         */
+        const stillOurs = async (sessionId: string): Promise<boolean> => {
+          const info = await runner.inspect(sessionId);
+          if (!isCurrentGeneration(admittedGeneration)) return false;
+          // 查得到就以它为准。**只有**真的查不到(会话刚建、还没落库)才退回
+          // awaitingPersist 里记的那个目录 —— 该表在整轮 turn 结束前都留着, 拿它
+          // 当捷径会让"已落库、随后被移出映射"的会话绕过这道闸
+          // (PR #733 review 指出)。
+          if (info === null) {
+            const pendingDir = awaitingPersist.get(sessionId);
+            return pendingDir !== undefined && dirStillAllowed(connectionId, pendingDir);
+          }
+          return (
+            info.usable === true &&
+            info.workingDir !== null &&
+            dirStillAllowed(connectionId, info.workingDir)
+          );
+        };
         let bindingNamespace = connectionId;
         let bound = bindings.get(connectionId, externalKey);
         if (!bound && connectionId.endsWith(':slack')) {
@@ -1022,26 +1185,27 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             // a chance to migrate the v1 mapping. Only act on that mapping
             // after proving it belongs to the current account DB and remains
             // inside today's workspace/dialogue allowlist.
-            const config = getConnection(connectionId);
-            const info = await runner.inspect(legacyBound);
-            if (!isCurrentGeneration(admittedGeneration)) return;
-            const allowed =
-              info?.usable === true &&
-              info.workingDir !== null &&
-              (Object.values(config?.workspaces ?? {}).some((root) =>
-                isPathWithin(root, info.workingDir!),
-              ) ||
-                (dialogue !== undefined && isPathWithin(dialogue.rootDir(), info.workingDir)));
-            if (allowed) {
+            if (await stillOurs(legacyBound)) {
               bound = legacyBound;
               bindingNamespace = 'slack';
             } else {
+              if (!isCurrentGeneration(admittedGeneration)) return;
               bindings.remove('slack', externalKey);
             }
           }
         }
         if (!bound) return; // 该 key 从没建过会话(或已归档清理过), 幂等 no-op
+        // 当前命名空间的绑定过同一道闸: 通不过就只丢绑定(下条消息本就会重开
+        // 会话), 但不动那个已越界的本地会话。
+        const authorized = bindingNamespace === 'slack' || (await stillOurs(bound));
+        if (!isCurrentGeneration(admittedGeneration)) return;
         bindings.remove(bindingNamespace, externalKey);
+        if (!authorized) {
+          log.info(
+            `hook archive skipped for ${externalKey}: session ${bound} is no longer inside the workspace map`,
+          );
+          return;
+        }
         if (!archiveSessionRow) return;
         try {
           await archiveSessionRow(bound);

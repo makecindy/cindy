@@ -21,7 +21,7 @@ Expo Go or an installed distribution build as proof that local source changes ar
 
 Required Expo public env:
 
-- `EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL`: endpoint manifest bootstrap base (per-region hotfix CDN). Runtime business endpoints (auth / device-link / gateway) are resolved from `<base>/endpoint.json` at startup; in dev they default to the repo's `config/endpoint.global.json` and can still be overridden with explicit `EXPO_PUBLIC_XDT_DEVICE_LINK_API_BASE_URL` / `EXPO_PUBLIC_CINDY_AUTH_BASE_URL`. Set `EXPO_PUBLIC_ENDPOINTS_CDN=1` to make dev fetch the online manifest used by packaged clients.
+- `EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL` / `EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL`: the current and peer region endpoint-manifest bootstrap bases. Runtime business endpoints are resolved from each trusted `<base>/endpoint.json`; organization discovery uses both manifests' `authApiBaseUrl` values. In dev, endpoint defaults still come from the repo region config. Set `EXPO_PUBLIC_ENDPOINTS_CDN=1` to make dev fetch the online manifest used by packaged clients.
 
 The mobile redirect URI is region-specific: `cindycn://auth` for CN and
 `cindy://auth` for Global. Cindy Auth and native social login callbacks must
