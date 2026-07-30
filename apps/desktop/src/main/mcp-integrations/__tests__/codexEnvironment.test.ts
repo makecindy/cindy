@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import type { Logger, McpProvider } from '@cindy/maker-core';
 import {
+  getActiveCodexBridgeServerNames,
   getCodexExtraSpawnConfig,
   registerCodexMcpThreadContext,
   setCodexEnvironmentShutdownHook,
@@ -188,6 +189,19 @@ describe('codexEnvironment', () => {
     // 同批次的正常 provider 不受影响，原型也没有被污染。
     expect(cfg.extraArgs).toContain('mcp_servers.themis.url="https://themis.example/mcp"');
     expect(Object.getPrototypeOf({} as Record<string, unknown>)).toBe(Object.prototype);
+  });
+
+  it('exposes the active bridge server-name snapshot and clears it on shutdown (R2 P2)', async () => {
+    // stale-bridge 钳制的数据源:活跃 bridge 的 server 集合 (启动时冻结),
+    // 远端 flag 钳制 / drift 判定用它区分「bridge 缺 cindy_memory 的窗口」
+    // 与「无 bridge (lazy 重建在即)」。
+    expect(getActiveCodexBridgeServerNames()).toBeNull(); // 未启动
+
+    await getCodexExtraSpawnConfig({ mcpProviders: [testProvider()], logger: noopLogger() });
+    expect(getActiveCodexBridgeServerNames()).toEqual(['cindy_test']);
+
+    await shutdownCodexEnvironment();
+    expect(getActiveCodexBridgeServerNames()).toBeNull(); // shutdown 后清空
   });
 
   it('invokes the shutdown hook after the bridge stops, on every shutdown path (R22 P1)', async () => {

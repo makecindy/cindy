@@ -4,6 +4,8 @@ import { getLiziMcpSessionContext } from '@cindy/mcps';
 
 import type { Logger } from '@cindy/maker-core';
 import {
+  computeRemoteMcpFingerprint,
+  selectRemoteInjectableServerNames,
   startCodexHttpBridge,
   type CodexHttpBridge,
 } from '../codexHttpBridge.js';
@@ -67,6 +69,51 @@ async function readAllRpcResponses(resp: Response): Promise<unknown[]> {
   return Array.isArray(parsed) ? parsed : [parsed];
 }
 
+describe('remote injection shared pure functions (R4 P3)', () => {
+  // 这两个函数是 CC 注入 / Codex ensure / Codex drift 三条路径的唯一真源,
+  // 间接测试出错时定位困难 — 这里直接锁 gate 组合与指纹敏感性。
+  const AVAILABLE = ['cindy_orca', 'orca_worker_bridge', 'cindy_memory', 'cindy_ssh'];
+
+  it('selectRemoteInjectableServerNames: gate 组合与白名单过滤', () => {
+    expect(selectRemoteInjectableServerNames(AVAILABLE, { collabEnabled: true, memoryEnabled: true }))
+      .toEqual(['cindy_orca', 'orca_worker_bridge', 'cindy_memory']);
+    expect(selectRemoteInjectableServerNames(AVAILABLE, { collabEnabled: true, memoryEnabled: false }))
+      .toEqual(['cindy_orca', 'orca_worker_bridge']);
+    // collab 关 + memory 开 → 只出 cindy_memory。
+    expect(selectRemoteInjectableServerNames(AVAILABLE, { collabEnabled: false, memoryEnabled: true }))
+      .toEqual(['cindy_memory']);
+    expect(selectRemoteInjectableServerNames(AVAILABLE, { collabEnabled: false, memoryEnabled: false }))
+      .toEqual([]);
+    // cindy_ssh 等非白名单 server 任何 gate 组合下都不可选(上面四例已隐含,
+    // 这里显式断言防未来放宽)。
+    for (const collabEnabled of [true, false]) {
+      for (const memoryEnabled of [true, false]) {
+        expect(
+          selectRemoteInjectableServerNames(AVAILABLE, { collabEnabled, memoryEnabled }),
+        ).not.toContain('cindy_ssh');
+      }
+    }
+    // memory 开但 bridge 没挂 cindy_memory → 不凭空注入。
+    expect(
+      selectRemoteInjectableServerNames(['cindy_orca'], { collabEnabled: true, memoryEnabled: true }),
+    ).toEqual(['cindy_orca']);
+  });
+
+  it('computeRemoteMcpFingerprint: 对 serverNames 顺序不敏感, 对集合/成分敏感', () => {
+    const base = { token: 'tok', bridgeInstanceId: 'b1', remotePort: 47921 };
+    const fp = computeRemoteMcpFingerprint({ ...base, serverNames: ['cindy_orca', 'cindy_memory'] });
+    expect(fp).toMatch(/^[0-9a-f]{12}$/);
+    // 顺序不敏感 — 调用方无需预排序。
+    expect(computeRemoteMcpFingerprint({ ...base, serverNames: ['cindy_memory', 'cindy_orca'] })).toBe(fp);
+    // 集合敏感 — memory 开关翻转必须构成新代际。
+    expect(computeRemoteMcpFingerprint({ ...base, serverNames: ['cindy_orca'] })).not.toBe(fp);
+    // 其余成分敏感 — token 轮换 / bridge 换代 / 端口重绑都构成新代际。
+    expect(computeRemoteMcpFingerprint({ ...base, token: 'tok2', serverNames: ['cindy_orca', 'cindy_memory'] })).not.toBe(fp);
+    expect(computeRemoteMcpFingerprint({ ...base, bridgeInstanceId: 'b2', serverNames: ['cindy_orca', 'cindy_memory'] })).not.toBe(fp);
+    expect(computeRemoteMcpFingerprint({ ...base, remotePort: 47922, serverNames: ['cindy_orca', 'cindy_memory'] })).not.toBe(fp);
+  });
+});
+
 describe('codexHttpBridge', () => {
   let bridge: CodexHttpBridge | null = null;
 
@@ -77,7 +124,11 @@ describe('codexHttpBridge', () => {
 
   it('accepts an additional bearer token (remote daemon) and rejects unknown tokens', async () => {
     bridge = await startCodexHttpBridge({
-      serverFactories: { cindy_orca: createTestServer, cindy_test: createTestServer },
+      serverFactories: {
+        cindy_orca: createTestServer,
+        cindy_test: createTestServer,
+        cindy_memory: createTestServer,
+      },
       additionalBearerTokens: () => ['remote-persistent-token'],
       logger: noopLogger(),
     });
@@ -117,6 +168,11 @@ describe('codexHttpBridge', () => {
     const remoteResp = await postInit('cindy_orca', 'remote-persistent-token');
     expect(remoteResp.status).toBe(200);
     await remoteResp.text();
+    // cindy_memory 属远端白名单 (Maker Memory 经 bridge 回本机 store) — scoped
+    // token 放行;其余 in-process server (cindy_test 代表) 仍 403。
+    const remoteMemory = await postInit('cindy_memory', 'remote-persistent-token');
+    expect(remoteMemory.status).toBe(200);
+    await remoteMemory.text();
     const remoteNonCollab = await postInit('cindy_test', 'remote-persistent-token');
     expect(remoteNonCollab.status).toBe(403);
     await remoteNonCollab.text();

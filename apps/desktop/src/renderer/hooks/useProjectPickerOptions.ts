@@ -37,11 +37,16 @@ export function useProjectPickerOptions(): FolderPickerOption[] {
 export function getProjectPickerDisplayName(
   cwd: string | null | undefined,
   projectOptions: readonly FolderPickerOption[] | undefined,
+  deviceLinkDeviceId?: string | null,
 ): string | null {
   if (!cwd) return null;
   const normalizedCwd = toPosixPath(cwd);
   const selectedProject = projectOptions?.find((project) => {
-    return project.path === cwd || toPosixPath(project.path) === normalizedCwd;
+    const pathMatches = project.path === cwd || toPosixPath(project.path) === normalizedCwd;
+    if (!pathMatches) return false;
+    return deviceLinkDeviceId
+      ? project.remoteDevice?.deviceId === deviceLinkDeviceId
+      : project.remoteDevice === undefined;
   });
   if (selectedProject) return selectedProject.name;
   const parts = normalizedCwd.split('/').filter(Boolean);

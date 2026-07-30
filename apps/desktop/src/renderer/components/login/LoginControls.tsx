@@ -777,6 +777,14 @@ function ConsentCheckGlyph() {
  * radio(24 命中区,圈 20 r9 + 2px 描边,选中态对勾)+ 声明文字 20 Regular
  * (login-control-text 双态),「服务条款」「隐私协议」为 Bold underline 内联链接。
  * radio 态切换只变圈色(transition-colors ≤150ms,规则 7:无布局跳变)。
+ *
+ * **整行热区**(2026-07-29 拍板):680×40 整行都能点,点声明文字与行内空白都等于
+ * 点 radio——原来只有 24px 圈体可点,鼠标要瞄准一个小圆点。两类元素例外:
+ * 「服务条款」/「隐私协议」两个内联链接各自 stopPropagation(点它们只开链接,
+ * 不切勾选态),radio 自己也 stopPropagation(否则冒泡到行容器会二次 toggle,
+ * 净效果为不变)。行容器刻意不加 role/tabIndex:radio 仍是唯一的无障碍交互点
+ * (role="checkbox" + aria-labelledby 指向声明文字),整行点击只是鼠标增强,
+ * 不给读屏用户制造第二个语义相同的可聚焦节点。
  */
 export function LoginConsentRow({
   checked,
@@ -795,12 +803,15 @@ export function LoginConsentRow({
   return (
     <div
       data-testid="login-consent-row"
-      className="absolute left-0 flex items-center justify-center"
+      // select-none:整行可点后,连点会选中声明文字,拖选也会盖住勾选反馈
+      className="absolute left-0 flex select-none items-center justify-center"
+      onClick={onToggle}
       style={{
         top: CONSENT_ROW.y,
         width: CONSENT_ROW.width,
         height: CONSENT_ROW.height,
         gap: CONSENT_ROW.gap,
+        cursor: 'pointer',
       }}
     >
       <button
@@ -809,7 +820,11 @@ export function LoginConsentRow({
         role="checkbox"
         aria-checked={checked}
         aria-labelledby="login-consent-statement"
-        onClick={onToggle}
+        onClick={(event) => {
+          // 行容器已接同一个 onToggle:不拦住冒泡会切两次,视觉上等于点不动
+          event.stopPropagation();
+          onToggle();
+        }}
         className="grid shrink-0 place-items-center border-0 bg-transparent p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
         style={{ width: hitSize, height: hitSize, cursor: 'pointer' }}
       >

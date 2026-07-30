@@ -51,6 +51,12 @@ interface SidebarProps {
   /** Open the update notice dialog to review release notes. */
   onOpenUpdateNotice?: () => void;
   /**
+   * Open the update notice dialog pinned to one version — used by UpdateBanner
+   * to preview the notes of the downloaded-but-not-yet-installed update, which
+   * `onOpenUpdateNotice`'s history range (`<= appVersion`) cannot reach.
+   */
+  onOpenVersionNotice?: (version: string) => void;
+  /**
    * 完全隐藏态 hover 临时浮出(peek)——非 null 时以 fixed overlay 抽屉渲染
    * (useSidebarPeek 驱动,MainLayout 只在 peek 可见期传入):
    *   peeking     滑入并停留;peekClosing 滑出动画中;
@@ -69,6 +75,7 @@ export function Sidebar({
   onDragStart,
   onResetWidth,
   onOpenUpdateNotice,
+  onOpenVersionNotice,
   peekState = null,
   peekDrawerProps,
 }: SidebarProps) {
@@ -215,7 +222,10 @@ export function Sidebar({
 
       {/* Update banner: shown only when a verified update is ready
           peek 抽屉视同展开(否则横幅在抽屉里消失,与「预览完整列表」语义相悖)。 */}
-      <UpdateBanner isCollapsed={(isCollapsed && !isPeek) || isRail} />
+      <UpdateBanner
+        isCollapsed={(isCollapsed && !isPeek) || isRail}
+        onOpenVersionNotice={onOpenVersionNotice}
+      />
 
       {/* Bottom: User info (Shell-level, shared across all features)
           isCollapsed 在这里表达"窄布局"（rail 居中头像）；完全隐藏态 w-0 整体裁掉。 */}

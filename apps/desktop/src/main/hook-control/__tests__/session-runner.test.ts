@@ -81,9 +81,18 @@ const h = vi.hoisted(() => {
 vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] },
 }));
-vi.mock('@cindy/maker-core', () => ({
-  isTerminalAgentErrorEvent: (ev: { type: string }) => ev.type === 'error',
-}));
+// 事件终止性判定与过载判定用**真实实现**: runner 现在按 isTerminal / willRetry
+// 区分"正在自动重试"与"真失败", 过载文案也直接复用 maker-core 的判定 —— 在这里
+// 复制一份桩会让两侧漂移时测试仍然全绿(旧桩把所有 error 都当终止, 恰好会掩盖
+// 非终止 error 的处理)。maker-core 零 Electron 依赖, 可直接加载。
+vi.mock('@cindy/maker-core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cindy/maker-core')>();
+  return {
+    isTerminalAgentErrorEvent: actual.isTerminalAgentErrorEvent,
+    parseOverloadError: actual.parseOverloadError,
+    parseOverloadRetryProgress: actual.parseOverloadRetryProgress,
+  };
+});
 vi.mock('../../device-link/broadcast-tap.js', () => ({
   tapWindowBroadcast: h.tapWindowBroadcast,
 }));
@@ -1019,6 +1028,206 @@ describe('进度快照(turn.progress 链路)', () => {
     cb({ type: 'done', data: null });
     const outcome = await p;
     expect(outcome.status).toBe('ok');
+  });
+});
+
+describe('上游过载自动重试期间的渠道进度(零产出窗口)', () => {
+  function makeManualSession(id: string) {
+    return {
+      id,
+      workDir: 'D:/repo',
+      onEvent(cb: (ev: { type: string; data: unknown }) => void) {
+        h.eventCbs.set(id, cb);
+        return () => {
+          h.eventCbs.delete(id);
+        };
+      },
+      setInteractionListener(listener: (req: unknown) => Promise<unknown>) {
+        h.interactionListeners.set(id, listener);
+      },
+      send: vi.fn(async (
+        _msg: unknown,
+        opts: {
+          beforeProviderStart?: () => Promise<void> | void;
+          onAccepted?: () => Promise<void>;
+        },
+      ) => {
+        await opts.beforeProviderStart?.();
+        await opts.onAccepted?.();
+        return {};
+      }),
+    };
+  }
+
+  async function flush(times = 30): Promise<void> {
+    for (let i = 0; i < times; i++) await Promise.resolve();
+  }
+
+  /**
+   * 本 describe 的核心回归: 过载重投只在**零产出**时发生, 那时过程区与正文都是
+   * 空的。若非终止 error 不进过程区, 整个退避窗口(~22-38s)一帧 turn.progress 都
+   * 发不出去 —— 渠道那条占位消息一个字不变, 用户只能判断为"卡死"。
+   */
+  it('非终止过载 error 发出带进度的快照帧, turn 不收口', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const emitted: string[] = [];
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(baseReq({ onProgress: (t: string) => emitted.push(t) }));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      cb({
+        type: 'error',
+        data: {
+          message:
+            'Selected model is at capacity. Please try a different model. (auto-retry 1/4)',
+          isTerminal: false,
+          willRetry: true,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(emitted).toHaveLength(1);
+      expect(emitted[0]).toContain('⏳ 模型服务繁忙，正在自动重试（1/4）…');
+      // 零工作项时不报"0 项", 但耗时仍在走(用户能看出还在动)。
+      expect(emitted[0]).toContain('⚙️ 工作中 · 0s');
+      expect(emitted[0]).not.toContain('项 ·');
+
+      // 次数推进 -> 新一帧; 内容没变的 ticker 帧不重复发。
+      cb({
+        type: 'error',
+        data: {
+          message:
+            'Selected model is at capacity. Please try a different model. (auto-retry 2/4)',
+          isTerminal: false,
+          willRetry: true,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(emitted).toHaveLength(2);
+      expect(emitted[1]).toContain('（2/4）');
+
+      // 重投成功: 真实进展到达 -> 状态行消失, 不在时间线里冒充一项工作。
+      cb({
+        type: 'tool_use',
+        data: { toolUseId: 'read-1', toolName: 'Read', input: { file_path: 'D:/repo/a.ts' } },
+      });
+      await vi.advanceTimersByTimeAsync(1_500);
+      const afterRecovery = emitted.at(-1)!;
+      expect(afterRecovery).toContain('工作中 · 1 项');
+      expect(afterRecovery).toContain('读取 a.ts');
+      expect(afterRecovery).not.toContain('自动重试');
+
+      cb({ type: 'text', data: { text: '好了。', isFinal: true } });
+      cb({ type: 'done', data: null });
+      const outcome = await p;
+      expect(outcome.status).toBe('ok');
+      expect(outcome.finalText).toBe('好了。');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('Telegram 草稿在零正文时也给出重试提示, 有正文后只发正文', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const emitted: string[] = [];
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(
+        baseReq({
+          source: { im: 'telegram', userText: 'hello' },
+          onProgress: (t: string) => emitted.push(t),
+        }),
+      );
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      cb({
+        type: 'error',
+        data: { message: 'model is at capacity (auto-retry 1/4)', isTerminal: false },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(emitted).toEqual(['模型服务繁忙，正在自动重试（1/4）…']);
+
+      cb({ type: 'text', data: { text: '结论。', isFinal: false } });
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(emitted.at(-1)).toBe('结论。');
+
+      cb({ type: 'done', data: null });
+      await p;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('非过载的非终止 error 保持静默(不发帧, 不收口)', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const emitted: string[] = [];
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(baseReq({ onProgress: (t: string) => emitted.push(t) }));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      cb({
+        type: 'error',
+        data: { message: 'stream disconnected (Reconnecting 1/3)', isTerminal: false },
+      });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(emitted).toEqual([]);
+
+      cb({ type: 'done', data: null });
+      const outcome = await p;
+      expect(outcome.status).toBe('ok');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('重试耗尽的终态过载错误换成可操作说明(桌面端重试不回流, 必须说清)', async () => {
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+      makeManualSession(opts.id ?? 'sess-x'),
+    );
+    const runner = createMakerHookSessionRunner({ log });
+    const p = runner.run(baseReq({}));
+    await new Promise((r) => setTimeout(r, 0));
+    const cb = h.eventCbs.get('sess-new')!;
+    cb({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model.',
+        isTerminal: true,
+      },
+    });
+    const outcome = await p;
+    expect(outcome.status).toBe('error');
+    expect(outcome.errorMessage).toContain('模型服务繁忙');
+    expect(outcome.errorMessage).toContain('在这里重发这条消息');
+    // 上游原文不外发到渠道, 只留在本地日志里。
+    expect(outcome.errorMessage).not.toContain('Selected model is at capacity');
+  });
+
+  it('非过载的终态错误仍原样上报(不误改其它失败的诊断信息)', async () => {
+    fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+      makeManualSession(opts.id ?? 'sess-x'),
+    );
+    const runner = createMakerHookSessionRunner({ log });
+    const p = runner.run(baseReq({}));
+    await new Promise((r) => setTimeout(r, 0));
+    const cb = h.eventCbs.get('sess-new')!;
+    cb({ type: 'error', data: { message: 'process exited with code 1', isTerminal: true } });
+    const outcome = await p;
+    expect(outcome.status).toBe('error');
+    expect(outcome.errorMessage).toBe('process exited with code 1');
   });
 });
 

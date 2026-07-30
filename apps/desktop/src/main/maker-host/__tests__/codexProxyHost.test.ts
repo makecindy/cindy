@@ -117,6 +117,129 @@ async function freshCodexProxyHost() {
   return import('../codex-proxy-host.js');
 }
 
+describe('withCodexUpstreamRecording', () => {
+  const DEFAULT_UPSTREAM = 'https://gateway.example/v1';
+  const ctxFor = (threadId?: string) => ({
+    reqId: 1,
+    method: 'POST',
+    url: '/responses',
+    headers: threadId ? { 'thread-id': threadId } : {},
+  }) as never;
+
+  it('records the override upstream origin for the request thread', async () => {
+    const host = await freshCodexProxyHost();
+    host.resetCodexThreadUpstreamForTest();
+    const wrapped = host.withCodexUpstreamRecording(
+      () => ({ upstreamOverride: 'https://api.x.ai/v1' }),
+      () => DEFAULT_UPSTREAM,
+    );
+
+    await wrapped({}, ctxFor('t-xai'));
+
+    // 诊断必须报本次真正打的上游 —— 会话选了 xAI 就不能报 gateway。
+    expect(host.getCodexThreadUpstreamOrigin('t-xai')).toBe('https://api.x.ai');
+    // 没记录过的 thread 不借用别人的结论。
+    expect(host.getCodexThreadUpstreamOrigin('t-other')).toBe(null);
+  });
+
+  it('falls back to the default upstream when the decision does not override it', async () => {
+    const host = await freshCodexProxyHost();
+    host.resetCodexThreadUpstreamForTest();
+    const wrapped = host.withCodexUpstreamRecording(() => null, () => DEFAULT_UPSTREAM);
+
+    await wrapped({}, ctxFor('t-default'));
+
+    expect(host.getCodexThreadUpstreamOrigin('t-default')).toBe('https://gateway.example');
+  });
+
+  it('records through an async decision and returns it unchanged', async () => {
+    // chat-bridge 分支返回 Promise;包装层必须同样记录,且不改变 decision。
+    const host = await freshCodexProxyHost();
+    host.resetCodexThreadUpstreamForTest();
+    const decision = { upstreamOverride: 'https://custom.provider:8443/v1' };
+    const wrapped = host.withCodexUpstreamRecording(
+      () => Promise.resolve(decision),
+      () => DEFAULT_UPSTREAM,
+    );
+
+    await expect(wrapped({}, ctxFor('t-async'))).resolves.toBe(decision);
+    expect(host.getCodexThreadUpstreamOrigin('t-async')).toBe('https://custom.provider:8443');
+  });
+
+  it('does not record for localHandler decisions or thread-less requests', async () => {
+    const host = await freshCodexProxyHost();
+    host.resetCodexThreadUpstreamForTest();
+
+    // localHandler 与其余路由字段互斥,不发生上游转发 → 没有出口可记。
+    const local = host.withCodexUpstreamRecording(
+      () => ({ localHandler: { handle: async () => undefined } }) as never,
+      () => DEFAULT_UPSTREAM,
+    );
+    await local({}, ctxFor('t-local'));
+    expect(host.getCodexThreadUpstreamOrigin('t-local')).toBe(null);
+
+    // 无 thread 的控制面请求(models 轮询)会被 selectedThreadIdFromHeaders 回落成
+    // 字面量 'unknown';那不是 thread,不该进桶。
+    const plain = host.withCodexUpstreamRecording(() => null, () => DEFAULT_UPSTREAM);
+    await plain({}, ctxFor(undefined));
+    expect(host.getCodexThreadUpstreamOrigin('unknown')).toBe(null);
+  });
+
+  it('records the chat-bridge upstream even though it routes through a localHandler', async () => {
+    // localHandler 不等于「不出网」:chat bridge 的 handler 自己用 outboundFetch 打
+    // route.routing.upstream,照样产生出站路径快照。漏记会让该供应商不可达时诊断
+    // 查不到映射、静默退回通用猜测清单。
+    const host = await freshCodexProxyHost();
+    host.resetCodexThreadUpstreamForTest();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'kimi-moonshot',
+        name: 'Kimi (Moonshot 中国大陆)',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://api.moonshot.cn/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'kimi-k3', name: 'Kimi K3' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'moonshot-key');
+    host.registerComposed('session-kimi-diag', 'thread-kimi-diag', 'PRODUCT_PROMPT');
+    setSessionProvider('session-kimi-diag', 'kimi-moonshot');
+    host.setCodexProxyAuthInjection('env-key');
+
+    try {
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'kimi-k3' },
+        { reqId: 1, method: 'POST', url: '/responses', headers: { 'thread-id': 'thread-kimi-diag' } },
+      ));
+      expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+      expect(host.getCodexThreadUpstreamOrigin('thread-kimi-diag')).toBe('https://api.moonshot.cn');
+    } finally {
+      clearSessionProvider('session-kimi-diag');
+      setCustomProviders([]);
+    }
+  });
+
+  it('never lets a recording failure affect forwarding', async () => {
+    // 诊断旁路:默认上游取值抛错也不能影响 decision。
+    const host = await freshCodexProxyHost();
+    host.resetCodexThreadUpstreamForTest();
+    const decision = { upstreamOverride: 'https://api.x.ai/v1' };
+    const wrapped = host.withCodexUpstreamRecording(
+      () => decision,
+      () => { throw new Error('endpoint unavailable'); },
+    );
+
+    expect(await wrapped({}, ctxFor('t-boom'))).toBe(decision);
+  });
+});
+
 describe('codex gateway config', () => {
   it('oauth-bearer 模式: requires_openai_auth, 不带 env_key', async () => {
     const { buildCodexProxySpawnArgs } = await import('../codex-gateway-config.js');
@@ -274,6 +397,17 @@ describe('decideCodexRoute', () => {
 });
 
 describe('chatBridgeCapabilitiesForRoute', () => {
+  it('does not forward unsupported passthrough fields into the translator', async () => {
+    const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
+    const capabilities = chatBridgeCapabilitiesForRoute(
+      'https://api.deepseek.com/v1',
+      'deepseek-chat',
+    );
+    expect(capabilities.passthroughFields).not.toContain('n');
+    expect(capabilities.passthroughFields).not.toContain('logprobs');
+    expect(capabilities.passthroughFields).not.toContain('top_logprobs');
+  });
+
   it.each([
     'https://api.moonshot.cn/v1',
     'https://api.moonshot.ai/v1/',
@@ -360,6 +494,37 @@ describe('chatBridgeCapabilitiesForRoute', () => {
       }),
       expect.anything(),
     );
+    const localHandler = (decision as {
+      localHandler: (input: { rawBody: Buffer; parsedBody: unknown; res: unknown }) => Promise<void>;
+    }).localHandler;
+    const originalInstructions = [
+      { type: 'input_text', text: 'BASE_PROMPT' },
+      { type: 'input_image', image_url: 'data:image/png;base64,eA==' },
+    ];
+    const parsedBody = {
+      model: 'kimi-k3',
+      instructions: originalInstructions,
+      input: 'hello',
+    };
+    const res = {};
+    await localHandler({
+      rawBody: Buffer.from(JSON.stringify(parsedBody)),
+      parsedBody,
+      res,
+    });
+    const bridgeHandler = mockState.createResponsesChatHandler.mock.results.at(-1)?.value as {
+      handle: ReturnType<typeof vi.fn>;
+    };
+    expect(bridgeHandler.handle).toHaveBeenCalledWith({
+      parsedBody: {
+        ...parsedBody,
+        instructions: [
+          ...originalInstructions,
+          { type: 'input_text', text: '\n\nPRODUCT_PROMPT' },
+        ],
+      },
+      res,
+    });
 
     clearSessionProvider('session-kimi-image');
     setCustomProviderKeyReader(() => null);
@@ -566,8 +731,8 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [encrypted activeStrip, image generation activeStrip, instructions 注入, Gateway 原生 web_search, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields]
-        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
+        // [encrypted activeStrip, image generation activeStrip, instructions 注入, provider-aware Guardian reviewer, Gateway 原生 web_search, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields]
+        transformRequest: [expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), mockState.stripNonAnthropicFields],
         routingTransform: expect.any(Function),
         recoveryRules: expect.arrayContaining([
           expect.objectContaining({ id: 'encrypted_content' }),
@@ -600,6 +765,292 @@ describe('codex proxy host', () => {
 
     host.unregister('session-1');
     expect(mockState.capturedRegistry?.get('thread-1')).toBeUndefined();
+  });
+
+  it('routes Guardian reviewer models per parent session without crossing providers', async () => {
+    const host = await freshCodexProxyHost();
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.setCodexProxyAuthInjection('oauth-bearer');
+
+    host.registerReviewerRouteContext('session-xd-review', 'thread-xd-parent', 'deepseek/deepseek-v4');
+    host.registerReviewerRouteContext('session-openai-review', 'thread-openai-parent', 'gpt-5.5');
+    setSessionProvider('session-xd-review', 'xd');
+    setSessionProvider('session-openai-review', 'openai');
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    // active strips ×2, product prompt injection, then provider-aware Guardian rewrite.
+    const reviewerTransform = transforms[3];
+    if (!reviewerTransform) throw new Error('expected Guardian reviewer transform');
+    const body = { model: 'codex-auto-review', input: [{ role: 'user', content: 'review' }] };
+    const guardianHeaders = (parentThreadId: string) => ({
+      'thread-id': `guardian-child-${parentThreadId}`,
+      'x-openai-subagent': 'guardian',
+      'x-codex-parent-thread-id': parentThreadId,
+    });
+
+    expect(reviewerTransform(body, {
+      method: 'POST',
+      url: '/responses',
+      headers: guardianHeaders('thread-xd-parent'),
+    })).toEqual({ ...body, model: 'deepseek/deepseek-v4' });
+    expect(reviewerTransform(body, {
+      method: 'POST',
+      url: '/responses',
+      headers: guardianHeaders('thread-openai-parent'),
+    })).toBeNull();
+    expect(reviewerTransform(body, {
+      method: 'POST',
+      url: '/responses',
+      headers: {
+        ...guardianHeaders('thread-xd-parent'),
+        'x-openai-subagent': 'review',
+      },
+    })).toBeNull();
+    expect(reviewerTransform(body, {
+      method: 'POST',
+      url: '/responses',
+      headers: guardianHeaders('missing-parent'),
+    })).toBeNull();
+
+    host.registerReviewerRouteContext('session-xd-review', 'thread-xd-parent', 'qwen/qwen3-coder');
+    expect(reviewerTransform(body, {
+      method: 'POST',
+      url: '/responses',
+      headers: guardianHeaders('thread-xd-parent'),
+    })).toEqual({ ...body, model: 'qwen/qwen3-coder' });
+
+    host.unregister('session-xd-review');
+    expect(reviewerTransform(body, {
+      method: 'POST',
+      url: '/responses',
+      headers: guardianHeaders('thread-xd-parent'),
+    })).toBeNull();
+
+    clearSessionProvider('session-xd-review');
+    clearSessionProvider('session-openai-review');
+  });
+
+  it('keeps Guardian transforms aligned with a control-plane proxy frozen auth mode', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    host.setCodexProxyAuthInjection('env-key');
+    host.registerReviewerRouteContext(
+      'session-frozen-review',
+      'thread-frozen-parent',
+      'unscoped-provider-model',
+    );
+
+    await host.ensureCodexControlPlaneProxyReady('oauth-bearer');
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    const reviewerTransform = transforms[3];
+    if (!reviewerTransform) throw new Error('expected Guardian reviewer transform');
+    expect(reviewerTransform(
+      { model: 'codex-auto-review', input: [] },
+      {
+        method: 'POST',
+        url: '/responses',
+        headers: {
+          'thread-id': 'guardian-child-frozen',
+          'x-openai-subagent': 'guardian',
+          'x-codex-parent-thread-id': 'thread-frozen-parent',
+        },
+      },
+    )).toBeNull();
+  });
+
+  it('keeps Gateway provider search tools out of Guardian review requests', async () => {
+    const host = await freshCodexProxyHost();
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    host.setCodexProxyGatewayKeyReader(() => 'gw-key');
+    host.registerReviewerRouteContext(
+      'session-gateway-review',
+      'thread-gateway-parent',
+      'gpt-5.6-sol',
+    );
+    setSessionProvider('session-gateway-review', 'xd');
+
+    const ctx = {
+      method: 'POST',
+      url: '/responses',
+      headers: {
+        'thread-id': 'guardian-child-gateway',
+        'x-openai-subagent': 'guardian',
+        'x-codex-parent-thread-id': 'thread-gateway-parent',
+      },
+    };
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model: 'codex-auto-review',
+      tools: [
+        { type: 'function', name: 'shell' },
+        { type: 'web_search' },
+      ],
+      input: [{ role: 'user', content: 'review this action' }],
+    };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toMatchObject({
+      model: 'gpt-5.6-sol',
+      tools: [{ type: 'function', name: 'shell' }],
+    });
+
+    host.setCodexProxyGatewayKeyReader(() => null);
+    clearSessionProvider('session-gateway-review');
+  });
+
+  it('applies provider compatibility and routing to a Guardian child via its parent thread', async () => {
+    const host = await freshCodexProxyHost();
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { setProviderOAuthTokenReader } = await import('../provider-route.js');
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    host.registerReviewerRouteContext('session-xai-review', 'thread-xai-parent', 'xai/grok-4.5');
+    setSessionProvider('session-xai-review', 'xai');
+    setProviderOAuthTokenReader((providerId) => (providerId === 'xai' ? 'xai-review-token' : null));
+
+    const ctx = {
+      reqId: 1,
+      method: 'POST',
+      url: '/responses',
+      headers: {
+        'thread-id': 'guardian-child-xai',
+        'x-openai-subagent': 'guardian',
+        'x-codex-parent-thread-id': 'thread-xai-parent',
+      },
+    };
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    const rawGuardianBody = {
+      model: 'codex-auto-review',
+      reasoning: { effort: 'high', summary: 'auto' },
+      tools: [
+        { type: 'function', name: 'shell' },
+        { type: 'namespace', name: 'multi_agent_v1', tools: [] },
+        { type: 'web_search' },
+        { type: 'x_search' },
+      ],
+      input: [{ role: 'user', content: 'review this action' }],
+    };
+    let current: unknown = rawGuardianBody;
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toMatchObject({ model: 'grok-4.5' });
+    expect((current as { tools?: Array<{ type?: string; name?: string }> }).tools)
+      .toEqual([{ type: 'function', name: 'shell' }]);
+
+    const routingTransform = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.routingTransform;
+    if (!routingTransform) throw new Error('expected routing transform');
+    // The proxy chooses the route from the raw JSON before running request
+    // transforms; routing must therefore resolve the same parent-aware model.
+    await expect(Promise.resolve(routingTransform(rawGuardianBody, ctx))).resolves.toEqual({
+      upstreamOverride: 'https://api.x.ai/v1',
+      headerOverride: { authorization: 'Bearer xai-review-token' },
+      headerDelete: ['chatgpt-account-id', 'openai-beta', 'originator', 'session_id'],
+    });
+
+    clearSessionProvider('session-xai-review');
+    setProviderOAuthTokenReader(() => null);
+  });
+
+  it('passes the parent session model into a Guardian request handled by the Chat bridge', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'guardian-chat-provider',
+        name: 'Guardian Chat Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://chat-provider.example/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'deepseek-v4', name: 'DeepSeek V4' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'chat-provider-key');
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    host.registerReviewerRouteContext(
+      'session-chat-review',
+      'thread-chat-parent',
+      'deepseek-v4',
+    );
+    setSessionProvider('session-chat-review', 'guardian-chat-provider');
+
+    const rawGuardianBody = {
+      model: 'codex-auto-review',
+      tools: [
+        { type: 'function', name: 'shell' },
+        { type: 'web_search' },
+        { type: 'x_search' },
+      ],
+      input: [{ role: 'user', content: 'review this action' }],
+    };
+    const ctx = {
+      reqId: 1,
+      method: 'POST',
+      url: '/responses',
+      headers: {
+        'thread-id': 'guardian-child-chat',
+        'x-openai-subagent': 'guardian',
+        'x-codex-parent-thread-id': 'thread-chat-parent',
+      },
+    };
+    const decision = await Promise.resolve(
+      host.createModelRoutingTransform()(rawGuardianBody, ctx),
+    );
+    expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+    if (!decision?.localHandler) throw new Error('expected Chat bridge local handler');
+
+    const res = {} as never;
+    await decision.localHandler({
+      rawBody: Buffer.from(JSON.stringify(rawGuardianBody)),
+      parsedBody: rawGuardianBody,
+      ctx,
+      res,
+    });
+    const bridge = mockState.createResponsesChatHandler.mock.results.at(-1)?.value as
+      | { handle: ReturnType<typeof vi.fn> }
+      | undefined;
+    expect(bridge?.handle).toHaveBeenCalledWith({
+      parsedBody: {
+        ...rawGuardianBody,
+        model: 'deepseek-v4',
+        tools: [{ type: 'function', name: 'shell' }],
+      },
+      res,
+    });
+
+    clearSessionProvider('session-chat-review');
+    setCustomProviderKeyReader(() => null);
+    setCustomProviders([]);
   });
 
   it('restores native web_search for Gateway GPT-5.6 when Codex omitted the declaration', async () => {
@@ -1234,6 +1685,160 @@ describe('codex proxy host', () => {
     clearSessionProvider('session-seed');
   });
 
+  it('normalizes custom Volcengine Ark Responses routes regardless of the model alias', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'custom-volcengine',
+        name: 'Custom Volcengine',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+            models: [{ id: 'production-deployment', name: 'Production Deployment' }],
+          },
+        },
+      }),
+    ]);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-custom-volcengine', 'thread-custom-volcengine', 'PRODUCT_PROMPT');
+    setSessionProvider('session-custom-volcengine', 'custom-volcengine');
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model: 'production-deployment',
+      reasoning: { effort: 'high', summary: 'auto' },
+      tools: [
+        { type: 'function', name: 'exec_command' },
+        { type: 'namespace', name: 'mcp__example', tools: [{ type: 'function', name: 'read' }] },
+        { type: 'web_search', external_web_access: true },
+      ],
+      input: [
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'earlier' }] },
+      ],
+    };
+    const ctx = {
+      method: 'POST',
+      url: '/responses',
+      headers: { 'thread-id': 'thread-custom-volcengine' },
+    };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual({
+      model: 'production-deployment',
+      reasoning: { effort: 'high' },
+      tools: [
+        { type: 'function', name: 'exec_command' },
+        { type: 'web_search' },
+      ],
+      input: [
+        {
+          type: 'message',
+          role: 'assistant',
+          status: 'completed',
+          content: [{ type: 'output_text', text: 'earlier' }],
+        },
+      ],
+    });
+
+    clearSessionProvider('session-custom-volcengine');
+    setCustomProviders([]);
+  });
+
+  it('does not apply the Seed fallback to non-Ark Volces Responses routes', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'custom-volces',
+        name: 'Custom Volces',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://gateway.volces.com/api/v3',
+            models: [{ id: 'production-deployment', name: 'Production Deployment' }],
+          },
+        },
+      }),
+    ]);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-custom-volces', 'thread-custom-volces', 'PRODUCT_PROMPT');
+    setSessionProvider('session-custom-volces', 'custom-volces');
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    const original = {
+      model: 'production-deployment',
+      reasoning: { effort: 'high', summary: 'auto' },
+      tools: [
+        { type: 'function', name: 'exec_command' },
+        { type: 'namespace', name: 'mcp__example', tools: [{ type: 'function', name: 'read' }] },
+        { type: 'web_search', external_web_access: true },
+      ],
+      input: [
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'earlier' }] },
+      ],
+    };
+    let current: unknown = original;
+    const ctx = {
+      method: 'POST',
+      url: '/responses',
+      headers: { 'thread-id': 'thread-custom-volces' },
+    };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual(original);
+
+    clearSessionProvider('session-custom-volces');
+    setCustomProviders([]);
+  });
+
+  it('recognizes Volcengine native doubao Seed model IDs without route metadata', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+
+    const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+    let current: unknown = {
+      model: 'doubao-seed-2-1-pro-260628',
+      tools: [
+        { type: 'function', name: 'exec_command' },
+        { type: 'namespace', name: 'mcp__example', tools: [{ type: 'function', name: 'read' }] },
+      ],
+      input: 'hello',
+    };
+    const ctx = { method: 'POST', url: '/responses', headers: {} };
+    for (const transform of transforms) {
+      const next = transform(current, ctx);
+      if (next !== null && next !== undefined) current = next;
+    }
+
+    expect(current).toEqual({
+      model: 'doubao-seed-2-1-pro-260628',
+      tools: [{ type: 'function', name: 'exec_command' }],
+      input: 'hello',
+    });
+  });
+
   it('removes Seed tool controls when every declared tool is unsupported', async () => {
     const host = await freshCodexProxyHost();
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
@@ -1755,7 +2360,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(12); // encrypted activeStrip, image generation activeStrip, instructions 注入, Gateway 原生 web_search, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields, dump
+    expect(transforms).toHaveLength(13); // encrypted activeStrip, image generation activeStrip, instructions 注入, provider-aware Guardian reviewer, Gateway 原生 web_search, 跨来源压缩块兼容, strict gateway history 兼容, xAI Responses 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, stripNonAnthropicFields, dump
     const ctx = {
       method: 'POST',
       url: '/v1/responses',

@@ -71,7 +71,7 @@ repository and is not part of this monorepo.
 | Mode | Account requirement | Availability |
 | --- | --- | --- |
 | Hosted service | Cindy cloud account | Use Cindy's full hosted service. See [pricing](https://cindy.app/#pricing). |
-| Local mode | No Cindy sign-in required | Choose “Local mode” on the login screen to use local agents. Server-backed capabilities are unavailable in this mode. |
+| Skip Sign-In | No Cindy sign-in required | Choose “Skip Sign-In” on the login screen to use local agents; the app then shows the account state as “Not signed in”. Server-backed capabilities are unavailable in this state. |
 
 ## Prerequisites
 
@@ -113,9 +113,9 @@ for Mainland China accounts and `global` for everyone else; do not rely
 on the internal default. Full desktop, mobile, data-isolation, and validation
 workflows are in [`CONTRIBUTING.en.md`](CONTRIBUTING.en.md).
 
-“Local mode” on the login screen is an unauthenticated local-agent mode, not a
-connection to a local server. Server-backed capabilities are unavailable in this
-mode.
+“Skip Sign-In” on the login screen runs local agents without a Cindy account
+(shown in the app as “Not signed in”), not a connection to a local server.
+Server-backed capabilities are unavailable in this state.
 
 **About the default servers:** the client connects to Cindy's official cloud
 services by default (endpoint manifests in

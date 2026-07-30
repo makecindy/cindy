@@ -355,6 +355,7 @@ export function MainLayout() {
     loadVersion: noticeLoadVersion,
     dismiss: dismissNotice,
     onOpen: openNotice,
+    onOpenVersion: openVersionNotice,
   } = useUpdateNotice();
   const navigate = useNavigate();
   const location = useLocation();
@@ -1172,6 +1173,7 @@ export function MainLayout() {
               onDragStart={handleDragStart}
               onResetWidth={resetWidth}
               onOpenUpdateNotice={openNotice}
+              onOpenVersionNotice={openVersionNotice}
               peekState={sidebarPeek.isPeekVisible ? sidebarPeek.peekState : null}
               peekDrawerProps={sidebarPeek.drawerProps}
             />

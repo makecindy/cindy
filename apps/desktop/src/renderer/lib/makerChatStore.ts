@@ -2530,7 +2530,11 @@ export function handleStreamEvent(
         return {
           ...state,
           error: null,
-          errorReason: null,
+          // 非终止 error 此前恒清 reason(那时没有任何非终止 error 带 reason)。过载
+          // 重投是第一个需要它的: renderer 靠 reason 判定"是否过载"来渲染本地化的
+          // 重试进度, 而重投恰恰只在**非终止**态发生 —— 清掉就等于 UI 侧只能回退
+          // 文案匹配。其它非终止 error 仍不带 reason, 行为不变。
+          errorReason: reason ?? null,
           recoverableError: errMsg,
           errorRetryText: null,
           isStreaming: true,
@@ -6570,7 +6574,6 @@ function buildCreateOptsForCurrentSession(
 ): AgentInputCreateOpts {
   const current = getOrCreateState(sessionId);
   const deviceLinkRemote = isRemoteSession(sessionId);
-  const sshRemote = Boolean(current.remoteHostId);
   return {
     agentKind: current.agentKind,
     workingDir,
@@ -6581,12 +6584,12 @@ function buildCreateOptsForCurrentSession(
     planMode: current.planModeEnabled,
     displayReasoning: 'summarized',
     userPrompt: getUserPrompt(),
-    // device-link routes to the target desktop, so omit the controller setting;
-    // SSH still starts the agent through this process and must not inherit the
-    // controller's default-enabled Maker Memory for a remote working directory.
-    ...(deviceLinkRemote
-      ? {}
-      : { makerMemoryEnabled: sshRemote ? false : getMakerMemoryEnabled() }),
+    // device-link routes to the target desktop, so omit the controller setting.
+    // SSH remote follows the controller's global setting like local sessions:
+    // memory lives on this machine, scoped per hostId+remote path
+    // (maker-core buildMemoryScopeKey), and reaches the remote agent via the
+    // host HTTP MCP bridge.
+    ...(deviceLinkRemote ? {} : { makerMemoryEnabled: getMakerMemoryEnabled() }),
     ...(current.remoteHostId ? { remoteHostId: current.remoteHostId } : {}),
     ...(opts?.vendorOptions ? { vendorOptions: opts.vendorOptions } : {}),
     ...(current.sdkSessionId ? { resumeSessionId: current.sdkSessionId } : {}),
@@ -8542,10 +8545,9 @@ function sendUiTrigger(sessionId: string, prompt: string): Promise<void> {
         ...((session.sdkSessionId ?? state.sdkSessionId)
           ? { resumeSessionId: (session.sdkSessionId ?? state.sdkSessionId) as string }
           : {}),
-        // buildQueuedMessage may have used a pre-hydration store snapshot.
-        // The DB row is authoritative here: SSH lazy-create must not inherit
-        // controller-local Cindy Memory. Device-link keeps target ownership.
-        ...(session.remoteHostId && !deviceLinkRemote ? { makerMemoryEnabled: false } : {}),
+        // SSH remote 与本地同语义: Maker Memory 跟随控制端全局开关 (scope 由
+        // maker-core 按 remoteHostId+workingDir 隔离), 这里不再强制关闭;
+        // device-link 仍由目标端自己的设置决定 (buildQueuedMessage 已省略)。
         // 远端 SSH 会话:重启后 lazy-create 缺它会把远端 workingDir 当本地路径。
         ...(session.remoteHostId ? { remoteHostId: session.remoteHostId } : {}),
       };

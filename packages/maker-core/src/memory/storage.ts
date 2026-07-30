@@ -19,6 +19,7 @@
  *  最坏情况 MEMORY.md 短暂不一致, rebuildIndex 幂等可恢复。要 ACID 加 SQLite 太重。
  */
 
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import matter from 'gray-matter';
@@ -56,6 +57,40 @@ export function sanitizeWorkdir(absPath: string): string {
     .replace(/[\\/]/g, '-')
     .replace(/:/g, '-')
     .replace(/^-+/, ''); // 去除最前面的 leading '-' (Unix 路径 / 开头转完是 '-Users-...')
+}
+
+/**
+ * Maker Memory 的 store 定位键(scope key)。本地会话直接用 workdir 绝对路径
+ * (保持既有存储目录不迁移);SSH remote 会话用 `ssh:<host 段>:<workdir>` 复合键 —
+ * 远端路径是远端机器上的字符串,直接当 key 会跟本地同名路径共用一个 store
+ * (两台机器各有 /home/me/proj 时记忆互串)。host 段经 encodeURIComponent 编码:
+ * 编码后不含 `:`,前缀后的首个 `:` 即边界,(hostId, workdir) → key 是单射 —
+ * 裸拼接时 ('/x:/repo','prod') 与 ('/repo','prod:/x') 会撞成同一个 key
+ * (review R5 P2);常规 alias 编码前后相同,键仍可读。数据仍存控制端本机,
+ * 目录名经 memoryScopeDirName 派生。所有 getStore 调用方 (agent 启动注入 /
+ * MCP withStore) 必须统一经本函数取键,不得各自拼接。
+ */
+export function buildMemoryScopeKey(workingDir: string, remoteHostId?: string | null): string {
+  return remoteHostId ? `ssh:${encodeURIComponent(remoteHostId)}:${workingDir}` : workingDir;
+}
+
+/** buildMemoryScopeKey 的远端键前缀。本地键恒为绝对路径, 不会以它开头。 */
+const SSH_SCOPE_KEY_PREFIX = 'ssh:';
+
+/**
+ * scope key → 落盘目录名。本地键沿用 sanitizeWorkdir(既有目录不迁移);远端
+ * 键不能走有损的 sanitizeWorkdir — `ssh:prod:/repo` 与本地路径 `/ssh/prod:/repo`
+ * 会 sanitize 成同一个目录名, 隔离承诺被撞破 (review R4 P2)。远端目录名 =
+ * `ssh-<host 可读片段>-<sha256(完整 key) 前 16 hex>`:key 是 (hostId, 路径)
+ * 对的单射 (见 buildMemoryScopeKey), hash 因此保证目录唯一性, 且对特殊字符/
+ * 超长路径免疫 (定长, Windows MAX_PATH 安全);host 片段 (编码形态, 不含 `:`)
+ * 只为肉眼可辨识。
+ */
+export function memoryScopeDirName(scopeKey: string): string {
+  if (!scopeKey.startsWith(SSH_SCOPE_KEY_PREFIX)) return sanitizeWorkdir(scopeKey);
+  const hostSegment = scopeKey.slice(SSH_SCOPE_KEY_PREFIX.length).split(':', 1)[0] ?? '';
+  const digest = createHash('sha256').update(scopeKey, 'utf8').digest('hex').slice(0, 16);
+  return `ssh-${sanitizeWorkdir(hostSegment).slice(0, 24)}-${digest}`;
 }
 
 /** filename = `<type>_<slug>.md` */

@@ -4565,7 +4565,8 @@ interface ElectronAPI {
         };
       } | UtilityTextFailure>;
       listRuns: (id: string, limit?: number) => Promise<unknown[]>;
-      listSidebarIndexRuns: () => Promise<unknown[]>;
+      /** { runs, inflightRunIds } —— 形态见 features/scheduler/lib/scheduleSidebarIndexRuns。 */
+      listSidebarIndexRuns: () => Promise<unknown>;
       listCostSummaries: () => Promise<unknown[]>;
       deleteRun: (runId: string) => Promise<void>;
       getInflightCount: (id: string) => Promise<number>;

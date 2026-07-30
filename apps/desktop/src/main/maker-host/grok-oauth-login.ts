@@ -251,6 +251,15 @@ export function xaiCallbackCorsHeaders(origin: string | undefined): Record<strin
 }
 
 // ── 回调监听(固定端口 56121)────────────────────────────────────────────────────
+/**
+ * EADDRINUSE 专属的用户可读提示。单独导出是为了让「这次失败是不是端口被占」有一个
+ * 与生产同源的判据:start() 把底层错误包成新 Error、丢掉了 err.code,调用方只剩文本
+ * 可看;而 Node 其它 listen 失败的原文里同样带端口号(实测
+ * `listen EADDRNOTAVAIL: address not available 240.0.0.1:56121`),按端口号做子串匹配
+ * 会把 EACCES / EADDRNOTAVAIL 一起误判成端口被占。
+ */
+export const XAI_CALLBACK_PORT_OCCUPIED_MESSAGE = `xAI OAuth 回调端口 ${REDIRECT_PORT} 被占用(可能有其它 Grok 登录在跑),请关掉后重试`;
+
 // 导出仅供单测(runGrokOAuthLogin 是唯一运行期使用方)。
 export class CallbackListener {
   private server: Server;
@@ -279,7 +288,7 @@ export class CallbackListener {
         reject(
           new Error(
             err.code === 'EADDRINUSE'
-              ? `xAI OAuth 回调端口 ${REDIRECT_PORT} 被占用(可能有其它 Grok 登录在跑),请关掉后重试`
+              ? XAI_CALLBACK_PORT_OCCUPIED_MESSAGE
               : `OAuth callback server failed: ${err.message}`,
           ),
         ),

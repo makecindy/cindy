@@ -162,6 +162,12 @@ import {
 } from './lib/pinnedSidebarOrder';
 import { createLogger } from '@/lib/logger';
 import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
+import { evictDeviceCapabilities, prefetchDeviceCapabilities } from '@/hooks/useAgentCapabilities';
+import { evictDeviceProviders, prefetchDeviceProviders } from '@/hooks/useDeviceProviders';
+import {
+  evictDeviceGitSafetySettings,
+  prefetchDeviceGitSafetySettings,
+} from '@/hooks/useGitSafetySettings';
 import { recentWorkdirsStore } from '@/lib/recentWorkdirsStore';
 import { useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
 import {
@@ -1492,6 +1498,36 @@ function ExpandedView({
       // device-link 远程项目:与本地一致先跳草稿页(主页)。草稿带上 deviceLink 目标
       // (workingDir + deviceId),草稿页显示"为远程设备新建"横幅,首条消息发出时再经
       // 隧道在被控端建会话(NewMakerDraftRoute 的 handleSend 远程分支)。
+      // 与创建页两条换设备路径同口径:被控端的能力 / 供应商 / Git safety 快照「拉一次、无 TTL、
+      // 只在设备下线才 evict」,它一直在线期间装了新模型或改了供应商,控制端不会知道 —— 草稿页
+      // 挂载时 hook 直接命中旧缓存,composer 会显示并向它提交可能已不支持的 model / provider。
+      // 这条路径是既有的(#807 未改动它),但缺口同类,一并补上,免得只有创建页那两条是对的。
+      //
+      // **evict 必须配对一次 fetch**(Codex review 第 32 轮 P1)。evict 不是幂等清理:
+      // evictDeviceCapabilities / evictDeviceProviders 会 notify `{ status: 'loading' }`,好让已挂载
+      // 的 hook 立刻知道旧快照失效。而两个 hook 的 fetch effect deps 是 `[agentKind, deviceId]` ——
+      // 用户**已经在** /cc-agent/new 且目标就是这台设备时,patchNewMakerDraft 保持同一 deviceId、
+      // navigate 到同一路由,deps 都不变,于是没有任何东西会去重拉:capabilitiesLoading 永久为真,
+      // 发送与新建目标的 gate 永久拒绝创建,用户只能切设备或重进路由才能恢复。
+      //
+      // 这里选 prefetch 而不是「同设备就跳过 evict」:刷新本身正是这条路径想要的(见上一段),
+      // 只是刷新 = 作废 + 重取,不能只做前一半。同款做法见 useDeviceLinkRemoteProjects 处理
+      // `maker:provider:changed` push 的那段(evict 紧跟 prefetch),那是本仓这条规则的既有范例。
+      //
+      // gitSafety 的 evict 不 notify loading,所以它不会卡住发送;但它的 effect deps 也是
+      // `[deviceId]`、同样不会自动重拉,不 prefetch 会让 Codex Rewind 的入口一直隐藏,
+      // 所以三个一并补齐。fire-and-forget:三个 prefetch 内部都自行 swallow 错误。
+      if (project.deviceLinkDeviceId) {
+        const targetDeviceId = project.deviceLinkDeviceId;
+        evictDeviceCapabilities(targetDeviceId);
+        evictDeviceProviders(targetDeviceId);
+        evictDeviceGitSafetySettings(targetDeviceId);
+        void Promise.all([
+          prefetchDeviceCapabilities(targetDeviceId),
+          prefetchDeviceProviders(targetDeviceId),
+          prefetchDeviceGitSafetySettings(targetDeviceId),
+        ]);
+      }
       patchNewMakerDraft({
         workingDir: project.workingDir,
         remoteHostId: project.deviceLinkDeviceId ? null : project.remoteHostId,

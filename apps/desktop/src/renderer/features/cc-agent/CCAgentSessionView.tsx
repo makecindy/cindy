@@ -2224,13 +2224,10 @@ export function CCAgentSessionView({
             permissionMode: session.permissionMode,
             userPrompt: getUserPrompt(),
             // device-link executes on the target desktop, so let that runtime
-            // own the setting. SSH still lazy-starts through this process and
-            // must explicitly disable controller-local Cindy Memory.
-            ...(remoteDeviceId
-              ? {}
-              : {
-                  makerMemoryEnabled: session.remoteHostId ? false : getMakerMemoryEnabled(),
-                }),
+            // own the setting. SSH remote follows the controller's global
+            // setting like local sessions (memory scoped per hostId+remote
+            // path on this machine, see maker-core buildMemoryScopeKey).
+            ...(remoteDeviceId ? {} : { makerMemoryEnabled: getMakerMemoryEnabled() }),
             extraDirs: session.extraDirs ?? [],
             displayReasoning: 'summarized' as const,
             ...(session.remoteHostId ? { remoteHostId: session.remoteHostId } : {}),

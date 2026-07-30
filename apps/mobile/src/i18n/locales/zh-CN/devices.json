@@ -8,20 +8,20 @@
     "create": "新建"
   },
   "list": {
-    "thisComputer": "这台电脑",
+    "thisComputer": "这台设备",
     "allConversations": "所有对话",
     "syncFailed": "同步失败",
     "requestFailed": "请求失败",
-    "loading": "正在读取可控制电脑",
+    "loading": "正在读取可控制设备",
     "untitled": "未命名对话",
     "connection": {
       "connecting": "连接中",
       "disconnected": "连接断开"
     },
     "error": {
-      "sessionDeviceNotFound": "找不到这个对话所属电脑，请重新同步后再试。",
-      "taskDeviceNotFound": "找不到这个任务所属电脑，请重新同步后再试。",
-      "noDevice": "没有可用电脑。请先打开桌面端远程控制，然后重新同步。"
+      "sessionDeviceNotFound": "找不到这个对话所属设备，请重新同步后再试。",
+      "taskDeviceNotFound": "找不到这个任务所属设备，请重新同步后再试。",
+      "noDevice": "没有可用设备。请先打开桌面端远程控制，然后重新同步。"
     },
     "alert": {
       "actionFailed": "操作失败",
@@ -198,7 +198,7 @@
     },
     "empty": {
       "copy": "可以直接从手机创建第一条自动化任务，或在桌面端创建后同步到这里。",
-      "title": "这台电脑暂无自动化"
+      "title": "这台设备暂无自动化"
     },
     "createAutomation": "新建自动化",
     "recentRuns": "最近执行",

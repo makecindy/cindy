@@ -6,6 +6,7 @@ import {
   parseMobileLocalSystemCommand,
 } from '@/session/systemCard';
 import type { InputProjection, RemoteSession } from '@/session/types';
+import { i18n } from '@/i18n';
 
 function session(patch: Partial<RemoteSession> = {}): RemoteSession {
   return {
@@ -115,5 +116,25 @@ describe('systemCard', () => {
       rows: [{ label: 'command', value: '/context' }],
       body: 'Context ok',
     });
+  });
+});
+
+describe('formatMobileSystemCard — goal 续跑卡按原因分说法', () => {
+  it('过载续跑说「正在重试目标」, 不说「用量已恢复」', () => {
+    // 上游过载那条只是干等了 60s、没有任何容量探测; 报「用量已恢复」是假信息, 而
+    // 桌面端已经区分开了, 手机端不跟上就会两端说法矛盾(review #844 codex P1)。
+    const capacity = formatMobileSystemCard('goal-resumed', { kind: 'capacity-resumed' });
+    expect(capacity.title).toBe(i18n.t('message.systemCard.goalCapacityRetry'));
+    expect(capacity.title).not.toBe(i18n.t('message.systemCard.goalResumed'));
+  });
+
+  it('账号限流续跑仍说「用量已恢复」(重置时刻有账号额度依据)', () => {
+    expect(formatMobileSystemCard('goal-resumed', { kind: 'usage-resumed' }).title).toBe(
+      i18n.t('message.systemCard.goalResumed'),
+    );
+    // data 缺失 / 旧记录没有 kind → 沿用原文案。
+    expect(formatMobileSystemCard('goal-resumed', undefined).title).toBe(
+      i18n.t('message.systemCard.goalResumed'),
+    );
   });
 });

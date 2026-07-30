@@ -582,11 +582,11 @@
       "fallbackName": "ユーザー",
       "avatarAlt": "{{name}} のアバター",
       "local": {
-        "exitFailed": "ローカルモードの終了に失敗しました。もう一度お試しください",
-        "name": "ローカルモード",
+        "exitFailed": "未ログイン状態の終了に失敗しました。もう一度お試しください",
+        "name": "未ログイン",
         "description": "データはこの端末だけに保存され、Cindy アカウントサービスは使用しません",
         "signIn": "Cindy にログイン",
-        "exit": "ローカルモードを終了"
+        "exit": "未ログイン状態を終了"
       },
       "copyUserId": {
         "action": "ユーザー ID をコピー",
@@ -756,7 +756,7 @@
       "serviceSource": {
         "label": "音声サービス",
         "hint": "既定では Cindy 音声サービスを使用します。リアルタイム ASR 対応サービスと専用の音声認証情報に切り替えることもできます。",
-        "localHint": "ローカルモードでは Cindy アカウントサービスを使用しません。リアルタイム ASR 対応サービスと専用の音声認証情報を設定してください。",
+        "localHint": "未ログイン状態では Cindy アカウントサービスを使用しません。リアルタイム ASR 対応サービスと専用の音声認証情報を設定してください。",
         "ariaLabel": "音声サービスソースの選択",
         "options": {
           "cindy": "Cindy 公式サービス",
@@ -3136,7 +3136,7 @@
     "ssoRequired": "この組織は SSO ログインが必要です",
     "ssoEntry": "企業 SSO でサインイン",
     "localModeEntry": "ログインをスキップ",
-    "localModeOpening": "ローカルモードを開いています…",
+    "localModeOpening": "ログインをスキップしています…",
     "localModeDescription": "Cindy アカウントは不要です。データはこのデバイスに保存され、クラウドモデル、デバイス間アクセス、マーケットサービスは利用できません。",
     "consentStatement": "<terms>利用規約</terms>と<privacy>プライバシーポリシー</privacy>を読み、同意します",
     "consentDialog": {
@@ -3849,6 +3849,8 @@
     "banner": {
       "title": "{{version}} に更新済み",
       "subtitle": "再起動して適用",
+      "viewNotes": "更新情報を見る",
+      "viewNotesAria": "{{version}} の更新情報を見る",
       "button": "再起動",
       "tooltipReady": "更新準備完了 — クリックで再起動{{versionSuffix}}",
       "ariaCollapsed": "更新準備完了、クリックでバージョン {{version}} に再起動",
@@ -3908,6 +3910,8 @@
     "user": {
       "settingsLink": "設定, 現在のユーザー: {{name}}",
       "canaryBadge": "Canary ユーザー",
+      "regionCodeCn": "CN",
+      "regionCodeDev": "Dev",
       "viewReleaseNotes": "リリースノートを表示",
       "reopenUpdateBanner": "更新の準備完了 — クリックして確認",
       "downloadMobile": "Cindy モバイル版をダウンロード"
@@ -4128,7 +4132,9 @@
         "addFailed": "プロジェクト追加に失敗",
         "pathEmpty": "プロジェクトのパスを入力してください",
         "pathIsFile": "{{path}} はファイルです (ディレクトリではありません)"
-      }
+      },
+      "selectTargetPlaceholder": "対象を選択…",
+      "requestedDeviceUnavailable": "指定のデバイスは現在利用できません。別の対象を選んでください"
     },
     "projectPicker": {
       "addRemoteProject": "リモートプロジェクトを追加"
@@ -4454,6 +4460,14 @@
       "alwaysAllowScopedHint": "このセッション全体に適用され、ここに挙げた範囲にのみ及びます。",
       "alwaysAllowSessionHint": "この 1 回のリクエストだけでなく、このセッション全体に適用されます。",
       "ruleSeparator": "、"
+    },
+    "deviceSwitcher": {
+      "label": "デバイス",
+      "localHint": "このパソコンで実行",
+      "onlineHint": "接続済み — 作成できます",
+      "offlineHint": "オフライン — 接続後に利用可能",
+      "attachmentsDropped": "添付ファイル {{count}} 件を削除しました（前のデバイス上のファイルです）",
+      "attachmentsRemoteUnsupported": "リモートデバイスではファイル添付に未対応のため {{count}} 件をスキップしました（画像は可）"
     }
   },
   "onboarding": {
@@ -4657,6 +4671,9 @@
       "networkUnreachableNoRetry": "ネットワークエラー:サービスに一時的に接続できません。",
       "networkAutoRetrying": "ネットワークエラー:自動的に再試行しています…",
       "networkReconnecting": "接続が中断されました。再接続中（{{attempt}}/{{maxAttempts}}）…",
+      "overloadRetrying": "モデルサービスが混雑しています:自動的に再試行しています（{{attempt}}/{{maxAttempts}}）…",
+      "overloadBusy": "モデルサービスが混雑しています。上流に空き容量がありません。「再試行」を押すか、別のモデルに切り替えてください",
+      "overloadBusyNoRetry": "モデルサービスが混雑しています。上流に空き容量がありません。しばらくしてから再試行するか、別のモデルに切り替えてください",
       "networkShowRaw": "元のエラーを表示",
       "networkHideRaw": "元のエラーを隠す",
       "silentStopContinue": "続行",
@@ -5313,7 +5330,8 @@
       "worktreeMissingRepo": "worktree を作成できません：現在のディレクトリのリポジトリルートがありません",
       "worktreeRepoHint": "作業ディレクトリを再選択し、右下のフォルダ表示が更新されてから再試行してください",
       "sessionInactive": "セッションはすでにアクティブではありません",
-      "remoteProjectBanner": "{{device}} の {{project}} で新しいセッションを作成"
+      "remoteProjectBanner": "{{device}} の {{project}} で新しいセッションを作成",
+      "remoteDialogueBanner": "{{device}} で新しい対話（プロジェクトなし）"
     },
     "jumpSession": {
       "emptyId": "移動先の sessionId を入力してください",
@@ -5810,7 +5828,7 @@
         "activityDesc": "最近アクティブ",
         "activityAsc": "古いアクティブ順"
       },
-      "filterAria": "検索フィルター（状態：{{status}}、エージェント：{{agent}}、最近のアクティビティ：{{lastActivity}}、プロジェクト：{{projects}}）",
+      "filterAria": "検索フィルターと並び順（並び順：{{sort}}、状態：{{status}}、エージェント：{{agent}}、最近のアクティビティ：{{lastActivity}}、プロジェクト：{{projects}}）",
       "filter": {
         "label": "フィルター",
         "active": "フィルター {{count}} 件",
@@ -5920,6 +5938,7 @@
     "cell": {
       "subtitlePaused": "一時停止中",
       "subtitleWaitingForResources": "実行スロット待ち（{{inFlight}}/{{max}}）",
+      "subtitleQueuedForSession": "セッションが空くのを待機中",
       "subtitleManual": "手動",
       "subtitleOnce": "1回",
       "tagOnce": "1回",
@@ -7190,7 +7209,9 @@
       "registrationFailed": "作成に失敗しました。後でもう一度お試しください",
       "silentStopExhausted": "モデルが空の応答を繰り返し返したため、自動再開を一時停止しました。「続行」をクリックしてタスクを再開してください。",
       "permissionTightenInterruptFailed": "権限を厳格化する際に実行中のタスクを停止できませんでした。タスクは終了まで確認なしで実行され続ける可能性があります。必要に応じて手動で停止してください。",
-      "codexAutoReviewUnavailable": "自動レビューは一時的に利用できません。現在の操作をブロックし、デフォルト権限に切り替えました。もう一度実行してください。必要な場合は確認します。"
+      "codexAutoReviewUnavailable": "自動レビューは一時的に利用できません。現在の操作をブロックし、デフォルト権限に切り替えました。もう一度実行してください。必要な場合は確認します。",
+      "upstreamResponseIdleTimeout": "モデルから長時間応答がなかったため、無限待機を避けるためこのターンを自動中断しました。完了したツール呼び出しは保持されています。次のメッセージを送信して続行できます。",
+      "turnNoEventTimeout": "このターンは長時間まったく進展がなかったため（モデル・ツール・バックグラウンド処理のすべてが無反応）、無限待機を避けるため自動中断しました。次のメッセージを送信して続行できます。"
     },
     "validation": {
       "feishuFieldsRequired": "App ID と App Secret の両方を入力してください",
@@ -7324,7 +7345,8 @@
       "blocked": "ブロック中",
       "complete": "完了",
       "budgetLimited": "上限到達",
-      "usageLimited": "利用上限"
+      "usageLimited": "利用上限",
+      "capacityLimited": "モデルサービスが混雑"
     },
     "turns": "{{used}} ターン",
     "turnsWithMax": "{{used}} / {{max}} ターン",
@@ -7344,10 +7366,13 @@
       "start": "開始",
       "starting": "作成中…",
       "cancel": "キャンセル",
-      "failed": "目標の作成に失敗しました"
+      "failed": "目標の作成に失敗しました",
+      "busy": "作成処理が進行中です。しばらくしてからもう一度お試しください。"
     },
     "usageLimitedUntil": "{{time}} に再開",
+    "capacityRetryAt": "{{time}} に再試行",
     "usageResumeNotice": "利用枠が回復しました。目標を再開します",
+    "capacityRetryNotice": "モデルサービスが混雑していました。目標を再試行します",
     "complete": {
       "record": "目標達成 · {{turns}} ターン · {{duration}}"
     },
@@ -7556,6 +7581,7 @@
       "poolDetail": "使用済み {{used}} · 合計 {{total}}",
       "remaining": "残り",
       "progressLabel": "{{label}}の使用量",
+      "noPlanCredits": "有効なサブスクリプションがないため、サブスクリプションクレジットはありません。",
       "historyUnavailable": "使用履歴が完全ではないため、残りのクレジットのみ表示しています。",
       "detailsUnavailable": "使用量の詳細を取得できないため、現在の残高のみ表示しています。",
       "promotionalDetails": {
@@ -7599,8 +7625,7 @@
     "catalog": {
       "errorTitle": "プランを取得できません",
       "errorDescription": "接続を確認して再試行してください。ローカルの代替プランは表示しません。",
-      "emptyTitle": "プランはまだありません",
-      "emptyDescription": "サーバーで公開中のプランはまだありません。",
+      "emptyTitle": "近日公開予定です。お楽しみに。",
       "currentPlan": "現在のプラン",
       "unavailableReasons": {
         "OFFER_COMING_SOON": "近日提供",

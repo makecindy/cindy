@@ -76,6 +76,11 @@ import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { UsageTracker } from '../shared/usage-tracker.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
 import { pickTurnStartStatus, type OneShotState } from '../shared/turn-start-phrases.js';
+import {
+  OVERLOAD_RETRY_MAX_ATTEMPTS,
+  overloadRetryDelayMs,
+  parseOverloadError,
+} from '../shared/overload-error.js';
 import { buildCodexEnv } from './env-builder.js';
 import { scanCodexCustomizations } from './customization-scanner.js';
 import { commandExecutionDisplayInput } from './command-display.js';
@@ -95,6 +100,7 @@ import {
 import {
   TurnRetryTracker,
   buildBackendUnreachableMessage,
+  type OutboundPathFact,
 } from './retry-escalation.js';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
 import { AppServerHost, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
@@ -104,6 +110,7 @@ import { CodexInteractionBroker } from './interaction-broker.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_CODEX_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
 import { MAKER_MEMORY_RULES } from '../../memory/system-prompt.js';
 import { MemoryFlushController } from '../../memory/flush-controller.js';
+import { buildMemoryScopeKey } from '../../memory/storage.js';
 import { CODEX_AGENT_COMMANDS } from './commands.js';
 import {
   canReuseCodexHostForCredentialMode,
@@ -112,6 +119,7 @@ import {
 } from '../credential-mode.js';
 import {
   Method,
+  codexErrorInfoTag,
   type AskForApproval,
   type ApprovalsReviewer,
   type ApprovalDecision,
@@ -683,6 +691,74 @@ const PROFILE_LIFECYCLE_ACK_TIMEOUT_MS = 10_000;
 // (terminal error + Done status)。注意: 超时只代表**我们不再等**, server 侧
 // 可能实际已建 thread/turn — 迟到事件按 stale turn 丢弃, 不影响 UI 复位。
 const CRITICAL_THREAD_RPC_TIMEOUT_MS = 60_000;
+
+/**
+ * upstream-response-idle watchdog 阈值 — codex 侧对齐 claude-code 的同名机制
+ * (claude-code/index.ts parseIdleTimeoutMs)。默认 30min, env
+ * `XDT_CODEX_IDLE_TIMEOUT_MS` (ms) 覆盖, 设 0 关闭。
+ *
+ * 背景: codex 此前只有 willRetry 风暴的终局升级 (retry-escalation.ts) —— 那只覆盖
+ * "daemon 在不停重试并如实上报"的情形。daemon **静默**卡死 (后端连接半开、内部
+ * 死锁、app-server 不再投递任何通知) 时没有任何兜底, turn 在 UI 上永远转圈。
+ *
+ * 计时语义与 claude 侧一致: 只在"客户端把 ball 交给上游、等上游回话"期间计时。
+ *  - 有未完成的工具类 item (命令执行 / MCP / 动态工具 / web 搜索 / 图像生成) →
+ *    停表: 工具执行由 daemon 侧承担, 长 build / 拉大表 / 等审批不该被误杀。
+ *  - 任何投递给上层的事件 (reasoning / text delta / status / item 更新) → 重置。
+ * 触发后走 turn/interrupt (与用户手动 Stop 同路径, 不销毁 thread), 并推一条终态
+ * error, reason 与 claude 侧共用 'upstream_response_idle_timeout'。
+ */
+const CODEX_UPSTREAM_IDLE_TIMEOUT_DEFAULT_MS = 30 * 60_000;
+
+/** upstream-idle 看门狗的计时分片长度(见 armUpstreamIdleSlice)。 */
+const CODEX_UPSTREAM_IDLE_SLICE_MS = 60_000;
+
+/** 分片实际耗时超出片长这么多 → 判为进程被系统挂起过,该片不计入额度。 */
+const CODEX_UPSTREAM_IDLE_SUSPEND_GAP_MS = 30_000;
+
+function parseCodexIdleTimeoutMs(raw: string | undefined): number {
+  if (raw === undefined || raw === '') return CODEX_UPSTREAM_IDLE_TIMEOUT_DEFAULT_MS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return CODEX_UPSTREAM_IDLE_TIMEOUT_DEFAULT_MS;
+  return Math.floor(n);
+}
+
+/**
+ * "球不在上游"的 item 类型白名单:这些 item 在 started → completed 之间由 daemon
+ * 侧执行(或在等用户审批),期间上游不欠我们回话,idle watchdog 必须停表。
+ * 与 translator 的 item 分派保持同一词表(codex/translator.ts)。
+ */
+const CODEX_TOOL_ITEM_TYPES: ReadonlySet<string> = new Set([
+  'commandExecution',
+  'mcpToolCall',
+  'dynamicToolCall',
+  'collabAgentToolCall',
+  'webSearch',
+  'imageGeneration',
+  'imageView',
+  'fileChange',
+]);
+
+/**
+ * Codex 权限档的严格度序（数值越大越严）。Codex 只支持 ask / auto /
+ * bypassPermissions 三档，其余取值走 clamp 后不会到这里；未知值按最严处理，
+ * 让比较偏向「需要中断」而不是放行。
+ *
+ * 用途：判断过载重投持的**冻结**策略是否比当前选择的档更宽。只比较最近一次
+ * 模式转换会漏掉 Full access → Ask → Auto 这类中间态。
+ */
+function codexPermissionStrictnessRank(mode: PermissionMode): number {
+  switch (mode) {
+    case 'bypassPermissions':
+      return 0;
+    case 'auto':
+      return 1;
+    case 'ask':
+      return 2;
+    default:
+      return 2;
+  }
+}
 
 // 计划批准后自动发起实施 turn 的固定输入 — 与官方 TUI 逐字一致
 // (codex-rs/tui/src/chatwidget/plan_implementation.rs 的
@@ -2074,15 +2150,18 @@ export class CodexAgent extends BaseAgent {
       opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled ?? false;
     const makerMemory = this.deps.makerMemory;
     const makerMemoryEnabled = makerMemoryFlag === true && !!makerMemory;
+    // SSH remote 的 workingDir 是远端路径 — store 定位统一经 scope key,
+    // 键规则与理由见 buildMemoryScopeKey (memory/storage.ts)。
+    const memoryScopeKey = buildMemoryScopeKey(opts.workingDir, opts.remoteHostId);
     // This per-session injection flag must not mutate the shared manager.
     if (makerMemoryEnabled && makerMemory) {
       try {
-        const store = await makerMemory.getStore(opts.workingDir);
+        const store = await makerMemory.getStore(memoryScopeKey);
         makerMemoryRules = MAKER_MEMORY_RULES;
         makerMemoryIndex = await store.getIndex();
         memoryFlushController = new MemoryFlushController({
           logger: log.child('memory-flush'),
-          workdir: opts.workingDir,
+          workdir: memoryScopeKey,
           agentKind: 'codex',
         });
         log.debug('maker memory loaded for session', {
@@ -2103,6 +2182,20 @@ export class CodexAgent extends BaseAgent {
     let sdkSessionId: string | undefined;
     let currentTurnId: string | null = null;
     let isTurnInFlight = false;
+    /**
+     * 本 handle 上「起过多少个 turn」的单调计数器,每次 isTurnInFlight 被置活 +1。
+     *
+     * 存在的唯一理由:延迟很久的善后动作(upstream-idle 看门狗那条要等两次 interrupt
+     * ack、最长 20s)不能只看**当下**有没有 turn 在跑 —— 新 turn 完全可能在这段窗口里
+     * 起来又正常结束,把 isTurnInFlight / currentTurnId 双双复位,善后于是误判成"没人
+     * 用了"并关掉这个已被证明健康的 host(review #944 第十八轮 P1)。存量瞬时状态答不了
+     * "期间有没有发生过新活儿",单调计数器可以。
+     *
+     * 与 sendGeneration 的区别:那个按 send() 计数,起不来 turn 的 send(RPC 失败、
+     * 被拒)也会 +1,而计划实施 turn 这类不经 send 的路径反而不 +1。这里要的恰恰是
+     * "turn 被置活"这件事。
+     */
+    let turnStartGeneration = 0;
     let isTurnStartPending = false;
     // turn/start RPC 失败(超时/拒绝)后置位: server 可能实际已建 turn,
     // 迟到的孤儿 turnStarted 由 turnStarted handler 拦下并补 interrupt。
@@ -2136,6 +2229,189 @@ export class CodexAgent extends BaseAgent {
     // 缓存供 turn end 日志读取 (协议本身不在 turn/completed 里带 usage)。
     let lastTurnTokenUsage: TokenUsageBreakdown | null = null;
     let lastModelContextWindow: number | null = null;
+    /**
+     * 已产出过模型内容(item 或 reasoning 增量)的 turn id。
+     *
+     * 只用于判断服务过载错误能否安全重投：容量拒绝发生在 admission 阶段时模型
+     * 一个字都没写过，重投同一份 turnParams 不会重复任何副作用；一旦已经产出过
+     * 内容（写过文件、跑过命令），重放就会让模型重做已完成的工作，那种情况必须
+     * 交回用户决定。
+     *
+     * **按 turn 记账而不是一个会话级标量**: 被 Stop 的旧 send 的隔离 start 若带着缓冲事件
+     * 回包(那要按"有产出"处理), 标量写的是**当前**这一轮的账 —— 而新一轮的 turnStarted 若
+     * 进过缓冲或作为同 turn 通知到达, 都不会把它清掉, 于是新消息一次本来安全的零产出容量
+     * 重投被误判成"有产出, 不重投", 自动重试静默失效(review #844 codex P1)。
+     * 每个写入方都拿得到自己的 turnId, 读取方(scheduleOverloadRetry)拿得到死 turn 的 id,
+     * 按 id 记账后跨轮污染在结构上就不成立, 也不再需要"换 turn 才清零"这类时序守卫。
+     */
+    const producedOutputTurnIds = new Set<string>();
+    /**
+     * 服务过载退避重投状态。`retry` 由 send() 每轮登记，闭包持有该 turn 的
+     * turnParams 与响应处理逻辑，因此重投投递的是同一条用户消息、同一套策略，
+     * 不会因为期间 mutable 配置变化而偷偷换参数。
+     */
+    let overloadRetry: {
+      retry: () => Promise<void>;
+      attempt: number;
+      timer: ReturnType<typeof setTimeout> | null;
+      /**
+       * 重投的 turn/start RPC 是否在途。计时器到点后 `timer` 已清空、新 turn 又
+       * 尚未激活，中间这段窗口若报 idle，并发 send 会被误接受并把原消息静默丢掉。
+       * 刻意用独立标记而不是复用 `isTurnStartPending`：后者在正常 send 路径上被
+       * 既有语义要求保持 idle（终态先于 turn/start 响应到达时，coordinator 必须
+       * 看到 idle 才能收口，否则 send 挂死），不能一起收紧。
+       */
+      inFlight: boolean;
+      /**
+       * 本轮 send 的取消信号是否已 abort。由 send() 闭包提供 —— `sendOpts` 只在
+       * 那个作用域里可见，而重投的失败收口判断发生在本文件的调度器作用域。
+       */
+      isCancelled: () => boolean;
+      /**
+       * 冻结 turnParams 时生效的权限档。判断「重投持的策略是否比当前更宽」要靠它：
+       * 只看最近一次模式转换会漏掉 Full access → Ask → Auto 这类中间态（Ask→Auto
+       * 不算收紧，会把延迟中断标记清掉，而冻结的 Full access 仍然更宽）。
+       */
+      launchedPermissionMode: PermissionMode;
+      /**
+       * 在途 RPC 期间又收到容量失败 → 那条错误被延后处理（既没排计时器也没收口）。
+       * RPC settle 且新 turn 没能激活时，必须凭这个标记补排一次，否则逻辑 send
+       * 永久悬空：错误已被落墓碑、响应因墓碑拒绝激活、inFlight 又被 finally 清掉，
+       * 没有任何计时器或终态事件残留（review #844 codex P1）。
+       */
+      deferredCapacityFailure: { deadTurnId: string | null } | null;
+      /** 这份重投状态属于哪一轮 send(判断"尾巴动作还有没有权限动全局状态")。 */
+      sendGen: number;
+      /** 摘掉本轮 send 信号的 abort 监听（状态被替换 / 收口时必须调）。 */
+      disposeSignalWatch: (() => void) | null;
+    } | null = null;
+    /**
+     * 在飞的 turn/start 请求登记表: 请求序号 → 该请求自己的状态。
+     *
+     * 为什么必须是**表**而不是几个标量: 这个文件其余部分假定"同一时刻只有一个 start 在
+     * 飞", 但 Stop 会让 handle 变 idle —— 用户可以在被 Stop 的那次 RPC 仍在飞时发下一条
+     * 消息, 于是确实会有两个 start 并存。用标量记"哪一次要被隔离 / 有没有 start 在飞"时,
+     * 后一个请求会把前一个的记账覆盖掉: 被 Stop 的旧 turn 于是逃过隔离、在响应回来时被
+     * 正常激活并继续跑工具; 反过来也可能把合法的新 turn 误杀
+     * (review #844 codex P1, 连续四轮都栽在同一个形状上)。
+     *
+     * 每个 per-request 的事实都住在自己的条目里, 请求 settle 时整条删掉, 天然不串味;
+     * "有没有 start 在飞"一律由 `inFlightStarts.size` 派生, 不再有第二份真相。
+     */
+    const inFlightStarts = new Map<number, { quarantined: boolean; terminalSettled: boolean }>();
+    /** 每次 turn/start RPC 的自增序号, 作为登记表的键。 */
+    let turnStartSeq = 0;
+    /**
+     * 每轮 send 的自增世代。
+     *
+     * Stop 会让 handle 变 idle, 于是被 Stop 的那一轮 send 还有"尾巴"在跑(它的 RPC 尚未
+     * settle、迟到的通知、失败清理), 而**下一轮 send 可能已经接管会话**。这些尾巴动作若
+     * 照旧操作全局状态(推终态、把 currentTurnId 当自己的孤儿收掉), 就会二次收口、甚至误杀
+     * 新一轮的合法 turn(review #844 codex/greptile P1)。判据统一为"我这一轮还是最新世代吗"。
+     */
+    let sendGeneration = 0;
+
+    /** 登记一次即将发出的 turn/start, 返回它的序号。 */
+    const beginTurnStart = (): number => {
+      const seq = ++turnStartSeq;
+      inFlightStarts.set(seq, { quarantined: false, terminalSettled: false });
+      isTurnStartPending = true;
+      return seq;
+    };
+
+    /**
+     * 注销一次已 settle 的 turn/start。
+     *
+     * `isTurnStartPending` 随之按"还有没有别的 start 在飞"重算 —— 直接置 false 会在两个
+     * start 并存时把属于**另一个**请求的状态清掉(review #844 codex P1)。
+     */
+    const endTurnStart = (seq: number): void => {
+      inFlightStarts.delete(seq);
+      isTurnStartPending = inFlightStarts.size > 0;
+    };
+
+    /**
+     * 除了 `seq` 这一次, 还有别的 turn/start 在飞吗。
+     *
+     * 缓冲集里的歧义 started **无法归属**(协议层分不清失败 RPC 的孤儿与在飞 RPC 的
+     * started-before-resp), 所以一个 id 只有在**所有候选归属方都被排除**之后才能被坐实成
+     * 孤儿 —— 也就是没有别的 start 还在飞的时候。隔离(reject)与对账(resolve)两条路共用这条
+     * 判据(review #844 codex P1)。
+     *
+     * 显式传 seq 而不是判 `inFlightStarts.size > 1`: 后者只在"调用点一定早于本请求
+     * endTurnStart"时才等价, 而那正是本 PR 反复踩过的隐式耦合。
+     */
+    /**
+     * turnId → 生出它的那一次 turn/start 的 seq。
+     *
+     * 用途只有一个: 判断"空 id 的容量拒绝能不能算在当前活跃 turn 头上"。活跃 turn 的
+     * 归属方若已 settle, 而登记表里还躺着**别人**的 start(典型: Stop 留下的旧 RPC), 那条
+     * 空 id 通知就可能是那一位的 —— 算在活跃 turn 头上会把一个正常在跑的 turn 落墓碑并
+     * 重放它的输入(review #844 codex P1)。
+     *
+     * sendGen 则回答"这个 turn 属于哪一轮 send": 退避 / 延后中的重投属于某一轮, 一个**不属于
+     * 那一轮**的 turn 的迟到终态不得替它收口, 也不得顺手撤销它的重投
+     * (review #844 greptile P1)。
+     *
+     * 按 turnId 建索引而不是存一个"当前 turn 的归属方"标量: 后者要跟着 currentTurnId 的
+     * 每一处清理同步, 漏一处就读到上一个 turn 的归属 —— 本 PR 已经在别的标量上踩过。
+     * 键就是 turnId 本身, 旧条目不可能被当成另一个 turn 的答案。
+     */
+    const turnOriginByTurnId = new Map<string, { startSeq: number | null; sendGen: number }>();
+
+    const hasOtherInFlightStart = (seq: number): boolean => {
+      for (const other of inFlightStarts.keys()) if (other !== seq) return true;
+      return false;
+    };
+
+    /**
+     * 标记某次在飞的 start:它的响应回来时**不得激活**带回的 turn, 必须落墓碑 + interrupt。
+     *
+     * 两个来源:
+     *  - 已接管一条**不带 turnId** 的容量拒绝(app-server 尚未回包时的空 id 形状): 要等响应
+     *    回来才知道那条失败说的是哪个 turn —— 记最新那一次(错误紧跟在它之后到达);
+     *  - 挂起重投期间的 Stop / 撤单: 已经推过终态事件, 随后回来的响应若照常激活, 用户看到
+     *    「已停止」而工具还在跑 —— 这种要把**当前所有**在飞的 start 一起隔离, 因为 Stop 的
+     *    语义是"什么都别再跑"。
+     */
+    const quarantineLatestInFlightStart = (): void => {
+      const seqs = [...inFlightStarts.keys()];
+      const latest = seqs[seqs.length - 1];
+      if (latest === undefined) return;
+      const entry = inFlightStarts.get(latest);
+      if (entry) entry.quarantined = true;
+      armLateStartOrphanGuard();
+    };
+    /**
+     * 标记当前所有在飞 start:这一轮已经由 Stop / 撤单推过终态, 它们的失败尾巴不得再推
+     * 第二组终态事件。
+     *
+     * 挂在**每个请求的条目**上而不是一个标量: 两轮 send 先后被 Stop 且各自的 RPC 都还在飞
+     * 时, 后一次会把标量覆盖掉 —— 先那次的 reject 于是又推一组终态, 而事件里不带 send 世代,
+     * 下游可能把这份过期收口套到后一个 turn 上(review #844 codex P1)。条目随 endTurnStart
+     * 一起删, 也不会泄漏。
+     */
+    const markInFlightStartsTerminallySettled = (): void => {
+      for (const entry of inFlightStarts.values()) entry.terminalSettled = true;
+    };
+    const quarantineAllInFlightStarts = (): void => {
+      if (inFlightStarts.size === 0) return;
+      for (const entry of inFlightStarts.values()) entry.quarantined = true;
+      armLateStartOrphanGuard();
+    };
+    /**
+     * 被隔离的 start 也可能在响应之前先推回 turnStarted —— 那个 handler 只看
+     * `turnStartFailedWithoutTurnId`, 不看登记表的 quarantined, 于是会把这个"已经判定不许
+     * 运行"的 turn 正常激活, 工具在 Stop 之后继续跑(review #844 codex P1)。
+     *
+     * 语义上这两件事是同一类: "有一次 start 我们拿不到 id 却已经决定它不许活"。所以复用既有
+     * 的通知级孤儿守卫, 让迟到的未知 started 走缓冲 / 墓碑 + interrupt 那条既有路径, 而不是
+     * 在 turnStarted handler 里再加一份并行判定。
+     */
+    function armLateStartOrphanGuard(): void {
+      turnStartFailedWithoutTurnId = true;
+    }
+
     let closed = false;
     let subscriptionInvalidatedByTransport = false;
     let subscription: ThreadSubscription | null = null;
@@ -2300,16 +2576,13 @@ export class CodexAgent extends BaseAgent {
       : credentialMode ?? this.hostEffectiveCredentialModes.get(currentHostKey);
     const approvalsReviewerProtocolSupported =
       supportsCodexApprovalsReviewerProtocol(initResp.userAgent);
-    // Codex's built-in reviewer currently selects the hidden `codex-auto-review`
-    // model through the session's model provider. Cindy's gateway, third-party
-    // providers, and other non-subscription credentials do not have a verified
-    // route for that model. Keep Auto usable on those routes by falling back to
-    // manual on-request approvals instead of letting the first write fail in the
-    // reviewer. Remote OAuth subscriptions use the daemon's synced subscription
-    // credential and keep the verified reviewer route.
-    const approvalsReviewerRouteSupported = sessionCredentialMode === 'oauth-bearer';
-    const approvalsReviewerSupported =
-      approvalsReviewerProtocolSupported && approvalsReviewerRouteSupported;
+    // OpenAI OAuth can use Codex's hidden reviewer model directly. Local proxy
+    // routes may opt in after registering a parent-thread → session → main-model
+    // context; until that synchronous registration succeeds they stay on the
+    // explicit user reviewer. Remote non-subscription routes have no local proxy
+    // rewrite and therefore keep the conservative manual fallback.
+    const nativeApprovalsReviewerRouteSupported = sessionCredentialMode === 'oauth-bearer';
+    let approvalsReviewerRouteSupported = nativeApprovalsReviewerRouteSupported;
     const readonlyReferenceDirsSupported = supportsCodexReadonlyReferenceDirs(initResp.userAgent);
     const resumeExcludeTurnsSupported = supportsCodexResumeExcludeTurns(initResp.userAgent);
     if (mutableExtraDirs.length > 0 && !readonlyReferenceDirsSupported) {
@@ -2318,7 +2591,10 @@ export class CodexAgent extends BaseAgent {
         `Codex reference directories require app-server 0.144.6 or newer (current: ${initResp.userAgent ?? 'unknown'})`,
       );
     }
-    if (mutablePermissionMode === 'auto' && !approvalsReviewerSupported) {
+    if (
+      mutablePermissionMode === 'auto' &&
+      !(approvalsReviewerProtocolSupported && approvalsReviewerRouteSupported)
+    ) {
       log.warn('Codex Auto falling back to user approvals: automatic reviewer is unavailable on this route', {
         userAgent: initResp.userAgent,
         providerId: opts.providerId ?? null,
@@ -2388,6 +2664,8 @@ export class CodexAgent extends BaseAgent {
           threadId,
           sessionId: sid,
           workingDir: opts.workingDir,
+          // remote thread ctx: scope key 语义见 buildMemoryScopeKey。
+          ...(opts.remoteHostId ? { remoteHostId: opts.remoteHostId } : {}),
           vendorOptions: vo,
         });
         log.debug('codex MCP thread context registered', {
@@ -2600,6 +2878,61 @@ export class CodexAgent extends BaseAgent {
       if (!register) return;
       register({ sessionId: sid, threadId, text });
     };
+    const registerCodexReviewerRouteContext = (targetThreadId: string): void => {
+      if (!sid || opts.remoteHostId || !hostUsesCodexProxy || !approvalsReviewerProtocolSupported) {
+        approvalsReviewerRouteSupported = nativeApprovalsReviewerRouteSupported;
+        return;
+      }
+      // `gpt-5` is the app-server's "use its default" sentinel, not an
+      // authoritative provider model id. A runtime switch to it deliberately
+      // skips thread/settings/update, so there is no concrete model to register
+      // for a third-party Guardian route. Keep manual review until a later
+      // start/resume/settings notification supplies the resolved model.
+      if (mutableModel === 'gpt-5') {
+        approvalsReviewerRouteSupported = nativeApprovalsReviewerRouteSupported;
+        if (!nativeApprovalsReviewerRouteSupported) {
+          log.warn('Codex Auto keeping user approvals: default model sentinel is unresolved', {
+            threadId: prefixId(targetThreadId),
+            sessionId: prefixId(sid),
+          });
+        }
+        return;
+      }
+      const register = this.deps.registerCodexReviewerRouteContext;
+      if (!register) {
+        approvalsReviewerRouteSupported = nativeApprovalsReviewerRouteSupported;
+        return;
+      }
+      try {
+        const registered = register({
+          sessionId: sid,
+          threadId: targetThreadId,
+          model: mutableModel,
+        });
+        approvalsReviewerRouteSupported =
+          nativeApprovalsReviewerRouteSupported || registered === true;
+        if (registered === true) {
+          log.debug('codex provider-aware Guardian reviewer route registered', {
+            threadId: prefixId(targetThreadId),
+            sessionId: prefixId(sid),
+            model: mutableModel,
+          });
+        } else if (!nativeApprovalsReviewerRouteSupported) {
+          log.warn('Codex Auto keeping user approvals: Guardian reviewer route registration declined', {
+            threadId: prefixId(targetThreadId),
+            sessionId: prefixId(sid),
+            model: mutableModel,
+          });
+        }
+      } catch (e) {
+        approvalsReviewerRouteSupported = nativeApprovalsReviewerRouteSupported;
+        log.warn('registerCodexReviewerRouteContext threw; keeping safe reviewer route', {
+          error: String(e),
+          threadId: prefixId(targetThreadId),
+          sessionId: prefixId(sid),
+        });
+      }
+    };
 
     // ── thread/start 或 thread/resume ────────────────────────────────────────
     // 防御: resumeSessionId 偶尔会是上次失败 session 残留的占位 ('<failed>' / '<pending>')
@@ -2700,6 +3033,7 @@ export class CodexAgent extends BaseAgent {
           mutableModel = resp.model;
         }
         threadId = resp.thread.id;
+        registerCodexReviewerRouteContext(threadId);
         if (useProxyChannel) {
           registerCodexDeveloperInstructions(threadId, developerInstructions);
           codexProductPromptDelivery = { threadId, historyHasProductPrompt: false };
@@ -2761,7 +3095,11 @@ export class CodexAgent extends BaseAgent {
         if (Object.hasOwn(resp, 'serviceTier')) {
           mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
         }
+        if (mutableModel === 'gpt-5' && resp.model) {
+          mutableModel = resp.model;
+        }
         threadId = resp.thread.id;
+        registerCodexReviewerRouteContext(threadId);
         if (useProxyChannel) {
           registerCodexDeveloperInstructions(threadId, developerInstructions);
           codexProductPromptDelivery = { threadId, historyHasProductPrompt: false };
@@ -2934,6 +3272,7 @@ export class CodexAgent extends BaseAgent {
           sdkSessionId = nextThreadId;
           subscription = host.subscribeThread(threadId, handlers);
           registerCodexMcpContext(threadId);
+          registerCodexReviewerRouteContext(threadId);
           eventQueue.push({ type: 'session_id', data: sdkSessionId, source: 'codex' });
           if (replacementServiceTierGeneration !== serviceTierMutationGeneration) {
             // setFastMode() updated the old thread while thread/start was
@@ -3332,9 +3671,20 @@ export class CodexAgent extends BaseAgent {
      * (review #969 第四轮 Codex P2)。send 入口清空 (每个 send 周期独立)。
      */
     const turnsCompletedBeforeStartResp = new Set<string>();
-    async function interruptTurnForPermissionTighten(turnId: string): Promise<void> {
-      if (closed) return;
-      if (skipIfStaleHost('turn/interrupt')) return;
+    /**
+     * @param opts.suppressFailureEvent 终失败时不推 'permission-tighten-interrupt-failed'
+     *        非终态 error。给 upstream-idle watchdog 用:它已经推过一条终态 error,
+     *        再补一条"收紧权限时没能停下任务"既词不达意也是重复打扰;它对失败的处置
+     *        是直接作废 host(见 onUpstreamIdleTimeout)。
+     * @returns true = app-server 确认收到中断;false = 两次 ack 都超时/报错(daemon
+     *          对我们哑火)。调用方据此决定要不要升级处置;忽略返回值即维持原行为。
+     */
+    async function interruptTurnForPermissionTighten(
+      turnId: string,
+      opts?: { suppressFailureEvent?: boolean },
+    ): Promise<boolean> {
+      if (closed) return false;
+      if (skipIfStaleHost('turn/interrupt')) return false;
       dismissPendingUserInputForTurn(turnId, 'turn_interrupted');
       // 每次尝试都设有界超时: app-server / 连接无响应时该 RPC 会永久悬挂, 没有
       // 超时就既不会走重试、也不会透出失败提示, 免审 turn 将无声继续跑
@@ -3357,6 +3707,7 @@ export class CodexAgent extends BaseAgent {
         });
       try {
         await requestInterruptWithTimeout();
+        return true;
       } catch (e) {
         // 这次 RPC 是收紧 fail-safe 的唯一执行手段, 失败不能静默: 重试一次,
         // 仍失败则透出非终态 error —— UI 已按 ask 展示, 但免审 turn 还在跑,
@@ -3364,8 +3715,10 @@ export class CodexAgent extends BaseAgent {
         log.warn('turn/interrupt on permission tighten threw — retrying once', { error: String(e) });
         try {
           await requestInterruptWithTimeout();
+          return true;
         } catch (retryErr) {
           log.error('turn/interrupt on permission tighten failed after retry', { error: String(retryErr) });
+          if (opts?.suppressFailureEvent) return false;
           eventQueue.push({
             type: 'error',
             data: {
@@ -3378,9 +3731,260 @@ export class CodexAgent extends BaseAgent {
             },
             source: 'codex',
           });
+          return false;
         }
       }
     }
+
+    // ── upstream-response-idle watchdog ────────────────────────────────────
+    // 见 CODEX_UPSTREAM_IDLE_TIMEOUT_DEFAULT_MS。探针装在 eventQueue.push 上而不是
+    // 逐个 handler 里:所有投递给上层的事件都必经这里,一处覆盖全部通道(item /
+    // reasoning / status / error),不会因为漏改某个 handler 就让 watchdog 少收到
+    // "还活着"的信号。这段刻意放在 interruptTurnForPermissionTighten 之后:它依赖
+    // closed / isTurnInFlight / threadId / 中断实现,全部已在上文声明。
+    const upstreamIdleTimeoutMs = parseCodexIdleTimeoutMs(process.env.XDT_CODEX_IDLE_TIMEOUT_MS);
+    /** 未完成的工具类 item id;非空 = 球不在上游,watchdog 停表。 */
+    const pendingToolItemIds = new Set<string>();
+    let upstreamIdleTimer: ReturnType<typeof setTimeout> | null = null;
+    let upstreamIdleLastEventType: string | null = null;
+    let upstreamIdleLastEventAt = 0;
+    /** 还需要"清醒地"静默多久才判上游哑火;按分片递减(见 armUpstreamIdleSlice)。 */
+    let upstreamIdleRemainingMs = 0;
+    /** 当前分片的起始壁钟时刻;片尾据此识别系统挂起。 */
+    let upstreamIdleSliceStartedAt = 0;
+    function clearUpstreamIdle(): void {
+      if (upstreamIdleTimer) {
+        clearTimeout(upstreamIdleTimer);
+        upstreamIdleTimer = null;
+      }
+      upstreamIdleRemainingMs = 0;
+      upstreamIdleSliceStartedAt = 0;
+    }
+    function armUpstreamIdle(): void {
+      clearUpstreamIdle();
+      if (upstreamIdleTimeoutMs <= 0) return;
+      if (closed || !isTurnInFlight) return;
+      // 工具执行 / 等审批期间 ball 不在上游,不计 idle 配额。
+      if (pendingToolItemIds.size > 0) return;
+      upstreamIdleRemainingMs = upstreamIdleTimeoutMs;
+      armUpstreamIdleSlice();
+    }
+    /**
+     * 分片计时,片尾核对真实耗时。不能用一个 30 分钟的长定时器直接判定 —— Electron 被
+     * 系统挂起(合盖睡眠)期间没有任何事件,定时器一旦在唤醒后到期就立刻开火,一次午休
+     * 就能让看门狗中断一条完全健康的 turn(review #944 第十二轮 P1,与 Session 层的
+     * armTurnStallSlice、scheduler 的 absorbSuspendGap 同源)。
+     */
+    function armUpstreamIdleSlice(): void {
+      const slice = Math.min(upstreamIdleRemainingMs, CODEX_UPSTREAM_IDLE_SLICE_MS);
+      upstreamIdleSliceStartedAt = Date.now();
+      upstreamIdleTimer = setTimeout(() => {
+        upstreamIdleTimer = null;
+        const elapsed = Date.now() - upstreamIdleSliceStartedAt;
+        if (elapsed > slice + CODEX_UPSTREAM_IDLE_SUSPEND_GAP_MS) {
+          log.info('upstream-idle watchdog skipped a suspended slice', {
+            threadId,
+            sliceMs: slice,
+            elapsedMs: elapsed,
+          });
+          // 唤醒后状态可能已变(turn 结束 / 又有工具在跑),走完整重判。
+          armUpstreamIdle();
+          return;
+        }
+        upstreamIdleRemainingMs -= Math.max(0, elapsed);
+        if (upstreamIdleRemainingMs > 0) {
+          armUpstreamIdleSlice();
+          return;
+        }
+        onUpstreamIdleTimeout();
+      }, slice);
+      (upstreamIdleTimer as unknown as { unref?: () => void }).unref?.();
+    }
+    /**
+     * 退役这个已确诊无响应的共享 app-server。写成箭头函数:下面的看门狗是 function
+     * 声明,拿不到实例 this。
+     *
+     * **只退役当初超时的那个 host 实例**:两次 interrupt ack 要等 20s,期间别的路径
+     * (auth / 凭证重启等)完全可能已经把这个 key 下的 host 换成一个新的健康实例。
+     * retireHostKey 只按 key 查删,不加这道闸就会把新 host 退役、连带终止它名下正在
+     * 干活的会话(review #944 第九轮 P1)。isCurrentHost 同时校验实例身份与
+     * hostGeneration,与 skipIfStaleHost 同款判据。
+     */
+    const retireUnresponsiveHost = async (reason: string): Promise<void> => {
+      if (!isCurrentHost()) {
+        log.warn('upstream-idle watchdog: host already replaced, skipping retire', {
+          threadId,
+          hostKey: currentHostKey,
+        });
+        return;
+      }
+      await this.retireHostKey(currentHostKey, reason, {
+        failIfActive: false,
+        logPrefix: 'codex upstream-idle watchdog',
+      });
+    };
+    /** turn 结束 / 中断时收表并清工具项(终态可能先于 item completed 到达)。 */
+    function resetUpstreamIdleForTurnEnd(): void {
+      clearUpstreamIdle();
+      pendingToolItemIds.clear();
+    }
+    /**
+     * itemStarted / itemCompleted 上维护"球在谁手里"。type / id 缺失的 item 不追踪
+     * (宁可少停表:watchdog 仍有 30min 缓冲,也不要因为一个没 id 的 item 永久停表)。
+     */
+    function noteToolItemLifecycle(item: unknown, phase: 'started' | 'completed'): void {
+      const rec = item && typeof item === 'object' ? (item as Record<string, unknown>) : null;
+      if (!rec) return;
+      const type = typeof rec.type === 'string' ? rec.type : null;
+      const id = typeof rec.id === 'string' ? rec.id : null;
+      if (!type || !id || !CODEX_TOOL_ITEM_TYPES.has(type)) return;
+      if (phase === 'started') pendingToolItemIds.add(id);
+      else pendingToolItemIds.delete(id);
+      // 停/起表边界变了,立即重算(最后一个工具收工 → 球回上游,开始计时)。
+      armUpstreamIdle();
+    }
+    /**
+     * 上游连续静默超阈值:daemon 对我们彻底哑火。推一条终态 error 收口(renderer 停
+     * 转圈 / scheduler 把 run 记 failed / IM 转播 finalize),再 turn/interrupt 让
+     * daemon 侧那个 turn 停掉(与用户手动 Stop 同路径,thread 保持可用)。
+     */
+    function onUpstreamIdleTimeout(): void {
+      if (closed || !isTurnInFlight) return;
+      if (pendingToolItemIds.size > 0) return;
+      const idleMs = upstreamIdleTimeoutMs;
+      const msSinceLast =
+        upstreamIdleLastEventAt > 0 ? Date.now() - upstreamIdleLastEventAt : null;
+      const turnId = currentTurnId;
+      log.warn('upstream-response-idle watchdog tripped — interrupting current turn', {
+        idleMs,
+        threadId,
+        turnId,
+        lastEventType: upstreamIdleLastEventType,
+        msSinceLastEvent: msSinceLast,
+      });
+      // 先立终态墓碑:下面合成的本地收口据此走 suppressTerminalUi 分支(只清状态、
+      // 不再推一遍终态 UI),迟到的 item / error 也一并被 stale guard 拦住。
+      if (turnId) terminalErroredTurnIds.add(turnId);
+      eventQueue.push({
+        type: 'error',
+        data: {
+          // reason 与 claude-code 侧共用同一稳定 key(renderer i18n 映射,规则 18);
+          // message 仅作非 renderer 消费方(IM / orca / 日志)的英文兜底。
+          reason: 'upstream_response_idle_timeout',
+          message:
+            `The upstream response has been silent for ${Math.round(idleMs / 1000)}s; ` +
+            'the turn was interrupted automatically to avoid hanging forever. ' +
+            'You can send the next message to continue.',
+          isTerminal: true,
+          idleMs,
+          lastEventType: upstreamIdleLastEventType,
+          msSinceLastEvent: msSinceLast,
+        },
+        source: 'codex',
+      });
+      resetUpstreamIdleForTurnEnd();
+      if (!turnId) return;
+      // **先把本地 turn 状态收干净,再去 interrupt**(review #944 第二轮 P1)。
+      // interruptTurnForPermissionTighten 在 app-server 彻底哑火时会两次 ack 超时
+      // 后放弃,而它按设计不动 isTurnInFlight / currentTurnId —— 那对权限收紧场景是
+      // 对的(turn 还在正常跑),但对这里是致命的:我们刚推了终态 error 让上层收口,
+      // 若本地仍认为 turn 在跑,handle.isTurnRunning() 恒 true,之后每一条 send 都被
+      // in-flight guard 拒掉,会话彻底不可用 —— watchdog 报告"已恢复"实际没有。
+      //
+      // 合成一次本地 turn 收口:上面已立墓碑,故走 suppressTerminalUi 分支,只清
+      // isTurnInFlight / currentTurnId / plan 态并做 usage 收尾,不重复推终态 UI。
+      // 同步完成,会话立刻恢复可发。
+      handleTurnCompleted({
+        threadId,
+        turn: { id: turnId, status: 'failed' },
+      } as TurnCompletedParams);
+      // 再让 daemon 侧那个 turn 也停下。**必须看结果**:上面的本地收口把
+      // isTurnInFlight 清成 false,于是 handle.isTurnRunning() 变 false —— Session 层
+      // 的 recoverIfTurnStillRunning 正是以它为判据,现在会认为"abort 生效了,会话
+      // 仍可用"而放过这个 host。若中断其实没成功,这个已经哑火 30 分钟的 app-server
+      // 就被留下来给下一条 send 复用:要么再次超时,要么撞上服务端那个还在跑的 turn
+      // (review #944 第五轮 P1)。
+      //
+      // 所以中断确认失败 = daemon 确诊不可用 → 自己 close():eventQueue.end() 让
+      // Session 的事件循环自然收尾 → setStatus('closed') → Maker 摘掉 activeSessions
+      // → 下一条 send 走 lazy create 重建 handle 并按 sdkSessionId resume。这条路径
+      // 与 Session.recoverIfTurnStillRunning 用的是同一套恢复机制(见 session.ts
+      // "handle.events() 自然结束"注释),不需要各 agent 另造一套。
+      // 中断成功时什么都不做:daemon 既然 ack 了就还活着,会话继续可用。
+      // 在进入 interrupt 等待窗口**之前**取一次快照:窗口里起过的新 turn 即使已经正常
+      // 结束(瞬时状态被复位),也要靠它认出来(见 turnStartGeneration 声明处)。
+      const turnGenBeforeInterrupt = turnStartGeneration;
+      void (async () => {
+        const interrupted = await interruptTurnForPermissionTighten(turnId, {
+          suppressFailureEvent: true,
+        });
+        if (interrupted || closed) return;
+        // **两次 ack 要等 20s,期间用户完全可能已经起了新 turn** —— 上面那次合成收口把
+        // isTurnInFlight 清成了 false,所以新的 send 不会被 in-flight guard 拒掉。此时
+        // 无条件 close 会掐死一条完全健康的新 turn,紧随其后的 host 退役还会连带终止同
+        // host 上的其它会话。isCurrentHost 只认得出"host 被换掉",认不出"同一 handle 上
+        // 起了新 turn"(review #944 第十七轮 P1;与第七轮 Session 的 turnGeneration、
+        // 第九轮的 host 身份闸是同一类错误:善后动作没绑定到发起它的那个实体)。
+        //
+        // 判据有两半,缺一不可:
+        // ① isTurnInFlight / currentTurnId —— 我们自己那次合成收口已把它们清空,所以
+        //    非空就一定是新活儿(新 turn 此刻仍在跑)。
+        // ② turnStartGeneration 与窗口前的快照不一致 —— 新 turn 在这 20s 里起来又**正常
+        //    结束**时,①的两个瞬时量会被 handleTurnCompleted 双双复位,只看①会误判成
+        //    "没人用了",照样关掉一个刚刚证明自己健康的 host,并连带退役同 host 上的其它
+        //    会话(review #944 第十八轮 P1)。单调计数器答得了"期间有没有发生过新活儿"。
+        // 两半都不成立才继续善后。留着这个 host 的风险由新 turn 自己的看门狗兜。
+        if (isTurnInFlight || currentTurnId !== null || turnStartGeneration !== turnGenBeforeInterrupt) {
+          log.warn(
+            'upstream-idle watchdog: this handle served a newer turn during the interrupt window — skipping close/retire',
+            {
+              threadId,
+              stalledTurnId: turnId,
+              currentTurnId,
+              turnGenBeforeInterrupt,
+              turnStartGeneration,
+            },
+          );
+          return;
+        }
+        // 走到这里有两种可能,处置相同:两次 ack 都超时(daemon 哑火),或 host 已被
+        // 替换(stale —— 这个 handle 的 send 本来也会被 assertCurrentHost 拒掉)。
+        // 两种情况下这个 handle 都已不可用,关掉它让上层重建是唯一正确的出路。
+        log.error(
+          'upstream-idle watchdog: turn interrupt not confirmed — closing this codex host so the next send rebuilds it',
+          { threadId, turnId },
+        );
+        try {
+          await handle.close();
+        } catch (e) {
+          log.warn('upstream-idle watchdog close threw', { error: String(e) });
+        }
+        // close() 只放掉本 thread 的订阅并结束自己的事件队列,**共享的 AppServerHost 仍
+        // 留在 this.hosts 缓存里** —— 下一次 lazy create 会经 getHost 拿到同一个已确诊
+        // 无响应的 app-server,立刻再卡一遍,等于没恢复(review #944 第八轮 P1)。
+        // turn/interrupt 是控制面 RPC,两次 ack 都超时说明整个 host 而不只是这个 thread
+        // 出了问题,所以要连 host 一起退役。
+        //
+        // 放在 close 之后:retireHostKey(failIfActive:false) 会向仍挂着的订阅者广播强制
+        // 退役的终态 transport error(让它们各自收口 turn 状态,见那里的注释);本会话已经
+        // 推过自己的终态 error 并在 close 里解除了订阅,不必再收一遍。
+        try {
+          await retireUnresponsiveHost(
+            `codex app-server unresponsive: no upstream activity for ${Math.round(idleMs / 1000)}s and turn/interrupt was never acknowledged`,
+          );
+        } catch (e) {
+          log.warn('upstream-idle watchdog host retire threw', { error: String(e) });
+        }
+      })();
+    }
+    // 装探针:此处仍远早于 handlers 注册(事件开始流动),不会漏掉任何一条。
+    const rawEventQueuePush = eventQueue.push;
+    eventQueue.push = (ev: AgentEvent): boolean => {
+      upstreamIdleLastEventType = ev.type;
+      upstreamIdleLastEventAt = Date.now();
+      armUpstreamIdle();
+      return rawEventQueuePush(ev);
+    };
 
     // ── ServerRequest handlers (Phase 2 approval, Phase 5 dismiss-on-mode-change) ──
     const commandExecutionApproval = async (
@@ -3917,6 +4521,32 @@ export class CodexAgent extends BaseAgent {
       && !completedTurnIds.has(turnId as string)
       && !terminalErroredTurnIds.has(turnId as string);
 
+    /**
+     * idle 孤儿落墓碑 —— **同时**补 best-effort interrupt。
+     *
+     * 为什么必须在这里 interrupt: turnStarted 的孤儿分支显式跳过已落墓碑的 id(它假设"已墓碑
+     * = interrupt 已经发过"), 而本函数此前只落墓碑、把 interrupt 留给那个分支。于是
+     * item/started 之类的事件**先于**迟到的 turnStarted 到达时, 两边各自以为对方会发 ——
+     * 谁都没发, 被 server 接受的那个 turn 在 Stop 已经终态收口 UI 之后继续执行工具
+     * (review #844 codex P1)。
+     *
+     * 恰好一次: isIdleOrphanTurnId 要求 id **不在** terminalErroredTurnIds 里, 而本函数第一件
+     * 事就是把它加进去, 所以同一个 turn 只会进来一次。
+     *
+     * turnCompleted 的 idle 孤儿分支**不用**它: 那个 turn 已经结束, interrupt 是纯浪费的 RPC。
+     */
+    const tombstoneIdleOrphanTurn = (turnId: string, reason: string): void => {
+      terminalErroredTurnIds.add(turnId);
+      if (!threadId) return;
+      host.request(Method.TurnInterrupt, { threadId, turnId }).catch((e: unknown) => {
+        log.warn('idle orphan turn interrupt failed (best-effort)', {
+          reason,
+          turnId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      });
+    };
+
     const shouldIgnoreStaleTurnEvent =(turnId: string | null | undefined): boolean => {
       if (!turnId) return false;
       if (completedTurnIds.has(turnId)) return true;
@@ -3927,11 +4557,12 @@ export class CodexAgent extends BaseAgent {
       // 计错 turn / 孤儿 error 终结合法新 turn, greptile R10 P1)。其事件一律
       // 忽略; 若响应证明合法 (id 一致)  buffer 已清空, 后续事件正常。
       if (bufferedOrphanTurnIds.has(turnId)) return true;
-      // idle 孤儿 (codex R15 P1): 立墓碑并丢弃。补 interrupt 由 turnStarted
-      // 的孤儿分支负责 (幂等); started 不到的孤儿在 daemon 侧自然跑完,
-      // 其 completed 由 turnCompleted handler 的同款判定拦。
+      // idle 孤儿 (codex R15 P1): 立墓碑 + 补 interrupt 并丢弃。interrupt 必须在这里发,
+      // 不能像早先那样留给 turnStarted 的孤儿分支 —— 那个分支跳过已落墓碑的 id, 而墓碑正是
+      // 这里刚落的; 事件先于迟到的 started 到达时谁都不发, 被接受的 turn 在 UI 已收口之后
+      // 继续跑工具 (review #844 codex P1)。
       if (isIdleOrphanTurnId(turnId)) {
-        terminalErroredTurnIds.add(turnId);
+        tombstoneIdleOrphanTurn(turnId, 'idle orphan event');
         return true;
       }
       return currentTurnId !== null && turnId !== currentTurnId;
@@ -3947,7 +4578,21 @@ export class CodexAgent extends BaseAgent {
     // 时 id 尚未入 buffer, 会穿透 stale guard 被按在飞 send 处理 — 孤儿
     // 守卫生效 + 新 RPC 在飞 + 无活跃 turn 时, 未知 id 视同 started 先进
     // buffer 再入队, 等对账。
-    const enqueueIfBufferedTurn = (turnId: string | null | undefined, replay: () => void): boolean => {
+    /**
+     * 缓冲期间**确实产出过模型 / 工具工作**的 turn。
+     *
+     * 与 bufferedTurnEventQueues 的区别: 队列里什么都有(turn/completed、userMessage echo、
+     * tokenUsage、plan 更新…), 拿"队列非空"当产出证据会把一次零产出的容量拒绝误判成
+     * "已有产出, 不重投", 结果对用户报硬失败 —— 而这一轮其实什么副作用都没发生
+     * (review #844 codex P1)。判据与非缓冲路径统一走 itemRepresentsModelWork。
+     */
+    const bufferedModelWorkTurnIds = new Set<string>();
+
+    const enqueueIfBufferedTurn = (
+      turnId: string | null | undefined,
+      replay: () => void,
+      opts?: { modelWork?: boolean },
+    ): boolean => {
       if (!turnId) return false;
       if (!bufferedOrphanTurnIds.has(turnId)) {
         if (!(turnStartFailedWithoutTurnId && isTurnStartPending && currentTurnId === null)) {
@@ -3962,6 +4607,7 @@ export class CodexAgent extends BaseAgent {
       const queue = bufferedTurnEventQueues.get(turnId) ?? [];
       queue.push(replay);
       bufferedTurnEventQueues.set(turnId, queue);
+      if (opts?.modelWork) bufferedModelWorkTurnIds.add(turnId);
       return true;
     };
 
@@ -4019,7 +4665,9 @@ export class CodexAgent extends BaseAgent {
       // turn, interrupt 输掉竞态时操作会真实执行)。与 notification 的
       // idle 孤儿闸同款判定, 立墓碑让后续事件一并拦。
       if (isIdleOrphanTurnId(turnId)) {
-        terminalErroredTurnIds.add(turnId);
+        // 同上: 落墓碑的同时补 interrupt。只拒掉审批/输入请求不够 —— 那个 turn 还在 server
+        // 上跑, 而 turnStarted 的孤儿分支不会为已落墓碑的 id 补发 (review #844 codex P1)。
+        tombstoneIdleOrphanTurn(turnId, 'idle orphan server request');
         return false;
       }
       // 孤儿守卫 + 已有活跃 turn: id ≠ currentTurnId 的请求来自失败 RPC 的
@@ -4207,6 +4855,10 @@ export class CodexAgent extends BaseAgent {
         isTurnInFlight = false;
         currentTurnId = null;
         currentTurnPlanModeActive = false;
+        // 收 idle 表只在**当前** turn 真正结束时做:放在上面的重叠早退之前会把
+        // 仍在跑的活跃 turn 的表一并清掉,而它若正好卡住(无事件可再 arm),watchdog
+        // 就永久失效了。
+        resetUpstreamIdleForTurnEnd();
       }
       const lastSnap = usageTracker.snapshot();
       // turn 桶快照 — endTurn 会清掉 turn 桶, 必须在调用前先取出来
@@ -4257,6 +4909,35 @@ export class CodexAgent extends BaseAgent {
         flushDeferredTerminalTurnCompletionsIfIdle();
         return;
       }
+      // 收口前的归属校验。本函数对**不是当前活跃 turn** 的终态一律按"收口当前这一轮"处理
+      // (既有行为: currentTurnId 为 null 时走 emit done, 非 null 时也照样推 error + done,
+      // 只是不动活跃态), 而挂起 / 延后 / 在飞的重投恰好活在这些窗口里: 被 Stop 的旧 turn 的
+      // 迟到 completed 于是既把新一轮报成失败, 又顺手撤销它的重投 —— 那一轮白白丢掉自动
+      // 重试, 要用户手动重发(review #844 greptile P1)。
+      //
+      // 判据**只看归属, 不看有没有活跃 turn**: 早先版本多要求 currentTurnId === null, 于是
+      // "重投 RPC 在飞 + 它的 turnStarted 已先到"这种状态(活跃 turn 存在且重投仍挂着)整段
+      // 绕过校验, 同一个 bug 换个时序照样成立(review #844 greptile P1)。
+      // 归属未知(拿不到 origin)同样算不属于 —— 未知的一律不许替它收口。
+      if (overloadRetryPending()) {
+        const origin = turnOriginByTurnId.get(turn.id);
+        if (origin?.sendGen !== overloadRetry?.sendGen) {
+          log.info('ignoring a foreign turn terminal state while an overload retry is pending', {
+            turnId: turn.id,
+            status: turn.status,
+            activeTurnId: currentTurnId,
+            turnSendGen: origin?.sendGen ?? null,
+            retrySendGen: overloadRetry?.sendGen ?? null,
+            threadId,
+          });
+          latestPlanByTurn.delete(turn.id);
+          flushDeferredTerminalTurnCompletionsIfIdle();
+          return;
+        }
+      }
+      // 到这里 = 这个 turn 的终态**要出 UI**, 逻辑 send 就此收口。墓碑压掉的那条路在上面
+      // 已经 return, 所以退避中的正常重投(死 turn 恒有墓碑)不会被误撤。
+      revokeOverloadRetryOnTerminalSettle(`turn_${turn.status}`);
 
       if (turn.status === 'failed' || turn.status === 'interrupted') {
         // 失败 / 中断的 plan turn 不发审批 — 半截计划没有审批意义, 循环就此结束。
@@ -4343,6 +5024,598 @@ export class CodexAgent extends BaseAgent {
       flushDeferredTerminalTurnCompletionsIfIdle();
     }
 
+    /**
+     * 该 item 是否代表"模型真的干了活"(有输出或有工具副作用)。
+     *
+     * app-server 会在 turn 开头把用户输入原样 echo 成一个 userMessage item ——
+     * translator 明确不消费它(见 translateItemNotification 里"故意不消费"那份清单)。
+     * 把这种 echo 算进产出, 过载重投的产出守卫会在**正常事件序**下就立刻生效, 自动
+     * 重投等于整体失效(review #844 codex P1)。hookPrompt 与 review 模式开关同理: 既
+     * 不是模型输出也没有工具副作用。
+     *
+     * 未知 / 缺失 type 一律按"有产出"处理: 宁可少重投一次, 不可把可能有副作用的
+     * turn 整体重放。
+     */
+    const ITEM_TYPES_WITHOUT_MODEL_WORK = new Set([
+      'userMessage',
+      'hookPrompt',
+      'enteredReviewMode',
+      'exitedReviewMode',
+    ]);
+    const itemRepresentsModelWork = (item: { type?: unknown } | null | undefined): boolean => {
+      const type = typeof item?.type === 'string' ? item.type : null;
+      return type === null || !ITEM_TYPES_WITHOUT_MODEL_WORK.has(type);
+    };
+
+    /** 取消挂起的过载重投（会话关闭 / 用户打断 / 新 turn 覆盖时调用）。 */
+    const cancelOverloadRetry = (reason: string): void => {
+      const state = overloadRetry;
+      if (!state?.timer) return;
+      clearTimeout(state.timer);
+      state.timer = null;
+      log.info('codex overload retry cancelled', { reason, threadId });
+    };
+
+    /**
+     * 彻底废弃当前的重投状态：清计时器、摘 signal 监听、置空引用。
+     *
+     * 与 cancelOverloadRetry 的分工：后者只清计时器（scheduleOverloadRetry 排新档
+     * 前的 'superseded' 就靠它，那时状态本身还要继续用）。凡是**状态整体作废**的地方
+     * 都必须走这个，否则 signal 的 abort 监听会残留在一个已废弃的闭包上。
+     */
+    const discardOverloadRetry = (reason: string): void => {
+      const state = overloadRetry;
+      if (!state) return;
+      cancelOverloadRetry(reason);
+      state.disposeSignalWatch?.();
+      state.disposeSignalWatch = null;
+      overloadRetry = null;
+    };
+
+    /**
+     * 空 turnId 的容量拒绝, 要等 turn/start 响应回来才知道说的是哪个 turn。
+     *
+     * 认领它并落墓碑, 否则 handleTurnStartResp 会把这个**已经报过容量失败**的 turn
+     * 正常激活: 一边跑着一个已被拒的 turn, 一边还挂着重投计时器 —— 同一条用户输入
+     * 会被执行两遍(review #844 codex P1)。初始 turn/start 与重投 turn/start 两条路
+     * 共用本函数。
+     */
+    const adoptUnidentifiedDeadTurn = (resp: TurnStartResponse, startSeq: number): void => {
+      const entry = inFlightStarts.get(startSeq);
+      if (!entry?.quarantined) return;
+      const turnId = resp.turn?.id;
+      if (!turnId) return;
+      entry.quarantined = false;
+      terminalErroredTurnIds.add(turnId);
+      // 这个 turn 的产出可能正躺在缓冲队列里(孤儿守卫武装期间 item / tool 都会被缓冲, 而
+      // 缓冲**只**表示我们还没渲染 —— daemon 那边命令早就跑了)。此时它自己的产出记账从未
+      // 被置上, 于是补排会照常重放同一条输入, 副作用执行两遍(review #844 codex P1)。
+      //
+      // 判据是"缓冲里有真的模型 / 工具工作", **不是**"队列非空": 队列里 turn/completed、
+      // userMessage echo、tokenUsage 都算一条, 拿长度当证据会把一次零产出的容量拒绝误判成
+      // 有产出, 对用户报硬失败 —— 而那一轮其实什么副作用都没发生(review #844 codex P1)。
+      if (bufferedModelWorkTurnIds.has(turnId)) {
+        producedOutputTurnIds.add(turnId);
+        log.info('codex adopted turn had buffered events — treating as produced output', {
+          turnId,
+          threadId,
+        });
+      }
+      // server 侧这个 turn 可能真的在跑(Stop / 撤单那条来源就是), 落墓碑只挡事件、
+      // 不停执行 —— 必须补一次 best-effort interrupt。容量拒绝那条来源里它本就已死,
+      // interrupt 是无害的空操作。
+      if (threadId) {
+        host.request(Method.TurnInterrupt, { threadId, turnId }).catch((e: unknown) => {
+          log.warn('quarantined pending start turn interrupt failed (best-effort)', {
+            turnId,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        });
+      }
+      const state = overloadRetry;
+      // 被延后的那条失败也要回填 id, 补排时才能清掉它挂起的审批 / 工具上下文。
+      if (state?.deferredCapacityFailure?.deadTurnId === null) {
+        state.deferredCapacityFailure = { deadTurnId: turnId };
+      }
+      // turnStarted 可能已经先于响应到达并把这个 id 激活。只落墓碑不清活跃态的话,
+      // rescheduleDeferredCapacityFailure 会因为"看起来还有 turn 在跑"而放弃补排(且顺手
+      // 清掉延后标记), 而那个 turn 的 turn/completed 又被墓碑压掉 —— 逻辑 send 既没有
+      // 下一次重投也没有终态事件, 永久悬空(review #844 codex P1)。与错误自带 id 时的
+      // 死 turn 处理保持一致。
+      if (currentTurnId === turnId) {
+        dismissPendingUserInputForTurn(turnId, 'turn_failed');
+        clearActiveToolContextsForTurn(turnId);
+        stopActiveRolloutPlanFallback();
+        currentTurnId = null;
+        isTurnInFlight = false;
+      }
+      log.info('codex adopted turn/start response id for an id-less capacity failure', {
+        turnId,
+        threadId,
+      });
+    };
+
+    /**
+     * 挂起的过载重投, 冻结的策略是否比 `mode` 更宽。
+     *
+     * 重投持的是发射那一刻冻结的 turnParams, 期间任何收紧都不会自动作用到它。判据
+     * 必须按严格度直接比"冻结档 vs 目标档", 不能只看"最近一次转换算不算收紧" ——
+     * Full access → Ask → Auto 这类中间态下最近一次是放宽, 而冻结的 Full access 仍然
+     * 比 Auto 宽(review #844 codex P1)。
+     *
+     * 公开的 setPermissionMode 与 Guardian 失败时的内部降级
+     * (switchAutoRuntimeToAskImmediately) 共用它: 后者绕开了公开路径, 只判
+     * currentTurnId / isTurnStartPending, 会漏掉"退避计时器正在等"这个窗口 ——
+     * 那时重投一到点就会以已被撤销的宽松档执行工具(review #844 codex P1)。
+     */
+    /**
+     * 本轮 send 的过载重投是否"还会发生"。三种状态都算:
+     *   - `timer != null`：退避等待中，计时器持着原消息；
+     *   - `inFlight`：计时器已到点、重投 RPC 在途、新 turn 尚未激活；
+     *   - `deferredCapacityFailure !== null`：失败已记账、等在途 turn/start settle 后
+     *     补排（那一刻既没有计时器也没有 inFlight）。
+     *
+     * 抽成单一判据是因为它同时决定三件事: 会话忙不忙(isTurnRunning)、取消要不要收口
+     * (signal abort)、权限收紧要不要作用到重投。前几轮每处各写一份, 第三种状态加进来
+     * 时漏了两处(review #844 codex/greptile P1)。
+     */
+    const overloadRetryPending = (
+      state: typeof overloadRetry = overloadRetry,
+    ): state is NonNullable<typeof overloadRetry> =>
+      state != null
+      && (state.timer != null || state.inFlight || state.deferredCapacityFailure !== null);
+
+    /**
+     * 逻辑 send 被终态收口(terminal error + Done 都已推出)时, 撤销挂起 / 延后的重投。
+     *
+     * 不撤销的话重投会在 UI 已经报失败之后照常发生: 最典型的是延后标记 ——
+     * `turn/completed(failed)` 抢在我们落墓碑之前到达(空 id 容量拒绝那条路要等
+     * turn/start 响应才知道 turn 身份, 这个窗口是真实存在的), 于是 handleTurnCompleted
+     * 正常收口成失败; 标记却还挂着, 等在飞的 turn/start settle 时它的 finally 照常补排
+     * 一次 —— 用户看到的是失败, 原消息却在他看不到的地方重投, 服务端已发生但未上报的
+     * 工具 / 文件操作跟着跑第二遍(review #844 greptile P1)。
+     *
+     * 语义上这就是"重投资格随收口一起作废": 代价只是这一轮要用户自己再发一次(与本功能
+     * 上线前的行为一致), 而另一侧是重复副作用。
+     */
+    const revokeOverloadRetryOnTerminalSettle = (reason: string): void => {
+      if (!overloadRetryPending()) return;
+      log.info('codex overload retry revoked — send already settled terminally', { reason, threadId });
+      discardOverloadRetry(`terminal-settle:${reason}`);
+    };
+
+    const overloadRetryPolicyLooserThan = (mode: PermissionMode): boolean => {
+      const state = overloadRetry;
+      if (!overloadRetryPending(state)) return false;
+      return (
+        codexPermissionStrictnessRank(state.launchedPermissionMode)
+        < codexPermissionStrictnessRank(mode)
+      );
+    };
+
+    /**
+     * 取消一轮过载重投时, 把它**已经激活**的 turn 一起收掉。
+     *
+     * 重投的 turnStarted 可能先于它的 turn/start 响应到达(协议允许的乱序), 那时
+     * currentTurnId 已经指向这个真实存在的 server turn。只推终态事件、不动它, 那个
+     * turn 会在调用方已按"已取消"处理之后继续执行工具(review #844 codex P1)。
+     *
+     * 自己落墓碑是关键: 之后到达的 turn/completed 会被压掉, 所以收口恰好一次 ——
+     * 无论重投响应最终是 resolve(它自己也会落墓碑)还是 reject。
+     * handle.abort() 与 sendOpts.signal 两条取消路径共用本函数。
+     */
+    const teardownActiveTurnForCancellation = (reason: string): void => {
+      const turnId = currentTurnId;
+      if (!turnId) return;
+      terminalErroredTurnIds.add(turnId);
+      dismissPendingUserInputForTurn(turnId, 'turn_interrupted');
+      clearActiveToolContextsForTurn(turnId);
+      if (threadId && !skipIfStaleHost('turn/interrupt')) {
+        host.request(Method.TurnInterrupt, { threadId, turnId }).catch((e: unknown) => {
+          log.warn('cancelled overload retry turn interrupt failed (best-effort)', {
+            reason,
+            turnId,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        });
+      }
+      stopActiveRolloutPlanFallback();
+      currentTurnId = null;
+      isTurnInFlight = false;
+      currentTurnPlanModeActive = false;
+    };
+
+    /**
+     * 退避等待 / 重投 RPC 在途期间发现本轮 send 已被取消时, 收口逻辑 turn。
+     *
+     * 只有"coordinator 只 abort 了 sendOpts.signal、没走 handle.abort()"那条路需要
+     * 它: abort() 自己已经推过终态并把 overloadRetry 置 null, 所以那条路走到这里时
+     * overloadRetry !== state, 不会二次收口。
+     *
+     * 为什么非推不可: signal 在本文件里原本只是**受理前**的取消边界
+     * (rejectIfCancelled 抛 "cancelled before acceptance"), 受理后没人再读它 —— 是
+     * 过载重投第一次在受理后去读 signal.aborted。若读到 aborted 就静默 return, 上层
+     * 永远等不到终态: desktop 的 SessionTurnActivityTracker 只在终态事件后释放派发
+     * 闩, Codex coordinator 刻意等这个事件而不自解锁, hook runner 要等一小时硬超时
+     * (review #844 greptile P1)。
+     */
+    const settleCancelledOverloadRetry = (
+      state: NonNullable<typeof overloadRetry>,
+      reason: string,
+    ): void => {
+      if (closed || overloadRetry !== state) return;
+      discardOverloadRetry(`settle:${reason}`);
+      // 重投的 turnStarted 已先于响应到达时, currentTurnId 指着一个真实在跑的
+      // server turn —— 必须一起收掉, 否则它会在调用方按"已取消"处理后继续执行工具。
+      teardownActiveTurnForCancellation(reason);
+      markInFlightStartsTerminallySettled();
+      // 还有 turn/start 在飞时同理: 它的响应晚于本次收口回来, 不隔离就会被正常激活。
+      // 全部隔离而不只是最新那个: 取消的语义是"这一轮什么都别再跑"。
+      quarantineAllInFlightStarts();
+      log.info('codex overload retry cancelled via send signal — settling logical turn', {
+        reason,
+        threadId,
+      });
+      eventQueue.push({
+        type: 'error',
+        data: {
+          message: 'Codex turn cancelled while waiting to retry a model-capacity failure',
+          isTerminal: true,
+          reason: 'codex-overload-retry-cancelled',
+        },
+        source: 'codex',
+      });
+      eventQueue.push({
+        type: 'status',
+        data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+        source: 'codex',
+      });
+    };
+
+    /**
+     * 服务过载退避重投调度。
+     *
+     * 返回进度表示已接管本次错误，**调用方必须跳过终态收口**（不推 terminal
+     * error、不推 Done status）——否则 UI 会先收口成失败再重投，用户看到一次假
+     * 失败闪烁，非交互入口更会直接把这一轮判死。返回 null 表示不接管，按原
+     * 终止路径报错。
+     *
+     * 为什么必须由我们重投：`Selected model is at capacity` 是模型服务槽位不足，
+     * OpenAI 侧不做任何重试就把 turn 判死（openai/codex#22390 请求 backoff 重试
+     * 至今 open），用户只能手动再发一次。这类抖动通常几秒内自愈，正是客户端该
+     * 兜住的部分。
+     *
+     * 为什么不自动换模型：容量故障往往横扫同一模型的所有 effort 档
+     * （2026-06-16 那次 medium/high/xhigh 全线不可用），换档无效；而换模型会
+     * 悄悄改变输出的判断风格，属于隐蔽的质量变更。降级留给用户显式选择。
+     */
+    const scheduleOverloadRetry = (
+      deadTurnId: string | null,
+    ): { attempt: number; maxAttempts: number } | null => {
+      const state = overloadRetry;
+      if (!state || closed) return null;
+      // 本轮已被取消(sendOpts.signal 已 abort)→ 一律不接管, 让这条错误走原终态路径收口。
+      // 不判的话: signal 在"初始 turn/start 还在飞、容量通知尚未到达"时 abort, 那个 {once}
+      // 监听器因为当时无事可做而被消费掉; 随后到达的空 id 容量拒绝照样建出
+      // deferredCapacityFailure, 而补排会在 isCancelled() 上退出 —— 标记留着,
+      // overloadRetryPending() 因此恒真, isTurnRunning() 永远为真(review #844 codex P1)。
+      if (state.isCancelled()) {
+        // 不接管**不等于**什么都不用做: 在飞的 start 必须一起隔离。这条错误随后走终态路径,
+        // 而在飞那次 RPC 若 resolve, 取消边界会在 quarantineTurnsAfterStartFailure 之前就把
+        // 异常抛出去 —— 于是迟到的 turnStarted 既没有隔离也没有墓碑, 会把这个已被取消的 turn
+        // 激活并执行工具(review #844 codex P1)。取消语义是"这一轮什么都别再跑", 所以隔离全部
+        // 在飞 start(与 settleCancelledOverloadRetry 一致); 隔离后响应回来时
+        // adoptUnidentifiedDeadTurn 会落墓碑 + 补 interrupt。
+        // 还要记"已由取消收口过": 这条错误马上就以终态形式发出去了(translator 那边),
+        // 而在飞那次 RPC 若最终 **reject**, finalErr 分支看到 initialStartSettledByCancel
+        // 为 false 会再推一组 terminal error + Done —— 同一轮收口两次, 而事件不带 send 世代,
+        // 期间若已有新一轮 send, 这份过期收口会落到它头上(review #844 codex P1)。
+        // 两件事一起做才与 settleCancelledOverloadRetry 同构(它也是 mark + quarantine)。
+        markInFlightStartsTerminallySettled();
+        quarantineAllInFlightStarts();
+        log.info('codex not taking over a capacity failure for an already-cancelled send', {
+          quarantinedStarts: inFlightStarts.size,
+          threadId,
+        });
+        return null;
+      }
+      // 空 id 的容量拒绝**无法归属**到具体请求(协议里它既不带 turnId 也不带请求关联)。
+      // 只有一个 start 在飞时可以安全地认定就是它; 有两个及以上时(Stop 留下的旧 RPC 仍在飞、
+      // 下一轮 send 又已发出)猜错的代价是: 隔离到错的那一个 → 把**已经在 server 上跑过工具**
+      // 的新 turn 落墓碑并重放它的输入 → 副作用执行两遍(review #844 codex P1)。
+      // 这里选择不接管: 代价只是这一轮要用户自己再发一次, 而错误的一侧是重复副作用。
+      if (!deadTurnId && inFlightStarts.size > 1) {
+        log.warn('codex id-less capacity failure not attributable — declining takeover', {
+          inFlightStarts: inFlightStarts.size,
+          threadId,
+        });
+        return null;
+      }
+      // 本 turn 已产出内容 → 重放会让模型重做已完成的工作（甚至重复副作用），
+      // 交回用户决定是否继续，不自动重投。
+      //
+      // **必须先于下面的 inFlight 延后分支**：重投出来的 turn 完全可能在自己的
+      // turn/start 响应 settle 之前就已经发出 item / tool / reasoning，那时
+      // state.inFlight 仍为 true，先走延后分支就会把这个已有产出的 turn 落墓碑、
+      // 随后重放原消息 —— 已经执行过的命令与文件改动跑第二遍
+      // (review #844 codex P1)。这里返回 null 是安全的：有产出意味着该 turn 早已
+      // 被 turnStarted 激活，不存在"UI 收口后在途 RPC 又把 turn 激活"的悬空风险。
+      // deadTurnId 为空(空 id 容量拒绝)时查不了, 也不必查: 那条路要求 currentTurnId 为
+      // null, 即这个 turn 的 turnStarted 还没到, 它的 item / reasoning 不可能被记到自己
+      // 名下(全被 stale 闸或缓冲挡住)。缓冲事件那种"看不见的产出"由
+      // adoptUnidentifiedDeadTurn 在响应回来、id 已知时补记, 补排再查一次就拦住了。
+      if (deadTurnId && producedOutputTurnIds.has(deadTurnId)) {
+        log.info('codex overload error after partial output — not auto-retrying', {
+          threadId,
+          deadTurnId,
+          inFlight: state.inFlight,
+        });
+        return null;
+      }
+      // 上一次重投的 turn/start 还在飞 → 绝不能再排一个。cancelOverloadRetry 只能
+      // 清计时器、取消不了在途 RPC，两个请求都可能被 server 接受，同一条用户输入
+      // 的工具副作用就会执行两遍（review #844 codex P1）。在途那次自己会走完
+      // 成功/失败路径，届时若仍缺容量会重新进入本函数。
+      if (inFlightStarts.size > 0) {
+        // 关键：**不能返回 null**。null 会让 translator 把这条错误报成终态，把逻辑
+        // turn 判死（review #844 codex P1），而在途那次 RPC 随后还可能成功并激活
+        // turn —— UI 已收口。这里返回当前进度：错误照样透成非终止状态（UI 继续显示
+        // 「正在重试」），但不递增预算、不排新计时器。
+        // 同时记账：这条失败只是被**延后**，retry() 的 finally 会在 RPC settle 后
+        // 补排一次；不记的话没有任何计时器或终态事件残留，逻辑 send 会永久悬空。
+        state.deferredCapacityFailure = { deadTurnId };
+        if (!deadTurnId) quarantineLatestInFlightStart();
+        // 这个 turn 在 app-server 侧已经死了, 必须**当场**把它从"活跃 turn"上摘掉,
+        // 不能等它自己的 turn/completed。事件顺序 turnStarted → 容量错误 →
+        // turn/start 响应 下, retry() 的 finally 跑到补排判定时 currentTurnId 还挂着
+        // 这具尸体 → 补排条件不成立; 而随后到达的 turn/completed 被墓碑压掉, 只清
+        // currentTurnId、不排任何东西 —— 逻辑 send 永久悬空(review #844 codex P1)。
+        // 只在确认是同一个 turn 时清: 真有别的 turn 活着说明这条错误不针对当前轮,
+        // 那时本就不该补排。
+        if (deadTurnId && currentTurnId === deadTurnId) {
+          dismissPendingUserInputForTurn(deadTurnId, 'turn_failed');
+          clearActiveToolContextsForTurn(deadTurnId);
+          stopActiveRolloutPlanFallback();
+          isTurnInFlight = false;
+          currentTurnId = null;
+        }
+        log.info('codex overload retry already in flight — deferring this failure to it', {
+          attempt: state.attempt,
+          threadId,
+          deadTurnId,
+        });
+        // 初始 RPC 在飞时 attempt 仍是 0（一次重投都还没发生），报 0/4 既难看也不实。
+        // 延后的这条失败补排时会消耗第 1 档，所以下限取 1。
+        return {
+          attempt: Math.max(1, state.attempt),
+          maxAttempts: OVERLOAD_RETRY_MAX_ATTEMPTS,
+        };
+      }
+      if (state.attempt >= OVERLOAD_RETRY_MAX_ATTEMPTS) {
+        log.warn('codex overload retry budget exhausted — surfacing terminal error', {
+          attempts: state.attempt,
+          threadId,
+        });
+        return null;
+      }
+      // 同一轮 send 只能有一个在飞的重投计时器。
+      cancelOverloadRetry('superseded');
+      const attempt = state.attempt + 1;
+      state.attempt = attempt;
+      const delayMs = overloadRetryDelayMs(attempt);
+      // 该 turn 在 app-server 侧确实已经死了：它挂起的审批 / user-input 必须清掉，
+      // 否则重投出来的新 turn 会与旧 turn 的悬空交互混在一起。
+      if (deadTurnId) {
+        dismissPendingUserInputForTurn(deadTurnId, 'turn_failed');
+        clearActiveToolContextsForTurn(deadTurnId);
+      } else {
+        // 空 id: 那个 turn 的身份要等 turn/start 响应才知道(典型是初始投递的
+        // turn/start 还没回包)。不记账的话响应会把这个已被拒的 turn 正常激活,
+        // 与刚排上的重投计时器一起把同一条输入跑两遍(review #844 codex P1)。
+        quarantineLatestInFlightStart();
+      }
+      stopActiveRolloutPlanFallback();
+      isTurnInFlight = false;
+      currentTurnId = null;
+      log.info('codex model at capacity — scheduling turn/start retry', {
+        attempt,
+        maxAttempts: OVERLOAD_RETRY_MAX_ATTEMPTS,
+        delayMs,
+        threadId,
+        deadTurnId,
+      });
+      // 重投持的是**冻结**策略。排上计时器的这一刻若当前档已经比冻结档更严, 必须
+      // (重新)武装延迟中断标记: 收紧若发生在"失败已延后、计时器还没排上"的窗口里,
+      // 那个标记会先被原始 turn 的 turn/start 响应消费掉(handleTurnStartResp 无条件
+      // 消费它), 等重投真的发出去时已经没有任何东西能拦住它 —— 工具就会在权限已被
+      // 撤销后执行(review #844 codex P1)。这里按状态重新推导, 不依赖标记存活。
+      if (
+        codexPermissionStrictnessRank(state.launchedPermissionMode)
+        < codexPermissionStrictnessRank(mutablePermissionMode)
+      ) {
+        pendingTightenInterrupt = true;
+        log.info('codex overload retry armed a tighten interrupt (frozen policy is looser)', {
+          frozen: state.launchedPermissionMode,
+          current: mutablePermissionMode,
+          threadId,
+        });
+      }
+      state.timer = setTimeout(() => {
+        state.timer = null;
+        if (closed || overloadRetry !== state) return;
+        void state.retry().catch((error) => {
+          // 取消之后 RPC 才 reject：Stop / close / 新 send 都已经各自收口过这一轮
+          // （abort 与新 send 会把 overloadRetry 置 null，close 会置 closed）。
+          // 此时再报一次 terminal error + Done 会让 UI 二次收口，并把用户主动停止
+          // 误报成「重投失败」。只留日志。
+          // 成功路径的同款复检在 retry() 内部（cancelledMidFlight）；reject 会绕过
+          // 那一段直接落到这里，两条路都要判。
+          if (closed || overloadRetry !== state || state.isCancelled()) {
+            log.info('codex overload retry rejected after cancellation — not surfacing', {
+              attempt,
+              error: String(error),
+              threadId,
+            });
+            return;
+          }
+          // 重投本身失败（含容量再次不足）：转终止错误交回用户，不在这里递归重排——
+          // 递归会绕过预算上限，容量故障期把额度烧光。
+          log.error('codex overload retry failed', { attempt, error: String(error), threadId });
+          // 与原始 turn/start 失败同款隔离：这次 RPC 可能已被 server 接受, 只是响应没
+          // 回来。不隔离的话, 先于 reject 到达的 turnStarted 会让 isTurnRunning() 在
+          // UI 收口后永真, 晚到的那种则会把一个没人消费的 turn 激活并执行工具
+          // (review #844 codex P1)。
+          quarantineTurnsAfterStartFailure('overload retry turn/start failed', {
+            ownsSession: sendGeneration === state.sendGen,
+          });
+          eventQueue.push({
+            type: 'error',
+            data: { message: `turn/start retry failed: ${String(error)}`, isTerminal: true },
+            source: 'codex',
+          });
+          eventQueue.push({
+            type: 'status',
+            data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+            source: 'codex',
+          });
+        });
+      }, delayMs);
+      return { attempt, maxAttempts: OVERLOAD_RETRY_MAX_ATTEMPTS };
+    };
+
+    /**
+     * turn/start RPC 级失败(超时 / 拒绝)后的孤儿隔离。
+     *
+     * RPC 失败**不代表** server 没建 turn —— daemon 可能已经接受了 turn/start, 只是
+     * 响应没回来。所以必须三件事一起做: 立孤儿守卫(之后迟到的 turnStarted 不得重新
+     * 激活会话)、把可能已被 started-before-resp 激活的活跃 turn 收掉(墓碑 + 清状态 +
+     * best-effort interrupt)、把缓冲的歧义 started 坐实成孤儿。
+     *
+     * 过载重投的 RPC 失败走同一套: 只推 terminal error + Done 的话, 迟到的
+     * turnStarted 会在 UI 已收口之后把一个没人消费的 turn 激活并执行工具; 而先于
+     * reject 到达的那种则会让 isTurnRunning() 永真, 下一条 send 被并发守卫挡死
+     * (review #844 codex P1)。
+     */
+    const quarantineTurnsAfterStartFailure = (
+      reason: string,
+      opts?: { ownsSession?: boolean },
+    ): void => {
+      turnStartFailedWithoutTurnId = true;
+      // currentTurnId 未必属于**这一次**失败的请求: Stop 之后下一轮 send 可能已经激活了它
+      // 自己的 turn, 这时把它当孤儿收掉 = 误杀一个合法在跑的 turn(review #844 codex P1)。
+      // 只有"我这一轮还拥有会话"时才动它; 否则只留孤儿守卫与缓冲清理。
+      const mayClaimActiveTurn = opts?.ownsSession !== false;
+      if (currentTurnId && mayClaimActiveTurn) {
+        const orphanTurnId = currentTurnId;
+        terminalErroredTurnIds.add(orphanTurnId);
+        if (threadId) {
+          host.request(Method.TurnInterrupt, { threadId, turnId: orphanTurnId }).catch((e2: unknown) => {
+            log.warn('turn/start-failure orphan interrupt failed (best-effort)', {
+              reason,
+              turnId: orphanTurnId,
+              error: e2 instanceof Error ? e2.message : String(e2),
+            });
+          });
+        }
+        currentTurnId = null;
+        isTurnInFlight = false;
+        currentTurnPlanModeActive = false;
+      }
+      // 缓冲集是**会话级共享**的, 只有"没有别的 start 在飞"时才能把里面的 id 整体坐实成
+      // 孤儿。还有 start 在飞时集子里可能躺着**它**的合法 started: Stop 会武装孤儿守卫,
+      // 于是下一轮 send 的 turnStarted 同样先进缓冲等对账。无条件清理会给它落墓碑 +
+      // interrupt, 它的 turn/start 响应随后拒绝激活 —— 那一轮既没有活跃 turn 也没有终态
+      // 事件, 永久卡 generating。ownsSession 挡不住这条: 那个守卫只护 currentTurnId
+      // (review #844 codex P1)。
+      //
+      // 留着不动是正确的收口: 在飞那次的响应本身就是权威对账者(id 不一致的坐实成孤儿并
+      // interrupt, 自己的正常激活); 它若也失败, 轮到它调用本函数时 inFlightStarts 已空,
+      // 集子在那时才被清。本函数的两个调用点都在各自请求 endTurnStart 之后, 所以这里的
+      // size>0 只可能是**别的**请求。
+      if (inFlightStarts.size === 0) {
+        for (const bufferedId of bufferedOrphanTurnIds) {
+          terminalErroredTurnIds.add(bufferedId);
+          settleBufferedTurnReconcile(bufferedId, false);
+          if (threadId) {
+            host.request(Method.TurnInterrupt, { threadId, turnId: bufferedId }).catch((e2: unknown) => {
+              log.warn('buffered orphan turn interrupt failed (best-effort)', {
+                reason,
+                turnId: bufferedId,
+                error: e2 instanceof Error ? e2.message : String(e2),
+              });
+            });
+          }
+        }
+        bufferedOrphanTurnIds.clear();
+        bufferedTurnEventQueues.clear();
+      } else {
+        log.debug('leaving buffered turns to the surviving turn/start response', {
+          reason,
+          bufferedTurnIds: [...bufferedOrphanTurnIds],
+          inFlightStarts: inFlightStarts.size,
+        });
+      }
+    };
+
+    /**
+     * 在途的 turn/start settle 后, 补排那条被延后的容量失败。
+     *
+     * 两条 start 路径共用: 重投自己的 RPC, 以及初始投递的 RPC(空 id 容量拒绝会落在它
+     * 还在飞的窗口里)。只有新 turn 确实没能激活时才补排（它被落了墓碑、响应因此拒绝
+     * 激活）; turn 活了就说明那条错误针对的是别的 turn, 不该重排。预算耗尽时必须自己
+     * 推终态, 否则逻辑 send 永久悬空。
+     *
+     * rpcSettledOk=false（RPC reject / 本地取消边界）时不补排: 那条路各自有终态收口,
+     * 在这里再排一个计时器会与它并存 —— UI 已收口, 原消息却仍被静默重投。
+     */
+    const rescheduleDeferredCapacityFailure = (
+      state: NonNullable<typeof overloadRetry>,
+      rpcSettledOk: boolean,
+    ): void => {
+      const deferred = state.deferredCapacityFailure;
+      if (!deferred) return;
+      // **只有真正接手时才清掉标记**。此前是一进函数就清: 被取消的旧 send 的 finally 把
+      // 当前(属于新 send 的)状态传进来, 随后任一 early return 都会把新 send 的延后失败
+      // 丢掉 —— 那一轮既不重投也不收口, 逻辑 turn 永久悬空(review #844 greptile P1)。
+      if (!rpcSettledOk) {
+        // 只有"标记归属本轮、而本轮 RPC 失败"时才会到这里(见调用点), 那条失败已由终态收口。
+        state.deferredCapacityFailure = null;
+        return;
+      }
+      if (closed || overloadRetry !== state) return;
+      // 已取消却还挂着延后标记 → **必须收口**, 不能静默返回: 标记留着会让
+      // overloadRetryPending() 恒真, isTurnRunning() 永远为真, 上层派发闩不释放
+      // (review #844 codex P1)。settleCancelledOverloadRetry 会 discard 状态(标记随之清掉)
+      // 并推终态; 重复调用是无害的 no-op(它自查 overloadRetry !== state)。
+      if (state.isCancelled()) {
+        settleCancelledOverloadRetry(state, 'deferred capacity failure on a cancelled send');
+        return;
+      }
+      if (currentTurnId !== null || isTurnInFlight) return;
+      // 还有别的 start 在飞 → 这条失败交给那一次的 settle 去补排, 本次不排:
+      // 否则又回到"两个 start 并存"的形状(review #844 codex P1)。
+      if (inFlightStarts.size > 0) return;
+      state.deferredCapacityFailure = null;
+      if (scheduleOverloadRetry(deferred.deadTurnId)) return;
+      log.warn('codex deferred capacity failure exhausted the retry budget', {
+        attempt: state.attempt,
+        threadId,
+      });
+      eventQueue.push({
+        type: 'error',
+        data: {
+          message: 'Selected model is at capacity. Please try a different model.',
+          isTerminal: true,
+        },
+        source: 'codex',
+      });
+      eventQueue.push({
+        type: 'status',
+        data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+        source: 'codex',
+      });
+    };
+
     const GUARDIAN_REVIEW_FAILURE_PREFIX = 'Automatic approval review failed:';
 
     const emitGuardianUnavailable = (params: ItemGuardianApprovalReviewCompletedNotification): void => {
@@ -4374,10 +5647,17 @@ export class CodexAgent extends BaseAgent {
       if (mutablePermissionMode !== 'auto') return false;
       dismissAllPending('permission_mode_changed_to_ask', 'deny');
       mutablePermissionMode = 'ask';
-      if (!closed && turnLaunchedUnattended) {
+      // 挂起的过载重投也要一起收紧: 它冻结的是 Auto / Full access, 而 Guardian 已经
+      // 不可用、运行期刚降到 Ask。这条路**绕开**了公开的 setPermissionMode, 原本只判
+      // currentTurnId / isTurnStartPending —— 退避计时器正在等的那个窗口两者都不成立,
+      // 重投一到点就会以已被撤销的宽松档执行工具(review #844 codex P1)。
+      const retryPolicyLooserThanAsk = overloadRetryPolicyLooserThan('ask');
+      if (!closed && (turnLaunchedUnattended || retryPolicyLooserThanAsk)) {
         if (currentTurnId !== null) {
           void interruptTurnForPermissionTighten(currentTurnId);
-        } else if (isTurnStartPending) {
+        } else if (isTurnStartPending || retryPolicyLooserThanAsk) {
+          // 与 turn/start 在飞同构: 标记由 handleTurnStartResp / turnStarted 在拿到
+          // turn id 的瞬间消费并补中断。
           pendingTightenInterrupt = true;
         }
       }
@@ -4490,8 +5770,18 @@ export class CodexAgent extends BaseAgent {
         if (turnsCompletedBeforeStartResp.has(params.turn.id)) return;
         threadMayHaveRollout = true;
         const wasSameTurn = currentTurnId === params.turn.id;
+        // started 先于响应到达时归属方只能推断: 只有一个 start 在飞 → 就是它; 多个 → 认不出,
+        // 不登记(读取方按"归属不明"从严处理)。
+        const startedOwnerSeqs = [...inFlightStarts.keys()];
+        turnOriginByTurnId.set(params.turn.id, {
+          startSeq: startedOwnerSeqs.length === 1 ? (startedOwnerSeqs[0] as number) : null,
+          sendGen: sendGeneration,
+        });
         currentTurnId = params.turn.id;
         isTurnInFlight = true;
+        turnStartGeneration += 1; // 见声明处:延迟善后靠它判断"期间起过新 turn"
+        // turn 开始 → 球在上游,起 idle 表(后续任何事件都会重置它)。
+        armUpstreamIdle();
         // turn/start 在飞期间权限被收紧 (turnStarted 通知可能先于 turn/start resp
         // 到达) → 拿到 id 立即补中断, 与 handleTurnStartResp 互斥消费同一标记。
         if (pendingTightenInterrupt) {
@@ -4515,6 +5805,12 @@ export class CodexAgent extends BaseAgent {
         translatorRt.networkRetryNotice = null;
         // retry 升级计数同样按 turn 隔离 — 新 turn 从零计。
         turnRetryTracker.reset();
+        // 产出记账**不在这里清**: 它按 turn id 存(producedOutputTurnIds), 新 turn 天然
+        // 从"零产出"起算, 同一 turn 的重复 / 迟到 started 也不会抹掉已记的账 —— 这两条
+        // 以前靠 `if (!wasSameTurn)` 的时序守卫维持(review #844 codex P1), 现在是结构性的。
+        // **不在这里重置 overloadRetry.attempt**:过载重投本身会开出新 turn,
+        // 在这里清预算等于每次重投都续满次数 → 容量故障期无限重试烧额度。
+        // 预算只在 send() 收到用户新消息时重置。
         log.debug('SDK ▶ turn start', {
           turnId: params.turn.id,
           model: mutableModel,
@@ -4556,7 +5852,9 @@ export class CodexAgent extends BaseAgent {
         // 直接丢弃会把尸体 turn 激活成 in-flight, send 永久卡 generating。
         if (enqueueIfBufferedTurn(params.turn.id, () => handlers.turnCompleted?.(params))) return;
         // 只拦 idle 孤儿 (codex R15 P1): 无 pending 时它的 completed 会走
-        // currentTurnId===null 的收口分支 emit 假 done。terminal/completed
+        // currentTurnId===null 的收口分支 emit 假 done。这里**只**落墓碑, 不补 interrupt ——
+        // 这个 turn 已经结束了, interrupt 是纯浪费的 RPC(与 tombstoneIdleOrphanTurn 的分工)。
+        // terminal/completed
         // 墓碑 turn 的迟到 completed 仍走 handleTurnCompleted 的正常
         // bookkeeping (suppressTerminalUi 分支, 不重复出 UI 事件) — 不能上
         // 整个 stale 闸。
@@ -4567,10 +5865,16 @@ export class CodexAgent extends BaseAgent {
         handleTurnCompleted(params);
       },
       itemStarted: (params) => {
-        if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemStarted?.(params))) return;
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemStarted?.(params), {
+          modelWork: itemRepresentsModelWork(params.item),
+        })) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         if (interceptProposedPlanItem(params.item)) return;
+        // 模型已开始产出 → 本 turn 不再适合被过载重投整体重放。SDK echo 类 item
+        // (userMessage 等)不算产出, 见 itemRepresentsModelWork。
+        if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
         noteActiveToolContext(params.item, params.turnId);
+        noteToolItemLifecycle(params.item, 'started');
         pushItemStatus(params.item);
         translateItemNotification('started', params, eventQueue, {
           rt: translatorRt,
@@ -4581,9 +5885,12 @@ export class CodexAgent extends BaseAgent {
         });
       },
       itemUpdated: (params) => {
-        if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemUpdated?.(params))) return;
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemUpdated?.(params), {
+          modelWork: itemRepresentsModelWork(params.item),
+        })) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         if (interceptProposedPlanItem(params.item)) return;
+        if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
         noteActiveToolContext(params.item, params.turnId);
         translateItemNotification('updated', params, eventQueue, {
           rt: translatorRt,
@@ -4594,10 +5901,14 @@ export class CodexAgent extends BaseAgent {
         });
       },
       itemCompleted: (params) => {
-        if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemCompleted?.(params))) return;
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemCompleted?.(params), {
+          modelWork: itemRepresentsModelWork(params.item),
+        })) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
         if (interceptProposedPlanItem(params.item)) return;
+        if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
         noteActiveToolContext(params.item, params.turnId);
+        noteToolItemLifecycle(params.item, 'completed');
         translateItemNotification('completed', params, eventQueue, {
           rt: translatorRt,
           log,
@@ -4616,18 +5927,25 @@ export class CodexAgent extends BaseAgent {
         translatePlanUpdatedNotification(params, eventQueue);
       },
       reasoningSummaryTextDelta: (params) => {
-        if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningSummaryTextDelta?.(params))) return;
+        // thinking 流同样算产出(与非缓冲路径一致)。
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningSummaryTextDelta?.(params), { modelWork: true })) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        // thinking 流也算产出：模型已经在这一轮里工作了，整体重放不再等价。
+        producedOutputTurnIds.add(params.turnId);
         translateReasoningSummaryTextDelta(params, eventQueue, { rt: translatorRt, log });
       },
       reasoningSummaryPartAdded: (params) => {
-        if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningSummaryPartAdded?.(params))) return;
+        // thinking 流同样算产出(与非缓冲路径一致)。
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningSummaryPartAdded?.(params), { modelWork: true })) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        producedOutputTurnIds.add(params.turnId);
         translateReasoningSummaryPartAdded(params, eventQueue, { rt: translatorRt, log });
       },
       reasoningTextDelta: (params) => {
-        if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningTextDelta?.(params))) return;
+        // thinking 流同样算产出(与非缓冲路径一致)。
+        if (enqueueIfBufferedTurn(params.turnId, () => handlers.reasoningTextDelta?.(params), { modelWork: true })) return;
         if (shouldIgnoreStaleTurnEvent(params.turnId)) return;
+        producedOutputTurnIds.add(params.turnId);
         translateReasoningTextDelta(params, eventQueue, { rt: translatorRt, log });
       },
       accountRateLimitsUpdated: (params) =>
@@ -4648,8 +5966,12 @@ export class CodexAgent extends BaseAgent {
         // 某个 turn 的响应推断。通知恒带完整 ThreadSettings, 故 serviceTier 总是 present。
         const s = params.threadSettings;
         const before = mutableServiceTier ?? null;
+        const beforeModel = mutableModel;
         mutableServiceTier = normalizeServiceTier(s.serviceTier) ?? null;
         if (typeof s.model === 'string' && s.model) mutableModel = s.model;
+        if (mutableModel !== beforeModel) {
+          registerCodexReviewerRouteContext(params.threadId);
+        }
         // ReasoningEffort 的 'none' 不属于 Effort; 排除后其余值都是合法 Effort, 无需 cast。
         if (s.effort && s.effort !== 'none') mutableEffort = s.effort;
         if (before !== (mutableServiceTier ?? null)) {
@@ -4696,8 +6018,72 @@ export class CodexAgent extends BaseAgent {
           activeToolContexts.clear();
         }
         const targetsPendingTurn = isTurnStartPending && currentTurnId === null && Boolean(params.turnId);
+        // 空 turnId 的容量拒绝: 过载重投的 RPC 还在飞、而它的 turnStarted 尚未到达时,
+        // currentTurnId 是 null 且 isTurnInFlight 是 false —— 上面两条既有判据都不成立,
+        // 这条错误会被当 stale 整条丢掉。后果是既不落墓碑也不记账, 随后到达的
+        // turn/start 响应把这个已经报过容量失败的 turn 激活成活跃 turn, 剩余重投预算
+        // 被绕过, 只能等它自己的 turn/completed 收口成硬失败(review #844 codex P1)。
+        // 只对**过载类**放行: 其它空 id 终态错误(含 transport)保持既有行为, 免得把
+        // 与本轮无关的错误误认成"针对当前 turn"。
+        // 判据用 isTurnStartPending 而**不是** overloadRetry.inFlight: 后者只由重投路径
+        // 设置, 初始投递的 turn/start 在飞时永远为 false —— 那个窗口里的空 id 容量拒绝
+        // 一样会被丢掉, 响应随后激活一个已被拒的 turn, 自动重投预算整轮白给
+        // (review #844 codex P1)。
+        // 归属唯一时(只有一个 start 在飞)才认它。两个及以上在飞时这条通知无法归属:
+        // 既不能接管重投(猜错就重放已跑过工具的 turn), 也**不能**让它走终态 —— 后者会
+        // 拿别人的错误把当前这一轮判死, 而那一轮的响应随后照样会被激活, 于是"UI 已收口、
+        // 工具还在跑"(review #844 codex P1)。
+        // 不认 → 落到既有的 `stale codex terminal error ignored` 分支被丢掉, 这是安全的:
+        // 真属于某个 turn 的话, server 随后会为那个 turn 发权威的 turn/completed(failed),
+        // 收口由它完成。
+        // 判定同样优先吃结构化 codexErrorInfo, 文案只作老 daemon 兜底: 这条判据决定
+        // 空 id 的容量拒绝能不能被归属到在飞的 turn/start, 漏判 = 整轮重投预算白给。
+        const idLessCapacityError =
+          params.turnId === ''
+          && isTerminalError
+          && parseOverloadError(
+            params.error?.message ?? '',
+            extractNonSecretErrorSignals(params.error?.message ?? '').errorStatus,
+            codexErrorInfoTag(params.error?.codexErrorInfo),
+          ) !== null;
+        const idLessAttributable = inFlightStarts.size === 1;
+        const targetsIdLessPendingStart =
+          idLessCapacityError
+          && isTurnStartPending
+          && currentTurnId === null
+          && idLessAttributable;
+        // 空 id 的容量拒绝什么时候才算"活跃 turn 的"。
+        //
+        // 判据是**它自己的 admission 还没回包**: 空 turnId 这个形状的含义就是"server 还没能
+        // 告诉你是哪个 turn", 也就是容量在 admission 阶段被拒。活跃 turn 的 turn/start 若已
+        // 经回包, 它早就过了 admission —— 之后真为它发的容量错误一定带得上 turnId。所以此时
+        // 的空 id 通知只可能来自别处(最典型: 被 Stop 的旧 send, 它的 turn id 我们从没学到),
+        // 认在活跃 turn 头上的后果是: scheduleOverloadRetry 拿 currentTurnId 当死 turn, 把一
+        // 个正常在跑的 turn 落墓碑、撤销重投、推 Done, 而 server 侧那个 turn 还在执行工具
+        // (review #844 codex/greptile P1)。
+        //
+        // 覆盖三种此前漏掉或猜错的形状, 收敛成一条:
+        //  - 活跃 turn 的 start 已 settle、登记表里躺着**别人**的 start(Stop 留下的旧 RPC);
+        //  - 活跃 turn 的 start 已 settle、且**没有任何** start 在飞(上一条的对称情形);
+        //  - 归属未知(拿不到 origin.startSeq)。
+        // 保留的是唯一合法形状: started-before-resp —— 活跃 turn 是它自己那次仍在飞的 start
+        // 生出来的, 那条空 id 拒绝确实可能是它的 admission。
+        // 只收紧**容量**这一类: 其它空 id 终态错误保持既有行为, 免得顺手改了无关语义。
+        const activeTurnStartSeq =
+          currentTurnId !== null ? turnOriginByTurnId.get(currentTurnId)?.startSeq ?? null : null;
+        const idLessCapacityTargetsActiveTurn =
+          isTurnInFlight
+          && currentTurnId !== null
+          && activeTurnStartSeq !== null
+          && inFlightStarts.has(activeTurnStartSeq)
+          && !hasOtherInFlightStart(activeTurnStartSeq);
         const targetsCurrentTurn =
-          params.turnId === currentTurnId || (params.turnId === '' && isTurnInFlight) || targetsPendingTurn;
+          params.turnId === currentTurnId
+          || (params.turnId === ''
+            && isTurnInFlight
+            && (!idLessCapacityError || idLessCapacityTargetsActiveTurn))
+          || targetsPendingTurn
+          || targetsIdLessPendingStart;
         if (isTerminalError && isTransportError && !targetsCurrentTurn) {
           translateErrorNotification(effectiveParams, eventQueue, { rt: translatorRt, log });
           return;
@@ -4748,18 +6134,39 @@ export class CodexAgent extends BaseAgent {
                   });
                 });
               }
+              // 出站路径快照只对本地有意义 (远端 daemon 自己出网, 见
+              // buildBackendUnreachableMessage 注释)。必须带 threadId: host 侧靠它
+              // 定位本次请求实际打的上游 (codex 的出口随会话 provider 变), 查不到就
+              // 返回 null 而不是拿「最近一条」凑。读取按 best-effort: 诊断绝不能反过来
+              // 把已经在收口的错误路径搞崩。
+              let outboundPath = null as OutboundPathFact | null;
+              if (!opts.remoteHostId && this.deps.getOutboundPathFact) {
+                try {
+                  outboundPath = this.deps.getOutboundPathFact({
+                    threadId: params.threadId,
+                  }) ?? null;
+                } catch (e) {
+                  log.warn('outbound path fact lookup failed (best-effort)', {
+                    error: e instanceof Error ? e.message : String(e),
+                  });
+                }
+              }
               const message = buildBackendUnreachableMessage({
                 isRemote: Boolean(opts.remoteHostId),
                 remoteHostId: opts.remoteHostId,
                 retryCount: decision.retryCount,
                 elapsedMs: decision.elapsedMs,
                 lastError: rawMessage,
+                outboundPath,
               });
               log.error('codex retry-loop escalated to terminal error (backend unreachable)', {
                 threadId: params.threadId,
                 turnId: params.turnId,
                 retryCount: decision.retryCount,
                 elapsedMs: decision.elapsedMs,
+                // 与用户看到的消息同源;`at` 让排查者判断这条判定有多新
+                // (系统代理判定有 TTL 缓存, 陈旧快照要按陈旧解读)。
+                ...(outboundPath ? { outboundPath } : {}),
               });
               effectiveParams = { ...params, willRetry: false, error: { message } };
               isTerminalError = true;
@@ -4767,10 +6174,38 @@ export class CodexAgent extends BaseAgent {
           }
         }
         const wasTurnRunning = isTurnInFlight || targetsPendingTurn;
-        translateErrorNotification(effectiveParams, eventQueue, { rt: translatorRt, log });
+        // 服务过载(模型容量不足)时接管重投：translator 命中 capacity 才回调，
+        // 拿到进度就把错误透成非终止状态，本函数随后跳过 Done 收口。
+        let overloadRetryScheduled = false;
+        translateErrorNotification(effectiveParams, eventQueue, {
+          rt: translatorRt,
+          log,
+          tryTakeOverOverload: () => {
+            // 只接管 app-server 本来就不重试的容量拒绝(原始 willRetry !== true)。
+            // TurnRetryTracker 把持续 retry 升级成终态的那条路径不接管：那说明
+            // daemon 已经重试很久仍不行，我们再叠一层退避重投属于双层重试。
+            if (params.willRetry === true) return null;
+            const progress = scheduleOverloadRetry(effectiveParams.turnId || currentTurnId);
+            if (progress) overloadRetryScheduled = true;
+            return progress;
+          },
+        });
         // 与 translator 的 terminal 判定保持一致：willRetry=false 或缺省都视为终态。
         if (!isTerminalError) return;
         const terminalTurnId = effectiveParams.turnId || currentTurnId;
+        if (overloadRetryScheduled) {
+          // 死掉的 turn **必须**落墓碑：app-server 随后还会为它发正常的
+          // turn/completed(failed)，没有墓碑 handleTurnCompleted 就会 emit terminal
+          // error + done，把 UI 与 goal turn 直接收口，我们刚透出的非终止重试状态
+          // 白费。重投会开出新的 turn id，不受这块墓碑影响。
+          if (terminalTurnId) terminalErroredTurnIds.add(terminalTurnId);
+          // **刻意不推任何 status**：renderer 的 handleStreamEvent 会在每个非 error
+          // 事件上清掉 recoverableError，紧跟其后的 status 会立刻把刚透出的本地化
+          // 「模型服务繁忙，正在自动重试（N/M）」横幅冲掉（review #844 codex P1）。
+          // 会话状态本来就还是 running（没推 Done），退避期间的用户可见提示由那条
+          // 非终止 error 横幅承担。
+          return;
+        }
         if (terminalTurnId) {
           terminalErroredTurnIds.add(terminalTurnId);
           dismissPendingUserInputForTurn(terminalTurnId, 'turn_failed');
@@ -4780,6 +6215,9 @@ export class CodexAgent extends BaseAgent {
         isTurnInFlight = false;
         currentTurnId = null;
         if (!wasTurnRunning) return;
+        // 没接管(预算耗尽 / 已有产出 / 非容量错误)且这一轮确实在跑 → 下面推 Done 收口。
+        // 同上: 收口即撤销重投资格, 否则延后标记会在别的 start settle 时补排。
+        revokeOverloadRetryOnTerminalSettle('terminal error notification');
         eventQueue.push({
           type: 'status',
           data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
@@ -4841,6 +6279,14 @@ export class CodexAgent extends BaseAgent {
         pendingTightenInterrupt = false;
         // 上一 send 周期的墓碑一并清空 (仅用于拦本周期内抢跑的终态)。
         turnsCompletedBeforeStartResp.clear();
+        // 用户发新消息 = 上一轮的过载重投彻底作废(它要重投的是旧消息)。
+        // 这里也是**唯一**重置重投预算的地方，见 turnStarted 的说明。
+        discardOverloadRetry('new send');
+        // 产出记账不需要按 send 归零: 它按 turn id 存, 新一轮读的是新 turn 的账。
+        // 早先的标量要在这里清, 是因为"新 turn 的响应 / 容量错误先于它的 turnStarted
+        // 到达"时会读到上一个 turn 的状态(review #844 codex P1); 按 id 记账后这类乱序
+        // 不再影响判定, 也不会再被别的 turn(含被 Stop 的旧 send 的孤儿)污染。
+        const mySendGen = ++sendGeneration;
         isTurnStartPending = true;
         usageTracker.beginTurn();
         log.debug('send ▶ user message', {
@@ -4994,14 +6440,32 @@ export class CodexAgent extends BaseAgent {
         // 只动 error path, happy path 完全不变 (规则 19: 不影响 cache hit /
         // 性能 / 准确性 4 指标)。重试只发生在 "thread not found" 字符串匹配时,
         // 普通 LLM 错误 / 超时 / auth 失败照原路径报错。
-        const handleTurnStartResp = (resp: TurnStartResponse): void => {
+        const handleTurnStartResp = (resp: TurnStartResponse, ownerSeq: number): void => {
           if (resp.turn?.id) {
             // 缓冲的歧义 started 对账 (codex R9 P2): 本响应确立在飞 RPC 的
             // turnId — 缓冲里 id 一致的是它的合法 started (下方正常激活),
             // 不一致的是失败 RPC 的孤儿 (interrupt + 墓碑, 没人消费)。
+            //
+            // 但"不是我的"只有在**没有别的 start 在飞**时才等于"是孤儿": Stop 会武装孤儿
+            // 守卫, 于是下一轮 send 的 turnStarted 同样先进这个**会话级共享**的缓冲集; 被
+            // Stop 的旧 RPC 若是 resolve(而不是 reject)回来, 它照样走到这里, 把新一轮那条
+            // 合法 started 当孤儿坐实 —— 墓碑 + interrupt 之后新一轮的响应拒绝激活, 那一轮
+            // 永久卡 generating(review #844 codex P1, 与隔离路径同源)。
+            //
+            // 非唯一权威时只做能确定的那一半: 把自己的 id 从缓冲里摘掉(否则 stale 闸会继续
+            // 忽略它已激活 turn 的事件), 其余留给仍在飞的那些 start 去对账。
             if (bufferedOrphanTurnIds.size > 0) {
               const wasBuffered = bufferedOrphanTurnIds.has(resp.turn.id);
-              for (const bufferedId of bufferedOrphanTurnIds) {
+              const soleAuthority = !hasOtherInFlightStart(ownerSeq);
+              if (!soleAuthority) {
+                bufferedOrphanTurnIds.delete(resp.turn.id);
+                log.debug('turn/start response is not the sole reconciler — leaving other buffered turns', {
+                  acceptedTurnId: resp.turn.id,
+                  remaining: [...bufferedOrphanTurnIds],
+                  threadId,
+                });
+              }
+              for (const bufferedId of soleAuthority ? bufferedOrphanTurnIds : []) {
                 if (bufferedId === resp.turn.id) continue;
                 terminalErroredTurnIds.add(bufferedId);
                 // 孤儿的事件队列整队丢弃 (greptile R11 P1) — 任何事件都不得
@@ -5023,7 +6487,7 @@ export class CodexAgent extends BaseAgent {
                   });
                 }
               }
-              bufferedOrphanTurnIds.clear();
+              if (soleAuthority) bufferedOrphanTurnIds.clear();
               if (wasBuffered) {
                 // 合法 started 曾被缓冲: 补做 turnStarted 正常路径被跳过的
                 // per-turn 状态重置 (与 turnStarted handler 同款)。
@@ -5045,8 +6509,11 @@ export class CodexAgent extends BaseAgent {
             // turnCompleted(interrupted) 先回), 不得重新置活, 否则会话卡 running。
             const alreadyCompleted = turnsCompletedBeforeStartResp.has(resp.turn.id);
             if (!alreadyCompleted && !terminalErroredTurnIds.has(resp.turn.id)) {
+              // 权威归属: 这个 turn 由本次 start 生出, 属于本轮 send。
+              turnOriginByTurnId.set(resp.turn.id, { startSeq: ownerSeq, sendGen: mySendGen });
               currentTurnId = resp.turn.id;
               isTurnInFlight = true;
+              turnStartGeneration += 1; // 见声明处:延迟善后靠它判断"期间起过新 turn"
               currentTurnPlanModeActive = turnStartsInPlanMode;
               pendingTurnStartPlanMode = null;
               startRolloutPlanFallback(resp.turn.id);
@@ -5089,19 +6556,154 @@ export class CodexAgent extends BaseAgent {
             });
           }
         };
+        // 登记本轮的过载重投器。闭包持有 turnParams 与本轮的响应处理逻辑，因此
+        // 重投投递的是同一条用户消息、同一套策略，不受期间 mutable 配置变化影响。
+        //
+        // 刻意**不**复用 happy path 的整段 send 逻辑：`usageTracker.beginTurn()`、
+        // turn-start status 抽样、planMode 武装态消耗都是"用户发了一条消息"的
+        // 一次性副作用，重投是同一条消息的再次投递，重跑那些会让用量统计与
+        // 计划模式状态错乱。
+        overloadRetry = {
+          attempt: 0,
+          timer: null,
+          inFlight: false,
+          isCancelled: () => sendOpts?.signal?.aborted === true,
+          launchedPermissionMode: mutablePermissionMode,
+          sendGen: mySendGen,
+          deferredCapacityFailure: null,
+          disposeSignalWatch: null,
+          retry: async () => {
+            const state = overloadRetry;
+            // 发出前复检：本轮 send 的取消信号在退避等待期间才 abort（coordinator
+            // 撤单、上层超时）时不走 handle.abort()，计时器到点仍会把一条已被取消
+            // 的消息重新投出去。
+            if (closed || !state || state.isCancelled()) {
+              log.info('codex overload retry skipped (send already cancelled)', { threadId });
+              if (state) settleCancelledOverloadRetry(state, 'cancelled before retry send');
+              return;
+            }
+            assertCurrentHost('turn/start overload retry');
+            resubscribeAfterTransportErrorIfNeeded();
+            // RPC 在途也算忙（见 isTurnRunning 注释）：计时器已清、turn 未激活的
+            // 这段窗口若报 idle，并发 send 会把原消息挤掉。
+            state.inFlight = true;
+            const retryStartSeq = beginTurnStart();
+            // RPC 是否走完了成功路径。补排延后的容量失败**只能**在成功路径上做:
+            // finally 先于外层 state.retry().catch 执行, 若 RPC 已经 reject 却在这里
+            // 排上新计时器, 紧随其后的 catch 会推终态 error + Done 收口 UI, 而那个
+            // 计时器没人取消 —— 会话已收口, 原消息却在稍后被静默重投并真的执行工具
+            // 副作用(review #844 codex P1)。失败路径统一由外层 catch 报终态。
+            let rpcSettledOk = false;
+            try {
+              // 必须带超时：AppServerHost.request 默认不超时，daemon / 远端传输
+              // 卡住时这个 RPC 会永久在飞，而 inFlight 被算作忙 → 会话永久卡死
+              // 且无人可解（review #844 codex P1）。与正常 turn/start 同款边界。
+              const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams, {
+                timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
+              });
+              // **发出后再复检**：RPC 在途期间 Stop / close / 撤单都拦不住它——
+              // 计时器早已清空，cancelOverloadRetry 无从取消；abort() 又因为
+              // currentTurnId 仍是 null 而直接返回。此时若照常激活，一个已被用户
+              // 撤销的 turn 会真的跑起来并执行命令、改文件。
+              // server 侧 turn 已经启动，所以不能只是丢掉响应：落墓碑挡住它的后续
+              // 事件，并 best-effort interrupt 把它停掉（与上方孤儿 turn 同款处理）。
+              const cancelledMidFlight =
+                closed || state.isCancelled() || overloadRetry !== state;
+              if (cancelledMidFlight) {
+                const staleTurnId = resp.turn?.id;
+                log.warn('codex overload retry cancelled while turn/start was in flight', {
+                  threadId,
+                  turnId: staleTurnId ?? null,
+                  closed,
+                  aborted: sendOpts?.signal?.aborted ?? false,
+                });
+                if (staleTurnId) {
+                  terminalErroredTurnIds.add(staleTurnId);
+                  if (threadId) {
+                    host
+                      .request(Method.TurnInterrupt, { threadId, turnId: staleTurnId })
+                      .catch((e: unknown) => {
+                        log.warn('cancelled overload retry interrupt failed (best-effort)', {
+                          turnId: staleTurnId,
+                          error: e instanceof Error ? e.message : String(e),
+                        });
+                      });
+                  }
+                }
+                // server 侧 turn 已挡掉, 但逻辑 turn 还得有人收口(同上)。
+                settleCancelledOverloadRetry(state, 'cancelled while turn/start was in flight');
+                return;
+              }
+              markTurnConfigAccepted();
+              adoptUnidentifiedDeadTurn(resp, retryStartSeq);
+              handleTurnStartResp(resp, retryStartSeq);
+              rpcSettledOk = true;
+            } finally {
+              state.inFlight = false;
+              // 注销本次请求(isTurnStartPending 由登记表重算, 不会误清别的请求的状态)。
+              endTurnStart(retryStartSeq);
+              flushDeferredTerminalTurnCompletionsIfIdle();
+              // 在途期间又撞容量、当时被延后的那条失败在这里收尾。只有新 turn 确实
+              // 没能激活时才补排（它被落了墓碑、响应因此拒绝激活）；turn 活了就说明
+              // 那条错误针对的是别的 turn，不该重排。预算耗尽时必须自己推终态，
+              // 否则逻辑 send 永久悬空。
+              // 同上: 延后的失败若属于另一轮仍活着的 send, 与本次 RPC 成败无关。
+              rescheduleDeferredCapacityFailure(
+                overloadRetry ?? state,
+                overloadRetry === state ? rpcSettledOk : true,
+              );
+            }
+          },
+        };
+        // 退避窗口里的取消要**立刻**收口, 不能等计时器到点。isCancelled() 是轮询式的,
+        // 只在 retry() 里被读到; 只 abort signal(不走 handle.abort())时, 会话会在剩余
+        // 退避里继续 isTurnRunning()===true —— 最多 30s 内后续排队消息全被挡住, 上层
+        // 派发闩也不释放(review #844 greptile P1)。
+        const armedRetryState = overloadRetry;
+        const sendSignal = sendOpts?.signal;
+        if (armedRetryState && sendSignal) {
+          const onSendAbort = (): void => {
+            if (overloadRetry !== armedRetryState) return;
+            // 两类要收口的状态:
+            //  1. 重投还会发生(退避等待 / RPC 在途 / 失败已延后等补排);
+            //  2. 重投已经把一个 turn 跑起来了(计时器已消费、inFlight 已清、
+            //     currentTurnId 已置)。这时若直接 return, 取消既不落墓碑也不
+            //     interrupt, 那个 turn 会继续执行命令与文件改动
+            //     (review #844 greptile P1)。
+            // 判据用 attempt > 0 限定在"本轮确实被重投接管过"上: 没发生过重投的
+            // 普通 send 里 signal 仍只是**受理前**的取消边界, 语义不变。
+            const retryOwnsActiveTurn =
+              armedRetryState.attempt > 0 && (currentTurnId !== null || isTurnInFlight);
+            if (!overloadRetryPending(armedRetryState) && !retryOwnsActiveTurn) return;
+            cancelOverloadRetry('send signal aborted');
+            settleCancelledOverloadRetry(armedRetryState, 'send signal aborted');
+          };
+          sendSignal.addEventListener('abort', onSendAbort, { once: true });
+          armedRetryState.disposeSignalWatch = () => {
+            sendSignal.removeEventListener('abort', onSendAbort);
+          };
+        }
         let finalErr: unknown = null;
+        // 初始 RPC 在飞期间到达的空 id 容量拒绝只会被"延后"(不排计时器), 由下面的
+        // finally 在响应处理完之后补排 —— 保证任一时刻只有一个 turn/start 在飞。
+        const initialStartSeq = beginTurnStart();
+        let initialStartSettledOk = false;
+        /** 本次请求是否已被 Stop / 撤单收口过(条目会在 finally 里删掉, 所以先取出来)。 */
+        let initialStartSettledByCancel = false;
         try {
           const resp = await host.request<TurnStartResponse>(Method.TurnStart, turnParams, {
             timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
           });
           markTurnConfigAccepted();
+          adoptUnidentifiedDeadTurn(resp, initialStartSeq);
           if (rejectClosedOrCancelledSend(sendOpts, 'after turn/start')) {
             // 本地取消边界直接 return: 挂起的 buffered 请求没有 settle 者
             // (codex R17 P2), 统一释放。
             abandonBufferedTurns('send cancelled after turn/start');
             return;
           }
-          handleTurnStartResp(resp);
+          handleTurnStartResp(resp, initialStartSeq);
+          initialStartSettledOk = true;
         } catch (e) {
           if (isLocalAcceptBoundaryError(e)) {
             throw e;
@@ -5176,11 +6778,13 @@ export class CodexAgent extends BaseAgent {
                 timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
               });
               markTurnConfigAccepted();
+              adoptUnidentifiedDeadTurn(resp, initialStartSeq);
               if (rejectClosedOrCancelledSend(sendOpts, 'after turn/start retry')) {
                 abandonBufferedTurns('send cancelled after turn/start retry');
                 return;
               }
-              handleTurnStartResp(resp);
+              handleTurnStartResp(resp, initialStartSeq);
+              initialStartSettledOk = true;
             } catch (retryErr) {
               if (isLocalAcceptBoundaryError(retryErr)) throw retryErr;
               log.error('thread/resume + retry turn/start failed', {
@@ -5193,11 +6797,42 @@ export class CodexAgent extends BaseAgent {
             finalErr = e;
           }
         } finally {
-          isTurnStartPending = false;
+          // 条目即将被删, 先把"已由取消收口"取出来供下面的 finalErr 分支判断。
+          initialStartSettledByCancel =
+            inFlightStarts.get(initialStartSeq)?.terminalSettled === true;
+          // 先注销本次请求(isTurnStartPending 由登记表重算) —— 无条件置 false 会在两个
+          // start 并存时清掉属于**另一个**请求的状态(review #844 codex P1)。注销必须早于
+          // flush: 后者按 idle 与否决定是否放行缓存的终态。
+          endTurnStart(initialStartSeq);
           pendingTurnStartPlanMode = null;
           flushDeferredTerminalTurnCompletionsIfIdle();
+          // 初始 RPC 已 settle → 现在才允许重投计时器排上（顺序见
+          // inFlightStarts 的注释）。终失败路径 settledOk 为 false，不补排；那条由下面的
+          // discardOverloadRetry + terminal error 收口。
+          const armedState = overloadRetry;
+          if (armedState) {
+            // rpcSettledOk 的本意是"我这次 RPC 失败了, 别在推终态之外再排一个计时器"。
+            // 但延后的那条失败可能属于**另一轮仍然活着的** send(它的容量错误在我还在飞时
+            // 到达, 于是只被记账): 那一轮的命运与我这次 RPC 成败无关, 用我的失败去压掉它
+            // 会让它既不重投也不收口(写本轮回归用例时实测到, review 未提)。
+            const ownedByThisSend = armedState.sendGen === mySendGen;
+            rescheduleDeferredCapacityFailure(
+              armedState,
+              ownedByThisSend ? initialStartSettledOk : true,
+            );
+          }
         }
         if (finalErr) {
+          // 容量通知可能先于本次 turn/start 响应到达(协议允许的乱序), 那时重投
+          // 计时器已经排上。原始请求随后终失败 → 下面会推 terminal error + Done,
+          // UI 与调用方都已按失败处理; 若不把重投一起废掉, 计时器到点会重投一条
+          // 已判失败的消息, 副作用在用户看不到的地方执行(review #844 codex P1)。
+          // 只废弃**属于本轮**的重投状态: Stop 之后下一轮 send 可能已经装上了自己的
+          // overloadRetry, 无条件 discard 会把它连同它记账的延后失败一起清掉 —— 那一轮
+          // 于是既不重投也不收口(review #844 codex P1)。
+          if (overloadRetry?.sendGen === mySendGen) {
+            discardOverloadRetry('original turn/start failed');
+          }
           // 计划模式: turn 从未启动就终失败 → 结束半开循环(与 turnCompleted 的
           // failed 分支同语义), 否则 planCycleActive 泄漏, 下一条常规消息仍会
           // 携带 collaborationMode plan(勾选与 chip 早已熄灭, 行为与 UI 脱节)。
@@ -5205,55 +6840,33 @@ export class CodexAgent extends BaseAgent {
           // RPC 级失败(超时/拒绝)不代表 server 没建 turn — daemon 可能已接受
           // turn/start 只是响应没回来。立孤儿守卫: 之后迟到的 turnStarted 不得
           // 重新激活会话 (greptile P1: 已报终态错误的会话又回到 generating)。
-          turnStartFailedWithoutTurnId = true;
           // turnStarted 也可能已先于响应到达并被接受 (started-before-resp 是
           // 协议允许的乱序) — 此时 currentTurnId/isTurnInFlight 已置位, 失败
-          // 收口必须把这个活跃 turn 一起收掉: 立墓碑挡后续事件 + 清 turn 状态 +
-          // 补 interrupt (daemon 侧该 turn 还在跑)。否则 UI 已 Done 但
-          // handle.isTurnRunning() 永真, 下一条 send 被 in-flight guard 挡死
-          // (greptile R6 P1)。
-          if (currentTurnId) {
-            const orphanTurnId = currentTurnId;
-            terminalErroredTurnIds.add(orphanTurnId);
-            if (threadId) {
-              host.request(Method.TurnInterrupt, { threadId, turnId: orphanTurnId }).catch((e2: unknown) => {
-                log.warn('turn/start-failure orphan interrupt failed (best-effort)', {
-                  turnId: orphanTurnId,
-                  error: e2 instanceof Error ? e2.message : String(e2),
-                });
-              });
-            }
-            currentTurnId = null;
-            isTurnInFlight = false;
-            currentTurnPlanModeActive = false;
-          }
-          // 缓冲的歧义 started 随本次失败一并坐实孤儿身份 (codex R9 P2):
-          // 没人消费, 全部 interrupt + 墓碑。
-          for (const bufferedId of bufferedOrphanTurnIds) {
-            terminalErroredTurnIds.add(bufferedId);
-            settleBufferedTurnReconcile(bufferedId, false);
-            if (threadId) {
-              host.request(Method.TurnInterrupt, { threadId, turnId: bufferedId }).catch((e2: unknown) => {
-                log.warn('buffered orphan turn interrupt failed (best-effort)', {
-                  turnId: bufferedId,
-                  error: e2 instanceof Error ? e2.message : String(e2),
-                });
-              });
-            }
-          }
-          bufferedOrphanTurnIds.clear();
-          bufferedTurnEventQueues.clear();
+          // 收口必须把这个活跃 turn 一起收掉; 缓冲的歧义 started 同样坐实成孤儿
+          // (greptile R6 P1 + codex R9 P2)。细节见 helper 顶注。
+          quarantineTurnsAfterStartFailure('original turn/start failed', {
+            ownsSession: sendGeneration === mySendGen,
+          });
           log.error('turn/start failed', { error: String(finalErr) });
-          eventQueue.push({
-            type: 'error',
-            data: { message: `turn/start failed: ${String(finalErr)}`, isTerminal: true },
-            source: 'codex',
-          });
-          eventQueue.push({
-            type: 'status',
-            data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
-            source: 'codex',
-          });
+          // Stop / 撤单已经为这一轮推过终态时不得再推一组: 否则取消被改报成"启动失败",
+          // 且 coordinator / 活动状态 / goal 会对同一个 turn 收口两次
+          // (review #844 greptile P1)。
+          if (initialStartSettledByCancel) {
+            log.info('turn/start failure suppressed — this send was already settled by cancel', {
+              threadId,
+            });
+          } else {
+            eventQueue.push({
+              type: 'error',
+              data: { message: `turn/start failed: ${String(finalErr)}`, isTerminal: true },
+              source: 'codex',
+            });
+            eventQueue.push({
+              type: 'status',
+              data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+              source: 'codex',
+            });
+          }
           if (sendOpts?.throwOnStartFailure) {
             throw new Error(`Codex turn/start failed: ${String(finalErr)}`);
           }
@@ -5402,8 +7015,51 @@ export class CodexAgent extends BaseAgent {
       },
 
       async abort() {
-        if (closed || !currentTurnId) return;
+        // 用户点 Stop = 明确不想继续这一轮，挂起的过载重投必须一起撤掉。
+        // 放在 currentTurnId 判空之前：重投等待期间 turn 已死、currentTurnId 为
+        // null，此时正是最需要响应 Stop 的时刻（否则计时器到点又发一个新 turn）。
+        const hadPendingOverloadRetry = overloadRetryPending();
+        discardOverloadRetry('aborted');
+        if (closed) return;
+        // 有挂起重投时的 Stop **必须**由这里显式收口逻辑 turn —— desktop 的
+        // SessionTurnActivityTracker 只在收到终态事件后才释放派发闩，Codex
+        // coordinator 也刻意等这个事件而不自己解锁，hook runner 同样等到一小时硬
+        // 超时才罢休。不发的话会话永久忙、后续消息无法派发（review #844 codex P1）。
+        //
+        // 两种排序都要覆盖:
+        //  - 退避等待中: server 侧没有 turn 可 interrupt (currentTurnId 为 null);
+        //  - 重投的 turnStarted 已先于它的响应到达: currentTurnId 非空, 但**不能**
+        //    像普通 Stop 那样把收口交给 turn/completed —— 随后到达的重投响应会走
+        //    cancelledMidFlight 把同一个 id 落墓碑, handleTurnCompleted 于是把唯一
+        //    那条完成事件压掉, 派发闩永远不释放（review #844 codex P1）。这里自己
+        //    落墓碑 + interrupt + 推终态, 保证恰好一次收口。
+        if (hadPendingOverloadRetry) {
+          teardownActiveTurnForCancellation('stopped while an overload retry was pending');
+          markInFlightStartsTerminallySettled();
+          // turn/start 还在飞时按下 Stop: 这里马上会推终态事件, 而那个 RPC 的响应随后
+          // 才回来。不武装隔离的话 handleTurnStartResp 会照常激活它 —— 用户看到
+          // 「已停止」, 工具还在跑(review #844 codex P1)。
+          quarantineAllInFlightStarts();
+          eventQueue.push({
+            type: 'error',
+            data: {
+              message: 'Codex turn stopped while waiting to retry a model-capacity failure',
+              isTerminal: true,
+              reason: 'codex-overload-retry-aborted',
+            },
+            source: 'codex',
+          });
+          eventQueue.push({
+            type: 'status',
+            data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+            source: 'codex',
+          });
+          return;
+        }
+        if (!currentTurnId) return;
         if (skipIfStaleHost('turn/interrupt')) return;
+        // 中断已在进行:收 idle 表,别让 watchdog 在收口窗口里再开一次火。
+        resetUpstreamIdleForTurnEnd();
         dismissPendingUserInputForTurn(currentTurnId, 'turn_interrupted');
         try {
           await host.request(Method.TurnInterrupt, { threadId, turnId: currentTurnId });
@@ -5419,6 +7075,7 @@ export class CodexAgent extends BaseAgent {
       async close() {
         if (closed) return;
         closed = true;
+        resetUpstreamIdleForTurnEnd();
         unregisterCodexMcpContext(threadId);
         // close 时 buffer 里可能还有等对账的挂起请求 (codex R17 P2):
         // 统一按拒绝释放, 否则 handler 永远悬挂, dispatchServerRequest
@@ -5429,6 +7086,10 @@ export class CodexAgent extends BaseAgent {
         try { dismissAllPending('session_closed', 'deny'); } catch (e) { log.warn('dismissAllPending threw', { error: String(e) }); }
         try { dismissAllPendingUserInput('session_closed'); } catch (e) { log.warn('dismissAllPendingUserInput threw', { error: String(e) }); }
         try { stopActiveRolloutPlanFallback(); } catch (e) { log.warn('stop rollout plan fallback threw', { error: String(e) }); }
+        // 挂起的过载重投计时器必须清掉：否则会话已关，计时器到点仍会对已释放的
+        // thread 发 turn/start（assertCurrentHost 会抛，但那是在无人接收的
+        // setTimeout 回调里，白留一次失败与一条误导日志）。
+        try { discardOverloadRetry('session_closed'); } catch (e) { log.warn('cancel overload retry threw', { error: String(e) }); }
         try { await subscription?.release(); } catch (e) { log.warn('release threw', { error: String(e) }); }
         try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
       },
@@ -5450,6 +7111,7 @@ export class CodexAgent extends BaseAgent {
         if (newModel === mutableModel) return; // 去重: 值没变不重推 (renderer 单次切换会全量重调 set*)
         log.debug('setModel', { from: mutableModel, to: newModel });
         mutableModel = newModel;
+        registerCodexReviewerRouteContext(threadId);
         // thread 已启动 → 立即经 thread/settings/update 推给 server (sticky); 未启动则由
         // 首个 thread/start 携带。沿用 turn/start 的 'gpt-5'=server 默认哨兵约定 (省略),
         // 避免把占位 model id 发给 server。失败时 turn/start 透传仍是兜底。
@@ -5486,15 +7148,28 @@ export class CodexAgent extends BaseAgent {
         // turn id 已知 → 立即中断; turn/start 在飞 (id 未回) → 置标记, 由
         // handleTurnStartResp / turnStarted 在拿到 id 的瞬间补中断。放宽则清标记
         // (收紧后又切回宽松档, 在飞的 turn 无需再中断)。
-        if (!tightensCurrentTurn) {
+        // 过载重投持的是**冻结**策略。只看最近一次转换会漏掉 Full access → Ask →
+        // Auto 这类中间态：Ask→Auto 不算收紧会把标记清掉，而冻结的 Full access 仍然
+        // 比 Auto 宽，重投出来的 turn 就能以 Full access 执行（review #844 codex P1）。
+        // 按严格度排序直接比冻结档与当前档。
+        const retryPolicyLooserThanNow = overloadRetryPolicyLooserThan(newMode);
+        if (!tightensCurrentTurn && !retryPolicyLooserThanNow) {
           pendingTightenInterrupt = false;
-        } else if (!closed && turnLaunchedUnattended) {
+        } else if (!closed && (turnLaunchedUnattended || retryPolicyLooserThanNow)) {
           // 只中断 auto_review / never / Auto policy turn;普通 user reviewer 发射的
           // turn 审批请求照常流经本地、收紧即时生效,期间 UI 短暂切过宽松档
           // 不构成中断理由。
+          // retryPolicyLooserThanNow 是过载重投的补充判据: 挂起的重投冻结的是发射时
+          // 那档策略, 只看"最近一次转换算不算收紧"会漏掉 Full access → Ask → Auto
+          // 这类中间态(review #844 codex P1)。
           if (currentTurnId !== null) {
             await interruptTurnForPermissionTighten(currentTurnId);
-          } else if (isTurnStartPending) {
+          } else if (isTurnStartPending || overloadRetry?.timer != null || overloadRetry?.inFlight === true) {
+            // 过载退避等待中 / 重投 RPC 在途时，既没有 currentTurnId 也不一定有
+            // isTurnStartPending，但重投持着的 turnParams 是**收紧之前**冻结的旧
+            // 宽松策略。不置这个标记，重投出来的 turn 会在权限已被撤销后继续执行
+            // 工具（review #844 codex P1）。与 turn/start 在飞的处理同构：标记由
+            // handleTurnStartResp 在拿到 turn id 的瞬间消费并补中断。
             pendingTightenInterrupt = true;
           }
         }
@@ -5609,6 +7284,7 @@ export class CodexAgent extends BaseAgent {
           threadMayHaveRollout = true;
           subscription = host.subscribeThread(threadId, handlers);
           registerCodexMcpContext(threadId);
+          registerCodexReviewerRouteContext(threadId);
           registerCodexDeveloperInstructions(threadId, registeredDeveloperInstructions);
           eventQueue.push({ type: 'session_id', data: sdkSessionId, source: 'codex' });
         } else {
@@ -5625,7 +7301,21 @@ export class CodexAgent extends BaseAgent {
       },
 
       isTurnRunning() {
-        return isTurnInFlight;
+        // 本方法是 Session.send() 的 in-flight guard 判据（另见上方 turn/start
+        // 失败收口处的注释）。过载重投把这一轮拆成了两段 app-server 侧「没有活着
+        // 的 turn」但逻辑上没结束的窗口，只看 isTurnInFlight 都会漏：并发 send
+        // 被误接受后，send() 开头的 cancelOverloadRetry 会把原消息静默丢掉。
+        //
+        // 三种状态见 overloadRetryPending 的注释(退避等待 / RPC 在途 / 失败已延后
+        // 等补排)。漏掉"已延后"那种时, Session.send() 会把会话当 idle 接受第二条
+        // 消息, 把第一条的重投状态连同它仍在飞的原始 RPC 一起丢掉
+        // (review #844 codex P1)。三者都在 retry() 的 finally /
+        // rescheduleDeferredCapacityFailure / cancelOverloadRetry 里必定复位。
+        // **不把 `isTurnStartPending` 一起算进来**：正常 send 路径上它必须保持
+        // idle 语义——终态先于 turn/start 响应到达时（协议允许的乱序），
+        // coordinator 要看到 idle 才能收口，否则 send 挂死（既有用例
+        // "accepts terminal error before TurnStartResponse…" 锁的就是这条）。
+        return isTurnInFlight || overloadRetryPending();
       },
     };
 
