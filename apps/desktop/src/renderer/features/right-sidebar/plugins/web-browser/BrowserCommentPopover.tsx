@@ -154,10 +154,14 @@ export function BrowserCommentPopover({
   const buildChanges = useCallback((): BrowserCommentStyleChange[] => {
     if (!designBaseline) return [];
     const changes: BrowserCommentStyleChange[] = [];
-    if (textEdit !== null && textEdit !== (designBaseline.editableText ?? '')) {
+    if (
+      designBaseline.editableText !== null &&
+      textEdit !== null &&
+      textEdit !== designBaseline.editableText
+    ) {
       changes.push({
         property: 'text content',
-        previousValue: designBaseline.editableText ?? '',
+        previousValue: designBaseline.editableText,
         value: textEdit,
       });
     }
@@ -183,11 +187,23 @@ export function BrowserCommentPopover({
         }
       }
       const textChanged =
-        nextText !== null && nextText !== (designBaseline.editableText ?? '');
+        designBaseline.editableText !== null &&
+        nextText !== null &&
+        nextText !== designBaseline.editableText;
       onPreviewDesign({ styles, text: textChanged ? nextText : null });
     },
     [designBaseline, onPreviewDesign],
   );
+
+  /**
+   * LRU 恢复草稿可能绑定到一个包含子元素、不能安全改写 textContent 的新
+   * target。此时旧 textEdit 与新 baseline 不兼容：预览必须发 null，并从
+   * Host 草稿中删除该字段，避免稍后提交虚假的文本变更或破坏子 DOM。
+   */
+  useEffect(() => {
+    if (!designBaseline || designBaseline.editableText !== null || textEdit === null) return;
+    onEditorDraftChange({ ...editorDraft, textEdit: null });
+  }, [designBaseline, editorDraft, onEditorDraftChange, textEdit]);
 
   /**
    * 预览由受控草稿派生，而不是只在 input handler 内发送。这样 WebView LRU

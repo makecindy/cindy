@@ -450,7 +450,11 @@ describe('useBrowserComment', () => {
     );
 
     act(() => result!.cancelPending());
+    expect(result!.mode).toBe('cancelling');
     expect(lastCommand(webview).command).toBe(BROWSER_COMMENT_CANCEL_PENDING_CHANNEL);
+    const callsBeforeSubmit = webview.send.mock.calls.length;
+    act(() => result!.submit('Must not race the pending cancellation'));
+    expect(webview.send).toHaveBeenCalledTimes(callsBeforeSubmit);
     await acknowledgeLastCommand(webview);
 
     expect(result!.mode).toBe('selecting');

@@ -17,6 +17,7 @@
  *
  * 状态机:off → starting(等待 guest 确认)→ selecting(点选中)→ pending(气泡打开)→
  *          submitting(截图 + 入草稿)→ selecting(连续标注)。
+ *          pending → cancelling(等待 guest 撤销)→ selecting。
  *          若 enter 时页面已有文本选区:starting 暂存选择,ACK 后直接进 pending。
  *          immediate 路径:selecting → submitting → selecting(不经 pending)。
  *          任何态可被 exit 打断回 off。
@@ -85,7 +86,13 @@ function observeSendRejection(result: unknown, onRejected: (reason: unknown) => 
   void Promise.resolve(result).catch(onRejected);
 }
 
-export type BrowserCommentMode = 'off' | 'starting' | 'selecting' | 'pending' | 'submitting';
+export type BrowserCommentMode =
+  | 'off'
+  | 'starting'
+  | 'selecting'
+  | 'pending'
+  | 'cancelling'
+  | 'submitting';
 
 interface PendingBrowserCommentCommand {
   webview: WebviewTag;
@@ -286,6 +293,9 @@ export function useBrowserComment(
   const cancelPending = useCallback(() => {
     if (modeRef.current !== 'pending') return;
     const epoch = submitEpochRef.current;
+    // 立即离开 pending，序列化 cancel 与 submit：ACK 前 submit() 不再能够
+    // 启动 prepare-screenshot，避免 guest 已撤销 target 后 host 又进提交态。
+    setMode('cancelling');
     void sendCommand(BROWSER_COMMENT_CANCEL_PENDING_CHANNEL).then(
       () => {
         if (submitEpochRef.current !== epoch) return;

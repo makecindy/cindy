@@ -502,11 +502,13 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
           </div>
         )}
         {/* 评论输入气泡:锚在 guest 上报的点选坐标。 */}
-        {(comment.mode === 'pending' || comment.mode === 'submitting') &&
+        {(comment.mode === 'pending' ||
+          comment.mode === 'cancelling' ||
+          comment.mode === 'submitting') &&
           comment.pendingTarget && (
             <BrowserCommentPopover
               anchor={comment.pendingTarget.point}
-              submitting={comment.mode === 'submitting'}
+              submitting={comment.mode !== 'pending'}
               designBaseline={comment.pendingTarget.designBaseline}
               editorDraft={comment.editorDraft}
               onEditorDraftChange={comment.updateEditorDraft}

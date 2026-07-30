@@ -127,4 +127,37 @@ describe('BrowserCommentPopover', () => {
       });
     });
   });
+
+  it('drops a restored text edit when the replacement target is not safely editable', async () => {
+    const onEditorDraftChange = vi.fn();
+    const onPreviewDesign = vi.fn();
+    render(
+      <ControlledPopover
+        initialDraft={{
+          text: 'Keep the host comment',
+          styleEdits: { color: '#ff0000' },
+          textEdit: 'Do not replace child DOM',
+        }}
+        designBaseline={{
+          styles: { color: 'rgb(0, 0, 0)' },
+          editableText: null,
+          provenance: {},
+        }}
+        onEditorDraftChange={onEditorDraftChange}
+        onPreviewDesign={onPreviewDesign}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(onEditorDraftChange).toHaveBeenCalledWith({
+        text: 'Keep the host comment',
+        styleEdits: { color: '#ff0000' },
+        textEdit: null,
+      });
+    });
+    expect(onPreviewDesign).toHaveBeenCalledWith({
+      styles: { color: '#ff0000' },
+      text: null,
+    });
+  });
 });
