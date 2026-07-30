@@ -142,6 +142,10 @@ const DANGEROUS_PATTERNS: readonly RegExp[] = [
   ...CREDENTIAL_PATH_PATTERNS,                            // 凭证/密钥路径(见上)
   /\bsecurity\s+(?:find|dump|export|add)-/,               // macOS keychain
   /\$\{?[A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|APIKEY|_PAT)[A-Za-z0-9_]*\}?/i, // 敏感环境变量展开(echo "$API_KEY" 等)
+  // 执行影响型环境变量赋值(env NAME=val cmd 或裸 NAME=val cmd):加载器注入 / 分页器 / 外部 diff /
+  // PATH 劫持 / 解释器启动钩子 —— 让"看似只读"的命令跑任意程序。unwrapWrappers 会剥掉 NAME=val,故在此
+  // 整条命令上先拦(env PAGER=./x git log、env LD_PRELOAD=./x true、PATH=./bin ls 等)。IFS= 太常见(read 循环)不列。
+  /(?:^|\s)(?:LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD_[A-Z_]+|GIT_PAGER|PAGER|GIT_SSH(?:_COMMAND)?|GIT_EXTERNAL_DIFF|GIT_CONFIG_(?:GLOBAL|SYSTEM)|BASH_ENV|PROMPT_COMMAND|PS4|PERL5LIB|PYTHONPATH|PYTHONSTARTUP|PYTHONINSPECT|NODE_OPTIONS|RUBYOPT|PATH)=/,
   /\bgit\b[^|;&]*\bpush\b[^|;&]*(?:--force\b|--force-with-lease\b|\s-f\b|\+)/, // 强推
   /\bgit\b[^|;&]*\breset\b[^|;&]*--hard/,                 // git reset --hard
   /\bgit\b[^|;&]*\bclean\b[^|;&]*\s-\w*f/,                // git clean -f
@@ -294,7 +298,7 @@ function isSafeReadonlyBin(bin: string, segment: string, tokens: string[]): bool
 /** curl/wget 的 URL/host 目标 token(有 scheme、无 scheme host、localhost、IPv4)。 */
 function isFetchTargetToken(t: string): boolean {
   return (
-    /:\/\//.test(t) ||                                    // 带 scheme:https:// 等
+    /^https?:\/\//i.test(t) ||                            // 仅 http(s):// 算安全 fetch 目标(file://scp://ftp:// 等另拦)
     /^[\w.-]+\.[a-z]{2,}(?:[:/].*)?$/i.test(t) ||         // 无 scheme 的 host[/path][:port]
     /^localhost(?::\d+)?(?:[/?].*)?$/i.test(t) ||         // localhost[:port]
     /^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?(?:[/?].*)?$/.test(t) // IPv4[:port]
@@ -323,10 +327,11 @@ function isInternalFetchTarget(t: string): boolean {
   // 取 32 位 IPv4:点分 a.b.c.d,或 SSRF 混淆用的十进制整数(2852039166=169.254.169.254)/ 十六进制(0xA9FEA9FE)。
   let a: number | null = null;
   let b = 0;
-  const dotted = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/.exec(host);
-  if (dotted) {
-    a = Number(dotted[1]);
-    b = Number(dotted[2]);
+  const parts = host.split('.');
+  if (parts.length >= 2 && parts.length <= 4 && parts.every((p) => /^\d+$/.test(p))) {
+    // 点分 IPv4,含缩写形(curl 接受 127.1=127.0.0.1、10.1=10.0.0.1):内网判定只看前两段即可。
+    a = Number(parts[0]);
+    b = Number(parts[1]);
   } else if (/^\d+$/.test(host) || /^0x[0-9a-f]+$/i.test(host)) {
     const n = host.startsWith('0x') || host.startsWith('0X') ? parseInt(host, 16) : Number(host);
     if (Number.isFinite(n) && n >= 0 && n <= 0xffffffff) {
@@ -352,6 +357,8 @@ function isSafeFetch(bin: string, segment: string, tokens: string[]): boolean {
   if (CURL_REDIRECT_FLAGS.test(segment)) return false;    // -L 跟随重定向 → 目标不可判 → 升级
   if (CURL_SENSITIVE_FLAGS.test(segment)) return false;   // 凭证/隐藏参数/SSRF 改路由 flag → 升级
   const positional = tokens.slice(1).filter((t) => !t.startsWith('-'));
+  // 非 http(s) scheme(file:// 读本地文件、scp://sftp:// 外发、ftp/dict/gopher 等)超出"命令行浏览器"面 → 升级。
+  if (positional.some((t) => /^[a-z][\w+.-]*:\/\//i.test(t) && !/^https?:\/\//i.test(t))) return false;
   if (positional.some((t) => t.includes('?'))) return false; // 查询串外发面(含无 scheme 的 host?query)
   // curl 可接多个 URL 并逐个抓取 → 必须校验**每一个** URL 目标,不能只看第一个
   // (`curl https://public http://169.254.169.254/...` 会把 metadata 也抓回来)。
@@ -368,7 +375,8 @@ function classifyGit(tokens: string[], segment: string): ReviewVerdict {
   //   --ext-diff(跑外部 diff 驱动=RCE);
   //   -O/--open-files-in-pager(git grep 用指定 pager 打开匹配文件 → 执行任意程序=RCE,
   //     `git grep --open-files-in-pager=./payload pat` 会跑 ./payload)。
-  if (/(?:^|\s)(?:-o\b|-o\S|-O\b|-O\S|--output\b|--ext-diff\b|--open-files-in-pager\b)/.test(segment)) return 'prompt';
+  //   --filters/--textconv(git cat-file 对内容跑 clean/smudge filter 或 textconv 驱动 → 执行任意程序=RCE)。
+  if (/(?:^|\s)(?:-o\b|-o\S|-O\b|-O\S|--output\b|--ext-diff\b|--open-files-in-pager\b|--filters\b|--textconv\b)/.test(segment)) return 'prompt';
   const rest = tokens.slice(1); // 'git' 之后
   // 子命令**之前**的内联 config(git -c core.pager=… / -c diff.external=… / --config-env[=…])可执行任意程序(RCE)→ 升级。
   // `--config-env` 的等号形式 `--config-env=core.pager=…` 是单 token,不等于裸 `--config-env`,用 startsWith 一并拦。
@@ -412,6 +420,10 @@ function classifyShellSegment(segment: string): ReviewVerdict {
   // 输出重定向(写文件)/ 命令替换(执行任意内容):任何命令带它都不能算只读放行,统一升级。
   // 必须挡在 git/fetch/readonly 判定之前 —— 否则 `curl x > ~/.bashrc`、`cat f > /etc/y` 会被误放行。
   if (OUTPUT_REDIRECTION.test(redirectScan) || COMMAND_SUBSTITUTION.test(segment)) return 'prompt';
+  // 显式路径的可执行文件(./ls、/tmp/ls、bin/ls)不是白名单里的系统工具,不能靠 basename 放行 ——
+  // 只信任绝对路径下的系统 bin 目录(/usr/bin 等);其余含 `/` 的命令一律 fail-closed 升级。
+  const cmd0 = tokens[0].replace(/\\/g, '');
+  if (cmd0.includes('/') && !/^\/(?:usr\/local\/bin|usr\/s?bin|s?bin|opt\/homebrew\/bin)\//.test(cmd0)) return 'prompt';
   if (bin === 'git') return classifyGit(tokens, deQuoted);
   if (isSafeFetch(bin, deQuoted, tokens)) return 'auto-approve';
   if (isSafeReadonlyBin(bin, deQuoted, tokens)) return 'auto-approve';

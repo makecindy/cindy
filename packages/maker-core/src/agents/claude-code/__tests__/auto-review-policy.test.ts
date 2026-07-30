@@ -83,6 +83,10 @@ describe('classifyBuiltinToolForAutoReview — 内置 Read/Grep/LS 读凭证升�
     expect(verdict('Read', { file_path: '/Users/me/.aws/credentials' })).toBe('prompt-each-time');
     expect(verdict('NotebookRead', { notebook_path: '/Users/me/.config/gcloud/application_default_credentials.json' })).toBe('prompt-each-time');
     expect(verdict('Grep', { pattern: 'AKIA', path: '/Users/me/.aws' })).toBe('prompt-each-time');
+    // Grep 的 glob 选择器指向凭证文件(path 本身普通)也要升级
+    expect(verdict('Grep', { pattern: '.', path: '/Users/me', glob: '**/.aws/credentials' })).toBe('prompt-each-time');
+    // Glob 的 pattern 就是选择器,指向凭证目录 → 升级
+    expect(verdict('Glob', { pattern: '**/.ssh/id_rsa' })).toBe('prompt-each-time');
     expect(verdict('LS', { path: '/Users/me/.ssh' })).toBe('prompt-each-time');
     // Windows 反斜杠路径的凭证同样命中(前缀类含 `\\`)。
     expect(verdict('Read', { file_path: 'C:\\Users\\me\\.ssh\\id_rsa' })).toBe('prompt-each-time');

@@ -489,6 +489,46 @@ describe('复审第二批(copilot/codex 3 项):Windows 反斜杠凭证 shell / �
   });
 });
 
+describe('复审第三批:env 注入 / 显式路径 / file:// / 缩写 IP / git cat-file', () => {
+  it('执行影响型环境变量赋值(LD_PRELOAD/PAGER/PATH/DYLD)→ prompt-each-time', () => {
+    for (const c of [
+      'env LD_PRELOAD=/repo/payload.so /usr/bin/true',
+      'env PAGER=./payload git --paginate log',
+      'env GIT_PAGER=./p git -p log',
+      'PATH=/repo/bin ls',
+      'env DYLD_INSERT_LIBRARIES=/x.dylib cat f',
+    ]) {
+      expect(classifyShellCommand(c, roots)).toBe('prompt-each-time');
+    }
+    // 普通 env 赋值(非执行影响)仍按内层命令放行
+    expect(classifyShellCommand('env FOO=bar ls', roots)).toBe('auto-approve');
+  });
+  it('显式路径可执行文件(./ls、/tmp/ls、bin/ls)→ prompt;系统 bin 绝对路径仍按工具判', () => {
+    for (const c of ['./ls', '/tmp/ls -la', 'bin/cat f', '/dev/shm/rg x']) {
+      expect(classifyShellCommand(c, roots)).toBe('prompt');
+    }
+    expect(classifyShellCommand('/usr/bin/ls -la', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('/bin/cat f', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('/usr/bin/git log', roots)).toBe('auto-approve');
+  });
+  it('curl 非 http(s) scheme(file://scp://ftp://)→ prompt', () => {
+    for (const c of ['curl file:///etc/passwd', 'curl scp://h/secret', 'curl ftp://h/x', 'curl dict://localhost:11211/x']) {
+      expect(classifyShellCommand(c, roots)).toBe('prompt');
+    }
+  });
+  it('curl 缩写点分 IPv4(127.1 / 10.1)命中内网 → prompt;公网仍放行', () => {
+    expect(classifyShellCommand('curl http://127.1/x', roots)).toBe('prompt');
+    expect(classifyShellCommand('curl http://10.1/', roots)).toBe('prompt');
+    expect(classifyShellCommand('curl http://192.168.1/x', roots)).toBe('prompt');
+    expect(classifyShellCommand('curl http://8.8.8.8/', roots)).toBe('auto-approve');
+  });
+  it('git cat-file --filters/--textconv 跑 filter(RCE)→ prompt;cat-file -p 只读放行', () => {
+    expect(classifyShellCommand('git cat-file --filters HEAD:path', roots)).toBe('prompt');
+    expect(classifyShellCommand('git cat-file --textconv HEAD:path', roots)).toBe('prompt');
+    expect(classifyShellCommand('git cat-file -p HEAD', roots)).toBe('auto-approve');
+  });
+});
+
 describe('classifyShellCommand — 数字 fd 重定向到文件 vs fd 复制', () => {
   it('fd 重定向到文件(1>/2>)→ prompt', () => {
     expect(classifyShellCommand('echo x 1>~/.bash_profile', roots)).toBe('prompt');

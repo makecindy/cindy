@@ -7,7 +7,7 @@
  * `default` 让 canUseTool 生效后,非 MCP 内置工具在此分类(见 claude-code/index.ts 的 dispatcher)。
  */
 
-import { reviewAction, type ReviewVerdict } from '../shared/auto-review.js';
+import { reviewAction, isSensitiveCredentialPath, type ReviewVerdict } from '../shared/auto-review.js';
 
 export type BuiltinAutoReviewVerdict = ReviewVerdict;
 
@@ -59,9 +59,17 @@ function extractCommand(input: unknown): string {
 function extractReadPath(toolName: string, input: unknown): string | undefined {
   const obj = input as Record<string, unknown> | null;
   if (!obj) return undefined;
-  const key = toolName === 'Read' ? 'file_path' : toolName === 'NotebookRead' ? 'notebook_path' : 'path';
-  const v = obj[key];
-  return typeof v === 'string' && v.length > 0 ? v : undefined;
+  const primaryKey = toolName === 'Read' ? 'file_path' : toolName === 'NotebookRead' ? 'notebook_path' : 'path';
+  const candidates: string[] = [];
+  const push = (v: unknown): void => {
+    if (typeof v === 'string' && v.length > 0) candidates.push(v);
+  };
+  push(obj[primaryKey]);
+  // 文件选择器也可能直指凭证文件:Grep 的 glob(`{path:'/Users/me', glob:'**/.aws/credentials'}` 会读出内容)、
+  // Glob 的 pattern(其本身就是路径选择器)。任一命中凭证就用它升级;Grep 的 pattern 是搜索正则、非路径,不纳入。
+  if (toolName === 'Grep') push(obj.glob);
+  if (toolName === 'Glob') push(obj.pattern);
+  return candidates.find((c) => isSensitiveCredentialPath(c)) ?? candidates[0];
 }
 
 /**
