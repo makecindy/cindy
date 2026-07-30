@@ -48,6 +48,8 @@ beforeEach(() => {
 
 afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
+  // 控制面(锁 + 作废计数器)刻意住在缓存根**之外**(clearAll 不能把它删掉),测试也要清。
+  fs.rmSync(`${root}.control`, { recursive: true, force: true });
 });
 
 describe('messageFileName', () => {
@@ -98,6 +100,63 @@ describe('normalizeMessages', () => {
     ]);
     expect(only.agentMeta).toEqual({ turnCostUsd: 1.5 });
     expect(only.rowid).toBe(7);
+  });
+});
+
+describe('内联媒体字节剥离', () => {
+  // review(codex P1):那些字节是 cindy-media 托管的内容,复制进镜像缓存目录等于在账本与
+  // 回收器之外多出一份未受管的明文副本;渲染本来就优先用 url,剥掉不改变可见结果。
+  it('content 里的 base64 字段被剥掉,url / mimeType 等元数据保留', () => {
+    const [only] = normalizeMessages([
+      row('m1', '2026-01-01T00:00:00.000Z', {
+        content: {
+          text: 'hi',
+          images: [
+            { url: 'cindy-media://blobs/abc.png', mimeType: 'image/png', base64: 'AAAABBBB' },
+          ],
+        },
+      }),
+    ]);
+    const content = only.content as { text: string; images: Array<Record<string, unknown>> };
+    expect(content.text).toBe('hi');
+    expect(content.images[0].url).toBe('cindy-media://blobs/abc.png');
+    expect(content.images[0].mimeType).toBe('image/png');
+    expect(content.images[0]).not.toHaveProperty('base64');
+  });
+
+  it('data:...;base64,... 内联 URI 被清空(渲染走 url)', () => {
+    const [only] = normalizeMessages([
+      row('m1', '2026-01-01T00:00:00.000Z', {
+        content: { images: [{ uri: `data:image/png;base64,${'A'.repeat(64)}` }] },
+      }),
+    ]);
+    const content = only.content as { images: Array<{ uri: string }> };
+    expect(content.images[0].uri).toBe('');
+  });
+
+  it('JSON 字符串形态的 content:够大且含 base64 时解析→剥→回写', () => {
+    const payload = JSON.stringify({
+      text: 'hi',
+      images: [{ url: 'u', base64: 'Z'.repeat(20_000) }],
+    });
+    const [only] = normalizeMessages([
+      row('m1', '2026-01-01T00:00:00.000Z', { content: payload }),
+    ]);
+    const parsed = JSON.parse(only.content as string) as {
+      text: string;
+      images: Array<Record<string, unknown>>;
+    };
+    expect(parsed.text).toBe('hi');
+    expect(parsed.images[0].url).toBe('u');
+    expect(parsed.images[0]).not.toHaveProperty('base64');
+  });
+
+  it('常规文本 content 逐字节不变(缓存行与 fresh 行判等要能短路)', () => {
+    const text = 'x'.repeat(2_000);
+    const [only] = normalizeMessages([
+      row('m1', '2026-01-01T00:00:00.000Z', { content: text }),
+    ]);
+    expect(only.content).toBe(text);
   });
 });
 
@@ -951,7 +1010,7 @@ describe('跨进程互斥(锁 + 清理完成标记)', () => {
   it('作废计数读不出来时保守跳过写(fail-closed)', async () => {
     if ((process.getuid?.() ?? 0) === 0) return;
     const c = cache();
-    const markDir = path.join(root, '.cleared');
+    const markDir = path.join(`${root}.control`, 'cleared');
     await fsp.mkdir(markDir, { recursive: true });
     const key = `${__testing.safeSegment('dev-1')}-${__testing.shortHash('dev-1')}`;
     const mark = path.join(markDir, key);

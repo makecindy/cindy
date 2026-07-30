@@ -18,7 +18,10 @@ import {
   getSessionDeviceId,
   remoteProjectsStore,
 } from '@/features/device-link/remoteProjectsStore';
-import { persistCachedMessages } from '@/features/device-link/mirrorCacheClient';
+import {
+  persistCachedMessages,
+  sessionCacheInvalidationToken,
+} from '@/features/device-link/mirrorCacheClient';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import type { Message, Session } from '@/lib/ccAgent.types';
 import * as messageService from '@/lib/messageService';
@@ -213,9 +216,14 @@ export function listMessagesFor(
     opts,
   ]) as Promise<Message[]>;
   if (!opts?.before && opts?.beforeTs == null) {
+    // 发起时的作废令牌:/clear、rewind、删消息都会自增它(见 clearCachedMessages)。
+    const invalidationAtStart = sessionCacheInvalidationToken(sessionId);
     void promise
       .then((rows) => {
         if (!Array.isArray(rows)) return;
+        // 请求在途期间权威侧作废过这个会话的历史 → 手里这批是作废前的行,丢弃这次写,
+        // 否则它会排在那次空写之后落地,把已被清掉的正文重新写回盘上(review: pr-code-review)。
+        if (sessionCacheInvalidationToken(sessionId) !== invalidationAtStart) return;
         // 请求在途期间这台设备可能已被撤销 / 关闭被控 / 本机停用控制,那条路径已经
         // clearCachedDevice 清过盘了。迟到的响应若照写,会用清理**之后**的 main 代际
         // 把被撤销对端的明文重新落盘,main 侧的作废闸挡不住它(review: codex P1)。

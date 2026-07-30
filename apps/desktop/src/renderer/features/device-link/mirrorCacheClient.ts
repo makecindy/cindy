@@ -59,7 +59,22 @@ export function persistCachedMessages(
 
 /** 清掉某会话的消息缓存(被控端 /clear、rewind、删除会话后不留陈旧正文)。 */
 export function clearCachedMessages(deviceId: string, sessionId: string): void {
+  // 作废令牌先自增:此刻还在途的"最新页"请求(它握着作废之前的行)提交前会发现令牌变了,
+  // 于是丢弃那次写 —— 否则它排在这次空写之后落地,把已经被 /clear、rewind、删消息抹掉的
+  // 正文重新写回盘上(review: pr-code-review)。
+  invalidationTokens.set(sessionId, (invalidationTokens.get(sessionId) ?? 0) + 1);
   persistCachedMessages(deviceId, sessionId, []);
+}
+
+/**
+ * 每会话的「缓存已被权威侧作废」令牌。写点(makerTransport 的最新页写入)在**发起时**取一次,
+ * 落盘前再取一次比对:变了说明期间发生过 /clear、rewind 或删消息,这次写必须丢弃。
+ * 读路径已有同款守卫(hydrateRemoteMessagesFromCache 落地前复查 _cacheHydrateSuppressed)。
+ */
+const invalidationTokens = new Map<string, number>();
+
+export function sessionCacheInvalidationToken(sessionId: string): number {
+  return invalidationTokens.get(sessionId) ?? 0;
 }
 
 /** 缓存快照里的单台设备(与 main 侧 CachedDeviceSessions 同形)。 */

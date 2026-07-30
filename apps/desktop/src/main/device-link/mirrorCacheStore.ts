@@ -57,8 +57,17 @@ const SESSION_LIST_SHRINK_STEPS = [MAX_CACHED_SESSIONS_PER_DEVICE, 40, 15] as co
 export const MAX_CACHED_TEXT_CHARS = 240;
 
 const MESSAGES_DIR = 'messages';
-/** 缓存根下的跨进程锁文件名(见 withCacheLock)。 */
-const CACHE_LOCK_FILE = '.lock';
+/**
+ * 跨进程锁与作废计数器**不能放在缓存根里面** —— `clearAll()` 会递归删掉整棵缓存根,
+ * 连带把自己正持着的锁和计数器一起删掉:此时另一个实例既能立刻抢到"不存在"的锁,又会把
+ * 缺失的计数器读成初始值 0(与它发起时读到的一样)→ 于是它把上一个账号的正文重建出来,
+ * 而 clearAll 照报成功(review: codex P1)。所以它们放在缓存根的**兄弟**目录里,
+ * 仍在 owner 命名空间内(切账号照样隔离),但不在被删的子树中。
+ */
+const CACHE_CONTROL_SUFFIX = '.control';
+const CACHE_LOCK_FILE = 'lock';
+/** clearAll 的账号级作废计数器(与逐设备计数器同机制,只是全局一份)。 */
+const CLEARED_ACCOUNT = '_account';
 const SESSION_LIST_FILE = 'session-list.json';
 
 /** 缓存快照里的单台设备(deviceName 供种入时重新 stamp)。 */
@@ -126,11 +135,60 @@ export function normalizeMessages(input: readonly unknown[]): Record<string, unk
     const id = typeof item.id === 'string' ? item.id : '';
     const clientId = typeof item.clientId === 'string' ? item.clientId : '';
     if (!id && !clientId) continue;
-    byKey.set(id || clientId, item);
+    byKey.set(id || clientId, { ...item, content: stripInlineMedia(item.content, 0) });
   }
   return [...byKey.values()]
     .sort((a, b) => messageOrderKey(a) - messageOrderKey(b))
     .slice(-MAX_CACHED_MESSAGES);
+}
+
+/**
+ * 剥掉 content 里的内联媒体字节(`base64` 字段、`data:…;base64,…` URI),其余**原样保留**。
+ *
+ * 为什么必须剥:那些字节是 cindy-media 托管的内容,把它们复制进镜像缓存目录等于在
+ * 账本(ledger)与回收器之外多出一份未受管的明文副本(docs/dev-rules/media-storage-and-protocols.md);
+ * 而渲染本来就优先用 url / 托管引用,剥掉不影响可见结果(手机端 mobileSessionMessageCache
+ * 同款处理)(review: codex P1)。
+ *
+ * 无内联媒体的常规 content 逐字节不变 —— 这点很重要:缓存行与 fresh 行越接近,renderer 的
+ * 逐字段比较越容易短路,冷开时不会出现 cached→fresh 的可见重渲染。
+ */
+const HEAVY_BLOB_KEYS = new Set(['base64']);
+/** content 里疑似内联 base64 的 JSON 字符串:超过这个长度才值得解析 → 剥 → 回写。 */
+const CONTENT_PARSE_THRESHOLD = 16_000;
+const MAX_CONTENT_DEPTH = 12;
+
+export function stripInlineMedia(value: unknown, depth: number): unknown {
+  if (depth > MAX_CONTENT_DEPTH) return undefined;
+  if (typeof value === 'string') return stripInlineMediaString(value, depth);
+  if (Array.isArray(value)) return value.map((item) => stripInlineMedia(item, depth + 1));
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, raw] of Object.entries(value)) {
+      if (HEAVY_BLOB_KEYS.has(key)) continue;
+      out[key] = stripInlineMedia(raw, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+
+function stripInlineMediaString(value: string, depth: number): string {
+  // data:...;base64,... 内联大块 → 丢弃(留空串占位),渲染走 url。
+  if (value.startsWith('data:') && value.includes(';base64,')) return '';
+  // 用户消息的 content 常是 JSON 字符串;只有"够大且疑似内联了 base64"时才解析,
+  // 否则原样返回以保逐字节一致。
+  if (value.length > CONTENT_PARSE_THRESHOLD && value.includes('base64')) {
+    const trimmed = value.trim();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        return JSON.stringify(stripInlineMedia(JSON.parse(value), depth + 1)) ?? '';
+      } catch {
+        return value;
+      }
+    }
+  }
+  return value;
 }
 
 function messageOrderKey(message: Record<string, unknown>): number {
@@ -570,12 +628,12 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
    * 之前",丢弃这次写。用计数而不是时间戳:毫秒精度下"清理在同一毫秒内跑完"时时间戳挡不住,
    * 计数没有精度问题。读不出来时保守跳过写(缓存是纯优化,少写一次无所谓)。
    */
-  const CLEARED_DIR = '.cleared';
+  const CLEARED_DIR = 'cleared';
   /** 列表快照是整份写,任何设备被清都可能让它变陈旧 → 用一个共享计数器。 */
   const CLEARED_ANY = '_any';
 
   function clearedMarkPath(root: string, key: string): string {
-    return path.join(root, CLEARED_DIR, key);
+    return path.join(controlDir(root), CLEARED_DIR, key);
   }
 
   function deviceClearKey(id: string): string {
@@ -596,18 +654,20 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     }
   }
 
-  async function bumpClearCounters(root: string, id: string): Promise<void> {
-    for (const key of [deviceClearKey(id), CLEARED_ANY]) {
-      const file = clearedMarkPath(root, key);
-      const current = (await readClearCounter(root, key)) ?? 0;
-      try {
-        await ensureDir(path.dirname(file));
-        await fsp.writeFile(file, String(current + 1), 'utf8');
-      } catch (err) {
-        // 计数落不下去只会让跨进程作废退化(本进程的代际屏障仍在),留痕即可。
-        log.debug(`mirror cache: failed to bump cleared counter ${key}`, err);
-      }
+  async function bumpClearedCounter(root: string, key: string): Promise<void> {
+    const file = clearedMarkPath(root, key);
+    const current = (await readClearCounter(root, key)) ?? 0;
+    try {
+      await ensureDir(path.dirname(file));
+      await fsp.writeFile(file, String(current + 1), 'utf8');
+    } catch (err) {
+      // 计数落不下去只会让跨进程作废退化(本进程的代际屏障仍在),留痕即可。
+      log.debug(`mirror cache: failed to bump cleared counter ${key}`, err);
     }
+  }
+
+  async function bumpClearCounters(root: string, id: string): Promise<void> {
+    for (const key of [deviceClearKey(id), CLEARED_ANY]) await bumpClearedCounter(root, key);
   }
 
   /** 自 `before` 之后计数是否变过(含读不出来:保守判"变过")。 */
@@ -616,15 +676,20 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     return before === null || now === null || now !== before;
   }
 
+  /** 控制面目录:`<cache-root>.control/`(与缓存根同级,clearAll 不会删它)。 */
+  function controlDir(root: string): string {
+    return `${root}${CACHE_CONTROL_SUFFIX}`;
+  }
+
   function cacheLockPath(root: string): string {
-    return path.join(root, CACHE_LOCK_FILE);
+    return path.join(controlDir(root), CACHE_LOCK_FILE);
   }
 
   async function withCacheLock<T>(
     root: string,
     task: (held: boolean) => Promise<T>,
   ): Promise<T> {
-    await ensureDir(root).catch(() => undefined);
+    await ensureDir(controlDir(root)).catch(() => undefined);
     return withCrossProcessLock(cacheLockPath(root), { label: 'mirror-cache' }, task);
   }
 
@@ -680,7 +745,11 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // (review: codex P1)。链内不能再调公开的 writeSessionList(同链嵌套会自锁),
       // 因此直接用 writeSessionListLocked。
       const listFile = path.join(rootAtStart, SESSION_LIST_FILE);
+      // 没拿到跨进程锁时**不做**「读 → 去掉我 → 写回」:另一个实例可能同时在删 / 改这份快照,
+      // 我们的写回会把它刚清掉的设备恢复回来。降级只做安全方向 —— 直接删掉整份快照
+      // (它是纯缓存,下一次成功的对账会重建)(review: codex P1)。
       const outcome = await serializeWrite(listFile, async () => {
+        if (!lockHeld) return invalidateSessionList(listFile);
         // 只有 clearAll 能作废这段(它会把整棵目录删掉,这里不该再把列表写回来);
         // 另一个并发的 clearDevice 不作废它 —— 两者依次落地才对。屏障还挡住「clearAll 已开始、
         // 尚未删完」的窗口:那时晚到的 clearDevice 会快照到新代际,若只比代际就拦不住它在
@@ -747,6 +816,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       const rootAtStart = resolveRoot();
       // 发起时的作废计数:提交前再读一次比对,挡住"内容取自清理之前、提交发生在清理之后"。
       const clearCounterAtStart = await readClearCounter(rootAtStart, deviceClearKey(deviceId));
+      const accountCounterAtStart = await readClearCounter(rootAtStart, CLEARED_ACCOUNT);
       const dir = path.join(rootAtStart, MESSAGES_DIR);
       const file = path.join(dir, messageFileName(deviceId, sessionId));
       const normalized = normalizeMessages(messages);
@@ -805,6 +875,8 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         if (isStale(writeGuard)) return;
         // 清理在我取到内容之后完成过 → 我手里的是被清掉的旧正文,丢弃。
         if (await clearedSince(rootAtStart, deviceClearKey(deviceId), clearCounterAtStart)) return;
+        // 账号级清理(登出 / 切账号)同理:它删的是整棵缓存根,而计数器在根之外。
+        if (await clearedSince(rootAtStart, CLEARED_ACCOUNT, accountCounterAtStart)) return;
         // 指纹只算消息体,不含 payload 的 updatedAt —— 否则每次都"变了",去重永不命中。
         // 在链内判等:排队期间前一笔可能刚写下同样内容。
         if (unchanged(file, body)) return;
@@ -866,6 +938,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // 同 writeMessages:root 与发起时刻都在发起时快照。
       const rootAtStart = resolveRoot();
       const clearCounterAtStart = await readClearCounter(rootAtStart, CLEARED_ANY);
+      const accountCounterAtStart = await readClearCounter(rootAtStart, CLEARED_ACCOUNT);
       // 与 writeMessages 同款:同一文件的写入串成链,保证「落盘 → 登记指纹」成对有序。
       const listFile = path.join(rootAtStart, SESSION_LIST_FILE);
       const outcome = await serializeWrite(listFile, () =>
@@ -873,7 +946,9 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
           // 拿不到跨进程锁 → 跳过(整份快照写在别人清理途中落地会把被清设备写回来)。
           // 空快照 = **删除**,删除是安全方向:即使拿不到锁 / 期间发生过清理也照做。
           normalizeDeviceSessions(devices).length === 0 ||
-          (held && !(await clearedSince(rootAtStart, CLEARED_ANY, clearCounterAtStart)))
+          (held &&
+            !(await clearedSince(rootAtStart, CLEARED_ANY, clearCounterAtStart)) &&
+            !(await clearedSince(rootAtStart, CLEARED_ACCOUNT, accountCounterAtStart)))
             ? writeSessionListLocked(devices, { kind: 'write', epoch }, listFile)
             : // 写不了内容时不能"什么都不做":盘上那份可能已经陈旧(它可能还带着刚被清掉的
               // 设备)。按与"落位失败"同一口径**作废**它;作废失败才登记重试。
@@ -928,6 +1003,9 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // 不会在删除途中把明文写回来。拿不到锁也照删(删除是安全方向)。
       return withCacheLock(root, async (lockHeld) => {
       if (!lockHeld) log.warn('mirror cache: clearAll without cross-process lock');
+      // 账号级作废计数器住在缓存根之外,先自增:发起时读到旧值的写入提交时会被挡掉,
+      // 即使它们排在整棵目录删除之后(review: codex P1)。
+      await bumpClearedCounter(root, CLEARED_ACCOUNT);
       try {
         await fsp.rm(root, { recursive: true, force: true });
         return;

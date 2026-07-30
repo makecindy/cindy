@@ -34,6 +34,7 @@ import { collectSessionListSnapshot } from '@/features/device-link/refreshRemote
 import {
   cancelSessionListPersist,
   clearCachedDevice,
+  clearCachedMessages,
   scheduleSessionListPersist,
 } from '@/features/device-link/mirrorCacheClient';
 import * as messageService from '@/lib/messageService';
@@ -590,6 +591,43 @@ describe('在途 hydrate 遇上权威删除', () => {
     await flush(20);
 
     expect(putMessages).toHaveBeenCalledWith(DEVICE_ID, s, []);
+  });
+});
+
+describe('在途最新页遇上权威作废', () => {
+  // review(pr-code-review):/clear、rewind、删消息都不改设备归属,所以"归属重核"挡不住这一种:
+  // 在途的最新页请求带着**作废之前**的行迟到 resolve,排在那次空写之后落地 → 把已经被抹掉的
+  // 正文重新写回盘上,下次离线冷启动又画回来。
+  it('请求在途期间 /clear → 迟到的最新页不写缓存', async () => {
+    const s = sid();
+    registerRemote(s);
+    let resolveList: (rows: Message[]) => void = () => {};
+    remoteListPromise = new Promise<Message[]>((resolve) => {
+      resolveList = resolve;
+    });
+
+    const pending = listMessagesFor(s);
+    // 期间权威侧作废(等价于 /clear、rewind、删消息走的那条路径)
+    clearCachedMessages(DEVICE_ID, s);
+    putMessages.mockClear();
+    resolveList([dbMessage(s, 'stale', '作废前的行', '2026-01-01T00:00:00.000Z')]);
+    await pending;
+    await flush(20);
+
+    // 只应看到"作废"那次空写(已被 mockClear 排除),不应有把旧行写回去的调用
+    expect(putMessages).not.toHaveBeenCalled();
+  });
+
+  it('没有发生作废时,最新页照常写缓存(令牌没变)', async () => {
+    const s = sid();
+    registerRemote(s);
+    remoteList = [dbMessage(s, 'm1', 'x', '2026-01-01T00:00:00.000Z')];
+    putMessages.mockClear();
+
+    await listMessagesFor(s);
+    await flush(20);
+
+    expect(putMessages).toHaveBeenCalledTimes(1);
   });
 });
 
