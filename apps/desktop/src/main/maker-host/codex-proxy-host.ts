@@ -723,14 +723,18 @@ function createAnthropicBridgeDecision(
       },
     };
   }
-  const isOAuth = route.routing.authStrategy === 'provider-oauth-header';
+  const usesProviderOAuth = route.routing.authStrategy === 'provider-oauth-header';
+  const isAnthropicSubscriptionOAuth =
+    usesProviderOAuth
+    && route.providerId === 'anthropic'
+    && route.providerSource === 'builtin';
   const buildProviderHeaders = (token: string | null): Record<string, string> => {
     const { headers: baseHeaders } = buildLocalHandlerHeaders(
       token === route.oauthToken ? route : { ...route, oauthToken: token },
       'codex',
     );
     let headers = { ...baseHeaders };
-    if (isOAuth) {
+    if (isAnthropicSubscriptionOAuth) {
       if (token) headers = claudeOAuthHeaders(headers, token);
     } else if (route.routing.authStrategy === 'api-key-header') {
       if (route.apiKey) {
@@ -769,9 +773,9 @@ function createAnthropicBridgeDecision(
   const handler = createResponsesAnthropicHandler({
     upstreamBase,
     ...(route.routing.requestPath ? { requestPath: route.routing.requestPath } : {}),
-    authMode: isOAuth ? 'oauth' : 'api-key',
+    authMode: isAnthropicSubscriptionOAuth ? 'oauth' : 'api-key',
     buildHeaders: async () => buildProviderHeaders(route.oauthToken),
-    ...(isOAuth
+    ...(usesProviderOAuth
       ? {
           refreshHeaders: async ({
             requestHeaders,
@@ -782,7 +786,7 @@ function createAnthropicBridgeDecision(
           }) => {
             const authorization = headerValue(requestHeaders, 'authorization');
             const staleToken = authorization?.replace(/^Bearer\s+/i, '');
-            const token = await readProviderOAuthToken('anthropic', 'codex', {
+            const token = await readProviderOAuthToken(providerId, 'codex', {
               forceRefresh: true,
               ...(staleToken ? { staleToken } : {}),
             });

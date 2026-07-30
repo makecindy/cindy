@@ -19,6 +19,26 @@ describe('desktopAnthropicImageCodec', () => {
     })).resolves.toEqual({ data: TINY_PNG, mediaType: 'image/png' });
   });
 
+  it('uses the decoded image format instead of an untrusted declared media type', async () => {
+    const jpeg = await sharp({
+      create: {
+        width: 2,
+        height: 2,
+        channels: 3,
+        background: '#336699',
+      },
+    }).jpeg().toBuffer();
+    const data = jpeg.toString('base64');
+
+    await expect(desktopAnthropicImageCodec.normalize({
+      data,
+      mediaType: 'image/png',
+      maxEdge: 2000,
+      qualities: [80],
+      hardCap: 2 * 1024 * 1024,
+    })).resolves.toEqual({ data, mediaType: 'image/jpeg' });
+  });
+
   it('rejects malformed base64 before decoding', async () => {
     await expect(desktopAnthropicImageCodec.normalize({
       data: 'not*base64',

@@ -13,6 +13,12 @@ const PASSTHROUGH_MEDIA_TYPES = new Set([
   'image/gif',
   'image/webp',
 ]);
+const MEDIA_TYPE_BY_SHARP_FORMAT: Readonly<Record<string, string>> = {
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+};
 
 function strictBase64Bytes(data: string): Buffer | null {
   const compact = data.replace(/\s/g, '');
@@ -45,6 +51,9 @@ class DesktopAnthropicImageCodec implements AnthropicImageCodec {
       const metadata = await source.metadata();
       const width = metadata.width ?? 0;
       const height = metadata.height ?? 0;
+      const decodedMediaType = metadata.format
+        ? MEDIA_TYPE_BY_SHARP_FORMAT[metadata.format]
+        : undefined;
       if (
         width <= 0
         || height <= 0
@@ -52,14 +61,15 @@ class DesktopAnthropicImageCodec implements AnthropicImageCodec {
       ) return null;
 
       if (
-        PASSTHROUGH_MEDIA_TYPES.has(input.mediaType)
+        decodedMediaType
+        && PASSTHROUGH_MEDIA_TYPES.has(decodedMediaType)
         && width <= input.maxEdge
         && height <= input.maxEdge
         && input.data.length <= input.hardCap
       ) {
         // metadata() is header-only; force one decoded pixel before trusting passthrough.
         await source.clone().resize(1, 1).jpeg({ quality: 1 }).toBuffer();
-        return { data: input.data, mediaType: input.mediaType };
+        return { data: input.data, mediaType: decodedMediaType };
       }
 
       const resized = source.resize({

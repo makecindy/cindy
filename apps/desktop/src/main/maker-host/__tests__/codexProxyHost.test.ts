@@ -721,6 +721,83 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     setProviderOAuthTokenReader(() => null);
   });
 
+  it('refreshes non-Anthropic provider OAuth without applying Claude.ai credentials or policy', async () => {
+    const host = await freshCodexProxyHost();
+    const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+    const { setActiveCatalog } = await import('../active-catalog.js');
+    const { setProviderOAuthTokenReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    const xai = catalog.providers.find((provider) => provider.id === 'xai');
+    if (!xai?.routing.codex) throw new Error('expected bundled xAI Codex route');
+    xai.routing.codex = {
+      ...xai.routing.codex,
+      wireProtocol: 'anthropic-messages',
+    };
+    setActiveCatalog(catalog);
+    const tokenReader = vi.fn((providerId: string, agent: string, options?: { forceRefresh?: boolean }) => (
+      providerId === 'xai' && agent === 'codex'
+        ? options?.forceRefresh ? 'xai-refreshed-token' : 'xai-initial-token'
+        : null
+    ));
+    setProviderOAuthTokenReader(tokenReader);
+    host.registerComposed('session-xai-anthropic-wire', 'thread-xai-anthropic-wire', 'PRODUCT_PROMPT');
+    setSessionProvider('session-xai-anthropic-wire', 'xai');
+    host.setCodexProxyAuthInjection('oauth-bearer');
+
+    try {
+      const decision = await Promise.resolve(host.createModelRoutingTransform()(
+        {
+          model: 'xai/grok-4.3',
+          input: [{ role: 'user', content: 'hello' }],
+        },
+        {
+          reqId: 1,
+          method: 'POST',
+          url: '/responses',
+          headers: { 'thread-id': 'thread-xai-anthropic-wire' },
+        },
+      ));
+      expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+      const anthropicHandlerCalls = mockState.createResponsesAnthropicHandler.mock.calls as unknown as Array<[
+        {
+          authMode: string;
+          buildHeaders: () => Promise<Record<string, string>>;
+          refreshHeaders: (input: {
+            status: 401 | 403;
+            body: string;
+            requestHeaders: Readonly<Record<string, string>>;
+          }) => Promise<Record<string, string> | null>;
+        },
+      ]>;
+      const config = anthropicHandlerCalls.at(-1)?.[0];
+      expect(config).toBeDefined();
+      if (!config) throw new Error('xAI Anthropic bridge config was not captured');
+      expect(config.authMode).toBe('api-key');
+      const initialHeaders = await config.buildHeaders();
+      expect(initialHeaders.authorization).toBe('Bearer xai-initial-token');
+      expect(initialHeaders).not.toHaveProperty('x-app');
+      expect(initialHeaders).not.toHaveProperty('x-claude-code-session-id');
+
+      const refreshedHeaders = await config.refreshHeaders({
+        status: 401,
+        body: 'expired',
+        requestHeaders: initialHeaders,
+      });
+      expect(refreshedHeaders?.authorization).toBe('Bearer xai-refreshed-token');
+      expect(refreshedHeaders).not.toHaveProperty('x-app');
+      expect(tokenReader).toHaveBeenLastCalledWith('xai', 'codex', {
+        forceRefresh: true,
+        staleToken: 'xai-initial-token',
+      });
+      expect(tokenReader.mock.calls.some(([providerId]) => providerId === 'anthropic')).toBe(false);
+    } finally {
+      clearSessionProvider('session-xai-anthropic-wire');
+      setProviderOAuthTokenReader(() => null);
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
   it('routes only XD Claude-only models through the Anthropic bridge in env-key mode', async () => {
     const host = await freshCodexProxyHost();
     const { setXdGatewayModels } = await import('../active-catalog.js');
