@@ -471,6 +471,22 @@ describe('Responses → Anthropic request translation', () => {
     expect(result.request.top_p).toBe(0.8);
   });
 
+  it('rejects sampling values outside the Anthropic 0-1 range', () => {
+    expect(() => translateResponsesRequest({
+      model: 'claude-sonnet-4-6',
+      reasoning: { effort: 'none' },
+      input: [{ role: 'user', content: 'hi' }],
+      temperature: 1.5,
+    })).toThrow('Responses temperature must be between 0 and 1');
+
+    expect(() => translateResponsesRequest({
+      model: 'claude-sonnet-4-6',
+      reasoning: { effort: 'none' },
+      input: [{ role: 'user', content: 'hi' }],
+      top_p: -0.1,
+    })).toThrow('Responses top_p must be between 0 and 1');
+  });
+
   it('maps Responses stop strings and arrays to Anthropic stop_sequences', () => {
     const single = translateResponsesRequest({
       model: 'claude',

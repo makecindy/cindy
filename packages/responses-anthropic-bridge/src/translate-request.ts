@@ -49,6 +49,20 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+function anthropicSamplingValue(
+  field: 'temperature' | 'top_p',
+  value: unknown,
+): number | undefined {
+  const sampling = numberValue(value);
+  if (sampling === undefined) return undefined;
+  if (sampling < 0 || sampling > 1) {
+    throw new InvalidResponsesRequestError(
+      `Responses ${field} must be between 0 and 1 for the Anthropic bridge`,
+    );
+  }
+  return sampling;
+}
+
 function textPart(text: string): { type: 'text'; text: string } {
   return { type: 'text', text };
 }
@@ -1229,8 +1243,10 @@ export function translateResponsesRequest(
     delete anth.output_config;
   }
   if (!anth.thinking || anth.thinking.type === 'disabled') {
-    if (numberValue(raw.temperature) !== undefined) anth.temperature = raw.temperature;
-    if (numberValue(raw.top_p) !== undefined) anth.top_p = raw.top_p;
+    const temperature = anthropicSamplingValue('temperature', raw.temperature);
+    const topP = anthropicSamplingValue('top_p', raw.top_p);
+    if (temperature !== undefined) anth.temperature = temperature;
+    if (topP !== undefined) anth.top_p = topP;
   }
   const mappedStopSequences = stopSequences(raw.stop);
   if (mappedStopSequences) anth.stop_sequences = mappedStopSequences;

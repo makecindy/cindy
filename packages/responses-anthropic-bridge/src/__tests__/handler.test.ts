@@ -531,6 +531,29 @@ describe('createResponsesAnthropicHandler', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it('rejects Responses sampling values outside the Anthropic range before fetch', async () => {
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const handler = createResponsesAnthropicHandler({
+      upstreamBase: 'https://provider.example',
+      buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({
+      parsedBody: {
+        model: 'claude',
+        input: 'hi',
+        reasoning: { effort: 'none' },
+        temperature: 1.5,
+      },
+      ctx,
+      res: res as never,
+    });
+    expect(res.status).toBe(400);
+    expect(res.chunks.join('')).toContain('"code":"invalid_request"');
+    expect(res.chunks.join('')).toContain('temperature must be between 0 and 1');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('maps upstream HTTP errors without leaking request credentials', async () => {
     const onUpstreamError = vi.fn();
     const fetchImpl = vi.fn(async () => new Response('bad key', { status: 401 })) as typeof fetch;
