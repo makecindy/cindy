@@ -705,9 +705,18 @@ export async function closeTab(
       await settleTabStateWrites(sessionId, tabId);
       const ipc = ipcApi();
       if (ipc && shouldPersist(sessionId)) {
-        await ipc.close({ id: tabId });
+        try {
+          await ipc.close({ id: tabId });
+        } catch (closeErr) {
+          // [NOT_FOUND] = 行已被并发路径删掉(典型:upsert 成功 setActive 失败的
+          // addTab 半失败回滚清理先删了行,而本次 close 因 pendingCreate 半失败
+          // 返回 true 走到了正常分支)。关闭的目标状态"行不存在"已达成,按成功
+          // 继续收尾——走外层回滚会把 DB 已无的行插回 cache,制造幽灵 tab。
+          if (!isTabRowMissingError(closeErr)) throw closeErr;
+        }
         // —— close 已落库:从这里起任何失败都不得进入下面的回滚分支(把已删的
         // tab 插回 cache 会与 DB 反向分叉)。active 同步单独 catch 兜底。
+        let attemptedActive: string | null | undefined;
         try {
           // active 落库前重取一次 cache 现值:关闭队列只串行关闭之间的变更,
           // 并发的 addTab / setActiveTab 可能已经把 active 换成别的 tab 并落库了 ——
@@ -736,6 +745,7 @@ export async function closeTab(
                 }
               }
               if (cacheStillOwned && activeNow !== prev.activeTabId) {
+                attemptedActive = activeNow;
                 await ipc.setActive({ sessionId, id: activeNow });
               }
             }
@@ -751,7 +761,14 @@ export async function closeTab(
             err: activeErr,
           });
           const current = getBucket(sessionId);
-          if (current.hydrated) {
+          // 只有 cache 现值仍指向**这次失败写的目标**才清空:setActive(B) 在途
+          // 期间用户已激活 C(setActiveTab 各自落库)时,无条件清 null 会把更新
+          // 的激活覆盖掉——旧写失败不该赢过新写成功。
+          if (
+            current.hydrated &&
+            attemptedActive !== undefined &&
+            current.activeTabId === attemptedActive
+          ) {
             setBucket(sessionId, { tabs: current.tabs, activeTabId: null });
           }
         }

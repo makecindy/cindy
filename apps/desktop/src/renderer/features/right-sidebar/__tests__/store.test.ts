@@ -597,6 +597,45 @@ describe('RSB store', () => {
       expect(store.getBucket('s1').tabs.map((t) => t.id)).toEqual([b.id]);
     });
 
+    it('正常分支 close 撞 [NOT_FOUND](行已被并发清理删掉)按成功收尾,不回插幽灵 tab', async () => {
+      // 双路径清理竞争:addTab 半失败(upsert 成功 setActive 失败)的回滚清理先删
+      // 了行,pendingCreate 半失败返回 true 让并发 close 走到正常分支 → ipc.close
+      // 拿 [NOT_FOUND]。行不存在正是关闭的目标状态——回滚反而把 DB 已无的行插
+      // 回 cache,制造幽灵 tab。
+      const a = await store.addTab('s1', 'web-browser', null);
+      ipc.close.mockRejectedValueOnce(
+        new Error(
+          "Error invoking remote method 'local-db:right-sidebar-tabs:close': Error: [NOT_FOUND] tab x not found",
+        ),
+      );
+      await expect(store.closeTab('s1', a.id)).resolves.toBeUndefined();
+      expect(store.getBucket('s1').tabs).toHaveLength(0);
+    });
+
+    it('post-close setActive 失败的恢复不覆盖期间用户的新激活', async () => {
+      // setActive(B) 在途期间用户激活 C(已各自落库):B 的失败恢复若无条件清
+      // null,会把更新的激活覆盖掉——旧写失败不该赢过新写成功。
+      const a = await store.addTab('s1', 'web-browser', null);
+      const b = await store.addTab('s1', 'web-browser', null);
+      const c = await store.addTab('s1', 'web-browser', null);
+      await store.setActiveTab('s1', a.id);
+      ipc.setActive.mockClear();
+      let rejectFirst!: (e: Error) => void;
+      ipc.setActive.mockImplementationOnce(
+        () => new Promise((_resolve, reject) => { rejectFirst = (e) => reject(e); }),
+      );
+
+      const close = store.closeTab('s1', a.id); // 替代者 = b → setActive(b) 挂起
+      await vi.waitFor(() =>
+        expect(ipc.setActive).toHaveBeenCalledWith({ sessionId: 's1', id: b.id }),
+      );
+      await store.setActiveTab('s1', c.id); // 用户此间激活 C(默认 mock 成功)
+      rejectFirst(new Error('boom'));
+      await close;
+
+      expect(store.getBucket('s1').activeTabId).toBe(c.id);
+    });
+
     it('close 落库后 setActive 失败只降级为警告,不复活已删 tab', async () => {
       const a = await store.addTab('s1', 'web-browser', null);
       const b = await store.addTab('s1', 'web-browser', null);
