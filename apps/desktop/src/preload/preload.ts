@@ -1511,6 +1511,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> => ipcRenderer.invoke('telegramBot:disconnect'),
     checkSessionAuth: (): Promise<DiscordBotSessionAuthCheckWire> =>
       ipcRenderer.invoke('telegramBot:check-session-auth'),
+    // 行为配置(emoji 回应等级 / 回复引用) — 设置卡可视化操作面, 改动即生效。
+    getBehavior: (): Promise<{
+      emojiReactions: 'off' | 'minimal' | 'expressive';
+      replyQuoteGroup: 'off' | 'first' | 'all';
+      replyQuoteDm: 'off' | 'first';
+    }> => ipcRenderer.invoke('telegramBot:get-behavior'),
+    setBehavior: (patch: {
+      emojiReactions?: 'off' | 'minimal' | 'expressive';
+      replyQuoteGroup?: 'off' | 'first' | 'all';
+      replyQuoteDm?: 'off' | 'first';
+    }): Promise<{
+      emojiReactions: 'off' | 'minimal' | 'expressive';
+      replyQuoteGroup: 'off' | 'first' | 'all';
+      replyQuoteDm: 'off' | 'first';
+    }> => ipcRenderer.invoke('telegramBot:set-behavior', patch),
     onStatusChange: fanOutTelegramBotStatusChange,
   },
 

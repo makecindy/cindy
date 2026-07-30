@@ -1792,6 +1792,36 @@
         "permission": "查看或切换权限模式",
         "ctr": "接管桌面端的对话",
         "exctr": "退出远程控制"
+      },
+      "behavior": {
+        "title": "回应与引用",
+        "emojiLabel": "表情回应",
+        "emojiOption": {
+          "off": "关闭",
+          "minimal": "基础",
+          "expressive": "生动"
+        },
+        "emojiHint": {
+          "off": "不放任何表情回应。",
+          "minimal": "收到消息 👀，完成 👍，失败 👎。",
+          "expressive": "完成/失败从 👍🎉💯 / 👎😱 中随机挑选，更有生气。"
+        },
+        "groupQuoteLabel": "群里回复时引用提问",
+        "quoteOption": {
+          "off": "不引用",
+          "first": "首条引用",
+          "all": "每条引用"
+        },
+        "groupQuoteHint": {
+          "off": "群里的回答不挂回提问消息。",
+          "first": "每次触发的第一条回答挂回提问，多人群里对得上号（推荐）。",
+          "all": "本次回答的每条消息都挂回提问。"
+        },
+        "dmQuoteLabel": "私聊回复时引用消息",
+        "dmQuoteHint": {
+          "off": "私聊回答不引用你的消息（默认，更清爽）。",
+          "first": "第一条回答引用你发的那条消息。"
+        }
       }
     },
     "logout": {

@@ -381,6 +381,12 @@ type DiscordBotTransportStatus =
   | { kind: 'error'; reason: string };
 
 /** @cindy/im TelegramIM 的 transport 状态(IMStatus union 的 mirror)。 */
+interface TelegramBotBehavior {
+  emojiReactions: 'off' | 'minimal' | 'expressive';
+  replyQuoteGroup: 'off' | 'first' | 'all';
+  replyQuoteDm: 'off' | 'first';
+}
+
 type TelegramBotTransportStatus =
   | { kind: 'idle' }
   | { kind: 'connecting' }
@@ -1693,6 +1699,8 @@ interface ElectronAPI {
       status: TelegramBotTransportStatus;
     }>;
     checkSessionAuth: () => Promise<DiscordBotSessionAuthCheckResult>;
+    getBehavior: () => Promise<TelegramBotBehavior>;
+    setBehavior: (patch: Partial<TelegramBotBehavior>) => Promise<TelegramBotBehavior>;
     onStatusChange: (
       callback: (update: {
         status: TelegramBotTransportStatus;

@@ -1792,6 +1792,36 @@
         "permission": "권한 모드 보기·전환",
         "ctr": "데스크톱 세션 원격 제어",
         "exctr": "원격 제어 종료"
+      },
+      "behavior": {
+        "title": "리액션과 인용",
+        "emojiLabel": "이모지 리액션",
+        "emojiOption": {
+          "off": "끄기",
+          "minimal": "기본",
+          "expressive": "생동감"
+        },
+        "emojiHint": {
+          "off": "이모지 리액션을 전혀 달지 않습니다.",
+          "minimal": "수신 시 👀, 성공 👍, 실패 👎.",
+          "expressive": "완료/실패 시 👍🎉💯 / 👎😱 중에서 랜덤으로 선택합니다."
+        },
+        "groupQuoteLabel": "그룹에서 질문 인용해 답장",
+        "quoteOption": {
+          "off": "안 함",
+          "first": "첫 답장만",
+          "all": "매번"
+        },
+        "groupQuoteHint": {
+          "off": "그룹 답변을 질문에 연결하지 않습니다.",
+          "first": "각 답변의 첫 메시지가 질문을 인용합니다(권장).",
+          "all": "답변의 모든 메시지가 질문을 인용합니다."
+        },
+        "dmQuoteLabel": "DM에서 메시지 인용해 답장",
+        "dmQuoteHint": {
+          "off": "DM 답변은 인용 없이 보냅니다(기본).",
+          "first": "첫 답장이 보낸 메시지를 인용합니다."
+        }
       }
     },
     "logout": {

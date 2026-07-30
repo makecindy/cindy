@@ -34,7 +34,7 @@ import { pinBlob } from '../cindy-media/ledger';
 import { t } from '../i18n';
 import { discordUiText } from './discord/uiText';
 import { telegramUiText } from './telegram/uiText';
-import { readTelegramBehavior } from './telegram/behaviorStore';
+import { patchTelegramBehavior, readTelegramBehavior } from './telegram/behaviorStore';
 import { imHostAccountScope } from './accountScopeBridge';
 import { ownerScopedImSecrets } from './ownerScopedStorage';
 import { captureImAccountGeneration, isImAccountGenerationCurrent } from './accountBoundary';
@@ -150,6 +150,13 @@ export const telegramIm = createTelegramIM(host, {
     }),
   ),
 });
+// 行为配置 IPC(设置卡「回应与引用」节)。payload 在 store 内白名单校验,
+// 未知字段/非法值一律丢弃(electron-security: 不信任 renderer 输入)。
+ipcMain.handle('telegramBot:get-behavior', () => readTelegramBehavior());
+ipcMain.handle('telegramBot:set-behavior', (_e, patch) =>
+  patchTelegramBehavior((patch ?? {}) as Parameters<typeof patchTelegramBehavior>[0]),
+);
+
 export const wechatCompatibilityPolicy = new WechatCompatibilityPolicyService({
   ...WECHAT_COMPATIBILITY_POLICY_PRODUCTION_CONFIG,
   cachePath: () =>

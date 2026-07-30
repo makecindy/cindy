@@ -1793,6 +1793,36 @@
         "permission": "Show or switch the permission mode",
         "ctr": "Remotely control a desktop session",
         "exctr": "Exit remote control"
+      },
+      "behavior": {
+        "title": "Reactions & quoting",
+        "emojiLabel": "Emoji reactions",
+        "emojiOption": {
+          "off": "Off",
+          "minimal": "Basic",
+          "expressive": "Lively"
+        },
+        "emojiHint": {
+          "off": "No emoji reactions at all.",
+          "minimal": "👀 on receipt, 👍 on success, 👎 on failure.",
+          "expressive": "Finishes pick randomly from 👍🎉💯 / 👎😱 for more life."
+        },
+        "groupQuoteLabel": "Quote the question in groups",
+        "quoteOption": {
+          "off": "Never",
+          "first": "First reply",
+          "all": "Every reply"
+        },
+        "groupQuoteHint": {
+          "off": "Group answers are not attached to the question.",
+          "first": "The first reply of each answer quotes the question (recommended).",
+          "all": "Every message of the answer quotes the question."
+        },
+        "dmQuoteLabel": "Quote your message in DM",
+        "dmQuoteHint": {
+          "off": "DM answers are sent without quoting (default, cleaner).",
+          "first": "The first reply quotes the message you sent."
+        }
       }
     },
     "logout": {
