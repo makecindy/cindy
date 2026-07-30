@@ -25,6 +25,8 @@ import type {
   RsbBrowserBridgeTabOpResult,
 } from '../../../../shared/rsbBrowserBridge';
 
+import { createLogger } from '@/lib/logger';
+
 import { browserWebviewPool } from './browserWebviewPool';
 import {
   addTab,
@@ -36,6 +38,12 @@ import {
 } from '../store';
 import { requestRightSidebarVisibility } from './sidebarCommands';
 import { isPopupSpawnedTab } from './popupTabs';
+
+const log = createLogger('rightSidebar.rsbBrowserBridge');
+
+/** guest 自关收尾对 closeTab 瞬态失败的重试延迟表(close 事件不重发,不重试
+ *  即静默丢关闭意图)。 */
+const GUEST_CLOSE_RETRY_DELAYS_MS = [50, 150, 400] as const;
 
 /** Subset of `window.electronAPI.rsbBrowserBridge` actually used here. */
 interface RsbBrowserBridgeIpcSubset {
@@ -237,21 +245,44 @@ export function initRsbBrowserBridge(): () => void {
     const sessionId = findSessionIdByTabId(tabId);
     if (!sessionId) return;
     void enqueueGuestClose(sessionId, async () => {
-      // 队列内重取:排在前面的自关可能已经把这个 tab 关掉了(或它已被用户关掉)。
-      if (!getBucket(sessionId).tabs.some((t) => t.id === tabId)) return;
-      const beforeCount = getBucket(sessionId).tabs.length;
-      await storeCloseTab(sessionId, tabId);
-      // closeTab 可能被 close interceptor 拦下(tab 留在 bucket)——此时不动资源,
-      // 保持"没关成"的完整语义(popup 标记同理:store 只在真正关成时才清)。
-      const stillPresent = getBucket(sessionId).tabs.some((t) => t.id === tabId);
-      if (stillPresent) return;
-      // 后台自关(BrowserTabBody 未挂载)没有 unmount cleanup 兜底,必须显式
-      // release:销毁 guest webContents、经 onRelease 链同步 main 端 TabRegistry。
-      // 前台场景 TabBody 的关闭路径先 release 过也没关系 —— release 幂等。
-      browserWebviewPool.release(tabId);
-      const afterCount = getBucket(sessionId).tabs.length;
-      if (beforeCount > 0 && afterCount === 0) {
-        requestRightSidebarVisibility('close', { sessionId });
+      // closeTab 的瞬态失败(DB overload / worker 短暂不可用)必须重试:guest 的
+      // close 事件不会重发,静默丢弃等于让"残留空 tab"被瞬态失败原样复活。
+      // 有限重试后仍失败 → log.error 留痕收手(fail-safe 方向是少关一个 tab,
+      // 用户手关兜底;popup 标记未清,理论上后续还有自关机会)。
+      for (let attempt = 0; ; attempt += 1) {
+        // 每轮重取存在性:排在前面的自关 / 用户手关 / 上一轮部分成功都可能已把
+        // 这个 tab 关掉。
+        if (!getBucket(sessionId).tabs.some((t) => t.id === tabId)) return;
+        const beforeCount = getBucket(sessionId).tabs.length;
+        try {
+          await storeCloseTab(sessionId, tabId);
+        } catch (err) {
+          if (attempt < GUEST_CLOSE_RETRY_DELAYS_MS.length) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, GUEST_CLOSE_RETRY_DELAYS_MS[attempt]),
+            );
+            continue;
+          }
+          log.error('guest-close: closeTab failed after retries; tab left in place', {
+            sessionId,
+            tabId,
+            err,
+          });
+          return;
+        }
+        // closeTab 可能被 close interceptor 拦下(tab 留在 bucket)——此时不动资源,
+        // 保持"没关成"的完整语义(popup 标记同理:store 只在真正关成时才清)。
+        const stillPresent = getBucket(sessionId).tabs.some((t) => t.id === tabId);
+        if (stillPresent) return;
+        // 后台自关(BrowserTabBody 未挂载)没有 unmount cleanup 兜底,必须显式
+        // release:销毁 guest webContents、经 onRelease 链同步 main 端 TabRegistry。
+        // 前台场景 TabBody 的关闭路径先 release 过也没关系 —— release 幂等。
+        browserWebviewPool.release(tabId);
+        const afterCount = getBucket(sessionId).tabs.length;
+        if (beforeCount > 0 && afterCount === 0) {
+          requestRightSidebarVisibility('close', { sessionId });
+        }
+        return;
       }
     });
   });

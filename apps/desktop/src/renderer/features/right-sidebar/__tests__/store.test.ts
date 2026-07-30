@@ -631,6 +631,53 @@ describe('RSB store', () => {
       expect(store.getBucket('s1').tabs).toHaveLength(0);
     });
 
+    it('孤儿行清理把 Electron 包装形态的 [NOT_FOUND] 视为"行本来就没有",不重试', async () => {
+      let rejectUpsert!: (e: Error) => void;
+      ipc.upsert.mockImplementationOnce(
+        () => new Promise((_resolve, reject) => { rejectUpsert = (e) => reject(e); }),
+      );
+      let createdId = '';
+      const pendingAdd = store.addTab('s1', 'web-browser', null, {
+        onOptimisticAdd: (id) => { createdId = id; },
+      });
+      const close = store.closeTab('s1', createdId);
+      await Promise.resolve();
+      // renderer 实际拿到的是 Electron invoke 包装后的形态。
+      ipc.close.mockRejectedValueOnce(
+        new Error(
+          "Error invoking remote method 'local-db:right-sidebar-tabs:close': Error: [NOT_FOUND] tab x not found",
+        ),
+      );
+
+      rejectUpsert(new Error('boom'));
+      await expect(pendingAdd).rejects.toThrow('boom');
+      await close;
+      expect(ipc.close).toHaveBeenCalledTimes(1);
+    });
+
+    it('message 恰含 [NOT_FOUND] 字样但非 IPC code 位置的失败,不误判为清理成功', async () => {
+      // 结构化 code 比对(extractIpcError 锚定 code 位置)的意义:裸
+      // `includes('[NOT_FOUND]')` 会把这类无关错误当成"行不存在",静默跳过清理。
+      let rejectUpsert!: (e: Error) => void;
+      ipc.upsert.mockImplementationOnce(
+        () => new Promise((_resolve, reject) => { rejectUpsert = (e) => reject(e); }),
+      );
+      let createdId = '';
+      const pendingAdd = store.addTab('s1', 'web-browser', null, {
+        onOptimisticAdd: (id) => { createdId = id; },
+      });
+      const close = store.closeTab('s1', createdId);
+      await Promise.resolve();
+      ipc.close.mockRejectedValueOnce(
+        new Error('proxy hiccup while forwarding [NOT_FOUND] marker downstream'),
+      );
+
+      rejectUpsert(new Error('boom'));
+      await expect(pendingAdd).rejects.toThrow('boom');
+      await close; // 默认 mock 第二次成功 → 重试路径完成清理
+      expect(ipc.close).toHaveBeenCalledTimes(2);
+    });
+
     it('孤儿行清理重试仍失败时向上抛,不静默', async () => {
       let rejectUpsert!: (e: Error) => void;
       ipc.upsert.mockImplementationOnce(

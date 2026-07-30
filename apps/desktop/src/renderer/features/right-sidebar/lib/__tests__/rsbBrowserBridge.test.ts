@@ -229,6 +229,40 @@ describe('rsbBrowserBridge — initialization & teardown', () => {
     });
   });
 
+  it('guest 自关对 closeTab 瞬态失败按延迟重试,不静默丢弃关闭意图', async () => {
+    installFakeIpc();
+    // 装 localDb stub 让 store 走持久化路径 —— memory-only 下 closeTab 不会失败,
+    // 测不到重试分支。close 事件不重发,首次 overload 若被吞掉 = 空 tab 复活。
+    const tabsIpc = {
+      list: vi.fn(async () => ({ tabs: [], activeTabId: null })),
+      upsert: vi.fn(async () => ({ ok: true })),
+      close: vi.fn(async () => ({ ok: true })),
+      setActive: vi.fn(async () => ({ ok: true })),
+      reorder: vi.fn(async () => ({ ok: true })),
+    };
+    (
+      window as unknown as { electronAPI: { localDb?: unknown } }
+    ).electronAPI.localDb = { rightSidebarTabs: tabsIpc };
+    initRsbBrowserBridge();
+
+    await ensureHydrated('sess-retry');
+    const tab = await addTab('sess-retry', 'web-browser', { url: 'https://cb.example' });
+    markPopupSpawnedTab(tab.id);
+    const entry = browserWebviewPool.acquire(tab.id);
+
+    tabsIpc.close.mockRejectedValueOnce(new Error('db worker RPC queue overloaded'));
+    entry.webview.dispatchEvent(new Event('close'));
+
+    await vi.waitFor(
+      () => {
+        expect(getBucket('sess-retry').tabs).toHaveLength(0);
+      },
+      { timeout: 2000 },
+    );
+    // 首次失败 + 重试成功 = 恰好 2 次。
+    expect(tabsIpc.close).toHaveBeenCalledTimes(2);
+  });
+
   it('pool release (LRU 淘汰) 不清 popup 标记 —— tab 重建后仍能自关', async () => {
     installFakeIpc();
     initRsbBrowserBridge();

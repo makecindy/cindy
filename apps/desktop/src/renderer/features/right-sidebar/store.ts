@@ -17,6 +17,7 @@
  */
 
 import { createLogger } from '@/lib/logger';
+import { extractIpcError } from '@/utils/ipcError';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import { getTabKind } from './registry';
 import { unmarkPopupSpawnedTab } from './lib/popupTabs';
@@ -167,11 +168,13 @@ function isDbWorkerQueueOverloadedError(err: unknown): boolean {
   return err instanceof Error && err.message.includes('db worker RPC queue overloaded');
 }
 
-/** main 端 rightSidebarTabs 对不存在的行抛 `[NOT_FOUND] tab <id> not found`
- *  (ipcValidate.throwIpcError 的 message 前缀会透传到 renderer 的 invoke reject)。
+/** main 端 rightSidebarTabs 对不存在的行抛 `[NOT_FOUND] tab <id> not found`。
+ *  经共享 helper 做结构化 code 比对(正则锚定 Electron 包装后的 code 位置),
+ *  而不是裸 `message.includes('[NOT_FOUND]')`——后者会把 message 恰好含该
+ *  字样的无关错误误判成"清理成功",让孤儿行清理被静默跳过。
  *  孤儿行清理用它区分"本来就没有"(=成功)与"清理没做成"(=必须重试/上抛)。 */
 function isTabRowMissingError(err: unknown): boolean {
-  return err instanceof Error && err.message.includes('[NOT_FOUND]');
+  return extractIpcError(err)?.code === 'NOT_FOUND';
 }
 
 function wait(ms: number): Promise<void> {
