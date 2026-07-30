@@ -39,10 +39,29 @@ function requestKeyOf(media: RemoteMediaRequest): string {
   return media.thumbnail ? `thumb\u0000${media.url}` : media.url;
 }
 
+/**
+ * 单次 resolve 的回写钩子(队列绑定到该次请求的缓存键)。
+ * 取件方拿到 presign 结果后仍在后台落盘,落盘成功时经此把缓存条目升级成本地
+ * file://,不必让调用方同步等待落盘。
+ */
+export interface RemoteMediaResolveHooks {
+  /**
+   * 本地副本已确证就绪(字节确实写进磁盘缓存)。队列据此把自己的缓存条目换成
+   * 本地地址,后续同键请求直接命中本地文件、零网络。
+   * 迟到 / 已退屏 / 条目已被更新的对象替换等情形由队列自行丢弃,取件方无需判断。
+   */
+  onLocalCopy(media: MobileResolvedRemoteMedia): void;
+}
+
 export interface RemoteMediaResolveQueueDeps {
   /** 真正的取件实现(fetchRemoteMedia + presignGet)。skipCache 随 forceRefresh 请求透传,
-   *  让下游(磁盘缓存 / 被控端上传去重缓存)一并绕过,保证强制重取真的取到新对象。 */
-  resolve(media: RemoteMediaRequest, opts?: { skipCache?: boolean }): Promise<MobileResolvedRemoteMedia>;
+   *  让下游(磁盘缓存 / 被控端上传去重缓存)一并绕过,保证强制重取真的取到新对象。
+   *  hooks 见 {@link RemoteMediaResolveHooks}。 */
+  resolve(
+    media: RemoteMediaRequest,
+    opts?: { skipCache?: boolean },
+    hooks?: RemoteMediaResolveHooks,
+  ): Promise<MobileResolvedRemoteMedia>;
   /** presign 是否仍然新鲜;默认 isResolvedRemoteMediaFresh。 */
   isFresh?(media: MobileResolvedRemoteMedia, now: number): boolean;
   /** 时钟注入,测试用;默认 Date.now。 */
@@ -146,6 +165,28 @@ export function createRemoteMediaResolveQueue(
     entry.waiters.length = 0;
   }
 
+  /**
+   * 后台落盘完成后把缓存条目升级成本地 file://(见 RemoteMediaResolveHooks)。
+   *
+   * 为什么必须有这一步:取件返回的 presign 地址会被当 fresh 结果缓存,在有效期内
+   * 同键请求一律直接命中它,**再也不会重新进入磁盘 lookup**。于是「已经打开过的
+   * 原图,关掉再打开又要从 OSS 重下一整张」——盘上那份副本永远轮不到用
+   * (PR #1125 review)。事件驱动的升级取代了此前"同步等落盘"的做法:调用方不必
+   * 等待,预取也就不会占住并发槽位把用户正在看的那张饿住。
+   *
+   * 三条丢弃路径(乱序 / 迟到的升级绝不能污染缓存):
+   *   - 已 releaseAll:缓存归退屏清理接管,升级会凭空复活一个条目;
+   *   - 条目不存在:被 evict / 从未落缓存(如缩略图回落原图落的是裸键),不创建;
+   *   - ossKey 已变:forceRefresh 换过对象,本次升级对应的是旧对象,已过期。
+   */
+  function upgradeToLocalCopy(key: string, local: MobileResolvedRemoteMedia): void {
+    if (released) return;
+    const current = cache.get(key);
+    if (!current) return;
+    if (current.ossKey !== local.ossKey) return;
+    cache.set(key, local);
+  }
+
   function pump(): void {
     while (inFlightCount < maxConcurrent && pendingOrder.length > 0) {
       const key = pendingOrder.shift();
@@ -154,7 +195,11 @@ export function createRemoteMediaResolveQueue(
       if (!entry || entry.inFlight || entry.waiters.length === 0) continue;
       entry.inFlight = true;
       inFlightCount += 1;
-      void deps.resolve(entry.media, entry.skipCache ? { skipCache: true } : undefined)
+      void deps.resolve(
+        entry.media,
+        entry.skipCache ? { skipCache: true } : undefined,
+        { onLocalCopy: (local) => upgradeToLocalCopy(key, local) },
+      )
         .then((resolved) => {
           if (released) {
             // 退屏后没人关心新旧,follow-up 一并按本轮结果 settle。

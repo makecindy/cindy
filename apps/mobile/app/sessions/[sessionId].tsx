@@ -425,7 +425,6 @@ import type {
   MobileSessionAgentSwitchIntent,
 } from '@cindy/maker-shared/device-link-contract';
 import {
-  REMOTE_MEDIA_LOCAL_COPY_WAIT_MS,
   REMOTE_MEDIA_NEVER_EXPIRES,
   localCopyResolvedMedia,
   resolveMobileRemoteMedia,
@@ -436,6 +435,7 @@ import {
   createRemoteMediaResolveQueue,
   type RemoteMediaRequest,
   type RemoteMediaRequestOptions,
+  type RemoteMediaResolveHooks,
 } from '@/session/remoteMediaResolveQueue';
 import { ChatFilePathContext, type ChatFilePathContextValue, type ChatFilePathTarget } from '@/session/chatFilePathContext';
 import { pathDisplayName } from '@/session/chatPathCandidate';
@@ -1190,7 +1190,11 @@ export default function SessionScreen() {
   // 队列工厂:本屏切 sessionId 不重挂载,换会话时旧队列 releaseAll 后必须换全新
   // 实例(released 标志一次性,释放过的队列不再回填缓存)。
   const createRemoteMediaQueue = useCallback(() => createRemoteMediaResolveQueue({
-      resolve: async (media: RemoteMediaRequest, opts?: { skipCache?: boolean }) => {
+      resolve: async (
+        media: RemoteMediaRequest,
+        opts?: { skipCache?: boolean },
+        hooks?: RemoteMediaResolveHooks,
+      ) => {
         const deps = remoteMediaDepsRef.current;
         const diskCache = remoteMediaDiskCacheRef.current;
         // 命名空间键与 deps 同一时刻捕获(首个 await 之前):切设备/账号时在飞的
@@ -1247,39 +1251,32 @@ export default function SessionScreen() {
           // 走到这里的都是完整原图字节(inline 缩略图已在上面 return):即便请求方
           // 要的是缩略图(被控端缩不了回落原图),也落**裸键**——lightbox 后续按裸键
           // 取原图直接磁盘命中,不再对同一张原图二次下载、双份落盘。
-          const store = diskCache.store(bareDiskSource, resolved.url, resolved.mimeType, resolved.size).catch(() => undefined);
+          const store = diskCache.store(bareDiskSource, resolved.url, resolved.mimeType, resolved.size)
+            .catch(() => false);
           if (resolved.ossKey) {
             const key = resolved.ossKey;
             pendingDiskStoresRef.current.set(key, store.finally(() => {
               pendingDiskStoresRef.current.delete(key);
             }));
           }
-          // 原图请求(查看器点开):等落盘结束,回本地 file:// 而不是 presign 地址。
-          //   - 同一个对象此前会被下载**两遍**(store 落盘一遍、<Image> 按 presign
-          //     地址再下一遍),两条下载还互相抢带宽;现在只下一遍,渲染读本地文件。
-          //   - 关掉查看器再打开时,队列内存缓存里存的是本地文件:presign 地址在有效期
-          //     内会被当 fresh 命中直接复用,于是每次点开都从 OSS 重新拉整张原图
-          //     (用户实测:「已经打开过原图,关闭再打开又从黑屏开始」)。换成本地
-          //     文件后再次点开直接满清晰度秒出,零网络。
-          // 落盘被跳过(单对象超缓存预算)或失败时回落 presign 地址,行为与此前一致。
-          // 缩略图请求不等:它可能是老被控端「缩不动回落原图」的整图下载,聊天列表
-          // 首帧不该为此多等一整个下载(且它本就已按裸键复用原图字节)。
-          if (!media.thumbnail) {
-            let waitTimer: ReturnType<typeof setTimeout> | undefined;
-            const stored = await Promise.race([
-              store.then(() => true),
-              new Promise<false>((settle) => {
-                waitTimer = setTimeout(() => settle(false), REMOTE_MEDIA_LOCAL_COPY_WAIT_MS);
-              }),
-            ]).finally(() => {
-              if (waitTimer) clearTimeout(waitTimer);
-            });
-            if (stored) {
+          // 落盘成功后把队列缓存条目升级成本地 file://:presign 地址会被队列当 fresh
+          // 结果缓存,在有效期内同键请求一律直接命中它、再也不会重进磁盘 lookup,
+          // 于是「已经打开过的原图,关掉再打开又从 OSS 重下一整张」,盘上那份副本
+          // 永远轮不到用(用户实测 + PR #1125 review)。
+          // 这里刻意**不同步等待**落盘:调用方立即拿到可渲染的 presign 地址。取件队列
+          // maxConcurrent=2 且看不到 front,同步等待会让 lightbox 的相邻页预取同样
+          // 占住槽位,把用户正在看的那张排到已翻过去的图的后台下载之后。
+          // store 的返回值是「本次是否真的写入了新字节」:超预算跳过 / 下载失败(现存
+          // 同名旧文件被刻意保留)/ 落成 0 字节都为 false,此时绝不能改用本地文件——
+          // 否则会把**已被 onError 证伪的旧文件**当本次结果并标成永不过期。
+          void store
+            .then(async (stored) => {
+              if (!stored) return;
               const hit = await diskCache.lookup(bareDiskSource).catch(() => null);
               const local = localCopyResolvedMedia(resolved, hit);
-              if (local) return local;
-            }
-          }
+              if (local) hooks?.onLocalCopy(local);
+            })
+            .catch(() => undefined);
         }
         return resolved;
       },
