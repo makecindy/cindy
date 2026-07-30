@@ -1813,23 +1813,24 @@ export class ClaudeCodeAgent extends BaseAgent {
     }): Promise<Query> => {
       const currentSdkModel = sdkModelFor(mutableModel);
       const currentSdkEffort = getSdkEffortForModel(mutableModel, mutableEffort);
-      // ── 智能通讯录两态段: 与 buildMcpServers 同点求值 —— rewind/fresh 重建时
-      // prompt 状态与 cindy_contacts 工具注册读同一份当前设置, 不分叉(否则中途
-      // 切开关再 rewind, prompt 会指挥模型用已移除的工具)。同一次 build 内只读
-      // 一次, 未 rewind 的会话与启动时快照语义等价, 前缀缓存不受影响。
-      // remote 会话不注入: in-process cindy_contacts 不随远端转发(过桥白名单只有
-      // collaboration/memory), 注入只会引导模型调不存在的工具。
-      const contactsRules =
-        opts.remoteHostId || !this.deps.isContactsEnabled
-          ? ''
-          : this.deps.isContactsEnabled()
-            ? CONTACTS_RULES_ENABLED
-            : CONTACTS_RULES_DISABLED;
       const baseResumeAt = vo.resumeSessionAt as string | undefined;
       const baseFork = vo.forkSession as boolean | undefined;
       const finalResumeAt = extra?.fresh ? undefined : (extra?.resumeSessionAt ?? baseResumeAt);
       const finalFork = extra?.fresh ? false : (extra?.forkSession ?? baseFork);
       const mcpServers = buildMcpServers();
+      // ── 智能通讯录两态段: 紧跟 buildMcpServers 求值, prompt 状态与本次 build
+      // 实际生效的工具面对齐(rewind/fresh 重建同步跟随), 三种去向:
+      //   host 有效状态 enabled 且 cindy_contacts 真的注册了 → 使用规范段;
+      //   disabled(功能未开) → 可选功能告示段(邀请开启);
+      //   其余(unavailable/工作区覆盖禁用/注册被跳过/remote/未接线) → 不注入 —
+      //   既不指挥模型调不可达工具, 也不邀请用户去开一个已开着的开关。
+      const contactsRules = (() => {
+        if (opts.remoteHostId) return '';
+        const state = this.deps.getContactsPromptState?.({ workingDir: opts.workingDir });
+        if (state === 'disabled') return CONTACTS_RULES_DISABLED;
+        if (state !== 'enabled') return '';
+        return registeredMcpServerNames.has('cindy_contacts') ? CONTACTS_RULES_ENABLED : '';
+      })();
       // resume 优先用当前的 sdkSessionId (rewind 重启时它指向上一轮 SDK 给的 id);
       // 缺省回到 startSession 入参的 resumeSessionId (新会话首次起 query 时用)。
       let resumeSdkSid = sdkSessionId ?? configuredResumeSessionId;
@@ -2238,7 +2239,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           //   [3] makerMemoryRules           — maker memory 写入规范 (条件式: makerMemoryEnabled
           //                                    且 manager 注入成功才注入)
           //   [4] contactsRules              — 智能通讯录两态段 (条件式: host 注入了
-          //                                    isContactsEnabled 才有, 开/关各一份静态文案)
+          //                                    getContactsPromptState 才有, 开/关各一份静态文案)
           //   [5] hostSystemPrompt           — host runtime (runtimeConfig.systemPrompt)
           //   [6] makerMemoryIndex           — 当前 workdir MEMORY.md 内容 (条件式, 紧邻 userPrompt
           //                                    高优先级, 启动时快照 — 跟 userPrompt 同语义)

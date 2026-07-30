@@ -2964,18 +2964,20 @@ export class CodexAgent extends BaseAgent {
         resumeSessionId: opts.resumeSessionId,
       });
     }
-    // 智能通讯录两态段: session 启动求值一次, host 未注入 isContactsEnabled 则缺省。
-    // remote 会话不注入: 远端 spawn 不带本地 MCP flags、托管 allowlist 只有
-    // collaboration/memory, cindy_contacts 不可达, 注入只会引导模型调不存在的工具。
-    // 本地会话中途切开关的一致性由 host 侧 app-server 失效机制兜底(contacts-ipc):
-    // MCP flags 冻结在 spawn 配置, 开关变更 → 失效 app-server → 新 thread 重建时
-    // 本段与工具面一起按新状态生成。
+    // 智能通讯录两态段: session 启动求值一次, host 未注入 getContactsPromptState
+    // 则缺省。remote 会话不注入(远端 spawn 无本地 MCP flags, cindy_contacts 不可达)。
+    // host 的有效状态计算已含: 全局开关 ∧ 工作区/用户覆盖 ∧ 实际应用到 running
+    // app-server 的 spawn 快照(失效失败留下 stale 配置时返回 unavailable, 本段
+    // 静默, 不指挥模型调 stale 桥里没有的工具)。
+    const contactsState = opts.remoteHostId
+      ? undefined
+      : this.deps.getContactsPromptState?.({ workingDir: opts.workingDir });
     const contactsRules =
-      opts.remoteHostId || !this.deps.isContactsEnabled
-        ? ''
-        : this.deps.isContactsEnabled()
-          ? CONTACTS_RULES_ENABLED
-          : CONTACTS_RULES_DISABLED;
+      contactsState === 'enabled'
+        ? CONTACTS_RULES_ENABLED
+        : contactsState === 'disabled'
+          ? CONTACTS_RULES_DISABLED
+          : '';
     const developerInstructions = buildCodexDeveloperInstructions({
       makerMemoryRules,
       contactsRules,
@@ -3102,7 +3104,7 @@ export class CodexAgent extends BaseAgent {
       //   [2] MAKER_CODEX_SYSTEM_PROMPT_APPEND — maker engine (system-prompt-append.md)
       //   [3] makerMemoryRules                 — maker memory 写入规范 (条件式)
       //   [4] contactsRules                    — 智能通讯录两态段 (条件式: host 注入
-      //                                          isContactsEnabled 才有)
+      //                                          getContactsPromptState 才有)
       //   [5] runtimeConfig.systemPrompt       — host runtime (host 维护的 .md)
       //   [6] makerMemoryIndex                 — 当前 workdir MEMORY.md 内容 (条件式,
       //                                          紧邻 userPrompt 高优先级, 启动时快照)

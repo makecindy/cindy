@@ -10,7 +10,7 @@
  *
  * 使用方:
  *  - claude-code/index.ts startSession 拼 systemPrompt.append 时, host 注入了
- *    deps.isContactsEnabled 才注入其一(缺省 = 两段都不注入, 与改造前行为一致)
+ *    deps.getContactsPromptState 才注入(缺省 = 两段都不注入, 与改造前行为一致)
  *  - codex/index.ts 同上, 拼 developerInstructions
  *
  * 缓存约束(maker-core-and-agent-behavior.md §3.1): 开关状态与 MCP 工具注册
@@ -23,3 +23,13 @@ import disabledText from './system-prompt-disabled.md?raw';
 
 export const CONTACTS_RULES_ENABLED = enabledText.trim();
 export const CONTACTS_RULES_DISABLED = disabledText.trim();
+
+/**
+ * host 计算的「本会话有效通讯录状态」(getContactsPromptState 返回值):
+ *  - enabled     → 注入使用规范段(agent 侧还会与实际注册的工具面取交)
+ *  - disabled    → 功能未开启, 注入「可选功能告示」段(邀请用户开启)
+ *  - unavailable → 功能开着但本会话不可用(工作区/用户覆盖禁用、codex stale
+ *                  spawn 快照等) — 什么都不注入: 既不能指挥模型用不可达的工具,
+ *                  也不该邀请用户去开一个已经开着的开关。
+ */
+export type ContactsPromptState = 'enabled' | 'disabled' | 'unavailable';

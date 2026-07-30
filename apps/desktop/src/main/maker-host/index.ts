@@ -107,6 +107,15 @@ import {
 } from './codex-proxy-host.js';
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
 import { readContactsSettings } from './contacts-settings-store.js';
+
+/**
+ * 最近一次成功构建的 codex spawn 配置里, 通讯录开关的实际取值(null = 尚未
+ * spawn 过)。codex 的 MCP flags 冻结在 cached spawn 配置且 app-server 跨会话
+ * 长活 —— 开关切换后若失效失败(busy), running 实例仍是旧工具面; codex 的
+ * getContactsPromptState 用这份快照识别该 stale 窗口, 避免 prompt 指挥模型调
+ * stale 桥里不存在的工具。在 prepareCodexExtraSpawnConfig 内更新。
+ */
+let codexAppliedContactsEnabled: boolean | null = null;
 import {
   registerCustomMcpArrays,
   refreshCustomMcpProviders,
@@ -657,9 +666,13 @@ export function getMaker(): Maker {
       resolveCcDebugFile: resolveSessionCcDebugFile,
       mcpProviders: claudeMcpProviders,
       makerMemory: makerMemoryManager,
-      // 智能通讯录两态 prompt 段的开关快照来源(session start 求值一次), 与
-      // mcp-providers.ts 的 contacts.isEnabled 同一读数, 保证工具面与 prompt 不分叉。
-      isContactsEnabled: () => readContactsSettings().enabled,
+      // 智能通讯录 prompt 段的「本会话有效状态」: 与 mcp-providers.ts 的 provider
+      // 包装同一判定链(PluginRegistry 工作区/用户覆盖 → 全局开关), 保证工具面与
+      // prompt 不分叉; agent 侧对 enabled 还会与实际注册的 server 集合取交。
+      getContactsPromptState: ({ workingDir }) => {
+        if (!getPluginRegistry().isEnabled('contacts', workingDir)) return 'unavailable';
+        return readContactsSettings().enabled ? 'enabled' : 'disabled';
+      },
       // 第一方只读工具走 SDK allowedTools, 避免 auto 模式为 discovery/read-only
       // 操作额外调用远程安全分类器; 列表按精确工具名维护, 不放行动态 call_tool。
       claudeAllowedTools: getDesktopClaudeReadOnlyAllowedTools(),
@@ -887,8 +900,17 @@ export function getMaker(): Maker {
       // 起 streamable-HTTP bridge 把 instance 通过 -c 'mcp_servers...=...' 注入。
       mcpProviders: codexMcpProviders,
       makerMemory: makerMemoryManager,
-      // 同 claude 侧: 通讯录两态 prompt 段的开关快照(session start 求值一次)。
-      isContactsEnabled: () => readContactsSettings().enabled,
+      // 通讯录 prompt 段有效状态(codex 版): 在 claude 的判定链之上再与「实际应用
+      // 到 running app-server 的 spawn 快照」对齐 —— 开关切换后失效失败(busy,
+      // contacts-ipc 折成 codexMcpRefreshed:false)时 stale 桥里没有新工具面,
+      // live=开 / applied=关 → unavailable(静默), 直到重建成功快照跟上。
+      getContactsPromptState: ({ workingDir }) => {
+        if (!getPluginRegistry().isEnabled('contacts', workingDir)) return 'unavailable';
+        const live = readContactsSettings().enabled;
+        if (!live) return 'disabled';
+        const applied = codexAppliedContactsEnabled ?? live;
+        return applied ? 'enabled' : 'unavailable';
+      },
       // 模型清单 SSoT = 目录（providers.json，OSS 运行时真源 / bundled 兜底）。maker-core 的
       // CODEX_MODELS 已删、availableModels 起始为空；host 从账号可选目录派生 codex 列表注入
       // （gpt 原生 + codex/ 折扣网关路由）。「折扣GPT」codex/ 仍是「XD 网关来源」,渲染层按
@@ -941,10 +963,15 @@ export function getMaker(): Maker {
           });
           mcpExtraArgs = cfg.extraArgs;
           mcpExtraEnv = cfg.extraEnv;
+          // 本次 spawn 配置实际应用的通讯录开关快照 —— getContactsPromptState 用它
+          // 判定「设置已改但 app-server 失效失败」的 stale 窗口(此时不注入 enabled 段)。
+          codexAppliedContactsEnabled = readContactsSettings().enabled;
         } catch (err) {
           desktopMakerLogger.error('codex MCP bridge prep failed, continuing without lizi MCP', {
             message: err instanceof Error ? err.message : String(err),
           });
+          // bridge 整体缺席 = cindy_contacts 必然不可达
+          codexAppliedContactsEnabled = false;
         }
         // API 模式: 追加 model_provider override, 让 codex app-server 走 AI Gateway
         // 而非 OAuth 订阅后端。每次 createHost 都现读 mode, 切模式后重建即生效。
