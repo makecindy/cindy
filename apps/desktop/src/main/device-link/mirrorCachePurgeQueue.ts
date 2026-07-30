@@ -370,12 +370,16 @@ async function writeQueue(entries: readonly PurgeEntry[]): Promise<void> {
   const compacted = compactEntries(entries);
   // 正本只放前 MAX_ENTRIES 条,其余**溢写**成追加文件(一条一个),读取时并回来。
   // 这样"条目数超上限"不会丢掉任何一个 owner root 的待清记录(review: codex P1)。
+  // 溢写必须**先成功**再改正本:否则「追加目录写不进、正本可写」时,被挤出正本的那条
+  // 记录在盘上一份都不剩,进程退出即丢(review: codex P1)。抛给调用方,由它保留内存副本
+  // 并如实报告"持久记录没写下"。
   const overflow = compacted.slice(MAX_ENTRIES);
   for (const entry of overflow) {
     try {
       await appendPendingEntry(entry);
     } catch (err) {
       log.error('failed to spill overflow purge entry to pending dir', err);
+      throw err;
     }
   }
   const payload: StoredQueue = { version: 1, entries: compacted.slice(0, MAX_ENTRIES) };

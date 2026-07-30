@@ -361,6 +361,21 @@ describe('条目数超上限', () => {
   }, 30_000);
 });
 
+describe('溢写失败', () => {
+  // review(codex P1):「追加目录写不进、正本可写」时,被挤出正本的那条记录在盘上一份都不剩。
+  it('追加目录不可写 → enqueuePurge 抛错(不静默提交被截断的正本)', async () => {
+    const roots: string[] = [];
+    for (let i = 0; i < 33; i += 1) roots.push(await makeOwnerCache(`owner-${i}`));
+    for (const root of roots.slice(0, 32)) await enqueuePurge(root);
+    // 把追加目录位置占成普通文件:mkdir / writeFile 必然失败。
+    await fsp.writeFile(path.join(userData, __testing.pendingDirName), 'not a dir', 'utf8');
+
+    await expect(enqueuePurge(roots[32])).rejects.toThrow();
+    // 内存里仍有它,本进程后续 drain 照样会重试。
+    expect(__testing.memoryQueueSize()).toBeGreaterThan(0);
+  }, 30_000);
+});
+
 describe('锁的所有权', () => {
   function lockPath(): string {
     return path.join(userData, __testing.lockFileName);

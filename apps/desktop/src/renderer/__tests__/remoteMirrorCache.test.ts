@@ -303,6 +303,36 @@ describe('冷缓存 hydrate', () => {
     expect(makerChatStore.getSnapshot(s).messages).toHaveLength(0);
   });
 
+  // review(codex P1):这次读是在 rewind **之前**发起的,入口的抑制检查挡不住它。
+  it('在途的缓存读遇上 rewind → 不把 rewind 之前的行插进刚清空的切片', async () => {
+    const s = sid();
+    cachedMessages.set(`${DEVICE_ID}::${s}`, [
+      dbMessage(s, 'pre', '被 rewind 截掉', '2026-01-01T00:00:00.000Z') as unknown as Record<
+        string,
+        unknown
+      >,
+    ]);
+    registerRemote(s);
+    remoteListPromise = new Promise<Message[]>(() => {}); // 首拉挂起
+    let resolveRead: (value: { messages: Record<string, unknown>[] }) => void = () => {};
+    getMessages.mockImplementationOnce(
+      () =>
+        new Promise<{ messages: Record<string, unknown>[] }>((resolve) => {
+          resolveRead = resolve;
+        }),
+    );
+
+    makerChatStore.ensureInitialMessages(s);
+    await flush();
+    // rewind:清空切片 + 置抑制(缓存读仍在途)
+    makerChatStore.reloadMessages(s);
+    await flush();
+    resolveRead({ messages: cachedMessages.get(`${DEVICE_ID}::${s}`) ?? [] });
+    await flush(20);
+
+    expect(makerChatStore.getSnapshot(s).messages).toHaveLength(0);
+  });
+
   it('权威页落地后粘滞抑制解除:再一次重挂可以照常借缓存', async () => {
     const s = sid();
     registerRemote(s);

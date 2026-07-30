@@ -5206,6 +5206,10 @@ function hydrateRemoteMessagesFromCache(sessionId: string): void {
     // 而新的权威首拉若离线失败,屏上留着的就是**另一台机器**的消息(review: codex P1)。
     // 与写缓存那侧同一条纪律:落地前重核归属。
     if (remoteProjectsStore.getSessionDeviceId(sessionId) !== deviceId) return;
+    // 抑制标记也要在**落地前**再看一眼:这次读是在 rewind 之前发起的,而 rewind 期间
+    // 切片被清空并置了抑制 —— 只在入口检查挡不住这笔在途的读,它会把 rewind 之前的行
+    // 插进刚清空的切片,权威首拉再失败就一直留在屏上(review: codex P1)。
+    if (_cacheHydrateSuppressed.has(sessionId)) return;
     setState(sessionId, (s) => {
       // fresh 已经落地 / 期间已有实时消息进来 → 缓存没有价值了,原样返回不动切片。
       if (s.historyLoaded || s.messages.length > 0) return s;

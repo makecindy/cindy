@@ -417,8 +417,11 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
   async function writeSessionListLocked(
     devices: readonly unknown[],
     guard: WriteGuard,
+    // 调用方在发起时快照的路径:owner 可能在写入期间换掉,内部再 resolve 会写 / 报到
+    // 另一个账号的目录去(review: codex P1)。
+    fileOverride?: string,
   ): Promise<SessionListWriteResult> {
-    const file = sessionListPath();
+    const file = fileOverride ?? sessionListPath();
     if (isStale(guard)) return { outcome: 'stale' };
     for (const perDeviceLimit of SESSION_LIST_SHRINK_STEPS) {
       const normalized = normalizeDeviceSessions(devices, perDeviceLimit);
@@ -490,7 +493,12 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
 
     async writeMessages(deviceId, sessionId, messages) {
       if (!deviceId.trim() || !sessionId.trim()) return;
-      const dir = messagesDir();
+      // root 在**发起时**快照,不能在出错时再 resolve:owner 会在进程生命周期内变(登出 /
+      // 切账号),那时 resolveRoot() 指向新账号,而 `file` 还在旧账号目录里 —— 用新 root 去
+      // 登记重试会被 purge 队列当成「路径不在 root 之内」直接拒掉,旧账号的明文就此没有任何
+      // 持久重试记录(review: codex P1)。
+      const rootAtStart = resolveRoot();
+      const dir = path.join(rootAtStart, MESSAGES_DIR);
       const file = path.join(dir, messageFileName(deviceId, sessionId));
       const normalized = normalizeMessages(messages);
       // 空列表 = 清掉这条缓存(被控端 /clear、rewind 或删完最后一条时,残留会在
@@ -504,7 +512,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
             // 这条路径服务的是被控端 /clear、rewind、会话删除 —— 权威侧已经确认"这个会话没有
             // 可见消息了",本机却还留着旧正文,下次离线冷启动照样 hydrate 出来。删不掉要能被
             // 重试,不能咽下去(review: codex P1)。
-            throw new MirrorCachePurgeError(resolveRoot(), [file], err);
+            throw new MirrorCachePurgeError(rootAtStart, [file], err);
           }
         });
       }
@@ -532,7 +540,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
           // 落位失败且连 `.tmp` 都删不掉:那份完整明文留在盘上,登记重试(逐设备清理的
           // 枚举现在也认 `.tmp`,但重试更直接)。
           if (written.leftoverTmp) {
-            throw new MirrorCachePurgeError(resolveRoot(), [written.leftoverTmp], null);
+            throw new MirrorCachePurgeError(rootAtStart, [written.leftoverTmp], null);
           }
           return;
         }
@@ -545,7 +553,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
           try {
             await fsp.rm(file, { force: true });
           } catch (err) {
-            throw new MirrorCachePurgeError(resolveRoot(), [file], err);
+            throw new MirrorCachePurgeError(rootAtStart, [file], err);
           }
           return;
         }
@@ -564,14 +572,17 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     async writeSessionList(devices) {
       // 同 writeMessages:代际在请求发起时捕获(排队期间的清理必须能作废这笔)。
       const epoch = generation;
+      // 同 writeMessages:root 在发起时快照(出错时 owner 可能已经换了)。
+      const rootAtStart = resolveRoot();
       // 与 writeMessages 同款:同一文件的写入串成链,保证「落盘 → 登记指纹」成对有序。
-      const outcome = await serializeWrite(sessionListPath(), () =>
-        writeSessionListLocked(devices, { kind: 'write', epoch }),
+      const listFile = path.join(rootAtStart, SESSION_LIST_FILE);
+      const outcome = await serializeWrite(listFile, () =>
+        writeSessionListLocked(devices, { kind: 'write', epoch }, listFile),
       );
       // 只有「删除失败」才抛(见 purge-failed):写入失败保留旧快照即可,不该让上层去
       // 重试删除一份仍然有效的缓存。
       if (outcome.outcome === 'purge-failed') {
-        throw new MirrorCachePurgeError(resolveRoot(), [outcome.stuck], null);
+        throw new MirrorCachePurgeError(rootAtStart, [outcome.stuck], null);
       }
     },
 
@@ -585,7 +596,8 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       if (!id) return;
       generation += 1;
       const epochAll = purgeAllEpoch;
-      const dir = messagesDir();
+      const rootAtStart = resolveRoot();
+      const dir = path.join(rootAtStart, MESSAGES_DIR);
       const prefix = `${safeSegment(id)}-${shortHash(id)}-`;
       const stuck: string[] = [];
 
@@ -617,7 +629,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // 各自读同一份旧快照再各写「除我之外的全部」,后写的那次会把另一台恢复回来
       // (review: codex P1)。链内不能再调公开的 writeSessionList(同链嵌套会自锁),
       // 因此直接用 writeSessionListLocked。
-      const listFile = sessionListPath();
+      const listFile = path.join(rootAtStart, SESSION_LIST_FILE);
       const outcome = await serializeWrite(listFile, async () => {
         // 只有 clearAll 能作废这段(它会把整棵目录删掉,这里不该再把列表写回来);
         // 另一个并发的 clearDevice 不作废它 —— 两者依次落地才对。屏障还挡住「clearAll 已开始、
@@ -628,14 +640,14 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         const parsed = await readJson(listFile);
         const devices = isRecord(parsed) && Array.isArray(parsed.devices) ? parsed.devices : [];
         const others = normalizeDeviceSessions(devices).filter((device) => device.deviceId !== id);
-        return writeSessionListLocked(others, guard);
+        return writeSessionListLocked(others, guard, listFile);
       });
       // 根目录下的 `session-list.json.<hex>.tmp`:进程死在 writeFile 与 rename 之间时,
       // 那里是**全部设备**的会话元数据。逐设备清理原先只扫 messages/ 下的 tmp,于是这份
       // 崩溃残留要等到整账号清理才消失(review: codex P1)。它是过期快照、对谁都没用,
       // 直接删掉;枚举失败则把根目录计入待重试(fail-closed)。
-      const rootTmp = await listRootTmpFiles(resolveRoot());
-      if (rootTmp.unreadable) stuck.push(resolveRoot());
+      const rootTmp = await listRootTmpFiles(rootAtStart);
+      if (rootTmp.unreadable) stuck.push(rootAtStart);
       for (const file of rootTmp.files) {
         try {
           await fsp.rm(file, { force: true });
@@ -651,7 +663,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
 
       // 删不掉 / 数不出来的东西都是隐私问题:被撤销的对端正文会留在盘上直到本账号生命周期
       // 结束。抛出来让调用方登记重试,而不是把失败咽下去。
-      if (stuck.length > 0) throw new MirrorCachePurgeError(resolveRoot(), stuck, null);
+      if (stuck.length > 0) throw new MirrorCachePurgeError(rootAtStart, stuck, null);
     },
 
     /**
