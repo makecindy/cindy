@@ -294,6 +294,62 @@ describe('队列文件原子落位', () => {
   );
 });
 
+describe('Windows 落位退路', () => {
+  // review(greptile P1 / security):Windows 上目标已存在时 rename 可能报 EPERM / EACCES /
+  // EBUSY(杀软、索引器、另一个实例打开着),直接失败会让这条记录只剩内存、退出即丢。
+  // 退路是「先把正本挪成 .bak 再落位」,任一步崩溃盘上都还有一份完整 JSON。
+  it('正本缺失时从 .bak 读回待清记录', async () => {
+    const root = await makeOwnerCache('owner-1');
+    await enqueuePurge(root);
+    // 模拟「挪走正本、尚未落位」的瞬间。
+    await fsp.rename(queueFile(), `${queueFile()}.bak`);
+    // 关键:清掉内存兜底,否则读的是本进程内存里那份,盘上的回退根本没被考。
+    // 真实场景就是「下次启动」——内存表按定义是空的。
+    __testing.resetMemoryQueue();
+
+    const entries = await __testing.readQueue();
+    expect(entries.map((e) => e.root)).toEqual([root]);
+
+    // 而且照样能被消化掉(不是只能读、不能用)。
+    const result = await drainPurgeQueue();
+    expect(result.purged).toBe(1);
+    expect(fs.existsSync(root)).toBe(false);
+  });
+
+  it('正本是半个文件时回退 .bak,而不是被当成空队列', async () => {
+    const root = await makeOwnerCache('owner-1');
+    await enqueuePurge(root);
+    await fsp.copyFile(queueFile(), `${queueFile()}.bak`);
+    await fsp.writeFile(queueFile(), '{"version":1,"entries":[{"root":"', 'utf8'); // 截断
+    __testing.resetMemoryQueue(); // 同上:考的是「下次启动只有盘」
+
+    expect((await __testing.readQueue()).map((e) => e.root)).toEqual([root]);
+  });
+
+  it('队列清空时 .bak 一起删掉(否则已清条目会被复活)', async () => {
+    const root = await makeOwnerCache('owner-1');
+    await enqueuePurge(root);
+    await fsp.copyFile(queueFile(), `${queueFile()}.bak`);
+
+    await drainPurgeQueue();
+    __testing.resetMemoryQueue();
+
+    expect(fs.existsSync(queueFile())).toBe(false);
+    expect(fs.existsSync(`${queueFile()}.bak`)).toBe(false);
+    expect(await __testing.readQueue()).toEqual([]);
+  });
+
+  it('落位成功后不留 .bak(留着会让下次读取回退到过期清单)', async () => {
+    const rootA = await makeOwnerCache('owner-1');
+    const rootB = await makeOwnerCache('owner-2');
+    await enqueuePurge(rootA);
+    await fsp.copyFile(queueFile(), `${queueFile()}.bak`);
+    await enqueuePurge(rootB);
+
+    expect(fs.existsSync(`${queueFile()}.bak`)).toBe(false);
+  });
+});
+
 describe('落盘失败', () => {
   // review(codex P1):唯一的持久重试记录写不下去却报成功 = 静默丢失。
   it('队列文件写不下去时 enqueuePurge 抛错,但条目留在内存里仍会被 drain 重试', async () => {

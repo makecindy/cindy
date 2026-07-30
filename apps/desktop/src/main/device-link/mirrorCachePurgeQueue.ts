@@ -111,8 +111,16 @@ function isPurgablePath(target: string, root: string): boolean {
 }
 
 async function readPersistedQueue(): Promise<PurgeEntry[]> {
+  // 正本读不出来(缺失 / 半个文件)时回退 .bak:Windows 落位需要「先挪走正本」的那条退路
+  // 会短暂只留备份,崩在那一瞬不该等于「没有待清记录」(见 commitQueueFile)。
+  const fromMain = await readQueueFile(queueFilePath());
+  if (fromMain !== null) return fromMain;
+  return (await readQueueFile(`${queueFilePath()}.bak`)) ?? [];
+}
+
+async function readQueueFile(file: string): Promise<PurgeEntry[] | null> {
   try {
-    const raw = await fsp.readFile(queueFilePath(), 'utf8');
+    const raw = await fsp.readFile(file, 'utf8');
     const parsed = JSON.parse(raw) as unknown;
     const entries =
       parsed && typeof parsed === 'object' && Array.isArray((parsed as StoredQueue).entries)
@@ -136,7 +144,8 @@ async function readPersistedQueue(): Promise<PurgeEntry[]> {
         }),
     );
   } catch {
-    return [];
+    // 读不出来 / 不是合法 JSON → null:交给调用方决定是否回退 .bak。
+    return null;
   }
 }
 
@@ -180,6 +189,9 @@ async function writeQueue(entries: readonly PurgeEntry[]): Promise<void> {
   const file = queueFilePath();
   if (entries.length === 0) {
     await fsp.rm(file, { force: true }).catch(() => undefined);
+    // 备份必须一起删:正本"合法缺失"(队列清空)时读取侧会回退 .bak,留着它等于把
+    // 已经清完的条目又复活出来。
+    await fsp.rm(`${file}.bak`, { force: true }).catch(() => undefined);
     return;
   }
   const payload: StoredQueue = { version: 1, entries: compactEntries(entries) };
@@ -189,11 +201,45 @@ async function writeQueue(entries: readonly PurgeEntry[]): Promise<void> {
   const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
   try {
     await fsp.writeFile(tmp, JSON.stringify(payload), 'utf8');
-    await fsp.rename(tmp, file);
+    await commitQueueFile(tmp, file);
   } catch (err) {
     await fsp.rm(tmp, { force: true }).catch(() => undefined);
     throw err;
   }
+}
+
+/**
+ * 把 tmp 落到目标位置。Windows 上目标已存在时 rename 可能报 EPERM / EACCES / EBUSY
+ * (杀毒软件、索引器或另一个实例正打开这个文件),直接失败会让这条重试记录只剩内存、
+ * 进程退出即丢(review: greptile P1 security)。
+ *
+ * 退路不是「删目标再 rename」——那个窗口里进程一死,整份队列就没了。改成先把目标挪到
+ * `.bak` 再落位:任一步崩溃都至少有一份完整 JSON 在盘上,读取侧会回退到 `.bak`
+ * (见 readPersistedQueue)。
+ */
+async function commitQueueFile(tmp: string, file: string): Promise<void> {
+  try {
+    await fsp.rename(tmp, file);
+    // 落位成功,上一份备份没用了(留着会让下次读取回退到过期清单)。
+    await fsp.rm(`${file}.bak`, { force: true }).catch(() => undefined);
+    return;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY' && code !== 'EEXIST') throw err;
+  }
+  const bak = `${file}.bak`;
+  await fsp.rm(bak, { force: true }).catch(() => undefined);
+  // 目标不存在(ENOENT)说明失败与「无法替换」无关,让下面的 rename 把真错误抛出来。
+  await fsp.rename(file, bak).catch(() => undefined);
+  try {
+    await fsp.rename(tmp, file);
+  } catch (err) {
+    // 落位仍然失败:把备份挪回去,别让盘上只剩一个 .bak(读取侧能回退,但正本缺失
+    // 会让下一次写入把它当成"从未有过记录")。
+    await fsp.rename(bak, file).catch(() => undefined);
+    throw err;
+  }
+  await fsp.rm(bak, { force: true }).catch(() => undefined);
 }
 
 /**

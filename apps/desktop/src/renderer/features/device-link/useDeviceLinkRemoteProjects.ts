@@ -108,8 +108,9 @@ export function useDeviceLinkRemoteProjects(): void {
 
   useEffect(() => {
     if (!isAuthenticated || !selfDeviceId) {
-      cancelSessionListPersist();
+      // 同 'stopped' / unmount:cancel 在 clear 之后,免得 clear 的同步通知又排一次回写。
       remoteProjectsStore.clear();
+      cancelSessionListPersist();
       return;
     }
 
@@ -388,9 +389,13 @@ export function useDeviceLinkRemoteProjects(): void {
           remoteProjectsStore.markAllDisconnected();
           return;
         }
-        // 先作废 pending 的快照回写:清空后残留的定时器会把刚清掉的分片写回盘上。
-        cancelSessionListPersist();
+        // 顺序要紧:cancel 必须在 clear **之后**。`clear()` 在 shards 非空时会同步通知
+        // 订阅者,而此刻 offShardChange 仍挂着 → 它立刻排一个去抖回写;1200ms 后 shards
+        // 已空,整份快照被写成 [],main 侧据此把 session-list.json 删掉。于是「relay 停服
+        // (非登出)」会在约 1.2s 后抹掉侧边栏冷缓存 —— 而「停服后重启、relay 仍未恢复」
+        // 正是这份缓存要解决的场景(review: P2)。整体删除只归 owner 边界的 clearAll。
         remoteProjectsStore.clear();
+        cancelSessionListPersist();
         clearRemoteSessionActivity();
         // 'stopped'(登出 / 停服)还要清掉「已撤销」标记:否则切换栏的 buildSwitcherDevices 仍会拿
         // revoked 集合单独撑起一颗 rejected chip,停服后切换栏残留陈旧被拒 chip。'connecting' 是瞬态
@@ -470,8 +475,10 @@ export function useDeviceLinkRemoteProjects(): void {
       }
       // 卸载可能只是关了个窗口(镜像是每渲染进程一份),盘上缓存**不动** ——
       // 只作废尚未落盘的回写,免得它把正在清空的分片写回去。
-      cancelSessionListPersist();
+      // cancel 放在 clear 之后(同 'stopped' 分支):这里 offShardChange 已退订,clear 通知不到
+      // 任何订阅者,但顺序保持一致,免得将来有人在两者之间插入新的订阅。
       remoteProjectsStore.clear();
+      cancelSessionListPersist();
       clearRemoteSessionActivity();
       revokedDevicesStore.clearAll();
     };
