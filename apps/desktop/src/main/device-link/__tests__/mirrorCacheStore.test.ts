@@ -904,6 +904,28 @@ describe('clearDevice / clearAll', () => {
   });
 });
 
+describe('clearAll 期间的写入', () => {
+  // review(codex P1):一笔在「generation 已自增、递归删除尚未完成」之间发起的写入会捕获到
+  // 新代际、两道 epoch 检查都放行,于是它的 rename 会在 clearAll 返回之后把旧账号的目录
+  // 重建出来 —— 而 owner 要等 teardown 完成才切换,那份明文就越过了账号边界。
+  it('clearAll 进行中发起的写入不会把缓存目录重建出来', async () => {
+    const cacheRoot = path.join(root, 'purging');
+    const c = createMirrorCache(() => cacheRoot);
+    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+
+    // 与 clearAll 同时发起(clearAll 的 await 之间正是那个窗口)。
+    await Promise.all([
+      c.clearAll(),
+      c.writeMessages('dev-1', 'sess-2', [row('m2', '2026-02-01T00:00:00.000Z')]),
+      c.writeSessionList([
+        { deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] },
+      ]),
+    ]);
+
+    expect(fs.existsSync(cacheRoot)).toBe(false);
+  });
+});
+
 describe('并发写入', () => {
   // review(greptile P1):两次并发写入在 await 处交错时,落盘内容与登记的指纹可能来自
   // 不同那一次,于是较新的快照之后会被 unchanged 跳过,冷启动一直显示旧消息。

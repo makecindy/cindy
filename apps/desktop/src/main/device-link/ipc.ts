@@ -57,7 +57,7 @@ import {
   type CachedDeviceSessions,
   type MirrorCache,
 } from './mirrorCacheStore';
-import { enqueuePurge } from './mirrorCachePurgeQueue';
+import { enqueuePurge, pendingPurgeCount } from './mirrorCachePurgeQueue';
 import {
   recordSubscribe,
   recordUnsubscribe,
@@ -720,6 +720,18 @@ async function awaitMirrorCacheReadGate(): Promise<void> {
 }
 
 /**
+ * 读之前的最后一道:上一次 drain 之后仍有待清条目时**一律不命中**。
+ *
+ * drain 是 best-effort 的 —— 它可能返回 `pending > 0`(某个 session-list / 消息文件因文件锁
+ * 或权限删不掉)。此时那份内容还在盘上,照读就把「本该消失的被撤销设备 / 上一个账号的正文」
+ * 交回 renderer,而 renderer 一旦画上去就收不回了(review: codex P1)。
+ * 代价只是失去首屏加速,且仅限于这种失败状态;下一次 drain 成功即恢复。
+ */
+function mirrorCacheReadsBlocked(): boolean {
+  return pendingPurgeCount() > 0;
+}
+
+/**
  * 缓存 id 的长度上界。renderer 被 XSS 时可以塞进任意长的 deviceId / sessionId,而 store 随后
  * 会对**完整字符串**做 trim + 正则改写 + sha256(messageFileName / clearDevice),这些都是同步
  * 的 —— 一次调用就能拖住 main(数组与单条字节预算管不到标量字段)(review: codex P1)。
@@ -743,6 +755,10 @@ export async function handleMirrorCacheGetMessages(
   const device = requireCacheId(deviceId, 'deviceId');
   const session = requireCacheId(sessionId, 'sessionId');
   await awaitMirrorCacheReadGate();
+  if (mirrorCacheReadsBlocked()) {
+    log.warn('mirror cache read suppressed: purge queue still has pending entries');
+    return { messages: [] };
+  }
   return { messages: await cache.readMessages(device, session) };
 }
 
@@ -771,6 +787,10 @@ export async function handleMirrorCacheGetSessionList(
   cache: MirrorCache,
 ): Promise<{ devices: CachedDeviceSessions[] }> {
   await awaitMirrorCacheReadGate();
+  if (mirrorCacheReadsBlocked()) {
+    log.warn('mirror cache read suppressed: purge queue still has pending entries');
+    return { devices: [] };
+  }
   return { devices: await cache.readSessionList() };
 }
 

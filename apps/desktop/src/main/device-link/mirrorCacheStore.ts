@@ -412,8 +412,12 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
 
   /** 这笔写入此刻是否已被作废。 */
   function isStale(guard: WriteGuard): boolean {
+    // 普通写入除了比代际,还必须在**整个** clearAll 期间一律作废:一笔在
+    // 「generation 已自增、递归删除尚未完成」之间发起的写入会捕获到新代际、两道 epoch 检查
+    // 都放行,于是它的原子 rename 会在 clearAll 返回之后把旧账号的目录重建出来 —— 而 owner
+    // 要等 teardown 完成才切换,那份明文就这样越过了账号边界(review: codex P1)。
     return guard.kind === 'write'
-      ? guard.epoch !== generation
+      ? guard.epoch !== generation || purgeAllInFlight > 0
       : guard.allEpoch !== purgeAllEpoch || purgeAllInFlight > 0;
   }
 
@@ -572,13 +576,14 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // 于是携带着清理前旧数据的这笔写入会被当成新写入放行(review: codex P1)。
       const epoch = generation;
       // 落盘与指纹登记必须成对且有序 → 同一文件的写入串成链(见 serializeWrite)。
+      const writeGuard: WriteGuard = { kind: 'write', epoch };
       return serializeWrite(file, async () => {
-        if (epoch !== generation) return;
+        if (isStale(writeGuard)) return;
         // 指纹只算消息体,不含 payload 的 updatedAt —— 否则每次都"变了",去重永不命中。
         // 在链内判等:排队期间前一笔可能刚写下同样内容。
         if (unchanged(file, body)) return;
         await ensureDir(dir);
-        if (epoch !== generation) return;
+        if (isStale(writeGuard)) return;
         const written = await writeFileAtomic(file, serialized);
         if (!written.ok) {
           // 走到这里说明权威内容**已经变了**(上面 unchanged 已挡掉没变的情况),而新内容
@@ -601,7 +606,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
           if (stuck.length > 0) throw new MirrorCachePurgeError(rootAtStart, stuck, null);
           return;
         }
-        if (epoch !== generation) {
+        if (isStale(writeGuard)) {
           // 隐私清理期间落的盘:立刻收回,否则刚被清空的目录里会留下本该消失的聊天内容。
           // 这笔补偿删除失败(Windows 文件锁 / 权限)时不能咽下去:清理侧已经枚举并删完了,
           // 它不知道这个文件又冒出来,于是既没人重试、明文也留在了隐私边界之后

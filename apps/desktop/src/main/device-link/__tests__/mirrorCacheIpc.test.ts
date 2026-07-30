@@ -21,6 +21,11 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
+vi.mock('../mirrorCachePurgeQueue', () => ({
+  enqueuePurge: vi.fn(async () => undefined),
+  pendingPurgeCount: (): number => pendingPurges,
+}));
+
 import {
   handleMirrorCacheClear,
   handleMirrorCacheGetMessages,
@@ -49,9 +54,12 @@ function fakeCache() {
 }
 
 let cache: ReturnType<typeof fakeCache>;
+/** 由 mock 的 pendingPurgeCount 读取:>0 表示队列里还有删不掉的东西。 */
+let pendingPurges = 0;
 
 beforeEach(() => {
   cache = fakeCache();
+  pendingPurges = 0;
 });
 
 describe('messages get / put', () => {
@@ -176,6 +184,27 @@ describe('payload 有界校验', () => {
     await handleMirrorCachePutSessionList(cache, devices);
     const passed = cache.writeSessionList.mock.calls[0]?.[0] as Array<{ sessions: unknown[] }>;
     expect(passed[0].sessions.length).toBe(500);
+  });
+});
+
+describe('待清未清时读路径不命中', () => {
+  // review(codex P1):drain 是 best-effort,可能返回 pending > 0(某个文件删不掉)。那份内容
+  // 还在盘上,照读就把本该消失的正文交回 renderer —— 而 renderer 画上去就收不回了。
+  it('purge 队列仍有待清条目 → 读消息 / 读列表都返回空,不碰 store', async () => {
+    pendingPurges = 1;
+    await expect(handleMirrorCacheGetMessages(cache, 'dev-1', 'sess-1')).resolves.toEqual({
+      messages: [],
+    });
+    await expect(handleMirrorCacheGetSessionList(cache)).resolves.toEqual({ devices: [] });
+    expect(cache.readMessages).not.toHaveBeenCalled();
+    expect(cache.readSessionList).not.toHaveBeenCalled();
+  });
+
+  it('队列干净 → 照常命中', async () => {
+    pendingPurges = 0;
+    await expect(handleMirrorCacheGetMessages(cache, 'dev-1', 'sess-1')).resolves.toEqual({
+      messages: [{ id: 'm1' }],
+    });
   });
 });
 

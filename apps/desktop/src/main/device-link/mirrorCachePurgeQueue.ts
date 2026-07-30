@@ -272,7 +272,14 @@ async function readPendingEntries(): Promise<Array<{ file: string; entry: PurgeE
 async function appendPendingEntry(entry: PurgeEntry): Promise<void> {
   const dir = pendingDirPath();
   await fsp.mkdir(dir, { recursive: true });
-  const file = path.join(dir, `${digestOfKey(entryKey(entry))}.json`);
+  // 文件名带随机后缀:同一条记录的**新版本**不能覆盖 drain 正在处理的那一份 —— 否则
+  // 「drain 取完 pendingFiles → 另一个实例重新入队(同名覆盖)→ drain 收尾按名字删掉它」
+  // 会把刚记下的失败清理抹掉,只剩那个实例的内存副本(review: codex P1)。
+  // 同一条记录留下多份文件无妨:读取侧按 entryKey 去重,drain 折进正本后一并删掉。
+  const file = path.join(
+    dir,
+    `${digestOfKey(entryKey(entry))}-${randomBytes(6).toString('hex')}.json`,
+  );
   const payload: StoredQueue = { version: 1, entries: [entry] };
   const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
   try {
@@ -505,8 +512,21 @@ async function enqueuePurgeLocked(
  * 消化队列:逐条重试删除,成功的移除。best-effort —— 不抛,失败的留到下一次。
  * 返回本次清掉与仍待清的条目数,便于日志与测试断言。
  */
+/**
+ * 最近一次 drain 之后仍待清的条目数。读路径据此**拒绝命中**:队列里还留着"本该删掉却删不掉"
+ * 的东西时,那份内容仍在盘上,照读就等于把已撤销 / 上一个账号的内容交回 renderer
+ * (review: codex P1)。初值 -1 = 本进程还没 drain 过(启动闸门会先跑一次)。
+ */
+let lastDrainPending = -1;
+
+export function pendingPurgeCount(): number {
+  return lastDrainPending;
+}
+
 export async function drainPurgeQueue(): Promise<{ purged: number; pending: number }> {
-  return withQueueLock(drainPurgeQueueLocked);
+  const result = await withQueueLock(drainPurgeQueueLocked);
+  lastDrainPending = result.pending;
+  return result;
 }
 
 async function drainPurgeQueueLocked(lockHeld = true): Promise<{ purged: number; pending: number }> {
