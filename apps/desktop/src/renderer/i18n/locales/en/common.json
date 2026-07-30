@@ -1537,6 +1537,18 @@
           "confirm": "Disconnect",
           "cancel": "Cancel"
         }
+      },
+      "imagesKey": {
+        "label": "Image generation API key",
+        "placeholder": "Paste OpenAI platform API key",
+        "save": "Save",
+        "clear": "Clear",
+        "toast": {
+          "saved": "Image generation API key saved",
+          "saveFailed": "Failed to save image generation API key. Please try again.",
+          "cleared": "Image generation API key cleared",
+          "clearFailed": "Failed to clear image generation API key"
+        }
       }
     },
     "experimental": {

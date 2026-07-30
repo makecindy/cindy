@@ -1536,6 +1536,18 @@
           "confirm": "연결 해제",
           "cancel": "취소"
         }
+      },
+      "imagesKey": {
+        "label": "이미지 생성 API key",
+        "placeholder": "OpenAI 플랫폼 API key 붙여넣기",
+        "save": "저장",
+        "clear": "지우기",
+        "toast": {
+          "saved": "이미지 생성 API key를 저장했습니다",
+          "saveFailed": "이미지 생성 API key 저장에 실패했습니다. 다시 시도해 주세요",
+          "cleared": "이미지 생성 API key를 지웠습니다",
+          "clearFailed": "이미지 생성 API key 지우기에 실패했습니다"
+        }
       }
     },
     "experimental": {

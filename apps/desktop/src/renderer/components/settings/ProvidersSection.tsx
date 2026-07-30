@@ -447,6 +447,12 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const { state, triggerLogin, cancelLogin, logout } = useCodexAuth();
+  // 图像 API key 行(2026-07 图像多来源):ChatGPT 订阅 OAuth 调不了平台 images API
+  // (实测缺 scope),图像通道用独立的平台 key。仅当目录给 openai 声明了 imageModels
+  // 才渲染(远端目录可能撤掉该能力)。
+  const imagesKeyRow = (provider?.imageModels?.length ?? 0) > 0 && (
+    <ImageApiKeyRow secretId="openai-images" />
+  );
   const reconnectRequired = state.kind === 'reconnect-required';
   const loggingIn = state.kind === 'login-pending';
   const connected = isChatGptConnectionConnected(state, provider?.connected ?? false);
@@ -515,7 +521,106 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
       subtitle={t('settings.providers.openai.subtitle')}
       trailing={trailing}
       provider={provider}
+      detail={imagesKeyRow || undefined}
     />
+  );
+}
+
+/**
+ * 「图像生成 API key」行(2026-07 图像多来源):订阅 OAuth 供应商(OpenAI/xAI)的
+ * 图像通道走独立的平台 key,与登录态解耦。已配置显示掩码尾巴 + 清除;未配置显示
+ * 输入 + 保存。key 走 safeStorage(providerSecrets SSoT),不回显明文。
+ */
+function ImageApiKeyRow({ secretId }: { secretId: ProviderSecretId }) {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  const [draftKey, setDraftKey] = useState('');
+  const storageKey = providerSecretStorageKey(secretId);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.electronAPI.safeStorageRead(storageKey).then((v) => {
+      if (!cancelled) setConfigured(v !== null && v.length > 0);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [storageKey]);
+
+  const handleSave = useCallback(async () => {
+    const key = draftKey.trim();
+    if (!key) return;
+    setBusy(true);
+    try {
+      const ok = await window.electronAPI.safeStorageStore(storageKey, key);
+      if (!ok) {
+        toast.error(t('settings.providers.imagesKey.toast.saveFailed'));
+        return;
+      }
+      toast.success(t('settings.providers.imagesKey.toast.saved'));
+      setDraftKey('');
+      setConfigured(true);
+    } catch {
+      toast.error(t('settings.providers.imagesKey.toast.saveFailed'));
+    } finally {
+      setBusy(false);
+    }
+  }, [draftKey, storageKey, t]);
+
+  const handleClear = useCallback(async () => {
+    setBusy(true);
+    try {
+      await window.electronAPI.safeStorageRemove(storageKey);
+      toast.success(t('settings.providers.imagesKey.toast.cleared'));
+      setConfigured(false);
+    } catch {
+      toast.error(t('settings.providers.imagesKey.toast.clearFailed'));
+    } finally {
+      setBusy(false);
+    }
+  }, [storageKey, t]);
+
+  if (configured === null) return null;
+  return (
+    <div className="flex items-center gap-2 pt-2">
+      <span className="shrink-0 text-12 font-medium" style={{ color: 'var(--text-secondary)' }}>
+        {t('settings.providers.imagesKey.label')}
+      </span>
+      {configured ? (
+        <>
+          <span className="font-mono text-12" style={{ color: 'var(--text-tertiary)' }}>
+            ••••••••
+          </span>
+          <PillButton
+            label={t('settings.providers.imagesKey.clear')}
+            onClick={() => void handleClear()}
+            disabled={busy}
+          />
+        </>
+      ) : (
+        <>
+          <input
+            type="password"
+            value={draftKey}
+            onChange={(e) => setDraftKey(e.target.value)}
+            autoComplete="off"
+            placeholder={t('settings.providers.imagesKey.placeholder')}
+            className="h-8 min-w-0 flex-1 rounded-full border px-3 font-mono text-12 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
+            style={{
+              borderColor: 'var(--border-default)',
+              backgroundColor: 'var(--surface-elevated)',
+              color: 'var(--settings-section-title)',
+            }}
+          />
+          <PillButton
+            label={t('settings.providers.imagesKey.save')}
+            onClick={() => void handleSave()}
+            disabled={busy || draftKey.trim().length === 0}
+          />
+        </>
+      )}
+    </div>
   );
 }
 

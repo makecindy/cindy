@@ -1536,6 +1536,18 @@
           "confirm": "切断",
           "cancel": "キャンセル"
         }
+      },
+      "imagesKey": {
+        "label": "画像生成 API key",
+        "placeholder": "OpenAI プラットフォーム API key を貼り付け",
+        "save": "保存",
+        "clear": "クリア",
+        "toast": {
+          "saved": "画像生成 API key を保存しました",
+          "saveFailed": "画像生成 API key の保存に失敗しました。もう一度お試しください",
+          "cleared": "画像生成 API key をクリアしました",
+          "clearFailed": "画像生成 API key のクリアに失敗しました"
+        }
       }
     },
     "experimental": {

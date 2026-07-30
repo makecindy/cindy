@@ -63,6 +63,12 @@ const OPENAI_PROVIDER: Provider = {
   auth: { method: 'oauth' },
   access: { kind: 'subscription', product: 'ChatGPT' },
   titleModel: 'gpt-5.4-mini',
+  // 图像通道(2026-07 图像多来源):OpenAI 平台 images API。ChatGPT 订阅 OAuth token
+  // 调不了平台面(实测 401/403 缺 api.model.images.request scope),执行凭证是独立的
+  // BYO 平台 API key('openai-images' secret,OpenAiHeader 配置);未配置时经
+  // imageChannelRegistry 就绪过滤不进白名单。id 带 openai/ 前缀(跨供应商数据契约,
+  // 防 first-wins 归属漂移);不声明 imageDefaults(xd 默认地位不动)。
+  imageModels: [{ id: 'openai/gpt-image-2', name: 'GPT Image 2' }],
   routing: {
     codex: {
       upstream: 'https://chatgpt.com/backend-api/codex',

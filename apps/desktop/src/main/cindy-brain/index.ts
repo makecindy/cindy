@@ -192,6 +192,7 @@ import {
 import { getCindyProxyMediaService } from '../mcp-integrations/cindyProxyMedia.js';
 import { ImageChannelRegistry } from './imageChannelRegistry.js';
 import { createGeminiImageChannel } from './geminiImageClient.js';
+import { createGatewayImageClient } from '../cindy-proxy-media/api/gatewayImageClient.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { ingestMedia, supportedMime } from '../cindy-media/ingest.js';
@@ -1856,6 +1857,40 @@ function getImageChannelRegistry(): ImageChannelRegistry {
       getApiKey: () => getProviderSecretStore().get('gemini'),
       beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
     }));
+    // OpenAI 平台 images API(BYO 平台 key;ChatGPT 订阅 OAuth 调不了平台面,实测
+    // 401/403 缺 scope):与 xd 网关同 wire(OpenAI-images 兼容面),整个客户端复用,
+    // 只换 baseUrl/品牌话术/凭证读取。目录 id 带 openai/ 前缀(跨供应商契约),
+    // 上游只认裸 id,适配层剥前缀。
+    const openaiImagesClient = createGatewayImageClient({
+      getApiKey: () => getProviderSecretStore().get('openai-images'),
+      proxy: {
+        baseUrl: 'https://api.openai.com',
+        generatePath: '/v1/images/generations',
+        editPath: '/v1/images/edits',
+      },
+      brandLabel: 'OpenAI',
+      missingKeyMessage:
+        'OpenAI 图像 API key 未配置,请到「设置 → 模型供应商 → OpenAI」填入后重试',
+      beforeDispatch: (model) => assertMediaModelStillEnabled('image', `openai/${model}`),
+    });
+    const stripOpenaiPrefix = (id: string) =>
+      id.startsWith('openai/') ? id.slice('openai/'.length) : id;
+    registry.register('openai', {
+      ready: () => getProviderSecretStore().get('openai-images') !== null,
+      generateImage: ({ model, prompt, aspectRatio }) =>
+        openaiImagesClient.generateImage({
+          model: stripOpenaiPrefix(model),
+          prompt,
+          ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
+        }),
+      editImage: ({ model, prompt, imagePaths, aspectRatio }) =>
+        openaiImagesClient.editImage({
+          model: stripOpenaiPrefix(model),
+          prompt,
+          imagePaths,
+          ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
+        }),
+    });
     imageChannelRegistrySingleton = registry;
   }
   return imageChannelRegistrySingleton;
