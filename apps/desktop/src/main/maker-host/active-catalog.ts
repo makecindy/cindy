@@ -607,12 +607,72 @@ export function setCustomProviders(providers: Provider[]): void {
 }
 
 /**
+ * auth 边界切换期间挂起「模型发现」写入的引用计数。>0 时 `setDiscoveredCodexModels`
+ * 拒绝 discovery 来源的写入(见该函数注释)。计数而非布尔:多个边界收口可能重叠
+ * (登出紧接换账号),布尔会被先结束的那个提前放开。
+ */
+let codexDiscoveryWriteSuspensions = 0;
+
+/**
+ * 挂起 codex 模型**发现**写入,返回释放函数(调用方必须 try/finally 释放)。
+ *
+ * 为什么需要它:codex 的模型发现是异步的,而写入发生在 agent 的 `onCodexLocalModelsListed`
+ * 回调里 —— 请求发出后,调用方再也拦不住那次写入。于是 auth 边界变化(登出 / 换账号 /
+ * 凭证失效)时,上一个账号在途的那次 `model/list` 会在目录被按新边界清空**之后**回来,
+ * 把旧账号的模型重新写进去并广播给 renderer;凭证失效路径尤其明显,它不 dispose 旧 host
+ * (PR #1076 review 第二轮)。
+ *
+ * 闸门放在写入口而不是各个发起方:发现写入有多条通道(启动补拉、登录收口、会话 init 的
+ * supportedModels 捕获),逐个去挡就是同一判据的第三、第四份拷贝。放在这里,任何现在和将来
+ * 的通道都自动服从同一个不变量:**auth 边界切换期间,只有边界收口自己的权威写入算数。**
+ */
+export function suspendCodexModelDiscoveryWrites(): () => void {
+  codexDiscoveryWriteSuspensions += 1;
+  let released = false;
+  return () => {
+    if (released) return; // 幂等:重复释放不得把别的收口的挂起一起放开
+    released = true;
+    codexDiscoveryWriteSuspensions = Math.max(0, codexDiscoveryWriteSuspensions - 1);
+  };
+}
+
+/** 当前是否处于 auth 边界切换的静默窗口(供日志 / 测试断言)。 */
+export function isCodexModelDiscoveryWriteSuspended(): boolean {
+  return codexDiscoveryWriteSuspensions > 0;
+}
+
+export interface SetDiscoveredCodexModelsOptions {
+  /**
+   * 本次写入是否来自 **auth 边界收口自己**(按新边界重读 models_cache / 清空防串号)。
+   * 这类写入是那一刻的权威事实,恒放行;缺省(= 来自模型发现回调)在静默窗口期被丢弃。
+   */
+  fromAuthBoundary?: boolean;
+}
+
+/**
  * 注入 codex cache 派生的规范化模型快照。由 ensureActiveCatalogLoaded 在目录加载后调用。
  * 传空数组 = 有效空快照(回到静态兜底);读取失败时调用方不应调用本 setter,以保留现值。
+ *
+ * 静默窗口(见 suspendCodexModelDiscoveryWrites)期间丢弃 discovery 来源的写入 —— 那是上一个
+ * auth 边界的在途请求迟到回来,写进去就是串号。
  */
-export function setDiscoveredCodexModels(models: CatalogModel[]): void {
+export function setDiscoveredCodexModels(
+  models: CatalogModel[],
+  options?: SetDiscoveredCodexModelsOptions,
+): void {
+  if (options?.fromAuthBoundary !== true && codexDiscoveryWriteSuspensions > 0) {
+    discardedCodexDiscoveryWrites += 1;
+    return;
+  }
   discoveredCodex = [...models];
   markChanged();
+}
+
+/** 被静默窗口丢弃的 discovery 写入次数(诊断 / 测试用,不参与任何业务判定)。 */
+let discardedCodexDiscoveryWrites = 0;
+
+export function readDiscardedCodexDiscoveryWriteCount(): number {
+  return discardedCodexDiscoveryWrites;
 }
 
 /**

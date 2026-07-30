@@ -21,6 +21,7 @@ import {
   getActiveCatalog,
   setActiveCatalogChangedListener,
   setDiscoveredCodexModels,
+  suspendCodexModelDiscoveryWrites,
 } from './active-catalog.js';
 import {
   createCodexModelBackfillCoordinator,
@@ -1113,25 +1114,38 @@ export function getMaker(): Maker {
     // dispose 幂等: 没 spawn 过就 no-op。
     //
     desktopCodexAuthAdapter.setOnLogoutSuccess(async () => {
-      resetProviderModelAutoRefreshCooldowns('openai');
-      // auth 边界变了:「清单已在场」和「试过几次」都不再适用于下一个账号。
-      resetCodexModelBackfillState();
-      await codexAgent.forceDisposeLocalHostForAuthChange('Codex desktop auth logout');
-      clearCodexProxyAuthInjection();
-      await broadcastCodexRuntimeRoute();
+      // 静默窗口盖住整个收口:上一个账号在途的 model/list 会在 dispose 之后才回来,
+      // 它的写入发生在 agent 回调里、发起方拦不住(见 suspendCodexModelDiscoveryWrites)。
+      const resumeDiscovery = suspendCodexModelDiscoveryWrites();
+      try {
+        resetProviderModelAutoRefreshCooldowns('openai');
+        // auth 边界变了:「清单已在场」和「试过几次」都不再适用于下一个账号。
+        resetCodexModelBackfillState();
+        await codexAgent.forceDisposeLocalHostForAuthChange('Codex desktop auth logout');
+        clearCodexProxyAuthInjection();
+        await broadcastCodexRuntimeRoute();
+      } finally {
+        resumeDiscovery();
+      }
     });
     // 登录成功也要对称重启本地 host:网关 key fallback 下 host 可能在 OAuth 登录前
     // 就以 env-key 形态跑着("auth gate 挡住未授权 spawn"的老前提在该场景不成立),
     // 不重启则隐式会话继续复用旧钥匙形态,新登录不生效(codex review 2026-07-03 P2)。
     // 下次 getHost 会按新 fallback(oauth-bearer)重建并重设 proxy 注入。
     desktopCodexAuthAdapter.setOnLoginSuccess(async () => {
-      resetProviderModelAutoRefreshCooldowns('openai');
-      resetCodexModelBackfillState();
-      // 必须在新 app-server 首次 model/list / Responses 请求之前清：bridge 的旧账号
-      // accessToken/accountId 有 30s 内存缓存，晚清会让新 host 短暂带旧账号凭证请求。
-      clearChatgptBridgeCredentialCache();
-      await codexAgent.forceDisposeLocalHostForAuthChange('Codex desktop auth login');
-      await broadcastCodexRuntimeRoute();
+      // 同 logout:旧账号在途的发现结果不得写进新边界的目录。
+      const resumeDiscovery = suspendCodexModelDiscoveryWrites();
+      try {
+        resetProviderModelAutoRefreshCooldowns('openai');
+        resetCodexModelBackfillState();
+        // 必须在新 app-server 首次 model/list / Responses 请求之前清：bridge 的旧账号
+        // accessToken/accountId 有 30s 内存缓存，晚清会让新 host 短暂带旧账号凭证请求。
+        clearChatgptBridgeCredentialCache();
+        await codexAgent.forceDisposeLocalHostForAuthChange('Codex desktop auth login');
+        await broadcastCodexRuntimeRoute();
+      } finally {
+        resumeDiscovery();
+      }
       // 这里刻意**不**补拉:登录路径的清单收口在 maker-ipc/auth.ts,它会在 live 拉取没
       // applied 时回退读 models_cache（cache miss 即清空,防串号）。在这里并发补拉会与那次
       // 清空交错,刚拉到的清单可能被空 cache 覆盖。补拉挂在那条收口之后,顺序确定。
@@ -1148,18 +1162,26 @@ export function getMaker(): Maker {
     // UI 弹 "请重新登录" — 否则错误只会反复埋在后台日志里。payload 字段对齐
     // maker-ipc/auth.ts logout handler 的 broadcast 形态。
     desktopCodexAuthAdapter.setOnInvalidatedBroadcast(async (reason) => {
-      resetProviderModelAutoRefreshCooldowns('openai');
-      resetCodexModelBackfillState();
-      // 运行中 401/token invalidation 不经过 maker:auth:logout IPC，必须在这里做同一套
-      // auth-boundary catalog 收口；否则磁盘 cache 已删但内存 discovered/capabilities 仍旧。
+      // 这条路径**不 dispose 旧 host**（凭证失效是运行中发生的，会话还在），所以在途的
+      // model/list 一定会带着已失效账号的清单回来 —— 静默窗口在这里最必要
+      // （PR #1076 review 第二轮点名的正是这条路径）。
+      const resumeDiscovery = suspendCodexModelDiscoveryWrites();
       try {
-        clearChatgptBridgeCredentialCache();
-        await refreshDiscoveredCodexModels(false);
-      } catch (e) {
-        // 目录刷新是失效广播的附加收口，不能因其异常让 renderer 错过“请重新登录”。
-        desktopMakerLogger.warn('Codex invalidation catalog cleanup failed', {
-          error: e instanceof Error ? e.message : String(e),
-        });
+        resetProviderModelAutoRefreshCooldowns('openai');
+        resetCodexModelBackfillState();
+        // 运行中 401/token invalidation 不经过 maker:auth:logout IPC，必须在这里做同一套
+        // auth-boundary catalog 收口；否则磁盘 cache 已删但内存 discovered/capabilities 仍旧。
+        try {
+          clearChatgptBridgeCredentialCache();
+          await refreshDiscoveredCodexModels(false);
+        } catch (e) {
+          // 目录刷新是失效广播的附加收口，不能因其异常让 renderer 错过“请重新登录”。
+          desktopMakerLogger.warn('Codex invalidation catalog cleanup failed', {
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      } finally {
+        resumeDiscovery();
       }
       const payload = {
         agentKind: 'codex' as const,
@@ -1426,9 +1448,16 @@ export async function finalizeCodexAfterAuthModeChange(): Promise<void> {
   // authInjection(oauth-bearer / env-key), routingTransform 据此 + per-session 选择出路由。
   // auth mode 变更后清 ChatGPT bridge 凭证缓存 —— 旧 OAuth token 已无效,下次请求重读 auth.json。
   clearChatgptBridgeCredentialCache();
-  // 重读 codex models_cache 刷新规范化模型快照 —— active-catalog 会同时投影 Codex 与
-  // Claude bridge;放在 auth 广播前,renderer refetch 即见最新。
-  await refreshDiscoveredCodexModels();
+  // 静默窗口只盖到「按新边界重读 cache」为止 —— 紧接的补拉是**新**边界自己发起的,
+  // 必须能写进目录,所以在它之前就 resume(见 suspendCodexModelDiscoveryWrites)。
+  const resumeDiscovery = suspendCodexModelDiscoveryWrites();
+  try {
+    // 重读 codex models_cache 刷新规范化模型快照 —— active-catalog 会同时投影 Codex 与
+    // Claude bridge;放在 auth 广播前,renderer refetch 即见最新。
+    await refreshDiscoveredCodexModels();
+  } finally {
+    resumeDiscovery();
+  }
   // auth 模式变了,上一条边界下的失败计数不再适用;随后补一次 live 拉取兜住
   // 「已登录 + models_cache 还没落盘」——必须排在上面的 cache 重读之后,否则被空快照覆盖。
   resetCodexModelBackfillState();

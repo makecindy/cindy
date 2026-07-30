@@ -15,6 +15,7 @@ import { createLogger } from '../logger.js';
 
 import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { clearChatgptBridgeCredentialCache } from '../maker-host/anthropic-responses-bridge-host.js';
+import { suspendCodexModelDiscoveryWrites } from '../maker-host/active-catalog.js';
 import { refreshDiscoveredCodexModels } from '../maker-host/createDesktopProviderService.js';
 import { requestCodexModelBackfill } from '../maker-host/index.js';
 import { registerMakerAuthHandlers } from './authHandlers.js';
@@ -54,7 +55,15 @@ export function registerMakerAuthIpc(maker: Maker): void {
         if (authenticated) {
           log.warn('Codex live model refresh was not applied; falling back to models_cache');
         }
-        await refreshDiscoveredCodexModels(authenticated, isCurrent);
+        // 静默窗口:这条收口与 adapter 的 onLogout/onLoginSuccess 是两条独立链，谁先谁后
+        // 不确定。各自挂窗口、由引用计数保证重叠期间不提前放开，旧账号在途的发现结果就
+        // 无法在这两条链之间的缝隙里写进目录（见 suspendCodexModelDiscoveryWrites）。
+        const resumeDiscovery = suspendCodexModelDiscoveryWrites();
+        try {
+          await refreshDiscoveredCodexModels(authenticated, isCurrent);
+        } finally {
+          resumeDiscovery();
+        }
       }
       // 走到这里若仍是「已登录 + 零模型」（live 没 applied 且 models_cache 也 miss，全新机器
       // 首次登录的常态：codex CLI 只在跑过会话后才写 cache），补一次 live 拉取。必须放在上面

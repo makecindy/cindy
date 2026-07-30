@@ -88,13 +88,18 @@ export interface CodexModelBackfillCoordinator {
  *
  * 记两件事:
  *   - `liveAttempts`:真起过(或试图起过)app-server 的失败次数,封顶后停手,避免反复 spawn;
- *   - `generation`:auth 边界的代号,`reset()` 递增。在途拉取回来时若代号已变,**丢弃结果**。
+ *   - `generation`:auth 边界的代号,`reset()` 递增。在途拉取回来时若代号已变,**不广播、
+ *     不计额度**。
  *
  * 代号是必需的,不是防御性编程:`reset()` 拿不回一个已经发出的 `model/list`。登出 / 切账号
- * 发生在拉取途中时,旧账号的那次请求仍会带着旧 `maker` 引用完成 —— 只清 `inflight` 引用的话
- * 它照样调 `onApplied`,把刚被 auth 边界清空的目录重新填上**上一个账号**的模型;新账号也已经
- * 开始自己那轮,最终目录取决于两者谁先回来(PR #1076 review)。代号让「哪一代的结果可以落地」
- * 变成确定的,而不是竞速结果。
+ * 发生在拉取途中时,旧账号的那次请求仍会带着旧 `maker` 引用完成(PR #1076 review)。
+ *
+ * **分层要看清**:目录写入本身**不由这里把关**。`refreshLive()` 内部经 agent 的
+ * `onCodexLocalModelsListed` 回调写 active-catalog,那发生在 promise resolve **之前**,
+ * 本模块根本没有机会介入(review 第二轮的正是这一点)。写入闸门统一放在 active-catalog 的
+ * `suspendCodexModelDiscoveryWrites` —— 它覆盖所有发现通道,不只补拉。这里的代号只管两件
+ * 本模块自己的事:广播(`onApplied`,避免为一次被丢弃的写入白广播一遍)与失败额度的归属
+ * (旧边界的失败不该扣新边界的重试次数)。两处不是重复判据,是同一不变量在不同层的执行点。
  *
  * 刻意**不缓存「已经拉到了」**:清单在场与否每次都现查 catalog(`hasCodexModels`),因为它
  * 随时会被 auth 边界收口清空(登出、cache miss 回退),缓存成终态会让清空之后再也拉不回来。
