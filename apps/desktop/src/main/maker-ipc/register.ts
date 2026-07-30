@@ -530,7 +530,10 @@ import {
   noteClaudeSessionTurnState,
   setClaudeBackgroundActivityBroadcaster,
 } from '../maker-host/claude-session-background-activity.js';
-import { readClaudeSessionRoute } from '../maker-host/claude-session-route-registry.js';
+import {
+  readClaudeSessionRoute,
+  recordClaudeSessionFailedRequestSource,
+} from '../maker-host/claude-session-route-registry.js';
 import { consumeClaudeGatewayOpusPlanMismatch } from '../maker-host/claude-gateway-error-observer.js';
 import { setLiveCcSessionBridge } from '../maker-host/claude-transcript-relocation.js';
 import {
@@ -3083,6 +3086,24 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // sdkError === 'authentication_failed' 以及 message 命中 authentication_error /
       // invalid api key / 401 的情形。本地会话（无 remoteHostId）无 auto-retry，不跳过。
       isRemoteAuthRetry = isRemoteAuthRetryErrorEvent(session, event);
+      // 计费引导的失败归因(claude-session-route-registry):cc 会话真正终止
+      // (会向用户展示)的失败落地时,把该会话的 lastFailedRequestBridge 覆写为
+      // false —— 非 bridge 请求的失败。用**这个 SDK 已判定"不再重试、即将
+      // surface 给用户"的终止事件**做归因边界,而不是在 proxy 层按单次 HTTP
+      // 状态码猜测:429/529 是 SDK 自带退避重试的状态码,单次响应不代表终态,
+      // 之前在 HTTP 层直接排除/放行这两个状态码都不对——排除会让真正耗尽重试
+      // 的终止 429(如网关预算耗尽)永远清不掉残留的 bridge 归因,放行又会被
+      // 中途还会重试成功的瞬时响应误清掉(PR review P1 ×2)。会话自身模型是
+      // 订阅直连 bridge(chatgpt/ / xai/)时跳过——那种终止失败已经在 bridge
+      // 的 localHandler 响应处直接记了 true,不该被这里覆写回 false。
+      if (
+        event.source === 'claude-code' &&
+        !isPlannedUpgradeClose &&
+        !isRemoteAuthRetry &&
+        !isSubscriptionDirectModel(session.model)
+      ) {
+        recordClaudeSessionFailedRequestSource(session.id, false);
+      }
       if (!isPlannedUpgradeClose) {
         agentInputCoordinatorHolder?.onTurnEvent(
           session.id,

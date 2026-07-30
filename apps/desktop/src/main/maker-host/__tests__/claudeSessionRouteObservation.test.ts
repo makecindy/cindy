@@ -58,7 +58,6 @@ vi.mock('../anthropic-responses-bridge-host', () => ({
 }));
 
 import {
-  createClaudeSessionFailedRequestObserver,
   createModelRoutingTransform,
   setClaudeProxyGatewayKeyReader,
   setClaudeProxySessionIdResolver,
@@ -273,92 +272,8 @@ describe('claude session route observation (routing transform ② 段)', () => {
     }
   });
 
-  it('failed forward-path POSTs overwrite the attribution back to non-bridge', () => {
-    // forward 路径观察器(false 侧):最后落地的失败决定归因。
-    const observer = createClaudeSessionFailedRequestObserver();
-    resetClaudeSessionRouteRegistryForTest();
-    // 先有一笔 bridge 失败归因……
-    const transform = createModelRoutingTransform();
-    const decision = transform(
-      { model: 'chatgpt/gpt-5.5' },
-      ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
-    ) as { localHandler: (args: { res: { statusCode: number } }) => Promise<void> };
-    bridgeMock.bridgeHandleImpl = async ({ res }) => {
-      res.statusCode = 429;
-    };
-    return decision.localHandler({ res: { statusCode: 0 } }).then(() => {
-      expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(true);
-      // Auto 权限分类器的辅助请求失败不参与归因:它的失败走 auto→ask 协调器,
-      // 不进错误横幅,并发后落地不得把 bridge 归因误覆写回 false(PR review P1)。
-      const classifierBody = Buffer.from(
-        JSON.stringify({
-          max_tokens: 512,
-          system: 'You are a security monitor for autonomous AI coding agents.',
-          messages: [],
-        }),
-      );
-      observer({
-        method: 'POST',
-        url: '/v1/messages?beta=true',
-        status: 429,
-        requestHeaders: SESSION_HEADER,
-        requestBody: classifierBody,
-      });
-      expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(true);
-      // count_tokens 探测失败同为辅助请求(404 本地估算兜底),不参与归因(PR review P1)。
-      observer({
-        method: 'POST',
-        url: '/v1/messages/count_tokens',
-        status: 404,
-        requestHeaders: SESSION_HEADER,
-        requestBody: Buffer.from('{"model":"claude-opus-4-8"}'),
-      });
-      expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(true);
-      // 429 / 529 是 SDK 自带退避重试的状态码,单次响应不代表终态——不得覆写
-      // 归因(PR review P1),否则一次会被重试掉的瞬时失败会污染当前显示的
-      // bridge 错误,且没有"重试成功"事件能纠正回来。
-      observer({
-        method: 'POST',
-        url: '/v1/messages?beta=true',
-        status: 429,
-        requestHeaders: SESSION_HEADER,
-        requestBody: Buffer.from('{"model":"claude-opus-4-8","max_tokens":32000}'),
-      });
-      expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(true);
-      observer({
-        method: 'POST',
-        url: '/v1/messages?beta=true',
-        status: 529,
-        requestHeaders: SESSION_HEADER,
-        requestBody: Buffer.from('{"model":"claude-opus-4-8","max_tokens":32000}'),
-      });
-      expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(true);
-      // ……随后 forward 路径主推理 POST 真正终止的失败(非 429/529)落地 →
-      // 覆写为非 bridge。
-      observer({
-        method: 'POST',
-        url: '/v1/messages?beta=true',
-        status: 400,
-        requestHeaders: SESSION_HEADER,
-        requestBody: Buffer.from('{"model":"claude-opus-4-8","max_tokens":32000}'),
-      });
-      expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(false);
-      // 成功响应 / GET 不参与归因。
-      observer({
-        method: 'POST',
-        url: '/v1/messages?beta=true',
-        status: 200,
-        requestHeaders: SESSION_HEADER,
-        requestBody: Buffer.from('{}'),
-      });
-      observer({
-        method: 'GET',
-        url: '/v1/models',
-        status: 404,
-        requestHeaders: SESSION_HEADER,
-        requestBody: Buffer.from(''),
-      });
-      expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(false);
-    });
-  });
+  // forward 路径不再有独立的"failed request"观察器:单次 HTTP 响应无法可靠
+  // 区分"SDK 还会重试"与"真正终止、即将 surface 给用户"(429/529 尤其如此),
+  // false 侧改在 register.ts 的 isTerminalTurnErrorEvent 分支里记(见该文件
+  // 对应的单测,这里只保留 bridge 侧 true 的记账,由本文件其它用例覆盖)。
 });

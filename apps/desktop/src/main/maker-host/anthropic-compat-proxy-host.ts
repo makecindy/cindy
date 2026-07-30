@@ -63,10 +63,7 @@ import {
   resolveSessionRouteDecision,
 } from './provider-route.js';
 import { createProviderUpstreamErrorObserver } from './provider-upstream-error-observer.js';
-import {
-  createClaudeAutoClassifierFailureObserver,
-  isClaudeAutoClassifierRequest,
-} from './claude-auto-permission-fallback.js';
+import { createClaudeAutoClassifierFailureObserver } from './claude-auto-permission-fallback.js';
 import {
   emptyAssistantStripController,
   emptyTextStripController,
@@ -367,43 +364,6 @@ export function createModelRoutingTransform(): RoutingTransform {
 
 
 /**
- * 失败归因观察器(forward 路径):POST 且 status≥400 的响应把该会话的
- * lastFailedRequestBridge 覆写为 false —— 非 bridge 请求的失败。与 bridge
- * localHandler 内的 true 侧配对(localHandler 响应不经本观察器,不会双记)。
- * 成功路径零开销;GET / 控制面请求不参与(横幅只关心推理请求的失败)。
- * 已知辅助请求不参与——它们的失败不进会话错误横幅,若与 bridge 配额失败并发、
- * 后落地,会把 bridge 归因误覆写回 false(PR review P1 ×3):
- *   - Auto 权限分类器(走 auto→ask 协调器):复用 isClaudeAutoClassifierRequest
- *     判据,仅错误路径 parse 一次 body;
- *   - count_tokens 探测(404 时本地估算兜底,见 provider-upstream-error-observer):
- *     按 URL 路径排除;
- *   - 429 / 529:Claude SDK 对这两类状态码自带退避重试(translator.ts 明确记录,
- *     客户端不得再叠一层),单次响应因此**不代表终态**——同一请求的第一次
- *     429/529 之后可能重试成功,若这里立即把归因覆写为 false,而此刻用户看到
- *     的其实是更早落地的 bridge 配额错误,归因会被这条终将被重试掉的瞬时响应
- *     污染,且没有对应的"重试成功"事件把它纠正回来。真正终止的 429/529
- *     失败要么被 SDK 耗尽重试后以其它形态透出、要么本来就不该覆盖已存在的
- *     bridge 归因。
- */
-export function createClaudeSessionFailedRequestObserver() {
-  return (ctx: {
-    method: string;
-    url: string;
-    status: number;
-    requestHeaders: Readonly<Record<string, string>>;
-    requestBody: Buffer;
-  }): void => {
-    if (ctx.method !== 'POST' || ctx.status < 400) return;
-    if (ctx.status === 429 || ctx.status === 529) return;
-    if (ctx.url.includes('/count_tokens')) return;
-    const sdkSessionId = ctx.requestHeaders['x-claude-code-session-id'];
-    const sessionId = sdkSessionId && _resolveCcSessionId ? _resolveCcSessionId(sdkSessionId) : null;
-    if (!sessionId || isClaudeAutoClassifierRequest(ctx.requestBody)) return;
-    recordClaudeSessionFailedRequestSource(sessionId, false);
-  };
-}
-
-/**
  * 启动本地代理。幂等 —— 重复调用直接返回已缓存 handle。
  *
  * 即使代理启动失败,也会把 _initialized 置 true,后续 getClaudeEndpoint()
@@ -432,10 +392,11 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
       //   - 自定义供应商上游错误分类广播(status≥400 且会话路由到 user 供应商时才 tee,
       //     成功路径零开销;30s 节流,见 provider-upstream-error-observer)。
       responseObserver: composeResponseObservers(
-        // 失败归因(lastFailedRequestBridge=false 侧):forward 路径的 POST 失败
-        // (默认/显式路由,非 bridge)在响应侧覆写归因槽——与 bridge localHandler
-        // 的 true 侧配对,最后落地的失败即横幅显示的错误(PR review P1)。
-        createClaudeSessionFailedRequestObserver(),
+        // 失败归因(lastFailedRequestBridge=false 侧)不在这里做:单次 HTTP 响应
+        // 无法可靠区分"SDK 还会重试"与"真正终止、即将 surface 给用户"(429/529
+        // 尤其如此),这个判断只有 SDK/maker-core 自己的终止事件知道。false 侧
+        // 改在 register.ts 的 isTerminalTurnErrorEvent 分支里记(与 bridge
+        // localHandler 的 true 侧配对,PR review P1 ×3)。
         createClaudeSubagentUsageResponseObserver(),
         createClaudeFastModeResponseObserver(log),
         createClaudeRateLimitHeadersObserver(),
