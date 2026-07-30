@@ -1890,13 +1890,12 @@
       "idleReleaseHint": "Set 0 to disable background auto-release; positive values release workers after this many idle minutes."
     },
     "agentResource": {
-      "loading": "Loading Agent resource settings…",
       "saveFailed": "Failed to save. Try again.",
       "title": "Agent Resource Usage",
       "description": "Limit how much system capacity Agent command-line work can consume, so parallel tests or builds don't freeze your machine. Defaults to full speed (no intervention). The concurrency limit and priority lowering take effect immediately (including running Agent processes); raising priority back to Normal and toolchain thread caps only apply to newly started Agent processes. Applies to local Agents only; Agents on remote (SSH) machines are not governed by these settings.",
       "preset": "Profile",
       "presets": {
-        "full": "Full speed",
+        "full": "Full Speed",
         "balanced": "Balanced",
         "background": "Background"
       },
@@ -1906,16 +1905,16 @@
         "background": "Lowest priority (efficiency cores on macOS) + a strict concurrency limit: quiet and responsive, but Agents run noticeably slower.",
         "custom": "Custom combination. Adjust the fields below directly."
       },
-      "maxConcurrent": "Concurrent command limit",
+      "maxConcurrent": "Concurrent Command Limit",
       "maxConcurrentHint": "Maximum number of commands the Claude Code engine may run at once; extra commands wait in a queue. 0 means unlimited. Codex commands run inside their own sandbox without a per-command hook and are covered by the priority and thread-cap layers instead.",
-      "priority": "Process priority",
+      "priority": "Process Priority",
       "priorityHint": "Lower it so Agents only use idle capacity and foreground apps stay responsive. Raising it back only applies to newly started Agent processes.",
       "priorityOptions": {
         "normal": "Normal",
         "low": "Low",
         "lowest": "Lowest"
       },
-      "capThreads": "Cap toolchain parallelism",
+      "capThreads": "Cap Toolchain Parallelism",
       "capThreadsHint": "Injects environment variables such as VITEST_MAX_FORKS and MAKEFLAGS so a single test or build command can't take every CPU core. Variables you set yourself are never overridden."
     },
     "computerUse": {

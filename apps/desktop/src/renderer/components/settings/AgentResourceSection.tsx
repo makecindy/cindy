@@ -167,13 +167,10 @@ export function AgentResourceSection() {
     }
   };
 
-  if (!settings) {
-    return (
-      <div className="py-8 text-center text-13 text-[var(--text-tertiary)]">
-        {t('settings.agentResource.loading')}
-      </div>
-    );
-  }
+  // 取数时序契约(engineering-conventions §7):本地 IPC 数据毫秒级到达,获取期间
+  // 界面不发生变化、不做 loading 态 —— 瞬时占位行会在数据到达时被更高的控件顶开,
+  // 造成后续 section 可见位移。
+  if (!settings) return null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -259,7 +256,8 @@ export function AgentResourceSection() {
           value={maxDraft ?? String(settings.maxConcurrentCommands)}
           onChange={(e) => setMaxDraft(e.target.value)}
           onBlur={() => {
-            // 提交点:仅 0..64 的整数且与当前值不同才写盘;非法/未变草稿作废,
+            // 唯一提交点(DESIGN §14.3:Settings 单行编辑器 Enter 不得提交):
+            // 仅 0..64 的整数且与当前值不同才写盘;非法/未变草稿作废,
             // 回显权威值(clamp 会绕过 main 侧硬拒语义,一律拒绝不改写)
             const text = (maxDraft ?? '').trim();
             setMaxDraft(null);
@@ -268,9 +266,6 @@ export function AgentResourceSection() {
             if (raw > MAX_CONCURRENT_CAP) return;
             if (raw === settings.maxConcurrentCommands) return;
             persist('maxConcurrentCommands', raw);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') e.currentTarget.blur(); // Enter = 显式提交边界
           }}
           className="mt-0.5 w-24 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-1.5 text-13 text-[var(--settings-input-text)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
         />
