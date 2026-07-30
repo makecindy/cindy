@@ -662,6 +662,12 @@ export function CustomProviderDialog({
     const chosen = picker.models.filter((m) => picker.selected.has(m.id));
     if (chosen.length === 0) return;
     const pickerIds = new Set(picker.models.map((m) => m.id));
+    // 重映射靠 id 而不是行号:picker 确认会任意增删/重排该 runtime 的行,旧行号
+    // 不能直接套到新数组。rtRef 是 setRtSynced 在状态计算的同一刻同步镜像的最新
+    // 值(见上方注释),patch() 调用后立即读取即可拿到刚提交的 merged 数组,不必
+    // 在 patch 外重复一遍合并逻辑(review P1:全量清空会连还在编辑、仍保留的行
+    // 一并清掉)。
+    const previousModels = rtRef.current[picker.agent].models;
     patch(picker.agent, (x) => {
       const latestById = new Map<string, ModelRow>();
       for (const m of x.models) {
@@ -692,14 +698,26 @@ export function CustomProviderDialog({
       }
       return { ...x, models: merged };
     });
-    // picker 重写该 runtime 的整个 models 数组(勾选/取消勾选可任意增删重排),
-    // 旧行号不可用简单映射对应新行——按 agent 整体清空该 runtime 的窗口草稿,
-    // 不留指向已不存在的行的陈旧非法草稿(否则会一直挡住保存、toast 报错却
-    // 找不到对应输入框,见 review P1)。
+    const mergedModels = rtRef.current[picker.agent].models;
+    const oldIndexToId = new Map(previousModels.map((m, i) => [i, m.id.trim()]));
+    const newIndexById = new Map<string, number>();
+    mergedModels.forEach((m, i) => {
+      if (!newIndexById.has(m.id)) newIndexById.set(m.id, i);
+    });
     setWindowDrafts((drafts) => {
       const next: Record<string, string> = {};
       for (const [key, text] of Object.entries(drafts)) {
-        if (!key.startsWith(`${picker.agent}:`)) next[key] = text;
+        const sep = key.lastIndexOf(':');
+        const agent = key.slice(0, sep);
+        if (agent !== picker.agent) {
+          next[key] = text;
+          continue;
+        }
+        // 仍保留的行(id 未变)把草稿迁到新行号;被 picker 移出的行(取消勾选)
+        // 丢弃草稿——不合法草稿只应因它对应的行真的消失才清除。
+        const id = oldIndexToId.get(Number(key.slice(sep + 1)));
+        const newIdx = id !== undefined ? newIndexById.get(id) : undefined;
+        if (newIdx !== undefined) next[`${agent}:${newIdx}`] = text;
       }
       return next;
     });
