@@ -428,12 +428,16 @@ export function installDeferredPopupRouter(
       popupWindow.close();
     }
     if (openerAttrPromise !== null) {
-      void openerAttrPromise.then((promiseResult) => {
-        // promiseResult 为 null 说明 1s 超时内 registry 还没有这条记录。
-        // URL 到达时补一次同步重查：opener 上报可能在超时后、URL 到达前才入库。
-        const opener = promiseResult ?? resolvePopupOpener(openerWebContentsId!);
-        sendBrowserPopup(hostContents, { url, disposition, ...(opener ?? {}) });
-      });
+      void openerAttrPromise
+        .then((pre) => {
+          if (pre !== null) return pre;
+          // 第一个 1s 超时(popup 创建时发起)未命中:从 URL 到达时起再给一次 1s。
+          // 覆盖场景:URL 早于 opener 上报到达(IPC 延迟 >1s 但 <2s)。
+          return waitForPopupOpener(openerWebContentsId!);
+        })
+        .then((opener) => {
+          sendBrowserPopup(hostContents, { url, disposition, ...(opener ?? {}) });
+        });
     } else {
       sendBrowserPopup(hostContents, { url, disposition });
     }

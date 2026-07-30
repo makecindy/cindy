@@ -367,7 +367,8 @@ describe('installDeferredPopupRouter', () => {
 
   it('routes without attribution once the opener wait times out', async () => {
     // 永久落空(guest 不属于任何已上报的 RSB tab)时不能把 popup 一直扣着 ——
-    // 有界等待到点后照常路由,只是没有 opener 字段(回落到旧行为)。
+    // 第一轮(popup 创建时) + 第二轮(URL 到达时)各 1s,共最多 2s 后照常路由,
+    // 只是没有 opener 字段(回落到旧行为)。
     vi.useFakeTimers();
     const { childContents, hostContents, popupWindow } = makePopupHarness();
     setRsbPopupOpenerResolver(() => null);
@@ -382,7 +383,8 @@ describe('installDeferredPopupRouter', () => {
     childContents.emit('will-navigate', {}, 'https://accounts.example.com/oauth');
     expect(hostContents.send).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(POPUP_OPENER_WAIT_TIMEOUT_MS + 50);
+    // 两轮各 1s:第一轮(popup 创建时)+ 第二轮(URL 到达时)
+    await vi.advanceTimersByTimeAsync(2 * POPUP_OPENER_WAIT_TIMEOUT_MS + 100);
 
     expect(hostContents.send).toHaveBeenCalledWith(RSB_BROWSER_POPUP_CHANNEL, {
       url: 'https://accounts.example.com/oauth',

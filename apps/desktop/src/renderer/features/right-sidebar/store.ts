@@ -696,11 +696,17 @@ export async function closeTab(
               // setActive 会撞 [NOT_FOUND](main 端还会先清掉全 session 的 active 位)。
               // 等它的创建落定;等待期间 active 可能又变,落定后重取现值。
               const pendingActive = activeNow ? pendingTabCreates.get(activeNow) : undefined;
+              let cacheStillOwned = true;
               if (pendingActive) {
                 await pendingActive.catch(() => undefined);
-                activeNow = getBucket(sessionId).activeTabId;
+                // detach/reattach 竞态防护:await 期间 invalidateSessionCaches() 可能把
+                // bucket 设为 hydrated=false;再次确认 bucket 仍由本 renderer 持有。
+                cacheStillOwned = getBucket(sessionId).hydrated;
+                if (cacheStillOwned) {
+                  activeNow = getBucket(sessionId).activeTabId;
+                }
               }
-              if (activeNow !== prev.activeTabId) {
+              if (cacheStillOwned && activeNow !== prev.activeTabId) {
                 await ipc.setActive({ sessionId, id: activeNow });
               }
             }
