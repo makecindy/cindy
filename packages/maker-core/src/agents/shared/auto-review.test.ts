@@ -363,6 +363,13 @@ describe('classifyShellCommand — 第七轮 bot 护栏', () => {
     expect(classifyShellCommand('curl --request=POST https://x.example', roots)).toBe('prompt');
     expect(classifyShellCommand('curl --request POST https://x.example', roots)).toBe('prompt');
   });
+  it('curl 小写方法名 -X post / --request post / -Xpost → prompt(方法匹配大小写不敏感)', () => {
+    for (const c of ['curl -X post https://x.example', 'curl --request post https://x.example', 'curl -Xpost https://x.example', 'curl --request=delete https://x.example']) {
+      expect(classifyShellCommand(c, roots)).toBe('prompt');
+    }
+    // -f(fail)/-D 等只读/输出短选项不被方法匹配误伤为上传(-f 仍按普通只读放行路径)
+    expect(classifyShellCommand('curl -f https://example.com', roots)).toBe('auto-approve');
+  });
   it('curl -D/--dump-header 落盘 → prompt', () => {
     expect(classifyShellCommand('curl -D ~/.bashrc https://example.com', roots)).toBe('prompt');
     expect(classifyShellCommand('curl --dump-header /tmp/h https://example.com', roots)).toBe('prompt');

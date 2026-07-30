@@ -165,7 +165,10 @@ const OUTPUT_REDIRECTION = /(?<!-)>>?(?!&)/;
 // 贴合的 value 照样命中。大小写敏感(不加 /i):`-d/-F/-T` 是上传,`-D`(dump-header,只读)不能误伤。
 // `-[a-zA-Z]*[dFT]`:短选项簇里含值取向的 -d/-F/-T(curl 无布尔短选项用 d/F/T),捕获贴合 `-dDATA`、
 // 捆绑 `-sdsecret`、独立 `-d`;curl 大小写敏感,不误伤只读的 -D。
-const CURL_UPLOAD_FLAGS = /(?:^|\s)-[a-zA-Z]*[dFT]|(?:^|\s)--(?:data|form|upload-file|json)[\w-]*|(?:^|\s)(?:-X|--request)[=\s]*(?:POST|PUT|DELETE|PATCH)/;
+const CURL_UPLOAD_FLAGS = /(?:^|\s)-[a-zA-Z]*[dFT]|(?:^|\s)--(?:data|form|upload-file|json)[\w-]*/;
+// 非 GET 方法(-X/--request POST 等)单列且**大小写不敏感**:curl 接受小写 `-X post` / `--request post`。
+// 不能给上面的短选项簇整体加 /i —— 那会让 `[dFT]` 匹配到只读的 -f/-D,把 `curl -f` 误判成上传。
+const CURL_NONGET_METHOD = /(?:^|\s)(?:-X|--request)[=\s]*(?:POST|PUT|DELETE|PATCH)\b/i;
 // 落盘到文件/目录(curl -o/-O/-D/--output;wget -o 日志 /-O 文档 /-P 目录前缀)。写任意路径。
 // 短选项用簇匹配 `-[a-zA-Z]*[oODP]`:除贴合 `-ofile`,还捕获与只读短选项捆绑的形态
 // (`-sD/tmp/headers`、`-so/tmp/out` = -s 静默 + -D/-o 落盘),否则簇里的落盘 flag 会被漏放行。
@@ -340,7 +343,7 @@ function isSafeFetch(bin: string, segment: string, tokens: string[]): boolean {
   // 且默认跟随重定向(最终 host 不可判)→ 一律升级,不当安全 fetch。
   if (bin !== 'curl') return false;
   if (FETCH_OUTPUT_FLAGS.test(segment)) return false;     // -o/-O 落盘
-  if (CURL_UPLOAD_FLAGS.test(segment)) return false;      // -d/-F/--json 等上传
+  if (CURL_UPLOAD_FLAGS.test(segment) || CURL_NONGET_METHOD.test(segment)) return false; // -d/-F/--json 上传、非 GET 方法
   if (CURL_REDIRECT_FLAGS.test(segment)) return false;    // -L 跟随重定向 → 目标不可判 → 升级
   if (CURL_SENSITIVE_FLAGS.test(segment)) return false;   // 凭证/隐藏参数/SSRF 改路由 flag → 升级
   const positional = tokens.slice(1).filter((t) => !t.startsWith('-'));
