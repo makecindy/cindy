@@ -528,7 +528,7 @@ export class GhostCindySlot {
         // 2026-07),AI 点名失败时靠这份清单自愈,不用猜主机认哪些 id。
         return {
           ok: false,
-          message: `不支持的模型(不在主机白名单内)。当前可用:${cfg.models.map((m) => m.id).join(' / ')}`,
+          message: `不支持的模型(不在主机白名单内)。当前可用:${cfg.models.length > 0 ? cfg.models.map((m) => m.id).join(' / ') : '(暂无可用型号)'}`,
         };
       }
       model = p.model;

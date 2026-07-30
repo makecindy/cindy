@@ -362,7 +362,7 @@ export function AddProviderWizard({
           p.source === 'builtin' &&
           p.auth.method === 'apiKey' &&
           !p.connected &&
-          (p.imageModels?.length ?? 0) > 0,
+          ((p.imageModels?.length ?? 0) > 0 || (p.videoModels?.length ?? 0) > 0),
       ),
     [providers],
   );

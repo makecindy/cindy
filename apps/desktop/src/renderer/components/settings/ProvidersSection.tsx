@@ -781,7 +781,13 @@ function BuiltinApiKeyHeader({
     if (!confirmed) return;
     setBusy(true);
     try {
-      await window.electronAPI.safeStorageRemove(storageKey);
+      const result = await window.electronAPI.safeStorageRemove(storageKey);
+      if (!result.success) {
+        toast.error(
+          t('settings.providers.builtinApiKey.toast.disconnectFailed', { name: provider.name }),
+        );
+        return;
+      }
       toast.success(
         t('settings.providers.builtinApiKey.toast.disconnected', { name: provider.name }),
       );
