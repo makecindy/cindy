@@ -49,7 +49,11 @@ export const DEVICE_LINK_INVOKE = {
   MIRROR_CACHE_GET_SESSION_LIST: 'device-link:mirror-cache:session-list:get',
   /** 写侧边栏远程会话列表快照 */
   MIRROR_CACHE_PUT_SESSION_LIST: 'device-link:mirror-cache:session-list:put',
-  /** 清缓存:带 deviceId 清单台设备,不带则整体清(登出) */
+  /**
+   * 清某台设备的缓存。deviceId 必填(缺失 / 空白一律 INVALID_PARAMS)——
+   * 「整体清」刻意不开放给 renderer:登出走 main 内部的 clearAll()(见
+   * teardownAuthAccountBoundary)。
+   */
   MIRROR_CACHE_CLEAR: 'device-link:mirror-cache:clear',
 } as const;
 

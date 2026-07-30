@@ -117,17 +117,23 @@ async function readPersistedQueue(): Promise<PurgeEntry[]> {
       parsed && typeof parsed === 'object' && Array.isArray((parsed as StoredQueue).entries)
         ? (parsed as StoredQueue).entries
         : [];
-    return entries
-      .filter((entry): entry is PurgeEntry => !!entry && typeof entry.root === 'string')
-      .map((entry) => ({
-        root: entry.root,
-        paths: Array.isArray(entry.paths)
-          ? entry.paths.filter((p): p is string => typeof p === 'string').slice(0, MAX_PATHS_PER_ENTRY)
-          : undefined,
-        since: typeof entry.since === 'number' ? entry.since : Date.now(),
-        attempts: typeof entry.attempts === 'number' ? entry.attempts : 0,
-      }))
-      .slice(0, MAX_ENTRIES);
+    return compactEntries(
+      entries
+        .filter((entry): entry is PurgeEntry => !!entry && typeof entry.root === 'string')
+        .map((entry) => {
+          const paths = Array.isArray(entry.paths)
+            ? entry.paths.filter((p): p is string => typeof p === 'string')
+            : undefined;
+          return {
+            root: entry.root,
+            // 文件级清单超上限(理论上写不出来,只可能来自被改写的队列文件):降级成整根条目
+            // 而不是截断 —— 截断会静默漏掉待清路径,整根是超集(见 compactEntries)。
+            paths: paths && paths.length > MAX_PATHS_PER_ENTRY ? undefined : paths,
+            since: typeof entry.since === 'number' ? entry.since : Date.now(),
+            attempts: typeof entry.attempts === 'number' ? entry.attempts : 0,
+          };
+        }),
+    );
   } catch {
     return [];
   }
@@ -138,7 +144,34 @@ async function readQueue(): Promise<PurgeEntry[]> {
   const merged = new Map<string, PurgeEntry>();
   for (const entry of await readPersistedQueue()) merged.set(entryKey(entry), entry);
   for (const [key, entry] of memoryQueue) merged.set(key, entry);
-  return [...merged.values()].slice(0, MAX_ENTRIES);
+  return compactEntries([...merged.values()]);
+}
+
+/**
+ * 条目数超上限时**按 root 合并成整根条目**,而不是截掉尾部。
+ *
+ * 直接 slice 会静默丢掉待清路径(那正是隐私残留);整根条目是它们的超集 —— 清的是本 owner
+ * 自己的缓存目录,而这份缓存是纯粹可重建的加速物,多删只损失首屏速度,不丢任何数据。
+ */
+function compactEntries(entries: readonly PurgeEntry[]): PurgeEntry[] {
+  if (entries.length <= MAX_ENTRIES) return [...entries];
+  const byRoot = new Map<string, PurgeEntry>();
+  for (const entry of entries) {
+    const key = path.resolve(entry.root);
+    const existing = byRoot.get(key);
+    byRoot.set(key, {
+      root: entry.root,
+      paths: undefined,
+      since: existing ? Math.min(existing.since, entry.since) : entry.since,
+      attempts: Math.max(existing?.attempts ?? 0, entry.attempts),
+    });
+  }
+  const collapsed = [...byRoot.values()];
+  log.warn(
+    `mirror cache purge queue overflow (${entries.length} entries); collapsed to ${collapsed.length} root-level entr(ies)`,
+  );
+  // 极端情况下 root 数本身就超上限:此时按 since 保留最早的(失败最久的最该被清掉)。
+  return collapsed.sort((a, b) => a.since - b.since).slice(0, MAX_ENTRIES);
 }
 
 /** 写队列文件。失败**抛出** —— 调用方需要知道「持久重试记录没写下」。 */
@@ -148,7 +181,7 @@ async function writeQueue(entries: readonly PurgeEntry[]): Promise<void> {
     await fsp.rm(file, { force: true }).catch(() => undefined);
     return;
   }
-  const payload: StoredQueue = { version: 1, entries: entries.slice(0, MAX_ENTRIES) };
+  const payload: StoredQueue = { version: 1, entries: compactEntries(entries) };
   await fsp.writeFile(file, JSON.stringify(payload), 'utf8');
 }
 
@@ -168,34 +201,48 @@ async function enqueuePurgeLocked(root: string, paths?: readonly string[]): Prom
     log.warn(`refusing to enqueue purge outside owners dir: ${root}`);
     return;
   }
-  const safePaths = (paths ?? [])
-    .filter((target) => isPurgablePath(target, root))
-    .slice(0, MAX_PATHS_PER_ENTRY);
+  const safePaths = (paths ?? []).filter((target) => isPurgablePath(target, root));
   if ((paths?.length ?? 0) > 0 && safePaths.length === 0) {
     log.warn(`refusing to enqueue purge paths outside root: ${root}`);
     return;
   }
-  const entry: PurgeEntry = {
-    root,
-    paths: safePaths.length > 0 ? safePaths : undefined,
-    since: Date.now(),
-    attempts: 1,
-  };
-  const key = entryKey(entry);
-  const existing = (await readQueue()).find((candidate) => entryKey(candidate) === key);
-  if (existing) {
-    entry.since = existing.since;
-    entry.attempts = existing.attempts + 1;
+  // 超出单条目上限时**分片存**,不能直接 slice 掉尾部:`clearDevice()` 在最坏情况下会交来
+  // 「200 个消息文件 + session-list.json」共 201 条,尾部正是那份 session-list —— 丢掉它
+  // 等于消息删了、被撤销设备的元数据永久留在盘上还能被 hydrate 回侧边栏(review: codex P1)。
+  const chunks: Array<string[] | undefined> =
+    safePaths.length === 0
+      ? [undefined]
+      : Array.from({ length: Math.ceil(safePaths.length / MAX_PATHS_PER_ENTRY) }, (_, i) =>
+          safePaths.slice(i * MAX_PATHS_PER_ENTRY, (i + 1) * MAX_PATHS_PER_ENTRY),
+        );
+
+  let persistError: unknown = null;
+  for (const chunk of chunks) {
+    const entry: PurgeEntry = { root, paths: chunk, since: Date.now(), attempts: 1 };
+    const key = entryKey(entry);
+    const existing = (await readQueue()).find((candidate) => entryKey(candidate) === key);
+    if (existing) {
+      entry.since = existing.since;
+      entry.attempts = existing.attempts + 1;
+    }
+    // 内存兜底先落:即使接下来落盘失败,本进程后续的 drain 仍会重试。
+    memoryQueue.set(key, entry);
+    const entries = (await readQueue()).filter((candidate) => entryKey(candidate) !== key);
+    entries.push(entry);
+    try {
+      await writeQueue(entries);
+    } catch (err) {
+      // 一个分片写不下去不代表其余分片也写不下去:记下第一个错误,剩下的照常尝试,
+      // 全部处理完再抛(否则后面的分片连内存记录都没登记上)。
+      persistError = persistError ?? err;
+    }
   }
-  // 内存兜底先落:即使接下来落盘失败,本进程后续的 drain 仍会重试。
-  memoryQueue.set(key, entry);
-  const entries = (await readQueue()).filter((candidate) => entryKey(candidate) !== key);
-  entries.push(entry);
-  try {
-    await writeQueue(entries);
-  } catch (err) {
-    log.error('failed to persist mirror cache purge queue (kept in memory only)', err);
-    throw err;
+  if (persistError) {
+    log.error(
+      'failed to persist mirror cache purge queue (kept in memory only)',
+      persistError,
+    );
+    throw persistError;
   }
 }
 

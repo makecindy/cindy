@@ -409,7 +409,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
   async function writeSessionListLocked(
     devices: readonly unknown[],
     guard: WriteGuard,
-  ): Promise<'written' | 'removed' | 'skipped' | 'stale' | 'failed'> {
+  ): Promise<'written' | 'removed' | 'skipped' | 'stale' | 'failed' | 'purge-failed'> {
     const file = sessionListPath();
     if (isStale(guard)) return 'stale';
     for (const perDeviceLimit of SESSION_LIST_SHRINK_STEPS) {
@@ -420,7 +420,9 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
           await fsp.rm(file, { force: true });
           return 'removed';
         } catch {
-          return 'failed';
+          // 删除类失败与写入类失败要分开:前者意味着「本该消失的元数据还在盘上」,得进
+          // purge 队列;后者只是缓存没更新,重试删除反而会删掉正常数据。
+          return 'purge-failed';
         }
       }
       const payload: StoredSessionList = { version: 1, updatedAt: Date.now(), devices: normalized };
@@ -434,8 +436,14 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       if (isStale(guard)) return 'stale';
       if (!(await writeFileAtomic(file, serialized))) return 'failed';
       if (isStale(guard)) {
+        // 同 writeMessages:清理已经过去了,这笔补偿删除失败就等于「被撤销 / 上一个账号的
+        // 设备元数据留在盘上,而且没人知道」。返回 purge-failed 让调用方登记重试。
         lastWritten.delete(file);
-        await fsp.rm(file, { force: true }).catch(() => undefined);
+        try {
+          await fsp.rm(file, { force: true });
+        } catch {
+          return 'purge-failed';
+        }
         return 'stale';
       }
       rememberWritten(file, body);
@@ -508,8 +516,15 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         if (!(await writeFileAtomic(file, serialized))) return;
         if (epoch !== generation) {
           // 隐私清理期间落的盘:立刻收回,否则刚被清空的目录里会留下本该消失的聊天内容。
+          // 这笔补偿删除失败(Windows 文件锁 / 权限)时不能咽下去:清理侧已经枚举并删完了,
+          // 它不知道这个文件又冒出来,于是既没人重试、明文也留在了隐私边界之后
+          // (review: codex P1)。抛出去让 IPC 登记进 purge 队列。
           lastWritten.delete(file);
-          await fsp.rm(file, { force: true }).catch(() => undefined);
+          try {
+            await fsp.rm(file, { force: true });
+          } catch (err) {
+            throw new MirrorCachePurgeError(resolveRoot(), [file], err);
+          }
           return;
         }
         // 指纹只在真正落盘之后登记(写失败留指纹 → 同内容重试被跳过 → 缓存永久缺失)。
@@ -528,9 +543,14 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // 同 writeMessages:代际在请求发起时捕获(排队期间的清理必须能作废这笔)。
       const epoch = generation;
       // 与 writeMessages 同款:同一文件的写入串成链,保证「落盘 → 登记指纹」成对有序。
-      await serializeWrite(sessionListPath(), () =>
+      const outcome = await serializeWrite(sessionListPath(), () =>
         writeSessionListLocked(devices, { kind: 'write', epoch }),
       );
+      // 只有「删除失败」才抛(见 purge-failed):写入失败保留旧快照即可,不该让上层去
+      // 重试删除一份仍然有效的缓存。
+      if (outcome === 'purge-failed') {
+        throw new MirrorCachePurgeError(resolveRoot(), [sessionListPath()], null);
+      }
     },
 
     /**
@@ -590,7 +610,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       });
       // 列表快照重写失败(Windows 上被占用 / owner 目录只读)同样要能被重试 —— 否则消息文件
       // 删掉了、会话元数据还在盘上,下次冷启动照样把这台被撤销的设备画回侧边栏(review: codex P1)。
-      if (outcome === 'failed') stuck.push(listFile);
+      if (outcome === 'failed' || outcome === 'purge-failed') stuck.push(listFile);
 
       // 删不掉 / 数不出来的东西都是隐私问题:被撤销的对端正文会留在盘上直到本账号生命周期
       // 结束。抛出来让调用方登记重试,而不是把失败咽下去。

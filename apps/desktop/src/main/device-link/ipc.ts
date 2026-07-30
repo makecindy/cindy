@@ -733,11 +733,14 @@ export async function handleMirrorCacheGetSessionList(
 export async function handleMirrorCachePutSessionList(
   cache: MirrorCache,
   devices: unknown,
+  enqueueRetry: (root: string, paths?: readonly string[]) => Promise<void> = enqueuePurge,
 ): Promise<{ ok: true }> {
   if (!Array.isArray(devices)) throwIpcError('INVALID_PARAMS', 'devices must be an array');
-  // 先把每台设备的 sessions 数组各自截断,再对整批做结构 / 字节预算 ——
-  // 否则「设备数不多但某台带着几十万个 session」照样能撑爆(review: codex P1)。
-  const trimmed = devices.map((device) =>
+  // 先把外层数组截断,再逐台把 sessions 截断,最后对整批做结构 / 字节预算。
+  // 顺序很重要:`map` 之前必须先 slice —— 否则一次超长 devices 数组会让 main 同步遍历全量
+  // 并再分配一份等长的新数组(含对象展开),64 台的上限要等 boundedItems 才生效,那时内存
+  // 已经吃进去了。截断之后才是「设备数不多但某台带着几十万个 session」这一层(review: codex P1)。
+  const trimmed = devices.slice(0, MIRROR_CACHE_MAX_INBOUND_DEVICES).map((device) =>
     device && typeof device === 'object' && Array.isArray((device as { sessions?: unknown }).sessions)
       ? {
           ...(device as Record<string, unknown>),
@@ -748,9 +751,15 @@ export async function handleMirrorCachePutSessionList(
         }
       : device,
   );
-  await cache.writeSessionList(
-    boundedItems(trimmed, MIRROR_CACHE_MAX_INBOUND_DEVICES, 'session-list'),
-  );
+  try {
+    await cache.writeSessionList(
+      boundedItems(trimmed, MIRROR_CACHE_MAX_INBOUND_DEVICES, 'session-list'),
+    );
+  } catch (err) {
+    // 快照写空(最后一台设备离场)或清理期间的补偿删除失败时,盘上会留着本该消失的设备
+    // 元数据 —— 登记重试,而不是把失败咽下去。
+    await queuePurgeRetry(err, enqueueRetry, 'writeSessionList');
+  }
   return { ok: true };
 }
 

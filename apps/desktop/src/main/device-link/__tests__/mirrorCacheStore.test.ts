@@ -408,6 +408,38 @@ describe('session list', () => {
     // 缩容后每设备条数小于原始 100 条
     expect(devices[0].sessions.length).toBeLessThan(100);
   });
+
+  // review(codex P1):删除类失败必须能被登记重试 —— 快照写空(最后一台设备离场 / 设备被
+  // 撤销)时删不掉旧文件,盘上就留着本该消失的设备元数据,下次冷启动照样 hydrate 回侧边栏。
+  it.skipIf((process.getuid?.() ?? 0) === 0)(
+    '空快照删不掉文件 → 抛 MirrorCachePurgeError(写入类失败则不抛)',
+    async () => {
+      const cacheRoot = path.join(root, 'ro-cache');
+      const c = createMirrorCache(() => cacheRoot);
+      await c.writeSessionList([
+        { deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] },
+      ]);
+      const listFile = path.join(cacheRoot, __testing.sessionListFileName);
+      await fsp.chmod(cacheRoot, 0o500); // r-x:目录里的文件删不掉了
+      try {
+        await c.writeSessionList([]).then(
+          () => expect.unreachable('empty snapshot write should have rejected'),
+          (err: unknown) => {
+            expect(err).toBeInstanceOf(MirrorCachePurgeError);
+            expect((err as MirrorCachePurgeError).remaining).toEqual([listFile]);
+          },
+        );
+        // 纯写入失败(同一个只读目录)不该被当成"该重试删除":旧快照仍然有效。
+        await expect(
+          c.writeSessionList([
+            { deviceId: 'dev-2', deviceName: 'Mac2', sessions: [{ id: 's2', status: 'active' }] },
+          ]),
+        ).resolves.toBeUndefined();
+      } finally {
+        await fsp.chmod(cacheRoot, 0o700);
+      }
+    },
+  );
 });
 
 describe('clearDevice / clearAll', () => {

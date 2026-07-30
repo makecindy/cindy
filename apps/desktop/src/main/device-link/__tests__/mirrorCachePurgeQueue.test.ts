@@ -206,6 +206,53 @@ describe('并发 mutation', () => {
   });
 });
 
+describe('超量路径分片', () => {
+  // review(codex P1):clearDevice 最坏情况会交来「200 个消息文件 + session-list.json」共 201 条,
+  // 旧实现按 200 截断,丢掉的恰是最后追加的 session-list —— 消息删了、被撤销设备的元数据
+  // 永久留在盘上还能被 hydrate 回侧边栏。
+  it('路径数超单条目上限时拆成多条,一条都不丢(尾部的 session-list 也在)', async () => {
+    const root = path.join(userData, 'owners', 'owner-1', 'device-link-mirror-cache');
+    await fsp.mkdir(path.join(root, 'messages'), { recursive: true });
+    const files = Array.from({ length: 200 }, (_, i) => path.join(root, 'messages', `m${i}.json`));
+    const listFile = path.join(root, 'session-list.json');
+    for (const file of [...files, listFile]) await fsp.writeFile(file, '{}', 'utf8');
+
+    await enqueuePurge(root, [...files, listFile]);
+
+    const entries = await __testing.readQueue();
+    const queued = entries.flatMap((entry) => entry.paths ?? []);
+    expect(entries.length).toBe(2);
+    expect(queued).toHaveLength(201);
+    expect(queued).toContain(listFile);
+
+    // 消化后 201 个文件全都没了(不是"删了 200 个、留下元数据")。
+    const result = await drainPurgeQueue();
+    expect(result.pending).toBe(0);
+    expect(fs.existsSync(listFile)).toBe(false);
+    expect(fs.existsSync(files[0])).toBe(false);
+  });
+
+  it('条目数超上限时合并成整根条目(整根是超集,不静默丢路径)', async () => {
+    // 33 台设备各留一条文件级失败记录 → 超过 MAX_ENTRIES(32),合并成 1 条整根条目。
+    const root = path.join(userData, 'owners', 'owner-1', 'device-link-mirror-cache');
+    await fsp.mkdir(path.join(root, 'messages'), { recursive: true });
+    for (let i = 0; i < 33; i += 1) {
+      const file = path.join(root, 'messages', `dev-${i}.json`);
+      await fsp.writeFile(file, '{}', 'utf8');
+      await enqueuePurge(root, [file]);
+    }
+
+    const entries = await __testing.readQueue();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].paths).toBeUndefined();
+    expect(entries[0].root).toBe(root);
+
+    const result = await drainPurgeQueue();
+    expect(result.pending).toBe(0);
+    expect(fs.existsSync(root)).toBe(false);
+  });
+});
+
 describe('落盘失败', () => {
   // review(codex P1):唯一的持久重试记录写不下去却报成功 = 静默丢失。
   it('队列文件写不下去时 enqueuePurge 抛错,但条目留在内存里仍会被 drain 重试', async () => {

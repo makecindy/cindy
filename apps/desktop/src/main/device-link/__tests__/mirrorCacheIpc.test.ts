@@ -144,6 +144,27 @@ describe('payload 有界校验', () => {
     expect(cache.writeMessages.mock.calls[0]?.[2]).toEqual([]);
   });
 
+  // review(codex P1):`devices.map(...)` 必须在外层截断**之后**跑 —— 否则一次超长数组会让
+  // main 同步遍历全量并再分配一份等长新数组,64 台的上限要等 boundedItems 才生效。
+  // 用「上限之外的元素一旦被读 sessions 就抛」把顺序钉死。
+  it('外层设备数组先截断再 map:上限之外的元素完全不被触碰', async () => {
+    const devices: unknown[] = Array.from({ length: 64 }, (_, i) => ({
+      deviceId: `dev-${i}`,
+      deviceName: `d${i}`,
+      sessions: [],
+    }));
+    for (let i = 0; i < 500; i += 1) {
+      devices.push({
+        deviceId: `overflow-${i}`,
+        get sessions(): unknown[] {
+          throw new Error('must not touch devices beyond the cap');
+        },
+      });
+    }
+    await expect(handleMirrorCachePutSessionList(cache, devices)).resolves.toEqual({ ok: true });
+    expect((cache.writeSessionList.mock.calls[0]?.[0] as unknown[]).length).toBe(64);
+  });
+
   it('每台设备的 sessions 数组也被截断(设备数不多但某台带几十万会话)', async () => {
     const devices = [
       {
@@ -169,6 +190,18 @@ describe('清理失败登记重试', () => {
     await expect(
       handleMirrorCachePutMessages(cache, 'dev-1', 'sess-1', [], enqueue),
     ).resolves.toEqual({ ok: true });
+
+    expect(enqueue).toHaveBeenCalledWith('/data/owners/x/device-link-mirror-cache', stuck);
+  });
+
+  it('列表快照的删除类失败 → 登记进 purge 队列,IPC 仍返回 ok', async () => {
+    const stuck = ['/data/owners/x/device-link-mirror-cache/session-list.json'];
+    cache.writeSessionList.mockRejectedValueOnce(
+      new MirrorCachePurgeError('/data/owners/x/device-link-mirror-cache', stuck, null),
+    );
+    const enqueue = vi.fn(async () => undefined);
+
+    await expect(handleMirrorCachePutSessionList(cache, [], enqueue)).resolves.toEqual({ ok: true });
 
     expect(enqueue).toHaveBeenCalledWith('/data/owners/x/device-link-mirror-cache', stuck);
   });
