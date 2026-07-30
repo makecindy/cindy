@@ -10,7 +10,10 @@
  *  - acquire 时 signal 已中止 / 等待中被中止(用户打断 turn)→ 立即返回、不占槽;
  *  - 释放事件丢失(进程被杀、hook 没触发)→ TTL 兜底回收 + SessionEnd 清扫;
  *  - limit 每次准入判断现读,设置热更即刻生效;limit <= 0 = 不限,但在途命令
- *    仍登记 running,保证中途调低 limit 时计数不失真。
+ *    仍登记 running,保证中途调低 limit 时计数不失真;
+ *  - 队列非空期间跑一个轻量 repump 轮询(默认 1s,队列清空即停):设置 store 没有
+ *    变更事件,limit 被调高(或改为不限)后等待者最迟一个轮询周期内被唤醒,
+ *    不必干等下一次 acquire/release 或 120s fail-open。
  *
  * 释放语义: release 按 toolUseId 幂等,多事件重复释放(PostToolUse 与
  * PermissionDenied 先后到达等)只生效一次。
@@ -55,11 +58,14 @@ export interface CommandConcurrencyGateOptions {
   queueWaitMaxMs?: number;
   /** running 记录的 TTL,兜底回收释放事件丢失的槽。默认 30min。 */
   runningTtlMs?: number;
+  /** 队列非空期间的 repump 轮询间隔(响应 limit 热更调高)。默认 1s。 */
+  repumpIntervalMs?: number;
   now?: () => number;
 }
 
 const DEFAULT_QUEUE_WAIT_MAX_MS = 120_000;
 const DEFAULT_RUNNING_TTL_MS = 30 * 60_000;
+const DEFAULT_REPUMP_INTERVAL_MS = 1_000;
 
 interface RunningEntry {
   sessionId: string;
@@ -82,9 +88,28 @@ export function createCommandConcurrencyGate(
   const now = options.now ?? Date.now;
   const queueWaitMaxMs = options.queueWaitMaxMs ?? DEFAULT_QUEUE_WAIT_MAX_MS;
   const runningTtlMs = options.runningTtlMs ?? DEFAULT_RUNNING_TTL_MS;
+  const repumpIntervalMs = options.repumpIntervalMs ?? DEFAULT_REPUMP_INTERVAL_MS;
 
   const running = new Map<string, RunningEntry>();
   const queue: Waiter[] = [];
+  /**
+   * 队列非空期间的 repump 轮询:设置 store 没有变更事件,limit 被调高后必须有人
+   * 主动再跑 pump,否则等待者只能干等下一次 acquire/release 或 fail-open 超时
+   * (bot review P1)。队列清空即自停,空闲零成本。
+   */
+  let repumpTimer: ReturnType<typeof setInterval> | null = null;
+
+  function ensureRepumpTimer(): void {
+    if (repumpTimer !== null || queue.length === 0) return;
+    repumpTimer = setInterval(() => {
+      pump();
+      if (queue.length === 0 && repumpTimer !== null) {
+        clearInterval(repumpTimer);
+        repumpTimer = null;
+      }
+    }, repumpIntervalMs);
+    (repumpTimer as { unref?: () => void }).unref?.();
+  }
 
   function readLimit(): number {
     try {
@@ -203,6 +228,7 @@ export function createCommandConcurrencyGate(
         signal.addEventListener('abort', onAbort, { once: true });
       }
       queue.push(waiter);
+      ensureRepumpTimer();
       log.debug?.('command gate queued', {
         toolUseId,
         sessionId,
