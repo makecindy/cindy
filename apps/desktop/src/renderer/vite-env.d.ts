@@ -1593,6 +1593,7 @@ interface ElectronAPI {
   safeStorageStore: (key: string, value: string) => Promise<boolean>;
   safeStorageRead: (key: string) => Promise<string | null>;
   safeStorageRemove: (key: string) => Promise<{ success: boolean; error?: string }>;
+  safeStorageHas: (key: string) => Promise<boolean>;
   /** CC 网络调试日志开关 (admin experimental). main 端 mutate process.env.XDT_CC_DEBUG_NET。 */
   ccSetDebugNet: (enabled: boolean) => Promise<{ ok: true }>;
   /** 网关凭据自动下发(model-access,类型见 shared/modelAccess.ts)。 */

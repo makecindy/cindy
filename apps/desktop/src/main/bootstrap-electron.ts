@@ -3390,6 +3390,23 @@ const registerIpcHandlers = () => {
   );
 
   ipcMain.handle(
+    'safe-storage-has',
+    async (event: Electron.IpcMainInvokeEvent, key: string): Promise<boolean> => {
+      try {
+        assertTrustedAppRendererEvent(event);
+        if (!isValidRendererKey(key)) return false;
+        const filepath = resolveSafeStorageFilepath(key);
+        if (!filepath) return false;
+        if (!safeStorage.isEncryptionAvailable()) return false;
+        return fs.existsSync(filepath);
+      } catch (err) {
+        console.error('[safe-storage-has]', err);
+        return false;
+      }
+    },
+  );
+
+  ipcMain.handle(
     'safe-storage-remove',
     async (
       event: Electron.IpcMainInvokeEvent,

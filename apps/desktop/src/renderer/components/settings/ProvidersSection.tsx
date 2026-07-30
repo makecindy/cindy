@@ -540,8 +540,8 @@ function ImageApiKeyRow({ secretId }: { secretId: ProviderSecretId }) {
 
   useEffect(() => {
     let cancelled = false;
-    void window.electronAPI.safeStorageRead(storageKey).then((v) => {
-      if (!cancelled) setConfigured(v !== null && v.length > 0);
+    void window.electronAPI.safeStorageHas(storageKey).then((has) => {
+      if (!cancelled) setConfigured(has);
     });
     return () => {
       cancelled = true;
@@ -571,7 +571,11 @@ function ImageApiKeyRow({ secretId }: { secretId: ProviderSecretId }) {
   const handleClear = useCallback(async () => {
     setBusy(true);
     try {
-      await window.electronAPI.safeStorageRemove(storageKey);
+      const result = await window.electronAPI.safeStorageRemove(storageKey);
+      if (!result.success) {
+        toast.error(t('settings.providers.imagesKey.toast.clearFailed'));
+        return;
+      }
       toast.success(t('settings.providers.imagesKey.toast.cleared'));
       setConfigured(false);
     } catch {
@@ -886,7 +890,13 @@ function BuiltinApiKeyHeader({
     if (!confirmed) return;
     setBusy(true);
     try {
-      await window.electronAPI.safeStorageRemove(storageKey);
+      const result = await window.electronAPI.safeStorageRemove(storageKey);
+      if (!result.success) {
+        toast.error(
+          t('settings.providers.builtinApiKey.toast.disconnectFailed', { name: provider.name }),
+        );
+        return;
+      }
       toast.success(
         t('settings.providers.builtinApiKey.toast.disconnected', { name: provider.name }),
       );
@@ -1497,7 +1507,10 @@ export function ProvidersSection() {
       if (p.id === 'xd') continue;
       if (p.source === 'builtin') {
         // reconnect-required 视同占行:凭证失效 ≠ 用户断开,重连入口必须保留。
-        if (p.connected || (p.id === 'openai' && openaiReconnectRequired)) rows.push(p);
+        // OpenAI 图像 key 与 ChatGPT OAuth 两套凭证解耦:imageModels 已声明时,
+        // 即使未做 OAuth 登录也需占行以便配置 / 管理图像 key。
+        const openaiHasImageCap = p.id === 'openai' && (p.imageModels?.length ?? 0) > 0;
+        if (p.connected || (p.id === 'openai' && openaiReconnectRequired) || openaiHasImageCap) rows.push(p);
         continue;
       }
       if (
@@ -1701,7 +1714,7 @@ export function ProvidersSection() {
     if (p.id === 'anthropic') return <AnthropicHeader provider={p} onChanged={refetch} />;
     if (p.id === 'openai') return <OpenAiHeader provider={p} onChanged={refetch} />;
     if (p.id === 'xai') return <XaiHeader provider={p} onChanged={refetch} />;
-    if (p.source === 'builtin' && p.auth.method === 'apiKey') {
+    if (p.source === 'builtin' && p.auth.method === 'apiKey' && (PROVIDER_SECRET_IDS as readonly string[]).includes(p.id)) {
       return <BuiltinApiKeyHeader provider={p} onChanged={refetch} />;
     }
     if (p.source === 'builtin') return <GenericOAuthHeader provider={p} onChanged={refetch} />;
