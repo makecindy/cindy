@@ -90,6 +90,7 @@ export function ContactsSection() {
   const startSourceSession = useCallback(
     (promptKey: 'settings.contacts.guide.mailPrompt' | 'settings.contacts.guide.imPrompt') => {
       prefillContactsAiSessionDraft(t(promptKey));
+      setManagerOpen(false);
       navigate('/cc-agent/new');
     },
     [navigate, t],
@@ -186,7 +187,7 @@ export function ContactsSection() {
               type="button"
               onClick={() => startSourceSession('settings.contacts.guide.mailPrompt')}
               className={cn(
-                'flex h-[30px] shrink-0 items-center gap-1.5 rounded-lg px-3 text-13 font-medium transition-colors',
+                'flex h-[30px] shrink-0 items-center gap-1.5 rounded-full px-6 text-13 font-medium transition-colors',
                 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] hover:opacity-90',
               )}
             >
@@ -197,7 +198,7 @@ export function ContactsSection() {
               type="button"
               onClick={() => startSourceSession('settings.contacts.guide.imPrompt')}
               className={cn(
-                'flex h-[30px] shrink-0 items-center gap-1.5 rounded-lg px-3 text-13 transition-colors',
+                'flex h-[30px] shrink-0 items-center gap-1.5 rounded-full px-6 text-13 transition-colors',
                 'text-[var(--settings-section-title)] bg-[var(--settings-theme-card-bg)]',
                 'border border-[var(--settings-theme-card-border)]',
                 'hover:bg-[var(--settings-menu-bg-hover)]',
@@ -210,7 +211,7 @@ export function ContactsSection() {
               type="button"
               onClick={() => setImportOpen(true)}
               className={cn(
-                'flex h-[30px] shrink-0 items-center gap-1.5 rounded-lg px-3 text-13 transition-colors',
+                'flex h-[30px] shrink-0 items-center gap-1.5 rounded-full px-6 text-13 transition-colors',
                 'text-[var(--settings-section-title)] bg-[var(--settings-theme-card-bg)]',
                 'border border-[var(--settings-theme-card-border)]',
                 'hover:bg-[var(--settings-menu-bg-hover)]',
