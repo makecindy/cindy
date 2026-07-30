@@ -20,8 +20,13 @@ vi.mock('@/lib/messageService', () => ({
 }));
 vi.mock('@/lib/sessionService', () => ({
   get: vi.fn(async () => ({
-    agentKind: 'cc', remoteHostId: null, sdkSessionId: null, fastMode: false,
-    contextTokens: 0, contextWindow: 0, totalCostUsd: 0,
+    agentKind: 'cc',
+    remoteHostId: null,
+    sdkSessionId: null,
+    fastMode: false,
+    contextTokens: 0,
+    contextWindow: 0,
+    totalCostUsd: 0,
   })),
   update: vi.fn(async () => ({})),
   touchUserSend: vi.fn(async () => ({})),
@@ -63,8 +68,13 @@ const invoke = vi.fn(async (_deviceId: string, channel: string, args: unknown[])
   if (channel === 'local-db:messages:list') return remoteListPromise ?? remoteList;
   if (channel === 'local-db:sessions:get') {
     return {
-      agentKind: 'cc', remoteHostId: null, sdkSessionId: null, fastMode: false,
-      contextTokens: 0, contextWindow: 0, totalCostUsd: 0,
+      agentKind: 'cc',
+      remoteHostId: null,
+      sdkSessionId: null,
+      fastMode: false,
+      contextTokens: 0,
+      contextWindow: 0,
+      totalCostUsd: 0,
     };
   }
   if (channel === 'maker:input:get-projection' || channel === 'maker:input:clear-session') {
@@ -93,8 +103,12 @@ function emptyProjection(sessionId: string) {
 
 /** 盘上缓存的替身:key 为 `${deviceId}::${sessionId}`。 */
 let cachedMessages = new Map<string, Record<string, unknown>[]>();
+/** get 的返回形状:main 会把当前会话级作废计数一起带回来。 */
+type CachedRead = { messages: Record<string, unknown>[]; invalidation: number };
+let cachedInvalidation = 7;
 const getMessages = vi.fn(async (deviceId: string, sessionId: string) => ({
   messages: cachedMessages.get(`${deviceId}::${sessionId}`) ?? [],
+  invalidation: cachedInvalidation,
 }));
 // 显式签名(而非从实现推断):断言里要读 mock.calls[0][0/1],推断成空元组就取不到。
 const putMessages = vi.fn<
@@ -112,7 +126,8 @@ const putMessages = vi.fn<
  */
 function expectPut(deviceId: string, sessionId: string, rows: unknown[]): void {
   const hit = putMessages.mock.calls.some(
-    ([d, s2, r]) => d === deviceId && s2 === sessionId && JSON.stringify(r) === JSON.stringify(rows),
+    ([d, s2, r]) =>
+      d === deviceId && s2 === sessionId && JSON.stringify(r) === JSON.stringify(rows),
   );
   expect(hit).toBe(true);
 }
@@ -169,6 +184,7 @@ beforeEach(() => {
   remoteListPromise = null;
   cachedMessages = new Map();
   invoke.mockClear();
+  cachedInvalidation = 7;
   getMessages.mockClear();
   putMessages.mockClear();
   putSessionList.mockClear();
@@ -264,10 +280,10 @@ describe('冷缓存 hydrate', () => {
     registerRemote(s);
     remoteListPromise = new Promise<Message[]>(() => {}); // 首拉挂起(被控端离线)
     // 缓存读挂起,等我们把设备摘掉之后才 resolve。
-    let resolveRead: (value: { messages: Record<string, unknown>[] }) => void = () => {};
+    let resolveRead: (value: CachedRead) => void = () => {};
     getMessages.mockImplementationOnce(
       () =>
-        new Promise<{ messages: Record<string, unknown>[] }>((resolve) => {
+        new Promise<CachedRead>((resolve) => {
           resolveRead = resolve;
         }),
     );
@@ -275,7 +291,10 @@ describe('冷缓存 hydrate', () => {
     makerChatStore.ensureInitialMessages(s);
     await flush();
     remoteProjectsStore.removeDevice(DEVICE_ID);
-    resolveRead({ messages: cachedMessages.get(`${DEVICE_ID}::${s}`) ?? [] });
+    resolveRead({
+      messages: cachedMessages.get(`${DEVICE_ID}::${s}`) ?? [],
+      invalidation: cachedInvalidation,
+    });
     await flush(20);
 
     expect(makerChatStore.getSnapshot(s).messages).toHaveLength(0);
@@ -295,10 +314,12 @@ describe('冷缓存 hydrate', () => {
   it('rewind 重载后首拉失败 → 重挂会话仍不借那份过期缓存', async () => {
     const s = sid();
     cachedMessages.set(`${DEVICE_ID}::${s}`, [
-      dbMessage(s, 'pre-rewind', '被 rewind 截掉的消息', '2026-01-01T00:00:00.000Z') as unknown as Record<
-        string,
-        unknown
-      >,
+      dbMessage(
+        s,
+        'pre-rewind',
+        '被 rewind 截掉的消息',
+        '2026-01-01T00:00:00.000Z',
+      ) as unknown as Record<string, unknown>,
     ]);
     registerRemote(s);
     // 先正常加载一次(权威页有内容),再 rewind。
@@ -329,10 +350,10 @@ describe('冷缓存 hydrate', () => {
     ]);
     registerRemote(s);
     remoteListPromise = new Promise<Message[]>(() => {}); // 首拉挂起
-    let resolveRead: (value: { messages: Record<string, unknown>[] }) => void = () => {};
+    let resolveRead: (value: CachedRead) => void = () => {};
     getMessages.mockImplementationOnce(
       () =>
-        new Promise<{ messages: Record<string, unknown>[] }>((resolve) => {
+        new Promise<CachedRead>((resolve) => {
           resolveRead = resolve;
         }),
     );
@@ -342,7 +363,10 @@ describe('冷缓存 hydrate', () => {
     // rewind:清空切片 + 置抑制(缓存读仍在途)
     makerChatStore.reloadMessages(s);
     await flush();
-    resolveRead({ messages: cachedMessages.get(`${DEVICE_ID}::${s}`) ?? [] });
+    resolveRead({
+      messages: cachedMessages.get(`${DEVICE_ID}::${s}`) ?? [],
+      invalidation: cachedInvalidation,
+    });
     await flush(20);
 
     expect(makerChatStore.getSnapshot(s).messages).toHaveLength(0);
@@ -404,10 +428,12 @@ describe('冷缓存 hydrate', () => {
 
     // 2) bootstrap 注入来源;被控端离线(隧道必失败),盘上有上次看到的最近一页。
     cachedMessages.set(`${DEVICE_ID}::${s}`, [
-      dbMessage(s, 'cold', 'cached before restart', '2026-01-01T00:00:00.000Z') as unknown as Record<
-        string,
-        unknown
-      >,
+      dbMessage(
+        s,
+        'cold',
+        'cached before restart',
+        '2026-01-01T00:00:00.000Z',
+      ) as unknown as Record<string, unknown>,
     ]);
     registerRemote(s);
     remoteListPromise = Promise.reject(new Error('DEVICE_OFFLINE'));
@@ -444,9 +470,9 @@ describe('冷缓存 hydrate', () => {
     makerChatStore.ensureInitialMessages(s);
     await flush();
 
-    expect(
-      makerChatStore.getSnapshot(s).messages.some((m) => m.clientId === 'client-a1'),
-    ).toBe(true);
+    expect(makerChatStore.getSnapshot(s).messages.some((m) => m.clientId === 'client-a1')).toBe(
+      true,
+    );
   });
 });
 
@@ -462,6 +488,21 @@ describe('缓存写点纪律', () => {
     expect(putMessages).toHaveBeenCalledTimes(1);
     expect(putMessages.mock.calls[0]?.[0]).toBe(DEVICE_ID);
     expect(putMessages.mock.calls[0]?.[1]).toBe(s);
+  });
+
+  it('本地还没有令牌时,在请求发起时补读一次计数,并把它带给这次写入', async () => {
+    // review(codex P1):main 拒绝没带令牌的非空写入(缓存读与远端请求刻意并行,远端页可能
+    // 先到)。补读必须发生在**发起远端请求时**,拖到落盘前做就会读到清理之后的值。
+    const s = sid();
+    registerRemote(s);
+    cachedInvalidation = 11;
+    remoteList = [dbMessage(s, 'm1', 'x', '2026-01-01T00:00:00.000Z')];
+
+    await listMessagesFor(s);
+    await flush(20);
+
+    expect(putMessages).toHaveBeenCalledTimes(1);
+    expect(putMessages.mock.calls[0]?.[3]).toBe(11);
   });
 
   it('翻页(before / beforeTs)不写缓存:老窗口不是"最近一页"', async () => {
@@ -573,10 +614,10 @@ describe('在途 hydrate 遇上权威删除', () => {
     ]);
     registerRemote(s);
     remoteListPromise = new Promise<Message[]>(() => {}); // 首拉挂起
-    let resolveRead: (value: { messages: Record<string, unknown>[] }) => void = () => {};
+    let resolveRead: (value: CachedRead) => void = () => {};
     getMessages.mockImplementationOnce(
       () =>
-        new Promise<{ messages: Record<string, unknown>[] }>((resolve) => {
+        new Promise<CachedRead>((resolve) => {
           resolveRead = resolve;
         }),
     );
@@ -584,7 +625,10 @@ describe('在途 hydrate 遇上权威删除', () => {
     makerChatStore.ensureInitialMessages(s);
     await flush();
     makerChatStore.removeMessagesByClientIds(s, ['client-gone']);
-    resolveRead({ messages: cachedMessages.get(`${DEVICE_ID}::${s}`) ?? [] });
+    resolveRead({
+      messages: cachedMessages.get(`${DEVICE_ID}::${s}`) ?? [],
+      invalidation: cachedInvalidation,
+    });
     await flush(20);
 
     expect(makerChatStore.getSnapshot(s).messages).toHaveLength(0);

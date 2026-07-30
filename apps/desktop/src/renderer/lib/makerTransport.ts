@@ -19,7 +19,7 @@ import {
   remoteProjectsStore,
 } from '@/features/device-link/remoteProjectsStore';
 import {
-  knownMainInvalidationFor,
+  invalidationAtRequestStart,
   persistCachedMessages,
   sessionCacheInvalidationToken,
 } from '@/features/device-link/mirrorCacheClient';
@@ -212,15 +212,16 @@ export function listMessagesFor(
 ): Promise<Message[]> {
   const deviceId = getSessionDeviceId(sessionId);
   if (!deviceId) return messageService.list(sessionId, opts);
-  const promise = invokeRemote(deviceId, 'local-db:messages:list', [
-    sessionId,
-    opts,
-  ]) as Promise<Message[]>;
+  const promise = invokeRemote(deviceId, 'local-db:messages:list', [sessionId, opts]) as Promise<
+    Message[]
+  >;
   if (!opts?.before && opts?.beforeTs == null) {
     // 发起时的作废令牌:/clear、rewind、删消息都会自增它(见 clearCachedMessages)。
     const invalidationAtStart = sessionCacheInvalidationToken(sessionId);
     // 同时记下 main 侧的会话级作废计数(跨窗口 / 跨进程可见);落盘时交给 main 比对。
-    const mainInvalidationAtStart = knownMainInvalidationFor(sessionId);
+    // 还没有已知值时**在这里**(与远端请求同时)补读一次 —— main 拒绝没带令牌的非空写入,
+    // 而补读若拖到落盘前做,拿到的是清理之后的值,屏障就失效了(见 invalidationAtRequestStart)。
+    const mainInvalidationAtStart = invalidationAtRequestStart(deviceId, sessionId);
     void promise
       .then((rows) => {
         if (!Array.isArray(rows)) return;
@@ -364,11 +365,10 @@ export function deleteMessageFor(
 ): Promise<MessageDeletionResult> {
   const deviceId = getSessionDeviceId(sessionId);
   if (!deviceId) return window.electronAPI.maker.deleteMessage(sessionId, clientId);
-  return invokeRemote(
-    deviceId,
-    'maker:message:delete',
-    [sessionId, clientId],
-  ) as Promise<MessageDeletionResult>;
+  return invokeRemote(deviceId, 'maker:message:delete', [
+    sessionId,
+    clientId,
+  ]) as Promise<MessageDeletionResult>;
 }
 
 /** interrupted-turn-resume:中断提示「忽略」的显式确认(写一次 last_turn_ended_at),

@@ -63,19 +63,50 @@ export function persistCachedMessages(
   deviceId: string,
   sessionId: string,
   rows: readonly Message[],
-  expectedInvalidation?: number,
+  expectedInvalidation?: number | Promise<number | undefined>,
 ): void {
   const api = bridge();
   if (!api || !deviceId || !sessionId) return;
-  void api
-    .putMessages(
-      deviceId,
-      sessionId,
-      rows as unknown as Record<string, unknown>[],
-      expectedInvalidation,
-    )
-    .then((result) => rememberMainInvalidation(sessionId, result?.invalidation))
+  const dispatch = (expected: number | undefined): void => {
+    void api
+      .putMessages(deviceId, sessionId, rows as unknown as Record<string, unknown>[], expected)
+      .then((result) => rememberMainInvalidation(sessionId, result?.invalidation))
+      .catch((err: unknown) => log.debug('persist cached messages failed', err));
+  };
+  // 令牌已经在手 / 根本没有(空写)时**同步**派发 —— 清缓存这类"必须尽快到 main"的调用不该
+  // 因为多一个 await 被推到下一个微任务(顺序会被后面的写入抢到前面去)。
+  if (typeof expectedInvalidation === 'number' || expectedInvalidation === undefined) {
+    dispatch(expectedInvalidation);
+    return;
+  }
+  void expectedInvalidation
+    .then(dispatch)
     .catch((err: unknown) => log.debug('persist cached messages failed', err));
+}
+
+/**
+ * 取"发起这次远端请求时 main 侧的会话级作废计数",没有已知值就**当场补读一次**。
+ *
+ * main 侧现在拒绝没带令牌的非空写入(见 mirrorCacheStore 的同名说明):缓存读与远端请求
+ * 刻意并行,远端页先到时本地还没有令牌,那笔写没有任何会话级比对可做。补读必须在**发起
+ * 远端请求时**启动(而不是落盘前),否则读到的是清理**之后**的值,反而会让取自清理之前的
+ * 行通过比对 —— 时序是这条屏障的全部意义(review: codex P1)。
+ */
+export function invalidationAtRequestStart(
+  deviceId: string,
+  sessionId: string,
+): number | Promise<number | undefined> {
+  const known = knownMainInvalidation.get(sessionId);
+  if (typeof known === 'number') return known;
+  const api = bridge();
+  if (!api || !deviceId || !sessionId) return Promise.resolve(undefined);
+  return api
+    .getMessages(deviceId, sessionId)
+    .then((result) => {
+      rememberMainInvalidation(sessionId, result?.invalidation);
+      return typeof result?.invalidation === 'number' ? result.invalidation : undefined;
+    })
+    .catch(() => undefined);
 }
 
 /** main 侧会话级作废计数的本地已知值(写入侧在**取内容时**取一次,落盘时交给 main 比对)。 */

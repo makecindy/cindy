@@ -14,6 +14,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import type { MirrorCache } from '../mirrorCacheStore';
 import {
   createMirrorCache,
   MirrorCachePurgeError,
@@ -30,8 +31,34 @@ import {
 
 let root: string;
 
-function cache() {
-  return createMirrorCache(() => root);
+/**
+ * 测试用句柄:非空写没显式给令牌时,自动先读一次当前作废计数当令牌。
+ *
+ * main 现在**拒绝**没带令牌的非空写入(review: codex P1 —— 缓存读与远端请求刻意并行,
+ * 远端页先到时那笔写没有任何会话级比对可做)。renderer 侧对应
+ * `mirrorCacheClient.invalidationAtRequestStart`;这里等价地补上,好让其余用例继续专注
+ * 各自要守的行为。刻意**不给**令牌的用例直接用 `rawCache()`。
+ */
+function withAutoToken(store: MirrorCache): MirrorCache {
+  return {
+    ...store,
+    async writeMessages(deviceId, sessionId, messages, expected) {
+      const token =
+        expected ??
+        (messages.length > 0
+          ? (await store.readMessagesWithInvalidation(deviceId, sessionId)).invalidation
+          : undefined);
+      return store.writeMessages(deviceId, sessionId, messages, token);
+    },
+  };
+}
+
+function rawCache(rootFn: () => string = () => root) {
+  return createMirrorCache(rootFn);
+}
+
+function cache(rootFn: () => string = () => root) {
+  return withAutoToken(createMirrorCache(rootFn));
 }
 
 function messagesDir(): string {
@@ -494,7 +521,7 @@ describe('session list', () => {
     '空快照删不掉文件 → 抛 MirrorCachePurgeError(写入类失败则不抛)',
     async () => {
       const cacheRoot = path.join(root, 'ro-cache');
-      const c = createMirrorCache(() => cacheRoot);
+      const c = cache(() => cacheRoot);
       await c.writeSessionList([
         { deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] },
       ]);
@@ -606,7 +633,7 @@ describe('.tmp 残留(落位失败 / 进程被杀在 writeFile 与 rename 之间
     '落位失败且 .tmp 也删不掉 → 抛 MirrorCachePurgeError 并带上那个 .tmp',
     async () => {
       const cacheRoot = path.join(root, 'ro-messages');
-      const c = createMirrorCache(() => cacheRoot);
+      const c = cache(() => cacheRoot);
       // 先建好 messages/,再把它设成 r-x:tmp 建不出来 → 落位失败,rm 也失败。
       await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
       const dir = path.join(cacheRoot, __testing.messagesDirName);
@@ -663,7 +690,7 @@ describe('clearDevice / clearAll', () => {
     'clearAll 内容删不掉时抛 MirrorCachePurgeError,并带上仍存在的文件清单',
     async () => {
       const cacheRoot = path.join(root, 'locked-cache');
-      const c = createMirrorCache(() => cacheRoot);
+      const c = cache(() => cacheRoot);
       await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
       const dir = path.join(cacheRoot, __testing.messagesDirName);
       const stuck = path.join(dir, (await fsp.readdir(dir))[0]);
@@ -688,7 +715,7 @@ describe('clearDevice / clearAll', () => {
     'clearAll 会尽力删掉能删的内容(一个删不掉的文件不该让其它文件也留下)',
     async () => {
       const cacheRoot = path.join(root, 'partial-cache');
-      const c = createMirrorCache(() => cacheRoot);
+      const c = cache(() => cacheRoot);
       await c.writeSessionList([
         { deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] },
       ]);
@@ -747,7 +774,7 @@ describe('clearDevice / clearAll', () => {
       const cacheRoot = path.join(root, 'unreadable-cache');
       await fsp.mkdir(path.join(cacheRoot, 'messages'), { recursive: true });
       await fsp.writeFile(path.join(cacheRoot, 'messages', 'a.json'), '{}', 'utf8');
-      const c = createMirrorCache(() => cacheRoot);
+      const c = cache(() => cacheRoot);
       await fsp.chmod(cacheRoot, 0o000);
       try {
         await expect(c.clearAll()).rejects.toBeInstanceOf(MirrorCachePurgeError);
@@ -855,7 +882,7 @@ describe('clearDevice / clearAll', () => {
   // 被撤销的设备画回侧边栏。
   it.skipIf(!canTestUnwritableDir)('clearDevice 在列表快照写不下去时抛错并带上该文件', async () => {
     const cacheRoot = path.join(root, 'ro-list');
-    const c = createMirrorCache(() => cacheRoot);
+    const c = cache(() => cacheRoot);
     await c.writeSessionList([
       { deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] },
       { deviceId: 'dev-2', deviceName: 'PC', sessions: [{ id: 's2', status: 'active' }] },
@@ -1080,11 +1107,83 @@ describe('会话级作废计数(跨窗口 / 跨进程)', () => {
     }
   });
 
-  it('不传 expectedInvalidation 时保持旧行为(只受设备 / 账号级屏障约束)', async () => {
-    const c = cache();
-    await c.writeMessages('dev-1', 'sess-1', []); // 先作废一次
-    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+  it('没带令牌的非空写入被拒,但响应带回当前计数 → 下一笔带上就能落盘', async () => {
+    // review(codex P1):缓存读与远端请求刻意并行,远端页先到时 renderer 还没有令牌。放行
+    // 那笔写等于绕过唯一的会话级比对(设备 / 账号基线是写入开始时才采样的,已在清理之后)。
+    const c = rawCache();
+    const first = await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+    expect(await c.readMessages('dev-1', 'sess-1')).toEqual([]);
+    // 拒了不等于永久关掉这条缓存:返回值里带着当前计数,下一次对账带上它就能写进去。
+    expect(typeof first.invalidation).toBe('number');
+    await c.writeMessages(
+      'dev-1',
+      'sess-1',
+      [row('m1', '2026-01-01T00:00:00.000Z')],
+      first.invalidation,
+    );
     expect((await c.readMessages('dev-1', 'sess-1')).map((m) => m.id)).toEqual(['m1']);
+  });
+
+  it('空写(清缓存)不需要令牌 —— 删除是安全方向', async () => {
+    const c = rawCache();
+    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')], 0);
+    expect((await c.readMessages('dev-1', 'sess-1')).map((m) => m.id)).toEqual(['m1']);
+    await c.writeMessages('dev-1', 'sess-1', []);
+    expect(await c.readMessages('dev-1', 'sess-1')).toEqual([]);
+  });
+
+  it('读缓存也被设备级计数夹住:文件读期间整台设备被清 → 当未命中', async () => {
+    // review(codex P1):clearDevice 只动设备级与 `_any` 计数,会话级计数根本不变 ——
+    // 只夹会话级的话,"文件读拿到旧字节、随后设备被撤销"这一路会把已撤销设备的正文照样返回。
+    const c = cache();
+    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+    const deviceMark = path.join(
+      `${root}.control`,
+      'cleared',
+      `${__testing.safeSegment('dev-1')}-${__testing.shortHash('dev-1')}`,
+    );
+    const file = path.join(messagesDir(), messageFileName('dev-1', 'sess-1'));
+    const original = fsp.readFile;
+    const spy = vi.spyOn(fsp, 'readFile').mockImplementation((async (
+      target: unknown,
+      ...rest: unknown[]
+    ) => {
+      if (typeof target === 'string' && target === file) {
+        fs.mkdirSync(path.dirname(deviceMark), { recursive: true });
+        fs.writeFileSync(deviceMark, '9', 'utf8');
+      }
+      return (original as (...args: unknown[]) => Promise<unknown>)(target, ...rest);
+    }) as unknown as typeof fsp.readFile);
+    try {
+      expect((await c.readMessagesWithInvalidation('dev-1', 'sess-1')).messages).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('读列表快照被 `_any` 夹住:读期间有设备被清 → 返回空(不把离场设备画回侧边栏)', async () => {
+    const c = cache();
+    await c.writeSessionList([
+      { deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] },
+    ]);
+    const anyMark = path.join(`${root}.control`, 'cleared', '_any');
+    const listFile = path.join(root, 'session-list.json');
+    const original = fsp.readFile;
+    const spy = vi.spyOn(fsp, 'readFile').mockImplementation((async (
+      target: unknown,
+      ...rest: unknown[]
+    ) => {
+      if (typeof target === 'string' && target === listFile) {
+        fs.mkdirSync(path.dirname(anyMark), { recursive: true });
+        fs.writeFileSync(anyMark, '9', 'utf8');
+      }
+      return (original as (...args: unknown[]) => Promise<unknown>)(target, ...rest);
+    }) as unknown as typeof fsp.readFile);
+    try {
+      expect(await c.readSessionList()).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
@@ -1094,7 +1193,7 @@ describe('跨进程互斥(锁 + 清理完成标记)', () => {
   // 「清理完成时刻」标记(挡住"内容取自清理之前、提交发生在清理之后"那一种)。
   it('别的实例(另一个 store 句柄)在清某设备时,本实例不写该设备的缓存', async () => {
     const a = cache();
-    const b = createMirrorCache(() => root); // 同一个 owner 目录,模拟另一个进程
+    const b = cache(); // 同一个 owner 目录,模拟另一个进程
     await a.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
 
     await Promise.all([
@@ -1130,6 +1229,57 @@ describe('跨进程互斥(锁 + 清理完成标记)', () => {
     }
   });
 
+  it('清理意图先落盘:第一次删除动作发生时,屏障已经在盘上', async () => {
+    // review(codex P1):bump 原先排在两轮扫描与列表重写**之后**。清理途中进程退出 → 盘上既
+    // 没有屏障也没有 purge 记录,锁被接管后另一个实例那笔"取自清理之前"的写照样能提交。
+    const c = cache();
+    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+    const deviceMark = path.join(
+      `${root}.control`,
+      'cleared',
+      `${__testing.safeSegment('dev-1')}-${__testing.shortHash('dev-1')}`,
+    );
+    const before =
+      Number.parseInt(await fsp.readFile(deviceMark, 'utf8').catch(() => '0'), 10) || 0;
+
+    // 直接钉住**顺序**:第一次删除动作发生时,屏障必须已经在盘上(进程若死在这一刻,
+    // 另一个实例仍然挡得住"取自清理之前"的写入)。
+    const barrierAtFirstDelete: number[] = [];
+    const original = fsp.rm;
+    const spy = vi.spyOn(fsp, 'rm').mockImplementation((async (
+      target: unknown,
+      ...rest: unknown[]
+    ) => {
+      barrierAtFirstDelete.push(
+        Number.parseInt(fs.readFileSync(deviceMark, 'utf8').trim() || '0', 10) || 0,
+      );
+      return (original as (...args: unknown[]) => Promise<unknown>)(target, ...rest);
+    }) as unknown as typeof fsp.rm);
+    try {
+      await c.clearDevice('dev-1');
+    } finally {
+      spy.mockRestore();
+    }
+    expect(barrierAtFirstDelete.length).toBeGreaterThan(0);
+    expect(barrierAtFirstDelete[0]).toBeGreaterThan(before);
+  });
+
+  it('旧计数读不出来时自增必须失败(不能重置成 0 → 1)', async () => {
+    // review(codex P1):曾经读到合法值 1 的写入,会在"清理后又被写成 1"的计数上比对成功,
+    // 把刚删掉的正文重建出来。既然这是唯一的持久屏障,读不出旧值就让清理报失败(登记重试)。
+    const c = cache();
+    const markDir = path.join(`${root}.control`, 'cleared');
+    await fsp.mkdir(markDir, { recursive: true });
+    const deviceMark = path.join(
+      markDir,
+      `${__testing.safeSegment('dev-1')}-${__testing.shortHash('dev-1')}`,
+    );
+    await fsp.writeFile(deviceMark, 'corrupted', 'utf8');
+    await expect(c.clearDevice('dev-1')).rejects.toBeInstanceOf(MirrorCachePurgeError);
+    // 没有被重置成 1(不可比对的屏障不许被"修复"成一个可能与旧采样相等的值)。
+    expect(await fsp.readFile(deviceMark, 'utf8')).toBe('corrupted');
+  });
+
   it('清理结束后写入恢复正常(计数只挡"清理之前取到的内容")', async () => {
     const c = cache();
     await c.clearDevice('dev-1');
@@ -1139,7 +1289,7 @@ describe('跨进程互斥(锁 + 清理完成标记)', () => {
 
   it('清某设备期间,另一台设备的写入照常落盘', async () => {
     const a = cache();
-    const b = createMirrorCache(() => root);
+    const b = cache();
     await Promise.all([
       a.clearDevice('dev-1'),
       b.writeMessages('dev-2', 'sess-9', [row('m9', '2026-01-01T00:00:00.000Z')]),
@@ -1151,7 +1301,7 @@ describe('跨进程互斥(锁 + 清理完成标记)', () => {
   // "除我之外的全部",后写的那次会把对方刚移除的设备恢复回来 —— 锁把这段串行化了。
   it('两个实例并发清不同设备 → 两台都从列表快照里消失', async () => {
     const a = cache();
-    const b = createMirrorCache(() => root);
+    const b = cache();
     await a.writeSessionList([
       { deviceId: 'dev-1', deviceName: 'A', sessions: [{ id: 's1', status: 'active' }] },
       { deviceId: 'dev-2', deviceName: 'B', sessions: [{ id: 's2', status: 'active' }] },
@@ -1173,7 +1323,7 @@ describe('clearAll 期间的写入', () => {
   // 重建出来 —— 而 owner 要等 teardown 完成才切换,那份明文就越过了账号边界。
   it('clearAll 进行中发起的写入不会把缓存目录重建出来', async () => {
     const cacheRoot = path.join(root, 'purging');
-    const c = createMirrorCache(() => cacheRoot);
+    const c = cache(() => cacheRoot);
     await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
 
     // 与 clearAll 同时发起(clearAll 的 await 之间正是那个窗口)。

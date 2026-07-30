@@ -525,10 +525,7 @@ import {
 } from '../shared/windowBehavior.js';
 import { getDesktopCommandRegistry, registerBuiltinDesktopCommands } from './commands/index.js';
 import { registerRemoteCmdIpc } from './commands/remoteCmdIpc.js';
-import {
-  resolvePreferredSystemLocale,
-  resolveSystemLocale,
-} from '../shared/locale.js';
+import { resolvePreferredSystemLocale, resolveSystemLocale } from '../shared/locale.js';
 import {
   IM_DEFAULT_SETTINGS,
   isImDefaultAgentKind,
@@ -1197,10 +1194,7 @@ protocol.registerSchemesAsPrivileged([
 
 import started from 'electron-squirrel-startup';
 
-import {
-  APPLICATION_MENU_LABELS,
-  type ApplicationMenuLocale,
-} from './applicationMenuLabels.js';
+import { APPLICATION_MENU_LABELS, type ApplicationMenuLocale } from './applicationMenuLabels.js';
 
 if (started) {
   app.quit();
@@ -4366,8 +4360,7 @@ const registerIpcHandlers = () => {
       // final component was swapped to a symlink in the realpath→open race it
       // fails (ELOOP) instead of following into a denied file. Falls back to 0
       // where the platform lacks the flag (Windows), matching saveChatAttachment.
-      const noFollow =
-        typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
+      const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
       return readFileBytesForPreview(params, {
         isPathAllowed: (p) => isPathAllowedAgainst(p, getSensitiveMediaBlocklist()),
         realpath: (p) => fs.promises.realpath(p),
@@ -5537,11 +5530,7 @@ app.on('ready', async () => {
       // and unable to claim the owner from its first p2p message.
       startAccountIntegrationsAfterOwnerDbReady(userId, {
         isOwnerCurrent: (ownerId) =>
-          isLocalDbOwnerCurrent(
-            authManager.getAuthState(),
-            ownerId,
-            isAppSessionBoundaryPending(),
-          ),
+          isLocalDbOwnerCurrent(authManager.getAuthState(), ownerId, isAppSessionBoundaryPending()),
         startHookControlAccount,
         startImConnection,
         log: dbClientLog,
@@ -5717,21 +5706,20 @@ app.on('ready', async () => {
   let updateRelaunchRemoteBusy = false;
   initDeviceLinkService({
     onUpdateRelaunchBusyChanged: (busy) => {
-      const transition = decideUpdateRelaunchBusyTransition(
-        updateRelaunchRemoteBusy,
-        busy,
-      );
+      const transition = decideUpdateRelaunchBusyTransition(updateRelaunchRemoteBusy, busy);
       updateRelaunchRemoteBusy = transition.nextBusy;
       if (transition.shouldNotify) notifyUpdateAutoRelaunchBusyStateChanged();
     },
   });
-  registerDeviceLinkIpc();
   // 上次登出时没删干净的远程会话镜像缓存(文件锁 / 权限占用),开机再清一次。
   // 不阻塞启动关键路径,失败留在队列里等下一次(见 mirrorCachePurgeQueue)。
   // 但**缓存读**要等它落定:否则 renderer 的 hydrate 可能读到正在被删的那份明文,
   // 而 drain 完成也收不回已经画到屏上的行(review: codex P1)。
+  // 顺序有讲究:drain 与 gate 必须排在 registerDeviceLinkIpc() **之前** —— handler 一注册
+  // renderer 就可能发起缓存读,而 gate 默认是"已放行"(review: copilot)。
   const startupPurgeDrain = drainPurgeQueue();
   setMirrorCacheReadGate(startupPurgeDrain);
+  registerDeviceLinkIpc();
   void startupPurgeDrain
     .then(({ purged, pending }) => {
       if (purged > 0 || pending > 0) {

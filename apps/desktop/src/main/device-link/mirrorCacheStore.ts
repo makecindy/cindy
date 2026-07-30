@@ -702,7 +702,14 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
   async function bumpClearedCounter(root: string, key: string): Promise<void> {
     const file = clearedMarkPath(root, key);
     const read = await readClearCounter(root, key);
-    const current = typeof read === 'number' ? read : 0;
+    // 旧值读不出来时**不能**当 0 重来:曾经读到合法值 1 的写入,会在"清理后又被写成 1"的计数上
+    // 比对成功,把刚删掉的正文重建出来。既然这是唯一的持久屏障,读不出旧值就让自增失败 ——
+    // 调用方会把这次清理登记成"没清完"(purge 队列),而 purge 记录挂着期间缓存读一律被挡掉,
+    // 于是失效方向是"缓存关掉",不是"旧明文回来"(review: codex P1)。
+    if (typeof read !== 'number') {
+      throw new Error(`mirror cache: clear counter unreadable (${read}) for ${key}`);
+    }
+    const current = read;
     await ensureDir(path.dirname(file));
     // 原子落位:直接 writeFile 会有"截断了、新内容还没写完"的窗口,那一刻读出来是空串 →
     // `'unknown'`,而 unknown 现在是 fail-closed,损坏一次就会把这个 key 的缓存写入长期挡住。
@@ -726,6 +733,15 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
    * `'unknown'`(EMFILE / EBUSY / 内容损坏)都属于"这是唯一的跨进程屏障,而我读不出来":
    * 放行意味着可能把清理之前的正文重建出来,拒写只是少一次首屏加速(review: codex P1)。
    */
+  function readCounters(root: string, keys: readonly string[]): Promise<ClearCounter[]> {
+    return Promise.all(keys.map((key) => readClearCounter(root, key)));
+  }
+
+  /** 读路径的"夹住"判定:每个计数都必须可比对且前后相同,否则这次读当未命中。 */
+  function countersHeld(before: readonly ClearCounter[], after: readonly ClearCounter[]): boolean {
+    return before.every((value, i) => typeof value === 'number' && value === after[i]);
+  }
+
   async function clearedSince(root: string, key: string, before: ClearCounter): Promise<boolean> {
     if (typeof before !== 'number') return true;
     const now = await readClearCounter(root, key);
@@ -796,6 +812,20 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
 
       const stuck: string[] = [];
 
+      // 作废意图必须**先落盘再删数据**:清理跑到一半进程被杀(或 owner 目录中途变只读)时,
+      // 若计数还没自增,盘上既没有屏障也没有 purge 记录 —— 锁被下一个实例接管后,它那笔"取自
+      // 清理之前"的写入照样能提交,把被撤销设备的正文重建出来,而没扫到的文件本来就还留着
+      // (review: codex P1)。所以这里先 bump 一次(挡住"内容取自清理之前"的写入),
+      // 收尾再 bump 一次(挡住"内容取自清理进行中"的写入),两次都失败即视为没清完。
+      let barrierPersisted = true;
+      try {
+        await bumpClearCounters(rootAtStart, id);
+      } catch (err) {
+        barrierPersisted = false;
+        log.error(`mirror cache: failed to persist clear intent for ${id.slice(0, 8)}`, err);
+        stuck.push(rootAtStart);
+      }
+
       /** 扫一轮该设备的消息文件(含 .tmp 残留)。返回删不掉的路径。 */
       const sweepMessages = async (): Promise<string[]> => {
         const left: string[] = [];
@@ -865,14 +895,14 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // 再扫一遍把这种"扫完才冒出来"的文件收掉(review: codex P1)。
       stuck.push(...(await sweepMessages()));
 
-      // 自增作废计数:发起时读到旧值的写入(可能握着清理前的内容)提交时会被挡掉。
-      // 落不下去就不能报"清干净了" —— 把**整个缓存根**计入待重试:purge 队列随后会把它整棵
-      // 删掉(超集、纯缓存,安全),这比"以为清完了、别人却把明文写回来"好得多。
+      // 收尾再自增一次:挡住"内容取自清理**进行中**"的写入(它入口读到的已经是第一次 bump
+      // 之后的值)。落不下去就不能报"清干净了" —— 把**整个缓存根**计入待重试:purge 队列随后
+      // 会把它整棵删掉(超集、纯缓存,安全),这比"以为清完了、别人却把明文写回来"好得多。
       try {
         await bumpClearCounters(rootAtStart, id);
       } catch (err) {
         log.error(`mirror cache: failed to persist clear barrier for ${id.slice(0, 8)}`, err);
-        stuck.push(rootAtStart);
+        if (barrierPersisted) stuck.push(rootAtStart);
       }
       // 本进程内再自增一次代际:清理**结束**时作废所有更早发起的写入。时间戳标记是跨进程
       // 手段,毫秒精度下"清理在同一毫秒内跑完"时它挡不住(测试与小目录下常见);代际比对
@@ -900,13 +930,18 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // 文件读可能返回清理**之前**的行、计数读却已经是新值(或反之),这一对被原样返回后,发起
       // 清理的那个 renderer 之外的窗口会把这些已被删除的行 hydrate 出来并在对端离线期间一直留着
       // (review: codex P1)。前后不一致 / 任一次读不出来(denied / unknown 不可比对)都当未命中。
-      const before = await readClearCounter(root, key);
+      //
+      // 夹住的不只是会话级计数:`clearDevice` 只动设备级与 `_any`、`clearAll` 只动 `_account`,
+      // 会话级计数在这两种清理里根本不变 —— 只比它的话,"文件读拿到旧字节、随后整台设备被撤销"
+      // 这一路会把已撤销设备的正文照样返回(review: codex P1)。
+      const keys = [key, deviceClearKey(deviceId), CLEARED_ACCOUNT];
+      const before = await readCounters(root, keys);
       const messages = await this.readMessages(deviceId, sessionId);
-      const after = await readClearCounter(root, key);
-      if (typeof before !== 'number' || typeof after !== 'number' || before !== after) {
-        return { messages: [], invalidation: numericCounter(after) };
+      const after = await readCounters(root, keys);
+      if (!countersHeld(before, after)) {
+        return { messages: [], invalidation: numericCounter(after[0]) };
       }
-      return { messages, invalidation: after };
+      return { messages, invalidation: numericCounter(after[0]) };
     },
 
     async readMessages(deviceId, sessionId) {
@@ -946,8 +981,13 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
           if (normalized.length === 0) {
             // 先落"作废意图"再删数据:计数自增在删除**之前**,于是即使本进程在删除中途崩掉,
             // 屏障也已经在盘上 —— 另一个实例(哪怕它的页取自作废之前)提交时会被挡掉
-            // (review: codex P1)。自增失败就不删:宁可缓存暂留,也不要"删了却没有屏障"。
-            await bumpClearedCounter(rootAtStart, sessionKey);
+            // (review: codex P1)。自增失败就不删:宁可缓存暂留,也不要"删了却没有屏障" ——
+            // 但"这页必须消失"的意图要能被重试,所以包成 MirrorCachePurgeError 交给 purge 队列。
+            try {
+              await bumpClearedCounter(rootAtStart, sessionKey);
+            } catch (err) {
+              throw new MirrorCachePurgeError(rootAtStart, [file], err);
+            }
             const invalidation = numericCounter(await readClearCounter(rootAtStart, sessionKey));
             await serializeWrite(file, async () => {
               lastWritten.delete(file);
@@ -1004,11 +1044,16 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
             if (isStale(writeGuard)) return;
             // 调用方取到这批内容时看到的会话级计数与此刻不一致 → 期间权威侧作废过(可能是
             // **另一个窗口 / 另一个进程**干的),手里这批属于作废之前,丢弃(review: codex P1)。
-            if (expectedInvalidation !== undefined) {
-              const now = await readClearCounter(rootAtStart, sessionKey);
-              // 读不出来 / 对不上都拒写(不可比对即 fail-closed,见 clearedSince)。
-              if (typeof now !== 'number' || now !== expectedInvalidation) return;
-            }
+            //
+            // **没带令牌的非空写入一律拒掉**:缓存读与远端请求是刻意并行的,于是远端页可能在
+            // 缓存读回来之前就到达,此时 renderer 拿不到令牌(undefined)。放行的话,期间另一个
+            // 窗口 rewind / 清会话,这笔取自清理之前的页就在没有任何会话级比对的情况下写回去了
+            // (设备 / 账号基线是这笔写入**开始时**才采样的,已经在清理之后)(review: codex P1)。
+            // 拒掉不会永久关掉这条缓存:下面照样把当前计数返回给调用方,它下一次对账就带上令牌。
+            // 空写(= 清掉这条缓存)不受此限 —— 它本身是安全方向,且由上面的分支处理。
+            const now = await readClearCounter(rootAtStart, sessionKey);
+            // 读不出来 / 对不上都拒写(不可比对即 fail-closed,见 clearedSince)。
+            if (typeof now !== 'number' || now !== expectedInvalidation) return;
             // 清理在我取到内容之后完成过 → 我手里的是被清掉的旧正文,丢弃。
             if (await clearedSince(rootAtStart, deviceClearKey(deviceId), clearCounterAtStart))
               return;
@@ -1064,7 +1109,15 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     },
 
     async readSessionList() {
+      // 同 readMessagesWithInvalidation:用 `_any`(任一设备被清)与 `_account`(登出 / 切账号)
+      // 夹住这次读 —— 否则"读到旧快照字节 → 期间设备被撤销 / 账号被清 → 照样返回"会把已经离场的
+      // 设备连同会话标题画回侧边栏(review: codex P1)。
+      const root = resolveRoot();
+      const keys = [CLEARED_ANY, CLEARED_ACCOUNT];
+      const before = await readCounters(root, keys);
       const parsed = await readJson(sessionListPath());
+      const after = await readCounters(root, keys);
+      if (!countersHeld(before, after)) return [];
       const devices = isRecord(parsed) && Array.isArray(parsed.devices) ? parsed.devices : [];
       return normalizeDeviceSessions(devices);
     },
