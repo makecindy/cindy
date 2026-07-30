@@ -200,7 +200,9 @@ export function parsePosixAgentProcesses(
 }
 
 async function scanPosix(): Promise<AgentProcessRow[]> {
-  const { stdout } = await execFileAsync('ps', ['-A', '-o', 'pid=,ppid=,command='], {
+  // -ww: macOS ps 默认按显示宽度截断 command 列,长路径(长用户名/重定向
+  // userData)会把 /claude-code/ marker 截掉导致扫描静默漏认;重复 -w 取消截断。
+  const { stdout } = await execFileAsync('ps', ['-Aww', '-o', 'pid=,ppid=,command='], {
     encoding: 'utf8',
     timeout: 5_000,
     maxBuffer: 8 * 1024 * 1024,
