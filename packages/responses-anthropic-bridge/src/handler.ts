@@ -13,10 +13,15 @@ import {
 } from './types.js';
 
 const MAX_ERROR_BODY_BYTES = 16 * 1024;
-const MAX_STREAM_BUFFER_CHARS = 1024 * 1024;
+const MAX_STREAM_BUFFER_BYTES = 1024 * 1024;
+const UTF8_ENCODER = new TextEncoder();
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function utf8ByteLength(value: string): number {
+  return UTF8_ENCODER.encode(value).byteLength;
 }
 
 function trimTrailingSlashes(value: string): string {
@@ -392,7 +397,7 @@ export function createResponsesAnthropicHandler(
         if (contentType.includes('application/json')) {
           const body = await readBodyWithLimit(
             upstream,
-            MAX_STREAM_BUFFER_CHARS,
+            MAX_STREAM_BUFFER_BYTES,
             'upstream JSON response exceeds 1 MiB',
           );
           const json = JSON.parse(body) as unknown;
@@ -404,7 +409,7 @@ export function createResponsesAnthropicHandler(
           // while sniffing streaming responses.
           const body = await readBodyWithLimit(
             upstream,
-            MAX_STREAM_BUFFER_CHARS,
+            MAX_STREAM_BUFFER_BYTES,
             'upstream response exceeds 1 MiB',
           );
           const trimmed = body.trimStart();
@@ -428,14 +433,14 @@ export function createResponsesAnthropicHandler(
             let boundary: number;
             while ((boundary = buffer.search(/\r?\n\r?\n/)) >= 0) {
               const block = buffer.slice(0, boundary);
-              if (block.length > MAX_STREAM_BUFFER_CHARS) {
+              if (utf8ByteLength(block) > MAX_STREAM_BUFFER_BYTES) {
                 throw new Error('upstream SSE frame exceeds 1 MiB');
               }
               const separator = buffer.slice(boundary).startsWith('\r\n\r\n') ? 4 : 2;
               buffer = buffer.slice(boundary + separator);
               consume(block);
             }
-            if (buffer.length > MAX_STREAM_BUFFER_CHARS) {
+            if (utf8ByteLength(buffer) > MAX_STREAM_BUFFER_BYTES) {
               throw new Error('upstream SSE frame exceeds 1 MiB');
             }
             if (buffer.trim()) consume(buffer);
@@ -445,6 +450,7 @@ export function createResponsesAnthropicHandler(
           const reader = upstream.body.getReader();
           const decoder = new TextDecoder();
           let buffer = '';
+          let receivedBytes = 0;
           let terminal = false;
           let bodyKind: 'unknown' | 'json' | 'sse' = 'unknown';
           const consume = (block: string): void => {
@@ -458,47 +464,59 @@ export function createResponsesAnthropicHandler(
             if (isObject(event) && event.type === 'message_stop') terminal = true;
             for (const output of translator.push(event)) emit(output);
           };
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            if (bodyKind === 'unknown') {
-              const trimmed = buffer.trimStart();
-              if (trimmed.startsWith('{') || trimmed.startsWith('[')) bodyKind = 'json';
-              else if (trimmed.length > 0) bodyKind = 'sse';
-            }
-            if (bodyKind === 'json') {
-              if (buffer.length > MAX_STREAM_BUFFER_CHARS) {
-                throw new Error('upstream JSON response exceeds 1 MiB');
+          try {
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              receivedBytes += value.byteLength;
+              buffer += decoder.decode(value, { stream: true });
+              if (bodyKind === 'unknown') {
+                const trimmed = buffer.trimStart();
+                if (trimmed.startsWith('{') || trimmed.startsWith('[')) bodyKind = 'json';
+                else if (trimmed.length > 0) bodyKind = 'sse';
               }
-              continue;
-            }
-            let boundary: number;
-            while ((boundary = buffer.search(/\r?\n\r?\n/)) >= 0) {
-              const block = buffer.slice(0, boundary);
-              if (block.length > MAX_STREAM_BUFFER_CHARS) {
+              if (bodyKind === 'json') {
+                if (receivedBytes > MAX_STREAM_BUFFER_BYTES) {
+                  throw new Error('upstream JSON response exceeds 1 MiB');
+                }
+                continue;
+              }
+              let boundary: number;
+              while ((boundary = buffer.search(/\r?\n\r?\n/)) >= 0) {
+                const block = buffer.slice(0, boundary);
+                if (utf8ByteLength(block) > MAX_STREAM_BUFFER_BYTES) {
+                  throw new Error('upstream SSE frame exceeds 1 MiB');
+                }
+                const separator = buffer.slice(boundary).startsWith('\r\n\r\n') ? 4 : 2;
+                buffer = buffer.slice(boundary + separator);
+                consume(block);
+              }
+              if (utf8ByteLength(buffer) > MAX_STREAM_BUFFER_BYTES) {
                 throw new Error('upstream SSE frame exceeds 1 MiB');
               }
-              const separator = buffer.slice(boundary).startsWith('\r\n\r\n') ? 4 : 2;
-              buffer = buffer.slice(boundary + separator);
-              consume(block);
             }
-            if (buffer.length > MAX_STREAM_BUFFER_CHARS) throw new Error('upstream SSE frame exceeds 1 MiB');
+            buffer += decoder.decode();
+          } catch (error) {
+            try {
+              await reader.cancel();
+            } catch {
+              // Preserve the original parse/limit failure.
+            }
+            throw error;
           }
-          buffer += decoder.decode();
           if (bodyKind === 'unknown') {
             const trimmed = buffer.trimStart();
             if (trimmed.startsWith('{') || trimmed.startsWith('[')) bodyKind = 'json';
             else if (trimmed.length > 0) bodyKind = 'sse';
           }
           if (bodyKind === 'json') {
-            if (buffer.length > MAX_STREAM_BUFFER_CHARS) {
+            if (receivedBytes > MAX_STREAM_BUFFER_BYTES) {
               throw new Error('upstream JSON response exceeds 1 MiB');
             }
             const json = JSON.parse(buffer) as unknown;
             for (const output of translator.pushJson(json)) emit(output);
           } else {
-            if (buffer.length > MAX_STREAM_BUFFER_CHARS) {
+            if (utf8ByteLength(buffer) > MAX_STREAM_BUFFER_BYTES) {
               throw new Error('upstream SSE frame exceeds 1 MiB');
             }
             if (buffer.trim()) consume(buffer);

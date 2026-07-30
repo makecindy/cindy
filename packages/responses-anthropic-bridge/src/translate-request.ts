@@ -920,6 +920,18 @@ function stopSequences(value: ResponsesRequest['stop']): string[] | undefined {
   return nonEmpty.length > 0 ? nonEmpty : undefined;
 }
 
+function assertSupportedResponseFormat(raw: ResponsesRequest): void {
+  const formats: Array<[string, unknown]> = [
+    ['response_format', raw.response_format],
+    ['text.format', isObject(raw.text) ? raw.text.format : undefined],
+  ];
+  for (const [field, value] of formats) {
+    if (value === undefined) continue;
+    if (isObject(value) && value.type === 'text') continue;
+    throw new UnsupportedResponsesFeatureError(field);
+  }
+}
+
 function applyPromptCaching(
   body: AnthropicRequest,
   enabled: boolean,
@@ -983,6 +995,7 @@ export function translateResponsesRequest(
   if (!isObject(raw) || typeof raw.model !== 'string' || raw.model.length === 0) {
     throw new UnsupportedResponsesFeatureError('model');
   }
+  assertSupportedResponseFormat(raw);
   const model = options.model ?? raw.model;
   const systemParts: string[] = [];
   const instructions = instructionsText(raw.instructions);

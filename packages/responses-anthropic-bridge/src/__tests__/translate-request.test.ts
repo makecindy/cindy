@@ -56,6 +56,32 @@ describe('Responses → Anthropic request translation', () => {
     })).toThrowError('instructions[0].input_image');
   });
 
+  it('rejects structured-output constraints instead of silently dropping them', () => {
+    expect(() => translateResponsesRequest({
+      model: 'claude',
+      input: 'hello',
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'answer',
+          schema: { type: 'object', properties: { value: { type: 'string' } } },
+        },
+      },
+    })).toThrowError('text.format');
+
+    expect(() => translateResponsesRequest({
+      model: 'claude',
+      input: 'hello',
+      response_format: { type: 'json_object' },
+    })).toThrowError('response_format');
+
+    expect(translateResponsesRequest({
+      model: 'claude',
+      input: 'hello',
+      text: { format: { type: 'text' } },
+    }).request.messages).toHaveLength(1);
+  });
+
   it('flattens namespace tools and restores their mapping in the context', () => {
     const result = translateResponsesRequest({
       model: 'claude',

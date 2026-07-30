@@ -319,6 +319,32 @@ describe('createResponsesAnthropicHandler', () => {
     expect(res.chunks.join('')).toContain('upstream response exceeds 1 MiB');
   });
 
+  it('counts UTF-8 bytes and cancels an oversized unmarked streaming frame', async () => {
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('你'.repeat(350_000)));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const fetchImpl = vi.fn(async () => new Response(stream, { status: 200 })) as typeof fetch;
+    const handler = createResponsesAnthropicHandler({
+      upstreamBase: 'https://provider.example',
+      buildHeaders: async () => ({}),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({
+      parsedBody: { model: 'claude', input: 'hi' },
+      ctx,
+      res: res as never,
+    });
+    expect(cancelled).toBe(true);
+    expect(res.chunks.join('')).toContain('event: response.failed');
+    expect(res.chunks.join('')).toContain('upstream SSE frame exceeds 1 MiB');
+  });
+
   it('retries one OAuth request after a provider 401 with refreshed headers', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response('expired', { status: 401 }))
