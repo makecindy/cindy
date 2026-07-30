@@ -2198,7 +2198,8 @@ export class CodexAgent extends BaseAgent {
     const usageTracker = new UsageTracker();
     const translatorRt: CodexRuntimeState = newCodexRuntimeState();
     /**
-     * 本 turn 实际发给 server 的 model, 在构造 turnParams 时快照。
+     * 本 turn 用于**目录查找**的模型 id, 在构造 turnParams 时快照(取 mutableCatalogModel,
+     * 不是送上游的 wire 值 —— 见该变量注释)。
      *
      * 不能在 usage 事件里读 mutableModel: setModel 虽然文档写「下一 turn 才生效」,
      * 赋值却是**即时**的, 于是活跃 turn 期间切模型会让这一 turn 还在产出的用量
@@ -2513,6 +2514,17 @@ export class CodexAgent extends BaseAgent {
      * host 侧的 provider route 与它必须同步,窗口上限按 (provider, model) 解析。
      */
     let mutableProviderId: string | null | undefined = opts.providerId;
+    /**
+     * 用于**目录查找**的模型 id —— 与 mutableModel(送上游的 wire 值)刻意分开。
+     *
+     * server 的 thread/settings/updated 会把请求的 id 规范化后回带(实测:`gpt-5.4` →
+     * `gpt-5.4-codex`),那个变体在产品目录里并不存在。窗口上限是按目录条目精确查的,
+     * 若拿 wire 值去查就查不到、于是不再收敛,虚高的上报值原样留下。
+     *
+     * 所以只有「用户选的模型」和「'gpt-5' 哨兵被解析成真实模型」这两种情况更新它;
+     * server 的 wire 规范化只动 mutableModel。
+     */
+    let mutableCatalogModel: string | undefined = opts.model;
     let mutableEffort: Effort = opts.effort ?? 'high';
     let mutablePermissionMode: PermissionMode = opts.permissionMode ?? 'ask';
     let mutableExtraDirs = [...(opts.extraDirs ?? [])];
@@ -3115,6 +3127,9 @@ export class CodexAgent extends BaseAgent {
         }
         if (mutableModel === 'gpt-5' && resp.model) {
           mutableModel = resp.model;
+          // 'gpt-5' 是「用 server 默认」的占位、本身不是目录条目,解析出的真实 id 才是
+          // 我们能拿到的最佳目录线索(与下方 wire 规范化不同,后者不更新它)。
+          mutableCatalogModel = resp.model;
         }
         threadId = resp.thread.id;
         registerCodexReviewerRouteContext(threadId);
@@ -3184,6 +3199,9 @@ export class CodexAgent extends BaseAgent {
         }
         if (mutableModel === 'gpt-5' && resp.model) {
           mutableModel = resp.model;
+          // 'gpt-5' 是「用 server 默认」的占位、本身不是目录条目,解析出的真实 id 才是
+          // 我们能拿到的最佳目录线索(与下方 wire 规范化不同,后者不更新它)。
+          mutableCatalogModel = resp.model;
         }
         threadId = resp.thread.id;
         registerCodexReviewerRouteContext(threadId);
@@ -6056,6 +6074,9 @@ export class CodexAgent extends BaseAgent {
         const before = mutableServiceTier ?? null;
         const beforeModel = mutableModel;
         mutableServiceTier = normalizeServiceTier(s.serviceTier) ?? null;
+        // 只对齐 wire 值: server 会把请求 id 规范化(`gpt-5.4` → `gpt-5.4-codex`),那个变体
+        // 目录里没有。**刻意不动 mutableCatalogModel** —— 否则窗口上限会因为查不到目录条目
+        // 而停止收敛(见该变量注释)。
         if (typeof s.model === 'string' && s.model) mutableModel = s.model;
         if (mutableModel !== beforeModel) {
           registerCodexReviewerRouteContext(params.threadId);
@@ -6498,7 +6519,7 @@ export class CodexAgent extends BaseAgent {
         };
         // 这一 turn 的用量按这里发出去的 (provider, model) 归属上下文窗口 —— 之后 setModel
         // 立即改这两个值也不会串到还在产出的本 turn (见 activeTurnModel / capContextWindow)。
-        activeTurnModel = mutableModel;
+        activeTurnModel = mutableCatalogModel;
         activeTurnProviderId = mutableProviderId;
         const markTurnConfigAccepted = (): void => {
           threadMayHaveRollout = true;
@@ -6832,6 +6853,10 @@ export class CodexAgent extends BaseAgent {
               });
               if (mutableModel === resumeModel && resumeModel === 'gpt-5' && resumeResp.model) {
                 mutableModel = resumeResp.model;
+                // 与 thread/start 的哨兵解析同理:'gpt-5' 是占位、不是目录条目, 解析出的真实
+                // id 才能用来查窗口上限。漏掉这行会让恢复后的 turn 一直按 'gpt-5' 去查(查不到
+                // → 不收敛), 这也是本文件第三处哨兵解析, 三处必须一致。
+                mutableCatalogModel = resumeResp.model;
               }
               if (
                 Object.hasOwn(resumeResp, 'serviceTier') &&
@@ -6849,7 +6874,7 @@ export class CodexAgent extends BaseAgent {
               }
               // 恢复路径可能把 'gpt-5' 哨兵解析成具体路由模型 —— 重投的 turn 用的是新值,
               // 窗口归属必须跟着改写走, 否则查不到目录条目、沿用 app-server 的基础模型窗口。
-              activeTurnModel = mutableModel;
+              activeTurnModel = mutableCatalogModel;
               activeTurnProviderId = mutableProviderId;
               if (mutableServiceTier !== undefined) {
                 turnParams.serviceTier = mutableServiceTier ?? null;
@@ -7210,6 +7235,8 @@ export class CodexAgent extends BaseAgent {
         if (newModel === mutableModel) return; // 去重: 值没变不重推 (renderer 单次切换会全量重调 set*)
         log.debug('setModel', { from: mutableModel, to: newModel, providerId: mutableProviderId ?? null });
         mutableModel = newModel;
+        // 用户显式选的一定是目录 id(选择器就是从目录渲染的)。
+        mutableCatalogModel = newModel;
         registerCodexReviewerRouteContext(threadId);
         // thread 已启动 → 立即经 thread/settings/update 推给 server (sticky); 未启动则由
         // 首个 thread/start 携带。沿用 turn/start 的 'gpt-5'=server 默认哨兵约定 (省略),

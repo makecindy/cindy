@@ -14867,6 +14867,43 @@ describe('CodexAgent context window reporting', () => {
     await handle.close();
   });
 
+  // server 会把请求的 model id 规范化后经 thread/settings/updated 回带(实测 `gpt-5.4` →
+  // `gpt-5.4-codex`),那个 wire 变体在产品目录里不存在。窗口上限按目录条目精确查,所以
+  // 快照必须用**目录 id**而不是 wire 值 —— 否则规范化之后就再也查不到、停止收敛。
+  it('server 规范化 model id 后仍按目录 id 解析上限', async () => {
+    const asked: string[] = [];
+    const agent = agentWithVerified((_providerId, modelId) => {
+      asked.push(modelId);
+      return modelId === 'gpt-5.4' ? 272_000 : null;
+    });
+    const host = installTurnCapableHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-ctxwin-canonicalized',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    // server 回带权威快照,把 id 规范成 wire 变体(目录里没有这个 id)。
+    handlers.threadSettingsUpdated?.({
+      threadId: 'start-thread-id',
+      threadSettings: { serviceTier: null, model: 'gpt-5.4-codex', effort: 'high' },
+    } as never);
+    expect(handle.model).toBe('gpt-5.4-codex'); // wire 值确实被对齐了
+
+    await handle.send({ type: 'user', content: 'go' });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+    pushUsage(handlers, 'turn-1', 1_000_000);
+
+    // 收敛仍按目录 id 生效,而不是拿 wire 变体去查(那会查不到 → 保留 1M)。
+    expect(handle.getUsageSnapshot().contextWindow).toBe(272_000);
+    expect(asked).toContain('gpt-5.4');
+    expect(asked).not.toContain('gpt-5.4-codex');
+
+    await handle.close();
+  });
+
   // idle 会话可以热切 provider:host 的 applyRuntimeSetModelChange 带着 { providerId } 调
   // setModel。窗口上限按 (provider, model) 解析,只更新 model 会让下一 turn 拿新模型去问
   // **旧路由** —— 那既可能取到错误上限,也可能整个取不到。
