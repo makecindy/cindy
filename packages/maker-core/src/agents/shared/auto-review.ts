@@ -113,12 +113,15 @@ const COMMAND_WRAPPERS: ReadonlySet<string> = new Set([
  */
 // 前缀类含反斜杠 `\\`:Windows 路径(C:\Users\me\.ssh\id_rsa)的分隔符是 `\`。全部大小写不敏感(`i`):
 // Windows FS 大小写不敏感,`.AWS` 等同 `.aws`;Linux 上少量混合大小写误升级也是 fail-closed 方向。
+// 与 apps/desktop/src/main/filePathPolicy.ts 的 CREDENTIAL_HOME_DIRS/FILES 保持一致(codex 报的缺口)。
 const CREDENTIAL_PATH_PATTERNS: readonly RegExp[] = [
-  /(?:^|[\\/\s'"~])\.(?:ssh|aws|gnupg|kube|docker|claude|codex)\b/i, // 凭证/密钥 + agent 配置目录(含 OAuth 凭证)
-  /(?:^|[\\/\s'"~])\.(?:netrc|npmrc|pgpass|pypirc)\b/i,   // 含 token 的凭证配置文件
+  /(?:^|[\\/\s'"~])\.(?:ssh|aws|gnupg|kube|docker|azure|claude|codex)\b/i, // 凭证/密钥 + 云/agent 配置目录(含 OAuth 凭证)
+  /(?:^|[\\/\s'"~])\.(?:netrc|npmrc|pgpass|pypirc|git-credentials)\b/i,   // 含 token 的凭证配置文件
+  /[\\/]\.cargo[\\/]credentials(?:\.toml)?\b/i,           // cargo registry 凭证(新旧命名)
+  /[\\/]\.m2[\\/]settings(?:-security)?\.xml\b/i,         // Maven settings(可含 server 密码)
   /\bapplication_default_credentials\b/i,                 // gcloud 默认凭证文件
   /\bcredentials\.json\b/i,                               // Claude 等的 OAuth 凭证文件(.credentials.json)
-  /[\\/](?:codex|claude|gcloud)[\\/]auth\.json\b/i,       // agent 认证文件(~/.config/codex/auth.json 等)
+  /[\\/](?:codex|claude|gcloud|containers)[\\/]auth\.json\b/i, // agent/registry 认证文件(~/.config/codex|containers/auth.json 等)
   /\/proc\/[^/\s]*\/environ\b/i,                          // procfs 环境变量(读 /proc/self/environ 即 dump 含凭证的环境)
   /\bid_rsa\b|\bid_ed25519\b|\bid_ecdsa\b|\bid_dsa\b|\.pem\b|\.p12\b/i, // 私钥文件
 ];
@@ -160,6 +163,23 @@ const DANGEROUS_PATTERNS: readonly RegExp[] = [
 
 /** 命令替换 / 进程替换:参数里塞 `$(...)` / 反引号 / `<(...)`,可绕过静态判定 → 一律升级。 */
 const COMMAND_SUBSTITUTION = /\$\(|`|<\(/;
+
+/**
+ * 去掉能**嵌进词中间**的 shell 参数展开:花括号形 `${...}` 与位置参数 `$1`(**不含**命令替换 `$(...)`,
+ * 那个另有 COMMAND_SUBSTITUTION 拦)。攻击者把未设变量嵌进关键词/flag 中间(`find … -ex${UNSET}ec …`、
+ * `rg --pr${UNSET}e=…`、`s${X}udo`),审查时字面不含 `-exec`/`sudo`,bash 展开成空后才成形(codex 报)。
+ * 把这类展开抹成空得到的变体一并参与匹配,即可在展开前现形。
+ *
+ * **只剥 `${...}`/`$N`,不剥裸 `$VAR`**:中间嵌入必须靠花括号或单字符位置参数定界(裸 `$UNSETec` 会被
+ * bash 当成变量名 `UNSETec`、无法拼出 `-exec`),故裸 `$VAR` 不构成此绕过;且裸形是 jq 的 `$ENV` 等语义
+ * token,抹掉会破坏既有检测。作为**额外变体**叠加(不替换原串),`$API_KEY` 等敏感变量检测仍走原串。
+ * `$VAR` 展开成非空值(如指向凭证路径)属静态不可闭合残口(同 DNS 重绑定)。
+ */
+function stripExpansions(s: string): string {
+  return s
+    .replace(/\$\{[^}]*\}/g, '') // ${VAR} / ${UNSET}
+    .replace(/\$\d+/g, '');      // $1 位置参数(单字符,可无花括号嵌入词中)
+}
 
 /**
  * 文件输出重定向 `>` / `>>`。凡 `>`/`>>` 且其后不是 `&` → 写文件(命中);`>` 后是 `&`(`2>&1`/`>&2` fd
@@ -404,7 +424,16 @@ function classifyGit(tokens: string[], segment: string): ReviewVerdict {
   //   --filters/--textconv(git cat-file 对内容跑 clean/smudge filter 或 textconv 驱动 → 执行任意程序=RCE)。
   //   --upload-pack/--receive-pack/--exec(ls-remote/fetch/push 等把 <exec> 当命令跑,连本地仓库也执行 →
   //     `git ls-remote --upload-pack='sh payload' repo` = RCE,codex 报)。
-  if (/(?:^|\s)(?:-o\b|-o\S|-O\b|-O\S|--output\b|--ext-diff\b|--open-files-in-pager\b|--filters\b|--textconv\b|--upload-pack\b|--receive-pack\b|--exec\b)/.test(segment)) return 'prompt';
+  if (/(?:^|\s)-[oO](?:\b|\S)/.test(segment)) return 'prompt';  // 短选项 -o/-O(写文件 / pager 执行器)
+  // 长选项按**前缀**匹配:git 接受唯一前缀缩写(`--upload-p=`、甚至 `--u=` 都等于 --upload-pack,codex 报),
+  // 只匹配全称会漏。逐 token 取选项名(去引号/展开),命中任一危险长选项的前缀即升级。极短歧义缩写
+  // (`--o`/`--e` 等)被一并升级 —— 这类在 git 里本就歧义报错,fail-closed 可接受。
+  const DANGEROUS_GIT_LONG_OPTS = ['--output', '--ext-diff', '--open-files-in-pager', '--filters', '--textconv', '--upload-pack', '--receive-pack', '--exec'];
+  for (const tok of tokens) {
+    if (!tok.startsWith('--')) continue;
+    const name = stripExpansions(tok.split('=')[0].replace(/['"\\]/g, ''));
+    if (name.length >= 3 && DANGEROUS_GIT_LONG_OPTS.some((full) => full.startsWith(name))) return 'prompt';
+  }
   const rest = tokens.slice(1); // 'git' 之后
   // 子命令**之前**的内联 config(git -c core.pager=… / -c diff.external=… / --config-env[=…])可执行任意程序(RCE)→ 升级。
   // `--config-env` 的等号形式 `--config-env=core.pager=…` 是单 token,不等于裸 `--config-env`,用 startsWith 一并拦。
@@ -441,8 +470,9 @@ function classifyShellSegment(segment: string): ReviewVerdict {
   if (tokens.length === 0) return 'prompt';
   const bin = baseName(tokens[0]);
   // 去引号标记 + 去反斜杠转义:防 -ex'ec' / -ex\ec / -'o' 这类把 flag/命令拆开的拼接绕过(bash 会把它们
-  // 还原成 -exec 等;flag/命令检测在此串上跑)。
-  const deQuoted = segment.replace(/['"\\]/g, '');
+  // 还原成 -exec 等)。再抹掉参数展开(-ex${UNSET}ec / --pr${UNSET}e=…,codex 报):否则 find/rg 等的
+  // 执行 flag 被藏在展开里、审查漏放行、bash 展开成空后才执行。flag/命令检测都在此串上跑。
+  const deQuoted = stripExpansions(segment.replace(/['"\\]/g, ''));
   // 去引号内容:判重定向时引号内的 `>` 是数据不是重定向(如 git log --format='%h>%s')。
   const redirectScan = segment.replace(/'[^']*'|"[^"]*"/g, '');
   // 输出重定向(写文件)/ 命令替换(执行任意内容):任何命令带它都不能算只读放行,统一升级。
@@ -478,8 +508,14 @@ export function classifyShellCommand(command: string, _workspaceRoots: string[])
   const deEscaped = command.replace(/['"\\]/g, '');
   const quotesOnly = command.replace(/['"]/g, '');
   const deGlobbed = deEscaped.replace(/[[\]{}*?]/g, '');
+  // deExpanded:抹掉参数展开(见 stripExpansions)—— 防 `s${X}udo`/`rm -r${X}f /` 这类把关键词拆开、
+  // bash 展开成空后才成形的绕过。**必须从 deEscaped 派生**(保留 `${...}` 完整):若先去 glob 会把
+  // `${X}` 的 `{}` 抹成 `$X`,再 stripExpansions 会把 `$Xudo` 整词吞掉、反而复原不出 `sudo`。
+  // deExpandedGlob:再叠加去 glob,覆盖 `${X}` 与 `[h]` 混用的组合变形。
+  const deExpanded = stripExpansions(deEscaped);
+  const deExpandedGlob = deExpanded.replace(/[[\]{}*?]/g, '');
   for (const re of DANGEROUS_PATTERNS) {
-    if (re.test(deEscaped) || re.test(quotesOnly) || re.test(deGlobbed)) return 'prompt-each-time';
+    if (re.test(deEscaped) || re.test(quotesOnly) || re.test(deGlobbed) || re.test(deExpanded) || re.test(deExpandedGlob)) return 'prompt-each-time';
   }
   const segments = splitTopLevelSegments(command);
   if (segments.length === 0) return 'prompt';

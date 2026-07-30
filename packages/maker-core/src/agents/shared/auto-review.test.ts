@@ -669,4 +669,47 @@ describe('classifyShellCommand — 第三轮 bot 审查回归护栏', () => {
     // 凭证命中优先于边界(即便标 tree)。
     expect(reviewAction({ kind: 'read', path: '/Users/me/.aws', scope: 'tree' }, roots)).toBe('prompt-each-time');
   });
+
+  // ─── 第五批评审(#964):参数展开绕 flag / 补齐凭证路径 / git 长选项前缀缩写 ───
+
+  it('参数展开 ${UNSET} 嵌进关键词/flag 中间 → 展开前现形,不被漏放行(codex P1)', () => {
+    // find 的 -exec 被 ${UNSET} 拆开:审查串抹掉展开后 -exec 现形 → 非只读 → prompt。
+    expect(classifyShellCommand("find . -maxdepth 0 -ex${UNSET}ec sh -c payload \\;", roots)).toBe('prompt');
+    // rg 的 --pre 执行器被拆开 → prompt。
+    expect(classifyShellCommand('rg --pr${UNSET}e=./payload pat', roots)).toBe('prompt');
+    // 关键词被拆开的危险命令:sudo / rm -rf → prompt-each-time。
+    expect(classifyShellCommand('s${X}udo rm x', roots)).toBe('prompt-each-time');
+    expect(classifyShellCommand('rm -r${X}f /tmp/x', roots)).toBe('prompt-each-time');
+    // 反例:良性 $VAR 参数不误升级(展开抹空后仍是安全命令)。
+    expect(classifyShellCommand('cat $file', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('grep $pat notes.txt', roots)).toBe('auto-approve');
+  });
+
+  it('补齐凭证路径(.git-credentials/.cargo/.azure/.m2/containers)与 filePathPolicy 对齐(codex P1)', () => {
+    for (const p of [
+      '/Users/me/.git-credentials',
+      '/Users/me/.cargo/credentials.toml',
+      '/Users/me/.cargo/credentials',
+      '/Users/me/.azure/accessTokens.json',
+      '/Users/me/.m2/settings.xml',
+      '/Users/me/.m2/settings-security.xml',
+      '/Users/me/.config/containers/auth.json',
+    ]) {
+      expect(reviewAction({ kind: 'read', path: p }, roots)).toBe('prompt-each-time');
+    }
+    // shell 读同样命中。
+    expect(classifyShellCommand('cat ~/.git-credentials', roots)).toBe('prompt-each-time');
+    expect(classifyShellCommand('cat ~/.cargo/credentials.toml', roots)).toBe('prompt-each-time');
+  });
+
+  it('git 长选项唯一前缀缩写(--upload-p= 等)按前缀拒绝(codex P1)', () => {
+    expect(classifyShellCommand("git ls-remote --upload-p='sh payload' repo", roots)).toBe('prompt');
+    expect(classifyShellCommand("git ls-remote --u='sh payload' repo", roots)).toBe('prompt');
+    expect(classifyShellCommand('git ls-remote --upl${X}oad-pack=sh repo', roots)).toBe('prompt');
+    // 反例:与危险选项不构成前缀关系的只读选项仍放行。
+    expect(classifyShellCommand('git ls-remote --tags origin', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('git ls-remote --refs origin', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('git log --oneline', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('git log --format=%h notes', roots)).toBe('auto-approve');
+  });
 });
