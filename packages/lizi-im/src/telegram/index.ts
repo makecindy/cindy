@@ -56,7 +56,8 @@ import { startTelegramStreaming } from './streamingText.js';
 
 const TOKEN_SECRET_KEY = 'telegram-bot-token';
 const OWNER_USER_ID_SECRET_KEY = 'telegram-owner-user-id';
-const RUNTIME_ACTIVE_SECRET_KEY = 'telegram-bot-runtime-active';
+/** 历史遗留 key(上下线播报机制已移除), disconnect 时顺手清掉。 */
+const LEGACY_RUNTIME_ACTIVE_SECRET_KEY = 'telegram-bot-runtime-active';
 /**
  * getUpdates 游标持久化(`${botId}:${offset}`)。offset 只有在下一次 getUpdates
  * 送达服务器时才被确认 — 强杀落在"批次处理完 → 下一次请求送达"窗口会导致
@@ -84,13 +85,12 @@ const STRANGER_NOTICE_COOLDOWN_MS = 60_000;
 const DEFAULT_STRANGER_NOTICE =
   '👋 我是一位主人的个人 Cindy 助理，只响应主人本人的指令~\nI am a personal Cindy assistant and only respond to my owner.';
 
+// 只保留一次性动作确认(填 token 关联成功 / 手动断开)。生命周期播报(上线/
+// 下线/离线致歉)已整体移除 —— bot 随桌面端频繁重启, 每次都播报会刷屏;
+// 官方 bot 与业内 Telegram bot 的重启一律静默(2026-07-30 Chris)。
 const DEFAULT_OWNER_NOTICES = {
   linked: '✅ All linked. Just send a message when you are ready.',
   disconnected: '🔌 Unlinked. Link again whenever you need me.',
-  online: '🟢 I am online on this computer. Send a message whenever you are ready.',
-  offline: '🔴 I am going offline because the desktop app is closing. Reopen it to chat again.',
-  offlineNotice:
-    '🔔 I was offline for a while, so messages sent during that time may have been missed.',
 } as const;
 
 type OwnerNoticePhase = keyof typeof DEFAULT_OWNER_NOTICES;
@@ -127,8 +127,6 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private configVersion = 0;
   private pollAbort: AbortController | null = null;
   private pollLoop: Promise<void> | null = null;
-  private pendingOfflineNotice = false;
-  private runtimeOnlineAnnounced = false;
   private disposing = false;
   private readonly mediaDir: string;
   /** 相册聚合缓冲 — key `${chatId}:${mediaGroupId}`。 */
@@ -168,34 +166,19 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   async init(): Promise<void> {
     this.disposing = false;
-    this.runtimeOnlineAnnounced = false;
     const token = this.host.secrets.read(TOKEN_SECRET_KEY)?.trim() ?? '';
     this.ownerUserId = this.host.secrets.read(OWNER_USER_ID_SECRET_KEY)?.trim() ?? '';
     if (!token) {
       this.setStatus({ kind: 'idle' });
       return;
     }
-    this.pendingOfflineNotice = Boolean(
-      this.ownerUserId && this.host.secrets.read(RUNTIME_ACTIVE_SECRET_KEY),
-    );
     await this.connect(token);
   }
 
+  // 生命周期静默: dispose / 重连不向 owner 发任何播报(桌面端频繁重启会刷屏)。
   async dispose(): Promise<void> {
     this.disposing = true;
     this.configVersion += 1;
-    if (this.status.kind === 'connected' && this.ownerUserId) {
-      const sent = await this.sendOwnerNoticeWithTimeout(
-        this.ownerUserId,
-        'offline',
-        OWNER_NOTICE_TIMEOUT_MS,
-      );
-      // 离线通知已送达 → 清 runtime 标记, 下次启动走正常 online 通知;
-      // 没送出去才保留标记, 让下次启动补一条"期间消息可能没收到"。
-      if (sent && !this.pendingOfflineNotice) {
-        this.host.secrets.remove(RUNTIME_ACTIVE_SECRET_KEY);
-      }
-    }
     await this.stopPolling();
     this.setStatus({ kind: 'idle' });
   }
@@ -252,7 +235,6 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           }
           return configResult(failedStatus);
         }
-        this.markRuntimeActive();
         const noticeConfigVersion = this.configVersion;
         await this.sendOwnerNoticeWithTimeout(
           nextOwnerUserId,
@@ -260,8 +242,6 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           OWNER_NOTICE_TIMEOUT_MS,
           () => this.configVersion === noticeConfigVersion && this.ownerUserId === nextOwnerUserId,
         );
-        this.runtimeOnlineAnnounced = true;
-        this.pendingOfflineNotice = false;
       } else if (nextOwnerUserId !== this.ownerUserId) {
         this.configVersion += 1;
         this.ownerUserId = nextOwnerUserId;
@@ -287,10 +267,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       );
       this.host.secrets.remove(TOKEN_SECRET_KEY);
       this.host.secrets.remove(OWNER_USER_ID_SECRET_KEY);
-      this.host.secrets.remove(RUNTIME_ACTIVE_SECRET_KEY);
+      this.host.secrets.remove(LEGACY_RUNTIME_ACTIVE_SECRET_KEY);
       this.host.secrets.remove(UPDATES_OFFSET_SECRET_KEY);
-      this.pendingOfflineNotice = false;
-      this.runtimeOnlineAnnounced = false;
       await this.stopPolling();
       this.setStatus({ kind: 'idle' });
       return { status: this.status };
@@ -480,28 +458,6 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.botDisplayName = me.first_name ?? '';
     this.setStatus({ kind: 'connected', appId: String(me.id) });
     this.startPolling(api);
-    if (this.pendingOfflineNotice && this.ownerUserId) {
-      const noticeConfigVersion = this.configVersion;
-      void this.sendOwnerNoticeWithTimeout(
-        this.ownerUserId,
-        'offlineNotice',
-        OWNER_NOTICE_TIMEOUT_MS,
-        () => this.configVersion === noticeConfigVersion,
-      ).then((sent) => {
-        if (sent) this.pendingOfflineNotice = false;
-      });
-    } else if (!this.runtimeOnlineAnnounced && this.ownerUserId) {
-      const noticeConfigVersion = this.configVersion;
-      void this.sendOwnerNoticeWithTimeout(
-        this.ownerUserId,
-        'online',
-        OWNER_NOTICE_TIMEOUT_MS,
-        () => this.configVersion === noticeConfigVersion,
-      ).then((sent) => {
-        if (sent) this.runtimeOnlineAnnounced = true;
-      });
-    }
-    this.markRuntimeActive();
     return true;
   }
 
@@ -1034,14 +990,6 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       });
   }
 
-  private markRuntimeActive(): void {
-    try {
-      if (!this.host.secrets.isAvailable()) return;
-      this.host.secrets.write(RUNTIME_ACTIVE_SECRET_KEY, String(Date.now()));
-    } catch {
-      /* best-effort */
-    }
-  }
 
   private async sendOwnerNoticeWithTimeout(
     userId: string,

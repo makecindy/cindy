@@ -1760,10 +1760,7 @@
       },
       "ownerNotice": {
         "linked": "✅ All linked. Just send a message when you're ready.",
-        "disconnected": "🔌 Unlinked. Link again whenever you need me.",
-        "online": "🟢 I'm online now. While the desktop app is open, you can message me here.",
-        "offline": "🔴 The desktop app is closing, so I'll be offline for a bit. Reopen it to keep chatting.",
-        "offlineNotice": "🔔 I was offline for a while, so messages sent then may have been missed. Please send them again."
+        "disconnected": "🔌 Unlinked. Link again whenever you need me."
       },
       "guide": {
         "title": "Setup guide",
