@@ -780,8 +780,13 @@ export async function closeTab(
       // 队列外的 —— close in-flight 期间它们可能已把新 tab 写进 cache 和 DB,
       // 整快照回滚会把那些并发变更从 cache 抹掉(DB 里还在,重启 hydrate 后
       // "幽灵复活",cache 与 DB 分叉)。
+      //
+      // detach/reattach 竞态防护:invalidateSessionCaches() 把 bucket 清为
+      // EMPTY_BUCKET(hydrated=false)。若此时仍回滚,setBucket 的 cache-miss
+      // base(hydrated:true)会重建 bucket,让老 renderer 重新"接管"新 renderer
+      // 已经接管的 session——只在 bucket 仍由本 renderer 持有时才回滚。
       const now = getBucket(sessionId);
-      if (!now.tabs.some((t) => t.id === tabId)) {
+      if (now.hydrated && !now.tabs.some((t) => t.id === tabId)) {
         const restored = [...now.tabs];
         restored.splice(Math.min(idx, restored.length), 0, prev.tabs[idx]);
         // activeTabId:只有"原 active 就是被关的 tab,且当前 active 仍是关闭时选出
