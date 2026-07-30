@@ -97,7 +97,9 @@ function sanitizeToolArguments(
   mapping: ToolCallMapping,
 ): string {
   const fallback = argumentsText.trim().length > 0 ? argumentsText : '{}';
-  if (mapping.name !== 'Read') return fallback;
+  // Claude OAuth exposes its built-in Read tool on the reserved custom_Read wire
+  // identity. User-defined tools may share the display name without this identity.
+  if (mapping.kind !== 'function' || mapping.wireName !== 'custom_Read') return fallback;
   try {
     const parsed = JSON.parse(fallback) as unknown;
     if (!isObject(parsed)) return fallback;

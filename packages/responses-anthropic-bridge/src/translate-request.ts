@@ -202,9 +202,11 @@ function mediaBlockFromToolPart(part: JsonObject): JsonObject | null {
       };
     }
     if (source?.type === 'url' && stringValue(source.url)) {
+      const url = validatedHttpUrl(source.url);
+      if (!url) return null;
       return {
         type: 'image',
-        source: { type: 'url', url: source.url },
+        source: { type: 'url', url },
       };
     }
   }
@@ -222,9 +224,11 @@ function mediaBlockFromToolPart(part: JsonObject): JsonObject | null {
       };
     }
     if (source.type === 'url' && stringValue(source.url)) {
+      const url = validatedHttpUrl(source.url);
+      if (!url) return null;
       return {
         type: 'document',
-        source: { type: 'url', url: source.url },
+        source: { type: 'url', url },
         ...(stringValue(part.title) ? { title: part.title } : {}),
       };
     }
@@ -875,6 +879,22 @@ function mapToolChoice(value: unknown, context: ToolContext, oauth: boolean): un
   return { type: 'auto' };
 }
 
+function assertSupportedToolChoice(value: unknown): void {
+  if (!isObject(value)) return;
+  const type = stringValue(value.type);
+  if (
+    type === 'function'
+    || type === 'custom'
+    || type === 'tool_search'
+    || type === 'allowed_tools'
+    || type === 'auto'
+    || type === 'none'
+  ) {
+    return;
+  }
+  throw new UnsupportedResponsesFeatureError(`tool_choice type '${type ?? 'unknown'}'`);
+}
+
 function filterToolsForChoice(
   tools: unknown[] | undefined,
   choice: unknown,
@@ -915,10 +935,9 @@ function filterToolsForChoice(
 function requiresToolCall(value: unknown): boolean {
   if (value === 'required') return true;
   if (!isObject(value)) return false;
-  return value.type === 'function'
-    || value.type === 'custom'
-    || value.type === 'tool_search'
-    || (value.type === 'allowed_tools' && value.mode === 'required');
+  if (value.type === 'allowed_tools') return value.mode === 'required';
+  if (value.type === 'auto' || value.type === 'none') return false;
+  return true;
 }
 
 function forcedToolChoice(value: unknown): boolean {
@@ -1032,6 +1051,7 @@ export function translateResponsesRequest(
       ]
     : undefined;
   const context = flattenTools(declaredTools, oauth, options.strictTools === true);
+  assertSupportedToolChoice(raw.tool_choice);
   const input = raw.input;
   const items = typeof input === 'string'
     ? [{ role: 'user', content: input }]

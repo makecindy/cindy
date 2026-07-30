@@ -187,6 +187,38 @@ describe('Anthropic SSE → Responses translation', () => {
     ))).toBe(false);
   });
 
+  it('preserves pages for a user-defined tool that only shares the Read name', () => {
+    const t = new AnthropicSseTranslator('claude', {
+      byWireName: new Map([[
+        'custom_Read__user',
+        { wireName: 'custom_Read__user', name: 'Read', kind: 'function' },
+      ]]),
+      byResponseName: new Map(),
+    });
+    const events = [
+      ...t.push({ type: 'message_start', message: { id: 'msg_user_read', model: 'claude' } }),
+      ...t.push({
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'tool_use', id: 'call_user_read', name: 'custom_Read__user' },
+      }),
+      ...t.push({
+        type: 'content_block_delta',
+        index: 0,
+        delta: {
+          type: 'input_json_delta',
+          partial_json: '{"file_path":"/tmp/a","pages":""}',
+        },
+      }),
+      ...t.push({ type: 'content_block_stop', index: 0 }),
+      ...t.push({ type: 'message_stop' }),
+    ];
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'response.function_call_arguments.done',
+      arguments: '{"file_path":"/tmp/a","pages":""}',
+    }));
+  });
+
   it('carries signed thinking in encrypted_content for the next request', () => {
     const t = translator();
     const events = [

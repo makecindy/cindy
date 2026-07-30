@@ -340,6 +340,20 @@ describe('Responses → Anthropic request translation', () => {
       input: [{ role: 'user', content: 'use the missing tool' }],
       tools: [{ type: 'function', name: 'available', parameters: {} }],
     })).toThrowError('tool_choice requires a bridge-compatible tool');
+
+    expect(() => translateResponsesRequest({
+      model: 'claude',
+      tool_choice: { type: 'web_search' },
+      input: [{ role: 'user', content: 'search the web' }],
+      tools: [{ type: 'web_search' }],
+    })).toThrowError("tool_choice type 'web_search'");
+
+    expect(() => translateResponsesRequest({
+      model: 'claude',
+      tool_choice: { type: 'web_search' },
+      input: [{ role: 'user', content: 'search the web' }],
+      tools: [{ type: 'function', name: 'local', parameters: {} }],
+    })).toThrowError("tool_choice type 'web_search'");
   });
 
   it('keeps allowed_tools filtering specific to same-named tool kinds', () => {
@@ -782,6 +796,43 @@ describe('Responses → Anthropic request translation', () => {
       model: 'claude',
       input: [{ role: 'user', content: [{ type: 'input_image', image_url: 'file:///tmp/a.png' }] }],
     })).toThrow('input_image.image_url scheme');
+  });
+
+  it('textifies invalid tool-result media URLs instead of forwarding them', () => {
+    const result = translateResponsesRequest({
+      model: 'claude',
+      input: [
+        { type: 'function_call', call_id: 'c1', name: 'inspect', arguments: '{}' },
+        {
+          type: 'function_call_output',
+          call_id: 'c1',
+          output: [
+            { type: 'image', source: { type: 'url', url: 'file:///tmp/a.png' } },
+            { type: 'image', source: { type: 'url', url: 'https://user:pass@example.com/a.png' } },
+            { type: 'image', source: { type: 'url', url: 'https://example.com/a.png' } },
+          ],
+        },
+      ],
+    });
+    const resultMessage = result.request.messages.find((message) => (
+      (message.content as Array<Record<string, unknown>>).some((block) => block.type === 'tool_result')
+    ))!;
+    const toolResult = (resultMessage.content as Array<Record<string, unknown>>)
+      .find((block) => block.type === 'tool_result') as Record<string, unknown>;
+    expect(toolResult.content).toEqual([
+      {
+        type: 'text',
+        text: JSON.stringify({ type: 'image', source: { type: 'url', url: 'file:///tmp/a.png' } }),
+      },
+      {
+        type: 'text',
+        text: JSON.stringify({
+          type: 'image',
+          source: { type: 'url', url: 'https://user:pass@example.com/a.png' },
+        }),
+      },
+      { type: 'image', source: { type: 'url', url: 'https://example.com/a.png' } },
+    ]);
   });
 
   it('places tool results before user text and textifies orphan results', () => {
