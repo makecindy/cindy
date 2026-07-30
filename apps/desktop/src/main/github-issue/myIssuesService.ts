@@ -244,47 +244,53 @@ export class MyIssuesService {
   }
 
   /**
-   * 可选增强。**整条路径**(身份解析 + 搜索)都套在一个超时里:插件通道自己的默认
-   * 超时长达 330s,而这一路是与平台通道并行 await 的,卡住就等于把整页遮住。
-   * 超时、失败、没配置三种情况对用户是同一个结果 ——「这次没有增强」,主列表照常出。
+   * 可选增强。整条路径(身份解析 + 搜索)共用**一次**总 deadline —— 分阶段各起一次
+   * 计时器会让第二段重置 deadline,页面最坏等两倍时长(#1103 review 实例:注释写
+   * 「整条路径 8s」,实现却是 8s + 8s)。
+   *
+   * 插件通道自己的默认超时长达 330s,而这一路与平台通道并行 await,卡住就等于把
+   * 整页遮住。超时、失败、没配置三种情况对用户是同一个结果 ——「这次没有增强」,
+   * 主列表照常出。
+   *
+   * 注:runtime 侧另给插件调用传了各自的 timeoutMs(身份 5s / 搜索 6s),那是让**通道
+   * 自己了结**,与这里的页面等待上限目的不同,不能互相替代。
    */
   private async loadGithubEnhancement(): Promise<{
     viewer: GithubEnhancementViewer | null;
     issues: RemoteIssue[];
     truncated: boolean;
   }> {
-    let viewer: GithubEnhancementViewer | null;
+    // 总超时触发时也要能回传已经解析成功的身份:header 照常显示并入了谁名下的 issue,
+    // 只是这一次没并进内容。所以把它记在闭包外。
+    let resolved: GithubEnhancementViewer | null = null;
     try {
-      viewer = await this.withEnhancementTimeout(
-        () => this.deps.resolveGithubEnhancement(),
-        'resolve',
-      );
+      return await this.withEnhancementDeadline(async () => {
+        resolved = await this.deps.resolveGithubEnhancement();
+        const viewer = resolved;
+        if (!viewer) return { viewer: null, issues: [], truncated: false };
+        try {
+          const page = await this.deps.searchAuthoredIssues(viewer, viewer.login);
+          return { viewer, issues: page.issues, truncated: isTruncated(page) };
+        } catch (err) {
+          // 搜索失败(非超时)不算列表降级 —— 主路径是平台通道。
+          log.debug('github enhancement search failed', { error: errorText(err) });
+          return { viewer, issues: [], truncated: false };
+        }
+      });
     } catch (err) {
-      // 没有 GitHub 身份是正常状态,解析失败 / 超时同样只是「没有增强」。
+      // 没有 GitHub 身份是正常状态;解析失败与总超时同样只是「这次没有增强」。
       log.debug('github enhancement unavailable', { error: errorText(err) });
-      return { viewer: null, issues: [], truncated: false };
-    }
-    if (!viewer) return { viewer: null, issues: [], truncated: false };
-
-    try {
-      const page = await this.withEnhancementTimeout(
-        () => this.deps.searchAuthoredIssues(viewer, viewer.login),
-        'search',
-      );
-      return { viewer, issues: page.issues, truncated: isTruncated(page) };
-    } catch (err) {
-      // 增强查询失败 / 超时不算列表降级 —— 主路径是平台通道。
-      log.debug('github enhancement search failed', { error: errorText(err) });
-      return { viewer, issues: [], truncated: false };
+      return { viewer: resolved, issues: [], truncated: false };
     }
   }
 
-  private withEnhancementTimeout<T>(run: () => Promise<T>, stage: string): Promise<T> {
+  /** 整条增强路径的单次 deadline;<=0 表示关闭(仅测试用)。 */
+  private withEnhancementDeadline<T>(run: () => Promise<T>): Promise<T> {
     const timeoutMs = this.deps.enhancementTimeoutMs ?? DEFAULT_ENHANCEMENT_TIMEOUT_MS;
     if (timeoutMs <= 0) return run();
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
-        reject(new Error(`github enhancement ${stage} timed out after ${timeoutMs}ms`));
+        reject(new Error(`github enhancement timed out after ${timeoutMs}ms`));
       }, timeoutMs);
       run().then(
         (value) => {

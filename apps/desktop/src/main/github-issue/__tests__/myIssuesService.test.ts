@@ -464,6 +464,33 @@ describe('MyIssuesService 的账号作用域隔离', () => {
     expect(result.githubEnhancement).toEqual({ login: 'octocat', source: 'ghost' });
   });
 
+  it('增强的总时长有单一 deadline:两段各自不超时但累计超预算时也会被切断', async () => {
+    // 专门区分「分阶段各起一次计时器」与「整条路径一次 deadline」:前者会让第二段
+    // 重置 deadline,两段各 40ms 在 50ms 预算下都不超时,于是总共等 80ms 才返回。
+    const started = Date.now();
+    const slow = <T>(value: T) => new Promise<T>((r) => setTimeout(() => r(value), 40));
+    const service = new MyIssuesService(
+      makeDeps({
+        enhancementTimeoutMs: 50,
+        fetchPlatformIssues: async () => ({
+          ok: true as const,
+          page: { issues: [remoteIssue({ number: 9 })], totalCount: 1 },
+        }),
+        resolveGithubEnhancement: () => slow(GHOST_VIEWER),
+        searchAuthoredIssues: () => slow({ issues: [remoteIssue({ number: 8 })], totalCount: 1 }),
+      }),
+    );
+    const result = await service.list();
+    const elapsed = Date.now() - started;
+
+    // 总 deadline 生效:在 50ms 附近被切断,不会跑到两段之和(80ms+)。
+    expect(elapsed).toBeLessThan(75);
+    // 被切断时身份已解析成功 → 照常回传,只是这次没并进内容。
+    expect(result.githubEnhancement).toEqual({ login: 'octocat', source: 'ghost' });
+    expect(result.items.map((i) => i.number)).toEqual([9]);
+    expect(result.degraded).toBeNull();
+  });
+
   it('身份解析本身卡住时同样超时,不阻塞主列表', async () => {
     const service = new MyIssuesService(
       makeDeps({
