@@ -277,18 +277,33 @@ export function useBrowserComment(
     }
   }, []);
 
+  /**
+   * 统一退出 Guest 评论状态。用户主动关闭 / 取消时 discardEditorDraft=true；
+   * WebView 导航、enter 失败等非用户故障只拆 overlay、保留可恢复的 Host 草稿。
+   */
+  const leaveMode = useCallback(
+    (discardEditorDraft: boolean) => {
+      const committedEpoch = committedSubmissionEpochRef.current;
+      submitEpochRef.current += 1; // 作废任何挂起中的提交
+      bufferedStartupSelectionRef.current = null;
+      if (discardEditorDraft) clearEditorDraft();
+      sendBestEffortCommand(BROWSER_COMMENT_EXIT_MODE_CHANNEL);
+      if (committedEpoch !== null && settleCommittedSubmission(committedEpoch, 'off')) return;
+      setMode('off');
+      setPendingTarget(null);
+    },
+    [clearEditorDraft, sendBestEffortCommand, settleCommittedSubmission],
+  );
   const exitMode = useCallback(() => {
-    const committedEpoch = committedSubmissionEpochRef.current;
-    submitEpochRef.current += 1; // 作废任何挂起中的提交
-    bufferedStartupSelectionRef.current = null;
-    clearEditorDraft();
-    sendBestEffortCommand(BROWSER_COMMENT_EXIT_MODE_CHANNEL);
-    if (committedEpoch !== null && settleCommittedSubmission(committedEpoch, 'off')) return;
-    setMode('off');
-    setPendingTarget(null);
-  }, [clearEditorDraft, sendBestEffortCommand, settleCommittedSubmission]);
+    leaveMode(true);
+  }, [leaveMode]);
+  const abortModePreservingDraft = useCallback(() => {
+    leaveMode(false);
+  }, [leaveMode]);
   const exitModeRef = useRef(exitMode);
   exitModeRef.current = exitMode;
+  const abortModePreservingDraftRef = useRef(abortModePreservingDraft);
+  abortModePreservingDraftRef.current = abortModePreservingDraft;
 
   const cancelPending = useCallback(() => {
     if (modeRef.current !== 'pending') return;
@@ -427,7 +442,7 @@ export function useBrowserComment(
             } catch {
               if (isStale()) return;
               // 无法确认 pending marker 已撤除时，整体退出比继续展示失配状态安全。
-              exitMode();
+              abortModePreservingDraft();
             }
             toast.error(t('rightSidebar.browser.commentFailed'));
             return;
@@ -442,6 +457,7 @@ export function useBrowserComment(
     },
     [
       composerDraftKey,
+      abortModePreservingDraft,
       exitMode,
       sendBestEffortCommand,
       sendCommand,
@@ -495,11 +511,17 @@ export function useBrowserComment(
         bufferedStartupSelectionRef.current = null;
         // send 已到 guest 但 ACK 丢失时，guest 可能已经挂上 overlay。失败路径
         // 必须与用户主动退出走同一套清理，不能只关闭 host 按钮状态。
-        exitMode();
+        abortModePreservingDraft();
         toast.error(tRef.current('rightSidebar.browser.commentFailed'));
       },
     );
-  }, [acceptSelectedTarget, composerDraftKey, exitMode, sendCommand]);
+  }, [
+    abortModePreservingDraft,
+    acceptSelectedTarget,
+    composerDraftKey,
+    exitMode,
+    sendCommand,
+  ]);
 
   const submit = useCallback(
     (commentText: string, styleChanges?: BrowserCommentStyleChange[]) => {
@@ -609,7 +631,7 @@ export function useBrowserComment(
     };
     const onNavigate = () => {
       if (modeRef.current === 'off') return;
-      exitModeRef.current();
+      abortModePreservingDraftRef.current();
     };
     webview.addEventListener('ipc-message', onIpcMessage);
     webview.addEventListener('did-navigate', onNavigate);

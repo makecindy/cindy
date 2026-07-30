@@ -241,6 +241,15 @@ describe('useBrowserComment', () => {
       textEdit: 'Updated label',
     });
 
+    act(() => result!.toggle());
+    await acknowledgeLastCommand(second, false);
+    expect(result!.mode).toBe('off');
+    expect(result!.editorDraft).toEqual({
+      text: 'Keep this unsent comment',
+      styleEdits: { color: '#ff0000' },
+      textEdit: 'Updated label',
+    });
+
     await enterSelecting(second, () => result!);
     act(() => second.dispatchIpc(BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL, TARGET));
     expect(result!.mode).toBe('pending');
@@ -644,10 +653,18 @@ describe('useBrowserComment', () => {
       }),
     );
     await enterSelecting(webview, () => result!);
+    act(() =>
+      result!.updateEditorDraft({
+        text: 'Recover after navigation',
+        styleEdits: {},
+        textEdit: null,
+      }),
+    );
 
     act(() => webview.dispatch('did-navigate'));
 
     expect(result!.mode).toBe('off');
+    expect(result!.editorDraft.text).toBe('Recover after navigation');
     act(() => webview.dispatchIpc(BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL, TARGET));
     expect(result!.pendingTarget).toBeNull();
   });
