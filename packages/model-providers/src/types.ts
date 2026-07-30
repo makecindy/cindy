@@ -242,8 +242,14 @@ export interface CatalogModel {
    * 200K、Anthropic 未知模型启发式)。两者数值上无法区分,但只有前者能用来收敛
    * 运行期上报的窗口 —— 拿兜底值当上限会把真实窗口压小。
    *
-   * 缺省(undefined)一律按未核实处理。语义与 maker-core 的
-   * `ModelDescriptor.contextWindowVerified` 一致,由 host 的 toDescriptor 透传。
+   * 缺省(undefined)一律按未核实处理。
+   *
+   * **这份 provenance 只活在 host 侧的目录里,刻意不进跨端 `ModelDescriptor`**
+   * (host 的 `toDescriptor` 不透传它)。原因:`availableModels` 是跨 provider union +
+   * 首见去重的扁平表,同一 model id 由多个 provider 提供时归属已丢,按 id 回查会命中
+   * 另一条路由的元数据 —— 拿错路由的上限去收敛比不收敛更糟。收敛统一走
+   * maker-core 的 `AgentDeps.resolveVerifiedContextWindow`,由 host 按
+   * (providerId, modelId) 解析。
    */
   contextWindowVerified?: boolean;
   maxOutput?: number;
