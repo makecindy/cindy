@@ -14,9 +14,7 @@
  *     游标在消息被路由受理后 commit。
  */
 
-import path from 'node:path';
 import fs from 'node:fs';
-import { app } from 'electron';
 import type { TelegramIM } from '@cindy/im';
 import {
   decodeTelegramLaneUserId,
@@ -100,9 +98,4 @@ export function buildTelegramAdapter(
       };
     },
   };
-}
-
-/** host 侧 media 目录(host.paths.telegramMediaDir 的取值来源)。 */
-export function telegramMediaDir(): string {
-  return path.join(app.getPath('userData'), 'cc-agent', 'telegram-media');
 }
