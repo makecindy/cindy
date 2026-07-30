@@ -812,6 +812,11 @@ export async function setActiveTab(
 ): Promise<void> {
   const prev = getBucket(sessionId);
   if (tabId === prev.activeTabId) return;
+  // closeTab 已把关闭中的 tab 从 bucket 乐观移除:若此时用户点击该 tab(或
+  // 并发命令调 setActiveTab),activeTabId 会指向 tabs 里不存在的 id —— sidebar
+  // 无法渲染对应 body;close 落库后 DB 里也没有 active row。提前守门,拒绝激活
+  // 不在当前 bucket 里的 tab。
+  if (tabId !== null && !prev.tabs.some((t) => t.id === tabId)) return;
   setBucket(sessionId, { activeTabId: tabId });
   try {
     const ipc = ipcApi();
