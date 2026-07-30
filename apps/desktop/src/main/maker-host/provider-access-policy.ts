@@ -53,7 +53,10 @@ export function projectProviderCatalogForBuildRegion(
       (provider.imageModels?.length ?? 0) > 0 ||
       provider.imageDefaults !== undefined ||
       (provider.videoModels?.length ?? 0) > 0 ||
-      provider.videoDefaults !== undefined;
+      provider.videoDefaults !== undefined ||
+      Object.values(provider.models).some((list) =>
+        list?.some((m) => { const g = groupOf(m); return g === 'image' || g === 'video'; }),
+      );
     const isCindyAi = provider.id === CINDY_AI_PROVIDER_ID;
     if (!hasMedia && !isCindyAi) return provider;
     changed = true;
@@ -68,7 +71,7 @@ export function projectProviderCatalogForBuildRegion(
         agent,
         list.filter((model) => {
           const group = groupOf(model);
-          return group !== 'image' && (group !== 'video' || MAINLAND_VIDEO_MODEL_IDS.has(model.id));
+          return group !== 'image' && (group !== 'video' || (isCindyAi && MAINLAND_VIDEO_MODEL_IDS.has(model.id)));
         }),
       ]),
     ) as Provider['models'];
