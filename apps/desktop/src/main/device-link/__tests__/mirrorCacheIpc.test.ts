@@ -215,6 +215,61 @@ describe('待清未清时读路径不命中', () => {
   });
 });
 
+describe('标量体积在序列化之前就被卡住', () => {
+  // review(codex P1):结构预检把一个超大字符串只算作**一个节点**,于是 JSON.stringify 要先
+  // 把整份分配 + 走完才撞上 512KB 上限 —— 那时内存已经吃进去了。
+  it('单条里的超大字符串被丢弃(不进序列化)', async () => {
+    const stringifySpy = vi.spyOn(JSON, 'stringify');
+    try {
+      const fat = { id: 'fat', clientId: 'c-fat', content: 'x'.repeat(2 * 1024 * 1024) };
+      const slim = { id: 'slim', clientId: 'c-slim', content: 'ok' };
+      await handleMirrorCachePutMessages(cache, 'dev-1', 'sess-1', [fat, slim]);
+      const passed = cache.writeMessages.mock.calls[0]?.[2] as Array<{ id: string }>;
+      expect(passed.map((m) => m.id)).toEqual(['slim']);
+      // 那条超大项从未被 stringify 过(只有 slim 会)。
+      const stringified = stringifySpy.mock.calls.map(([arg]) => arg);
+      expect(stringified).not.toContain(fat);
+    } finally {
+      stringifySpy.mockRestore();
+    }
+  });
+
+  it('超长键名同样计入预算,且同样不进序列化', async () => {
+    const stringifySpy = vi.spyOn(JSON, 'stringify');
+    try {
+      const wideKey: Record<string, unknown> = { id: 'k', clientId: 'c-k' };
+      wideKey['k'.repeat(2 * 1024 * 1024)] = 1;
+      await handleMirrorCachePutMessages(cache, 'dev-1', 'sess-1', [wideKey]);
+      expect(cache.writeMessages.mock.calls[0]?.[2]).toEqual([]);
+      expect(stringifySpy.mock.calls.map(([arg]) => arg)).not.toContain(wideKey);
+    } finally {
+      stringifySpy.mockRestore();
+    }
+  });
+});
+
+describe('读完成之后又有待清记录', () => {
+  // review(codex P1):预检之后、读完成之前另一个实例可能刚登记待清 —— 那份正文已经被标记
+  // 为"必须删掉",不能再交出去。
+  it('读期间被登记待清 → 丢弃结果', async () => {
+    cache.readMessages.mockImplementationOnce(async () => {
+      pendingPurges = 1; // 读的过程中有人登记了待清
+      return [{ id: 'm1' }];
+    });
+    await expect(handleMirrorCacheGetMessages(cache, 'dev-1', 'sess-1')).resolves.toEqual({
+      messages: [],
+    });
+  });
+
+  it('读列表期间被登记待清 → 丢弃结果', async () => {
+    cache.readSessionList.mockImplementationOnce(async () => {
+      pendingPurges = 1;
+      return [{ deviceId: 'dev-1', deviceName: 'Mac', sessions: [] }];
+    });
+    await expect(handleMirrorCacheGetSessionList(cache)).resolves.toEqual({ devices: [] });
+  });
+});
+
 describe('读期间账号边界推进', () => {
   // review(codex P1):闸门等待 / 文件读期间账号边界可能已经走完 —— 那时返回的既可能是上一个
   // 账号的明文,也可能是新账号的快照被交给旧账号发起的那次请求。

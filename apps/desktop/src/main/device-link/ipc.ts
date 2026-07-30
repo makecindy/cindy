@@ -627,6 +627,11 @@ const MIRROR_CACHE_MAX_INBOUND_DEVICES = 64;
 /** 每设备的会话条数上限(store 内部还会按 MAX_CACHED_SESSIONS_PER_DEVICE 再裁一次)。 */
 const MIRROR_CACHE_MAX_INBOUND_SESSIONS_PER_DEVICE = 500;
 /** 单条(一条消息 / 一台设备)序列化后的字节上限。 */
+/**
+ * 单条允许的**字符**总量(键名 + 字符串值)。取 512K 字符:与单条字节上限同量级,而字符数
+ * 在遍历时就能累加,不必先序列化(见 withinStructuralBudget)。
+ */
+const MIRROR_CACHE_MAX_ITEM_CHARS = 512 * 1024;
 const MIRROR_CACHE_MAX_ITEM_BYTES = 512 * 1024;
 /** 整批 payload 序列化后的字节上限。 */
 const MIRROR_CACHE_MAX_TOTAL_BYTES = 4 * 1024 * 1024;
@@ -642,9 +647,18 @@ const MIRROR_CACHE_MAX_NODES_PER_ITEM = 20_000;
  */
 function withinStructuralBudget(value: unknown): boolean {
   let nodes = 0;
+  // 标量字符预算:一条里塞一个超大字符串(或超长键名)时,结构预检只把它算作**一个节点**,
+  // 于是随后的 JSON.stringify 要先把整份分配 + 走完才撞上 512KB 上限 —— 那时内存已经吃进去了
+  // (review: codex P1)。所以在遍历时就累计字符数,超预算立刻短路,绝不进序列化。
+  let chars = 0;
+  const withinChars = (text: string): boolean => {
+    chars += text.length;
+    return chars <= MIRROR_CACHE_MAX_ITEM_CHARS;
+  };
   const walk = (node: unknown, depth: number): boolean => {
     if (depth > MIRROR_CACHE_MAX_DEPTH) return false;
     if (++nodes > MIRROR_CACHE_MAX_NODES_PER_ITEM) return false;
+    if (typeof node === 'string') return withinChars(node);
     if (Array.isArray(node)) {
       for (const child of node) if (!walk(child, depth + 1)) return false;
       return true;
@@ -656,6 +670,8 @@ function withinStructuralBudget(value: unknown): boolean {
       // 逐键遍历可以在超限的第一个键上就短路返回。
       for (const key in node) {
         if (!Object.prototype.hasOwnProperty.call(node, key)) continue;
+        // 键名同样计入(超长键名也是要序列化的字节)。
+        if (!withinChars(key)) return false;
         if (!walk((node as Record<string, unknown>)[key], depth + 1)) return false;
       }
       return true;
@@ -776,6 +792,13 @@ export async function handleMirrorCacheGetMessages(
     log.warn('mirror cache read discarded: account boundary moved while reading');
     return { messages: [] };
   }
+  // 读**之后**再复核一次待清状态:另一个共享 userData 的实例(或本进程里一次失败的清理)
+  // 可能刚好在预检之后、读完成之前登记了待清 —— 那份正文已经被标记为"必须删掉",不能再交出去
+  // (review: codex P1)。这是与 owner 复核并列的"返回前再验一次"。
+  if (await mirrorCacheReadsBlocked()) {
+    log.warn('mirror cache read discarded: purge enqueued while reading');
+    return { messages: [] };
+  }
   return { messages };
 }
 
@@ -812,6 +835,11 @@ export async function handleMirrorCacheGetSessionList(
   const devices = await cache.readSessionList();
   if (cacheOwnerToken() !== owner) {
     log.warn('mirror cache read discarded: account boundary moved while reading');
+    return { devices: [] };
+  }
+  // 同 messages:读完再复核待清状态(见那边的说明)。
+  if (await mirrorCacheReadsBlocked()) {
+    log.warn('mirror cache read discarded: purge enqueued while reading');
     return { devices: [] };
   }
   return { devices };
