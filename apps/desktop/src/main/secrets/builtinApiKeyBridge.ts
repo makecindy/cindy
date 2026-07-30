@@ -14,11 +14,22 @@
 import type { ProviderSecretId } from '../../shared/providerSecrets.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 
-/** 允许经本桥访问的内置 API-key 供应商(新增供应商时在此扩展)。 */
-export const BUILTIN_API_KEY_PROVIDER_IDS: ReadonlySet<ProviderSecretId> = new Set<ProviderSecretId>([
+/**
+ * 允许经本桥访问的内置 API-key 供应商(新增供应商时在此扩展)。
+ * 模块私有:这是权限白名单,不导出可变引用(ReadonlySet 只是编译期约束,
+ * 挡不住运行时 .add());外部只能经 isBuiltinApiKeyProviderId 查询。
+ */
+const BUILTIN_API_KEY_PROVIDER_IDS: ReadonlySet<ProviderSecretId> = new Set<ProviderSecretId>([
   'gemini',
   'openai-images',
 ]);
+
+/** 白名单查询(只读语义,供测试与未来调用方使用,不暴露集合本体)。 */
+export function isBuiltinApiKeyProviderId(providerId: unknown): providerId is ProviderSecretId {
+  return (
+    typeof providerId === 'string' && BUILTIN_API_KEY_PROVIDER_IDS.has(providerId as ProviderSecretId)
+  );
+}
 
 /**
  * 真实 API key 远短于此(gemini ~39 / OpenAI 平台 ~200 字符);上限挡的是被攻陷
@@ -37,13 +48,10 @@ export interface BuiltinApiKeyBridgeDeps {
 }
 
 function requireBuiltinApiKeyProviderId(providerId: unknown): ProviderSecretId {
-  if (
-    typeof providerId !== 'string' ||
-    !BUILTIN_API_KEY_PROVIDER_IDS.has(providerId as ProviderSecretId)
-  ) {
+  if (!isBuiltinApiKeyProviderId(providerId)) {
     throwIpcError('INVALID_PARAMS', `unsupported builtin api-key provider: ${String(providerId)}`);
   }
-  return providerId as ProviderSecretId;
+  return providerId;
 }
 
 /** 写入 key。校验顺序:白名单 → 类型/长度 → 非空;存储失败抛 INTERNAL。 */
@@ -78,14 +86,9 @@ export function builtinApiKeyRemove(deps: BuiltinApiKeyBridgeDeps, providerId: u
 
 /** 查询 key 是否已存。非白名单 / 存储层异常一律回 false(UI 按未配置渲染)。 */
 export function builtinApiKeyHas(deps: BuiltinApiKeyBridgeDeps, providerId: unknown): boolean {
-  if (
-    typeof providerId !== 'string' ||
-    !BUILTIN_API_KEY_PROVIDER_IDS.has(providerId as ProviderSecretId)
-  ) {
-    return false;
-  }
+  if (!isBuiltinApiKeyProviderId(providerId)) return false;
   try {
-    return deps.store.has(providerId as ProviderSecretId);
+    return deps.store.has(providerId);
   } catch (err) {
     console.error('[builtin-api-key-has]', err);
     return false;
