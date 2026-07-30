@@ -275,6 +275,19 @@ export function useDeviceLinkRemoteProjects(): void {
               isSelf: d.isSelf,
             });
           }
+          // 权威列表里**根本没有**的分片必须在这里收掉:applyDevice 只对返回的设备跑,
+          // 账号里已删除的设备(冷启动时由缓存种进来的)否则永远没人评估,会作为
+          // disconnected 项目常驻侧边栏,还会被后续快照一直写回盘(review: codex P1)。
+          // 只在 listDevices **成功**时做(catch 分支不清):拿不到权威集合就不能判定缺席。
+          // eligible 里的设备豁免 —— 它们由 presence 事件管理,listDevices 偶发缺项不该误删。
+          const authoritative = new Set(devices.map((d) => d.deviceId));
+          for (const deviceId of remoteProjectsStore.getDeviceIds()) {
+            if (authoritative.has(deviceId) || eligible.has(deviceId)) continue;
+            log.debug(`removing cached shard absent from listDevices: ${deviceId.slice(0, 8)}`);
+            remoteProjectsStore.removeDevice(deviceId);
+            removeRemoteSessionActivityForDevice(deviceId);
+            clearCachedDevice(deviceId);
+          }
         })
         .catch((err) => log.debug('listDevices reseed failed', err));
     };
@@ -284,8 +297,8 @@ export function useDeviceLinkRemoteProjects(): void {
     //
     // 种入后**必须再 reseed 一次**:合格性判定(applyDevice → resolveIneligibleRemoteProjectAction)
     // 依赖 `hasCachedShard`,而这次种入是异步的,很可能落在初始 reseed 之后 —— 那一轮看到
-    // 的是"没有分片"于是判 ignore,种进来的设备就没人再评估。app 关闭期间对端关掉被控的
-    // 情形下,补这一轮才能把它按 remove 收敛掉(而不是留在侧边栏)。
+    // 的是"没有分片"于是判 ignore,种进来的设备就没人再评估。app 关闭期间对端关掉被控 /
+    // 账号里删掉设备的情形,都靠补这一轮收敛(reseed 末尾还会清掉权威列表中缺席的分片)。
     // 仍在 listDevices 里但离线的设备照既有语义保留为 disconnected —— 与「断连保留最近
     // 一次快照让 All Sessions 稳定」一致,不是本次引入的行为。
     void readCachedSessionList().then((devices) => {

@@ -125,10 +125,13 @@ describe('clear', () => {
     expect(cache.clearAll).not.toHaveBeenCalled();
   });
 
-  it('不带 deviceId / 空串 → 整体清(登出路径依赖这条)', async () => {
-    await handleMirrorCacheClear(cache, undefined);
-    await handleMirrorCacheClear(cache, '   ');
-    expect(cache.clearAll).toHaveBeenCalledTimes(2);
+  // review(codex P1):缺 deviceId 曾被当成「清整个 owner 缓存」的授权。renderer 没有任何
+  // 合法的无参调用方(登出是 main 内部直接调 clearAll),这个入口不该带那种破坏力。
+  it('缺 deviceId / 空白 / 非字符串 → INVALID_PARAMS,且绝不触发整体清', async () => {
+    for (const bad of [undefined, null, '', '   ', 42, {}]) {
+      await expect(handleMirrorCacheClear(cache, bad)).rejects.toThrow(/INVALID_PARAMS/);
+    }
+    expect(cache.clearAll).not.toHaveBeenCalled();
     expect(cache.clearDevice).not.toHaveBeenCalled();
   });
 });

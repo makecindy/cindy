@@ -660,13 +660,21 @@ export async function handleMirrorCachePutSessionList(
   return { ok: true };
 }
 
-/** deviceId 缺省 = 整体清(登出隐私路径);带 deviceId = 单台设备离场。 */
+/**
+ * 清掉**一台设备**的缓存(设备撤销访问 / 关闭被控 / 本机禁用控制)。
+ *
+ * 刻意只支持逐设备、**不提供**「整体清」入口:renderer 没有任何合法的无参调用方 ——
+ * 登出清理是 main 内部直接调 `clearAll()`(见 teardownAuthAccountBoundary)。把
+ * `deviceId` 缺失当成「授权抹掉整个 owner 缓存」,等于给一个固定的 preload 方法配上
+ * 不必要的破坏力:renderer 若被 XSS,顶层 frame 的 sender 闸挡不住它(review: codex P1)。
+ * 所以缺失 / 空白 / 非字符串一律 INVALID_PARAMS。
+ */
 export async function handleMirrorCacheClear(
   cache: MirrorCache,
   deviceId: unknown,
 ): Promise<{ ok: true }> {
-  if (typeof deviceId === 'string' && deviceId.trim()) await cache.clearDevice(deviceId);
-  else await cache.clearAll();
+  const device = requireString(deviceId, 'deviceId');
+  await cache.clearDevice(device);
   return { ok: true };
 }
 
@@ -795,8 +803,9 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
   //     导航到不可信内容时,读 handler 能吐出缓存的聊天正文,put/clear 能改写或抹掉
   //     owner 作用域的数据(review: codex P1)。
   //  2. requireDeviceLinkCapability:没账号就不存在远程会话,读写一律不放行。
-  //  3. **clear 只过第 1 道** —— 登出清理恰好发生在 capability 已经掉下去之后,
-  //     用 capability gate 住就再也清不掉上一个账号的缓存了。
+  //  3. **clear 只过第 1 道** —— 设备被撤销 / 关掉控制时要能清,而那可能发生在 capability
+  //     已经掉下去之后。它只接受非空 deviceId(逐设备),不提供「清全部」入口:登出清理
+  //     由 main 内部直接调 clearAll,renderer 不需要这个破坏力。
   ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_GET_MESSAGES, (e, payload: unknown) => {
     assertTrustedAppRendererEvent(e);
     requireDeviceLinkCapability();

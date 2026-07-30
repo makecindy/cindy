@@ -2832,8 +2832,8 @@ interface ElectronAPI {
           sessions: readonly Record<string, unknown>[];
         }>,
       ) => Promise<{ ok: true }>;
-      /** 传 deviceId 清单台设备,不传则整体清(登出) */
-      clear: (deviceId?: string) => Promise<{ ok: true }>;
+      /** 清掉一台设备的缓存;deviceId 必填(登出的整体清理由 main 在账号边界自己做) */
+      clear: (deviceId: string) => Promise<{ ok: true }>;
     };
   };
 

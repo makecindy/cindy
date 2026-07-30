@@ -248,6 +248,53 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 // ─── 带 IO 的缓存实例 ────────────────────────────────────────────────────────
 
+/**
+ * 隐私清理没能把内容全部删掉。带上仍存在的文件清单,调用方据此**持久化一次重试**
+ * (见 mirrorCachePurgeQueue):只记日志不够 —— 账号边界照常推进,而上一个账号的明文
+ * 聊天缓存会无限期留在盘上(review: codex P1)。
+ */
+export class MirrorCachePurgeError extends Error {
+  constructor(
+    readonly root: string,
+    readonly remaining: string[],
+    readonly cause: unknown,
+  ) {
+    super(`device-link mirror cache purge incomplete: ${remaining.length} file(s) remain`);
+    this.name = 'MirrorCachePurgeError';
+  }
+}
+
+/**
+ * 尽力删掉缓存目录里的内容,返回仍然存在的文件绝对路径。
+ * 逐个删而不是整棵 rm:一个删不掉的文件不该让其它文件也留下来。
+ */
+async function purgeContents(root: string): Promise<string[]> {
+  const remaining: string[] = [];
+  const walk = async (dir: string): Promise<void> => {
+    let entries: Array<{ name: string; isDirectory(): boolean }>;
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+      return; // 目录不存在 / 读不了:没有可枚举的内容
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(full);
+        await fsp.rmdir(full).catch(() => undefined); // 空壳目录删不掉无所谓
+        continue;
+      }
+      try {
+        await fsp.rm(full, { force: true });
+      } catch {
+        remaining.push(full);
+      }
+    }
+  };
+  await walk(root);
+  return remaining;
+}
+
 export interface MirrorCache {
   readMessages(deviceId: string, sessionId: string): Promise<Record<string, unknown>[]>;
   writeMessages(deviceId: string, sessionId: string, messages: readonly unknown[]): Promise<void>;
@@ -286,11 +333,38 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
   }
 
   /**
-   * 写入代际。clearAll(登出 / 切账号)自增,作废所有在途写入 —— 隐私清理与 renderer 的
-   * fire-and-forget 写盘是并发的,只清一次目录挡不住「清完之后才落地」的那一笔。
+   * 写入代际。**任何清理路径**(clearAll 登出 / 切账号、clearDevice 撤销 / 关闭控制)都自增,
+   * 作废所有在途写入 —— 隐私清理与 renderer 的 fire-and-forget 写盘是并发的,只删一次
+   * 文件挡不住「清完之后才落地」的那一笔(它的原子 rename 会把刚被清掉的正文重建出来)。
    * 与手机端 mobileHomeListCache 的 writeEpoch 同款。
+   *
+   * clearDevice 用的是同一个全局代际、而不是 per-device 的:代价只是把并发的其它设备写入
+   * 也一起作废(缓存少一次更新,下一轮对账就补回来),换来的是不必推理「消息文件按设备、
+   * 列表快照跨设备」这两种粒度如何各自失效 —— 隐私路径上,保守比精巧值钱(review: codex P1)。
    */
   let generation = 0;
+
+  /**
+   * 同一文件的写入串行化(文件路径 → 尾部 promise)。
+   *
+   * 不串行化会让指纹失真:两次并发写入在 `await` 处交错时,最后落盘的内容与最后登记的
+   * 指纹可能来自不同的那一次,于是真正较新的快照之后会被 `unchanged` 跳过,冷启动一直
+   * 显示旧消息(review: greptile P1)。串成链后「落盘 → 登记指纹」始终成对且有序。
+   */
+  const writeChains = new Map<string, Promise<unknown>>();
+
+  function serializeWrite<T>(file: string, task: () => Promise<T>): Promise<T> {
+    const prev = writeChains.get(file) ?? Promise.resolve();
+    // 前一笔失败不应阻断后一笔:两个分支都接到 task 上。
+    const next = prev.then(task, task);
+    writeChains.set(file, next);
+    void next
+      .catch(() => undefined)
+      .finally(() => {
+        if (writeChains.get(file) === next) writeChains.delete(file);
+      });
+    return next;
+  }
 
   return {
     async readMessages(deviceId, sessionId) {
@@ -308,9 +382,10 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // 空列表 = 清掉这条缓存(被控端 /clear、rewind 或删完最后一条时,残留会在
       // 下次冷开 hydrate 出已经不存在的正文)。
       if (normalized.length === 0) {
-        lastWritten.delete(file);
-        await fsp.rm(file, { force: true }).catch(() => undefined);
-        return;
+        return serializeWrite(file, async () => {
+          lastWritten.delete(file);
+          await fsp.rm(file, { force: true }).catch(() => undefined);
+        });
       }
       const body = JSON.stringify(normalized);
       const payload: StoredMessages = { version: 1, updatedAt: Date.now(), messages: normalized };
@@ -319,22 +394,29 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         // 单会话超限:放弃本次写入,保留旧文件(缓存只是首屏加速)。
         return;
       }
-      // 指纹只算消息体,不含 payload 的 updatedAt —— 否则每次都"变了",去重永不命中。
-      if (unchanged(file, body)) return;
-      // 捕获发起时代际:clearAll(登出 / 切账号)会自增,作废本次在途写入。
+      // 代际必须在**请求发起时**(排队之前)捕获,不能等任务开始执行才读:
+      // 「发起 → 排队 → 清理自增 → 任务开始」这个序列里,任务读到的是清理后的新代际,
+      // 于是携带着清理前旧数据的这笔写入会被当成新写入放行(review: codex P1)。
       const epoch = generation;
-      await ensureDir(dir);
-      if (epoch !== generation) return;
-      if (!(await writeFileAtomic(file, serialized))) return;
-      if (epoch !== generation) {
-        // 隐私清理期间落的盘:立刻收回,否则刚被清空的目录里会留下上一个账号的聊天内容。
-        lastWritten.delete(file);
-        await fsp.rm(file, { force: true }).catch(() => undefined);
-        return;
-      }
-      // 指纹只在真正落盘之后登记(写失败留指纹 → 同内容重试被跳过 → 缓存永久缺失)。
-      rememberWritten(file, body);
-      await evictMessagesIfNeeded(dir, lastWritten);
+      // 落盘与指纹登记必须成对且有序 → 同一文件的写入串成链(见 serializeWrite)。
+      return serializeWrite(file, async () => {
+        if (epoch !== generation) return;
+        // 指纹只算消息体,不含 payload 的 updatedAt —— 否则每次都"变了",去重永不命中。
+        // 在链内判等:排队期间前一笔可能刚写下同样内容。
+        if (unchanged(file, body)) return;
+        await ensureDir(dir);
+        if (epoch !== generation) return;
+        if (!(await writeFileAtomic(file, serialized))) return;
+        if (epoch !== generation) {
+          // 隐私清理期间落的盘:立刻收回,否则刚被清空的目录里会留下本该消失的聊天内容。
+          lastWritten.delete(file);
+          await fsp.rm(file, { force: true }).catch(() => undefined);
+          return;
+        }
+        // 指纹只在真正落盘之后登记(写失败留指纹 → 同内容重试被跳过 → 缓存永久缺失)。
+        rememberWritten(file, body);
+        await evictMessagesIfNeeded(dir, lastWritten);
+      });
     },
 
     async readSessionList() {
@@ -345,42 +427,53 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
 
     async writeSessionList(devices) {
       const file = sessionListPath();
-      for (const perDeviceLimit of SESSION_LIST_SHRINK_STEPS) {
-        const normalized = normalizeDeviceSessions(devices, perDeviceLimit);
-        if (normalized.length === 0) {
-          lastWritten.delete(file);
-          await fsp.rm(file, { force: true }).catch(() => undefined);
-          return;
-        }
-        const payload: StoredSessionList = {
-          version: 1,
-          updatedAt: Date.now(),
-          devices: normalized,
-        };
-        const serialized = JSON.stringify(payload);
-        if (Buffer.byteLength(serialized, 'utf8') > MAX_SESSION_LIST_BYTES) continue;
-        // 同 writeMessages:指纹只算 devices,不含 updatedAt。10 秒一轮的 anti-entropy
-        // 绝大多数时候内容没变,这里直接跳过落盘。
-        const body = JSON.stringify(normalized);
-        if (unchanged(file, body)) return;
-        const epoch = generation;
-        await ensureDir(path.dirname(file));
+      // 同 writeMessages:代际在请求发起时捕获(排队期间的清理必须能作废这笔)。
+      const epoch = generation;
+      // 与 writeMessages 同款:同一文件的写入串成链,保证「落盘 → 登记指纹」成对有序。
+      return serializeWrite(file, async () => {
         if (epoch !== generation) return;
-        if (!(await writeFileAtomic(file, serialized))) return;
-        if (epoch !== generation) {
-          lastWritten.delete(file);
-          await fsp.rm(file, { force: true }).catch(() => undefined);
+        for (const perDeviceLimit of SESSION_LIST_SHRINK_STEPS) {
+          const normalized = normalizeDeviceSessions(devices, perDeviceLimit);
+          if (normalized.length === 0) {
+            lastWritten.delete(file);
+            await fsp.rm(file, { force: true }).catch(() => undefined);
+            return;
+          }
+          const payload: StoredSessionList = {
+            version: 1,
+            updatedAt: Date.now(),
+            devices: normalized,
+          };
+          const serialized = JSON.stringify(payload);
+          if (Buffer.byteLength(serialized, 'utf8') > MAX_SESSION_LIST_BYTES) continue;
+          // 同 writeMessages:指纹只算 devices,不含 updatedAt。10 秒一轮的 anti-entropy
+          // 绝大多数时候内容没变,这里直接跳过落盘。
+          const body = JSON.stringify(normalized);
+          if (unchanged(file, body)) return;
+          await ensureDir(path.dirname(file));
+          if (epoch !== generation) return;
+          if (!(await writeFileAtomic(file, serialized))) return;
+          if (epoch !== generation) {
+            lastWritten.delete(file);
+            await fsp.rm(file, { force: true }).catch(() => undefined);
+            return;
+          }
+          rememberWritten(file, body);
           return;
         }
-        rememberWritten(file, body);
-        return;
-      }
-      // 缩到最小档仍超上限:保留旧快照,不写入。
+        // 缩到最小档仍超上限:保留旧快照,不写入。
+      });
     },
 
+    /**
+     * 某设备离场(撤销访问 / 关闭被控 / 本机禁用控制)。同样是隐私路径:
+     * 先自增代际作废在途写入 —— 不然那笔写入的原子 rename 会在删除之后完成,把刚被清掉的
+     * 设备正文或列表条目重建出来,直到下一次清理才消失(review: codex P1)。
+     */
     async clearDevice(deviceId) {
       const id = deviceId.trim();
       if (!id) return;
+      generation += 1;
       const dir = messagesDir();
       const prefix = `${safeSegment(id)}-${shortHash(id)}-`;
       const names = await listFiles(dir);
@@ -413,7 +506,20 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     async clearAll() {
       generation += 1;
       lastWritten.clear();
-      await fsp.rm(resolveRoot(), { recursive: true, force: true });
+      const root = resolveRoot();
+      try {
+        await fsp.rm(root, { recursive: true, force: true });
+        return;
+      } catch (err) {
+        // 整棵删不掉(Windows 文件锁 / 权限 / 并发写)时**不要就此放弃**:先逐个删内容,
+        // 把「还剩什么」查清楚 —— 目录空壳留着无所谓,聊天正文留着才是隐私问题。
+        const remaining = await purgeContents(root);
+        if (remaining.length === 0) {
+          log.debug(`mirror cache purged but root dir remains: ${root}`, err);
+          return;
+        }
+        throw new MirrorCachePurgeError(root, remaining, err);
+      }
     },
   };
 }
@@ -509,4 +615,5 @@ export const __testing = {
   sessionListFileName: SESSION_LIST_FILE,
   safeSegment,
   shortHash,
+  purgeContents,
 };

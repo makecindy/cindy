@@ -170,9 +170,20 @@ describe('mirror-cache IPC 授权边界', () => {
     }
   });
 
-  it('无 device-link capability 时 clear 仍放行(登出清理依赖这条)', async () => {
+  it('无 device-link capability 时 clear 仍放行(设备撤销可能发生在 capability 掉下去之后)', async () => {
     h.canUseDeviceLink = false;
-    await expect(call(DEVICE_LINK_INVOKE.MIRROR_CACHE_CLEAR, {})).resolves.toEqual({ ok: true });
-    expect(h.cache.clearAll).toHaveBeenCalledTimes(1);
+    await expect(
+      call(DEVICE_LINK_INVOKE.MIRROR_CACHE_CLEAR, { deviceId: 'dev-1' }),
+    ).resolves.toEqual({ ok: true });
+    expect(h.cache.clearDevice).toHaveBeenCalledWith('dev-1');
+    expect(h.cache.clearAll).not.toHaveBeenCalled();
+  });
+
+  it('clear 这个 IPC 永远碰不到 clearAll(整体清理只在 main 内部)', async () => {
+    await call(DEVICE_LINK_INVOKE.MIRROR_CACHE_CLEAR, { deviceId: 'dev-1' });
+    await expect(call(DEVICE_LINK_INVOKE.MIRROR_CACHE_CLEAR, {})).rejects.toThrow(
+      /INVALID_PARAMS/,
+    );
+    expect(h.cache.clearAll).not.toHaveBeenCalled();
   });
 });

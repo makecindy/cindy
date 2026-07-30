@@ -16,6 +16,7 @@ import path from 'node:path';
 
 import {
   createMirrorCache,
+  MirrorCachePurgeError,
   coerceCachedSession,
   messageFileName,
   normalizeMessages,
@@ -413,13 +414,76 @@ describe('clearDevice / clearAll', () => {
     expect(await c.readSessionList()).toEqual([]);
   });
 
-  // review(codex P1):隐私清理不能把失败吞成成功 —— 调用方要能 log / 重试,
+  // review(codex P1):隐私清理不能把失败吞成成功 —— 调用方要能 log / 持久化重试,
   // 否则账号边界照常推进而上一个账号的明文缓存留在盘上。
-  it('clearAll 删除失败时抛错(不把失败吞成成功)', async () => {
-    const c = createMirrorCache(() => path.join(root, 'blocked', 'cache'));
-    // 把父目录做成普通文件:rm 递归删除子路径时必然失败(ENOTDIR)。
-    await fsp.writeFile(path.join(root, 'blocked'), 'not a directory', 'utf8');
-    await expect(c.clearAll()).rejects.toThrow();
+  //
+  // 制造「内容删不掉」用的是「父目录只读」(删文件需要父目录写权限)。root 跑测试时
+  // 权限位不生效,那种环境下跳过。
+  const canTestUnwritableDir = (process.getuid?.() ?? 0) !== 0;
+
+  it.skipIf(!canTestUnwritableDir)(
+    'clearAll 内容删不掉时抛 MirrorCachePurgeError,并带上仍存在的文件清单',
+    async () => {
+      const cacheRoot = path.join(root, 'locked-cache');
+      const c = createMirrorCache(() => cacheRoot);
+      await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+      const dir = path.join(cacheRoot, __testing.messagesDirName);
+      const stuck = path.join(dir, (await fsp.readdir(dir))[0]);
+      await fsp.chmod(dir, 0o500); // r-x:目录里的文件删不掉了
+      try {
+        await c.clearAll().then(
+          () => expect.unreachable('clearAll should have rejected'),
+          (err: unknown) => {
+            expect(err).toBeInstanceOf(MirrorCachePurgeError);
+            const purgeErr = err as MirrorCachePurgeError;
+            expect(purgeErr.root).toBe(cacheRoot);
+            expect(purgeErr.remaining).toContain(stuck);
+          },
+        );
+      } finally {
+        await fsp.chmod(dir, 0o700);
+      }
+    },
+  );
+
+  it.skipIf(!canTestUnwritableDir)(
+    'clearAll 会尽力删掉能删的内容(一个删不掉的文件不该让其它文件也留下)',
+    async () => {
+      const cacheRoot = path.join(root, 'partial-cache');
+      const c = createMirrorCache(() => cacheRoot);
+      await c.writeSessionList([
+        { deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] },
+      ]);
+      await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+      const dir = path.join(cacheRoot, __testing.messagesDirName);
+      await fsp.chmod(dir, 0o500);
+      try {
+        await expect(c.clearAll()).rejects.toBeInstanceOf(MirrorCachePurgeError);
+        // messages/ 里的删不掉,但列表快照必须已经没了
+        expect(fs.existsSync(path.join(cacheRoot, __testing.sessionListFileName))).toBe(false);
+      } finally {
+        await fsp.chmod(dir, 0o700);
+      }
+    },
+  );
+
+  // 整棵 rm 失败后的降级路径:逐文件删,把「还剩什么」查清楚 ——
+  // 目录空壳留着无所谓,聊天正文留着才是隐私问题。
+  it('purgeContents 逐个删内容,并返回仍存在的文件清单', async () => {
+    const dir = path.join(root, 'purge-me');
+    await fsp.mkdir(path.join(dir, 'messages'), { recursive: true });
+    await fsp.writeFile(path.join(dir, 'session-list.json'), '{}', 'utf8');
+    await fsp.writeFile(path.join(dir, 'messages', 'a.json'), '{}', 'utf8');
+
+    const remaining = await __testing.purgeContents(dir);
+
+    expect(remaining).toEqual([]);
+    expect(fs.existsSync(path.join(dir, 'session-list.json'))).toBe(false);
+    expect(fs.existsSync(path.join(dir, 'messages', 'a.json'))).toBe(false);
+  });
+
+  it('purgeContents 对不存在的目录安全返回空清单', async () => {
+    expect(await __testing.purgeContents(path.join(root, 'nope'))).toEqual([]);
   });
 
   it('clearAll 之后到达的在途写入不会把内容写回(代际闸)', async () => {
@@ -450,5 +514,75 @@ describe('clearDevice / clearAll', () => {
     await c.clearAll();
     await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
     expect((await c.readMessages('dev-1', 'sess-1')).map((m) => m.id)).toEqual(['m1']);
+  });
+
+  // review(codex P1):clearDevice 与 clearAll 同构 —— 在途写入的原子 rename 会在删除之后
+  // 完成,把刚被撤销的设备正文重建出来。
+  it('clearDevice 之后到达的在途写入不会重建该设备的消息', async () => {
+    const c = cache();
+    const inFlight = c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+    await c.clearDevice('dev-1');
+    await inFlight;
+    expect(await c.readMessages('dev-1', 'sess-1')).toEqual([]);
+  });
+
+  it('clearDevice 之后到达的在途列表写入不会重建该设备的条目', async () => {
+    const c = cache();
+    const inFlight = c.writeSessionList([
+      { deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] },
+    ]);
+    await c.clearDevice('dev-1');
+    await inFlight;
+    expect((await c.readSessionList()).map((d) => d.deviceId)).toEqual([]);
+  });
+
+  it('clearDevice 只作废在途写入,之后的新写入照常落盘', async () => {
+    const c = cache();
+    await c.clearDevice('dev-1');
+    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+    expect((await c.readMessages('dev-1', 'sess-1')).map((m) => m.id)).toEqual(['m1']);
+  });
+});
+
+describe('并发写入', () => {
+  // review(greptile P1):两次并发写入在 await 处交错时,落盘内容与登记的指纹可能来自
+  // 不同那一次,于是较新的快照之后会被 unchanged 跳过,冷启动一直显示旧消息。
+  it('同一会话的并发写入串行化:盘上留的是最后一笔,且指纹与它一致', async () => {
+    const c = cache();
+    const first = [row('m1', '2026-01-01T00:00:00.000Z')];
+    const second = [row('m1', '2026-01-01T00:00:00.000Z'), row('m2', '2026-01-02T00:00:00.000Z')];
+
+    await Promise.all([
+      c.writeMessages('dev-1', 'sess-1', first),
+      c.writeMessages('dev-1', 'sess-1', second),
+    ]);
+
+    expect((await c.readMessages('dev-1', 'sess-1')).map((m) => m.id)).toEqual(['m1', 'm2']);
+
+    // 指纹没错位的判据:再提交**盘上这份**会被去重跳过,而提交另一份必须真的写下去。
+    const file = path.join(messagesDir(), messageFileName('dev-1', 'sess-1'));
+    const past = new Date(2020, 0, 1);
+    await fsp.utimes(file, past, past);
+    await c.writeMessages('dev-1', 'sess-1', second);
+    expect((await fsp.stat(file)).mtimeMs).toBe(past.getTime());
+
+    await c.writeMessages('dev-1', 'sess-1', first);
+    expect((await c.readMessages('dev-1', 'sess-1')).map((m) => m.id)).toEqual(['m1']);
+  });
+
+  it('列表快照的并发写入同样串行化', async () => {
+    const c = cache();
+    await Promise.all([
+      c.writeSessionList([
+        { deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] },
+      ]),
+      c.writeSessionList([
+        { deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] },
+        { deviceId: 'dev-2', deviceName: 'PC', sessions: [{ id: 's2', status: 'active' }] },
+      ]),
+    ]);
+
+    const devices = (await c.readSessionList()).map((d) => d.deviceId).sort();
+    expect(devices).toEqual(['dev-1', 'dev-2']);
   });
 });

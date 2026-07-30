@@ -285,7 +285,8 @@ import {
   defaultDeps as deviceLinkIpcDeps,
   handleInvoke as deviceLinkHandleInvoke,
 } from './device-link/ipc';
-import { getMirrorCache } from './device-link/mirrorCacheStore';
+import { getMirrorCache, MirrorCachePurgeError } from './device-link/mirrorCacheStore';
+import { drainPurgeQueue, enqueuePurge } from './device-link/mirrorCachePurgeQueue';
 import { assertCaptureHealthy } from './device-link/invoke-registry';
 // worktree-parallel-sessions: IPC 注册 + close-session 内的 fire-and-forget 删除钩子
 import {
@@ -852,10 +853,24 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   // 远程会话的镜像冷缓存里是别的设备的聊天内容。owner 命名空间已经保证下一个账号读不到
   // 它,但登出后不该在盘上留着 —— 这里 owner 还指向**旧账号**(commitActiveAppSession 在
   // teardown 之后才切),正是唯一能清准的时机。
+  //
+  // 删不掉时(Windows 文件锁 / 权限 / 并发写)**不阻断登出** —— 卡住登出比缓存残留更糟 ——
+  // 但也不能只记一行日志了事:把待清目录持久化进重试队列,下次启动与下次账号边界各消化
+  // 一次,直到真正删掉(review: codex P1)。顺手先消化一次历史遗留。
+  try {
+    await drainPurgeQueue();
+  } catch (err) {
+    authBoundaryLog.warn(`drain mirror cache purge queue on ${reason} failed:`, err);
+  }
   try {
     await getMirrorCache().clearAll();
   } catch (err) {
-    authBoundaryLog.error(`clear device-link mirror cache on ${reason} failed (non-fatal):`, err);
+    authBoundaryLog.error(`clear device-link mirror cache on ${reason} failed:`, err);
+    if (err instanceof MirrorCachePurgeError) {
+      await enqueuePurge(err.root).catch((enqueueErr: unknown) => {
+        authBoundaryLog.error('failed to enqueue mirror cache purge retry:', enqueueErr);
+      });
+    }
   }
   // Cindy relay owns long-lived transports plus account-scoped task/binding
   // state. Drain ingress before discarding the owner-scoped store; otherwise a
@@ -5710,6 +5725,17 @@ app.on('ready', async () => {
     },
   });
   registerDeviceLinkIpc();
+  // 上次登出时没删干净的远程会话镜像缓存(文件锁 / 权限占用),开机再清一次。
+  // 不阻塞启动关键路径,失败留在队列里等下一次(见 mirrorCachePurgeQueue)。
+  void drainPurgeQueue()
+    .then(({ purged, pending }) => {
+      if (purged > 0 || pending > 0) {
+        createLogger('device-link:mirror-cache-purge').info(
+          `startup purge drain: purged=${purged} pending=${pending}`,
+        );
+      }
+    })
+    .catch(() => undefined);
   // 注:invoke-capture 自检(assertCaptureHealthy)不在这里——maker:create-session / maker:send
   // 由 splash 后的 registerMakerIpcsAfterSplash 延迟注册,此刻尚未注册。自检已挪到该函数末尾
   // (见上方),那里所有 sentinel 都已就位,结果才准确。

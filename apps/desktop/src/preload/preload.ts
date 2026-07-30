@@ -2970,8 +2970,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
         }>,
       ): Promise<{ ok: true }> =>
         ipcRenderer.invoke('device-link:mirror-cache:session-list:put', { devices }),
-      /** 清缓存:传 deviceId 清单台设备,不传则整体清(登出) */
-      clear: (deviceId?: string): Promise<{ ok: true }> =>
+      /**
+       * 清掉一台设备的缓存(撤销 / 关被控 / 禁用控制)。deviceId 必填 ——
+       * 登出的整体清理由 main 在账号边界自己做,renderer 不持有那个能力。
+       */
+      clear: (deviceId: string): Promise<{ ok: true }> =>
         ipcRenderer.invoke('device-link:mirror-cache:clear', { deviceId }),
     },
   },
