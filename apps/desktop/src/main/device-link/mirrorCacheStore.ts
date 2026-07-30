@@ -265,8 +265,13 @@ export class MirrorCachePurgeError extends Error {
 }
 
 /**
- * 尽力删掉缓存目录里的内容,返回仍然存在的文件绝对路径。
+ * 尽力删掉缓存目录里的内容,返回仍然存在(或**无法确认已消失**)的路径。
  * 逐个删而不是整棵 rm:一个删不掉的文件不该让其它文件也留下来。
+ *
+ * 关键区分:`readdir` 失败时只有 `ENOENT` 能推出「这里已经没有内容了」。权限不足
+ * (EACCES / EPERM)、EBUSY 之类是**枚举失败** —— 目录里可能仍有明文缓存,却什么都数不出来。
+ * 把它当成「没有残留」会让 clearAll 误报成功、不入重试队列(review: codex P1),
+ * 所以这类目录本身要计入返回清单。
  */
 async function purgeContents(root: string): Promise<string[]> {
   const remaining: string[] = [];
@@ -274,8 +279,9 @@ async function purgeContents(root: string): Promise<string[]> {
     let entries: Array<{ name: string; isDirectory(): boolean }>;
     try {
       entries = await fsp.readdir(dir, { withFileTypes: true });
-    } catch {
-      return; // 目录不存在 / 读不了:没有可枚举的内容
+    } catch (err) {
+      if (errnoCode(err) !== 'ENOENT') remaining.push(dir); // 数不出来 ≠ 已经空了
+      return;
     }
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
@@ -293,6 +299,12 @@ async function purgeContents(root: string): Promise<string[]> {
   };
   await walk(root);
   return remaining;
+}
+
+function errnoCode(err: unknown): string | undefined {
+  return typeof err === 'object' && err !== null && 'code' in err
+    ? String((err as { code?: unknown }).code)
+    : undefined;
 }
 
 export interface MirrorCache {
@@ -477,19 +489,26 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       const dir = messagesDir();
       const prefix = `${safeSegment(id)}-${shortHash(id)}-`;
       const names = await listFiles(dir);
+      const stuck: string[] = [];
       await Promise.all(
         names
           .filter((name) => name.startsWith(prefix))
-          .map((name) => {
+          .map(async (name) => {
+            const file = path.join(dir, name);
             // 指纹一起清:文件删了却留着指纹,下次写同样内容会被去重跳过 → 文件回不来。
-            lastWritten.delete(path.join(dir, name));
-            return fsp.rm(path.join(dir, name), { force: true }).catch(() => undefined);
+            lastWritten.delete(file);
+            try {
+              await fsp.rm(file, { force: true });
+            } catch {
+              stuck.push(file);
+            }
           }),
       );
-      const remaining = (await this.readSessionList()).filter(
-        (device) => device.deviceId !== id,
-      );
-      await this.writeSessionList(remaining);
+      const others = (await this.readSessionList()).filter((device) => device.deviceId !== id);
+      await this.writeSessionList(others);
+      // 删不掉的文件(文件锁 / 权限)同样是隐私问题:被撤销的对端正文会留在盘上直到本账号
+      // 生命周期结束。抛出来让调用方登记重试,而不是把失败咽下去(review: codex P1)。
+      if (stuck.length > 0) throw new MirrorCachePurgeError(resolveRoot(), stuck, null);
     },
 
     /**

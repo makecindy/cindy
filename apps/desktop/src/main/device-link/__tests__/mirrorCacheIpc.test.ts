@@ -28,7 +28,7 @@ import {
   handleMirrorCachePutMessages,
   handleMirrorCachePutSessionList,
 } from '../ipc';
-import type { MirrorCache } from '../mirrorCacheStore';
+import { MirrorCachePurgeError, type MirrorCache } from '../mirrorCacheStore';
 
 function fakeCache() {
   return {
@@ -133,5 +133,34 @@ describe('clear', () => {
     }
     expect(cache.clearAll).not.toHaveBeenCalled();
     expect(cache.clearDevice).not.toHaveBeenCalled();
+  });
+
+  // review(codex P1):renderer 侧的清理是 fire-and-forget,没人重试 —— 文件删不掉时
+  // 必须由 main 登记到 purge 队列,否则被撤销对端的正文留到本账号生命周期结束。
+  it('文件删不掉时把失败路径登记进重试队列,并照常返回 ok', async () => {
+    const stuck = ['/data/owners/x/device-link-mirror-cache/messages/a.json'];
+    cache.clearDevice.mockRejectedValueOnce(
+      new MirrorCachePurgeError('/data/owners/x/device-link-mirror-cache', stuck, null),
+    );
+    const enqueue = vi.fn(async () => undefined);
+
+    await expect(handleMirrorCacheClear(cache, 'dev-1', enqueue)).resolves.toEqual({ ok: true });
+
+    expect(enqueue).toHaveBeenCalledWith('/data/owners/x/device-link-mirror-cache', stuck);
+  });
+
+  it('登记重试本身失败也不让 IPC 失败(已记 error,清理是 best-effort)', async () => {
+    cache.clearDevice.mockRejectedValueOnce(new MirrorCachePurgeError('/data/owners/x', ['/a'], null));
+    const enqueue = vi.fn(async () => {
+      throw new Error('userData read-only');
+    });
+    await expect(handleMirrorCacheClear(cache, 'dev-1', enqueue)).resolves.toEqual({ ok: true });
+  });
+
+  it('非 purge 类错误照常抛出(不被误当成"已登记重试")', async () => {
+    cache.clearDevice.mockRejectedValueOnce(new Error('boom'));
+    await expect(handleMirrorCacheClear(cache, 'dev-1', async () => undefined)).rejects.toThrow(
+      /boom/,
+    );
   });
 });

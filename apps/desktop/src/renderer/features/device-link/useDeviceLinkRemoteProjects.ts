@@ -280,8 +280,12 @@ export function useDeviceLinkRemoteProjects(): void {
           // disconnected 项目常驻侧边栏,还会被后续快照一直写回盘(review: codex P1)。
           // 只在 listDevices **成功**时做(catch 分支不清):拿不到权威集合就不能判定缺席。
           // eligible 里的设备豁免 —— 它们由 presence 事件管理,listDevices 偶发缺项不该误删。
+          //
+          // 必须遍历 `getAllDeviceIds()`:缓存种入的分片一律标 disconnected,而
+          // `getDeviceIds()` 只返回 connected —— 用它的话这个收敛循环恰好**永远看不到**
+          // 要收的那些分片(review: codex 指出上一轮的修复因此无效)。
           const authoritative = new Set(devices.map((d) => d.deviceId));
-          for (const deviceId of remoteProjectsStore.getDeviceIds()) {
+          for (const deviceId of remoteProjectsStore.getAllDeviceIds()) {
             if (authoritative.has(deviceId) || eligible.has(deviceId)) continue;
             log.debug(`removing cached shard absent from listDevices: ${deviceId.slice(0, 8)}`);
             remoteProjectsStore.removeDevice(deviceId);

@@ -53,9 +53,11 @@ import {
 } from './settings-store';
 import {
   getMirrorCache,
+  MirrorCachePurgeError,
   type CachedDeviceSessions,
   type MirrorCache,
 } from './mirrorCacheStore';
+import { enqueuePurge } from './mirrorCachePurgeQueue';
 import {
   recordSubscribe,
   recordUnsubscribe,
@@ -672,9 +674,23 @@ export async function handleMirrorCachePutSessionList(
 export async function handleMirrorCacheClear(
   cache: MirrorCache,
   deviceId: unknown,
+  enqueueRetry: (root: string, paths?: readonly string[]) => Promise<void> = enqueuePurge,
 ): Promise<{ ok: true }> {
   const device = requireString(deviceId, 'deviceId');
-  await cache.clearDevice(device);
+  try {
+    await cache.clearDevice(device);
+  } catch (err) {
+    // 文件删不掉(文件锁 / 权限)时登记重试:被撤销的对端正文不能就这么留在盘上,
+    // 而 renderer 侧的清理是 fire-and-forget、没人会重试(review: codex P1)。
+    if (err instanceof MirrorCachePurgeError) {
+      log.error(`clearDevice left ${err.remaining.length} file(s) behind; queued for retry`, err);
+      await enqueueRetry(err.root, err.remaining).catch((queueErr: unknown) => {
+        log.error('failed to queue clearDevice purge retry', queueErr);
+      });
+      return { ok: true };
+    }
+    throw err;
+  }
   return { ok: true };
 }
 

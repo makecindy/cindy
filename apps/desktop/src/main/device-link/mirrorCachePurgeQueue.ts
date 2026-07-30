@@ -1,18 +1,26 @@
 /**
- * mirrorCachePurgeQueue —— 「登出时没清干净的镜像缓存」的持久重试队列。
+ * mirrorCachePurgeQueue —— 「镜像缓存没清干净」的重试队列(持久 + 内存兜底)。
  * ---------------------------------------------------------------------------
- * `mirrorCacheStore.clearAll()` 是隐私路径:登出 / 切账号 / 会话失效时必须把上一个账号的
- * 远程聊天缓存从盘上删掉。但删除**可能失败**(Windows 文件锁、权限、并发写),而登出本身
- * 不能因此卡住 —— 于是只记一条日志的话,账号边界照常推进,那份明文缓存就无限期留在盘上,
- * 既没有重试也没有任何痕迹(review: codex P1)。
+ * `mirrorCacheStore` 的两条隐私路径都可能删不掉东西(Windows 文件锁、权限、并发写):
+ *  - `clearAll()`:登出 / 切账号 / 会话失效,要清掉上一个账号的整份远程聊天缓存;
+ *  - `clearDevice()`:对端撤销访问 / 关闭被控 / 本机禁用控制,要清掉那台设备的正文。
+ * 两者都不该因为删除失败就阻断主流程(卡住登出比缓存暫留更糟),但也**不能只记一行日志**
+ * —— 那样账号边界照常推进,明文缓存无限期留在盘上,既没有重试也没有痕迹(review: codex P1)。
  *
- * 这里补上「持久化一次重试」:失败时把待清目录记进 userData 根下的小 JSON,
- * 之后两个时机各消化一次 —— 下一次进程启动(device-link 服务初始化时)、以及下一次
- * 账号边界 teardown。清成功就把条目移除。
+ * 这里提供可重试的记录,两个时机各消化一次:下一次进程启动(device-link 服务初始化后)、
+ * 以及下一次账号边界 teardown。
  *
- * 记录里**只有目录路径**:owner 命名空间目录名是 userId 的 sha256 派生值(见
- * appSessionState.dataOwnerStorageKey),不可逆、不含账号信息,也不含任何凭证。
- * 消化时强制校验路径落在 `<userData>/owners/` 之内,不接受队列文件被人为改成任意路径。
+ * 记录分两级:
+ *  - 整根条目(`clearAll` 失败):删掉整棵缓存目录;
+ *  - 文件级条目(`clearDevice` 失败):只删列出的文件,不动别人的缓存。
+ *
+ * 双写:落盘 JSON(跨重启)+ 进程内内存表(userData 只读 / 满 / 被锁时的兜底,本进程内仍能
+ * 在后续 drain 时重试)。落盘失败会**抛给调用方**,同时把条目留在内存里 —— 调用方据此
+ * 记录「连持久记录都没写下」这一更严重的事实。
+ *
+ * 安全边界:条目里只有路径(owner 目录名是 userId 的 sha256 派生值,见
+ * appSessionState.dataOwnerStorageKey —— 不可逆、不含账号信息,也不含任何凭证)。
+ * 队列文件是普通 JSON,**不能当授权**:消化前一律重新校验路径落在 `<userData>/owners/` 之内。
  */
 
 import { app } from 'electron';
@@ -24,12 +32,19 @@ import { createLogger } from '../logger';
 const log = createLogger('device-link:mirror-cache-purge');
 
 const QUEUE_FILE = 'device-link-mirror-cache-purge.json';
-/** 队列条目上限:防止异常情况下无界增长(每条只有一个路径 + 时间戳)。 */
+/** 队列条目上限:防止异常情况下无界增长。 */
 const MAX_ENTRIES = 32;
+/** 单条目里的文件级路径上限。 */
+const MAX_PATHS_PER_ENTRY = 200;
 
 interface PurgeEntry {
   /** 待清理的缓存根目录绝对路径。 */
   root: string;
+  /**
+   * 文件级重试清单。非空 = 只删这些文件(clearDevice 失败);
+   * 缺省 / 空 = 删整棵 root(clearAll 失败)。
+   */
+  paths?: string[];
   /** 首次记录时间(毫秒),仅供排查。 */
   since: number;
   /** 已经尝试过多少次。 */
@@ -41,6 +56,12 @@ interface StoredQueue {
   entries: PurgeEntry[];
 }
 
+/**
+ * 内存兜底表:落盘失败时至少本进程内还能重试。key 用 `root|paths.join()` 去重。
+ * 进程退出即丢 —— 它补的是「盘写不下去」这个洞,不是替代持久化。
+ */
+const memoryQueue = new Map<string, PurgeEntry>();
+
 function queueFilePath(): string {
   return path.join(app.getPath('userData'), QUEUE_FILE);
 }
@@ -50,9 +71,13 @@ function ownersRoot(): string {
   return path.join(app.getPath('userData'), 'owners');
 }
 
+function entryKey(entry: PurgeEntry): string {
+  return `${path.resolve(entry.root)}|${[...(entry.paths ?? [])].sort().join('')}`;
+}
+
 /**
  * 路径是否可被本模块删除。队列文件是普通 JSON,理论上可被改写 —— 消化前必须重新验证,
- * 不能凭文件内容就去 rm 任意目录。
+ * 不能凭文件内容就去 rm 任意路径。
  */
 export function isPurgableRoot(root: string, ownersRootPath: string): boolean {
   if (!root || typeof root !== 'string') return false;
@@ -63,7 +88,14 @@ export function isPurgableRoot(root: string, ownersRootPath: string): boolean {
   return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
-async function readQueue(): Promise<PurgeEntry[]> {
+/** 文件级条目的每个路径都必须落在它自己的 root 之内(顺带满足 owners 约束)。 */
+function isPurgablePath(target: string, root: string): boolean {
+  if (!target || typeof target !== 'string') return false;
+  const rel = path.relative(path.resolve(root), path.resolve(target));
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+async function readPersistedQueue(): Promise<PurgeEntry[]> {
   try {
     const raw = await fsp.readFile(queueFilePath(), 'utf8');
     const parsed = JSON.parse(raw) as unknown;
@@ -75,6 +107,9 @@ async function readQueue(): Promise<PurgeEntry[]> {
       .filter((entry): entry is PurgeEntry => !!entry && typeof entry.root === 'string')
       .map((entry) => ({
         root: entry.root,
+        paths: Array.isArray(entry.paths)
+          ? entry.paths.filter((p): p is string => typeof p === 'string').slice(0, MAX_PATHS_PER_ENTRY)
+          : undefined,
         since: typeof entry.since === 'number' ? entry.since : Date.now(),
         attempts: typeof entry.attempts === 'number' ? entry.attempts : 0,
       }))
@@ -84,6 +119,15 @@ async function readQueue(): Promise<PurgeEntry[]> {
   }
 }
 
+/** 持久 + 内存两处合并后的待清清单(内存条目优先,它更新)。 */
+async function readQueue(): Promise<PurgeEntry[]> {
+  const merged = new Map<string, PurgeEntry>();
+  for (const entry of await readPersistedQueue()) merged.set(entryKey(entry), entry);
+  for (const [key, entry] of memoryQueue) merged.set(key, entry);
+  return [...merged.values()].slice(0, MAX_ENTRIES);
+}
+
+/** 写队列文件。失败**抛出** —— 调用方需要知道「持久重试记录没写下」。 */
 async function writeQueue(entries: readonly PurgeEntry[]): Promise<void> {
   const file = queueFilePath();
   if (entries.length === 0) {
@@ -91,27 +135,55 @@ async function writeQueue(entries: readonly PurgeEntry[]): Promise<void> {
     return;
   }
   const payload: StoredQueue = { version: 1, entries: entries.slice(0, MAX_ENTRIES) };
-  await fsp.writeFile(file, JSON.stringify(payload), 'utf8').catch((err: unknown) => {
-    log.warn('failed to persist mirror cache purge queue', err);
-  });
-}
-
-/** 记下一个没清干净的缓存目录(同一目录只保留一条,累加 attempts)。 */
-export async function enqueuePurge(root: string): Promise<void> {
-  if (!isPurgableRoot(root, ownersRoot())) {
-    log.warn(`refusing to enqueue purge outside owners dir: ${root}`);
-    return;
-  }
-  const entries = await readQueue();
-  const existing = entries.find((entry) => path.resolve(entry.root) === path.resolve(root));
-  if (existing) existing.attempts += 1;
-  else entries.push({ root, since: Date.now(), attempts: 1 });
-  await writeQueue(entries);
+  await fsp.writeFile(file, JSON.stringify(payload), 'utf8');
 }
 
 /**
- * 消化队列:逐个重试删除,成功的移除条目。best-effort —— 全程不抛,失败的留到下一次。
- * 返回本次成功清掉的数量,便于日志与测试断言。
+ * 记下一条没清干净的记录。同一 (root, paths) 只保留一条、attempts 累加。
+ * `paths` 非空 = 文件级重试;缺省 = 整根重试。
+ *
+ * 内存表**先**记(保证本进程内一定能重试),再尝试落盘;落盘失败照常抛给调用方。
+ */
+export async function enqueuePurge(root: string, paths?: readonly string[]): Promise<void> {
+  const base = ownersRoot();
+  if (!isPurgableRoot(root, base)) {
+    log.warn(`refusing to enqueue purge outside owners dir: ${root}`);
+    return;
+  }
+  const safePaths = (paths ?? [])
+    .filter((target) => isPurgablePath(target, root))
+    .slice(0, MAX_PATHS_PER_ENTRY);
+  if ((paths?.length ?? 0) > 0 && safePaths.length === 0) {
+    log.warn(`refusing to enqueue purge paths outside root: ${root}`);
+    return;
+  }
+  const entry: PurgeEntry = {
+    root,
+    paths: safePaths.length > 0 ? safePaths : undefined,
+    since: Date.now(),
+    attempts: 1,
+  };
+  const key = entryKey(entry);
+  const existing = (await readQueue()).find((candidate) => entryKey(candidate) === key);
+  if (existing) {
+    entry.since = existing.since;
+    entry.attempts = existing.attempts + 1;
+  }
+  // 内存兜底先落:即使接下来落盘失败,本进程后续的 drain 仍会重试。
+  memoryQueue.set(key, entry);
+  const entries = (await readQueue()).filter((candidate) => entryKey(candidate) !== key);
+  entries.push(entry);
+  try {
+    await writeQueue(entries);
+  } catch (err) {
+    log.error('failed to persist mirror cache purge queue (kept in memory only)', err);
+    throw err;
+  }
+}
+
+/**
+ * 消化队列:逐条重试删除,成功的移除。best-effort —— 不抛,失败的留到下一次。
+ * 返回本次清掉与仍待清的条目数,便于日志与测试断言。
  */
 export async function drainPurgeQueue(): Promise<{ purged: number; pending: number }> {
   const entries = await readQueue();
@@ -120,21 +192,53 @@ export async function drainPurgeQueue(): Promise<{ purged: number; pending: numb
   const keep: PurgeEntry[] = [];
   let purged = 0;
   for (const entry of entries) {
+    const key = entryKey(entry);
     if (!isPurgableRoot(entry.root, base)) {
       log.warn(`dropping purge entry outside owners dir: ${entry.root}`);
+      memoryQueue.delete(key);
       continue;
     }
+    const targets = (entry.paths ?? []).filter((target) => isPurgablePath(target, entry.root));
     try {
-      await fsp.rm(entry.root, { recursive: true, force: true });
+      if (entry.paths && entry.paths.length > 0) {
+        // 文件级:全部删成功才算清掉;剩下的继续留在队列里。
+        const stuck: string[] = [];
+        for (const target of targets) {
+          try {
+            await fsp.rm(target, { force: true });
+          } catch {
+            stuck.push(target);
+          }
+        }
+        if (stuck.length > 0) throw new Error(`${stuck.length} file(s) still undeletable`);
+      } else {
+        await fsp.rm(entry.root, { recursive: true, force: true });
+      }
       purged += 1;
+      memoryQueue.delete(key);
       log.info(`purged leftover device-link mirror cache: ${entry.root}`);
     } catch (err) {
-      keep.push({ ...entry, attempts: entry.attempts + 1 });
-      log.warn(`retry purge still failing (attempt ${entry.attempts + 1}): ${entry.root}`, err);
+      const retried = { ...entry, attempts: entry.attempts + 1 };
+      keep.push(retried);
+      memoryQueue.set(key, retried);
+      log.warn(`retry purge still failing (attempt ${retried.attempts}): ${entry.root}`, err);
     }
   }
-  await writeQueue(keep);
+  // 落盘失败不影响本次结果:内存表已经更新,下一次 drain 照样会重试。
+  await writeQueue(keep).catch((err: unknown) => {
+    log.error('failed to persist purge queue after drain (kept in memory only)', err);
+  });
   return { purged, pending: keep.length };
 }
 
-export const __testing = { queueFileName: QUEUE_FILE, maxEntries: MAX_ENTRIES, readQueue };
+export const __testing = {
+  queueFileName: QUEUE_FILE,
+  maxEntries: MAX_ENTRIES,
+  readQueue,
+  resetMemoryQueue(): void {
+    memoryQueue.clear();
+  },
+  memoryQueueSize(): number {
+    return memoryQueue.size;
+  },
+};

@@ -42,10 +42,12 @@ async function makeOwnerCache(ownerKey: string): Promise<string> {
 
 beforeEach(() => {
   userData = fs.mkdtempSync(path.join(os.tmpdir(), 'mirror-purge-queue-'));
+  __testing.resetMemoryQueue();
 });
 
 afterEach(() => {
   fs.rmSync(userData, { recursive: true, force: true });
+  __testing.resetMemoryQueue();
 });
 
 describe('isPurgableRoot', () => {
@@ -119,5 +121,59 @@ describe('enqueuePurge / drainPurgeQueue', () => {
 
     expect(await drainPurgeQueue()).toEqual({ purged: 1, pending: 0 });
     expect(fs.existsSync(queueFile())).toBe(false);
+  });
+});
+
+describe('文件级条目(clearDevice 删不掉时用)', () => {
+  it('只删列出的文件,不动同目录的其它缓存', async () => {
+    const root = await makeOwnerCache('owner-1');
+    const mine = path.join(root, 'messages', 'a.json');
+    const other = path.join(root, 'messages', 'b.json');
+    await fsp.writeFile(other, '{}', 'utf8');
+
+    await enqueuePurge(root, [mine]);
+    const result = await drainPurgeQueue();
+
+    expect(result).toEqual({ purged: 1, pending: 0 });
+    expect(fs.existsSync(mine)).toBe(false);
+    expect(fs.existsSync(other)).toBe(true);
+    expect(fs.existsSync(root)).toBe(true);
+  });
+
+  it('root 之外的文件路径拒绝入队(不给自己造越界删除的能力)', async () => {
+    const root = await makeOwnerCache('owner-1');
+    const outside = path.join(userData, 'owners', 'owner-2', 'secret.json');
+    await fsp.mkdir(path.dirname(outside), { recursive: true });
+    await fsp.writeFile(outside, '{}', 'utf8');
+
+    await enqueuePurge(root, [outside]);
+
+    expect(fs.existsSync(queueFile())).toBe(false);
+    expect(await drainPurgeQueue()).toEqual({ purged: 0, pending: 0 });
+    expect(fs.existsSync(outside)).toBe(true);
+  });
+
+  it('文件级条目与整根条目互不覆盖', async () => {
+    const root = await makeOwnerCache('owner-1');
+    await enqueuePurge(root);
+    await enqueuePurge(root, [path.join(root, 'messages', 'a.json')]);
+    expect(await __testing.readQueue()).toHaveLength(2);
+  });
+});
+
+describe('落盘失败', () => {
+  // review(codex P1):唯一的持久重试记录写不下去却报成功 = 静默丢失。
+  it('队列文件写不下去时 enqueuePurge 抛错,但条目留在内存里仍会被 drain 重试', async () => {
+    const root = await makeOwnerCache('owner-1');
+    // 把队列文件位置占成目录:writeFile 必然 EISDIR。
+    await fsp.mkdir(queueFile(), { recursive: true });
+
+    await expect(enqueuePurge(root)).rejects.toThrow();
+    expect(__testing.memoryQueueSize()).toBe(1);
+
+    const result = await drainPurgeQueue();
+    expect(result.purged).toBe(1);
+    expect(fs.existsSync(root)).toBe(false);
+    expect(__testing.memoryQueueSize()).toBe(0);
   });
 });

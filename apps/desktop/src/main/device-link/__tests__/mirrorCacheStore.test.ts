@@ -482,9 +482,65 @@ describe('clearDevice / clearAll', () => {
     expect(fs.existsSync(path.join(dir, 'messages', 'a.json'))).toBe(false);
   });
 
-  it('purgeContents 对不存在的目录安全返回空清单', async () => {
+  it('purgeContents 对不存在的目录安全返回空清单(ENOENT = 真的没有内容)', async () => {
     expect(await __testing.purgeContents(path.join(root, 'nope'))).toEqual([]);
   });
+
+  // review(codex P1):readdir 因权限失败时"数不出东西"不等于"已经空了" —— 当成空的话
+  // clearAll 会误报成功、不入重试队列,而明文缓存可能仍在里面。
+  it.skipIf(!canTestUnwritableDir)(
+    'purgeContents 把「读不了的目录」计入残留清单(而不是当成已清空)',
+    async () => {
+      const dir = path.join(root, 'unreadable');
+      await fsp.mkdir(dir, { recursive: true });
+      await fsp.writeFile(path.join(dir, 'a.json'), '{}', 'utf8');
+      await fsp.chmod(dir, 0o000);
+      try {
+        expect(await __testing.purgeContents(dir)).toEqual([dir]);
+      } finally {
+        await fsp.chmod(dir, 0o700);
+      }
+    },
+  );
+
+  it.skipIf(!canTestUnwritableDir)(
+    'clearAll 在缓存目录读不了时抛错(不静默成功、能进重试队列)',
+    async () => {
+      const cacheRoot = path.join(root, 'unreadable-cache');
+      await fsp.mkdir(path.join(cacheRoot, 'messages'), { recursive: true });
+      await fsp.writeFile(path.join(cacheRoot, 'messages', 'a.json'), '{}', 'utf8');
+      const c = createMirrorCache(() => cacheRoot);
+      await fsp.chmod(cacheRoot, 0o000);
+      try {
+        await expect(c.clearAll()).rejects.toBeInstanceOf(MirrorCachePurgeError);
+      } finally {
+        await fsp.chmod(cacheRoot, 0o700);
+      }
+    },
+  );
+
+  // review(codex P1):撤销设备时删不掉的文件会留到本账号生命周期结束,必须能被重试。
+  it.skipIf(!canTestUnwritableDir)(
+    'clearDevice 有文件删不掉时抛 MirrorCachePurgeError 并带上那些路径',
+    async () => {
+      const c = cache();
+      await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+      const dir = messagesDir();
+      const stuck = path.join(dir, messageFileName('dev-1', 'sess-1'));
+      await fsp.chmod(dir, 0o500);
+      try {
+        await c.clearDevice('dev-1').then(
+          () => expect.unreachable('clearDevice should have rejected'),
+          (err: unknown) => {
+            expect(err).toBeInstanceOf(MirrorCachePurgeError);
+            expect((err as MirrorCachePurgeError).remaining).toEqual([stuck]);
+          },
+        );
+      } finally {
+        await fsp.chmod(dir, 0o700);
+      }
+    },
+  );
 
   it('clearAll 之后到达的在途写入不会把内容写回(代际闸)', async () => {
     const c = cache();

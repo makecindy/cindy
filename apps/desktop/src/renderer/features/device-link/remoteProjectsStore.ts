@@ -592,6 +592,19 @@ const actions = {
       .map((shard) => shard.deviceId);
   },
 
+  /**
+   * **保留着分片的全部**设备 id(connected + disconnected)。
+   *
+   * 与 `getDeviceIds()` 的区别是刻意的,两者不可混用:那个是「在线可控」语义(anti-entropy
+   * 轮询、Stop 按钮的 host-online 判定都只该看在线设备);这个是「本端还留着谁的镜像」语义,
+   * 给需要遍历全部留存分片的场景用 —— 冷缓存回写(断连设备也要写进快照,否则下次冷启动
+   * 就恢复不出它)、以及按权威列表收掉缺席分片(缓存种入的分片一律是 disconnected,
+   * 用 connected-only 的访问器根本遍历不到它们)。见 review(codex P1)。
+   */
+  getAllDeviceIds(): string[] {
+    return [...shards.keys()];
+  },
+
   /** 机器切换栏用:当前已同步或保留断线缓存的被控设备摘要列表(引用稳定 + 稳定排序)。 */
   getDeviceList(): RemoteDeviceSummary[] {
     return deviceListSnapshot;

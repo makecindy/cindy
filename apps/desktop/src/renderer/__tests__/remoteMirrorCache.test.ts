@@ -30,6 +30,7 @@ vi.mock('@/lib/sessionService', () => ({
 import { makerChatStore } from '@/lib/makerChatStore';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { listMessagesFor } from '@/lib/makerTransport';
+import { collectSessionListSnapshot } from '@/features/device-link/refreshRemoteSessions';
 import * as messageService from '@/lib/messageService';
 
 const DEVICE_ID = 'dev-A';
@@ -392,5 +393,39 @@ describe('会话离场时清消息缓存', () => {
 
     expect(putMessages).toHaveBeenCalledWith(DEVICE_ID, 's-del', []);
     expect(putMessages).toHaveBeenCalledWith(DEVICE_ID, 's-arch', []);
+  });
+});
+
+describe('列表快照的采集口径', () => {
+  // review(codex P1):collectSessionListSnapshot 原本用 getDeviceIds()(只返回 connected),
+  // 于是「A 离线、B 刚 refresh」时整份回写会把 A 抹掉,下次冷启动恢复不出那台离线设备 ——
+  // 而离线可见正是这份缓存存在的理由。
+  it('断连设备仍进快照(否则冷启动就恢复不出离线设备)', () => {
+    remoteProjectsStore.setDeviceSessions('dev-online', 'Online Mac', [{ id: 's-on' }] as never);
+    remoteProjectsStore.setDeviceSessions('dev-offline', 'Offline Mac', [{ id: 's-off' }] as never);
+    remoteProjectsStore.markDeviceDisconnected('dev-offline');
+
+    const snapshot = collectSessionListSnapshot();
+
+    expect(snapshot.map((d) => d.deviceId).sort()).toEqual(['dev-offline', 'dev-online']);
+    expect(snapshot.find((d) => d.deviceId === 'dev-offline')?.sessions.map((s) => s.id)).toEqual([
+      's-off',
+    ]);
+  });
+
+  it('缓存种入的(disconnected)分片也在采集范围内', () => {
+    remoteProjectsStore.hydrateFromCache([
+      { deviceId: 'dev-cold', deviceName: 'Cold', sessions: [{ id: 's-cold' }] as never },
+    ]);
+    expect(collectSessionListSnapshot().map((d) => d.deviceId)).toEqual(['dev-cold']);
+  });
+
+  it('getDeviceIds 仍是「在线可控」语义(anti-entropy 只该轮询在线设备)', () => {
+    remoteProjectsStore.setDeviceSessions('dev-online', 'Online', [{ id: 's-on' }] as never);
+    remoteProjectsStore.setDeviceSessions('dev-offline', 'Offline', [{ id: 's-off' }] as never);
+    remoteProjectsStore.markDeviceDisconnected('dev-offline');
+
+    expect(remoteProjectsStore.getDeviceIds()).toEqual(['dev-online']);
+    expect(remoteProjectsStore.getAllDeviceIds().sort()).toEqual(['dev-offline', 'dev-online']);
   });
 });
