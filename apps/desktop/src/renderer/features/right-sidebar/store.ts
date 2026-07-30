@@ -545,14 +545,17 @@ export async function addTab(
     forgetClosedTab(sessionId, id);
     // rowCommitted=true 说明 upsert 已成功、SQLite 有这一行,但 addTab 整体失败
     // (通常是 setActive 抛错)。cache 已回滚且没有调用方会再发 closeTab —— 走共享
-    // 的孤儿行清理(与 closeTab 创建失败分支同款):[NOT_FOUND] 即成功,瞬态失败
-    // 按 overload 节奏重试,终失败 log.error 留痕。旁路 fire-and-forget:addTab
-    // 必须原样抛出触发回滚的 err,清理结果不改变调用方看到的失败语义,但绝不再
-    // 单次尝试就静默吞掉(那会让孤儿行躲过重试、下次 hydrate 复活)。
+    // 的孤儿行清理(与 closeTab 创建失败分支同款 cleanupOrphanTabRow):
+    // [NOT_FOUND] 即成功,瞬态失败按 overload 节奏重试,终失败 log.error 留痕。
+    // await 到清理尽力完成再抛原始 err(时序确定);清理自身的失败绝不掩盖
+    // 触发回滚的原始错误。
     if (rowCommitted) {
-      void settleTabStateWrites(sessionId, id)
-        .then(() => cleanupOrphanTabRow(sessionId, id, 'addTab rollback'))
-        .catch(() => undefined); // 终失败已在 helper 内 log.error 留痕
+      try {
+        await settleTabStateWrites(sessionId, id);
+        await cleanupOrphanTabRow(sessionId, id, 'addTab rollback');
+      } catch {
+        // 终失败已在 helper 内 log.error 留痕;继续抛原始 err。
+      }
     }
     throw err;
   }
