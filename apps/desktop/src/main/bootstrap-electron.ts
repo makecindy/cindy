@@ -3324,6 +3324,12 @@ const registerIpcHandlers = () => {
       source: 'host_config',
       ref: `provider:${providerId}`,
     });
+    // 向所有窗口广播 PROVIDER_CHANGED:useProviders 依赖此消息刷新连接态快照(多窗口同步)。
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) {
+        try { win.webContents.send(MAKER_PUSH.PROVIDER_CHANGED, {}); } catch { /* no-op */ }
+      }
+    }
   };
 
   ipcMain.handle(
