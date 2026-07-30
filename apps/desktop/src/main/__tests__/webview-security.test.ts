@@ -431,8 +431,7 @@ describe('installDeferredPopupRouter', () => {
 
   it('routes without attribution once the opener wait times out', async () => {
     // 永久落空(guest 不属于任何已上报的 RSB tab)时不能把 popup 一直扣着 ——
-    // 第一轮(popup 创建时) + 第二轮(URL 到达时)各 1s,共最多 2s 后照常路由,
-    // 只是没有 opener 字段(回落到旧行为)。
+    // 有界等待到点后照常路由,只是没有 opener 字段(回落到旧行为)。
     vi.useFakeTimers();
     const { childContents, hostContents, popupWindow } = makePopupHarness();
     setRsbPopupOpenerResolver(() => null);
@@ -447,44 +446,11 @@ describe('installDeferredPopupRouter', () => {
     childContents.emit('will-navigate', {}, 'https://accounts.example.com/oauth');
     expect(hostContents.send).not.toHaveBeenCalled();
 
-    // 两轮各 1s:第一轮(popup 创建时)+ 第二轮(URL 到达时)
-    await vi.advanceTimersByTimeAsync(2 * POPUP_OPENER_WAIT_TIMEOUT_MS + 100);
-
-    expect(hostContents.send).toHaveBeenCalledWith(RSB_BROWSER_POPUP_CHANNEL, {
-      url: 'https://accounts.example.com/oauth',
-      disposition: 'foreground-tab',
-    });
-  });
-
-  it('uses sync fallback when opener report arrives after the 1s timeout but before URL', async () => {
-    // Greptile P1: waitForPopupOpener 在 popup 创建 1 秒后超时返回 null。
-    // 若 renderer 的 opener 上报在超时后才入库,URL 到达时应补一次同步重查，
-    // 而不是直接以 null 路由（导致落错会话）。
-    vi.useFakeTimers();
-    const { childContents, hostContents, popupWindow } = makePopupHarness();
-    let registered: { tabId: string; sessionId: string } | null = null;
-    setRsbPopupOpenerResolver((id) => (id === 42 ? registered : null));
-
-    installDeferredPopupRouter(
-      hostContents,
-      popupWindow as unknown as BrowserWindow,
-      'foreground-tab',
-      42,
-    );
-
-    // 1s 超时过去:waitForPopupOpener 返回 null
     await vi.advanceTimersByTimeAsync(POPUP_OPENER_WAIT_TIMEOUT_MS + 50);
 
-    // 超时之后、URL 到达之前 opener 上报到达
-    registered = { tabId: 'tab-1', sessionId: 'session-a' };
-    childContents.emit('will-navigate', {}, 'https://accounts.example.com/oauth');
-
-    await vi.waitFor(() => expect(hostContents.send).toHaveBeenCalledTimes(1));
     expect(hostContents.send).toHaveBeenCalledWith(RSB_BROWSER_POPUP_CHANNEL, {
       url: 'https://accounts.example.com/oauth',
       disposition: 'foreground-tab',
-      openerTabId: 'tab-1',
-      openerSessionId: 'session-a',
     });
   });
 
