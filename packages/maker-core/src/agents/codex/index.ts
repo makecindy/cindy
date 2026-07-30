@@ -2213,30 +2213,26 @@ export class CodexAgent extends BaseAgent {
      * 例如目录 372K 的 GPT-5.6-Sol 会被报成 1M。虚高值会让上下文占比被低估,
      * memory flush 阈值也跟着推迟, 所以两者都有时取小值。
      *
-     * 三个约束都不是可省的细节:
-     * - **每次查 live capabilities, 不在会话启动时拍快照**: host 的
-     *   refreshCatalogDerivedModels 靠原地 splice 让已建会话看到刷新后的目录
-     *   (模型发现、切账号、自定义 provider 增删改)。拍 Map 会让新发现的模型永远
-     *   不被收敛、改过的上限沿用旧值直到用户新开会话。
-     * - **只认 contextWindowVerified 的目录值**: 目录里的窗口可能是派生时补的兜底
-     *   常量(codex `model/list` 一律 272K、自定义 provider 未填时的 200K、Anthropic
-     *   未知模型的启发式), 数值上与真实上限无从区分。拿兜底值当上限会把真实更大的
-     *   窗口压小, 上下文占比与 memory flush 阈值全部偏早 —— 那比原本的虚高更糟。
-     *   判据只认显式声明这一个标记, 不用数值大小猜(见 ModelDescriptor 的该字段注释)。
-     * - **按 turn 归属模型**: 见 activeTurnModel 注释。
+     * 两个约束都不是可省的细节:
+     * - **按 turn 归属模型**, 不读 mutableModel: 见 activeTurnModel 注释。
+     * - **取值交给 host 的 resolveVerifiedContextWindow**, 不自己查 availableModels:
+     *   那张表是跨 provider 去重后的扁平结构, 同一 model id 由多个 provider 提供时
+     *   归属已丢(订阅直连发现的 `gpt-5.6-sol` 与网关下发的同 id), 按 id 回查可能命中
+     *   另一条路由的元数据 —— 用错路由的上限收敛比不收敛更糟。host 同时持有完整目录、
+     *   provider 维度与「这个窗口是显式声明还是派生兜底」的信息, 也天然读的是 live 目录
+     *   (模型发现 / 切账号 / 自定义 provider 增删改都即时反映), 见该 dep 的注释。
      *
-     * 没有已核实的目录窗口时(未覆盖的模型、'gpt-5' 这类 server 默认哨兵、只有兜底值)
-     * 沿用上报值; 上报值反过来比目录小时同样取它 (路由真被降窗)。
-     * renderer 侧对应逻辑见 apps/desktop/src/renderer/lib/contextWindow.ts。
+     * 拿不到已核实窗口时(host 未注入、目录未覆盖、'gpt-5' 这类 server 默认哨兵、只有
+     * 兜底值、或 provider 归属有歧义)沿用上报值 —— 即改动前行为; 上报值反过来比它小时
+     * 同样取上报值(路由真被降窗)。
      */
     const capContextWindow = (reported: number | null): number | null => {
-      const entry = activeTurnModel
-        ? this.capabilities.availableModels.find((m) => m.id === activeTurnModel)
-        : undefined;
-      const catalog = entry?.contextWindowVerified === true ? entry.contextWindow : undefined;
-      if (!catalog || catalog <= 0) return reported;
-      if (!reported || reported <= 0) return catalog;
-      return Math.min(catalog, reported);
+      const verified = activeTurnModel
+        ? (this.deps.resolveVerifiedContextWindow?.(opts.providerId, activeTurnModel) ?? null)
+        : null;
+      if (!verified || verified <= 0) return reported;
+      if (!reported || reported <= 0) return verified;
+      return Math.min(verified, reported);
     };
 
     let sdkSessionId: string | undefined;

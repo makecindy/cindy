@@ -34,7 +34,10 @@ function toDescriptor(m: CatalogModel): ModelDescriptor {
     efforts: m.efforts,
     defaultEffort: m.defaultEffort,
   };
-  if (m.contextWindowVerified !== undefined) d.contextWindowVerified = m.contextWindowVerified;
+  // 刻意**不**透传 contextWindowVerified:availableModels 是跨 provider 去重后的扁平表,
+  // provider 归属已丢,按 id 回查可能命中另一条路由的元数据。窗口能否作为上限必须按会话
+  // 实际路由解析 —— 见下方 resolveVerifiedContextWindow(provenance 只活在 host 侧,
+  // 不进这份跨端 descriptor)。
   if (m.description !== undefined) d.description = m.description;
   if (m.effortDisplayNames !== undefined) d.effortDisplayNames = m.effortDisplayNames;
   if (m.supportsFastMode !== undefined) d.supportsFastMode = m.supportsFastMode;
@@ -49,26 +52,6 @@ function toDescriptor(m: CatalogModel): ModelDescriptor {
 
 /** 派生某 agent 的 availableModels：跨 provider union（数组序）+ 按 id 首见去重。 */
 export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): ModelDescriptor[] {
-  // 同一 model id 可以由多个 provider 提供（订阅直连发现的 `gpt-5.6-sol` 注入 openai，
-  // 网关下发的同 id 落在 xd；自定义 provider 也可能重名）。去重是 first-wins，**provider
-  // 归属随之丢失**，而 agent 侧只能按 id 回查这张扁平表 —— 拿到的可能是另一条路由的元数据。
-  //
-  // 这种歧义下不能声称窗口「已核实」：否则会用错路由的上限去收敛运行期上报值（例：命中
-  // openai live-list 的兜底条目，或反过来拿某条路由的 372K 去压另一条真的更大的窗口）。
-  // 所以冲突 id 一律清掉 contextWindowVerified → 退回不收敛（改动前行为，fail-safe）。
-  //
-  // 已知限制：这让「同时连订阅直连与网关、两边都提供同一个无前缀 id」的配置收敛不生效。
-  // 要精确到路由得让 capabilities 带 provider 维度（availableModels 形状是跨端协议，
-  // device-link / renderer 都吃它），属于独立改动，不在本次范围。带 `codex/` 前缀的折扣
-  // 路由 id 只由网关提供，不受此限制。
-  const providersPerId = new Map<string, number>();
-  for (const provider of catalog.providers) {
-    if (provider.routing[agent]?.disabled === true) continue;
-    for (const m of provider.models[agent] ?? []) {
-      providersPerId.set(m.id, (providersPerId.get(m.id) ?? 0) + 1);
-    }
-  }
-
   const seen = new Set<string>();
   const out: ModelDescriptor[] = [];
   for (const provider of catalog.providers) {
@@ -80,12 +63,45 @@ export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): Model
       // 25 轮)。非聊天模型不占 seen,同 id 若被其它来源标为 chat 仍可补上。
       if (!isAgentSelectableModel(m, { userProvider: provider.source === 'user' })) continue;
       seen.add(m.id);
-      const d = toDescriptor(m);
-      if ((providersPerId.get(m.id) ?? 0) > 1) delete d.contextWindowVerified;
-      out.push(d);
+      out.push(toDescriptor(m));
     }
   }
   return out;
+}
+
+/**
+ * 解析某条**具体路由**上该模型已核实的上下文窗口上限；没有则返回 null。
+ *
+ * 为什么不能按 id 查 `availableModels`：那是跨 provider union + 首见去重的扁平表，同一
+ * model id 可以由多个 provider 提供（订阅直连发现的 `gpt-5.6-sol` 注入 `openai`、网关下发
+ * 的同 id 落在 `xd`；自定义 provider 也可能与内置重名），去重后 provider 归属就丢了。用错
+ * 路由的上限去收敛运行期上报值，比不收敛更糟。
+ *
+ * 所以收敛的取值交给 host —— 只有它同时持有完整目录与 provider 维度：
+ * - 给了 `providerId`（会话实际路由）→ 只认该 provider 的条目。
+ * - 没给（默认路由 / 解析不出）→ 要求全目录对该 id **无歧义**：恰好一个候选才用它。
+ * - 候选未标记 `contextWindowVerified` → null（那是派生兜底值，只够展示，见该字段注释）。
+ *
+ * 返回 null 一律意味着「不收敛」，也就是改动前的行为（fail-safe）。
+ */
+export function resolveVerifiedContextWindow(
+  catalog: Catalog,
+  agent: AgentKind,
+  providerId: string | null | undefined,
+  modelId: string,
+): number | null {
+  const candidates: CatalogModel[] = [];
+  for (const provider of catalog.providers) {
+    if (provider.routing[agent]?.disabled === true) continue;
+    if (providerId && provider.id !== providerId) continue;
+    for (const m of provider.models[agent] ?? []) {
+      if (m.id === modelId) candidates.push(m);
+    }
+  }
+  if (candidates.length !== 1) return null;
+  const only = candidates[0];
+  if (only.contextWindowVerified !== true) return null;
+  return only.contextWindow > 0 ? only.contextWindow : null;
 }
 
 /**

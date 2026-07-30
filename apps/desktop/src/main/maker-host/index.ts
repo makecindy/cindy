@@ -78,7 +78,11 @@ import {
 import { createReadImageHook } from './claude-hooks/read-image-hook.js';
 import { readAgentResourceSettings } from './agent-resource-settings-store.js';
 import { createCommandConcurrencyGate } from './command-concurrency-gate.js';
-import { deriveAvailableModels, refreshCatalogDerivedModels } from './catalog-to-descriptors.js';
+import {
+  deriveAvailableModels,
+  refreshCatalogDerivedModels,
+  resolveVerifiedContextWindow,
+} from './catalog-to-descriptors.js';
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
 import {
   getDesktopSelectableCatalog,
@@ -952,6 +956,11 @@ export function getMaker(): Maker {
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'codex'),
       },
+      // 把 app-server 上报的上下文窗口收敛到该**路由**真实上限。每次调用读 live 目录:
+      // 模型发现 / 切账号 / 自定义 provider 增删改都要即时反映。按 providerId 定夺而不是
+      // 让 agent 按 id 回查 availableModels —— 那张表去重后 provider 归属已丢。
+      resolveVerifiedContextWindow: (providerId, modelId) =>
+        resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'codex', providerId, modelId),
       onCodexLocalModelsListed: (models) => {
         setDiscoveredCodexModels(mapCodexAppServerModelsToCatalog(models));
       },

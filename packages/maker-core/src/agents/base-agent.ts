@@ -189,6 +189,26 @@ export interface AgentDeps {
   capabilityAdditions?: AgentCapabilityAdditions;
 
   /**
+   * 解析某条**具体路由**上该模型已核实的上下文窗口上限（host 注入）；没有则返回 null。
+   *
+   * 用于把上游上报的窗口收敛到真实上限：app-server 对网关路由的模型常报**基础模型**的窗口
+   * （例：目录 372K 的 GPT-5.6-Sol 被报成 1M），虚高值会让上下文占比被低估、memory flush
+   * 阈值跟着推迟。
+   *
+   * 为什么不让 agent 自己查 `capabilities.availableModels`：那是跨 provider 去重后的扁平表，
+   * 同一 model id 由多个 provider 提供时归属已丢，按 id 回查可能命中另一条路由的元数据 ——
+   * 用错路由的上限收敛比不收敛更糟。host 同时持有完整目录与 provider 维度，由它按
+   * (providerId, modelId) 定夺；目录里那些**派生兜底**的窗口（上游不给元数据时补的常量）
+   * 一律不作为上限。
+   *
+   * 返回 null / 缺省不注入 = 不收敛，直接采信上报值（改动前行为）。
+   */
+  resolveVerifiedContextWindow?: (
+    providerId: string | null | undefined,
+    modelId: string,
+  ) => number | null;
+
+  /**
    * Agent 起 session 时追加到 system prompt 末尾的字符串（host 注入）。
    * **本轮一阶段不消费**，仅占位。后续接通后 desktop 可以传项目级 prompt。
    */

@@ -16,7 +16,11 @@ import { BUNDLED_CATALOG } from '@cindy/model-providers';
 import type { Catalog, CatalogModel } from '@cindy/model-providers';
 import type { ModelDescriptor } from '@cindy/maker-core';
 
-import { deriveAvailableModels, refreshCatalogDerivedModels } from '../catalog-to-descriptors.js';
+import {
+  deriveAvailableModels,
+  refreshCatalogDerivedModels,
+  resolveVerifiedContextWindow,
+} from '../catalog-to-descriptors.js';
 
 function model(id: string, extra: Partial<CatalogModel> = {}): CatalogModel {
   return { id, name: id, contextWindow: 200_000, efforts: [], defaultEffort: null, ...extra };
@@ -81,74 +85,17 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     });
   });
 
-  // contextWindowVerified 是 host → maker-core 的唯一桥梁: 不透传, agent 侧就永远
-  // 拿不到「这个窗口能否当上限」,收敛逻辑要么全不生效、要么退回按数值猜。
-  it('contextWindowVerified 双向透传(标记 / 缺省都按原样)', () => {
+  // availableModels 是跨 provider 去重后的扁平表 —— provenance 刻意**不**进这份 descriptor:
+  // 归属已丢,按 id 回查可能命中另一条路由。收敛改走 resolveVerifiedContextWindow。
+  it('toDescriptor 不透传 contextWindowVerified(provenance 只留在 host 侧)', () => {
     const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
     for (const p of catalog.providers) {
       if (p.id !== 'openai') continue;
-      p.models.codex = [
-        model('verified/known', { contextWindow: 372_000, contextWindowVerified: true }),
-        model('unverified/fallback', { contextWindow: 272_000 }),
-      ];
+      p.models.codex = [model('verified/known', { contextWindow: 372_000, contextWindowVerified: true })];
     }
-    const codex = deriveAvailableModels(catalog, 'codex');
-    expect(codex.find((m) => m.id === 'verified/known')).toMatchObject({
-      contextWindow: 372_000,
-      contextWindowVerified: true,
-    });
-    const fallback = codex.find((m) => m.id === 'unverified/fallback');
-    expect(fallback?.contextWindow).toBe(272_000);
-    // 缺省不得被派生成 false / true —— 保持 undefined,语义即「未核实」。
-    expect(fallback && 'contextWindowVerified' in fallback).toBe(false);
-  });
-
-  // 去重是 first-wins,provider 归属随之丢失;agent 侧只能按 id 回查这张扁平表。同一 id
-  // 由多个 provider 提供时,拿到的可能是另一条路由的元数据 —— 此时不得声称已核实,否则会
-  // 用**错路由**的上限去收敛上报值(reviewer 指出的 "a custom route can be capped by an
-  // unrelated built-in value")。冲突一律清标记 → 退回不收敛(fail-safe)。
-  it('同一 id 跨 provider 冲突时清掉 contextWindowVerified', () => {
-    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
-    for (const p of catalog.providers) {
-      if (p.id === 'openai') {
-        // 靠前 → first-wins 选中它。**带已核实标记**:若不按冲突清掉,它就会被拿去 cap
-        // 实际可能跑在另一条路由上的同 id 会话。
-        p.models.codex = [model('shared-id', { contextWindow: 372_000, contextWindowVerified: true })];
-      }
-      if (p.id === 'xd') {
-        // 靠后的同 id(真实窗口不同的另一条路由)。
-        p.models.codex = [model('shared-id', { contextWindow: 500_000, contextWindowVerified: true })];
-        p.models['claude-code'] = [model('xd-only', { contextWindow: 500_000, contextWindowVerified: true })];
-      }
-    }
-    const codex = deriveAvailableModels(catalog, 'codex');
-    const conflicted = codex.filter((m) => m.id === 'shared-id');
-    expect(conflicted).toHaveLength(1);
-    expect(conflicted[0].contextWindow).toBe(372_000); // first-wins 取值不变
-    expect('contextWindowVerified' in conflicted[0]).toBe(false); // 但不再声称已核实
-
-    // 只由单一 provider 提供的 id 不受影响,照常保留标记。
-    const cc = deriveAvailableModels(catalog, 'claude-code');
-    expect(cc.find((m) => m.id === 'xd-only')).toMatchObject({
-      contextWindow: 500_000,
-      contextWindowVerified: true,
-    });
-  });
-
-  // reviewer 原始场景的方向:靠前的订阅直连条目是 live-list 兜底(未核实),靠后的网关条目
-  // 已核实。first-wins 本就取到未核实那条 → 结果同样是不收敛,不会误用另一条路由的上限。
-  it('冲突且 first-wins 条目未核实时同样不收敛', () => {
-    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
-    for (const p of catalog.providers) {
-      if (p.id === 'openai') p.models.codex = [model('gpt-5.6-sol', { contextWindow: 272_000 })];
-      if (p.id === 'xd') {
-        p.models.codex = [model('gpt-5.6-sol', { contextWindow: 372_000, contextWindowVerified: true })];
-      }
-    }
-    const picked = deriveAvailableModels(catalog, 'codex').filter((m) => m.id === 'gpt-5.6-sol');
-    expect(picked).toHaveLength(1);
-    expect(picked[0].contextWindow).toBe(272_000);
-    expect(picked[0].contextWindowVerified).toBeUndefined();
+    const d = deriveAvailableModels(catalog, 'codex').find((m) => m.id === 'verified/known');
+    expect(d?.contextWindow).toBe(372_000);
+    expect(d && 'contextWindowVerified' in d).toBe(false);
   });
 
   it('注入后:按 provider 序 union + id 首见去重(anthropic 先于 xd,fast 分叉取首见)', () => {
@@ -238,5 +185,70 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(codexModels).toBe(codexRef);
     expect(claudeModels).toEqual(deriveAvailableModels(injectedCatalog(), 'claude-code'));
     expect(codexModels).toEqual(deriveAvailableModels(injectedCatalog(), 'codex'));
+  });
+});
+
+describe('resolveVerifiedContextWindow — 按路由解析已核实窗口', () => {
+  /** 常见双 provider 目录:订阅直连发现的无前缀 id(live-list 兜底 272K,未核实) + 网关下发的同 id(已核实 372K)。 */
+  function dualProviderCatalog(): Catalog {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    for (const p of catalog.providers) {
+      if (p.id === 'openai') {
+        p.models.codex = [model('gpt-5.6-sol', { contextWindow: 272_000 })];
+      }
+      if (p.id === 'xd') {
+        p.models.codex = [
+          model('gpt-5.6-sol', { contextWindow: 372_000, contextWindowVerified: true }),
+          model('codex/gpt-5.6-sol', { contextWindow: 372_000, contextWindowVerified: true }),
+        ];
+      }
+    }
+    return catalog;
+  }
+
+  // 这是本 PR 的核心场景:会话明确路由到 xd 时,必须拿到网关声明的 372K —— 不能因为
+  // openai 也暴露同一个无前缀 id 就放弃收敛(那会让 app-server 的 1M 原样留下)。
+  it('给了 providerId 时只认该路由的条目', () => {
+    const catalog = dualProviderCatalog();
+    expect(resolveVerifiedContextWindow(catalog, 'codex', 'xd', 'gpt-5.6-sol')).toBe(372_000);
+    // openai 那条是 live-list 兜底、未核实 → 不可作上限。
+    expect(resolveVerifiedContextWindow(catalog, 'codex', 'openai', 'gpt-5.6-sol')).toBeNull();
+  });
+
+  it('没给 providerId 且该 id 跨 provider 有歧义时不收敛', () => {
+    expect(resolveVerifiedContextWindow(dualProviderCatalog(), 'codex', null, 'gpt-5.6-sol')).toBeNull();
+  });
+
+  it('没给 providerId 但该 id 无歧义时照常返回(折扣路由只由网关提供)', () => {
+    expect(
+      resolveVerifiedContextWindow(dualProviderCatalog(), 'codex', undefined, 'codex/gpt-5.6-sol'),
+    ).toBe(372_000);
+  });
+
+  it('候选存在但未标记已核实 → null(派生兜底值只够展示)', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    for (const p of catalog.providers) {
+      if (p.id === 'openai') p.models.codex = [model('fallback/only', { contextWindow: 272_000 })];
+    }
+    expect(resolveVerifiedContextWindow(catalog, 'codex', 'openai', 'fallback/only')).toBeNull();
+  });
+
+  it('providerId 指向的路由没有该模型 → null,不回落到别的 provider', () => {
+    const catalog = dualProviderCatalog();
+    expect(resolveVerifiedContextWindow(catalog, 'codex', 'anthropic', 'gpt-5.6-sol')).toBeNull();
+  });
+
+  it('目录未覆盖的模型 → null', () => {
+    expect(resolveVerifiedContextWindow(dualProviderCatalog(), 'codex', 'xd', 'nope/unknown')).toBeNull();
+  });
+
+  it('该 agent 上被 disabled 的 provider 不参与解析', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    for (const p of catalog.providers) {
+      if (p.id !== 'xd') continue;
+      p.models.codex = [model('xd/only', { contextWindow: 500_000, contextWindowVerified: true })];
+      p.routing.codex = { ...(p.routing.codex ?? {}), disabled: true } as typeof p.routing.codex;
+    }
+    expect(resolveVerifiedContextWindow(catalog, 'codex', 'xd', 'xd/only')).toBeNull();
   });
 });

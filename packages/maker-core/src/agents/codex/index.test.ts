@@ -14653,32 +14653,22 @@ describe('CodexAgent upstream-response-idle watchdog', () => {
 });
 
 describe('CodexAgent context window reporting', () => {
-  // 目录里 GPT-5.6-Sol 系列就是 372K(官方与折扣路由同值), 而 app-server 会报
-  // 上游基础模型的 1M。虚高值会让上下文占比被低估, maker memory flush 阈值跟着推迟。
-  const gatewayRoutedModel = {
-    id: 'codex/gpt-5.6-sol',
-    displayName: 'GPT-5.6-Sol',
-    contextWindow: 372_000,
-    // 目录显式声明的真实上限 —— 只有标记过的才够格收敛上报值。
-    contextWindowVerified: true,
-    efforts: ['low', 'medium', 'high', 'xhigh'],
-    defaultEffort: 'high',
-  };
+  // agent 侧只负责两件事:按 turn 归属模型、把 host 给的已核实上限与上报值取小。
+  // 「目录里这个窗口算不算已核实、该用哪条路由的」判定在 host
+  // (apps/desktop/.../catalog-to-descriptors.ts 的 resolveVerifiedContextWindow,有独立用例)。
+  const GATEWAY_MODEL = 'codex/gpt-5.6-sol';
+  const WIDE_MODEL = 'codex/gpt-wide';
 
-  /** 目录里另一个真窗口更大的模型 — 用来验证切模型后窗口不串。 */
-  const wideModel = {
-    id: 'codex/gpt-wide',
-    displayName: 'GPT Wide',
-    contextWindow: 1_000_000,
-    contextWindowVerified: true,
-    efforts: ['low', 'medium', 'high', 'xhigh'],
-    defaultEffort: 'high',
-  };
-
-  function agentWithCatalog(models: unknown[]): CodexAgent {
+  /** 注入 host 侧解析器;返回 null = 该路由没有已核实上限(不收敛)。 */
+  function agentWithVerified(resolve: (providerId: string | null | undefined, modelId: string) => number | null) {
     return new CodexAgent(
-      createDeps({}, { capabilityAdditions: { availableModels: models } as never }),
+      createDeps({}, { resolveVerifiedContextWindow: resolve } as never),
     );
+  }
+
+  /** 最常见形态:按 model id 给固定的已核实上限。 */
+  function agentWithWindows(windows: Record<string, number>) {
+    return agentWithVerified((_providerId, modelId) => windows[modelId] ?? null);
   }
 
   /** turn/start 与 settings/update 都要能应答: setModel 会推 thread/settings/update。 */
@@ -14700,11 +14690,7 @@ describe('CodexAgent context window reporting', () => {
     reasoningOutputTokens: 3,
   };
 
-  function pushUsage(
-    handlers: ThreadEventHandlers,
-    turnId: string,
-    appServerWindow: number,
-  ): void {
+  function pushUsage(handlers: ThreadEventHandlers, turnId: string, appServerWindow: number): void {
     handlers.tokenUsageUpdated?.({
       threadId: 'start-thread-id',
       turnId,
@@ -14738,91 +14724,61 @@ describe('CodexAgent context window reporting', () => {
     return contextWindow;
   }
 
-  it('caps the app-server window at the catalog window for gateway-routed models', async () => {
+  it('把 app-server 上报的基础模型窗口收敛到该路由已核实的上限', async () => {
     expect(
       await reportedContextWindow(
-        agentWithCatalog([gatewayRoutedModel]),
+        agentWithWindows({ [GATEWAY_MODEL]: 372_000 }),
         'session-ctxwin-cap',
-        'codex/gpt-5.6-sol',
+        GATEWAY_MODEL,
         1_000_000,
       ),
     ).toBe(372_000);
   });
 
-  it('keeps a smaller app-server window when the route is actually downsized', async () => {
+  it('上报值本来就更小时取上报值(路由真被降窗)', async () => {
     expect(
       await reportedContextWindow(
-        agentWithCatalog([gatewayRoutedModel]),
+        agentWithWindows({ [GATEWAY_MODEL]: 372_000 }),
         'session-ctxwin-downsized',
-        'codex/gpt-5.6-sol',
+        GATEWAY_MODEL,
         128_000,
       ),
     ).toBe(128_000);
   });
 
-  it('keeps the app-server window when the catalog has no entry for the model', async () => {
+  // host 返回 null 覆盖了所有「不该收敛」的情形:目录未覆盖、只有派生兜底值(自定义 provider
+  // 的 200K 占位 / codex model/list 的 272K)、provider 归属有歧义、host 未注入解析器。
+  it('host 没有给出已核实上限时不收敛,直接采信上报值', async () => {
     expect(
       await reportedContextWindow(
-        new CodexAgent(createDeps()),
-        'session-ctxwin-no-catalog',
+        agentWithVerified(() => null),
+        'session-ctxwin-unverified',
         'gpt-5.4',
-        272_000,
-      ),
-    ).toBe(272_000);
-  });
-
-  // 自定义 provider 省略 contextWindow 时,派生填的 DEFAULT_CUSTOM_CONTEXT_WINDOW(200K)
-  // 是「仅用于展示」的保守兜底、不是已核实的路由上限,所以不带 verified 标记。拿它当上限
-  // 会把真实的 1M 压成 200K,Maker Memory flush 早得离谱。
-  it('does not cap with the unverified placeholder a custom provider leaves behind', async () => {
-    const placeholderModel = {
-      ...wideModel,
-      id: 'custom/unknown-window',
-      contextWindow: 200_000,
-      contextWindowVerified: undefined,
-    };
-    expect(
-      await reportedContextWindow(
-        agentWithCatalog([placeholderModel]),
-        'session-ctxwin-placeholder',
-        'custom/unknown-window',
         1_000_000,
       ),
     ).toBe(1_000_000);
   });
 
-  // codex `model/list` 对**每个**发现的模型都填 272K —— 恰恰因为该协议不暴露 context
-  // window 元数据。272K 数值上不像占位, 只能靠 verified 标记识别; 用数值阈值判断会把
-  // 一个运行期报 400K 的模型压到 272K。
-  it('does not cap with the unverified 272K discovery fallback', async () => {
-    const discovered = {
-      ...wideModel,
-      id: 'gpt-5.6-discovered',
-      contextWindow: 272_000,
-      contextWindowVerified: undefined,
-    };
+  it('host 完全没注入解析器时同样不收敛(老 host / 远程会话)', async () => {
     expect(
       await reportedContextWindow(
-        agentWithCatalog([discovered]),
-        'session-ctxwin-discovery-fallback',
-        'gpt-5.6-discovered',
-        400_000,
+        new CodexAgent(createDeps()),
+        'session-ctxwin-no-resolver',
+        GATEWAY_MODEL,
+        1_000_000,
       ),
-    ).toBe(400_000);
+    ).toBe(1_000_000);
   });
 
-  // host 的 refreshCatalogDerivedModels 靠原地 splice 让已建会话看到刷新后的目录
-  // (模型发现 / 切账号 / 自定义 provider 增删改)。启动时拍 Map 会让这些会话永远
-  // 按旧目录收敛,所以这里在 startSession 之后才把真窗口 splice 进去。
-  it('reads the catalog live so a mid-session refresh takes effect', async () => {
-    const models: Array<Record<string, unknown>> = [
-      { ...wideModel, id: 'codex/late-known', contextWindow: 200_000 },
-    ];
-    const agent = agentWithCatalog(models);
+  // 解析器每次调用都读 live 目录(host 侧实现如此),所以会话中途的目录刷新即时生效 ——
+  // 不能在会话启动时把结果缓存住。
+  it('解析结果随目录刷新即时生效,不被会话启动时缓存住', async () => {
+    let live = 200_000;
+    const agent = agentWithVerified((_p, modelId) => (modelId === GATEWAY_MODEL ? live : null));
     const host = installFakeHost(agent);
     const handle = await agent.startSession({
       sessionId: 'session-ctxwin-live-catalog',
-      model: 'codex/late-known',
+      model: GATEWAY_MODEL,
       workingDir: '/repo',
     });
     const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<
@@ -14831,9 +14787,7 @@ describe('CodexAgent context window reporting', () => {
     const handlers = subscribeCalls[0]?.[1];
     if (!handlers) throw new Error('expected thread handlers');
 
-    // 目录刷新:原地替换条目,把该模型的真实上限改成 372K(模拟 refreshCatalogDerivedModels)
-    const live = agent.capabilities.availableModels as unknown as Array<Record<string, unknown>>;
-    live.splice(0, live.length, { ...wideModel, id: 'codex/late-known', contextWindow: 372_000 });
+    live = 372_000; // 模拟 refreshCatalogDerivedModels 之后的目录
 
     handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
     pushUsage(handlers, 'turn-1', 1_000_000);
@@ -14842,12 +14796,40 @@ describe('CodexAgent context window reporting', () => {
     await handle.close();
   });
 
+  // 会话实际路由的 provider 必须传给 host —— 同一个无前缀 id 可能同时来自订阅直连与网关,
+  // 只有按 providerId 才能取到该路由声明的上限(否则这个常见配置下收敛会整个失效)。
+  it('把会话的 providerId 传给解析器', async () => {
+    const seen: Array<string | null | undefined> = [];
+    const agent = agentWithVerified((providerId, modelId) => {
+      seen.push(providerId);
+      return providerId === 'xd' && modelId === 'gpt-5.6-sol' ? 372_000 : null;
+    });
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-ctxwin-provider',
+      model: 'gpt-5.6-sol',
+      providerId: 'xd',
+      workingDir: '/repo',
+    } as never);
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<
+      [string, ThreadEventHandlers]
+    >;
+    const handlers = subscribeCalls[0]?.[1];
+    if (!handlers) throw new Error('expected thread handlers');
+
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+    pushUsage(handlers, 'turn-1', 1_000_000);
+
+    expect(handle.getUsageSnapshot().contextWindow).toBe(372_000);
+    expect(seen).toContain('xd');
+    await handle.close();
+  });
+
   // daemon 重启后 turn/start 报 "thread not found" 会走 thread/resume + 重投; 若会话是用
-  // 'gpt-5' 这个 server-default 哨兵启动的, resume 会把它解析成具体路由模型并重写
-  // turnParams.model。快照必须跟着改写走 —— 否则重投 turn 的用量按 'gpt-5' 查目录(查不到),
-  // 保留 app-server 的基础模型窗口(1M)而不是该路由真实的 372K。
-  it('refreshes the turn-model snapshot when daemon recovery rewrites the model', async () => {
-    const agent = agentWithCatalog([gatewayRoutedModel, wideModel]);
+  // 'gpt-5' 哨兵启动的, resume 会把它解析成具体路由模型并重写 turnParams.model。快照必须
+  // 跟着改写走 —— 否则重投 turn 的用量按 'gpt-5' 去问 host(拿不到上限), 保留 1M。
+  it('daemon 恢复重写模型后刷新 turn 模型快照', async () => {
+    const agent = agentWithWindows({ [GATEWAY_MODEL]: 372_000 });
     let turnStartCount = 0;
     const host = installFakeHost(agent, (method) => {
       if (method === Method.ThreadStart) {
@@ -14860,13 +14842,7 @@ describe('CodexAgent context window reporting', () => {
         return { turn: { id: `turn-${turnStartCount}` } };
       }
       if (method === Method.ThreadResume) {
-        // 恢复时解析出真正的路由模型(目录里 372K)。
-        return {
-          thread: { id: 'start-thread-id' },
-          model: 'codex/gpt-5.6-sol',
-          modelProvider: 'openai',
-          cwd: '/repo',
-        };
+        return { thread: { id: 'start-thread-id' }, model: GATEWAY_MODEL, modelProvider: 'openai', cwd: '/repo' };
       }
       if (method === Method.ThreadSettingsUpdate) return {};
       return undefined;
@@ -14892,14 +14868,13 @@ describe('CodexAgent context window reporting', () => {
   });
 
   // setModel 文档写「下一 turn 才生效」,但 mutableModel 是**即时**改的。活跃 turn 仍在
-  // 产出 usage 时切模型,不能拿下一个模型的窗口去收敛这一 turn —— 否则 372K 的 turn 会
-  // 按 1M 记账,memory flush 阈值随之推迟。
-  it('attributes in-flight usage to the turn model, not the just-switched one', async () => {
-    const agent = agentWithCatalog([gatewayRoutedModel, wideModel]);
+  // 产出 usage 时切模型,不能拿下一个模型的上限去收敛这一 turn。
+  it('活跃 turn 的用量按该 turn 的模型归属,不受中途 setModel 影响', async () => {
+    const agent = agentWithWindows({ [GATEWAY_MODEL]: 372_000, [WIDE_MODEL]: 1_000_000 });
     const host = installTurnCapableHost(agent);
     const handle = await agent.startSession({
       sessionId: 'session-ctxwin-turn-model',
-      model: 'codex/gpt-5.6-sol',
+      model: GATEWAY_MODEL,
       workingDir: '/repo',
     });
     const handlers = host.getThreadHandlers();
@@ -14912,13 +14887,13 @@ describe('CodexAgent context window reporting', () => {
     // turn 还在飞时切到 1M 的模型。显式断言能力存在 —— 用 `?.()` 静默跳过会让这条
     // 用例在 setModel 消失后依然"通过",反而掩盖回归。
     if (!handle.setModel) throw new Error('expected setModel support');
-    await handle.setModel('codex/gpt-wide');
+    await handle.setModel(WIDE_MODEL);
 
     // 这条 usage 属于仍在产出的 372K turn,必须按 372K 收敛
     pushUsage(handlers, 'turn-1', 1_000_000);
     expect(handle.getUsageSnapshot().contextWindow).toBe(372_000);
 
-    // 下一 turn 才轮到新模型:它的 1M 目录窗口不再被旧模型压住
+    // 下一 turn 才轮到新模型:它的 1M 上限不再被旧模型压住
     await handle.send({ type: 'user', content: 'again' });
     handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } } as never);
     pushUsage(handlers, 'turn-2', 1_000_000);
