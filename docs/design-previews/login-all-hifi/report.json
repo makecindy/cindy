@@ -1,0 +1,349 @@
+{
+  "ok": true,
+  "toolVersion": "qa-hifi-demo@2026-07-25-p0-hardening",
+  "demo": "cindy-login-all-hifi",
+  "inputHashes": {
+    "spec.json": "e60efbc018e1bf2ebdc3cb6dec30f7ea85e6190375795fd944a6fb985a2dd378",
+    "truth.json": "76abfb71da902feaa5c4b4ec44a857d738b7926768a5b5161bf6977a6c5fbfed",
+    "index.html": "612bb18219c93f575fca94de40f0172292952510d1ec233ad46b14e7d31fa27b",
+    "baselines": {
+      "declared": [],
+      "files": []
+    }
+  },
+  "statesResult": {
+    "total": 79,
+    "viaReachable": 75,
+    "tabOnly": 4
+  },
+  "coverage": {
+    "cases": [
+      {
+        "id": "desk-cn-mac-light-zh",
+        "prefs": {
+          "plat": "desk",
+          "region": "cn",
+          "os": "mac",
+          "mode": "light",
+          "lang": "zh-CN"
+        },
+        "source": "verify.cases"
+      },
+      {
+        "id": "desk-global-mac-dark-en",
+        "prefs": {
+          "plat": "desk",
+          "region": "global",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "en"
+        },
+        "source": "verify.cases"
+      },
+      {
+        "id": "phone-cn-android-light-ja",
+        "prefs": {
+          "plat": "phone",
+          "region": "cn",
+          "os": "android",
+          "mode": "light",
+          "lang": "ja"
+        },
+        "source": "verify.cases"
+      },
+      {
+        "id": "phone-global-ios-dark-ko",
+        "prefs": {
+          "plat": "phone",
+          "region": "global",
+          "os": "ios",
+          "mode": "dark",
+          "lang": "ko"
+        },
+        "source": "verify.cases"
+      },
+      {
+        "id": "pad-global-android-light-en",
+        "prefs": {
+          "plat": "pad",
+          "region": "global",
+          "os": "android",
+          "mode": "light",
+          "lang": "en"
+        },
+        "source": "verify.cases"
+      },
+      {
+        "id": "pad-cn-ios-dark-zh",
+        "prefs": {
+          "plat": "pad",
+          "region": "cn",
+          "os": "ios",
+          "mode": "dark",
+          "lang": "zh-CN"
+        },
+        "source": "verify.cases"
+      }
+    ]
+  },
+  "gateA": {
+    "name": "真值一致",
+    "pass": true,
+    "detail": "",
+    "provenance": "required",
+    "extractorDrift": "none"
+  },
+  "gateB": {
+    "name": "状态覆盖",
+    "pass": true,
+    "total": 474,
+    "passed": 474,
+    "failures": [],
+    "cases": [
+      {
+        "id": "desk-cn-mac-light-zh",
+        "prefs": {
+          "plat": "desk",
+          "region": "cn",
+          "os": "mac",
+          "mode": "light",
+          "lang": "zh-CN"
+        },
+        "passed": 79,
+        "total": 79,
+        "failures": []
+      },
+      {
+        "id": "desk-global-mac-dark-en",
+        "prefs": {
+          "plat": "desk",
+          "region": "global",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "en"
+        },
+        "passed": 79,
+        "total": 79,
+        "failures": []
+      },
+      {
+        "id": "phone-cn-android-light-ja",
+        "prefs": {
+          "plat": "phone",
+          "region": "cn",
+          "os": "android",
+          "mode": "light",
+          "lang": "ja"
+        },
+        "passed": 79,
+        "total": 79,
+        "failures": []
+      },
+      {
+        "id": "phone-global-ios-dark-ko",
+        "prefs": {
+          "plat": "phone",
+          "region": "global",
+          "os": "ios",
+          "mode": "dark",
+          "lang": "ko"
+        },
+        "passed": 79,
+        "total": 79,
+        "failures": []
+      },
+      {
+        "id": "pad-global-android-light-en",
+        "prefs": {
+          "plat": "pad",
+          "region": "global",
+          "os": "android",
+          "mode": "light",
+          "lang": "en"
+        },
+        "passed": 79,
+        "total": 79,
+        "failures": []
+      },
+      {
+        "id": "pad-cn-ios-dark-zh",
+        "prefs": {
+          "plat": "pad",
+          "region": "cn",
+          "os": "ios",
+          "mode": "dark",
+          "lang": "zh-CN"
+        },
+        "passed": 79,
+        "total": 79,
+        "failures": []
+      }
+    ]
+  },
+  "gateC": {
+    "name": "交互鲁棒",
+    "pass": true,
+    "checks": [
+      {
+        "id": "no-clip",
+        "pass": true,
+        "failures": []
+      },
+      {
+        "id": "input-stable:.lp-code-input",
+        "pass": true,
+        "failures": []
+      },
+      {
+        "id": "input-stable:.lp-code-input",
+        "pass": true,
+        "failures": []
+      },
+      {
+        "id": "persistence",
+        "pass": true,
+        "failures": []
+      }
+    ],
+    "cases": [
+      {
+        "id": "desk-cn-mac-light-zh",
+        "prefs": {
+          "plat": "desk",
+          "region": "cn",
+          "os": "mac",
+          "mode": "light",
+          "lang": "zh-CN"
+        }
+      },
+      {
+        "id": "desk-global-mac-dark-en",
+        "prefs": {
+          "plat": "desk",
+          "region": "global",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "en"
+        }
+      },
+      {
+        "id": "phone-cn-android-light-ja",
+        "prefs": {
+          "plat": "phone",
+          "region": "cn",
+          "os": "android",
+          "mode": "light",
+          "lang": "ja"
+        }
+      },
+      {
+        "id": "phone-global-ios-dark-ko",
+        "prefs": {
+          "plat": "phone",
+          "region": "global",
+          "os": "ios",
+          "mode": "dark",
+          "lang": "ko"
+        }
+      },
+      {
+        "id": "pad-global-android-light-en",
+        "prefs": {
+          "plat": "pad",
+          "region": "global",
+          "os": "android",
+          "mode": "light",
+          "lang": "en"
+        }
+      },
+      {
+        "id": "pad-cn-ios-dark-zh",
+        "prefs": {
+          "plat": "pad",
+          "region": "cn",
+          "os": "ios",
+          "mode": "dark",
+          "lang": "zh-CN"
+        }
+      }
+    ]
+  },
+  "gateD": {
+    "name": "渲染绑定",
+    "pass": true,
+    "total": 924,
+    "passed": 924,
+    "failures": [],
+    "cases": [
+      {
+        "id": "desk-cn-mac-light-zh",
+        "prefs": {
+          "plat": "desk",
+          "region": "cn",
+          "os": "mac",
+          "mode": "light",
+          "lang": "zh-CN"
+        }
+      },
+      {
+        "id": "desk-global-mac-dark-en",
+        "prefs": {
+          "plat": "desk",
+          "region": "global",
+          "os": "mac",
+          "mode": "dark",
+          "lang": "en"
+        }
+      },
+      {
+        "id": "phone-cn-android-light-ja",
+        "prefs": {
+          "plat": "phone",
+          "region": "cn",
+          "os": "android",
+          "mode": "light",
+          "lang": "ja"
+        }
+      },
+      {
+        "id": "phone-global-ios-dark-ko",
+        "prefs": {
+          "plat": "phone",
+          "region": "global",
+          "os": "ios",
+          "mode": "dark",
+          "lang": "ko"
+        }
+      },
+      {
+        "id": "pad-global-android-light-en",
+        "prefs": {
+          "plat": "pad",
+          "region": "global",
+          "os": "android",
+          "mode": "light",
+          "lang": "en"
+        }
+      },
+      {
+        "id": "pad-cn-ios-dark-zh",
+        "prefs": {
+          "plat": "pad",
+          "region": "cn",
+          "os": "ios",
+          "mode": "dark",
+          "lang": "zh-CN"
+        }
+      }
+    ]
+  },
+  "gateF": {
+    "name": "适配还原",
+    "pass": true,
+    "total": 11,
+    "passed": 11,
+    "failures": [],
+    "cases": []
+  },
+  "generatedAt": "2026-07-29T10:44:32.692Z"
+}

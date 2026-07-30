@@ -247,6 +247,26 @@ describe('normalizeTaskSource', () => {
     expect(fr.calls[0]?.source?.userText).toHaveLength(20_000);
     fr.finish();
   });
+
+  it('laneKind 派生: telegram group/topic externalKey → group, DM 与 Slack → dm', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+
+    const keys = [
+      'telegram:group:bot:-900:42:9:g0',
+      'telegram:topic:bot:-900:77:9:g0',
+      'telegram:dm:bot:user:g0',
+      'team-slack:C1:1.1',
+    ];
+    for (const [i, externalKey] of keys.entries()) {
+      d.handleDispatch('conn-1', dispatch({ requestId: `req-lane-${i}`, externalKey }), c.send);
+      await tick();
+      fr.finish();
+      await tick();
+    }
+    expect(fr.calls.map((call) => call.laneKind)).toEqual(['group', 'group', 'dm', 'dm']);
+  });
 });
 
 describe('dispatcher 核心语义', () => {

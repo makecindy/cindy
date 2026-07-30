@@ -6,15 +6,17 @@ import {
   ensureMobileEnv,
   REQUIRED_MOBILE_ENV_KEYS,
 } from '../../scripts/ensure-mobile-env.mjs';
-import { mobileClientBuildEnv } from '../../../../scripts/shared/client-endpoint-build-env.mjs';
+import { mobileClientBundleEnv } from '../../../../scripts/shared/client-endpoint-build-env.mjs';
 
 const roots: string[] = [];
 
-// 2026-07 端点清单重构后,.env 必填键收缩为构建身份 + 清单自举基址;
+// 2026-07 端点清单重构后,.env 必填键收缩为构建身份 + 本区/对端清单自举基址;
 // 业务端点初值 dev 走仓内 config/endpoint.json,不再进 .env 必填集。
 const productionEnv = {
   EXPO_PUBLIC_CINDY_AUTH_REGION: 'cn',
   EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL: 'https://hotfix.example.invalid/app',
+  EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL:
+    'https://hotfix-peer.example.invalid/app',
 };
 
 afterEach(() => {
@@ -44,6 +46,7 @@ describe('mobile simulator env bootstrap', () => {
         '# local overrides',
         'EXPO_PUBLIC_CINDY_AUTH_REGION=global',
         'EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL=',
+        'EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL=',
         'EXPO_PUBLIC_XDT_DEV_LOGIN_ENABLED=1',
         '',
       ].join('\n'),
@@ -53,10 +56,16 @@ describe('mobile simulator env bootstrap', () => {
     const env = readEnvMap(join(mobileDir, '.env'));
 
     expect(result.created).toBe(false);
-    expect(result.addedKeys).toEqual(['EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL']);
+    expect(result.addedKeys).toEqual([
+      'EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL',
+      'EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL',
+    ]);
     expect(env.EXPO_PUBLIC_CINDY_AUTH_REGION).toBe('global');
     expect(env.EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL).toBe(
       productionEnv.EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL,
+    );
+    expect(env.EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL).toBe(
+      productionEnv.EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL,
     );
     expect(env.EXPO_PUBLIC_XDT_DEV_LOGIN_ENABLED).toBe('1');
   });
@@ -69,6 +78,7 @@ describe('mobile simulator env bootstrap', () => {
       [
         'EXPO_PUBLIC_CINDY_AUTH_REGION=',
         'EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL=""',
+        'EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL=""',
         '',
       ].join('\n'),
     );
@@ -92,6 +102,7 @@ describe('mobile simulator env bootstrap', () => {
       [
         'EXPO_PUBLIC_CINDY_AUTH_REGION=global',
         'EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL=https://hotfix.user.example.com/app',
+        'EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL=https://hotfix-peer.user.example.com/app',
         'EXPO_PUBLIC_CINDY_AUTH_BASE_URL=https://auth.user.example.com',
         'EXPO_PUBLIC_XDT_API_BASE_URL=https://api.user.example.com',
         'EXPO_PUBLIC_XDT_DEVICE_LINK_API_BASE_URL=https://relay.user.example.com',
@@ -116,6 +127,7 @@ describe('mobile simulator env bootstrap', () => {
       [
         'EXPO_PUBLIC_CINDY_AUTH_REGION="global"',
         'EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL="https://hotfix.custom.example.invalid/app"',
+        'EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL="https://hotfix-peer.custom.example.invalid/app"',
         '',
       ].join('\n'),
     );
@@ -128,6 +140,9 @@ describe('mobile simulator env bootstrap', () => {
     expect(env.EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL).toBe(
       '"https://hotfix.custom.example.invalid/app"',
     );
+    expect(env.EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL).toBe(
+      '"https://hotfix-peer.custom.example.invalid/app"',
+    );
   });
 
   it('accepts complete existing env when the inherited EAS profile omits the manifest base', () => {
@@ -139,6 +154,7 @@ describe('mobile simulator env bootstrap', () => {
       [
         'EXPO_PUBLIC_CINDY_AUTH_REGION=global',
         'EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL=https://hotfix.global.example.invalid/app',
+        'EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL=https://hotfix.cn.example.invalid/app',
         '',
       ].join('\n'),
     );
@@ -149,6 +165,8 @@ describe('mobile simulator env bootstrap', () => {
     expect(readEnvMap(join(mobileDir, '.env'))).toMatchObject({
       EXPO_PUBLIC_CINDY_AUTH_REGION: 'global',
       EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL: 'https://hotfix.global.example.invalid/app',
+      EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL:
+        'https://hotfix.cn.example.invalid/app',
     });
   });
 
@@ -161,6 +179,7 @@ describe('mobile simulator env bootstrap', () => {
       [
         'EXPO_PUBLIC_CINDY_AUTH_REGION=cn',
         'EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL=https://hotfix.cn.example.invalid/app',
+        'EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL=https://hotfix.global.example.invalid/app',
         '',
       ].join('\n'),
     );
@@ -169,7 +188,7 @@ describe('mobile simulator env bootstrap', () => {
 
     expect(result.addedKeys).toEqual(REQUIRED_MOBILE_ENV_KEYS);
     expect(readEnvMap(join(mobileDir, '.env'))).toMatchObject(
-      mobileClientBuildEnv({ authRegion: 'global' }),
+      mobileClientBundleEnv({ authRegion: 'global' }),
     );
   });
 });
@@ -197,6 +216,7 @@ function writeEnvExample(mobileDir: string) {
     [
       'EXPO_PUBLIC_CINDY_AUTH_REGION=cn',
       'EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL=',
+      'EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL=',
       '',
     ].join('\n'),
   );

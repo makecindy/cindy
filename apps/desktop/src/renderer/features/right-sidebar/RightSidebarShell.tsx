@@ -100,6 +100,8 @@ interface RightSidebarShellProps {
    * 子窗口不应消费这段空间。
    */
   reserveLeftChromeActions?: boolean;
+  /** 工具面板处于最左 rail 邻位时，顶栏为浮动 ChromeActions 挖 no-drag 命中区并预留布局空间。 */
+  railChromeActionsHitHole?: boolean;
   /** 「在新窗口中打开侧边栏」;仅 Win 端 TabBar 内渲染按钮(Mac 走 MainLayout 浮层)。 */
   onDetach?: () => void;
   /** TabBar 横带是否作为窗口拖拽区(见 TabBar 同名 prop):主窗口内嵌形态传
@@ -133,6 +135,7 @@ export function RightSidebarShell({
   panelSide = 'right',
   onAllTabsClosed,
   reserveLeftChromeActions = false,
+  railChromeActionsHitHole = false,
 }: RightSidebarShellProps) {
   const { isFullscreen } = useMacFullscreen();
   const chromeActionsLeft =
@@ -144,6 +147,12 @@ export function RightSidebarShell({
   const leftChromeActionsSpacerWidth =
     unifiedTopbar && reserveLeftChromeActions
       ? chromeActionsLeft + CHROME_ACTIONS_GEOMETRY.clusterWidth
+      : 0;
+  // rail 邻位时浮动 ChromeActions 从工具面板左缘开始。命中洞保持 absolute
+  // 对齐窗口坐标；另加正常流中的 spacer，把 TabStrip 推到按钮簇之后。
+  const railChromeActionsSpacerWidth =
+    unifiedTopbar && !isFullscreen && railChromeActionsHitHole
+      ? CHROME_ACTIONS_GEOMETRY.clusterWidth
       : 0;
   const { t } = useTranslation();
 
@@ -383,6 +392,32 @@ export function RightSidebarShell({
           className="relative flex h-[46px] shrink-0 flex-none items-center border-b border-[var(--border-default)] bg-[var(--panel-bg)] px-2"
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
+          {!isFullscreen && railChromeActionsHitHole && (
+            <div
+              aria-hidden
+              data-testid="right-sidebar-rail-chrome-actions-hit-hole"
+              className="absolute left-0 top-0 h-full"
+              style={
+                {
+                  width: CHROME_ACTIONS_GEOMETRY.clusterWidth,
+                  WebkitAppRegion: 'no-drag',
+                } as React.CSSProperties
+              }
+            />
+          )}
+          {railChromeActionsSpacerWidth > 0 && (
+            <div
+              aria-hidden
+              data-testid="right-sidebar-rail-chrome-actions-spacer"
+              className="h-full shrink-0"
+              style={
+                {
+                  width: railChromeActionsSpacerWidth,
+                  WebkitAppRegion: 'no-drag',
+                } as React.CSSProperties
+              }
+            />
+          )}
           {leftChromeActionsSpacerWidth > 0 && (
             <div
               aria-hidden

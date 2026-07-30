@@ -72,7 +72,18 @@ export interface CodexMcpThreadContextArgs {
   threadId: string;
   sessionId: string;
   workingDir: string;
+  /**
+   * SSH remote 会话的 host id。cindy_memory 的 store 定位键要靠它区分
+   * 「远端路径」与「本地同名路径」(buildMemoryScopeKey), 缺省 = 本地会话。
+   */
+  remoteHostId?: string;
   vendorOptions: Record<string, unknown>;
+}
+
+export interface CodexReviewerRouteContextArgs {
+  threadId: string;
+  sessionId: string;
+  model: string;
 }
 
 /**
@@ -119,6 +130,15 @@ export interface CodexLocalCredentialModeSwitchContext {
   fromModeEffective?: AgentCredentialMode;
   toMode?: AgentCredentialMode;
   activeSubscriptions: number;
+}
+
+export interface RefreshLocalModelsOptions {
+  /**
+   * Bind model discovery to a specific local credential route.
+   * Codex serves explicit routes from an isolated control-plane host so live
+   * session hosts never need a credential-mode switch.
+   */
+  credentialMode?: AgentCredentialMode;
 }
 
 export interface ClaudeSubagentTaskRegistration {
@@ -193,6 +213,8 @@ export interface AgentDeps {
     ctx: {
       remoteHostId?: string;
       credentialMode?: AgentCredentialMode;
+      /** Marks one-off app-server work (e.g. model/list) that must not alter session routing. */
+      hostPurpose?: 'control-plane';
     },
   ) => Promise<CodexExtraSpawnConfig>;
 
@@ -251,6 +273,26 @@ export interface AgentDeps {
    * 缺省 / undefined → 不支持远端, 任何带 remoteHostId 的 session 会被拒。
    */
   getRemoteCodexTransport?: (remoteHostId: string) => import('./codex/app-server/transport.js').Transport;
+
+  /**
+   * Codex 专用:读**这个 thread 本次实际出口**的出站代理路径判定,用于把「后端不可达」
+   * 的通用猜测换成实测事实(走了哪个代理 / 确认直连 / 配了但用不了 / 判定没问出来)。
+   *
+   * 必须传 threadId:codex 的出口随会话选定的 provider 变(订阅直连、网关、xAI、
+   * 自定义供应商),host 侧要靠它定位本次请求真正打的上游。拿不到对应记录时**必须**
+   * 返回 null(例:本次请求没经过 loopback proxy),而不是回退到「最近一条」——
+   * 报一条本次没走过的路径比不报更糟。
+   *
+   * 只在**本地** session 的 retry-loop 终局升级时读一次,不进任何热路径;实现必须是
+   * 同步、只读、不抛的内存快照读取(desktop 侧 = outbound-proxy-resolver 的快照 +
+   * codex-proxy-host 的 thread→上游映射)。返回的 proxy 字段必须已脱敏 —— 它会进
+   * 用户可见的错误消息。
+   *
+   * 缺省 / undefined / 返回 null → 保留原有的通用排查文案,不降级任何行为。
+   */
+  getOutboundPathFact?: (
+    ctx: { threadId?: string },
+  ) => import('./codex/retry-escalation.js').OutboundPathFact | null;
 
   /**
    * Maker Memory 顶层单例 (host 注入). 当 runtimeConfig.makerMemoryEnabled === true 时,
@@ -315,6 +357,18 @@ export interface AgentDeps {
     threadId: string;
     text: string;
   }) => void;
+
+  /**
+   * Codex 专用：登记 Guardian 子线程回到父业务 session 时应使用的主模型。
+   *
+   * Codex app-server 的模型目录由共享进程持有，不能代表单个 session 的实际
+   * Provider。host/proxy 通过 Guardian 请求的 x-codex-parent-thread-id 找回
+   * 此上下文，在非 OpenAI 路由把隐藏 codex-auto-review 改写为当前主模型。
+   *
+   * 只有明确返回 true 才表示路由已就绪；缺省、false 或抛错都必须继续使用
+   * user reviewer，不能让未知路由进入无人值守审批。
+   */
+  registerCodexReviewerRouteContext?: (args: CodexReviewerRouteContextArgs) => boolean;
 
   /**
    * Claude 专用: host 明确认定可无提示执行的只读工具名, 透传到 SDK
@@ -391,6 +445,14 @@ export interface AgentDeps {
      */
     startParams: Record<string, unknown>;
     /**
+     * session 自己的 vendorOptions (startSession 入参透传)。远端 cc 的协同
+     * MCP ctx 必须以它为准:worker 首次创建时 DB 的 orca 标记/markOrcaRole
+     * 发生在 bootstrap 之后, host 侧现场查 DB 会拿到空角色 (fail-closed
+     * "not an orca worker session");opts 里的 vendorOptions 才是创建方
+     * 显式声明的身份。host 实现可在缺失时回退 DB 合成。
+     */
+    vendorOptions?: Record<string, unknown>;
+    /**
      * Callback for daemon-side approval requests (canUseTool / AskUserQuestion /
      * ExitPlanMode). Host layer registers this on the RPC client; maker-core wires
      * it to the session's interactionResolver.
@@ -399,6 +461,14 @@ export interface AgentDeps {
      * but typed as unknown here to avoid cross-package dependency.
      */
     onApprovalRequest?: (params: unknown) => Promise<unknown>;
+    /**
+     * 本 session 的 Maker Memory 注入开关 (startSession 时已按 per-session flag
+     * + manager 就绪归一)。host 据此决定是否把 cindy_memory 以 http 形态经
+     * bridge 注进远端 startParams.mcpServers — prompt 段 (rules + MEMORY.md
+     * index) 由 maker-core 自己拼, 两侧必须同源同值, 否则模型被 rules 引导去
+     * 调不存在的工具。缺省视为 false。
+     */
+    makerMemoryEnabled?: boolean;
   }) => Promise<Query>;
 }
 
@@ -620,6 +690,42 @@ export interface SendOptions {
    * 共享 session 下区分自动任务 turn 与用户 turn。agent 子类不消费,透传无害。
    */
   origin?: SendOrigin;
+  /**
+   * Host-owned, per-turn permission policy. This is deliberately a callback
+   * rather than prompt text: providers must enforce it at their pre-execution
+   * approval boundary, before MCP auto-approval or permission-mode bypasses.
+   */
+  turnPermissionPolicy?: TurnPermissionPolicy;
+}
+
+export type TurnPermissionOrigin =
+  | { kind: 'desktop' }
+  | { kind: 'im'; channel: 'feishu' | 'discord' | 'slack' | 'wechat'; taskId?: string }
+  | { kind: 'scheduler' }
+  | { kind: 'hook'; source: string };
+
+export interface TurnPermissionPolicy {
+  readonly origin: TurnPermissionOrigin;
+  readonly confirmationSurface: 'desktop' | 'channel';
+  readonly confirmationTimeoutMs?: number;
+  readonly onInteractionStateChange?: (
+    state: 'waiting' | 'resolved' | 'cancelled',
+  ) => void;
+  forceConfirmToolCall(toolName: string, input: unknown): boolean;
+}
+
+export class TurnPermissionPolicyUnsupportedError extends Error {
+  readonly code = 'TURN_PERMISSION_POLICY_UNSUPPORTED';
+
+  constructor(
+    readonly agentKind: AgentKind,
+    readonly permissionMode: PermissionMode,
+  ) {
+    super(
+      `Turn permission policy is not supported by ${agentKind} in permission mode ${permissionMode}`,
+    );
+    this.name = 'TurnPermissionPolicyUnsupportedError';
+  }
 }
 
 /**
@@ -658,6 +764,13 @@ export interface AgentSessionHandle {
 
   /** 推送一条用户消息（流式输入） */
   send(message: UserMessage, opts?: SendOptions): Promise<void>;
+
+  /**
+   * Synchronous provider preflight called by Session after reserving the turn
+   * but before any product `beforeProviderStart` / `onAccepted` side effect.
+   * Direct handle callers are still validated again inside send().
+   */
+  validateSendOptions?(opts: SendOptions): void;
 
   /**
    * 把用户消息追加到当前 in-flight turn。
@@ -1008,7 +1121,7 @@ export abstract class BaseAgent {
    * 默认无运行时发现能力，返回 false；Codex 覆盖后通过 app-server `model/list`
    * 拉完整分页快照。返回值表示快照是否仍属于当前 host 且已由宿主成功应用。
    */
-  async refreshLocalModels(): Promise<boolean> {
+  async refreshLocalModels(_options?: RefreshLocalModelsOptions): Promise<boolean> {
     return false;
   }
 

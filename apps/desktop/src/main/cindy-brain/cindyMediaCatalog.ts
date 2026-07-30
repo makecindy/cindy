@@ -17,6 +17,8 @@
 
 /** 目录里与媒体能力相关的供应商字段(只取本模块用得到的那几个)。 */
 export interface CindyMediaProviderSlice {
+  /** 供应商 id —— 停用过滤(isModelDisabled)按 (供应商, 模型) 定位 override。 */
+  id: string;
   imageModels?: { id: string; name: string }[];
   imageDefaults?: { standard: string; draft?: string; best?: string };
   videoModels?: { id: string; name: string }[];
@@ -37,6 +39,9 @@ export interface CindyMediaCatalogConfig {
  * 从目录供应商数组派生某一类目(image / video)的 cindy 媒体能力配置。
  *
  * - 清单:按供应商出现序拼接、按 id 去重(first-wins),`label` 取目录 `name`。
+ * - 停用过滤:`isModelDisabled(providerId, modelId)` 为 true 的条目不进清单
+ *   (用户在 设置 → 模型供应商 停用的媒体模型;缺省 = 不过滤)。被停用条目
+ *   **不占** first-wins 的 seen;目录默认值指向被停用型号时同样回落清单首项。
  * - 默认:取**首个声明了默认段**的供应商(今天只有 xd 一家);目录写的默认值
  *   若不在册(型号已下架但默认没跟着改)→ 回落清单首项,不让能力卡死。
  * - 清单为空 → `defaults: null`(调用方必须先判空再用 defaults)。
@@ -44,6 +49,7 @@ export interface CindyMediaCatalogConfig {
 export function deriveCindyMediaConfig(
   providers: readonly CindyMediaProviderSlice[],
   kind: 'image' | 'video',
+  isModelDisabled?: (providerId: string, modelId: string) => boolean,
 ): CindyMediaCatalogConfig {
   const models: Array<{ id: string; label: string }> = [];
   const seen = new Set<string>();
@@ -52,6 +58,7 @@ export function deriveCindyMediaConfig(
     const list = kind === 'image' ? p.imageModels : p.videoModels;
     for (const m of list ?? []) {
       if (seen.has(m.id)) continue;
+      if (isModelDisabled?.(p.id, m.id)) continue;
       seen.add(m.id);
       models.push({ id: m.id, label: m.name });
     }

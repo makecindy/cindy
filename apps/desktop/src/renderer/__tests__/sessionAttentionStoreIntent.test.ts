@@ -72,7 +72,7 @@ describe('sessionAttentionStore clear intents', () => {
 
   it('explicit clear bridges the IPC even when there is no local badge entry (renderer reload)', () => {
     // renderer 重载后本地 map 为空,但灵动岛可能仍挂着未读 error:
-    // explicit 清除(RunHistoryPane / 全部标为已读 / useErrorReadAck)必须照发桥接。
+    // explicit 清除(处置横幅 / 全部标为已读 / pending-alerts 派生收敛)必须照发桥接。
     expect(hasSessionAttention('s1')).toBe(false);
 
     expect(clearSessionAttention('s1', { intent: 'explicit' })).toBe(false);
@@ -190,8 +190,8 @@ describe('clearSystemSessionAttention 的远程路由', () => {
   });
 
   it('explicit receipts release on display-ready without waiting for a fresh sync', () => {
-    // explicit 的展示证据来自触发源(报错 UI 真实展示 / 显式操作),且 explicit 之后
-    // 未必再有 sync——若也卡新鲜度会饿死(如 useErrorReadAck 在 turn-end 对账之后才发)。
+    // explicit 的证据来自触发源(用户处置横幅 / 显式操作),且 explicit 之后未必
+    // 再有 sync——若也卡新鲜度会饿死。
     seedRemote();
     setRemoteReceiptDisplayReady('rs1', true);
 
@@ -226,7 +226,7 @@ describe('clearSystemSessionAttention 的远程路由', () => {
   });
 
   it('restores explicit receipts to the queue when the tunnel fails transiently', async () => {
-    // 设备离线时 explicit 出队发送、重试耗尽:必须恢复入队而非吞掉——useErrorReadAck
+    // 设备离线时 explicit 出队发送、重试耗尽:必须恢复入队而非吞掉——用户处置横幅
     // 只发一次,error 免疫又挡住后续 passive,丢了 host 红点就永挂。
     vi.useFakeTimers();
     try {
@@ -252,38 +252,17 @@ describe('clearSystemSessionAttention 的远程路由', () => {
     }
   });
 
-  it('display-sourced explicit receipts wait for the current visit reconcile to complete', () => {
-    // useErrorReadAck 的 explicit 证据是「banner 在视图内展示」,复访时 banner 可能
-    // 来自缓存旧错误——需等本次访问的对账完成(入队时在飞的视图对账完成即算)。
+  it('explicit receipts never wait on sync freshness (no display-sourced tier)', () => {
+    // 2026-07 统一:曾有第三档 'explicit-display'(banner 在视图内驻留即回执),
+    // 连带一套 releaseGen 对账门槛确认「展示的不是复访缓存的旧错误」。红点改成未处理
+    // 告警的派生投影后,展示不再产生已读,该档失去全部触发源已删除 —— 现在 explicit
+    // 只来自用户处置动作,一律 origin 可解析即发,不卡任何新鲜度门槛。
     seedRemote();
     setRemoteReceiptDisplayReady('rs1', true);
-    const inflight = noteRemoteSessionSyncStarted('rs1');
+    // 有在飞 sync 也不影响:explicit 不看放行代。
+    noteRemoteSessionSyncStarted('rs1');
 
-    clearSystemSessionAttention('rs1', 'explicit', 'display');
-    expect(deviceLinkInvokeMock).not.toHaveBeenCalled();
-
-    noteRemoteSessionSyncCompleted('rs1', inflight);
-    expect(deviceLinkInvokeMock).toHaveBeenCalledWith(
-      'dev1',
-      'notification:clear-session-attention',
-      ['rs1', 'explicit'],
-    );
-  });
-
-  it('display-sourced explicit with no in-flight sync requires a brand-new sync (sticky origin window)', () => {
-    // sticky origin 窗口:视图对账被 isRemoteSession 早退、没有在飞 sync。此时入队的
-    // display-explicit 不得被**上一次访问**的旧 completedGen 放行,必须等 origin 回来
-    // 后新一轮 sync 完成。
-    seedRemote();
-    setRemoteReceiptDisplayReady('rs1', true);
-    // 制造「上一次访问已完成过 sync」的旧 completedGen。
-    noteRemoteSessionSyncCompleted('rs1', noteRemoteSessionSyncStarted('rs1'));
-    deviceLinkInvokeMock.mockClear();
-
-    clearSystemSessionAttention('rs1', 'explicit', 'display');
-    expect(deviceLinkInvokeMock).not.toHaveBeenCalled(); // 旧代不放行
-
-    noteRemoteSessionSyncCompleted('rs1', noteRemoteSessionSyncStarted('rs1'));
+    clearSystemSessionAttention('rs1', 'explicit');
     expect(deviceLinkInvokeMock).toHaveBeenCalledWith(
       'dev1',
       'notification:clear-session-attention',

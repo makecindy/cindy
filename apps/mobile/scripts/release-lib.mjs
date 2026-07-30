@@ -86,12 +86,14 @@ export function assertProductionGitGate({ cwd = process.cwd(), git = runGit } = 
 }
 
 /**
- * 自建纯构建必须齐全的公开构建变量:region 身份、端点清单自举基址、自建门控标志。
+ * 自建纯构建必须齐全的公开构建变量:region 身份、本区/对端清单自举基址、
+ * 自建门控标志。
  * 值全部来自仓内 config/endpoint*.json 与脚本字面量(见 build 脚本的 selfhostEnv)。
  */
 export const SELF_HOST_PUBLIC_ENV_KEYS = Object.freeze([
   'EXPO_PUBLIC_CINDY_AUTH_REGION',
   'EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL',
+  'EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL',
   'EXPO_PUBLIC_XDT_OTA_SELFHOST',
 ]);
 

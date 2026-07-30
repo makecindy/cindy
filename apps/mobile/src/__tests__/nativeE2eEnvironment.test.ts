@@ -226,7 +226,7 @@ describe('native e2e environment', () => {
     const cleanupBody = authContext.slice(cleanupStart, authContext.indexOf('}, [', cleanupStart));
     const refreshTokenDelete = cleanupBody.indexOf('await serializeRefreshTokenMutation(() =>');
     expect(refreshTokenDelete).toBeGreaterThanOrEqual(0);
-    expect(cleanupBody).toContain('deleteSecureItem(REFRESH_TOKEN_KEY).catch(() => undefined)');
+    expect(cleanupBody).toContain('deleteSecureItem(AUTH_SESSION_KEY).catch(() => undefined)');
     expect(cleanupBody.indexOf('await clearAllMobileVoiceCredentials().catch(() => undefined);')).toBeLessThan(refreshTokenDelete);
     expect(cleanupBody.indexOf('await clearAllMobileVoiceInputHistories().catch(() => undefined);')).toBeLessThan(refreshTokenDelete);
     const logoutStart = authContext.indexOf('const logout = useCallback(async () => {');

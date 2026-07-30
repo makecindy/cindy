@@ -239,7 +239,7 @@ function StopButton({ sessionId, taskId }: { sessionId: string; taskId: string }
       aria-label={t('rightSidebar.backgroundTasks.stop')}
       title={t('rightSidebar.backgroundTasks.stop')}
       className={cn(
-        'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
+        'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
         stopping && 'cursor-default opacity-50',
       )}
     >
@@ -447,7 +447,7 @@ function WorkflowDetail({
           onClick={onBack}
           aria-label={t('rightSidebar.backgroundTasks.back')}
           title={t('rightSidebar.backgroundTasks.back')}
-          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
         >
           <ArrowLeft size={14} aria-hidden="true" />
         </button>

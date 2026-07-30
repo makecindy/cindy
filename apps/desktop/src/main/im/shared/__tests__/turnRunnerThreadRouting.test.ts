@@ -200,6 +200,7 @@ const fakeCards = {
 const fakeAdapter: ImChannelAdapter = {
   channel: 'slack',
   im: mocks.slackIm as unknown as ChannelIM,
+  output: { kind: 'rich-card', im: mocks.slackIm as unknown as ChannelIM },
   config: {
     agentKind: 'claude-code',
     defaultModel: 'claude-opus-4-7',
@@ -430,7 +431,9 @@ describe('turnRunner thread = session 路由(slack threadScoped)', () => {
     await vi.waitFor(() => {
       expect(stream.finalize).toHaveBeenCalledWith('late output');
       expect(harness.unsubscribe).toHaveBeenCalledOnce();
-      expect(mocks.installDesktopInteractionListener).toHaveBeenCalledWith(harness.session);
+      // Central InteractionRouter keeps the Session listener installed; detach
+      // only releases this turn's route and must not overwrite the listener.
+      expect(mocks.installDesktopInteractionListener).not.toHaveBeenCalled();
     });
     await rewire;
     expect(rewireResolved).toBe(true);

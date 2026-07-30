@@ -160,6 +160,28 @@ describe('孤儿 local_bash 不进聊天流', () => {
     expect(items.some((it) => it.type === 'agent_task')).toBe(false);
   });
 
+  it('历史窗口未加载完时不丢弃孤儿 local_bash(父 Bash 调用可能只是还没翻到)', () => {
+    // 归属判定只能靠「父 Bash 调用在不在 messages 里」,而 messages 是分页窗口
+    // (首屏 50 行)。重开长会话时,用户自己还在跑的后台命令,其 Bash 调用可能在
+    // 更老的页里 —— 此时丢弃会连带把聊天流里的停止按钮一起抹掉。窗口不完整就放行,
+    // 宁可临时多显示 workflow 内部的卡(本 PR 前的形态)。
+    const messages: ChatMessage[] = [mkUser('u1'), mkAssistant('a1', '在跑了。')];
+    const taskUpdates = new Map<string, AgentTaskUpdate>([
+      ['bash-old', { ...mkBashUpdate('bash-old', 'running'), parentToolUseId: 'tu-in-older-page' }],
+    ]);
+    const { items } = buildRenderItems(messages, taskUpdates, undefined, {
+      historyWindowIncomplete: true,
+    });
+    expect(
+      items.some((it) => it.type === 'agent_task' && it.update?.taskId === 'bash-old'),
+    ).toBe(true);
+    // 窗口加载完后过滤恢复(同一输入,仅 flag 变化)。
+    const { items: complete } = buildRenderItems(messages, taskUpdates, undefined, {
+      historyWindowIncomplete: false,
+    });
+    expect(complete.some((it) => it.type === 'agent_task')).toBe(false);
+  });
+
   it('无最终正文的 turn(legacy 分组路径)里,stopped workflow 卡同样平铺', () => {
     // 场景:workflow 被用户 Stop,turn 没有 sealed 正文 → groupAnsweredTurnItems
     // handled:false 回落 groupLegacyWorkRuns —— 三条分组路径必须同语义。

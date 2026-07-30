@@ -25,14 +25,13 @@ import type {
   StreamingTextHandle,
 } from './types.js';
 
-export interface ChannelIM {
+export interface TextChannelIM {
   /** 渠道名 ('feishu' / 'slack') — 与 IdentityKey.channel 同值域。 */
   readonly name: string;
 
   // ── inbound subscriptions ──────────────────────────────────────────────────
 
   onMessage(handler: (e: IMMessageEvent) => void): () => void;
-  onCardAction(handler: (e: IMCardActionEvent) => void): () => void;
   onStatusChange(handler: (s: IMStatus) => void): () => void;
 
   // ── outbound ───────────────────────────────────────────────────────────────
@@ -54,6 +53,34 @@ export interface ChannelIM {
     opts?: { threadTs?: string },
   ): Promise<{ messageId: string }>;
 
+  /** 发送本地文件;失败原因见 SendFileResult.reason。 */
+  sendFile(
+    userId: string,
+    absPath: string,
+    displayName?: string,
+    opts?: { threadTs?: string },
+  ): Promise<SendFileResult>;
+
+  // ── optional capabilities ──────────────────────────────────────────────────
+
+  /**
+   * 给某条消息加 emoji 回应("已收到" ack)。返回撤销用的 token
+   * (feishu: reaction_id; slack: emoji 名), 失败返回 null。
+   */
+  reactToMessage?(messageId: string, emoji: string): Promise<string | null>;
+
+  /** 撤销 reactToMessage 加的回应;失败吞掉(清理是尽力而为)。 */
+  removeMessageReaction?(messageId: string, reactionToken: string): Promise<void>;
+
+  // ── status ─────────────────────────────────────────────────────────────────
+
+  getStatus(): IMStatus;
+}
+
+/** Channels that can render and mutate interactive/streaming cards. */
+export interface RichChannelIM extends TextChannelIM {
+  onCardAction(handler: (e: IMCardActionEvent) => void): () => void;
+
   /** 带按钮的交互卡片;按钮按压经 onCardAction 回流。 */
   sendInteractiveCard(
     userId: string,
@@ -74,33 +101,38 @@ export interface ChannelIM {
     opts?: { threadTs?: string },
   ): Promise<StreamingTextHandle>;
 
-  /** 发送本地文件;失败原因见 SendFileResult.reason。 */
-  sendFile(
-    userId: string,
-    absPath: string,
-    displayName?: string,
-    opts?: { threadTs?: string },
-  ): Promise<SendFileResult>;
-
-  // ── optional capabilities ──────────────────────────────────────────────────
-
-  /**
-   * 给某条消息加 emoji 回应("已收到" ack)。返回撤销用的 token
-   * (feishu: reaction_id; slack: emoji 名), 失败返回 null。
-   */
-  reactToMessage?(messageId: string, emoji: string): Promise<string | null>;
-
-  /** 撤销 reactToMessage 加的回应;失败吞掉(清理是尽力而为)。 */
-  removeMessageReaction?(messageId: string, reactionToken: string): Promise<void>;
-
   /**
    * 从出站消息的 messageId 提取 thread 维度键(= 该消息作为 thread root 时的
    * thread_ts)。thread 能力渠道(slack)实现;编排层用它把"刚发出的接管卡"
    * 变成 thread root 的 scopeKey, 而不泄漏渠道 messageId 编码格式。
    */
   threadKeyForMessage?(messageId: string): string;
-
-  // ── status ─────────────────────────────────────────────────────────────────
-
-  getStatus(): IMStatus;
 }
+
+/** Backward-compatible name for the existing rich-card channel contract. */
+export type ChannelIM = RichChannelIM;
+
+export interface ImFinalOutput {
+  userId: string;
+  text: string;
+  terminal: 'done' | 'aborted' | 'error';
+  threadTs?: string;
+  errorCode?: string;
+  /** Managed local media discovered in the terminal assistant output. */
+  mediaAbsPaths?: string[];
+}
+
+/**
+ * Output is deliberately discriminated: rich channels may stream/patch,
+ * while durable text channels atomically commit the complete terminal output.
+ */
+export type ImOutputDriver =
+  | {
+      kind: 'rich-card';
+      im: RichChannelIM;
+    }
+  | {
+      kind: 'chunked-text';
+      im: TextChannelIM;
+      commitFinal(output: ImFinalOutput): Promise<void>;
+    };

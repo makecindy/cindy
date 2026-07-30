@@ -96,6 +96,30 @@ describe('cc routingTransform — xAI 会话的辅助请求回落默认路由 (i
     expect(decision).toBeNull();
   });
 
+  it('claude-haiku 分类器请求(provider-oauth spawn 带占位 x-api-key)→ 换网关 key,不 passthrough (#831)', () => {
+    // codex→cc 切换后的 openai/xai 来源会话:cc 子进程 env 里是占位 key,分类器请求带着它
+    // 落到 ② 段。占位 key 不是可用凭证,按「无凭证」处理换网关 key;此前被误判成
+    // gateway-spawn passthrough → 网关确定性 401 → 首次权限请求即 auto→ask 降级。
+    const transform = createModelRoutingTransform();
+    const decision = transform(
+      { model: 'claude-haiku-4-5-20251001' },
+      ctxWith({ ...SESSION_HEADER, 'x-api-key': 'xdt-provider-auth-placeholder-key' }),
+    );
+    expect(decision).toEqual({
+      headerOverride: { 'x-api-key': 'sk-gw', authorization: 'Bearer sk-gw' },
+    });
+  });
+
+  it('占位 x-api-key 且无网关 key → 维持 passthrough(与改动前行为一致,上游 401)', () => {
+    gatewayKey = null;
+    const transform = createModelRoutingTransform();
+    const decision = transform(
+      { model: 'claude-haiku-4-5-20251001' },
+      ctxWith({ ...SESSION_HEADER, 'x-api-key': 'xdt-provider-auth-placeholder-key' }),
+    );
+    expect(decision).toBeNull();
+  });
+
   it('claude-haiku 分类器请求(无网关 key 的 oauth-spawn)→ 直连 Anthropic 订阅', () => {
     gatewayKey = null;
     const transform = createModelRoutingTransform();

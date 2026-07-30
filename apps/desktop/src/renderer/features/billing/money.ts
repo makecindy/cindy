@@ -6,6 +6,15 @@
 
 const DECIMAL_PATTERN = /^([+-]?)(\d+)(?:\.(\d+))?$/;
 
+function billingCurrencyFormatOptions(currency: string): Intl.NumberFormatOptions {
+  const normalizedCurrency = currency.toUpperCase();
+  return {
+    style: 'currency',
+    currency: normalizedCurrency,
+    ...(normalizedCurrency === 'USD' ? { currencyDisplay: 'narrowSymbol' } : {}),
+  };
+}
+
 function roundToMinorUnits(amount: string, digits: number): bigint | null {
   const matched = DECIMAL_PATTERN.exec(amount.trim());
   if (!matched) return null;
@@ -50,10 +59,7 @@ function formatMinorUnits(
 
 export function formatBillingAmount(amount: string, currency: string, locale?: string): string {
   try {
-    const fmt = new Intl.NumberFormat(locale, {
-      style: 'currency',
-      currency: currency.toUpperCase(),
-    });
+    const fmt = new Intl.NumberFormat(locale, billingCurrencyFormatOptions(currency));
     const digits = fmt.resolvedOptions().maximumFractionDigits ?? 2;
     const minor = roundToMinorUnits(amount, digits);
     return minor === null
@@ -71,10 +77,7 @@ export function formatBillingMinorAmount(
 ): string {
   try {
     if (!Number.isSafeInteger(minor)) return `${minor} ${currency.toUpperCase()}`;
-    const fmt = new Intl.NumberFormat(locale, {
-      style: 'currency',
-      currency: currency.toUpperCase(),
-    });
+    const fmt = new Intl.NumberFormat(locale, billingCurrencyFormatOptions(currency));
     const digits = fmt.resolvedOptions().maximumFractionDigits ?? 2;
     return formatMinorUnits(BigInt(minor), fmt, digits);
   } catch {

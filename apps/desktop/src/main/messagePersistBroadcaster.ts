@@ -346,7 +346,7 @@ const toolUseCreatedAtBySession = new Map<string, Map<string, number>>();
  * 需要按 tool_use 的 input.args 去 mediaToolResultFallback 池里认领结果。
  */
 const toolUseInfoBySession = new Map<string, Map<string, { toolName: string; input: unknown }>>();
-const planToolUsePersistIdBySession = new Map<string, Map<string, string>>();
+const updatableToolUsePersistIdBySession = new Map<string, Map<string, string>>();
 
 function rememberToolUseId(sessionId: string, toolUseId: string, createdAt: number): void {
   let set = knownToolUseIdsBySession.get(sessionId);
@@ -384,11 +384,15 @@ function clampAfterLatestToolUse(sessionId: string, toolUseIds: string[], create
   return latestToolUseCreatedAt + 1;
 }
 
-function rememberPlanToolUsePersistId(sessionId: string, toolUseId: string, persistId: string): void {
-  let idMap = planToolUsePersistIdBySession.get(sessionId);
+function isUpdatableToolUse(toolName: string): boolean {
+  return toolName === 'update_plan' || toolName === 'web_search';
+}
+
+function rememberUpdatableToolUsePersistId(sessionId: string, toolUseId: string, persistId: string): void {
+  let idMap = updatableToolUsePersistIdBySession.get(sessionId);
   if (!idMap) {
     idMap = new Map();
-    planToolUsePersistIdBySession.set(sessionId, idMap);
+    updatableToolUsePersistIdBySession.set(sessionId, idMap);
   }
   idMap.set(toolUseId, persistId);
 }
@@ -414,16 +418,16 @@ export function onToolUseEvent(
       input: data.input,
     });
   }
-  const existingPlanPersistId = toolName === 'update_plan' && toolUseId
-    ? planToolUsePersistIdBySession.get(sessionId)?.get(toolUseId)
+  const existingPersistId = isUpdatableToolUse(toolName) && toolUseId
+    ? updatableToolUsePersistIdBySession.get(sessionId)?.get(toolUseId)
     : undefined;
-  if (existingPlanPersistId) {
+  if (existingPersistId) {
     const content = { toolUseId, toolName, input: data.input };
-    enqueueWrite(`tool_use_update:${sessionId}:${existingPlanPersistId}`, () =>
-      updateDbMessageContent(sessionId, existingPlanPersistId, content),
+    enqueueWrite(`tool_use_update:${sessionId}:${existingPersistId}`, () =>
+      updateDbMessageContent(sessionId, existingPersistId, content),
     );
-    notePersistedMessage(sessionId, 'tool_use', existingPlanPersistId);
-    return existingPlanPersistId;
+    notePersistedMessage(sessionId, 'tool_use', existingPersistId);
+    return existingPersistId;
   }
   const persistId = createId();
   const meta = agentMeta ?? lastAgentMetaBySession.get(sessionId) ?? null;
@@ -436,8 +440,8 @@ export function onToolUseEvent(
     agentMeta: meta,
     createdAt,
   });
-  if (toolName === 'update_plan' && toolUseId) {
-    rememberPlanToolUsePersistId(sessionId, toolUseId, persistId);
+  if (isUpdatableToolUse(toolName) && toolUseId) {
+    rememberUpdatableToolUsePersistId(sessionId, toolUseId, persistId);
   }
   notePersistedMessage(sessionId, 'tool_use', persistId);
   return persistId;
@@ -875,7 +879,7 @@ export function resetTurnPersistState(sessionId: string): void {
   knownToolUseIdsBySession.delete(sessionId);
   toolUseCreatedAtBySession.delete(sessionId);
   toolUseInfoBySession.delete(sessionId);
-  planToolUsePersistIdBySession.delete(sessionId);
+  updatableToolUsePersistIdBySession.delete(sessionId);
   lastAgentMetaBySession.delete(sessionId);
   _turnStartedAtBySession.delete(sessionId);
   _turnDedupIdBySession.delete(sessionId);
@@ -1148,7 +1152,7 @@ export function clearSessionPersistState(sessionId: string): void {
   knownToolUseIdsBySession.delete(sessionId);
   toolUseCreatedAtBySession.delete(sessionId);
   toolUseInfoBySession.delete(sessionId);
-  planToolUsePersistIdBySession.delete(sessionId);
+  updatableToolUsePersistIdBySession.delete(sessionId);
   toolResultIdByToolUseId.delete(sessionId);
   pendingFullTextByToolUseId.delete(sessionId);
   toolResultContentByClientId.delete(sessionId);

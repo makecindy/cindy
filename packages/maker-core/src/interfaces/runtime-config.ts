@@ -7,6 +7,14 @@
  * - 这样 CLI host 可以一行配置切换不走 proxy；业务 flag 也能交给用户 settings 调
  */
 
+import type { SubagentModelDiagnostic } from '../agents/claude-code/subagent-model-default.js';
+import type { AgentCredentialMode } from './auth-adapter.js';
+
+/** 函数形态 behaviorFlags 的入参:本次 spawn 的凭证形态(undefined = 未显式指定,走 adapter fallback)。 */
+export interface BehaviorFlagsContext {
+  credentialMode?: AgentCredentialMode;
+}
+
 export interface AgentRuntimeConfig {
   /**
    * 接入端点。设为 undefined 表示走 SDK 默认（如 api.anthropic.com）。
@@ -33,8 +41,13 @@ export interface AgentRuntimeConfig {
   /**
    * 业务行为 flag。Agent 内部决定哪些 key 有意义。
    * Claude 当前用到：CLAUDE_CODE_SKIP_FAST_MODE_NETWORK_ERRORS
+   *
+   * 函数形态:flag 需要按本次 spawn 的凭证形态分叉时用(env-builder 在组装 env 时
+   * 以 spawn 的 credentialMode 调用)。典型:CLAUDE_CODE_ATTRIBUTION_HEADER 只对
+   * gateway-key spawn 禁用——oauth 侧禁用会让订阅直连的 Auto 分类器子请求被上游
+   * 429(desktop issue #758)。静态对象形态语义不变。
    */
-  behaviorFlags?: Record<string, string>;
+  behaviorFlags?: Record<string, string> | ((ctx: BehaviorFlagsContext) => Record<string, string>);
 
   /**
    * Host-managed default model for native subagents.
@@ -44,8 +57,28 @@ export interface AgentRuntimeConfig {
    *
    * Claude maps this to `CLAUDE_CODE_SUBAGENT_MODEL`. Codex does not consume it yet because
    * its full-history fork path rejects model overrides in the currently bundled binary.
+   *
+   * ⚠️ 该 env 在 cc 的解析顺序里是**最高优先级**,不仅压过 agent frontmatter 的 `model:`,
+   * 也压过每次 Task/Agent 调用传入的 `model` 参数,而平台不提供更低优先级的槽位。
+   * Claude agent 因此只在「本会话没有任何手写 agent 声明 model」时才注入它 —— 取舍与实测
+   * 依据见 agents/claude-code/subagent-model-default.ts 的模块头。
    */
   subagentModel?: string;
+
+  /**
+   * 路由感知版 subagent 覆写(优先于 subagentModel):env-builder 传入本次 spawn 的
+   * 会话来源(显式 providerId,null = 隐式默认),host 据此判定覆写在**该来源**下是否
+   * 仍可路由(子代理跑在父会话来源上;停用轴按 (来源, 模型) 记账,只看「任一来源可用」
+   * 会让父会话来源下被停用的拷贝继续被子代理付费使用,PR #744 review 第十九轮)。
+   * `credentialMode` 是本次 spawn 已解析的凭证形态:providerId 为 null(隐式默认)
+   * 时 host 据它映射实际落点(gateway-key = XD 网关 / oauth-bearer = Anthropic 直连),
+   * 不再静态猜测(PR #744 review 第二十轮)。
+   * 返回 undefined = 不注入覆写,回退 CLI 原生 subagent 选择。缺席时退回 subagentModel。
+   */
+  subagentModelForRoute?: (
+    providerId: string | null,
+    credentialMode?: string,
+  ) => string | undefined;
 
   /**
    * Claude Code 自动上下文压缩阈值百分比。
@@ -103,6 +136,18 @@ export interface AgentRuntimeConfig {
    * 不允许 (true, true) 共存 (双写会污染 LLM 上下文)。
    */
   makerMemoryEnabled?: boolean;
+
+  /**
+   * 「Subagent 模型」相关诊断的回调(见 agents/claude-code/subagent-model-default.ts)。
+   *
+   * 会话启动时扫描用户手写 subagent 定义,对每条问题逐一回调。当前的种类见
+   * `SubagentModelDiagnosticKind`:声明的模型不在可用清单里(`unknown-model`),或用了会随
+   * 二进制升级漂移的裸别名(`alias-model`)。
+   *
+   * host 据此落日志、在会话内提示用户、或交给 AI 查询。缺省 = 只落 agent 层日志。
+   * 回调抛错被吞(诊断不能影响会话启动)。
+   */
+  onSubagentModelDiagnostics?: (diagnostics: readonly SubagentModelDiagnostic[]) => void;
 
   /**
    * Electron app.getPath('userData') 绝对路径, host 注入。

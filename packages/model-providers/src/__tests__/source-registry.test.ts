@@ -11,6 +11,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { BUNDLED_CATALOG } from '../catalog.js';
 import {
   loadCatalog,
+  loadCatalogWithSource,
   resolveCatalogUrl,
   resolveFallbackCatalogUrl,
   mergeWithBundled,
@@ -176,6 +177,25 @@ describe('mergeWithBundled', () => {
 });
 
 describe('loadCatalog', () => {
+  it('reports whether local, remote, or bundled supplied the snapshot', async () => {
+    const local = await loadCatalogWithSource(
+      { localPath: '/repo/providers.json' },
+      { readFile: vi.fn(async () => JSON.stringify(MINIMAL)) },
+    );
+    const remote = await loadCatalogWithSource(
+      { url: 'https://catalog.example.test/providers.json' },
+      { fetchText: vi.fn(async () => JSON.stringify(MINIMAL)) },
+    );
+    const bundled = await loadCatalogWithSource(
+      { url: 'https://catalog.example.test/providers.json' },
+      { fetchText: vi.fn(async () => { throw new Error('network down'); }) },
+    );
+
+    expect(local).toMatchObject({ source: 'local', catalog: { version: 'test' } });
+    expect(remote).toMatchObject({ source: 'remote', catalog: { version: 'test' } });
+    expect(bundled).toEqual({ source: 'bundled', catalog: BUNDLED_CATALOG });
+  });
+
   it('dev: reads local path, skips network', async () => {
     const fetchText = vi.fn();
     const io: CatalogIO = { readFile: vi.fn(async () => JSON.stringify(MINIMAL)), fetchText };

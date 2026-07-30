@@ -24,8 +24,11 @@ import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { useAgentIslandSettings } from '@/hooks/useAgentIslandSettings';
 import anniePreviewUrl from '@/assets/agent-island-annie.png?url';
+import blackcatPreviewUrl from '@/assets/agent-island-blackcat.png?url';
 import boliPreviewUrl from '@/assets/agent-island-boli.png?url';
 import chakuPreviewUrl from '@/assets/agent-island-chaku.png?url';
+import cindyPreviewUrl from '@/assets/agent-island-cindy.png?url';
+import erikaPreviewUrl from '@/assets/agent-island-erika.png?url';
 import muffinPreviewUrl from '@/assets/agent-island-muffin.png?url';
 import pululuPreviewUrl from '@/assets/agent-island-pululu.svg?url';
 import tararaPreviewUrl from '@/assets/agent-island-tarara.png?url';
@@ -44,6 +47,9 @@ import {
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 
 const MASCOT_PREVIEW_URLS: Record<AgentIslandMascotSkin, string> = {
+  cindy: cindyPreviewUrl,
+  blackcat: blackcatPreviewUrl,
+  erika: erikaPreviewUrl,
   pululu: pululuPreviewUrl,
   tarara: tararaPreviewUrl,
   boli: boliPreviewUrl,
@@ -64,7 +70,39 @@ const MASCOT_PREVIEW_VIEWBOX_SIZE = 16;
 const MASCOT_KEY_BORDER_RADIUS = `${(0.12 / 1.8) * 100}% / ${(0.12 / 0.7) * 100}%`;
 const MASCOT_KEY_RECTS = Array.from({ length: 12 }, (_, index) => index);
 
+// 眼睛几何与配色必须与原生侧 SpriteMascotConfig 保持一致
+// (native/agent-island/macos-agent-island-helper.swift)，否则设置页预览和灵动岛实际渲染会不一样。
 const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, MascotPreviewConfig> = {
+  cindy: {
+    keyboardBase: 'rgb(38 43 69)',
+    keyboardKey: 'rgb(103 118 240)',
+    eyeColor: 'rgb(107 61 50)',
+    eyeLeftX: 6.71,
+    eyeRightX: 9.3,
+    eyeY: 9.5,
+    eyeRx: 0.585,
+    eyeRy: 0.98,
+  },
+  blackcat: {
+    keyboardBase: 'rgb(31 36 41)',
+    keyboardKey: 'rgb(103 118 240)',
+    eyeColor: 'rgb(253 207 69)',
+    eyeLeftX: 5.95,
+    eyeRightX: 10.05,
+    eyeY: 9.05,
+    eyeRx: 0.585,
+    eyeRy: 0.98,
+  },
+  erika: {
+    keyboardBase: 'rgb(51 71 77)',
+    keyboardKey: 'rgb(90 156 170)',
+    eyeColor: 'rgb(135 93 66)',
+    eyeLeftX: 6.84,
+    eyeRightX: 9.16,
+    eyeY: 10.75,
+    eyeRx: 0.585,
+    eyeRy: 0.98,
+  },
   tarara: {
     keyboardBase: '#00615c',
     keyboardKey: '#00d9c5',
@@ -128,15 +166,10 @@ const MASCOT_PREVIEW_CONFIGS: Record<Exclude<AgentIslandMascotSkin, 'pululu'>, M
   },
 };
 
-const DEFAULT_MASCOT_ANIMATION_STEPS: MascotAnimationSteps = {
-  pululu: 0,
-  tarara: 1,
-  boli: 2,
-  whitesnow: 3,
-  annie: 0,
-  chaku: 1,
-  muffin: 2,
-};
+/** 让各角色的预览动画错峰起步(按皮肤顺序轮转到不同动画模式)，新增皮肤自动纳入。 */
+const DEFAULT_MASCOT_ANIMATION_STEPS: MascotAnimationSteps = Object.fromEntries(
+  AGENT_ISLAND_MASCOT_SKINS.map((skin, index) => [skin, index % MASCOT_ANIMATION_MODES.length]),
+) as MascotAnimationSteps;
 
 interface MascotPreviewConfig {
   keyboardBase: string;
@@ -644,15 +677,9 @@ function advanceMascotAnimationStep(
 }
 
 function advanceAllMascotAnimationSteps(current: MascotAnimationSteps): MascotAnimationSteps {
-  return {
-    pululu: current.pululu + 1,
-    tarara: current.tarara + 1,
-    boli: current.boli + 1,
-    whitesnow: current.whitesnow + 1,
-    annie: current.annie + 1,
-    chaku: current.chaku + 1,
-    muffin: current.muffin + 1,
-  };
+  return Object.fromEntries(
+    AGENT_ISLAND_MASCOT_SKINS.map((skin) => [skin, current[skin] + 1]),
+  ) as MascotAnimationSteps;
 }
 
 function displayTargetToOptionValue(target: AgentIslandDisplayTarget): string {

@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useState,
   useMemo,
   useEffect,
@@ -44,6 +45,7 @@ import { useProviderModelMemoryVersion } from '@/state/providerModelMemory';
 import { useDeviceLinkModelMirrorVersion } from '@/state/deviceLinkModelMirror';
 import {
   connectedProvidersForAgent,
+  actualSourceIdForModel,
   effectiveSourceIdForModel,
   getModel,
   modelSupportsFastMode,
@@ -266,6 +268,32 @@ function ModelPromotionBadge({ children }: { children: ReactNode }) {
   );
 }
 
+export interface ModelSelectorAgentIdentity {
+  vendorKey: 'cc' | 'codex';
+  /**
+   * current = 已由会话/runtime 元数据确认的当前 Agent；
+   * pending = 已登记、将在下一条消息应用的切换目标。
+   */
+  state: 'current' | 'pending';
+}
+
+export function resolveModelSelectorAgentIdentity(
+  runtimeAgentKind: AgentKind | null | undefined,
+  pendingTarget: AgentKind | null | undefined,
+): ModelSelectorAgentIdentity | undefined {
+  if (pendingTarget) {
+    return {
+      vendorKey: pendingTarget === 'codex' ? 'codex' : 'cc',
+      state: 'pending',
+    };
+  }
+  if (!runtimeAgentKind) return undefined;
+  return {
+    vendorKey: runtimeAgentKind === 'codex' ? 'codex' : 'cc',
+    state: 'current',
+  };
+}
+
 interface ModelSelectorProps {
   modelId: string;
   effort: Effort;
@@ -292,6 +320,8 @@ interface ModelSelectorProps {
    * 其他消费方(ScheduleChips / ImDefaultSettingsSection / CreateWorkerPopover 等)不传 = 行为不变。
    */
   sourceDisconnected?: boolean;
+  /** 语义同 ModelSelectorContentProps.actualRoute(仅已建会话传 true)。 */
+  actualRoute?: boolean;
   /** Fast Mode 状态 + 回调(从工具栏搬进 Edit 配置列)。不传 → 配置列不显示 Fast 开关。 */
   fastMode?: boolean;
   onFastModeChange?: (enabled: boolean) => void | Promise<void>;
@@ -299,6 +329,12 @@ interface ModelSelectorProps {
   modelMemory?: ModelMemoryAccessors;
   /** When provided, only models with this vendorKey are shown in the dropdown. */
   vendorKey?: 'cc' | 'codex';
+  /**
+   * 已创建会话的 trigger 同时展示 Agent 与模型，避免 Claude Code 使用 OpenAI 模型时
+   * 只看来源图标而误判成 Codex。必须由权威 session/runtime 身份或明确切换 intent 提供，
+   * 不得从用于模型列表过滤的 vendorKey 推断。紧凑布局仅视觉收起，aria/title 保留完整语义。
+   */
+  agentIdentity?: ModelSelectorAgentIdentity;
   /** device-link 远程会话所属被控端 id;非空 = 列被控端的模型 + 退化为纯列表(不分供应商段)。 */
   deviceId?: string;
   /**
@@ -396,6 +432,15 @@ interface ModelSelectorContentProps {
   excludeChatBridgedCodex?: boolean;
   /** 选中后是否自动关闭。Popover 场景传入,内嵌场景不传。 */
   onDismiss?: () => void;
+  /**
+   * 当前来源解析口径。true = 实际路由口径(actualSourceIdForModel,不剔除停用拷贝)
+   * —— 仅**已建会话**的选择器传(ChatInput sessionId 在时):运行中会话的图标/价格/
+   * Fast/选中行豁免必须跟真实扣费路由。缺省 false = 准入口径
+   * (effectiveSourceIdForModel):草稿 / worker / IM 默认 / hook 配置等**新路由
+   * 选择**场景,高亮与元数据必须指向真正会被路由到的启用来源
+   * (PR #744 review 第十轮)。
+   */
+  actualRoute?: boolean;
   /** 语义同 ModelSelectorProps.maxVisibleModelRows。 */
   maxVisibleModelRows?: number;
   /** 模型信息 / 选项浮层的额外样式。供嵌套在高层级 overlay 中的调用方覆盖默认 z-index。 */
@@ -459,6 +504,7 @@ function ModelSelectorContentView({
   excludeSubscriptionDirect,
   excludeChatBridgedCodex,
   onDismiss,
+  actualRoute = false,
   maxVisibleModelRows,
   overlayContentClassName,
   currentProviderId,
@@ -472,6 +518,8 @@ function ModelSelectorContentView({
   agentSwitch,
   pricing,
 }: ModelSelectorContentProps & { pricing: ModelPricingCatalog | null }) {
+  // 当前来源解析器:已建会话 = 实际路由口径(含停用拷贝),其余 = 准入口径。
+  const resolveCurrentSourceId = actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel;
   const { t } = useTranslation();
   const constrainedListMaxHeight = modelListMaxHeightForRows(maxVisibleModelRows);
   // session-agent-switch:两步式引擎切换的浏览态。browseVendor 初始 = 会话当前引擎;
@@ -682,22 +730,27 @@ function ModelSelectorContentView({
   }, [sourcesEnabled, providers, currentAgentKind, excludeChatBridgedCodex]);
   // 生效来源必须按当前模型收窄。只按 agent 从 connected 里兜底，会在 XD key 缺失但
   // OpenAI 已连接时拼出「OpenAI 图标 + Opus」这种不存在的路由。
+  // 用「实际路由口径」(actualSourceIdForModel,不剔除停用拷贝):这里描述的是**当前
+  // 会话正在用的来源**——运行中的会话不因停用打断,实际请求仍走原来源;若按准入过滤
+  // 后解析,图标/价格/Fast/选中行豁免会显示成替代来源,与真实扣费路由不符
+  // (PR #744 review 第五轮)。新路由选择(行点击/浏览)另走 connected 分段,不受影响。
   const activeSourceId = useMemo(
     () =>
       currentAgentKind
-        ? effectiveSourceIdForModel(providers, currentProviderId, modelId, currentAgentKind)
+        ? resolveCurrentSourceId(providers, currentProviderId, modelId, currentAgentKind)
         : null,
-    [providers, currentProviderId, modelId, currentAgentKind],
+    [providers, currentProviderId, modelId, currentAgentKind, resolveCurrentSourceId],
   );
 
   // 行级 Fast 可编辑性 = agent 能力 × 该(供应商, 模型)条目的 supportsFastMode。
   // Fast 能力是 per-(provider, agent) 的(见 CatalogModel)：按该行供应商现查它自己的模型条目,
   // 同一 model id 在不同供应商下可不同(如某网关剥掉 fast 字段 ⇒ 那家配 false)。providerId 为 null
   // (flat / device-link 退化)回退 activeSourceId;取不到供应商 / 该来源不提供此模型 ⇒ false。
-  // cc / codex 同一套门控,仅各供应商的配置数据不同。
+  // cc / codex 同一套门控,仅各供应商的配置数据不同。查找用全量 providers:activeSourceId
+  // 可能指向 suspended 来源(实际路由口径),connected 里查不到会误判 Fast 不可用。
   const fastEditable = (providerId: string | null, m: RowModel): boolean => {
     if (!onFastModeChange || !hasFastModeCap || !currentAgentKind) return false;
-    const provider = connected.find((p) => p.id === (providerId ?? activeSourceId));
+    const provider = providers.find((p) => p.id === (providerId ?? activeSourceId));
     return modelSupportsFastMode(provider, m.id, currentAgentKind);
   };
 
@@ -712,7 +765,7 @@ function ModelSelectorContentView({
     const effectiveProviderId =
       providerId ??
       (currentAgentKind
-        ? effectiveSourceIdForModel(providers, currentProviderId, id, currentAgentKind)
+        ? resolveCurrentSourceId(providers, currentProviderId, id, currentAgentKind)
         : null);
     const quote = getModelPriceQuote(pricing, effectiveProviderId, id);
     if (effectiveProviderId === 'xd' && (!quote || quote.source === 'gateway')) {
@@ -740,25 +793,50 @@ function ModelSelectorContentView({
       providers,
     });
     if (!rowAgentKind) return true;
+    // 逐模型停用与供应商级 suspended 同为准入硬门:被控端某来源整体启用但该模型被
+    // 点名停用(CatalogModel.disabled,由被控端把 override 烘进 provider 视图)时,
+    // 该拷贝不算可路由 —— 只数「来源连接且启用 + 模型条目未停用」的拷贝,否则远程
+    // flat picker(如 CreateWorkerPopover)选中后到 Main 准入才失败
+    // (PR #744 review 第二十二轮)。
     return !providers.some(
       (provider) =>
         provider.connected &&
+        !provider.suspended &&
         provider.agents.includes(rowAgentKind) &&
-        providerOffersModel(provider, id, rowAgentKind),
+        providerOffersModel(provider, id, rowAgentKind) &&
+        getModel(provider, id, rowAgentKind)?.disabled !== true,
     );
   };
 
   // ── 供应商分段 / flat 列表 ────────────────────────────────────────────────
   // sections 非空 = 按供应商分段(每行 = (供应商, 模型));null = flat(无供应商概念)。
+  // 当前会话的实际来源(activeSourceId)被供应商级停用时,connected(经
+  // connectedProvidersForAgent,剔除 suspended)不含它 —— 选中行会整个消失,
+  // keepSelected 豁免无从生效。把这个仍然连接着的 suspended 来源补进分段输入,
+  // 但只保留选中行(isVisible 收口):它的其它模型不可作为新路由选择
+  // (PR #744 review 第七轮)。
+  const sectionProviders = useMemo(() => {
+    if (!currentAgentKind || !activeSourceId) return connected;
+    if (connected.some((p) => p.id === activeSourceId)) return connected;
+    const actual = providers.find((p) => p.id === activeSourceId);
+    // 只补「已连接但 suspended」的当前来源;未连接来源仍走既有空态/断链路径。
+    if (!actual?.connected || !actual.agents.includes(currentAgentKind)) return connected;
+    return [...connected, actual];
+  }, [connected, providers, activeSourceId, currentAgentKind]);
+  const suspendedActiveSourceId =
+    sectionProviders === connected ? null : activeSourceId;
   // biome-ignore lint/correctness/useExhaustiveDependencies: visibilityVersion 是外部可见性偏好的刷新信号,需要强制重算分段列表。
   const sections = useMemo(() => {
     if (!sourcesEnabled || !currentAgentKind) return null;
     // 0 个可连来源 → 返回 null 退化到 flat 列表(而非空 sections 触发「无结果」)。覆盖:
     //  · device-link 老被控端不认 maker:provider:list(invoke reject)→ device providers 为空 → flat 兜底;
     //  · providers 拉取中的瞬态窗口;· 本机 0 来源已由上方 emptyState 引导卡先行接管。
-    if (connected.length === 0) return null;
+    if (sectionProviders.length === 0) return null;
+    // 被停用的当前来源只保留选中行(keepSelected 豁免语义)。
+    const restrictSuspended = (pid: string, mid: string): boolean =>
+      !(suspendedActiveSourceId && pid === suspendedActiveSourceId && mid !== modelId);
     return buildProviderSections({
-      providers: connected,
+      providers: sectionProviders,
       agent: currentAgentKind,
       selectedModelId: modelId,
       selectedProviderId: activeSourceId,
@@ -766,7 +844,8 @@ function ModelSelectorContentView({
       // 控制端本机 modelVisibilityPrefs。旧被控端不回传快照时 fail-open，保持兼容。
       isVisible: deviceId
         ? (pid, mid) => {
-            const p = connected.find((x) => x.id === pid);
+            if (!restrictSuspended(pid, mid)) return false;
+            const p = sectionProviders.find((x) => x.id === pid);
             const cat = p ? getModel(p, mid, currentAgentKind) : undefined;
             return isDeviceModelVisible(
               remoteProviders.modelVisibilityOverrides,
@@ -776,7 +855,8 @@ function ModelSelectorContentView({
             );
           }
         : (pid, mid) => {
-            const p = connected.find((x) => x.id === pid);
+            if (!restrictSuspended(pid, mid)) return false;
+            const p = sectionProviders.find((x) => x.id === pid);
             const cat = p ? getModel(p, mid, currentAgentKind) : undefined;
             return isModelEnabled(currentAgentKind, pid, {
               id: mid,
@@ -788,7 +868,8 @@ function ModelSelectorContentView({
     // visibilityVersion 仅作刷新触发器(设置页改显示开关后强制重算);deviceId 切换需重算分段。
   }, [
     sourcesEnabled,
-    connected,
+    sectionProviders,
+    suspendedActiveSourceId,
     currentAgentKind,
     modelId,
     activeSourceId,
@@ -1003,9 +1084,9 @@ function ModelSelectorContentView({
     if (!editingModel || !currentAgentKind) return undefined;
     const providerId =
       editingProviderId ??
-      effectiveSourceIdForModel(providers, currentProviderId, editingModel.id, currentAgentKind);
+      resolveCurrentSourceId(providers, currentProviderId, editingModel.id, currentAgentKind);
     return providerId ? providers.find((provider) => provider.id === providerId) : undefined;
-  }, [editingModel, currentAgentKind, editingProviderId, providers, currentProviderId]);
+  }, [editingModel, currentAgentKind, editingProviderId, providers, currentProviderId, resolveCurrentSourceId]);
   const editingPricePresentation = editingModel
     ? pricePresentationOf(editingProvider?.id ?? editingProviderId, editingModel.id)
     : null;
@@ -1546,6 +1627,7 @@ export function ModelSelector({
   onFastModeChange,
   modelMemory,
   vendorKey,
+  agentIdentity,
   deviceId,
   excludeSubscriptionDirect,
   excludeChatBridgedCodex,
@@ -1566,13 +1648,33 @@ export function ModelSelector({
   ariaContext,
   currentProviderId,
   sourceDisconnected = false,
+  actualRoute = false,
   onProviderChange,
   onNavigateToProviders,
   agentSwitch,
 }: ModelSelectorProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const openRef = useRef(false);
   const [keepOpenForAgentConfirmation, setKeepOpenForAgentConfirmation] = useState(false);
+  const setOpenWithoutAutoRefresh = useCallback((next: boolean): void => {
+    openRef.current = next;
+    setOpen(next);
+  }, []);
+  const handleOpenChange = useCallback(
+    (next: boolean): void => {
+      const nextOpen = disabled ? false : next;
+      const wasOpen = openRef.current;
+      openRef.current = nextOpen;
+      if (nextOpen && !wasOpen && !deviceId) {
+        void window.electronAPI.maker
+          .requestProviderModelsAutoRefresh('model-selector-open')
+          .catch(() => undefined);
+      }
+      setOpen(nextOpen);
+    },
+    [deviceId, disabled],
+  );
 
   // AlertDialog 打开时会被 Popover 视作外部交互并请求关闭。Agent 分段确认期间
   // 强制保留已展开的模型面板；确认结束后把底层 open 恢复为 true，避免弹窗关闭
@@ -1587,12 +1689,12 @@ export function ModelSelector({
         try {
           return await confirmBrowseSwitch();
         } finally {
-          setOpen(true);
+          setOpenWithoutAutoRefresh(true);
           setKeepOpenForAgentConfirmation(false);
         }
       },
     };
-  }, [agentSwitch]);
+  }, [agentSwitch, setOpenWithoutAutoRefresh]);
 
   const agentKind = vendorKeyToAgentKind(vendorKey);
   const cc = useAgentCapabilities('claude-code', deviceId);
@@ -1637,6 +1739,19 @@ export function ModelSelector({
     : (currentModel?.displayName ??
       (unknownLabel !== '' ? unknownLabel : null) ??
       t('newChat.modelSelector.trigger.placeholder'));
+  const agentName =
+    agentIdentity && !fallbackOption?.active
+      ? agentIdentity.vendorKey === 'cc'
+        ? t('newChat.modelSelector.trigger.agent.claudeCode')
+        : t('newChat.modelSelector.trigger.agent.codex')
+      : null;
+  const agentIdentityLabel =
+    agentName && agentIdentity?.state === 'pending'
+      ? t('newChat.modelSelector.trigger.agent.pending', { agent: agentName })
+      : agentName;
+  const displayIdentityLabel = agentIdentityLabel
+    ? `${agentIdentityLabel} · ${displayLabel}`
+    : displayLabel;
   const efforts = currentModel?.efforts ?? [];
 
   const currentAgentKind: AgentKind | null = useMemo(() => {
@@ -1673,9 +1788,9 @@ export function ModelSelector({
   const activeSourceId = useMemo<string | null>(
     () =>
       currentAgentKind
-        ? effectiveSourceIdForModel(providers, currentProviderId, modelId, currentAgentKind)
+        ? (actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel)(providers, currentProviderId, modelId, currentAgentKind)
         : null,
-    [providers, currentAgentKind, currentProviderId, modelId],
+    [providers, currentAgentKind, currentProviderId, modelId, actualRoute],
   );
   // 空態:当前模型一个已连接来源都没有 → trigger 改「连接来源」CTA。
   // device-link 远程会话不走此 CTA(控制端无法替被控端连来源;hasConnectedSource 是本机口径)。
@@ -1741,16 +1856,27 @@ export function ModelSelector({
   const baseAriaLabel = noSource
     ? t('newChat.modelSelector.source.connect')
     : showSourceDisconnected
-      ? `${t('newChat.modelSelector.source.disconnected')}: ${displayLabel}`
-      : effortLabel
-        ? t('newChat.modelSelector.trigger.ariaWithEffort', {
-            model: displayLabel,
-            effort: effortLabel,
-          })
-        : t('newChat.modelSelector.trigger.aria', { model: displayLabel });
+      ? `${t('newChat.modelSelector.source.disconnected')}: ${displayIdentityLabel}`
+      : agentIdentity?.state === 'pending' && agentName
+        ? effortLabel
+          ? t('newChat.modelSelector.trigger.pendingAriaWithEffort', {
+              agent: agentName,
+              model: displayLabel,
+              effort: effortLabel,
+            })
+          : t('newChat.modelSelector.trigger.pendingAria', {
+              agent: agentName,
+              model: displayLabel,
+            })
+        : effortLabel
+          ? t('newChat.modelSelector.trigger.ariaWithEffort', {
+              model: displayIdentityLabel,
+              effort: effortLabel,
+            })
+          : t('newChat.modelSelector.trigger.aria', { model: displayIdentityLabel });
   // compact 会隐藏断连状态文字；原生 title 仍需保留同一状态，避免鼠标用户悬停
   // 错误图标时只看到模型名、无法判断发送为何被阻断。
-  const triggerTitle = showSourceDisconnected ? baseAriaLabel : displayLabel;
+  const triggerTitle = showSourceDisconnected ? baseAriaLabel : displayIdentityLabel;
   // 多实例同屏(IM 目录偏好)时前置「字段名 · 行别名」,读屏才能区分行与行。
   const ariaLabel = ariaContext ? `${ariaContext}:${baseAriaLabel}` : baseAriaLabel;
   const isBudget = modelId.startsWith('codex/');
@@ -1760,6 +1886,28 @@ export function ModelSelector({
   // 正常会话在侧栏 + 浏览器 split-pane 下也必须让长模型名承担收缩。
   const isCompactToolbar = compactToolbar && !isFieldTrigger;
   const isUltraCompactToolbar = ultraCompactToolbar && isCompactToolbar;
+  const agentIdentityPrefix =
+    agentIdentityLabel && !isCompactToolbar ? (
+      <>
+        <span
+          className={cn(
+            'shrink-0 font-normal text-[var(--model-trigger-meta)]',
+            isCreateAgentVariant ? 'text-[12px]' : dense ? 'text-[12.5px]' : 'text-[13px]',
+          )}
+        >
+          {agentIdentityLabel}
+        </span>
+        <span
+          className={cn(
+            'shrink-0 font-normal text-[var(--model-trigger-meta)]',
+            isCreateAgentVariant ? 'text-[12px]' : dense ? 'text-[12.5px]' : 'text-[13px]',
+          )}
+          aria-hidden="true"
+        >
+          ·
+        </span>
+      </>
+    ) : null;
   // 保留 useMorphPopover 作用域开关(仅 composer 工具条 opt-in;settings/CreateWorker 用 Radix 回退),
   // 但去掉 !isCreateAgentVariant —— 新建对话框工具条也走脱身上浮 morph,与会话内统一(2026-07-22)。
   const morphEnabled = useMorphPopover && !isFieldTrigger;
@@ -1776,7 +1924,7 @@ export function ModelSelector({
     <button
       type="button"
       disabled={switching || disabled}
-      onClick={morphEnabled ? () => setOpen((prev) => (disabled ? false : !prev)) : undefined}
+      onClick={morphEnabled ? () => handleOpenChange(!openRef.current) : undefined}
       aria-expanded={open && !disabled}
       aria-haspopup="listbox"
       title={triggerTitle}
@@ -1851,6 +1999,7 @@ export function ModelSelector({
             logoKind={disconnectedProvider?.logoKind}
             colorClass="text-[var(--error-fg)]"
           />
+          {agentIdentityPrefix}
           <span
             className={cn(
               'min-w-0 font-normal text-[var(--text-primary)]',
@@ -1902,6 +2051,7 @@ export function ModelSelector({
               }
             />
           )}
+          {agentIdentityPrefix}
           <span
             className={cn(
               'min-w-0 font-normal',
@@ -2003,7 +2153,8 @@ export function ModelSelector({
       deviceId={deviceId}
       excludeSubscriptionDirect={excludeSubscriptionDirect}
       excludeChatBridgedCodex={excludeChatBridgedCodex}
-      onDismiss={() => setOpen(false)}
+      onDismiss={() => setOpenWithoutAutoRefresh(false)}
+      actualRoute={actualRoute}
       maxVisibleModelRows={maxVisibleModelRows}
       currentProviderId={currentProviderId}
       onProviderChange={onProviderChange}
@@ -2030,7 +2181,7 @@ export function ModelSelector({
     return (
       <MorphPopover
         open={(open || keepOpenForAgentConfirmation) && !disabled}
-        onOpenChange={(next) => setOpen(disabled ? false : next)}
+        onOpenChange={handleOpenChange}
         side={popoverSide}
         align="end"
         wrapperClassName="min-w-0 max-w-full shrink"
@@ -2046,7 +2197,7 @@ export function ModelSelector({
   return (
     <Popover
       open={(open || keepOpenForAgentConfirmation) && !disabled}
-      onOpenChange={(next) => setOpen(disabled ? false : next)}
+      onOpenChange={handleOpenChange}
     >
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent

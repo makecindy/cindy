@@ -784,7 +784,13 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
                 usageDetailsUnavailable ? t('billing.usage.detailsUnavailable') : undefined
               }
             >
-              <UsageBreakdownCard usage={creditUsage} balance={balance} />
+              <UsageBreakdownCard
+                usage={creditUsage}
+                balance={balance}
+                hasNoActiveSubscription={
+                  !loadingSubscription && !subscriptionError && currentSubscription === null
+                }
+              />
             </BillingGroup>
           )}
 
@@ -1161,9 +1167,11 @@ function BalanceOverviewCard({
 function UsageBreakdownCard({
   usage,
   balance,
+  hasNoActiveSubscription,
 }: {
   usage: ModelAccessCreditUsage | null;
   balance: ModelAccessBalance | null;
+  hasNoActiveSubscription: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
@@ -1181,7 +1189,14 @@ function UsageBreakdownCard({
               ['purchased', usage.purchased],
               ['promotional', usage.promotional],
             ] as const
-          ).map(([key, pool]) => <CreditPoolRow key={key} label={poolLabels[key]} pool={pool} />)
+          ).map(([key, pool]) => (
+            <CreditPoolRow
+              key={key}
+              label={poolLabels[key]}
+              pool={pool}
+              noActiveSubscription={key === 'plan' && hasNoActiveSubscription}
+            />
+          ))
         : balance
           ? (
               [
@@ -1205,7 +1220,19 @@ function UsageBreakdownCard({
   );
 }
 
-function CreditPoolRow({ label, pool }: { label: string; pool: ModelAccessCreditPoolUsage }) {
+function isZeroCreditAmount(amount: string): boolean {
+  return /^[+-]?0+(?:\.0+)?$/.test(amount.trim());
+}
+
+function CreditPoolRow({
+  label,
+  pool,
+  noActiveSubscription,
+}: {
+  label: string;
+  pool: ModelAccessCreditPoolUsage;
+  noActiveSubscription: boolean;
+}) {
   const { t, i18n } = useTranslation();
   const billingLocale = i18n.resolvedLanguage ?? i18n.language;
   const percent = usagePercent(pool);
@@ -1215,7 +1242,9 @@ function CreditPoolRow({ label, pool }: { label: string; pool: ModelAccessCredit
           used: formatMoney(pool.used, BILLING_CURRENCY, billingLocale),
           total: formatMoney(pool.total, BILLING_CURRENCY, billingLocale),
         })
-      : t('billing.usage.historyUnavailable');
+      : noActiveSubscription && isZeroCreditAmount(pool.remaining)
+        ? t('billing.usage.noPlanCredits')
+        : t('billing.usage.historyUnavailable');
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-5 py-3.5">
       <div className="min-w-0">
@@ -1425,7 +1454,6 @@ function BillingOfferDialog({
               <StateCard
                 icon={<PackageOpen size={22} />}
                 title={t('billing.catalog.emptyTitle')}
-                description={t('billing.catalog.emptyDescription')}
               />
             ) : (
               <>
@@ -1459,19 +1487,30 @@ function BillingOfferDialog({
                         )}
                       >
                         <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-2">
+                          <div
+                            className={cn(
+                              'grid items-center gap-2',
+                              currentPlan || unavailableReason
+                                ? 'grid-cols-[6rem_minmax(0,1fr)]'
+                                : 'grid-cols-[minmax(0,1fr)]',
+                            )}
+                          >
                             <p className="truncate text-13 font-medium text-[var(--text-primary)]">
                               {product.name}
                             </p>
-                            {currentPlan && (
-                              <span className="rounded-full bg-[var(--surface)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
-                                {t('billing.catalog.currentPlan')}
-                              </span>
-                            )}
-                            {unavailableReason && (
-                              <span className="rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
-                                {t(`billing.catalog.unavailableReasons.${unavailableReason}`)}
-                              </span>
+                            {(currentPlan || unavailableReason) && (
+                              <div className="min-w-0">
+                                {currentPlan && (
+                                  <span className="rounded-full bg-[var(--surface)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
+                                    {t('billing.catalog.currentPlan')}
+                                  </span>
+                                )}
+                                {unavailableReason && (
+                                  <span className="rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 font-medium text-[var(--text-secondary)]">
+                                    {t(`billing.catalog.unavailableReasons.${unavailableReason}`)}
+                                  </span>
+                                )}
+                              </div>
                             )}
                           </div>
                         </div>
@@ -1612,7 +1651,7 @@ function StateCard({
 }: {
   icon: React.ReactNode;
   title: string;
-  description: string;
+  description?: string;
   action?: React.ReactNode;
 }) {
   return (
@@ -1621,7 +1660,7 @@ function StateCard({
         {icon}
       </div>
       <p className="mt-4 text-sm font-medium">{title}</p>
-      <p className="mt-1 text-12 text-[var(--text-secondary)]">{description}</p>
+      {description && <p className="mt-1 text-12 text-[var(--text-secondary)]">{description}</p>}
       {action}
     </div>
   );

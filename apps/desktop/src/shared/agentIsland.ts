@@ -63,13 +63,16 @@ export type AgentIslandDisplaySurface = 'collapsed' | 'sessionList' | 'interacti
 export type AgentIslandLayoutMode = 'compact' | 'normal';
 export type AgentIslandPillStatus = 'idle' | AgentIslandSessionPhase;
 export type AgentIslandMascotSkin =
+  | 'cindy'
+  | 'blackcat'
   | 'pululu'
   | 'tarara'
   | 'boli'
   | 'whitesnow'
   | 'annie'
   | 'chaku'
-  | 'muffin';
+  | 'muffin'
+  | 'erika';
 export type AgentIslandSoundEvent = 'start' | 'attention' | 'complete' | 'error' | 'select';
 export type AgentIslandDisplayTarget =
   | { mode: 'all' }
@@ -121,7 +124,10 @@ export interface AgentIslandDisplayOption {
   };
 }
 
+/** 顺序即设置页「图标皮肤」列表的展示顺序。 */
 export const AGENT_ISLAND_MASCOT_SKINS: readonly AgentIslandMascotSkin[] = [
+  'cindy',
+  'blackcat',
   'pululu',
   'tarara',
   'boli',
@@ -129,6 +135,7 @@ export const AGENT_ISLAND_MASCOT_SKINS: readonly AgentIslandMascotSkin[] = [
   'annie',
   'chaku',
   'muffin',
+  'erika',
 ] as const;
 
 export const AGENT_ISLAND_SOUND_EVENTS: readonly AgentIslandSoundEvent[] = [
@@ -404,6 +411,8 @@ export interface AgentIslandStrings {
   input: string;
   done: string;
   running: string;
+  /** `{{attempt}}` / `{{maxAttempts}}` are interpolated by the main-process reducer. */
+  networkReconnecting: string;
   updatingTasks: string;
   /** 等待交互摘要(按 interactionKind 出人话,替代过期 tool 状态行;文案与侧栏卡片 awaiting* 对齐)。 */
   awaitingPermission: string;
@@ -430,6 +439,7 @@ export const DEFAULT_AGENT_ISLAND_STRINGS: AgentIslandStrings = {
   input: 'Input',
   done: 'Done',
   running: 'Running',
+  networkReconnecting: 'Connection interrupted — reconnecting ({{attempt}}/{{maxAttempts}})…',
   updatingTasks: 'Updating tasks',
   awaitingPermission: 'Awaiting permission',
   awaitingQuestion: 'Awaiting your reply',

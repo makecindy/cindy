@@ -19,6 +19,8 @@ import {
   type ImDefaultSettings,
   isImDefaultAgentKind,
   isImDefaultEffort,
+  isImDefaultPermissionMode,
+  isWechatUnsupportedPermissionMode,
 } from '../../shared/imDefaultSettings.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import {
@@ -28,7 +30,7 @@ import {
 import { claimLegacyImPath, ownerScopedImUserDataPath } from './ownerScopedStorage.js';
 
 const log = desktopMakerLogger.child('im-default-settings-store');
-const SETTINGS_SCHEMA_VERSION = 2;
+const SETTINGS_SCHEMA_VERSION = 3;
 
 interface ImDefaultSettingsDocument {
   schemaVersion: typeof SETTINGS_SCHEMA_VERSION;
@@ -58,6 +60,9 @@ function normalizeSettings(raw: unknown): ImDefaultSettings {
   const legacySettings = legacyAgentSettings(r);
   return {
     agentKind,
+    permissionMode: isImDefaultPermissionMode(r.permissionMode)
+      ? r.permissionMode
+      : IM_DEFAULT_SETTINGS.permissionMode,
     agents: {
       'claude-code': normalizeAgentSettings(
         'claude-code',
@@ -214,6 +219,9 @@ export function writeImDefaultSettingsPatch(
   patch: ImDefaultSettingsPatch,
   channel?: ImDefaultSettingsChannel,
 ): OverrideSettingsState<ImDefaultSettings> {
+  if (channel === 'wechat' && isWechatUnsupportedPermissionMode(patch.permissionMode)) {
+    throw new Error('WECHAT_PERMISSION_MODE_UNSUPPORTED');
+  }
   const document = store.read();
   const current = channel ? document.channels[channel] : document.global;
   const next = mergeSettingsPatch(current, patch);
@@ -301,6 +309,9 @@ function settingsOverrides(
 ): Record<string, unknown> {
   const overrides: Record<string, unknown> = {};
   if (value.agentKind !== defaults.agentKind) overrides.agentKind = value.agentKind;
+  if (value.permissionMode !== defaults.permissionMode) {
+    overrides.permissionMode = value.permissionMode;
+  }
   const agents: Partial<Record<ImDefaultAgentKind, ImDefaultAgentSettings>> = {};
   for (const agentKind of ['claude-code', 'codex'] as const) {
     if (!agentSettingsEqual(value.agents[agentKind], defaults.agents[agentKind])) {
@@ -314,6 +325,7 @@ function settingsOverrides(
 function settingsCustomizedKeys(value: ImDefaultSettings, defaults: ImDefaultSettings): string[] {
   const keys: string[] = [];
   if (value.agentKind !== defaults.agentKind) keys.push('agentKind');
+  if (value.permissionMode !== defaults.permissionMode) keys.push('permissionMode');
   for (const agentKind of ['claude-code', 'codex'] as const) {
     if (!agentSettingsEqual(value.agents[agentKind], defaults.agents[agentKind])) {
       keys.push(`agents.${agentKind}`);
@@ -329,6 +341,7 @@ function agentSettingsEqual(a: ImDefaultAgentSettings, b: ImDefaultAgentSettings
 function cloneSettings(settings: ImDefaultSettings): ImDefaultSettings {
   return {
     agentKind: settings.agentKind,
+    permissionMode: settings.permissionMode,
     agents: {
       'claude-code': { ...settings.agents['claude-code'] },
       codex: { ...settings.agents.codex },

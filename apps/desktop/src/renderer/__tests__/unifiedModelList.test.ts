@@ -7,7 +7,13 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { buildUnionRows, countModelsByAgent, isRowDiverged } from '@/components/settings/UnifiedModelList';
+import {
+  buildUnionRows,
+  countModelsByAgent,
+  isCapabilityRow,
+  isRowDisabled,
+  isRowDiverged,
+} from '@/components/settings/UnifiedModelList';
 import { __resetForTest, setModelVisibility } from '@/state/modelVisibilityPrefs';
 
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
@@ -121,5 +127,92 @@ describe('countModelsByAgent', () => {
       { agent: 'claude-code', on: 2, total: 2 },
       { agent: 'codex', on: 2, total: 3 },
     ]);
+  });
+
+  it('停用模型与能力模型(image 等)不进「显示 x/y」计数', () => {
+    const withExtras = {
+      ...provider,
+      models: {
+        ...provider.models,
+        // gpt-image-2 按 id 归入 image 能力分组;disabled 是 buildRegistry 烘焙的视图层标志。
+        codex: [
+          ...(provider.models.codex ?? []),
+          model('gpt-image-2'),
+          { ...model('banned'), disabled: true },
+        ],
+      },
+    } as ProviderView;
+    expect(countModelsByAgent(withExtras)).toEqual([
+      { agent: 'claude-code', on: 2, total: 2 },
+      { agent: 'codex', on: 2, total: 2 },
+    ]);
+  });
+
+  it('注入停用判定(乐观覆盖口径)时以之为准,而非快照的 disabled 标志', () => {
+    // 组件把 pendingDisabled 叠加进判定:刚点「停用」快照未回来时计数即时收缩,
+    // 刚点「启用」时快照仍带 disabled 标志的行也立刻回到分母(PR #744 review 第四轮)。
+    const withDisabled = {
+      ...provider,
+      models: {
+        ...provider.models,
+        codex: [...(provider.models.codex ?? []), { ...model('banned'), disabled: true }],
+      },
+    } as ProviderView;
+    const pending: Record<string, boolean> = { shared: true, banned: false };
+    const counts = countModelsByAgent(
+      withDisabled,
+      (_agent, m) => pending[m.id] ?? m.disabled === true,
+    );
+    expect(counts).toEqual([
+      { agent: 'claude-code', on: 1, total: 1 },
+      { agent: 'codex', on: 2, total: 2 },
+    ]);
+  });
+});
+
+describe('停用轴(isRowDisabled / isCapabilityRow)', () => {
+  it('任一端条目带 disabled 标志即视为停用行(单一写入口两端一起写)', () => {
+    const withDisabled = {
+      ...provider,
+      models: {
+        'claude-code': [{ ...model('shared'), disabled: true }, model('cc-only')],
+        codex: [model('shared', 272_000), model('codex-only')],
+      },
+    } as ProviderView;
+    const rows = buildUnionRows(withDisabled);
+    expect(isRowDisabled(rows[0])).toBe(true);
+    expect(isRowDisabled(rows[1])).toBe(false);
+  });
+
+  it('专属媒体清单(imageModels/videoModels)合成能力行:可停用、与 agent 清单同 id 去重', () => {
+    const withMedia = {
+      ...provider,
+      imageModels: [
+        { id: 'gpt-image-2', name: 'GPT Image 2', disabled: true },
+        { id: 'shared', name: '与 agent 清单撞 id(应被去重)' },
+      ],
+      videoModels: [{ id: 'seedance-fast', name: 'Seedance 快速' }],
+    } as ProviderView;
+    const rows = buildUnionRows(withMedia);
+    const image = rows.find((r) => r.id === 'gpt-image-2')!;
+    expect(isCapabilityRow(image, false)).toBe(true);
+    expect(isRowDisabled(image)).toBe(true);
+    expect(rows.find((r) => r.id === 'seedance-fast')).toBeTruthy();
+    // 同 id 去重:'shared' 只保留 agent 清单那行(可见性开关照常)。
+    expect(rows.filter((r) => r.id === 'shared')).toHaveLength(1);
+    expect(isCapabilityRow(rows.find((r) => r.id === 'shared')!, false)).toBe(false);
+  });
+
+  it('能力模型行按分组判定(image → 能力行;对话厂商/兜底分组 → 否)', () => {
+    const withImage = {
+      ...provider,
+      models: {
+        ...provider.models,
+        codex: [...(provider.models.codex ?? []), model('gpt-image-2')],
+      },
+    } as ProviderView;
+    const rows = buildUnionRows(withImage);
+    expect(isCapabilityRow(rows.find((r) => r.id === 'gpt-image-2')!, false)).toBe(true);
+    expect(isCapabilityRow(rows.find((r) => r.id === 'shared')!, false)).toBe(false);
   });
 });

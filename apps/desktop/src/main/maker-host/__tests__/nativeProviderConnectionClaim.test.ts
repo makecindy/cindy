@@ -40,6 +40,9 @@ vi.mock('../../appSessionState.js', () => ({
     generation: 1,
   }),
   isAppSessionBoundaryPending: () => false,
+  // model-disable-store(经 createDesktopProviderService 引入)按 owner 定位 override
+  // 文件;指到本用例的临时 userData 即可(store 是惰性读,文件缺席 = 全启用)。
+  ownerScopedUserDataPath: (...segments: string[]) => path.join(h.userDataDir, ...segments),
 }));
 
 // 本机凭证库:*Unbound 是「blob 里有凭证吗」,无绑定语义;带绑定的读取叠加 owner 校验,
@@ -77,10 +80,11 @@ vi.mock('../../authManager.js', () => ({ getAuthState: () => ({ mode: 'local' as
 vi.mock('../../appCapabilities.js', () => ({ getAppCapabilities: () => ({ canUseCindyGateway: false }) }));
 vi.mock('../../ownerNamespaceMigration.js', () => ({ hasLegacyOwnerNamespaceClaim: () => false }));
 vi.mock('../../manifestService.js', () => ({ isDev: () => true, getBaseUrl: () => 'https://example.invalid' }));
-vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://example.invalid' }));
+vi.mock('../../clientEndpointsService.js', () => ({ getBuildClientEndpoint: () => 'https://example.invalid', getClientEndpoint: () => 'https://example.invalid' }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({
   genericOAuthSecretIo: {},
   setProviderSecretsClearedListener: () => {},
+  addProviderSecretsClearedListener: () => {},
   readCustomProviderKey: () => null,
 }));
 

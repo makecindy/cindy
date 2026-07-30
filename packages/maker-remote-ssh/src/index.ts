@@ -6,7 +6,7 @@
  * claude/codex over an exec channel + session ingest.
  */
 
-export { RemoteHost, isAuthFailure, authFailureHint } from './RemoteHost.js';
+export { RemoteHost, isAuthFailure, authFailureHint, DEFAULT_REMOTE_FORWARD_PORT_BASE } from './RemoteHost.js';
 export type {
   RemoteHostDeps,
   StatusListener,
@@ -14,6 +14,8 @@ export type {
   ExecResult,
   ExecStreamOpts,
   ExecStreamHandle,
+  RemoteForward,
+  RemoteForwardSpec,
 } from './RemoteHost.js';
 
 export {
@@ -59,6 +61,8 @@ export {
   REMOTE_CC_MGR_PID_PATH,
   REMOTE_XDT_NODE_PATH,
   REMOTE_CLAUDE_SHIM_PATH,
+  REMOTE_INSTALL_ROOT,
+  REMOTE_AGENT_PROXY_ENV_PATH,
 } from './constants.js';
 
 export { ConnectionPool } from './ConnectionPool.js';

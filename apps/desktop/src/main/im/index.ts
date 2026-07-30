@@ -52,14 +52,15 @@
  * the logged-in user's DbClient; a later login reconnects saved credentials.
  */
 
-import { ipcMain, BrowserWindow, type IpcMainEvent } from 'electron';
+import { ipcMain, BrowserWindow, dialog, type IpcMainEvent } from 'electron';
 import { and, eq, like, ne, sql } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current';
 import { sessions } from '../localDb/schema';
-import { im, feishuIm, discordIm } from './host';
+import { im, feishuIm, discordIm, wechatCompatibilityPolicy, wechatIm } from './host';
 import { wireFeishuOrchestrator, type FeishuOrchestratorConfig } from './feishu';
 import { wireDiscordOrchestrator } from './discord';
+import { wireWechatOrchestrator } from './wechat';
 import { getImOrchestrator, listImOrchestrators } from './shared/orchestrator';
 import { createSerializedConnectionLifecycle } from './connectionLifecycle';
 import {
@@ -77,8 +78,14 @@ import { getAuthState } from '../authManager';
 import { getUpdateStatus } from '../updateService';
 
 import { createLogger } from '../logger';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
+import {
+  readWechatChannelSettings,
+  resetWechatWorkingDir,
+  writeWechatWorkingDir,
+} from './wechat/channelSettings';
 
-export { im, feishuIm, discordIm } from './host';
+export { im, feishuIm, discordIm, wechatIm } from './host';
 
 const log = createLogger('main:im');
 
@@ -139,7 +146,15 @@ const DISCORD_CONFIG: ImOrchestratorConfig = {
   effortOverrides: IM_DEFAULT_EFFORT_OVERRIDES,
 };
 
+const WECHAT_CONFIG: ImOrchestratorConfig = {
+  agentKind: IM_DEFAULT_SETTINGS.agentKind,
+  defaultModel: IM_DEFAULT_SETTINGS.agents[IM_DEFAULT_SETTINGS.agentKind].model,
+  defaultPermissionMode: IM_DEFAULT_SETTINGS.permissionMode,
+  effortOverrides: IM_DEFAULT_EFFORT_OVERRIDES,
+};
+
 export function startImOrchestrators(): void {
+  wechatCompatibilityPolicy.start();
   if (wired) return;
   wired = true;
   // Production bootstrap wires handlers before login/DbClient readiness.
@@ -155,6 +170,69 @@ export function startImOrchestrators(): void {
 
   wireFeishuOrchestrator(feishuIm, FEISHU_CONFIG);
   wireDiscordOrchestrator(discordIm, DISCORD_CONFIG);
+  wireWechatOrchestrator(wechatIm, WECHAT_CONFIG);
+
+  ipcMain.handle('wechatBot:get-state', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return wechatIm.getState();
+  });
+  ipcMain.handle('wechatBot:authorize', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return connectionLifecycle.runWhileStarted(() => wechatIm.authorize());
+  });
+  ipcMain.handle('wechatBot:cancel-authorization', (event) => {
+    assertTrustedAppRendererEvent(event);
+    wechatIm.cancelAuthorization();
+    return { ok: true };
+  });
+  ipcMain.handle('wechatBot:unbind', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return connectionLifecycle.runWhileStarted(async () => {
+      await wechatIm.unbind();
+      return { ok: true };
+    });
+  });
+  ipcMain.handle('wechatBot:get-channel-settings', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return readWechatChannelSettings();
+  });
+  ipcMain.handle('wechatBot:choose-working-directory', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    if (!owner || owner.isDestroyed()) throw new Error('WECHAT_SETTINGS_WINDOW_UNAVAILABLE');
+    const result = await dialog.showOpenDialog(owner, {
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (result.canceled || !result.filePaths[0]) {
+      return { canceled: true as const, state: readWechatChannelSettings() };
+    }
+    try {
+      return {
+        canceled: false as const,
+        state: writeWechatWorkingDir(result.filePaths[0]),
+      };
+    } catch (error) {
+      log.warn('failed to save user-picked personal WeChat working directory', {
+        errorCode:
+          typeof error === 'object' &&
+          error !== null &&
+          'code' in error &&
+          typeof (error as { code?: unknown }).code === 'string'
+            ? (error as { code: string }).code
+            : 'UNKNOWN',
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+      throw new Error('WECHAT_WORKING_DIR_UPDATE_FAILED');
+    }
+  });
+  ipcMain.handle('wechatBot:reset-working-directory', (event) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      return resetWechatWorkingDir();
+    } catch {
+      throw new Error('WECHAT_WORKING_DIR_UPDATE_FAILED');
+    }
+  });
 
   // bindingStore.preload() 故意不在这里跑 —— 它要 DbClient, 而 localDb 在
   // 用户登录后才 ensureReady (worker spawn + db open + smoke 后才 setCurrentDbClient)。
@@ -312,6 +390,7 @@ async function reconcileOwnerScopedImWorkingDirs(): Promise<void> {
   const db = getDbClient().drizzle;
   const feishuAdapter = getImOrchestrator('feishu')?.adapter;
   const discordAdapter = getImOrchestrator('discord')?.adapter;
+  const wechatAdapter = getImOrchestrator('wechat')?.adapter;
 
   try {
     if (feishuAdapter) {
@@ -343,6 +422,23 @@ async function reconcileOwnerScopedImWorkingDirs(): Promise<void> {
       for (const row of rows) {
         if (!row.botContextId) continue;
         const scoped = discordAdapter.sessions.ensureWorkingDir(row.botContextId);
+        if (row.workingDir === scoped) continue;
+        await db.update(sessions).set({ workingDir: scoped }).where(eq(sessions.id, row.id));
+      }
+    }
+
+    if (wechatAdapter) {
+      const rows = await db
+        .select({
+          id: sessions.id,
+          workingDir: sessions.workingDir,
+          botContextId: sessions.imBotContextId,
+        })
+        .from(sessions)
+        .where(eq(sessions.source, 'wechat'));
+      for (const row of rows) {
+        if (!row.botContextId) continue;
+        const scoped = wechatAdapter.sessions.ensureWorkingDir(row.botContextId);
         if (row.workingDir === scoped) continue;
         await db.update(sessions).set({ workingDir: scoped }).where(eq(sessions.id, row.id));
       }

@@ -78,6 +78,23 @@ let reseedImpl: ((deviceId: string) => void) | null = null;
 let mergedSnapshot: Session[] = [];
 /** sessionId → deviceId 注册表(随分片变化重建)。 */
 const sessionDeviceIndex = new Map<string, string>();
+/**
+ * 「归属已确定、但快照还没到」的 origin 钉子:sessionId → deviceId。
+ *
+ * 远程新建会话时,被控端 `maker:create-session` 一返回 id,那条会话就**确实存在**了;但把它带
+ * 进镜像的 `sessions:list` 回流可能失败(链路刚断 / 对端 DB 未就绪 / 被更新的一次 refresh 取代)。
+ * 那个窗口里 sessionDeviceIndex 没有这条,`getSessionDeviceId` 返回 undefined —— 传输层据此把
+ * 一个**远程**会话的操作发给本机 maker:首条消息、setGoal、流订阅全落错边(#807 review P1)。
+ *
+ * 所以创建成功后立刻把这个已确定的事实钉进来,recompute 时先铺钉子、再让分片派生值覆盖
+ * (分片更完整,且与钉子不可能冲突)。钉子只影响 origin 判定,不伪造会话行 —— 会话进列表仍等
+ * 权威快照。
+ *
+ * 不主动清理(含 clear / removeDevice):与 stickySessionOrigin 同一论证 —— 归属是单向的
+ * (会话不会从远程变回本机,本机会话永远不会进这张表),单次 app 运行内新建会话数量有限。
+ * 设备真被解除配对后,钉子只会让操作走隧道并明确报错,而不是静默落到本机执行 —— 后者严重得多。
+ */
+const pinnedOrigins = new Map<string, string>();
 
 const EMPTY: Session[] = [];
 
@@ -215,6 +232,9 @@ function withPendingTitle(session: Session): Session {
 /** 重算扁平快照 + origin 注册表,然后通知订阅者。所有 mutation 走这里。 */
 function recompute(): void {
   sessionDeviceIndex.clear();
+  // 先铺 origin 钉子:分片还没到的新建远程会话也必须能被判定为远程(见 pinnedOrigins)。
+  // 分片派生值随后覆盖同 id 的条目。
+  for (const [sessionId, deviceId] of pinnedOrigins) sessionDeviceIndex.set(sessionId, deviceId);
   if (shards.size === 0) {
     mergedSnapshot = EMPTY;
   } else {
@@ -522,6 +542,12 @@ const actions = {
     synthesizedPreviewSessions.clear();
   },
 
+  /** 测试专用:清空 origin 钉子(生产期刻意不清,见 pinnedOrigins)。 */
+  __resetPinnedOriginsForTest(): void {
+    pinnedOrigins.clear();
+    recompute();
+  },
+
   /** refresh anti-entropy 用:取某设备当前缓存分片，调用方只读。 */
   getDeviceSessions(deviceId: string): readonly Session[] {
     return shards.get(deviceId)?.sessions ?? EMPTY;
@@ -533,6 +559,16 @@ const actions = {
    */
   getSessionDeviceId(sessionId: string): string | undefined {
     return sessionDeviceIndex.get(sessionId);
+  },
+
+  /**
+   * 远程新建会话后**立刻**登记归属(见 pinnedOrigins)。只让 origin 判定即刻可用,不制造会话行;
+   * 权威快照回流后由分片派生值接管。幂等。
+   */
+  pinSessionOrigin(deviceId: string, sessionId: string): void {
+    if (pinnedOrigins.get(sessionId) === deviceId) return;
+    pinnedOrigins.set(sessionId, deviceId);
+    recompute();
   },
 
   /** 取设备友好名(tooltip / 日志用)。 */

@@ -4,7 +4,16 @@
  * 资源:
  *   - worker 通过 ?url import,Vite 在 dev / build 都会发出可访问 URL。
  *   - cmaps / standard_fonts 在 vite.renderer.config.ts 的 pdfjsAssetsPlugin
- *     里挂在 /pdfjs/ 下。CJK PDF 没 cmaps 会显示成方块。
+ *     里挂在 /pdfjs/ 下(同源 `self`,CSP connect-src 已覆盖)。CJK PDF 没
+ *     cmaps 会显示成方块。
+ *   - PDF 字节:经 `readFileBytes` IPC 以 Uint8Array 读入(可结构化克隆,
+ *     无 base64 中转),喂给 pdf.js `getDocument({ data })`。**不走**
+ *     `getDocument({ url })` 直接 fetch xdt-file://——那会要求把 xdt-file:
+ *     放进 CSP connect-src。xdt-file:// 本身受扩展名白名单 + 敏感目录黑名单
+ *     约束(见 localFileProtocol.ts),并非任意文件;但放进 connect-src 会让
+ *     整个渲染进程脚本可 fetch 这些白名单媒体的字节(超出 PDF 预览所需)。
+ *     改走 IPC 后:不进 renderer 的 fetch 面、按发送方可信校验 + 与用户附件
+ *     同一套 main 侧路径策略、硬上限 30MB;失败以 IpcError 抛出 → 占位卡。
  *
  * 视觉:
  *   - 容器灰底跟仓库其它预览容器对齐 (#f5f5f5 / #2c2c2a)。
@@ -19,7 +28,6 @@ import * as pdfjs from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 import { createLogger } from '@/lib/logger';
-import { toLocalFileUrl } from '@/lib/localPathResolver';
 
 import { UnrenderablePlaceholder } from './UnrenderablePlaceholder';
 import { joinPath } from './lib/fileMeta';
@@ -49,24 +57,32 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
 
   useEffect(() => {
     let cancelled = false;
+    let loadingTask: ReturnType<typeof pdfjs.getDocument> | null = null;
+    let pdfDoc: pdfjs.PDFDocumentProxy | null = null;
     const container = containerRef.current;
     if (!container) return;
     container.replaceChildren();
     setState({ kind: 'loading' });
 
     const absPath = joinPath(workdir, relPath);
-    const url = toLocalFileUrl(absPath);
-
-    const loadingTask = pdfjs.getDocument({
-      url,
-      cMapUrl: '/pdfjs/cmaps/',
-      cMapPacked: true,
-      standardFontDataUrl: '/pdfjs/standard_fonts/',
-    });
 
     (async () => {
       try {
+        // 读字节走 main 侧受策略约束的 IPC(可信发送方校验、拒敏感路径、
+        // 硬上限 30MB),以 Uint8Array 直接交给 pdf.js —— 不用 getDocument({
+        // url }) 让渲染进程 fetch xdt-file://(那需要放开 CSP connect-src)。
+        // 越权 / 超上限 / 读失败时 IPC 以 IpcError reject,由下方 catch 落
+        // 占位卡。详见文件头注释。
+        const { bytes } = await window.electronAPI.readFileBytes({ filePath: absPath });
+        if (cancelled) return;
+        loadingTask = pdfjs.getDocument({
+          data: bytes,
+          cMapUrl: '/pdfjs/cmaps/',
+          cMapPacked: true,
+          standardFontDataUrl: '/pdfjs/standard_fonts/',
+        });
         const pdf = await loadingTask.promise;
+        pdfDoc = pdf;
         if (cancelled) {
           await pdf.destroy();
           return;
@@ -103,9 +119,16 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
 
     return () => {
       cancelled = true;
-      void loadingTask.destroy();
+      // destroy 两者:loadingTask 中止未完成的加载;pdfDoc 释放已解析文档的
+      // worker / 渲染资源(promise resolve 后仅 destroy loadingTask 不够,
+      // 中途导航离开会泄漏文档)。destroy 幂等,两者都调是安全的。
+      void loadingTask?.destroy();
+      void pdfDoc?.destroy();
     };
-  }, [workdir, relPath]);
+    // size/mtimeMs 进依赖:同一路径的文件被就地改写(agent 重生成 PDF 等)时
+    // relPath 不变但 mtimeMs/size 变,需要重新读字节 + 重渲染,否则预览会停在
+    // 旧内容直到用户切走再切回。FileBodyView 正是为此把 size/mtimeMs 传进来。
+  }, [workdir, relPath, size, mtimeMs]);
 
   if (state.kind === 'error') {
     return (

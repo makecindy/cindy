@@ -830,6 +830,13 @@ export function buildRenderItems(
   messages: ChatMessage[],
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>,
   ghostCards?: GhostCardSnapshot,
+  opts?: {
+    /**
+     * 还有更老的历史页没加载(= `messages` 只是窗口、不是全量)。为真时,凡靠
+     * 「父调用在不在 messages 里」做的归属判定都不可信,必须放宽而不是丢弃。
+     */
+    historyWindowIncomplete?: boolean;
+  },
 ): {
   items: RenderItem[];
   singleResultMap: Map<string, string>;
@@ -1290,6 +1297,13 @@ export function buildRenderItems(
     // 不进 agent_task 配对分支),必须按 parentToolUseId 命中保留;命不中的才是
     // workflow / 子 agent 内部启动的后台命令 —— 只进后台任务面板,不进聊天流刷屏
     // (对齐官方:聊天流只呈现父会话自己的调用)。
+    //
+    // 归属只能靠「父 Bash 调用在不在 messages 里」判定(AgentTaskUpdate 没有
+    // 结构化的「谁 spawn 的」字段),而 messages 是分页窗口(首屏 50 行)。窗口
+    // 不完整时父调用可能只是还没翻到,此时**不丢**:宁可临时多显示 workflow 内部
+    // 的后台命令卡(本 PR 之前就是这个形态),也不能把用户自己还在跑的后台命令
+    // 及其停止按钮从聊天流里抹掉。翻到旧页 / 加载完历史后过滤自动恢复。
+    const historyWindowIncomplete = opts?.historyWindowIncomplete === true;
     const parentBashToolUseIds = new Set<string>();
     for (const m of messages) {
       if (
@@ -1305,6 +1319,7 @@ export function buildRenderItems(
     for (const update of taskUpdates.values()) {
       if (
         update.taskType === 'local_bash' &&
+        !historyWindowIncomplete &&
         !(update.parentToolUseId && parentBashToolUseIds.has(update.parentToolUseId))
       ) {
         continue;
@@ -2246,8 +2261,11 @@ export function MessageStream({
   // 用户看到的。流式中每 token messages 引用变 → 这里跑一次 O(n) 单线性扫描,
   // 实测 N=1000 < 2ms (Windows),如果未来发现瓶颈再走增量化(out of scope)。
   const { items: ungroupedRenderItems, singleResultMap } = useMemo(
-    () => buildRenderItems(messages, taskUpdates, ghostCardSnapshot),
-    [messages, taskUpdates, ghostCardSnapshot],
+    () =>
+      buildRenderItems(messages, taskUpdates, ghostCardSnapshot, {
+        historyWindowIncomplete: Boolean(hasMoreMessages),
+      }),
+    [messages, taskUpdates, ghostCardSnapshot, hasMoreMessages],
   );
   const assistantsWithFollowingUserBoundary = useMemo(
     () => collectAssistantsWithFollowingUserBoundary(messages),

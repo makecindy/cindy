@@ -178,7 +178,10 @@ function createSessionHarness(
   // mockRejectedValueOnce 整体替换实现, 抛错路径自然不会触发(正确)。
   const send = vi.fn<HarnessSend>(async (message, opts) => {
     const result = await sendImpl(message);
-    if (result.accepted) await opts?.onAccepted?.();
+    if (result.accepted) {
+      await opts?.beforeProviderStart?.();
+      await opts?.onAccepted?.();
+    }
     return result;
   });
   const isTurnRunning = vi.fn(() => false);
@@ -245,6 +248,7 @@ const fakeCards = {
 const fakeAdapter: ImChannelAdapter = {
   channel: 'feishu',
   im: mocks.feishuIm as unknown as ChannelIM,
+  output: { kind: 'rich-card', im: mocks.feishuIm as unknown as ChannelIM },
   config: {
     agentKind: 'claude-code',
     defaultModel: 'claude-opus-4-7',
@@ -1008,6 +1012,16 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(secondComplete).not.toHaveBeenCalled();
     expect(mocks.persistUserMessage).toHaveBeenCalledTimes(1);
 
+    h.emit({
+      type: 'error',
+      data: { message: 'Reconnecting... 1/5', isTerminal: false, willRetry: true },
+    });
+    await flushMicrotasks();
+    expect(h.send).toHaveBeenCalledTimes(1);
+    expect(firstComplete).not.toHaveBeenCalled();
+    expect(secondComplete).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
+
     h.emit({ type: 'text', data: { text: 'first final', isFinal: true } });
     h.emit({ type: 'done', data: {} });
     await waitForAssertion(() => {
@@ -1042,6 +1056,14 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     expect(h.send).not.toHaveBeenCalled();
     expect(mocks.feishuIm.sendText).not.toHaveBeenCalled();
     expect(mocks.feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);
+    expect(mocks.persistUserMessage).not.toHaveBeenCalled();
+
+    h.emit({
+      type: 'error',
+      data: { message: 'Reconnecting... 1/5', isTerminal: false, willRetry: true },
+    });
+    await flushMicrotasks();
+    expect(h.send).not.toHaveBeenCalled();
     expect(mocks.persistUserMessage).not.toHaveBeenCalled();
 
     h.isTurnRunning.mockReturnValue(false);
@@ -1119,13 +1141,133 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     // desktop 聊天流才能像 Slack hook 会话一样看到完整过程。
     expect(mocks.wireSessionToIpcExternal).toHaveBeenCalledTimes(1);
     expect(mocks.persistAssistantMessage).not.toHaveBeenCalled();
-    // 顺序不变量: wire(装 desktop interaction listener)必须先于渠道版
-    // setInteractionListener 覆盖 — 颠倒会让渠道会话的 permission 卡死等 desktop。
+    // 顺序不变量:wire 先安装中央 Router 的 Desktop fallback;本 turn 只在
+    // beforeProviderStart 登记 route,不再覆盖/恢复 Session listener。
     const wireOrder = mocks.wireSessionToIpcExternal.mock.invocationCallOrder[0];
     const listenerMock = h.session.setInteractionListener as unknown as ReturnType<typeof vi.fn>;
     expect(wireOrder).toBeLessThan(listenerMock.mock.invocationCallOrder[0]);
     // 真实用户消息给 silent-stop 守卫充值(scheduler / hook runner 同款 parity)。
     expect(mocks.noteSilentStopUserSend).toHaveBeenCalledWith('feishu-session');
+  });
+
+  it('exposes accepted and terminal outcomes for an external durable queue', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+    const beforeProviderStart = vi.fn(async () => undefined);
+
+    const dispatch = await getRunner().dispatchAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      userMessageId: 'msg-external',
+      text: 'durable task',
+      attachments: [],
+      queueMode: 'external',
+      beforeProviderStart,
+    });
+
+    expect(dispatch.kind).toBe('accepted');
+    if (dispatch.kind !== 'accepted') throw new Error('expected accepted dispatch');
+    expect(dispatch.sessionId).toBe('feishu-session');
+    expect(dispatch.acceptedAt).toBeGreaterThan(0);
+    expect(beforeProviderStart).toHaveBeenCalledTimes(1);
+
+    h.emit({ type: 'text', data: { text: 'durable answer', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await expect(dispatch.terminal).resolves.toMatchObject({
+      kind: 'done',
+      text: 'durable answer',
+    });
+  });
+
+  it('reports the attached Desktop route before provider startup', async () => {
+    const h = setupAttachedSession(async () => ({ accepted: true }));
+    const onRouteResolved = vi.fn();
+    const beforeProviderStart = vi.fn(async () => undefined);
+
+    const dispatch = await getRunner().dispatchAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      userMessageId: 'msg-attached-route',
+      text: 'route this turn',
+      attachments: [],
+      queueMode: 'external',
+      onRouteResolved,
+      beforeProviderStart,
+    });
+
+    expect(dispatch.kind).toBe('accepted');
+    expect(onRouteResolved).toHaveBeenCalledWith('desktop-attached-session');
+    expect(onRouteResolved.mock.invocationCallOrder[0]).toBeLessThan(
+      beforeProviderStart.mock.invocationCallOrder[0]!,
+    );
+
+    h.emit({ type: 'done', data: {} });
+    if (dispatch.kind === 'accepted') await dispatch.terminal;
+  });
+
+  it('returns busy without copying external work into the in-memory queue', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+    const first = await getRunner().dispatchAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      userMessageId: 'msg-external-1',
+      text: 'first durable task',
+      attachments: [],
+      queueMode: 'external',
+      beforeProviderStart: async () => undefined,
+    });
+    expect(first.kind).toBe('accepted');
+
+    const second = await getRunner().dispatchAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      userMessageId: 'msg-external-2',
+      text: 'second durable task',
+      attachments: [],
+      queueMode: 'external',
+      beforeProviderStart: async () => undefined,
+    });
+
+    expect(second).toEqual({ kind: 'busy', reason: 'session_running' });
+    expect(h.send).toHaveBeenCalledTimes(1);
+    expect(mocks.feishuIm.sendMarkdownText).not.toHaveBeenCalledWith(
+      'ou_user',
+      expect.stringContaining('排队'),
+      expect.anything(),
+    );
+
+    h.emit({ type: 'done', data: {} });
+    if (first.kind === 'accepted') await first.terminal;
+  });
+
+  it('commits one terminal payload for a chunked-text output driver', async () => {
+    const previousOutput = fakeAdapter.output;
+    const commitFinal = vi.fn(async () => undefined);
+    fakeAdapter.output = {
+      kind: 'chunked-text',
+      im: mocks.feishuIm as unknown as ChannelIM,
+      commitFinal,
+    };
+    try {
+      const h = setupSession(async () => ({ accepted: true }));
+      const { turnPromise } = await startDefaultTurn();
+      await turnPromise;
+
+      h.emit({ type: 'text', data: { text: 'complete text only', isFinal: true } });
+      h.emit({ type: 'done', data: {} });
+      await flushMicrotasks();
+
+      expect(mocks.feishuIm.startStreamingText).not.toHaveBeenCalled();
+      expect(commitFinal).toHaveBeenCalledTimes(1);
+      expect(commitFinal).toHaveBeenCalledWith({
+        userId: 'ou_user',
+        text: 'complete text only',
+        terminal: 'done',
+        threadTs: undefined,
+      });
+    } finally {
+      fakeAdapter.output = previousOutput;
+    }
   });
 
   it('holds the turn open on silentStop done and finalizes only when the guard settles without resume', async () => {
@@ -1163,6 +1305,175 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     // settle 回调自身退订,不留陈旧监听。
     const unsub = mocks.onSilentStopSettled.mock.results[0].value as ReturnType<typeof vi.fn>;
     expect(unsub).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the retry notice when the retried turn succeeds with no output', async () => {
+    // 不变量锁定(review #844 codex P1 提出的担心, 实测不成立但值得锁住):
+    // 重投成功而那一轮零输出时, 没有任何进展 handler 会清掉"正在自动重试" —— 卡片
+    // 会不会停在"仍在重试"、并因正文非空而压掉空回复兜底? 不会: handleTurnDoneAsync
+    // 先置 turn.done, 而 composeStreamingView 对 done 的 turn 直接返回正文、整段跳过
+    // 过程区。这条用例把这个短路行为钉住, 以后改 composeStreamingView 会立刻暴露。
+    const handle = {
+      messageId: 'stream-retry-empty-done',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const h = setupSession(async () => ({ accepted: true }));
+    await runDefaultTurn();
+
+    h.emit({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model. (auto-retry 1/4)',
+        isTerminal: false,
+        willRetry: true,
+      },
+    });
+    await flushMicrotasks();
+    expect(handle.replace.mock.calls.map((c) => String(c[0])).join('\n')).toContain(
+      '正在自动重试',
+    );
+
+    // 重投成功, 但这一轮一个字都没输出。
+    h.emit({ type: 'done', data: {} });
+    await waitForAssertion(() => {
+      expect(handle.finalize).toHaveBeenCalledTimes(1);
+    });
+    const finalView = String(handle.finalize.mock.calls[0][0]);
+    expect(finalView).not.toContain('正在自动重试');
+    // 过程区清空后应回落到空回复兜底, 而不是把状态行当正文。
+    expect(finalView).toContain('空回复');
+  });
+
+  it('waits for the pending retry card before finalizing a terminal overload error', async () => {
+    // 过载重试提示会**惰性建卡**, 而终态错误可能恰好在 startStreamingText 回来之前
+    // 到达。不同步的话: 终态看到 streamingHandle 还是 null → 另发一条错误消息并把
+    // turn 出队, 随后建卡 promise resolve, 又去 replace 一张没人收口的孤儿卡, 渠道
+    // 里出现重复/残留输出(review #844 codex P1)。
+    let releaseCard: (h: unknown) => void = () => {};
+    const handle = {
+      messageId: 'stream-retry-race',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText.mockReturnValue(
+      new Promise((resolve) => {
+        releaseCard = resolve;
+      }),
+    );
+    const h = setupSession(async () => ({ accepted: true }));
+    const { onTurnComplete } = await runDefaultTurn();
+
+    // 非终止过载 error → 开始建卡(请求挂住)。
+    h.emit({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model. (auto-retry 1/4)',
+        isTerminal: false,
+        willRetry: true,
+      },
+    });
+    await flushMicrotasks();
+    expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
+    expect(handle.replace).not.toHaveBeenCalled(); // 卡还没建好
+
+    // 建卡还在飞时重试耗尽 → 终态。
+    h.emit({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model.',
+        isTerminal: true,
+      },
+    });
+    await flushMicrotasks();
+    // 卡还没回来, 收口正文不能先落地(不然就是"另发一条 + 留下孤儿卡")。
+    expect(handle.finalize).not.toHaveBeenCalled();
+
+    releaseCard(handle);
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      // 失败说明落在**同一张**卡上, 而不是另发一条 + 留下孤儿卡。
+      expect(handle.finalize).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.feishuIm.startStreamingText).toHaveBeenCalledTimes(1);
+    const finalView = String(handle.finalize.mock.calls[0][0]);
+    expect(finalView).toContain('模型服务繁忙');
+    expect(finalView).not.toContain('正在自动重试');
+    // 没有另发一条错误消息(那正是重复输出的来源)。
+    expect(
+      mocks.feishuIm.sendText.mock.calls.some(([, text]) => String(text).includes('错误')),
+    ).toBe(false);
+  });
+
+  it('holds the turn open on a non-terminal error and surfaces the auto-retry notice', async () => {
+    const handle = {
+      messageId: 'stream-retry',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const h = setupSession(async () => ({ accepted: true }));
+    const { onTurnComplete } = await runDefaultTurn();
+
+    // 过载重投只在本 turn **零产出**时发生, 所以这里刻意不先发 text: 卡片此刻
+    // 还不存在, 提示必须能把它建出来, 否则用户除了 👀 表情什么都看不到。
+    // 非终止 error = agent 正在自愈。此前这里无条件收口: 卡片被判失败、turn
+    // 出队、排队消息立刻放行, 而 agent 其实还在跑。
+    h.emit({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model. (auto-retry 2/4)',
+        isTerminal: false,
+        willRetry: true,
+      },
+    });
+    await flushMicrotasks();
+
+    expect(onTurnComplete).not.toHaveBeenCalled();
+    expect(handle.finalize).not.toHaveBeenCalled();
+    expect(mocks.feishuIm.startStreamingText).toHaveBeenCalled();
+    const retryView = handle.replace.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(retryView).toContain('模型服务繁忙，正在自动重试（2/4）…');
+
+    // 重试成功: 同一张卡继续收口, 状态行随真实进展消失。
+    h.emit({ type: 'text', data: { text: 'done at last', isFinal: false } });
+    h.emit({ type: 'done', data: {} });
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(handle.finalize).toHaveBeenCalledTimes(1);
+    });
+    const finalView = String(handle.finalize.mock.calls[0][0]);
+    expect(finalView).toContain('done at last');
+    expect(finalView).not.toContain('自动重试');
+  });
+
+  it('still finalizes as failed on a terminal error', async () => {
+    const handle = {
+      messageId: 'stream-fatal',
+      append: vi.fn(),
+      replace: vi.fn(),
+      finalize: vi.fn(),
+      close: vi.fn(),
+    };
+    mocks.feishuIm.startStreamingText.mockResolvedValue(handle);
+    const h = setupSession(async () => ({ accepted: true }));
+    const { onTurnComplete } = await runDefaultTurn();
+
+    h.emit({ type: 'text', data: { text: 'partial', isFinal: false } });
+    await flushMicrotasks(); // 等卡片 handle 建好, 收口才走 finalize 而非另发一条
+    h.emit({ type: 'error', data: { message: 'process exited with code 1', isTerminal: true } });
+    await waitForAssertion(() => {
+      expect(onTurnComplete).toHaveBeenCalledTimes(1);
+      expect(handle.finalize).toHaveBeenCalledTimes(1);
+    });
+    expect(String(handle.finalize.mock.calls[0][0])).toContain('process exited with code 1');
   });
 
   it('keeps streaming resumed-turn output into the same turn after a silentStop resume', async () => {

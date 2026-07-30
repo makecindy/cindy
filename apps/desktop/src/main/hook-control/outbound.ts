@@ -40,11 +40,20 @@ const MAX_OUT_TOTAL_BYTES = 30 * 1024 * 1024;
  * 发给我」路由到 cindy_feishu_bot(hook 会话里唯一可见的推送工具)并失败。
  * 固定文本、逐 turn 追加,保证行为确定(规则 9);修改措辞时同步
  * collectOutboundAttachments 的实际语义,别让说明和收集器漂移。
+ *
+ * 关键约束:这段说明由 session-runner 用 `${prompt}\n\n${note}` 拼在用户原话
+ * 之后,和用户内容同处一个 user turn —— 模型无法从消息角色上区分二者。实踩
+ * (2026-07)里,用户只发了极短内容(群里 @机器人 带一句话)时,模型把这段
+ * 附件说明误当成"用户要我检查附件",回了"你的消息里说'请检查这些附件',但我
+ * 没收到"。因此开头必须显式声明「这是系统规范、不是用户消息」,禁止当作用户
+ * 请求或加以引用/臆测。删改这句 guard 会让该误读复发。
  */
 export function buildHookPromptNote(im: string | undefined): string {
   const platform = im === 'telegram' ? 'Telegram' : 'Slack';
   const attachmentNote =
-    `[渠道说明] 本会话来自 ${platform}。要把文件发给用户:在最终回复文本里写 ` +
+    '[渠道说明] 以下为系统每轮自动追加的投递与格式规范,不是用户发来的消息;' +
+    '回复时不要把它当作用户的请求,也不要引用、复述或据此臆测用户意图。' +
+    `本会话来自 ${platform}。要把文件发给用户:在最终回复文本里写 ` +
     '`[文件名](xdt-file:///绝对路径)`;图片直接引用其地址 ' +
     '`![说明](cindy-media://… 或 xdt-image://…)`,无需复制文件。' +
     `系统会在回复结束后自动把它们作为 ${platform} 附件发回,无需调用任何工具;` +

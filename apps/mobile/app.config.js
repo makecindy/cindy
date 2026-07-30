@@ -113,6 +113,22 @@ function resolveMobileBuildEnv() {
   return loadMobileClientBuildEnv();
 }
 
+function resolvePeerManifestBaseUrl(region) {
+  const previousRegion = process.env.EXPO_PUBLIC_CINDY_AUTH_REGION;
+  try {
+    process.env.EXPO_PUBLIC_CINDY_AUTH_REGION =
+      region === 'global' ? 'cn' : 'global';
+    const peerBuildEnv = loadMobileClientBuildEnv();
+    return peerBuildEnv.EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL;
+  } finally {
+    if (previousRegion === undefined) {
+      delete process.env.EXPO_PUBLIC_CINDY_AUTH_REGION;
+    } else {
+      process.env.EXPO_PUBLIC_CINDY_AUTH_REGION = previousRegion;
+    }
+  }
+}
+
 const REGION_CONFIG = {
   cn: {
     scheme: 'cindycn',
@@ -186,9 +202,17 @@ module.exports = (context = {}) => {
   const baseConfig = context.config ?? appJson.expo;
   const region = resolveRegion();
   const mobileBuildEnv = resolveMobileBuildEnv();
-  for (const [key, value] of Object.entries(mobileBuildEnv)) {
+  const mobileBundleEnv = {
+    ...mobileBuildEnv,
+    EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL:
+      resolvePeerManifestBaseUrl(region),
+  };
+  for (const [key, value] of Object.entries(mobileBundleEnv)) {
     if (!process.env[key]?.trim()) process.env[key] = value;
   }
+  // xdtProductionEnv 是既有 Expo config / runtime fingerprint 的一部分。对端清单
+  // 基址只需通过上面的 EXPO_PUBLIC_* 环境变量进入 Metro bundle；不要把它追加到
+  // extra，否则本次纯 JS 登录路由会无意要求一次冷构建，并切断旧 runtime 的 OTA 链。
   const selfHosted = process.env.EXPO_PUBLIC_XDT_OTA_SELFHOST === '1';
   const usesLocalRegionConfig =
     process.env.CINDY_USE_LOCAL_REGION_CONFIG === '1';

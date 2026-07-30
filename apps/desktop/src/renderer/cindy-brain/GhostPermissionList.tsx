@@ -78,7 +78,11 @@ function PermRow({ item, badge }: { item: GhostPermissionItem; badge?: 'added' |
   const Icon = itemIcon(item);
   // 主机固定说明(detailKey)与作者自由文本(detail)可以并存(oauth 凭证:
   // 说明 + scopes 原文清单)——都在时两行都渲染,不许作者文本顶掉主机说明。
-  const hostDetail = item.detailKey ? t(`settings.ghosts.perm.${item.detailKey}`) : undefined;
+  // detailArgs 只喂说明行(与 labelArgs 分开:说明里的插值是主机政策数字,
+  // 如寄存字节上限,由常量单源注入,免得上限改了四份 locale 的数字对不上)。
+  const hostDetail = item.detailKey
+    ? t(`settings.ghosts.perm.${item.detailKey}`, item.detailArgs)
+    : undefined;
   const authorDetail = item.detail;
   return (
     <div className={cn('flex items-start gap-2 py-1', badge === 'removed' && 'opacity-60')}>

@@ -77,6 +77,19 @@ async function ssoOrgListState(org = 'example-corp') {
   });
 }
 
+async function realmConfirmationState(targetRegion: 'cn' | 'global') {
+  const identifier = await identifierState('providers:both');
+  if (identifier.step !== 'identifier') throw new Error('expected identifier');
+  const client = scenarioClient('sso:single', targetRegion);
+  const discovery = await client.discoverSsoOrg('example-corp');
+  return reduceAuthFlow(identifier, {
+    type: 'realm-switch-required',
+    targetRegion,
+    providers: identifier.providers,
+    methods: ssoOrgDiscoveryToMethods(discovery),
+  });
+}
+
 function mount(state: AuthFlowState | null, extra?: Partial<typeof loginHook.value>) {
   loginHook.value = {
     isLoading: false,
@@ -130,7 +143,8 @@ describe('wave4 stage 视觉', () => {
     expect(panel.style.boxShadow).toContain('inset 0 0 0 1px var(--login-panel-border)');
     expect(panel.style.borderRadius).toBe('36px');
     expect(panel.style.width).toBe('680px');
-    expect(panel.style.height).toBe('440px');
+    // 面板 440 → 500(新稿 700:791):增高 60 = 面板内「跳过登录」容器高
+    expect(panel.style.height).toBe('500px');
   });
 
   it('字标为 wave4 黑红版内层几何 423×145 @(698,1046)(368:1381)', async () => {
@@ -173,18 +187,72 @@ describe('identifier 态(附录 A providers 场景)', () => {
     expect(screen.getByTestId('login-social-row')).toBeTruthy();
   });
 
-  it('identifier 视图:协议行挂在登录组内(y=582),游客圆钮取代 footer 入口', async () => {
+  it('identifier 视图:协议行挂在登录组内(y=642),「跳过登录」文字链在面板内 y=430', async () => {
     mount(await identifierState('providers:both'));
-    // 协议同意行(consent PR):登录组坐标 y=582(圆钮行下方 22 设计px),radio 初始未勾选
+    // 协议同意行(consent PR):登录组坐标 y=642(面板 500 后圆钮行下方 22 设计px),radio 初始未勾选
     const row = screen.getByTestId('login-consent-row');
     expect(screen.getByTestId('login-group').contains(row)).toBe(true);
-    expect(row.style.top).toBe('582px');
+    expect(row.style.top).toBe('642px');
     expect(screen.getByTestId('login-consent-radio').getAttribute('aria-checked')).toBe('false');
-    // 游客入口 = 社交行最后一颗人形圆钮;identifier 步不再渲染 footer(仅 error 步保留逃生入口)
-    const socialRow = screen.getByTestId('login-social-row');
-    expect(socialRow.lastElementChild).toBe(screen.getByTestId('login-social-guest'));
+    // 「跳过登录」= 面板内文字按钮(新稿 705:1068 布局槽 680×60 @y430,文本 24px 下划线),
+    // 取代旧游客圆钮。槽负责居中定位,按钮承接点击(热区断言见下一条用例)。
+    const slot = screen.getByTestId('login-skip-entry-slot');
+    const skip = screen.getByTestId('login-skip-entry');
+    expect(screen.getByTestId('login-panel-identifier').contains(slot)).toBe(true);
+    expect(slot.contains(skip)).toBe(true);
+    expect(slot.style.left).toBe('0px');
+    expect(slot.style.top).toBe('430px');
+    expect(slot.style.width).toBe('680px');
+    expect(slot.style.height).toBe('60px');
+    expect(skip.style.fontSize).toBe('24px');
+    expect(skip.className).toContain('underline');
+    // 圆钮行不再有游客圆钮;identifier 步不渲染 footer(仅 error 步保留逃生入口)
+    expect(screen.queryByTestId('login-social-guest')).toBeNull();
     expect(screen.queryByTestId('login-stage-footer')).toBeNull();
     expect(screen.queryByTestId('login-local-mode')).toBeNull();
+  });
+
+  it('「跳过登录」槽与错误提示槽首尾相接且不重叠(error 出现不推移跳过入口)', async () => {
+    mount(await identifierState('providers:both'), { errorCode: 'NETWORK_ERROR' });
+    const error = screen.getByTestId('login-error-text');
+    const slot = screen.getByTestId('login-skip-entry-slot');
+    // error_text 680×50 @y380(新稿 705:1067)→ 底 430 = 跳过槽顶,零重叠
+    expect(error.style.top).toBe('380px');
+    expect(error.style.height).toBe('50px');
+    expect(slot.style.top).toBe('430px');
+    expect(parseFloat(error.style.top) + parseFloat(error.style.height)).toBe(
+      parseFloat(slot.style.top),
+    );
+  });
+
+  it('「跳过登录」= 文字按钮:统一 #6F6F6F 不随 hover/pressed 变色(用户拍板 2026-07-27)', async () => {
+    mount(await identifierState('providers:both'));
+    const skip = screen.getByTestId('login-skip-entry');
+    // 颜色走 --login-secondary-text(双模同值 #6F6F6F),不是 link 族 --login-link-text
+    const style = skip.getAttribute('style') ?? '';
+    expect(style).toContain('--login-secondary-text');
+    expect(style).not.toContain('--login-link-text');
+    // 文字按钮 ≠ 文字链接:不带 link 族 hover/pressed 变色类
+    expect(skip.className).not.toContain('--login-link-hover');
+    expect(skip.className).not.toContain('--login-link-pressed');
+    // 反馈只保留下划线 + 指针形状
+    expect(skip.className).toContain('underline');
+    expect(skip.className).toContain('cursor-pointer');
+  });
+
+  it('「跳过登录」热区 = 文字宽 + 左右各 30 设计px,680×60 容器本身不可点', async () => {
+    mount(await identifierState('providers:both'));
+    const slot = screen.getByTestId('login-skip-entry-slot');
+    const skip = screen.getByTestId('login-skip-entry');
+    // 容器只做居中布局,不接点击
+    expect(slot.style.pointerEvents).toBe('none');
+    expect(slot.className).toContain('justify-center');
+    // 按钮承接点击:宽度不写死(shrink-to-fit 随语言),靠左右 padding 30 扩热区,高占满槽
+    expect(skip.style.pointerEvents).toBe('auto');
+    expect(skip.style.width).toBe('');
+    expect(skip.style.paddingLeft).toBe('30px');
+    expect(skip.style.paddingRight).toBe('30px');
+    expect(skip.style.height).toBe('60px');
   });
 
   it('providers:phone-only → 无 tabs,placeholder 为手机号', async () => {
@@ -203,14 +271,15 @@ describe('identifier 态(附录 A providers 场景)', () => {
     );
   });
 
-  it('providers:cn-social → 圆钮行 = Apple + SSO + 游客(游客恒为行内最后一颗,SSO 次末)', async () => {
+  it('providers:cn-social → 圆钮行 = Apple + SSO(SSO 恒为行内最后一颗,游客圆钮已删)', async () => {
     mount(await identifierState('providers:cn-social'));
     const row = screen.getByTestId('login-social-row');
     expect(screen.getByTestId('login-social-apple')).toBeTruthy();
     expect(screen.queryByTestId('login-social-google')).toBeNull();
-    // consent PR:游客人形圆钮追加为行内最后一颗(figma 600:655 顺序 Apple→SSO→游客)
-    expect(row.lastElementChild).toBe(screen.getByTestId('login-social-guest'));
-    expect(row.children[row.children.length - 2]).toBe(screen.getByTestId('login-social-sso'));
+    // 新稿(700:796)圆钮行只剩 Apple + SSO 两颗:游客圆钮由面板内「跳过登录」文字链取代
+    expect(row.children.length).toBe(2);
+    expect(row.firstElementChild).toBe(screen.getByTestId('login-social-apple'));
+    expect(row.lastElementChild).toBe(screen.getByTestId('login-social-sso'));
   });
 
   it('providers:global-social → 圆钮行 = Apple + Google + SSO,region=global(不冒充构建区域)', async () => {
@@ -261,7 +330,7 @@ describe('ssoOrgMode 子视图', () => {
     expect(screen.getByText('login.ssoOrgHint')).toBeTruthy();
   });
 
-  it('sso-org 填写态:输入企业 ID 后继续可用,提交派发 discover-sso-org', async () => {
+  it('sso-org 填写态:直接派发 discover-sso-org，不在查询前弹确认', async () => {
     mount(await identifierState('providers:both'));
     fireEvent.click(screen.getByTestId('login-social-sso'));
     const input = screen.getByTestId('login-sso-org-input') as HTMLInputElement;
@@ -272,6 +341,29 @@ describe('ssoOrgMode 子视图', () => {
     expect(loginHook.value.dispatch).toHaveBeenCalledWith({
       type: 'discover-sso-org',
       org: 'example-corp',
+    });
+    expect(screen.queryByText('login.realmConsent.title')).toBeNull();
+  });
+
+  it('组织区域与安装区域不一致时才显示确认，确认或取消走独立 action', async () => {
+    mount(await realmConfirmationState('global'));
+    expect(screen.getByText('login.realmConsent.title')).toBeTruthy();
+    const bodyText = screen.getByText('login.realmConsent.bodyGlobal');
+    const body = bodyText.closest('#login-consent-dialog-body') as HTMLElement;
+    expect(body).toBeTruthy();
+    expect(body.style.fontSize).toBe('26px');
+    expect(body.style.lineHeight).toBe('40px');
+    expect(body.style.color).toBe('var(--login-secondary-text)');
+    expect(body.className).toContain('whitespace-pre-line');
+
+    fireEvent.click(screen.getByText('login.realmConsent.agree'));
+    expect(loginHook.value.dispatch).toHaveBeenCalledWith({
+      type: 'confirm-sso-realm',
+    });
+
+    fireEvent.click(screen.getByText('login.realmConsent.disagree'));
+    expect(loginHook.value.dispatch).toHaveBeenCalledWith({
+      type: 'cancel-sso-realm',
     });
   });
 

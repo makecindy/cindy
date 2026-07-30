@@ -47,6 +47,19 @@ vi.mock('@/lib/makerTransport', () => ({
 }));
 
 import { AgentTaskCard } from '@/components/chat/AgentTaskCard';
+import { SessionNavigationModeProvider } from '@/features/cc-agent/embeddedSessionNavigation';
+
+/**
+ * 面板入口的 affordance 判据是「本会话的右栏 bucket 此刻可见」,由路由主实例经
+ * SessionNavigationModeProvider 声明(见 useSidebarPanelReachable)。默认 fail
+ * closed:没声明 = 打不开 = 不给假入口,所以断言面板入口的用例要显式声明宿主。
+ */
+const withPanelHost = (hostSessionId: string, element: React.ReactElement) =>
+  React.createElement(SessionNavigationModeProvider, {
+    mode: 'route-owner' as const,
+    sidebarPanelHostSessionId: hostSessionId,
+    children: element,
+  });
 
 describe('AgentTaskCard', () => {
   it('renders the full expanded task result instead of truncating it', () => {
@@ -215,16 +228,19 @@ describe('AgentTaskCard', () => {
   it('opens the background tasks panel focused on the task when a workflow card is clicked', () => {
     openBackgroundTasksTabMock.mockClear();
     const { container } = render(
-      React.createElement(AgentTaskCard, {
-        sessionId: 'session-1',
-        update: {
-          provider: 'claude-code',
-          taskId: 'wf-1',
-          status: 'running',
-          taskType: 'local_workflow',
-          workflowName: 'Release pipeline',
-        },
-      }),
+      withPanelHost(
+        'session-1',
+        React.createElement(AgentTaskCard, {
+          sessionId: 'session-1',
+          update: {
+            provider: 'claude-code',
+            taskId: 'wf-1',
+            status: 'running',
+            taskType: 'local_workflow',
+            workflowName: 'Release pipeline',
+          },
+        }),
+      ),
     );
     const btn = headerButton(container);
     expect(btn).not.toBeNull();
@@ -298,18 +314,21 @@ describe('AgentTaskCard', () => {
     // 面板入口(与面板 listSessionTasks 的提取同源,focusTaskId 才配得上)。
     openBackgroundTasksTabMock.mockClear();
     const { container } = render(
-      React.createElement(AgentTaskCard, {
-        sessionId: 'session-1',
-        toolCall: {
-          clientId: 'wf-call-1',
-          role: 'tool_use',
-          content: '',
-          toolUseId: 'tu-wf-1',
-          toolName: 'Workflow',
-          toolInput: { script: 'export const meta = {}' },
-        },
-        result: 'Workflow launched in background. Task ID: wf_restored42',
-      }),
+      withPanelHost(
+        'session-1',
+        React.createElement(AgentTaskCard, {
+          sessionId: 'session-1',
+          toolCall: {
+            clientId: 'wf-call-1',
+            role: 'tool_use',
+            content: '',
+            toolUseId: 'tu-wf-1',
+            toolName: 'Workflow',
+            toolInput: { script: 'export const meta = {}' },
+          },
+          result: 'Workflow launched in background. Task ID: wf_restored42',
+        }),
+      ),
     );
     const btn = headerButton(container);
     expect(btn).not.toBeNull();
@@ -323,23 +342,57 @@ describe('AgentTaskCard', () => {
 
   it('renders no inline expand region for workflow cards', () => {
     const { container } = render(
-      React.createElement(AgentTaskCard, {
-        sessionId: 'session-1',
-        update: {
-          provider: 'claude-code',
-          taskId: 'wf-1',
-          status: 'completed',
-          taskType: 'local_workflow',
-          workflowName: 'Release pipeline',
-          description: 'WORKFLOW_DESCRIPTION_HIDDEN',
-          summary: 'WORKFLOW_SUMMARY_HIDDEN',
-        },
-      }),
+      withPanelHost(
+        'session-1',
+        React.createElement(AgentTaskCard, {
+          sessionId: 'session-1',
+          update: {
+            provider: 'claude-code',
+            taskId: 'wf-1',
+            status: 'completed',
+            taskType: 'local_workflow',
+            workflowName: 'Release pipeline',
+            description: 'WORKFLOW_DESCRIPTION_HIDDEN',
+            summary: 'WORKFLOW_SUMMARY_HIDDEN',
+          },
+        }),
+      ),
     );
     // useExpandedBlockMemory mock 恒为 expanded=true,仍不得渲染展开区内容。
     expect(container.textContent).not.toContain('WORKFLOW_DESCRIPTION_HIDDEN');
     expect(container.textContent).not.toContain('WORKFLOW_SUMMARY_HIDDEN');
     expect(container.querySelector('[aria-expanded]')).toBeNull();
+  });
+
+  it('falls back to the expand toggle in embedded hosts where the panel bucket is invisible', () => {
+    // 协同 worker 面板 / workdir-browse 窄 rail:右栏显示的是别的会话(这里 lead),
+    // 往本会话 bucket 写 tab 用户看不到 —— 必须退回展开区,不给「点了没反应」的
+    // 假入口,也不能因为面板入口化就在这些宿主里彻底没有详情可读。
+    openBackgroundTasksTabMock.mockClear();
+    const { container } = render(
+      withPanelHost(
+        'lead-session',
+        React.createElement(AgentTaskCard, {
+          sessionId: 'worker-session',
+          update: {
+            provider: 'claude-code',
+            taskId: 'wf-1',
+            status: 'running',
+            taskType: 'local_workflow',
+            workflowName: 'Release pipeline',
+            summary: 'WORKFLOW_SUMMARY_IN_EMBEDDED_HOST',
+          },
+        }),
+      ),
+    );
+    expect(headerButton(container)).toBeNull();
+    const toggleBtn = container.querySelector<HTMLButtonElement>('button[aria-expanded]');
+    expect(toggleBtn).not.toBeNull();
+    act(() => {
+      toggleBtn!.click();
+    });
+    expect(openBackgroundTasksTabMock).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('WORKFLOW_SUMMARY_IN_EMBEDDED_HOST');
   });
 
   const progressLine = (container: HTMLElement) =>

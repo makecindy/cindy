@@ -112,9 +112,13 @@ describe('uploadLocalFile — 小文件整体 PUT', () => {
       expect.objectContaining({
         method: 'POST',
         body: { size: 100, ext: 'png', contentType: 'image/png' },
-        baseUrl: 'http://relay.test:3335',
+        baseUrl: expect.any(Function),
       }),
     );
+    const relayBaseUrl = apiFetch.mock.calls[0]?.[1]?.baseUrl;
+    expect(
+      typeof relayBaseUrl === 'function' ? relayBaseUrl() : relayBaseUrl,
+    ).toBe('http://relay.test:3335');
     const [url, init] = undiciFetchMock.mock.calls[0];
     expect(url).toBe('https://oss.example/put');
     expect(init.method).toBe('PUT');

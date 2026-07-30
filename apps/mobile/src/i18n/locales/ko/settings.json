@@ -16,7 +16,7 @@
     "currentLabel": "현재 버전",
     "bundleVersion": "앱 패키지 {{version}}",
     "otaVersion": "OTA 버전 {{version}}",
-    "desktopVersion": "데스크톱 버전 {{version}}",
+    "pairedDesktopVersion": "연동 대상 데스크톱 버전 {{version}}",
     "devNoOta": "개발 빌드에서는 OTA 업데이트를 사용할 수 없습니다",
     "checkAction": "업데이트 확인",
     "testFlightCheckAction": "콘텐츠 업데이트 확인",

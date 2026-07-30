@@ -25,6 +25,7 @@ import {
   fileStatusToTaskStatus,
   workflowAgentVisualState,
 } from '@/features/right-sidebar/plugins/background-tasks/workflowProgressModel';
+import { useSidebarPanelReachable } from '@/features/cc-agent/embeddedSessionNavigation';
 import { cn } from '@/lib/utils';
 import { formatModelShortLabel } from '@/lib/modelShortLabel';
 
@@ -225,9 +226,14 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
   }, [sessionId, update?.taskId]);
 
   // workflow 卡整卡点击 → 打开右栏后台任务面板并定位本任务(workflowTaskId 在
-  // 组件顶部与状态修正共用同一次推导)。两者都提不到才退回传统展开交互,让
+  // 组件顶部与状态修正共用同一次推导)。三者缺一就退回传统展开交互,让
   // description/summary 就地可读,不做「点了没反应」的假入口。
-  const canOpenInPanel = Boolean(sessionId) && Boolean(workflowTaskId);
+  //
+  // panelReachable:内嵌宿主(协同 worker 面板 / workdir-browse 窄 rail / Orca
+  // split)里右栏显示的是别的会话(或压根没在场),往本会话 bucket 写 tab 用户看
+  // 不到 —— 那里必须退回展开区,否则卡片既点不动、又因面板入口化丢掉了展开区。
+  const panelReachable = useSidebarPanelReachable(sessionId);
+  const canOpenInPanel = Boolean(sessionId) && Boolean(workflowTaskId) && panelReachable;
   const openInPanel = useCallback(() => {
     if (!sessionId || !workflowTaskId) return;
     void openBackgroundTasksTab(sessionId, { focusTaskId: workflowTaskId });

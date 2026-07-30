@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseIssueEnvRegion, parseIssueSubmissionIdentity } from '@/lib/issueConfirmPayload';
+import {
+  parseIssueEnvRegion,
+  parseIssueSuggestedPublicName,
+  parseIssueSubmissionIdentity,
+} from '@/lib/issueConfirmPayload';
 
 describe('parseIssueSubmissionIdentity', () => {
   it('保留 GitHub 用户和平台的实际 login', () => {
@@ -35,5 +39,21 @@ describe('parseIssueEnvRegion', () => {
     expect(parseIssueEnvRegion(undefined)).toBeUndefined();
     expect(parseIssueEnvRegion(null)).toBeUndefined();
     expect(parseIssueEnvRegion(1)).toBeUndefined();
+  });
+});
+
+describe('parseIssueSuggestedPublicName', () => {
+  it('trims a valid single-line public name', () => {
+    expect(parseIssueSuggestedPublicName('  Cindy User  ')).toBe('Cindy User');
+  });
+
+  it('drops empty, over-long, control-character and line-separator values', () => {
+    expect(parseIssueSuggestedPublicName('')).toBeUndefined();
+    expect(parseIssueSuggestedPublicName('x'.repeat(101))).toBeUndefined();
+    expect(parseIssueSuggestedPublicName('line 1\nline 2')).toBeUndefined();
+    expect(parseIssueSuggestedPublicName('line 1\u0085line 2')).toBeUndefined();
+    expect(parseIssueSuggestedPublicName('line 1\u009fline 2')).toBeUndefined();
+    expect(parseIssueSuggestedPublicName('line 1\u2028line 2')).toBeUndefined();
+    expect(parseIssueSuggestedPublicName('line 1\u2029line 2')).toBeUndefined();
   });
 });

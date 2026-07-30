@@ -18,6 +18,7 @@ import {
   walkPanes,
   type Layout,
   type LayoutNode,
+  type SplitNode,
 } from '../layoutTree';
 
 /** 构造一棵最小合法树的便捷函数,测试里按需改坏它。 */
@@ -394,6 +395,21 @@ describe('transferSplitFraction(缝把手拖宽提交)', () => {
     const layout = createDefaultLayout(); // 0.5 / 0.5
     expect(transferSplitFraction(layout, 'root', 0, 1, 0.48).applied).toBe(false);
     expect(transferSplitFraction(layout, 'root', 0, 1, 0.4).applied).toBe(true);
+  });
+
+  it('恰好夹到 0.05 下限的转移必须放行:浮点残差不得判成非法(否则松手回弹)', () => {
+    // 调用方(缝把手)按下限夹取 amount 后,减回去会得到 0.04999999999999999 ——
+    // 裸比较 < 0.05 会整单拒绝,拖动的整段位移作废(2026-07-29 实测右栏回弹)。
+    const layout = createDefaultLayout();
+    const children = (layout.content as SplitNode).children;
+    children[0].fraction = 0.4589135021784424; // 用户现场树的 chat 份额
+    children[1].fraction = 0.5410864978215576;
+    const amount = children[0].fraction - 0.05; // 夹到下限
+    expect(children[0].fraction - amount).toBeLessThan(0.05); // 浮点残差前提成立
+    const r = transferSplitFraction(layout, 'root', 0, 1, amount);
+    expect(r.applied).toBe(true);
+    expect((r.layout.content as SplitNode).children[0].fraction).toBeCloseTo(0.05, 6);
+    expect(validateLayout(r.layout)).toEqual({ ok: true });
   });
 
   it('非法入参(amount=0 / 同下标 / 越界 / split 不存在)全部拒绝', () => {

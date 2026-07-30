@@ -71,8 +71,8 @@ export async function submitGithubIssueForSession(
   };
   return submitGithubIssueWithConfirm(
     {
-      confirm: (sessionId, draft, env, submissionIdentity) =>
-        bridge.request(sessionId, draft, env, submissionIdentity),
+      confirm: (sessionId, draft, env, submissionIdentity, suggestedPublicName) =>
+        bridge.request(sessionId, draft, env, submissionIdentity, suggestedPublicName),
       resolveSubmissionIdentity: (workdir) =>
         resolveGithubIssueSubmissionIdentity(githubUserSubmitterDeps, workdir),
       postIssue: (submissionIdentity, bodyFactory) => {
@@ -86,8 +86,8 @@ export async function submitGithubIssueForSession(
             bodyFactory,
             // 独立部署的 github-server(服务端仓);登录 JWT 验签与
             // auth-server 同侧。bodyFactory 随 401 refresh 重建,确保账号切换后
-            // userName 与最终 Bearer membership 一致。
-            baseUrl: getClientEndpoint('githubApiBaseUrl'),
+            // userName、区域端点与最终 Bearer membership 一致。
+            baseUrl: () => getClientEndpoint('githubApiBaseUrl'),
           },
         );
       },

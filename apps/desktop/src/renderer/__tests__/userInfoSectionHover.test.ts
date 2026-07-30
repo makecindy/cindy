@@ -58,12 +58,24 @@ describe('UserInfoSection — outer wrapper takes over full-row hover', () => {
 });
 
 describe('UserInfoSection — version label', () => {
-  it('shows the build region alongside the app version', () => {
+  it('labels only the non-global builds alongside the app version', () => {
     expect(source).toContain("import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';");
-    expect(source).toContain(
-      "const appRegionLabel = CURRENT_CINDY_REGION === 'global' ? 'Global' : 'CN';",
+    // 「哪些区域要标」必须来自 shared 单点,不得在组件里再写一份映射
+    // (issue 反馈链路同源;口径见 DESIGN.md §16.3 / region-and-editions §2.3)。
+    expect(source).toContain("import { shouldLabelRegion } from '../../../shared/regionCode';");
+    expect(source).not.toMatch(/const REGION_LABEL/);
+    // global 故意不贴标签,落到 null 分支只显示版本号。
+    expect(source).toMatch(
+      /const appRegionLabel = !shouldLabelRegion\(CURRENT_CINDY_REGION\)\s*\n\s*\? null\s*\n\s*: CURRENT_CINDY_REGION === 'cn'/,
     );
-    expect(source).toContain('const appVersionLabel = `${appRegionLabel} · ${appDisplayVersion}`;');
+    // 展示文案走 i18n,且 key 为字面量分支(check:i18n 静态提取要看得到)。
+    expect(source).toContain("t('sidebar.user.regionCodeCn')");
+    expect(source).toContain("t('sidebar.user.regionCodeDev')");
+    expect(source).not.toContain("'Global'");
+    expect(source).not.toMatch(/'CN'|'Dev'/);
+    expect(source).toMatch(
+      /const appVersionLabel = appRegionLabel\s*\n\s*\? `\$\{appRegionLabel\} · \$\{appDisplayVersion\}`\s*\n\s*: appDisplayVersion;/,
+    );
     expect(source).not.toContain('XD.Inc');
     expect(source).toContain('{appVersionLabel}');
     expect(source).toContain('title={appVersionLabelDetail}');
@@ -72,7 +84,9 @@ describe('UserInfoSection — version label', () => {
 
 describe('UserInfoSection — Canary avatar badge', () => {
   it('shows only the shield decoration when isCanary is true', () => {
-    expect(source).toContain("import { Flame, Shield, Smartphone } from 'lucide-react';");
+    expect(source).toContain(
+      "import { Flame, Shield, Smartphone, UserRound } from 'lucide-react';",
+    );
     expect(source).toContain('const { user, mode, isCanary } = useAuth();');
     expect(source).toContain('{isCanary && (');
     expect(source).toContain("aria-label={t('sidebar.user.canaryBadge')}");
@@ -82,9 +96,33 @@ describe('UserInfoSection — Canary avatar badge', () => {
   });
 });
 
+describe('UserInfoSection — 未登录态头像兜底', () => {
+  it('未登录(跳过登录)态用中性人形图标,不拿状态文案取首字', () => {
+    // 状态名四语各不相同(未登录 / Not signed in / 未ログイン / 로그인하지 않음),
+    // 取首字会渲染成「未」/「N」这类无意义字符,所以这里必须走图标分支。
+    expect(source).toContain('const showNotSignedInGlyph = !user && isLocal;');
+    // 折叠 rail(36px 圆)与展开胶囊(27px 圆)两处兜底都要接上
+    expect(source).toMatch(
+      /showNotSignedInGlyph \? \(\s*\n\s*<UserRound aria-hidden="true" size=\{18\}/,
+    );
+    expect(source).toMatch(
+      /showNotSignedInGlyph \? \(\s*\n\s*<UserRound aria-hidden="true" size=\{15\}/,
+    );
+  });
+
+  it('已登录用户仍使用姓名首字兜底', () => {
+    expect(source).toContain(
+      "const displayName = user?.name ?? (isLocal ? t('settings.userProfile.local.name') : '');",
+    );
+    expect(source).toContain('const initial = displayName.charAt(0).toUpperCase();');
+  });
+});
+
 describe('UserInfoSection — mobile download entry', () => {
   it('uses the local Lucide Smartphone icon in a matching 22x22 capsule action', () => {
-    expect(source).toContain("import { Flame, Shield, Smartphone } from 'lucide-react';");
+    expect(source).toContain(
+      "import { Flame, Shield, Smartphone, UserRound } from 'lucide-react';",
+    );
     expect(source).toMatch(/'mobile-download-btn',\s*\n\s*'flex h-\[22px\] w-\[22px\]/);
     expect(source).toContain("!isCollapsed && 'mr-1'");
     expect(source).toContain('<Smartphone className="h-3 w-3" aria-hidden="true" />');

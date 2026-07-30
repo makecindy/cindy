@@ -309,6 +309,38 @@ export class AppServerHost {
     return this.startPromise;
   }
 
+  /**
+   * ensureStarted 的限时变体 (codex R13 P1): startSession 直调路径用。
+   * 冷启动 / transport 重建时 bootstrap 也可能永不返回 (远端 daemon 挂死 /
+   * SSH 通道无响应) — request() 的关键 RPC 已带 startup+request 整体
+   * deadline, 但 startSession 的 initialize 直调绕开了它, 需要同款上界,
+   * 否则 UI 无限卡 session 初始化。
+   *
+   * 与 request() 内 startup deadline 同款语义: 超时只 reject 本次等待,
+   * startPromise 后台继续 (并发共享, 下次调用可直接复用其结果), 挂
+   * swallow catch 防迟到 settle 变 unhandled rejection。
+   */
+  async ensureStartedWithTimeout(timeoutMs: number, label: string): Promise<InitializeResponse> {
+    const started = this.ensureStarted();
+    let timer: NodeJS.Timeout | null = null;
+    try {
+      return await Promise.race([
+        started,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error(`app-server startup (for ${label}) timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
+          timer.unref?.();
+        }),
+      ]);
+    } catch (err) {
+      started.catch(() => { /* late startup failure swallowed after timeout */ });
+      throw err;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   private async bootstrap(capabilities?: InitializeCapabilities): Promise<InitializeResponse> {
     const client = new AppServerClient({
       createTransport: this.opts.createTransport,
@@ -484,11 +516,54 @@ export class AppServerHost {
   /**
    * 透传 JSON-RPC request 到底层 client (会先 ensureStarted)。
    * thread/start / turn/start / turn/interrupt / thread/resume / thread/fork 都走这里。
+   *
+   * `opts.timeoutMs` 按需传入: 裸 RPC 默认**无超时** (协议上 response 可能任意晚),
+   * 但 turn/start 这类「daemon 失联就永远挂住」的关键路径应显式给上限 —
+   * 超时 reject 后上层按 turn 启动失败收口, 而不是让 UI 无限 generating。
    */
-  async request<R = unknown>(method: string, params?: unknown): Promise<R> {
-    await this.ensureStarted();
+  async request<R = unknown>(
+    method: string,
+    params?: unknown,
+    opts?: { timeoutMs?: number },
+  ): Promise<R> {
+    // 冷启动 / transport 重建时 ensureStarted 本身也可能永不返回 (远端 daemon
+    // bootstrap 挂死 / SSH 通道无响应) — 调用方显式给 timeoutMs 时同样给它
+    // 上界, 否则「关键 RPC 加超时」在启动路径上形同虚设 (greptile R6 P1)。
+    // timeoutMs 是 startup + request 的整体 deadline (copilot R9): startup 用掉
+    // 的预算从 request 里扣, 否则最坏等 2× timeoutMs, 与「关键 RPC 60s 上界」
+    // 的意图冲突, UI 仍可能长时间卡 generating。
+    const started = this.ensureStarted();
+    if (opts?.timeoutMs != null) {
+      const deadline = Date.now() + opts.timeoutMs;
+      let timer: NodeJS.Timeout | null = null;
+      try {
+        await Promise.race([
+          started,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+              reject(new Error(`app-server startup (for ${method}) timed out after ${opts.timeoutMs}ms`));
+            }, opts.timeoutMs);
+            timer.unref?.();
+          }),
+        ]);
+      } catch (err) {
+        // 超时后 started 仍在后台继续 (下次 request 可直接复用) — 挂一个
+        // swallow catch 防它迟到 reject 时变成 unhandled rejection。
+        started.catch(() => { /* late startup failure swallowed after timeout */ });
+        throw err;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        throw new Error(`app-server startup (for ${method}) consumed the entire ${opts.timeoutMs}ms timeout budget`);
+      }
+      if (!this.client) throw new Error('AppServerHost: client missing after ensureStarted (unreachable)');
+      return this.client.request<R>(method, params, { ...opts, timeoutMs: remaining });
+    }
+    await started;
     if (!this.client) throw new Error('AppServerHost: client missing after ensureStarted (unreachable)');
-    return this.client.request<R>(method, params);
+    return this.client.request<R>(method, params, opts);
   }
 
   /** Release one thread's live runtime without archiving or deleting its history. */

@@ -4,22 +4,26 @@ export interface CollabProjectPolicyContext {
   workingDir?: string | null;
   workspaceKind?: string | null;
   remoteHostId?: string | null;
+  agentKind?: string | null;
 }
 
 /**
- * 协同 Team 只能由启用 collab 插件的本地项目会话创建。
+ * 协同 Team 只能由启用 collab 插件的项目会话创建;SSH 远端会话 codex 与
+ * claude-code 均已接通 —— 远端 agent 经 SSH remote-forward 直连本机 HTTP
+ * MCP bridge(codex 走 daemon config 注入 + persistent token,cc 走
+ * per-query http 注入 + persistent token 与 ?session= 路由),cindy_orca
+ * 在两端都可用。
  *
  * 这是主进程的最终授权边界；Renderer 的入口状态只是用户体验层，
  * 不能替代这里的校验。
  */
 export function assertCollabProjectEnabled(
   context: CollabProjectPolicyContext,
-  isPluginEnabled: (pluginId: 'collab', workingDir: string) => boolean,
+  isPluginEnabled: (pluginId: 'collab', workingDir?: string) => boolean,
 ): void {
   const workingDir = typeof context.workingDir === 'string' ? context.workingDir.trim() : null;
   if (
     context.workspaceKind !== 'project' ||
-    context.remoteHostId != null ||
     workingDir === null ||
     workingDir === ''
   ) {
@@ -27,6 +31,24 @@ export function assertCollabProjectEnabled(
       'PRECONDITION_FAILED',
       'collaboration requires an enabled local project session',
     );
+  }
+
+  // 远端会话的 workingDir 是远端机器上的路径, 在本机 fs 上查项目级插件配置
+  // (.cindy/plugins.json) 没有意义 —— 命中同路径的本机目录会误判, 查不到又
+  // 会误拒。远端项目级 collab 配置暂无对应机制; 协同边界由 "session 已在
+  // 远端建立" + bridge 注入白名单 (cindy_orca / orca_worker_bridge) 兜底。
+  // 但用户级/全局级 collab 开关 (registry Tier 4, 不依赖 workingDir) 对远端
+  // 同样有效 — 用户全局禁用 Collab 时远端会话一样拒绝, 与本地行为一致。
+  // TODO(follow-up): 远端项目级 collab 开关 (远端 fs 的 .cindy/plugins.json
+  // 或 per-host 设置) 有需求时再做。
+  if (context.remoteHostId) {
+    if (!isPluginEnabled('collab')) {
+      throwIpcError(
+        'PRECONDITION_FAILED',
+        'collaboration is disabled for this project',
+      );
+    }
+    return;
   }
 
   if (!isPluginEnabled('collab', workingDir)) {

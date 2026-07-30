@@ -50,6 +50,10 @@ describe('formatBillingAmount', () => {
   it('falls back to the raw amount when the value is not numeric', () => {
     expect(formatBillingAmount('not-a-number', 'usd')).toBe('not-a-number USD');
   });
+
+  it('uses the dollar symbol for USD in Chinese', () => {
+    expect(formatBillingAmount('3', 'usd', 'zh-CN')).toBe('$3.00');
+  });
 });
 
 describe('formatBillingMinorAmount', () => {

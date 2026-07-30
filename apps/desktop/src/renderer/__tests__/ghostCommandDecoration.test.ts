@@ -8,15 +8,20 @@
  *   2. 前导空白 / 空段落被 trim → 仍亮;正文中段的 `$` 不亮;
  *   3. chip 在前(序列化 `@...` 前缀)/ 指令词紧贴 chip(run 未断)→ 不亮;
  *   4. 未装 / 沉睡 / 全角触发符 / 大小写折叠等与 findGhostByCommand 同判;
- *   5. roster 经 meta 推入后 plugin 重算(装/卸即时反映,不依赖 docChanged)。
+ *   5. roster 经 meta 推入后 plugin 重算(装/卸即时反映,不依赖 docChanged);
+ *   6. Backspace 整体删除只在「胶囊亮 + 光标在胶囊外(尾随空格之后)」接管,
+ *      胶囊内(含贴着词尾的位置)与其余情况一律落回原生逐字删——那里是编辑位,
+ *      改词能力不能被捷径吃掉。
  */
 import { describe, expect, it } from 'vitest';
 import { Schema, type Node as PMNode } from '@tiptap/pm/model';
-import { EditorState } from '@tiptap/pm/state';
+import { EditorState, TextSelection } from '@tiptap/pm/state';
+import type { EditorView } from '@tiptap/pm/view';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import {
+  applyGhostCommandBackspace,
   createGhostCommandPlugin,
   findGhostCommandMatch,
   ghostPillAttrs,
@@ -198,6 +203,103 @@ describe('createGhostCommandPlugin — roster meta 与 decoration 生命周期',
       class: 'ghost-cmd-pill',
       'data-ghost-cmd': 'ghost-画图',
     });
+  });
+});
+
+describe('applyGhostCommandBackspace — 整体删除的接管边界', () => {
+  const META_KEY = 'ghostCommandDecoration';
+
+  /**
+   * 在 state 层跑一次 Backspace:推 roster → 放光标 → 调用。view 只需要
+   * state / dispatch 两个面,applyGhostCommandBackspace 不碰 DOM。
+   */
+  function backspaceAt(
+    initial: PMNode,
+    ghosts: InstalledGhost[],
+    caret: number,
+    caretTo = caret,
+  ): { handled: boolean; text: string; caret: number } {
+    const plugin = createGhostCommandPlugin();
+    let state = EditorState.create({ schema, doc: initial, plugins: [plugin] });
+    state = state.apply(state.tr.setMeta(META_KEY, ghosts));
+    state = state.apply(state.tr.setSelection(TextSelection.create(state.doc, caret, caretTo)));
+    const view = {
+      get state() {
+        return state;
+      },
+      dispatch: (tr: ReturnType<typeof state.tr.delete>) => {
+        state = state.apply(tr);
+      },
+    } as unknown as EditorView;
+    const handled = applyGhostCommandBackspace(view);
+    return {
+      handled,
+      text: state.doc.textBetween(0, state.doc.content.size, '\n'),
+      caret: state.selection.from,
+    };
+  }
+
+  // `$画图 一只猫`:$ 在 1,词尾 4,尾随空格 4,正文自 5 起
+  const 带正文 = () => doc(p(txt('$画图 一只猫')));
+
+  it('光标在胶囊外(尾随空格之后):整体删,不留孤立空格', () => {
+    expect(backspaceAt(带正文(), [画图], 5)).toEqual({ handled: true, text: '一只猫', caret: 1 });
+  });
+
+  it('全角触发符(￥)同权整体删', () => {
+    expect(backspaceAt(doc(p(txt('￥画图 猫'))), [画图], 5)).toMatchObject({
+      handled: true,
+      text: '猫',
+    });
+  });
+
+  it('不接管:光标贴在词尾(视觉上在胶囊右内边距里)—— 那里是编辑位', () => {
+    expect(backspaceAt(带正文(), [画图], 4)).toEqual({
+      handled: false,
+      text: '$画图 一只猫',
+      caret: 4,
+    });
+  });
+
+  it('不接管:没有尾随空格时光标只可能停在胶囊内,一律逐字删', () => {
+    expect(backspaceAt(doc(p(txt('$画图'))), [画图], 4)).toMatchObject({
+      handled: false,
+      text: '$画图',
+    });
+    // 词尾是 hardBreak:光标在换行后属于下一行行首,退格该合并行而不是删引用
+    expect(backspaceAt(doc(p(txt('$画图'), br(), txt('一只猫'))), [画图], 5)).toMatchObject({
+      handled: false,
+    });
+  });
+
+  it('不接管:光标在词中间 / 触发符前 / 正文里 —— 改词能力照旧', () => {
+    expect(backspaceAt(带正文(), [画图], 3)).toMatchObject({
+      handled: false,
+      text: '$画图 一只猫',
+    });
+    expect(backspaceAt(带正文(), [画图], 1)).toMatchObject({
+      handled: false,
+      text: '$画图 一只猫',
+    });
+    expect(backspaceAt(带正文(), [画图], 8)).toMatchObject({
+      handled: false,
+      text: '$画图 一只猫',
+    });
+  });
+
+  it('不接管:选区非空(原生删选区)', () => {
+    expect(backspaceAt(带正文(), [画图], 1, 5)).toMatchObject({ handled: false });
+  });
+
+  it('不接管:胶囊没亮(roster 空 / 未装该指令 / 意识沉睡 / 位置不对)', () => {
+    expect(backspaceAt(带正文(), [], 5)).toMatchObject({ handled: false, text: '$画图 一只猫' });
+    expect(backspaceAt(doc(p(txt('$不存在 猫'))), [画图], 5)).toMatchObject({ handled: false });
+    expect(backspaceAt(带正文(), [makeGhost('画图', { enabled: false })], 5)).toMatchObject({
+      handled: false,
+      text: '$画图 一只猫',
+    });
+    // 正文中段的 `$` 不是消息起点指令,不整体删
+    expect(backspaceAt(doc(p(txt('帮我 $画图 猫'))), [画图], 8)).toMatchObject({ handled: false });
   });
 });
 

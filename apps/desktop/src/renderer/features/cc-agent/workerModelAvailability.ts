@@ -6,6 +6,8 @@ import {
 } from '@cindy/model-providers';
 
 import type { AgentCapabilities, ModelDescriptor } from '@/hooks/useAgentCapabilities';
+import { filterChatBridgedCodexProviders } from '@/lib/providerModels';
+import { isSubscriptionDirectModel } from '../../../shared/subscriptionModels';
 
 export interface SelectWorkerModelsOptions {
   agent: AgentKind;
@@ -16,6 +18,18 @@ export interface SelectWorkerModelsOptions {
   providersError: string | null;
   /** Local-only provider model visibility. Device-link peers own their own visibility choices. */
   isVisible?: (providerId: string, model: CatalogModel) => boolean;
+  /**
+   * 过滤订阅直连模型(chatgpt/ / xai/)。SSH 远程 Lead(remoteHostId)必须传 true:
+   * bridge 只挂在本地 compat-proxy,远程走 remoteEndpoint 不经翻译,选了必失败
+   * (与 ChatInput 的同名开关同口径;main 侧 orcaWorkerCreationService 会拒绝,
+   * 这里在提交前就把不可路由的选项藏起来)。
+   */
+  excludeSubscriptionDirect?: boolean;
+  /**
+   * 过滤 `wireProtocol: 'openai-chat'` 的 Codex 供应商:Responses→Chat 桥只挂在本地
+   * codex-proxy,SSH 远程走 daemon transport 不经它。SSH 远程 Lead 必须传 true。
+   */
+  excludeChatBridgedCodex?: boolean;
 }
 
 /**
@@ -35,14 +49,29 @@ export function selectWorkerModels({
   providersLoading,
   providersError,
   isVisible,
+  excludeSubscriptionDirect,
+  excludeChatBridgedCodex,
 }: SelectWorkerModelsOptions): ModelDescriptor[] {
   const models = capabilities?.availableModels ?? [];
 
   if (!deviceId) {
-    const selectableIds = new Set(
-      visibleModelUnion(providers, agent, isVisible ?? (() => true)).map((model) => model.id),
+    // SSH 远程 Lead 与本地共用这份 provider 清单(worker 继承 remoteHostId 在远端
+    // spawn,但目录快照来自本机) — 先按 SSH 口径剔除仅本地可桥接的来源,再取并集,
+    // 与 selectVisibleModels 的 excludeProvider 语义一致(同 id 另有可路由来源仍补上)。
+    const routedProviders = filterChatBridgedCodexProviders(
+      providers,
+      agent,
+      excludeChatBridgedCodex === true,
     );
-    return models.filter((model) => selectableIds.has(model.id));
+    const selectableIds = new Set(
+      visibleModelUnion(routedProviders, agent, isVisible ?? (() => true)).map(
+        (model) => model.id,
+      ),
+    );
+    const selectable = models.filter((model) => selectableIds.has(model.id));
+    return excludeSubscriptionDirect
+      ? selectable.filter((model) => !isSubscriptionDirectModel(model.id))
+      : selectable;
   }
 
   if (providersError) return models;

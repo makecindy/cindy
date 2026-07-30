@@ -69,6 +69,12 @@ export interface HookSessionRunner {
 
 export interface HookRunRequest {
   sessionId: string;
+  /**
+   * IM lane 形态(externalKey 派生): 'group' = 群/topic, 'dm' = 私聊。
+   * runner 据此决定进度快照是否携带过程时间线(群内可编辑消息适合过程卡,
+   * DM 的 Rich draft 动画不适合反复重排)。缺省按 'dm' 保守处理。
+   */
+  laneKind?: 'dm' | 'group';
   /** true = 新建 session(workingDir/title 生效); false = 复用/接管已有。 */
   isNew: boolean;
   workingDir: string;
@@ -156,6 +162,16 @@ export interface HookDispatcherDeps {
    * 回退共享工作区目录, 不拒单(非 git 目录天然走回退)。
    */
   prepareWorktree?: (workingDir: string) => Promise<PrepareWorktreeResult>;
+  /**
+   * 可选: 为派发组装本地群上下文前缀(group-relay-v1 窗口, 生产为
+   * groupWindow.buildGroupContextPrefix)。只影响发给 agent 的 prompt,
+   * 不影响会话标题与 UI 渲染(二者用 source.userText / 原始 prompt);
+   * 失败或空装配 = 无前缀, 绝不因上下文拒单。commit 在任务被受理
+   * (accepted/queued)后由本模块调用, 拒单不推进窗口游标。
+   */
+  buildContextPrefix?: (
+    payload: TaskDispatchPayload,
+  ) => Promise<{ prefix: string; commit: () => void }>;
   /**
    * 可选: 内置「对话」伪目录(chat 保留别名)的解析面。rootDir 在每次
    * dispatch 时解析当前 data owner 的 app 托管目录根，allocateDir 为新会话
@@ -252,6 +268,7 @@ const NOTICE_SESSION_GONE = 'ℹ️ 原对话现在读不到（可能已被归�
 const TITLE_SNIPPET_MAX = 24;
 /** Server-controlled source metadata is persisted and rendered, so keep it bounded locally too. */
 const SOURCE_USER_TEXT_MAX = 20_000;
+const SOURCE_TRIGGER_MESSAGE_ID_MAX = 64;
 const SOURCE_CHANNEL_NAME_MAX = 160;
 const SOURCE_TEAM_ID_MAX = 128;
 const SOURCE_TEAM_NAME_MAX = 160;
@@ -290,6 +307,14 @@ export function normalizeTaskSource(source: TaskSource): TaskSource {
     ...(threadContext !== undefined ? { threadContext } : {}),
     ...(source.userText !== undefined
       ? { userText: source.userText.slice(0, SOURCE_USER_TEXT_MAX) }
+      : {}),
+    ...(source.triggerMessageId !== undefined
+      ? {
+          triggerMessageId:
+            source.triggerMessageId === null
+              ? null
+              : source.triggerMessageId.slice(0, SOURCE_TRIGGER_MESSAGE_ID_MAX),
+        }
       : {}),
   };
 }
@@ -349,6 +374,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     bindings,
     runner,
     prepareWorktree,
+    buildContextPrefix,
     dialogue,
     abortSession,
     archiveSessionRow,
@@ -674,6 +700,8 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     /** 旧绑定作废、本次不得不新建会话时, 随 turn.end 回给渠道的说明。 */
     let recreatedNotice: string | null = null;
 
+    const laneKind: 'dm' | 'group' =
+      /^telegram:(group|topic):/.test(payload.externalKey) ? 'group' : 'dm';
     // 接管路径: server 显式指定已有 session(对话会话同样可接管)
     if (payload.sessionId !== null) {
       const info = await runner.inspect(payload.sessionId);
@@ -689,6 +717,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         run: {
           sessionId: payload.sessionId,
           isNew: false,
+          laneKind,
           workingDir: info.workingDir as string,
           agentKind,
           model,
@@ -768,6 +797,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           run: {
             sessionId: bound,
             isNew: false,
+            laneKind,
             // 尚未落库, 没有 meta 可查 —— 用建它时那个刚重新过完映射校验的目录
             workingDir: pendingDir!,
             agentKind,
@@ -807,6 +837,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           run: {
             sessionId: bound,
             isNew: false,
+            laneKind,
             workingDir,
             agentKind,
             model,
@@ -888,6 +919,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       run: {
         sessionId,
         isNew: true,
+        laneKind,
         workingDir: runDir,
         agentKind,
         model,
@@ -943,6 +975,17 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     // 同 key 串行化(见 keyChains 注释) —— 定位+入队作为一个原子段执行
     serializeByKey(`${connectionId} ${payload.externalKey}`, async () => {
       try {
+        let contextPrefix = '';
+        let commitContextCursor: () => void = () => undefined;
+        if (buildContextPrefix) {
+          try {
+            const assembly = await buildContextPrefix(dispatchPayload);
+            contextPrefix = assembly.prefix;
+            commitContextCursor = assembly.commit;
+          } catch (error) {
+            log.warn(`group context prefix failed, dispatching without it: ${String(error)}`);
+          }
+        }
         const resolved = await resolveTarget(
           connectionId,
           config,
@@ -963,7 +1006,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           connectionId,
           requestId: payload.requestId,
           externalKey: payload.externalKey,
-          run: { ...resolved.run, ...(source ? { source } : {}) },
+          run: {
+            ...resolved.run,
+            ...(contextPrefix ? { prompt: `${contextPrefix}${resolved.run.prompt}` } : {}),
+            ...(source ? { source } : {}),
+          },
           accountGeneration: admittedGeneration,
           ...(resolved.notice ? { notice: resolved.notice } : {}),
           ...(resolved.cleanupWorktree ? { cleanupWorktree: resolved.cleanupWorktree } : {}),
@@ -979,6 +1026,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           }
           queue.push(task);
           queues.set(sessionId, queue);
+          commitContextCursor();
           reply(connectionId, send, {
             requestId: payload.requestId,
             result: 'queued',
@@ -993,6 +1041,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         }
 
         running.add(sessionId);
+        commitContextCursor();
         reply(connectionId, send, {
           requestId: payload.requestId,
           result: 'accepted',

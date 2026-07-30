@@ -5,6 +5,7 @@ import {
   shouldApplyEstimatedValueEntry,
   syncEstimatedValueCostsFromStoreSnapshot,
 } from '@/hooks/useSessionEstimatedValue';
+import { combineSessionUsageMoney } from '@/hooks/useSessionUsageMoney';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import { buildTurnUsageDetails } from '../../shared/turnUsageDetails';
 import type { RegionalMoney } from '../../shared/regionalMoney';
@@ -182,5 +183,53 @@ describe('shouldApplyEstimatedValueEntry', () => {
       'persisted-history',
       false,
     )).toBe(true);
+  });
+});
+
+describe('combineSessionUsageMoney', () => {
+  it('adds CN actual cost and subscription value into one stable session total', () => {
+    const result = combineSessionUsageMoney(
+      {
+        amount: 0.393092,
+        currency: 'CNY',
+        approximate: false,
+        kind: 'actual-cost',
+      },
+      {
+        amount: 0.866712,
+        currency: 'CNY',
+        approximate: true,
+        kind: 'value-estimate',
+        estimateReasons: ['subscription-value', 'reference-price'],
+      },
+    );
+
+    expect(result.totalMoney).toMatchObject({
+      currency: 'CNY',
+      approximate: true,
+      kind: 'actual-cost',
+    });
+    expect(result.totalMoney?.amount).toBeCloseTo(1.259804, 10);
+  });
+
+  it('drops an ambiguous legacy USD estimate from an active CNY session total', () => {
+    const result = combineSessionUsageMoney(
+      {
+        amount: 1,
+        currency: 'CNY',
+        approximate: false,
+        kind: 'actual-cost',
+      },
+      {
+        amount: 1,
+        currency: 'USD',
+        approximate: true,
+        kind: 'value-estimate',
+        estimateReasons: ['legacy-usd', 'subscription-value'],
+      },
+    );
+
+    expect(result.estimatedValueMoney).toBeNull();
+    expect(result.totalMoney).toMatchObject({ amount: 1, currency: 'CNY' });
   });
 });

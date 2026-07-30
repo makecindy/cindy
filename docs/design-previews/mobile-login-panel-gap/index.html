@@ -1,0 +1,307 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#141414;color:#EDEDED;font:14px/1.5 -apple-system,"PingFang SC",sans-serif;padding:28px 24px 36px}
+  h1{font-size:22px;margin-bottom:4px}
+  .lead{color:#9A9A9A;font-size:13px;margin-bottom:22px}
+  .lead b{color:#FF8A80}
+  h2{font-size:15px;color:#C9C9C9;margin:22px 0 10px;font-weight:600}
+  .row{display:flex;gap:20px}
+  .col{flex:0 0 auto}
+  .cap{font-size:12.5px;margin-bottom:7px;display:flex;align-items:center;gap:8px;color:#B9B9B9}
+  .cap.bad{color:#FF6F60;font-weight:700}
+  .cap.pick{color:#F3C969;font-weight:700}
+  .metrics{display:flex;gap:5px;margin-bottom:7px;flex-wrap:wrap}
+  .m{font-family:ui-monospace,Menlo,monospace;font-size:10px;padding:1px 5px;border-radius:3px;background:#242424;color:#B5B5B5}
+  .m.good{background:#1E3A22;color:#9FE0A6}
+  .m.warn{background:#4A2A1A;color:#FFC79A}
+  .botzone{position:absolute;left:0;width:100%;display:flex;align-items:center;justify-content:center}
+  .botzone.ok{background:rgba(120,220,140,.10);border-top:1px dashed rgba(150,230,170,.45)}
+  .botzone.warn{background:repeating-linear-gradient(45deg,rgba(255,170,60,.20),rgba(255,170,60,.20) 7px,rgba(255,170,60,.08) 7px,rgba(255,170,60,.08) 14px);border-top:1px dashed #FFAA3C}
+  .botzone span{font-family:ui-monospace,Menlo,monospace;font-size:9.5px;color:#E9E9E9;background:rgba(0,0,0,.55);padding:0 5px;border-radius:3px}
+  .stage{position:relative;background:#1F1F1E;overflow:hidden;border-radius:10px;outline:1px solid #333}
+  .stage img,.stage .group,.stage .gapzone{position:absolute}
+  .asset,.hero{object-fit:contain}
+  .group{left:0;width:100%}
+  .panel{position:absolute;top:0;background:#FBFBFB;border-radius:18px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.06)}
+  .panel>div{position:absolute;color:#1A1A1A}
+  .p-title{left:0;width:100%;text-align:center;font-weight:700}
+  .p-sub{color:#6F6F6F}
+  .p-input{background:#EFEFEF;color:#9A9A9A;display:flex;align-items:center}
+  .p-btn{background:#1F1F1E;color:#FBFBFB;display:flex;align-items:center;justify-content:center;font-weight:600}
+  .social{position:absolute;border-radius:50%;background:#FBFBFB;opacity:.92}
+  .consent{position:absolute;display:flex;align-items:center;justify-content:center;gap:5px;color:#CFCFCF;font-size:10px}
+  .radio{width:9px;height:9px;border-radius:50%;border:1.2px solid #CFCFCF;display:inline-block}
+  .gapzone{display:flex;align-items:center;justify-content:center;font-family:ui-monospace,Menlo,monospace;font-size:11px}
+  .gapzone.bad{background:repeating-linear-gradient(45deg,rgba(255,80,60,.30),rgba(255,80,60,.30) 7px,rgba(255,80,60,.13) 7px,rgba(255,80,60,.13) 14px);border-top:1px dashed #FF6F60;border-bottom:1px dashed #FF6F60}
+  .gapzone.bad span{color:#FFD9D2;background:rgba(120,25,15,.85);padding:1px 7px;border-radius:4px}
+  .note{color:#9A9A9A;font-size:12px;line-height:1.65;margin:0 0 12px;max-width:1020px}
+  .note b{color:#DADADA}
+  .matrix{border-collapse:collapse;font-size:12.5px}
+  .matrix th,.matrix td{border:1px solid #2E2E2E;padding:5px 11px;text-align:left}
+  .matrix th{background:#1E1E1E;color:#B9B9B9;font-weight:600}
+  .matrix td{color:#D6D6D6}
+  .matrix .num{text-align:right;font-variant-numeric:tabular-nums}
+  .matrix .dim{color:#7A7A7A;font-size:11px}
+  .matrix .st{font-weight:600}
+  .matrix tr.fixed .st{color:#F3C969}
+  .matrix tr.fixed td:nth-child(4){color:#9FE0A6;font-weight:700}
+  .matrix tr.fixed td:nth-child(3){color:#FF8A7A}
+  .matrix tr.intact .st{color:#8FBF95}
+  .matrix tr.preexist .st{color:#FFAA6A}
+  .matrix tr.preexist td:nth-child(3),.matrix tr.preexist td:nth-child(4){color:#FFC79A}
+  .mono{font-family:ui-monospace,Menlo,monospace}
+  .chart{display:block;background:#161616;border:1px solid #2A2A2A;border-radius:8px}
+  .chart .grid{stroke:#2A2A2A;stroke-width:1}
+  .chart .ax{fill:#7E7E7E;font-size:10px;font-family:ui-monospace,Menlo,monospace}
+  .chart .ar{text-anchor:end}.chart .mid{text-anchor:middle}.chart .end{text-anchor:end}
+  .chart .band{fill:rgba(255,80,60,.11)}
+  .chart .ref{stroke:#6E6E6E;stroke-width:1;stroke-dasharray:3 3}
+  .chart .lab{fill:#9C9C9C;font-size:9.5px}
+  .chart .dim2{fill:#6E6E6E}
+  .chart path{fill:none;stroke-width:2}
+  .chart .c-word{stroke:#E8E8E8;stroke-dasharray:5 3}
+  .chart .c-rej{stroke:#FF6F60}
+  .chart .c-main{stroke:#6C8FC7;stroke-width:3;opacity:.75}
+  .chart .c-adopt{stroke:#F3C969;stroke-dasharray:7 4}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:9px;font-size:11.5px;color:#A8A8A8}
+  .legend i{display:inline-block;width:16px;height:3px;margin-right:6px;vertical-align:middle;border-radius:2px}
+  .legend .k-word{background:#E8E8E8}.legend .k-rej{background:#FF6F60}
+  .legend .k-main{background:#6C8FC7}.legend .k-adopt{background:#F3C969}
+  .legend .k-band{background:rgba(255,80,60,.35);height:11px;border-radius:2px}
+  .gapzone.pick{background:rgba(120,220,140,.16);border-top:1px dashed rgba(150,230,170,.55);border-bottom:1px dashed rgba(150,230,170,.55)}
+  .gapzone.pick span{color:#DFF5E4;background:rgba(20,70,35,.85);padding:1px 7px;border-radius:4px;font-size:10px}
+</style></head><body>
+<h1>手机登录页：字标底 → 登录面板顶 的间距（主干现状 vs 本 PR 修复）</h1>
+<div class="lead">两列几何都从 <code>apps/mobile/src/auth/loginSkinLayout.ts</code> 真值渲染：① 取 <code>git show origin/main</code> 的同一文件，② 取本分支工作树。资产为仓库真图、<code>contain</code> 适配同 <code>MobileLoginHandoffStage</code> 的 <code>resizeMode</code>。<b>红斜纹 = 多出来的空白</b>；✓稿 = 与 figma 新稿标注一致。
+<br><b>① 就是当前主干的实际状态</b>（PR #697 已于 2026-07-29 合并）：品牌簇已换 figma 新稿基准（<code>705:915</code> / <code>705:799</code>），但功能区落位 <code>loginY</code> 仍是配旧品牌簇的 694 / 933，两半拼接使字标底↔面板顶空出 <b>92 / 131.65 设计px</b>（实机 ≈38pt / 57pt）—— 该值在 main 改版前（18.98 / 22）和新稿（20 / 25.65）里都不存在。
+<br>② 本 PR 把 <code>loginY</code> 取回新稿标注值 <b>622 / 827</b>，间距回到稿内的 20 / 25.65。底部留白 90 / 175 比稿内的 30 / 115 各多 60（新稿手机帧面板 500 高含「跳过登录」栏，手机端已剥离该入口、面板回 440，少掉的 60 落到底部）—— 审图拍板「方案 B」，已在 <code>DESIGN.md §16.2</code> 就地记录。</div>
+<div class="rowwrap"><h2>① 基准屏对照 · 短屏 iPhone 750×1334（stage 750×1334）</h2><div class="row">
+  
+  <div class="col">
+    <div class="cap bad">① origin/main 现状（有问题）</div>
+    <div class="metrics">
+      <span class="m warn">字标↔面板 92</span>
+      <span class="m warn">底部留白 18</span>
+      <span class="m">立绘顶 60</span>
+    </div>
+    <div class="stage" style="width:465px;height:827.08px">
+      <img class="hero" src="./assets/hero.png" style="left:46.5px;top:37.2px;width:371.38px;height:446.4px">
+      <img class="asset" src="./assets/slogan-dark.png" style="left:286.781px;top:253.1894px;width:157.4862px;height:45.135999999999996px">
+      <img class="asset" src="./assets/wordmark-dark.png" style="left:128.96px;top:301.94px;width:207.7px;height:71.3px">
+      <div class="gapzone bad" style="left:0;top:373.24px;width:465px;height:57.04px">
+        <span>92</span>
+      </div>
+      <div class="group" style="top:430.28px;height:347.2px">
+        
+  <div class="panel" style="left:21.7px;width:421.6px;height:272.8px">
+    <div class="p-title" style="top:19.22px;height:23.56px;font-size:19.84px">登录 Cindy</div>
+    <div class="p-sub" style="left:43.4px;top:46.5px;width:334.8px;font-size:12.4px;line-height:14.26px">使用手机号登录</div>
+    <div class="p-input" style="left:43.4px;top:97.96px;width:334.8px;height:49.6px;border-radius:24.8px;font-size:14.879999999999999px;padding-left:19.22px">请输入手机号</div>
+    <div class="p-btn" style="left:43.4px;top:186px;width:334.8px;height:49.6px;border-radius:24.8px;font-size:14.879999999999999px">继续</div>
+  </div>
+        <div class="social" style="left:114.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="social" style="left:207.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="social" style="left:300.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="consent" style="left:21.7px;top:360.84px;width:421.6px;height:24.8px;font-size:12.4px"><span class="radio"></span>已阅读并同意《用户协议》《隐私政策》</div>
+      </div>
+      <div class="botzone warn" style="top:815.92px;height:11.16px"><span>底 18</span></div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="cap pick">② 本 PR 修复后</div>
+    <div class="metrics">
+      <span class="m good">字标↔面板 20 ✓稿</span>
+      <span class="m warn">底部留白 90</span>
+      <span class="m">立绘顶 60</span>
+    </div>
+    <div class="stage" style="width:465px;height:827.08px">
+      <img class="hero" src="./assets/hero.png" style="left:46.5px;top:37.2px;width:371.38px;height:446.4px">
+      <img class="asset" src="./assets/slogan-dark.png" style="left:286.781px;top:253.1894px;width:157.4862px;height:45.135999999999996px">
+      <img class="asset" src="./assets/wordmark-dark.png" style="left:128.96px;top:301.94px;width:207.7px;height:71.3px">
+      <div class="gapzone pick" style="left:0;top:373.24px;width:465px;height:12.4px">
+        <span>20</span>
+      </div>
+      <div class="group" style="top:385.64px;height:347.2px">
+        
+  <div class="panel" style="left:21.7px;width:421.6px;height:272.8px">
+    <div class="p-title" style="top:19.22px;height:23.56px;font-size:19.84px">登录 Cindy</div>
+    <div class="p-sub" style="left:43.4px;top:46.5px;width:334.8px;font-size:12.4px;line-height:14.26px">使用手机号登录</div>
+    <div class="p-input" style="left:43.4px;top:97.96px;width:334.8px;height:49.6px;border-radius:24.8px;font-size:14.879999999999999px;padding-left:19.22px">请输入手机号</div>
+    <div class="p-btn" style="left:43.4px;top:186px;width:334.8px;height:49.6px;border-radius:24.8px;font-size:14.879999999999999px">继续</div>
+  </div>
+        <div class="social" style="left:114.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="social" style="left:207.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="social" style="left:300.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="consent" style="left:21.7px;top:360.84px;width:421.6px;height:24.8px;font-size:12.4px"><span class="radio"></span>已阅读并同意《用户协议》《隐私政策》</div>
+      </div>
+      <div class="botzone warn" style="top:771.28px;height:55.8px"><span>底 90</span></div>
+    </div>
+  </div>
+  </div></div>
+<div class="rowwrap"><h2>① 基准屏对照 · 长屏 iPhone 750×1624（stage 750×1624）</h2><div class="row">
+  
+  <div class="col">
+    <div class="cap bad">① origin/main 现状（有问题）</div>
+    <div class="metrics">
+      <span class="m warn">字标↔面板 131.65</span>
+      <span class="m warn">底部留白 69</span>
+      <span class="m">立绘顶 106</span>
+    </div>
+    <div class="stage" style="width:465px;height:1006.88px">
+      <img class="hero" src="./assets/hero.png" style="left:0px;top:65.72px;width:465px;height:559.24px">
+      <img class="asset" src="./assets/slogan-dark.png" style="left:275.83799999999997px;top:352.16px;width:167.18920000000003px;height:47.9198px">
+      <img class="asset" src="./assets/wordmark-dark.png" style="left:112.84px;top:414.88539999999995px;width:239.94px;height:81.9516px">
+      <div class="gapzone bad" style="left:0;top:496.83699999999993px;width:465px;height:81.623px">
+        <span>131.65</span>
+      </div>
+      <div class="group" style="top:578.46px;height:347.2px">
+        
+  <div class="panel" style="left:21.7px;width:421.6px;height:272.8px">
+    <div class="p-title" style="top:19.22px;height:23.56px;font-size:19.84px">登录 Cindy</div>
+    <div class="p-sub" style="left:43.4px;top:46.5px;width:334.8px;font-size:12.4px;line-height:14.26px">使用手机号登录</div>
+    <div class="p-input" style="left:43.4px;top:97.96px;width:334.8px;height:49.6px;border-radius:24.8px;font-size:14.879999999999999px;padding-left:19.22px">请输入手机号</div>
+    <div class="p-btn" style="left:43.4px;top:186px;width:334.8px;height:49.6px;border-radius:24.8px;font-size:14.879999999999999px">继续</div>
+  </div>
+        <div class="social" style="left:114.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="social" style="left:207.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="social" style="left:300.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="consent" style="left:21.7px;top:360.84px;width:421.6px;height:24.8px;font-size:12.4px"><span class="radio"></span>已阅读并同意《用户协议》《隐私政策》</div>
+      </div>
+      <div class="botzone warn" style="top:964.1px;height:42.78px"><span>底 69</span></div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="cap pick">② 本 PR 修复后</div>
+    <div class="metrics">
+      <span class="m good">字标↔面板 25.65 ✓稿</span>
+      <span class="m warn">底部留白 175</span>
+      <span class="m">立绘顶 106</span>
+    </div>
+    <div class="stage" style="width:465px;height:1006.88px">
+      <img class="hero" src="./assets/hero.png" style="left:0px;top:65.72px;width:465px;height:559.24px">
+      <img class="asset" src="./assets/slogan-dark.png" style="left:275.83799999999997px;top:352.16px;width:167.18920000000003px;height:47.9198px">
+      <img class="asset" src="./assets/wordmark-dark.png" style="left:112.84px;top:414.88539999999995px;width:239.94px;height:81.9516px">
+      <div class="gapzone pick" style="left:0;top:496.83699999999993px;width:465px;height:15.902999999999999px">
+        <span>25.65</span>
+      </div>
+      <div class="group" style="top:512.74px;height:347.2px">
+        
+  <div class="panel" style="left:21.7px;width:421.6px;height:272.8px">
+    <div class="p-title" style="top:19.22px;height:23.56px;font-size:19.84px">登录 Cindy</div>
+    <div class="p-sub" style="left:43.4px;top:46.5px;width:334.8px;font-size:12.4px;line-height:14.26px">使用手机号登录</div>
+    <div class="p-input" style="left:43.4px;top:97.96px;width:334.8px;height:49.6px;border-radius:24.8px;font-size:14.879999999999999px;padding-left:19.22px">请输入手机号</div>
+    <div class="p-btn" style="left:43.4px;top:186px;width:334.8px;height:49.6px;border-radius:24.8px;font-size:14.879999999999999px">继续</div>
+  </div>
+        <div class="social" style="left:114.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="social" style="left:207.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="social" style="left:300.7px;top:297.6px;width:49.6px;height:49.6px"></div><div class="consent" style="left:21.7px;top:360.84px;width:421.6px;height:24.8px;font-size:12.4px"><span class="radio"></span>已阅读并同意《用户协议》《隐私政策》</div>
+      </div>
+      <div class="botzone warn" style="top:898.38px;height:108.5px"><span>底 175</span></div>
+    </div>
+  </div>
+  </div></div>
+<div class="rowwrap">
+    <h2>② 全形态覆盖矩阵（12 种形态，<code>resolveLoginSurface()</code> 实算）</h2>
+    <div class="note">「字标底 → 面板顶」间距（设计px）。<b>已修</b> = 本 PR 改变了该形态的间距；
+      <b>未变 · 自洽</b> = 两版同值且为健康正间距（pad 两档品牌簇未换稿、与自己的 loginY 同源；
+      窄屏压缩段沿用 main 的紧凑底距）；<b>既有问题</b> = 负间距（面板盖住字标）且 main 逐值相同，
+      非本 PR 引入，属「功能区优先」在极扁视口下的既定结果。</div>
+    <table class="matrix">
+      <thead><tr><th>形态</th><th>mode</th><th>main 间距</th><th>本 PR 间距</th><th>状态</th></tr></thead>
+      <tbody><tr class="fixed">
+      <td>iPhone SE<span class="dim"> 375×667</span></td>
+      <td class="mono">phone</td>
+      <td class="mono num">92</td>
+      <td class="mono num">20</td>
+      <td class="st">已修</td>
+    </tr><tr class="fixed">
+      <td>iPhone 15<span class="dim"> 393×852</span></td>
+      <td class="mono">phone</td>
+      <td class="mono num">131.65</td>
+      <td class="mono num">25.65</td>
+      <td class="st">已修</td>
+    </tr><tr class="fixed">
+      <td>iPhone Pro Max<span class="dim"> 430×932</span></td>
+      <td class="mono">phone</td>
+      <td class="mono num">131.65</td>
+      <td class="mono num">25.65</td>
+      <td class="st">已修</td>
+    </tr><tr class="fixed">
+      <td>Split 窄窗<span class="dim"> 320×680</span></td>
+      <td class="mono">phone</td>
+      <td class="mono num">127.51</td>
+      <td class="mono num">25.06</td>
+      <td class="st">已修</td>
+    </tr><tr class="fixed">
+      <td>iPad 分屏窄<span class="dim"> 507×1133</span></td>
+      <td class="mono">phone</td>
+      <td class="mono num">131.65</td>
+      <td class="mono num">25.65</td>
+      <td class="st">已修</td>
+    </tr><tr class="intact">
+      <td>折叠内屏<span class="dim"> 673×841</span></td>
+      <td class="mono">phone</td>
+      <td class="mono num">20.64</td>
+      <td class="mono num">20.64</td>
+      <td class="st">未变 · 自洽</td>
+    </tr><tr class="intact">
+      <td>Android 分屏<span class="dim"> 393×450</span></td>
+      <td class="mono">phone</td>
+      <td class="mono num">6.54</td>
+      <td class="mono num">6.54</td>
+      <td class="st">未变 · 自洽</td>
+    </tr><tr class="intact">
+      <td>iPad mini 竖<span class="dim"> 744×1133</span></td>
+      <td class="mono">pad 竖</td>
+      <td class="mono num">14.84</td>
+      <td class="mono num">14.84</td>
+      <td class="st">未变 · 自洽</td>
+    </tr><tr class="intact">
+      <td>iPad Pro 竖<span class="dim"> 1024×1366</span></td>
+      <td class="mono">pad 竖</td>
+      <td class="mono num">14.84</td>
+      <td class="mono num">14.84</td>
+      <td class="st">未变 · 自洽</td>
+    </tr><tr class="intact">
+      <td>iPad 横<span class="dim"> 1180×820</span></td>
+      <td class="mono">pad 横</td>
+      <td class="mono num">33.88</td>
+      <td class="mono num">33.88</td>
+      <td class="st">未变 · 自洽</td>
+    </tr><tr class="intact">
+      <td>iPad Pro 横<span class="dim"> 1366×1024</span></td>
+      <td class="mono">pad 横</td>
+      <td class="mono num">33.88</td>
+      <td class="mono num">33.88</td>
+      <td class="st">未变 · 自洽</td>
+    </tr><tr class="preexist">
+      <td>iPhone 手机横屏<span class="dim"> 852×393</span></td>
+      <td class="mono">phone</td>
+      <td class="mono num">-150.5</td>
+      <td class="mono num">-150.5</td>
+      <td class="st">既有问题（main 同值）</td>
+    </tr></tbody>
+    </table>
+  </div>
+<div class="rowwrap">
+    <h2>③ 窄屏分支 <code>dh&lt;1334</code>：三种落位公式 vs 被压缩后的字标底</h2>
+    <div class="note">纵轴 = stage 设计px，横轴 = <code>designHeight</code>。
+      <b>面板顶（loginY）落到字标底之下即发生遮挡</b>（不透明面板盖住字标）。
+      被否的 <code>dh-712</code>（红）在 <b>dh∈[600,1222]</b> 全段位于字标底之下 ——
+      这正是评审实算否掉它的依据（dh=1000 处压 40 设计px）；采纳的钳制式（黄虚线）与 main 的
+      <code>dh-640</code>（蓝）在 dh&lt;1262 <b>完全重合</b>（窄屏行为与 main 逐值一致），
+      自 dh=1262 起钳在 622 不再上移，并在 dh→1334⁻ 与短屏档连续。
+      左端 <code>dh&lt;822</code> 处字标底高于三条落位线 = 字标本就与面板交叠（main 既有行为，本 PR 未恶化）。</div>
+    <svg class="chart" viewBox="0 0 760 320" width="760" height="320" role="img"
+      aria-label="窄屏分支三种落位公式与字标底的对比折线图">
+      <rect x="52.0" y="20" width="586.4" height="252" class="band"/>
+      <line x1="52" x2="744" y1="272.0" y2="272.0" class="grid"/><text x="44" y="275.5" class="ax ar">0</text><line x1="52" x2="744" y1="202.0" y2="202.0" class="grid"/><text x="44" y="205.5" class="ax ar">200</text><line x1="52" x2="744" y1="132.0" y2="132.0" class="grid"/><text x="44" y="135.5" class="ax ar">400</text><line x1="52" x2="744" y1="54.3" y2="54.3" class="grid"/><text x="44" y="57.8" class="ax ar">622</text>
+      <line y1="20" y2="272" x1="52.0" x2="52.0" class="grid"/><text y="287" x="52.0" class="ax mid">600</text><line y1="20" y2="272" x1="157.6" x2="157.6" class="grid"/><text y="287" x="157.6" class="ax mid">712</text><line y1="20" y2="272" x1="261.3" x2="261.3" class="grid"/><text y="287" x="261.3" class="ax mid">822</text><line y1="20" y2="272" x1="429.1" x2="429.1" class="grid"/><text y="287" x="429.1" class="ax mid">1000</text><line y1="20" y2="272" x1="744.0" x2="744.0" class="grid"/><text y="287" x="744.0" class="ax mid">1334</text>
+      <line x1="52" x2="744" y1="54.3" y2="54.3" class="ref"/>
+      <text x="58" y="49.3" class="ax lab">钳制上限 622（= 短屏档 loginY）</text>
+      <line x1="676.1" x2="676.1" y1="20" y2="272" class="ref"/><text x="670.1" y="32" class="ax ar lab">dh=1262 起钳制生效</text>
+      <path d="M52.0,219.3L53.9,219.3L55.8,219.3L57.7,219.3L59.5,219.3L61.4,219.3L63.3,219.3L65.2,219.3L67.1,219.3L69.0,219.3L70.9,219.3L72.7,219.3L74.6,219.3L76.5,219.3L78.4,219.3L80.3,219.3L82.2,219.3L84.1,219.3L85.9,219.3L87.8,219.3L89.7,219.3L91.6,219.3L93.5,219.3L95.4,219.3L97.3,219.3L99.1,219.3L101.0,219.3L102.9,219.3L104.8,219.3L106.7,219.3L108.6,219.3L110.5,219.3L112.3,219.3L114.2,219.3L116.1,219.3L118.0,219.3L119.9,219.3L121.8,219.3L123.7,219.3L125.5,219.3L127.4,219.3L129.3,219.3L131.2,219.3L133.1,219.3L135.0,219.3L136.9,219.3L138.7,219.3L140.6,219.3L142.5,219.3L144.4,219.3L146.3,219.3L148.2,219.3L150.0,219.3L151.9,219.3L153.8,219.3L155.7,219.3L157.6,219.3L159.5,219.3L161.4,219.3L163.2,219.3L165.1,219.3L167.0,219.3L168.9,219.3L170.8,219.3L172.7,219.3L174.6,219.3L176.4,219.3L178.3,219.3L180.2,219.3L182.1,219.3L184.0,219.3L185.9,219.3L187.8,219.3L189.6,219.3L191.5,219.3L193.4,219.3L195.3,219.3L197.2,219.3L199.1,219.3L201.0,219.3L202.8,219.3L204.7,219.3L206.6,219.3L208.5,219.3L210.4,219.3L212.3,219.3L214.2,219.3L216.0,219.3L217.9,219.3L219.8,219.3L221.7,219.3L223.6,219.3L225.5,219.2L227.4,218.6L229.2,218.0L231.1,217.5L233.0,216.9L234.9,216.3L236.8,215.7L238.7,215.2L240.6,214.6L242.4,214.0L244.3,213.4L246.2,212.9L248.1,212.3L250.0,211.7L251.9,211.1L253.8,210.6L255.6,210.0L257.5,209.4L259.4,208.8L261.3,208.3L263.2,207.7L265.1,207.1L267.0,206.6L268.8,206.0L270.7,205.4L272.6,204.8L274.5,204.3L276.4,203.7L278.3,203.1L280.2,202.5L282.0,202.0L283.9,201.4L285.8,200.8L287.7,200.2L289.6,199.7L291.5,199.1L293.4,198.5L295.2,197.9L297.1,197.4L299.0,196.8L300.9,196.2L302.8,195.6L304.7,195.1L306.6,194.5L308.4,193.9L310.3,193.3L312.2,192.8L314.1,192.2L316.0,191.6L317.9,191.0L319.7,190.5L321.6,189.9L323.5,189.3L325.4,188.8L327.3,188.2L329.2,187.6L331.1,187.0L332.9,186.5L334.8,185.9L336.7,185.3L338.6,184.7L340.5,184.2L342.4,183.6L344.3,183.0L346.1,182.4L348.0,181.9L349.9,181.3L351.8,180.7L353.7,180.1L355.6,179.6L357.5,179.0L359.3,178.4L361.2,177.8L363.1,177.3L365.0,176.7L366.9,176.1L368.8,175.6L370.7,175.0L372.5,174.4L374.4,173.8L376.3,173.3L378.2,172.7L380.1,172.1L382.0,171.5L383.9,171.0L385.7,170.4L387.6,169.8L389.5,169.2L391.4,168.7L393.3,168.1L395.2,167.5L397.1,166.9L398.9,166.4L400.8,165.8L402.7,165.2L404.6,164.6L406.5,164.1L408.4,163.5L410.3,162.9L412.1,162.3L414.0,161.8L415.9,161.2L417.8,160.6L419.7,160.0L421.6,159.5L423.5,158.9L425.3,158.3L427.2,157.7L429.1,157.2L431.0,156.6L432.9,156.0L434.8,155.5L436.7,154.9L438.5,154.3L440.4,153.7L442.3,153.2L444.2,152.6L446.1,152.0L448.0,151.4L449.9,150.9L451.7,150.3L453.6,149.7L455.5,149.1L457.4,148.6L459.3,148.0L461.2,147.4L463.1,146.8L464.9,146.3L466.8,145.7L468.7,145.1L470.6,144.5L472.5,144.0L474.4,143.4L476.3,142.8L478.1,142.3L480.0,141.7L481.9,141.1L483.8,140.5L485.7,140.0L487.6,139.4L489.4,138.8L491.3,138.2L493.2,137.7L495.1,137.1L497.0,136.5L498.9,135.9L500.8,135.4L502.6,134.8L504.5,134.2L506.4,133.6L508.3,133.1L510.2,132.5L512.1,131.9L514.0,131.3L515.8,130.8L517.7,130.2L519.6,129.6L521.5,129.0L523.4,128.5L525.3,127.9L527.2,127.3L529.0,126.8L530.9,126.2L532.8,125.6L534.7,125.0L536.6,124.5L538.5,123.9L540.4,123.3L542.2,122.7L544.1,122.2L546.0,121.6L547.9,121.0L549.8,120.4L551.7,119.9L553.6,119.3L555.4,118.7L557.3,118.1L559.2,117.6L561.1,117.0L563.0,116.4L564.9,115.8L566.8,115.3L568.6,114.7L570.5,114.1L572.4,113.5L574.3,113.0L576.2,112.4L578.1,111.8L580.0,111.2L581.8,110.7L583.7,110.1L585.6,109.5L587.5,109.0L589.4,108.4L591.3,107.8L593.2,107.2L595.0,106.7L596.9,106.1L598.8,105.5L600.7,104.9L602.6,104.4L604.5,103.8L606.4,103.2L608.2,102.6L610.1,102.1L612.0,101.5L613.9,100.9L615.8,100.3L617.7,99.8L619.6,99.2L621.4,98.6L623.3,98.0L625.2,97.5L627.1,96.9L629.0,96.3L630.9,95.7L632.8,95.2L634.6,94.6L636.5,94.0L638.4,93.5L640.3,92.9L642.2,92.3L644.1,91.7L646.0,91.2L647.8,90.6L649.7,90.0L651.6,89.4L653.5,88.9L655.4,88.3L657.3,87.7L659.1,87.1L661.0,86.6L662.9,86.0L664.8,85.4L666.7,84.8L668.6,84.3L670.5,83.7L672.3,83.1L674.2,82.5L676.1,82.0L678.0,81.4L679.9,80.8L681.8,80.2L683.7,79.7L685.5,79.1L687.4,78.5L689.3,77.9L691.2,77.4L693.1,76.8L695.0,76.2L696.9,75.7L698.7,75.1L700.6,74.5L702.5,73.9L704.4,73.4L706.3,72.8L708.2,72.2L710.1,71.6L711.9,71.1L713.8,70.5L715.7,69.9L717.6,69.3L719.5,68.8L721.4,68.2L723.3,67.6L725.1,67.0L727.0,66.5L728.9,65.9L730.8,65.3L732.7,64.7L734.6,64.2L736.5,63.6L738.3,63.0L740.2,62.4L742.1,61.9L744.0,61.3" class="c-word"/>
+      <path d="M52.0,272.0L53.9,272.0L55.8,272.0L57.7,272.0L59.5,272.0L61.4,272.0L63.3,272.0L65.2,272.0L67.1,272.0L69.0,272.0L70.9,272.0L72.7,272.0L74.6,272.0L76.5,272.0L78.4,272.0L80.3,272.0L82.2,272.0L84.1,272.0L85.9,272.0L87.8,272.0L89.7,272.0L91.6,272.0L93.5,272.0L95.4,272.0L97.3,272.0L99.1,272.0L101.0,272.0L102.9,272.0L104.8,272.0L106.7,272.0L108.6,272.0L110.5,272.0L112.3,272.0L114.2,272.0L116.1,272.0L118.0,272.0L119.9,272.0L121.8,272.0L123.7,272.0L125.5,272.0L127.4,272.0L129.3,272.0L131.2,272.0L133.1,272.0L135.0,272.0L136.9,272.0L138.7,272.0L140.6,272.0L142.5,272.0L144.4,272.0L146.3,272.0L148.2,272.0L150.0,272.0L151.9,272.0L153.8,272.0L155.7,272.0L157.6,272.0L159.5,271.3L161.4,270.6L163.2,269.9L165.1,269.2L167.0,268.5L168.9,267.8L170.8,267.1L172.7,266.4L174.6,265.7L176.4,265.0L178.3,264.3L180.2,263.6L182.1,262.9L184.0,262.2L185.9,261.5L187.8,260.8L189.6,260.1L191.5,259.4L193.4,258.7L195.3,258.0L197.2,257.3L199.1,256.6L201.0,255.9L202.8,255.2L204.7,254.5L206.6,253.8L208.5,253.1L210.4,252.4L212.3,251.7L214.2,251.0L216.0,250.3L217.9,249.6L219.8,248.9L221.7,248.2L223.6,247.5L225.5,246.8L227.4,246.1L229.2,245.4L231.1,244.7L233.0,244.0L234.9,243.3L236.8,242.6L238.7,241.9L240.6,241.2L242.4,240.5L244.3,239.8L246.2,239.1L248.1,238.4L250.0,237.7L251.9,237.0L253.8,236.3L255.6,235.6L257.5,234.9L259.4,234.2L261.3,233.5L263.2,232.8L265.1,232.1L267.0,231.4L268.8,230.7L270.7,230.0L272.6,229.3L274.5,228.6L276.4,227.9L278.3,227.2L280.2,226.5L282.0,225.8L283.9,225.1L285.8,224.4L287.7,223.7L289.6,223.0L291.5,222.3L293.4,221.6L295.2,220.9L297.1,220.2L299.0,219.5L300.9,218.8L302.8,218.1L304.7,217.4L306.6,216.7L308.4,216.0L310.3,215.3L312.2,214.6L314.1,213.9L316.0,213.2L317.9,212.5L319.7,211.8L321.6,211.1L323.5,210.4L325.4,209.7L327.3,209.0L329.2,208.3L331.1,207.6L332.9,206.9L334.8,206.2L336.7,205.5L338.6,204.8L340.5,204.1L342.4,203.4L344.3,202.7L346.1,202.0L348.0,201.3L349.9,200.6L351.8,199.9L353.7,199.2L355.6,198.5L357.5,197.8L359.3,197.1L361.2,196.4L363.1,195.7L365.0,195.0L366.9,194.3L368.8,193.6L370.7,192.9L372.5,192.2L374.4,191.5L376.3,190.8L378.2,190.1L380.1,189.4L382.0,188.7L383.9,188.0L385.7,187.3L387.6,186.6L389.5,185.9L391.4,185.2L393.3,184.5L395.2,183.8L397.1,183.1L398.9,182.4L400.8,181.7L402.7,181.0L404.6,180.3L406.5,179.6L408.4,178.9L410.3,178.2L412.1,177.5L414.0,176.8L415.9,176.1L417.8,175.4L419.7,174.7L421.6,174.0L423.5,173.3L425.3,172.6L427.2,171.9L429.1,171.2L431.0,170.5L432.9,169.8L434.8,169.1L436.7,168.4L438.5,167.7L440.4,167.0L442.3,166.3L444.2,165.6L446.1,164.9L448.0,164.2L449.9,163.5L451.7,162.8L453.6,162.1L455.5,161.4L457.4,160.7L459.3,160.0L461.2,159.3L463.1,158.6L464.9,157.9L466.8,157.2L468.7,156.5L470.6,155.8L472.5,155.1L474.4,154.4L476.3,153.7L478.1,153.0L480.0,152.3L481.9,151.6L483.8,150.9L485.7,150.2L487.6,149.5L489.4,148.8L491.3,148.1L493.2,147.4L495.1,146.7L497.0,146.0L498.9,145.3L500.8,144.6L502.6,143.9L504.5,143.2L506.4,142.5L508.3,141.8L510.2,141.1L512.1,140.4L514.0,139.7L515.8,139.0L517.7,138.3L519.6,137.6L521.5,136.9L523.4,136.2L525.3,135.5L527.2,134.8L529.0,134.1L530.9,133.4L532.8,132.7L534.7,132.0L536.6,131.3L538.5,130.6L540.4,129.9L542.2,129.2L544.1,128.5L546.0,127.8L547.9,127.1L549.8,126.4L551.7,125.7L553.6,125.0L555.4,124.3L557.3,123.6L559.2,122.9L561.1,122.2L563.0,121.5L564.9,120.8L566.8,120.1L568.6,119.4L570.5,118.7L572.4,118.0L574.3,117.3L576.2,116.6L578.1,115.9L580.0,115.2L581.8,114.5L583.7,113.8L585.6,113.1L587.5,112.4L589.4,111.7L591.3,111.0L593.2,110.3L595.0,109.6L596.9,108.9L598.8,108.2L600.7,107.5L602.6,106.8L604.5,106.1L606.4,105.4L608.2,104.7L610.1,104.0L612.0,103.3L613.9,102.6L615.8,101.9L617.7,101.2L619.6,100.5L621.4,99.8L623.3,99.1L625.2,98.4L627.1,97.7L629.0,97.0L630.9,96.3L632.8,95.6L634.6,94.9L636.5,94.2L638.4,93.5L640.3,92.8L642.2,92.1L644.1,91.4L646.0,90.7L647.8,90.0L649.7,89.3L651.6,88.6L653.5,87.9L655.4,87.2L657.3,86.5L659.1,85.8L661.0,85.1L662.9,84.4L664.8,83.7L666.7,83.0L668.6,82.3L670.5,81.6L672.3,80.9L674.2,80.2L676.1,79.5L678.0,78.8L679.9,78.1L681.8,77.4L683.7,76.7L685.5,76.0L687.4,75.3L689.3,74.6L691.2,73.9L693.1,73.2L695.0,72.5L696.9,71.8L698.7,71.1L700.6,70.4L702.5,69.7L704.4,69.0L706.3,68.3L708.2,67.6L710.1,66.9L711.9,66.2L713.8,65.5L715.7,64.8L717.6,64.1L719.5,63.4L721.4,62.7L723.3,62.0L725.1,61.3L727.0,60.6L728.9,59.9L730.8,59.2L732.7,58.5L734.6,57.8L736.5,57.1L738.3,56.4L740.2,55.7L742.1,55.0L744.0,54.3" class="c-rej"/>
+      <path d="M52.0,272.0L53.9,272.0L55.8,272.0L57.7,272.0L59.5,272.0L61.4,272.0L63.3,272.0L65.2,272.0L67.1,272.0L69.0,272.0L70.9,272.0L72.7,272.0L74.6,272.0L76.5,272.0L78.4,272.0L80.3,272.0L82.2,272.0L84.1,272.0L85.9,272.0L87.8,272.0L89.7,272.0L91.6,271.3L93.5,270.6L95.4,269.9L97.3,269.2L99.1,268.5L101.0,267.8L102.9,267.1L104.8,266.4L106.7,265.7L108.6,265.0L110.5,264.3L112.3,263.6L114.2,262.9L116.1,262.2L118.0,261.5L119.9,260.8L121.8,260.1L123.7,259.4L125.5,258.7L127.4,258.0L129.3,257.3L131.2,256.6L133.1,255.9L135.0,255.2L136.9,254.5L138.7,253.8L140.6,253.1L142.5,252.4L144.4,251.7L146.3,251.0L148.2,250.3L150.0,249.6L151.9,248.9L153.8,248.2L155.7,247.5L157.6,246.8L159.5,246.1L161.4,245.4L163.2,244.7L165.1,244.0L167.0,243.3L168.9,242.6L170.8,241.9L172.7,241.2L174.6,240.5L176.4,239.8L178.3,239.1L180.2,238.4L182.1,237.7L184.0,237.0L185.9,236.3L187.8,235.6L189.6,234.9L191.5,234.2L193.4,233.5L195.3,232.8L197.2,232.1L199.1,231.4L201.0,230.7L202.8,230.0L204.7,229.3L206.6,228.6L208.5,227.9L210.4,227.2L212.3,226.5L214.2,225.8L216.0,225.1L217.9,224.4L219.8,223.7L221.7,223.0L223.6,222.3L225.5,221.6L227.4,220.9L229.2,220.2L231.1,219.5L233.0,218.8L234.9,218.1L236.8,217.4L238.7,216.7L240.6,216.0L242.4,215.3L244.3,214.6L246.2,213.9L248.1,213.2L250.0,212.5L251.9,211.8L253.8,211.1L255.6,210.4L257.5,209.7L259.4,209.0L261.3,208.3L263.2,207.6L265.1,206.9L267.0,206.2L268.8,205.5L270.7,204.8L272.6,204.1L274.5,203.4L276.4,202.7L278.3,202.0L280.2,201.3L282.0,200.6L283.9,199.9L285.8,199.2L287.7,198.5L289.6,197.8L291.5,197.1L293.4,196.4L295.2,195.7L297.1,195.0L299.0,194.3L300.9,193.6L302.8,192.9L304.7,192.2L306.6,191.5L308.4,190.8L310.3,190.1L312.2,189.4L314.1,188.7L316.0,188.0L317.9,187.3L319.7,186.6L321.6,185.9L323.5,185.2L325.4,184.5L327.3,183.8L329.2,183.1L331.1,182.4L332.9,181.7L334.8,181.0L336.7,180.3L338.6,179.6L340.5,178.9L342.4,178.2L344.3,177.5L346.1,176.8L348.0,176.1L349.9,175.4L351.8,174.7L353.7,174.0L355.6,173.3L357.5,172.6L359.3,171.9L361.2,171.2L363.1,170.5L365.0,169.8L366.9,169.1L368.8,168.4L370.7,167.7L372.5,167.0L374.4,166.3L376.3,165.6L378.2,164.9L380.1,164.2L382.0,163.5L383.9,162.8L385.7,162.1L387.6,161.4L389.5,160.7L391.4,160.0L393.3,159.3L395.2,158.6L397.1,157.9L398.9,157.2L400.8,156.5L402.7,155.8L404.6,155.1L406.5,154.4L408.4,153.7L410.3,153.0L412.1,152.3L414.0,151.6L415.9,150.9L417.8,150.2L419.7,149.5L421.6,148.8L423.5,148.1L425.3,147.4L427.2,146.7L429.1,146.0L431.0,145.3L432.9,144.6L434.8,143.9L436.7,143.2L438.5,142.5L440.4,141.8L442.3,141.1L444.2,140.4L446.1,139.7L448.0,139.0L449.9,138.3L451.7,137.6L453.6,136.9L455.5,136.2L457.4,135.5L459.3,134.8L461.2,134.1L463.1,133.4L464.9,132.7L466.8,132.0L468.7,131.3L470.6,130.6L472.5,129.9L474.4,129.2L476.3,128.5L478.1,127.8L480.0,127.1L481.9,126.4L483.8,125.7L485.7,125.0L487.6,124.3L489.4,123.6L491.3,122.9L493.2,122.2L495.1,121.5L497.0,120.8L498.9,120.1L500.8,119.4L502.6,118.7L504.5,118.0L506.4,117.3L508.3,116.6L510.2,115.9L512.1,115.2L514.0,114.5L515.8,113.8L517.7,113.1L519.6,112.4L521.5,111.7L523.4,111.0L525.3,110.3L527.2,109.6L529.0,108.9L530.9,108.2L532.8,107.5L534.7,106.8L536.6,106.1L538.5,105.4L540.4,104.7L542.2,104.0L544.1,103.3L546.0,102.6L547.9,101.9L549.8,101.2L551.7,100.5L553.6,99.8L555.4,99.1L557.3,98.4L559.2,97.7L561.1,97.0L563.0,96.3L564.9,95.6L566.8,94.9L568.6,94.2L570.5,93.5L572.4,92.8L574.3,92.1L576.2,91.4L578.1,90.7L580.0,90.0L581.8,89.3L583.7,88.6L585.6,87.9L587.5,87.2L589.4,86.5L591.3,85.8L593.2,85.1L595.0,84.4L596.9,83.7L598.8,83.0L600.7,82.3L602.6,81.6L604.5,80.9L606.4,80.2L608.2,79.5L610.1,78.8L612.0,78.1L613.9,77.4L615.8,76.7L617.7,76.0L619.6,75.3L621.4,74.6L623.3,73.9L625.2,73.2L627.1,72.5L629.0,71.8L630.9,71.1L632.8,70.4L634.6,69.7L636.5,69.0L638.4,68.3L640.3,67.6L642.2,66.9L644.1,66.2L646.0,65.5L647.8,64.8L649.7,64.1L651.6,63.4L653.5,62.7L655.4,62.0L657.3,61.3L659.1,60.6L661.0,59.9L662.9,59.2L664.8,58.5L666.7,57.8L668.6,57.1L670.5,56.4L672.3,55.7L674.2,55.0L676.1,54.3L678.0,53.6L679.9,52.9L681.8,52.2L683.7,51.5L685.5,50.8L687.4,50.1L689.3,49.4L691.2,48.7L693.1,48.0L695.0,47.3L696.9,46.6L698.7,45.9L700.6,45.2L702.5,44.5L704.4,43.8L706.3,43.1L708.2,42.4L710.1,41.7L711.9,41.0L713.8,40.3L715.7,39.6L717.6,38.9L719.5,38.2L721.4,37.5L723.3,36.8L725.1,36.1L727.0,35.4L728.9,34.7L730.8,34.0L732.7,33.3L734.6,32.6L736.5,31.9L738.3,31.2L740.2,30.5L742.1,29.8L744.0,29.1" class="c-main"/>
+      <path d="M52.0,272.0L53.9,272.0L55.8,272.0L57.7,272.0L59.5,272.0L61.4,272.0L63.3,272.0L65.2,272.0L67.1,272.0L69.0,272.0L70.9,272.0L72.7,272.0L74.6,272.0L76.5,272.0L78.4,272.0L80.3,272.0L82.2,272.0L84.1,272.0L85.9,272.0L87.8,272.0L89.7,272.0L91.6,271.3L93.5,270.6L95.4,269.9L97.3,269.2L99.1,268.5L101.0,267.8L102.9,267.1L104.8,266.4L106.7,265.7L108.6,265.0L110.5,264.3L112.3,263.6L114.2,262.9L116.1,262.2L118.0,261.5L119.9,260.8L121.8,260.1L123.7,259.4L125.5,258.7L127.4,258.0L129.3,257.3L131.2,256.6L133.1,255.9L135.0,255.2L136.9,254.5L138.7,253.8L140.6,253.1L142.5,252.4L144.4,251.7L146.3,251.0L148.2,250.3L150.0,249.6L151.9,248.9L153.8,248.2L155.7,247.5L157.6,246.8L159.5,246.1L161.4,245.4L163.2,244.7L165.1,244.0L167.0,243.3L168.9,242.6L170.8,241.9L172.7,241.2L174.6,240.5L176.4,239.8L178.3,239.1L180.2,238.4L182.1,237.7L184.0,237.0L185.9,236.3L187.8,235.6L189.6,234.9L191.5,234.2L193.4,233.5L195.3,232.8L197.2,232.1L199.1,231.4L201.0,230.7L202.8,230.0L204.7,229.3L206.6,228.6L208.5,227.9L210.4,227.2L212.3,226.5L214.2,225.8L216.0,225.1L217.9,224.4L219.8,223.7L221.7,223.0L223.6,222.3L225.5,221.6L227.4,220.9L229.2,220.2L231.1,219.5L233.0,218.8L234.9,218.1L236.8,217.4L238.7,216.7L240.6,216.0L242.4,215.3L244.3,214.6L246.2,213.9L248.1,213.2L250.0,212.5L251.9,211.8L253.8,211.1L255.6,210.4L257.5,209.7L259.4,209.0L261.3,208.3L263.2,207.6L265.1,206.9L267.0,206.2L268.8,205.5L270.7,204.8L272.6,204.1L274.5,203.4L276.4,202.7L278.3,202.0L280.2,201.3L282.0,200.6L283.9,199.9L285.8,199.2L287.7,198.5L289.6,197.8L291.5,197.1L293.4,196.4L295.2,195.7L297.1,195.0L299.0,194.3L300.9,193.6L302.8,192.9L304.7,192.2L306.6,191.5L308.4,190.8L310.3,190.1L312.2,189.4L314.1,188.7L316.0,188.0L317.9,187.3L319.7,186.6L321.6,185.9L323.5,185.2L325.4,184.5L327.3,183.8L329.2,183.1L331.1,182.4L332.9,181.7L334.8,181.0L336.7,180.3L338.6,179.6L340.5,178.9L342.4,178.2L344.3,177.5L346.1,176.8L348.0,176.1L349.9,175.4L351.8,174.7L353.7,174.0L355.6,173.3L357.5,172.6L359.3,171.9L361.2,171.2L363.1,170.5L365.0,169.8L366.9,169.1L368.8,168.4L370.7,167.7L372.5,167.0L374.4,166.3L376.3,165.6L378.2,164.9L380.1,164.2L382.0,163.5L383.9,162.8L385.7,162.1L387.6,161.4L389.5,160.7L391.4,160.0L393.3,159.3L395.2,158.6L397.1,157.9L398.9,157.2L400.8,156.5L402.7,155.8L404.6,155.1L406.5,154.4L408.4,153.7L410.3,153.0L412.1,152.3L414.0,151.6L415.9,150.9L417.8,150.2L419.7,149.5L421.6,148.8L423.5,148.1L425.3,147.4L427.2,146.7L429.1,146.0L431.0,145.3L432.9,144.6L434.8,143.9L436.7,143.2L438.5,142.5L440.4,141.8L442.3,141.1L444.2,140.4L446.1,139.7L448.0,139.0L449.9,138.3L451.7,137.6L453.6,136.9L455.5,136.2L457.4,135.5L459.3,134.8L461.2,134.1L463.1,133.4L464.9,132.7L466.8,132.0L468.7,131.3L470.6,130.6L472.5,129.9L474.4,129.2L476.3,128.5L478.1,127.8L480.0,127.1L481.9,126.4L483.8,125.7L485.7,125.0L487.6,124.3L489.4,123.6L491.3,122.9L493.2,122.2L495.1,121.5L497.0,120.8L498.9,120.1L500.8,119.4L502.6,118.7L504.5,118.0L506.4,117.3L508.3,116.6L510.2,115.9L512.1,115.2L514.0,114.5L515.8,113.8L517.7,113.1L519.6,112.4L521.5,111.7L523.4,111.0L525.3,110.3L527.2,109.6L529.0,108.9L530.9,108.2L532.8,107.5L534.7,106.8L536.6,106.1L538.5,105.4L540.4,104.7L542.2,104.0L544.1,103.3L546.0,102.6L547.9,101.9L549.8,101.2L551.7,100.5L553.6,99.8L555.4,99.1L557.3,98.4L559.2,97.7L561.1,97.0L563.0,96.3L564.9,95.6L566.8,94.9L568.6,94.2L570.5,93.5L572.4,92.8L574.3,92.1L576.2,91.4L578.1,90.7L580.0,90.0L581.8,89.3L583.7,88.6L585.6,87.9L587.5,87.2L589.4,86.5L591.3,85.8L593.2,85.1L595.0,84.4L596.9,83.7L598.8,83.0L600.7,82.3L602.6,81.6L604.5,80.9L606.4,80.2L608.2,79.5L610.1,78.8L612.0,78.1L613.9,77.4L615.8,76.7L617.7,76.0L619.6,75.3L621.4,74.6L623.3,73.9L625.2,73.2L627.1,72.5L629.0,71.8L630.9,71.1L632.8,70.4L634.6,69.7L636.5,69.0L638.4,68.3L640.3,67.6L642.2,66.9L644.1,66.2L646.0,65.5L647.8,64.8L649.7,64.1L651.6,63.4L653.5,62.7L655.4,62.0L657.3,61.3L659.1,60.6L661.0,59.9L662.9,59.2L664.8,58.5L666.7,57.8L668.6,57.1L670.5,56.4L672.3,55.7L674.2,55.0L676.1,54.3L678.0,54.3L679.9,54.3L681.8,54.3L683.7,54.3L685.5,54.3L687.4,54.3L689.3,54.3L691.2,54.3L693.1,54.3L695.0,54.3L696.9,54.3L698.7,54.3L700.6,54.3L702.5,54.3L704.4,54.3L706.3,54.3L708.2,54.3L710.1,54.3L711.9,54.3L713.8,54.3L715.7,54.3L717.6,54.3L719.5,54.3L721.4,54.3L723.3,54.3L725.1,54.3L727.0,54.3L728.9,54.3L730.8,54.3L732.7,54.3L734.6,54.3L736.5,54.3L738.3,54.3L740.2,54.3L742.1,54.3L744.0,54.3" class="c-adopt"/>
+      <text x="398.0" y="316" class="ax mid dim2">designHeight（设计px）</text>
+    </svg>
+    <div class="legend">
+      <span><i class="k-word"></i>字标底（被 v 压缩后）</span>
+      <span><i class="k-rej"></i>被否 <code>dh-712</code></span>
+      <span><i class="k-main"></i>main <code>dh-640</code></span>
+      <span><i class="k-adopt"></i>本 PR 钳制式（与 main 重合至 dh=1262）</span>
+      <span><i class="k-band"></i><code>dh-712</code> 压盖字标区</span>
+    </div>
+  </div>
+</body></html>

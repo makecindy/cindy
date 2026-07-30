@@ -57,6 +57,7 @@ import {
 } from 'react-native';
 import { UITextView } from 'react-native-uitextview';
 import { LegendList, type LegendListRef } from '@legendapp/list/react-native';
+import { tokenizeCode, type CodeTokenKind } from '@/session/codeHighlight';
 import { buildComposerTouchLayout } from '@/session/composerTouchLayout';
 import { useFoldableExpandedState } from '@/session/expandedBlockMemory';
 import {
@@ -138,7 +139,7 @@ import {
   copyMessageText,
   formatMessageAbsoluteTime,
   formatMessageRelativeTime,
-  formatMessageTurnCostUsd,
+  formatMessageTurnCost,
   formatModelShortLabel,
   writeClipboardText,
   type MobileMessageControlActionId,
@@ -1544,7 +1545,7 @@ function MessageBubble({
   const relativeTime = showCompletedActionBar ? formatMessageRelativeTime(item.message.createdAt) : '';
   const absoluteTime = formatMessageAbsoluteTime(item.message.createdAt);
   const turnCost = showCompletedActionBar && item.message.kind === 'assistant'
-    ? formatMessageTurnCostUsd(item.message.turnCostUsd ?? 0, item.message.turnCostIsEstimate)
+    ? formatMessageTurnCost(item.message.turnMoney)
     : '';
   const canFork = !!(
     showCompletedActionBar
@@ -3290,7 +3291,7 @@ function MarkdownBody({
             );
           }
           const baseStyle: StyleProp<TextStyle> = block.type === 'heading'
-            ? [styles.markdownHeading, block.level <= 2 ? styles.markdownHeadingLarge : styles.markdownHeadingSmall]
+            ? [styles.markdownHeading, headingSizeStyle(styles, block.level)]
             : styles.messageText;
           if (block.type === 'list_item') {
             const task = typeof block.checked === 'boolean';
@@ -3363,14 +3364,15 @@ function MarkdownBody({
                   },
                 ]}
               >
-                <MarkdownSelectableText
+                <HighlightedCodeText
+                  SpanComponent={spanFor(selectable === true) ?? Text}
                   allowIosUITextView={allowIosUITextView}
+                  language={block.language}
                   selectable={selectable === true}
                   selectionColor={colors.surfaceChip}
-                  style={styles.markdownCodeText}
-                >
-                  {block.text}
-                </MarkdownSelectableText>
+                  styles={styles}
+                  text={block.text}
+                />
               </ScrollView>
             </View>
           );
@@ -3378,7 +3380,7 @@ function MarkdownBody({
         if (block.type === 'heading') {
           const headingStyle = [
             styles.markdownHeading,
-            block.level <= 2 ? styles.markdownHeadingLarge : styles.markdownHeadingSmall,
+            headingSizeStyle(styles, block.level),
           ];
           const headingSelectable = inlinesSelectable(block.inlines);
           return (
@@ -5551,6 +5553,84 @@ function messageClientId(item: MobileMessageItem): string {
   return item.message.source.clientId || item.message.source.id || item.message.key;
 }
 
+/** 语法 kind → 样式。plain 不走这里(直接当字符串塞进父 Text,少一层节点)。 */
+function syntaxStyleFor(
+  styles: ReturnType<typeof makeStyles>,
+  kind: Exclude<CodeTokenKind, 'plain'>,
+): StyleProp<TextStyle> {
+  switch (kind) {
+    case 'keyword': return styles.syntaxKeyword;
+    case 'string': return styles.syntaxString;
+    case 'comment': return styles.syntaxComment;
+    case 'number': return styles.syntaxNumber;
+    case 'function': return styles.syntaxFunction;
+    case 'property': return styles.syntaxProperty;
+  }
+}
+
+/**
+ * 代码块正文 —— 按 language 做词法着色(配色对齐桌面的 GitHub hljs 主题)。
+ *
+ * 抽成组件只为拿 useMemo:renderBlock 每次重渲都会走到,大代码块重复分词不划算。
+ * 嵌套 span 只带 color,其余样式继承外层 markdownCodeText。
+ *
+ * ⚠️ `SpanComponent` 必须由调用方经 `spanFor()` 给出,不能图省事直接用 RN 的
+ * `Text`:块可选中且在 iOS 时外层是 UITextView,而它只接受 UITextView 家族的子
+ * 节点 —— 传普通 Text 的话那些 span 会被整个丢掉(表现为代码里的属性名、关键字
+ * 直接从画面上消失,不报错)。
+ */
+function HighlightedCodeText({
+  SpanComponent,
+  allowIosUITextView,
+  language,
+  selectable,
+  selectionColor,
+  styles,
+  text,
+}: {
+  SpanComponent: typeof Text;
+  allowIosUITextView: boolean;
+  language: string | undefined;
+  selectable: boolean;
+  selectionColor: string;
+  styles: ReturnType<typeof makeStyles>;
+  text: string;
+}) {
+  const tokens = useMemo(() => tokenizeCode(text, language), [language, text]);
+  return (
+    <MarkdownSelectableText
+      allowIosUITextView={allowIosUITextView}
+      selectable={selectable}
+      selectionColor={selectionColor}
+      style={styles.markdownCodeText}
+    >
+      {tokens.map((token, index) => (
+        token.kind === 'plain'
+          ? token.text
+          : (
+            <SpanComponent key={index} style={syntaxStyleFor(styles, token.kind)}>
+              {token.text}
+            </SpanComponent>
+          )
+      ))}
+    </MarkdownSelectableText>
+  );
+}
+
+/**
+ * markdown 标题的字号档:h1 / h2 / h3+ 三档(见 markdownHeading* 的比例说明)。
+ * 两处渲染路径(text_run 合并树与独立 heading 块)共用,避免再次分叉成
+ * 「level <= 2 一刀切」那种只有两档、且第二档比正文还小的形态。
+ */
+function headingSizeStyle(
+  styles: ReturnType<typeof makeStyles>,
+  level: number,
+): StyleProp<TextStyle> {
+  if (level <= 1) return styles.markdownHeadingLarge;
+  if (level === 2) return styles.markdownHeadingMedium;
+  return styles.markdownHeadingSmall;
+}
+
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   messageFrame: { flex: 1, minHeight: 0 },
   messageList: { flex: 1 },
@@ -5834,17 +5914,22 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   // 与普通强调的区别只在语义,视觉上沿用 italic 已足够。
   markdownMathInline: { fontStyle: 'italic' },
   markdownStrike: { textDecorationLine: 'line-through' },
+  // 行内 code:零底色 + 等宽字体 + 文字压暗(参照 Codex 客户端)。
+  // 不给底色是平台约束:RN 嵌套在 Text 内的 inline 片段只认 backgroundColor,不认
+  // borderRadius(同 sessionLinkChipText 的注释),底色在这里只能是直角方块,成段
+  // 中文里一排方块比没有底色更糟。桌面走的是 GitHub 淡底 + 6px 圆角(CSS 能实现),
+  // 两端形态刻意不同 —— 取值与理由见 chatInlineCodeText。
   markdownInlineCode: {
-    backgroundColor: colors.chatCodeSurface,
-    borderRadius: radius.container,
+    color: colors.chatInlineCodeText,
     fontFamily: monoFont,
     fontSize: typeScale.code,
     lineHeight: lineHeight.code,
-    paddingHorizontal: 4,
   },
-  // 已验证存在的文件/目录路径 chip:在 inline code 底色上加下划线示意可点
-  // (嵌套 Text 只支持有限样式,与 sessionLinkChipText 同一约束)。
+  // 已验证存在的文件/目录路径 chip:靠「正文色 + medium + 下划线」区别于普通行内
+  // code(后者压暗)。color 必须显式钉回 textPrimary —— 本样式总是叠在
+  // markdownInlineCode 之后,不写就会继承那份压暗色,可点的反而比不可点的更淡。
   markdownPathChip: {
+    color: colors.textPrimary,
     fontWeight: fontWeight.medium,
     textDecorationLine: 'underline',
   },
@@ -5856,29 +5941,49 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     fontWeight: fontWeight.medium,
   },
+  // 三档标题,行高刻意选到能与 desktop 的相对比例对齐(desktop 正文 15:h1 20/1.4、
+  // h2 18/1.556、h3 16/1.5≈正文;mobile 正文 17):
+  //   h1  20/28 = 1.400  ← 与 desktop h1 的 1.4 相同
+  //   h2  18/28 = 1.556  ← 与 desktop h2 的 1.556 相同
+  //   h3+ 17/26          ← 与正文同字号,靠 medium 区分(同 desktop 让 h3 贴近正文)
+  // 20/28 与 18/28 都是 lineHeight 阶梯里既有的 listTitle 配对,未扩档。
+  // 改前 h1/h2 都是 bodyLarge(17)=正文字号、h3-h6 是 caption(12)——标题比正文还小。
   markdownHeadingLarge: {
+    fontSize: typeScale.title,
+    lineHeight: lineHeight.listTitle,
+  },
+  markdownHeadingMedium: {
+    fontSize: typeScale.subtitle,
+    lineHeight: lineHeight.listTitle,
+  },
+  markdownHeadingSmall: {
     fontSize: typeScale.bodyLarge,
     lineHeight: lineHeight.bodyLarge,
   },
-  markdownHeadingSmall: {
-    fontSize: typeScale.caption,
-    lineHeight: lineHeight.caption,
-  },
+  // 竖线对齐本文件 styles.rail(chatCodeBorder + 2px)——界面里「块引导竖线」是
+  // 一套统一的视觉语言,淡是设计意图;引用块不另搞一套(desktop 侧同样跟随
+  // --agent-actions-rail)。
   markdownQuote: {
-    borderLeftColor: colors.borderStrong,
+    borderLeftColor: colors.chatCodeBorder,
     borderLeftWidth: 2,
     paddingLeft: spacing.sm,
   },
+  // 引用正文与正文同色:textSecondary 对 surface 仅 3.1:1(light)/ 3.4:1(dark),
+  // 低于 WCAG AA 4.5:1,而 `>` 常承载本轮最该看的内容 —— 这是引用块唯一要修的
+  // 问题。「这是引用」由 rail + 内缩表达,不靠压低正文对比度。
   markdownQuoteText: {
-    color: colors.textSecondary,
+    color: colors.textPrimary,
   },
   markdownListRow: { flexDirection: 'row', gap: spacing.sm },
-  // text_run 合并树里的列表 marker 前缀(不占固定列宽,颜色弱化与原 marker 一致)。
+  // text_run 合并树里的列表 marker 前缀(不占固定列宽,颜色与原 marker 一致)。
   markdownListMarkerInline: {
-    color: colors.textSecondary,
+    color: colors.textPrimary,
   },
+  // 编号/项目符号与列表项正文同色(对齐 desktop 的 list-decimal / list-disc:
+  // 那边 marker 本就继承正文色)。编号在实际使用中承担段落引导,弱化到
+  // 3.1:1 会让扫读整段丢失。
   markdownListMarker: {
-    color: colors.textSecondary,
+    color: colors.textPrimary,
     fontSize: typeScale.bodyLarge,
     lineHeight: lineHeight.bodyLarge,
     textAlign: 'right',
@@ -5918,6 +6023,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontSize: typeScale.code,
     lineHeight: lineHeight.code,
   },
+  // 语法着色:只上 color,其余(字体/字号/行高)继承 markdownCodeText —— 嵌套 Text
+  // 只支持有限样式,且改字号会让同一行的 token 高低不齐。
+  syntaxKeyword: { color: colors.syntaxKeyword },
+  syntaxString: { color: colors.syntaxString },
+  syntaxComment: { color: colors.syntaxComment },
+  syntaxNumber: { color: colors.syntaxNumber },
+  syntaxFunction: { color: colors.syntaxFunction },
+  syntaxProperty: { color: colors.syntaxProperty },
   markdownTableScroll: {
     maxWidth: '100%',
   },

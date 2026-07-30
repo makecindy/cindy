@@ -54,7 +54,7 @@ export function WorkflowAgentStrip({
     <span
       data-workflow-agent-strip="true"
       aria-hidden="true"
-      className="flex flex-wrap items-center gap-[3px]"
+      className="flex flex-wrap items-center gap-1"
     >
       {visible.map((cell, i) => (
         <span

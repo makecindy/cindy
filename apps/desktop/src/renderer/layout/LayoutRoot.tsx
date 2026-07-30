@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 
 import {
+  MIN_SPLIT_CHILD_FRACTION,
   transferSplitFraction,
   type Layout,
   type LayoutNode,
@@ -30,10 +31,16 @@ import { PaneWidthProvider, useContentAvailableWidth } from './paneWidths';
  * - 按 content 树渲染 pane 的**顺序与在场**;未注册 kind(未安装的意识残留)
  *   整个 pane 不渲染、空间自然回流;
  * - **分割线与宽度主权**:相邻可见面板之间有且仅有一条引擎分割线,每条
- *   分割线都是拖宽把手 —— 拖动把 delta 在缝两侧邻居的 fraction 之间转移
+ *   分割线都是拖宽把手 —— 拖动把 delta 在缝两侧邻居的份额之间转移
  *   (只动邻居,其余面板不受影响),拖动中走本地瞬时值实时跟手,松手才写树
- *   持久化;双击缝 = 两侧份额均分。非 chat 面板的像素宽 = fraction × 可用宽
+ *   持久化;双击缝 = 两侧份额均分。非 chat 面板的像素宽 = **在场份额** × 可用宽
  *   (经 PaneWidthContext 下发,面板消费);chat-main 弹性吸收剩余(flex-1)。
+ * - **在场份额(active share)**:树上的 fraction 是"全体 pane"的账本,而不渲染的
+ *   pane(未安装残留 / 已抽离 / 已最小化成气泡)那份地方实际被弹性的 chat 吸收 ——
+ *   账本与画面脱钩后,像素换算与拖缝余量全都失真。引擎因此一律按
+ *   `share = fraction / Σ在场 fraction` 计算(见 activeSplitLedger),隐藏面板的
+ *   fraction 一字不动(位置与宽度记忆保留,重装/合并/恢复即原位复活,
+ *   architecture-invariants §3)。
  *
  * 实现细节 —— root split 扁平化:根分割不产生容器 div,children(含分割线)
  * 直接吐进父容器(MainLayout 的 row flex div)。嵌套 split 走通用容器渲染,
@@ -76,15 +83,45 @@ function PanelHost({ node }: { node: PaneNode }): ReactNode {
 
 interface SplitChildEntry {
   treeIndex: number;
+  /** 树上的原始份额(写树寻址用)。 */
   fraction: number;
+  /** 在场份额:只在渲染中的兄弟之间分配 100%(Σ在场 share = 1)。渲染与拖缝都用它。 */
+  share: number;
   node: LayoutNode;
+}
+
+interface ActiveSplitLedger {
+  /** 在场子项(未注册/已抽离/已最小化的 pane 已剔除),保留树内原始下标。 */
+  entries: SplitChildEntry[];
+  /**
+   * Σ在场 fraction —— 在场份额与树份额之间的比例尺:`树份额 = share × scale`。
+   * 缝把手把份额增量写回树时必须乘它,否则隐藏面板占着的那份会被重复计算。
+   */
+  scale: number;
+}
+
+/**
+ * 在场份额账本:过滤出可见子项并把份额在它们之间归一化(见文件头「在场份额」)。
+ * 隐藏子项的 fraction 不参与分配、也不被改写。
+ */
+function activeSplitLedger(children: { fraction: number; node: LayoutNode }[]): ActiveSplitLedger {
+  const visible = children
+    .map((c, treeIndex) => ({ treeIndex, fraction: c.fraction, node: c.node }))
+    .filter((e) => e.node.type !== 'pane' || isPanelKindVisible(e.node.panelKind));
+  const scale = visible.reduce((sum, e) => sum + e.fraction, 0);
+  return {
+    scale,
+    entries: visible.map((e) => ({
+      ...e,
+      // scale 异常(空分割 / 全零份额)时退化为均分,不产出 NaN 宽度。
+      share: scale > 0 ? e.fraction / scale : 1 / Math.max(1, visible.length),
+    })),
+  };
 }
 
 /** 过滤出可见子项(未注册/已抽离 kind 的 pane 不可见),保留树内原始下标供 fraction 操作寻址。 */
 function visibleSplitChildren(children: { fraction: number; node: LayoutNode }[]): SplitChildEntry[] {
-  return children
-    .map((c, treeIndex) => ({ treeIndex, fraction: c.fraction, node: c.node }))
-    .filter((e) => e.node.type !== 'pane' || isPanelKindVisible(e.node.panelKind));
+  return activeSplitLedger(children).entries;
 }
 
 /** 面板的最小像素宽:chat 硬下限 400,其余只有防拖丢兜底(见 NON_CHAT_FLOOR_PX)。 */
@@ -102,6 +139,9 @@ function paneMinPx(node: LayoutNode): number {
  * 账本(fraction)对不上** —— 拖缝按账本起步,就出现"先空拖一段、面板突然
  * 跳大"的体感(2026-07-08 Lizi 实测)。自愈让两者始终一致,拖动从第一像素
  * 就跟手。chat 捐到自身最小宽以下时放弃(极端小窗口,保底 clamp 兜底)。
+ *
+ * 判定与写回都在**在场份额**口径上做(见文件头):隐藏 pane 占着的份额不算在
+ * 谁头上,否则会把画面其实够宽的面板误判成"吃不饱"而无谓改写账本。
  */
 export function normalizeSubMinFractions(
   layout: Layout,
@@ -112,33 +152,42 @@ export function normalizeSubMinFractions(
   const children = layout.content.children;
   const chatIndex = children.findIndex((c) => c.node.type === 'pane' && c.node.panelKind === 'chat-main');
   if (chatIndex < 0) return null;
+  // 在场份额的比例尺(share × scale = 树份额)。此处不能复用 activeSplitLedger:
+  // 自愈是纯函数,可见性判定由入参 isRegistered 提供(测试注入)。
+  const scale = children
+    .filter((c) => c.node.type !== 'pane' || isRegistered(c.node.panelKind))
+    .reduce((sum, c) => sum + c.fraction, 0);
+  if (!(scale > 0)) return null;
 
-  let neededTotal = 0;
-  const bumps = new Map<number, number>(); // treeIndex → 目标 fraction
+  let neededTotal = 0; // 在场份额口径的缺口总额
+  const bumps = new Map<number, number>(); // treeIndex → 目标在场份额
   children.forEach((child, index) => {
     const node = child.node;
     if (node.type !== 'pane' || node.panelKind === 'chat-main') return;
     if (!isRegistered(node.panelKind)) return; // 隐藏面板不渲染,不参与自愈
-    const minF = paneMinPx(node) / avail;
-    if (child.fraction >= minF) return;
-    bumps.set(index, minF);
-    neededTotal += minF - child.fraction;
+    const minShare = paneMinPx(node) / avail;
+    const share = child.fraction / scale;
+    if (share >= minShare) return;
+    bumps.set(index, minShare);
+    neededTotal += minShare - share;
   });
   if (bumps.size === 0) return null;
 
-  const chatAfter = children[chatIndex].fraction - neededTotal;
+  const chatAfter = children[chatIndex].fraction / scale - neededTotal;
   if (chatAfter * avail < CHAT_MIN_PX) return null; // 窗口真不够宽,维持 clamp 保底
 
   const next = structuredClone(layout);
   const nextChildren = (next.content as { children: { fraction: number }[] }).children;
-  for (const [index, target] of bumps) nextChildren[index].fraction = target;
-  nextChildren[chatIndex].fraction = chatAfter;
+  // 回写乘 scale:在场份额之和保持为 scale,隐藏面板那份不受影响,整树仍归一。
+  for (const [index, target] of bumps) nextChildren[index].fraction = target * scale;
+  nextChildren[chatIndex].fraction = chatAfter * scale;
   return next;
 }
 
 /**
- * 按树(+ 拖动中的瞬时覆盖)计算根分割里各非 chat 面板的像素宽。
- * chat-main 不进表(弹性 flex-1 吸收剩余);上限给中间留出 chat 的最小宽。
+ * 按树(+ 拖动中的瞬时覆盖)计算根分割里各非 chat 面板的像素宽 = **在场份额** ×
+ * 可用宽。chat-main 不进表(弹性 flex-1 吸收剩余);上限给中间留出 chat 的最小宽。
+ * live 覆盖里存的同样是在场份额(拖动与渲染同一口径)。
  */
 function computePanelWidths(
   layout: Layout,
@@ -147,14 +196,13 @@ function computePanelWidths(
 ): Record<string, number> {
   const out: Record<string, number> = {};
   if (layout.content.type !== 'split' || layout.content.direction !== 'row') return out;
-  for (const child of layout.content.children) {
-    const node = child.node;
+  for (const entry of visibleSplitChildren(layout.content.children)) {
+    const node = entry.node;
     if (node.type !== 'pane' || node.panelKind === 'chat-main') continue;
-    if (!isPanelKindVisible(node.panelKind)) continue;
-    const fraction = live?.[node.id] ?? child.fraction;
+    const share = live?.[node.id] ?? entry.share;
     const min = paneMinPx(node);
     const max = Math.max(min, avail - CHAT_MIN_PX);
-    out[node.panelKind] = Math.min(max, Math.max(min, Math.round(fraction * avail)));
+    out[node.panelKind] = Math.min(max, Math.max(min, Math.round(share * avail)));
   }
   return out;
 }
@@ -191,16 +239,16 @@ function NodeView({ node }: { node: LayoutNode }): ReactNode {
 
 interface RootDividerPropsExtra {
   /**
-   * chat-main 渲染宽的**账本估值**(px,仅兜底用)。chat 是弹性 flex-1,会吸收
-   * 隐藏面板(卸载残留)与折叠面板的份额,账面 fraction 严重低估它的真实宽度——
-   * 按账面算余量会把拖缝整个钳死(2026-07-09 mac 实测"纹丝不动"的根因)。
-   * 本估值仍把折叠/抽离面板按账面份额记成"占着地方"(右侧栏收起时误差可达
-   * 数百像素,2026-07-25 Lizi 实测"拖不到头"的根因),所以拖缝的事实来源改为
-   * **起拖时实测 chat-main 元素矩形**(见 onPointerDown;一次布局读取,符合
-   * 起拖测量口径);本值只在量不到元素(测试环境等)时兜底。份额记忆与活跃
-   * 份额分账的根治方案暂未纳入布局树职责。
+   * chat-main 渲染宽的**账本估值**(px,仅兜底用):可用宽 − 各在场非 chat 面板
+   * 宽度之和。起拖时优先实测 chat-main 元素矩形(一次布局读取,符合起拖测量
+   * 口径),量不到(测试环境等)才回落本值。
    */
   chatRenderedPx: number;
+  /**
+   * 在场份额与树份额的比例尺(Σ在场 fraction)。份额增量写回树时要乘它 ——
+   * 隐藏面板占着的那份不参与分配,也不该被拖动改写(见文件头「在场份额」)。
+   */
+  shareScale: number;
 }
 
 interface RootDividerProps extends RootDividerPropsExtra {
@@ -208,28 +256,49 @@ interface RootDividerProps extends RootDividerPropsExtra {
   left: SplitChildEntry;
   right: SplitChildEntry;
   avail: number;
-  /** 拖动中的瞬时 fraction 覆盖(paneId → fraction);null = 结束。 */
+  /** 拖动中的瞬时**在场份额**覆盖(paneId → share);null = 结束。 */
   onLive: (live: Record<string, number> | null) => void;
   /** 提交后的乐观本地树更新(广播随后回声同一棵树)。 */
   onCommitted: (layout: Layout) => void;
 }
 
+/** 起拖时实测某面板的元素宽;量不到 / 收成 0 宽返回 null(调用方回落账面)。 */
+function measuredPanePx(node: LayoutNode): number | null {
+  if (node.type !== 'pane') return null;
+  const width = document
+    .querySelector(`[data-panel-drag-root="${node.panelKind}"]`)
+    ?.getBoundingClientRect().width;
+  return typeof width === 'number' && width > 0 ? width : null;
+}
+
 /**
  * 根分割的交互式分割线:1px 缝 + 7px 隐形抓握区。拖动在缝两侧邻居之间转移
- * fraction(像素下限双侧夹取),拖动中只更新瞬时覆盖(不写 IPC),松手经
- * transferSplitFraction 一次性写树;双击 = 两侧份额均分。
+ * 在场份额(三重余量夹取,见 sideRoomShare),拖动中只更新瞬时覆盖(不写 IPC),
+ * 松手经 transferSplitFraction 一次性写树;双击 = 两侧份额均分。
  */
-function RootDivider({ splitId, left, right, avail, chatRenderedPx, onLive, onCommitted }: RootDividerProps): ReactNode {
+function RootDivider({
+  splitId,
+  left,
+  right,
+  avail,
+  chatRenderedPx,
+  shareScale,
+  onLive,
+  onCommitted,
+}: RootDividerProps): ReactNode {
   const [hover, setHover] = useState(false);
   const draggingRef = useRef(false);
 
+  /** amountToLeft:**在场份额**增量(> 0 = 左侧变宽);写树前乘 shareScale 换成树份额。 */
   const commit = (amountToLeft: number) => {
+    const treeAmount = amountToLeft * shareScale;
+    if (treeAmount === 0) return;
     try {
       const current = window.electronAPI.layout.getStateSync().layout;
       const op =
-        amountToLeft > 0
-          ? transferSplitFraction(current, splitId, right.treeIndex, left.treeIndex, amountToLeft)
-          : transferSplitFraction(current, splitId, left.treeIndex, right.treeIndex, -amountToLeft);
+        treeAmount > 0
+          ? transferSplitFraction(current, splitId, right.treeIndex, left.treeIndex, treeAmount)
+          : transferSplitFraction(current, splitId, left.treeIndex, right.treeIndex, -treeAmount);
       if (!op.applied) return;
       onCommitted(op.layout);
       void window.electronAPI.layout.set(op.layout).catch(() => undefined);
@@ -238,34 +307,39 @@ function RootDivider({ splitId, left, right, avail, chatRenderedPx, onLive, onCo
     }
   };
 
+  /**
+   * 一侧能让出的份额余量 = min(账面余量, 实测余量, 账本地板余量),三条都不能越:
+   * - **账面余量** share × avail − 面板最小宽:在场份额口径下账面即画面,拖动
+   *   从第一像素就跟手;
+   * - **实测余量** 实测元素宽 − 面板最小宽:面板被 CSS 收成 0 宽(折叠态)或被
+   *   min-width 顶住时,账面会高估它能让出的地方,实测才是真相;
+   * - **地板余量** (树份额 − 0.05) / scale:transferSplitFraction 对让某一侧跌破
+   *   0.05 的转移整单拒绝 —— 实时拖动必须同受此限,否则松手写树失败、整段位移
+   *   作废,界面弹回原宽(2026-07-29 Lizi 实测右栏拖到最大就回弹的根因:树里
+   *   躺着一条已卸载插件的残留份额,聊天区吸收了它的地方,账面却还记在它头上)。
+   */
+  const sideRoomShare = (entry: SplitChildEntry, fallbackPx: number | null): number => {
+    if (!(avail > 0)) return 0; // 可用宽异常:不给余量,免得 0/0 产出 NaN 份额
+    const minPx = paneMinPx(entry.node);
+    const ledgerPx = entry.share * avail;
+    const realPx = measuredPanePx(entry.node) ?? fallbackPx ?? ledgerPx;
+    const pxRoom = Math.min(ledgerPx, realPx) - minPx;
+    const floorRoom =
+      shareScale > 0 ? (entry.fraction - MIN_SPLIT_CHILD_FRACTION) / shareScale : 0;
+    return Math.max(0, Math.min(pxRoom / avail, floorRoom));
+  };
+
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0 || draggingRef.current) return;
     e.preventDefault();
     draggingRef.current = true;
     const startX = e.clientX;
-    const startL = left.fraction;
-    const startR = right.fraction;
-    // delta(给左侧的增量)的允许区间,每侧余量 = min(渲染余量, 账面余量):
-    // - 渲染余量:chat 用**起拖时实测的元素宽**算 —— 账本估值会把折叠/抽离
-    //   面板的份额也记成"占着地方"(右侧栏收起时聊天区实际早已吸收那块空间,
-    //   估值一保守拖动就提前到头,见 RootDividerPropsExtra);起拖只量这一次,
-    //   拖动期间界面静止,没有失效场景。非 chat 面板 px = fraction × avail,
-    //   账面即渲染。
-    // - 账面余量:transferSplitFraction 低于 0.05 整单拒绝(不收窄),实时
-    //   拖动必须同受此限,否则松手回弹。
-    const leftIsChat = left.node.type === 'pane' && left.node.panelKind === 'chat-main';
-    const rightIsChat = right.node.type === 'pane' && right.node.panelKind === 'chat-main';
-    const minLF = Math.max(0.05, paneMinPx(left.node) / avail);
-    const minRF = Math.max(0.05, paneMinPx(right.node) / avail);
-    const measuredChatPx = document
-      .querySelector('[data-panel-drag-root="chat-main"]')
-      ?.getBoundingClientRect().width;
-    const chatPx = measuredChatPx && measuredChatPx > 0 ? measuredChatPx : chatRenderedPx;
-    const chatRenderRoom = Math.max(0, (chatPx - CHAT_MIN_PX) / avail);
-    const roomL = leftIsChat ? Math.min(startL - 0.05, chatRenderRoom) : startL - minLF;
-    const roomR = rightIsChat ? Math.min(startR - 0.05, chatRenderRoom) : startR - minRF;
-    const dMin = -Math.max(0, roomL);
-    const dMax = Math.max(0, roomR);
+    const startL = left.share;
+    const startR = right.share;
+    const isChat = (node: LayoutNode) => node.type === 'pane' && node.panelKind === 'chat-main';
+    // 起拖只量一次(拖动期间界面静止,没有失效场景);chat 量不到时回落账本估值。
+    const dMin = -sideRoomShare(left, isChat(left.node) ? chatRenderedPx : null);
+    const dMax = sideRoomShare(right, isChat(right.node) ? chatRenderedPx : null);
     let lastD = 0;
 
     document.body.classList.add('resizing-pane');
@@ -298,10 +372,10 @@ function RootDivider({ splitId, left, right, avail, chatRenderedPx, onLive, onCo
   };
 
   // 双击:两侧份额均分(把差值的一半转给少的一侧)—— 右栏旧"双击复位 50/50"
-  // 在两块布局下的语义等价推广。
+  // 在两块布局下的语义等价推广。在场份额口径:均分的是**画面上**这两块的宽度。
   const onDoubleClick = () => {
-    const total = left.fraction + right.fraction;
-    commit(total / 2 - left.fraction);
+    const total = left.share + right.share;
+    commit(total / 2 - left.share);
   };
 
   return (
@@ -371,7 +445,7 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
     [maximizedKind],
   );
 
-  // 分割线拖动中的瞬时 fraction 覆盖(paneId → fraction);面板宽度实时跟手,
+  // 分割线拖动中的瞬时**在场份额**覆盖(paneId → share);面板宽度实时跟手,
   // 松手清空回落树值 —— 拖动全程不写 IPC。
   const [liveFractions, setLiveFractions] = useState<Record<string, number> | null>(null);
   const availCtx = useContentAvailableWidth();
@@ -382,8 +456,8 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
     () => computePanelWidths(layout, liveFractions, avail),
     [layout, liveFractions, avail, ghostWindowsState, ghostBubbleState],
   );
-  // chat 实际渲染宽 ≈ 可用宽 − 可见非 chat 面板宽度之和(拖缝余量用,见
-  // RootDividerPropsExtra;折叠面板的误差偏保守)。
+  // chat 实际渲染宽 ≈ 可用宽 − 各在场非 chat 面板宽度之和(拖缝余量的兜底估值,
+  // 见 RootDividerPropsExtra;起拖优先实测元素矩形)。
   const chatRenderedPx = Math.max(
     CHAT_MIN_PX,
     avail - Object.values(widths).reduce((sum, w) => sum + w, 0),
@@ -422,7 +496,8 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
   if (content.type === 'split') {
     // root split 扁平化(见文件头注释):children(含交互式分割线)直接作为父 row
     // 容器的 flex 子项。接管态只留 chat-main(见 LayoutRootProps)。
-    const visible = visibleSplitChildren(content.children).filter(
+    const ledger = activeSplitLedger(content.children);
+    const visible = ledger.entries.filter(
       (e) => !suppressNonChatPanels || (e.node.type === 'pane' && e.node.panelKind === 'chat-main'),
     );
     // 撑满态:目标 pane 独占一行(自身经 PanelMaximizeContext 切成 flex-1),
@@ -473,6 +548,7 @@ export function LayoutRoot({ suppressNonChatPanels = false }: LayoutRootProps = 
               right={entry}
               avail={avail}
               chatRenderedPx={chatRenderedPx}
+              shareScale={ledger.scale}
               onLive={setLiveFractions}
               onCommitted={setLayout}
             />,

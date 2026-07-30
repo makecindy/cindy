@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
 import { type ModelDescriptor, useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
 import { deriveModelsFromProviders } from '@/lib/providerModels';
@@ -28,6 +29,8 @@ import {
   type ImDefaultSettingsPatch,
   type ImDefaultSettingsState,
   isImDefaultEffort,
+  isImDefaultPermissionMode,
+  isWechatUnsupportedPermissionMode,
 } from '../../../shared/imDefaultSettings';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { buildAgentSettingsPatch, mergeSettingsPatch } from './imDefaultSettingsLogic';
@@ -93,9 +96,11 @@ export function ImDefaultSettingsSection({
   }, [onSummaryChange, settings]);
 
   const modelsByAgent = useMemo<Record<ImDefaultAgentKind, ModelDescriptor[]>>(() => {
+    // 准入口径:IM 默认模型是「从零挑一个」的清单,停用的供应商/模型与能力模型
+    // 不该可选 —— 否则 headless runner 派发时才降级换模型,用户无感(PR #744 review)。
     const fromProviders = {
-      'claude-code': deriveModelsFromProviders(providers, 'claude-code'),
-      codex: deriveModelsFromProviders(providers, 'codex'),
+      'claude-code': deriveModelsFromProviders(providers, 'claude-code', { admissionFiltered: true }),
+      codex: deriveModelsFromProviders(providers, 'codex', { admissionFiltered: true }),
     };
     return {
       'claude-code': fromProviders['claude-code'].length
@@ -212,6 +217,17 @@ export function ImDefaultSettingsSection({
     );
   };
 
+  const changePermissionMode = (permissionMode: string) => {
+    if (
+      !isImDefaultPermissionMode(permissionMode) ||
+      isWechatUnsupportedPermissionMode(permissionMode) ||
+      permissionMode === settings.permissionMode
+    ) {
+      return;
+    }
+    void persist({ permissionMode });
+  };
+
   return (
     <section
       className={cn(
@@ -304,6 +320,29 @@ export function ImDefaultSettingsSection({
           />
         </div>
       </div>
+
+      {channel === 'wechat' && (
+        <div className="flex flex-col gap-2">
+          <span className="text-[12px] font-medium text-[var(--text-secondary)]">
+            {t('settings.wechatBot.permission.label')}
+          </span>
+          <PermissionSelector
+            permissionMode={settings.permissionMode}
+            onPermissionModeChange={changePermissionMode}
+            vendorKey={vendorKeyFor(settings.agentKind)}
+            disabled={pending}
+            triggerVariant="field"
+            ariaContext={t('settings.wechatBot.permission.label')}
+            disabledModes={{
+              bypassPermissions: t('settings.wechatBot.permission.fullAccessDisabled'),
+              acceptEdits: t('settings.wechatBot.permission.permissionModeDisabled'),
+            }}
+          />
+          <p className="text-[12px] leading-[1.5] text-[var(--settings-section-desc)]">
+            {t('settings.wechatBot.permission.hint')}
+          </p>
+        </div>
+      )}
     </section>
   );
 }

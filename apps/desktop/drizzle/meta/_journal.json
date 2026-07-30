@@ -575,6 +575,20 @@
       "when": 1785037003169,
       "tag": "0081_preserve_gateway_currency",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "6",
+      "when": 1785150667133,
+      "tag": "0082_daffy_calypso",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "6",
+      "when": 1785287922480,
+      "tag": "0083_gray_katie_power",
+      "breakpoints": true
     }
   ]
 }

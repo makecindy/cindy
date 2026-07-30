@@ -1,5 +1,6 @@
 import type { MobileSessionAgentSwitchIntent } from '@cindy/maker-shared/device-link-contract';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
+import type { RemoteMoney } from '@/session/remoteMoney';
 
 export type RemoteSessionStatus = 'active' | 'archived' | 'deleted';
 export type RemoteMessageRole =
@@ -41,6 +42,8 @@ export interface RemoteSession {
    *  带上——lazy-create 缺它会把远端 workingDir 当本地路径(对齐桌面 sendUiTrigger)。 */
   remoteHostId?: string | null;
   totalTokenUsage?: number;
+  totalMoney?: RemoteMoney;
+  /** 旧 Desktop / USD 账本兼容字段。 */
   totalCostUsd?: number;
   contextTokens?: number;
   contextWindow?: number;

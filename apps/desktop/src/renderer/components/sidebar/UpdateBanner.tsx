@@ -11,7 +11,19 @@
  * 「取消」置于其下(次级、需刻意移动),从而在保持左下角、减少视线/鼠标移动的同时,
  * 用两步显式点击防止误更新。
  *
- *   - Expanded ready:        Flame 36px → "Updated to {v}" → "Relaunch to apply" → Relaunch pill
+ * 「查看更新公告」文字链:ready 态在副标题下给一条 ghost 文字链,点开 UpdateNoticeDialog
+ * 预览**待安装版本**的公告,让用户在「现在重启 vs 稍后」之间有据可依(装完后的自动弹窗
+ * 只解决装完之后的事)。跨版本时会把「已装版本 → 待装版本」之间跳过的每一版聚合进同一个
+ * 弹窗(useUpdateNotice 的 onOpenVersion),普通单版本升级就只有一块。三条刻意的边界:
+ *   - 只在 ready 态出现。superseding 态顶部刻意不显示版本号(新版还在下),没有可信的
+ *     版本可查,confirming 态则要保持两步确认的干净,两者都不给入口。
+ *   - CDN 上没有该版本公告(或内容不可渲染)时不显示入口 —— 用挂载时的 fetch 探测,
+ *     宁可没有入口,也不给一个点了报错的链接。探测结果被 release-notes 双层缓存复用,
+ *     真正点开时不会再打一次网。
+ *   - 收起 / rail 态放不下文字链,因此**没有入口**;那两态里 UserInfoSection 的火焰按钮
+ *     也只能看 <= 当前已装版本的历史,看不到待装版本。这是本方案已知的取舍。
+ *
+ *   - Expanded ready:        Flame 36px → "Updated to {v}" → "Relaunch to apply" → notes link → Relaunch pill
  *   - Expanded confirming:   Flame 36px → "Restart to update?" → hint → Confirm pill / Cancel (下方,ghost)
  *   - Expanded superseding:  Loader2 36px (spin) → "Newer version found" → "Updating…" → disabled pill with spinner
  *   - Collapsed ready:       Flame 20px, click → confirming(就地展开 ✓ / ✕)
@@ -31,15 +43,21 @@ import { useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { useUpdateBannerDismiss } from '@/hooks/useUpdateBannerDismiss';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Tip } from '@/components/ui/tooltip';
+import { fetchReleaseNotes } from '@/release-notes';
 
 // 运行期端点清单(dev/packaged 都在启动阻断后有真值,烘焙兜底已退役)
 const websiteUrl = () => window.electronAPI.clientEndpoints.websiteUrl;
 
 interface UpdateBannerProps {
   isCollapsed: boolean;
+  /**
+   * 打开指定版本的更新公告(UpdateNoticeDialog)。由 MainLayout 的 useUpdateNotice
+   * 提供;未传时文字链整体不渲染。
+   */
+  onOpenVersionNotice?: (version: string) => void;
 }
 
-export function UpdateBanner({ isCollapsed }: UpdateBannerProps) {
+export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerProps) {
   const { status, version, errorCode } = useUpdateStatus();
   // 用户主动关闭态(仅本次进程内存,由 UserInfoSection 的火焰按钮唤回)。
   // status/version 变化时下面 effect 会自动 restore,新一版更新到达时 banner
@@ -62,6 +80,8 @@ export function UpdateBanner({ isCollapsed }: UpdateBannerProps) {
   const { t } = useTranslation();
 
   const [showSpawnFailedDialog, setShowSpawnFailedDialog] = useState(false);
+  // 待安装版本的公告在 CDN 上是否可用 —— 决定文字链是否渲染。
+  const [hasNotes, setHasNotes] = useState(false);
 
   // Show the translocated fallback dialog when the main process reports
   // the app is running from a read-only App Translocation path.
@@ -103,6 +123,30 @@ export function UpdateBanner({ isCollapsed }: UpdateBannerProps) {
       relaunchTriggerRef.current?.focus();
     }
   }, [confirming]);
+
+  // 公告可用性探测。只对 ready 态的具体版本做 —— superseding 时的 version 指向的是
+  // 上一个已就绪补丁,不是正在下载的新版,拿它探测会给出错版本的入口。
+  // fetchReleaseNotes 在 renderer + main 两层都有缓存,所以这次探测同时也是预热:
+  // 用户真点开时命中缓存,不会再打一次 CDN。
+  //
+  // 两条刻意的收窄:
+  //   - 收起 / rail 态不渲染文字链,那就别探测;展开时 isCollapsed 变化会让 effect
+  //     重跑,该探测的时候一定会探测到。
+  //   - 依赖里用 canOpenNotice 这个布尔量而不是回调本身 —— 回调来自 useUpdateNotice
+  //     的 useCallback([t, open]),弹窗每次开关都会换掉它的 identity,直接依赖函数会
+  //     让探测跟着弹窗开关反复重跑。
+  const canOpenNotice = Boolean(onOpenVersionNotice);
+  useEffect(() => {
+    if (status !== 'ready' || !version || !canOpenNotice || isCollapsed) {
+      setHasNotes(false);
+      return;
+    }
+    let cancelled = false;
+    fetchReleaseNotes(version)
+      .then((notes) => { if (!cancelled) setHasNotes(notes !== null); })
+      .catch(() => { if (!cancelled) setHasNotes(false); });
+    return () => { cancelled = true; };
+  }, [status, version, canOpenNotice, isCollapsed]);
 
   // 取消:先打标记再复位,让上面的 effect 在入口按钮重新挂载后把焦点还回去。
   const handleCancelConfirm = () => {
@@ -148,6 +192,12 @@ export function UpdateBanner({ isCollapsed }: UpdateBannerProps) {
     setShowSpawnFailedDialog(false);
     window.open(websiteUrl(), '_blank');
   };
+
+  // 文字链要显示的版本 —— undefined 即不显示。ready 态之外(superseding / error)没有
+  // 可信版本号,confirming 态则刻意让位给两步确认。hasNotes 已经蕴含「ready + 该版本
+  // 公告可渲染」,这里再显式列出条件,读代码时不必回溯 effect。
+  const notesVersion =
+    status === 'ready' && !confirming && hasNotes && version ? version : undefined;
 
   const versionSuffix = version ? ` (v${version})` : '';
   const versionForAria = version ?? 'latest';
@@ -297,14 +347,30 @@ export function UpdateBanner({ isCollapsed }: UpdateBannerProps) {
               : t('update.banner.title', { version: version ?? '…' })}
         </p>
 
-        {/* Subtitle */}
-        <p className="text-xs text-sidebar-muted">
-          {isPreparing
-            ? t('update.banner.preparingSubtitle')
-            : confirming
-              ? t('update.banner.confirmHint')
-              : t('update.banner.subtitle')}
-        </p>
+        {/* Subtitle + 「查看更新公告」文字链 —— 同一视觉组(gap-1),所以链接读作副标题的
+            延伸而不是第三段独立文案;没有链接时这个 wrapper 只有一个子元素,布局与
+            加链接前完全一致。 */}
+        <div className="flex flex-col items-center gap-1">
+          <p className="text-xs text-sidebar-muted">
+            {isPreparing
+              ? t('update.banner.preparingSubtitle')
+              : confirming
+                ? t('update.banner.confirmHint')
+                : t('update.banner.subtitle')}
+          </p>
+          {notesVersion && (
+            <button
+              onClick={() => onOpenVersionNotice?.(notesVersion)}
+              aria-label={t('update.banner.viewNotesAria', { version: notesVersion })}
+              className={cn(
+                'rounded-full text-xs underline underline-offset-2',
+                'text-sidebar-muted transition-colors hover:text-foreground',
+              )}
+            >
+              {t('update.banner.viewNotes')}
+            </button>
+          )}
+        </div>
 
         {/* Actions.
             - superseding: disabled pill + spinner.

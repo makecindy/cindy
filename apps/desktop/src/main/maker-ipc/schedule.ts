@@ -484,8 +484,19 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     return withScheduler(({ scheduler }) => scheduler.listRuns(id, lim));
   });
 
+  // 一并回传引擎的 in-flight runId 快照:renderer 的通知抑制标记要靠它区分「DB 里查不到
+  // 这条 run」的两种含义 —— 已结束并被清理,还是自删除场景下行已消失却仍在跑(见
+  // scheduler.listInflightRunIds 的注释)。runId 本身不是特权数据(renderer 的标记里就
+  // 存着它)。
+  //
+  // 注意这**不是**原子快照:两次读之间隔着 DB 查询的 await,run 恰好在那个窗口内结束时
+  // 会出现「行还是 running、controller 已注销」。消费方(reconcileRunMarkers)能识别这种
+  // 不一致并安排一次重查,所以这里不为它忙等重采样。
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_LIST_SIDEBAR_INDEX_RUNS, async () =>
-    withScheduler(({ storage }) => storage.listSidebarIndexRuns()),
+    withScheduler(async ({ storage, scheduler }) => ({
+      runs: await storage.listSidebarIndexRuns(),
+      inflightRunIds: scheduler.listInflightRunIds(),
+    })),
   );
 
   ipcMain.handle(MAKER_INVOKE.SCHEDULE_LIST_COST_SUMMARIES, async () =>

@@ -38,6 +38,7 @@ type AuthStateSnapshot = ReturnType<typeof authManager.getAuthState>;
 
 let handle: HeartbeatHandle | null = null;
 let handleUid: string | null = null;
+let handleRealm: ReturnType<typeof authManager.getActiveAuthRealm> | null = null;
 let unsubscribeAuth: (() => void) | null = null;
 
 /** 已验证 cloud 会话返回其 user.id,其余模式一律 null(= 不上报云端心跳)。 */
@@ -49,6 +50,7 @@ function startCloudHeartbeat(uid: string): void {
   // 运行期端点清单(initClientEndpoints 在 app.ready 内早于本服务,清单全权无兜底)
   const endpoint = getClientEndpoint('heartbeatUrl');
   handleUid = uid;
+  handleRealm = authManager.getActiveAuthRealm();
   handle = createHeartbeatClient({
     endpoint,
     intervalMs: DEFAULT_INTERVAL_MS,
@@ -67,13 +69,16 @@ function startCloudHeartbeat(uid: string): void {
       },
     },
   });
-  log.info(`heartbeat client started → ${endpoint} (interval=${DEFAULT_INTERVAL_MS}ms, uid=${uid})`);
+  log.info(
+    `heartbeat client started → ${endpoint} (interval=${DEFAULT_INTERVAL_MS}ms, uid=${uid})`,
+  );
 }
 
 function stopCloudHeartbeat(): void {
   handle?.stop();
   handle = null;
   handleUid = null;
+  handleRealm = null;
 }
 
 function applyAuthState(state: AuthStateSnapshot): void {
@@ -85,7 +90,8 @@ function applyAuthState(state: AuthStateSnapshot): void {
     }
     return;
   }
-  if (handle && handleUid === uid) return;
+  const realm = authManager.getActiveAuthRealm();
+  if (handle && handleUid === uid && handleRealm === realm) return;
   if (handle) stopCloudHeartbeat();
   startCloudHeartbeat(uid);
 }

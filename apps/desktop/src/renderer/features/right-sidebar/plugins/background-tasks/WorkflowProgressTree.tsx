@@ -172,7 +172,7 @@ function AgentRow({ row }: { row: WorkflowTreeAgentRow }) {
         {row.label}
       </span>
       {modelLabel && (
-        <span className="shrink-0 rounded-[4px] bg-[var(--surface-chip)] px-1.5 py-0.5 text-11 leading-4 text-[var(--text-tertiary)]">
+        <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-11 leading-4 text-[var(--text-tertiary)]">
           {modelLabel}
         </span>
       )}

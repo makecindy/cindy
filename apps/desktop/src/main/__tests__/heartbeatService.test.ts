@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
     user: null,
   } as TestAuthState,
   authListener: null as AuthListener | null,
+  authRealm: 'cn' as 'cn' | 'global',
   createHeartbeatClient: vi.fn(),
   heartbeatStop: vi.fn(),
   unsubscribeAuth: vi.fn(),
@@ -40,6 +41,7 @@ vi.mock('@cindy/heartbeat-client', () => ({
 
 vi.mock('../authManager', () => ({
   getAuthState: () => mocks.authState,
+  getActiveAuthRealm: () => mocks.authRealm,
   onAuthStateChange: (listener: AuthListener) => {
     mocks.authListener = listener;
     return mocks.unsubscribeAuth;
@@ -47,7 +49,7 @@ vi.mock('../authManager', () => ({
 }));
 
 vi.mock('../clientEndpointsService', () => ({
-  getClientEndpoint: () => 'https://heartbeat.example.test',
+  getClientEndpoint: () => `https://heartbeat.${mocks.authRealm}.example.test`,
 }));
 
 vi.mock('../lifecycle', () => ({
@@ -87,6 +89,7 @@ describe('heartbeat service app-mode isolation', () => {
     vi.setSystemTime(new Date(2026, 6, 22, 23, 59, 0));
     vi.resetModules();
     mocks.authState = authState('signed-out');
+    mocks.authRealm = 'cn';
     mocks.authListener = null;
     mocks.onQuitDisposer = null;
     mocks.createHeartbeatClient.mockReset().mockReturnValue({
@@ -116,7 +119,7 @@ describe('heartbeat service app-mode isolation', () => {
     expect(mocks.createHeartbeatClient).toHaveBeenCalledTimes(1);
 
     const options = mocks.createHeartbeatClient.mock.calls[0][0];
-    expect(options.endpoint).toBe('https://heartbeat.example.test');
+    expect(options.endpoint).toBe('https://heartbeat.cn.example.test');
     expect(options.host.getUid()).toBe('cloud-user-1');
 
     pushAuthState(authState('local'));
@@ -134,6 +137,21 @@ describe('heartbeat service app-mode isolation', () => {
     expect(mocks.heartbeatStop).toHaveBeenCalledTimes(1);
     expect(mocks.createHeartbeatClient).toHaveBeenCalledTimes(2);
     expect(mocks.createHeartbeatClient.mock.calls[1][0].host.getUid()).toBe('cloud-user-2');
+  });
+
+  it('restarts Cindy heartbeat when the same authenticated owner moves to another realm', async () => {
+    mocks.authState = authState('cloud', 'cloud-user-1');
+    const { initHeartbeatService } = await loadService();
+    initHeartbeatService();
+
+    mocks.authRealm = 'global';
+    pushAuthState(authState('cloud', 'cloud-user-1'));
+
+    expect(mocks.heartbeatStop).toHaveBeenCalledTimes(1);
+    expect(mocks.createHeartbeatClient).toHaveBeenCalledTimes(2);
+    expect(mocks.createHeartbeatClient.mock.calls[1][0].endpoint).toBe(
+      'https://heartbeat.global.example.test',
+    );
   });
 
   it('never broadcasts to renderers, even across local-midnight boundaries', async () => {
