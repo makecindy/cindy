@@ -2959,11 +2959,11 @@ export function ChatInput({
     (opts?: { forceReload?: boolean }) => {
       const seq = ++slashCommandLoadSeqRef.current;
       // device-link 远程会话:agent-builtin / agent-skill 从被控端读(deviceLinkDeviceId);
-      // workingDir 是被控端路径(SSH remoteHostId 才置 null 关扫描)。desktop 命令始终本地。
+      // workingDir 是被控端路径；SSH remote 显式关扫描。desktop 命令始终本地。
       loadAllCommands(
         paletteAgentKind,
-        isRemoteSession ? null : (workingDir ?? null),
-        opts,
+        workingDir,
+        { ...opts, skipAgentSkills: isRemoteSession },
         deviceLinkDeviceId,
       )
         .then((cmds) => {

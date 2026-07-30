@@ -1330,6 +1330,22 @@ body.resizing-pane [data-ghost-webview] {
   background-color: var(--msg-scrollbar-hover);
 }
 
+/* Diff 卡片(chat/DiffView + chat/MarkdownDiffBlock)的横向滚动条 —— 常显,
+   不参与 `.is-scrolling` 自动隐藏体系。
+   why: 纵向"还有内容"有视觉线索(卡片被容器切断),横向没有 —— 长行到卡片右缘
+   就没了,thumb 默认透明时用户根本不知道这里能横滚(2026-07-30 用户反馈)。
+   槽厚 12px 与全局纵向槽宽对齐,thumb 同样靠 3px 透明 border 收成可见 6px;
+   `:horizontal` 让规则只吃横向条,纵向条继续走 auto-hide。 */
+.diff-hscroll::-webkit-scrollbar:horizontal {
+  height: 12px;
+}
+.diff-hscroll::-webkit-scrollbar-thumb:horizontal {
+  background-color: var(--msg-scrollbar);
+}
+.diff-hscroll::-webkit-scrollbar-thumb:horizontal:hover {
+  background-color: var(--msg-scrollbar-hover);
+}
+
 /* F-QUEUE-DEFER · PendingQueuePanel — slim 4px scrollbar so the
    `scrollbar-gutter: stable both-edges` reserved slot is small
    (4px each side instead of 12px). Without this, the chip-bg rows
