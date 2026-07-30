@@ -8772,6 +8772,9 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
     expect(danger).toEqual({ decision: 'accept' });
     expect(resolver).toHaveBeenCalledOnce();
+    // prompt-each-time 必须剥离会话级 suggestion —— 否则用户点一次"总是允许"就把高风险 action 永久放行
+    // (与 Claude Code 侧等价断言对齐)。
+    expect(resolver.mock.calls[0]?.[0]?.suggestions).toBeUndefined();
     await handle.close();
   });
 

@@ -454,13 +454,17 @@ describe('classifyShellCommand — 上传参数(wget 独有 + 贴合式短选项
 });
 
 describe('classifyShellCommand — 只读命令的写文件形态', () => {
-  it('sort -o/--output、uniq 第二位置参数、yq -i 写文件 → prompt', () => {
-    for (const c of ['sort -o /etc/passwd f', 'sort --output=/tmp/x f', 'sort -o/tmp/x f', 'uniq in.txt out.txt', 'yq -i \'.a=1\' conf.yaml']) {
+  it('sort -o/--output、uniq 第二位置参数、yq -i、base64 -o、tree -o 写文件 → prompt', () => {
+    for (const c of [
+      'sort -o /etc/passwd f', 'sort --output=/tmp/x f', 'sort -o/tmp/x f',
+      'uniq in.txt out.txt', 'yq -i \'.a=1\' conf.yaml',
+      'base64 -o /etc/cron.d/x payload', 'base64 -o/tmp/x in', 'tree -o /tmp/out.txt',
+    ]) {
       expect(classifyShellCommand(c, roots)).toBe('prompt');
     }
   });
   it('只读形态(stdout / 单输入 / 管道)仍放行', () => {
-    for (const c of ['sort f', 'uniq in.txt', 'cat f | sort | uniq', 'yq \'.a\' conf.yaml']) {
+    for (const c of ['sort f', 'uniq in.txt', 'cat f | sort | uniq', 'yq \'.a\' conf.yaml', 'base64 -d in', 'tree -L 2 src']) {
       expect(classifyShellCommand(c, roots)).toBe('auto-approve');
     }
   });

@@ -254,6 +254,8 @@ function isSafeReadonlyBin(bin: string, segment: string, tokens: string[]): bool
   if (bin === 'find' && /-(?:exec(?:dir)?|ok(?:dir)?|delete)\b|-f(?:print[f0]?|ls)\b/.test(segment)) return false;
   // sort:-o/--output 写文件;--compress-program 会运行任意外部程序(RCE)。
   if (bin === 'sort' && /(?:^|\s)(?:-o\b|-o\S|--output\b|--compress-program\b)/.test(segment)) return false;
+  // base64(BSD/macOS `-o <file>` 把解码内容写任意文件)、tree(`-o <file>` 把树输出写文件)—— -o/--output 落盘。
+  if ((bin === 'base64' || bin === 'tree') && /(?:^|\s)(?:-o\b|-o\S|--output\b)/.test(segment)) return false;
   // ripgrep 跑外部程序的 flag:--pre=CMD(预处理器)、--hostname-bin=CMD(取 hostname 供超链接)= RCE。
   // --pre-glob 无害不拦。
   if (bin === 'rg' && (/--pre(?:=|\s|$)/.test(segment) || /--hostname-bin\b/.test(segment))) return false;

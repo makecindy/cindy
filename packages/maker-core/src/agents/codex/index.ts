@@ -4240,6 +4240,8 @@ export class CodexAgent extends BaseAgent {
       if (turnGate === false) return { permissions: {}, scope: 'turn' };
       if (turnGate instanceof Promise && !(await turnGate)) return { permissions: {}, scope: 'turn' };
       const requestId = params.itemId ?? params.turnId;
+      // kind 借用 'commandExecution' 仅为复用其 fail-closed 语义(见 awaitApprovalDecision:无 action /
+      // 无人值守时 decline)——权限升级请求本就该 fail-closed。此处不是命令执行,只是共用同一条兜底路径。
       const decision = await awaitApprovalDecision(requestId, 'commandExecution', {
         kind: 'permission',
         requestId,
