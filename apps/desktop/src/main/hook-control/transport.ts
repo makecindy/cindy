@@ -69,15 +69,19 @@ export interface HookTransport {
 const BACKOFF_BASE_MS = 1000;
 const BACKOFF_MAX_MS = 30_000;
 /**
- * 退避抖动下界：实际延迟取 [BACKOFF_JITTER_MIN_RATIO, 1.0) × 退避值。
+ * 退避抖动下界：实际延迟取 [BACKOFF_JITTER_MIN_RATIO, 1.0] × 退避值。
+ *
+ * 上端闭合是实现事实，不是笔误：注入的 random() 契约为 [0,1)、取不到 1，但
+ * computeBackoffDelayMs 末尾的 Math.round 会把逼近满值的比例舍入上去，因此实际
+ * 延迟可以恰好等于退避值本身。
  *
  * 与 device-link 同口径（`packages/device-link/src/client.ts` 的 scheduleReconnect）。
  * hook-server 是所有 desktop 共连的中心服务，而退避序列本身是确定性的
  * （1s/2s/4s…30s），一旦服务重启或中间网络恢复，全端客户端会齐步撞上来。向下
  * 抖动把这批重连打散开。
  *
- * 取向下（而非双向）抖动，是为了让 backoffMaxMs 仍然是真实上限——注释和 opts 里
- * 承诺的「30s 封顶」不能因为抖动被抬高。
+ * 取向下（而非双向）抖动，是为了让 backoffMaxMs 仍然是真实上限——闭区间的上端
+ * 恰好是 backoffMaxMs，opts 承诺的「30s 封顶」不会被抖动抬高。
  */
 const BACKOFF_JITTER_MIN_RATIO = 0.7;
 

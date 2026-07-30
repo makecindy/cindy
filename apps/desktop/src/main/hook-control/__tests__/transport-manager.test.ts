@@ -405,7 +405,8 @@ describe('hook-control transport backoff jitter', () => {
     // random 的两个极端决定区间端点；中点用于确认是线性插值而非跳变。
     expect(computeBackoffDelayMs(0, BASE, MAX, () => 0)).toBe(700);
     expect(computeBackoffDelayMs(0, BASE, MAX, () => 0.5)).toBe(850);
-    // random() 返回 [0,1)，取不到 1；逼近 1 时应逼近 base 本身且不超过它。
+    // random() 取不到 1，但末尾 Math.round 会把逼近满值的比例舍入上去，
+    // 所以上端是闭的：延迟可以恰好等于退避值（这也是 maxMs 仍不被越过的边界）。
     expect(computeBackoffDelayMs(0, BASE, MAX, () => 0.999999)).toBe(BASE);
   });
 
