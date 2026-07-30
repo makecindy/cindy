@@ -1722,6 +1722,69 @@
         }
       }
     },
+    "telegramBot": {
+      "title": "Telegram ボット",
+      "description": "自分で作成した Telegram ボットを連携します。デスクトップが Telegram に直接接続し、DM でもグループでも {{appName}} を使えます。",
+      "statusAria": "Telegram ボットの状態: {{status}}",
+      "status": {
+        "needsConfig": "設定が必要",
+        "connecting": "接続中…",
+        "connected": "接続済み",
+        "conflict": "別のデバイスで使用中",
+        "error": "接続に失敗"
+      },
+      "connected": {
+        "heading": "Telegram Bot 接続済み",
+        "note": "Bot への DM やグループでのメンションは、このマシンの {{appName}} にルーティングされます。グループの直近の会話はコンテキストとして添付されます。",
+        "botLabel": "Bot アカウント",
+        "ownerLabel": "自分のユーザー ID"
+      },
+      "tokenLabel": "Bot Token",
+      "tokenPlaceholder": "BotFather が生成した Token を貼り付け",
+      "ownerUserIdLabel": "自分の Telegram ユーザー ID",
+      "ownerUserIdPlaceholder": "数字の ID（@userinfobot で確認）",
+      "showToken": "Token を表示",
+      "hideToken": "Token を非表示",
+      "formHint": "ユーザー ID は数字です。@userinfobot に DM すると自分の ID を確認できます。",
+      "connect": "接続",
+      "connectingAction": "接続中…",
+      "disconnect": "連携解除",
+      "disconnectingAction": "解除中…",
+      "disconnectAria": "Telegram ボットの連携を解除",
+      "disconnectConfirm": {
+        "title": "Telegram ボットの連携を解除しますか？",
+        "description": "連携を解除すると接続が切れ、ローカルに保存された Bot Token と Telegram ユーザー ID が削除されます。",
+        "confirm": "連携解除",
+        "cancel": "キャンセル"
+      },
+      "ownerNotice": {
+        "linked": "✅ 連携できました。準備できたらそのまま話しかけてください。",
+        "disconnected": "🔌 連携を解除しました。必要になったらまたつないでください。",
+        "online": "🟢 オンラインになりました。デスクトップアプリを開いている間は、ここでそのまま話しかけてください。",
+        "offline": "🔴 デスクトップアプリを閉じるので、しばらくオフラインになります。もう一度開いたら続きから話せます。",
+        "offlineNotice": "🔔 さっきまでしばらくオフラインでした。その間のメッセージは受け取れていないかもしれないので、もう一度送ってください。"
+      },
+      "guide": {
+        "title": "設定ガイド",
+        "openBotFather": "BotFather を開く ↗",
+        "step1": {
+          "title": "Bot を作成",
+          "body": "Telegram で @BotFather に /newbot を送り、指示に従って作成し、生成された Bot Token をコピーします。"
+        },
+        "step2": {
+          "title": "自分のユーザー ID を確認",
+          "body": "@userinfobot に DM して数字のユーザー ID を取得します。この ID からのメッセージだけが処理されます。"
+        },
+        "step3": {
+          "title": "グループコンテキスト（任意）",
+          "body": "Bot をグループに追加したら、BotFather で /setprivacy を Disable にする（または Bot をグループ管理者にする）と、全メッセージを見てコンテキストを組み立てられます。返信するのはメンションか Bot への返信のときだけです。"
+        },
+        "step4": {
+          "title": "接続",
+          "body": "上に Token とユーザー ID を入力して接続を押します。デスクトップが Telegram に直接接続し、{{appName}} のサーバーは経由しません。"
+        }
+      }
+    },
     "logout": {
       "button": "ログアウト",
       "aria": "ログアウト"
@@ -2383,7 +2446,8 @@
           "feishu": "Feishu の新規会話では、この Agent とモデルを使用します。既存の DM には /new で適用します。",
           "slack": "Slack の新しいスレッドでは、この Agent とモデルを使用します。",
           "discord": "Discord の新規会話では、この Agent とモデルを使用します。既存の DM には /new で適用します。",
-          "wechat": "WeChat の新規会話では、この Agent・モデル・権限モードを使用します。既存のチャットには /new で適用します。"
+          "wechat": "WeChat の新規会話では、この Agent・モデル・権限モードを使用します。既存のチャットには /new で適用します。",
+          "telegram": "Telegram の新規会話では、この Agent とモデルを使用します。既存の会話には /new で適用します。"
         },
         "agentLabel": "Agent",
         "modelLabel": "モデル設定",
@@ -7179,7 +7243,12 @@
       "migrationFailed": "移行に失敗しました。後でもう一度お試しください",
       "fetchUpdateNoticeFailed": "更新通知の取得に失敗しました",
       "corruptionRestored": "{{time}} のスナップショットからデータベースを復元しました。期間中のチャットが失われた可能性があります",
-      "schemaDriftWarning": "ローカルデータベースのバージョン記録に不整合があります。最新版に更新し、更新後もこの警告が繰り返し表示される場合はサポートに連絡してください。アプリがローカルデータを自動的に削除することはありません。"
+      "schemaDriftWarning": "ローカルデータベースのバージョン記録に不整合があります。最新版に更新し、更新後もこの警告が繰り返し表示される場合はサポートに連絡してください。アプリがローカルデータを自動的に削除することはありません。",
+      "telegramBotConnected": "Telegram ボット設定を保存しました",
+      "telegramBotConnectFailed": "Telegram ボットの接続に失敗しました。Token とネットワークを確認してください",
+      "telegramBotSaveFailed": "保存に失敗しました：{{message}}",
+      "telegramBotDisconnected": "Telegram ボットの連携を解除しました",
+      "telegramBotDisconnectFailed": "連携解除に失敗しました：{{message}}"
     },
     "errors": {
       "openFileFailed": "システムでファイルを開けません",
@@ -7201,7 +7270,10 @@
       "feishuFieldsRequired": "App ID と App Secret の両方を入力してください",
       "feishuAppIdFormat": "App ID の形式は cli_xxxxxxxxxxxxxxxx である必要があります",
       "discordFieldsRequired": "Bot Token と Discord ユーザー ID の両方を入力してください",
-      "discordOwnerUserIdFormat": "Discord ユーザー ID は 17-20 桁の数字である必要があります"
+      "discordOwnerUserIdFormat": "Discord ユーザー ID は 17-20 桁の数字である必要があります",
+      "telegramFieldsRequired": "Bot Token と Telegram ユーザー ID の両方を入力してください",
+      "telegramTokenFormat": "Token の形式が不正です。BotFather が生成する「数字:シークレット」の形にしてください",
+      "telegramOwnerUserIdFormat": "Telegram ユーザー ID は数字である必要があります"
     },
     "confirm": {
       "logoutTitle": "ログアウト",

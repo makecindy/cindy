@@ -377,6 +377,8 @@ const fanOutFeishuBotConflict = createIpcFanOut('feishuBot:conflict');
 const fanOutFeishuBotRegistrationStatus = createIpcFanOut('feishuBot:registration-status');
 // Discord Bot：本机凭证模式；这里只暴露 @cindy/im DiscordIM 的 transport 状态。
 const fanOutDiscordBotStatusChange = createIpcFanOut('discordBot:status-change');
+// 个人 Telegram Bot：本机凭证模式(BotFather token 直连);同上只暴露 transport 状态。
+const fanOutTelegramBotStatusChange = createIpcFanOut('telegramBot:status-change');
 // Personal WeChat: main owns auth/polling and broadcasts a credential-free state snapshot.
 const fanOutWechatBotStateChange = createIpcFanOut('wechatBot:state-changed');
 const fanOutVoiceInputEvent = createIpcFanOut('voice-input:event');
@@ -1467,6 +1469,49 @@ contextBridge.exposeInMainWorld('electronAPI', {
     checkSessionAuth: (): Promise<DiscordBotSessionAuthCheckWire> =>
       ipcRenderer.invoke('discordBot:check-session-auth'),
     onStatusChange: fanOutDiscordBotStatusChange,
+  },
+
+  // ── Personal Telegram Bot (Settings → IM Bot → Personal) ──
+  // 用户在 BotFather 自建 bot;token + owner user id 保存在本机 secrets,
+  // 桌面端直连 Telegram Bot API 长轮询, 不经 Cindy 服务器。
+  telegramBot: {
+    getStatus: (): Promise<{
+      status:
+        | { kind: 'idle' }
+        | { kind: 'connecting' }
+        | { kind: 'connected'; appId: string }
+        | { kind: 'conflict'; appId: string }
+        | { kind: 'error'; reason: string };
+      ownerUserId: string | null;
+      botUsername: string | null;
+    }> => ipcRenderer.invoke('telegramBot:get-status'),
+    setConfig: (payload: { token: string; ownerUserId: string }): Promise<{
+      status:
+        | { kind: 'idle' }
+        | { kind: 'connecting' }
+        | { kind: 'connected'; appId: string }
+        | { kind: 'conflict'; appId: string }
+        | { kind: 'error'; reason: string };
+      saveErrorStatus?:
+        | { kind: 'idle' }
+        | { kind: 'connecting' }
+        | { kind: 'connected'; appId: string }
+        | { kind: 'conflict'; appId: string }
+        | { kind: 'error'; reason: string };
+      ownerUserId: string | null;
+      botUsername: string | null;
+    }> => ipcRenderer.invoke('telegramBot:set-config', payload),
+    disconnect: (): Promise<{
+      status:
+        | { kind: 'idle' }
+        | { kind: 'connecting' }
+        | { kind: 'connected'; appId: string }
+        | { kind: 'conflict'; appId: string }
+        | { kind: 'error'; reason: string };
+    }> => ipcRenderer.invoke('telegramBot:disconnect'),
+    checkSessionAuth: (): Promise<DiscordBotSessionAuthCheckWire> =>
+      ipcRenderer.invoke('telegramBot:check-session-auth'),
+    onStatusChange: fanOutTelegramBotStatusChange,
   },
 
   // ── Personal WeChat (Settings → IM Bot → Personal) ──

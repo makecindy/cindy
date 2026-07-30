@@ -1723,6 +1723,69 @@
         }
       }
     },
+    "telegramBot": {
+      "title": "Telegram Bot",
+      "description": "Connect your own Telegram bot. The desktop connects to Telegram directly, so {{appName}} works from DMs and group chats.",
+      "statusAria": "Telegram bot status: {{status}}",
+      "status": {
+        "needsConfig": "Needs setup",
+        "connecting": "Connecting…",
+        "connected": "Connected",
+        "conflict": "In use by another device",
+        "error": "Connection failed"
+      },
+      "connected": {
+        "heading": "Telegram bot connected",
+        "note": "DM your bot or @mention it in a group and messages are routed to {{appName}} on this machine; recent group chatter is included as context.",
+        "botLabel": "Bot account",
+        "ownerLabel": "My user ID"
+      },
+      "tokenLabel": "Bot Token",
+      "tokenPlaceholder": "Paste the token from BotFather",
+      "ownerUserIdLabel": "My Telegram user ID",
+      "ownerUserIdPlaceholder": "Numeric ID (ask @userinfobot)",
+      "showToken": "Show token",
+      "hideToken": "Hide token",
+      "formHint": "The user ID is numeric; DM @userinfobot to look up your own ID.",
+      "connect": "Connect",
+      "connectingAction": "Connecting…",
+      "disconnect": "Unbind",
+      "disconnectingAction": "Unbinding…",
+      "disconnectAria": "Unbind Telegram bot",
+      "disconnectConfirm": {
+        "title": "Unbind Telegram Bot?",
+        "description": "Unbinding disconnects the bot and removes the locally saved Bot Token and Telegram user ID.",
+        "confirm": "Unbind",
+        "cancel": "Cancel"
+      },
+      "ownerNotice": {
+        "linked": "✅ All linked. Just send a message when you're ready.",
+        "disconnected": "🔌 Unlinked. Link again whenever you need me.",
+        "online": "🟢 I'm online now. While the desktop app is open, you can message me here.",
+        "offline": "🔴 The desktop app is closing, so I'll be offline for a bit. Reopen it to keep chatting.",
+        "offlineNotice": "🔔 I was offline for a while, so messages sent then may have been missed. Please send them again."
+      },
+      "guide": {
+        "title": "Setup guide",
+        "openBotFather": "Open BotFather ↗",
+        "step1": {
+          "title": "Create a bot",
+          "body": "Message @BotFather on Telegram, send /newbot and follow the prompts, then copy the generated Bot Token."
+        },
+        "step2": {
+          "title": "Find your user ID",
+          "body": "DM @userinfobot to get your numeric user ID; only messages from this ID are processed."
+        },
+        "step3": {
+          "title": "Group context (optional)",
+          "body": "After adding the bot to a group, send /setprivacy to BotFather and choose Disable (or make the bot a group admin) so it can see all group messages and build context; it only replies when you @mention it or reply to it."
+        },
+        "step4": {
+          "title": "Connect",
+          "body": "Fill in the token and user ID above and hit Connect. The desktop talks to Telegram directly — nothing goes through {{appName}} servers."
+        }
+      }
+    },
     "logout": {
       "button": "Log out",
       "aria": "Log out"
@@ -2384,7 +2447,8 @@
           "feishu": "New Feishu conversations use this Agent and model. Send /new in an existing DM to apply it.",
           "slack": "New Slack threads use this Agent and model.",
           "discord": "New Discord conversations use this Agent and model. Send /new in an existing DM to apply it.",
-          "wechat": "New WeChat conversations use this Agent, model, and permission mode. Send /new in an existing chat to apply them."
+          "wechat": "New WeChat conversations use this Agent, model, and permission mode. Send /new in an existing chat to apply them.",
+          "telegram": "New Telegram conversations use this Agent and model. Send /new in an existing conversation to apply it."
         },
         "agentLabel": "Agent",
         "modelLabel": "Model Configuration",
@@ -7189,7 +7253,12 @@
       "migrationFailed": "Migration failed, please retry later",
       "fetchUpdateNoticeFailed": "Failed to fetch update notice",
       "corruptionRestored": "Database restored from snapshot at {{time}}; recent chats may be lost",
-      "schemaDriftWarning": "A local database version record is inconsistent. Update to the latest version; if this warning keeps appearing, contact support. The app will not delete local data automatically."
+      "schemaDriftWarning": "A local database version record is inconsistent. Update to the latest version; if this warning keeps appearing, contact support. The app will not delete local data automatically.",
+      "telegramBotConnected": "Telegram bot configuration saved",
+      "telegramBotConnectFailed": "Telegram bot connection failed; check the token and your network",
+      "telegramBotSaveFailed": "Save failed: {{message}}",
+      "telegramBotDisconnected": "Telegram bot unbound",
+      "telegramBotDisconnectFailed": "Unbind failed: {{message}}"
     },
     "errors": {
       "openFileFailed": "Cannot open file in system",
@@ -7211,7 +7280,10 @@
       "feishuFieldsRequired": "App ID and App Secret are both required",
       "feishuAppIdFormat": "App ID format should be cli_xxxxxxxxxxxxxxxx",
       "discordFieldsRequired": "Bot Token and Discord user ID are both required",
-      "discordOwnerUserIdFormat": "Discord user ID must be 17-20 digits"
+      "discordOwnerUserIdFormat": "Discord user ID must be 17-20 digits",
+      "telegramFieldsRequired": "Bot Token and Telegram user ID are both required",
+      "telegramTokenFormat": "Invalid token format: expected the \"digits:secret\" shape generated by BotFather",
+      "telegramOwnerUserIdFormat": "Telegram user ID must be numeric"
     },
     "confirm": {
       "logoutTitle": "Log out",

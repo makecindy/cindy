@@ -380,6 +380,14 @@ type DiscordBotTransportStatus =
   | { kind: 'conflict'; appId: string }
   | { kind: 'error'; reason: string };
 
+/** @cindy/im TelegramIM 的 transport 状态(IMStatus union 的 mirror)。 */
+type TelegramBotTransportStatus =
+  | { kind: 'idle' }
+  | { kind: 'connecting' }
+  | { kind: 'connected'; appId: string }
+  | { kind: 'conflict'; appId: string }
+  | { kind: 'error'; reason: string };
+
 type WechatBotPhase =
   | 'disconnected'
   | 'authorizing'
@@ -1664,6 +1672,31 @@ interface ElectronAPI {
     onStatusChange: (
       callback: (update: {
         status: DiscordBotTransportStatus;
+      }) => void,
+    ) => () => void;
+  };
+
+  // ── Personal Telegram Bot (Settings → IM Bot → Personal) ──
+  telegramBot: {
+    getStatus: () => Promise<{
+      status: TelegramBotTransportStatus;
+      ownerUserId: string | null;
+      botUsername: string | null;
+    }>;
+    setConfig: (payload: { token: string; ownerUserId: string }) => Promise<{
+      status: TelegramBotTransportStatus;
+      saveErrorStatus?: TelegramBotTransportStatus;
+      ownerUserId: string | null;
+      botUsername: string | null;
+    }>;
+    disconnect: () => Promise<{
+      status: TelegramBotTransportStatus;
+    }>;
+    checkSessionAuth: () => Promise<DiscordBotSessionAuthCheckResult>;
+    onStatusChange: (
+      callback: (update: {
+        status: TelegramBotTransportStatus;
+        botUsername: string | null;
       }) => void,
     ) => () => void;
   };

@@ -1722,6 +1722,69 @@
         }
       }
     },
+    "telegramBot": {
+      "title": "Telegram 봇",
+      "description": "직접 만든 Telegram 봇을 연결하세요. 데스크톱이 Telegram에 직접 연결되어 DM과 그룹 채팅에서 {{appName}}를 사용할 수 있습니다.",
+      "statusAria": "Telegram 봇 상태: {{status}}",
+      "status": {
+        "needsConfig": "설정 필요",
+        "connecting": "연결 중…",
+        "connected": "연결됨",
+        "conflict": "다른 기기에서 사용 중",
+        "error": "연결 실패"
+      },
+      "connected": {
+        "heading": "Telegram 봇 연결됨",
+        "note": "봇에게 DM을 보내거나 그룹에서 멘션하면 이 기기의 {{appName}}로 전달됩니다. 그룹의 최근 대화는 컨텍스트로 함께 전달됩니다.",
+        "botLabel": "봇 계정",
+        "ownerLabel": "내 사용자 ID"
+      },
+      "tokenLabel": "Bot Token",
+      "tokenPlaceholder": "BotFather가 생성한 Token 붙여넣기",
+      "ownerUserIdLabel": "내 Telegram 사용자 ID",
+      "ownerUserIdPlaceholder": "숫자 ID (@userinfobot으로 확인)",
+      "showToken": "Token 표시",
+      "hideToken": "Token 숨기기",
+      "formHint": "사용자 ID는 숫자입니다. @userinfobot에게 DM을 보내면 자신의 ID를 확인할 수 있습니다.",
+      "connect": "연결",
+      "connectingAction": "연결 중…",
+      "disconnect": "연동 해제",
+      "disconnectingAction": "해제 중…",
+      "disconnectAria": "Telegram 봇 연동 해제",
+      "disconnectConfirm": {
+        "title": "Telegram 봇 연동을 해제하시겠습니까?",
+        "description": "연동을 해제하면 연결이 끊기고 로컬에 저장된 Bot Token과 Telegram 사용자 ID가 삭제됩니다.",
+        "confirm": "연동 해제",
+        "cancel": "취소"
+      },
+      "ownerNotice": {
+        "linked": "✅ 연동됐어요. 준비되면 바로 말을 걸어 주세요.",
+        "disconnected": "🔌 연동을 해제했어요. 필요할 때 다시 연결하면 됩니다.",
+        "online": "🟢 온라인이에요. 데스크톱 앱이 켜져 있는 동안 여기서 바로 말을 걸어 주세요.",
+        "offline": "🔴 데스크톱 앱이 종료되어 잠시 오프라인이 됩니다. 다시 열면 이어서 대화할 수 있어요.",
+        "offlineNotice": "🔔 조금 전까지 한동안 오프라인이었어요. 그동안 보낸 메시지는 못 받았을 수 있으니 다시 보내 주세요."
+      },
+      "guide": {
+        "title": "설정 가이드",
+        "openBotFather": "BotFather 열기 ↗",
+        "step1": {
+          "title": "봇 만들기",
+          "body": "Telegram에서 @BotFather에게 /newbot을 보내고 안내에 따라 만든 뒤, 생성된 Bot Token을 복사하세요."
+        },
+        "step2": {
+          "title": "내 사용자 ID 확인",
+          "body": "@userinfobot에게 DM을 보내 숫자 사용자 ID를 확인하세요. 이 ID가 보낸 메시지만 처리됩니다."
+        },
+        "step3": {
+          "title": "그룹 컨텍스트 (선택)",
+          "body": "봇을 그룹에 추가한 뒤 BotFather에서 /setprivacy를 Disable로 설정하거나 봇을 그룹 관리자로 지정하면, 봇이 모든 그룹 메시지를 보고 컨텍스트를 구성합니다. 멘션하거나 봇의 메시지에 답장할 때만 응답합니다."
+        },
+        "step4": {
+          "title": "연결",
+          "body": "위에 Token과 사용자 ID를 입력하고 연결을 누르세요. 데스크톱이 Telegram에 직접 연결되며 {{appName}} 서버를 거치지 않습니다."
+        }
+      }
+    },
     "logout": {
       "button": "로그아웃",
       "aria": "로그아웃"
@@ -2383,7 +2446,8 @@
           "feishu": "새 Feishu 대화는 이 Agent와 모델을 사용합니다. 기존 DM에는 /new를 보내 적용하세요.",
           "slack": "새 Slack 스레드는 이 Agent와 모델을 사용합니다.",
           "discord": "새 Discord 대화는 이 Agent와 모델을 사용합니다. 기존 DM에는 /new를 보내 적용하세요.",
-          "wechat": "새 WeChat 대화는 이 Agent, 모델, 권한 모드를 사용합니다. 기존 채팅에는 /new를 보내 적용하세요."
+          "wechat": "새 WeChat 대화는 이 Agent, 모델, 권한 모드를 사용합니다. 기존 채팅에는 /new를 보내 적용하세요.",
+          "telegram": "새 Telegram 대화는 이 Agent와 모델을 사용합니다. 기존 대화에는 /new를 보내 적용하세요."
         },
         "agentLabel": "Agent",
         "modelLabel": "모델 설정",
@@ -7179,7 +7243,12 @@
       "migrationFailed": "마이그레이션 실패. 잠시 후 다시 시도하세요",
       "fetchUpdateNoticeFailed": "업데이트 알림 가져오기 실패",
       "corruptionRestored": "{{time}}의 스냅샷에서 데이터베이스가 복원됨. 그 사이의 채팅이 손실되었을 수 있습니다",
-      "schemaDriftWarning": "로컬 데이터베이스 버전 기록이 일치하지 않습니다. 최신 버전으로 업데이트한 뒤에도 이 경고가 계속 표시되면 지원팀에 문의해 주세요. 앱은 로컬 데이터를 자동으로 삭제하지 않습니다."
+      "schemaDriftWarning": "로컬 데이터베이스 버전 기록이 일치하지 않습니다. 최신 버전으로 업데이트한 뒤에도 이 경고가 계속 표시되면 지원팀에 문의해 주세요. 앱은 로컬 데이터를 자동으로 삭제하지 않습니다.",
+      "telegramBotConnected": "Telegram 봇 구성이 저장됨",
+      "telegramBotConnectFailed": "Telegram 봇 연결 실패. Token과 네트워크를 확인하세요",
+      "telegramBotSaveFailed": "저장 실패: {{message}}",
+      "telegramBotDisconnected": "Telegram 봇 연동이 해제됨",
+      "telegramBotDisconnectFailed": "연동 해제 실패: {{message}}"
     },
     "errors": {
       "openFileFailed": "시스템에서 파일을 열 수 없습니다",
@@ -7201,7 +7270,10 @@
       "feishuFieldsRequired": "App ID와 App Secret 둘 다 입력해야 합니다",
       "feishuAppIdFormat": "App ID 형식은 cli_xxxxxxxxxxxxxxxx여야 합니다",
       "discordFieldsRequired": "Bot Token과 Discord 사용자 ID 둘 다 입력해야 합니다",
-      "discordOwnerUserIdFormat": "Discord 사용자 ID는 17-20자리 숫자여야 합니다"
+      "discordOwnerUserIdFormat": "Discord 사용자 ID는 17-20자리 숫자여야 합니다",
+      "telegramFieldsRequired": "Bot Token과 Telegram 사용자 ID 둘 다 입력해야 합니다",
+      "telegramTokenFormat": "Token 형식이 잘못되었습니다. BotFather가 생성한 \"숫자:시크릿\" 형태여야 합니다",
+      "telegramOwnerUserIdFormat": "Telegram 사용자 ID는 숫자여야 합니다"
     },
     "confirm": {
       "logoutTitle": "로그아웃",

@@ -1722,6 +1722,69 @@
         }
       }
     },
+    "telegramBot": {
+      "title": "Telegram 机器人",
+      "description": "绑定你自建的 Telegram Bot，桌面端直连 Telegram，私聊和群聊都能找 {{appName}}。",
+      "statusAria": "Telegram 机器人状态：{{status}}",
+      "status": {
+        "needsConfig": "需要配置",
+        "connecting": "连接中…",
+        "connected": "已连接",
+        "conflict": "已被另一台设备使用",
+        "error": "连接失败"
+      },
+      "connected": {
+        "heading": "已连接 Telegram Bot",
+        "note": "私聊 Bot 或在群里 @ 它，消息会路由到本机的 {{appName}}；群里最近的消息会作为上下文一起带上。",
+        "botLabel": "Bot 账号",
+        "ownerLabel": "我的用户 ID"
+      },
+      "tokenLabel": "Bot Token",
+      "tokenPlaceholder": "粘贴 BotFather 生成的 Token",
+      "ownerUserIdLabel": "我的 Telegram 用户 ID",
+      "ownerUserIdPlaceholder": "纯数字 ID（向 @userinfobot 查询）",
+      "showToken": "显示 Token",
+      "hideToken": "隐藏 Token",
+      "formHint": "用户 ID 是纯数字；私聊 @userinfobot 可以查到自己的 ID。",
+      "connect": "连接",
+      "connectingAction": "连接中…",
+      "disconnect": "解绑",
+      "disconnectingAction": "解绑中…",
+      "disconnectAria": "解绑 Telegram 机器人",
+      "disconnectConfirm": {
+        "title": "解绑 Telegram 机器人？",
+        "description": "解绑后会断开连接，并清除本机保存的 Bot Token 和 Telegram 用户 ID。",
+        "confirm": "解绑",
+        "cancel": "取消"
+      },
+      "ownerNotice": {
+        "linked": "✅ 关联好啦，直接开聊就行~",
+        "disconnected": "🔌 已断开关联啦，需要时再连上就行~",
+        "online": "🟢 我上线啦。电脑端开着时，直接在这里找我就行~",
+        "offline": "🔴 电脑端要关闭啦，我会先离线一会儿。重新打开后再继续聊~",
+        "offlineNotice": "🔔 我刚刚离线过一段时间，那期间发来的消息可能没收到，可以再发我一次~"
+      },
+      "guide": {
+        "title": "配置引导",
+        "openBotFather": "打开 BotFather ↗",
+        "step1": {
+          "title": "创建 Bot",
+          "body": "在 Telegram 里找 @BotFather，发送 /newbot 按提示创建，复制生成的 Bot Token。"
+        },
+        "step2": {
+          "title": "查自己的用户 ID",
+          "body": "私聊 @userinfobot 获取自己的数字用户 ID；只有这个 ID 发来的消息会被处理。"
+        },
+        "step3": {
+          "title": "群聊上下文（可选）",
+          "body": "把 Bot 拉进群后，在 BotFather 里发送 /setprivacy 选 Disable（或把 Bot 设为群管理员），Bot 才能看到全部群消息、拼出群上下文；群里 @ 它或回复它的消息才会触发回答。"
+        },
+        "step4": {
+          "title": "连接",
+          "body": "把 Token 和用户 ID 填到上面，点连接。桌面端会直连 Telegram，不经 {{appName}} 服务器。"
+        }
+      }
+    },
     "logout": {
       "button": "退出登录",
       "aria": "退出登录"
@@ -2383,7 +2446,8 @@
           "feishu": "飞书新对话会使用这组 Agent 和模型；已有私聊发送 /new 后应用。",
           "slack": "Slack 新 thread 会使用这组 Agent 和模型。",
           "discord": "Discord 新对话会使用这组 Agent 和模型；已有私聊发送 /new 后应用。",
-          "wechat": "微信新对话会使用这组 Agent、模型和权限模式；已有私聊发送 /new 后应用。"
+          "wechat": "微信新对话会使用这组 Agent、模型和权限模式；已有私聊发送 /new 后应用。",
+          "telegram": "Telegram 新对话会使用这组 Agent 和模型；已有对话发送 /new 后应用。"
         },
         "agentLabel": "Agent",
         "modelLabel": "模型配置",
@@ -7179,7 +7243,12 @@
       "migrationFailed": "迁移失败，请稍后重试",
       "fetchUpdateNoticeFailed": "获取更新公告失败",
       "corruptionRestored": "数据库已从 {{time}} 的快照恢复，期间的对话可能丢失",
-      "schemaDriftWarning": "本地数据库版本记录不一致。请升级到最新版；如果更新后仍反复出现，请联系支持。应用不会自动删除本地数据"
+      "schemaDriftWarning": "本地数据库版本记录不一致。请升级到最新版；如果更新后仍反复出现，请联系支持。应用不会自动删除本地数据",
+      "telegramBotConnected": "Telegram 机器人配置已保存",
+      "telegramBotConnectFailed": "Telegram 机器人连接失败，请检查 Token 和网络",
+      "telegramBotSaveFailed": "保存失败：{{message}}",
+      "telegramBotDisconnected": "已解绑 Telegram 机器人",
+      "telegramBotDisconnectFailed": "解绑失败：{{message}}"
     },
     "errors": {
       "openFileFailed": "无法在系统中打开文件",
@@ -7201,7 +7270,10 @@
       "feishuFieldsRequired": "App ID 和 App Secret 都需要填写",
       "feishuAppIdFormat": "App ID 格式应为 cli_xxxxxxxxxxxxxxxx",
       "discordFieldsRequired": "Bot Token 和 Discord 用户 ID 都需要填写",
-      "discordOwnerUserIdFormat": "Discord 用户 ID 必须是 17-20 位纯数字"
+      "discordOwnerUserIdFormat": "Discord 用户 ID 必须是 17-20 位纯数字",
+      "telegramFieldsRequired": "Bot Token 和 Telegram 用户 ID 都需要填写",
+      "telegramTokenFormat": "Token 格式不对：应为 BotFather 生成的「1234567:xxxx」形态",
+      "telegramOwnerUserIdFormat": "Telegram 用户 ID 必须是纯数字"
     },
     "confirm": {
       "logoutTitle": "退出登录",
