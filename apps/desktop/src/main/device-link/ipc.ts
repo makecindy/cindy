@@ -623,6 +623,75 @@ export async function handleUnsubscribe(
  */
 const MIRROR_CACHE_MAX_INBOUND_MESSAGES = 500;
 const MIRROR_CACHE_MAX_INBOUND_DEVICES = 64;
+/** 每设备的会话条数上限(store 内部还会按 MAX_CACHED_SESSIONS_PER_DEVICE 再裁一次)。 */
+const MIRROR_CACHE_MAX_INBOUND_SESSIONS_PER_DEVICE = 500;
+/** 单条(一条消息 / 一台设备)序列化后的字节上限。 */
+const MIRROR_CACHE_MAX_ITEM_BYTES = 512 * 1024;
+/** 整批 payload 序列化后的字节上限。 */
+const MIRROR_CACHE_MAX_TOTAL_BYTES = 4 * 1024 * 1024;
+/** 结构深度与节点数上限:在**序列化之前**挡住病态嵌套 / 超宽对象。 */
+const MIRROR_CACHE_MAX_DEPTH = 16;
+const MIRROR_CACHE_MAX_NODES_PER_ITEM = 20_000;
+
+/**
+ * 结构体量预检:不序列化,只走一遍计数。深度或节点数超限即判不合格。
+ *
+ * 顺序很重要 —— 先做这一步再 `JSON.stringify`:对病态嵌套 / 超宽对象直接序列化,本身就是
+ * 那个「一次调用拖住 main 进程」的攻击面(review: codex P1)。
+ */
+function withinStructuralBudget(value: unknown): boolean {
+  let nodes = 0;
+  const walk = (node: unknown, depth: number): boolean => {
+    if (depth > MIRROR_CACHE_MAX_DEPTH) return false;
+    if (++nodes > MIRROR_CACHE_MAX_NODES_PER_ITEM) return false;
+    if (Array.isArray(node)) {
+      for (const child of node) if (!walk(child, depth + 1)) return false;
+      return true;
+    }
+    if (node && typeof node === 'object') {
+      for (const child of Object.values(node)) if (!walk(child, depth + 1)) return false;
+      return true;
+    }
+    return true;
+  };
+  return walk(value, 0);
+}
+
+/**
+ * 逐条做有界筛选:超限的**单条丢弃**、累计字节到顶就停止收后续条目。
+ *
+ * 只限数组长度是不够的:一条消息里可以塞进任意大的字符串或深嵌套对象,而 main 侧随后要
+ * 遍历 + 反复 `JSON.stringify` 才会撞上 512KB 的输出上限 —— 那时内存已经吃进去了。
+ * 这里在归一化之前就把总量卡住,单条超限只丢那一条(缓存是纯优化,少一条无所谓)。
+ */
+function boundedItems<T>(items: readonly T[], maxItems: number, label: string): T[] {
+  const out: T[] = [];
+  let totalBytes = 0;
+  for (const item of items.slice(0, maxItems)) {
+    if (!withinStructuralBudget(item)) {
+      log.warn(`mirror cache ${label}: dropping structurally oversized item`);
+      continue;
+    }
+    let bytes: number;
+    try {
+      bytes = Buffer.byteLength(JSON.stringify(item) ?? '', 'utf8');
+    } catch {
+      log.warn(`mirror cache ${label}: dropping unserializable item`);
+      continue;
+    }
+    if (bytes > MIRROR_CACHE_MAX_ITEM_BYTES) {
+      log.warn(`mirror cache ${label}: dropping item of ${bytes} bytes`);
+      continue;
+    }
+    if (totalBytes + bytes > MIRROR_CACHE_MAX_TOTAL_BYTES) {
+      log.warn(`mirror cache ${label}: payload budget reached, ignoring the rest`);
+      break;
+    }
+    totalBytes += bytes;
+    out.push(item);
+  }
+  return out;
+}
 
 export async function handleMirrorCacheGetMessages(
   cache: MirrorCache,
@@ -639,11 +708,19 @@ export async function handleMirrorCachePutMessages(
   deviceId: unknown,
   sessionId: unknown,
   messages: unknown,
+  enqueueRetry: (root: string, paths?: readonly string[]) => Promise<void> = enqueuePurge,
 ): Promise<{ ok: true }> {
   const device = requireString(deviceId, 'deviceId');
   const session = requireString(sessionId, 'sessionId');
   if (!Array.isArray(messages)) throwIpcError('INVALID_PARAMS', 'messages must be an array');
-  await cache.writeMessages(device, session, messages.slice(0, MIRROR_CACHE_MAX_INBOUND_MESSAGES));
+  const bounded = boundedItems(messages, MIRROR_CACHE_MAX_INBOUND_MESSAGES, 'messages');
+  try {
+    await cache.writeMessages(device, session, bounded);
+  } catch (err) {
+    // 空写(被控端 /clear、rewind、会话删除)删不掉旧文件时同样要能重试:
+    // 权威侧已经没有这些消息了,本机留着就会在下次离线冷启动被 hydrate 出来。
+    await queuePurgeRetry(err, enqueueRetry, 'writeMessages');
+  }
   return { ok: true };
 }
 
@@ -658,8 +735,36 @@ export async function handleMirrorCachePutSessionList(
   devices: unknown,
 ): Promise<{ ok: true }> {
   if (!Array.isArray(devices)) throwIpcError('INVALID_PARAMS', 'devices must be an array');
-  await cache.writeSessionList(devices.slice(0, MIRROR_CACHE_MAX_INBOUND_DEVICES));
+  // 先把每台设备的 sessions 数组各自截断,再对整批做结构 / 字节预算 ——
+  // 否则「设备数不多但某台带着几十万个 session」照样能撑爆(review: codex P1)。
+  const trimmed = devices.map((device) =>
+    device && typeof device === 'object' && Array.isArray((device as { sessions?: unknown }).sessions)
+      ? {
+          ...(device as Record<string, unknown>),
+          sessions: ((device as { sessions: unknown[] }).sessions).slice(
+            0,
+            MIRROR_CACHE_MAX_INBOUND_SESSIONS_PER_DEVICE,
+          ),
+        }
+      : device,
+  );
+  await cache.writeSessionList(
+    boundedItems(trimmed, MIRROR_CACHE_MAX_INBOUND_DEVICES, 'session-list'),
+  );
   return { ok: true };
+}
+
+/** 清理类失败 → 登记持久重试;其它错误照常抛。 */
+async function queuePurgeRetry(
+  err: unknown,
+  enqueueRetry: (root: string, paths?: readonly string[]) => Promise<void>,
+  where: string,
+): Promise<void> {
+  if (!(err instanceof MirrorCachePurgeError)) throw err;
+  log.error(`${where} left ${err.remaining.length} path(s) behind; queued for retry`, err);
+  await enqueueRetry(err.root, err.remaining).catch((queueErr: unknown) => {
+    log.error(`failed to queue ${where} purge retry`, queueErr);
+  });
 }
 
 /**
@@ -682,14 +787,7 @@ export async function handleMirrorCacheClear(
   } catch (err) {
     // 文件删不掉(文件锁 / 权限)时登记重试:被撤销的对端正文不能就这么留在盘上,
     // 而 renderer 侧的清理是 fire-and-forget、没人会重试(review: codex P1)。
-    if (err instanceof MirrorCachePurgeError) {
-      log.error(`clearDevice left ${err.remaining.length} file(s) behind; queued for retry`, err);
-      await enqueueRetry(err.root, err.remaining).catch((queueErr: unknown) => {
-        log.error('failed to queue clearDevice purge retry', queueErr);
-      });
-      return { ok: true };
-    }
-    throw err;
+    await queuePurgeRetry(err, enqueueRetry, 'clearDevice');
   }
   return { ok: true };
 }

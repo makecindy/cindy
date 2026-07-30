@@ -62,6 +62,20 @@ interface StoredQueue {
  */
 const memoryQueue = new Map<string, PurgeEntry>();
 
+/**
+ * 队列 mutation 的串行锁。`enqueuePurge` 与 `drainPurgeQueue` 都是「读盘 → 改 → 写盘」,
+ * 不加锁时:drain 取完快照、enqueue 在其后写下一条新失败记录、drain 最后那次写入又把它
+ * 覆盖掉 —— 那条记录只剩内存里,正常退出即丢,被撤销设备的缓存就此没有跨重启的重试
+ * (review: codex P1)。所有 mutation 排成一条链,读与写落在同一个临界区内。
+ */
+let queueLock: Promise<unknown> = Promise.resolve();
+
+function withQueueLock<T>(task: () => Promise<T>): Promise<T> {
+  const next = queueLock.then(task, task);
+  queueLock = next.catch(() => undefined);
+  return next;
+}
+
 function queueFilePath(): string {
   return path.join(app.getPath('userData'), QUEUE_FILE);
 }
@@ -145,6 +159,10 @@ async function writeQueue(entries: readonly PurgeEntry[]): Promise<void> {
  * 内存表**先**记(保证本进程内一定能重试),再尝试落盘;落盘失败照常抛给调用方。
  */
 export async function enqueuePurge(root: string, paths?: readonly string[]): Promise<void> {
+  return withQueueLock(() => enqueuePurgeLocked(root, paths));
+}
+
+async function enqueuePurgeLocked(root: string, paths?: readonly string[]): Promise<void> {
   const base = ownersRoot();
   if (!isPurgableRoot(root, base)) {
     log.warn(`refusing to enqueue purge outside owners dir: ${root}`);
@@ -186,16 +204,22 @@ export async function enqueuePurge(root: string, paths?: readonly string[]): Pro
  * 返回本次清掉与仍待清的条目数,便于日志与测试断言。
  */
 export async function drainPurgeQueue(): Promise<{ purged: number; pending: number }> {
+  return withQueueLock(drainPurgeQueueLocked);
+}
+
+async function drainPurgeQueueLocked(): Promise<{ purged: number; pending: number }> {
   const entries = await readQueue();
   if (entries.length === 0) return { purged: 0, pending: 0 };
   const base = ownersRoot();
   const keep: PurgeEntry[] = [];
+  const purgedKeys = new Set<string>();
   let purged = 0;
   for (const entry of entries) {
     const key = entryKey(entry);
     if (!isPurgableRoot(entry.root, base)) {
       log.warn(`dropping purge entry outside owners dir: ${entry.root}`);
       memoryQueue.delete(key);
+      purgedKeys.add(key); // 非法条目同样要从盘上消失
       continue;
     }
     const targets = (entry.paths ?? []).filter((target) => isPurgablePath(target, entry.root));
@@ -221,6 +245,7 @@ export async function drainPurgeQueue(): Promise<{ purged: number; pending: numb
         await fsp.rm(entry.root, { recursive: true, force: true });
       }
       purged += 1;
+      purgedKeys.add(key);
       memoryQueue.delete(key);
       log.info(`purged leftover device-link mirror cache: ${entry.root}`);
     } catch (err) {
@@ -230,8 +255,14 @@ export async function drainPurgeQueue(): Promise<{ purged: number; pending: numb
       log.warn(`retry purge still failing (attempt ${retried.attempts}): ${entry.root}`, err);
     }
   }
+  // 收尾写入前与「此刻盘上 + 内存」重新合并一次:锁只保证本进程内互斥,另一个实例
+  // (共享 userData 的 dev 多开)可能刚写进新条目,不能被这次写入抹掉。
+  const merged = new Map<string, PurgeEntry>();
+  for (const entry of await readQueue()) merged.set(entryKey(entry), entry);
+  for (const entry of keep) merged.set(entryKey(entry), entry);
+  for (const key of purgedKeys) merged.delete(key);
   // 落盘失败不影响本次结果:内存表已经更新,下一次 drain 照样会重试。
-  await writeQueue(keep).catch((err: unknown) => {
+  await writeQueue([...merged.values()]).catch((err: unknown) => {
     log.error('failed to persist purge queue after drain (kept in memory only)', err);
   });
   return { purged, pending: keep.length };

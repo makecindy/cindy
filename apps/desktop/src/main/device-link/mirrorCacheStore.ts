@@ -476,7 +476,14 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       if (normalized.length === 0) {
         return serializeWrite(file, async () => {
           lastWritten.delete(file);
-          await fsp.rm(file, { force: true }).catch(() => undefined);
+          try {
+            await fsp.rm(file, { force: true });
+          } catch (err) {
+            // 这条路径服务的是被控端 /clear、rewind、会话删除 —— 权威侧已经确认"这个会话没有
+            // 可见消息了",本机却还留着旧正文,下次离线冷启动照样 hydrate 出来。删不掉要能被
+            // 重试,不能咽下去(review: codex P1)。
+            throw new MirrorCachePurgeError(resolveRoot(), [file], err);
+          }
         });
       }
       const body = JSON.stringify(normalized);

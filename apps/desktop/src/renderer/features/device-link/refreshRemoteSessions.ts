@@ -21,10 +21,7 @@ import { extractIpcError } from '@/utils/ipcError';
 import { DEVICE_LINK_RECONCILIATION_PROBE_MARKER } from '@cindy/maker-shared/device-link-contract';
 import { remoteProjectsStore } from './remoteProjectsStore';
 import { removeRemoteSessionActivityEntry } from './remoteSessionActivityStore';
-import {
-  scheduleSessionListPersist,
-  type CachedDeviceSessionsSnapshot,
-} from './mirrorCacheClient';
+import type { CachedDeviceSessionsSnapshot } from './mirrorCacheClient';
 
 const log = createLogger('device-link-refresh');
 
@@ -311,9 +308,6 @@ async function runRefreshRemoteDeviceSessions(
         } else {
           remoteProjectsStore.setDeviceSessions(deviceId, deviceName, list as Session[]);
         }
-        // 权威列表已落进 store → 去抖回写冷缓存,供下次冷启动先画侧边栏
-        // (collect 在定时器触发时才跑,拿的是届时最新的全部分片,不闭包本次数据)。
-        scheduleSessionListPersist(collectSessionListSnapshot);
       }
       return 'ok'; // 成功
     } catch (err) {

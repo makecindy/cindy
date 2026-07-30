@@ -40,11 +40,12 @@ import {
   removeRemoteSessionActivityForDevice,
 } from './remoteSessionActivityStore';
 import { revokedDevicesStore } from './revokedDevicesStore';
-import { refreshRemoteDeviceSessions } from './refreshRemoteSessions';
+import { collectSessionListSnapshot, refreshRemoteDeviceSessions } from './refreshRemoteSessions';
 import {
   cancelSessionListPersist,
   clearCachedDevice,
   readCachedSessionList,
+  scheduleSessionListPersist,
 } from './mirrorCacheClient';
 import { prefetchDeviceCapabilities, evictDeviceCapabilities } from '@/hooks/useAgentCapabilities';
 import { prefetchDeviceProviders, evictDeviceProviders } from '@/hooks/useDeviceProviders';
@@ -436,6 +437,16 @@ export function useDeviceLinkRemoteProjects(): void {
       if (eligible.has(deviceId)) eligible.set(deviceId, name);
     });
 
+    // 冷缓存回写由「分片变更」驱动,而不是只在一次成功 refresh 之后:
+    // 被控端推来的 archived / deleted 增量(applyPatch)只改内存,若 app 在下一次 10 秒对账
+    // 之前退出,下次离线冷启动就会把那条已归档 / 已删除的会话又 hydrate 回侧边栏
+    // (review: codex P1)。订阅覆盖所有 mutation(snapshot / patch / 改名 / 断连 / 移除),
+    // 去抖 1200ms 合并高频变更,main 侧还有内容指纹去重 —— 内容没变根本不落盘。
+    const offShardChange = remoteProjectsStore.subscribe(() => {
+      if (disposed) return;
+      scheduleSessionListPersist(collectSessionListSnapshot);
+    });
+
     return () => {
       disposed = true;
       setRemoteReseedImpl(null);
@@ -449,6 +460,7 @@ export function useDeviceLinkRemoteProjects(): void {
       offAccessRevoked();
       offControlTarget();
       offRename();
+      offShardChange();
       // best-effort 取消所有订阅(被控端 presence-offline 也会兜底清僵尸订阅)+ 驱逐远端快照缓存。
       for (const deviceId of eligible.keys()) {
         window.electronAPI.deviceLink.unsubscribe(deviceId, ['sessions']).catch(() => {});

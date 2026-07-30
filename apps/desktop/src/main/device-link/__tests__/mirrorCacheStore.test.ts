@@ -194,6 +194,28 @@ describe('readMessages / writeMessages', () => {
     expect(fs.existsSync(path.join(messagesDir(), messageFileName('dev-1', 'sess-1')))).toBe(false);
   });
 
+  // review(codex P1):/clear、rewind、会话删除走的是这条空写路径,rm 失败被吞的话
+  // 旧正文会在下次离线冷启动被 hydrate 出来。
+  it('空写删除失败 → 抛 MirrorCachePurgeError 带上该文件(可被登记重试)', async () => {
+    if ((process.getuid?.() ?? 0) === 0) return; // root 下权限位不生效
+    const c = cache();
+    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+    const dir = messagesDir();
+    const file = path.join(dir, messageFileName('dev-1', 'sess-1'));
+    await fsp.chmod(dir, 0o500);
+    try {
+      await c.writeMessages('dev-1', 'sess-1', []).then(
+        () => expect.unreachable('empty write should have rejected'),
+        (err: unknown) => {
+          expect(err).toBeInstanceOf(MirrorCachePurgeError);
+          expect((err as MirrorCachePurgeError).remaining).toEqual([file]);
+        },
+      );
+    } finally {
+      await fsp.chmod(dir, 0o700);
+    }
+  });
+
   it('单文件超体积上限 → 放弃写入并保留旧文件(宁缺毋滥)', async () => {
     const c = cache();
     await c.writeMessages('dev-1', 'sess-1', [row('keep', '2026-01-01T00:00:00.000Z')]);

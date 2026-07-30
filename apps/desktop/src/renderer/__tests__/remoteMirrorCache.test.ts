@@ -396,6 +396,48 @@ describe('会话离场时清消息缓存', () => {
   });
 });
 
+describe('分片变更通知(冷缓存回写的触发源)', () => {
+  // review(codex P1):archived / deleted 的增量原先只改内存,列表快照要等下一次成功
+  // refresh 才更新;app 若在 10 秒对账前退出,下次离线冷启动会把它 hydrate 回侧边栏。
+  // 现在回写由 store 订阅驱动 —— 这里钉住「这些 mutation 确实会通知订阅者」这一契约。
+  it('applyPatch 的 deleted / archived 会通知订阅者', () => {
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [
+      { id: 's-del' },
+      { id: 's-arch' },
+    ] as never);
+    let notified = 0;
+    const off = remoteProjectsStore.subscribe(() => {
+      notified += 1;
+    });
+    try {
+      remoteProjectsStore.applyPatch(DEVICE_ID, 's-del', { status: 'deleted' });
+      expect(notified).toBeGreaterThan(0);
+      const afterDelete = notified;
+      remoteProjectsStore.applyPatch(DEVICE_ID, 's-arch', { status: 'archived' });
+      expect(notified).toBeGreaterThan(afterDelete);
+    } finally {
+      off();
+    }
+  });
+
+  it('markDeviceDisconnected / removeDevice 同样通知订阅者', () => {
+    remoteProjectsStore.setDeviceSessions('dev-x', 'X', [{ id: 's-x' }] as never);
+    let notified = 0;
+    const off = remoteProjectsStore.subscribe(() => {
+      notified += 1;
+    });
+    try {
+      remoteProjectsStore.markDeviceDisconnected('dev-x');
+      const afterDisconnect = notified;
+      expect(afterDisconnect).toBeGreaterThan(0);
+      remoteProjectsStore.removeDevice('dev-x');
+      expect(notified).toBeGreaterThan(afterDisconnect);
+    } finally {
+      off();
+    }
+  });
+});
+
 describe('列表快照的采集口径', () => {
   // review(codex P1):collectSessionListSnapshot 原本用 getDeviceIds()(只返回 connected),
   // 于是「A 离线、B 刚 refresh」时整份回写会把 A 抹掉,下次冷启动恢复不出那台离线设备 ——

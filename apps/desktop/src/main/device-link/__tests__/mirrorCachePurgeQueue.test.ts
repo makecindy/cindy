@@ -176,6 +176,36 @@ describe('文件级条目(clearDevice 删不掉时用)', () => {
   });
 });
 
+describe('并发 mutation', () => {
+  // review(codex P1):drain 取完快照、enqueue 写入新记录、drain 收尾写入把它覆盖掉 ——
+  // 那条记录只剩内存,正常退出即丢,被撤销设备就此没有跨重启的重试。
+  it('drain 与 enqueue 并发时,新入队的条目不会被 drain 的收尾写入抹掉', async () => {
+    const purgeable = await makeOwnerCache('owner-1');
+    await enqueuePurge(purgeable);
+    // 第二台设备的缓存:enqueue 与 drain 同时发生
+    const late = path.join(userData, 'owners', 'owner-2', 'device-link-mirror-cache');
+    await fsp.mkdir(path.join(late, 'messages'), { recursive: true });
+    const stuck = path.join(late, 'messages', 'locked.json');
+    await fsp.writeFile(stuck, '{}', 'utf8');
+    await fsp.chmod(path.join(late, 'messages'), 0o500); // 让它删不掉,好断言仍在队列里
+
+    try {
+      await Promise.all([drainPurgeQueue(), enqueuePurge(late, [stuck])]);
+
+      const entries = await __testing.readQueue();
+      // owner-1 已清掉;owner-2 的新条目必须还在(且已落盘,不只在内存里)
+      expect(fs.existsSync(purgeable)).toBe(false);
+      expect(entries.map((e) => e.root)).toContain(late);
+      const persisted = JSON.parse(await fsp.readFile(queueFile(), 'utf8')) as {
+        entries: Array<{ root: string }>;
+      };
+      expect(persisted.entries.map((e) => e.root)).toContain(late);
+    } finally {
+      await fsp.chmod(path.join(late, 'messages'), 0o700);
+    }
+  });
+});
+
 describe('落盘失败', () => {
   // review(codex P1):唯一的持久重试记录写不下去却报成功 = 静默丢失。
   it('队列文件写不下去时 enqueuePurge 抛错,但条目留在内存里仍会被 drain 重试', async () => {

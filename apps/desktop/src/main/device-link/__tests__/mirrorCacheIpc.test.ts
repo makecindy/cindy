@@ -1,9 +1,9 @@
 /**
  * mirrorCacheIpc.test.ts —— 镜像冷缓存 IPC handler 的入参校验与裁剪。
  *
- * IPC payload 一律不可信:缺 id / 非数组要确定性拒掉(而不是把垃圾写进缓存目录),
- * 超量数组要在 main 侧就地截断。clear 的语义分叉(带 deviceId = 单设备,不带 = 整体)
- * 也在这里钉住 —— 登出清理依赖后者。
+ * IPC payload 一律不可信:缺 id / 非数组要确定性拒掉(而不是把垃圾写进缓存目录);
+ * 数组长度、单条字节、总字节、结构深度与节点数都要在 main 侧就地卡住(只限长度挡不住
+ * 「一条里塞任意大字符串」)。`clear` 只接受非空 deviceId、绝不触发整体清,也在这里钉住。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -92,6 +92,92 @@ describe('messages get / put', () => {
   it('空数组照常透传(空 = 清掉该条缓存,是有意义的写)', async () => {
     await handleMirrorCachePutMessages(cache, 'dev-1', 'sess-1', []);
     expect(cache.writeMessages).toHaveBeenCalledWith('dev-1', 'sess-1', []);
+  });
+});
+
+describe('payload 有界校验', () => {
+  // review(codex P1):只限数组长度挡不住「一条消息里塞任意大字符串 / 深嵌套」——
+  // main 会先遍历 + 反复 stringify 才撞上 512KB 输出上限,那时内存已经吃进去了。
+  it('单条超字节上限 → 丢弃那一条,其余照常写入', async () => {
+    const fat = { id: 'fat', clientId: 'c-fat', content: 'x'.repeat(600 * 1024) };
+    const slim = { id: 'slim', clientId: 'c-slim', content: 'ok' };
+    await handleMirrorCachePutMessages(cache, 'dev-1', 'sess-1', [fat, slim]);
+    const passed = cache.writeMessages.mock.calls[0]?.[2] as Array<{ id: string }>;
+    expect(passed.map((m) => m.id)).toEqual(['slim']);
+  });
+
+  it('整批超总字节预算 → 到顶即停,不继续吃后面的条目', async () => {
+    // 每条 ~400KB,总预算 4MB → 大约 10 条封顶
+    const items = Array.from({ length: 40 }, (_, i) => ({
+      id: `m${i}`,
+      clientId: `c-${i}`,
+      content: 'y'.repeat(400 * 1024),
+    }));
+    await handleMirrorCachePutMessages(cache, 'dev-1', 'sess-1', items);
+    const passed = cache.writeMessages.mock.calls[0]?.[2] as unknown[];
+    expect(passed.length).toBeGreaterThan(0);
+    expect(passed.length).toBeLessThan(items.length);
+  });
+
+  it('病态深嵌套 → 在序列化之前就被丢掉', async () => {
+    let deep: Record<string, unknown> = { id: 'deep', clientId: 'c-deep' };
+    for (let i = 0; i < 200; i += 1) deep = { id: 'deep', clientId: 'c-deep', nested: deep };
+    const slim = { id: 'slim', clientId: 'c-slim', content: 'ok' };
+    await handleMirrorCachePutMessages(cache, 'dev-1', 'sess-1', [deep, slim]);
+    const passed = cache.writeMessages.mock.calls[0]?.[2] as Array<{ id: string }>;
+    expect(passed.map((m) => m.id)).toEqual(['slim']);
+  });
+
+  it('超宽对象(节点数爆炸)同样被丢掉', async () => {
+    const wide: Record<string, unknown> = { id: 'wide', clientId: 'c-wide' };
+    for (let i = 0; i < 30_000; i += 1) wide[`k${i}`] = i;
+    await handleMirrorCachePutMessages(cache, 'dev-1', 'sess-1', [wide]);
+    expect(cache.writeMessages.mock.calls[0]?.[2]).toEqual([]);
+  });
+
+  it('循环引用不会让 handler 抛错(丢弃那条即可)', async () => {
+    const cyclic: Record<string, unknown> = { id: 'cyc', clientId: 'c-cyc' };
+    cyclic.self = cyclic;
+    await expect(
+      handleMirrorCachePutMessages(cache, 'dev-1', 'sess-1', [cyclic]),
+    ).resolves.toEqual({ ok: true });
+    expect(cache.writeMessages.mock.calls[0]?.[2]).toEqual([]);
+  });
+
+  it('每台设备的 sessions 数组也被截断(设备数不多但某台带几十万会话)', async () => {
+    const devices = [
+      {
+        deviceId: 'dev-1',
+        deviceName: 'Mac',
+        sessions: Array.from({ length: 5_000 }, (_, i) => ({ id: `s${i}`, status: 'active' })),
+      },
+    ];
+    await handleMirrorCachePutSessionList(cache, devices);
+    const passed = cache.writeSessionList.mock.calls[0]?.[0] as Array<{ sessions: unknown[] }>;
+    expect(passed[0].sessions.length).toBe(500);
+  });
+});
+
+describe('清理失败登记重试', () => {
+  it('空写删除失败 → 登记进 purge 队列,IPC 仍返回 ok', async () => {
+    const stuck = ['/data/owners/x/device-link-mirror-cache/messages/a.json'];
+    cache.writeMessages.mockRejectedValueOnce(
+      new MirrorCachePurgeError('/data/owners/x/device-link-mirror-cache', stuck, null),
+    );
+    const enqueue = vi.fn(async () => undefined);
+
+    await expect(
+      handleMirrorCachePutMessages(cache, 'dev-1', 'sess-1', [], enqueue),
+    ).resolves.toEqual({ ok: true });
+
+    expect(enqueue).toHaveBeenCalledWith('/data/owners/x/device-link-mirror-cache', stuck);
+  });
+
+  it('写入的非 purge 类错误照常抛出', async () => {
+    cache.writeMessages.mockRejectedValueOnce(new Error('disk on fire'));
+    await expect(
+      handleMirrorCachePutMessages(cache, 'dev-1', 'sess-1', [], async () => undefined),
+    ).rejects.toThrow(/disk on fire/);
   });
 });
 
