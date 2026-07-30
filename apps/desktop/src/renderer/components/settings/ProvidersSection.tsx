@@ -39,11 +39,7 @@ import {
   updateCustomProvider,
 } from '@/lib/customProviders';
 import { providerMonogram } from '@/lib/providerModels';
-import {
-  providerSecretStorageKey,
-  PROVIDER_SECRET_IDS,
-  type ProviderSecretId,
-} from '../../../shared/providerSecrets';
+import { PROVIDER_SECRET_IDS, type ProviderSecretId } from '../../../shared/providerSecrets';
 
 import {
   customProviderSubtitleForDisplay,
@@ -530,31 +526,31 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
 /**
  * 「图像生成 API key」行(2026-07 图像多来源):订阅 OAuth 供应商(OpenAI/xAI)的
  * 图像通道走独立的平台 key,与登录态解耦。已配置显示掩码尾巴 + 清除;未配置显示
- * 输入 + 保存。key 走 safeStorage(providerSecrets SSoT),不回显明文。
+ * 输入 + 保存。key 是 MAIN_ONLY 键,走内置 API-key 专用 IPC(builtinApiKey*),
+ * renderer 只能查存在性/写/删,通用 safeStorage 桥读不到明文。
  */
 function ImageApiKeyRow({ secretId }: { secretId: ProviderSecretId }) {
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [draftKey, setDraftKey] = useState('');
-  const storageKey = providerSecretStorageKey(secretId);
 
   useEffect(() => {
     let cancelled = false;
-    void window.electronAPI.safeStorageHas(storageKey).then((has) => {
+    void window.electronAPI.builtinApiKeyHas(secretId).then((has) => {
       if (!cancelled) setConfigured(has);
     });
     return () => {
       cancelled = true;
     };
-  }, [storageKey]);
+  }, [secretId]);
 
   const handleSave = useCallback(async () => {
     const key = draftKey.trim();
     if (!key) return;
     setBusy(true);
     try {
-      const ok = await window.electronAPI.safeStorageStore(storageKey, key);
+      const ok = await window.electronAPI.builtinApiKeyStore(secretId, key);
       if (!ok) {
         toast.error(t('settings.providers.imagesKey.toast.saveFailed'));
         return;
@@ -567,12 +563,12 @@ function ImageApiKeyRow({ secretId }: { secretId: ProviderSecretId }) {
     } finally {
       setBusy(false);
     }
-  }, [draftKey, storageKey, t]);
+  }, [draftKey, secretId, t]);
 
   const handleClear = useCallback(async () => {
     setBusy(true);
     try {
-      const result = await window.electronAPI.safeStorageRemove(storageKey);
+      const result = await window.electronAPI.builtinApiKeyRemove(secretId);
       if (!result.success) {
         toast.error(t('settings.providers.imagesKey.toast.clearFailed'));
         return;
@@ -584,7 +580,7 @@ function ImageApiKeyRow({ secretId }: { secretId: ProviderSecretId }) {
     } finally {
       setBusy(false);
     }
-  }, [storageKey, t]);
+  }, [secretId, t]);
 
   if (configured === null) return null;
   return (

@@ -3402,23 +3402,6 @@ const registerIpcHandlers = () => {
   );
 
   ipcMain.handle(
-    'safe-storage-has',
-    async (event: Electron.IpcMainInvokeEvent, key: string): Promise<boolean> => {
-      try {
-        assertTrustedAppRendererEvent(event);
-        if (!isValidRendererKey(key)) return false;
-        const filepath = resolveSafeStorageFilepath(key);
-        if (!filepath) return false;
-        if (!safeStorage.isEncryptionAvailable()) return false;
-        return fs.existsSync(filepath);
-      } catch (err) {
-        console.error('[safe-storage-has]', err);
-        return false;
-      }
-    },
-  );
-
-  ipcMain.handle(
     'safe-storage-remove',
     async (
       event: Electron.IpcMainInvokeEvent,
@@ -3481,10 +3464,24 @@ const registerIpcHandlers = () => {
     },
   );
 
-  // 内置 API-key 供应商专用 IPC(写/删,永不回读明文)。
+  // 内置 API-key 供应商专用 IPC(查/写/删,has 只回存在性,永不回读明文)。
   // 这些键在 MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS 里,通用 safeStorage IPC 已拦截;
-  // 此处是唯一合法的 renderer 写入通道。
-  const BUILTIN_API_KEY_PROVIDER_IDS = new Set<ProviderSecretId>(['gemini']);
+  // 此处是唯一合法的 renderer 访问通道。
+  const BUILTIN_API_KEY_PROVIDER_IDS = new Set<ProviderSecretId>(['gemini', 'openai-images']);
+
+  ipcMain.handle(
+    'builtin-api-key-has',
+    async (event: Electron.IpcMainInvokeEvent, providerId: string): Promise<boolean> => {
+      try {
+        assertTrustedAppRendererEvent(event);
+        if (!BUILTIN_API_KEY_PROVIDER_IDS.has(providerId as ProviderSecretId)) return false;
+        return getProviderSecretStore().has(providerId as ProviderSecretId);
+      } catch (err) {
+        console.error('[builtin-api-key-has]', err);
+        return false;
+      }
+    },
+  );
 
   ipcMain.handle(
     'builtin-api-key-store',

@@ -1889,7 +1889,8 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     const stripOpenaiPrefix = (id: string) =>
       id.startsWith('openai/') ? id.slice('openai/'.length) : id;
     registry.register('openai', {
-      ready: () => getProviderSecretStore().get('openai-images') !== null,
+      // trim-nonempty 与 gemini 通道同口径:空白 key 不算就绪。
+      ready: () => (getProviderSecretStore().get('openai-images')?.trim() ?? '') !== '',
       generateImage: ({ model, prompt, aspectRatio }) =>
         openaiImagesClient.generateImage({
           model: stripOpenaiPrefix(model),
