@@ -404,7 +404,10 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
    * 也可能是落位失败后删不掉的 `.tmp` —— 后者里同样是完整快照明文)。
    */
   type SessionListWriteResult =
-    | { outcome: 'written' | 'removed' | 'skipped' | 'stale' | 'failed'; stuck?: undefined }
+    | {
+        outcome: 'written' | 'removed' | 'skipped' | 'stale' | 'failed' | 'invalidated';
+        stuck?: undefined;
+      }
     | { outcome: 'purge-failed'; stuck: string };
 
   /** 这笔写入此刻是否已被作废。 */
@@ -447,10 +450,19 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       if (isStale(guard)) return { outcome: 'stale' };
       const written = await writeFileAtomic(file, serialized);
       if (!written.ok) {
-        // 连 `.tmp` 都删不掉时那份完整快照留在盘上 → 当成删除类失败登记重试。
+        // 同 writeMessages:内容已变而新快照没落位,旧快照就是过期的(可能还带着刚被
+        // 归档 / 删除的会话)。保留它会在下次离线冷启动把那条会话画回侧边栏,而"内容没变"
+        // 的后续对账不会再通知订阅者、也就不会再试一次 —— 所以**作废**旧快照
+        // (review: codex P1)。作废失败才登记重试。
+        lastWritten.delete(file);
+        try {
+          await fsp.rm(file, { recursive: true, force: true });
+        } catch {
+          if (await pathExists(file)) return { outcome: 'purge-failed', stuck: file };
+        }
         return written.leftoverTmp
           ? { outcome: 'purge-failed', stuck: written.leftoverTmp }
-          : { outcome: 'failed' };
+          : { outcome: 'invalidated' };
       }
       if (isStale(guard)) {
         // 同 writeMessages:清理已经过去了,这笔补偿删除失败就等于「被撤销 / 上一个账号的
@@ -537,11 +549,24 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         if (epoch !== generation) return;
         const written = await writeFileAtomic(file, serialized);
         if (!written.ok) {
-          // 落位失败且连 `.tmp` 都删不掉:那份完整明文留在盘上,登记重试(逐设备清理的
-          // 枚举现在也认 `.tmp`,但重试更直接)。
-          if (written.leftoverTmp) {
-            throw new MirrorCachePurgeError(rootAtStart, [written.leftoverTmp], null);
+          // 走到这里说明权威内容**已经变了**(上面 unchanged 已挡掉没变的情况),而新内容
+          // 没能落位。旧正本此刻是过期窗口:rewind / 删消息之前的正文。留着它,下次离线冷
+          // 启动就会把已经不存在的消息 hydrate 出来 —— 所以宁可**作废**这条缓存,而不是保留
+          // 一份会骗人的旧页(缓存是纯优化,缺一条只是少一次首屏加速)(review: codex P1)。
+          lastWritten.delete(file);
+          const stuck: string[] = [];
+          try {
+            // recursive:落位失败的成因也可能让目标位置变成一个目录(枚举 / 清理都按
+            // 「这是本缓存自己的路径」处理,递归不会越界)。
+            await fsp.rm(file, { recursive: true, force: true });
+          } catch {
+            // 只有旧正本**确实还在**才算残留:messages/ 位置被占成普通文件这类情况下
+            // rm 也会失败,但盘上本来就没有那份缓存(同 writeFileAtomic 的 tmp 判定)。
+            if (await pathExists(file)) stuck.push(file);
           }
+          if (written.leftoverTmp) stuck.push(written.leftoverTmp);
+          // 作废也失败 → 登记重试(明文留在盘上是隐私问题,不能咽下去)。
+          if (stuck.length > 0) throw new MirrorCachePurgeError(rootAtStart, stuck, null);
           return;
         }
         if (epoch !== generation) {
@@ -757,6 +782,13 @@ async function listRootTmpFiles(root: string): Promise<{ files: string[]; unread
     if (errnoCode(err) === 'ENOENT') return { files: [], unreadable: false };
     return { files: [], unreadable: true };
   }
+}
+
+async function pathExists(file: string): Promise<boolean> {
+  return fsp.stat(file).then(
+    () => true,
+    () => false,
+  );
 }
 
 /** 超过这个年龄的 `.tmp` 一定不是在写的那笔(单次写盘是毫秒级),可以安全清掉。 */

@@ -429,17 +429,46 @@ describe('session list', () => {
             expect((err as MirrorCachePurgeError).remaining).toEqual([listFile]);
           },
         );
-        // 纯写入失败(同一个只读目录)不该被当成"该重试删除":旧快照仍然有效。
-        await expect(
-          c.writeSessionList([
+        // review(codex P1):内容**已变**而新快照落不下去时,盘上那份就是过期快照
+        // (可能还带着刚被归档 / 删除的会话)。作废也做不到(只读目录)→ 必须登记重试,
+        // 不能当成"旧快照仍然有效"咽下去。
+        await c
+          .writeSessionList([
             { deviceId: 'dev-2', deviceName: 'Mac2', sessions: [{ id: 's2', status: 'active' }] },
-          ]),
-        ).resolves.toBeUndefined();
+          ])
+          .then(
+            () => expect.unreachable('stale snapshot that cannot be replaced must be queued'),
+            (err: unknown) => {
+              expect(err).toBeInstanceOf(MirrorCachePurgeError);
+              expect((err as MirrorCachePurgeError).remaining).toEqual([listFile]);
+            },
+          );
       } finally {
         await fsp.chmod(cacheRoot, 0o700);
       }
     },
   );
+});
+
+describe('落位失败时作废过期缓存', () => {
+  // review(codex P1):权威内容已变而新页没能落位(Windows 文件锁)时,旧正本是 rewind /
+  // 删消息之前的窗口。留着它,下次离线冷启动就 hydrate 出已经不存在的消息 —— 宁可作废。
+  it('消息页落位失败 → 旧正本被作废(不留一份会骗人的旧页)', async () => {
+    const c = cache();
+    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+    const file = path.join(messagesDir(), messageFileName('dev-1', 'sess-1'));
+    expect(fs.existsSync(file)).toBe(true);
+
+    // 让 rename 失败:把目标位置换成目录(rename 文件 → 已存在目录必失败)。
+    await fsp.rm(file, { force: true });
+    await fsp.mkdir(file, { recursive: true });
+
+    await c.writeMessages('dev-1', 'sess-1', [row('m2', '2026-02-01T00:00:00.000Z')]);
+
+    // 旧内容已经不在(这里旧正本恰好是那个目录,作废 = 它被删掉)。
+    expect(fs.existsSync(file)).toBe(false);
+    expect(await c.readMessages('dev-1', 'sess-1')).toEqual([]);
+  });
 });
 
 describe('.tmp 残留(落位失败 / 进程被杀在 writeFile 与 rename 之间)', () => {

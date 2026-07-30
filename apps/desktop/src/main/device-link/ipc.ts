@@ -700,6 +700,25 @@ function boundedItems<T>(items: readonly T[], maxItems: number, label: string): 
   return out;
 }
 
+/**
+ * 「启动时那次 purge drain 还没跑完」的闸门。
+ *
+ * 上一次登出 / 撤销留下的待清文件在 drain 完成前仍在盘上,而缓存读 IPC 在 `registerDeviceLinkIpc`
+ * 之后立刻可用 —— renderer 的 hydrate 可能正好读到那份本该消失的明文,并且被控端离线时它会
+ * 一直留在 renderer 内存里(drain 完成也不会把屏上的行收回去)(review: codex P1)。
+ * 所以**读**路径等这次 drain 落定;写与清理不受影响(它们只会让盘上更干净)。
+ */
+let mirrorCacheReadGate: Promise<unknown> = Promise.resolve();
+
+export function setMirrorCacheReadGate(gate: Promise<unknown>): void {
+  // 闸门只用来"等一下",本身失败不该让读路径抛错(drain 失败会自己记日志与重试)。
+  mirrorCacheReadGate = gate.catch(() => undefined);
+}
+
+async function awaitMirrorCacheReadGate(): Promise<void> {
+  await mirrorCacheReadGate;
+}
+
 export async function handleMirrorCacheGetMessages(
   cache: MirrorCache,
   deviceId: unknown,
@@ -707,6 +726,7 @@ export async function handleMirrorCacheGetMessages(
 ): Promise<{ messages: Record<string, unknown>[] }> {
   const device = requireString(deviceId, 'deviceId');
   const session = requireString(sessionId, 'sessionId');
+  await awaitMirrorCacheReadGate();
   return { messages: await cache.readMessages(device, session) };
 }
 
@@ -734,6 +754,7 @@ export async function handleMirrorCachePutMessages(
 export async function handleMirrorCacheGetSessionList(
   cache: MirrorCache,
 ): Promise<{ devices: CachedDeviceSessions[] }> {
+  await awaitMirrorCacheReadGate();
   return { devices: await cache.readSessionList() };
 }
 

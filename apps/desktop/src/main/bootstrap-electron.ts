@@ -284,6 +284,7 @@ import {
   registerDeviceLinkIpc,
   defaultDeps as deviceLinkIpcDeps,
   handleInvoke as deviceLinkHandleInvoke,
+  setMirrorCacheReadGate,
 } from './device-link/ipc';
 import { getMirrorCache, MirrorCachePurgeError } from './device-link/mirrorCacheStore';
 import { drainPurgeQueue, enqueuePurge } from './device-link/mirrorCachePurgeQueue';
@@ -5727,7 +5728,11 @@ app.on('ready', async () => {
   registerDeviceLinkIpc();
   // 上次登出时没删干净的远程会话镜像缓存(文件锁 / 权限占用),开机再清一次。
   // 不阻塞启动关键路径,失败留在队列里等下一次(见 mirrorCachePurgeQueue)。
-  void drainPurgeQueue()
+  // 但**缓存读**要等它落定:否则 renderer 的 hydrate 可能读到正在被删的那份明文,
+  // 而 drain 完成也收不回已经画到屏上的行(review: codex P1)。
+  const startupPurgeDrain = drainPurgeQueue();
+  setMirrorCacheReadGate(startupPurgeDrain);
+  void startupPurgeDrain
     .then(({ purged, pending }) => {
       if (purged > 0 || pending > 0) {
         createLogger('device-link:mirror-cache-purge').info(
