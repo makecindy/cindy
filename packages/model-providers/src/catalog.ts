@@ -12,6 +12,7 @@
  */
 
 import type { Catalog, Provider, CatalogModel, AgentKind, Effort, ProviderPreset } from './types.js';
+import { withVerifiedStaticWindows } from './builtin.js';
 import { findReservedOAuthExtraParam } from './provider-oauth.js';
 import { isProviderRequestPath } from './provider-url.js';
 
@@ -509,5 +510,11 @@ export function parseCatalog(input: string | unknown): Catalog {
   const presets = sanitizePresets((catalog as { presets?: unknown }).presets);
   if (presets.length > 0) catalog.presets = presets;
   else delete catalog.presets;
-  return catalog;
+  // 远端下发目录与 bundled 同格式:静态条目的窗口是产品侧写定的真实上限,标记为已核实
+  // (幂等;条目自己表过态时尊重原值)。动态发现的模型不经这里 —— 见 withVerifiedStaticWindows。
+  //
+  // 刻意**不**原地替换 catalog.providers:入参可能就是 BUNDLED_CATALOG(共享的 import 对象),
+  // 原地改会把标记悄悄写回那份共享目录 —— 既是跨调用方的副作用,也会让「bundled 自己有没有
+  // 标记」这类断言变成假通过。
+  return { ...catalog, providers: catalog.providers.map(withVerifiedStaticWindows) };
 }

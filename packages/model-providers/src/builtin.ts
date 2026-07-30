@@ -30,11 +30,39 @@ import type { Catalog, Provider } from './types.js';
 /** 仓内 v2 目录文件(xai 清单 + presets;同一文件发布到 OSS `cfg/providers.json`)。 */
 const catalogFile = catalogJson as unknown as Catalog;
 
-const xaiFromCatalog = catalogFile.providers.find((p) => p.id === 'xai');
-if (!xaiFromCatalog) {
+/**
+ * 把静态目录条目的上下文窗口标记为**已核实**(不 mutate 入参)。
+ *
+ * 静态目录 —— 仓内 `catalog/providers.json` 与同格式的远端下发目录 —— 里的
+ * `contextWindow` 是产品侧逐条写定的真实上限,可以用来收敛运行期上报的窗口。动态发现
+ * 的模型**不走这里**(它们经 `set*DiscoveredModels` 注入,各自表态;上游不给元数据时补的
+ * 兜底常量一律不标记)。条目自己显式表过态时尊重原值。
+ *
+ * 语义见 `CatalogModel.contextWindowVerified`;不标记静态目录会让 xai 这类纯静态清单的
+ * 真实窗口(如 256K 的 `xai/grok-code-fast`)被当成未核实,虚高的上报值就收敛不掉。
+ */
+export function withVerifiedStaticWindows(provider: Provider): Provider {
+  const models: Provider['models'] = {};
+  let changed = false;
+  for (const [agent, list] of Object.entries(provider.models) as Array<
+    [keyof Provider['models'], Provider['models'][keyof Provider['models']]]
+  >) {
+    if (!list) continue;
+    models[agent] = list.map((m) => {
+      if (m.contextWindowVerified !== undefined) return m;
+      changed = true;
+      return { ...m, contextWindowVerified: true };
+    });
+  }
+  return changed ? { ...provider, models } : provider;
+}
+
+const xaiRaw = catalogFile.providers.find((p) => p.id === 'xai');
+if (!xaiRaw) {
   // 仓内目录文件被误删 xai 段属于构建期错误,越早炸越好(import 期即失败)。
   throw new Error('[model-providers] catalog/providers.json missing builtin provider "xai"');
 }
+const xaiFromCatalog = withVerifiedStaticWindows(xaiRaw);
 
 /** Anthropic(Claude.ai 订阅 OAuth)。模型清单运行时动态注入,此处恒为空。 */
 const ANTHROPIC_PROVIDER: Provider = {

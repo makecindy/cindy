@@ -446,6 +446,41 @@ describe('vendor grouping metadata (xai 静态清单)', () => {
       }
     }
   });
+
+  // 静态目录里的窗口是产品侧逐条写定的真实上限 —— 必须标记为已核实,否则运行期收敛不掉
+  // 上游报的虚高窗口(例:256K 的 xai/grok-code-fast 被报成基础模型的更大值)。
+  it('静态清单的 contextWindow 标记为已核实(可用于收敛上报值)', () => {
+    const xai = provider('xai');
+    for (const agent of xai.agents) {
+      for (const m of xai.models[agent] ?? []) {
+        expect(m.contextWindow, `${m.id} contextWindow`).toBeGreaterThan(0);
+        expect(m.contextWindowVerified, `${m.id} contextWindowVerified`).toBe(true);
+      }
+    }
+  });
+
+  // 远端下发目录与 bundled 同格式,同样要在解析时标记;条目自己表过态时尊重原值。
+  it('parseCatalog 给远端下发的静态条目补标记,但不覆盖显式表态', () => {
+    const parsed = parseCatalog({
+      version: '2',
+      providers: [
+        {
+          ...provider('xai'),
+          models: {
+            codex: [
+              { id: 'remote/known', name: 'Known', contextWindow: 262_144, efforts: [], defaultEffort: null, group: 'grok', sortOrder: 1 },
+              { id: 'remote/opted-out', name: 'Opted Out', contextWindow: 272_000, contextWindowVerified: false, efforts: [], defaultEffort: null, group: 'grok', sortOrder: 2 },
+            ],
+          },
+          agents: ['codex'],
+          titleModel: 'remote/known',
+        },
+      ],
+    });
+    const models = parsed.providers[0].models.codex ?? [];
+    expect(models.find((m) => m.id === 'remote/known')?.contextWindowVerified).toBe(true);
+    expect(models.find((m) => m.id === 'remote/opted-out')?.contextWindowVerified).toBe(false);
+  });
 });
 
 describe('provider OAuth and upstream URL validation', () => {

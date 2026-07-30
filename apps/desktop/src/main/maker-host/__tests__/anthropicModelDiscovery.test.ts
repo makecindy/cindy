@@ -935,6 +935,43 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
     });
   });
 
+  // 磁盘缓存里可能带着上一版目录算出的 contextWindowVerified。若该模型在新版目录里被移除、
+  // 且不在 explicitWindows(命中目录的窗口不进那张表)里,重载会走启发式分支 —— 残留的
+  // true 会盖在猜测值上,得到一个「已核实」的启发式窗口。Haiku 这种残留 200K 而运行期真实
+  // 1M 的情形,反倒会把上报值压小,正是本 PR 要消除的失败模式。
+  it('磁盘缓存重载抹掉旧 provenance,不让启发式窗口冒充已核实', async () => {
+    const cacheDir = path.join(TEST_USER_DATA, 'model-discovery');
+    await fsp.mkdir(cacheDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(cacheDir, 'anthropic-models.json'),
+      JSON.stringify({
+        fetchedAt: '2026-07-19T00:00:00.000Z',
+        models: [
+          {
+            // 目录里没有这个 id、也没有 explicitWindows 记录 → 重载必须落到启发式。
+            id: 'claude-haiku-removed-from-catalog',
+            name: 'Haiku (removed)',
+            group: 'anthropic',
+            sortOrder: 0,
+            contextWindow: 200_000,
+            contextWindowVerified: true, // 上一版目录留下的陈旧标记
+            efforts: [],
+            defaultEffort: null,
+            supportsFastMode: false,
+            status: 'active',
+          },
+        ],
+      }),
+      'utf-8',
+    );
+    await loadAnthropicModelsFromDiskCache();
+
+    const reloaded = anthropicModel('claude-haiku-removed-from-catalog');
+    // 窗口按启发式重算(id 含 haiku → 200K),但**不得**再声称已核实。
+    expect(reloaded?.contextWindow).toBe(200_000);
+    expect(reloaded?.contextWindowVerified).toBeUndefined();
+  });
+
   // 目录里**没有**的新模型:HTTP 的 max_input_tokens 是它唯一的已核实窗口。SDK 通道
   // 重新映射时走「无 explicit」分支(落到启发式、不带标记),恢复 explicitWindows 时
   // 只覆盖 contextWindow 会把 provenance 静默擦掉 —— 之后就不再用这个真实上限收敛

@@ -645,8 +645,14 @@ export async function loadAnthropicModelsFromDiskCache(): Promise<void> {
       const effortBaseline = restoredExplicitEffortIds.has(model.id)
         ? null
         : fallbackEffortBaseline(model.id);
+      // 必须先抹掉缓存里的旧 provenance 再让 contextWindowFor 重新判定:它的启发式分支
+      // **不返回** contextWindowVerified 键,残留的 true 会盖在新算出的启发式窗口上。
+      // 触发面窄但后果正是本次要消除的那种:某模型被新版目录移除、又不在 explicitWindows
+      // 里(命中目录的窗口不进那张表)时,会得到一个「已核实」的猜测值 —— 例如 Haiku 残留
+      // 200K 而运行期真实 1M,反倒把上报值压小。这也是上面那条刷新不变量的要求。
+      const { contextWindowVerified: _staleProvenance, ...rest } = model;
       return {
-        ...model,
+        ...rest,
         ...contextWindowFor(model.id, explicitWindows.get(model.id)),
         ...(effortBaseline ?? {}),
       };
