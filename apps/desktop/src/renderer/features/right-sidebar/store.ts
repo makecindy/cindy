@@ -705,18 +705,13 @@ export async function closeTab(
       await settleTabStateWrites(sessionId, tabId);
       const ipc = ipcApi();
       if (ipc && shouldPersist(sessionId)) {
-        try {
-          await ipc.close({ id: tabId });
-        } catch (closeErr) {
-          // [NOT_FOUND] = 行已被并发路径删掉(典型:upsert 成功 setActive 失败的
-          // addTab 半失败回滚清理先删了行,而本次 close 因 pendingCreate 半失败
-          // 返回 true 走到了正常分支)。关闭的目标状态"行不存在"已达成,按成功
-          // 继续收尾——走外层回滚会把 DB 已无的行插回 cache,制造幽灵 tab。
-          if (!isTabRowMissingError(closeErr)) throw closeErr;
-        }
+        await ipc.close({ id: tabId });
         // —— close 已落库:从这里起任何失败都不得进入下面的回滚分支(把已删的
         // tab 插回 cache 会与 DB 反向分叉)。active 同步单独 catch 兜底。
-        let attemptedActive: string | null | undefined;
+        // setActiveTarget:记录我们实际调用 ipc.setActive 时的目标值,供 activeErr catch 判断。
+        // 声明在 inner try 外、if 块内——JavaScript let 不跨 try/catch 块,必须在两者共同的
+        // 父作用域里声明才能被 catch 看到。
+        let setActiveTarget: string | null | undefined;
         try {
           // active 落库前重取一次 cache 现值:关闭队列只串行关闭之间的变更,
           // 并发的 addTab / setActiveTab 可能已经把 active 换成别的 tab 并落库了 ——
@@ -745,29 +740,27 @@ export async function closeTab(
                 }
               }
               if (cacheStillOwned && activeNow !== prev.activeTabId) {
-                attemptedActive = activeNow;
+                setActiveTarget = activeNow;
                 await ipc.setActive({ sessionId, id: activeNow });
               }
             }
           }
         } catch (activeErr) {
           // active 同步失败:tab 删除已成功落库,绝不能回滚。
-          // 但 cache 里 activeTabId 仍指向那个 tab,若用户立刻点击同一 tab,
-          // setActiveTab 会以"already active"跳过 IPC → DB 永久漂移。
-          // 清空 cache active 让下次用户点击时 setActiveTab 照常落库。
+          // 清空 cache active 让下次用户点击时 setActiveTab 照常落库——
+          // 但只有 cache 仍指向我们尝试设置的 active 时才清,否则用户已切到
+          // 别的 tab 且该 tab 已成功落库,强清会让 setActiveTab 对那个 tab
+          // 多发一次 IPC,结果虽等价但语义上是"回退到无 active"的短暂漂移。
           log.warn('closeTab: post-close setActive failed; clearing cache activeTabId for recovery', {
             sessionId,
             tabId,
             err: activeErr,
           });
           const current = getBucket(sessionId);
-          // 只有 cache 现值仍指向**这次失败写的目标**才清空:setActive(B) 在途
-          // 期间用户已激活 C(setActiveTab 各自落库)时,无条件清 null 会把更新
-          // 的激活覆盖掉——旧写失败不该赢过新写成功。
           if (
             current.hydrated &&
-            attemptedActive !== undefined &&
-            current.activeTabId === attemptedActive
+            setActiveTarget !== undefined &&
+            current.activeTabId === setActiveTarget
           ) {
             setBucket(sessionId, { tabs: current.tabs, activeTabId: null });
           }
@@ -775,6 +768,12 @@ export async function closeTab(
       }
       forgetClosedTab(sessionId, tabId);
     } catch (err) {
+      // NOT_FOUND:行已被并发的 addTab rollback cleanup 或另一个 closeTab 删掉,
+      // cache 的乐观删除与 DB 已一致,不需要重新插回——回滚反而造成 cache/DB 分叉。
+      if (isTabRowMissingError(err)) {
+        forgetClosedTab(sessionId, tabId);
+        return;
+      }
       log.error('closeTab IPC failed; rolling back cache', { sessionId, tabId, err });
       // 精准回滚:只把被乐观删除的这个 tab 插回**当前** bucket,不整份恢复 prev
       // 快照。close 队列只串行关闭之间的变更,addTab / setActiveTab 是有意留在
