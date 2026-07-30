@@ -39,4 +39,12 @@ describe('ImageChannelRegistry', () => {
     expect(registry.resolve('xd')).toBe(xd);
     expect(() => registry.register('xd', channel(true))).toThrow(/already registered/);
   });
+
+  it('supportsEdit: false 的通道 resolve 后仍携带该标记,供派发层拒改图请求', () => {
+    const registry = new ImageChannelRegistry();
+    const generateOnly: ImageChannel = { ...channel(true), supportsEdit: false };
+    registry.register('xai', generateOnly);
+    expect(registry.isProviderReady('xai')).toBe(true);
+    expect(registry.resolve('xai').supportsEdit).toBe(false);
+  });
 });
