@@ -3874,21 +3874,26 @@ export class ClaudeCodeAgent extends BaseAgent {
             providerId: targetProviderId,
             model: newModel,
           });
-          // env 比对排除易变 token 字段(CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY /
-          // ANTHROPIC_AUTH_TOKEN):订阅 token 刷新后 remoteRoute.env 仍是 spawn 时旧值,
-          // 而 resolver 返回新值,直接 JSON 比对会把正常 token 轮换误判成路由变化
-          // (codex-connector review #1035)。稳定字段(endpoint + 非 token env)一致
-          // 即视为同一路由。
-          const stableEnvOf = (env: Record<string, string>): Record<string, string> => {
-            const { CLAUDE_CODE_OAUTH_TOKEN: _, ANTHROPIC_API_KEY: __, ANTHROPIC_AUTH_TOKEN: ___, ...rest } = env;
-            return rest;
-          };
           const routeChanged =
             (nextRoute === null) !== (remoteRoute === null) ||
             (nextRoute !== null &&
               remoteRoute !== null &&
-              (nextRoute.endpoint !== remoteRoute.endpoint ||
-                JSON.stringify(stableEnvOf(nextRoute.env)) !== JSON.stringify(stableEnvOf(remoteRoute.env))));
+              (() => {
+                // 与「当前生效的 remoteEnv」比对,而不是 spawn 时冻结的 remoteRoute.env:
+                // refreshSubscriptionTokenInPlace 会原地写回 remoteEnv,因此它始终是最新
+                // 凭证;nextRoute 也是现解析的最新值。两者一致 = 同一路由(放行,token
+                // 轮换不误拒);用户在设置里改了 key/定制头 → 不一致(拒绝,不放行旧凭证)。
+                // (Greptile/codex-connector review #1035:排除 token 字段会放行真凭证变化。)
+                // remoteEnv 含 route.env 之外的字段(ANTHROPIC_BASE_URL / entrypoint gate
+                // 补的 CLAUDE_CODE_ENTRYPOINT 等),只取 nextRoute.env 声明的 key 比对。
+                const currentRouteEnv = remoteEnv
+                  ? Object.fromEntries(Object.keys(nextRoute.env).map((k) => [k, remoteEnv[k]]))
+                  : {};
+                return (
+                  nextRoute.endpoint !== remoteRoute.endpoint ||
+                  JSON.stringify(nextRoute.env) !== JSON.stringify(currentRouteEnv)
+                );
+              })());
           if (routeChanged) {
             throw new Error(
               `[REMOTE_MODEL_SWITCH_ROUTE_CHANGE] switching to "${newModel}" requires a different remote route; close and recreate the remote session to apply it`,
