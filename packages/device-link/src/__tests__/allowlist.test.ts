@@ -15,6 +15,7 @@ import {
   DL_VOICE_CREDENTIAL_SYNC_CHANNEL,
   DL_VOICE_DICTIONARY_LEARNING_CHANNEL,
   DL_HISTORY_MESSAGES_CHANNEL,
+  DL_HISTORY_SESSION_TERMINAL_CHANNEL,
 } from '../allowlist.js';
 import { SESSION_ACTIVITY_CHANNEL } from '../topics.js';
 
@@ -43,6 +44,11 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
 
   it('放行订阅价值历史汇总只读聚合(远程会话底部 $ chip 的历史初值查被控端)', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('local-db:messages:estimatedSessionValue')).toBe(true);
+  });
+
+  it('放行会话尾部终态探针(只回安全标记,错误正文不出被控端;老被控端降级)', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has(DL_HISTORY_SESSION_TERMINAL_CHANNEL)).toBe(true);
+    expect(DL_HISTORY_SESSION_TERMINAL_CHANNEL).toBe('local-db:history:session-terminal');
   });
 
   it('放行 per-session turn 态只读查询(控制端 stall 看门狗核实被控端用)', () => {

@@ -5,10 +5,11 @@
  * 设备读取权威历史。整次用户请求共享 20 条 / 约 8k token 的硬预算。
  */
 import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql, type SQL } from 'drizzle-orm';
-import { DL_HISTORY_MESSAGES_CHANNEL } from '@cindy/device-link';
+import { DL_HISTORY_MESSAGES_CHANNEL, DL_HISTORY_SESSION_TERMINAL_CHANNEL } from '@cindy/device-link';
 import { getSelfDeviceId, remoteInvoke as invokeRemote } from '../device-link/index.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { messages, sessions } from '../localDb/schema.js';
+import { readLatestSessionTerminal } from '../localDb/sessionTerminal.js';
 import { messageToCamel } from '../localDb/mapper.js';
 import { isSyntheticTriggerText } from '../../shared/interruptedTurn.js';
 import {
@@ -76,53 +77,6 @@ function timestampToMs(value: unknown): number | undefined {
     if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
-}
-
-/**
- * Return only a non-sensitive terminal hint for a local snapshot.
- *
- * Error rows intentionally stay out of the quoted message list: their
- * structured body may contain provider details or echoed request data.  The
- * marker is enough to explain why the last assistant text can be incomplete.
- */
-async function readLatestLocalTerminal(
-  ref: AgentInputSessionRef,
-  clearedAt: number | null,
-): Promise<AgentInputSessionReferenceTerminal | undefined> {
-  const db = getDbClient().drizzle;
-  const where: SQL<unknown>[] = [
-    eq(messages.sessionId, ref.sessionId),
-    isNull(messages.rewindAt),
-  ];
-  if (clearedAt !== null) where.push(gt(messages.createdAt, clearedAt));
-  const [latest] = await db
-    .select({ role: messages.role, content: messages.content, createdAt: messages.createdAt })
-    .from(messages)
-    .where(and(...where))
-    .orderBy(desc(messages.createdAt), desc(messageRowid))
-    .limit(1);
-  if (latest?.role !== 'error') return undefined;
-  // An ignored error remains in the database for audit/history, but should no
-  // longer make a fresh quote look like an active failed turn.
-  if (typeof latest.content === 'string') {
-    try {
-      const parsed = JSON.parse(latest.content) as unknown;
-      if (
-        parsed &&
-        typeof parsed === 'object' &&
-        !Array.isArray(parsed) &&
-        (parsed as Record<string, unknown>).dismissed === true
-      ) {
-        return undefined;
-      }
-    } catch {
-      // Legacy non-JSON error content is treated as an undismissed error.
-    }
-  }
-  return {
-    status: 'error',
-    ...(Number.isFinite(latest.createdAt) ? { createdAt: latest.createdAt } : {}),
-  };
 }
 
 /** 保守 token 估算：CJK/非 ASCII 按 1 token，ASCII 按约 4 字符 1 token。 */
@@ -419,7 +373,7 @@ async function resolveLocal(
   let terminal: AgentInputSessionReferenceTerminal | undefined;
   if (!ref.messageClientId) {
     try {
-      terminal = await readLatestLocalTerminal(ref, session.clearedAt ?? null);
+      terminal = await readLatestSessionTerminal(ref.sessionId, session.clearedAt ?? null);
     } catch {
       // Terminal status is diagnostic metadata; a transient read failure must
       // not make an otherwise valid session reference fail closed.
@@ -604,6 +558,40 @@ async function readRemoteHistory(
   };
 }
 
+/**
+ * Probe the source device for a safe terminal marker. Fail-open: an old
+ * controlled device (CHANNEL_NOT_ALLOWED), a flaky link, or an unexpected
+ * payload must not break an otherwise valid remote quote — the marker is
+ * diagnostic metadata, not a load-bearing field.
+ */
+async function readRemoteTerminal(
+  ref: AgentInputSessionRef,
+  clearedAt: number | null,
+): Promise<AgentInputSessionReferenceTerminal | undefined> {
+  try {
+    const response = await invokeRemote(ref.deviceId!, DL_HISTORY_SESSION_TERMINAL_CHANNEL, [
+      { sessionId: ref.sessionId, fromMs: clearedAt },
+    ]);
+    if (response.ok !== true || response.result === null || response.result === undefined) {
+      return undefined;
+    }
+    const result = response.result as Record<string, unknown>;
+    if (typeof result !== 'object' || Array.isArray(result) || result.status !== 'error') {
+      return undefined;
+    }
+    // Trust boundary: rebuild the marker from validated fields only, so a
+    // crafted payload cannot smuggle extra keys toward the model prompt.
+    return {
+      status: 'error',
+      ...(typeof result.createdAt === 'number' && Number.isFinite(result.createdAt)
+        ? { createdAt: result.createdAt }
+        : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 async function resolveRemote(
   ref: AgentInputSessionRef,
   messageLimit: number,
@@ -705,6 +693,12 @@ async function resolveRemote(
   if (mapped.length === 0) {
     throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `会话 ${ref.sessionId} 没有可引用的可见消息`);
   }
+  // A recent remote snapshot may legitimately end at a partial assistant
+  // message when the turn failed on the source device.  Probe for the safe
+  // marker only — the persisted error body never crosses device-link.
+  const terminal = ref.messageClientId
+    ? undefined
+    : await readRemoteTerminal(ref, remoteClearedAt ?? null);
   const fitted = fitMessagesToTokenBudget(mapped, tokenBudget, anchorIndex);
   return {
     context: {
@@ -719,6 +713,7 @@ async function resolveRemote(
       range: ref.messageClientId ? 'around-anchor' : 'recent',
       messageCount: fitted.messages.length,
       truncated: sourceTruncated || fitted.truncated,
+      ...(terminal ? { terminal } : {}),
     },
     usedTokens: fitted.usedTokens,
   };

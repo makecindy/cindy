@@ -6,7 +6,7 @@
  */
 import { ipcMain } from 'electron';
 import { eq } from 'drizzle-orm';
-import { DL_HISTORY_MESSAGES_CHANNEL } from '@cindy/device-link';
+import { DL_HISTORY_MESSAGES_CHANNEL, DL_HISTORY_SESSION_TERMINAL_CHANNEL } from '@cindy/device-link';
 
 import {
   getMessagesForHistory,
@@ -18,6 +18,7 @@ import {
 } from '../chatHistoryReader';
 import { getDbClient } from '../client/current';
 import { sessions } from '../schema';
+import { readLatestSessionTerminal, type SessionTerminalHint } from '../sessionTerminal';
 import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate';
 
 const VALID_AGENT_KINDS: readonly HistoryAgentKind[] = ['cc', 'codex'];
@@ -52,6 +53,12 @@ export interface RemoteHistoryMessagesRequest {
 export interface RemoteHistoryIpcDeps {
   sessionExists(sessionId: string): Promise<boolean>;
   getMessages(params: GetMessagesParams): ReturnType<typeof getMessagesForHistory>;
+}
+
+/** Dependencies for the session-terminal probe handler. */
+export interface RemoteSessionTerminalIpcDeps {
+  sessionExists(sessionId: string): Promise<boolean>;
+  readTerminal(sessionId: string, clearedAt: number | null): Promise<SessionTerminalHint | undefined>;
 }
 
 function nullableFiniteNumber(value: unknown, name: string): number | null {
@@ -264,16 +271,23 @@ function capReferenceHistoryPage(
   };
 }
 
+const defaultSessionExists = async (sessionId: string): Promise<boolean> => {
+  const rows = await getDbClient().drizzle
+    .select({ id: sessions.id })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .limit(1);
+  return rows.length > 0;
+};
+
 const defaultDeps: RemoteHistoryIpcDeps = {
-  async sessionExists(sessionId) {
-    const rows = await getDbClient().drizzle
-      .select({ id: sessions.id })
-      .from(sessions)
-      .where(eq(sessions.id, sessionId))
-      .limit(1);
-    return rows.length > 0;
-  },
+  sessionExists: defaultSessionExists,
   getMessages: getMessagesForHistory,
+};
+
+const defaultTerminalDeps: RemoteSessionTerminalIpcDeps = {
+  sessionExists: defaultSessionExists,
+  readTerminal: readLatestSessionTerminal,
 };
 
 /** Register the allowlisted, read-only remote history handler. */
@@ -299,5 +313,22 @@ export function registerRemoteHistoryIpc(deps: RemoteHistoryIpcDeps = defaultDep
       request.roles === null ||
       request.roles.some((role) => role !== 'user' && role !== 'assistant');
     return capReferenceHistoryPage(page, request.contentCharLimit, preserveStructuredRoles);
+  });
+}
+
+/**
+ * 会话尾部终态探针:被控端在本机库上判定,只回安全标记或 null。
+ * 错误正文不出被控端,控制端拿到标记即可解释引用尾部为何不完整。
+ */
+export function registerRemoteSessionTerminalIpc(deps: RemoteSessionTerminalIpcDeps = defaultTerminalDeps): void {
+  ipcMain.handle(DL_HISTORY_SESSION_TERMINAL_CHANNEL, async (_event, value: unknown) => {
+    const input = requireObject(value, 'request');
+    const sessionId = requireString(input.sessionId, 'sessionId');
+    const fromMs = nullableFiniteNumber(input.fromMs ?? null, 'fromMs');
+    if (!(await deps.sessionExists(sessionId))) {
+      throwIpcError('NOT_FOUND', 'Session does not exist');
+    }
+    const terminal = await deps.readTerminal(sessionId, fromMs);
+    return terminal ?? null;
   });
 }

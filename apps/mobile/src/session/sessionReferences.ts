@@ -1,5 +1,6 @@
 import {
   DL_HISTORY_MESSAGES_CHANNEL,
+  DL_HISTORY_SESSION_TERMINAL_CHANNEL,
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
 } from '@cindy/device-link';
 import { i18n } from '@/i18n';
@@ -32,6 +33,19 @@ export interface MobileSessionReferenceMessage {
   createdAt?: number;
 }
 
+/**
+ * Safe terminal-state hint for a quoted session.
+ *
+ * The persisted error row is intentionally not copied into the quote: its
+ * body may contain provider-specific details.  This additive marker lets the
+ * receiving agent distinguish a genuinely interrupted turn from a response
+ * that simply ended at the last visible text.
+ */
+export interface MobileSessionReferenceTerminal {
+  status: 'error';
+  createdAt?: number;
+}
+
 export interface MobileSessionReferenceContext {
   sessionId: string;
   title?: string;
@@ -42,6 +56,8 @@ export interface MobileSessionReferenceContext {
   range: 'recent' | 'around-anchor';
   messageCount: number;
   truncated: boolean;
+  /** Present only when the recent snapshot ends in a persisted turn error on the source device. */
+  terminal?: MobileSessionReferenceTerminal;
 }
 
 /** 展示安全的落库摘要；不含任何被引用消息正文。 */
@@ -564,6 +580,38 @@ async function invokeSource<T>(
   }
 }
 
+/**
+ * Probe the source device for a safe terminal marker. Fail-open: an old
+ * source device (CHANNEL_NOT_ALLOWED), a flaky link, or an unexpected payload
+ * must not break an otherwise valid quote — the marker is diagnostic
+ * metadata, not a load-bearing field.
+ */
+async function readRemoteTerminal(
+  invoke: RemoteInvoke,
+  ref: MobileSessionReference,
+  clearedAt: number | null,
+): Promise<MobileSessionReferenceTerminal | undefined> {
+  try {
+    const result = await invokeSource<unknown>(invoke, ref, DL_HISTORY_SESSION_TERMINAL_CHANNEL, [
+      { sessionId: ref.sessionId, fromMs: clearedAt },
+    ]);
+    if (result === null || result === undefined) return undefined;
+    if (typeof result !== 'object' || Array.isArray(result)) return undefined;
+    const record = result as Record<string, unknown>;
+    if (record.status !== 'error') return undefined;
+    // Trust boundary: rebuild the marker from validated fields only, so a
+    // crafted payload cannot smuggle extra keys toward the model prompt.
+    return {
+      status: 'error',
+      ...(typeof record.createdAt === 'number' && Number.isFinite(record.createdAt)
+        ? { createdAt: record.createdAt }
+        : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 async function resolveRemoteReference(
   invoke: RemoteInvoke,
   ref: MobileSessionReference,
@@ -670,6 +718,12 @@ async function resolveRemoteReference(
       `Session ${ref.sessionId} has no visible messages to reference`,
     );
   }
+  // A recent snapshot may legitimately end at a partial assistant message
+  // when the turn failed on the source device.  Probe for the safe marker
+  // only — the persisted error body never crosses device-link.
+  const terminal = ref.messageClientId
+    ? undefined
+    : await readRemoteTerminal(invoke, ref, remoteClearedAt ?? null);
   const fitted = fitMessagesToTokenBudget(mapped, tokenBudget, anchorIndex);
   return {
     context: {
@@ -684,6 +738,7 @@ async function resolveRemoteReference(
       range: ref.messageClientId ? 'around-anchor' : 'recent',
       messageCount: fitted.messages.length,
       truncated: sourceTruncated || fitted.truncated,
+      ...(terminal ? { terminal } : {}),
     },
     usedTokens: fitted.usedTokens,
   };

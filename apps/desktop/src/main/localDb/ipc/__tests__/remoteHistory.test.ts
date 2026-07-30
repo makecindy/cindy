@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { DL_HISTORY_MESSAGES_CHANNEL } from '@cindy/device-link';
+import { DL_HISTORY_MESSAGES_CHANNEL, DL_HISTORY_SESSION_TERMINAL_CHANNEL } from '@cindy/device-link';
 
 const handlers = new Map<string, (...args: unknown[]) => unknown>();
 
@@ -11,7 +11,7 @@ vi.mock('electron', () => ({
   },
 }));
 
-import { registerRemoteHistoryIpc } from '../history';
+import { registerRemoteHistoryIpc, registerRemoteSessionTerminalIpc } from '../history';
 
 const request = {
   sessionId: 'session-1',
@@ -324,5 +324,54 @@ describe('local-db:history:messages', () => {
     expect(getMessages).toHaveBeenCalledWith(expect.objectContaining({
       cursor: { createdAt: 700, id: 'message-7', rowid: 42 },
     }));
+  });
+});
+
+describe('local-db:history:session-terminal', () => {
+  beforeEach(() => {
+    handlers.clear();
+    vi.clearAllMocks();
+  });
+
+  it('returns the safe terminal marker for the requested session window', async () => {
+    const readTerminal = vi.fn(async () => ({ status: 'error' as const, createdAt: 500 }));
+    registerRemoteSessionTerminalIpc({
+      sessionExists: vi.fn(async () => true),
+      readTerminal,
+    });
+
+    const handler = handlers.get(DL_HISTORY_SESSION_TERMINAL_CHANNEL);
+    const result = await handler?.({}, { sessionId: 'session-1', fromMs: 100 });
+
+    expect(result).toEqual({ status: 'error', createdAt: 500 });
+    expect(readTerminal).toHaveBeenCalledWith('session-1', 100);
+  });
+
+  it('normalizes a missing terminal to null and a missing fromMs to null', async () => {
+    const readTerminal = vi.fn(async () => undefined);
+    registerRemoteSessionTerminalIpc({
+      sessionExists: vi.fn(async () => true),
+      readTerminal,
+    });
+
+    const handler = handlers.get(DL_HISTORY_SESSION_TERMINAL_CHANNEL);
+    const result = await handler?.({}, { sessionId: 'session-1' });
+
+    expect(result).toBeNull();
+    expect(readTerminal).toHaveBeenCalledWith('session-1', null);
+  });
+
+  it('rejects unknown sessions and malformed payloads before reading', async () => {
+    const readTerminal = vi.fn();
+    registerRemoteSessionTerminalIpc({
+      sessionExists: vi.fn(async () => false),
+      readTerminal,
+    });
+
+    const handler = handlers.get(DL_HISTORY_SESSION_TERMINAL_CHANNEL);
+    await expect(handler?.({}, { sessionId: 'session-1', fromMs: null })).rejects.toThrow('[NOT_FOUND]');
+    await expect(handler?.({}, { sessionId: 'session-1', fromMs: 'bad' })).rejects.toThrow('[INVALID_PARAMS]');
+    await expect(handler?.({}, { fromMs: null })).rejects.toThrow();
+    expect(readTerminal).not.toHaveBeenCalled();
   });
 });

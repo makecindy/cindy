@@ -84,7 +84,7 @@ export interface AgentInputSessionReferenceContext {
   range: 'recent' | 'around-anchor';
   messageCount: number;
   truncated: boolean;
-  /** Present only when the recent local snapshot ends in a persisted turn error. */
+  /** Present only when the recent snapshot (local or device-link) ends in a persisted turn error. */
   terminal?: AgentInputSessionReferenceTerminal;
 }
 

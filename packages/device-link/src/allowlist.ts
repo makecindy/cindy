@@ -35,6 +35,15 @@ export const DL_UNSUBSCRIBE_CHANNEL = 'device-link:unsubscribe';
 export const DL_HISTORY_MESSAGES_CHANNEL = 'local-db:history:messages';
 
 /**
+ * 会话尾部终态探针(控制端 → 被控端):被控端在本机库上判定会话最新可见行是否为
+ * 未忽略的错误行,只回 { status:'error', createdAt? } 或 null —— 错误正文(可能含
+ * provider 细节)不出被控端。会话引用(quote)在远端重建上下文时凭它区分「回合被
+ * 错误截断」与「正常结束」;老被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端
+ * 按无终态降级,不阻断引用。
+ */
+export const DL_HISTORY_SESSION_TERMINAL_CHANNEL = 'local-db:history:session-terminal';
+
+/**
  * 会话引用消费能力探针。控制端在发送含引用快照的队列消息前必须先调用；
  * 老被控端不在 allowlist 中会返回 CHANNEL_NOT_ALLOWED，控制端据此显式拒绝，
  * 避免消息看似发送成功但 Agent 只收到一条普通深链文本。
@@ -185,6 +194,9 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'local-db:sessions:list',
   'local-db:sessions:get',
   DL_HISTORY_MESSAGES_CHANNEL,
+  // 会话尾部终态探针:只回安全标记(status + createdAt),错误正文不出被控端;
+  // 与会话引用的 remote quote 同安全级。老被控端无此 channel → 控制端降级为无终态。
+  DL_HISTORY_SESSION_TERMINAL_CHANNEL,
   'local-db:messages:list',
   // 会话内搜索跳转定位(loadAroundMessage):只读,与 messages:list 同安全级。
   'local-db:messages:around',
