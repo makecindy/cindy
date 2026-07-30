@@ -110,6 +110,11 @@ export interface TelegramIMOptions {
     | ((phase: OwnerNoticePhase) => string);
   /** 非 owner 显式召唤时的礼貌回应文案(缺省用内置中英双语一句)。 */
   strangerNotice?: string;
+  /**
+   * owner 的命令菜单(setMyCommands + BotCommandScopeChat 精准只发 owner
+   * 私聊; 陌生人/群成员看不到任何命令)。缺省不注册。
+   */
+  commandMenu?: ReadonlyArray<{ command: string; description: string }>;
   /** 测试注入: 替换真实 Bot API 客户端。 */
   apiFactory?: (token: string) => TelegramApiClient;
 }
@@ -266,6 +271,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.host.ipc.handle('telegramBot:disconnect', async () => {
       this.configVersion += 1;
       const disconnectedOwnerUserId = this.ownerUserId;
+      // 顺手清掉 owner scope 的命令菜单(解绑后菜单残留会误导)。
+      if (this.api && disconnectedOwnerUserId) {
+        void this.api
+          .call('deleteMyCommands', {
+            scope: { type: 'chat', chat_id: Number(disconnectedOwnerUserId) },
+          })
+          .catch(() => {});
+      }
       this.ownerUserId = '';
       await this.sendOwnerNoticeWithTimeout(
         disconnectedOwnerUserId,
@@ -498,7 +511,27 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.botDisplayName = me.first_name ?? '';
     this.setStatus({ kind: 'connected', appId: String(me.id) });
     this.startPolling(api);
+    this.registerOwnerCommandMenu();
     return true;
+  }
+
+  /**
+   * 把命令菜单注册到 owner 私聊 scope(best-effort, 失败静默)。
+   * scope 精准到 chat: 只有 owner 的输入框会出现 "/" 菜单。
+   */
+  private registerOwnerCommandMenu(): void {
+    const api = this.api;
+    const menu = this.opts.commandMenu;
+    if (!api || !menu?.length || !this.ownerUserId) return;
+    void api
+      .call('setMyCommands', {
+        commands: menu,
+        scope: { type: 'chat', chat_id: Number(this.ownerUserId) },
+      })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.log.warn(`telegram command menu register failed (non-fatal): ${msg}`);
+      });
   }
 
   private startPolling(api: TelegramApiClient): void {

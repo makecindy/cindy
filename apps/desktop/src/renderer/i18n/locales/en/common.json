@@ -1781,6 +1781,18 @@
           "title": "Connect",
           "body": "Fill in the token and user ID above and hit Connect. The desktop talks to Telegram directly — nothing goes through {{appName}} servers."
         }
+      },
+      "commandMenu": {
+        "start": "Welcome and usage",
+        "new": "Start a new session",
+        "help": "Show command help",
+        "stop": "Stop the current task",
+        "session": "Recent sessions, pick one to continue",
+        "project": "Switch project workspace",
+        "model": "Show or switch the model",
+        "permission": "Show or switch the permission mode",
+        "ctr": "Remotely control a desktop session",
+        "exctr": "Exit remote control"
       }
     },
     "logout": {

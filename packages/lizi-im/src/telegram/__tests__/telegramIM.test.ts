@@ -593,6 +593,21 @@ describe('TelegramIM', () => {
     expect(api.calls.filter((c) => c.method === 'sendPhoto').length).toBe(1);
   });
 
+  it('connect 后把命令菜单注册到 owner scope; disconnect 清理', async () => {
+    await im.dispose();
+    im = new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      commandMenu: [{ command: 'help', description: '帮助' }],
+    });
+    im.registerIpc();
+    await connect();
+    const reg = api.calls.find((c) => c.method === 'setMyCommands');
+    expect(reg).toBeTruthy();
+    expect(reg!.params.scope).toEqual({ type: 'chat', chat_id: Number(OWNER_ID) });
+    await ctx.handlers.get('telegramBot:disconnect')!();
+    expect(api.calls.some((c) => c.method === 'deleteMyCommands')).toBe(true);
+  });
+
   it('disconnect 清空凭证并回 idle', async () => {
     await connect();
     await ctx.handlers.get('telegramBot:disconnect')!();

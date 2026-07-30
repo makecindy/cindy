@@ -139,6 +139,13 @@ export const telegramIm = createTelegramIM(host, {
   resolveImageUrl: resolveManagedImageAbsPath,
   expiredCardNotice: telegramUiText.expiredCardNotice,
   ownerNoticeText: (phase) => t(`settings.telegramBot.ownerNotice.${phase}`),
+  // owner 私聊的 "/" 命令菜单(BotCommandScopeChat 只发 owner, 其他人不可见)。
+  commandMenu: ['start', 'new', 'help', 'stop', 'session', 'project', 'model', 'permission', 'ctr', 'exctr'].map(
+    (command) => ({
+      command,
+      description: t(`settings.telegramBot.commandMenu.${command}`),
+    }),
+  ),
 });
 export const wechatCompatibilityPolicy = new WechatCompatibilityPolicyService({
   ...WECHAT_COMPATIBILITY_POLICY_PRODUCTION_CONFIG,

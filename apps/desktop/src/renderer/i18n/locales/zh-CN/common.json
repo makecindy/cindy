@@ -1780,6 +1780,18 @@
           "title": "连接",
           "body": "把 Token 和用户 ID 填到上面，点连接。桌面端会直连 Telegram，不经 {{appName}} 服务器。"
         }
+      },
+      "commandMenu": {
+        "start": "查看欢迎信息和用法",
+        "new": "开启新对话",
+        "help": "查看命令帮助",
+        "stop": "停止当前任务",
+        "session": "最近对话列表，选中即续聊",
+        "project": "切换项目工作区",
+        "model": "查看或切换模型",
+        "permission": "查看或切换权限模式",
+        "ctr": "接管桌面端的对话",
+        "exctr": "退出远程控制"
       }
     },
     "logout": {
