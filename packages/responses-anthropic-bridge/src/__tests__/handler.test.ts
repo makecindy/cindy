@@ -366,6 +366,27 @@ describe('createResponsesAnthropicHandler', () => {
     expect(res.status).toBe(200);
   });
 
+  it('refreshes provider OAuth even when Claude request policy uses API-key mode', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('expired', { status: 401 }))
+      .mockResolvedValueOnce(anthropicStream());
+    const fetchImpl = fetchMock as unknown as typeof fetch;
+    const refreshHeaders = vi.fn(async () => ({ authorization: 'Bearer fresh' }));
+    const handler = createResponsesAnthropicHandler({
+      upstreamBase: 'https://provider.example',
+      authMode: 'api-key',
+      buildHeaders: async () => ({ authorization: 'Bearer stale' }),
+      refreshHeaders,
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: { model: 'claude', input: 'hi' }, ctx, res: res as never });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(refreshHeaders).toHaveBeenCalledTimes(1);
+    const second = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    expect((second.headers as Record<string, string>).authorization).toBe('Bearer fresh');
+    expect(res.status).toBe(200);
+  });
+
   it('retries one 413 request with a lower image normalization tier', async () => {
     const maxEdges: number[] = [];
     const fetchMock = vi.fn()

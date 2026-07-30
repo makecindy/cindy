@@ -307,7 +307,6 @@ export function createResponsesAnthropicHandler(
           if (
             !authRetried
             && provider.refreshHeaders
-            && (provider.authMode === 'oauth' || provider.authMode === undefined)
           ) {
             authRetried = true;
             let refreshed: Record<string, string> | null = null;

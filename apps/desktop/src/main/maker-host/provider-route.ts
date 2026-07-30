@@ -19,7 +19,12 @@
  * token 覆盖 authorization,避免把子进程里其它供应商的 OAuth bearer 泄漏过去(如 Codex → xAI)。
  */
 
-import type { AgentKind, Provider, RoutingDescriptor } from '@cindy/model-providers';
+import {
+  nativeDefaultSourceId,
+  type AgentKind,
+  type Provider,
+  type RoutingDescriptor,
+} from '@cindy/model-providers';
 import type { RoutingDecision } from '@cindy/anthropic-compat-proxy';
 
 import {
@@ -470,17 +475,11 @@ export interface ResolvedSessionRoute {
   oauthToken: string | null;
 }
 
-/**
- * 解析会话选定来源的完整运行时素材，供需要本地协议 handler 的路径使用。
- * 普通透明转发仍走 resolveSessionRouteDecision，避免改变历史返回形态。
- */
-export async function resolveSessionRoute(
-  sessionId: string,
+async function resolveProviderRouteById(
+  providerId: string,
   agent: AgentKind,
   wireModel?: string,
 ): Promise<ResolvedSessionRoute | null> {
-  const providerId = getSessionProvider(sessionId);
-  if (!providerId) return null;
   if (isProviderRouteMutationInProgress(providerId)) return null;
   const provider = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
   const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
@@ -502,6 +501,20 @@ export async function resolveSessionRoute(
     apiKey,
     oauthToken,
   };
+}
+
+/**
+ * 解析会话选定来源的完整运行时素材，供需要本地协议 handler 的路径使用。
+ * 普通透明转发仍走 resolveSessionRouteDecision，避免改变历史返回形态。
+ */
+export async function resolveSessionRoute(
+  sessionId: string,
+  agent: AgentKind,
+  wireModel?: string,
+): Promise<ResolvedSessionRoute | null> {
+  const providerId = getSessionProvider(sessionId);
+  if (!providerId) return null;
+  return resolveProviderRouteById(providerId, agent, wireModel);
 }
 
 /** Build outbound headers for an already resolved local protocol handler. */
@@ -597,6 +610,15 @@ function providersForModel(modelId: string, agent: AgentKind) {
   );
 }
 
+function defaultProviderForModel(modelId: string, agent: AgentKind) {
+  const providers = providersForModel(modelId, agent);
+  const defaultId = nativeDefaultSourceId(
+    providers.map((provider) => ({ ...provider, connected: true })),
+    agent,
+  );
+  return providers.find((provider) => provider.id === defaultId) ?? null;
+}
+
 function uniqueProviderForModel(modelId: string, agent: AgentKind) {
   const providers = providersForModel(modelId, agent);
   return providers.length === 1 ? providers[0] : null;
@@ -608,6 +630,30 @@ function uniqueProviderForModel(modelId: string, agent: AgentKind) {
  */
 export function inferProviderIdForModel(modelId: string, agent: AgentKind): string | null {
   return uniqueProviderForModel(modelId, agent)?.id ?? null;
+}
+
+/**
+ * 隐式本地 bridge 来源：会话未显式选 Provider 时，按模型选择器相同的原生默认来源
+ * 解析 Provider；只有最终来源明确声明 Chat / Anthropic Messages wire 才接管。
+ *
+ * 这里不能使用 uniqueProviderForModel：Claude 模型通常同时由 Anthropic 与 XD 提供，
+ * 但 Codex 的默认来源仍应稳定选择 XD；XD 不可用时才落到候选首项（如 Anthropic）。
+ */
+export function resolveImplicitLocalBridgeRoute(
+  modelId: string,
+  agent: AgentKind,
+): Promise<ResolvedSessionRoute | null> | null {
+  const catalogModelId = modelId.replace(/\[1m\]$/, '');
+  const provider = defaultProviderForModel(catalogModelId, agent);
+  if (!provider) return null;
+  const routing = providerRoutingForModel(provider, agent, modelId);
+  if (
+    routing?.wireProtocol !== 'openai-chat'
+    && routing?.wireProtocol !== 'anthropic-messages'
+  ) {
+    return null;
+  }
+  return resolveProviderRouteById(provider.id, agent, modelId);
 }
 
 /**

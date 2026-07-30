@@ -51,11 +51,15 @@ export interface ResponsesAnthropicProviderConfig {
   upstreamBase: string;
   /** Optional exact endpoint path, for gateways that do not use `/v1/messages`. */
   requestPath?: string;
-  /** API keys use the plain Messages contract; Claude.ai OAuth needs Claude Code policy. */
+  /**
+   * Request-policy mode only: API keys use the plain Messages contract, while
+   * Claude.ai OAuth needs Claude Code policy. Credential refresh is controlled
+   * independently by refreshHeaders.
+   */
   authMode?: 'api-key' | 'oauth';
   /** Provider-owned headers. Never pass Codex/OpenAI OAuth headers here. */
   buildHeaders: () => Promise<Record<string, string>>;
-  /** One-shot OAuth refresh hook invoked only after an upstream 401/403. */
+  /** One-shot provider credential refresh hook invoked only after an upstream 401/403. */
   refreshHeaders?: (
     info: ResponsesAnthropicAuthRetryInfo,
   ) => Promise<Record<string, string> | null>;

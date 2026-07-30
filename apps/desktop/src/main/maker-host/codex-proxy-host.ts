@@ -55,6 +55,7 @@ import {
   getUserProviderIdForSession,
   readProviderOAuthToken,
   providerRoutingServesWireModel,
+  resolveImplicitLocalBridgeRoute,
   resolveImplicitProviderOAuthRouteDecision,
   resolveProviderOAuthControlRouteDecision,
   rewriteImplicitModelIdForRoute,
@@ -818,6 +819,44 @@ function createAnthropicBridgeDecision(
       return handler.handle({ parsedBody: body, ctx, res });
     },
   };
+}
+
+function createLocalBridgeDecision(
+  route: Awaited<ReturnType<typeof resolveSessionRoute>>,
+  instructions: string | undefined,
+  wireModel: string,
+  requestModelOverride: string | undefined,
+  threadId: string,
+): RoutingDecision | null {
+  if (!route) return null;
+  if (route.routing.wireProtocol === 'openai-chat') {
+    const decision = createChatBridgeDecision(
+      route,
+      instructions,
+      wireModel,
+      requestModelOverride,
+    );
+    if (decision) {
+      recordCodexThreadUpstreamForDiagnostics(threadId, route.routing.upstream);
+    }
+    return decision;
+  }
+  if (route.routing.wireProtocol === 'anthropic-messages') {
+    const decision = createAnthropicBridgeDecision(
+      route,
+      instructions,
+      wireModel,
+      requestModelOverride,
+    );
+    if (decision) {
+      recordCodexThreadUpstreamForDiagnostics(
+        threadId,
+        anthropicBridgeUpstreamBase(route),
+      );
+    }
+    return decision;
+  }
+  return null;
 }
 
 function moveInstructionsIntoInput(body: Record<string, unknown>): Record<string, unknown> | null {
@@ -1876,6 +1915,7 @@ export function createModelRoutingTransform(
       requestModel;
     const threadId = selectedThreadIdFromHeaders(ctx.headers);
     const sessionId = sessionIdFromHeaders(ctx.headers);
+    const explicitProviderId = sessionId ? getSessionProvider(sessionId) : null;
     const selectedRouting = sessionId
       ? getSessionRoutingDescriptor(sessionId, 'codex', model || undefined)
       : null;
@@ -1898,41 +1938,15 @@ export function createModelRoutingTransform(
       isHostInjectedAuthSession(sessionId, 'codex') ||
       selectedUsesLocalBridge
     )) {
-      if (selectedRouting?.wireProtocol === 'openai-chat' && ctx.method === 'POST' && model) {
+      if (selectedUsesLocalBridge && model) {
         return resolveSessionRoute(sessionId, 'codex', model).then((localRoute) => {
-          const decision = createChatBridgeDecision(
+          return createLocalBridgeDecision(
             localRoute,
             threadId ? registry.get(threadId) : undefined,
             model,
             model !== requestModel ? model : undefined,
+            threadId,
           );
-          // chat bridge 走 localHandler,但它**确实出网** —— handler 自己用
-          // outboundFetch 打 route.routing.upstream(绕开转发层,却走同一个出站代理
-          // 解析器),所以照样会产生出站路径快照。这里必须补记 thread→上游映射:
-          // 漏了的话该供应商不可达时诊断查不到记录,静默退回通用猜测清单。
-          // 包装层(withCodexUpstreamRecording)看不到 localHandler 背后的上游,
-          // 只能由产生它的分支自己记。
-          if (decision && localRoute?.routing.upstream) {
-            recordCodexThreadUpstreamForDiagnostics(threadId, localRoute.routing.upstream);
-          }
-          return decision;
-        });
-      }
-      if (selectedRouting?.wireProtocol === 'anthropic-messages' && ctx.method === 'POST' && model) {
-        return resolveSessionRoute(sessionId, 'codex', model).then((localRoute) => {
-          const decision = createAnthropicBridgeDecision(
-            localRoute,
-            threadId ? registry.get(threadId) : undefined,
-            model,
-            model !== requestModel ? model : undefined,
-          );
-          if (decision && localRoute) {
-            recordCodexThreadUpstreamForDiagnostics(
-              threadId,
-              anthropicBridgeUpstreamBase(localRoute),
-            );
-          }
-          return decision;
         });
       }
       // model 传给 scope 门(空串 = 控制面 GET,不受范围限制);声明了 modelPrefixes 的
@@ -1950,11 +1964,23 @@ export function createModelRoutingTransform(
       }
     }
 
-    // ①.5 隐式来源(providerId/sessionProvider=null)但 model 自带唯一供应商命名空间。
-    // 典型:xai/grok-* 来自默认/调度/IM 路径时不写 sessionProvider,但仍必须走 api.x.ai
-    // + SuperGrok OAuth + modelIdRewrite,不能掉到 Codex 默认 ChatGPT/XD 分支。
-    const explicitProviderId = sessionId ? getSessionProvider(sessionId) : null;
+    // ①.5 隐式来源(providerId/sessionProvider=null):
+    //   - Chat / Anthropic Messages wire 按模型选择器相同的默认来源进入本地 bridge;
+    //   - xai/grok-* 等唯一 provider-oauth 来源仍注入对应 OAuth 并透明转发。
+    // 两者都必须先于 Codex 默认 ChatGPT/XD 分支，避免协议或凭证落错上游。
     if (!explicitProviderId && model) {
+      if (sessionId && ctx.method === 'POST') {
+        const implicitLocalRoute = resolveImplicitLocalBridgeRoute(model, 'codex');
+        if (implicitLocalRoute) {
+          return implicitLocalRoute.then((localRoute) => createLocalBridgeDecision(
+            localRoute,
+            threadId ? registry.get(threadId) : undefined,
+            model,
+            model !== requestModel ? model : undefined,
+            threadId,
+          ));
+        }
+      }
       const implicitProviderOAuth = resolveImplicitProviderOAuthRouteDecision(model, 'codex', gatewayKey);
       if (implicitProviderOAuth) return implicitProviderOAuth;
     }
