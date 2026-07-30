@@ -53,9 +53,8 @@ import type { TabKindHostContext, TabKindId, TabState } from './types';
 // file-browser;Phase 5 注册 web-browser。Shell 不直接消费 plugin 实例,只通过
 // getTabKind 查 registry。
 import './plugins';
-import { eagerSpawnAndReport, initRsbBrowserBridge } from './lib/rsbBrowserBridge';
-import { markPopupSpawnedTab } from './lib/popupTabs';
-import { requestRightSidebarVisibility } from './lib/sidebarCommands';
+import { initRsbBrowserBridge } from './lib/rsbBrowserBridge';
+import { initPopupRouter, setPopupFallbackSession } from './lib/popupRouter';
 
 const log = createLogger('rightSidebar.shell');
 /**
@@ -346,76 +345,16 @@ export function RightSidebarShell({
     }
   }, [sessionId, bucket.tabs]);
 
-  // 订阅 main 端的 webview popup 推送 —— guest webview 内 window.open /
-  // target=_blank / window.location 跨 host 时,把 popup URL 路由到一个新的
-  // web-browser RSB tab(对齐 Codex `main-cC-d0ezP.js:48849` 的 foreground/
-  // background-tab 智能路由,简化版:都开前台 tab)。
-  //
-  // 归属:优先 payload 的 openerSessionId(main 按发起方 guest 的 webContentsId
-  // 从 TabRegistry 反查)。agent 在后台 session 操作的 eager-spawn webview 也会
-  // 触发 popup——没有 opener 归属时它会落进"用户正在看的 session",串会话;有
-  // openerSessionId 时落进 opener 的 bucket,跨 session 场景只写存档不动当前 UI
-  // (交给 MainLayout 的 visibility 分支)。
-  // 已知边界(与修复前一致,本 PR 不扩大也不消除):本订阅随 Shell 生命周期 ——
-  //   - 用户在草稿页等无 session 路由时推上来的 popup 被丢弃(丢弃优于落错 session);
-  //   - 用户离开聊天视图(如进设置页)导致 Shell 卸载期间,后台 agent 触发的 popup
-  //     也会丢,授权流程要等 agent 重试。
-  // preload 的 popup 扇出不缓存事件,所以"没人订阅"就等于丢。要消除这个盲区得把
-  // popup 路由挪到窗口级常驻位置(bridge 已是常驻单例,但它没有"用户正在看哪个
-  // session"这个回落信息),涉及 RSB 事件归属的架构决定,留作独立 follow-up。
+  // popup 路由已挪到窗口级常驻模块(lib/popupRouter.ts):订阅不随 Shell 生命
+  // 周期,用户离开聊天视图 / main 端归属等待期间 route 切换都不再丢 popup。
+  // Shell 只负责两件事:确保 router 已 init(幂等,与 bridge 同款),以及把
+  // "用户正在看的 session"喂给 router 作无归属 popup 的回落目标(保留最后
+  // 已知值,Shell 卸载期间到达的 popup 仍有处可去)。
   useEffect(() => {
-    if (!sessionId) return;
-    const off = window.electronAPI.onRsbBrowserPopup(({ url, openerSessionId }) => {
-      const targetSessionId = openerSessionId ?? sessionId;
-      // 给新 tab 一份完整 default state,只把 url 替换成 popup URL;hydrateState
-      // 会把缺字段补回默认。background-tab disposition 暂不区分,统一前台打开;
-      // 日后要支持后台 tab 时再按 disposition 分支选 setActive。
-      const initialState = {
-        url,
-        title: '',
-        favicon: null,
-        isAudible: false,
-      };
-      void (async () => {
-        // 写 bucket 前一律先水合(含当前 session):store 契约要求先 hydrated 再写 ——
-        // 未水合就写,`setBucket` 会以 hydrated:true 为 merge base(store.ts 的 cache
-        // miss 分支),`ensureHydrated` 之后就早退,DB 里既有的 tab 被永久挡在本
-        // renderer 外(丢 tab)。Shell 刚 mount、list IPC 还在途时 popup 就可能到达,
-        // 所以当前 session 也不能省。ensureHydrated 幂等且并发去重,命中缓存即返回。
-        await ensureHydrated(targetSessionId);
-        // popup 来源标记必须在乐观插入的同一 tick 登记(onOptimisticAdd),不能等
-        // addTab resolve:持久化 IPC 在途期间 React 已可能 mount webview 并加载完
-        // callback 页,快速 window.close 会赶在登记前到达且 close 事件不重发。
-        const newTab = await addTab(targetSessionId, 'web-browser', initialState, {
-          onOptimisticAdd: markPopupSpawnedTab,
-        });
-        // 一律离屏物化,不区分目标 session 是否当前:
-        // - 跨 session:Shell 只渲染当前 bucket,后台 tab 没有 BrowserTabBody 去
-        //   出生 webview;
-        // - **同 session 但侧栏折叠**:Shell 挂着但 shellVisible=false,#700 之后
-        //   隐藏 tab 不再首次物化 —— popup URL 同样永远不开始加载,OAuth 卡死。
-        // 两种形态都没有别的物化路径(与 main 端 open tab-op 的 eagerSpawnAndReport
-        // 同理);侧栏可见时 TabBody 会 acquire 同一个 pool entry,eagerSpawn 幂等
-        // 复用,无副作用。
-        await eagerSpawnAndReport(targetSessionId, newTab.id, url);
-        // 物化期间 tab 可能已经没了:OAuth callback 页在 dom-ready 前就
-        // window.close()(guest 自关路径会把最后一个 tab 关掉并请求收起侧栏),
-        // 或用户手动关了它。此时再无条件请求 'open' 会把刚写的"收起"存档翻回
-        // "展开",用户切回该 session 只看到一个空侧栏。
-        if (!getBucket(targetSessionId).tabs.some((t) => t.id === newTab.id)) return;
-        // 当前 session:折叠时展开侧栏让用户看到 popup;已展开则 no-op。
-        // 跨 session:只写目标 session 的折叠存档,用户切回去时侧栏已展开。
-        // userInitiated:false —— popup 由 guest 页面脚本催生,不是用户当次手势;
-        // detached 形态下不得 show+focus 抢走用户前台(与 agent tab-op open 一致)。
-        requestRightSidebarVisibility('open', {
-          sessionId: targetSessionId,
-          userInitiated: false,
-        });
-      })().catch((err) => {
-        log.error('rsb popup → addTab failed', { sessionId: targetSessionId, url, err });
-      });
-    });
-    return off;
+    initPopupRouter();
+  }, []);
+  useEffect(() => {
+    setPopupFallbackSession(sessionId);
   }, [sessionId]);
 
   useEffect(() => {

@@ -32,6 +32,7 @@ vi.mock('../lib/rsbBrowserBridge', async () => {
 
 import { RightSidebarShell } from '../RightSidebarShell';
 import { _resetRsbBrowserBridgeForTests } from '../lib/rsbBrowserBridge';
+import { _resetPopupRouterForTests } from '../lib/popupRouter';
 import {
   _resetSidebarCommandsForTests,
   onRequestRightSidebarVisibility,
@@ -202,6 +203,7 @@ describe('RightSidebarShell empty state', () => {
     });
     _resetStore();
     _resetRsbBrowserBridgeForTests();
+    _resetPopupRouterForTests();
     rsbBrowserCommandListeners = [];
     rsbBrowserPopupListeners = [];
     eagerSpawnAndReport.mockClear();
@@ -213,6 +215,7 @@ describe('RightSidebarShell empty state', () => {
   afterEach(() => {
     _resetStore();
     _resetRsbBrowserBridgeForTests();
+    _resetPopupRouterForTests();
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
   });
 
@@ -702,6 +705,7 @@ describe('RightSidebarShell 跨 session popup 归属', () => {
     });
     _resetStore();
     _resetRsbBrowserBridgeForTests();
+    _resetPopupRouterForTests();
     _resetSidebarCommandsForTests();
     rsbBrowserCommandListeners = [];
     rsbBrowserPopupListeners = [];
@@ -720,6 +724,7 @@ describe('RightSidebarShell 跨 session popup 归属', () => {
     _resetSidebarCommandsForTests();
     _resetStore();
     _resetRsbBrowserBridgeForTests();
+    _resetPopupRouterForTests();
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
   });
 
@@ -761,6 +766,62 @@ describe('RightSidebarShell 跨 session popup 归属', () => {
     // popup 是 guest 页面脚本催生的,不是用户手势:detached 形态下不得 show+focus
     // 抢走用户前台(与 agent tab-op open 路径一致)。
     expect(requests[0].opts.userInitiated).toBe(false);
+  });
+
+  it('Shell 卸载(route 切换)后 popup 仍被常驻 router 路由,不丢事件', async () => {
+    // popup 订阅在窗口级常驻模块,不随 Shell 生命周期:用户离开聊天视图 / main
+    // 端归属等待期间 route 切换,归属明确的 popup 照常落 opener session。
+    const view = render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        isMac: true,
+        unifiedTopbar: true,
+      }),
+    );
+    await waitFor(() => expect(rsbBrowserPopupListeners).toHaveLength(1));
+    view.unmount();
+    // 卸载后 listener 仍在(常驻订阅不解绑)。
+    expect(rsbBrowserPopupListeners).toHaveLength(1);
+
+    await act(async () => {
+      rsbBrowserPopupListeners[0]({
+        url: 'https://accounts.example.com/oauth',
+        disposition: 'foreground-tab',
+        openerTabId: 'tab-opener',
+        openerSessionId: 's2',
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(getBucket('s2').tabs).toHaveLength(1));
+    await waitFor(() => expect(eagerSpawnAndReport).toHaveBeenCalledTimes(1));
+  });
+
+  it('无归属 popup 在 Shell 卸载后回落到最后已知 session(不丢弃)', async () => {
+    const view = render(
+      createElement(RightSidebarShell, {
+        sessionId: 's1',
+        workdir: '/tmp/repo',
+        remoteHostId: null,
+        isMac: true,
+        unifiedTopbar: true,
+      }),
+    );
+    await waitFor(() => expect(rsbBrowserPopupListeners).toHaveLength(1));
+    view.unmount();
+
+    await act(async () => {
+      rsbBrowserPopupListeners[0]({
+        url: 'https://plain.example.com/page',
+        disposition: 'foreground-tab',
+        // 无 openerSessionId:回落 fallback(最后看过的 s1)。
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(getBucket('s1').tabs).toHaveLength(1));
   });
 
   it('当前 session 的 popup 也离屏物化并请求展开(折叠侧栏下 OAuth 不再卡死)', async () => {
