@@ -77,6 +77,7 @@ export function detectGroupTrigger(
   m: TgMessage,
   botId: number,
   botUsername: string,
+  botName?: string,
 ): { text: string } | null {
   const sourceText = m.text ?? m.caption ?? '';
   const entities = m.text !== undefined ? m.entities : m.caption_entities;
@@ -97,11 +98,44 @@ export function detectGroupTrigger(
     }
   }
   const repliedToBot = m.reply_to_message?.from?.id === botId;
-  if (!mentioned && !repliedToBot) return null;
+  if (!mentioned && !repliedToBot) {
+    // 名字召唤(OpenClaw 习惯, Chris 2026-07-30 实测踩坑): 显示名不是
+    // username, 手打 "@Ivy" 或开头喊 "Ivy ..." 不构成 Telegram mention,
+    // 但用户预期就是在叫 bot — 按显示名匹配补上这类召唤。
+    const summoned = botName ? matchNameSummon(sourceText, botName) : null;
+    if (summoned === null) return null;
+    return { text: summoned };
+  }
 
   let text = stripRanges(sourceText, strippedRanges);
   text = text.replace(new RegExp(`(/[a-zA-Z0-9_]+)@${escapeRegExp(botUsername)}`, 'gi'), '$1');
   return { text: text.replace(/[ \t]{2,}/g, ' ').trim() };
+}
+
+/**
+ * 显示名召唤匹配:
+ *   - `@显示名` 任意位置(如 "@Ivy 你在?" — 大小写不敏感, 后面不能紧跟字母数字);
+ *   - 裸显示名在**句首**且后跟分隔符/结尾(如 "Ivy 帮我看看" / "ivy?")。
+ * 句中出现名字(如 "我问过 Ivy 了")不算召唤 — 只是聊到它, 避免误触发。
+ * 命中后剥掉召唤 token; 剥完为空(纯 "@Ivy")时保留原文让 agent 打招呼。
+ */
+function matchNameSummon(sourceText: string, botName: string): string | null {
+  const name = botName.trim();
+  if (name.length < 2) return null;
+  const esc = escapeRegExp(name);
+  const SEP = '[\\s,，。:：、!！?？~〜]';
+  const atRe = new RegExp(`@${esc}(?![\\w])`, 'gi');
+  const leadRe = new RegExp(`^\\s*${esc}(?=$|${SEP})`, 'i');
+  let cleaned: string | null = null;
+  const atStripped = sourceText.replace(atRe, ' ');
+  if (atStripped !== sourceText) {
+    cleaned = atStripped;
+  } else if (leadRe.test(sourceText)) {
+    cleaned = sourceText.replace(leadRe, '').replace(new RegExp(`^${SEP}+`), '');
+  }
+  if (cleaned === null) return null;
+  const text = cleaned.replace(/[ \t]{2,}/g, ' ').trim();
+  return text || sourceText.trim();
 }
 
 /**

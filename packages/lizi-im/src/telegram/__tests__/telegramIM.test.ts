@@ -226,6 +226,21 @@ describe('TelegramIM', () => {
     });
   });
 
+  it('名字召唤: 手打 "@显示名" 与句首裸名字都触发(非 username), 句中提到不触发', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([
+      // 显示名 Cindy ≠ username my_cindy_bot: 手打 @Cindy 没有 mention entity
+      groupMessage({ text: '@Cindy 你在?', fromId: 111, messageId: 30 }),
+      groupMessage({ text: 'cindy 帮我看看这个', fromId: 222, messageId: 31 }),
+      groupMessage({ text: '我问过 Cindy 了不用管', fromId: 111, messageId: 32 }),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    expect(events[0]).toMatchObject({ senderId: 'g/-100200', text: '你在?' });
+    expect(events[1]).toMatchObject({ senderId: 'g/-100200', text: '帮我看看这个' });
+  });
+
   it('群多人: 全员 @bot 可触发且共享同一条群 lane; 命令仍 owner 专属', async () => {
     const events: IMMessageEvent[] = [];
     const windowEntries: TelegramGroupWindowEntry[] = [];

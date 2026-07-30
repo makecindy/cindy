@@ -606,6 +606,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     if (!api) return false;
     try {
       await api.call('setMyName', { name: name.slice(0, 64) });
+      // 名字召唤(detectGroupTrigger)按显示名匹配 — 同步成功即更新本地缓存,
+      // 不等下次 getMe。
+      this.botDisplayName = name.slice(0, 64);
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -808,7 +811,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         this.emitGroupWindow(groupWindowEntryOf(m));
       }
 
-      let trigger = detectGroupTrigger(m, this.botId, this.botUsername);
+      let trigger = detectGroupTrigger(m, this.botId, this.botUsername, this.botDisplayName);
       let ambient = false;
       if (!trigger) {
         // 全响应·自主判断(per-chat 配置): 未被召唤的消息也进 turn, 打 ambient
