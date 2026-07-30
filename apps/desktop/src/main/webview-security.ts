@@ -478,7 +478,10 @@ export function installDeferredPopupRouter(
       popupWindow.close();
     }
     if (openerAttrPromise !== null) {
-      void openerAttrPromise.then((opener) => {
+      void openerAttrPromise.then((promiseResult) => {
+        // promiseResult 为 null 说明 1s 超时内 registry 还没有这条记录。
+        // URL 到达时补一次同步重查：opener 上报可能在超时后、URL 到达前才入库。
+        const opener = promiseResult ?? resolvePopupOpener(openerWebContentsId!);
         sendBrowserPopup(hostContents, { url, disposition, ...(opener ?? {}) });
       });
     } else {

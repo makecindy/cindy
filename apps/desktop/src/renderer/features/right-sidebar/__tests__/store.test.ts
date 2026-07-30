@@ -1004,6 +1004,33 @@ describe('RSB store', () => {
       );
       expect(store.getBucket('s1').hydrated).toBe(false);
     });
+
+    it('skips post-close setActive when cache is invalidated during the close IPC', async () => {
+      // Codex P1: invalidateSessionCaches() 清掉旧 renderer 的 bucket(hydrated=false)
+      // 时,closeTab 的 active 同步段不应调 setActive(null)——那会把新 renderer 已
+      // 接管会话的 active 标志清掉。
+      const tab = await store.addTab('s1', 'web-browser', { url: 'https://example.com/a' });
+      await store.addTab('s1', 'web-browser', { url: 'https://example.com/b' });
+      ipc.setActive.mockClear();
+
+      let releaseClose: (() => void) | undefined;
+      ipc.close.mockImplementationOnce(
+        () => new Promise<{ ok: true }>((resolve) => {
+          releaseClose = () => resolve({ ok: true });
+        }),
+      );
+
+      const closing = store.closeTab('s1', tab.id);
+      // 等 closeTab 走到 ipc.close 调用后(releaseClose 已被 mock 赋值)
+      await vi.waitFor(() => expect(releaseClose).toBeDefined());
+      // close IPC 在途时 invalidate
+      store.invalidateSessionCaches();
+      releaseClose!();
+      await closing;
+
+      // hydrated=false 后 active 同步段必须跳过
+      expect(ipc.setActive).not.toHaveBeenCalled();
+    });
   });
 
   describe('subscribe / notify', () => {

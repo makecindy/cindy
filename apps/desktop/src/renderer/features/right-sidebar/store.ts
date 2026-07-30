@@ -684,18 +684,25 @@ export async function closeTab(
           // 并发的 addTab / setActiveTab 可能已经把 active 换成别的 tab 并落库了 ——
           // 拿关闭前算好的旧值去写会把它盖掉,DB 与 cache 分叉(下次 hydrate 恢复出
           // 错的 active)。cache 是 renderer 侧的真相,直接对齐它即可收敛。
-          let activeNow = getBucket(sessionId).activeTabId;
-          if (activeNow !== prev.activeTabId) {
-            // 并发 addTab 可能刚把新 tab 设为 active 而它的 INSERT 还在途:直接
-            // setActive 会撞 [NOT_FOUND](main 端还会先清掉全 session 的 active 位)。
-            // 等它的创建落定;等待期间 active 可能又变,落定后重取现值。
-            const pendingActive = activeNow ? pendingTabCreates.get(activeNow) : undefined;
-            if (pendingActive) {
-              await pendingActive.catch(() => undefined);
-              activeNow = getBucket(sessionId).activeTabId;
-            }
+          //
+          // detach/reattach 竞态防护:invalidateSessionCaches() 清掉旧 renderer 的
+          // bucket 时 hydrated 变 false。EMPTY_BUCKET.activeTabId = null;若照常
+          // setActive(null) 会把新 renderer 已接管会话的 active 标志清掉。
+          const afterClose = getBucket(sessionId);
+          if (afterClose.hydrated) {
+            let activeNow = afterClose.activeTabId;
             if (activeNow !== prev.activeTabId) {
-              await ipc.setActive({ sessionId, id: activeNow });
+              // 并发 addTab 可能刚把新 tab 设为 active 而它的 INSERT 还在途:直接
+              // setActive 会撞 [NOT_FOUND](main 端还会先清掉全 session 的 active 位)。
+              // 等它的创建落定;等待期间 active 可能又变,落定后重取现值。
+              const pendingActive = activeNow ? pendingTabCreates.get(activeNow) : undefined;
+              if (pendingActive) {
+                await pendingActive.catch(() => undefined);
+                activeNow = getBucket(sessionId).activeTabId;
+              }
+              if (activeNow !== prev.activeTabId) {
+                await ipc.setActive({ sessionId, id: activeNow });
+              }
             }
           }
         } catch (activeErr) {
