@@ -3843,7 +3843,7 @@ const MessageItem = memo(function MessageItem({
     case 'ask_user':
       return <AskUserQuestionBubble message={message} />;
     case 'plan_review':
-      return <PlanReviewBubble message={message} />;
+      return <PlanReviewBubble message={message} workingDir={workingDir} />;
     case 'error':
       // interrupted-turn-resume:app 退出中断标记行不进消息流(2026-07-05 产品
       // 决策)——它作为「会话尾部是否停在中断态」的判定源保留在 messages 数组里,
