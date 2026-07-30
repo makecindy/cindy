@@ -804,12 +804,17 @@ function summarizeInterruption(detail?: string): string | undefined {
 
 /**
  * silent-stop 自动续跑的分隔条（上游用空回复静默收尾后自动续跑）。形态与文案保持
- * 本 PR 之前的原样：居中 pill + 「已自动继续」。它不是重连，没有原因也没有次数，
- * 套用重连行只会给出错误的语义。
+ * 本 PR 之前的原样：居中 pill + 「连接中断，已自动继续」。它不是重连，没有原因也没有
+ * 次数，套用重连行只会给出错误的语义。
+ *
+ * **文案 key 必须是它自己的 `autoResumeSeparator.label`。** 本 PR 把
+ * `autoResume.label` 的**值**改成了「已重新连接」（那是重连成功态），复用它等于让
+ * silent-stop 行显示「已重新连接」—— 恢复了组件形态却仍然改错文案，只是把回归从
+ * 组件层搬到了 i18n 层（copilot review）。
  */
 function AutoResumeSeparator() {
   const { t } = useTranslation();
-  const label = t('chat.systemCard.autoResume.label');
+  const label = t('chat.systemCard.autoResumeSeparator.label');
   return (
     <div className="flex w-full items-center gap-3 py-2 select-none" role="separator" aria-label={label}>
       <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />

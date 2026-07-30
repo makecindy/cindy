@@ -5005,6 +5005,9 @@
           "sessionTotal": "この会話での再接続 {{count}} 回"
         }
       },
+      "autoResumeSeparator": {
+        "label": "接続が中断されたため、自動的に再開しました"
+      },
       "autoResumePending": {
         "label": "再接続中",
         "labelWithProgress": "再接続中 {{attempt}}/{{total}}"

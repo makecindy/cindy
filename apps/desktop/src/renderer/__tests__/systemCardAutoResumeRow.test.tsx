@@ -12,6 +12,9 @@
  * 紧跟其后的中断原因摘要 —— 而那句摘要正是这行存在的理由。
  */
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { cleanup, render, screen } from '@testing-library/react';
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -36,12 +39,19 @@ afterEach(() => {
 });
 
 describe('SystemCard auto-resume 行', () => {
-  it('无中断信息(silent-stop) → 保持「已自动继续」分隔条,不套用重连文案', () => {
+  it('无中断信息(silent-stop) → 保持分隔条形态,且用它**自己**的文案 key', () => {
     render(<SystemCard cardType="auto-resume" data={{}} />);
-    expect(screen.getByText('chat.systemCard.autoResume.label')).toBeTruthy();
-    // 中性重连文案属于"中断重连但结果未回填",不该出现在 silent-stop 行上。
-    expect(screen.queryByText('chat.systemCard.autoResume.labelNeutral')).toBeNull();
     expect(screen.getByRole('separator')).toBeTruthy();
+    // 关键在 key 的归属:`autoResume.label` 的值在本 PR 里已改成重连成功态
+    // 「已重新连接」,分隔条复用它就等于把回归从组件层搬到 i18n 层(copilot review)。
+    expect(screen.getByText('chat.systemCard.autoResumeSeparator.label')).toBeTruthy();
+    for (const reconnectKey of [
+      'chat.systemCard.autoResume.label',
+      'chat.systemCard.autoResume.labelNeutral',
+      'chat.systemCard.autoResume.labelFailed',
+    ]) {
+      expect(screen.queryByText(reconnectKey), `${reconnectKey} 属于重连行,不该出现在分隔条上`).toBeNull();
+    }
   });
 
   it('带中断信息 + outcome=failed → 三态活动行显示「重新连接未成功」', () => {
@@ -66,6 +76,26 @@ describe('SystemCard auto-resume 行', () => {
       <SystemCard cardType="auto-resume" data={{ error: 'socket hang up', attempt: 1, maxAttempts: 5 }} />,
     );
     expect(screen.getByText('chat.systemCard.autoResume.labelNeutral')).toBeTruthy();
+  });
+
+  // 上一条只锁了"用哪个 key"。**光锁 key 不够**:t 在测试里被 mock 成回显 key,
+  // 所以「key 归属对了但那个 key 的值被改成了重连文案」这一层测不到 —— 而本 PR 恰恰
+  // 就是把 autoResume.label 的值改成了「已重新连接」,第一次修的时候只换回了组件、
+  // 没换 key,回归就藏在 i18n 层活了下来。这条直接读四个 locale 的 JSON 补上那一层。
+  it('四个 locale 里分隔条文案与重连文案是两条独立的 key(值不得相同)', () => {
+    const locales = ['zh-CN', 'en', 'ja', 'ko'] as const;
+    for (const locale of locales) {
+      const raw = readFileSync(
+        resolve(__dirname, '..', 'i18n', 'locales', locale, 'common.json'),
+        'utf8',
+      );
+      const card = JSON.parse(raw).chat.systemCard;
+      const separator = card.autoResumeSeparator?.label;
+      const reconnected = card.autoResume?.label;
+      expect(typeof separator, `${locale}: 分隔条缺少自己的文案`).toBe('string');
+      expect(separator.length, `${locale}: 分隔条文案为空`).toBeGreaterThan(0);
+      expect(separator, `${locale}: 分隔条不能复用重连成功态文案`).not.toBe(reconnected);
+    }
   });
 
   it('活动行不设 aria-label:无障碍名要包含中断原因摘要', () => {

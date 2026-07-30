@@ -5005,6 +5005,9 @@
           "sessionTotal": "이 대화에서 재연결 {{count}}회"
         }
       },
+      "autoResumeSeparator": {
+        "label": "연결이 중단되어 자동으로 재개되었습니다"
+      },
       "autoResumePending": {
         "label": "다시 연결하는 중",
         "labelWithProgress": "다시 연결하는 중 {{attempt}}/{{total}}"

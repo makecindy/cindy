@@ -5006,6 +5006,9 @@
           "sessionTotal": "{{count}} reconnects in this conversation"
         }
       },
+      "autoResumeSeparator": {
+        "label": "Connection interrupted — resumed automatically"
+      },
       "autoResumePending": {
         "label": "Reconnecting",
         "labelWithProgress": "Reconnecting {{attempt}}/{{total}}"

@@ -5005,6 +5005,9 @@
           "sessionTotal": "本对话累计重连 {{count}} 次"
         }
       },
+      "autoResumeSeparator": {
+        "label": "连接中断，已自动继续"
+      },
       "autoResumePending": {
         "label": "重新连接中",
         "labelWithProgress": "重新连接中 {{attempt}}/{{total}}"
