@@ -4136,6 +4136,11 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "This model needs an API key — configure it in Settings",
+      "subscriptionDirectDisabled": {
+        "chatgpt": "Subscription-direct GPT models are not supported in SSH remote sessions yet",
+        "xai": "Subscription-direct Grok models are not supported in SSH remote sessions yet",
+        "generic": "Subscription-direct models are not supported in SSH remote sessions yet"
+      },
       "effortLabel": "Effort level",
       "edit": "Edit",
       "options": "Options",

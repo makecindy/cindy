@@ -40,6 +40,11 @@ import {
   selectVisibleModels,
 } from '@/lib/providerModels';
 import type { Effort } from '@/lib/userPreferences.types';
+import {
+  CHATGPT_MODEL_PREFIX,
+  XAI_MODEL_PREFIX,
+  isSubscriptionDirectModel,
+} from '../../../shared/subscriptionModels';
 import { isModelEnabled, useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
 import { useProviderModelMemoryVersion } from '@/state/providerModelMemory';
 import { useDeviceLinkModelMirrorVersion } from '@/state/deviceLinkModelMirror';
@@ -781,8 +786,22 @@ function ModelSelectorContentView({
     const displayQuote = quote.approximate ? { ...quote, approximate: false } : quote;
     return modelPricePresentation(displayQuote, undefined);
   };
+  // SSH 远程会话里订阅直连模型(chatgpt/ / xai/)不可路由:远端 cc 不经本地
+  // compat-proxy 的 responses-bridge,选了必失败。保留在列表但置灰 + 原因提示,
+  // 避免静默消失让用户误以为订阅掉了。device-link 远程(deviceId 非空)不受此限。
+  const subscriptionDirectDisabledReason = (id: string): string | null => {
+    if (!excludeSubscriptionDirect || !isSubscriptionDirectModel(id)) return null;
+    return id.startsWith(CHATGPT_MODEL_PREFIX)
+      ? t('newChat.modelSelector.subscriptionDirectDisabled.chatgpt')
+      : id.startsWith(XAI_MODEL_PREFIX)
+        ? t('newChat.modelSelector.subscriptionDirectDisabled.xai')
+        : t('newChat.modelSelector.subscriptionDirectDisabled.generic');
+  };
   const modelDisabledOf = (id: string): boolean => {
-    if (!deviceId) return id.startsWith('codex/') && !hasSavedKey;
+    if (!deviceId) {
+      if (subscriptionDirectDisabledReason(id)) return true;
+      return id.startsWith('codex/') && !hasSavedKey;
+    }
     if (remoteProviders.loading) return true;
     if (remoteProviders.error) return false;
     const rowAgentKind = resolveVisibleModelAgentKind({
@@ -1266,6 +1285,7 @@ function ModelSelectorContentView({
     const isBudgetModel = model.id.startsWith('codex/');
     const isSubscriptionModel = provider?.access?.kind === 'subscription';
     const disabled = modelDisabledOf(model.id);
+    const disabledReason = subscriptionDirectDisabledReason(model.id);
     const rowEffort = rowEffortOf(providerId, model);
     const rowFastOn = fastOnOf(providerId, model);
     const rowPrice = pricePresentationOf(providerId, model.id);
@@ -1319,6 +1339,7 @@ function ModelSelectorContentView({
             role="option"
             aria-selected={isSelected}
             aria-disabled={disabled}
+            title={disabledReason ?? undefined}
             data-model-selected={isSelected ? 'true' : undefined}
             data-model-options-active={isEditingThis ? 'true' : undefined}
             tabIndex={disabled ? -1 : 0}

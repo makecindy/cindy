@@ -4135,6 +4135,11 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "このモデルは設定で API key を構成してから使用できます",
+      "subscriptionDirectDisabled": {
+        "chatgpt": "サブスクリプション直結の GPT モデルは SSH リモートセッションに未対応です",
+        "xai": "サブスクリプション直結の Grok モデルは SSH リモートセッションに未対応です",
+        "generic": "サブスクリプション直結モデルは SSH リモートセッションに未対応です"
+      },
       "effortLabel": "推論強度",
       "edit": "編集",
       "options": "オプション",

@@ -4135,6 +4135,11 @@
     },
     "modelSelector": {
       "budgetNeedsApiKey": "此模型需先在设置里配置 API key 才能使用",
+      "subscriptionDirectDisabled": {
+        "chatgpt": "订阅直连的 GPT 模型协议暂不支持 SSH 远程会话",
+        "xai": "订阅直连的 Grok 模型协议暂不支持 SSH 远程会话",
+        "generic": "订阅直连模型协议暂不支持 SSH 远程会话"
+      },
       "effortLabel": "推理强度",
       "edit": "编辑",
       "options": "选项",
