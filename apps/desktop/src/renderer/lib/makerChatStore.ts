@@ -9670,8 +9670,9 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           isStreaming: false,
           isSyntheticTrigger: true,
           systemCardType: 'auto-resume' as const,
-          // 展示信息只有「中断自愈」那条路径带(silent-stop 本身没有 error / 次数),
-          // 有就渲染 param 位与展开详情,没有就只显示结论行。
+          // 展示信息只有「中断自愈」那条路径带(silent-stop 本身没有 error / 次数)。
+          // SystemCard 据此二选一:带信息 → 三态重连行;不带 → silent-stop 原来的
+          // 「已自动继续」分隔条(见 hasInterruptionContext)。
           systemCardData: {
             ...(m.agentMeta.autoResumeInfo ?? {}),
             ...(m.agentMeta.autoResumeOutcome

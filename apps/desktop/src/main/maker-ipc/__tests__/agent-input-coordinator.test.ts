@@ -177,6 +177,16 @@ function createHarness() {
   const onResumableTurnError = vi.fn<NonNullable<AgentInputCoordinatorDeps['onResumableTurnError']>>(
     () => resumableTurnErrorTakeover,
   );
+  // 纯判定(无副作用):这条 error 有没有可能被接管。host 侧接的是 isInterruptedTurnError,
+  // 这里默认认所有带 sdkError='server_error' 的,够表达"候选 / 非候选"两种分支。
+  let resumableTurnErrorCandidate: (signals: { sdkError?: string }) => boolean = (signals) =>
+    signals.sdkError === 'server_error';
+  const isResumableTurnErrorCandidate = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['isResumableTurnErrorCandidate']>
+  >((signals) => resumableTurnErrorCandidate(signals));
+  const onResumableTurnErrorDiscarded = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['onResumableTurnErrorDiscarded']>
+  >(() => {});
   const noteSessionClearBoundary = vi.fn<NonNullable<AgentInputCoordinatorDeps['noteSessionClearBoundary']>>();
   const resolveSessionReferences = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['resolveSessionReferences']>
@@ -223,6 +233,8 @@ function createHarness() {
     onAcceptedQueuedMessage,
     onDispatchedUserTurn,
     onResumableTurnError,
+    isResumableTurnErrorCandidate,
+    onResumableTurnErrorDiscarded,
     noteSessionClearBoundary,
     resolveSessionReferences,
     hasPendingCredentialSwitch: () => hasPendingCredentialSwitch?.() === true,
@@ -250,6 +262,8 @@ function createHarness() {
     onAcceptedQueuedMessage,
     onDispatchedUserTurn,
     onResumableTurnError,
+    isResumableTurnErrorCandidate,
+    onResumableTurnErrorDiscarded,
     noteSessionClearBoundary,
     resolveSessionReferences,
     emitProjection,
@@ -287,6 +301,10 @@ function createHarness() {
         | null,
     ) {
       resumableTurnErrorTakeover = value;
+    },
+    /** 改写"这条 error 有没有可能被接管"的纯判定(决定横幅与落库要不要先按住)。 */
+    setResumableTurnErrorCandidate(fn: (signals: { sdkError?: string }) => boolean) {
+      resumableTurnErrorCandidate = fn;
     },
     persistQueueSnapshot,
     setLoadQueueSnapshot(
@@ -6123,12 +6141,14 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
   });
 
-  it('延后结算路径接管时清掉已发布的 error(接管态与红横幅互斥)', async () => {
-    // 前置分支(active.persisting)在暂存 terminal event 时已经 emit 过 state.error;
-    // 落库完成后接管若不清它,renderer 会先闪一帧红横幅、再收到同时带 error 与
-    // autoResumePending 的投影(greptile P1)。
+  /**
+   * 「terminal error 早于用户气泡落库完成」这条时序:接管决策只能等到落库完成
+   * (recovery 留不留得住是前提),但红横幅与 error 行落库都发生在决策之前。
+   * 下面四条锁的就是这段窗口 —— 候选期一律先按住,决策落定后按结果放行。
+   */
+  it('延后结算:候选期不发布 error(一帧都不闪),接管后只有活动行', async () => {
     const h = createHarness();
-    const sid = 'deferred-takeover-clears-error';
+    const sid = 'deferred-takeover-no-flash';
     h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
     let releasePersist: () => void = () => {};
     mocks.createMessage.mockImplementationOnce(async () => {
@@ -6142,14 +6162,101 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     await flush();
     h.coordinator.onTurnEvent(sid, 'error', truncationMessage, truncationSignals);
     await flush();
-    // 持久化未完成时错误照常呈现(此时还不知道能不能自愈)。
-    expect(latestProjection(h.projections).error).toBe(truncationMessage);
+    // 候选判定为真 → 决策未定这段窗口里**不许**出现红横幅(greptile P1)。
+    expect(
+      latestProjection(h.projections).error,
+      '决策未定就弹横幅 = 接管成功时用户已经先看过一帧红',
+    ).toBeNull();
+    expect(h.coordinator.isAutoResumeDeferred(sid), 'host 据此把 error 行也一起按住').toBe(true);
 
     releasePersist();
     await flush();
 
     const projection = latestProjection(h.projections);
     expect(projection.autoResumePending).toEqual(TAKEOVER_INFO);
-    expect(projection.error, '接管后必须撤掉红横幅').toBeNull();
+    expect(projection.error, '接管后必须没有红横幅').toBeNull();
+    expect(h.coordinator.isAutoResumeDeferred(sid), '已决策 → 不再是候选态').toBe(false);
+    expect(h.onResumableTurnErrorDiscarded, '接管成立就不该通知补落').not.toHaveBeenCalled();
+  });
+
+  it('延后结算:host 拒绝接管 → 横幅回落,并通知 host 补落被按住的 error 行', async () => {
+    // 额度耗尽 / 熔断 / 开关关闭都走这里。被按住的 error 行如果没人补落,那次中断在
+    // 历史里彻底消失(不变量 I2)。
+    const h = createHarness();
+    const sid = 'deferred-decline-flushes';
+    h.setResumableTurnErrorTakeover(null);
+    let releasePersist: () => void = () => {};
+    mocks.createMessage.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        releasePersist = resolve;
+      });
+      return {};
+    });
+
+    h.coordinator.enqueue(sid, makeItem('q-first', 'original long task'));
+    await flush();
+    h.coordinator.onTurnEvent(sid, 'error', truncationMessage, truncationSignals);
+    await flush();
+    expect(latestProjection(h.projections).error).toBeNull();
+
+    releasePersist();
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(projection.autoResumePending ?? null).toBeNull();
+    expect(projection.error, '不接管就得把横幅还给用户').toBe(truncationMessage);
+    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid);
+  });
+
+  it('延后结算:非候选错误照旧立刻呈现(确定性失败不受本机制影响)', async () => {
+    const h = createHarness();
+    const sid = 'deferred-non-candidate';
+    h.setResumableTurnErrorCandidate(() => false);
+    let releasePersist: () => void = () => {};
+    mocks.createMessage.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        releasePersist = resolve;
+      });
+      return {};
+    });
+
+    h.coordinator.enqueue(sid, makeItem('q-first', 'original long task'));
+    await flush();
+    h.coordinator.onTurnEvent(sid, 'error', 'Invalid API key', { sdkError: 'authentication_failed' });
+    await flush();
+    expect(latestProjection(h.projections).error, '认证失效必须立刻报,不许被按住').toBe(
+      'Invalid API key',
+    );
+    expect(h.coordinator.isAutoResumeDeferred(sid)).toBe(false);
+
+    releasePersist();
+    await flush();
+    expect(h.onResumableTurnErrorDiscarded, '没按住过就不该通知补落').not.toHaveBeenCalled();
+  });
+
+  it('延后结算:用户气泡落库失败 → 被按住的 error 行仍要补落', async () => {
+    // 这条 error 永远走不到接管决策(recovery 已清),host 侧压住的行必须有人补落。
+    const h = createHarness();
+    const sid = 'deferred-persist-failed-flushes';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    let rejectPersist: (err: Error) => void = () => {};
+    mocks.createMessage.mockImplementationOnce(async () => {
+      await new Promise<void>((_resolve, reject) => {
+        rejectPersist = reject;
+      });
+      return {};
+    });
+
+    h.coordinator.enqueue(sid, makeItem('q-first', 'original long task'));
+    await flush();
+    h.coordinator.onTurnEvent(sid, 'error', truncationMessage, truncationSignals);
+    await flush();
+    expect(h.coordinator.isAutoResumeDeferred(sid)).toBe(true);
+
+    rejectPersist(new Error('disk full'));
+    await flush();
+
+    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid);
+    expect(h.onResumableTurnError, '落库失败就没有可续跑的目标,不该消耗额度').not.toHaveBeenCalled();
   });
 });

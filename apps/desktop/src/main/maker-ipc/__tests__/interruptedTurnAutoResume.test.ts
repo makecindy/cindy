@@ -24,6 +24,38 @@ describe('isInterruptedTurnError', () => {
     ).toBe(true);
   });
 
+  // 同一物理故障的第二种上游措辞(2026-07-30 实测,Cindy 真实会话日志:
+  // terminalReason='api_error'、sdkError='server_error'、durationMs≈100s 即已有产出)。
+  // 上一条锚的是 "Connection closed",这条锚的是 "Server error" —— 两条一起证明判定不能
+  // 只挂在单一措辞上(这些字符串是 CLI 内部文案,不是协议字段)。
+  it('matches the second observed wording of the same truncation', () => {
+    expect(
+      isInterruptedTurnError({
+        sdkError: 'server_error',
+        message: 'API Error: Server error mid-response. The response above may be incomplete.',
+      }),
+    ).toBe(true);
+  });
+
+  // Codex 的容量错误**一律**带 reason='upstream-overload'(translator 对每条都盖,
+  // renderer 隔着 IPC 只能靠它本地化)。reason 门若不给它开例外,「容量 + 已有产出」
+  // 这一格对 Codex 就是死代码 —— 而那一格正是本份要接的(codex review P1)。
+  it('accepts the classified retryable overload reason (Codex 容量 + 已有产出)', () => {
+    expect(
+      isInterruptedTurnError({
+        reason: 'upstream-overload',
+        message: 'Selected model is at capacity. Please try a different model.',
+      }),
+    ).toBe(true);
+    // 结构化 reason 比文案可靠:codex 改了容量措辞也照样接管。
+    expect(
+      isInterruptedTurnError({
+        reason: 'upstream-overload',
+        message: 'The upstream declined this request.',
+      }),
+    ).toBe(true);
+  });
+
   it('rejects errors that carry a stable reason (已分类,另有处置路径)', () => {
     for (const reason of ['empty-response', 'turn-failed', 'silent-stop-exhausted']) {
       expect(

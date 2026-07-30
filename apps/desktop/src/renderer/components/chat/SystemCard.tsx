@@ -752,6 +752,23 @@ interface AutoResumeCardInfo {
   outcome?: 'succeeded' | 'failed';
 }
 
+/**
+ * 这条自动续跑记录属于「中断重连」还是 silent-stop 的「空回复后续跑」。
+ *
+ * 判据是有没有任何中断上下文（原因 / 次数 / 累计 / 结果）。**必须区分**：silent-stop 那条
+ * 路径也走 `auto-resume` 卡，但它不是重连——把三态重连行套上去，历史里那条「已自动继续」
+ * 会变成语义错误的「重新连接」（copilot review）。
+ */
+function hasInterruptionContext(info: AutoResumeCardInfo): boolean {
+  return (
+    info.error !== undefined ||
+    info.attempt !== undefined ||
+    info.maxAttempts !== undefined ||
+    info.sessionTotal !== undefined ||
+    info.outcome !== undefined
+  );
+}
+
 function readAutoResumeInfo(data?: Record<string, unknown>): AutoResumeCardInfo {
   const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined);
   return {
@@ -786,6 +803,26 @@ function summarizeInterruption(detail?: string): string | undefined {
 }
 
 /**
+ * silent-stop 自动续跑的分隔条（上游用空回复静默收尾后自动续跑）。形态与文案保持
+ * 本 PR 之前的原样：居中 pill + 「已自动继续」。它不是重连，没有原因也没有次数，
+ * 套用重连行只会给出错误的语义。
+ */
+function AutoResumeSeparator() {
+  const { t } = useTranslation();
+  const label = t('chat.systemCard.autoResume.label');
+  return (
+    <div className="flex w-full items-center gap-3 py-2 select-none" role="separator" aria-label={label}>
+      <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
+      <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--msg-tool-card-border)] bg-background/50 px-2.5 py-1 text-[11px] text-muted-foreground tabular-nums">
+        <RefreshCw size={12} className="shrink-0" />
+        <span>{label}</span>
+      </div>
+      <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
+    </div>
+  );
+}
+
+/**
  * 中断自愈活动行（进行中 / 已完成共用）。
  *
  * **形态刻意对齐 AgentActionRow（工具活动行）**：radius 6 / `px-2 py-[3px]` / 16px 状态
@@ -794,9 +831,10 @@ function summarizeInterruption(detail?: string): string | undefined {
  * 重连」，而不是一条系统公告——所以它读起来必须像正常工作行，不是横幅、不是警告。
  *
  * 展开详情给三件事：为什么重连（完整原文）、本轮第几次 / 上限、本会话累计多少次。
- * 自愈成功时 error 行**不落库**，所以这里是中断原因唯一的用户可见出口。没有任何
- * 展示信息时（silent-stop 那条路径本身没有 error / 次数）整行不可点、不显示 chevron
- * —— 不给一个点开是空的假入口。
+ * 自愈成功时 error 行**不落库**，所以这里是中断原因唯一的用户可见出口。
+ *
+ * **只服务「中断重连」这一条路径**：silent-stop 那套（空回复后自动续跑）没有中断原因也
+ * 没有重试次数，它继续用原来的 `AutoResumeSeparator`。判据见 `hasInterruptionContext`。
  */
 function AutoResumeActionRow({
   state,
@@ -839,7 +877,9 @@ function AutoResumeActionRow({
         type="button"
         onClick={canExpand ? () => setExpanded((v) => !v) : undefined}
         aria-expanded={canExpand ? expanded : undefined}
-        aria-label={label}
+        // 刻意**不设 aria-label**:设了会覆盖按钮的可见文本,读屏就只念得到「已重新连接」,
+        // 听不到紧跟其后的中断原因摘要 —— 而那句摘要正是这行存在的理由(copilot review)。
+        // 图标与 chevron 都是 aria-hidden,可见文本(动词 + 摘要)本身就是正确的无障碍名。
         disabled={!canExpand}
         className={cn(
           'group flex w-full items-center gap-[6px]',
@@ -1056,8 +1096,16 @@ export function SystemCard({ cardType, data, sessionId }: SystemCardProps) {
       return <GoalCompleteCard data={data} />;
     case 'goal-resumed':
       return <GoalResumedCard data={data as { kind?: string } | undefined} />;
-    case 'auto-resume':
-      return <AutoResumeActionRow state="recorded" info={readAutoResumeInfo(data)} />;
+    case 'auto-resume': {
+      // 同一个卡类型承载两套自愈:带中断上下文的是本份的「重连」记录,没有的是 silent-stop
+      // 的「已自动继续」分隔条 —— 后者保持原形态原文案,不被重连三态改写(copilot review)。
+      const info = readAutoResumeInfo(data);
+      return hasInterruptionContext(info) ? (
+        <AutoResumeActionRow state="recorded" info={info} />
+      ) : (
+        <AutoResumeSeparator />
+      );
+    }
     case 'auto-resume-pending':
       return <AutoResumeActionRow state="live" info={readAutoResumeInfo(data)} />;
     case 'agent-switch':

@@ -24,7 +24,11 @@
  * 社区同型：anthropics/claude-code#38905（SSE 静默中断）。
  */
 
-import { isNetworkishErrorMessage, isOverloadErrorMessage } from '@cindy/maker-core';
+import {
+  isNetworkishErrorMessage,
+  isOverloadErrorMessage,
+  UPSTREAM_OVERLOAD_REASON,
+} from '@cindy/maker-core';
 
 /** 判定输入。字段全部可选：不同 agent / 不同失败路径能提供的信号不一样。 */
 export interface InterruptedTurnErrorSignals {
@@ -81,7 +85,10 @@ function isStreamTruncationError(signals: InterruptedTurnErrorSignals): boolean 
  *     `fetch failed`、`socket hang up`、`Request timed out` …）。它们同样是"连不上"
  *     而不是"请求有问题"，续跑一次就能过去，用户实际遇到的多半是这一类。
  *  3. **上游没容量**（`isOverloadErrorMessage`：Anthropic 529 / `overloaded_error`、
- *     Codex `Selected model is at capacity`）。
+ *     Codex `Selected model is at capacity`）。**Codex 侧这类必然带
+ *     `reason: 'upstream-overload'`**（translator 对每条容量错误都盖这个 key，renderer
+ *     隔着 IPC 只能靠它本地化文案），所以 reason 门必须给它开例外 —— 否则第 3 类对 Codex
+ *     恒为死代码，本份声称要接的「容量 + 已有产出」那一格永远走不到（codex review P1）。
  *
  * **第 3 类与 #844 的分工靠「本 turn 有没有产出」自动划清，两者互斥、不会叠加重试**：
  * 容量拒绝发生在 admission 阶段（模型一个字都没写）时，Codex 侧会重投同一份
@@ -93,7 +100,11 @@ function isStreamTruncationError(signals: InterruptedTurnErrorSignals): boolean 
  * 状态码，网络 errno 也没有 SDK tag。收紧只对第 1 类成立。
  */
 export function isInterruptedTurnError(signals: InterruptedTurnErrorSignals): boolean {
-  if (typeof signals.reason === 'string' && signals.reason.length > 0) return false;
+  const reason = typeof signals.reason === 'string' ? signals.reason : '';
+  // 例外先行：`upstream-overload` 是**已归类为可重试**的 reason，它本身就是比文案更可靠的
+  // 权威判据（结构化优先于文案，与 overload-error.ts 的论证同源），直接放行、不再看文案。
+  if (reason === UPSTREAM_OVERLOAD_REASON) return true;
+  if (reason.length > 0) return false;
   if (isStreamTruncationError(signals)) return true;
   const message = signals.message;
   if (typeof message !== 'string' || message.length === 0) return false;

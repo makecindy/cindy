@@ -167,6 +167,21 @@ export interface AgentInputCoordinatorDeps {
     sessionId: string,
     signals: InterruptedTurnErrorSignals,
   ) => AutoResumeInfo | null;
+  /**
+   * **纯判定**：这条 terminal error 有没有可能被自愈接管（`isInterruptedTurnError`）。
+   * 不消耗额度、不排期、无副作用。
+   *
+   * 用途只有一个：terminal error 早于用户气泡持久化完成到达时，接管决策必须等到
+   * `settlePendingTerminalEventAfterPersist` 才能做（那时才知道 recovery 留不留得住），
+   * 但**红横幅与 error 行落库都发生在决策之前**。用这个判定把那两件事先按住，
+   * 决策落定后再放行（见 `isAutoResumeDeferred`）。
+   */
+  isResumableTurnErrorCandidate?: (signals: InterruptedTurnErrorSignals) => boolean;
+  /**
+   * 一条被 `isAutoResumeDeferred` 按住的 error 最终**没能走到决策**（用户气泡持久化失败等），
+   * host 必须把压住的 error 行补落，否则那次中断在历史里彻底消失（不变量 I2）。
+   */
+  onResumableTurnErrorDiscarded?: (sessionId: string) => void;
   /** 在 vendor dispatch 前读取用户选中的本地/在线会话引用。 */
   resolveSessionReferences?: (
     refs: AgentInputQueuedMessage['sessionRefs'],
@@ -295,7 +310,16 @@ type ActiveTurnTerminalEvent =
   // signals 必须跟着一起暂存:这条 error 落库完成后才在
   // settlePendingTerminalEventAfterPersist 里结算,那时原始事件已经不在手上,
   // 少存就会让"error 早于持久化完成"的时序拿不到判据、自动续跑静默失效。
-  | { type: 'error'; message?: string; signals?: Omit<InterruptedTurnErrorSignals, 'message'> };
+  | {
+      type: 'error';
+      message?: string;
+      signals?: Omit<InterruptedTurnErrorSignals, 'message'>;
+      /**
+       * 纯判定认为它有可能被自愈接管（`isResumableTurnErrorCandidate`）。为 true 时红横幅
+       * 与 error 行落库都先按住，等 `settlePendingTerminalEventAfterPersist` 做出真正决策。
+       */
+      resumableCandidate?: boolean;
+    };
 
 type AgentInputSendFailure = Extract<AgentInputSendResult, { accepted: false } | { dispatched: false }>;
 
@@ -1831,8 +1855,23 @@ export class AgentInputCoordinator {
       if (active?.persisting) {
         // 用户气泡还在 DB 边界内。先暂存 terminal error，等持久化
         // 和 dispatch 结果共同决定它能否成为 active-turn retry。
-        recordPendingTerminalEvent(active, { type: 'error', message, signals });
-        state.error = state.stickyError ?? message ?? state.error;
+        //
+        // 接管决策要等到那时才能做（recovery 留不留得住是前提），但红横幅在这里就会发出去。
+        // 所以先用纯判定问一句「这条有可能被接管吗」：有可能就**先不设 error** —— 否则接管
+        // 成功时用户已经先看过一帧红横幅，违反「接管态为真时 error 必为 null」(不变量 I1,
+        // greptile P1)。判定为假（认证失效、协议错等确定性失败）时照旧立刻呈现，不受影响。
+        const resumableCandidate = this.isResumableTurnErrorCandidate(sessionId, message, signals);
+        recordPendingTerminalEvent(active, {
+          type: 'error',
+          message,
+          signals,
+          ...(resumableCandidate ? { resumableCandidate: true } : {}),
+        });
+        // 候选态只压住**本次**的 message；既有 stickyError 是上一次未处置的错误，与本次无关，
+        // 该继续显示。
+        state.error = resumableCandidate
+          ? (state.stickyError ?? state.error)
+          : (state.stickyError ?? message ?? state.error);
         state.recovery = null;
         this.emit(sessionId);
         return;
@@ -2295,6 +2334,9 @@ export class AgentInputCoordinator {
       this.emit(sessionId);
     } catch (err) {
       if (!this.isActiveTurnCurrent(sessionId, active)) return;
+      // 派发 / 落库失败(含 SESSION_RUNNING 让位):暂存的 error 候选到此作废,补落它的行。
+      // 放在分支之前 —— 三条出口都不会再走到接管决策。
+      this.discardDeferredResumableCandidate(sessionId, active);
       const latest = this.getState(sessionId);
       if (!active.persisted) {
         if (isSessionRunningError(err)) {
@@ -2349,6 +2391,10 @@ export class AgentInputCoordinator {
     result: AgentInputSendFailure,
   ): void {
     if (!this.isActiveTurnCurrent(sessionId, active)) return;
+    // 这条 turn 没派出去 → 暂存的 error 候选不会再有接管决策(settle 只挂在已派发那条路上),
+    // 就地作废并让 host 补落它的行(不变量 I2)。credential-switch / SESSION_RUNNING 那两个
+    // 会重试的分支同理:重试的是**新** turn,旧 error 不会再被接管。
+    this.discardDeferredResumableCandidate(sessionId, active);
     const latest = this.getState(sessionId);
     const message = sendFailureMessage(result);
     const logFields = sendFailureLogFields(result);
@@ -2938,6 +2984,55 @@ export class AgentInputCoordinator {
     return this.getState(sessionId).autoResumePending !== null;
   }
 
+  /**
+   * 有一条 terminal error 正被「可能接管」按住、还没走到决策（见
+   * `isResumableTurnErrorCandidate` 与 `ActiveTurnTerminalEvent.resumableCandidate`）。
+   *
+   * host 用它把 error 行的落库也一起推迟到决策之后：不推迟的话，「error 早于持久化完成」
+   * 的时序下 error 行会先落库、接管随后成功，历史里就同时留下错误卡和重连行，
+   * 而且已经落库的那条压不回去了（codex P1）。
+   */
+  isAutoResumeDeferred(sessionId: string): boolean {
+    const pending = this.getState(sessionId).activeTurn?.pendingTerminalEvent;
+    return pending?.type === 'error' && pending.resumableCandidate === true;
+  }
+
+  /** 纯判定包装：host 未注入或抛异常都返回 false（自愈是增强，坏了也不能改变错误呈现）。 */
+  private isResumableTurnErrorCandidate(
+    sessionId: string,
+    message?: string,
+    signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
+  ): boolean {
+    if (!this.deps.isResumableTurnErrorCandidate) return false;
+    try {
+      return this.deps.isResumableTurnErrorCandidate({ ...(signals ?? {}), message }) === true;
+    } catch (err) {
+      log.warn('isResumableTurnErrorCandidate failed', { sessionId, error: errorMessage(err) });
+      return false;
+    }
+  }
+
+  /**
+   * 这个 turn 不会再走到接管决策了（派发失败 / 落库失败 / SESSION_RUNNING 让位）→ 把按住的
+   * error 候选就地作废：清标记（否则 `isAutoResumeDeferred` 会一直为真，把后续无关错误的
+   * error 行也压掉）并通知 host 补落那一行（不变量 I2）。非候选或没有暂存事件时是 no-op。
+   */
+  private discardDeferredResumableCandidate(sessionId: string, active: ActiveTurn): void {
+    const pending = active.pendingTerminalEvent;
+    if (pending?.type !== 'error' || pending.resumableCandidate !== true) return;
+    active.pendingTerminalEvent = null;
+    this.notifyResumableTurnErrorDiscarded(sessionId);
+  }
+
+  /** 被按住的 error 没能走到决策 → 通知 host 补落 error 行（不变量 I2）。 */
+  private notifyResumableTurnErrorDiscarded(sessionId: string): void {
+    try {
+      this.deps.onResumableTurnErrorDiscarded?.(sessionId);
+    } catch (err) {
+      log.warn('onResumableTurnErrorDiscarded failed', { sessionId, error: errorMessage(err) });
+    }
+  }
+
   abandonAutoResume(sessionId: string, message?: string): void {
     const state = this.getState(sessionId);
     if (!state.autoResumePending) return;
@@ -3004,6 +3099,10 @@ export class AgentInputCoordinator {
       const terminalEvent = active.pendingTerminalEvent;
       const releasedTerminalBoundary = Boolean(terminalEvent && this.isActiveTurnCurrent(sessionId, active));
       if (releasedTerminalBoundary) {
+        // 这条 error 永远走不到接管决策了(steer 消息落库失败,recovery 也已清)。它的 error 行
+        // 在 host 侧被「可能接管」压住了,必须补落,否则那次中断在历史里彻底消失(I2)。
+        // 横幅这里已经由 persist 失败自己占着,host 补落时不再叠加。
+        this.discardDeferredResumableCandidate(sessionId, active);
         active.pendingTerminalEvent = null;
         state.activeTurn = null;
       }
@@ -3032,9 +3131,14 @@ export class AgentInputCoordinator {
       // 结算。scheduler 的 prompt 同样不留重试入口(判据内建在 setActiveTurnRecovery):
       // runner 那边已经把这一轮 run 失败收口,克隆重跑只会造出一条不计账的幽灵消息
       // (review #944 第二十轮 P1)。
+      // 被按住的 error 最终没能接管(recovery 没留住 / host 拒绝接管)时,统一在本方法里
+      // 通知 host 补落 error 行 —— 出口有三个(dropped-scheduler、非 kept、拒绝接管),
+      // 集中在这里判比让 host 在每个 null 返回点各自记得补落更难漏(不变量 I2)。
+      const deferredPersistSuppressed = terminalEvent.resumableCandidate === true;
       const outcome = this.setActiveTurnRecovery(state, active.item);
       if (outcome === 'dropped-scheduler') {
         state.error = terminalEvent.message ?? state.error;
+        if (deferredPersistSuppressed) this.notifyResumableTurnErrorDiscarded(sessionId);
         // 与 onTurnEvent 的 persisted 分支同款处置:没有 recovery 挡住"紧随的 done",
         // 必须用配对标记吃掉它,否则失败呈现会被 done 擦成"已完成"(第二十一轮 P1)。
         // recovery 不留 → 没有"用户点 clearError / Retry"这个唤醒源,队里压着的消息
@@ -3053,13 +3157,14 @@ export class AgentInputCoordinator {
           : null;
       if (deferredTakeover) {
         state.autoResumePending = deferredTakeover;
-        // **必须撤掉 error**:本路径的前置分支(active.persisting)在暂存 terminal event
-        // 时已经设过并 emit 过 state.error,接管后若不清,renderer 会先闪一帧红横幅、
-        // 随后收到同时带 error 与 autoResumePending 的投影 —— 违反「接管态为真时
-        // error 必为 null」这条不变量(greptile P1)。
+        // **必须撤掉 error**:候选判定为假时前置分支(active.persisting)照旧设过 state.error,
+        // 接管后若不清,renderer 会收到同时带 error 与 autoResumePending 的投影 —— 违反
+        // 「接管态为真时 error 必为 null」这条不变量(greptile P1)。候选判定为真时那里本就
+        // 没设,这行是幂等的兜底。
         state.error = null;
       } else {
         state.error = terminalEvent.message ?? state.error;
+        if (deferredPersistSuppressed) this.notifyResumableTurnErrorDiscarded(sessionId);
       }
       this.emit(sessionId);
       return;

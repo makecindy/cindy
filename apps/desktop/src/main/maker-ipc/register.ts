@@ -644,6 +644,37 @@ function teardownAutoResumeForSession(sessionId: string): void {
   autoResumeSuppressedErrors.delete(sessionId);
 }
 
+/**
+ * 记下被压住的那条 error 的详情,供后续补落。
+ *
+ * 两个调用点:onEvent 里压住落库的那一刻(决策可能还没做),以及接管成立时的
+ * onResumableTurnError。同一条 error 两处内容一致,覆盖无害。
+ */
+function stashSuppressedAutoResumeError(sessionId: string, data: unknown): void {
+  const d = (data ?? {}) as { message?: unknown; reason?: unknown; sdkError?: unknown };
+  autoResumeSuppressedErrors.set(sessionId, {
+    ...(typeof d.message === 'string' ? { message: d.message } : {}),
+    ...(typeof d.reason === 'string' ? { reason: d.reason } : {}),
+    ...(typeof d.sdkError === 'string' ? { sdkError: d.sdkError } : {}),
+  });
+}
+
+/**
+ * 决策推迟场景下最终**没有**接管 → 只把压住的 error 行补落。
+ *
+ * 与 `finalizeSuppressedAutoResumeError` 的区别:那份还要回滚接管态并按需弹横幅,而这条
+ * 路径上接管态从未成立、横幅由 coordinator 自己在同一拍里设好,这里只补历史记录。
+ * 没有压住任何东西时是 no-op(常规时序不会走到这里)。
+ */
+function flushDeferredSuppressedAutoResumeError(sessionId: string): void {
+  const suppressed = autoResumeSuppressedErrors.get(sessionId);
+  if (!suppressed) return;
+  autoResumeSuppressedErrors.delete(sessionId);
+  // agentMeta 传 null:原事件已不在手上,onTurnErrorEvent 按 register 记录的 turnDedupId
+  // 做多窗 dedup(saveTurnStartedAtForDeferred 已在压住那一刻存好)。
+  onTurnErrorEvent(sessionId, suppressed, null);
+}
+
 /** 回填一次自动续跑的结果并清除待确认(重复调用安全:没有待确认就 no-op)。 */
 function settleAutoResumeOutcome(sessionId: string, outcome: 'succeeded' | 'failed'): void {
   const clientId = pendingAutoResumeOutcomes.get(sessionId);
@@ -2944,9 +2975,16 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // 救不回来时由 finalizeSuppressedAutoResumeError 补落。判据取 coordinator 的实时
       // 接管态(而非 host 自己的 map):退避期间用户若自己发了消息,接管态已被清,那之后
       // 新 turn 的失败必须照常落库。
+      //
+      // 还有一种时序:terminal error 早于用户气泡落库完成到达时,接管决策要推迟到
+      // settlePendingTerminalEventAfterPersist 才能做(recovery 留不留得住是前提)。那时
+      // error 行早就落库了、压不回去,接管成功后历史里会同时留下错误卡与重连行(codex P1)。
+      // 所以决策未定时也一并压住(isAutoResumeDeferred),由 coordinator 在三个「最终没接管」
+      // 的出口回调 onResumableTurnErrorDiscarded 让它补落。
       const autoResumeSuppressesPersist =
         event.type === 'error' &&
-        agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true;
+        (agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true ||
+          agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true);
       if (
         event.type === 'error' &&
         !isPlannedUpgradeClose &&
@@ -2959,10 +2997,17 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           eventAgentMeta,
         );
       }
+      // 压住的错误详情必须在这里存一份:决策推迟场景下 onResumableTurnError 还没被调用过
+      // (它自己那份 set 发生在接管成立时),不存就无从补落。同 clientId 内容,覆盖无害。
+      if (autoResumeSuppressesPersist) {
+        stashSuppressedAutoResumeError(session.id, event.data);
+      }
       // deferred 路径保存 turn 开始时刻:isRemoteAuthRetry 时 onTurnErrorEvent 被跳过，
       // renderer 会稍后调 persistTurnErrorDeferred IPC。在 resetTurnPersistState 清掉
       // _turnStartedAtBySession 之前保存一份，让 deferred 路径能正确做 /clear 竞态 cap。
-      if (event.type === 'error' && isRemoteAuthRetry) {
+      // 自愈压住 error 行时同理:补落发生在 resetTurnPersistState 之后(退避 3–20 秒,
+      // 或决策推迟的那一小段),不先存一份会让 /clear 竞态 cap 判错。
+      if (event.type === 'error' && (isRemoteAuthRetry || autoResumeSuppressesPersist)) {
         saveTurnStartedAtForDeferred(session.id);
       }
       // turn 收尾打标:本 turn 已知持久化(assistant flush / orphan tool_result /
@@ -3435,6 +3480,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
     broadcastToAllWindows(MAKER_PUSH.STATUS_CHANGED, { sessionId: session.id, status });
     if (status === 'closed') {
       cleanupPendingInteractionsForSession(session.id, 'session_closed');
+      // 会话关闭同样是"终止":退避窗口有 3–20 秒,期间会话可能被独立关掉(切 agent、
+      // 远端断开、宿主回收)。只清 coordinator 不够 —— 排期中的定时器与悬空的重连记录
+      // 都还活着,前者会到点往已关闭的会话补发消息(coordinator 关闭路径保留 recovery,
+      // 补发会把用户关掉的会话重新拉起来),后者会把结果错绑到下一个会话实例(codex P1)。
+      teardownAutoResumeForSession(session.id);
       agentInputCoordinatorHolder?.onSessionClosed(session.id);
       // 会话关闭:兑现延迟凭证切换(直接写 route),并唤醒被它挡住的等待者。
       pendingCredentialSwitchHolder?.onSessionClosed(session.id);
@@ -7020,6 +7070,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     // turn 被上游打断(且已有产出)→ 自动替用户点一次「继续」。判据、额度、退避都在
     // interruptedTurnAutoResume;这里只做编排:决策 → 退避 → 复核 → 补发 → 失败回滚。
+    // 纯判定,无副作用:coordinator 用它在「决策还做不了」的时序里先把红横幅与 error 行
+    // 按住(见 isAutoResumeDeferred)。与下面 onResumableTurnError 的第一道门是同一个函数,
+    // 两处必须同判据 —— 否则会出现"按住了却永远不接管"或"没按住却接管"的错配。
+    isResumableTurnErrorCandidate: (signals: InterruptedTurnErrorSignals) =>
+      isInterruptedTurnError(signals),
+    // 被按住的 error 最终没接管 → 只补落 error 行(横幅 coordinator 自己设)。
+    onResumableTurnErrorDiscarded: (sessionId: string) => {
+      flushDeferredSuppressedAutoResumeError(sessionId);
+    },
     onResumableTurnError: (sessionId: string, signals: InterruptedTurnErrorSignals) => {
       if (!isInterruptedTurnError(signals)) return null;
       const erroredAt = Date.now();
