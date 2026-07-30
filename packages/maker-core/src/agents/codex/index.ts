@@ -4818,19 +4818,27 @@ export class CodexAgent extends BaseAgent {
 
     function handleServerRequestResolved(params: ServerRequestResolvedNotification['params']): void {
       const requestId = String(params.requestId);
+      const brokerKey = { connectionId, requestId: params.requestId };
+      const userInputPending = userInputBroker.has(brokerKey);
+      const dynamicPending = dynamicToolBroker.has(brokerKey);
+      if (userInputPending || dynamicPending) {
+        // Wake joined duplicates before settling the owner's outer broker
+        // response. This keeps them on the cancellation/reassignment path even
+        // if a resolver starts mirroring broker settlement in the future.
+        forgetPendingUserInputRequest(requestId);
+      }
       const userInputCancelled = userInputBroker.cancel(
-        { connectionId, requestId: params.requestId },
+        brokerKey,
         { answers: {} },
       );
       const dynamicCancelled = dynamicToolBroker.cancel(
-        { connectionId, requestId: params.requestId },
+        brokerKey,
         {
           contentItems: [{ type: 'inputText', text: 'Request was resolved before user input was submitted.' }],
           success: false,
         },
       );
       if (userInputCancelled || dynamicCancelled) {
-        forgetPendingUserInputRequest(requestId);
         eventQueue.push({
           type: 'interaction_dismissed',
           data: { requestId, reason: 'server_request_resolved', resolvedAs: 'deny' },
