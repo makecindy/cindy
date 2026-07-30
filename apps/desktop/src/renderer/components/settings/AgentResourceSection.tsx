@@ -70,9 +70,10 @@ export function AgentResourceSection() {
   const [settings, setSettings] = useState<Wire | null>(null);
   // 预设三键写入的 in-flight 闸:防并发点击交错出"杂交档位"落盘。
   const [applyingPreset, setApplyingPreset] = useState(false);
-  // 并发上限输入框的本地草稿:清空是编辑中间态,Number('') === 0 会被瞬态持久化
-  // 成"不限"并放行排队命令(bot review P1)——空/非法值只留在草稿,不写盘;
-  // blur 时草稿作废回显权威值。
+  // 并发上限输入框的本地草稿:一切编辑中间态(清空、"10"删掉首位剩"0"等)都
+  // 只进草稿,blur/Enter 才校验提交 —— 任何 onChange 即写盘的变体都会把中间值
+  // 瞬态落成"0=不限"并放行排队命令(bot review 连续四轮触碰同一根因,改为
+  // 提交制一次收口)。
   const [maxDraft, setMaxDraft] = useState<string | null>(null);
   // 写序号:每次以写类 IPC 响应落地 settings 时 +1。失败回读的 GET 是异步的,
   // 且发起后操作闸已解除 —— 期间用户的成功修改不能被迟到的旧 GET 快照覆盖,
@@ -210,7 +211,7 @@ export function AgentResourceSection() {
         <div
           role="radiogroup"
           aria-label={t('settings.agentResource.preset')}
-          className="flex w-fit shrink-0 items-center gap-0.5 rounded-lg border border-[var(--settings-theme-card-border)] p-0.5"
+          className="flex w-fit shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
         >
           {(['full', 'balanced', 'background'] as const).map((id) => {
             const active = activePreset === id;
@@ -223,7 +224,7 @@ export function AgentResourceSection() {
                 disabled={applyingPreset}
                 onClick={() => void applyPreset(id)}
                 className={cn(
-                  'rounded-md px-2.5 py-1 text-xs transition-colors',
+                  'rounded-full px-2.5 py-1 text-xs transition-colors',
                   active
                     ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
                     : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',
@@ -256,19 +257,22 @@ export function AgentResourceSection() {
           max={MAX_CONCURRENT_CAP}
           disabled={applyingPreset}
           value={maxDraft ?? String(settings.maxConcurrentCommands)}
-          onChange={(e) => {
-            const text = e.target.value;
-            setMaxDraft(text);
-            // 非法输入(空串/负号/小数/越界)一律只留草稿、不写盘,blur 作废回显
-            // 权威值 —— clamp 会把 -1 之类静默改写成 0=不限,瞬间放行排队命令,
-            // 且绕过 main 侧的硬拒语义(bot review P1)。只接受 0..64 的整数。
-            if (!/^\d+$/.test(text.trim())) return;
-            const raw = Number(text.trim());
+          onChange={(e) => setMaxDraft(e.target.value)}
+          onBlur={() => {
+            // 提交点:仅 0..64 的整数且与当前值不同才写盘;非法/未变草稿作废,
+            // 回显权威值(clamp 会绕过 main 侧硬拒语义,一律拒绝不改写)
+            const text = (maxDraft ?? '').trim();
+            setMaxDraft(null);
+            if (!/^\d+$/.test(text)) return;
+            const raw = Number(text);
             if (raw > MAX_CONCURRENT_CAP) return;
+            if (raw === settings.maxConcurrentCommands) return;
             persist('maxConcurrentCommands', raw);
           }}
-          onBlur={() => setMaxDraft(null)}
-          className="mt-0.5 w-20 rounded-lg border border-[var(--border-default)] bg-transparent px-3 py-1.5 text-13 text-[var(--settings-input-text)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur(); // Enter = 显式提交边界
+          }}
+          className="mt-0.5 w-24 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 py-1.5 text-13 text-[var(--settings-input-text)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
         />
       </label>
 
@@ -283,7 +287,7 @@ export function AgentResourceSection() {
         <div
           role="radiogroup"
           aria-label={t('settings.agentResource.priority')}
-          className="mt-0.5 flex w-fit shrink-0 items-center gap-0.5 rounded-lg border border-[var(--settings-theme-card-border)] p-0.5"
+          className="mt-0.5 flex w-fit shrink-0 items-center gap-0.5 rounded-full border border-[var(--settings-theme-card-border)] p-0.5"
         >
           {PRIORITY_OPTIONS.map((tier) => {
             const active = settings.processPriority === tier;
@@ -296,7 +300,7 @@ export function AgentResourceSection() {
                 disabled={applyingPreset}
                 onClick={() => persist('processPriority', tier)}
                 className={cn(
-                  'rounded-md px-2.5 py-1 text-xs transition-colors',
+                  'rounded-full px-2.5 py-1 text-xs transition-colors',
                   active
                     ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
                     : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',

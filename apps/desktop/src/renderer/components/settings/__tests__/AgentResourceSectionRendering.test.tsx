@@ -219,6 +219,7 @@ describe('AgentResourceSection', () => {
 
     // 用户随后的成功修改
     fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '7' } });
+    fireEvent.blur(screen.getByRole('spinbutton')); // 提交制:blur 落盘
     await waitFor(() => {
       expect((screen.getByRole('spinbutton') as HTMLInputElement).value).toBe('7');
     });
@@ -229,26 +230,39 @@ describe('AgentResourceSection', () => {
     expect((screen.getByRole('spinbutton') as HTMLInputElement).value).toBe('7');
   });
 
-  it('keeps invalid concurrency input as draft instead of coercing it to disk', async () => {
-    const api = installElectronApi({ ...DEFAULT_WIRE, maxConcurrentCommands: 5, isCustomized: true });
+  it('keeps concurrency edits as draft and only commits valid values on blur', async () => {
+    const api = installElectronApi({
+      ...DEFAULT_WIRE,
+      maxConcurrentCommands: 10,
+      isCustomized: true,
+    });
     render(<AgentResourceSection />);
     await waitFor(() => screen.getByRole('spinbutton'));
 
-    // 负值/小数/越界都不许写盘(clamp 成 0 会瞬间解除已有限制)
-    for (const bad of ['-1', '3.5', '99', '']) {
-      fireEvent.change(screen.getByRole('spinbutton'), { target: { value: bad } });
-    }
+    // 编辑中间态一律不写盘:"10"删掉首位剩"0"若被提交,会瞬间解除限制放行排队命令
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '0' } });
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '20' } });
     expect(api.settingsSet).not.toHaveBeenCalled();
 
-    // blur 后草稿作废,回显权威值
+    // blur = 提交点:只落最终值
     fireEvent.blur(screen.getByRole('spinbutton'));
-    expect((screen.getByRole('spinbutton') as HTMLInputElement).value).toBe('5');
-
-    // 合法整数(含 0 与上限 64)照常持久化
-    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '64' } });
     await waitFor(() => {
-      expect(api.settingsSet).toHaveBeenCalledWith('maxConcurrentCommands', 64);
+      expect(api.settingsSet).toHaveBeenCalledTimes(1);
     });
+    expect(api.settingsSet).toHaveBeenCalledWith('maxConcurrentCommands', 20);
+
+    // 非法草稿(负值/小数/越界/空)blur 时作废,回显权威值,不写盘
+    for (const bad of ['-1', '3.5', '99', '']) {
+      fireEvent.change(screen.getByRole('spinbutton'), { target: { value: bad } });
+      fireEvent.blur(screen.getByRole('spinbutton'));
+    }
+    expect(api.settingsSet).toHaveBeenCalledTimes(1);
+    expect((screen.getByRole('spinbutton') as HTMLInputElement).value).toBe('20');
+
+    // 与当前值相同的提交不产生冗余写
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '20' } });
+    fireEvent.blur(screen.getByRole('spinbutton'));
+    expect(api.settingsSet).toHaveBeenCalledTimes(1);
   });
 
   it('persists single-field edits through the settings IPC', async () => {
@@ -257,6 +271,7 @@ describe('AgentResourceSection', () => {
     await waitFor(() => screen.getByRole('spinbutton'));
 
     fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '5' } });
+    fireEvent.blur(screen.getByRole('spinbutton')); // 提交制:blur 落盘
     await waitFor(() => {
       expect(api.settingsSet).toHaveBeenCalledWith('maxConcurrentCommands', 5);
     });
