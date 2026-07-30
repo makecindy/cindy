@@ -880,7 +880,10 @@ export function parseModelsListResponse(
           : id;
     const rawWindow = rec
       ? [rec.context_length, rec.context_window, rec.max_context_length, rec.max_input_tokens].find(
-          (v) => typeof v === 'number' && Number.isFinite(v) && v > 0,
+          // Math.floor(v) > 0 而非 v > 0:0 < v < 1(如 context_length: 0.5)会通过
+          // v > 0 但取整成 contextWindow: 0——按取整后的值校验才不会漏这个区间
+          // (review P2)。
+          (v) => typeof v === 'number' && Number.isFinite(v) && Math.floor(v) > 0,
         )
       : undefined;
     out.push({

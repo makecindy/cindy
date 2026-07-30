@@ -201,6 +201,9 @@ describe('parseModelsListResponse contextWindow 提取(#386)', () => {
           { id: 'f', max_input_tokens: 200_000 },
           { id: 'd', context_length: -5 },
           { id: 'e' },
+          // 0 < v < 1 会通过 v > 0 但 Math.floor 取整成 0——按取整后的值校验
+          // 才不会漏这个区间(review P2)。
+          { id: 'g', context_length: 0.5 },
         ],
       }),
     ).toEqual([
@@ -210,6 +213,7 @@ describe('parseModelsListResponse contextWindow 提取(#386)', () => {
       { id: 'f', name: 'f', contextWindow: 200_000 },
       { id: 'd', name: 'd' },
       { id: 'e', name: 'e' },
+      { id: 'g', name: 'g' },
     ]);
   });
 
