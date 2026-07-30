@@ -7,7 +7,7 @@
  * 显示为自定义即可,不做迁移。
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Switch } from '@/components/ui/switch';
@@ -70,6 +70,15 @@ export function AgentResourceSection() {
   const [settings, setSettings] = useState<Wire | null>(null);
   // 预设三键写入的 in-flight 闸:防并发点击交错出"杂交档位"落盘。
   const [applyingPreset, setApplyingPreset] = useState(false);
+  // 写序号:每次以写类 IPC 响应落地 settings 时 +1。失败回读的 GET 是异步的,
+  // 且发起后操作闸已解除 —— 期间用户的成功修改不能被迟到的旧 GET 快照覆盖,
+  // 回读响应只在序号未前进时生效(bot review P1)。
+  const writeSeqRef = useRef(0);
+
+  const applyServerState = (next: Wire) => {
+    writeSeqRef.current += 1;
+    setSettings(next);
+  };
 
   useEffect(() => {
     void window.electronAPI.maker
@@ -96,11 +105,18 @@ export function AgentResourceSection() {
 
   const activePreset = useMemo(() => (settings ? matchPreset(settings) : null), [settings]);
 
-  /** 写失败后从 main 重新拉权威状态,替换乐观值 —— UI 与磁盘不留分叉。 */
+  /**
+   * 写失败后从 main 重新拉权威状态,替换乐观值 —— UI 与磁盘不留分叉。
+   * 迟到守卫:发起后若有新的写响应落地(写序号前进),本次回读结果作废,
+   * 不覆盖用户随后的成功修改。
+   */
   const refetchAuthoritative = () => {
+    const seqAtIssue = writeSeqRef.current;
     void window.electronAPI.maker
       .agentResourceSettingsGet()
-      .then((s) => setSettings(s))
+      .then((s) => {
+        if (writeSeqRef.current === seqAtIssue) setSettings(s);
+      })
       .catch(() => {});
   };
 
@@ -109,7 +125,7 @@ export function AgentResourceSection() {
     setSettings((prev) => (prev ? { ...prev, [key]: value, isCustomized: true } : prev));
     void window.electronAPI.maker
       .agentResourceSettingsSet(key, value)
-      .then((next) => setSettings(next))
+      .then((next) => applyServerState(next))
       .catch(() => {
         // IPC 错误统一显示本地化文案,不透出原始异常(可能含内部路径)
         toast.error(t('settings.agentResource.saveFailed'));
@@ -135,7 +151,7 @@ export function AgentResourceSection() {
         'capToolchainThreads',
         values.capToolchainThreads,
       );
-      setSettings(next);
+      applyServerState(next);
     } catch {
       // 中途失败 = 只落了部分字段;拉回权威状态,不让乐观值假装写成功了
       toast.error(t('settings.agentResource.saveFailed'));
@@ -167,7 +183,7 @@ export function AgentResourceSection() {
             void window.electronAPI.maker
               .agentResourceSettingsReset()
               .then((next) => {
-                setSettings(next);
+                applyServerState(next);
                 toast.success(t('settings.defaults.restored'));
               })
               .catch(() => {

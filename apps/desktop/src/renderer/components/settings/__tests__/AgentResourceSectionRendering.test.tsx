@@ -190,6 +190,45 @@ describe('AgentResourceSection', () => {
     ]);
   });
 
+  it('discards a late failure-refetch snapshot when a newer write landed meanwhile', async () => {
+    const api = installElectronApi(DEFAULT_WIRE);
+    // 预设第 2 键写失败 → 触发失败回读;把回读 GET 挂起,晚于用户的下一次成功写返回
+    api.settingsSet.mockImplementationOnce(async (key: string, value: number | string | boolean) => {
+      return { ...DEFAULT_WIRE, [key]: value, isCustomized: true };
+    });
+    api.settingsSet.mockImplementationOnce(async () => {
+      throw new Error('write failed');
+    });
+    let releaseStaleGet: (() => void) | null = null;
+    api.settingsGet.mockImplementationOnce(async () => DEFAULT_WIRE); // 初始加载
+    api.settingsGet.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          // 回读返回"失败预设的部分状态"旧快照
+          releaseStaleGet = () => resolve({ ...DEFAULT_WIRE, maxConcurrentCommands: 2 });
+        }),
+    );
+    render(<AgentResourceSection />);
+    await waitFor(() => screen.getByText('settings.agentResource.presets.background'));
+
+    fireEvent.click(screen.getByText('settings.agentResource.presets.background'));
+    // 等预设序列失败、操作闸解除(回读 GET 仍挂起)
+    await waitFor(() => {
+      expect(api.settingsGet).toHaveBeenCalledTimes(2);
+    });
+
+    // 用户随后的成功修改
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '7' } });
+    await waitFor(() => {
+      expect((screen.getByRole('spinbutton') as HTMLInputElement).value).toBe('7');
+    });
+
+    // 迟到的旧快照返回:必须被丢弃,不得覆盖用户的新值
+    releaseStaleGet!();
+    await new Promise((r) => setTimeout(r, 0));
+    expect((screen.getByRole('spinbutton') as HTMLInputElement).value).toBe('7');
+  });
+
   it('persists single-field edits through the settings IPC', async () => {
     const api = installElectronApi(DEFAULT_WIRE);
     render(<AgentResourceSection />);
