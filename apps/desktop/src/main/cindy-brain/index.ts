@@ -1719,8 +1719,8 @@ function assertMediaModelStillEnabled(kind: 'image' | 'video', model: string): v
   if (!getCatalogMediaConfig(kind).models.some((m) => m.id === model)) {
     throw new Error(
       kind === 'image'
-        ? '图像模型已在设置中停用,本次生成已取消'
-        : '视频模型已在设置中停用,本次生成已取消',
+        ? '图像模型不可用(可能已停用或来源凭证未就绪),本次生成已取消'
+        : '视频模型不可用(可能已停用或来源凭证未就绪),本次生成已取消',
     );
   }
 }
@@ -1859,7 +1859,11 @@ function getImageChannelRegistry(): ImageChannelRegistry {
  */
 function resolveImageChannelForModel(model: string) {
   const entry = getCatalogMediaConfig('image').models.find((m) => m.id === model);
-  if (!entry) throw new Error('图像模型已在设置中停用,本次生成已取消');
+  if (!entry) {
+    const slash = model.indexOf('/');
+    if (slash > 0) getImageChannelRegistry().resolve(model.slice(0, slash));
+    throw new Error('图像模型不可用,本次生成已取消');
+  }
   return getImageChannelRegistry().resolve(entry.providerId);
 }
 
