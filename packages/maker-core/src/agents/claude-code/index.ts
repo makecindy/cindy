@@ -3884,14 +3884,21 @@ export class ClaudeCodeAgent extends BaseAgent {
                 // 凭证;nextRoute 也是现解析的最新值。两者一致 = 同一路由(放行,token
                 // 轮换不误拒);用户在设置里改了 key/定制头 → 不一致(拒绝,不放行旧凭证)。
                 // (Greptile/codex-connector review #1035:排除 token 字段会放行真凭证变化。)
+                // 比对两边 key 的并集:nextRoute 删除某个定制头时,remoteEnv 里仍烤着
+                // 旧值,只取 nextRoute 的 key 会把「删除」误判成一致(Greptile 二轮)。
                 // remoteEnv 含 route.env 之外的字段(ANTHROPIC_BASE_URL / entrypoint gate
-                // 补的 CLAUDE_CODE_ENTRYPOINT 等),只取 nextRoute.env 声明的 key 比对。
-                const currentRouteEnv = remoteEnv
-                  ? Object.fromEntries(Object.keys(nextRoute.env).map((k) => [k, remoteEnv[k]]))
-                  : {};
+                // 补的 CLAUDE_CODE_ENTRYPOINT 等),只取 route 声明过的 key(remoteRoute.env
+                // 的 key 集 = spawn 时 route 声明,nextRoute.env 的 key 集 = 现声明)。
+                const routeKeys = new Set([
+                  ...Object.keys(remoteRoute.env),
+                  ...Object.keys(nextRoute.env),
+                ]);
+                const pick = (env: Record<string, string>): Record<string, string> =>
+                  Object.fromEntries([...routeKeys].filter((k) => env[k] !== undefined).map((k) => [k, env[k]]));
                 return (
                   nextRoute.endpoint !== remoteRoute.endpoint ||
-                  JSON.stringify(nextRoute.env) !== JSON.stringify(currentRouteEnv)
+                  JSON.stringify(pick(nextRoute.env)) !==
+                    JSON.stringify(pick(remoteEnv ?? {}))
                 );
               })());
           if (routeChanged) {

@@ -584,4 +584,43 @@ describe('ClaudeCodeAgent plan mode', () => {
     expect(resolveRemoteClaudeRoute).toHaveBeenCalledTimes(3); // startSession + 两次 setModel
     await handle.close();
   });
+
+  it('remote setModel rejects when the target route drops a custom header', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const fakeQuery = createFakeQuery();
+    const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async () =>
+      fakeQuery as never;
+    // 初次解析带 x-tenant 定制头;切模时目标路由把它删了 —— 远端 daemon 仍烤着旧头,
+    // 必须拒绝(Greptile review #1035:只取 nextRoute 的 key 会把删除误判成一致)。
+    let callCount = 0;
+    const resolveRemoteClaudeRoute = vi.fn(async () => {
+      callCount += 1;
+      return callCount === 1
+        ? {
+            endpoint: 'https://provider.example/v1',
+            env: { ANTHROPIC_API_KEY: 'k', ANTHROPIC_CUSTOM_HEADERS: 'x-tenant: acme' },
+          }
+        : { endpoint: 'https://provider.example/v1', env: { ANTHROPIC_API_KEY: 'k' } };
+    });
+    const agent = new ClaudeCodeAgent(createDeps({
+      runtimeConfig: { remoteEndpoint: 'https://gw.example/claude' },
+      remoteCcQueryFactory,
+      resolveRemoteClaudeRoute,
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-drop-header',
+      model: 'custom-model',
+      providerId: 'custom-provider',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+
+    await expect(handle.setModel?.('another-custom-model')).rejects.toThrow(
+      /REMOTE_MODEL_SWITCH_ROUTE_CHANGE/,
+    );
+    await handle.close();
+  });
 });
