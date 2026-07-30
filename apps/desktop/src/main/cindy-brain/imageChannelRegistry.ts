@@ -34,6 +34,11 @@ export interface ImageChannelResult {
 export interface ImageChannel {
   /** 执行凭证是否就绪。false ⇒ 该来源整段不进 cindy 白名单。 */
   ready(): boolean;
+  /**
+   * 该来源是否支持图像编辑(editImage)。
+   * 省略视为 true;仅生成来源(xAI 等)显式设为 false 以从编辑清单排除。
+   */
+  supportsEdit?: boolean;
   generateImage(params: {
     model: string;
     prompt: string;
@@ -60,6 +65,12 @@ export class ImageChannelRegistry {
   /** 白名单派生用:未注册 = 不就绪(目录数据先行时的乱序安全兜底)。 */
   isProviderReady(providerId: string): boolean {
     return this.channels.get(providerId)?.ready() === true;
+  }
+
+  /** 编辑操作清单派生用:就绪且 supportsEdit !== false。 */
+  isProviderEditReady(providerId: string): boolean {
+    const ch = this.channels.get(providerId);
+    return ch?.ready() === true && ch.supportsEdit !== false;
   }
 
   /**

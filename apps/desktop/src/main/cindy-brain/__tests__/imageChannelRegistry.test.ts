@@ -8,9 +8,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { ImageChannelRegistry, type ImageChannel } from '../imageChannelRegistry';
 
-function channel(ready: boolean): ImageChannel {
+function channel(ready: boolean, supportsEdit?: boolean): ImageChannel {
   return {
     ready: () => ready,
+    ...(supportsEdit !== undefined ? { supportsEdit } : {}),
     generateImage: vi.fn(async () => ({ data: [{ b64_json: 'aGk=' }] })),
     editImage: vi.fn(async () => ({ data: [{ b64_json: 'aGk=' }] })),
   };
@@ -38,5 +39,16 @@ describe('ImageChannelRegistry', () => {
     registry.register('xd', xd);
     expect(registry.resolve('xd')).toBe(xd);
     expect(() => registry.register('xd', channel(true))).toThrow(/already registered/);
+  });
+
+  it('isProviderEditReady: supportsEdit: false 的来源不进编辑就绪', () => {
+    const registry = new ImageChannelRegistry();
+    registry.register('xd', channel(true));            // 省略 supportsEdit → true
+    registry.register('xai', channel(true, false));    // 仅生成
+    registry.register('gemini', channel(true, true));  // 明示支持编辑
+    expect(registry.isProviderEditReady('xd')).toBe(true);
+    expect(registry.isProviderEditReady('xai')).toBe(false);
+    expect(registry.isProviderEditReady('gemini')).toBe(true);
+    expect(registry.isProviderEditReady('unknown')).toBe(false);
   });
 });
