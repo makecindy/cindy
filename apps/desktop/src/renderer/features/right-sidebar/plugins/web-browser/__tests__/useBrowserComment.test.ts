@@ -106,7 +106,11 @@ const TARGET: BrowserCommentTargetInfo = {
   targetPath: 'html > body > button#save',
   nearbyText: 'Save changes',
   themeVariant: 'light',
-  designBaseline: null,
+  designBaseline: {
+    styles: { color: 'rgb(0, 0, 0)' },
+    editableText: 'Save',
+    provenance: {},
+  },
   markerNumber: 1,
 };
 
@@ -342,6 +346,7 @@ describe('useBrowserComment', () => {
       targetRole: null,
       targetSelector: 'p:nth-of-type(1)',
       targetPath: 'html > body > p:nth-of-type(1)',
+      designBaseline: null,
     };
     let result: UseBrowserCommentResult | null = null;
     render(
@@ -576,6 +581,81 @@ describe('useBrowserComment', () => {
       textEdit: null,
     });
     expect(webview.send).toHaveBeenCalledTimes(callsBeforeSelection);
+    expect(draftMocks.append).not.toHaveBeenCalled();
+  });
+
+  it('preserves recovered design edits until a compatible target is selected', async () => {
+    const webview = makeWebview();
+    let result: UseBrowserCommentResult | null = null;
+    render(
+      createElement(HookProbe, {
+        webview: webview.value,
+        onResult: (next) => {
+          result = next;
+        },
+      }),
+    );
+    const recoveredDraft = {
+      text: 'Keep the comment too',
+      styleEdits: { color: '#ff0000' },
+      textEdit: 'Recovered label',
+    };
+    act(() => result!.updateEditorDraft(recoveredDraft));
+    await enterSelecting(webview, () => result!);
+
+    act(() =>
+      webview.dispatchIpc(BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL, {
+        ...TARGET,
+        kind: 'region',
+        designBaseline: null,
+      }),
+    );
+
+    expect(result!.mode).toBe('cancelling');
+    expect(result!.pendingTarget).toBeNull();
+    expect(lastCommand(webview).command).toBe(BROWSER_COMMENT_CANCEL_PENDING_CHANNEL);
+    await acknowledgeLastCommand(webview);
+
+    expect(result!.mode).toBe('selecting');
+    expect(result!.editorDraft).toEqual(recoveredDraft);
+    expect(draftMocks.append).not.toHaveBeenCalled();
+
+    act(() => webview.dispatchIpc(BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL, TARGET));
+    expect(result!.mode).toBe('pending');
+    expect(result!.pendingTarget).toEqual(TARGET);
+    expect(result!.editorDraft).toEqual(recoveredDraft);
+  });
+
+  it('keeps recovered design edits when incompatible-target cleanup fails', async () => {
+    const webview = makeWebview();
+    let result: UseBrowserCommentResult | null = null;
+    render(
+      createElement(HookProbe, {
+        webview: webview.value,
+        onResult: (next) => {
+          result = next;
+        },
+      }),
+    );
+    const recoveredDraft = {
+      text: '',
+      styleEdits: { color: '#ff0000' },
+      textEdit: 'Recovered label',
+    };
+    act(() => result!.updateEditorDraft(recoveredDraft));
+    await enterSelecting(webview, () => result!);
+
+    act(() =>
+      webview.dispatchIpc(BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL, {
+        ...TARGET,
+        designBaseline: null,
+      }),
+    );
+    await acknowledgeLastCommand(webview, false);
+
+    expect(result!.mode).toBe('off');
+    expect(result!.editorDraft).toEqual(recoveredDraft);
+    expect(toastMocks.error).toHaveBeenCalledWith('rightSidebar.browser.commentFailed');
     expect(draftMocks.append).not.toHaveBeenCalled();
   });
 

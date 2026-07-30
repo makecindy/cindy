@@ -53,6 +53,7 @@ import {
 import { composerDraftKeyForRightSidebarSession } from '@/features/cc-agent/newMakerDraftRightSidebar';
 import {
   createEmptyBrowserCommentEditorDraft,
+  hasBrowserCommentDesignDraft,
   hasBrowserCommentEditorDraft,
   type BrowserCommentEditorDraft,
 } from './browserCommentEditorDraft';
@@ -88,12 +89,7 @@ function observeSendRejection(result: unknown, onRejected: (reason: unknown) => 
 }
 
 export type BrowserCommentMode =
-  | 'off'
-  | 'starting'
-  | 'selecting'
-  | 'pending'
-  | 'cancelling'
-  | 'submitting';
+  'off' | 'starting' | 'selecting' | 'pending' | 'cancelling' | 'submitting';
 
 interface PendingBrowserCommentCommand {
   webview: WebviewTag;
@@ -308,27 +304,44 @@ export function useBrowserComment(
   const abortModePreservingDraftRef = useRef(abortModePreservingDraft);
   abortModePreservingDraftRef.current = abortModePreservingDraft;
 
+  /**
+   * 撤销 Guest 已建立的 pending target。显式取消会丢弃 Host 草稿；自动拒绝
+   * 一个无法承载恢复中 design edits 的 target 时只撤 marker，保留草稿继续
+   * 点选。两条路径共用 ACK 状态机，避免 Host 提前回 selecting 而 Guest 仍
+   * 卡在 pending。
+   */
+  const cancelGuestPending = useCallback(
+    (discardEditorDraft: boolean) => {
+      const epoch = submitEpochRef.current;
+      setMode('cancelling');
+      void sendCommand(BROWSER_COMMENT_CANCEL_PENDING_CHANNEL).then(
+        () => {
+          if (submitEpochRef.current !== epoch) return;
+          setPendingTarget(null);
+          if (discardEditorDraft) clearEditorDraft();
+          setMode('selecting');
+        },
+        () => {
+          if (submitEpochRef.current !== epoch) return;
+          // 无法确认 guest 已撤掉 pending 时整体退出；下次 enter 会先幂等拆旧 overlay。
+          if (discardEditorDraft) {
+            exitMode();
+          } else {
+            abortModePreservingDraft();
+          }
+          toast.error(tRef.current('rightSidebar.browser.commentFailed'));
+        },
+      );
+    },
+    [abortModePreservingDraft, clearEditorDraft, exitMode, sendCommand],
+  );
+
   const cancelPending = useCallback(() => {
     if (modeRef.current !== 'pending') return;
-    const epoch = submitEpochRef.current;
     // 立即离开 pending，序列化 cancel 与 submit：ACK 前 submit() 不再能够
     // 启动 prepare-screenshot，避免 guest 已撤销 target 后 host 又进提交态。
-    setMode('cancelling');
-    void sendCommand(BROWSER_COMMENT_CANCEL_PENDING_CHANNEL).then(
-      () => {
-        if (submitEpochRef.current !== epoch) return;
-        setPendingTarget(null);
-        clearEditorDraft();
-        setMode('selecting');
-      },
-      () => {
-        if (submitEpochRef.current !== epoch) return;
-        // 无法确认 guest 已撤掉 pending 时整体退出；下次 enter 会先幂等拆旧 overlay。
-        exitMode();
-        toast.error(tRef.current('rightSidebar.browser.commentFailed'));
-      },
-    );
-  }, [clearEditorDraft, exitMode, sendCommand]);
+    cancelGuestPending(true);
+  }, [cancelGuestPending]);
 
   /**
    * 提交主流程(气泡提交与 immediate 共用)。commentText 允许为空(immediate:
@@ -472,19 +485,30 @@ export function useBrowserComment(
   const doSubmitRef = useRef(doSubmit);
   doSubmitRef.current = doSubmit;
 
-  const acceptSelectedTarget = useCallback((info: BrowserCommentTargetInfo) => {
-    if (info.immediate && !hasBrowserCommentEditorDraft(editorDraftRef.current)) {
-      // Cmd/Ctrl+点击「立即添加」:跳过气泡,空评论文本直接提交。
-      doSubmitRef.current(info, '');
-      return;
-    }
-    // 生命周期恢复后若仍有 Host 草稿，即使用户 Cmd/Ctrl+点击也必须重新打开
-    // Popover，让恢复的正文 / 样式明确绑定当前 target；不能提交空评论后清空。
-    // 同时归一化为普通 pending，后续截图失败应保留 Popover，而不是走 immediate
-    // 的无编辑器取消路径。
-    setPendingTarget(info.immediate ? { ...info, immediate: false } : info);
-    setMode('pending');
-  }, []);
+  const acceptSelectedTarget = useCallback(
+    (info: BrowserCommentTargetInfo) => {
+      const editorDraft = editorDraftRef.current;
+      if (!info.designBaseline && hasBrowserCommentDesignDraft(editorDraft)) {
+        // 恢复中的 CSS / text edit 不能绑定到 region、文本选区或 baseline
+        // 采集失败的元素。Guest 此时已经建立 pending marker，先经 ACK 撤销，
+        // Host 草稿保持不变，让用户继续选择一个兼容元素。
+        cancelGuestPending(false);
+        return;
+      }
+      if (info.immediate && !hasBrowserCommentEditorDraft(editorDraft)) {
+        // Cmd/Ctrl+点击「立即添加」:跳过气泡,空评论文本直接提交。
+        doSubmitRef.current(info, '');
+        return;
+      }
+      // 生命周期恢复后若仍有 Host 草稿，即使用户 Cmd/Ctrl+点击也必须重新打开
+      // Popover，让恢复的正文 / 样式明确绑定当前 target；不能提交空评论后清空。
+      // 同时归一化为普通 pending，后续截图失败应保留 Popover，而不是走 immediate
+      // 的无编辑器取消路径。
+      setPendingTarget(info.immediate ? { ...info, immediate: false } : info);
+      setMode('pending');
+    },
+    [cancelGuestPending],
+  );
 
   const toggle = useCallback(() => {
     if (modeRef.current !== 'off') {
@@ -503,11 +527,7 @@ export function useBrowserComment(
         if (submitEpochRef.current !== epoch) return;
         const buffered = bufferedStartupSelectionRef.current;
         bufferedStartupSelectionRef.current = null;
-        if (
-          buffered &&
-          buffered.epoch === epoch &&
-          buffered.webview === webviewRef.current
-        ) {
+        if (buffered && buffered.epoch === epoch && buffered.webview === webviewRef.current) {
           acceptSelectedTarget(buffered.target);
           return;
         }
@@ -522,13 +542,7 @@ export function useBrowserComment(
         toast.error(tRef.current('rightSidebar.browser.commentFailed'));
       },
     );
-  }, [
-    abortModePreservingDraft,
-    acceptSelectedTarget,
-    composerDraftKey,
-    exitMode,
-    sendCommand,
-  ]);
+  }, [abortModePreservingDraft, acceptSelectedTarget, composerDraftKey, exitMode, sendCommand]);
 
   const submit = useCallback(
     (commentText: string, styleChanges?: BrowserCommentStyleChange[]) => {

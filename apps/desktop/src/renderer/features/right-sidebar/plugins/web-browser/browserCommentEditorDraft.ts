@@ -22,15 +22,16 @@ export function createEmptyBrowserCommentEditorDraft(): BrowserCommentEditorDraf
   };
 }
 
+/** 是否包含必须绑定到可用 design baseline 才能预览 / 提交的编辑。 */
+export function hasBrowserCommentDesignDraft(draft: BrowserCommentEditorDraft): boolean {
+  return draft.textEdit !== null || Object.keys(draft.styleEdits).length > 0;
+}
+
 /**
  * 是否存在不能被 immediate 空评论路径静默覆盖的 Host 编辑内容。
  * 使用原始编辑状态而非提交时的 trimmed diff：即使用户暂时输入空白或尚未
  * 绑定兼容 baseline，这仍是需要回到 Popover 明确处理的恢复草稿。
  */
 export function hasBrowserCommentEditorDraft(draft: BrowserCommentEditorDraft): boolean {
-  return (
-    draft.text.length > 0 ||
-    draft.textEdit !== null ||
-    Object.keys(draft.styleEdits).length > 0
-  );
+  return draft.text.length > 0 || hasBrowserCommentDesignDraft(draft);
 }
