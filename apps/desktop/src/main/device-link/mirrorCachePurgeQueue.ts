@@ -157,11 +157,22 @@ async function withFileLock<T>(task: (held: boolean) => Promise<T>): Promise<T> 
 
 /** 只有「心跳早已停」且「owner 进程确实不在了」才允许接管。 */
 async function canTakeOverLock(lock: string): Promise<boolean> {
-  const stat = await fsp.stat(lock).catch(() => null);
-  if (!stat) return true; // 锁刚被别人释放 → 直接重试抢
+  let stat: Awaited<ReturnType<typeof fsp.stat>> | null = null;
+  try {
+    stat = await fsp.stat(lock);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    // 只有"锁文件真的没了"才算可以重新抢(下一轮 open(wx) 会成功);EACCES / EPERM 这类
+    // 读不到锁的情况必须保守 —— 当成"别人还持着",否则会把活着的持有者挤掉
+    // (review: copilot)。
+    if (code === 'ENOENT' || code === 'ENOTDIR') return true;
+    return false;
+  }
   if (Date.now() - stat.mtimeMs <= LOCK_STALE_MS) return false;
   const owner = await readLockOwnerPid(lock);
-  if (owner === null) return true; // 内容读不出来 / 不是本模块写的:按死锁处理
+  // 内容**读不出来**(EACCES / EPERM / 瞬时锁)≠ 持有者已死:保守,不接管(review: copilot)。
+  if (owner === 'unreadable') return false;
+  if (owner === null) return true; // 能读但不是本模块写的(陈旧残留):按死锁处理
   if (owner === process.pid) return true; // 本进程上一轮崩在临界区里(心跳早停)
   try {
     process.kill(owner, 0);
@@ -172,22 +183,38 @@ async function canTakeOverLock(lock: string): Promise<boolean> {
   }
 }
 
-async function readLockOwnerPid(lock: string): Promise<number | null> {
+/**
+ * 锁文件里的 owner pid。区分三种情况:
+ *  - number:正常读到 pid;
+ *  - null:能读、但内容不是本模块写的(陈旧残留);
+ *  - 'unreadable':**读不出来**(EACCES / EPERM / 瞬时锁)—— 不能据此判定持有者已死。
+ */
+async function readLockOwnerPid(lock: string): Promise<number | null | 'unreadable'> {
+  let raw: string;
   try {
-    const parsed = JSON.parse(await fsp.readFile(lock, 'utf8')) as unknown;
+    raw = await fsp.readFile(lock, 'utf8');
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    // 文件已经没了 → 交给调用方重新抢锁;其余(权限 / 占用)一律保守。
+    if (code === 'ENOENT' || code === 'ENOTDIR') return null;
+    return 'unreadable';
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
     if (parsed && typeof parsed === 'object') {
       const pid = (parsed as { pid?: unknown }).pid;
       if (typeof pid === 'number' && Number.isInteger(pid) && pid > 0) return pid;
     }
-    return null;
   } catch {
-    return null;
+    // 能读但不是合法 JSON:按陈旧残留处理。
   }
+  return null;
 }
 
 /** 释放前确认锁里还是自己的 pid:别人接管过之后不能替他删。 */
 async function releaseOwnLock(lock: string): Promise<void> {
   const owner = await readLockOwnerPid(lock);
+  if (owner === 'unreadable') return; // 读不出来就别乱删别人的锁
   if (owner !== null && owner !== process.pid) {
     log.warn('mirror cache purge queue lock was taken over; leaving it to its new owner');
     return;
@@ -381,10 +408,20 @@ function compactEntries(entries: readonly PurgeEntry[]): PurgeEntry[] {
 async function writeQueue(entries: readonly PurgeEntry[]): Promise<void> {
   const file = queueFilePath();
   if (entries.length === 0) {
-    await fsp.rm(file, { force: true }).catch(() => undefined);
+    // 删不掉要**抛**:账本还在盘上的话,hasPendingPurgeRecords() 会一直判"有待清"从而
+    // 永久压掉所有缓存读,而下一次 drain 还会照着这份陈旧账本再删一遍(可能删掉刚重建的
+    // 缓存)。调用方据此保留内存里的重试状态并如实报告(review: codex P1)。
     // 备份必须一起删:正本"合法缺失"(队列清空)时读取侧会回退 .bak,留着它等于把
     // 已经清完的条目又复活出来。
-    await fsp.rm(`${file}.bak`, { force: true }).catch(() => undefined);
+    for (const target of [file, `${file}.bak`]) {
+      try {
+        await fsp.rm(target, { force: true });
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException)?.code;
+        if (code === 'ENOENT' || code === 'ENOTDIR') continue;
+        throw err;
+      }
+    }
     return;
   }
   const compacted = compactEntries(entries);

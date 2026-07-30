@@ -437,6 +437,33 @@ describe('锁的所有权', () => {
     }
   }, 20_000);
 
+  // review(copilot):stat 读不到锁文件(EACCES / EPERM)时不能当成"锁已释放"——那会把活着的
+  // 持有者挤掉。只有"锁文件真的没了"才允许重新抢。
+  it.skipIf((process.getuid?.() ?? 0) === 0)(
+    '锁文件读不出来(EACCES)→ 不接管,记录改走追加落盘',
+    async () => {
+      const root = await makeOwnerCache('owner-1');
+      // 锁文件存在但**内容读不出来**(chmod 000):open(wx) 仍报 EEXIST,stat 仍成功,
+      // 唯独读不到 owner pid —— 这时不能当成"持有者已死"而接管。
+      await fsp.writeFile(lockPath(), JSON.stringify({ pid: process.ppid, startedAt: 1 }), 'utf8');
+      const old = new Date(Date.now() - 60_000);
+      await fsp.utimes(lockPath(), old, old);
+      await fsp.chmod(lockPath(), 0o000);
+
+      try {
+        await enqueuePurge(root);
+        // 锁没被删掉(不可读 ≠ 可接管)
+        expect(fs.existsSync(lockPath())).toBe(true);
+        __testing.resetMemoryQueue();
+        expect((await __testing.readQueue()).map((e) => e.root)).toEqual([root]);
+      } finally {
+        await fsp.chmod(lockPath(), 0o600).catch(() => undefined);
+        await fsp.rm(lockPath(), { force: true });
+      }
+    },
+    20_000,
+  );
+
   it('owner 进程已经不在 → 接管陈旧锁', async () => {
     const root = await makeOwnerCache('owner-1');
     // 一个几乎不可能存在的 pid(用完即弃的高位数字)。

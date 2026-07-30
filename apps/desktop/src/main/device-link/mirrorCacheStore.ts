@@ -397,7 +397,21 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
    *    `ensureDir` / 原子写前后被判成 stale(甚至写完又删掉),而那台设备的元数据就此留下
    *    —— 而且那个 outcome 既没被计入待重试也没人重试(review: codex P1)。
    */
-  type WriteGuard = { kind: 'write'; epoch: number } | { kind: 'purge'; allEpoch: number };
+  /**
+   * 正在被 clearDevice 清理的设备(可重入计数)。与 `purgeAllInFlight` 同理:一笔在
+   * 「generation 已自增、枚举已跑完、清理还没结束」之间发起的写入会捕获到新代际、两道
+   * 检查都放行,于是它的 rename 会把刚被扫掉的正文重建出来 —— 多窗口下这是真实可达的
+   * (一个窗口在清被撤销设备,另一个窗口提交它已经拉到的页)(review: codex P1)。
+   */
+  const clearingDevices = new Map<string, number>();
+
+  function isClearingDevice(deviceId: string): boolean {
+    return (clearingDevices.get(deviceId.trim()) ?? 0) > 0;
+  }
+
+  type WriteGuard =
+    | { kind: 'write'; epoch: number; deviceId?: string }
+    | { kind: 'purge'; allEpoch: number };
 
   /**
    * 列表快照写入结果。`purge-failed` 带上具体卡住的路径(可能是 session-list.json 本身,
@@ -416,9 +430,15 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     // 「generation 已自增、递归删除尚未完成」之间发起的写入会捕获到新代际、两道 epoch 检查
     // 都放行,于是它的原子 rename 会在 clearAll 返回之后把旧账号的目录重建出来 —— 而 owner
     // 要等 teardown 完成才切换,那份明文就这样越过了账号边界(review: codex P1)。
-    return guard.kind === 'write'
-      ? guard.epoch !== generation || purgeAllInFlight > 0
-      : guard.allEpoch !== purgeAllEpoch || purgeAllInFlight > 0;
+    if (guard.kind === 'purge') {
+      return guard.allEpoch !== purgeAllEpoch || purgeAllInFlight > 0;
+    }
+    if (guard.epoch !== generation || purgeAllInFlight > 0) return true;
+    // 逐设备清理进行中:该设备自己的写入作废;列表快照(不带 deviceId)在**任何**
+    // clearDevice 进行中都作废 —— 它是整份快照,可能把正在被清掉的设备又写回去。
+    return guard.deviceId === undefined
+      ? clearingDevices.size > 0
+      : isClearingDevice(guard.deviceId);
   }
 
   async function writeSessionListLocked(
@@ -511,6 +531,81 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     return next;
   }
 
+
+  /** clearDevice 的实际清理体(登记 in-flight 与代际自增由调用方负责)。 */
+  async function clearDeviceLocked(id: string): Promise<void> {
+      const epochAll = purgeAllEpoch;
+      const rootAtStart = resolveRoot();
+      const dir = path.join(rootAtStart, MESSAGES_DIR);
+      const prefix = `${safeSegment(id)}-${shortHash(id)}-`;
+
+      const stuck: string[] = [];
+
+      // 枚举必须 fail-closed:`listFiles` 是 fail-open 的(读不了就返回 []),用它的话
+      // messages/ 因 EACCES / EPERM / 锁而枚举失败时,这里会「一个文件都没删」却报成功,
+      // 于是 IPC 也不会登记重试,正文在权限恢复后照样能被读回(review: greptile + codex P1)。
+      const listing = await listMessageFileNames(dir);
+      if (listing.unreadable) {
+        // 数不出来 ≠ 里面没有。把目录本身计入待重试,删除留给下一次。
+        stuck.push(dir);
+      } else {
+        await Promise.all(
+          listing.names
+            .filter((name) => name.startsWith(prefix))
+            .map(async (name) => {
+              const file = path.join(dir, name);
+              // 指纹一起清:文件删了却留着指纹,下次写同样内容会被去重跳过 → 文件回不来。
+              lastWritten.delete(file);
+              try {
+                await fsp.rm(file, { force: true });
+              } catch {
+                stuck.push(file);
+              }
+            }),
+        );
+      }
+
+      // 「读快照 → 去掉这台设备 → 写回」整段进同一条串行化链:两台设备同时被收掉时,
+      // 各自读同一份旧快照再各写「除我之外的全部」,后写的那次会把另一台恢复回来
+      // (review: codex P1)。链内不能再调公开的 writeSessionList(同链嵌套会自锁),
+      // 因此直接用 writeSessionListLocked。
+      const listFile = path.join(rootAtStart, SESSION_LIST_FILE);
+      const outcome = await serializeWrite(listFile, async () => {
+        // 只有 clearAll 能作废这段(它会把整棵目录删掉,这里不该再把列表写回来);
+        // 另一个并发的 clearDevice 不作废它 —— 两者依次落地才对。屏障还挡住「clearAll 已开始、
+        // 尚未删完」的窗口:那时晚到的 clearDevice 会快照到新代际,若只比代际就拦不住它在
+        // 删除完成之后把列表写回去(review: codex P1)。
+        const guard = { kind: 'purge', allEpoch: epochAll } as const;
+        if (isStale(guard)) return { outcome: 'stale' } as SessionListWriteResult;
+        const parsed = await readJson(listFile);
+        const devices = isRecord(parsed) && Array.isArray(parsed.devices) ? parsed.devices : [];
+        const others = normalizeDeviceSessions(devices).filter((device) => device.deviceId !== id);
+        return writeSessionListLocked(others, guard, listFile);
+      });
+      // 根目录下的 `session-list.json.<hex>.tmp`:进程死在 writeFile 与 rename 之间时,
+      // 那里是**全部设备**的会话元数据。逐设备清理原先只扫 messages/ 下的 tmp,于是这份
+      // 崩溃残留要等到整账号清理才消失(review: codex P1)。它是过期快照、对谁都没用,
+      // 直接删掉;枚举失败则把根目录计入待重试(fail-closed)。
+      const rootTmp = await listRootTmpFiles(rootAtStart);
+      if (rootTmp.unreadable) stuck.push(rootAtStart);
+      for (const file of rootTmp.files) {
+        try {
+          await fsp.rm(file, { force: true });
+        } catch {
+          stuck.push(file);
+        }
+      }
+
+      // 列表快照重写失败(Windows 上被占用 / owner 目录只读)同样要能被重试 —— 否则消息文件
+      // 删掉了、会话元数据还在盘上,下次冷启动照样把这台被撤销的设备画回侧边栏(review: codex P1)。
+      if (outcome.outcome === 'failed') stuck.push(listFile);
+      else if (outcome.outcome === 'purge-failed') stuck.push(outcome.stuck);
+
+      // 删不掉 / 数不出来的东西都是隐私问题:被撤销的对端正文会留在盘上直到本账号生命周期
+      // 结束。抛出来让调用方登记重试,而不是把失败咽下去。
+      if (stuck.length > 0) throw new MirrorCachePurgeError(rootAtStart, stuck, null);
+  }
+
   return {
     async readMessages(deviceId, sessionId) {
       if (!deviceId.trim() || !sessionId.trim()) return [];
@@ -576,7 +671,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // 于是携带着清理前旧数据的这笔写入会被当成新写入放行(review: codex P1)。
       const epoch = generation;
       // 落盘与指纹登记必须成对且有序 → 同一文件的写入串成链(见 serializeWrite)。
-      const writeGuard: WriteGuard = { kind: 'write', epoch };
+      const writeGuard: WriteGuard = { kind: 'write', epoch, deviceId };
       return serializeWrite(file, async () => {
         if (isStale(writeGuard)) return;
         // 指纹只算消息体,不含 payload 的 updatedAt —— 否则每次都"变了",去重永不命中。
@@ -657,75 +752,14 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       const id = deviceId.trim();
       if (!id) return;
       generation += 1;
-      const epochAll = purgeAllEpoch;
-      const rootAtStart = resolveRoot();
-      const dir = path.join(rootAtStart, MESSAGES_DIR);
-      const prefix = `${safeSegment(id)}-${shortHash(id)}-`;
-      const stuck: string[] = [];
-
-      // 枚举必须 fail-closed:`listFiles` 是 fail-open 的(读不了就返回 []),用它的话
-      // messages/ 因 EACCES / EPERM / 锁而枚举失败时,这里会「一个文件都没删」却报成功,
-      // 于是 IPC 也不会登记重试,正文在权限恢复后照样能被读回(review: greptile + codex P1)。
-      const listing = await listMessageFileNames(dir);
-      if (listing.unreadable) {
-        // 数不出来 ≠ 里面没有。把目录本身计入待重试,删除留给下一次。
-        stuck.push(dir);
-      } else {
-        await Promise.all(
-          listing.names
-            .filter((name) => name.startsWith(prefix))
-            .map(async (name) => {
-              const file = path.join(dir, name);
-              // 指纹一起清:文件删了却留着指纹,下次写同样内容会被去重跳过 → 文件回不来。
-              lastWritten.delete(file);
-              try {
-                await fsp.rm(file, { force: true });
-              } catch {
-                stuck.push(file);
-              }
-            }),
-        );
+      clearingDevices.set(id, (clearingDevices.get(id) ?? 0) + 1);
+      try {
+        return await clearDeviceLocked(id);
+      } finally {
+        const left = (clearingDevices.get(id) ?? 1) - 1;
+        if (left > 0) clearingDevices.set(id, left);
+        else clearingDevices.delete(id);
       }
-
-      // 「读快照 → 去掉这台设备 → 写回」整段进同一条串行化链:两台设备同时被收掉时,
-      // 各自读同一份旧快照再各写「除我之外的全部」,后写的那次会把另一台恢复回来
-      // (review: codex P1)。链内不能再调公开的 writeSessionList(同链嵌套会自锁),
-      // 因此直接用 writeSessionListLocked。
-      const listFile = path.join(rootAtStart, SESSION_LIST_FILE);
-      const outcome = await serializeWrite(listFile, async () => {
-        // 只有 clearAll 能作废这段(它会把整棵目录删掉,这里不该再把列表写回来);
-        // 另一个并发的 clearDevice 不作废它 —— 两者依次落地才对。屏障还挡住「clearAll 已开始、
-        // 尚未删完」的窗口:那时晚到的 clearDevice 会快照到新代际,若只比代际就拦不住它在
-        // 删除完成之后把列表写回去(review: codex P1)。
-        const guard = { kind: 'purge', allEpoch: epochAll } as const;
-        if (isStale(guard)) return { outcome: 'stale' } as SessionListWriteResult;
-        const parsed = await readJson(listFile);
-        const devices = isRecord(parsed) && Array.isArray(parsed.devices) ? parsed.devices : [];
-        const others = normalizeDeviceSessions(devices).filter((device) => device.deviceId !== id);
-        return writeSessionListLocked(others, guard, listFile);
-      });
-      // 根目录下的 `session-list.json.<hex>.tmp`:进程死在 writeFile 与 rename 之间时,
-      // 那里是**全部设备**的会话元数据。逐设备清理原先只扫 messages/ 下的 tmp,于是这份
-      // 崩溃残留要等到整账号清理才消失(review: codex P1)。它是过期快照、对谁都没用,
-      // 直接删掉;枚举失败则把根目录计入待重试(fail-closed)。
-      const rootTmp = await listRootTmpFiles(rootAtStart);
-      if (rootTmp.unreadable) stuck.push(rootAtStart);
-      for (const file of rootTmp.files) {
-        try {
-          await fsp.rm(file, { force: true });
-        } catch {
-          stuck.push(file);
-        }
-      }
-
-      // 列表快照重写失败(Windows 上被占用 / owner 目录只读)同样要能被重试 —— 否则消息文件
-      // 删掉了、会话元数据还在盘上,下次冷启动照样把这台被撤销的设备画回侧边栏(review: codex P1)。
-      if (outcome.outcome === 'failed') stuck.push(listFile);
-      else if (outcome.outcome === 'purge-failed') stuck.push(outcome.stuck);
-
-      // 删不掉 / 数不出来的东西都是隐私问题:被撤销的对端正文会留在盘上直到本账号生命周期
-      // 结束。抛出来让调用方登记重试,而不是把失败咽下去。
-      if (stuck.length > 0) throw new MirrorCachePurgeError(rootAtStart, stuck, null);
     },
 
     /**

@@ -904,6 +904,28 @@ describe('clearDevice / clearAll', () => {
   });
 });
 
+describe('clearDevice 期间的写入', () => {
+  // review(codex P1):一笔在「generation 已自增、枚举已跑完、清理还没结束」之间发起的写入
+  // 会捕获到新代际、两道检查都放行 —— 多窗口下真实可达(一个窗口清被撤销设备,另一个窗口
+  // 提交它已经拉到的页),那笔 rename 会把刚被扫掉的正文重建出来。
+  it('clearDevice 进行中,该设备的写入不会把正文重建出来', async () => {
+    const c = cache();
+    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+    const other = 'dev-2';
+    await c.writeMessages(other, 'sess-9', [row('m9', '2026-01-01T00:00:00.000Z')]);
+
+    await Promise.all([
+      c.clearDevice('dev-1'),
+      c.writeMessages('dev-1', 'sess-2', [row('m2', '2026-02-01T00:00:00.000Z')]),
+    ]);
+
+    expect(await c.readMessages('dev-1', 'sess-1')).toEqual([]);
+    expect(await c.readMessages('dev-1', 'sess-2')).toEqual([]);
+    // 别的设备不受影响。
+    expect((await c.readMessages(other, 'sess-9')).map((m) => m.id)).toEqual(['m9']);
+  });
+});
+
 describe('clearAll 期间的写入', () => {
   // review(codex P1):一笔在「generation 已自增、递归删除尚未完成」之间发起的写入会捕获到
   // 新代际、两道 epoch 检查都放行,于是它的 rename 会在 clearAll 返回之后把旧账号的目录
