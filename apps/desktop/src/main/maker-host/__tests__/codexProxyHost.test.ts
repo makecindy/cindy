@@ -1383,6 +1383,84 @@ describe('codex proxy host', () => {
     setCustomProviders([]);
   });
 
+  it('passes the parent session model into a Guardian request handled by the Anthropic bridge', async () => {
+    const host = await freshCodexProxyHost();
+    const { buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setCustomProviderKeyReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'guardian-anthropic-provider',
+        name: 'Guardian Anthropic Provider',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://anthropic-provider.example',
+            wireProtocol: 'anthropic-messages',
+            models: [{ id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'anthropic-provider-key');
+    host.setCodexProxyAuthInjection('env-key');
+    host.registerReviewerRouteContext(
+      'session-anthropic-review',
+      'thread-anthropic-parent',
+      'claude-sonnet-4-6',
+    );
+    setSessionProvider('session-anthropic-review', 'guardian-anthropic-provider');
+
+    const rawGuardianBody = {
+      model: 'codex-auto-review',
+      tools: [
+        { type: 'function', name: 'shell' },
+        { type: 'web_search' },
+        { type: 'x_search' },
+      ],
+      input: [{ role: 'user', content: 'review this action' }],
+    };
+    const ctx = {
+      reqId: 1,
+      method: 'POST',
+      url: '/responses',
+      headers: {
+        'thread-id': 'guardian-child-anthropic',
+        'x-openai-subagent': 'guardian',
+        'x-codex-parent-thread-id': 'thread-anthropic-parent',
+      },
+    };
+    const decision = await Promise.resolve(
+      host.createModelRoutingTransform()(rawGuardianBody, ctx),
+    );
+    expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+    if (!decision?.localHandler) throw new Error('expected Anthropic bridge local handler');
+
+    const res = {} as never;
+    await decision.localHandler({
+      rawBody: Buffer.from(JSON.stringify(rawGuardianBody)),
+      parsedBody: rawGuardianBody,
+      ctx,
+      res,
+    });
+    const bridge = mockState.createResponsesAnthropicHandler.mock.results.at(-1)?.value as
+      | { handle: ReturnType<typeof vi.fn> }
+      | undefined;
+    expect(bridge?.handle).toHaveBeenCalledWith({
+      parsedBody: {
+        ...rawGuardianBody,
+        model: 'claude-sonnet-4-6',
+        tools: [{ type: 'function', name: 'shell' }],
+      },
+      ctx,
+      res,
+    });
+
+    clearSessionProvider('session-anthropic-review');
+    setCustomProviderKeyReader(() => null);
+    setCustomProviders([]);
+  });
+
   it('restores native web_search for Gateway GPT-5.6 when Codex omitted the declaration', async () => {
     const host = await freshCodexProxyHost();
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');

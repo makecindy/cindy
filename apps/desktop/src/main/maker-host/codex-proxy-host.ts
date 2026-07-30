@@ -665,6 +665,7 @@ function createAnthropicBridgeDecision(
   route: Awaited<ReturnType<typeof resolveSessionRoute>>,
   instructions: string | undefined,
   wireModel: string,
+  requestModelOverride?: string,
 ): RoutingDecision | null {
   if (!route || route.routing.wireProtocol !== 'anthropic-messages') return null;
   const isXdGatewayBridge =
@@ -796,6 +797,7 @@ function createAnthropicBridgeDecision(
         rawBody,
         parsedBody,
         instructions,
+        requestModelOverride,
         bridge: 'anthropic',
         providerId,
         upstreamBase,
@@ -1909,6 +1911,7 @@ export function createModelRoutingTransform(
             localRoute,
             threadId ? registry.get(threadId) : undefined,
             model,
+            model !== requestModel ? model : undefined,
           ));
       }
       // model 传给 scope 门(空串 = 控制面 GET,不受范围限制);声明了 modelPrefixes 的
