@@ -82,6 +82,8 @@ const DEFAULT_EXPIRED_CARD_NOTICE = '卡片已过期';
 
 /** 非 owner 显式召唤(私聊/群 @/reply)的礼貌回应 — per-user 冷却防刷屏。 */
 const STRANGER_NOTICE_COOLDOWN_MS = 60_000;
+/** DM 定稿的 message_effect_id(官方公开的标准特效 id, 👍; 仅私聊生效)。 */
+const DM_DONE_EFFECT_ID = '5107584321108051014';
 const DEFAULT_STRANGER_NOTICE =
   '👋 我是一位主人的个人 Cindy 助理，只响应主人本人的指令~\nI am a personal Cindy assistant and only respond to my owner.';
 
@@ -132,6 +134,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private draftIdCounter = 0;
   /** sendMessageDraft 能力性失败后的永久 latch(本实例生命周期内)。 */
   private draftStreamingDisabled = false;
+  /** sendRichMessage 方法不可用(404)后的永久 latch(本实例生命周期内)。 */
+  private richSendDisabled = false;
   private readonly mediaDir: string;
   /** 相册聚合缓冲 — key `${chatId}:${mediaGroupId}`。 */
   private readonly pendingAlbums = new Map<
@@ -377,6 +381,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         extractImageUrls: (markdown) => markdownToTelegramHtml(markdown).imageUrls,
         ...(useDraft
           ? {
+              sendFinal: (markdown: string) => this.sendRichFinal(userId, markdown),
               sendDraft: async (plainText: string) => {
                 try {
                   await this.requireApi().call('sendMessageDraft', {
@@ -441,6 +446,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         chat_id: chatId,
         message_id: Number(nativeId),
         reaction: [{ type: 'emoji', emoji }],
+        // 终态表情放大动画; 过程 ack(👀)保持安静。
+        ...(emoji === '👍' || emoji === '👎' ? { is_big: true } : {}),
       });
       return emoji;
     } catch {
@@ -804,6 +811,37 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         return api.call<T>(method, params);
       }
       throw err;
+    }
+  }
+
+  /**
+   * Rich 定稿(Bot API 10.1 sendRichMessage, markdown 直投): 表格/标题/代码块/
+   * LaTeX 原生渲染, 32768 上限一条到底不分段。仅 DM 定稿路径尝试;
+   *   - 404 = 方法不可用(旧 Bot API server) → 实例级永久 latch;
+   *   - 400 = 本条内容 rich 解析不过 → 只本条回落, rich 保持可用;
+   *   - 其它错误(网络/限流)回落经典路径, 不 latch。
+   * DM 定稿顺带 message_effect_id(👍 特效, 仅私聊生效)。
+   */
+  private async sendRichFinal(userId: string, markdown: string): Promise<string | null> {
+    if (this.richSendDisabled || !markdown.trim()) return null;
+    const api = this.api;
+    if (!api) return null;
+    try {
+      const target = this.targetOf(userId);
+      const replyParams = this.consumeReplyParams(userId);
+      const sent = await this.callSend<TgMessage>('sendRichMessage', {
+        ...target,
+        ...replyParams,
+        rich_message: { markdown },
+        message_effect_id: DM_DONE_EFFECT_ID,
+      });
+      this.recordOwnEcho(userId, markdown, sent);
+      return encodeMessageId(String(sent.chat.id), String(sent.message_id));
+    } catch (err) {
+      if (err instanceof TelegramApiError && err.errorCode === 404) {
+        this.richSendDisabled = true;
+      }
+      return null;
     }
   }
 

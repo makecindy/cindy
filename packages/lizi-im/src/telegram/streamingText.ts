@@ -46,6 +46,12 @@ export interface TelegramStreamingDeps {
    * 任何一次 draft 调用失败都永久 latch 回 send+edit 经典路径(本 handle 内)。
    */
   sendDraft?: (plainText: string) => Promise<void>;
+  /**
+   * Rich 定稿(sendRichMessage): 整段 markdown 一条到底(32768 上限), 表格/
+   * 标题/LaTeX 原生渲染。返回 null = 本条不可用(方法缺失/内容解析不过/
+   * 网络失败), 调用方回落 chunk+send 经典定稿。仅 draft 模式消费。
+   */
+  sendFinal?: (markdown: string) => Promise<string | null>;
 }
 
 export function startTelegramStreaming(
@@ -266,6 +272,12 @@ class TelegramDraftStreamingHandle implements StreamingTextHandle {
     }
 
     const imageUrls = this.deps.extractImageUrls(finalText);
+    // 无受管图片时优先 rich 定稿(一条到底); 带图回落经典分段 + sendPhoto 旁路,
+    // 避免 rich markdown 里的受管 URL 变成死链。
+    if (this.deps.sendFinal && imageUrls.length === 0 && this.extraImageAbsPaths.length === 0) {
+      const richId = await this.deps.sendFinal(finalText);
+      if (richId) return;
+    }
     const chunks = this.deps.chunk(finalText);
     let anchorMessageId: string | null = null;
     for (const chunk of chunks) {

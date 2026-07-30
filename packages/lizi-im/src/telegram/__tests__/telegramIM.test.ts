@@ -82,7 +82,7 @@ function createFakeApi(opts: { getMeError?: Error } = {}): FakeApi {
           signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
         });
       }
-      if (method === 'sendMessage') {
+      if (method === 'sendMessage' || method === 'sendRichMessage') {
         sentSeq += 1;
         return {
           message_id: sentSeq,
@@ -496,9 +496,35 @@ describe('TelegramIM', () => {
     expect([...draftIds][0]).not.toBe(0);
 
     await handle.finalize('最终回答');
-    const sends = api.calls.filter((c) => c.method === 'sendMessage');
-    expect(sends.length).toBe(sendsBefore + 1);
+    // 定稿走 rich(markdown 直投 + 👍 特效), 不产生 sendMessage / edit
+    const rich = api.calls.filter((c) => c.method === 'sendRichMessage');
+    expect(rich.length).toBe(1);
+    expect((rich[0].params.rich_message as { markdown?: string }).markdown).toBe('最终回答');
+    expect(rich[0].params.message_effect_id).toBeTruthy();
+    expect(api.calls.filter((c) => c.method === 'sendMessage').length).toBe(sendsBefore);
     expect(api.calls.some((c) => c.method === 'editMessageText')).toBe(false);
+  });
+
+  it('rich 定稿 404(方法不可用)实例级 latch, 回落经典分段且后续不再尝试', async () => {
+    await connect();
+    const originalCall = api.call.bind(api);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'sendRichMessage') {
+        api.calls.push({ method, params: params ?? {} });
+        throw new TelegramApiError('sendRichMessage', 404, 'Not Found');
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    const handle = await im.startStreamingText(OWNER_ID);
+    await handle.finalize('回答一');
+    // rich 试了一次 → 404 latch → 回落 sendMessage
+    expect(api.calls.filter((c) => c.method === 'sendRichMessage').length).toBe(1);
+    expect(api.calls.some((c) => c.method === 'sendMessage')).toBe(true);
+
+    const handle2 = await im.startStreamingText(OWNER_ID);
+    await handle2.finalize('回答二');
+    expect(api.calls.filter((c) => c.method === 'sendRichMessage').length).toBe(1);
   });
 
   it('群 lane 流式仍走 send+edit 经典路径, 不用 draft', async () => {
