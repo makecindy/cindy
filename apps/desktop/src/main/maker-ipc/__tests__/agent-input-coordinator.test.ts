@@ -5983,6 +5983,9 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
   it('autoRetryLastError 在有产出时补发带 autoResume 的续跑指令', async () => {
     const h = createHarness();
     const sid = 'auto-retry-with-progress';
+    // 生产上定时器只在 host 接管成立后才排期,所以先建立接管态 —— autoRetryLastError
+    // 的 auto 守卫要求它仍然成立(用户接手时它会被清掉,见下面 superseded 那条)。
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
     h.setHasAssistantProgressAfter(async () => true);
     await failAfterDispatch(h, sid);
 
@@ -6017,6 +6020,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
   it('零产出时不自动补发,错误横幅与「继续」按钮留给用户', async () => {
     const h = createHarness();
     const sid = 'auto-retry-without-progress';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
     h.setHasAssistantProgressAfter(async () => false);
     await failAfterDispatch(h, sid);
 
@@ -6025,8 +6029,15 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     await flush();
 
     expect(h.sendToAgent, '不得克隆重发用户原文').toHaveBeenCalledTimes(1);
+    // 接管成立时横幅是被压住的,所以这一刻 error 仍为 null:把它还给用户是 host 的动作
+    // (finalizeSuppressedAutoResumeError → abandonAutoResume),outcome='no-progress'
+    // 正是那个信号。这里连着验完整条链,免得只测一半。
+    expect(latestProjection(h.projections).error).toBeNull();
+    h.coordinator.abandonAutoResume(sid, truncationMessage);
+    await flush();
     const projection = latestProjection(h.projections);
     expect(projection.error).toBe(truncationMessage);
+    expect(projection.autoResumePending ?? null).toBeNull();
     expect(projection.recovery?.kind).toBe('active-turn');
   });
 
@@ -6206,6 +6217,61 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(projection.autoResumePending ?? null).toBeNull();
     expect(projection.error, '不接管就得把横幅还给用户').toBe(truncationMessage);
     expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid);
+  });
+
+  it('延后结算:候选窗口里用户自己发了消息 → 不接管、不消耗额度,回落成常规错误', async () => {
+    // 用户的 enqueue 发生在接管决策**之前**,清接管态清不到这条(它还没接管)。不作废
+    // 的话延后结算会再接管一次,把一条隐藏续跑指令插到用户那条消息前面(greptile P1)。
+    const h = createHarness();
+    const sid = 'deferred-superseded-by-user';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    let releasePersist: () => void = () => {};
+    mocks.createMessage.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        releasePersist = resolve;
+      });
+      return {};
+    });
+
+    h.coordinator.enqueue(sid, makeItem('q-first', 'original long task'));
+    await flush();
+    h.coordinator.onTurnEvent(sid, 'error', truncationMessage, truncationSignals);
+    await flush();
+    // 用户在这一小段窗口里自己发了新消息。
+    h.coordinator.enqueue(sid, makeItem('q-user', '换个思路重来'));
+    await flush();
+
+    releasePersist();
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(projection.autoResumePending ?? null, '用户已接手 → 不该再显示重连').toBeNull();
+    expect(projection.error, '回落成常规错误呈现,让用户自己决定要不要续跑').toBe(truncationMessage);
+    expect(h.onResumableTurnError, '连问都不该问(不消耗额度)').not.toHaveBeenCalled();
+    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid);
+  });
+
+  it('退避窗口里用户自己发了消息 → autoRetryLastError 判 superseded(不抢在他前面代发)', async () => {
+    // recovery 不会被 enqueue 清掉(队列的 drain 恰恰被 recovery 挡着),所以只看 recovery
+    // 会让定时器到点仍然代发一条隐藏续跑指令,插在用户消息前面且完全不可见(greptile P1)。
+    const h = createHarness();
+    const sid = 'auto-retry-superseded-by-enqueue';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    h.setHasAssistantProgressAfter(async () => true);
+    await failAfterDispatch(h, sid);
+    expect(latestProjection(h.projections).autoResumePending).toEqual(TAKEOVER_INFO);
+
+    h.coordinator.enqueue(sid, makeItem('q-user', '先看看这个'));
+    await flush();
+    expect(h.coordinator.isAutoResumePending(sid), 'enqueue 同步撤掉接管态').toBe(false);
+
+    const sendCallsBefore = h.sendToAgent.mock.calls.length;
+    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe('superseded');
+    await flush();
+    expect(
+      h.sendToAgent.mock.calls.length,
+      '不许在用户消息之前插一条自动续跑',
+    ).toBe(sendCallsBefore);
   });
 
   it('延后结算:非候选错误照旧立刻呈现(确定性失败不受本机制影响)', async () => {

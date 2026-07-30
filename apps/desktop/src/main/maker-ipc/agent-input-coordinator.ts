@@ -319,6 +319,12 @@ type ActiveTurnTerminalEvent =
        * 与 error 行落库都先按住，等 `settlePendingTerminalEventAfterPersist` 做出真正决策。
        */
       resumableCandidate?: boolean;
+      /**
+       * 决策还没做出时用户已经自己接手（发了新消息 / 插话）→ 结算时不再接管，回落成常规
+       * 错误呈现。缺了它，用户接手之后延后结算还会再接管一次，把一条隐藏续跑指令插到他
+       * 那条消息前面（greptile P1）。
+       */
+      supersededByUser?: boolean;
     };
 
 type AgentInputSendFailure = Extract<AgentInputSendResult, { accepted: false } | { dispatched: false }>;
@@ -480,6 +486,18 @@ function isCredentialSwitchBusySendFailure(
   result: AgentInputSendFailure,
 ): result is Extract<AgentInputSendResult, { kind: 'host-send' }> {
   return result.kind === 'host-send' && result.code === 'CREDENTIAL_SWITCH_BUSY';
+}
+
+/**
+ * 用户自己接手了（发新消息 / 插话）→ 把还没做出接管决策的那条中断标成作废。
+ *
+ * 只对「决策推迟」那条时序有意义（已决策的接管由 `state.autoResumePending = null` 撤销）。
+ * 非候选或没有暂存事件时是 no-op。
+ */
+function markPendingTerminalSupersededByUser(active: ActiveTurn | null): void {
+  const pending = active?.pendingTerminalEvent;
+  if (pending?.type !== 'error' || pending.resumableCandidate !== true) return;
+  pending.supersededByUser = true;
 }
 
 function recordPendingTerminalEvent(active: ActiveTurn, event: ActiveTurnTerminalEvent): void {
@@ -882,6 +900,11 @@ export class AgentInputCoordinator {
     // 有新消息入队(用户自己接手,或自愈的续跑指令本身)→ 撤掉「重新连接中」提示:
     // 它的语义是"退避窗口内什么都没发生",队列一动就不再成立。
     state.autoResumePending = null;
+    // 还有一种接管**尚未做出决策**的中断(error 早于用户气泡落库完成,见
+    // isAutoResumeDeferred):它的接管发生在本次 enqueue **之后**,清接管态清不到它。
+    // 不就地作废的话,用户已经自己接手了,延后结算却还会再接管一次、再补发一条旧 turn
+    // 的续跑指令插到他前面(greptile P1)。
+    markPendingTerminalSupersededByUser(state.activeTurn);
     // 崩溃恢复暂停队列的死锁解除(2026-07-14):恢复暂停只防"重启后自动替用户
     // 发送",用户显式输入(composer 发送 / 中断横幅「继续任务」,均经 INPUT_ENQUEUE
     // 携带本 flag)即视为放行——否则「继续任务」只是往暂停队列再塞一条,永远
@@ -1462,6 +1485,16 @@ export class AgentInputCoordinator {
     const state = this.getState(sessionId);
     const recovery = state.recovery;
     if (!recovery) return { projection: this.getProjection(sessionId), outcome: 'superseded' };
+    // auto 路径的第二道守卫:接管态必须**仍然**成立。
+    //
+    // 只看 recovery 不够 —— 用户在退避窗口里自己发了消息时 `enqueue` 清的是接管态,
+    // 而 recovery 会一直留着(队列的 drain 恰恰被 recovery 自己挡住,见 getDrainableHead)。
+    // 于是定时器到点仍能拿到 recovery,把一条隐藏的续跑指令插到用户那条消息**前面**,
+    // 而「重新连接中」提示早就撤了,用户完全看不到这次代发(greptile P1)。
+    // 接管态是唯一与用户所见一致的判据:它在 enqueue / clearError 时同步清除。
+    if (opts?.auto && !state.autoResumePending) {
+      return { projection: this.getProjection(sessionId), outcome: 'superseded' };
+    }
     // active-turn recovery 的续跑判定:失败 turn 若已有 assistant 侧产出,重发
     // 原文等于让模型"从头再来"(原文可能是很久之前的初始任务指令),改发规范化
     // 续跑指令;零产出(派发即失败 / 首个 API 调用就挂)才维持克隆重发。
@@ -3151,8 +3184,10 @@ export class AgentInputCoordinator {
       // 与 onTurnEvent 的 persisted 分支对称:两条留 recovery 的 error 路径都要给 host
       // 接管自愈的机会(含"接管时不设 error"这一条),否则「error 早于持久化完成」的时序
       // 下自愈会静默失效、或者先闪一帧红横幅。
+      // 候选窗口里用户已经自己接手 → **不问接管**(连额度都不消耗),回落成常规错误呈现:
+      // 横幅 + 「继续任务」交回用户,由他决定要不要续跑(greptile P1)。
       const deferredTakeover =
-        outcome === 'kept'
+        outcome === 'kept' && terminalEvent.supersededByUser !== true
           ? this.notifyResumableTurnError(sessionId, terminalEvent.message, terminalEvent.signals)
           : null;
       if (deferredTakeover) {
