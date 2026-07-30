@@ -238,6 +238,23 @@ describe('applyInputProjection 自愈进行中提示', () => {
     expect(snapshot.error).toBeNull();
   });
 
+  it('进度更新时同一张卡的 systemCardData 必须跟着变(1/5 → 2/5)', () => {
+    inputProjectionCb!(projection({ autoResumePending: { ...PENDING_INFO, attempt: 1 } }));
+    const first = makerChatStore
+      .getSnapshot(SID)
+      .messages.find((m) => m.clientId === PENDING_CARD_ID);
+    expect((first?.systemCardData as { attempt?: number } | undefined)?.attempt).toBe(1);
+
+    inputProjectionCb!(projection({ autoResumePending: { ...PENDING_INFO, attempt: 2 } }));
+    const rows = makerChatStore.getSnapshot(SID).messages;
+    expect(rows.filter((m) => m.clientId === PENDING_CARD_ID)).toHaveLength(1);
+    const second = rows.find((m) => m.clientId === PENDING_CARD_ID);
+    expect(
+      (second?.systemCardData as { attempt?: number } | undefined)?.attempt,
+      '卡已存在时也要写回最新进度,否则永远停在第一次',
+    ).toBe(2);
+  });
+
   it('重复投递同一接管态不会插出第二张卡(固定 clientId 保证幂等)', () => {
     inputProjectionCb!(projection({ autoResumePending: PENDING_INFO }));
     inputProjectionCb!(projection({ autoResumePending: PENDING_INFO }));

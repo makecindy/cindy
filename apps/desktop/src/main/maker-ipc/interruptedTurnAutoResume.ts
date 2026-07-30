@@ -119,6 +119,27 @@ export function isAutoResumeUserMessage(agentMeta: unknown): boolean {
 }
 
 /**
+ * 这个 agent 事件算不算「模型有实质产出」——即连续失败计数该不该归零、上一次重连该不该
+ * 判成成功的唯一证据。
+ *
+ * 只认两种：非空 assistant 文本、工具调用。**空文本必须排除**：translator 在若干路径上
+ * 会推 `text: ''`（流式兜底、空 assistant 消息），把它算成产出的话，一个什么都没产出的
+ * 重连会既绕过连续失败上限、又在历史里错误显示「已重新连接」（greptile / codex 双报 P1）。
+ * thinking / status / 我们自己补发的续跑指令同理都不算。
+ *
+ * 抽成纯函数是为了能被单测锁住 —— 它原本长在 register 的巨型 wiring 里，测不到。
+ */
+export function isSubstantiveProgressEvent(event: {
+  type?: string;
+  data?: unknown;
+}): boolean {
+  if (event.type === 'tool_use') return true;
+  if (event.type !== 'text') return false;
+  const text = (event.data as { text?: unknown } | null | undefined)?.text;
+  return typeof text === 'string' && text.length > 0;
+}
+
+/**
  * 一次中断事件里最多连续自动重连几次。
  *
  * 额度模型是**连续失败计数**，不是「每条人话买 N 次」：

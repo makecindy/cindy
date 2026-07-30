@@ -95,6 +95,12 @@ export interface AgentInputSendOpts {
   };
 }
 
+/**
+ * 自动续跑的结果三态。`superseded` 与 `no-progress` 都表示"没补发"，但对用户的含义
+ * 相反：前者是他自己接手了（别打扰），后者是一次没人接手的真失败（必须把横幅还给他）。
+ */
+export type AutoRetryOutcome = 'resumed' | 'superseded' | 'no-progress';
+
 export type AgentInputHostSendFailureCode = HostSendFailureCode;
 
 export type AgentInputSendResult =
@@ -1400,13 +1406,18 @@ export class AgentInputCoordinator {
    * main 守卫自动替用户点一次「继续」（turn 被上游打断；判据与额度见
    * maker-ipc/interruptedTurnAutoResume.ts）。
    *
-   * @returns 是否真的补发了续跑指令。**调用方必须消费它**：守卫在决策时已经置了
-   * pendingResume，没补发就得回滚（`noteResumeSendFailed`），否则该会话后续的中断会
-   * 一直被判成「上一次续跑还在路上」而跳过，自愈静默失效。
+   * @returns 三态，**调用方必须区分**（守卫在决策时已置 pendingResume，非 `resumed`
+   * 一律要回滚 `noteResumeSendFailed`，否则该会话后续中断会一直被判成「上一次还在
+   * 路上」）：
+   *  - `resumed`：已补发续跑指令。
+   *  - `superseded`：目标已消失（用户自己接手 / 清了会话）——他已经在处理，别再弹横幅。
+   *  - `no-progress`：失败 turn 零产出，按设计不自动续跑 —— 这是一次**没被自愈接手的
+   *    真失败**，调用方必须把错误回落成常规呈现（横幅 + 「继续任务」），否则它被静默
+   *    吞掉、用户什么都看不到（copilot review）。
    */
-  async autoRetryLastError(sessionId: string): Promise<boolean> {
-    const { resumed } = await this.performRetryLastError(sessionId, { auto: true });
-    return resumed;
+  async autoRetryLastError(sessionId: string): Promise<AutoRetryOutcome> {
+    const { outcome } = await this.performRetryLastError(sessionId, { auto: true });
+    return outcome;
   }
 
   /**
@@ -1423,10 +1434,10 @@ export class AgentInputCoordinator {
   private async performRetryLastError(
     sessionId: string,
     opts?: { auto?: boolean },
-  ): Promise<{ projection: AgentInputProjection; resumed: boolean }> {
+  ): Promise<{ projection: AgentInputProjection; outcome: AutoRetryOutcome }> {
     const state = this.getState(sessionId);
     const recovery = state.recovery;
-    if (!recovery) return { projection: this.getProjection(sessionId), resumed: false };
+    if (!recovery) return { projection: this.getProjection(sessionId), outcome: 'superseded' };
     // active-turn recovery 的续跑判定:失败 turn 若已有 assistant 侧产出,重发
     // 原文等于让模型"从头再来"(原文可能是很久之前的初始任务指令),改发规范化
     // 续跑指令;零产出(派发即失败 / 首个 API 调用就挂)才维持克隆重发。
@@ -1444,7 +1455,7 @@ export class AgentInputCoordinator {
       // await 期间 turn 事件可能已推进状态(clearError / 新 error / 并发 retry):
       // recovery 不再是同一对象时放弃本次意图,以当前 projection 为准。
       if (this.getState(sessionId).recovery !== recovery) {
-        return { projection: this.getProjection(sessionId), resumed: false };
+        return { projection: this.getProjection(sessionId), outcome: 'superseded' };
       }
       if (hasProgress) {
         const clientId = crypto.randomUUID();
@@ -1484,7 +1495,7 @@ export class AgentInputCoordinator {
     // 不动 state.error / recovery：横幅与「继续」按钮原样留给用户。
     if (opts?.auto && !continueItem) {
       log.debug('auto retry skipped — no assistant progress to continue from', { sessionId });
-      return { projection: this.getProjection(sessionId), resumed: false };
+      return { projection: this.getProjection(sessionId), outcome: 'no-progress' };
     }
     state.error = null;
     state.stickyError = null;
@@ -1523,7 +1534,7 @@ export class AgentInputCoordinator {
     this.emit(sessionId);
     this.scheduleDrain(sessionId, 'retry');
     this.scheduleExternalTurnRetryIfNeeded(sessionId, state, 'retry');
-    return { projection: this.getProjection(sessionId), resumed: true };
+    return { projection: this.getProjection(sessionId), outcome: 'resumed' };
   }
 
   clearError(sessionId: string): AgentInputProjection {
@@ -3042,6 +3053,11 @@ export class AgentInputCoordinator {
           : null;
       if (deferredTakeover) {
         state.autoResumePending = deferredTakeover;
+        // **必须撤掉 error**:本路径的前置分支(active.persisting)在暂存 terminal event
+        // 时已经设过并 emit 过 state.error,接管后若不清,renderer 会先闪一帧红横幅、
+        // 随后收到同时带 error 与 autoResumePending 的投影 —— 违反「接管态为真时
+        // error 必为 null」这条不变量(greptile P1)。
+        state.error = null;
       } else {
         state.error = terminalEvent.message ?? state.error;
       }

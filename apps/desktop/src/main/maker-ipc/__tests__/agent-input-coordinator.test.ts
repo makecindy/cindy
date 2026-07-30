@@ -5968,7 +5968,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     h.setHasAssistantProgressAfter(async () => true);
     await failAfterDispatch(h, sid);
 
-    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe(true);
+    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe('resumed');
     await flush();
 
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
@@ -6002,7 +6002,8 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     h.setHasAssistantProgressAfter(async () => false);
     await failAfterDispatch(h, sid);
 
-    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe(false);
+    // no-progress 而不是 superseded:这是一次没人接手的真失败,host 据此把横幅还给用户。
+    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe('no-progress');
     await flush();
 
     expect(h.sendToAgent, '不得克隆重发用户原文').toHaveBeenCalledTimes(1);
@@ -6043,7 +6044,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     await failAfterDispatch(h, sid);
     expect(latestProjection(h.projections).autoResumePending).toEqual(TAKEOVER_INFO);
 
-    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe(true);
+    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe('resumed');
     await flush();
 
     const projection = latestProjection(h.projections);
@@ -6117,8 +6118,38 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     h.coordinator.clearError(sid);
     await flush();
 
-    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe(false);
+    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe('superseded');
     await flush();
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('延后结算路径接管时清掉已发布的 error(接管态与红横幅互斥)', async () => {
+    // 前置分支(active.persisting)在暂存 terminal event 时已经 emit 过 state.error;
+    // 落库完成后接管若不清它,renderer 会先闪一帧红横幅、再收到同时带 error 与
+    // autoResumePending 的投影(greptile P1)。
+    const h = createHarness();
+    const sid = 'deferred-takeover-clears-error';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    let releasePersist: () => void = () => {};
+    mocks.createMessage.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        releasePersist = resolve;
+      });
+      return {};
+    });
+
+    h.coordinator.enqueue(sid, makeItem('q-first', 'original long task'));
+    await flush();
+    h.coordinator.onTurnEvent(sid, 'error', truncationMessage, truncationSignals);
+    await flush();
+    // 持久化未完成时错误照常呈现(此时还不知道能不能自愈)。
+    expect(latestProjection(h.projections).error).toBe(truncationMessage);
+
+    releasePersist();
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(projection.autoResumePending).toEqual(TAKEOVER_INFO);
+    expect(projection.error, '接管后必须撤掉红横幅').toBeNull();
   });
 });

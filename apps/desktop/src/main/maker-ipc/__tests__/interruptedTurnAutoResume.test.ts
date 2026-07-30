@@ -6,6 +6,7 @@ import {
   interruptedTurnResumeDelayMs,
   isAutoResumeUserMessage,
   isInterruptedTurnError,
+  isSubstantiveProgressEvent,
 } from '../interruptedTurnAutoResume.js';
 
 // 判定单测的核心是**白名单收紧**:自动重试一个确定性失败(认证过期、协议错)会反复
@@ -144,6 +145,31 @@ describe('isAutoResumeUserMessage', () => {
     expect(
       isAutoResumeUserMessage({ content: '[UI_ACTION_TRIGGER] continue the task' }),
     ).toBe(false);
+  });
+});
+
+// 「有产出」是连续失败计数归零、上一次重连判成成功的唯一证据。空文本必须排除:
+// 否则一个什么都没产出的重连会绕过上限,并在历史里错误显示「已重新连接」(P1 ×2)。
+describe('isSubstantiveProgressEvent', () => {
+  it('counts tool_use and non-empty text only', () => {
+    expect(isSubstantiveProgressEvent({ type: 'tool_use', data: {} })).toBe(true);
+    expect(isSubstantiveProgressEvent({ type: 'text', data: { text: 'x' } })).toBe(true);
+  });
+
+  it('rejects empty text (translator 在若干路径上会推 text: "")', () => {
+    expect(isSubstantiveProgressEvent({ type: 'text', data: { text: '' } })).toBe(false);
+    expect(isSubstantiveProgressEvent({ type: 'text', data: {} })).toBe(false);
+    expect(isSubstantiveProgressEvent({ type: 'text', data: null })).toBe(false);
+    expect(isSubstantiveProgressEvent({ type: 'text', data: { text: 123 } })).toBe(false);
+  });
+
+  it('rejects thinking / status / done and other event types', () => {
+    for (const type of ['thinking', 'status', 'done', 'error', 'tool_result', undefined]) {
+      expect(
+        isSubstantiveProgressEvent({ ...(type ? { type } : {}), data: { text: 'x' } }),
+        `${String(type)} 不算产出`,
+      ).toBe(false);
+    }
   });
 });
 

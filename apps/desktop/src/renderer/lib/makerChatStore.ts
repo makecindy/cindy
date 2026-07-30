@@ -1499,6 +1499,18 @@ function notify(sessionId: string): void {
  * 「正在自动继续」ephemeral 卡的固定 clientId。每个会话一份 state，所以固定串足够；
  * 用固定值而不是随机 id，是为了让插入幂等（同一接管窗口内 projection 会 emit 多次）。
  */
+/** 浅比较两份 systemCardData（只有原始值字段），用来避免无变化时替换消息引用。 */
+function shallowEqualRecord(
+  a: Record<string, unknown> | undefined,
+  b: Record<string, unknown>,
+): boolean {
+  if (!a) return false;
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((key) => a[key] === b[key]);
+}
+
 const AUTO_RESUME_PENDING_CLIENT_ID = '__auto_resume_pending__';
 
 function applyInputProjection(projection: AgentInputProjection): void {
@@ -1541,9 +1553,21 @@ function applyInputProjection(projection: AgentInputProjection): void {
     const hasPendingCard = dedupedMessages.some(
       (m) => m.clientId === AUTO_RESUME_PENDING_CLIENT_ID,
     );
+    const pendingCardData = projection.autoResumePending
+      ? ({ ...projection.autoResumePending } as Record<string, unknown>)
+      : null;
     const withPendingCard = autoResumePending
       ? hasPendingCard
-        ? dedupedMessages
+        // 卡已在:必须把最新展示信息写回去 —— 同一次中断的进度会连续更新
+        // (1/5 → 2/5 …),原样保留旧卡的话进度永远停在第一次(copilot review)。
+        // 只在内容真的变了时才换引用,避免每次 projection 都触发无谓重渲染。
+        ? dedupedMessages.map((m) =>
+            m.clientId === AUTO_RESUME_PENDING_CLIENT_ID &&
+            pendingCardData &&
+            !shallowEqualRecord(m.systemCardData, pendingCardData)
+              ? { ...m, systemCardData: pendingCardData }
+              : m,
+          )
         : [
             ...dedupedMessages,
             {
@@ -1552,7 +1576,7 @@ function applyInputProjection(projection: AgentInputProjection): void {
               content: '',
               isStreaming: false,
               systemCardType: 'auto-resume-pending' as const,
-              systemCardData: { ...projection.autoResumePending },
+              ...(pendingCardData ? { systemCardData: pendingCardData } : {}),
               createdAt: new Date().toISOString(),
             },
           ]
@@ -9078,8 +9102,11 @@ function collapseConsecutiveAutoResumeRows(messages: ChatMessage[]): ChatMessage
     if (cardType && AUTO_RESUME_CARD_TYPES.has(cardType)) {
       if (sawCardSinceContent) {
         if (!out) out = messages.slice();
-        const { systemCardType: _cardType, systemCardData: _cardData, ...rest } = message;
-        out[i] = rest as ChatMessage;
+        // 去掉卡型后就是普通合成指令行(渲染 null),仍留在流里参与时序判定。
+        const stripped: ChatMessage = { ...message };
+        delete stripped.systemCardType;
+        delete stripped.systemCardData;
+        out[i] = stripped;
         changed = true;
       } else {
         sawCardSinceContent = true;
