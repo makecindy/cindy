@@ -379,6 +379,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         uploadImages: (messageId, imageUrls) => this.uploadImages(messageId, imageUrls),
         chunk: chunkTelegramSource,
         extractImageUrls: (markdown) => markdownToTelegramHtml(markdown).imageUrls,
+        editFinal: (messageId, markdown) => this.richEditFinal(messageId, markdown),
         ...(useDraft
           ? {
               sendFinal: (markdown: string) => this.sendRichFinal(userId, markdown),
@@ -848,6 +849,31 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         this.richSendDisabled = true;
       }
       return null;
+    }
+  }
+
+  /**
+   * 经典路径 rich 原地定稿(editMessageText + rich_message, Bot API 10.1):
+   * 群与降级档 DM 的流式占位消息一步升级 rich 渲染。404 → 实例级 latch;
+   * 400(本条解析不过)只回落本条。
+   */
+  private async richEditFinal(messageId: string, markdown: string): Promise<boolean> {
+    if (this.richSendDisabled || !markdown.trim()) return false;
+    const api = this.api;
+    if (!api) return false;
+    try {
+      const { chatId, messageId: nativeId } = decodeMessageId(messageId);
+      await api.call('editMessageText', {
+        chat_id: chatId,
+        message_id: Number(nativeId),
+        rich_message: { markdown },
+      });
+      return true;
+    } catch (err) {
+      if (err instanceof TelegramApiError && err.errorCode === 404) {
+        this.richSendDisabled = true;
+      }
+      return false;
     }
   }
 

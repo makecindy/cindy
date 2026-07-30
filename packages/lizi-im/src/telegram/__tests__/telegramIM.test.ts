@@ -527,13 +527,21 @@ describe('TelegramIM', () => {
     expect(api.calls.filter((c) => c.method === 'sendRichMessage').length).toBe(1);
   });
 
-  it('群 lane 流式仍走 send+edit 经典路径, 不用 draft', async () => {
+  it('群 lane 流式仍走 send+edit 经典路径, 不用 draft; 定稿 rich 原地升级', async () => {
     await connect();
     const handle = await im.startStreamingText('g/-100200/r7');
     handle.replace('进行中');
     await handle.finalize('群里的最终回答');
     expect(api.calls.some((c) => c.method === 'sendMessageDraft')).toBe(false);
     expect(api.calls.some((c) => c.method === 'sendMessage')).toBe(true);
+    // 定稿是 editMessageText + rich_message(表格/LaTeX 原生渲染), 非 HTML edit
+    const richEdits = api.calls.filter(
+      (c) => c.method === 'editMessageText' && c.params.rich_message !== undefined,
+    );
+    expect(richEdits.length).toBe(1);
+    expect((richEdits[0].params.rich_message as { markdown?: string }).markdown).toBe(
+      '群里的最终回答',
+    );
   });
 
   it('draft 400 失败: 本 turn 落回经典路径, 本实例后续 turn 不再尝试 draft', async () => {

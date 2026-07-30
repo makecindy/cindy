@@ -52,6 +52,12 @@ export interface TelegramStreamingDeps {
    * 网络失败), 调用方回落 chunk+send 经典定稿。仅 draft 模式消费。
    */
   sendFinal?: (markdown: string) => Promise<string | null>;
+  /**
+   * 经典路径的 rich 原地定稿(editMessageText + rich_message): 把流式占位
+   * 消息一步升级成 rich 渲染(群与降级档 DM 共用)。返回 false = 本条不可用,
+   * 调用方回落 HTML edit 分段定稿。
+   */
+  editFinal?: (messageId: string, markdown: string) => Promise<boolean>;
 }
 
 export function startTelegramStreaming(
@@ -124,6 +130,17 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
     }
 
     const imageUrls = this.deps.extractImageUrls(finalText);
+    // 无受管图片时优先 rich 原地定稿(表格/标题/LaTeX 原生渲染, 32768 上限
+    // 免分段); 失败回落 HTML edit 分段。
+    if (
+      this.deps.editFinal &&
+      imageUrls.length === 0 &&
+      this.extraImageAbsPaths.length === 0 &&
+      finalText.trim().length > 0
+    ) {
+      const upgraded = await this.deps.editFinal(this.messageId, finalText);
+      if (upgraded) return;
+    }
     const chunks = this.deps.chunk(finalText);
     const firstChunk = chunks[0] ?? '';
     if (firstChunk.trim().length > 0) {
