@@ -204,6 +204,10 @@ describe('parseModelsListResponse contextWindow 提取(#386)', () => {
           // 0 < v < 1 会通过 v > 0 但 Math.floor 取整成 0——按取整后的值校验
           // 才不会漏这个区间(review P2)。
           { id: 'g', context_length: 0.5 },
+          // 超出安全整数范围的异常值同样要拒绝,否则落盘后 Main 的正数校验会
+          // 因超界拒绝整份供应商配置,内置 OAuth 发现分支则会把这个失真值当
+          // 真实窗口注入目录(review P2)。
+          { id: 'h', context_length: 1e20 },
         ],
       }),
     ).toEqual([
@@ -214,6 +218,7 @@ describe('parseModelsListResponse contextWindow 提取(#386)', () => {
       { id: 'd', name: 'd' },
       { id: 'e', name: 'e' },
       { id: 'g', name: 'g' },
+      { id: 'h', name: 'h' },
     ]);
   });
 

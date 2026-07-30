@@ -882,8 +882,11 @@ export function parseModelsListResponse(
       ? [rec.context_length, rec.context_window, rec.max_context_length, rec.max_input_tokens].find(
           // Math.floor(v) > 0 而非 v > 0:0 < v < 1(如 context_length: 0.5)会通过
           // v > 0 但取整成 contextWindow: 0——按取整后的值校验才不会漏这个区间
-          // (review P2)。
-          (v) => typeof v === 'number' && Number.isFinite(v) && Math.floor(v) > 0,
+          // (review P2)。Number.isSafeInteger(Math.floor(v)) 拒绝超出安全整数范围的
+          // 异常值(如 context_length: 1e20)——这类值会通过取整后为正的校验,但落盘后
+          // Main 的正数校验反而会因为超界而拒绝整份供应商配置,内置 OAuth 发现分支则会
+          // 把这个失真值当真实窗口注入目录(review P2)。
+          (v) => typeof v === 'number' && Number.isFinite(v) && Math.floor(v) > 0 && Number.isSafeInteger(Math.floor(v)),
         )
       : undefined;
     out.push({
