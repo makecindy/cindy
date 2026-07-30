@@ -1637,10 +1637,13 @@ function invalidateWindowsTrayMenu(): void {
 }
 
 function openWindowsTrayMenu(): void {
-  // 这条 debug 日志是长期诊断留的,不是临时排查: 上游那条弹不出的 bug 是静默失败
-  // (不抛错),所以日志里有没有这一行,是区分 "右键事件没到" 与 "事件到了但菜单没弹"
-  // 的唯一依据。再有用户报 "右键没反应" 时,先让他看这行。
-  windowsTrayLog.debug('tray right-click received, opening tray menu');
+  // 这条日志是长期诊断留的,不是临时排查: 上游那条弹不出的 bug 是静默失败(不抛错),
+  // 所以日志里有没有这一行,是区分 "右键事件没到" 与 "事件到了但菜单没弹" 的唯一依据。
+  // 再有用户报 "右键没反应" 时,先让他看这行。
+  // 用 info 而不是 debug: packaged 的默认级别就是 info (logger.ts 的 level 解析),
+  // debug 会被 shouldLog 过滤掉 —— 那样它恰好在唯一需要它的场景(用户手上的正式包)
+  // 里不会出现。频率上也不担心刷屏: 只有用户真的右键托盘图标才会走到这里。
+  windowsTrayLog.info('tray right-click received, opening tray menu');
   popUpWindowsTrayMenu<Menu>({
     tray: windowsTray,
     menu: windowsTrayMenu,
