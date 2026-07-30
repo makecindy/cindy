@@ -285,6 +285,11 @@ export interface ImRunAgentTurnArgs {
   attachments: IMAttachment[];
   /** thread = session 模型的会话维度键(slack);feishu 不传。 */
   scopeKey?: string;
+  /**
+   * 发给 agent 的正文覆盖(群上下文前缀拼装, 见 adapter.prepareAgentTurnText)。
+   * 缺省 = text。落库(persistUserMessage)与标题生成恒用 text(渠道原文)。
+   */
+  agentText?: string;
   outputCardMessageId?: string;
   outputCardPrefix?: string;
   onTurnComplete?: () => void;
@@ -681,7 +686,7 @@ export function createTurnRunner(
 
     const item: QueuedSend = {
       turn,
-      userMessage: buildImUserMessage(text, attachments, target.attached),
+      userMessage: buildImUserMessage(args.agentText ?? text, attachments, target.attached),
       rowId: row.id,
       text,
       attachments,
@@ -1617,6 +1622,12 @@ export function createTurnRunner(
   function composeStreamingView(turn: TurnState): string {
     const body = turn.outputCardPrefix ? turn.outputCardPrefix + turn.buffer : turn.buffer;
     if (turn.done) return body;
+    if (adapter.answerOnlyProgress?.(turn.userId)) {
+      // Telegram 私聊: 过程时间线会打断客户端的草稿动画渲染 → 中间态只发
+      // 正文;零产出的过载重试窗口保留 notice 单行(退避期间不能毫无反馈)。
+      if (body) return body;
+      return turn.activity.notice ?? '';
+    }
     const act = renderActivity(turn.activity, Date.now());
     if (!act) return body;
     return body ? `${act}\n\n${body}` : act;

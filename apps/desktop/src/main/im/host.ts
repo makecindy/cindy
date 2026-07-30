@@ -13,7 +13,13 @@
 import path from 'node:path';
 import { app, ipcMain, BrowserWindow, net, shell } from 'electron';
 
-import { createIM, createDiscordIM, createFeishuIM, type IMHost } from '@cindy/im';
+import {
+  createIM,
+  createDiscordIM,
+  createFeishuIM,
+  createTelegramIM,
+  type IMHost,
+} from '@cindy/im';
 import { TencentIlinkTransport } from '@cindy/wechat-ilink';
 
 import { createLogger } from '../logger';
@@ -27,6 +33,7 @@ import {
 import { pinBlob } from '../cindy-media/ledger';
 import { t } from '../i18n';
 import { discordUiText } from './discord/uiText';
+import { telegramUiText } from './telegram/uiText';
 import { imHostAccountScope } from './accountScopeBridge';
 import { ownerScopedImSecrets } from './ownerScopedStorage';
 import { captureImAccountGeneration, isImAccountGenerationCurrent } from './accountBoundary';
@@ -51,6 +58,7 @@ const host: IMHost = {
   paths: {
     feishuMediaDir: path.join(app.getPath('userData'), 'cc-agent', 'feishu-media'),
     discordMediaDir: path.join(app.getPath('userData'), 'cc-agent', 'discord-media'),
+    telegramMediaDir: path.join(app.getPath('userData'), 'cc-agent', 'telegram-media'),
   },
   // cindy-media 媒体总仓回调(规则 25):IM 入站图片按平台 token
   // 免重下、内容寻址去重、isCache=true 吃缓存回收策略;包侧只摸字节和字符串。
@@ -127,6 +135,10 @@ export const discordIm = createDiscordIM(host, {
   expiredCardNotice: discordUiText.expiredCardNotice,
   ownerNoticeText: (phase) => t(`settings.discordBot.ownerNotice.${phase}`),
 });
+export const telegramIm = createTelegramIM(host, {
+  resolveImageUrl: resolveManagedImageAbsPath,
+  expiredCardNotice: telegramUiText.expiredCardNotice,
+});
 export const wechatCompatibilityPolicy = new WechatCompatibilityPolicyService({
   ...WECHAT_COMPATIBILITY_POLICY_PRODUCTION_CONFIG,
   cachePath: () =>
@@ -170,4 +182,4 @@ wechatCompatibilityPolicy.subscribe((decision) => {
     log.warn('failed to apply personal WeChat compatibility policy');
   });
 });
-export const im = createIM([feishuIm, discordIm, wechatIm]);
+export const im = createIM([feishuIm, discordIm, wechatIm, telegramIm]);
