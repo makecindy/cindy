@@ -25,13 +25,27 @@ vi.mock('../maker-host/logger-adapter.js', () => ({
   },
 }));
 
+const osMock = vi.hoisted(() => ({
+  setPriority: vi.fn(),
+}));
+vi.mock('node:os', () => {
+  const constants = { priority: { PRIORITY_BELOW_NORMAL: 10, PRIORITY_LOW: 19, PRIORITY_NORMAL: 0 } };
+  return {
+    default: { setPriority: osMock.setPriority, constants },
+    setPriority: osMock.setPriority,
+    constants,
+  };
+});
+
 import { allUserDataDirNames } from '@cindy/maker-shared/brand-identity';
 
 import {
+  __testing,
   classifyAgentCommandLine,
   createAgentProcessPriorityWatcher,
   parsePosixAgentProcesses,
   type AgentProcessRow,
+  type ApplyPriorityResult,
 } from '../agent-process-priority';
 import type { AgentProcessPriority } from '../maker-host/agent-resource-settings-store';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
@@ -41,12 +55,15 @@ const fakeLog = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
 function makeWatcher(opts: {
   priority: () => AgentProcessPriority;
   rows: () => AgentProcessRow[];
-  applyResult?: (pid: number) => boolean;
+  applyResult?: (pid: number) => ApplyPriorityResult;
 }) {
   const scan = vi.fn(async () => opts.rows());
   const apply = vi.fn(
-    async (pid: number, _tier: AgentProcessPriority, _prev: AgentProcessPriority | undefined) =>
-      opts.applyResult ? opts.applyResult(pid) : true,
+    async (
+      pid: number,
+      _tier: AgentProcessPriority,
+      _prev: AgentProcessPriority | undefined,
+    ): Promise<ApplyPriorityResult> => (opts.applyResult ? opts.applyResult(pid) : 'applied'),
   );
   const watcher = createAgentProcessPriorityWatcher({
     readPriority: opts.priority,
@@ -129,7 +146,7 @@ describe('agent process priority watcher', () => {
     const { watcher, apply } = makeWatcher({
       priority: () => 'low',
       rows: () => rows,
-      applyResult: (pid) => pid !== 22, // 22 在 apply 时已退出
+      applyResult: (pid) => (pid === 22 ? 'process-gone' : 'applied'), // 22 在 apply 时已退出
     });
     await watcher.tickOnce();
     expect(apply).toHaveBeenCalledTimes(2);
@@ -147,9 +164,42 @@ describe('agent process priority watcher', () => {
     expect(apply).toHaveBeenLastCalledWith(11, 'low', undefined);
   });
 
+  it('records nice-stuck raises truthfully and does not retry them every tick', async () => {
+    // lowest → low 是 POSIX 升档:nice 卡在 19,只有钳制被调整
+    let tier: AgentProcessPriority = 'lowest';
+    const { watcher, apply } = makeWatcher({
+      priority: () => tier,
+      rows: () => [{ pid: 11, kind: 'claude' }],
+      applyResult: () => (tier === 'low' ? 'nice-raise-refused' : 'applied'),
+    });
+    await watcher.tickOnce();
+    expect(fakeLog.info).toHaveBeenCalledWith(
+      'agent process priority lowered',
+      expect.objectContaining({ pid: 11, tier: 'lowest' }),
+    );
+
+    tier = 'low';
+    fakeLog.info.mockClear();
+    await watcher.tickOnce();
+    // 不写"lowered"假成功日志,改记 warn 说明 nice 卡档
+    expect(fakeLog.info).not.toHaveBeenCalledWith(
+      'agent process priority lowered',
+      expect.anything(),
+    );
+    expect(fakeLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining('nice stuck'),
+      expect.objectContaining({ pid: 11, requestedTier: 'low', stuckAtTier: 'lowest' }),
+    );
+
+    // 已按目标档入账:下一 tick 不再空转重试
+    const applyCalls = apply.mock.calls.length;
+    await watcher.tickOnce();
+    expect(apply.mock.calls.length).toBe(applyCalls);
+  });
+
   it('survives a throwing scan without breaking later ticks', async () => {
     let shouldThrow = true;
-    const apply = vi.fn(async () => true);
+    const apply = vi.fn(async (): Promise<ApplyPriorityResult> => 'applied');
     const watcher = createAgentProcessPriorityWatcher({
       readPriority: () => 'low',
       scanAgentProcesses: async () => {
@@ -181,6 +231,43 @@ describe('agent process discovery', () => {
     expect(classifyAgentCommandLine(devClaudeCmd)).toBe('claude');
     expect(classifyAgentCommandLine(externalClaudeCmd)).toBeNull();
     expect(classifyAgentCommandLine('/usr/bin/node some-script.js')).toBeNull();
+  });
+
+  it('classifies packaged Linux layouts (legacy managed + agent-runtime fallback)', () => {
+    // Linux userData 在 ~/.config/<dir>/;linux-runtime-fallback 的 privateBinaryPath
+    // 布局是 <userData>/agent-runtime/<kind>/bin/<cmd>
+    expect(
+      classifyAgentCommandLine(`/home/u/.config/${userDataDir}/agent-runtime/claude-code/bin/claude`),
+    ).toBe('claude');
+    expect(
+      classifyAgentCommandLine(`/home/u/.config/${userDataDir}/agent-runtime/codex/bin/codex`),
+    ).toBe('codex');
+    expect(
+      classifyAgentCommandLine(`/home/u/.config/${userDataDir}/claude-code/2.1.219/claude`),
+    ).toBe('claude');
+    expect(
+      classifyAgentCommandLine(`/home/u/.config/${userDataDir}/codex/0.145.0/codex app-server`),
+    ).toBe('codex');
+    // 外部安装(不带 userData 目录)仍不认领
+    expect(classifyAgentCommandLine('/home/u/.local/bin/claude')).toBeNull();
+  });
+
+  it('maps setPriority errno to apply results (default implementation)', async () => {
+    const applyPriority = __testing.makeDefaultApplyPriority(fakeLog);
+    const errWith = (code: string) => Object.assign(new Error(code), { code });
+
+    osMock.setPriority.mockImplementationOnce(() => {
+      throw errWith('ESRCH');
+    });
+    await expect(applyPriority(11, 'low', undefined)).resolves.toBe('process-gone');
+
+    osMock.setPriority.mockImplementationOnce(() => {
+      throw errWith('EPERM');
+    });
+    await expect(applyPriority(11, 'low', undefined)).resolves.toBe('nice-raise-refused');
+
+    osMock.setPriority.mockImplementationOnce(() => {});
+    await expect(applyPriority(11, 'low', undefined)).resolves.toBe('applied');
   });
 
   it('parses ps output and keeps only direct children of this process', () => {
