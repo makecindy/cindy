@@ -270,15 +270,7 @@ export class AnthropicSseTranslator {
   finish(): unknown[] {
     if (this.terminal) return [];
     if (this.stopReason || this.terminalMarker) return this.complete();
-    const hasOutput = this.outputItems.size > 0 || [...this.blocks.values()].some((block) => (
-      block.text.length > 0 || block.args.length > 0 || block.callId.length > 0
-    ));
-    if (!hasOutput) return this.fail('upstream stream ended before message_stop (stream_truncated)');
-    const out = this.closeBlocks('incomplete');
-    this.terminal = true;
-    const response = this.responseObject('incomplete', { incomplete_details: { reason: 'max_output_tokens' } });
-    out.push({ type: 'response.incomplete', response });
-    return out;
+    return this.fail('upstream stream ended before message_stop (stream_truncated)');
   }
 
   fail(message: string): unknown[] {

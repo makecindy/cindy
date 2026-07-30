@@ -298,7 +298,7 @@ describe('Anthropic SSE → Responses translation', () => {
     ]);
   });
 
-  it('reports a cleanly truncated stream as incomplete or failed, never completed', () => {
+  it('reports a stream that ends without a stop reason as failed while preserving partial output', () => {
     const t = translator();
     const events = [
       ...t.push({ type: 'message_start', message: { id: 'msg_partial', model: 'claude' } }),
@@ -306,13 +306,38 @@ describe('Anthropic SSE → Responses translation', () => {
       ...t.push({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'partial' } }),
       ...t.finish(),
     ];
-    expect(events.some((event) => (event as { type?: string }).type === 'response.incomplete')).toBe(true);
+    expect(events.some((event) => (event as { type?: string }).type === 'response.failed')).toBe(true);
     const terminal = events.find((event) => ['response.completed', 'response.incomplete', 'response.failed'].includes((event as { type?: string }).type ?? '')) as { response: { status: string } };
-    expect(terminal.response.status).toBe('incomplete');
+    expect(terminal.response.status).toBe('failed');
+    expect(terminal.response).toMatchObject({
+      error: {
+        code: 'upstream_error',
+        message: expect.stringContaining('stream_truncated'),
+      },
+    });
     const item = events.find((event) => (
       (event as { type?: string }).type === 'response.output_item.done'
     )) as { item: { status: string } };
     expect(item.item.status).toBe('incomplete');
+  });
+
+  it('reports max_tokens as incomplete even when the stream ends before message_stop', () => {
+    const t = translator();
+    const events = [
+      ...t.push({ type: 'message_start', message: { id: 'msg_max_tokens', model: 'claude' } }),
+      ...t.push({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }),
+      ...t.push({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'partial' } }),
+      ...t.push({ type: 'message_delta', delta: { stop_reason: 'max_tokens' } }),
+      ...t.finish(),
+    ];
+    const terminal = events.find((event) => (
+      (event as { type?: string }).type === 'response.incomplete'
+    )) as { response: { status: string; incomplete_details: { reason: string } } };
+    expect(terminal.response).toMatchObject({
+      status: 'incomplete',
+      incomplete_details: { reason: 'max_output_tokens' },
+    });
+    expect(events.some((event) => (event as { type?: string }).type === 'response.failed')).toBe(false);
   });
 
   it('accepts reasoning_delta as an alias for thinking_delta', () => {
@@ -353,6 +378,9 @@ describe('Anthropic SSE → Responses translation', () => {
     ))).toBe(false);
     expect(events.some((event) => (
       (event as { type?: string; item?: { status?: string } }).item?.status === 'incomplete'
+    ))).toBe(true);
+    expect(events.some((event) => (
+      (event as { type?: string }).type === 'response.failed'
     ))).toBe(true);
   });
 });
