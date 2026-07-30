@@ -137,9 +137,8 @@ export function SubagentModelSection() {
       } catch (err) {
         log.warn('subagentModelSettingsSet failed', err);
         toast.error(
-          err instanceof Error
-            ? err.message
-            : (opts?.errorToast ?? t('settings.subagentModels.saveFailed')),
+          opts?.errorToast ??
+            (err instanceof Error ? err.message : t('settings.subagentModels.saveFailed')),
         );
         return false;
       } finally {
