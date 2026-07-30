@@ -377,7 +377,8 @@ describe('同一次中断事件的多次重连折叠成一行', () => {
       serverMessage({
         clientId: 'ws1',
         role: 'assistant',
-        content: '   \n  ',
+        // 纯空白 + 零宽字符:两者都是"用户看不见",都不该成为折叠边界(greptile P2)。
+        content: '   \n \u200B\uFEFF ',
         createdAt: '2026-06-12T00:00:06.000Z',
       }),
       resumeRow('r2', 2, undefined, '2026-06-12T00:00:1'),
