@@ -14,8 +14,26 @@ vi.mock('react-i18next', () => ({
 // MarkdownRenderer 本体拖着 rehype-highlight / mermaid / lightbox 一串重依赖,
 // 这里只关心"计划正文有没有交给它渲染",用桩替掉即可。
 vi.mock('@/components/chat/MarkdownRenderer', () => ({
-  MarkdownRenderer: ({ content, workingDir }: { content: string; workingDir: string }) => (
-    <div data-testid="markdown" data-working-dir={workingDir}>
+  MarkdownRenderer: ({
+    content,
+    workingDir,
+    currentSessionId,
+    currentSessionTitle,
+    localFileRefs,
+  }: {
+    content: string;
+    workingDir: string;
+    currentSessionId?: string;
+    currentSessionTitle?: string | null;
+    localFileRefs?: readonly { name: string }[];
+  }) => (
+    <div
+      data-testid="markdown"
+      data-working-dir={workingDir}
+      data-session-id={currentSessionId ?? ''}
+      data-session-title={currentSessionTitle ?? ''}
+      data-file-refs={(localFileRefs ?? []).map((r) => r.name).join(',')}
+    >
       {content}
     </div>
   ),
@@ -55,15 +73,38 @@ describe('PlanReviewBubble 计划正文渲染', () => {
     expect(container.querySelector('pre')).toBeNull();
   });
 
-  it('expired / cancelled 态同样渲染 Markdown(只是不给展开按钮)', () => {
+  // 回归护栏(PR #1083 review):计划正文是会话消息内容,必须拿到与
+  // AssistantMessage 同一套解析上下文。currentSessionId 缺失时
+  // MarkdownRenderer 的 remoteMediaOrigin 恒 undefined,device / ssh 会话里
+  // 计划内的图片会绕过 cindy-remote-media:// 改写而坏图。
+  it('把会话解析上下文透传给 MarkdownRenderer', () => {
+    render(
+      <PlanReviewBubble
+        message={planReviewMessage()}
+        workingDir="/tmp/repo"
+        currentSessionId="sess-42"
+        currentSessionTitle="改计划审阅气泡"
+        localFileRefs={[{ name: 'spec.docx', absPath: '/tmp/repo/spec.docx' } as never]}
+      />,
+    );
+
+    const markdown = screen.getByTestId('markdown');
+    expect(markdown.getAttribute('data-session-id')).toBe('sess-42');
+    expect(markdown.getAttribute('data-session-title')).toBe('改计划审阅气泡');
+    expect(markdown.getAttribute('data-file-refs')).toBe('spec.docx');
+  });
+
+  it('expired / cancelled 态同样渲染 Markdown、同样带会话上下文(只是不给展开按钮)', () => {
     for (const status of ['expired', 'cancelled'] as const) {
       const { unmount } = render(
         <PlanReviewBubble
           message={planReviewMessage({ planReviewStatus: status })}
           workingDir="/tmp/repo"
+          currentSessionId="sess-42"
         />,
       );
       expect(screen.getByTestId('markdown').textContent).toBe(PLAN);
+      expect(screen.getByTestId('markdown').getAttribute('data-session-id')).toBe('sess-42');
       expect(screen.queryByRole('button')).toBeNull();
       unmount();
     }

@@ -26,6 +26,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import type { ChatMessage } from '@/lib/makerChatStore';
+import type { KnownLocalFileRef } from '@/lib/localPathResolver';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
 // ---------------------------------------------------------------------------
@@ -37,6 +38,19 @@ interface PlanReviewBubbleProps {
   /** Session cwd — forwarded to MarkdownRenderer so local-path links inside the
    *  plan (e.g. `apps/desktop/src/...`) resolve to the right file. */
   workingDir: string;
+  /**
+   * 计划正文是**会话消息内容**,所以要拿到和 AssistantMessage 同一套解析上下文,
+   * 而不是 TextLightbox 那种"渲染文件内容"的裸调用:
+   *   - currentSessionId 是 MarkdownRenderer 里远程媒体改写的门控 —— 缺了它
+   *     remoteMediaOrigin 恒 undefined,device / ssh 会话里计划内的图片/音频会
+   *     去加载本机 URL 而不是走 cindy-remote-media:// 管道,直接坏图。
+   *   - localFileRefs 把计划里 `[spec.docx](spec.docx)` 这类写法解析回用户上传
+   *     的原附件路径。
+   *   - currentSessionTitle 供计划里可能出现的会话交接卡片构建返回链接。
+   */
+  currentSessionId?: string;
+  currentSessionTitle?: string | null;
+  localFileRefs?: readonly KnownLocalFileRef[];
 }
 
 // ---------------------------------------------------------------------------
@@ -65,7 +79,13 @@ const COLLAPSED_FADE_MASK =
 // Component
 // ---------------------------------------------------------------------------
 
-export function PlanReviewBubble({ message, workingDir }: PlanReviewBubbleProps) {
+export function PlanReviewBubble({
+  message,
+  workingDir,
+  currentSessionId,
+  currentSessionTitle,
+  localFileRefs,
+}: PlanReviewBubbleProps) {
   const { t } = useTranslation();
   const status = message.planReviewStatus ?? 'pending';
   // Important #4: planReviewPlan is the single source of truth. No fallback
@@ -132,6 +152,9 @@ export function PlanReviewBubble({ message, workingDir }: PlanReviewBubbleProps)
       {status === 'approved' && (
         <PlanMarkdownBody
           workingDir={workingDir}
+          currentSessionId={currentSessionId}
+          currentSessionTitle={currentSessionTitle}
+          localFileRefs={localFileRefs}
           plan={plan}
           collapsedMaxHeight={APPROVED_COLLAPSED_MAX_HEIGHT}
           expandable
@@ -158,6 +181,9 @@ export function PlanReviewBubble({ message, workingDir }: PlanReviewBubbleProps)
       {(status === 'expired' || status === 'cancelled') && plan && (
         <PlanMarkdownBody
           workingDir={workingDir}
+          currentSessionId={currentSessionId}
+          currentSessionTitle={currentSessionTitle}
+          localFileRefs={localFileRefs}
           plan={plan}
           collapsedMaxHeight={INACTIVE_COLLAPSED_MAX_HEIGHT}
         />
@@ -179,11 +205,17 @@ export function PlanReviewBubble({ message, workingDir }: PlanReviewBubbleProps)
  */
 function PlanMarkdownBody({
   workingDir,
+  currentSessionId,
+  currentSessionTitle,
+  localFileRefs,
   plan,
   collapsedMaxHeight,
   expandable = false,
 }: {
   workingDir: string;
+  currentSessionId?: string;
+  currentSessionTitle?: string | null;
+  localFileRefs?: readonly KnownLocalFileRef[];
   plan: string;
   collapsedMaxHeight: number;
   expandable?: boolean;
@@ -239,7 +271,13 @@ function PlanMarkdownBody({
             '[&_.msg-markdown>*:last-child]:mb-0',
           )}
         >
-          <MarkdownRenderer workingDir={workingDir} content={plan} />
+          <MarkdownRenderer
+            workingDir={workingDir}
+            content={plan}
+            currentSessionId={currentSessionId}
+            currentSessionTitle={currentSessionTitle}
+            localFileRefs={localFileRefs}
+          />
         </div>
       </div>
       {expandable && overflowing && (
