@@ -263,6 +263,19 @@ async function taskpolicy(args: string[], log: WatcherLogger): Promise<void> {
   }
 }
 
+/**
+ * 提取 os.setPriority 失败的真实 errno。Node 把 libuv 失败包成 SystemError:
+ * 顶层 code 是 'ERR_SYSTEM_ERROR',可判定的 errno 在 err.info.code(bot review
+ * fresh evidence);plain ErrnoException 形态与 message 内的 uv 错误名做兜底。
+ */
+export function systemErrnoCode(err: unknown): string | undefined {
+  const e = err as NodeJS.ErrnoException & { info?: { code?: string } };
+  if (typeof e?.info?.code === 'string') return e.info.code;
+  if (typeof e?.code === 'string' && e.code !== 'ERR_SYSTEM_ERROR') return e.code;
+  const match = /\b(EACCES|EPERM|ESRCH)\b/.exec(String(e?.message ?? ''));
+  return match?.[1];
+}
+
 function makeDefaultApplyPriority(log: WatcherLogger) {
   return async (
     pid: number,
@@ -273,7 +286,7 @@ function makeDefaultApplyPriority(log: WatcherLogger) {
     try {
       os.setPriority(pid, priorityValue(tier));
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
+      const code = systemErrnoCode(err);
       if (code === 'ESRCH') return 'process-gone';
       if (code === 'EPERM' || code === 'EACCES') {
         // POSIX 非特权进程不能调高优先级(normal←low←lowest 方向都算 raise):
