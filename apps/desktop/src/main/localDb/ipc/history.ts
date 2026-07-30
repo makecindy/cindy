@@ -6,7 +6,7 @@
  */
 import { ipcMain } from 'electron';
 import { eq } from 'drizzle-orm';
-import { DL_HISTORY_MESSAGES_CHANNEL, DL_HISTORY_SESSION_TERMINAL_CHANNEL } from '@cindy/device-link';
+import { DL_HISTORY_MESSAGES_CHANNEL } from '@cindy/device-link';
 
 import {
   getMessagesForHistory,
@@ -53,11 +53,6 @@ export interface RemoteHistoryMessagesRequest {
 export interface RemoteHistoryIpcDeps {
   sessionExists(sessionId: string): Promise<boolean>;
   getMessages(params: GetMessagesParams): ReturnType<typeof getMessagesForHistory>;
-}
-
-/** Dependencies for the session-terminal probe handler. */
-export interface RemoteSessionTerminalIpcDeps {
-  sessionExists(sessionId: string): Promise<boolean>;
   readTerminal(sessionId: string, clearedAt: number | null): Promise<SessionTerminalHint | undefined>;
 }
 
@@ -283,10 +278,6 @@ const defaultSessionExists = async (sessionId: string): Promise<boolean> => {
 const defaultDeps: RemoteHistoryIpcDeps = {
   sessionExists: defaultSessionExists,
   getMessages: getMessagesForHistory,
-};
-
-const defaultTerminalDeps: RemoteSessionTerminalIpcDeps = {
-  sessionExists: defaultSessionExists,
   readTerminal: readLatestSessionTerminal,
 };
 
@@ -309,26 +300,21 @@ export function registerRemoteHistoryIpc(deps: RemoteHistoryIpcDeps = defaultDep
       cursor: request.cursor,
       order: request.order,
     });
+    // 终态标记与页面读取在同一次 handler 调用内完成:跨设备调用方拿到的
+    // terminal 与消息快照来自同一数据库时刻(与本机解析路径的两查询间隔
+    // 同价),不会出现「历史页读完、再探测时源端已写入更新回合的错误行」
+    // 导致的终态错配。错误正文不出被控端,只回安全标记。
+    // 页面下界是 gte(fromMs),终态探针是 gt(clearedAt)——同一窗口需 fromMs-1。
+    const terminal = await deps.readTerminal(
+      request.sessionId,
+      request.fromMs === null ? null : request.fromMs - 1,
+    );
     const preserveStructuredRoles =
       request.roles === null ||
       request.roles.some((role) => role !== 'user' && role !== 'assistant');
-    return capReferenceHistoryPage(page, request.contentCharLimit, preserveStructuredRoles);
-  });
-}
-
-/**
- * 会话尾部终态探针:被控端在本机库上判定,只回安全标记或 null。
- * 错误正文不出被控端,控制端拿到标记即可解释引用尾部为何不完整。
- */
-export function registerRemoteSessionTerminalIpc(deps: RemoteSessionTerminalIpcDeps = defaultTerminalDeps): void {
-  ipcMain.handle(DL_HISTORY_SESSION_TERMINAL_CHANNEL, async (_event, value: unknown) => {
-    const input = requireObject(value, 'request');
-    const sessionId = requireString(input.sessionId, 'sessionId');
-    const fromMs = nullableFiniteNumber(input.fromMs ?? null, 'fromMs');
-    if (!(await deps.sessionExists(sessionId))) {
-      throwIpcError('NOT_FOUND', 'Session does not exist');
-    }
-    const terminal = await deps.readTerminal(sessionId, fromMs);
-    return terminal ?? null;
+    return {
+      ...capReferenceHistoryPage(page, request.contentCharLimit, preserveStructuredRoles),
+      terminal: terminal ?? null,
+    };
   });
 }

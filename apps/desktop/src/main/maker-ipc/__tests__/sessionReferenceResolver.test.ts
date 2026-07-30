@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { DL_HISTORY_MESSAGES_CHANNEL, DL_HISTORY_SESSION_TERMINAL_CHANNEL } from '@cindy/device-link';
+import { DL_HISTORY_MESSAGES_CHANNEL } from '@cindy/device-link';
 import { serializeSessionReferencePayload } from '../../../shared/agentInputQueue.js';
 
 const remoteInvoke = vi.hoisted(() => vi.fn());
@@ -306,8 +306,7 @@ describe('sessionReferenceResolver', () => {
           sessionId: `s-${index}`,
           role: 'user',
           content: `s-${index}`,
-        }]))
-        .mockResolvedValueOnce({ ok: true, result: null });
+        }]));
     }
 
     const contexts = await resolveSessionReferences([
@@ -376,12 +375,10 @@ describe('sessionReferenceResolver', () => {
       .mockResolvedValueOnce(historyPage([
         { id: 'm-1', sessionId: 's-1', role: 'user', content: '甲'.repeat(10_000) },
       ]))
-      .mockResolvedValueOnce({ ok: true, result: null })
       .mockResolvedValueOnce({ ok: true, result: { id: 's-2' } })
       .mockResolvedValueOnce(historyPage([
         { id: 'm-2', sessionId: 's-2', role: 'assistant', content: '乙'.repeat(10_000) },
-      ]))
-      .mockResolvedValueOnce({ ok: true, result: null });
+      ]));
     const contexts = await resolveSessionReferences([
       { sessionId: 's-1', deviceId: 'dev-1' },
       { sessionId: 's-2', deviceId: 'dev-1' },
@@ -401,20 +398,24 @@ describe('sessionReferenceResolver', () => {
     expect(remoteInvoke).not.toHaveBeenCalled();
   });
 
-  it('attaches a validated remote terminal marker without leaking the error body', async () => {
+  it('attaches the validated first-page terminal without leaking the error body', async () => {
     remoteInvoke
       .mockResolvedValueOnce({ ok: true, result: { id: 's-1', title: 'Session' } })
-      .mockResolvedValueOnce(historyPage([
-        { id: 'm-2', sessionId: 's-1', role: 'assistant', content: '我已经看到，但', createdAt: 102 },
-        { id: 'm-1', sessionId: 's-1', role: 'user', content: '请继续', createdAt: 101 },
-      ]))
       .mockResolvedValueOnce({
         ok: true,
         result: {
-          status: 'error',
-          createdAt: 103,
-          message: 'provider secret must not cross the quote boundary',
-          injected: 'junk',
+          items: [
+            { id: 'm-2', sessionId: 's-1', role: 'assistant', content: '我已经看到，但', createdAt: 102 },
+            { id: 'm-1', sessionId: 's-1', role: 'user', content: '请继续', createdAt: 101 },
+          ],
+          hasMore: false,
+          nextCursor: null,
+          terminal: {
+            status: 'error',
+            createdAt: 103,
+            message: 'provider secret must not cross the quote boundary',
+            injected: 'junk',
+          },
         },
       });
 
@@ -423,51 +424,16 @@ describe('sessionReferenceResolver', () => {
     expect(context.terminal).toEqual({ status: 'error', createdAt: 103 });
     expect(JSON.stringify(context)).not.toContain('provider secret');
     expect(JSON.stringify(context)).not.toContain('junk');
-    expect(remoteInvoke).toHaveBeenNthCalledWith(3, 'dev-1', DL_HISTORY_SESSION_TERMINAL_CHANNEL, [
-      { sessionId: 's-1', fromMs: null },
-    ]);
+    // 终态与历史页同一次响应到达,没有额外的探测往返。
+    expect(remoteInvoke).toHaveBeenCalledTimes(2);
   });
 
-  it('forwards the cleared window to the terminal probe', async () => {
-    remoteInvoke
-      .mockResolvedValueOnce({ ok: true, result: { id: 's-1', clearedAt: '1970-01-01T00:00:00.100Z' } })
-      .mockResolvedValueOnce(historyPage([
-        { id: 'm-1', sessionId: 's-1', role: 'user', content: 'q', createdAt: 200 },
-      ]))
-      .mockResolvedValueOnce({ ok: true, result: { status: 'error', createdAt: 300 } });
-
-    const [context] = await resolveSessionReferences([{ sessionId: 's-1', deviceId: 'dev-1' }]);
-
-    expect(context.terminal).toEqual({ status: 'error', createdAt: 300 });
-    expect(remoteInvoke).toHaveBeenNthCalledWith(3, 'dev-1', DL_HISTORY_SESSION_TERMINAL_CHANNEL, [
-      { sessionId: 's-1', fromMs: 100 },
-    ]);
-  });
-
-  it('degrades to no terminal when the source device predates the probe channel', async () => {
+  it('degrades to no terminal when the source page predates the terminal field', async () => {
     remoteInvoke
       .mockResolvedValueOnce({ ok: true, result: { id: 's-1' } })
       .mockResolvedValueOnce(historyPage([
         { id: 'm-1', sessionId: 's-1', role: 'assistant', content: 'partial', createdAt: 1 },
-      ]))
-      .mockResolvedValueOnce({
-        ok: false,
-        error: { code: 'CHANNEL_NOT_ALLOWED', message: 'channel not allowed remotely' },
-      });
-
-    const [context] = await resolveSessionReferences([{ sessionId: 's-1', deviceId: 'dev-1' }]);
-
-    expect(context.messages).toHaveLength(1);
-    expect(context.terminal).toBeUndefined();
-  });
-
-  it('degrades to no terminal when the probe link fails outright', async () => {
-    remoteInvoke
-      .mockResolvedValueOnce({ ok: true, result: { id: 's-1' } })
-      .mockResolvedValueOnce(historyPage([
-        { id: 'm-1', sessionId: 's-1', role: 'assistant', content: 'partial', createdAt: 1 },
-      ]))
-      .mockRejectedValueOnce(new Error('link dead'));
+      ]));
 
     const [context] = await resolveSessionReferences([{ sessionId: 's-1', deviceId: 'dev-1' }]);
 
@@ -478,26 +444,37 @@ describe('sessionReferenceResolver', () => {
   it('ignores malformed terminal payloads from the source device', async () => {
     remoteInvoke
       .mockResolvedValueOnce({ ok: true, result: { id: 's-1' } })
-      .mockResolvedValueOnce(historyPage([
-        { id: 'm-1', sessionId: 's-1', role: 'assistant', content: 'partial', createdAt: 1 },
-      ]))
-      .mockResolvedValueOnce({ ok: true, result: { status: 'fatal', body: 'crafted' } });
+      .mockResolvedValueOnce({
+        ok: true,
+        result: {
+          items: [{ id: 'm-1', sessionId: 's-1', role: 'assistant', content: 'partial', createdAt: 1 }],
+          hasMore: false,
+          nextCursor: null,
+          terminal: { status: 'fatal', body: 'crafted' },
+        },
+      });
 
     const [context] = await resolveSessionReferences([{ sessionId: 's-1', deviceId: 'dev-1' }]);
 
     expect(context.terminal).toBeUndefined();
   });
 
-  it('does not probe the terminal channel for anchor quotes', async () => {
+  it('ignores the page terminal for anchor quotes', async () => {
     remoteInvoke
       .mockResolvedValueOnce({ ok: true, result: { id: 's-1', title: 'Session' } })
       .mockResolvedValueOnce({
         ok: true,
         result: [{ sessionId: 's-1', clientId: 'c-1', id: 'm-2', rowid: 2, role: 'assistant', content: 'anchor', createdAt: 2 }],
       })
-      .mockResolvedValueOnce(historyPage([
-        { id: 'm-1', sessionId: 's-1', role: 'user', content: 'before', createdAt: 1 },
-      ]))
+      .mockResolvedValueOnce({
+        ok: true,
+        result: {
+          items: [{ id: 'm-1', sessionId: 's-1', role: 'user', content: 'before', createdAt: 1 }],
+          hasMore: false,
+          nextCursor: null,
+          terminal: { status: 'error', createdAt: 9 },
+        },
+      })
       .mockResolvedValueOnce(historyPage([
         { id: 'm-3', sessionId: 's-1', role: 'assistant', content: 'after', createdAt: 3 },
       ]));
@@ -510,6 +487,5 @@ describe('sessionReferenceResolver', () => {
 
     expect(context.range).toBe('around-anchor');
     expect(context.terminal).toBeUndefined();
-    expect(remoteInvoke.mock.calls.some((call) => call[1] === DL_HISTORY_SESSION_TERMINAL_CHANNEL)).toBe(false);
   });
 });

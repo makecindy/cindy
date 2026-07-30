@@ -5,7 +5,7 @@
  * 设备读取权威历史。整次用户请求共享 20 条 / 约 8k token 的硬预算。
  */
 import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql, type SQL } from 'drizzle-orm';
-import { DL_HISTORY_MESSAGES_CHANNEL, DL_HISTORY_SESSION_TERMINAL_CHANNEL } from '@cindy/device-link';
+import { DL_HISTORY_MESSAGES_CHANNEL } from '@cindy/device-link';
 import { getSelfDeviceId, remoteInvoke as invokeRemote } from '../device-link/index.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { messages, sessions } from '../localDb/schema.js';
@@ -441,6 +441,20 @@ interface RemoteHistoryPage {
   items: Record<string, unknown>[];
   hasMore: boolean;
   nextCursor: RemoteHistoryCursor | null;
+  terminal: AgentInputSessionReferenceTerminal | undefined;
+}
+
+/** Rebuild the optional terminal marker from validated fields only (trust boundary). */
+function parseRemoteTerminal(value: unknown): AgentInputSessionReferenceTerminal | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (record.status !== 'error') return undefined;
+  return {
+    status: 'error',
+    ...(typeof record.createdAt === 'number' && Number.isFinite(record.createdAt)
+      ? { createdAt: record.createdAt }
+      : {}),
+  };
 }
 
 function parseRemoteHistoryPage(ref: AgentInputSessionRef, value: unknown): RemoteHistoryPage {
@@ -455,6 +469,7 @@ function parseRemoteHistoryPage(ref: AgentInputSessionRef, value: unknown): Remo
     items: page.items.filter((row): row is Record<string, unknown> =>
       !!row && typeof row === 'object' && !Array.isArray(row) && row.sessionId === ref.sessionId),
     hasMore: page.hasMore,
+    terminal: parseRemoteTerminal(page.terminal),
     nextCursor: page.nextCursor === null || page.nextCursor === undefined
       ? null
       : (() => {
@@ -527,9 +542,17 @@ async function readRemoteHistory(
   order: 'asc' | 'desc',
   fromMs: number | null,
   cursor: RemoteHistoryCursor | null = null,
-): Promise<{ items: Record<string, unknown>[]; sourceTruncated: boolean }> {
+): Promise<{
+  items: Record<string, unknown>[];
+  sourceTruncated: boolean;
+  terminal: AgentInputSessionReferenceTerminal | undefined;
+}> {
   const items: Record<string, unknown>[] = [];
   let sourceTruncated = false;
+  // 被控端把 terminal 与页面在同一 handler 调用内算好,只有第一页的标记
+  // 与本次快照同源;后续翻页捎带的标记忽略。
+  let terminal: AgentInputSessionReferenceTerminal | undefined;
+  let firstPage = true;
   const seenCursors = new Set<string>();
   while (true) {
     const response = await invokeRemote(ref.deviceId!, DL_HISTORY_MESSAGES_CHANNEL, [
@@ -537,6 +560,10 @@ async function readRemoteHistory(
     ]);
     if (response.ok !== true) remoteFailure(ref, response);
     const page = parseRemoteHistoryPage(ref, response.result);
+    if (firstPage) {
+      terminal = page.terminal;
+      firstPage = false;
+    }
     items.push(...page.items);
     sourceTruncated ||= remoteRowsWereTrimmed(page.items);
     const visibleCount = items.reduce((count, row) => count + (toReferenceMessage(row) ? 1 : 0), 0);
@@ -555,41 +582,8 @@ async function readRemoteHistory(
   return {
     items,
     sourceTruncated: sourceTruncated || (limit === 0 && items.length > 0),
+    terminal,
   };
-}
-
-/**
- * Probe the source device for a safe terminal marker. Fail-open: an old
- * controlled device (CHANNEL_NOT_ALLOWED), a flaky link, or an unexpected
- * payload must not break an otherwise valid remote quote — the marker is
- * diagnostic metadata, not a load-bearing field.
- */
-async function readRemoteTerminal(
-  ref: AgentInputSessionRef,
-  clearedAt: number | null,
-): Promise<AgentInputSessionReferenceTerminal | undefined> {
-  try {
-    const response = await invokeRemote(ref.deviceId!, DL_HISTORY_SESSION_TERMINAL_CHANNEL, [
-      { sessionId: ref.sessionId, fromMs: clearedAt },
-    ]);
-    if (response.ok !== true || response.result === null || response.result === undefined) {
-      return undefined;
-    }
-    const result = response.result as Record<string, unknown>;
-    if (typeof result !== 'object' || Array.isArray(result) || result.status !== 'error') {
-      return undefined;
-    }
-    // Trust boundary: rebuild the marker from validated fields only, so a
-    // crafted payload cannot smuggle extra keys toward the model prompt.
-    return {
-      status: 'error',
-      ...(typeof result.createdAt === 'number' && Number.isFinite(result.createdAt)
-        ? { createdAt: result.createdAt }
-        : {}),
-    };
-  } catch {
-    return undefined;
-  }
 }
 
 async function resolveRemote(
@@ -619,9 +613,13 @@ async function resolveRemote(
   let mapped: AgentInputSessionReferenceMessage[];
   let anchorIndex: number | undefined;
   let sourceTruncated = false;
+  // 终态标记由被控端与首个历史页在同一 handler 调用内算好(见
+  // readRemoteHistory),与消息快照天然同源;锚点路径不带终态(与本地一致)。
+  let terminal: AgentInputSessionReferenceTerminal | undefined;
   try {
     if (!ref.messageClientId) {
       const page = await readRemoteHistory(ref, messageLimit, 'desc', clearedAt);
+      terminal = page.terminal;
       const visibleRows = page.items
         .map(toReferenceMessage)
         .filter((row): row is AgentInputSessionReferenceMessage => row !== null)
@@ -693,12 +691,6 @@ async function resolveRemote(
   if (mapped.length === 0) {
     throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `会话 ${ref.sessionId} 没有可引用的可见消息`);
   }
-  // A recent remote snapshot may legitimately end at a partial assistant
-  // message when the turn failed on the source device.  Probe for the safe
-  // marker only — the persisted error body never crosses device-link.
-  const terminal = ref.messageClientId
-    ? undefined
-    : await readRemoteTerminal(ref, remoteClearedAt ?? null);
   const fitted = fitMessagesToTokenBudget(mapped, tokenBudget, anchorIndex);
   return {
     context: {

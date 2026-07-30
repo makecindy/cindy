@@ -20,7 +20,7 @@ import { registerProjectAliasesIpc } from './projectAliases';
 import { registerRightSidebarTabsIpc } from './rightSidebarTabs';
 import { registerDevSqliteVecIpc } from './dev/sqliteVec';
 import { registerSearchIpc } from './search';
-import { registerRemoteHistoryIpc, registerRemoteSessionTerminalIpc } from './history';
+import { registerRemoteHistoryIpc } from './history';
 
 import { createLogger } from '../../logger';
 import { recordDesktopDevLocalDbStartupResult } from '../../devStartupStatus';
@@ -121,7 +121,6 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   registerSessionIpc();
   registerMessageIpc();
   registerRemoteHistoryIpc();
-  registerRemoteSessionTerminalIpc();
   registerSessionImportIpc();
   registerSessionShareIpc();
   registerOrcaWorkflowIpc();

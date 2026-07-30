@@ -2,7 +2,6 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   DeviceLinkError,
   DL_HISTORY_MESSAGES_CHANNEL,
-  DL_HISTORY_SESSION_TERMINAL_CHANNEL,
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
 } from '@cindy/device-link';
 import { i18n } from '@/i18n';
@@ -185,7 +184,6 @@ describe('mobile session-reference links', () => {
           hasMore: false,
         };
       }
-      if (channel === DL_HISTORY_SESSION_TERMINAL_CHANNEL) return null;
       throw new Error(`unexpected channel ${channel}`);
     });
 
@@ -203,7 +201,6 @@ describe('mobile session-reference links', () => {
       DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
       'local-db:sessions:get',
       DL_HISTORY_MESSAGES_CHANNEL,
-      DL_HISTORY_SESSION_TERMINAL_CHANNEL,
     ]);
     expect(prepared.trustedSessionReferenceContexts?.[0]?.messages[0]?.content)
       .toBe('trusted body');
@@ -460,7 +457,6 @@ describe('resolveMobileSessionReferences', () => {
     const calls: Array<{ deviceId: string; sessionId: string; limit: number }> = [];
     const invoke = asInvoke(async (deviceId, channel, args) => {
       if (channel === 'local-db:sessions:get') return { id: args[0], title: deviceId };
-      if (channel === DL_HISTORY_SESSION_TERMINAL_CHANNEL) return null;
       const request = args[0] as { sessionId: string; limit: number };
       calls.push({ deviceId, sessionId: request.sessionId, limit: request.limit });
       return {
@@ -546,21 +542,19 @@ describe('resolveMobileSessionReferences', () => {
     expect(neverInvoke).not.toHaveBeenCalled();
   });
 
-  it('attaches a validated terminal marker without leaking the source error body', async () => {
+  it('attaches the validated first-page terminal without leaking the source error body', async () => {
     const invoke = asInvoke(async (_deviceId, channel, args) => {
       if (channel === 'local-db:sessions:get') return { id: args[0], title: 'Source' };
       if (channel === DL_HISTORY_MESSAGES_CHANNEL) {
         return {
           items: [message('s1', '1', 'c1', '半截回复', 'assistant')],
           hasMore: false,
-        };
-      }
-      if (channel === DL_HISTORY_SESSION_TERMINAL_CHANNEL) {
-        return {
-          status: 'error',
-          createdAt: 103,
-          message: 'provider secret must not cross the quote boundary',
-          injected: 'junk',
+          terminal: {
+            status: 'error',
+            createdAt: 103,
+            message: 'provider secret must not cross the quote boundary',
+            injected: 'junk',
+          },
         };
       }
       throw new Error(`unexpected channel ${channel}`);
@@ -576,7 +570,7 @@ describe('resolveMobileSessionReferences', () => {
     expect(serialized).not.toContain('junk');
   });
 
-  it('degrades to no terminal when the source device predates the probe channel', async () => {
+  it('degrades to no terminal when the source page predates the terminal field', async () => {
     const invoke = asInvoke(async (_deviceId, channel, args) => {
       if (channel === 'local-db:sessions:get') return { id: args[0], title: 'Source' };
       if (channel === DL_HISTORY_MESSAGES_CHANNEL) {
@@ -584,9 +578,6 @@ describe('resolveMobileSessionReferences', () => {
           items: [message('s1', '1', 'c1', 'partial', 'assistant')],
           hasMore: false,
         };
-      }
-      if (channel === DL_HISTORY_SESSION_TERMINAL_CHANNEL) {
-        throw new DeviceLinkError('CHANNEL_NOT_ALLOWED', 'old source');
       }
       throw new Error(`unexpected channel ${channel}`);
     });
@@ -599,15 +590,15 @@ describe('resolveMobileSessionReferences', () => {
     expect(context.terminal).toBeUndefined();
   });
 
-  it('does not probe the terminal channel for anchor quotes', async () => {
-    const channels: string[] = [];
+  it('ignores the page terminal for anchor quotes', async () => {
     const invoke = asInvoke(async (_deviceId, channel, args) => {
-      channels.push(channel);
       if (channel === 'local-db:sessions:get') return { id: args[0], title: 'Anchored' };
       if (channel === 'local-db:messages:around-client-id') {
         return [message('s1', '1', 'anchor', 'anchor body', 'user', 1_000)];
       }
-      if (channel === DL_HISTORY_MESSAGES_CHANNEL) return { items: [], hasMore: false };
+      if (channel === DL_HISTORY_MESSAGES_CHANNEL) {
+        return { items: [], hasMore: false, terminal: { status: 'error', createdAt: 9 } };
+      }
       return null;
     });
 
@@ -617,6 +608,5 @@ describe('resolveMobileSessionReferences', () => {
 
     expect(context.range).toBe('around-anchor');
     expect(context.terminal).toBeUndefined();
-    expect(channels).not.toContain(DL_HISTORY_SESSION_TERMINAL_CHANNEL);
   });
 });

@@ -1,6 +1,5 @@
 import {
   DL_HISTORY_MESSAGES_CHANNEL,
-  DL_HISTORY_SESSION_TERMINAL_CHANNEL,
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
 } from '@cindy/device-link';
 import { i18n } from '@/i18n';
@@ -403,6 +402,20 @@ interface RemoteHistoryPage {
   items: Record<string, unknown>[];
   hasMore: boolean;
   nextCursor: RemoteHistoryCursor | null;
+  terminal: MobileSessionReferenceTerminal | undefined;
+}
+
+/** Rebuild the optional terminal marker from validated fields only (trust boundary). */
+function parseRemoteTerminal(value: unknown): MobileSessionReferenceTerminal | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (record.status !== 'error') return undefined;
+  return {
+    status: 'error',
+    ...(typeof record.createdAt === 'number' && Number.isFinite(record.createdAt)
+      ? { createdAt: record.createdAt }
+      : {}),
+  };
 }
 
 function parseRemoteHistoryPage(ref: MobileSessionReference, value: unknown): RemoteHistoryPage {
@@ -423,6 +436,7 @@ function parseRemoteHistoryPage(ref: MobileSessionReference, value: unknown): Re
     items: page.items.filter((row): row is Record<string, unknown> =>
       !!row && typeof row === 'object' && !Array.isArray(row) && row.sessionId === ref.sessionId),
     hasMore: page.hasMore,
+    terminal: parseRemoteTerminal(page.terminal),
     nextCursor: page.nextCursor === null || page.nextCursor === undefined
       ? null
       : (() => {
@@ -496,15 +510,27 @@ async function readRemoteHistory(
   order: 'asc' | 'desc',
   fromMs: number | null,
   cursor: RemoteHistoryCursor | null = null,
-): Promise<{ items: Record<string, unknown>[]; sourceTruncated: boolean }> {
+): Promise<{
+  items: Record<string, unknown>[];
+  sourceTruncated: boolean;
+  terminal: MobileSessionReferenceTerminal | undefined;
+}> {
   const items: Record<string, unknown>[] = [];
   let sourceTruncated = false;
+  // 被控端把 terminal 与页面在同一 handler 调用内算好,只有第一页的标记
+  // 与本次快照同源;后续翻页捎带的标记忽略。
+  let terminal: MobileSessionReferenceTerminal | undefined;
+  let firstPage = true;
   const seenCursors = new Set<string>();
   while (true) {
     const rawPage = await invokeSource<unknown>(invoke, ref, DL_HISTORY_MESSAGES_CHANNEL, [
       remoteHistoryRequest(ref, Math.max(1, limit), order, fromMs, cursor),
     ]);
     const page = parseRemoteHistoryPage(ref, rawPage);
+    if (firstPage) {
+      terminal = page.terminal;
+      firstPage = false;
+    }
     items.push(...page.items);
     sourceTruncated ||= remoteRowsWereTrimmed(page.items);
     const visibleCount = items.reduce((count, row) => count + (toReferenceMessage(row) ? 1 : 0), 0);
@@ -523,6 +549,7 @@ async function readRemoteHistory(
   return {
     items,
     sourceTruncated: sourceTruncated || (limit === 0 && items.length > 0),
+    terminal,
   };
 }
 
@@ -580,38 +607,6 @@ async function invokeSource<T>(
   }
 }
 
-/**
- * Probe the source device for a safe terminal marker. Fail-open: an old
- * source device (CHANNEL_NOT_ALLOWED), a flaky link, or an unexpected payload
- * must not break an otherwise valid quote — the marker is diagnostic
- * metadata, not a load-bearing field.
- */
-async function readRemoteTerminal(
-  invoke: RemoteInvoke,
-  ref: MobileSessionReference,
-  clearedAt: number | null,
-): Promise<MobileSessionReferenceTerminal | undefined> {
-  try {
-    const result = await invokeSource<unknown>(invoke, ref, DL_HISTORY_SESSION_TERMINAL_CHANNEL, [
-      { sessionId: ref.sessionId, fromMs: clearedAt },
-    ]);
-    if (result === null || result === undefined) return undefined;
-    if (typeof result !== 'object' || Array.isArray(result)) return undefined;
-    const record = result as Record<string, unknown>;
-    if (record.status !== 'error') return undefined;
-    // Trust boundary: rebuild the marker from validated fields only, so a
-    // crafted payload cannot smuggle extra keys toward the model prompt.
-    return {
-      status: 'error',
-      ...(typeof record.createdAt === 'number' && Number.isFinite(record.createdAt)
-        ? { createdAt: record.createdAt }
-        : {}),
-    };
-  } catch {
-    return undefined;
-  }
-}
-
 async function resolveRemoteReference(
   invoke: RemoteInvoke,
   ref: MobileSessionReference,
@@ -644,8 +639,12 @@ async function resolveRemoteReference(
   let mapped: MobileSessionReferenceMessage[];
   let anchorIndex: number | undefined;
   let sourceTruncated = false;
+  // 终态标记由被控端与首个历史页在同一 handler 调用内算好(见
+  // readRemoteHistory),与消息快照天然同源;锚点路径不带终态。
+  let terminal: MobileSessionReferenceTerminal | undefined;
   if (!ref.messageClientId) {
     const page = await readRemoteHistory(invoke, ref, messageLimit, 'desc', clearedAt);
+    terminal = page.terminal;
     const visibleRows = page.items
       .map(toReferenceMessage)
       .filter((row): row is MobileSessionReferenceMessage => row !== null)
@@ -718,12 +717,6 @@ async function resolveRemoteReference(
       `Session ${ref.sessionId} has no visible messages to reference`,
     );
   }
-  // A recent snapshot may legitimately end at a partial assistant message
-  // when the turn failed on the source device.  Probe for the safe marker
-  // only — the persisted error body never crosses device-link.
-  const terminal = ref.messageClientId
-    ? undefined
-    : await readRemoteTerminal(invoke, ref, remoteClearedAt ?? null);
   const fitted = fitMessagesToTokenBudget(mapped, tokenBudget, anchorIndex);
   return {
     context: {

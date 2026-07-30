@@ -31,17 +31,13 @@ export const DL_UNSUBSCRIBE_CHANNEL = 'device-link:unsubscribe';
 /**
  * cindy_helper 跨设备历史读取。被控端只接受单 session 的结构化只读查询，
  * 并复用本机 history reader 的过滤、排序与游标语义。
+ *
+ * 响应除分页结果外附带可选 `terminal` 字段(会话尾部终态安全标记,
+ * { status:'error', createdAt? } 或 null):被控端与页面读取在同一次
+ * handler 调用内计算,保证标记与消息快照来自同一数据库时刻;错误正文
+ * 不出被控端。老被控端响应无此字段 → 控制端按无终态降级。
  */
 export const DL_HISTORY_MESSAGES_CHANNEL = 'local-db:history:messages';
-
-/**
- * 会话尾部终态探针(控制端 → 被控端):被控端在本机库上判定会话最新可见行是否为
- * 未忽略的错误行,只回 { status:'error', createdAt? } 或 null —— 错误正文(可能含
- * provider 细节)不出被控端。会话引用(quote)在远端重建上下文时凭它区分「回合被
- * 错误截断」与「正常结束」;老被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端
- * 按无终态降级,不阻断引用。
- */
-export const DL_HISTORY_SESSION_TERMINAL_CHANNEL = 'local-db:history:session-terminal';
 
 /**
  * 会话引用消费能力探针。控制端在发送含引用快照的队列消息前必须先调用；
@@ -194,9 +190,6 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   'local-db:sessions:list',
   'local-db:sessions:get',
   DL_HISTORY_MESSAGES_CHANNEL,
-  // 会话尾部终态探针:只回安全标记(status + createdAt),错误正文不出被控端;
-  // 与会话引用的 remote quote 同安全级。老被控端无此 channel → 控制端降级为无终态。
-  DL_HISTORY_SESSION_TERMINAL_CHANNEL,
   'local-db:messages:list',
   // 会话内搜索跳转定位(loadAroundMessage):只读,与 messages:list 同安全级。
   'local-db:messages:around',
