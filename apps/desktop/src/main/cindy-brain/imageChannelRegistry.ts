@@ -36,7 +36,8 @@ export interface ImageChannel {
   ready(): boolean;
   /**
    * 该来源是否支持图像编辑(editImage)。
-   * 省略视为 true;仅生成来源(xAI 等)显式设为 false 以从编辑清单排除。
+   * 省略视为 true;仅生成来源(xAI 等)显式设为 false 以从编辑清单排除,
+   * 改图派发路径在出网前早失效。
    */
   supportsEdit?: boolean;
   generateImage(params: {
