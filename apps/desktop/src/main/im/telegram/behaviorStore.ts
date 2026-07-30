@@ -45,6 +45,46 @@ const file = createOverrideSettingsFile<TelegramBehaviorConfig>({
   label: 'telegram-bot-behavior',
 });
 
+/** 人格配置(soul.md 语义): 名字进 Telegram 资料页同步与 persona 块, soul 每轮注入。 */
+export interface TelegramPersonaConfig {
+  botName: string;
+  soul: string;
+}
+
+const PERSONA_DEFAULTS: TelegramPersonaConfig = { botName: '', soul: '' };
+const BOT_NAME_MAX = 64; // Telegram setMyName 上限
+const SOUL_MAX = 4000;
+
+function normalizePersona(raw: unknown): TelegramPersonaConfig {
+  const r = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  return {
+    botName: typeof r.botName === 'string' ? r.botName.slice(0, BOT_NAME_MAX) : '',
+    soul: typeof r.soul === 'string' ? r.soul.slice(0, SOUL_MAX) : '',
+  };
+}
+
+const personaFile = createOverrideSettingsFile<TelegramPersonaConfig>({
+  filePath: () => ownerScopedImUserDataPath('telegram-bot-persona.json'),
+  defaults: PERSONA_DEFAULTS,
+  normalize: normalizePersona,
+  log,
+  label: 'telegram-bot-persona',
+});
+
+export function readTelegramPersona(): TelegramPersonaConfig {
+  return personaFile.read();
+}
+
+export function patchTelegramPersona(
+  patch: Partial<TelegramPersonaConfig>,
+): TelegramPersonaConfig {
+  const next: Partial<TelegramPersonaConfig> = {};
+  if (typeof patch.botName === 'string') next.botName = patch.botName.trim().slice(0, BOT_NAME_MAX);
+  if (typeof patch.soul === 'string') next.soul = patch.soul.slice(0, SOUL_MAX);
+  personaFile.writePatch(next);
+  return personaFile.read();
+}
+
 export function readTelegramBehavior(): TelegramBehaviorConfig {
   return file.read();
 }

@@ -1822,6 +1822,20 @@
           "off": "DM の回答は引用なしで送ります（デフォルト）。",
           "first": "最初の返信があなたのメッセージを引用します。"
         }
+      },
+      "persona": {
+        "title": "ペルソナ",
+        "nameLabel": "名前",
+        "namePlaceholder": "ボットに名前を（Telegram プロフィールに同期）",
+        "soulLabel": "Soul（基本人格）",
+        "soulPlaceholder": "性格・口調・口ぐせ・境界線などを書くと、毎回の返信にこの人格が宿ります。",
+        "syncHint": "名前を Telegram プロフィールへ書き込み（BotFather 不要）",
+        "sync": {
+          "idle": "プロフィール同期",
+          "syncing": "同期中…",
+          "done": "同期済み ✓",
+          "failed": "同期失敗、後でもう一度"
+        }
       }
     },
     "logout": {

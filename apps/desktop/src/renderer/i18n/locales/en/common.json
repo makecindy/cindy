@@ -1823,6 +1823,20 @@
           "off": "DM answers are sent without quoting (default, cleaner).",
           "first": "The first reply quotes the message you sent."
         }
+      },
+      "persona": {
+        "title": "Persona",
+        "nameLabel": "Name",
+        "namePlaceholder": "Name your bot (synced to its Telegram profile)",
+        "soulLabel": "Soul (base persona)",
+        "soulPlaceholder": "Describe its character, tone, catchphrases, boundaries… Every reply carries this persona.",
+        "syncHint": "Write the name to the Telegram profile (no BotFather needed)",
+        "sync": {
+          "idle": "Sync profile",
+          "syncing": "Syncing…",
+          "done": "Synced ✓",
+          "failed": "Sync failed, try again later"
+        }
       }
     },
     "logout": {

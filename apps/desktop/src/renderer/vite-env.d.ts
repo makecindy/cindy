@@ -1701,6 +1701,12 @@ interface ElectronAPI {
     checkSessionAuth: () => Promise<DiscordBotSessionAuthCheckResult>;
     getBehavior: () => Promise<TelegramBotBehavior>;
     setBehavior: (patch: Partial<TelegramBotBehavior>) => Promise<TelegramBotBehavior>;
+    getPersona: () => Promise<{ botName: string; soul: string }>;
+    setPersona: (payload: {
+      botName?: string;
+      soul?: string;
+      syncProfile?: boolean;
+    }) => Promise<{ persona: { botName: string; soul: string }; profileSynced?: boolean }>;
     onStatusChange: (
       callback: (update: {
         status: TelegramBotTransportStatus;

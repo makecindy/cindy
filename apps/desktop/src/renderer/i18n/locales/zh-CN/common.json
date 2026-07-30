@@ -1822,6 +1822,20 @@
           "off": "私聊回答不引用你的消息（默认，更清爽）。",
           "first": "第一条回答引用你发的那条消息。"
         }
+      },
+      "persona": {
+        "title": "人格",
+        "nameLabel": "名字",
+        "namePlaceholder": "给 bot 起个名字（同步到 Telegram 资料页）",
+        "soulLabel": "Soul（基础人格）",
+        "soulPlaceholder": "写下 TA 的性格、语气、口头禅、边界……每次回复都会带着这份人格。",
+        "syncHint": "把名字写进 Telegram 资料页（BotFather 免操作）",
+        "sync": {
+          "idle": "同步资料页",
+          "syncing": "同步中…",
+          "done": "已同步 ✓",
+          "failed": "同步失败，稍后再试"
+        }
       }
     },
     "logout": {

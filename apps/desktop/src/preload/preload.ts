@@ -1526,6 +1526,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       replyQuoteGroup: 'off' | 'first' | 'all';
       replyQuoteDm: 'off' | 'first';
     }> => ipcRenderer.invoke('telegramBot:set-behavior', patch),
+    // 人格(soul + 名字); syncProfile=true 时顺带 setMyName 同步资料页。
+    getPersona: (): Promise<{ botName: string; soul: string }> =>
+      ipcRenderer.invoke('telegramBot:get-persona'),
+    setPersona: (payload: {
+      botName?: string;
+      soul?: string;
+      syncProfile?: boolean;
+    }): Promise<{ persona: { botName: string; soul: string }; profileSynced?: boolean }> =>
+      ipcRenderer.invoke('telegramBot:set-persona', payload),
     onStatusChange: fanOutTelegramBotStatusChange,
   },
 

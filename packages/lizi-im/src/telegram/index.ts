@@ -554,6 +554,23 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   }
 
   /**
+   * 人格名字同步到 Telegram 资料页(setMyName)。空名 = 清除自定义名。
+   * 返回是否成功(限流/网络失败返回 false, 由设置卡提示重试)。
+   */
+  async syncBotProfileName(name: string): Promise<boolean> {
+    const api = this.api;
+    if (!api) return false;
+    try {
+      await api.call('setMyName', { name: name.slice(0, 64) });
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(`telegram setMyName failed: ${msg}`);
+      return false;
+    }
+  }
+
+  /**
    * 把命令菜单注册到 owner 私聊 scope(best-effort, 失败静默)。
    * scope 精准到 chat: 只有 owner 的输入框会出现 "/" 菜单。
    */

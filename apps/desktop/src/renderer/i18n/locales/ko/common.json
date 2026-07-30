@@ -1822,6 +1822,20 @@
           "off": "DM 답변은 인용 없이 보냅니다(기본).",
           "first": "첫 답장이 보낸 메시지를 인용합니다."
         }
+      },
+      "persona": {
+        "title": "페르소나",
+        "nameLabel": "이름",
+        "namePlaceholder": "봇 이름 짓기(Telegram 프로필에 동기화)",
+        "soulLabel": "Soul(기본 인격)",
+        "soulPlaceholder": "성격, 말투, 입버릇, 경계를 적어 두면 모든 답장에 이 인격이 담깁니다.",
+        "syncHint": "이름을 Telegram 프로필에 기록(BotFather 불필요)",
+        "sync": {
+          "idle": "프로필 동기화",
+          "syncing": "동기화 중…",
+          "done": "동기화 완료 ✓",
+          "failed": "동기화 실패, 나중에 다시"
+        }
       }
     },
     "logout": {

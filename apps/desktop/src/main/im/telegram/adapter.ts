@@ -24,6 +24,7 @@ import {
 import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
 import { ownerScopedImUserDataPath } from '../ownerScopedStorage';
 import { buildTelegramGroupContextPrefix, buildTelegramReplyContextBlock } from './groupWindow';
+import { readTelegramPersona } from './behaviorStore';
 import { ui, PROCESSING_EMOJI } from './uiText';
 
 function ensureWorkingDir(botId: string): string {
@@ -35,6 +36,19 @@ function ensureWorkingDir(botId: string): string {
 /** lane userId 含 `/`, 会话 id 与文件系统场景统一替换成 `-`。 */
 function sessionSafeUserId(userId: string): string {
   return userId.replace(/\//g, '-');
+}
+
+/**
+ * 人格块(soul.md 语义) — Hermes channel_prompt 先例: 每轮注入送模型文本,
+ * 不落 transcript(prepareAgentTurnText 的 agentText 只进模型, 落库用渠道原文)。
+ * owner 在设置卡编辑, 即改即生效。
+ */
+function personaBlock(): string {
+  const persona = readTelegramPersona();
+  const soul = persona.soul.trim();
+  if (!persona.botName && !soul) return '';
+  const nameLine = persona.botName ? `你的名字: ${persona.botName}\n` : '';
+  return `<bot_persona>\n${nameLine}${soul}\n</bot_persona>\n\n`;
 }
 
 /** 发言人显示名/用户名消毒: 平台可改字段是不可信输入, 去控制字符与换行防注入。 */
@@ -88,10 +102,11 @@ export function buildTelegramAdapter(
       const replyBlock = event.replyContext
         ? buildTelegramReplyContextBlock(event.replyContext)
         : '';
+      const persona = personaBlock();
       if (!lane) {
-        // DM: 无群窗口, 但引用注入(回复某条消息触发)同样生效。
-        if (!replyBlock) return null;
-        return { agentText: `${replyBlock}${event.text}` };
+        // DM: 无群窗口, 但人格块与引用注入(回复某条消息触发)同样生效。
+        if (!replyBlock && !persona) return null;
+        return { agentText: `${persona}${replyBlock}${event.text}` };
       }
       const { messageId: triggerMessageId } = decodeTelegramMessageId(event.messageId);
       // 合成 lane 标记: `r<msgId>` = owner per-root reply 链; `u<uid>[t<topic>]`
@@ -116,7 +131,7 @@ export function buildTelegramAdapter(
         : '';
       // 顺序: 群窗口(较远的背景) → 引用块(直接相关) → 发言人 → 用户正文。
       return {
-        agentText: `${assembly.prefix}${replyBlock}${speakerLine}${event.text}`,
+        agentText: `${persona}${assembly.prefix}${replyBlock}${speakerLine}${event.text}`,
         commit: assembly.commit,
       };
     },

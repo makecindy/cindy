@@ -7,7 +7,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useTelegramBot } from '@/hooks/useTelegramBot';
 import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
-import { TelegramBehaviorSettings } from './TelegramBehaviorSettings';
+import { TelegramBehaviorSettings, TelegramPersonaSettings } from './TelegramBehaviorSettings';
 
 const TELEGRAM_BOTFATHER_URL = 'https://t.me/BotFather';
 
@@ -142,6 +142,8 @@ export function TelegramBotSection({
       }
     >
       <ImDefaultSettingsSection channel="telegram" embedded onSummaryChange={setRouteSummary} />
+      <div className="h-px w-full bg-[var(--border-default)]" />
+      <TelegramPersonaSettings />
       <div className="h-px w-full bg-[var(--border-default)]" />
       <TelegramBehaviorSettings />
       <div className="h-px w-full bg-[var(--border-default)]" />

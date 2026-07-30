@@ -34,7 +34,12 @@ import { pinBlob } from '../cindy-media/ledger';
 import { t } from '../i18n';
 import { discordUiText } from './discord/uiText';
 import { telegramUiText } from './telegram/uiText';
-import { patchTelegramBehavior, readTelegramBehavior } from './telegram/behaviorStore';
+import {
+  patchTelegramBehavior,
+  patchTelegramPersona,
+  readTelegramBehavior,
+  readTelegramPersona,
+} from './telegram/behaviorStore';
 import { imHostAccountScope } from './accountScopeBridge';
 import { ownerScopedImSecrets } from './ownerScopedStorage';
 import { captureImAccountGeneration, isImAccountGenerationCurrent } from './accountBoundary';
@@ -156,6 +161,20 @@ ipcMain.handle('telegramBot:get-behavior', () => readTelegramBehavior());
 ipcMain.handle('telegramBot:set-behavior', (_e, patch) =>
   patchTelegramBehavior((patch ?? {}) as Parameters<typeof patchTelegramBehavior>[0]),
 );
+// 人格配置(soul + 名字); 保存后可选把名字同步到 Telegram 资料页(setMyName)。
+ipcMain.handle('telegramBot:get-persona', () => readTelegramPersona());
+ipcMain.handle('telegramBot:set-persona', async (_e, payload) => {
+  const p = (payload ?? {}) as { botName?: string; soul?: string; syncProfile?: boolean };
+  const persona = patchTelegramPersona({
+    ...(typeof p.botName === 'string' ? { botName: p.botName } : {}),
+    ...(typeof p.soul === 'string' ? { soul: p.soul } : {}),
+  });
+  let profileSynced: boolean | undefined;
+  if (p.syncProfile === true) {
+    profileSynced = await telegramIm.syncBotProfileName(persona.botName);
+  }
+  return { persona, ...(profileSynced !== undefined ? { profileSynced } : {}) };
+});
 
 export const wechatCompatibilityPolicy = new WechatCompatibilityPolicyService({
   ...WECHAT_COMPATIBILITY_POLICY_PRODUCTION_CONFIG,
