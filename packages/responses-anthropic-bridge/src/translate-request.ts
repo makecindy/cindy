@@ -201,8 +201,9 @@ function mediaBlockFromToolPart(part: JsonObject): JsonObject | null {
         },
       };
     }
-    if (source?.type === 'url' && stringValue(source.url)) {
-      const url = validatedHttpUrl(source.url);
+    const sourceUrl = stringValue(source?.url);
+    if (source?.type === 'url' && sourceUrl) {
+      const url = validatedHttpUrl(sourceUrl);
       if (!url) return null;
       return {
         type: 'image',
@@ -223,8 +224,9 @@ function mediaBlockFromToolPart(part: JsonObject): JsonObject | null {
         ...(stringValue(part.title) ? { title: part.title } : {}),
       };
     }
-    if (source.type === 'url' && stringValue(source.url)) {
-      const url = validatedHttpUrl(source.url);
+    const sourceUrl = stringValue(source.url);
+    if (source.type === 'url' && sourceUrl) {
+      const url = validatedHttpUrl(sourceUrl);
       if (!url) return null;
       return {
         type: 'document',
