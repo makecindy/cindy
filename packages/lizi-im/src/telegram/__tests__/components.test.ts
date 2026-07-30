@@ -28,6 +28,25 @@ describe('buildCardPayload', () => {
     expect(replyMarkup?.inline_keyboard.map((row) => row.length)).toEqual([2, 1]);
   });
 
+  it('超长正文截断不切进标签/实体, 未配对标签补闭合(parse_mode=HTML 不 400)', () => {
+    // 长链接列表: 3800 截点大概率落在 <a href="..."> 内部或实体中间
+    const body = Array.from({ length: 200 }, (_, i) =>
+      `[链接与符号 & 文本 ${i}](https://example.com/very/long/path/segment-${i}?q=a&b=c)`,
+    ).join(' ');
+    const { html } = buildCardPayload({ title: 'T', body, buttons: [] });
+    expect(html.length).toBeLessThan(4200);
+    // 无残缺标签: 每个 '<' 都有配对 '>'
+    expect(html.lastIndexOf('<')).toBeLessThan(html.lastIndexOf('>'));
+    // 标签配对: <a> 与 </a> 数量一致(截断处补了闭合)
+    const opens = (html.match(/<a\s/g) ?? []).length;
+    const closes = (html.match(/<\/a>/g) ?? []).length;
+    expect(opens).toBe(closes);
+    // 无被切断的实体(& 后面在合理窗口内必有 ;)
+    const tail = html.slice(-12);
+    const amp = tail.lastIndexOf('&');
+    if (amp !== -1) expect(tail.slice(amp)).toContain(';');
+  });
+
   it('无按钮时不带 reply_markup', () => {
     expect(buildCardPayload({ body: 'b', buttons: [] }).replyMarkup).toBeUndefined();
   });

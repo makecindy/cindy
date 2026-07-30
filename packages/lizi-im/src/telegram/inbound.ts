@@ -313,9 +313,14 @@ async function downloadTelegramFile(
         return { kind, absPath: cached.absPath, originalName, mimeType: cached.mimeType, url: cached.url };
       }
     }
-    const file = await ctx.api.call<TgFile>('getFile', { file_id: fileId });
+    // getFile 与下载 fetch 同在轮询循环的 await 链上 — 两跳都必须带超时,
+    // 否则任一悬死连接(TCP 半开/代理黑洞)会卡住全部入站直到进程重启。
+    const file = await ctx.api.call<TgFile>(
+      'getFile',
+      { file_id: fileId },
+      AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+    );
     if (!file.file_path) return null;
-    // 下载在轮询循环内 await — 必须带超时, 否则一个悬死连接会卡住全部入站。
     const res = await fetch(ctx.api.fileUrl(file.file_path), {
       signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
     });

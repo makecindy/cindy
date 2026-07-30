@@ -1450,8 +1450,11 @@ export function createTurnRunner(
           ? adapter.terminalReactionEmoji(turn.terminalKind)
           : null;
       if (terminalEmoji) {
-        await im.reactToMessage?.(turn.userMessageId, terminalEmoji);
-        return;
+        // 替换成功(返回 token)即顶掉旧 ack;返回 null = 渠道本轮拒放表情
+        // (如 telegram 在 turn 进行中被切到 emoji off)— 必须回落撤 ack,
+        // 否则 👀 永久卡在用户消息上。
+        const replaced = await im.reactToMessage?.(turn.userMessageId, terminalEmoji);
+        if (replaced) return;
       }
       await im.removeMessageReaction?.(turn.userMessageId, reactionId);
     } catch {

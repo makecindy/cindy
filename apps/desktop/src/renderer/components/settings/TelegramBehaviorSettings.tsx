@@ -120,6 +120,8 @@ export function TelegramPersonaSettings() {
   const [persona, setPersona] = useState<{ botName: string; soul: string } | null>(null);
   const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'done' | 'failed'>('idle');
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 去抖窗口内未落盘的最新编辑 — 卸载时 flush, 600ms 内关面板不丢内容。
+  const pendingSave = useRef<{ botName: string; soul: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -129,6 +131,11 @@ export function TelegramPersonaSettings() {
     return () => {
       cancelled = true;
       if (saveTimer.current) clearTimeout(saveTimer.current);
+      if (pendingSave.current) {
+        const flush = pendingSave.current;
+        pendingSave.current = null;
+        void window.electronAPI.telegramBot.setPersona(flush);
+      }
     };
   }, []);
 
@@ -136,15 +143,19 @@ export function TelegramPersonaSettings() {
 
   const save = (next: { botName: string; soul: string }) => {
     setPersona(next);
+    pendingSave.current = { botName: next.botName, soul: next.soul };
     if (saveTimer.current) clearTimeout(saveTimer.current);
     // 600ms 去抖自动保存 — 无显式保存按钮(设置卡即改即存的通用手感)。
     saveTimer.current = setTimeout(() => {
+      pendingSave.current = null;
       void window.electronAPI.telegramBot.setPersona({ botName: next.botName, soul: next.soul });
     }, 600);
   };
 
   const syncProfile = async () => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
+    // 本次调用带的就是最新值, 去抖窗口的待存内容随之落盘。
+    pendingSave.current = null;
     setSyncState('syncing');
     const result = await window.electronAPI.telegramBot.setPersona({
       botName: persona.botName,

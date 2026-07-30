@@ -37,11 +37,13 @@ export function autoRegisterTelegramSpeaker(
     if (speaker.isOwner) return;
     if (seenTelegramIds.has(speaker.id)) return;
     if (!readContactsSettingsState().value.enabled) return;
-    seenTelegramIds.add(speaker.id);
 
     const store = getDesktopContactsManager().getStore();
     const hits = store.resolve(speaker.id, { platform: 'telegram', limit: 1 });
-    if (hits.some((h) => h.matchType === 'identity')) return;
+    if (hits.some((h) => h.matchType === 'identity')) {
+      seenTelegramIds.add(speaker.id);
+      return;
+    }
 
     const displayName = speaker.name.trim() || speaker.id;
     const groupNote = context.chatName ? `Telegram 群「${context.chatName}」` : 'Telegram 群';
@@ -55,6 +57,9 @@ export function autoRegisterTelegramSpeaker(
         ...(speaker.username ? [{ platform: 'telegram', value: `@${speaker.username}` }] : []),
       ],
     });
+    // 去重标记只在成功路径落下: resolve/create 瞬时失败(DB busy/管理器未
+    // 就绪)不标记, 该发言人下次发言可重试 — 尽力而为但可恢复。
+    seenTelegramIds.add(speaker.id);
     log.info(`auto-registered telegram speaker id=${speaker.id}`);
   } catch (err) {
     log.debug?.(

@@ -91,6 +91,35 @@ function escapeTitle(title: string): string {
   return title.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/**
+ * HTML 安全截断: 纯字符切片可能切在标签(<a href=...)或实体(&amp;)中间,
+ * parse_mode=HTML 的 sendMessage 会 400 整条失败。截点回退到完整边界,
+ * 再栈扫描闭合未配对标签(Telegram HTML 子集无自闭合标签)。
+ */
 function capCardText(html: string): string {
-  return html.length > CARD_TEXT_MAX ? `${html.slice(0, CARD_TEXT_MAX - 1)}…` : html;
+  if (html.length <= CARD_TEXT_MAX) return html;
+  let cut = html.slice(0, CARD_TEXT_MAX - 1);
+  const lastOpen = cut.lastIndexOf('<');
+  if (lastOpen > cut.lastIndexOf('>')) cut = cut.slice(0, lastOpen);
+  const lastAmp = cut.lastIndexOf('&');
+  if (lastAmp !== -1 && !cut.slice(lastAmp).includes(';') && cut.length - lastAmp <= 10) {
+    cut = cut.slice(0, lastAmp);
+  }
+  const stack: string[] = [];
+  const tagRe = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)(?:\s[^>]*)?>/g;
+  let m: RegExpExecArray | null;
+  while ((m = tagRe.exec(cut)) !== null) {
+    const name = m[2].toLowerCase();
+    if (m[1]) {
+      const idx = stack.lastIndexOf(name);
+      if (idx !== -1) stack.splice(idx, 1);
+    } else {
+      stack.push(name);
+    }
+  }
+  const closers = stack
+    .reverse()
+    .map((name) => `</${name}>`)
+    .join('');
+  return `${cut}…${closers}`;
 }
