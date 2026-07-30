@@ -461,6 +461,47 @@ describe('TelegramIM', () => {
     expect(events[1].text).toBe('顺便再查个东西');
   });
 
+  it('相册处理(附件下载)未收口前, 持久化游标不越过相册首条 update', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    // 让 getFile 悬住 — 模拟 settle 已触发、附件仍在下载的处理窗口
+    let releaseGetFile!: () => void;
+    const gate = new Promise<void>((r) => (releaseGetFile = r));
+    const origCall = api.call.bind(api);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'getFile') {
+        await gate;
+      }
+      return origCall(method, params, signal);
+    }) as typeof api.call;
+    const member = (messageId: number): TgUpdate => ({
+      update_id: messageId,
+      message: {
+        message_id: messageId,
+        from: { id: 111, is_bot: false, first_name: 'U' },
+        chat: { id: 111, type: 'private' },
+        date: 1_753_000_000,
+        media_group_id: 'album-cap',
+        ...(messageId === 45 ? { caption: '慢速相册' } : {}),
+        photo: [{ file_id: `f${messageId}`, file_unique_id: `u${messageId}`, width: 10, height: 10 }],
+      },
+    });
+    api.pushUpdates([member(45), member(46)]);
+    // 等 settle 触发进入下载(getFile 悬住), 此时游标不得越过 45
+    await new Promise((r) => setTimeout(r, 1400));
+    expect(events).toHaveLength(0);
+    const persistedDuring = Number((ctx.secrets.get('telegram-updates-offset') ?? ':0').split(':')[1]);
+    expect(persistedDuring).toBeLessThanOrEqual(45);
+    // 放行下载 → 相册收口 → 游标补写越过整组
+    releaseGetFile();
+    await vi.waitFor(() => expect(events).toHaveLength(1), { timeout: 4000 });
+    await vi.waitFor(() => {
+      const persisted = Number((ctx.secrets.get('telegram-updates-offset') ?? ':0').split(':')[1]);
+      expect(persisted).toBeGreaterThanOrEqual(47);
+    });
+  });
+
   it('相册(media_group)聚合为单个事件, 不各起一轮 turn', async () => {
     const events: IMMessageEvent[] = [];
     im.onMessage((e) => events.push(e));

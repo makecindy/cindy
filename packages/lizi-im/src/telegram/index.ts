@@ -108,7 +108,8 @@ type GroupWindowHandler = (entry: TelegramGroupWindowEntry) => void;
 /** settle 缓冲/处理中的相册(见 albumsInFlight 注释)。 */
 interface PendingAlbum {
   messages: TgMessage[];
-  timer: ReturnType<typeof setTimeout>;
+  /** settle 定时器; null = 尚未挂上(构造与 setTimeout 之间的窗口)。 */
+  timer: ReturnType<typeof setTimeout> | null;
   firstUpdateId: number;
   chatId: string;
   /** 处理收口(或被丢弃)时 resolve — 同 chat 后续消息的顺序门在等它。 */
@@ -215,6 +216,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private readonly albumsInFlight = new Set<PendingAlbum>();
   /** 本连接见过的最大 offset(update_id+1) — 相册 flush 后补写持久化游标用。 */
   private lastSeenOffset = 0;
+  /**
+   * per-chat 串行处理链(chatKey → 链尾 promise): 轮询循环只做分发不等待 —
+   * 同 chat 内保序(相册门只挡自己 chat), 跨 chat 并行, 无队头阻塞
+   * (2026-07-30 #1098 review: 全局 await 会让一个 chat 的相册下载拖住全部)。
+   */
+  private readonly chatQueues = new Map<string, Promise<void>>();
+  /** 已分发未收口的 update_id — 持久化游标的低水位以它为准, 掉线不丢任何在途消息。 */
+  private readonly inflightUpdateIds = new Set<number>();
   /**
    * 待配对的回挂触发队列(laneUserId → 原生 message_id FIFO): 多条消息在上一
    * 轮还没出话时先后触发同一 lane, 各自的答案必须挂回各自的提问 — 单值会被
@@ -711,16 +720,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           offset = Math.max(offset, update.update_id + 1);
           this.lastSeenOffset = offset;
           if (abort.signal.aborted || this.configVersion !== generation) return;
-          try {
-            await this.handleUpdate(update);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            this.log.warn(`telegram update handling failed: ${msg}`);
-          }
+          // 只分发不等待: 处理进 per-chat 串行链, 循环立即消费下一条 —
+          // 一个 chat 的相册下载/顺序门不会拖住其它 chat(#1098 review P1/P2)。
+          this.dispatchUpdate(update, generation);
         }
-        // 持久化游标不越过仍在缓冲的相册成员: settle 窗口内断开/换 token 时,
-        // 下次连接从相册首条重放, 不丢用户的图(getUpdates 的内存 offset 照常
-        // 前进, 本连接内不重复拉取)。flush 完成后由 persistOffsetCapped 补写。
+        // 持久化游标走低水位: 不越过任何在途(分发未收口)update 与缓冲中
+        // 相册 — 各任务收口时在 finally 里自行补写(getUpdates 的内存 offset
+        // 照常前进, 本连接内不重复拉取)。
         if (updates.length > 0) this.persistOffsetCapped();
       } catch (err) {
         if (abort.signal.aborted || this.configVersion !== generation) return;
@@ -758,6 +764,36 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   // ── update handling ────────────────────────────────────────────────────────
 
+  /**
+   * 把 update 挂进所属 chat 的串行处理链并登记在途 id。链尾即序: 同 chat
+   * 严格按到达顺序处理; 不同 chat 各自成链互不等待。收口(成功/失败/跳过)
+   * 时移除在途 id 并补写低水位游标 — 进程在任何点退出, 重启都从"最早未
+   * 完成的 update"续读, 不丢消息(at-least-once)。
+   */
+  private dispatchUpdate(update: TgUpdate, generation: number): void {
+    const chatId =
+      update.message?.chat.id ?? update.callback_query?.message?.chat.id ?? 'global';
+    const key = String(chatId);
+    this.inflightUpdateIds.add(update.update_id);
+    const prev = this.chatQueues.get(key) ?? Promise.resolve();
+    const next = prev
+      .then(async () => {
+        if (this.disposing || this.configVersion !== generation) return;
+        try {
+          await this.handleUpdate(update);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.log.warn(`telegram update handling failed: ${msg}`);
+        }
+      })
+      .finally(() => {
+        this.inflightUpdateIds.delete(update.update_id);
+        if (this.chatQueues.get(key) === next) this.chatQueues.delete(key);
+        if (!this.disposing && this.configVersion === generation) this.persistOffsetCapped();
+      });
+    this.chatQueues.set(key, next);
+  }
+
   private async handleUpdate(update: TgUpdate): Promise<void> {
     if (this.disposing) return;
     if (update.callback_query) {
@@ -778,8 +814,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     }
 
     // 顺序门: 同 chat 有相册在 settle/处理中时, 后续消息等它收口再进 turn —
-    // 否则同批次里"相册 + 追问"会被倒序回答(review P1)。handleUpdate 在
-    // 轮询循环里被串行 await, 这里等待即全链路保序; settle 定时器照常触发。
+    // 否则"相册 + 追问"会被倒序回答。本方法跑在该 chat 自己的串行链里
+    // (dispatchUpdate), 等待只挡本 chat, 其它 chat 的链照常并行。
     const gates = [...this.albumsInFlight]
       .filter((album) => album.chatId === String(m.chat.id))
       .map((album) => album.done);
@@ -800,7 +836,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     let album: PendingAlbum;
     if (existing && !existing.settled) {
       existing.messages.push(m);
-      clearTimeout(existing.timer);
+      if (existing.timer) clearTimeout(existing.timer);
       album = existing;
     } else {
       let resolveDone!: () => void;
@@ -809,7 +845,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       });
       album = {
         messages: [m],
-        timer: undefined as unknown as ReturnType<typeof setTimeout>,
+        timer: null,
         firstUpdateId: updateId,
         chatId: String(m.chat.id),
         done,
@@ -849,7 +885,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   private clearPendingAlbums(): void {
     for (const album of this.albumsInFlight) {
-      clearTimeout(album.timer);
+      if (album.timer) clearTimeout(album.timer);
       album.resolveDone(); // 解开顺序门, 不留悬挂 await
     }
     this.pendingAlbums.clear();
@@ -1475,11 +1511,15 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    * 补写时相册会重放一次, 比丢图可取。
    */
   private persistOffsetCapped(): void {
-    // 以 albumsInFlight 为准(含 settle 后仍在处理中的相册): pendingAlbums
-    // 的键在定时器触发即摘除, 只看它会在处理窗口内提前放开 cap(review P1)。
+    // 低水位 = min(在途 update, 缓冲/处理中相册的首条): 顺序门里等待的追问、
+    // 处理中的消息、settle 后仍在下载附件的相册都算未完成 — 游标一律不越过
+    // (#1098 review: 只看相册会把门里等待的追问永久跳过)。
     let floor = Number.POSITIVE_INFINITY;
     for (const album of this.albumsInFlight) {
       floor = Math.min(floor, album.firstUpdateId);
+    }
+    for (const updateId of this.inflightUpdateIds) {
+      floor = Math.min(floor, updateId);
     }
     this.persistOffset(Math.min(this.lastSeenOffset, floor));
   }
