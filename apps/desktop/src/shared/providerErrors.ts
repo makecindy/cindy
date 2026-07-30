@@ -81,13 +81,13 @@ const MODEL_NOT_FOUND_RE =
 const CONTEXT_TOO_LONG_RE =
   /prompt is too long|maximum context length|context.{0,20}(length|window).{0,40}(exceed|too)|too many tokens|input length.{0,20}exceed|context_length_exceeded/i;
 /** 余额 / 配额：OpenAI "insufficient_quota"、通用 balance / credit 措辞、
- *  LiteLLM "ExceededBudget: … Budget has been exceeded"(XD 网关点数耗尽的实际形状)。 */
+ *  LiteLLM "ExceededBudget: … Budget has been exceeded"(XD 网关余额不足的实际形状)。 */
 const QUOTA_RE =
   /insufficient_quota|insufficient.{0,12}(balance|credit|funds)|quota.{0,20}exceed|budget.{0,20}exceeded|ExceededBudget|余额不足|欠费/i;
 /** 速率型配额措辞(每分钟/每秒请求或 token 上限,如 Google "Quota exceeded for quota
  *  metric 'requests per minute'"、紧凑斜杠写法 "100 requests/minute"、
  *  "1M tokens/day"):也含 quota exceeded 字样,但等待重试即可恢复,**不是**
- *  余额/预算耗尽——不得判成不可重试的 QUOTA_EXCEEDED,更不得触发购买点数
+ *  余额/预算耗尽——不得判成不可重试的 QUOTA_EXCEEDED,更不得触发充值引导
  *  引导(review P1 ×2)。 */
 const RATE_QUOTA_RE =
   /per\s+(second|minute|hour|day)|per-(second|minute|hour|day)|\/(second|minute|hour|day)\b|\b[rt]pm\b|quota metric|rate.{0,8}limit/i;

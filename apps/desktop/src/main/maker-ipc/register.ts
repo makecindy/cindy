@@ -3093,14 +3093,23 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // 状态码猜测:429/529 是 SDK 自带退避重试的状态码,单次响应不代表终态,
       // 之前在 HTTP 层直接排除/放行这两个状态码都不对——排除会让真正耗尽重试
       // 的终止 429(如网关预算耗尽)永远清不掉残留的 bridge 归因,放行又会被
-      // 中途还会重试成功的瞬时响应误清掉(PR review P1 ×2)。会话自身模型是
-      // 订阅直连 bridge(chatgpt/ / xai/)时跳过——那种终止失败已经在 bridge
-      // 的 localHandler 响应处直接记了 true,不该被这里覆写回 false。
+      // 中途还会重试成功的瞬时响应误清掉(PR review P1 ×2)。
+      //
+      // 判据必须是**这次失败请求实际用的模型**,不能是 session.model:Task/
+      // sub-agent 可以在 frontmatter 里把单次请求覆写成 chatgpt/ / xai/,会话
+      // 顶层选择的模型不变,若照顶层模型判断,bridge 子代理失败时这里会立刻把
+      // bridge 的 localHandler 刚记的 true 覆写回 false(PR review P1)。terminal
+      // error 事件的 agentMeta.model 反映 SDK 消息里那次调用真实用的模型
+      // (translator.ts extractAssistantMeta 读 msg.message.model,不是会话
+      // 静态选择),按它判断才对;拿不到 agentMeta(极少数无 envelope 的兜底
+      // 错误分支)时宁可跳过、不覆写——没有可靠信号时不应该断言分类。
+      const failingModel = (event as { agentMeta?: { model?: string } | null }).agentMeta?.model;
       if (
         event.source === 'claude-code' &&
         !isPlannedUpgradeClose &&
         !isRemoteAuthRetry &&
-        !isSubscriptionDirectModel(session.model)
+        typeof failingModel === 'string' &&
+        !isSubscriptionDirectModel(failingModel)
       ) {
         recordClaudeSessionFailedRequestSource(session.id, false);
       }

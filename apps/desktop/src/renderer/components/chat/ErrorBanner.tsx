@@ -72,7 +72,7 @@ interface ErrorBannerProps {
   /** XD Gateway 返回了误导性的 Claude Pro/Opus 套餐错误时，切到已连接的
    * Claude.ai 订阅来源并重试本轮。未连接 Anthropic 时不提供此操作。 */
   onSwitchToClaudeSubscription?: () => Promise<void>;
-  /** 当前 session id。cc 默认路由(无显式来源)的点数耗尽引导需要它读会话的
+  /** 当前 session id。cc 默认路由(无显式来源)的余额不足引导需要它读会话的
    *  生效计费路由(gateway/subscription),缺省时该引导只按显式来源判定。 */
   sessionId?: string;
   /** true = 本横幅渲染的是持久化历史错误(ErrorTail),而非刚发生的 live 错误。
@@ -169,7 +169,7 @@ export function ErrorBanner({
   // 不能因为错误文案碰巧含 token_revoked 就引导用户去修 ChatGPT 登录态。历史无来源
   // 会话仍允许从非 provider-oauth runtime + 非 XD/xAI 前缀推断 OpenAI，守住旧数据兼容。
   const normalizedProviderId = providerId?.trim() || null;
-  // ── Cindy AI 点数耗尽 → 「购买点数」直达 ────────────────────────────────
+  // ── Cindy AI 余额不足 → 「余额充值」直达 ────────────────────────────────
   // 转化闭环:被余额挡住的瞬间给出可行动入口,而不是让用户自己去设置里找计费页。
   // 三重门,缺一不显(防止把别家供应商的余额问题错误指向 Cindy 计费):
   //  1. 错误文本命中共享分类器的余额/配额 pattern(与 QUOTA_EXCEEDED 同口径);
@@ -186,7 +186,7 @@ export function ErrorBanner({
   // ── 计费引导的来源归因快照(错误实例级)────────────────────────────────
   // providerId / modelId 是会话的**可变**当前值:错误还挂着时用户切换来源
   // (ChatInput.performProviderChange 不清错误尾部),自定义供应商的余额错误会
-  // 被换上的 xd 重新贴成 Cindy 点数耗尽(PR review P1)。快照按 (sessionId, 错误
+  // 被换上的 xd 重新贴成 Cindy 余额不足(PR review P1)。快照按 (sessionId, 错误
   // 文本) 联合实例冻结首帧的来源归因,只服务下方计费引导;其它恢复分支维持既有
   // 行为。只按错误文本键控不够:route-owner 会话视图直接切到另一会话时,若两个
   // 会话的错误文案恰好相同(如都命中 insufficient_quota),旧会话的快照会被
@@ -205,7 +205,7 @@ export function ErrorBanner({
   const billingProviderId = billingAttribution.providerId;
   const billingModelId = billingAttribution.modelId;
   // 订阅直连 bridge 模型(chatgpt/ / xai/)不参与:请求在 proxy 提前分流,花的是
-  // 个人订阅额度——ChatGPT/xAI 的配额错误绝不能被贴成 Cindy 点数耗尽(PR review
+  // 个人订阅额度——ChatGPT/xAI 的配额错误绝不能被贴成 Cindy 余额不足(PR review
   // P1)。这里按会话顶层模型兜底;子代理按请求覆写 bridge 模型时顶层模型不变,
   // 由观察状态的 lastFailedRequestBridge 失败归因兜住(PR review P1 ×3)。
   const isSubscriptionBridgeModel = !!billingModelId && isSubscriptionDirectModel(billingModelId);
@@ -258,7 +258,7 @@ export function ErrorBanner({
   // ccLastFailedRequestBridge:最近一笔**失败**请求是子代理覆写的 bridge 模型
   // (chatgpt/ / xai/,花个人订阅额度;proxy 响应侧落账,归因到失败那笔而非
   // 发起序)——顶层模型与会话来源都看不出它,默认路由与显式 XD 的 cc 会话
-  // 都必须据此闭嘴,不把 bridge 配额错误引导去购买点数(PR review P1 ×2)。
+  // 都必须据此闭嘴,不把 bridge 配额错误引导去充值(PR review P1 ×2)。
   const ccBridgeFailureVeto = agentKind === 'cc' && ccLastFailedRequestBridge;
   // 显式来源子句统一要求 !persistedError:历史错误的来源归因不可回溯(快照
   // 也只是重开时的当前值),按现值分类必然张冠李戴;持久化错误仅剩 cc 会话
@@ -427,7 +427,7 @@ export function ErrorBanner({
         })
       : t(safeRetryText ? 'chat.errorBanner.overloadBusy' : 'chat.errorBanner.overloadBusyNoRetry');
   } else if (showGatewayQuotaRecovery) {
-    // 点数耗尽:原始报错(LiteLLM budget 措辞等)对用户没有行动价值,换成
+    // 余额不足:原始报错(LiteLLM budget 措辞等)对用户没有行动价值,换成
     // 「点数不足 + 购买后重试」。外部发起的 turn(scheduler/goal)没有安全
     // retry 目标 → Retry 按钮不显示,文案也不能让用户点一个不存在的按钮。
     displayError = t(

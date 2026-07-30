@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 /**
- * ErrorBanner 点数耗尽引导(购买点数直达)的门控契约:
+ * ErrorBanner 余额不足引导(充值直达)的门控契约:
  *  - 命中 = quota 措辞 + 账号可进计费页(cloud+personal) + 花费走 XD 网关;
  *  - 三重门任一不满足都不得出现按钮,显式第三方来源(自定义供应商)的余额
  *    问题绝不指向 Cindy 计费页。
@@ -161,7 +161,7 @@ describe('ErrorBanner billing CTA', () => {
 
   it('never relabels subscription-bridge (chatgpt/) quota errors even with a stale gateway route', () => {
     // bridge 请求在 proxy 提前分流、不更新会话路由观察值:残留的 gateway 观察值
-    // 不得把 ChatGPT 的配额错误贴成 Cindy 点数耗尽。
+    // 不得把 ChatGPT 的配额错误贴成 Cindy 余额不足。
     mocks.claudeRoute.mockReturnValue({ route: 'gateway', lastFailedRequestBridge: false, resolved: true });
     renderBanner({ providerId: null, modelId: 'chatgpt/gpt-5.5' });
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
@@ -197,7 +197,7 @@ describe('ErrorBanner billing CTA', () => {
 
   it('freezes billing attribution per error instance across provider switches', () => {
     // 错误还挂着时切换来源(performProviderChange 不清错误尾部):自定义供应商
-    // 的余额错误不得被换上的 xd 重新贴成 Cindy 点数耗尽(PR review P1)。
+    // 的余额错误不得被换上的 xd 重新贴成 Cindy 余额不足(PR review P1)。
     const view = renderBanner({ providerId: 'my-custom-provider' });
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
     view.rerender(
@@ -243,7 +243,7 @@ describe('ErrorBanner billing CTA', () => {
 
   it('hides the CTA for explicit XD sessions when the failed request was a bridge override', () => {
     // 显式 XD 会话的子代理 bridge 覆写按请求绕过会话来源:providerId=xd +
-    // 顶层网关模型也不得把 bridge 配额失败引导去购买点数(PR review P1)。
+    // 顶层网关模型也不得把 bridge 配额失败引导去充值(PR review P1)。
     mocks.claudeRoute.mockReturnValue({ route: null, lastFailedRequestBridge: true, resolved: true });
     renderBanner({ providerId: 'xd' });
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
@@ -261,7 +261,7 @@ describe('ErrorBanner billing CTA', () => {
 
   it('never classifies persisted cc failures from current credentials (heuristic off)', () => {
     // 重启后观察值丢失、且失败那一轮之后凭证可能已变:订阅失败后配上网关 key,
-    // 按当前 key 回落判 gateway 会把订阅错误贴成 Cindy 点数耗尽——持久化错误
+    // 按当前 key 回落判 gateway 会把订阅错误贴成 Cindy 余额不足——持久化错误
     // 不回落启发式。
     mocks.claudeRoute.mockReturnValue({ route: null, lastFailedRequestBridge: false, resolved: true });
     mocks.apiKey.mockReturnValue({ hasSavedKey: true, isReconciling: false });
