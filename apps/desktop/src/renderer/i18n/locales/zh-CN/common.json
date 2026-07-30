@@ -4996,7 +4996,18 @@
         "aria": "对话已压缩"
       },
       "autoResume": {
-        "label": "连接中断，已自动继续"
+        "label": "已重新连接",
+        "labelFailed": "重新连接未成功",
+        "labelNeutral": "重新连接",
+        "detail": {
+          "reason": "中断原因",
+          "attempt": "本次重试 {{attempt}}/{{total}}",
+          "sessionTotal": "本对话累计重连 {{count}} 次"
+        }
+      },
+      "autoResumePending": {
+        "label": "重新连接中",
+        "labelWithProgress": "重新连接中 {{attempt}}/{{total}}"
       },
       "agentSwitch": {
         "label": "已从 {{from}} 切换到 {{to}}",

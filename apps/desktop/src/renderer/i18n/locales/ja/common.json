@@ -4996,7 +4996,18 @@
         "aria": "会話を圧縮しました"
       },
       "autoResume": {
-        "label": "接続が中断されたため、自動的に再開しました"
+        "label": "再接続しました",
+        "labelFailed": "再接続できませんでした",
+        "labelNeutral": "再接続",
+        "detail": {
+          "reason": "中断の理由",
+          "attempt": "今回の再試行 {{attempt}}/{{total}}",
+          "sessionTotal": "この会話での再接続 {{count}} 回"
+        }
+      },
+      "autoResumePending": {
+        "label": "再接続中",
+        "labelWithProgress": "再接続中 {{attempt}}/{{total}}"
       },
       "agentSwitch": {
         "label": "{{from}} から {{to}} に切り替えました",

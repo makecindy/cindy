@@ -252,6 +252,7 @@ import {
   onToolResultEvent,
   onToolResultFullEvent,
   onToolUseEvent,
+  markAutoResumeOutcome,
   onTurnErrorEvent,
   prepareSyntheticToolEventForBroadcast,
   resetTurnPersistState,
@@ -525,6 +526,13 @@ import {
 } from './uiContinuationSignal.js';
 import { readSilentStopAutoResumeSettings } from '../maker-host/silent-stop-auto-resume-store.js';
 import {
+  InterruptedTurnAutoResumeGuard,
+  isAutoResumeUserMessage,
+  isInterruptedTurnError,
+  type InterruptedTurnErrorSignals,
+} from './interruptedTurnAutoResume.js';
+import { readInterruptedTurnAutoResumeSettings } from '../maker-host/interrupted-turn-auto-resume-store.js';
+import {
   broadcastGhostMessageBlocked,
   broadcastGhostMessageRewritten,
   createGhostSessionTap,
@@ -573,6 +581,66 @@ const silentStopAutoResumeGuard = new SilentStopAutoResumeGuard({
     warn: (message, meta) => log.warn(message, meta),
   },
 });
+// 中断自动续跑守卫(上游把已有产出的 turn 打断 → 自动替用户点一次「继续」)。
+// 与 silent-stop 那份**额度独立记账**,理由见 interruptedTurnAutoResume.ts 文件头。
+const interruptedTurnAutoResumeGuard = new InterruptedTurnAutoResumeGuard({
+  isEnabled: () => readInterruptedTurnAutoResumeSettings().enabled,
+  log: {
+    debug: (message, meta) => log.debug(message, meta),
+    warn: (message, meta) => log.warn(message, meta),
+  },
+});
+
+/**
+ * 自愈接管中的会话 → 当初被压住的错误详情。
+ *
+ * 接管期间刻意**不落 error 行**:自愈成功时用户看到的应该是聊天流里一条低调的
+ * 「连接中断，已自动继续」分隔条,而不是一张红色错误卡 + 一条分隔条。最终没救回来时
+ * 用这份详情补落(`finalizeSuppressedAutoResumeError`),历史里不会缺记录。
+ */
+const autoResumeSuppressedErrors = new Map<
+  string,
+  { message?: string; reason?: string; sdkError?: string }
+>();
+
+/**
+ * 已落库、但还不知道结果的自动续跑消息(sessionId → clientId)。
+ *
+ * 那条消息在「续跑指令发出去」的瞬间就落库,那时还不知道有没有真连上;结果由
+ * `settleAutoResumeOutcome` 在后续事件里回填(见 markAutoResumeOutcome 的注释)。
+ */
+const pendingAutoResumeOutcomes = new Map<string, string>();
+
+/** 回填一次自动续跑的结果并清除待确认(重复调用安全:没有待确认就 no-op)。 */
+function settleAutoResumeOutcome(sessionId: string, outcome: 'succeeded' | 'failed'): void {
+  const clientId = pendingAutoResumeOutcomes.get(sessionId);
+  if (!clientId) return;
+  pendingAutoResumeOutcomes.delete(sessionId);
+  void markAutoResumeOutcome(sessionId, clientId, outcome);
+}
+
+/**
+ * 自愈没成 → 把压住的 error 行补落,并按需把横幅回落出来。
+ *
+ * `surfaceBanner=false` 用于「退避窗口内用户自己接手了」(recovery 已被清):那时再弹一条
+ * 横幅只是打扰,但错误行仍要补落 —— 否则那次中断在历史里没有任何痕迹。
+ */
+function finalizeSuppressedAutoResumeError(
+  sessionId: string,
+  opts: { surfaceBanner: boolean },
+): void {
+  // 自愈到此为止 → 上一条续跑记录的结果就是失败。
+  settleAutoResumeOutcome(sessionId, 'failed');
+  const suppressed = autoResumeSuppressedErrors.get(sessionId);
+  autoResumeSuppressedErrors.delete(sessionId);
+  // agentMeta 传 null:接管决策可能发生在延后结算路径上(原事件已不在手上),
+  // onTurnErrorEvent 无 agentMeta 时按 register 记录的 turnDedupId 做多窗 dedup。
+  if (suppressed) onTurnErrorEvent(sessionId, suppressed, null);
+  agentInputCoordinatorHolder?.abandonAutoResume(
+    sessionId,
+    opts.surfaceBanner ? suppressed?.message : undefined,
+  );
+}
 
 /**
  * 非 renderer 发送路径(scheduler runner / hook runner)调用:给 silent-stop
@@ -2576,6 +2644,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         noteTurnStarted(session.id);
         // silent-stop 守卫:新 turn 开始 → 清 pendingResume + 记录时刻(陈旧判定)。
         silentStopAutoResumeGuard.noteTurnStarted(session.id);
+        interruptedTurnAutoResumeGuard.noteTurnStarted(session.id);
         const wasInTurn = sessionTurnActivityTracker.isSessionInTurn(session.id);
         sessionTurnActivityTracker.setSessionInTurn(session.id, data.isRunning);
         // 后台活动检测:turn 开始 → 该会话的 API 流量回归主线,后台横幅熄灭。
@@ -2650,7 +2719,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         turnModelPromiseBySession.delete(session.id);
       }
       const errData = event.type === 'error'
-        ? (event.data as { message?: unknown; reason?: unknown; sdkError?: unknown } | undefined)
+        ? (event.data as
+            | { message?: unknown; reason?: unknown; sdkError?: unknown; errorStatus?: unknown }
+            | undefined)
         : undefined;
       // 计划内 cc-mgr 升级窗口的 daemon 关闭(reason='remote_daemon_closed')是
       // 预期噪音: renderer 事件路径按同语义静默 banner, 这里同样不给 coordinator
@@ -2676,6 +2747,14 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             typeof (broadcastEvent.data as { message?: unknown }).message === 'string'
             ? (broadcastEvent.data as { message: string }).message
             : undefined,
+          // 结构化信号:自动续跑的判据靠它们收紧(见 isInterruptedTurnError),不靠文本猜。
+          {
+            ...(typeof errData?.sdkError === 'string' ? { sdkError: errData.sdkError } : {}),
+            ...(typeof errData?.reason === 'string' ? { reason: errData.reason } : {}),
+            ...(typeof errData?.errorStatus === 'number'
+              ? { errorStatus: errData.errorStatus }
+              : {}),
+          },
         );
       }
     }
@@ -2692,6 +2771,16 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
     // tool_result 家族:main 解析出的权威内容,盖进 payload 让 renderer 即时显示
     // (Option C:内容重排状态机只在 main 一份,与落库同源同值)。
     let resolvedContent: string | undefined;
+    // 中断自愈的额度判据是「是否在推进」:模型产出了实质内容(文本 / 工具调用)就把
+    // 连续失败计数归零,于是只要任务还在往前走,自愈次数不设上限;连续 N 次重连都
+    // 产出不了任何东西才停下等人(见 interruptedTurnAutoResume.ts 的额度模型)。
+    // 刻意只认这两类事件:thinking / status / 空消息都不算产出;guard 侧是 O(1)、
+    // 无 IO、无日志,放在热路径安全。
+    if (event.type === 'text' || event.type === 'tool_use') {
+      interruptedTurnAutoResumeGuard.noteProgress(session.id);
+      // 同一个信号也是「上一次重连真的成功了」的唯一证据 → 回填结果。
+      settleAutoResumeOutcome(session.id, 'succeeded');
+    }
     if (event.type === 'text') {
       const td = event.data as { text?: unknown; isFinal?: unknown } | null;
       if (typeof td?.text === 'string') {
@@ -2810,7 +2899,19 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       }
       // error 行在 flushOrphanToolResults 之后入队,保证 orphan tool_result 排在
       // error 行之前(历史时间线:tool 输出 → 错误卡,而非错误卡插到 tool 输出之前)。
-      if (event.type === 'error' && !isPlannedUpgradeClose && !isRemoteAuthRetry) {
+      // 自愈接管中 → 压住 error 行:成功续跑时历史里只留一条「已自动继续」分隔条,
+      // 救不回来时由 finalizeSuppressedAutoResumeError 补落。判据取 coordinator 的实时
+      // 接管态(而非 host 自己的 map):退避期间用户若自己发了消息,接管态已被清,那之后
+      // 新 turn 的失败必须照常落库。
+      const autoResumeSuppressesPersist =
+        event.type === 'error' &&
+        agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true;
+      if (
+        event.type === 'error' &&
+        !isPlannedUpgradeClose &&
+        !isRemoteAuthRetry &&
+        !autoResumeSuppressesPersist
+      ) {
         onTurnErrorEvent(
           session.id,
           event.data as { message?: unknown; reason?: unknown; sdkError?: unknown } | null,
@@ -3439,7 +3540,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   registerStopSessionBackgroundTasksHandler(createElectronIpcHandlerRegistry(), {
     closeSession: (sessionId) => maker.closeSession(sessionId),
     clearBackgroundActivity: clearClaudeSessionBackgroundActivity,
-    noteSessionReset: (sessionId) => silentStopAutoResumeGuard.noteSessionReset(sessionId),
+    noteSessionReset: (sessionId) => {
+      silentStopAutoResumeGuard.noteSessionReset(sessionId);
+      interruptedTurnAutoResumeGuard.noteSessionReset(sessionId);
+    },
     notifyGoalStop: (sessionId) => goalStopObserver?.(sessionId),
   });
 
@@ -6632,9 +6736,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     prepareSendUserMessage: (sessionId, message) =>
       prepareUserMessageForAgent(sessionId, message, 'send'),
     createDbMessage: async (sessionId, message, opts) => {
-      // 真实用户消息(renderer 发送事务)→ 给 silent-stop 守卫充值自动续跑额度。
-      // 自动补发的「继续」不走本路径(直接 session.send),不会自我充值。
-      silentStopAutoResumeGuard.noteUserSend(sessionId);
+      // 真实用户消息(renderer 发送事务)→ 给两个自动续跑守卫充值额度。
+      //
+      // **必须按 agentMeta.autoResume 排除自动补发的消息。** silent-stop 的自动续跑
+      // 走 session.send 直发、天然绕开本路径,但**中断自动续跑走的正是本路径**
+      // (coordinator 队列 → makerSendTransaction.onAccepted → 这里)。不排除的话它
+      // 每次续跑都给自己(和 silent-stop)重新充值,「每条人话最多买 N 个自动 turn」
+      // 这条防死循环的硬保证就没了 —— 上游连环抽风时会无限自动续跑。
+      if (isAutoResumeUserMessage(message.agentMeta)) {
+        // 这条自动续跑消息的结果还不知道,登记待确认(产出→succeeded / 再被打断→failed)。
+        pendingAutoResumeOutcomes.set(sessionId, message.clientId);
+      } else {
+        silentStopAutoResumeGuard.noteUserSend(sessionId);
+        interruptedTurnAutoResumeGuard.noteUserSend(sessionId);
+      }
       const result = await enqueueDurableWrite(`user:${sessionId}:${message.clientId}`, () => {
         // Coordinator accepts can stamp transcriptParentUuid early; this late FIFO
         // fallback covers makerSendTransaction/direct createDbMessage paths.
@@ -6859,6 +6974,76 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         );
         throw err;
       }
+    },
+    // turn 被上游打断(且已有产出)→ 自动替用户点一次「继续」。判据、额度、退避都在
+    // interruptedTurnAutoResume;这里只做编排:决策 → 退避 → 复核 → 补发 → 失败回滚。
+    onResumableTurnError: (sessionId: string, signals: InterruptedTurnErrorSignals) => {
+      if (!isInterruptedTurnError(signals)) return null;
+      const erroredAt = Date.now();
+      const decision = interruptedTurnAutoResumeGuard.onInterruptedTurn(sessionId, erroredAt);
+      if (decision.action !== 'resume') {
+        // 不接管 → coordinator 走常规错误呈现(落 error 行 + 红横幅 + 「继续任务」)。
+        // 额度耗尽 / 熔断 / 开关关闭都走这里:自愈救不动了就把方向盘交回用户。
+        log.debug('interrupted-turn auto-resume not granted', {
+          sessionId,
+          action: decision.action,
+        });
+        return null;
+      }
+      // 又被打断 = 上一次重连没成功,先把它的结果钉死,别让历史停在"重新连接中"。
+      settleAutoResumeOutcome(sessionId, 'failed');
+      // 接管:压住这条错误的落库与横幅,只在聊天流里显示低调的自愈提示。
+      // saveTurnStartedAtForDeferred 与 isRemoteAuthRetry 同款 —— 补落时 turn 开始时刻
+      // 已被 resetTurnPersistState 清掉,不先存一份会让 /clear 竞态 cap 判错。
+      autoResumeSuppressedErrors.set(sessionId, {
+        ...(signals.message !== undefined ? { message: signals.message } : {}),
+        ...(signals.reason !== undefined ? { reason: signals.reason } : {}),
+        ...(signals.sdkError !== undefined ? { sdkError: signals.sdkError } : {}),
+      });
+      saveTurnStartedAtForDeferred(sessionId);
+      log.info('interrupted-turn auto-resume scheduled', {
+        sessionId,
+        attempt: decision.attempt,
+        maxAttempts: decision.maxAttempts,
+        sessionTotal: decision.sessionTotal,
+        delayMs: decision.delayMs,
+      });
+      setTimeout(() => {
+        void (async () => {
+          try {
+            // 退避窗口内用户可能已经自己发了消息 / 清了会话。最终判据是 coordinator 的
+            // recovery 是否还在(那些动作都会清掉它),autoRetryLastError 内部复核后会
+            // no-op 并返回 false —— 此时必须回滚 pendingResume。
+            const resumed = await inputCoordinator.autoRetryLastError(sessionId);
+            if (!resumed) {
+              interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId);
+              // 用户已经自己接手 → 不再弹横幅打扰,但那次中断要补进历史。
+              finalizeSuppressedAutoResumeError(sessionId, { surfaceBanner: false });
+              log.debug('interrupted-turn auto-resume superseded before dispatch', { sessionId });
+              return;
+            }
+            // 自愈成功:压住的错误就此丢弃,用户看到的是「已自动继续」分隔条。
+            autoResumeSuppressedErrors.delete(sessionId);
+            log.info('interrupted-turn auto-resume dispatched', { sessionId });
+          } catch (err) {
+            interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId);
+            // 补发本身失败 → 回落成常规错误呈现,让用户能手点重试。
+            finalizeSuppressedAutoResumeError(sessionId, { surfaceBanner: true });
+            log.warn('interrupted-turn auto-resume failed', {
+              sessionId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        })();
+      }, decision.delayMs);
+      // 回传展示信息:coordinator 存进 autoResumePending → projection → 活动行
+      // (「重新连接中 attempt/maxAttempts」+ 展开详情里的原因与会话累计)。
+      return {
+        ...(signals.message !== undefined ? { error: signals.message } : {}),
+        attempt: decision.attempt,
+        maxAttempts: decision.maxAttempts,
+        sessionTotal: decision.sessionTotal,
+      };
     },
     steerToAgent: (sessionId, message, sendOpts) =>
       steerToAgentAccepted(sessionId, message, sendOpts),
@@ -7592,6 +7777,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     });
     const projection = inputCoordinator.clearSession(sid, clearBoundary);
     silentStopAutoResumeGuard.noteSessionReset(sid);
+    interruptedTurnAutoResumeGuard.noteSessionReset(sid);
     // 丢弃缓存的待注入交接 / fork 来源标记:它们是按 clear 之前的历史算出来的,
     // DB 侧的 cleared_at 抑制拦不住已经落进 registry 内存的那一份(首发被拒后
     // 缓存仍在),下次 send 会把旧血缘灌进用户刚显式清空的上下文。
@@ -7637,6 +7823,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
     markWorkerManualInterruptIfKnown(sessionId, 'abort_session');
     silentStopAutoResumeGuard.noteSessionReset(sessionId);
+    interruptedTurnAutoResumeGuard.noteSessionReset(sessionId);
     const sess = maker.getSession(sessionId);
     if (!sess) return;
     handleAgentIslandSessionStopped(sess);

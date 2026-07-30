@@ -4996,7 +4996,18 @@
         "aria": "대화가 압축되었습니다"
       },
       "autoResume": {
-        "label": "연결이 중단되어 자동으로 재개되었습니다"
+        "label": "다시 연결되었습니다",
+        "labelFailed": "다시 연결하지 못했습니다",
+        "labelNeutral": "다시 연결",
+        "detail": {
+          "reason": "중단 원인",
+          "attempt": "이번 재시도 {{attempt}}/{{total}}",
+          "sessionTotal": "이 대화에서 재연결 {{count}}회"
+        }
+      },
+      "autoResumePending": {
+        "label": "다시 연결하는 중",
+        "labelWithProgress": "다시 연결하는 중 {{attempt}}/{{total}}"
       },
       "agentSwitch": {
         "label": "{{from}}에서 {{to}}(으)로 전환됨",

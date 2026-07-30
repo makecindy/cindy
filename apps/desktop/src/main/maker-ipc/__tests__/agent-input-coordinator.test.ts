@@ -170,6 +170,13 @@ function createHarness() {
   const onUndispatchedUserTurn = vi.fn<NonNullable<AgentInputCoordinatorDeps['onUndispatchedUserTurn']>>(() => {});
   const onAcceptedQueuedMessage = vi.fn<NonNullable<AgentInputCoordinatorDeps['onAcceptedQueuedMessage']>>(() => {});
   const onDispatchedUserTurn = vi.fn<NonNullable<AgentInputCoordinatorDeps['onDispatchedUserTurn']>>(() => {});
+  // host 是否接管自愈。null = 不接管(走常规错误呈现),与「没装自愈」的行为一致;
+  // 非 null 时返回的就是要透到 UI 的展示信息(原因 + 本轮次数 + 会话累计)。
+  let resumableTurnErrorTakeover: { error?: string; attempt: number; maxAttempts: number; sessionTotal: number } | null =
+    null;
+  const onResumableTurnError = vi.fn<NonNullable<AgentInputCoordinatorDeps['onResumableTurnError']>>(
+    () => resumableTurnErrorTakeover,
+  );
   const noteSessionClearBoundary = vi.fn<NonNullable<AgentInputCoordinatorDeps['noteSessionClearBoundary']>>();
   const resolveSessionReferences = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['resolveSessionReferences']>
@@ -215,6 +222,7 @@ function createHarness() {
     onUndispatchedUserTurn,
     onAcceptedQueuedMessage,
     onDispatchedUserTurn,
+    onResumableTurnError,
     noteSessionClearBoundary,
     resolveSessionReferences,
     hasPendingCredentialSwitch: () => hasPendingCredentialSwitch?.() === true,
@@ -241,6 +249,7 @@ function createHarness() {
     onUndispatchedUserTurn,
     onAcceptedQueuedMessage,
     onDispatchedUserTurn,
+    onResumableTurnError,
     noteSessionClearBoundary,
     resolveSessionReferences,
     emitProjection,
@@ -270,6 +279,14 @@ function createHarness() {
       fn: ((sessionId: string, userClientId: string) => Promise<boolean>) | null,
     ) {
       hasAssistantProgressAfter = fn;
+    },
+    /** 模拟 host 决定接管自愈(判定命中 + 额度允许);传 null = 不接管。 */
+    setResumableTurnErrorTakeover(
+      value:
+        | { error?: string; attempt: number; maxAttempts: number; sessionTotal: number }
+        | null,
+    ) {
+      resumableTurnErrorTakeover = value;
     },
     persistQueueSnapshot,
     setLoadQueueSnapshot(
@@ -5847,5 +5864,261 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
 
     steer.resolve();
     await steerPromise;
+  });
+});
+
+describe('AgentInputCoordinator 中断自动续跑', () => {
+  // 上游把「已经干到一半」的 turn 打断时,main 守卫自动替用户点一次「继续」。
+  // coordinator 这一侧只负责两件事:把带结构化信号的失败告知 host(判据不在这里),
+  // 以及提供一条**带 autoResume 标记**的补发路径(标记是额度不自我充值的判据)。
+  const truncationSignals = { sdkError: 'server_error' } as const;
+  /** host 接管时回传的展示信息(原因 + 本轮第几次 / 上限 + 会话累计)。 */
+  const TAKEOVER_INFO = {
+    error: 'API Error: Connection closed mid-response.',
+    attempt: 1,
+    maxAttempts: 5,
+    sessionTotal: 1,
+  } as const;
+  const truncationMessage = 'API Error: Connection closed mid-response.';
+
+  /** 派发一条用户消息并让它以 terminal error 收尾，返回 harness。 */
+  async function failAfterDispatch(
+    h: ReturnType<typeof createHarness>,
+    sid: string,
+    item = makeItem('q-first', 'original long task'),
+  ) {
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', truncationMessage, truncationSignals);
+    await flush();
+    return h;
+  }
+
+  it('通知 host 时带上 message 与结构化信号', async () => {
+    const h = createHarness();
+    const sid = 'resumable-error-signals';
+    await failAfterDispatch(h, sid);
+
+    expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
+    expect(h.onResumableTurnError).toHaveBeenCalledTimes(1);
+    expect(h.onResumableTurnError.mock.calls[0]).toEqual([
+      sid,
+      { sdkError: 'server_error', message: truncationMessage },
+    ]);
+  });
+
+  it('scheduler 来源的失败不通知(没有 recovery 就没有可续跑的目标)', async () => {
+    const h = createHarness();
+    const sid = 'resumable-error-scheduler';
+    await failAfterDispatch(
+      h,
+      sid,
+      makeItem('q-sched', 'heartbeat', {
+        origin: { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: '任务 1' },
+      }),
+    );
+
+    expect(latestProjection(h.projections).recovery).toBeNull();
+    expect(h.onResumableTurnError).not.toHaveBeenCalled();
+  });
+
+  it('外部发起的 turn(无 active turn)失败不通知', async () => {
+    const h = createHarness();
+    const sid = 'resumable-error-external';
+    h.coordinator.onTurnEvent(sid, 'error', truncationMessage, truncationSignals);
+    await flush();
+
+    expect(h.onResumableTurnError).not.toHaveBeenCalled();
+  });
+
+  it('terminal error 早于持久化完成时,信号跟着暂存并在结算时通知(对称路径)', async () => {
+    // 第五条终态路径:error 在 DB 写入还没完成时到达 → 暂存,落库后才结算。
+    // signals 若不跟着暂存,这条时序下自愈会静默失效。
+    const h = createHarness();
+    const sid = 'resumable-error-deferred-persist';
+    let releasePersist: () => void = () => {};
+    mocks.createMessage.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        releasePersist = resolve;
+      });
+      return {};
+    });
+
+    h.coordinator.enqueue(sid, makeItem('q-first', 'original long task'));
+    await flush();
+    // 持久化卡住期间 terminal error 先到。
+    h.coordinator.onTurnEvent(sid, 'error', truncationMessage, truncationSignals);
+    await flush();
+    expect(h.onResumableTurnError, '持久化未完成前不该通知').not.toHaveBeenCalled();
+
+    releasePersist();
+    await flush();
+
+    expect(h.onResumableTurnError).toHaveBeenCalledTimes(1);
+    expect(h.onResumableTurnError.mock.calls[0]).toEqual([
+      sid,
+      { sdkError: 'server_error', message: truncationMessage },
+    ]);
+  });
+
+  it('autoRetryLastError 在有产出时补发带 autoResume 的续跑指令', async () => {
+    const h = createHarness();
+    const sid = 'auto-retry-with-progress';
+    h.setHasAssistantProgressAfter(async () => true);
+    await failAfterDispatch(h, sid);
+
+    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe(true);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: CONTINUE_AFTER_ERROR_PROMPT,
+    });
+    // autoResume 必须透到落库参数:renderer 靠它隐藏气泡,host 靠它跳过额度充值。
+    expect(h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage?.autoResume).toBe(true);
+    // 自动补发不冒充人类动作(userSendAt 是「人最近发过消息」的语义)。
+    expect(mocks.touchUserSendInDb).toHaveBeenCalledTimes(1);
+  });
+
+  it('人工 retryLastError 不打 autoResume(否则会误跳过额度充值)', async () => {
+    const h = createHarness();
+    const sid = 'manual-retry-no-auto-flag';
+    h.setHasAssistantProgressAfter(async () => true);
+    await failAfterDispatch(h, sid);
+
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage?.autoResume).toBeUndefined();
+    expect(mocks.touchUserSendInDb).toHaveBeenCalledTimes(2);
+  });
+
+  it('零产出时不自动补发,错误横幅与「继续」按钮留给用户', async () => {
+    const h = createHarness();
+    const sid = 'auto-retry-without-progress';
+    h.setHasAssistantProgressAfter(async () => false);
+    await failAfterDispatch(h, sid);
+
+    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe(false);
+    await flush();
+
+    expect(h.sendToAgent, '不得克隆重发用户原文').toHaveBeenCalledTimes(1);
+    const projection = latestProjection(h.projections);
+    expect(projection.error).toBe(truncationMessage);
+    expect(projection.recovery?.kind).toBe('active-turn');
+  });
+
+  it('host 接管时不设 error、只置 autoResumePending(红横幅留给最终失败)', async () => {
+    const h = createHarness();
+    const sid = 'takeover-suppresses-banner';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    await failAfterDispatch(h, sid);
+
+    const projection = latestProjection(h.projections);
+    expect(projection.error, '自愈期间不该弹红横幅').toBeNull();
+    // 展示信息原样透到 projection:活动行据此显示「重新连接中 1/5」与展开详情。
+    expect(projection.autoResumePending).toEqual(TAKEOVER_INFO);
+    // recovery 仍在:救不回来时要靠它回落出「继续任务」。
+    expect(projection.recovery?.kind).toBe('active-turn');
+  });
+
+  it('host 不接管时照常呈现错误(默认行为不变)', async () => {
+    const h = createHarness();
+    const sid = 'no-takeover-keeps-banner';
+    await failAfterDispatch(h, sid);
+
+    const projection = latestProjection(h.projections);
+    expect(projection.error).toBe(truncationMessage);
+    expect(projection.autoResumePending).toBeUndefined();
+  });
+
+  it('补发发出时清 autoResumePending(交棒给「已自动继续」分隔条)', async () => {
+    const h = createHarness();
+    const sid = 'takeover-clears-on-dispatch';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    h.setHasAssistantProgressAfter(async () => true);
+    await failAfterDispatch(h, sid);
+    expect(latestProjection(h.projections).autoResumePending).toEqual(TAKEOVER_INFO);
+
+    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe(true);
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(projection.autoResumePending).toBeUndefined();
+    expect(projection.error).toBeNull();
+  });
+
+  it('abandonAutoResume 带 message → 错误回落成横幅', async () => {
+    const h = createHarness();
+    const sid = 'abandon-surfaces-banner';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    await failAfterDispatch(h, sid);
+
+    h.coordinator.abandonAutoResume(sid, truncationMessage);
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(projection.autoResumePending).toBeUndefined();
+    expect(projection.error).toBe(truncationMessage);
+    expect(projection.recovery?.kind).toBe('active-turn');
+  });
+
+  it('abandonAutoResume 不带 message → 只收提示,不弹横幅(用户已自己接手)', async () => {
+    const h = createHarness();
+    const sid = 'abandon-silently';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    await failAfterDispatch(h, sid);
+
+    h.coordinator.abandonAutoResume(sid);
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(projection.autoResumePending).toBeUndefined();
+    expect(projection.error).toBeNull();
+  });
+
+  it('退避窗口内用户自己发消息 → 接管态立即清除(isAutoResumePending 同步反映)', async () => {
+    const h = createHarness();
+    const sid = 'takeover-cleared-by-user-send';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    await failAfterDispatch(h, sid);
+    expect(h.coordinator.isAutoResumePending(sid)).toBe(true);
+
+    h.coordinator.enqueue(sid, makeItem('q-user', 'user takes over'));
+    await flush();
+
+    // 这条不变量是 host 抑制 error 落库的判据:清晚了会把用户新 turn 的失败一起压掉。
+    expect(h.coordinator.isAutoResumePending(sid)).toBe(false);
+    expect(latestProjection(h.projections).autoResumePending).toBeUndefined();
+  });
+
+  it('用户点「忽略」也清接管态', async () => {
+    const h = createHarness();
+    const sid = 'takeover-cleared-by-clear-error';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    await failAfterDispatch(h, sid);
+
+    h.coordinator.clearError(sid);
+    await flush();
+
+    expect(h.coordinator.isAutoResumePending(sid)).toBe(false);
+  });
+
+  it('recovery 已被用户清掉时 autoRetryLastError 返回 false(调用方据此回滚额度)', async () => {
+    const h = createHarness();
+    const sid = 'auto-retry-superseded';
+    h.setHasAssistantProgressAfter(async () => true);
+    await failAfterDispatch(h, sid);
+
+    // 退避窗口内用户自己点了「忽略」。
+    h.coordinator.clearError(sid);
+    await flush();
+
+    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe(false);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
   });
 });
