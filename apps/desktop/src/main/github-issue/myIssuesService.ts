@@ -24,6 +24,7 @@ import type {
   MyIssuesResult,
   SubmittedIssueRecord,
 } from '../../shared/myIssues.js';
+import { myIssueUrl } from '../../shared/myIssues.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('github-issue/my-issues');
@@ -371,7 +372,8 @@ function overlayRemote(
   if (!sources.includes(source)) sources.push(source);
   return {
     number: issue.number,
-    url: issue.htmlUrl,
+    // 派生,不用 issue.htmlUrl —— 见 shared/myIssues.ts 的 myIssueUrl 注释。
+    url: myIssueUrl(issue.number),
     title: issue.title,
     // 远端标签被人工清掉时回退账本记的类型,而不是莫名变成「无类型」。
     type: issueTypeFromLabels(issue.labels) ?? existing?.type ?? null,
@@ -393,7 +395,8 @@ function sortSources(sources: MyIssueSource[]): MyIssueSource[] {
 function ledgerOnlyItem(record: SubmittedIssueRecord): MyIssueItem {
   return {
     number: record.number,
-    url: record.url,
+    // 同上:账本落盘的 url 也不直接用,一律按 number 派生。
+    url: myIssueUrl(record.number),
     title: record.title,
     type: record.type,
     state: 'unknown',

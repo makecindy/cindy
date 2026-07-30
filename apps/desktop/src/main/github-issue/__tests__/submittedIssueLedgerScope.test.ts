@@ -34,10 +34,12 @@ vi.mock('electron-store', () => ({
 
 const { listSubmittedIssues, recordSubmittedIssue } = await import('../submittedIssueLedger');
 
+/** url 跟着 number 走 —— 清洗要求两者指向同一条 issue(见 isMyIssueUrl)。 */
 function record(over: Partial<SubmittedIssueRecord> = {}): SubmittedIssueRecord {
+  const number = over.number ?? 1061;
   return {
-    number: 1061,
-    url: 'https://github.com/makecindy/cindy/issues/1061',
+    number,
+    url: `https://github.com/makecindy/cindy/issues/${number}`,
     title: '账号 A 提交的 issue',
     type: 'feature',
     submittedAt: '2026-07-30T09:12:49.000Z',

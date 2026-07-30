@@ -217,8 +217,12 @@ export const MAKER_INVOKE = {
    */
   HELP_FEEDBACK_CREATE: 'maker:help:feedback:create',
   /**
-   * /issues 页面的「我的 Issue」列表:本机提交账本 + 当前 GitHub 身份名下的 issue
-   * 合并去重。查询型 handler,失败时 renderer 仍要靠账本渲染,故返回 { success }
+   * /issues 页面的「我的 Issue」列表。三路合并去重,主次不要记反:
+   * 平台通道(按 Cindy 登录态取「我提交过的 issue」,唯一给实时状态且跨设备的来源)
+   * + 本机提交账本(平台未就绪时的兜底)
+   * + 用户自己的 GitHub 身份(**可选增强**,没有时列表照常工作)。
+   *
+   * 查询型 handler,失败时 renderer 仍要靠账本渲染,故返回 { success }
    * 风格而不是 throwIpcError(见 engineering-conventions §2 的例外)。
    */
   MY_ISSUES_LIST: 'maker:issues:list-mine',

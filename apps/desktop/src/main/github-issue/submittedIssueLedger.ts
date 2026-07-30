@@ -14,6 +14,7 @@
 import Store from 'electron-store';
 
 import type { SubmittedIssueRecord } from '../../shared/myIssues.js';
+import { isMyIssueUrl } from '../../shared/myIssues.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
 
@@ -50,8 +51,10 @@ function isValidRecord(value: unknown): value is SubmittedIssueRecord {
     typeof r.number === 'number' &&
     Number.isInteger(r.number) &&
     r.number > 0 &&
+    // url 与其它字段一样按不可信输入清洗:它必须指向本仓这一号 issue。落盘文件
+    // 被篡改或损坏时,不让一条「你提交的 issue」把用户带去别处。
     typeof r.url === 'string' &&
-    r.url.length > 0 &&
+    isMyIssueUrl(r.url, r.number) &&
     typeof r.title === 'string' &&
     (r.type === 'bug' || r.type === 'feature') &&
     typeof r.submittedAt === 'string' &&

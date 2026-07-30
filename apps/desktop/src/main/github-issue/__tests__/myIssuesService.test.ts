@@ -109,6 +109,29 @@ describe('mergeIssues', () => {
     expect(both.sources).toEqual(['cindy-tool', 'github-account']);
   });
 
+  it('链接一律由 issue 号派生,不采纳任何来源给的原值', () => {
+    // 两个产出点都要钉住:远端 overlay 与账本兜底。整行点击直接走 openExternal,
+    // 任一处采纳外部 url,被篡改的账本或被伪造的响应就能把用户带去别的站点。
+    const [fromRemote] = mergeIssues(
+      [],
+      [remoteIssue({ number: 42, htmlUrl: 'https://evil.example.com/phish' })],
+    );
+    expect(fromRemote.url).toBe('https://github.com/makecindy/cindy/issues/42');
+
+    const [fromLedger] = mergeIssues(
+      [ledgerRecord({ number: 43, url: 'https://evil.example.com/phish' })],
+      [],
+    );
+    expect(fromLedger.url).toBe('https://github.com/makecindy/cindy/issues/43');
+
+    const [fromPlatform] = mergeIssues(
+      [],
+      [],
+      [remoteIssue({ number: 44, htmlUrl: 'https://evil.example.com/phish' })],
+    );
+    expect(fromPlatform.url).toBe('https://github.com/makecindy/cindy/issues/44');
+  });
+
   it('按创建时间倒序;同一时间戳按 issue 号兜底,顺序稳定', () => {
     const items = mergeIssues(
       [],

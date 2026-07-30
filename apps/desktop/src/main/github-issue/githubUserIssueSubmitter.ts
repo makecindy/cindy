@@ -58,12 +58,19 @@ export function isCindyGithubGhostUsable(
 }
 
 /**
+ * 本模块对外开放的只读操作名。收成联合类型而不是 string,是为了让拼错的 tool name
+ * 在编译期就挂掉 —— 否则 `search_issues_and_prs` 少个字母要等运行到插件通道才失败,
+ * 而那条路径的失败又是**静默降级**(可选增强拿不到就当没配),几乎不会被发现。
+ */
+export type CindyGithubReadOperation = 'get_current_user' | 'search_issues_and_prs';
+
+/**
  * 经插件通道调一个只读 GitHub 操作。失败返回结构化 failure(不抛),
  * 响应形状不对时才抛 —— 与提交路径共用同一个通道与解包逻辑。
  */
 export function callCindyGithubOperation(
   deps: GithubUserIssueSubmitterDeps,
-  name: string,
+  name: CindyGithubReadOperation,
   args: Record<string, unknown>,
   options: { timeoutMs?: number } = {},
 ): Promise<{ ok: true; data: unknown } | GithubOperationFailure> {
