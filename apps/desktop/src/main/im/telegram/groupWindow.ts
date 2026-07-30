@@ -31,6 +31,15 @@ const log = createLogger('telegram-group-window');
 export const TELEGRAM_PERSONAL_WINDOW_PROVIDER = 'telegram-personal';
 
 /**
+ * provider 按 bot 命名空间(`telegram-personal:<botId>`): 换绑不同 bot 后,
+ * 新 bot 的上下文注入与设置卡群清单不掺前任 bot 的历史(review P1)。
+ * 官方 hook 通道的 TTL 清扫按 'telegram-personal%' 前缀豁免本命名空间全部行。
+ */
+function providerOf(botId: string): string {
+  return botId ? `${TELEGRAM_PERSONAL_WINDOW_PROVIDER}:${botId}` : TELEGRAM_PERSONAL_WINDOW_PROVIDER;
+}
+
+/**
  * 存储永久保留(Chris 2026-07-30 拍板): Telegram bot 没有别的聊天记录来源,
  * 本地群消息库就是它的记忆, 不做 TTL/条数自动清理 — 清理只在用户明确要求时
  * 执行(与主流 agent 产品同理念)。单条正文截断与每轮 4000 字注入预算仍在,
@@ -50,7 +59,7 @@ export async function recordTelegramGroupMessage(entry: TelegramGroupWindowEntry
   await db
     .insert(hookGroupMessages)
     .values({
-      provider: TELEGRAM_PERSONAL_WINDOW_PROVIDER,
+      provider: providerOf(entry.botId),
       chatId: entry.chatId,
       threadId: entry.threadId,
       messageId: entry.messageId,
@@ -142,7 +151,7 @@ export async function buildTelegramGroupContextPrefix(args: {
     .from(hookGroupMessages)
     .where(
       and(
-        eq(hookGroupMessages.provider, TELEGRAM_PERSONAL_WINDOW_PROVIDER),
+        eq(hookGroupMessages.provider, providerOf(args.botId)),
         eq(hookGroupMessages.chatId, args.chatId),
         eq(hookGroupMessages.threadId, args.threadId),
         gt(hookGroupMessages.id, cursor),
@@ -211,12 +220,13 @@ export function resetTelegramGroupContextCursors(): void {
 
 
 /**
- * 设置卡「群聊」节的数据源: bot 见过的群(窗口表 distinct chat), 按最近活跃
- * 排序。窗口行不带 botId 列 — provider='telegram-personal' 在单桌面上即单 bot。
+ * 设置卡「群聊」节的数据源: **当前 bot** 见过的群(窗口表 distinct chat),
+ * 按最近活跃排序。provider 按 bot 命名空间过滤 — 换绑后不列前任 bot 的群。
  */
-export async function listTelegramKnownGroups(): Promise<
-  Array<{ chatId: string; chatName: string | null }>
-> {
+export async function listTelegramKnownGroups(
+  botId: string,
+): Promise<Array<{ chatId: string; chatName: string | null }>> {
+  if (!botId) return [];
   const db = getDbClient().drizzle;
   const rows = await db
     .select({
@@ -224,7 +234,7 @@ export async function listTelegramKnownGroups(): Promise<
       chatName: sql<string | null>`max(${hookGroupMessages.chatName})`,
     })
     .from(hookGroupMessages)
-    .where(eq(hookGroupMessages.provider, TELEGRAM_PERSONAL_WINDOW_PROVIDER))
+    .where(eq(hookGroupMessages.provider, providerOf(botId)))
     .groupBy(hookGroupMessages.chatId)
     .orderBy(sql`max(${hookGroupMessages.sentAt}) desc`)
     .limit(50);

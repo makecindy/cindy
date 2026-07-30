@@ -114,7 +114,13 @@ const host: IMHost = {
   secrets: ownerScopedImSecrets,
   ipc: {
     handle(channel, handler) {
-      ipcMain.handle(channel, (_e, payload) => handler(payload));
+      // IM 凭证/配置通道(set-config/get-status/disconnect 等)全部是敏感面:
+      // 统一在适配器入口验可信 app renderer, 包侧 handler 拿不到 event 也
+      // 不会漏鉴权(review P1 — 不受信 WebContents 不得读 owner id/换 token)。
+      ipcMain.handle(channel, (e, payload) => {
+        assertTrustedAppRendererEvent(e);
+        return handler(payload);
+      });
     },
     broadcast(channel, payload) {
       for (const w of BrowserWindow.getAllWindows()) {
@@ -179,7 +185,7 @@ export function registerTelegramBotConfigIpc(): void {
   // 群聊节: 已知群列表(窗口表 distinct chat)+ per-chat 参与模式读写。
   ipcMain.handle('telegramBot:list-groups', async (e) => {
     assertTrustedAppRendererEvent(e);
-    const groups = await listTelegramKnownGroups();
+    const groups = await listTelegramKnownGroups(telegramIm.botContextId);
     const activation = readTelegramBehavior().groupActivation ?? {};
     return {
       groups: groups.map((g) => ({

@@ -22,6 +22,12 @@ const MAX_INBOUND_FILE_BYTES = 20 * 1024 * 1024;
 const DOWNLOAD_TIMEOUT_MS = 30_000;
 
 export interface TelegramGroupWindowEntry {
+  /**
+   * 归属 bot 的数字 id(字符串形态) — 窗口存储按 bot 命名空间隔离: 换绑
+   * 不同 bot 后, 新 bot 的上下文/群清单不掺前任 bot 的历史(review P1)。
+   * 由 transport 的 emitGroupWindow 统一注入。
+   */
+  botId: string;
   chatId: string;
   /** forum topic id; '' = 主群流。 */
   threadId: string;
@@ -46,8 +52,8 @@ export function laneThreadIdOf(m: TgMessage): string {
     : '';
 }
 
-/** 群消息 → 本地窗口条目(触发与否都记录; 纯附件消息 text 为空串)。 */
-export function groupWindowEntryOf(m: TgMessage): TelegramGroupWindowEntry {
+/** 群消息 → 本地窗口条目(触发与否都记录; 纯附件消息 text 为空串; botId 由 emit 注入)。 */
+export function groupWindowEntryOf(m: TgMessage): Omit<TelegramGroupWindowEntry, 'botId'> {
   const fileNames: string[] = [];
   if (m.document?.file_name) fileNames.push(m.document.file_name);
   if (m.photo && m.photo.length > 0) fileNames.push('photo');

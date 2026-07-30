@@ -40,6 +40,7 @@ let entrySeq = 0;
 function entry(overrides: Partial<TelegramGroupWindowEntry> = {}): TelegramGroupWindowEntry {
   entrySeq += 1;
   return {
+    botId: 'bot-1',
     chatId: '-900',
     threadId: '',
     messageId: `m-${entrySeq}`,
@@ -81,7 +82,8 @@ describe('recordTelegramGroupMessage', () => {
     const row = sqlite
       .prepare('SELECT provider, author, is_bot FROM hook_group_messages')
       .get() as { provider: string; author: string; is_bot: number };
-    expect(row.provider).toBe(TELEGRAM_PERSONAL_WINDOW_PROVIDER);
+    // provider 按 bot 命名空间: telegram-personal:<botId>(换绑不串史)
+    expect(row.provider).toBe(`${TELEGRAM_PERSONAL_WINDOW_PROVIDER}:bot-1`);
     expect(row.author).toBe('user202');
     expect(row.is_bot).toBe(0);
   });
@@ -173,6 +175,20 @@ describe('buildTelegramGroupContextPrefix', () => {
     expect(main.prefix).not.toContain('话题里');
     expect(topic.prefix).toContain('话题里');
     expect(topic.prefix).not.toContain('主群流');
+  });
+
+  it('换绑不同 bot 不串史: bot-2 的上下文/群清单不含 bot-1 的行', async () => {
+    await recordTelegramGroupMessage(entry({ messageId: 'b1-1', text: '前任 bot 的历史' }));
+    const asm = await buildTelegramGroupContextPrefix({
+      botId: 'bot-2',
+      chatId: '-900',
+      threadId: '',
+      triggerMessageId: 'n',
+    });
+    expect(asm.prefix).toBe('');
+    const { listTelegramKnownGroups } = await import('../groupWindow');
+    expect(await listTelegramKnownGroups('bot-2')).toHaveLength(0);
+    expect(await listTelegramKnownGroups('bot-1')).toHaveLength(1);
   });
 
   it('引用块: 栅栏中和 + 截断 + bot 标注', () => {

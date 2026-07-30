@@ -591,6 +591,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     return this.botDisplayName || this.botUsername || 'bot';
   }
 
+  /** 当前 bot 的 contextId(数字 id 字符串; 未连接为 '') — 群窗口按 bot 命名空间查询用。 */
+  get botContextId(): string {
+    return this.botId ? String(this.botId) : '';
+  }
+
   // ── connect / polling ──────────────────────────────────────────────────────
 
   private async connect(token: string): Promise<boolean> {
@@ -933,10 +938,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     }
   }
 
-  private emitGroupWindow(entry: TelegramGroupWindowEntry): void {
+  private emitGroupWindow(entry: Omit<TelegramGroupWindowEntry, 'botId'>): void {
+    // botId 统一在此注入 — 窗口存储按 bot 命名空间隔离(换绑不串史)。
+    const full: TelegramGroupWindowEntry = { ...entry, botId: String(this.botId) };
     for (const h of this.groupWindowHandlers) {
       try {
-        h(entry);
+        h(full);
       } catch {
         /* swallow */
       }
