@@ -5663,6 +5663,9 @@ app.on('ready', async () => {
   // IPC handlers 必须无条件注册:用户在 Settings 页保存凭证时, renderer 走这些
   // channel 跟 main 通信, 跟用户登录态无关。
   im.registerIpc();
+  // Telegram 个人 bot 行为/人格/群参与配置的 IPC(设置卡数据面),与 im.registerIpc
+  // 同期无条件注册;不能放 host.ts 模块顶层(mock electron 的单测收集期会炸)。
+  registerTelegramBotConfigIpc();
   // 挂业务 orchestrator: 订阅 feishuIm.onMessage / .onCardAction。orchestrator
   // 必须在 createWindow 前挂好,避免 renderer 起来后第一波 IPC / event 找不到
   // handler。FeishuBot 的 WS 长连接必须等当前用户 localDb ready 后再启动。
