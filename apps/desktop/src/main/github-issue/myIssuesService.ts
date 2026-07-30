@@ -411,8 +411,26 @@ function ledgerOnlyItem(record: SubmittedIssueRecord): MyIssueItem {
     createdAt: record.submittedAt,
     updatedAt: null,
     commentCount: null,
-    sources: ['cindy-tool'],
+    sources: sourcesFromLedger(record),
   };
+}
+
+/**
+ * 账本记录自带的来源。`identity` 是**提交那一刻**确定下来的事实,比事后按
+ * `author:` 搜索更可靠 —— 用自己 GitHub 身份提交的那条,两个来源都成立:
+ * 它确实经产品内 /issue 提交(cindy-tool),作者也确实是本人账号(github-account)。
+ *
+ * 硬编码成 ['cindy-tool'] 会造成同一条 issue 的来源标记随插件状态漂移:插件开着时
+ * (搜索命中)显示两个来源,插件停用 / 超时 / 离线时只显示「由 Cindy 提交」,丢掉一个
+ * 早已确认的事实。
+ *
+ * 注意与平台代发的区别:`identity === 'platform'` 时 GitHub 上的作者是 cindy-issue
+ * App、**不是**本人,所以只打 cindy-tool(同 mergeIssues 对 platform 那一路的口径)。
+ */
+function sourcesFromLedger(record: SubmittedIssueRecord): MyIssueSource[] {
+  return sortSources(
+    record.identity === 'github-user' ? ['cindy-tool', 'github-account'] : ['cindy-tool'],
+  );
 }
 
 /** 反馈 issue 由提交链路打 bug / feature 标签;人工改过标签时回退 null。 */

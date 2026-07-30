@@ -92,10 +92,10 @@ export function IssueTrackerFeatureLayout() {
         {error && !hasItems ? (
           // 整页错误态只留给「从来没加载成功过」;已经有数据时刷新失败不能把列表
           // 盖掉(useMyIssues 特意保留了旧 data),否则用户点一下刷新就丢失全部内容。
-          <LoadFailed onRetry={refresh} />
+          <LoadFailed onRetry={refresh} busy={refreshing} />
         ) : hasItems ? (
           <>
-            {error ? <RefreshFailedNotice onRetry={refresh} /> : null}
+            {error ? <RefreshFailedNotice onRetry={refresh} busy={refreshing} /> : null}
             <Notices data={data} />
             <MyIssueList items={items} />
           </>
@@ -174,8 +174,12 @@ function Notices({ data }: { data: MyIssuesResult | null }) {
 /**
  * 已有数据时刷新失败:降级成列表上方一条提示 + 重试,旧内容照常可读可点。
  * 与整页 LoadFailed 复用同一组文案,只是不夺走内容区。
+ *
+ * 重试进行中**不清掉这条提示**:清了会让它消失、失败后又出现,两次跳变
+ * (engineering-conventions §7)。刷新状态由 header 图标表达,这里只把按钮禁用掉 ——
+ * 否则它看着可点、点了却被 useMyIssues 的 in-flight 静默挡掉,毫无反馈。
  */
-function RefreshFailedNotice({ onRetry }: { onRetry: () => void }) {
+function RefreshFailedNotice({ onRetry, busy }: { onRetry: () => void; busy: boolean }) {
   const { t } = useTranslation();
   return (
     <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl bg-sidebar-item-hover px-3 py-2">
@@ -183,7 +187,12 @@ function RefreshFailedNotice({ onRetry }: { onRetry: () => void }) {
       <button
         type="button"
         onClick={onRetry}
-        className="text-11 text-sidebar-muted underline-offset-2 hover:text-foreground hover:underline"
+        disabled={busy}
+        className={cn(
+          'text-11 text-sidebar-muted underline-offset-2',
+          'hover:text-foreground hover:underline',
+          'disabled:pointer-events-none disabled:opacity-50',
+        )}
       >
         {t('issueTracker.list.retry')}
       </button>
@@ -191,7 +200,7 @@ function RefreshFailedNotice({ onRetry }: { onRetry: () => void }) {
   );
 }
 
-function LoadFailed({ onRetry }: { onRetry: () => void }) {
+function LoadFailed({ onRetry, busy }: { onRetry: () => void; busy: boolean }) {
   const { t } = useTranslation();
   return (
     <div className="flex flex-col items-start gap-2 px-3 py-2">
@@ -200,7 +209,12 @@ function LoadFailed({ onRetry }: { onRetry: () => void }) {
       <button
         type="button"
         onClick={onRetry}
-        className="text-12 text-sidebar-muted underline-offset-2 hover:text-foreground hover:underline"
+        disabled={busy}
+        className={cn(
+          'text-12 text-sidebar-muted underline-offset-2',
+          'hover:text-foreground hover:underline',
+          'disabled:pointer-events-none disabled:opacity-50',
+        )}
       >
         {t('issueTracker.list.retry')}
       </button>

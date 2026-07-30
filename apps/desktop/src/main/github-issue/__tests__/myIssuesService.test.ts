@@ -109,6 +109,17 @@ describe('mergeIssues', () => {
     expect(both.sources).toEqual(['cindy-tool', 'github-account']);
   });
 
+  it('账本 identity=github-user 时保留 github-account —— 增强不可用也不丢已确认的来源', () => {
+    // 用自己 GitHub 身份提交的那条,两个来源都成立。硬编码 ['cindy-tool'] 会让同一条
+    // issue 的来源标记随插件状态漂移:插件开着显示两个,停用 / 超时 / 离线只显示一个。
+    const [asUser] = mergeIssues([ledgerRecord({ identity: 'github-user' })], []);
+    expect(asUser.sources).toEqual(['cindy-tool', 'github-account']);
+
+    // 平台代发的作者是 cindy-issue App、不是本人 —— 这一路仍然只打 cindy-tool。
+    const [asPlatform] = mergeIssues([ledgerRecord({ identity: 'platform' })], []);
+    expect(asPlatform.sources).toEqual(['cindy-tool']);
+  });
+
   it('链接一律由 issue 号派生,不采纳任何来源给的原值', () => {
     // 两个产出点都要钉住:远端 overlay 与账本兜底。整行点击直接走 openExternal,
     // 任一处采纳外部 url,被篡改的账本或被伪造的响应就能把用户带去别的站点。

@@ -87,6 +87,18 @@ describe('parseRemoteIssue', () => {
       expect(parseRemoteIssue(bad)).toBeNull();
     }
   });
+
+  it('createdAt 必须可解析,不只是非空字符串', () => {
+    // mergeIssues 的排序比较器直接 Date.parse 相减:不可解析会得到 NaN,让**整份**
+    // 列表顺序变成未定义(不是这一条排错位置)。账本清洗早就这样校验 submittedAt。
+    for (const bad of ['', 'not-a-date', '昨天', '2026-13-45T99:99:99Z']) {
+      expect(parseRemoteIssue({ ...RAW_ISSUE, created_at: bad })).toBeNull();
+    }
+    // 合法的非 ISO 写法照常接受 —— 收紧的是「能不能解析」,不是「必须长成 ISO」。
+    expect(parseRemoteIssue({ ...RAW_ISSUE, created_at: '2026-07-30' })?.createdAt).toBe(
+      '2026-07-30',
+    );
+  });
 });
 
 describe('parseIssuePage', () => {

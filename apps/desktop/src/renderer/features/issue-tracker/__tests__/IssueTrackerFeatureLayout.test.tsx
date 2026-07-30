@@ -92,6 +92,18 @@ describe('IssueTrackerFeatureLayout 内容区分支', () => {
     expect(screen.getAllByText('issueTracker.list.retry').length).toBe(1);
   });
 
+  it('重试进行中:保留失败提示但禁用重试按钮(不清 error,避免消失又出现两次跳变)', () => {
+    useMyIssuesMock.mockReturnValue(
+      state({ data: result([item()]), error: 'unexpected', refreshing: true }),
+    );
+    render(<IssueTrackerFeatureLayout />);
+
+    // 提示条仍在 —— 清掉它会让界面在刷新期间变一次、失败后再变回来。
+    expect(screen.getByText('issueTracker.list.loadFailed')).toBeTruthy();
+    // 但按钮不可再点:否则它看着可点、点了却被 in-flight 静默挡掉。
+    expect(screen.getByText('issueTracker.list.retry').hasAttribute('disabled')).toBe(true);
+  });
+
   it('从未加载成功过:才用整页错误态', () => {
     useMyIssuesMock.mockReturnValue(state({ data: null, error: 'ECONNRESET' }));
     render(<IssueTrackerFeatureLayout />);

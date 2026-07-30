@@ -49,7 +49,17 @@ export function parseRemoteIssue(value: unknown): RemoteIssue | null {
   const title = readString(record, ['title']);
   const htmlUrl = readString(record, ['html_url', 'htmlUrl', 'url']);
   const createdAt = readString(record, ['created_at', 'createdAt']);
-  if (number === null || !Number.isInteger(number) || !title || !htmlUrl || !createdAt) {
+  // createdAt 必须**可解析**,不只是非空:mergeIssues 的排序比较器直接对它做
+  // Date.parse 相减,不可解析会得到 NaN,让整份列表的顺序变成未定义(不是"这条排错
+  // 位置",而是整体不稳定)。账本清洗早就这样校验 submittedAt 了 —— 这里补齐对称。
+  if (
+    number === null ||
+    !Number.isInteger(number) ||
+    !title ||
+    !htmlUrl ||
+    !createdAt ||
+    !Number.isFinite(Date.parse(createdAt))
+  ) {
     return null;
   }
   return {
