@@ -649,7 +649,14 @@ function withinStructuralBudget(value: unknown): boolean {
       return true;
     }
     if (node && typeof node === 'object') {
-      for (const child of Object.values(node)) if (!walk(child, depth + 1)) return false;
+      // 刻意用 `for...in` + hasOwnProperty 而不是 `Object.values(node)`:后者会**先分配**
+      // 一份包含全部可枚举值的数组,于是「一个几十万键的宽对象」在预算生效之前就已经让
+      // main 吃了一次大分配 —— 而这个函数存在的意义正是在此之前挡住它(review: copilot)。
+      // 逐键遍历可以在超限的第一个键上就短路返回。
+      for (const key in node) {
+        if (!Object.prototype.hasOwnProperty.call(node, key)) continue;
+        if (!walk((node as Record<string, unknown>)[key], depth + 1)) return false;
+      }
       return true;
     }
     return true;

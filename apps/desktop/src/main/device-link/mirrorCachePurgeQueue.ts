@@ -92,6 +92,8 @@ const LOCK_STALE_MS = 10_000;
 /** 抢锁最长等待:拿不到就降级为「只靠进程内锁 + 提交时合并」,绝不因此丢掉这次记录。 */
 const LOCK_WAIT_MS = 3_000;
 const LOCK_RETRY_MS = 40;
+/** 持锁期间刷新 mtime 的间隔:让「陈旧」只对真正死掉的持有者成立。 */
+const LOCK_HEARTBEAT_MS = 2_000;
 
 /**
  * 跨进程互斥。dev 实例与打包实例可以共用同一个 userData(见 devStartupStatus.ts),
@@ -100,8 +102,15 @@ const LOCK_RETRY_MS = 40;
  * (review: codex P1)。
  *
  * 用 `open(lock, 'wx')` 做锁:同目录、O_EXCL 语义在 Windows / macOS / Linux 都可靠。
- * 抢不到就退化(只等 LOCK_WAIT_MS),因为「宁可偶尔覆盖,也不能因为拿不到锁就不记」——
- * 提交时的合并(drain / enqueue 都在临界区里重读一次最新盘上内容)仍在兜着。
+ *
+ * 陈旧锁的接管**不能只看时间**:临界区包含递归删除,一个正常持锁的 drain 完全可能跑过
+ * 10 秒。只按 mtime 抢锁会把活着的持有者挤掉,它随后还会在 finally 里把别人的锁删掉
+ * (review: codex P1)。所以:
+ *  - 锁内容写 `{ pid, startedAt }`,持锁期间每 2 秒 touch 一次 mtime(心跳);
+ *  - 只有「mtime 陈旧」**且**「owner pid 已经不在」才接管 —— 共享 userData 必然同机,
+ *    `process.kill(pid, 0)` 是可靠的存活判定;
+ *  - owner 还活着就继续等,等不到就走**追加**路径(见 QUEUE_PENDING_DIR),不做整份写回;
+ *  - 释放时先确认锁里还是自己的 pid,再删 —— 免得删掉别人的锁。
  */
 async function withFileLock<T>(task: (held: boolean) => Promise<T>): Promise<T> {
   const lock = path.join(app.getPath('userData'), QUEUE_LOCK_FILE);
@@ -110,30 +119,80 @@ async function withFileLock<T>(task: (held: boolean) => Promise<T>): Promise<T> 
   for (;;) {
     try {
       const handle = await fsp.open(lock, 'wx');
-      await handle.writeFile(String(process.pid), 'utf8').catch(() => undefined);
+      await handle
+        .writeFile(JSON.stringify({ pid: process.pid, startedAt: Date.now() }), 'utf8')
+        .catch(() => undefined);
       await handle.close().catch(() => undefined);
       held = true;
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') break; // 权限等:直接降级
-      const stat = await fsp.stat(lock).catch(() => null);
-      if (stat && Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
-        log.warn('breaking stale mirror cache purge queue lock');
+      if (await canTakeOverLock(lock)) {
+        log.warn('taking over mirror cache purge queue lock from a dead owner');
         await fsp.rm(lock, { force: true }).catch(() => undefined);
         continue;
       }
       if (Date.now() >= deadline) {
-        log.warn('mirror cache purge queue lock busy; proceeding without cross-process lock');
+        log.warn('mirror cache purge queue lock busy; falling back to append-only records');
         break;
       }
       await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
     }
   }
+  // 心跳:持锁期间不断刷新 mtime,让"陈旧"只对真正死掉的持有者成立。
+  const heartbeat = held
+    ? setInterval(() => {
+        const now = new Date();
+        void fsp.utimes(lock, now, now).catch(() => undefined);
+      }, LOCK_HEARTBEAT_MS)
+    : null;
+  heartbeat?.unref?.();
   try {
     return await task(held);
   } finally {
-    if (held) await fsp.rm(lock, { force: true }).catch(() => undefined);
+    if (heartbeat) clearInterval(heartbeat);
+    if (held) await releaseOwnLock(lock);
   }
+}
+
+/** 只有「心跳早已停」且「owner 进程确实不在了」才允许接管。 */
+async function canTakeOverLock(lock: string): Promise<boolean> {
+  const stat = await fsp.stat(lock).catch(() => null);
+  if (!stat) return true; // 锁刚被别人释放 → 直接重试抢
+  if (Date.now() - stat.mtimeMs <= LOCK_STALE_MS) return false;
+  const owner = await readLockOwnerPid(lock);
+  if (owner === null) return true; // 内容读不出来 / 不是本模块写的:按死锁处理
+  if (owner === process.pid) return true; // 本进程上一轮崩在临界区里(心跳早停)
+  try {
+    process.kill(owner, 0);
+    return false; // owner 还活着:很可能是个跑得久的 drain,不能挤掉它
+  } catch (err) {
+    // ESRCH = 进程不在了;EPERM = 进程在但不属于当前用户(保守认为活着)
+    return (err as NodeJS.ErrnoException)?.code !== 'EPERM';
+  }
+}
+
+async function readLockOwnerPid(lock: string): Promise<number | null> {
+  try {
+    const parsed = JSON.parse(await fsp.readFile(lock, 'utf8')) as unknown;
+    if (parsed && typeof parsed === 'object') {
+      const pid = (parsed as { pid?: unknown }).pid;
+      if (typeof pid === 'number' && Number.isInteger(pid) && pid > 0) return pid;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** 释放前确认锁里还是自己的 pid:别人接管过之后不能替他删。 */
+async function releaseOwnLock(lock: string): Promise<void> {
+  const owner = await readLockOwnerPid(lock);
+  if (owner !== null && owner !== process.pid) {
+    log.warn('mirror cache purge queue lock was taken over; leaving it to its new owner');
+    return;
+  }
+  await fsp.rm(lock, { force: true }).catch(() => undefined);
 }
 
 function queueFilePath(): string {
@@ -291,8 +350,11 @@ function compactEntries(entries: readonly PurgeEntry[]): PurgeEntry[] {
   log.warn(
     `mirror cache purge queue overflow (${entries.length} entries); collapsed to ${collapsed.length} root-level entr(ies)`,
   );
-  // 极端情况下 root 数本身就超上限:此时按 since 保留最早的(失败最久的最该被清掉)。
-  return collapsed.sort((a, b) => a.since - b.since).slice(0, MAX_ENTRIES);
+  // **不再截断**:不同 owner root 之间无法合并(一个账号的缓存不能拿另一个账号的清理来代表),
+  // 截掉就等于那个账号的明文缓存永远没有重试机会(review: codex P1)。超出正本容量的部分由
+  // writeQueue 溢写到追加目录 —— 那里一条一个文件,读取时会被并回来。
+  // 按 since 升序:失败最久的排在前面,优先留在正本里。
+  return collapsed.sort((a, b) => a.since - b.since);
 }
 
 /** 写队列文件。失败**抛出** —— 调用方需要知道「持久重试记录没写下」。 */
@@ -305,7 +367,18 @@ async function writeQueue(entries: readonly PurgeEntry[]): Promise<void> {
     await fsp.rm(`${file}.bak`, { force: true }).catch(() => undefined);
     return;
   }
-  const payload: StoredQueue = { version: 1, entries: compactEntries(entries) };
+  const compacted = compactEntries(entries);
+  // 正本只放前 MAX_ENTRIES 条,其余**溢写**成追加文件(一条一个),读取时并回来。
+  // 这样"条目数超上限"不会丢掉任何一个 owner root 的待清记录(review: codex P1)。
+  const overflow = compacted.slice(MAX_ENTRIES);
+  for (const entry of overflow) {
+    try {
+      await appendPendingEntry(entry);
+    } catch (err) {
+      log.error('failed to spill overflow purge entry to pending dir', err);
+    }
+  }
+  const payload: StoredQueue = { version: 1, entries: compacted.slice(0, MAX_ENTRIES) };
   // 原子落位(写 .tmp 再 rename),不能直接覆写:这份文件是「缓存没清干净」唯一的跨重启
   // 痕迹,覆写期间进程被杀会留下截断的 JSON,下次启动解析失败被当成空队列,而内存兜底
   // 早随进程消失 —— 那些明文缓存就此永久失去清理机会(review: greptile P1 security)。

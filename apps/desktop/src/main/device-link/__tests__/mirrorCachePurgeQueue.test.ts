@@ -340,6 +340,90 @@ describe('跨进程锁', () => {
   });
 });
 
+describe('条目数超上限', () => {
+  // review(codex P1):不同 owner root 之间无法合并(一个账号的清理代表不了另一个账号),
+  // 旧实现 slice(0, 32) 会把较新的 root 永久丢掉,那个账号的明文缓存再也没有重试机会。
+  it('超过上限的**不同 root** 溢写到追加目录,一个都不丢', async () => {
+    const roots: string[] = [];
+    for (let i = 0; i < 40; i += 1) {
+      roots.push(await makeOwnerCache(`owner-${i}`));
+    }
+    for (const root of roots) await enqueuePurge(root);
+
+    __testing.resetMemoryQueue(); // 只看盘上
+    const persisted = await __testing.readQueue();
+    expect(persisted.map((e) => e.root).sort()).toEqual([...roots].sort());
+
+    // 全部都能被消化掉。
+    const result = await drainPurgeQueue();
+    expect(result.purged).toBe(40);
+    for (const root of roots) expect(fs.existsSync(root)).toBe(false);
+  }, 30_000);
+});
+
+describe('锁的所有权', () => {
+  function lockPath(): string {
+    return path.join(userData, __testing.lockFileName);
+  }
+
+  // review(codex P1):临界区包含递归删除,正常持锁的 drain 完全可能跑过 10 秒。
+  // 只按 mtime 抢锁会挤掉活着的持有者,它随后还会在 finally 里删掉别人的锁。
+  it('owner 进程还活着 → 陈旧 mtime 也不接管(降级走追加)', async () => {
+    const root = await makeOwnerCache('owner-1');
+    // 用**本测试进程之外**的活进程当 owner:process.ppid 一定活着且不是自己。
+    await fsp.writeFile(
+      lockPath(),
+      JSON.stringify({ pid: process.ppid, startedAt: 1 }),
+      'utf8',
+    );
+    const old = new Date(Date.now() - 60_000);
+    await fsp.utimes(lockPath(), old, old);
+
+    try {
+      await enqueuePurge(root);
+
+      // 没有接管:锁还在,且内容仍是那个 owner 的。
+      const owner = JSON.parse(await fsp.readFile(lockPath(), 'utf8')) as { pid: number };
+      expect(owner.pid).toBe(process.ppid);
+      // 记录走了追加路径,没丢。
+      __testing.resetMemoryQueue();
+      expect((await __testing.readQueue()).map((e) => e.root)).toEqual([root]);
+    } finally {
+      await fsp.rm(lockPath(), { force: true });
+    }
+  }, 20_000);
+
+  it('owner 进程已经不在 → 接管陈旧锁', async () => {
+    const root = await makeOwnerCache('owner-1');
+    // 一个几乎不可能存在的 pid(用完即弃的高位数字)。
+    await fsp.writeFile(lockPath(), JSON.stringify({ pid: 2_147_483_600, startedAt: 1 }), 'utf8');
+    const old = new Date(Date.now() - 60_000);
+    await fsp.utimes(lockPath(), old, old);
+
+    await enqueuePurge(root);
+
+    // 接管后正常释放,锁不残留;条目落在正本里(不是追加目录)。
+    expect(fs.existsSync(lockPath())).toBe(false);
+    const persisted = JSON.parse(await fsp.readFile(queueFile(), 'utf8')) as {
+      entries: Array<{ root: string }>;
+    };
+    expect(persisted.entries.map((e) => e.root)).toEqual([root]);
+  });
+
+  it('锁已被别人接管时不替他删(释放前先认 pid)', async () => {
+    const root = await makeOwnerCache('owner-1');
+    await enqueuePurge(root); // 正常一轮:锁建了又删了
+    // 模拟"我们持锁期间被接管":手工写一个别人的锁,再跑一轮(会走追加降级)。
+    await fsp.writeFile(lockPath(), JSON.stringify({ pid: process.ppid, startedAt: 1 }), 'utf8');
+    try {
+      await enqueuePurge(root);
+      expect(fs.existsSync(lockPath())).toBe(true); // 别人的锁还在
+    } finally {
+      await fsp.rm(lockPath(), { force: true });
+    }
+  }, 20_000);
+});
+
 describe('队列文件原子落位', () => {
   // review(greptile P1 / security):这份文件是「缓存没清干净」唯一的跨重启痕迹。直接覆写时
   // 进程在写入中途被杀会留下截断的 JSON,下次启动解析失败被当成空队列,而内存兜底早已
