@@ -11,12 +11,16 @@
  * 而自动继承成功后该供应商 `connected === true`,引导卡压根不出现 —— 于是这条路径上的用户
  * 什么提示都收不到。两个 hook 各管一半,判定不重叠。
  *
- * 判定刻意只用两份已有数据推导,不新增 main 侧状态:
+ * 判定用三个条件,缺一不可:
  *   1. `scanLocalCli()` 报告该 CLI 本机已安装且已登录;
- *   2. 同名 provider 在 Cindy 里已连接。
- * 两者同时成立时,Cindy 用的就是本机那份凭证(用户也可能自己在 Cindy 里登录了同一账号 ——
- * 那时这句告知依然是事实,只是他已经知道了。代价是他会多看一次、点掉即止,这比让继承路径
- * 的用户完全无感知要好)。
+ *   2. 该条检测的 `sharedWithCindy` —— Cindy 用的**确实是这一份**凭证;
+ *   3. 同名 provider 在 Cindy 里已连接。
+ *
+ * 第 2 条是硬要求,不能省。只看 1+3 会误报:codex 有独立的 codex-home,「本机登录着账号 A、
+ * 用户又在 Cindy 里显式登录了账号 B」时两条都成立,而 reconcile 检测到账号不同、刻意让两份
+ * 凭证各管各 —— 此时告诉用户「已沿用本机订阅」是错的,他会以为在花 A 的额度
+ * (PR #1076 review)。判据按 CLI 分派在 main 侧(claude 与本机共用同一处凭证存储,codex 比对
+ * 硬链 inode),renderer 只消费结论。
  */
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
@@ -83,7 +87,9 @@ export function useInheritedLocalSubscriptions(
   const rows = useMemo<InheritedSubscriptionRow[]>(() => {
     if (!enabled || loading || !detections) return [];
     return detections
-      .filter((d) => d.installed && d.loggedIn)
+      // sharedWithCindy 是「确实继承了」的实证(见顶注第 2 条);只有 installed+loggedIn
+      // 的那些不算 —— 它们可能是各自登录的不同账号。
+      .filter((d) => d.installed && d.loggedIn && d.sharedWithCindy)
       .map((detection) => ({
         detection,
         provider: providers.find((p) => p.id === detection.providerId),

@@ -12,7 +12,12 @@ import { join } from 'node:path';
 import { stat } from 'node:fs/promises';
 
 import { hasClaudeAiOAuth } from '../maker-host/claude-credentials-store.js';
-import { LOCAL_CLI_DETECT_MAP, type LocalCliDetection } from '../../shared/localCliDetect.js';
+import { isCodexAuthInheritedFromSystemCli } from '../maker-host/auth-adapters.js';
+import {
+  LOCAL_CLI_DETECT_MAP,
+  type LocalCliDetection,
+  type LocalCliId,
+} from '../../shared/localCliDetect.js';
 
 export interface LocalCliScanDeps {
   homeDir: string;
@@ -25,6 +30,11 @@ export interface LocalCliScanDeps {
    * 生产 = hasClaudeAiOAuth();只返 boolean,不暴露凭证内容(规则 23)。
    */
   hasClaudeLogin(): boolean;
+  /**
+   * Cindy 用的凭证是否确实就是这份本机凭证(填 `LocalCliDetection.sharedWithCindy`)。
+   * 只在该 CLI 已登录时被调用;判据按 CLI 分派,见 createLocalCliScanDeps。
+   */
+  isCredentialSharedWithCindy(cli: LocalCliId): boolean;
 }
 
 /** 生产 deps:真实 home + fs.stat(异常一律 false)+ Claude 跨平台登录探测。 */
@@ -52,6 +62,20 @@ export function createLocalCliScanDeps(): LocalCliScanDeps {
         return false;
       }
     },
+    isCredentialSharedWithCindy: (cli) => {
+      try {
+        // claude:Cindy 与本机 Claude Code **共用同一处凭证存储**(macOS Keychain 的
+        // `Claude Code-credentials` / 其它平台 ~/.claude/.credentials.json,见
+        // claude-credentials-store 顶注)。物理上就是同一份,不存在「各自登录不同账号」
+        // 这种分歧,所以已登录即已共用。
+        if (cli === 'claude-cli') return true;
+        // codex:Cindy 有自己的 codex-home,只有账号一致时 reconcile 才建硬链 ——
+        // 必须实证 inode 同一性,不能由「两边都登录了」推出来。
+        return isCodexAuthInheritedFromSystemCli();
+      } catch {
+        return false;
+      }
+    },
   };
 }
 
@@ -75,7 +99,15 @@ export async function scanLocalCliAuth(deps: LocalCliScanDeps): Promise<LocalCli
     } else if (dirExists && entry.credentialFileSegments) {
       loggedIn = await deps.isFile(join(deps.homeDir, ...entry.credentialFileSegments));
     }
-    results.push({ cli: entry.cli, providerId: entry.providerId, installed, loggedIn });
+    // 未登录时不必探测共用性(也无从谈起);已登录才问「Cindy 用的是不是这一份」。
+    const sharedWithCindy = loggedIn ? deps.isCredentialSharedWithCindy(entry.cli) : false;
+    results.push({
+      cli: entry.cli,
+      providerId: entry.providerId,
+      installed,
+      loggedIn,
+      sharedWithCindy,
+    });
   }
   return results;
 }

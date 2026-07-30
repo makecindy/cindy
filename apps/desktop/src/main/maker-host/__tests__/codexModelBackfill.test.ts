@@ -154,6 +154,60 @@ describe('createCodexModelBackfillCoordinator', () => {
     expect(refreshLive).toHaveBeenCalledTimes(CODEX_MODEL_BACKFILL_MAX_LIVE_ATTEMPTS + 1);
   });
 
+  it('reset 作废在途那次的写回权 —— 旧账号结果不得落地', async () => {
+    // 回归 PR #1076 review:reset 只清 inflight 引用时,旧账号那次 model/list 仍会带着旧
+    // maker 引用完成并调 onApplied,把刚被 auth 边界清空的目录重新填上上一个账号的模型。
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const onApplied = vi.fn();
+    const warn = vi.fn();
+    const coordinator = createCodexModelBackfillCoordinator(
+      makeDeps({
+        refreshLive: async () => {
+          await gate;
+          return true;
+        },
+        onApplied,
+        log: { info: vi.fn(), warn },
+      }),
+    );
+
+    const oldAccountFlight = coordinator.request();
+    coordinator.reset(); // 登出 / 切账号发生在拉取途中
+    release();
+    await expect(oldAccountFlight).resolves.toBe('applied');
+    expect(onApplied).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('auth boundary changed mid-flight'));
+  });
+
+  it('换代后的失败不占新边界的重试额度', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const refreshLive = vi
+      .fn<() => Promise<boolean>>()
+      .mockImplementationOnce(async () => {
+        await gate;
+        return false;
+      })
+      .mockResolvedValue(false);
+    const coordinator = createCodexModelBackfillCoordinator(makeDeps({ refreshLive }));
+
+    const stale = coordinator.request();
+    coordinator.reset();
+    release();
+    await stale;
+
+    // 新边界应有完整的 MAX 次额度：旧代那次失败不能记在它头上。
+    for (let i = 0; i < CODEX_MODEL_BACKFILL_MAX_LIVE_ATTEMPTS; i += 1) {
+      await expect(coordinator.request()).resolves.toBe('not-applied');
+    }
+    await expect(coordinator.request()).resolves.toBe('skipped-exhausted');
+  });
+
   it('未授权抖动不会耗尽额度', async () => {
     const refreshLive = vi.fn(async () => true);
     const coordinator = createCodexModelBackfillCoordinator(

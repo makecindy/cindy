@@ -44,8 +44,16 @@ export function createProviderModelRefreshCoordinator(
 ): ProviderModelRefreshCoordinator {
   const inFlight = new Map<
     BuiltinRefreshableProviderId,
-    { promise: Promise<void>; scopeGeneration: number; providerGeneration: number }
+    {
+      promise: Promise<void>;
+      scopeGeneration: number;
+      providerGeneration: number;
+      /** 这次在途请求是否无视冷却(见 refresh 里 forced-follow-up 分支的理由)。 */
+      forced: boolean;
+    }
   >();
+  /** 排在非强制在途请求之后的强制补跑链(按 provider 去重,见 refresh)。 */
+  const forcedFollowUp = new Map<BuiltinRefreshableProviderId, Promise<void>>();
   const lastAttemptAt = new Map<BuiltinRefreshableProviderId, number>();
   const lastFailureAt = new Map<BuiltinRefreshableProviderId, number>();
   const providerGenerations = new Map<BuiltinRefreshableProviderId, number>();
@@ -60,6 +68,9 @@ export function createProviderModelRefreshCoordinator(
     lastAttemptAt.clear();
     lastFailureAt.clear();
     inFlight.clear();
+    // 补跑链跟着在途请求一起作废:它排在**上一个 scope** 的那次请求之后,把新 scope 的
+    // 强制请求 join 进去等于让它等一件与自己无关的事。
+    forcedFollowUp.clear();
     providerGenerations.clear();
     deps.log.debug('provider model auto-refresh scope changed', { scopeGeneration });
   }
@@ -73,24 +84,47 @@ export function createProviderModelRefreshCoordinator(
         (providerGenerations.get(providerId) ?? 0) + 1,
       );
       inFlight.delete(providerId);
+      forcedFollowUp.delete(providerId);
       return;
     }
     lastAttemptAt.clear();
     lastFailureAt.clear();
   }
 
+  /**
+   * @param bypassJoin 跳过「合并到在途请求」这一步,直接发起新的一次刷新。只由下方
+   *   forced-follow-up 链内部使用(它已经等过那次在途请求),外部调用方一律不传 ——
+   *   传了就会绕过 in-flight 合并、可能并发起两个 codex app-server。
+   */
   function refresh(
     providerId: BuiltinRefreshableProviderId,
     force: boolean,
+    bypassJoin = false,
   ): Promise<void> {
     syncScope();
     const providerGeneration = providerGenerations.get(providerId) ?? 0;
     const existing = inFlight.get(providerId);
     if (
+      !bypassJoin &&
       existing?.scopeGeneration === scopeGeneration &&
       existing.providerGeneration === providerGeneration
     ) {
-      return existing.promise;
+      // 同语义(都不强制,或在途那次本来就是强制的)→ 合并,这是 in-flight 去重的本意。
+      if (!force || existing.forced) return existing.promise;
+      // 强制请求撞上**非强制**在途:不能就这么合并。那次在途可能正是启动早期发起的
+      // ——owner 绑定还没认领、网关凭证还没下发,它什么都发现不到 —— 合并进去等于这次
+      // 强制刷新从未发生,首启清单不全的问题原样保留到下一个触发时机(PR #1076 review)。
+      // 正确做法是排在它后面真跑一次:等它 settle(成败都算 settle),再发起新的一次。
+      const pendingFollowUp = forcedFollowUp.get(providerId);
+      if (pendingFollowUp) return pendingFollowUp;
+      const followUp = existing.promise
+        .catch(() => undefined)
+        .then(() => refresh(providerId, true, true))
+        .finally(() => {
+          if (forcedFollowUp.get(providerId) === followUp) forcedFollowUp.delete(providerId);
+        });
+      forcedFollowUp.set(providerId, followUp);
+      return followUp;
     }
     const generation = scopeGeneration;
 
@@ -141,6 +175,7 @@ export function createProviderModelRefreshCoordinator(
       promise: flight,
       scopeGeneration: generation,
       providerGeneration,
+      forced: force,
     });
     return flight;
   }

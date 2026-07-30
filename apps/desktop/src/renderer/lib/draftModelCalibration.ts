@@ -58,9 +58,24 @@ function firstModelByOrder(provider: ProviderView, agent: AgentKind): CatalogMod
     )[0];
 }
 
+/** 校准挑中的 (模型, 来源)。`providerId` 是按订阅优先顺序命中的那家。 */
+export interface PickedConnectedModel {
+  model: string;
+  /**
+   * 挑中它的那家供应商。
+   *
+   * **必须一路带到来源解析**,不能只返回 model id:`nativeDefaultSourceId` 对
+   * claude-code 无条件优先 XD 网关（registry.ts）。于是「校准按订阅优先挑了 anthropic 的
+   * claude-opus-5」但只交出模型 id 时,下游解析又把它指回 XD —— 计费走网关,而不是用户
+   * 已经付过钱的订阅额度,本模块承诺的「订阅优先」在最后一步被推翻（PR #1076 review）。
+   */
+  providerId: string;
+}
+
 /**
- * 在该 agent 的已连接来源里挑一个模型 id：
+ * 在该 agent 的已连接来源里挑 (模型, 来源)：
  *   1. `preferredModelId` 本身可用 —— 默认值能用就绝不动它，避免首屏莫名换模型；
+ *      来源仍按订阅优先顺序取「第一家提供它的」，让默认值也享受订阅优先；
  *   2. 否则按「订阅优先」的供应商序取第一家，返回它排序第一的默认可见模型
  *      （见 providersByPreference / firstModelByOrder）；
  *   3. 一个已连接来源都没有（或都没有模型）→ null，交给既有的「零来源」空态引导去连接供应商。
@@ -69,17 +84,17 @@ export function pickConnectedModelForAgent(
   providers: readonly ProviderView[],
   agent: AgentKind,
   preferredModelId: string,
-): string | null {
+): PickedConnectedModel | null {
   const ranked = providersByPreference(providers, agent);
   if (ranked.length === 0) return null;
   for (const provider of ranked) {
     if ((provider.models[agent] ?? []).some((m) => m.id === preferredModelId)) {
-      return preferredModelId;
+      return { model: preferredModelId, providerId: provider.id };
     }
   }
   for (const provider of ranked) {
     const first = firstModelByOrder(provider, agent);
-    if (first) return first.id;
+    if (first) return { model: first.id, providerId: provider.id };
   }
   return null;
 }
@@ -102,14 +117,26 @@ export interface DraftModelCalibrationInput {
   providersLoading: boolean;
 }
 
-/** 返回草稿应当展示 / 发送的模型 id（不可校准时原样返回，绝不返回空）。 */
+/** 校准结果：草稿应当展示 / 发送的模型，以及（若校准出了结论）它该走哪家来源。 */
+export interface DraftModelCalibrationResult {
+  /** 草稿应当展示 / 发送的模型 id（不可校准时原样返回，绝不为空）。 */
+  model: string;
+  /**
+   * 建议来源。`null` = 本次没给出结论（用户已显式选过 / 清单还在加载 / 一个来源都没有），
+   * 调用方应回落既有的来源解析。给出时调用方要把它喂给 `effectiveSourceIdForModel`，
+   * 优先级排在**用户显式选的来源之后**（他选的必须赢），见 PickedConnectedModel.providerId。
+   */
+  providerId: string | null;
+}
+
 export function calibrateDraftModel({
   providers,
   agent,
   model,
   chosenByUser,
   providersLoading,
-}: DraftModelCalibrationInput): string {
-  if (chosenByUser || providersLoading) return model;
-  return pickConnectedModelForAgent(providers, agent, model) ?? model;
+}: DraftModelCalibrationInput): DraftModelCalibrationResult {
+  if (chosenByUser || providersLoading) return { model, providerId: null };
+  const picked = pickConnectedModelForAgent(providers, agent, model);
+  return picked ?? { model, providerId: null };
 }

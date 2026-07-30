@@ -75,6 +75,8 @@ function detection(providerId: string, over: Partial<LocalCliDetection> = {}): L
     providerId,
     installed: true,
     loggedIn: true,
+    // 默认「确实是同一份凭证」；不共用的场景由用例显式覆写（见 sharedWithCindy 用例）。
+    sharedWithCindy: true,
     ...over,
   };
 }
@@ -139,6 +141,17 @@ describe('InheritedSubscriptionNotice', () => {
     // 未连接的那些归 useProviderOnboarding.detectedRows 去引导授权；两处都出会重复叙事。
     h.providers = [provider('openai', false, 'ChatGPT')];
     h.detections = [detection('openai')];
+    await renderNotice();
+
+    expect(screen.queryByTestId('inherited-subscription-notice')).toBeNull();
+  });
+
+  it('本机已登录但 Cindy 用的是另一份凭证 → 不出现（否则是错话）', async () => {
+    // 回归 PR #1076 review：本机 codex 登录着账号 A、用户又在 Cindy 里显式登录了账号 B 时，
+    // installed/loggedIn/connected 三个都为真，但 reconcile 检测到账号不同、刻意让两份凭证
+    // 各管各。此时说「已沿用本机订阅」，用户会误以为在花账号 A 的额度。
+    h.providers = [provider('openai', true, 'ChatGPT')];
+    h.detections = [detection('openai', { sharedWithCindy: false })];
     await renderNotice();
 
     expect(screen.queryByTestId('inherited-subscription-notice')).toBeNull();

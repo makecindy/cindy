@@ -205,6 +205,35 @@ export function readCodexOneShotCreds(): { accessToken: string; accountId: strin
   }
 }
 
+/**
+ * Cindy 当前用的 Codex 凭证**是否确实就是本机 codex CLI 那一份**。
+ *
+ * 判据是 inode 同一性,不是「两边都有凭证」:reconcile 只在双方账号一致时才把 Cindy 的
+ * auth.json 换成指向 `~/.codex/auth.json` 的硬链;账号不同时刻意各管各(见
+ * runReconcileWithSystemCodex)。于是「本机登录着账号 A、Cindy 的 codex-home 显式登录了
+ * 账号 B」时,两边都 installed+loggedIn、provider 也 connected —— 但 Cindy 用的根本不是
+ * 本机那份凭证。用文件存在性推断继承会在这种情况下报错话(PR #1076 review)。
+ *
+ * 只返 boolean,不暴露路径与凭证内容(规则 23)。任何异常按 false ——「无法确证」不该说成
+ * 「已继承」。绑定不属当前 owner、或用户已显式断开(durable marker)时同样是 false:那时
+ * Cindy 压根不该在用这份凭证。
+ */
+export function isCodexAuthInheritedFromSystemCli(): boolean {
+  if (!isNativeProviderAuthBound('openai')) return false;
+  try {
+    const codexHome = getCodexHome();
+    const localAuth = path.join(codexHome, 'auth.json');
+    if (shouldSuppressLocalCodexAuth(codexHome, localAuth)) return false;
+    const systemAuth = getSystemCodexAuthPath();
+    if (!existsSync(localAuth) || !existsSync(systemAuth)) return false;
+    const localStat = fs.statSync(localAuth);
+    const systemStat = fs.statSync(systemAuth);
+    return localStat.ino === systemStat.ino && localStat.dev === systemStat.dev;
+  } catch {
+    return false;
+  }
+}
+
 /** 删除 Cindy 自管且无法按账号归属的 Codex 模型 cache。 */
 async function removeDesktopCodexModelsCache(codexHome: string): Promise<boolean> {
   const cachePath = path.join(codexHome, 'models_cache.json');

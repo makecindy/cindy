@@ -76,8 +76,9 @@ export interface CodexModelBackfillCoordinator {
    */
   request(): Promise<CodexBackfillOutcome>;
   /**
-   * 重置失败计数。**只在 auth 边界真的变了时调**(登录 / 登出 / 换账号 / 凭证失效):
-   * 新边界下「上个账号试过几次都不成」这个结论不再适用。
+   * 作废当前这一代:清失败计数,并让**已在途**的那次拉取不再写回目录。
+   * **只在 auth 边界真的变了时调**(登录 / 登出 / 换账号 / 凭证失效):新边界下
+   * 「上个账号试过几次都不成」这个结论不再适用,上个账号的拉取结果更不能落地。
    */
   reset(): void;
 }
@@ -85,11 +86,20 @@ export interface CodexModelBackfillCoordinator {
 /**
  * 把一次性的补拉包成可按事件重试的收口。
  *
- * 只记一件事:`liveAttempts` —— 真起过(或试图起过)app-server 的失败次数,封顶后停手,
- * 避免反复 spawn。刻意**不缓存「已经拉到了」**:清单在场与否每次都现查 catalog
- * (`hasCodexModels`),因为它随时会被 auth 边界收口清空(登出、cache miss 回退),缓存成
- * 终态会让清空之后再也拉不回来。`skipped-unauthed` 不计入失败 —— 它意味着「还没资格试」,
- * 不该消费任何重试额度,这正是首启那次被白白跳过的原因。
+ * 记两件事:
+ *   - `liveAttempts`:真起过(或试图起过)app-server 的失败次数,封顶后停手,避免反复 spawn;
+ *   - `generation`:auth 边界的代号,`reset()` 递增。在途拉取回来时若代号已变,**丢弃结果**。
+ *
+ * 代号是必需的,不是防御性编程:`reset()` 拿不回一个已经发出的 `model/list`。登出 / 切账号
+ * 发生在拉取途中时,旧账号的那次请求仍会带着旧 `maker` 引用完成 —— 只清 `inflight` 引用的话
+ * 它照样调 `onApplied`,把刚被 auth 边界清空的目录重新填上**上一个账号**的模型;新账号也已经
+ * 开始自己那轮,最终目录取决于两者谁先回来(PR #1076 review)。代号让「哪一代的结果可以落地」
+ * 变成确定的,而不是竞速结果。
+ *
+ * 刻意**不缓存「已经拉到了」**:清单在场与否每次都现查 catalog(`hasCodexModels`),因为它
+ * 随时会被 auth 边界收口清空(登出、cache miss 回退),缓存成终态会让清空之后再也拉不回来。
+ * `skipped-unauthed` 不计入失败 —— 它意味着「还没资格试」,不该消费任何重试额度,这正是首启
+ * 那次被白白跳过的原因。
  */
 export function createCodexModelBackfillCoordinator(
   deps: CodexBackfillDeps,
@@ -97,13 +107,28 @@ export function createCodexModelBackfillCoordinator(
 ): CodexModelBackfillCoordinator {
   let liveAttempts = 0;
   let inflight: Promise<CodexBackfillOutcome> | null = null;
+  let generation = 0;
 
   return {
     request(): Promise<CodexBackfillOutcome> {
       if (liveAttempts >= maxLiveAttempts) return Promise.resolve('skipped-exhausted');
       if (inflight) return inflight;
-      const flight = maybeBackfillCodexModels(deps)
+      const startedAt = generation;
+      // onApplied 在 deps 里包一层代号校验:广播必须与「结果是否该落地」同一个判据,
+      // 否则会出现「目录没更新但 renderer 收到了 PROVIDER_CHANGED」这种半落地状态。
+      const flight = maybeBackfillCodexModels({
+        ...deps,
+        onApplied: () => {
+          if (generation !== startedAt) {
+            deps.log.warn('codex model backfill result dropped: auth boundary changed mid-flight');
+            return;
+          }
+          deps.onApplied();
+        },
+      })
         .then((outcome) => {
+          // 换代后的结果不再计入这一代的失败额度:新边界要有完整的重试机会。
+          if (generation !== startedAt) return outcome;
           // not-applied / error 都真起过(或试图起过)app-server,计入封顶;
           // applied / has-models 是成功路径;skipped-unauthed 根本没试。
           if (outcome === 'not-applied' || outcome === 'error') liveAttempts += 1;
@@ -117,6 +142,8 @@ export function createCodexModelBackfillCoordinator(
     },
     reset(): void {
       liveAttempts = 0;
+      // 递增代号即作废在途那次的写回权;inflight 置 null 只是让下一次 request 能立刻起新的。
+      generation += 1;
       inflight = null;
     },
   };

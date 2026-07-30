@@ -12,7 +12,18 @@ import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 import {
   calibrateDraftModel,
   pickConnectedModelForAgent,
+  type DraftModelCalibrationInput,
 } from '../lib/draftModelCalibration';
+
+/**
+ * 两个只取 model id 的薄壳 —— 校准现在同时给出 (模型, 来源)，而绝大多数用例只关心挑中了
+ * 哪个模型。来源那一维由本文件末尾的「校准结果要带上供应商」一组用例直接断言原函数。
+ */
+const pickId = (
+  ...args: Parameters<typeof pickConnectedModelForAgent>
+): string | null => pickConnectedModelForAgent(...args)?.model ?? null;
+const calibratedId = (input: DraftModelCalibrationInput): string =>
+  calibrateDraftModel(input).model;
 
 function model(id: string, over: Partial<CatalogModel> = {}): CatalogModel {
   return {
@@ -68,14 +79,14 @@ const connectedButEmpty = provider('anthropic', true, { 'claude-code': [] });
 describe('pickConnectedModelForAgent', () => {
   it('默认模型本身可用时原样保留,不无谓换模型', () => {
     const providers = [provider('xd', true, { 'claude-code': [model('claude-opus-4-8')] })];
-    expect(pickConnectedModelForAgent(providers, 'claude-code', 'claude-opus-4-8')).toBe(
+    expect(pickId(providers, 'claude-code', 'claude-opus-4-8')).toBe(
       'claude-opus-4-8',
     );
   });
 
   it('默认模型没有已连接来源时落到已连接来源的第一个模型', () => {
     expect(
-      pickConnectedModelForAgent(
+      pickId(
         [gatewayWithoutOpus, disconnectedAnthropic],
         'claude-code',
         'claude-opus-4-8',
@@ -85,11 +96,11 @@ describe('pickConnectedModelForAgent', () => {
 
   it('已连接但零模型的来源不算数(动态发现失败的 anthropic)', () => {
     expect(
-      pickConnectedModelForAgent([connectedButEmpty], 'claude-code', 'claude-opus-4-8'),
+      pickId([connectedButEmpty], 'claude-code', 'claude-opus-4-8'),
     ).toBeNull();
     // 同时存在一个真有模型的来源时,挑那个。
     expect(
-      pickConnectedModelForAgent(
+      pickId(
         [connectedButEmpty, gatewayWithoutOpus],
         'claude-code',
         'claude-opus-4-8',
@@ -99,7 +110,7 @@ describe('pickConnectedModelForAgent', () => {
 
   it('一个已连接来源都没有时返回 null,交给零来源空态', () => {
     expect(
-      pickConnectedModelForAgent([disconnectedAnthropic], 'claude-code', 'claude-opus-4-8'),
+      pickId([disconnectedAnthropic], 'claude-code', 'claude-opus-4-8'),
     ).toBeNull();
   });
 
@@ -112,7 +123,7 @@ describe('pickConnectedModelForAgent', () => {
         model('claude-sonnet-5', { sortOrder: 6 }),
       ],
     });
-    expect(pickConnectedModelForAgent([gateway], 'claude-code', 'claude-opus-4-8')).toBe(
+    expect(pickId([gateway], 'claude-code', 'claude-opus-4-8')).toBe(
       'claude-opus-5',
     );
   });
@@ -130,7 +141,7 @@ describe('pickConnectedModelForAgent', () => {
       codex: [model('codex/gpt-5.6-sol', { sortOrder: 8, group: 'gpt-budget' })],
     });
 
-    expect(pickConnectedModelForAgent([gateway, subscription], 'codex', 'gpt-nonexistent')).toBe(
+    expect(pickId([gateway, subscription], 'codex', 'gpt-nonexistent')).toBe(
       'gpt-5.6-luna',
     );
   });
@@ -151,7 +162,7 @@ describe('pickConnectedModelForAgent', () => {
 
     // 目录序 anthropic → openai，两家都是订阅 → 取 anthropic。
     expect(
-      pickConnectedModelForAgent([anthropic, openai], 'claude-code', 'claude-opus-4-8'),
+      pickId([anthropic, openai], 'claude-code', 'claude-opus-4-8'),
     ).toBe('claude-opus-5');
   });
 
@@ -159,7 +170,7 @@ describe('pickConnectedModelForAgent', () => {
     const gateway = provider('xd', true, {
       codex: [model('codex/gpt-5.6-sol', { sortOrder: 8 }), model('gpt-5.6-sol', { sortOrder: 18 })],
     });
-    expect(pickConnectedModelForAgent([gateway], 'codex', 'gpt-nonexistent')).toBe(
+    expect(pickId([gateway], 'codex', 'gpt-nonexistent')).toBe(
       'codex/gpt-5.6-sol',
     );
   });
@@ -173,7 +184,7 @@ describe('pickConnectedModelForAgent', () => {
         model('gpt-5.6-sol', { sortOrder: 18 }),
       ],
     });
-    expect(pickConnectedModelForAgent([gateway], 'codex', 'gpt-nonexistent')).toBe('gpt-5.6-sol');
+    expect(pickId([gateway], 'codex', 'gpt-nonexistent')).toBe('gpt-5.6-sol');
   });
 
   it('整组都默认收起时退回纯排序第一,不让该供应商落空', () => {
@@ -183,7 +194,7 @@ describe('pickConnectedModelForAgent', () => {
         model('gpt-5.4', { sortOrder: 21, defaultEnabled: false }),
       ],
     });
-    expect(pickConnectedModelForAgent([gateway], 'codex', 'gpt-nonexistent')).toBe('gpt-5.4');
+    expect(pickId([gateway], 'codex', 'gpt-nonexistent')).toBe('gpt-5.4');
   });
 
   it('默认模型可用时,排序与订阅优先都不得抢走它', () => {
@@ -194,7 +205,7 @@ describe('pickConnectedModelForAgent', () => {
         model('claude-opus-5', { sortOrder: 0 }),
       ],
     });
-    expect(pickConnectedModelForAgent([gateway], 'claude-code', 'claude-opus-4-8')).toBe(
+    expect(pickId([gateway], 'claude-code', 'claude-opus-4-8')).toBe(
       'claude-opus-4-8',
     );
   });
@@ -202,7 +213,7 @@ describe('pickConnectedModelForAgent', () => {
   it('不修改传入 provider 的清单顺序（排序必须走副本）', () => {
     const models = [model('b', { sortOrder: 9 }), model('a', { sortOrder: 0 })];
     const gateway = provider('xd', true, { codex: models });
-    pickConnectedModelForAgent([gateway], 'codex', 'nonexistent');
+    pickId([gateway], 'codex', 'nonexistent');
     // 展示层依赖 ProviderView 里的原始顺序，原地 sort 会把选择器的分组顺序搅乱。
     expect(models.map((m) => m.id)).toEqual(['b', 'a']);
   });
@@ -217,22 +228,22 @@ describe('calibrateDraftModel', () => {
   };
 
   it('校准从未被显式选过的种子默认', () => {
-    expect(calibrateDraftModel({ ...base, chosenByUser: false })).toBe('claude-sonnet-5');
+    expect(calibratedId({ ...base, chosenByUser: false })).toBe('claude-sonnet-5');
   });
 
   it('绝不改写用户显式选过的模型', () => {
-    expect(calibrateDraftModel({ ...base, chosenByUser: true })).toBe('claude-opus-4-8');
+    expect(calibratedId({ ...base, chosenByUser: true })).toBe('claude-opus-4-8');
   });
 
   it('供应商清单加载期不校准,避免首帧闪模型', () => {
-    expect(calibrateDraftModel({ ...base, chosenByUser: false, providersLoading: true })).toBe(
+    expect(calibratedId({ ...base, chosenByUser: false, providersLoading: true })).toBe(
       'claude-opus-4-8',
     );
   });
 
   it('没有任何可用来源时原样返回,不返回空', () => {
     expect(
-      calibrateDraftModel({ ...base, providers: [disconnectedAnthropic], chosenByUser: false }),
+      calibratedId({ ...base, providers: [disconnectedAnthropic], chosenByUser: false }),
     ).toBe('claude-opus-4-8');
   });
 
@@ -246,7 +257,7 @@ describe('calibrateDraftModel', () => {
 
     // 未过滤(本地草稿):bridge 来源可用。
     expect(
-      calibrateDraftModel({
+      calibratedId({
         providers: [localOnlyBridge, routableEverywhere],
         agent: 'codex',
         model: 'gpt-nonexistent',
@@ -257,7 +268,7 @@ describe('calibrateDraftModel', () => {
 
     // 已过滤(SSH 草稿):只会落到远端也能路由的来源。
     expect(
-      calibrateDraftModel({
+      calibratedId({
         providers: [routableEverywhere],
         agent: 'codex',
         model: 'gpt-nonexistent',
@@ -281,7 +292,7 @@ describe('calibrateDraftModel', () => {
 
     // 本地草稿:候选未剔除,取清单里的第一个。
     expect(
-      calibrateDraftModel({
+      calibratedId({
         ...input,
         providers: [provider('xd', true, { 'claude-code': models })],
       }),
@@ -289,7 +300,7 @@ describe('calibrateDraftModel', () => {
 
     // SSH 草稿:候选已剔除订阅直连,落到真正可路由的模型。
     expect(
-      calibrateDraftModel({
+      calibratedId({
         ...input,
         providers: [
           provider('xd', true, {
@@ -303,7 +314,7 @@ describe('calibrateDraftModel', () => {
   it('候选里剔掉用户隐藏的条目后就不会被选成默认(与选择器可见性同口径)', () => {
     const visibleOnly = [model('claude-sonnet-5')];
     expect(
-      calibrateDraftModel({
+      calibratedId({
         providers: [provider('xd', true, { 'claude-code': visibleOnly })],
         agent: 'claude-code',
         model: 'claude-opus-4-8',
@@ -318,7 +329,7 @@ describe('calibrateDraftModel', () => {
     const emptied = provider('xd', true, { 'claude-code': [] });
     const usable = provider('anthropic', true, { 'claude-code': [model('claude-sonnet-5')] });
     expect(
-      calibrateDraftModel({
+      calibratedId({
         providers: [emptied, usable],
         agent: 'claude-code',
         model: 'claude-opus-4-8',
@@ -326,5 +337,64 @@ describe('calibrateDraftModel', () => {
         providersLoading: false,
       }),
     ).toBe('claude-sonnet-5');
+  });
+});
+
+describe('校准结果要带上供应商', () => {
+  // 回归 PR #1076 review:只交出 model id 时,下游 nativeDefaultSourceId 对 claude-code
+  // 无条件优先 XD 网关 —— 校准好的「anthropic 订阅提供的模型」会被重新指回网关,计费落
+  // 网关而不是用户已付费的订阅额度,「订阅优先」在最后一步被推翻。
+  const anthropicSub = provider(
+    'anthropic',
+    true,
+    { 'claude-code': [model('claude-opus-5', { sortOrder: 0 })] },
+    'subscription',
+  );
+  const gatewaySameModel = provider('xd', true, {
+    'claude-code': [model('claude-opus-5', { sortOrder: 0 })],
+  });
+
+  it('两家都提供同一个模型时,来源给的是订阅那家', () => {
+    const picked = pickConnectedModelForAgent(
+      [gatewaySameModel, anthropicSub],
+      'claude-code',
+      'claude-opus-4-8',
+    );
+    expect(picked).toEqual({ model: 'claude-opus-5', providerId: 'anthropic' });
+  });
+
+  it('默认值本身可用时也给出订阅来源(第 1 步不该丢掉来源维度)', () => {
+    const picked = pickConnectedModelForAgent(
+      [gatewaySameModel, anthropicSub],
+      'claude-code',
+      'claude-opus-5',
+    );
+    expect(picked).toEqual({ model: 'claude-opus-5', providerId: 'anthropic' });
+  });
+
+  it('用户已显式选过 / 清单在加载 / 无可用来源时不给来源结论', () => {
+    const base = {
+      providers: [anthropicSub],
+      agent: 'claude-code' as const,
+      model: 'claude-opus-5',
+      chosenByUser: false,
+      providersLoading: false,
+    };
+    expect(calibrateDraftModel({ ...base, chosenByUser: true }).providerId).toBeNull();
+    expect(calibrateDraftModel({ ...base, providersLoading: true }).providerId).toBeNull();
+    expect(
+      calibrateDraftModel({ ...base, providers: [disconnectedAnthropic] }).providerId,
+    ).toBeNull();
+  });
+
+  it('校准出结论时 model 与 providerId 成对给出', () => {
+    const result = calibrateDraftModel({
+      providers: [gatewaySameModel, anthropicSub],
+      agent: 'claude-code',
+      model: 'claude-opus-4-8',
+      chosenByUser: false,
+      providersLoading: false,
+    });
+    expect(result).toEqual({ model: 'claude-opus-5', providerId: 'anthropic' });
   });
 });
