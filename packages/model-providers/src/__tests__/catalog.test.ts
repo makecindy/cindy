@@ -542,3 +542,29 @@ describe('buildRegistry 的清单发现失败投影', () => {
     expect(bare.find((p) => p.id === 'anthropic')?.modelDiscoveryFailure).toBeUndefined();
   });
 });
+
+describe('媒体清单跨供应商契约(2026-07 图像多来源)', () => {
+  // deriveCindyMediaConfig(desktop 侧)按目录序 first-wins 选默认与归属:
+  // BUILTIN 顺序里 openai/xai 排在 xd 前面,任何非 xd 供应商声明 imageDefaults
+  // 都会把 xd 的出厂默认顶掉;同 id 撞车会把 xd 条目的归属抢走(派发错通道)。
+  // 这两条是数据契约,在目录层锁死,不等运行时踩雷。
+  it('声明 imageDefaults / videoDefaults 的内置供应商只能是 xd(防 first-wins 顶默认)', () => {
+    for (const p of BUNDLED_CATALOG.providers) {
+      if (p.id === 'xd') continue;
+      expect(p.imageDefaults, `${p.id} 不得声明 imageDefaults`).toBeUndefined();
+      expect(p.videoDefaults, `${p.id} 不得声明 videoDefaults`).toBeUndefined();
+    }
+  });
+
+  it('非 xd 内置供应商的媒体模型 id 必须带 "<providerId>/" 前缀(防 first-wins 归属漂移)', () => {
+    for (const p of BUNDLED_CATALOG.providers) {
+      if (p.id === 'xd') continue;
+      for (const m of [...(p.imageModels ?? []), ...(p.videoModels ?? [])]) {
+        expect(
+          m.id.startsWith(`${p.id}/`),
+          `${p.id} 的媒体模型 ${m.id} 必须带 "${p.id}/" 前缀`,
+        ).toBe(true);
+      }
+    }
+  });
+});

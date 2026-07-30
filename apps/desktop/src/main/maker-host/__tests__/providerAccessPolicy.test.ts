@@ -117,3 +117,59 @@ describe('provider access policy', () => {
     },
   );
 });
+
+describe('projectProviderCatalogForBuildRegion — 图像多来源(2026-07)', () => {
+  it('非 global 区域对所有供应商清空图像清单/默认,新来源不绕地区闸', () => {
+    const gemini: Provider = {
+      id: 'gemini',
+      name: 'Google Gemini',
+      source: 'builtin',
+      agents: ['claude-code'],
+      auth: { method: 'oauth' },
+      routing: {},
+      models: { 'claude-code': [] },
+      imageModels: [{ id: 'gemini/gemini-3-pro-image', name: 'Gemini 3 Pro Image' }],
+    };
+    const openai: Provider = {
+      id: 'openai',
+      name: 'OpenAI',
+      source: 'builtin',
+      agents: ['claude-code'],
+      auth: { method: 'oauth' },
+      routing: {},
+      models: { 'claude-code': [] },
+      imageModels: [{ id: 'openai/gpt-image-2', name: 'GPT Image 2' }],
+      // 防御对象:即使有人违反"只有 xd 声明 defaults"的契约,大陆闸也要剥掉。
+      imageDefaults: { standard: 'openai/gpt-image-2' },
+    };
+    const base = catalog();
+    const projected = projectProviderCatalogForBuildRegion(
+      { ...base, providers: [...base.providers, gemini, openai] },
+      'cn',
+    );
+    for (const p of projected.providers) {
+      expect(p.imageModels ?? []).toEqual([]);
+      expect(p.imageDefaults).toBeUndefined();
+    }
+    // 视频白名单维持 xd 专属:非 xd 供应商声明的视频清单一并清空。
+    const xd = projected.providers.find((p) => p.id === 'xd');
+    expect(xd?.videoModels?.map((m) => m.id)).toEqual(['seedance-fast', 'seedance-pro']);
+  });
+
+  it('global 区域原样返回(含新来源的媒体清单)', () => {
+    const gemini: Provider = {
+      id: 'gemini',
+      name: 'Google Gemini',
+      source: 'builtin',
+      agents: ['claude-code'],
+      auth: { method: 'oauth' },
+      routing: {},
+      models: { 'claude-code': [] },
+      imageModels: [{ id: 'gemini/gemini-3-pro-image', name: 'Gemini 3 Pro Image' }],
+    };
+    const base = catalog();
+    const input = { ...base, providers: [...base.providers, gemini] };
+    const projected = projectProviderCatalogForBuildRegion(input, 'global');
+    expect(projected).toBe(input);
+  });
+});

@@ -32,9 +32,14 @@ function projectVideoDefaults(
 }
 
 /**
- * Build-region projection for the Cindy AI media catalog. Global keeps the
- * catalog source verbatim; Mainland China and dev share the Mainland product
- * semantics and expose only the media capabilities supported there.
+ * Build-region projection for the media catalog. Global keeps the catalog
+ * source verbatim; Mainland China and dev share the Mainland product semantics
+ * and expose only the media capabilities supported there.
+ *
+ * 2026-07 图像多来源:投影不再只针对 xd —— 大陆版「无图像能力」是产品语义,
+ * **所有**供应商的 imageModels/imageDefaults 一律清空(新来源不得绕过地区闸);
+ * 视频白名单(seedance 两型号)维持 xd 专属逻辑,其它供应商目前不声明视频清单,
+ * 声明了也一并清空(大陆视频能力只经 xd 网关合规通道)。
  */
 export function projectProviderCatalogForBuildRegion(
   catalog: Catalog,
@@ -44,12 +49,18 @@ export function projectProviderCatalogForBuildRegion(
 
   let changed = false;
   const providers = catalog.providers.map((provider) => {
-    if (provider.id !== CINDY_AI_PROVIDER_ID) return provider;
+    const hasMedia =
+      (provider.imageModels?.length ?? 0) > 0 ||
+      provider.imageDefaults !== undefined ||
+      (provider.videoModels?.length ?? 0) > 0 ||
+      provider.videoDefaults !== undefined;
+    const isCindyAi = provider.id === CINDY_AI_PROVIDER_ID;
+    if (!hasMedia && !isCindyAi) return provider;
     changed = true;
 
-    const videoModels = (provider.videoModels ?? []).filter((model) =>
-      MAINLAND_VIDEO_MODEL_IDS.has(model.id),
-    );
+    const videoModels = isCindyAi
+      ? (provider.videoModels ?? []).filter((model) => MAINLAND_VIDEO_MODEL_IDS.has(model.id))
+      : [];
     const videoIds = new Set(videoModels.map((model) => model.id));
     const videoDefaults = projectVideoDefaults(provider.videoDefaults, videoIds);
     const models = Object.fromEntries(
