@@ -81,6 +81,42 @@ export function lightboxPageLabel(index: number, count: number): string | null {
   return `${index + 1} / ${count}`;
 }
 
+/** 单页的图像层可见性(见 {@link lightboxImageLayers})。 */
+export interface LightboxImageLayers {
+  /** 是否渲染缩略图垫底层(在原图层之下)。 */
+  showPreview: boolean;
+  /** 是否渲染转圈(仅在连缩略图都没有、否则就是纯黑时)。 */
+  showSpinner: boolean;
+}
+
+/**
+ * 渐进出图的层决策:打开瞬间必须有像素接住画面。
+ *
+ * 点开的图在聊天列表里已经解码好了,所以缩略图从**打开那一刻**就垫在底下,
+ * 一直垫到原图 `onLoad` 真正落地(有像素)才撤 —— 空档窗口有两段,取件在途
+ * (还没有原图地址)与原图地址已拿到、字节仍在下载,两段都必须被垫住。
+ * 此前只垫住了第一段(且垫底状态挂在取件态里,取件一完成就连带丢失),于是
+ * 第二段裸露成纯黑:用户已经在列表看过这张图,点开反而先黑一段再跳出来。
+ *
+ * 拿不到缩略图时(直连 http 图、缓存未命中)退一步给转圈:宁可有反馈,
+ * 不要纯黑无提示。有缩略图时**不叠**转圈 —— 画面已经完整可读(只是软),
+ * 再压一个转圈反而制造"还在加载"的噪声,对齐主流 IM 的渐进出图观感。
+ */
+export function lightboxImageLayers(input: {
+  /** 原图可渲染地址;取件完成前为 null。 */
+  fullUri: string | null;
+  /** 列表缩略图地址;取不到为 null。 */
+  previewUri: string | null;
+  /** 原图是否已 onLoad。仅在与当前 fullUri 对应时为 true(换图即失效)。 */
+  fullLoaded: boolean;
+}): LightboxImageLayers {
+  // fullUri 为空时 fullLoaded 一律不成立:防调用方漏重置造成"已加载"的假阳性
+  // (会把垫底和转圈同时撤掉,又回到纯黑)。
+  if (input.fullUri && input.fullLoaded) return { showPreview: false, showSpinner: false };
+  if (input.previewUri) return { showPreview: true, showSpinner: false };
+  return { showPreview: false, showSpinner: true };
+}
+
 /** 可分享判定:本地 file:// 直接分享;http(s) 可下载后分享;data: 不支持。 */
 export function canShareLightboxImage(displayUri: string | null): boolean {
   if (!displayUri) return false;

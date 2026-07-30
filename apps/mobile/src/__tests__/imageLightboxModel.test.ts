@@ -7,6 +7,7 @@ import {
   clampLightboxScale,
   clampLightboxTranslation,
   lightboxBackgroundOpacity,
+  lightboxImageLayers,
   lightboxInitialIndex,
   lightboxPageIndex,
   lightboxPageLabel,
@@ -68,6 +69,51 @@ describe('imageLightboxModel', () => {
   it('hides the page label for single images', () => {
     expect(lightboxPageLabel(0, 1)).toBeNull();
     expect(lightboxPageLabel(1, 5)).toBe('2 / 5');
+  });
+
+  describe('lightboxImageLayers', () => {
+    // 打开图片的两段空档窗口都必须被垫住,否则用户看到的就是「列表里图明明已经
+    // 出来了,点开反而先黑一段」。
+    it('keeps the thumbnail while the original is still fetching', () => {
+      expect(lightboxImageLayers({ fullUri: null, previewUri: 'file:///thumb.webp', fullLoaded: false }))
+        .toEqual({ showPreview: true, showSpinner: false });
+    });
+
+    it('keeps the thumbnail after the original url arrives but before it paints', () => {
+      // 回归点:旧实现把垫底挂在取件态里,取件一完成(ready)就撤,这一段裸露成黑屏。
+      expect(lightboxImageLayers({
+        fullUri: 'https://oss.example/full.png',
+        previewUri: 'file:///thumb.webp',
+        fullLoaded: false,
+      })).toEqual({ showPreview: true, showSpinner: false });
+    });
+
+    it('drops both layers only once the original has actually loaded', () => {
+      expect(lightboxImageLayers({
+        fullUri: 'https://oss.example/full.png',
+        previewUri: 'file:///thumb.webp',
+        fullLoaded: true,
+      })).toEqual({ showPreview: false, showSpinner: false });
+    });
+
+    it('falls back to a spinner when no thumbnail is available', () => {
+      // 直连 http 图没有缩略图可垫:给转圈,不留纯黑无反馈。
+      expect(lightboxImageLayers({ fullUri: null, previewUri: null, fullLoaded: false }))
+        .toEqual({ showPreview: false, showSpinner: true });
+      expect(lightboxImageLayers({
+        fullUri: 'https://oss.example/full.png',
+        previewUri: null,
+        fullLoaded: false,
+      })).toEqual({ showPreview: false, showSpinner: true });
+    });
+
+    it('never trusts fullLoaded without a full uri', () => {
+      // 调用方漏复位 loaded 标记时不能把两层同时撤掉(又回到纯黑)。
+      expect(lightboxImageLayers({ fullUri: null, previewUri: 'file:///thumb.webp', fullLoaded: true }))
+        .toEqual({ showPreview: true, showSpinner: false });
+      expect(lightboxImageLayers({ fullUri: null, previewUri: null, fullLoaded: true }))
+        .toEqual({ showPreview: false, showSpinner: true });
+    });
   });
 
   it('allows sharing only for file and http(s) uris', () => {

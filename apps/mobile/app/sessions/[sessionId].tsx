@@ -425,6 +425,9 @@ import type {
   MobileSessionAgentSwitchIntent,
 } from '@cindy/maker-shared/device-link-contract';
 import {
+  REMOTE_MEDIA_LOCAL_COPY_WAIT_MS,
+  REMOTE_MEDIA_NEVER_EXPIRES,
+  localCopyResolvedMedia,
   resolveMobileRemoteMedia,
   type MobileRemoteMediaPresignResult,
   type MobileResolvedRemoteMedia,
@@ -1209,7 +1212,7 @@ export default function SessionScreen() {
               mimeType: hit.mimeType,
               size: hit.size,
               // 本地文件不过期;若被 LRU/OS 清掉,Image onError → forceRefresh 重取自愈。
-              expiresAt: '9999-12-31T00:00:00.000Z',
+              expiresAt: REMOTE_MEDIA_NEVER_EXPIRES,
               previewable: hit.mimeType.startsWith('image/'),
             };
           }
@@ -1250,6 +1253,32 @@ export default function SessionScreen() {
             pendingDiskStoresRef.current.set(key, store.finally(() => {
               pendingDiskStoresRef.current.delete(key);
             }));
+          }
+          // 原图请求(查看器点开):等落盘结束,回本地 file:// 而不是 presign 地址。
+          //   - 同一个对象此前会被下载**两遍**(store 落盘一遍、<Image> 按 presign
+          //     地址再下一遍),两条下载还互相抢带宽;现在只下一遍,渲染读本地文件。
+          //   - 关掉查看器再打开时,队列内存缓存里存的是本地文件:presign 地址在有效期
+          //     内会被当 fresh 命中直接复用,于是每次点开都从 OSS 重新拉整张原图
+          //     (用户实测:「已经打开过原图,关闭再打开又从黑屏开始」)。换成本地
+          //     文件后再次点开直接满清晰度秒出,零网络。
+          // 落盘被跳过(单对象超缓存预算)或失败时回落 presign 地址,行为与此前一致。
+          // 缩略图请求不等:它可能是老被控端「缩不动回落原图」的整图下载,聊天列表
+          // 首帧不该为此多等一整个下载(且它本就已按裸键复用原图字节)。
+          if (!media.thumbnail) {
+            let waitTimer: ReturnType<typeof setTimeout> | undefined;
+            const stored = await Promise.race([
+              store.then(() => true),
+              new Promise<false>((settle) => {
+                waitTimer = setTimeout(() => settle(false), REMOTE_MEDIA_LOCAL_COPY_WAIT_MS);
+              }),
+            ]).finally(() => {
+              if (waitTimer) clearTimeout(waitTimer);
+            });
+            if (stored) {
+              const hit = await diskCache.lookup(bareDiskSource).catch(() => null);
+              const local = localCopyResolvedMedia(resolved, hit);
+              if (local) return local;
+            }
           }
         }
         return resolved;

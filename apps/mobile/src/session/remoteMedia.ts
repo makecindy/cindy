@@ -77,6 +77,42 @@ export function canPreviewResolvedRemoteMedia(
   return false;
 }
 
+/**
+ * 原图请求等待落盘的上限。expo 的下载没有显式 deadline,不能无界地等——它会
+ * 占住取件队列的并发槽位,并把查看器一直吊在垫底缩略图上。超时即回落 presign
+ * 地址(= 本机制引入前的行为),后台落盘照常继续,下次点开走磁盘命中。
+ * 取 30s 与 `device-link:media:fetch` 的执行预算同量级:合法的慢下载仍能吃到
+ * 「只下载一遍」的收益,只有真卡住才回落。
+ */
+export const REMOTE_MEDIA_LOCAL_COPY_WAIT_MS = 30_000;
+
+/**
+ * 原图落盘成功后的条目升级:把渲染地址从 presign OSS 换成本地 file://。
+ *
+ * 为什么必须换:presign 地址在有效期内会被取件队列当 fresh 缓存命中反复复用,
+ * 于是每次点开查看器都从 OSS 重新拉整张原图(用户实测「已经打开过原图,关闭再
+ * 打开又从黑屏开始」);同一个对象还会被下载两遍(落盘一遍、渲染一遍)。换成
+ * 本地文件后再次点开零网络秒出。
+ *
+ * ossKey 必须保留:OSS 对象仍在世,退屏清理要靠它 DELETE(空 key 才跳过)。
+ * hit 为空(落盘被跳过 / 失败)或 mime 不是图片时返回 null,由调用方回落原条目。
+ */
+export function localCopyResolvedMedia(
+  resolved: MobileResolvedRemoteMedia,
+  hit: { uri: string; mimeType: string; size: number } | null | undefined,
+): MobileResolvedRemoteMedia | null {
+  if (!hit || !hit.uri || !hit.mimeType.startsWith('image/')) return null;
+  return {
+    url: hit.uri,
+    ossKey: resolved.ossKey,
+    mimeType: hit.mimeType,
+    size: hit.size,
+    // 本地文件不过期;被 LRU/OS 清掉时 Image onError → forceRefresh 重取自愈。
+    expiresAt: REMOTE_MEDIA_NEVER_EXPIRES,
+    previewable: true,
+  };
+}
+
 export function isResolvedRemoteMediaFresh(
   media: Pick<MobileResolvedRemoteMedia, 'expiresAt'>,
   now = Date.now(),
