@@ -721,6 +721,20 @@ describe('清某设备缓存不牵连别的设备', () => {
 });
 
 describe('会话离场时清消息缓存', () => {
+  // review(codex P1):会话可能不在当前(有界)分片里、甚至这台设备还没有分片,但它完全可能
+  // 有一份上次打开时留下的缓存文件 —— 早退就等于把"别的控制端刚删掉的会话"的正文留在盘上。
+  it('会话不在分片里(甚至没有分片)时,终态推送同样清缓存', () => {
+    // 没有分片:直接对一台未知设备发终态 patch
+    remoteProjectsStore.applyPatch('dev-unknown', 'sess-ghost', { status: 'deleted' });
+    expect(putMessages).toHaveBeenCalledWith('dev-unknown', 'sess-ghost', []);
+
+    // 有分片但会话不在窗口内
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: 's-in' }] as never);
+    putMessages.mockClear();
+    remoteProjectsStore.applyPatch(DEVICE_ID, 's-outside-window', { status: 'archived' });
+    expect(putMessages).toHaveBeenCalledWith(DEVICE_ID, 's-outside-window', []);
+  });
+
   it('被控端把会话标 deleted / archived → 清掉该会话的缓存文件', () => {
     remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [
       { id: 's-del' },

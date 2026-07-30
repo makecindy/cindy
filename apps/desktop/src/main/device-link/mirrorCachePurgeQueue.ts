@@ -34,6 +34,8 @@ import { withCrossProcessLock } from './crossProcessLock';
 const log = createLogger('device-link:mirror-cache-purge');
 
 const QUEUE_FILE = 'device-link-mirror-cache-purge.json';
+/** 唯一允许被本队列删除的目录名(owner 作用域下的镜像缓存根)。 */
+const MIRROR_CACHE_DIR_NAME = 'device-link-mirror-cache';
 /** 队列条目上限:防止异常情况下无界增长。 */
 const MAX_ENTRIES = 32;
 /** 单条目里的文件级路径上限。 */
@@ -120,8 +122,12 @@ export function isPurgableRoot(root: string, ownersRootPath: string): boolean {
   const resolved = path.resolve(root);
   const base = path.resolve(ownersRootPath);
   const rel = path.relative(base, resolved);
-  // 必须在 owners/ 之内、且不是 owners/ 自身
-  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return false;
+  // 必须**正好**是 `<ownerKey>/device-link-mirror-cache`:队列文件是不可信 JSON,放宽到
+  // "owners 之内任意目录"就等于给了它删掉同一 owner 下凭证 / 对话 / 插件市场数据的能力
+  // (review: copilot)。
+  const parts = rel.split(path.sep);
+  return parts.length === 2 && parts[1] === MIRROR_CACHE_DIR_NAME;
 }
 
 /** 文件级条目的每个路径都必须落在它自己的 root 之内(顺带满足 owners 约束)。 */

@@ -654,16 +654,16 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     }
   }
 
+  /**
+   * 自增作废计数。**失败会抛** —— 这是跨进程唯一的持久屏障:另一个实例可能已经读到旧计数
+   * 并在锁上等着,自增落不下去却报"清干净了"的话,它会在清理之后把被撤销设备 / 上一个账号的
+   * 正文重建出来(review: codex P1)。落不下去就让调用方把这次清理当成"没清完",登记重试。
+   */
   async function bumpClearedCounter(root: string, key: string): Promise<void> {
     const file = clearedMarkPath(root, key);
     const current = (await readClearCounter(root, key)) ?? 0;
-    try {
-      await ensureDir(path.dirname(file));
-      await fsp.writeFile(file, String(current + 1), 'utf8');
-    } catch (err) {
-      // 计数落不下去只会让跨进程作废退化(本进程的代际屏障仍在),留痕即可。
-      log.debug(`mirror cache: failed to bump cleared counter ${key}`, err);
-    }
+    await ensureDir(path.dirname(file));
+    await fsp.writeFile(file, String(current + 1), 'utf8');
   }
 
   async function bumpClearCounters(root: string, id: string): Promise<void> {
@@ -780,7 +780,14 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       stuck.push(...(await sweepMessages()));
 
       // 自增作废计数:发起时读到旧值的写入(可能握着清理前的内容)提交时会被挡掉。
-      await bumpClearCounters(rootAtStart, id);
+      // 落不下去就不能报"清干净了" —— 把**整个缓存根**计入待重试:purge 队列随后会把它整棵
+      // 删掉(超集、纯缓存,安全),这比"以为清完了、别人却把明文写回来"好得多。
+      try {
+        await bumpClearCounters(rootAtStart, id);
+      } catch (err) {
+        log.error(`mirror cache: failed to persist clear barrier for ${id.slice(0, 8)}`, err);
+        stuck.push(rootAtStart);
+      }
       // 本进程内再自增一次代际:清理**结束**时作废所有更早发起的写入。时间戳标记是跨进程
       // 手段,毫秒精度下"清理在同一毫秒内跑完"时它挡不住(测试与小目录下常见);代际比对
       // 没有精度问题,两者互补(review: codex P1)。
@@ -901,9 +908,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
           }
           if (written.leftoverTmp) stuck.push(written.leftoverTmp);
           // 作废也失败 → 登记重试(明文留在盘上是隐私问题,不能咽下去)。
-          // 去重:两轮扫描会把同一个删不掉的文件报两次。
-      const remaining = [...new Set(stuck)];
-      if (remaining.length > 0) throw new MirrorCachePurgeError(rootAtStart, remaining, null);
+          if (stuck.length > 0) throw new MirrorCachePurgeError(rootAtStart, stuck, null);
           return;
         }
         if (isStale(writeGuard)) {
@@ -1004,8 +1009,14 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       return withCacheLock(root, async (lockHeld) => {
       if (!lockHeld) log.warn('mirror cache: clearAll without cross-process lock');
       // 账号级作废计数器住在缓存根之外,先自增:发起时读到旧值的写入提交时会被挡掉,
-      // 即使它们排在整棵目录删除之后(review: codex P1)。
-      await bumpClearedCounter(root, CLEARED_ACCOUNT);
+      // 即使它们排在整棵目录删除之后(review: codex P1)。落不下去同样不能当成清理成功 ——
+      // 抛出去让账号边界登记整根重试(见 teardownAuthAccountBoundary)。
+      try {
+        await bumpClearedCounter(root, CLEARED_ACCOUNT);
+      } catch (err) {
+        purgeAllInFlight -= 1; // 下面的 finally 不会执行(还没进 try)
+        throw new MirrorCachePurgeError(root, [root], err);
+      }
       try {
         await fsp.rm(root, { recursive: true, force: true });
         return;

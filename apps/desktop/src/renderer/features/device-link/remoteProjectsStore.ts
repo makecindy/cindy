@@ -385,6 +385,12 @@ const actions = {
    *    (后续 snapshot 自带最终态;对不在 active 视图的会话的改动控制端不关心)。
    */
   applyPatch(deviceId: string, sessionId: string, patch: Record<string, unknown>): void {
+    const terminal = patch.status === 'deleted' || patch.status === 'archived';
+    // 终态清缓存必须放在**所有早退之前**:这个会话可能不在当前(有界)分片里、甚至这台设备
+    // 还没有分片,但它完全可能有一份上次打开时留下的消息缓存文件 —— 那时早退就等于把
+    // 「别的控制端刚删掉的会话」的正文一直留在盘上,直到 LRU 逐出 / 设备移除 / 登出
+    // (review: codex P1)。缓存是纯优化,多清一次无害。
+    if (terminal) clearCachedMessages(deviceId, sessionId);
     const shard = shards.get(deviceId);
     if (!shard) return;
     const idx = shard.sessions.findIndex((s) => s.id === sessionId);
@@ -398,9 +404,7 @@ const actions = {
       // 会话),之后 unarchive / reseed 会把边界前的旧预览顶回一个仍是系统占位的
       // 会话上(PR #510 review)。
       dropTitleOverlay(sessionId);
-      // 该会话已离场:它的消息冷缓存也没意义了(留着只会占地方,unarchive 后
-      // 反正要重新拉一页)。失败静默,缓存是纯优化。
-      clearCachedMessages(deviceId, sessionId);
+      // 消息冷缓存已在函数开头清掉(那里能覆盖"会话不在分片里"的情形)。
       shard.sessions = shard.sessions.filter((s) => s.id !== sessionId);
       recompute();
       return;

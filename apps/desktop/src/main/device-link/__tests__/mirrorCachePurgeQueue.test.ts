@@ -52,13 +52,21 @@ afterEach(() => {
 });
 
 describe('isPurgableRoot', () => {
-  it('只接受 owners/ 之内的路径', () => {
+  it('只接受 `<ownerKey>/device-link-mirror-cache`,不接受同 owner 下的其它目录', () => {
     const owners = '/data/owners';
     expect(isPurgableRoot('/data/owners/abc/device-link-mirror-cache', owners)).toBe(true);
     expect(isPurgableRoot('/data/owners', owners)).toBe(false);
     expect(isPurgableRoot('/data/other/abc', owners)).toBe(false);
     expect(isPurgableRoot('/data/owners/../secrets', owners)).toBe(false);
     expect(isPurgableRoot('', owners)).toBe(false);
+    // review(copilot):队列文件是不可信 JSON,放宽到"owners 之内任意目录"就等于给了它
+    // 删掉同一 owner 下凭证 / 对话 / 插件市场数据的能力。
+    expect(isPurgableRoot('/data/owners/abc', owners)).toBe(false);
+    expect(isPurgableRoot('/data/owners/abc/dialogues', owners)).toBe(false);
+    expect(isPurgableRoot('/data/owners/abc/device-link-mirror-cache/messages', owners)).toBe(
+      false,
+    );
+    expect(isPurgableRoot('/data/owners/abc/device-link-mirror-cache.control', owners)).toBe(false);
   });
 });
 
