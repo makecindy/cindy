@@ -669,8 +669,10 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
    * 读作废计数。三态,理由见 clearedSince:
    *  - number:计数(缺文件 = 0,从未清过);
    *  - `'denied'`:文件在那儿但**没权限**读(EACCES / EPERM)—— 屏障可能是真的,fail-closed;
-   *  - `'unknown'`:资源类失败(EMFILE / EBUSY…)或内容不是数字 —— 与"有没有清过"无关,
-   *    不该据此丢掉写入(那会在文件描述符紧张时静默关掉缓存);同进程的代际屏障仍在。
+   *  - `'unknown'`:资源类失败(EMFILE / EBUSY…)或内容不是数字 —— **无法比对**,写入侧一律
+   *    按"可能清过"处理(fail-closed)。取舍很不对称:少写一次缓存只是少一次首屏加速,而放行
+   *    一笔可能取自清理之前的内容,等于把被撤销设备 / 上个账号的正文重建到盘上(review: codex
+   *    P1)。计数文件是原子落位的,所以"内容不是数字"只会来自外部损坏,那时更不该信它。
    */
   type ClearCounter = number | 'denied' | 'unknown';
 
@@ -702,7 +704,17 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     const read = await readClearCounter(root, key);
     const current = typeof read === 'number' ? read : 0;
     await ensureDir(path.dirname(file));
-    await fsp.writeFile(file, String(current + 1), 'utf8');
+    // 原子落位:直接 writeFile 会有"截断了、新内容还没写完"的窗口,那一刻读出来是空串 →
+    // `'unknown'`,而 unknown 现在是 fail-closed,损坏一次就会把这个 key 的缓存写入长期挡住。
+    // 计数文件里只有一个数字,tmp 残留不含正文,清理失败可忽略。
+    const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
+    try {
+      await fsp.writeFile(tmp, String(current + 1), 'utf8');
+      await fsp.rename(tmp, file);
+    } catch (err) {
+      await fsp.rm(tmp, { force: true }).catch(() => undefined);
+      throw err;
+    }
   }
 
   async function bumpClearCounters(root: string, id: string): Promise<void> {
@@ -710,15 +722,14 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
   }
 
   /**
-   * 自 `before` 之后计数是否变过。`'denied'`(没权限读屏障)一律判"变过" —— 屏障可能真的存在;
-   * `'unknown'`(资源类失败)判"没变" —— 它与清理无关,拿它丢写入等于在 fd 紧张时静默关掉缓存,
-   * 而同进程的代际 / clearingDevices 屏障仍然生效。
+   * 自 `before` 之后计数是否变过 —— **不可比对时一律判"变过"**。`'denied'`(没权限读屏障)与
+   * `'unknown'`(EMFILE / EBUSY / 内容损坏)都属于"这是唯一的跨进程屏障,而我读不出来":
+   * 放行意味着可能把清理之前的正文重建出来,拒写只是少一次首屏加速(review: codex P1)。
    */
   async function clearedSince(root: string, key: string, before: ClearCounter): Promise<boolean> {
-    if (before === 'denied') return true;
+    if (typeof before !== 'number') return true;
     const now = await readClearCounter(root, key);
-    if (now === 'denied') return true;
-    if (before === 'unknown' || now === 'unknown') return false;
+    if (typeof now !== 'number') return true;
     return now !== before;
   }
 
@@ -884,11 +895,18 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
   return {
     async readMessagesWithInvalidation(deviceId, sessionId) {
       const root = resolveRoot();
-      const [messages, invalidation] = await Promise.all([
-        this.readMessages(deviceId, sessionId),
-        readClearCounter(root, sessionClearKey(deviceId, sessionId)),
-      ]);
-      return { messages, invalidation: numericCounter(invalidation) };
+      const key = sessionClearKey(deviceId, sessionId);
+      // 计数必须**夹住**文件读(前后各读一次),不能与它并行:并行时另一个窗口正在清理这条会话,
+      // 文件读可能返回清理**之前**的行、计数读却已经是新值(或反之),这一对被原样返回后,发起
+      // 清理的那个 renderer 之外的窗口会把这些已被删除的行 hydrate 出来并在对端离线期间一直留着
+      // (review: codex P1)。前后不一致 / 任一次读不出来(denied / unknown 不可比对)都当未命中。
+      const before = await readClearCounter(root, key);
+      const messages = await this.readMessages(deviceId, sessionId);
+      const after = await readClearCounter(root, key);
+      if (typeof before !== 'number' || typeof after !== 'number' || before !== after) {
+        return { messages: [], invalidation: numericCounter(after) };
+      }
+      return { messages, invalidation: after };
     },
 
     async readMessages(deviceId, sessionId) {
@@ -988,9 +1006,8 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
             // **另一个窗口 / 另一个进程**干的),手里这批属于作废之前,丢弃(review: codex P1)。
             if (expectedInvalidation !== undefined) {
               const now = await readClearCounter(rootAtStart, sessionKey);
-              // 'denied' 一律拒写(屏障可能真的在);'unknown' 不据此判断(见 clearedSince)。
-              if (now === 'denied') return;
-              if (typeof now === 'number' && now !== expectedInvalidation) return;
+              // 读不出来 / 对不上都拒写(不可比对即 fail-closed,见 clearedSince)。
+              if (typeof now !== 'number' || now !== expectedInvalidation) return;
             }
             // 清理在我取到内容之后完成过 → 我手里的是被清掉的旧正文,丢弃。
             if (await clearedSince(rootAtStart, deviceClearKey(deviceId), clearCounterAtStart))

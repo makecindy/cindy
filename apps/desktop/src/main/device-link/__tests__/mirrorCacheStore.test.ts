@@ -8,7 +8,7 @@
  *  - 逐出与体积上限真实生效,缓存不会无界增长。
  *  - deviceId / sessionId 是不可信输入:路径穿越字符不得逃出缓存目录。
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
@@ -139,9 +139,7 @@ describe('内联媒体字节剥离', () => {
       text: 'hi',
       images: [{ url: 'u', base64: 'Z'.repeat(20_000) }],
     });
-    const [only] = normalizeMessages([
-      row('m1', '2026-01-01T00:00:00.000Z', { content: payload }),
-    ]);
+    const [only] = normalizeMessages([row('m1', '2026-01-01T00:00:00.000Z', { content: payload })]);
     const parsed = JSON.parse(only.content as string) as {
       text: string;
       images: Array<Record<string, unknown>>;
@@ -153,9 +151,7 @@ describe('内联媒体字节剥离', () => {
 
   it('常规文本 content 逐字节不变(缓存行与 fresh 行判等要能短路)', () => {
     const text = 'x'.repeat(2_000);
-    const [only] = normalizeMessages([
-      row('m1', '2026-01-01T00:00:00.000Z', { content: text }),
-    ]);
+    const [only] = normalizeMessages([row('m1', '2026-01-01T00:00:00.000Z', { content: text })]);
     expect(only.content).toBe(text);
   });
 });
@@ -485,9 +481,7 @@ describe('session list', () => {
         updatedAt: new Date(2026, 0, 1, 0, 0, i).toISOString(),
       })),
     });
-    await c.writeSessionList(
-      Array.from({ length: 8 }, (_, i) => bulky(`dev-${i}`)),
-    );
+    await c.writeSessionList(Array.from({ length: 8 }, (_, i) => bulky(`dev-${i}`)));
     const devices = await c.readSessionList();
     expect(devices.length).toBeGreaterThan(0);
     // 缩容后每设备条数小于原始 100 条
@@ -859,30 +853,27 @@ describe('clearDevice / clearAll', () => {
 
   // review(codex P1):消息文件删掉了、会话元数据却还在盘上 → 下次冷启动照样把这台
   // 被撤销的设备画回侧边栏。
-  it.skipIf(!canTestUnwritableDir)(
-    'clearDevice 在列表快照写不下去时抛错并带上该文件',
-    async () => {
-      const cacheRoot = path.join(root, 'ro-list');
-      const c = createMirrorCache(() => cacheRoot);
-      await c.writeSessionList([
-        { deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] },
-        { deviceId: 'dev-2', deviceName: 'PC', sessions: [{ id: 's2', status: 'active' }] },
-      ]);
-      const listFile = path.join(cacheRoot, __testing.sessionListFileName);
-      await fsp.chmod(cacheRoot, 0o500); // 目录只读:原子 rename 落不进去
-      try {
-        await c.clearDevice('dev-1').then(
-          () => expect.unreachable('clearDevice should have rejected'),
-          (err: unknown) => {
-            expect(err).toBeInstanceOf(MirrorCachePurgeError);
-            expect((err as MirrorCachePurgeError).remaining).toContain(listFile);
-          },
-        );
-      } finally {
-        await fsp.chmod(cacheRoot, 0o700);
-      }
-    },
-  );
+  it.skipIf(!canTestUnwritableDir)('clearDevice 在列表快照写不下去时抛错并带上该文件', async () => {
+    const cacheRoot = path.join(root, 'ro-list');
+    const c = createMirrorCache(() => cacheRoot);
+    await c.writeSessionList([
+      { deviceId: 'dev-1', deviceName: 'Mac', sessions: [{ id: 's1', status: 'active' }] },
+      { deviceId: 'dev-2', deviceName: 'PC', sessions: [{ id: 's2', status: 'active' }] },
+    ]);
+    const listFile = path.join(cacheRoot, __testing.sessionListFileName);
+    await fsp.chmod(cacheRoot, 0o500); // 目录只读:原子 rename 落不进去
+    try {
+      await c.clearDevice('dev-1').then(
+        () => expect.unreachable('clearDevice should have rejected'),
+        (err: unknown) => {
+          expect(err).toBeInstanceOf(MirrorCachePurgeError);
+          expect((err as MirrorCachePurgeError).remaining).toContain(listFile);
+        },
+      );
+    } finally {
+      await fsp.chmod(cacheRoot, 0o700);
+    }
+  });
 
   // review(codex P1):撤销设备时删不掉的文件会留到本账号生命周期结束,必须能被重试。
   it.skipIf(!canTestUnwritableDir)(
@@ -992,9 +983,7 @@ describe('会话级作废计数(跨窗口 / 跨进程)', () => {
   // 删消息时,本窗口在途的最新页写入照样能落地。作废计数必须在 main 侧、且**先落再删**。
   it('空写会自增计数,带着旧计数的写入被丢弃', async () => {
     const c = cache();
-    const first = await c.writeMessages('dev-1', 'sess-1', [
-      row('m1', '2026-01-01T00:00:00.000Z'),
-    ]);
+    const first = await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
 
     // 另一个窗口 /clear:空写(先自增计数,再删文件)
     const cleared = await c.writeMessages('dev-1', 'sess-1', []);
@@ -1027,6 +1016,68 @@ describe('会话级作废计数(跨窗口 / 跨进程)', () => {
     const after = await c.readMessagesWithInvalidation('dev-1', 'sess-1');
     expect(after.invalidation).toBeGreaterThan(before.invalidation);
     expect(after.messages).toEqual([]);
+  });
+
+  it('计数在文件读期间被别的实例改掉 → 这次读当未命中', async () => {
+    // review(codex P1):计数与文件读原先是 Promise.all 并行的,另一个窗口正在清这条会话时,
+    // 文件读可能返回清理**之前**的行、计数却已是新值 —— 那些已被删除的行会被本窗口 hydrate
+    // 出来并在对端离线期间一直留着。计数必须夹住文件读,前后不一致就当未命中。
+    const c = cache();
+    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+    const key = messageFileName('dev-1', 'sess-1').replace(/\.json$/, '');
+    const mark = path.join(`${root}.control`, 'cleared', key);
+    const file = path.join(messagesDir(), messageFileName('dev-1', 'sess-1'));
+
+    const original = fsp.readFile;
+    const spy = vi.spyOn(fsp, 'readFile').mockImplementation((async (
+      target: unknown,
+      ...rest: unknown[]
+    ) => {
+      // 正文读进行中 → 模拟另一个实例此刻完成了作废(先自增计数再删数据)。
+      if (typeof target === 'string' && target === file) {
+        fs.mkdirSync(path.dirname(mark), { recursive: true });
+        fs.writeFileSync(mark, '42', 'utf8');
+      }
+      return (original as (...args: unknown[]) => Promise<unknown>)(target, ...rest);
+    }) as unknown as typeof fsp.readFile);
+    try {
+      const read = await c.readMessagesWithInvalidation('dev-1', 'sess-1');
+      expect(read.messages).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('计数文件损坏(读不出数字)→ 读当未命中、写入被拒(fail-closed)', async () => {
+    // 不可比对的屏障不能当成"没清过":放行等于可能把清理前的正文重建出来,而拒绝只是少一次
+    // 首屏加速(review: codex P1)。
+    const c = cache();
+    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+    const deviceKey = `${__testing.safeSegment('dev-1')}-${__testing.shortHash('dev-1')}`;
+    const sessionKey = messageFileName('dev-1', 'sess-1').replace(/\.json$/, '');
+    const markDir = path.join(`${root}.control`, 'cleared');
+    await fsp.mkdir(markDir, { recursive: true });
+    await fsp.writeFile(path.join(markDir, sessionKey), 'not-a-number', 'utf8');
+
+    expect((await c.readMessagesWithInvalidation('dev-1', 'sess-1')).messages).toEqual([]);
+
+    // 设备级计数损坏 → 新写入一律拒掉。
+    await fsp.writeFile(path.join(markDir, deviceKey), '', 'utf8');
+    await c.writeMessages('dev-1', 'sess-2', [row('m2', '2026-01-01T00:00:00.000Z')]);
+    expect(await c.readMessages('dev-1', 'sess-2')).toEqual([]);
+  });
+
+  it('计数自增是原子落位(不留 .tmp、不出现空内容窗口)', async () => {
+    const c = cache();
+    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+    await c.writeMessages('dev-1', 'sess-1', []); // 触发一次自增
+    const markDir = path.join(`${root}.control`, 'cleared');
+    const entries = await fsp.readdir(markDir);
+    expect(entries.filter((name) => name.endsWith('.tmp'))).toEqual([]);
+    for (const name of entries) {
+      const raw = await fsp.readFile(path.join(markDir, name), 'utf8');
+      expect(Number.isFinite(Number.parseInt(raw, 10))).toBe(true);
+    }
   });
 
   it('不传 expectedInvalidation 时保持旧行为(只受设备 / 账号级屏障约束)', async () => {
