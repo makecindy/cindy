@@ -124,7 +124,7 @@ export const QUEUED_DISPATCH_MAX_WAIT_MS = 30 * 60_000;
  * 排队上限用壁钟量"等了多久",而机器睡觉时进程被冻结、定时器不跑、壁钟照走:睡够 30 分钟
  * 醒来第一拍就会把一条完全健康的排队 prompt 撤掉 —— recurring 被无谓顺延,Once / manual
  * 无法顺延、直接记失败且从未执行(review #944 第十六轮 P1)。与 maker-scheduler 的
- * SUSPEND_GAP_MS、Session / codex 看门狗的分片核对同源。
+ * SUSPEND_GAP_MS、Session / codex / claude-code 看门狗的分片核对同源。
  */
 export const QUEUED_DISPATCH_SUSPEND_GAP_MS = 30_000;
 

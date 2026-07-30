@@ -759,7 +759,11 @@ my-ghost/
   "entry": "main.js",          // 电子脑入口(kind 字段已无需填写:意识只有芯片一种形态,缺省即 chip;写了也只认 "chip")
   "launch": "on-demand",       // 可选:电子脑启动模式。on-demand(缺省)=被需要才拉起;resident=唤醒即常驻(确认框会如实标注"常驻运行",绝大多数意识不需要,仅订阅型/需秒响应的场景用)
   "slots": ["tool", "cindy", "panel"],   // 能力白名单,没声明的槽运行时不存在
-  "command": "画图",            // 可选:用户 $画图 显式点名(与已装意识查重,冲突拒装)
+  "command": "画图",            // 推荐:用户 $画图 显式点名(与已装意识查重,冲突拒装)。
+  // 注意:不声明 command 时,插件页"使用"按钮将处于禁用状态——用户无法通过插件页
+  // 一键启用/唤起插件,也不能用 $command 显式点名;但 AI 的工具发现与调用不受影响
+  // (仅检查插件启用状态与 tools 声明)。除非你的插件完全靠 panel 或 subscribe 驱动,
+  // 否则请始终声明一个 command。
   "tools": [ /* 见 §3 */ ],
   "cindy": { "image": ["generate", "edit"] },   // 声明了 cindy 槽时必写:能力详单,见下
   // 三个类目:image / video 的动作是 "generate" | "edit";media 的动作只有
@@ -2601,6 +2605,8 @@ const ensured = await cindy.workspace({
 ## 9. 常见拒装原因速查
 
 - \`id\` 不合法(大写/下划线/超长)· 声明了 command 但没有 tools · command 与已装意识撞名
+  · **未声明 command**:不拒装,但插件页"使用"按钮禁用,用户无法通过插件页一键启用
+    或用 $command 点名;AI 工具调用不受影响(见 §2 说明)
 - 声明了 tool 槽但缺 tools(或反之)· panel.html 声明了但 slots 没有 "panel"
 - settingsHtml 路径不合法/文件不在包里 · settingsHeight 越界(160–800)或没配 settingsHtml 单独声明
 - panel.systemButtons 格式错(不是对象、未知键、值非布尔,或 position:"tab" 时声明——页签形态没有标准头)

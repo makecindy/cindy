@@ -169,7 +169,9 @@ test("unit workspace concurrency reserves the full worker budget for heavy works
 	assert.equal(desktop.tiers.unit.execution, "exclusive");
 	assert.deepEqual(desktop.tiers.unit.command.args, [
 		"run",
-		`--pool=${nodeWebstorageEnabled() ? "forks" : "threads"}`,
+		// win32 pins forks: threads segfaults the desktop suite there, and the
+		// LaunchServices churn that threads exists to avoid is macOS-only.
+		`--pool=${nodeWebstorageEnabled() || process.platform === "win32" ? "forks" : "threads"}`,
 		`--maxWorkers=${desktopUnitWorkerCount()}`,
 	]);
 	assert.equal(desktopUnitWorkerCount(1), 1);
@@ -197,10 +199,15 @@ test("unit tier pins an explicit vitest pool, forks only by documented exception
 	// registry -> no frontmost app -> dead keyboard, no menu bar, vanishing Dock
 	// tiles). A workspace added later must not silently inherit that churn, and
 	// opting back into forks must be a deliberate edit to this list.
-	// Desktop's entry is conditional: it only stays on forks on a Node whose
-	// webstorage globals force the execArgv that worker threads cannot take.
+	// Desktop's entry is conditional: it stays on forks on a Node whose
+	// webstorage globals force the execArgv that worker threads cannot take,
+	// and on win32, where threads segfaults the suite outright (native addon
+	// finalizers crashing in isolate teardown) and no launchservicesd exists
+	// for the churn to hurt.
 	const forksByException = [
-		...(nodeWebstorageEnabled() ? ["apps/desktop"] : []),
+		...(nodeWebstorageEnabled() || process.platform === "win32"
+			? ["apps/desktop"]
+			: []),
 		"packages/maker-core",
 	];
 	const unpinned = [];

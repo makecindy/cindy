@@ -12,95 +12,58 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-const newMakerDraftRouteSource = readFileSync(
-  resolve(__dirname, '..', 'features', 'cc-agent', 'NewMakerDraftRoute.tsx'),
-  'utf8',
+// 本仓 core.autocrlf=true 时 Windows checkout 出来的源文件是 CRLF,而下面的快照断言
+// 统一按 LF 书写;读入时归一化行尾(CRLF 与孤立 CR 都归一为 LF),让断言不绑定
+// checkout 端的行尾配置。
+const readSource = (...segments: string[]): string =>
+  readFileSync(resolve(__dirname, '..', ...segments), 'utf8').replace(/\r\n?/g, '\n');
+
+const newMakerDraftRouteSource = readSource('features', 'cc-agent', 'NewMakerDraftRoute.tsx');
+
+const worktreeChipsSource = readSource('components', 'new-chat', 'WorktreeChipsRow.tsx');
+
+const folderPickerPopoverSource = readSource('components', 'new-chat', 'FolderPickerPopover.tsx');
+
+const addRemoteProjectDialogSource = readSource(
+  'components',
+  'new-chat',
+  'AddRemoteProjectDialog.tsx',
 );
 
-const worktreeChipsSource = readFileSync(
-  resolve(__dirname, '..', 'components', 'new-chat', 'WorktreeChipsRow.tsx'),
-  'utf8',
+const projectPickerOptionsHookSource = readSource('hooks', 'useProjectPickerOptions.ts');
+
+const deviceLinkProjectsHookSource = readSource('hooks', 'useDeviceLinkProjects.ts');
+
+const remoteSessionHandoffSource = readSource('features', 'cc-agent', 'remoteSessionHandoff.ts');
+
+const deviceSwitcherPillSource = readSource('components', 'new-chat', 'DeviceSwitcherPill.tsx');
+
+const controllableDevicesHookSource = readSource('hooks', 'useControllableDevices.ts');
+
+const deviceLinkRemoteProjectsSource = readSource(
+  'features',
+  'device-link',
+  'useDeviceLinkRemoteProjects.ts',
 );
 
-const folderPickerPopoverSource = readFileSync(
-  resolve(__dirname, '..', 'components', 'new-chat', 'FolderPickerPopover.tsx'),
-  'utf8',
+const deviceProvidersHookSource = readSource('hooks', 'useDeviceProviders.ts');
+
+const agentCapabilitiesHookSource = readSource('hooks', 'useAgentCapabilities.ts');
+
+const scheduleFormDialogSource = readSource(
+  'features',
+  'scheduler',
+  'components',
+  'ScheduleFormDialog.tsx',
 );
 
-const addRemoteProjectDialogSource = readFileSync(
-  resolve(__dirname, '..', 'components', 'new-chat', 'AddRemoteProjectDialog.tsx'),
-  'utf8',
-);
+const scheduleChipsSource = readSource('features', 'scheduler', 'components', 'ScheduleChips.tsx');
 
-const projectPickerOptionsHookSource = readFileSync(
-  resolve(__dirname, '..', 'hooks', 'useProjectPickerOptions.ts'),
-  'utf8',
-);
+const newGoalDialogSource = readSource('components', 'new-chat', 'NewGoalDialog.tsx');
 
-const deviceLinkProjectsHookSource = readFileSync(
-  resolve(__dirname, '..', 'hooks', 'useDeviceLinkProjects.ts'),
-  'utf8',
-);
+const extraDirsButtonSource = readSource('components', 'new-chat', 'ExtraDirsButton.tsx');
 
-const remoteSessionHandoffSource = readFileSync(
-  resolve(__dirname, '..', 'features', 'cc-agent', 'remoteSessionHandoff.ts'),
-  'utf8',
-);
-
-const deviceLinkCreateArgsSource = readFileSync(
-  resolve(__dirname, '..', 'features', 'cc-agent', 'deviceLinkCreateArgs.ts'),
-  'utf8',
-);
-
-const deviceSwitcherPillSource = readFileSync(
-  resolve(__dirname, '..', 'components', 'new-chat', 'DeviceSwitcherPill.tsx'),
-  'utf8',
-);
-
-const controllableDevicesHookSource = readFileSync(
-  resolve(__dirname, '..', 'hooks', 'useControllableDevices.ts'),
-  'utf8',
-);
-
-const deviceLinkRemoteProjectsSource = readFileSync(
-  resolve(__dirname, '..', 'features', 'device-link', 'useDeviceLinkRemoteProjects.ts'),
-  'utf8',
-);
-
-const deviceProvidersHookSource = readFileSync(
-  resolve(__dirname, '..', 'hooks', 'useDeviceProviders.ts'),
-  'utf8',
-);
-
-const agentCapabilitiesHookSource = readFileSync(
-  resolve(__dirname, '..', 'hooks', 'useAgentCapabilities.ts'),
-  'utf8',
-);
-
-const scheduleFormDialogSource = readFileSync(
-  resolve(__dirname, '..', 'features', 'scheduler', 'components', 'ScheduleFormDialog.tsx'),
-  'utf8',
-);
-
-const scheduleChipsSource = readFileSync(
-  resolve(__dirname, '..', 'features', 'scheduler', 'components', 'ScheduleChips.tsx'),
-  'utf8',
-);
-
-const newGoalDialogSource = readFileSync(
-  resolve(__dirname, '..', 'components', 'new-chat', 'NewGoalDialog.tsx'),
-  'utf8',
-);
-
-const extraDirsButtonSource = readFileSync(
-  resolve(__dirname, '..', 'components', 'new-chat', 'ExtraDirsButton.tsx'),
-  'utf8',
-);
-
-const sidebarUpperSource = readFileSync(
-  resolve(__dirname, '..', 'features', 'cc-agent', 'CCAgentSidebarUpper.tsx'),
-  'utf8',
-);
+const sidebarUpperSource = readSource('features', 'cc-agent', 'CCAgentSidebarUpper.tsx');
 
 describe('Shared create project picker', () => {
   it('builds project options from the persistent recent_workdirs table, not from live sessions', () => {
@@ -358,7 +321,9 @@ describe('Shared create project picker', () => {
 
   // #807 review 第二轮:换机器 = 换文件系统,@file/@dir chip 指的是上一台机器的路径。
   it('strips filesystem mention chips when switching devices', () => {
-    expect(newMakerDraftRouteSource).toContain('const composerDraft = getComposerDraft(NEW_MAKER_DRAFT_KEY);');
+    expect(newMakerDraftRouteSource).toContain(
+      'const composerDraft = getComposerDraft(NEW_MAKER_DRAFT_KEY);',
+    );
     expect(newMakerDraftRouteSource).toContain('text: stripLocalMentionChips(composerDraft.text),');
   });
 
@@ -455,9 +420,7 @@ describe('Shared create project picker', () => {
   // #807 review 第十四轮:注释与实现必须一致 —— 早前几轮把「指名设备不在目标里就留空」改对了,
   // 但 JSDoc 还写着 falls back to the first available target,会误导后续维护者改回静默换机器。
   it('documents that an explicitly requested device never falls back', () => {
-    expect(addRemoteProjectDialogSource).not.toContain(
-      'falls back to the first available target',
-    );
+    expect(addRemoteProjectDialogSource).not.toContain('falls back to the first available target');
     expect(addRemoteProjectDialogSource).toContain('**指名了就只认这一台**');
   });
 
@@ -473,7 +436,7 @@ describe('Shared create project picker', () => {
     // extraDirs 只在换设备、或进入「对话」时清 —— 同机换项目那些目录仍然有效,
     // 不传则 store 保持原值。
     expect(action).toContain(
-      "...(deviceChanged || req.workingDir == null ? { extraDirs: [] } : {}),",
+      '...(deviceChanged || req.workingDir == null ? { extraDirs: [] } : {}),',
     );
     // 但 worktree 三态照常重置 —— 换项目就是换 repo。
     expect(action).toContain('if (deviceChanged || workingDirChanged) {');
@@ -530,9 +493,7 @@ describe('Shared create project picker', () => {
   // #807 review 第十二轮:pending 删除集合按设备分层,否则 A 上未结束的 /x 会被当成 B 的待删除项,
   // B 上同名 /x 会被权威列表错误过滤掉。
   it('scopes pending removals per device', () => {
-    expect(deviceLinkProjectsHookSource).toContain(
-      'useRef<Map<string, Set<string>>>(new Map())',
-    );
+    expect(deviceLinkProjectsHookSource).toContain('useRef<Map<string, Set<string>>>(new Map())');
     expect(deviceLinkProjectsHookSource).toContain(
       'pendingRemovalsRef.current.get(target.deviceId)',
     );
@@ -563,9 +524,10 @@ describe('Shared create project picker', () => {
   // false —— 只看它们会在 maker:get-new-maker-defaults 回来前放行,提交 capability 兜底值而不是
   // 该设备保存的草稿值,会话建出来后晚到的响应也修不回去。
   it('waits for remote defaults before allowing send or goal creation', () => {
-    const guards = newMakerDraftRouteSource.match(
-      /capabilitiesLoading \|\| deviceProvidersLoading \|\| !remoteDraftState\.loaded/g,
-    ) ?? [];
+    const guards =
+      newMakerDraftRouteSource.match(
+        /capabilitiesLoading \|\| deviceProvidersLoading \|\| !remoteDraftState\.loaded/g,
+      ) ?? [];
     expect(guards.length).toBe(2);
     expect(newMakerDraftRouteSource).not.toContain(
       'if (isDeviceLinkDraft && (capabilitiesLoading || deviceProvidersLoading)) return false;',
@@ -672,7 +634,9 @@ describe('Shared create project picker', () => {
     const effect = newMakerDraftRouteSource.slice(
       newMakerDraftRouteSource.indexOf('selected device is no longer selectable'),
     );
-    expect(effect.slice(0, effect.indexOf('  }, ['))).toContain('applyDraftTarget({ deviceId: null');
+    expect(effect.slice(0, effect.indexOf('  }, ['))).toContain(
+      'applyDraftTarget({ deviceId: null',
+    );
     const action = newMakerDraftRouteSource.slice(
       newMakerDraftRouteSource.indexOf('const applyDraftTarget = useCallback('),
     );
@@ -713,7 +677,9 @@ describe('Shared create project picker', () => {
   // capabilitiesLoading 永久为 true,而创建页的 send / goal guard 正是看它。
   it('clears inherited loading state when the capability cache hits', () => {
     const cachedBranch = agentCapabilitiesHookSource.slice(
-      agentCapabilitiesHookSource.indexOf('const cached = cache.get(cacheKey(agentKind, deviceId));'),
+      agentCapabilitiesHookSource.indexOf(
+        'const cached = cache.get(cacheKey(agentKind, deviceId));',
+      ),
     );
     const untilReturn = cachedBranch.slice(0, cachedBranch.indexOf('return;'));
     expect(untilReturn).toContain('setLoading(false);');
@@ -774,7 +740,9 @@ describe('Shared create project picker', () => {
     expect(remoteSessionHandoffSource).toContain(
       'export function commitRemoteSessionHandoff(p: RemoteSessionHandoffParams): void {',
     );
-    expect(remoteSessionHandoffSource).not.toContain('export async function commitRemoteSessionHandoff');
+    expect(remoteSessionHandoffSource).not.toContain(
+      'export async function commitRemoteSessionHandoff',
+    );
     // 回流不被 await。
     expect(remoteSessionHandoffSource).not.toContain('await refreshRemoteDeviceSessions(');
     // 两处调用点都不得 await 它 —— await 一个同步函数不报错,但会把「不要等」这个意图悄悄改回去。
@@ -783,7 +751,9 @@ describe('Shared create project picker', () => {
     const sendPart = newMakerDraftRouteSource.slice(
       newMakerDraftRouteSource.indexOf("logTag: 'draft send'"),
     );
-    expect(sendPart.slice(0, sendPart.indexOf('navigate('))).toContain('setPending(remoteSessionId');
+    expect(sendPart.slice(0, sendPart.indexOf('navigate('))).toContain(
+      'setPending(remoteSessionId',
+    );
     const goalPart = newMakerDraftRouteSource.slice(
       newMakerDraftRouteSource.indexOf("logTag: 'draft goal'"),
     );
@@ -807,9 +777,7 @@ describe('Shared create project picker', () => {
     // model / permission / workspaceKind。
     expect((newMakerDraftRouteSource.match(/\n\s+createArgs,\n/g) ?? []).length).toBe(2);
     // workDir 取 create 响应(纯对话的运行目录由对端分配,控制端猜不到)。
-    expect(
-      (newMakerDraftRouteSource.match(/workDir: created\?\.workDir,/g) ?? []).length,
-    ).toBe(2);
+    expect((newMakerDraftRouteSource.match(/workDir: created\?\.workDir,/g) ?? []).length).toBe(2);
   });
 
   // #807 review 第十七轮:handleSend 的第一个 await 是协同策略重取,它在上锁之前 —— 期间两个
@@ -855,7 +823,8 @@ describe('Shared create project picker', () => {
     // 全文恰好两处非图片过滤,各有明确分工:① 这个换设备时的同步清理;② 第二十四轮加的不变量
     // 收敛 effect(兜住在途摄入等所有入口)。出现第三处就说明又有人在某条路径上手写了一份。
     expect(
-      (newMakerDraftRouteSource.match(/\.filter\(\(f\) => f\.category !== 'image'\)/g) ?? []).length,
+      (newMakerDraftRouteSource.match(/\.filter\(\(f\) => f\.category !== 'image'\)/g) ?? [])
+        .length,
     ).toBe(2);
     expect(newMakerDraftRouteSource).toContain('「远程草稿绝不携带控制端路径附件」的**收敛器**');
   });
@@ -1000,7 +969,9 @@ describe('Shared create project picker', () => {
     // ③ 「设备已不可用」类的 evict 不需要配对 —— 那几处刻意不 prefetch,别被这条规则误改。
     //    这里只锁「本仓存在那个正确范例」,它是这条规则的出处。
     expect(deviceLinkRemoteProjectsSource).toContain('evictDeviceProviders(push.deviceId);');
-    expect(deviceLinkRemoteProjectsSource).toContain('void prefetchDeviceProviders(push.deviceId);');
+    expect(deviceLinkRemoteProjectsSource).toContain(
+      'void prefetchDeviceProviders(push.deviceId);',
+    );
   });
 
   /**
@@ -1076,7 +1047,9 @@ describe('Shared create project picker', () => {
     // 断言旧代码形态而非裸片段 —— 上面那段注释里会逐字提到它作为历史记录。
     expect(body).not.toContain("incoming.filter((f) => f.type.startsWith('image/'))");
     expect(body).toContain('const ext = extractExt(f.name);');
-    expect(body).toContain('const category = ext ? categorizeFile(ext) : categorizeByFilename(f.name);');
+    expect(body).toContain(
+      'const category = ext ? categorizeFile(ext) : categorizeByFilename(f.name);',
+    );
     // 认不出类别时**放行**,交给下游的文件头推断 + 收敛器兜底 —— 闸门宁可放过,绝不误拒。
     expect(body).toContain('if (!category) return false;');
     expect(body).toContain("return category !== 'image';");
@@ -1185,9 +1158,7 @@ describe('Shared create project picker', () => {
       "t('newChat.addRemoteProject.selectTargetPlaceholder')",
     );
     // 未选中的原因也要说出来,否则用户只看到一个空下拉。
-    expect(addRemoteProjectDialogSource).toContain(
-      'const requestedDeviceUnavailable =',
-    );
+    expect(addRemoteProjectDialogSource).toContain('const requestedDeviceUnavailable =');
     expect(addRemoteProjectDialogSource).toContain(
       "t('newChat.addRemoteProject.requestedDeviceUnavailable')",
     );
@@ -1210,7 +1181,9 @@ describe('Shared create project picker', () => {
     expect(body).toContain('model: prev.model,');
     expect(body).toContain('permissionMode: prev.permissionMode,');
     // 三处调用:换设备重种、同设备按 prev 校准、prev 为空时退回正常 seed。
-    expect((body.match(/resolveDeviceLinkDraftDefaults\(/g) ?? []).length).toBeGreaterThanOrEqual(3);
+    expect((body.match(/resolveDeviceLinkDraftDefaults\(/g) ?? []).length).toBeGreaterThanOrEqual(
+      3,
+    );
   });
 
   // #807 review 第二十七轮:设备菜单行原来只有 hover / disabled 两态,且 outline-none 去掉了浏览器

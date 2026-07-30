@@ -876,11 +876,16 @@
         "recording": "Press a new shortcut",
         "none": "Not set",
         "clear": "Clear",
+        "fnNeedsInputMonitoring": "Fn-based shortcuts need the shortcut listener permission; other shortcuts record normally.",
+        "awaitingInputMonitoring": "This shortcut is waiting for the shortcut listener permission and takes effect once granted.",
         "toast": {
           "needsModifier": "Use a key combo, a standalone F1-F24 key, or Left/Right Command, Option, Control, Fn.",
           "fnUnavailable": "Use a key combo, a standalone F1-F24 key, or Left/Right Command, Option, Control, Fn.",
           "systemReserved": "This shortcut conflicts with a system or common editing shortcut",
-          "registrationFailed": "Could not register this shortcut: {{error}}"
+          "registrationFailed": "Could not register this shortcut: {{error}}",
+          "recordingFailed": "Could not start shortcut recording: {{error}}",
+          "listenerUnavailable": "Could not start the shortcut listener — restart Cindy and try again",
+          "pendingInputMonitoring": "Shortcut saved — it takes effect after you grant the shortcut listener permission"
         }
       },
       "permissions": {
@@ -7554,6 +7559,9 @@
         "unavailable": "Subscription status is temporarily unavailable. Refresh to try again.",
         "action": "View plans",
         "changeAction": "Change plan",
+        "manageAction": "Manage subscription",
+        "portalAction": "Manage in Stripe",
+        "portalFailed": "Couldn't open Stripe subscription management. Try again later.",
         "priceInterval": "{{price}} / {{interval}}",
         "includedCredits": "Includes {{amount}} credits per {{interval}}",
         "renewsAt": "Renews {{date}}",
