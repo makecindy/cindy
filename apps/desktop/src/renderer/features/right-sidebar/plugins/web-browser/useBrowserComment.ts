@@ -64,6 +64,22 @@ function computeNextMarkerNumber(items: readonly { markerNumber: number }[] | un
   return items.reduce((max, item) => Math.max(max, item.markerNumber), 0) + 1;
 }
 
+/**
+ * Electron 当前类型把 WebviewTag.send 标成 Promise<void>，但不同 Electron
+ * 版本 / 测试替身可能仍返回 void。状态机只能观察真实 thenable 的异步失败，
+ * 不能因对 undefined 调用 .catch 而把已经投递的命令误判成发送失败。
+ */
+function observeSendRejection(result: unknown, onRejected: (reason: unknown) => void): void {
+  if (
+    result === null ||
+    (typeof result !== 'object' && typeof result !== 'function') ||
+    typeof (result as PromiseLike<unknown>).then !== 'function'
+  ) {
+    return;
+  }
+  void Promise.resolve(result).catch(onRejected);
+}
+
 export type BrowserCommentMode = 'off' | 'starting' | 'selecting' | 'pending' | 'submitting';
 
 interface PendingBrowserCommentCommand {
@@ -125,6 +141,12 @@ export function useBrowserComment(
    * 已取消 / 已失效的选择追加进草稿(或把已退出的模式又拨回 selecting)。
    */
   const submitEpochRef = useRef(0);
+  /**
+   * appendBrowserCommentToDraft 是用户数据的提交点。其后的 guest ACK 只负责
+   * 收尾 overlay；若此时 WebView 导航 / 崩溃 / 换代，仍必须按成功上报，不能
+   * 用 lifecycle failure 诱导用户重试并重复写入同一条评论。
+   */
+  const committedSubmissionEpochRef = useRef<number | null>(null);
 
   const rejectCommandsForWebview = useCallback((target: WebviewTag) => {
     for (const [requestId, pending] of pendingCommandsRef.current) {
@@ -134,6 +156,18 @@ export function useBrowserComment(
       pending.reject(new Error('browser comment WebView changed'));
     }
   }, []);
+
+  const settleCommittedSubmission = useCallback(
+    (epoch: number, nextMode: Extract<BrowserCommentMode, 'off' | 'selecting'>): boolean => {
+      if (committedSubmissionEpochRef.current !== epoch) return false;
+      committedSubmissionEpochRef.current = null;
+      setPendingTarget(null);
+      setMode(nextMode);
+      toast.success(tRef.current('rightSidebar.browser.commentAdded'));
+      return true;
+    },
+    [],
+  );
 
   /**
    * 向当前 WebView 发送一条必须确认完成的命令。requestId resolver 与具体
@@ -161,20 +195,18 @@ export function useBrowserComment(
           reject,
         });
 
-        try {
-          void target.send(command, envelope).catch((reason: unknown) => {
-            const pending = pendingCommandsRef.current.get(requestId);
-            if (!pending) return;
-            clearTimeout(pending.timer);
-            pendingCommandsRef.current.delete(requestId);
-            reject(reason instanceof Error ? reason : new Error('browser comment send failed'));
-          });
-        } catch (reason) {
+        const rejectDelivery = (reason: unknown) => {
           const pending = pendingCommandsRef.current.get(requestId);
           if (!pending) return;
           clearTimeout(pending.timer);
           pendingCommandsRef.current.delete(requestId);
           reject(reason instanceof Error ? reason : new Error('browser comment send failed'));
+        };
+
+        try {
+          observeSendRejection(target.send(command, envelope), rejectDelivery);
+        } catch (reason) {
+          rejectDelivery(reason);
         }
       });
     },
@@ -191,7 +223,7 @@ export function useBrowserComment(
         payload,
       };
       try {
-        void target.send(command, envelope).catch(() => undefined);
+        observeSendRejection(target.send(command, envelope), () => undefined);
       } catch {
         // WebView 正在 detach / destroy；host 仍可安全完成本地退出。
       }
@@ -203,18 +235,20 @@ export function useBrowserComment(
     const target = webviewRef.current;
     if (!target) return;
     try {
-      void target.send(channel, payload).catch(() => undefined);
+      observeSendRejection(target.send(channel, payload), () => undefined);
     } catch {
       // 实时预览是非关键通知；关键状态转换全部走 sendCommand。
     }
   }, []);
 
   const exitMode = useCallback(() => {
+    const committedEpoch = committedSubmissionEpochRef.current;
     submitEpochRef.current += 1; // 作废任何挂起中的提交
     sendBestEffortCommand(BROWSER_COMMENT_EXIT_MODE_CHANNEL);
+    if (committedEpoch !== null && settleCommittedSubmission(committedEpoch, 'off')) return;
     setMode('off');
     setPendingTarget(null);
-  }, [sendBestEffortCommand]);
+  }, [sendBestEffortCommand, settleCommittedSubmission]);
   const exitModeRef = useRef(exitMode);
   exitModeRef.current = exitMode;
 
@@ -342,28 +376,29 @@ export function useBrowserComment(
           };
           appendBrowserCommentToDraft(composerDraftKey, item);
           draftCommitted = true;
+          committedSubmissionEpochRef.current = epoch;
 
           // 5) Phase 2 连续标注:pending marker 转常驻,编号按草稿最大编号推进,
           //    回点选态继续标注(不退出模式,与 Codex 一致)。
           await sendCommand(BROWSER_COMMENT_COMMIT_PENDING_CHANNEL, {
             nextMarkerNumber: computeNextMarkerNumber(getDraft(composerDraftKey)?.browserComments),
           });
-          if (isStale()) return;
-          setPendingTarget(null);
-          setMode('selecting');
-          toast.success(t('rightSidebar.browser.commentAdded'));
-        } catch {
-          // 已退出 / 导航:模式与 marker 已由打断方复位,静默(不报错、不拨回)。
-          if (isStale()) return;
-          if (draftCommitted) {
-            // Composer 已经是用户数据的提交点。guest 收尾失败时不能把同一条评论
-            // 留在气泡里让用户重试并重复 append；退出本次 overlay，保留已写草稿。
-            sendBestEffortCommand(BROWSER_COMMENT_EXIT_MODE_CHANNEL);
-            setPendingTarget(null);
-            setMode('off');
-            toast.success(t('rightSidebar.browser.commentAdded'));
+          if (isStale()) {
+            settleCommittedSubmission(epoch, 'off');
             return;
           }
+          settleCommittedSubmission(epoch, 'selecting');
+        } catch {
+          if (draftCommitted) {
+            // Composer 已经是用户数据的提交点。guest 收尾失败时不能把同一条评论
+            // 留在气泡里让用户重试并重复 append。即使 lifecycle 已作废本纪元，
+            // 也先结算成功；若 lifecycle 已抢先结算，epoch guard 会避免重复 toast。
+            if (!isStale()) sendBestEffortCommand(BROWSER_COMMENT_EXIT_MODE_CHANNEL);
+            settleCommittedSubmission(epoch, 'off');
+            return;
+          }
+          // 已退出 / 导航:模式与 marker 已由打断方复位,静默(不报错、不拨回)。
+          if (isStale()) return;
           if (target.immediate) {
             // immediate 没有 Popover / 用户输入可保留。失败时撤掉本次 pending
             // marker 并回点选态，用户可以直接重新 Cmd/Ctrl+点击；不能把 host
@@ -389,7 +424,15 @@ export function useBrowserComment(
         }
       })();
     },
-    [composerDraftKey, exitMode, sendBestEffortCommand, sendCommand, t, tabId],
+    [
+      composerDraftKey,
+      exitMode,
+      sendBestEffortCommand,
+      sendCommand,
+      settleCommittedSubmission,
+      t,
+      tabId,
+    ],
   );
   const doSubmitRef = useRef(doSubmit);
   doSubmitRef.current = doSubmit;
@@ -424,8 +467,11 @@ export function useBrowserComment(
     const previousWebview = webviewRef.current;
     webviewRef.current = webview;
     if (previousWebview && previousWebview !== webview) {
+      const committedEpoch = committedSubmissionEpochRef.current;
       submitEpochRef.current += 1;
-      if (
+      if (committedEpoch !== null) {
+        settleCommittedSubmission(committedEpoch, 'off');
+      } else if (
         modeRef.current === 'pending' ||
         modeRef.current === 'submitting' ||
         pendingTargetRef.current
@@ -477,7 +523,9 @@ export function useBrowserComment(
         }
         case BROWSER_COMMENT_MODE_EXITED_CHANNEL: {
           // guest 内按了 Esc,overlay 已自拆 —— host 只同步状态。
+          const committedEpoch = committedSubmissionEpochRef.current;
           submitEpochRef.current += 1; // 作废任何挂起中的提交
+          if (committedEpoch !== null && settleCommittedSubmission(committedEpoch, 'off')) return;
           setMode('off');
           setPendingTarget(null);
           return;
@@ -498,7 +546,7 @@ export function useBrowserComment(
       webview.removeEventListener('did-navigate-in-page', onNavigate);
       rejectCommandsForWebview(webview);
     };
-  }, [rejectCommandsForWebview, webview]);
+  }, [rejectCommandsForWebview, settleCommittedSubmission, webview]);
 
   // tab 卸载 / 切走时若模式仍开着,通知 guest 拆 overlay(webview 被 pool 保活,
   // 不通知的话 overlay 会一直趴在页面上)。

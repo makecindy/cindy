@@ -62,7 +62,7 @@ interface MockWebview {
 }
 
 function makeWebview(
-  sendImpl: (channel: string, payload: unknown) => Promise<void> = async () => undefined,
+  sendImpl: (channel: string, payload: unknown) => void | Promise<void> = async () => undefined,
 ): MockWebview {
   const listeners = new Map<string, Set<WebviewListener>>();
   const send = vi.fn(sendImpl);
@@ -234,6 +234,32 @@ describe('useBrowserComment', () => {
     expect(toastMocks.error).toHaveBeenCalledWith('rightSidebar.browser.commentFailed');
   });
 
+  it('waits for ACKs when WebView send returns void', async () => {
+    const webview = makeWebview(() => undefined);
+    let result: UseBrowserCommentResult | null = null;
+    render(
+      createElement(HookProbe, {
+        webview: webview.value,
+        onResult: (next) => {
+          result = next;
+        },
+      }),
+    );
+
+    act(() => result!.toggle());
+    expect(result!.mode).toBe('starting');
+    expect(toastMocks.error).not.toHaveBeenCalled();
+
+    await acknowledgeLastCommand(webview);
+    expect(result!.mode).toBe('selecting');
+
+    act(() => result!.resetDesign());
+    act(() => result!.toggle());
+    expect(result!.mode).toBe('off');
+    expect(lastCommand(webview).command).toBe(BROWSER_COMMENT_EXIT_MODE_CHANNEL);
+    expect(toastMocks.error).not.toHaveBeenCalled();
+  });
+
   it('returns to off when a delivered enter command is never acknowledged', async () => {
     vi.useFakeTimers();
     const webview = makeWebview();
@@ -402,6 +428,45 @@ describe('useBrowserComment', () => {
     expect(result!.mode).toBe('off');
     expect(result!.pendingTarget).toBeNull();
     expect(toastMocks.success).toHaveBeenCalledWith('rightSidebar.browser.commentAdded');
+  });
+
+  it('reports a committed draft as success when the WebView is replaced before commit ACK', async () => {
+    const first = makeWebview();
+    const second = makeWebview();
+    let result: UseBrowserCommentResult | null = null;
+    const view = render(
+      createElement(HookProbe, {
+        webview: first.value,
+        onResult: (next) => {
+          result = next;
+        },
+      }),
+    );
+    await enterSelecting(first, () => result!);
+    act(() => first.dispatchIpc(BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL, TARGET));
+
+    act(() => result!.submit('Keep the committed draft'));
+    await acknowledgeLastCommand(first);
+    await waitFor(() => {
+      expect(lastCommand(first).command).toBe(BROWSER_COMMENT_COMMIT_PENDING_CHANNEL);
+    });
+    expect(draftMocks.append).toHaveBeenCalledOnce();
+
+    view.rerender(
+      createElement(HookProbe, {
+        webview: second.value,
+        onResult: (next) => {
+          result = next;
+        },
+      }),
+    );
+
+    await waitFor(() => expect(result!.mode).toBe('off'));
+    expect(result!.pendingTarget).toBeNull();
+    expect(draftMocks.append).toHaveBeenCalledOnce();
+    expect(toastMocks.success).toHaveBeenCalledOnce();
+    expect(toastMocks.success).toHaveBeenCalledWith('rightSidebar.browser.commentAdded');
+    expect(toastMocks.error).not.toHaveBeenCalled();
   });
 
   it('exits on navigation and ignores the old generation afterwards', async () => {
