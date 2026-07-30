@@ -439,18 +439,26 @@ describe('Claude Code translator is_error result guard', () => {
       maxRetries: 3,
       isTerminal: true,
     });
-    expect(errors[0]?.agentMeta, 'api_retry has no assistant transcript anchor').toBeUndefined();
+    // 没有 assistant transcript 锚点(uuid / parentUuid 等),但本 session 从未
+    // 启动过 subagent,归因给下游计费用的 model 仍能安全填上当前 ctx.getModel()
+    // (PR review P1 / P2:见 translator.ts api_retry 分支注释)。
+    expect(errors[0]?.agentMeta).toMatchObject({ model: 'codex/gpt-5.5' });
     expect(events.some((e) => e.type === 'done'), 'done tail remains available for usage accounting').toBe(true);
   });
 
-  it('falls back to lastAssistantMeta for a no-envelope api_retry when no subagent has ever launched', async () => {
+  it('falls back to ctx.getModel() for a no-envelope api_retry when no subagent has ever launched', async () => {
     // 本 session 从未启动过 subagent 时,当前活跃 lane 只能是主 agent —— 一条
-    // 完全没有 assistant.error envelope 的 api_retry 可以安全借用
-    // ctx.rt.lastAssistantMeta,不会像并发 subagent 场景那样猜错 lane
-    // (PR review P1:不应把"拿不到 agentMeta"一律等同于"必须跳过")。
+    // 完全没有 assistant.error envelope 的 api_retry 可以安全归因到当前模型
+    // 选择,不会像并发 subagent 场景那样猜错 lane(PR review P1:不应把"拿不到
+    // agentMeta"一律等同于"必须跳过")。归因必须来自 ctx.getModel()(本 turn
+    // 当前实际选择),而不是上一轮成功 turn 遗留的 ctx.rt.lastAssistantMeta——
+    // 用户切换模型后,新模型的请求在产生任何 envelope 前耗尽重试时,借用旧
+    // meta 会把失败错误标注成上一轮的模型(PR review P2)。这里刻意让上一条
+    // assistant 消息的模型与 ctx.getModel() 不同,锁住"用当前模型而非历史
+    // 模型"这条。
     const tracker = new UsageTracker();
     const queue = createAsyncQueue<AgentEvent>();
-    const ctx = createCtx(tracker);
+    const ctx = { ...createCtx(tracker), getModel: () => 'chatgpt/gpt-5.5' };
 
     translateSdkMessage(
       {
@@ -481,7 +489,7 @@ describe('Claude Code translator is_error result guard', () => {
         stop_reason: 'end_turn',
         total_cost_usd: 0,
         usage: { input_tokens: 100, output_tokens: 0 },
-        modelUsage: { 'codex/gpt-5.5': { inputTokens: 100, outputTokens: 0, costUSD: 0, contextWindow: 272_000 } },
+        modelUsage: { 'chatgpt/gpt-5.5': { inputTokens: 100, outputTokens: 0, costUSD: 0, contextWindow: 272_000 } },
       },
       queue,
       ctx,
@@ -490,7 +498,7 @@ describe('Claude Code translator is_error result guard', () => {
     const events = await drain(queue);
     const errors = events.filter((e) => e.type === 'error');
     expect(errors).toHaveLength(1);
-    expect(errors[0]?.agentMeta).toMatchObject({ uuid: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', model: 'codex/gpt-5.5' });
+    expect(errors[0]?.agentMeta).toMatchObject({ model: 'chatgpt/gpt-5.5' });
   });
 
   // SDK 自带退避重试（529 overloaded / 429 / 连接错误都走它）。这组用例锁住

@@ -742,12 +742,15 @@ function handleSystem(
     // 猜并发场景下的 lane 会把归因导向错误模型,不能赌)。但当本 session
     // 从未启动过任何 subagent(resolvedSubagentModelByParentToolUseId 为空、
     // 且从未被写入过)时不存在这个歧义 —— 迄今唯一活跃的 lane 只能是主
-    // agent,ctx.rt.lastAssistantMeta 就是它自己的 meta,可以安全借用
-    // (PR review P1:不应把"拿不到 agentMeta"一律等同于"必须跳过")。
+    // agent。这里不能借用 ctx.rt.lastAssistantMeta:那是上一条成功 assistant
+    // 消息的 meta,若用户在上一轮成功 turn 之后切换了模型,新模型的请求在
+    // 产生任何 envelope 前耗尽 api_retry,借用旧 meta 会把当前失败请求错误
+    // 标注成上一轮的模型(PR review P2)。ctx.getModel() 是当前 turn 实际使用
+    // 的模型选择,才是这次失败请求的真实归属。
     const noSubagentEverLaunched = ctx.rt.resolvedSubagentModelByParentToolUseId.size === 0
       && ctx.rt.subagentParentToolUseIdByTaskId.size === 0;
     const fallbackMeta = !hasAssistantEnvelope && noSubagentEverLaunched
-      ? ctx.rt.lastAssistantMeta ?? undefined
+      ? { model: ctx.getModel() }
       : undefined;
     const sdkError = redactSensitiveText(hasAssistantEnvelope ? previous.sdkError : (msg.error || 'unknown'));
     const statusLabel = msg.error_status == null ? 'connection error' : `HTTP ${msg.error_status}`;
