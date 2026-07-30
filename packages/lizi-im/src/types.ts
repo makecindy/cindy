@@ -136,6 +136,11 @@ export interface IMMessageEvent {
    * name 为平台显示名 — 不可信输入, 消费方注入 prompt 前必须消毒。
    */
   speaker?: { id: string; name: string; username?: string; isOwner: boolean };
+  /**
+   * 全响应模式下的旁听触发(非显式召唤): 业务层注入安静上下文指令,
+   * 模型可用 NO_REPLY 哨兵选择沉默; transport 抑制该消息的表情回应。
+   */
+  ambient?: boolean;
   /** Pre-downloaded attachments. */
   attachments: IMAttachment[];
   /**

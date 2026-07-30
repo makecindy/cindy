@@ -34,7 +34,32 @@ function normalize(raw: unknown): TelegramBehaviorConfig {
     replyQuoteDm: DM_QUOTE_MODES.has(String(r.replyQuoteDm))
       ? (r.replyQuoteDm as TelegramBehaviorConfig['replyQuoteDm'])
       : TELEGRAM_DEFAULT_BEHAVIOR.replyQuoteDm,
+    ...(isRecordOfActivation(r.groupActivation)
+      ? { groupActivation: r.groupActivation }
+      : {}),
   };
+}
+
+function isRecordOfActivation(
+  raw: unknown,
+): raw is Record<string, 'mention' | 'always'> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  return Object.entries(raw as Record<string, unknown>).every(
+    ([chatId, mode]) => /^-?\d+$/.test(chatId) && (mode === 'mention' || mode === 'always'),
+  );
+}
+
+/** 单个群的参与模式覆写(always=全响应·自主判断; mention=回默认并从表中清除)。 */
+export function setTelegramGroupActivation(
+  chatId: string,
+  mode: 'mention' | 'always',
+): TelegramBehaviorConfig {
+  const current = file.read().groupActivation ?? {};
+  const next = { ...current };
+  if (mode === 'mention') delete next[chatId];
+  else next[chatId] = mode;
+  file.writePatch({ groupActivation: next });
+  return file.read();
 }
 
 const file = createOverrideSettingsFile<TelegramBehaviorConfig>({
@@ -108,6 +133,9 @@ function normalizePatch(
   }
   if (patch.replyQuoteDm && DM_QUOTE_MODES.has(patch.replyQuoteDm)) {
     next.replyQuoteDm = patch.replyQuoteDm;
+  }
+  if (isRecordOfActivation(patch.groupActivation)) {
+    next.groupActivation = patch.groupActivation;
   }
   return next;
 }

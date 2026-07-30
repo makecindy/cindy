@@ -698,6 +698,44 @@ describe('TelegramIM', () => {
     expect((withReply[0].params.reply_parameters as { message_id: number }).message_id).toBe(95);
   });
 
+  it('全响应·自主判断: always 群未召唤消息进 ambient turn, 表情静默, NO_REPLY 删占位', async () => {
+    await im.dispose();
+    im = new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      behavior: () => ({
+        emojiReactions: 'minimal',
+        replyQuoteGroup: 'first',
+        replyQuoteDm: 'off',
+        groupActivation: { '-100200': 'always' },
+      }),
+    });
+    im.registerIpc();
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    // 未 @ 的普通消息也进 turn, 带 ambient 标记
+    api.pushUpdates([groupMessage({ text: '今天天气不错', fromId: 222, messageId: 50 })]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0].ambient).toBe(true);
+    expect(events[0].senderId).toBe('g/-100200/u222');
+    // ambient 触发的表情回应被抑制
+    expect(await im.reactToMessage('-100200|50', '👀')).toBeNull();
+    // ambient 路径不消费命令(即使 owner)
+    api.pushUpdates([groupMessage({ text: '/new', fromId: 111, messageId: 51 })]);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(events).toHaveLength(1);
+    // NO_REPLY 哨兵: 经典流式 finalize 删掉占位消息, 不发正文
+    const handle = await im.startStreamingText('g/-100200/u222');
+    handle.replace('NO_REPLY');
+    await handle.finalize('NO_REPLY');
+    expect(api.calls.some((c) => c.method === 'deleteMessage')).toBe(true);
+    expect(
+      api.calls.some(
+        (c) => c.method === 'editMessageText' || c.method === 'sendRichMessage',
+      ),
+    ).toBe(false);
+  });
+
   it('disconnect 清空凭证并回 idle', async () => {
     await connect();
     await ctx.handlers.get('telegramBot:disconnect')!();

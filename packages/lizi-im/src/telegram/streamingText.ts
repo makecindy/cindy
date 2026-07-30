@@ -28,6 +28,15 @@ const DRAFT_PREVIEW_LIMIT = 3800;
  */
 const DRAFT_KEEPALIVE_MS = 20_000;
 const IMAGE_ONLY_PLACEHOLDER = '🖼️';
+/**
+ * 自主判断沉默哨兵(全响应群的 ambient turn): 模型整条回复只有它时,
+ * 本次 turn 静默 — 经典路径删掉流式占位消息, draft 路径什么都不发。
+ */
+export const NO_REPLY_SENTINEL = 'NO_REPLY';
+
+function isNoReply(text: string): boolean {
+  return text.trim() === NO_REPLY_SENTINEL;
+}
 
 export interface TelegramStreamingDeps {
   /** 发送一条 markdown 渲染消息, 返回编码 messageId。 */
@@ -58,6 +67,8 @@ export interface TelegramStreamingDeps {
    * 调用方回落 HTML edit 分段定稿。
    */
   editFinal?: (messageId: string, markdown: string) => Promise<boolean>;
+  /** NO_REPLY 静默时删除流式占位消息(经典路径)。 */
+  deleteMessage?: (messageId: string) => Promise<void>;
 }
 
 export function startTelegramStreaming(
@@ -129,6 +140,15 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
       }
     }
 
+    if (isNoReply(finalText)) {
+      // 自主判断选择沉默: 撤掉占位消息, 本 turn 零输出。
+      try {
+        await this.deps.deleteMessage?.(this.messageId);
+      } catch {
+        /* 删除失败(权限等)保留占位, 不抛错 */
+      }
+      return;
+    }
     const imageUrls = this.deps.extractImageUrls(finalText);
     // 无受管图片时优先 rich 原地定稿(表格/标题/LaTeX 原生渲染, 32768 上限
     // 免分段); 失败回落 HTML edit 分段。
@@ -177,6 +197,7 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
     }
     if (this.done || this.buffer === this.flushed) return;
     if (this.buffer.length > INTERMEDIATE_EDIT_LIMIT) return;
+    if (isNoReply(this.buffer)) return; // 哨兵不闪现在占位消息里
 
     const next = this.buffer;
     this.inFlight = (async () => {
@@ -288,6 +309,7 @@ class TelegramDraftStreamingHandle implements StreamingTextHandle {
       }
     }
 
+    if (isNoReply(finalText)) return; // 沉默: draft 30s 内自然蒸发, 不发正式消息
     const imageUrls = this.deps.extractImageUrls(finalText);
     // 无受管图片时优先 rich 定稿(一条到底); 带图回落经典分段 + sendPhoto 旁路,
     // 避免 rich markdown 里的受管 URL 变成死链。
@@ -330,6 +352,7 @@ class TelegramDraftStreamingHandle implements StreamingTextHandle {
       }
     }
     if (this.done || this.fallback || this.buffer === this.flushed) return;
+    if (isNoReply(this.buffer)) return;
     await this.pushDraft(this.buffer);
   }
 

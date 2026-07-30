@@ -123,6 +123,13 @@ export function buildTelegramAdapter(
         cursorScope: lane.threadId,
         triggerMessageId,
       });
+      // 全响应·自主判断(ambient): 安静上下文指令 — 值得说才说, 否则 NO_REPLY
+      // 哨兵沉默(transport 在流式 finalize 吞掉哨兵并撤占位)。
+      const ambientBlock = event.ambient
+        ? '<ambient_mode>\n本条群消息不是对你的直接召唤(该群开启了全响应模式)。' +
+          '只在你确有价值可补充时回复; 与你无关或不需要你插话时, ' +
+          '只输出 NO_REPLY(不带任何其它字符)。\n</ambient_mode>\n'
+        : '';
       // 群多人: 发言人标签注入(显示名是不可信输入 — 控制字符/换行消毒, 截断)。
       const speakerLine = event.speaker
         ? `[发言人] ${sanitizeSpeakerText(event.speaker.name)}` +
@@ -131,7 +138,7 @@ export function buildTelegramAdapter(
         : '';
       // 顺序: 群窗口(较远的背景) → 引用块(直接相关) → 发言人 → 用户正文。
       return {
-        agentText: `${persona}${assembly.prefix}${replyBlock}${speakerLine}${event.text}`,
+        agentText: `${persona}${ambientBlock}${assembly.prefix}${replyBlock}${speakerLine}${event.text}`,
         commit: assembly.commit,
       };
     },

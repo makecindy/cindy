@@ -114,6 +114,12 @@ export interface TelegramBehaviorConfig {
   replyQuoteGroup: 'off' | 'first' | 'all';
   /** DM 回复引用: off(默认) / first=首条回复挂回触发消息。 */
   replyQuoteDm: 'off' | 'first';
+  /**
+   * per-chat 群参与模式(chatId → 模式)。缺省 mention。
+   * always = 全响应·自主判断: 每条群消息都进 turn(ambient 标记), 模型用
+   * NO_REPLY 哨兵决定插不插话; ambient 消息不放表情回应。
+   */
+  groupActivation?: Record<string, 'mention' | 'always'>;
 }
 
 export const TELEGRAM_DEFAULT_BEHAVIOR: TelegramBehaviorConfig = {
@@ -189,6 +195,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    * 内存态 FIFO 上限 2000; 重启丢失时 reply 降级为开新链(不丢消息)。
    */
   private readonly outboundLanes = new Map<string, string>();
+  /** ambient 触发的原生 messageId(`chatId|msgId`) — 表情回应抑制名单(FIFO 512)。 */
+  private readonly ambientTriggerIds = new Set<string>();
 
   constructor(
     host: IMHost,
@@ -419,6 +427,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         chunk: chunkTelegramSource,
         extractImageUrls: (markdown) => markdownToTelegramHtml(markdown).imageUrls,
         editFinal: (messageId, markdown) => this.richEditFinal(messageId, markdown),
+        deleteMessage: async (messageId) => {
+          const { chatId, messageId: nativeId } = decodeMessageId(messageId);
+          await this.requireApi().call('deleteMessage', {
+            chat_id: chatId,
+            message_id: Number(nativeId),
+          });
+        },
         ...(useDraft
           ? {
               sendFinal: (markdown: string) => this.sendRichFinal(userId, markdown),
@@ -483,6 +498,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     try {
       const behavior = this.behaviorOf();
       if (behavior.emojiReactions === 'off') return null;
+      if (this.ambientTriggerIds.has(messageId)) return null; // ambient 全静默
       let effective = emoji;
       if (behavior.emojiReactions === 'expressive') {
         // 终态用变体池(生动档); ack(👀)保持稳重不随机。
@@ -761,25 +777,45 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         this.emitGroupWindow(groupWindowEntryOf(m));
       }
 
-      const trigger = detectGroupTrigger(m, this.botId, this.botUsername);
-      if (!trigger) return;
+      let trigger = detectGroupTrigger(m, this.botId, this.botUsername);
+      let ambient = false;
+      if (!trigger) {
+        // 全响应·自主判断(per-chat 配置): 未被召唤的消息也进 turn, 打 ambient
+        // 标记 — 业务层注入安静上下文, 模型可用 NO_REPLY 沉默。
+        const activation = this.behaviorOf().groupActivation?.[String(m.chat.id)] ?? 'mention';
+        if (activation !== 'always') return;
+        const plain = (m.text ?? m.caption ?? '').trim();
+        if (!plain) return; // 纯媒体/服务消息不进 ambient turn
+        trigger = { text: plain };
+        ambient = true;
+      }
       const isOwner = String(m.from.id) === this.ownerUserId;
-      if (!isOwner) {
-        // 群成员全员可对话(D1); 但命令永远 owner 专属 — 文本命令静默丢弃
-        // (群里不可被探测, 对标 OpenClaw/Hermes 口径)。
+      {
         const probe = trigger.text.trimStart();
-        if (probe.startsWith('/') || probe.startsWith('!')) return;
+        const isCommand = probe.startsWith('/') || probe.startsWith('!');
+        // 命令永远 owner 专属且必须显式召唤: 成员命令静默丢(群里不可被探测,
+        // 对标 OpenClaw/Hermes); ambient 路径不消费任何人的命令。
+        if (isCommand && (!isOwner || ambient)) return;
       }
       const laneUserId = this.resolveGroupLane(m, isOwner);
       if (this.behaviorOf().replyQuoteGroup !== 'off') {
         this.laneReplyTargets.set(laneUserId, String(m.message_id));
       }
-      // 被召唤即出 typing(5s 自动消失, 首条输出到达时客户端自动清):
-      // 群里没有 DM 的草稿占位, 这是"收到了, 在干活"的第一反馈。
-      this.sendTypingAction(
-        String(m.chat.id),
-        m.is_topic_message === true ? m.message_thread_id : undefined,
-      );
+      if (ambient) {
+        // ambient 全静默: 不 typing、不表情(说不说话都不能打扰群)。
+        this.ambientTriggerIds.add(`${m.chat.id}|${m.message_id}`);
+        if (this.ambientTriggerIds.size > 512) {
+          const oldest = this.ambientTriggerIds.values().next().value;
+          if (oldest !== undefined) this.ambientTriggerIds.delete(oldest);
+        }
+      } else {
+        // 被召唤即出 typing(5s 自动消失, 首条输出到达时客户端自动清):
+        // 群里没有 DM 的草稿占位, 这是"收到了, 在干活"的第一反馈。
+        this.sendTypingAction(
+          String(m.chat.id),
+          m.is_topic_message === true ? m.message_thread_id : undefined,
+        );
+      }
       const acceptedConfigVersion = this.configVersion;
       const event = await normalizeMessage(m, {
         api: this.requireApi(),
@@ -800,6 +836,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           ...(m.from.username ? { username: m.from.username } : {}),
           isOwner,
         },
+        ...(ambient ? { ambient: true } : {}),
       });
     }
     // channel 消息不支持(bot 作为频道管理员的广播场景不在个人助理语义内)。
