@@ -963,9 +963,11 @@ export function getMaker(): Maker {
           });
           mcpExtraArgs = cfg.extraArgs;
           mcpExtraEnv = cfg.extraEnv;
-          // 本次 spawn 配置实际应用的通讯录开关快照 —— getContactsPromptState 用它
-          // 判定「设置已改但 app-server 失效失败」的 stale 窗口(此时不注入 enabled 段)。
-          codexAppliedContactsEnabled = readContactsSettings().enabled;
+          // 本次 spawn 配置实际应用的通讯录可用性快照 —— 从返回的 cfg 本体推导,
+          // 不另读 settings: getCodexExtraSpawnConfig 是模块级缓存, 失效失败后
+          // 命中缓存返回的还是 pre-toggle 配置, 此时 live 设置读数会谎报新状态
+          // (review: 快照必须等于 applied config, 而非 applied 时刻的旁路读数)。
+          codexAppliedContactsEnabled = cfg.bridgeServerNames.includes('cindy_contacts');
         } catch (err) {
           desktopMakerLogger.error('codex MCP bridge prep failed, continuing without lizi MCP', {
             message: err instanceof Error ? err.message : String(err),
