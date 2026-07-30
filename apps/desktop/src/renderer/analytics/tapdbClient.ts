@@ -111,6 +111,12 @@ const ENGAGED_REPORT_INTERVAL_MS = 30 * 60 * 1000;
  */
 const ENGAGED_SHARED_LAST_REPORT_KEY = 'tapdb.lastEngagedReportAt';
 /**
+ * localStorage 的单次读写同步,但「读 → 判断 → 写」不是跨 renderer 原子事务。
+ * working timer 会把多个窗口对齐到同一截止时刻,因此用 Chromium Web Locks
+ * 串行化 app_engaged 的领取,并在锁内重读共享时间。
+ */
+const ENGAGED_SHARED_LOCK_NAME = 'cindy.tapdb.app-engaged';
+/**
  * 下一次允许上报活跃的时刻(epoch ms)。仅内存:reload 丢失只会让上报提前一条,
  * 服务端按天去重,无害。任何 tag 的上报(含 app_start)都会推进它,避免冷启动
  * app_start 后紧跟的第一次点击立刻再发一条。
@@ -126,6 +132,26 @@ let engagedDayEndsAt = 0;
 let workingReportTimer: ReturnType<typeof setTimeout> | null = null;
 /** makerChatStore 全会话 running 快照订阅。 */
 let unsubscribeWorkingState: (() => void) | null = null;
+/** 当前 renderer 已有一条 Web Lock 请求在途;高频交互不重复排队。 */
+let engagedReportLockPending = false;
+/** 在途 working 请求可被后到的真人信号升级,保留跨日立即上报语义。 */
+let engagedReportLockAllowsNewDay = false;
+
+/**
+ * 在当前状态下实际尝试一次上报。Web Lock 路径会在获得锁后再调用这里,
+ * 重新读取跨窗口时间并复核闸与节流条件。
+ */
+function reportEngagedNowIfDue(allowNewDay: boolean): void {
+  const now = Date.now();
+  if (now < nextEngagedReportAt && (!allowNewDay || now < engagedDayEndsAt)) return;
+  if (!sdkInitialized || !reportingAllowed) return;
+  if (!allowNewDay && !hasWorkingSession()) return;
+  try {
+    reportActive('app_engaged');
+  } catch (err) {
+    log.error('engaged report failed (non-fatal)', err);
+  }
+}
 
 /**
  * 活跃信号统一入口。真人操作允许跨日首条立即上报,保留原有「不吞次日首次
@@ -136,10 +162,42 @@ function reportEngagedIfDue(allowNewDay: boolean): void {
   const now = Date.now();
   if (now < nextEngagedReportAt && (!allowNewDay || now < engagedDayEndsAt)) return;
   if (!sdkInitialized || !reportingAllowed) return;
+  if (engagedReportLockPending) {
+    if (allowNewDay) engagedReportLockAllowsNewDay = true;
+    return;
+  }
+
+  // Cindy 的受控 Electron Chromium 提供 Web Locks。测试/极端兼容环境缺失时
+  // 维持原有 localStorage 去重退化路径,不能因统计锁不可用影响主流程。
+  const lockManager = navigator.locks;
+  if (!lockManager) {
+    reportEngagedNowIfDue(allowNewDay);
+    return;
+  }
+
+  engagedReportLockPending = true;
+  engagedReportLockAllowsNewDay = allowNewDay;
   try {
-    reportActive('app_engaged');
+    void lockManager
+      .request(ENGAGED_SHARED_LOCK_NAME, () => {
+        reportEngagedNowIfDue(engagedReportLockAllowsNewDay);
+      })
+      .catch((err) => {
+        log.warn('engagement Web Lock failed; falling back to local throttle', err);
+        reportEngagedNowIfDue(engagedReportLockAllowsNewDay);
+      })
+      .finally(() => {
+        engagedReportLockPending = false;
+        engagedReportLockAllowsNewDay = false;
+        // working timer 在锁请求期间不另起 1ms 空转;锁释放后按新窗口重新排期。
+        syncWorkingReport();
+      });
   } catch (err) {
-    log.error('engaged report failed (non-fatal)', err);
+    const fallbackAllowNewDay = engagedReportLockAllowsNewDay;
+    engagedReportLockPending = false;
+    engagedReportLockAllowsNewDay = false;
+    log.warn('engagement Web Lock unavailable; falling back to local throttle', err);
+    reportEngagedNowIfDue(fallbackAllowNewDay);
   }
 }
 
@@ -172,6 +230,7 @@ function syncWorkingReport(): void {
   }
 
   reportEngagedIfDue(false);
+  if (engagedReportLockPending) return;
   // makerChatStore 会随 text/tool progress 高频 notify。已有 timer 时保持原定时点,
   // 不在每一帧 clear + 重建;真人操作若推进了窗口,旧 timer 到点后会自行重新对齐。
   if (workingReportTimer !== null) return;
@@ -518,6 +577,8 @@ export const __testing = {
     lastSetUserDate = null;
     nextEngagedReportAt = 0;
     engagedDayEndsAt = 0;
+    engagedReportLockPending = false;
+    engagedReportLockAllowsNewDay = false;
     clearWorkingReportTimer();
     unsubscribeWorkingState?.();
     unsubscribeWorkingState = null;

@@ -72,6 +72,7 @@ const visibilityHandlers: Array<() => void> = [];
  * 只保留最新一个,fireWindowEvent 只打本用例的监听器。
  */
 const windowHandlers = new Map<string, () => void>();
+let originalNavigatorLocksDescriptor: PropertyDescriptor | undefined;
 
 function fireWindowEvent(type: 'focus' | 'keydown' | 'pointerdown'): void {
   windowHandlers.get(type)?.();
@@ -122,6 +123,50 @@ async function flush(): Promise<void> {
   await Promise.resolve();
 }
 
+/**
+ * Chromium Web Locks 的最小测试替身:同名请求严格串行,让两个独立 module 实例
+ * 能在同一 fake-timer tick 内竞争,再由第二个锁持有者重读 localStorage。
+ */
+function installSerializedWebLocks() {
+  let tail = Promise.resolve();
+  const request = vi.fn((name: string, callback: (lock: { name: string }) => void) => {
+    const current = tail.then(() => callback({ name }));
+    tail = current.then(
+      () => undefined,
+      () => undefined,
+    );
+    return current;
+  });
+  Object.defineProperty(window.navigator, 'locks', {
+    configurable: true,
+    value: { request },
+  });
+  return request;
+}
+
+function installDeferredWebLock() {
+  let acquire: (() => void) | null = null;
+  const request = vi.fn(
+    (name: string, callback: (lock: { name: string }) => void) =>
+      new Promise<void>((resolve, reject) => {
+        acquire = () => {
+          Promise.resolve(callback({ name })).then(resolve, reject);
+        };
+      }),
+  );
+  Object.defineProperty(window.navigator, 'locks', {
+    configurable: true,
+    value: { request },
+  });
+  return {
+    request,
+    acquire(): void {
+      if (!acquire) throw new Error('Web Lock request was not queued');
+      acquire();
+    },
+  };
+}
+
 const DENIED: SettingsPayload = {
   privacyConsentAccepted: false,
   analyticsEnabled: true,
@@ -134,6 +179,7 @@ const ALLOWED: SettingsPayload = {
 };
 
 beforeEach(() => {
+  originalNavigatorLocksDescriptor = Object.getOwnPropertyDescriptor(window.navigator, 'locks');
   settingsListener = null;
   authListener = null;
   visibilityHandlers.length = 0;
@@ -159,6 +205,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (originalNavigatorLocksDescriptor) {
+    Object.defineProperty(window.navigator, 'locks', originalNavigatorLocksDescriptor);
+  } else {
+    Reflect.deleteProperty(window.navigator, 'locks');
+  }
   vi.restoreAllMocks();
 });
 
@@ -502,6 +553,41 @@ describe('engagement-driven activity reporting', () => {
 
     expect(tapdb.pvEvent).toHaveBeenCalledTimes(2);
     expect(tapdb.pvEvent).toHaveBeenLastCalledWith({ '#tag': 'app_engaged' });
+  });
+
+  it('serializes aligned working timers across renderer windows', async () => {
+    const lockRequest = installSerializedWebLocks();
+    await initAllowed();
+    // resetModules 模拟独立 renderer 的 module state;TapDB mock、working store 与
+    // localStorage 仍按真实同源窗口共享。
+    await initAllowed();
+    tapdb.pvEvent.mockClear();
+
+    workingStore.setRunning(true);
+    vi.advanceTimersByTime(30 * 60 * 1000);
+    await flush();
+    await flush();
+
+    expect(lockRequest).toHaveBeenCalledTimes(2);
+    expect(tapdb.pvEvent).toHaveBeenCalledTimes(1);
+    expect(tapdb.pvEvent).toHaveBeenCalledWith({ '#tag': 'app_engaged' });
+  });
+
+  it('drops a queued working report if work stops before the lock is acquired', async () => {
+    const lock = installDeferredWebLock();
+    await initAllowed();
+    tapdb.pvEvent.mockClear();
+
+    workingStore.setRunning(true);
+    vi.advanceTimersByTime(30 * 60 * 1000);
+    expect(lock.request).toHaveBeenCalledTimes(1);
+
+    workingStore.setRunning(false);
+    lock.acquire();
+    await flush();
+    await flush();
+
+    expect(tapdb.pvEvent).not.toHaveBeenCalled();
   });
 
   it('stops the rolling report as soon as no session is working', async () => {
