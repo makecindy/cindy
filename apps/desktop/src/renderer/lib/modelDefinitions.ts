@@ -19,6 +19,11 @@ export interface ModelDefinition {
   defaultEffort: Effort | null;
   vendorKey: 'cc' | 'codex';
   contextWindow?: number;
+  /**
+   * `contextWindow` 是否为显式声明的真实上限(见 ModelDescriptor.contextWindowVerified)。
+   * 缺省按未核实处理 —— 只用于展示,不拿去压 SDK 实测的窗口。
+   */
+  contextWindowVerified?: boolean;
   supportsFastMode?: boolean;
   /** 目录展示排序;缺省排末尾(见 getDefaultModelForVendor)。 */
   sortOrder?: number;
@@ -35,6 +40,7 @@ function toLegacy(m: ModelDescriptor, vendorKey: 'cc' | 'codex'): ModelDefinitio
     defaultEffort: m.defaultEffort,
     vendorKey,
     contextWindow: m.contextWindow,
+    contextWindowVerified: m.contextWindowVerified,
     supportsFastMode: m.supportsFastMode,
     sortOrder: m.sortOrder,
     defaultEnabled: m.defaultEnabled,

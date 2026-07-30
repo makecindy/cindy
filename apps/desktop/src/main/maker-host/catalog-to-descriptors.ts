@@ -34,6 +34,7 @@ function toDescriptor(m: CatalogModel): ModelDescriptor {
     efforts: m.efforts,
     defaultEffort: m.defaultEffort,
   };
+  if (m.contextWindowVerified !== undefined) d.contextWindowVerified = m.contextWindowVerified;
   if (m.description !== undefined) d.description = m.description;
   if (m.effortDisplayNames !== undefined) d.effortDisplayNames = m.effortDisplayNames;
   if (m.supportsFastMode !== undefined) d.supportsFastMode = m.supportsFastMode;

@@ -137,6 +137,20 @@ export interface ModelDescriptor {
   description?: string;
   /** 上下文窗口大小 (tokens), SDK result.modelUsage 缺值时的 fallback。 */
   contextWindow: number;
+  /**
+   * `contextWindow` 是否为**显式声明**的真实上限 (产品目录写定、上游 HTTP/cache 明示、
+   * 用户自己填), 而不是派生时补的兜底值。
+   *
+   * 目录里的窗口有两种截然不同的来源, 数值上无法区分:
+   * - 显式声明: 例如 Cindy 目录给网关路由写定的 372K —— 可以用来收敛上游上报值。
+   * - 派生兜底: 上游协议不给元数据时补的常量 (codex `model/list` 一律 272K、自定义
+   *   provider 未填时的 200K、Anthropic 未知模型的 1M/200K 启发式) —— 只够展示,
+   *   拿它当上限会把真实窗口压小, 上下文占比与 memory flush 阈值全部偏早。
+   *
+   * 所以「能否作为上限」必须跟着值一起传, 不能靠数值大小猜。缺省 (undefined) 一律
+   * 按**未核实**处理: 只用于展示与 fallback, 不参与收敛。
+   */
+  contextWindowVerified?: boolean;
   /** 该模型支持的 effort 列表; 空数组表示不支持 effort 切换 (如 Haiku)。 */
   efforts: readonly Effort[];
   /**

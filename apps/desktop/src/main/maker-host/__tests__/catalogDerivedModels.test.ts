@@ -81,6 +81,28 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     });
   });
 
+  // contextWindowVerified 是 host → maker-core 的唯一桥梁: 不透传, agent 侧就永远
+  // 拿不到「这个窗口能否当上限」,收敛逻辑要么全不生效、要么退回按数值猜。
+  it('contextWindowVerified 双向透传(标记 / 缺省都按原样)', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    for (const p of catalog.providers) {
+      if (p.id !== 'openai') continue;
+      p.models.codex = [
+        model('verified/known', { contextWindow: 372_000, contextWindowVerified: true }),
+        model('unverified/fallback', { contextWindow: 272_000 }),
+      ];
+    }
+    const codex = deriveAvailableModels(catalog, 'codex');
+    expect(codex.find((m) => m.id === 'verified/known')).toMatchObject({
+      contextWindow: 372_000,
+      contextWindowVerified: true,
+    });
+    const fallback = codex.find((m) => m.id === 'unverified/fallback');
+    expect(fallback?.contextWindow).toBe(272_000);
+    // 缺省不得被派生成 false / true —— 保持 undefined,语义即「未核实」。
+    expect(fallback && 'contextWindowVerified' in fallback).toBe(false);
+  });
+
   it('注入后:按 provider 序 union + id 首见去重(anthropic 先于 xd,fast 分叉取首见)', () => {
     const cc = deriveAvailableModels(injectedCatalog(), 'claude-code');
     const ids = cc.map((m) => m.id);

@@ -34,6 +34,15 @@ export interface ModelDescriptor {
   mode?: string;
   description?: string;
   contextWindow: number;
+  /**
+   * `contextWindow` 是否为**显式声明**的真实上限,而不是派生时补的兜底常量
+   * (codex `model/list` 一律 272K、自定义 provider 未填时的 200K、Anthropic 未知模型
+   * 启发式)。两者数值上无从区分,所以「能否当上限」必须跟着值一起传。
+   *
+   * 缺省按未核实处理:只用于展示与兜底,不拿去压 SDK 实测的窗口
+   * (见 lib/contextWindow.ts 的 resolveDisplayContextWindow)。
+   */
+  contextWindowVerified?: boolean;
   efforts: readonly Effort[];
   effortDisplayNames?: Partial<Record<Effort, string>>;
   defaultEffort: Effort | null;

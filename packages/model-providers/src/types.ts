@@ -234,6 +234,18 @@ export interface CatalogModel {
   sortOrder?: number;
   /** 上下文窗口（tokens）。该 agent 下的权威值(host 派生进 ModelDescriptor.contextWindow)。 */
   contextWindow: number;
+  /**
+   * `contextWindow` 是否为**显式声明**的真实上限,而非派生时补的兜底值。
+   *
+   * 目录条目的窗口可能来自产品目录写定 / 上游明示 / 用户填写(都算显式),也可能是
+   * 上游不给元数据时补的常量(codex `model/list` 一律 272K、自定义 provider 未填时的
+   * 200K、Anthropic 未知模型启发式)。两者数值上无法区分,但只有前者能用来收敛
+   * 运行期上报的窗口 —— 拿兜底值当上限会把真实窗口压小。
+   *
+   * 缺省(undefined)一律按未核实处理。语义与 maker-core 的
+   * `ModelDescriptor.contextWindowVerified` 一致,由 host 的 toDescriptor 透传。
+   */
+  contextWindowVerified?: boolean;
   maxOutput?: number;
   /** 支持的 effort 档；空数组 = 不支持切换（如 Haiku / 部分 provider-managed 模型）。 */
   efforts: Effort[];

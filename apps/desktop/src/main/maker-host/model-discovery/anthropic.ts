@@ -140,12 +140,25 @@ function normalizeModelId(raw: string): string {
   return raw.replace(/\[[^\]]*\]$/, '').replace(/-20\d{6}$/, '');
 }
 
-/** contextWindow 规则:HTTP 明示 > 目录已知值 > 未知模型启发式(默认 1M,Haiku 200k)。 */
-function contextWindowFor(id: string, explicit?: number): number {
-  if (typeof explicit === 'number' && explicit > 0) return explicit;
+/**
+ * contextWindow 规则:HTTP 明示 > 目录已知值 > 未知模型启发式(默认 1M,Haiku 200k)。
+ *
+ * 前两档是**显式声明**的真实上限,一并标记 contextWindowVerified 让下游可以拿它收敛
+ * 运行期上报的窗口;最后一档是猜的,不标记 —— 否则未知模型会被一个启发式常量当成硬
+ * 上限(见 CatalogModel.contextWindowVerified 注释)。返回可直接展开进 CatalogModel。
+ */
+function contextWindowFor(
+  id: string,
+  explicit?: number,
+): { contextWindow: number; contextWindowVerified?: true } {
+  if (typeof explicit === 'number' && explicit > 0) {
+    return { contextWindow: explicit, contextWindowVerified: true };
+  }
   const catalogWindow = getCindyModelContextWindow(id);
-  if (catalogWindow !== null) return catalogWindow;
-  return /haiku/.test(id) ? 200_000 : 1_000_000;
+  if (catalogWindow !== null) {
+    return { contextWindow: catalogWindow, contextWindowVerified: true };
+  }
+  return { contextWindow: /haiku/.test(id) ? 200_000 : 1_000_000 };
 }
 
 function pickDefaultEffort(efforts: Effort[]): Effort | null {
@@ -332,7 +345,7 @@ export function mapAnthropicSdkModels(raw: unknown): SdkMappedModel[] {
         ...(typeof e.description === 'string' && e.description.length > 0
           ? { description: e.description }
           : {}),
-        contextWindow: contextWindowFor(id),
+        ...contextWindowFor(id),
         efforts,
         defaultEffort,
         supportsFastMode: e.supportsFastMode === true,
@@ -450,7 +463,7 @@ export function mapAnthropicHttpModels(raw: unknown): HttpMappedModel[] {
         name: typeof e.display_name === 'string' && e.display_name.length > 0 ? e.display_name : id,
         group: 'anthropic',
         sortOrder: out.length,
-        contextWindow: contextWindowFor(id, maxInput ?? undefined),
+        ...contextWindowFor(id, maxInput ?? undefined),
         efforts,
         defaultEffort,
         supportsFastMode: caps?.fast_mode === true,
@@ -634,7 +647,7 @@ export async function loadAnthropicModelsFromDiskCache(): Promise<void> {
         : fallbackEffortBaseline(model.id);
       return {
         ...model,
-        contextWindow: contextWindowFor(model.id, explicitWindows.get(model.id)),
+        ...contextWindowFor(model.id, explicitWindows.get(model.id)),
         ...(effortBaseline ?? {}),
       };
     });

@@ -537,6 +537,10 @@ function computeMerged(): Catalog {
           name: gm.name ?? gm.id,
           group: gm.group ?? 'custom:xd',
           contextWindow: ov.contextWindow ?? gm.contextWindow ?? 200_000,
+          // override 或 gateway 模型显式给了才算真实上限;落到 200_000 兜底的不标记。
+          ...(ov.contextWindow !== undefined || gm.contextWindow !== undefined
+            ? { contextWindowVerified: true }
+            : {}),
           efforts,
           defaultEffort,
           supportsFastMode: ov.supportsFastMode ?? gm.supportsFastMode ?? false,

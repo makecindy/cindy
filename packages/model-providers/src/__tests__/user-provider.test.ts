@@ -122,6 +122,12 @@ describe('buildUserProvider (per-runtime)', () => {
       ['long-context', 1_000_000],
       ['default-context', DEFAULT_CUSTOM_CONTEXT_WINDOW],
     ]);
+    // 只有用户自己填的窗口算「已核实」,可以拿去收敛运行期上报值;走 200K 兜底的那条
+    // 不标记 —— 否则真实 1M 的端点会被这个展示用默认值压到 200K。
+    expect(p.models.codex?.map((m) => [m.id, m.contextWindowVerified])).toEqual([
+      ['long-context', true],
+      ['default-context', undefined],
+    ]);
   });
 
   it('attaches per-runtime custom headers (still no api key)', () => {

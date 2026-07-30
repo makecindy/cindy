@@ -14659,6 +14659,8 @@ describe('CodexAgent context window reporting', () => {
     id: 'codex/gpt-5.6-sol',
     displayName: 'GPT-5.6-Sol',
     contextWindow: 372_000,
+    // 目录显式声明的真实上限 —— 只有标记过的才够格收敛上报值。
+    contextWindowVerified: true,
     efforts: ['low', 'medium', 'high', 'xhigh'],
     defaultEffort: 'high',
   };
@@ -14668,6 +14670,7 @@ describe('CodexAgent context window reporting', () => {
     id: 'codex/gpt-wide',
     displayName: 'GPT Wide',
     contextWindow: 1_000_000,
+    contextWindowVerified: true,
     efforts: ['low', 'medium', 'high', 'xhigh'],
     defaultEffort: 'high',
   };
@@ -14768,11 +14771,16 @@ describe('CodexAgent context window reporting', () => {
     ).toBe(272_000);
   });
 
-  // 自定义 provider 省略 contextWindow 时,派生会填 DEFAULT_CUSTOM_CONTEXT_WINDOW(200K)
-  // 占位,那是「仅用于展示」的保守兜底、不是已核实的路由上限。拿它当上限会把真实的 1M
-  // 压成 200K,Maker Memory flush 早得离谱。
-  it('does not cap with the 200K placeholder a custom provider leaves behind', async () => {
-    const placeholderModel = { ...wideModel, id: 'custom/unknown-window', contextWindow: 200_000 };
+  // 自定义 provider 省略 contextWindow 时,派生填的 DEFAULT_CUSTOM_CONTEXT_WINDOW(200K)
+  // 是「仅用于展示」的保守兜底、不是已核实的路由上限,所以不带 verified 标记。拿它当上限
+  // 会把真实的 1M 压成 200K,Maker Memory flush 早得离谱。
+  it('does not cap with the unverified placeholder a custom provider leaves behind', async () => {
+    const placeholderModel = {
+      ...wideModel,
+      id: 'custom/unknown-window',
+      contextWindow: 200_000,
+      contextWindowVerified: undefined,
+    };
     expect(
       await reportedContextWindow(
         agentWithCatalog([placeholderModel]),
@@ -14781,6 +14789,26 @@ describe('CodexAgent context window reporting', () => {
         1_000_000,
       ),
     ).toBe(1_000_000);
+  });
+
+  // codex `model/list` 对**每个**发现的模型都填 272K —— 恰恰因为该协议不暴露 context
+  // window 元数据。272K 数值上不像占位, 只能靠 verified 标记识别; 用数值阈值判断会把
+  // 一个运行期报 400K 的模型压到 272K。
+  it('does not cap with the unverified 272K discovery fallback', async () => {
+    const discovered = {
+      ...wideModel,
+      id: 'gpt-5.6-discovered',
+      contextWindow: 272_000,
+      contextWindowVerified: undefined,
+    };
+    expect(
+      await reportedContextWindow(
+        agentWithCatalog([discovered]),
+        'session-ctxwin-discovery-fallback',
+        'gpt-5.6-discovered',
+        400_000,
+      ),
+    ).toBe(400_000);
   });
 
   // host 的 refreshCatalogDerivedModels 靠原地 splice 让已建会话看到刷新后的目录
