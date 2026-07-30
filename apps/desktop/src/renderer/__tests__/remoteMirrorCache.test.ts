@@ -261,6 +261,34 @@ describe('冷缓存 hydrate', () => {
     expect(makerChatStore.getSnapshot(s).messages).toHaveLength(0);
   });
 
+  // review(codex P1):启动竞速里会话先以 origin=undefined 命中本机空库,mapping 注入后
+  // reconcileOpenSessionOrigins 会重载一次。那次重载并没有让缓存过期(这才是本会话第一次
+  // 知道自己是远程会话),压着不 hydrate 的话被控端离线时只剩空白 + spinner。
+  it('origin 首次解析(undefined → deviceId)后的重载仍然借缓存', async () => {
+    const s = sid();
+    // 1) 竞速:mapping 未注入 → 命中本机空库(messageService.list 返回 [])。
+    makerChatStore.ensureInitialMessages(s);
+    await flush(20);
+    expect(makerChatStore.getSnapshot(s).historyLoaded).toBe(true);
+
+    // 2) bootstrap 注入来源;被控端离线(隧道必失败),盘上有上次看到的最近一页。
+    cachedMessages.set(`${DEVICE_ID}::${s}`, [
+      dbMessage(s, 'cold', 'cached before restart', '2026-01-01T00:00:00.000Z') as unknown as Record<
+        string,
+        unknown
+      >,
+    ]);
+    registerRemote(s);
+    remoteListPromise = Promise.reject(new Error('DEVICE_OFFLINE'));
+
+    makerChatStore.reconcileOpenSessionOrigins();
+    await flush(30);
+
+    const snapshot = makerChatStore.getSnapshot(s);
+    expect(snapshot.messages.map((m) => m.clientId)).toEqual(['client-cold']);
+    expect(snapshot.messages[0].cacheHydrated).toBe(true);
+  });
+
   it('缓存页里只要有一条可见锚点就照常种入', async () => {
     const s = sid();
     cachedMessages.set(`${DEVICE_ID}::${s}`, [
@@ -324,6 +352,26 @@ describe('缓存写点纪律', () => {
     ]);
 
     await listMessagesFor(s);
+    await flush();
+
+    expect(putMessages).not.toHaveBeenCalled();
+  });
+
+  // review(codex P1):请求在途期间设备可能被撤销 / 关闭被控,那条路径已经清过盘了;
+  // 迟到的响应若照写,会用清理**之后**的 main 代际把被撤销对端的明文重新落盘。
+  it('响应回来前设备已离场 → 丢弃这次写入(不把被撤销对端的正文写回)', async () => {
+    const s = sid();
+    registerRemote(s);
+    let resolveList: (rows: Message[]) => void = () => {};
+    remoteListPromise = new Promise<Message[]>((resolve) => {
+      resolveList = resolve;
+    });
+
+    const pending = listMessagesFor(s);
+    // 撤销访问 / 关闭被控 → 设备分片被移除,mapping 随之消失。
+    remoteProjectsStore.removeDevice(DEVICE_ID);
+    resolveList([dbMessage(s, 'm1', 'x', '2026-01-01T00:00:00.000Z')]);
+    await pending;
     await flush();
 
     expect(putMessages).not.toHaveBeenCalled();

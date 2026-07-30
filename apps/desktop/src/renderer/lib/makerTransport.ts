@@ -215,7 +215,13 @@ export function listMessagesFor(
   if (!opts?.before && opts?.beforeTs == null) {
     void promise
       .then((rows) => {
-        if (Array.isArray(rows)) persistCachedMessages(deviceId, sessionId, rows);
+        if (!Array.isArray(rows)) return;
+        // 请求在途期间这台设备可能已被撤销 / 关闭被控 / 本机停用控制,那条路径已经
+        // clearCachedDevice 清过盘了。迟到的响应若照写,会用清理**之后**的 main 代际
+        // 把被撤销对端的明文重新落盘,main 侧的作废闸挡不住它(review: codex P1)。
+        // 落盘前重核归属:mapping 已经不在(或已换设备)就直接丢弃这次写入。
+        if (getSessionDeviceId(sessionId) !== deviceId) return;
+        persistCachedMessages(deviceId, sessionId, rows);
       })
       // 拉取失败由调用方处理;这里只是不写缓存(旧缓存保留,离线时正好还能用)。
       .catch(() => undefined);

@@ -5422,15 +5422,21 @@ function ensureInitialMessages(sessionId: string): void {
  * view automatically. Resets pagination cursors and isStreaming flags so the
  * slice looks like a clean session (re-)open.
  */
-function reloadMessages(sessionId: string): void {
+function reloadMessages(sessionId: string, opts?: { allowCacheHydrate?: boolean }): void {
   discardPendingTextDelta(sessionId);
   // 代际递增:作废 in-flight 的 loadOlderMessages 追页窗口(见 _messagesEpoch 注释)。
   bumpMessagesEpoch(sessionId);
   // Drop the in-flight guard so ensureInitialMessages can run again.
   _historyFetchInFlight.delete(sessionId);
-  // 本轮重载**不借**冷缓存:重载的起因(rewind 截断 / origin 漂移)恰恰意味着盘上那份
-  // 缓存已经过期,hydrate 它只会先闪一下刚被截掉的消息。重载后的首拉照常刷新缓存。
-  _cacheHydrateStarted.add(sessionId);
+  // 默认**不借**冷缓存:rewind 截断这类重载的起因恰恰意味着盘上那份缓存已经过期,
+  // hydrate 它只会先闪一下刚被截掉的消息。重载后的首拉照常刷新缓存。
+  //
+  // 例外是启动竞速里的 origin 解析重载(undefined → deviceId):那次重载并没有让缓存
+  // 过期,反而是这个会话**第一次**知道自己是远程会话。压着不 hydrate 的话,被控端离线时
+  // 首拉必然失败,屏上就只剩空白 + spinner —— 而离线可见正是这份缓存的存在理由
+  // (review: codex P1)。调用方据此显式放开(见 reconcileOpenSessionOrigins)。
+  if (opts?.allowCacheHydrate) _cacheHydrateStarted.delete(sessionId);
+  else _cacheHydrateStarted.add(sessionId);
   setState(sessionId, (s) => ({
     ...s,
     messages: [],
@@ -5568,8 +5574,12 @@ function reconcileOpenSessionOrigins(): void {
   for (const sessionId of sessions.keys()) {
     const current = remoteProjectsStore.getSessionDeviceId(sessionId);
     if (current === undefined) continue;
-    if (current === _historyLoadOrigin.get(sessionId)) continue;
-    reloadMessages(sessionId);
+    const loaded = _historyLoadOrigin.get(sessionId);
+    if (current === loaded) continue;
+    // undefined → deviceId 是启动竞速的**首次解析**(上一次首拉命中的是本机空库),
+    // 缓存并未因此过期 → 放开 hydrate,让被控端离线时也能看到上次的最近一页。
+    // 设备之间真的换了 origin(string → 另一个 string)时不放开:那是另一台机器的历史。
+    reloadMessages(sessionId, { allowCacheHydrate: loaded === undefined });
   }
 }
 

@@ -26,6 +26,7 @@
 import { app } from 'electron';
 import path from 'node:path';
 import fsp from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
 
 import { createLogger } from '../logger';
 
@@ -182,7 +183,17 @@ async function writeQueue(entries: readonly PurgeEntry[]): Promise<void> {
     return;
   }
   const payload: StoredQueue = { version: 1, entries: compactEntries(entries) };
-  await fsp.writeFile(file, JSON.stringify(payload), 'utf8');
+  // 原子落位(写 .tmp 再 rename),不能直接覆写:这份文件是「缓存没清干净」唯一的跨重启
+  // 痕迹,覆写期间进程被杀会留下截断的 JSON,下次启动解析失败被当成空队列,而内存兜底
+  // 早随进程消失 —— 那些明文缓存就此永久失去清理机会(review: greptile P1 security)。
+  const tmp = `${file}.${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    await fsp.writeFile(tmp, JSON.stringify(payload), 'utf8');
+    await fsp.rename(tmp, file);
+  } catch (err) {
+    await fsp.rm(tmp, { force: true }).catch(() => undefined);
+    throw err;
+  }
 }
 
 /**

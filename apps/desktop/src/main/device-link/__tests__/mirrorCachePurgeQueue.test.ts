@@ -253,6 +253,47 @@ describe('超量路径分片', () => {
   });
 });
 
+describe('队列文件原子落位', () => {
+  // review(greptile P1 / security):这份文件是「缓存没清干净」唯一的跨重启痕迹。直接覆写时
+  // 进程在写入中途被杀会留下截断的 JSON,下次启动解析失败被当成空队列,而内存兜底早已
+  // 随进程消失 —— 那些明文缓存就此永久失去清理机会。
+  it('写入后不留 .tmp 残留,文件始终是可解析 JSON', async () => {
+    const rootA = await makeOwnerCache('owner-1');
+    const rootB = await makeOwnerCache('owner-2');
+    await enqueuePurge(rootA);
+    await enqueuePurge(rootB);
+
+    expect(fs.readdirSync(userData).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+    const parsed = JSON.parse(await fsp.readFile(queueFile(), 'utf8')) as {
+      entries: Array<{ root: string }>;
+    };
+    expect(parsed.entries.map((e) => e.root).sort()).toEqual([rootA, rootB].sort());
+  });
+
+  it.skipIf((process.getuid?.() ?? 0) === 0)(
+    '落位失败时旧队列内容保持完整(不会被截断成半个文件)',
+    async () => {
+      const rootA = await makeOwnerCache('owner-1');
+      await enqueuePurge(rootA);
+      const before = await fsp.readFile(queueFile(), 'utf8');
+
+      // userData 变只读:tmp 建不出来 → 写入失败。旧实现直接覆写目标文件,这一步就会
+      // 把已有记录截断/清掉;原子落位则原样保留。
+      const rootB = await makeOwnerCache('owner-2');
+      await fsp.chmod(userData, 0o500);
+      try {
+        await expect(enqueuePurge(rootB)).rejects.toThrow();
+        expect(await fsp.readFile(queueFile(), 'utf8')).toBe(before);
+        expect(JSON.parse(before)).toBeTruthy();
+        // 新条目虽然没落盘,本进程内仍会被 drain 重试(内存兜底)。
+        expect(__testing.memoryQueueSize()).toBeGreaterThan(0);
+      } finally {
+        await fsp.chmod(userData, 0o700);
+      }
+    },
+  );
+});
+
 describe('落盘失败', () => {
   // review(codex P1):唯一的持久重试记录写不下去却报成功 = 静默丢失。
   it('队列文件写不下去时 enqueuePurge 抛错,但条目留在内存里仍会被 drain 重试', async () => {
