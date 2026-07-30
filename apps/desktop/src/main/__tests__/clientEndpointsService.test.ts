@@ -1209,8 +1209,13 @@ describe('netlog 产物事后核对(verifyEndpointNetLogCapture)', () => {
     // 它能抓住 symlink / 类型变化,抓不住"号被回收后重建"。
     const capture = prepareEndpointNetLogFile(logDir)!;
     fs.writeFileSync(capture.file, '{}', 'utf8');
-    expect(verifyEndpointNetLogCapture({ ...capture, dirIno: capture.dirIno + 1 })).toBe(false);
-    expect(verifyEndpointNetLogCapture({ ...capture, dirDev: capture.dirDev + 1 })).toBe(false);
+    // Windows 可能把 ino 暴露为 0；生产逻辑会有意跳过无法执行的 inode 身份核对。
+    if (!capture.dirIno) return;
+    // 不用 +1：Windows 的 inode 可能超过 Number.MAX_SAFE_INTEGER，+1 后数值仍相等。
+    const otherIno = capture.dirIno === 1 ? 2 : 1;
+    const otherDev = capture.dirDev === 1 ? 2 : 1;
+    expect(verifyEndpointNetLogCapture({ ...capture, dirIno: otherIno })).toBe(false);
+    expect(verifyEndpointNetLogCapture({ ...capture, dirDev: otherDev })).toBe(false);
   });
 
   it('目标被换成 symlink → 不通过', () => {
