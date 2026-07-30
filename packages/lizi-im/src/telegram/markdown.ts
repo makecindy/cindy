@@ -92,6 +92,12 @@ function renderInline(text: string): string {
         return `<code>${escapeHtml(part.slice(1, -1))}</code>`;
       }
       let out = escapeHtml(part);
+      // 网络图片语法 ![alt](http…) 降级为链接(Telegram 文本消息内嵌不了图),
+      // 先于普通链接处理避免残留孤儿 '!'。
+      out = out.replace(
+        /!\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+        (_m, label: string, url: string) => `<a href="${url.replace(/"/g, '&quot;')}">${label}</a>`,
+      );
       // [text](url) — 只放行 http(s), 其它 scheme 保留原文(不构造可点链接)。
       out = out.replace(
         /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
