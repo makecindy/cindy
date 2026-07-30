@@ -118,7 +118,7 @@
       "personalization": "개인화",
       "chipMetrics": "사용량 표시기",
       "memory": "메모리",
-      "subagentModels": "하위 에이전트 모델",
+      "subagentModels": "하위 에이전트",
       "compaction": "컨텍스트 압축",
       "terminalShell": "기본 터미널 셸",
       "linkOpen": "링크 열기 방식",
@@ -1782,12 +1782,30 @@
       }
     },
     "subagentModels": {
-      "title": "하위 에이전트 모델",
-      "description": "Claude Code와 Codex가 하위 작업을 실행할 때 사용할 기본 모델을 설정합니다. 설정은 진입점별로 적용되며 모델별로 저장되지 않습니다.",
+      "title": "하위 에이전트",
+      "description": "Claude Code와 Codex가 하위 작업을 실행할 때 사용할 기본 모델을 설정하고 Codex 하위 에이전트의 가드레일을 구성합니다. 설정은 진입점별로 적용되며 모델별로 저장되지 않습니다.",
       "unspecified": "지정 안 함(기본 동작 사용)",
-      "codexUnavailable": "현재 Codex 버전에서는 안전한 재정의를 지원하지 않습니다",
-      "hint": "선택 가능한 모델은 연결된 모델 소스에 따라 달라집니다. 지정하지 않으면 Agent의 기본 설정을 사용합니다. Claude Code 변경 사항은 새 세션부터 적용되며, 현재 Codex 버전은 하위 에이전트 모델 재정의를 지원하지 않습니다.",
-      "saveFailed": "하위 에이전트 모델 저장 실패"
+      "hint": "선택 가능한 모델은 연결된 모델 소스에 따라 달라집니다. 지정하지 않으면 Agent의 기본 설정을 사용합니다. Claude Code 변경 사항은 새 세션부터 적용됩니다. Codex 변경 사항은 유휴 상태에서 즉시 재시작되어 반영되며, 작업 실행 중에는 로컬 Codex 세션이 모두 유휴 상태가 된 후 자동 적용됩니다.",
+      "codexV2ModelHint": "Sol / Terra(멀티 에이전트 V2)는 V2 카탈로그 모델(현재 gpt-5.6-sol과 gpt-5.6-terra)만 하위 에이전트 기본 모델로 허용합니다. 다른 모델을 지정하면 Sol / Terra에서 하위 에이전트 생성이 실패합니다. 이전 버전 멀티 에이전트(V1)에는 영향이 없습니다.",
+      "saveFailed": "하위 에이전트 설정 저장 실패",
+      "guardrails": {
+        "title": "Codex 하위 에이전트 가드레일",
+        "enableHint": "Codex가 작업 중 일회성 하위 에이전트를 생성하도록 허용합니다. 끄면 이전 버전 멀티 에이전트(V1)와 Sol / Terra(V2) 모두에 적용됩니다.",
+        "enableAria": "Codex 하위 에이전트 허용",
+        "concurrencyLabel": "하위 에이전트 동시 실행 한도",
+        "concurrencyHint": "동시에 실행할 수 있는 하위 에이전트 수의 상한입니다. 하위 에이전트는 각각 모델 할당량을 소비합니다. Ultra 단계에서 동시 실행이 8에 도달하면 Codex가 경고합니다.",
+        "concurrencyFollowDefault": "Codex 기본값 따르기(이전 버전 V1은 6, Sol / Terra는 3)",
+        "concurrencyAria": "Codex 하위 에이전트 동시 실행 한도 조정",
+        "concurrencyCustomAria": "Codex 하위 에이전트 동시 실행 한도 사용자 지정",
+        "nestedLabel": "하위 에이전트의 하위 에이전트 생성 허용",
+        "nestedHint": "이전 버전 멀티 에이전트(V1)에만 적용되며 Sol / Terra(V2)는 이 설정을 무시합니다.",
+        "nestedAria": "하위 에이전트의 하위 에이전트 생성 허용",
+        "localOnlyHint": "이 가드레일은 이 컴퓨터에서 실행되는 Codex에만 적용되며 SSH 원격의 Codex에는 영향을 주지 않습니다."
+      },
+      "toast": {
+        "saved": "하위 에이전트 설정이 저장되었습니다",
+        "deferredSuffix": " — 실행 중인 Codex 세션에는 현재 작업이 끝난 후 적용됩니다"
+      }
     },
     "compaction": {
       "title": "컨텍스트 압축",

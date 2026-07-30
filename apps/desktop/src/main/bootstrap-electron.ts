@@ -384,6 +384,7 @@ import {
 } from './right-sidebar-window/settings-store.js';
 import {
   anySessionInTurn,
+  applyCodexSpawnConfigChangeWithRestart,
   clearDeferredCodexRestartForOwnerBoundary,
   collectAgentInputQueueScanTexts,
   createAutomationUserTurnGitBaselineHooks,
@@ -539,6 +540,10 @@ import {
   type ImDefaultSettingsPatch,
 } from '../shared/imDefaultSettings.js';
 import {
+  SUBAGENT_MODEL_SETTINGS_DEFAULTS,
+  codexSpawnConfigChanged,
+  isCodexSubagentEffort,
+  isValidCodexSubagentConcurrencyInput,
   isValidSubagentModelIdInput,
   normalizeSubagentModelId,
   reconcileSubagentModelSettingsPatch,
@@ -2561,17 +2566,37 @@ const registerIpcHandlers = () => {
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_SET, async (_e, patch: unknown) => {
     // 配对一致性按「patch 合并当前存储」判定:有效模型为 null 时来源强制清空,
     // 同时兜住「清模型漏清来源」与「模型未指定时的 provider-only patch」两类孤儿写入。
-    writeSubagentModelSettingsPatch(
-      reconcileSubagentModelSettingsPatch(
-        parseSubagentModelSettingsPatch(patch),
-        readSubagentModelSettings(),
-      ),
+    const current = readSubagentModelSettings();
+    const parsed = reconcileSubagentModelSettingsPatch(
+      parseSubagentModelSettingsPatch(patch),
+      current,
     );
-    return subagentModelSettingsWire();
+    // codex 的 -c 注入在共享 app-server 的 spawn 时刻,变更触及注入键且有存活
+    // maker 时走 DeferredCodexRestart 执行体(空闲即软重启,busy 落盘后延迟兑现);
+    // 无 maker(启动早期/已关)时新 spawn 天然现读新值,直接落盘。
+    const needsCodexRestart =
+      codexSpawnConfigChanged(current, { ...current, ...parsed }) && getMakerIfReady() !== null;
+    if (!needsCodexRestart) {
+      writeSubagentModelSettingsPatch(parsed);
+      return { ...subagentModelSettingsWire(), codexRestartDeferred: false };
+    }
+    return applyCodexSpawnConfigChangeWithRestart(async () => {
+      writeSubagentModelSettingsPatch(parsed);
+      return subagentModelSettingsWire();
+    });
   });
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_RESET, async () => {
-    resetSubagentModelSettings();
-    return subagentModelSettingsWire();
+    const needsCodexRestart =
+      codexSpawnConfigChanged(readSubagentModelSettings(), SUBAGENT_MODEL_SETTINGS_DEFAULTS) &&
+      getMakerIfReady() !== null;
+    if (!needsCodexRestart) {
+      resetSubagentModelSettings();
+      return { ...subagentModelSettingsWire(), codexRestartDeferred: false };
+    }
+    return applyCodexSpawnConfigChangeWithRestart(async () => {
+      resetSubagentModelSettings();
+      return subagentModelSettingsWire();
+    });
   });
 
   // Claude Code 自动上下文压缩阈值 IPC —— store 跟 Maker 单例无关, 提前注册。
@@ -5925,6 +5950,34 @@ function parseSubagentModelSettingsPatch(raw: unknown): SubagentModelSettingsPat
       throwIpcError('INVALID_PARAMS', `subagent model ${key} must be a valid string or null`);
     }
     patch[key] = normalizeSubagentModelId(value);
+  }
+  // 护栏/effort 字段类型各异(enum / boolean / number|null),逐字段分支校验。
+  if ('codexEffort' in input) {
+    if (input.codexEffort !== null && !isCodexSubagentEffort(input.codexEffort)) {
+      throwIpcError('INVALID_PARAMS', 'subagent codexEffort must be a known effort or null');
+    }
+    patch.codexEffort = input.codexEffort as SubagentModelSettingsPatch['codexEffort'];
+  }
+  if ('codexSubagentsEnabled' in input) {
+    if (typeof input.codexSubagentsEnabled !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'subagent codexSubagentsEnabled must be boolean');
+    }
+    patch.codexSubagentsEnabled = input.codexSubagentsEnabled;
+  }
+  if ('codexMaxConcurrentSubagents' in input) {
+    if (!isValidCodexSubagentConcurrencyInput(input.codexMaxConcurrentSubagents)) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        'subagent codexMaxConcurrentSubagents must be an integer in range or null',
+      );
+    }
+    patch.codexMaxConcurrentSubagents = input.codexMaxConcurrentSubagents;
+  }
+  if ('codexAllowNestedSubagents' in input) {
+    if (typeof input.codexAllowNestedSubagents !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'subagent codexAllowNestedSubagents must be boolean');
+    }
+    patch.codexAllowNestedSubagents = input.codexAllowNestedSubagents;
   }
   return patch;
 }

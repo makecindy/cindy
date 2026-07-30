@@ -118,7 +118,7 @@
       "personalization": "パーソナライズ",
       "chipMetrics": "使用量インジケーター",
       "memory": "メモリ",
-      "subagentModels": "サブエージェントモデル",
+      "subagentModels": "サブエージェント",
       "compaction": "コンテキスト圧縮",
       "terminalShell": "デフォルトターミナルシェル",
       "linkOpen": "リンクの開き方",
@@ -1782,12 +1782,30 @@
       }
     },
     "subagentModels": {
-      "title": "サブエージェントモデル",
-      "description": "Claude Code と Codex がサブタスクを実行するときに使用する既定のモデルを設定します。設定は入口ごとに適用され、モデルごとには保存されません。",
+      "title": "サブエージェント",
+      "description": "Claude Code と Codex がサブタスクを実行するときに使用する既定のモデルを設定し、Codex サブエージェントのガードレールを構成します。設定は入口ごとに適用され、モデルごとには保存されません。",
       "unspecified": "指定しない（既定の動作を使用）",
-      "codexUnavailable": "現在の Codex バージョンでは安全な上書きに未対応です",
-      "hint": "選択できるモデルは接続済みのモデルソースによって異なります。未指定の場合は Agent 本来の既定値を使用します。Claude Code の変更は新規セッションから有効になり、現在の Codex バージョンではサブエージェントのモデル上書きに対応していません。",
-      "saveFailed": "サブエージェントモデルの保存に失敗しました"
+      "hint": "選択できるモデルは接続済みのモデルソースによって異なります。未指定の場合は Agent 本来の既定値を使用します。Claude Code の変更は新規セッションから有効になります。Codex の変更はアイドル時に即時再起動で反映され、タスク実行中はローカルの Codex セッションがすべてアイドルになった後に自動適用されます。",
+      "codexV2ModelHint": "Sol / Terra（マルチエージェント V2）は V2 カタログモデル（現在は gpt-5.6-sol と gpt-5.6-terra）のみをサブエージェントの既定モデルとして受け付けます。他のモデルを指定すると Sol / Terra でのサブエージェント作成は失敗します。旧版マルチエージェント（V1）には影響しません。",
+      "saveFailed": "サブエージェント設定の保存に失敗しました",
+      "guardrails": {
+        "title": "Codex サブエージェントガードレール",
+        "enableHint": "Codex がタスク実行中に使い捨てのサブエージェントを作成することを許可します。オフにすると旧版マルチエージェント（V1）と Sol / Terra（V2）の両方に適用されます。",
+        "enableAria": "Codex のサブエージェントを許可",
+        "concurrencyLabel": "サブエージェントの同時実行上限",
+        "concurrencyHint": "同時に実行できるサブエージェント数の上限です。サブエージェントはそれぞれモデルのクォータを消費します。Ultra 段階で同時実行が 8 に達すると Codex が警告します。",
+        "concurrencyFollowDefault": "Codex の既定に従う（旧版 V1 は 6、Sol / Terra は 3）",
+        "concurrencyAria": "Codex サブエージェントの同時実行上限を調整",
+        "concurrencyCustomAria": "Codex サブエージェントの同時実行上限をカスタマイズ",
+        "nestedLabel": "サブエージェントによるサブエージェント作成を許可",
+        "nestedHint": "旧版マルチエージェント（V1）のみ有効で、Sol / Terra（V2）はこの設定を無視します。",
+        "nestedAria": "サブエージェントによるサブエージェント作成を許可",
+        "localOnlyHint": "これらのガードレールはこのマシンで実行される Codex にのみ適用され、SSH リモートの Codex には影響しません。"
+      },
+      "toast": {
+        "saved": "サブエージェント設定を保存しました",
+        "deferredSuffix": " — 実行中の Codex セッションには現在のタスク終了後に適用されます"
+      }
     },
     "compaction": {
       "title": "コンテキスト圧縮",

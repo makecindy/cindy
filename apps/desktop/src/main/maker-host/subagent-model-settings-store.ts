@@ -6,6 +6,8 @@
 
 import {
   SUBAGENT_MODEL_SETTINGS_DEFAULTS,
+  isCodexSubagentEffort,
+  normalizeCodexSubagentConcurrency,
   normalizeSubagentModelId,
   type SubagentModelSettings,
   type SubagentModelSettingsPatch,
@@ -38,6 +40,14 @@ function normalize(raw: unknown): SubagentModelSettings {
       claudeCode === null ? null : normalizeSubagentModelId(input.claudeCodeProviderId),
     codex,
     codexProviderId: codex === null ? null : normalizeSubagentModelId(input.codexProviderId),
+    // effort 不依附模型(effort-only 是合法上游配置,见 shared 契约注释)。
+    codexEffort: isCodexSubagentEffort(input.codexEffort) ? input.codexEffort : null,
+    // 垃圾值回退方向按语义定:总开关 fail-open(保能力),嵌套 fail-closed(少放权)。
+    codexSubagentsEnabled: input.codexSubagentsEnabled === false ? false : true,
+    codexMaxConcurrentSubagents: normalizeCodexSubagentConcurrency(
+      input.codexMaxConcurrentSubagents,
+    ),
+    codexAllowNestedSubagents: input.codexAllowNestedSubagents === true,
   };
 }
 

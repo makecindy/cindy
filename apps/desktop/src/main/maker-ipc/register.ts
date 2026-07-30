@@ -753,6 +753,23 @@ async function applyMemoryChangeWithCodexRestart<T extends object>(
   );
 }
 
+/**
+ * 子代理 spawn 配置(`-c agents.*`)变更的统一执行体:复用 Memory 设置的
+ * 「能立即软重启就重启,busy 就延迟到全部本地 Codex 会话空闲」链路。与 Memory
+ * 的差异只有一点:子代理配置没有 native 热推维度(唯一杠杆是重启后新 spawn 现读
+ * store),所以 applyRuntime 传 no-op。调用方(bootstrap-electron 的
+ * subagent-model-settings SET/RESET)负责先判定变更是否真的触及 spawn 注入键。
+ */
+export async function applyCodexSpawnConfigChangeWithRestart<T extends object>(
+  persist: () => Promise<T>,
+): Promise<T & { codexRestartDeferred: boolean }> {
+  return applyMemoryChangeWithCodexRestart({
+    persist,
+    applyRuntime: async () => {},
+    reason: 'subagent-spawn-config-change',
+  });
+}
+
 // ─── Sessions push helpers ────────────────────────────────────────────────
 // maker-ipc 会话创建路径与 scheduler-host 共享此导出，统一广播
 // `local-db:sessions:created`；renderer sessionsStore.onCreated 收到后

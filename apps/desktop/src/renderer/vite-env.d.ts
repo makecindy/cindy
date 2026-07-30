@@ -237,6 +237,7 @@ type ImDefaultSettingsState = import('../shared/imDefaultSettings').ImDefaultSet
 type ImDefaultSettingsChannel = import('../shared/imDefaultSettings').ImDefaultSettingsChannel;
 type SubagentModelSettingsPatch = import('../shared/subagentModelSettings').SubagentModelSettingsPatch;
 type SubagentModelSettingsState = import('../shared/subagentModelSettings').SubagentModelSettingsState;
+type SubagentModelSettingsWriteResult = import('../shared/subagentModelSettings').SubagentModelSettingsWriteResult;
 
 interface VoiceInputShortcut {
   trigger?: 'keyboard' | 'modifier';
@@ -4166,8 +4167,8 @@ interface ElectronAPI {
 
     /** 子代理模型覆盖。null 表示不注入覆盖，仅对新建 agent 会话生效。 */
     subagentModelSettingsGet: () => Promise<SubagentModelSettingsState>;
-    subagentModelSettingsSet: (patch: SubagentModelSettingsPatch) => Promise<SubagentModelSettingsState>;
-    subagentModelSettingsReset: () => Promise<SubagentModelSettingsState>;
+    subagentModelSettingsSet: (patch: SubagentModelSettingsPatch) => Promise<SubagentModelSettingsWriteResult>;
+    subagentModelSettingsReset: () => Promise<SubagentModelSettingsWriteResult>;
 
     /** Silent invalid_encrypted_content recovery setting. */
     silentEncryptedRetryGet: () => Promise<{ enabled: boolean; isCustomized?: boolean; defaultEnabled?: boolean }>;

@@ -240,6 +240,8 @@ export interface MemoryChangeParts<T extends object> {
    * 不能 mid-turn 热更正在跑的任务(review P1 2026-07-23)。
    */
   applyRuntime: () => Promise<void>;
+  /** 延迟重启诊断日志里的触发源标签;缺省 'memory-change'(历史默认)。 */
+  reason?: string;
 }
 
 export interface MemoryChangeWithCodexRestartDeps {
@@ -299,7 +301,7 @@ export async function runMemoryChangeWithCodexRestart<T extends object>(
   }
   if (!prepared) {
     const result = await parts.persist();
-    deps.scheduleDeferredRestart('memory-change', parts.applyRuntime);
+    deps.scheduleDeferredRestart(parts.reason ?? 'memory-change', parts.applyRuntime);
     return { ...result, codexRestartDeferred: true };
   }
   let changed = false;

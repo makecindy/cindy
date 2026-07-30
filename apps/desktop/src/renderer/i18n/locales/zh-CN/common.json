@@ -118,7 +118,7 @@
       "personalization": "个性化",
       "chipMetrics": "用量指示器",
       "memory": "记忆",
-      "subagentModels": "Subagent 模型",
+      "subagentModels": "Subagent",
       "compaction": "上下文压缩",
       "terminalShell": "默认终端 shell",
       "linkOpen": "链接打开方式",
@@ -1782,12 +1782,30 @@
       }
     },
     "subagentModels": {
-      "title": "Subagent 模型",
-      "description": "分别设置 Claude Code 和 Codex 执行子任务时使用的默认模型。设置按入口生效，不会为每个模型单独保存。",
+      "title": "Subagent",
+      "description": "分别设置 Claude Code 和 Codex 执行子任务时使用的默认模型，并为 Codex Subagent 配置运行护栏。设置按入口生效，不会为每个模型单独保存。",
       "unspecified": "不指定（跟随原逻辑）",
-      "codexUnavailable": "当前 Codex 版本暂不支持安全覆盖",
-      "hint": "可选模型取决于已连接的模型来源；留空表示使用 Agent 原本的默认设置。Claude Code 的修改从新建的 Agent 会话开始生效，Codex 当前版本暂不支持覆盖 Subagent 模型。",
-      "saveFailed": "保存 Subagent 模型失败"
+      "hint": "可选模型取决于已连接的模型来源；留空表示使用 Agent 原本的默认设置。Claude Code 的修改从新建的 Agent 会话开始生效；Codex 的修改在空闲时立即重启生效，有任务运行时会在本地 Codex 会话全部空闲后自动应用。",
+      "codexV2ModelHint": "Sol / Terra（Multi-Agent V2）仅接受 V2 目录模型（当前为 gpt-5.6-sol 与 gpt-5.6-terra）作为 Subagent 默认模型；指定其它模型时，Sol / Terra 下创建 Subagent 会失败，旧版（V1）不受影响。",
+      "saveFailed": "保存 Subagent 设置失败",
+      "guardrails": {
+        "title": "Codex Subagent 护栏",
+        "enableHint": "允许 Codex 在执行任务时创建一次性 Subagent。关闭后对旧版（V1）和 Sol / Terra（V2）都生效。",
+        "enableAria": "允许 Codex 使用 Subagent",
+        "concurrencyLabel": "Subagent 并发上限",
+        "concurrencyHint": "同时运行的 Subagent 数量上限。每个 Subagent 都会消耗模型配额，调低更省；Ultra 档位下并发达到 8 时 Codex 会发出用量警告。",
+        "concurrencyFollowDefault": "跟随 Codex 默认（旧版 V1 为 6，Sol / Terra 为 3）",
+        "concurrencyAria": "调整 Codex Subagent 并发上限",
+        "concurrencyCustomAria": "自定义 Codex Subagent 并发上限",
+        "nestedLabel": "允许 Subagent 再创建 Subagent",
+        "nestedHint": "仅旧版 Codex Multi-Agent（V1）生效，Sol / Terra（V2）会忽略此设置。",
+        "nestedAria": "允许 Subagent 再创建 Subagent",
+        "localOnlyHint": "以上护栏仅对本机运行的 Codex 生效，SSH 远程连接的 Codex 不受影响。"
+      },
+      "toast": {
+        "saved": "Subagent 设置已保存",
+        "deferredSuffix": " — 运行中的 Codex 对话将在当前任务结束后应用"
+      }
     },
     "compaction": {
       "title": "上下文压缩",
