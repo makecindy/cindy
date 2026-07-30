@@ -68,6 +68,7 @@ export class TabRegistry {
    */
   private readonly destroyedCleanup = new Map<string, () => void>();
   private readonly pinListeners = new Set<PinChangeListener>();
+  private readonly reportListeners = new Set<(record: TabRecord) => void>();
 
   constructor(private readonly opts: TabRegistryOptions) {}
 
@@ -83,6 +84,23 @@ export class TabRegistry {
     this.detachDestroyedListener(record.tabId);
     this.records.set(record.tabId, record);
     this.attachDestroyedListener(record);
+    for (const l of this.reportListeners) {
+      try {
+        l(record);
+      } catch (err) {
+        this.opts.logger.warn('report listener threw (ignored)', err);
+      }
+    }
+  }
+
+  /**
+   * 订阅 report 到达事件。popup 归属等待用:guest 的 window.open 可能先于
+   * renderer 的 report 抵达 main,等待方靠这个事件在 report 落地的瞬间完成
+   * 反查,而不是靠固定轮询窗口赌时序。返回退订函数。
+   */
+  onReport(listener: (record: TabRecord) => void): () => void {
+    this.reportListeners.add(listener);
+    return () => this.reportListeners.delete(listener);
   }
 
   /**

@@ -74,6 +74,20 @@ describe('TabRegistry — report / lookup / release', () => {
     expect(registry.listBySession('s2')).toHaveLength(0);
   });
 
+  it('onReport 在 report 落地时通知订阅者(popup 归属的事件驱动等待用)', () => {
+    const { registry, wcMap } = buildRegistry();
+    wcMap.set(101, fakeWc(101));
+    const seen: number[] = [];
+    const unsub = registry.onReport((record) => seen.push(record.webContentsId));
+
+    registry.report({ sessionId: 's1', tabId: 't1', webContentsId: 101 });
+    expect(seen).toEqual([101]);
+
+    unsub();
+    registry.report({ sessionId: 's1', tabId: 't1', webContentsId: 101 });
+    expect(seen).toEqual([101]);
+  });
+
   it('findByWebContentsId reverse-looks-up the owning tab record', () => {
     const { registry, wcMap } = buildRegistry();
     wcMap.set(101, fakeWc(101));

@@ -26,7 +26,9 @@ import { BROWSER_PARTITION } from '../../shared/webviewPartition';
 import { getEffectiveAppShortcuts, type AppShortcutId } from '../../shared/appShortcuts';
 import {
   DEFERRED_POPUP_ROUTE_TIMEOUT_MS,
+  POPUP_OPENER_EVENT_WAIT_TIMEOUT_MS,
   POPUP_OPENER_WAIT_TIMEOUT_MS,
+  setRsbPopupOpenerReportSubscriber,
   RSB_BROWSER_POPUP_CHANNEL,
   applyGhostWebviewHardening,
   applyWebviewHardening,
@@ -204,6 +206,7 @@ describe('installDeferredPopupRouter', () => {
   afterEach(() => {
     vi.useRealTimers();
     setRsbPopupOpenerResolver(null);
+    setRsbPopupOpenerReportSubscriber(null);
   });
 
   function makePopupHarness() {
@@ -362,6 +365,67 @@ describe('installDeferredPopupRouter', () => {
       disposition: 'foreground-tab',
       openerTabId: 'tab-1',
       openerSessionId: 'session-a',
+    });
+  });
+
+  it('event-driven wait: report 落地的瞬间完成反查路由,不赌固定窗口', async () => {
+    // 事件驱动档(生产路径):bootstrap 注入 report 订阅钩子后,归属等待不再是
+    // 25ms 轮询 + 1s 硬超时 —— report 到达即命中,晚于 1s 的 report 也不丢归属。
+    const { childContents, hostContents, popupWindow } = makePopupHarness();
+    let registered: { tabId: string; sessionId: string } | null = null;
+    const reportListeners = new Set<(id: number) => void>();
+    setRsbPopupOpenerResolver((id) => (id === 42 ? registered : null));
+    setRsbPopupOpenerReportSubscriber((listener) => {
+      reportListeners.add(listener);
+      return () => reportListeners.delete(listener);
+    });
+
+    installDeferredPopupRouter(
+      hostContents,
+      popupWindow as unknown as BrowserWindow,
+      'foreground-tab',
+      42,
+    );
+    childContents.emit('will-navigate', {}, 'https://accounts.example.com/oauth');
+    expect(hostContents.send).not.toHaveBeenCalled();
+
+    // 无关 guest 的 report 不触发路由。
+    for (const l of [...reportListeners]) l(99);
+    expect(hostContents.send).not.toHaveBeenCalled();
+
+    // 目标 guest 的 report 落地(可以远晚于旧的 1s 轮询窗口)→ 立即带归属路由。
+    registered = { tabId: 'tab-1', sessionId: 'session-a' };
+    for (const l of [...reportListeners]) l(42);
+    await vi.waitFor(() => expect(hostContents.send).toHaveBeenCalledTimes(1));
+    expect(hostContents.send).toHaveBeenCalledWith(RSB_BROWSER_POPUP_CHANNEL, {
+      url: 'https://accounts.example.com/oauth',
+      disposition: 'foreground-tab',
+      openerTabId: 'tab-1',
+      openerSessionId: 'session-a',
+    });
+    // 路由完成后订阅已退订,不泄漏 listener。
+    expect(reportListeners.size).toBe(0);
+  });
+
+  it('event-driven wait: 兜底超时后无归属路由(report 永不来的极端场景)', async () => {
+    vi.useFakeTimers();
+    const { childContents, hostContents, popupWindow } = makePopupHarness();
+    setRsbPopupOpenerResolver(() => null);
+    setRsbPopupOpenerReportSubscriber(() => () => undefined);
+
+    installDeferredPopupRouter(
+      hostContents,
+      popupWindow as unknown as BrowserWindow,
+      'foreground-tab',
+      42,
+    );
+    childContents.emit('will-navigate', {}, 'https://accounts.example.com/oauth');
+    expect(hostContents.send).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(POPUP_OPENER_EVENT_WAIT_TIMEOUT_MS + 50);
+    expect(hostContents.send).toHaveBeenCalledWith(RSB_BROWSER_POPUP_CHANNEL, {
+      url: 'https://accounts.example.com/oauth',
+      disposition: 'foreground-tab',
     });
   });
 

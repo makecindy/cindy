@@ -322,9 +322,33 @@ function resolvePopupOpener(webContentsId: number): ResolvedPopupOpener | null {
  *
  * 所以 main 侧不能"尽力反查一次就发":反查落空时把 popup 的路由推迟到 registry
  * 收到该 guest 的记录(或超时)之后。等待只发生在落空分支,命中时零延迟。
+ *
+ * 等待模型分两档:
+ *  - **事件驱动**(bootstrap 注入了 report 订阅钩子,生产路径):report 落地的
+ *    瞬间完成反查,不赌固定窗口;超时只兜"report 永不来"(opener 在上报前就被
+ *    销毁等),可以放得很宽 —— 5s 后仍无归属才降级为无归属路由(落当前 session,
+ *    与本修复之前的行为一致)。
+ *  - **轮询兜底**(订阅钩子未注入:启动早期 / 单测):保持原有 25ms × 1s 短轮询。
  */
 export const POPUP_OPENER_WAIT_TIMEOUT_MS = 1_000;
+export const POPUP_OPENER_EVENT_WAIT_TIMEOUT_MS = 5_000;
 const POPUP_OPENER_WAIT_INTERVAL_MS = 25;
+
+/**
+ * report 到达事件的订阅钩子(与 popupOpenerResolver 同模式注入,保持本模块对
+ * rsb-browser-bridge 的单向解耦)。回调参数是该条 report 的 webContentsId。
+ */
+export type RsbPopupOpenerReportSubscriber = (
+  listener: (webContentsId: number) => void,
+) => () => void;
+
+let popupOpenerReportSubscriber: RsbPopupOpenerReportSubscriber | null = null;
+
+export function setRsbPopupOpenerReportSubscriber(
+  subscriber: RsbPopupOpenerReportSubscriber | null,
+): void {
+  popupOpenerReportSubscriber = subscriber;
+}
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -334,13 +358,39 @@ function delay(ms: number): Promise<void> {
 }
 
 async function waitForPopupOpener(webContentsId: number): Promise<ResolvedPopupOpener | null> {
-  const deadline = Date.now() + POPUP_OPENER_WAIT_TIMEOUT_MS;
-  for (;;) {
-    const opener = resolvePopupOpener(webContentsId);
-    if (opener) return opener;
-    if (Date.now() >= deadline) return null;
-    await delay(POPUP_OPENER_WAIT_INTERVAL_MS);
+  const subscribe = popupOpenerReportSubscriber;
+  if (!subscribe) {
+    // 轮询兜底档(无事件源可订阅)。
+    const deadline = Date.now() + POPUP_OPENER_WAIT_TIMEOUT_MS;
+    for (;;) {
+      const opener = resolvePopupOpener(webContentsId);
+      if (opener) return opener;
+      if (Date.now() >= deadline) return null;
+      await delay(POPUP_OPENER_WAIT_INTERVAL_MS);
+    }
   }
+  return new Promise((resolve) => {
+    let settled = false;
+    let unsub: (() => void) | null = null;
+    const timer = setTimeout(() => {
+      finish(resolvePopupOpener(webContentsId));
+    }, POPUP_OPENER_EVENT_WAIT_TIMEOUT_MS);
+    timer.unref?.();
+    const finish = (value: ResolvedPopupOpener | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      unsub?.();
+      resolve(value);
+    };
+    unsub = subscribe((reportedId) => {
+      if (reportedId !== webContentsId) return;
+      finish(resolvePopupOpener(webContentsId));
+    });
+    // 订阅建立后再同步查一次,堵"report 在建立订阅之前恰好落地"的竞态窗。
+    const now = resolvePopupOpener(webContentsId);
+    if (now) finish(now);
+  });
 }
 
 /**
