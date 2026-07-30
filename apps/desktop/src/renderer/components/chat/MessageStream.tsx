@@ -31,7 +31,11 @@ import { createPortal } from 'react-dom';
 import { GitFork } from 'lucide-react';
 import { SelectionQuoteButton } from './SelectionQuoteButton';
 import { useTranslation } from 'react-i18next';
-import { findMessageTodoInsertions, isAgentPlanToolName } from '@cindy/maker-shared/message-render';
+import {
+  findMessageTodoInsertions,
+  isAgentPlanToolName,
+  isDeliveryProseText,
+} from '@cindy/maker-shared/message-render';
 
 import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
 import { Spinner } from '@/components/ui/spinner';
@@ -1406,6 +1410,27 @@ function isWorkActivityItem(it: RenderItem): it is WorkChildItem {
   );
 }
 
+/**
+ * 交付正文 item —— 无论落在 turn 的哪个位置都不折进「已工作 Xs」。
+ *
+ * 为什么只靠 seal 位置不够:「最终答复」只认最后一次动作之后的正文,而 agent
+ * 常见「先输出正文 → 再执行一个收尾副作用(发通知 / 落库 / 提交) → 再说一句
+ * 已完成」。这时真正的交付内容排在收尾动作之前,会被整段折起来,只剩收尾那句
+ * 元数据留在消息流里(实例:2026-07-31 定时巡检的产品决策简报 3250 字被折,
+ * 外面只剩 110 字的「已触发通知」)。
+ *
+ * 判据(长度 / 块级 markdown 结构)由 maker-shared 的 isDeliveryProseText 单一
+ * 提供,两端不各写一份。
+ */
+function isDeliveryProseItem(it: RenderItem): boolean {
+  return (
+    it.type === 'message' &&
+    it.message.role === 'assistant' &&
+    !it.message.systemCardType &&
+    isDeliveryProseText(it.message.content)
+  );
+}
+
 /** 最终可见正文候选:同一用户 turn 内最后一条普通 assistant 文本。 */
 function isAssistantAnswerCandidate(it: RenderItem): it is MessageRenderItem {
   return (
@@ -1810,6 +1835,9 @@ function groupActiveWorkRuns(items: RenderItem[], turnStartTs: number | null = n
  * 连续输出的 assistant 文字视为最终答复阶段,留在组外;若整轮没有真实动作,
  * 只保留最后一条 assistant 正文,此前文字仍视作工作过程。
  *
+ * 位置判定之外还有一条位置无关的兜底:交付正文(见 isDeliveryProseItem)即使排在
+ * 收尾动作之前也不折叠,免得「先出简报 → 再发通知 → 再说一句已完成」把产出藏进组里。
+ *
  * 没有最终正文(被中断 / 停在工具)或最终正文后仍有已完成动作时返回
  * handled:false,交回 groupLegacyWorkRuns 按连续动作折叠。tool_media /
  * agent_plan /运行中子 Agent 等非可归档项保持可见,并作为顺序锚点切开工作组。
@@ -1906,6 +1934,7 @@ function groupAnsweredTurnItems(
       !sealedAnswers.has(i) &&
       !isRunningAgentTask(it) &&
       !isWorkflowTaskItem(it) &&
+      !isDeliveryProseItem(it) &&
       isWorkChild(it)
     ) {
       run.push(it);
