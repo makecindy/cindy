@@ -723,6 +723,36 @@ describe('Responses → Anthropic request translation', () => {
     }]);
   });
 
+  it('converts inline plain-text files to Anthropic text document sources', () => {
+    const result = translateResponsesRequest({
+      model: 'claude',
+      input: [{
+        type: 'input_file',
+        file_data: 'data:text/plain;base64,SGVsbG8gQ2xhdWRlIQ==',
+        filename: 'hello.txt',
+      }],
+    });
+    expect(result.request.messages[0].content).toEqual([{
+      type: 'document',
+      source: {
+        type: 'text',
+        media_type: 'text/plain',
+        data: 'Hello Claude!',
+      },
+      title: 'hello.txt',
+    }]);
+  });
+
+  it('rejects unsupported inline document MIME types before reaching Anthropic', () => {
+    expect(() => translateResponsesRequest({
+      model: 'claude',
+      input: [{
+        type: 'input_file',
+        file_data: 'data:application/json;base64,eyJvayI6dHJ1ZX0=',
+      }],
+    })).toThrow("input_file media type 'application/json'");
+  });
+
   it('normalizes long and invalid tool names deterministically', () => {
     const longName = 'tool.'.repeat(30);
     const first = translateResponsesRequest({

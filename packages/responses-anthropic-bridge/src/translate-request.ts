@@ -34,6 +34,12 @@ const ANTHROPIC_IMAGE_MEDIA_TYPES = new Set([
   'image/gif',
   'image/webp',
 ]);
+const ANTHROPIC_BASE64_DOCUMENT_MEDIA_TYPES = new Set([
+  'application/pdf',
+]);
+const ANTHROPIC_TEXT_DOCUMENT_MEDIA_TYPES = new Set([
+  'text/plain',
+]);
 
 type JsonObject = Record<string, unknown>;
 
@@ -164,6 +170,22 @@ function documentBlockFromPart(part: JsonObject): JsonObject {
       throw new UnsupportedResponsesFeatureError('input_file.file_id');
     }
     throw new UnsupportedResponsesFeatureError('input_file.file_url/file_data');
+  }
+  if (data && ANTHROPIC_TEXT_DOCUMENT_MEDIA_TYPES.has(data.mediaType)) {
+    return {
+      type: 'document',
+      source: {
+        type: 'text',
+        media_type: 'text/plain',
+        data: Buffer.from(data.data, 'base64').toString('utf8'),
+      },
+      ...(filename ? { title: filename } : {}),
+    };
+  }
+  if (data && !ANTHROPIC_BASE64_DOCUMENT_MEDIA_TYPES.has(data.mediaType)) {
+    throw new UnsupportedResponsesFeatureError(
+      `input_file media type '${data.mediaType}'`,
+    );
   }
   return {
     type: 'document',

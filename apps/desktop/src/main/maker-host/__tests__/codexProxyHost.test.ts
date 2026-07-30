@@ -659,8 +659,27 @@ describe('chatBridgeCapabilitiesForRoute', () => {
 
   it('routes the built-in Anthropic subscription through the bridge with host-owned Claude.ai OAuth', async () => {
     const host = await freshCodexProxyHost();
+    const { setAnthropicDiscoveredModels } = await import('../active-catalog.js');
     const { setProviderOAuthTokenReader } = await import('../provider-route.js');
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setAnthropicDiscoveredModels([
+      {
+        id: 'claude-opus-5',
+        name: 'Opus 5',
+        contextWindow: 1_000_000,
+        efforts: ['low', 'medium', 'high'],
+        defaultEffort: 'high',
+        status: 'active',
+      },
+      {
+        id: 'claude-sonnet-4-5',
+        name: 'Sonnet 4.5',
+        contextWindow: 200_000,
+        efforts: ['low', 'medium', 'high'],
+        defaultEffort: 'high',
+        status: 'active',
+      },
+    ]);
     setProviderOAuthTokenReader((providerId, agent) =>
       providerId === 'anthropic' && agent === 'codex'
         ? Promise.resolve('claude-subscription-token')
@@ -676,7 +695,7 @@ describe('chatBridgeCapabilitiesForRoute', () => {
 
     const decision = await Promise.resolve(host.createModelRoutingTransform()(
       {
-        model: 'claude-opus-5[1m]',
+        model: 'claude-opus-5',
         input: [{ role: 'user', content: 'hello' }],
       },
       {
@@ -717,8 +736,33 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     ]);
     expect(config.rewriteModel('claude-opus-5[1m]')).toBe('claude-opus-5');
 
+    await Promise.resolve(host.createModelRoutingTransform()(
+      {
+        model: 'claude-sonnet-4-5',
+        input: [{ role: 'user', content: 'short context' }],
+      },
+      {
+        reqId: 2,
+        method: 'POST',
+        url: '/responses',
+        headers: {
+          'thread-id': 'thread-anthropic-subscription',
+        },
+      },
+    ));
+    const ordinaryConfig = (mockState.createResponsesAnthropicHandler.mock.calls as unknown as Array<[
+      { buildHeaders: () => Promise<Record<string, string>> },
+    ]>).at(-1)?.[0];
+    expect(ordinaryConfig).toBeDefined();
+    if (!ordinaryConfig) throw new Error('ordinary Anthropic bridge config was not captured');
+    expect((await ordinaryConfig.buildHeaders())['anthropic-beta']?.split(',')).toEqual([
+      'claude-code-20250219',
+      'oauth-2025-04-20',
+    ]);
+
     clearSessionProvider('session-anthropic-subscription');
     setProviderOAuthTokenReader(() => null);
+    setAnthropicDiscoveredModels([]);
   });
 
   it('refreshes non-Anthropic provider OAuth without applying Claude.ai credentials or policy', async () => {

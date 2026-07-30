@@ -42,7 +42,7 @@ import path from 'node:path';
 
 import { buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM } from './codex-gateway-config.js';
 import { claudeUpstreamEndpoint } from './runtime-configs.js';
-import { getActiveCatalog } from './active-catalog.js';
+import { getActiveCatalog, getCatalogModelContextWindow } from './active-catalog.js';
 import {
   gatewayDefaultRouteDecision,
   getSessionRoutingDescriptor,
@@ -752,7 +752,20 @@ function createAnthropicBridgeDecision(
       delete headers.authorization;
       delete headers['x-api-key'];
     }
-    if (wireModel.endsWith('[1m]')) {
+    const catalogContextWindow = getCatalogModelContextWindow(
+      providerId,
+      'codex',
+      wireModel,
+      stripPrefix,
+    );
+    if (
+      wireModel.endsWith('[1m]')
+      || (
+        isOfficialAnthropicUpstream(upstreamBase)
+        && catalogContextWindow !== null
+        && catalogContextWindow >= 1_000_000
+      )
+    ) {
       appendCommaSeparatedHeaderToken(
         headers,
         'anthropic-beta',

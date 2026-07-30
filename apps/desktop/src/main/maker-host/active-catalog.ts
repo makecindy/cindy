@@ -632,6 +632,33 @@ export function getActiveCatalog(): Catalog {
   return merged;
 }
 
+/**
+ * 返回指定 provider/agent 下模型的目录上下文窗口。
+ *
+ * Codex wire model 可能带有 `[1m]` 展示后缀，或被 route 的 stripPrefix
+ * 包了一层；目录始终保存原始模型 id，因此查询在这里统一做去后缀/去前缀
+ * 候选归一，避免各个上游 bridge 自己复制一份模型匹配逻辑。
+ */
+export function getCatalogModelContextWindow(
+  providerId: string,
+  agent: AgentKind,
+  modelId: string,
+  stripPrefix?: string,
+): number | null {
+  const candidates = new Set<string>([
+    modelId,
+    modelId.replace(/\[1m\]$/, ''),
+  ]);
+  if (stripPrefix && modelId.startsWith(stripPrefix)) {
+    const stripped = modelId.slice(stripPrefix.length);
+    candidates.add(stripped);
+    candidates.add(stripped.replace(/\[1m\]$/, ''));
+  }
+  const provider = getActiveCatalog().providers.find((entry) => entry.id === providerId);
+  const model = provider?.models[agent]?.find((entry) => candidates.has(entry.id));
+  return model?.contextWindow ?? null;
+}
+
 /** 由 host 的目录加载器(ensureActiveCatalogLoaded)在拉取成功后写入基础目录。 */
 export function setActiveCatalog(catalog: Catalog): void {
   base = catalog;
