@@ -161,7 +161,7 @@ describe('resolveRemoteClaudeRoute — 显式供应商', () => {
     expect(route!.env.ANTHROPIC_CUSTOM_HEADERS!.split('\n')).toHaveLength(1);
   });
 
-  it('通用 oauth-token 供应商 → ANTHROPIC_AUTH_TOKEN 当门', async () => {
+  it('通用 oauth-token 供应商 → REMOTE_PROVIDER_UNSUPPORTED(远端无 refresh 通道)', async () => {
     resolveProviderRouteDecision.mockResolvedValue({
       providerId: 'generic-oauth',
       routing: { upstream: 'https://api.g.com/anthropic', authStrategy: 'oauth-token' },
@@ -170,10 +170,9 @@ describe('resolveRemoteClaudeRoute — 显式供应商', () => {
         headerOverride: { authorization: 'Bearer oauth-xyz' },
       },
     });
-    const route = await resolveRemoteClaudeRoute({ providerId: 'generic-oauth', model: 'some-model' });
-    expect(route!.env.ANTHROPIC_AUTH_TOKEN).toBe('oauth-xyz');
-    expect(route!.env.ANTHROPIC_API_KEY).toBeUndefined();
-    expect(route!.env.ANTHROPIC_CUSTOM_HEADERS).toBeUndefined();
+    await expect(
+      resolveRemoteClaudeRoute({ providerId: 'generic-oauth', model: 'some-model' }),
+    ).rejects.toThrow(/REMOTE_PROVIDER_UNSUPPORTED/);
   });
 
   it('无鉴权(none)自托管(非 loopback)→ 占位 key 过 cc auth gate', async () => {

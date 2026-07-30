@@ -146,6 +146,15 @@ function materializeRoutedProvider(routed: ResolvedProviderRouteDecision): Remot
       `[REMOTE_PROVIDER_UNSUPPORTED] provider "${providerId}" (oauth-passthrough) isn't supported on remote Claude Code sessions`,
     );
   }
+  // oauth-token(generic OAuth,如 xAI):ANTHROPIC_AUTH_TOKEN 烤进远端,但 desktop 的
+  // generic OAuth 刷新只在 desktop 侧读时发生,远端 daemon 无 refresh 通道 —— token
+  // 过期后持续 401,与本地 routed 会话行为不一致(codex-connector review #1035)。
+  // 除非补 provider-token refresh/sync(follow-up),一律拒绝。
+  if (routing.authStrategy === 'oauth-token') {
+    throw new Error(
+      `[REMOTE_PROVIDER_UNSUPPORTED] provider "${providerId}" (oauth-token) isn't supported on remote Claude Code sessions: the bearer can't be refreshed remotely`,
+    );
+  }
   // buildRouteDecision 返回 null(非 xd 的 gateway-key 路由缺网关 key / 未知 authStrategy):
   // 不能拿占位鉴权打真上游(运行期 401,归因困难),前置报错。
   if (!decision) {
