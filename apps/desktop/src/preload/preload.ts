@@ -155,10 +155,15 @@ type VoiceInputShortcutWire = {
 };
 type VoiceInputGlobalResult =
   | { ok: true }
-  | { ok: false; error: string; errorCode?: 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed' };
+  | { ok: false; error: string; errorCode?: 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed' | 'superseded' };
 type VoiceInputSettingsUpdateResult =
-  | { ok: true; settings: import('../shared/voiceInputData').VoiceInputSettings }
-  | { ok: false; error: string; errorCode?: 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed' };
+  | {
+    ok: true;
+    settings: import('../shared/voiceInputData').VoiceInputSettings;
+    /** 已存盘但 macOS 监听权限未授权，快捷键要等授权后才生效。 */
+    pendingInputMonitoring?: boolean;
+  }
+  | { ok: false; error: string; errorCode?: 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed' | 'superseded' };
 type VoiceInputReadinessWire = {
   ok: boolean;
   serviceMode: 'cindy' | 'byok';
@@ -423,6 +428,9 @@ const fanOutGhostNotify = createIpcFanOut('ghosts:notify');
 // 插件预览开页(preview 槽:renderer 在右侧栏开 web-browser 标签)。
 const fanOutGhostPreviewOpen = createIpcFanOut('ghosts:preview-open');
 const fanOutVoiceInputModifierShortcutKeys = createIpcFanOut('voice-input:modifier-shortcut-keys');
+// 「待授权」快捷键在设置页之外自动恢复失败（helper 起不来）。设置页不在,它的 toast 也就
+// 不在,所以由常挂载的 MainLayout 接这条并提示。main 侧一次 App 运行只推一次。
+const fanOutVoiceInputShortcutRecoveryFailed = createIpcFanOut('voice-input:shortcut-recovery-failed');
 // Remote SSH (Phase A) — host status fan-out. Channel literal kept in
 // sync with REMOTE_SSH_PUSH.STATUS_CHANGED in main/remote-ssh/index.ts;
 // preload can't import from main due to vite chunking.
@@ -1000,6 +1008,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('voice-input:open-microphone-settings'),
     openInputMonitoringSettings: (): Promise<VoiceInputGlobalResult> =>
       ipcRenderer.invoke('voice-input:open-input-monitoring-settings'),
+    // 失败走统一 IPC 错误协议（reject），所以成功路径只有 ok:true + 权限状态。
+    // status 沿用 VoiceInputPermissionSnapshot 的 string 形状（granted / denied / …）：
+    // 那是 microphone、accessibility 共用的既有类型，单独在这里收成字面量联合会与它们
+    // 不一致，收紧要整条一起动，超出本次改动范围。
+    requestInputMonitoringPermission: (): Promise<{ ok: true; status: string }> =>
+      ipcRenderer.invoke('voice-input:request-input-monitoring-permission'),
     muteSystemAudio: (): Promise<{ ok: true } | { ok: false; error: string }> =>
       ipcRenderer.invoke('voice-input:mute-system-audio'),
     restoreSystemAudio: (): Promise<{ ok: true } | { ok: false; error: string }> =>
@@ -1087,13 +1101,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
       throwVoiceInputSyncError(result);
     },
     onDataChanged: fanOutVoiceInputDataChanged,
-    setGlobalShortcut: (shortcut: VoiceInputShortcutWire | null): Promise<VoiceInputGlobalResult> =>
-      ipcRenderer.invoke('voice-input:global-shortcut:set', shortcut),
+    // options.suspend 表示「录制期挂起」这个意图。main 侧会丢掉与存盘不一致的同步请求
+    // (过时的广播回声),而挂起传的 null 恰恰故意与存盘不同,必须能区分开。
+    setGlobalShortcut: (
+      shortcut: VoiceInputShortcutWire | null,
+      options?: { suspend?: true },
+    ): Promise<VoiceInputGlobalResult> =>
+      ipcRenderer.invoke('voice-input:global-shortcut:set', shortcut, options),
     startModifierShortcutRecording: (): Promise<VoiceInputGlobalResult> =>
       ipcRenderer.invoke('voice-input:modifier-shortcut-recording:start'),
     stopModifierShortcutRecording: (): Promise<VoiceInputGlobalResult> =>
       ipcRenderer.invoke('voice-input:modifier-shortcut-recording:stop'),
     onModifierShortcutKeys: fanOutVoiceInputModifierShortcutKeys,
+    onShortcutRecoveryFailed: fanOutVoiceInputShortcutRecoveryFailed,
+    consumeShortcutRecoveryFailure: () =>
+      ipcRenderer.invoke('voice-input:consume-shortcut-recovery-failure'),
     onGlobalShortcutTrigger: fanOutVoiceInputGlobalShortcutTrigger,
     claimGlobalShortcutTrigger: (id: string): void =>
       ipcRenderer.send('voice-input:global-shortcut-claim', { id }),

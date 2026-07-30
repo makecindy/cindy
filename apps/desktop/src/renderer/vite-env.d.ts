@@ -168,7 +168,7 @@ interface RemoteAgentOneShotResult extends RemoteAgentExecResult {
 type VoiceInputState = import('@cindy/voice-input-core').VoiceInputState;
 type VoiceAudioTrace = import('@cindy/voice-input-core').AudioTrace;
 type VoiceSpeechSegment = import('@cindy/voice-input-core').SpeechSegment;
-type VoiceInputGlobalErrorCode = 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed';
+type VoiceInputGlobalErrorCode = 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed' | 'superseded';
 type VoiceInputGlobalResult =
   | { ok: true }
   | { ok: false; error: string; errorCode?: VoiceInputGlobalErrorCode };
@@ -1305,6 +1305,11 @@ interface ElectronAPI {
     }>;
     openMicrophoneSettings: () => Promise<{ ok: true } | { ok: false; error: string }>;
     openInputMonitoringSettings: () => Promise<VoiceInputGlobalResult>;
+    /**
+     * 失败走统一 IPC 错误协议（reject），成功路径只有 ok:true + 权限状态。
+     * status 与 getSystemPermissions 的各项同为 string 形状（granted / denied / …）。
+     */
+    requestInputMonitoringPermission: () => Promise<{ ok: true; status: string }>;
     muteSystemAudio: () => Promise<{ ok: true } | { ok: false; error: string }>;
     restoreSystemAudio: () => Promise<{ ok: true } | { ok: false; error: string }>;
     testConnection: () => Promise<VoiceInputConnectionTestResult>;
@@ -1381,7 +1386,12 @@ interface ElectronAPI {
     }) => VoiceInputDataSnapshot;
     updateSettings: (patch: Partial<VoiceInputSettingsData>) => Promise<VoiceInputSettingsData>;
     updateShortcutSetting: (shortcut: VoiceInputShortcut | null) => Promise<
-      | { ok: true; settings: VoiceInputSettingsData }
+      | {
+        ok: true;
+        settings: VoiceInputSettingsData;
+        /** 已存盘但 macOS 监听权限未授权，快捷键要等授权后才生效。 */
+        pendingInputMonitoring?: boolean;
+      }
       | { ok: false; error: string; errorCode?: VoiceInputGlobalErrorCode }
     >;
     deleteDictionaryEntries: (entryIds: string[]) => Promise<VoiceInputSettingsData>;
@@ -1398,10 +1408,21 @@ interface ElectronAPI {
     updateHistoryEntry: (id: string, text: string) => void;
     deleteHistoryEntry: (id: string) => void;
     onDataChanged: (callback: (payload: VoiceInputDataSnapshot) => void) => () => void;
-    setGlobalShortcut: (shortcut: VoiceInputShortcut | null) => Promise<VoiceInputGlobalResult>;
+    /** options.suspend = 录制期挂起（故意与存盘不同）；不带它的请求会被 main 按存盘校验。 */
+    setGlobalShortcut: (
+      shortcut: VoiceInputShortcut | null,
+      options?: { suspend?: true },
+    ) => Promise<VoiceInputGlobalResult>;
     startModifierShortcutRecording: () => Promise<VoiceInputGlobalResult>;
     stopModifierShortcutRecording: () => Promise<VoiceInputGlobalResult>;
     onModifierShortcutKeys: (callback: (payload: { keys: string[] }) => void) => () => void;
+    /** 「待授权」快捷键在设置页之外自动恢复失败（helper 起不来）。 */
+    onShortcutRecoveryFailed: (callback: () => void) => () => void;
+    /**
+     * 取走「自动恢复失败」这条待通知状态（取走即清，一次 App 运行只提示一次）。
+     * 挂载时也要主动取一次：失败可能发生在常挂载 UI 之前，那时推送没有订阅者。
+     */
+    consumeShortcutRecoveryFailure: () => Promise<{ failed: boolean }>;
     onGlobalShortcutTrigger: (callback: (payload?: { id?: string; phase?: 'start' | 'tap' | 'end' }) => void) => () => void;
     claimGlobalShortcutTrigger: (id: string) => void;
     onGlobalOverlayCommand: (callback: (command: { type: 'start' | 'submit' | 'cancel' }) => void) => () => void;

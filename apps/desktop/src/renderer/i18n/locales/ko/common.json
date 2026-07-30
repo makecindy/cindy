@@ -876,11 +876,16 @@
         "recording": "새 단축키를 누르세요",
         "none": "설정 안 됨",
         "clear": "지우기",
+        "fnNeedsInputMonitoring": "Fn이 포함된 단축키에는 단축키 감지 권한이 필요하며, 다른 단축키는 정상적으로 기록됩니다.",
+        "awaitingInputMonitoring": "이 단축키는 단축키 감지 권한을 기다리고 있으며, 허용하면 적용됩니다.",
         "toast": {
           "needsModifier": "조합 키, F1-F24 단일 키, 또는 왼쪽/오른쪽 Command, Option, Control, Fn을 사용하세요.",
           "fnUnavailable": "조합 키, F1-F24 단일 키, 또는 왼쪽/오른쪽 Command, Option, Control, Fn을 사용하세요.",
           "systemReserved": "이 단축키는 시스템 또는 일반 편집 단축키와 충돌합니다",
-          "registrationFailed": "단축키를 등록할 수 없습니다: {{error}}"
+          "registrationFailed": "단축키를 등록할 수 없습니다: {{error}}",
+          "recordingFailed": "단축키 기록을 시작할 수 없습니다: {{error}}",
+          "listenerUnavailable": "단축키 감지를 시작할 수 없습니다. Cindy를 재시작한 후 다시 시도하세요",
+          "pendingInputMonitoring": "단축키를 저장했습니다. 단축키 감지 권한을 허용하면 적용됩니다"
         }
       },
       "permissions": {

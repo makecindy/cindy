@@ -876,11 +876,16 @@
         "recording": "按下新的快捷键",
         "none": "未设置",
         "clear": "清除",
+        "fnNeedsInputMonitoring": "Fn 相关快捷键需要监听权限，其余快捷键可正常录制。",
+        "awaitingInputMonitoring": "当前快捷键待授权监听权限，授权后生效。",
         "toast": {
           "needsModifier": "请使用组合键、F1-F24 单键，或左/右 Command、Option、Control、Fn。",
           "fnUnavailable": "请使用组合键、F1-F24 单键，或左/右 Command、Option、Control、Fn。",
           "systemReserved": "这个快捷键会和系统或常用编辑快捷键冲突",
-          "registrationFailed": "无法注册此快捷键：{{error}}"
+          "registrationFailed": "无法注册此快捷键：{{error}}",
+          "recordingFailed": "无法开始录制快捷键：{{error}}",
+          "listenerUnavailable": "无法启动快捷键监听器，请重启 Cindy 后再试",
+          "pendingInputMonitoring": "快捷键已保存，授权监听权限后生效"
         }
       },
       "permissions": {

@@ -876,11 +876,16 @@
         "recording": "新しいショートカットを押してください",
         "none": "未設定",
         "clear": "クリア",
+        "fnNeedsInputMonitoring": "Fn を含むショートカットにはショートカット監視の許可が必要です。他のショートカットは通常どおり記録できます。",
+        "awaitingInputMonitoring": "このショートカットはショートカット監視の許可待ちです。許可すると有効になります。",
         "toast": {
           "needsModifier": "組み合わせキー、F1-F24 単独、または左右の Command / Option / Control / Fn を使ってください。",
           "fnUnavailable": "組み合わせキー、F1-F24 単独、または左右の Command / Option / Control / Fn を使ってください。",
           "systemReserved": "このショートカットはシステムまたは一般的な編集ショートカットと競合します",
-          "registrationFailed": "ショートカットを登録できませんでした: {{error}}"
+          "registrationFailed": "ショートカットを登録できませんでした: {{error}}",
+          "recordingFailed": "ショートカットの記録を開始できませんでした: {{error}}",
+          "listenerUnavailable": "ショートカット監視を開始できませんでした。Cindy を再起動してから再試行してください",
+          "pendingInputMonitoring": "ショートカットを保存しました。ショートカット監視を許可すると有効になります"
         }
       },
       "permissions": {
