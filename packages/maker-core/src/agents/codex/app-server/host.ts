@@ -363,7 +363,7 @@ export class AppServerHost {
     // 防 server 在握手过程中就发出 approval (虽然实际不会, 但 defensive)。
     client.setRequestHandler(Method.CommandExecutionRequestApproval, async (rawParams) => {
       const params = rawParams as CommandExecutionRequestApprovalParams;
-      const handlers = this.subscribers.get(params.threadId);
+      const handlers = this.handlersForThread(params.threadId);
       if (!handlers?.commandExecutionApproval) {
         this.logger.warn('commandExecution approval without subscriber → decline', {
           threadId: params.threadId,
@@ -384,7 +384,7 @@ export class AppServerHost {
 
     client.setRequestHandler(Method.FileChangeRequestApproval, async (rawParams) => {
       const params = rawParams as FileChangeRequestApprovalParams;
-      const handlers = this.subscribers.get(params.threadId);
+      const handlers = this.handlersForThread(params.threadId);
       if (!handlers?.fileChangeApproval) {
         this.logger.warn('fileChange approval without subscriber → decline', {
           threadId: params.threadId,
@@ -405,7 +405,7 @@ export class AppServerHost {
 
     client.setRequestHandler(Method.McpServerElicitationRequest, async (rawParams) => {
       const params = rawParams as McpServerElicitationRequestParams;
-      const handlers = this.subscribers.get(params.threadId);
+      const handlers = this.handlersForThread(params.threadId);
       if (!handlers?.mcpServerElicitation) {
         this.logger.warn('MCP server elicitation without subscriber -> decline', {
           threadId: params.threadId,
@@ -427,7 +427,7 @@ export class AppServerHost {
 
     client.setRequestHandler(Method.PermissionsRequestApproval, async (rawParams) => {
       const params = rawParams as PermissionsRequestApprovalParams;
-      const handlers = this.subscribers.get(params.threadId);
+      const handlers = this.handlersForThread(params.threadId);
       if (!handlers?.permissionsApproval) {
         this.logger.warn('permissions approval without subscriber → decline', {
           threadId: params.threadId,
@@ -447,7 +447,7 @@ export class AppServerHost {
 
     client.setRequestHandler(Method.ToolRequestUserInput, async (rawParams, meta) => {
       const params = rawParams as ToolRequestUserInputParams;
-      const handlers = this.subscribers.get(params.threadId);
+      const handlers = this.handlersForThread(params.threadId);
       if (!handlers?.requestUserInput) {
         this.logger.warn('requestUserInput without subscriber -> empty response', {
           threadId: params.threadId,
@@ -469,7 +469,7 @@ export class AppServerHost {
 
     client.setRequestHandler(Method.DynamicToolCall, async (rawParams, meta) => {
       const params = rawParams as DynamicToolCallParams;
-      const handlers = this.subscribers.get(params.threadId);
+      const handlers = this.handlersForThread(params.threadId);
       if (!handlers?.dynamicToolCall) {
         this.logger.warn('dynamicToolCall without subscriber -> failed result', {
           threadId: params.threadId,
@@ -763,6 +763,18 @@ export class AppServerHost {
     // subscribe 还没到 — 暂存 + TTL 清理。Codex 协议保证 server 内同 thread 顺序,
     // drain 时按到达顺序 dispatch 不会乱。
     this.bufferNotification(threadId, method, params);
+  }
+
+  /**
+   * Server requests from descendant threads must use the root subscription's
+   * handlers, just like descendant notifications. The app-server only knows
+   * the concrete child thread id, while approvals / elicitation / dynamic
+   * tool callbacks belong to the Cindy session that owns the root thread.
+   */
+  private handlersForThread(threadId: string): ThreadEventHandlers | undefined {
+    const rootThreadId = this.lineageRoots.get(threadId)
+      ?? (this.subscribers.has(threadId) ? threadId : null);
+    return rootThreadId ? this.subscribers.get(rootThreadId) : undefined;
   }
 
   private routeDescendantThreadStarted(params: ThreadStartedNotification['params']): void {

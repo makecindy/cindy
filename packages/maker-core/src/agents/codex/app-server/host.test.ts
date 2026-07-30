@@ -72,8 +72,10 @@ class DelayedTransport implements Transport {
 class NotificationTransport implements Transport {
   private readonly lineHandlers = new Set<LineHandler>();
   private readonly closeHandlers = new Set<CloseHandler>();
+  readonly lines: string[] = [];
 
   async writeLine(line: string): Promise<void> {
+    this.lines.push(line);
     const msg = JSON.parse(line) as { id?: unknown; method?: string };
     if (msg.id == null) return;
     const result = msg.method === 'initialize'
@@ -317,6 +319,153 @@ describe('AppServerHost descendant thread routing', () => {
         parentThreadId: 'child-thread',
       },
     });
+
+    await subscription.release();
+    await host.shutdown();
+  });
+
+  it('routes descendant server requests to the root subscription handlers', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    const commandExecutionApproval = vi.fn(async () => ({ decision: 'accept' as const }));
+    const fileChangeApproval = vi.fn(async () => ({ decision: 'accept' as const }));
+    const mcpServerElicitation = vi.fn(async () => ({
+      action: 'accept' as const,
+      content: { value: 'ok' },
+      _meta: null,
+    }));
+    const permissionsApproval = vi.fn(async () => ({
+      permissions: { network: true },
+      scope: 'turn' as const,
+    }));
+    const requestUserInput = vi.fn(async (_params, meta) => ({
+      answers: { q1: { answers: [`request:${String(meta.requestId)}`] } },
+    }));
+    const dynamicToolCall = vi.fn(async (_params, meta) => ({
+      contentItems: [{ type: 'inputText' as const, text: `request:${String(meta.requestId)}` }],
+      success: true,
+    }));
+    const subscription = host.subscribeThread('root-thread', {
+      commandExecutionApproval,
+      fileChangeApproval,
+      mcpServerElicitation,
+      permissionsApproval,
+      requestUserInput,
+      dynamicToolCall,
+    });
+
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'child-thread', parentThreadId: 'root-thread' } },
+    });
+
+    const requests = [
+      {
+        id: 'server-command',
+        method: 'item/commandExecution/requestApproval',
+        params: { threadId: 'child-thread', turnId: 'turn-1', itemId: 'item-1' },
+        expected: { decision: 'accept' },
+      },
+      {
+        id: 'server-file',
+        method: 'item/fileChange/requestApproval',
+        params: { threadId: 'child-thread', turnId: 'turn-1', itemId: 'item-2' },
+        expected: { decision: 'accept' },
+      },
+      {
+        id: 'server-elicitation',
+        method: 'mcpServer/elicitation/request',
+        params: {
+          threadId: 'child-thread',
+          turnId: 'turn-1',
+          serverName: 'test-mcp',
+          mode: 'form',
+          _meta: null,
+          message: 'Confirm',
+          requestedSchema: {},
+        },
+        expected: { action: 'accept', content: { value: 'ok' }, _meta: null },
+      },
+      {
+        id: 'server-permissions',
+        method: 'item/permissions/requestApproval',
+        params: {
+          threadId: 'child-thread',
+          turnId: 'turn-1',
+          itemId: 'item-3',
+          permissions: { network: true },
+        },
+        expected: { permissions: { network: true }, scope: 'turn' },
+      },
+      {
+        id: 'server-input',
+        method: 'item/tool/requestUserInput',
+        params: {
+          threadId: 'child-thread',
+          turnId: 'turn-1',
+          itemId: 'item-4',
+          questions: [],
+        },
+        expected: { answers: { q1: { answers: ['request:server-input'] } } },
+      },
+      {
+        id: 'server-tool',
+        method: 'item/tool/call',
+        params: {
+          threadId: 'child-thread',
+          turnId: 'turn-1',
+          callId: 'call-1',
+          namespace: null,
+          tool: 'test_tool',
+          arguments: {},
+        },
+        expected: {
+          contentItems: [{ type: 'inputText', text: 'request:server-tool' }],
+          success: true,
+        },
+      },
+    ] as const;
+
+    const initialLineCount = transport.lines.length;
+    for (const request of requests) {
+      transport.emit(request);
+    }
+
+    await vi.waitFor(() => {
+      expect(transport.lines.length).toBe(initialLineCount + requests.length);
+    });
+    const responses = transport.lines
+      .slice(initialLineCount)
+      .map((line) => JSON.parse(line) as { id: string; result: unknown });
+    expect(responses).toEqual(
+      requests.map((request) => ({ id: request.id, result: request.expected })),
+    );
+    expect(commandExecutionApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: 'child-thread' }),
+    );
+    expect(fileChangeApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: 'child-thread' }),
+    );
+    expect(mcpServerElicitation).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: 'child-thread' }),
+    );
+    expect(permissionsApproval).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: 'child-thread' }),
+    );
+    expect(requestUserInput).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: 'child-thread' }),
+      { requestId: 'server-input' },
+    );
+    expect(dynamicToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: 'child-thread' }),
+      { requestId: 'server-tool' },
+    );
 
     await subscription.release();
     await host.shutdown();
