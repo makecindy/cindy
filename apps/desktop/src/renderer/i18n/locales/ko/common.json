@@ -5311,6 +5311,9 @@
     },
     "draft": {
       "createSessionFailed": "세션 생성에 실패했습니다. 다시 시도하세요",
+        "remoteProviderUpdating": "공급자 자격 증명을 업데이트하는 중입니다. 잠시 후 다시 시도하세요",
+        "remoteProviderUnsupported": "이 공급자는 SSH 원격 세션을 지원하지 않습니다. 다른 소스를 선택하세요",
+        "remoteNativeOauthUnavailable": "Claude.ai 구독이 연결되지 않았습니다. 먼저 연결하거나 게이트웨이 모델을 선택하세요",
       "deviceStillLoading": "원격 기기가 아직 로딩 중입니다. 잠시 기다려 주세요",
       "worktreeMissingRepo": "worktree를 만들 수 없음: 현재 디렉터리의 리포지토리 루트가 없습니다",
       "worktreeRepoHint": "작업 디렉터리를 다시 선택하고 우측 하단의 폴더 표시가 갱신된 후 다시 시도하세요",

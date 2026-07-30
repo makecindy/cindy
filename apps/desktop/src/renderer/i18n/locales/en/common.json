@@ -5321,6 +5321,9 @@
     },
     "draft": {
       "createSessionFailed": "Failed to create session, please retry",
+      "remoteProviderUpdating": "Provider credentials are being updated — retry in a moment",
+      "remoteProviderUnsupported": "This provider is not supported in SSH remote sessions — pick another source",
+      "remoteNativeOauthUnavailable": "Claude.ai subscription is not connected — connect it first or pick a gateway model",
       "deviceStillLoading": "Remote device is still loading, please wait",
       "worktreeMissingRepo": "Cannot create worktree: missing repository root for the current directory",
       "worktreeRepoHint": "Try re-selecting the working directory and wait for the folder badge to refresh, then retry",

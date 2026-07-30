@@ -5311,6 +5311,9 @@
     },
     "draft": {
       "createSessionFailed": "创建对话失败，请重试",
+      "remoteProviderUpdating": "供应商凭证正在更新，请稍后重试",
+      "remoteProviderUnsupported": "该供应商不支持 SSH 远程会话，请更换来源",
+      "remoteNativeOauthUnavailable": "未连接 Claude.ai 订阅，请先连接或选择网关模型",
       "deviceStillLoading": "远程设备仍在加载中，请稍候",
       "worktreeMissingRepo": "无法开 worktree：缺少当前目录的仓库根",
       "worktreeRepoHint": "可尝试重新选一次工作目录，等右下角文件夹标识刷新后再试",
