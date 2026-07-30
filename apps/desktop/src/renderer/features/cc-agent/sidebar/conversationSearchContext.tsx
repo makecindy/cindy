@@ -41,10 +41,7 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
   const [openSignal, setOpenSignal] = useState(0);
 
   // allKnownProjects:全量会话(含归档)、排除 Orca worker,与 CCAgentSidebarUpper 同口径。
-  // 本 Provider 包裹整个侧栏、首屏即挂载,但它喂的是搜索筛选面板的项目清单 —— 用户按下
-  // 搜索前不需要。与 CCAgentSidebarUpper 那个 'all' 消费者一起标 deferred,否则这条
-  // 仍会在首屏抢占单线程 DB worker,把用户在等的 active 列表排到后面。
-  const { sessions } = useCCSessions({ includeArchived: 'all', deferred: true });
+  const { sessions } = useCCSessions({ includeArchived: 'all' });
   const { aliases } = useProjectAliases();
   const searchSessions = useMemo(
     () => sessions.filter((s) => !isOrcaWorkerSession(s)),

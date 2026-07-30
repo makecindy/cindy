@@ -34,29 +34,6 @@ import { sessionsStore } from '@/lib/sessionsStore';
 interface UseCCSessionsOptions {
   /** Session status filter — F-PJ-10 V0.5.1。默认 'active'。 */
   includeArchived?: ListStatusFilter;
-  /**
-   * 该消费者不参与首屏关键路径：桶未加载时**等浏览器空闲**再拉，而不是挂载即发 IPC。
-   *
-   * 为什么需要：DB worker 是单线程 better-sqlite3，一条 list 查询跑完才轮到下一条。
-   * 侧栏首屏同时要 `active`（列表本体，用户在等）与 `all`（attention 标记 + 搜索索引，
-   * 用户看不见），后者会把前者的 IPC 排在自己后面 —— 真实 4.7GB 库上实测这意味着首屏
-   * 多等一整条查询。给 `all` 标 deferred 后，两条查询都还会跑，只是顺序对了。
-   *
-   * 语义不变：延迟期间 `sessions` 是空数组、`isLoading` 仍为 true，数据到达后照常
-   * 经 store 广播补上。只适用于「晚一点拿到也不影响正确性」的消费者。同一桶若还有
-   * 非 deferred 的消费者，那边照常立即拉——deferred 只表示「我不着急」，不阻止别人。
-   */
-  deferred?: boolean;
-}
-
-/** 空闲调度 + 2s 兜底；返回取消函数。无 requestIdleCallback 时退化成短 setTimeout。 */
-function scheduleIdle(fn: () => void): () => void {
-  if (typeof requestIdleCallback === 'function') {
-    const handle = requestIdleCallback(fn, { timeout: 2000 });
-    return () => cancelIdleCallback(handle);
-  }
-  const handle = setTimeout(fn, 200);
-  return () => clearTimeout(handle);
 }
 
 interface UseCCSessionsReturn {
@@ -98,7 +75,6 @@ interface SnapshotState {
 
 export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsReturn {
   const filter: ListStatusFilter = options?.includeArchived ?? 'active';
-  const deferred = options?.deferred ?? false;
 
   // 关键：初始 snapshot 来自 store —— remount 命中 cache 即非 null，无 skeleton 闪烁。
   const [snapshotState, setSnapshotState] = useState<SnapshotState>(() => ({
@@ -128,28 +104,6 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
     // else: 切桶但旧桶有数据 → 保留旧 snapshotState (含旧 filter), 不动 isLoading,
     //       等新桶 IPC 回来再由下面 subscribe 一次性 swap, 杜绝中间空白帧。
 
-    let cancelPendingKick: (() => void) | null = null;
-    const kick = (): void => {
-      cancelPendingKick = null;
-      sessionsStore
-        .ensureByFilter(filter)
-        .then(() => setError(null))
-        .catch((e: unknown) => {
-          setError(e instanceof Error ? e : new Error(String(e)));
-          // 失败兜底: 防止首次挂载场景骨架卡死。
-          setIsLoading(false);
-        });
-    };
-    /** deferred 桶让出首屏：空闲再拉，2s 兜底防饿死。非 deferred 保持同步发起。 */
-    const kickNow = (): void => {
-      if (!deferred) {
-        kick();
-        return;
-      }
-      cancelPendingKick?.();
-      cancelPendingKick = scheduleIdle(kick);
-    };
-
     const unsub = sessionsStore.subscribe((change) => {
       const next = sessionsStore.getByFilter(filter);
       if (change === 'reset') {
@@ -157,8 +111,13 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
         setSnapshotState({ data: null, filter });
         setIsLoading(true);
         setError(null);
-        // 账号切换后同样是首屏级时刻，deferred 桶继续让路。
-        kickNow();
+        void sessionsStore
+          .ensureByFilter(filter)
+          .then(() => setError(null))
+          .catch((e: unknown) => {
+            setError(e instanceof Error ? e : new Error(String(e)));
+            setIsLoading(false);
+          });
         return;
       }
       // 只在新桶有确切数据时才覆盖, 否则其它桶的变化不应擦掉当前视图。
@@ -168,12 +127,18 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       }
     });
 
-    if (sessionsStore.getByFilter(filter) === null) kickNow();
-    return () => {
-      cancelPendingKick?.();
-      unsub();
-    };
-  }, [filter, deferred]);
+    if (sessionsStore.getByFilter(filter) === null) {
+      sessionsStore
+        .ensureByFilter(filter)
+        .then(() => setError(null))
+        .catch((e: unknown) => {
+          setError(e instanceof Error ? e : new Error(String(e)));
+          // 失败兜底: 防止首次挂载场景骨架卡死。
+          setIsLoading(false);
+        });
+    }
+    return unsub;
+  }, [filter]);
 
   const createSession = useCallback(
     async (opts?: {
