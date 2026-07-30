@@ -121,13 +121,14 @@ const MODE_TO_CATEGORY: Record<string, ModelCategory> = {
 const CHAT_CAPABLE_MODES = new Set(['chat', 'responses']);
 
 /**
- * 去掉 id 的一层 `<namespace>/` 前缀,取最后一段。网关有时会给 id 加供应商命名空间
- * (如 openai/dall-e-3、google/veo-3,catalog 本身就支持 openai/gpt-5.4 这类写法);
- * dall-e/sora/veo- 这几个锚定 id 开头的关键字判定必须同时认「裸 id」与「去前缀后的
- * 尾部」,否则加了命名空间就漏网(2026-07 review 第 19 轮)。
+ * 去掉 id 的全部 `<namespace>/` 前缀,取最后一段。网关有时会给 id 加供应商命名空间
+ * (如 openai/dall-e-3、google/veo-3,catalog 本身就支持 openai/gpt-5.4 这类写法),
+ * 且可能嵌套多层(如 gateway/openai/dall-e-3);dall-e/sora/veo- 这几个锚定 id 开头的
+ * 关键字判定必须同时认「裸 id」与「去前缀后的尾部」,只剥一层的话嵌套命名空间仍会
+ * 漏网(2026-07 review 第 19 轮;多层修正见第 24 轮)。
  */
 function stripNamespace(id: string): string {
-  const idx = id.indexOf('/');
+  const idx = id.lastIndexOf('/');
   return idx === -1 ? id : id.slice(idx + 1);
 }
 

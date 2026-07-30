@@ -165,6 +165,16 @@ describe('categorize', () => {
     expect(isChatEligible({ id: 'cohere/embed-english-v3.0' })).toBe(false);
   });
 
+  it('嵌套多层命名空间(如 gateway/openai/dall-e-3)同样不漏网:stripNamespace 取最后一段而非只剥一层(2026-07 review 第 24 轮)', () => {
+    expect(categorize('gateway/openai/dall-e-3')).toBe('image');
+    expect(categorize('gateway/openai/sora-2')).toBe('video');
+    expect(categorize('org/cohere/embed-english-v3.0')).toBe('embedding');
+    expect(categorize('gateway/openai/gpt-4o-realtime-preview')).toBe('realtime');
+    expect(categorize('gateway/openai/babbage-002')).toBe('other');
+    expect(isChatEligible({ id: 'gateway/openai/dall-e-3' })).toBe(false);
+    expect(isChatEligible({ id: 'org/cohere/embed-english-v3.0' })).toBe(false);
+  });
+
   it('moderation 模型不落进厂商兜底组、不被判定为可聊天(2026-07 review:fresh evidence,不是issue 列出的语义类型之一,落 other 保留)', () => {
     expect(categorize('omni-moderation-latest')).toBe('other');
     expect(categorize('text-moderation-latest')).toBe('other');
