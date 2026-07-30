@@ -75,6 +75,8 @@ export interface GithubIssue {
   html_url: string;
   created_at: string;
   updated_at: string;
+  /** 评论数。声明为可选:老调用点不依赖它,search 结果里也不保证出现。 */
+  comments?: number;
   /** issue 是 PR 时 GitHub 会带 pull_request 对象;纯 issue 时无此字段 */
   pull_request?: { url: string; html_url: string } | null;
 }

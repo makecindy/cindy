@@ -216,6 +216,12 @@ export const MAKER_INVOKE = {
    * Phase 2 会加一个 submit-to-GitHub 动作(同 PAT 配置 + 去重相同 open issue)。
    */
   HELP_FEEDBACK_CREATE: 'maker:help:feedback:create',
+  /**
+   * /issues 页面的「我的 Issue」列表:本机提交账本 + 当前 GitHub 身份名下的 issue
+   * 合并去重。查询型 handler,失败时 renderer 仍要靠账本渲染,故返回 { success }
+   * 风格而不是 throwIpcError(见 engineering-conventions §2 的例外)。
+   */
+  MY_ISSUES_LIST: 'maker:issues:list-mine',
   WRITE_PLAN_FILE: 'maker:write-plan-file',
   // Rewind / Fork (Stage 2 C2) — 取代老 cc-agent:rewind:* + local-db:sessions:fork
   REWIND_PREVIEW: 'maker:rewind:preview',

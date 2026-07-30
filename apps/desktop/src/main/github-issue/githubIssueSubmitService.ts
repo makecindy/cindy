@@ -14,6 +14,7 @@ import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 
 import { CINDY_REGION_CODE } from '../../shared/regionCode.js';
 import { normalizeIssuePublicName } from '../../shared/issuePublicName.js';
+import type { SubmittedIssueRecord } from '../../shared/myIssues.js';
 import type {
   IssueConfirmDecision,
   IssueDraft,
@@ -86,6 +87,12 @@ export interface GithubIssueSubmitServiceDeps {
   getFallbackLocale: () => string;
   /** 当前 Cindy membership 的展示名,仅用于 issue 正文标记提交人。 */
   getSubmitterName: () => string | undefined;
+  /**
+   * 提交成功后记账(「我的 Issue」列表靠它认出平台代发的那一半)。
+   * 只在 postIssue 真正成功后调用一次,抛错由本模块吞掉 —— 记账失败绝不能把一次
+   * 已经成功的提交翻成失败,那会诱导用户重复提交。
+   */
+  onSubmitted?: (record: SubmittedIssueRecord) => void;
 }
 
 // server 侧 github.ts 的上限(TITLE_MAX=200 / DESC_MAX=5000),超限会被 400,这里主动 clamp。
@@ -175,6 +182,13 @@ export async function submitGithubIssueWithConfirm(
       appVersion: env.appVersion,
       ...(confirmedPublicName ? { userName: confirmedPublicName } : {}),
     }));
+    recordSubmission(deps, submissionIdentity, {
+      number: result.githubIssue.number,
+      url: result.githubIssue.url,
+      title: finalTitle,
+      type: decision.type,
+      publicName: confirmedPublicName,
+    });
     return {
       ok: true,
       issueNumber: result.githubIssue.number,
@@ -184,6 +198,37 @@ export async function submitGithubIssueWithConfirm(
     };
   } catch (err) {
     return mapSubmitError(err);
+  }
+}
+
+/** 记账是 best-effort:任何异常只吞掉,不影响已经成功的提交结果。 */
+function recordSubmission(
+  deps: GithubIssueSubmitServiceDeps,
+  submissionIdentity: IssueSubmissionIdentity,
+  submitted: {
+    number: number;
+    url: string;
+    title: string;
+    type: 'bug' | 'feature';
+    publicName: string | null;
+  },
+): void {
+  if (!deps.onSubmitted) return;
+  try {
+    deps.onSubmitted({
+      number: submitted.number,
+      url: submitted.url,
+      title: submitted.title,
+      type: submitted.type,
+      submittedAt: new Date().toISOString(),
+      identity: submissionIdentity.kind === 'github-user' ? 'github-user' : 'platform',
+      ...(submissionIdentity.kind === 'github-user'
+        ? { githubLogin: submissionIdentity.login }
+        : {}),
+      ...(submitted.publicName ? { publicName: submitted.publicName } : {}),
+    });
+  } catch {
+    // 交给注入方记日志;这里连 rethrow 都不做。
   }
 }
 

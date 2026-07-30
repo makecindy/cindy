@@ -6602,6 +6602,21 @@
       "emptyFilter": "没有匹配的 Issue",
       "clearFilters": "清空筛选"
     },
+    "mine": {
+      "refresh": "刷新",
+      "emptyTitle": "还没有提交过 Issue",
+      "startIssueChat": "用 /issue 开始新对话",
+      "statusUnknown": "状态未知",
+      "sourceCindy": "由 Cindy 提交",
+      "sourceGithub": "GitHub 账号",
+      "commentCount_other": "{{count}} 条评论",
+      "openOnGithub": "在 GitHub 上打开",
+      "viewerGithub": "GitHub 账号 @{{login}}",
+      "platformUnavailableHint": "当前只显示本机记录的提交，这些 Issue 在 GitHub 上的最新状态暂时无法在应用内查看。",
+      "notSignedInHint": "登录 Cindy 账号后，可以看到你提交过的全部 Issue 和它们的最新状态。",
+      "fetchFailedHint": "暂时取不到最新状态，当前只显示本机记录的提交。",
+      "truncatedHint": "Issue 较多，这里只列出了一部分，完整列表请在 GitHub 上查看。"
+    },
     "redirect": {
       "title": "从左侧选择一个 Issue",
       "description": "浏览左侧列表查看 Issue，或者创建一个新 Issue 来报告 Bug 或提出功能建议。",
@@ -6815,7 +6830,6 @@
       "cancel": "取消"
     },
     "redirect": {
-      "title": "Issue 已迁移至 GitHub",
       "descriptionBefore": "在对话中输入 ",
       "descriptionAfter": " 即可提交问题或建议，AI 会与你确认细节后帮你提交。",
       "cta": "查看 GitHub Issues"

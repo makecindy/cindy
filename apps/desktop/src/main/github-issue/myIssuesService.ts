@@ -1,0 +1,280 @@
+/**
+ * myIssuesService —— /issues 页面「我的 Issue」列表的业务体。
+ *
+ * 核心口径:**看自己的 issue 与提交 issue 走同一条公共能力**,只要 Cindy 登录态,
+ * 不要求用户有 GitHub 账号。三路输入:
+ *  1. 平台通道(主)—— 服务端按 Cindy 账号返回提交记录 + 实时状态,跨设备;
+ *  2. 本机账本 —— 产品内提交时落在本机的记录。平台接口未就绪 / 离线时是唯一来源,
+ *     此时状态标 unknown,但标题、编号、类型、时间、链接照常可见;
+ *  3. GitHub 账号(可选增强)—— 配了插件 / gh CLI 才有,把用户自己 GitHub 名下的
+ *     issue 并进来。缺它只是少一部分内容,**不构成任何前提**。
+ *
+ * 其它设计约束:
+ *   - 状态是易变远端数据,**不落库**;60s TTL 内存缓存 + in-flight 去重,
+ *     模式与 git-context/prStatusService 一致。
+ *   - 结果超一页会截断,并在返回值里显式标出,不静默丢。
+ *   - 依赖全注入、模块 electron-free,单测不碰网络与 Electron。
+ */
+
+import type {
+  GithubEnhancementSource,
+  MyIssueItem,
+  MyIssueSource,
+  MyIssuesDegradedReason,
+  MyIssuesResult,
+  SubmittedIssueRecord,
+} from '../../shared/myIssues.js';
+import { createLogger } from '../logger.js';
+
+const log = createLogger('github-issue/my-issues');
+
+const DEFAULT_CACHE_TTL_MS = 60_000;
+/** 单次查询只取一页;更多就截断并让 UI 明说,不静默丢也不翻页打爆额度。 */
+export const SEARCH_PAGE_SIZE = 100;
+
+/** 可选增强的 GitHub 身份。token 只在 gh CLI 路径存在(插件路径拿不到明文)。 */
+export interface GithubEnhancementViewer {
+  source: GithubEnhancementSource;
+  login: string;
+  token?: string;
+}
+
+/** 远端 issue 的必要字段子集(平台响应与 GitHub 响应的公共部分)。 */
+export interface RemoteIssue {
+  number: number;
+  title: string;
+  htmlUrl: string;
+  state: 'open' | 'closed';
+  labels: string[];
+  createdAt: string;
+  updatedAt: string | null;
+  commentCount: number | null;
+}
+
+/** 一页远端结果 + 远端总数;拿不到总数时为 null。 */
+export interface RemoteIssuePage {
+  issues: RemoteIssue[];
+  totalCount: number | null;
+}
+
+/** 平台通道的结果。unavailable 表示服务端还没提供这条读接口。 */
+export type PlatformIssuesOutcome =
+  | { ok: true; page: RemoteIssuePage }
+  | { ok: false; reason: MyIssuesDegradedReason };
+
+export interface MyIssuesServiceDeps {
+  readLedger: () => SubmittedIssueRecord[];
+  /** 平台通道:按 Cindy 登录态取「我提交过的 issue」。永不抛,失败归一为 reason。 */
+  fetchPlatformIssues: () => Promise<PlatformIssuesOutcome>;
+  /** 可选增强的 GitHub 身份;没配返回 null(正常状态)。 */
+  resolveGithubEnhancement: () => Promise<GithubEnhancementViewer | null>;
+  /** 搜该 login 名下的 issue。抛错只丢掉增强部分,不影响主列表。 */
+  searchAuthoredIssues: (
+    viewer: GithubEnhancementViewer,
+    login: string,
+  ) => Promise<RemoteIssuePage>;
+  cacheTtlMs?: number;
+  now?: () => number;
+}
+
+interface CacheEntry {
+  at: number;
+  result: MyIssuesResult;
+}
+
+export class MyIssuesService {
+  private readonly deps: MyIssuesServiceDeps;
+  private readonly ttlMs: number;
+  private readonly now: () => number;
+  private cache: CacheEntry | null = null;
+  private inFlight: Promise<MyIssuesResult> | null = null;
+
+  constructor(deps: MyIssuesServiceDeps) {
+    this.deps = deps;
+    this.ttlMs = deps.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
+    this.now = deps.now ?? Date.now;
+  }
+
+  /** force=true 绕过 TTL(手动刷新按钮),但仍复用正在飞的请求。 */
+  async list(options: { force?: boolean } = {}): Promise<MyIssuesResult> {
+    if (!options.force && this.cache && this.now() - this.cache.at < this.ttlMs) {
+      return this.cache.result;
+    }
+    if (this.inFlight) return this.inFlight;
+    const pending = this.load()
+      .then((result) => {
+        this.cache = { at: this.now(), result };
+        return result;
+      })
+      .finally(() => {
+        this.inFlight = null;
+      });
+    this.inFlight = pending;
+    return pending;
+  }
+
+  /** 提交成功后调用:账本变了,缓存立即失效,下次进页面能看到新提交的那条。 */
+  invalidate(): void {
+    this.cache = null;
+  }
+
+  private async load(): Promise<MyIssuesResult> {
+    const ledger = this.deps.readLedger();
+
+    // 两路互不阻塞:平台通道挂了不能连可选增强一起拖掉,反之亦然。
+    const [platform, enhancement] = await Promise.all([
+      this.loadPlatform(),
+      this.loadGithubEnhancement(),
+    ]);
+
+    return {
+      items: mergeIssues(ledger, enhancement.issues, platform.issues),
+      githubEnhancement: enhancement.viewer
+        ? { login: enhancement.viewer.login, source: enhancement.viewer.source }
+        : null,
+      degraded: platform.degraded,
+      truncated: platform.truncated || enhancement.truncated,
+    };
+  }
+
+  private async loadPlatform(): Promise<{
+    issues: RemoteIssue[];
+    degraded: MyIssuesDegradedReason | null;
+    truncated: boolean;
+  }> {
+    let outcome: PlatformIssuesOutcome;
+    try {
+      outcome = await this.deps.fetchPlatformIssues();
+    } catch (err) {
+      // fetchPlatformIssues 约定不抛;真抛了也不能把整页打挂。
+      log.warn('platform issues fetch threw', { error: errorText(err) });
+      return { issues: [], degraded: 'fetch-failed', truncated: false };
+    }
+    if (!outcome.ok) {
+      log.debug('platform issues unavailable', { reason: outcome.reason });
+      return { issues: [], degraded: outcome.reason, truncated: false };
+    }
+    return {
+      issues: outcome.page.issues,
+      degraded: null,
+      truncated: isTruncated(outcome.page),
+    };
+  }
+
+  private async loadGithubEnhancement(): Promise<{
+    viewer: GithubEnhancementViewer | null;
+    issues: RemoteIssue[];
+    truncated: boolean;
+  }> {
+    let viewer: GithubEnhancementViewer | null;
+    try {
+      viewer = await this.deps.resolveGithubEnhancement();
+    } catch (err) {
+      // 没有 GitHub 身份是正常状态,解析失败同样只是「没有增强」。
+      log.debug('github enhancement unavailable', { error: errorText(err) });
+      return { viewer: null, issues: [], truncated: false };
+    }
+    if (!viewer) return { viewer: null, issues: [], truncated: false };
+
+    try {
+      const page = await this.deps.searchAuthoredIssues(viewer, viewer.login);
+      return { viewer, issues: page.issues, truncated: isTruncated(page) };
+    } catch (err) {
+      // 增强查询失败不算列表降级 —— 主路径是平台通道。
+      log.debug('github enhancement search failed', { error: errorText(err) });
+      return { viewer, issues: [], truncated: false };
+    }
+  }
+}
+
+/**
+ * 合并三路输入,按 issue 号去重、远端字段覆盖账本历史字段(标题会被维护者改),
+ * 按创建时间倒序。纯函数,单测直接调。
+ *
+ * 来源标记的区别是关键:
+ *  - `authored` 是按 `author:<login>` 搜出来的,命中即证明是本人 GitHub 账号发的 →
+ *    打 github-account;
+ *  - `platform` 是服务端按 Cindy 账号返回的产品内提交记录。平台代发的 issue 在
+ *    GitHub 上作者是 cindy-issue App,**不是**本人 → 只打 cindy-tool。
+ */
+export function mergeIssues(
+  ledger: SubmittedIssueRecord[],
+  authored: RemoteIssue[],
+  platform: RemoteIssue[] = [],
+): MyIssueItem[] {
+  const byNumber = new Map<number, MyIssueItem>();
+
+  for (const record of ledger) {
+    byNumber.set(record.number, ledgerOnlyItem(record));
+  }
+  for (const issue of platform) {
+    byNumber.set(issue.number, overlayRemote(byNumber.get(issue.number), issue, 'cindy-tool'));
+  }
+  for (const issue of authored) {
+    byNumber.set(issue.number, overlayRemote(byNumber.get(issue.number), issue, 'github-account'));
+  }
+
+  return [...byNumber.values()].sort((a, b) => {
+    const delta = Date.parse(b.createdAt) - Date.parse(a.createdAt);
+    // 同一时间戳时按 issue 号兜底,保证顺序稳定、不随 Map 插入顺序抖。
+    return delta !== 0 ? delta : b.number - a.number;
+  });
+}
+
+function overlayRemote(
+  existing: MyIssueItem | undefined,
+  issue: RemoteIssue,
+  source: MyIssueSource,
+): MyIssueItem {
+  const sources: MyIssueSource[] = existing ? [...existing.sources] : [];
+  if (!sources.includes(source)) sources.push(source);
+  return {
+    number: issue.number,
+    url: issue.htmlUrl,
+    title: issue.title,
+    // 远端标签被人工清掉时回退账本记的类型,而不是莫名变成「无类型」。
+    type: issueTypeFromLabels(issue.labels) ?? existing?.type ?? null,
+    state: issue.state,
+    createdAt: issue.createdAt,
+    updatedAt: issue.updatedAt,
+    commentCount: issue.commentCount,
+    sources: sortSources(sources),
+  };
+}
+
+/** 固定「产品内提交」在前,保证同一条 issue 的来源顺序不随合并顺序抖。 */
+function sortSources(sources: MyIssueSource[]): MyIssueSource[] {
+  const order: MyIssueSource[] = ['cindy-tool', 'github-account'];
+  return order.filter((source) => sources.includes(source));
+}
+
+/** 拿不到远端数据时的形态:标题用账本记的那一版,状态明确标 unknown。 */
+function ledgerOnlyItem(record: SubmittedIssueRecord): MyIssueItem {
+  return {
+    number: record.number,
+    url: record.url,
+    title: record.title,
+    type: record.type,
+    state: 'unknown',
+    createdAt: record.submittedAt,
+    updatedAt: null,
+    commentCount: null,
+    sources: ['cindy-tool'],
+  };
+}
+
+/** 反馈 issue 由提交链路打 bug / feature 标签;人工改过标签时回退 null。 */
+export function issueTypeFromLabels(labels: string[]): 'bug' | 'feature' | null {
+  const lowered = labels.map((label) => label.toLowerCase());
+  if (lowered.includes('bug')) return 'bug';
+  if (lowered.includes('feature')) return 'feature';
+  return null;
+}
+
+function isTruncated(page: RemoteIssuePage): boolean {
+  return page.totalCount !== null && page.totalCount > page.issues.length;
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}

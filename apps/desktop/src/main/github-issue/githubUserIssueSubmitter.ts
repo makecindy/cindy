@@ -36,10 +36,38 @@ interface IssueSubmissionError extends Error {
   issueErrorCode: 'AUTH_NOT_READY' | 'NETWORK_ERROR' | 'SERVER_ERROR';
 }
 
-interface GithubOperationFailure {
+export interface GithubOperationFailure {
   ok: false;
   errorCode: string;
   message: string;
+}
+
+/**
+ * 插件通道是否可用(已装、已启用、当前 workdir 未停用、且保存了凭证)。
+ * 提交路径与「我的 Issue」查询路径共用这一份判定,避免两边口径漂移。
+ */
+export function isCindyGithubGhostUsable(
+  deps: GithubUserIssueSubmitterDeps,
+  workdir?: string | null,
+): boolean {
+  return (
+    !deps.isGithubGhostDisabledForWorkdir(workdir) &&
+    deps.isGithubGhostEnabled() &&
+    deps.isGithubCredentialSaved()
+  );
+}
+
+/**
+ * 经插件通道调一个只读 GitHub 操作。失败返回结构化 failure(不抛),
+ * 响应形状不对时才抛 —— 与提交路径共用同一个通道与解包逻辑。
+ */
+export function callCindyGithubOperation(
+  deps: GithubUserIssueSubmitterDeps,
+  name: string,
+  args: Record<string, unknown>,
+  options: { timeoutMs?: number } = {},
+): Promise<{ ok: true; data: unknown } | GithubOperationFailure> {
+  return callGithubOperation(deps, name, args, options);
 }
 
 /** 已装、启用且保存了凭证时验证 token；其余场景明确选择平台代提交。 */
@@ -47,11 +75,7 @@ export async function resolveGithubIssueSubmissionIdentity(
   deps: GithubUserIssueSubmitterDeps,
   workdir?: string | null,
 ): Promise<IssueSubmissionIdentity> {
-  if (
-    deps.isGithubGhostDisabledForWorkdir(workdir) ||
-    !deps.isGithubGhostEnabled() ||
-    !deps.isGithubCredentialSaved()
-  ) {
+  if (!isCindyGithubGhostUsable(deps, workdir)) {
     return PLATFORM_ISSUE_SUBMISSION_IDENTITY;
   }
 
@@ -139,7 +163,7 @@ async function requireGithubOperation(
 
 async function callGithubOperation(
   deps: GithubUserIssueSubmitterDeps,
-  name: 'get_current_user' | 'create_issue',
+  name: string,
   args: Record<string, unknown>,
   options: { timeoutMs?: number } = {},
 ): Promise<{ ok: true; data: unknown } | GithubOperationFailure> {

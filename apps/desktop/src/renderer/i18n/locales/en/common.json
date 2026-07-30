@@ -6612,6 +6612,22 @@
       "emptyFilter": "No matching issues",
       "clearFilters": "Clear filters"
     },
+    "mine": {
+      "refresh": "Refresh",
+      "emptyTitle": "No issues submitted yet",
+      "startIssueChat": "Start a new chat with /issue",
+      "statusUnknown": "Status unknown",
+      "sourceCindy": "Submitted from Cindy",
+      "sourceGithub": "GitHub account",
+      "commentCount_one": "{{count}} comment",
+      "commentCount_other": "{{count}} comments",
+      "openOnGithub": "Open on GitHub",
+      "viewerGithub": "GitHub account @{{login}}",
+      "platformUnavailableHint": "Showing only submissions recorded on this device. Live status for these issues isn't available in the app yet.",
+      "notSignedInHint": "Sign in to your Cindy account to see every issue you've filed, along with its current status.",
+      "fetchFailedHint": "Couldn't load the latest status. Showing only submissions recorded on this device.",
+      "truncatedHint": "There are more issues than shown here — open GitHub for the full list."
+    },
     "redirect": {
       "title": "Select an issue from the left",
       "description": "Browse the list to view issues, or create a new one to report a bug or suggest a feature.",
@@ -6825,7 +6841,6 @@
       "cancel": "Cancel"
     },
     "redirect": {
-      "title": "Issues have moved to GitHub",
       "descriptionBefore": "Type ",
       "descriptionAfter": " in a chat to report a problem or suggestion — the AI will confirm the details with you before submitting.",
       "cta": "View GitHub Issues"

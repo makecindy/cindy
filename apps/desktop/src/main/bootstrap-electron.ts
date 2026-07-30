@@ -468,6 +468,7 @@ import { registerContactsIpc } from './maker-ipc/contacts-ipc.js';
 import { disposeDesktopContactsManager } from './maker-host/maker-contacts-host.js';
 import { registerMakerHelpIpc } from './maker-ipc/help.js';
 import { registerHelpFeedbackIpc } from './maker-ipc/help-feedback.js';
+import { registerMyIssuesIpc } from './maker-ipc/my-issues.js';
 import { registerMakerPlanWriteIpc } from './maker-ipc/plan-write.js';
 import { registerMakerRewindIpc } from './maker-ipc/rewind.js';
 import { registerMakerForkIpc } from './maker-ipc/fork.js';
@@ -3658,6 +3659,7 @@ const registerIpcHandlers = () => {
       registerMakerTitleIpc();
       registerMakerHelpIpc(ipcMaker);
       registerHelpFeedbackIpc();
+      registerMyIssuesIpc();
       registerMakerPlanWriteIpc();
       registerMakerRewindIpc();
       registerMakerForkIpc();

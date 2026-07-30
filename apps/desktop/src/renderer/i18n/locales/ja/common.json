@@ -6602,6 +6602,21 @@
       "emptyFilter": "一致する Issue がありません",
       "clearFilters": "フィルターをクリア"
     },
+    "mine": {
+      "refresh": "更新",
+      "emptyTitle": "送信した Issue はまだありません",
+      "startIssueChat": "/issue で新しいチャットを開始",
+      "statusUnknown": "ステータス不明",
+      "sourceCindy": "Cindy から送信",
+      "sourceGithub": "GitHub アカウント",
+      "commentCount_other": "コメント {{count}} 件",
+      "openOnGithub": "GitHub で開く",
+      "viewerGithub": "GitHub アカウント @{{login}}",
+      "platformUnavailableHint": "この端末に記録された送信分のみを表示しています。これらの Issue の最新ステータスはまだアプリ内で表示できません。",
+      "notSignedInHint": "Cindy アカウントにサインインすると、送信したすべての Issue と最新のステータスを表示できます。",
+      "fetchFailedHint": "最新ステータスを取得できませんでした。この端末に記録された送信分のみを表示しています。",
+      "truncatedHint": "Issue が多いため一部のみ表示しています。全件は GitHub で確認してください。"
+    },
     "redirect": {
       "title": "左から Issue を選択してください",
       "description": "左のリストを参照するか、新しい Issue を作成してバグ報告や機能提案を行ってください。",
@@ -6815,7 +6830,6 @@
       "cancel": "キャンセル"
     },
     "redirect": {
-      "title": "Issue は GitHub に移行しました",
       "descriptionBefore": "チャットで ",
       "descriptionAfter": " と入力すると、AI が詳細を確認したうえで問題や提案を提出します。",
       "cta": "GitHub Issues を見る"

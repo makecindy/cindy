@@ -6602,6 +6602,21 @@
       "emptyFilter": "일치하는 이슈가 없습니다",
       "clearFilters": "필터 지우기"
     },
+    "mine": {
+      "refresh": "새로 고침",
+      "emptyTitle": "아직 제출한 이슈가 없습니다",
+      "startIssueChat": "/issue 로 새 채팅 시작",
+      "statusUnknown": "상태 알 수 없음",
+      "sourceCindy": "Cindy에서 제출",
+      "sourceGithub": "GitHub 계정",
+      "commentCount_other": "댓글 {{count}}개",
+      "openOnGithub": "GitHub에서 열기",
+      "viewerGithub": "GitHub 계정 @{{login}}",
+      "platformUnavailableHint": "이 기기에 기록된 제출 항목만 표시합니다. 해당 이슈의 최신 상태는 아직 앱에서 확인할 수 없습니다.",
+      "notSignedInHint": "Cindy 계정에 로그인하면 제출한 모든 이슈와 최신 상태를 볼 수 있습니다.",
+      "fetchFailedHint": "최신 상태를 가져오지 못했습니다. 이 기기에 기록된 제출 항목만 표시합니다.",
+      "truncatedHint": "이슈가 많아 일부만 표시했습니다. 전체 목록은 GitHub에서 확인하세요."
+    },
     "redirect": {
       "title": "왼쪽에서 이슈를 선택하세요",
       "description": "왼쪽 목록에서 이슈를 보거나, 새 이슈를 만들어 버그 보고 또는 기능 제안을 하세요.",
@@ -6815,7 +6830,6 @@
       "cancel": "취소"
     },
     "redirect": {
-      "title": "Issue가 GitHub로 이전되었습니다",
       "descriptionBefore": "채팅에서 ",
       "descriptionAfter": " 를 입력하면 AI가 세부 사항을 확인한 후 문제나 제안을 제출합니다.",
       "cta": "GitHub Issues 보기"

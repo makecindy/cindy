@@ -25,7 +25,7 @@ import { createLogger } from '../logger.js';
 import { getCurrentDbClientUserId } from '../localDb/client/current';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
-import { createGhCliTokenSource } from './ghCliTokenSource.js';
+import { getSharedGhCliTokenSource } from './ghCliTokenSource.js';
 import { GitContextService } from './GitContextService.js';
 import { resolveSessionGitDirLive } from './sessionDirResolver.js';
 import {
@@ -68,8 +68,8 @@ function broadcastToAllWindows(channel: string, payload: unknown): void {
   }
 }
 
-/** gh CLI 登录态来源(模块级单例,内置 5min 正/负缓存)。 */
-const ghCliTokenSource = createGhCliTokenSource();
+/** gh CLI 登录态来源(进程内共享单例,内置 5min 正 / 30s 负缓存)。 */
+const ghCliTokenSource = getSharedGhCliTokenSource();
 
 async function readGithubToken(): Promise<string | null> {
   return ghCliTokenSource.readToken();
