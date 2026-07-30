@@ -387,6 +387,49 @@ describe('校准结果要带上供应商', () => {
     ).toBeNull();
   });
 
+  it('存量草稿里持久化的隐藏默认模型要被校准掉,而不是因「有来源提供」就留下', () => {
+    // 回归 PR #1076 review 第三轮:存量用户的草稿存着旧代码写死的 gpt-5.4 / gpt-5.5,
+    // 而这两个 id 在目录里都是 defaultEnabled:false。modelChosenByVendor 仍为 false,
+    // 正是这套校准要迁移的那批;只判「某来源提供它」会把它们原样留下,用户继续用一个
+    // 在默认选择器里看不到的模型。
+    const gateway = provider('xd', true, {
+      codex: [
+        model('gpt-5.4', { sortOrder: 21, defaultEnabled: false }),
+        model('gpt-5.6-sol', { sortOrder: 18 }),
+      ],
+    });
+
+    expect(pickId([gateway], 'codex', 'gpt-5.4')).toBe('gpt-5.6-sol');
+    expect(
+      calibratedId({
+        providers: [gateway],
+        agent: 'codex',
+        model: 'gpt-5.4',
+        chosenByUser: false,
+        providersLoading: false,
+      }),
+    ).toBe('gpt-5.6-sol');
+  });
+
+  it('用户真选过的模型即便默认收起也一律不动', () => {
+    // chosenByUser 在 calibrateDraftModel 里更早短路 —— 上一条的收紧不能连坐到它。
+    const gateway = provider('xd', true, {
+      codex: [
+        model('gpt-5.4', { sortOrder: 21, defaultEnabled: false }),
+        model('gpt-5.6-sol', { sortOrder: 18 }),
+      ],
+    });
+    expect(
+      calibratedId({
+        providers: [gateway],
+        agent: 'codex',
+        model: 'gpt-5.4',
+        chosenByUser: true,
+        providersLoading: false,
+      }),
+    ).toBe('gpt-5.4');
+  });
+
   it('校准出结论时 model 与 providerId 成对给出', () => {
     const result = calibrateDraftModel({
       providers: [gatewaySameModel, anthropicSub],

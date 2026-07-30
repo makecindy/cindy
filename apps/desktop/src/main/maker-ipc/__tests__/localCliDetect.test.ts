@@ -103,6 +103,19 @@ describe('scanLocalCliAuth', () => {
     expect(codex).toMatchObject({ installed: true, loggedIn: true, sharedWithCindy: false });
   });
 
+  it('deps 判定为「自己在 Cindy 里授权过」时不算继承', async () => {
+    // 回归 PR #1076 review 第三轮：用户在 Cindy 里亲自完成 Claude.ai 授权后，token 写进
+    // 与本机 CLI 相同的凭证库。共用存储只证明账号相同，证不出凭证先于 Cindy 存在 ——
+    // 此时说「已沿用本机登录、无需额外授权」，而那次授权正是他刚做的。
+    // 生产判据在 createLocalCliScanDeps（isNativeProviderAuthSelfAuthorized）；这里断言
+    // 纯函数如实透传 deps 的结论。
+    const r = await scanLocalCliAuth(depsWith(['.claude'], [], true, () => false));
+    expect(r.find((d) => d.cli === 'claude-cli')).toMatchObject({
+      loggedIn: true,
+      sharedWithCindy: false,
+    });
+  });
+
   it('已登录且确为同一份凭证 → sharedWithCindy=true', async () => {
     const r = await scanLocalCliAuth(
       depsWith(['.codex'], [join('.codex', 'auth.json')], true, () => true),

@@ -13,6 +13,7 @@ import { stat } from 'node:fs/promises';
 
 import { hasClaudeAiOAuth } from '../maker-host/claude-credentials-store.js';
 import { isCodexAuthInheritedFromSystemCli } from '../maker-host/auth-adapters.js';
+import { isNativeProviderAuthSelfAuthorized } from '../maker-host/nativeProviderAuthBinding.js';
 import {
   LOCAL_CLI_DETECT_MAP,
   type LocalCliDetection,
@@ -64,10 +65,16 @@ export function createLocalCliScanDeps(): LocalCliScanDeps {
     },
     isCredentialSharedWithCindy: (cli) => {
       try {
+        const providerId = cli === 'claude-cli' ? 'anthropic' : 'openai';
+        // 用户在 Cindy 里**亲自授权过**这家 → 不是继承,无论凭证此刻是否与本机共用。
+        // 少了这道判据，「在 Cindy 里点过 Claude 授权」的用户下次进新建页会被告知
+        // 「已沿用本机登录、无需额外授权」，而那次授权正是他自己刚做的
+        // （PR #1076 review 第三轮）。共用存储只证明账号相同，证不出凭证的来路。
+        if (isNativeProviderAuthSelfAuthorized(providerId)) return false;
         // claude:Cindy 与本机 Claude Code **共用同一处凭证存储**(macOS Keychain 的
         // `Claude Code-credentials` / 其它平台 ~/.claude/.credentials.json,见
         // claude-credentials-store 顶注)。物理上就是同一份,不存在「各自登录不同账号」
-        // 这种分歧,所以已登录即已共用。
+        // 这种分歧,所以排除掉自己授权的那种情况后,已登录即是继承。
         if (cli === 'claude-cli') return true;
         // codex:Cindy 有自己的 codex-home,只有账号一致时 reconcile 才建硬链 ——
         // 必须实证 inode 同一性,不能由「两边都登录了」推出来。

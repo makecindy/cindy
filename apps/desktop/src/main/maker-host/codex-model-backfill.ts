@@ -91,15 +91,16 @@ export interface CodexModelBackfillCoordinator {
  *   - `generation`:auth 边界的代号,`reset()` 递增。在途拉取回来时若代号已变,**不广播、
  *     不计额度**。
  *
- * 代号是必需的,不是防御性编程:`reset()` 拿不回一个已经发出的 `model/list`。登出 / 切账号
- * 发生在拉取途中时,旧账号的那次请求仍会带着旧 `maker` 引用完成(PR #1076 review)。
+ * **代号管的不是目录写入**(容易误读,PR #1076 review 三轮都绕着这点):目录写入发生在
+ * `refreshLive()` 内部 —— agent 的 `onCodexLocalModelsListed` 回调,在 promise resolve
+ * **之前**就跑完了,本模块没有任何介入点。挡住跨边界写入的判据在 maker-core:CodexAgent 把
+ * model/list 结果交给宿主前会校验 `this.hosts.get(key) !== host`,所以只要 auth 边界收口
+ * **退役了旧 host**,迟到响应就压根不会调回调。四条收口路径(登出 / 登录 / 凭证失效 /
+ * auth 模式切换)现在都退役 host,这条不变量由那一处判据统一保证 —— 不要在写入侧再加第二层
+ * 闸门,那既是重复判据,也挡不住真正的问题(试过,见 review 第二、三轮)。
  *
- * **分层要看清**:目录写入本身**不由这里把关**。`refreshLive()` 内部经 agent 的
- * `onCodexLocalModelsListed` 回调写 active-catalog,那发生在 promise resolve **之前**,
- * 本模块根本没有机会介入(review 第二轮的正是这一点)。写入闸门统一放在 active-catalog 的
- * `suspendCodexModelDiscoveryWrites` —— 它覆盖所有发现通道,不只补拉。这里的代号只管两件
- * 本模块自己的事:广播(`onApplied`,避免为一次被丢弃的写入白广播一遍)与失败额度的归属
- * (旧边界的失败不该扣新边界的重试次数)。两处不是重复判据,是同一不变量在不同层的执行点。
+ * 这里的代号只管两件**本模块自己**的事:广播(`onApplied` —— 不为一次已被 host 校验挡掉的
+ * 写入白广播一轮)与失败额度的归属(旧边界的失败不该扣新边界的重试次数)。
  *
  * 刻意**不缓存「已经拉到了」**:清单在场与否每次都现查 catalog(`hasCodexModels`),因为它
  * 随时会被 auth 边界收口清空(登出、cache miss 回退),缓存成终态会让清空之后再也拉不回来。

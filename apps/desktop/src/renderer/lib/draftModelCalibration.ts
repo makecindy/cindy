@@ -74,11 +74,18 @@ export interface PickedConnectedModel {
 
 /**
  * 在该 agent 的已连接来源里挑 (模型, 来源)：
- *   1. `preferredModelId` 本身可用 —— 默认值能用就绝不动它，避免首屏莫名换模型；
- *      来源仍按订阅优先顺序取「第一家提供它的」，让默认值也享受订阅优先；
+ *   1. `preferredModelId` 本身可用**且默认可见** —— 默认值能用就绝不动它，避免首屏莫名换
+ *      模型；来源仍按订阅优先顺序取「第一家提供它的」，让默认值也享受订阅优先；
  *   2. 否则按「订阅优先」的供应商序取第一家，返回它排序第一的默认可见模型
  *      （见 providersByPreference / firstModelByOrder）；
  *   3. 一个已连接来源都没有（或都没有模型）→ null，交给既有的「零来源」空态引导去连接供应商。
+ *
+ * 第 1 步为什么要卡「默认可见」：存量用户的草稿里持久化着**旧代码写死的**种子默认
+ * （`gpt-5.4` / `gpt-5.5`），而这两个 id 在目录里都是 `defaultEnabled: false`。它们的
+ * `modelChosenByVendor` 仍是 false —— 正是这套校准要迁移的那批草稿。只判「某个已连接来源
+ * 提供它」会把它们原样留下，用户继续用一个在默认选择器里根本看不到的模型
+ * （PR #1076 review 第三轮）。真正被用户选过的模型不受影响：那由 `chosenByUser` 在
+ * `calibrateDraftModel` 里更早短路，压根走不到这里。
  */
 export function pickConnectedModelForAgent(
   providers: readonly ProviderView[],
@@ -88,7 +95,8 @@ export function pickConnectedModelForAgent(
   const ranked = providersByPreference(providers, agent);
   if (ranked.length === 0) return null;
   for (const provider of ranked) {
-    if ((provider.models[agent] ?? []).some((m) => m.id === preferredModelId)) {
+    const preferred = (provider.models[agent] ?? []).find((m) => m.id === preferredModelId);
+    if (preferred && preferred.defaultEnabled !== false) {
       return { model: preferredModelId, providerId: provider.id };
     }
   }

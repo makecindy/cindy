@@ -354,15 +354,12 @@ export async function refreshDiscoveredCodexModels(
   authenticated = true,
   shouldApply: () => boolean = () => true,
 ): Promise<void> {
-  // fromAuthBoundary:这两处写入都是「按当前 auth 边界重建快照」的权威事实,必须穿透
-  // discovery 静默窗口(见 active-catalog.suspendCodexModelDiscoveryWrites)——它们正是
-  // 那个窗口要保护的目标状态。
   if (!authenticated) {
-    if (shouldApply()) setDiscoveredCodexModels([], { fromAuthBoundary: true });
+    if (shouldApply()) setDiscoveredCodexModels([]);
     return;
   }
   const discovered = await readCodexDiscoveredModelsForAuthRefresh();
-  if (shouldApply()) setDiscoveredCodexModels(discovered, { fromAuthBoundary: true });
+  if (shouldApply()) setDiscoveredCodexModels(discovered);
 }
 
 /**
