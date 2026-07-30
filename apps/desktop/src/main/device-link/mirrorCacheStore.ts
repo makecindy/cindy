@@ -81,11 +81,17 @@ interface StoredSessionList {
 
 /**
  * 缓存文件名。deviceId / sessionId 来自 renderer,一律当不可信输入:
- * 先消毒成可见片段(只留 [A-Za-z0-9._-]、截断),再拼 sha256 前 16 位保证唯一。
+ * 先 **trim 归一** 再消毒成可见片段(只留 `[A-Za-z0-9_-]`、截断),最后拼 sha256 前 16 位保证唯一。
  * 消毒后的片段只为人肉排查可读,唯一性完全靠哈希。
+ *
+ * trim 是**正确性**要求,不只是整洁:IPC 层的 `requireString` 不 trim,于是 `"dev "` 与 `"dev"`
+ * 会落到两个不同文件,而 `clearDevice` / 读路径都按 trim 后的值算前缀 —— 带空白的那份就永远
+ * 清不掉也读不到。写、读、清三条路径必须共用同一套归一化(review: copilot)。
  */
 export function messageFileName(deviceId: string, sessionId: string): string {
-  return `${safeSegment(deviceId)}-${shortHash(deviceId)}-${safeSegment(sessionId)}-${shortHash(sessionId)}.json`;
+  const device = deviceId.trim();
+  const session = sessionId.trim();
+  return `${safeSegment(device)}-${shortHash(device)}-${safeSegment(session)}-${shortHash(session)}.json`;
 }
 
 /**
@@ -99,6 +105,10 @@ function safeSegment(value: string): string {
 
 function shortHash(value: string): string {
   return createHash('sha256').update(value).digest('hex').slice(0, 16);
+}
+
+function digestOf(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
 }
 
 /**
@@ -254,20 +264,33 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
   const messagesDir = (): string => path.join(resolveRoot(), MESSAGES_DIR);
   const sessionListPath = (): string => path.join(resolveRoot(), SESSION_LIST_FILE);
   /**
-   * 上次写入内容的指纹(文件路径 → sha256)。写路径被调得很勤:列表快照跟着 10 秒一轮的
-   * anti-entropy 走,消息缓存跟着每次对账(focus / 重连 / turn 结束)走,而绝大多数轮次
-   * 内容一个字节都没变。没有这层去重就是每 10 秒一次无意义的落盘。
-   * 只在进程内有效(重启后第一次写照写),清理路径会把它一起清掉。
+   * 上次**成功落盘**内容的指纹(文件路径 → sha256)。写路径被调得很勤:列表快照跟着 10 秒
+   * 一轮的 anti-entropy 走,消息缓存跟着每次对账(focus / 重连 / turn 结束)走,而绝大多数
+   * 轮次内容一个字节都没变。没有这层去重就是每 10 秒一次无意义的落盘。
+   * 只在进程内有效(重启后第一次写照写)。
+   *
+   * ⚠️ 指纹必须严格对应「盘上此刻真有这份内容」,任何让文件消失的路径都要同步删掉指纹,
+   * 否则同内容的下一次写入会被跳过,该文件在本进程余生里再也回不来(review: greptile)。
+   * 已覆盖:写入失败(只在成功后才记)、LRU 逐出、空写删除、clearDevice、clearAll。
    */
   const lastWritten = new Map<string, string>();
 
-  /** 内容与上次写入一致 → 跳过。返回 true 表示可以跳过本次写入。 */
+  /** 内容与上次成功落盘一致 → 可跳过。**不写入指纹**,记录留给写成功之后。 */
   function unchanged(file: string, content: string): boolean {
-    const digest = createHash('sha256').update(content).digest('hex');
-    if (lastWritten.get(file) === digest) return true;
-    lastWritten.set(file, digest);
-    return false;
+    return lastWritten.get(file) === digestOf(content);
   }
+
+  /** 写成功后登记指纹(与 unchanged 配对使用)。 */
+  function rememberWritten(file: string, content: string): void {
+    lastWritten.set(file, digestOf(content));
+  }
+
+  /**
+   * 写入代际。clearAll(登出 / 切账号)自增,作废所有在途写入 —— 隐私清理与 renderer 的
+   * fire-and-forget 写盘是并发的,只清一次目录挡不住「清完之后才落地」的那一笔。
+   * 与手机端 mobileHomeListCache 的 writeEpoch 同款。
+   */
+  let generation = 0;
 
   return {
     async readMessages(deviceId, sessionId) {
@@ -289,6 +312,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         await fsp.rm(file, { force: true }).catch(() => undefined);
         return;
       }
+      const body = JSON.stringify(normalized);
       const payload: StoredMessages = { version: 1, updatedAt: Date.now(), messages: normalized };
       const serialized = JSON.stringify(payload);
       if (Buffer.byteLength(serialized, 'utf8') > MAX_MESSAGE_FILE_BYTES) {
@@ -296,10 +320,21 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         return;
       }
       // 指纹只算消息体,不含 payload 的 updatedAt —— 否则每次都"变了",去重永不命中。
-      if (unchanged(file, JSON.stringify(normalized))) return;
+      if (unchanged(file, body)) return;
+      // 捕获发起时代际:clearAll(登出 / 切账号)会自增,作废本次在途写入。
+      const epoch = generation;
       await ensureDir(dir);
+      if (epoch !== generation) return;
       if (!(await writeFileAtomic(file, serialized))) return;
-      await evictMessagesIfNeeded(dir);
+      if (epoch !== generation) {
+        // 隐私清理期间落的盘:立刻收回,否则刚被清空的目录里会留下上一个账号的聊天内容。
+        lastWritten.delete(file);
+        await fsp.rm(file, { force: true }).catch(() => undefined);
+        return;
+      }
+      // 指纹只在真正落盘之后登记(写失败留指纹 → 同内容重试被跳过 → 缓存永久缺失)。
+      rememberWritten(file, body);
+      await evictMessagesIfNeeded(dir, lastWritten);
     },
 
     async readSessionList() {
@@ -326,9 +361,18 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         if (Buffer.byteLength(serialized, 'utf8') > MAX_SESSION_LIST_BYTES) continue;
         // 同 writeMessages:指纹只算 devices,不含 updatedAt。10 秒一轮的 anti-entropy
         // 绝大多数时候内容没变,这里直接跳过落盘。
-        if (unchanged(file, JSON.stringify(normalized))) return;
+        const body = JSON.stringify(normalized);
+        if (unchanged(file, body)) return;
+        const epoch = generation;
         await ensureDir(path.dirname(file));
-        await writeFileAtomic(file, serialized);
+        if (epoch !== generation) return;
+        if (!(await writeFileAtomic(file, serialized))) return;
+        if (epoch !== generation) {
+          lastWritten.delete(file);
+          await fsp.rm(file, { force: true }).catch(() => undefined);
+          return;
+        }
+        rememberWritten(file, body);
         return;
       }
       // 缩到最小档仍超上限:保留旧快照,不写入。
@@ -355,15 +399,34 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       await this.writeSessionList(remaining);
     },
 
+    /**
+     * 隐私路径(登出 / 切账号 / 会话失效)。与其它方法不同:**失败会抛**。
+     *
+     * 吞掉失败等于骗调用方「盘上已经干净了」——`teardownAuthAccountBoundary` 会照常推进
+     * 账号边界,而上一个账号的明文聊天缓存无声地留在盘上,既没日志也没重试机会
+     * (review: codex P1)。Windows 文件锁、权限问题、并发写都可能让 rm 失败,必须让它冒泡。
+     *
+     * 自增代际同时作废所有在途写入(见 writeMessages / writeSessionList 的 epoch 比对):
+     * 清理与 renderer 的 fire-and-forget 写盘是并发的,不设这道闸就可能「先清后写」,
+     * 把刚删掉的内容又写回来。
+     */
     async clearAll() {
+      generation += 1;
       lastWritten.clear();
-      await fsp.rm(resolveRoot(), { recursive: true, force: true }).catch(() => undefined);
+      await fsp.rm(resolveRoot(), { recursive: true, force: true });
     },
   };
 }
 
-/** messages/ 超文件数或总字节上限时按 mtime 逐出最旧(缓存越旧越不值钱)。 */
-async function evictMessagesIfNeeded(dir: string): Promise<void> {
+/**
+ * messages/ 超文件数或总字节上限时按 mtime 逐出最旧(缓存越旧越不值钱)。
+ * 被逐出的文件必须同步删掉写入指纹(`lastWritten`),否则同内容的下一次写入会被去重跳过,
+ * 该会话的缓存在本进程余生里再也建不回来(review: greptile)。
+ */
+async function evictMessagesIfNeeded(
+  dir: string,
+  lastWritten: Map<string, string>,
+): Promise<void> {
   const names = await listFiles(dir);
   if (names.length === 0) return;
   const stats: Array<{ name: string; size: number; mtimeMs: number }> = [];
@@ -381,7 +444,9 @@ async function evictMessagesIfNeeded(dir: string): Promise<void> {
   let count = stats.length;
   for (const entry of stats) {
     if (count <= MAX_MESSAGE_FILES && totalBytes <= MAX_MESSAGE_DIR_BYTES) break;
-    await fsp.rm(path.join(dir, entry.name), { force: true }).catch(() => undefined);
+    const file = path.join(dir, entry.name);
+    lastWritten.delete(file);
+    await fsp.rm(file, { force: true }).catch(() => undefined);
     count -= 1;
     totalBytes -= entry.size;
   }

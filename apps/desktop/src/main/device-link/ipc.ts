@@ -14,6 +14,7 @@ import {
 } from '@cindy/device-link';
 import { serverApiFetch, ServerApiError } from '../serverApiClient';
 import { requireString, throwIpcError } from '../utils/ipcValidate';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import type { IpcErrorCode } from '../../shared/ipc-errors';
 import {
   DEVICE_LINK_INVOKE,
@@ -788,15 +789,22 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleRestore(deps, p.deviceId);
   });
-  // 远程会话镜像缓存:读写按 device-link capability 把关(没账号就不存在远程会话),
-  // 但 **clear 不 gate** —— 登出清理恰好发生在 capability 已经掉下去之后,
-  // gate 住就再也清不掉上一个账号的缓存了。
-  ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_GET_MESSAGES, (_e, payload: unknown) => {
+  // 远程会话镜像缓存。三道闸:
+  //  1. assertTrustedAppRendererEvent:必须来自 Cindy 自己登记过的应用窗口**顶层页面**。
+  //     capability 只证明「当前登着云账号」,不证明调用者是可信 frame —— 带 preload 的窗口被
+  //     导航到不可信内容时,读 handler 能吐出缓存的聊天正文,put/clear 能改写或抹掉
+  //     owner 作用域的数据(review: codex P1)。
+  //  2. requireDeviceLinkCapability:没账号就不存在远程会话,读写一律不放行。
+  //  3. **clear 只过第 1 道** —— 登出清理恰好发生在 capability 已经掉下去之后,
+  //     用 capability gate 住就再也清不掉上一个账号的缓存了。
+  ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_GET_MESSAGES, (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { deviceId?: unknown; sessionId?: unknown };
     return handleMirrorCacheGetMessages(getMirrorCache(), p.deviceId, p.sessionId);
   });
-  ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_PUT_MESSAGES, (_e, payload: unknown) => {
+  ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_PUT_MESSAGES, (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as {
       deviceId?: unknown;
@@ -805,16 +813,19 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
     };
     return handleMirrorCachePutMessages(getMirrorCache(), p.deviceId, p.sessionId, p.messages);
   });
-  ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_GET_SESSION_LIST, () => {
+  ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_GET_SESSION_LIST, (e) => {
+    assertTrustedAppRendererEvent(e);
     requireDeviceLinkCapability();
     return handleMirrorCacheGetSessionList(getMirrorCache());
   });
-  ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_PUT_SESSION_LIST, (_e, payload: unknown) => {
+  ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_PUT_SESSION_LIST, (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
     requireDeviceLinkCapability();
     const p = (payload ?? {}) as { devices?: unknown };
     return handleMirrorCachePutSessionList(getMirrorCache(), p.devices);
   });
-  ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_CLEAR, (_e, payload: unknown) => {
+  ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_CLEAR, (e, payload: unknown) => {
+    assertTrustedAppRendererEvent(e);
     const p = (payload ?? {}) as { deviceId?: unknown };
     return handleMirrorCacheClear(getMirrorCache(), p.deviceId);
   });

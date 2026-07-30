@@ -234,6 +234,60 @@ describe('冷缓存 hydrate', () => {
     await flush();
     expect(getMessages).not.toHaveBeenCalled();
   });
+
+  // review(codex P1):整页无可见渲染锚点时,种入会让 messages 非空(于是 loading 覆盖层
+  // 被收起)但 MessageStream 渲染 0 项 —— 被控端离线时就是一片永久空白。
+  it('缓存页整页都是 orphan tool_result → 不种入,留给 loading 覆盖层', async () => {
+    const s = sid();
+    cachedMessages.set(`${DEVICE_ID}::${s}`, [
+      {
+        id: 'tr1',
+        clientId: 'client-tr1',
+        sessionId: s,
+        role: 'tool_result',
+        content: 'orphan result',
+        toolUseId: 'tu-missing',
+        agentMeta: null,
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+    ]);
+    registerRemote(s);
+    remoteListPromise = new Promise<Message[]>(() => {});
+
+    makerChatStore.ensureInitialMessages(s);
+    await flush();
+
+    expect(makerChatStore.getSnapshot(s).messages).toHaveLength(0);
+  });
+
+  it('缓存页里只要有一条可见锚点就照常种入', async () => {
+    const s = sid();
+    cachedMessages.set(`${DEVICE_ID}::${s}`, [
+      {
+        id: 'tr1',
+        clientId: 'client-tr1',
+        sessionId: s,
+        role: 'tool_result',
+        content: 'orphan result',
+        toolUseId: 'tu-missing',
+        agentMeta: null,
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+      dbMessage(s, 'a1', 'visible answer', '2026-01-02T00:00:00.000Z') as unknown as Record<
+        string,
+        unknown
+      >,
+    ]);
+    registerRemote(s);
+    remoteListPromise = new Promise<Message[]>(() => {});
+
+    makerChatStore.ensureInitialMessages(s);
+    await flush();
+
+    expect(
+      makerChatStore.getSnapshot(s).messages.some((m) => m.clientId === 'client-a1'),
+    ).toBe(true);
+  });
 });
 
 describe('缓存写点纪律', () => {

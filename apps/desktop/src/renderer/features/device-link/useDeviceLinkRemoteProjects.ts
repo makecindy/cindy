@@ -404,6 +404,11 @@ export function useDeviceLinkRemoteProjects(): void {
           evictDeviceProviders(p.deviceId);
           evictDeviceGitSafetySettings(p.deviceId);
         }
+        // 本机关掉「控制这台设备」→ 盘上那份镜像缓存也要清。只清内存分片的话,下次冷启动
+        // hydrateFromCache 会把这台已经明确禁用控制的设备连着它的会话画回侧边栏
+        // (review: greptile)。放在 if 外面:即使此刻内存里没有分片(本次会话从未连上它),
+        // 盘上仍可能留着上一次运行写下的缓存。
+        clearCachedDevice(p.deviceId);
         return;
       }
       reseed();

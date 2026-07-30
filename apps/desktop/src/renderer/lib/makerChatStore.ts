@@ -5175,6 +5175,12 @@ function hydrateRemoteMessagesFromCache(sessionId: string): void {
   _cacheHydrateStarted.add(sessionId);
   void readCachedMessages(deviceId, sessionId).then((rows) => {
     if (rows.length === 0) return;
+    // 缓存页整页都是"渲染后不留可见锚点"的行(orphan tool_result / 隐藏 thinking /
+    // 合成指令行)时**不种入**:mapServerMessages 会产出非空数组,但 MessageStream 渲染 0 项,
+    // 而 CCAgentSessionView 又会因 messages 非空而收起 loading 覆盖层 —— 被控端离线时
+    // 就是一片永久空白(review: codex P1)。这种页对首屏没有价值,让 loading 照常显示、
+    // 交给 fresh 首拉的 no-anchor-backfill 往前翻页处理。
+    if (rows.every(isNonAnchorHistoryRow)) return;
     const mapped = mapServerMessages(rows).map((message) => ({
       ...message,
       cacheHydrated: true as const,
