@@ -383,10 +383,17 @@ async function waitForPopupOpener(webContentsId: number): Promise<ResolvedPopupO
       unsub?.();
       resolve(value);
     };
-    unsub = subscribe((reportedId) => {
-      if (reportedId !== webContentsId) return;
-      finish(resolvePopupOpener(webContentsId));
-    });
+    // subscribe 是外部注入的钩子:它抛错会让 Promise executor 抛 → promise
+    // reject → 调用方的 `void promise.then(...)` 变 unhandled rejection,popup
+    // 路由静默中断。防御性兜住:订阅失败就退化为"纯超时兜底"档,路由不中断。
+    try {
+      unsub = subscribe((reportedId) => {
+        if (reportedId !== webContentsId) return;
+        finish(resolvePopupOpener(webContentsId));
+      });
+    } catch {
+      unsub = null;
+    }
     // 订阅建立后再同步查一次,堵"report 在建立订阅之前恰好落地"的竞态窗。
     const now = resolvePopupOpener(webContentsId);
     if (now) finish(now);

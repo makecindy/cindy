@@ -492,6 +492,30 @@ describe('installDeferredPopupRouter', () => {
     });
   });
 
+  it('注入的 report 订阅器抛错时退化为超时兜底,popup 路由不中断', async () => {
+    vi.useFakeTimers();
+    const { childContents, hostContents, popupWindow } = makePopupHarness();
+    setRsbPopupOpenerResolver(() => null);
+    setRsbPopupOpenerReportSubscriber(() => {
+      throw new Error('subscriber exploded');
+    });
+
+    installDeferredPopupRouter(
+      hostContents,
+      popupWindow as unknown as BrowserWindow,
+      'foreground-tab',
+      42,
+    );
+    childContents.emit('will-navigate', {}, 'https://accounts.example.com/oauth');
+
+    // 不产生 unhandled rejection,超时兜底后照常无归属路由。
+    await vi.advanceTimersByTimeAsync(POPUP_OPENER_EVENT_WAIT_TIMEOUT_MS + 50);
+    expect(hostContents.send).toHaveBeenCalledWith(RSB_BROWSER_POPUP_CHANNEL, {
+      url: 'https://accounts.example.com/oauth',
+      disposition: 'foreground-tab',
+    });
+  });
+
   it('event-driven wait: 兜底超时后无归属路由(report 永不来的极端场景)', async () => {
     vi.useFakeTimers();
     const { childContents, hostContents, popupWindow } = makePopupHarness();
