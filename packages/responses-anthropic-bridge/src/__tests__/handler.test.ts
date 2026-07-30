@@ -101,6 +101,31 @@ describe('createResponsesAnthropicHandler', () => {
     expect(res.ended).toBe(true);
   });
 
+  it('normalizes provider header names before applying bridge-owned values', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toEqual({
+        'anthropic-version': 'custom-version',
+        'content-type': 'application/json',
+        accept: 'application/json',
+        'x-api-key': 'secret',
+      });
+      return anthropicStream();
+    }) as typeof fetch;
+    const handler = createResponsesAnthropicHandler({
+      upstreamBase: 'https://provider.example',
+      buildHeaders: async () => ({
+        'Anthropic-Version': 'custom-version',
+        'Content-Type': 'text/plain',
+        Accept: 'text/event-stream',
+        'X-Api-Key': 'secret',
+      }),
+    }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: { model: 'claude', input: 'hi' }, ctx, res: res as never });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(res.status).toBe(200);
+  });
+
   it('does not duplicate /v1 when a provider stores the versioned base URL', async () => {
     const fetchImpl = vi.fn(async () => anthropicStream()) as typeof fetch;
     const handler = createResponsesAnthropicHandler({

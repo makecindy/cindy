@@ -268,4 +268,57 @@ describe('AppServerHost descendant thread routing', () => {
 
     await host.shutdown();
   });
+
+  it('rebuilds buffered descendant lineage when the root subscribes after child starts', async () => {
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    // Cross-thread notifications can arrive out of lineage order. Both starts are
+    // buffered under their own child ids because the root has not subscribed yet.
+    transport.emit({
+      method: 'thread/started',
+      params: {
+        thread: {
+          id: 'grandchild-thread',
+          parentThreadId: 'child-thread',
+        },
+      },
+    });
+    transport.emit({
+      method: 'thread/started',
+      params: {
+        thread: {
+          id: 'child-thread',
+          parentThreadId: 'root-thread',
+        },
+      },
+    });
+
+    const descendantThreadStarted = vi.fn();
+    const subscription = host.subscribeThread('root-thread', {
+      descendantThreadStarted,
+    });
+
+    expect(descendantThreadStarted).toHaveBeenCalledTimes(2);
+    expect(descendantThreadStarted).toHaveBeenCalledWith({
+      thread: {
+        id: 'child-thread',
+        parentThreadId: 'root-thread',
+      },
+    });
+    expect(descendantThreadStarted).toHaveBeenCalledWith({
+      thread: {
+        id: 'grandchild-thread',
+        parentThreadId: 'child-thread',
+      },
+    });
+
+    await subscription.release();
+    await host.shutdown();
+  });
 });

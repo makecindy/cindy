@@ -8,9 +8,12 @@ export const ABSOLUTE_MAX_DIMENSION = 8000;
 export const MAX_IMAGES_PER_REQUEST = 100;
 export const MAX_IMAGE_BASE64_LENGTH = 5 * 1024 * 1024;
 export const TOTAL_IMAGE_BASE64_BUDGET = 20 * 1024 * 1024;
-export const MAX_INPUT_BASE64_LENGTH = 64 * 1024 * 1024;
+export const MAX_INPUT_BASE64_LENGTH = 20 * 1024 * 1024;
 
-const IMAGE_NORMALIZE_CONCURRENCY = 4;
+// Sharp holds the decoded input and resized output concurrently. Serialize native
+// normalization so multiple large-but-admissible images cannot multiply that peak
+// inside Electron's main process before the final request budget is enforced.
+const IMAGE_NORMALIZE_CONCURRENCY = 1;
 const ALLOWED_IMAGE_MEDIA_TYPES = new Set([
   'image/jpeg',
   'image/png',

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   enforceAnthropicImageLimits,
+  MAX_INPUT_BASE64_LENGTH,
   normalizeAnthropicImages,
   requestHasInlineImage,
 } from '../anthropic-images.js';
@@ -59,5 +60,45 @@ describe('Anthropic image limits and normalization', () => {
     }];
     enforceAnthropicImageLimits(messages);
     expect(messages[0].content[0]).toMatchObject({ type: 'text' });
+  });
+
+  it('rejects oversized raw input before invoking the native codec', async () => {
+    const normalize = vi.fn();
+    const messages = [{
+      role: 'user',
+      content: [{
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: 'image/png',
+          data: 'A'.repeat(MAX_INPUT_BASE64_LENGTH + 1),
+        },
+      }],
+    }];
+    await normalizeAnthropicImages(messages, { codec: { normalize } });
+    expect(normalize).not.toHaveBeenCalled();
+    expect(messages[0].content[0]).toMatchObject({ type: 'text' });
+  });
+
+  it('serializes native normalization to bound concurrent decode memory', async () => {
+    let active = 0;
+    let peak = 0;
+    const normalize = vi.fn(async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await Promise.resolve();
+      active -= 1;
+      return { data: tinyPng, mediaType: 'image/png' };
+    });
+    const messages = [{
+      role: 'user',
+      content: Array.from({ length: 4 }, () => ({
+        type: 'image',
+        source: { type: 'base64', media_type: 'image/png', data: tinyPng },
+      })),
+    }];
+    await normalizeAnthropicImages(messages, { codec: { normalize } });
+    expect(normalize).toHaveBeenCalledTimes(4);
+    expect(peak).toBe(1);
   });
 });

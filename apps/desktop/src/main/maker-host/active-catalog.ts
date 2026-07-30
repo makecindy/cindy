@@ -516,9 +516,20 @@ function computeMerged(): Catalog {
     const overlaid = sortModelsByOrder(
       anthropicModels.map((m) => overlayCindyMeta(m, metaIndex.get(m.id))),
     );
+    const codexBridgeModels = overlaid.map((model) => ({
+      ...model,
+      supportsFastMode: false,
+    }));
     providers = providers.map((p) =>
       p.id === 'anthropic'
-        ? { ...p, models: { ...p.models, 'claude-code': overlaid, codex: overlaid } }
+        ? {
+            ...p,
+            models: {
+              ...p.models,
+              'claude-code': overlaid,
+              codex: codexBridgeModels,
+            },
+          }
         : p,
     );
   }
@@ -589,6 +600,7 @@ function computeMerged(): Catalog {
         if (xdCodexAnthropicBridgeModelIds.has(model.id)) {
           codexModels.push({
             ...model,
+            supportsFastMode: false,
             codexCompatibilityWireProtocol: 'anthropic-messages',
           });
         }

@@ -118,6 +118,19 @@ function parseSseBlock(block: string): unknown | null {
   return parsed;
 }
 
+function upstreamRequestHeaders(providerHeaders: Record<string, string>): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const [name, value] of Object.entries(providerHeaders)) {
+    normalized[name.toLowerCase()] = value;
+  }
+  normalized['anthropic-version'] ??= '2023-06-01';
+  normalized['content-type'] = 'application/json';
+  // Native Anthropic SDKs request application/json even when stream:true; the body
+  // flag selects SSE. Strict Messages gateways reject event-stream Accept with 406.
+  normalized.accept = 'application/json';
+  return normalized;
+}
+
 export interface ResponsesAnthropicHandlerOptions {
   logger?: ResponsesAnthropicLogger;
   fetchImpl?: typeof fetch;
@@ -225,15 +238,7 @@ export function createResponsesAnthropicHandler(
         try {
           upstream = await fetchImpl(upstreamUrl, {
             method: 'POST',
-            headers: {
-              ...providerHeaders,
-              'anthropic-version': providerHeaders['anthropic-version'] ?? '2023-06-01',
-              'content-type': 'application/json',
-              // Native Anthropic SDKs request application/json even when stream:true;
-              // the body flag selects SSE. Strict Messages gateways reject an
-              // event-stream Accept with 406, so normalize this client fingerprint.
-              accept: 'application/json',
-            },
+            headers: upstreamRequestHeaders(providerHeaders),
             body: JSON.stringify(translated.request),
             signal: abort.signal,
           });

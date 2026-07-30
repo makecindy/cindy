@@ -198,7 +198,12 @@ describe('anthropic 发现条目的 cindyModelMeta 元数据基线', () => {
       ['claude-sonnet-4-5', 'Sonnet 4.5'],
       ['claude-haiku-4-5', 'Haiku 4.5'],
     ]);
-    expect(anthropicList('codex')).toEqual(anthropicList('claude-code'));
+    expect(anthropicList('codex')).toEqual(
+      anthropicList('claude-code').map((model) => ({
+        ...model,
+        supportsFastMode: false,
+      })),
+    );
     expect(Object.fromEntries([
       'claude-fable-5',
       'claude-opus-5',

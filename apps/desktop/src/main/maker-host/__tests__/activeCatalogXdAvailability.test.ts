@@ -74,6 +74,20 @@ describe('XD 网关权威模型清单重建', () => {
     ).toContain('brand-new-model');
   });
 
+  it('Claude-only 模型投影到 Codex bridge 时清除未实现的 Fast 能力', () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+    setXdGatewayModels([{
+      id: 'fast-claude-only',
+      agents: ['claude-code'],
+      supportsFastMode: true,
+    }]);
+    expect(xdModels('claude-code')[0]?.supportsFastMode).toBe(true);
+    expect(xdModels('codex')[0]).toMatchObject({
+      supportsFastMode: false,
+      codexCompatibilityWireProtocol: 'anthropic-messages',
+    });
+  });
+
   it('显式登记 efforts=[] 表示不可调,不合成 3 档;fast 显式 false 尊重', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([
@@ -264,9 +278,9 @@ describe('XD 网关权威模型清单重建', () => {
 });
 
 describe('Anthropic 权威模型清单注入', () => {
-  function anthropicModels() {
+  function anthropicModels(agent: 'claude-code' | 'codex' = 'claude-code') {
     const p = getActiveCatalog().providers.find((x) => x.id === 'anthropic');
-    return p?.models['claude-code'] ?? [];
+    return p?.models[agent] ?? [];
   }
 
   const opus: CatalogModel = {
@@ -291,8 +305,13 @@ describe('Anthropic 权威模型清单注入', () => {
     setAnthropicDiscoveredModels([opus]);
     expect(anthropicModels().map((m) => m.id)).toEqual(['claude-opus-4-8']);
     expect(anthropicModels()[0]).toMatchObject({ name: 'Opus 4.8', supportsFastMode: true });
+    expect(anthropicModels('codex')[0]).toMatchObject({
+      name: 'Opus 4.8',
+      supportsFastMode: false,
+    });
     setAnthropicDiscoveredModels([]);
     expect(anthropicModels()).toEqual([]);
+    expect(anthropicModels('codex')).toEqual([]);
   });
 
   it('注入 anthropic 不影响其它供应商(xai 静态清单逐字不变)', () => {

@@ -331,51 +331,14 @@ function stripEncryptedSchemaMarker(
 function schemaForAnthropic(value: unknown): JsonObject {
   const stripped = stripEncryptedSchemaMarker(value);
   const source = isObject(stripped) ? stripped : {};
-  const compositionKeys = ['oneOf', 'anyOf', 'allOf'] as const;
-  const hasRootComposition = compositionKeys.some((key) => Array.isArray(source[key]));
-  if (!hasRootComposition) {
-    return {
-      ...source,
-      type: 'object',
-      properties: isObject(source.properties) ? source.properties : {},
-    };
-  }
-
-  const properties: JsonObject = isObject(source.properties)
-    ? { ...source.properties }
-    : {};
-  const required = new Set(
-    Array.isArray(source.required)
-      ? source.required.filter((item): item is string => typeof item === 'string')
-      : [],
-  );
-  for (const key of compositionKeys) {
-    const variants = source[key];
-    if (!Array.isArray(variants)) continue;
-    for (const variant of variants) {
-      if (!isObject(variant)) continue;
-      if (isObject(variant.properties)) Object.assign(properties, variant.properties);
-      if (key === 'allOf' && Array.isArray(variant.required)) {
-        for (const item of variant.required) if (typeof item === 'string') required.add(item);
-      }
-    }
-  }
-  const normalized: JsonObject = {};
-  for (const [key, child] of Object.entries(source)) {
-    if (
-      key === 'oneOf'
-      || key === 'anyOf'
-      || key === 'allOf'
-      || key === 'type'
-      || key === 'properties'
-      || key === 'required'
-    ) continue;
-    normalized[key] = child;
-  }
-  normalized.type = 'object';
-  normalized.properties = properties;
-  if (required.size > 0) normalized.required = [...required];
-  return normalized;
+  // Anthropic requires a root object schema, but oneOf/anyOf/allOf remain valid
+  // constraints on that object. Preserve them verbatim instead of merging variants,
+  // which would weaken mutually exclusive required-property contracts.
+  return {
+    ...source,
+    type: 'object',
+    properties: isObject(source.properties) ? source.properties : {},
+  };
 }
 
 function safeToolName(value: string, fallback: string): string {

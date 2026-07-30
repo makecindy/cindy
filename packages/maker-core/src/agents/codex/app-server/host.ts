@@ -665,6 +665,7 @@ export class AppServerHost {
         this.dispatchToHandlers(handlers, item.method, item.params);
       }
     }
+    this.replayBufferedDescendantThreadStarts(threadId);
 
     // 账号配额 snapshot replay — 让新 session 立即看到当前账号配额, 不必等下次 turn。
     if (this.lastAccountRateLimits && handlers.accountRateLimitsUpdated) {
@@ -772,6 +773,7 @@ export class AppServerHost {
     const rootThreadId = this.lineageRoots.get(parentThreadId)
       ?? (this.subscribers.has(parentThreadId) ? parentThreadId : null);
     if (!rootThreadId) return;
+    if (this.lineageRoots.get(childThreadId) === rootThreadId) return;
 
     const handlers = this.subscribers.get(rootThreadId);
     if (!handlers) return;
@@ -787,6 +789,32 @@ export class AppServerHost {
         childThreadId,
         message: (e as Error).message,
       });
+    }
+  }
+
+  private replayBufferedDescendantThreadStarts(rootThreadId: string): void {
+    // thread/started is buffered under the child id. A root subscription therefore
+    // cannot drain those entries directly; rebuild the lineage iteratively so an
+    // already-buffered child can unlock an already-buffered grandchild as well.
+    for (;;) {
+      let discovered = 0;
+      for (const notifications of this.buffered.values()) {
+        for (const item of notifications) {
+          if (item.method !== 'thread/started') continue;
+          const params = item.params as ThreadStartedNotification['params'];
+          const childThreadId = params.thread?.id;
+          const parentThreadId = params.thread?.parentThreadId;
+          if (
+            !childThreadId
+            || !parentThreadId
+            || this.lineageRoots.has(childThreadId)
+            || this.lineageRoots.get(parentThreadId) !== rootThreadId
+          ) continue;
+          this.routeDescendantThreadStarted(params);
+          if (this.lineageRoots.get(childThreadId) === rootThreadId) discovered += 1;
+        }
+      }
+      if (discovered === 0) return;
     }
   }
 

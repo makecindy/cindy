@@ -393,6 +393,41 @@ describe('Responses → Anthropic request translation', () => {
     });
   });
 
+  it('preserves root tool-schema composition constraints', () => {
+    const result = translateResponsesRequest({
+      model: 'claude',
+      input: 'open one location',
+      tools: [{
+        type: 'function',
+        name: 'open',
+        parameters: {
+          oneOf: [
+            {
+              type: 'object',
+              properties: { path: { type: 'string' } },
+              required: ['path'],
+            },
+            {
+              type: 'object',
+              properties: { url: { type: 'string' } },
+              required: ['url'],
+            },
+          ],
+        },
+      }],
+    });
+    expect(result.request.tools?.[0]).toMatchObject({
+      input_schema: {
+        type: 'object',
+        properties: {},
+        oneOf: [
+          { required: ['path'] },
+          { required: ['url'] },
+        ],
+      },
+    });
+  });
+
   it('preserves strict tool definitions only for capable upstreams and drops incomplete historical tool turns', () => {
     const result = translateResponsesRequest({
       model: 'claude',
