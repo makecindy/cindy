@@ -236,7 +236,9 @@ export function useBrowserComment(
       },
       () => {
         if (submitEpochRef.current !== epoch) return;
-        setMode('off');
+        // send 已到 guest 但 ACK 丢失时，guest 可能已经挂上 overlay。失败路径
+        // 必须与用户主动退出走同一套清理，不能只关闭 host 按钮状态。
+        exitMode();
         toast.error(tRef.current('rightSidebar.browser.commentFailed'));
       },
     );
@@ -362,14 +364,32 @@ export function useBrowserComment(
             toast.success(t('rightSidebar.browser.commentAdded'));
             return;
           }
-          // 截图 / 缓存 / guest 准备失败：pendingTarget 与 Popover 实例都保留，
-          // 用户输入不会卸载丢失，可直接修订后重试或主动取消。
+          if (target.immediate) {
+            // immediate 没有 Popover / 用户输入可保留。失败时撤掉本次 pending
+            // marker 并回点选态，用户可以直接重新 Cmd/Ctrl+点击；不能把 host
+            // 留在一个没有 pendingTarget、也没有取消入口的 pending 状态。
+            try {
+              await sendCommand(BROWSER_COMMENT_CANCEL_PENDING_CHANNEL);
+              if (isStale()) return;
+              setPendingTarget(null);
+              setMode('selecting');
+            } catch {
+              if (isStale()) return;
+              // 无法确认 pending marker 已撤除时，整体退出比继续展示失配状态安全。
+              exitMode();
+            }
+            toast.error(t('rightSidebar.browser.commentFailed'));
+            return;
+          }
+          // 普通气泡提交失败：pendingTarget 与 Popover 实例都保留，用户输入不会
+          // 卸载丢失，可直接修订后重试或主动取消。guest 在截图准备期间始终保有
+          // 透明 blocker，因此底层网页也不会抢走点击。
           setMode('pending');
           toast.error(t('rightSidebar.browser.commentFailed'));
         }
       })();
     },
-    [composerDraftKey, sendBestEffortCommand, sendCommand, t, tabId],
+    [composerDraftKey, exitMode, sendBestEffortCommand, sendCommand, t, tabId],
   );
   const doSubmitRef = useRef(doSubmit);
   doSubmitRef.current = doSubmit;

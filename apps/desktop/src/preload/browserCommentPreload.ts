@@ -993,11 +993,22 @@ function exitMode(): void {
   state = null;
 }
 
-/** 恢复交互层可见 + crosshair(prepare-screenshot 之后 commit / cancel 共用)。 */
+/** 恢复点选态的 crosshair 与输入拦截(commit / cancel 共用)。 */
 function showInteraction(): void {
   if (!state) return;
   state.blocker.style.display = 'block';
   state.blocker.style.cursor = 'crosshair';
+}
+
+/**
+ * 截图只需要隐藏会留下像素的临时交互反馈。透明 blocker 必须继续接管输入：
+ * capture / cache 失败时 host 会保留 pending Popover，若这里释放 pointer events，
+ * 底层网页会在评论仍待处理时直接响应点击，造成 host / guest 交互语义分叉。
+ */
+function hideTransientInteractionVisuals(): void {
+  if (!state) return;
+  state.highlight.style.display = 'none';
+  state.dragRect.style.display = 'none';
 }
 
 /** 取消当前 pending:marker 与附加可视整组撤除,样式预览还原,回到点选状态。 */
@@ -1065,9 +1076,7 @@ async function prepareScreenshot(payload?: BrowserCommentPrepareScreenshotPayloa
     });
     pruneCommittedDesignForInvalidMarkers(valid);
   }
-  state.blocker.style.display = 'none';
-  state.highlight.style.display = 'none';
-  state.dragRect.style.display = 'none';
+  hideTransientInteractionVisuals();
   await new Promise<void>((resolve) => {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => resolve());

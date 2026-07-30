@@ -6,10 +6,12 @@ import type { WebviewTag } from 'electron';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  BROWSER_COMMENT_CANCEL_PENDING_CHANNEL,
   BROWSER_COMMENT_COMMAND_RESULT_CHANNEL,
   BROWSER_COMMENT_COMMIT_PENDING_CHANNEL,
   BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL,
   BROWSER_COMMENT_ENTER_MODE_CHANNEL,
+  BROWSER_COMMENT_EXIT_MODE_CHANNEL,
   BROWSER_COMMENT_PREPARE_SCREENSHOT_CHANNEL,
   type BrowserCommentCommandEnvelope,
   type BrowserCommentCommandResult,
@@ -252,6 +254,7 @@ describe('useBrowserComment', () => {
     });
 
     expect(result!.mode).toBe('off');
+    expect(lastCommand(webview).command).toBe(BROWSER_COMMENT_EXIT_MODE_CHANNEL);
     expect(toastMocks.error).toHaveBeenCalledWith('rightSidebar.browser.commentFailed');
   });
 
@@ -275,6 +278,68 @@ describe('useBrowserComment', () => {
 
     expect(result!.mode).toBe('pending');
     expect(result!.pendingTarget).toEqual(TARGET);
+    expect(draftMocks.append).not.toHaveBeenCalled();
+    expect(toastMocks.error).toHaveBeenCalledWith('rightSidebar.browser.commentFailed');
+  });
+
+  it('keeps the pending target mounted when capture fails after preparation', async () => {
+    vi.mocked(window.electronAPI.rsbBrowserBridge.captureScreenshotData).mockRejectedValueOnce(
+      new Error('capture failed'),
+    );
+    const webview = makeWebview();
+    let result: UseBrowserCommentResult | null = null;
+    render(
+      createElement(HookProbe, {
+        webview: webview.value,
+        onResult: (next) => {
+          result = next;
+        },
+      }),
+    );
+    await enterSelecting(webview, () => result!);
+    act(() => webview.dispatchIpc(BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL, TARGET));
+
+    act(() => result!.submit('Keep this draft in the popover'));
+    await acknowledgeLastCommand(webview);
+
+    await waitFor(() => expect(result!.mode).toBe('pending'));
+    expect(result!.pendingTarget).toEqual(TARGET);
+    expect(draftMocks.append).not.toHaveBeenCalled();
+    expect(lastCommand(webview).command).toBe(BROWSER_COMMENT_PREPARE_SCREENSHOT_CHANNEL);
+    expect(toastMocks.error).toHaveBeenCalledWith('rightSidebar.browser.commentFailed');
+  });
+
+  it('cancels an immediate marker and resumes selecting when capture fails', async () => {
+    vi.mocked(window.electronAPI.rsbBrowserBridge.captureScreenshotData).mockRejectedValueOnce(
+      new Error('capture failed'),
+    );
+    const webview = makeWebview();
+    let result: UseBrowserCommentResult | null = null;
+    render(
+      createElement(HookProbe, {
+        webview: webview.value,
+        onResult: (next) => {
+          result = next;
+        },
+      }),
+    );
+    await enterSelecting(webview, () => result!);
+    act(() =>
+      webview.dispatchIpc(BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL, {
+        ...TARGET,
+        immediate: true,
+      }),
+    );
+
+    expect(result!.mode).toBe('submitting');
+    await acknowledgeLastCommand(webview);
+    await waitFor(() => {
+      expect(lastCommand(webview).command).toBe(BROWSER_COMMENT_CANCEL_PENDING_CHANNEL);
+    });
+    await acknowledgeLastCommand(webview);
+
+    expect(result!.mode).toBe('selecting');
+    expect(result!.pendingTarget).toBeNull();
     expect(draftMocks.append).not.toHaveBeenCalled();
     expect(toastMocks.error).toHaveBeenCalledWith('rightSidebar.browser.commentFailed');
   });
