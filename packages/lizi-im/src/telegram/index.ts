@@ -77,6 +77,10 @@ const POLL_RETRY_MAX_MS = 30_000;
 const POLL_CONFLICT_RETRY_MS = 30_000;
 const MAX_OUTBOUND_FILE_BYTES = 50 * 1024 * 1024;
 const OWNER_NOTICE_TIMEOUT_MS = 4_500;
+/** typing 状态原生只持续 ~5s — 按 4.5s 续命直到首条真实消息发出。 */
+const TYPING_REFRESH_MS = 4_500;
+/** typing 循环兜底上限(turn 异常悬挂时不无限打 API)。 */
+const TYPING_LOOP_MAX_MS = 5 * 60_000;
 const SECRET_WRITE_FAILED_REASON = '无法安全保存凭证(系统安全存储不可用)';
 const DEFAULT_EXPIRED_CARD_NOTICE = '卡片已过期';
 
@@ -197,6 +201,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private readonly outboundLanes = new Map<string, string>();
   /** ambient 触发的原生 messageId(`chatId|msgId`) — 表情回应抑制名单(FIFO 512)。 */
   private readonly ambientTriggerIds = new Set<string>();
+  /** 进行中的 typing 续命循环(`chatId:threadId` → 状态)。 */
+  private readonly typingLoops = new Map<
+    string,
+    { timer: ReturnType<typeof setInterval>; startedAt: number }
+  >();
 
   constructor(
     host: IMHost,
@@ -226,6 +235,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   async dispose(): Promise<void> {
     this.disposing = true;
     this.configVersion += 1;
+    this.clearAllTypingLoops();
     await this.stopPolling();
     this.setStatus({ kind: 'idle' });
   }
@@ -766,6 +776,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       if (this.behaviorOf().replyQuoteDm === 'first') {
         this.laneReplyTargets.set(String(m.from.id), String(m.message_id));
       }
+      // DM 也要 typing: 草稿占位只在会话内部可见, 聊天列表/标题栏的
+      // 「正在输入…」靠 sendChatAction(Chris 2026-07-30 实测点名缺失)。
+      this.startTypingLoop(String(m.chat.id));
       this.emitMessage(event);
       return;
     }
@@ -809,9 +822,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           if (oldest !== undefined) this.ambientTriggerIds.delete(oldest);
         }
       } else {
-        // 被召唤即出 typing(5s 自动消失, 首条输出到达时客户端自动清):
-        // 群里没有 DM 的草稿占位, 这是"收到了, 在干活"的第一反馈。
-        this.sendTypingAction(
+        // 被召唤即出 typing 并持续续命到首条输出 — "收到了, 在干活"。
+        this.startTypingLoop(
           String(m.chat.id),
           m.is_topic_message === true ? m.message_thread_id : undefined,
         );
@@ -984,6 +996,10 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   /** 429 退避一次重试; 'message is not modified' 静默。 */
   private async callSend<T>(method: string, params: Record<string, unknown>): Promise<T> {
     const api = this.requireApi();
+    // 首条真实消息即将出现 — typing 使命完成(客户端收到消息也会自动清)。
+    if (typeof params.chat_id === 'string' || typeof params.chat_id === 'number') {
+      this.stopTypingLoopsForChat(String(params.chat_id));
+    }
     try {
       return await api.call<T>(method, params);
     } catch (err) {
@@ -1187,6 +1203,48 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     } catch {
       return TELEGRAM_DEFAULT_BEHAVIOR;
     }
+  }
+
+  /**
+   * 持续 typing: 立即打一次 sendChatAction 并按 4.5s 续命(原生 typing 只显
+   * ~5s), 首条真实消息发出(callSend)即停; 5 分钟兜底上限。聊天列表与标题栏
+   * 的「正在输入…」由它保证 — DM 的草稿占位只在会话内部可见, 不能替代。
+   */
+  private startTypingLoop(chatId: string, messageThreadId?: number): void {
+    const key = `${chatId}:${messageThreadId ?? ''}`;
+    const existing = this.typingLoops.get(key);
+    if (existing) {
+      existing.startedAt = Date.now(); // 同 chat 追问: 续租, 不叠循环
+      return;
+    }
+    this.sendTypingAction(chatId, messageThreadId);
+    const timer = setInterval(() => {
+      const loop = this.typingLoops.get(key);
+      if (!loop || Date.now() - loop.startedAt > TYPING_LOOP_MAX_MS || this.disposing) {
+        this.stopTypingLoop(key);
+        return;
+      }
+      this.sendTypingAction(chatId, messageThreadId);
+    }, TYPING_REFRESH_MS);
+    this.typingLoops.set(key, { timer, startedAt: Date.now() });
+  }
+
+  private stopTypingLoop(key: string): void {
+    const loop = this.typingLoops.get(key);
+    if (!loop) return;
+    clearInterval(loop.timer);
+    this.typingLoops.delete(key);
+  }
+
+  /** 该 chat 的所有 typing 循环全停(首条真实消息已到, 客户端会自动清 typing)。 */
+  private stopTypingLoopsForChat(chatId: string): void {
+    for (const key of [...this.typingLoops.keys()]) {
+      if (key.startsWith(`${chatId}:`)) this.stopTypingLoop(key);
+    }
+  }
+
+  private clearAllTypingLoops(): void {
+    for (const key of [...this.typingLoops.keys()]) this.stopTypingLoop(key);
   }
 
   /** fire-and-forget typing 状态(失败静默 — 纯体验增强, 不参与正确性)。 */

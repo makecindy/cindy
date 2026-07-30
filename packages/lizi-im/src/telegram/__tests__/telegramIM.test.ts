@@ -736,6 +736,33 @@ describe('TelegramIM', () => {
     ).toBe(false);
   });
 
+  it('typing: DM 与群触发都持续 typing, 首条真实消息发出即停', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    // DM: 收到消息即 typing
+    api.pushUpdates([privateMessage('查个东西', 111, 97)]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    await vi.waitFor(() => {
+      expect(
+        api.calls.some((c) => c.method === 'sendChatAction' && c.params.chat_id === '111'),
+      ).toBe(true);
+    });
+    // 发出首条真实消息 → typing 循环停(不再有新的 sendChatAction)
+    await im.sendText(OWNER_ID, '答复');
+    const countAfterSend = api.calls.filter((c) => c.method === 'sendChatAction').length;
+    await new Promise((r) => setTimeout(r, 120));
+    expect(api.calls.filter((c) => c.method === 'sendChatAction').length).toBe(countAfterSend);
+    // 群触发同样 typing
+    api.pushUpdates([groupMessage({ text: '帮个忙', fromId: 111, messageId: 98, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    await vi.waitFor(() => {
+      expect(
+        api.calls.some((c) => c.method === 'sendChatAction' && c.params.chat_id === '-100200'),
+      ).toBe(true);
+    });
+  });
+
   it('disconnect 清空凭证并回 idle', async () => {
     await connect();
     await ctx.handlers.get('telegramBot:disconnect')!();
