@@ -17,7 +17,7 @@
  *     (调试期的常态)两套窗口互不污染。
  */
 
-import { and, desc, eq, gt, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, sql } from 'drizzle-orm';
 
 import type { TelegramGroupWindowEntry } from '@cindy/im';
 
@@ -30,10 +30,14 @@ const log = createLogger('telegram-group-window');
 /** 窗口行的 provider 列值 — 与官方通道('telegram')隔离。 */
 export const TELEGRAM_PERSONAL_WINDOW_PROVIDER = 'telegram-personal';
 
-/** 每个群/topic 键保留的最大行数(插入时 GC), 与官方通道同参数。 */
-const WINDOW_KEEP_PER_KEY = 500;
-/** 条目 TTL: 7 天(上下文只有近期值)。 */
-const WINDOW_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * 存储永久保留(Chris 2026-07-30 拍板): Telegram bot 没有别的聊天记录来源,
+ * 本地群消息库就是它的记忆, 不做 TTL/条数自动清理 — 清理只在用户明确要求时
+ * 执行(与主流 agent 产品同理念)。单条正文截断与每轮 4000 字注入预算仍在,
+ * 那是 prompt 预算, 不是存储上限。
+ */
+/** 单次上下文拼装最多读取的增量行数(读取预算, 非存储上限)。 */
+const CONTEXT_READ_LIMIT = 500;
 /** 拼进 prompt 的上下文字符预算(保新丢旧)。 */
 const CONTEXT_MAX_CHARS = 4_000;
 /** 单条上下文行的正文截断。 */
@@ -41,7 +45,6 @@ const ENTRY_TEXT_MAX_CHARS = 500;
 
 /** 入窗(幂等: 同 (provider,chat,thread,message) 唯一键重复插入直接忽略)。 */
 export async function recordTelegramGroupMessage(entry: TelegramGroupWindowEntry): Promise<void> {
-  await sweepExpiredRows();
   const db = getDbClient().drizzle;
   const now = Date.now();
   await db
@@ -63,59 +66,6 @@ export async function recordTelegramGroupMessage(entry: TelegramGroupWindowEntry
       createdAt: now,
     })
     .onConflictDoNothing();
-
-  const keyFilter = and(
-    eq(hookGroupMessages.provider, TELEGRAM_PERSONAL_WINDOW_PROVIDER),
-    eq(hookGroupMessages.chatId, entry.chatId),
-    eq(hookGroupMessages.threadId, entry.threadId),
-  );
-  await db
-    .delete(hookGroupMessages)
-    .where(and(keyFilter, lt(hookGroupMessages.sentAt, now - WINDOW_TTL_MS)));
-  const overflow = await db
-    .select({ id: hookGroupMessages.id })
-    .from(hookGroupMessages)
-    .where(keyFilter)
-    .orderBy(desc(hookGroupMessages.id))
-    .limit(1)
-    .offset(WINDOW_KEEP_PER_KEY - 1);
-  const threshold = overflow[0]?.id;
-  if (threshold !== undefined) {
-    await db.delete(hookGroupMessages).where(and(keyFilter, lt(hookGroupMessages.id, threshold)));
-  }
-}
-
-/**
- * 全局 TTL 清扫: 不活跃群(不再有新消息触发按键 GC)的过期行兜底清理。
- * 入窗/拼装时最多每 6 小时全表扫一次; 失败归零放行下次重试。
- */
-let lastGlobalSweepAt = 0;
-const GLOBAL_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
-
-async function sweepExpiredRows(): Promise<void> {
-  const now = Date.now();
-  if (now - lastGlobalSweepAt < GLOBAL_SWEEP_INTERVAL_MS) return;
-  lastGlobalSweepAt = now;
-  try {
-    const db = getDbClient().drizzle;
-    await db
-      .delete(hookGroupMessages)
-      .where(
-        and(
-          eq(hookGroupMessages.provider, TELEGRAM_PERSONAL_WINDOW_PROVIDER),
-          lt(hookGroupMessages.sentAt, now - WINDOW_TTL_MS),
-        ),
-      );
-  } catch (err) {
-    lastGlobalSweepAt = 0;
-    throw err;
-  }
-}
-
-/** 启动清扫入口: 账号 DB 就绪后强制跑一次(绕过间隔门控), 7 天留存兜底。 */
-export async function sweepTelegramGroupWindowExpired(): Promise<void> {
-  lastGlobalSweepAt = 0;
-  await sweepExpiredRows();
 }
 
 /**
@@ -178,7 +128,6 @@ export async function buildTelegramGroupContextPrefix(args: {
   /** 触发消息的 Telegram 原生 message id — 从上下文中精确剔除"当前消息"。 */
   triggerMessageId: string;
 }): Promise<TelegramGroupContextAssembly> {
-  await sweepExpiredRows();
   const db = getDbClient().drizzle;
   const cursorKey = `${args.botId}:${args.chatId}:${args.cursorScope ?? args.threadId}`;
   const cursor = contextCursors.get(cursorKey) ?? 0;
@@ -200,7 +149,7 @@ export async function buildTelegramGroupContextPrefix(args: {
       ),
     )
     .orderBy(desc(hookGroupMessages.id))
-    .limit(WINDOW_KEEP_PER_KEY);
+    .limit(CONTEXT_READ_LIMIT);
 
   // 从最新往回累加, 超出预算保新丢旧(rows 已是新→旧序)。
   const lines: string[] = [];
@@ -258,7 +207,6 @@ export async function buildTelegramGroupContextPrefix(args: {
 /** 测试与登出清理: 重置内存游标(窗口行随账号 DB 生命周期)。 */
 export function resetTelegramGroupContextCursors(): void {
   contextCursors.clear();
-  lastGlobalSweepAt = 0;
 }
 
 

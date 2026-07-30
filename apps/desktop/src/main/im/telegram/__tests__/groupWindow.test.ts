@@ -25,7 +25,6 @@ import {
   buildTelegramReplyContextBlock,
   recordTelegramGroupMessage,
   resetTelegramGroupContextCursors,
-  sweepTelegramGroupWindowExpired,
   TELEGRAM_PERSONAL_WINDOW_PROVIDER,
 } from '../groupWindow';
 
@@ -87,19 +86,11 @@ describe('recordTelegramGroupMessage', () => {
     expect(row.is_bot).toBe(0);
   });
 
-  it('TTL 过期行在入窗时被清', async () => {
-    await recordTelegramGroupMessage(entry({ sentAt: Date.now() - 8 * 24 * 3600 * 1000 }));
+  it('存储永久保留: 老消息不会被 TTL/条数自动清理', async () => {
+    // Chris 2026-07-30: 本地群消息库即 bot 的长期记忆, 清理只按用户指令。
+    await recordTelegramGroupMessage(entry({ sentAt: Date.now() - 400 * 24 * 3600 * 1000 }));
     await recordTelegramGroupMessage(entry());
-    expect(rowCount()).toBe(1);
-  });
-
-  it('启动兜底清扫清理不活跃 lane 的过期行', async () => {
-    await recordTelegramGroupMessage(entry({ sentAt: Date.now() }));
-    sqlite
-      .prepare('UPDATE hook_group_messages SET sent_at = ?')
-      .run(Date.now() - 8 * 24 * 3600 * 1000);
-    await sweepTelegramGroupWindowExpired();
-    expect(rowCount()).toBe(0);
+    expect(rowCount()).toBe(2);
   });
 
   it('bot 回流条目 isBot=1', async () => {
@@ -210,14 +201,5 @@ describe('buildTelegramGroupContextPrefix', () => {
     const asm = await buildTelegramGroupContextPrefix({ ...LANE, triggerMessageId: 'n' });
     expect(asm.prefix).toContain('个人窗口的消息');
     expect(asm.prefix).not.toContain('官方窗口的消息');
-    // 个人侧 sweep 不动官方行
-    sqlite.prepare("UPDATE hook_group_messages SET sent_at = 1 WHERE provider = 'telegram'").run();
-    await sweepTelegramGroupWindowExpired();
-    const officialLeft = (
-      sqlite
-        .prepare("SELECT COUNT(*) AS n FROM hook_group_messages WHERE provider = 'telegram'")
-        .get() as { n: number }
-    ).n;
-    expect(officialLeft).toBe(1);
   });
 });

@@ -62,10 +62,7 @@ import { wireFeishuOrchestrator, type FeishuOrchestratorConfig } from './feishu'
 import { wireDiscordOrchestrator } from './discord';
 import { wireTelegramOrchestrator } from './telegram';
 import { wireWechatOrchestrator } from './wechat';
-import {
-  resetTelegramGroupContextCursors,
-  sweepTelegramGroupWindowExpired,
-} from './telegram/groupWindow';
+import { resetTelegramGroupContextCursors } from './telegram/groupWindow';
 import { getImOrchestrator, listImOrchestrators } from './shared/orchestrator';
 import { createSerializedConnectionLifecycle } from './connectionLifecycle';
 import {
@@ -362,14 +359,8 @@ export function startImOrchestrators(): void {
 
 async function initializeImConnection(): Promise<void> {
   await reconcileOwnerScopedImWorkingDirs();
-  // 个人 Telegram 群窗口的 7 天 TTL 兜底清扫: 流量路径只在有群消息时触发,
-  // 群不活跃/通道关闭后要靠启动这一次(与官方 hook 通道的启动清扫同口径)。
-  try {
-    await sweepTelegramGroupWindowExpired();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.warn(`telegram group window startup sweep failed (non-fatal): ${msg}`);
-  }
+  // 个人 Telegram 群窗口不做自动清理(Chris 2026-07-30: 本地群消息库即 bot
+  // 的长期记忆, 永久保留, 清理只按用户明确指令执行)。
   try {
     await bindingStore.preload();
   } catch (err) {
