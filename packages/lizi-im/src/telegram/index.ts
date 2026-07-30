@@ -65,6 +65,11 @@ const RUNTIME_ACTIVE_SECRET_KEY = 'telegram-bot-runtime-active';
 const UPDATES_OFFSET_SECRET_KEY = 'telegram-updates-offset';
 
 const POLL_TIMEOUT_SEC = 50;
+/**
+ * 相册(media_group)聚合窗: Telegram 把一次多图拆成多条消息, 同组消息通常在
+ * 同一批 getUpdates 里到齐; 静默 1s 后合并成单个事件, 不各起一轮 turn。
+ */
+const ALBUM_SETTLE_MS = 1_000;
 const POLL_RETRY_BASE_MS = 1_000;
 const POLL_RETRY_MAX_MS = 30_000;
 /** 409 = 另一个进程在对同一 token 轮询 — 低频探测等它退出。 */
@@ -119,6 +124,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private runtimeOnlineAnnounced = false;
   private disposing = false;
   private readonly mediaDir: string;
+  /** 相册聚合缓冲 — key `${chatId}:${mediaGroupId}`。 */
+  private readonly pendingAlbums = new Map<
+    string,
+    { messages: TgMessage[]; timer: ReturnType<typeof setTimeout> }
+  >();
 
   constructor(
     host: IMHost,
@@ -534,6 +544,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   }
 
   private async stopPolling(): Promise<void> {
+    this.clearPendingAlbums();
     this.pollAbort?.abort();
     this.pollAbort = null;
     if (this.pollLoop) {
@@ -559,6 +570,57 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     if (!m || !m.from) return;
     if (m.from.id === this.botId) return; // 自身消息(某些客户端场景)不处理
 
+    // 相册成员先入群窗口(逐条, 幂等), turn 触发交给聚合器合并处理。
+    if (m.media_group_id) {
+      if (m.chat.type === 'group' || m.chat.type === 'supergroup') {
+        this.emitGroupWindow(groupWindowEntryOf(m));
+      }
+      this.bufferAlbumMessage(m);
+      return;
+    }
+
+    await this.processInboundMessage(m);
+  }
+
+  /** 相册成员缓冲 + 静默窗到期后合并处理。 */
+  private bufferAlbumMessage(m: TgMessage): void {
+    const key = `${m.chat.id}:${m.media_group_id}`;
+    const generation = this.configVersion;
+    const existing = this.pendingAlbums.get(key);
+    if (existing) {
+      existing.messages.push(m);
+      clearTimeout(existing.timer);
+    }
+    const messages = existing?.messages ?? [m];
+    const timer = setTimeout(() => {
+      this.pendingAlbums.delete(key);
+      if (this.disposing || this.configVersion !== generation) return;
+      // 有正文/引用的成员当主消息(caption 通常只挂在其中一条上)。
+      const primary =
+        messages.find((x) => (x.text ?? x.caption ?? '') !== '' || x.reply_to_message) ??
+        messages[0];
+      const siblings = messages.filter((x) => x !== primary);
+      void this.processInboundMessage(primary, siblings, { skipGroupWindow: true }).catch(
+        (err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.log.warn(`telegram album handling failed: ${msg}`);
+        },
+      );
+    }, ALBUM_SETTLE_MS);
+    this.pendingAlbums.set(key, { messages, timer });
+  }
+
+  private clearPendingAlbums(): void {
+    for (const { timer } of this.pendingAlbums.values()) clearTimeout(timer);
+    this.pendingAlbums.clear();
+  }
+
+  private async processInboundMessage(
+    m: TgMessage,
+    siblings: TgMessage[] = [],
+    opts: { skipGroupWindow?: boolean } = {},
+  ): Promise<void> {
+    if (!m.from) return;
     if (m.chat.type === 'private') {
       if (String(m.from.id) !== this.ownerUserId) return; // 非 owner 私聊直接忽略
       // 附件下载可达数秒 — 快照受理时的配置, 完成后配置已换代就丢弃
@@ -568,6 +630,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         api: this.requireApi(),
         contextId: String(this.botId),
         mediaDir: this.mediaDir,
+        ...(siblings.length > 0 ? { siblings } : {}),
         ...(this.host.media ? { media: this.host.media } : {}),
       });
       if (this.disposing || this.configVersion !== acceptedConfigVersion) return;
@@ -576,8 +639,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     }
 
     if (m.chat.type === 'group' || m.chat.type === 'supergroup') {
-      // 每条群消息(触发与否)都进本地窗口 — 群上下文的数据面。
-      this.emitGroupWindow(groupWindowEntryOf(m));
+      // 每条群消息(触发与否)都进本地窗口 — 群上下文的数据面。相册成员在
+      // 缓冲入口已逐条入窗, 这里跳过避免重复(入窗本身幂等, 跳过纯省一次写)。
+      if (!opts.skipGroupWindow) {
+        this.emitGroupWindow(groupWindowEntryOf(m));
+      }
 
       const trigger = detectGroupTrigger(m, this.botId, this.botUsername);
       if (!trigger) return;
@@ -590,6 +656,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         mediaDir: this.mediaDir,
         overrideText: trigger.text,
         laneUserId,
+        ...(siblings.length > 0 ? { siblings } : {}),
         ...(this.host.media ? { media: this.host.media } : {}),
       });
       if (this.disposing || this.configVersion !== acceptedConfigVersion) return;

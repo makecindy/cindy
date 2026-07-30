@@ -138,14 +138,42 @@ export interface NormalizeContext {
   overrideText?: string;
   /** 群触发时 senderId 用 lane id;私聊 undefined。 */
   laneUserId?: string;
+  /** 相册(media_group)同组的其余消息 — 媒体并入本事件, 不各起一轮 turn。 */
+  siblings?: TgMessage[];
 }
 
-/** 私聊消息/群触发消息 → IMMessageEvent(下载图片与文档附件)。 */
-export async function normalizeMessage(m: TgMessage, ctx: NormalizeContext): Promise<IMMessageEvent> {
-  const attachments: IMAttachment[] = [];
-  const unsupported: IMUnsupportedEntry[] = [];
-  const chatId = String(m.chat.id);
+/**
+ * 被回复消息 → 引用上下文(编排层拼进送模型正文)。纯附件消息给类型占位,
+ * 让模型知道"引用的是一张图/一个文件"而不是空字符串。
+ */
+export function replyContextOf(
+  m: TgMessage,
+): { author: string; text: string; isBot?: boolean } | null {
+  const replied = m.reply_to_message;
+  if (!replied) return null;
+  let text = replied.text ?? replied.caption ?? '';
+  if (!text) {
+    if (replied.photo && replied.photo.length > 0) text = '[图片]';
+    else if (replied.document) text = `[文件: ${replied.document.file_name ?? 'document'}]`;
+    else if (replied.voice) text = '[语音消息]';
+    else if (replied.video) text = '[视频]';
+    else if (replied.sticker) text = `[贴纸${replied.sticker.emoji ? ` ${replied.sticker.emoji}` : ''}]`;
+    else return null; // 服务消息等无内容形态, 不构造空引用
+  }
+  return {
+    author: displayNameOf(replied.from),
+    text,
+    ...(replied.from?.is_bot ? { isBot: true } : {}),
+  };
+}
 
+/** 单条消息的媒体收集(相册聚合时对每个成员各调一次)。 */
+async function collectMedia(
+  m: TgMessage,
+  ctx: NormalizeContext,
+  attachments: IMAttachment[],
+  unsupported: IMUnsupportedEntry[],
+): Promise<void> {
   if (m.sticker) unsupported.push({ type: 'sticker', label: m.sticker.emoji ?? 'sticker' });
   if (m.voice) unsupported.push({ type: 'audio', label: 'voice message' });
   if (m.audio) unsupported.push({ type: 'audio', label: m.audio.file_name ?? 'audio' });
@@ -179,6 +207,19 @@ export async function normalizeMessage(m: TgMessage, ctx: NormalizeContext): Pro
       else unsupported.push({ type: 'download', label: name });
     }
   }
+}
+
+/** 私聊消息/群触发消息 → IMMessageEvent(下载图片与文档附件, 相册成员并入)。 */
+export async function normalizeMessage(m: TgMessage, ctx: NormalizeContext): Promise<IMMessageEvent> {
+  const attachments: IMAttachment[] = [];
+  const unsupported: IMUnsupportedEntry[] = [];
+  const chatId = String(m.chat.id);
+
+  await collectMedia(m, ctx, attachments, unsupported);
+  for (const sibling of ctx.siblings ?? []) {
+    await collectMedia(sibling, ctx, attachments, unsupported);
+  }
+  const reply = replyContextOf(m);
 
   return {
     channelName: 'telegram',
@@ -191,6 +232,7 @@ export async function normalizeMessage(m: TgMessage, ctx: NormalizeContext): Pro
     unsupported,
     threadTs: undefined,
     scopeKey: undefined,
+    ...(reply ? { replyContext: reply } : {}),
     raw: m,
   };
 }

@@ -279,6 +279,64 @@ describe('TelegramIM', () => {
     });
   });
 
+  it('相册(media_group)聚合为单个事件, 不各起一轮 turn', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    const albumMember = (messageId: number, caption?: string): TgUpdate => ({
+      update_id: messageId,
+      message: {
+        message_id: messageId,
+        from: { id: 111, is_bot: false, first_name: 'U' },
+        chat: { id: 111, type: 'private' },
+        date: 1_753_000_000,
+        media_group_id: 'album-1',
+        ...(caption ? { caption } : {}),
+        photo: [{ file_id: `f${messageId}`, file_unique_id: `u${messageId}`, width: 10, height: 10 }],
+      },
+    });
+    api.pushUpdates([albumMember(31, '这三张图帮我看看'), albumMember(32), albumMember(33)]);
+    await vi.waitFor(() => expect(events).toHaveLength(1), { timeout: 4000 });
+    expect(events[0].text).toBe('这三张图帮我看看');
+    // 假 API 的 getFile 不返回 file_path → 三张图都落 download 失败标注,
+    // 关键断言是"三个成员合进同一个事件", 不是下载成功与否。
+    expect(events[0].attachments.length + events[0].unsupported.length).toBe(3);
+    // 静默窗后不再有第二个事件
+    await new Promise((r) => setTimeout(r, 1300));
+    expect(events).toHaveLength(1);
+  });
+
+  it('私聊回复消息携带 replyContext', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([
+      {
+        update_id: 51,
+        message: {
+          message_id: 51,
+          from: { id: 111, is_bot: false, first_name: 'U' },
+          chat: { id: 111, type: 'private' },
+          date: 1_753_000_000,
+          text: '按这个继续',
+          reply_to_message: {
+            message_id: 40,
+            from: { id: BOT.id, is_bot: true, first_name: 'Cindy' },
+            chat: { id: 111, type: 'private' },
+            date: 1_752_999_000,
+            text: '方案 A: 先改 transport',
+          },
+        },
+      },
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0].replyContext).toEqual({
+      author: 'Cindy',
+      text: '方案 A: 先改 transport',
+      isBot: true,
+    });
+  });
+
   it('批次处理后持久化 offset, 重启从游标续读(不重放已处理消息)', async () => {
     await connect();
     api.pushUpdates([privateMessage('hi', 111, 41)]);

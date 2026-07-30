@@ -119,6 +119,8 @@ export interface TgMessage {
   date: number;
   /** forum topic 消息所属话题 id(supergroup 开启 topics 时)。 */
   message_thread_id?: number;
+  /** 相册分组 id — 一次多图/多文件会拆成多条消息, 同组共此 id。 */
+  media_group_id?: string;
   /** 仅当消息真的属于某个 forum topic 时为 true — 普通回复也会带 thread_id。 */
   is_topic_message?: boolean;
   reply_to_message?: TgMessage;

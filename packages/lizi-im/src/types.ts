@@ -154,6 +154,12 @@ export interface IMMessageEvent {
    * 「thread = 独立 session」;feishu 恒 undefined(整 DM 单会话)。
    */
   scopeKey?: string;
+  /**
+   * 本条消息所**回复/引用**的原消息(telegram reply_to_message 等)。
+   * 编排层可据此在送模型正文前拼引用上下文块;落库仍是渠道原文。
+   * 不支持引用语义的渠道恒 undefined。
+   */
+  replyContext?: { author: string; text: string; isBot?: boolean };
   /** Channel-specific raw event for debug. */
   raw?: unknown;
 }

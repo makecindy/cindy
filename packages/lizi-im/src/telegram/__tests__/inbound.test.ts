@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { TgMessage } from '../api.js';
-import { detectGroupTrigger, groupWindowEntryOf, laneThreadIdOf } from '../inbound.js';
+import { detectGroupTrigger, groupWindowEntryOf, laneThreadIdOf, replyContextOf } from '../inbound.js';
 
 const BOT_ID = 999;
 const BOT_USERNAME = 'my_cindy_bot';
@@ -67,6 +67,48 @@ describe('detectGroupTrigger', () => {
       caption_entities: [{ type: 'mention', offset: 5, length: BOT_USERNAME.length + 1 }],
     });
     expect(detectGroupTrigger(m, BOT_ID, BOT_USERNAME)).toEqual({ text: '看看这个' });
+  });
+});
+
+describe('replyContextOf', () => {
+  it('文本回复带作者与正文', () => {
+    const m = msg({
+      reply_to_message: msg({
+        from: { id: 222, is_bot: false, first_name: 'Bob' },
+        text: '昨天的部署日志在这',
+      }),
+    });
+    expect(replyContextOf(m)).toEqual({ author: 'Bob', text: '昨天的部署日志在这' });
+  });
+
+  it('回复 bot 的消息标 isBot', () => {
+    const m = msg({
+      reply_to_message: msg({
+        from: { id: BOT_ID, is_bot: true, first_name: 'Cindy' },
+        text: '已完成',
+      }),
+    });
+    expect(replyContextOf(m)).toEqual({ author: 'Cindy', text: '已完成', isBot: true });
+  });
+
+  it('纯附件回复给类型占位; 无内容的服务消息返回 null', () => {
+    const photoReply = msg({
+      reply_to_message: msg({
+        text: undefined,
+        photo: [{ file_id: 'f', file_unique_id: 'u', width: 100, height: 100 }],
+      }),
+    });
+    expect(replyContextOf(photoReply)?.text).toBe('[图片]');
+    const docReply = msg({
+      reply_to_message: msg({
+        text: undefined,
+        document: { file_id: 'f', file_unique_id: 'u', file_name: 'a.pdf' },
+      }),
+    });
+    expect(replyContextOf(docReply)?.text).toBe('[文件: a.pdf]');
+    const empty = msg({ reply_to_message: msg({ text: undefined }) });
+    expect(replyContextOf(empty)).toBeNull();
+    expect(replyContextOf(msg())).toBeNull();
   });
 });
 

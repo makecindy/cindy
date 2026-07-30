@@ -25,7 +25,7 @@ import {
 
 import type { ImChannelAdapter, ImOrchestratorConfig } from '../shared/types';
 import { ownerScopedImUserDataPath } from '../ownerScopedStorage';
-import { buildTelegramGroupContextPrefix } from './groupWindow';
+import { buildTelegramGroupContextPrefix, buildTelegramReplyContextBlock } from './groupWindow';
 import { ui, PROCESSING_EMOJI } from './uiText';
 
 function ensureWorkingDir(botId: string): string {
@@ -70,7 +70,14 @@ export function buildTelegramAdapter(
     answerOnlyProgress: (userId) => decodeTelegramLaneUserId(userId) === null,
     prepareAgentTurnText: async (event) => {
       const lane = decodeTelegramLaneUserId(event.senderId);
-      if (!lane) return null; // DM 无群上下文
+      const replyBlock = event.replyContext
+        ? buildTelegramReplyContextBlock(event.replyContext)
+        : '';
+      if (!lane) {
+        // DM: 无群窗口, 但引用注入(回复某条消息触发)同样生效。
+        if (!replyBlock) return null;
+        return { agentText: `${replyBlock}${event.text}` };
+      }
       const { messageId: triggerMessageId } = decodeTelegramMessageId(event.messageId);
       const assembly = await buildTelegramGroupContextPrefix({
         botId: event.contextId,
@@ -78,8 +85,9 @@ export function buildTelegramAdapter(
         threadId: lane.threadId,
         triggerMessageId,
       });
+      // 顺序: 群窗口(较远的背景) → 引用块(直接相关) → 用户正文。
       return {
-        agentText: assembly.prefix ? `${assembly.prefix}${event.text}` : event.text,
+        agentText: `${assembly.prefix}${replyBlock}${event.text}`,
         commit: assembly.commit,
       };
     },
