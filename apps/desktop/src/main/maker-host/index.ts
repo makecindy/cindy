@@ -68,7 +68,13 @@ import {
 } from '../remote-ssh/agent-proxy.js';
 import { openCcManagerSession } from './cc-manager-client.js';
 import { getRemoteClaudeBinaryPath } from '../remote-ssh/cc-manager-install.js';
+import {
+  createBashConcurrencyHooks,
+  mergeClaudeHooks,
+} from './claude-hooks/bash-concurrency-hook.js';
 import { createReadImageHook } from './claude-hooks/read-image-hook.js';
+import { readAgentResourceSettings } from './agent-resource-settings-store.js';
+import { createCommandConcurrencyGate } from './command-concurrency-gate.js';
 import { deriveAvailableModels, refreshCatalogDerivedModels } from './catalog-to-descriptors.js';
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
 import {
@@ -646,6 +652,12 @@ export function getMaker(): Maker {
       ...createDesktopMcpProviders(makerMemoryProviderDeps),
       orcaWorkerBridgeProvider,
     ];
+    // agent Bash 命令的全局并发闸门(跨所有本地 cc session / worker / subagent 共享)。
+    // 上限每次准入判断现读设置文件,热更即刻生效;默认 0 = 不限 = 不排队。
+    const commandConcurrencyGate = createCommandConcurrencyGate({
+      readMaxConcurrent: () => readAgentResourceSettings().maxConcurrentCommands,
+      log: desktopMakerLogger.child('command-gate'),
+    });
     const claudeAgent = new ClaudeCodeAgent({
       auth: desktopClaudeAuthAdapter,
       runtimeConfig: buildDesktopClaudeRuntimeConfig(getClaudeEndpoint),
@@ -678,17 +690,23 @@ export function getMaker(): Maker {
       //     WebP 副本, 把 Read 的 file_path 改写到副本路径再交给 SDK (原图不动).
       //     解决 agent 自主 Read 大图把 vision context 撑爆的问题 (用户附图那条路本来
       //     就走压缩, 但 agent 自己调 Read 绕过了).
+      //   - bash-concurrency-hooks: agent Bash 命令的全局并发闸门(跨 session)。
+      //     PreToolUse 满员挂起排队, Post/Failure/Denied/SessionEnd 释放;
+      //     maxConcurrentCommands 默认 0 = 不限 = 行为与无此 hook 时一致。
       //   (slack-empty-cursor-hook 已随 slack-official MCP 集成退役 2026-07-15:
       //    它只认老集成的 mcp__slack__* 工具名;空 cursor 清洗移入 cindy-slack
       //    意识的 slack_call_tool。)
-      claudeHooks: {
-        PreToolUse: [
-          {
-            matcher: 'Read',
-            hooks: [createReadImageHook(desktopMakerLogger)],
-          },
-        ],
-      },
+      claudeHooks: mergeClaudeHooks(
+        {
+          PreToolUse: [
+            {
+              matcher: 'Read',
+              hooks: [createReadImageHook(desktopMakerLogger)],
+            },
+          ],
+        },
+        createBashConcurrencyHooks(commandConcurrencyGate, desktopMakerLogger),
+      ),
       registerClaudeSubagentTask: (task) => claudeSubagentUsageBridge.registerTask(task),
       getClaudeSubagentTaskUsage: (taskId) => claudeSubagentUsageBridge.getTaskUsage(taskId),
       // Phase 4.3: 远端 cc 路由 — 当 session 标了 remoteHostId, ClaudeCodeAgent
