@@ -4483,11 +4483,31 @@ export class CodexAgent extends BaseAgent {
       for (const [itemId, ctx] of activeToolContexts) {
         if (ctx.turnId === turnId) activeToolContexts.delete(itemId);
       }
+      // Lifecycle callers dismiss the broker entries first. Wake joined waiters
+      // before dropping the lookup maps so they can observe that their request
+      // is no longer pending instead of reopening the interaction.
+      const pendingForTurn = pendingUserInputByTurn.get(turnId);
+      if (pendingForTurn) {
+        for (const pendingInteraction of pendingForTurn.values()) {
+          pendingInteraction.cancel();
+        }
+      }
       for (const [requestId, pending] of pendingUserInputOwnerByRequestId) {
         if (pending.turnId === turnId) pendingUserInputOwnerByRequestId.delete(requestId);
       }
       submittedUserInputByTurn.delete(turnId);
       pendingUserInputByTurn.delete(turnId);
+    }
+
+    function clearAllPendingUserInputInteractions(): void {
+      // Keep the same broker-dismiss-before-wake ordering as the per-turn path.
+      for (const pendingForTurn of pendingUserInputByTurn.values()) {
+        for (const pendingInteraction of pendingForTurn.values()) {
+          pendingInteraction.cancel();
+        }
+      }
+      pendingUserInputByTurn.clear();
+      pendingUserInputOwnerByRequestId.clear();
     }
 
     function forgetPendingUserInputRequest(requestId: string): void {
@@ -4558,6 +4578,10 @@ export class CodexAgent extends BaseAgent {
           pendingReplay.cancelledPromise.then(() => ({ kind: 'cancelled' as const })),
         ]);
         if (joined.kind === 'cancelled') {
+          log.debug('joined duplicate same-turn user input request cancelled', {
+            requestId,
+            turnId,
+          });
           return isRequestPending()
             ? askUserViaInteraction(requestId, questions, turnId, isRequestPending)
             : emptyUserInputResponse(questions);
@@ -6370,8 +6394,7 @@ export class CodexAgent extends BaseAgent {
           dismissAllPendingUserInput('transport_error');
           activeToolContexts.clear();
           submittedUserInputByTurn.clear();
-          pendingUserInputByTurn.clear();
-          pendingUserInputOwnerByRequestId.clear();
+          clearAllPendingUserInputInteractions();
         }
         const targetsPendingTurn = isTurnStartPending && currentTurnId === null && Boolean(params.turnId);
         // 空 turnId 的容量拒绝: 过载重投的 RPC 还在飞、而它的 turnStarted 尚未到达时,
@@ -7453,6 +7476,7 @@ export class CodexAgent extends BaseAgent {
         // 否则 server 那边没回 response 会卡; UI 上的 PermissionPrompt 也会留尸
         try { dismissAllPending('session_closed', 'deny'); } catch (e) { log.warn('dismissAllPending threw', { error: String(e) }); }
         try { dismissAllPendingUserInput('session_closed'); } catch (e) { log.warn('dismissAllPendingUserInput threw', { error: String(e) }); }
+        try { clearAllPendingUserInputInteractions(); } catch (e) { log.warn('clear pending user input threw', { error: String(e) }); }
         try { stopActiveRolloutPlanFallback(); } catch (e) { log.warn('stop rollout plan fallback threw', { error: String(e) }); }
         // 挂起的过载重投计时器必须清掉：否则会话已关，计时器到点仍会对已释放的
         // thread 发 turn/start（assertCurrentHost 会抛，但那是在无人接收的

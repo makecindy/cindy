@@ -10239,6 +10239,105 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it.each([
+    {
+      lifecycle: 'turn completion',
+      reason: 'turn_completed',
+      trigger: (_handle: AgentSessionHandle, handlers: ThreadEventHandlers) => {
+        handlers.turnCompleted?.({
+          threadId: 'start-thread-id',
+          turn: { id: 'turn-1', status: 'completed' },
+        });
+      },
+    },
+    {
+      lifecycle: 'transport failure',
+      reason: 'transport_error',
+      trigger: (_handle: AgentSessionHandle, handlers: ThreadEventHandlers) => {
+        handlers.error?.({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          scope: 'transport',
+          error: { message: 'transport closed' },
+        });
+      },
+    },
+    {
+      lifecycle: 'session close',
+      reason: 'session_closed',
+      trigger: async (handle: AgentSessionHandle) => {
+        await handle.close();
+      },
+    },
+  ])('wakes joined user-input requests during $lifecycle cleanup', async ({ lifecycle, reason, trigger }) => {
+    const logger = createNoopLogger();
+    const debug = vi.spyOn(logger, 'debug');
+    const agent = new CodexAgent(createDeps({}, { logger }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: `session-user-input-cleanup-${lifecycle.replaceAll(' ', '-')}`,
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.requestUserInput || !handlers.dynamicToolCall) {
+      throw new Error('expected user input handlers');
+    }
+    const ownerDecision = deferred<InteractionDecision>();
+    let requestCount = 0;
+    handle.setInteractionResolver(async () => {
+      requestCount += 1;
+      return ownerDecision.promise;
+    });
+
+    const ownerResponsePromise = handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'item-owner',
+      questions: [{
+        id: 'native-q1',
+        header: 'Question',
+        question: 'Pick one',
+        isOther: false,
+        isSecret: false,
+        options: null,
+      }],
+    }, { requestId: 'req-owner' });
+    const joinedResponsePromise = handlers.dynamicToolCall({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      callId: 'item-joined',
+      namespace: 'cindy',
+      tool: 'ask_user_question',
+      arguments: {
+        questions: [{
+          id: 'dynamic-q1',
+          header: 'Question',
+          question: 'Pick one',
+          isOther: false,
+          options: null,
+        }],
+      },
+    }, { requestId: 'req-joined' });
+    expect(requestCount).toBe(1);
+
+    await trigger(handle, handlers);
+
+    await expect(ownerResponsePromise).resolves.toEqual({ answers: {} });
+    await expect(joinedResponsePromise).resolves.toEqual({
+      success: false,
+      contentItems: [{ type: 'inputText', text: `Request cancelled: ${reason}` }],
+    });
+    await waitForExpectation(() => {
+      expect(debug).toHaveBeenCalledWith(
+        'joined duplicate same-turn user input request cancelled',
+        { requestId: 'req-joined', turnId: 'turn-1' },
+      );
+    });
+    if (lifecycle !== 'session close') await handle.close();
+  });
+
   it('updates the registered vendorOptions object by reference on setVendorOptions', async () => {
     const registerCodexMcpThreadContext = vi.fn();
     const agent = new CodexAgent(createDeps({}, {
