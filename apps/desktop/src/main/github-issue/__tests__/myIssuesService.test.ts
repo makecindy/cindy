@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SubmittedIssueRecord } from '../../../shared/myIssues';
 import {
   MyIssuesService,
+  isStaleAccountScopeError,
   issueTypeFromLabels,
   mergeIssues,
   type GithubEnhancementViewer,
@@ -356,10 +357,13 @@ describe('MyIssuesService 的账号作用域隔离', () => {
     const second = service.list();
     expect(fetchPlatformIssues).toHaveBeenCalledTimes(2);
     release!();
-    await Promise.all([first, second]);
+    // 账号 A 发起的那次落地时已不是当前账号 → 拒绝交付;
+    // 账号 B 自己那次照常拿到结果。
+    await expect(first).rejects.toSatisfy(isStaleAccountScopeError);
+    await expect(second).resolves.toMatchObject({ degraded: null });
   });
 
-  it('请求期间切了账号 → 结果不落缓存,新账号下次必须重新取', async () => {
+  it('请求期间切了账号 → 缓存未被投毒,新账号下次必须重新取', async () => {
     let scope = 'owner-a:1';
     let release: (() => void) | null = null;
     const gate = new Promise<void>((resolve) => {
@@ -374,10 +378,106 @@ describe('MyIssuesService 的账号作用域隔离', () => {
     const pending = service.list();
     scope = 'owner-b:2'; // 结果回来时已经不是发起时那个账号了
     release!();
-    await pending;
+    await expect(pending).rejects.toSatisfy(isStaleAccountScopeError);
 
+    // 关键:新账号读不到任何缓存,必须重新打远端(此前那份结果没被写进去)。
     await service.list();
     expect(fetchPlatformIssues).toHaveBeenCalledTimes(2);
+  });
+
+  it('结果落地时账号已切换 → 拒绝交付,不把旧账号数据交给调用方', async () => {
+    // 这一条专门区分「只堵缓存」与「也堵返回值」两种修法:前者会让这里拿到 resolved
+    // 的旧账号结果,测试必挂。
+    let scope = 'owner-a:1';
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const service = new MyIssuesService(
+      makeDeps({
+        readScope: () => scope,
+        fetchPlatformIssues: async () => {
+          await gate;
+          return {
+            ok: true as const,
+            page: { issues: [remoteIssue({ title: '账号 A 的私有标题' })], totalCount: 1 },
+          };
+        },
+      }),
+    );
+
+    const pending = service.list();
+    scope = 'owner-b:2';
+    release!();
+    await expect(pending).rejects.toSatisfy(isStaleAccountScopeError);
+  });
+
+  it('invalidate 让在飞的旧快照不可落缓存(提交成功后下次一定看到新记录)', async () => {
+    let ledger: SubmittedIssueRecord[] = [];
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let gated = true;
+    const service = new MyIssuesService(
+      makeDeps({
+        readLedger: () => ledger,
+        fetchPlatformIssues: async () => {
+          if (gated) await gate;
+          return { ok: false as const, reason: 'platform-unavailable' as const };
+        },
+      }),
+    );
+
+    // 请求先读到空账本,期间另一个窗口提交成功 → invalidate()。
+    const pending = service.list();
+    ledger = [ledgerRecord({ number: 777 })];
+    service.invalidate();
+    release!();
+    gated = false;
+    await pending;
+
+    // 那份旧快照不得落缓存,否则接下来 60s 都看不到 #777。
+    const next = await service.list();
+    expect(next.items.map((i) => i.number)).toEqual([777]);
+  });
+
+  it('可选增强卡住时不拖累主列表:超时后当作没有增强,平台结果照常返回', async () => {
+    // 插件通道默认超时 330s,而增强与平台通道是并行 await 的 —— 没有短超时的话
+    // 这里会一直挂着,页面被加载态遮住。
+    const service = new MyIssuesService(
+      makeDeps({
+        enhancementTimeoutMs: 5,
+        fetchPlatformIssues: async () => ({
+          ok: true as const,
+          page: { issues: [remoteIssue({ number: 42 })], totalCount: 1 },
+        }),
+        resolveGithubEnhancement: async () => GHOST_VIEWER,
+        // 永不 resolve,模拟插件卡死
+        searchAuthoredIssues: () => new Promise(() => {}),
+      }),
+    );
+    const result = await service.list();
+    expect(result.items.map((i) => i.number)).toEqual([42]);
+    expect(result.degraded).toBeNull();
+    // 身份解析成功过,所以身份照常回传,只是这次没并进内容。
+    expect(result.githubEnhancement).toEqual({ login: 'octocat', source: 'ghost' });
+  });
+
+  it('身份解析本身卡住时同样超时,不阻塞主列表', async () => {
+    const service = new MyIssuesService(
+      makeDeps({
+        enhancementTimeoutMs: 5,
+        fetchPlatformIssues: async () => ({
+          ok: true as const,
+          page: { issues: [remoteIssue({ number: 7 })], totalCount: 1 },
+        }),
+        resolveGithubEnhancement: () => new Promise(() => {}),
+      }),
+    );
+    const result = await service.list();
+    expect(result.items.map((i) => i.number)).toEqual([7]);
+    expect(result.githubEnhancement).toBeNull();
   });
 
   it('同一账号内 TTL 与 in-flight 复用不受影响', async () => {

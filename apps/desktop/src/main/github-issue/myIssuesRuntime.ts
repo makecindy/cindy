@@ -49,6 +49,11 @@ const PLATFORM_MY_ISSUES_PATH = '/api/github/issues/mine';
 const GITHUB_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
 
 const GHOST_IDENTITY_TIMEOUT_MS = 5_000;
+/**
+ * 增强搜索的插件通道超时。service 层另有一道整体超时兜着,但这里也必须传 ——
+ * 那道只是放弃等待,这道才真正让插件调用自己了结(通道默认 330s)。
+ */
+const GHOST_SEARCH_TIMEOUT_MS = 6_000;
 
 let serviceInstance: MyIssuesService | null = null;
 
@@ -169,6 +174,7 @@ async function searchAuthoredIssues(
       buildGithubUserSubmitterDeps(),
       'search_issues_and_prs',
       params,
+      { timeoutMs: GHOST_SEARCH_TIMEOUT_MS },
     );
     if (!operation.ok) throw new Error(operation.message);
     return parseIssuePage(operation.data);

@@ -10,8 +10,9 @@
 
 import { ipcMain } from 'electron';
 
-import type { MyIssuesResult } from '../../shared/myIssues.js';
+import type { MyIssuesErrorCode, MyIssuesResult } from '../../shared/myIssues.js';
 import { getMyIssuesService } from '../github-issue/myIssuesRuntime.js';
+import { isStaleAccountScopeError } from '../github-issue/myIssuesService.js';
 import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { MAKER_INVOKE } from './channels.js';
@@ -22,25 +23,43 @@ export type MyIssuesListResponse =
   | ({ success: true } & MyIssuesResult)
   | {
       success: false;
-      error: string;
+      /** 稳定脱敏码,不是原始错误文本 —— renderer 只据它选 i18n 文案。 */
+      error: MyIssuesErrorCode;
       items: [];
       githubEnhancement: null;
       degraded: null;
       truncated: false;
     };
 
-export async function handleMyIssuesList(raw: unknown): Promise<MyIssuesListResponse> {
+export interface MyIssuesListDeps {
+  list: (options: { force?: boolean }) => Promise<MyIssuesResult>;
+}
+
+/**
+ * 失败时**只回稳定错误码**。原始 Error.message 可能带 userData 绝对路径
+ * (electron-store 初始化失败)或上游响应片段,不得跨 Main/Renderer 边界 ——
+ * 细节只进 main 日志(engineering-conventions §2 的收尾要求)。
+ */
+export async function handleMyIssuesList(
+  raw: unknown,
+  deps: MyIssuesListDeps = { list: (options) => getMyIssuesService().list(options) },
+): Promise<MyIssuesListResponse> {
   const force = !!(raw && typeof raw === 'object' && (raw as { force?: unknown }).force === true);
   try {
-    const result = await getMyIssuesService().list({ force });
+    const result = await deps.list({ force });
     return { success: true, ...result };
   } catch (err) {
-    // 服务内部已对每条子查询降级;走到这里说明是意外错误,如实告诉 renderer。
-    const error = err instanceof Error ? err.message : String(err);
-    log.warn('my issues list failed', { error });
+    // 切号导致结果作废是预期路径(renderer 会按新账号重取),记 debug 不记 warn。
+    const stale = isStaleAccountScopeError(err);
+    const detail = err instanceof Error ? err.message : String(err);
+    if (stale) {
+      log.debug('my issues list discarded after account switch', { detail });
+    } else {
+      log.warn('my issues list failed', { detail });
+    }
     return {
       success: false,
-      error,
+      error: stale ? 'stale-account-scope' : 'unexpected',
       items: [],
       githubEnhancement: null,
       degraded: null,

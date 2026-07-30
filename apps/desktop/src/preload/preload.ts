@@ -4734,7 +4734,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       | ({ success: true } & import('../shared/myIssues').MyIssuesResult)
       | {
           success: false;
-          error: string;
+          /** 稳定脱敏码,不是原始错误文本。 */
+          error: import('../shared/myIssues').MyIssuesErrorCode;
           items: [];
           githubEnhancement: null;
           degraded: null;

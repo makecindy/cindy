@@ -83,10 +83,10 @@ export function IssueTrackerFeatureLayout() {
         ) : error && !hasItems ? (
           // 整页错误态只留给「从来没加载成功过」;已经有数据时刷新失败不能把列表
           // 盖掉(useMyIssues 特意保留了旧 data),否则用户点一下刷新就丢失全部内容。
-          <LoadFailed error={error} onRetry={refresh} />
+          <LoadFailed onRetry={refresh} />
         ) : hasItems ? (
           <>
-            {error ? <RefreshFailedNotice error={error} onRetry={refresh} /> : null}
+            {error ? <RefreshFailedNotice onRetry={refresh} /> : null}
             <Notices data={data} />
             <MyIssueList items={items} />
           </>
@@ -166,7 +166,7 @@ function Notices({ data }: { data: MyIssuesResult | null }) {
  * 已有数据时刷新失败:降级成列表上方一条提示 + 重试,旧内容照常可读可点。
  * 与整页 LoadFailed 复用同一组文案,只是不夺走内容区。
  */
-function RefreshFailedNotice({ error, onRetry }: { error: string; onRetry: () => void }) {
+function RefreshFailedNotice({ onRetry }: { onRetry: () => void }) {
   const { t } = useTranslation();
   return (
     <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md bg-sidebar-item-hover px-3 py-2">
@@ -174,7 +174,6 @@ function RefreshFailedNotice({ error, onRetry }: { error: string; onRetry: () =>
       <button
         type="button"
         onClick={onRetry}
-        title={error}
         className="text-11 text-sidebar-muted underline-offset-2 hover:text-foreground hover:underline"
       >
         {t('issueTracker.list.retry')}
@@ -183,16 +182,15 @@ function RefreshFailedNotice({ error, onRetry }: { error: string; onRetry: () =>
   );
 }
 
-function LoadFailed({ error, onRetry }: { error: string; onRetry: () => void }) {
+function LoadFailed({ onRetry }: { onRetry: () => void }) {
   const { t } = useTranslation();
   return (
     <div className="flex flex-col items-start gap-2 px-3 py-2">
       <p className="text-13 text-foreground">{t('issueTracker.list.loadFailed')}</p>
-      {/* 原始错误只作为 title 附着,不铺在页面上 */}
+      {/* 刻意不展示 main 侧错误原文:它可能带 userData 绝对路径,详情只进 main 日志。 */}
       <button
         type="button"
         onClick={onRetry}
-        title={error}
         className="text-12 text-sidebar-muted underline-offset-2 hover:text-foreground hover:underline"
       >
         {t('issueTracker.list.retry')}

@@ -62,6 +62,14 @@ export interface MyIssuesResult {
   truncated: boolean;
 }
 
+/**
+ * 查询失败时跨进程回传的**稳定脱敏码**。刻意不回原始 Error.message ——
+ * 它可能带 userData 绝对路径或上游响应片段,细节只留在 main 日志里。
+ *  - stale-account-scope:请求期间切了账号,结果属于旧账号已被丢弃,重取即可;
+ *  - unexpected:其余意外错误,详情看 main 日志。
+ */
+export type MyIssuesErrorCode = 'stale-account-scope' | 'unexpected';
+
 /** 本机账本里的一条提交记录。 */
 export interface SubmittedIssueRecord {
   number: number;

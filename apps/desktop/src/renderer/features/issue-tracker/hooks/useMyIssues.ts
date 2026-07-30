@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { MyIssuesResult } from '@/../shared/myIssues';
+import type { MyIssuesErrorCode, MyIssuesResult } from '@/../shared/myIssues';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('useMyIssues');
@@ -18,7 +18,11 @@ export interface UseMyIssuesState {
   /** 首屏加载中(有数据后的刷新走 refreshing,不让列表闪成骨架屏)。 */
   loading: boolean;
   refreshing: boolean;
-  error: string | null;
+  /**
+   * 稳定错误码,不是 main 侧的原始错误文本 —— 后者可能带 userData 绝对路径。
+   * UI 只据它选 i18n 文案,不展示原文。
+   */
+  error: MyIssuesErrorCode | null;
   refresh: () => void;
 }
 
@@ -26,7 +30,7 @@ export function useMyIssues(): UseMyIssuesState {
   const [data, setData] = useState<MyIssuesResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<MyIssuesErrorCode | null>(null);
   const disposed = useRef(false);
   const inFlight = useRef(false);
 
@@ -35,24 +39,32 @@ export function useMyIssues(): UseMyIssuesState {
     inFlight.current = true;
     if (force) setRefreshing(true);
     try {
-      const response = await window.electronAPI.maker.listMyIssues({ force });
-      if (disposed.current) return;
-      if (!response.success) {
-        setError(response.error);
+      // 切号会让 main 侧把旧账号的结果作废(stale-account-scope),那不是用户该看到的
+      // 错误 —— 在同一次调用里按新账号重取。刻意不递归调 load:那样外层 finally 会
+      // 清掉内层的 in-flight 标志并提前关掉 loading。上限 2 次,连续切号时不打转。
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const response = await window.electronAPI.maker.listMyIssues({ force });
+        if (disposed.current) return;
+        if (response.success) {
+          setData({
+            items: response.items,
+            githubEnhancement: response.githubEnhancement,
+            degraded: response.degraded,
+            truncated: response.truncated,
+          });
+          setError(null);
+          return;
+        }
+        if (response.error === 'stale-account-scope' && attempt === 0) continue;
+        // 重试仍撞上切号:按通用错误处理,用户点一次刷新即可。
+        setError(response.error === 'stale-account-scope' ? 'unexpected' : response.error);
         return;
       }
-      setData({
-        items: response.items,
-        githubEnhancement: response.githubEnhancement,
-        degraded: response.degraded,
-        truncated: response.truncated,
-      });
-      setError(null);
     } catch (err) {
       if (disposed.current) return;
-      const message = err instanceof Error ? err.message : String(err);
-      log.warn('listMyIssues failed', { error: message });
-      setError(message);
+      // IPC 层抛错(如来源校验拒绝)只记本地日志,UI 走统一的通用文案。
+      log.warn('listMyIssues failed', { error: err instanceof Error ? err.message : String(err) });
+      setError('unexpected');
     } finally {
       inFlight.current = false;
       if (!disposed.current) {

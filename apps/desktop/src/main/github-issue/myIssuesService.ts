@@ -29,6 +29,13 @@ import { createLogger } from '../logger.js';
 const log = createLogger('github-issue/my-issues');
 
 const DEFAULT_CACHE_TTL_MS = 60_000;
+/**
+ * 可选 GitHub 增强的整体超时。插件通道默认工具超时是 330s
+ * (cindy-brain/pipeDispatcher),而增强与平台通道是 Promise.all 并行等的 ——
+ * 不设短超时,插件卡住时账本与平台结果早已就绪也会被加载态遮上五分半。
+ * 增强只是加成,超时就当「没有增强」,绝不拖累主列表。
+ */
+const DEFAULT_ENHANCEMENT_TIMEOUT_MS = 8_000;
 /** 单次查询只取一页;更多就截断并让 UI 明说,不静默丢也不翻页打爆额度。 */
 export const SEARCH_PAGE_SIZE = 100;
 
@@ -81,7 +88,27 @@ export interface MyIssuesServiceDeps {
    */
   readScope: () => string;
   cacheTtlMs?: number;
+  /** 可选增强整条路径的超时,默认 8s;<=0 关闭(仅测试用)。 */
+  enhancementTimeoutMs?: number;
   now?: () => number;
+}
+
+/** 结果落地时账号已切换 —— 这份数据属于别人,拒绝交付。 */
+export const STALE_ACCOUNT_SCOPE_CODE = 'stale-account-scope';
+
+export function isStaleAccountScopeError(err: unknown): boolean {
+  return (
+    !!err &&
+    typeof err === 'object' &&
+    (err as { myIssuesErrorCode?: unknown }).myIssuesErrorCode === STALE_ACCOUNT_SCOPE_CODE
+  );
+}
+
+function staleAccountScopeError(): Error {
+  return Object.assign(
+    new Error('active account changed while the issue list was loading; result discarded'),
+    { myIssuesErrorCode: STALE_ACCOUNT_SCOPE_CODE },
+  );
 }
 
 interface CacheEntry {
@@ -96,6 +123,8 @@ export class MyIssuesService {
   private readonly now: () => number;
   private cache: CacheEntry | null = null;
   private inFlight: { scope: string; promise: Promise<MyIssuesResult> } | null = null;
+  /** 账本世代。invalidate() 递增,使早于它发起的在途结果不再可缓存。 */
+  private cacheEpoch = 0;
 
   constructor(deps: MyIssuesServiceDeps) {
     this.deps = deps;
@@ -117,15 +146,10 @@ export class MyIssuesService {
     // 只复用同账号的在途请求;跨账号一律另起,绝不共享结果。
     if (this.inFlight && this.inFlight.scope === scope) return this.inFlight.promise;
 
+    // 发起时的账本世代。invalidate() 会递增它 —— 见 CACHE_EPOCH 不变量。
+    const epochAtStart = this.cacheEpoch;
     const promise = this.load()
-      .then((result) => {
-        // 请求期间切了号 → 这份结果属于旧账号,丢弃不落缓存(否则新账号下次
-        // 读缓存就拿到别人的数据)。
-        if (this.deps.readScope() === scope) {
-          this.cache = { at: this.now(), scope, result };
-        }
-        return result;
-      })
+      .then((result) => this.settle(result, scope, epochAtStart))
       .finally(() => {
         // 只清自己那条,别把切号后新起的在途请求误清掉。
         if (this.inFlight?.promise === promise) this.inFlight = null;
@@ -134,9 +158,34 @@ export class MyIssuesService {
     return promise;
   }
 
-  /** 提交成功后调用:账本变了,缓存立即失效,下次进页面能看到新提交的那条。 */
+  /**
+   * 结果落地的**唯一**收口。两条不变量刻意分开判,因为它们并不对称 ——
+   * 上一版把两者混成一个「不写缓存」的判断,于是漏掉了「也不能返回」这半条:
+   *
+   *  1. 归属(安全):结果只能交给发起它的那个账号。落地时 scope 变了说明期间切了号,
+   *     这份数据属于别人 —— **既不返回也不缓存**,直接拒绝,让调用方按新账号重取。
+   *  2. 新鲜度(正确性):落地时 epoch 变了说明期间有提交成功过。数据仍是本账号的,
+   *     所以照常**返回**(拒绝只会让刚提交完的用户看到一次假错误),但**不得落缓存** ——
+   *     否则接下来 60s 都会命中这个不含新 issue 的旧快照。
+   */
+  private settle(result: MyIssuesResult, scope: string, epochAtStart: number): MyIssuesResult {
+    if (this.deps.readScope() !== scope) {
+      throw staleAccountScopeError();
+    }
+    if (this.cacheEpoch === epochAtStart) {
+      this.cache = { at: this.now(), scope, result };
+    }
+    return result;
+  }
+
+  /**
+   * 提交成功后调用:账本变了,缓存立即失效,下次进页面能看到新提交的那条。
+   * 递增 epoch 是关键 —— 只清 cache 挡不住「早于本次提交发起、晚于本次提交完成」
+   * 的那个请求把旧快照写回来。
+   */
   invalidate(): void {
     this.cache = null;
+    this.cacheEpoch += 1;
   }
 
   private async load(): Promise<MyIssuesResult> {
@@ -182,6 +231,11 @@ export class MyIssuesService {
     };
   }
 
+  /**
+   * 可选增强。**整条路径**(身份解析 + 搜索)都套在一个超时里:插件通道自己的默认
+   * 超时长达 330s,而这一路是与平台通道并行 await 的,卡住就等于把整页遮住。
+   * 超时、失败、没配置三种情况对用户是同一个结果 ——「这次没有增强」,主列表照常出。
+   */
   private async loadGithubEnhancement(): Promise<{
     viewer: GithubEnhancementViewer | null;
     issues: RemoteIssue[];
@@ -189,22 +243,48 @@ export class MyIssuesService {
   }> {
     let viewer: GithubEnhancementViewer | null;
     try {
-      viewer = await this.deps.resolveGithubEnhancement();
+      viewer = await this.withEnhancementTimeout(
+        () => this.deps.resolveGithubEnhancement(),
+        'resolve',
+      );
     } catch (err) {
-      // 没有 GitHub 身份是正常状态,解析失败同样只是「没有增强」。
+      // 没有 GitHub 身份是正常状态,解析失败 / 超时同样只是「没有增强」。
       log.debug('github enhancement unavailable', { error: errorText(err) });
       return { viewer: null, issues: [], truncated: false };
     }
     if (!viewer) return { viewer: null, issues: [], truncated: false };
 
     try {
-      const page = await this.deps.searchAuthoredIssues(viewer, viewer.login);
+      const page = await this.withEnhancementTimeout(
+        () => this.deps.searchAuthoredIssues(viewer, viewer.login),
+        'search',
+      );
       return { viewer, issues: page.issues, truncated: isTruncated(page) };
     } catch (err) {
-      // 增强查询失败不算列表降级 —— 主路径是平台通道。
+      // 增强查询失败 / 超时不算列表降级 —— 主路径是平台通道。
       log.debug('github enhancement search failed', { error: errorText(err) });
       return { viewer, issues: [], truncated: false };
     }
+  }
+
+  private withEnhancementTimeout<T>(run: () => Promise<T>, stage: string): Promise<T> {
+    const timeoutMs = this.deps.enhancementTimeoutMs ?? DEFAULT_ENHANCEMENT_TIMEOUT_MS;
+    if (timeoutMs <= 0) return run();
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`github enhancement ${stage} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      run().then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+      );
+    });
   }
 }
 
