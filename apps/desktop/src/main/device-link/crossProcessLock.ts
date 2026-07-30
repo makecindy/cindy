@@ -28,6 +28,8 @@ const LOCK_STALE_MS = 10_000;
 /** 抢锁最长等待;之后交给调用方降级。 */
 const LOCK_WAIT_MS = 3_000;
 const LOCK_RETRY_MS = 40;
+/** 一次调用里最多接管几次陈旧锁(正常只需 1 次;更多说明有人在高频重建,该降级)。 */
+const MAX_TAKEOVERS = 3;
 /** 持锁期间刷新 mtime 的间隔:让「陈旧」只对真正死掉的持有者成立。 */
 const LOCK_HEARTBEAT_MS = 2_000;
 
@@ -58,6 +60,9 @@ export async function withCrossProcessLock<T>(
   const deadline = Date.now() + (opts.waitMs ?? LOCK_WAIT_MS);
   let held = false;
   let reason: 'busy' | 'unavailable' = 'unavailable';
+  // 接管次数上限:正常最多一次(删掉陈旧锁 → 下一轮建成功)。反复"删得掉却又立刻 EEXIST"
+  // 说明有人在高频重建锁,那时该降级而不是继续跟它抢。
+  let takeovers = 0;
   for (;;) {
     try {
       const handle = await fsp.open(lockPath, 'wx');
@@ -73,10 +78,21 @@ export async function withCrossProcessLock<T>(
         reason = 'unavailable';
         break;
       }
-      if (await canTakeOverLock(lockPath)) {
+      if (takeovers < MAX_TAKEOVERS && (await canTakeOverLock(lockPath))) {
         log.warn(`taking over stale ${opts.label} lock from a dead owner`);
-        await fsp.rm(lockPath, { force: true }).catch(() => undefined);
-        continue;
+        takeovers += 1;
+        const removed = await fsp
+          .rm(lockPath, { force: true })
+          .then(() => true)
+          .catch(() => false);
+        if (removed) continue;
+        // 删不掉(Windows 上 EPERM / EBUSY 最常见:别的进程还开着句柄)。原先是 catch 掉再
+        // `continue`,而"陈旧 + owner 已死"的判定下一轮仍然成立 —— 于是这里会变成没有退避、
+        // 没有截止时间的空转,把调用方永久卡住(review: copilot)。删不掉就当"有人在临界区"
+        // 降级退出:内容写会跳过(安全方向),清理路径照常执行。
+        log.warn(`${opts.label} stale lock is undeletable; proceeding in degraded mode`);
+        reason = 'busy';
+        break;
       }
       if (Date.now() >= deadline) {
         log.warn(`${opts.label} lock busy; proceeding in degraded mode`);

@@ -177,6 +177,43 @@ describe('文件级条目(clearDevice 删不掉时用)', () => {
     expect(fs.existsSync(outside)).toBe(true);
   });
 
+  // review(codex P1):clearDevice 在**持久屏障自增失败**时登记的就是 root 本身(意思是
+  // "这一整棵都不可信")。而 isPurgablePath(root, root) 是 false,于是这条最重要的记录原先
+  // 被整条拒收 —— IPC 报成功,既没有持久重试也没有挡读的队列条目。
+  it('路径正好是 root 时升格成整根清理(不能当成越界路径拒收)', async () => {
+    const root = await makeOwnerCache('owner-1');
+    await fsp.writeFile(path.join(root, 'messages', 'a.json'), '{}', 'utf8');
+
+    await enqueuePurge(root, [root]);
+
+    // 有持久记录 → 读路径会被挡住(hasPendingPurgeRecords)。
+    expect(fs.existsSync(queueFile())).toBe(true);
+    expect(await hasPendingPurgeRecords()).toBe(true);
+    const entries = await __testing.readQueue();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.paths).toBeUndefined(); // 整根条目
+
+    expect(await drainPurgeQueue()).toEqual({ purged: 1, pending: 0 });
+    expect(fs.existsSync(root)).toBe(false);
+  });
+
+  it('盘上老条目把 root 列在 paths 里时,drain 同样按整根清理处理', async () => {
+    const root = await makeOwnerCache('owner-1');
+    await fsp.writeFile(path.join(root, 'messages', 'a.json'), '{}', 'utf8');
+    // 直接写一份"paths 含 root"的簿记(模拟旧版本 / 另一个实例留下的记录)。
+    await fsp.writeFile(
+      queueFile(),
+      JSON.stringify({
+        version: 1,
+        entries: [{ root, paths: [root], since: Date.now(), attempts: 1 }],
+      }),
+      'utf8',
+    );
+
+    expect(await drainPurgeQueue()).toEqual({ purged: 1, pending: 0 });
+    expect(fs.existsSync(root)).toBe(false);
+  });
+
   it('文件级条目与整根条目互不覆盖', async () => {
     const root = await makeOwnerCache('owner-1');
     await enqueuePurge(root);
@@ -277,17 +314,20 @@ describe('待清状态查询(读路径据此拒绝命中)', () => {
 
   // review(codex P1):EACCES / 瞬时锁下 readdir 失败若当成"空",读路径会被重新放行,
   // 而那些文件可能是"已撤销明文仍待删除"的唯一凭据。
-  it.skipIf((process.getuid?.() ?? 0) === 0)('追加目录读不出来 → fail-closed 判为有待清', async () => {
-    const pendingDir = path.join(userData, __testing.pendingDirName);
-    await fsp.mkdir(pendingDir, { recursive: true });
-    await fsp.writeFile(path.join(pendingDir, 'x.json'), '{"version":1,"entries":[]}', 'utf8');
-    await fsp.chmod(pendingDir, 0o000);
-    try {
-      expect(await hasPendingPurgeRecords()).toBe(true);
-    } finally {
-      await fsp.chmod(pendingDir, 0o700);
-    }
-  });
+  it.skipIf((process.getuid?.() ?? 0) === 0)(
+    '追加目录读不出来 → fail-closed 判为有待清',
+    async () => {
+      const pendingDir = path.join(userData, __testing.pendingDirName);
+      await fsp.mkdir(pendingDir, { recursive: true });
+      await fsp.writeFile(path.join(pendingDir, 'x.json'), '{"version":1,"entries":[]}', 'utf8');
+      await fsp.chmod(pendingDir, 0o000);
+      try {
+        expect(await hasPendingPurgeRecords()).toBe(true);
+      } finally {
+        await fsp.chmod(pendingDir, 0o700);
+      }
+    },
+  );
 });
 
 describe('跨进程锁', () => {
@@ -423,11 +463,7 @@ describe('锁的所有权', () => {
   it('owner 进程还活着 → 陈旧 mtime 也不接管(降级走追加)', async () => {
     const root = await makeOwnerCache('owner-1');
     // 用**本测试进程之外**的活进程当 owner:process.ppid 一定活着且不是自己。
-    await fsp.writeFile(
-      lockPath(),
-      JSON.stringify({ pid: process.ppid, startedAt: 1 }),
-      'utf8',
-    );
+    await fsp.writeFile(lockPath(), JSON.stringify({ pid: process.ppid, startedAt: 1 }), 'utf8');
     const old = new Date(Date.now() - 60_000);
     await fsp.utimes(lockPath(), old, old);
 

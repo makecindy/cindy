@@ -679,6 +679,30 @@ describe('clearDevice / clearAll', () => {
     expect(await c.readSessionList()).toEqual([]);
   });
 
+  it('clearAll 前后各自增一次账号级计数(挡住"开头之后才发起"的跨进程写入)', async () => {
+    // review(codex P1):收尾原先只自增进程内代际。共享同一 userData 的另一个进程若在开头
+    // 那次 bump **之后**才发起写入,它读到的是新值,等锁等到删除结束再提交时值没变 → 把上一个
+    // 账号的缓存重建出来。持久计数必须在释放锁之前再自增一次。
+    const c = cache();
+    const accountMark = path.join(`${root}.control`, 'cleared', '_account');
+    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+    await c.clearAll();
+    const first = Number.parseInt(await fsp.readFile(accountMark, 'utf8'), 10);
+    expect(first).toBe(2); // 开头 1 次 + 收尾 1 次
+
+    // 另一个实例:入口在"开头 bump 之后"读到 1,提交时比对到 2 → 丢弃这次写。
+    const other = rawCache();
+    await other.writeMessages(
+      'dev-1',
+      'sess-2',
+      [row('m2', '2026-02-01T00:00:00.000Z')],
+      0, // 会话级计数(随整棵目录一起没了)
+    );
+    // 账号级基线由 store 在写入发起时读取 —— 这里用第二次 clearAll 制造"发起后又清一次"。
+    await c.clearAll();
+    expect(Number.parseInt(await fsp.readFile(accountMark, 'utf8'), 10)).toBe(4);
+  });
+
   // review(codex P1):隐私清理不能把失败吞成成功 —— 调用方要能 log / 持久化重试,
   // 否则账号边界照常推进而上一个账号的明文缓存留在盘上。
   //
@@ -1343,13 +1367,16 @@ describe('并发写入', () => {
   // review(greptile P1):两次并发写入在 await 处交错时,落盘内容与登记的指纹可能来自
   // 不同那一次,于是较新的快照之后会被 unchanged 跳过,冷启动一直显示旧消息。
   it('同一会话的并发写入串行化:盘上留的是最后一笔,且指纹与它一致', async () => {
-    const c = cache();
+    // 这里必须用 rawCache + 显式令牌:withAutoToken 会在调用 writeMessages **之前**先补读一次
+    // 计数,两笔并发写的互斥准入顺序就变成"谁的补读先回来"(实测会翻)。而"准入顺序 = 调用
+    // 顺序"正是本用例要守的东西 —— 生产里令牌在请求发起时就拿到了,调用是同步派发的。
+    const c = rawCache();
     const first = [row('m1', '2026-01-01T00:00:00.000Z')];
     const second = [row('m1', '2026-01-01T00:00:00.000Z'), row('m2', '2026-01-02T00:00:00.000Z')];
 
     await Promise.all([
-      c.writeMessages('dev-1', 'sess-1', first),
-      c.writeMessages('dev-1', 'sess-1', second),
+      c.writeMessages('dev-1', 'sess-1', first, 0),
+      c.writeMessages('dev-1', 'sess-1', second, 0),
     ]);
 
     expect((await c.readMessages('dev-1', 'sess-1')).map((m) => m.id)).toEqual(['m1', 'm2']);
@@ -1358,10 +1385,10 @@ describe('并发写入', () => {
     const file = path.join(messagesDir(), messageFileName('dev-1', 'sess-1'));
     const past = new Date(2020, 0, 1);
     await fsp.utimes(file, past, past);
-    await c.writeMessages('dev-1', 'sess-1', second);
+    await c.writeMessages('dev-1', 'sess-1', second, 0);
     expect((await fsp.stat(file)).mtimeMs).toBe(past.getTime());
 
-    await c.writeMessages('dev-1', 'sess-1', first);
+    await c.writeMessages('dev-1', 'sess-1', first, 0);
     expect((await c.readMessages('dev-1', 'sess-1')).map((m) => m.id)).toEqual(['m1']);
   });
 

@@ -137,6 +137,33 @@ function isPurgablePath(target: string, root: string): boolean {
   return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
+/**
+ * 把路径清单分成「整根」与「根内文件」两类。
+ *
+ * `clearDevice()` 在**持久屏障自增失败**时登记的就是 `root` 本身(意思是"这一整棵都不可信,
+ * 整棵删掉重来")。而 `isPurgablePath(root, root)` 是 false(rel === ''),于是这条最重要的
+ * 记录会被当成"root 之外的路径"整条拒收 —— IPC 随后报成功,既没有持久重试也没有挡读的队列
+ * 条目,清理前 / 清理中的写入照样能把被撤销设备的正文重建出来(review: codex P1)。
+ * 所以精确等于 root 的路径要升格成**整根清理**(它是任何文件级条目的超集)。
+ */
+function classifyPurgePaths(
+  root: string,
+  paths: readonly string[] | undefined,
+): { wholeRoot: boolean; paths: string[] } {
+  const resolvedRoot = path.resolve(root);
+  let wholeRoot = false;
+  const safe: string[] = [];
+  for (const target of paths ?? []) {
+    if (!target || typeof target !== 'string') continue;
+    if (path.resolve(target) === resolvedRoot) {
+      wholeRoot = true;
+      continue;
+    }
+    if (isPurgablePath(target, root)) safe.push(target);
+  }
+  return { wholeRoot, paths: safe };
+}
+
 async function readPersistedQueue(): Promise<PurgeEntry[]> {
   // 正本读不出来(缺失 / 半个文件)时回退 .bak:Windows 落位需要「先挪走正本」的那条退路
   // 会短暂只留备份,崩在那一瞬不该等于「没有待清记录」(见 commitQueueFile)。
@@ -389,8 +416,11 @@ async function enqueuePurgeLocked(
     log.warn(`refusing to enqueue purge outside owners dir: ${root}`);
     return;
   }
-  const safePaths = (paths ?? []).filter((target) => isPurgablePath(target, root));
-  if ((paths?.length ?? 0) > 0 && safePaths.length === 0) {
+  const classified = classifyPurgePaths(root, paths);
+  // 精确等于 root 的路径 = 整根清理(见 classifyPurgePaths);整根是文件级的超集,
+  // 其余路径不必再单独登记。
+  const safePaths = classified.wholeRoot ? [] : classified.paths;
+  if (!classified.wholeRoot && (paths?.length ?? 0) > 0 && safePaths.length === 0) {
     log.warn(`refusing to enqueue purge paths outside root: ${root}`);
     return;
   }
@@ -432,10 +462,7 @@ async function enqueuePurgeLocked(
     }
   }
   if (persistError) {
-    log.error(
-      'failed to persist mirror cache purge queue (kept in memory only)',
-      persistError,
-    );
+    log.error('failed to persist mirror cache purge queue (kept in memory only)', persistError);
     throw persistError;
   }
 }
@@ -472,7 +499,9 @@ export async function drainPurgeQueue(): Promise<{ purged: number; pending: numb
   return withQueueLock(drainPurgeQueueLocked);
 }
 
-async function drainPurgeQueueLocked(lockHeld = true): Promise<{ purged: number; pending: number }> {
+async function drainPurgeQueueLocked(
+  lockHeld = true,
+): Promise<{ purged: number; pending: number }> {
   // 折进正本之前先记下追加目录里有哪些文件:只删这次真的读进来的那几个,
   // 期间另一个实例新写的追加文件不受影响。
   const pendingRead = lockHeld ? await readPendingEntries() : { items: [], unreadable: false };
@@ -491,9 +520,11 @@ async function drainPurgeQueueLocked(lockHeld = true): Promise<{ purged: number;
       purgedKeys.add(key); // 非法条目同样要从盘上消失
       continue;
     }
-    const targets = (entry.paths ?? []).filter((target) => isPurgablePath(target, entry.root));
+    // 盘上的老条目(以及别的实例写的)可能把 root 本身列在 paths 里 → 同样按整根清理处理。
+    const classified = classifyPurgePaths(entry.root, entry.paths);
+    const targets = classified.paths;
     try {
-      if (entry.paths && entry.paths.length > 0) {
+      if (!classified.wholeRoot && entry.paths && entry.paths.length > 0) {
         // 逐个删成功才算清掉;剩下的继续留在队列里。
         //
         // `recursive: true` 是必需的:清理路径可能登记的是**目录** —— `clearDevice` 在

@@ -1204,24 +1204,32 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
           purgeAllInFlight -= 1; // 下面的 finally 不会执行(还没进 try)
           throw new MirrorCachePurgeError(root, [root], err);
         }
+        let failure: MirrorCachePurgeError | null = null;
         try {
           await fsp.rm(root, { recursive: true, force: true });
-          return;
         } catch (err) {
           // 整棵删不掉(Windows 文件锁 / 权限 / 并发写)时**不要就此放弃**:先逐个删内容,
           // 把「还剩什么」查清楚 —— 目录空壳留着无所谓,聊天正文留着才是隐私问题。
           const remaining = await purgeContents(root);
-          if (remaining.length === 0) {
+          if (remaining.length === 0)
             log.debug(`mirror cache purged but root dir remains: ${root}`, err);
-            return;
-          }
-          throw new MirrorCachePurgeError(root, remaining, err);
+          else failure = new MirrorCachePurgeError(root, remaining, err);
         } finally {
           purgeAllInFlight -= 1;
           // 收尾再自增一次代际(同 clearDevice):互斥让"清理期间发起"的写入排到清理之后才执行,
           // 只比"发起时的代际"就挡不住了 —— 结束时再 bump,它们提交时必然失配。
           generation += 1;
         }
+        // 收尾再自增一次**持久**账号计数(代际只在本进程内有效):共享同一个 userData 的另一个
+        // 进程可能在开头那次 bump **之后**才发起写入 —— 它读到的是新值,在锁上等到删除结束再
+        // 提交时值没变,于是把上一个账号的消息 / 列表缓存重建出来(review: codex P1)。
+        // 自增落不下去 = 屏障不完整,按"没清完"处理:登记整根重试。
+        try {
+          await bumpClearedCounter(root, CLEARED_ACCOUNT);
+        } catch (err) {
+          failure ??= new MirrorCachePurgeError(root, [root], err);
+        }
+        if (failure) throw failure;
       });
     },
   };
