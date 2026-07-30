@@ -327,6 +327,57 @@ describe('translateErrorNotification', () => {
     );
   });
 
+  it('过载错误带稳定 reason key，供 renderer 隔 IPC 判定（非终止与终止两条路径）', async () => {
+    // renderer 拿不到 codexErrorInfo(跨 IPC 投影只留 message 字符串), 靠这个 key 渲染
+    // 本地化重试进度与过载引导。两条路径都必须带, 否则退避窗口内或耗尽后有一边退回
+    // 英文原文 —— 也就是本次改动要消除的依赖在 UI 侧原样残留。
+    const rt = newCodexRuntimeState();
+    const q1 = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message: 'The upstream declined this request.',
+        codexErrorInfo: 'serverOverloaded',
+      }),
+      q1,
+      { ...makeCtx(rt), tryTakeOverOverload: () => ({ attempt: 1, maxAttempts: 4 }) },
+    );
+    const nonTerminal = await collect(q1);
+    expect(nonTerminal[0]!.data).toMatchObject({
+      reason: 'upstream-overload',
+      isTerminal: false,
+    });
+
+    // 接管不成立(预算耗尽 / 本 turn 已有产出) → 终止路径, reason 同样要带。
+    const q2 = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message: 'The upstream declined this request.',
+        codexErrorInfo: 'serverOverloaded',
+      }),
+      q2,
+      { ...makeCtx(rt), tryTakeOverOverload: () => null },
+    );
+    const terminal = await collect(q2);
+    expect(terminal[0]!.data).toMatchObject({
+      reason: 'upstream-overload',
+      isTerminal: true,
+    });
+  });
+
+  it('非过载错误不得带过载 reason key', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({ willRetry: false, message: 'tool failed: file not found' }),
+      q,
+      makeCtx(rt),
+    );
+    const events = await collect(q);
+    expect(events[0]!.data).not.toHaveProperty('reason');
+  });
+
   it('容量拒绝改了文案措辞时，结构化 tag 仍触发接管重投', async () => {
     // 本用例锁的是这次改动的核心目标: 重投不再依赖 codex 的英文文案。
     // message 故意完全不含 "at capacity" —— 模拟 codex 升级改了措辞。若判定回退到

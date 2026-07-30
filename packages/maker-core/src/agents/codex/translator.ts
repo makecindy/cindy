@@ -32,7 +32,11 @@ import { normalizeAccountRateLimitSnapshot } from '../../types/account-rate-limi
 import type { AsyncQueue } from '../shared/async-queue.js';
 import { stripTerminalControlSequences } from '../shared/terminal-output.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
-import { formatOverloadRetryMessage, parseOverloadError } from '../shared/overload-error.js';
+import {
+  UPSTREAM_OVERLOAD_REASON,
+  formatOverloadRetryMessage,
+  parseOverloadError,
+} from '../shared/overload-error.js';
 import { commandExecutionDisplayInput, type CommandExecutionDisplayInput } from './command-display.js';
 import { codexErrorInfoTag } from './app-server/protocol.js';
 import type {
@@ -323,16 +327,21 @@ export function translateErrorNotification(
   // 由 agent 层接管退避重投。接管成功时透成非终止状态并带进度后缀, renderer
   // 显示"模型繁忙, 正在重试 (N/M)"; 预算耗尽或条件不满足 (本 turn 已有产出)
   // 时 tryTakeOverOverload 返回 null, 落回下面的终止错误路径。
-  if (
-    !params.willRetry &&
-    parseOverloadError(safeMessage, signals.errorStatus, errorInfoTag)?.kind === 'capacity'
-  ) {
+  const isCapacityError =
+    parseOverloadError(safeMessage, signals.errorStatus, errorInfoTag)?.kind === 'capacity';
+  // 过载错误一律带上稳定 reason key。renderer 隔着 IPC 投影拿不到 codexErrorInfo,
+  // 靠这个 key 判定"是否过载"(ErrorBanner 的本地化文案 + 重试进度 + hideRetry 都由它
+  // 驱动)。不带的话 renderer 只能回退到文案匹配 —— codex 改一次措辞, 用户就会在整段
+  // 重试窗口里看到英文原文, 也就是本次改动要消除的那个依赖在 UI 侧原样残留。
+  const overloadReason = isCapacityError ? { reason: UPSTREAM_OVERLOAD_REASON } : {};
+  if (!params.willRetry && isCapacityError) {
     const progress = ctx.tryTakeOverOverload?.();
     if (progress) {
       queue.push({
         type: 'error',
         data: {
           ...safeErrorData,
+          ...overloadReason,
           message: formatOverloadRetryMessage(safeMessage, progress.attempt, progress.maxAttempts),
           isTerminal: false,
           willRetry: true,
@@ -345,7 +354,12 @@ export function translateErrorNotification(
   ctx.log.warn('codex turn error', { message: safeMessage, willRetry: params.willRetry, isAuthMissing, threadId: params.threadId, turnId: params.turnId });
   queue.push({
     type: 'error',
-    data: { ...safeErrorData, isTerminal: !params.willRetry, willRetry: params.willRetry },
+    data: {
+      ...safeErrorData,
+      ...overloadReason,
+      isTerminal: !params.willRetry,
+      willRetry: params.willRetry,
+    },
     source: 'codex',
   });
 }

@@ -2530,7 +2530,11 @@ export function handleStreamEvent(
         return {
           ...state,
           error: null,
-          errorReason: null,
+          // 非终止 error 此前恒清 reason(那时没有任何非终止 error 带 reason)。过载
+          // 重投是第一个需要它的: renderer 靠 reason 判定"是否过载"来渲染本地化的
+          // 重试进度, 而重投恰恰只在**非终止**态发生 —— 清掉就等于 UI 侧只能回退
+          // 文案匹配。其它非终止 error 仍不带 reason, 行为不变。
+          errorReason: reason ?? null,
           recoverableError: errMsg,
           errorRetryText: null,
           isStreaming: true,

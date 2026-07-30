@@ -21,18 +21,42 @@
 
 export type OverloadErrorKind = 'capacity' | 'overloaded';
 
+/**
+ * maker-core 在过载 error 事件上带的**稳定 reason key**(见 maker-core 的
+ * `agents/shared/overload-error.ts` 的 `UPSTREAM_OVERLOAD_REASON`)。
+ *
+ * 为什么 renderer 认这个而不是 codex 的原始 `codexErrorInfo` tag: 判定依据按
+ * 进程边界分层 —— main 侧(goal-host / IM)直接消费 error data, 吃 codex 的原始
+ * 结构化 tag; renderer 隔着 IPC 投影, 吃我们自己定义的稳定 key。后者不随 vendor
+ * 协议演进而变, 也不需要把 vendor 枚举搬进 renderer bundle。
+ *
+ * 为什么两者都不能只靠文案: `Selected model is at capacity...` 是 codex 二进制里
+ * 硬编码的用户可见提示语, 不是 API 契约。只认文案时 codex 改一次措辞, 用户就会在
+ * 整段自动重试窗口(约 22-38s)里看到英文原文, 而不是本地化的重试进度与过载引导。
+ *
+ * 与 maker-core 侧同名常量两处同步(不跨 bundle 共享代码, 与本文件其它谓词同规)。
+ */
+export const UPSTREAM_OVERLOAD_REASON = 'upstream-overload';
+
 export function parseOverloadError(
   message: string,
   errorStatus?: number,
+  reason?: string | null,
 ): { kind: OverloadErrorKind } | null {
+  if (reason === UPSTREAM_OVERLOAD_REASON) return { kind: 'capacity' };
   if (errorStatus === 529) return { kind: 'overloaded' };
+  // 文案 pattern 保留作老 daemon(不发结构化标识)与 Anthropic 侧的兜底。
   if (/\bat capacity\b/i.test(message)) return { kind: 'capacity' };
   if (/\boverloaded_error\b|\b529\b/.test(message)) return { kind: 'overloaded' };
   return null;
 }
 
-export function isOverloadErrorMessage(message: string, errorStatus?: number): boolean {
-  return parseOverloadError(message, errorStatus) !== null;
+export function isOverloadErrorMessage(
+  message: string,
+  errorStatus?: number,
+  reason?: string | null,
+): boolean {
+  return parseOverloadError(message, errorStatus, reason) !== null;
 }
 
 /**

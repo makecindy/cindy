@@ -27,6 +27,23 @@
  *    与 network-error 两端一致性同款惯例）。修改 pattern 时两处同步。
  */
 
+/**
+ * 过载 error 事件上带的**稳定 reason key**。
+ *
+ * 判定依据按进程边界分层：main 侧（goal-host / IM）直接消费 error data，吃 codex 的
+ * 原始 `codexErrorInfo` tag；renderer 隔着 IPC 投影，吃这个我们自己定义的 key。
+ * 后者不随 vendor 协议演进而变，也不用把 vendor 枚举搬进 renderer bundle。
+ *
+ * 走 `reason` 这个既有通道而不是新增字段：`reason` 本就是「maker-core 用稳定 key 告诉
+ * renderer 这是什么错误」的现成语义（`empty-response` / `turn-failed` 同款），store 侧
+ * 已随 error 一起清理，不必再引入一条平行的清理链（漏清会让过载标记残留到下一条
+ * 非过载错误上）。
+ *
+ * renderer 侧有同名常量镜像（`apps/desktop/src/renderer/utils/overloadError.ts`），
+ * 两处同步。
+ */
+export const UPSTREAM_OVERLOAD_REASON = 'upstream-overload';
+
 /** 过载形态。决定由谁重试，以及用户看到哪条文案。 */
 export type OverloadErrorKind = 'capacity' | 'overloaded';
 
