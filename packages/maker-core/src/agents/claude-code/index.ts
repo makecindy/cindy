@@ -4025,6 +4025,13 @@ export class ClaudeCodeAgent extends BaseAgent {
             parent_tool_use_id: null,
             ...(sendOpts?.messageUuid ? { uuid: sendOpts.messageUuid } : {}),
           };
+          // beginNewTurn() 在上面 toClaudeSdkContent 之前打过一次快照,但多模态
+          // 转换(图片 resize)可以异步等数百毫秒~几秒;这段空窗内 runtimeSetModel
+          // 仍可能通过 q.setModel() 热切模型,实际发出的请求会用新模型,但那次
+          // 快照仍是旧模型。这里在真正入队前(转换已完成、请求内容已确定)重新
+          // 打一次快照,覆盖掉可能过期的旧值——只有这里才是"这次请求最终确定
+          // 使用哪个模型"的边界(PR review P2)。
+          turnState.turnStartModel = mutableModel;
           const accepted = inputQueue.push(sdkInput);
           if (!accepted) {
             // close() can win while content conversion is still preparing files or
