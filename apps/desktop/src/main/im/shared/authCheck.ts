@@ -1,7 +1,7 @@
 import {
   chatEligibleSourcesForModel,
   getModel,
-  isChatEligible,
+  isAgentSelectableModel,
   nativeDefaultSourceId,
   type ProviderView,
 } from '@cindy/model-providers';
@@ -171,7 +171,10 @@ export function resolveEffectiveProvider(
         return false;
       }
       const model = getModel(p, row.model, row.agentKind);
-      return model !== undefined && isChatEligible(model);
+      return (
+        model !== undefined &&
+        isAgentSelectableModel(model, { userProvider: p.source === 'user' })
+      );
     });
     return explicit ? { kind: 'provider', provider: explicit } : { kind: 'explicit-invalid' };
   }

@@ -1,6 +1,6 @@
 import {
   effectiveSourceIdForModel,
-  isChatEligible,
+  isAgentSelectableModel,
   type AgentKind,
   type ProviderView,
 } from '@cindy/model-providers';
@@ -52,7 +52,9 @@ export function resolveBoundSessionGenerationRoute(input: {
       // 只按 id 匹配会漏检 mode:同一 id 在该来源下若是非聊天类型模型的具体条目,
       // 请求会被 fail-open 送进 image/audio/embedding 端点(2026-07 review 第 17 轮)。
       && (provider.models[agentKind] ?? []).some(
-        (candidate) => candidate.id === model && isChatEligible(candidate),
+        (candidate) =>
+          candidate.id === model
+          && isAgentSelectableModel(candidate, { userProvider: provider.source === 'user' }),
       ),
     )
     : undefined;

@@ -6,7 +6,7 @@ import {
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
   getModel,
-  isChatEligible,
+  isAgentSelectableModel,
   modelSupportsFastMode,
   providerOffersModel,
 } from '@cindy/model-providers';
@@ -209,7 +209,7 @@ export function CreateWorkerPopover({
       // 启用/显示双轴拆分),故不查 isModelEnabled——记忆来源被隐藏仍合法可路由。
       return catalogModel &&
         catalogModel.disabled !== true &&
-        isChatEligible(catalogModel)
+        isAgentSelectableModel(catalogModel, { userProvider: provider.source === 'user' })
         ? candidate
         : null;
     },

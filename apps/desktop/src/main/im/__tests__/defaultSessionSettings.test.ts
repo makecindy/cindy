@@ -505,11 +505,15 @@ describe('resolveImSessionDefaults', () => {
     });
   });
 
-  it('does not pin the session to a saved provider whose copy of the model is non-chat, even when another provider offers the same id as chat (2026-07 review: fresh evidence)', async () => {
+  it('reroutes the session to the chat-eligible provider when the saved provider copy of the model is non-chat (2026-07 review: fresh evidence + 第 25 轮)', async () => {
     // Same model id 'shared-id' exists on both providers with DIFFERENT modes:
     // 'xd' (the saved providerId) marks it non-chat; 'openai' marks it chat.
     // hasModel() passes because *some* source is eligible, but resolveProviderId
     // must independently reject binding the session to the specific non-chat source.
+    // Returning null is NOT enough: null means implicit default routing, which lands
+    // back on the native default source — and 'xd' IS the native default for
+    // claude-code, so null would send the request right back to the non-chat copy.
+    // The eligible fallback source must be resolved and persisted explicitly.
     mocks.listProviders.mockResolvedValue([
       {
         ...providers[0],
@@ -547,7 +551,10 @@ describe('resolveImSessionDefaults', () => {
     await expect(resolveImSessionDefaults(config)).resolves.toMatchObject({
       agentKind: 'claude-code',
       model: 'shared-id',
-      providerId: null, // must not stay pinned to 'xd' — its copy of this id is not chat-eligible
+      // must not stay pinned to 'xd' (its copy is not chat-eligible), and must not
+      // fall back to null either (implicit routing lands back on 'xd', the native
+      // default) — the chat-eligible source must be selected explicitly.
+      providerId: 'openai',
     });
   });
 

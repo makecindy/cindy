@@ -12,7 +12,7 @@
 
 import type { AgentKind, CatalogModel, Effort } from './types.js';
 import type { ProviderView } from './registry.js';
-import { isChatEligible } from './classification.js';
+import { isAgentSelectableModel } from './classification.js';
 import { deriveModelList, deriveModelSections } from './modelList.js';
 
 /**
@@ -124,7 +124,10 @@ export function visibleModelUnion(
     providerScope: 'connected-for-agent',
     isVisible,
     dedupe: 'first-wins',
-    excludeModel: (model) => !isChatEligible(model),
+    // provider-aware 谓词:用户自定义供应商显式配置的模型带未知 group,id 撞上能力
+    // 启发式(如 flux-image-x)时不能被误杀(2026-07 review 第 25 轮)。
+    excludeModel: (model, provider) =>
+      !isAgentSelectableModel(model, { userProvider: provider.source === 'user' }),
   });
 }
 
@@ -149,7 +152,8 @@ export function buildProviderSections(args: {
     providers: args.providers,
     agent: args.agent,
     providerScope: 'as-given',
-    excludeModel: (model) => !isChatEligible(model),
+    excludeModel: (model, provider) =>
+      !isAgentSelectableModel(model, { userProvider: provider.source === 'user' }),
     isVisible: (providerId, model) => args.isVisible(providerId, model.id),
     ...(args.selectedModelId !== undefined &&
     args.selectedProviderId !== undefined &&

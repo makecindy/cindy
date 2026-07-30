@@ -178,7 +178,7 @@ import {
   deriveModelsFromProviders,
   filterChatBridgedCodexProviders,
 } from '@/lib/providerModels';
-import { effectiveSourceIdForModel, getModel, isAgentSelectableModel, isChatEligible, providerOffersModel, sessionModelSupportsFastMode, connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
+import { effectiveSourceIdForModel, getModel, isAgentSelectableModel, providerOffersModel, sessionModelSupportsFastMode, connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
 import { isSubscriptionDirectModel } from '../../../shared/subscriptionModels';
 import {
   resolveDeviceLinkDraftDefaults,
@@ -300,7 +300,7 @@ function draftEnableOrcaOptions(
     // 与 CreateWorkerPopover.narrowProviderSource 同规则同理由。
     return catalogModel &&
       catalogModel.disabled !== true &&
-      isChatEligible(catalogModel)
+      isAgentSelectableModel(catalogModel, { userProvider: provider.source === 'user' })
       ? cfg.providerId
       : undefined;
   })();

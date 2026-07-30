@@ -13,7 +13,7 @@
  */
 
 import type { Catalog, Provider, CatalogModel, AgentKind, RoutingDescriptor } from './types.js';
-import { isChatEligible } from './classification.js';
+import { isAgentSelectableModel } from './classification.js';
 import type { ProviderLogoKind } from './providerBranding.js';
 import {
   isModelDisabled,
@@ -271,7 +271,12 @@ export function chatEligibleSourcesForModel(
 ): ProviderView[] {
   return sourcesForModel(views, modelId, agent, opts).filter((provider) => {
     const model = getModel(provider, modelId, agent);
-    return model !== undefined && isChatEligible(model);
+    // provider-aware 谓词而非裸 isChatEligible:用户自定义供应商显式配置的模型带未知
+    // group,id 撞上能力启发式(如 flux-image-x)时不能被误杀(2026-07 review 第 25 轮)。
+    return (
+      model !== undefined &&
+      isAgentSelectableModel(model, { userProvider: provider.source === 'user' })
+    );
   });
 }
 

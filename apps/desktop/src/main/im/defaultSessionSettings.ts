@@ -12,7 +12,7 @@ import {
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
   getModel,
-  isChatEligible,
+  isAgentSelectableModel,
   type ProviderView,
 } from '@cindy/model-providers';
 
@@ -281,20 +281,25 @@ function resolveProviderId(
     });
     return fallback;
   }
-  if (!isChatEligible(model)) {
+  if (!isAgentSelectableModel(model, { userProvider: provider.source === 'user' })) {
     // hasModel() 只证明"这个 id 在某个来源上是聊天模型"(any-source),不代表**这个**被
     // 保存的 providerId 本身也是——同一 id 若在不同来源上 mode 不一致(如 A 是
     // image_generation、B 是 chat),model 存在性校验会因 B 通过,但这里若只查
     // providerOffersModel(仅看 id 是否存在,不看 mode),仍会把会话钉死在 A 上
-    // (2026-07 review:fresh evidence,与 hasModel 校验的是两件不同的事)。不像
-    // 停用轴那样跨来源自动改道:同 id 在不同来源 mode 不一致是数据异常而非正常
-    // 的产品开关,不静默改道掩盖,直接回落 null 交给隐式默认路径处理。
-    log.warn('im default provider is non-chat for this model; dropping explicit source', {
+    // (2026-07 review:fresh evidence,与 hasModel 校验的是两件不同的事)。
+    // 必须**显式**解析聊天可用的替代来源,不能返回 null 了事:null 的语义是隐式
+    // 默认路由,运行时会落回原生默认来源——保存的 providerId 若恰好就是原生默认
+    // (如 XD),null 等于原路发回那份非聊天拷贝,什么也没挡住(2026-07 review 第
+    // 25 轮)。effectiveSourceIdForModel 走 chat 准入 rail,零可用 ⇒ null 交给既有
+    // 失败路径;数据异常本身留 warn 供排查。
+    const fallback = effectiveSourceIdForModel(providers, null, modelId, agentKind);
+    log.warn('im default provider is non-chat for this model; rerouting to chat-eligible source', {
       agentKind,
       modelId,
       providerId,
+      fallback,
     });
-    return null;
+    return fallback;
   }
   return providerId;
 }
@@ -337,7 +342,12 @@ function findModel(
     // 已经把会话正确路由到了后面那个启用的聊天来源。
     for (const provider of connectedProvidersForAgent(providers, agentKind)) {
       const model = getModel(provider, modelId, agentKind);
-      if (model && model.disabled !== true && isChatEligible(model)) return model;
+      if (
+        model &&
+        model.disabled !== true &&
+        isAgentSelectableModel(model, { userProvider: provider.source === 'user' })
+      )
+        return model;
     }
   }
   return getMaker()

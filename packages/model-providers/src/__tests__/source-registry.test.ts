@@ -474,6 +474,36 @@ describe('registry visibility & sources(运行时注入 fixture)', () => {
       'openai',
     ]);
   });
+
+  it('chatEligibleSourcesForModel 不误杀用户自定义供应商显式配置的模型(2026-07 review 第 25 轮)', () => {
+    // flux-image-x 的 id 撞上 /image/ 启发式,但它来自 source:'user' 的自定义供应商且
+    // group 是未知的 custom:*——isAgentSelectableModel 的 userProvider 例外有意放行
+    // (用户显式配置的就是聊天模型)。裸 isChatEligible 会把它从路由/发送门禁里删掉,
+    // 用户配好的模型 UI 显示"没有已连接的来源"、请求发不出去。
+    const userProviderCatalog: Catalog = {
+      version: 'test',
+      providers: [
+        {
+          id: 'custom-p',
+          name: 'Custom',
+          source: 'user',
+          agents: ['claude-code'],
+          auth: { method: 'api-key' },
+          routing: { 'claude-code': { upstream: 'https://custom.test', authStrategy: 'api-key' } },
+          models: {
+            'claude-code': [model('flux-image-x', { group: 'custom:custom-p' })],
+          },
+        },
+      ],
+    };
+    const views = buildRegistry(userProviderCatalog, { 'custom-p': true });
+    expect(
+      chatEligibleSourcesForModel(views, 'flux-image-x', 'claude-code').map((p) => p.id),
+    ).toEqual(['custom-p']);
+    expect(effectiveSourceIdForModel(views, 'custom-p', 'flux-image-x', 'claude-code')).toBe(
+      'custom-p',
+    );
+  });
 });
 
 describe('resolveRoute(运行时注入 fixture)', () => {

@@ -16,7 +16,7 @@
 
 import {
   appendProviderRequestPath,
-  isChatEligible,
+  isAgentSelectableModel,
   isLoopbackProviderUrl,
   type AgentKind,
   type ProviderWireProtocol,
@@ -320,7 +320,9 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
   // 探测发的是聊天形状的最小请求(见下方 requestPath/body 组装);挑第一个非聊天模型
   // (image/embedding/...)会把探测发给一个本来就不接受聊天请求的端点,得到的失败结论
   // 和"这个供应商配置是坏的"完全无关(2026-07 review,与 issue #882 第 3 点同一类问题)。
-  const model = (provider.models[agent] ?? []).find(isChatEligible);
+  const model = (provider.models[agent] ?? []).find((m) =>
+    isAgentSelectableModel(m, { userProvider: provider.source === 'user' }),
+  );
   if (!model) throw new Error(`provider '${providerId}' has no chat models for '${agent}'`);
   // OAuth 形态：探测凭证用 Runner 持有的 access_token（与 oauth-token 路由同源），未登录时
   // 无 token → 探测会得到 AUTH_INVALID，这本身就是「先去登录」的正确结论。

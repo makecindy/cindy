@@ -20,6 +20,7 @@ import {
   getModel,
   groupModelsForDisplay,
   groupOf,
+  isAgentSelectableModel,
   isChatEligible,
   type AgentKind,
   type DisplayModel,
@@ -108,7 +109,12 @@ function isModelChatEligibleOnProvider(
   agent: AgentKind,
 ): boolean {
   const model = getModel(provider, modelId, agent);
-  return model !== undefined && isChatEligible(model);
+  // provider-aware 谓词:用户自定义供应商显式配置的模型带未知 group,id 撞上能力
+  // 启发式时不能被误杀(2026-07 review 第 25 轮)。
+  return (
+    model !== undefined &&
+    isAgentSelectableModel(model, { userProvider: provider.source === 'user' })
+  );
 }
 
 export function resolveSourceSwitch(args: {
