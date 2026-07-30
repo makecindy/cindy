@@ -76,6 +76,46 @@ const INACTIVE_COLLAPSED_MAX_HEIGHT = 56;
 const COLLAPSED_FADE_MASK =
   'linear-gradient(to bottom, black calc(100% - 28px), transparent 100%)';
 
+/** 折叠时要从 tab 序里摘掉的元素(MarkdownRenderer 会产出链接、文件 chip、
+ *  代码块复制按钮、媒体控件,其中 chip 靠 tabIndex={0} 参与键盘导航)。 */
+const FOCUSABLE_SELECTOR =
+  'a[href], button, input, select, textarea, summary, audio[controls], video[controls], [tabindex], [contenteditable="true"]';
+
+/** 暂存被改动前的 tabindex 原值,空串表示"原本没有这个属性"。属性跟着节点走,
+ *  React 重渲染换了节点也不会把还原值串到别的元素上。 */
+const SAVED_TABINDEX_ATTR = 'data-plan-collapse-tabindex';
+
+/**
+ * 把 root 内"底边超过 cutoff"的可聚焦元素移出 tab 序;cutoff 为 null(未折叠)
+ * 时全部还原。
+ *
+ * 判据用底边而不是顶边:跨在裁剪线上的控件只露出一半,聚焦它同样会把
+ * overflow-hidden 容器滚起来,所以按"不完全可见"处理。只改 tabindex、不加
+ * aria-hidden —— 读屏用户没有"折叠"这个视觉概念,把内容从 a11y 树里摘掉是净
+ * 损失;避免"激活看不见的控件"只需要它进不了 tab 序。
+ */
+function syncClippedFocusability(root: HTMLElement, cutoff: number | null): void {
+  const rootTop = root.getBoundingClientRect().top;
+  root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR).forEach((el) => {
+    const saved = el.getAttribute(SAVED_TABINDEX_ATTR);
+    const clipped =
+      cutoff != null && el.getBoundingClientRect().bottom - rootTop > cutoff;
+
+    if (clipped) {
+      if (saved == null) {
+        el.setAttribute(SAVED_TABINDEX_ATTR, el.getAttribute('tabindex') ?? '');
+      }
+      el.setAttribute('tabindex', '-1');
+      return;
+    }
+
+    if (saved == null) return;
+    if (saved === '') el.removeAttribute('tabindex');
+    else el.setAttribute('tabindex', saved);
+    el.removeAttribute(SAVED_TABINDEX_ATTR);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -203,9 +243,13 @@ export function PlanReviewBubble({
  * 行高与外边距差得很远,行数和视觉高度没有稳定关系,而"能否展开"必须和用户
  * 真正看到的有没有被切掉一致 —— 否则会出现按钮点了没变化(或该给按钮时没给)。
  *
- * 折叠态整块 inert(见下方注释):裁掉的部分只是视觉上不见了,DOM 里仍在 tab 序
- * 与 a11y 树里。所以任何会被裁的状态都必须给得出展开入口 —— 三态共用同一个
- * 折叠+展开机制,只有折叠高度不同。
+ * 折叠只裁"看得见",所以被裁掉的链接 / 文件 chip / 代码块按钮仍留在 tab 序里:
+ * 键盘能聚焦并激活一个看不见的控件,而且焦点一进去浏览器就会滚动这个
+ * overflow-hidden 容器,把折叠预览顶掉。修法是**只**把不完全可见的可聚焦元素
+ * 移出 tab 序(syncClippedFocusability),不整块 inert —— inert 会连带禁掉预览
+ * 文字的选中,而 DESIGN.md §14.1 要求消息正文默认可选。可见控件因此照常能点,
+ * 被裁内容对读屏仍可读(只是 tab 不到),任何会被裁的状态都给得出展开入口 ——
+ * 三态共用同一个折叠 + 展开机制,只有折叠高度不同。
  */
 function PlanMarkdownBody({
   workingDir,
@@ -230,19 +274,23 @@ function PlanMarkdownBody({
   const bodyRef = useRef<HTMLDivElement>(null);
 
   // useLayoutEffect:首帧就在 paint 前定下折叠与否,否则长计划会先整段铺开
-  // 再收起,滚动位置和卡片高度跳一下。
+  // 再收起,滚动位置和卡片高度跳一下。tab 序同步也放这里 —— 它依赖布局,必须
+  // 在同一时机跟着高度一起算,并由 ResizeObserver 在图片加载 / 字体就位 /
+  // 窗口改宽导致回流后重算。
   useLayoutEffect(() => {
     const el = bodyRef.current;
     if (!el) return;
-    const measure = () => {
-      setOverflowing(el.offsetHeight > collapsedMaxHeight + 1);
+    const sync = () => {
+      const tooTall = el.offsetHeight > collapsedMaxHeight + 1;
+      setOverflowing(tooTall);
+      syncClippedFocusability(el, tooTall && !expanded ? collapsedMaxHeight : null);
     };
-    measure();
+    sync();
     if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(measure);
+    const observer = new ResizeObserver(sync);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [collapsedMaxHeight, plan]);
+  }, [collapsedMaxHeight, plan, expanded]);
 
   const collapsed = !expanded && overflowing;
 
@@ -250,15 +298,6 @@ function PlanMarkdownBody({
     <div className="flex flex-col gap-[8px]">
       <div
         className={cn('min-w-0', collapsed && 'overflow-hidden')}
-        // 折叠态整块 inert。overflow-hidden 与 mask 只挡住"看得见",被裁掉的
-        // Markdown 链接、文件 chip、代码块按钮仍留在 tab 序与 a11y 树里:键盘
-        // 用户能聚焦并激活一个看不见的控件,而且焦点一进去浏览器就会滚动这个
-        // overflow-hidden 容器,把折叠预览顶掉、露出本该藏起来的下半部分。
-        // inert 一次解决聚焦、点击和 a11y 三条路径,唯一入口收敛到下方的展开
-        // 按钮(它在本容器之外,不受影响)。
-        // 代价:inert 子树内的文字不能选中,所以折叠预览无法复制 —— 这也是三态
-        // 都必须给展开按钮的原因,展开后完整可选可交互。
-        inert={collapsed}
         style={
           collapsed
             ? ({
