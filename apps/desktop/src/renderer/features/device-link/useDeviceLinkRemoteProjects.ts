@@ -300,6 +300,10 @@ export function useDeviceLinkRemoteProjects(): void {
             log.debug(`removing cached shard absent from listDevices: ${deviceId.slice(0, 8)}`);
             remoteProjectsStore.removeDevice(deviceId);
             removeRemoteSessionActivityForDevice(deviceId);
+            // 权威列表里没有它 = 明确离场,和撤销 / 关被控同一档:登记进 hydration 黑名单,
+            // 否则在途的那次 readCachedSessionList 落地后又把它种回来,而紧随的 reseed 在
+            // listDevices 离线时纠正不了(review: codex P1)。
+            cacheHydrationBlocked.add(deviceId);
             clearCachedDevice(deviceId);
           }
         })

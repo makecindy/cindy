@@ -926,10 +926,10 @@ describe('clearDevice 期间的写入', () => {
   });
 });
 
-describe('跨进程清理标记', () => {
-  // review(codex P1):`clearingDevices` 只在本进程可见,而 dev 实例与打包实例可以共用同一个
-  // userData —— B 进程看不到 A 在清某台被撤销设备,它的 rename 若落在 A 的扫描之后,
-  // A 会报"清干净了"而明文已被重建。落盘标记 + 清理收尾的二次扫描共同保证收敛。
+describe('跨进程互斥(锁 + 清理完成标记)', () => {
+  // review(codex P1):`clearingDevices` / serializeWrite 都只在本进程内有效,而 dev 实例与
+  // 打包实例可以共用同一个 userData。两道机制:缓存根下的跨进程锁(清理与提交不重叠)+
+  // 「清理完成时刻」标记(挡住"内容取自清理之前、提交发生在清理之后"那一种)。
   it('别的实例(另一个 store 句柄)在清某设备时,本实例不写该设备的缓存', async () => {
     const a = cache();
     const b = createMirrorCache(() => root); // 同一个 owner 目录,模拟另一个进程
@@ -944,31 +944,38 @@ describe('跨进程清理标记', () => {
     expect(await b.readMessages('dev-1', 'sess-1')).toEqual([]);
   });
 
-  // 上一条走的是"二次扫描"这条收敛路径。这条单独钉住**标记本身**:手工放一个标记
-  // (等价于另一个进程正处在清理中间),此时写入必须直接跳过。
-  it('盘上存在该设备的清理标记时,写入直接跳过(不靠二次扫描兜)', async () => {
+  // 注:"提交前计数变了 → 丢弃"这条时序由上面的两实例用例确定性地覆盖(B 在入口读到旧计数,
+  // 随后在锁上等 A 整段清理跑完,提交前再读已经变了)。这里不再另写一个靠 sleep 拼时序的版本
+  // —— 那种测试本身就是 flaky 的(第一版写过,连跑三次两次失败)。
+
+  it('作废计数读不出来时保守跳过写(fail-closed)', async () => {
+    if ((process.getuid?.() ?? 0) === 0) return;
     const c = cache();
-    const markerDir = path.join(root, '.clearing');
-    await fsp.mkdir(markerDir, { recursive: true });
-    const name = messageFileName('dev-1', 'sess-1').replace(/-sess.*$/, '');
-    await fsp.writeFile(path.join(markerDir, name), '999', 'utf8');
-
-    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
-
-    expect(await c.readMessages('dev-1', 'sess-1')).toEqual([]);
-    // 别的设备不受这个标记影响。
-    await c.writeMessages('dev-2', 'sess-1', [row('m2', '2026-01-01T00:00:00.000Z')]);
-    expect((await c.readMessages('dev-2', 'sess-1')).map((m) => m.id)).toEqual(['m2']);
+    const markDir = path.join(root, '.cleared');
+    await fsp.mkdir(markDir, { recursive: true });
+    const key = `${__testing.safeSegment('dev-1')}-${__testing.shortHash('dev-1')}`;
+    const mark = path.join(markDir, key);
+    await fsp.writeFile(mark, '1', 'utf8');
+    await fsp.chmod(mark, 0o000);
+    try {
+      await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+      expect(await c.readMessages('dev-1', 'sess-1')).toEqual([]);
+      // 别的设备不受影响。
+      await c.writeMessages('dev-2', 'sess-1', [row('m2', '2026-01-01T00:00:00.000Z')]);
+      expect((await c.readMessages('dev-2', 'sess-1')).map((m) => m.id)).toEqual(['m2']);
+    } finally {
+      await fsp.chmod(mark, 0o600).catch(() => undefined);
+    }
   });
 
-  it('清理结束后标记撤掉,写入恢复正常', async () => {
+  it('清理结束后写入恢复正常(计数只挡"清理之前取到的内容")', async () => {
     const c = cache();
     await c.clearDevice('dev-1');
     await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
     expect((await c.readMessages('dev-1', 'sess-1')).map((m) => m.id)).toEqual(['m1']);
   });
 
-  it('清理某设备期间,另一台设备的写入照常落盘(标记是逐设备的)', async () => {
+  it('清某设备期间,另一台设备的写入照常落盘', async () => {
     const a = cache();
     const b = createMirrorCache(() => root);
     await Promise.all([
@@ -976,6 +983,25 @@ describe('跨进程清理标记', () => {
       b.writeMessages('dev-2', 'sess-9', [row('m9', '2026-01-01T00:00:00.000Z')]),
     ]);
     expect((await b.readMessages('dev-2', 'sess-9')).map((m) => m.id)).toEqual(['m9']);
+  });
+
+  // review(codex P1):两个实例并发清**不同**设备时,各自读同一份旧 session-list、各写
+  // "除我之外的全部",后写的那次会把对方刚移除的设备恢复回来 —— 锁把这段串行化了。
+  it('两个实例并发清不同设备 → 两台都从列表快照里消失', async () => {
+    const a = cache();
+    const b = createMirrorCache(() => root);
+    await a.writeSessionList([
+      { deviceId: 'dev-1', deviceName: 'A', sessions: [{ id: 's1', status: 'active' }] },
+      { deviceId: 'dev-2', deviceName: 'B', sessions: [{ id: 's2', status: 'active' }] },
+      { deviceId: 'dev-3', deviceName: 'C', sessions: [{ id: 's3', status: 'active' }] },
+    ]);
+
+    await Promise.all([a.clearDevice('dev-1'), b.clearDevice('dev-2')]);
+
+    const left = (await a.readSessionList()).map((d) => d.deviceId);
+    expect(left).not.toContain('dev-1');
+    expect(left).not.toContain('dev-2');
+    expect(left).toContain('dev-3');
   });
 });
 

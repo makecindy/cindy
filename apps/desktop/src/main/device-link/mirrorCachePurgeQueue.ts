@@ -29,6 +29,7 @@ import fsp from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 
 import { createLogger } from '../logger';
+import { withCrossProcessLock } from './crossProcessLock';
 
 const log = createLogger('device-link:mirror-cache-purge');
 
@@ -87,139 +88,14 @@ const QUEUE_PENDING_DIR = `${QUEUE_FILE}.pending`;
 
 /** 跨进程锁文件名(与队列文件同目录)。 */
 const QUEUE_LOCK_FILE = `${QUEUE_FILE}.lock`;
-/** 超过这个年龄的锁一定是崩溃残留(临界区只有几毫秒的文件 IO),可以强行接管。 */
-const LOCK_STALE_MS = 10_000;
-/** 抢锁最长等待:拿不到就降级为「只靠进程内锁 + 提交时合并」,绝不因此丢掉这次记录。 */
-const LOCK_WAIT_MS = 3_000;
-const LOCK_RETRY_MS = 40;
-/** 持锁期间刷新 mtime 的间隔:让「陈旧」只对真正死掉的持有者成立。 */
-const LOCK_HEARTBEAT_MS = 2_000;
 
-/**
- * 跨进程互斥。dev 实例与打包实例可以共用同一个 userData(见 devStartupStatus.ts),
- * 于是「读队列 → 改 → 整份写回」在两个进程之间会互相覆盖:后落位的那次赢,输的那条记录
- * 只剩在自己进程的 memoryQueue 里,进程退出即消失,对应的明文缓存再也没有重试
- * (review: codex P1)。
- *
- * 用 `open(lock, 'wx')` 做锁:同目录、O_EXCL 语义在 Windows / macOS / Linux 都可靠。
- *
- * 陈旧锁的接管**不能只看时间**:临界区包含递归删除,一个正常持锁的 drain 完全可能跑过
- * 10 秒。只按 mtime 抢锁会把活着的持有者挤掉,它随后还会在 finally 里把别人的锁删掉
- * (review: codex P1)。所以:
- *  - 锁内容写 `{ pid, startedAt }`,持锁期间每 2 秒 touch 一次 mtime(心跳);
- *  - 只有「mtime 陈旧」**且**「owner pid 已经不在」才接管 —— 共享 userData 必然同机,
- *    `process.kill(pid, 0)` 是可靠的存活判定;
- *  - owner 还活着就继续等,等不到就走**追加**路径(见 QUEUE_PENDING_DIR),不做整份写回;
- *  - 释放时先确认锁里还是自己的 pid,再删 —— 免得删掉别人的锁。
- */
+/** 跨进程互斥(实现见 crossProcessLock);拿不到锁时走**追加**路径,不做整份写回。 */
 async function withFileLock<T>(task: (held: boolean) => Promise<T>): Promise<T> {
-  const lock = path.join(app.getPath('userData'), QUEUE_LOCK_FILE);
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  let held = false;
-  for (;;) {
-    try {
-      const handle = await fsp.open(lock, 'wx');
-      await handle
-        .writeFile(JSON.stringify({ pid: process.pid, startedAt: Date.now() }), 'utf8')
-        .catch(() => undefined);
-      await handle.close().catch(() => undefined);
-      held = true;
-      break;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') break; // 权限等:直接降级
-      if (await canTakeOverLock(lock)) {
-        log.warn('taking over mirror cache purge queue lock from a dead owner');
-        await fsp.rm(lock, { force: true }).catch(() => undefined);
-        continue;
-      }
-      if (Date.now() >= deadline) {
-        log.warn('mirror cache purge queue lock busy; falling back to append-only records');
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
-    }
-  }
-  // 心跳:持锁期间不断刷新 mtime,让"陈旧"只对真正死掉的持有者成立。
-  const heartbeat = held
-    ? setInterval(() => {
-        const now = new Date();
-        void fsp.utimes(lock, now, now).catch(() => undefined);
-      }, LOCK_HEARTBEAT_MS)
-    : null;
-  heartbeat?.unref?.();
-  try {
-    return await task(held);
-  } finally {
-    if (heartbeat) clearInterval(heartbeat);
-    if (held) await releaseOwnLock(lock);
-  }
-}
-
-/** 只有「心跳早已停」且「owner 进程确实不在了」才允许接管。 */
-async function canTakeOverLock(lock: string): Promise<boolean> {
-  let stat: Awaited<ReturnType<typeof fsp.stat>> | null = null;
-  try {
-    stat = await fsp.stat(lock);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    // 只有"锁文件真的没了"才算可以重新抢(下一轮 open(wx) 会成功);EACCES / EPERM 这类
-    // 读不到锁的情况必须保守 —— 当成"别人还持着",否则会把活着的持有者挤掉
-    // (review: copilot)。
-    if (code === 'ENOENT' || code === 'ENOTDIR') return true;
-    return false;
-  }
-  if (Date.now() - stat.mtimeMs <= LOCK_STALE_MS) return false;
-  const owner = await readLockOwnerPid(lock);
-  // 内容**读不出来**(EACCES / EPERM / 瞬时锁)≠ 持有者已死:保守,不接管(review: copilot)。
-  if (owner === 'unreadable') return false;
-  if (owner === null) return true; // 能读但不是本模块写的(陈旧残留):按死锁处理
-  if (owner === process.pid) return true; // 本进程上一轮崩在临界区里(心跳早停)
-  try {
-    process.kill(owner, 0);
-    return false; // owner 还活着:很可能是个跑得久的 drain,不能挤掉它
-  } catch (err) {
-    // ESRCH = 进程不在了;EPERM = 进程在但不属于当前用户(保守认为活着)
-    return (err as NodeJS.ErrnoException)?.code !== 'EPERM';
-  }
-}
-
-/**
- * 锁文件里的 owner pid。区分三种情况:
- *  - number:正常读到 pid;
- *  - null:能读、但内容不是本模块写的(陈旧残留);
- *  - 'unreadable':**读不出来**(EACCES / EPERM / 瞬时锁)—— 不能据此判定持有者已死。
- */
-async function readLockOwnerPid(lock: string): Promise<number | null | 'unreadable'> {
-  let raw: string;
-  try {
-    raw = await fsp.readFile(lock, 'utf8');
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    // 文件已经没了 → 交给调用方重新抢锁;其余(权限 / 占用)一律保守。
-    if (code === 'ENOENT' || code === 'ENOTDIR') return null;
-    return 'unreadable';
-  }
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (parsed && typeof parsed === 'object') {
-      const pid = (parsed as { pid?: unknown }).pid;
-      if (typeof pid === 'number' && Number.isInteger(pid) && pid > 0) return pid;
-    }
-  } catch {
-    // 能读但不是合法 JSON:按陈旧残留处理。
-  }
-  return null;
-}
-
-/** 释放前确认锁里还是自己的 pid:别人接管过之后不能替他删。 */
-async function releaseOwnLock(lock: string): Promise<void> {
-  const owner = await readLockOwnerPid(lock);
-  if (owner === 'unreadable') return; // 读不出来就别乱删别人的锁
-  if (owner !== null && owner !== process.pid) {
-    log.warn('mirror cache purge queue lock was taken over; leaving it to its new owner');
-    return;
-  }
-  await fsp.rm(lock, { force: true }).catch(() => undefined);
+  return withCrossProcessLock(
+    path.join(app.getPath('userData'), QUEUE_LOCK_FILE),
+    { label: 'purge-queue' },
+    task,
+  );
 }
 
 function queueFilePath(): string {

@@ -35,6 +35,7 @@ import fsp from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 
 import { ownerScopedUserDataPath } from '../appSessionState';
+import { withCrossProcessLock } from './crossProcessLock';
 import { createLogger } from '../logger';
 
 const log = createLogger('device-link:mirror-cache');
@@ -56,6 +57,8 @@ const SESSION_LIST_SHRINK_STEPS = [MAX_CACHED_SESSIONS_PER_DEVICE, 40, 15] as co
 export const MAX_CACHED_TEXT_CHARS = 240;
 
 const MESSAGES_DIR = 'messages';
+/** 缓存根下的跨进程锁文件名(见 withCacheLock)。 */
+const CACHE_LOCK_FILE = '.lock';
 const SESSION_LIST_FILE = 'session-list.json';
 
 /** 缓存快照里的单台设备(deviceName 供种入时重新 stamp)。 */
@@ -441,6 +444,17 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       : isClearingDevice(guard.deviceId);
   }
 
+  /** 作废盘上的列表快照(写不了新内容时用):删掉即可,删不掉则登记重试。 */
+  async function invalidateSessionList(file: string): Promise<SessionListWriteResult> {
+    lastWritten.delete(file);
+    try {
+      await fsp.rm(file, { recursive: true, force: true });
+    } catch {
+      if (await pathMaybeExists(file)) return { outcome: 'purge-failed', stuck: file };
+    }
+    return { outcome: 'invalidated' };
+  }
+
   async function writeSessionListLocked(
     devices: readonly unknown[],
     guard: WriteGuard,
@@ -449,10 +463,8 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     fileOverride?: string,
   ): Promise<SessionListWriteResult> {
     const file = fileOverride ?? sessionListPath();
-    const rootOfFile = path.dirname(file);
-    // 列表快照是**整份**写:任何设备正在被清(含别的进程在清)时都不能写,否则会把那台
-    // 设备的会话元数据又写回去(review: codex P1)。clearDevice 自己走 purge guard,不受阻。
-    if (await blockedByClear(guard, rootOfFile)) return { outcome: 'stale' };
+    // 跨进程互斥由调用方的 withCacheLock 负责;这里只管本进程的代际 / 清理屏障。
+    if (isStale(guard)) return { outcome: 'stale' };
     for (const perDeviceLimit of SESSION_LIST_SHRINK_STEPS) {
       const normalized = normalizeDeviceSessions(devices, perDeviceLimit);
       if (normalized.length === 0) {
@@ -474,7 +486,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       const body = JSON.stringify(normalized);
       if (unchanged(file, body)) return { outcome: 'skipped' };
       await ensureDir(path.dirname(file));
-      if (await blockedByClear(guard, rootOfFile)) return { outcome: 'stale' };
+      if (isStale(guard)) return { outcome: 'stale' };
       const written = await writeFileAtomic(file, serialized);
       if (!written.ok) {
         // 同 writeMessages:内容已变而新快照没落位,旧快照就是过期的(可能还带着刚被
@@ -491,7 +503,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
           ? { outcome: 'purge-failed', stuck: written.leftoverTmp }
           : { outcome: 'invalidated' };
       }
-      if (await blockedByClear(guard, rootOfFile)) {
+      if (isStale(guard)) {
         // 同 writeMessages:清理已经过去了,这笔补偿删除失败就等于「被撤销 / 上一个账号的
         // 设备元数据留在盘上,而且没人知道」。返回 purge-failed 让调用方登记重试。
         lastWritten.delete(file);
@@ -536,64 +548,102 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
 
 
   /**
-   * 跨进程的「这台设备正在被清」标记。`clearingDevices` 只在本进程内可见,而 dev 实例与
-   * 打包实例可以共用同一个 userData —— 那时 B 进程完全看不到 A 正在清某台被撤销的设备,
-   * 它的原子 rename 若落在 A 的扫描之后,A 会报"清干净了"而那份明文已经被重建出来
+   * 缓存根下的跨进程锁。`clearingDevices` 与 `serializeWrite` 都只在**本进程**内有效,而 dev
+   * 实例与打包实例可以共用同一个 userData —— 那时:
+   *  - B 的写入看不到 A 正在清某台被撤销设备,它的 rename 落在 A 的扫描之后就把明文重建了;
+   *  - 两个进程各自清不同设备时,会各读同一份旧 session-list、各写"除我之外的全部",
+   *    后写的那次把对方刚移除的设备恢复回来 —— 两边都报成功(review: codex P1)。
+   *
+   * 所以落盘写入与清理统一在这把锁里做(实现见 crossProcessLock:pid + 心跳 + 存活判定,
+   * 只接管确实死掉的持有者)。拿不到锁时:
+   *  - **写入**直接跳过(缓存是纯优化,少写一次远好过在别人清理途中写回明文);
+   *  - **清理**照常进行(删除是安全方向),并保留清理收尾的二次扫描兜底。
+   */
+  /**
+   * 「这台设备被清过几次」——跨进程可见的**作废计数器**。
+   *
+   * 跨进程锁只保证清理与提交不重叠,挡不住这一种:B 的写入**在清理之前**就取到了内容,却在
+   * 清理结束、锁释放之后才提交 —— 那份内容是被撤销设备的旧正文,照写就等于把它重建出来
    * (review: codex P1)。
    *
-   * 于是清理期间在缓存根下放一个标记文件,写入侧在落位前后各查一次(fail-closed:读不出来
-   * 就当成"正在清",宁可少写一次缓存)。标记 + 清理结束前的**二次扫描**共同保证收敛:
-   *  - B 在标记出现之后检查 → 直接不写;
-   *  - B 的检查恰好早于标记创建 → 它的写可能落在首轮扫描之后,由二次扫描收掉。
+   * 写入侧在**发起时**读一次计数,提交前(锁内)再读一次:变了就说明"我手里的内容属于清理
+   * 之前",丢弃这次写。用计数而不是时间戳:毫秒精度下"清理在同一毫秒内跑完"时时间戳挡不住,
+   * 计数没有精度问题。读不出来时保守跳过写(缓存是纯优化,少写一次无所谓)。
    */
-  const CLEARING_DIR = '.clearing';
+  const CLEARED_DIR = '.cleared';
+  /** 列表快照是整份写,任何设备被清都可能让它变陈旧 → 用一个共享计数器。 */
+  const CLEARED_ANY = '_any';
 
-  function clearingMarkerPath(root: string, id: string): string {
-    return path.join(root, CLEARING_DIR, `${safeSegment(id)}-${shortHash(id)}`);
+  function clearedMarkPath(root: string, key: string): string {
+    return path.join(root, CLEARED_DIR, key);
   }
 
-  /** 任何设备正在被清(列表快照是整份写,任一设备在清都不能写)。fail-closed。 */
-  async function anyClearingMarkerExists(root: string): Promise<boolean> {
+  function deviceClearKey(id: string): string {
+    const trimmed = id.trim();
+    return `${safeSegment(trimmed)}-${shortHash(trimmed)}`;
+  }
+
+  /** 读作废计数:缺文件 = 0(从未清过);读不出来 / 不是数字 = null(调用方保守处理)。 */
+  async function readClearCounter(root: string, key: string): Promise<number | null> {
     try {
-      const names = await fsp.readdir(path.join(root, CLEARING_DIR));
-      return names.length > 0;
+      const raw = await fsp.readFile(clearedMarkPath(root, key), 'utf8');
+      const value = Number.parseInt(raw, 10);
+      return Number.isFinite(value) ? value : null;
     } catch (err) {
       const code = errnoCode(err);
-      if (code === 'ENOENT' || code === 'ENOTDIR') return false;
-      return true; // 读不出来 → 保守当成"有清理在跑"
+      if (code === 'ENOENT' || code === 'ENOTDIR') return 0;
+      return null;
     }
   }
 
-  async function deviceClearingMarkerExists(root: string, id: string): Promise<boolean> {
-    return pathMaybeExists(clearingMarkerPath(root, id));
+  async function bumpClearCounters(root: string, id: string): Promise<void> {
+    for (const key of [deviceClearKey(id), CLEARED_ANY]) {
+      const file = clearedMarkPath(root, key);
+      const current = (await readClearCounter(root, key)) ?? 0;
+      try {
+        await ensureDir(path.dirname(file));
+        await fsp.writeFile(file, String(current + 1), 'utf8');
+      } catch (err) {
+        // 计数落不下去只会让跨进程作废退化(本进程的代际屏障仍在),留痕即可。
+        log.debug(`mirror cache: failed to bump cleared counter ${key}`, err);
+      }
+    }
   }
 
-  /** 落位前后各查一次:本进程的 in-flight 计数 + 跨进程的标记文件。 */
-  async function blockedByClear(guard: WriteGuard, root: string): Promise<boolean> {
-    if (isStale(guard)) return true;
-    if (guard.kind !== 'write') return false;
-    return guard.deviceId === undefined
-      ? anyClearingMarkerExists(root)
-      : deviceClearingMarkerExists(root, guard.deviceId.trim());
+  /** 自 `before` 之后计数是否变过(含读不出来:保守判"变过")。 */
+  async function clearedSince(root: string, key: string, before: number | null): Promise<boolean> {
+    const now = await readClearCounter(root, key);
+    return before === null || now === null || now !== before;
+  }
+
+  function cacheLockPath(root: string): string {
+    return path.join(root, CACHE_LOCK_FILE);
+  }
+
+  async function withCacheLock<T>(
+    root: string,
+    task: (held: boolean) => Promise<T>,
+  ): Promise<T> {
+    await ensureDir(root).catch(() => undefined);
+    return withCrossProcessLock(cacheLockPath(root), { label: 'mirror-cache' }, task);
   }
 
   /** clearDevice 的实际清理体(登记 in-flight 与代际自增由调用方负责)。 */
   async function clearDeviceLocked(id: string): Promise<void> {
+    const rootAtStart = resolveRoot();
+    // 整段清理拿着跨进程锁跑:别的实例的写入会在锁上等(等不到就跳过写),不会把刚扫掉的
+    // 明文重建出来;两个实例并发清不同设备时,session-list 的「读 → 去掉我 → 写回」也因此
+    // 串行化,不再互相恢复(review: codex P1)。拿不到锁也照常清(删除是安全方向),
+    // 收尾的二次扫描兜住"扫完才冒出来"的文件。
+    return withCacheLock(rootAtStart, async (lockHeld) => {
+      if (!lockHeld) {
+        log.warn(`mirror cache: clearing ${id.slice(0, 8)} without cross-process lock`);
+      }
       const epochAll = purgeAllEpoch;
-      const rootAtStart = resolveRoot();
       const dir = path.join(rootAtStart, MESSAGES_DIR);
       const prefix = `${safeSegment(id)}-${shortHash(id)}-`;
 
       const stuck: string[] = [];
-      // 跨进程标记:让别的实例在整段清理期间都不写这台设备(见 CLEARING_DIR 说明)。
-      const marker = clearingMarkerPath(rootAtStart, id);
-      try {
-        await ensureDir(path.dirname(marker));
-        await fsp.writeFile(marker, String(process.pid), 'utf8');
-      } catch (err) {
-        // 标记建不出来不阻断清理(本进程的计数仍然生效),但要留痕:此时跨进程互斥退化。
-        log.warn(`mirror cache: failed to write clearing marker for ${id.slice(0, 8)}`, err);
-      }
 
       /** 扫一轮该设备的消息文件(含 .tmp 残留)。返回删不掉的路径。 */
       const sweepMessages = async (): Promise<string[]> => {
@@ -656,12 +706,16 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         }
       }
 
-      // 二次扫描:另一个实例的写入可能在首轮扫描之后、标记生效之前落位(它的检查早于我们
-      // 创建标记)。再扫一遍把这种"扫完才冒出来"的文件收掉(review: codex P1)。
+      // 二次扫描:降级(没拿到锁)时另一个实例的写入仍可能在首轮扫描之后落位;
+      // 再扫一遍把这种"扫完才冒出来"的文件收掉(review: codex P1)。
       stuck.push(...(await sweepMessages()));
 
-      // 清理结束,撤掉跨进程标记(删不掉也不算残留:它不含任何正文,只会让别人多跳过几次写)。
-      await fsp.rm(marker, { force: true }).catch(() => undefined);
+      // 自增作废计数:发起时读到旧值的写入(可能握着清理前的内容)提交时会被挡掉。
+      await bumpClearCounters(rootAtStart, id);
+      // 本进程内再自增一次代际:清理**结束**时作废所有更早发起的写入。时间戳标记是跨进程
+      // 手段,毫秒精度下"清理在同一毫秒内跑完"时它挡不住(测试与小目录下常见);代际比对
+      // 没有精度问题,两者互补(review: codex P1)。
+      generation += 1;
 
       // 列表快照重写失败(Windows 上被占用 / owner 目录只读)同样要能被重试 —— 否则消息文件
       // 删掉了、会话元数据还在盘上,下次冷启动照样把这台被撤销的设备画回侧边栏(review: codex P1)。
@@ -673,6 +727,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // 去重:两轮扫描会把同一个删不掉的文件报两次。
       const remaining = [...new Set(stuck)];
       if (remaining.length > 0) throw new MirrorCachePurgeError(rootAtStart, remaining, null);
+    });
   }
 
   return {
@@ -690,6 +745,8 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // 登记重试会被 purge 队列当成「路径不在 root 之内」直接拒掉,旧账号的明文就此没有任何
       // 持久重试记录(review: codex P1)。
       const rootAtStart = resolveRoot();
+      // 发起时的作废计数:提交前再读一次比对,挡住"内容取自清理之前、提交发生在清理之后"。
+      const clearCounterAtStart = await readClearCounter(rootAtStart, deviceClearKey(deviceId));
       const dir = path.join(rootAtStart, MESSAGES_DIR);
       const file = path.join(dir, messageFileName(deviceId, sessionId));
       const normalized = normalizeMessages(messages);
@@ -741,13 +798,18 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       const epoch = generation;
       // 落盘与指纹登记必须成对且有序 → 同一文件的写入串成链(见 serializeWrite)。
       const writeGuard: WriteGuard = { kind: 'write', epoch, deviceId };
-      return serializeWrite(file, async () => {
-        if (await blockedByClear(writeGuard, rootAtStart)) return;
+      return serializeWrite(file, async () =>
+        withCacheLock(rootAtStart, async (held) => {
+        // 拿不到跨进程锁 → 跳过这次写(别在另一个实例清理途中把明文写回去)。
+        if (!held) return;
+        if (isStale(writeGuard)) return;
+        // 清理在我取到内容之后完成过 → 我手里的是被清掉的旧正文,丢弃。
+        if (await clearedSince(rootAtStart, deviceClearKey(deviceId), clearCounterAtStart)) return;
         // 指纹只算消息体,不含 payload 的 updatedAt —— 否则每次都"变了",去重永不命中。
         // 在链内判等:排队期间前一笔可能刚写下同样内容。
         if (unchanged(file, body)) return;
         await ensureDir(dir);
-        if (await blockedByClear(writeGuard, rootAtStart)) return;
+        if (isStale(writeGuard)) return;
         const written = await writeFileAtomic(file, serialized);
         if (!written.ok) {
           // 走到这里说明权威内容**已经变了**(上面 unchanged 已挡掉没变的情况),而新内容
@@ -772,7 +834,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       if (remaining.length > 0) throw new MirrorCachePurgeError(rootAtStart, remaining, null);
           return;
         }
-        if (await blockedByClear(writeGuard, rootAtStart)) {
+        if (isStale(writeGuard)) {
           // 隐私清理期间落的盘:立刻收回,否则刚被清空的目录里会留下本该消失的聊天内容。
           // 这笔补偿删除失败(Windows 文件锁 / 权限)时不能咽下去:清理侧已经枚举并删完了,
           // 它不知道这个文件又冒出来,于是既没人重试、明文也留在了隐私边界之后
@@ -788,7 +850,8 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         // 指纹只在真正落盘之后登记(写失败留指纹 → 同内容重试被跳过 → 缓存永久缺失)。
         rememberWritten(file, body);
         await evictMessagesIfNeeded(dir, lastWritten);
-      });
+        }),
+      );
     },
 
     async readSessionList() {
@@ -800,12 +863,22 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     async writeSessionList(devices) {
       // 同 writeMessages:代际在请求发起时捕获(排队期间的清理必须能作废这笔)。
       const epoch = generation;
-      // 同 writeMessages:root 在发起时快照(出错时 owner 可能已经换了)。
+      // 同 writeMessages:root 与发起时刻都在发起时快照。
       const rootAtStart = resolveRoot();
+      const clearCounterAtStart = await readClearCounter(rootAtStart, CLEARED_ANY);
       // 与 writeMessages 同款:同一文件的写入串成链,保证「落盘 → 登记指纹」成对有序。
       const listFile = path.join(rootAtStart, SESSION_LIST_FILE);
       const outcome = await serializeWrite(listFile, () =>
-        writeSessionListLocked(devices, { kind: 'write', epoch }, listFile),
+        withCacheLock(rootAtStart, async (held) =>
+          // 拿不到跨进程锁 → 跳过(整份快照写在别人清理途中落地会把被清设备写回来)。
+          // 空快照 = **删除**,删除是安全方向:即使拿不到锁 / 期间发生过清理也照做。
+          normalizeDeviceSessions(devices).length === 0 ||
+          (held && !(await clearedSince(rootAtStart, CLEARED_ANY, clearCounterAtStart)))
+            ? writeSessionListLocked(devices, { kind: 'write', epoch }, listFile)
+            : // 写不了内容时不能"什么都不做":盘上那份可能已经陈旧(它可能还带着刚被清掉的
+              // 设备)。按与"落位失败"同一口径**作废**它;作废失败才登记重试。
+              invalidateSessionList(listFile),
+        ),
       );
       // 只有「删除失败」才抛(见 purge-failed):写入失败保留旧快照即可,不该让上层去
       // 重试删除一份仍然有效的缓存。
@@ -851,6 +924,10 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       purgeAllInFlight += 1;
       lastWritten.clear();
       const root = resolveRoot();
+      // 同 clearDevice:整段拿着跨进程锁跑,别的实例的写入会在锁上等(等不到就跳过写),
+      // 不会在删除途中把明文写回来。拿不到锁也照删(删除是安全方向)。
+      return withCacheLock(root, async (lockHeld) => {
+      if (!lockHeld) log.warn('mirror cache: clearAll without cross-process lock');
       try {
         await fsp.rm(root, { recursive: true, force: true });
         return;
@@ -866,6 +943,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       } finally {
         purgeAllInFlight -= 1;
       }
+      });
     },
   };
 }
