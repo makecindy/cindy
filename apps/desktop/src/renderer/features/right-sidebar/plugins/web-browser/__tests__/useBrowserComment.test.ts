@@ -260,6 +260,64 @@ describe('useBrowserComment', () => {
     expect(toastMocks.error).not.toHaveBeenCalled();
   });
 
+  it('preserves an existing text selection emitted before the enter ACK', async () => {
+    const webview = makeWebview();
+    const textTarget: BrowserCommentTargetInfo = {
+      ...TARGET,
+      kind: 'text',
+      selectedText: 'Already selected before comment mode opened',
+      targetTag: 'p',
+      targetLabel: 'Already selected before comment mode opened',
+      targetRole: null,
+      targetSelector: 'p:nth-of-type(1)',
+      targetPath: 'html > body > p:nth-of-type(1)',
+    };
+    let result: UseBrowserCommentResult | null = null;
+    render(
+      createElement(HookProbe, {
+        webview: webview.value,
+        onResult: (next) => {
+          result = next;
+        },
+      }),
+    );
+
+    act(() => result!.toggle());
+    expect(result!.mode).toBe('starting');
+
+    act(() => webview.dispatchIpc(BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL, textTarget));
+    expect(result!.mode).toBe('starting');
+    expect(result!.pendingTarget).toBeNull();
+
+    await acknowledgeLastCommand(webview);
+
+    expect(result!.mode).toBe('pending');
+    expect(result!.pendingTarget).toEqual(textTarget);
+  });
+
+  it('discards a startup selection when enter-mode is rejected', async () => {
+    const webview = makeWebview();
+    let result: UseBrowserCommentResult | null = null;
+    render(
+      createElement(HookProbe, {
+        webview: webview.value,
+        onResult: (next) => {
+          result = next;
+        },
+      }),
+    );
+
+    act(() => result!.toggle());
+    act(() => webview.dispatchIpc(BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL, TARGET));
+    await acknowledgeLastCommand(webview, false);
+
+    expect(result!.mode).toBe('off');
+    expect(result!.pendingTarget).toBeNull();
+
+    await enterSelecting(webview, () => result!);
+    expect(result!.pendingTarget).toBeNull();
+  });
+
   it('returns to off when a delivered enter command is never acknowledged', async () => {
     vi.useFakeTimers();
     const webview = makeWebview();

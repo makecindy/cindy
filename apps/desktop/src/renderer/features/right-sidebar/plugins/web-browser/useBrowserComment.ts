@@ -17,6 +17,7 @@
  *
  * 状态机:off → starting(等待 guest 确认)→ selecting(点选中)→ pending(气泡打开)→
  *          submitting(截图 + 入草稿)→ selecting(连续标注)。
+ *          若 enter 时页面已有文本选区:starting 暂存选择,ACK 后直接进 pending。
  *          immediate 路径:selecting → submitting → selecting(不经 pending)。
  *          任何态可被 exit 打断回 off。
  */
@@ -90,6 +91,12 @@ interface PendingBrowserCommentCommand {
   reject: (reason: Error) => void;
 }
 
+interface BufferedStartupSelection {
+  webview: WebviewTag;
+  epoch: number;
+  target: BrowserCommentTargetInfo;
+}
+
 export interface UseBrowserCommentResult {
   /** 当前状态;BrowserChrome 按钮 active 态 = mode !== 'off'。 */
   mode: BrowserCommentMode;
@@ -135,6 +142,13 @@ export function useBrowserComment(
   const webviewRef = useRef<WebviewTag | null>(null);
   const requestSequenceRef = useRef(0);
   const pendingCommandsRef = useRef(new Map<string, PendingBrowserCommentCommand>());
+  /**
+   * Guest 在 enter-mode 内会同步识别页面已有文本选区，而统一 command ACK
+   * 要等 handler 返回后才发送。starting 期间收到的 selection 先按 WebView
+   * 代际与提交纪元暂存，ACK 后再原子地推进到 pending / submitting，避免
+   * guest 已被 blocker 锁成 pending、host 却把事件丢掉。
+   */
+  const bufferedStartupSelectionRef = useRef<BufferedStartupSelection | null>(null);
   /**
    * 提交纪元:每次退出模式 / 导航 / guest 内 Esc 都自增,使正在挂起的异步提交
    * (prepare → capture → cache)在恢复后察觉自己已被作废并静默中止,避免把一个
@@ -244,6 +258,7 @@ export function useBrowserComment(
   const exitMode = useCallback(() => {
     const committedEpoch = committedSubmissionEpochRef.current;
     submitEpochRef.current += 1; // 作废任何挂起中的提交
+    bufferedStartupSelectionRef.current = null;
     sendBestEffortCommand(BROWSER_COMMENT_EXIT_MODE_CHANNEL);
     if (committedEpoch !== null && settleCommittedSubmission(committedEpoch, 'off')) return;
     setMode('off');
@@ -251,32 +266,6 @@ export function useBrowserComment(
   }, [sendBestEffortCommand, settleCommittedSubmission]);
   const exitModeRef = useRef(exitMode);
   exitModeRef.current = exitMode;
-
-  const toggle = useCallback(() => {
-    if (modeRef.current !== 'off') {
-      exitMode();
-      return;
-    }
-    if (!composerDraftKey) return;
-    // 编号 = 草稿里已有 marker 编号的最大值 + 1(删 chip 后长度与最大编号会脱节)。
-    const epoch = submitEpochRef.current;
-    setMode('starting');
-    void sendCommand(BROWSER_COMMENT_ENTER_MODE_CHANNEL, {
-      markerNumber: computeNextMarkerNumber(getDraft(composerDraftKey)?.browserComments),
-    }).then(
-      () => {
-        if (submitEpochRef.current !== epoch) return;
-        setMode('selecting');
-      },
-      () => {
-        if (submitEpochRef.current !== epoch) return;
-        // send 已到 guest 但 ACK 丢失时，guest 可能已经挂上 overlay。失败路径
-        // 必须与用户主动退出走同一套清理，不能只关闭 host 按钮状态。
-        exitMode();
-        toast.error(tRef.current('rightSidebar.browser.commentFailed'));
-      },
-    );
-  }, [composerDraftKey, exitMode, sendCommand]);
 
   const cancelPending = useCallback(() => {
     if (modeRef.current !== 'pending') return;
@@ -437,6 +426,54 @@ export function useBrowserComment(
   const doSubmitRef = useRef(doSubmit);
   doSubmitRef.current = doSubmit;
 
+  const acceptSelectedTarget = useCallback((info: BrowserCommentTargetInfo) => {
+    if (info.immediate) {
+      // Cmd/Ctrl+点击「立即添加」:跳过气泡,空评论文本直接提交。
+      doSubmitRef.current(info, '');
+      return;
+    }
+    setPendingTarget(info);
+    setMode('pending');
+  }, []);
+
+  const toggle = useCallback(() => {
+    if (modeRef.current !== 'off') {
+      exitMode();
+      return;
+    }
+    if (!composerDraftKey) return;
+    // 编号 = 草稿里已有 marker 编号的最大值 + 1(删 chip 后长度与最大编号会脱节)。
+    const epoch = submitEpochRef.current;
+    bufferedStartupSelectionRef.current = null;
+    setMode('starting');
+    void sendCommand(BROWSER_COMMENT_ENTER_MODE_CHANNEL, {
+      markerNumber: computeNextMarkerNumber(getDraft(composerDraftKey)?.browserComments),
+    }).then(
+      () => {
+        if (submitEpochRef.current !== epoch) return;
+        const buffered = bufferedStartupSelectionRef.current;
+        bufferedStartupSelectionRef.current = null;
+        if (
+          buffered &&
+          buffered.epoch === epoch &&
+          buffered.webview === webviewRef.current
+        ) {
+          acceptSelectedTarget(buffered.target);
+          return;
+        }
+        setMode('selecting');
+      },
+      () => {
+        if (submitEpochRef.current !== epoch) return;
+        bufferedStartupSelectionRef.current = null;
+        // send 已到 guest 但 ACK 丢失时，guest 可能已经挂上 overlay。失败路径
+        // 必须与用户主动退出走同一套清理，不能只关闭 host 按钮状态。
+        exitMode();
+        toast.error(tRef.current('rightSidebar.browser.commentFailed'));
+      },
+    );
+  }, [acceptSelectedTarget, composerDraftKey, exitMode, sendCommand]);
+
   const submit = useCallback(
     (commentText: string, styleChanges?: BrowserCommentStyleChange[]) => {
       const target = pendingTarget;
@@ -469,6 +506,7 @@ export function useBrowserComment(
     if (previousWebview && previousWebview !== webview) {
       const committedEpoch = committedSubmissionEpochRef.current;
       submitEpochRef.current += 1;
+      bufferedStartupSelectionRef.current = null;
       if (committedEpoch !== null) {
         settleCommittedSubmission(committedEpoch, 'off');
       } else if (
@@ -509,22 +547,28 @@ export function useBrowserComment(
           return;
         }
         case BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL: {
-          if (modeRef.current !== 'selecting') return;
+          const currentMode = modeRef.current;
+          if (currentMode !== 'starting' && currentMode !== 'selecting') return;
           const info = e.args[0] as BrowserCommentTargetInfo | undefined;
           if (!info || typeof info !== 'object') return;
-          if (info.immediate) {
-            // Cmd/Ctrl+点击「立即添加」:跳过气泡,空评论文本直接提交。
-            doSubmitRef.current(info, '');
+          if (currentMode === 'starting') {
+            // enterMode 会在统一 ACK 前同步上报页面已有文本选区。只保留当前
+            // generation / epoch 的第一条选择；guest 一旦 pending 不会再发第二条。
+            bufferedStartupSelectionRef.current ??= {
+              webview,
+              epoch: submitEpochRef.current,
+              target: info,
+            };
             return;
           }
-          setPendingTarget(info);
-          setMode('pending');
+          acceptSelectedTarget(info);
           return;
         }
         case BROWSER_COMMENT_MODE_EXITED_CHANNEL: {
           // guest 内按了 Esc,overlay 已自拆 —— host 只同步状态。
           const committedEpoch = committedSubmissionEpochRef.current;
           submitEpochRef.current += 1; // 作废任何挂起中的提交
+          bufferedStartupSelectionRef.current = null;
           if (committedEpoch !== null && settleCommittedSubmission(committedEpoch, 'off')) return;
           setMode('off');
           setPendingTarget(null);
@@ -546,7 +590,7 @@ export function useBrowserComment(
       webview.removeEventListener('did-navigate-in-page', onNavigate);
       rejectCommandsForWebview(webview);
     };
-  }, [rejectCommandsForWebview, settleCommittedSubmission, webview]);
+  }, [acceptSelectedTarget, rejectCommandsForWebview, settleCommittedSubmission, webview]);
 
   // tab 卸载 / 切走时若模式仍开着,通知 guest 拆 overlay(webview 被 pool 保活,
   // 不通知的话 overlay 会一直趴在页面上)。
