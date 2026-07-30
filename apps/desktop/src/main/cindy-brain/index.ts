@@ -1861,6 +1861,9 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     // 同语义 —— xd 的挂在网关客户端装配处,gemini 的挂在这里)。
     registry.register('gemini', createGeminiImageChannel({
       getApiKey: () => getProviderSecretStore().get('gemini'),
+      // googleapis 境外端点经 outboundFetch 吃系统代理:main 的裸 fetch 不读系统
+      // 代理设置,代理软件非 TUN 模式下会直连失败(xd 网关域名境内直连,不注)。
+      fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
       beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
     }));
     imageChannelRegistrySingleton = registry;
