@@ -2,6 +2,7 @@ import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import type { SessionSource } from '../../shared/sessionSource';
 import type { TurnUsageDetails } from '../../shared/turnUsageDetails';
 import type { RegionalMoney } from '../../shared/regionalMoney';
+import type { AutoResumeInfo } from '../../shared/agentInputQueue';
 
 export type SessionStatus = 'active' | 'archived' | 'deleted';
 export type WorkspaceKind = 'project' | 'dialogue';
@@ -85,6 +86,21 @@ export interface CcMeta {
    * 同时也是 DB/transcript 里每次自动续跑的审计标记。
    */
   autoResume?: boolean;
+
+  /**
+   * 这次自动续跑的展示信息（中断原因 + 本轮第几次 + 会话累计）。
+   *
+   * 只有「中断自愈」路径会带（silent-stop 那条本身没有 error）。renderer 用它渲染
+   * 「已重新连接」活动行的 param 位与展开详情——自愈成功时 error 行**不落库**，
+   * 所以这是中断原因唯一的用户可见出口。
+   */
+  autoResumeInfo?: AutoResumeInfo;
+
+  /**
+   * 这次自动续跑的**结果**,由后续事件回填(见 main 的 markAutoResumeOutcome)。
+   * 缺省 = 还在等结果。renderer 据此三态渲染:重新连接中 / 已重新连接 / 未成功。
+   */
+  autoResumeOutcome?: 'succeeded' | 'failed';
 
   /**
    * Hook 来源元数据（IM 平台 + 用户干净原文 + 结构化 thread 上下文）。

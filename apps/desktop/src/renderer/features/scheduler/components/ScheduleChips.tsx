@@ -14,6 +14,7 @@ import { useDetectCwd } from '@/hooks/useWorktreeQueries';
 import { useAgentCapabilities, type ModelDescriptor } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
 import { ModelIconMark, ModelSelectorContent } from '@/components/new-chat/ModelSelector';
+import { useModelDiscoveryPending } from '@/components/new-chat/useModelDiscoveryPending';
 import {
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
@@ -1092,19 +1093,23 @@ export function ModelEffortChip({
     openRef.current = next;
     setOpen(next);
   }, []);
+  // 与聊天的模型选择器同一套「发现在途」状态(理由见 useModelDiscoveryPending):
+  // 定时任务这边同样是打开就触发一次发现,静默的话用户看到的清单同样可能是上一轮的。
+  const discovery = useModelDiscoveryPending();
   const handleOpenChange = useCallback(
     (next: boolean): void => {
       const nextOpen = disabled ? false : next;
       const wasOpen = openRef.current;
       openRef.current = nextOpen;
       if (nextOpen && !wasOpen) {
-        void window.electronAPI.maker
-          .requestProviderModelsAutoRefresh('model-selector-open')
-          .catch(() => undefined);
+        discovery.begin(() =>
+          window.electronAPI.maker.requestProviderModelsAutoRefresh('model-selector-open'),
+        );
       }
+      if (!nextOpen) discovery.reset();
       setOpen(nextOpen);
     },
-    [disabled],
+    [disabled, discovery],
   );
   const caps = useAgentCapabilities(agentKind);
   // 触发器(trigger)展示用:仍按 codex/ 折扣模型的 XD 网关来源可见性过滤,算出当前
@@ -1218,6 +1223,7 @@ export function ModelEffortChip({
           }}
           onNavigateToProviders={onNavigateToProviders}
           overlayContentClassName="z-[10020]"
+          discoveringModels={discovery.pending}
           followSession={
             followSession
               ? {

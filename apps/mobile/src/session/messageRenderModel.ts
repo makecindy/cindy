@@ -15,6 +15,7 @@ import {
   type MessageRenderWorkGroupItem,
 } from '@cindy/maker-shared/message-render';
 import type { AgentTaskUpdate } from '@cindy/maker-shared/agent-task';
+import type { MobilePendingSendItem } from '@/session/pendingSendItems';
 import { normalizeRemoteMessages, type NormalizedRemoteMessage } from '@/session/messageNormalize';
 import type { RemoteMessage } from '@/session/types';
 import {
@@ -68,7 +69,10 @@ export interface MobileForkOrigin {
 export type MobileMessageRenderItem =
   | MessageRenderItem<NormalizedRemoteMessage>
   | MobileSubagentGroupItem
-  | MobileForkOriginItem;
+  | MobileForkOriginItem
+  // 待发送气泡(排队 / 落定 / 本地 outbox)也是消息流的一等项:与正式消息同容器同 key,
+  // 回流时原地变实,不再跨 footer↔data 搬家(见 pendingSendItems.ts 的说明)。
+  | MobilePendingSendItem;
 
 export function buildMobileMessageRenderItems(
   messages: readonly RemoteMessage[],

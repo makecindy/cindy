@@ -6,11 +6,14 @@ import {
   buildAttachmentPersistImageRefs,
   buildMobileRemoteFileAttachment,
   buildMobileUploadedAttachment,
+  MOBILE_MAX_ATTACHMENTS,
   MOBILE_MAX_ATTACHMENT_BYTES,
   categorizeMobileAttachment,
+  mergeAttachmentsWithinLimit,
   extractRemoteFileExt,
 } from '@/session/attachments';
 import { isAttachmentOssRef, parseAttachmentOssRef } from '@/session/attachmentOssRef';
+import type { RemoteSerializedAttachment } from '@/session/types';
 
 const SHA256 = 'a'.repeat(64);
 
@@ -196,5 +199,50 @@ describe('attachmentOssRef legacy 兼容', () => {
     });
     // rollout 期间生成面使用旧 scheme，确保旧版桌面端可识别
     expect(fresh!.path.startsWith('xdt-oss-attach://m/')).toBe(true);
+  });
+});
+
+describe('mergeAttachmentsWithinLimit', () => {
+  const item = (id: string): RemoteSerializedAttachment => ({
+    id,
+    name: `${id}.png`,
+    path: `cindy-oss-attach://key/${id}`,
+    ext: '.png',
+    size: 1,
+    category: 'image',
+    mimeType: 'image/png',
+  });
+
+  it('按 id 去重,前者优先,顺序稳定', () => {
+    const result = mergeAttachmentsWithinLimit([item('a'), item('b')], [item('b'), item('c')]);
+    expect(result.merged.map((a) => a.id)).toEqual(['a', 'b', 'c']);
+    expect(result.dropped).toEqual([]);
+  });
+
+  it('溢出的附件进 dropped,不静默消失', () => {
+    // 上限是「每条消息」的产品约束,而创建失败的恢复要把 N 条待发消息并进一条草稿:
+    // 溢出不可避免,但必须交给调用方回收中转对象 + 告知用户,不能内部丢掉(review P1)。
+    const preferred = Array.from({ length: MOBILE_MAX_ATTACHMENTS }, (_, i) => item(`p${i}`));
+    const extra = [item('x'), item('y')];
+    const result = mergeAttachmentsWithinLimit(preferred, extra);
+    expect(result.merged).toHaveLength(MOBILE_MAX_ATTACHMENTS);
+    expect(result.dropped.map((a) => a.id)).toEqual(['x', 'y']);
+    // 一个都不许凭空消失:merged + dropped 覆盖全部输入(去重后)。
+    expect(result.merged.length + result.dropped.length).toBe(preferred.length + extra.length);
+  });
+
+  it('重复 id 不占额度(先去重再判上限)', () => {
+    const preferred = Array.from({ length: MOBILE_MAX_ATTACHMENTS }, (_, i) => item(`p${i}`));
+    const result = mergeAttachmentsWithinLimit(preferred, [item('p0'), item('z')]);
+    // p0 已在,既不重复也不算溢出;只有真正装不下的 z 进 dropped。
+    expect(result.merged).toHaveLength(MOBILE_MAX_ATTACHMENTS);
+    expect(result.dropped.map((a) => a.id)).toEqual(['z']);
+  });
+
+  it('preferred 自身超限时原样保留(不越权截断调用方自己的内容)', () => {
+    const preferred = Array.from({ length: MOBILE_MAX_ATTACHMENTS + 3 }, (_, i) => item(`p${i}`));
+    const result = mergeAttachmentsWithinLimit(preferred, []);
+    expect(result.merged).toHaveLength(MOBILE_MAX_ATTACHMENTS + 3);
+    expect(result.dropped).toEqual([]);
   });
 });

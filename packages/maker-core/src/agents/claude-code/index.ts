@@ -53,6 +53,10 @@ import {
 } from '../base-agent.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
 import { MAKER_MEMORY_RULES } from '../../memory/system-prompt.js';
+import {
+  CONTACTS_RULES_DISABLED,
+  CONTACTS_RULES_ENABLED,
+} from '../../contacts/system-prompt.js';
 import { MemoryFlushController } from '../../memory/flush-controller.js';
 import { buildMemoryScopeKey } from '../../memory/storage.js';
 import type {
@@ -1904,6 +1908,19 @@ export class ClaudeCodeAgent extends BaseAgent {
       const finalResumeAt = extra?.fresh ? undefined : (extra?.resumeSessionAt ?? baseResumeAt);
       const finalFork = extra?.fresh ? false : (extra?.forkSession ?? baseFork);
       const mcpServers = buildMcpServers();
+      // ── 智能通讯录两态段: 紧跟 buildMcpServers 求值, prompt 状态与本次 build
+      // 实际生效的工具面对齐(rewind/fresh 重建同步跟随), 三种去向:
+      //   host 有效状态 enabled 且 cindy_contacts 真的注册了 → 使用规范段;
+      //   disabled(功能未开) → 可选功能告示段(邀请开启);
+      //   其余(unavailable/工作区覆盖禁用/注册被跳过/remote/未接线) → 不注入 —
+      //   既不指挥模型调不可达工具, 也不邀请用户去开一个已开着的开关。
+      const contactsRules = (() => {
+        if (opts.remoteHostId) return '';
+        const state = this.deps.getContactsPromptState?.({ workingDir: opts.workingDir });
+        if (state === 'disabled') return CONTACTS_RULES_DISABLED;
+        if (state !== 'enabled') return '';
+        return registeredMcpServerNames.has('cindy_contacts') ? CONTACTS_RULES_ENABLED : '';
+      })();
       // resume 优先用当前的 sdkSessionId (rewind 重启时它指向上一轮 SDK 给的 id);
       // 缺省回到 startSession 入参的 resumeSessionId (新会话首次起 query 时用)。
       let resumeSdkSid = sdkSessionId ?? configuredResumeSessionId;
@@ -2014,6 +2031,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             const appendText = [
               MAKER_SYSTEM_PROMPT_APPEND,
               makerMemoryRules,
+              contactsRules,
               hostSystemPrompt,
               makerMemoryIndex,
               opts.userPrompt,
@@ -2321,21 +2339,24 @@ export class ClaudeCodeAgent extends BaseAgent {
           includePartialMessages: true,
           ...thinkingOpts,
           pathToClaudeCodeExecutable: binaryPath,
-          // systemPrompt 六段拼接 — SDK 先输出 preset, 再追加 append 字段。
+          // systemPrompt 七段拼接(含 SDK 内嵌 preset)— SDK 先输出 preset, 再追加 append 字段。
           //   [1] cc preset                  — Claude SDK 自带 (内嵌不可见)
           //   [2] MAKER_SYSTEM_PROMPT_APPEND — maker engine (system-prompt-append.md)
           //   [3] makerMemoryRules           — maker memory 写入规范 (条件式: makerMemoryEnabled
           //                                    且 manager 注入成功才注入)
-          //   [4] hostSystemPrompt           — host runtime (runtimeConfig.systemPrompt)
-          //   [5] makerMemoryIndex           — 当前 workdir MEMORY.md 内容 (条件式, 紧邻 userPrompt
+          //   [4] contactsRules              — 智能通讯录两态段 (条件式: host 注入了
+          //                                    getContactsPromptState 才有, 开/关各一份静态文案)
+          //   [5] hostSystemPrompt           — host runtime (runtimeConfig.systemPrompt)
+          //   [6] makerMemoryIndex           — 当前 workdir MEMORY.md 内容 (条件式, 紧邻 userPrompt
           //                                    高优先级, 启动时快照 — 跟 userPrompt 同语义)
-          //   [6] opts.userPrompt            — per-call 用户级 (renderer 本地 storage,
+          //   [7] opts.userPrompt            — per-call 用户级 (renderer 本地 storage,
           //                                    每次 startSession 透传, 优先级最高)
           // 空段被 .filter 跳过 (.md 文件为空 / userPrompt 为空 = 不 append).
           systemPrompt: (() => {
             const appendText = [
               MAKER_SYSTEM_PROMPT_APPEND,
               makerMemoryRules,
+              contactsRules,
               hostSystemPrompt,
               makerMemoryIndex,
               opts.userPrompt,

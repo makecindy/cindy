@@ -59,6 +59,7 @@ import { useHasAnyRemoteTarget } from '@/hooks/useHasAnyReadyRemoteHost';
 import { useSelectableDevices } from '@/hooks/useControllableDevices';
 import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
 import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard';
+import { InheritedSubscriptionNotice } from '@/components/onboarding/InheritedSubscriptionNotice';
 import { resolveDeviceLinkSubmission } from './deviceLinkCreateArgs';
 import { commitRemoteSessionHandoff } from './remoteSessionHandoff';
 import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSwitcher';
@@ -96,7 +97,10 @@ import {
 } from '@/lib/composerDraftStore';
 import type { JSONContent } from '@tiptap/core';
 import { base64ToUint8Array } from '@/lib/fileTypeInference';
-import { calibrateDraftModel } from '@/lib/draftModelCalibration';
+import {
+  calibrateDraftModel,
+  type DraftModelCalibrationResult,
+} from '@/lib/draftModelCalibration';
 import { showWorktreeError } from '@/lib/worktreeToast';
 import type { CreateWorktreeResp } from '@/lib/worktree.types';
 import * as sessionService from '@/lib/sessionService';
@@ -866,8 +870,8 @@ export function NewMakerDraftRoute() {
     const healthy = calibrationProviders.filter((p) => !p.modelDiscoveryFailure);
     return healthy.length > 0 ? healthy : calibrationProviders;
   }, [calibrationProviders, draftModelChosenByUser, chatPrefs.providerId]);
-  const calibratedDraftModel = useMemo(() => {
-    if (isDeviceLinkDraft) return chatPrefs.model;
+  const draftCalibration = useMemo<DraftModelCalibrationResult>(() => {
+    if (isDeviceLinkDraft) return { model: chatPrefs.model, providerId: null };
     return calibrateDraftModel({
       providers: autoCalibrationProviders,
       agent: capabilityAgentKind,
@@ -883,6 +887,7 @@ export function NewMakerDraftRoute() {
     draftModelChosenByUser,
     localProvidersLoading,
   ]);
+  const calibratedDraftModel = draftCalibration.model;
 
   const effectiveSourceId = useMemo<string | null>(() => {
     // 本地草稿用**过滤后**的候选解析来源:SSH 场景下同一个 model id 可能既被允许的来源
@@ -895,9 +900,13 @@ export function NewMakerDraftRoute() {
     // 挑好的健康模型重新指回那个已知失败的原生默认来源(PR #548 review)。用户显式表达过时
     // autoCalibrationProviders 本身就等于完整候选,不受影响。
     const source = isDeviceLinkDraft ? providers : autoCalibrationProviders;
+    // 来源优先级:用户显式选的 > 校准挑中的 > 原生默认(nativeDefaultSourceId)。
+    // 中间那一档不能省:nativeDefaultSourceId 对 claude-code 无条件优先 XD 网关,校准好的
+    // 「anthropic 订阅提供的 claude-opus-5」交出去只剩模型 id 时会被重新指回网关 ——
+    // 计费落网关而不是用户已付费的订阅额度,「订阅优先」在最后一步被推翻(PR #1076 review)。
     return effectiveSourceIdForModel(
       source,
-      chatPrefs.providerId ?? null,
+      chatPrefs.providerId ?? draftCalibration.providerId ?? null,
       calibratedDraftModel,
       capabilityAgentKind,
     );
@@ -907,6 +916,7 @@ export function NewMakerDraftRoute() {
     autoCalibrationProviders,
     capabilityAgentKind,
     chatPrefs.providerId,
+    draftCalibration.providerId,
     calibratedDraftModel,
   ]);
 
@@ -3267,6 +3277,14 @@ export function NewMakerDraftRoute() {
                     <ConnectProviderCard />
                   </div>
                 )}
+                {/* 「已沿用本机订阅」一次性告知。与上面的引导卡条件互斥(它要求零已连接
+                    来源,而继承成功后该供应商已连接),所以不与快捷入口互斥 —— 告知不是
+                    待办,不该把快速开始顶掉。device-link 草稿不出:连接态在被控端。
+                    间距挂在组件自身:外层包一层 div 会在它不可见时留下一段空白 margin。 */}
+                <InheritedSubscriptionNotice
+                  enabled={!isDeviceLinkDraft}
+                  className="mt-6 self-stretch"
+                />
                 {/* 快捷入口与输入框同宽:左右两缘都与上方 ChatInput 对齐(父列已封顶
                     inputWidth)。此前封顶 800px 会在宽窗口下右缘短一截,视觉上没对齐
                     (2026-07-24 用户反馈)。 */}

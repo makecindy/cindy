@@ -642,6 +642,57 @@ describe('claim(划归乐观消息)', () => {
     expect(controller.claimableTasks()).toEqual([]);
   });
 
+  it('unclaim 把在途任务交还托盘:继续跑、重回限额、产物回落 composer', async () => {
+    // 创建失败把待发消息交还输入框时走这条路:取消重传是错的(用户已经等过一次上传,
+    // 粘贴来源的本地文件此时可能已被回收,连重选都做不到,review P1)。
+    const gate = gatedUpload();
+    const { deps, pendingSnapshots, uploaded, discarded } = makeDeps({ upload: gate.upload });
+    const controller = createMobileLocalAttachmentUploadController(deps);
+    controller.enqueue([candidate('a.jpg')], { token: 't' });
+    await flush();
+    controller.claim(['local-attachment-upload-1']);
+    expect(controller.pendingCount()).toBe(0);
+
+    controller.unclaim(['local-attachment-upload-1']);
+    // 回到托盘:重新出现在 pending 列表、重新占限额、waitForIdle 重新等它。
+    expect(pendingSnapshots.at(-1)?.map((item) => item.localId)).toEqual(['local-attachment-upload-1']);
+    expect(controller.pendingCount()).toBe(1);
+    expect(controller.claimableTasks().map((task) => task.localId)).toEqual(['local-attachment-upload-1']);
+    // 上传没有被取消:放行后照常产出,且中转对象没有被回收。
+    gate.release('a.jpg');
+    await flush();
+    expect(uploaded).toHaveLength(1);
+    expect(discarded).toEqual([]);
+  });
+
+  it('unclaim 把失败卡交还托盘(可重试),对未 claim / 未知任务是 no-op', async () => {
+    const gate = gatedUpload();
+    const { deps, pendingSnapshots } = makeDeps({ upload: gate.upload });
+    const controller = createMobileLocalAttachmentUploadController(deps);
+    controller.enqueue([candidate('a.jpg')], { token: 't' });
+    await flush();
+    controller.claim(['local-attachment-upload-1']);
+    gate.fail('a.jpg');
+    await flush();
+    expect(controller.claimableTasks()).toEqual([]);
+
+    controller.unclaim(['local-attachment-upload-1']);
+    // 失败卡回到托盘,带 failed 标(渲染成可 retry / X 的卡)。
+    expect(pendingSnapshots.at(-1)?.map((item) => ({ id: item.localId, failed: item.failed })))
+      .toEqual([{ id: 'local-attachment-upload-1', failed: true }]);
+    expect(controller.claimableTasks()).toEqual([{
+      localId: 'local-attachment-upload-1',
+      failed: true,
+      kind: 'image',
+      previewUri: 'file:///tmp/a.jpg',
+    }]);
+
+    const snapshotCount = pendingSnapshots.length;
+    expect(() => controller.unclaim(['local-attachment-upload-1', 'nope'])).not.toThrow();
+    // 已在托盘 / 不存在的任务不产生多余通知。
+    expect(pendingSnapshots).toHaveLength(snapshotCount);
+  });
+
   it('removeAll 只丢 composer 域任务,claimed 任务照跑并回调(排队编辑退出不打断已发消息)', async () => {
     const gate = gatedUpload();
     const uploadedIds: string[] = [];

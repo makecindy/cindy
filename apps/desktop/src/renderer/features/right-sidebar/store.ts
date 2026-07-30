@@ -17,8 +17,10 @@
  */
 
 import { createLogger } from '@/lib/logger';
+import { extractIpcError } from '@/utils/ipcError';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import { getTabKind } from './registry';
+import { unmarkPopupSpawnedTab } from './lib/popupTabs';
 import type { TabKindId, TabState } from './types';
 
 const log = createLogger('rightSidebar.store');
@@ -42,6 +44,44 @@ const listeners = new Set<Listener>();
 const memoryOnlySessions = new Set<string>();
 const closeInterceptors = new Map<string, TabCloseInterceptor>();
 const patchRevisions = new Map<string, number>();
+/**
+ * 进行中的 tab 创建(tabId → 该 tab 是否**落库成功**)。
+ *
+ * closeTab 必须等它落定再发 close:tab 是乐观插入的,持久化 IPC 还在途时 React
+ * 已能 mount 它的 body(浏览器 tab 甚至已经加载完 OAuth callback 页并
+ * `window.close()`)。此时 close 先到 main 会拿到 NOT_FOUND → closeTab 回滚到
+ * "含这个 tab"的快照,随后 upsert 才落地 —— cache 和 DB 里都留下一个本该消失的
+ * tab。手动关闭刚建的 tab 也是同一个竞态。
+ *
+ * 值是 boolean 而不是 void:创建**失败**时 DB 里从来没有这行(addTab 已把它从
+ * cache 回滚掉),此时若照样发 close,必然 NOT_FOUND,而 closeTab 的回滚分支会把
+ * 这个幽灵 tab 又写回 cache。所以 closeTab 要能区分"创建成功了"和"创建失败了"。
+ */
+const pendingTabCreates = new Map<string, Promise<boolean>>();
+/**
+ * per-session 关闭变更队列(sessionId → 队尾)。closeTab 的变更段在这里串行,
+ * 保证任意两次关闭(用户手关 / ⌘W 连按 / closeAllTabs / agent close tab-op /
+ * guest `window.close()` 自关)不会拿着彼此的旧 bucket 快照交错落盘。
+ */
+const closeMutationQueues = new Map<string, Promise<void>>();
+
+/**
+ * 把一次关闭变更排到该 session 队尾。链上只用于**排序**:前一个任务失败不能把
+ * 后续关闭全部拖挂,所以链本身吞异常;调用方仍拿到自己那次的真实结果 / 异常。
+ */
+function enqueueCloseMutation(sessionId: string, task: () => Promise<void>): Promise<void> {
+  const prev = closeMutationQueues.get(sessionId) ?? Promise.resolve();
+  const run = prev.then(task);
+  const chained = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  closeMutationQueues.set(sessionId, chained);
+  void chained.then(() => {
+    if (closeMutationQueues.get(sessionId) === chained) closeMutationQueues.delete(sessionId);
+  });
+  return run;
+}
 const persistedStateBaselines = new Map<string, unknown>();
 const STATE_WRITE_OVERLOAD_RETRY_DELAYS_MS = [25, 75, 150] as const;
 
@@ -128,8 +168,52 @@ function isDbWorkerQueueOverloadedError(err: unknown): boolean {
   return err instanceof Error && err.message.includes('db worker RPC queue overloaded');
 }
 
+/** main 端 rightSidebarTabs 对不存在的行抛 `[NOT_FOUND] tab <id> not found`。
+ *  经共享 helper 做结构化 code 比对(正则锚定 Electron 包装后的 code 位置),
+ *  而不是裸 `message.includes('[NOT_FOUND]')`——后者会把 message 恰好含该
+ *  字样的无关错误误判成"清理成功",让孤儿行清理被静默跳过。
+ *  孤儿行清理用它区分"本来就没有"(=成功)与"清理没做成"(=必须重试/上抛)。 */
+function isTabRowMissingError(err: unknown): boolean {
+  return extractIpcError(err)?.code === 'NOT_FOUND';
+}
+
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * 孤儿行清理:删除一条"cache 已经不认、但 SQLite 可能仍有"的 tab 行。
+ * closeTab 的创建失败分支与 addTab 的半失败回滚共用——两处的失败语义一致:
+ *  - `[NOT_FOUND]` = 行本来就没有(或另一路径已删),清理成功;
+ *  - 其它(DB worker 不可用/过载)= 清理没做成,按 overload 节奏有限重试;
+ *    终失败 log.error 留痕并向上抛,调用方决定是传播还是旁路记录——静默吞掉
+ *    等于让孤儿行在下次 hydrate / 重启时"幽灵复活"。
+ */
+async function cleanupOrphanTabRow(
+  sessionId: string,
+  tabId: string,
+  caller: string,
+): Promise<void> {
+  const ipc = ipcApi();
+  if (!ipc || !shouldPersist(sessionId)) return;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await ipc.close({ id: tabId });
+      return;
+    } catch (cleanupErr) {
+      if (isTabRowMissingError(cleanupErr)) return;
+      if (attempt < STATE_WRITE_OVERLOAD_RETRY_DELAYS_MS.length) {
+        await wait(STATE_WRITE_OVERLOAD_RETRY_DELAYS_MS[attempt]);
+        continue;
+      }
+      log.error(`${caller}: orphan-row cleanup failed after retries`, {
+        sessionId,
+        tabId,
+        err: cleanupErr,
+      });
+      throw cleanupErr;
+    }
+  }
 }
 
 function resetStateWriteQueue(): void {
@@ -341,6 +425,19 @@ export function getBucket(sessionId: string | null | undefined): TabBucket {
   return cache.get(sessionId) ?? EMPTY_BUCKET;
 }
 
+/**
+ * 按 tabId 反查所属 sessionId(只扫已水合进本 renderer 的 bucket)。
+ * guest 自关(window.close)路径用:pool 的 close 事件只带 tabId,要落到
+ * closeTab(sessionId, tabId) 必须先找回归属。线性扫 cache —— bucket 数 =
+ * 本 renderer 摸过的 session 数,量级个位到十位,无需索引。
+ */
+export function findSessionIdByTabId(tabId: string): string | null {
+  for (const [sessionId, bucket] of cache) {
+    if (bucket.tabs.some((t) => t.id === tabId)) return sessionId;
+  }
+  return null;
+}
+
 /** 首次访问 sessionId 触发 IPC list 拉取;后续命中 cache 即 noop。dedupe 并发请求。 */
 export async function ensureHydrated(sessionId: string): Promise<void> {
   if (!sessionId) return;
@@ -377,11 +474,24 @@ export async function ensureHydrated(sessionId: string): Promise<void> {
   return promise;
 }
 
-/** 新增 tab —— 走乐观本地添加 + IPC upsert + setActive,失败回滚 cache。 */
+/**
+ * 新增 tab —— 走乐观本地添加 + IPC upsert + setActive,失败回滚 cache。
+ *
+ * `opts.onOptimisticAdd`:乐观 setBucket 之后、await IPC 之前**同步**回调新
+ * tabId。给需要"在 React 能看到这个 tab 的同一 tick 内登记副标记"的调用方用
+ * (如 popup 来源标记:等 addTab resolve 再登记的话,持久化 IPC 在途期间 React
+ * 已可能 mount webview 并加载完 callback 页,window.close 事件会赶在登记前到达
+ * 且不重发)。
+ *
+ * 不需要对称的"回滚回调":IPC 失败回滚时 store 自己走 `forgetClosedTab(id)` 把
+ * 挂在这个 tabId 上的旁路记录(含 popup 标记)清掉 —— 与关闭路径同一个收尾函数。
+ * 否则 DB / IPC 异常期间反复触发 popup,标记集合会随进程生命周期无界增长。
+ */
 export async function addTab(
   sessionId: string,
   kind: TabKindId,
   initialState: unknown = null,
+  opts?: { onOptimisticAdd?: (tabId: string) => void },
 ): Promise<TabState> {
   const prev = getBucket(sessionId);
   if (prev.tabs.length >= MAX_TABS_PER_SESSION) {
@@ -395,10 +505,32 @@ export async function addTab(
   const newTab: TabState = { id, kind, state: initialState };
   setBucket(sessionId, { tabs: [...prev.tabs, newTab], activeTabId: id });
   try {
+    opts?.onOptimisticAdd?.(id);
+  } catch {
+    // 调用方回调抛错不该毒化 addTab 主流程。
+  }
+  let rowCommitted = false;
+  try {
     const ipc = ipcApi();
     if (ipc && shouldPersist(sessionId)) {
-      await ipc.upsert({ id, sessionId, kind, position, state: initialState });
-      await ipc.setActive({ sessionId, id });
+      // 同步登记 in-flight 创建(与乐观插入同一 tick),并发的 closeTab 才等得到。
+      // `rowCommitted` 只跟踪 **upsert 这一步**:upsert 成功但随后的 setActive 失败
+      // 时,DB 里已经有这一行了,关闭路径必须照常发 close 把它删掉,否则 addTab
+      // 回滚了 renderer cache,DB 里却留下一行孤儿 tab,下次 hydrate / 重启就冒出来。
+      const create = (async () => {
+        await ipc.upsert({ id, sessionId, kind, position, state: initialState });
+        rowCommitted = true;
+        await ipc.setActive({ sessionId, id });
+      })();
+      const persisted = create.then(
+        () => true,
+        () => rowCommitted,
+      );
+      pendingTabCreates.set(id, persisted);
+      void persisted.then(() => {
+        if (pendingTabCreates.get(id) === persisted) pendingTabCreates.delete(id);
+      });
+      await create;
     }
     return newTab;
   } catch (err) {
@@ -408,6 +540,23 @@ export async function addTab(
     }
     log.error('addTab IPC failed; rolling back cache', { sessionId, kind, err });
     setBucket(sessionId, { tabs: prev.tabs, activeTabId: prev.activeTabId });
+    // 这个 tab 从未存在过 —— `onOptimisticAdd` 里登记的旁路记录(popup 标记等)
+    // 必须跟着回滚,否则没有任何 closeTab 成功分支会来清它。
+    forgetClosedTab(sessionId, id);
+    // rowCommitted=true 说明 upsert 已成功、SQLite 有这一行,但 addTab 整体失败
+    // (通常是 setActive 抛错)。cache 已回滚且没有调用方会再发 closeTab —— 走共享
+    // 的孤儿行清理(与 closeTab 创建失败分支同款 cleanupOrphanTabRow):
+    // [NOT_FOUND] 即成功,瞬态失败按 overload 节奏重试,终失败 log.error 留痕。
+    // await 到清理尽力完成再抛原始 err(时序确定);清理自身的失败绝不掩盖
+    // 触发回滚的原始错误。
+    if (rowCommitted) {
+      try {
+        await settleTabStateWrites(sessionId, id);
+        await cleanupOrphanTabRow(sessionId, id, 'addTab rollback');
+      } catch {
+        // 终失败已在 helper 内 log.error 留痕;继续抛原始 err。
+      }
+    }
     throw err;
   }
 }
@@ -455,23 +604,43 @@ export function hasTabCloseInterceptor(tabId: string): boolean {
   return closeInterceptors.has(tabId);
 }
 
-/** 关 tab —— 优先激活右邻 → 左邻 → null。失败回滚。
- *  plugin.onBeforeClose 给 plugin 释放 main 进程资源的机会(terminal 在这里 dispose PTY)。
- *  默认失败不阻断关闭流程;只有 plugin 明确返回 false 时才否决关闭。 */
+/**
+ * tab 已确定从 store 消失后的收尾:清掉挂在 tabId 上的所有旁路记录。
+ *
+ * 只在"真的没了"的分支调 —— close IPC 失败会回滚 cache(tab 还在),那时这些记录
+ * 必须留着。popup 来源标记同理:所有关闭入口(用户手关 / closeAllTabs / agent
+ * close tab-op / guest 自关)都汇聚到 closeTab,标记不会随某条路径泄漏。
+ */
+function forgetClosedTab(sessionId: string, tabId: string): void {
+  const key = tabStateWriteKey(sessionId, tabId);
+  patchRevisions.delete(key);
+  persistedStateBaselines.delete(key);
+  unmarkPopupSpawnedTab(tabId);
+}
+
+/**
+ * 关 tab —— 优先激活右邻 → 左邻 → null。失败回滚。
+ * plugin.onBeforeClose 给 plugin 释放 main 进程资源的机会(terminal 在这里 dispose PTY)。
+ * 默认失败不阻断关闭流程;只有 plugin 明确返回 false 时才否决关闭。
+ *
+ * 并发纪律:**变更段按 session 串行**(见 closeMutationQueues)。关闭要跨越
+ * 若干 await(创建落地 / state 写落地 / close IPC / setActive IPC),而回滚用的是
+ * 进入变更段时的 bucket 快照 —— 同 session 两次关闭交错跑,后完成的那次会用旧
+ * 快照把对方删掉的 tab 写回,或让 setActive 指向已删 tab 拿 NOT_FOUND 后把两次
+ * 删除一起回滚(cache 与 DB 从此不一致)。触发场景不需要多罕见:OAuth popup 自关
+ * 撞上用户手关另一个 tab、⌘W 连按、closeAll 与自关并行,都是。
+ *
+ * interceptor / onBeforeClose **不进**队列:它们可能弹确认框等用户很久,不该
+ * 卡住同 session 其它 tab 的关闭;放在队列外也就不存在"拦截里再调 store"自锁的
+ * 可能。它们只读 closing tab 自己的状态,不依赖 bucket 快照。
+ */
 export async function closeTab(
   sessionId: string,
   tabId: string,
   opts: { skipBeforeClose?: boolean } = {},
 ): Promise<void> {
-  const prev = getBucket(sessionId);
-  const idx = prev.tabs.findIndex((t) => t.id === tabId);
-  if (idx < 0) return;
-  const tab = prev.tabs[idx];
-  const nextTabs = prev.tabs.filter((t) => t.id !== tabId);
-  let nextActiveId = prev.activeTabId;
-  if (tabId === prev.activeTabId) {
-    nextActiveId = nextTabs[idx]?.id ?? nextTabs[idx - 1]?.id ?? null;
-  }
+  const tab = getBucket(sessionId).tabs.find((t) => t.id === tabId);
+  if (!tab) return;
 
   // 先调 close interceptor / plugin onBeforeClose,后改 cache + IPC。
   // 在 cache 改之前调,plugin 拿到的还是 closing tab 的稳定状态。
@@ -497,24 +666,140 @@ export async function closeTab(
     }
   }
 
-  setBucket(sessionId, { tabs: nextTabs, activeTabId: nextActiveId });
-  try {
-    await settleTabStateWrites(sessionId, tabId);
-    const ipc = ipcApi();
-    if (ipc && shouldPersist(sessionId)) {
-      await ipc.close({ id: tabId });
-      if (nextActiveId !== prev.activeTabId) {
-        await ipc.setActive({ sessionId, id: nextActiveId });
-      }
+  return enqueueCloseMutation(sessionId, async () => {
+    // 队列内重取快照:排在前面的关闭可能已经动过这个 bucket(甚至已经关掉了本
+    // tab)。用旧快照算 nextTabs / 回滚基线正是并发出错的根源。
+    const prev = getBucket(sessionId);
+    const idx = prev.tabs.findIndex((t) => t.id === tabId);
+    if (idx < 0) return;
+    const nextTabs = prev.tabs.filter((t) => t.id !== tabId);
+    let nextActiveId = prev.activeTabId;
+    if (tabId === prev.activeTabId) {
+      nextActiveId = nextTabs[idx]?.id ?? nextTabs[idx - 1]?.id ?? null;
     }
-    const key = tabStateWriteKey(sessionId, tabId);
-    patchRevisions.delete(key);
-    persistedStateBaselines.delete(key);
-  } catch (err) {
-    log.error('closeTab IPC failed; rolling back cache', { sessionId, tabId, err });
-    setBucket(sessionId, { tabs: prev.tabs, activeTabId: prev.activeTabId });
-    throw err;
-  }
+
+    setBucket(sessionId, { tabs: nextTabs, activeTabId: nextActiveId });
+    // 先等这个 tab 的创建落定(见 pendingTabCreates)—— 否则 close 可能跑在 INSERT
+    // 之前,拿 NOT_FOUND 把整次关闭回滚掉。
+    const pendingCreate = pendingTabCreates.get(tabId);
+    if (pendingCreate && !(await pendingCreate)) {
+      // 创建**连 upsert 都没成**:DB 里"通常"没有这行(addTab 已经把它从 cache
+      // 回滚掉)。绝不能走下面的正常分支 —— close 报 NOT_FOUND 会命中 catch 里的
+      // 回滚,把这个幽灵 tab 写回 cache。
+      // (upsert 成功、只是 setActive 失败的半失败情形返回 true,照常走下面的 close。)
+      //
+      // 但"通常"不等于"一定":state 写队列同样走 `ipc.upsert`(还带 overload 重试),
+      // 乐观插入后入队的某次 patch 可能反倒把这一行写进了 DB。所以先等 state 写落定,
+      // 再发一次清理 close 兜掉这种孤儿行。失败分两类:
+      //  - `[NOT_FOUND]` = "本来就没有",清理目标不存在即成功,吞掉;
+      //  - 其它(DB worker 不可用/过载)= **清理没做成**,孤儿行可能留在 SQLite,
+      //    吞掉会让它在下次 hydrate / 重启时复活。按 overload 节奏有限重试,
+      //    终失败向上抛(cache 里 tab 已被 addTab 回滚,本分支不碰 cache,
+      //    不存在"复活失败 tab"的问题)——调用方至少拿到真实结果与日志留痕。
+      await settleTabStateWrites(sessionId, tabId);
+      await cleanupOrphanTabRow(sessionId, tabId, 'closeTab');
+      forgetClosedTab(sessionId, tabId);
+      return;
+    }
+    try {
+      await settleTabStateWrites(sessionId, tabId);
+      const ipc = ipcApi();
+      if (ipc && shouldPersist(sessionId)) {
+        await ipc.close({ id: tabId });
+        // —— close 已落库:从这里起任何失败都不得进入下面的回滚分支(把已删的
+        // tab 插回 cache 会与 DB 反向分叉)。active 同步单独 catch 兜底。
+        // setActiveTarget:记录我们实际调用 ipc.setActive 时的目标值,供 activeErr catch 判断。
+        // 声明在 inner try 外、if 块内——JavaScript let 不跨 try/catch 块,必须在两者共同的
+        // 父作用域里声明才能被 catch 看到。
+        let setActiveTarget: string | null | undefined;
+        try {
+          // active 落库前重取一次 cache 现值:关闭队列只串行关闭之间的变更,
+          // 并发的 addTab / setActiveTab 可能已经把 active 换成别的 tab 并落库了 ——
+          // 拿关闭前算好的旧值去写会把它盖掉,DB 与 cache 分叉(下次 hydrate 恢复出
+          // 错的 active)。cache 是 renderer 侧的真相,直接对齐它即可收敛。
+          //
+          // detach/reattach 竞态防护:invalidateSessionCaches() 清掉旧 renderer 的
+          // bucket 时 hydrated 变 false。EMPTY_BUCKET.activeTabId = null;若照常
+          // setActive(null) 会把新 renderer 已接管会话的 active 标志清掉。
+          const afterClose = getBucket(sessionId);
+          if (afterClose.hydrated) {
+            let activeNow = afterClose.activeTabId;
+            if (activeNow !== prev.activeTabId) {
+              // 并发 addTab 可能刚把新 tab 设为 active 而它的 INSERT 还在途:直接
+              // setActive 会撞 [NOT_FOUND](main 端还会先清掉全 session 的 active 位)。
+              // 等它的创建落定;等待期间 active 可能又变,落定后重取现值。
+              const pendingActive = activeNow ? pendingTabCreates.get(activeNow) : undefined;
+              let cacheStillOwned = true;
+              if (pendingActive) {
+                await pendingActive.catch(() => undefined);
+                // detach/reattach 竞态防护:await 期间 invalidateSessionCaches() 可能把
+                // bucket 设为 hydrated=false;再次确认 bucket 仍由本 renderer 持有。
+                cacheStillOwned = getBucket(sessionId).hydrated;
+                if (cacheStillOwned) {
+                  activeNow = getBucket(sessionId).activeTabId;
+                }
+              }
+              if (cacheStillOwned && activeNow !== prev.activeTabId) {
+                setActiveTarget = activeNow;
+                await ipc.setActive({ sessionId, id: activeNow });
+              }
+            }
+          }
+        } catch (activeErr) {
+          // active 同步失败:tab 删除已成功落库,绝不能回滚。
+          // 清空 cache active 让下次用户点击时 setActiveTab 照常落库——
+          // 但只有 cache 仍指向我们尝试设置的 active 时才清,否则用户已切到
+          // 别的 tab 且该 tab 已成功落库,强清会让 setActiveTab 对那个 tab
+          // 多发一次 IPC,结果虽等价但语义上是"回退到无 active"的短暂漂移。
+          log.warn('closeTab: post-close setActive failed; clearing cache activeTabId for recovery', {
+            sessionId,
+            tabId,
+            err: activeErr,
+          });
+          const current = getBucket(sessionId);
+          if (
+            current.hydrated &&
+            setActiveTarget !== undefined &&
+            current.activeTabId === setActiveTarget
+          ) {
+            setBucket(sessionId, { tabs: current.tabs, activeTabId: null });
+          }
+        }
+      }
+      forgetClosedTab(sessionId, tabId);
+    } catch (err) {
+      // NOT_FOUND:行已被并发的 addTab rollback cleanup 或另一个 closeTab 删掉,
+      // cache 的乐观删除与 DB 已一致,不需要重新插回——回滚反而造成 cache/DB 分叉。
+      if (isTabRowMissingError(err)) {
+        forgetClosedTab(sessionId, tabId);
+        return;
+      }
+      log.error('closeTab IPC failed; rolling back cache', { sessionId, tabId, err });
+      // 精准回滚:只把被乐观删除的这个 tab 插回**当前** bucket,不整份恢复 prev
+      // 快照。close 队列只串行关闭之间的变更,addTab / setActiveTab 是有意留在
+      // 队列外的 —— close in-flight 期间它们可能已把新 tab 写进 cache 和 DB,
+      // 整快照回滚会把那些并发变更从 cache 抹掉(DB 里还在,重启 hydrate 后
+      // "幽灵复活",cache 与 DB 分叉)。
+      //
+      // detach/reattach 竞态防护:invalidateSessionCaches() 把 bucket 清为
+      // EMPTY_BUCKET(hydrated=false)。若此时仍回滚,setBucket 的 cache-miss
+      // base(hydrated:true)会重建 bucket,让老 renderer 重新"接管"新 renderer
+      // 已经接管的 session——只在 bucket 仍由本 renderer 持有时才回滚。
+      const now = getBucket(sessionId);
+      if (now.hydrated && !now.tabs.some((t) => t.id === tabId)) {
+        const restored = [...now.tabs];
+        restored.splice(Math.min(idx, restored.length), 0, prev.tabs[idx]);
+        // activeTabId:只有"原 active 就是被关的 tab,且当前 active 仍是关闭时选出
+        // 的替代者"才恢复回被关 tab;并发操作已把 active 指向别处时尊重现值。
+        const activeTabId =
+          prev.activeTabId === tabId && now.activeTabId === nextActiveId
+            ? tabId
+            : now.activeTabId;
+        setBucket(sessionId, { tabs: restored, activeTabId });
+      }
+      throw err;
+    }
+  });
 }
 
 /** 关闭某个 session bucket 的全部 tab,逐个走 closeTab 以触发 plugin cleanup。 */
@@ -532,6 +817,11 @@ export async function setActiveTab(
 ): Promise<void> {
   const prev = getBucket(sessionId);
   if (tabId === prev.activeTabId) return;
+  // closeTab 已把关闭中的 tab 从 bucket 乐观移除:若此时用户点击该 tab(或
+  // 并发命令调 setActiveTab),activeTabId 会指向 tabs 里不存在的 id —— sidebar
+  // 无法渲染对应 body;close 落库后 DB 里也没有 active row。提前守门,拒绝激活
+  // 不在当前 bucket 里的 tab。
+  if (tabId !== null && !prev.tabs.some((t) => t.id === tabId)) return;
   setBucket(sessionId, { activeTabId: tabId });
   try {
     const ipc = ipcApi();
@@ -648,6 +938,8 @@ export function _resetStore(): void {
   inflight.clear();
   memoryOnlySessions.clear();
   closeInterceptors.clear();
+  pendingTabCreates.clear();
+  closeMutationQueues.clear();
   resetStateWriteQueue();
   listeners.clear();
 }

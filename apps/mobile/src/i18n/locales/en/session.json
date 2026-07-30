@@ -38,6 +38,8 @@
     "backToEdit": "Back to Edit",
     "retry": "Retry",
     "firstMessageNotSent": "The first message wasn't sent; its content has been restored to the input box.",
+    "attachmentsNotCarriedBack": "{{count}} attachment(s) couldn't be brought back — please add them again.",
+    "commandWaitsForSession": "The conversation is still being created — this command needs the session to be ready. Please try again shortly.",
     "locateMessageNotFound": "Couldn't find the message to jump to.",
     "shareNoLocalImage": "Couldn't get the local image file",
     "shareFailedTitle": "Share Failed",

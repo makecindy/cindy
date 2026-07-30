@@ -3843,7 +3843,18 @@ const MessageItem = memo(function MessageItem({
     case 'ask_user':
       return <AskUserQuestionBubble message={message} />;
     case 'plan_review':
-      return <PlanReviewBubble message={message} />;
+      // 计划正文是会话消息内容,解析上下文与 AssistantMessage 保持一致
+      // (currentSessionId 缺失会让远程会话里计划内的媒体链接绕过
+      // cindy-remote-media:// 改写而坏图)。
+      return (
+        <PlanReviewBubble
+          message={message}
+          workingDir={workingDir}
+          currentSessionId={sessionId}
+          currentSessionTitle={sessionTitle}
+          localFileRefs={localFileRefs}
+        />
+      );
     case 'error':
       // interrupted-turn-resume:app 退出中断标记行不进消息流(2026-07-05 产品
       // 决策)——它作为「会话尾部是否停在中断态」的判定源保留在 messages 数组里,

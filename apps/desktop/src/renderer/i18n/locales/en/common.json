@@ -272,13 +272,22 @@
           "keyHint": "Read a private key file directly. We don't store passphrases, so encrypted keys aren't supported — use this only when ssh-agent isn't available."
         },
         "identityFile": "Identity file path",
-        "agentProxy": "Route agent traffic via local proxy",
-        "agentProxyTip": "Open a 127.0.0.1 port on the remote that tunnels back over SSH to a proxy on this machine; remote codex / Claude Code traffic flows out through it",
-        "agentProxyAddr": "Local proxy address",
-        "agentProxyHint": "Opens a 127.0.0.1 port on the remote, tunneled over SSH back to your local proxy (e.g. Clash on 7890). {{appName}} does not provide a proxy — only the tunnel; the remote agent's HTTPS_PROXY points at the tunnel and domains are resolved by your proxy. Toggling restarts the remote codex daemon once to take effect.",
-        "agentProxyAddrInvalid": "Expected host:port, e.g. 127.0.0.1:7890",
         "cancel": "Cancel",
-        "submit": "Add machine"
+        "submit": "Add machine",
+        "agentProxy": "Route agent traffic via proxy",
+        "agentProxyTip": "Send remote codex / Claude Code model traffic through a proxy: either a Cindy-managed SSH tunnel back to your local proxy, or a remote-reachable proxy URL you provide",
+        "agentProxyModeTunnel": "Cindy-managed tunnel",
+        "agentProxyModeTunnelDesc": "Dedicated SSH tunnel back to your local proxy, fixed remote port, auto-reconnects",
+        "agentProxyModeEnv": "Bring your own proxy (env vars only)",
+        "agentProxyModeEnvDesc": "Provide a proxy URL reachable from the remote; you maintain the tunnel/reachability",
+        "agentProxyAddr": "Local proxy address",
+        "agentProxyHint": "A fixed port on the remote 127.0.0.1 is tunneled over a dedicated, Cindy-managed SSH connection back to your local proxy (e.g. Clash on 7890). {{appName}} does not provide a proxy — only the tunnel; the remote agent's HTTPS_PROXY is pinned to the fixed port and never drifts on reconnect. Changing this restarts the remote codex daemon once.",
+        "agentProxyAddrInvalid": "Expected host:port, e.g. 127.0.0.1:7890",
+        "agentProxyRemotePort": "Fixed remote port",
+        "agentProxyRemotePortInvalid": "Port must be an integer between 1 and 65535",
+        "agentProxyUrl": "Remote-reachable proxy URL",
+        "agentProxyUrlHint": "Resolved on the remote host: a proxy on the remote itself (e.g. your own autossh -R tunnel), a LAN proxy, etc. Supports http / https / socks5.",
+        "agentProxyUrlInvalid": "Must be an http(s):// or socks5:// URL without spaces or quotes"
       },
       "detail": {
         "agentSetupTitle": "Agent setup",
@@ -292,11 +301,6 @@
         "statusInstalled": "Installed",
         "statusNotInstalled": "Not installed",
         "claudeCodeName": "Claude Code",
-        "agentProxyTitle": "Agent proxy tunnel",
-        "agentProxyActive": "Remote 127.0.0.1:{{port}} → local {{target}} · established",
-        "agentProxyPending": "Establishing tunnel → local {{target}}",
-        "agentProxyWaiting": "Host not connected; tunnel will be established on reconnect → local {{target}}",
-        "agentProxyError": "Tunnel failed: {{message}}",
         "button": {
           "install": "Install",
           "reinstall": "Reinstall",
@@ -305,7 +309,15 @@
           "run": "Run",
           "syncAuth": "Sync auth",
           "syncAuthTip": "Copy your local Codex credentials to this remote so you don't need to log in again there"
-        }
+        },
+        "agentProxyTitle": "Agent proxy",
+        "agentProxyActive": "Remote 127.0.0.1:{{port}} → local {{target}} · established",
+        "agentProxyPending": "Establishing tunnel → local {{target}}",
+        "agentProxyWaiting": "Host not connected; resumes automatically on reconnect → local {{target}}",
+        "agentProxyError": "Proxy setup failed: {{message}}",
+        "agentProxyPortBusy": "Remote port {{port}} is busy; waiting for release and retrying… (change the port in settings if it stays busy)",
+        "agentProxyEnvInfo": "Env vars injected → {{url}} (you maintain the route)",
+        "agentProxyEnvPending": "Waiting to apply env vars → {{url}} (takes effect automatically once the host connects)"
       },
       "startSession": {
         "title": "Start a remote Codex session",
@@ -1950,6 +1962,24 @@
           "failed": "ADB status check failed: {{message}}",
           "unknownIssue": "ADB issue: {{issue}}"
         },
+        "connectionGuide": {
+          "connect": {
+            "title": "How to connect an Android phone",
+            "adbNote": "Cindy prepares ADB automatically; you do not need to install the Android SDK. Custom ADB path is for advanced users.",
+            "step1": "Connect the phone to the computer with a USB cable that supports data transfer.",
+            "step2": "On the phone, open Settings → About phone and tap the build number repeatedly to enable Developer options.",
+            "step3": "Open Developer options and turn on USB debugging.",
+            "step4": "Keep the phone unlocked, return to Cindy, and click Recheck."
+          },
+          "unauthorized": {
+            "title": "Allow USB debugging",
+            "body": "On the phone, choose Allow in the USB debugging permission dialog. We recommend checking Always allow from this computer, then return to Cindy and click Recheck."
+          },
+          "offline": {
+            "title": "The device is offline",
+            "body": "Reconnect the USB cable, keep the phone unlocked, then return to Cindy and click Recheck."
+          }
+        },
         "device": {
           "title": "Device",
           "ariaLabel": "Select default Android device",
@@ -2879,7 +2909,7 @@
     },
     "contacts": {
       "title": "Smart Contacts",
-      "description": "A people and organization directory built for agents: cross-platform identity resolution (email / Feishu / Slack / GitHub id → who is this), relationship context, and dated event records. Agents collect entries as they work; low-confidence ones land in a pending queue for your review.",
+      "description": "A people and organization directory built for agents: cross-platform identity resolution (email / Feishu / Slack / GitHub id → who is this), relationship context, and dated event records. Agents collect entries as they work; low-confidence ones land in a pending queue for your review. Data is stored on this device only; lookups and organizing are processed through your own model.",
       "enable": {
         "label": "Enable Smart Contacts",
         "description": "When on, agents can look up and automatically collect contact information (uncertain entries go to pending review). Turning it off does not affect browsing or managing existing data here.",
@@ -3023,9 +3053,16 @@
         "INTERNAL": "Operation failed. Please try again later."
       },
       "guide": {
-        "hint": "Your contacts are empty. Let AI get you started — collect people from conversations or import from system contacts.",
+        "hint": "Your contacts are empty. Start from any source so it knows your people from day one:",
         "cta": "Organize with AI",
-        "prompt": "Help me organize my smart contacts: review what is there, add people worth keeping (import from system contacts or vCard, or ask me), and confirm-then-merge any duplicates."
+        "prompt": "Help me organize my smart contacts: review what is there, add people worth keeping (import from system contacts or vCard, or ask me), and confirm-then-merge any duplicates.",
+        "sources": {
+          "mail": "From Email",
+          "im": "From IM",
+          "import": "Import Contacts"
+        },
+        "mailPrompt": "Help me build my Smart Contacts from email: first check which mail tools I have connected (if none, tell me how to connect one); scan the last 6 months of correspondence and create profiles for real contacts I exchange mail with — confirm high-frequency, clearly-identified people directly, use pending for uncertain ones; skip marketing mail, notification bots, and one-off senders. Report which profiles you created at the end.",
+        "imPrompt": "Help me build my Smart Contacts from chat tools: first check which IMs I have connected (Feishu / Slack / WeChat etc.; if none, tell me how to connect one); organize the people I chat with regularly into contacts, use pending for uncertain ones, and skip group bots and one-off conversations. Report which profiles you created at the end."
       }
     }
   },
@@ -3872,6 +3909,7 @@
       "preparingAria": "Preparing newer version, please wait",
       "confirmTitle": "Restart to update?",
       "confirmHint": "The app will restart automatically",
+      "confirmBusyHint": "A task is still running. Restarting will interrupt it",
       "confirmButton": "Restart now",
       "cancel": "Cancel",
       "confirmTooltip": "Confirm restart to apply the update",
@@ -4156,6 +4194,7 @@
         "xai": "Subscription-direct Grok models are not supported in SSH remote sessions yet",
         "generic": "Subscription-direct models are not supported in SSH remote sessions yet"
       },
+      "discovering": "Fetching models…",
       "effortLabel": "Effort level",
       "edit": "Edit",
       "options": "Options",
@@ -4508,6 +4547,13 @@
       },
       "detectedLabel": "Detected",
       "oauthSub": "Opens a verification page in your browser — connects automatically"
+    },
+    "inheritedSubscription": {
+      "title": "Using the {{products}} sign-in already on this computer",
+      "desc": "Cindy picked up the account you're already signed in to locally — no separate authorization was needed. Switch or disconnect it under model providers.",
+      "openProviders": "Open Model Providers",
+      "acknowledge": "Got it",
+      "separator": ", "
     }
   },
   "voiceInputOverlay": {
@@ -5000,7 +5046,21 @@
         "aria": "Conversation compacted"
       },
       "autoResume": {
+        "label": "Reconnected",
+        "labelFailed": "Reconnect failed",
+        "labelNeutral": "Reconnect",
+        "detail": {
+          "reason": "Interruption reason",
+          "attempt": "Attempt {{attempt}}/{{total}}",
+          "sessionTotal": "{{count}} reconnects in this conversation"
+        }
+      },
+      "autoResumeSeparator": {
         "label": "Connection interrupted — resumed automatically"
+      },
+      "autoResumePending": {
+        "label": "Reconnecting",
+        "labelWithProgress": "Reconnecting {{attempt}}/{{total}}"
       },
       "agentSwitch": {
         "label": "Switched from {{from}} to {{to}}",
@@ -5037,7 +5097,6 @@
       "openInSidebarFailed": "Failed to open in sidebar browser"
     },
     "ghostSummon": {
-      "overline": "PLUGIN USE · GHOST",
       "directiveLabel": "Directive appended for the model",
       "legend": "Highlighted = injected from the plugin's manifest · the rest is the fixed system template",
       "expandAria": "Show the directive appended for the model",
@@ -5047,7 +5106,12 @@
       "mentionDirectiveLabel": "Hint appended for the model",
       "semanticExpandAria": "Show how this plugin was used",
       "semanticNote": "The AI used this plugin on its own based on the meaning of your message; no machine directive was appended to it.",
-      "listSeparator": ", "
+      "listSeparator": ", ",
+      "status": {
+        "running": "Calling…",
+        "called": "Called",
+        "done": "Finished"
+      }
     },
     "userMessage": {
       "attachmentPrefix": "Attachments: ",

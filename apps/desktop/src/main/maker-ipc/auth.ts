@@ -16,6 +16,7 @@ import { createLogger } from '../logger.js';
 import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { clearChatgptBridgeCredentialCache } from '../maker-host/anthropic-responses-bridge-host.js';
 import { refreshDiscoveredCodexModels } from '../maker-host/createDesktopProviderService.js';
+import { requestCodexModelBackfill } from '../maker-host/index.js';
 import { registerMakerAuthHandlers } from './authHandlers.js';
 import { createElectronIpcHandlerRegistry } from './electronIpcRegistry.js';
 
@@ -55,6 +56,10 @@ export function registerMakerAuthIpc(maker: Maker): void {
         }
         await refreshDiscoveredCodexModels(authenticated, isCurrent);
       }
+      // 走到这里若仍是「已登录 + 零模型」（live 没 applied 且 models_cache 也 miss，全新机器
+      // 首次登录的常态：codex CLI 只在跑过会话后才写 cache），补一次 live 拉取。必须放在上面
+      // 的 cache 回退**之后**：那次回退会以空快照收口，先补拉就会被它覆盖掉。
+      if (authenticated && isCurrent()) await requestCodexModelBackfill();
     },
   );
 

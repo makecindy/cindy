@@ -378,7 +378,15 @@ beforeEach(() => {
 });
 
 describe('ModelSelector trigger variants', () => {
-  it('requests a silent refresh when a local selector opens, but not for a remote device', () => {
+  // 打开选择器既发起刷新、又把「发现在途」状态推给内容区(见 useModelDiscoveryPending),
+  // 所以点击要走 act:那次刷新 resolve 后还有一次 setPending(false) 落在微任务里。
+  const clickTrigger = async (): Promise<void> => {
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+    });
+  };
+
+  it('requests a silent refresh when a local selector opens, but not for a remote device', async () => {
     const local = render(
       React.createElement(ModelSelector, {
         modelId: 'claude-opus-4-8',
@@ -388,10 +396,10 @@ describe('ModelSelector trigger variants', () => {
         vendorKey: 'cc',
       }),
     );
-    fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+    await clickTrigger();
     expect(requestProviderModelsAutoRefresh).toHaveBeenCalledWith('model-selector-open');
-    fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
-    fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+    await clickTrigger();
+    await clickTrigger();
     expect(requestProviderModelsAutoRefresh).toHaveBeenCalledTimes(2);
     local.unmount();
 
@@ -406,7 +414,7 @@ describe('ModelSelector trigger variants', () => {
         deviceId: 'remote-device',
       }),
     );
-    fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+    await clickTrigger();
     expect(requestProviderModelsAutoRefresh).not.toHaveBeenCalled();
   });
 

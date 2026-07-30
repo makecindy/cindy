@@ -23,7 +23,12 @@ vi.mock('../detachedSidebarRouting', () => ({
 import { addTab, ensureHydrated } from '../../store';
 import { requestRightSidebarVisibility } from '../sidebarCommands';
 import { routeSidebarCommand } from '../detachedSidebarRouting';
-import { openUrlInSidebarBrowser, pathToFileUrl } from '../openInSidebarBrowser';
+import {
+  openUrlInSidebarBrowser,
+  pathToFileUrl,
+  fileUrlToAbsPath,
+  isLocalHtmlFileUrl,
+} from '../openInSidebarBrowser';
 
 describe('pathToFileUrl', () => {
   it('converts a Windows drive path with backslashes', () => {
@@ -37,6 +42,30 @@ describe('pathToFileUrl', () => {
   it('percent-encodes CJK, # and ? so they cannot become fragment/query', () => {
     expect(pathToFileUrl('E:\\页 面#1.html')).toBe('file:///E:/%E9%A1%B5%20%E9%9D%A2%231.html');
     expect(pathToFileUrl('/tmp/a?b.html')).toBe('file:///tmp/a%3Fb.html');
+  });
+});
+
+describe('fileUrlToAbsPath / isLocalHtmlFileUrl', () => {
+  it('round-trips POSIX paths including spaces', () => {
+    expect(fileUrlToAbsPath('file:///Users/a%20b/x.html')).toBe('/Users/a b/x.html');
+    expect(isLocalHtmlFileUrl('file:///Users/a%20b/x.html')).toBe(true);
+  });
+
+  it('round-trips Windows drive paths', () => {
+    expect(fileUrlToAbsPath('file:///E:/out/index.html')).toBe('E:\\out\\index.html');
+    expect(isLocalHtmlFileUrl('file:///E:/out/index.htm')).toBe(true);
+  });
+
+  it('rejects non-file and non-html URLs', () => {
+    expect(fileUrlToAbsPath('https://example.com/x.html')).toBeNull();
+    expect(fileUrlToAbsPath('file:///%E0%A4%A.html')).toBeNull();
+    expect(isLocalHtmlFileUrl('https://example.com/x.html')).toBe(false);
+    expect(isLocalHtmlFileUrl('file:///tmp/notes.md')).toBe(false);
+    expect(isLocalHtmlFileUrl('about:blank')).toBe(false);
+  });
+
+  it('ignores hash/query when recovering the path', () => {
+    expect(fileUrlToAbsPath('file:///tmp/x.html#section')).toBe('/tmp/x.html');
   });
 });
 

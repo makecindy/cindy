@@ -30,6 +30,7 @@ import type { AgentKind, Effort, PermissionMode, ReasoningDisplay, UserMessage, 
 import type { Capabilities, EffortDescriptor, ModelDescriptor } from '../types/capabilities.js';
 import { NotSupportedError } from '../types/capabilities.js';
 import type { AgentCredentialMode, AuthLoginOptions } from '../interfaces/auth-adapter.js';
+import type { ContactsPromptState } from '../contacts/system-prompt.js';
 import type {
   MemoryStatus,
   MemorySetResult,
@@ -304,6 +305,24 @@ export interface AgentDeps {
    * 视为禁用), agent 走原 system prompt 拼接路径。
    */
   makerMemory?: MakerMemoryManager;
+
+  /**
+   * 智能通讯录「本会话有效状态」(host 注入)。决定注入哪段 contacts prompt
+   * (enabled = 使用规范, disabled = 可选功能告示, unavailable = 不注入, 语义见
+   * contacts/system-prompt.ts 的 ContactsPromptState)。host 必须按**有效策略**
+   * 计算, 不能只读全局开关: desktop 侧 = 全局开关 ∧ PluginRegistry 的
+   * 工作区/用户覆盖(workingDir 传入即为此), codex 侧还要与实际应用到 running
+   * app-server 的 spawn 快照对齐(失效失败时 stale 配置里没有新工具面)。
+   * 求值时机与 MCP 工具注册对齐, 保证 prompt 状态与工具可用性不分叉:
+   *  - claude-code: 每次 buildQuery(含 rewind/fresh 重建)与 buildMcpServers
+   *    同点求值, enabled 还会与本次 build 实际注册的 server 集合取交;
+   *    单次 build 内恒定, 前缀缓存不受影响。
+   *  - codex: session 启动求值一次(MCP flags 冻结在 spawn 配置)。
+   * remote 会话两端都不注入(cindy_contacts 不随远端转发)。
+   *
+   * 缺省 / undefined → 两段都不注入 (host 未接线, 与改造前行为一致)。
+   */
+  getContactsPromptState?: (ctx: { workingDir?: string }) => ContactsPromptState;
 
   /**
    * Host-side MCP approval policy, shared by **both** agents. `auto-approve`

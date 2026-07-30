@@ -27,7 +27,6 @@ import { normalizeWorkingDirForStorage } from '../../shared/workingDir';
 import { getManagedWorktreeBasePath } from '../../shared/managedWorktreePaths';
 
 const STORAGE_KEY = 'xdt:newMakerDraft:v1';
-const DEFAULT_CODEX_DRAFT_MODEL = 'gpt-5.4';
 let activeDataOwnerId: string | null = null;
 
 function storageKey(): string {
@@ -137,10 +136,15 @@ export interface NewMakerDraft {
   modelChosenByVendor: Partial<Record<MakerVendor, boolean>>;
 }
 
+/**
+ * 种子默认偏好。模型 id **一律经 getDefaultModelForVendor 从目录推荐位取**,不在这里写死:
+ * 这里曾写死 codex → 'gpt-5.4',与 modelDefinitions 里写死的 'gpt-5.5' 漂移成两个值,而两者
+ * 在目录里都是默认隐藏的模型 —— 种子默认模型压根不在用户看到的清单里。
+ */
 function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
   if (vendor === 'codex') {
     return {
-      model: DEFAULT_CODEX_DRAFT_MODEL,
+      model: getDefaultModelForVendor('codex').id,
       effort: 'high',
       permissionMode: 'auto',
       planMode: false,

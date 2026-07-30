@@ -338,6 +338,12 @@ export interface ChatMessage {
     | 'goal-resumed'
     | 'learn'
     | 'auto-resume'
+    /**
+     * 中断自愈**进行中**(退避窗口内,由 projection.autoResumePending 驱动的 ephemeral
+     * 卡)。与 'auto-resume' 的分工:那条是自愈**已完成**、由落库的 autoResume user 行
+     * 派生、重开会话仍在;这条只活在退避那几秒,补发一发出就撤掉。
+     */
+    | 'auto-resume-pending'
     | 'agent-switch';
   systemCardData?: Record<string, unknown>;
   /** FP-3: plan_review message fields */
@@ -1489,6 +1495,24 @@ function notify(sessionId: string): void {
   });
 }
 
+/**
+ * 「正在自动继续」ephemeral 卡的固定 clientId。每个会话一份 state，所以固定串足够；
+ * 用固定值而不是随机 id，是为了让插入幂等（同一接管窗口内 projection 会 emit 多次）。
+ */
+/** 浅比较两份 systemCardData（只有原始值字段），用来避免无变化时替换消息引用。 */
+function shallowEqualRecord(
+  a: Record<string, unknown> | undefined,
+  b: Record<string, unknown>,
+): boolean {
+  if (!a) return false;
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((key) => a[key] === b[key]);
+}
+
+const AUTO_RESUME_PENDING_CLIENT_ID = '__auto_resume_pending__';
+
 function applyInputProjection(projection: AgentInputProjection): void {
   if (!projection.sessionId) return;
   setState(projection.sessionId, (s) => {
@@ -1518,10 +1542,50 @@ function applyInputProjection(projection: AgentInputProjection): void {
     // 气泡, 回落到队列态。真正被立即派发的那条 clientId 不在 pendingQueue 里, 气泡
     // 保留, 之后 localDb.messages.onCreated 广播按 clientId dedupe 不会重复。
     const queuedIds = new Set(projection.pendingQueue.map((q) => q.clientId));
-    const messages =
+    const dedupedMessages =
       queuedIds.size > 0 && s.messages.some((m) => m.isPendingPersist && queuedIds.has(m.clientId))
         ? s.messages.filter((m) => !(m.isPendingPersist && queuedIds.has(m.clientId)))
         : s.messages;
+    // 中断自愈接管中 → 在流末尾挂一条 ephemeral 的「正在自动继续」分隔条(不落库);
+    // 接管结束(补发已发出 / 放弃 / 用户自己接手)由同一处撤掉。红横幅只留给最终失败,
+    // 所以这几秒里 projection.error 是 null,用户看到的就只有这条低调提示。
+    const autoResumePending = !!projection.autoResumePending;
+    const hasPendingCard = dedupedMessages.some(
+      (m) => m.clientId === AUTO_RESUME_PENDING_CLIENT_ID,
+    );
+    const pendingCardData = projection.autoResumePending
+      ? ({ ...projection.autoResumePending } as Record<string, unknown>)
+      : null;
+    const withPendingCard = autoResumePending
+      ? hasPendingCard
+        // 卡已在:必须把最新展示信息写回去 —— 同一次中断的进度会连续更新
+        // (1/5 → 2/5 …),原样保留旧卡的话进度永远停在第一次(copilot review)。
+        // 只在内容真的变了时才换引用,避免每次 projection 都触发无谓重渲染。
+        ? dedupedMessages.map((m) =>
+            m.clientId === AUTO_RESUME_PENDING_CLIENT_ID &&
+            pendingCardData &&
+            !shallowEqualRecord(m.systemCardData, pendingCardData)
+              ? { ...m, systemCardData: pendingCardData }
+              : m,
+          )
+        : [
+            ...dedupedMessages,
+            {
+              clientId: AUTO_RESUME_PENDING_CLIENT_ID,
+              role: 'assistant' as const,
+              content: '',
+              isStreaming: false,
+              systemCardType: 'auto-resume-pending' as const,
+              ...(pendingCardData ? { systemCardData: pendingCardData } : {}),
+              createdAt: new Date().toISOString(),
+            },
+          ]
+      : hasPendingCard
+        ? dedupedMessages.filter((m) => m.clientId !== AUTO_RESUME_PENDING_CLIENT_ID)
+        : dedupedMessages;
+    // 折叠:同一次中断事件里,ephemeral 进行中行与它前面那些已落库的重连行只显示最新
+    // 一条(否则第 2 次重连时会看到「未成功」+「重新连接中 2/5」两行并存)。
+    const messages = collapseConsecutiveAutoResumeRows(withPendingCard);
     return {
       ...s,
       messages,
@@ -9004,6 +9068,56 @@ export const makerChatStore = {
 
 type RemoteRowsOrder = 'newest-first' | 'oldest-first';
 
+/** 自愈活动行的两种卡型（ephemeral 进行中 + 落库记录）。 */
+const AUTO_RESUME_CARD_TYPES = new Set(['auto-resume', 'auto-resume-pending']);
+
+/** 这一行对用户是不是"实质内容"（用来切分自愈事件的边界）。 */
+function isSubstantiveChatRow(message: ChatMessage): boolean {
+  // 其它系统卡（compact / goal 分隔条等）算边界:它们之后的重连属于新一段。
+  if (message.systemCardType && !AUTO_RESUME_CARD_TYPES.has(message.systemCardType)) return true;
+  // 隐藏的合成指令行（含我们自己补发的续跑指令）不算内容。
+  if (message.isSyntheticTrigger === true) return false;
+  return typeof message.content === 'string' ? message.content.length > 0 : message.content != null;
+}
+
+/**
+ * 把**同一次中断事件**的多条自愈行折叠成一行。
+ *
+ * 一次中断可能连续重连多次（1/5 → 2/5 → …），每次都会真的补发一条续跑消息、因此每次
+ * 都在 DB 里留一行。但那是同一个事件的推进过程，不是 5 件事——流里堆 5 条「重新连接」
+ * 既吵又读不出"还在同一次重连里"。所以只保留**最后一条**（它带最新计数与最终结果），
+ * 前面的退回隐藏占位（去掉 systemCardType 后就是普通合成指令行，渲染 null）。
+ *
+ * 边界是"实质内容"：模型一旦产出过东西，后面的中断就是新一段，不再折叠进来——这与
+ * main 侧「有产出就重置连续计数」的判据是同一条线。
+ */
+function collapseConsecutiveAutoResumeRows(messages: ChatMessage[]): ChatMessage[] {
+  let sawCardSinceContent = false;
+  let changed = false;
+  let out: ChatMessage[] | null = null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (!message) continue;
+    const cardType = message.systemCardType;
+    if (cardType && AUTO_RESUME_CARD_TYPES.has(cardType)) {
+      if (sawCardSinceContent) {
+        if (!out) out = messages.slice();
+        // 去掉卡型后就是普通合成指令行(渲染 null),仍留在流里参与时序判定。
+        const stripped: ChatMessage = { ...message };
+        delete stripped.systemCardType;
+        delete stripped.systemCardData;
+        out[i] = stripped;
+        changed = true;
+      } else {
+        sawCardSinceContent = true;
+      }
+      continue;
+    }
+    if (isSubstantiveChatRow(message)) sawCardSinceContent = false;
+  }
+  return changed && out ? out : messages;
+}
+
 function mergeMessages(
   serverMsgs: ChatMessage[],
   existing: ChatMessage[],
@@ -9024,7 +9138,11 @@ function mergeMessages(
   rowsOrder: RemoteRowsOrder = 'oldest-first',
 ): ChatMessage[] {
   const serverOrder = new Map(serverMsgs.map((message, index) => [message.clientId, index]));
-  if (existing.length === 0) return sortMessagesChronologically(serverMsgs, serverOrder, rowsOrder);
+  if (existing.length === 0) {
+    return collapseConsecutiveAutoResumeRows(
+      sortMessagesChronologically(serverMsgs, serverOrder, rowsOrder),
+    );
+  }
   const serverByClientId = new Map(serverMsgs.map((message) => [message.clientId, message]));
   const seen = new Set<string>();
   let changed = false;
@@ -9049,7 +9167,7 @@ function mergeMessages(
   const sameOrder =
     sorted.length === existing.length &&
     sorted.every((message, index) => message === existing[index]);
-  return !changed && sameOrder ? existing : sorted;
+  return !changed && sameOrder ? existing : collapseConsecutiveAutoResumeRows(sorted);
 }
 
 /** 对账找不到重叠时,用远端权威窗口替换旧缓存窗口,只保留对账期间新到的消息。 */
@@ -9524,6 +9642,21 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           content: '',
           isStreaming: false,
           isSyntheticTrigger: true,
+          // 中断自动续跑补发的续跑指令带 [UI_ACTION_TRIGGER] 前缀(复用人工「继续」
+          // 那条常量),会先命中本分支 —— 但它同样是**自动**动作,必须渲染「已自动
+          // 继续」分隔线(MessageStream 对 systemCardType 的处理刻意优先于 synthetic
+          // early-return)。少这一句,用户看到的是任务自己接着跑了、没有任何交代。
+          ...(m.agentMeta?.autoResume === true
+            ? {
+                systemCardType: 'auto-resume' as const,
+                systemCardData: {
+                  ...(m.agentMeta.autoResumeInfo ?? {}),
+                  ...(m.agentMeta.autoResumeOutcome
+                    ? { outcome: m.agentMeta.autoResumeOutcome }
+                    : {}),
+                },
+              }
+            : {}),
         };
       }
       // silent-stop 自动续跑注入的「继续」(agentMeta.autoResume,main 守卫落库):
@@ -9537,6 +9670,15 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           isStreaming: false,
           isSyntheticTrigger: true,
           systemCardType: 'auto-resume' as const,
+          // 展示信息只有「中断自愈」那条路径带(silent-stop 本身没有 error / 次数)。
+          // SystemCard 据此二选一:带信息 → 三态重连行;不带 → silent-stop 原来的
+          // 「已自动继续」分隔条(见 hasInterruptionContext)。
+          systemCardData: {
+            ...(m.agentMeta.autoResumeInfo ?? {}),
+            ...(m.agentMeta.autoResumeOutcome
+              ? { outcome: m.agentMeta.autoResumeOutcome }
+              : {}),
+          },
         };
       }
       const parsed = parseUserContent(m.content);

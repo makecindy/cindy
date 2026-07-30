@@ -272,13 +272,22 @@
           "keyHint": "개인 키 파일을 직접 읽습니다. 암호를 저장하지 않으므로 암호화된 키는 지원되지 않습니다 — ssh-agent 를 사용할 수 없을 때만 사용하세요."
         },
         "identityFile": "개인 키 파일 경로",
-        "agentProxy": "Agent 트래픽을 로컬 프록시로 우회",
-        "agentProxyTip": "원격에 127.0.0.1 포트를 열고 SSH 터널로 이 컴퓨터의 프록시로 중계합니다. 원격 codex / Claude Code 트래픽이 그 경로로 나갑니다",
-        "agentProxyAddr": "로컬 프록시 주소",
-        "agentProxyHint": "원격 127.0.0.1에 포트를 열고 SSH 터널로 로컬 프록시(예: Clash 7890)로 중계합니다. {{appName}}은(는) 프록시를 제공하지 않고 터널만 만듭니다. 원격 Agent의 HTTPS_PROXY가 터널 포트를 가리키고, 도메인은 프록시에서 해석됩니다. 전환 후 원격 codex daemon이 한 번 재시작됩니다.",
-        "agentProxyAddrInvalid": "host:port 형식이어야 합니다(예: 127.0.0.1:7890)",
         "cancel": "취소",
-        "submit": "머신 추가"
+        "submit": "머신 추가",
+        "agentProxy": "Agent 트래픽을 프록시로 우회",
+        "agentProxyTip": "원격 codex / Claude Code 모델 트래픽을 프록시로 내보냅니다. Cindy가 관리하는 SSH 터널로 로컬 프록시에 연결하거나, 원격에서 접근 가능한 프록시 URL을 직접 지정합니다",
+        "agentProxyModeTunnel": "Cindy 관리 터널",
+        "agentProxyModeTunnelDesc": "전용 SSH 터널로 로컬 프록시에 중계. 원격 포트 고정, 끊기면 자동 재연결",
+        "agentProxyModeEnv": "직접 준비한 프록시(환경 변수만 주입)",
+        "agentProxyModeEnvDesc": "원격에서 접근 가능한 프록시 주소를 입력하세요. 터널/도달성은 직접 관리합니다",
+        "agentProxyAddr": "로컬 프록시 주소",
+        "agentProxyHint": "원격 127.0.0.1의 고정 포트를 Cindy가 관리하는 전용 SSH 연결로 로컬 프록시(예: Clash 7890)에 중계합니다. {{appName}}은(는) 프록시를 제공하지 않고 터널만 만듭니다. 원격 Agent의 HTTPS_PROXY는 고정 포트로 고정되어 재연결 시 변하지 않습니다. 설정을 바꾸면 원격 codex daemon이 한 번 재시작됩니다.",
+        "agentProxyAddrInvalid": "host:port 형식이어야 합니다(예: 127.0.0.1:7890)",
+        "agentProxyRemotePort": "원격 고정 포트",
+        "agentProxyRemotePortInvalid": "포트는 1~65535 사이의 정수여야 합니다",
+        "agentProxyUrl": "원격에서 접근 가능한 프록시 주소",
+        "agentProxyUrlHint": "원격 호스트에서 해석됩니다. 원격 자체의 프록시(예: autossh -R로 직접 만든 터널 포트), LAN 프록시 등. http / https / socks5 지원.",
+        "agentProxyUrlInvalid": "공백/따옴표 없이 http(s):// 또는 socks5:// URL이어야 합니다"
       },
       "detail": {
         "agentSetupTitle": "에이전트 설정",
@@ -292,11 +301,6 @@
         "statusInstalled": "설치됨",
         "statusNotInstalled": "설치되지 않음",
         "claudeCodeName": "Claude Code",
-        "agentProxyTitle": "Agent 프록시 터널",
-        "agentProxyActive": "원격 127.0.0.1:{{port}} → 로컬 {{target}} · 설정됨",
-        "agentProxyPending": "터널 설정 중 → 로컬 {{target}}",
-        "agentProxyWaiting": "호스트 미연결 — 재연결 후 자동 설정 → 로컬 {{target}}",
-        "agentProxyError": "터널 설정 실패: {{message}}",
         "button": {
           "install": "설치",
           "reinstall": "재설치",
@@ -305,7 +309,15 @@
           "run": "실행",
           "syncAuth": "인증 동기화",
           "syncAuthTip": "로컬 Codex 자격 증명을 이 원격에 복사해서 다시 로그인하지 않도록 합니다"
-        }
+        },
+        "agentProxyTitle": "Agent 프록시",
+        "agentProxyActive": "원격 127.0.0.1:{{port}} → 로컬 {{target}} · 설정됨",
+        "agentProxyPending": "터널 설정 중 → 로컬 {{target}}",
+        "agentProxyWaiting": "호스트 미연결 — 재연결 후 자동 복구 → 로컬 {{target}}",
+        "agentProxyError": "프록시 설정 실패: {{message}}",
+        "agentProxyPortBusy": "원격 포트 {{port}}이(가) 사용 중입니다. 해제를 기다려 자동 재시도합니다… (계속 사용 중이면 설정에서 포트를 변경하세요)",
+        "agentProxyEnvInfo": "환경 변수 주입됨 → {{url}} (경로는 직접 관리)",
+        "agentProxyEnvPending": "환경 변수 적용 대기 중 → {{url}} (호스트 연결 후 자동 적용)"
       },
       "startSession": {
         "title": "이 원격에서 Codex 세션 시작",
@@ -1949,6 +1961,24 @@
           "failed": "ADB 상태 확인 실패: {{message}}",
           "unknownIssue": "ADB 문제: {{issue}}"
         },
+        "connectionGuide": {
+          "connect": {
+            "title": "Android 휴대폰 연결 방법",
+            "adbNote": "Cindy가 ADB를 자동으로 준비하므로 Android SDK를 설치할 필요가 없습니다. 사용자 지정 ADB 경로는 고급 설정입니다.",
+            "step1": "데이터 전송을 지원하는 USB 케이블로 휴대폰을 컴퓨터에 연결합니다.",
+            "step2": "휴대폰에서 설정 → 휴대전화 정보로 이동한 다음 빌드 번호를 여러 번 눌러 개발자 옵션을 활성화합니다.",
+            "step3": "개발자 옵션에서 USB 디버깅을 켭니다.",
+            "step4": "휴대폰 잠금을 해제한 상태로 Cindy로 돌아와 다시 확인을 누릅니다."
+          },
+          "unauthorized": {
+            "title": "USB 디버깅을 허용하세요",
+            "body": "휴대폰에 표시된 USB 디버깅 권한 대화상자에서 허용을 선택하세요. 가능하면 이 컴퓨터에서 항상 허용을 선택한 후 Cindy로 돌아와 다시 확인을 누르세요."
+          },
+          "offline": {
+            "title": "기기가 offline 상태입니다",
+            "body": "USB 케이블을 뺐다가 다시 연결하고 휴대폰 잠금을 해제한 상태로 Cindy로 돌아와 다시 확인을 누르세요."
+          }
+        },
         "device": {
           "title": "기기",
           "ariaLabel": "기본 Android 기기 선택",
@@ -2878,7 +2908,7 @@
     },
     "contacts": {
       "title": "스마트 연락처",
-      "description": "에이전트를 위한 인물·조직 데이터베이스입니다. 플랫폼 간 신원 조회(이메일 / Feishu / Slack / GitHub id → 이 사람이 누구인지), 관계 배경, 날짜별 이벤트 기록을 제공합니다. 에이전트가 작업 중 자동으로 수집하며, 확신도가 낮은 항목은 확인 대기 큐로 들어갑니다.",
+      "description": "에이전트를 위한 인물·조직 데이터베이스입니다. 플랫폼 간 신원 조회(이메일 / Feishu / Slack / GitHub id → 이 사람이 누구인지), 관계 배경, 날짜별 이벤트 기록을 제공합니다. 에이전트가 작업 중 자동으로 수집하며, 확신도가 낮은 항목은 확인 대기 큐로 들어갑니다. 데이터는 이 기기에만 저장되며, 조회와 정리는 사용자의 모델을 통해 처리됩니다.",
       "enable": {
         "label": "스마트 연락처 사용",
         "description": "켜면 에이전트가 연락처 정보를 조회하고 자동으로 수집할 수 있습니다(불확실한 항목은 확인 대기로 이동). 꺼도 여기에서 기존 데이터를 보고 관리하는 데는 영향이 없습니다.",
@@ -3022,9 +3052,16 @@
         "INTERNAL": "작업에 실패했습니다. 잠시 후 다시 시도하세요."
       },
       "guide": {
-        "hint": "연락처가 아직 비어 있습니다. AI의 도움을 받아 시작하세요 — 대화에 등장한 사람 정리나 시스템 연락처 가져오기가 가능합니다.",
+        "hint": "연락처가 아직 비어 있습니다. 어느 소스에서든 시작해 첫날부터 인맥을 파악하게 하세요:",
         "cta": "AI로 정리하기",
-        "prompt": "스마트 연락처 정리를 도와주세요. 먼저 현재 상태를 확인하고, 기록할 가치가 있는 사람을 추가한 뒤(시스템 연락처/vCard 가져오기 또는 저에게 질문해도 됩니다), 중복이 있으면 확인 후 병합해 주세요."
+        "prompt": "스마트 연락처 정리를 도와주세요. 먼저 현재 상태를 확인하고, 기록할 가치가 있는 사람을 추가한 뒤(시스템 연락처/vCard 가져오기 또는 저에게 질문해도 됩니다), 중복이 있으면 확인 후 병합해 주세요.",
+        "sources": {
+          "mail": "이메일에서 정리",
+          "im": "IM에서 정리",
+          "import": "연락처 가져오기"
+        },
+        "mailPrompt": "이메일에서 스마트 연락처를 만들어 주세요: 먼저 연결된 메일 도구를 확인하고(없다면 연결 방법을 알려 주세요), 최근 6개월간의 주고받은 메일을 스캔해 실제로 왕래하는 연락처를 등록해 주세요 — 빈도가 높고 신원이 명확한 사람은 바로 확정, 불확실한 사람은 pending으로. 마케팅 메일, 알림 봇, 일회성 발신자는 건너뜁니다. 마지막에 어떤 프로필을 만들었는지 보고해 주세요.",
+        "imPrompt": "채팅 도구에서 스마트 연락처를 만들어 주세요: 먼저 연결된 IM(Feishu / Slack / WeChat 등)을 확인하고(없다면 연결 방법을 알려 주세요), 최근 자주 대화하는 사람들을 연락처로 정리해 주세요. 불확실한 사람은 pending으로, 그룹 봇과 일회성 대화는 건너뜁니다. 마지막에 어떤 프로필을 만들었는지 보고해 주세요."
       }
     }
   },
@@ -3871,6 +3908,7 @@
       "preparingAria": "새 버전 준비 중입니다. 잠시만 기다려 주세요",
       "confirmTitle": "재시작하여 업데이트?",
       "confirmHint": "앱이 자동으로 재시작됩니다",
+      "confirmBusyHint": "아직 실행 중인 작업이 있습니다. 재시작하면 작업이 중단됩니다",
       "confirmButton": "재시작",
       "cancel": "취소",
       "confirmTooltip": "재시작하여 업데이트 적용",
@@ -4155,6 +4193,7 @@
         "xai": "구독 직결 Grok 모델은 SSH 원격 세션을 아직 지원하지 않습니다",
         "generic": "구독 직결 모델은 SSH 원격 세션을 아직 지원하지 않습니다"
       },
+      "discovering": "모델 가져오는 중…",
       "effortLabel": "추론 강도",
       "edit": "편집",
       "options": "옵션",
@@ -4507,6 +4546,13 @@
       },
       "detectedLabel": "감지됨",
       "oauthSub": "브라우저에서 인증 페이지가 열리며, 로그인 후 자동으로 연결됩니다"
+    },
+    "inheritedSubscription": {
+      "title": "이 컴퓨터에 이미 로그인된 {{products}} 계정을 그대로 사용합니다",
+      "desc": "Cindy가 이 기기에 로그인된 계정을 그대로 사용했으며, 별도의 인증은 필요하지 않았습니다. 계정을 바꾸거나 연결을 끊으려면 모델 제공자에서 변경하세요.",
+      "openProviders": "모델 제공자 열기",
+      "acknowledge": "확인",
+      "separator": ", "
     }
   },
   "voiceInputOverlay": {
@@ -4999,7 +5045,21 @@
         "aria": "대화가 압축되었습니다"
       },
       "autoResume": {
+        "label": "다시 연결되었습니다",
+        "labelFailed": "다시 연결하지 못했습니다",
+        "labelNeutral": "다시 연결",
+        "detail": {
+          "reason": "중단 원인",
+          "attempt": "이번 재시도 {{attempt}}/{{total}}",
+          "sessionTotal": "이 대화에서 재연결 {{count}}회"
+        }
+      },
+      "autoResumeSeparator": {
         "label": "연결이 중단되어 자동으로 재개되었습니다"
+      },
+      "autoResumePending": {
+        "label": "다시 연결하는 중",
+        "labelWithProgress": "다시 연결하는 중 {{attempt}}/{{total}}"
       },
       "agentSwitch": {
         "label": "{{from}}에서 {{to}}(으)로 전환됨",
@@ -5036,7 +5096,6 @@
       "openInSidebarFailed": "사이드바 브라우저에서 열지 못했습니다"
     },
     "ghostSummon": {
-      "overline": "플러그인 호출 · GHOST",
       "directiveLabel": "모델에 추가된 지시문",
       "legend": "강조 표시 = 플러그인 매니페스트에서 주입된 값 · 나머지는 시스템 고정 템플릿",
       "expandAria": "모델에 추가된 지시문 보기",
@@ -5046,7 +5105,12 @@
       "mentionDirectiveLabel": "모델에 추가된 힌트",
       "semanticExpandAria": "이 호출에 대한 설명 보기",
       "semanticNote": "AI가 메시지의 의미를 바탕으로 이 플러그인을 스스로 호출했습니다. 이 메시지에는 기계 지시문이 추가되지 않았습니다.",
-      "listSeparator": ", "
+      "listSeparator": ", ",
+      "status": {
+        "running": "호출 중…",
+        "called": "호출됨",
+        "done": "완료됨"
+      }
     },
     "userMessage": {
       "attachmentPrefix": "첨부: ",

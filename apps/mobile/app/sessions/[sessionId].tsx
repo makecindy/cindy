@@ -124,6 +124,7 @@ import {
 import {
   MOBILE_MAX_ATTACHMENTS,
   attachmentDisplayLabel,
+  mergeAttachmentsWithinLimit,
 } from '@/session/attachments';
 import {
   ContextSheet,
@@ -139,6 +140,7 @@ import { ImageLightbox } from '@/session/ImageLightbox';
 import { pickWriteFields, retryPatchWhileLatest, writeGuardFields } from '@/session/swipeRowRegistry';
 import {
   dismissNewSessionCreation,
+  getNewSessionCreationTask,
   retryNewSessionCreation,
   shouldBlockSessionSync,
   stashNewSessionDraftForEdit,
@@ -208,7 +210,7 @@ import {
   useSessionQuotes,
 } from '@/session/chatQuoteStore';
 import { QuoteCapsule } from '@/session/QuoteCapsule';
-import { formatQuotesForSend } from '@cindy/maker-shared/chat-quotes';
+import { formatQuotesForSend, stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { confirmFullAccessChange } from '@/session/fullAccessConfirmation';
@@ -226,12 +228,18 @@ import {
 } from '@/session/composerAttachmentInbox';
 import {
   buildQueuedTextMessage,
+  buildQueueRowPresentation,
   createQueueEditTextState,
   queuedMessageHasEncodedQuotes,
   resolveQueueEditTextSubmission,
   stopOptionsForProjection,
   type QueueEditTextState,
 } from '@/session/inputProjection';
+import {
+  buildPendingSendItems,
+  type MobilePendingSendActions,
+} from '@/session/pendingSendItems';
+import type { PendingSendBubbleActions } from '@/session/PendingSendBubble';
 import {
   acquireQueueEditLock,
   commitQueueEdit,
@@ -280,6 +288,7 @@ import {
   recoverOutboxItemsToComposerDraft,
   replaceOutboxItem,
   type MobileOutboxItem,
+  type MobileRecoverableDraftItem,
 } from '@/session/sessionOutbox';
 import {
   AT_RESOURCE_QUERY_DEBOUNCE_MS,
@@ -448,12 +457,14 @@ import {
   shouldFallbackToLegacyCodexUsage,
 } from '@/session/sessionControls';
 import { buildSessionOperationLayout, composerDisabledReasonI18nKey } from '@/session/sessionOperationLayout';
+import { computeVanishedQueueItems, mergeSettlingItems } from '@/session/queueSettling';
 import {
   summarizeSessionOverview,
   type SessionActionStripActionId,
 } from '@/session/sessionOverview';
 import {
   buildMobileSystemCardData,
+  commandNeedsRemoteSession,
   mergeMobileLocalSlashCommands,
   parseMobileLocalSystemCommand,
 } from '@/session/systemCard';
@@ -568,6 +579,46 @@ function isNotConnectedError(err: unknown): boolean {
 const ENQUEUE_RECONNECT_RETRIES = 3;
 const ENQUEUE_RECONNECT_BACKOFF_MS = 300;
 
+/**
+ * composer 活动条(「思考中 · 0s · N tokens」)的下降沿去抖窗口。
+ *
+ * 运行信号由 sending / 队列可停 / 远端 run status / turn streaming 四路拼成,交接时会
+ * 漏出一两帧「都不为真」的空隙(实测新建会话日志 streaming 1→0→1),活动条会在那里
+ * 闪一下、计时还被重置回 0s。真停了推迟这点时间熄灭无感,交接空隙则被吃掉。
+ */
+const COMPOSER_ACTIVITY_SETTLE_MS = 600;
+
+/** 落定集合 / 基线的空值(模块级常量:引用稳定,不让 memo 每帧失效)。 */
+const EMPTY_SETTLING_ITEMS: readonly QueuedRemoteMessage[] = [];
+const EMPTY_SETTLING_BASELINE: {
+  sessionId: string;
+  queue: readonly QueuedRemoteMessage[];
+  steeringSource: readonly string[];
+  steeringClientIds: ReadonlySet<string>;
+} = { sessionId: '', queue: [], steeringSource: [], steeringClientIds: new Set() };
+
+/**
+ * 「这个会话在被控端还不存在」——所有**需要远端会话**的入口共用的唯一判据。
+ *
+ * 新建乐观管线的合成会话行在 create 成功前带 `pendingLocalCreation`,此刻任何以
+ * sessionId 打过去的 RPC 都会失败。三类入口都要看它(review 收敛检查点:这个语义
+ * 原先只在会话设置那一处写了,slash 命令那条路漏了,于是创建窗口内发 `/context`
+ * 会消费掉草稿再糊一张错误卡):
+ *  - 消息派发:由 outboxDispatchBlockedNow 复合(它还要求字段权威、管线已收口);
+ *  - 会话设置类 RPC(model / effort / fast / permission / plan);
+ *  - 需要远端的 slash 命令(/context 取用量、/learn 打蒸馏)。
+ *
+ * 行不存在也算「不存在」:那种状态下这些 RPC 同样无处可去。
+ */
+function isRemoteSessionMissing(row: RemoteSession | null | undefined): boolean {
+  return !row || row.pendingLocalCreation === true;
+}
+
+/** 恢复进「只有一个输入框」的新建页时,气泡文本要剥掉产品私有 marker。 */
+function outboxItemDraftText(item: MobileOutboxItem): string {
+  return (item.quotesEncoded ? stripChatQuoteMarkerLines(item.text) : item.text).trim();
+}
+
 /** 编辑保存的降级判定:附件集合(按 id,顺序不敏感)未变时可退回 update-text。 */
 function attachmentIdSetsEqual(
   a: readonly { id: string }[] | undefined,
@@ -589,8 +640,23 @@ function restoreOutboxItemsToDraft(items: readonly MobileOutboxItem[]): void {
     sessionItems.push(item);
     itemsBySession.set(item.sessionId, sessionItems);
   }
-
   for (const [draftSessionId, sessionItems] of itemsBySession) {
+    restoreRecoverableItemsToDraft(draftSessionId, sessionItems);
+  }
+}
+
+/**
+ * 把一组待发条目按给定顺序合并回某个会话的草稿。
+ *
+ * 显式收 sessionId(而不是从条目上读)是为了让**不属于 outbox 的消息**也能参与同一次
+ * 合并:新建会话 enqueue 失败时,首条消息来自 creationTask.draft,必须排在创建期间攒下
+ * 的后续消息前面,否则用户无法恢复原始顺序(重试后续会超到首条前面)。
+ */
+function restoreRecoverableItemsToDraft(
+  draftSessionId: string,
+  sessionItems: readonly MobileRecoverableDraftItem[],
+): void {
+  {
     const existingVisibleText = readComposerDraftSync(draftSessionId)?.trim() ?? '';
     const existingQuotes = [...getQuotes(draftSessionId)];
     const existingOrderedDraft = resolveOrderedQuoteDraft(
@@ -733,6 +799,7 @@ export default function SessionScreen() {
     discardAllPendingUploads,
     waitForPendingUploads,
     claimActiveUploads,
+    releaseClaimedUploads,
     waitForPastePlaceholdersSettled,
     hasPastePlaceholders,
     getPendingUploadCount,
@@ -842,11 +909,96 @@ export default function SessionScreen() {
   // 后落库推送,device-link 下两者相隔可感知——此间继续渲染半透明气泡(转圈徽标),
   // 消息回流(clientId 进入 queueHiddenClientIds)或超时后移除,保证「原位变实」
   // 不闪断。用户主动删除的条目经 locallyRemoved 集合排除,不产生幽灵气泡。
-  const [settlingQueueItems, setSettlingQueueItems] = useState<readonly QueuedRemoteMessage[]>([]);
+  // 状态本体带归属会话:同一个 SessionScreen 实例会原地从会话 A 切到 B,而清理是**被动**
+  // effect(layout effect 先跑、它后跑),清理落地前 B 的首帧会照着 A 的残留画气泡 ——
+  // 用户会在 B 里看到一瞬间 A 的消息内容(review P1)。带上 sessionId 后读侧一律先核身份,
+  // 不匹配即视为空,时序不再影响正确性;被动清理只剩释放内存的作用。
+  const [settlingState, setSettlingState] = useState<{
+    sessionId: string;
+    items: readonly QueuedRemoteMessage[];
+  }>(() => ({ sessionId, items: [] }));
+  const settlingQueueItems = settlingState.sessionId === sessionId ? settlingState.items : EMPTY_SETTLING_ITEMS;
+  /** 更新本会话的落定集合;跨会话残留一律先丢掉再算(不把 A 的条目并进 B)。 */
+  const setSettlingQueueItems = useCallback((
+    updater: (current: readonly QueuedRemoteMessage[]) => readonly QueuedRemoteMessage[],
+  ) => {
+    setSettlingState((current) => {
+      const base = current.sessionId === sessionId ? current.items : EMPTY_SETTLING_ITEMS;
+      const next = updater(base);
+      if (next === base && current.sessionId === sessionId) return current;
+      return { sessionId, items: next };
+    });
+  }, [sessionId]);
   const settlingAddedAtRef = useRef<Map<string, number>>(new Map());
-  const prevPendingQueueRef = useRef<readonly QueuedRemoteMessage[]>([]);
-  const prevSteeringClientIdsRef = useRef<ReadonlySet<string>>(new Set());
-  const locallyRemovedQueueClientIdsRef = useRef<Set<string>>(new Set());
+  /**
+   * 「附件 ossRef → 发送时刻的本地预览 file://」。
+   *
+   * 排队气泡里的图不能等 sentAttachmentThumbStore 那条链(上传落定 → 拷进自有目录 →
+   * AsyncStorage hydrate)——期间查询一律返回 null,气泡只能画空占位格。发送时手边就有
+   * 预览,记下来直接用;store 仍是重开会话 / 预览失效后的后备。
+   * 上限防无界:窗口本来就短(消息回流即不再需要),留 64 条覆盖极端连发。
+   */
+  const sentPreviewByOssRefRef = useRef<Map<string, string>>(new Map());
+  const rememberSentAttachmentPreviews = useCallback((
+    attachments: readonly RemoteSerializedAttachment[],
+    previewOf: (attachment: RemoteSerializedAttachment) => string | null | undefined,
+  ) => {
+    const map = sentPreviewByOssRefRef.current;
+    for (const attachment of attachments) {
+      const ossRef = attachment.url ?? attachment.path;
+      const preview = previewOf(attachment);
+      if (!ossRef || !preview) continue;
+      map.set(ossRef, preview);
+    }
+    while (map.size > 64) {
+      const oldest = map.keys().next();
+      if (oldest.done) break;
+      map.delete(oldest.value);
+    }
+  }, []);
+  // 「乐观气泡已上屏、enqueue RPC 尚未落定」的 clientId:这段窗口消息是否真的发出
+  // 还没有答案(弱网可达数秒,且失败会回滚摘除气泡),徽标必须是转圈而不是「排入
+  // 队尾」——后者是已确认入队的语义。成功 / 回滚 / 转失败任一落定即移除。
+  const [sendingQueueClientIds, setSendingQueueClientIds] = useState<ReadonlySet<string>>(new Set());
+  const markQueueItemSending = useCallback((clientId: string) => {
+    setSendingQueueClientIds((current) => {
+      if (current.has(clientId)) return current;
+      const next = new Set(current);
+      next.add(clientId);
+      return next;
+    });
+  }, []);
+  const clearQueueItemSending = useCallback((clientId: string) => {
+    setSendingQueueClientIds((current) => {
+      if (!current.has(clientId)) return current;
+      const next = new Set(current);
+      next.delete(clientId);
+      return next;
+    });
+  }, []);
+  /**
+   * 落定判定的基线:上一帧的 pendingQueue 与插队标记。
+   *
+   * 必须是 state,不能是 ref(review P1)。render 阶段的现算(derivedSettlingItems)拿它
+   * 当输入,而 useMemo 只在**列出的依赖**变化时重算——基线放 ref 时它推进不触发重算,
+   * memo 就带着「上一次转移」的答案继续活着:队首被其它控制端删除 / 被 /clear 消化、
+   * 消息永不回流时,10s 超时把条目从 settlingQueueItems 移除后,过期缓存又把它加回来,
+   * 转圈永不停。放 state 后 memo 的依赖 = 它的全部输入,这类错误在结构上不可能再出现。
+   * 存 projection 的原数组引用(不拷贝)是为了让「本帧是否已处理过」可用身份判定。
+   */
+  const [settlingBaselineState, setSettlingBaseline] = useState<{
+    sessionId: string;
+    queue: readonly QueuedRemoteMessage[];
+    steeringSource: readonly string[];
+    steeringClientIds: ReadonlySet<string>;
+  }>(() => ({ sessionId, queue: [], steeringSource: [], steeringClientIds: new Set() }));
+  // 基线同样按会话核身份:切到 B 的首帧若拿 A 的队列当基线,A 里有、B 里没有的条目会被
+  // 判成「刚出队」,当场把 A 的消息画进 B(review P1)。不匹配 → 空基线 = 判不出消失。
+  const settlingBaseline = settlingBaselineState.sessionId === sessionId
+    ? settlingBaselineState
+    : EMPTY_SETTLING_BASELINE;
+  /** 用户本地主动删除的排队条目(同上:落定判定的输入,必须对 memo 可见)。 */
+  const [locallyRemovedQueueClientIds, setLocallyRemovedQueueClientIds] = useState<ReadonlySet<string>>(new Set());
   const [pendingHistoryExpanded, setPendingHistoryExpanded] = useState(false);
   const [pendingInteractionActiveRequestId, setPendingInteractionActiveRequestId] = useState<string | null>(null);
   const [pendingPlanViewerState, setPendingPlanViewerState] = useState<MobilePlanViewerState>('half');
@@ -1302,27 +1454,36 @@ export default function SessionScreen() {
   );
   // 缓存种入的会话行只是首屏骨架:字段经瘦身/截断(240 字符),不能作为发送参数
   // (buildQueuedTextMessage 会把 workingDir / model / permission 复制进队列请求)。
-  // fresh 元数据(getSession→upsertDeviceSession)到达前禁发,输入框仍可编辑存草稿
-  // (复用降级 composer 既有语义;codex review R15)。
   const cacheSeededReason = currentSession?.cacheSeeded
     ? t('session.screen.composerSyncing')
     : null;
-  // 新建会话乐观管线在途:合成行(pendingLocalCreation)在被控端确认前禁发,
-  // 输入框仍可编辑存草稿(与 cacheSeeded 同一降级通道);权威 upsert 后自净解禁。
+  // 新建会话乐观管线在途:合成行(pendingLocalCreation)期间会话可能还没在被控端建成,
+  // 且首条 enqueue 落定前抢发的消息 sendAtMs 会早于首条、被排到它前面
+  // (newSessionCreation.ts 的 sendAtMs 顺序注释)。
   const pendingCreationReason = currentSession?.pendingLocalCreation
     ? t('session.screen.composerCreating')
     : null;
+  // 会话设置类动作(model / effort / fast / permission / plan)在会话建成前不可用:
+  // 它们是打到被控端会话的 RPC。cacheSeeded 不锁——那种会话在被控端是存在的,只是
+  // 本地行还是瘦身缓存。硬门在 runControlAction 里,这里供按钮表达灰态。
+  // 判据与命令式路径共用 isRemoteSessionMissing(见其注释):这里是渲染需要的
+  // reactive 形态,send / runControlAction 用读 store 的 Now 形态。
+  const sessionSettingsLocked = isRemoteSessionMissing(currentSession);
+  // 这两条理由**不再**进 composer 的 readOnlyReason:共享模型会据此把整个输入框换成
+  // 「只读模式」卡片,而它们表达的只是「会话参数还没就绪」——每次新建会话都必然经过,
+  // 用户看到的是「刚发出消息就变只读」。改为:composer 全程正常,这期间发出的消息压进
+  // 本地 outbox(转圈气泡上屏),就绪后由 pumpOutbox 按 FIFO 自动派发(sendAtMs 在
+  // dispatch 时才生成,顺序天然正确)。判据见 outboxDispatchBlockedNow。
   const sessionOperationLayout = useMemo(
     () => buildSessionOperationLayout({
       hasCurrentSession,
       hasActivePendingInteraction,
       pendingInteractionBlocksComposer,
       remoteUnavailableReason,
-      // composer 用 composer-only reason:Lead → editable(可发消息),worker → read-only;
-      // 缓存种入行在 fresh 同步前同走此禁发通道。
-      readOnlyReason: cacheSeededReason ?? pendingCreationReason ?? composerReadOnlyReason,
+      // composer 用 composer-only reason:Lead → editable(可发消息),worker → read-only。
+      readOnlyReason: composerReadOnlyReason,
     }),
-    [cacheSeededReason, composerReadOnlyReason, hasActivePendingInteraction, hasCurrentSession, pendingCreationReason, pendingInteractionBlocksComposer, remoteUnavailableReason],
+    [composerReadOnlyReason, hasActivePendingInteraction, hasCurrentSession, pendingInteractionBlocksComposer, remoteUnavailableReason],
   );
   useEffect(() => {
     if (!pendingInteractionActiveRequestId) return;
@@ -1358,7 +1519,12 @@ export default function SessionScreen() {
   // inline 队列操作可用性:旧队列弹层由 showQueue 整体隐藏(离线/被撤销、pending
   // interaction 等),inline 化后气泡必须留在消息流里,故改为保留渲染、按同一规则
   // 禁用操作(取消/编辑/插话/重试/恢复),禁用理由沿用 composerDisabledReason。
+  // 会话参数未就绪(缓存种入 / 新建在途)时队列行仍只读:取消 / 编辑 / 插队都是打到
+  // 被控端队列的 RPC,会话在那边可能还不存在。composer 已按乐观语义放开,只有这些
+  // 队列操作留在禁用档。
   const queueInlineReadOnlyReason = collaborationReadOnlyReason
+    ?? cacheSeededReason
+    ?? pendingCreationReason
     ?? (sessionOperationLayout.showQueue ? null : composerDisabledReason);
   const showMessageHistory = sessionOperationLayout.messageHistoryMode === 'visible'
     || (sessionOperationLayout.messageHistoryMode === 'collapsed' && pendingHistoryExpanded);
@@ -1829,7 +1995,7 @@ export default function SessionScreen() {
       {renderComposerAttachmentButton()}
       {planModeOn ? (
         <PlanModeChip
-          disabled={!canUseComposer || controlBusy}
+          disabled={!canUseComposer || controlBusy || sessionSettingsLocked}
           onExit={() => togglePlanMode(false)}
           testID="session.planModeChip"
         />
@@ -2059,18 +2225,28 @@ export default function SessionScreen() {
     extraDirBrowsePath,
   ]);
 
+  // 切会话时清掉上一个会话的排队交互态。
+  //
+  // 必须跳过首次挂载(实测 P1):React 的提交顺序是「先所有 layout effect,再所有 effect」,
+  // 而 settling 的 vanish 检测是 layout effect —— 首帧它已经先记下「进入会话时队列长什么
+  // 样」,这里紧接着把落定基线擦成空,首条消息被 drain 时就拿 [] 比 [],判不出
+  // 「落定中」,排队气泡凭空消失只剩「正在同步」骨架(新建会话 100% 命中:进入会话页时首条
+  // 消息就在队列里;打开已有会话时队列本就是空的,所以看不出来)。
+  // 真正切会话才需要清:那时旧会话的队列快照对新会话没有意义。
+  const resetForSessionIdRef = useRef(sessionId);
   useEffect(() => {
+    if (resetForSessionIdRef.current === sessionId) return;
+    resetForSessionIdRef.current = sessionId;
     setSettingsOpen(false);
     setQueueSelectedClientId(null);
     // ref 与 state 同步清:解锁已由下方 cleanup effect(旧 sessionId 闭包)在本
     // effect body 之前完成,这里再清 ref 是幂等的,保证两者时刻一致。
     queueEditingRef.current = null;
     setQueueEditing(null);
-    setSettlingQueueItems([]);
+    setSettlingQueueItems(() => EMPTY_SETTLING_ITEMS);
     settlingAddedAtRef.current.clear();
-    prevPendingQueueRef.current = [];
-    prevSteeringClientIdsRef.current = new Set();
-    locallyRemovedQueueClientIdsRef.current.clear();
+    setSettlingBaseline({ ...EMPTY_SETTLING_BASELINE, sessionId });
+    setLocallyRemovedQueueClientIds(new Set());
   }, [sessionId]);
 
   // 切会话 / 卸载时收尾上一个会话的排队编辑态:cleanup 闭包持旧 sessionId,
@@ -2747,6 +2923,52 @@ export default function SessionScreen() {
   }, [deviceId, deviceName, maker, openLink, sessionId, subscribe]);
   const load = useRemoteSyncTask(() => syncSession());
 
+  /** 恢复路径里装不下的附件:中转对象回收,不留无人认领的已上传对象。 */
+  const discardRecoveredAttachments = (attachments: readonly RemoteSerializedAttachment[]) => {
+    for (const attachment of attachments) {
+      discardMobileUploadedAttachment(attachment, { getToken: () => auth.getAccessToken() });
+    }
+  };
+
+  /**
+   * 把创建失败交还的附件并入 composer 托盘(enqueue-failed 的两条分支共用一条收尾)。
+   *
+   * 一条草稿只能带 MOBILE_MAX_ATTACHMENTS 个附件,而恢复的可能是 N 条消息的附件之和,
+   * 溢出无法避免。取舍顺序:**托盘里已有的**(用户正拿着、屏幕上看得见)> 首条消息 >
+   * 后续消息;溢出的回收中转对象 + 明确告知。两条铁律(review P1 收敛检查点):
+   *  - 不静默丢:装不下就说出来,绝不无声消失;
+   *  - 不删活的:discard 只会落在没进托盘的附件上,不碰用户正在编辑的东西。
+   */
+  const adoptRecoveredAttachments = (
+    firstMessageAttachments: readonly RemoteSerializedAttachment[],
+    followUps: readonly MobileOutboxItem[],
+  ) => {
+    const followUpAttachments = followUps.flatMap(outboxItemAttachments);
+    if (firstMessageAttachments.length === 0 && followUpAttachments.length === 0) return;
+    const withFirst = mergeAttachmentsWithinLimit(attachmentsRef.current, firstMessageAttachments);
+    const withFollowUps = mergeAttachmentsWithinLimit(withFirst.merged, followUpAttachments);
+    // 托盘缩略图:恢复的图片带上发送时刻记下的本地预览,否则回到托盘退化成无图 chip
+    // (内容在、但用户看不出是哪张图)。
+    const previewByAttachmentId: Record<string, string> = {};
+    for (const item of followUps) {
+      item.attachmentSlots.forEach((slot, index) => {
+        const previewUri = item.slotMeta[index]?.previewUri;
+        if (slot && previewUri) previewByAttachmentId[slot.id] = previewUri;
+      });
+    }
+    if (Object.keys(previewByAttachmentId).length > 0) {
+      // 已有映射优先:同 id 的现有预览是用户此刻正看着的那张。
+      setAttachmentPreviews((current) => ({ ...previewByAttachmentId, ...current }));
+    }
+    attachmentsRef.current = withFollowUps.merged;
+    setAttachments(withFollowUps.merged);
+    const dropped = [...withFirst.dropped, ...withFollowUps.dropped];
+    discardRecoveredAttachments(dropped);
+    if (dropped.length > 0) {
+      setAttachmentError(t('session.screen.attachmentsNotCarriedBack', { count: dropped.length }));
+    }
+  };
+
   // 新建会话乐观管线的收口响应:
   //  - running → task 移除(成功):守卫解除,补一轮完整同步(权威 meta / 交互 / projection);
   //  - create-failed:Alert 重试面(重试 = 同 id 重跑管线,幂等安全;返回编辑 = 草稿
@@ -2776,7 +2998,37 @@ export default function SessionScreen() {
           style: 'cancel',
           onPress: () => {
             if (!creationTask) return;
-            stashNewSessionDraftForEdit(creationTask);
+            // 创建期间发出的后续消息必须一起带回新建页(review P1):它们此刻在 outbox 里,
+            // 而下一行 dismiss 会连同合成会话行一起删掉——会话页 unmount 时 cleanup 会把它们
+            // 写进那个已经不存在的会话的草稿,用户在新建页看不到、也再也找不回来。
+            // 新建页只有一个首条消息输入框,所以按序拼成文本、附件按 id 去重合并后一起 stash。
+            // 上传任务保不住:本页(连同 upload controller)马上就要销毁,只能取消
+            // 并回收,再把「没能带回多少」告知用户(review P1:静默丢等于偷走内容)。
+            const { items: followUps, cancelledUploadCount } = takeOutboxForSession(sessionId, 'cancel');
+            if (followUps.length > 0) {
+              const { merged, dropped } = mergeAttachmentsWithinLimit(
+                creationTask.attachments,
+                followUps.flatMap(outboxItemAttachments),
+              );
+              // 装不下的中转对象在这里回收:草稿带不走它们,留着就是没人认领的垃圾。
+              discardRecoveredAttachments(dropped);
+              const unrecoveredCount = dropped.length + cancelledUploadCount;
+              stashNewSessionDraftForEdit(creationTask, {
+                draft: {
+                  ...creationTask.draft,
+                  firstMessage: [
+                    creationTask.draft.firstMessage,
+                    ...followUps.map(outboxItemDraftText),
+                  ].filter(Boolean).join('\n\n'),
+                },
+                attachments: merged,
+                notice: unrecoveredCount > 0
+                  ? t('session.screen.attachmentsNotCarriedBack', { count: unrecoveredCount })
+                  : null,
+              });
+            } else {
+              stashNewSessionDraftForEdit(creationTask);
+            }
             dismissNewSessionCreation(sessionId, { removeSyntheticRow: true });
             router.replace({ pathname: '/sessions/new', params: { deviceId, deviceName } });
           },
@@ -2792,37 +3044,58 @@ export default function SessionScreen() {
       return;
     }
     if (status === 'enqueue-failed') {
+      // 首条消息没发出,而创建期间用户可能已经发了后续消息(composer 全程可用)。
+      //
+      // 「首条回输入框 + 后续留在 outbox」是不可恢复的:重试失败的 outbox 条目会把后续
+      // 消息发到首条前面,而重发首条又会追加到失败条目之后被挡住,原始顺序无论怎么操作
+      // 都拼不回来(review P1)。所以两者必须一起交回 —— 全部按序合并进同一份草稿,
+      // 首条在前,用户重发一次即恢复原顺序。
+      // 留在本页:在途 / 失败的上传任务交还托盘,继续跑完就落进附件托盘(review P1)。
+      const { items: followUps } = takeOutboxForSession(sessionId, 'release-to-tray');
       if (creationTask) {
-        // 等待窗口内 composer 可编辑(pendingLocalCreation 只禁发不禁输入),
-        // 用户可能已经打了下一段草稿 / 加了新附件——回填不能覆盖(codex review
-        // P2)。文本:空则回填,非空则把首条消息按时间序前置合并;附件:按 id
-        // 去重合并,回填的首条附件在前,超限截断(信息不静默丢,上限内保全)。
+        // 等待窗口内用户可能已经打了下一段草稿 / 加了新附件——回填不能覆盖(codex review
+        // P2)。文本:首条 + 后续消息按序前置到现有草稿之前(引用块与富文本结构由
+        // recoverOutboxItemsToComposerDraft 保留);附件走 adoptRecoveredAttachments。
         const restoredText = creationTask.draft.firstMessage;
-        if (restoredText) {
-          setComposerDraft((current) => {
-            const existing = current.trim();
-            if (!existing) return restoredText;
-            if (existing === restoredText.trim()) return current;
-            return `${restoredText}\n\n${current}`;
-          });
-        }
-        if (creationTask.attachments.length > 0) {
-          setAttachments((current) => {
-            const merged = [...creationTask.attachments];
-            for (const attachment of current) {
-              if (merged.length >= MOBILE_MAX_ATTACHMENTS) break;
-              if (merged.some((item) => item.id === attachment.id)) continue;
-              merged.push(attachment);
-            }
-            return merged;
-          });
-        }
+        const recoverables: MobileRecoverableDraftItem[] = [
+          ...(restoredText
+            ? [{
+                text: restoredText,
+                // draft.firstMessage 是发送文本,可能含产品引用 marker:剥离前后不同即说明有。
+                quotesEncoded: stripChatQuoteMarkerLines(restoredText) !== restoredText,
+                pastedTextRanges: [],
+                slashCommandRanges: [],
+                agentReferences: [],
+              }]
+            : []),
+          ...followUps,
+        ];
+        if (recoverables.length > 0) restoreRecoverableItemsToDraft(sessionId, recoverables);
+        adoptRecoveredAttachments(creationTask.attachments, followUps);
+      } else if (followUps.length > 0) {
+        // task 已被消费(极端竞态):后续消息仍然要回草稿,不能随 outbox 清空蒸发。
+        // 附件走同一条收尾(这条分支原先只恢复文本,附件连带丢掉)。
+        restoreRecoverableItemsToDraft(sessionId, followUps);
+        adoptRecoveredAttachments([], followUps);
       }
       setError(creationTask?.error ?? t('session.screen.firstMessageNotSent'));
       dismissNewSessionCreation(sessionId);
       void load();
     }
   }, [creationTask, deviceId, deviceName, load, router, sessionId, setComposerDraft]);
+
+  // 排队行里该显示「在途转圈」的 clientId:本页 enqueue 在途的条目,加上新建会话
+  // 乐观管线仍在跑(create + 首条 enqueue 都还没确认)时的首条消息——它同样是
+  // 「已上屏但没确认发出」,不能画排队 icon。
+  const sendingQueueBadgeClientIds = useMemo(() => {
+    const creationPendingClientId = creationTask?.status === 'running'
+      ? creationTask.firstMessageClientId
+      : null;
+    if (!creationPendingClientId || sendingQueueClientIds.has(creationPendingClientId)) {
+      return sendingQueueClientIds;
+    }
+    return new Set([...sendingQueueClientIds, creationPendingClientId]);
+  }, [creationTask, sendingQueueClientIds]);
 
   // 已读回执:liveActivity **签名变化且 attention=true**(会话开着时新 turn 完成翻
   // 未读,或 attention 一直为 true 但内容更新——新 turn 完成会经 completed→running→
@@ -2856,15 +3129,17 @@ export default function SessionScreen() {
       let composerFocusFrame: number | null = null;
       const pending = drainComposerAttachments(sessionId);
       if (pending.length > 0) {
-        setAttachments((current) => {
-          const merged = [...current];
-          for (const attachment of pending) {
-            if (merged.length >= MOBILE_MAX_ATTACHMENTS) break;
-            if (merged.some((item) => item.id === attachment.id)) continue;
-            merged.push(attachment);
-          }
-          return merged;
-        });
+        // 判据与创建失败恢复共用同一个 helper(去重 + 上限 + 溢出显式返回):同一语义
+        // 分散实现过三处,其中两处会静默丢弃溢出附件(review 收敛检查点)。
+        // 走 ref 而不是 setAttachments 更新器:更新器必须是纯函数,不能顺手把溢出条数
+        // 写出来(ref 是本文件既有的同步真源,onUploaded 同样先写 ref 再镜像 state)。
+        const { merged, dropped } = mergeAttachmentsWithinLimit(attachmentsRef.current, pending);
+        attachmentsRef.current = merged;
+        setAttachments(merged);
+        // 中转对象的生命周期归投递方(文件浏览器把桌面端文件送进来),这里只负责不静默。
+        if (dropped.length > 0) {
+          setAttachmentError(t('session.common.maxAttachments', { max: MOBILE_MAX_ATTACHMENTS }));
+        }
       }
       // 文件浏览器 lightbox 画笔投递的标注提交:交给标注管线烧录 + 上传进托盘
       // (与聊天 lightbox 直发同链路,annotated 标 / 再编辑真相一致)。
@@ -3038,9 +3313,28 @@ export default function SessionScreen() {
     () => sending || canStopQueue || remoteSessionRunning || currentTurnStreaming,
     [canStopQueue, currentTurnStreaming, remoteSessionRunning, sending],
   );
+  // 活动条信号去抖:isSessionStreaming 由四个来源(sending / canStopQueue /
+  // remoteSessionRunning / currentTurnStreaming)拼成,它们交接时会漏出一两帧空隙
+  // ——实测日志里 streaming 1→0→1,活动条跟着闪一下、计时还被重置回 0s。
+  // 上升沿立即生效(「跑起来了」要第一时间说),下降沿延后熄灭:真停了这点延迟无感,
+  // 交接空隙则被吃掉。换会话立即复位,不让上一会话的粘滞态泄漏过来。
+  // 粘滞态绑定它属于哪个会话:切会话若正好落在去抖窗口内,清零要等提交后的 effect 才跑,
+  // 新会话首帧会顶着上一个会话残留的「思考中」(review P2)。带上 sessionId 后,渲染阶段
+  // 直接判定粘滞态是否属于当前会话,不依赖 effect 的执行时机。
+  const [streamingSticky, setStreamingSticky] = useState<string | null>(null);
   useEffect(() => {
-    setComposerActivityStartedAt(isSessionStreaming ? Date.now() : null);
+    if (isSessionStreaming) {
+      setStreamingSticky(sessionId);
+      return undefined;
+    }
+    const timer = setTimeout(() => setStreamingSticky(null), COMPOSER_ACTIVITY_SETTLE_MS);
+    return () => clearTimeout(timer);
   }, [isSessionStreaming, sessionId]);
+  const showComposerActivity = isSessionStreaming || streamingSticky === sessionId;
+  useEffect(() => {
+    // 计时起点跟着去抖后的信号走:否则空隙一过 startedAt 被重置,活动条从 0s 重新数。
+    setComposerActivityStartedAt(showComposerActivity ? Date.now() : null);
+  }, [showComposerActivity, sessionId]);
   const composerActivityStartedAtMs = remoteSessionRunStatus.startedAt ?? composerActivityStartedAt;
   const composerActivityTokenUsage = remoteSessionRunStatus.tokenUsage;
   const forkOrigin = useMemo(
@@ -3069,22 +3363,38 @@ export default function SessionScreen() {
   //    消费,steer 按 steeringQueueClientIds 标记;两者都不沾的中段消失是远端删除
   //    (桌面端/其它控制端取消),直接放行不渲染转圈幽灵(review P2)。队首的远端
   //    删除无法与派发区分,靠回流判定 + 30s 超时兜底。
-  useEffect(() => {
-    const previous = prevPendingQueueRef.current;
-    const previousSteering = prevSteeringClientIdsRef.current;
+  //
+  // useLayoutEffect 而非 useEffect(实测 P1):pendingQueue 减少与 settling 建立必须落在
+  // 同一帧。用 useEffect 时两者跨帧,中间会漏出「queue=0 settling=0 msgs=0」——首条消息
+  // 刚被 drain、消息还没回流,屏幕上气泡凭空消失、只剩「正在同步」骨架,新建会话每次
+  // 都能看到。layout effect 在绘制前同步 flush 这次 setState,那一帧不会被用户看见。
+  useLayoutEffect(() => {
+    // 本帧的 projection 已经推进过基线 → 这次转移处理完了,直接返回(否则 setState 会
+    // 让本 effect 依赖再次变化,自激成无限循环)。
+    if (
+      settlingBaseline.queue === inputProjection.pendingQueue
+      && settlingBaseline.steeringSource === inputProjection.steeringQueueClientIds
+    ) {
+      return;
+    }
+    const previous = settlingBaseline.queue;
+    const previousSteering = settlingBaseline.steeringClientIds;
     const currentIds = new Set(inputProjection.pendingQueue.map((item) => item.clientId));
     const currentSteering = new Set(inputProjection.steeringQueueClientIds);
-    prevPendingQueueRef.current = [...inputProjection.pendingQueue];
-    prevSteeringClientIdsRef.current = new Set(inputProjection.steeringQueueClientIds);
-    let vanishedPrefixEnd = 0;
-    while (vanishedPrefixEnd < previous.length
-      && !currentIds.has(previous[vanishedPrefixEnd].clientId)) {
-      vanishedPrefixEnd++;
-    }
-    const vanished = previous.filter((item, index) => !currentIds.has(item.clientId)
-      && (index < vanishedPrefixEnd || previousSteering.has(item.clientId) || currentSteering.has(item.clientId))
-      && !queueHiddenClientIds.has(item.clientId)
-      && !locallyRemovedQueueClientIdsRef.current.has(item.clientId));
+    setSettlingBaseline({
+      sessionId,
+      queue: inputProjection.pendingQueue,
+      steeringSource: inputProjection.steeringQueueClientIds,
+      steeringClientIds: currentSteering,
+    });
+    const vanished = computeVanishedQueueItems({
+      previous,
+      current: inputProjection.pendingQueue,
+      previousSteeringClientIds: previousSteering,
+      currentSteeringClientIds: currentSteering,
+      hiddenClientIds: queueHiddenClientIds,
+      locallyRemovedClientIds: locallyRemovedQueueClientIds,
+    });
     const now = Date.now();
     for (const item of vanished) settlingAddedAtRef.current.set(item.clientId, now);
     // 「条目回到队列」(派发失败被塞回队首等)的摘除必须无条件执行,不能只在有
@@ -3098,18 +3408,71 @@ export default function SessionScreen() {
       if (added.length === 0 && kept.length === current.length) return current;
       return [...kept, ...added];
     });
-  }, [inputProjection.pendingQueue, inputProjection.steeringQueueClientIds, queueHiddenClientIds]);
-  // 2) 消息回流即移除(排队气泡消失的同帧正式气泡已在流里,原位变实);
-  useEffect(() => {
+  }, [
+    inputProjection.pendingQueue,
+    inputProjection.steeringQueueClientIds,
+    locallyRemovedQueueClientIds,
+    queueHiddenClientIds,
+    sessionId,
+    setSettlingQueueItems,
+    settlingBaseline,
+  ]);
+  // 「这一条不该再画落定气泡」的唯一判据:已回流(正式消息进流里)或用户本地删除。
+  // render 过滤与 effect 摘除共用它,不再各写一份。
+  const settlingRetired = useCallback(
+    (clientId: string) => queueHiddenClientIds.has(clientId)
+      || locallyRemovedQueueClientIds.has(clientId),
+    [locallyRemovedQueueClientIds, queueHiddenClientIds],
+  );
+  // 2) 回流 / 本地删除即移除(排队气泡消失的同帧正式气泡已在流里,原位变实);
+  //    同样用 layout effect:跨帧会让「落定转圈气泡 + 已回流正式消息」双显一帧
+  //    (实测日志里的 msgs=1 settling=1 那帧),视觉上是同一句话闪成两条。
+  //    本地删除也在这里摘:删除标记与队列出队现在都是 state,谁先落地不确定,标记晚
+  //    一帧到达时上面那个 effect 可能已经把条目记成落定中了——这里无条件复检,让顺序
+  //    不再影响结果(ref 版靠同步写规避,state 版靠自愈)。
+  useLayoutEffect(() => {
     setSettlingQueueItems((current) => {
-      const next = current.filter((item) => !queueHiddenClientIds.has(item.clientId));
+      const next = current.filter((item) => !settlingRetired(item.clientId));
       if (next.length === current.length) return current;
       for (const item of current) {
-        if (queueHiddenClientIds.has(item.clientId)) settlingAddedAtRef.current.delete(item.clientId);
+        if (settlingRetired(item.clientId)) settlingAddedAtRef.current.delete(item.clientId);
       }
       return next;
     });
-  }, [queueHiddenClientIds]);
+  }, [setSettlingQueueItems, settlingRetired]);
+  // render 阶段现算的落定项:上面那个 layout effect 的 setState 要多走一次 render 才落地
+  // (RN 下不保证在绘制前 flush,实测 trace 里 queue=0 settling=0 会先亮一帧),队列减少的
+  // 同一帧屏幕上就没有气泡了。这里用同一份纯判定在 render 时直接算出来补上,与 state 版
+  // 按 clientId 去重。基线推进后(effect 已把这次转移落进 settlingQueueItems)它自然回到
+  // 空集——依赖里列的就是它读的全部输入,不存在「缓存答的是上一次转移」的可能。
+  const derivedSettlingItems = useMemo(
+    () => computeVanishedQueueItems({
+      previous: settlingBaseline.queue,
+      current: inputProjection.pendingQueue,
+      previousSteeringClientIds: settlingBaseline.steeringClientIds,
+      currentSteeringClientIds: new Set(inputProjection.steeringQueueClientIds),
+      hiddenClientIds: queueHiddenClientIds,
+      locallyRemovedClientIds: locallyRemovedQueueClientIds,
+    }),
+    [
+      inputProjection.pendingQueue,
+      inputProjection.steeringQueueClientIds,
+      locallyRemovedQueueClientIds,
+      queueHiddenClientIds,
+      settlingBaseline,
+    ],
+  );
+  // state 版的落定项也在 render 阶段按「已回流」过滤:等 effect 移除会多亮一帧
+  // 「落定气泡 + 正式消息」双显(实测 trace 的 msgs=1 settling=1 那帧),同一句话看着像
+  // 出现了两条。渲染口径统一为「render 现算优先,effect 只负责持久化与超时兜底」。
+  const settlingItemsForRender = useMemo(
+    () => mergeSettlingItems(
+      settlingQueueItems.filter((item) => !settlingRetired(item.clientId)),
+      derivedSettlingItems,
+    ),
+    [derivedSettlingItems, settlingQueueItems, settlingRetired],
+  );
+
   // 3) 超时兜底:被 /clear、队首远端删除等消化而永不回流的条目清除,不留幽灵。
   //    正常派发的「出队→落库回流」在 device-link 上通常亚秒到数秒,10s 已是宽裕
   //    上界;线协议今天没有 accepted/draining 信号,队首远端删除的残余幽灵由此
@@ -3127,7 +3490,7 @@ export default function SessionScreen() {
       }));
     }, SETTLE_TIMEOUT_MS + 500);
     return () => clearTimeout(timer);
-  }, [settlingQueueItems]);
+  }, [setSettlingQueueItems, settlingQueueItems]);
   // session-tail-banner「忽略」过的错误行(本地乐观集合;持久化 dismiss 另发,老被控端
   // 降级本视图隐藏)。声明在 renderItems 之前——errorTailClientId 过滤要用;banner 相关
   // 的其余状态与 handler 在下方 queue handler 区。
@@ -4108,6 +4471,17 @@ export default function SessionScreen() {
       pendingQueue: [...projectionBeforeSend.pendingQueue, queued],
     });
     updateOutbox((items) => items.filter((entry) => entry.clientId !== item.clientId));
+    // outbox 条目的槽位预览接着给排队气泡用:交接后图不能因为换了数据源就消失。
+    rememberSentAttachmentPreviews(
+      outboxItemAttachments(item),
+      (attachment) => {
+        const slotIndex = item.attachmentSlots.findIndex((slot) => slot?.id === attachment.id);
+        return slotIndex >= 0 ? item.slotMeta[slotIndex]?.previewUri : null;
+      },
+    );
+    // outbox 气泡本来就在转圈:交接进 pendingQueue 后 enqueue 仍在途,徽标继续转圈,
+    // 不要在这一帧闪成排队 icon 再回来(也不能谎报「已入队」)。
+    markQueueItemSending(queued.clientId);
     try {
       // 弱网重试与写序边界同 send() 原路径(仅「保证未发出」的 NOT_CONNECTED 自动重发)。
       let projection: InputProjection | undefined;
@@ -4146,7 +4520,33 @@ export default function SessionScreen() {
         failItem(formatRemoteError(err));
       }
       // applied:消息已在桌面队列,按成功继续(不回滚、不报错)。
+    } finally {
+      // 落定(入队确认 / 回 outbox 标失败)后收掉转圈:失败条目的气泡由 outbox 侧
+      // 重新持有(它自己画错误徽标),排队行里不该留下悬空的在途标记。
+      clearQueueItemSending(queued.clientId);
     }
+  };
+
+  /** 会话行的同步真源(store);命令式路径不能读可能落后一帧的 render 快照。 */
+  const readSessionRowNow = () => remoteSessionStore.getSessions().find((item) => item.id === sessionId) ?? null;
+
+  /**
+   * 「会话参数还没就绪,现在不能 enqueue」——outbox 只排队不派发的判据。
+   *
+   * 这三种状态下消息仍然照常上屏(乐观语义,composer 不进只读档),只是派发要等:
+   *  - 会话行还没到:没有任何可用的发送参数;
+   *  - 缓存种入行:字段经瘦身 / 截断(240 字符),不能当发送参数;
+   *  - 新建在途 / 创建管线未收口:会话可能还没在被控端建成,且首条 enqueue 落定前
+   *    抢发的消息 sendAtMs 会早于首条、被排到它前面(newSessionCreation.ts 注释)。
+   *
+   * 读 store 而非 render 快照:pump 是异步循环,每轮都要看当下的真相。
+   */
+  const outboxDispatchBlockedNow = () => {
+    const row = readSessionRowNow();
+    // 「会话在被控端还不存在」是子集;派发还额外要求字段权威、创建管线已收口。
+    if (isRemoteSessionMissing(row)) return true;
+    if (row?.cacheSeeded) return true;
+    return getNewSessionCreationTask(sessionId) !== null;
   };
 
   /** FIFO 派发循环:队首就绪(附件齐、无失败)才派发;失败条目留在队首阻塞后续保顺序。 */
@@ -4157,6 +4557,9 @@ export default function SessionScreen() {
       for (;;) {
         const head = outboxRef.current[0];
         if (!head || !outboxItemReady(head)) return;
+        // 会话未就绪:条目原样留在 outbox(气泡继续转圈,不标失败),就绪时由
+        // 下方的解禁 effect 重新 pump。
+        if (outboxDispatchBlockedNow()) return;
         updateOutbox((items) => replaceOutboxItem(items, { ...head, phase: 'dispatching' }));
         await dispatchOutboxItem({ ...head, phase: 'dispatching' });
       }
@@ -4206,6 +4609,108 @@ export default function SessionScreen() {
   };
 
   const outboxDisplayItems = useMemo(() => outboxItems.map(outboxDisplayItem), [outboxItems]);
+
+  /**
+   * 取出并清空某会话的 outbox 条目(创建失败的两条收尾路径都要用)。
+   *
+   * 必须同步取走:调用方紧接着会 dismiss task / 删合成会话行,留在 ref 里的条目会被
+   * unmount cleanup 写进一个即将消失的会话草稿里,等于丢消息。
+   *
+   * `uploads` 决定在途 / 失败上传任务的归宿——两条收尾路径的答案不同(review P1):
+   *  - `release-to-tray`:交还 composer 托盘(留在本页时的正解)。任务继续跑,落定后
+   *    routeUploadToOutbox 找不到归属条目、产物回落托盘;失败卡也回托盘可重试。取消
+   *    重传是错的:用户已经等过一次上传,粘贴来源的本地文件此时可能已被回收,连重选
+   *    都做不到。
+   *  - `cancel`:取消并回收中转对象,返回未能保住的条数。跨页导航(返回新建页)时
+   *    上传 controller 随会话页销毁,保不住,只能取消 + 由调用方告知用户。
+   */
+  const takeOutboxForSession = (
+    targetSessionId: string,
+    uploads: 'release-to-tray' | 'cancel',
+  ): { items: MobileOutboxItem[]; cancelledUploadCount: number } => {
+    const taken = outboxRef.current.filter((item) => item.sessionId === targetSessionId);
+    if (taken.length === 0) return { items: [], cancelledUploadCount: 0 };
+    updateOutbox((items) => items.filter((item) => item.sessionId !== targetSessionId));
+    const pendingLocalIds = taken.flatMap((item) => [...item.waitingIds, ...item.failedIds]);
+    if (uploads === 'release-to-tray') {
+      // 已就绪附件的中转对象由调用方决定是否随草稿保留,不在这里回收。
+      releaseClaimedUploads(pendingLocalIds);
+      return { items: taken, cancelledUploadCount: 0 };
+    }
+    for (const localId of pendingLocalIds) removePendingUpload(localId);
+    return { items: taken, cancelledUploadCount: pendingLocalIds.length };
+  };
+
+  // 待发送气泡(排队 / 落定 / 本地 outbox)作为消息流末尾的渲染项。
+  //
+  // 它们过去挂在列表 footer,消息回流时要跨 footer↔data 搬家:位置从「footer 落点」跳到
+  // 「列表末项」,空会话时还会被撑满高度的居中同步占位顶到屏幕中间——用户看到的就是
+  // 「气泡在中间 → 消失 → 在底部重新出现」。进 data 后与正式消息同容器、同 key,回流即
+  // 原地变实(见 pendingSendItems.ts)。只喂给消息列表,不进 renderItems——搜索 / 相册 /
+  // diff 计数只认已落库的消息。
+  const pendingSendItems = useMemo(
+    () => {
+      const presentationByClientId = new Map<
+        string,
+        { actions: MobilePendingSendActions; hint: string | null }
+      >();
+      inputProjection.pendingQueue.forEach((item, index) => {
+        const presentation = buildQueueRowPresentation({
+          busy: queueBusy,
+          item,
+          originalIndex: index,
+          projection: inputProjection,
+          queueLength: inputProjection.pendingQueue.length,
+          readOnlyReason: queueInlineReadOnlyReason,
+        });
+        presentationByClientId.set(item.clientId, {
+          actions: presentation.actions,
+          hint: presentation.hint,
+        });
+      });
+      return buildPendingSendItems({
+        queue: inputProjection.pendingQueue,
+        settling: settlingItemsForRender,
+        outbox: outboxDisplayItems,
+        hiddenClientIds: queueHiddenClientIds,
+        sendingClientIds: sendingQueueBadgeClientIds,
+        editingClientId: queueEditing?.clientId ?? null,
+        steeringClientIds: new Set(inputProjection.steeringQueueClientIds),
+        presentationByClientId,
+        previewByOssRef: sentPreviewByOssRefRef.current,
+      });
+    },
+    [
+      inputProjection,
+      outboxDisplayItems,
+      queueBusy,
+      queueEditing?.clientId,
+      queueHiddenClientIds,
+      queueInlineReadOnlyReason,
+      sendingQueueBadgeClientIds,
+      settlingItemsForRender,
+    ],
+  );
+  const messageListItems = useMemo(
+    () => (pendingSendItems.length === 0 ? renderItems : [...renderItems, ...pendingSendItems]),
+    [pendingSendItems, renderItems],
+  );
+  // 解禁唤醒:会话参数就绪(fresh 元数据到达 / 新建管线收口)的那一帧重新 pump,把
+  // 未就绪期间攒下的待发消息按 FIFO 发出去。渲染态判据与 outboxDispatchBlockedNow
+  // 同构(那个读 store,供异步循环用;这个供 effect 依赖比较用)。
+  // 声明位置在创建管线收口 effect 之后:enqueue-failed 那一帧要先把 outbox 条目标成
+  // 失败挡住队首,再轮到这里 pump,否则后续消息会超车到首条消息前面。
+  const outboxDispatchBlocked = !currentSession
+    || currentSession.cacheSeeded === true
+    || currentSession.pendingLocalCreation === true
+    || creationTask !== null;
+  useEffect(() => {
+    if (outboxDispatchBlocked) return;
+    void pumpOutbox();
+    // pumpOutbox 是每 render 重建的普通闭包,不入依赖(入了会每帧重跑);它内部读
+    // outboxRef / store 的最新真相,不依赖捕获值。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [outboxDispatchBlocked]);
 
   async function send(options: {
     draftOverride?: string;
@@ -4272,6 +4777,23 @@ export default function SessionScreen() {
       && pendingSkillAtSend.name === parsedDesktopCommandAtSend.name
         ? null
         : parsedDesktopCommandAtSend;
+    // 需要远端会话的命令在会话建成前必须挡住(review P1)。
+    //
+    // 命令走的是下方「豁免 outbox」的原路径:/context 直接向被控端取用量、/learn 直接
+    // 打蒸馏管线。合成行此刻在被控端还不存在,执行的唯一结果是把草稿消费掉、再糊一张
+    // 错误卡。排队也不成立——outbox 的派发动作是「enqueue 一条消息」,命令原样入队
+    // agent 只会当普通文本忽略。所以挡住 + 明说:草稿此刻还没被乐观清空(清空在下面
+    // 几行),原文留在输入框,几秒后重试即可。纯本地卡不受影响(判据见
+    // commandNeedsRemoteSession)。
+    if (
+      commandNeedsRemoteSession(earlyLocalCommand, earlyDesktopCommand)
+      && isRemoteSessionMissing(readSessionRowNow())
+    ) {
+      setError(t('session.screen.commandWaitsForSession'));
+      sendInFlightRef.current = false;
+      setSending(false);
+      return;
+    }
     const sessionRefsAtSend = outboxEligible && !earlyLocalCommand && !earlyDesktopCommand
       ? extractMobileSessionReferences(text, remoteSessionStore.getSessionDeviceId)
       : [];
@@ -4330,10 +4852,17 @@ export default function SessionScreen() {
     // outboxPumpBusyRef 也算「outbox 在途」:派发起点条目即移出 outbox,enqueue
     // 弱网重试窗内 outbox 可能为空——此时新消息若走原路径会并发 enqueue 超车
     // 在途消息,破坏 FIFO(review P1);计入 pump busy 让它同样进 outbox 排队。
+    // 会话参数未就绪(缓存种入 / 新建在途)同样走本分支:此刻 enqueue 不可用,但消息
+    // 照常上屏,由派发循环在就绪后按序发出——composer 不再为此进只读档。
+    const dispatchBlockedAtSend = outboxDispatchBlockedNow();
     if (outboxEligible && !earlyLocalCommand && !earlyDesktopCommand
-      && (uploadsInFlight > 0 || outboxRef.current.length > 0 || outboxPumpBusyRef.current)) {
+      && (uploadsInFlight > 0 || outboxRef.current.length > 0 || outboxPumpBusyRef.current
+        || dispatchBlockedAtSend)) {
       try {
-        if (!currentSession.workingDir) {
+        // workingDir 校验只对「此刻就能派发」的消息前置:dialogue 会话的工作目录由
+        // 被控端在创建时分配,合成行此刻本就为空,而 dispatchOutboxItem 会在真正派发
+        // 时重读 store 拿权威值并自行校验。
+        if (!dispatchBlockedAtSend && !currentSession.workingDir) {
           setError(t('session.screen.missingWorkingDir'));
           restoreDraftAfterFailure();
           return;
@@ -4669,6 +5198,14 @@ export default function SessionScreen() {
         sessionId: projectionBeforeSend.sessionId || sessionId,
         pendingQueue: [...projectionBeforeSend.pendingQueue, queued],
       });
+      // 排队气泡的图立刻可见(先记预览,再让 projection 变化触发重算)。
+      rememberSentAttachmentPreviews(
+        sendAttachments,
+        (attachment) => attachmentPreviews[attachment.id],
+      );
+      // 乐观气泡此刻还没有「已入队」这个事实:徽标先给转圈,enqueue 落定后才交给
+      // 排队 icon(或随回滚一起消失)。
+      markQueueItemSending(queued.clientId);
       setAttachments([]);
       attachmentsRef.current = [];
       // 标注再编辑真相(矢量笔迹 + 原图副本)不在乐观段清:enqueue 失败回滚恢复
@@ -4737,6 +5274,10 @@ export default function SessionScreen() {
         }
         // applied:消息已在桌面队列(权威 / 推送 projection 已含该 clientId),
         // 按成功继续——不回滚、不报错,后续收尾(plan 恢复 / 映射清理)照常执行。
+      } finally {
+        // 成功、对账认定已入队、回滚 throw 三条路径都算「不再在途」:转圈必须收掉,
+        // 否则回滚后集合残留、同 clientId 重发时首帧仍是转圈。
+        clearQueueItemSending(queued.clientId);
       }
       if (sessionAtSend.permissionMode === 'plan') {
         // 一次性语义(对齐桌面 PR#494 / 产品决策):计划模式只对本条消息生效,发送后
@@ -5015,7 +5556,12 @@ export default function SessionScreen() {
     const removed = index >= 0 ? before.pendingQueue[index] : undefined;
     // 用户主动删除:标记进 locallyRemoved,settling 跟踪不再把这次出队当成
     // "派发中"渲染幽灵气泡;回滚(删除失败)时撤销标记。
-    locallyRemovedQueueClientIdsRef.current.add(clientId);
+    setLocallyRemovedQueueClientIds((current) => {
+      if (current.has(clientId)) return current;
+      const next = new Set(current);
+      next.add(clientId);
+      return next;
+    });
     if (!removed) {
       void runQueueAction(() => maker.input.remove(sessionId, clientId));
       return;
@@ -5026,7 +5572,12 @@ export default function SessionScreen() {
         pendingQueue: current.pendingQueue.filter((item) => item.clientId !== clientId),
       }),
       rollback: (current) => {
-        locallyRemovedQueueClientIdsRef.current.delete(clientId);
+        setLocallyRemovedQueueClientIds((current) => {
+          if (!current.has(clientId)) return current;
+          const next = new Set(current);
+          next.delete(clientId);
+          return next;
+        });
         const next = [...current.pendingQueue];
         next.splice(Math.min(index, next.length), 0, removed);
         return { ...current, pendingQueue: next };
@@ -5139,6 +5690,36 @@ export default function SessionScreen() {
   };
 
   /** 放弃排队消息编辑:解锁 + 回收编辑期新增附件 + 恢复进入前的草稿与附件托盘。 */
+  const pendingSendActions = useMemo<PendingSendBubbleActions>(
+    () => ({
+      busy: queueBusy,
+      selectedClientId: queueSelectedClientId,
+      onSelect: setQueueSelectedClientId,
+      onRemove: (clientId: string) => {
+        setQueueSelectedClientId(null);
+        removeQueueItem(clientId);
+      },
+      onBeginEdit: (clientId: string) => {
+        const target = remoteSessionStore.getInputProjection(sessionId).pendingQueue
+          .find((entry) => entry.clientId === clientId);
+        if (target) beginQueueEdit(target);
+      },
+      onSteer: (clientId: string) => {
+        const target = remoteSessionStore.getInputProjection(sessionId).pendingQueue
+          .find((entry) => entry.clientId === clientId);
+        if (!target) return;
+        setQueueSelectedClientId(null);
+        steerQueueItem(target);
+      },
+      onRetryOutbox: retryOutboxItem,
+      onRemoveOutbox: removeOutboxItem,
+    }),
+    [beginQueueEdit, queueBusy, queueSelectedClientId, removeQueueItem, removeOutboxItem, retryOutboxItem, sessionId, steerQueueItem],
+  );
+
+  // ⚠️ 临时取证(定位「气泡凭空消失」,定位完成后删):会话页实例身份 + 挂载/卸载。
+  // settlingDiag 只在两次「首帧」打出 prev=0,之后再没跑过 —— 强烈指向组件被换了实例
+  // (整棵树重建会清掉 settling / outbox / 落定基线等全部本地状态)。
   const cancelQueueEdit = useCallback(() => {
     const editing = queueEditingRef.current;
     if (!editing) return;
@@ -5221,10 +5802,12 @@ export default function SessionScreen() {
   // 尚未落库回流的间隙):只看队列会在 settling 间隙让 banner 重现、允许对同一失败
   // 重复续跑(review P1)。该值**同时**是 hidden 释放信号与 resolveSessionTailBanner
   // 的抑制输入(continuationInFlight)——单点判定,两处各算一遍曾造成错位(第五轮)。
+  // 用 render 合并后的落定集合(含本帧现算项):否则续跑项被 drain 的那一帧这里会短暂
+  // 判成「不在途」,banner 闪回来一下。
   const tailContinuationInFlight = useMemo(
     () => inputProjection.pendingQueue.some(isContinuationQueueItem)
-      || settlingQueueItems.some(isContinuationQueueItem),
-    [inputProjection.pendingQueue, settlingQueueItems],
+      || settlingItemsForRender.some(isContinuationQueueItem),
+    [inputProjection.pendingQueue, settlingItemsForRender],
   );
   useEffect(() => {
     if (retryHiddenTailClientId === null) return;
@@ -5336,6 +5919,13 @@ export default function SessionScreen() {
     opts?: { recover?: 'rollback' | 'refetch' },
   ) => {
     if (controlBusy) return;
+    // 新建会话在途:会话可能还没在被控端建成,setModel / setPlanMode 这类 RPC 必然
+    // 失败并弹错,把「一切正常」的乐观观感打碎。静默忽略(不发 RPC、不写乐观 patch、
+    // 不报错),对应入口的按钮同期也是灰的;窗口只有几秒。
+    // composer 与发送不受此限:那条路径改走 outbox 排队(见 outboxDispatchBlockedNow)。
+    // 判据与 send 里的命令门同源(sessionSettingsLocked = isRemoteSessionMissing);
+    // 这里用 reactive 形态就够:按钮就是按这一帧的快照渲染的,点击不跨帧竞争。
+    if (sessionSettingsLocked) return;
     setControlBusy(true);
     setError(null);
     let rollbackPatch: Partial<RemoteSession> | null = null;
@@ -5384,12 +5974,17 @@ export default function SessionScreen() {
     } finally {
       setControlBusy(false);
     }
-  }, [controlBusy, currentSession, deviceId, maker, sessionId]);
+  }, [controlBusy, currentSession, deviceId, maker, sessionId, sessionSettingsLocked]);
 
   const writeSessionAgentSwitchIntent = useCallback(async (
     nextIntent: NonNullable<RemoteSession['agentSwitchIntent']>,
   ): Promise<boolean> => {
     if (!deviceId || controlBusy) return false;
+    // 会话建成前不写切换意图:被控端的 switch handler 要求会话行已存在,合成行阶段
+    // 一律 NOT_FOUND。这里是**全部** agent-switch 写入的唯一出口(换模型 / 换 effort /
+    // 换 fast 三条路都经它),门放在这里而不是各调用点,新增入口不会漏(review P1:
+    // 换模型那条路不走 runControlAction,只在那儿加锁就漏了它)。
+    if (sessionSettingsLocked) return false;
     const seq = ++agentSwitchWriteSeqRef.current;
     const previousIntent = normalizeSessionAgentSwitchIntent(
       remoteSessionStore.getSessions().find((item) => item.id === sessionId)?.agentSwitchIntent,
@@ -5448,7 +6043,7 @@ export default function SessionScreen() {
     } finally {
       if (agentSwitchWriteSeqRef.current === seq) setControlBusy(false);
     }
-  }, [controlBusy, deviceId, maker, sessionId]);
+  }, [controlBusy, deviceId, maker, sessionId, sessionSettingsLocked]);
 
   // Context 面板「计划模式」开关,双路径(#494 迁移):
   //  - 新协议(capabilities.planMode.supported):maker:set-plan-mode 开关一级 flag,
@@ -5462,7 +6057,9 @@ export default function SessionScreen() {
   const legacyPlanModeOn = currentSession?.permissionMode === 'plan';
   const planModeOn = planModeCapability ? currentSession?.planModeEnabled === true : legacyPlanModeOn;
   const togglePlanMode = useCallback((next: boolean) => {
-    if (!canUseComposer || !currentSession) return;
+    // sessionSettingsLocked:会话建成前不动权限档(老协议分支还会写
+    // prePlanPermissionModeRef,提前 return 免得留下没生效的「进入前档位」记录)。
+    if (!canUseComposer || sessionSettingsLocked || !currentSession) return;
     if (planModeCapability) {
       void runControlAction(() => maker.setPlanMode(sessionId, next), { planModeEnabled: next });
       return;
@@ -5476,7 +6073,7 @@ export default function SessionScreen() {
     const remembered = prePlanPermissionModeRef.current;
     const restored = remembered && remembered !== 'plan' ? remembered : fallback;
     void runControlAction(() => maker.setPermissionMode(sessionId, restored), { permissionMode: restored });
-  }, [canUseComposer, currentSession, maker, planModeCapability, runControlAction, runtimeOptions, sessionId]);
+  }, [canUseComposer, currentSession, maker, planModeCapability, runControlAction, runtimeOptions, sessionId, sessionSettingsLocked]);
   // 权限位置(设置面板下拉)不体现 plan(对齐桌面 PR#494 / Cursor):新协议下 permissionMode
   // 本就与 plan 正交,直接展示;仅老被控端 permissionMode='plan' 时替换为进入前的底层权限档
   // (无记录时回退首个非 plan 档),激活态由 composer 的 PlanModeChip 表达。
@@ -6895,7 +7492,8 @@ export default function SessionScreen() {
                     focusedRequestKey={focusedMessageRequestKey}
                     followLatestRequestKey={messageListFollowLatestRequestKey}
                     isSessionStreaming={isSessionStreaming}
-                    items={renderItems}
+                    items={messageListItems}
+                    pendingSend={pendingSendActions}
                     loadingEarlier={loadingEarlier}
                     onCopyMessageLink={copyMessageLink}
                     onAddMessageToComposer={canUseComposer ? addMessageToComposer : undefined}
@@ -6932,30 +7530,15 @@ export default function SessionScreen() {
                             state={tailBannerState}
                           />
                         ) : null}
+                        {/* 队列状态横幅(错误 / 凭证等待 / 停止确认 / 暂停)。待发送气泡
+                            不在这里,它们是消息流里的 pending_send 项。 */}
                         <InlineQueueSection
                           busy={queueBusy}
-                          editingClientId={queueEditing?.clientId ?? null}
-                          hiddenClientIds={queueHiddenClientIds}
-                          onBeginEdit={beginQueueEdit}
                           onClearError={clearQueueError}
-                          onRemove={(clientId) => {
-                            setQueueSelectedClientId(null);
-                            removeQueueItem(clientId);
-                          }}
-                          onRemoveOutboxItem={removeOutboxItem}
                           onResume={resumeQueue}
                           onRetryError={retryQueueError}
-                          onRetryOutboxItem={retryOutboxItem}
-                          onSelect={setQueueSelectedClientId}
-                          onSteer={(item) => {
-                            setQueueSelectedClientId(null);
-                            steerQueueItem(item);
-                          }}
-                          outboxItems={outboxDisplayItems}
                           projection={inputProjection}
                           readOnlyReason={queueInlineReadOnlyReason}
-                          selectedClientId={queueSelectedClientId}
-                          settlingItems={settlingQueueItems}
                         />
                       </>
                     )}
@@ -7138,7 +7721,12 @@ export default function SessionScreen() {
             </View>
           ) : (
             <>
-              {isSessionStreaming ? (
+              {/* 消息区还在「正在同步」占位(新建会话第一帧 / 冷开首屏)时不谈运行状态:
+                  「正在同步 + 思考中 + 0s · 0 tokens」三件事同时铺开,反倒像出错,而且
+                  紧接着消息落屏时这条又要重排一次。等有内容了再显示活动条。
+                  判据必须带 messageCount:syncingWhileEmpty 只要 loading 就为真,而收口后
+                  还会再来几轮 load(实测日志),只看它会让已有消息的会话反复熄灭活动条。 */}
+              {showComposerActivity && !(syncingWhileEmpty && messages.length === 0) ? (
                 <View
                   style={[
                     styles.composerActivityFrame,
@@ -7150,7 +7738,7 @@ export default function SessionScreen() {
                     sideTaskRunning={remoteSessionRunStatus.sideTaskRunning}
                     startedAt={composerActivityStartedAtMs}
                     tokenUsage={composerActivityTokenUsage}
-                    visible={isSessionStreaming}
+                    visible={showComposerActivity}
                   />
                 </View>
               ) : null}

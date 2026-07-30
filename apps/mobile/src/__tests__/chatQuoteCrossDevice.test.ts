@@ -47,7 +47,9 @@ describe('mobile cross-device quote wiring', () => {
   });
 
   it('strips private markers from queued and outbox raw-text bubbles', () => {
-    const source = readSource('src/session/InlineQueueSection.tsx');
+    // 气泡文本的构造已从 InlineQueueSection(现在只剩队列状态横幅)搬进消息流渲染项的
+    // 数据层 pendingSendItems.ts —— marker-bearing body 仍然绝不进气泡正文。
+    const source = readSource('src/session/pendingSendItems.ts');
     expect(source).toContain('stripChatQuoteMarkerLines(item.text)');
     expect(source).toContain('item.chatMessage.quotesEncoded === true');
     expect(source).toContain('item.quotesEncoded ? stripChatQuoteMarkerLines(item.text)');

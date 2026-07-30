@@ -272,13 +272,22 @@
           "keyHint": "秘密鍵ファイルを直接読み込みます。パスフレーズは保存しないため、暗号化された鍵には非対応 — ssh-agent が使えない場合のみご使用ください。"
         },
         "identityFile": "秘密鍵ファイルのパス",
-        "agentProxy": "Agent トラフィックをローカルプロキシ経由にする",
-        "agentProxyTip": "リモートに 127.0.0.1 ポートを開き、SSH トンネルでこのマシンのプロキシに中継します。リモートの codex / Claude Code の通信がそこから出ます",
-        "agentProxyAddr": "ローカルプロキシのアドレス",
-        "agentProxyHint": "リモートの 127.0.0.1 にポートを開き、SSH トンネルでローカルプロキシ（例: Clash の 7890）に中継します。{{appName}} はプロキシを提供せず、トンネルのみを張ります。リモート Agent の HTTPS_PROXY がトンネル口を指し、ドメインはお使いのプロキシ側で解決されます。切り替え後、リモートの codex daemon が一度再起動します。",
-        "agentProxyAddrInvalid": "host:port 形式で入力してください（例: 127.0.0.1:7890）",
         "cancel": "キャンセル",
-        "submit": "マシンを追加"
+        "submit": "マシンを追加",
+        "agentProxy": "Agent トラフィックをプロキシ経由にする",
+        "agentProxyTip": "リモートの codex / Claude Code のモデル通信をプロキシ経由にします。Cindy が管理する SSH トンネルでローカルプロキシへ戻すか、リモートから到達可能なプロキシ URL を指定します",
+        "agentProxyModeTunnel": "Cindy 管理トンネル",
+        "agentProxyModeTunnelDesc": "専用 SSH トンネルでローカルプロキシへ中継。リモートポート固定、切断時は自動再接続",
+        "agentProxyModeEnv": "自前プロキシ（環境変数の注入のみ）",
+        "agentProxyModeEnvDesc": "リモートから到達可能なプロキシ URL を指定。トンネルや到達性はご自身で管理",
+        "agentProxyAddr": "ローカルプロキシのアドレス",
+        "agentProxyHint": "リモート 127.0.0.1 の固定ポートを、Cindy が管理する専用 SSH 接続でローカルプロキシ（例: Clash の 7890）へ中継します。{{appName}} はプロキシを提供せず、トンネルのみを張ります。リモート Agent の HTTPS_PROXY は固定ポートに固定され、再接続でずれません。設定変更後、リモートの codex daemon が一度再起動します。",
+        "agentProxyAddrInvalid": "host:port 形式で入力してください（例: 127.0.0.1:7890）",
+        "agentProxyRemotePort": "リモート固定ポート",
+        "agentProxyRemotePortInvalid": "ポートは 1〜65535 の整数で入力してください",
+        "agentProxyUrl": "リモートから到達可能なプロキシ URL",
+        "agentProxyUrlHint": "リモート側で解決されます。リモート上のプロキシ（例: autossh -R で自作したトンネル口）や LAN 内プロキシなど。http / https / socks5 に対応。",
+        "agentProxyUrlInvalid": "http(s):// または socks5:// で始まる URL を、空白や引用符なしで入力してください"
       },
       "detail": {
         "agentSetupTitle": "エージェント設定",
@@ -292,11 +301,6 @@
         "statusInstalled": "インストール済み",
         "statusNotInstalled": "未インストール",
         "claudeCodeName": "Claude Code",
-        "agentProxyTitle": "Agent プロキシトンネル",
-        "agentProxyActive": "リモート 127.0.0.1:{{port}} → ローカル {{target}} · 確立済み",
-        "agentProxyPending": "トンネル確立中 → ローカル {{target}}",
-        "agentProxyWaiting": "ホスト未接続 — 再接続後に自動確立 → ローカル {{target}}",
-        "agentProxyError": "トンネルの確立に失敗: {{message}}",
         "button": {
           "install": "インストール",
           "reinstall": "再インストール",
@@ -305,7 +309,15 @@
           "run": "実行",
           "syncAuth": "認証情報を同期",
           "syncAuthTip": "ローカルの Codex 認証情報をこのリモートにコピーして、再ログインを省きます"
-        }
+        },
+        "agentProxyTitle": "Agent プロキシ",
+        "agentProxyActive": "リモート 127.0.0.1:{{port}} → ローカル {{target}} · 確立済み",
+        "agentProxyPending": "トンネル確立中 → ローカル {{target}}",
+        "agentProxyWaiting": "ホスト未接続 — 再接続後に自動復旧 → ローカル {{target}}",
+        "agentProxyError": "プロキシ設定に失敗: {{message}}",
+        "agentProxyPortBusy": "リモートポート {{port}} が使用中です。解放を待って自動再試行します…（長く続く場合は設定でポートを変更してください）",
+        "agentProxyEnvInfo": "環境変数を注入済み → {{url}}（経路はご自身で管理）",
+        "agentProxyEnvPending": "環境変数の適用待ち → {{url}}（ホスト接続後に自動で反映）"
       },
       "startSession": {
         "title": "このリモートで Codex セッションを開始",
@@ -1949,6 +1961,24 @@
           "failed": "ADB 状態確認に失敗しました: {{message}}",
           "unknownIssue": "ADB の問題: {{issue}}"
         },
+        "connectionGuide": {
+          "connect": {
+            "title": "Android スマートフォンを接続する方法",
+            "adbNote": "Cindy が ADB を自動で準備するため、Android SDK のインストールは不要です。「カスタム ADB パス」は上級者向けです。",
+            "step1": "データ転送に対応した USB ケーブルでスマートフォンとパソコンを接続します。",
+            "step2": "スマートフォンの「設定 → デバイス情報」でビルド番号を連続してタップし、開発者向けオプションを有効にします。",
+            "step3": "「開発者向けオプション」で「USB デバッグ」をオンにします。",
+            "step4": "スマートフォンのロックを解除したまま Cindy に戻り、「再確認」をクリックします。"
+          },
+          "unauthorized": {
+            "title": "USB デバッグを許可してください",
+            "body": "スマートフォンに表示された USB デバッグの許可ダイアログで「許可」を選び、可能なら「このパソコンを常に許可」にチェックを入れてから、Cindy で「再確認」をクリックします。"
+          },
+          "offline": {
+            "title": "デバイスが offline です",
+            "body": "USB ケーブルをいったん抜き差しし、スマートフォンのロックを解除したまま、Cindy に戻って「再確認」をクリックします。"
+          }
+        },
         "device": {
           "title": "デバイス",
           "ariaLabel": "デフォルトの Android デバイスを選択",
@@ -2878,7 +2908,7 @@
     },
     "contacts": {
       "title": "スマート連絡先",
-      "description": "エージェントのための人物・組織データベース。プラットフォーム横断の身元照合(メール / Feishu / Slack / GitHub id → この人は誰か)、関係性の背景、日付付きイベント記録を備えています。エージェントが作業中に自動で収集し、確度の低い項目は確認待ちキューに入ります。",
+      "description": "エージェントのための人物・組織データベース。プラットフォーム横断の身元照合(メール / Feishu / Slack / GitHub id → この人は誰か)、関係性の背景、日付付きイベント記録を備えています。エージェントが作業中に自動で収集し、確度の低い項目は確認待ちキューに入ります。データの保存先はこの端末のみで、検索や整理はお使いのモデルを通じて処理されます。",
       "enable": {
         "label": "スマート連絡先を有効にする",
         "description": "オンにすると、エージェントが連絡先情報を検索・自動収集できます(不確かな項目は確認待ちへ)。オフにしても、ここでの閲覧や管理には影響しません。",
@@ -3022,9 +3052,16 @@
         "INTERNAL": "操作に失敗しました。しばらくしてから再試行してください。"
       },
       "guide": {
-        "hint": "連絡先はまだ空です。AI に手伝ってもらいましょう — 会話に登場した人の整理やシステム連絡先からのインポートができます。",
+        "hint": "連絡先はまだ空です。いずれかのソースから始めて、初日からあなたの人脈を把握させましょう：",
         "cta": "AI で整理する",
-        "prompt": "スマート連絡先の整理を手伝ってください。まず現状を確認し、記録すべき人を追加して(システム連絡先や vCard からのインポート、または私への確認でも構いません)、重複があれば確認のうえ統合してください。"
+        "prompt": "スマート連絡先の整理を手伝ってください。まず現状を確認し、記録すべき人を追加して(システム連絡先や vCard からのインポート、または私への確認でも構いません)、重複があれば確認のうえ統合してください。",
+        "sources": {
+          "mail": "メールから整理",
+          "im": "IM から整理",
+          "import": "連絡先をインポート"
+        },
+        "mailPrompt": "メールからスマート連絡先を作成してください：まず接続済みのメールツールを確認し(なければ接続方法を教えてください)、直近 6 か月のやり取りをスキャンして、双方向のやり取りがある実在の連絡先を登録してください——頻度が高く身元が明確な人は確定で、不確かな人は pending で。マーケティングメール、通知ボット、一度きりの送信者はスキップ。最後に作成した項目を報告してください。",
+        "imPrompt": "チャットツールからスマート連絡先を作成してください：まず接続済みの IM(Feishu / Slack / WeChat など)を確認し(なければ接続方法を教えてください)、最近よく会話する相手を連絡先に整理してください。不確かな人は pending で、グループボットや一時的な会話はスキップ。最後に作成した項目を報告してください。"
       }
     }
   },
@@ -3871,6 +3908,7 @@
       "preparingAria": "新しいバージョンを準備中、お待ちください",
       "confirmTitle": "再起動して更新?",
       "confirmHint": "アプリが自動的に再起動します",
+      "confirmBusyHint": "実行中のタスクがあります。再起動すると中断されます",
       "confirmButton": "再起動",
       "cancel": "キャンセル",
       "confirmTooltip": "再起動して更新を適用",
@@ -4155,6 +4193,7 @@
         "xai": "サブスクリプション直結の Grok モデルは SSH リモートセッションに未対応です",
         "generic": "サブスクリプション直結モデルは SSH リモートセッションに未対応です"
       },
+      "discovering": "モデルを取得中…",
       "effortLabel": "推論強度",
       "edit": "編集",
       "options": "オプション",
@@ -4507,6 +4546,13 @@
       },
       "detectedLabel": "検出済み",
       "oauthSub": "ブラウザで認証ページが開き、ログイン後に自動接続されます"
+    },
+    "inheritedSubscription": {
+      "title": "このパソコンでログイン済みの {{products}} をそのまま使っています",
+      "desc": "Cindy はこの端末でログイン済みのアカウントをそのまま利用しました。別途の認証は不要です。アカウントの切り替えや解除はモデルプロバイダーから行えます。",
+      "openProviders": "モデルプロバイダーを開く",
+      "acknowledge": "了解",
+      "separator": "、"
     }
   },
   "voiceInputOverlay": {
@@ -4999,7 +5045,21 @@
         "aria": "会話を圧縮しました"
       },
       "autoResume": {
+        "label": "再接続しました",
+        "labelFailed": "再接続できませんでした",
+        "labelNeutral": "再接続",
+        "detail": {
+          "reason": "中断の理由",
+          "attempt": "今回の再試行 {{attempt}}/{{total}}",
+          "sessionTotal": "この会話での再接続 {{count}} 回"
+        }
+      },
+      "autoResumeSeparator": {
         "label": "接続が中断されたため、自動的に再開しました"
+      },
+      "autoResumePending": {
+        "label": "再接続中",
+        "labelWithProgress": "再接続中 {{attempt}}/{{total}}"
       },
       "agentSwitch": {
         "label": "{{from}} から {{to}} に切り替えました",
@@ -5036,7 +5096,6 @@
       "openInSidebarFailed": "サイドバーのブラウザで開けませんでした"
     },
     "ghostSummon": {
-      "overline": "プラグイン呼び出し · GHOST",
       "directiveLabel": "モデルに追加された指示",
       "legend": "ハイライト = プラグインのマニフェスト由来の注入値 · それ以外はシステム固定テンプレート",
       "expandAria": "モデルに追加された指示を表示",
@@ -5046,7 +5105,12 @@
       "mentionDirectiveLabel": "モデルに追加されたヒント",
       "semanticExpandAria": "この呼び出しの説明を表示",
       "semanticNote": "AI がメッセージの意味に基づいてこのプラグインを自律的に呼び出しました。このメッセージに機械指示は追加されていません。",
-      "listSeparator": "、"
+      "listSeparator": "、",
+      "status": {
+        "running": "呼び出し中…",
+        "called": "呼び出し済み",
+        "done": "完了"
+      }
     },
     "userMessage": {
       "attachmentPrefix": "添付：",

@@ -38,6 +38,8 @@
     "backToEdit": "返回编辑",
     "retry": "重试",
     "firstMessageNotSent": "首条消息没有发出，内容已还原到输入框。",
+    "attachmentsNotCarriedBack": "有 {{count}} 个附件没能一起带回，需要重新添加。",
+    "commandWaitsForSession": "对话还在创建中，这个命令要等对话就绪后才能用，请稍后再发。",
     "locateMessageNotFound": "未找到要定位的消息。",
     "shareNoLocalImage": "无法获取本地图片文件",
     "shareFailedTitle": "分享失败",

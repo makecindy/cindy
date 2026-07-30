@@ -38,6 +38,8 @@
     "backToEdit": "編集に戻る",
     "retry": "再試行",
     "firstMessageNotSent": "最初のメッセージは送信されませんでした。内容は入力欄に復元されました。",
+    "attachmentsNotCarriedBack": "{{count}} 件の添付は復元できませんでした。もう一度追加してください。",
+    "commandWaitsForSession": "会話の作成中です。このコマンドはセッションの準備が必要なため、少し待ってから送信してください。",
     "locateMessageNotFound": "移動先のメッセージが見つかりませんでした。",
     "shareNoLocalImage": "ローカルの画像ファイルを取得できませんでした",
     "shareFailedTitle": "共有に失敗しました",

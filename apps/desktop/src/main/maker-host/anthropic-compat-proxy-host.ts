@@ -19,11 +19,15 @@
 import {
   createAnthropicCompatProxy,
   createActiveStripTransform,
+  createDuplicateToolUseIdRecoveryRule,
   createEmptyAssistantMessageRecoveryRule,
   createEmptyTextRecoveryRule,
   createEmptyThinkingRecoveryRule,
   createEncryptedContentRecoveryRule,
+  createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
+  dedupeDuplicateToolUseIds,
+  repairToolExchangeAdjacency,
   stripEmptyAssistantMessagesFromBody,
   stripEmptyTextFromBody,
   stripEmptyThinkingFromBody,
@@ -327,6 +331,17 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
           enabled: () => true,
           strip: stripEmptyAssistantMessagesFromBody,
         }),
+        // tool 配对断裂修复 —— always-on 检测即修(孤儿/前置/超编 result 丢弃 +
+        // 错位前移 + 非 trailing 缺失合成占位;与 kimi code projector 的
+        // consumed-scan 接力配对同构)。**必须在 dedupe 之前**:它产出的结构
+        // 合法历史上 result 与 call 严格同序,dedupe 的顺序配对才等于真实配对
+        // (复审实测反例: 前置 result 白占序号会致 dedupe 张冠李戴)。
+        repairToolExchangeAdjacency,
+        // 重复 tool_use id 唯一化 —— always-on 检测即修(moonshot/kimi 序号 id
+        // 跨 turn 复用致会话安静瘫痪,2026-07 两个会话实测 `Edit_306`/`Bash_256`
+        // 各复用 20+ 次;重写方案与 kosong normalize 同构,详见 transform.ts 头注)。
+        // 无重复返回 null 字节透传,不需要 controller(异常在请求体里可直接检测)。
+        dedupeDuplicateToolUseIds,
         // LiteLLM/provider adapter 可能把 provider_specific_fields(null) 挂到 tool_use 上，
         // 严格 Anthropic 入站 schema 不接受该扩展字段。
         stripToolUseProviderSpecificFields,
@@ -354,6 +369,16 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
           onRetry: (threadId, model) => emptyAssistantStripController.markActive(threadId, model),
         }),
         createToolUseProviderSpecificFieldsRecoveryRule(),
+        // tool 配对断裂 400(moonshot `tool_call_id is not found` / Anthropic
+        // `unexpected tool_use_id` / `tool_use ids were found without tool_result`
+        // / OpenAI 系 wording)→ 组合结构修复重发,always-on。
+        // 两条 tool exchange 规则的 strip 同为 repairToolExchangeStructureFromBody
+        // (内建 repair → dedupe 顺序,与上方主动链一致;命中顺序不再影响正确性)。
+        createToolExchangeAdjacencyRecoveryRule(),
+        // 重复 tool_use id 400(``tool_use` ids must be unique`)→ 组合结构修复
+        // 重发,always-on(moonshot 实测不报错,但 LiteLLM 版本差 / 真 Anthropic
+        // 上游会报;主动 transform 已检测即修,此为第二道防线)。
+        createDuplicateToolUseIdRecoveryRule(),
       ],
       logger: log,
       // 请求体 dump 默认关(dev trace 级别 + agent 高并发会刷爆 main event loop

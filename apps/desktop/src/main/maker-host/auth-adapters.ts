@@ -205,6 +205,35 @@ export function readCodexOneShotCreds(): { accessToken: string; accountId: strin
   }
 }
 
+/**
+ * Cindy 当前用的 Codex 凭证**是否确实就是本机 codex CLI 那一份**。
+ *
+ * 判据是 inode 同一性,不是「两边都有凭证」:reconcile 只在双方账号一致时才把 Cindy 的
+ * auth.json 换成指向 `~/.codex/auth.json` 的硬链;账号不同时刻意各管各(见
+ * runReconcileWithSystemCodex)。于是「本机登录着账号 A、Cindy 的 codex-home 显式登录了
+ * 账号 B」时,两边都 installed+loggedIn、provider 也 connected —— 但 Cindy 用的根本不是
+ * 本机那份凭证。用文件存在性推断继承会在这种情况下报错话(PR #1076 review)。
+ *
+ * 只返 boolean,不暴露路径与凭证内容(规则 23)。任何异常按 false ——「无法确证」不该说成
+ * 「已继承」。绑定不属当前 owner、或用户已显式断开(durable marker)时同样是 false:那时
+ * Cindy 压根不该在用这份凭证。
+ */
+export function isCodexAuthInheritedFromSystemCli(): boolean {
+  if (!isNativeProviderAuthBound('openai')) return false;
+  try {
+    const codexHome = getCodexHome();
+    const localAuth = path.join(codexHome, 'auth.json');
+    if (shouldSuppressLocalCodexAuth(codexHome, localAuth)) return false;
+    const systemAuth = getSystemCodexAuthPath();
+    if (!existsSync(localAuth) || !existsSync(systemAuth)) return false;
+    const localStat = fs.statSync(localAuth);
+    const systemStat = fs.statSync(systemAuth);
+    return localStat.ino === systemStat.ino && localStat.dev === systemStat.dev;
+  } catch {
+    return false;
+  }
+}
+
 /** 删除 Cindy 自管且无法按账号归属的 Codex 模型 cache。 */
 async function removeDesktopCodexModelsCache(codexHome: string): Promise<boolean> {
   const cachePath = path.join(codexHome, 'models_cache.json');
@@ -579,6 +608,17 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    * 由 maker-host 注入并允许 async — 适配层不直接 import IPC channel 常量,保持单向依赖。
    */
   private onInvalidatedBroadcast?: (reason: string) => void | Promise<void>;
+
+  /**
+   * 「本机已有的 Codex OAuth 凭证刚被认领到当前 owner」的收口回调(由 maker-host 注入)。
+   *
+   * 这是 openai 侧长期缺失的一半对称性:anthropic 在认领成功时会补拉一次模型清单
+   * (见 createDesktopProviderService 的 claimNativeProviderAuthOnRead),openai 只记日志。
+   * 于是「新机器上本机已登录 ChatGPT」这条路径 —— 它不走 OAuth 登录动作、拿不到
+   * onLoginSuccess —— 认领完就停在「已连接 + 零模型」,清单要等用户打开某个面板才出现。
+   * 回调允许 async,失败只记日志:认领本身已经成功,不能因为补拉失败反过来算作认领失败。
+   */
+  private onOAuthBindingClaimed?: () => void | Promise<void>;
   private oauthInvalidatedReason: string | null = null;
   private suppressSystemCodexReconcile = false;
 
@@ -715,12 +755,29 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     if (this.oauthInvalidatedReason) return;
     const authPath = path.join(this.codexHome, 'auth.json');
     if (shouldSuppressLocalCodexAuth(this.codexHome, authPath)) return;
+    let claimed = false;
     try {
-      if (claimDetectedNativeProviderAuth('openai', () => this.hasCodexOAuthLoginUnbound())) {
-        log.info('codex OAuth credential auto-bound to current owner after reconcile');
-      }
+      claimed = claimDetectedNativeProviderAuth('openai', () => this.hasCodexOAuthLoginUnbound());
+      if (claimed) log.info('codex OAuth credential auto-bound to current owner after reconcile');
     } catch (err) {
       log.warn('codex OAuth binding claim failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    // 收口放在 claim 的 try 之外:回调是「认领之后要做什么」,它失败不该被记成认领失败,
+    // 也不该反过来影响 reconcile 链路(见 onOAuthBindingClaimed 字段注释)。
+    if (!claimed) return;
+    try {
+      const result = this.onOAuthBindingClaimed?.();
+      if (result) {
+        void result.catch?.((err: unknown) => {
+          log.warn('codex OAuth binding claim follow-up failed', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }
+    } catch (err) {
+      log.warn('codex OAuth binding claim follow-up threw', {
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -871,6 +928,14 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   /** maker-host 注入: invalidate() 触发后收口派生状态并给 renderer push auth state。 */
   setOnInvalidatedBroadcast(cb: (reason: string) => void | Promise<void>): void {
     this.onInvalidatedBroadcast = cb;
+  }
+
+  /**
+   * maker-host 注入: 本机已有 Codex 凭证被认领到当前 owner 后补拉模型清单
+   * (见 onOAuthBindingClaimed 字段注释)。
+   */
+  setOnOAuthBindingClaimed(cb: () => void | Promise<void>): void {
+    this.onOAuthBindingClaimed = cb;
   }
 
   async getState(options?: AuthAdapterOptions): Promise<AuthState> {

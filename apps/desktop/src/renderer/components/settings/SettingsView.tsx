@@ -162,7 +162,7 @@ export function SettingsView() {
     [canAccessBilling, isMac],
   );
 
-  // deep-link: ?section=... → scroll to a section inside General settings.
+  // deep-link: ?section=... → scroll to a section inside the active tab.
   useEffect(() => {
     const section = searchParams.get('section');
     const sectionId =
@@ -170,7 +170,9 @@ export function SettingsView() {
         ? 'settings-collaboration'
         : section === 'notifications'
           ? 'settings-notifications'
-          : null;
+          : section === 'contacts'
+            ? 'settings-contacts'
+            : null;
     if (!sectionId) return;
     const el = document.getElementById(sectionId);
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -363,11 +365,14 @@ export function SettingsView() {
                 <section className="pb-[18px]" aria-label={t('settings.sections.subagentModels')}>
                   <SubagentModelSection key={`subagent-models:${mode}:${dataOwnerId ?? 'none'}`} />
                 </section>
-                {mode !== 'local' && (
-                  <section className="pb-[18px]" aria-label={t('settings.contacts.title')}>
-                    <ContactsSection key={`contacts:${dataOwnerId ?? 'none'}`} />
-                  </section>
-                )}
+                {/* 通讯录是本机全局库(数据与开关都不依赖云端账号),local 模式同样可用 */}
+                <section
+                  id="settings-contacts"
+                  className="pb-[18px]"
+                  aria-label={t('settings.contacts.title')}
+                >
+                  <ContactsSection key={`contacts:${dataOwnerId ?? 'none'}`} />
+                </section>
                 <section className="pb-[18px]" aria-label={t('settings.sections.compaction')}>
                   <CompactionSection key={`compaction:${mode}:${dataOwnerId ?? 'none'}`} />
                 </section>

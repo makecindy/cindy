@@ -166,7 +166,12 @@ import { createAccountDeletionIpcHandlers } from './accountDeletionIpc';
 import * as profileEdit from './profileEdit';
 import { uploadPublicAsset } from './ossPublicUpload';
 import { removeRefs as removeMediaRefs } from './cindy-media/ledger';
-import { installWebviewHardener } from './webview-security';
+import {
+  installWebviewHardener,
+  setRsbPopupHostResolver,
+  setRsbPopupOpenerReportSubscriber,
+  setRsbPopupOpenerResolver,
+} from './webview-security';
 import {
   installSelectionContextMenu,
   setSelectionContextMenuLocale,
@@ -260,6 +265,7 @@ import {
   installVoiceInputPowerRelease,
 } from './voice-input/powerReleaseNotifier';
 import { reapClaudeOrphansSync } from './claude-orphan-reaper';
+import { startAgentProcessPriorityWatcher } from './agent-process-priority';
 import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService';
 import { initNotificationService } from './notificationService';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
@@ -972,6 +978,15 @@ try {
   createLogger('claude-orphan-reaper').warn('initial reap threw', { error: String(err) });
 }
 
+// ── agent 进程优先级降档 watcher(agent 资源占用治理)─────────────────────
+// 设置(processPriority)为 normal 且无欠恢复进程时,每 tick 零成本(不扫进程表);
+// interval 已 unref,进程退出不被它拖住。所有失败 best-effort,不影响启动。
+try {
+  startAgentProcessPriorityWatcher();
+} catch (err) {
+  createLogger('agent-process-priority').warn('watcher start threw', { error: String(err) });
+}
+
 // ── 启动诊断 (issue #758) ────────────────────────────────────────────────
 // 上次异常退出尸检 (run marker) + Crashpad 本地 minidump + crash dump 扫描。
 // 必须在 app ready 前 (crashReporter.start 约束)、userData 定型后 (index.ts 的
@@ -1093,6 +1108,21 @@ registerRsbBrowserBridgeIpc({
   getHostWebContents: () => rsbWindowController.getHostWebContents(),
   logger: createLogger('rsb-browser-bridge-bootstrap'),
 });
+// popup opener 反查:webview-security 的 popup 路由据此把 window.open 的目标
+// tab 归属到发起方 tab 的 session(而不是用户正在看的 session)。
+setRsbPopupOpenerResolver((webContentsId) => {
+  const record = getRsbBrowserBridge().findByWebContentsId(webContentsId);
+  return record ? { tabId: record.tabId, sessionId: record.sessionId } : null;
+});
+// report 到达事件订阅:归属等待从固定轮询窗口升级为事件驱动 —— report 落地的
+// 瞬间完成反查,超时只兜"report 永不来"的极端场景。
+setRsbPopupOpenerReportSubscriber((listener) =>
+  getRsbBrowserBridge().onReport((record) => listener(record.webContentsId)),
+);
+// popup 路由目标 host 动态解析:异步等待(归属反查 / deferred URL 捕获)期间用户
+// detach 侧边栏或切视图后,捕获时的 hostContents 已过时 —— 发送时刻按当前宿主
+// 形态解析(与 tab-op bridge 同一来源),消息才能落到活着的订阅者。
+setRsbPopupHostResolver(() => rsbWindowController.getHostWebContents());
 // Tab-op result handler for the main → renderer request/response bridge —
 // RsbWebviewBackend (Phase 3) uses this to drive `open` / `focus` / `close`
 // against the renderer's RSB store.
@@ -5582,6 +5612,13 @@ app.on('ready', async () => {
             });
           }
         }
+        // 账号数据就绪 = 启动链路上最早能确定「owner 绑定已认领、网关凭证已下发」的时机，
+        // 也是模型清单该被刷新到最新的时机。在这里强制跑一遍（无视冷却），别再等用户去打开
+        // 设置页或模型选择器把清单逼出来 —— 那是全新机器首启只看到少数模型的直接原因。
+        //
+        // 必须排在上面 codex 重启序列**之后**：那条序列末尾会按 auth 边界重读
+        // models_cache（cache miss 即清空防串号），并发跑会让刚发现的清单被空快照覆盖。
+        void requestProviderModelAutoRefresh('startup');
       })();
       void sweepStartupDraftImages({
         dbClient: getDbClient(),

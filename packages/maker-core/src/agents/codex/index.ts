@@ -109,6 +109,10 @@ import { createStdioTransport } from './app-server/stdioTransport.js';
 import { CodexInteractionBroker } from './interaction-broker.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_CODEX_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
 import { MAKER_MEMORY_RULES } from '../../memory/system-prompt.js';
+import {
+  CONTACTS_RULES_DISABLED,
+  CONTACTS_RULES_ENABLED,
+} from '../../contacts/system-prompt.js';
 import { MemoryFlushController } from '../../memory/flush-controller.js';
 import { buildMemoryScopeKey } from '../../memory/storage.js';
 import { CODEX_AGENT_COMMANDS } from './commands.js';
@@ -257,6 +261,7 @@ function hasUnsafeForkRolloutPayload(line: string): boolean {
 
 function buildCodexDeveloperInstructions(parts: {
   makerMemoryRules?: string;
+  contactsRules?: string;
   runtimeSystemPrompt?: string;
   makerMemoryIndex?: string;
   userPrompt?: string;
@@ -264,6 +269,7 @@ function buildCodexDeveloperInstructions(parts: {
   return [
     MAKER_CODEX_SYSTEM_PROMPT_APPEND,
     parts.makerMemoryRules,
+    parts.contactsRules,
     parts.runtimeSystemPrompt,
     parts.makerMemoryIndex,
     parts.userPrompt,
@@ -2958,8 +2964,23 @@ export class CodexAgent extends BaseAgent {
         resumeSessionId: opts.resumeSessionId,
       });
     }
+    // 智能通讯录两态段: session 启动求值一次, host 未注入 getContactsPromptState
+    // 则缺省。remote 会话不注入(远端 spawn 无本地 MCP flags, cindy_contacts 不可达)。
+    // host 的有效状态计算已含: 全局开关 ∧ 工作区/用户覆盖 ∧ 实际应用到 running
+    // app-server 的 spawn 快照(失效失败留下 stale 配置时返回 unavailable, 本段
+    // 静默, 不指挥模型调 stale 桥里没有的工具)。
+    const contactsState = opts.remoteHostId
+      ? undefined
+      : this.deps.getContactsPromptState?.({ workingDir: opts.workingDir });
+    const contactsRules =
+      contactsState === 'enabled'
+        ? CONTACTS_RULES_ENABLED
+        : contactsState === 'disabled'
+          ? CONTACTS_RULES_DISABLED
+          : '';
     const developerInstructions = buildCodexDeveloperInstructions({
       makerMemoryRules,
+      contactsRules,
       runtimeSystemPrompt: this.deps.runtimeConfig.systemPrompt,
       makerMemoryIndex,
       userPrompt: opts.userPrompt,
@@ -3079,15 +3100,18 @@ export class CodexAgent extends BaseAgent {
         throw new Error(message);
       }
     } else {
-      // developerInstructions 五段拼接 (协议见 thread/start.developerInstructions):
+      // developerInstructions 六段拼接 (协议见 thread/start.developerInstructions):
       //   [2] MAKER_CODEX_SYSTEM_PROMPT_APPEND — maker engine (system-prompt-append.md)
       //   [3] makerMemoryRules                 — maker memory 写入规范 (条件式)
-      //   [4] runtimeConfig.systemPrompt       — host runtime (host 维护的 .md)
-      //   [5] makerMemoryIndex                 — 当前 workdir MEMORY.md 内容 (条件式,
+      //   [4] contactsRules                    — 智能通讯录两态段 (条件式: host 注入
+      //                                          getContactsPromptState 才有)
+      //   [5] runtimeConfig.systemPrompt       — host runtime (host 维护的 .md)
+      //   [6] makerMemoryIndex                 — 当前 workdir MEMORY.md 内容 (条件式,
       //                                          紧邻 userPrompt 高优先级, 启动时快照)
-      //   [6] opts.userPrompt                  — per-call 用户级 (renderer 本地 storage,
+      //   [7] opts.userPrompt                  — per-call 用户级 (renderer 本地 storage,
       //                                          每次 startSession 透传, 优先级最高)
-      // 跟 claude-code 六段语义对齐。空段被 .filter 跳过,
+      // 段序语义与 claude-code 对齐(claude 的 [1] 是 SDK 内嵌 preset, 此处无对应段,
+      // 故编号从 [2] 起、共六段)。空段被 .filter 跳过,
       // 内容为空时不发送 developerInstructions 字段。
       const params: ThreadStartParams = {
         cwd: opts.workingDir,
