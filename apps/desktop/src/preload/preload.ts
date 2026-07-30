@@ -4343,6 +4343,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     subagentModelSettingsReset: (): Promise<SubagentModelSettingsState> =>
       ipcRenderer.invoke('maker:subagent-model-settings:reset'),
 
+    // Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。
+    // 并发上限即刻生效;优先级与限核 env 只对新启动的 agent 进程生效。
+    agentResourceSettingsGet: (): Promise<unknown> =>
+      ipcRenderer.invoke('maker:agent-resource-settings:get'),
+    agentResourceSettingsSet: (key: string, value: number | string | boolean): Promise<unknown> =>
+      ipcRenderer.invoke('maker:agent-resource-settings:set', { key, value }),
+    agentResourceSettingsReset: (): Promise<unknown> =>
+      ipcRenderer.invoke('maker:agent-resource-settings:reset'),
+
     silentEncryptedRetryGet: (): Promise<{ enabled: boolean; isCustomized?: boolean; defaultEnabled?: boolean }> =>
       ipcRenderer.invoke('maker:silent-encrypted-retry:get'),
     silentEncryptedRetrySet: (enabled: boolean): Promise<{ enabled: boolean; isCustomized: boolean; defaultEnabled: boolean; effective: 'immediate' }> =>

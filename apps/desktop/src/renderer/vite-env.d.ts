@@ -238,6 +238,21 @@ type ImDefaultSettingsChannel = import('../shared/imDefaultSettings').ImDefaultS
 type SubagentModelSettingsPatch = import('../shared/subagentModelSettings').SubagentModelSettingsPatch;
 type SubagentModelSettingsState = import('../shared/subagentModelSettings').SubagentModelSettingsState;
 
+/** Agent 资源占用设置的 IPC wire 形状(main 侧 agentResourceSettingsWire)。 */
+type AgentResourceProcessPriority = 'normal' | 'low' | 'lowest';
+type AgentResourceSettingsWire = {
+  maxConcurrentCommands: number;
+  processPriority: AgentResourceProcessPriority;
+  capToolchainThreads: boolean;
+  isCustomized: boolean;
+  customizedKeys: string[];
+  defaults: {
+    maxConcurrentCommands: number;
+    processPriority: AgentResourceProcessPriority;
+    capToolchainThreads: boolean;
+  };
+};
+
 interface VoiceInputShortcut {
   trigger?: 'keyboard' | 'modifier';
   code: string;
@@ -4168,6 +4183,14 @@ interface ElectronAPI {
     subagentModelSettingsGet: () => Promise<SubagentModelSettingsState>;
     subagentModelSettingsSet: (patch: SubagentModelSettingsPatch) => Promise<SubagentModelSettingsState>;
     subagentModelSettingsReset: () => Promise<SubagentModelSettingsState>;
+
+    /** Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。 */
+    agentResourceSettingsGet: () => Promise<AgentResourceSettingsWire>;
+    agentResourceSettingsSet: (
+      key: 'maxConcurrentCommands' | 'processPriority' | 'capToolchainThreads',
+      value: number | string | boolean,
+    ) => Promise<AgentResourceSettingsWire>;
+    agentResourceSettingsReset: () => Promise<AgentResourceSettingsWire>;
 
     /** Silent invalid_encrypted_content recovery setting. */
     silentEncryptedRetryGet: () => Promise<{ enabled: boolean; isCustomized?: boolean; defaultEnabled?: boolean }>;

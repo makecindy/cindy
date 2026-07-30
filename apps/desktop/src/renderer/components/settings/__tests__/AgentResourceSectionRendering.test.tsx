@@ -1,0 +1,165 @@
+// @vitest-environment jsdom
+
+/**
+ * Agent 资源占用设置面板的渲染与交互回归:
+ *   1. 默认态(全速)下预设条高亮 full,三个字段回显默认值;
+ *   2. 点预设按三键顺序写入组合值(maxConcurrentCommands → processPriority →
+ *      capToolchainThreads),UI 用最后一次返回的 wire 状态;
+ *   3. 与任何预设不匹配的值组合 → 预设条不高亮,提示 custom;
+ *   4. 单字段修改走 agentResourceSettingsSet 且不写档位名。
+ */
+
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { AgentResourceSection } from '../AgentResourceSection';
+
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (key: string) => key }),
+}));
+
+vi.mock('@/lib/toast', () => ({
+  toast: { error: vi.fn(), success: vi.fn() },
+}));
+
+vi.mock('@/components/ui/switch', () => ({
+  Switch: (props: { checked: boolean; onCheckedChange: (next: boolean) => void; ['aria-label']?: string }) => (
+    <button
+      role="switch"
+      aria-checked={props.checked}
+      aria-label={props['aria-label']}
+      onClick={() => props.onCheckedChange(!props.checked)}
+    />
+  ),
+}));
+
+type WireShape = {
+  maxConcurrentCommands: number;
+  processPriority: 'normal' | 'low' | 'lowest';
+  capToolchainThreads: boolean;
+  isCustomized: boolean;
+  customizedKeys: string[];
+  defaults: {
+    maxConcurrentCommands: number;
+    processPriority: 'normal' | 'low' | 'lowest';
+    capToolchainThreads: boolean;
+  };
+};
+
+const DEFAULT_WIRE: WireShape = {
+  maxConcurrentCommands: 0,
+  processPriority: 'normal',
+  capToolchainThreads: false,
+  isCustomized: false,
+  customizedKeys: [],
+  defaults: { maxConcurrentCommands: 0, processPriority: 'normal', capToolchainThreads: false },
+};
+
+function installElectronApi(initial: WireShape) {
+  let current = { ...initial };
+  const settingsGet = vi.fn(async () => current);
+  const settingsSet = vi.fn(async (key: string, value: number | string | boolean) => {
+    current = { ...current, [key]: value, isCustomized: true };
+    return current;
+  });
+  const settingsReset = vi.fn(async () => {
+    current = { ...DEFAULT_WIRE };
+    return current;
+  });
+  (window as unknown as { electronAPI: unknown }).electronAPI = {
+    maker: {
+      agentResourceSettingsGet: settingsGet,
+      agentResourceSettingsSet: settingsSet,
+      agentResourceSettingsReset: settingsReset,
+    },
+  };
+  return { settingsGet, settingsSet, settingsReset };
+}
+
+describe('AgentResourceSection', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('renders defaults with the full-speed preset highlighted', async () => {
+    installElectronApi(DEFAULT_WIRE);
+    render(<AgentResourceSection />);
+
+    await waitFor(() => {
+      expect(screen.getByText('settings.agentResource.title')).toBeTruthy();
+    });
+    const fullBtn = screen.getByText('settings.agentResource.presets.full');
+    expect(fullBtn.getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByText('settings.agentResource.presetHints.full')).toBeTruthy();
+    const numberInput = screen.getByRole('spinbutton') as HTMLInputElement;
+    expect(numberInput.value).toBe('0');
+    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('applies a preset by writing all three fields', async () => {
+    const api = installElectronApi(DEFAULT_WIRE);
+    render(<AgentResourceSection />);
+    await waitFor(() => screen.getByText('settings.agentResource.presets.background'));
+
+    fireEvent.click(screen.getByText('settings.agentResource.presets.background'));
+
+    await waitFor(() => {
+      expect(api.settingsSet).toHaveBeenCalledTimes(3);
+    });
+    expect(api.settingsSet).toHaveBeenNthCalledWith(1, 'maxConcurrentCommands', 2);
+    expect(api.settingsSet).toHaveBeenNthCalledWith(2, 'processPriority', 'lowest');
+    expect(api.settingsSet).toHaveBeenNthCalledWith(3, 'capToolchainThreads', true);
+    await waitFor(() => {
+      expect(
+        screen
+          .getByText('settings.agentResource.presets.background')
+          .getAttribute('aria-checked'),
+      ).toBe('true');
+    });
+  });
+
+  it('shows the custom hint when values match no preset', async () => {
+    installElectronApi({
+      ...DEFAULT_WIRE,
+      maxConcurrentCommands: 7,
+      processPriority: 'lowest',
+      capToolchainThreads: false,
+      isCustomized: true,
+      customizedKeys: ['maxConcurrentCommands', 'processPriority'],
+    });
+    render(<AgentResourceSection />);
+
+    await waitFor(() => {
+      expect(screen.getByText('settings.agentResource.presetHints.custom')).toBeTruthy();
+    });
+    for (const preset of ['full', 'balanced', 'background']) {
+      expect(
+        screen.getByText(`settings.agentResource.presets.${preset}`).getAttribute('aria-checked'),
+      ).toBe('false');
+    }
+  });
+
+  it('persists single-field edits through the settings IPC', async () => {
+    const api = installElectronApi(DEFAULT_WIRE);
+    render(<AgentResourceSection />);
+    await waitFor(() => screen.getByRole('spinbutton'));
+
+    fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '5' } });
+    await waitFor(() => {
+      expect(api.settingsSet).toHaveBeenCalledWith('maxConcurrentCommands', 5);
+    });
+
+    fireEvent.click(screen.getByText('settings.agentResource.priorityOptions.low'));
+    await waitFor(() => {
+      expect(api.settingsSet).toHaveBeenCalledWith('processPriority', 'low');
+    });
+
+    fireEvent.click(screen.getByRole('switch'));
+    await waitFor(() => {
+      expect(api.settingsSet).toHaveBeenCalledWith('capToolchainThreads', true);
+    });
+  });
+});

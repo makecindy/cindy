@@ -1,0 +1,275 @@
+/**
+ * AgentResourceSection — Agent 资源占用设置(命令并发上限/进程优先级/工具链限核)。
+ *
+ * 三档预设(全速/均衡/后台)只是三个底层字段的组合快捷方式,不单独持久化档位名;
+ * 字段与任何预设组合都不匹配时,预设条不高亮(= 自定义状态)。
+ * 均衡档的并发值按本机核数派生,换机器后读出的旧值可能不再匹配预设 —— 属预期,
+ * 显示为自定义即可,不做迁移。
+ */
+
+import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+
+import { Switch } from '@/components/ui/switch';
+import { cn } from '@/lib/utils';
+import { toast } from '@/lib/toast';
+import { DefaultOverrideControls } from './DefaultOverrideControls';
+
+type Wire = AgentResourceSettingsWire;
+type SettingKey = 'maxConcurrentCommands' | 'processPriority' | 'capToolchainThreads';
+
+type PresetId = 'full' | 'balanced' | 'background';
+
+const PRIORITY_OPTIONS: AgentResourceProcessPriority[] = ['normal', 'low', 'lowest'];
+const MAX_CONCURRENT_CAP = 64;
+
+/** 均衡档并发值:本机核数的一半,至少 2(与 main 侧 toolchain-thread-cap 的口径一致)。 */
+function balancedConcurrency(): number {
+  const cores =
+    typeof navigator !== 'undefined' && navigator.hardwareConcurrency
+      ? navigator.hardwareConcurrency
+      : 8;
+  return Math.max(2, Math.ceil(cores / 2));
+}
+
+function presetValues(id: PresetId): Pick<Wire, SettingKey> {
+  switch (id) {
+    case 'full':
+      return { maxConcurrentCommands: 0, processPriority: 'normal', capToolchainThreads: false };
+    case 'balanced':
+      return {
+        maxConcurrentCommands: balancedConcurrency(),
+        processPriority: 'low',
+        capToolchainThreads: true,
+      };
+    case 'background':
+      return { maxConcurrentCommands: 2, processPriority: 'lowest', capToolchainThreads: true };
+  }
+}
+
+function matchPreset(s: Pick<Wire, SettingKey>): PresetId | null {
+  for (const id of ['full', 'balanced', 'background'] as const) {
+    const p = presetValues(id);
+    if (
+      s.maxConcurrentCommands === p.maxConcurrentCommands &&
+      s.processPriority === p.processPriority &&
+      s.capToolchainThreads === p.capToolchainThreads
+    ) {
+      return id;
+    }
+  }
+  return null;
+}
+
+export function AgentResourceSection() {
+  const { t } = useTranslation();
+  const [settings, setSettings] = useState<Wire | null>(null);
+
+  useEffect(() => {
+    void window.electronAPI.maker
+      .agentResourceSettingsGet()
+      .then((s) => {
+        if (s && typeof s.maxConcurrentCommands === 'number') setSettings(s);
+      })
+      .catch(() => {
+        // 读失败时按默认态渲染,写路径仍可用(main 侧会兜底校验)
+        setSettings({
+          maxConcurrentCommands: 0,
+          processPriority: 'normal',
+          capToolchainThreads: false,
+          isCustomized: false,
+          customizedKeys: [],
+          defaults: {
+            maxConcurrentCommands: 0,
+            processPriority: 'normal',
+            capToolchainThreads: false,
+          },
+        });
+      });
+  }, []);
+
+  const activePreset = useMemo(() => (settings ? matchPreset(settings) : null), [settings]);
+
+  const persist = (key: SettingKey, value: number | string | boolean) => {
+    setSettings((prev) => (prev ? { ...prev, [key]: value, isCustomized: true } : prev));
+    void window.electronAPI.maker
+      .agentResourceSettingsSet(key, value)
+      .then((next) => setSettings(next))
+      .catch((err) => {
+        toast.error(err instanceof Error ? err.message : String(err));
+      });
+  };
+
+  const applyPreset = async (id: PresetId) => {
+    const values = presetValues(id);
+    setSettings((prev) => (prev ? { ...prev, ...values } : prev));
+    try {
+      await window.electronAPI.maker.agentResourceSettingsSet(
+        'maxConcurrentCommands',
+        values.maxConcurrentCommands,
+      );
+      await window.electronAPI.maker.agentResourceSettingsSet('processPriority', values.processPriority);
+      const next = await window.electronAPI.maker.agentResourceSettingsSet(
+        'capToolchainThreads',
+        values.capToolchainThreads,
+      );
+      setSettings(next);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  if (!settings) {
+    return (
+      <div className="py-8 text-center text-13 text-[var(--text-tertiary)]">
+        {t('settings.agentResource.loading')}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
+          {t('settings.agentResource.title')}
+        </h2>
+        <DefaultOverrideControls
+          isCustomized={Boolean(settings.isCustomized)}
+          onReset={() => {
+            void window.electronAPI.maker
+              .agentResourceSettingsReset()
+              .then((next) => {
+                setSettings(next);
+                toast.success(t('settings.defaults.restored'));
+              })
+              .catch((err) => {
+                toast.error(
+                  err instanceof Error ? err.message : t('settings.defaults.restoreFailed'),
+                );
+              });
+          }}
+        />
+      </div>
+
+      <p className="text-11 leading-relaxed text-[var(--text-tertiary)]">
+        {t('settings.agentResource.description')}
+      </p>
+
+      {/* 预设条:三个字段的组合快捷方式;都不匹配 = 自定义,均不高亮 */}
+      <div className="flex flex-col gap-1.5">
+        <span className="text-12 font-medium text-[var(--text-primary)]">
+          {t('settings.agentResource.preset')}
+        </span>
+        <div
+          role="radiogroup"
+          aria-label={t('settings.agentResource.preset')}
+          className="flex w-fit shrink-0 items-center gap-0.5 rounded-lg border border-[var(--settings-theme-card-border)] p-0.5"
+        >
+          {(['full', 'balanced', 'background'] as const).map((id) => {
+            const active = activePreset === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                onClick={() => void applyPreset(id)}
+                className={cn(
+                  'rounded-md px-2.5 py-1 text-xs transition-colors',
+                  active
+                    ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
+                    : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',
+                )}
+              >
+                {t(`settings.agentResource.presets.${id}`)}
+              </button>
+            );
+          })}
+        </div>
+        <span className="text-11 text-[var(--text-tertiary)]">
+          {activePreset
+            ? t(`settings.agentResource.presetHints.${activePreset}`)
+            : t('settings.agentResource.presetHints.custom')}
+        </span>
+      </div>
+
+      {/* 并发命令上限 */}
+      <label className="flex flex-col gap-1.5">
+        <span className="text-12 font-medium text-[var(--text-primary)]">
+          {t('settings.agentResource.maxConcurrent')}
+        </span>
+        <span className="text-11 text-[var(--text-tertiary)]">
+          {t('settings.agentResource.maxConcurrentHint')}
+        </span>
+        <input
+          type="number"
+          min={0}
+          max={MAX_CONCURRENT_CAP}
+          value={settings.maxConcurrentCommands}
+          onChange={(e) => {
+            const raw = Number(e.target.value);
+            const v = Math.max(
+              0,
+              Math.min(MAX_CONCURRENT_CAP, Number.isFinite(raw) ? Math.trunc(raw) : 0),
+            );
+            persist('maxConcurrentCommands', v);
+          }}
+          className="mt-0.5 w-20 rounded-lg border border-[var(--border-default)] bg-transparent px-3 py-1.5 text-13 text-[var(--settings-input-text)] outline-none"
+        />
+      </label>
+
+      {/* 进程优先级 */}
+      <div className="flex flex-col gap-1.5">
+        <span className="text-12 font-medium text-[var(--text-primary)]">
+          {t('settings.agentResource.priority')}
+        </span>
+        <span className="text-11 text-[var(--text-tertiary)]">
+          {t('settings.agentResource.priorityHint')}
+        </span>
+        <div
+          role="radiogroup"
+          aria-label={t('settings.agentResource.priority')}
+          className="mt-0.5 flex w-fit shrink-0 items-center gap-0.5 rounded-lg border border-[var(--settings-theme-card-border)] p-0.5"
+        >
+          {PRIORITY_OPTIONS.map((tier) => {
+            const active = settings.processPriority === tier;
+            return (
+              <button
+                key={tier}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                onClick={() => persist('processPriority', tier)}
+                className={cn(
+                  'rounded-md px-2.5 py-1 text-xs transition-colors',
+                  active
+                    ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)]'
+                    : 'text-[var(--settings-section-sublabel)] hover:bg-sidebar-item-hover',
+                )}
+              >
+                {t(`settings.agentResource.priorityOptions.${tier}`)}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 工具链限核 */}
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-col gap-1.5">
+          <span className="text-12 font-medium text-[var(--text-primary)]">
+            {t('settings.agentResource.capThreads')}
+          </span>
+          <span className="text-11 text-[var(--text-tertiary)]">
+            {t('settings.agentResource.capThreadsHint')}
+          </span>
+        </div>
+        <Switch
+          checked={settings.capToolchainThreads}
+          onCheckedChange={(next) => persist('capToolchainThreads', next)}
+          aria-label={t('settings.agentResource.capThreads')}
+        />
+      </div>
+    </div>
+  );
+}

@@ -522,6 +522,9 @@ export const MAKER_INVOKE = {
   COLLABORATION_SETTINGS_GET: 'maker:collaboration-settings:get',
   COLLABORATION_SETTINGS_SET: 'maker:collaboration-settings:set',
   COLLABORATION_SETTINGS_RESET: 'maker:collaboration-settings:reset',
+  AGENT_RESOURCE_SETTINGS_GET: 'maker:agent-resource-settings:get',
+  AGENT_RESOURCE_SETTINGS_SET: 'maker:agent-resource-settings:set',
+  AGENT_RESOURCE_SETTINGS_RESET: 'maker:agent-resource-settings:reset',
   // Plugin system (Phase 1)
   PLUGINS_LIST: 'maker:plugins:list',
   // Read one plugin's enable state by id — works for plugins hidden from

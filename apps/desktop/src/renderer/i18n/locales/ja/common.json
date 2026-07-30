@@ -111,6 +111,7 @@
       "notifications": "通知",
       "agentIsland": "Agent Island",
       "collaboration": "コラボレーション",
+      "agentResource": "Agent リソース使用量",
       "gitSafety": "Git セーフティ",
       "language": "言語",
       "experimental": "実験的機能",
@@ -1881,6 +1882,34 @@
       "workerHardLimitHint": "作成できる Worker の最大数です。ソフト上限以上にしてください。",
       "idleRelease": "アイドル解放（分）",
       "idleReleaseHint": "0 にするとバックグラウンド自動解放を無効化します。正の値では、その分数だけアイドルだった Worker を自動解放します。"
+    },
+    "agentResource": {
+      "loading": "Agent リソース設定を読み込み中…",
+      "title": "Agent リソース使用量",
+      "description": "Agent のコマンドライン作業によるシステム負荷を制限し、並列テストやビルドでマシンが固まるのを防ぎます。デフォルトはフルスピード（制限なし）。優先度とスレッド上限は新しく起動した Agent プロセスにのみ適用され、同時実行上限は即時反映されます。",
+      "preset": "プロファイル",
+      "presets": {
+        "full": "フルスピード",
+        "balanced": "バランス",
+        "background": "バックグラウンド"
+      },
+      "presetHints": {
+        "full": "制限なし（デフォルト）。Agent はマシンをフルに使います。",
+        "balanced": "コマンドのキューイング + 低優先度 + ツールチェーンのスレッド上限。Agent は動き続けつつ、前面のアプリが常に優先されます。",
+        "background": "最低優先度（macOS では高効率コア）+ 厳格な同時実行制限。静かで快適になりますが、Agent は明らかに遅くなります。",
+        "custom": "カスタム設定です。下の項目を直接調整できます。"
+      },
+      "maxConcurrent": "同時実行コマンド数の上限",
+      "maxConcurrentHint": "すべての Agent が同時に実行できるコマンド数の上限です。超えた分はキューで待機します。0 は無制限です。",
+      "priority": "プロセス優先度",
+      "priorityHint": "下げると Agent はアイドルリソースのみを使い、前面のアプリが優先されます。上げ直した場合は新しく起動した Agent プロセスにのみ適用されます。",
+      "priorityOptions": {
+        "normal": "標準",
+        "low": "低",
+        "lowest": "最低"
+      },
+      "capThreads": "ツールチェーンの並列度を制限",
+      "capThreadsHint": "VITEST_MAX_FORKS や MAKEFLAGS などの環境変数を注入し、1 つのテストやビルドが全 CPU コアを占有しないようにします。自分で設定した同名の変数は上書きされません。"
     },
     "computerUse": {
       "title": "自動操作",

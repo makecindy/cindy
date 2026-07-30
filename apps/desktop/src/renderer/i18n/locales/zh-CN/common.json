@@ -111,6 +111,7 @@
       "notifications": "通知",
       "agentIsland": "灵动岛",
       "collaboration": "协同",
+      "agentResource": "Agent 资源占用",
       "gitSafety": "Git 安全",
       "language": "语言",
       "experimental": "实验性功能",
@@ -1881,6 +1882,34 @@
       "workerHardLimitHint": "允许创建的最大 Worker 数量，必须大于等于软上限。",
       "idleRelease": "空闲释放（分钟）",
       "idleReleaseHint": "设为 0 时关闭后台自动释放；正数表示空闲超过该时长后自动释放。"
+    },
+    "agentResource": {
+      "loading": "正在加载 Agent 资源设置…",
+      "title": "Agent 资源占用",
+      "description": "限制 Agent 命令行任务的系统资源占用，避免并行测试、构建把机器拖卡。默认全速（不干预）。优先级与限核只对新启动的 Agent 进程生效；并发上限即刻生效。",
+      "preset": "档位",
+      "presets": {
+        "full": "全速",
+        "balanced": "均衡",
+        "background": "后台"
+      },
+      "presetHints": {
+        "full": "不限制（默认），Agent 全速使用系统资源。",
+        "balanced": "命令排队 + 低优先级 + 工具链限核：Agent 照常干活，前台操作永远优先。",
+        "background": "最低优先级（macOS 上压到能效核）+ 严格限并发：机器安静流畅，Agent 明显变慢。",
+        "custom": "当前为自定义组合，可直接调节下方各项。"
+      },
+      "maxConcurrent": "并发命令上限",
+      "maxConcurrentHint": "所有 Agent 同时执行的命令数上限，超出的排队等待；0 表示不限。",
+      "priority": "进程优先级",
+      "priorityHint": "调低后 Agent 只用空闲资源，前台应用优先。从低档调回后只对新启动的 Agent 进程生效。",
+      "priorityOptions": {
+        "normal": "正常",
+        "low": "低",
+        "lowest": "最低"
+      },
+      "capThreads": "限制工具链并行度",
+      "capThreadsHint": "注入 VITEST_MAX_FORKS、MAKEFLAGS 等环境变量，防止单条测试或构建命令占满全部 CPU 核心；你自己设置过的同名变量不会被覆盖。"
     },
     "computerUse": {
       "title": "自动操作",

@@ -177,6 +177,12 @@ import {
   resetCollaborationSettings,
   writeCollaborationSetting,
 } from '../maker-host/collaboration-settings-store.js';
+import {
+  readAgentResourceSettingsState,
+  resetAgentResourceSettings,
+  writeAgentResourceSetting,
+  type AgentResourceSettings,
+} from '../maker-host/agent-resource-settings-store.js';
 import { createGitSnapshotCoordinator } from '../maker-host/git-snapshot-host.js';
 import {
   cancelCodexAuthModeChange,
@@ -663,6 +669,58 @@ function validateCollaborationSettingValue(key: CollaborationSettingKey, value: 
 
 function collaborationSettingsWire() {
   const state = readCollaborationSettingsState();
+  return {
+    ...state.value,
+    isCustomized: state.isCustomized,
+    customizedKeys: state.customizedKeys,
+    defaults: state.defaults,
+  };
+}
+
+const AGENT_RESOURCE_SETTING_KEYS = [
+  'maxConcurrentCommands',
+  'processPriority',
+  'capToolchainThreads',
+] as const;
+type AgentResourceSettingKey = typeof AGENT_RESOURCE_SETTING_KEYS[number];
+const AGENT_RESOURCE_MAX_CONCURRENT_CAP = 64;
+const AGENT_RESOURCE_PRIORITIES = ['normal', 'low', 'lowest'] as const;
+
+function isAgentResourceSettingKey(key: unknown): key is AgentResourceSettingKey {
+  return typeof key === 'string'
+    && (AGENT_RESOURCE_SETTING_KEYS as readonly string[]).includes(key);
+}
+
+/** store 层 clamp 容错读盘;IPC 写路径按惯例硬拒非法值(INVALID_PARAMS)。 */
+function validateAgentResourceSettingValue(
+  key: AgentResourceSettingKey,
+  value: unknown,
+): AgentResourceSettings[AgentResourceSettingKey] {
+  if (key === 'maxConcurrentCommands') {
+    if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value)) {
+      throwIpcError('INVALID_PARAMS', `${key} must be an integer`);
+    }
+    if (value < 0) throwIpcError('INVALID_PARAMS', `${key} must be >= 0`);
+    if (value > AGENT_RESOURCE_MAX_CONCURRENT_CAP) {
+      throwIpcError('INVALID_PARAMS', `${key} must be <= ${AGENT_RESOURCE_MAX_CONCURRENT_CAP}`);
+    }
+    return value;
+  }
+  if (key === 'processPriority') {
+    if (typeof value !== 'string'
+      || !(AGENT_RESOURCE_PRIORITIES as readonly string[]).includes(value)) {
+      throwIpcError('INVALID_PARAMS', `${key} must be one of ${AGENT_RESOURCE_PRIORITIES.join('/')}`);
+    }
+    return value as AgentResourceSettings['processPriority'];
+  }
+  if (typeof value !== 'boolean') {
+    throwIpcError('INVALID_PARAMS', `${key} must be a boolean`);
+  }
+  return value;
+}
+
+function agentResourceSettingsWire() {
+  const state = readAgentResourceSettingsState();
   return {
     ...state.value,
     isCustomized: state.isCustomized,
@@ -6362,6 +6420,30 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ipcMain.handle(MAKER_INVOKE.COLLABORATION_SETTINGS_RESET, async () => {
     resetCollaborationSettings();
     return collaborationSettingsWire();
+  });
+
+  // ─── Agent resource settings IPC(命令并发/进程优先级/工具链限核)──────────
+  ipcMain.handle(MAKER_INVOKE.AGENT_RESOURCE_SETTINGS_GET, async () => {
+    return agentResourceSettingsWire();
+  });
+
+  ipcMain.handle(MAKER_INVOKE.AGENT_RESOURCE_SETTINGS_SET, async (_e, body: unknown) => {
+    const b = body as Record<string, unknown> | null | undefined;
+    if (!b || typeof b.key !== 'string') throwIpcError('INVALID_PARAMS', 'key required');
+    if (!isAgentResourceSettingKey(b.key)) {
+      throwIpcError('INVALID_PARAMS', `unknown key: ${b.key}`);
+    }
+    const value = validateAgentResourceSettingValue(b.key, b.value);
+    writeAgentResourceSetting(
+      b.key as keyof AgentResourceSettings,
+      value as AgentResourceSettings[keyof AgentResourceSettings],
+    );
+    return agentResourceSettingsWire();
+  });
+
+  ipcMain.handle(MAKER_INVOKE.AGENT_RESOURCE_SETTINGS_RESET, async () => {
+    resetAgentResourceSettings();
+    return agentResourceSettingsWire();
   });
 
   // ─── Idle watcher ────────────────────────────────────────────────────────
