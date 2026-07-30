@@ -491,6 +491,22 @@ describe('MyIssuesService 的账号作用域隔离', () => {
     expect(result.degraded).toBeNull();
   });
 
+  it('平台通道卡住时有总 deadline,账本记录照常渲染', async () => {
+    // 覆盖 401 → authManager.refresh() 挂死这条链:runtime 侧给 serverApiFetch 的
+    // timeoutMs 只管单次 fetch,refresh 自己无上限,所以 service 层必须有总 deadline。
+    const service = new MyIssuesService(
+      makeDeps({
+        platformTimeoutMs: 5,
+        readLedger: () => [ledgerRecord({ number: 314 })],
+        fetchPlatformIssues: () => new Promise(() => {}),
+      }),
+    );
+    const result = await service.list();
+    expect(result.degraded).toBe('fetch-failed');
+    expect(result.items.map((i) => i.number)).toEqual([314]);
+    expect(result.items[0]!.state).toBe('unknown');
+  });
+
   it('身份解析本身卡住时同样超时,不阻塞主列表', async () => {
     const service = new MyIssuesService(
       makeDeps({

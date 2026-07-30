@@ -69,7 +69,11 @@ export function IssueTrackerFeatureLayout() {
             'disabled:pointer-events-none disabled:opacity-50',
           )}
         >
-          <RefreshCw size={14} className={cn(refreshing && 'animate-spinner')} />
+          {/* 动画挂外层 span,SVG 保持静态:挂在 SVG 上会每帧惊动主线程
+              (engineering-conventions「常驻动画必须 compositor-only」)。 */}
+          <span className={cn('inline-flex', refreshing && 'animate-spinner')}>
+            <RefreshCw size={14} />
+          </span>
         </button>
       </header>
 

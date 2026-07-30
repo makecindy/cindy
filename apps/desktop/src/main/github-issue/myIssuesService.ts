@@ -36,6 +36,13 @@ const DEFAULT_CACHE_TTL_MS = 60_000;
  * 增强只是加成,超时就当「没有增强」,绝不拖累主列表。
  */
 const DEFAULT_ENHANCEMENT_TIMEOUT_MS = 8_000;
+
+/**
+ * 平台通道的整体超时。比 runtime 侧给 serverApiFetch 的单次 fetch 上限更长,
+ * 因为它要覆盖**整条调用链**:401 → authManager.refresh() → 重试。那次 refresh
+ * 自己是 `timeoutMs: 0`(无上限),所以只约束单次 fetch 挡不住整条链挂死。
+ */
+const DEFAULT_PLATFORM_TIMEOUT_MS = 12_000;
 /** 单次查询只取一页;更多就截断并让 UI 明说,不静默丢也不翻页打爆额度。 */
 export const SEARCH_PAGE_SIZE = 100;
 
@@ -90,6 +97,8 @@ export interface MyIssuesServiceDeps {
   cacheTtlMs?: number;
   /** 可选增强整条路径的超时,默认 8s;<=0 关闭(仅测试用)。 */
   enhancementTimeoutMs?: number;
+  /** 平台通道整条调用链的超时,默认 12s;<=0 关闭(仅测试用)。 */
+  platformTimeoutMs?: number;
   now?: () => number;
 }
 
@@ -226,10 +235,17 @@ export class MyIssuesService {
   }> {
     let outcome: PlatformIssuesOutcome;
     try {
-      outcome = await this.deps.fetchPlatformIssues();
+      // 总 deadline 覆盖整条调用链,不只是单次 fetch:401 之后 serverApiFetch 会等
+      // authManager.refresh(),而那次 refresh 自己无超时上限,只约束 fetch 挡不住
+      // 整条链挂死、把本机账本一直遮在 loading 后面。
+      outcome = await this.withDeadline(
+        () => this.deps.fetchPlatformIssues(),
+        this.deps.platformTimeoutMs ?? DEFAULT_PLATFORM_TIMEOUT_MS,
+        'platform',
+      );
     } catch (err) {
-      // fetchPlatformIssues 约定不抛;真抛了也不能把整页打挂。
-      log.warn('platform issues fetch threw', { error: errorText(err) });
+      // fetchPlatformIssues 约定不抛;超时或它真抛了都不能把整页打挂。
+      log.warn('platform issues fetch failed', { error: errorText(err) });
       return { issues: [], degraded: 'fetch-failed', truncated: false };
     }
     if (!outcome.ok) {
@@ -264,7 +280,7 @@ export class MyIssuesService {
     // 只是这一次没并进内容。所以把它记在闭包外。
     let resolved: GithubEnhancementViewer | null = null;
     try {
-      return await this.withEnhancementDeadline(async () => {
+      return await this.withDeadline(async () => {
         resolved = await this.deps.resolveGithubEnhancement();
         const viewer = resolved;
         if (!viewer) return { viewer: null, issues: [], truncated: false };
@@ -276,7 +292,7 @@ export class MyIssuesService {
           log.debug('github enhancement search failed', { error: errorText(err) });
           return { viewer, issues: [], truncated: false };
         }
-      });
+      }, this.deps.enhancementTimeoutMs ?? DEFAULT_ENHANCEMENT_TIMEOUT_MS, 'enhancement');
     } catch (err) {
       // 没有 GitHub 身份是正常状态;解析失败与总超时同样只是「这次没有增强」。
       log.debug('github enhancement unavailable', { error: errorText(err) });
@@ -284,13 +300,19 @@ export class MyIssuesService {
     }
   }
 
-  /** 整条增强路径的单次 deadline;<=0 表示关闭(仅测试用)。 */
-  private withEnhancementDeadline<T>(run: () => Promise<T>): Promise<T> {
-    const timeoutMs = this.deps.enhancementTimeoutMs ?? DEFAULT_ENHANCEMENT_TIMEOUT_MS;
+  /**
+   * `load()` 里**每一条**并行分支的总 deadline —— 唯一实现,新增分支照同一形状套。
+   *
+   * 「一条分支挂住就把整页钉在 loading」这个缺陷在 review 里出现过四次(增强身份、
+   * 增强搜索、平台单次 fetch、平台 401-refresh 链),每次都是某条路径没有上限。
+   * 所以 deadline 只留这一个入口:传 run + 预算,不要在分支内部各自 new 计时器
+   * (那样第二段还会重置前一段的 deadline)。`<=0` 关闭,仅测试用。
+   */
+  private withDeadline<T>(run: () => Promise<T>, timeoutMs: number, label: string): Promise<T> {
     if (timeoutMs <= 0) return run();
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
-        reject(new Error(`github enhancement timed out after ${timeoutMs}ms`));
+        reject(new Error(`my-issues ${label} timed out after ${timeoutMs}ms`));
       }, timeoutMs);
       run().then(
         (value) => {
