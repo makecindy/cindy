@@ -124,14 +124,22 @@ export function commandUsesUserDataDir(command, userDataDir) {
   const normalizedCommand = normalize(command);
   const normalizedDir = stripTrailingSlashes(normalize(userDataDir));
   if (!normalizedDir) return false;
-  const needle = `--user-data-dir=${normalizedDir}`;
-  let index = normalizedCommand.indexOf(needle);
-  while (index !== -1) {
-    const after = normalizedCommand[index + needle.length];
-    if (after === undefined || after === '/' || after === '"' || after === "'" || /\s/.test(after)) {
-      return true;
+  // 值可能带引号(Windows 常见: --user-data-dir="C:\..."), 裸值与引号包裹
+  // 两种形态都要命中, 否则冲突检测漏判会放行进共享 SQLite/登录态。
+  const needles = [
+    `--user-data-dir=${normalizedDir}`,
+    `--user-data-dir="${normalizedDir}`,
+    `--user-data-dir='${normalizedDir}`,
+  ];
+  for (const needle of needles) {
+    let index = normalizedCommand.indexOf(needle);
+    while (index !== -1) {
+      const after = normalizedCommand[index + needle.length];
+      if (after === undefined || after === '/' || after === '"' || after === "'" || /\s/.test(after)) {
+        return true;
+      }
+      index = normalizedCommand.indexOf(needle, index + 1);
     }
-    index = normalizedCommand.indexOf(needle, index + 1);
   }
   return false;
 }

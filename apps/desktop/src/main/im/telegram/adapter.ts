@@ -92,12 +92,13 @@ export function buildTelegramAdapter(
     projectSwitching: true,
     buildVendorOptions: (userId) => ({ telegramChatId: userId, source: 'telegram' }),
     answerOnlyProgress: (userId) => decodeTelegramLaneUserId(userId) === null,
-    // 一群一会话下的成员权限收紧(D1): 群成员触发的轮次挂强确认策略 —
-    // 读/搜自由, 破坏性操作弹确认卡且只有 owner 能点。owner 自己的轮次不挂。
+    // 一群一会话的权限收紧(D1 + 2026-07-30 review 修订): **所有群轮次**都挂
+    // 破坏性操作强确认 — 不只成员触发的。群窗口/引用块把成员可控文本注入
+    // owner 触发的轮次, 提示注入可借 owner 轮次的宽松档执行危险操作; 统一
+    // 强确认后确认卡只认 owner 点击, owner 多一次点按换掉这条注入通路。
+    // DM(无 speaker)不挂, owner 私聊保持全速。
     turnPermissionPolicyFor: (event) =>
-      event.speaker && !event.speaker.isOwner
-        ? createTelegramGuestTurnPermissionPolicy(event.messageId)
-        : undefined,
+      event.speaker ? createTelegramGuestTurnPermissionPolicy(event.messageId) : undefined,
     prepareAgentTurnText: async (event) => {
       const lane = decodeTelegramLaneUserId(event.senderId);
       const replyBlock = event.replyContext

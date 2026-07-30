@@ -454,6 +454,10 @@ async function reconcileOwnerScopedImWorkingDirs(): Promise<void> {
         .where(eq(sessions.source, 'telegram'));
       for (const row of rows) {
         if (!row.botContextId) continue;
+        // /project 切到项目目录是用户显式选择, 重连不得覆盖回托管目录 —
+        // 本归一只服务"跨 owner 命名空间迁移的旧托管路径", 因此仅当现值
+        // 本来就是托管 im-working-dir 路径(或为空)时才改写。
+        if (row.workingDir && !row.workingDir.includes('im-working-dir')) continue;
         const scoped = telegramAdapter.sessions.ensureWorkingDir(row.botContextId);
         if (row.workingDir === scoped) continue;
         await db.update(sessions).set({ workingDir: scoped }).where(eq(sessions.id, row.id));

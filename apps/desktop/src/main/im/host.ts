@@ -42,6 +42,7 @@ import {
   setTelegramGroupActivation,
 } from './telegram/behaviorStore';
 import { listTelegramKnownGroups } from './telegram/groupWindow';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { imHostAccountScope } from './accountScopeBridge';
 import { ownerScopedImSecrets } from './ownerScopedStorage';
 import { captureImAccountGeneration, isImAccountGenerationCurrent } from './accountBoundary';
@@ -165,12 +166,19 @@ export const telegramIm = createTelegramIM(host, {
  * payload 在 store 内白名单校验, 未知字段/非法值一律丢弃。
  */
 export function registerTelegramBotConfigIpc(): void {
-  ipcMain.handle('telegramBot:get-behavior', () => readTelegramBehavior());
-  ipcMain.handle('telegramBot:set-behavior', (_e, patch) =>
-    patchTelegramBehavior((patch ?? {}) as Parameters<typeof patchTelegramBehavior>[0]),
-  );
+  // 每个 handler 先验事件来自可信 app renderer(与 bootstrap 内敏感通道同口径):
+  // 共享的 host.ipc.handle 适配器会丢弃 event, 所以这组通道直接走 ipcMain。
+  ipcMain.handle('telegramBot:get-behavior', (e) => {
+    assertTrustedAppRendererEvent(e);
+    return readTelegramBehavior();
+  });
+  ipcMain.handle('telegramBot:set-behavior', (e, patch) => {
+    assertTrustedAppRendererEvent(e);
+    return patchTelegramBehavior((patch ?? {}) as Parameters<typeof patchTelegramBehavior>[0]);
+  });
   // 群聊节: 已知群列表(窗口表 distinct chat)+ per-chat 参与模式读写。
-  ipcMain.handle('telegramBot:list-groups', async () => {
+  ipcMain.handle('telegramBot:list-groups', async (e) => {
+    assertTrustedAppRendererEvent(e);
     const groups = await listTelegramKnownGroups();
     const activation = readTelegramBehavior().groupActivation ?? {};
     return {
@@ -181,7 +189,8 @@ export function registerTelegramBotConfigIpc(): void {
       })),
     };
   });
-  ipcMain.handle('telegramBot:set-group-activation', (_e, payload) => {
+  ipcMain.handle('telegramBot:set-group-activation', (e, payload) => {
+    assertTrustedAppRendererEvent(e);
     const p = (payload ?? {}) as { chatId?: string; mode?: string };
     const chatId = typeof p.chatId === 'string' && /^-?\d+$/.test(p.chatId) ? p.chatId : null;
     const mode = p.mode === 'always' ? 'always' : 'mention';
@@ -189,8 +198,12 @@ export function registerTelegramBotConfigIpc(): void {
     return setTelegramGroupActivation(chatId, mode);
   });
   // 人格配置(soul + 名字); 保存后可选把名字同步到 Telegram 资料页(setMyName)。
-  ipcMain.handle('telegramBot:get-persona', () => readTelegramPersona());
-  ipcMain.handle('telegramBot:set-persona', async (_e, payload) => {
+  ipcMain.handle('telegramBot:get-persona', (e) => {
+    assertTrustedAppRendererEvent(e);
+    return readTelegramPersona();
+  });
+  ipcMain.handle('telegramBot:set-persona', async (e, payload) => {
+    assertTrustedAppRendererEvent(e);
     const p = (payload ?? {}) as { botName?: string; soul?: string; syncProfile?: boolean };
     const persona = patchTelegramPersona({
       ...(typeof p.botName === 'string' ? { botName: p.botName } : {}),

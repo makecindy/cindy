@@ -386,6 +386,26 @@ describe('TelegramIM', () => {
     expect(sends[1].params.reply_parameters).toBeUndefined();
   });
 
+  it('连发两条触发排队时, 两轮输出各自挂回自己的提问(FIFO 配对, 不被后到覆盖)', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([
+      groupMessage({ text: '第一问', fromId: 111, messageId: 60, mentionBot: true }),
+      groupMessage({ text: '第二问', fromId: 222, messageId: 61, mentionBot: true }),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    // 两轮输出按触发顺序先后开始(lane 内 turn 串行)
+    await im.sendText(events[0].senderId, '答一');
+    await im.sendText(events[0].senderId, '答二');
+    const sends = api.calls.filter(
+      (c) => c.method === 'sendMessage' && c.params.chat_id === '-100200',
+    );
+    expect(sends).toHaveLength(2);
+    expect((sends[0].params.reply_parameters as { message_id: number }).message_id).toBe(60);
+    expect((sends[1].params.reply_parameters as { message_id: number }).message_id).toBe(61);
+  });
+
   it('私聊出站不回挂 reply', async () => {
     const events: IMMessageEvent[] = [];
     im.onMessage((e) => events.push(e));

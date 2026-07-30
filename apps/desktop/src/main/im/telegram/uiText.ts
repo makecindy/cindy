@@ -34,7 +34,7 @@ export const ui = {
 
 私聊直接发消息就行；群里 @ 我或回复我的消息才会触发，我也会记住群里最近的聊天做上下文~`,
     unknownCommand: (cmd: string) =>
-      `没认出 \`${cmd}\` 这个命令 🤔\n我能听懂的: /new、/model、/permission、/ctr、/exctr、/help`,
+      `没认出 \`${cmd}\` 这个命令 🤔\n我能听懂的: /new、/session、/project、/model、/permission、/ctr、/exctr、/stop、/help`,
     detachedBySlash: '🚪 接管结束，咱们回到 Telegram 对话。下次想远程操控 desktop 再 /ctr',
     detachedByRevoke: '⚠️ 你在 desktop 那边把接管收回去了，后续消息回到 Telegram 对话。',
     notAttached: '🤷 你现在没在接管任何会话，/exctr 闲着也没事可干。',

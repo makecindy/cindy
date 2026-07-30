@@ -51,7 +51,7 @@ import {
   normalizeMessage,
   type TelegramGroupWindowEntry,
 } from './inbound.js';
-import { markdownToTelegramHtml } from './markdown.js';
+import { markdownToTelegramHtml, stripTelegramHtmlTags } from './markdown.js';
 import { startTelegramStreaming } from './streamingText.js';
 
 const TOKEN_SECRET_KEY = 'telegram-bot-token';
@@ -197,12 +197,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     { messages: TgMessage[]; timer: ReturnType<typeof setTimeout> }
   >();
   /**
-   * 群 lane 的待回挂触发消息(laneUserId → 原生 message_id): 该触发的**首条**
-   * 出站消息以 reply 形式挂回触发消息下面 — 多人群里答案必须和提问对上号
-   * (与官方 bot / OpenClaw / Hermes 的群内回复习惯一致)。用后即耗, 后续分段
-   * /卡片不重复回挂; DM 不回挂。
+   * 待配对的回挂触发队列(laneUserId → 原生 message_id FIFO): 多条消息在上一
+   * 轮还没出话时先后触发同一 lane, 各自的答案必须挂回各自的提问 — 单值会被
+   * 后到者覆盖(2026-07-30 review P1)。lane 的 turn 串行执行, 每次流式句柄
+   * 创建(= 一轮输出开始)从队头领取本轮目标进 turnReplyTargets。
    */
-  private readonly laneReplyTargets = new Map<string, string>();
+  private readonly pendingReplyTargets = new Map<string, Array<{ id: string; at: number }>>();
+  /** 当前轮的回挂目标(claimTurnReplyTarget 领取; 'first' 用后即耗, 'all' 整轮保留)。 */
+  private readonly turnReplyTargets = new Map<string, string>();
   /** 非 owner 礼貌回应的 per-user 冷却(userId → 上次回应 ts)。 */
   private readonly strangerNoticeAt = new Map<string, number>();
   /** ambient 触发的原生 messageId(`chatId|msgId`) — 表情回应抑制名单(FIFO 512)。 */
@@ -242,6 +244,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.disposing = true;
     this.configVersion += 1;
     this.clearAllTypingLoops();
+    // 回挂配对是连接期内存态 — 换代/断开后旧目标一律作废, 不跨代错配。
+    this.pendingReplyTargets.clear();
+    this.turnReplyTargets.clear();
     await this.stopPolling();
     this.setStatus({ kind: 'idle' });
   }
@@ -372,6 +377,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   // ── outbound ───────────────────────────────────────────────────────────────
 
   async sendText(userId: string, text: string): Promise<{ messageId: string }> {
+    // 独立输出(命令回复/notice/turn 未及流式即失败的报错): 本轮没有已领取
+    // 的回挂目标时从队列领取 — 这类输出就是对触发消息的直接响应。
+    this.claimTurnReplyTargetIfIdle(userId);
     return this.sendPlainChunked(userId, text);
   }
 
@@ -394,6 +402,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     userId: string,
     spec: InteractiveCardSpec,
   ): Promise<{ messageId: string }> {
+    this.claimTurnReplyTargetIfIdle(userId);
     const target = this.targetOf(userId);
     const { html, replyMarkup } = buildCardPayload(spec);
     const sent = await this.callSend<TgMessage>('sendMessage', {
@@ -425,6 +434,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     // answerOnly 补丁由该通道取代; draft 一旦失败 handle 内部 latch 回
     // send+edit 经典路径, 且本实例后续 turn 不再尝试 draft)。
     const isDm = decodeLaneUserId(userId) === null;
+    // 一轮输出开始: 从待配对队列领取本轮的回挂目标(见 claimTurnReplyTarget)。
+    this.claimTurnReplyTarget(userId);
     const useDraft = isDm && !this.draftStreamingDisabled;
     if (useDraft) this.draftIdCounter += 1;
     const draftId = this.draftIdCounter;
@@ -795,7 +806,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       });
       if (this.disposing || this.configVersion !== acceptedConfigVersion) return;
       if (this.behaviorOf().replyQuoteDm === 'first') {
-        this.laneReplyTargets.set(String(m.from.id), String(m.message_id));
+        this.queueReplyTarget(String(m.from.id), String(m.message_id));
       }
       // DM 也要 typing: 草稿占位只在会话内部可见, 聊天列表/标题栏的
       // 「正在输入…」靠 sendChatAction(Chris 2026-07-30 实测点名缺失)。
@@ -833,7 +844,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       }
       const laneUserId = this.resolveGroupLane(m);
       if (this.behaviorOf().replyQuoteGroup !== 'off') {
-        this.laneReplyTargets.set(laneUserId, String(m.message_id));
+        this.queueReplyTarget(laneUserId, String(m.message_id));
       }
       if (ambient) {
         // ambient 全静默: 不 typing、不表情(说不说话都不能打扰群)。
@@ -938,19 +949,49 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     return { chat_id: lane.chatId, message_thread_id: Number(lane.threadId) };
   }
 
+  /** 触发消息入队(等待与它的那一轮输出配对)。 */
+  private queueReplyTarget(userId: string, messageId: string): void {
+    const queue = this.pendingReplyTargets.get(userId) ?? [];
+    queue.push({ id: messageId, at: Date.now() });
+    while (queue.length > 32) queue.shift();
+    this.pendingReplyTargets.set(userId, queue);
+  }
+
   /**
-   * 消费该 lane 的待回挂触发 → reply_parameters(首条出站专用)。
+   * 一轮输出开始(流式句柄创建)时从队头领取本轮回挂目标。lane 的 turn 串行,
+   * 触发顺序 = 输出顺序, FIFO 即正确配对。掉队条目(如某轮在产出前失败, 其
+   * 目标从未被领取)按 15 分钟时效丢弃, 防止错位配对无限传递。
+   */
+  private claimTurnReplyTarget(userId: string): void {
+    const queue = this.pendingReplyTargets.get(userId);
+    const cutoff = Date.now() - 15 * 60_000;
+    while (queue && queue.length > 0 && queue[0].at < cutoff) queue.shift();
+    const next = queue?.shift();
+    if (queue && queue.length === 0) this.pendingReplyTargets.delete(userId);
+    if (next) this.turnReplyTargets.set(userId, next.id);
+    else this.turnReplyTargets.delete(userId);
+  }
+
+  /** 独立输出入口用: 本轮没有已领取目标且队列有货时才领取(不动流式轮的语义)。 */
+  private claimTurnReplyTargetIfIdle(userId: string): void {
+    if (this.turnReplyTargets.has(userId)) return;
+    if (!this.pendingReplyTargets.has(userId)) return;
+    this.claimTurnReplyTarget(userId);
+  }
+
+  /**
+   * 本轮回挂目标 → reply_parameters(首条出站专用)。
    * allow_sending_without_reply: 触发消息被删时降级为普通消息, 不让发送失败。
    */
   private consumeReplyParams(
     userId: string,
   ): { reply_parameters: { message_id: number; allow_sending_without_reply: true } } | Record<string, never> {
-    const target = this.laneReplyTargets.get(userId);
+    const target = this.turnReplyTargets.get(userId);
     if (!target) return {};
-    // 群 'all' 档: 目标保留到下一次触发覆盖, 本次 turn 的每条出站都挂回。
+    // 群 'all' 档: 目标保留整轮(下一轮 claim 时被替换/清除), 每条出站都挂回。
     const keepForAll =
       decodeLaneUserId(userId) !== null && this.behaviorOf().replyQuoteGroup === 'all';
-    if (!keepForAll) this.laneReplyTargets.delete(userId);
+    if (!keepForAll) this.turnReplyTargets.delete(userId);
     return {
       reply_parameters: { message_id: Number(target), allow_sending_without_reply: true },
     };
@@ -1112,7 +1153,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         await this.callSend('editMessageText', {
           chat_id: chatId,
           message_id: Number(nativeMessageId),
-          text: html.replace(/<[^>]+>/g, '') || '…',
+          text: stripTelegramHtmlTags(html) || '…',
           link_preview_options: { is_disabled: true },
         }).catch((fallbackErr) => {
           if (fallbackErr instanceof TelegramApiError && /not modified/i.test(fallbackErr.message)) {

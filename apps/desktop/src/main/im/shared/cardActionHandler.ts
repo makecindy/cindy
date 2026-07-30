@@ -1145,8 +1145,15 @@ export function createCardActionHandler(
         log.warn('project:pick missing workingDir — ignoring');
         return;
       }
-      if (!fs.existsSync(workingDir)) {
-        // 项目清单来自历史会话行, 目录可能已被移动/删除 — fail-closed 不切。
+      // 项目清单来自历史会话行, 目录可能已被移动/删除/被同名文件顶替 —
+      // 必须确认是目录才切(fail-closed), 否则会话会切进非法 cwd 难以排障。
+      let isDirectory = false;
+      try {
+        isDirectory = fs.statSync(workingDir).isDirectory();
+      } catch {
+        isDirectory = false;
+      }
+      if (!isDirectory) {
         await patchProjectCard(im, event.messageId, projectUi.switchFailed(displayName));
         return;
       }

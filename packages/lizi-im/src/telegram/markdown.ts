@@ -30,6 +30,27 @@ export function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/**
+ * 剥掉 Telegram HTML 子集标签(400 回退纯文本编辑用)。单趟线性扫描 —
+ * 不用 `/<[^>]+>/g` 正则: CodeQL 判其对 '<' 重复串多项式回溯, 且单趟
+ * replace 对嵌套构造(`<<b>`)剥不干净。输出走无 parse_mode 的 text 字段,
+ * 残余尖括号只是字面字符, 不会被再解释。
+ */
+export function stripTelegramHtmlTags(html: string): string {
+  let out = '';
+  let inTag = false;
+  for (const ch of html) {
+    if (!inTag && ch === '<') {
+      inTag = true;
+    } else if (inTag && ch === '>') {
+      inTag = false;
+    } else if (!inTag) {
+      out += ch;
+    }
+  }
+  return out;
+}
+
 function splitByCodeFence(text: string): Segment[] {
   const segments: Segment[] = [];
   const re = /```[\s\S]*?(?:```|$)/g;
@@ -75,7 +96,10 @@ function renderLine(line: string): string {
   if (heading) return `<b>${renderInline(heading[2])}</b>`;
   const quote = line.match(/^>\s?(.*)$/);
   if (quote) return `<blockquote>${renderInline(quote[1])}</blockquote>`;
-  if (/^\s*(?:[-*_]\s*){3,}$/.test(line) && line.trim().length >= 3) return '———';
+  // 有界量词(CodeQL polynomial-redos): agent 输出的分隔线不会超过这个宽度。
+  if (/^[ \t]{0,64}(?:[-*_][ \t]{0,64}){3,64}$/.test(line) && line.trim().length >= 3) {
+    return '———';
+  }
   return renderInline(line);
 }
 
@@ -93,14 +117,15 @@ function renderInline(text: string): string {
       }
       let out = escapeHtml(part);
       // 网络图片语法 ![alt](http…) 降级为链接(Telegram 文本消息内嵌不了图),
-      // 先于普通链接处理避免残留孤儿 '!'。
+      // 先于普通链接处理避免残留孤儿 '!'。label/url 用有界量词(CodeQL
+      // polynomial-redos): 超界的病态输入按原文放行, 不构造链接。
       out = out.replace(
-        /!\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+        /!\[([^\]]{1,512})\]\((https?:\/\/[^)\s]{1,2048})\)/g,
         (_m, label: string, url: string) => `<a href="${url.replace(/"/g, '&quot;')}">${label}</a>`,
       );
       // [text](url) — 只放行 http(s), 其它 scheme 保留原文(不构造可点链接)。
       out = out.replace(
-        /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+        /\[([^\]]{1,512})\]\((https?:\/\/[^)\s]{1,2048})\)/g,
         (_m, label: string, url: string) => `<a href="${url.replace(/"/g, '&quot;')}">${label}</a>`,
       );
       out = out.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
