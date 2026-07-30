@@ -682,6 +682,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       }
       const laneUserId = this.resolveGroupLane(m);
       this.laneReplyTargets.set(laneUserId, String(m.message_id));
+      // 被召唤即出 typing(5s 自动消失, 首条输出到达时客户端自动清):
+      // 群里没有 DM 的草稿占位, 这是"收到了, 在干活"的第一反馈。
+      this.sendTypingAction(
+        String(m.chat.id),
+        m.is_topic_message === true ? m.message_thread_id : undefined,
+      );
       const acceptedConfigVersion = this.configVersion;
       const event = await normalizeMessage(m, {
         api: this.requireApi(),
@@ -973,6 +979,21 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         for (const absPath of group) await this.sendSinglePhoto(chatId, absPath);
       }
     }
+  }
+
+  /** fire-and-forget typing 状态(失败静默 — 纯体验增强, 不参与正确性)。 */
+  private sendTypingAction(chatId: string, messageThreadId?: number): void {
+    const api = this.api;
+    if (!api) return;
+    void api
+      .call('sendChatAction', {
+        chat_id: chatId,
+        action: 'typing',
+        ...(messageThreadId !== undefined ? { message_thread_id: messageThreadId } : {}),
+      })
+      .catch(() => {
+        /* 无权限/限流一律静默 */
+      });
   }
 
   private async sendSinglePhoto(chatId: string, absPath: string): Promise<void> {
