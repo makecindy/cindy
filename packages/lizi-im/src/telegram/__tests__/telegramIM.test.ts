@@ -438,6 +438,29 @@ describe('TelegramIM', () => {
     });
   });
 
+  it('相册 settle 期间同 chat 的后续消息保序: 先答相册再答追问', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    const member = (messageId: number, caption?: string): TgUpdate => ({
+      update_id: messageId,
+      message: {
+        message_id: messageId,
+        from: { id: 111, is_bot: false, first_name: 'U' },
+        chat: { id: 111, type: 'private' },
+        date: 1_753_000_000,
+        media_group_id: 'album-ord',
+        ...(caption ? { caption } : {}),
+        photo: [{ file_id: `f${messageId}`, file_unique_id: `u${messageId}`, width: 10, height: 10 }],
+      },
+    });
+    // 同一批次: 相册两张 + 紧跟的追问文本 — 追问必须排在相册事件之后
+    api.pushUpdates([member(35, '看这组图'), member(36), privateMessage('顺便再查个东西', 111, 37)]);
+    await vi.waitFor(() => expect(events).toHaveLength(2), { timeout: 5000 });
+    expect(events[0].text).toBe('看这组图');
+    expect(events[1].text).toBe('顺便再查个东西');
+  });
+
   it('相册(media_group)聚合为单个事件, 不各起一轮 turn', async () => {
     const events: IMMessageEvent[] = [];
     im.onMessage((e) => events.push(e));

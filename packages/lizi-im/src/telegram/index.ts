@@ -105,6 +105,19 @@ type CardActionHandler = (e: IMCardActionEvent) => void;
 type StatusHandler = (s: IMStatus) => void;
 type GroupWindowHandler = (entry: TelegramGroupWindowEntry) => void;
 
+/** settle 缓冲/处理中的相册(见 albumsInFlight 注释)。 */
+interface PendingAlbum {
+  messages: TgMessage[];
+  timer: ReturnType<typeof setTimeout>;
+  firstUpdateId: number;
+  chatId: string;
+  /** 处理收口(或被丢弃)时 resolve — 同 chat 后续消息的顺序门在等它。 */
+  done: Promise<void>;
+  resolveDone: () => void;
+  /** settle 定时器已触发, 不再接受追加成员。 */
+  settled: boolean;
+}
+
 /** 行为配置(设置卡可视化, 实时生效 — host 以 getter 注入, transport 每次使用时读)。 */
 export interface TelegramBehaviorConfig {
   /**
@@ -192,10 +205,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private richSendDisabled = false;
   private readonly mediaDir: string;
   /** 相册聚合缓冲 — key `${chatId}:${mediaGroupId}`。 */
-  private readonly pendingAlbums = new Map<
-    string,
-    { messages: TgMessage[]; timer: ReturnType<typeof setTimeout>; firstUpdateId: number }
-  >();
+  private readonly pendingAlbums = new Map<string, PendingAlbum>();
+  /**
+   * 缓冲或处理中的相册(settle 定时器一响就从 pendingAlbums 摘键关闭追加,
+   * 但要留在这里直到 processInboundMessage 收口): 持久化游标 cap 与同
+   * chat 的顺序门都看本集合 — 摘早了, 处理途中到达的批次会把游标推过
+   * 未完成的相册(review P1)。
+   */
+  private readonly albumsInFlight = new Set<PendingAlbum>();
   /** 本连接见过的最大 offset(update_id+1) — 相册 flush 后补写持久化游标用。 */
   private lastSeenOffset = 0;
   /**
@@ -760,6 +777,18 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       return;
     }
 
+    // 顺序门: 同 chat 有相册在 settle/处理中时, 后续消息等它收口再进 turn —
+    // 否则同批次里"相册 + 追问"会被倒序回答(review P1)。handleUpdate 在
+    // 轮询循环里被串行 await, 这里等待即全链路保序; settle 定时器照常触发。
+    const gates = [...this.albumsInFlight]
+      .filter((album) => album.chatId === String(m.chat.id))
+      .map((album) => album.done);
+    if (gates.length > 0) {
+      const generation = this.configVersion;
+      await Promise.all(gates);
+      if (this.disposing || this.configVersion !== generation) return;
+    }
+
     await this.processInboundMessage(m);
   }
 
@@ -768,36 +797,63 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     const key = `${m.chat.id}:${m.media_group_id}`;
     const generation = this.configVersion;
     const existing = this.pendingAlbums.get(key);
-    if (existing) {
+    let album: PendingAlbum;
+    if (existing && !existing.settled) {
       existing.messages.push(m);
       clearTimeout(existing.timer);
+      album = existing;
+    } else {
+      let resolveDone!: () => void;
+      const done = new Promise<void>((resolve) => {
+        resolveDone = resolve;
+      });
+      album = {
+        messages: [m],
+        timer: undefined as unknown as ReturnType<typeof setTimeout>,
+        firstUpdateId: updateId,
+        chatId: String(m.chat.id),
+        done,
+        resolveDone,
+        settled: false,
+      };
+      this.pendingAlbums.set(key, album);
+      this.albumsInFlight.add(album);
     }
-    const messages = existing?.messages ?? [m];
-    const firstUpdateId = existing?.firstUpdateId ?? updateId;
-    const timer = setTimeout(() => {
+    album.timer = setTimeout(() => {
+      // 关闭追加(摘 append 键), 但留在 albumsInFlight 直到处理收口 —
+      // 游标 cap 与顺序门在处理期间必须仍然生效(review P1)。
+      album.settled = true;
       this.pendingAlbums.delete(key);
-      if (this.disposing || this.configVersion !== generation) return;
+      const finish = () => {
+        this.albumsInFlight.delete(album);
+        album.resolveDone();
+        if (!this.disposing && this.configVersion === generation) this.persistOffsetCapped();
+      };
+      if (this.disposing || this.configVersion !== generation) {
+        finish();
+        return;
+      }
       // 有正文/引用的成员当主消息(caption 通常只挂在其中一条上)。
       const primary =
-        messages.find((x) => (x.text ?? x.caption ?? '') !== '' || x.reply_to_message) ??
-        messages[0];
-      const siblings = messages.filter((x) => x !== primary);
+        album.messages.find((x) => (x.text ?? x.caption ?? '') !== '' || x.reply_to_message) ??
+        album.messages[0];
+      const siblings = album.messages.filter((x) => x !== primary);
       void this.processInboundMessage(primary, siblings, { skipGroupWindow: true })
         .catch((err) => {
           const msg = err instanceof Error ? err.message : String(err);
           this.log.warn(`telegram album handling failed: ${msg}`);
         })
-        .finally(() => {
-          // 相册已处理(或确定失败) — 持久化游标此刻才允许越过它。
-          if (!this.disposing && this.configVersion === generation) this.persistOffsetCapped();
-        });
+        .finally(finish);
     }, ALBUM_SETTLE_MS);
-    this.pendingAlbums.set(key, { messages, timer, firstUpdateId });
   }
 
   private clearPendingAlbums(): void {
-    for (const { timer } of this.pendingAlbums.values()) clearTimeout(timer);
+    for (const album of this.albumsInFlight) {
+      clearTimeout(album.timer);
+      album.resolveDone(); // 解开顺序门, 不留悬挂 await
+    }
     this.pendingAlbums.clear();
+    this.albumsInFlight.clear();
   }
 
   private async processInboundMessage(
@@ -1419,8 +1475,10 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    * 补写时相册会重放一次, 比丢图可取。
    */
   private persistOffsetCapped(): void {
+    // 以 albumsInFlight 为准(含 settle 后仍在处理中的相册): pendingAlbums
+    // 的键在定时器触发即摘除, 只看它会在处理窗口内提前放开 cap(review P1)。
     let floor = Number.POSITIVE_INFINITY;
-    for (const album of this.pendingAlbums.values()) {
+    for (const album of this.albumsInFlight) {
       floor = Math.min(floor, album.firstUpdateId);
     }
     this.persistOffset(Math.min(this.lastSeenOffset, floor));
