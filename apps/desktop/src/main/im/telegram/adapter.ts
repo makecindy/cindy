@@ -66,6 +66,8 @@ export function buildTelegramAdapter(
       }),
     },
     processingEmoji: PROCESSING_EMOJI,
+    // /project: 从 Telegram 把当前会话切到 desktop 项目目录(bot 原生会话)。
+    projectSwitching: true,
     buildVendorOptions: (userId) => ({ telegramChatId: userId, source: 'telegram' }),
     answerOnlyProgress: (userId) => decodeTelegramLaneUserId(userId) === null,
     prepareAgentTurnText: async (event) => {

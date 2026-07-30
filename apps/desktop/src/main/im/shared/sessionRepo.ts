@@ -327,6 +327,32 @@ export async function resetSessionToDefaults(
   setSessionProvider(sessionId, defaults.providerId);
 }
 
+/**
+ * `/project` 语义: 把该 IM 会话行切到指定工作目录并重开上下文(sdkSessionId
+ * 归零)。模型/权限/供应商等设置保留 — 换目录不该顺手改路由。workspaceKind
+ * 随目录性质切换: 项目目录落 'project'(sidebar 按项目归组), 托管对话目录落
+ * 'dialogue'。广播 created 让 sidebar 重拉 — 行会跨分组移动, patched 增量
+ * 覆盖不了归组变化。
+ */
+export async function switchSessionWorkingDir(
+  sessionId: string,
+  workingDir: string,
+  workspaceKind: 'project' | 'dialogue',
+): Promise<void> {
+  const db = getDbClient().drizzle;
+  await db
+    .update(sessions)
+    .set({
+      workingDir,
+      workspaceKind,
+      sdkSessionId: null,
+      clearedAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+    .where(eq(sessions.id, sessionId));
+  broadcastSessionCreated(sessionId);
+}
+
 /** 读取 `/model` 修改前的持久化路由快照，用于失败时恢复运行态。 */
 export async function readModelRouteSnapshot(
   sessionId: string,

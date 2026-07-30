@@ -20,6 +20,7 @@ export const ui = {
     help: `🤖 我能帮你做这些：
 
 /new         开个新对话（清掉当前上下文；群里发就重置这个群话题的上下文）
+/project     切到某个项目目录干活（bot 原生会话，不接管 desktop）
 /model       换个模型上场
 /permission  调一下权限模式（auto / bypass / ask 等）
 /ctr         远程接管 desktop 上的某个工作区（接管中再发可直接换会话）
@@ -130,6 +131,22 @@ export const ui = {
       btnConfirmFullAccess: '开启 Full access',
       btnCancelFullAccess: '保留当前权限',
       fullAccessCancelled: '已取消，保留当前权限',
+    },
+    project: {
+      title: '📂 切个项目目录',
+      hint: (currentName: string) =>
+        `**当前**：${currentName}\n选一个项目，接下来的消息就在那个目录里干活（会重开上下文，模型和权限设置保留）`,
+      emptyBody: '_desktop 端还没有活跃的项目工作区~ 先在 desktop 里打开一个项目再来_',
+      btnDialogue: '💬 回到对话',
+      btnCancel: '🚪 算了',
+      resolvedPick: (displayName: string) =>
+        `📂 已切到 **${displayName}** —— 新上下文已就位，直接发指令开干。想回普通聊天发 /project 选「回到对话」`,
+      resolvedDialogue: '💬 已回到对话目录，上下文重新开始~',
+      resolvedCancel: '🚪 没切，保持现状',
+      switchFailed: (reason: string) => `❌ 没切过去：${reason}（目录可能已被移动或删除）`,
+      attachedUnsupported:
+        '🎮 你正在 /ctr 接管一个 desktop 会话——接管期间消息直接进那个会话，不需要 /project。想切项目先 `/exctr` 退出接管',
+      dialogueName: '对话（托管目录）',
     },
     control: {
       title: '🎮 挑个工作区上号',

@@ -273,6 +273,47 @@ export function createSlashHandlers(
         return true;
       }
 
+      case '/project': {
+        // 项目切换 — projectSwitching 渠道专属(个人 Telegram);其它渠道当
+        // 未知命令处理, 不暴露半成品入口。
+        const projectUi = ui.cards.project;
+        if (!adapter.projectSwitching || !projectUi) {
+          await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+          return true;
+        }
+        // /ctr 接管期间语义冲突(消息在被接管的 desktop 会话里跑): 先 /exctr。
+        const identity: IdentityKey = {
+          channel,
+          botContextId: ctx.botContextId,
+          userId: ctx.userId,
+        };
+        if (bindingStore.get(identity)) {
+          await safeSendText(ctx.userId, projectUi.attachedUnsupported);
+          return true;
+        }
+        const [projects, current] = await Promise.all([
+          listProjectsForControl(),
+          repo.findActiveSession(ctx.botContextId, ctx.userId),
+        ]);
+        const dialogueDir = adapter.sessions.ensureWorkingDir(ctx.botContextId);
+        const currentName =
+          !current || current.workingDir === dialogueDir
+            ? projectUi.dialogueName
+            : (current.workingDir.split(/[\\/]/).filter(Boolean).pop() ?? current.workingDir);
+        const spec = cards.buildProjectPickerCard({
+          botAppId: ctx.botContextId,
+          projects,
+          currentName,
+        });
+        try {
+          await im.sendInteractiveCard(ctx.userId, spec);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.error(`/project card send failed: ${msg}`);
+        }
+        return true;
+      }
+
       case '/permission': {
         if (threadScoped && threadUi) {
           await safeSendText(ctx.userId, threadUi.perThreadConfigUnsupported);

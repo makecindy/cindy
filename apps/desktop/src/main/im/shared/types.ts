@@ -97,6 +97,13 @@ export interface ImChannelAdapter {
   /** "已收到" ack 的 emoji(feishu: emoji_type 枚举名;slack: emoji 名)。 */
   processingEmoji: string;
   /**
+   * `/project` 项目切换开关(个人 Telegram: true)。开启后 slash 层放行
+   * /project 命令: 列出 desktop 端项目工作区, 选中后把当前 (bot, user/lane)
+   * 会话行切到该项目目录并重开上下文(bot 原生会话, 非接管)。开启时
+   * ui.cards.project 必须提供(orchestrator 接线期断言)。
+   */
+  projectSwitching?: boolean;
+  /**
    * thread = session 模型开关(slack: true)。开启后:
    *   - 入站事件的 scopeKey(thread root ts)参与会话路由与接管 binding
    *   - 出站回复全部带 threadTs = scopeKey(发进对应 thread)
@@ -227,6 +234,26 @@ export interface ImUiTextPack {
       btnConfirmFullAccess: string;
       btnCancelFullAccess: string;
       fullAccessCancelled: string;
+    };
+    /**
+     * `/project` 项目切换卡 — 仅 projectSwitching 渠道提供(接线期断言),
+     * 其它渠道省略。
+     */
+    project?: {
+      title: string;
+      /** 卡片提示行; currentName = 当前目录显示名('对话' 或项目名)。 */
+      hint: (currentName: string) => string;
+      emptyBody: string;
+      btnDialogue: string;
+      btnCancel: string;
+      resolvedPick: (displayName: string) => string;
+      resolvedDialogue: string;
+      resolvedCancel: string;
+      switchFailed: (reason: string) => string;
+      /** /ctr 接管期间不支持切项目(先 /exctr)。 */
+      attachedUnsupported: string;
+      /** 当前目录显示名为托管对话目录时的称呼。 */
+      dialogueName: string;
     };
     control: {
       title: string;

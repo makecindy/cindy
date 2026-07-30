@@ -88,6 +88,16 @@ export interface ImCardBuilders {
     sessions: ControlSession[];
     anchorMessageId?: string;
   }): InteractiveCardSpec;
+  /**
+   * `/project` 项目切换卡(projectSwitching 渠道专用): 列 desktop 项目工作区,
+   * 选中把当前 IM 会话行切到该目录(bot 原生会话, 非接管)。
+   */
+  buildProjectPickerCard(args: {
+    botAppId: string;
+    projects: ControlProject[];
+    /** 当前会话所在目录的显示名(项目名或 ui.cards.project.dialogueName)。 */
+    currentName: string;
+  }): InteractiveCardSpec;
   buildResolvedCard(label: string): InteractiveCardSpec;
 }
 
@@ -405,6 +415,56 @@ export function createCardBuilders(
           newBtn,
           backBtn,
           exitBtn,
+        ],
+      };
+    },
+
+    /**
+     * `/project` 项目切换卡。按钮 payload 同 control 卡约定: botAppId 走
+     * payload(cardAction 通道只带 senderId), requestId 是 sentinel。
+     */
+    buildProjectPickerCard(args) {
+      const projectUi = ui.cards.project;
+      if (!projectUi) {
+        throw new Error('buildProjectPickerCard requires ui.cards.project (projectSwitching channel)');
+      }
+      const { botAppId, projects, currentName } = args;
+      const dialogueBtn = {
+        id: 'project:dialogue',
+        label: projectUi.btnDialogue,
+        type: 'default' as const,
+        payload: { requestId: 'project-dialogue', botAppId },
+      };
+      const cancelBtn = {
+        id: 'project:cancel',
+        label: projectUi.btnCancel,
+        type: 'danger' as const,
+        payload: { requestId: 'project-cancel', botAppId },
+      };
+      if (projects.length === 0) {
+        return {
+          title: projectUi.title,
+          body: projectUi.emptyBody,
+          buttons: [dialogueBtn, cancelBtn],
+        };
+      }
+      return {
+        title: projectUi.title,
+        body: projectUi.hint(currentName),
+        buttons: [
+          ...projects.map((p) => ({
+            id: 'project:pick',
+            label: truncate(p.displayName, 30),
+            type: 'default' as const,
+            payload: {
+              requestId: `project-pick:${p.workingDir}`,
+              botAppId,
+              workingDir: p.workingDir,
+              displayName: p.displayName,
+            },
+          })),
+          dialogueBtn,
+          cancelBtn,
         ],
       };
     },
