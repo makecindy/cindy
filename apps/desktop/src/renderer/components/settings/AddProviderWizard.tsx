@@ -286,7 +286,7 @@ export function AddProviderWizard({
     entry?.kind === 'builtin' ? providers.find((x) => x.id === entry.providerId) : undefined;
   const [sel, setSel] = useState<Selection | null>(() => {
     if (!entryProvider) return null;
-    return entryProvider.auth.method === 'apiKey'
+    return entryProvider.auth?.method === 'apiKey'
       ? { kind: 'builtinApiKey', provider: entryProvider }
       : { kind: 'oauth', provider: entryProvider };
   });

@@ -137,9 +137,10 @@ export function createGeminiImageChannel(opts: CreateGeminiImageChannelOptions):
     }
     const body: Record<string, unknown> = {
       contents: [{ parts }],
-      ...(params.aspectRatio
-        ? { generationConfig: { imageConfig: { aspectRatio: params.aspectRatio } } }
-        : {}),
+      generationConfig: {
+        responseModalities: ['TEXT', 'IMAGE'],
+        ...(params.aspectRatio ? { imageConfig: { aspectRatio: params.aspectRatio } } : {}),
+      },
     };
     // 停用轴派发前重查:参考图 fs.readFile 是 await,窗口内被停用即拒(同 gatewayImageClient)。
     opts.beforeDispatch?.(params.model);

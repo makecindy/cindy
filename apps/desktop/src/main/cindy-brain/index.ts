@@ -1893,10 +1893,6 @@ function decodeImageResponse(res: {
 export function getGhostCindySlot(): GhostCindySlot {
   if (!cindySlotSingleton) {
     cindySlotSingleton = new GhostCindySlot({
-      // Ghost 可用性与 XD 网关能力解耦:BYO-key 来源(如 Gemini)不经网关,
-      // 无 Cindy 云账号的本地用户仍可使用自己配置的 key。XD 模型在
-      // canUseCindyGateway=false 时由 registry.isProviderReady 自动清空
-      // 白名单,会在 assertMediaModelStillEnabled 层拦截,不会到达通道。
       getGhost: (id) => findAvailableGhost(id),
       // model 已在 modelSlot 按白名单校验;归属来源(providerId)按白名单条目
       // 定位,经 imageChannelRegistry 取对应执行通道(2026-07 图像多来源)。
