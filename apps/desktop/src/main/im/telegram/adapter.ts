@@ -37,6 +37,12 @@ function sessionSafeUserId(userId: string): string {
   return userId.replace(/\//g, '-');
 }
 
+/** 发言人显示名/用户名消毒: 平台可改字段是不可信输入, 去控制字符与换行防注入。 */
+function sanitizeSpeakerText(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/[\u0000-\u001f\u007f\u200b]/g, ' ').trim().slice(0, 64);
+}
+
 export function buildTelegramAdapter(
   telegramIm: TelegramIM,
   config: ImOrchestratorConfig,
@@ -62,6 +68,13 @@ export function buildTelegramAdapter(
         imBotContextId: botId,
         imUserId: userId,
       }),
+      // guest lane(群成员会话, threadId 段 u<uid>[t<topic>]) → 只读探索档:
+      // 能搜索/读文件回答问题, 不能改文件/执行风险命令(D1/D2, 2026-07-30)。
+      // owner 可在桌面端对具体会话行手动放开 — 那是显式动作, 不给默认。
+      permissionModeFor: (userId) => {
+        const lane = decodeTelegramLaneUserId(userId);
+        return lane && lane.threadId.startsWith('u') ? 'plan' : null;
+      },
     },
     processingEmoji: PROCESSING_EMOJI,
     // 官方 bot 的结果表情习惯: 成功 👍 / 失败 👎; 中止不放(撤回 👀 即可)。
@@ -81,19 +94,29 @@ export function buildTelegramAdapter(
         return { agentText: `${replyBlock}${event.text}` };
       }
       const { messageId: triggerMessageId } = decodeTelegramMessageId(event.messageId);
-      // 普通群的 per-root reply 链(threadId 段 `r<msgId>`): 共享主群流窗口,
-      // 但各链独立游标 — 与官方 externalKey 含 rootMessageId 的语义对齐。
+      // 合成 lane 标记: `r<msgId>` = owner per-root reply 链; `u<uid>[t<topic>]`
+      // = guest lane(群成员)。两者都共享所在群流的窗口(guest 在 topic 里则共享
+      // 该 topic 窗口), 但各自独立游标。
       const isRootLane = lane.threadId.startsWith('r');
+      const isGuestLane = lane.threadId.startsWith('u');
+      const guestTopic = isGuestLane ? (/t(\d+)$/.exec(lane.threadId)?.[1] ?? '') : '';
+      const windowThreadId = isRootLane ? '' : isGuestLane ? guestTopic : lane.threadId;
       const assembly = await buildTelegramGroupContextPrefix({
         botId: event.contextId,
         chatId: lane.chatId,
-        threadId: isRootLane ? '' : lane.threadId,
+        threadId: windowThreadId,
         cursorScope: lane.threadId,
         triggerMessageId,
       });
-      // 顺序: 群窗口(较远的背景) → 引用块(直接相关) → 用户正文。
+      // 群多人: 发言人标签注入(显示名是不可信输入 — 控制字符/换行消毒, 截断)。
+      const speakerLine = event.speaker
+        ? `[发言人] ${sanitizeSpeakerText(event.speaker.name)}` +
+          (event.speaker.username ? ` (@${sanitizeSpeakerText(event.speaker.username)})` : '') +
+          ` · id:${event.speaker.id}${event.speaker.isOwner ? ' · 主人' : ''}\n`
+        : '';
+      // 顺序: 群窗口(较远的背景) → 引用块(直接相关) → 发言人 → 用户正文。
       return {
-        agentText: `${assembly.prefix}${replyBlock}${event.text}`,
+        agentText: `${assembly.prefix}${replyBlock}${speakerLine}${event.text}`,
         commit: assembly.commit,
       };
     },

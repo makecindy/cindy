@@ -72,6 +72,11 @@ export interface ImSessionNamespace {
   /** 渠道专属列(feishu: feishuBotAppId/feishuOpenId;slack: imBotContextId/imUserId)。 */
   extraInsertColumns(botContextId: string, userId: string): Record<string, unknown>;
   /**
+   * 按 userId 收紧新会话的权限档(telegram guest lane → 'plan' 只读探索)。
+   * 返回 null/缺省 = 用渠道默认。只影响**新建**行; 已存在行的权限归 owner 管。
+   */
+  permissionModeFor?(userId: string): PermissionMode | null;
+  /**
    * 非接管会话 oneshot 生成正式标题时的前缀(如 'Slack · ' / '[飞书·DM] ')。
    *   - threadScoped 渠道(slack): 新 thread 会话的首条消息触发;
    *   - 非 threadScoped 渠道(feishu/discord): 新上下文(建行 / /new 后)的

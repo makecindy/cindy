@@ -156,11 +156,15 @@ export function createImSessionRepo(
     async prepareNewSession(botContextId, userId, scopeKey, providerSnapshot) {
       const id = ns.sessionIdFor(botContextId, userId, scopeKey);
       const workingDir = ns.ensureWorkingDir(botContextId);
-      return rowFromDefaults(
+      const row = rowFromDefaults(
         id,
         workingDir,
         await resolveImSessionDefaults(config, providerSnapshot, ns.source),
       );
+      // 渠道可按 userId 收紧新会话权限档(telegram guest lane → 只读探索)。
+      const tightened = ns.permissionModeFor?.(userId) ?? null;
+      if (tightened) row.permissionMode = tightened;
+      return row;
     },
 
     /**

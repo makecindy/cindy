@@ -226,7 +226,7 @@ describe('TelegramIM', () => {
     });
   });
 
-  it('群消息全部进窗口; 仅 owner @bot 触发 lane 事件', async () => {
+  it('群多人: 全员 @bot 可触发; 成员走 guest lane, owner 走 reply 链; 命令仍 owner 专属', async () => {
     const events: IMMessageEvent[] = [];
     const windowEntries: TelegramGroupWindowEntry[] = [];
     im.onMessage((e) => events.push(e));
@@ -235,17 +235,81 @@ describe('TelegramIM', () => {
     api.pushUpdates([
       groupMessage({ text: 'random chatter', fromId: 222, messageId: 10 }),
       groupMessage({ text: 'ping', fromId: 222, messageId: 11, mentionBot: true }),
+      groupMessage({ text: '/new', fromId: 222, messageId: 13, mentionBot: true }),
       groupMessage({ text: '部署一下', fromId: 111, messageId: 12, mentionBot: true }),
     ]);
-    await vi.waitFor(() => expect(windowEntries).toHaveLength(3));
-    await vi.waitFor(() => expect(events).toHaveLength(1));
-    // 裸 @ = 以触发消息为 root 的新 reply 链 lane(官方群会话模型)
-    expect(events[0]).toMatchObject({ senderId: 'g/-100200/r12', text: '部署一下' });
-    // 第三方显式召唤收到礼貌回应(挂回 TA 的消息)
+    await vi.waitFor(() => expect(windowEntries).toHaveLength(4));
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    // 成员 @ → 每人每群一条 guest lane, speaker 标记非 owner
+    expect(events[0]).toMatchObject({
+      senderId: 'g/-100200/u222',
+      text: 'ping',
+      speaker: { id: '222', isOwner: false },
+    });
+    // 成员发命令(消息 13)被静默丢弃 — 只有两个事件
+    // owner 裸 @ = 以触发消息为 root 的新 reply 链 lane(官方群会话模型)
+    expect(events[1]).toMatchObject({
+      senderId: 'g/-100200/r12',
+      text: '部署一下',
+      speaker: { id: '111', isOwner: true },
+    });
+    // 不再有陌生人礼貌回应(群成员全员可对话, D1)
     const notice = api.calls.find(
-      (c) => c.method === 'sendMessage' && (c.params.reply_parameters as { message_id?: number })?.message_id === 11,
+      (c) =>
+        c.method === 'sendMessage' &&
+        (c.params.reply_parameters as { message_id?: number })?.message_id === 11,
     );
-    expect(notice).toBeTruthy();
+    expect(notice).toBeUndefined();
+  });
+
+  it('群多人: 成员回复 bot 只续自己的 guest lane; owner 回复 guest 链不进 guest 会话', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([groupMessage({ text: '这是啥项目', fromId: 222, messageId: 40, mentionBot: true })]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0].senderId).toBe('g/-100200/u222');
+    const sent = await im.sendText('g/-100200/u222', '这是 Cindy 呀');
+    const answerId = Number(sent.messageId.split('|')[1]);
+    const replyTo = {
+      message_id: answerId,
+      from: { id: BOT.id, is_bot: true, first_name: 'Cindy' },
+      chat: { id: -100200, type: 'supergroup' as const },
+      date: 1_753_000_050,
+      text: '这是 Cindy 呀',
+    };
+    // 成员回复 bot → 续自己的 guest lane
+    api.pushUpdates([
+      {
+        update_id: 41,
+        message: {
+          message_id: 41,
+          from: { id: 222, is_bot: false, first_name: 'F' },
+          chat: { id: -100200, type: 'supergroup', title: 'Ops' },
+          date: 1_753_000_100,
+          text: '再多讲讲',
+          reply_to_message: replyTo,
+        },
+      },
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    expect(events[1].senderId).toBe('g/-100200/u222');
+    // owner 回复 guest 链的 bot 消息 → 不进 guest 会话, 按 owner 新链
+    api.pushUpdates([
+      {
+        update_id: 42,
+        message: {
+          message_id: 42,
+          from: { id: 111, is_bot: false, first_name: 'U' },
+          chat: { id: -100200, type: 'supergroup', title: 'Ops' },
+          date: 1_753_000_200,
+          text: '我来补充',
+          reply_to_message: replyTo,
+        },
+      },
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(3));
+    expect(events[2].senderId).toBe('g/-100200/r42');
   });
 
   it('reply bot 的回答续接同一条链; 裸 @ 开新链', async () => {

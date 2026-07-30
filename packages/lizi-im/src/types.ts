@@ -131,6 +131,11 @@ export interface IMMessageEvent {
   messageId: string;
   /** Plain-text payload. */
   text: string;
+  /**
+   * 群多人对话的发言人元数据(telegram 群 turn 提供; 其它渠道/DM 缺省)。
+   * name 为平台显示名 — 不可信输入, 消费方注入 prompt 前必须消毒。
+   */
+  speaker?: { id: string; name: string; username?: string; isOwner: boolean };
   /** Pre-downloaded attachments. */
   attachments: IMAttachment[];
   /**
