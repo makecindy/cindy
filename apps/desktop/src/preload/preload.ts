@@ -2940,18 +2940,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
       getMessages: (
         deviceId: string,
         sessionId: string,
-      ): Promise<{ messages: Record<string, unknown>[] }> =>
+      ): Promise<{ messages: Record<string, unknown>[]; invalidation?: number }> =>
         ipcRenderer.invoke('device-link:mirror-cache:messages:get', { deviceId, sessionId }),
-      /** 写某 (设备, 会话) 的最近一页消息;空数组 = 清掉该条缓存 */
+      /**
+       * 写某 (设备, 会话) 的最近一页消息;空数组 = 清掉该条缓存。
+       * `expectedInvalidation` = 取到这批内容时 main 侧的会话级作废计数(由 get / put 带回,
+       * renderer 缓存):不一致说明期间**任意窗口 / 进程**作废过这个会话,main 会丢弃这次写。
+       */
       putMessages: (
         deviceId: string,
         sessionId: string,
         messages: readonly Record<string, unknown>[],
-      ): Promise<{ ok: true }> =>
+        expectedInvalidation?: number,
+      ): Promise<{ ok: true; invalidation?: number }> =>
         ipcRenderer.invoke('device-link:mirror-cache:messages:put', {
           deviceId,
           sessionId,
           messages,
+          expectedInvalidation,
         }),
       /** 读侧边栏远程会话列表快照 */
       getSessionList: (): Promise<{

@@ -96,7 +96,7 @@ async function withFileLock<T>(task: (held: boolean) => Promise<T>): Promise<T> 
   return withCrossProcessLock(
     path.join(app.getPath('userData'), QUEUE_LOCK_FILE),
     { label: 'purge-queue' },
-    task,
+    (status) => task(status.held),
   );
 }
 

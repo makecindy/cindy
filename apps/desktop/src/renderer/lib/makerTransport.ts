@@ -19,6 +19,7 @@ import {
   remoteProjectsStore,
 } from '@/features/device-link/remoteProjectsStore';
 import {
+  knownMainInvalidationFor,
   persistCachedMessages,
   sessionCacheInvalidationToken,
 } from '@/features/device-link/mirrorCacheClient';
@@ -218,6 +219,8 @@ export function listMessagesFor(
   if (!opts?.before && opts?.beforeTs == null) {
     // 发起时的作废令牌:/clear、rewind、删消息都会自增它(见 clearCachedMessages)。
     const invalidationAtStart = sessionCacheInvalidationToken(sessionId);
+    // 同时记下 main 侧的会话级作废计数(跨窗口 / 跨进程可见);落盘时交给 main 比对。
+    const mainInvalidationAtStart = knownMainInvalidationFor(sessionId);
     void promise
       .then((rows) => {
         if (!Array.isArray(rows)) return;
@@ -229,7 +232,9 @@ export function listMessagesFor(
         // 把被撤销对端的明文重新落盘,main 侧的作废闸挡不住它(review: codex P1)。
         // 落盘前重核归属:mapping 已经不在(或已换设备)就直接丢弃这次写入。
         if (getSessionDeviceId(sessionId) !== deviceId) return;
-        persistCachedMessages(deviceId, sessionId, rows);
+        // 把"我取到内容时 main 侧的会话级作废计数"一起交上去:main 会再比对一次,于是
+        // **另一个窗口 / 另一个进程**的作废也能挡住这次写(renderer 令牌只在本进程内可见)。
+        persistCachedMessages(deviceId, sessionId, rows, mainInvalidationAtStart);
       })
       // 拉取失败由调用方处理;这里只是不写缓存(旧缓存保留,离线时正好还能用)。
       .catch(() => undefined);

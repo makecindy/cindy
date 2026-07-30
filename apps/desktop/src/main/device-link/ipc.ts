@@ -778,7 +778,7 @@ export async function handleMirrorCacheGetMessages(
   cache: MirrorCache,
   deviceId: unknown,
   sessionId: unknown,
-): Promise<{ messages: Record<string, unknown>[] }> {
+): Promise<{ messages: Record<string, unknown>[]; invalidation?: number }> {
   const device = requireCacheId(deviceId, 'deviceId');
   const session = requireCacheId(sessionId, 'sessionId');
   const owner = cacheOwnerToken();
@@ -787,7 +787,8 @@ export async function handleMirrorCacheGetMessages(
     log.warn('mirror cache read suppressed: purge queue still has pending entries');
     return { messages: [] };
   }
-  const messages = await cache.readMessages(device, session);
+  const read = await cache.readMessagesWithInvalidation(device, session);
+  const messages = read.messages;
   if (cacheOwnerToken() !== owner) {
     log.warn('mirror cache read discarded: account boundary moved while reading');
     return { messages: [] };
@@ -799,7 +800,9 @@ export async function handleMirrorCacheGetMessages(
     log.warn('mirror cache read discarded: purge enqueued while reading');
     return { messages: [] };
   }
-  return { messages };
+  // 带回**主进程侧**的会话级作废计数:renderer 缓存它,下一次写入用它当"我取到内容时的
+  // 计数",于是另一个窗口 / 另一个进程的作废也能挡住这次写(review: codex P1)。
+  return { messages, invalidation: read.invalidation };
 }
 
 export async function handleMirrorCachePutMessages(
@@ -808,13 +811,19 @@ export async function handleMirrorCachePutMessages(
   sessionId: unknown,
   messages: unknown,
   enqueueRetry: (root: string, paths?: readonly string[]) => Promise<void> = enqueuePurge,
-): Promise<{ ok: true }> {
+  expectedInvalidation?: unknown,
+): Promise<{ ok: true; invalidation?: number }> {
   const device = requireCacheId(deviceId, 'deviceId');
   const session = requireCacheId(sessionId, 'sessionId');
   if (!Array.isArray(messages)) throwIpcError('INVALID_PARAMS', 'messages must be an array');
   const bounded = boundedItems(messages, MIRROR_CACHE_MAX_INBOUND_MESSAGES, 'messages');
+  const expected =
+    typeof expectedInvalidation === 'number' && Number.isFinite(expectedInvalidation)
+      ? expectedInvalidation
+      : undefined;
   try {
-    await cache.writeMessages(device, session, bounded);
+    const result = await cache.writeMessages(device, session, bounded, expected);
+    return { ok: true, invalidation: result.invalidation };
   } catch (err) {
     // 空写(被控端 /clear、rewind、会话删除)删不掉旧文件时同样要能重试:
     // 权威侧已经没有这些消息了,本机留着就会在下次离线冷启动被 hydrate 出来。
@@ -1060,8 +1069,16 @@ export function registerDeviceLinkIpc(deps: DeviceLinkIpcDeps = defaultDeps()): 
       deviceId?: unknown;
       sessionId?: unknown;
       messages?: unknown;
+      expectedInvalidation?: unknown;
     };
-    return handleMirrorCachePutMessages(getMirrorCache(), p.deviceId, p.sessionId, p.messages);
+    return handleMirrorCachePutMessages(
+      getMirrorCache(),
+      p.deviceId,
+      p.sessionId,
+      p.messages,
+      undefined,
+      p.expectedInvalidation,
+    );
   });
   ipcMain.handle(DEVICE_LINK_INVOKE.MIRROR_CACHE_GET_SESSION_LIST, (e) => {
     assertTrustedAppRendererEvent(e);

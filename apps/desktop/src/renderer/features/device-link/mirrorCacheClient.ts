@@ -37,6 +37,7 @@ export async function readCachedMessages(deviceId: string, sessionId: string): P
   if (!api || !deviceId || !sessionId) return [];
   try {
     const result = await api.getMessages(deviceId, sessionId);
+    rememberMainInvalidation(sessionId, result?.invalidation);
     return Array.isArray(result?.messages) ? (result.messages as unknown as Message[]) : [];
   } catch (err) {
     log.debug('read cached messages failed', err);
@@ -45,16 +46,41 @@ export async function readCachedMessages(deviceId: string, sessionId: string): P
 }
 
 /** 写某 (设备, 会话) 的最近一页 server rows(空数组 = 清掉该条缓存)。失败静默。 */
+/**
+ * main 侧会话级作废计数的**本地已知值**。get / put 的响应都会带回它;写入时把它当成
+ * "我取到这批内容时的计数"交给 main 比对 —— 于是另一个窗口(甚至另一个共享 userData 的进程)
+ * 作废这个会话时,这次写会被 main 丢弃(renderer 本地令牌只在本渲染进程内可见)(review: codex P1)。
+ */
+const knownMainInvalidation = new Map<string, number>();
+
+function rememberMainInvalidation(sessionId: string, value: number | undefined): void {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    knownMainInvalidation.set(sessionId, value);
+  }
+}
+
 export function persistCachedMessages(
   deviceId: string,
   sessionId: string,
   rows: readonly Message[],
+  expectedInvalidation?: number,
 ): void {
   const api = bridge();
   if (!api || !deviceId || !sessionId) return;
   void api
-    .putMessages(deviceId, sessionId, rows as unknown as Record<string, unknown>[])
+    .putMessages(
+      deviceId,
+      sessionId,
+      rows as unknown as Record<string, unknown>[],
+      expectedInvalidation,
+    )
+    .then((result) => rememberMainInvalidation(sessionId, result?.invalidation))
     .catch((err: unknown) => log.debug('persist cached messages failed', err));
+}
+
+/** main 侧会话级作废计数的本地已知值(写入侧在**取内容时**取一次,落盘时交给 main 比对)。 */
+export function knownMainInvalidationFor(sessionId: string): number | undefined {
+  return knownMainInvalidation.get(sessionId);
 }
 
 /** 清掉某会话的消息缓存(被控端 /clear、rewind、删除会话后不留陈旧正文)。 */

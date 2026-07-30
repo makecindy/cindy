@@ -102,8 +102,20 @@ const putMessages = vi.fn<
     deviceId: string,
     sessionId: string,
     rows: readonly Record<string, unknown>[],
+    expectedInvalidation?: number,
   ) => Promise<{ ok: true }>
 >(async () => ({ ok: true as const }));
+
+/**
+ * 断言"某次写入发生过"。不用 toHaveBeenCalledWith:写入现在还带第 4 个参数
+ * (main 侧作废计数,值随路径不同),逐参数写死会让断言变脆。
+ */
+function expectPut(deviceId: string, sessionId: string, rows: unknown[]): void {
+  const hit = putMessages.mock.calls.some(
+    ([d, s2, r]) => d === deviceId && s2 === sessionId && JSON.stringify(r) === JSON.stringify(rows),
+  );
+  expect(hit).toBe(true);
+}
 const getSessionList = vi.fn(async () => ({ devices: [] as never[] }));
 const putSessionList = vi.fn<
   (devices: readonly Record<string, unknown>[]) => Promise<{ ok: true }>
@@ -236,7 +248,7 @@ describe('冷缓存 hydrate', () => {
     expect(snapshot.messages).toHaveLength(0);
     expect(snapshot.historyLoaded).toBe(true);
     // 空页也要把盘上那份清掉(putMessages 收到空数组 = 删除)。
-    expect(putMessages).toHaveBeenCalledWith(DEVICE_ID, s, []);
+    expectPut(DEVICE_ID, s, []);
   });
 
   // review(codex P1):读缓存这一跳期间设备可能已被移除 / 会话换到了另一台设备。
@@ -576,7 +588,7 @@ describe('在途 hydrate 遇上权威删除', () => {
     await flush(20);
 
     expect(makerChatStore.getSnapshot(s).messages).toHaveLength(0);
-    expect(putMessages).toHaveBeenCalledWith(DEVICE_ID, s, []);
+    expectPut(DEVICE_ID, s, []);
   });
 
   it('edit-last 截断(dropMessagesFromClientId)也清缓存', async () => {
@@ -590,7 +602,7 @@ describe('在途 hydrate 遇上权威删除', () => {
     makerChatStore.dropMessagesFromClientId(s, 'client-m1');
     await flush(20);
 
-    expect(putMessages).toHaveBeenCalledWith(DEVICE_ID, s, []);
+    expectPut(DEVICE_ID, s, []);
   });
 });
 
@@ -645,7 +657,7 @@ describe('作废式重载 → 缓存一起清', () => {
     makerChatStore.reloadMessages(s);
     await flush(20);
 
-    expect(putMessages).toHaveBeenCalledWith(DEVICE_ID, s, []);
+    expectPut(DEVICE_ID, s, []);
   });
 
   it('origin 首次解析的重载(允许借缓存)不清盘', async () => {
@@ -677,7 +689,7 @@ describe('权威侧删消息 → 缓存一起清', () => {
     makerChatStore.clearSession(s);
     await flush(40);
 
-    expect(putMessages).toHaveBeenCalledWith(DEVICE_ID, s, []);
+    expectPut(DEVICE_ID, s, []);
   });
 
   it('删消息(菜单删除 / messages:deleted 推送)→ 清掉该会话的缓存文件', async () => {
@@ -691,7 +703,7 @@ describe('权威侧删消息 → 缓存一起清', () => {
     makerChatStore.removeMessagesByClientIds(s, ['client-m1']);
     await flush(20);
 
-    expect(putMessages).toHaveBeenCalledWith(DEVICE_ID, s, []);
+    expectPut(DEVICE_ID, s, []);
   });
 });
 
@@ -726,13 +738,13 @@ describe('会话离场时清消息缓存', () => {
   it('会话不在分片里(甚至没有分片)时,终态推送同样清缓存', () => {
     // 没有分片:直接对一台未知设备发终态 patch
     remoteProjectsStore.applyPatch('dev-unknown', 'sess-ghost', { status: 'deleted' });
-    expect(putMessages).toHaveBeenCalledWith('dev-unknown', 'sess-ghost', []);
+    expectPut('dev-unknown', 'sess-ghost', []);
 
     // 有分片但会话不在窗口内
     remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: 's-in' }] as never);
     putMessages.mockClear();
     remoteProjectsStore.applyPatch(DEVICE_ID, 's-outside-window', { status: 'archived' });
-    expect(putMessages).toHaveBeenCalledWith(DEVICE_ID, 's-outside-window', []);
+    expectPut(DEVICE_ID, 's-outside-window', []);
   });
 
   it('被控端把会话标 deleted / archived → 清掉该会话的缓存文件', () => {
@@ -744,8 +756,8 @@ describe('会话离场时清消息缓存', () => {
     remoteProjectsStore.applyPatch(DEVICE_ID, 's-del', { status: 'deleted' });
     remoteProjectsStore.applyPatch(DEVICE_ID, 's-arch', { status: 'archived' });
 
-    expect(putMessages).toHaveBeenCalledWith(DEVICE_ID, 's-del', []);
-    expect(putMessages).toHaveBeenCalledWith(DEVICE_ID, 's-arch', []);
+    expectPut(DEVICE_ID, 's-del', []);
+    expectPut(DEVICE_ID, 's-arch', []);
   });
 });
 

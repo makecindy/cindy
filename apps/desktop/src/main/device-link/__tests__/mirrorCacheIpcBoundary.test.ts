@@ -17,7 +17,11 @@ const h = vi.hoisted(() => ({
   canUseDeviceLink: true,
   cache: {
     readMessages: vi.fn(async () => [] as Record<string, unknown>[]),
-    writeMessages: vi.fn(async () => undefined),
+    readMessagesWithInvalidation: vi.fn(async () => ({
+      messages: [] as Record<string, unknown>[],
+      invalidation: 0,
+    })),
+    writeMessages: vi.fn(async () => ({ invalidation: 0 })),
     readSessionList: vi.fn(async () => [] as unknown[]),
     writeSessionList: vi.fn(async () => undefined),
     clearDevice: vi.fn(async () => undefined),
@@ -155,6 +159,7 @@ describe('mirror-cache IPC 授权边界', () => {
       await expect(call(channel, payload)).rejects.toThrow(/PERMISSION_DENIED/);
     }
     expect(h.cache.readMessages).not.toHaveBeenCalled();
+    expect(h.cache.readMessagesWithInvalidation).not.toHaveBeenCalled();
     expect(h.cache.writeMessages).not.toHaveBeenCalled();
     expect(h.cache.readSessionList).not.toHaveBeenCalled();
     expect(h.cache.writeSessionList).not.toHaveBeenCalled();
@@ -166,7 +171,8 @@ describe('mirror-cache IPC 授权边界', () => {
     for (const [channel, payload] of MIRROR_CACHE_CALLS) {
       await expect(call(channel, payload)).resolves.toBeDefined();
     }
-    expect(h.cache.readMessages).toHaveBeenCalledTimes(1);
+    // 读路径现在走 readMessagesWithInvalidation(它会带回 main 侧的会话级作废计数)。
+    expect(h.cache.readMessagesWithInvalidation).toHaveBeenCalledTimes(1);
     expect(h.cache.clearDevice).toHaveBeenCalledTimes(1);
   });
 

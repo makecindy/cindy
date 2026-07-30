@@ -620,9 +620,11 @@ describe('.tmp 残留(落位失败 / 进程被杀在 writeFile 与 rename 之间
       try {
         // 只读目录下 writeFile(tmp) 就会失败,rm(tmp) 因 ENOENT 成功 → 不抛。
         // 这里验证的是"不误报":真正抛错的路径由上面的空写 / 补偿删除用例覆盖。
+        // writeMessages 现在返回 { invalidation }(会话级作废计数,供写入侧比对),
+        // 这里只关心"不抛"。
         await expect(
           c.writeMessages('dev-1', 'sess-2', [row('m2', '2026-02-01T00:00:00.000Z')]),
-        ).resolves.toBeUndefined();
+        ).resolves.toBeTruthy();
       } finally {
         await fsp.chmod(dir, 0o700);
       }
@@ -982,6 +984,56 @@ describe('clearDevice 期间的写入', () => {
     expect(await c.readMessages('dev-1', 'sess-2')).toEqual([]);
     // 别的设备不受影响。
     expect((await c.readMessages(other, 'sess-9')).map((m) => m.id)).toEqual(['m9']);
+  });
+});
+
+describe('会话级作废计数(跨窗口 / 跨进程)', () => {
+  // review(codex P1):renderer 侧的作废令牌只在本渲染进程内可见 —— 另一个窗口 rewind /
+  // 删消息时,本窗口在途的最新页写入照样能落地。作废计数必须在 main 侧、且**先落再删**。
+  it('空写会自增计数,带着旧计数的写入被丢弃', async () => {
+    const c = cache();
+    const first = await c.writeMessages('dev-1', 'sess-1', [
+      row('m1', '2026-01-01T00:00:00.000Z'),
+    ]);
+
+    // 另一个窗口 /clear:空写(先自增计数,再删文件)
+    const cleared = await c.writeMessages('dev-1', 'sess-1', []);
+    expect(cleared.invalidation).toBeGreaterThan(first.invalidation);
+
+    // 本窗口那笔在途写入带着**作废之前**的计数提交 → 丢弃
+    await c.writeMessages(
+      'dev-1',
+      'sess-1',
+      [row('m1', '2026-01-01T00:00:00.000Z')],
+      first.invalidation,
+    );
+    expect(await c.readMessages('dev-1', 'sess-1')).toEqual([]);
+
+    // 带着最新计数的写入照常落盘
+    await c.writeMessages(
+      'dev-1',
+      'sess-1',
+      [row('m2', '2026-02-01T00:00:00.000Z')],
+      cleared.invalidation,
+    );
+    expect((await c.readMessages('dev-1', 'sess-1')).map((m) => m.id)).toEqual(['m2']);
+  });
+
+  it('读路径带回当前计数(写入侧据此比对)', async () => {
+    const c = cache();
+    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+    const before = await c.readMessagesWithInvalidation('dev-1', 'sess-1');
+    await c.writeMessages('dev-1', 'sess-1', []); // 作废
+    const after = await c.readMessagesWithInvalidation('dev-1', 'sess-1');
+    expect(after.invalidation).toBeGreaterThan(before.invalidation);
+    expect(after.messages).toEqual([]);
+  });
+
+  it('不传 expectedInvalidation 时保持旧行为(只受设备 / 账号级屏障约束)', async () => {
+    const c = cache();
+    await c.writeMessages('dev-1', 'sess-1', []); // 先作废一次
+    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+    expect((await c.readMessages('dev-1', 'sess-1')).map((m) => m.id)).toEqual(['m1']);
   });
 });
 

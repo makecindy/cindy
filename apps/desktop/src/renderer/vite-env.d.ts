@@ -2812,12 +2812,13 @@ interface ElectronAPI {
       getMessages: (
         deviceId: string,
         sessionId: string,
-      ) => Promise<{ messages: Record<string, unknown>[] }>;
+      ) => Promise<{ messages: Record<string, unknown>[]; invalidation?: number }>;
       putMessages: (
         deviceId: string,
         sessionId: string,
         messages: readonly Record<string, unknown>[],
-      ) => Promise<{ ok: true }>;
+        expectedInvalidation?: number,
+      ) => Promise<{ ok: true; invalidation?: number }>;
       getSessionList: () => Promise<{
         devices: Array<{
           deviceId: string;

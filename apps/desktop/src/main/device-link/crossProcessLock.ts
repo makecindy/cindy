@@ -31,6 +31,14 @@ const LOCK_RETRY_MS = 40;
 /** 持锁期间刷新 mtime 的间隔:让「陈旧」只对真正死掉的持有者成立。 */
 const LOCK_HEARTBEAT_MS = 2_000;
 
+/**
+ * 没拿到锁时**为什么**没拿到:
+ *  - `busy`:锁一直被别人持着(EEXIST 直到超时)→ 另一个进程正在临界区里,调用方应当避让;
+ *  - `unavailable`:锁根本建不出来(EMFILE / EACCES / 只读目录…)→ 无从判断有没有别人,
+ *    调用方通常应当**照常做事**(best-effort),否则在这些环境里功能会被静默关掉。
+ */
+export type LockStatus = { held: true } | { held: false; reason: 'busy' | 'unavailable' };
+
 export interface FileLockOptions {
   /** 日志里用来标识这把锁(如 'purge-queue' / 'mirror-cache')。 */
   label: string;
@@ -45,10 +53,11 @@ export interface FileLockOptions {
 export async function withCrossProcessLock<T>(
   lockPath: string,
   opts: FileLockOptions,
-  task: (held: boolean) => Promise<T>,
+  task: (status: LockStatus) => Promise<T>,
 ): Promise<T> {
   const deadline = Date.now() + (opts.waitMs ?? LOCK_WAIT_MS);
   let held = false;
+  let reason: 'busy' | 'unavailable' = 'unavailable';
   for (;;) {
     try {
       const handle = await fsp.open(lockPath, 'wx');
@@ -59,7 +68,11 @@ export async function withCrossProcessLock<T>(
       held = true;
       break;
     } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') break; // 权限 / 目录不存在:降级
+      if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') {
+        // 锁**建不出来**(EMFILE / EACCES / 目录不存在…):无从判断有没有别人在临界区。
+        reason = 'unavailable';
+        break;
+      }
       if (await canTakeOverLock(lockPath)) {
         log.warn(`taking over stale ${opts.label} lock from a dead owner`);
         await fsp.rm(lockPath, { force: true }).catch(() => undefined);
@@ -67,6 +80,7 @@ export async function withCrossProcessLock<T>(
       }
       if (Date.now() >= deadline) {
         log.warn(`${opts.label} lock busy; proceeding in degraded mode`);
+        reason = 'busy';
         break;
       }
       await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
@@ -80,7 +94,7 @@ export async function withCrossProcessLock<T>(
     : null;
   heartbeat?.unref?.();
   try {
-    return await task(held);
+    return await task(held ? { held: true } : { held: false, reason });
   } finally {
     if (heartbeat) clearInterval(heartbeat);
     if (held) await releaseOwnLock(lockPath, opts.label);

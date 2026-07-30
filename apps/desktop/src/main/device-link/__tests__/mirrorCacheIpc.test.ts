@@ -42,13 +42,15 @@ import { MirrorCachePurgeError, type MirrorCache } from '../mirrorCacheStore';
 function fakeCache() {
   return {
     readMessages: vi.fn(async () => [{ id: 'm1' }]),
-    writeMessages: vi.fn(async () => undefined),
+    readMessagesWithInvalidation: vi.fn(async () => ({ messages: [{ id: 'm1' }], invalidation: 3 })),
+    writeMessages: vi.fn(async () => ({ invalidation: 3 })),
     readSessionList: vi.fn(async () => [{ deviceId: 'dev-1', deviceName: 'Mac', sessions: [] }]),
     writeSessionList: vi.fn(async () => undefined),
     clearDevice: vi.fn(async () => undefined),
     clearAll: vi.fn(async () => undefined),
   } satisfies Record<keyof MirrorCache, unknown> as unknown as MirrorCache & {
     readMessages: ReturnType<typeof vi.fn>;
+    readMessagesWithInvalidation: ReturnType<typeof vi.fn>;
     writeMessages: ReturnType<typeof vi.fn>;
     readSessionList: ReturnType<typeof vi.fn>;
     writeSessionList: ReturnType<typeof vi.fn>;
@@ -70,11 +72,12 @@ beforeEach(() => {
 });
 
 describe('messages get / put', () => {
-  it('读:转发给 store 并包成 { messages }', async () => {
+  it('读:转发给 store 并包成 { messages, invalidation }', async () => {
     await expect(handleMirrorCacheGetMessages(cache, 'dev-1', 'sess-1')).resolves.toEqual({
       messages: [{ id: 'm1' }],
+      invalidation: 3,
     });
-    expect(cache.readMessages).toHaveBeenCalledWith('dev-1', 'sess-1');
+    expect(cache.readMessagesWithInvalidation).toHaveBeenCalledWith('dev-1', 'sess-1');
   });
 
   it('缺 deviceId / sessionId → INVALID_PARAMS,不碰 store', async () => {
@@ -84,7 +87,7 @@ describe('messages get / put', () => {
     await expect(handleMirrorCachePutMessages(cache, 'dev-1', undefined, [])).rejects.toThrow(
       /INVALID_PARAMS/,
     );
-    expect(cache.readMessages).not.toHaveBeenCalled();
+    expect(cache.readMessagesWithInvalidation).not.toHaveBeenCalled();
     expect(cache.writeMessages).not.toHaveBeenCalled();
   });
 
@@ -106,7 +109,7 @@ describe('messages get / put', () => {
 
   it('空数组照常透传(空 = 清掉该条缓存,是有意义的写)', async () => {
     await handleMirrorCachePutMessages(cache, 'dev-1', 'sess-1', []);
-    expect(cache.writeMessages).toHaveBeenCalledWith('dev-1', 'sess-1', []);
+    expect(cache.writeMessages).toHaveBeenCalledWith('dev-1', 'sess-1', [], undefined);
   });
 });
 
@@ -155,7 +158,7 @@ describe('payload 有界校验', () => {
     cyclic.self = cyclic;
     await expect(
       handleMirrorCachePutMessages(cache, 'dev-1', 'sess-1', [cyclic]),
-    ).resolves.toEqual({ ok: true });
+    ).resolves.toEqual({ ok: true, invalidation: 3 });
     expect(cache.writeMessages.mock.calls[0]?.[2]).toEqual([]);
   });
 
@@ -203,7 +206,7 @@ describe('待清未清时读路径不命中', () => {
       messages: [],
     });
     await expect(handleMirrorCacheGetSessionList(cache)).resolves.toEqual({ devices: [] });
-    expect(cache.readMessages).not.toHaveBeenCalled();
+    expect(cache.readMessagesWithInvalidation).not.toHaveBeenCalled();
     expect(cache.readSessionList).not.toHaveBeenCalled();
   });
 
@@ -211,6 +214,7 @@ describe('待清未清时读路径不命中', () => {
     pendingPurges = 0;
     await expect(handleMirrorCacheGetMessages(cache, 'dev-1', 'sess-1')).resolves.toEqual({
       messages: [{ id: 'm1' }],
+      invalidation: 3,
     });
   });
 });
@@ -252,9 +256,9 @@ describe('读完成之后又有待清记录', () => {
   // review(codex P1):预检之后、读完成之前另一个实例可能刚登记待清 —— 那份正文已经被标记
   // 为"必须删掉",不能再交出去。
   it('读期间被登记待清 → 丢弃结果', async () => {
-    cache.readMessages.mockImplementationOnce(async () => {
+    cache.readMessagesWithInvalidation.mockImplementationOnce(async () => {
       pendingPurges = 1; // 读的过程中有人登记了待清
-      return [{ id: 'm1' }];
+      return { messages: [{ id: 'm1' }], invalidation: 3 };
     });
     await expect(handleMirrorCacheGetMessages(cache, 'dev-1', 'sess-1')).resolves.toEqual({
       messages: [],
@@ -274,9 +278,9 @@ describe('读期间账号边界推进', () => {
   // review(codex P1):闸门等待 / 文件读期间账号边界可能已经走完 —— 那时返回的既可能是上一个
   // 账号的明文,也可能是新账号的快照被交给旧账号发起的那次请求。
   it('读消息期间 owner 变了 → 丢弃结果,返回空', async () => {
-    cache.readMessages.mockImplementationOnce(async () => {
+    cache.readMessagesWithInvalidation.mockImplementationOnce(async () => {
       ownerKey = 'owner-b'; // 读的过程中账号边界推进
-      return [{ id: 'm1' }];
+      return { messages: [{ id: 'm1' }], invalidation: 3 };
     });
     await expect(handleMirrorCacheGetMessages(cache, 'dev-1', 'sess-1')).resolves.toEqual({
       messages: [],
@@ -310,7 +314,7 @@ describe('标量 id 长度上界', () => {
       /INVALID_PARAMS/,
     );
     await expect(handleMirrorCacheClear(cache, long)).rejects.toThrow(/INVALID_PARAMS/);
-    expect(cache.readMessages).not.toHaveBeenCalled();
+    expect(cache.readMessagesWithInvalidation).not.toHaveBeenCalled();
     expect(cache.writeMessages).not.toHaveBeenCalled();
     expect(cache.clearDevice).not.toHaveBeenCalled();
   });

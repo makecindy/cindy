@@ -247,9 +247,8 @@ export function coerceCachedSession(input: unknown): Record<string, unknown> | n
   for (const key of SESSION_FIELD_WHITELIST) {
     const value = input[key];
     if (value === undefined) continue;
-    out[key] = typeof value === 'string' && TRUNCATED_TEXT_FIELDS.has(key)
-      ? truncateText(value)
-      : value;
+    out[key] =
+      typeof value === 'string' && TRUNCATED_TEXT_FIELDS.has(key) ? truncateText(value) : value;
   }
   return out;
 }
@@ -273,9 +272,10 @@ export function normalizeDeviceSessions(
       .sort((a, b) => lastActivityTime(b) - lastActivityTime(a))
       .slice(0, perDeviceLimit);
     if (sessions.length === 0) continue;
-    const deviceName = typeof item.deviceName === 'string' && item.deviceName.trim()
-      ? truncateText(item.deviceName.trim())
-      : deviceId;
+    const deviceName =
+      typeof item.deviceName === 'string' && item.deviceName.trim()
+        ? truncateText(item.deviceName.trim())
+        : deviceId;
     devices.push({ deviceId, deviceName, sessions });
   }
   return devices
@@ -370,7 +370,25 @@ function errnoCode(err: unknown): string | undefined {
 
 export interface MirrorCache {
   readMessages(deviceId: string, sessionId: string): Promise<Record<string, unknown>[]>;
-  writeMessages(deviceId: string, sessionId: string, messages: readonly unknown[]): Promise<void>;
+  /**
+   * 写某 (设备, 会话) 的最近一页。空数组 = 清掉这条(权威侧已确认没有可见消息)。
+   *
+   * `expectedInvalidation` 是调用方**取到这批内容时**看到的每会话作废计数(由本方法与
+   * `readMessages` 一并返回、renderer 缓存)。空写会**先**自增该计数再删除,于是任何"内容取自
+   * 作废之前"的写入(哪怕来自另一个窗口 / 另一个进程)都会在提交前被比对挡掉 —— renderer
+   * 侧的令牌只在本渲染进程内可见,挡不住多窗口(review: codex P1)。
+   */
+  writeMessages(
+    deviceId: string,
+    sessionId: string,
+    messages: readonly unknown[],
+    expectedInvalidation?: number,
+  ): Promise<{ invalidation: number }>;
+  /** 读某 (设备, 会话) 的最近一页,并带回当前作废计数(供写入侧比对)。 */
+  readMessagesWithInvalidation(
+    deviceId: string,
+    sessionId: string,
+  ): Promise<{ messages: Record<string, unknown>[]; invalidation: number }>;
   readSessionList(): Promise<CachedDeviceSessions[]>;
   writeSessionList(devices: readonly unknown[]): Promise<void>;
   /** 某设备离场(移除 / 撤销控制):清掉它的消息文件与列表快照条目。 */
@@ -471,8 +489,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
   }
 
   type WriteGuard =
-    | { kind: 'write'; epoch: number; deviceId?: string }
-    | { kind: 'purge'; allEpoch: number };
+    { kind: 'write'; epoch: number; deviceId?: string } | { kind: 'purge'; allEpoch: number };
 
   /**
    * 列表快照写入结果。`purge-failed` 带上具体卡住的路径(可能是 session-list.json 本身,
@@ -579,7 +596,10 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     // 超限状态每次对账都会走到这里 —— 永远不会有第二次机会更新它。所以**作废**旧快照,
     // 除非它的内容与最小档快照一致(那就是同一份,没什么可作废的)(review: codex P1)。
     const smallestBody = JSON.stringify(
-      normalizeDeviceSessions(devices, SESSION_LIST_SHRINK_STEPS[SESSION_LIST_SHRINK_STEPS.length - 1]),
+      normalizeDeviceSessions(
+        devices,
+        SESSION_LIST_SHRINK_STEPS[SESSION_LIST_SHRINK_STEPS.length - 1],
+      ),
     );
     if (unchanged(file, smallestBody)) return { outcome: 'skipped' };
     lastWritten.delete(file);
@@ -603,7 +623,6 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       });
     return next;
   }
-
 
   /**
    * 缓存根下的跨进程锁。`clearingDevices` 与 `serializeWrite` 都只在**本进程**内有效,而 dev
@@ -636,21 +655,40 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     return path.join(controlDir(root), CLEARED_DIR, key);
   }
 
+  /** 每会话的作废计数 key(与消息文件同名派生,天然跟着 trim / 消毒规则)。 */
+  function sessionClearKey(deviceId: string, sessionId: string): string {
+    return messageFileName(deviceId, sessionId).replace(/\.json$/, '');
+  }
+
   function deviceClearKey(id: string): string {
     const trimmed = id.trim();
     return `${safeSegment(trimmed)}-${shortHash(trimmed)}`;
   }
 
-  /** 读作废计数:缺文件 = 0(从未清过);读不出来 / 不是数字 = null(调用方保守处理)。 */
-  async function readClearCounter(root: string, key: string): Promise<number | null> {
+  /**
+   * 读作废计数。三态,理由见 clearedSince:
+   *  - number:计数(缺文件 = 0,从未清过);
+   *  - `'denied'`:文件在那儿但**没权限**读(EACCES / EPERM)—— 屏障可能是真的,fail-closed;
+   *  - `'unknown'`:资源类失败(EMFILE / EBUSY…)或内容不是数字 —— 与"有没有清过"无关,
+   *    不该据此丢掉写入(那会在文件描述符紧张时静默关掉缓存);同进程的代际屏障仍在。
+   */
+  type ClearCounter = number | 'denied' | 'unknown';
+
+  /** 对外暴露的计数值:非数字(denied / unknown)一律用 -1 表示"不可比对"。 */
+  function numericCounter(value: ClearCounter): number {
+    return typeof value === 'number' ? value : -1;
+  }
+
+  async function readClearCounter(root: string, key: string): Promise<ClearCounter> {
     try {
       const raw = await fsp.readFile(clearedMarkPath(root, key), 'utf8');
       const value = Number.parseInt(raw, 10);
-      return Number.isFinite(value) ? value : null;
+      return Number.isFinite(value) ? value : 'unknown';
     } catch (err) {
       const code = errnoCode(err);
       if (code === 'ENOENT' || code === 'ENOTDIR') return 0;
-      return null;
+      if (code === 'EACCES' || code === 'EPERM') return 'denied';
+      return 'unknown';
     }
   }
 
@@ -661,7 +699,8 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
    */
   async function bumpClearedCounter(root: string, key: string): Promise<void> {
     const file = clearedMarkPath(root, key);
-    const current = (await readClearCounter(root, key)) ?? 0;
+    const read = await readClearCounter(root, key);
+    const current = typeof read === 'number' ? read : 0;
     await ensureDir(path.dirname(file));
     await fsp.writeFile(file, String(current + 1), 'utf8');
   }
@@ -670,10 +709,17 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     for (const key of [deviceClearKey(id), CLEARED_ANY]) await bumpClearedCounter(root, key);
   }
 
-  /** 自 `before` 之后计数是否变过(含读不出来:保守判"变过")。 */
-  async function clearedSince(root: string, key: string, before: number | null): Promise<boolean> {
+  /**
+   * 自 `before` 之后计数是否变过。`'denied'`(没权限读屏障)一律判"变过" —— 屏障可能真的存在;
+   * `'unknown'`(资源类失败)判"没变" —— 它与清理无关,拿它丢写入等于在 fd 紧张时静默关掉缓存,
+   * 而同进程的代际 / clearingDevices 屏障仍然生效。
+   */
+  async function clearedSince(root: string, key: string, before: ClearCounter): Promise<boolean> {
+    if (before === 'denied') return true;
     const now = await readClearCounter(root, key);
-    return before === null || now === null || now !== before;
+    if (now === 'denied') return true;
+    if (before === 'unknown' || now === 'unknown') return false;
+    return now !== before;
   }
 
   /** 控制面目录:`<cache-root>.control/`(与缓存根同级,clearAll 不会删它)。 */
@@ -685,12 +731,41 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     return path.join(controlDir(root), CACHE_LOCK_FILE);
   }
 
-  async function withCacheLock<T>(
+  /**
+   * 进程内的 per-root 互斥链。**必须**有:跨进程锁在 EMFILE / 只读目录等情况下拿不到
+   * (`unavailable`),那时同进程内的两笔写入若同时进入临界区就会互相覆盖 —— 本进程的串行化
+   * 不该依赖文件锁能不能建出来。文件锁只负责跨进程那一半。
+   */
+  const rootChains = new Map<string, Promise<unknown>>();
+
+  function withRootMutex<T>(root: string, task: () => Promise<T>): Promise<T> {
+    const prev = rootChains.get(root) ?? Promise.resolve();
+    const next = prev.then(task, task);
+    rootChains.set(
+      root,
+      next.catch(() => undefined),
+    );
+    return next;
+  }
+
+  /**
+   * 进程内互斥 + 跨进程锁。`held=false` 分两种(见 LockStatus):
+   *  - `busy`:别的**进程**正在临界区 → 调用方避让(内容写跳过);
+   *  - `unavailable`:锁建不出来(EMFILE / 只读 userData…)→ 照常做事,否则这些环境里缓存
+   *    会被静默关掉;同进程的正确性已由上面的互斥链保证。
+   */
+  async function withCacheFileLock<T>(
     root: string,
     task: (held: boolean) => Promise<T>,
   ): Promise<T> {
     await ensureDir(controlDir(root)).catch(() => undefined);
-    return withCrossProcessLock(cacheLockPath(root), { label: 'mirror-cache' }, task);
+    return withCrossProcessLock(cacheLockPath(root), { label: 'mirror-cache' }, (status) =>
+      task(status.held || status.reason === 'unavailable'),
+    );
+  }
+
+  async function withCacheLock<T>(root: string, task: (held: boolean) => Promise<T>): Promise<T> {
+    return withRootMutex(root, () => withCacheFileLock(root, task));
   }
 
   /** clearDevice 的实际清理体(登记 in-flight 与代际自增由调用方负责)。 */
@@ -807,6 +882,15 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
   }
 
   return {
+    async readMessagesWithInvalidation(deviceId, sessionId) {
+      const root = resolveRoot();
+      const [messages, invalidation] = await Promise.all([
+        this.readMessages(deviceId, sessionId),
+        readClearCounter(root, sessionClearKey(deviceId, sessionId)),
+      ]);
+      return { messages, invalidation: numericCounter(invalidation) };
+    },
+
     async readMessages(deviceId, sessionId) {
       if (!deviceId.trim() || !sessionId.trim()) return [];
       const parsed = await readJson(path.join(messagesDir(), messageFileName(deviceId, sessionId)));
@@ -814,121 +898,152 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       return normalizeMessages(messages);
     },
 
-    async writeMessages(deviceId, sessionId, messages) {
-      if (!deviceId.trim() || !sessionId.trim()) return;
+    async writeMessages(deviceId, sessionId, messages, expectedInvalidation) {
+      if (!deviceId.trim() || !sessionId.trim()) return { invalidation: -1 };
       // root 在**发起时**快照,不能在出错时再 resolve:owner 会在进程生命周期内变(登出 /
       // 切账号),那时 resolveRoot() 指向新账号,而 `file` 还在旧账号目录里 —— 用新 root 去
       // 登记重试会被 purge 队列当成「路径不在 root 之内」直接拒掉,旧账号的明文就此没有任何
       // 持久重试记录(review: codex P1)。
       const rootAtStart = resolveRoot();
-      // 发起时的作废计数:提交前再读一次比对,挡住"内容取自清理之前、提交发生在清理之后"。
-      const clearCounterAtStart = await readClearCounter(rootAtStart, deviceClearKey(deviceId));
-      const accountCounterAtStart = await readClearCounter(rootAtStart, CLEARED_ACCOUNT);
-      const dir = path.join(rootAtStart, MESSAGES_DIR);
-      const file = path.join(dir, messageFileName(deviceId, sessionId));
-      const normalized = normalizeMessages(messages);
-      // 空列表 = 清掉这条缓存(被控端 /clear、rewind 或删完最后一条时,残留会在
-      // 下次冷开 hydrate 出已经不存在的正文)。
-      if (normalized.length === 0) {
-        return serializeWrite(file, async () => {
-          lastWritten.delete(file);
-          // 同名 `.tmp` 兄弟一起删:上一次落位崩在 writeFile 与 rename 之间时,那里是
-          // 完整明文,而 /clear、rewind 正是"这些消息必须消失"的场合(review: copilot)。
-          const tmpStuck = await removeTmpSiblings(dir, path.basename(file));
-          try {
-            // recursive:目标位置若因异常变成目录,非递归 rm 会永远失败。
-            await fsp.rm(file, { recursive: true, force: true });
-            if (tmpStuck.length > 0) {
-              throw new MirrorCachePurgeError(rootAtStart, tmpStuck, null);
-            }
-          } catch (err) {
-            if (err instanceof MirrorCachePurgeError) throw err;
-            // 这条路径服务的是被控端 /clear、rewind、会话删除 —— 权威侧已经确认"这个会话没有
-            // 可见消息了",本机却还留着旧正文,下次离线冷启动照样 hydrate 出来。删不掉要能被
-            // 重试,不能咽下去(review: codex P1)。
-            throw new MirrorCachePurgeError(rootAtStart, [file, ...tmpStuck], err);
-          }
-        });
-      }
-      const body = JSON.stringify(normalized);
-      const payload: StoredMessages = { version: 1, updatedAt: Date.now(), messages: normalized };
-      const serialized = JSON.stringify(payload);
-      if (Buffer.byteLength(serialized, 'utf8') > MAX_MESSAGE_FILE_BYTES) {
-        // 单会话超限:新页写不下 —— 但旧正本此刻可能是 rewind / 删消息**之前**的窗口,
-        // 而同一个超限页每次对账都会走到这里,永远不会有第二次机会更新它。所以**作废**
-        // 旧缓存,而不是留一份会骗人的旧页(review: codex P1)。
-        return serializeWrite(file, async () => {
-          if (unchanged(file, body)) return; // 内容没变(旧页就是它)→ 无需作废
-          lastWritten.delete(file);
-          try {
-            await fsp.rm(file, { recursive: true, force: true });
-          } catch {
-            if (await pathMaybeExists(file)) {
-              throw new MirrorCachePurgeError(rootAtStart, [file], null);
-            }
-          }
-        });
-      }
-      // 代际必须在**请求发起时**(排队之前)捕获,不能等任务开始执行才读:
-      // 「发起 → 排队 → 清理自增 → 任务开始」这个序列里,任务读到的是清理后的新代际,
-      // 于是携带着清理前旧数据的这笔写入会被当成新写入放行(review: codex P1)。
+      const sessionKey = sessionClearKey(deviceId, sessionId);
+      // 代际必须在**请求发起时**(进互斥之前)同步捕获:等排到自己再读,读到的是清理**之后**
+      // 的新代际,于是携带清理前旧数据的这笔写入会被当成新写入放行(review: codex P1)。
+      // 同步读模块变量不引入 await,不影响"准入顺序 = 调用顺序"。
       const epoch = generation;
-      // 落盘与指纹登记必须成对且有序 → 同一文件的写入串成链(见 serializeWrite)。
-      const writeGuard: WriteGuard = { kind: 'write', epoch, deviceId };
-      return serializeWrite(file, async () =>
-        withCacheLock(rootAtStart, async (held) => {
-        // 拿不到跨进程锁 → 跳过这次写(别在另一个实例清理途中把明文写回去)。
-        if (!held) return;
-        if (isStale(writeGuard)) return;
-        // 清理在我取到内容之后完成过 → 我手里的是被清掉的旧正文,丢弃。
-        if (await clearedSince(rootAtStart, deviceClearKey(deviceId), clearCounterAtStart)) return;
-        // 账号级清理(登出 / 切账号)同理:它删的是整棵缓存根,而计数器在根之外。
-        if (await clearedSince(rootAtStart, CLEARED_ACCOUNT, accountCounterAtStart)) return;
-        // 指纹只算消息体,不含 payload 的 updatedAt —— 否则每次都"变了",去重永不命中。
-        // 在链内判等:排队期间前一笔可能刚写下同样内容。
-        if (unchanged(file, body)) return;
-        await ensureDir(dir);
-        if (isStale(writeGuard)) return;
-        const written = await writeFileAtomic(file, serialized);
-        if (!written.ok) {
-          // 走到这里说明权威内容**已经变了**(上面 unchanged 已挡掉没变的情况),而新内容
-          // 没能落位。旧正本此刻是过期窗口:rewind / 删消息之前的正文。留着它,下次离线冷
-          // 启动就会把已经不存在的消息 hydrate 出来 —— 所以宁可**作废**这条缓存,而不是保留
-          // 一份会骗人的旧页(缓存是纯优化,缺一条只是少一次首屏加速)(review: codex P1)。
-          lastWritten.delete(file);
-          const stuck: string[] = [];
-          try {
-            // recursive:落位失败的成因也可能让目标位置变成一个目录(枚举 / 清理都按
-            // 「这是本缓存自己的路径」处理,递归不会越界)。
-            await fsp.rm(file, { recursive: true, force: true });
-          } catch {
-            // 只有旧正本**确实还在**才算残留:messages/ 位置被占成普通文件这类情况下
-            // rm 也会失败,但盘上本来就没有那份缓存(同 writeFileAtomic 的 tmp 判定)。
-            if (await pathMaybeExists(file)) stuck.push(file);
+      // 加锁分三段,顺序有讲究:
+      //  1. **先进 root 互斥**(同步准入、不夹 await):准入顺序必须等于调用顺序,否则"同一会话
+      //     的两笔并发写"谁先落盘取决于各自前置 IO 的快慢(实测 fd 紧张时会翻转);
+      //  2. 互斥内、**等跨进程锁之前**读作废计数基线:另一个实例此刻正在清理(它持着文件锁)时,
+      //     我们读到的是清理**之前**的值,它清完自增后比对失配 → 丢弃这次写;
+      //  3. 最后才等跨进程锁,拿到才提交。
+      return withRootMutex(rootAtStart, async () => {
+        const clearCounterAtStart = await readClearCounter(rootAtStart, deviceClearKey(deviceId));
+        const accountCounterAtStart = await readClearCounter(rootAtStart, CLEARED_ACCOUNT);
+        return withCacheFileLock(rootAtStart, async (held) => {
+          const dir = path.join(rootAtStart, MESSAGES_DIR);
+          const file = path.join(dir, messageFileName(deviceId, sessionId));
+          const normalized = normalizeMessages(messages);
+          // 空列表 = 清掉这条缓存(被控端 /clear、rewind 或删完最后一条时,残留会在
+          // 下次冷开 hydrate 出已经不存在的正文)。
+          if (normalized.length === 0) {
+            // 先落"作废意图"再删数据:计数自增在删除**之前**,于是即使本进程在删除中途崩掉,
+            // 屏障也已经在盘上 —— 另一个实例(哪怕它的页取自作废之前)提交时会被挡掉
+            // (review: codex P1)。自增失败就不删:宁可缓存暂留,也不要"删了却没有屏障"。
+            await bumpClearedCounter(rootAtStart, sessionKey);
+            const invalidation = numericCounter(await readClearCounter(rootAtStart, sessionKey));
+            await serializeWrite(file, async () => {
+              lastWritten.delete(file);
+              // 同名 `.tmp` 兄弟一起删:上一次落位崩在 writeFile 与 rename 之间时,那里是
+              // 完整明文,而 /clear、rewind 正是"这些消息必须消失"的场合(review: copilot)。
+              const tmpStuck = await removeTmpSiblings(dir, path.basename(file));
+              try {
+                // recursive:目标位置若因异常变成目录,非递归 rm 会永远失败。
+                await fsp.rm(file, { recursive: true, force: true });
+                if (tmpStuck.length > 0) {
+                  throw new MirrorCachePurgeError(rootAtStart, tmpStuck, null);
+                }
+              } catch (err) {
+                if (err instanceof MirrorCachePurgeError) throw err;
+                // 这条路径服务的是被控端 /clear、rewind、会话删除 —— 权威侧已经确认"这个会话没有
+                // 可见消息了",本机却还留着旧正文,下次离线冷启动照样 hydrate 出来。删不掉要能被
+                // 重试,不能咽下去(review: codex P1)。
+                throw new MirrorCachePurgeError(rootAtStart, [file, ...tmpStuck], err);
+              }
+            });
+            return { invalidation };
           }
-          if (written.leftoverTmp) stuck.push(written.leftoverTmp);
-          // 作废也失败 → 登记重试(明文留在盘上是隐私问题,不能咽下去)。
-          if (stuck.length > 0) throw new MirrorCachePurgeError(rootAtStart, stuck, null);
-          return;
-        }
-        if (isStale(writeGuard)) {
-          // 隐私清理期间落的盘:立刻收回,否则刚被清空的目录里会留下本该消失的聊天内容。
-          // 这笔补偿删除失败(Windows 文件锁 / 权限)时不能咽下去:清理侧已经枚举并删完了,
-          // 它不知道这个文件又冒出来,于是既没人重试、明文也留在了隐私边界之后
-          // (review: codex P1)。抛出去让 IPC 登记进 purge 队列。
-          lastWritten.delete(file);
-          try {
-            await fsp.rm(file, { recursive: true, force: true });
-          } catch (err) {
-            throw new MirrorCachePurgeError(rootAtStart, [file], err);
+          const body = JSON.stringify(normalized);
+          const payload: StoredMessages = {
+            version: 1,
+            updatedAt: Date.now(),
+            messages: normalized,
+          };
+          const serialized = JSON.stringify(payload);
+          if (Buffer.byteLength(serialized, 'utf8') > MAX_MESSAGE_FILE_BYTES) {
+            // 单会话超限:新页写不下 —— 但旧正本此刻可能是 rewind / 删消息**之前**的窗口,
+            // 而同一个超限页每次对账都会走到这里,永远不会有第二次机会更新它。所以**作废**
+            // 旧缓存,而不是留一份会骗人的旧页(review: codex P1)。
+            await serializeWrite(file, async () => {
+              if (unchanged(file, body)) return; // 内容没变(旧页就是它)→ 无需作废
+              lastWritten.delete(file);
+              try {
+                await fsp.rm(file, { recursive: true, force: true });
+              } catch {
+                if (await pathMaybeExists(file)) {
+                  throw new MirrorCachePurgeError(rootAtStart, [file], null);
+                }
+              }
+            });
+            return {
+              invalidation: numericCounter(await readClearCounter(rootAtStart, sessionKey)),
+            };
           }
-          return;
-        }
-        // 指纹只在真正落盘之后登记(写失败留指纹 → 同内容重试被跳过 → 缓存永久缺失)。
-        rememberWritten(file, body);
-        await evictMessagesIfNeeded(dir, lastWritten);
-        }),
-      );
+          // 落盘与指纹登记必须成对且有序 → 同一文件的写入串成链(见 serializeWrite)。
+          const writeGuard: WriteGuard = { kind: 'write', epoch, deviceId };
+          await serializeWrite(file, async () => {
+            // 拿不到跨进程锁(别的**进程**正在临界区)→ 跳过这次写。
+            if (!held) return;
+            if (isStale(writeGuard)) return;
+            // 调用方取到这批内容时看到的会话级计数与此刻不一致 → 期间权威侧作废过(可能是
+            // **另一个窗口 / 另一个进程**干的),手里这批属于作废之前,丢弃(review: codex P1)。
+            if (expectedInvalidation !== undefined) {
+              const now = await readClearCounter(rootAtStart, sessionKey);
+              // 'denied' 一律拒写(屏障可能真的在);'unknown' 不据此判断(见 clearedSince)。
+              if (now === 'denied') return;
+              if (typeof now === 'number' && now !== expectedInvalidation) return;
+            }
+            // 清理在我取到内容之后完成过 → 我手里的是被清掉的旧正文,丢弃。
+            if (await clearedSince(rootAtStart, deviceClearKey(deviceId), clearCounterAtStart))
+              return;
+            // 账号级清理(登出 / 切账号)同理:它删的是整棵缓存根,而计数器在根之外。
+            if (await clearedSince(rootAtStart, CLEARED_ACCOUNT, accountCounterAtStart)) return;
+            // 指纹只算消息体,不含 payload 的 updatedAt —— 否则每次都"变了",去重永不命中。
+            // 在链内判等:排队期间前一笔可能刚写下同样内容。
+            if (unchanged(file, body)) return;
+            await ensureDir(dir);
+            if (isStale(writeGuard)) return;
+            const written = await writeFileAtomic(file, serialized);
+            if (!written.ok) {
+              // 走到这里说明权威内容**已经变了**(上面 unchanged 已挡掉没变的情况),而新内容
+              // 没能落位。旧正本此刻是过期窗口:rewind / 删消息之前的正文。留着它,下次离线冷
+              // 启动就会把已经不存在的消息 hydrate 出来 —— 所以宁可**作废**这条缓存,而不是保留
+              // 一份会骗人的旧页(缓存是纯优化,缺一条只是少一次首屏加速)(review: codex P1)。
+              lastWritten.delete(file);
+              const stuck: string[] = [];
+              try {
+                // recursive:落位失败的成因也可能让目标位置变成一个目录(枚举 / 清理都按
+                // 「这是本缓存自己的路径」处理,递归不会越界)。
+                await fsp.rm(file, { recursive: true, force: true });
+              } catch {
+                // 只有旧正本**确实还在**才算残留:messages/ 位置被占成普通文件这类情况下
+                // rm 也会失败,但盘上本来就没有那份缓存(同 writeFileAtomic 的 tmp 判定)。
+                if (await pathMaybeExists(file)) stuck.push(file);
+              }
+              if (written.leftoverTmp) stuck.push(written.leftoverTmp);
+              // 作废也失败 → 登记重试(明文留在盘上是隐私问题,不能咽下去)。
+              if (stuck.length > 0) throw new MirrorCachePurgeError(rootAtStart, stuck, null);
+              return;
+            }
+            if (isStale(writeGuard)) {
+              // 隐私清理期间落的盘:立刻收回,否则刚被清空的目录里会留下本该消失的聊天内容。
+              // 这笔补偿删除失败(Windows 文件锁 / 权限)时不能咽下去:清理侧已经枚举并删完了,
+              // 它不知道这个文件又冒出来,于是既没人重试、明文也留在了隐私边界之后
+              // (review: codex P1)。抛出去让 IPC 登记进 purge 队列。
+              lastWritten.delete(file);
+              try {
+                await fsp.rm(file, { recursive: true, force: true });
+              } catch (err) {
+                throw new MirrorCachePurgeError(rootAtStart, [file], err);
+              }
+              return;
+            }
+            // 指纹只在真正落盘之后登记(写失败留指纹 → 同内容重试被跳过 → 缓存永久缺失)。
+            rememberWritten(file, body);
+            await evictMessagesIfNeeded(dir, lastWritten);
+          });
+          return { invalidation: numericCounter(await readClearCounter(rootAtStart, sessionKey)) };
+        });
+      });
     },
 
     async readSessionList() {
@@ -938,33 +1053,35 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     },
 
     async writeSessionList(devices) {
-      // 同 writeMessages:代际在请求发起时捕获(排队期间的清理必须能作废这笔)。
+      // 代际在请求发起时(进互斥之前)同步捕获 —— 同 writeMessages。
       const epoch = generation;
-      // 同 writeMessages:root 与发起时刻都在发起时快照。
       const rootAtStart = resolveRoot();
-      const clearCounterAtStart = await readClearCounter(rootAtStart, CLEARED_ANY);
-      const accountCounterAtStart = await readClearCounter(rootAtStart, CLEARED_ACCOUNT);
-      // 与 writeMessages 同款:同一文件的写入串成链,保证「落盘 → 登记指纹」成对有序。
-      const listFile = path.join(rootAtStart, SESSION_LIST_FILE);
-      const outcome = await serializeWrite(listFile, () =>
-        withCacheLock(rootAtStart, async (held) =>
-          // 拿不到跨进程锁 → 跳过(整份快照写在别人清理途中落地会把被清设备写回来)。
-          // 空快照 = **删除**,删除是安全方向:即使拿不到锁 / 期间发生过清理也照做。
-          normalizeDeviceSessions(devices).length === 0 ||
-          (held &&
-            !(await clearedSince(rootAtStart, CLEARED_ANY, clearCounterAtStart)) &&
-            !(await clearedSince(rootAtStart, CLEARED_ACCOUNT, accountCounterAtStart)))
-            ? writeSessionListLocked(devices, { kind: 'write', epoch }, listFile)
-            : // 写不了内容时不能"什么都不做":盘上那份可能已经陈旧(它可能还带着刚被清掉的
-              // 设备)。按与"落位失败"同一口径**作废**它;作废失败才登记重试。
-              invalidateSessionList(listFile),
-        ),
-      );
-      // 只有「删除失败」才抛(见 purge-failed):写入失败保留旧快照即可,不该让上层去
-      // 重试删除一份仍然有效的缓存。
-      if (outcome.outcome === 'purge-failed') {
-        throw new MirrorCachePurgeError(rootAtStart, [outcome.stuck], null);
-      }
+      // 同 writeMessages 的三段式:互斥准入 → 等跨进程锁之前读基线 → 拿到锁才提交。
+      return withRootMutex(rootAtStart, async () => {
+        const clearCounterAtStart = await readClearCounter(rootAtStart, CLEARED_ANY);
+        const accountCounterAtStart = await readClearCounter(rootAtStart, CLEARED_ACCOUNT);
+        return withCacheFileLock(rootAtStart, async (held) => {
+          // 与 writeMessages 同款:同一文件的写入串成链,保证「落盘 → 登记指纹」成对有序。
+          const listFile = path.join(rootAtStart, SESSION_LIST_FILE);
+          const outcome = await serializeWrite(listFile, async () =>
+            // 拿不到跨进程锁 → 跳过(整份快照写在别人清理途中落地会把被清设备写回来)。
+            // 空快照 = **删除**,删除是安全方向:即使拿不到锁 / 期间发生过清理也照做。
+            normalizeDeviceSessions(devices).length === 0 ||
+            (held &&
+              !(await clearedSince(rootAtStart, CLEARED_ANY, clearCounterAtStart)) &&
+              !(await clearedSince(rootAtStart, CLEARED_ACCOUNT, accountCounterAtStart)))
+              ? writeSessionListLocked(devices, { kind: 'write', epoch }, listFile)
+              : // 写不了内容时不能"什么都不做":盘上那份可能已经陈旧(它可能还带着刚被清掉的
+                // 设备)。按与"落位失败"同一口径**作废**它;作废失败才登记重试。
+                invalidateSessionList(listFile),
+          );
+          // 只有「删除失败」才抛(见 purge-failed):写入失败保留旧快照即可,不该让上层去
+          // 重试删除一份仍然有效的缓存。
+          if (outcome.outcome === 'purge-failed') {
+            throw new MirrorCachePurgeError(rootAtStart, [outcome.stuck], null);
+          }
+        });
+      });
     },
 
     /**
@@ -1007,31 +1124,34 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // 同 clearDevice:整段拿着跨进程锁跑,别的实例的写入会在锁上等(等不到就跳过写),
       // 不会在删除途中把明文写回来。拿不到锁也照删(删除是安全方向)。
       return withCacheLock(root, async (lockHeld) => {
-      if (!lockHeld) log.warn('mirror cache: clearAll without cross-process lock');
-      // 账号级作废计数器住在缓存根之外,先自增:发起时读到旧值的写入提交时会被挡掉,
-      // 即使它们排在整棵目录删除之后(review: codex P1)。落不下去同样不能当成清理成功 ——
-      // 抛出去让账号边界登记整根重试(见 teardownAuthAccountBoundary)。
-      try {
-        await bumpClearedCounter(root, CLEARED_ACCOUNT);
-      } catch (err) {
-        purgeAllInFlight -= 1; // 下面的 finally 不会执行(还没进 try)
-        throw new MirrorCachePurgeError(root, [root], err);
-      }
-      try {
-        await fsp.rm(root, { recursive: true, force: true });
-        return;
-      } catch (err) {
-        // 整棵删不掉(Windows 文件锁 / 权限 / 并发写)时**不要就此放弃**:先逐个删内容,
-        // 把「还剩什么」查清楚 —— 目录空壳留着无所谓,聊天正文留着才是隐私问题。
-        const remaining = await purgeContents(root);
-        if (remaining.length === 0) {
-          log.debug(`mirror cache purged but root dir remains: ${root}`, err);
-          return;
+        if (!lockHeld) log.warn('mirror cache: clearAll without cross-process lock');
+        // 账号级作废计数器住在缓存根之外,先自增:发起时读到旧值的写入提交时会被挡掉,
+        // 即使它们排在整棵目录删除之后(review: codex P1)。落不下去同样不能当成清理成功 ——
+        // 抛出去让账号边界登记整根重试(见 teardownAuthAccountBoundary)。
+        try {
+          await bumpClearedCounter(root, CLEARED_ACCOUNT);
+        } catch (err) {
+          purgeAllInFlight -= 1; // 下面的 finally 不会执行(还没进 try)
+          throw new MirrorCachePurgeError(root, [root], err);
         }
-        throw new MirrorCachePurgeError(root, remaining, err);
-      } finally {
-        purgeAllInFlight -= 1;
-      }
+        try {
+          await fsp.rm(root, { recursive: true, force: true });
+          return;
+        } catch (err) {
+          // 整棵删不掉(Windows 文件锁 / 权限 / 并发写)时**不要就此放弃**:先逐个删内容,
+          // 把「还剩什么」查清楚 —— 目录空壳留着无所谓,聊天正文留着才是隐私问题。
+          const remaining = await purgeContents(root);
+          if (remaining.length === 0) {
+            log.debug(`mirror cache purged but root dir remains: ${root}`, err);
+            return;
+          }
+          throw new MirrorCachePurgeError(root, remaining, err);
+        } finally {
+          purgeAllInFlight -= 1;
+          // 收尾再自增一次代际(同 clearDevice):互斥让"清理期间发起"的写入排到清理之后才执行,
+          // 只比"发起时的代际"就挡不住了 —— 结束时再 bump,它们提交时必然失配。
+          generation += 1;
+        }
       });
     },
   };
@@ -1042,10 +1162,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
  * 被逐出的文件必须同步删掉写入指纹(`lastWritten`),否则同内容的下一次写入会被去重跳过,
  * 该会话的缓存在本进程余生里再也建不回来(review: greptile)。
  */
-async function evictMessagesIfNeeded(
-  dir: string,
-  lastWritten: Map<string, string>,
-): Promise<void> {
+async function evictMessagesIfNeeded(dir: string, lastWritten: Map<string, string>): Promise<void> {
   // 先扫掉陈旧的 `.tmp`:进程在 writeFile 与 rename 之间被杀会留下完整明文,而它既不进
   // 体积预算也不会被下面的 LRU 逐出(review: codex P1)。只删够老的,免得动到正在写的那笔。
   await sweepStaleTmpFiles(dir);
@@ -1185,7 +1302,8 @@ async function listMessageFileNames(
       // 所以调用方的 prefix 过滤照样命中。
       names: entries
         .filter(
-          (entry) => entry.isFile() && (entry.name.endsWith('.json') || entry.name.endsWith('.tmp')),
+          (entry) =>
+            entry.isFile() && (entry.name.endsWith('.json') || entry.name.endsWith('.tmp')),
         )
         .map((entry) => entry.name),
       unreadable: false,
