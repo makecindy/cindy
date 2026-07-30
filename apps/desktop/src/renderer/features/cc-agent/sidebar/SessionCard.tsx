@@ -57,16 +57,18 @@ import { createLogger } from '@/lib/logger';
 import { formatSidebarTime, formatSidebarTimeAbsolute } from '../lib/formatSidebarTime';
 import { highlightSegments } from '../lib/highlightSegments';
 import { scrollIntoNearestView } from '../lib/scrollIntoNearestView';
+import { isAutomationGeneratedSession } from '../lib/scheduledSessionGrouping';
 import {
-  getAutomationSessionDisplayTitle,
-  isAutomationGeneratedSession,
-  isScheduledSession,
-} from '../lib/scheduledSessionGrouping';
+  canHighlightSessionDisplayTitle,
+  getSessionDisplayTitle,
+  isEmptyDraftSession,
+} from '../lib/sessionDisplayTitle';
 import { SessionProjectMoveSubmenu } from './SessionProjectMoveSubmenu';
 import { SessionRenameInput } from '../SessionRenameInput';
 import type { SessionItemProps } from './SessionItem';
 import { RemoteProjectIcon } from './RemoteProjectIcon';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
+import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
 import { useSessionBoundSchedules, scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { loadScheduleSidebarIndexRuns } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
 
@@ -128,7 +130,7 @@ export function SessionCard({
   // 灵动岛同源的 per-session 实时活动(执行中逐步活动 + 等待交互态)。
   const islandActivity = useAgentIslandActivity(session.id);
   const isPinned = session.pinnedAt != null;
-  const isEmpty = session.title === 'New Maker' && (session._count?.messages ?? 0) === 0;
+  const isEmpty = isEmptyDraftSession(session);
   const activityIso = session.updatedAt;
   const remoteIconKind = session.deviceLinkDeviceId ? 'device-link' : session.remoteHostId ? 'ssh' : null;
   const remoteIconConnectionStatus = session.deviceLinkDeviceId
@@ -139,8 +141,8 @@ export function SessionCard({
   const boundSchedules = useSessionBoundSchedules(session.id);
   const showScheduleBindingBadge = boundSchedules.length > 0;
   const showAutomationTimer = !showScheduleBindingBadge && isAutomationGenerated;
-  const displayTitle = getAutomationSessionDisplayTitle(session);
-  const canHighlightDisplayTitle = !isScheduledSession(session);
+  const displayTitle = getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'));
+  const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session);
   const isArchived = session.status === 'archived';
   const canQuickArchive = !isArchived && !isEmpty && !remoteWritesBlocked;
   // 卡片/列表的正文固定给预览区域。list 保留 main 既有实时执行文案;
@@ -180,6 +182,21 @@ export function SessionCard({
   const [archivePending, setArchivePending] = useState(false);
   const confirmPillRef = useRef<HTMLButtonElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
+
+  // 归档/删除前那次 dirty-worktree 预检要在 main 侧跑 git status,是"点了归档、
+  // 卡片还没消失"里剩下的最大一块等待。亮出 Confirm 胶囊 / 打开菜单到用户点下去
+  // 之间隔着一次反应时间,足够它跑完 —— 那一刻先发,执行时命中缓存。
+  // 包在 setter 上而不是逐个 onClick:本卡片与下面的 compact 变体共用这个 setter。
+  const prefetchRemovalPreflight = useCallback(() => {
+    prefetchDirtyWorktreeForRemoval(session.id, session.deviceLinkDeviceId);
+  }, [session.id, session.deviceLinkDeviceId]);
+  const beginArchivePending = useCallback(
+    (pending: boolean) => {
+      if (pending) prefetchRemovalPreflight();
+      setArchivePending(pending);
+    },
+    [prefetchRemovalPreflight],
+  );
 
   // 运行结束:仅做一次卡片底色 settle 闪动作为完成提示。运行中的活动感由标题左侧
   // SessionStatusIcon 呼吸 + 底部短扫动进度条表达;完成提醒继续走 SessionStatusIcon 状态点(绿/蓝/红)。
@@ -473,6 +490,7 @@ export function SessionCard({
         if (isEditing) return;
         e.preventDefault();
         e.stopPropagation();
+        prefetchRemovalPreflight();
         setMenuPos({ x: e.clientX, y: e.clientY });
       }}
       className={cn(
@@ -583,11 +601,12 @@ export function SessionCard({
                 isArchived={isArchived}
                 canQuickArchive={canQuickArchive}
                 archivePending={archivePending}
-                setArchivePending={setArchivePending}
+                setArchivePending={beginArchivePending}
                 confirmPillRef={confirmPillRef}
                 menuOpen={menuPos !== null}
                 onOpenMenu={(e) => {
                   const rect = e.currentTarget.getBoundingClientRect();
+                  prefetchRemovalPreflight();
                   setMenuPos({ x: rect.left, y: rect.bottom + 2 });
                 }}
                 onArchiveNow={() => onAction(session.id, 'archive-now')}
@@ -633,6 +652,7 @@ export function SessionCard({
               label={t('ccAgent.sidebar.sessionMenu.moreActions')}
               onClick={(e) => {
                 const rect = e.currentTarget.getBoundingClientRect();
+                prefetchRemovalPreflight();
                 setMenuPos({ x: rect.left, y: rect.bottom + 2 });
               }}
             >
@@ -648,7 +668,7 @@ export function SessionCard({
             ) : canQuickArchive ? (
               <CardAction
                 label={t('ccAgent.sidebar.sessionMenu.archived')}
-                onClick={() => setArchivePending(true)}
+                onClick={() => beginArchivePending(true)}
               >
                 <Archive size={13} strokeWidth={2} />
               </CardAction>

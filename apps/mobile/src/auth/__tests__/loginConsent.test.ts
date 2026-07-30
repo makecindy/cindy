@@ -232,5 +232,10 @@ describe('LoginSkinControls 接线(源码断言)', () => {
     expect(controlsSource).toContain('login.overlaySecondaryPressed');
     // 弹窗 = stage 内全屏遮罩 + 680×380 设计坐标系整层缩放(与登录组同口径)
     expect(controlsSource).toMatch(/LOGIN_CONSENT_DIALOG[\s\S]*transform: \[\{ scale \}\]/);
+    // 区域确认与协议确认共用设计标准正文 26/40，不允许按文案临时缩字号。
+    expect(controlsSource).toContain('fontSize={D.body.font}');
+    expect(controlsSource).toContain('lineHeight={D.body.lineHeight}');
+    expect(controlsSource).not.toContain('compactBody');
+    expect(loginSource).not.toContain('compactBody');
   });
 });

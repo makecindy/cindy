@@ -221,7 +221,11 @@ export function isSelectedSourceDisconnected(args: {
 }): boolean {
   const { providers, agent, modelId, selectedProviderId, providersLoading } = args;
   if (providersLoading || !agent || !selectedProviderId) return false;
-  const sources = sourcesForModel(providers, modelId, agent);
+  // 实际路由口径(includeDisabled):本判定只回答「选中来源还连着吗」,服务的是
+  // **已建会话**的显示与发送门禁。停用(suspended / 该拷贝 disabled)是准入轴,
+  // 不打断运行中的会话 —— 按准入过滤后的 rail 判会把停用当断开,Send 被误禁
+  // (PR #744 review 第十轮)。
+  const sources = sourcesForModel(providers, modelId, agent, { includeDisabled: true });
   return !sources.some((p) => p.id === selectedProviderId);
 }
 

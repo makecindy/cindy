@@ -42,7 +42,7 @@
 | `#2a2828` | 主按钮 / 社交按钮背景、active 边框、Dark 回调页面底、Dark CTA 文本 | 新增别名分语义 | `login-primary-button-bg`、`login-control-border-active`、`login-inverted-button-text`、`login-result-page-bg` dark、`login-link-text` | `#2a2828`，HSL `0 2.4% 16.1%` | 全主题保持；CINDY dark `surface` 同值但语义不同 |
 | `#434343` | 主按钮 / 社交按钮边框、Dark 回调卡片边框 | 新增 | `login-primary-button-border`、`login-panel-border` dark | `#434343`，HSL `0 0% 26.3%` | 全主题保持；可由 CINDY dark `border-default` 提供但 login alias 更稳 |
 | `#252222` | 标题、输入已填文本 | 新增 | `login-title-text`、`login-control-text` | `#252222`，HSL `0 4.2% 13.9%` | 全主题保持；不复用 `text-primary`，因为 default light 是 `#262626`、CINDY light 是 `#3c3f43` |
-| `#6f6f6f` | 副标题、回调正文 | 新增 | `login-secondary-text` | `#6f6f6f`，HSL `0 0% 43.5%` | 全主题保持；CINDY dark `text-secondary` 同值，light 不同 |
+| `#6f6f6f` | 副标题、回调正文、**「跳过登录」文字按钮**（2026-07-27 新增消费点） | 新增 | `login-secondary-text` | `#6f6f6f`，HSL `0 0% 43.5%`；light / dark **同值** | 全主题保持；CINDY dark `text-secondary` 同值，light 不同。**「跳过登录」文字按钮走本 token、不走 `login-link-*` 族**（文字按钮 ≠ 文字链接：不做 hover / pressed 变色），故本次改版**零新增颜色 token** |
 | `#ffffff` | Global 文字、返回按钮边框、Dark 回调按钮边框、状态栏变量 | 语义豁免或 alias | `login-inverted-button-border`；Global text 可用 `login-inverted-button-border` 或 dedicated constant | `#ffffff`，HSL `0 0% 100%` | 白色在这些场景是设计稿固定高对比值；不走 `surface-elevated`，避免主题污染 |
 | `#d91f37` | 错误原因文字 | 复用现有名并改默认 / override | `login-error-text` / existing component alias | 建议把旧 `login-error-text` 从 `error-flat(#ef4444)` 调整为 `#d91f37`，HSL `352.3 75% 48.6%` | 全主题保持；错误色是登录设计稿专用，不应和通用 destructive 混同 |
 | `#b4b4b4` | disabled 按钮边框 | 新增 | `login-control-border-disabled` / component alias | `#b4b4b4`，HSL `0 0% 70.6%` | 全主题保持 |
@@ -73,8 +73,10 @@
 | `680` | 桌面登录组宽、WORD_MARK 宽、回调卡片尺寸 | 新增 | `login-panel-width`、`login-wordmark-frame-width`、`login-result-card-size` | 语义不同，不建议只留一个 magic number |
 | `180` | 桌面 / 移动 WORD_MARK frame 高 | 新增 | `login-wordmark-frame-height` | 字标外框高度，不等于内部实际图片高度 |
 | `460 x 134` | SLOGAN frame | 新增 | `login-slogan-width`、`login-slogan-height` | 短屏移动端会缩放该 frame，但设计基准仍需保留 |
-| `560` | 登录整体高度含第三方入口 | 新增 | `login-flow-height` | 面板 `440` + gap `40` + social `80` |
-| `440` | 登录面板高度 | 新增 | `login-panel-height` | 浏览器等待 / 准备 / 错误态也用 |
+| `620` | 登录整体高度含第三方入口 | 新增 | `login-flow-height` | 面板 `500` + gap `40` + social `80`。**2026-07-27 登录改版由 `560` 改 `620`**（面板增高 60 随之）；双端落码 = 桌面 `LOGIN_GROUP.height` / 手机 `loginSizes.flowHeight` + `LOGIN_GROUP.height` |
+| `500` | 登录面板高度 | 新增 | `login-panel-height` | 浏览器等待 / 准备 / 错误态也用（登录全步骤恒定，步骤间不得跳变）。**2026-07-27 登录改版由 `440` 改 `500`**——增的 60 = 面板内新增「跳过登录」槽（`figma 700:791` / `705:886` / `705:1062`）。**Splash 借用登录面板时不跟随，仍为 `440`**（`SPLASH_PANEL.height` 独立常量：Splash 五帧无该入口、设计稿未改版） |
+| `680 x 60` | 「跳过登录」文字按钮槽（面板内 @y430） | 新增 | `login-skip-entry-*`（槽 680×60、字号 24 / 行框 29、命中区左右扩张 桌面 30 / 移动 50） | **2026-07-27 新增**（`figma 705:1068` 容器 / `705:1069` 文本 / 桌面 `700:910`）。槽仅作布局容器、本身不可点；字号取稿值 24，**≠** Text_link 的 20，故单列不复用 `login-code-link-*`；命中区 = 当前语言实际文字渲染宽度 + 左右各扩（用户拍板），移动端用**放大 `Pressable` bounds**、不用 `hitSlop`（slop 不越父 View 边界，Android 界外触摸不派发）。落码 = 桌面 `SKIP_ENTRY` / 手机 `LOGIN_SKIP_LOGIN` |
+| `y=540` | 圆钮行落位（= 面板底 500 + gap 40） | 复用推导 | 由 `login-panel-height + 40` 推导，不新增 token | **2026-07-27 由 `480` 改 `540`**；协议行同理由 `582` 改 `642`（= 组高 620 + 22）；error 槽保持 `680×50 @y380` 不随之移动 |
 | `36` | 面板 / 回调卡片圆角 | 新增 | `login-panel-radius` | 不复用 mobile `radius.container=12` |
 | `540` | 输入框 / 按钮宽 | 新增 | `login-control-width` | 面板左右边距 70 推导，但以节点值为准 |
 | `80` | 输入、按钮、社交圆钮高度 | 新增 | `login-control-height`、`login-social-size` | 控件和社交语义不同 |
@@ -89,6 +91,10 @@
 | `1624` | 移动 tall 画板高 | 新增 | `login-mobile-tall-height` | 对应约 812pt |
 | `1334` | 移动 short 画板高 | 新增 | `login-mobile-short-height` | 对应约 667pt |
 | `115.672` | 状态栏 mock 高 | 不进产品 token | 无 | 只是 Figma iOS mock；真实 RN 走 safe-area |
+
+> **勘误（2026-07-28）**：「跳过登录」**仅桌面落地**，手机端整体剥离（见 `design-decision-log.md`「2026-07-28」条）。故本表 §4 里 `login-panel-height` 的 `440→500`、`login-skip-entry-*` 尺寸族与「命中区移动端扩 50 / 落码手机 `LOGIN_SKIP_LOGIN`」均只对桌面成立；手机端 `loginSizes.panelHeight` 仍为 `440`、无 `LOGIN_SKIP_LOGIN` 常量。
+
+**「跳过登录」文字按钮的色源（2026-07-27）**：文字色 = `--login-secondary-text`（`#6F6F6F`，light / dark 同值，见 §3 对应行），**不走 `--login-link-*` 族**——文字按钮与文字链接是两种组件，前者不做 hover / pressed 变色，因此本次改版没有新增任何颜色 token。
 
 尺寸新增清单中不包含可由其它 token稳定推导的值（例如社交半径 `80/2`、输入左右边距 `(680-540)/2`）。若实现希望所有数值全命名，可额外补 `login-panel-horizontal-padding=70`、`login-panel-title-y=31`、`login-panel-subtitle-y=75` 等布局常量，但它们更适合在组件局部用结构化对象表达。
 

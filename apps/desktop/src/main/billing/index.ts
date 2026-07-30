@@ -2,6 +2,7 @@ import { ipcMain, shell, type BrowserWindow, type IpcMainInvokeEvent } from 'ele
 
 import {
   BILLING_INVOKE,
+  type BillingSubscriptionPortalResult,
   type CreateBillingSubscriptionRequest,
   type CreateBillingTopupRequest,
 } from '../../shared/billing.js';
@@ -13,6 +14,7 @@ import {
   projectBillingCatalog,
   projectBillingCurrentSubscription,
   projectBillingOrderList,
+  projectBillingPortalSession,
   projectBillingPaymentOrder,
   projectBillingPlanChange,
   projectBillingSubscription,
@@ -25,6 +27,7 @@ const CODE_PATTERN = /^[a-z][a-z0-9_]{1,63}$/;
 const DECIMAL_PATTERN = /^(0|[1-9]\d{0,14})(?:\.\d{1,9})?$/;
 const ID_MAX_LENGTH = 128;
 const BILLING_REQUEST_TIMEOUT_MS = 20_000;
+const EXTERNAL_BROWSER_LAUNCH_TIMEOUT_MS = 10_000;
 
 type ServerFetch = <T>(path: string, options: ApiFetchOptions) => Promise<T>;
 
@@ -96,6 +99,35 @@ function projectResponse<T>(value: unknown, projector: (input: unknown) => T): T
   } catch {
     throwIpcError('INTERNAL', 'billing service response was invalid');
   }
+}
+
+function openExternalWithTimeout(
+  openExternal: (url: string) => Promise<void>,
+  url: string,
+): Promise<BillingSubscriptionPortalResult> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout>;
+    const finish = (result: BillingSubscriptionPortalResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve(result);
+    };
+
+    timeout = setTimeout(
+      () => finish({ success: false, timedOut: true }),
+      EXTERNAL_BROWSER_LAUNCH_TIMEOUT_MS,
+    );
+    try {
+      void openExternal(url).then(
+        () => finish({ success: true }),
+        () => finish({ success: false }),
+      );
+    } catch {
+      finish({ success: false });
+    }
+  });
 }
 
 function assertOnlyKeys(
@@ -187,7 +219,7 @@ export function createBillingHandlers(
         timeoutMs: BILLING_REQUEST_TIMEOUT_MS,
         ...options,
         redactErrorDetails: true,
-        baseUrl: getBaseUrl(),
+        baseUrl: getBaseUrl,
       });
     } catch (error) {
       throwBillingFetchError(error);
@@ -211,7 +243,7 @@ export function createBillingHandlers(
         response = await fetch<unknown>('/api/model-access/balance', {
           timeoutMs: BILLING_REQUEST_TIMEOUT_MS,
           redactErrorDetails: true,
-          baseUrl: getBaseUrl(),
+          baseUrl: getBaseUrl,
         });
       } catch (error) {
         throwBalanceFetchError(error);
@@ -227,7 +259,7 @@ export function createBillingHandlers(
         response = await fetch<unknown>('/api/model-access/credit-usage', {
           timeoutMs: BILLING_REQUEST_TIMEOUT_MS,
           redactErrorDetails: true,
-          baseUrl: getBaseUrl(),
+          baseUrl: getBaseUrl,
         });
       } catch (error) {
         throwBalanceFetchError(error);
@@ -387,6 +419,16 @@ export function createBillingHandlers(
         ),
         projectBillingPlanChange,
       );
+    }),
+    [BILLING_INVOKE.OPEN_SUBSCRIPTION_PORTAL]: protect(async (raw) => {
+      if (raw !== undefined) {
+        throwIpcError('INVALID_PARAMS', 'subscription portal does not accept a payload');
+      }
+      const session = projectResponse(
+        await invoke<unknown>('/api/billing/subscription/portal', { method: 'POST' }),
+        projectBillingPortalSession,
+      );
+      return openExternalWithTimeout(openExternal, session.url);
     }),
     [BILLING_INVOKE.OPEN_PAYMENT_REDIRECT]: protect(async (raw) => {
       const payload = requireObject(raw);

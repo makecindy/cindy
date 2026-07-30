@@ -10,7 +10,12 @@ import { scanLocalCliAuth, type LocalCliScanDeps } from '../localCliDetect.js';
 
 const HOME = join('/tmp', 'cli-detect-home');
 
-function depsWith(dirs: string[], files: string[], claudeLogin = false): LocalCliScanDeps {
+function depsWith(
+  dirs: string[],
+  files: string[],
+  claudeLogin = false,
+  shared: (cli: string) => boolean = () => true,
+): LocalCliScanDeps {
   const dirSet = new Set(dirs.map((d) => join(HOME, d)));
   const fileSet = new Set(files.map((f) => join(HOME, f)));
   return {
@@ -18,6 +23,7 @@ function depsWith(dirs: string[], files: string[], claudeLogin = false): LocalCl
     isDirectory: async (p) => dirSet.has(p),
     isFile: async (p) => fileSet.has(p),
     hasClaudeLogin: () => claudeLogin,
+    isCredentialSharedWithCindy: (cli) => shared(cli),
   };
 }
 
@@ -70,7 +76,51 @@ describe('scanLocalCliAuth', () => {
         throw new Error('EACCES');
       },
       hasClaudeLogin: () => false,
+      isCredentialSharedWithCindy: () => true,
     };
     await expect(scanLocalCliAuth(deps)).rejects.toThrow('EACCES');
+  });
+
+  it('未登录时不探测共用性,sharedWithCindy 恒 false', async () => {
+    let asked = 0;
+    const r = await scanLocalCliAuth(
+      depsWith([], [], false, () => {
+        asked += 1;
+        return true;
+      }),
+    );
+    expect(r.every((d) => d.sharedWithCindy === false)).toBe(true);
+    expect(asked).toBe(0);
+  });
+
+  it('已登录但 Cindy 用的是另一份凭证 → sharedWithCindy=false', async () => {
+    // 回归 PR #1076 review:本机 codex 登录着账号 A、Cindy 的 codex-home 显式登录账号 B 时,
+    // installed/loggedIn 都为 true,但 reconcile 刻意让两份凭证各管各 —— 不能据此说「已继承」。
+    const r = await scanLocalCliAuth(
+      depsWith(['.codex'], [join('.codex', 'auth.json')], false, (cli) => cli !== 'codex-cli'),
+    );
+    const codex = r.find((d) => d.cli === 'codex-cli');
+    expect(codex).toMatchObject({ installed: true, loggedIn: true, sharedWithCindy: false });
+  });
+
+  it('deps 判定为「自己在 Cindy 里授权过」时不算继承', async () => {
+    // 回归 PR #1076 review 第三轮：用户在 Cindy 里亲自完成 Claude.ai 授权后，token 写进
+    // 与本机 CLI 相同的凭证库。共用存储只证明账号相同，证不出凭证先于 Cindy 存在 ——
+    // 此时说「已沿用本机登录、无需额外授权」，而那次授权正是他刚做的。
+    // 生产判据在 createLocalCliScanDeps（isNativeProviderAuthSelfAuthorized）；这里断言
+    // 纯函数如实透传 deps 的结论。
+    const r = await scanLocalCliAuth(depsWith(['.claude'], [], true, () => false));
+    expect(r.find((d) => d.cli === 'claude-cli')).toMatchObject({
+      loggedIn: true,
+      sharedWithCindy: false,
+    });
+  });
+
+  it('已登录且确为同一份凭证 → sharedWithCindy=true', async () => {
+    const r = await scanLocalCliAuth(
+      depsWith(['.codex'], [join('.codex', 'auth.json')], true, () => true),
+    );
+    expect(r.find((d) => d.cli === 'codex-cli')).toMatchObject({ sharedWithCindy: true });
+    expect(r.find((d) => d.cli === 'claude-cli')).toMatchObject({ sharedWithCindy: true });
   });
 });

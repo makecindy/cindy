@@ -25,6 +25,7 @@ import {
   Terminal,
   GitPullRequestArrow,
   UsersRound,
+  ListTodo,
   Plus,
   Puzzle,
   X,
@@ -120,6 +121,7 @@ const KIND_ICON: Record<BuiltinTabKindId, LucideIcon> = {
   terminal: Terminal,
   review: GitPullRequestArrow,
   'orca-workers': UsersRound,
+  'background-tasks': ListTodo,
 };
 
 const KIND_LABEL_KEY: Record<BuiltinTabKindId, string> = {
@@ -128,6 +130,7 @@ const KIND_LABEL_KEY: Record<BuiltinTabKindId, string> = {
   terminal: 'rightSidebar.tabs.kinds.terminal',
   review: 'rightSidebar.tabs.kinds.review',
   'orca-workers': 'rightSidebar.tabs.kinds.collaboration',
+  'background-tasks': 'rightSidebar.tabs.kinds.backgroundTasks',
 };
 
 /**

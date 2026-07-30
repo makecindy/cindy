@@ -33,6 +33,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 
 import type { RemoteHost, ExecStreamHandle } from '@cindy/maker-remote-ssh';
+import { REMOTE_INSTALL_ROOT } from '@cindy/maker-remote-ssh';
 
 // ws lib doesn't export Receiver / Sender from its main entry — they live as
 // internal classes under ws/lib/. The package's `exports` field also
@@ -133,6 +134,13 @@ export interface SshDaemonTransportOptions {
    * up and tearing the transport down. Default 15 s.
    */
   handshakeTimeoutMs?: number;
+  /**
+   * daemon 探活前跑的钩子 (async): agent-proxy 的 env marker 对账走这里 —
+   * marker 漂移时钩子会重写 marker 并 pkill 旧 daemon, 随后的 version 探活
+   * 失败 → bootstrap 新 daemon 吃到新 env。钩子失败会中止 transport 建立,
+   * 错误经 fireClose 上浮 (比"隧道没建好就让 daemon 裸连"更诚实)。
+   */
+  beforeDaemonProbe?: () => Promise<void>;
 }
 
 /** Standard WebSocket GUID — appended to client key for Accept hash check. */
@@ -166,7 +174,7 @@ type State = 'connecting' | 'open' | 'closed';
  */
 export function createSshDaemonTransport(opts: SshDaemonTransportOptions): Transport {
   const logger = opts.logger.child('codex-ssh-daemon-transport');
-  const installRoot = opts.installRoot ?? '$HOME/.xdt-server/v1';
+  const installRoot = opts.installRoot ?? REMOTE_INSTALL_ROOT;
   const handshakeTimeoutMs = opts.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS;
   const autoStartDaemon = opts.autoStartDaemon !== false;
 
@@ -187,6 +195,11 @@ export function createSshDaemonTransport(opts: SshDaemonTransportOptions): Trans
   //
   // The `_` is $0 (script name placeholder); positional $1+ are the codex
   // subcommand/flags forwarded to `exec "$@"` (shellQuote-safe pass-through).
+  //
+  // agent-proxy.env: 「Agent 流量走本地 Proxy」隧道开启时由 agent-proxy 的
+  // reconcile 写入 (export HTTPS_PROXY=http://127.0.0.1:<forwardPort> 等)。
+  // daemon bootstrap / 一次性命令统一 source — codex 的后端流量因此经隧道
+  // 流回用户本地 Proxy。文件不存在 = 功能未开启, 直连。
   const codexCmd = (subArgs: string[]): string => {
     // installRoot is interpolated UNQUOTED so the default `$HOME/.xdt-server/v1`
     // gets shell-expanded remotely. We don't know remote $HOME from the client
@@ -201,6 +214,7 @@ if [ ! -x "$CODEX" ]; then
   printf 'codex not installed at %s — run P1 install flow first\\n' "$CODEX" >&2
   exit 127
 fi
+if [ -f "$INSTALL_ROOT/agent-proxy.env" ]; then . "$INSTALL_ROOT/agent-proxy.env"; fi
 exec "$CODEX" "$@"
 `.trim();
     const quotedArgs = subArgs.map(shellQuote).join(' ');
@@ -359,6 +373,11 @@ exec "$CODEX" "$@"
 
   /** Async kickoff: probe daemon, optionally start it, open proxy, do handshake. */
   const bootstrap = async (): Promise<void> => {
+    // 0) agent-proxy 对账钩子等 (隧道 + env marker 就绪后再碰 daemon)。
+    if (opts.beforeDaemonProbe) {
+      await opts.beforeDaemonProbe();
+    }
+
     // 1) Probe daemon. Output is one JSON object on stdout.
     let socketPath = opts.socketPath ?? '';
     if (!socketPath) {

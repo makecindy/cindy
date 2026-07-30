@@ -11,7 +11,13 @@ export const VERSION = '0.0.0';
 export { BaseIM } from './BaseIM.js';
 export { createIM } from './createIM.js';
 export type { IM } from './createIM.js';
-export type { ChannelIM } from './channelIM.js';
+export type {
+  ChannelIM,
+  TextChannelIM,
+  RichChannelIM,
+  ImFinalOutput,
+  ImOutputDriver,
+} from './channelIM.js';
 
 export type { Logger } from './logger.js';
 
@@ -32,6 +38,16 @@ export { FeishuIM, createFeishuIM } from './feishu/index.js';
 
 export { DiscordIM, createDiscordIM } from './discord/index.js';
 export type { DiscordIMOptions } from './discord/index.js';
+
+export { TelegramIM, createTelegramIM } from './telegram/index.js';
+export type { TelegramIMOptions, TelegramGroupWindowEntry } from './telegram/index.js';
+export { TELEGRAM_DEFAULT_BEHAVIOR } from './telegram/index.js';
+export type { TelegramBehaviorConfig } from './telegram/index.js';
+export {
+  decodeLaneUserId as decodeTelegramLaneUserId,
+  encodeLaneUserId as encodeTelegramLaneUserId,
+  decodeMessageId as decodeTelegramMessageId,
+} from './telegram/codec.js';
 
 export type {
   IdentityKey,

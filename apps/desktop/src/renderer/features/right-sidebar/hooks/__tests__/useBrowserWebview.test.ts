@@ -158,6 +158,7 @@ describe('useBrowserWebview', () => {
 
     expect(acquire).not.toHaveBeenCalled();
     expect(result!.wrapper).toBeNull();
+    expect(result!.webview).toBeNull();
   });
 
   it('does not materialize a hidden tab until it becomes visible', async () => {
@@ -177,6 +178,7 @@ describe('useBrowserWebview', () => {
 
     expect(acquire).toHaveBeenCalledTimes(1);
     expect(result!.wrapper).not.toBeNull();
+    expect(result!.webview).toBe(mockWebview);
   });
 
   it('touches an existing entry through acquire when it becomes visible', async () => {
@@ -196,6 +198,7 @@ describe('useBrowserWebview', () => {
 
     expect(browserWebviewPool.acquire).toHaveBeenCalledOnce();
     expect(result!.wrapper).toBe(existing.wrapper);
+    expect(result!.webview).toBe(mockWebview);
   });
 
   it('observes an entry explicitly created while hidden without navigating it', async () => {
@@ -212,6 +215,7 @@ describe('useBrowserWebview', () => {
 
     expect(browserWebviewPool.acquire).toHaveBeenCalledOnce();
     expect(result!.wrapper).toBeNull();
+    expect(result!.webview).toBe(mockWebview);
     expect(mockWebview.addEventListener).toHaveBeenCalledWith(
       'render-process-gone',
       expect.any(Function),
@@ -309,6 +313,123 @@ describe('useBrowserWebview', () => {
     expect(mockWebview.loadURL).toHaveBeenCalledTimes(BROWSER_NAVIGATION_FUSE_LIMIT + 1);
   });
 
+  it('shows loading immediately on reload and resets after stop-loading', () => {
+    let result: UseBrowserWebviewResult | null = null;
+    render(createElement(HookProbe, {
+      visible: true,
+      onResult: (next) => { result = next; },
+    }));
+
+    act(() => result!.reload());
+    expect(mockWebview.reload).toHaveBeenCalledOnce();
+    expect(result!.isLoading).toBe(true);
+
+    act(() => mockWebview.dispatch('did-stop-loading'));
+    expect(result!.isLoading).toBe(false);
+  });
+
+  it('rolls back optimistic loading when reload throws', () => {
+    mockWebview.reload.mockImplementationOnce(() => {
+      throw new Error('detached');
+    });
+    let result: UseBrowserWebviewResult | null = null;
+    render(createElement(HookProbe, {
+      visible: true,
+      onResult: (next) => { result = next; },
+    }));
+
+    act(() => result!.reload());
+    expect(result!.isLoading).toBe(false);
+  });
+
+  it('leaves loading immediately when the user stops the page', () => {
+    let result: UseBrowserWebviewResult | null = null;
+    render(createElement(HookProbe, {
+      visible: true,
+      onResult: (next) => { result = next; },
+    }));
+
+    act(() => result!.reload());
+    expect(result!.isLoading).toBe(true);
+
+    act(() => result!.stop());
+    expect(mockWebview.stop).toHaveBeenCalledOnce();
+    expect(result!.isLoading).toBe(false);
+  });
+
+  it('distinguishes an unobserved favicon from an explicitly missing favicon', () => {
+    let result: UseBrowserWebviewResult | null = null;
+    render(createElement(HookProbe, {
+      visible: true,
+      onResult: (next) => { result = next; },
+    }));
+
+    expect(result!.favicon).toBeNull();
+
+    act(() => {
+      mockWebview.dispatch('page-favicon-updated', {
+        favicons: ['', 'https://www.taptap.cn/favicon.ico'],
+      });
+    });
+    expect(result!.favicon).toBe('https://www.taptap.cn/favicon.ico');
+
+    act(() => {
+      mockWebview.dispatch('page-favicon-updated', { favicons: [] });
+    });
+    expect(result!.favicon).toBe('');
+  });
+
+  it('does not treat a suppressed stale navigation report as a missing favicon', () => {
+    let result: UseBrowserWebviewResult | null = null;
+    render(createElement(HookProbe, {
+      visible: true,
+      onResult: (next) => { result = next; },
+    }));
+
+    act(() => {
+      mockWebview.dispatch('page-favicon-updated', {
+        favicons: ['https://www.taptap.cn/favicon.ico'],
+      });
+      result!.navigate('https://example.com/');
+    });
+    expect(result!.favicon).toBeNull();
+
+    act(() => {
+      mockWebview.dispatch('did-navigate', { url: 'https://www.taptap.cn/' });
+    });
+    expect(result!.favicon).toBeNull();
+    expect(result!.url).toBe('https://example.com/');
+  });
+
+  it('clears a stale favicon after guest navigation but keeps reload state independent', () => {
+    let result: UseBrowserWebviewResult | null = null;
+    render(createElement(HookProbe, {
+      visible: true,
+      onResult: (next) => { result = next; },
+    }));
+
+    act(() => {
+      mockWebview.dispatch('page-favicon-updated', {
+        favicons: ['https://www.taptap.cn/favicon.ico'],
+      });
+    });
+    expect(result!.favicon).toBe('https://www.taptap.cn/favicon.ico');
+
+    act(() => {
+      mockWebview.dispatch('did-navigate', { url: 'https://example.com/' });
+    });
+    expect(result!.favicon).toBe('');
+
+    act(() => {
+      mockWebview.dispatch('page-favicon-updated', {
+        favicons: ['https://example.com/favicon.ico'],
+      });
+      result!.reload();
+    });
+    expect(result!.favicon).toBe('https://example.com/favicon.ico');
+    expect(result!.isLoading).toBe(true);
+  });
+
   it('re-acquires a fresh pool entry when an evicted tab becomes visible again', async () => {
     const { browserWebviewPool } = await import('../../lib/browserWebviewPool');
     const acquire = vi.mocked(browserWebviewPool.acquire);
@@ -318,6 +439,7 @@ describe('useBrowserWebview', () => {
     );
     expect(acquire).toHaveBeenCalledTimes(1);
     const firstWrapper = result!.wrapper;
+    const firstWebview = result!.webview;
 
     act(() => {
       for (let i = 0; i <= BROWSER_NAVIGATION_FUSE_LIMIT; i += 1) {
@@ -333,6 +455,7 @@ describe('useBrowserWebview', () => {
     // 后台淘汰(资源看门狗 / LRU):entry 被 release,不可见期间不得重建。
     act(() => poolMocks.fireRelease('tab-a'));
     expect(acquire).toHaveBeenCalledTimes(1);
+    expect(result!.webview).toBeNull();
 
     // 重新可见 → 重新 acquire,拿到新一代 entry,观测 state 复位。
     mockWebview = makeMockWebview('');
@@ -341,6 +464,8 @@ describe('useBrowserWebview', () => {
     );
     expect(acquire).toHaveBeenCalledTimes(2);
     expect(result!.wrapper).not.toBe(firstWrapper);
+    expect(result!.webview).not.toBe(firstWebview);
+    expect(result!.webview).toBe(mockWebview);
     expect(result!.url).toBe('');
     expect(result!.crash).toBeNull();
 

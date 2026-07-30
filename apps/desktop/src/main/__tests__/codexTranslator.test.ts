@@ -252,6 +252,178 @@ describe('webSearch', () => {
     feedItem('updated', { type: 'webSearch', id: 'ws2', query: 'x' });
     expect(coll.events).toHaveLength(0);
   });
+
+  it('优先从 action 归一实际查询内容并保留完整参数', () => {
+    const action = {
+      type: 'search',
+      query: 'actual query',
+      queries: ['actual query', 'backup query'],
+    };
+    feedItem('started', { type: 'webSearch', id: 'ws-action', query: '', action });
+
+    expect(coll.events).toHaveLength(1);
+    expect((coll.events[0].data as { input: unknown }).input).toEqual({
+      query: 'actual query',
+      action,
+    });
+  });
+
+  it('兼容 app-server snake_case 与历史 camelCase action 并生成可读摘要', () => {
+    feedItem('started', {
+      type: 'webSearch',
+      id: 'ws-many',
+      query: '',
+      action: { type: 'search', query: null, queries: ['', 'first query', 'second query'] },
+    });
+    feedItem('started', {
+      type: 'webSearch',
+      id: 'ws-open',
+      query: '',
+      action: { type: 'open_page', url: 'https://example.com/page' },
+    });
+    feedItem('started', {
+      type: 'webSearch',
+      id: 'ws-find',
+      query: '',
+      action: { type: 'find_in_page', url: 'https://example.com/page', pattern: 'needle' },
+    });
+    feedItem('started', {
+      type: 'webSearch',
+      id: 'ws-find-escaped',
+      query: '',
+      action: { type: 'findInPage', url: 'https://example.com/page', pattern: "foo'\\bar" },
+    });
+
+    expect(coll.events.map((event) => (
+      event.data as { input: { query: string } }
+    ).input.query)).toEqual([
+      'first query ...',
+      'https://example.com/page',
+      "'needle' in https://example.com/page",
+      "'foo\\'\\\\bar' in https://example.com/page",
+    ]);
+  });
+
+  it('started 只有 legacy query 时等 updated action 补齐，且只落一条 tool_use', () => {
+    feedItem('started', {
+      type: 'webSearch',
+      id: 'ws-late',
+      query: 'placeholder query',
+      action: null,
+    });
+    expect(coll.events).toHaveLength(0);
+
+    feedItem('updated', {
+      type: 'webSearch',
+      id: 'ws-late',
+      query: '',
+      action: { type: 'search', query: 'late query', queries: null },
+    });
+    feedItem('completed', {
+      type: 'webSearch',
+      id: 'ws-late',
+      query: '',
+      action: { type: 'search', query: 'late query', queries: null },
+    });
+
+    expect(coll.events.map((event) => event.type)).toEqual([
+      'tool_use',
+      'tool_result_full',
+      'tool_result',
+    ]);
+    expect((coll.events[0].data as { input: unknown }).input).toEqual({
+      query: 'late query',
+      action: { type: 'search', query: 'late query', queries: null },
+    });
+  });
+
+  it('completed 的权威 action 变化时用同一 id 补发 tool_use 更新', () => {
+    feedItem('started', {
+      type: 'webSearch',
+      id: 'ws-final-action',
+      query: '',
+      action: { type: 'search', query: 'early query', queries: null },
+    });
+    feedItem('completed', {
+      type: 'webSearch',
+      id: 'ws-final-action',
+      query: '',
+      action: { type: 'open_page', url: 'https://example.com/final' },
+    });
+
+    expect(coll.events.map((event) => event.type)).toEqual([
+      'tool_use',
+      'tool_use',
+      'tool_result_full',
+      'tool_result',
+    ]);
+    expect(coll.events.slice(0, 2).map((event) => event.data)).toEqual([
+      {
+        toolUseId: 'ws-final-action',
+        toolName: 'web_search',
+        input: {
+          query: 'early query',
+          action: { type: 'search', query: 'early query', queries: null },
+        },
+      },
+      {
+        toolUseId: 'ws-final-action',
+        toolName: 'web_search',
+        input: {
+          query: 'https://example.com/final',
+          action: { type: 'open_page', url: 'https://example.com/final' },
+        },
+      },
+    ]);
+  });
+
+  it('completed 快照丢失字段时仍用 started 的 legacy query 补发调用记录', () => {
+    feedItem('started', {
+      type: 'webSearch',
+      id: 'ws-legacy-only',
+      query: 'legacy query',
+      action: null,
+    });
+    expect(coll.events).toHaveLength(0);
+
+    feedItem('completed', {
+      type: 'webSearch',
+      id: 'ws-legacy-only',
+      query: '',
+      action: null,
+    });
+
+    expect(coll.events.map((event) => event.type)).toEqual([
+      'tool_use',
+      'tool_result_full',
+      'tool_result',
+    ]);
+    expect((coll.events[0].data as { input: { query: string } }).input.query).toBe('legacy query');
+  });
+
+  it('缺失 started/updated 时 completed 仍先补 tool_use', () => {
+    feedItem('completed', {
+      type: 'webSearch',
+      id: 'ws-completed-only',
+      query: '',
+      action: { type: 'search', query: 'completed query', queries: null },
+    });
+
+    expect(coll.events.map((event) => event.type)).toEqual([
+      'tool_use',
+      'tool_result_full',
+      'tool_result',
+    ]);
+    expect((coll.events[0].data as { input: { query: string } }).input.query).toBe('completed query');
+  });
+
+  it('completed 仍无有效参数时不生成空白调用记录', () => {
+    feedItem('started', { type: 'webSearch', id: 'ws-empty', query: '', action: null });
+    feedItem('updated', { type: 'webSearch', id: 'ws-empty', query: '', action: null });
+    feedItem('completed', { type: 'webSearch', id: 'ws-empty', query: '', action: null });
+
+    expect(coll.events).toHaveLength(0);
+  });
 });
 
 // ── fileChange ──────────────────────────────────────────────────────────────

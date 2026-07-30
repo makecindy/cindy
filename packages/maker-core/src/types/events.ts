@@ -9,6 +9,8 @@
  * 与现有 ccAgent.types StreamEvent 接近，但精简了未启用字段。
  */
 
+import type { WorkflowProgressEntry } from '@cindy/maker-shared/agent-task';
+
 export type AgentEventType =
   | 'text'                  // 流式文本输出（增量或完整）
   | 'thinking'              // reasoning 输出（增量或完整）
@@ -75,6 +77,12 @@ export interface AgentTaskUpdateEventData {
   model?: string;
   reasoningEffort?: string;
   receiverThreadIds?: string[];
+  /**
+   * workflow 逐 agent 进度树(taskType=local_workflow 时 task_progress 事件携带,
+   * 经 `@cindy/maker-shared/agent-task` 的 normalizeWorkflowProgressEntries 收窄截断)。
+   * CLI 对纯心跳帧节流省略本字段(undefined = 沿用上一帧),下游 merge 不得清空。
+   */
+  workflowProgress?: WorkflowProgressEntry[];
   raw?: unknown;
 }
 

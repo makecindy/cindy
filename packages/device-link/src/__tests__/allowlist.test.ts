@@ -71,6 +71,14 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     }
   });
 
+  it('放行 workflow 逐 agent 进度树只读(记录文件真相在被控端 HOME,控制端本机读必落空)', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:get-workflow-progress')).toBe(true);
+  });
+
+  it('放行会话后台任务快照只读(任务真身在被控端,后台任务面板挂载水合用)', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:session-background-tasks:list')).toBe(true);
+  });
+
   it('放行会话级完整对等补充(fork-strip / context-usage / 窄口径 patch-meta / Magic 重命名)', () => {
     for (const ch of [
       'maker:fork-strip-encrypted',
@@ -123,6 +131,9 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
   it('放行窄口径文本文件预览(只读 + 大小上限 + forbidden/oversize reason)', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('text-file:read-preview')).toBe(true);
     expect(REMOTE_INVOKE_ALLOWLIST.has('read-file-for-attachment')).toBe(false);
+    // 同理:read-file-bytes 回整个文件的原始字节(PDF 预览用),调用方永远是被控端
+    // 本机 renderer,远程控制端不需要、也不得拿到这条通道。
+    expect(REMOTE_INVOKE_ALLOWLIST.has('read-file-bytes')).toBe(false);
   });
 
   it('放行 /goal 远程(goal-host 在被控端,per-session 业务写)', () => {

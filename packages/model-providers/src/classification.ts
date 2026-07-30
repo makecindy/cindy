@@ -94,6 +94,44 @@ export function categorize(id: string): ModelCategory {
 const KNOWN_CATEGORIES = new Set<string>(CATEGORY_ORDER);
 
 /**
+ * 能作为 agent 对话模型被选择/路由的厂商分组(anthropic..china)。image / audio / video /
+ * embedding / other 是网关多返回的**能力模型**:不能当 agent 用,永远不进对话模型选择面板
+ * (硬排除,与显示开关无关),它们的「启用」只作用于媒体生成等专属链路。
+ */
+const AGENT_MODEL_CATEGORIES: ReadonlySet<ModelCategory> = new Set([
+  'anthropic',
+  'gpt',
+  'gpt-budget',
+  'grok',
+  'google',
+  'china',
+]);
+
+/**
+ * 该模型是否属于可被 agent 选择的对话厂商分组(见 AGENT_MODEL_CATEGORIES)。
+ *
+ * `opts.userProvider` = 该条目来自用户自定义供应商(Provider.source === 'user',由
+ * 调用方注入 —— 本模块纯逻辑不持 provider 上下文):此时目录带的**未知 group**
+ * (buildUserProvider 的 `custom:<providerId>`)= 用户显式配置的 agent 模型,直接放行,
+ * 不让 groupOf 的未知组回退吃 id 启发式 —— 否则 `gpt-4o-audio-preview` 这类合法
+ * 自定义对话模型会被误判成能力模型而从全部对话清单消失(PR #744 review)。
+ *
+ * 例外**只限用户供应商**:网关条目缺 group 时 active-catalog 会补 `custom:xd`
+ * (active-catalog.ts),若无条件放行未知组,无分组下发的网关图像/音频/向量模型会
+ * 绕过能力分类、重新漏进对话清单 —— 正是本过滤要堵的洞(PR #744 review 第二轮)。
+ * 非用户供应商一律走 groupOf(显式已知组优先,未知/缺省回退 id 启发式)。
+ */
+export function isAgentSelectableModel(
+  model: { id: string; group?: string },
+  opts?: { userProvider?: boolean },
+): boolean {
+  if (opts?.userProvider === true && model.group && !KNOWN_CATEGORIES.has(model.group)) {
+    return true;
+  }
+  return AGENT_MODEL_CATEGORIES.has(groupOf(model));
+}
+
+/**
  * 决定一个模型的厂商分组 —— **数据优先**:目录里带了合法 `group` 就用它,
  * 否则回退到 id 前缀归类(categorize)。未知的 group 值(渲染层没有对应标签)也回退,
  * 避免出现没有 i18n 标签的空分组。

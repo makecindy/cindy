@@ -3,7 +3,7 @@
  *
  * Upstream uses `rastermill` (an OpenClaw image lib) + an OpenClaw media store.
  * We re-implement the small surface the browser core actually calls using
- * `sharp` (already a first-class dep in XDMaker) for image ops, and plain fs
+ * `sharp` (already a first-class dep in Cindy) for image ops, and plain fs
  * for media persistence. Image resize/metadata are standard, well-defined ops
  * (not security-sensitive). The media dir is the neutral scratch CONFIG_DIR.
  */

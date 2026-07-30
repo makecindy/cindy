@@ -146,6 +146,7 @@ function createRunnerHarness(session: Session) {
   runner.attachScheduler({
     update: schedulerUpdate,
     isRunSilenced: () => false,
+    isRunAbandoned: () => false,
   } as unknown as Scheduler);
   return { runner, createSession, schedulerUpdate };
 }

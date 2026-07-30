@@ -45,6 +45,18 @@ export interface Capabilities {
   /** 权限模式 */
   permissionModes: PermissionModeDescriptor[];
   setPermissionModeMidSession: CapabilityStatus;
+  /**
+   * Per-turn host policy that can force selected tool calls through the
+   * interaction resolver before execution. Optional for older/custom agents.
+   *
+   * `unsupportedPermissionModes` is load-bearing: a host must reject those
+   * combinations instead of silently weakening either the selected permission
+   * mode or the per-turn safety policy.
+   */
+  turnPermissionPolicy?: {
+    supported: CapabilityStatus;
+    unsupportedPermissionModes: PermissionMode[];
+  };
 
   /**
    * 计划模式（Plan Mode）—— 与 permissionMode 正交的独立会话状态：
@@ -148,6 +160,12 @@ export interface ModelDescriptor {
    * 展示排序权重（纯展示元数据，源自目录）。渲染层据此排序;缺省排末尾。maker-core 运行时不读它。
    */
   sortOrder?: number;
+  /**
+   * 该模型在选择器里**默认是否可见**（源自目录 `defaultEnabled`，host 派生时透传；
+   * 缺省 ⇒ 可见）。渲染层取种子默认模型时据它跳过默认收起的 legacy 模型 ——
+   * 否则默认模型可能是用户在清单里根本看不到的那个。maker-core 运行时不读它。
+   */
+  defaultEnabled?: boolean;
 }
 
 /**

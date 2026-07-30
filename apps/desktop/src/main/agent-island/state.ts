@@ -1,4 +1,8 @@
-import type { AgentEvent, InteractionRequest } from '@cindy/maker-core';
+import {
+  parseReconnectAttemptMessage,
+  type AgentEvent,
+  type InteractionRequest,
+} from '@cindy/maker-core';
 import { DEFAULT_TOOL_ROW_WORDING, type ToolRowWording } from '@cindy/maker-shared/message-presentation';
 
 import { stripTrailingPathSeparators } from '../../shared/pathText';
@@ -100,6 +104,8 @@ interface AgentIslandSessionState {
   projectName: string | null;
   detail: string;
   detailSource: 'tool' | 'status' | 'interaction' | null;
+  /** Localized transient reconnect progress; kept separate from tool/interaction detail. */
+  reconnectStatus: string | null;
   currentToolUseId: string | null;
   toolDetailUntil: number | null;
   phase: AgentIslandSessionPhase;
@@ -432,6 +438,7 @@ export function applyAgentIslandUserPrompt(
   session.interactionKind = undefined;
   session.detail = '';
   session.detailSource = null;
+  session.reconnectStatus = null;
   session.currentToolUseId = null;
   session.toolDetailUntil = null;
   clearAssistantStream(session);
@@ -481,6 +488,9 @@ export function applyAgentIslandEvent(
 
   const session = getOrCreateSession(state, meta, now);
   applyMeta(session, meta);
+  if (event.type !== 'error') {
+    session.reconnectStatus = null;
+  }
   session.lastActivityAt = now;
 
   if (event.type === 'text') {
@@ -590,14 +600,26 @@ export function applyAgentIslandEvent(
   }
 
   if (event.type === 'error') {
-    clearAssistantStream(session);
     const data = asRecord(event.data);
     const isTerminal = typeof data?.isTerminal === 'boolean'
       ? data.isTerminal
       : typeof data?.willRetry === 'boolean'
         ? !data.willRetry
         : true;
-    if (!isTerminal) return true;
+    if (!isTerminal) {
+      const message = typeof data?.message === 'string' ? data.message : '';
+      const reconnectAttempt = parseReconnectAttemptMessage(message);
+      session.reconnectStatus = reconnectAttempt
+        ? formatReconnectStatus(
+            state.strings.networkReconnecting,
+            reconnectAttempt.attempt,
+            reconnectAttempt.maxAttempts,
+          )
+        : null;
+      return true;
+    }
+    session.reconnectStatus = null;
+    clearAssistantStream(session);
     session.running = false;
     session.phase = 'error';
     session.interactionKind = undefined;
@@ -634,6 +656,7 @@ export function applyAgentIslandInteractionRequest(
 ): void {
   const session = getOrCreateSession(state, meta, now);
   applyMeta(session, meta);
+  session.reconnectStatus = null;
   session.pendingInteractionIds.add(request.requestId);
   session.pendingInteractionKinds.set(request.requestId, request.kind);
   session.pendingInteractionDetails.set(request.requestId, detailForInteraction(request, state.toolWording));
@@ -1841,6 +1864,9 @@ function pillTitle(session: AgentIslandSessionState, mode: 'micro' | 'compact'):
 }
 
 function compactDetailForSession(session: AgentIslandSessionState): string {
+  if (session.phase === 'running' && session.reconnectStatus) {
+    return truncateInlineText(session.reconnectStatus, AGENT_ISLAND_COMPACT_DETAIL_MAX_LENGTH);
+  }
   const messagePreview = messagePreviewTextForSession(session);
   if (messagePreview) return truncateInlineText(messagePreview, AGENT_ISLAND_COMPACT_DETAIL_MAX_LENGTH);
 
@@ -1918,6 +1944,7 @@ function getOrCreateSession(
     projectName: projectNameFromWorkingDir(meta.workingDir, meta.workspaceKind),
     detail: '',
     detailSource: null,
+    reconnectStatus: null,
     currentToolUseId: null,
     toolDetailUntil: null,
     phase: 'running',
@@ -2017,11 +2044,12 @@ function applyMeta(session: AgentIslandSessionState, meta: AgentIslandSessionMet
 }
 
 function toSnapshot(session: AgentIslandSessionState): AgentIslandSessionSnapshot {
+  const reconnectStatus = session.phase === 'running' ? session.reconnectStatus : null;
   return {
     sessionId: session.sessionId,
     title: session.title || session.projectName || session.sessionId.slice(0, 8),
     projectName: session.projectName,
-    detail: session.detail,
+    detail: reconnectStatus ?? session.detail,
     compactDetail: compactDetailForSession(session),
     messagePreview: session.messagePreview?.line ?? null,
     phase: session.phase,
@@ -2296,6 +2324,12 @@ function normalizeInlineText(text: string): string {
   return text
     .trim()
     .replace(/\s+/g, ' ');
+}
+
+function formatReconnectStatus(template: string, attempt: number, maxAttempts: number): string {
+  return template
+    .replaceAll('{{attempt}}', String(attempt))
+    .replaceAll('{{maxAttempts}}', String(maxAttempts));
 }
 
 function truncateInlineText(text: string, maxLength: number): string {

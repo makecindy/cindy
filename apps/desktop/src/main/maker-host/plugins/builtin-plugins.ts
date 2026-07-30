@@ -6,7 +6,7 @@
  *   - 项目设置：.claude/settings.json → xdtMaker.builtinTools.{id}
  *
  * 所有 ID 都使用短且一致的名字，不带 `cindy_` 前缀：
- *   android | browser | computer | feishu_bot |
+ *   android | browser | computer | feishu_bot | wechat |
  *   scheduler | ssh | memory | contacts | xdt_helper | collab(→ cindy_orca) | lsp
  *
  * @cindy/mcps/providers.ts 里的现役 MCP provider `name` 使用 `cindy_` 前缀；
@@ -33,6 +33,7 @@ const BUILTIN_META: BuiltinPluginMeta[] = [
   { id: 'browser',     name: 'Browser',      description: 'Browser automation — isolated browsing, snapshots, screenshots, and page actions' },
   { id: 'computer',    name: 'Computer Use', description: 'Local desktop automation — apps, windows, UI inspection, clicks, and typing via an installed driver' },
   { id: 'feishu_bot',   name: 'Feishu Bot',   description: 'Send files and notifications to Feishu users via bot messages' },
+  { id: 'wechat',       name: 'Personal WeChat', description: 'Send proactive messages to known personal WeChat contacts' },
   { id: 'slack',        name: 'Slack',        description: 'Slack tools via the bound Slack connection — search, read history, and post through Slack\'s hosted MCP as the bound user' },
   { id: 'scheduler',    name: 'Scheduler',    description: 'Task scheduling — cron-based recurring jobs and one-shot reminders' },
   { id: 'ssh',          name: 'SSH Remote',   description: 'Run commands on configured SSH hosts via the built-in connection pool (aliases, ssh-agent/keys) — nothing installed remotely' },
@@ -71,6 +72,7 @@ export type KnownProviderName =
   | 'cindy_browser'
   | 'cindy_computer'
   | 'cindy_feishu_bot'
+  | 'cindy_wechat'
   | 'cindy_slack'
   | 'cindy_scheduler'
   | 'cindy_ssh'
@@ -99,6 +101,7 @@ export const PROVIDER_NAME_TO_PLUGIN_ID: Record<KnownProviderName, PluginId> = {
   cindy_browser: 'browser',
   cindy_computer: 'computer',
   cindy_feishu_bot: 'feishu_bot',
+  cindy_wechat: 'wechat',
   cindy_slack: 'slack',
   cindy_scheduler: 'scheduler',
   cindy_ssh: 'ssh',
@@ -154,6 +157,7 @@ const PLUGIN_ID_TO_MCP_ID: Record<PluginId, LiziMcpId | undefined> = {
   browser: 'browser',
   computer: 'computer',
   feishu_bot: 'cindy_feishu_bot',
+  wechat: 'cindy_wechat',
   slack: 'cindy_slack',
   scheduler: 'cindy_scheduler',
   ssh: 'cindy_ssh',

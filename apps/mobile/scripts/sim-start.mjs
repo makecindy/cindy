@@ -22,7 +22,7 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mobileClientBuildEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
+import { mobileClientBundleEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
 import { ensureMobileEnv, formatMobileEnvStatus } from './ensure-mobile-env.mjs';
 import {
   extractMobileDevRegionArgs,
@@ -51,7 +51,7 @@ const localConfigResult = ensureMobileLocalRegionConfig({ mobileDir });
 const localConfigStatus = formatMobileLocalConfigStatus(localConfigResult, worktreeRoot);
 if (localConfigStatus) console.log(localConfigStatus);
 const buildEnv = withLocalMobileRegionConfig(
-  mobileClientBuildEnv({ authRegion: region }),
+  mobileClientBundleEnv({ authRegion: region }),
 );
 
 const envResult = ensureMobileEnv({ mobileDir, authRegion: region, endpointEnv: buildEnv });

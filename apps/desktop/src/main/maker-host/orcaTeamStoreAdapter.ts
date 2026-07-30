@@ -43,6 +43,10 @@ export function createDesktopOrcaTeamStoreAdapter(
         fastMode: link.leadSession.fastMode,
         sdkSessionId: link.leadSession.sdkSessionId,
         title: link.leadSession.title,
+        // 远端 lead 的 host id 必须随快照带出:worker send_to_lead 时 lead 不
+        // 活跃, bridge 经 ensureSessionFromMeta 重建 — 缺失会以远端路径在
+        // 本机建 session (codex-connector P1)。
+        remoteHostId: link.leadSession.remoteHostId ?? null,
       };
       const bridgeLink = {
         workerId: link.workerId,

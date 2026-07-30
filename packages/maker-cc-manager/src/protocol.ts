@@ -33,7 +33,7 @@ export const PROTOCOL_VERSION = 1 as const;
  * 无关依赖变化而变。desktop 用这个（而非 bundle sha256）判断远端 daemon
  * 是否需要 upgrade,避免无关的 pnpm install 触发全量远端重装。
  */
-export const CC_MGR_BUNDLE_VERSION = '0.0.4' as const;
+export const CC_MGR_BUNDLE_VERSION = '0.0.5' as const;
 
 export type RpcId = number;
 
@@ -51,6 +51,10 @@ export type RpcErrorCode =
   | 'NOT_INITIALIZED'
   | 'SESSION_NOT_FOUND'
   | 'SESSION_ALREADY_EXISTS'
+  /** forceful kill 终止窗口 (inputQueue 已 end, consume loop 未退出) — 可重试。 */
+  | 'SESSION_KILL_PENDING'
+  /** kill + close 升级后 consume loop 仍未退出 (daemon 病态) — 需重启 daemon。 */
+  | 'SESSION_KILL_TIMEOUT'
   | 'SDK_ERROR'
   | 'INTERNAL';
 
@@ -126,6 +130,14 @@ export const NOTIFICATIONS = {
 export const SERVER_METHODS = {
   /** SDK's canUseTool fired — daemon needs desktop to approve/deny a tool use. */
   APPROVAL_REQUEST: 'approval/request',
+  /**
+   * SDK's getOAuthToken fired — remote cc hit a 401 on its subscription OAuth
+   * token and the daemon needs desktop to mint a fresh one
+   * (auth.getFreshSubscriptionToken). Additive (protocol version unchanged):
+   * old desktops answer UNKNOWN_METHOD → daemon returns null to the SDK,
+   * degrading to the pre-refresh behavior (session surfaces the auth error).
+   */
+  OAUTH_REFRESH: 'oauth/refresh',
 } as const;
 
 export type ServerMethodName = (typeof SERVER_METHODS)[keyof typeof SERVER_METHODS];
@@ -306,6 +318,27 @@ export interface ApprovalRequestParams {
   plan?: string;
   /** Plan file path (for 'plan_review' kind). */
   planFilePath?: string;
+}
+
+/**
+ * OAuth refresh request — daemon's SDK getOAuthToken callback fired (remote cc
+ * got a 401 on the spawn-time subscription token). Desktop should return a
+ * fresh access token, or null when refresh is impossible (logged out, refresh
+ * token revoked) — the SDK then surfaces the auth error to the session.
+ */
+export interface OAuthRefreshParams {
+  /**
+   * Session asking for the refresh. Deliberately the only field: desktop's own
+   * env/credential store is the source of truth for the stale-token baseline,
+   * and echoing the daemon-side token back over the wire would widen the
+   * token's exposure surface for no consumer.
+   */
+  sessionId: string;
+}
+
+export interface OAuthRefreshResult {
+  /** Fresh subscription access token, or null when refresh failed. */
+  token: string | null;
 }
 
 /**

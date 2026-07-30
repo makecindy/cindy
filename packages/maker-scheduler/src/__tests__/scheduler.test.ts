@@ -166,6 +166,10 @@ function makeHarness(opts?: {
   generateId?: () => string;
   passive?: boolean;
   maxConcurrentRuns?: number;
+  runStallMs?: number;
+  runStallAbortGraceMs?: number;
+  /** 默认 0(关闭挂起吸收):假时钟跳表与真实睡眠在壁钟上同形,见 SchedulerOptions.suspendGapMs。 */
+  suspendGapMs?: number;
   logger?: Logger;
 }): Harness {
   const storage = opts?.storage ?? new InMemoryStorage();
@@ -189,6 +193,9 @@ function makeHarness(opts?: {
     isManagedWorkspaceDir: opts?.isManagedWorkspaceDir,
     passive: opts?.passive,
     maxConcurrentRuns: opts?.maxConcurrentRuns,
+    runStallMs: opts?.runStallMs,
+    runStallAbortGraceMs: opts?.runStallAbortGraceMs,
+    suspendGapMs: opts?.suspendGapMs ?? 0,
     logger: opts?.logger,
     instanceId: 'test-scheduler',
     processId: 1234,
@@ -1119,11 +1126,15 @@ describe('Scheduler', () => {
     expect(await local.storage.get(sch.id)).toBeNull();
     // caller run 仍在 in-flight(fireOne 还没走完 finally)
     expect(local.scheduler.getInflightCount(sch.id)).toBe(1);
+    // run 行已随 schedule 级联删除,但引擎内存仍报它在跑 —— renderer 的通知抑制标记
+    // 对账靠这份快照区分「查不到 = 跑完了」与「查不到 = 自删除后仍在跑」。
+    expect(local.scheduler.listInflightRunIds()).toContain(callerRunId);
 
     // caller run 自然跑完:fireOne 收尾不抛错,run 走 success 分支
     resolveRunner({ sessionId: 'sess-caller' });
     await tickPromise;
     expect(local.scheduler.getInflightCount(sch.id)).toBe(0);
+    expect(local.scheduler.listInflightRunIds()).not.toContain(callerRunId);
     const run = local.storage.runs.get(callerRunId);
     expect(run?.status).toBe('success');
     // schedule 行已删,fireOne 尾部重排的 storage.update 是 no-op,不会复活 schedule
@@ -2401,5 +2412,1445 @@ describe('Scheduler concurrency gate(并发闸门)', () => {
     expect(h.scheduler.getRuntimeSnapshot().inFlight).toBe(0);
     expect(info.mock.calls.filter(([message]) => message === 'scheduler: in-flight run registered')).toHaveLength(1);
     expect(info.mock.calls.filter(([message]) => message === 'scheduler: in-flight run released')).toHaveLength(1);
+  });
+});
+
+// ── 纯等待不占槽 + 卡死守卫 ───────────────────────────────────────────────
+// 2026-07-29 事故:4 个心跳 run 排在忙会话的队列里等派发,各挂 3.5 小时,占满全部
+// 执行槽,其余任务全部停摆。两道修复:① 'queued' 的纯等待项不计入并发闸门;
+// ② 占槽的 run 连续无进展就 abort,abort 不生效则强制收回槽位。
+describe('Scheduler: 排队不占槽与卡死守卫', () => {
+  it("排队中的 run 不占并发槽,闸门照常放行新触发", async () => {
+    const queued: FireContext[] = [];
+    const h = makeHarness({
+      maxConcurrentRuns: 2,
+      runnerImpl: (_s, ctx) =>
+        new Promise<FireResult>(() => {
+          // 进入纯等待后永不 settle —— 模拟目标会话长时间不空闲。
+          ctx.onQueueWaitStart?.();
+          queued.push(ctx);
+        }),
+    });
+    // 上限 2:先让两条任务进入排队等待
+    const a = await h.scheduler.create({ ...baseInput, manual: true });
+    const b = await h.scheduler.create({ ...baseInput, manual: true });
+    void h.scheduler.runNow(a.id);
+    void h.scheduler.runNow(b.id);
+    await vi.waitFor(() => expect(queued).toHaveLength(2));
+
+    const snap = h.scheduler.getRuntimeSnapshot();
+    expect(snap.inFlight).toBe(2); // 两条 in-flight 记录仍在
+    expect(snap.slotsInUse).toBe(0); // 但都不占槽
+    expect(snap.inFlightRuns.every((r) => r.phase === 'queued')).toBe(true);
+
+    // 闸门此刻应视作"零占用":两个到点的自动任务都能放行。
+    const c = await h.scheduler.create({ ...baseInput });
+    const d = await h.scheduler.create({ ...baseInput });
+    h.clock.advance(60_000);
+    void h.scheduler.tick();
+    await vi.waitFor(() => expect(queued).toHaveLength(4));
+    expect(h.fireCalls.map((call) => call.schedule.id)).toContain(c.id);
+    expect(h.fireCalls.map((call) => call.schedule.id)).toContain(d.id);
+    await h.scheduler.stop();
+  });
+
+  it('离开排队等待后重新占槽(不过闸门、不阻塞)', async () => {
+    let ctxRef: FireContext | undefined;
+    const h = makeHarness({
+      maxConcurrentRuns: 1,
+      runnerImpl: (_s, ctx) =>
+        new Promise<FireResult>(() => {
+          ctx.onQueueWaitStart?.();
+          ctxRef = ctx;
+        }),
+    });
+    const sch = await h.scheduler.create({ ...baseInput, manual: true });
+    void h.scheduler.runNow(sch.id);
+    await vi.waitFor(() => expect(ctxRef).toBeDefined());
+    expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0);
+
+    // 派发被接受 → 要回槽位（有空槽，必然成功）
+    expect(ctxRef!.endQueueWait?.(true)).toBe(true);
+    const snap = h.scheduler.getRuntimeSnapshot();
+    expect(snap.slotsInUse).toBe(1);
+    expect(snap.inFlightRuns[0]?.phase).toBe('running');
+    await h.scheduler.stop();
+  });
+
+  it('全部 in-flight 都在排队时,心跳仍然续期(否则被僵尸清扫误标 interrupted)', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({
+        runnerImpl: (_s, ctx) =>
+          new Promise<FireResult>(() => {
+            ctx.onQueueWaitStart?.();
+          }),
+      });
+      const touchSpy = vi.spyOn(h.storage, 'touchRunHeartbeats');
+      const sch = await h.scheduler.create({ ...baseInput, manual: true });
+      void h.scheduler.runNow(sch.id);
+      await vi.waitFor(() =>
+        expect(h.scheduler.getRuntimeSnapshot().inFlightRuns[0]?.phase).toBe('queued'),
+      );
+      const runId = (await h.storage.listRuns(sch.id))[0].id;
+      h.clock.advance(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      expect(touchSpy).toHaveBeenCalledWith([runId], h.clock.now());
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('无进展超阈值 → abort;宽限内仍不 settle → 强制收回槽位、run 记 failed、重排下次触发', async () => {
+    vi.useFakeTimers();
+    try {
+      const warn = vi.fn();
+      const error = vi.fn();
+      let sawAbort = false;
+      const h = makeHarness({
+        // interval 模式:重排结果可预期(finishedAt + intervalMs)
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        logger: { warn, error },
+        runnerImpl: (_s, ctx) =>
+          new Promise<FireResult>(() => {
+            ctx.signal.addEventListener('abort', () => {
+              sawAbort = true;
+            });
+          }),
+      });
+      // 走自动触发路径（不是 runNow）：只有它会经 claimDueFire 清空 nextFireAt，
+      // 也只有它需要守卫补排 —— manual 任务按语义本就不该被续命。
+      const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+      h.clock.advance(3_600_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      const runId = (await h.storage.listRuns(sch.id))[0].id;
+      // 认领已把 nextFireAt 清空 —— 不补排的话这条任务会永久停摆
+      expect((await h.storage.get(sch.id))?.nextFireAt).toBeUndefined();
+
+      // 跨过无进展阈值 → 心跳 loop 上的守卫发出 abort
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      expect(sawAbort).toBe(true);
+      // 仍未 settle,但槽位还在(宽限期内)
+      expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1);
+
+      // 跨过宽限 → 强制收回
+      h.clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0));
+      expect(h.scheduler.getRuntimeSnapshot().inFlight).toBe(0);
+      const run = h.storage.runs.get(runId);
+      expect(run?.status).toBe('failed');
+      expect(run?.errorMsg).toMatch(/stalled/);
+      // 重排:claimDueFire 清空过 nextFireAt,守卫必须补排,否则任务永久停摆
+      expect((await h.storage.get(sch.id))?.nextFireAt).toBeDefined();
+      expect(error).toHaveBeenCalledWith(
+        'scheduler: force-releasing stalled run slot (runner never settled)',
+        expect.anything(),
+      );
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('有进展信号时不触发卡死守卫(判无反馈而非总时长)', async () => {
+    vi.useFakeTimers();
+    try {
+      let sawAbort = false;
+      let ctxRef: FireContext | undefined;
+      const h = makeHarness({
+        runStallMs: 60_000,
+        runnerImpl: (_s, ctx) =>
+          new Promise<FireResult>(() => {
+            ctxRef = ctx;
+            ctx.signal.addEventListener('abort', () => {
+              sawAbort = true;
+            });
+          }),
+      });
+      const sch = await h.scheduler.create({ ...baseInput, manual: true });
+      void h.scheduler.runNow(sch.id);
+      await vi.waitFor(() => expect(ctxRef).toBeDefined());
+      // 总时长远超阈值,但每个心跳周期都有进展 → 不该被判卡死
+      for (let i = 0; i < 6; i++) {
+        h.clock.advance(30_000);
+        ctxRef!.onProgress?.();
+        await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      }
+      expect(sawAbort).toBe(false);
+      expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1);
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('排队中的 run 不被卡死守卫判定(等忙会话是正常状态)', async () => {
+    vi.useFakeTimers();
+    try {
+      let sawAbort = false;
+      const h = makeHarness({
+        runStallMs: 60_000,
+        runnerImpl: (_s, ctx) =>
+          new Promise<FireResult>(() => {
+            ctx.signal.addEventListener('abort', () => {
+              sawAbort = true;
+            });
+            ctx.onQueueWaitStart?.();
+          }),
+      });
+      const sch = await h.scheduler.create({ ...baseInput, manual: true });
+      void h.scheduler.runNow(sch.id);
+      await vi.waitFor(() =>
+        expect(h.scheduler.getRuntimeSnapshot().inFlightRuns[0]?.phase).toBe('queued'),
+      );
+      h.clock.advance(600_000);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS * 2);
+      expect(sawAbort).toBe(false);
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('强制收口后迟到的 settle 不覆写已呈现的 failed', async () => {
+    vi.useFakeTimers();
+    try {
+      let release: ((r: FireResult) => void) | undefined;
+      const h = makeHarness({
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        runnerImpl: () =>
+          new Promise<FireResult>((resolve) => {
+            release = resolve;
+          }),
+      });
+      const sch = await h.scheduler.create({ ...baseInput, manual: true });
+      const p = h.scheduler.runNow(sch.id);
+      await vi.waitFor(() => expect(release).toBeDefined());
+      const runId = (await h.storage.listRuns(sch.id))[0].id;
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(h.storage.runs.get(runId)?.status).toBe('failed'));
+      const finishedAt = h.storage.runs.get(runId)?.finishedAt;
+
+      // runner 几小时后才 settle:不得把 failed 改回 success
+      release!({ sessionId: 'sess-late' });
+      await p;
+      const run = h.storage.runs.get(runId);
+      expect(run?.status).toBe('failed');
+      expect(run?.finishedAt).toBe(finishedAt);
+      expect(run?.sessionId).toBeUndefined();
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // ── review #944 抓到的回归 ────────────────────────────────────────────────
+  it('守卫 abort 被 runner 响应时:记 failed(不是 aborted)且照常重排 nextFireAt', async () => {
+    // 这是最严重的一条:守卫「正常工作」(runner 老实响应 abort)时,原实现把它当成
+    // 用户 pause/delete —— 记 aborted 且跳过重排,而 claimDueFire 已清空 nextFireAt,
+    // recurring 任务就此永久停摆,比不加守卫更糟。
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        runnerImpl: (_s, ctx) =>
+          new Promise<FireResult>((_resolve, reject) => {
+            // 老实响应 abort:抛 AbortError（真实 runner 的约定行为）
+            ctx.signal.addEventListener('abort', () => {
+              reject(new Error('aborted by signal'));
+            });
+          }),
+      });
+      const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+      h.clock.advance(3_600_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      const runId = (await h.storage.listRuns(sch.id))[0].id;
+      expect((await h.storage.get(sch.id))?.nextFireAt).toBeUndefined();
+
+      // 跨过无进展阈值 → 守卫 abort → runner 立刻响应并 settle
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(h.storage.runs.get(runId)?.status).not.toBe('running'));
+
+      const run = h.storage.runs.get(runId);
+      expect(run?.status).toBe('failed'); // 不是 aborted —— 卡死是异常,必须可见
+      expect(run?.errorMsg).toMatch(/stall guard/);
+      // 关键断言:schedule 排期必须被恢复,否则任务永久停摆
+      expect((await h.storage.get(sch.id))?.nextFireAt).toBeDefined();
+      expect((await h.storage.get(sch.id))?.status).toBe('active');
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('用户 pause/delete 的 abort 仍记 aborted 且不重排(不被守卫改动波及)', async () => {
+    let ctxRef: FireContext | undefined;
+    const h = makeHarness({
+      runnerImpl: (_s, ctx) =>
+        new Promise<FireResult>((_resolve, reject) => {
+          ctxRef = ctx;
+          ctx.signal.addEventListener('abort', () => reject(new Error('aborted')));
+        }),
+    });
+    const sch = await h.scheduler.create({ ...baseInput, manual: true });
+    const p = h.scheduler.runNow(sch.id);
+    await vi.waitFor(() => expect(ctxRef).toBeDefined());
+    const runId = (await h.storage.listRuns(sch.id))[0].id;
+    await h.scheduler.pause(sch.id);
+    await p;
+    expect(h.storage.runs.get(runId)?.status).toBe('aborted');
+    expect(h.storage.runs.get(runId)?.errorMsg).toMatch(/cancelled by user/);
+  });
+
+  it('stop() 之后迟到的 settle 仍不覆写被强制收口的 run', async () => {
+    // stop() 曾清空 abandonedRuns,导致这条保护在切账号/退出路径上失效。
+    vi.useFakeTimers();
+    try {
+      let release: ((r: FireResult) => void) | undefined;
+      const h = makeHarness({
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        runnerImpl: () =>
+          new Promise<FireResult>((resolve) => {
+            release = resolve;
+          }),
+      });
+      const sch = await h.scheduler.create({ ...baseInput, manual: true });
+      const p = h.scheduler.runNow(sch.id);
+      await vi.waitFor(() => expect(release).toBeDefined());
+      const runId = (await h.storage.listRuns(sch.id))[0].id;
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(h.storage.runs.get(runId)?.status).toBe('failed'));
+
+      await h.scheduler.stop(); // ← 曾在这里丢掉保护
+      release!({ sessionId: 'sess-late-after-stop' });
+      await p;
+
+      expect(h.storage.runs.get(runId)?.status).toBe('failed');
+      expect(h.storage.runs.get(runId)?.sessionId).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('强制收口时同 schedule 还有 runNow 在跑,也要恢复排期', async () => {
+    // rescheduleAfterSweep 遇到「该 schedule 仍有 running 行」就放弃补排,而 runNow
+    // 收口从不重排 —— 两者叠加会让任务永久停摆。
+    vi.useFakeTimers();
+    try {
+      const gates: Array<(r: FireResult) => void> = [];
+      const h = makeHarness({
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        runnerImpl: () =>
+          new Promise<FireResult>((resolve) => {
+            gates.push(resolve);
+          }),
+      });
+      const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+      // 自动触发占一个槽
+      h.clock.advance(3_600_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(gates).toHaveLength(1));
+      // 同 schedule 再来一个手动 runNow（它会一直挂着 → hasRunningRuns 恒为 true）
+      const manual = h.scheduler.runNow(sch.id);
+      await vi.waitFor(() => expect(gates).toHaveLength(2));
+      expect((await h.storage.get(sch.id))?.nextFireAt).toBeUndefined();
+
+      // 让自动那条被守卫强制收口
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+
+      await vi.waitFor(async () =>
+        expect((await h.storage.get(sch.id))?.nextFireAt).toBeDefined(),
+      );
+      gates[1]!({ sessionId: 'sess-manual' });
+      await manual;
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('强制收口经 notifyForcedFailure 出口投通知', async () => {
+    vi.useFakeTimers();
+    try {
+      const notified: Array<{ scheduleId: string; runId: string; errorMsg: string }> = [];
+      const storage = new InMemoryStorage();
+      const clock = new FakeClock();
+      const scheduler = new Scheduler({
+        storage,
+        runner: { fire: () => new Promise<FireResult>(() => {}) },
+        clock,
+        generateId: makeIdGen(),
+        tickIntervalMs: 60_000_000,
+        suspendGapMs: 0, // 见 makeHarness 同名注释:假时钟跳表 ≠ 系统睡眠
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        notifyForcedFailure: (input) => {
+          notified.push(input);
+        },
+        instanceId: 'test-notify',
+      });
+      const sch = await scheduler.create({ ...baseInput, manual: true });
+      void scheduler.runNow(sch.id);
+      await vi.waitFor(() => expect(scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(notified).toHaveLength(1));
+      expect(notified[0]!.scheduleId).toBe(sch.id);
+      expect(notified[0]!.errorMsg).toMatch(/stalled/);
+      await scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('终态落库失败时不广播 failed(避免 UI 与 DB 分叉)', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        runnerImpl: () => new Promise<FireResult>(() => {}),
+      });
+      const failedEvents: unknown[] = [];
+      h.scheduler.on('failed', (e) => failedEvents.push(e));
+      const sch = await h.scheduler.create({ ...baseInput, manual: true });
+      void h.scheduler.runNow(sch.id);
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      // 让终态写入失败
+      vi.spyOn(h.storage, 'updateRun').mockRejectedValue(new Error('disk on fire'));
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      // 槽位仍然要收回（目的达到），但不得广播一个 DB 里不存在的终态
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0));
+      expect(failedEvents).toHaveLength(0);
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('script 模式不参与卡死守卫(静默长跑是它的正常形态)', async () => {
+    vi.useFakeTimers();
+    try {
+      let sawAbort = false;
+      const h = makeHarness({
+        runStallMs: 60_000,
+        runnerImpl: (_s, ctx) =>
+          new Promise<FireResult>(() => {
+            ctx.signal.addEventListener('abort', () => {
+              sawAbort = true;
+            });
+          }),
+      });
+      const sch = await h.scheduler.create({
+        ...baseInput,
+        manual: true,
+        prompt: '',
+        executionMode: 'script',
+        workspaceKind: 'project',
+        workingDir: '/repo',
+        scriptConfig: { command: 'node long-sync.mjs', capabilities: [] },
+      });
+      void h.scheduler.runNow(sch.id);
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      h.clock.advance(24 * 3_600_000);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS * 2);
+      expect(sawAbort).toBe(false);
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('排队 run 恢复派发时要不到槽 → endQueueWait(true) 返回 false,峰值严格不超上限', async () => {
+    // 排队 run 让出的槽会被 tick 补上新任务。恢复派发时必须重新过闸门:拿不到就由
+    // runner 在 vendor dispatch 之前站下(顺延),否则实际并发突破 maxConcurrentRuns。
+    const ctxs: FireContext[] = [];
+    const h = makeHarness({
+      maxConcurrentRuns: 2,
+      runnerImpl: (_s, ctx) =>
+        new Promise<FireResult>(() => {
+          ctxs.push(ctx);
+        }),
+    });
+    const a = await h.scheduler.create({ ...baseInput, manual: true });
+    const b = await h.scheduler.create({ ...baseInput, manual: true });
+    void h.scheduler.runNow(a.id);
+    void h.scheduler.runNow(b.id);
+    await vi.waitFor(() => expect(ctxs).toHaveLength(2));
+
+    // 两条都进纯等待 → 槽位全部让出
+    for (const ctx of ctxs) ctx.onQueueWaitStart?.();
+    expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0);
+
+    // 让出的两个槽被新的自动任务补满
+    const c = await h.scheduler.create({ ...baseInput });
+    const d = await h.scheduler.create({ ...baseInput });
+    h.clock.advance(60_000);
+    void h.scheduler.tick();
+    await vi.waitFor(() => expect(ctxs).toHaveLength(4));
+    expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(2);
+    void c;
+    void d;
+
+    // 此刻两条排队 run 都要不回槽 —— 必须被拒
+    expect(ctxs[0]!.endQueueWait?.(true)).toBe(false);
+    expect(ctxs[1]!.endQueueWait?.(true)).toBe(false);
+    expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(2); // 没有超发
+
+    // 站下(reclaimSlot=false)只复位记账:转 'cancelling' —— 卡死守卫看得住它,但它
+    // 明确不会执行,所以**不占槽**。曾经复位成 'running',于是这里会变成 3/2、UI 上冒出
+    // 9/8,也与 endQueueWait 契约里"只复位记账"矛盾(review #944 第十五轮)。
+    expect(ctxs[0]!.endQueueWait?.(false)).toBe(true);
+    expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(2);
+    expect(
+      h.scheduler.getRuntimeSnapshot().inFlightRuns.filter((r) => r.phase === 'cancelling'),
+    ).toHaveLength(1);
+    await h.scheduler.stop();
+  });
+
+  it('守卫 abort 被 runner 响应时不重复投通知(runner 自己已投过)', async () => {
+    // 判据是 runner 有没有经 onRunnerNotified 上报"我投过失败通知",不是"它有没有
+    // 抛错" —— 后者会把"abort 落在通知之前"的那批 run 一并当成已通知(见下一个用例)。
+    vi.useFakeTimers();
+    try {
+      const notified: unknown[] = [];
+      const storage = new InMemoryStorage();
+      const clock = new FakeClock();
+      const scheduler = new Scheduler({
+        storage,
+        runner: {
+          fire: (_s, ctx) =>
+            new Promise<FireResult>((_resolve, reject) => {
+              // 老实响应守卫 abort:先按自己的 notify 配置投一条失败通知,再 settle
+              ctx.signal.addEventListener('abort', () => {
+                ctx.onRunnerNotified?.('failure');
+                reject(new Error('aborted by signal'));
+              });
+            }),
+        },
+        clock,
+        generateId: makeIdGen(),
+        tickIntervalMs: 60_000_000,
+        suspendGapMs: 0, // 见 makeHarness 同名注释:假时钟跳表 ≠ 系统睡眠
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        notifyForcedFailure: (input) => {
+          notified.push(input);
+        },
+        instanceId: 'test-no-dup-notify',
+      });
+      const sch = await scheduler.create({ ...baseInput, manual: true });
+      const p = scheduler.runNow(sch.id);
+      await vi.waitFor(() => expect(scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      const runId = (await storage.listRuns(sch.id))[0].id;
+
+      clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await p;
+
+      // run 仍记 failed（可见），但通知出口不被调用（避免与 runner 侧重复）
+      expect(storage.runs.get(runId)?.status).toBe('failed');
+      expect(notified).toHaveLength(0);
+      await scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('守卫 abort 落在 runner 投通知之前时补发失败通知', async () => {
+    // 守卫的 abort 可能命中前置检查脚本、workspace / session 创建这类 setup await:
+    // runner 从那里抛出,压根没走到任何 notifier 调用 —— 有 runError 却一条通知都没投。
+    // 旧判据(runError !== undefined 即视为已通知)会静默吞掉唯一的失败提醒,配了桌面/
+    // 飞书通知的用户什么都收不到(review #944 第五轮 P1)。
+    vi.useFakeTimers();
+    try {
+      const notified: { scheduleId: string; runId: string; errorMsg: string }[] = [];
+      const storage = new InMemoryStorage();
+      const clock = new FakeClock();
+      const scheduler = new Scheduler({
+        storage,
+        runner: {
+          fire: (_s, ctx) =>
+            new Promise<FireResult>((_resolve, reject) => {
+              // 响应 abort 并 settle,但**不**调 onRunnerNotified:复刻"还没走到通知
+              // 就被打断"的 setup 阶段失败。
+              ctx.signal.addEventListener('abort', () =>
+                reject(new Error('aborted while creating the session')),
+              );
+            }),
+        },
+        clock,
+        generateId: makeIdGen(),
+        tickIntervalMs: 60_000_000,
+        suspendGapMs: 0, // 见 makeHarness 同名注释:假时钟跳表 ≠ 系统睡眠
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        notifyForcedFailure: (input) => {
+          notified.push(input);
+        },
+        instanceId: 'test-notify-unnotified-stall',
+      });
+      const sch = await scheduler.create({ ...baseInput, manual: true });
+      const p = scheduler.runNow(sch.id);
+      await vi.waitFor(() => expect(scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      const runId = (await storage.listRuns(sch.id))[0].id;
+
+      clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await p;
+
+      expect(storage.runs.get(runId)?.status).toBe('failed');
+      expect(notified).toHaveLength(1);
+      expect(notified[0]).toMatchObject({ scheduleId: sch.id, runId });
+      await scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('终态落库卡死时保持追踪:controller 缺席不等于这条 fire 结束了', async () => {
+    // runner 返回后 unregisterInflight 已经摘掉 controller、phase 进 'finalizing',此时
+    // 终态落库(updateRun / get / update)若卡住,"controller 缺席"会被误读成"已 settle":
+    // 旧实现删掉 attempt 就返回,于是这条仍在往下写的 fire 从槽位记账和守卫视野里一起
+    // 消失,run 行停在 'running'、自动认领清空的 nextFireAt 也没人补(第六轮 P1)。
+    vi.useFakeTimers();
+    try {
+      const notified: unknown[] = [];
+      const storage = new InMemoryStorage();
+      const clock = new FakeClock();
+      let releaseUpdateRun: (() => void) | null = null;
+      const realUpdateRun = storage.updateRun.bind(storage);
+      storage.updateRun = (id: string, patch: Partial<ScheduleRun>) =>
+        new Promise<ScheduleRun | null>((resolve) => {
+          releaseUpdateRun = () => resolve(realUpdateRun(id, patch));
+        });
+      const scheduler = new Scheduler({
+        storage,
+        // runner 正常返回;卡住的是它之后的终态落库
+        runner: { fire: async (s) => ({ sessionId: `sess-${s.id}` }) },
+        clock,
+        generateId: makeIdGen(),
+        tickIntervalMs: 60_000_000,
+        suspendGapMs: 0, // 见 makeHarness 同名注释:假时钟跳表 ≠ 系统睡眠
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        notifyForcedFailure: (input) => {
+          notified.push(input);
+        },
+        instanceId: 'test-finalizing-stall',
+      });
+      const sch = await scheduler.create({ ...baseInput, manual: true });
+      const p = scheduler.runNow(sch.id);
+      const runId = await vi.waitFor(async () => {
+        const runs = await storage.listRuns(sch.id);
+        expect(releaseUpdateRun).not.toBeNull(); // 已经卡在终态落库上
+        return runs[0].id;
+      });
+      expect(scheduler.getRuntimeSnapshot().inFlightRuns[0]?.phase).toBe('finalizing');
+
+      // 走完"超阈值 → 宽限到点"两拍:旧实现在这里就把 attempt 删了
+      clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+
+      expect(scheduler.getRuntimeSnapshot().slotsInUse).toBe(1);
+      expect(scheduler.getRuntimeSnapshot().inFlightRuns).toHaveLength(1);
+      expect(notified).toHaveLength(0);
+
+      // 落库最终返回后走正常收口,槽位由 fire 自己的 finally 释放
+      releaseUpdateRun!();
+      await p;
+      expect(scheduler.getRuntimeSnapshot().slotsInUse).toBe(0);
+      expect(storage.runs.get(runId)?.status).toBe('success');
+      await scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('第一拍心跳之前就睡下去,醒来同样不判卡死', async () => {
+    // 基准若等第一拍回调才播种,醒来那一拍还没有可比的间隔 → 整段睡眠被当成无反馈,
+    // 一条健康 run 直接被砍(review #944 第十四轮 P1)。
+    vi.useFakeTimers();
+    try {
+      let sawAbort = false;
+      const h = makeHarness({
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        suspendGapMs: 30_000,
+        runnerImpl: (_s, ctx) =>
+          new Promise<FireResult>(() => {
+            ctx.signal.addEventListener('abort', () => { sawAbort = true; });
+          }),
+      });
+      await h.scheduler.create({ ...baseInput, intervalMs: 24 * 3_600_000 });
+      h.clock.advance(24 * 3_600_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+
+      // 还没跑过任何一拍心跳就合盖睡 8 小时,醒来第一拍
+      h.clock.advance(8 * 3_600_000);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      expect(sawAbort).toBe(false);
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('系统挂起(合盖睡眠)醒来后不把睡着的时间当成无反馈', async () => {
+    // 判据用壁钟:机器睡 8 小时,醒来第一次心跳看到的 noProgressMs 就是 8 小时,于是把
+    // 一条完全健康、睡前正在跑长工具的 run 直接 abort(review #944 第十二轮 P1)。
+    // 心跳每 15s 一拍,间隔突然出现远大于它的缺口只可能是进程被冻结过。
+    vi.useFakeTimers();
+    try {
+      let sawAbort = false;
+      const h = makeHarness({
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        suspendGapMs: 30_000, // 本用例专门验挂起吸收,显式打开
+        runnerImpl: (_s, ctx) =>
+          new Promise<FireResult>(() => {
+            ctx.signal.addEventListener('abort', () => { sawAbort = true; });
+          }),
+      });
+      await h.scheduler.create({ ...baseInput, intervalMs: 24 * 3_600_000 });
+      h.clock.advance(24 * 3_600_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+
+      // 第一拍心跳:建立基准(此时还没有可比的间隔)
+      h.clock.advance(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      expect(sawAbort).toBe(false);
+
+      // 合盖睡 8 小时:定时器在睡眠期间不跑,醒来这一拍的壁钟间隔是 8 小时
+      h.clock.advance(8 * 3_600_000);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      expect(sawAbort).toBe(false); // 睡着的时间不算无反馈
+
+      // 醒来后继续静默,额度要从醒来那一刻重新算:再睡前额度已用掉 15s,还差 ~60s
+      h.clock.advance(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      expect(sawAbort).toBe(false);
+      for (let i = 0; i < 4; i++) {
+        h.clock.advance(RUN_HEARTBEAT_INTERVAL_MS);
+        await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      }
+      // 真正连续静默满一分钟(清醒时间)之后,守卫照常开火 —— 吸收不等于豁免
+      expect(sawAbort).toBe(true);
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('终态落库抛错不吞掉排期恢复', async () => {
+    // 守卫已中断 run、runner 在强制收口前老实返回,而这一步的 updateRun 撞上存储瞬时
+    // 错误 → 异常直接冒出 fireOneInner,把下面的 schedule 重排一起跳过。claimDueFire
+    // 已清空 nextFireAt,这条活跃的 recurring 任务就此静默停摆到进程重启
+    // (review #944 第九轮 P1)。
+    vi.useFakeTimers();
+    try {
+      const storage = new InMemoryStorage();
+      storage.updateRun = () => Promise.reject(new Error('database is locked'));
+      const h = makeHarness({
+        storage,
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        runnerImpl: (_s, ctx) =>
+          new Promise<FireResult>((_resolve, reject) => {
+            // 老实响应守卫 abort 并 settle → 走 fireOneInner 的 stallAborted 分支
+            ctx.signal.addEventListener('abort', () => reject(new Error('aborted by signal')));
+          }),
+      });
+      const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+      h.clock.advance(3_600_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      expect((await h.storage.get(sch.id))?.nextFireAt).toBeUndefined(); // 认领已清空
+
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+
+      // 落库失败(run 行留给僵尸清扫兜底),但排期必须已恢复
+      await vi.waitFor(async () =>
+        expect((await h.storage.get(sch.id))?.nextFireAt).toBeDefined(),
+      );
+      expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0);
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('补排本身失败时挂进重试队列,后续 tick 就地修好(不停摆到重启)', async () => {
+    // 补排的存储调用抛瞬时错误时,旧实现只记一行 warn 就放手,理由写的是"周期清扫 / 重启
+    // 归一会兜底" —— 那是错的:周期 DB sync 只把行重新灌进内存,nextFireAt 仍是空、tick
+    // 永远选不到它;僵尸清扫只看 'running' 的 run 行,而这条已是终态。于是一条活跃的
+    // recurring 任务静默停摆到**进程重启**(第十八轮 P1)。
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        runnerImpl: () => new Promise<FireResult>(() => {}), // 卡死且不理 abort
+      });
+      const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+      const realUpdate = h.storage.update.bind(h.storage);
+      let failNextReplanWrite = true;
+      h.storage.update = (id: string, patch: Partial<Schedule>) => {
+        // 只打掉补排那一次写(nextFireAt),别的写照常
+        if (failNextReplanWrite && patch.nextFireAt !== undefined) {
+          failNextReplanWrite = false;
+          return Promise.reject(new Error('database is locked'));
+        }
+        return realUpdate(id, patch);
+      };
+
+      h.clock.advance(3_600_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+
+      // 槽位已收回,但补排那次写被打掉 → 这条 recurring 任务此刻没有排期
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0));
+      expect((await h.storage.get(sch.id))?.nextFireAt).toBeUndefined();
+      expect((await h.storage.get(sch.id))?.status).toBe('active'); // 仍是活跃任务,不是过期
+
+      // 下一个 tick 就地重试 → 排期被修好
+      await h.scheduler.tick();
+      expect((await h.storage.get(sch.id))?.nextFireAt).toBeDefined();
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('重试发现别的路径已补好排期:凭据必须摘除,不能永久上膛', async () => {
+    // 重试的每一个"确定性结论"(补上了 / 行已删 / 已 paused / 已消耗 / 别人已补过)都要摘
+    // 凭据。留着的话它永久上膛:等那次合法触发被认领、nextFireAt 又被清空时,重叠的 tick
+    // 会把这条陈旧重试再应用一次,凭空排出一次触发并与正在跑的那一轮重叠
+    // (第十八轮 P1 —— 这是我上一版修法自己引入的洞:早退分支绕过了 delete)。
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        runnerImpl: () => new Promise<FireResult>(() => {}), // 卡死且不理 abort
+      });
+      const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+      const realUpdate = h.storage.update.bind(h.storage);
+      let failNextReplanWrite = true;
+      h.storage.update = (id: string, patch: Partial<Schedule>) => {
+        if (failNextReplanWrite && patch.nextFireAt !== undefined) {
+          failNextReplanWrite = false;
+          return Promise.reject(new Error('database is locked'));
+        }
+        return realUpdate(id, patch);
+      };
+
+      h.clock.advance(3_600_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0));
+
+      // 别的路径先把排期补好(用户改了 cron / 另一实例重排),重试于是走"已有排期"早退
+      const repairedAt = h.clock.now() + 3_600_000;
+      await h.storage.update(sch.id, { nextFireAt: repairedAt });
+      await h.scheduler.tick();
+      expect((await h.storage.get(sch.id))?.nextFireAt).toBe(repairedAt); // 没被覆盖
+
+      // 那次合法触发被认领 → nextFireAt 又成空。此刻若凭据还在,tick 会凭空补一次触发。
+      h.clock.advance(3_600_001);
+      await h.storage.update(sch.id, { nextFireAt: undefined });
+      await h.scheduler.tick();
+      expect((await h.storage.get(sch.id))?.nextFireAt).toBeUndefined();
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('强制收口一次性任务:过期而不是又排一次', async () => {
+    // 强制收口不走 fireOneInner 的正常终态段,lastFiredAt 从未落定,computeNextFireAt 会
+    // 把 Once 当成"还没跑过"又排一次 —— 一个失败的一次性任务自己再跑一遍(第七轮 P1)。
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        runnerImpl: () => new Promise<FireResult>(() => {}), // 卡死且不理 abort
+      });
+      // recurring=false 的一次性任务(cron 到点触发一次就该消耗掉)
+      const sch = await h.scheduler.create({ ...baseInput, recurring: false });
+      h.clock.advance(60_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      const runId = (await h.storage.listRuns(sch.id))[0].id;
+
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(h.storage.runs.get(runId)?.status).toBe('failed'));
+
+      const row = await h.storage.get(sch.id);
+      expect(row?.status).toBe('expired'); // 已消耗
+      expect(row?.nextFireAt).toBeUndefined(); // 不得又排一次
+      expect(row?.lastFiredAt).toBeDefined();
+      expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0);
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('强制收口的终态落库失败时仍要投失败通知', async () => {
+    // 不广播 'failed' 事件是为了不让 UI 和 DB 分叉,但通知是另一条通道:这一轮确实失败了,
+    // 用户配的桌面 / 飞书提醒不该因为一次写盘失败就消失。尤其当 runner 迟到 settle 并已
+    // 因 isRunAbandoned 主动让出通知权时,这里再跳过就等于两边都不投
+    // (review #944 第十五轮 P1)。
+    vi.useFakeTimers();
+    try {
+      const notified: unknown[] = [];
+      const storage = new InMemoryStorage();
+      storage.updateRun = () => Promise.resolve(null); // 行不存在 / 写失败
+      const clock = new FakeClock();
+      const scheduler = new Scheduler({
+        storage,
+        runner: { fire: () => new Promise<FireResult>(() => {}) }, // 卡死且不理 abort
+        clock,
+        generateId: makeIdGen(),
+        tickIntervalMs: 60_000_000,
+        suspendGapMs: 0,
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        notifyForcedFailure: (input) => {
+          notified.push(input);
+        },
+        instanceId: 'test-notify-on-persist-fail',
+      });
+      const sch = await scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+      clock.advance(3_600_000);
+      void scheduler.tick();
+      await vi.waitFor(() => expect(scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+
+      clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+
+      // 落库失败 → 不广播 failed,但通知照投,且排期照恢复
+      await vi.waitFor(() => expect(notified).toHaveLength(1));
+      expect((await storage.get(sch.id))?.nextFireAt).toBeDefined();
+      await scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('守卫 abort 被响应后终态落库抛错:通知不被外层 catch 一起吞掉', async () => {
+    // 上一个用例走的是"runner 完全不理 abort → 强制收口"那条路;这里 runner 老实响应
+    // abort,走的是 fireOneInner 自己的 stallAborted 分支。该分支整段包在一层 catch 里
+    // (职责是保住 claimDueFire 清空的排期),落库一抛错控制流就跳出分支 —— 补发通知被
+    // 顺带跳过,而"abort 落在 setup、runner 一条通知都没投"恰恰是最需要补发的场景:
+    // 用户配了桌面 / 飞书通知却什么都收不到(review #944 第十八轮 P1)。
+    vi.useFakeTimers();
+    try {
+      const notified: { scheduleId: string; runId: string; errorMsg: string }[] = [];
+      const storage = new InMemoryStorage();
+      storage.updateRun = () => Promise.reject(new Error('database is locked'));
+      const clock = new FakeClock();
+      const scheduler = new Scheduler({
+        storage,
+        runner: {
+          fire: (_s, ctx) =>
+            new Promise<FireResult>((_resolve, reject) => {
+              // 响应 abort 并 settle,但**不**调 onRunnerNotified:复刻"还没走到通知
+              // 就被打断"的 setup 阶段失败。
+              ctx.signal.addEventListener('abort', () =>
+                reject(new Error('aborted while creating the session')),
+              );
+            }),
+        },
+        clock,
+        generateId: makeIdGen(),
+        tickIntervalMs: 60_000_000,
+        suspendGapMs: 0,
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        notifyForcedFailure: (input) => {
+          notified.push(input);
+        },
+        instanceId: 'test-notify-when-terminal-write-throws',
+      });
+      const sch = await scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+      clock.advance(3_600_000);
+      void scheduler.tick();
+      await vi.waitFor(() => expect(scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+
+      clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+
+      await vi.waitFor(() => expect(notified).toHaveLength(1));
+      expect(notified[0]?.scheduleId).toBe(sch.id);
+      // 外层 catch 的既有职责不能因这次改动回归:排期照恢复、槽位照释放
+      expect((await storage.get(sch.id))?.nextFireAt).toBeDefined();
+      expect(scheduler.getRuntimeSnapshot().slotsInUse).toBe(0);
+      await scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('runNow 守卫 abort:落库抛错照旧向调用方冒泡,但通知已经投出', async () => {
+    // runNow 那条分支没有(也不该有)吞错的 catch —— 用户主动触发,写盘失败必须让调用方
+    // 知道。补发通知因此要放在 finally,而不是靠"落库成功"顺序执行(第十八轮 P1)。
+    vi.useFakeTimers();
+    try {
+      const notified: { scheduleId: string; runId: string; errorMsg: string }[] = [];
+      const storage = new InMemoryStorage();
+      storage.updateRun = () => Promise.reject(new Error('database is locked'));
+      const clock = new FakeClock();
+      const scheduler = new Scheduler({
+        storage,
+        runner: {
+          fire: (_s, ctx) =>
+            new Promise<FireResult>((_resolve, reject) => {
+              ctx.signal.addEventListener('abort', () =>
+                reject(new Error('aborted while creating the session')),
+              );
+            }),
+        },
+        clock,
+        generateId: makeIdGen(),
+        tickIntervalMs: 60_000_000,
+        suspendGapMs: 0,
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        notifyForcedFailure: (input) => {
+          notified.push(input);
+        },
+        instanceId: 'test-runnow-notify-when-write-throws',
+      });
+      const sch = await scheduler.create({ ...baseInput, manual: true });
+      // 立刻挂 handler:落库的拒绝发生在下面推时钟的那一拍,晚接会被记成 unhandled rejection
+      const settled = scheduler.runNow(sch.id).then(
+        () => null,
+        (err: unknown) => err,
+      );
+      await vi.waitFor(() => expect(scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+
+      clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+
+      expect(String(await settled)).toMatch(/database is locked/);
+      expect(notified).toHaveLength(1);
+      expect(notified[0]?.runId).toBeDefined();
+      await scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('强制收口已投通知后,迟到 settle 的 runner 不再重复投', async () => {
+    // 常见顺序:引擎先投失败通知,runner 几分钟后才 settle 并走自己的 finalizeRun ——
+    // 用户为同一轮收到两条通知。runner 侧必须自查 isRunAbandoned(review #944 第十四轮 P1)。
+    vi.useFakeTimers();
+    try {
+      const notified: unknown[] = [];
+      const storage = new InMemoryStorage();
+      const clock = new FakeClock();
+      let settleRunner: (() => void) | null = null;
+      let abandonedSeenByRunner: boolean | null = null;
+      const scheduler = new Scheduler({
+        storage,
+        runner: {
+          fire: (_s, ctx) =>
+            new Promise<FireResult>((resolve) => {
+              settleRunner = () => {
+                // runner 在真正投通知前查询引擎(生产里就是 finalizeRun 的那次自查)
+                abandonedSeenByRunner = scheduler.isRunAbandoned(ctx.runId);
+                resolve({ sessionId: 'sess-late' });
+              };
+            }),
+        },
+        clock,
+        generateId: makeIdGen(),
+        tickIntervalMs: 60_000_000,
+        suspendGapMs: 0,
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        notifyForcedFailure: (input) => {
+          notified.push(input);
+        },
+        instanceId: 'test-no-late-dup-notify',
+      });
+      const sch = await scheduler.create({ ...baseInput, manual: true });
+      const p = scheduler.runNow(sch.id);
+      await vi.waitFor(() => expect(scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+
+      clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      // 引擎已强制收口并投过通知
+      await vi.waitFor(() => expect(notified).toHaveLength(1));
+
+      // runner 现在才 settle:它自查到本轮已被强制收口 → 生产里据此跳过自己的通知
+      settleRunner!();
+      await p;
+      expect(abandonedSeenByRunner).toBe(true);
+      // 引擎侧也没有再补第二条
+      expect(notified).toHaveLength(1);
+      await scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('收口期间迟到的 settle 不得替强制收口删掉 attempt', async () => {
+    // runner 在 abandonedRuns 标记之后、收口 await 期间才 settle:fireOne 自己的外层
+    // finally 会调 finishInflightAttempt 把同一条 attempt 删掉,未完成的收口就此从槽位
+    // 记账和守卫视野里消失 —— 落库若卡住,run 行停在 'running'、自动认领清空的 nextFireAt
+    // 也没人补,而新任务照常放行(review #944 第十三轮 P1)。
+    vi.useFakeTimers();
+    try {
+      const errorLogs: string[] = [];
+      const logger = {
+        debug() {}, info() {}, warn() {},
+        error(msg: string) { errorLogs.push(msg); },
+      } as unknown as Logger;
+      const storage = new InMemoryStorage();
+      let releaseUpdateRun: (() => void) | null = null;
+      const realUpdateRun = storage.updateRun.bind(storage);
+      storage.updateRun = (id: string, patch: Partial<ScheduleRun>) =>
+        new Promise<ScheduleRun | null>((resolve) => {
+          releaseUpdateRun = () => resolve(realUpdateRun(id, patch));
+        });
+      let settleRunner: (() => void) | null = null;
+      const h = makeHarness({
+        storage,
+        logger,
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        // 一直不理 abort,直到测试显式放它 settle
+        runnerImpl: () =>
+          new Promise<FireResult>((resolve) => {
+            settleRunner = () => resolve({ sessionId: 'sess-late' });
+          }),
+      });
+      const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+      h.clock.advance(3_600_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+
+      // 走到强制收口,并卡在它自己的 updateRun 上
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(releaseUpdateRun).not.toBeNull());
+      expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1);
+
+      // 此刻 runner 迟到 settle → fireOne 的外层 finally 跑起来
+      settleRunner!();
+      await vi.advanceTimersByTimeAsync(0);
+
+      // 收口还没结束:attempt 必须仍在账上(旧实现这里已经是 0 了)
+      expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1);
+      expect(h.scheduler.getRuntimeSnapshot().inFlightRuns).toHaveLength(1);
+      // 落库继续卡着 → 超过阈值仍要有存储卡死诊断
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      expect(errorLogs.filter((m) => m.includes('storage await appears wedged'))).toHaveLength(1);
+
+      // 放行落库 → 收口走完,槽位由强制收口这一个出口释放,排期已恢复
+      releaseUpdateRun!();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0));
+      expect((await h.storage.get(sch.id))?.nextFireAt).toBeDefined();
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('强制收口自己的落库卡住时也保持追踪', async () => {
+    // forceReleaseStalledRun 曾经先删 attempt 再 await 落库/重排。落库卡住时:run 行还停在
+    // 'running'、自动认领清空的 nextFireAt 还没补,而这条 run 已经从槽位记账和守卫视野里
+    // 一起消失 —— 与第六轮修的 runner-finalization 同一个坑(第七轮 P1)。
+    vi.useFakeTimers();
+    try {
+      const errorLogs: string[] = [];
+      const logger = {
+        debug() {}, info() {}, warn() {},
+        error(msg: string) { errorLogs.push(msg); },
+      } as unknown as Logger;
+      const storage = new InMemoryStorage();
+      let releaseUpdateRun: (() => void) | null = null;
+      const realUpdateRun = storage.updateRun.bind(storage);
+      storage.updateRun = (id: string, patch: Partial<ScheduleRun>) =>
+        new Promise<ScheduleRun | null>((resolve) => {
+          releaseUpdateRun = () => resolve(realUpdateRun(id, patch));
+        });
+      const h = makeHarness({
+        storage,
+        logger,
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        runnerImpl: () => new Promise<FireResult>(() => {}), // 卡死且不理 abort
+      });
+      const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+      h.clock.advance(3_600_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+
+      // 走到强制收口,然后卡在它自己的 updateRun 上
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(releaseUpdateRun).not.toBeNull());
+
+      // 收口没结束 → 仍在账上、仍受守卫观测(旧实现这里已经是 0 了)
+      expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1);
+      expect(h.scheduler.getRuntimeSnapshot().inFlightRuns[0]?.phase).toBe('finalizing');
+
+      // 落库一直卡着 → 超过阈值后要有存储卡死诊断,不能静默
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      expect(errorLogs.filter((m) => m.includes('storage await appears wedged'))).toHaveLength(1);
+
+      // 落库返回后走完收口,槽位由统一出口释放
+      releaseUpdateRun!();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0));
+      expect((await h.storage.get(sch.id))?.nextFireAt).toBeDefined(); // 排期已恢复
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('守卫 abort 被响应后的正常落库不报存储卡死', async () => {
+    // finalizing 卡死若按 lastProgressAt 判定,守卫 abort 生效的正常路径会在落库刚开始那
+    // 一刻就误报:此时 lastProgressAt 已经旧了整个 runStallMs。判定必须从进入 finalizing
+    // 起算(finalizingSince)。
+    vi.useFakeTimers();
+    try {
+      const errorLogs: string[] = [];
+      const logger = {
+        debug() {}, info() {}, warn() {},
+        error(msg: string) { errorLogs.push(msg); },
+      } as unknown as Logger;
+      // 落库刻意慢一拍,好让心跳在 finalizing 期间抓到这条 attempt —— 真机上 SQLite 忙时
+      // 就是这个窗口。InMemoryStorage 太快,不挂住的话根本复现不出误报。
+      const storage = new InMemoryStorage();
+      let releaseUpdateRun: (() => void) | null = null;
+      const realUpdateRun = storage.updateRun.bind(storage);
+      storage.updateRun = (id: string, patch: Partial<ScheduleRun>) =>
+        new Promise<ScheduleRun | null>((resolve) => {
+          releaseUpdateRun = () => resolve(realUpdateRun(id, patch));
+        });
+      const h = makeHarness({
+        storage,
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        logger,
+        runnerImpl: (_s, ctx) =>
+          new Promise<FireResult>((_resolve, reject) => {
+            ctx.signal.addEventListener('abort', () => reject(new Error('aborted by signal')));
+          }),
+      });
+      const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+      h.clock.advance(3_600_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      const runId = (await h.storage.listRuns(sch.id))[0].id;
+
+      // 无进展超阈值 → 守卫 abort → runner 立刻响应 → 进 finalizing 并卡在终态落库
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => {
+        expect(h.scheduler.getRuntimeSnapshot().inFlightRuns[0]?.phase).toBe('finalizing');
+        expect(releaseUpdateRun).not.toBeNull();
+      });
+
+      // 再走一拍心跳:此刻 lastProgressAt 已经旧了整个阈值,但 finalizing 才刚开始 ——
+      // 按 lastProgressAt 判定会在这里误报卡死。
+      h.clock.advance(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      expect(errorLogs.filter((m) => m.includes('storage await appears wedged'))).toHaveLength(0);
+
+      releaseUpdateRun!();
+      await vi.waitFor(() => expect(h.storage.runs.get(runId)?.status).toBe('failed'));
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('强制收口一条手动 run 时不替自动 claim 补排', async () => {
+    // runNow 从不认领自动触发、也从不改 nextFireAt。强制收口手动 run 时顺手补排等于替一个
+    // 自己没持有的 claim 写排期:同 schedule 上真正在跑的自动 run 会与新排出来的这次重叠,
+    // 一次性任务还会因为 lastFiredAt 尚未落定而被当成没消耗过、就此复活(第六轮 P1)。
+    vi.useFakeTimers();
+    try {
+      const h = makeHarness({
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        // 手动 run 卡死且不理 abort → 走到强制收口
+        runnerImpl: () => new Promise<FireResult>(() => {}),
+      });
+      const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+      // 模拟同 schedule 上的自动 run 已经认领本次触发(claimDueFire 会清空 nextFireAt)
+      await h.storage.update(sch.id, { nextFireAt: undefined });
+
+      const p = h.scheduler.runNow(sch.id);
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      const runId = (await h.storage.listRuns(sch.id))[0].id;
+
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+
+      // 自己的槽位和 run 行照常收口
+      await vi.waitFor(() => expect(h.storage.runs.get(runId)?.status).toBe('failed'));
+      expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0);
+      // 但**不得**替自动 claim 补排 —— 那个 claim 不归这条手动 run 管
+      expect((await h.storage.get(sch.id))?.nextFireAt).toBeUndefined();
+      void p;
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('前置 await 卡死时保持追踪:不删 attempt、不强制收口', async () => {
+    // attempt 在第一次 await 前就登记,而 AbortController 只在 run 行插入之后注册。
+    // 卡在这段前置窗口(claimDueFire / insertRun / runNow 的 storage.get)时,守卫既
+    // 无从 abort(没有 controller),也**不能**强制收口 —— 删掉 attempt 后,挂起的
+    // await 一旦返回,fire 会照原路启动 runner,此时它既不计入 maxConcurrentRuns、
+    // 也不再受守卫保护,正是本 PR 要消灭的隐形泄漏(review #944 第五轮 P1)。
+    vi.useFakeTimers();
+    try {
+      const notified: unknown[] = [];
+      const storage = new InMemoryStorage();
+      const clock = new FakeClock();
+      let releaseInsert: (() => void) | null = null;
+      const realInsertRun = storage.insertRun.bind(storage);
+      storage.insertRun = (run: ScheduleRun) =>
+        new Promise<ScheduleRun>((resolve) => {
+          releaseInsert = () => resolve(realInsertRun(run));
+        });
+      const errorLogs: string[] = [];
+      const logger = {
+        debug() {}, info() {}, warn() {},
+        error(msg: string) { errorLogs.push(msg); },
+      } as unknown as Logger;
+      const scheduler = new Scheduler({
+        storage,
+        runner: { fire: async (s) => ({ sessionId: `sess-${s.id}` }) },
+        clock,
+        generateId: makeIdGen(),
+        tickIntervalMs: 60_000_000,
+        suspendGapMs: 0, // 见 makeHarness 同名注释:假时钟跳表 ≠ 系统睡眠
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        logger,
+        notifyForcedFailure: (input) => {
+          notified.push(input);
+        },
+        instanceId: 'test-pre-registration-stall',
+      });
+      const sch = await scheduler.create({ ...baseInput, manual: true });
+      const p = scheduler.runNow(sch.id);
+      await vi.waitFor(() => expect(scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+
+      // 阈值之内的前置窗口是正常形态(每次 fire 都会有几毫秒),不许报卡死
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      expect(errorLogs).toHaveLength(0);
+
+      // 走完"无进展超阈值 → 宽限也到点"的完整两拍:强制收口的条件已经齐了
+      clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+
+      // 仍在账上(继续占槽、继续出现在诊断快照里),也没被记成 failed / 投通知
+      expect(scheduler.getRuntimeSnapshot().slotsInUse).toBe(1);
+      expect(scheduler.getRuntimeSnapshot().inFlightRuns).toHaveLength(1);
+      expect(notified).toHaveLength(0);
+      // 但必须留下诊断:静默占槽才是这个洞真正的危险处。节流后仍只有一条。
+      expect(errorLogs.filter((m) => m.includes('before its abort controller'))).toHaveLength(1);
+
+      // 挂起的写入返回后照常跑完,槽位由正常路径释放
+      releaseInsert!();
+      await p;
+      expect(scheduler.getRuntimeSnapshot().slotsInUse).toBe(0);
+      await scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('runStallMs=0 关闭卡死守卫', async () => {
+    vi.useFakeTimers();
+    try {
+      let sawAbort = false;
+      const h = makeHarness({
+        runStallMs: 0,
+        runnerImpl: (_s, ctx) =>
+          new Promise<FireResult>(() => {
+            ctx.signal.addEventListener('abort', () => {
+              sawAbort = true;
+            });
+          }),
+      });
+      const sch = await h.scheduler.create({ ...baseInput, manual: true });
+      void h.scheduler.runNow(sch.id);
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      h.clock.advance(24 * 3_600_000);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS * 2);
+      expect(sawAbort).toBe(false);
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -64,6 +64,13 @@ function downloadItem(
 
 let root = '';
 
+// Most cases exercise handling after a known download event, not the production
+// grace window. Keep those cases deterministic; the delayed-start case opts
+// into a short non-zero window to preserve that separate timing contract.
+function createArtifacts(downloadGraceMs = 0): RsbWebviewArtifacts {
+  return new RsbWebviewArtifacts(() => root, { warn: vi.fn() }, downloadGraceMs);
+}
+
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-browser-artifact-test-'));
 });
@@ -78,7 +85,7 @@ describe('RsbWebviewArtifacts', () => {
     await fs.promises.mkdir(staleRoot, { recursive: true });
     await fs.promises.writeFile(path.join(staleRoot, 'stale.txt'), 'stale');
     const harness = artifactHarness();
-    const artifacts = new RsbWebviewArtifacts(() => root, { warn: vi.fn() }, 0);
+    const artifacts = createArtifacts();
 
     await artifacts.capture(
       harness.wc,
@@ -92,7 +99,7 @@ describe('RsbWebviewArtifacts', () => {
   it('stores a completed download in an isolated directory with a safe name', async () => {
     const harness = artifactHarness();
     const item = downloadItem('completed');
-    const artifacts = new RsbWebviewArtifacts(() => root, { warn: vi.fn() });
+    const artifacts = createArtifacts();
 
     const result = await artifacts.capture(
       harness.wc,
@@ -119,7 +126,7 @@ describe('RsbWebviewArtifacts', () => {
   it('removes partial files after a cancelled download', async () => {
     const harness = artifactHarness();
     const item = downloadItem('cancelled');
-    const artifacts = new RsbWebviewArtifacts(() => root, { warn: vi.fn() });
+    const artifacts = createArtifacts();
 
     const result = await artifacts.capture(
       harness.wc,
@@ -137,7 +144,7 @@ describe('RsbWebviewArtifacts', () => {
 
   it('does not intercept downloads outside an active agent action', async () => {
     const harness = artifactHarness();
-    const artifacts = new RsbWebviewArtifacts(() => root, { warn: vi.fn() });
+    const artifacts = createArtifacts();
     await artifacts.capture(harness.wc, { sessionId: 'session-three' }, async () => undefined);
 
     const item = downloadItem('completed');
@@ -149,16 +156,16 @@ describe('RsbWebviewArtifacts', () => {
   it('captures a download that starts after the action returns', async () => {
     const harness = artifactHarness();
     const item = downloadItem('completed');
-    const artifacts = new RsbWebviewArtifacts(() => root, { warn: vi.fn() });
+    const artifacts = createArtifacts(100);
 
     const result = await artifacts.capture(
       harness.wc,
-      { sessionId: 'delayed-download', timeoutMs: 2_000 },
+      { sessionId: 'delayed-download', timeoutMs: 1_000 },
       async () => {
         setTimeout(() => {
           harness.emitDownload(item);
           setTimeout(() => item.finish(), 0);
-        }, 300);
+        }, 10);
         return 'clicked';
       },
     );
@@ -169,7 +176,7 @@ describe('RsbWebviewArtifacts', () => {
 
   it('limits artifact diagnostics to the requested session', async () => {
     const harness = artifactHarness();
-    const artifacts = new RsbWebviewArtifacts(() => root, { warn: vi.fn() });
+    const artifacts = createArtifacts();
 
     for (const sessionId of ['session-a', 'session-b']) {
       const item = downloadItem('completed');
@@ -191,7 +198,7 @@ describe('RsbWebviewArtifacts', () => {
   it('cancels a download that exceeds the per-file quota before saving', async () => {
     const harness = artifactHarness();
     const item = downloadItem('cancelled', { totalBytes: 32 * 1024 * 1024 + 1 });
-    const artifacts = new RsbWebviewArtifacts(() => root, { warn: vi.fn() });
+    const artifacts = createArtifacts();
 
     const result = await artifacts.capture(
       harness.wc,
@@ -210,7 +217,7 @@ describe('RsbWebviewArtifacts', () => {
   it('cancels a download that crosses the quota while streaming', async () => {
     const harness = artifactHarness();
     const item = downloadItem('cancelled', { totalBytes: 0, receivedBytes: 0 });
-    const artifacts = new RsbWebviewArtifacts(() => root, { warn: vi.fn() });
+    const artifacts = createArtifacts();
 
     const result = await artifacts.capture(
       harness.wc,
@@ -233,7 +240,7 @@ describe('RsbWebviewArtifacts', () => {
     const items = Array.from({ length: 4 }, () => (
       downloadItem('completed', { totalBytes: 16 * 1024 * 1024 })
     ));
-    const artifacts = new RsbWebviewArtifacts(() => root, { warn: vi.fn() });
+    const artifacts = createArtifacts();
 
     const result = await artifacts.capture(
       harness.wc,
@@ -261,7 +268,7 @@ describe('RsbWebviewArtifacts', () => {
     const items = Array.from({ length: 9 }, () => (
       downloadItem('completed', { totalBytes: 20 * 1024 * 1024 })
     ));
-    const artifacts = new RsbWebviewArtifacts(() => root, { warn: vi.fn() });
+    const artifacts = createArtifacts();
 
     const result = await artifacts.capture(
       harness.wc,
@@ -288,7 +295,7 @@ describe('RsbWebviewArtifacts', () => {
       downloadItem('completed', { totalBytes: 32 * 1024 * 1024 }),
       downloadItem('completed', { totalBytes: 32 * 1024 * 1024 }),
     ];
-    const artifacts = new RsbWebviewArtifacts(() => root, { warn: vi.fn() });
+    const artifacts = createArtifacts();
 
     const result = await artifacts.capture(
       harness.wc,
@@ -314,7 +321,7 @@ describe('RsbWebviewArtifacts', () => {
   it('removes retained artifacts when the backend is disposed', async () => {
     const harness = artifactHarness();
     const item = downloadItem('completed');
-    const artifacts = new RsbWebviewArtifacts(() => root, { warn: vi.fn() });
+    const artifacts = createArtifacts();
 
     const result = await artifacts.capture(
       harness.wc,
@@ -333,7 +340,7 @@ describe('RsbWebviewArtifacts', () => {
 
   it('evicts the oldest files when retained bytes exceed the global budget', async () => {
     const harness = artifactHarness();
-    const artifacts = new RsbWebviewArtifacts(() => root, { warn: vi.fn() }, 0);
+    const artifacts = createArtifacts();
     const savedPaths: string[] = [];
 
     for (let captureIndex = 0; captureIndex < 5; captureIndex += 1) {

@@ -56,6 +56,31 @@ export function parseMobileLocalSystemCommand(text: string): MobileSystemCardTyp
   return parseLocalSystemCommand(text, MOBILE_LOCAL_SYSTEM_COMMANDS);
 }
 
+/**
+ * 出卡前需要「会话在被控端已存在」的本地命令。
+ *
+ * /context 要向被控端取上下文用量(maker.getContextUsage);/help /cost /pwd /status
+ * 都只是本地 projection 与会话行的视图,合成行上照样出得来,不该挡——挡了反而破坏
+ * 新建会话「一切正常」的观感。
+ */
+export const MOBILE_REMOTE_BACKED_LOCAL_COMMANDS: ReadonlySet<MobileSystemCardType> = new Set(['context']);
+
+/**
+ * 这次发送要执行的命令是否需要远端会话已经存在。
+ *
+ * desktop 命令一律算:手机端白名单(MOBILE_SUPPORTED_DESKTOP_COMMANDS)只有 /learn,
+ * 而它就是打被控端蒸馏管线的。会话还没建成时这类命令必须挡住而不是执行 —— 也不能
+ * 排队,outbox 的派发动作是「enqueue 一条消息」,命令原样入队 agent 只会当普通文本
+ * 忽略(review P1)。
+ */
+export function commandNeedsRemoteSession(
+  localCommand: MobileSystemCardType | null,
+  desktopCommand: { name: string } | null,
+): boolean {
+  if (desktopCommand) return true;
+  return localCommand !== null && MOBILE_REMOTE_BACKED_LOCAL_COMMANDS.has(localCommand);
+}
+
 export function mergeMobileLocalSlashCommands(
   remoteCommands: readonly MobileSlashCommand[],
 ): MobileSlashCommand[] {
@@ -87,7 +112,18 @@ export function formatMobileSystemCard(
   data: Record<string, unknown> | undefined,
 ): MobileSystemCardPresentation {
   if (type === 'goal-complete') return formatGoalCompleteCard(data);
-  if (type === 'goal-resumed') return { title: i18n.t('message.systemCard.goalResumed'), rows: [] };
+  if (type === 'goal-resumed') {
+    // 两种续跑原因共用这张卡, 但说法必须分开(与桌面 GoalResumedCard 同口径):
+    // 上游过载那条只是干等了 60s、**没有**任何容量探测, 说「用量已恢复」是假信息;
+    // 账号限流那条的重置时刻来自账号额度信息, 有依据(review #844 codex P1)。
+    const isCapacity = data?.kind === 'capacity-resumed';
+    return {
+      title: i18n.t(
+        isCapacity ? 'message.systemCard.goalCapacityRetry' : 'message.systemCard.goalResumed',
+      ),
+      rows: [],
+    };
+  }
   if (type === 'auto-resume') return { title: i18n.t('message.systemCard.autoResume'), rows: [] };
   if (type === 'agent-switch') return formatAgentSwitchCard(data);
   if (type === 'learn') return formatLearnCard(data);

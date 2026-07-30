@@ -108,13 +108,39 @@ describe('Project 行内 + 也对标统一 New(delayed-create)', () => {
   });
 });
 
-describe('inline archive dirty-worktree warning', () => {
-  it('preflights archive-now and opens the warning dialog before archiving a dirty worktree', () => {
-    // 钉的是预检顺序,不是排版:末段用 [\s\S]*? 容忍换行。activeSessionId 取
-    // viewedSessionIdRef.current(而非 viewedSessionId)是为了让 handleActionClick
-    // 的 useCallback deps 保持稳定,见 sessionRowRenderIsolation 的行渲染隔离不变量。
+describe('archive dirty-worktree warning', () => {
+  it('only skips the archive dialog when the preflight confirms the worktree is clean', () => {
+    // 钉的是预检顺序与放行判据,不是排版:末段用 [\s\S]*? 容忍换行。
+    //   · 菜单归档与行内 archive-now 共用 isArchiveLike 这一条无弹窗路径 ——
+    //     归档可逆,只有 worktree 有情况才升级到 ConfirmDialog;
+    //   · 判据必须是 `preflight !== 'clean'`,**不能**退回布尔的「不是脏的就放行」:
+    //     预检失败是 'unknown',塌成放行就会静默回收带未提交改动的 worktree
+    //     (greptile review);
+    //   · 走 resolveWorktreeRemovalPreflight(而非直调 fetch)才吃得到菜单打开 /
+    //     亮出 Confirm 胶囊时的预取,见 worktreeRemovalWarning 的预取缓存;
+    //   · activeSessionId 取 viewedSessionIdRef.current(而非 viewedSessionId)是为了
+    //     让 handleActionClick 的 useCallback deps 保持稳定,见 sessionRowRenderIsolation
+    //     的行渲染隔离不变量。
     expect(sidebarSource).toMatch(
-      /if \(action === 'archive-now'\) \{[\s\S]*?fetchDirtyWorktreeForRemoval\([\s\S]*?if \(dirtyWorktree\) \{[\s\S]*?setConfirm\(\{ open: true, sessionId, action: 'archive', dirtyWorktree: true \}\);[\s\S]*?return;[\s\S]*?await runSessionAction\(sessionId, 'archive', \{[\s\S]*?activeSessionId: viewedSessionIdRef\.current,[\s\S]*?\}\);/,
+      /if \(isArchiveLike\) \{[\s\S]*?resolveWorktreeRemovalPreflight\([\s\S]*?if \(preflight !== 'clean'\) \{[\s\S]*?setConfirm\(\{[\s\S]*?action: 'archive',[\s\S]*?dirtyWorktree: preflight === 'dirty',[\s\S]*?\}\);[\s\S]*?return;[\s\S]*?await runSessionAction\(sessionId, 'archive', \{[\s\S]*?activeSessionId: viewedSessionIdRef\.current,[\s\S]*?\}\);/,
+    );
+  });
+
+  it('resolves the worktree preflight last, after the attachment gate', () => {
+    // 预检之后再 await 任何东西都会给 clean 结论留失效窗口(codex review):
+    // 接管查询必须先结算,worktree 预检是最后一个前置条件。
+    const archiveBranch = sidebarSource.match(
+      /if \(isArchiveLike\) \{[\s\S]*?await runSessionAction\(sessionId, 'archive'/,
+    )?.[0];
+    expect(archiveBranch).toBeTruthy();
+    expect(archiveBranch!.indexOf('blockedByAttachment()')).toBeLessThan(
+      archiveBranch!.indexOf('resolveWorktreeRemovalPreflight('),
+    );
+  });
+
+  it('keeps the delete confirm dialog — deletion is irreversible', () => {
+    expect(sidebarSource).toMatch(
+      /if \(action === 'delete'\) \{[\s\S]*?resolveWorktreeRemovalPreflight\([\s\S]*?setConfirm\(\{ open: true, sessionId, action, dirtyWorktree \}\);/,
     );
   });
 });

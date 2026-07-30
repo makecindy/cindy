@@ -76,6 +76,8 @@ export interface OrcaWorkerLinkRecord {
     fastMode: boolean;
     sdkSessionId?: string;
     title: string;
+    /** SSH 远端 lead 的 host id;bridge rehydrate 必须带回 createSession。 */
+    remoteHostId?: string | null;
   };
 }
 
@@ -435,6 +437,7 @@ export async function getWorkerLink(input: {
       fastMode: !!row.leadSession.fastMode,
       sdkSessionId: row.leadSession.sdkSessionId ?? undefined,
       title: row.leadSession.title,
+      remoteHostId: row.leadSession.remoteHostId ?? null,
     },
   };
 }

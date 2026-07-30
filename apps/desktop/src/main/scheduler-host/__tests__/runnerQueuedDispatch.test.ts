@@ -17,6 +17,8 @@
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
+import { AcceptedCallbackDispatchCancelled } from '../../maker-ipc/acceptedCallbackRunner.js';
+
 import type {
   AgentEvent,
   Maker,
@@ -68,7 +70,13 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner, type SchedulerQueueDeps } from '../runner';
+import {
+  MakerScheduleRunner,
+  QUEUED_DISPATCH_MAX_WAIT_MS,
+  QUEUED_DISPATCH_TRACK_POLL_MS,
+  type MakerScheduleRunnerDeps,
+  type SchedulerQueueDeps,
+} from '../runner';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
@@ -204,6 +212,11 @@ function createQueueHarness(opts: {
   removeTriggersDiscard?: boolean;
   /** isPromptTracked 的返回(默认 true)。 */
   tracked?: () => boolean;
+  /**
+   * true = coordinator 在 enqueuePrompt **resolve 之前**就 drain 并调用 onAccepted。
+   * 复刻「目标会话在入队前的 await 期间恰好空闲」这条既有注释明确允许的顺序。
+   */
+  acceptBeforeEnqueueResolves?: boolean;
 }): QueueHarness {
   const enqueueCalls: QueueHarness['enqueueCalls'] = [];
   const removeCalls: QueueHarness['removeCalls'] = [];
@@ -217,6 +230,7 @@ function createQueueHarness(opts: {
         if (opts.enqueueRetry) return { retry: true as const };
         if (opts.enqueueDuplicate) return { duplicate: true as const };
         enqueueCalls.push(req);
+        if (opts.acceptBeforeEnqueueResolves) await req.onAccepted();
         return { clientId: `client-${enqueueCalls.length}` };
       }),
       removeQueuedPrompt: (sessionId, clientId) => {
@@ -245,6 +259,8 @@ function createRunnerHarness(
     availableModels?: Array<{ id: string; efforts?: readonly string[]; defaultEffort?: string | null }>;
     /** 绑定会话 meta 里的 effort(= 排队路径的 baseline.effort);默认 undefined。 */
     metaEffort?: string;
+    /** 停用轴裁决桩(缺省 = 不裁决,与生产未接线时一致)。 */
+    checkModelRoute?: MakerScheduleRunnerDeps['checkModelRoute'];
   } = {},
 ) {
   const logger = createLogger();
@@ -273,6 +289,7 @@ function createRunnerHarness(
     notifier,
     logger,
     schedulerQueue,
+    checkModelRoute: opts.checkModelRoute,
   });
   return { runner, logger, notifier, maker };
 }
@@ -624,6 +641,40 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     await expect(firePromise).resolves.toMatchObject({ sessionId: SESSION_ID });
   });
 
+  it('停用轴终检:setModel 失败回退 live.model 且它已被停用 → 派发前失败收口(PR #744 R22)', async () => {
+    // 上方裁决对象是 targetModel(启用),但 setModel 被拒后 turn 实际跑在 live.model
+    // (claude-opus-4-6,期间被停用)。缺终检时该 turn 照发 = 继续经停用路由扣费。
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    harness.setModel.mockRejectedValue(new Error('switchModel rejected'));
+    const queue = createQueueHarness({ busy: true });
+    const checkModelRoute = vi.fn(
+      async (_agent: string, model: string, _providerId: string | null) =>
+        model === 'claude-opus-4-6'
+          ? ({ kind: 'reject', reason: 'model-disabled' } as const)
+          : ({ kind: 'pass' } as const),
+    );
+    const { runner } = createRunnerHarness(harness.session, queue.deps, {
+      availableModels: [
+        { id: 'claude-opus-4-6', efforts: ['low', 'medium', 'high'], defaultEffort: 'high' },
+        { id: 'claude-opus-4-8', efforts: ['low', 'medium', 'high'], defaultEffort: 'high' },
+      ],
+      checkModelRoute,
+    });
+
+    const firePromise = runner.fire(
+      heartbeatSchedule({ model: 'claude-opus-4-8' }),
+      createFireContext(),
+    );
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    await queue.accept();
+
+    expect(harness.setModel).toHaveBeenCalledWith('claude-opus-4-8'); // 尝试切(被拒)
+    // 终检按实际运行路由 (live.model, 落地来源) 裁决 → reject → run 失败收口,turn 被中断。
+    await expect(firePromise).rejects.toThrow(/disabled in settings/);
+    expect(checkModelRoute).toHaveBeenCalledWith('claude-code', 'claude-opus-4-6', null);
+    expect(harness.setEffort).not.toHaveBeenCalled(); // 终检在 effort 下发之前拦截
+  });
+
   it('clamps follow-session queued effort to the drifted live model, not the stale baseline (PR #479 review)', async () => {
     // follow-session:schedule 无显式 model(沿用会话模型)但覆盖 effort=max。排队等待期间用户
     // 把会话切到只到 xhigh 的模型 → 本轮不 setModel、turn 跑在 live.model。effort 必须按 live.model
@@ -724,6 +775,330 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     const firePromise = runner.fire(heartbeatSchedule(), createFireContext());
     await vi.waitFor(() => expect(harness.send).toHaveBeenCalledTimes(1));
     expect(queue.enqueueCalls.length).toBe(0);
+    harness.emit({ type: 'done', data: {}, source: 'claude-code' });
+    await expect(firePromise).resolves.toMatchObject({ sessionId: SESSION_ID });
+  });
+});
+
+// ── 排队等待:不占执行槽 + 有上限 ────────────────────────────────────────────
+// 2026-07-29 事故:目标会话长时间不空闲(用户在长对话里 / 那个会话自己卡死),队列
+// 永不 drain,`await dispatchGate` 永不 settle —— 4 个心跳 run 各挂 3.5 小时,占满
+// 全部执行槽,其余定时任务全部停摆。
+describe('MakerScheduleRunner queued dispatch: slot accounting and wait cap', () => {
+  it('入队即让出执行槽,派发被接受时向引擎要回槽位', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true });
+    const { runner } = createRunnerHarness(harness.session, queue.deps);
+    const ctx = createFireContext();
+    let started = 0;
+    const ends: boolean[] = [];
+    (ctx as { onQueueWaitStart?: () => void }).onQueueWaitStart = () => { started += 1; };
+    (ctx as { endQueueWait?: (r: boolean) => boolean }).endQueueWait = (r) => {
+      ends.push(r);
+      return true; // 有空槽
+    };
+
+    const firePromise = runner.fire(heartbeatSchedule(), ctx);
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    expect(started).toBe(1);
+    expect(ends).toEqual([]);
+
+    await queue.accept();
+    await vi.waitFor(() => expect(ends).toEqual([true]));
+    harness.emit({ type: 'done', data: {}, source: 'claude-code' });
+    await expect(firePromise).resolves.toMatchObject({ sessionId: SESSION_ID });
+  });
+
+  it('派发时要不到执行槽 → 在 vendor dispatch 前中断并顺延,不超发', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true });
+    const { runner } = createRunnerHarness(harness.session, queue.deps);
+    const ctx = createFireContext();
+    const ends: boolean[] = [];
+    (ctx as { onQueueWaitStart?: () => void }).onQueueWaitStart = () => {};
+    (ctx as { endQueueWait?: (r: boolean) => boolean }).endQueueWait = (r) => {
+      ends.push(r);
+      return r ? false : true; // 要槽被拒；站下时正常复位
+    };
+
+    const firePromise = runner.fire(heartbeatSchedule(), ctx);
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    await queue.accept();
+
+    // 与撞忙顺延同语义:不留可见失败,下次到点重新排队
+    await expect(firePromise).resolves.toMatchObject({ deferred: true });
+    // 被拒后必须补一次 reclaimSlot=false 复位记账，否则引擎侧永远算它「不占槽」
+    expect(ends).toEqual([true, false]);
+    // turn 在 vendor dispatch 之前就被掐掉
+    expect(harness.session.abort).toHaveBeenCalled();
+  });
+
+  it('排队超时后迟到的 onAccepted 被补杀,不产生未跟踪的执行', async () => {
+    // 撤项对已转 activeTurn 的项是 no-op，coordinator 仍可能之后调 onAccepted。
+    vi.useFakeTimers();
+    try {
+      const harness = createSessionHarness(async () => ({ accepted: true }));
+      // removeTriggersDiscard=false 模拟「项已转 activeTurn，remove 是 no-op」
+      const queue = createQueueHarness({ busy: true, removeTriggersDiscard: false });
+      const { runner } = createRunnerHarness(harness.session, queue.deps);
+
+      const firePromise = runner.fire(heartbeatSchedule(), createFireContext());
+      await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+      await vi.advanceTimersByTimeAsync(QUEUED_DISPATCH_MAX_WAIT_MS + QUEUED_DISPATCH_TRACK_POLL_MS);
+      await expect(firePromise).resolves.toMatchObject({ deferred: true });
+
+      // 超时之后 coordinator 才 drain 到它
+      await queue.accept();
+      expect(harness.session.abort).toHaveBeenCalled();
+      // 迟到派发不得真的发出 prompt
+      expect(harness.send).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('等派发超过上限 → 撤项并顺延(recurring 任务下次到点重新排队)', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createSessionHarness(async () => ({ accepted: true }));
+      const queue = createQueueHarness({ busy: true });
+      const { runner } = createRunnerHarness(harness.session, queue.deps);
+      const ctx = createFireContext();
+      let started = 0;
+      const ends: boolean[] = [];
+      (ctx as { onQueueWaitStart?: () => void }).onQueueWaitStart = () => { started += 1; };
+      (ctx as { endQueueWait?: (r: boolean) => boolean }).endQueueWait = (r) => {
+        ends.push(r);
+        return true;
+      };
+
+      const firePromise = runner.fire(heartbeatSchedule(), ctx);
+      await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+      // 走到上限:轮询在下一拍发现超时 → 撤项 + 顺延
+      await vi.advanceTimersByTimeAsync(QUEUED_DISPATCH_MAX_WAIT_MS + QUEUED_DISPATCH_TRACK_POLL_MS);
+
+      await expect(firePromise).resolves.toMatchObject({ deferred: true });
+      expect(queue.removeCalls).toEqual([{ sessionId: SESSION_ID, clientId: 'client-1' }]);
+      // 离开等待必须配对上报(reclaimSlot=false),否则引擎侧的槽位记账会漏
+      expect(started).toBe(1);
+      expect(ends).toEqual([false]);
+      expect(harness.send).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('abort 撞在 onAccepted 执行期间:等待门自己收口,run 不永久挂 running', async () => {
+    // onAccepted 第一行就把 dispatched 置 true。abort 若在此之后到达:
+    //   - onAbort 走"中断 live turn"分支,不 failDispatch;
+    //   - trackPoll 见 dispatched 直接早退,也不 failDispatch。
+    // 两边都不收口 → dispatchGate 永不 settle → run 一直挂 running 到卡死守卫兜底
+    // (review #944 第十七轮 P1)。取消分支必须自己 failDispatch。
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true, removeTriggersDiscard: false });
+    const { runner, maker } = createRunnerHarness(harness.session, queue.deps);
+    const ctx = createFireContext();
+    // getSession 在 dispatched=true 之后、ctx.signal.aborted 复核之前被调用 ——
+    // 借它精确复刻"abort 撞在回调执行期间"这个窗口。
+    (maker.getSession as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      ctx.abortController.abort();
+      return harness.session;
+    });
+
+    const firePromise = runner.fire(heartbeatSchedule(), ctx);
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    await queue.accept();
+
+    // 修复前这里永不 settle(fire 挂死);修复后以"用户中断"收口
+    await expect(firePromise).rejects.toThrow(/abort/i);
+  });
+
+  it('排队期间系统挂起:睡着的时间不计入等待额度', async () => {
+    // 排队上限用壁钟量"等了多久",而机器睡觉时定时器不跑、壁钟照走:睡够 30 分钟醒来
+    // 第一拍就会撤掉一条完全健康的排队 prompt(review #944 第十六轮 P1)。
+    vi.useFakeTimers();
+    try {
+      const harness = createSessionHarness(async () => ({ accepted: true }));
+      const queue = createQueueHarness({ busy: true });
+      const { runner } = createRunnerHarness(harness.session, queue.deps);
+
+      const firePromise = runner.fire(heartbeatSchedule(), createFireContext());
+      await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+
+      // 先正常等一拍,建立轮询基准
+      await vi.advanceTimersByTimeAsync(QUEUED_DISPATCH_TRACK_POLL_MS);
+      // 合盖睡 8 小时:壁钟跳,定时器没有按比例推进
+      vi.setSystemTime(Date.now() + 8 * 3_600_000);
+      await vi.advanceTimersByTimeAsync(QUEUED_DISPATCH_TRACK_POLL_MS);
+      // 睡着的时间不算数 → 不得撤项
+      expect(queue.removeCalls).toEqual([]);
+
+      // 醒来后正常派发,照常跑完
+      await queue.accept();
+      harness.emit({ type: 'done', data: {}, source: 'claude-code' });
+      await expect(firePromise).resolves.toMatchObject({ sessionId: SESSION_ID });
+      expect(queue.removeCalls).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('挂起吸收不等于豁免:清醒地等满上限仍要撤项', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createSessionHarness(async () => ({ accepted: true }));
+      const queue = createQueueHarness({ busy: true });
+      const { runner } = createRunnerHarness(harness.session, queue.deps);
+
+      const firePromise = runner.fire(heartbeatSchedule(), createFireContext());
+      const settled = expect(firePromise).resolves.toMatchObject({ deferred: true });
+      await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+
+      // 一路清醒:每拍的真实间隔都等于轮询间隔,额度正常累加
+      await vi.advanceTimersByTimeAsync(QUEUED_DISPATCH_MAX_WAIT_MS + QUEUED_DISPATCH_TRACK_POLL_MS);
+      await settled;
+      expect(queue.removeCalls).toEqual([{ sessionId: SESSION_ID, clientId: 'client-1' }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('不能顺延的任务(一次性)排队超时 → 可见失败,不静默消失', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createSessionHarness(async () => ({ accepted: true }));
+      const queue = createQueueHarness({ busy: true });
+      const { runner, notifier } = createRunnerHarness(harness.session, queue.deps);
+
+      const firePromise = runner.fire(
+        heartbeatSchedule({ recurring: false }),
+        createFireContext(),
+      );
+      // 先挂上 rejection handler 再推进假时钟:fire 会在 advance 期间同步 reject,
+      // 此时若还没有 handler,Node 会报 unhandled rejection 污染整个测试文件。
+      const rejection = expect(firePromise).rejects.toThrow();
+      await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+      await vi.advanceTimersByTimeAsync(QUEUED_DISPATCH_MAX_WAIT_MS + QUEUED_DISPATCH_TRACK_POLL_MS);
+
+      await rejection;
+      expect(queue.removeCalls).toEqual([{ sessionId: SESSION_ID, clientId: 'client-1' }]);
+      expect(notifier.notify).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('上限内被派发的排队项不受超时影响', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createSessionHarness(async () => ({ accepted: true }));
+      const queue = createQueueHarness({ busy: true });
+      const { runner } = createRunnerHarness(harness.session, queue.deps);
+
+      const firePromise = runner.fire(heartbeatSchedule(), createFireContext());
+      await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+      // 快到上限时派发被接受
+      await vi.advanceTimersByTimeAsync(QUEUED_DISPATCH_MAX_WAIT_MS - QUEUED_DISPATCH_TRACK_POLL_MS);
+      await queue.accept();
+      // 再跨过上限:已 dispatched,轮询早退,不得撤项
+      await vi.advanceTimersByTimeAsync(QUEUED_DISPATCH_MAX_WAIT_MS);
+      harness.emit({ type: 'done', data: {}, source: 'claude-code' });
+
+      await expect(firePromise).resolves.toMatchObject({ sessionId: SESSION_ID });
+      expect(queue.removeCalls).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('排队超时后迟到的 accept:有 live 会话时取消这次派发(不抛错)', async () => {
+    // 阻断手段是 live.abort() 同步取消 Session.send 的 send reservation —— 这个回调正
+    // 运行在 Session.send 的 onAccepted 链里,返回后 send 会以 cancelled-before-dispatch
+    // 收场,coordinator 干净回滚。所以有 live 时不需要抛错(抛错那条路不置空 activeTurn)。
+    vi.useFakeTimers();
+    try {
+      const harness = createSessionHarness(async () => ({ accepted: true }));
+      const queue = createQueueHarness({ busy: true, removeTriggersDiscard: false });
+      const { runner } = createRunnerHarness(harness.session, queue.deps);
+
+      const firePromise = runner.fire(heartbeatSchedule(), createFireContext());
+      const settled = expect(firePromise).resolves.toMatchObject({ deferred: true });
+      await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+      await vi.advanceTimersByTimeAsync(QUEUED_DISPATCH_MAX_WAIT_MS + QUEUED_DISPATCH_TRACK_POLL_MS);
+      await settled;
+
+      // 迟到的 accept 不抛(coordinator 靠 reservation 取消回滚),但必须取消这次派发
+      await expect(queue.accept()).resolves.toBeUndefined();
+      expect(harness.session.abort).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('排队超时后迟到的 accept:拿不到 live 会话时抛错让 coordinator 回滚', async () => {
+    // 没有 live 就没有"取消 send reservation"这个手段,正常返回等于放行 —— coordinator
+    // 紧接着把 turn 交给 vendor,产生一次没人跟踪、还可能与顺延重试重叠的执行
+    // (review #944 第八轮 P1)。此时只能抛错。
+    vi.useFakeTimers();
+    try {
+      const harness = createSessionHarness(async () => ({ accepted: true }));
+      const queue = createQueueHarness({ busy: true, removeTriggersDiscard: false });
+      const { runner, maker } = createRunnerHarness(harness.session, queue.deps);
+
+      const firePromise = runner.fire(heartbeatSchedule(), createFireContext());
+      const settled = expect(firePromise).resolves.toMatchObject({ deferred: true });
+      await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+      await vi.advanceTimersByTimeAsync(QUEUED_DISPATCH_MAX_WAIT_MS + QUEUED_DISPATCH_TRACK_POLL_MS);
+      await settled;
+
+      // 会话此刻已不在内存里(ephemeral 关闭 / 进程重建)
+      (maker.getSession as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
+      // 必须是 AcceptedCallbackDispatchCancelled:普通 Error 会被 runAcceptedCallback
+      // 当成副作用失败吞掉,turn 照样发出去(review #944 第十一轮 P1)。
+      await expect(queue.accept()).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
+      await expect(queue.accept()).rejects.toThrow(/SEND_CANCELLED_BEFORE_DISPATCH/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('accept 早于入队 resolve 时,不得把已在执行的 run 标成 queued(review 第四轮)', async () => {
+    // 目标会话在 metadata / 崩溃恢复 await 期间恰好空闲 → coordinator 可以在
+    // enqueuePrompt resolve 之前就 drain 并 onAccepted。此时 run 已经在执行,若还
+    // 无条件切进 'queued',它会永久不计入 maxConcurrentRuns、也被排除在卡死守卫外。
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true, acceptBeforeEnqueueResolves: true });
+    const { runner } = createRunnerHarness(harness.session, queue.deps);
+    const ctx = createFireContext();
+    let startCalls = 0;
+    const ends: boolean[] = [];
+    (ctx as { onQueueWaitStart?: () => void }).onQueueWaitStart = () => { startCalls += 1; };
+    (ctx as { endQueueWait?: (r: boolean) => boolean }).endQueueWait = (r) => {
+      ends.push(r);
+      return true;
+    };
+
+    const firePromise = runner.fire(heartbeatSchedule(), ctx);
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    harness.emit({ type: 'done', data: {}, source: 'claude-code' });
+    await expect(firePromise).resolves.toMatchObject({ sessionId: SESSION_ID });
+
+    // 关键断言:从未进入纯等待 —— run 全程占着槽（它确实一直在执行）
+    expect(startCalls).toBe(0);
+  });
+
+  it('turn 事件经 onProgress 上报给引擎的卡死守卫', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: false });
+    const { runner } = createRunnerHarness(harness.session, queue.deps);
+    const ctx = createFireContext();
+    const onProgress = vi.fn();
+    (ctx as { onProgress?: () => void }).onProgress = onProgress;
+
+    const firePromise = runner.fire(heartbeatSchedule(), ctx);
+    await vi.waitFor(() => expect(harness.send).toHaveBeenCalledTimes(1));
+    harness.emit({ type: 'text', data: { text: 'thinking' }, source: 'claude-code' });
+    await vi.waitFor(() => expect(onProgress).toHaveBeenCalled());
     harness.emit({ type: 'done', data: {}, source: 'claude-code' });
     await expect(firePromise).resolves.toMatchObject({ sessionId: SESSION_ID });
   });

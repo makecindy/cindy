@@ -1,5 +1,5 @@
 /**
- * csp.ts — Content-Security-Policy for the XDMaker desktop app window(s).
+ * csp.ts — Content-Security-Policy for the Cindy desktop app window(s).
  * ---------------------------------------------------------------------------
  * WHY: the main window renders untrusted content (agent output, markdown,
  * file previews, web-search results) while `preload` exposes highly privileged

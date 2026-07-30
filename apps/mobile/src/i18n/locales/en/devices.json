@@ -8,20 +8,20 @@
     "create": "New"
   },
   "list": {
-    "thisComputer": "This computer",
+    "thisComputer": "This device",
     "allConversations": "All Conversations",
     "syncFailed": "Sync failed",
     "requestFailed": "Request failed",
-    "loading": "Loading available computers",
+    "loading": "Loading available devices",
     "untitled": "Untitled conversation",
     "connection": {
       "connecting": "Connecting",
       "disconnected": "Disconnected"
     },
     "error": {
-      "sessionDeviceNotFound": "Can't find the computer this conversation belongs to. Sync again and retry.",
-      "taskDeviceNotFound": "Can't find the computer this task belongs to. Sync again and retry.",
-      "noDevice": "No computer available. Turn on remote control on the desktop, then sync again."
+      "sessionDeviceNotFound": "Can't find the device this conversation belongs to. Sync again and retry.",
+      "taskDeviceNotFound": "Can't find the device this task belongs to. Sync again and retry.",
+      "noDevice": "No device available. Turn on remote control on the desktop, then sync again."
     },
     "alert": {
       "actionFailed": "Action failed",
@@ -198,7 +198,7 @@
     },
     "empty": {
       "copy": "Create your first automation right from your phone, or create one on the desktop and sync it here.",
-      "title": "No automations on this computer"
+      "title": "No automations on this device"
     },
     "createAutomation": "New Automation",
     "recentRuns": "Recent Runs",

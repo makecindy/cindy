@@ -50,6 +50,14 @@ type MakerSendOptions = {
     shouldBroadcast?: unknown;
     onPersisting?: unknown;
     onPersisted?: unknown;
+    /**
+     * 自动续跑标记(coordinator drain 透传,见 AgentInputQueuedMessage.autoResume)。
+     * 合进落库 user 消息的 agentMeta.autoResume:renderer 据此隐藏气泡并渲染
+     * 「已自动继续」,host 的 createDbMessage 据此跳过自动续跑额度充值。
+     */
+    autoResume?: unknown;
+    /** 本次自动续跑的展示信息(合进 agentMeta.autoResumeInfo,供活动行 param 位与展开详情)。 */
+    autoResumeInfo?: unknown;
   };
 };
 
@@ -169,6 +177,8 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
   content: unknown;
   sdkSessionId?: string;
   delivery?: 'turn' | 'steer';
+  autoResume?: boolean;
+  autoResumeInfo?: Record<string, unknown>;
   shouldBroadcast?: () => boolean;
   onPersisting?: () => void;
   onPersisted?: () => void | Promise<void>;
@@ -179,6 +189,10 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
     clientId: persist.clientId,
     content: persist.content,
     ...(typeof persist.sdkSessionId === 'string' ? { sdkSessionId: persist.sdkSessionId } : {}),
+    ...(persist.autoResume === true ? { autoResume: true as const } : {}),
+    ...(persist.autoResumeInfo && typeof persist.autoResumeInfo === 'object'
+      ? { autoResumeInfo: persist.autoResumeInfo as Record<string, unknown> }
+      : {}),
     ...(persist.delivery === 'turn' || persist.delivery === 'steer' ? { delivery: persist.delivery } : {}),
     ...(typeof persist.shouldBroadcast === 'function'
       ? { shouldBroadcast: persist.shouldBroadcast as () => boolean }
@@ -481,6 +495,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                     uuid: so.messageUuid,
                     sdkSessionId: persistUserMessage.sdkSessionId,
                     ...(persistUserMessage.delivery ? { delivery: persistUserMessage.delivery } : {}),
+                    // 自动补发的续跑指令:renderer 隐藏气泡 + 渲染「已重新连接」活动行,
+                    // 同时也是 host 跳过额度充值的判据(见 register 的 createDbMessage)。
+                    ...(persistUserMessage.autoResume ? { autoResume: true } : {}),
+                    ...(persistUserMessage.autoResumeInfo
+                      ? { autoResumeInfo: persistUserMessage.autoResumeInfo }
+                      : {}),
                     // scheduler 排队消息:与 runner 直发路径落库的 agentMeta.origin
                     // 对齐,renderer 据此渲染"由自动化任务发送"标签。
                     ...(so.origin ? { origin: so.origin } : {}),

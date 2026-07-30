@@ -5,6 +5,20 @@ import { BILLING_INVOKE } from '../../../shared/billing.js';
 import { ServerApiError } from '../../serverApiClient.js';
 import { createBillingHandlers } from '../index.js';
 
+vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: vi.fn() }));
+vi.mock('../../serverApiClient.js', () => {
+  class ServerApiError extends Error {
+    constructor(
+      public readonly code: string,
+      public readonly statusCode: number,
+      message: string,
+    ) {
+      super(message);
+    }
+  }
+  return { ServerApiError, serverApiFetch: vi.fn() };
+});
+
 function harness() {
   const mainFrame = { routingId: 1 };
   const mainWebContents = { id: 1, mainFrame };
@@ -119,10 +133,14 @@ describe('billing IPC', () => {
       observedAt: '2026-07-23T12:00:00.000Z',
     });
     expect(fetch).toHaveBeenCalledWith('/api/model-access/balance', {
-      baseUrl: 'https://model-access.example',
+      baseUrl: expect.any(Function),
       timeoutMs: 20_000,
       redactErrorDetails: true,
     });
+    const baseUrl = fetch.mock.calls[0]?.[1]?.baseUrl;
+    expect(typeof baseUrl === 'function' ? baseUrl() : baseUrl).toBe(
+      'https://model-access.example',
+    );
   });
 
   it('rejects any balance payload before network access', async () => {
@@ -151,7 +169,7 @@ describe('billing IPC', () => {
       promotionalGrantConsistency: 'OBSERVED',
     });
     expect(fetch).toHaveBeenCalledWith('/api/model-access/credit-usage', {
-      baseUrl: 'https://model-access.example',
+      baseUrl: expect.any(Function),
       timeoutMs: 20_000,
       redactErrorDetails: true,
     });
@@ -162,6 +180,7 @@ describe('billing IPC', () => {
     BILLING_INVOKE.GET_CATALOG,
     BILLING_INVOKE.GET_CURRENT_SUBSCRIPTION,
     BILLING_INVOKE.CANCEL_CURRENT_SUBSCRIPTION,
+    BILLING_INVOKE.OPEN_SUBSCRIPTION_PORTAL,
   ])('rejects any payload on the no-payload channel %s before network access', async (channel) => {
     const { call, fetch } = harness();
 
@@ -211,7 +230,7 @@ describe('billing IPC', () => {
     });
 
     expect(fetch).toHaveBeenCalledWith('/api/billing/credit-topup/orders', {
-      baseUrl: 'https://model-access.example',
+      baseUrl: expect.any(Function),
       timeoutMs: 20_000,
       redactErrorDetails: true,
       method: 'POST',
@@ -230,7 +249,7 @@ describe('billing IPC', () => {
       purchaseAttemptId: 'attempt/1',
     });
     expect(fetch).toHaveBeenCalledWith('/api/billing/subscriptions/purchases/attempt%2F1/refresh', {
-      baseUrl: 'https://model-access.example',
+      baseUrl: expect.any(Function),
       timeoutMs: 20_000,
       redactErrorDetails: true,
       method: 'POST',
@@ -254,7 +273,7 @@ describe('billing IPC', () => {
 
     await expect(call(BILLING_INVOKE.CANCEL_CURRENT_SUBSCRIPTION)).resolves.toEqual(canceled);
     expect(fetch).toHaveBeenCalledWith('/api/billing/subscription', {
-      baseUrl: 'https://model-access.example',
+      baseUrl: expect.any(Function),
       timeoutMs: 20_000,
       redactErrorDetails: true,
       method: 'DELETE',
@@ -389,7 +408,7 @@ describe('billing IPC', () => {
       }),
     ).resolves.toEqual(change);
     expect(fetch).toHaveBeenCalledWith('/api/billing/subscription/plan-change-quotes', {
-      baseUrl: 'https://model-access.example',
+      baseUrl: expect.any(Function),
       timeoutMs: 20_000,
       redactErrorDetails: true,
       method: 'POST',
@@ -443,7 +462,7 @@ describe('billing IPC', () => {
 
     await call(BILLING_INVOKE.CANCEL_PLAN_CHANGE, { planChangeId: 'plan/1' });
     expect(fetch).toHaveBeenCalledWith('/api/billing/subscription/plan-changes/plan%2F1', {
-      baseUrl: 'https://model-access.example',
+      baseUrl: expect.any(Function),
       timeoutMs: 20_000,
       redactErrorDetails: true,
       method: 'DELETE',
@@ -470,6 +489,51 @@ describe('billing IPC', () => {
       code: 'INTERNAL',
       message: '[INTERNAL] billing service response was invalid',
     });
+  });
+
+  it('creates and opens a Stripe portal session only in the main process', async () => {
+    const { call, fetch, openExternal } = harness();
+    const url = 'https://billing.stripe.com/p/session/session_fixture';
+    fetch.mockResolvedValueOnce({ url });
+
+    await expect(call(BILLING_INVOKE.OPEN_SUBSCRIPTION_PORTAL)).resolves.toEqual({
+      success: true,
+    });
+    expect(fetch).toHaveBeenCalledWith('/api/billing/subscription/portal', {
+      baseUrl: expect.any(Function),
+      timeoutMs: 20_000,
+      redactErrorDetails: true,
+      method: 'POST',
+    });
+    expect(openExternal).toHaveBeenCalledWith(url);
+  });
+
+  it('releases a stalled Stripe portal browser launch', async () => {
+    vi.useFakeTimers();
+    try {
+      const { call, fetch, openExternal } = harness();
+      const url = 'https://billing.stripe.com/p/session/session_fixture';
+      fetch.mockResolvedValueOnce({ url });
+      openExternal.mockImplementationOnce(() => new Promise<undefined>(() => {}));
+
+      const pending = call(BILLING_INVOKE.OPEN_SUBSCRIPTION_PORTAL);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      await expect(pending).resolves.toEqual({ success: false, timedOut: true });
+      expect(openExternal).toHaveBeenCalledWith(url);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fails closed when the portal endpoint does not return a Stripe portal URL', async () => {
+    const { call, fetch, openExternal } = harness();
+    fetch.mockResolvedValueOnce({ url: 'https://checkout.stripe.com/c/pay/session_fixture' });
+
+    await expect(call(BILLING_INVOKE.OPEN_SUBSCRIPTION_PORTAL)).rejects.toMatchObject({
+      code: 'INTERNAL',
+    });
+    expect(openExternal).not.toHaveBeenCalled();
   });
 
   it.each([

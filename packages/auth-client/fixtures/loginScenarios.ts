@@ -258,12 +258,15 @@ function discoveryFor(scenario: ParsedLoginScenario): unknown {
   return { methods: [{ type: "email_code" }] };
 }
 
-function ssoOrgDiscoveryFor(scenario: ParsedLoginScenario): unknown {
+function ssoOrgDiscoveryFor(
+  scenario: ParsedLoginScenario,
+  region: AuthRegion,
+): unknown {
   const connections =
     scenario.kind === "sso" && scenario.variant === "multi"
       ? [SSO_CONNECTION_A, SSO_CONNECTION_B]
       : [SSO_CONNECTION_A];
-  return { orgName: SSO_ORG_NAME, connections };
+  return { region, orgName: SSO_ORG_NAME, connections };
 }
 
 /** verify-code / callback exchange 的 outcome(附录 A outcome:* 场景)。 */
@@ -317,7 +320,7 @@ export function createScenarioFetch(
       case "discover":
         return jsonResponse(200, discoveryFor(scenario));
       case "sso-discovery":
-        return jsonResponse(200, ssoOrgDiscoveryFor(scenario));
+        return jsonResponse(200, ssoOrgDiscoveryFor(scenario, region));
       case "request-code":
       case "request-binding-code":
         return jsonResponse(200, { status: "sent" });

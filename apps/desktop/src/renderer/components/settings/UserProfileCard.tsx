@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Building2, Copy, Pencil } from 'lucide-react';
+import { Building2, Copy, Pencil, UserRound } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 import { cn } from '@/lib/utils';
@@ -66,8 +66,10 @@ export function UserProfileCard() {
           'border border-[var(--settings-profile-card-border)]',
         )}
       >
-        <div className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-full border border-[var(--settings-profile-card-border)] bg-[var(--settings-profile-avatar-bg)] text-18 font-medium text-[var(--settings-profile-avatar-text)]">
-          L
+        {/* 未登录态没有身份可展示:用中性人形图标,不取文案首字(会渲染成「未」/「N」
+            这类无意义字符,且四语各不相同)。 */}
+        <div className="flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-full border border-[var(--settings-profile-card-border)] bg-[var(--settings-profile-avatar-bg)] text-[var(--settings-profile-avatar-text)]">
+          <UserRound aria-hidden="true" size={22} strokeWidth={1.75} />
         </div>
         <div className="min-w-0 flex-1">
           <p className="text-18 font-medium text-[var(--settings-profile-name)]">

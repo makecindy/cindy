@@ -8,6 +8,7 @@ import {
 
 const VALID_MANIFEST = {
   schemaVersion: 1,
+  region: 'cn',
   apiBaseUrl: 'https://api.example.com',
   authApiBaseUrl: 'https://auth.example.com',
   authDesktopCallbackUrl: 'https://auth.example.com/api/auth/desktop/callback',
@@ -36,7 +37,48 @@ describe('parseClientEndpointManifest(字段可按 region 缺省)', () => {
     if (!result.ok) throw new Error('unreachable');
     expect(result.endpoints.authApiBaseUrl).toBe('https://auth.example.com');
     expect(result.endpoints.slackHookWsUrl).toBe('wss://slack-hook.example.com');
+    expect(result.region).toBe('cn');
     expect(Object.keys(result.endpoints).sort()).toEqual([...CLIENT_ENDPOINT_KEYS].sort());
+  });
+
+  it('清单缺少 region 时保持兼容，由可信清单地址确定区域', () => {
+    const legacy: Record<string, unknown> = { ...VALID_MANIFEST };
+    delete legacy.region;
+    const result = parseClientEndpointManifest(JSON.stringify(legacy));
+    expect(result).toMatchObject({
+      ok: true,
+      region: null,
+    });
+  });
+
+  it.each([
+    [
+      '区域非法',
+      { region: 'us' },
+      undefined,
+      'invalid-field:region',
+    ],
+    [
+      '期望区域不匹配',
+      { region: 'global' },
+      { expectedRegion: 'cn' as const },
+      'region-mismatch:cn:global',
+    ],
+  ])('拒绝区域诊断元数据配置错误：%s', (_label, patch, options, reason) => {
+    expect(
+      parseClientEndpointManifest(JSON.stringify({ ...VALID_MANIFEST, ...patch }), options),
+    ).toEqual({ ok: false, reason });
+  });
+
+  it('忽略旧跨区字段，区域路由不依赖远端清单', () => {
+    const result = parseClientEndpointManifest(
+      JSON.stringify({
+        ...VALID_MANIFEST,
+        crossRealmOrgLoginEnabled: 'invalid-but-ignored',
+        realmManifestBaseUrls: 'invalid-but-ignored',
+      }),
+    );
+    expect(result).toMatchObject({ ok: true });
   });
 
   it('忽略未知字段(向前兼容)', () => {

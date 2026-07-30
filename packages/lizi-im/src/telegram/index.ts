@@ -1,0 +1,1547 @@
+/**
+ * telegram/index.ts — 个人 Telegram bot 传输层(BYO token, 直连 Bot API)。
+ * ---------------------------------------------------------------------------
+ * 与官方 Cindy Telegram bot(hook-control, 经 relay server)完全平行的另一套
+ * 通道: 用户在 BotFather 建自己的 bot, 桌面端拿 token 直连 getUpdates 长轮询,
+ * 消息不经任何服务器中转 — 本地即可调试全链路体验。
+ *
+ * 会话路由约定(见 codec.ts):
+ *   - 私聊: senderId = Telegram 数字 user id(仅 owner 放行, Discord 同款
+ *     显式 owner 模型 — Telegram bot 全网可搜, TOFU 抢注风险不可接受);
+ *   - 群/topic: senderId = 群 lane id `g/{chatId}[/{threadId}]`, 编排层按
+ *     (bot, laneId) 得到「每群每话题一个会话」; 出站按 lane id 解码回群聊。
+ *     触发条件 = owner 在群里 @bot 或回复 bot 消息; 其余群消息只进本地
+ *     群上下文窗口(onGroupWindowMessage), 不起 turn。
+ *
+ * 群窗口数据面: transport 把收到的每条群消息(含非触发消息与其他 bot 消息,
+ * 取决于 BotFather privacy mode)与自己发出的群回复(回流条目)推给
+ * onGroupWindowMessage 订阅者; 窗口存储与上下文拼装在 desktop main
+ * (im/telegram/groupWindow.ts), 包内不落盘。
+ */
+
+import fs from 'node:fs';
+import path from 'node:path';
+
+import { BaseIM } from '../BaseIM.js';
+import type { ChannelIM } from '../channelIM.js';
+import type {
+  IMCardActionEvent,
+  IMHost,
+  IMMessageEvent,
+  IMStatus,
+  InteractiveCardSpec,
+  SendFileResult,
+  StreamingTextHandle,
+} from '../types.js';
+import {
+  createTelegramApiClient,
+  TelegramApiError,
+  type TelegramApiClient,
+  type TgMessage,
+  type TgUpdate,
+  type TgUser,
+} from './api.js';
+import { chunkTelegramSource } from './chunk.js';
+import { decodeLaneUserId, decodeMessageId, encodeLaneUserId, encodeMessageId } from './codec.js';
+import { buildCardPayload, parseCallbackQuery } from './components.js';
+import {
+  detectGroupTrigger,
+  groupWindowEntryOf,
+  laneThreadIdOf,
+  normalizeMessage,
+  type TelegramGroupWindowEntry,
+} from './inbound.js';
+import { markdownToTelegramHtml, stripTelegramHtmlTags } from './markdown.js';
+import { startTelegramStreaming } from './streamingText.js';
+
+const TOKEN_SECRET_KEY = 'telegram-bot-token';
+const OWNER_USER_ID_SECRET_KEY = 'telegram-owner-user-id';
+/** 历史遗留 key(上下线播报机制已移除), disconnect 时顺手清掉。 */
+const LEGACY_RUNTIME_ACTIVE_SECRET_KEY = 'telegram-bot-runtime-active';
+/**
+ * getUpdates 游标持久化(`${botId}:${offset}`)。offset 只有在下一次 getUpdates
+ * 送达服务器时才被确认 — 强杀落在"批次处理完 → 下一次请求送达"窗口会导致
+ * 重放, 而下游 turn 无 messageId 幂等; 落盘让重启从上次处理完的位置续读。
+ */
+const UPDATES_OFFSET_SECRET_KEY = 'telegram-updates-offset';
+
+const POLL_TIMEOUT_SEC = 50;
+/**
+ * 相册(media_group)聚合窗: Telegram 把一次多图拆成多条消息, 同组消息通常在
+ * 同一批 getUpdates 里到齐; 静默 1s 后合并成单个事件, 不各起一轮 turn。
+ */
+const ALBUM_SETTLE_MS = 1_000;
+const POLL_RETRY_BASE_MS = 1_000;
+const POLL_RETRY_MAX_MS = 30_000;
+/** 409 = 另一个进程在对同一 token 轮询 — 低频探测等它退出。 */
+const POLL_CONFLICT_RETRY_MS = 30_000;
+const MAX_OUTBOUND_FILE_BYTES = 50 * 1024 * 1024;
+const OWNER_NOTICE_TIMEOUT_MS = 4_500;
+/** typing 状态原生只持续 ~5s — 按 4.5s 续命直到首条真实消息发出。 */
+const TYPING_REFRESH_MS = 4_500;
+/** typing 循环兜底上限(turn 异常悬挂时不无限打 API)。 */
+const TYPING_LOOP_MAX_MS = 5 * 60_000;
+const SECRET_WRITE_FAILED_REASON = '无法安全保存凭证(系统安全存储不可用)';
+const DEFAULT_EXPIRED_CARD_NOTICE = '卡片已过期';
+
+/** 非 owner 显式召唤(私聊/群 @/reply)的礼貌回应 — per-user 冷却防刷屏。 */
+const STRANGER_NOTICE_COOLDOWN_MS = 60_000;
+/** DM 定稿的 message_effect_id(官方公开的标准特效 id, 👍; 仅私聊生效)。 */
+const DM_DONE_EFFECT_ID = '5107584321108051014';
+const DEFAULT_STRANGER_NOTICE =
+  '👋 我是一位主人的个人 Cindy 助理，只响应主人本人的指令~\nI am a personal Cindy assistant and only respond to my owner.';
+
+// 只保留一次性动作确认(填 token 关联成功 / 手动断开)。生命周期播报(上线/
+// 下线/离线致歉)已整体移除 —— bot 随桌面端频繁重启, 每次都播报会刷屏;
+// 官方 bot 与业内 Telegram bot 的重启一律静默(2026-07-30 Chris)。
+const DEFAULT_OWNER_NOTICES = {
+  linked: '✅ All linked. Just send a message when you are ready.',
+  disconnected: '🔌 Unlinked. Link again whenever you need me.',
+} as const;
+
+type OwnerNoticePhase = keyof typeof DEFAULT_OWNER_NOTICES;
+type MessageHandler = (e: IMMessageEvent) => void;
+type CardActionHandler = (e: IMCardActionEvent) => void;
+type StatusHandler = (s: IMStatus) => void;
+type GroupWindowHandler = (entry: TelegramGroupWindowEntry) => void;
+
+/** 行为配置(设置卡可视化, 实时生效 — host 以 getter 注入, transport 每次使用时读)。 */
+export interface TelegramBehaviorConfig {
+  /**
+   * emoji 回应等级:
+   *   off = 完全不放表情(含 👀 ack 与终态);
+   *   minimal = 👀 ack → 👍/👎 终态(默认);
+   *   expressive = 终态用丰富变体池(👍🎉💯 / 👎😱), ack 保持 👀。
+   */
+  emojiReactions: 'off' | 'minimal' | 'expressive';
+  /** 群回复引用: off=不挂 / first=每次触发首条挂回(默认) / all=每条都挂。 */
+  replyQuoteGroup: 'off' | 'first' | 'all';
+  /** DM 回复引用: off(默认) / first=首条回复挂回触发消息。 */
+  replyQuoteDm: 'off' | 'first';
+  /**
+   * per-chat 群参与模式(chatId → 模式)。缺省 mention。
+   * always = 全响应·自主判断: 每条群消息都进 turn(ambient 标记), 模型用
+   * NO_REPLY 哨兵决定插不插话; ambient 消息不放表情回应。
+   */
+  groupActivation?: Record<string, 'mention' | 'always'>;
+}
+
+export const TELEGRAM_DEFAULT_BEHAVIOR: TelegramBehaviorConfig = {
+  emojiReactions: 'minimal',
+  replyQuoteGroup: 'first',
+  replyQuoteDm: 'off',
+};
+
+/**
+ * 生动档变体池 — Telegram bot 可用标准 reaction 全集按语义分池(Chris:
+ * 能用的都随便用)。正/负分开是底线: 成功不能随机出 💩/🤡。选中表情在该
+ * 群被限制时(available_reactions), setMessageReaction 会 400 — 回落基础款
+ * 重试一次。
+ */
+const EXPRESSIVE_DONE_POOL = [
+  '👍', '❤', '🔥', '🥰', '👏', '😁', '🎉', '🤩', '🙏', '👌',
+  '😍', '❤‍🔥', '💯', '🤣', '⚡', '🏆', '🍾', '🤗', '🫡', '😇',
+  '🤝', '💅', '🆒', '💘', '😎', '🦄', '🕊', '🐳', '🍓', '💋',
+  '😘', '🎃', '👾', '🍌', '🌭',
+] as const;
+const EXPRESSIVE_ERROR_POOL = [
+  '👎', '😱', '😢', '💔', '😨', '🤯', '🥴', '🙈', '😐', '🗿',
+] as const;
+
+export interface TelegramIMOptions {
+  /** cindy-media:// / xdt-image:// → 本地绝对路径(出站图片上传用)。 */
+  resolveImageUrl?: (url: string) => string;
+  expiredCardNotice?: string;
+  ownerNoticeText?:
+    | Partial<Record<OwnerNoticePhase, string>>
+    | ((phase: OwnerNoticePhase) => string);
+  /** 非 owner 显式召唤时的礼貌回应文案(缺省用内置中英双语一句)。 */
+  strangerNotice?: string;
+  /**
+   * owner 的命令菜单(setMyCommands + BotCommandScopeChat 精准只发 owner
+   * 私聊; 陌生人/群成员看不到任何命令)。缺省不注册。
+   */
+  commandMenu?: ReadonlyArray<{ command: string; description: string }>;
+  /** 测试注入: 替换真实 Bot API 客户端。 */
+  apiFactory?: (token: string) => TelegramApiClient;
+  /** 行为配置 getter(缺省 = TELEGRAM_DEFAULT_BEHAVIOR)。 */
+  behavior?: () => TelegramBehaviorConfig;
+}
+
+export class TelegramIM extends BaseIM implements ChannelIM {
+  private readonly messageHandlers = new Set<MessageHandler>();
+  private readonly cardActionHandlers = new Set<CardActionHandler>();
+  private readonly statusHandlers = new Set<StatusHandler>();
+  private readonly groupWindowHandlers = new Set<GroupWindowHandler>();
+
+  private status: IMStatus = { kind: 'idle' };
+  private api: TelegramApiClient | null = null;
+  private botId = 0;
+  private botUsername = '';
+  private botDisplayName = '';
+  private ownerUserId = '';
+  private configVersion = 0;
+  private pollAbort: AbortController | null = null;
+  private pollLoop: Promise<void> | null = null;
+  private disposing = false;
+  /** DM 流式草稿的 draft_id 单调计数(非零; 同 id 连续更新触发客户端动画)。 */
+  private draftIdCounter = 0;
+  /** sendMessageDraft 能力性失败后的永久 latch(本实例生命周期内)。 */
+  private draftStreamingDisabled = false;
+  /** sendRichMessage 方法不可用(404)后的永久 latch(本实例生命周期内)。 */
+  private richSendDisabled = false;
+  private readonly mediaDir: string;
+  /** 相册聚合缓冲 — key `${chatId}:${mediaGroupId}`。 */
+  private readonly pendingAlbums = new Map<
+    string,
+    { messages: TgMessage[]; timer: ReturnType<typeof setTimeout>; firstUpdateId: number }
+  >();
+  /** 本连接见过的最大 offset(update_id+1) — 相册 flush 后补写持久化游标用。 */
+  private lastSeenOffset = 0;
+  /**
+   * 待配对的回挂触发队列(laneUserId → 原生 message_id FIFO): 多条消息在上一
+   * 轮还没出话时先后触发同一 lane, 各自的答案必须挂回各自的提问 — 单值会被
+   * 后到者覆盖(2026-07-30 review P1)。lane 的 turn 串行执行, 每次流式句柄
+   * 创建(= 一轮输出开始)从队头领取本轮目标进 turnReplyTargets。
+   */
+  private readonly pendingReplyTargets = new Map<string, Array<{ id: string; at: number }>>();
+  /** 当前轮的回挂目标(claimTurnReplyTarget 领取; 'first' 用后即耗, 'all' 整轮保留)。 */
+  private readonly turnReplyTargets = new Map<string, string>();
+  /** 非 owner 礼貌回应的 per-user 冷却(userId → 上次回应 ts)。 */
+  private readonly strangerNoticeAt = new Map<string, number>();
+  /** ambient 触发的原生 messageId(`chatId|msgId`) — 表情回应抑制名单(FIFO 512)。 */
+  private readonly ambientTriggerIds = new Set<string>();
+  /** 进行中的 typing 续命循环(`chatId:threadId` → 状态)。 */
+  private readonly typingLoops = new Map<
+    string,
+    { timer: ReturnType<typeof setInterval>; startedAt: number }
+  >();
+
+  constructor(
+    host: IMHost,
+    private readonly opts: TelegramIMOptions = {},
+  ) {
+    super('telegram', host);
+    if (!host.paths.telegramMediaDir) {
+      throw new Error('IMHost.paths.telegramMediaDir is required to wire the telegram channel');
+    }
+    this.mediaDir = host.paths.telegramMediaDir;
+  }
+
+  // ── lifecycle ──────────────────────────────────────────────────────────────
+
+  async init(): Promise<void> {
+    this.disposing = false;
+    const token = this.host.secrets.read(TOKEN_SECRET_KEY)?.trim() ?? '';
+    this.ownerUserId = this.host.secrets.read(OWNER_USER_ID_SECRET_KEY)?.trim() ?? '';
+    if (!token) {
+      this.setStatus({ kind: 'idle' });
+      return;
+    }
+    await this.connect(token);
+  }
+
+  // 生命周期静默: dispose / 重连不向 owner 发任何播报(桌面端频繁重启会刷屏)。
+  async dispose(): Promise<void> {
+    this.disposing = true;
+    this.configVersion += 1;
+    this.clearAllTypingLoops();
+    // 回挂配对是连接期内存态 — 换代/断开后旧目标一律作废, 不跨代错配。
+    this.pendingReplyTargets.clear();
+    this.turnReplyTargets.clear();
+    await this.stopPolling();
+    this.setStatus({ kind: 'idle' });
+  }
+
+  registerIpc(): void {
+    const configResult = (saveErrorStatus?: IMStatus) => ({
+      status: this.status,
+      ownerUserId: this.ownerUserId || null,
+      botUsername: this.botUsername || null,
+      ...(saveErrorStatus ? { saveErrorStatus } : {}),
+    });
+
+    this.host.ipc.handle('telegramBot:set-config', async (payload) => {
+      const config = isRecord(payload) ? payload : {};
+      const token = typeof config.token === 'string' ? config.token.trim() : '';
+      const ownerUserId =
+        typeof config.ownerUserId === 'string' ? config.ownerUserId.trim() : '';
+      if (!this.host.secrets.isAvailable()) {
+        this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+        return configResult();
+      }
+
+      const previousToken = this.host.secrets.read(TOKEN_SECRET_KEY);
+      const previousOwnerUserId = this.host.secrets.read(OWNER_USER_ID_SECRET_KEY);
+      const previousRuntimeOwnerUserId = this.ownerUserId;
+
+      const tokenSaved = token ? this.host.secrets.write(TOKEN_SECRET_KEY, token) : true;
+      const ownerSaved = ownerUserId
+        ? this.host.secrets.write(OWNER_USER_ID_SECRET_KEY, ownerUserId)
+        : true;
+      if (!tokenSaved || !ownerSaved) {
+        this.restoreSecret(TOKEN_SECRET_KEY, previousToken);
+        this.restoreSecret(OWNER_USER_ID_SECRET_KEY, previousOwnerUserId);
+        this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
+        this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+        return configResult();
+      }
+
+      const nextOwnerUserId = ownerUserId || this.ownerUserId;
+      if (token) {
+        this.configVersion += 1;
+        await this.stopPolling();
+        this.ownerUserId = nextOwnerUserId;
+        const connected = await this.connect(token);
+        if (!connected) {
+          const failedStatus = this.status;
+          this.restoreSecret(TOKEN_SECRET_KEY, previousToken);
+          this.restoreSecret(OWNER_USER_ID_SECRET_KEY, previousOwnerUserId);
+          this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
+          const previous = previousToken?.trim();
+          if (previous) {
+            this.configVersion += 1;
+            await this.connect(previous);
+          }
+          return configResult(failedStatus);
+        }
+        const noticeConfigVersion = this.configVersion;
+        await this.sendOwnerNoticeWithTimeout(
+          nextOwnerUserId,
+          'linked',
+          OWNER_NOTICE_TIMEOUT_MS,
+          () => this.configVersion === noticeConfigVersion && this.ownerUserId === nextOwnerUserId,
+        );
+      } else if (nextOwnerUserId !== this.ownerUserId) {
+        this.configVersion += 1;
+        this.ownerUserId = nextOwnerUserId;
+      }
+      return configResult();
+    });
+
+    this.host.ipc.handle('telegramBot:get-status', () => ({
+      status: this.status,
+      ownerUserId: this.ownerUserId || null,
+      botUsername: this.botUsername || null,
+    }));
+
+    this.host.ipc.handle('telegramBot:disconnect', async () => {
+      this.configVersion += 1;
+      const disconnectedOwnerUserId = this.ownerUserId;
+      // 顺手清掉 owner scope 的命令菜单(解绑后菜单残留会误导)。
+      if (this.api && disconnectedOwnerUserId) {
+        void this.api
+          .call('deleteMyCommands', {
+            scope: { type: 'chat', chat_id: Number(disconnectedOwnerUserId) },
+          })
+          .catch(() => {});
+      }
+      this.ownerUserId = '';
+      await this.sendOwnerNoticeWithTimeout(
+        disconnectedOwnerUserId,
+        'disconnected',
+        OWNER_NOTICE_TIMEOUT_MS,
+        () => !this.ownerUserId,
+      );
+      this.host.secrets.remove(TOKEN_SECRET_KEY);
+      this.host.secrets.remove(OWNER_USER_ID_SECRET_KEY);
+      this.host.secrets.remove(LEGACY_RUNTIME_ACTIVE_SECRET_KEY);
+      this.host.secrets.remove(UPDATES_OFFSET_SECRET_KEY);
+      await this.stopPolling();
+      this.setStatus({ kind: 'idle' });
+      return { status: this.status };
+    });
+  }
+
+  // ── inbound subscriptions ──────────────────────────────────────────────────
+
+  onMessage(handler: MessageHandler): () => void {
+    this.messageHandlers.add(handler);
+    return () => this.messageHandlers.delete(handler);
+  }
+
+  onCardAction(handler: CardActionHandler): () => void {
+    this.cardActionHandlers.add(handler);
+    return () => this.cardActionHandlers.delete(handler);
+  }
+
+  onStatusChange(handler: StatusHandler): () => void {
+    this.statusHandlers.add(handler);
+    return () => this.statusHandlers.delete(handler);
+  }
+
+  /** 群窗口数据面订阅(desktop main 的 groupWindow 存储挂这里)。 */
+  onGroupWindowMessage(handler: GroupWindowHandler): () => void {
+    this.groupWindowHandlers.add(handler);
+    return () => this.groupWindowHandlers.delete(handler);
+  }
+
+  // ── outbound ───────────────────────────────────────────────────────────────
+
+  async sendText(userId: string, text: string): Promise<{ messageId: string }> {
+    // 独立输出(命令回复/notice/turn 未及流式即失败的报错): 本轮没有已领取
+    // 的回挂目标时从队列领取 — 这类输出就是对触发消息的直接响应。
+    this.claimTurnReplyTargetIfIdle(userId);
+    return this.sendPlainChunked(userId, text);
+  }
+
+  async sendMarkdownText(userId: string, markdown: string): Promise<{ messageId: string }> {
+    // 与 sendText/卡片同口径: 独立 markdown 输出(slash 命令回复等)也要
+    // 认领回挂目标, 否则命令回复不挂回、队列残留错配到下一轮。
+    this.claimTurnReplyTargetIfIdle(userId);
+    const chunks = chunkTelegramSource(markdown);
+    let firstMessageId = '';
+    const allImageUrls: string[] = [];
+    for (const chunk of chunks) {
+      const { messageId, imageUrls } = await this.sendRenderedChunk(userId, chunk);
+      if (!firstMessageId) firstMessageId = messageId;
+      allImageUrls.push(...imageUrls);
+    }
+    if (allImageUrls.length > 0 && firstMessageId) {
+      await this.uploadImages(firstMessageId, allImageUrls);
+    }
+    return { messageId: firstMessageId };
+  }
+
+  async sendInteractiveCard(
+    userId: string,
+    spec: InteractiveCardSpec,
+  ): Promise<{ messageId: string }> {
+    this.claimTurnReplyTargetIfIdle(userId);
+    const target = this.targetOf(userId);
+    const { html, replyMarkup } = buildCardPayload(spec);
+    const sent = await this.callSend<TgMessage>('sendMessage', {
+      ...target,
+      ...this.consumeReplyParams(userId),
+      text: html,
+      parse_mode: 'HTML',
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+    });
+    this.recordOwnEcho(userId, spec.title ? `[${spec.title}]` : spec.body.slice(0, 100), sent);
+    return { messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)) };
+  }
+
+  async updateInteractiveCard(messageId: string, spec: InteractiveCardSpec): Promise<void> {
+    const { chatId, messageId: nativeId } = decodeMessageId(messageId);
+    const { html, replyMarkup } = buildCardPayload(spec);
+    await this.editHtml(chatId, nativeId, html, replyMarkup);
+  }
+
+  async patchMarkdownCard(messageId: string, markdown: string): Promise<void> {
+    const { chatId, messageId: nativeId } = decodeMessageId(messageId);
+    const { html } = markdownToTelegramHtml(markdown);
+    await this.editHtml(chatId, nativeId, html, undefined);
+  }
+
+  async startStreamingText(userId: string, initial?: string): Promise<StreamingTextHandle> {
+    // DM(非 lane 合成 id)走 sendMessageDraft 原生流式草稿: turn 开始即原生
+    // "Thinking…" 占位动画, 中间态无真实消息、定稿才落聊天记录(#848 的
+    // answerOnly 补丁由该通道取代; draft 一旦失败 handle 内部 latch 回
+    // send+edit 经典路径, 且本实例后续 turn 不再尝试 draft)。
+    const isDm = decodeLaneUserId(userId) === null;
+    // 一轮输出开始: 从待配对队列领取本轮的回挂目标(见 claimTurnReplyTarget)。
+    this.claimTurnReplyTarget(userId);
+    const useDraft = isDm && !this.draftStreamingDisabled;
+    if (useDraft) this.draftIdCounter += 1;
+    const draftId = this.draftIdCounter;
+    return startTelegramStreaming(
+      {
+        send: async (markdown) => {
+          const { messageId } = await this.sendRenderedChunk(userId, markdown);
+          return messageId;
+        },
+        edit: async (messageId, markdown) => {
+          const { chatId, messageId: nativeId } = decodeMessageId(messageId);
+          const { html } = markdownToTelegramHtml(markdown);
+          await this.editHtml(chatId, nativeId, html, undefined);
+        },
+        uploadImages: (messageId, imageUrls) => this.uploadImages(messageId, imageUrls),
+        chunk: chunkTelegramSource,
+        extractImageUrls: (markdown) => markdownToTelegramHtml(markdown).imageUrls,
+        editFinal: (messageId, markdown) => this.richEditFinal(messageId, markdown),
+        deleteMessage: async (messageId) => {
+          const { chatId, messageId: nativeId } = decodeMessageId(messageId);
+          await this.requireApi().call('deleteMessage', {
+            chat_id: chatId,
+            message_id: Number(nativeId),
+          });
+        },
+        ...(useDraft
+          ? {
+              sendFinal: (markdown: string) => this.sendRichFinal(userId, markdown),
+              sendDraft: async (plainText: string) => {
+                try {
+                  await this.requireApi().call('sendMessageDraft', {
+                    chat_id: Number(userId),
+                    draft_id: draftId,
+                    text: plainText,
+                  });
+                } catch (err) {
+                  // 能力性失败(旧 Bot API server / 客户端不支持)永久 latch,
+                  // 不再逐 turn 白付一次往返; 瞬时失败(限流等)只影响本 turn。
+                  if (err instanceof TelegramApiError && err.errorCode === 400) {
+                    this.draftStreamingDisabled = true;
+                  }
+                  throw err;
+                }
+              },
+            }
+          : {}),
+      },
+      initial,
+    );
+  }
+
+  async sendFile(userId: string, absPath: string, displayName?: string): Promise<SendFileResult> {
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(absPath);
+    } catch {
+      return { ok: false, reason: 'NOT_FOUND' };
+    }
+    if (stat.size === 0) return { ok: false, reason: 'EMPTY' };
+    if (stat.size > MAX_OUTBOUND_FILE_BYTES) return { ok: false, reason: 'TOO_LARGE' };
+    const api = this.api;
+    if (!api) return { ok: false, reason: 'SEND_FAIL' };
+
+    try {
+      const target = this.targetOf(userId);
+      const form = new FormData();
+      form.set('chat_id', target.chat_id);
+      if (target.message_thread_id !== undefined) {
+        form.set('message_thread_id', String(target.message_thread_id));
+      }
+      const name = displayName ?? path.basename(absPath);
+      form.set('document', new Blob([fs.readFileSync(absPath)]), name);
+      const sent = await api.callForm<TgMessage>('sendDocument', form);
+      this.recordOwnEcho(userId, '', sent, [name]);
+      return { ok: true, messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)) };
+    } catch (err) {
+      if (err instanceof TelegramApiError && err.errorCode === 413) {
+        return { ok: false, reason: 'TOO_LARGE' };
+      }
+      return { ok: false, reason: 'UPLOAD_FAIL' };
+    }
+  }
+
+  async reactToMessage(messageId: string, emoji: string): Promise<string | null> {
+    const api = this.api;
+    if (!api) return null;
+    try {
+      const behavior = this.behaviorOf();
+      if (behavior.emojiReactions === 'off') return null;
+      if (this.ambientTriggerIds.has(messageId)) return null; // ambient 全静默
+      let effective = emoji;
+      if (behavior.emojiReactions === 'expressive') {
+        // 终态用变体池(生动档); ack(👀)保持稳重不随机。
+        if (emoji === '👍') {
+          effective = EXPRESSIVE_DONE_POOL[Math.floor(Math.random() * EXPRESSIVE_DONE_POOL.length)];
+        } else if (emoji === '👎') {
+          effective =
+            EXPRESSIVE_ERROR_POOL[Math.floor(Math.random() * EXPRESSIVE_ERROR_POOL.length)];
+        }
+      }
+      const { chatId, messageId: nativeId } = decodeMessageId(messageId);
+      const isBig = emoji === '👍' || emoji === '👎';
+      const react = (value: string) =>
+        api.call('setMessageReaction', {
+          chat_id: chatId,
+          message_id: Number(nativeId),
+          reaction: [{ type: 'emoji', emoji: value }],
+          // 终态表情放大动画; 过程 ack(👀)保持安静。
+          ...(isBig ? { is_big: true } : {}),
+        });
+      try {
+        await react(effective);
+        return effective;
+      } catch (err) {
+        // 变体在该群被 available_reactions 限制 → 回落基础款一次。
+        if (effective !== emoji && err instanceof TelegramApiError && err.errorCode === 400) {
+          await react(emoji);
+          return emoji;
+        }
+        throw err;
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  async removeMessageReaction(messageId: string): Promise<void> {
+    const api = this.api;
+    if (!api) return;
+    try {
+      const { chatId, messageId: nativeId } = decodeMessageId(messageId);
+      await api.call('setMessageReaction', {
+        chat_id: chatId,
+        message_id: Number(nativeId),
+        reaction: [],
+      });
+    } catch {
+      /* cleanup is best-effort */
+    }
+  }
+
+  getStatus(): IMStatus {
+    return this.status;
+  }
+
+  /** 当前 bot 的展示名(群窗口回流条目署名用)。 */
+  get botName(): string {
+    return this.botDisplayName || this.botUsername || 'bot';
+  }
+
+  /** 当前 bot 的 contextId(数字 id 字符串; 未连接为 '') — 群窗口按 bot 命名空间查询用。 */
+  get botContextId(): string {
+    return this.botId ? String(this.botId) : '';
+  }
+
+  // ── connect / polling ──────────────────────────────────────────────────────
+
+  private async connect(token: string): Promise<boolean> {
+    const api = (this.opts.apiFactory ?? createTelegramApiClient)(token);
+    this.setStatus({ kind: 'connecting' });
+    let me: TgUser;
+    try {
+      me = await api.call<TgUser>('getMe');
+    } catch (err) {
+      this.setStatus(mapConnectErrorToStatus(err));
+      return false;
+    }
+    this.api = api;
+    this.botId = me.id;
+    this.botUsername = me.username ?? '';
+    this.botDisplayName = me.first_name ?? '';
+    this.setStatus({ kind: 'connected', appId: String(me.id) });
+    this.startPolling(api);
+    this.registerOwnerCommandMenu();
+    return true;
+  }
+
+  /**
+   * 人格名字同步到 Telegram 资料页(setMyName)。空名 = 清除自定义名。
+   * 返回是否成功(限流/网络失败返回 false, 由设置卡提示重试)。
+   */
+  async syncBotProfileName(name: string): Promise<boolean> {
+    const api = this.api;
+    if (!api) return false;
+    try {
+      await api.call('setMyName', { name: name.slice(0, 64) });
+      // 名字召唤(detectGroupTrigger)按显示名匹配 — 同步成功即更新本地缓存,
+      // 不等下次 getMe。
+      this.botDisplayName = name.slice(0, 64);
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(`telegram setMyName failed: ${msg}`);
+      return false;
+    }
+  }
+
+  /**
+   * 把命令菜单注册到 owner 私聊 scope(best-effort, 失败静默)。
+   * scope 精准到 chat: 只有 owner 的输入框会出现 "/" 菜单。
+   */
+  private registerOwnerCommandMenu(): void {
+    const api = this.api;
+    const menu = this.opts.commandMenu;
+    if (!api || !menu?.length || !this.ownerUserId) return;
+    void api
+      .call('setMyCommands', {
+        commands: menu,
+        scope: { type: 'chat', chat_id: Number(this.ownerUserId) },
+      })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.log.warn(`telegram command menu register failed (non-fatal): ${msg}`);
+      });
+  }
+
+  private startPolling(api: TelegramApiClient): void {
+    const abort = new AbortController();
+    this.pollAbort = abort;
+    const generation = this.configVersion;
+    this.pollLoop = this.runPollLoop(api, abort, generation).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(`telegram poll loop exited unexpectedly: ${msg}`);
+    });
+  }
+
+  private async runPollLoop(
+    api: TelegramApiClient,
+    abort: AbortController,
+    generation: number,
+  ): Promise<void> {
+    let offset = this.readPersistedOffset();
+    this.lastSeenOffset = offset;
+    let retryDelay = POLL_RETRY_BASE_MS;
+    while (!abort.signal.aborted && this.configVersion === generation) {
+      try {
+        const updates = await api.call<TgUpdate[]>(
+          'getUpdates',
+          {
+            offset,
+            timeout: POLL_TIMEOUT_SEC,
+            allowed_updates: ['message', 'callback_query'],
+          },
+          abort.signal,
+        );
+        retryDelay = POLL_RETRY_BASE_MS;
+        if (this.status.kind !== 'connected') {
+          this.setStatus({ kind: 'connected', appId: String(this.botId) });
+        }
+        for (const update of updates) {
+          offset = Math.max(offset, update.update_id + 1);
+          this.lastSeenOffset = offset;
+          if (abort.signal.aborted || this.configVersion !== generation) return;
+          try {
+            await this.handleUpdate(update);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            this.log.warn(`telegram update handling failed: ${msg}`);
+          }
+        }
+        // 持久化游标不越过仍在缓冲的相册成员: settle 窗口内断开/换 token 时,
+        // 下次连接从相册首条重放, 不丢用户的图(getUpdates 的内存 offset 照常
+        // 前进, 本连接内不重复拉取)。flush 完成后由 persistOffsetCapped 补写。
+        if (updates.length > 0) this.persistOffsetCapped();
+      } catch (err) {
+        if (abort.signal.aborted || this.configVersion !== generation) return;
+        if (err instanceof TelegramApiError && err.errorCode === 409) {
+          this.setStatus({ kind: 'conflict', appId: String(this.botId) });
+          await sleep(POLL_CONFLICT_RETRY_MS, abort.signal);
+          continue;
+        }
+        if (err instanceof TelegramApiError && (err.errorCode === 401 || err.errorCode === 404)) {
+          this.setStatus({ kind: 'error', reason: 'invalid token' });
+          return;
+        }
+        // 网络抖动/超时: connecting + 指数退避重试。
+        if (this.status.kind === 'connected') this.setStatus({ kind: 'connecting' });
+        await sleep(retryDelay, abort.signal);
+        retryDelay = Math.min(retryDelay * 2, POLL_RETRY_MAX_MS);
+      }
+    }
+  }
+
+  private async stopPolling(): Promise<void> {
+    this.clearPendingAlbums();
+    this.pollAbort?.abort();
+    this.pollAbort = null;
+    if (this.pollLoop) {
+      try {
+        await this.pollLoop;
+      } catch {
+        /* swallow */
+      }
+      this.pollLoop = null;
+    }
+    this.api = null;
+  }
+
+  // ── update handling ────────────────────────────────────────────────────────
+
+  private async handleUpdate(update: TgUpdate): Promise<void> {
+    if (this.disposing) return;
+    if (update.callback_query) {
+      await this.handleCallbackQuery(update.callback_query);
+      return;
+    }
+    const m = update.message;
+    if (!m || !m.from) return;
+    if (m.from.id === this.botId) return; // 自身消息(某些客户端场景)不处理
+
+    // 相册成员先入群窗口(逐条, 幂等), turn 触发交给聚合器合并处理。
+    if (m.media_group_id) {
+      if (m.chat.type === 'group' || m.chat.type === 'supergroup') {
+        this.emitGroupWindow(groupWindowEntryOf(m));
+      }
+      this.bufferAlbumMessage(m, update.update_id);
+      return;
+    }
+
+    await this.processInboundMessage(m);
+  }
+
+  /** 相册成员缓冲 + 静默窗到期后合并处理。 */
+  private bufferAlbumMessage(m: TgMessage, updateId: number): void {
+    const key = `${m.chat.id}:${m.media_group_id}`;
+    const generation = this.configVersion;
+    const existing = this.pendingAlbums.get(key);
+    if (existing) {
+      existing.messages.push(m);
+      clearTimeout(existing.timer);
+    }
+    const messages = existing?.messages ?? [m];
+    const firstUpdateId = existing?.firstUpdateId ?? updateId;
+    const timer = setTimeout(() => {
+      this.pendingAlbums.delete(key);
+      if (this.disposing || this.configVersion !== generation) return;
+      // 有正文/引用的成员当主消息(caption 通常只挂在其中一条上)。
+      const primary =
+        messages.find((x) => (x.text ?? x.caption ?? '') !== '' || x.reply_to_message) ??
+        messages[0];
+      const siblings = messages.filter((x) => x !== primary);
+      void this.processInboundMessage(primary, siblings, { skipGroupWindow: true })
+        .catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.log.warn(`telegram album handling failed: ${msg}`);
+        })
+        .finally(() => {
+          // 相册已处理(或确定失败) — 持久化游标此刻才允许越过它。
+          if (!this.disposing && this.configVersion === generation) this.persistOffsetCapped();
+        });
+    }, ALBUM_SETTLE_MS);
+    this.pendingAlbums.set(key, { messages, timer, firstUpdateId });
+  }
+
+  private clearPendingAlbums(): void {
+    for (const { timer } of this.pendingAlbums.values()) clearTimeout(timer);
+    this.pendingAlbums.clear();
+  }
+
+  private async processInboundMessage(
+    m: TgMessage,
+    siblings: TgMessage[] = [],
+    opts: { skipGroupWindow?: boolean } = {},
+  ): Promise<void> {
+    if (!m.from) return;
+    if (m.chat.type === 'private') {
+      if (String(m.from.id) !== this.ownerUserId) {
+        // 非 owner 私聊: 礼貌回应一句(官方 bot unbound 提示的个人版语义),
+        // per-user 冷却防刷屏; 不进任何业务链路。
+        this.maybeSendStrangerNotice(String(m.from.id), String(m.chat.id), m.message_id);
+        return;
+      }
+      // 附件下载可达数秒 — 快照受理时的配置, 完成后配置已换代就丢弃
+      // (与 Discord 的 acceptedContext 模式同口径)。
+      const acceptedConfigVersion = this.configVersion;
+      const event = await normalizeMessage(m, {
+        api: this.requireApi(),
+        contextId: String(this.botId),
+        mediaDir: this.mediaDir,
+        ...(siblings.length > 0 ? { siblings } : {}),
+        ...(this.host.media ? { media: this.host.media } : {}),
+      });
+      if (this.disposing || this.configVersion !== acceptedConfigVersion) return;
+      if (this.behaviorOf().replyQuoteDm === 'first') {
+        this.queueReplyTarget(String(m.from.id), String(m.message_id));
+      }
+      // DM 也要 typing: 草稿占位只在会话内部可见, 聊天列表/标题栏的
+      // 「正在输入…」靠 sendChatAction(Chris 2026-07-30 实测点名缺失)。
+      this.startTypingLoop(String(m.chat.id));
+      this.emitMessage(event);
+      return;
+    }
+
+    if (m.chat.type === 'group' || m.chat.type === 'supergroup') {
+      // 每条群消息(触发与否)都进本地窗口 — 群上下文的数据面。相册成员在
+      // 缓冲入口已逐条入窗, 这里跳过避免重复(入窗本身幂等, 跳过纯省一次写)。
+      if (!opts.skipGroupWindow) {
+        this.emitGroupWindow(groupWindowEntryOf(m));
+      }
+
+      let trigger = detectGroupTrigger(m, this.botId, this.botUsername, this.botDisplayName);
+      let ambient = false;
+      if (!trigger) {
+        // 全响应·自主判断(per-chat 配置): 未被召唤的消息也进 turn, 打 ambient
+        // 标记 — 业务层注入安静上下文, 模型可用 NO_REPLY 沉默。
+        const activation = this.behaviorOf().groupActivation?.[String(m.chat.id)] ?? 'mention';
+        if (activation !== 'always') return;
+        const plain = (m.text ?? m.caption ?? '').trim();
+        if (!plain) return; // 纯媒体/服务消息不进 ambient turn
+        trigger = { text: plain };
+        ambient = true;
+      }
+      const isOwner = String(m.from.id) === this.ownerUserId;
+      {
+        const probe = trigger.text.trimStart();
+        const isCommand = probe.startsWith('/') || probe.startsWith('!');
+        // 命令永远 owner 专属且必须显式召唤: 成员命令静默丢(群里不可被探测,
+        // 对标 OpenClaw/Hermes); ambient 路径不消费任何人的命令。
+        if (isCommand && (!isOwner || ambient)) return;
+      }
+      const laneUserId = this.resolveGroupLane(m);
+      if (this.behaviorOf().replyQuoteGroup !== 'off') {
+        this.queueReplyTarget(laneUserId, String(m.message_id));
+      }
+      if (ambient) {
+        // ambient 全静默: 不 typing、不表情(说不说话都不能打扰群)。
+        this.ambientTriggerIds.add(`${m.chat.id}|${m.message_id}`);
+        if (this.ambientTriggerIds.size > 512) {
+          const oldest = this.ambientTriggerIds.values().next().value;
+          if (oldest !== undefined) this.ambientTriggerIds.delete(oldest);
+        }
+      } else {
+        // 被召唤即出 typing 并持续续命到首条输出 — "收到了, 在干活"。
+        this.startTypingLoop(
+          String(m.chat.id),
+          m.is_topic_message === true ? m.message_thread_id : undefined,
+        );
+      }
+      const acceptedConfigVersion = this.configVersion;
+      const event = await normalizeMessage(m, {
+        api: this.requireApi(),
+        contextId: String(this.botId),
+        mediaDir: this.mediaDir,
+        overrideText: trigger.text,
+        laneUserId,
+        ...(siblings.length > 0 ? { siblings } : {}),
+        ...(this.host.media ? { media: this.host.media } : {}),
+      });
+      if (this.disposing || this.configVersion !== acceptedConfigVersion) return;
+      this.emitMessage({
+        ...event,
+        speaker: {
+          id: String(m.from.id),
+          name:
+            [m.from.first_name, m.from.last_name].filter(Boolean).join(' ') || String(m.from.id),
+          ...(m.from.username ? { username: m.from.username } : {}),
+          isOwner,
+        },
+        ...(ambient ? { ambient: true } : {}),
+      });
+    }
+    // channel 消息不支持(bot 作为频道管理员的广播场景不在个人助理语义内)。
+  }
+
+  private async handleCallbackQuery(q: import('./api.js').TgCallbackQuery): Promise<void> {
+    const api = this.api;
+    if (!api) return;
+    // 无论结果如何都先应答, 消掉客户端 loading 态。
+    void api.call('answerCallbackQuery', { callback_query_id: q.id }).catch(() => undefined);
+    if (String(q.from.id) !== this.ownerUserId) return;
+    const event = parseCallbackQuery(q);
+    if (!event) {
+      const notice = this.opts.expiredCardNotice ?? DEFAULT_EXPIRED_CARD_NOTICE;
+      void api
+        .call('answerCallbackQuery', { callback_query_id: q.id, text: notice, show_alert: true })
+        .catch(() => undefined);
+      return;
+    }
+    for (const h of this.cardActionHandlers) {
+      try {
+        h(event);
+      } catch {
+        /* swallow */
+      }
+    }
+  }
+
+  private emitMessage(event: IMMessageEvent): void {
+    for (const h of this.messageHandlers) {
+      try {
+        h(event);
+      } catch {
+        /* swallow */
+      }
+    }
+  }
+
+  private emitGroupWindow(entry: Omit<TelegramGroupWindowEntry, 'botId'>): void {
+    // botId 统一在此注入 — 窗口存储按 bot 命名空间隔离(换绑不串史)。
+    const full: TelegramGroupWindowEntry = { ...entry, botId: String(this.botId) };
+    for (const h of this.groupWindowHandlers) {
+      try {
+        h(full);
+      } catch {
+        /* swallow */
+      }
+    }
+  }
+
+  // ── outbound helpers ───────────────────────────────────────────────────────
+
+  /**
+   * 群消息 → lane 归属(OpenClaw 同款会话模型, Chris 2026-07-30 拍板):
+   * **一个群一条持久 lane** `g/{chatId}` — 群公共上下文连续, 所有成员(含
+   * owner)共享同一条会话, bot 靠发言人标签区分谁在说话。仅论坛型群组真带
+   * message_thread_id 的消息按 topic 分流(普通群完全无感)。
+   */
+  private resolveGroupLane(m: TgMessage): string {
+    return encodeLaneUserId(String(m.chat.id), laneThreadIdOf(m));
+  }
+
+  /** userId → sendMessage 目标参数(私聊 chat_id = user id; lane 解码回群)。 */
+  private targetOf(userId: string): { chat_id: string; message_thread_id?: number } {
+    const lane = decodeLaneUserId(userId);
+    if (!lane) return { chat_id: userId };
+    if (!lane.threadId) return { chat_id: lane.chatId };
+    return { chat_id: lane.chatId, message_thread_id: Number(lane.threadId) };
+  }
+
+  /** 触发消息入队(等待与它的那一轮输出配对)。 */
+  private queueReplyTarget(userId: string, messageId: string): void {
+    const queue = this.pendingReplyTargets.get(userId) ?? [];
+    queue.push({ id: messageId, at: Date.now() });
+    while (queue.length > 32) queue.shift();
+    this.pendingReplyTargets.set(userId, queue);
+  }
+
+  /**
+   * 一轮输出开始(流式句柄创建)时从队头领取本轮回挂目标。lane 的 turn 串行,
+   * 触发顺序 = 输出顺序, FIFO 即正确配对。掉队条目(如某轮在产出前失败, 其
+   * 目标从未被领取)按 15 分钟时效丢弃, 防止错位配对无限传递。
+   */
+  private claimTurnReplyTarget(userId: string): void {
+    const queue = this.pendingReplyTargets.get(userId);
+    const cutoff = Date.now() - 15 * 60_000;
+    while (queue && queue.length > 0 && queue[0].at < cutoff) queue.shift();
+    const next = queue?.shift();
+    if (queue && queue.length === 0) this.pendingReplyTargets.delete(userId);
+    if (next) this.turnReplyTargets.set(userId, next.id);
+    else this.turnReplyTargets.delete(userId);
+  }
+
+  /** 独立输出入口用: 本轮没有已领取目标且队列有货时才领取(不动流式轮的语义)。 */
+  private claimTurnReplyTargetIfIdle(userId: string): void {
+    if (this.turnReplyTargets.has(userId)) return;
+    if (!this.pendingReplyTargets.has(userId)) return;
+    this.claimTurnReplyTarget(userId);
+  }
+
+  /**
+   * 本轮回挂目标 → reply_parameters(首条出站专用)。
+   * allow_sending_without_reply: 触发消息被删时降级为普通消息, 不让发送失败。
+   */
+  private consumeReplyParams(
+    userId: string,
+  ): { reply_parameters: { message_id: number; allow_sending_without_reply: true } } | Record<string, never> {
+    const target = this.turnReplyTargets.get(userId);
+    if (!target) return {};
+    // 群 'all' 档: 目标保留整轮(下一轮 claim 时被替换/清除), 每条出站都挂回。
+    const keepForAll =
+      decodeLaneUserId(userId) !== null && this.behaviorOf().replyQuoteGroup === 'all';
+    if (!keepForAll) this.turnReplyTargets.delete(userId);
+    return {
+      reply_parameters: { message_id: Number(target), allow_sending_without_reply: true },
+    };
+  }
+
+
+  private requireApi(): TelegramApiClient {
+    if (!this.api) throw new Error('telegram api is not connected');
+    return this.api;
+  }
+
+  /** 429 退避一次重试; 'message is not modified' 静默。 */
+  private async callSend<T>(method: string, params: Record<string, unknown>): Promise<T> {
+    const api = this.requireApi();
+    // 首条真实消息即将出现 — typing 使命完成(客户端收到消息也会自动清)。
+    if (typeof params.chat_id === 'string' || typeof params.chat_id === 'number') {
+      this.stopTypingLoopsForChat(String(params.chat_id));
+    }
+    try {
+      return await api.call<T>(method, params);
+    } catch (err) {
+      if (err instanceof TelegramApiError && err.errorCode === 429) {
+        await sleep(Math.min((err.retryAfterSec ?? 3) * 1000, 10_000));
+        return api.call<T>(method, params);
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Rich 定稿(Bot API 10.1 sendRichMessage, markdown 直投): 表格/标题/代码块/
+   * LaTeX 原生渲染, 32768 上限一条到底不分段。仅 DM 定稿路径尝试;
+   *   - 404 = 方法不可用(旧 Bot API server) → 实例级永久 latch;
+   *   - 400 = 本条内容 rich 解析不过 → 只本条回落, rich 保持可用;
+   *   - 其它错误(网络/限流)回落经典路径, 不 latch。
+   * DM 定稿顺带 message_effect_id(👍 特效, 仅私聊生效)。
+   */
+  private async sendRichFinal(userId: string, markdown: string): Promise<string | null> {
+    if (this.richSendDisabled || !markdown.trim()) return null;
+    const api = this.api;
+    if (!api) return null;
+    // 只读取不消耗: rich 失败(404 latch/400 解析/网络)回落经典路径时,
+    // 目标必须还在, 否则定稿消息丢掉回挂。成功后才按档位消耗。
+    const pendingTarget = this.turnReplyTargets.get(userId);
+    try {
+      const target = this.targetOf(userId);
+      const sent = await this.callSend<TgMessage>('sendRichMessage', {
+        ...target,
+        ...(pendingTarget
+          ? {
+              reply_parameters: {
+                message_id: Number(pendingTarget),
+                allow_sending_without_reply: true,
+              },
+            }
+          : {}),
+        rich_message: { markdown },
+        message_effect_id: DM_DONE_EFFECT_ID,
+      });
+      if (pendingTarget) this.consumeReplyParams(userId); // 成功才消耗('all' 档语义由它处理)
+      this.recordOwnEcho(userId, markdown, sent);
+      return encodeMessageId(String(sent.chat.id), String(sent.message_id));
+    } catch (err) {
+      if (err instanceof TelegramApiError && err.errorCode === 404) {
+        this.richSendDisabled = true;
+      }
+      return null;
+    }
+  }
+
+  /**
+   * 经典路径 rich 原地定稿(editMessageText + rich_message, Bot API 10.1):
+   * 群与降级档 DM 的流式占位消息一步升级 rich 渲染。404 → 实例级 latch;
+   * 400(本条解析不过)只回落本条。
+   */
+  private async richEditFinal(messageId: string, markdown: string): Promise<boolean> {
+    if (this.richSendDisabled || !markdown.trim()) return false;
+    const api = this.api;
+    if (!api) return false;
+    try {
+      const { chatId, messageId: nativeId } = decodeMessageId(messageId);
+      await api.call('editMessageText', {
+        chat_id: chatId,
+        message_id: Number(nativeId),
+        rich_message: { markdown },
+      });
+      return true;
+    } catch (err) {
+      if (err instanceof TelegramApiError && err.errorCode === 404) {
+        this.richSendDisabled = true;
+      }
+      return false;
+    }
+  }
+
+  /** 单段 markdown → HTML 发送; parse 失败回退纯文本(agent 输出偶发怪标记)。 */
+  private async sendRenderedChunk(
+    userId: string,
+    markdownChunk: string,
+  ): Promise<{ messageId: string; imageUrls: string[] }> {
+    const target = this.targetOf(userId);
+    const replyParams = this.consumeReplyParams(userId);
+    const { html, imageUrls } = markdownToTelegramHtml(markdownChunk);
+    let sent: TgMessage;
+    try {
+      sent = await this.callSend<TgMessage>('sendMessage', {
+        ...target,
+        ...replyParams,
+        text: html || '…',
+        parse_mode: 'HTML',
+        link_preview_options: { is_disabled: true },
+      });
+    } catch (err) {
+      if (err instanceof TelegramApiError && err.errorCode === 400) {
+        sent = await this.callSend<TgMessage>('sendMessage', {
+          ...target,
+          ...replyParams,
+          text: markdownChunk || '…',
+          link_preview_options: { is_disabled: true },
+        });
+      } else {
+        throw err;
+      }
+    }
+    this.recordOwnEcho(userId, markdownChunk, sent);
+    return {
+      messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)),
+      imageUrls,
+    };
+  }
+
+  private async sendPlainChunked(userId: string, text: string): Promise<{ messageId: string }> {
+    const target = this.targetOf(userId);
+    let firstMessageId = '';
+    for (const chunk of chunkTelegramSource(text)) {
+      const sent = await this.callSend<TgMessage>('sendMessage', {
+        ...target,
+        ...(firstMessageId === '' ? this.consumeReplyParams(userId) : {}),
+        text: chunk || '…',
+        link_preview_options: { is_disabled: true },
+      });
+      if (!firstMessageId) {
+        firstMessageId = encodeMessageId(String(sent.chat.id), String(sent.message_id));
+      }
+      this.recordOwnEcho(userId, chunk, sent);
+    }
+    return { messageId: firstMessageId };
+  }
+
+  private async editHtml(
+    chatId: string,
+    nativeMessageId: string,
+    html: string,
+    replyMarkup: unknown,
+  ): Promise<void> {
+    try {
+      await this.callSend('editMessageText', {
+        chat_id: chatId,
+        message_id: Number(nativeMessageId),
+        text: html || '…',
+        parse_mode: 'HTML',
+        link_preview_options: { is_disabled: true },
+        ...(replyMarkup !== undefined ? { reply_markup: replyMarkup } : {}),
+      });
+    } catch (err) {
+      if (err instanceof TelegramApiError && /not modified/i.test(err.message)) return;
+      if (err instanceof TelegramApiError && err.errorCode === 400) {
+        // HTML parse 失败: 剥标签退回纯文本编辑(宁可丢格式不丢内容)。
+        await this.callSend('editMessageText', {
+          chat_id: chatId,
+          message_id: Number(nativeMessageId),
+          text: stripTelegramHtmlTags(html) || '…',
+          link_preview_options: { is_disabled: true },
+        }).catch((fallbackErr) => {
+          if (fallbackErr instanceof TelegramApiError && /not modified/i.test(fallbackErr.message)) {
+            return;
+          }
+          throw fallbackErr;
+        });
+        return;
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * 受管图片(cindy-media/xdt-image url 或 `abs:` 前缀绝对路径)出站。
+   * 2 张起自动合成原生相册(sendMediaGroup, 每组 ≤10 — Telegram 上限),
+   * 客户端渲染为整齐的图集而不是刷屏的一串独立消息; 单张走 sendPhoto;
+   * 相册整组失败回落逐张(部分文件缺失/超限时不拖累其余)。
+   */
+  private async uploadImages(messageId: string, imageRefs: string[]): Promise<void> {
+    const api = this.api;
+    if (!api || imageRefs.length === 0) return;
+    // 图片以 reply 挂回答案锚点消息: 论坛 topic 内自动跟随该 topic(裸发会
+    // 落进 General), 视觉上也和答案连成一体; 锚点被删则降级普通发送。
+    const { chatId, messageId: anchorNativeId } = decodeMessageId(messageId);
+    const anchorReply = {
+      reply_parameters: {
+        message_id: Number(anchorNativeId),
+        allow_sending_without_reply: true as const,
+      },
+    };
+    const seen = new Set<string>();
+    const absPaths: string[] = [];
+    for (const ref of imageRefs) {
+      let absPath: string | null = null;
+      if (ref.startsWith('abs:')) {
+        absPath = ref.slice(4);
+      } else if (this.opts.resolveImageUrl) {
+        try {
+          absPath = this.opts.resolveImageUrl(ref);
+        } catch {
+          absPath = null;
+        }
+      }
+      if (!absPath || seen.has(absPath)) continue;
+      seen.add(absPath);
+      absPaths.push(absPath);
+    }
+    if (absPaths.length === 1) {
+      await this.sendSinglePhoto(chatId, absPaths[0], anchorReply);
+      return;
+    }
+    for (let i = 0; i < absPaths.length; i += 10) {
+      const group = absPaths.slice(i, i + 10);
+      const albumSent = group.length > 1 && (await this.sendPhotoAlbum(chatId, group, anchorReply));
+      if (!albumSent) {
+        for (const absPath of group) await this.sendSinglePhoto(chatId, absPath, anchorReply);
+      }
+    }
+  }
+
+  private behaviorOf(): TelegramBehaviorConfig {
+    try {
+      return this.opts.behavior?.() ?? TELEGRAM_DEFAULT_BEHAVIOR;
+    } catch {
+      return TELEGRAM_DEFAULT_BEHAVIOR;
+    }
+  }
+
+  /**
+   * 持续 typing: 立即打一次 sendChatAction 并按 4.5s 续命(原生 typing 只显
+   * ~5s), 首条真实消息发出(callSend)即停; 5 分钟兜底上限。聊天列表与标题栏
+   * 的「正在输入…」由它保证 — DM 的草稿占位只在会话内部可见, 不能替代。
+   */
+  private startTypingLoop(chatId: string, messageThreadId?: number): void {
+    const key = `${chatId}:${messageThreadId ?? ''}`;
+    const existing = this.typingLoops.get(key);
+    if (existing) {
+      existing.startedAt = Date.now(); // 同 chat 追问: 续租, 不叠循环
+      return;
+    }
+    this.sendTypingAction(chatId, messageThreadId);
+    const timer = setInterval(() => {
+      const loop = this.typingLoops.get(key);
+      if (!loop || Date.now() - loop.startedAt > TYPING_LOOP_MAX_MS || this.disposing) {
+        this.stopTypingLoop(key);
+        return;
+      }
+      this.sendTypingAction(chatId, messageThreadId);
+    }, TYPING_REFRESH_MS);
+    this.typingLoops.set(key, { timer, startedAt: Date.now() });
+  }
+
+  private stopTypingLoop(key: string): void {
+    const loop = this.typingLoops.get(key);
+    if (!loop) return;
+    clearInterval(loop.timer);
+    this.typingLoops.delete(key);
+  }
+
+  /** 该 chat 的所有 typing 循环全停(首条真实消息已到, 客户端会自动清 typing)。 */
+  private stopTypingLoopsForChat(chatId: string): void {
+    for (const key of [...this.typingLoops.keys()]) {
+      if (key.startsWith(`${chatId}:`)) this.stopTypingLoop(key);
+    }
+  }
+
+  private clearAllTypingLoops(): void {
+    for (const key of [...this.typingLoops.keys()]) this.stopTypingLoop(key);
+  }
+
+  /** fire-and-forget typing 状态(失败静默 — 纯体验增强, 不参与正确性)。 */
+  private sendTypingAction(chatId: string, messageThreadId?: number): void {
+    const api = this.api;
+    if (!api) return;
+    void api
+      .call('sendChatAction', {
+        chat_id: chatId,
+        action: 'typing',
+        ...(messageThreadId !== undefined ? { message_thread_id: messageThreadId } : {}),
+      })
+      .catch(() => {
+        /* 无权限/限流一律静默 */
+      });
+  }
+
+  private async sendSinglePhoto(
+    chatId: string,
+    absPath: string,
+    anchorReply?: { reply_parameters: { message_id: number; allow_sending_without_reply: true } },
+  ): Promise<void> {
+    const api = this.api;
+    if (!api) return;
+    try {
+      const form = new FormData();
+      form.set('chat_id', chatId);
+      if (anchorReply) form.set('reply_parameters', JSON.stringify(anchorReply.reply_parameters));
+      form.set('photo', new Blob([fs.readFileSync(absPath)]), path.basename(absPath));
+      await api.callForm('sendPhoto', form);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(`telegram image upload failed: ${msg}`);
+    }
+  }
+
+  /** 多图原生相册(attach:// 多部分上传)。返回 false = 整组失败, 调用方回落逐张。 */
+  private async sendPhotoAlbum(
+    chatId: string,
+    absPaths: string[],
+    anchorReply?: { reply_parameters: { message_id: number; allow_sending_without_reply: true } },
+  ): Promise<boolean> {
+    const api = this.api;
+    if (!api) return false;
+    try {
+      const form = new FormData();
+      form.set('chat_id', chatId);
+      if (anchorReply) form.set('reply_parameters', JSON.stringify(anchorReply.reply_parameters));
+      form.set(
+        'media',
+        JSON.stringify(absPaths.map((_, i) => ({ type: 'photo', media: `attach://photo${i}` }))),
+      );
+      absPaths.forEach((absPath, i) => {
+        form.set(`photo${i}`, new Blob([fs.readFileSync(absPath)]), path.basename(absPath));
+      });
+      await api.callForm('sendMediaGroup', form);
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.log.warn(`telegram album upload failed, fallback to singles: ${msg}`);
+      return false;
+    }
+  }
+
+  /**
+   * 自己发进群 lane 的消息回流进群窗口(与官方通道 server 回流 isBot 条目
+   * 同语义) — 让下一轮上下文里能看到 bot 自己说过什么。私聊不记录。
+   */
+  private recordOwnEcho(
+    userId: string,
+    text: string,
+    sent: TgMessage,
+    fileNames?: string[],
+  ): void {
+    const lane = decodeLaneUserId(userId);
+    if (!lane) return;
+    this.emitGroupWindow({
+      chatId: lane.chatId,
+      threadId: lane.threadId,
+      messageId: String(sent.message_id),
+      chatName: sent.chat.title ?? null,
+      author: { name: this.botName, isBot: true },
+      text,
+      ...(fileNames && fileNames.length > 0 ? { fileNames } : {}),
+      sentAt: sent.date * 1000,
+    });
+  }
+
+  // ── owner notices / secrets ────────────────────────────────────────────────
+
+  private restoreSecret(key: string, previousValue: string | null): void {
+    if (previousValue === null) {
+      this.host.secrets.remove(key);
+      return;
+    }
+    this.host.secrets.write(key, previousValue);
+  }
+
+  /** 持久化游标按 botId 命名空间 — 换 bot(token)后旧 offset 无意义, 归零。 */
+  private readPersistedOffset(): number {
+    const raw = this.host.secrets.read(UPDATES_OFFSET_SECRET_KEY);
+    if (!raw) return 0;
+    const separator = raw.indexOf(':');
+    if (separator <= 0) return 0;
+    if (raw.slice(0, separator) !== String(this.botId)) return 0;
+    const n = Number(raw.slice(separator + 1));
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
+  private persistOffset(offset: number): void {
+    try {
+      if (!this.host.secrets.isAvailable()) return;
+      this.host.secrets.write(UPDATES_OFFSET_SECRET_KEY, `${this.botId}:${offset}`);
+    } catch {
+      /* best-effort — 丢失只是退化回 at-least-once 重放 */
+    }
+  }
+
+  /**
+   * 持久化游标, 但不越过仍在 settle 缓冲的相册成员(取各缓冲相册最早
+   * update_id 为上限) — settle 窗口内进程退出/换 token 时, 下次连接从该
+   * 相册重放而不是永久丢弃。at-least-once 语义: flush 后崩溃且游标未及
+   * 补写时相册会重放一次, 比丢图可取。
+   */
+  private persistOffsetCapped(): void {
+    let floor = Number.POSITIVE_INFINITY;
+    for (const album of this.pendingAlbums.values()) {
+      floor = Math.min(floor, album.firstUpdateId);
+    }
+    this.persistOffset(Math.min(this.lastSeenOffset, floor));
+  }
+
+  /** 非 owner 显式召唤的礼貌回应(fire-and-forget, per-user 冷却)。 */
+  private maybeSendStrangerNotice(
+    userId: string,
+    chatId: string,
+    replyToMessageId: number,
+    opts: { messageThreadId?: number } = {},
+  ): void {
+    const now = Date.now();
+    const last = this.strangerNoticeAt.get(userId) ?? 0;
+    if (now - last < STRANGER_NOTICE_COOLDOWN_MS) return;
+    this.strangerNoticeAt.set(userId, now);
+    if (this.strangerNoticeAt.size > 500) {
+      const oldest = this.strangerNoticeAt.keys().next().value;
+      if (oldest !== undefined) this.strangerNoticeAt.delete(oldest);
+    }
+    const api = this.api;
+    if (!api) return;
+    void api
+      .call('sendMessage', {
+        chat_id: chatId,
+        text: this.opts.strangerNotice?.trim() || DEFAULT_STRANGER_NOTICE,
+        reply_parameters: { message_id: replyToMessageId, allow_sending_without_reply: true },
+        ...(opts.messageThreadId !== undefined
+          ? { message_thread_id: opts.messageThreadId }
+          : {}),
+      })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.log.warn(`stranger notice failed (non-fatal): ${msg}`);
+      });
+  }
+
+
+  private async sendOwnerNoticeWithTimeout(
+    userId: string,
+    phase: OwnerNoticePhase,
+    timeoutMs: number,
+    isCurrent?: () => boolean,
+  ): Promise<boolean> {
+    if (!userId || !this.api) return false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      return await Promise.race([
+        (async () => {
+          if (isCurrent && !isCurrent()) return false;
+          const text = this.resolveOwnerNoticeText(phase);
+          await this.callSend('sendMessage', { chat_id: userId, text });
+          return true;
+        })().catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.log.warn(`telegram owner ${phase} notice failed: ${msg}`);
+          return false;
+        }),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private resolveOwnerNoticeText(phase: OwnerNoticePhase): string {
+    const configured = this.opts.ownerNoticeText;
+    const text = typeof configured === 'function' ? configured(phase) : configured?.[phase];
+    return text?.trim() || DEFAULT_OWNER_NOTICES[phase];
+  }
+
+  private setStatus(s: IMStatus): void {
+    this.status = s;
+    this.host.ipc.broadcast('telegramBot:status-change', {
+      status: s,
+      botUsername: this.botUsername || null,
+    });
+    for (const h of this.statusHandlers) {
+      try {
+        h(s);
+      } catch {
+        /* swallow */
+      }
+    }
+  }
+}
+
+export function createTelegramIM(host: IMHost, opts?: TelegramIMOptions): TelegramIM {
+  return new TelegramIM(host, opts);
+}
+
+export type { TelegramGroupWindowEntry } from './inbound.js';
+
+function laneUserIdOf(m: TgMessage): string {
+  return encodeLaneUserId(String(m.chat.id), laneThreadIdOf(m));
+}
+
+function mapConnectErrorToStatus(err: unknown): IMStatus {
+  if (err instanceof TelegramApiError) {
+    if (err.errorCode === 401 || err.errorCode === 404) {
+      return { kind: 'error', reason: 'invalid token' };
+    }
+    return { kind: 'error', reason: `telegram api ${err.errorCode}` };
+  }
+  return { kind: 'error', reason: 'network unreachable' };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, ms);
+    function done(): void {
+      signal?.removeEventListener('abort', done);
+      clearTimeout(timer);
+      resolve();
+    }
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}

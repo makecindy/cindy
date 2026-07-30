@@ -21,7 +21,9 @@
  *      turn 收口后自动 drain;
  *   4. 回推: turn.end 经当前连接发送; 连接不在线时缓存, 重连(onConnected)
  *      后按序补发 —— server 侧按 requestId 幂等。执行中的渲染快照经
- *      turn.progress 直发(不缓存不补发, 装饰性信息丢了无害)。
+ *      turn.progress 直发(不缓存不补发, 装饰性信息丢了无害)。**例外**: 续跑轮
+ *      (turn.reopen)的 turn.end 也直发不缓存 —— 那条渠道消息在断连瞬间已被
+ *      server 的孤儿收口改写并解绑 requestId, 补发只会被当未知 id 丢弃。
  *
  * 权限模式: dispatch 的 options.permissionMode 对「新建 session」生效 ——
  * runner 校验其属于目标 agent 的能力档位, 合法即用, 非法/缺省落
@@ -39,6 +41,8 @@ import {
   makeTaskAck,
   makeTurnEnd,
   makeTurnProgress,
+  makeTurnReopen,
+  HOOK_FEATURE_TURN_REOPEN,
   type HookMessage,
   type InteractionButton,
   type InteractionDecisionPayload,
@@ -65,10 +69,73 @@ export interface HookSessionRunner {
   inspect(sessionId: string): Promise<{ workingDir: string | null; usable: boolean } | null>;
   /** 跑一个完整 turn, 收口(done / terminal error)后返回。 */
   run(req: HookRunRequest): Promise<HookRunOutcome>;
+  /**
+   * 观察一次「桌面端续跑」并把过程与结果回流(turn.reopen 链路, 见协议阶段 18)。
+   * 返回撤销函数(幂等)。未实现 = 该 runner 不支持回流, dispatcher 自动降级为
+   * 旧行为(渠道消息停在失败上)。
+   */
+  watchContinuation?(req: HookContinuationWatchRequest): () => void;
+}
+
+/**
+ * 一次续跑观察。dispatcher 在收到「用户在桌面端续跑了这个会话」信号后发起,
+ * runner 负责挂事件监听。
+ *
+ * 回调契约(dispatcher 依赖它来保证渠道消息不会卡在假的"进行中"):
+ *   - onClaim 最多一次, 在**观察器已就绪、这一轮确实要跑起来**时调。生产实现的调用
+ *     点是 pre-dispatch 归属点(dispatcher 已按 clientId 认定目标轮, vendor dispatch
+ *     即将发生), 所以不必也不该再等首个事件 —— 事件流是会话级的, 用"首个事件"当
+ *     认领判据反而会把别的轮次认成这一轮(那正是本能力早先的误认来源)。
+ *     会话已不在进程里 / 目录已撤权这类"压根跑不起来"的情形走 onAbandon;
+ *   - onClaim 调过之后, 必然恰好有一次 onEnd(正常收口 / 错误 / 硬超时);
+ *   - onClaim 没调过时, 必然恰好有一次 onAbandon(会话已不在 / 目录已撤权 / 被撤销)。
+ */
+export interface HookContinuationWatchRequest {
+  sessionId: string;
+  /** 原任务的目录(出站附件的允许根; runner 会用 live session 的实际目录复核)。 */
+  workingDir: string;
+  /** 原任务的来源标注(决定 Telegram / Slack 的进度渲染差异)。 */
+  source?: TaskSource;
+  /** 原任务的渠道形态; 与 run() 同判据地决定进度只发正文还是带过程区。 */
+  laneKind?: 'dm' | 'group';
+  /**
+   * "这个目录此刻还在本连接的工作目录映射内吗" —— 与 run() 的同名回调同语义, 用来
+   * 复核**真正要观察的那个 live session 的 workDir**。
+   *
+   * 必须复核: 记账里存的是失败那一轮的持久化目录, 而 live 实例可能仍跑在搬迁前的
+   * 旧目录里(run() 因 PR #733 review 已加这道校验)。若旧目录已被移出映射、而新目录
+   * 仍在, 只查记账就会放行, 于是续跑的输出与文件从一个已撤销的目录回流到渠道。
+   */
+  isDirAuthorized?: (dir: string) => boolean;
+  /** 观察器已就绪、这一轮就要跑起来 —— 此刻认领渠道那条消息(见上面的回调契约)。 */
+  onClaim: () => void;
+  /** 执行中渲染快照(仅 onClaim 之后)。 */
+  onProgress: (text: string) => void;
+  /**
+   * 已停止观察, 但终态还没算完(成功收口要先异步收集出站附件)。同步调, 且必然先于
+   * onEnd / onAbandon。
+   *
+   * dispatcher 用它把这一轮从"在观察"的账上摘掉, 从而让「表里还有这一轮」严格等价于
+   * 「它仍在观察」—— 有个推断依赖这个等价: 另一条用户轮居然 dispatch 了, 说明我们这轮
+   * 已不是活跃轮, 于是判定被 Stop 顶掉并就地收口。少了这一步, 附件收集那段时间里它还
+   * 挂在表上, 排在后面的桌面消息一 dispatch 就会被误判成顶替
+   * (review: "附件收集期间误判顶替")。发帧的闭包不受影响, 迟到的 onEnd 照样如实收口。
+   */
+  onSettling?: () => void;
+  /** 收口(仅 onClaim 之后)。 */
+  onEnd: (outcome: HookRunOutcome) => void;
+  /** 一个事件都没等到就放弃(onClaim 未发生)。 */
+  onAbandon: () => void;
 }
 
 export interface HookRunRequest {
   sessionId: string;
+  /**
+   * IM lane 形态(externalKey 派生): 'group' = 群/topic, 'dm' = 私聊。
+   * runner 据此决定进度快照是否携带过程时间线(群内可编辑消息适合过程卡,
+   * DM 的 Rich draft 动画不适合反复重排)。缺省按 'dm' 保守处理。
+   */
+  laneKind?: 'dm' | 'group';
   /** true = 新建 session(workingDir/title 生效); false = 复用/接管已有。 */
   isNew: boolean;
   workingDir: string;
@@ -157,6 +224,16 @@ export interface HookDispatcherDeps {
    */
   prepareWorktree?: (workingDir: string) => Promise<PrepareWorktreeResult>;
   /**
+   * 可选: 为派发组装本地群上下文前缀(group-relay-v1 窗口, 生产为
+   * groupWindow.buildGroupContextPrefix)。只影响发给 agent 的 prompt,
+   * 不影响会话标题与 UI 渲染(二者用 source.userText / 原始 prompt);
+   * 失败或空装配 = 无前缀, 绝不因上下文拒单。commit 在任务被受理
+   * (accepted/queued)后由本模块调用, 拒单不推进窗口游标。
+   */
+  buildContextPrefix?: (
+    payload: TaskDispatchPayload,
+  ) => Promise<{ prefix: string; commit: () => void }>;
+  /**
    * 可选: 内置「对话」伪目录(chat 保留别名)的解析面。rootDir 在每次
    * dispatch 时解析当前 data owner 的 app 托管目录根，allocateDir 为新会话
    * 分配独立子目录。
@@ -180,6 +257,38 @@ export interface HookDispatcherDeps {
    */
   resolveInteraction?: (interactionId: string, buttonId: string) => boolean;
   /**
+   * 可选: 订阅「用户在桌面端显式续跑了某会话」信号(生产为 maker-ipc 的
+   * onUiContinuation)。未注入 = 不做续跑回流, 渠道消息停在失败上(旧行为)。
+   * 返回退订函数, dispose 时调用。
+   */
+  subscribeUiContinuation?: (listener: (sessionId: string, clientId: string) => void) => () => void;
+  /**
+   * 可选: 订阅「桌面端在某会话里做了与续跑无关的事」(生产为 maker-ipc 的
+   * onUiSessionIntervention)。命中即作废该会话的待续跑记账 —— 记账只按 sessionId
+   * 记, 而普通桌面 turn 不经本模块; 没有这条, 一笔失败记账会一直躺着, 直到用户在
+   * 跑过别的 turn **之后**点重试, 那时会把那个无关 turn 的输出写进渠道原消息。
+   */
+  subscribeUiSessionIntervention?: (listener: (sessionId: string) => void) => () => void;
+  /**
+   * 可选: 订阅「这条消息即将 vendor dispatch」(生产为 maker-ipc 的 onUiTurnDispatching)。
+   *
+   * 这是续跑回流的**权威归属点**。续跑意图信号只说"用户点了重试", 说不出后面哪一轮
+   * 才是它 —— 观察器是会话级的, 靠"首个事件"认会把绕过 coordinator 的 turn
+   * (silent-stop 自动续跑)误认成目标轮。改用 clientId 匹配: 对上了才挂观察、才认领,
+   * 而本回调发生在 dispatch **之前**且被 await, 所以既不丢正文开头, live session 也
+   * 必然已就绪(马上就要 dispatch)。
+   */
+  subscribeUiTurnDispatching?: (
+    listener: (sessionId: string, clientId: string) => void,
+  ) => () => void;
+  /**
+   * 可选: 订阅「这条消息落库了却没能 dispatch」(取消 / 派发失败)。目标轮没起来,
+   * 记账立刻还回去 —— 不必等任何超时, 也不会把回流永久丢掉。
+   */
+  subscribeUiTurnUndispatched?: (
+    listener: (sessionId: string, clientId: string) => void,
+  ) => () => void;
+  /**
    * Production keeps ingress closed until the owner DB-ready callback opens
    * the account boundary. Tests and standalone consumers retain the historical
    * eager behavior unless they opt out explicitly.
@@ -195,8 +304,16 @@ export interface HookDispatcher {
     payload: TaskDispatchPayload,
     send: (m: HookMessage) => boolean,
   ): void;
-  /** 连接握手完成(welcome)后调用: 更新发送函数并补发离线期间积压的 turn.end。 */
-  onConnected(connectionId: string, send: (m: HookMessage) => boolean): void;
+  /**
+   * 连接握手完成(welcome)后调用: 更新发送函数并补发离线期间积压的 turn.end。
+   * features 为该连接本次 welcome 宣告的能力集(缺省 = 空, 按老 server 处理)——
+   * turn.reopen 只在 server 宣告支持时才用。
+   */
+  onConnected(
+    connectionId: string,
+    send: (m: HookMessage) => boolean,
+    features?: readonly string[],
+  ): void;
   /** transport 离线或失去已协商能力时调用，禁止继续向旧 socket 发送帧。 */
   onDisconnected(connectionId: string): void;
   /**
@@ -220,12 +337,30 @@ export interface HookDispatcher {
   activateAccount(): void;
   /** Close ingress, abort old-account turns and await their final async boundary. */
   deactivateAccount(): Promise<void>;
+  /**
+   * 彻底弃用本 dispatcher(退订进程级信号源)。与 deactivateAccount 不同:
+   * 后者是账号边界、之后还会 activate 回来, 本方法之后这个实例不再被使用。
+   * 幂等。
+   */
+  dispose(): void;
 }
 
 /** 单 session 排队上限 —— 超过按 rejected(invalid) 打回, 防失控上游刷爆。 */
 const MAX_QUEUE_PER_SESSION = 20;
 /** 单连接离线 turn.end 缓存上限(FIFO 丢最老)。 */
 const MAX_PENDING_TURN_ENDS = 100;
+
+/**
+ * 失败任务的续跑记账保留时长。
+ *
+ * 用户看到渠道里那条失败消息、打开桌面端点「重试」, 中间可能隔很久(下班前失败,
+ * 第二天早上才处理)。取 24h 让"当天内回来点重试"都能接回; 更久的意义不大, 而且
+ * server 侧那条消息的位置映射也未必还在(它认不出 reopenOf 时会静默忽略, 所以两端
+ * TTL 不必对齐, 最坏就是回到"消息停在失败上")。
+ */
+const REOPEN_TTL_MS = 24 * 60 * 60_000;
+/** 续跑记账条数上限(FIFO 淘汰最老), 同 ackHistory 语义: 防长驻进程无界增长。 */
+const MAX_PENDING_REOPENS = 200;
 
 /**
  * 原对话不再落在工作目录映射内时(被移到映射外的项目, 或映射本身被改/删),
@@ -252,6 +387,7 @@ const NOTICE_SESSION_GONE = 'ℹ️ 原对话现在读不到（可能已被归�
 const TITLE_SNIPPET_MAX = 24;
 /** Server-controlled source metadata is persisted and rendered, so keep it bounded locally too. */
 const SOURCE_USER_TEXT_MAX = 20_000;
+const SOURCE_TRIGGER_MESSAGE_ID_MAX = 64;
 const SOURCE_CHANNEL_NAME_MAX = 160;
 const SOURCE_TEAM_ID_MAX = 128;
 const SOURCE_TEAM_NAME_MAX = 160;
@@ -290,6 +426,14 @@ export function normalizeTaskSource(source: TaskSource): TaskSource {
     ...(threadContext !== undefined ? { threadContext } : {}),
     ...(source.userText !== undefined
       ? { userText: source.userText.slice(0, SOURCE_USER_TEXT_MAX) }
+      : {}),
+    ...(source.triggerMessageId !== undefined
+      ? {
+          triggerMessageId:
+            source.triggerMessageId === null
+              ? null
+              : source.triggerMessageId.slice(0, SOURCE_TRIGGER_MESSAGE_ID_MAX),
+        }
       : {}),
   };
 }
@@ -335,6 +479,17 @@ interface PendingTask {
   /** 会话定位阶段产生的一次性说明, 前置到本次 turn.end 的 finalText。 */
   notice?: string;
   /**
+   * 派活被接下那一刻, 这条连接宣告过 turn.reopen 吗。
+   *
+   * 必须在**接活时**取快照, 不能等失败收口时再查 serverFeatures: 连接可能在 turn 跑到
+   * 一半时断掉, 而 onDisconnected 会清掉能力快照(滚动发布时重连可能落到不宣告
+   * turn.reopen 的老实例上, 所以那个清理是对的)。此时失败的 turn.end 走 sendOrBuffer
+   * 缓存、重连后补发, 渠道里确实会显示失败 —— 却因为查不到能力而没记待续跑, 用户点
+   * 重试就接不回来(review: "Preserve reopen state for failures completed while
+   * disconnected")。能力在重连后是否仍然成立, 由续跑发起时按当时的 serverFeatures 复核。
+   */
+  reopenCapable: boolean;
+  /**
    * 本次定位为新会话预建的 worktree 的回收句柄。**只在这个任务最终没能进
    * runner 时调用** —— 正常执行时 worktree 归会话所有, 不能回收。少了它,
    * 执行前的映射收口一旦拦下任务, 刚建好的 worktree 目录与分支就成了没有会话
@@ -343,16 +498,43 @@ interface PendingTask {
   cleanupWorktree?: () => Promise<void>;
 }
 
+/** 一条等待续跑的失败任务(见 pendingReopens)。 */
+/**
+ * 渠道形态(dm / group)—— 只看 externalKey 的前缀形状, 不查任何状态。
+ * execute() 与续跑观察共用: 两边都要用它算 answerOnlyProgress, 判据分叉就会让
+ * 续跑轮的进度渲染跟正常任务不一致(Telegram DM 冒出过程区 / 群里少了过程区)。
+ */
+function deriveLaneKind(externalKey: string): 'dm' | 'group' {
+  return /^telegram:(group|topic):/.test(externalKey) ? 'group' : 'dm';
+}
+
+interface PendingReopen {
+  connectionId: string;
+  /** 失败那一轮的 requestId —— server 用它定位渠道里那条消息(reopenOf)。 */
+  requestId: string;
+  externalKey: string;
+  /** 那一轮真正跑的目录(执行前还要按当前映射复核一次)。 */
+  workingDir: string;
+  source?: TaskSource;
+  accountGeneration: number;
+  expiresAt: number;
+}
+
 export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   const {
     getConnection,
     bindings,
     runner,
     prepareWorktree,
+    buildContextPrefix,
     dialogue,
     abortSession,
     archiveSessionRow,
     resolveInteraction,
+    subscribeUiContinuation,
+    subscribeUiSessionIntervention,
+    subscribeUiTurnDispatching,
+    subscribeUiTurnUndispatched,
     accountInitiallyActive,
     log,
   } = deps;
@@ -429,6 +611,145 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   const runningByRequest = new Map<string, { sessionId: string; connectionId: string }>();
   /** 已请求取消的 connectionId + requestId(execute 收口时据此把结果改写为 cancelled)。 */
   const cancelRequested = new Set<string>();
+  /** 每连接最近一次 welcome 宣告的能力集(turn.reopen 的 feature gate)。 */
+  const serverFeatures = new Map<string, readonly string[]>();
+  /**
+   * 以失败收口、**还等着被续跑**的任务, 按 sessionId 记账(见协议阶段 18)。
+   *
+   * 只存进程内: app 重启后原 requestId 已随进程消失, server 侧也早已把那一轮当
+   * 结束处理, 没有可续的东西。
+   *
+   * ## 作废时刻(唯一一处"被消费")
+   *
+   * 记账代表的是"渠道里那条消息此刻仍停在失败态, 还能被接回来"。所以它只在**渠道消息
+   * 真的被改写**时删 —— 也就是 claim 帧成功发出的那一刻(见 beginContinuation)。在那之前
+   * 无论意图记了多久、中途死了多少次(被意识钩挡掉 / 落库失败 / 排队被丢), 记账都保持
+   * 有效, 用户再点一次还能接上; 早先"记意图时就转移走"会让这些静默失败把记账吃掉,
+   * 之后谁也接不回来(review: "Restore claims when retries die before persistence")。
+   *
+   * 另有几处是**明确失效**而非被消费, 各自就地删: 新 hook turn 接管这条消息线、无关桌面
+   * turn 推进了会话(enqueue 或 dispatch 任一处观测到)、连接断开 / 换账号 / dispose。
+   */
+  const pendingReopens = new Map<string, PendingReopen>();
+  /**
+   * 正在观察的续跑轮, 按 sessionId(同一会话同时只可能有一轮)。
+   * 记归属连接是为了在该连接断开时精确撤掉它们 —— 断连是续跑回流的终局
+   * (见 onDisconnected), 不能让观察器活到重连后继续用已被 server 解绑的 id 发帧。
+   */
+  const activeContinuations = new Map<
+    string,
+    {
+      connectionId: string;
+      clientId: string;
+      isClaimed: () => boolean;
+      /** silent=true 时连收口帧都不发(仅连接已断时用, 见 dropContinuation)。 */
+      cancel: (silent: boolean, noRemember: boolean) => void;
+    }
+  >();
+  /** 正在因"新任务接管"而撤销的 session —— 它的收口不得再记待续跑(见 dropContinuation)。 */
+  let suppressReopenFor: string | null = null;
+  // 退订句柄由 dispose() 消费。刻意**不**在 deactivateAccount 里退订: 换账号后
+  // 同一个 dispatcher 还要继续服务新账号, 订阅必须跨账号存活(账号边界由记账里的
+  // accountGeneration 与 isCurrentGeneration 把关, 不靠摘监听)。
+  const unsubscribeUiContinuation =
+    subscribeUiContinuation?.((sessionId, clientId) => {
+      onUiContinuation(sessionId, clientId);
+    }) ?? null;
+  /**
+   * 已认下"等哪条消息 dispatch"的续跑意图, 按 sessionId。
+   *
+   * 用户点重试 -> 记这里(带 clientId); 等到那条消息真的要 dispatch 时才挂观察器并
+   * 认领渠道消息。中间这段时间任意长(远端会话冷启动、SSH 重连、凭证切换都在
+   * dispatch 之前), 所以不需要任何固定窗口去猜。
+   *
+   * 与 pendingReopens 是**并存**关系, 不是转移: 意图只是"在等哪条消息", 记账要等渠道
+   * 消息真被改写(claim 帧发出去)才作废 —— 见 pendingReopens 的作废时刻说明。所以这里
+   * 的条目失效时不需要"还回去", 也不怕自己变成孤儿(下一次重试直接覆盖它)。
+   */
+  const pendingClaims = new Map<string, { clientId: string; entry: PendingReopen }>();
+
+  // 无关介入只作废**记账**与在等的意图, 不碰已认领的那一轮: 它有自己的生命周期
+  // (事件流就是渠道消息的当前内容), 由收口 / 撤销 / 超时管。
+  const unsubscribeUiIntervention =
+    subscribeUiSessionIntervention?.((sessionId) => {
+      // 在等 dispatch 的意图直接作废(**不**还记账): 会话已被无关内容推进, 把结果接回
+      // 渠道那条旧消息只会显示无关输出。
+      if (pendingClaims.delete(sessionId)) {
+        log.info(`hook pending claim dropped: an unrelated desktop turn intervened (${sessionId})`);
+      }
+      if (pendingReopens.delete(sessionId)) {
+        log.info(
+          `hook pending reopen dropped: an unrelated desktop turn intervened (${sessionId})`,
+        );
+      }
+    }) ?? null;
+  // 权威归属: 只有 clientId 对得上的那次 dispatch 才是目标续跑轮。
+  const unsubscribeUiTurnDispatching =
+    subscribeUiTurnDispatching?.((sessionId, clientId) => {
+      const claim = pendingClaims.get(sessionId);
+      if (claim && claim.clientId === clientId) {
+        pendingClaims.delete(sessionId);
+        beginContinuation(sessionId, clientId, claim.entry);
+        return;
+      }
+      // clientId 对不上 = 这个会话正被一条**无关**的桌面消息推进。
+      //
+      // 这一道不能只靠 enqueue 侧的介入信号: 消息在 hook turn(或在观察的续跑轮)还没
+      // 收口时就进了队, 那时记账压根还不存在, 介入信号删了个空; 等那一轮失败再登记
+      // 记账时, 队列里那条无关消息已经不会再发第二次介入信号了。它最终 dispatch 时
+      // 会到这里 —— 于是"会话被推进"这件事在 enqueue 与 dispatch 两处都能观测到, 不管
+      // 记账是在哪一侧先出现的(review: "Preserve interventions that occur before
+      // failure registration")。
+      //
+      // hook turn 自己不经 coordinator(session-runner 直接 session.send), 所以不会误伤:
+      // 到这里的 dispatch 一定是桌面端发起的用户轮。
+      if (activeContinuations.has(sessionId)) {
+        // 已认领的那一轮**被顶掉了**, 而且不会再有终态事件 —— 就地收口。
+        //
+        // 判据是 coordinator 的派发边界: activeTurn 非空或 isTurnRunning 为真时它不放行
+        // 任何 dispatch(插话走 steer, 不发本信号)。所以"另一条用户轮居然 dispatch 了"
+        // 等价于"我们这一轮已经不是活跃轮了"。正常收口的话观察器早已在终态事件上 settle
+        // 并把自己从表里删掉, 所以还在表里 = 它是被 Stop 之类抢在 vendor dispatch 与
+        // sendToAgent 收口检查之间顶掉的 —— coordinator 那条路径直接 return, 不发
+        // undispatched(它不能发: 那会顺带 abort 新 turn 的 git 快照)。
+        // 不收口就会让渠道消息停在"进行中"直到 1 小时硬超时(review: "Stop 后续跑仍被认领")。
+        //
+        // 语义与"新 hook 任务接管"完全一致: 发收口帧把那条消息定稿, 但不再记待续跑
+        // —— 这条消息线已经交给别人了。
+        log.info(`hook continuation superseded by another desktop turn (${sessionId})`);
+        dropContinuation(sessionId, { silent: false, remember: false });
+        return;
+      }
+      if (pendingClaims.delete(sessionId)) {
+        log.info(`hook pending claim dropped: an unrelated desktop turn dispatched (${sessionId})`);
+      }
+      if (pendingReopens.delete(sessionId)) {
+        log.info(
+          `hook pending reopen dropped: an unrelated desktop turn dispatched (${sessionId})`,
+        );
+      }
+    }) ?? null;
+  const unsubscribeUiTurnUndispatched =
+    subscribeUiTurnUndispatched?.((sessionId, clientId) => {
+      const claim = pendingClaims.get(sessionId);
+      if (claim && claim.clientId === clientId) {
+        // 记账没被动过(它只在 claim 帧发出时才删), 所以这里只丢意图 —— 渠道那条消息
+        // 仍是原来的失败态, 用户再点一次重试还能接上。
+        log.info(`hook pending claim released: the target turn never dispatched (${sessionId})`);
+        pendingClaims.delete(sessionId);
+        return;
+      }
+      // 已经认领了才收到 undispatched: dispatching 信号发在 vendor dispatch **之前**,
+      // 而它之后仍有会失败的环节(Stop 抢在持久化之后、gitSnapshotCoordinator.onTurnStart
+      // 之类的 pre-vendor hook 抛错)。那一轮压根没跑起来, 但渠道消息已经被改成
+      // "进行中" —— 必须撤掉观察让它按失败收口, 否则要挂到 1 小时硬超时。
+      const watching = activeContinuations.get(sessionId);
+      if (!watching || watching.clientId !== clientId) return;
+      log.info(`hook continuation revoked: the claimed turn never dispatched (${sessionId})`);
+      // 连接还在 -> 必须发收口帧(否则渠道消息停在假的"进行中"); 且这一轮压根没跑起来,
+      // coordinator 那边还留着 active-turn recovery, 用户马上会再点一次重试 —— 记一笔。
+      dropContinuation(sessionId, { silent: false, remember: true });
+    }) ?? null;
   let accountActive = accountInitiallyActive ?? true;
   let accountGeneration = 0;
   const executing = new Set<Promise<void>>();
@@ -471,6 +792,291 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     return { requestId, result: 'rejected', reason, sessionId: null, queuePosition: null };
   }
 
+  /** server 本次握手宣告了 turn.reopen 能力吗(缺席 = 老 server, 不回流)。 */
+  function supportsReopen(connectionId: string): boolean {
+    return serverFeatures.get(connectionId)?.includes(HOOK_FEATURE_TURN_REOPEN) === true;
+  }
+
+  /**
+   * 放弃这个 session 的续跑回流: 撤销在观察的那一轮 + 清掉记账。
+   *
+   * 新的 hook turn 一开跑就必须调 —— 那条渠道消息的"最新一轮"已经换人了, 旧的
+   * 观察器若还挂着, 新 turn 的事件会被当成续跑的继续, 把上一条消息改写成不相干
+   * 的内容。
+   */
+  function dropContinuation(
+    sessionId: string,
+    opts: { silent?: boolean; remember?: boolean } = {},
+  ): void {
+    const { silent = false, remember = false } = opts;
+    if (!remember) {
+      pendingReopens.delete(sessionId);
+      // 在等 dispatch 的意图一起清掉。它自带一份 entry 快照, 留着的话: 新任务失败后登记了
+      // 自己的记账, 而那条迟到的重试(远端冷启动 / 凭证切换期间一直没 dispatch)最终匹配上
+      // 这条陈旧意图, 就会拿已被 server 解绑的旧 reopenOf 去认领, 顺带把**新**记账删掉
+      // (review: "Clear stale retry claims when hook tasks take over")。
+      pendingClaims.delete(sessionId);
+    }
+    const watching = activeContinuations.get(sessionId);
+    if (!watching) return;
+    activeContinuations.delete(sessionId);
+    // 撤销让 runner 以"已取消"收口(那条 turn.end 是 error)。两个维度要分场景:
+    //
+    //   silent  —— 连帧都不发。只用于**连接已断**: server 那边已经做过孤儿收口并解绑
+    //              这一轮的 requestId, 迟到的帧只会被当未知 id 丢弃(协议阶段 18)。
+    //              连接还在的场景一律不能 silent, 否则渠道消息停在假的"进行中"。
+    //   remember —— 收口后是否再记一笔待续跑。新任务接管时**不**记(消息线已经交给
+    //              别人, 记了会让之后的续跑信号把用户带回一条过期消息); 而"这一轮
+    //              压根没 dispatch 起来"时要记, 用户马上就会再点一次重试。
+    if (!remember) suppressReopenFor = sessionId;
+    try {
+      watching.cancel(silent, !remember);
+    } finally {
+      suppressReopenFor = null;
+    }
+    if (!remember) pendingReopens.delete(sessionId);
+  }
+
+  /** 失败收口后登记"等着被续跑"。只有 server 支持回流时才记, 否则纯占内存。 */
+  function rememberForReopen(
+    sessionId: string,
+    entry: Omit<PendingReopen, 'expiresAt'>,
+    reopenCapable: boolean,
+  ): void {
+    if (suppressReopenFor === sessionId) return;
+    if (!runner.watchContinuation || !reopenCapable) return;
+    pendingReopens.set(sessionId, { ...entry, expiresAt: Date.now() + REOPEN_TTL_MS });
+    if (pendingReopens.size > MAX_PENDING_REOPENS) {
+      const oldest = pendingReopens.keys().next().value;
+      if (oldest !== undefined) pendingReopens.delete(oldest);
+    }
+  }
+
+  /**
+   * 「用户在桌面端续跑了这个会话」意图到达(带那条消息的 clientId)。
+   *
+   * 这里只**记下在等哪条消息**, 不挂观察器、不发帧 —— 归属要等到那条消息真的要
+   * dispatch 时才成立(见 subscribeUiTurnDispatching)。中间可以隔任意长时间: 远端
+   * 会话冷启动、SSH 重连、凭证切换都发生在 dispatch 之前, 所以不需要固定窗口去猜。
+   *
+   * 记账每被**接回**一次就作废一次(claim 帧发出即删), 不会被两轮同时认领: 续跑轮自己
+   * 若又失败, 由它的 onEnd 重新登记(带新 requestId), 于是形成一条每环都有独立 id 的链。
+   * 但"意图没走到 dispatch"不算被接回 —— 那种情况记账原样留着, 用户再点一次仍然有效。
+   */
+  function onUiContinuation(sessionId: string, clientId: string): void {
+    const entry = pendingReopens.get(sessionId);
+    if (!entry) return;
+    if (!runner.watchContinuation) return;
+    if (!isCurrentGeneration(entry.accountGeneration)) return;
+    if (Date.now() > entry.expiresAt) return;
+    // 本模块正跑这个 session 的 hook turn / 已有在观察的续跑: 那一轮才是这条消息线
+    // 的主人, 不能被另一条意图顶掉。
+    if (running.has(sessionId) || activeContinuations.has(sessionId)) return;
+    if (!supportsReopen(entry.connectionId)) return;
+    // 刻意**不**动 pendingReopens: 记账要留到渠道消息真被改写才作废(见它的注释)。
+    pendingClaims.set(sessionId, { clientId, entry });
+    if (pendingClaims.size > MAX_PENDING_REOPENS) {
+      const oldest = pendingClaims.keys().next().value;
+      if (oldest !== undefined) pendingClaims.delete(oldest);
+    }
+  }
+
+  /**
+   * 目标那条消息即将 dispatch —— 归属已确认, 现在挂观察器并认领渠道那条消息。
+   *
+   * 调用点在 coordinator 的 beforeDispatchUserTurn 里(被 await), 所以:
+   *   - 监听挂在 vendor dispatch **之前**, 不丢正文开头;
+   *   - live session 必然已就绪(马上就要 dispatch), 不需要等它出现。
+   */
+  function beginContinuation(sessionId: string, clientId: string, entry: PendingReopen): void {
+    const watch = runner.watchContinuation;
+    if (!watch) return;
+    if (!isCurrentGeneration(entry.accountGeneration)) return;
+    if (running.has(sessionId) || activeContinuations.has(sessionId)) return;
+    if (!supportsReopen(entry.connectionId)) return;
+    // 目录授权按现场重算(与 execute 同一道收口): 等待期间映射可能已被改删。
+    if (!dirStillAllowed(entry.connectionId, entry.workingDir)) {
+      log.info(
+        `hook continuation skipped: the session directory is no longer authorized (reopenOf=${entry.requestId})`,
+      );
+      return;
+    }
+    const requestId = randomUUID();
+    const requestKey = ackKey(entry.connectionId, requestId);
+    let claimed = false;
+    // runner 可能在 watch() 里**同步**收口(会话已不在进程里就直接 onAbandon),
+    // 那时 cancelWatch 还没赋值 —— 用这个标记决定要不要登记, 不去碰它。
+    let settledEarly = false;
+    /**
+     * 这一轮已被**外部**撤掉(新任务接管 / 连接断开 / 换账号 / dispose)。
+     *
+     * 撤销后 runner 会按契约 settle 并停止回调, 但本模块不把正确性外包出去:
+     * 撤销与 runner 收口之间存在窗口(已排队的微任务仍可能回调), 而断连场景下
+     * server 已经解绑了这一轮的 requestId —— 任何迟到的帧都是拿 stale id 发的,
+     * 其中 error 收口还会把它记成下一轮的 reopenOf。置位后一切回调直接短路。
+     */
+    let revoked = false;
+    /**
+     * 这一轮收口后**不得**再记一笔待续跑。
+     *
+     * 与全局 suppressReopenFor 的区别: 那个只在 dropContinuation 的同步窗口内有效,
+     * 一旦 runner 的收口跨了微任务就漏。撤销是否允许重新登记属于"这一轮"的属性,
+     * 所以钉在闭包里 —— 不依赖任何时序假设。
+     */
+    let denyRemember = false;
+    /**
+     * 本轮在 activeContinuations 里的那条记录(注册后赋值)。
+     *
+     * 收口时**只能按实例删**, 不能只按 sessionId: 成功收口要先异步收集出站附件, onEnd
+     * 因此可能落在"这一轮已被接管、用户又续了一次、新一轮已注册"之后。那时无条件
+     * delete(sessionId) 会把**新**那一轮从表里抹掉 —— 它的观察器于是躲过断连与后续接管的
+     * 撤销, 拿一个已被 server 解绑的 requestId 继续发帧
+     * (review: "Delete only the continuation instance being settled")。
+     */
+    let handle: NonNullable<ReturnType<typeof activeContinuations.get>> | null = null;
+    /** 从"在观察"的账上摘掉本轮(只摘自己那条)。 */
+    const detach = (): void => {
+      settledEarly = true;
+      if (handle && activeContinuations.get(sessionId) === handle) {
+        activeContinuations.delete(sessionId);
+      }
+    };
+    const cleanup = (): void => {
+      runningByRequest.delete(requestKey);
+      cancelRequested.delete(requestKey);
+      detach();
+    };
+    const cancelWatch = watch({
+      sessionId,
+      workingDir: entry.workingDir,
+      ...(entry.source ? { source: entry.source } : {}),
+      laneKind: deriveLaneKind(entry.externalKey),
+      isDirAuthorized: (dir) => dirStillAllowed(entry.connectionId, dir),
+      onClaim: () => {
+        if (revoked || !isCurrentGeneration(entry.accountGeneration)) return;
+        const send = sendFns.get(entry.connectionId);
+        // 连接不在线 / 发帧失败(WS 正在 CLOSING 时 send 返回 false): reopen 是"把消息
+        // 接回来"的即时动作, 缓存补发没有意义(等重连时那轮早跑完了)。
+        // 但**不能只是不认领**: runner 那边已经按契约认为认领发生过, 之后不会再给
+        // 第二次机会, 而这一轮的结果又确实没法回流 —— 必须撤掉观察, 并且**保留记账**,
+        // 否则用户再点重试也接不上(review: "Restore the reopen when its claim frame
+        // is not sent")。渠道消息此刻仍是原来的失败态, 记账依然有效。
+        claimed =
+          send?.(
+            makeTurnReopen({
+              requestId,
+              reopenOf: entry.requestId,
+              externalKey: entry.externalKey,
+              sessionId,
+            }),
+          ) === true;
+        if (!claimed) {
+          log.warn(
+            `hook continuation claim frame not sent; keeping the pending reopen (${sessionId})`,
+          );
+          revoked = true;
+          // 观察器交给调用方在本次返回后撤(cancelWatch 尚未赋值, 这里不能碰它)。
+          return;
+        }
+        // 渠道那条消息从这一刻起归本轮所有(server 已把它的位置转记给 requestId), 记账
+        // 就此作废 —— 它存的 reopenOf 已被 server 解绑, 再拿去续只会被静默忽略。
+        pendingReopens.delete(sessionId);
+        // 认领成功后这一轮就等同于一个在执行的任务: 登记进 runningByRequest,
+        // 渠道侧的 /stop 才能用新 requestId 命中它。
+        runningByRequest.set(requestKey, { sessionId, connectionId: entry.connectionId });
+      },
+      onProgress: (text) => {
+        if (revoked || !claimed || !isCurrentGeneration(entry.accountGeneration)) return;
+        const send = sendFns.get(entry.connectionId);
+        if (send) send(makeTurnProgress({ requestId, text }));
+      },
+      // 停止观察即摘账 —— 成功收口还要异步收集附件, 那段时间它不该再被算作"在观察的
+      // 那一轮"(否则排在后面的桌面消息一 dispatch 就被误判成顶替)。发帧的闭包照旧存活。
+      onSettling: detach,
+      onEnd: (outcome) => {
+        const wasCancelled = cancelRequested.has(requestKey);
+        cleanup();
+        if (revoked || !claimed || !isCurrentGeneration(entry.accountGeneration)) return;
+        const status: 'ok' | 'error' | 'cancelled' = wasCancelled ? 'cancelled' : outcome.status;
+        const isError = status === 'error';
+        // 续跑轮的 turn.end **直发不缓存**, 与普通任务(sendOrBuffer 断线补发)刻意
+        // 相反: 普通任务的消息由 server 建、断线期间没人动它, 补发就能定稿; 而续跑
+        // 轮的消息在断连那一刻已被 server 的孤儿收口改写并解绑 requestId, 迟到的
+        // turn.end 会被当未知 id 丢弃 —— 那反而把"其实跑成功了"显示成"续跑中断"。
+        // 断连即这一轮回流的终局, 由 server 收口单方权威(协议阶段 18)。
+        const send = sendFns.get(entry.connectionId);
+        const delivered =
+          send?.(
+            makeTurnEnd({
+              requestId,
+              externalKey: entry.externalKey,
+              sessionId,
+              status,
+              finalText: outcome.finalText,
+              errorMessage: isError ? outcome.errorMessage || 'unknown error' : null,
+              usage: { durationMs: outcome.durationMs },
+              ...(outcome.attachments !== undefined && outcome.attachments.length > 0
+                ? { attachments: outcome.attachments }
+                : {}),
+            }),
+          ) === true;
+        if (!delivered) {
+          // 没发出去 => server 已把这条消息收口并解绑本轮 requestId, 再拿它当
+          // reopenOf 只会被静默忽略。这条消息线到此为止, 不再登记可续跑。
+          log.warn(`hook continuation turn.end dropped (connection offline): ${requestId}`);
+          return;
+        }
+        // 续跑又失败了 -> 允许再续一次(用户还得再点一次重试, 天然限流)。
+        // reopenOf 换成这一轮的 requestId: server 侧那条消息现在挂在它上面。
+        if (isError && !denyRemember) {
+          rememberForReopen(
+            sessionId,
+            {
+              connectionId: entry.connectionId,
+              requestId,
+              externalKey: entry.externalKey,
+              workingDir: entry.workingDir,
+              ...(entry.source ? { source: entry.source } : {}),
+              accountGeneration: entry.accountGeneration,
+            },
+            // 这一轮开跑时已复核过能力(见 beginContinuation), 且它的 turn.end 刚刚
+            // 真的发出去了 —— 连接此刻在线, 能力也就仍然成立。
+            true,
+          );
+        }
+      },
+      onAbandon: () => {
+        // 压根没认领(会话已不在进程里 / 目录已撤权 / 被撤销)。渠道那条消息**没被改写
+        // 过**, 记账也从未被删 —— 什么都不用做, 用户再点一次重试还能接上。
+        //
+        // 这里刻意不"还回记账": 撤销与放弃之间可能夹着别的失效(无关 turn 推进了会话、
+        // 新 hook turn 接管、连接断开), 那些路径已经把记账删掉了, 再 set 一次等于把
+        // 已失效的记账复活。被外部撤销的场景由 dropContinuation 按 remember 维度决定
+        // 记账去留, 不由这里兜。
+        cleanup();
+      },
+    });
+    if (revoked) {
+      // onClaim 在 watch() 内同步跑过且发帧失败: 记账已还回去, 这个观察器不该留着。
+      cancelWatch();
+      return;
+    }
+    if (!settledEarly) {
+      handle = {
+        connectionId: entry.connectionId,
+        clientId,
+        isClaimed: () => claimed,
+        cancel: (silent: boolean, noRemember: boolean) => {
+          // revoked 是"连迟到的帧都别发"的开关 —— 只有连接已断时才该置位。
+          if (silent) revoked = true;
+          if (noRemember) denyRemember = true;
+          cancelWatch();
+        },
+      };
+      activeContinuations.set(sessionId, handle);
+    }
+  }
+
   /** 执行一个任务并回推 turn.end; 收口后 drain 同 session 队列。 */
   async function execute(task: PendingTask): Promise<void> {
     const sessionId = task.run.sessionId;
@@ -479,6 +1085,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       running.delete(sessionId);
       return;
     }
+    // 这条消息线交给新任务了: 撤掉上一轮失败留下的续跑观察与记账。连接还在, 所以要
+    // 发收口帧把那条旧消息定稿; 但不再记待续跑(它已经不是"最新一轮"了)。
+    dropContinuation(sessionId, { silent: false, remember: false });
     runningByRequest.set(requestKey, { sessionId, connectionId: task.connectionId });
 
     // 进度快照直发不缓存: 断线期间的中间帧没有补发价值(turn.end 会带最终
@@ -588,6 +1197,23 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       }),
     );
     running.delete(sessionId);
+    // 失败收口 -> 记一笔"等着被续跑"。只有 error 记: cancelled 是用户按了停止,
+    // ok 没什么可续的。用户之后在桌面端点「重试」时, 这一轮的进展与结果就能接回
+    // 渠道里这条消息(协议阶段 18)。
+    if (isError) {
+      rememberForReopen(
+        sessionId,
+        {
+          connectionId: task.connectionId,
+          requestId: task.requestId,
+          externalKey: task.externalKey,
+          workingDir: task.run.workingDir,
+          ...(task.run.source ? { source: task.run.source } : {}),
+          accountGeneration: task.accountGeneration,
+        },
+        task.reopenCapable,
+      );
+    }
     // 本次执行收口, 免检窗口到此为止。注意**不能**断言"session 一定已落库":
     // 上面可能因映射撤权根本没进 runner, runner 也可能在 createSession 之前就
     // 失败(PR #733 review 指出)。这里删掉只是让后续消息回到正常判定 —— 那两种
@@ -674,6 +1300,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     /** 旧绑定作废、本次不得不新建会话时, 随 turn.end 回给渠道的说明。 */
     let recreatedNotice: string | null = null;
 
+    const laneKind = deriveLaneKind(payload.externalKey);
     // 接管路径: server 显式指定已有 session(对话会话同样可接管)
     if (payload.sessionId !== null) {
       const info = await runner.inspect(payload.sessionId);
@@ -689,6 +1316,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         run: {
           sessionId: payload.sessionId,
           isNew: false,
+          laneKind,
           workingDir: info.workingDir as string,
           agentKind,
           model,
@@ -768,6 +1396,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           run: {
             sessionId: bound,
             isNew: false,
+            laneKind,
             // 尚未落库, 没有 meta 可查 —— 用建它时那个刚重新过完映射校验的目录
             workingDir: pendingDir!,
             agentKind,
@@ -807,6 +1436,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           run: {
             sessionId: bound,
             isNew: false,
+            laneKind,
             workingDir,
             agentKind,
             model,
@@ -888,6 +1518,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       run: {
         sessionId,
         isNew: true,
+        laneKind,
         workingDir: runDir,
         agentKind,
         model,
@@ -943,6 +1574,17 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     // 同 key 串行化(见 keyChains 注释) —— 定位+入队作为一个原子段执行
     serializeByKey(`${connectionId} ${payload.externalKey}`, async () => {
       try {
+        let contextPrefix = '';
+        let commitContextCursor: () => void = () => undefined;
+        if (buildContextPrefix) {
+          try {
+            const assembly = await buildContextPrefix(dispatchPayload);
+            contextPrefix = assembly.prefix;
+            commitContextCursor = assembly.commit;
+          } catch (error) {
+            log.warn(`group context prefix failed, dispatching without it: ${String(error)}`);
+          }
+        }
         const resolved = await resolveTarget(
           connectionId,
           config,
@@ -963,8 +1605,13 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           connectionId,
           requestId: payload.requestId,
           externalKey: payload.externalKey,
-          run: { ...resolved.run, ...(source ? { source } : {}) },
+          run: {
+            ...resolved.run,
+            ...(contextPrefix ? { prompt: `${contextPrefix}${resolved.run.prompt}` } : {}),
+            ...(source ? { source } : {}),
+          },
           accountGeneration: admittedGeneration,
+          reopenCapable: supportsReopen(connectionId),
           ...(resolved.notice ? { notice: resolved.notice } : {}),
           ...(resolved.cleanupWorktree ? { cleanupWorktree: resolved.cleanupWorktree } : {}),
         };
@@ -979,6 +1626,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           }
           queue.push(task);
           queues.set(sessionId, queue);
+          commitContextCursor();
           reply(connectionId, send, {
             requestId: payload.requestId,
             result: 'queued',
@@ -993,6 +1641,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         }
 
         running.add(sessionId);
+        commitContextCursor();
         reply(connectionId, send, {
           requestId: payload.requestId,
           result: 'accepted',
@@ -1063,6 +1712,15 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       queues.clear();
       sendFns.clear();
       pendingTurnEnds.clear();
+      // 能力快照按连接存, 而连接身份含账号指纹 —— 换账号后旧条目永远不会再被
+      // 命中, 但留着会让 supportsReopen 对"同名连接"给出上一个账号的答案。
+      serverFeatures.clear();
+      // 续跑记账与在观察的续跑轮都属于上一个账号, 一并清掉(记账里带
+      // accountGeneration 只是第二道防线, 表本身不该跨账号留存)。
+      for (const sessionId of [...activeContinuations.keys()]) {
+        dropContinuation(sessionId, { silent: true, remember: false });
+      }
+      pendingReopens.clear();
 
       const drain = (async (): Promise<void> => {
         const aborts: Promise<void>[] = [];
@@ -1237,9 +1895,40 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     },
     onDisconnected(connectionId) {
       sendFns.delete(connectionId);
+      // 断连是续跑回流的终局(协议阶段 18): server 此刻会收口那条消息并解绑这一轮
+      // 的 requestId。观察器若活到重连后, 它的 progress / turn.end 会带着那个已被
+      // 解绑的 id 发到新 socket(dispatchId 在重连间稳定, 所以真的发得出去), 被当
+      // 未知 id 丢弃; 更糟的是 error 收口还会把这个 stale id 登记成下一轮的
+      // reopenOf。所以在这里就撤掉, 与"turn.end 直发不缓存"同一个决定。
+      for (const [sessionId, watching] of [...activeContinuations]) {
+        // 连接已断: server 那边已孤儿收口并解绑 requestId, 迟到的帧只会被丢弃。
+        if (watching.connectionId === connectionId) {
+          dropContinuation(sessionId, { silent: true, remember: false });
+        }
+      }
+      // 能力集只在握手时才权威。断连后不清会留下"上一次连上的那个 server 实例"
+      // 的快照: 滚动发布时重连可能落到不宣告 turn.reopen 的老实例上, 而在
+      // onConnected 重设之前, supportsReopen 会按旧快照放行发帧。
+      serverFeatures.delete(connectionId);
     },
-    onConnected(connectionId, send) {
+    dispose() {
+      unsubscribeUiContinuation?.();
+      unsubscribeUiIntervention?.();
+      unsubscribeUiTurnDispatching?.();
+      unsubscribeUiTurnUndispatched?.();
+      pendingClaims.clear();
+      for (const sessionId of [...activeContinuations.keys()]) {
+        dropContinuation(sessionId, { silent: true, remember: false });
+      }
+      pendingReopens.clear();
+      serverFeatures.clear();
+      sendFns.clear();
+    },
+    onConnected(connectionId, send, features) {
       if (!accountActive) return;
+      // 能力集以最新一次握手为准: 滚动发布时重连可能落到另一版本的实例上,
+      // 老实例不宣告 turn.reopen 时必须立刻停用回流, 不能拿上一次的快照发帧。
+      serverFeatures.set(connectionId, features ? [...features] : []);
       sendFns.set(connectionId, send);
       const buf = pendingTurnEnds.get(connectionId);
       if (!buf?.length) return;

@@ -10,6 +10,7 @@ import {
   recentWorkdirsToProjects,
   sshExistingProjects,
   loadDeviceLinkExistingProjects,
+  removeDeviceLinkExistingProject,
 } from '@/components/new-chat/remoteExistingProjects';
 
 const sess = (partial: Partial<Session>): Session =>
@@ -46,6 +47,17 @@ describe('recentWorkdirsToProjects', () => {
       { path: 'C:\\Users\\me\\proj', lastUsedAt: '2026-06-15T00:00:00.000Z' },
     ]);
     expect(out[0]).toEqual({ path: 'C:\\Users\\me\\proj', name: 'proj' });
+  });
+
+  it('保留被控端目录存在性,供项目选择器提示已迁移目录', () => {
+    const out = recentWorkdirsToProjects([
+      {
+        path: '/remote/missing',
+        lastUsedAt: '2026-06-15T00:00:00.000Z',
+        exists: false,
+      },
+    ]);
+    expect(out[0]).toEqual({ path: '/remote/missing', name: 'missing', exists: false });
   });
 
   it('空列表 → 空数组', () => {
@@ -111,5 +123,15 @@ describe('loadDeviceLinkExistingProjects', () => {
   it('被控端返回 null/undefined → 空数组(不抛)', async () => {
     invoke.mockResolvedValue(null);
     expect(await loadDeviceLinkExistingProjects('dev-1')).toEqual([]);
+  });
+
+  it('从被控端最近项目列表移除路径,不调用本机 recent-workdirs API', async () => {
+    invoke.mockResolvedValue({ deleted: true });
+    await removeDeviceLinkExistingProject('dev-1', '/remote/app');
+    expect(invoke).toHaveBeenCalledWith(
+      'dev-1',
+      'local-db:recent-workdirs:remove',
+      [{ path: '/remote/app' }],
+    );
   });
 });

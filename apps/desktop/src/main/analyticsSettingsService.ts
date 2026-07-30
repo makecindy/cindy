@@ -18,6 +18,7 @@ import * as authManager from './authManager';
 import {
   acceptPrivacyConsent,
   clearAnalyticsEnabledOverride,
+  closeLegacyConsentMigration,
   isAnalyticsAllowed,
   isAnalyticsEnabledCustomized,
   migrateExistingLoginAsConsented,
@@ -38,6 +39,8 @@ const log = createLogger('analytics-settings');
 let ipcRegistered = false;
 /** 存量迁移只评估一次;评估过就不再看任何后续登录。 */
 let migrationEvaluated = false;
+/** auth 状态订阅的退订句柄(进出本地模式要重播上报结论,见 initAnalyticsSettingsService)。 */
+let unsubscribeAuthState: (() => void) | null = null;
 
 /**
  * 落盘失败翻译成统一 IPC 错误协议。
@@ -59,13 +62,32 @@ function writeOrThrowIpcError(write: () => void, context: string): void {
   }
 }
 
+/**
+ * 本地模式(跳过登录)期间一律不放行上报 —— 运行时闸,和构建闸(isReportingBuild)同款:
+ * **不写盘、不碰 privacyConsentAccepted / analyticsEnabled 这两个用户持久真相**。
+ *
+ * 为什么需要(2026-07-28 review P1):「跳过登录」= 不创建账号、不上报数据(2026-07-27
+ * 拍板),但同意事实是**本机级**的 —— 一个此前登录过(或被存量迁移过)的用户,盘上已经
+ * 有 privacyConsentAccepted: true;他退出登录后点「跳过登录」进入本地模式时,
+ * `isAnalyticsAllowed()` 仍然恒真,TapDB 会继续发设备级事件(authManager 只在身份变化时
+ * 清 accountId,不 opt-out)。那正是本条产品拍板明确不要的行为。
+ *
+ * 放在这里而不是 store:store 是纯持久层(不依赖 authManager),而 `allowed` 是给
+ * renderer 的**运行时结论**;renderer 的 tapdbClient 完全由这个字段驱动
+ * (allowed=false → optOutTracking),所以在 payload 处加闸即可全链路生效。
+ * 退出本地模式后闸自动松开,用户原有的同意与开关一字未动。
+ */
+function isReportingAllowedNow(): boolean {
+  return isAnalyticsAllowed() && !authManager.isLocalMode();
+}
+
 export function analyticsSettingsPayload(): AnalyticsSettingsPayload {
   const value = readAnalyticsSettings();
   return {
     privacyConsentAccepted: value.privacyConsentAccepted,
     analyticsEnabled: value.analyticsEnabled,
     analyticsEnabledCustomized: isAnalyticsEnabledCustomized(),
-    allowed: isAnalyticsAllowed(),
+    allowed: isReportingAllowedNow(),
   };
 }
 
@@ -89,8 +111,21 @@ function broadcastSettingsChange(): void {
  * 会被误判成已同意。冷启动恢复出来的登录态则不同——那是本次改动之前就存在的
  * 会话,属于产品拍板(2026-07-25)的"不再二次打扰"范围。
  *
+ * 为什么本地模式(跳过登录)**不算**已登录:冷启动可能恢复出三种状态——
+ *   1. 真实账号(cloud):经登录页进入,链路一直带《用户协议》《隐私政策》表述 → 可迁移
+ *   2. 本地模式(跳过登录):2026-07-27 拍板「不创建账号、不上报数据」,刻意免协议门,
+ *      这类用户从未同意过隐私协议 → 绝不可迁移
+ *   3. 完全未登录:新装 → 不迁移
+ * 把 2 当成 1 会让「跳过登录」的用户在下一次冷启动被静默写入 privacyConsentAccepted,
+ * 等于未经同意打开采集(隐私红线)。
+ *
  * 迁移本身还有第二道闸:store 里已经有 override 时一律跳过(见
  * analytics-settings-store.migrateExistingLoginAsConsented)。
+ *
+ * 第三道闸是**持久**的:本函数一旦明确判定「没有存量登录态」(情形 2 / 3),就把结论落盘
+ * (`legacyConsentMigrationClosed`)。否则「跳过登录 → 从本地模式登录 → 企业 SSO」这类
+ * 全程免协议门的链路会在下一次冷启动伪装成情形 1(真实账号 + 零记录)被静默迁移
+ * (2026-07-28 review P1)。
  */
 /**
  * 迁移是 best-effort 的埋点工作,**绝不能把登录拖下水**。
@@ -107,13 +142,64 @@ function migrateOrLog(): void {
   }
 }
 
+/**
+ * 冷启动**明确**判定「本机没有存量登录态」时,把这个结论落盘,永久关闭迁移窗口。
+ *
+ * 为什么必须持久化(2026-07-28 review P1):模块级 `migrationEvaluated` 只活一个进程,
+ * 下次冷启动窗口照常打开。而「跳过登录」与企业 SSO 都被协议门刻意豁免、一份记录都不写,
+ * 于是「跳过登录 → 从本地模式走登录入口 → 完成 SSO」之后的那次冷启动会看到「真实账号 +
+ * 零记录」,与真正的存量账号无法区分,被静默迁移成已同意 —— 未经同意打开采集。纯 SSO
+ * 新装用户同理。落盘之后,本机就再也不满足「改版前存量账号」的定义。
+ *
+ * 全程 best-effort:写不进去绝不能把登录拖下水(下次冷启动 / 下次进本地模式还有机会)。
+ */
+function sealMigrationWindowOrLog(): void {
+  try {
+    closeLegacyConsentMigration();
+  } catch (err) {
+    log.warn('closing legacy consent migration window failed (non-fatal)', err);
+  }
+}
+
+/**
+ * 冷启动判出「未登录」时的关窗 —— 必须先过一道**凭证闸**(2026-07-28 review 追加)。
+ *
+ * 「冷启动未登录」是有歧义的:`authManager.initialize()` 在对端区域清单不可用、或
+ * cold-start refresh 瞬态失败时会**保留 refresh token** 并以未登录放行 UI
+ * (`pendingCompletion === null`)。那种机器下一次冷启动就会恢复成真实的存量账号,
+ * 若在这里关了窗,它永远拿不到本该有的同意迁移。所以只有
+ * `hasNoPersistedAuthCredentials()` 为真(只认 ENOENT 为真缺席,密钥链抖动 / EPERM
+ * 一律按「可能还有凭证」)才落盘。
+ *
+ * 注意这道闸**只用于冷启动这条歧义路径**:用户主动点「跳过登录」时没有任何歧义,
+ * 走的是 `sealMigrationWindowOrLog()`(见 initAnalyticsSettingsService 的 auth 订阅)。
+ * 否则密钥链恰好不可用的那一刻,跳过登录用户会因为「探不出凭证已删」而不关窗,给
+ * 之后的免协议 SSO 留下被静默迁移的缺口 —— 那正是本轮要堵的洞。
+ */
+function closeMigrationWindowOrLog(): void {
+  try {
+    if (!authManager.hasNoPersistedAuthCredentials()) {
+      log.info('legacy consent migration window kept open — persisted credentials still present');
+      return;
+    }
+  } catch (err) {
+    // 探测本身失败 = 结论不明确,保守保留窗口(不误伤存量用户)。
+    log.warn('persisted credential probe failed; keeping migration window open', err);
+    return;
+  }
+  sealMigrationWindowOrLog();
+}
+
 export function noteAuthColdStartState(
   state: { isAuthenticated: boolean },
   pendingCompletion: Promise<{ isAuthenticated: boolean }> | null,
 ): void {
   if (migrationEvaluated) return;
 
-  const signedIn = state.isAuthenticated || authManager.isLocalMode();
+  // `!isLocalMode()` 在当前实现下是冗余的(local 会话拿不到 isAuthenticated),但这里
+  // 保留它做 fail closed:哪天本地模式改成也带 canEnterApp / authenticated 语义,
+  // 也不会静默把免协议门的用户迁移成「已同意」。
+  const signedIn = state.isAuthenticated && !authManager.isLocalMode();
   if (signedIn) {
     migrationEvaluated = true;
     migrateOrLog();
@@ -127,17 +213,24 @@ export function noteAuthColdStartState(
       .then((finalState) => {
         if (migrationEvaluated) return;
         migrationEvaluated = true;
-        const finalSignedIn = finalState.isAuthenticated || authManager.isLocalMode();
+        const finalSignedIn = finalState.isAuthenticated && !authManager.isLocalMode();
         if (finalSignedIn) migrateOrLog();
+        // 明确判定「没有存量登录态」→ 落盘关窗(见 closeMigrationWindowOrLog)。
+        else closeMigrationWindowOrLog();
       })
       .catch(() => {
+        // 结果异常 = 结论不明确:只关本进程的窗,不落盘(否则弱网存量用户会被永久误判)。
         migrationEvaluated = true;
       });
     return;
   }
 
-  // 冷启动确定未登录 = 新装用户,不迁移;此后只有登录页的协议门能写入同意。
+  // 冷启动确定没有真实账号(未登录 / 跳过登录的本地模式)= 不迁移,并把这个结论**落盘**:
+  // 本机从此不再是「改版前存量账号」,后续冷启动即便恢复出真实账号也不迁移。此后只有登录页
+  // 的协议门能写入同意——本地模式用户之后真登录走的就是那道门,与新装用户一致(企业 SSO 被
+  // 协议门豁免,那类用户就是不采集,这是刻意的)。
   migrationEvaluated = true;
+  closeMigrationWindowOrLog();
 }
 
 export function initAnalyticsSettingsService(): void {
@@ -146,6 +239,20 @@ export function initAnalyticsSettingsService(): void {
     return;
   }
   ipcRegistered = true;
+
+  // 进出本地模式要**即时**改变上报结论(见 isReportingAllowedNow):renderer 的
+  // tapdbClient 只在收到广播或首次读取时更新,已经 init 过的 SDK 不会自己 opt-out。
+  // 订阅顺带覆盖登录 / 登出(同意事实不变,结论也不变,applyReportingAllowed 自带
+  // 同值早返回,不会造成无用功);notifyAuthListeners 只在登录 / 登出 / 身份或 realm
+  // 切换时触发,周期性 refresh 不触发,无广播风暴。
+  unsubscribeAuthState = authManager.onAuthStateChange(() => {
+    // 进入本地模式 = 用户主动点了「跳过登录」,这一刻**毫无歧义**:本机不是「改版前
+    // 就已登录的存量账号」。所以在这里直接封窗,不走冷启动那条路径的凭证探测闸——
+    // 那道闸在密钥链暂不可用时会保守地拒绝关窗,而此处的确定性不依赖任何探测。
+    // 幂等(closeLegacyConsentMigration 自带 no-op 早返回),不写用户偏好。
+    if (authManager.isLocalMode()) sealMigrationWindowOrLog();
+    broadcastSettingsChange();
+  });
 
   ipcMain.handle('analytics:settings-get', (event) => {
     assertTrustedAppRendererEvent(event);
@@ -182,6 +289,8 @@ export function initAnalyticsSettingsService(): void {
 
   onQuit('analytics-settings', () => {
     ipcRegistered = false;
+    unsubscribeAuthState?.();
+    unsubscribeAuthState = null;
   });
 }
 
@@ -189,6 +298,8 @@ export const __testing = {
   resetForTests(): void {
     ipcRegistered = false;
     migrationEvaluated = false;
+    unsubscribeAuthState?.();
+    unsubscribeAuthState = null;
   },
   broadcastSettingsChange,
 };

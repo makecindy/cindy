@@ -42,6 +42,7 @@ const mocks = vi.hoisted(() => ({
     name: string;
     connected: boolean;
     agents: string[];
+    routing?: Record<string, { wireProtocol?: string }>;
     models: Record<
       string,
       Array<{
@@ -49,6 +50,8 @@ const mocks = vi.hoisted(() => ({
         supportsFastMode?: boolean;
         efforts?: string[];
         defaultEffort?: string | null;
+        /** 停用轴(buildRegistry 烘焙的视图层标志;narrowProviderSource 消费)。 */
+        disabled?: boolean;
       }>
     >;
   }>,
@@ -91,7 +94,7 @@ vi.mock('@/hooks/useProviders', () => ({
   useProviders: () => ({
     providers: mocks.localProviders.map((provider) => ({
       ...provider,
-      routing: Object.fromEntries(provider.agents.map((agent) => [agent, {}])),
+      routing: provider.routing ?? Object.fromEntries(provider.agents.map((agent) => [agent, {}])),
     })),
     loading: mocks.providersLoading,
   }),
@@ -503,6 +506,39 @@ describe('CreateWorkerPopover', () => {
     );
   });
 
+  it('clears a restored chat-bridged Codex provider for SSH worker creation', async () => {
+    window.localStorage.setItem(
+      'workerCreationPrefs',
+      JSON.stringify({
+        lastAgent: 'codex',
+        codex: { model: 'gpt-5.5', effort: 'high', fast: false, providerId: 'chat-bridge' },
+      }),
+    );
+    mocks.localProviders = [
+      {
+        id: 'chat-bridge',
+        name: 'Chat Bridge',
+        connected: true,
+        agents: ['codex'],
+        routing: { codex: { wireProtocol: 'openai-chat' } },
+        models: { codex: [{ id: 'gpt-5.5' }], 'claude-code': [] },
+      },
+    ];
+    mocks.modelsByAgent.codex = [model('gpt-5.5')];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'gpt-5.5' }] };
+    const onCreate = vi.fn();
+
+    render(<CreateWorkerPopover open sshRemote onClose={vi.fn()} onCreate={onCreate} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe(''),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ providerId: null })),
+    );
+  });
+
   it('restores remembered effort and Fast for the picked row when the panel omits them', async () => {
     // 真组件选行只回传 (providerId, modelId);目标模型 hover 配置过的 effort/Fast
     // 存在模型级全局预设里,选中后必须恢复,不能沿用上一个模型的值。
@@ -576,9 +612,42 @@ describe('CreateWorkerPopover', () => {
     );
   });
 
-  it('narrows a remembered provider whose model entry is hidden by visibility prefs', async () => {
-    // 同模型多来源:用户隐藏了记忆来源那份条目后,面板已不显示该行,
-    // 不能仍显式路由过去(codex review)。
+  it('narrows a remembered provider whose model entry is disabled', async () => {
+    // 停用轴才收窄显式来源:被停用的 (来源, 模型) 不能显式路由过去。
+    // (2026-07 启用/显示双轴拆分:disabled 是 buildRegistry 烘焙的视图层标志。)
+    window.localStorage.setItem(
+      'workerCreationPrefs',
+      JSON.stringify({
+        lastAgent: 'codex',
+        codex: { model: 'gpt-5.5', effort: 'high', fast: false, providerId: 'openai' },
+      }),
+    );
+    mocks.localProviders = [
+      {
+        id: 'openai',
+        name: 'OpenAI',
+        connected: true,
+        agents: ['codex'],
+        models: { codex: [{ id: 'gpt-5.5', disabled: true }], 'claude-code': [] },
+      },
+    ];
+    mocks.modelsByAgent.codex = [model('gpt-5.5')];
+    mocks.capabilitiesByAgent.codex = { availableModels: [{ id: 'gpt-5.5' }] };
+    const onCreate = vi.fn();
+
+    render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe(''),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ providerId: null })),
+    );
+  });
+
+  it('keeps a remembered provider whose model entry is merely hidden by visibility prefs', async () => {
+    // 「隐藏」只是陈列过滤,不再收窄显式来源:记忆来源被隐藏仍然合法可路由
+    // (2026-07 启用/显示双轴拆分,用户裁决「隐藏可点名、可兜底」)。
     window.localStorage.setItem(
       'workerCreationPrefs',
       JSON.stringify({
@@ -602,11 +671,11 @@ describe('CreateWorkerPopover', () => {
 
     render(<CreateWorkerPopover open onClose={vi.fn()} onCreate={onCreate} />);
     await waitFor(() =>
-      expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe(''),
+      expect(screen.getByTestId('model-selector').dataset.currentProvider).toBe('openai'),
     );
     fireEvent.click(screen.getByRole('button', { name: 'orca.createWorker.submit' }));
     await waitFor(() =>
-      expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ providerId: null })),
+      expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'openai' })),
     );
   });
 

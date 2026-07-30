@@ -2,11 +2,38 @@ import type { Topic } from '@cindy/device-link';
 import type { RehydratePlan } from '@/device-link/topicRegistry';
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
 
+export interface DeviceLinkRehydrateSendOptions {
+  /** 同一设备的一轮快照 fan-out 共享一个响应性观测 cohort。 */
+  responsivenessCohort?: number;
+}
+
+export interface PresenceTrackedRehydrateStep {
+  capturedPresenceEpoch: number;
+  capturedResponseEvidenceEpoch: number;
+  request: Promise<unknown>;
+}
+
 export interface DeviceLinkRehydrateDeps {
-  openLink(deviceId: string): Promise<unknown>;
+  isCancelled?(): boolean;
+  createDeviceSendCohort(deviceId: string): number;
+  capturePresenceEpoch(deviceId: string): number;
+  captureResponseEvidenceEpoch(deviceId: string): number;
+  isPresenceEpochCurrent(deviceId: string, capturedPresenceEpoch: number): boolean;
+  isResponseEvidenceEpochCurrent(
+    deviceId: string,
+    capturedResponseEvidenceEpoch: number,
+  ): boolean;
+  openLink(deviceId: string): PresenceTrackedRehydrateStep;
   subscribe(deviceId: string, topics: readonly Topic[]): Promise<unknown>;
   requestSessionsReseed(deviceId: string): void;
-  rebuildSessionSnapshot(deviceId: string, sessionId: string): Promise<unknown>;
+  onDeviceReachable?(deviceId: string): void;
+  onDeviceRemoteDisabled?(deviceId: string): void;
+  onDeviceUnavailable?(deviceId: string): void;
+  rebuildSessionSnapshot(
+    deviceId: string,
+    sessionId: string,
+    opts?: DeviceLinkRehydrateSendOptions,
+  ): Promise<unknown>;
 }
 
 export interface DeviceLinkRehydrateResult {
@@ -31,34 +58,176 @@ export async function rehydrateDeviceLinkTopics(
   deps: DeviceLinkRehydrateDeps,
 ): Promise<DeviceLinkRehydrateResult> {
   let transientFailures = 0;
-  const track = async (step: Promise<unknown>): Promise<void> => {
+  const track = async (
+    deviceId: string,
+    capturedPresenceEpoch: number,
+    capturedResponseEvidenceEpoch: number,
+    step: Promise<unknown>,
+  ): Promise<'continue' | 'unavailable'> => {
     try {
       await step;
+      if (deps.isPresenceEpochCurrent(deviceId, capturedPresenceEpoch)) {
+        deps.onDeviceReachable?.(deviceId);
+      }
+      return 'continue';
     } catch (err) {
-      if (isTransientRemoteError(err)) transientFailures += 1;
+      const epochCurrent = deps.isPresenceEpochCurrent(
+        deviceId,
+        capturedPresenceEpoch,
+      );
+      const offlineVerdict = isDeviceOfflineError(err);
+      const remoteDisabledVerdict = isRemoteDisabledError(err);
+      const availabilityVerdict = offlineVerdict || remoteDisabledVerdict;
+      const staleAvailabilityVerdict = availabilityVerdict && !epochCurrent;
+      const supersededByConcurrentResponse = epochCurrent
+        && availabilityVerdict
+        && !deps.isResponseEvidenceEpochCurrent(
+          deviceId,
+          capturedResponseEvidenceEpoch,
+        );
+      const unavailable = epochCurrent
+        && availabilityVerdict
+        && !supersededByConcurrentResponse;
+      if (unavailable) {
+        if (remoteDisabledVerdict) {
+          deps.onDeviceRemoteDisabled?.(deviceId);
+        } else {
+          deps.onDeviceUnavailable?.(deviceId);
+        }
+      }
+      if (
+        !unavailable
+        && (
+          isTransientRemoteError(err)
+          || staleAvailabilityVerdict
+          || supersededByConcurrentResponse
+        )
+      ) {
+        transientFailures += 1;
+      }
+      return unavailable ? 'unavailable' : 'continue';
     }
   };
 
   for (const plan of plans) {
+    if (deps.isCancelled?.()) return { transientFailures };
     if (plan.openLink) {
-      await track(deps.openLink(plan.deviceId));
+      // openLink 可能与页面请求共用一条在途请求;它必须连同底层请求真正创建时
+      // 捕获的 epoch 一起复用,不能在 dedupe 时补拍一个更新的 epoch。
+      const openLinkStep = deps.openLink(plan.deviceId);
+      if (await track(
+        plan.deviceId,
+        openLinkStep.capturedPresenceEpoch,
+        openLinkStep.capturedResponseEvidenceEpoch,
+        openLinkStep.request,
+      ) === 'unavailable') {
+        continue;
+      }
     }
 
     if (plan.topics.length === 0) continue;
-    await track(deps.subscribe(plan.deviceId, plan.topics));
+    if (deps.isCancelled?.()) return { transientFailures };
+    if (
+      await track(
+        plan.deviceId,
+        deps.capturePresenceEpoch(plan.deviceId),
+        deps.captureResponseEvidenceEpoch(plan.deviceId),
+        deps.subscribe(plan.deviceId, plan.topics),
+      ) === 'unavailable'
+    ) {
+      continue;
+    }
 
     for (const topic of plan.topics) {
+      if (deps.isCancelled?.()) return { transientFailures };
       if (topic === 'sessions') {
         deps.requestSessionsReseed(plan.deviceId);
         continue;
       }
       const sessionId = readSessionTopic(topic);
       if (sessionId) {
-        await track(deps.rebuildSessionSnapshot(plan.deviceId, sessionId));
+        // 每个 session snapshot 自身包含四路 Promise.allSettled fan-out;只把
+        // 同一批真正并发的请求合并,不要把多个串行 session 的超时压成一次观测。
+        if (await track(
+          plan.deviceId,
+          deps.capturePresenceEpoch(plan.deviceId),
+          deps.captureResponseEvidenceEpoch(plan.deviceId),
+          deps.rebuildSessionSnapshot(plan.deviceId, sessionId, {
+            responsivenessCohort: deps.createDeviceSendCohort(plan.deviceId),
+          }),
+        ) === 'unavailable') {
+          break;
+        }
       }
     }
   }
   return { transientFailures };
+}
+
+export function hasDeviceLinkErrorCode(
+  error: unknown,
+  expectedCode: string,
+): boolean {
+  if (typeof error === 'string') return error.includes(expectedCode);
+  if (!error || typeof error !== 'object') return false;
+  const code = (error as { code?: unknown }).code;
+  if (code === expectedCode) return true;
+  const message = error instanceof Error ? error.message : '';
+  return message.includes(expectedCode);
+}
+
+function isDeviceOfflineError(error: unknown): boolean {
+  return hasDeviceLinkErrorCode(error, 'DEVICE_OFFLINE');
+}
+
+function isRemoteDisabledError(error: unknown): boolean {
+  return hasDeviceLinkErrorCode(error, 'REMOTE_DISABLED');
+}
+
+export type SnapshotBatchFailure =
+  | { kind: 'none' }
+  | { kind: 'partial-transient' }
+  | { kind: 'reject'; error: unknown };
+
+export function classifySnapshotBatchFailure(
+  results: readonly PromiseSettledResult<unknown>[],
+): SnapshotBatchFailure {
+  const rejections = results.filter(
+    (result): result is PromiseRejectedResult => result.status === 'rejected',
+  );
+  const availabilityRejections = rejections.filter(
+    (result) =>
+      isDeviceOfflineError(result.reason)
+      || isRemoteDisabledError(result.reason),
+  );
+  const otherTransient = rejections.find(
+    (result) =>
+      isTransientRemoteError(result.reason)
+      && !isDeviceOfflineError(result.reason)
+      && !isRemoteDisabledError(result.reason),
+  );
+  if (availabilityRejections.length === 0) {
+    return otherTransient
+      ? { kind: 'reject', error: otherTransient.reason }
+      : { kind: 'none' };
+  }
+
+  const hasTargetResponse = results.some((result) => result.status === 'fulfilled');
+  if (hasTargetResponse) {
+    // 同批已有目标端应答时,兄弟请求的 unavailable 不能升级为整机 verdict;
+    // 仍作为普通瞬时失败退避重试,补齐缺失的子快照。
+    return { kind: 'partial-transient' };
+  }
+
+  // 无任何目标应答时保留 unavailable verdict;两种标记混合时优先被控端
+  // 实时返回的 REMOTE_DISABLED,而不是可能来自 relay 路由窗口的 DEVICE_OFFLINE。
+  const remoteDisabled = availabilityRejections.find(
+    (result) => isRemoteDisabledError(result.reason),
+  );
+  return {
+    kind: 'reject',
+    error: (remoteDisabled ?? availabilityRejections[0]).reason,
+  };
 }
 
 function readSessionTopic(topic: Topic): string | null {

@@ -1,8 +1,8 @@
 /**
  * In-memory drafts for the submit_github_issue confirmation card.
  *
- * This input state is intentionally separate from makerChatStore: title/body
- * changes happen on every keystroke and must not invalidate running-status
+ * This input state is intentionally separate from makerChatStore: title/body/
+ * public-name changes happen on every keystroke and must not invalidate running-status
  * snapshots or notify session/global chat subscribers. Keys include both the
  * session and request so parallel sessions and consecutive requests cannot
  * share edits. Renderer restart intentionally drops all entries.
@@ -12,6 +12,8 @@ export interface IssueConfirmDraft {
   title: string;
   body: string;
   type: 'bug' | 'feature';
+  /** 平台代发时用户在确认卡片里编辑的公开署名。 */
+  publicName?: string;
 }
 
 const draftsBySession = new Map<string, Map<string, IssueConfirmDraft>>();

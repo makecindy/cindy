@@ -31,6 +31,13 @@ import { createAsyncQueue, type AsyncQueue } from './async-queue.js';
  */
 export interface SdkQueryLike extends AsyncIterable<unknown> {
   interrupt(): Promise<void>;
+  /**
+   * Optional — terminate the underlying CLI subprocess (SDK >= 0.2.x).
+   * Used as kill escalation when interrupt + input end do not make the
+   * consume loop exit: closing the transport ends/errors the async
+   * iterator, so the loop genuinely finishes.
+   */
+  close?(): void;
   setModel(model?: string): Promise<void>;
   setPermissionMode(mode: string): Promise<void>;
   applyFlagSettings(settings: Record<string, unknown>): Promise<void>;
@@ -98,6 +105,14 @@ export interface SdkQueryFactoryOptions {
    * If not provided, SDK uses its own permissionMode logic (acceptEdits default).
    */
   canUseTool?: CanUseToolCallback;
+  /**
+   * SDK oauth_token_refresh callback — remote cc hit 401 on its subscription
+   * OAuth token; forwarded to the attached desktop via reverse-request RPC.
+   * Only wired when the session env carries CLAUDE_CODE_OAUTH_TOKEN (the SDK
+   * auto-injects CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH=1 when the callback exists,
+   * so wiring it for gateway-key sessions would misroute API-key 401s).
+   */
+  getOAuthToken?: () => Promise<string | null>;
 }
 
 /**
@@ -152,6 +167,15 @@ interface SessionState {
   sdkSessionId: string | null;
   /** Whether the consume loop is still running. */
   alive: boolean;
+  /**
+   * forceful kill 已开始 (interrupt 发出、inputQueue 已/将 end) 但 consume
+   * loop 尚未退出 — 此窗口内 alive 仍为 true, sendMessage 必须显式拒绝
+   * (Greptile P1: ended queue 的 push 静默丢, 其他连接 attach+send 会让
+   * 用户消息看似成功实则消失)。
+   */
+  killing?: boolean;
+  /** consume loop 的完成 promise — kill 同步等待它 (带看门狗)。 */
+  consumeLoopDone?: Promise<void>;
   /** Currently attached client's notify function; null when no client is attached. */
   attachedNotify: AttachedNotify | null;
   /**
@@ -188,6 +212,17 @@ export type ApprovalRequestForwarder = (
   params: import('./protocol.js').ApprovalRequestParams,
 ) => Promise<import('./protocol.js').ApprovalRequestResult>;
 
+/**
+ * Callback that the session registry invokes when SDK's getOAuthToken fires
+ * for a session (subscription token expired mid-turn). The implementation
+ * should forward this as a reverse-request to the attached client and return
+ * the fresh token (or null when refresh failed / client too old).
+ */
+export type OAuthRefreshForwarder = (
+  sessionId: string,
+  params: import('./protocol.js').OAuthRefreshParams,
+) => Promise<import('./protocol.js').OAuthRefreshResult>;
+
 export interface SessionRegistryOptions {
   sdkQueryFactory: SdkQueryFactory;
   /**
@@ -197,11 +232,28 @@ export interface SessionRegistryOptions {
    */
   bufferCapacity?: number;
   /**
+   * Watchdog for kill(): how long to wait for the consume loop to exit
+   * after interrupt + input end before escalating to query.close().
+   * Default 10_000. Tests override with small values.
+   */
+  killSettleWatchdogMs?: number;
+  /**
+   * Grace period after the close() escalation to still let the consume
+   * loop exit before kill() fails with SESSION_KILL_TIMEOUT. Default 5_000.
+   */
+  killCloseGraceMs?: number;
+  /**
    * Called when a session's SDK canUseTool fires and a client is attached.
    * Implementation should send a reverse-request RPC to the client. If not
    * provided (or if no client is attached), the registry defaults to 'deny'.
    */
   onApprovalRequest?: ApprovalRequestForwarder;
+  /**
+   * Called when a session's SDK getOAuthToken fires (401 on the subscription
+   * token). Implementation should send a reverse-request RPC to the client.
+   * If not provided, sessions get no refresh callback (pre-refresh behavior).
+   */
+  onOAuthRefresh?: OAuthRefreshForwarder;
   logger?: {
     debug(msg: string, ctx?: Record<string, unknown>): void;
     info(msg: string, ctx?: Record<string, unknown>): void;
@@ -211,6 +263,8 @@ export interface SessionRegistryOptions {
 }
 
 const DEFAULT_BUFFER_CAPACITY = 1000;
+const DEFAULT_KILL_SETTLE_WATCHDOG_MS = 10_000;
+const DEFAULT_KILL_CLOSE_GRACE_MS = 5_000;
 
 export class SessionRegistry {
   private readonly sessions = new Map<string, SessionState>();
@@ -218,11 +272,17 @@ export class SessionRegistry {
   private readonly logger: NonNullable<SessionRegistryOptions['logger']>;
   private readonly bufferCapacity: number;
   private readonly onApprovalRequest?: ApprovalRequestForwarder;
+  private readonly onOAuthRefresh?: OAuthRefreshForwarder;
+  private readonly killSettleWatchdogMs: number;
+  private readonly killCloseGraceMs: number;
 
   constructor(opts: SessionRegistryOptions) {
     this.factory = opts.sdkQueryFactory;
     this.bufferCapacity = opts.bufferCapacity ?? DEFAULT_BUFFER_CAPACITY;
     this.onApprovalRequest = opts.onApprovalRequest;
+    this.onOAuthRefresh = opts.onOAuthRefresh;
+    this.killSettleWatchdogMs = opts.killSettleWatchdogMs ?? DEFAULT_KILL_SETTLE_WATCHDOG_MS;
+    this.killCloseGraceMs = opts.killCloseGraceMs ?? DEFAULT_KILL_CLOSE_GRACE_MS;
     this.logger =
       opts.logger ?? {
         debug: () => undefined,
@@ -315,6 +375,39 @@ export class SessionRegistry {
         }
       : undefined;
 
+    // Wire the SDK's oauth refresh callback only for sessions whose env carries
+    // a subscription OAuth token — the SDK injects CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH=1
+    // whenever the callback exists, and gateway-key sessions must not have their
+    // API-key 401s misrouted into a subscription refresh (mirrors the local
+    // maker-core wiring in claude-code/index.ts).
+    const getOAuthToken: (() => Promise<string | null>) | undefined =
+      this.onOAuthRefresh && opts.env.CLAUDE_CODE_OAUTH_TOKEN
+        ? async () => {
+            if (!sessionRef?.attachedNotify) {
+              this.logger.warn('getOAuthToken fired without attached client — returning null', {
+                sessionId: opts.sessionId,
+              });
+              return null;
+            }
+            try {
+              const result = await this.onOAuthRefresh!(opts.sessionId, {
+                sessionId: opts.sessionId,
+              });
+              // 不回写 opts.env:远端 daemon 不会用旧 env 重建 Query(rewind/fork 不支持),
+              // 重连 fresh-start 的 env 由 desktop 重新下发(desktop 侧才是 token 事实源)。
+              return result.token ?? null;
+            } catch (err) {
+              // Old desktop (UNKNOWN_METHOD) / RPC timeout / refresh failure all land
+              // here — null lets the SDK surface the auth error (pre-refresh behavior).
+              this.logger.warn('onOAuthRefresh failed — returning null', {
+                sessionId: opts.sessionId,
+                error: (err as Error).message,
+              });
+              return null;
+            }
+          }
+        : undefined;
+
     const sdkOpts: SdkQueryFactoryOptions = {
       inputStream: inputQueue,
       cwd: opts.cwd,
@@ -330,6 +423,7 @@ export class SessionRegistry {
       ...(opts.resumeSdkSessionId ? { resume: opts.resumeSdkSessionId } : {}),
       ...(opts.extraOptions ? { extraOptions: opts.extraOptions } : {}),
       ...(canUseTool ? { canUseTool } : {}),
+      ...(getOAuthToken ? { getOAuthToken } : {}),
     };
     const query = this.factory(sdkOpts);
     const session: SessionState = {
@@ -392,6 +486,15 @@ export class SessionRegistry {
     const s = this.get(sessionId);
     if (!s.alive) {
       throw makeRegistryError('SESSION_NOT_FOUND', `session ${sessionId} is no longer alive`);
+    }
+    // kill 窗口 (killing=true 且 consume loop 未退出) 必须显式拒绝:
+    // inputQueue 已 end, push 静默丢 — 看似发送成功实则消息消失
+    // (Greptile P1)。调用方应稍后重试或走 fresh start。
+    if (s.killing) {
+      throw makeRegistryError(
+        'SESSION_KILL_PENDING',
+        `session ${sessionId} is being killed (input closed) — retry shortly or start a fresh query`,
+      );
     }
     s.inputQueue.push(message);
   }
@@ -474,6 +577,9 @@ export class SessionRegistry {
       this.sessions.delete(sessionId);
       return;
     }
+    // 先标 killing 再 interrupt:终止窗口从这一刻起对 sendMessage 可见
+    // (Greptile P1, 见 SessionState.killing)。
+    s.killing = true;
     try {
       await s.query.interrupt();
     } catch (err) {
@@ -483,7 +589,48 @@ export class SessionRegistry {
       });
     }
     s.inputQueue.end();
-    // Loop will discover end + remove from registry.
+    // 同步等 consume loop 真正退出 (带看门狗):kill 返回时 session
+    // 必然不再 alive — client 不再需要用「固定期限轮询 list」猜终止状态
+    // (Greptile R27 confidence:固定期限的客户端等待没有 daemon 侧保证,
+    // 慢退出场景反复失败)。
+    if (s.consumeLoopDone) {
+      const settled = await raceWithTimeout(s.consumeLoopDone, this.killSettleWatchdogMs);
+      if (!settled) {
+        // 升级: 真实 SDK Query 的 close() 直接终止 CLI 子进程 — transport
+        // 关闭后 async iterator 必然结束/报错, consume loop 随之为
+        // alive=false (由 loop 自己置)。只在 loop 无视 interrupt 的
+        // 卡死场景才会走到这里。
+        if (typeof s.query.close === 'function') {
+          this.logger.warn('consume loop ignored interrupt during kill — escalating to query.close()', {
+            sessionId,
+            watchdogMs: this.killSettleWatchdogMs,
+          });
+          try {
+            s.query.close();
+          } catch (err) {
+            this.logger.warn('query.close during kill escalation threw', {
+              sessionId,
+              error: (err as Error).message,
+            });
+          }
+          const settledAfterClose = await raceWithTimeout(s.consumeLoopDone, this.killCloseGraceMs);
+          if (settledAfterClose) return;
+        }
+        // close() 不可用或 loop 仍不退出 = daemon 病态。绝不把 session
+        // 谎报为已退出让恢复路径继续 (Greptile confidence 3/5:同 ID 的
+        // 新旧 query 会在远端重叠执行)。抛 SESSION_KILL_TIMEOUT 并保留
+        // session (alive 仍 true、killing 保持) — 重试 kill 幂等重进
+        // 本流程;恢复手段是重启 cc-mgr daemon。
+        throw makeRegistryError(
+          'SESSION_KILL_TIMEOUT',
+          `SESSION_KILL_TIMEOUT: session ${sessionId} consume loop did not exit after kill ` +
+            `(watchdog ${this.killSettleWatchdogMs}ms` +
+            `${typeof s.query.close === 'function' ? ` + close grace ${this.killCloseGraceMs}ms` : ''}) — ` +
+            `restart the cc-mgr daemon to recover; refusing to report it as exited ` +
+            `while the old loop may still be running`,
+        );
+      }
+    }
   }
 
   /**
@@ -612,7 +759,7 @@ export class SessionRegistry {
   /* ============================== private ============================== */
 
   private startConsumeLoop(session: SessionState): void {
-    void (async (): Promise<void> => {
+    session.consumeLoopDone = (async (): Promise<void> => {
       try {
         for await (const message of session.query) {
           this.recordEvent(session, message);
@@ -629,6 +776,8 @@ export class SessionRegistry {
         this.notifyClosed(session, 'error', (err as Error).message);
       }
     })();
+    // 迟到失败不成 unhandled rejection (kill 的同步等待另有 race 兜底)。
+    session.consumeLoopDone.catch(() => undefined);
   }
 
   private recordEvent(session: SessionState, message: unknown): void {
@@ -699,13 +848,29 @@ export class SessionRegistry {
 }
 
 interface RegistryError extends Error {
-  code: 'SESSION_NOT_FOUND' | 'SESSION_ALREADY_EXISTS' | 'SDK_ERROR';
+  code:
+    | 'SESSION_NOT_FOUND'
+    | 'SESSION_ALREADY_EXISTS'
+    | 'SESSION_KILL_PENDING'
+    | 'SESSION_KILL_TIMEOUT'
+    | 'SDK_ERROR';
 }
 
 function makeRegistryError(code: RegistryError['code'], message: string): RegistryError {
   const err = new Error(message) as RegistryError;
   err.code = code;
   return err;
+}
+
+/** Race a promise against a timeout; resolves true if settled, false on timeout. */
+function raceWithTimeout(p: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  return Promise.race([
+    p.then(() => true),
+    new Promise<false>((resolve) => {
+      const timer = setTimeout(() => resolve(false), timeoutMs);
+      timer.unref?.();
+    }),
+  ]);
 }
 
 /** SDK's first SDKSystemMessage variant always has subtype='init' and session_id. */

@@ -19,10 +19,16 @@
 import {
   createAnthropicCompatProxy,
   createActiveStripTransform,
+  createDuplicateToolUseIdRecoveryRule,
+  createEmptyAssistantMessageRecoveryRule,
   createEmptyTextRecoveryRule,
   createEmptyThinkingRecoveryRule,
   createEncryptedContentRecoveryRule,
+  createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
+  dedupeDuplicateToolUseIds,
+  repairToolExchangeAdjacency,
+  stripEmptyAssistantMessagesFromBody,
   stripEmptyTextFromBody,
   stripEmptyThinkingFromBody,
   stripEncryptedContentFromBody,
@@ -32,7 +38,7 @@ import {
   type RoutingTransform,
 } from '@cindy/anthropic-compat-proxy';
 
-import { ANTHROPIC_DIRECT_UPSTREAM, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
+import { ANTHROPIC_DIRECT_UPSTREAM, CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
 import { getActiveCatalog } from './active-catalog.js';
 import { getResponsesBridgeHandler } from './anthropic-responses-bridge-host.js';
 import { getSessionEffort, getSessionFastMode } from './session-effort-store.js';
@@ -51,6 +57,7 @@ import {
 import { createProviderUpstreamErrorObserver } from './provider-upstream-error-observer.js';
 import { createClaudeAutoClassifierFailureObserver } from './claude-auto-permission-fallback.js';
 import {
+  emptyAssistantStripController,
   emptyTextStripController,
   emptyThinkingStripController,
   encryptedStripController,
@@ -115,13 +122,13 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-/** 大小写不敏感地判断请求是否带某 header(且非空)。 */
-function hasHeader(headers: Readonly<Record<string, string>>, name: string): boolean {
+/** 大小写不敏感取 header 值;缺失或空串 → null。 */
+function headerValue(headers: Readonly<Record<string, string>>, name: string): string | null {
   const lower = name.toLowerCase();
   for (const [k, v] of Object.entries(headers)) {
-    if (k.toLowerCase() === lower && typeof v === 'string' && v.length > 0) return true;
+    if (k.toLowerCase() === lower && typeof v === 'string' && v.length > 0) return v;
   }
-  return false;
+  return null;
 }
 
 /**
@@ -204,7 +211,15 @@ export function createModelRoutingTransform(): RoutingTransform {
     // providerId=null 时读)——显式选了供应商但被 scope 门放下来的辅助请求(如 xai 会话
     // 的 claude-* 分类器调用)不该往表里写死记录。
     const recordDefaultRoute = sessionId !== null && getSessionProvider(sessionId) == null;
-    if (hasHeader(ctx.headers, 'x-api-key')) {
+    // provider-oauth spawn 的占位 key **不是可用凭证**:scope 门放下来的辅助请求
+    // (如 openai / xai 来源 cc 会话里 CLI 自发的 claude-* 权限分类器调用)带着它
+    // passthrough 会在网关吃确定性 401 → 误触发 auto→ask 降级(#831)。与 codex
+    // ①.5 段 #890 修复同语义:占位 key 按「无可用凭证」处理,走下方换网关 key 的
+    // 默认路由;真实 key(gateway-spawn)照旧 passthrough。
+    const apiKeyHeader = headerValue(ctx.headers, 'x-api-key');
+    const hasUsableApiKey =
+      apiKeyHeader !== null && apiKeyHeader !== CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY;
+    if (hasUsableApiKey) {
       // gateway-spawn:自带网关 key,passthrough。
       if (recordDefaultRoute) recordClaudeSessionRoute(sessionId, 'gateway');
       return null;
@@ -214,6 +229,12 @@ export function createModelRoutingTransform(): RoutingTransform {
       // oauth-spawn 默认:全量换网关 key(防订阅 token 泄漏到网关)。
       if (recordDefaultRoute) recordClaudeSessionRoute(sessionId, 'gateway');
       return decision;
+    }
+    if (apiKeyHeader !== null) {
+      // 占位 key 且无网关 key:保持改动前行为(passthrough,上游 401)——下方的
+      // Anthropic 直连支路是给 oauth-spawn 订阅 token 准备的,占位 key 不适用。
+      log.warn('provider-oauth cc spawn 占位 key 且无网关 key; passthrough (预期 401)', { wireModel });
+      return null;
     }
     // 没网关 key:Anthropic 模型只能直连(唯一出路),其余 passthrough + 记一条诊断。
     // 判据 = 前缀地板 ∪ 目录 anthropic 供应商模型集合(新家族改 OSS 目录即可,无需发版)。
@@ -302,6 +323,25 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
           enabled: () => true,
           strip: stripEmptyTextFromBody,
         }),
+        // 空 assistant 消息主动剥离 —— always-on,独立 controller(moonshot/kimi 空
+        // thinking 占位被中断持久化后回放 400 "with role 'assistant' must not be empty";
+        // 与 kimi code 官方客户端的发送前兜底同构)。
+        createActiveStripTransform({
+          controller: emptyAssistantStripController,
+          enabled: () => true,
+          strip: stripEmptyAssistantMessagesFromBody,
+        }),
+        // tool 配对断裂修复 —— always-on 检测即修(孤儿/前置/超编 result 丢弃 +
+        // 错位前移 + 非 trailing 缺失合成占位;与 kimi code projector 的
+        // consumed-scan 接力配对同构)。**必须在 dedupe 之前**:它产出的结构
+        // 合法历史上 result 与 call 严格同序,dedupe 的顺序配对才等于真实配对
+        // (复审实测反例: 前置 result 白占序号会致 dedupe 张冠李戴)。
+        repairToolExchangeAdjacency,
+        // 重复 tool_use id 唯一化 —— always-on 检测即修(moonshot/kimi 序号 id
+        // 跨 turn 复用致会话安静瘫痪,2026-07 两个会话实测 `Edit_306`/`Bash_256`
+        // 各复用 20+ 次;重写方案与 kosong normalize 同构,详见 transform.ts 头注)。
+        // 无重复返回 null 字节透传,不需要 controller(异常在请求体里可直接检测)。
+        dedupeDuplicateToolUseIds,
         // LiteLLM/provider adapter 可能把 provider_specific_fields(null) 挂到 tool_use 上，
         // 严格 Anthropic 入站 schema 不接受该扩展字段。
         stripToolUseProviderSpecificFields,
@@ -322,7 +362,23 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
           enabled: () => true,
           onRetry: (threadId, model) => emptyTextStripController.markActive(threadId, model),
         }),
+        // 空 assistant 消息 400 → 丢空消息重发,always-on(moonshot/kimi 空 thinking
+        // 占位污染的会话;恢复一次后该 thread 发送前主动预剥,不再每轮撞 400)。
+        createEmptyAssistantMessageRecoveryRule({
+          enabled: () => true,
+          onRetry: (threadId, model) => emptyAssistantStripController.markActive(threadId, model),
+        }),
         createToolUseProviderSpecificFieldsRecoveryRule(),
+        // tool 配对断裂 400(moonshot `tool_call_id is not found` / Anthropic
+        // `unexpected tool_use_id` / `tool_use ids were found without tool_result`
+        // / OpenAI 系 wording)→ 组合结构修复重发,always-on。
+        // 两条 tool exchange 规则的 strip 同为 repairToolExchangeStructureFromBody
+        // (内建 repair → dedupe 顺序,与上方主动链一致;命中顺序不再影响正确性)。
+        createToolExchangeAdjacencyRecoveryRule(),
+        // 重复 tool_use id 400(``tool_use` ids must be unique`)→ 组合结构修复
+        // 重发,always-on(moonshot 实测不报错,但 LiteLLM 版本差 / 真 Anthropic
+        // 上游会报;主动 transform 已检测即修,此为第二道防线)。
+        createDuplicateToolUseIdRecoveryRule(),
       ],
       logger: log,
       // 请求体 dump 默认关(dev trace 级别 + agent 高并发会刷爆 main event loop

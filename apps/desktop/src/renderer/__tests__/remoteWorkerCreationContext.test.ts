@@ -29,7 +29,11 @@ describe('remote Orca Worker creation context', () => {
   it('never uses the controller API key to gate a remote model row', () => {
     const selector = read('components/new-chat/ModelSelector.tsx');
 
-    expect(selector).toContain("if (!deviceId) return id.startsWith('codex/') && !hasSavedKey;");
+    // 本地会话仍只按 codex/ + hasSavedKey 准入;SSH 远程额外按订阅直连前缀禁用
+    // (不可路由),两者都不得回退到 controller key 判定。
+    expect(selector).toContain('if (!deviceId) {');
+    expect(selector).toContain('if (subscriptionDirectDisabledReason(id)) return true;');
+    expect(selector).toContain("return id.startsWith('codex/') && !hasSavedKey;");
     expect(selector).toContain('if (remoteProviders.error) return false;');
     expect(selector).toContain('const rowAgentKind = resolveVisibleModelAgentKind({');
     expect(selector).toContain('providerOffersModel(provider, id, rowAgentKind)');

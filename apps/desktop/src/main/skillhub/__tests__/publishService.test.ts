@@ -249,8 +249,15 @@ describe('SkillPublishService', () => {
     expect(serverApiFetch).toHaveBeenCalledWith('/api/skills-hub/skills/publish/init', {
       method: 'POST',
       body: { slug: 'lark-task', version: '1.1.0' },
-      baseUrl: 'https://skillhub.test.invalid',
+      baseUrl: expect.any(Function),
     });
+    const initCall = vi.mocked(serverApiFetch).mock.calls.find(
+      ([path]) => path === '/api/skills-hub/skills/publish/init',
+    );
+    const initBaseUrl = initCall?.[1]?.baseUrl;
+    expect(
+      typeof initBaseUrl === 'function' ? initBaseUrl() : initBaseUrl,
+    ).toBe('https://skillhub.test.invalid');
   });
 
   it('sends the hand-filled 280-char text to Hub commit as summary', async () => {
@@ -314,7 +321,7 @@ describe('SkillPublishService', () => {
     expect(result.success).toBe(true);
     expect(serverApiFetch).toHaveBeenCalledWith('/api/skills-hub/skills/publish/commit', {
       method: 'POST',
-      baseUrl: 'https://skillhub.test.invalid',
+      baseUrl: expect.any(Function),
       body: expect.objectContaining({
         displayName: 'Lark Task',
         summary: 'Publish summary',
@@ -387,7 +394,7 @@ describe('SkillPublishService', () => {
     expect(result.success).toBe(true);
     expect(serverApiFetch).toHaveBeenCalledWith('/api/skills-hub/skills/publish/commit', {
       method: 'POST',
-      baseUrl: 'https://skillhub.test.invalid',
+      baseUrl: expect.any(Function),
       body: expect.objectContaining({
         categoryMode: 'auto',
         categories: [],
@@ -457,7 +464,7 @@ describe('SkillPublishService', () => {
     expect(result.success).toBe(true);
     expect(serverApiFetch).toHaveBeenCalledWith('/api/skills-hub/skills/publish/commit', {
       method: 'POST',
-      baseUrl: 'https://skillhub.test.invalid',
+      baseUrl: expect.any(Function),
       body: expect.objectContaining({
         visibility: 'public',
         visibleSlugs: [],

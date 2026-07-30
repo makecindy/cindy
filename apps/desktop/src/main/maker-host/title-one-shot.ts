@@ -42,6 +42,8 @@ import { createLogger } from '../logger.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 
 import { getActiveCatalog } from './active-catalog.js';
+import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
+import { readModelDisableOverrides } from './model-disable-store.js';
 import { readClaudeApiKey, readCodexOneShotCreds } from './auth-adapters.js';
 import { getValidClaudeAiOAuth } from './claude-oauth-refresh.js';
 import { outboundUndiciFetch } from './outbound-fetch.js';
@@ -53,6 +55,12 @@ const log = createLogger('maker-host:title-one-shot');
 const TITLE_TIMEOUT_MS = 12_000;
 /** 标题 ≤ 20 字,32 token 足够;codex Responses 协议层不暴露 max_tokens,仅对 messages/chat 生效。 */
 const TITLE_MAX_TOKENS = 32;
+/**
+ * Codex Responses 要求 instructions 字段，但语言和长度必须由调用方 prompt 决定。
+ * 这里仅约束输出形状，避免覆盖 locale-aware 标题指令。
+ */
+const CODEX_TITLE_INSTRUCTIONS =
+  'Output only the short conversation title requested by the user message, without quotation marks or ending punctuation.';
 
 type FetchImpl = typeof undiciFetch;
 
@@ -205,7 +213,7 @@ async function fetchCodexTitle(
 ): Promise<string> {
   const body: Record<string, unknown> = {
     model: modelId,
-    instructions: 'You output only a short conversation title (<= 10 Chinese chars), no punctuation, no quotes.',
+    instructions: CODEX_TITLE_INSTRUCTIONS,
     input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: prompt }] }],
     tools: [],
     tool_choice: 'auto',
@@ -314,15 +322,18 @@ export async function generateTitleViaProvider(
   const readGatewayKey = deps.readGatewayKey ?? readClaudeApiKey;
 
   // Provider 解析:WYSIWYG,与模型选择器高亮同口径。
-  //   1. DB sessions.provider_id(显式选中,race-free)。
+  //   1. DB sessions.provider_id(显式选中,race-free)—— 但必须仍在可路由 rail 里
+  //      (connectedProvidersForAgent 已剔除 suspended 停用供应商):标题 one-shot 是
+  //      一次新的付费调用,停用的来源不给用(PR #744 review);断开的来源本来也会在
+  //      各 wire 的凭证检查处折返,这里提前跳过语义一致。
   //   2. 无显式选 → nativeDefaultSourceId(已连接来源列表,agentKind)。
   //   3. 零已连接来源 → null → 直接跳过(不起智能标题)。
   const explicitFromDb = args.sessionId ? await readSessionProviderId(args.sessionId) : null;
+  const rail = await listConnectedProviders(args.agentKind);
   let providerId: string | null;
   if (explicitFromDb) {
-    providerId = explicitFromDb;
+    providerId = rail.some((p) => p.id === explicitFromDb) ? explicitFromDb : null;
   } else {
-    const rail = await listConnectedProviders(args.agentKind);
     providerId = nativeDefaultSourceId(rail, args.agentKind);
   }
 
@@ -336,6 +347,19 @@ export async function generateTitleViaProvider(
     log.debug('title oneShot skipped: no title target', { providerId, agentKind: args.agentKind });
     return null;
   }
+  // 标题模型这份拷贝被用户停用 → 跳过(回落启发式起名)。rail 条目带 buildRegistry
+  // 烘焙的 disabled 标志。查找必须跨该供应商的**所有 agent** 清单(findCatalogModel,
+  // 与 buildTitleTarget 解析 titleModel 的口径一致):cc 会话经 OpenAI 路由时,标题模型
+  // gpt-5.4-mini 挂在 codex 清单下,只查会话 agent 会漏掉停用标志(PR #744 review
+  // 第十一轮)。目录里完全找不到该模型时不额外拦。
+  const railProvider = rail.find((p) => p.id === providerId);
+  if (railProvider && findCatalogModel(railProvider, target.model)?.disabled === true) {
+    log.debug('title oneShot skipped: title model disabled in settings', {
+      providerId,
+      model: target.model,
+    });
+    return null;
+  }
 
   const startedAt = Date.now();
   const controller = new AbortController();
@@ -344,6 +368,18 @@ export async function generateTitleViaProvider(
   const onExternalAbort = () => controller.abort();
   args.signal?.addEventListener('abort', onExternalAbort);
 
+  // 派发紧前重查(PR #744 review 第二十一轮):OAuth 刷新等凭证获取是可能数秒的
+  // await,期间该 (来源, 标题模型) 可能被用户停用 —— 凭证到手、请求发出的紧前按
+  // override store 同步再验一次(key 无 agent 维度,组合判定即精确口径)。
+  // 直查 override store(不经 oneShotCandidates:那条链模块加载期拖 runtime-configs
+  // / ripgrep 探测等 electron 面,污染轻量测试环境)。
+  const routeDisabledNow = (): boolean => {
+    const overrides = readModelDisableOverrides();
+    return (
+      isProviderDisabled(overrides, providerId) ||
+      isModelDisabled(overrides, providerId, target.model)
+    );
+  };
   try {
     let text = '';
     switch (target.wire) {
@@ -351,6 +387,10 @@ export async function generateTitleViaProvider(
         const oauth = await readAnthropicOAuth();
         if (!oauth?.accessToken) {
           log.debug('title oneShot skipped: no anthropic OAuth', { providerId });
+          return null;
+        }
+        if (routeDisabledNow()) {
+          log.debug('title oneShot skipped: route disabled after credential refresh', { providerId });
           return null;
         }
         text = await fetchAnthropicTitle(target.upstream, target.model, args.prompt, oauth.accessToken, fetchImpl, controller.signal);
@@ -362,6 +402,10 @@ export async function generateTitleViaProvider(
           log.debug('title oneShot skipped: no codex creds', { providerId });
           return null;
         }
+        if (routeDisabledNow()) {
+          log.debug('title oneShot skipped: route disabled before dispatch', { providerId });
+          return null;
+        }
         text = await fetchCodexTitle(target.upstream, target.model, target.effort, args.prompt, creds, fetchImpl, controller.signal);
         break;
       }
@@ -369,6 +413,10 @@ export async function generateTitleViaProvider(
         const key = readGatewayKey();
         if (!key) {
           log.debug('title oneShot skipped: no gateway key', { providerId });
+          return null;
+        }
+        if (routeDisabledNow()) {
+          log.debug('title oneShot skipped: route disabled before dispatch', { providerId });
           return null;
         }
         text = await fetchGatewayTitle(target.upstream, target.model, args.prompt, key, fetchImpl, controller.signal);

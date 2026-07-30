@@ -2,7 +2,7 @@
  * Shim: openclaw/plugin-sdk/runtime-config-snapshot.
  *
  * Upstream reads a live global config singleton. We expose a host-settable
- * in-memory config (seeded by XDMaker: browser profiles, ssrf policy, ports).
+ * in-memory config (seeded by Cindy: browser profiles, ssrf policy, ports).
  * Defaults to an empty config so the runtime starts with built-in defaults.
  */
 import type { OpenClawConfig } from './config-contracts.js';

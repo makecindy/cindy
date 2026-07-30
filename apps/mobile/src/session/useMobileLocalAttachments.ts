@@ -121,6 +121,14 @@ export interface UseMobileLocalAttachmentsResult {
    * onUploaded / onError 的 localId 路由。快照与 claim 同一同步段完成,无竞态窗。
    */
   claimActiveUploads: () => ReturnType<MobileLocalAttachmentUploadController['claimableTasks']>;
+  /**
+   * claimActiveUploads 的逆操作:把一批已划归乐观消息的上传任务交还托盘。
+   *
+   * 乐观消息被收回成草稿时用(创建失败交还待发消息):任务继续跑,落定后宿主的
+   * outbox 路由找不到归属条目、产物回落托盘。取消重传是错的——用户已经等过一次
+   * 上传,粘贴来源的本地文件此时可能已被回收,重选都做不到(review P1)。
+   */
+  releaseClaimedUploads: (localIds: readonly string[]) => void;
   /** 只等粘贴占位落定(兑现任务已入队 / 失败 / 超时),不等上传完成;详见实现处注释。 */
   waitForPastePlaceholdersSettled: () => Promise<void>;
   /** 是否有粘贴占位在途(同步真源):占位兑现前任务尚未入队、无法 claim。 */
@@ -480,6 +488,7 @@ export function useMobileLocalAttachments(
       controller.claim(snapshot.map((task) => task.localId));
       return snapshot;
     },
+    releaseClaimedUploads: controller.unclaim,
     // 只等粘贴占位落定(兑现的同步段任务已入 controller 队列),不等上传本身:
     // 乐观发送(outbox)在占位窗口内需要它把「尚未入队、无法划归」的粘贴图等成
     // 可划归任务,再做同步 claim——不能用 waitForPendingUploads(那会退化回

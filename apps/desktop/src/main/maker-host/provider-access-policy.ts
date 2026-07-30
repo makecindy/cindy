@@ -5,7 +5,8 @@
  * providers and models exposed as selectable capabilities to product surfaces.
  */
 
-import type { Catalog } from '@cindy/model-providers';
+import { groupOf, type Catalog, type Provider } from '@cindy/model-providers';
+import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 
 export interface ProviderAccessContext {
   /** False for account-free local sessions, in every build flavor. */
@@ -13,6 +14,67 @@ export interface ProviderAccessContext {
 }
 
 const CINDY_AI_PROVIDER_ID = 'xd';
+const MAINLAND_VIDEO_MODEL_IDS: ReadonlySet<string> = new Set([
+  'seedance-fast',
+  'seedance-pro',
+]);
+
+function projectVideoDefaults(
+  defaults: Provider['videoDefaults'],
+  allowedIds: ReadonlySet<string>,
+): Provider['videoDefaults'] | undefined {
+  if (!defaults || !allowedIds.has(defaults.standard)) return undefined;
+  return {
+    standard: defaults.standard,
+    ...(defaults.draft && allowedIds.has(defaults.draft) ? { draft: defaults.draft } : {}),
+    ...(defaults.best && allowedIds.has(defaults.best) ? { best: defaults.best } : {}),
+  };
+}
+
+/**
+ * Build-region projection for the Cindy AI media catalog. Global keeps the
+ * catalog source verbatim; Mainland China and dev share the Mainland product
+ * semantics and expose only the media capabilities supported there.
+ */
+export function projectProviderCatalogForBuildRegion(
+  catalog: Catalog,
+  region: CindyRegion,
+): Catalog {
+  if (region === 'global') return catalog;
+
+  let changed = false;
+  const providers = catalog.providers.map((provider) => {
+    if (provider.id !== CINDY_AI_PROVIDER_ID) return provider;
+    changed = true;
+
+    const videoModels = (provider.videoModels ?? []).filter((model) =>
+      MAINLAND_VIDEO_MODEL_IDS.has(model.id),
+    );
+    const videoIds = new Set(videoModels.map((model) => model.id));
+    const videoDefaults = projectVideoDefaults(provider.videoDefaults, videoIds);
+    const models = Object.fromEntries(
+      Object.entries(provider.models).map(([agent, list]) => [
+        agent,
+        list.filter((model) => {
+          const group = groupOf(model);
+          return group !== 'image' && (group !== 'video' || MAINLAND_VIDEO_MODEL_IDS.has(model.id));
+        }),
+      ]),
+    ) as Provider['models'];
+    const projected: Provider = {
+      ...provider,
+      models,
+      imageModels: [],
+      videoModels,
+    };
+    delete projected.imageDefaults;
+    delete projected.videoDefaults;
+    if (videoDefaults) projected.videoDefaults = videoDefaults;
+    return projected;
+  });
+
+  return changed ? { ...catalog, providers } : catalog;
+}
 
 /** Cindy AI requires a Cindy account session; every membership kind may select it. */
 export function isProviderSelectable(providerId: string, context: ProviderAccessContext): boolean {

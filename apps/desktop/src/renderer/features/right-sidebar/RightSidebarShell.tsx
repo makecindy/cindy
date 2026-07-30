@@ -54,6 +54,7 @@ import type { TabKindHostContext, TabKindId, TabState } from './types';
 // getTabKind 查 registry。
 import './plugins';
 import { initRsbBrowserBridge } from './lib/rsbBrowserBridge';
+import { initPopupRouter, setPopupFallbackSession } from './lib/popupRouter';
 
 const log = createLogger('rightSidebar.shell');
 /**
@@ -100,6 +101,8 @@ interface RightSidebarShellProps {
    * 子窗口不应消费这段空间。
    */
   reserveLeftChromeActions?: boolean;
+  /** 工具面板处于最左 rail 邻位时，顶栏为浮动 ChromeActions 挖 no-drag 命中区并预留布局空间。 */
+  railChromeActionsHitHole?: boolean;
   /** 「在新窗口中打开侧边栏」;仅 Win 端 TabBar 内渲染按钮(Mac 走 MainLayout 浮层)。 */
   onDetach?: () => void;
   /** TabBar 横带是否作为窗口拖拽区(见 TabBar 同名 prop):主窗口内嵌形态传
@@ -133,6 +136,7 @@ export function RightSidebarShell({
   panelSide = 'right',
   onAllTabsClosed,
   reserveLeftChromeActions = false,
+  railChromeActionsHitHole = false,
 }: RightSidebarShellProps) {
   const { isFullscreen } = useMacFullscreen();
   const chromeActionsLeft =
@@ -144,6 +148,12 @@ export function RightSidebarShell({
   const leftChromeActionsSpacerWidth =
     unifiedTopbar && reserveLeftChromeActions
       ? chromeActionsLeft + CHROME_ACTIONS_GEOMETRY.clusterWidth
+      : 0;
+  // rail 邻位时浮动 ChromeActions 从工具面板左缘开始。命中洞保持 absolute
+  // 对齐窗口坐标；另加正常流中的 spacer，把 TabStrip 推到按钮簇之后。
+  const railChromeActionsSpacerWidth =
+    unifiedTopbar && !isFullscreen && railChromeActionsHitHole
+      ? CHROME_ACTIONS_GEOMETRY.clusterWidth
       : 0;
   const { t } = useTranslation();
 
@@ -335,29 +345,16 @@ export function RightSidebarShell({
     }
   }, [sessionId, bucket.tabs]);
 
-  // 订阅 main 端的 webview popup 推送 —— guest webview 内 window.open /
-  // target=_blank / window.location 跨 host 时,把 popup URL 路由到一个新的
-  // web-browser RSB tab(对齐 Codex `main-cC-d0ezP.js:48849` 的 foreground/
-  // background-tab 智能路由,简化版:都开前台 tab)。
-  // 注:sessionId 为 null 时(刚 mount 还没拿到 session)推上来的 popup 暂时丢弃 ——
-  // RSB 自身在没 sessionId 时也不显示,用户也看不到 webview,实际不会触发 popup。
+  // popup 路由已挪到窗口级常驻模块(lib/popupRouter.ts):订阅不随 Shell 生命
+  // 周期,用户离开聊天视图 / main 端归属等待期间 route 切换都不再丢 popup。
+  // Shell 只负责两件事:确保 router 已 init(幂等,与 bridge 同款),以及把
+  // "用户正在看的 session"喂给 router 作无归属 popup 的回落目标(保留最后
+  // 已知值,Shell 卸载期间到达的 popup 仍有处可去)。
   useEffect(() => {
-    if (!sessionId) return;
-    const off = window.electronAPI.onRsbBrowserPopup(({ url }) => {
-      // 给新 tab 一份完整 default state,只把 url 替换成 popup URL;hydrateState
-      // 会把缺字段补回默认。background-tab disposition 暂不区分,统一前台打开;
-      // 日后要支持后台 tab 时再按 disposition 分支选 setActive。
-      const initialState = {
-        url,
-        title: '',
-        favicon: null,
-        isAudible: false,
-      };
-      void addTab(sessionId, 'web-browser', initialState).catch((err) => {
-        log.error('rsb popup → addTab failed', { sessionId, url, err });
-      });
-    });
-    return off;
+    initPopupRouter();
+  }, []);
+  useEffect(() => {
+    setPopupFallbackSession(sessionId);
   }, [sessionId]);
 
   useEffect(() => {
@@ -383,6 +380,32 @@ export function RightSidebarShell({
           className="relative flex h-[46px] shrink-0 flex-none items-center border-b border-[var(--border-default)] bg-[var(--panel-bg)] px-2"
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
+          {!isFullscreen && railChromeActionsHitHole && (
+            <div
+              aria-hidden
+              data-testid="right-sidebar-rail-chrome-actions-hit-hole"
+              className="absolute left-0 top-0 h-full"
+              style={
+                {
+                  width: CHROME_ACTIONS_GEOMETRY.clusterWidth,
+                  WebkitAppRegion: 'no-drag',
+                } as React.CSSProperties
+              }
+            />
+          )}
+          {railChromeActionsSpacerWidth > 0 && (
+            <div
+              aria-hidden
+              data-testid="right-sidebar-rail-chrome-actions-spacer"
+              className="h-full shrink-0"
+              style={
+                {
+                  width: railChromeActionsSpacerWidth,
+                  WebkitAppRegion: 'no-drag',
+                } as React.CSSProperties
+              }
+            />
+          )}
           {leftChromeActionsSpacerWidth > 0 && (
             <div
               aria-hidden
@@ -473,6 +496,7 @@ export function RightSidebarShell({
           <EmptyState
             onAddFileTab={() => handleAdd('file-browser')}
             onAddReviewTab={() => handleAdd('review')}
+            onAddBackgroundTasksTab={() => handleAdd('background-tasks')}
             onAddBrowserTab={() => handleAdd('web-browser')}
             onAddTerminalTab={() => handleAdd('terminal')}
             ghostTabMetas={ghostTabMetas}

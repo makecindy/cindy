@@ -141,9 +141,13 @@ export function summarizeAccountRateLimits(value: unknown, nowMs: number): {
   return rows.length > 0 ? { rows } : null;
 }
 
-/** Mobile presentation model for banked Codex reset credits and their bound account. */
+/** Shared reset-credit summary; `rows` preserves Mobile UI while neutral fields serve other surfaces. */
 export interface CodexRateLimitResetSummary {
   rows: Array<{ label: string; value: string }>;
+  /** Whether app-server returned reset-credit availability (including an explicit zero). */
+  hasResetCreditCount: boolean;
+  /** Earliest available reset-credit expiry, as Unix epoch seconds. */
+  earliestExpiryAt: number | null;
   availableCount: number;
   canReset: boolean;
   shouldPrompt: boolean;
@@ -162,15 +166,16 @@ export function summarizeCodexRateLimitReset(
   if (value.account.email) rows.push({ label: '账号', value: value.account.email });
   if (value.account.accountId) rows.push({ label: 'Workspace', value: value.account.accountId });
 
+  const hasResetCreditCount = Boolean(value.rateLimitResetCredits);
   const availableCount = Math.max(0, Math.floor(value.rateLimitResetCredits?.availableCount ?? 0));
-  if (value.rateLimitResetCredits) {
+  if (hasResetCreditCount) {
     rows.push({ label: '可用重置', value: `${availableCount} 次` });
   }
 
-  const earliestExpiry = value.resetOffer?.expiresAt ?? earliestCreditExpiry(
+  const earliestExpiryAt = value.resetOffer?.expiresAt ?? earliestCreditExpiry(
     value.rateLimitResetCredits?.credits ?? null,
   );
-  const expiryText = formatRateLimitResetAt(earliestExpiry, nowMs);
+  const expiryText = formatRateLimitResetAt(earliestExpiryAt, nowMs);
   if (expiryText) rows.push({ label: '最早过期', value: expiryText });
 
   const snapshots = [
@@ -190,6 +195,8 @@ export function summarizeCodexRateLimitReset(
 
   return {
     rows,
+    hasResetCreditCount,
+    earliestExpiryAt,
     availableCount,
     shouldPrompt,
     canReset: shouldPrompt

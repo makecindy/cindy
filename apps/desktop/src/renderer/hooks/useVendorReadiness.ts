@@ -21,11 +21,11 @@ export type Readiness = 'ready' | 'unauthenticated' | 'binary-missing' | 'loadin
 
 export function useVendorReadiness(vendorKey: 'cc' | 'codex'): {
   readiness: Readiness;
-  revalidate: () => Promise<Readiness>;
+  revalidate: (opts?: { includeSuspended?: boolean }) => Promise<Readiness>;
 } {
   const [readiness, setReadiness] = useState<Readiness>('loading');
 
-  const revalidate = useCallback(async (): Promise<Readiness> => {
+  const revalidate = useCallback(async (opts?: { includeSuspended?: boolean }): Promise<Readiness> => {
     const agent: AgentKind = vendorKey === 'cc' ? 'claude-code' : 'codex';
 
     // 轴 2(仅 codex,正交于来源):本地二进制是运行时前提,缺了连发都发不了 → 优先返回
@@ -57,8 +57,15 @@ export function useVendorReadiness(vendorKey: 'cc' | 'codex'): {
     } catch {
       providers = [];
     }
+    // includeSuspended:已建会话的发送门禁传 true —— 供应商级停用是准入轴,不打断
+    // 运行中会话,门禁只回答「凭证还连着吗」;全停时把继续发送判成 unauthenticated
+    // 会误堵旧会话(PR #744 review 第十七轮)。新路由(草稿)保持准入口径。
     const next: Readiness =
-      connectedProvidersForAgent(providers, agent).length > 0 ? 'ready' : 'unauthenticated';
+      connectedProvidersForAgent(providers, agent, {
+        includeSuspended: opts?.includeSuspended === true,
+      }).length > 0
+        ? 'ready'
+        : 'unauthenticated';
     setReadiness(next);
     return next;
   }, [vendorKey]);

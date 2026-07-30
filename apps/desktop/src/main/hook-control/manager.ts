@@ -17,6 +17,7 @@
 import { randomUUID } from 'node:crypto';
 
 import {
+  HOOK_FEATURE_GROUP_RELAY,
   HOOK_FEATURE_MULTI_TEAM,
   HOOK_FEATURE_PROVIDER_BIND,
   HOOK_FEATURE_PROVIDER_PREFS,
@@ -56,6 +57,7 @@ import type {
   HookPendingBindView,
   HookPrefsPatch,
   HookPrefsView,
+  HookProvider as ClientHookProvider,
   ProviderBindingView,
   ProviderPrefsView,
   HookTeamBindingView,
@@ -64,6 +66,7 @@ import type {
 import type { ProviderBindingCacheEntry, SlackHookStore } from './store.js';
 import type { HookDispatcher } from './dispatcher.js';
 import { buildQueryResponse, type AgentModelSource } from './queryResponder.js';
+import { recordGroupMessage, sweepGroupWindowExpired } from './groupWindow.js';
 import { parseTelegramConnectUrl } from './telegramDeepLink.js';
 import type { HookTransport, HookTransportOpts, HookTransportStatus } from './transport.js';
 
@@ -150,6 +153,8 @@ export interface HookControlManagerDeps {
   notifyProviderPrefs?: (view: ProviderPrefsView) => void;
   /** prefs 读写往返超时(默认 10s; 测试注短)。 */
   prefsTimeoutMs?: number;
+  /** multi-team 自动首绑延迟窗；仅测试注短，生产默认 300ms。 */
+  autoBindDeferMs?: number;
   /** Slack 网关工具往返超时(默认 60s —— 搜索/长查询比 prefs 慢得多; 测试注短)。 */
   toolTimeoutMs?: number;
   /**
@@ -406,8 +411,16 @@ type ProviderBindRequest =
   | { kind: 'cancel'; requestId: string; attemptId: string }
   | { kind: 'revoke'; requestId: string; bindingId: string };
 
-/** Provider-neutral 连接线的 provider 值域(Slack 走 legacy 专属帧, 不进本表)。 */
-type NeutralHookProvider = Exclude<HookProvider, 'slack'>;
+/**
+ * Provider-neutral 连接线的 provider 值域(Slack 走 legacy 专属帧, 不进本表)。
+ *
+ * 从**客户端支持集**(IPC 契约的 ClientHookProvider)派生, 而不是协议全集:
+ * 协议按 append-only 先行加了 'x'(配套能力 provider:x), 但客户端的 X 渠道
+ * 还没实现(见 makecindy/cindy#691), 运行期也没有对应 lane。若沿用协议全集,
+ * 一个客户端从不支持的 provider 会漏进 renderer 可见类型。等 X 的 lane config
+ * 与设置页一并落地时, 放宽 ClientHookProvider 即可自动带上本表。
+ */
+type NeutralHookProvider = Exclude<ClientHookProvider, 'slack'>;
 
 /** renderer 请求打开 provider 相关链接的动作(openTelegramAction 的值域)。 */
 type ProviderOpenAction = 'connect' | 'provider' | 'add-to-group';
@@ -499,6 +512,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     onSlackToolProviderEnabledChanged,
     notifyPrefs,
     prefsTimeoutMs,
+    autoBindDeferMs = AUTO_BIND_DEFER_MS,
     toolTimeoutMs,
     bindPendingTimeoutMs,
     installWaitTimeoutMs,
@@ -551,6 +565,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       HOOK_FEATURE_PROVIDER_BIND,
       HOOK_FEATURE_PROVIDER_PREFS,
       HOOK_FEATURE_SESSION_PICKER,
+      HOOK_FEATURE_GROUP_RELAY,
     ],
     isEnabled: () => store.get().telegramEnabled,
     setEnabled: (enabled) => {
@@ -634,6 +649,18 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   const laneByProvider = new Map<NeutralHookProvider, NeutralProviderLane>(
     lanes.map((lane) => [lane.config.provider, lane]),
   );
+  /**
+   * 协议全集的 provider → 客户端实际跑着的那条 lane。两类值在这里都归为 null,
+   * 调用方按「没有这条线」处理:
+   *   - 'slack': 走 legacy 专属帧, 本就不进本表;
+   *   - 协议按 append-only 先行加入、客户端尚未实现的 provider(当前是 'x',
+   *     见 makecindy/cindy#691) —— 没有 lane config, 也没有设置页入口。
+   * 直接用 laneByProvider.get() 会因 key 已收窄而在这类入口处编译不过, 那正是
+   * 本函数要收的边界: 收窄发生一次, 而不是在每个调用点各写一遍断言。
+   */
+  function neutralLaneFor(provider: HookProvider): NeutralProviderLane | null {
+    return lanes.find((lane) => lane.config.provider === provider) ?? null;
+  }
   /**
    * (multi-team)自动首绑的延迟触发器: 空 bind.state + autoBindIntent 时不能
    * 立即发 bind.start —— server 的 hello 同步可能紧跟一帧 pending 回放(旧
@@ -721,6 +748,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   function activateCurrentAccount(): void {
     if (accountActive || disposed) return;
     accountActive = true;
+    // 群窗口 TTL 兜底清扫: 流量路径的清扫只在有群消息/派发时触发, 这里保证
+    // 群不再活跃(或通道停用)后过期行也在每次账号激活时清掉。纳入
+    // pendingAccountOps: 登出/切号等待清扫落库完成再销毁 DB client。
+    trackAccountOp(sweepGroupWindowExpired());
     dispatcher?.activateAccount();
     multiBindings = store.get().bindingsCache.map((entry) => ({ ...entry, displaced: false }));
     for (const lane of lanes) lane.binding = lane.config.restoreCachedBinding();
@@ -886,8 +917,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     return {
       enabled,
       url,
-      status:
-        enabled && url.length === 0 ? 'error' : toViewStatus(lane.status, enabled),
+      status: enabled && url.length === 0 ? 'error' : toViewStatus(lane.status, enabled),
       lastError:
         enabled && url.length === 0
           ? lane.config.notConfiguredError
@@ -996,9 +1026,18 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     lane.bindWatchdog.unref?.();
   }
 
-  function providerBindingView(payload: ProviderBindStatusPayload): ProviderBindingView {
+  /**
+   * provider 取本地 lane config 而不是 payload: 调用方已用
+   * `payload.provider !== lane.config.provider` 丢过走错线的帧, 两者必然相等,
+   * 而 lane config 是接线期定死的可信值 —— renderer 可见快照里的渠道标识不从
+   * 网线上的值取。
+   */
+  function providerBindingView(
+    provider: NeutralHookProvider,
+    payload: ProviderBindStatusPayload,
+  ): ProviderBindingView {
     return {
-      provider: payload.provider,
+      provider,
       state: payload.state,
       attemptId: payload.attemptId,
       bindingId: payload.bindingId,
@@ -1230,7 +1269,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     // initial snapshot; do not let that older snapshot roll it back.
     if (!isStateSnapshot) lane.awaitingStateSnapshot = false;
     const previousBindingId = lane.binding?.state === 'confirmed' ? lane.binding.bindingId : null;
-    const view = providerBindingView(acceptedPayload);
+    const view = providerBindingView(lane.config.provider, acceptedPayload);
     lane.binding = view;
     const currentBindingId = view.state === 'confirmed' ? view.bindingId : null;
     if (previousBindingId !== null && previousBindingId !== currentBindingId) {
@@ -1645,8 +1684,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       log.info(`hook frame dropped after account ingress closed: ${msg.type}`);
       return;
     }
-    const lane =
-      expectedProvider === 'slack' ? null : (laneByProvider.get(expectedProvider) ?? null);
+    const lane = neutralLaneFor(expectedProvider);
     const neutralOnly =
       msg.type === 'provider.bind.update' ||
       msg.type === 'provider.bind.state' ||
@@ -1736,7 +1774,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
             if (!autoBindIntent || !store.get().enabled) return;
             if (pendingBind !== null) return; // 回放先到, 已交给 pending 路径
             if (initiateMultiBind(null)) autoBindIntent = false;
-          }, AUTO_BIND_DEFER_MS);
+          }, autoBindDeferMs);
           autoBindDefer.unref?.();
         }
       }
@@ -1797,7 +1835,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         return;
       }
       const view: ProviderPrefsView = {
-        provider: msg.payload.provider,
+        // 同 providerBindingView: 上面已丢过走错线的帧, 渠道标识取可信的 lane config。
+        provider: lane.config.provider,
         bindingId: msg.payload.bindingId,
         scopeId: msg.payload.scopeId,
         bound: msg.payload.bound,
@@ -2044,6 +2083,25 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       );
       return;
     }
+    if (msg.type === 'group.message') {
+      // 群消息实时中继入本地窗口(group-relay-v1)。只接受来自对应 provider
+      // transport 的帧(错误路由的连接不得写窗口); fire-and-forget:
+      // 失败只记日志, 窗口是上下文增强, 不影响任务链路。内容不写日志。
+      if (msg.payload.provider !== expectedProvider) {
+        log.warn(
+          `group.message ignored: provider=${msg.payload.provider} on ${expectedProvider} transport`,
+        );
+        return;
+      }
+      // 账号边界: 写入纳入 pendingAccountOps, 登出/切号等待落库完成后再
+      // 销毁 DB client, 不留 use-after-dispose。
+      trackAccountOp(
+        recordGroupMessage(msg.payload).catch((err) =>
+          log.warn(`group window record failed: ${String(err)}`),
+        ),
+      );
+      return;
+    }
     // task.ack / turn.end 不该由 server 发给 desktop; 未知业务帧只记日志
     log.warn(`unexpected message type=${msg.type}, ignored`);
   }
@@ -2140,7 +2198,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         // 握手完成 → dispatcher 刷新发送函数并补发离线积压的 turn.end
         if (s === 'connected') {
           const t = created;
-          dispatcher?.onConnected(dispatchId('slack'), (m) => t.send(m));
+          // features 一并交出去: dispatcher 的 turn.reopen 回流按 server 本次
+          // 握手宣告的能力开关(滚动发布时重连可能落到不支持的旧实例)。
+          dispatcher?.onConnected(dispatchId('slack'), (m) => t.send(m), serverFeatures);
           // 阶段 4 起绑定走 SIWS OIDC, 由用户点「连接 Slack」显式发起(需开浏览器),
           // 不再随连接就绪自动绑 —— 抢占式绑定若自动补绑会让两台设备互相顶。
         }
@@ -2205,7 +2265,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           // refreshHello() can upgrade an already-open socket after a rolling
           // deploy without another status transition.
           const t = created;
-          dispatcher?.onConnected(dispatchId(provider), (m) => t.send(m));
+          dispatcher?.onConnected(dispatchId(provider), (m) => t.send(m), lane.serverFeatures);
         }
         notifyStatus(toView());
       },
@@ -2219,7 +2279,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         }
         if (s === 'connected' && laneCapabilityReady(lane)) {
           const t = created;
-          dispatcher?.onConnected(dispatchId(provider), (m) => t.send(m));
+          dispatcher?.onConnected(dispatchId(provider), (m) => t.send(m), lane.serverFeatures);
         }
         notifyStatus(toView());
       },
@@ -2435,8 +2495,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         notifyStatus(toView());
         return;
       }
-      const lane = laneByProvider.get(provider);
-      if (lane === undefined) return;
+      const lane = neutralLaneFor(provider);
+      if (lane === null) return;
       lane.config.setEnabled(enabled);
       if (!enabled) {
         lane.autoBindIntent = false;
@@ -2667,6 +2727,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     dispose() {
       disposed = true;
       stopAll();
+      // dispatcher 由本 manager 独占持有(ipc.ts 在同一处创建两者), 所以它的
+      // 进程级信号订阅也随本次 dispose 一起退掉, 否则重建 manager 会叠加一个
+      // 对着废弃 dispatcher 状态跑的续跑监听。
+      dispatcher?.dispose();
     },
   };
 }

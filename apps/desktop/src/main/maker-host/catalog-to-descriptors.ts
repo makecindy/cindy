@@ -37,6 +37,9 @@ function toDescriptor(m: CatalogModel): ModelDescriptor {
   if (m.supportsFastMode !== undefined) d.supportsFastMode = m.supportsFastMode;
   if (m.group !== undefined) d.group = m.group;
   if (m.sortOrder !== undefined) d.sortOrder = m.sortOrder;
+  // 默认可见性要透传：渲染层的种子默认模型取「排序第一**且默认可见**」的那个，没有它就会
+  // 把默认收起的 legacy 模型选成默认 —— 用户在选择器里根本看不到自己的默认模型。
+  if (m.defaultEnabled !== undefined) d.defaultEnabled = m.defaultEnabled;
   return d;
 }
 

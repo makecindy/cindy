@@ -65,6 +65,65 @@ describe('deviceResponsivenessBreaker', () => {
     expect(h.breaker.acquire(DEV).decision).toBe('reject');
   });
 
+  it('同一显式 fan-out 一起超时只贡献一次 strike,不会误判为三轮故障', () => {
+    const h = harness();
+    const cohort = h.breaker.createCohort(DEV);
+    const batch = [
+      h.breaker.acquire(DEV, cohort),
+      h.breaker.acquire(DEV, cohort),
+      h.breaker.acquire(DEV, cohort),
+      h.breaker.acquire(DEV, cohort),
+    ];
+    expect(new Set(batch.map((slot) => slot.cohort))).toEqual(new Set([cohort]));
+
+    for (const slot of batch) h.breaker.settle(DEV, slot, 'timeout');
+    expect(h.breaker.isOpen(DEV)).toBe(false);
+
+    // 后续普通请求没有显式共享 cohort,各自代表新的独立故障观测。
+    timeoutOnce(h.breaker);
+    expect(h.breaker.isOpen(DEV)).toBe(false);
+    timeoutOnce(h.breaker);
+    expect(h.breaker.isOpen(DEV)).toBe(true);
+  });
+
+  it('未显式分组的同步请求各自使用独立 cohort', () => {
+    const h = harness();
+    const slots = [
+      h.breaker.acquire(DEV),
+      h.breaker.acquire(DEV),
+      h.breaker.acquire(DEV),
+    ];
+    expect(new Set(slots.map((slot) => slot.cohort)).size).toBe(3);
+
+    for (const slot of slots) h.breaker.settle(DEV, slot, 'timeout');
+    expect(h.breaker.isOpen(DEV)).toBe(true);
+  });
+
+  it('每轮 acquire→timeout 的顺序故障仍按独立 cohort 连续累计', () => {
+    const h = harness();
+    const cohorts: number[] = [];
+    for (let i = 0; i < BREAKER_FAILURE_THRESHOLD; i++) {
+      const slot = h.breaker.acquire(DEV);
+      cohorts.push(slot.cohort);
+      h.breaker.settle(DEV, slot, 'timeout');
+    }
+    expect(new Set(cohorts).size).toBe(BREAKER_FAILURE_THRESHOLD);
+    expect(h.breaker.isOpen(DEV)).toBe(true);
+  });
+
+  it('preserves cohort id uniqueness after a generation bump', () => {
+    const h = harness();
+    const first = h.breaker.createCohort(DEV);
+    const stale = h.breaker.acquire(DEV, first);
+    timeoutOnce(h.breaker);
+    h.breaker.settle(DEV, stale, 'responded');
+
+    const next = h.breaker.acquire(DEV);
+    expect(next.cohort).not.toBe(first);
+    h.breaker.settle(DEV, next, 'timeout');
+    expect(h.breaker.isOpen(DEV)).toBe(false);
+  });
+
   it('真实回包(即使是业务错误应答)重置连续计数', () => {
     const h = harness();
     timeoutOnce(h.breaker);
@@ -211,29 +270,41 @@ describe('generation:恢复前派出的旧请求结果不采信(review P1)', () 
     expect(h.breaker.isOpen(DEV)).toBe(false); // 新代只累计了 2 次
   });
 
-  it('无状态时的 responded 不翻篇:健康并发下同期超时照常累计(review)', () => {
-    // 若每次 responded 都翻代,健康并发里一个较快回包会把同期在途请求随后的
-    // 超时全部作废——连续超时被低估,设备真卡死时熔断反而难打开。
+  it('健康并发里一个快回包后,同批慢请求一起超时仍只算一个故障批次', () => {
     const h = harness();
-    const slow1 = h.breaker.acquire(DEV);
-    const slow2 = h.breaker.acquire(DEV);
-    const slow3 = h.breaker.acquire(DEV);
-    settleOnce(h.breaker, 'responded'); // 快请求先回包:无状态,不翻代
+    const cohort = h.breaker.createCohort(DEV);
+    const slow1 = h.breaker.acquire(DEV, cohort);
+    const slow2 = h.breaker.acquire(DEV, cohort);
+    const slow3 = h.breaker.acquire(DEV, cohort);
+    const fast = h.breaker.acquire(DEV, cohort);
+    h.breaker.settle(DEV, fast, 'responded'); // 设备当时没有失败状态,不翻代
     h.breaker.settle(DEV, slow1, 'timeout');
     h.breaker.settle(DEV, slow2, 'timeout');
     h.breaker.settle(DEV, slow3, 'timeout');
-    expect(h.breaker.isOpen(DEV)).toBe(true); // 3 条同期超时照常开断路器
+    expect(h.breaker.isOpen(DEV)).toBe(false);
+    // 后续两轮独立超时仍会补足三次阈值,没有把真实持续卡死静默掉。
+    timeoutOnce(h.breaker);
+    timeoutOnce(h.breaker);
+    expect(h.breaker.isOpen(DEV)).toBe(true);
   });
 
-  it('clear(撤权)翻篇:清除前在途请求的超时不会重建计数', () => {
+  it('clear(权威 offline / 撤权)翻篇:整批在途超时不会重建计数', () => {
     const h = harness();
-    const stale = h.breaker.acquire(DEV);
+    const stale = [
+      h.breaker.acquire(DEV),
+      h.breaker.acquire(DEV),
+      h.breaker.acquire(DEV),
+    ];
     timeoutOnce(h.breaker);
     h.breaker.clear(DEV);
-    h.breaker.settle(DEV, stale, 'timeout');
-    h.breaker.settle(DEV, stale, 'timeout');
-    h.breaker.settle(DEV, stale, 'timeout');
+    for (const slot of stale) h.breaker.settle(DEV, slot, 'timeout');
     expect(h.breaker.isOpen(DEV)).toBe(false);
+    // 清理不影响之后真正的独立故障检测。
+    timeoutOnce(h.breaker);
+    timeoutOnce(h.breaker);
+    expect(h.breaker.isOpen(DEV)).toBe(false);
+    timeoutOnce(h.breaker);
+    expect(h.breaker.isOpen(DEV)).toBe(true);
   });
 
   it('旧代 responded 同样不采信(不会误关新一代已 open 的熔断)', () => {

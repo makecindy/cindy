@@ -5,7 +5,7 @@
  * 偏好什么、在做什么",让蒸馏产物真正为该用户改写,而不是程序化裁剪。
  *
  * 来源边界(防跨项目张冠李戴 —— 实测踩过:把别的项目的 build 禁令写进
- * XDMaker skill):
+ * Cindy skill):
  *   - user_* 分片:person 级事实,取自**所有** workdir 的 memory 目录
  *   - feedback_* / project_* 分片:项目域规则,只取**触发会话所在 workdir**
  *     的 memory 目录,且格式化时标注来源,prompt 里禁止跨项目移植

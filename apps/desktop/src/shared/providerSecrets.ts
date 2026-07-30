@@ -3,7 +3,7 @@
  * ---------------------------------------------------------------------------
  * 供应商 API key(密钥)在本机的存储约定 —— 单一事实来源(SSoT)。
  *
- * 设计背景:XDMaker 的供应商密钥一律 **本地 only**,只存 Electron safeStorage
+ * 设计背景:Cindy 的供应商密钥一律 **本地 only**,只存 Electron safeStorage
  * (委托 OS keychain / DPAPI 加密),从不同步 / 上传到服务器。历史上各处用裸字符串
  * ("api_key" / "mivo_api_key")指代存储键名,随供应商增多容易散落、写错。本模块
  * 把「providerId → safeStorage 存储键名」收敛成唯一映射:
@@ -50,8 +50,19 @@ export function providerSecretStorageKey(id: ProviderSecretId): string {
   return STORAGE_KEYS[id];
 }
 
+/**
+ * SSH 远端常驻 codex daemon 经 remote-forward 直连本机 MCP bridge 时使用的
+ * persistent bearer token 的存储键名。
+ *
+ * 与 bridge 主 token (per-run 随机, 经 env 给本地 codex 子进程) 不同:daemon
+ * env 在其 spawn 时固定, 需要跨 app 重启稳定, 因此落 safeStorage。main-only:
+ * renderer 没有正当读取场景, 不经通用 safe-storage IPC 暴露。
+ */
+export const REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY = 'remote_mcp_bridge_token';
+
 const MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS = new Set<string>([
   STORAGE_KEYS['voice-asr'].toLowerCase(),
+  REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY.toLowerCase(),
 ]);
 
 /**

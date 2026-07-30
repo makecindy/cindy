@@ -289,6 +289,83 @@ describe('Agent Island display state', () => {
     ]);
   });
 
+  it('preserves one assistant stream across a recoverable reconnect error', () => {
+    const state = createAgentIslandState();
+    const start = 1_000;
+    setAgentIslandStrings(state, {
+      ...DEFAULT_AGENT_ISLAND_STRINGS,
+      networkReconnecting: '（{{attempt}}/{{maxAttempts}}）正在重连…',
+    });
+
+    applyAgentIslandUserPrompt(state, { sessionId: 's1', title: 'Task', agentKind: 'codex' }, 'run tests', start);
+    applyAgentIslandEvent(state, { sessionId: 's1' }, textDeltaEvent('我会先'), start + 100);
+    applyAgentIslandEvent(state, { sessionId: 's1' }, {
+      type: 'error',
+      source: 'codex',
+      data: {
+        message: 'Reconnecting... 1/5',
+        isTerminal: false,
+        willRetry: true,
+      },
+    }, start + 200);
+    expect(state.sessions.get('s1')).toMatchObject({
+      assistantStreamRawText: '我会先',
+      reconnectStatus: '（1/5）正在重连…',
+    });
+    expect(buildAgentIslandDisplayState(state, start + 200).sessions[0]).toMatchObject({
+      detail: '（1/5）正在重连…',
+      compactDetail: '（1/5）正在重连…',
+    });
+
+    applyAgentIslandEvent(state, { sessionId: 's1' }, {
+      type: 'error',
+      source: 'codex',
+      data: {
+        message: 'Reconnecting... 2/5',
+        isTerminal: false,
+        willRetry: true,
+      },
+    }, start + 250);
+    expect(buildAgentIslandDisplayState(state, start + 250).sessions[0]).toMatchObject({
+      detail: '（2/5）正在重连…',
+      compactDetail: '（2/5）正在重连…',
+    });
+
+    applyAgentIslandEvent(state, { sessionId: 's1' }, {
+      type: 'error',
+      source: 'codex',
+      data: {
+        message: 'Waiting before another automatic retry',
+        isTerminal: false,
+        willRetry: true,
+      },
+    }, start + 275);
+    expect(state.sessions.get('s1')?.reconnectStatus).toBeNull();
+    expect(buildAgentIslandDisplayState(state, start + 275).sessions[0]?.compactDetail)
+      .not.toContain('2/5');
+
+    applyAgentIslandEvent(state, { sessionId: 's1' }, textDeltaEvent('继续处理'), start + 300);
+    expect(state.sessions.get('s1')?.reconnectStatus).toBeNull();
+    applyAgentIslandEvent(
+      state,
+      { sessionId: 's1' },
+      finalTextEvent('我会先继续处理并完成。'),
+      start + 400,
+    );
+
+    const session = state.sessions.get('s1');
+    expect(session).toMatchObject({
+      running: true,
+      phase: 'running',
+      assistantStreamLineId: null,
+      assistantStreamRawText: '',
+    });
+    expect(session?.activityLines.map((line) => `${line.kind}:${line.text}`)).toEqual([
+      'user:run tests',
+      'assistant:我会先继续处理并完成。',
+    ]);
+  });
+
   it('keeps whitespace-only assistant deltas in the raw stream accumulator', () => {
     const state = createAgentIslandState();
     const start = 1_000;
@@ -562,6 +639,32 @@ describe('Agent Island display state', () => {
 
     expect(display.pillSnapshot.priorityCompactTitle).toBe('run island tests');
     expect(display.pillSnapshot.priorityCompactTitle).not.toBe('codex');
+  });
+
+  it('哨兵标题不进 pillSnapshot —— meaningfulSessionTitle 先把它过滤掉', () => {
+    // review 曾担心 priorityCompactTitle 会把原始哨兵带给 native(Swift 侧的 compactTitle
+    // 优先读这个字段)。事实是取值链第一步 meaningfulSessionTitle 就按大小写无关过滤掉
+    // 'new maker' / 'untitled' / 'codex' 等泛化串,pill 因此回落到项目名 —— 小尺寸胶囊里
+    // 项目名本来也比「未命名对话」有信息量。这条断言把该事实钉住,免得日后有人放宽过滤
+    // 又把哨兵漏给 native(PR #1031 review 第 13 轮)。
+    const state = createAgentIslandState();
+
+    applyAgentIslandEvent(
+      state,
+      {
+        sessionId: 's1',
+        title: 'New Maker',
+        agentKind: 'codex',
+        workingDir: '/repo/cindy',
+      },
+      statusEvent(true, 'Thinking'),
+      1_000,
+    );
+    const display = buildAgentIslandDisplayState(state, 1_050);
+
+    expect(display.pillSnapshot.priorityCompactTitle).toBe('cindy');
+    expect(display.pillSnapshot.priorityCompactTitle).not.toBe('New Maker');
+    expect(display.pillSnapshot.priorityMicroTitle).not.toBe('New Maker');
   });
 
   it('prefers a bounded conversation title over the project name for the compact title', () => {

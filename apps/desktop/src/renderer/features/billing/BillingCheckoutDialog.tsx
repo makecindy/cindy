@@ -4,6 +4,7 @@ import * as QRCode from 'qrcode';
 import { Check, CircleAlert, ExternalLink, LoaderCircle, RotateCcw, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import cindyIconUrl from '@/../../resources/icon.png?url';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { billingApi } from './api';
@@ -49,7 +50,8 @@ export function BillingCheckoutDialog({
     setQrDataUrl(null);
     if (action?.type === 'QR_CODE') {
       void QRCode.toDataURL(action.value, {
-        width: 1024,
+        errorCorrectionLevel: 'H',
+        width: 320,
         margin: 4,
       })
         .then((dataUrl) => {
@@ -180,14 +182,22 @@ export function BillingCheckoutDialog({
             {state.phase === 'AWAITING_PAYMENT' && !actionExpired && action?.type === 'QR_CODE' && (
               <>
                 <div
-                  className="grid place-items-center rounded-xl border border-[var(--border-default)] bg-white p-2"
+                  className="relative grid place-items-center rounded-xl border border-[var(--border-default)] bg-white p-2"
                   style={{
-                    width: 'min(512px, calc(100vw - 96px), calc(100vh - 260px))',
-                    height: 'min(512px, calc(100vw - 96px), calc(100vh - 260px))',
+                    width: 'min(280px, calc(100vw - 96px), calc(100vh - 260px))',
+                    height: 'min(280px, calc(100vw - 96px), calc(100vh - 260px))',
                   }}
                 >
                   {qrDataUrl ? (
-                    <img src={qrDataUrl} className="size-full" alt={t('billing.checkout.qrAlt')} />
+                    <>
+                      <img src={qrDataUrl} className="size-full" alt={t('billing.checkout.qrAlt')} />
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute grid size-10 place-items-center rounded-lg bg-white p-1"
+                      >
+                        <img src={cindyIconUrl} className="size-8 rounded-md" alt="" />
+                      </span>
+                    </>
                   ) : (
                     <Spinner size={24} className="text-[var(--text-secondary)]" />
                   )}

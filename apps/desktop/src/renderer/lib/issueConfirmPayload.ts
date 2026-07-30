@@ -1,4 +1,5 @@
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
+import { normalizeIssuePublicName } from '../../shared/issuePublicName';
 
 /**
  * issue_confirm IPC 里的构建区域。非法或缺失一律返回 undefined —— 确认卡片宁可
@@ -6,7 +7,7 @@ import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
  *
  * 写成字面量比较而非「数组 + includes + as CindyRegion」：narrowing 直接得出
  * `CindyRegion`，不需要类型断言，也就不会在 `CindyRegion` 改动后继续静默通过。
- * 新增区域时的漏改由同族的 `shared/issueRegionCode.ts` 兜住——那里的
+ * 新增区域时的漏改由同族的 `shared/regionCode.ts` 兜住——那里的
  * `Record<CindyRegion, …>` 会编译报错，改它时会一并看到本函数。
  */
 export function parseIssueEnvRegion(raw: unknown): CindyRegion | undefined {
@@ -29,4 +30,9 @@ export function parseIssueSubmissionIdentity(raw: unknown): IssueSubmissionIdent
     return null;
   }
   return { kind: obj.kind, login: obj.login.trim() };
+}
+
+/** Main 提供的平台代发建议署名；非法值按缺失处理，由卡片回退为“匿名”。 */
+export function parseIssueSuggestedPublicName(raw: unknown): string | undefined {
+  return normalizeIssuePublicName(raw) ?? undefined;
 }

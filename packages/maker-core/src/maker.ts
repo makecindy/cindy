@@ -15,6 +15,8 @@
  * - 业务 token 管理、飞书业务态
  */
 
+import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
+
 import type { AgentKind } from './types/common.js';
 import type { Capabilities } from './types/capabilities.js';
 import type { ForkSdkSessionOptions, ForkSdkSessionResult } from './types/events.js';
@@ -30,7 +32,12 @@ import type {
   ListCustomizationsResult,
 } from './types/customizations.js';
 import { Session, generateSessionId } from './session.js';
-import type { BaseAgent, StartSessionOptions, OneShotOptions } from './agents/base-agent.js';
+import type {
+  BaseAgent,
+  StartSessionOptions,
+  OneShotOptions,
+  RefreshLocalModelsOptions,
+} from './agents/base-agent.js';
 import type { MemoryStatus, MemorySetResult, MemoryResetResult } from './types/memory.js';
 import type { ConsumeAccountRateLimitResetCreditParams } from './types/account-rate-limits.js';
 import type { SessionStorage, SessionMeta } from './interfaces/session-storage.js';
@@ -309,7 +316,7 @@ export class Maker {
         id,
         agentKind: opts.agentKind,
         workDir: opts.workingDir,
-        title: opts.title ?? 'New Maker',
+        title: opts.title ?? DEFAULT_DRAFT_SESSION_TITLE,
         model: opts.model,
         workspaceKind: opts.workspaceKind,
         effort: opts.effort,
@@ -687,8 +694,11 @@ export class Maker {
   }
 
   /** 刷新指定 agent 的本机运行时模型清单；不支持或结果已过期时返回 false。 */
-  async refreshAgentLocalModels(agentKind: AgentKind): Promise<boolean> {
-    return this.requireAgent(agentKind).refreshLocalModels();
+  async refreshAgentLocalModels(
+    agentKind: AgentKind,
+    options?: RefreshLocalModelsOptions,
+  ): Promise<boolean> {
+    return this.requireAgent(agentKind).refreshLocalModels(options);
   }
 
   /** Read account quota and banked reset credits through the selected agent runtime. */

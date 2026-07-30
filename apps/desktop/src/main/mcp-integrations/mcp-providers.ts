@@ -13,7 +13,7 @@ import { getCindyGhostsMcpDeps } from './ghost.js';
 import { getAndroidMcpDeps } from './android.js';
 import { getBrowserMcpDeps } from './browser.js';
 import { getComputerMcpDeps } from './computer.js';
-import { feishuIm } from '../im';
+import { feishuIm, wechatIm } from '../im';
 import { getSlackToolBridge } from '../hook-control/slackToolBridge.js';
 import { createLogger } from '../logger.js';
 import { getScheduler } from '../scheduler-host/index.js';
@@ -141,6 +141,36 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         }
       },
       logger: createLogger('mcp/cindy_feishu_bot'),
+    },
+    wechatBot: {
+      getActivePeerIdForSession: (sessionId) =>
+        wechatIm.getActivePeerIdForSession(sessionId),
+      getMostRecentPeerId: () => wechatIm.getMostRecentPeerId(),
+      sendMessage: async (peerId, text) => {
+        try {
+          const { messageId } = await wechatIm.sendText(peerId, text);
+          return { ok: true, messageId };
+        } catch (error) {
+          createLogger('mcp/cindy_wechat').warn(
+            'sendMessage failed target=...%s detail=%s',
+            peerId.slice(-8),
+            error instanceof Error ? error.message : String(error),
+          );
+          return { ok: false, reason: 'SEND_FAIL' };
+        }
+      },
+      sendFile: async (peerId, absPath, displayName) => {
+        const result = await wechatIm.sendFile(peerId, absPath, displayName);
+        if (!result.ok) {
+          createLogger('mcp/cindy_wechat').warn(
+            'sendFile failed target=...%s reason=%s',
+            peerId.slice(-8),
+            result.reason ?? 'unknown',
+          );
+        }
+        return result;
+      },
+      logger: createLogger('mcp/cindy_wechat'),
     },
     // cindy_slack(2026-07-19): Slack 网关工具。桥经 hook-control 的零依赖
     // 注册表取用(静态 import ipc.ts 会与 maker-host 闭环, 见 slackToolBridge
@@ -290,13 +320,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return { ok: false, errorCode: 'INTERNAL', message };
         }
       },
-      sendToSession: async ({ targetSessionId, message, dispatcherSessionId, title, useWorktree }) => {
+      sendToSession: async ({ targetSessionId, message, dispatcherSessionId, title, useWorktree, workingDir }) => {
         const svc = tryGetOrcaCollabService();
         if (!svc) {
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'orca collab service not initialized' };
         }
         try {
-          return await svc.sendToSession({ targetSessionId, message, dispatcherSessionId, title, useWorktree });
+          return await svc.sendToSession({ targetSessionId, message, dispatcherSessionId, title, useWorktree, workingDir });
         } catch (err) {
           return { ok: false, errorCode: 'INTERNAL', message: err instanceof Error ? err.message : String(err) };
         }

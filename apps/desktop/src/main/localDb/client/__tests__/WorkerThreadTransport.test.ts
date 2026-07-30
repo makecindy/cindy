@@ -60,15 +60,18 @@ describe('WorkerThreadTransport', () => {
       useInlineWorker: true,
       maxInFlightRpcs: 1,
       maxQueuedRpcs: 1,
-      rpcTimeoutMs: 100,
+      // Leave enough startup/scheduling headroom for Windows worker threads;
+      // the assertion below still verifies that queue wait consumes the
+      // request's total budget.
+      rpcTimeoutMs: 500,
     });
     const startedAt = Date.now();
     try {
-      const active = transport.send('sleep', { ms: 70 });
-      const queued = transport.send('sleep', { ms: 100 });
-      await expect(active).resolves.toEqual({ slept: 70 });
+      const active = transport.send('sleep', { ms: 200 });
+      const queued = transport.send('sleep', { ms: 400 });
+      await expect(active).resolves.toEqual({ slept: 200 });
       await expect(queued).rejects.toThrow(/RPC timeout/);
-      expect(Date.now() - startedAt).toBeLessThan(140);
+      expect(Date.now() - startedAt).toBeLessThan(700);
     } finally {
       await transport.close();
     }

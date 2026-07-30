@@ -3,7 +3,7 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-linux",
-  "documentNamespace": "https://cindy.app/spdx/desktop-linux/823159b53c2c291f7aa5f869c33c719496ff37f5c67dc973cc383b67bfb3e881",
+  "documentNamespace": "https://cindy.app/spdx/desktop-linux/cb85667531389dc5500e06bc4aaa034f7a2ed9160fa4274e9843f3291755c614",
   "creationInfo": {
     "created": "2026-07-28T11:22:53Z",
     "creators": [
@@ -129,6 +129,16 @@
       "filesAnalyzed": false,
       "licenseConcluded": "Apache-2.0",
       "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "Tencent openclaw-weixin protocol sources (adapted)",
+      "SPDXID": "SPDXRef-Package-c675a4f80195e3e9",
+      "versionInfo": "2.4.6",
+      "downloadLocation": "https://github.com/Tencent/openclaw-weixin/tree/v2.4.6",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
       "copyrightText": "NOASSERTION"
     },
     {
@@ -11998,6 +12008,23 @@
       ]
     },
     {
+      "name": "silk-wasm",
+      "SPDXID": "SPDXRef-Package-1f5626585935f113",
+      "versionInfo": "3.7.1",
+      "downloadLocation": "https://github.com/idranme/silk-wasm",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/silk-wasm@3.7.1"
+        }
+      ]
+    },
+    {
       "name": "simple-concat",
       "SPDXID": "SPDXRef-Package-21d7a09ca81c30af",
       "versionInfo": "1.0.1",
@@ -13452,6 +13479,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-5db1c86634c06028"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-c675a4f80195e3e9"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -16942,6 +16974,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-0540e3a65d43c022"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-1f5626585935f113"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
