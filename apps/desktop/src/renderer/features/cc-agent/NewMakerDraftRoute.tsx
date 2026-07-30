@@ -380,8 +380,9 @@ export function NewMakerDraftRoute() {
   const refreshWorktrees = useRefreshWorktrees();
 
   /** createSession 失败 toast:远端路由错误按 code 给可操作文案,其余回退通用文案。 */
-  const toastCreateSessionFailed = () => {
-    const code = (createSessionError as { code?: string } | null)?.code;
+  const toastCreateSessionFailed = (err?: unknown) => {
+    const code = (err as { code?: string } | null | undefined)?.code
+      ?? (createSessionError as { code?: string } | null)?.code;
     const key =
       code === 'REMOTE_PROVIDER_UPDATING'
         ? 'ccAgent.draft.remoteProviderUpdating'
