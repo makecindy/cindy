@@ -787,6 +787,22 @@ const SYSTEM_PLAN_REVIEW_DISMISSAL_REASONS = new Set([
   'user_rejected',
 ]);
 
+/**
+ * 目录上下文窗口低于/等于这个档位时,不拿它去收敛 app-server 上报值。
+ *
+ * 200K 在目录里同时是「真实窗口」和「没填元数据时的占位」: 自定义 provider 的模型
+ * 省略 contextWindow 时,派生会填 DEFAULT_CUSTOM_CONTEXT_WINDOW (= 200_000,
+ * packages/model-providers/src/user-provider.ts), 而它的声明就写明**仅用于展示**、
+ * 不是已核实的路由上限。把这种占位当上限会把 app-server 报的真实 1M 压成 200K,
+ * Maker Memory flush 会早得离谱、容量圆环也只显示五分之一。
+ *
+ * 所以这一档及以下一律退回改动前的行为(直接采信上报值): 宁可少收敛一部分真的是
+ * 200K 的模型(与改前一致, 不构成回归), 也不能把占位值当权威去压真实窗口。
+ * renderer 侧同值常量是 DEFAULT_CONTEXT_WINDOW, 语义一致(都代表「不可信的兜底」)。
+ * 刻意不 import model-providers: 不为一个判据阈值给 agent 运行时引入 catalog 领域依赖。
+ */
+const UNTRUSTED_CATALOG_WINDOW_CEILING = 200_000;
+
 // ── 能力声明 (Phase 3 全开) ──────────────────────────────────────────────────
 
 // 模型清单 SSoT 已迁至目录 packages/model-providers/catalog/providers.json。
@@ -2197,11 +2213,15 @@ export class CodexAgent extends BaseAgent {
     const eventQueue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
     const usageTracker = new UsageTracker();
     const translatorRt: CodexRuntimeState = newCodexRuntimeState();
-    // 模型目录窗口 (claude-code agent 同源: 那边直接用它做 setContextWindow)。
-    // Codex 侧走 app-server 上报值, 这里留着给 capContextWindow 做上限。
-    const modelContextWindows = new Map(
-      this.capabilities.availableModels.map((model) => [model.id, model.contextWindow] as const),
-    );
+    /**
+     * 本 turn 实际发给 server 的 model, 在构造 turnParams 时快照。
+     *
+     * 不能在 usage 事件里读 mutableModel: setModel 虽然文档写「下一 turn 才生效」,
+     * 赋值却是**即时**的, 于是活跃 turn 期间切模型会让这一 turn 还在产出的用量
+     * 按**下一个**模型的目录窗口收敛。turn 结束后不清空 —— 迟到的 usage 事件
+     * 归属的仍是它那一 turn 的模型。
+     */
+    let activeTurnModel: string | undefined = opts.model;
     /**
      * 把 app-server 上报的 modelContextWindow 收敛到模型目录的真实上限。
      *
@@ -2209,13 +2229,23 @@ export class CodexAgent extends BaseAgent {
      * 例如目录 372K 的 GPT-5.6-Sol 会被报成 1M。虚高值会让上下文占比被低估,
      * memory flush 阈值也跟着推迟, 所以两者都有时取小值。
      *
-     * 目录值可能缺失 (自定义 provider、目录未覆盖的新模型), 此时沿用上报值;
+     * 三个约束都不是可省的细节:
+     * - **每次查 live capabilities, 不在会话启动时拍快照**: host 的
+     *   refreshCatalogDerivedModels 靠原地 splice 让已建会话看到刷新后的目录
+     *   (模型发现、切账号、自定义 provider 增删改)。拍 Map 会让新发现的模型永远
+     *   不被收敛、改过的上限沿用旧值直到用户新开会话。
+     * - **只认高于 UNTRUSTED_CATALOG_WINDOW_CEILING 的目录值**: 见该常量注释。
+     * - **按 turn 归属模型**: 见 activeTurnModel 注释。
+     *
+     * 目录值缺失 (目录未覆盖的模型、'gpt-5' 这类 server 默认哨兵) 时沿用上报值;
      * 上报值反过来比目录小时同样取它 (路由真被降窗)。
      * renderer 侧对应逻辑见 apps/desktop/src/renderer/lib/contextWindow.ts。
      */
     const capContextWindow = (reported: number | null): number | null => {
-      const catalog = modelContextWindows.get(mutableModel);
-      if (!catalog || catalog <= 0) return reported;
+      const catalog = activeTurnModel
+        ? this.capabilities.availableModels.find((m) => m.id === activeTurnModel)?.contextWindow
+        : undefined;
+      if (!catalog || catalog <= UNTRUSTED_CATALOG_WINDOW_CEILING) return reported;
       if (!reported || reported <= 0) return catalog;
       return Math.min(catalog, reported);
     };
@@ -6468,6 +6498,9 @@ export class CodexAgent extends BaseAgent {
           ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
           ...(collaborationMode ? { collaborationMode } : {}),
         };
+        // 这一 turn 的用量按这里发出去的 model 归属上下文窗口 —— 之后 setModel 立即改
+        // mutableModel 也不会串到还在产出的本 turn (见 activeTurnModel / capContextWindow)。
+        activeTurnModel = mutableModel;
         const markTurnConfigAccepted = (): void => {
           threadMayHaveRollout = true;
           if (turnParams.collaborationMode?.mode === 'plan') {

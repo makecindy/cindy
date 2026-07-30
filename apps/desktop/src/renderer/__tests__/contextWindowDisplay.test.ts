@@ -35,6 +35,16 @@ describe('resolveDisplayContextWindow', () => {
     })).toBe(992_000);
   });
 
+  // 自定义 provider 省略 contextWindow 时,目录里留下的是 DEFAULT_CUSTOM_CONTEXT_WINDOW
+  // (200K) 占位——它自己就声明「仅用于展示」。拿它当上限会把 SDK 实测的 1M 压成 200K,
+  // 圆环只显示五分之一余量。
+  it('does not let a 200K catalog placeholder cap a real 1M SDK window', () => {
+    expect(resolveDisplayContextWindow({
+      modelContextWindow: 200_000,
+      sdkContextWindow: 1_000_000,
+    })).toBe(1_000_000);
+  });
+
   it('keeps a smaller SDK value when the route is actually downsized', () => {
     expect(resolveDisplayContextWindow({
       modelContextWindow: 1_000_000,

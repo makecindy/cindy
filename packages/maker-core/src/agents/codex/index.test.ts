@@ -14663,6 +14663,56 @@ describe('CodexAgent context window reporting', () => {
     defaultEffort: 'high',
   };
 
+  /** 目录里另一个真窗口更大的模型 — 用来验证切模型后窗口不串。 */
+  const wideModel = {
+    id: 'codex/gpt-wide',
+    displayName: 'GPT Wide',
+    contextWindow: 1_000_000,
+    efforts: ['low', 'medium', 'high', 'xhigh'],
+    defaultEffort: 'high',
+  };
+
+  function agentWithCatalog(models: unknown[]): CodexAgent {
+    return new CodexAgent(
+      createDeps({}, { capabilityAdditions: { availableModels: models } as never }),
+    );
+  }
+
+  /** turn/start 与 settings/update 都要能应答: setModel 会推 thread/settings/update。 */
+  function installTurnCapableHost(agent: CodexAgent) {
+    let turnSeq = 0;
+    return installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+      if (method === Method.ThreadSettingsUpdate) return {};
+      if (method === Method.TurnInterrupt) return {};
+      return undefined;
+    });
+  }
+
+  const usageBreakdown = {
+    totalTokens: 108,
+    inputTokens: 100,
+    cachedInputTokens: 40,
+    outputTokens: 5,
+    reasoningOutputTokens: 3,
+  };
+
+  function pushUsage(
+    handlers: ThreadEventHandlers,
+    turnId: string,
+    appServerWindow: number,
+  ): void {
+    handlers.tokenUsageUpdated?.({
+      threadId: 'start-thread-id',
+      turnId,
+      tokenUsage: {
+        total: usageBreakdown,
+        last: usageBreakdown,
+        modelContextWindow: appServerWindow,
+      },
+    } as never);
+  }
+
   async function reportedContextWindow(
     agent: CodexAgent,
     sessionId: string,
@@ -14678,18 +14728,7 @@ describe('CodexAgent context window reporting', () => {
     if (!handlers) throw new Error('expected thread handlers');
 
     handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
-    const breakdown = {
-      totalTokens: 108,
-      inputTokens: 100,
-      cachedInputTokens: 40,
-      outputTokens: 5,
-      reasoningOutputTokens: 3,
-    };
-    handlers.tokenUsageUpdated?.({
-      threadId: 'start-thread-id',
-      turnId: 'turn-1',
-      tokenUsage: { total: breakdown, last: breakdown, modelContextWindow: appServerWindow },
-    } as never);
+    pushUsage(handlers, 'turn-1', appServerWindow);
 
     const { contextWindow } = handle.getUsageSnapshot();
     await handle.close();
@@ -14697,27 +14736,117 @@ describe('CodexAgent context window reporting', () => {
   }
 
   it('caps the app-server window at the catalog window for gateway-routed models', async () => {
-    const agent = new CodexAgent(
-      createDeps({}, { capabilityAdditions: { availableModels: [gatewayRoutedModel] } as never }),
-    );
     expect(
-      await reportedContextWindow(agent, 'session-ctxwin-cap', 'codex/gpt-5.6-sol', 1_000_000),
+      await reportedContextWindow(
+        agentWithCatalog([gatewayRoutedModel]),
+        'session-ctxwin-cap',
+        'codex/gpt-5.6-sol',
+        1_000_000,
+      ),
     ).toBe(372_000);
   });
 
   it('keeps a smaller app-server window when the route is actually downsized', async () => {
-    const agent = new CodexAgent(
-      createDeps({}, { capabilityAdditions: { availableModels: [gatewayRoutedModel] } as never }),
-    );
     expect(
-      await reportedContextWindow(agent, 'session-ctxwin-downsized', 'codex/gpt-5.6-sol', 128_000),
+      await reportedContextWindow(
+        agentWithCatalog([gatewayRoutedModel]),
+        'session-ctxwin-downsized',
+        'codex/gpt-5.6-sol',
+        128_000,
+      ),
     ).toBe(128_000);
   });
 
   it('keeps the app-server window when the catalog has no entry for the model', async () => {
-    const agent = new CodexAgent(createDeps());
     expect(
-      await reportedContextWindow(agent, 'session-ctxwin-no-catalog', 'gpt-5.4', 272_000),
+      await reportedContextWindow(
+        new CodexAgent(createDeps()),
+        'session-ctxwin-no-catalog',
+        'gpt-5.4',
+        272_000,
+      ),
     ).toBe(272_000);
+  });
+
+  // 自定义 provider 省略 contextWindow 时,派生会填 DEFAULT_CUSTOM_CONTEXT_WINDOW(200K)
+  // 占位,那是「仅用于展示」的保守兜底、不是已核实的路由上限。拿它当上限会把真实的 1M
+  // 压成 200K,Maker Memory flush 早得离谱。
+  it('does not cap with the 200K placeholder a custom provider leaves behind', async () => {
+    const placeholderModel = { ...wideModel, id: 'custom/unknown-window', contextWindow: 200_000 };
+    expect(
+      await reportedContextWindow(
+        agentWithCatalog([placeholderModel]),
+        'session-ctxwin-placeholder',
+        'custom/unknown-window',
+        1_000_000,
+      ),
+    ).toBe(1_000_000);
+  });
+
+  // host 的 refreshCatalogDerivedModels 靠原地 splice 让已建会话看到刷新后的目录
+  // (模型发现 / 切账号 / 自定义 provider 增删改)。启动时拍 Map 会让这些会话永远
+  // 按旧目录收敛,所以这里在 startSession 之后才把真窗口 splice 进去。
+  it('reads the catalog live so a mid-session refresh takes effect', async () => {
+    const models: Array<Record<string, unknown>> = [
+      { ...wideModel, id: 'codex/late-known', contextWindow: 200_000 },
+    ];
+    const agent = agentWithCatalog(models);
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-ctxwin-live-catalog',
+      model: 'codex/late-known',
+      workingDir: '/repo',
+    });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<
+      [string, ThreadEventHandlers]
+    >;
+    const handlers = subscribeCalls[0]?.[1];
+    if (!handlers) throw new Error('expected thread handlers');
+
+    // 目录刷新:原地替换条目,把该模型的真实上限改成 372K(模拟 refreshCatalogDerivedModels)
+    const live = agent.capabilities.availableModels as unknown as Array<Record<string, unknown>>;
+    live.splice(0, live.length, { ...wideModel, id: 'codex/late-known', contextWindow: 372_000 });
+
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+    pushUsage(handlers, 'turn-1', 1_000_000);
+
+    expect(handle.getUsageSnapshot().contextWindow).toBe(372_000);
+    await handle.close();
+  });
+
+  // setModel 文档写「下一 turn 才生效」,但 mutableModel 是**即时**改的。活跃 turn 仍在
+  // 产出 usage 时切模型,不能拿下一个模型的窗口去收敛这一 turn —— 否则 372K 的 turn 会
+  // 按 1M 记账,memory flush 阈值随之推迟。
+  it('attributes in-flight usage to the turn model, not the just-switched one', async () => {
+    const agent = agentWithCatalog([gatewayRoutedModel, wideModel]);
+    const host = installTurnCapableHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-ctxwin-turn-model',
+      model: 'codex/gpt-5.6-sol',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    // 真实走一次 send,让 turnParams 带着 372K 的模型发出去
+    await handle.send({ type: 'user', content: 'go' });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+
+    // turn 还在飞时切到 1M 的模型。显式断言能力存在 —— 用 `?.()` 静默跳过会让这条
+    // 用例在 setModel 消失后依然"通过",反而掩盖回归。
+    if (!handle.setModel) throw new Error('expected setModel support');
+    await handle.setModel('codex/gpt-wide');
+
+    // 这条 usage 属于仍在产出的 372K turn,必须按 372K 收敛
+    pushUsage(handlers, 'turn-1', 1_000_000);
+    expect(handle.getUsageSnapshot().contextWindow).toBe(372_000);
+
+    // 下一 turn 才轮到新模型:它的 1M 目录窗口不再被旧模型压住
+    await handle.send({ type: 'user', content: 'again' });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } } as never);
+    pushUsage(handlers, 'turn-2', 1_000_000);
+    expect(handle.getUsageSnapshot().contextWindow).toBe(1_000_000);
+
+    await handle.close();
   });
 });
