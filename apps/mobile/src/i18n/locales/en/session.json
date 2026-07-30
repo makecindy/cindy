@@ -38,6 +38,7 @@
     "backToEdit": "Back to Edit",
     "retry": "Retry",
     "firstMessageNotSent": "The first message wasn't sent; its content has been restored to the input box.",
+    "queuedAfterFirstMessageFailed": "The first message wasn't sent, so this one is held back to keep the order. Retry or delete it.",
     "locateMessageNotFound": "Couldn't find the message to jump to.",
     "shareNoLocalImage": "Couldn't get the local image file",
     "shareFailedTitle": "Share Failed",

@@ -38,6 +38,7 @@
     "backToEdit": "編集に戻る",
     "retry": "再試行",
     "firstMessageNotSent": "最初のメッセージは送信されませんでした。内容は入力欄に復元されました。",
+    "queuedAfterFirstMessageFailed": "最初のメッセージが送信されなかったため、順序を保つためこのメッセージは保留中です。再試行または削除できます。",
     "locateMessageNotFound": "移動先のメッセージが見つかりませんでした。",
     "shareNoLocalImage": "ローカルの画像ファイルを取得できませんでした",
     "shareFailedTitle": "共有に失敗しました",
