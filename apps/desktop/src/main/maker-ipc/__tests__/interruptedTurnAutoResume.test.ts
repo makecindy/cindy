@@ -195,6 +195,20 @@ describe('isSubstantiveProgressEvent', () => {
     expect(isSubstantiveProgressEvent({ type: 'text', data: { text: 123 } })).toBe(false);
   });
 
+  // 两侧 translator 转发的 text block / delta 内容是任意的,纯空白同样会原样透出。算成产出
+  // 的话:空白 delta 可以让连续失败计数永远停在 1/5(绕过上限),历史里还会显示成
+  // 「已重新连接」—— 而用户一个字都没看到(codex P1)。
+  it('rejects whitespace-only text (用户什么都没看到,不能算产出)', () => {
+    for (const text of [' ', '\n', '\n\n', '\t', '  \r\n  ']) {
+      expect(
+        isSubstantiveProgressEvent({ type: 'text', data: { text } }),
+        `text=${JSON.stringify(text)} 不该算产出`,
+      ).toBe(false);
+    }
+    // 夹着空白的真实产出仍然算:实义字符是唯一判据。
+    expect(isSubstantiveProgressEvent({ type: 'text', data: { text: '\n好的' } })).toBe(true);
+  });
+
   it('rejects thinking / status / done and other event types', () => {
     for (const type of ['thinking', 'status', 'done', 'error', 'tool_result', undefined]) {
       expect(
