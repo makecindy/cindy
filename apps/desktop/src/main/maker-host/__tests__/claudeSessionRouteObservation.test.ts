@@ -49,12 +49,19 @@ const bridgeMock = vi.hoisted(() => ({
   bridgeHandleImpl: undefined as
     | ((args: { res: { statusCode: number } }) => Promise<void>)
     | undefined,
+  // SSE 流内错误但 HTTP 状态码仍是 200 的场景(真实包只在 res 走完整个真实
+  // node:http ServerResponse 时才会标记,这里的合成 res 对象拿不到那条真实路径,
+  // 改由本 mock 直接控制返回值,验证 localHandler 确实会去查这个信号)。
+  streamFailure: false,
 }));
 vi.mock('../anthropic-responses-bridge-host', () => ({
   getResponsesBridgeHandler: () => ({
     handle: (args: { res: { statusCode: number } }) =>
       bridgeMock.bridgeHandleImpl ? bridgeMock.bridgeHandleImpl(args) : Promise.resolve(),
   }),
+}));
+vi.mock('@cindy/anthropic-responses-bridge', () => ({
+  wasBridgeStreamFailure: () => bridgeMock.streamFailure,
 }));
 
 import {
@@ -85,6 +92,7 @@ describe('claude session route observation (routing transform ② 段)', () => {
     routeMocks.resolveSessionRouteDecision.mockReset();
     routeMocks.resolveSessionRouteDecision.mockReturnValue(null);
     bridgeMock.bridgeHandleImpl = undefined;
+    bridgeMock.streamFailure = false;
     setClaudeProxyGatewayKeyReader(() => gatewayKey);
     setClaudeProxySessionIdResolver((sdkId) => (sdkId === 'sdk-abc' ? 'sess-1' : null));
   });
@@ -246,6 +254,23 @@ describe('claude session route observation (routing transform ② 段)', () => {
       throw new Error('upstream 429');
     };
     await expect(okDecision.localHandler({ res: { statusCode: 0 } })).rejects.toThrow();
+    expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(true);
+  });
+
+  it('attributes a bridge failure carried in-stream even when the HTTP status stays 200', async () => {
+    // SSE 一开始就 writeHead(200)(约定,不能等翻出结果才定状态码),上游流中途报
+    // response.failed / error 时状态码仍是 200——只看 statusCode 会漏掉,必须叠加
+    // wasBridgeStreamFailure 查流本身是否以错误帧收尾(PR review P1)。
+    const transform = createModelRoutingTransform();
+    const decision = transform(
+      { model: 'chatgpt/gpt-5.5' },
+      ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
+    ) as { localHandler: (args: { res: { statusCode: number } }) => Promise<void> };
+    bridgeMock.bridgeHandleImpl = async ({ res }) => {
+      res.statusCode = 200;
+    };
+    bridgeMock.streamFailure = true;
+    await decision.localHandler({ res: { statusCode: 0 } });
     expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(true);
   });
 

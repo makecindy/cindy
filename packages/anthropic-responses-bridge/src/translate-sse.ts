@@ -83,6 +83,11 @@ const DEFERRABLE_TYPES = new Set([
 export class SseTranslator {
   private messageStarted = false;
   private finished = false;
+  /** emitFailure() 是否已翻出过一条 error 帧——与 finished 分开:finished 在正常
+   *  completed 收尾时也会置 true,消费方(desktop 计费归因)需要区分「流正常结束」
+   *  与「流以错误收尾」,即使上游 HTTP 响应本身是 200(SSE 里的 response.failed /
+   *  error 事件不影响 HTTP 状态码,见 handler.ts 对应注释)。 */
+  private errored = false;
   private nextBlockIndex = 0;
   private hasToolUse = false;
   /** output_index → 该 item 的块状态。 */
@@ -564,6 +569,12 @@ export class SseTranslator {
       data: { type: 'error', error: { type: 'api_error', message } },
     });
     this.finished = true;
+    this.errored = true;
+  }
+
+  /** 流是否以错误收尾(emitFailure 已翻出过 error 帧)。 */
+  get failed(): boolean {
+    return this.errored;
   }
 
   // ── 工具 ────────────────────────────────────────────────────────────────────

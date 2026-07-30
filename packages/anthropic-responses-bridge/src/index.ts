@@ -12,7 +12,7 @@
  *     在路由决策点闭包传入,无伪 header。
  */
 
-export { createResponsesHandler } from './handler.js';
+export { createResponsesHandler, wasBridgeStreamFailure } from './handler.js';
 export { translateRequest } from './translate-request.js';
 export { SseTranslator } from './translate-sse.js';
 export { mapUsage } from './usage.js';

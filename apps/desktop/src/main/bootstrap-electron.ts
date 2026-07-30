@@ -2996,7 +2996,8 @@ const registerIpcHandlers = () => {
   // cc 默认路由会话的生效计费路由 —— proxy transform 按请求观察进 registry(路由真值),
   // 用量 chip 优先用它显示订阅 / 网关形态(spawn 凭证冻结, 全局活性状态重算会发散)。
   // GET 读最近观察值; 变化时(每会话生命周期通常一次)广播给所有窗口。
-  ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_SESSION_ROUTE_GET, async (_event, sessionId: unknown) => {
+  ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_SESSION_ROUTE_GET, async (event, sessionId: unknown) => {
+    assertTrustedAppRendererEvent(event);
     if (typeof sessionId !== 'string' || sessionId.length === 0) return null;
     return readClaudeSessionRouteState(sessionId);
   });

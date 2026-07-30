@@ -42,6 +42,7 @@ import {
 import { ANTHROPIC_DIRECT_UPSTREAM, CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
 import { getActiveCatalog } from './active-catalog.js';
 import { getResponsesBridgeHandler } from './anthropic-responses-bridge-host.js';
+import { wasBridgeStreamFailure } from '@cindy/anthropic-responses-bridge';
 import { getSessionEffort, getSessionFastMode } from './session-effort-store.js';
 import { isSubscriptionDirectModel } from '../../shared/subscriptionModels.js';
 import {
@@ -232,14 +233,17 @@ export function createModelRoutingTransform(): RoutingTransform {
         // 订阅额度,失败要记 lastFailedRequestBridge=true,让错误横幅不把它的配额
         // 错误贴成 Cindy 点数耗尽;**不限默认路由会话**——显式 XD 会话的子代理
         // bridge 覆写同样绕过会话来源,一样要归因(PR review P1)。localHandler
-        // 响应不经 responseObserver 链,故在此按 res 终态判定。
+        // 响应不经 responseObserver 链,故在此按 res 终态判定;SSE 流一开始就
+        // 200(约定,不能等翻出结果才定状态码),上游流中途报 response.failed /
+        // error 时状态码仍是 200——只看 statusCode 会漏掉,须叠加
+        // wasBridgeStreamFailure 查 SSE 流本身是否以错误帧收尾(PR review P1)。
         localHandler: async (args) => {
           try {
             await bridgeHandler.handle({
               ...args,
               prefs: { reasoningEffort: effort ?? undefined, fast },
             });
-            if (sessionId && args.res.statusCode >= 400) {
+            if (sessionId && (args.res.statusCode >= 400 || wasBridgeStreamFailure(args.res))) {
               recordClaudeSessionFailedRequestSource(sessionId, true);
             }
           } catch (err) {
