@@ -14867,6 +14867,45 @@ describe('CodexAgent context window reporting', () => {
     await handle.close();
   });
 
+  // idle 会话可以热切 provider:host 的 applyRuntimeSetModelChange 带着 { providerId } 调
+  // setModel。窗口上限按 (provider, model) 解析,只更新 model 会让下一 turn 拿新模型去问
+  // **旧路由** —— 那既可能取到错误上限,也可能整个取不到。
+  it('setModel 带来的 provider 切换要跟着进下一 turn 的归属', async () => {
+    const seen: Array<[string | null | undefined, string]> = [];
+    const agent = agentWithVerified((providerId, modelId) => {
+      seen.push([providerId, modelId]);
+      if (providerId === 'xd' && modelId === 'gpt-5.6-sol') return 372_000;
+      if (providerId === 'other' && modelId === 'gpt-5.6-sol') return 900_000;
+      return null;
+    });
+    const host = installTurnCapableHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-ctxwin-provider-switch',
+      model: 'gpt-5.6-sol',
+      providerId: 'xd',
+      workingDir: '/repo',
+    } as never);
+    const handlers = host.getThreadHandlers();
+    if (!handlers) throw new Error('expected thread handlers');
+
+    await handle.send({ type: 'user', content: 'go' });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+    pushUsage(handlers, 'turn-1', 1_000_000);
+    expect(handle.getUsageSnapshot().contextWindow).toBe(372_000);
+
+    // 同一个 model id 换到另一条路由(真实上限不同)。
+    if (!handle.setModel) throw new Error('expected setModel support');
+    await handle.setModel('gpt-5.6-sol', { providerId: 'other' } as never);
+
+    await handle.send({ type: 'user', content: 'again' });
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-2' } } as never);
+    pushUsage(handlers, 'turn-2', 1_000_000);
+    expect(handle.getUsageSnapshot().contextWindow).toBe(900_000);
+    expect(seen).toContainEqual(['other', 'gpt-5.6-sol']);
+
+    await handle.close();
+  });
+
   // setModel 文档写「下一 turn 才生效」,但 mutableModel 是**即时**改的。活跃 turn 仍在
   // 产出 usage 时切模型,不能拿下一个模型的上限去收敛这一 turn。
   it('活跃 turn 的用量按该 turn 的模型归属,不受中途 setModel 影响', async () => {

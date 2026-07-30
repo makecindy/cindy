@@ -2207,6 +2207,14 @@ export class CodexAgent extends BaseAgent {
      */
     let activeTurnModel: string | undefined = opts.model;
     /**
+     * 本 turn 实际路由的 provider,与 activeTurnModel 同时快照。
+     *
+     * 不能用 opts.providerId: 它是**会话创建时**冻结的值,而 idle 会话可以热切 provider ——
+     * host 的 applyRuntimeSetModelChange 会带着 `{ providerId }` 调 setModel。窗口上限按
+     * (provider, model) 解析, 只更新 model 会让下一 turn 拿新模型去问**旧路由**。
+     */
+    let activeTurnProviderId: string | null | undefined = opts.providerId;
+    /**
      * 把 app-server 上报的 modelContextWindow 收敛到模型目录的真实上限。
      *
      * app-server 对网关路由的模型常报**基础模型**的窗口, 忽略该路由的实际限制 ——
@@ -2228,7 +2236,7 @@ export class CodexAgent extends BaseAgent {
      */
     const capContextWindow = (reported: number | null): number | null => {
       const verified = activeTurnModel
-        ? (this.deps.resolveVerifiedContextWindow?.(opts.providerId, activeTurnModel) ?? null)
+        ? (this.deps.resolveVerifiedContextWindow?.(activeTurnProviderId, activeTurnModel) ?? null)
         : null;
       if (!verified || verified <= 0) return reported;
       if (!reported || reported <= 0) return verified;
@@ -2500,6 +2508,11 @@ export class CodexAgent extends BaseAgent {
 
     /** Phase 3: mutable 配置, 下一个 turn/start 透传; resume 时也透传一次。 */
     let mutableModel = opts.model;
+    /**
+     * 运行时 provider 路由(会话创建时取 opts.providerId,setModel 可带新值覆盖)。
+     * host 侧的 provider route 与它必须同步,窗口上限按 (provider, model) 解析。
+     */
+    let mutableProviderId: string | null | undefined = opts.providerId;
     let mutableEffort: Effort = opts.effort ?? 'high';
     let mutablePermissionMode: PermissionMode = opts.permissionMode ?? 'ask';
     let mutableExtraDirs = [...(opts.extraDirs ?? [])];
@@ -6483,9 +6496,10 @@ export class CodexAgent extends BaseAgent {
           ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
           ...(collaborationMode ? { collaborationMode } : {}),
         };
-        // 这一 turn 的用量按这里发出去的 model 归属上下文窗口 —— 之后 setModel 立即改
-        // mutableModel 也不会串到还在产出的本 turn (见 activeTurnModel / capContextWindow)。
+        // 这一 turn 的用量按这里发出去的 (provider, model) 归属上下文窗口 —— 之后 setModel
+        // 立即改这两个值也不会串到还在产出的本 turn (见 activeTurnModel / capContextWindow)。
         activeTurnModel = mutableModel;
+        activeTurnProviderId = mutableProviderId;
         const markTurnConfigAccepted = (): void => {
           threadMayHaveRollout = true;
           if (turnParams.collaborationMode?.mode === 'plan') {
@@ -6836,6 +6850,7 @@ export class CodexAgent extends BaseAgent {
               // 恢复路径可能把 'gpt-5' 哨兵解析成具体路由模型 —— 重投的 turn 用的是新值,
               // 窗口归属必须跟着改写走, 否则查不到目录条目、沿用 app-server 的基础模型窗口。
               activeTurnModel = mutableModel;
+              activeTurnProviderId = mutableProviderId;
               if (mutableServiceTier !== undefined) {
                 turnParams.serviceTier = mutableServiceTier ?? null;
               } else {
@@ -7188,9 +7203,12 @@ export class CodexAgent extends BaseAgent {
       },
 
       // ── Phase 3: 运行时切换 (下一 turn 才生效, 内部已是 mutable 闭包) ──
-      async setModel(newModel: string) {
+      async setModel(newModel: string, setOpts?: { providerId?: string | null }) {
+        // provider 可能在 model 不变时单独切换(同一 id 换路由), 所以先记 provider 再做 model 去重。
+        // 窗口上限按 (provider, model) 解析, 漏掉这一步会让后续 turn 拿新模型去问旧路由。
+        if (setOpts && Object.hasOwn(setOpts, 'providerId')) mutableProviderId = setOpts.providerId;
         if (newModel === mutableModel) return; // 去重: 值没变不重推 (renderer 单次切换会全量重调 set*)
-        log.debug('setModel', { from: mutableModel, to: newModel });
+        log.debug('setModel', { from: mutableModel, to: newModel, providerId: mutableProviderId ?? null });
         mutableModel = newModel;
         registerCodexReviewerRouteContext(threadId);
         // thread 已启动 → 立即经 thread/settings/update 推给 server (sticky); 未启动则由
