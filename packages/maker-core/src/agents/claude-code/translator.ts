@@ -62,6 +62,14 @@ export interface TurnState {
     message: string;
     sdkError: string;
     agentMeta?: Record<string, unknown>;
+    /**
+     * agentMeta 是否来自「无 subagent 场景下借用当前模型选择」的兜底(而非真实
+     * assistant envelope)。见 translator.ts api_retry 分支:兜底值只在首次填入时
+     * 读 ctx.getModel(),此后必须原样保留、不能每次 retry 都重新读——ctx.getModel()
+     * 是活的当前选择,用户可能在同一次失败请求仍在重试期间切换模型,重新读会把
+     * 归因误导向切换后的新模型而不是这次实际失败请求的模型(PR review P2)。
+     */
+    agentMetaIsProvisional?: boolean;
     errorStatus?: number | null;
     usageLimit?: boolean;
     retryAttempt?: number;
@@ -734,7 +742,7 @@ function handleSystem(
     // assistant.error envelope、最终 ResultMessage 又没有 result 文本的路径。
     // 已有 envelope 时保留其中的人话文案与 transcript metadata，只补 retry 元数据。
     const previous = ctx.turn.pendingApiError;
-    const hasAssistantEnvelope = previous?.agentMeta !== undefined;
+    const hasAssistantEnvelope = previous?.agentMeta !== undefined && !previous.agentMetaIsProvisional;
     // 完全没有 envelope(纯连接失败、SDK 从没吐过一条 assistant 消息)时,
     // agentMeta 缺位会让下游(register.ts 计费归因)只能跳过、不覆写(见其
     // 注释)。SDKAPIRetryMessage 本身不带 parent_tool_use_id,无法判断这次
@@ -746,12 +754,21 @@ function handleSystem(
     // 消息的 meta,若用户在上一轮成功 turn 之后切换了模型,新模型的请求在
     // 产生任何 envelope 前耗尽 api_retry,借用旧 meta 会把当前失败请求错误
     // 标注成上一轮的模型(PR review P2)。ctx.getModel() 是当前 turn 实际使用
-    // 的模型选择,才是这次失败请求的真实归属。
+    // 的模型选择,才是这次失败请求的真实归属——但只在**首次**填入时读:
+    // ctx.getModel() 是活的当前选择,若这次失败请求横跨多轮 api_retry 期间
+    // 用户把模型热切走(gateway host 可直接复用 provider-oauth、setModel 即时
+    // 生效),每次 retry 都重新读会把归因在半路改判成新模型,而实际重试的仍是
+    // 旧请求(PR review P2 ×2)。previous.agentMetaIsProvisional 为 true 时说明
+    // 已经在更早一次 retry 里冻结过,原样复用,不再重新读。
     const noSubagentEverLaunched = ctx.rt.resolvedSubagentModelByParentToolUseId.size === 0
       && ctx.rt.subagentParentToolUseIdByTaskId.size === 0;
-    const fallbackMeta = !hasAssistantEnvelope && noSubagentEverLaunched
-      ? { model: ctx.getModel() }
-      : undefined;
+    const fallbackMeta = hasAssistantEnvelope
+      ? undefined
+      : previous?.agentMetaIsProvisional
+        ? previous.agentMeta
+        : noSubagentEverLaunched
+          ? { model: ctx.getModel() }
+          : undefined;
     const sdkError = redactSensitiveText(hasAssistantEnvelope ? previous.sdkError : (msg.error || 'unknown'));
     const statusLabel = msg.error_status == null ? 'connection error' : `HTTP ${msg.error_status}`;
     const retryLabel = typeof msg.attempt === 'number' && typeof msg.max_retries === 'number'
@@ -765,7 +782,7 @@ function handleSystem(
       ...(hasAssistantEnvelope
         ? { agentMeta: previous.agentMeta }
         : fallbackMeta
-          ? { agentMeta: fallbackMeta }
+          ? { agentMeta: fallbackMeta, agentMetaIsProvisional: true }
           : {}),
       errorStatus: msg.error_status,
       retryAttempt: msg.attempt,
@@ -1688,7 +1705,14 @@ function handleResult(
     const errDetail = redactSensitiveText(rawResult);
     const errorStatus = resultSignals.errorStatus ?? pendingApiError?.errorStatus;
     const usageLimit = pendingApiError?.usageLimit === true || resultSignals.usageLimit;
-    const errorMessage = pendingApiError?.agentMeta
+    // agentMeta 存在 ≠ 有真实 assistant envelope:无 envelope 的兜底路径现在也会填
+    // agentMeta(计费归因用,见 api_retry 分支),但它的 pendingApiError.message 只是
+    // 模板化的 "SDK API request failed: ..." 文案,不如这次终态 result 自带的原文
+    // 信息量大——判据要看 agentMetaIsProvisional,而不是单看 agentMeta 是否存在
+    // (PR review P2 连带修正,否则会把本该优先的 errDetail 挤掉)。
+    const hasRichEnvelopeMessage = pendingApiError?.agentMeta !== undefined
+      && !pendingApiError.agentMetaIsProvisional;
+    const errorMessage = hasRichEnvelopeMessage
       ? pendingApiError.message
       : errDetail || pendingApiError?.message;
     queue.push({

@@ -501,6 +501,66 @@ describe('Claude Code translator is_error result guard', () => {
     expect(errors[0]?.agentMeta).toMatchObject({ model: 'chatgpt/gpt-5.5' });
   });
 
+  it('freezes the no-envelope fallback model at the first retry, not re-read on later retries', async () => {
+    // ctx.getModel() 是活的当前选择:同一个仍在重试的失败请求可能横跨用户
+    // 热切模型的那一刻(gateway host 可直接复用 provider-oauth、setModel 即时
+    // 生效)。第一次 api_retry 冻结的模型必须原样保留到终态,不能因为后续
+    // retry 重新读到新选择而被覆盖——否则归因会指向切换后的新模型,而不是
+    // 这次实际失败请求所用的旧模型(PR review P2)。
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    let currentModel = 'xd/gateway-model';
+    const ctx = { ...createCtx(tracker), getModel: () => currentModel };
+
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 1,
+        max_retries: 3,
+        retry_delay_ms: 1_000,
+        error_status: null,
+        error: 'unknown',
+      },
+      queue,
+      ctx,
+    );
+    // 用户在重试进行期间把模型热切到 chatgpt/*——同一个失败请求仍在重试,
+    // 不是新请求。
+    currentModel = 'chatgpt/gpt-5.5';
+    translateSdkMessage(
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 2,
+        max_retries: 3,
+        retry_delay_ms: 2_000,
+        error_status: null,
+        error: 'unknown',
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'result',
+        is_error: true,
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        usage: { input_tokens: 100, output_tokens: 0 },
+        modelUsage: { 'xd/gateway-model': { inputTokens: 100, outputTokens: 0, costUSD: 0, contextWindow: 272_000 } },
+      },
+      queue,
+      ctx,
+    );
+
+    const events = await drain(queue);
+    const errors = events.filter((e) => e.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.agentMeta).toMatchObject({ model: 'xd/gateway-model' });
+    expect(errors[0]?.data).toMatchObject({ retryAttempt: 2, maxRetries: 3 });
+  });
+
   // SDK 自带退避重试（529 overloaded / 429 / 连接错误都走它）。这组用例锁住
   // "透出进度但绝不自己重投"：客户端再叠一层重试会把一次上游过载放大成指数级
   // 请求，而失败请求照扣额度。
