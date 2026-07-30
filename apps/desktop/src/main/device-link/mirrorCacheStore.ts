@@ -449,7 +449,10 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
     fileOverride?: string,
   ): Promise<SessionListWriteResult> {
     const file = fileOverride ?? sessionListPath();
-    if (isStale(guard)) return { outcome: 'stale' };
+    const rootOfFile = path.dirname(file);
+    // 列表快照是**整份**写:任何设备正在被清(含别的进程在清)时都不能写,否则会把那台
+    // 设备的会话元数据又写回去(review: codex P1)。clearDevice 自己走 purge guard,不受阻。
+    if (await blockedByClear(guard, rootOfFile)) return { outcome: 'stale' };
     for (const perDeviceLimit of SESSION_LIST_SHRINK_STEPS) {
       const normalized = normalizeDeviceSessions(devices, perDeviceLimit);
       if (normalized.length === 0) {
@@ -471,7 +474,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       const body = JSON.stringify(normalized);
       if (unchanged(file, body)) return { outcome: 'skipped' };
       await ensureDir(path.dirname(file));
-      if (isStale(guard)) return { outcome: 'stale' };
+      if (await blockedByClear(guard, rootOfFile)) return { outcome: 'stale' };
       const written = await writeFileAtomic(file, serialized);
       if (!written.ok) {
         // 同 writeMessages:内容已变而新快照没落位,旧快照就是过期的(可能还带着刚被
@@ -488,7 +491,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
           ? { outcome: 'purge-failed', stuck: written.leftoverTmp }
           : { outcome: 'invalidated' };
       }
-      if (isStale(guard)) {
+      if (await blockedByClear(guard, rootOfFile)) {
         // 同 writeMessages:清理已经过去了,这笔补偿删除失败就等于「被撤销 / 上一个账号的
         // 设备元数据留在盘上,而且没人知道」。返回 purge-failed 让调用方登记重试。
         lastWritten.delete(file);
@@ -532,6 +535,48 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
   }
 
 
+  /**
+   * 跨进程的「这台设备正在被清」标记。`clearingDevices` 只在本进程内可见,而 dev 实例与
+   * 打包实例可以共用同一个 userData —— 那时 B 进程完全看不到 A 正在清某台被撤销的设备,
+   * 它的原子 rename 若落在 A 的扫描之后,A 会报"清干净了"而那份明文已经被重建出来
+   * (review: codex P1)。
+   *
+   * 于是清理期间在缓存根下放一个标记文件,写入侧在落位前后各查一次(fail-closed:读不出来
+   * 就当成"正在清",宁可少写一次缓存)。标记 + 清理结束前的**二次扫描**共同保证收敛:
+   *  - B 在标记出现之后检查 → 直接不写;
+   *  - B 的检查恰好早于标记创建 → 它的写可能落在首轮扫描之后,由二次扫描收掉。
+   */
+  const CLEARING_DIR = '.clearing';
+
+  function clearingMarkerPath(root: string, id: string): string {
+    return path.join(root, CLEARING_DIR, `${safeSegment(id)}-${shortHash(id)}`);
+  }
+
+  /** 任何设备正在被清(列表快照是整份写,任一设备在清都不能写)。fail-closed。 */
+  async function anyClearingMarkerExists(root: string): Promise<boolean> {
+    try {
+      const names = await fsp.readdir(path.join(root, CLEARING_DIR));
+      return names.length > 0;
+    } catch (err) {
+      const code = errnoCode(err);
+      if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+      return true; // 读不出来 → 保守当成"有清理在跑"
+    }
+  }
+
+  async function deviceClearingMarkerExists(root: string, id: string): Promise<boolean> {
+    return pathMaybeExists(clearingMarkerPath(root, id));
+  }
+
+  /** 落位前后各查一次:本进程的 in-flight 计数 + 跨进程的标记文件。 */
+  async function blockedByClear(guard: WriteGuard, root: string): Promise<boolean> {
+    if (isStale(guard)) return true;
+    if (guard.kind !== 'write') return false;
+    return guard.deviceId === undefined
+      ? anyClearingMarkerExists(root)
+      : deviceClearingMarkerExists(root, guard.deviceId.trim());
+  }
+
   /** clearDevice 的实际清理体(登记 in-flight 与代际自增由调用方负责)。 */
   async function clearDeviceLocked(id: string): Promise<void> {
       const epochAll = purgeAllEpoch;
@@ -540,17 +585,27 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       const prefix = `${safeSegment(id)}-${shortHash(id)}-`;
 
       const stuck: string[] = [];
+      // 跨进程标记:让别的实例在整段清理期间都不写这台设备(见 CLEARING_DIR 说明)。
+      const marker = clearingMarkerPath(rootAtStart, id);
+      try {
+        await ensureDir(path.dirname(marker));
+        await fsp.writeFile(marker, String(process.pid), 'utf8');
+      } catch (err) {
+        // 标记建不出来不阻断清理(本进程的计数仍然生效),但要留痕:此时跨进程互斥退化。
+        log.warn(`mirror cache: failed to write clearing marker for ${id.slice(0, 8)}`, err);
+      }
 
-      // 枚举必须 fail-closed:`listFiles` 是 fail-open 的(读不了就返回 []),用它的话
-      // messages/ 因 EACCES / EPERM / 锁而枚举失败时,这里会「一个文件都没删」却报成功,
-      // 于是 IPC 也不会登记重试,正文在权限恢复后照样能被读回(review: greptile + codex P1)。
-      const listing = await listMessageFileNames(dir);
-      if (listing.unreadable) {
-        // 数不出来 ≠ 里面没有。把目录本身计入待重试,删除留给下一次。
-        stuck.push(dir);
-      } else {
+      /** 扫一轮该设备的消息文件(含 .tmp 残留)。返回删不掉的路径。 */
+      const sweepMessages = async (): Promise<string[]> => {
+        const left: string[] = [];
+        const listed = await listMessageFileNames(dir);
+        if (listed.unreadable) {
+          // 数不出来 ≠ 里面没有。把目录本身计入待重试,删除留给下一次。
+          left.push(dir);
+          return left;
+        }
         await Promise.all(
-          listing.names
+          listed.names
             .filter((name) => name.startsWith(prefix))
             .map(async (name) => {
               const file = path.join(dir, name);
@@ -559,11 +614,16 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
               try {
                 await fsp.rm(file, { force: true });
               } catch {
-                stuck.push(file);
+                left.push(file);
               }
             }),
         );
-      }
+        return left;
+      };
+
+      // 枚举必须 fail-closed(见 listMessageFileNames):messages/ 因 EACCES / EPERM / 锁而
+      // 枚举失败时不能报成"清干净了",否则 IPC 也不会登记重试。
+      stuck.push(...(await sweepMessages()));
 
       // 「读快照 → 去掉这台设备 → 写回」整段进同一条串行化链:两台设备同时被收掉时,
       // 各自读同一份旧快照再各写「除我之外的全部」,后写的那次会把另一台恢复回来
@@ -596,6 +656,13 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         }
       }
 
+      // 二次扫描:另一个实例的写入可能在首轮扫描之后、标记生效之前落位(它的检查早于我们
+      // 创建标记)。再扫一遍把这种"扫完才冒出来"的文件收掉(review: codex P1)。
+      stuck.push(...(await sweepMessages()));
+
+      // 清理结束,撤掉跨进程标记(删不掉也不算残留:它不含任何正文,只会让别人多跳过几次写)。
+      await fsp.rm(marker, { force: true }).catch(() => undefined);
+
       // 列表快照重写失败(Windows 上被占用 / owner 目录只读)同样要能被重试 —— 否则消息文件
       // 删掉了、会话元数据还在盘上,下次冷启动照样把这台被撤销的设备画回侧边栏(review: codex P1)。
       if (outcome.outcome === 'failed') stuck.push(listFile);
@@ -603,7 +670,9 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
 
       // 删不掉 / 数不出来的东西都是隐私问题:被撤销的对端正文会留在盘上直到本账号生命周期
       // 结束。抛出来让调用方登记重试,而不是把失败咽下去。
-      if (stuck.length > 0) throw new MirrorCachePurgeError(rootAtStart, stuck, null);
+      // 去重:两轮扫描会把同一个删不掉的文件报两次。
+      const remaining = [...new Set(stuck)];
+      if (remaining.length > 0) throw new MirrorCachePurgeError(rootAtStart, remaining, null);
   }
 
   return {
@@ -673,12 +742,12 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // 落盘与指纹登记必须成对且有序 → 同一文件的写入串成链(见 serializeWrite)。
       const writeGuard: WriteGuard = { kind: 'write', epoch, deviceId };
       return serializeWrite(file, async () => {
-        if (isStale(writeGuard)) return;
+        if (await blockedByClear(writeGuard, rootAtStart)) return;
         // 指纹只算消息体,不含 payload 的 updatedAt —— 否则每次都"变了",去重永不命中。
         // 在链内判等:排队期间前一笔可能刚写下同样内容。
         if (unchanged(file, body)) return;
         await ensureDir(dir);
-        if (isStale(writeGuard)) return;
+        if (await blockedByClear(writeGuard, rootAtStart)) return;
         const written = await writeFileAtomic(file, serialized);
         if (!written.ok) {
           // 走到这里说明权威内容**已经变了**(上面 unchanged 已挡掉没变的情况),而新内容
@@ -698,10 +767,12 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
           }
           if (written.leftoverTmp) stuck.push(written.leftoverTmp);
           // 作废也失败 → 登记重试(明文留在盘上是隐私问题,不能咽下去)。
-          if (stuck.length > 0) throw new MirrorCachePurgeError(rootAtStart, stuck, null);
+          // 去重:两轮扫描会把同一个删不掉的文件报两次。
+      const remaining = [...new Set(stuck)];
+      if (remaining.length > 0) throw new MirrorCachePurgeError(rootAtStart, remaining, null);
           return;
         }
-        if (isStale(writeGuard)) {
+        if (await blockedByClear(writeGuard, rootAtStart)) {
           // 隐私清理期间落的盘:立刻收回,否则刚被清空的目录里会留下本该消失的聊天内容。
           // 这笔补偿删除失败(Windows 文件锁 / 权限)时不能咽下去:清理侧已经枚举并删完了,
           // 它不知道这个文件又冒出来,于是既没人重试、明文也留在了隐私边界之后

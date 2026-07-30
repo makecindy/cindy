@@ -926,6 +926,59 @@ describe('clearDevice 期间的写入', () => {
   });
 });
 
+describe('跨进程清理标记', () => {
+  // review(codex P1):`clearingDevices` 只在本进程可见,而 dev 实例与打包实例可以共用同一个
+  // userData —— B 进程看不到 A 在清某台被撤销设备,它的 rename 若落在 A 的扫描之后,
+  // A 会报"清干净了"而明文已被重建。落盘标记 + 清理收尾的二次扫描共同保证收敛。
+  it('别的实例(另一个 store 句柄)在清某设备时,本实例不写该设备的缓存', async () => {
+    const a = cache();
+    const b = createMirrorCache(() => root); // 同一个 owner 目录,模拟另一个进程
+    await a.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+
+    await Promise.all([
+      a.clearDevice('dev-1'),
+      b.writeMessages('dev-1', 'sess-2', [row('m2', '2026-02-01T00:00:00.000Z')]),
+    ]);
+
+    expect(await b.readMessages('dev-1', 'sess-2')).toEqual([]);
+    expect(await b.readMessages('dev-1', 'sess-1')).toEqual([]);
+  });
+
+  // 上一条走的是"二次扫描"这条收敛路径。这条单独钉住**标记本身**:手工放一个标记
+  // (等价于另一个进程正处在清理中间),此时写入必须直接跳过。
+  it('盘上存在该设备的清理标记时,写入直接跳过(不靠二次扫描兜)', async () => {
+    const c = cache();
+    const markerDir = path.join(root, '.clearing');
+    await fsp.mkdir(markerDir, { recursive: true });
+    const name = messageFileName('dev-1', 'sess-1').replace(/-sess.*$/, '');
+    await fsp.writeFile(path.join(markerDir, name), '999', 'utf8');
+
+    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+
+    expect(await c.readMessages('dev-1', 'sess-1')).toEqual([]);
+    // 别的设备不受这个标记影响。
+    await c.writeMessages('dev-2', 'sess-1', [row('m2', '2026-01-01T00:00:00.000Z')]);
+    expect((await c.readMessages('dev-2', 'sess-1')).map((m) => m.id)).toEqual(['m2']);
+  });
+
+  it('清理结束后标记撤掉,写入恢复正常', async () => {
+    const c = cache();
+    await c.clearDevice('dev-1');
+    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+    expect((await c.readMessages('dev-1', 'sess-1')).map((m) => m.id)).toEqual(['m1']);
+  });
+
+  it('清理某设备期间,另一台设备的写入照常落盘(标记是逐设备的)', async () => {
+    const a = cache();
+    const b = createMirrorCache(() => root);
+    await Promise.all([
+      a.clearDevice('dev-1'),
+      b.writeMessages('dev-2', 'sess-9', [row('m9', '2026-01-01T00:00:00.000Z')]),
+    ]);
+    expect((await b.readMessages('dev-2', 'sess-9')).map((m) => m.id)).toEqual(['m9']);
+  });
+});
+
 describe('clearAll 期间的写入', () => {
   // review(codex P1):一笔在「generation 已自增、递归删除尚未完成」之间发起的写入会捕获到
   // 新代际、两道 epoch 检查都放行,于是它的 rename 会在 clearAll 返回之后把旧账号的目录
