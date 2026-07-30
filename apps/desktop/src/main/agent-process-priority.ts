@@ -47,6 +47,15 @@ export interface AgentProcessRow {
   kind: 'claude' | 'codex';
 }
 
+/**
+ * 单进程调档结果:
+ *  - 'applied'            : 目标档已生效(或至少 setPriority 成功)
+ *  - 'process-gone'       : 进程已退出(ESRCH),从账上移除
+ *  - 'nice-raise-refused' : POSIX 拒绝调高优先级(EPERM/EACCES)——nice 停留在
+ *                           原档;darwin 的 taskpolicy 钳制部分仍按目标档调整过
+ */
+export type ApplyPriorityResult = 'applied' | 'process-gone' | 'nice-raise-refused';
+
 interface WatcherLogger {
   info(message: string, meta?: Record<string, unknown>): void;
   warn(message: string, meta?: Record<string, unknown>): void;
@@ -56,15 +65,12 @@ interface WatcherLogger {
 export interface AgentProcessPriorityWatcherDeps {
   readPriority: () => AgentProcessPriority;
   scanAgentProcesses: () => Promise<AgentProcessRow[]>;
-  /**
-   * 对单个进程应用档位。返回 false = 进程已不存在(从账上移除)。
-   * 其余失败(如 POSIX 无法调回)由实现内部消化,返回 true。
-   */
+  /** 对单个进程应用档位;结果语义见 ApplyPriorityResult。 */
   applyPriority: (
     pid: number,
     tier: AgentProcessPriority,
     prevTier: AgentProcessPriority | undefined,
-  ) => Promise<boolean>;
+  ) => Promise<ApplyPriorityResult>;
   log: WatcherLogger;
   intervalMs?: number;
 }
@@ -91,14 +97,36 @@ export function buildCodexPathMarkers(dirNames: readonly string[]): string[] {
   });
 }
 
+/**
+ * Linux 布局 marker:userData 在 ~/.config/<dir>/ 下。覆盖两种托管形态——
+ * legacy `<userData>/<kind>/<version>/` 与 linux-runtime-fallback 的
+ * `<userData>/agent-runtime/<kind>/bin/`(见 agent-binaries/linux-runtime-fallback.ts
+ * privateBinaryPath;打包 Linux 走这条,不加就整平台失明,bot review P1)。
+ * agent-runtime 布局当前仅 Linux 使用,mac/win 无需对应新增。
+ */
+export function buildLinuxPathMarkers(
+  dirNames: readonly string[],
+  kind: 'claude-code' | 'codex',
+): string[] {
+  return dirNames.flatMap((dirName) => {
+    const dir = dirName.toLowerCase();
+    return [
+      `/.config/${dir}/${kind}/`,
+      `/.config/${dir}/agent-runtime/${kind}/`,
+    ];
+  });
+}
+
 const CLAUDE_MARKERS = [
   ...buildClaudePathMarkers(allUserDataDirNames(CURRENT_CINDY_REGION)),
+  ...buildLinuxPathMarkers(allUserDataDirNames(CURRENT_CINDY_REGION), 'claude-code'),
   'apps\\claude-code-bin\\',
   'apps/claude-code-bin/',
 ];
 
 const CODEX_MARKERS = [
   ...buildCodexPathMarkers(allUserDataDirNames(CURRENT_CINDY_REGION)),
+  ...buildLinuxPathMarkers(allUserDataDirNames(CURRENT_CINDY_REGION), 'codex'),
   'apps\\codex-bin\\',
   'apps/codex-bin/',
 ];
@@ -201,21 +229,29 @@ function makeDefaultApplyPriority(log: WatcherLogger) {
     pid: number,
     tier: AgentProcessPriority,
     prevTier: AgentProcessPriority | undefined,
-  ): Promise<boolean> => {
+  ): Promise<ApplyPriorityResult> => {
+    let result: ApplyPriorityResult = 'applied';
     try {
       os.setPriority(pid, priorityValue(tier));
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
-      if (code === 'ESRCH') return false; // 进程已退出
-      // EPERM/EACCES: POSIX 非特权进程不能调回已升高的 nice —— 预期内,只记 debug。
-      log.debug('setPriority failed', { pid, tier, code, error: String(err) });
+      if (code === 'ESRCH') return 'process-gone';
+      if (code === 'EPERM' || code === 'EACCES') {
+        // POSIX 非特权进程不能调高优先级(normal←low←lowest 方向都算 raise):
+        // nice 停在原档。如实上报给调用方,不装成功(bot review P1)。
+        result = 'nice-raise-refused';
+      } else {
+        log.debug('setPriority failed', { pid, tier, code, error: String(err) });
+      }
     }
+    // taskpolicy 钳制与 nice 独立:即使 nice 调不回,darwin 上仍按目标档调整钳制
+    // (lowest→low 清掉 -b 后,实际效果介于两档之间,是无特权下能达到的最优近似)。
     if (tier === 'lowest') {
       await taskpolicy(['-b', '-p', String(pid)], log);
     } else if (prevTier === 'lowest') {
       await taskpolicy(['-B', '-p', String(pid)], log);
     }
-    return true;
+    return result;
   };
 }
 
@@ -224,8 +260,14 @@ export function createAgentProcessPriorityWatcher(
 ): AgentProcessPriorityWatcher {
   const { readPriority, scanAgentProcesses, applyPriority, log } = deps;
   const intervalMs = deps.intervalMs ?? DEFAULT_INTERVAL_MS;
-  /** 已被本 watcher 降档的进程 → 当前档位。只记非 normal 档;恢复/退出即移除。 */
-  const applied = new Map<number, AgentProcessPriority>();
+  /**
+   * 已被本 watcher 处理过的进程账本。只记非 normal 档;恢复/退出即移除。
+   * tier 记的是**目标档**;niceStuck = POSIX 拒绝了本次 raise,nice 实际停在
+   * 更低优先级的旧档(darwin 钳制已按目标档调整)。仍按目标档入账是有意的:
+   * 无特权下重试永远失败,每 tick 重试只会空转 + 反复 spawn taskpolicy;
+   * 账本的职责是"别重复动它",真实状态由日志如实记录。
+   */
+  const applied = new Map<number, { tier: AgentProcessPriority; niceStuck: boolean }>();
   let timer: ReturnType<typeof setInterval> | null = null;
   let ticking = false;
 
@@ -245,20 +287,35 @@ export function createAgentProcessPriorityWatcher(
         const prev = applied.get(row.pid);
         if (desired === 'normal') {
           if (prev === undefined) continue; // 没动过的进程绝不碰
-          await applyPriority(row.pid, 'normal', prev);
-          applied.delete(row.pid); // POSIX 恢复可能无效,但重试无意义(见模块头注释)
-          log.info('agent process priority restore attempted', { pid: row.pid, kind: row.kind });
-        } else if (prev !== desired) {
-          const ok = await applyPriority(row.pid, desired, prev);
-          if (ok) {
-            applied.set(row.pid, desired);
+          const result = await applyPriority(row.pid, 'normal', prev.tier);
+          applied.delete(row.pid); // POSIX 恢复注定被拒,重试无意义(见账本注释)
+          log.info('agent process priority restore attempted', {
+            pid: row.pid,
+            kind: row.kind,
+            // nice-raise-refused = nice 停在降档值直到进程退出,新进程不受影响
+            niceRestored: result === 'applied',
+          });
+        } else if (prev?.tier !== desired) {
+          const result = await applyPriority(row.pid, desired, prev?.tier);
+          if (result === 'process-gone') {
+            applied.delete(row.pid);
+          } else if (result === 'nice-raise-refused') {
+            // lowest→low 这类升档:nice 卡在旧档,只有 darwin 钳制按目标档调整了。
+            // 入账目标档防空转重试,日志如实说明(不写"lowered")。
+            applied.set(row.pid, { tier: desired, niceStuck: true });
+            log.warn('agent process priority partially applied: nice stuck at previous tier', {
+              pid: row.pid,
+              kind: row.kind,
+              requestedTier: desired,
+              stuckAtTier: prev?.tier ?? 'unknown',
+            });
+          } else {
+            applied.set(row.pid, { tier: desired, niceStuck: false });
             log.info('agent process priority lowered', {
               pid: row.pid,
               kind: row.kind,
               tier: desired,
             });
-          } else {
-            applied.delete(row.pid);
           }
         }
       }
@@ -288,6 +345,8 @@ export function createAgentProcessPriorityWatcher(
     tickOnce,
   };
 }
+
+export const __testing = { makeDefaultApplyPriority };
 
 /** 生产入口:默认依赖(设置 store + 平台扫描 + os.setPriority/taskpolicy)组装并启动。 */
 export function startAgentProcessPriorityWatcher(): AgentProcessPriorityWatcher {
