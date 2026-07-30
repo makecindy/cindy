@@ -10,9 +10,11 @@ import type { MyIssuesResult } from '@/../shared/myIssues';
 export function selectMyIssuesNotices(data: MyIssuesResult): string[] {
   const notices: string[] = [];
 
-  // 服务端读接口上线前,platform-unavailable 对每个用户都成立。一条都没有时提它纯属
-  // 噪音(用户没问、也没有可见损失);真有条目、状态显示为「未知」时才需要解释原因。
-  if (data.degraded === 'platform-unavailable' && data.items.length > 0) {
+  // 服务端读接口上线前,platform-unavailable 对每个用户都成立,所以只在它造成**可见
+  // 损失**时才解释:即列表里确有状态显示为「未知」的条目。
+  // 判据是 state === 'unknown' 而不是 items.length > 0 —— 平台接口 404 但列表全部来自
+  // GitHub 增强(每条都有真实状态)时,提示「只显示本机记录」既是噪音也不成立。
+  if (data.degraded === 'platform-unavailable' && data.items.some((i) => i.state === 'unknown')) {
     notices.push('issueTracker.mine.platformUnavailableHint');
   }
   // 未登录 / 取数失败无条件提示:空列表时用户同样需要分清「真的没有」和「没查到」。

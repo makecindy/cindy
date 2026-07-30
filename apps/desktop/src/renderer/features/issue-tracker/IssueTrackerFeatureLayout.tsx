@@ -80,10 +80,13 @@ export function IssueTrackerFeatureLayout() {
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6 pt-2">
         {loading ? (
           <p className="px-3 py-2 text-13 text-sidebar-muted">{t('issueTracker.detail.loading')}</p>
-        ) : error ? (
+        ) : error && !hasItems ? (
+          // 整页错误态只留给「从来没加载成功过」;已经有数据时刷新失败不能把列表
+          // 盖掉(useMyIssues 特意保留了旧 data),否则用户点一下刷新就丢失全部内容。
           <LoadFailed error={error} onRetry={refresh} />
         ) : hasItems ? (
           <>
+            {error ? <RefreshFailedNotice error={error} onRetry={refresh} /> : null}
             <Notices data={data} />
             <MyIssueList items={items} />
           </>
@@ -155,6 +158,27 @@ function Notices({ data }: { data: MyIssuesResult | null }) {
           {t(key)}
         </p>
       ))}
+    </div>
+  );
+}
+
+/**
+ * 已有数据时刷新失败:降级成列表上方一条提示 + 重试,旧内容照常可读可点。
+ * 与整页 LoadFailed 复用同一组文案,只是不夺走内容区。
+ */
+function RefreshFailedNotice({ error, onRetry }: { error: string; onRetry: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md bg-sidebar-item-hover px-3 py-2">
+      <p className="text-11 text-sidebar-muted">{t('issueTracker.list.loadFailed')}</p>
+      <button
+        type="button"
+        onClick={onRetry}
+        title={error}
+        className="text-11 text-sidebar-muted underline-offset-2 hover:text-foreground hover:underline"
+      >
+        {t('issueTracker.list.retry')}
+      </button>
     </div>
   );
 }

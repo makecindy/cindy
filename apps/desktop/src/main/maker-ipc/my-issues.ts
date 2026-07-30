@@ -13,6 +13,7 @@ import { ipcMain } from 'electron';
 import type { MyIssuesResult } from '../../shared/myIssues.js';
 import { getMyIssuesService } from '../github-issue/myIssuesRuntime.js';
 import { createLogger } from '../logger.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { MAKER_INVOKE } from './channels.js';
 
 const log = createLogger('maker-ipc/my-issues');
@@ -49,5 +50,11 @@ export async function handleMyIssuesList(raw: unknown): Promise<MyIssuesListResp
 }
 
 export function registerMyIssuesIpc(): void {
-  ipcMain.handle(MAKER_INVOKE.MY_ISSUES_LIST, (_e, raw: unknown) => handleMyIssuesList(raw));
+  ipcMain.handle(MAKER_INVOKE.MY_ISSUES_LIST, (event, raw: unknown) => {
+    // issue 列表含标题、编号与 GitHub 用户名,是账号私有数据,且这条 handler 会代为
+    // 发起带登录态的平台请求。只允许 Cindy 自有顶层页面调用:WebView、Ghost 页面、
+    // 子 frame 一律拒绝。不可信来源直接 throw,不给它降级数据。
+    assertTrustedAppRendererEvent(event);
+    return handleMyIssuesList(raw);
+  });
 }

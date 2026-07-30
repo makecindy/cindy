@@ -8,7 +8,7 @@ import type { MyIssueItem, MyIssuesResult } from '@/../shared/myIssues';
 
 import { selectMyIssuesNotices } from '../lib/myIssuesNotices';
 
-function item(): MyIssueItem {
+function item(over: Partial<MyIssueItem> = {}): MyIssueItem {
   return {
     number: 1,
     url: 'https://github.com/makecindy/cindy/issues/1',
@@ -19,6 +19,7 @@ function item(): MyIssueItem {
     updatedAt: null,
     commentCount: null,
     sources: ['cindy-tool'],
+    ...over,
   };
 }
 
@@ -37,14 +38,45 @@ describe('selectMyIssuesNotices', () => {
     expect(selectMyIssuesNotices(result({ items: [item()] }))).toEqual([]);
   });
 
-  it('平台接口未就绪:有条目才解释「状态未知」的原因', () => {
+  it('平台接口未就绪:确有「状态未知」条目时才解释原因', () => {
     expect(
-      selectMyIssuesNotices(result({ degraded: 'platform-unavailable', items: [item()] })),
+      selectMyIssuesNotices(
+        result({ degraded: 'platform-unavailable', items: [item({ state: 'unknown' })] }),
+      ),
     ).toEqual(['issueTracker.mine.platformUnavailableHint']);
   });
 
   it('平台接口未就绪 + 一条都没有:不提示 —— 用户没问,也没有可见损失', () => {
     expect(selectMyIssuesNotices(result({ degraded: 'platform-unavailable' }))).toEqual([]);
+  });
+
+  it('平台接口未就绪但列表全部有真实状态(纯 GitHub 增强来源):不提示', () => {
+    // 判据若写成 items.length > 0,这里会错误地说「只显示本机记录」——文案也不成立。
+    expect(
+      selectMyIssuesNotices(
+        result({
+          degraded: 'platform-unavailable',
+          items: [
+            item({ number: 1, state: 'open', sources: ['github-account'] }),
+            item({ number: 2, state: 'closed', sources: ['github-account'] }),
+          ],
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('混合列表里只要有一条状态未知就提示', () => {
+    expect(
+      selectMyIssuesNotices(
+        result({
+          degraded: 'platform-unavailable',
+          items: [
+            item({ number: 1, state: 'open', sources: ['github-account'] }),
+            item({ number: 2, state: 'unknown', sources: ['cindy-tool'] }),
+          ],
+        }),
+      ),
+    ).toEqual(['issueTracker.mine.platformUnavailableHint']);
   });
 
   it('未登录 / 取数失败无条件提示,空列表时也要说清是「没查到」而不是「没有」', () => {

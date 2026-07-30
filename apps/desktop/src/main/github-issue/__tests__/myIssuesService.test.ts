@@ -55,6 +55,7 @@ function makeDeps(over: Partial<MyIssuesServiceDeps> = {}): MyIssuesServiceDeps 
     }),
     resolveGithubEnhancement: async () => null,
     searchAuthoredIssues: async () => ({ issues: [], totalCount: 0 }),
+    readScope: () => 'owner-a:1',
     ...over,
   };
 }
@@ -306,5 +307,89 @@ describe('MyIssuesService.list', () => {
     const [first, second] = await both;
     expect(fetchPlatformIssues).toHaveBeenCalledTimes(1);
     expect(first).toBe(second);
+  });
+});
+
+/**
+ * 账号边界 —— 服务是进程级单例,而 issue 列表(标题/编号/GitHub 用户名)是账号私有
+ * 数据。这一组用例是安全回归:任一条挂掉都意味着切号后可能看到别人的 issue。
+ */
+describe('MyIssuesService 的账号作用域隔离', () => {
+  it('切账号后不复用上一个账号的缓存', async () => {
+    let scope = 'owner-a:1';
+    const fetchPlatformIssues = vi.fn(async () => ({
+      ok: true as const,
+      page: {
+        issues: [remoteIssue({ number: scope === 'owner-a:1' ? 111 : 222 })],
+        totalCount: 1,
+      },
+    }));
+    const service = new MyIssuesService(makeDeps({ fetchPlatformIssues, readScope: () => scope }));
+
+    expect((await service.list()).items.map((i) => i.number)).toEqual([111]);
+
+    // TTL 远未到期,但账号换了 —— 必须重新取,绝不能回放账号 A 的结果。
+    scope = 'owner-b:2';
+    expect((await service.list()).items.map((i) => i.number)).toEqual([222]);
+    expect(fetchPlatformIssues).toHaveBeenCalledTimes(2);
+
+    // 切回账号 A 也不该命中账号 B 留下的那条缓存。
+    scope = 'owner-a:3';
+    await service.list();
+    expect(fetchPlatformIssues).toHaveBeenCalledTimes(3);
+  });
+
+  it('切账号后不复用上一个账号的在途请求', async () => {
+    let scope = 'owner-a:1';
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchPlatformIssues = vi.fn(async () => {
+      await gate;
+      return { ok: true as const, page: { issues: [remoteIssue()], totalCount: 1 } };
+    });
+    const service = new MyIssuesService(makeDeps({ fetchPlatformIssues, readScope: () => scope }));
+
+    const first = service.list();
+    scope = 'owner-b:2';
+    const second = service.list();
+    expect(fetchPlatformIssues).toHaveBeenCalledTimes(2);
+    release!();
+    await Promise.all([first, second]);
+  });
+
+  it('请求期间切了账号 → 结果不落缓存,新账号下次必须重新取', async () => {
+    let scope = 'owner-a:1';
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchPlatformIssues = vi.fn(async () => {
+      await gate;
+      return { ok: true as const, page: { issues: [remoteIssue()], totalCount: 1 } };
+    });
+    const service = new MyIssuesService(makeDeps({ fetchPlatformIssues, readScope: () => scope }));
+
+    const pending = service.list();
+    scope = 'owner-b:2'; // 结果回来时已经不是发起时那个账号了
+    release!();
+    await pending;
+
+    await service.list();
+    expect(fetchPlatformIssues).toHaveBeenCalledTimes(2);
+  });
+
+  it('同一账号内 TTL 与 in-flight 复用不受影响', async () => {
+    const fetchPlatformIssues = vi.fn(async () => ({
+      ok: true as const,
+      page: { issues: [remoteIssue()], totalCount: 1 },
+    }));
+    const service = new MyIssuesService(
+      makeDeps({ fetchPlatformIssues, readScope: () => 'owner-a:1' }),
+    );
+    await service.list();
+    await service.list();
+    expect(fetchPlatformIssues).toHaveBeenCalledTimes(1);
   });
 });

@@ -48,7 +48,12 @@ function MyIssueRow({ item }: { item: MyIssueItem }) {
         : t('issueTracker.mine.sourceGithub'),
     ),
     formatDate(item.createdAt, i18n.language),
-    item.commentCount ? t('issueTracker.mine.commentCount', { count: item.commentCount }) : null,
+    // 显式判 null 而不是 falsy:0 是「已知 0 条」的有效值,不能和 null(未知)混为一谈。
+    // 判完再要求 > 0 —— 「0 条评论」对用户没有信息量,不占元信息行的位置(这是刻意的
+    // 展示取舍,不是把 0 当假值漏掉)。
+    item.commentCount !== null && item.commentCount > 0
+      ? t('issueTracker.mine.commentCount', { count: item.commentCount })
+      : null,
   ].filter((part): part is string => !!part);
 
   return (

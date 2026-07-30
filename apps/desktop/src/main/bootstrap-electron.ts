@@ -3659,7 +3659,6 @@ const registerIpcHandlers = () => {
       registerMakerTitleIpc();
       registerMakerHelpIpc(ipcMaker);
       registerHelpFeedbackIpc();
-      registerMyIssuesIpc();
       registerMakerPlanWriteIpc();
       registerMakerRewindIpc();
       registerMakerForkIpc();
@@ -5463,6 +5462,11 @@ app.on('ready', async () => {
   // 本机 FS 目录浏览(项目选择器「添加远程项目」逐级浏览;device-link 经隧道在被控端执行)。
   // 无 DB / 无登录依赖,随其它顶层 handler 一起注册即可。
   registerFsBrowseIpc();
+  // 「我的 Issue」列表查询。刻意注册在这里而不是 registerMakerIpcsAfterSplash:
+  // 它不依赖 Maker 与 agent 二进制,而 /issues 在 splash check-environment 完成前
+  // (或二进制 provision 失败时)就可能被打开 —— 挂在 splash 之后会让页面拿到
+  // "No handler registered" 且不会自动恢复。
+  registerMyIssuesIpc();
   // chat-data-localization F2/F5：注册 localDb IPC + 干净退出快照钩子。
   // 不立即开 db；ensureReady 由 AuthContext 在登录成功后通过 IPC 触发。
   // onReady 回调 → scheduler-host 启动重试入口 (Phase 3)：splash 跑早于 user login

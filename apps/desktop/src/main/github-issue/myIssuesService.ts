@@ -73,12 +73,20 @@ export interface MyIssuesServiceDeps {
     viewer: GithubEnhancementViewer,
     login: string,
   ) => Promise<RemoteIssuePage>;
+  /**
+   * 当前账号作用域标识(data owner + session generation)。**这是安全边界**:
+   * issue 列表含标题、编号与 GitHub 用户名,属于账号私有数据。服务是进程级单例,
+   * 缓存与在途请求都必须按它键控,否则 60s TTL 内切号会让新账号看到上一个账号的
+   * issue 历史。切号时该值必须变化。
+   */
+  readScope: () => string;
   cacheTtlMs?: number;
   now?: () => number;
 }
 
 interface CacheEntry {
   at: number;
+  scope: string;
   result: MyIssuesResult;
 }
 
@@ -87,7 +95,7 @@ export class MyIssuesService {
   private readonly ttlMs: number;
   private readonly now: () => number;
   private cache: CacheEntry | null = null;
-  private inFlight: Promise<MyIssuesResult> | null = null;
+  private inFlight: { scope: string; promise: Promise<MyIssuesResult> } | null = null;
 
   constructor(deps: MyIssuesServiceDeps) {
     this.deps = deps;
@@ -95,22 +103,35 @@ export class MyIssuesService {
     this.now = deps.now ?? Date.now;
   }
 
-  /** force=true 绕过 TTL(手动刷新按钮),但仍复用正在飞的请求。 */
+  /** force=true 绕过 TTL(手动刷新按钮),但仍复用**同账号**正在飞的请求。 */
   async list(options: { force?: boolean } = {}): Promise<MyIssuesResult> {
-    if (!options.force && this.cache && this.now() - this.cache.at < this.ttlMs) {
+    const scope = this.deps.readScope();
+    if (
+      !options.force &&
+      this.cache &&
+      this.cache.scope === scope &&
+      this.now() - this.cache.at < this.ttlMs
+    ) {
       return this.cache.result;
     }
-    if (this.inFlight) return this.inFlight;
-    const pending = this.load()
+    // 只复用同账号的在途请求;跨账号一律另起,绝不共享结果。
+    if (this.inFlight && this.inFlight.scope === scope) return this.inFlight.promise;
+
+    const promise = this.load()
       .then((result) => {
-        this.cache = { at: this.now(), result };
+        // 请求期间切了号 → 这份结果属于旧账号,丢弃不落缓存(否则新账号下次
+        // 读缓存就拿到别人的数据)。
+        if (this.deps.readScope() === scope) {
+          this.cache = { at: this.now(), scope, result };
+        }
         return result;
       })
       .finally(() => {
-        this.inFlight = null;
+        // 只清自己那条,别把切号后新起的在途请求误清掉。
+        if (this.inFlight?.promise === promise) this.inFlight = null;
       });
-    this.inFlight = pending;
-    return pending;
+    this.inFlight = { scope, promise };
+    return promise;
   }
 
   /** 提交成功后调用:账本变了,缓存立即失效,下次进页面能看到新提交的那条。 */

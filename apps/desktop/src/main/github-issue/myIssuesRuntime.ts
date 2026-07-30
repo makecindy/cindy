@@ -18,6 +18,7 @@ import { GithubClient } from '@cindy/github-client';
 
 import { MY_ISSUES_REPOSITORY, type MyIssuesDegradedReason } from '../../shared/myIssues.js';
 import { getAppCapabilities } from '../appCapabilities.js';
+import { getActiveAppSession } from '../appSessionState.js';
 import { getClientEndpoint } from '../clientEndpointsService';
 import { getSharedGhCliTokenSource } from '../git-context/ghCliTokenSource.js';
 import { createLogger } from '../logger.js';
@@ -58,6 +59,7 @@ export function getMyIssuesService(): MyIssuesService {
       fetchPlatformIssues: fetchPlatformIssues,
       resolveGithubEnhancement: resolveGithubEnhancement,
       searchAuthoredIssues: searchAuthoredIssues,
+      readScope: readAccountScope,
     });
   }
   return serviceInstance;
@@ -66,6 +68,16 @@ export function getMyIssuesService(): MyIssuesService {
 /** 提交成功后让列表缓存立即失效,不然新提交的那条最多要等 60s 才出现。 */
 export function invalidateMyIssuesCache(): void {
   serviceInstance?.invalidate();
+}
+
+/**
+ * 账号作用域键。generation 在每次 mode / dataOwnerId 变化时递增
+ * (appSessionState.commitActiveAppSession),所以切号后旧缓存与旧在途结果一律作废 ——
+ * issue 列表是账号私有数据,进程级单例不能跨账号复用。
+ */
+function readAccountScope(): string {
+  const session = getActiveAppSession();
+  return `${session.mode}:${session.dataOwnerId ?? 'none'}:${session.generation}`;
 }
 
 /** 平台通道。约定不抛:所有失败归一成 reason,由 UI 如实说明。 */

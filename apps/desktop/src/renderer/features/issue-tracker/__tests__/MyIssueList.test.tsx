@@ -64,6 +64,16 @@ describe('MyIssueList', () => {
     expect(meta).not.toContain('commentCount');
   });
 
+  it('评论数 0 与 null 都不渲染,但两者是不同语义(0 = 已知没人回复)', () => {
+    // 判据必须是显式的 !== null && > 0:写成 falsy 会让 0 与「未知」在代码里混为一谈,
+    // 后续要改成「0 也展示」时会踩空。
+    render(<MyIssueList items={[item({ commentCount: 0 })]} />);
+    expect(screen.getByText(/#1061/).textContent).not.toContain('commentCount');
+    cleanup();
+    render(<MyIssueList items={[item({ commentCount: 1 })]} />);
+    expect(screen.getByText(/#1061/).textContent).toContain('issueTracker.mine.commentCount:1');
+  });
+
   it('同时命中两个来源时都标出来', () => {
     render(<MyIssueList items={[item({ sources: ['cindy-tool', 'github-account'] })]} />);
     const meta = screen.getByText(/#1061/).textContent!;
