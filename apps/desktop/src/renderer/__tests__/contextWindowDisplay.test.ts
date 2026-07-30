@@ -18,9 +18,33 @@ describe('resolveDisplayContextWindow', () => {
     })).toBe(1_048_576);
   });
 
-  it('keeps non-default SDK values as runtime ground truth', () => {
+  // app-server 报的是**基础模型**窗口, 忽略网关对该路由的实际限制。目录值是产品侧
+  // 维护的真实上限, 不能被这种虚高值盖掉 —— 否则圆环把 372K 会话显示成 1M,
+  // 用户在真实上限前就被压缩, 却以为还剩 60% 余量。
+  it('caps the SDK value at the catalog window for gateway-routed models', () => {
+    expect(resolveDisplayContextWindow({
+      modelContextWindow: 372_000,
+      sdkContextWindow: 1_000_000,
+    })).toBe(372_000);
+  });
+
+  it('caps to the catalog window even when the gap is small', () => {
     expect(resolveDisplayContextWindow({
       modelContextWindow: 992_000,
+      sdkContextWindow: 1_000_000,
+    })).toBe(992_000);
+  });
+
+  it('keeps a smaller SDK value when the route is actually downsized', () => {
+    expect(resolveDisplayContextWindow({
+      modelContextWindow: 1_000_000,
+      sdkContextWindow: 400_000,
+    })).toBe(400_000);
+  });
+
+  it('trusts the SDK value when the catalog has no entry for the model', () => {
+    expect(resolveDisplayContextWindow({
+      modelContextWindow: undefined,
       sdkContextWindow: 1_000_000,
     })).toBe(1_000_000);
   });
@@ -30,6 +54,13 @@ describe('resolveDisplayContextWindow', () => {
       modelContextWindow: 262_144,
       sdkContextWindow: 0,
     })).toBe(262_144);
+  });
+
+  it('falls back to the hardcoded default when neither source is known', () => {
+    expect(resolveDisplayContextWindow({
+      modelContextWindow: undefined,
+      sdkContextWindow: 0,
+    })).toBe(200_000);
   });
 });
 

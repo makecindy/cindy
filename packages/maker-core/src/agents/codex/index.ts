@@ -2197,6 +2197,28 @@ export class CodexAgent extends BaseAgent {
     const eventQueue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
     const usageTracker = new UsageTracker();
     const translatorRt: CodexRuntimeState = newCodexRuntimeState();
+    // 模型目录窗口 (claude-code agent 同源: 那边直接用它做 setContextWindow)。
+    // Codex 侧走 app-server 上报值, 这里留着给 capContextWindow 做上限。
+    const modelContextWindows = new Map(
+      this.capabilities.availableModels.map((model) => [model.id, model.contextWindow] as const),
+    );
+    /**
+     * 把 app-server 上报的 modelContextWindow 收敛到模型目录的真实上限。
+     *
+     * app-server 对网关路由的模型常报**基础模型**的窗口, 忽略该路由的实际限制 ——
+     * 例如目录 372K 的 GPT-5.6-Sol 会被报成 1M。虚高值会让上下文占比被低估,
+     * memory flush 阈值也跟着推迟, 所以两者都有时取小值。
+     *
+     * 目录值可能缺失 (自定义 provider、目录未覆盖的新模型), 此时沿用上报值;
+     * 上报值反过来比目录小时同样取它 (路由真被降窗)。
+     * renderer 侧对应逻辑见 apps/desktop/src/renderer/lib/contextWindow.ts。
+     */
+    const capContextWindow = (reported: number | null): number | null => {
+      const catalog = modelContextWindows.get(mutableModel);
+      if (!catalog || catalog <= 0) return reported;
+      if (!reported || reported <= 0) return catalog;
+      return Math.min(catalog, reported);
+    };
 
     let sdkSessionId: string | undefined;
     let currentTurnId: string | null = null;
@@ -5864,7 +5886,7 @@ export class CodexAgent extends BaseAgent {
         const last = params.tokenUsage?.last;
         if (!last) return;
         lastTurnTokenUsage = last;
-        lastModelContextWindow = params.tokenUsage?.modelContextWindow ?? null;
+        lastModelContextWindow = capContextWindow(params.tokenUsage?.modelContextWindow ?? null);
         usageTracker.setContextWindow(lastModelContextWindow ?? 0);
         const cached = last.cachedInputTokens ?? 0;
         const totalInput = last.inputTokens ?? 0;

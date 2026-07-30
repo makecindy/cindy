@@ -14651,3 +14651,73 @@ describe('CodexAgent upstream-response-idle watchdog', () => {
     }
   });
 });
+
+describe('CodexAgent context window reporting', () => {
+  // 目录里 GPT-5.6-Sol 系列就是 372K(官方与折扣路由同值), 而 app-server 会报
+  // 上游基础模型的 1M。虚高值会让上下文占比被低估, maker memory flush 阈值跟着推迟。
+  const gatewayRoutedModel = {
+    id: 'codex/gpt-5.6-sol',
+    displayName: 'GPT-5.6-Sol',
+    contextWindow: 372_000,
+    efforts: ['low', 'medium', 'high', 'xhigh'],
+    defaultEffort: 'high',
+  };
+
+  async function reportedContextWindow(
+    agent: CodexAgent,
+    sessionId: string,
+    model: string,
+    appServerWindow: number,
+  ): Promise<number> {
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({ sessionId, model, workingDir: '/repo' });
+    const subscribeCalls = host.subscribeThread.mock.calls as unknown as Array<
+      [string, ThreadEventHandlers]
+    >;
+    const handlers = subscribeCalls[0]?.[1];
+    if (!handlers) throw new Error('expected thread handlers');
+
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+    const breakdown = {
+      totalTokens: 108,
+      inputTokens: 100,
+      cachedInputTokens: 40,
+      outputTokens: 5,
+      reasoningOutputTokens: 3,
+    };
+    handlers.tokenUsageUpdated?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      tokenUsage: { total: breakdown, last: breakdown, modelContextWindow: appServerWindow },
+    } as never);
+
+    const { contextWindow } = handle.getUsageSnapshot();
+    await handle.close();
+    return contextWindow;
+  }
+
+  it('caps the app-server window at the catalog window for gateway-routed models', async () => {
+    const agent = new CodexAgent(
+      createDeps({}, { capabilityAdditions: { availableModels: [gatewayRoutedModel] } as never }),
+    );
+    expect(
+      await reportedContextWindow(agent, 'session-ctxwin-cap', 'codex/gpt-5.6-sol', 1_000_000),
+    ).toBe(372_000);
+  });
+
+  it('keeps a smaller app-server window when the route is actually downsized', async () => {
+    const agent = new CodexAgent(
+      createDeps({}, { capabilityAdditions: { availableModels: [gatewayRoutedModel] } as never }),
+    );
+    expect(
+      await reportedContextWindow(agent, 'session-ctxwin-downsized', 'codex/gpt-5.6-sol', 128_000),
+    ).toBe(128_000);
+  });
+
+  it('keeps the app-server window when the catalog has no entry for the model', async () => {
+    const agent = new CodexAgent(createDeps());
+    expect(
+      await reportedContextWindow(agent, 'session-ctxwin-no-catalog', 'gpt-5.4', 272_000),
+    ).toBe(272_000);
+  });
+});
