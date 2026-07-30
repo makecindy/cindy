@@ -621,6 +621,43 @@ describe('ClaudeCodeAgent plan mode', () => {
     await handle.close();
   });
 
+  it('remote setModel rejects when a custom provider key changes (no refresh channel)', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const fakeQuery = createFakeQuery();
+    const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async () =>
+      fakeQuery as never;
+    // 自定义供应商 ANTHROPIC_API_KEY 无 oauth/refresh 通道:用户在设置里改 key 后,
+    // 远端 daemon 仍带旧 key,持续 401 —— 必须拒绝(Greptile 六轮)。
+    let callCount = 0;
+    const resolveRemoteClaudeRoute = vi.fn(async () => {
+      callCount += 1;
+      return {
+        endpoint: 'https://provider.example/v1',
+        env: { ANTHROPIC_API_KEY: callCount === 1 ? 'k-old' : 'k-new' },
+      };
+    });
+    const agent = new ClaudeCodeAgent(createDeps({
+      runtimeConfig: { remoteEndpoint: 'https://gw.example/claude' },
+      remoteCcQueryFactory,
+      resolveRemoteClaudeRoute,
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-key-change',
+      model: 'custom-model',
+      providerId: 'custom-provider',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+
+    await expect(handle.setModel?.('another-custom-model')).rejects.toThrow(
+      /REMOTE_MODEL_SWITCH_ROUTE_CHANGE/,
+    );
+    await handle.close();
+  });
+
   it('remote setModel rejects when the target route drops a custom header', async () => {
     const configDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;

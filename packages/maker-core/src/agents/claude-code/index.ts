@@ -3884,37 +3884,35 @@ export class ClaudeCodeAgent extends BaseAgent {
                 // refreshSubscriptionTokenInPlace 会原地写回 remoteEnv,因此它始终是最新
                 // 凭证;nextRoute 也是现解析的最新值。
                 //
-                // 比对规则(三轮 review 的折中):
+                // 比对规则(四轮 review 的折中):
                 // - endpoint + 非 token env 值:任一变化 → 拒绝(真路由/定制头变化);
-                // - token 字段(CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY /
-                //   ANTHROPIC_AUTH_TOKEN)的**存在性**:在/不在变化 → 拒绝(路由类型变化);
-                // - token 字段的**值**:不比对 —— 订阅 token 轮换(后台刷新先更新
-                //   nextRoute,远端 daemon 尚未 401)与网关 key 轮换同理会误拒;远端
-                //   daemon 撞 401 时会经 oauth/refresh 拿到最新值,不会用旧 token 跑。
-                // (Greptile 三轮 vs codex P2:全值比对误拒轮换,排除字段放行真变化;
-                // 存在性比对是两边都安全的折中。)
-                const TOKEN_KEYS = new Set([
-                  'CLAUDE_CODE_OAUTH_TOKEN',
-                  'ANTHROPIC_API_KEY',
-                  'ANTHROPIC_AUTH_TOKEN',
-                ]);
+                // - CLAUDE_CODE_OAUTH_TOKEN(订阅 token,有 oauth/refresh 通道)的**值**:
+                //   不比对 —— 后台刷新先更新 nextRoute、远端 daemon 尚未 401 的轮换
+                //   窗口会误拒;daemon 撞 401 时经 refresh 拿最新值。
+                // - ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN(自定义供应商 key,**无**
+                //   refresh 通道)的**值**:仍比对 —— 用户改 key 后远端 daemon 会持续
+                //   401,必须拒绝(Greptile 六轮)。存在性(在/不在)同样比对(路由类型)。
+                const SUBSCRIPTION_TOKEN_KEY = 'CLAUDE_CODE_OAUTH_TOKEN';
+                const PROVIDER_KEY_KEYS = new Set(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']);
                 const routeKeys = new Set([
                   ...Object.keys(remoteRoute.env),
                   ...Object.keys(nextRoute.env),
                 ]);
-                const pick = (env: Record<string, string>): Record<string, string> =>
-                  Object.fromEntries(
-                    [...routeKeys]
-                      .filter((k) => env[k] !== undefined && !TOKEN_KEYS.has(k))
-                      .map((k) => [k, env[k]]),
-                  );
-                const tokenPresenceOf = (env: Record<string, string>): string[] =>
-                  [...TOKEN_KEYS].filter((k) => env[k] !== undefined).sort();
+                // 非订阅-token 字段的值(含自定义供应商 key + 定制头)+ 订阅 token 的存在性。
+                const pick = (env: Record<string, string>): Record<string, string> => {
+                  const out: Record<string, string> = {};
+                  for (const k of routeKeys) {
+                    if (k === SUBSCRIPTION_TOKEN_KEY) {
+                      if (env[k] !== undefined) out[k] = '<present>';
+                    } else if (env[k] !== undefined) {
+                      out[k] = env[k];
+                    }
+                  }
+                  return out;
+                };
                 return (
                   nextRoute.endpoint !== remoteRoute.endpoint ||
-                  JSON.stringify(pick(nextRoute.env)) !== JSON.stringify(pick(remoteEnv ?? {})) ||
-                  JSON.stringify(tokenPresenceOf(nextRoute.env)) !==
-                    JSON.stringify(tokenPresenceOf(remoteEnv ?? {}))
+                  JSON.stringify(pick(nextRoute.env)) !== JSON.stringify(pick(remoteEnv ?? {}))
                 );
               })()) ||
             // 网关路径(route null):切模时重新读当前网关 key,与 remoteEnv 里 spawn 时

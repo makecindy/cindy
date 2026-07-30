@@ -249,6 +249,9 @@ export async function applyRuntimeSetModelChange(
     return { status: 'applied' };
   }
 
+  // 清除前先记下值:热切失败时恢复用(Greptile review #1035 六轮 —— catch 里
+  // 现读只会得到 undefined)。
+  const pendingBeforeClear = input.getPendingCredentialSwitch?.(sessionId);
   if (providerId !== undefined) {
     setSessionProvider(sessionId, nextProviderId);
     // 显式选源且无需切换 → 取消尚未兑现的 pending(后选覆盖先选)。
@@ -276,7 +279,7 @@ export async function applyRuntimeSetModelChange(
     }
     // 热切失败:恢复上面清除的 pending,用户的待定来源选择不随异常丢失
     // (Greptile review #1035 五轮;与 shouldCloseSession 分支同口径)。
-    const clearedPending = pendingTarget ?? (providerId !== undefined ? input.getPendingCredentialSwitch?.(sessionId) : undefined);
+    const clearedPending = pendingTarget ?? pendingBeforeClear;
     if (clearedPending && input.registerPendingCredentialSwitch) {
       input.registerPendingCredentialSwitch(sessionId, clearedPending);
     }
