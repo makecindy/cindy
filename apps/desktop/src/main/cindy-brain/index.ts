@@ -1903,6 +1903,9 @@ export function getGhostCindySlot(): GhostCindySlot {
         try {
           assertMediaModelStillEnabled('image', model);
           const channel = resolveImageChannelForModel(model);
+          if (channel.supportsEdit === false) {
+            throw new Error('所选图像来源不支持改图,请改用支持改图的型号');
+          }
           return decodeImageResponse(
             await channel.editImage({
               model,

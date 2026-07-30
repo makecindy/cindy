@@ -34,6 +34,8 @@ export interface ImageChannelResult {
 export interface ImageChannel {
   /** 执行凭证是否就绪。false ⇒ 该来源整段不进 cindy 白名单。 */
   ready(): boolean;
+  /** 是否支持改图。undefined/true = 支持;false = 仅生成,改图派发前早失效。 */
+  supportsEdit?: boolean;
   generateImage(params: {
     model: string;
     prompt: string;
