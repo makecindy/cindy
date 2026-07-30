@@ -1891,7 +1891,7 @@
     "agentResource": {
       "loading": "正在加载 Agent 资源设置…",
       "title": "Agent 资源占用",
-      "description": "限制 Agent 命令行任务的系统资源占用，避免并行测试、构建把机器拖卡。默认全速（不干预）。优先级与限核只对新启动的 Agent 进程生效；并发上限即刻生效。",
+      "description": "限制 Agent 命令行任务的系统资源占用，避免并行测试、构建把机器拖卡。默认全速（不干预）。并发上限与优先级降档即刻生效（含已在跑的 Agent 进程）；把优先级调回正常和工具链限核只对新启动的 Agent 进程生效。",
       "preset": "档位",
       "presets": {
         "full": "全速",
@@ -1905,7 +1905,7 @@
         "custom": "当前为自定义组合，可直接调节下方各项。"
       },
       "maxConcurrent": "并发命令上限",
-      "maxConcurrentHint": "所有 Agent 同时执行的命令数上限，超出的排队等待；0 表示不限。",
+      "maxConcurrentHint": "Claude Code 引擎所有命令的并发上限，超出的排队等待；0 表示不限。Codex 命令在自身沙箱内执行、不经此闸门，由优先级与限核层覆盖。",
       "priority": "进程优先级",
       "priorityHint": "调低后 Agent 只用空闲资源，前台应用优先。从低档调回后只对新启动的 Agent 进程生效。",
       "priorityOptions": {

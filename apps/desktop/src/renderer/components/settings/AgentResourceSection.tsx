@@ -23,13 +23,17 @@ type PresetId = 'full' | 'balanced' | 'background';
 const PRIORITY_OPTIONS: AgentResourceProcessPriority[] = ['normal', 'low', 'lowest'];
 const MAX_CONCURRENT_CAP = 64;
 
-/** 均衡档并发值:本机核数的一半,至少 2(与 main 侧 toolchain-thread-cap 的口径一致)。 */
+/**
+ * 均衡档并发值:本机核数的一半,至少 2(与 main 侧 toolchain-thread-cap 的口径一致),
+ * 且不超过 IPC 校验上限 —— 超高核数工作站(>128 核)算出的值若越过 cap,首个 IPC 写
+ * 会被硬拒,预设应用直接失败(bot review P1)。
+ */
 function balancedConcurrency(): number {
   const cores =
     typeof navigator !== 'undefined' && navigator.hardwareConcurrency
       ? navigator.hardwareConcurrency
       : 8;
-  return Math.max(2, Math.ceil(cores / 2));
+  return Math.min(MAX_CONCURRENT_CAP, Math.max(2, Math.ceil(cores / 2)));
 }
 
 function presetValues(id: PresetId): Pick<Wire, SettingKey> {
@@ -101,6 +105,7 @@ export function AgentResourceSection() {
   };
 
   const persist = (key: SettingKey, value: number | string | boolean) => {
+    if (applyingPreset) return; // 预设三键序列在途时所有控件已禁用,这里兜底防交错
     setSettings((prev) => (prev ? { ...prev, [key]: value, isCustomized: true } : prev));
     void window.electronAPI.maker
       .agentResourceSettingsSet(key, value)
@@ -155,7 +160,9 @@ export function AgentResourceSection() {
         </h2>
         <DefaultOverrideControls
           isCustomized={Boolean(settings.isCustomized)}
+          disabled={applyingPreset}
           onReset={() => {
+            if (applyingPreset) return;
             void window.electronAPI.maker
               .agentResourceSettingsReset()
               .then((next) => {
@@ -227,6 +234,7 @@ export function AgentResourceSection() {
           type="number"
           min={0}
           max={MAX_CONCURRENT_CAP}
+          disabled={applyingPreset}
           value={settings.maxConcurrentCommands}
           onChange={(e) => {
             const raw = Number(e.target.value);
@@ -261,6 +269,7 @@ export function AgentResourceSection() {
                 type="button"
                 role="radio"
                 aria-checked={active}
+                disabled={applyingPreset}
                 onClick={() => persist('processPriority', tier)}
                 className={cn(
                   'rounded-md px-2.5 py-1 text-xs transition-colors',
@@ -288,6 +297,7 @@ export function AgentResourceSection() {
         </div>
         <Switch
           checked={settings.capToolchainThreads}
+          disabled={applyingPreset}
           onCheckedChange={(next) => persist('capToolchainThreads', next)}
           aria-label={t('settings.agentResource.capThreads')}
         />

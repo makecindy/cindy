@@ -1892,7 +1892,7 @@
     "agentResource": {
       "loading": "Loading Agent resource settings…",
       "title": "Agent Resource Usage",
-      "description": "Limit how much system capacity Agent command-line work can consume, so parallel tests or builds don't freeze your machine. Defaults to full speed (no intervention). Priority and thread caps only apply to newly started Agent processes; the concurrency limit applies immediately.",
+      "description": "Limit how much system capacity Agent command-line work can consume, so parallel tests or builds don't freeze your machine. Defaults to full speed (no intervention). The concurrency limit and priority lowering take effect immediately (including running Agent processes); raising priority back to Normal and toolchain thread caps only apply to newly started Agent processes.",
       "preset": "Profile",
       "presets": {
         "full": "Full speed",
@@ -1906,7 +1906,7 @@
         "custom": "Custom combination. Adjust the fields below directly."
       },
       "maxConcurrent": "Concurrent command limit",
-      "maxConcurrentHint": "Maximum number of commands all Agents may run at once; extra commands wait in a queue. 0 means unlimited.",
+      "maxConcurrentHint": "Maximum number of commands the Claude Code engine may run at once; extra commands wait in a queue. 0 means unlimited. Codex commands run inside their own sandbox without a per-command hook and are covered by the priority and thread-cap layers instead.",
       "priority": "Process priority",
       "priorityHint": "Lower it so Agents only use idle capacity and foreground apps stay responsive. Raising it back only applies to newly started Agent processes.",
       "priorityOptions": {

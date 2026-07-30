@@ -6423,11 +6423,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   // ─── Agent resource settings IPC(命令并发/进程优先级/工具链限核)──────────
-  ipcMain.handle(MAKER_INVOKE.AGENT_RESOURCE_SETTINGS_GET, async () => {
+  // 写路径会持久改变 agent 进程的资源治理行为,属特权 IPC:先验 sender 可信度
+  // (新增特权 handler 的硬性要求,bot review P1)。
+  ipcMain.handle(MAKER_INVOKE.AGENT_RESOURCE_SETTINGS_GET, async (e) => {
+    assertTrustedAppRendererEvent(e);
     return agentResourceSettingsWire();
   });
 
-  ipcMain.handle(MAKER_INVOKE.AGENT_RESOURCE_SETTINGS_SET, async (_e, body: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.AGENT_RESOURCE_SETTINGS_SET, async (e, body: unknown) => {
+    assertTrustedAppRendererEvent(e);
     const b = body as Record<string, unknown> | null | undefined;
     if (!b || typeof b.key !== 'string') throwIpcError('INVALID_PARAMS', 'key required');
     if (!isAgentResourceSettingKey(b.key)) {
@@ -6441,7 +6445,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return agentResourceSettingsWire();
   });
 
-  ipcMain.handle(MAKER_INVOKE.AGENT_RESOURCE_SETTINGS_RESET, async () => {
+  ipcMain.handle(MAKER_INVOKE.AGENT_RESOURCE_SETTINGS_RESET, async (e) => {
+    assertTrustedAppRendererEvent(e);
     resetAgentResourceSettings();
     return agentResourceSettingsWire();
   });
