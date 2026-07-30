@@ -501,16 +501,21 @@ describe('Claude Code translator is_error result guard', () => {
     expect(errors[0]?.agentMeta).toMatchObject({ model: 'chatgpt/gpt-5.5' });
   });
 
-  it('freezes the no-envelope fallback model at the first retry, not re-read on later retries', async () => {
-    // ctx.getModel() 是活的当前选择:同一个仍在重试的失败请求可能横跨用户
-    // 热切模型的那一刻(gateway host 可直接复用 provider-oauth、setModel 即时
-    // 生效)。第一次 api_retry 冻结的模型必须原样保留到终态,不能因为后续
-    // retry 重新读到新选择而被覆盖——否则归因会指向切换后的新模型,而不是
-    // 这次实际失败请求所用的旧模型(PR review P2)。
+  it('uses turnStartModel (frozen at request dispatch) instead of the live current model selection', async () => {
+    // ctx.getModel() 是活的当前选择:用户可能在这次失败请求发出之后、甚至在
+    // 第一条 api_retry 到达**之前**就把模型热切走(gateway host 可直接复用
+    // provider-oauth、setModel 即时生效)。归因必须用 ctx.turn.turnStartModel——
+    // index.ts 的 beginNewTurn 在请求真正 dispatch 前打的快照,turn 内不变——
+    // 而不是无论第一次还是后续 retry 都去读的 ctx.getModel(),否则会把归因
+    // 指向切换后的新模型,而不是这次实际失败请求发出时用的模型
+    // (PR review P2 ×3)。
     const tracker = new UsageTracker();
     const queue = createAsyncQueue<AgentEvent>();
-    let currentModel = 'xd/gateway-model';
-    const ctx = { ...createCtx(tracker), getModel: () => currentModel };
+    const ctx = createCtx(tracker);
+    ctx.turn.turnStartModel = 'xd/gateway-model';
+    // 模拟:请求发出后、第一条 api_retry 到达前,用户已经把模型热切到 chatgpt/*——
+    // ctx.getModel() 此时已经是新选择,但这次失败请求仍是旧模型发出的。
+    ctx.getModel = () => 'chatgpt/gpt-5.5';
 
     translateSdkMessage(
       {
@@ -525,9 +530,6 @@ describe('Claude Code translator is_error result guard', () => {
       queue,
       ctx,
     );
-    // 用户在重试进行期间把模型热切到 chatgpt/*——同一个失败请求仍在重试,
-    // 不是新请求。
-    currentModel = 'chatgpt/gpt-5.5';
     translateSdkMessage(
       {
         type: 'system',

@@ -1870,12 +1870,17 @@ export class ClaudeCodeAgent extends BaseAgent {
       generation: 0,
       interruptGeneration: 0,
       lastAssistantMsgHadSubstance: true,
+      turnStartModel: mutableModel,
     };
     const runtimeState: RuntimeState = newRuntimeState();
     const beginNewTurn = (): void => {
       // usageTracker.beginTurn() 只清 usage 桶；translator 的 turnState 也要在新 turn
       // 开始时清掉，避免上一轮 abnormal/abort 没走 result 时污染下一轮 API call 计数。
       usageTracker.beginTurn();
+      // 请求真正 dispatch 前的模型快照 —— translator 的 api_retry 无 envelope 兜底
+      // 归因靠它,不能读 mutableModel 的活值(PR review P2 ×3,详见 translator.ts
+      // pendingApiError 字段注释)。
+      turnState.turnStartModel = mutableModel;
       turnState.text = '';
       turnState.toolUses = 0;
       turnState.apiCalls = 0;

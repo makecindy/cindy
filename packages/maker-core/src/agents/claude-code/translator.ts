@@ -106,6 +106,15 @@ export interface TurnState {
    * 见过 assistant 消息时不参与判定)。
    */
   lastAssistantMsgHadSubstance: boolean;
+  /**
+   * 本 turn 实际发起请求那一刻的模型选择(index.ts 的 beginNewTurn 在请求真正
+   * dispatch 前快照 mutableModel)。api_retry 的无 envelope 兜底归因必须用这个,
+   * 不能用 ctx.getModel():后者是活的当前选择,用户可能在同一个仍在重试的失败
+   * 请求生命周期内(甚至在第一条 api_retry 到达前)就把模型热切走,那样归因会
+   * 指向切换后的新模型而不是这次实际失败请求发出时用的模型(PR review P2)。
+   * 可选:测试里手搭的 TurnState fixture 未必会填,未填时兜底回落 ctx.getModel()。
+   */
+  turnStartModel?: string;
 }
 
 export interface RuntimeState {
@@ -750,25 +759,18 @@ function handleSystem(
     // 猜并发场景下的 lane 会把归因导向错误模型,不能赌)。但当本 session
     // 从未启动过任何 subagent(resolvedSubagentModelByParentToolUseId 为空、
     // 且从未被写入过)时不存在这个歧义 —— 迄今唯一活跃的 lane 只能是主
-    // agent。这里不能借用 ctx.rt.lastAssistantMeta:那是上一条成功 assistant
-    // 消息的 meta,若用户在上一轮成功 turn 之后切换了模型,新模型的请求在
-    // 产生任何 envelope 前耗尽 api_retry,借用旧 meta 会把当前失败请求错误
-    // 标注成上一轮的模型(PR review P2)。ctx.getModel() 是当前 turn 实际使用
-    // 的模型选择,才是这次失败请求的真实归属——但只在**首次**填入时读:
-    // ctx.getModel() 是活的当前选择,若这次失败请求横跨多轮 api_retry 期间
-    // 用户把模型热切走(gateway host 可直接复用 provider-oauth、setModel 即时
-    // 生效),每次 retry 都重新读会把归因在半路改判成新模型,而实际重试的仍是
-    // 旧请求(PR review P2 ×2)。previous.agentMetaIsProvisional 为 true 时说明
-    // 已经在更早一次 retry 里冻结过,原样复用,不再重新读。
+    // agent。这里不能借用 ctx.rt.lastAssistantMeta(上一条成功 assistant 消息
+    // 的 meta,可能是上一轮的模型),也不能读 ctx.getModel()(活的当前选择):
+    // 用户可能在这次失败请求发出之后、甚至在第一条 api_retry 到达之前就把
+    // 模型热切走(gateway host 可直接复用 provider-oauth、setModel 即时生效),
+    // 这两种取法都会把归因指向切换后的新模型,而不是这次实际失败请求发出时
+    // 用的模型。ctx.turn.turnStartModel 是 index.ts 的 beginNewTurn 在请求真正
+    // dispatch 前打的快照,turn 内不会变,才是可靠来源(PR review P2 ×3)。
     const noSubagentEverLaunched = ctx.rt.resolvedSubagentModelByParentToolUseId.size === 0
       && ctx.rt.subagentParentToolUseIdByTaskId.size === 0;
-    const fallbackMeta = hasAssistantEnvelope
-      ? undefined
-      : previous?.agentMetaIsProvisional
-        ? previous.agentMeta
-        : noSubagentEverLaunched
-          ? { model: ctx.getModel() }
-          : undefined;
+    const fallbackMeta = !hasAssistantEnvelope && noSubagentEverLaunched
+      ? { model: ctx.turn.turnStartModel ?? ctx.getModel() }
+      : undefined;
     const sdkError = redactSensitiveText(hasAssistantEnvelope ? previous.sdkError : (msg.error || 'unknown'));
     const statusLabel = msg.error_status == null ? 'connection error' : `HTTP ${msg.error_status}`;
     const retryLabel = typeof msg.attempt === 'number' && typeof msg.max_retries === 'number'
