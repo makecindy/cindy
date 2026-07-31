@@ -4849,6 +4849,18 @@ export const GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE: Readonly<Record<GhostVideoRefM
 };
 
 /**
+ * 单次图生视频的**参考图总字节**上限(48MB)。张数上限之外还要有字节闸:
+ * 寄存单张可达 GHOST_CINDY_DEPOSIT_MAX_BYTES(50MB),9 张全顶格就是 450MB
+ * 原始字节;主机把它们读成 base64 data URI 时按 4/3 膨胀,JSON 请求体再复制
+ * 一份 —— 峰值约聚合量的 3.7 倍,足以让 main 进程 OOM 或长时间卡死。
+ *
+ * 主机在**读取字节之前**先 stat 出总量再决定读不读:超限的请求一个字节都
+ * 不会被物化。48MB 对 9 张 1080p 级参考图绰绰有余(单张均摊 5MB+),同时把
+ * 峰值压在 ~180MB 量级。
+ */
+export const GHOST_VIDEO_REF_IMAGE_MAX_TOTAL_BYTES = 48 * 1024 * 1024;
+
+/**
  * 视频时长/帧率的形状上限(秒 / fps)。这两项各型号差异大(如 seedance
  * 支持 4/6/8/10 秒,happyhorse 只有 5 秒),协议层不枚举值域,只做"正整数
  * 且不离谱"的粗筛,真正的可用集由主机按解析出的型号校验并在拒绝话术里
