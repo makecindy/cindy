@@ -9,10 +9,11 @@
 import { safeStorage } from 'electron';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import { getActiveAppSession, ownerScopedUserDataPath } from '../appSessionState.js';
-import { createBetterSqliteDatabase } from '../localDb/betterSqliteFactory.js';
+import { withCrossProcessLock } from '../device-link/crossProcessLock.js';
 import {
   generateContactsSyncIdentity,
   isValidContactsSyncPublicKey,
@@ -40,29 +41,54 @@ export interface ContactsSyncKeyStoreDeps {
 export class ContactsSyncKeyStore {
   private loadedPath: string | null = null;
   private data: StoredContactsSyncKeys | null = null;
+  private generation = 0;
 
   constructor(private readonly deps: ContactsSyncKeyStoreDeps = desktopDeps) {}
 
+  /**
+   * 首次读/建密钥可能等待另一个 Desktop 实例，必须 await，不能阻塞 Electron Main。
+   * 后续握手和加解密只读内存缓存，保持同步热路径。
+   */
+  async prepare(): Promise<void> {
+    const file = this.requireFile();
+    const generation = this.selectFile(file);
+    if (this.data) return;
+    await withKeyFileLock(file, () => {
+      this.assertOperationCurrent(file, generation);
+      const data = this.readOrCreateLocked(file);
+      this.loadedPath = file;
+      this.data = data;
+    });
+    this.assertOperationCurrent(file, generation);
+  }
+
   getIdentity(): ContactsSyncExportedIdentity {
-    const data = this.load();
+    const data = this.requireLoaded();
     return { publicKey: data.publicKey, privateKey: data.privateKey };
   }
 
   getPeerPublicKey(deviceId: string): string | null {
     assertDeviceId(deviceId);
-    return this.load().peers[deviceId] ?? null;
+    const file = this.deps.filePath();
+    if (!file || !this.deps.isEncryptionAvailable()) return null;
+    this.selectFile(file);
+    // LAN stop / owner 切换可能与最后一个 socket 回调交错；未 prepare 时按“未 pin”拒绝，
+    // 不能让一个迟到的 allowlist 查询因缓存已清空而向 EventEmitter 抛异常。
+    return this.data?.peers[deviceId] ?? null;
   }
 
   /**
    * 首次见到该 deviceId 时落盘；已有 pin 一致返回 false，不一致 fail closed。
    */
-  pinPeerPublicKey(deviceId: string, publicKey: string): boolean {
+  async pinPeerPublicKey(deviceId: string, publicKey: string): Promise<boolean> {
     assertDeviceId(deviceId);
     if (!isValidContactsSyncPublicKey(publicKey)) {
       throw new Error('invalid contacts sync peer public key');
     }
     const file = this.requireFile();
-    return withKeyFileLock(file, () => {
+    const generation = this.selectFile(file);
+    const result = await withKeyFileLock(file, () => {
+      this.assertOperationCurrent(file, generation);
       // 共享 userData 的另一实例可能刚写入新 pin；锁内强制从磁盘取最新基线，
       // 不能用本实例缓存做 read-modify-write，否则会静默覆盖对方的 pin。
       const data = this.readOrCreateLocked(file);
@@ -80,29 +106,40 @@ export class ContactsSyncKeyStore {
       this.data = next;
       return true;
     });
+    this.assertOperationCurrent(file, generation);
+    return result;
   }
 
   resetMemory(): void {
+    this.generation += 1;
     this.loadedPath = null;
     this.data = null;
   }
 
-  private load(): StoredContactsSyncKeys {
+  private requireLoaded(): StoredContactsSyncKeys {
     const file = this.requireFile();
+    this.selectFile(file);
+    if (!this.data) throw new Error('contacts sync device key is not prepared');
+    return this.data;
+  }
+
+  private selectFile(file: string): number {
     if (this.loadedPath !== file) {
+      this.generation += 1;
       this.loadedPath = file;
       this.data = null;
     }
-    if (this.data) return this.data;
+    return this.generation;
+  }
 
-    return withKeyFileLock(file, () => {
-      // exists/read/create 都在同一把跨进程锁内；等待者拿锁后必须重读，保证多个
-      // Desktop 实例首次启用时最终采用同一份设备身份。
-      const data = this.readOrCreateLocked(file);
-      this.loadedPath = file;
-      this.data = data;
-      return data;
-    });
+  private assertOperationCurrent(file: string, generation: number): void {
+    if (
+      this.generation !== generation ||
+      this.deps.filePath() !== file ||
+      !this.deps.isEncryptionAvailable()
+    ) {
+      throw new Error('contacts sync key operation was invalidated');
+    }
   }
 
   private requireFile(): string {
@@ -161,48 +198,22 @@ export class ContactsSyncKeyStore {
 }
 
 /**
- * 密钥 API 为同步调用（握手验签和 LAN allowlist 都依赖它），因此临界区也保持
- * 同步。SQLite 的进程级写锁负责等待与崩溃自动释放，避免自制 lockfile 在多个
- * 等待者同时接管陈旧锁时出现 compare-then-unlink 竞态；超时后 fail closed。
+ * 复用已有异步跨进程锁：等待只占 Promise，不阻塞 Electron Main。锁用 PID + mtime
+ * 心跳确认陈旧 owner，释放前复核归属，避免多个等待者 compare-then-unlink；任何
+ * busy / unavailable 都 fail closed，不能在没有互斥时读改写密钥文件。
  */
-function withKeyFileLock<T>(file: string, task: () => T): T {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const lockDbPath = `${file}.lock.sqlite`;
-  // 统一走 Desktop factory：dev Electron 需要显式选择 Electron ABI 的 native binding，
-  // packaged 路径和数据库文件权限也由同一入口处理。
-  const db = createBetterSqliteDatabase(lockDbPath);
-  try {
-    db.pragma(`busy_timeout = ${LOCK_WAIT_MS}`);
-    db.exec('BEGIN IMMEDIATE');
-    let committed = false;
-    try {
-      // 首次创建也在同一事务内；后续 BEGIN IMMEDIATE 会由 SQLite 串行化。
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS contacts_sync_key_mutex (
-          singleton INTEGER PRIMARY KEY CHECK (singleton = 1)
-        );
-        INSERT OR IGNORE INTO contacts_sync_key_mutex(singleton) VALUES (1);
-      `);
-      const result = task();
-      db.exec('COMMIT');
-      committed = true;
-      return result;
-    } finally {
-      if (!committed && db.inTransaction) {
-        try {
-          db.exec('ROLLBACK');
-        } catch {
-          // close 仍会释放 SQLite 进程锁；保留原始业务异常。
-        }
+async function withKeyFileLock<T>(file: string, task: () => T): Promise<T> {
+  await fsp.mkdir(path.dirname(file), { recursive: true });
+  return withCrossProcessLock(
+    `${file}.lock`,
+    { label: 'contacts-sync-key', waitMs: LOCK_WAIT_MS },
+    async (status) => {
+      if (!status.held) {
+        throw new Error(`contacts sync key lock ${status.reason}`);
       }
-    }
-  } finally {
-    try {
-      db.close();
-    } catch {
-      // close 失败不能覆盖密钥读写的原始结果或异常。
-    }
-  }
+      return task();
+    },
+  );
 }
 
 function isStoredKeys(value: unknown): value is StoredContactsSyncKeys {

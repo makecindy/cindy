@@ -12,8 +12,10 @@ import { createLogger } from '../logger.js';
 import { activeOwnerScopeKey, getActiveAppSession } from '../appSessionState.js';
 import { getDesktopContactsManager } from '../maker-host/maker-contacts-host.js';
 import {
+  commitContactsDeviceSyncSettingIntent,
+  readContactsDeviceSyncSettingIntent,
   readContactsSettings,
-  writeContactsDeviceSyncEnabled,
+  writeContactsDeviceSyncSettingIntent,
 } from '../maker-host/contacts-settings-store.js';
 import {
   onLocalContactsChanged,
@@ -93,6 +95,10 @@ let observedContactsChangeToken: string | null | undefined;
 let observedSyncRequestToken: string | null | undefined;
 let usingSharedRuntimeStatus = false;
 let lastRuntimeStatusWriteAt = 0;
+let settingsIntentGeneration = 0;
+let recoveringDisableIntentToken: string | null = null;
+const activeDisableIntentTokens = new Set<string>();
+let activeDisableIntentWrites = 0;
 const outbound = new ContactsSyncOutbound({
   getGeneration: () => runtimeGeneration,
   getOwnerId: () => getActiveAppSession().dataOwnerId,
@@ -138,14 +144,11 @@ export function setContactsDeviceLinkOwnerActive(active: boolean): void {
   refreshOnlineCount(false);
   emitStatus();
   if (isEnabled()) {
-    try {
-      prepareLocalSync();
+    prepareAndRun(() => {
       startLan();
       setPhase(onlinePeers().length > 0 ? 'syncing' : 'waiting');
       runSyncTask(() => broadcastContactsNow(true));
-    } catch (error) {
-      recordError(error);
-    }
+    });
   }
 }
 
@@ -199,24 +202,61 @@ export function getContactsDeviceSyncStatus(): ContactsDeviceSyncStatus {
 
 export async function setContactsDeviceSyncEnabled(enabled: boolean): Promise<void> {
   ensureCurrentOwnerStatus();
+  const intentGeneration = ++settingsIntentGeneration;
   const ownerId = getActiveAppSession().dataOwnerId;
   const ownerScopeKey = activeOwnerScopeKey();
   if (enabled && !isCloudSession()) {
     throw new Error('contacts device sync requires a signed-in cloud account');
   }
-  if (enabled === isEnabled() && enabled === isConfiguredEnabled()) {
-    if (enabled) await broadcastContactsNow(true);
+  if (!enabled) {
+    // “关闭”是隐私意图：先让当前进程立即停传，再等待任何跨进程落盘。
+    if (ownerId) locallyDisabledOwners.add(ownerId);
+    liveStatus = { ...liveStatus, enabled: false, errorCode: null };
+    stopContactsDeviceSyncRuntime();
+    setPhase('off');
+    activeDisableIntentWrites += 1;
+  }
+  let persistedIntent: Awaited<ReturnType<typeof writeContactsDeviceSyncSettingIntent>>;
+  try {
+    persistedIntent = await writeContactsDeviceSyncSettingIntent(enabled);
+  } catch (error) {
+    if (!enabled) activeDisableIntentWrites = Math.max(0, activeDisableIntentWrites - 1);
+    if (settingsIntentGeneration === intentGeneration && activeOwnerScopeKey() === ownerScopeKey) {
+      recordError(error);
+    }
+    throw error;
+  }
+  if (!enabled) {
+    activeDisableIntentWrites = Math.max(0, activeDisableIntentWrites - 1);
+    activeDisableIntentTokens.add(persistedIntent.token);
+  }
+  const intentIsCurrent = () => {
+    if (settingsIntentGeneration !== intentGeneration || activeOwnerScopeKey() !== ownerScopeKey) {
+      return false;
+    }
+    const current = readContactsDeviceSyncSettingIntent();
+    // 关闭是隐私方向：意图文件读坏/瞬时不可读时仍继续 durable false；只有读到一个
+    // 明确的后发意图才让路。开启则必须精确匹配 token，任何异常都 fail closed。
+    return sameSettingIntent(current, persistedIntent) || (!enabled && current === null);
+  };
+  if (!intentIsCurrent()) {
+    activeDisableIntentTokens.delete(persistedIntent.token);
+    reconcileSupersededDisable(enabled, ownerId, ownerScopeKey);
     return;
   }
   if (enabled) {
-    // 先确认数据库与系统安全存储都可用；失败时不把开关留在“已开启但不可工作”。
+    // await intent 期间本实例也可能被另一进程的 disable 轮询停掉；即使调用开始时
+    // 已开启，也要重新 prepare，不能拿旧快照跳过密钥缓存恢复。
     try {
-      prepareLocalSync();
+      await prepareLocalSync();
     } catch (error) {
+      if (!intentIsCurrent()) return;
       recordError(error);
       throw error;
     }
-    await writeContactsDeviceSyncEnabled(true);
+    if (!intentIsCurrent()) return;
+    if (!(await commitContactsDeviceSyncSettingIntent(persistedIntent))) return;
+    if (!intentIsCurrent()) return;
     if (ownerId) locallyDisabledOwners.delete(ownerId);
     if (activeOwnerScopeKey() !== ownerScopeKey) {
       ensureCurrentOwnerStatus();
@@ -228,18 +268,20 @@ export async function setContactsDeviceSyncEnabled(enabled: boolean): Promise<vo
     await broadcastContactsNow(true);
     return;
   }
-  // “关闭”是隐私意图：先让当前进程立即停传，再等待跨进程设置锁。落盘失败时
-  // 也保留本进程的关闭抑制，不能由轮询读到旧的 true 后偷偷重启。
-  if (ownerId) locallyDisabledOwners.add(ownerId);
-  liveStatus = { ...liveStatus, enabled: false, errorCode: null };
-  stopContactsDeviceSyncRuntime();
-  setPhase('off');
+  // 落盘失败时保留本进程的关闭抑制，不能由轮询读到旧的 true 后偷偷重启。
   try {
-    await writeContactsDeviceSyncEnabled(false);
+    if (!(await commitContactsDeviceSyncSettingIntent(persistedIntent))) {
+      activeDisableIntentTokens.delete(persistedIntent.token);
+      reconcileSupersededDisable(enabled, ownerId, ownerScopeKey);
+      return;
+    }
+    activeDisableIntentTokens.delete(persistedIntent.token);
     if (ownerId) locallyDisabledOwners.delete(ownerId);
     if (activeOwnerScopeKey() !== ownerScopeKey) ensureCurrentOwnerStatus();
   } catch (error) {
-    if (activeOwnerScopeKey() === ownerScopeKey) {
+    activeDisableIntentTokens.delete(persistedIntent.token);
+    reconcileSupersededDisable(enabled, ownerId, ownerScopeKey);
+    if (settingsIntentGeneration === intentGeneration && activeOwnerScopeKey() === ownerScopeKey) {
       recordError(error);
     } else {
       log.warn('contacts device sync setting write failed after owner changed', {
@@ -250,11 +292,31 @@ export async function setContactsDeviceSyncEnabled(enabled: boolean): Promise<vo
   }
 }
 
+function reconcileSupersededDisable(
+  enabled: boolean,
+  ownerId: string | null,
+  ownerScopeKey: string,
+): void {
+  if (enabled || !ownerId || activeOwnerScopeKey() !== ownerScopeKey) return;
+  const latestIntent = readContactsDeviceSyncSettingIntent();
+  if (latestIntent?.enabled !== true) return;
+  locallyDisabledOwners.delete(ownerId);
+  pollContactsDeviceSyncSettingChange();
+}
+
+function sameSettingIntent(
+  current: ReturnType<typeof readContactsDeviceSyncSettingIntent>,
+  expected: Awaited<ReturnType<typeof writeContactsDeviceSyncSettingIntent>>,
+): boolean {
+  return current?.token === expected.token && current.enabled === expected.enabled;
+}
+
 /** Device Link 持有者定期调用，应用其它共享 userData 实例写入的同步开关。 */
 export function pollContactsDeviceSyncSettingChange(): void {
   ensureCurrentOwnerStatus();
   const ownerId = getActiveAppSession().dataOwnerId;
   const configuredEnabled = isConfiguredEnabled();
+  recoverPendingDisableIntent(configuredEnabled);
   if (!configuredEnabled && ownerId) locallyDisabledOwners.delete(ownerId);
   const enabled = isEnabled();
   if (enabled === liveStatus.enabled) {
@@ -283,6 +345,28 @@ export function pollContactsDeviceSyncSettingChange(): void {
   });
 }
 
+function recoverPendingDisableIntent(configuredEnabled: boolean): void {
+  const intent = readContactsDeviceSyncSettingIntent();
+  if (
+    !configuredEnabled ||
+    intent?.enabled !== false ||
+    activeDisableIntentWrites > 0 ||
+    activeDisableIntentTokens.has(intent.token) ||
+    recoveringDisableIntentToken === intent.token
+  ) {
+    return;
+  }
+  recoveringDisableIntentToken = intent.token;
+  runSyncTask(async () => {
+    try {
+      await commitContactsDeviceSyncSettingIntent(intent);
+    } finally {
+      if (recoveringDisableIntentToken === intent.token) recoveringDisableIntentToken = null;
+    }
+    pollContactsDeviceSyncSettingChange();
+  });
+}
+
 export async function broadcastContactsNow(requestReply = true): Promise<void> {
   ensureCurrentOwnerStatus();
   if (!isEnabled()) return;
@@ -293,7 +377,7 @@ export async function broadcastContactsNow(requestReply = true): Promise<void> {
     scheduleSyncAttemptTimeout();
     return;
   }
-  prepareLocalSync();
+  await prepareLocalSync();
   startLan();
   const peers = onlinePeers();
   refreshOnlineCount();
@@ -441,8 +525,9 @@ export function handleIncomingContactsRelayFrame(srcDeviceId: string, raw: unkno
     return;
   }
   if (raw.type === 'key') {
-    prepareAndRun(() => {
-      const firstSeen = contactsSyncKeyStore.pinPeerPublicKey(srcDeviceId, raw.publicKey);
+    prepareAndRun(async (isCurrent) => {
+      const firstSeen = await contactsSyncKeyStore.pinPeerPublicKey(srcDeviceId, raw.publicKey);
+      if (!isCurrent() || !deviceLinkOwnerActive || !transport?.isPeerAllowed(srcDeviceId)) return;
       if (firstSeen) log.info(`pinned contacts sync peer ${shortId(srcDeviceId)}`);
       respondToKey(srcDeviceId);
       startLan();
@@ -518,12 +603,12 @@ function sendKeyAnnouncement(deviceId: string, announcedAt: number): void {
   announcedTo.set(deviceId, announcedAt);
 }
 
-function prepareLocalSync(): void {
+async function prepareLocalSync(): Promise<void> {
   if (!isCloudSession()) {
     throw new Error('contacts device sync requires a signed-in cloud account');
   }
   getDesktopContactsManager().getStore().activateDeviceSync();
-  contactsSyncKeyStore.getIdentity();
+  await contactsSyncKeyStore.prepare();
 }
 
 function readLocalState(): ContactsSyncState {
@@ -559,18 +644,31 @@ function startLan(): void {
   lan.start();
 }
 
-function prepareAndRun(action: () => void): void {
-  try {
-    prepareLocalSync();
+function prepareAndRun(action: (isCurrent: () => boolean) => void | Promise<void>): void {
+  const generation = runtimeGeneration;
+  const ownerScopeKey = activeOwnerScopeKey();
+  const isCurrent = () =>
+    runtimeGeneration === generation && activeOwnerScopeKey() === ownerScopeKey && isEnabled();
+  void (async () => {
+    await prepareLocalSync();
+    if (!isCurrent()) return;
     startLan();
-    action();
-  } catch (error) {
-    recordError(error);
-  }
+    await action(isCurrent);
+  })().catch((error) => {
+    if (runtimeGeneration === generation && activeOwnerScopeKey() === ownerScopeKey) {
+      recordError(error);
+    }
+  });
 }
 
 function runSyncTask(task: () => Promise<void>): void {
-  void task().catch((error) => recordError(error));
+  const generation = runtimeGeneration;
+  const ownerScopeKey = activeOwnerScopeKey();
+  void task().catch((error) => {
+    if (runtimeGeneration === generation && activeOwnerScopeKey() === ownerScopeKey) {
+      recordError(error);
+    }
+  });
 }
 
 function onlinePeers(): ContactsSyncPeer[] {
@@ -654,6 +752,7 @@ function isEnabled(): boolean {
     session.mode === 'cloud' &&
     ownerId !== null &&
     !locallyDisabledOwners.has(ownerId) &&
+    readContactsDeviceSyncSettingIntent()?.enabled !== false &&
     readContactsSettings().deviceSyncEnabled
   );
 }
@@ -735,6 +834,7 @@ function sameStatus(a: ContactsDeviceSyncStatus, b: ContactsDeviceSyncStatus): b
 function ensureCurrentOwnerStatus(): void {
   const ownerId = getActiveAppSession().dataOwnerId;
   if (ownerId === statusOwnerId) return;
+  settingsIntentGeneration += 1;
   runtimeGeneration += 1;
   lan?.stop();
   lan = null;
@@ -752,6 +852,9 @@ function ensureCurrentOwnerStatus(): void {
   observedSyncRequestToken = readContactsSyncRequestToken();
   usingSharedRuntimeStatus = false;
   lastRuntimeStatusWriteAt = 0;
+  recoveringDisableIntentToken = null;
+  activeDisableIntentTokens.clear();
+  activeDisableIntentWrites = 0;
   liveStatus = buildInitialStatus();
   emitStatus();
 }
@@ -772,6 +875,10 @@ export const __testing = {
     observedSyncRequestToken = readContactsSyncRequestToken();
     usingSharedRuntimeStatus = false;
     lastRuntimeStatusWriteAt = 0;
+    settingsIntentGeneration += 1;
+    recoveringDisableIntentToken = null;
+    activeDisableIntentTokens.clear();
+    activeDisableIntentWrites = 0;
     liveStatus = buildInitialStatus();
     statusListeners.clear();
   },
