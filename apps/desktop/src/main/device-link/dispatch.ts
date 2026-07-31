@@ -348,7 +348,14 @@ type RemoteInvokeBusyChangedListener = (busy: boolean) => void;
 let onRemoteInvokeBusyChanged: RemoteInvokeBusyChangedListener | null = null;
 let inFlightRemoteInvokeCount = 0;
 const REMOTE_INVOKE_IN_FLIGHT_LIMIT = 64;
+/**
+ * Keep one slow controller from consuming the entire target-device budget.
+ * The global limit still protects the host, while this per-controller slice
+ * guarantees admission for other linked controllers.
+ */
+const REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_LIMIT = 16;
 const REMOTE_INVOKE_IN_FLIGHT_BYTES = 16 * 1024 * 1024;
+const REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_BYTES = 4 * 1024 * 1024;
 const REMOTE_INVOKE_RESULT_CACHE_LIMIT = 128;
 const REMOTE_INVOKE_RESULT_CACHE_BYTES = 16 * 1024 * 1024;
 /** 本地发送背压时保留已执行结果；与 transport pending 分层且同样严格有界。 */
@@ -861,12 +868,17 @@ async function handleInvoke(
   }
 
   const invokeBytes = encodedByteLength(fingerprint);
-  if (
-    inFlightRemoteInvokeResults.size + remoteInvokeResultOutbox.size
-      >= REMOTE_INVOKE_IN_FLIGHT_LIMIT
+  const controllerAdmission = remoteInvokeAdmissionState(src);
+  const controllerAtLimit = (
+    controllerAdmission.messages >= REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_LIMIT
+    || controllerAdmission.bytes + invokeBytes > REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_BYTES
+  );
+  const globalAtLimit = (
+    inFlightRemoteInvokeResults.size + remoteInvokeResultOutbox.size >= REMOTE_INVOKE_IN_FLIGHT_LIMIT
     || inFlightRemoteInvokeBytes + remoteInvokeResultOutboxBytes + invokeBytes
       > REMOTE_INVOKE_IN_FLIGHT_BYTES
-  ) {
+  );
+  if (controllerAtLimit || globalAtLimit) {
     const result: InvokeResultPayload = {
       ok: false,
       error: {
@@ -985,6 +997,23 @@ function currentRemoteInvokeAdmissionFailure(src: string): InvokeResultPayload |
     return { ok: false, error: { code: 'ACCESS_REVOKED', message: 'access revoked by target device' } };
   }
   return null;
+}
+
+function remoteInvokeAdmissionState(src: string): { messages: number; bytes: number } {
+  const prefix = `${src}\u0000`;
+  let messages = 0;
+  let bytes = 0;
+  for (const [key, entry] of inFlightRemoteInvokeResults) {
+    if (!key.startsWith(prefix)) continue;
+    messages += 1;
+    bytes += entry.bytes;
+  }
+  for (const entry of remoteInvokeResultOutbox.values()) {
+    if (entry.src !== src) continue;
+    messages += 1;
+    bytes += entry.bytes;
+  }
+  return { messages, bytes };
 }
 
 function sendRequestIdReuseError(
@@ -1830,6 +1859,7 @@ export const __testing = {
   sendInvokeResultSafe,
   projectInvokeResultForTunnel,
   remoteInvokeInFlightLimit: REMOTE_INVOKE_IN_FLIGHT_LIMIT,
+  remoteInvokeInFlightPerControllerLimit: REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_LIMIT,
   remoteInvokeOrphanTimeoutMs: REMOTE_INVOKE_ORPHAN_TIMEOUT_MS,
   remoteInvokeResultOutboxLimit: REMOTE_INVOKE_RESULT_OUTBOX_LIMIT,
   remoteInvokeResultOutboxSize: () => remoteInvokeResultOutbox.size,

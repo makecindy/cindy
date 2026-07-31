@@ -873,7 +873,7 @@ describe('被控端控制链路生命周期', () => {
           v: 1,
           kind: 'invoke',
           id: `invoke-cache-pressure-${index}`,
-          src: 'ctrl-a',
+          src: `ctrl-cache-pressure-${index}`,
           payload: { channel: 'maker:list-active', args: [`value-${index}`] },
         });
       }
@@ -1247,7 +1247,7 @@ describe('被控端控制链路生命周期', () => {
         v: 1,
         kind: 'invoke',
         id: `invoke-bounded-${index}`,
-        src: 'ctrl-a',
+        src: `ctrl-${Math.floor(index / dispatchTesting.remoteInvokeInFlightPerControllerLimit)}`,
         payload: { channel: 'maker:list-active', args: [] },
       });
     }
@@ -1255,7 +1255,7 @@ describe('被控端控制链路生命周期', () => {
       v: 1,
       kind: 'invoke',
       id: 'invoke-over-limit',
-      src: 'ctrl-a',
+      src: 'ctrl-over',
       payload: { channel: 'maker:list-active', args: [] },
     });
 
@@ -1263,7 +1263,7 @@ describe('被控端控制链路生命周期', () => {
       dispatchTesting.remoteInvokeInFlightLimit,
     ));
     expect(calls.invokeResult).toContainEqual({
-      dst: 'ctrl-a',
+      dst: 'ctrl-over',
       requestId: 'invoke-over-limit',
       payload: {
         ok: false,
@@ -1277,6 +1277,71 @@ describe('被控端控制链路生命周期', () => {
     for (const release of releases) release();
     await vi.waitFor(() => expect(calls.invokeResult).toHaveLength(
       dispatchTesting.remoteInvokeInFlightLimit + 1,
+    ));
+  });
+
+  it('单个控制端达到配额时，不阻塞其他控制端的 invoke', async () => {
+    remoteControlEnabled = true;
+    const releases: Array<() => void> = [];
+    const handler = vi.fn(
+      () =>
+        new Promise<string[]>((resolve) => {
+          releases.push(() => resolve([]));
+        }),
+    );
+    registry.register('maker:list-active', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+
+    for (let index = 0; index < dispatchTesting.remoteInvokeInFlightPerControllerLimit; index++) {
+      feed({
+        v: 1,
+        kind: 'invoke',
+        id: `invoke-controller-a-${index}`,
+        src: 'ctrl-a',
+        payload: { channel: 'maker:list-active', args: [] },
+      });
+    }
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'invoke-controller-a-over-limit',
+      src: 'ctrl-a',
+      payload: { channel: 'maker:list-active', args: [] },
+    });
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'invoke-controller-b-admitted',
+      src: 'ctrl-b',
+      payload: { channel: 'maker:list-active', args: [] },
+    });
+
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(
+      dispatchTesting.remoteInvokeInFlightPerControllerLimit + 1,
+    ));
+    expect(calls.invokeResult).toContainEqual({
+      dst: 'ctrl-a',
+      requestId: 'invoke-controller-a-over-limit',
+      payload: {
+        ok: false,
+        error: {
+          code: 'BACKPRESSURE',
+          message: 'remote invoke execution queue is full',
+        },
+      },
+    });
+    expect(calls.invokeResult).not.toContainEqual(expect.objectContaining({
+      dst: 'ctrl-b',
+      requestId: 'invoke-controller-b-admitted',
+      payload: expect.objectContaining({
+        error: expect.objectContaining({ code: 'BACKPRESSURE' }),
+      }),
+    }));
+
+    for (const release of releases) release();
+    await vi.waitFor(() => expect(calls.invokeResult).toHaveLength(
+      dispatchTesting.remoteInvokeInFlightPerControllerLimit + 2,
     ));
   });
 
