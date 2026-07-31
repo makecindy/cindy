@@ -315,7 +315,13 @@ export function ContactsSection() {
                 'disabled:cursor-not-allowed disabled:opacity-50',
               )}
             >
-              <span className={cn('inline-flex', syncPending && 'animate-spin')} aria-hidden="true">
+              <span
+                className={cn(
+                  'inline-flex',
+                  syncPending && 'animate-spinner motion-reduce:animate-none',
+                )}
+                aria-hidden="true"
+              >
                 <RefreshCw size={13} />
               </span>
               {t('settings.contacts.sync.syncNow')}

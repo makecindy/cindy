@@ -290,7 +290,10 @@ export function ContactsManagerDialog({
                 )}
               >
                 <span
-                  className={cn('inline-flex', syncPending && 'animate-spin')}
+                  className={cn(
+                    'inline-flex',
+                    syncPending && 'animate-spinner motion-reduce:animate-none',
+                  )}
                   aria-hidden="true"
                 >
                   <RefreshCw size={14} />

@@ -5,16 +5,16 @@ import {
 } from '@cindy/maker-core';
 
 import type { LanContactsSyncTransport } from './lanTransport.js';
-import {
-  encodeContactsSyncMessage,
-  type ContactsSyncWireFrame,
-} from './wire.js';
+import { encodeContactsSyncMessage, type ContactsSyncWireFrame } from './wire.js';
 
 interface OutboundTransport {
   getSelfDeviceId(): string | null;
   isPeerAllowed(deviceId: string): boolean;
-  sendRelayFrame(deviceId: string, frame: ContactsSyncWireFrame): void;
+  sendRelayFrame(deviceId: string, frame: ContactsSyncWireFrame): void | Promise<void>;
 }
+
+const RELAY_BACKPRESSURE_RETRY_MS = 50;
+const RELAY_BACKPRESSURE_TIMEOUT_MS = 30_000;
 
 export interface ContactsSyncOutboundContext {
   generation: number;
@@ -102,9 +102,7 @@ export class ContactsSyncOutbound {
     }
     const fullState = this.deps.readLocalState();
     const knownClocks = this.deps.getKnownClocks(deviceId);
-    const state = knownClocks
-      ? createContactsSyncDelta(fullState, knownClocks)
-      : fullState;
+    const state = knownClocks ? createContactsSyncDelta(fullState, knownClocks) : fullState;
     const frames = encodeContactsSyncMessage({
       message: {
         version: 1,
@@ -129,11 +127,38 @@ export class ContactsSyncOutbound {
         throw error;
       }
       if (!this.canSend(context, deviceId)) return;
-      if (!sentDirect) context.transport.sendRelayFrame(deviceId, frame);
+      if (!sentDirect) await this.sendRelayFrame(context, deviceId, frame);
+    }
+  }
+
+  private async sendRelayFrame(
+    context: ContactsSyncOutboundContext,
+    deviceId: string,
+    frame: ContactsSyncWireFrame,
+  ): Promise<void> {
+    const deadline = Date.now() + RELAY_BACKPRESSURE_TIMEOUT_MS;
+    while (this.canSend(context, deviceId)) {
+      try {
+        await context.transport.sendRelayFrame(deviceId, frame);
+        return;
+      } catch (error) {
+        if (!isBackpressure(error) || Date.now() >= deadline) throw error;
+        await delay(RELAY_BACKPRESSURE_RETRY_MS);
+      }
     }
   }
 
   private canSend(context: ContactsSyncOutboundContext, deviceId: string): boolean {
     return this.isCurrent(context) && context.transport.isPeerAllowed(deviceId);
   }
+}
+
+function isBackpressure(error: unknown): boolean {
+  return (
+    typeof error === 'object' && error !== null && 'code' in error && error.code === 'BACKPRESSURE'
+  );
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
