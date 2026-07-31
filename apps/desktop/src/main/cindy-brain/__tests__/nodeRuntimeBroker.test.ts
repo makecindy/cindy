@@ -234,6 +234,47 @@ describe('nodeRuntimeBroker · 进程生命周期', () => {
     expect(settled).toBe(true);
   });
 
+  it('stopAndWait 在进程不退出时有界失败，不让更新永久卡住', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost({ lifecycle: 'resident' });
+    const child = new FakeNodeProcess();
+    vi.spyOn(child, 'kill').mockImplementation(() => {
+      child.killed = true;
+      return true;
+    });
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+    });
+    await broker.startResident(ghost);
+
+    const stopping = expect(broker.stopAndWait('node-ghost')).rejects.toThrow(
+      '插件 Node 进程停止超时',
+    );
+    await vi.advanceTimersByTimeAsync(2_500);
+    await stopping;
+  });
+
+  it('stopAndWait 将没有 exit 的进程错误作为更新失败返回', async () => {
+    const ghost = fakeGhost({ lifecycle: 'resident' });
+    const child = new FakeNodeProcess();
+    vi.spyOn(child, 'kill').mockImplementation(() => {
+      child.killed = true;
+      return true;
+    });
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+    });
+    await broker.startResident(ghost);
+
+    const stopping = expect(broker.stopAndWait('node-ghost')).rejects.toThrow(
+      '插件 Node 进程停止失败',
+    );
+    child.emit('error', new Error('spawn transport broke'));
+    await stopping;
+  });
+
   it('按需进程空闲两分钟后自动关闭', async () => {
     vi.useFakeTimers();
     const ghost = fakeGhost();
@@ -1185,7 +1226,11 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     return ghost;
   }
 
-  async function bootWorker(ghost: InstalledGhost, spawnChild?: () => FakeRawChild) {
+  async function bootWorker(
+    ghost: InstalledGhost,
+    spawnChild?: () => FakeRawChild,
+    autoSpawnChild = true,
+  ) {
     const worker = new FakeControlProcess((message) => {
       if (message.id !== undefined && typeof message.method === 'string') {
         queueMicrotask(() => worker.send({ jsonrpc: '2.0', id: message.id, result: null }));
@@ -1198,7 +1243,7 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
       spawnChildProcess: (entryPath, _cwd, _ghostId, args) => {
         const child = spawnChild?.() ?? new FakeRawChild();
         spawned.push({ entryPath, args, child });
-        queueMicrotask(() => child.emit('spawn'));
+        if (autoSpawnChild) queueMicrotask(() => child.emit('spawn'));
         return child as unknown as NodeWorkerProcess;
       },
     });
@@ -1296,5 +1341,26 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     broker.stop('node-ghost');
     expect(spawned[0].child.killed).toBe(true);
     expect(worker.killed).toBe(true);
+  });
+
+  it('stopAndWait 等待尚未触发 spawn 的已 fork 子进程退出', async () => {
+    const startingChild = new FakeRawChild();
+    const { broker, worker, spawned } = await bootWorker(
+      childSpawnGhost(),
+      () => startingChild,
+      false,
+    );
+    worker.emitControl({ type: 'spawn-child', reqId: 'r1', entry: 'node/maker.cjs' });
+    await vi.waitFor(() => expect(spawned).toHaveLength(1));
+
+    let settled = false;
+    const stopping = broker.stopAndWait('node-ghost').then(() => {
+      settled = true;
+    });
+    expect(startingChild.killed).toBe(true);
+    expect(settled).toBe(false);
+
+    await stopping;
+    expect(settled).toBe(true);
   });
 });

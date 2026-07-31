@@ -42,6 +42,10 @@ import {
 const DEFAULT_IDLE_TIMEOUT_MS = 2 * 60_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_START_TIMEOUT_MS = 10_000;
+/** 停止后先给进程自行收尾的窗口；到点再 SIGKILL。 */
+const PROCESS_STOP_GRACE_MS = 2_000;
+/** 原位更新绝不能无限等退出；给 SIGKILL 的 exit 事件留一个小缓冲。 */
+const PROCESS_STOP_WAIT_TIMEOUT_MS = PROCESS_STOP_GRACE_MS + 500;
 /**
  * 启动失败重试(2026-07-24):Windows 上杀软实时扫描刚写入的 .vite 产物 /
  * 刚更新的 app.asar 时,子进程读引导入口会瞬时 ACCESS_DENIED(表现为
@@ -140,6 +144,14 @@ interface PendingRpc {
 interface ChildProcEntry {
   childId: string;
   entryRel: string;
+  proc: NodeWorkerProcess;
+  hardKillTimer: NodeJS.Timeout | null;
+  stopping: boolean;
+}
+
+/** 已 fork 但尚未完成 spawn 握手的代启子进程。 */
+interface StartingChildProcEntry {
+  ghostId: string;
   proc: NodeWorkerProcess;
   hardKillTimer: NodeJS.Timeout | null;
   stopping: boolean;
@@ -659,6 +671,14 @@ export class GhostNodeRuntimeBroker {
     message: Extract<GhostNodeChildToHostMessage, { type: 'spawn-child' }>,
   ): Promise<void> {
     const ghostId = entry.ghost.manifest.id;
+    // stopAndWait 已开始后不得再 fork 新 child；否则它会落在本轮快照之外，
+    // 又把目录替换竞态带回来。
+    if (
+      this.stoppedGhosts.has(ghostId) ||
+      this.workers.get(GhostNodeRuntimeBroker.keyOf(ghostId, entry.entryRel)) !== entry
+    ) {
+      return;
+    }
     const fail = (reason: string): void => {
       this.deps.log?.warn('ghost node child spawn rejected', { ghostId, reason });
       this.replyToWorker(entry, {
@@ -728,6 +748,10 @@ export class GhostNodeRuntimeBroker {
       fail(error instanceof Error ? error.message : '子进程启动失败');
       return;
     }
+    // fork 已经产生真实 OS 进程，但它要等 child-mode ready 才会写进
+    // entry.children。原位更新不能漏掉这段空窗，否则 Windows rename 仍可能
+    // 撞上子进程持有的插件文件句柄。
+    const startingChild = this.trackStartingChild(ghostId, proc);
     try {
       await new Promise<void>((resolve, reject) => {
         let settled = false;
@@ -767,6 +791,8 @@ export class GhostNodeRuntimeBroker {
       return;
     }
 
+    // 之后没有 await，先从启动中集合移到正式 children 不会留下可观察空窗。
+    this.forgetStartingChild(startingChild);
     const child: ChildProcEntry = {
       childId: randomUUID(),
       entryRel: message.entry,
@@ -837,7 +863,7 @@ export class GhostNodeRuntimeBroker {
         } catch {
           // already gone
         }
-      }, 2_000);
+      }, PROCESS_STOP_GRACE_MS);
       child.hardKillTimer.unref?.();
     } catch {
       // 已退出即视为停止成功。
@@ -847,6 +873,9 @@ export class GhostNodeRuntimeBroker {
   /** 停用、更新或卸载一个插件时立即停止其名下**全部** Node 进程。 */
   stop(ghostId: string): void {
     this.stoppedGhosts.add(ghostId);
+    for (const starting of [...(this.startingChildren.get(ghostId) ?? [])]) {
+      this.stopStartingChild(starting);
+    }
     for (const [key, entry] of [...this.workers]) {
       if (entry.ghost.manifest.id === ghostId) this.stopWorker(key, entry);
     }
@@ -857,23 +886,88 @@ export class GhostNodeRuntimeBroker {
    *
    * 原位更新会把整个插件目录 rename 到备份位。在 Windows 上，即使已经向
    * utilityProcess 发出 SIGTERM，只要旧进程尚未触发 exit，目录中的入口文件
-   * 仍可能被占用而让 rename 报 EPERM。这里先订阅 exit、再 stop，避免在两步
-   * 之间漏掉极快退出的事件；stopWorker 自身仍保留 SIGKILL 兜底。
+   * 仍可能被占用而让 rename 报 EPERM。已 fork 但尚未 ready 的 child 也在
+   * 等待集合内；先订阅 exit、再 stop，避免在两步之间漏掉极快退出的事件。
    */
   async stopAndWait(ghostId: string): Promise<void> {
+    // 先封住新的 child spawn；这段没有 await，随后快照可覆盖所有已 fork 的进程。
+    this.stoppedGhosts.add(ghostId);
     const active = [...this.workers.values()].filter(
       (entry) => entry.ghost.manifest.id === ghostId,
     );
-    const exited = active
-      .flatMap((entry) => [entry.child, ...entry.children.values().map((child) => child.proc)])
-      .map(
-        (process) =>
-          new Promise<void>((resolve) => {
-            process.once('exit', () => resolve());
-          }),
-      );
+    const processes = new Set<NodeWorkerProcess>([
+      ...active.flatMap((entry) => [entry.child, ...entry.children.values().map((child) => child.proc)]),
+      ...[...(this.startingChildren.get(ghostId) ?? [])].map((child) => child.proc),
+    ]);
+    const exited = [...processes].map((process) => this.waitForProcessExit(process, ghostId));
     this.stop(ghostId);
     await Promise.all(exited);
+  }
+
+  /** 原位更新时，进程异常或强杀后仍不退出都必须阻止目录替换。 */
+  private waitForProcessExit(process: NodeWorkerProcess, ghostId: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let timer: NodeJS.Timeout | null = null;
+      const settle = (outcome: () => void) => {
+        if (settled) return;
+        settled = true;
+        if (timer) this.clearTimer(timer);
+        outcome();
+      };
+      timer = this.setTimer(
+        () => settle(() => reject(new Error(`插件 Node 进程停止超时(${ghostId})`))),
+        PROCESS_STOP_WAIT_TIMEOUT_MS,
+      );
+      timer.unref?.();
+      process.once('exit', () => settle(resolve));
+      process.once('error', (error) =>
+        settle(() => reject(new Error(`插件 Node 进程停止失败(${ghostId}): ${error.message}`))),
+      );
+    });
+  }
+
+  private readonly startingChildren = new Map<string, Set<StartingChildProcEntry>>();
+
+  private trackStartingChild(ghostId: string, proc: NodeWorkerProcess): StartingChildProcEntry {
+    const entry: StartingChildProcEntry = { ghostId, proc, hardKillTimer: null, stopping: false };
+    const children = this.startingChildren.get(ghostId) ?? new Set<StartingChildProcEntry>();
+    children.add(entry);
+    this.startingChildren.set(ghostId, children);
+    const finish = () => this.forgetStartingChild(entry);
+    proc.once('exit', finish);
+    proc.once('error', finish);
+    return entry;
+  }
+
+  private forgetStartingChild(entry: StartingChildProcEntry): void {
+    if (entry.hardKillTimer) {
+      this.clearTimer(entry.hardKillTimer);
+      entry.hardKillTimer = null;
+    }
+    const children = this.startingChildren.get(entry.ghostId);
+    if (!children) return;
+    children.delete(entry);
+    if (children.size === 0) this.startingChildren.delete(entry.ghostId);
+  }
+
+  private stopStartingChild(entry: StartingChildProcEntry): void {
+    if (entry.stopping) return;
+    entry.stopping = true;
+    try {
+      entry.proc.kill('SIGTERM');
+      entry.hardKillTimer = this.setTimer(() => {
+        entry.hardKillTimer = null;
+        try {
+          entry.proc.kill('SIGKILL');
+        } catch {
+          // already gone
+        }
+      }, PROCESS_STOP_GRACE_MS);
+      entry.hardKillTimer.unref?.();
+    } catch {
+      // 已退出即视为停止成功；stopAndWait 会以 exit/error 或有界超时收口。
+    }
   }
 
   private stopWorker(key: string, entry: WorkerEntry): void {
@@ -898,7 +992,7 @@ export class GhostNodeRuntimeBroker {
         } catch {
           // already gone
         }
-      }, 2_000);
+      }, PROCESS_STOP_GRACE_MS);
       entry.hardKillTimer.unref?.();
     } catch {
       // 已退出即视为停止成功。
