@@ -54,10 +54,15 @@ describe('resolveAutoReviewDecision', () => {
     },
   );
 
-  it('silently blocks under-specified network actions before calling the model', async () => {
+  it.each([
+    { kind: 'file-write', path: undefined } as const,
+    { kind: 'exec', command: '   ' } as const,
+    { kind: 'network' } as const,
+    { kind: 'other' } as const,
+  ])('silently blocks under-specified action $kind before calling the model', async (action) => {
     let called = false;
     await expect(resolveAutoReviewDecision(
-      request({ kind: 'network' }),
+      request(action),
       async () => {
         called = true;
         return { verdict: 'allow' };
@@ -67,7 +72,7 @@ describe('resolveAutoReviewDecision', () => {
   });
 
   it('silently blocks when the reviewer is absent, throws, or returns invalid output', async () => {
-    const gray = request({ kind: 'other' });
+    const gray = request({ kind: 'exec', command: 'npx tsc --noEmit' });
     await expect(resolveAutoReviewDecision(gray, undefined)).resolves.toMatchObject({ verdict: 'block' });
     await expect(resolveAutoReviewDecision(gray, async () => {
       throw new Error('offline');

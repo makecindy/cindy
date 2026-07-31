@@ -45,6 +45,27 @@ export function classifyLocalAutoReviewTier(
   return verdict === 'prompt' ? 'needs-review' : verdict;
 }
 
+function missingReviewEvidence(action: ReviewableAction): string | null {
+  switch (action.kind) {
+    case 'file-write':
+      return action.path?.trim()
+        ? null
+        : 'File-write review needs a concrete destination path.';
+    case 'exec':
+      return action.command.trim()
+        ? null
+        : 'Command review needs concrete command text.';
+    case 'network':
+      return action.target?.trim()
+        ? null
+        : 'Network review needs a concrete destination or query.';
+    case 'other':
+      return 'Unknown actions cannot be reviewed without concrete action details.';
+    default:
+      return null;
+  }
+}
+
 /**
  * 原生 reviewer 不可用时的统一裁决入口：明显安全和明显红线仍由本地规则确定，
  * 只有中间灰区才调用当前会话模型。delegate 缺失、超时、抛错或返回非法结果时
@@ -57,16 +78,13 @@ export async function resolveAutoReviewDecision(
   const localTier = classifyLocalAutoReviewTier(request);
   if (localTier === 'auto-approve') return { verdict: 'allow' };
   if (localTier === 'prompt-each-time') return { verdict: 'ask' };
-  // A network verdict without even a destination/search target gives the model
-  // no evidence to distinguish a routine fetch from exfiltration. Fail silently
-  // instead of allowing an under-specified action or bouncing the uncertainty to UI.
-  if (
-    request.action.kind === 'network'
-    && !request.action.target?.trim()
-  ) {
+  // Never ask the model to approve an action whose material target/text is absent.
+  // It has no evidence to distinguish routine work from an unsafe side effect.
+  const missingEvidenceReason = missingReviewEvidence(request.action);
+  if (missingEvidenceReason) {
     return {
       verdict: 'block',
-      reason: 'Network review needs a concrete destination or query.',
+      reason: missingEvidenceReason,
     };
   }
   if (!delegate) {
