@@ -2741,7 +2741,8 @@
         "origin": {
           "public": "Public",
           "organization": "Team shared",
-          "local": "Local"
+          "local": "Local",
+          "custom": "Custom"
         },
         "emptyFiltered": "No matching plugins",
         "useAction": "Use",
@@ -2754,7 +2755,8 @@
           "public": "Public",
           "organization": "Organization",
           "personal": "Personal",
-          "local": "Local"
+          "local": "Local",
+          "custom": "Custom"
         },
         "install": "Install",
         "details": "Details",
@@ -2780,10 +2782,45 @@
         },
         "securityTitle": "Install and permissions",
         "securityDescription": "Cindy verifies package size and SHA-256 in the main process, validates the plugin manifest, then installs atomically. First-time installs are enabled automatically and can be disabled anytime on the Plugins page; updates keep the current enabled state.",
+        "customSecurityDescription": "This plugin comes from a custom marketplace you added and has not been verified by the Cindy server. Its manifest is validated in the main process before install. First-time installs are enabled automatically and can be disabled anytime on the Plugins page.",
         "noPermissions": "This plugin declares no additional capabilities.",
         "installConfirmTitle": "Install “{{name}}”?",
         "installConfirmDescription": "The package will be verified for integrity and manifest compatibility. The plugin is enabled automatically after install; you can disable it or adjust its setup anytime.",
-        "updateConfirmDescription": "The package will be verified for integrity and manifest compatibility, then replace the installed version. Its current enabled state stays unchanged."
+        "customInstallConfirmDescription": "This plugin comes from a custom marketplace and has not been verified for integrity by the server; its manifest will be validated before install. The plugin is enabled automatically after install; you can disable it or adjust its setup anytime.",
+        "updateConfirmDescription": "The package will be verified for integrity and manifest compatibility, then replace the installed version. Its current enabled state stays unchanged.",
+        "sources": {
+          "addMarketplace": "Add Plugin Marketplace…",
+          "dialogTitle": "Add Plugin Marketplace",
+          "dialogDescription": "Add a plugin marketplace from a GitHub repository, Git URL, or local folder.",
+          "sourceLabel": "Source",
+          "sourcePlaceholder": "openai/plugins or git@github.com:org/repo.git",
+          "refLabel": "Git Ref",
+          "refPlaceholder": "Main branch",
+          "sparseLabel": "Sparse Paths",
+          "sparsePlaceholder": "One path per line, e.g. plugins/codex",
+          "gitUnavailable": "Git is not installed or is older than 2.25. Git sources are unavailable; local folder sources still work.",
+          "listTitle": "Added Marketplaces",
+          "pluginCount": "{{count}} plugins",
+          "sourceError": "Unavailable",
+          "localBadge": "Local",
+          "defaultRef": "Default branch",
+          "neverSynced": "Never synced",
+          "refresh": "Refresh",
+          "remove": "Remove",
+          "removeConfirmTitle": "Remove marketplace \"{{name}}\"?",
+          "removeConfirmDescription": "Plugins from this marketplace will no longer be listed. Installed plugins are kept.",
+          "close": "Close",
+          "add": "Add Marketplace",
+          "errors": {
+            "invalidSource": "Invalid source. Use a GitHub owner/repo, a Git URL, or a local folder path.",
+            "gitUnavailable": "Git is not installed or is older than 2.25, so Git sources cannot be added.",
+            "cloneAuthFailed": "Cannot access this repository. For private repositories, configure Git authentication on this machine first (credential helper or SSH key).",
+            "cloneFailed": "Failed to clone the repository. Check your network or proxy settings and try again.",
+            "manifestMissing": "No supported marketplace.json manifest was found in this source.",
+            "duplicate": "This marketplace has already been added.",
+            "notFound": "This marketplace does not exist or has been removed."
+          }
+        }
       },
       "install": "Install Plugin…",
       "empty": "No plugins installed yet",

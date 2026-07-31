@@ -1322,6 +1322,17 @@ interface ElectronAPI {
       options: { expectedReleaseId: string; allowPermissionExpansion?: boolean },
     ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
     uninstall: (pluginId: string) => Promise<{ ok: true }>;
+    listSources: () => Promise<import('../shared/pluginMarket').MarketSourceSummary[]>;
+    addSource: (input: {
+      source: string;
+      ref?: string;
+      sparsePaths?: string[];
+    }) => Promise<import('../shared/pluginMarket').MarketSourceSummary>;
+    removeSource: (name: string) => Promise<{ ok: true }>;
+    refreshSource: (
+      name: string,
+    ) => Promise<import('../shared/pluginMarket').MarketSourceSummary>;
+    gitPreflight: () => Promise<{ ok: boolean; version: string | null }>;
   };
   voiceInput: {
     prewarm: (payload?: { sourceLanguage?: string; refinementEnabled?: boolean }) => Promise<{ ok: true }>;

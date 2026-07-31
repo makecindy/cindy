@@ -25,7 +25,7 @@ describe('Plugin Market IPC error boundary', () => {
 
     expect(body).toContain('if (isIpcError(error)) throw error;');
     expect(body).toContain("throwIpcError('INTERNAL', 'Plugin market operation failed');");
-    expect(registerSource.match(/return invokePluginMarket\(/g)?.length).toBe(4);
+    expect(registerSource.match(/return invokePluginMarket\(/g)?.length).toBe(9);
   });
 
   it('does not throw user-visible plain errors from the market service', () => {

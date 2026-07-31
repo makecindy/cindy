@@ -989,6 +989,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('plugin-market:install', pluginId, options),
     uninstall: (pluginId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('plugin-market:uninstall', pluginId),
+    listSources: (): Promise<import('../shared/pluginMarket').MarketSourceSummary[]> =>
+      ipcRenderer.invoke('plugin-market:list-sources'),
+    addSource: (input: {
+      source: string;
+      ref?: string;
+      sparsePaths?: string[];
+    }): Promise<import('../shared/pluginMarket').MarketSourceSummary> =>
+      ipcRenderer.invoke('plugin-market:add-source', input),
+    removeSource: (name: string): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('plugin-market:remove-source', name),
+    refreshSource: (
+      name: string,
+    ): Promise<import('../shared/pluginMarket').MarketSourceSummary> =>
+      ipcRenderer.invoke('plugin-market:refresh-source', name),
+    gitPreflight: (): Promise<{ ok: boolean; version: string | null }> =>
+      ipcRenderer.invoke('plugin-market:git-preflight'),
   },
   voiceInput: {
     prewarm: (payload?: { sourceLanguage?: string; refinementEnabled?: boolean }): Promise<{ ok: true }> =>

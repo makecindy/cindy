@@ -2740,7 +2740,8 @@
         "origin": {
           "public": "公开",
           "organization": "团队共享",
-          "local": "本地"
+          "local": "本地",
+          "custom": "自定义"
         },
         "emptyFiltered": "没有找到匹配的插件",
         "useAction": "使用",
@@ -2753,7 +2754,8 @@
           "public": "公开",
           "organization": "组织",
           "personal": "个人",
-          "local": "本地"
+          "local": "本地",
+          "custom": "自定义"
         },
         "install": "安装",
         "details": "详情",
@@ -2779,10 +2781,45 @@
         },
         "securityTitle": "安装与权限",
         "securityDescription": "安装包会在主进程中校验大小与 SHA-256，再经 Cindy 插件清单校验后原子安装。首次安装完成后即自动开启，可随时在插件页停用；更新会保留当前生效状态。",
+        "customSecurityDescription": "该插件来自你添加的自定义市场，未经 Cindy 服务端完整性校验。安装前会在主进程校验插件清单；首次安装完成后即自动开启，可随时在插件页停用。",
         "noPermissions": "此插件未声明额外能力。",
         "installConfirmTitle": "安装「{{name}}」？",
         "installConfirmDescription": "安装包将经过完整性与清单校验。安装完成后插件将自动开启，你可以随时在插件页停用或调整配置。",
-        "updateConfirmDescription": "安装包将经过完整性与清单校验，并替换现有版本。当前生效状态保持不变。"
+        "customInstallConfirmDescription": "插件来自自定义市场，未经服务端完整性校验，安装前将校验插件清单。安装完成后插件将自动开启，你可以随时在插件页停用或调整配置。",
+        "updateConfirmDescription": "安装包将经过完整性与清单校验，并替换现有版本。当前生效状态保持不变。",
+        "sources": {
+          "addMarketplace": "添加插件市场…",
+          "dialogTitle": "添加插件市场",
+          "dialogDescription": "从 GitHub 仓库、Git URL 或本地文件夹添加插件市场。",
+          "sourceLabel": "来源",
+          "sourcePlaceholder": "owner/repo 或 git@github.com:org/repo.git",
+          "refLabel": "Git 引用",
+          "refPlaceholder": "主分支",
+          "sparseLabel": "稀疏路径",
+          "sparsePlaceholder": "每行一个路径，如 team/tools",
+          "gitUnavailable": "未检测到 Git 或版本低于 2.25。Git 来源不可用，本地文件夹来源不受影响。",
+          "listTitle": "已添加的市场",
+          "pluginCount": "{{count}} 个插件",
+          "sourceError": "读取失败",
+          "localBadge": "本地",
+          "defaultRef": "默认分支",
+          "neverSynced": "尚未同步",
+          "refresh": "刷新",
+          "remove": "移除",
+          "removeConfirmTitle": "移除市场「{{name}}」？",
+          "removeConfirmDescription": "移除后，来自该市场的插件将不再显示；已安装的插件保留。",
+          "close": "关闭",
+          "add": "添加市场",
+          "errors": {
+            "invalidSource": "来源格式无效。支持 GitHub owner/repo、Git URL 或本地文件夹路径。",
+            "gitUnavailable": "未检测到 Git 或版本低于 2.25，无法添加 Git 来源。",
+            "cloneAuthFailed": "无法访问该仓库。私有仓库需要先在系统中配置 Git 认证（credential helper 或 SSH key）。",
+            "cloneFailed": "克隆仓库失败，请检查网络连接后重试。",
+            "manifestMissing": "该来源中找不到受支持的 marketplace.json 清单。",
+            "duplicate": "该市场已添加。",
+            "notFound": "该市场不存在或已被移除。"
+          }
+        }
       },
       "install": "安装插件…",
       "empty": "还没有安装任何插件",

@@ -269,6 +269,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     await expect(h.service.snapshot()).resolves.toEqual({
       items: [],
       unavailableReason: 'authentication-required',
+      customSourceNames: [],
     });
     expect(h.api.listAll).not.toHaveBeenCalled();
   });
@@ -285,6 +286,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     await expect(h.service.snapshot()).resolves.toEqual({
       items: [],
       unavailableReason: 'not-configured',
+      customSourceNames: [],
     });
     expect(h.api.listAll).not.toHaveBeenCalled();
   });
@@ -296,6 +298,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     await expect(h.service.snapshot()).resolves.toEqual({
       items: [],
       unavailableReason: 'session-switching',
+      customSourceNames: [],
     });
     expect(h.api.listAll).not.toHaveBeenCalled();
   });
@@ -496,6 +499,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     await expect(h.service.snapshot()).resolves.toEqual({
       items: [],
       unavailableReason: null,
+      customSourceNames: [],
     });
     expect(h.api.listAll).toHaveBeenCalledOnce();
   });

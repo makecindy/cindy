@@ -2740,7 +2740,8 @@
         "origin": {
           "public": "공개",
           "organization": "팀 공유",
-          "local": "로컬"
+          "local": "로컬",
+          "custom": "사용자 지정"
         },
         "emptyFiltered": "일치하는 플러그인이 없습니다",
         "useAction": "사용",
@@ -2753,7 +2754,8 @@
           "public": "공개",
           "organization": "조직",
           "personal": "개인",
-          "local": "로컬"
+          "local": "로컬",
+          "custom": "사용자 지정"
         },
         "install": "설치",
         "details": "상세",
@@ -2779,10 +2781,45 @@
         },
         "securityTitle": "설치 및 권한",
         "securityDescription": "메인 프로세스에서 크기와 SHA-256 및 플러그인 매니페스트를 검증한 뒤 원자적으로 설치합니다. 최초 설치 후 자동으로 활성화되며 플러그인 페이지에서 언제든지 비활성화할 수 있습니다. 업데이트 시 현재 활성화 상태가 유지됩니다.",
+        "customSecurityDescription": "이 플러그인은 추가한 사용자 지정 마켓에서 제공되며 Cindy 서버의 무결성 검증을 거치지 않았습니다. 설치 전에 메인 프로세스에서 매니페스트를 검증합니다. 처음 설치하면 자동으로 활성화되며 플러그인 페이지에서 언제든 비활성화할 수 있습니다.",
         "noPermissions": "이 플러그인은 추가 기능을 선언하지 않았습니다.",
         "installConfirmTitle": "‘{{name}}’을(를) 설치할까요?",
         "installConfirmDescription": "패키지 무결성과 매니페스트 호환성을 확인한 뒤 설치합니다. 설치가 완료되면 자동으로 활성화되며, 언제든지 비활성화하거나 설정을 변경할 수 있습니다.",
-        "updateConfirmDescription": "패키지 무결성과 매니페스트 호환성을 확인한 뒤 기존 버전을 교체합니다. 현재 활성화 상태는 그대로 유지됩니다."
+        "customInstallConfirmDescription": "사용자 지정 마켓의 플러그인으로 서버 무결성 검증을 거치지 않았으며, 설치 전에 매니페스트를 검증합니다. 설치 후 플러그인이 자동으로 활성화되며 언제든 비활성화하거나 설정을 변경할 수 있습니다.",
+        "updateConfirmDescription": "패키지 무결성과 매니페스트 호환성을 확인한 뒤 기존 버전을 교체합니다. 현재 활성화 상태는 그대로 유지됩니다.",
+        "sources": {
+          "addMarketplace": "플러그인 마켓 추가…",
+          "dialogTitle": "플러그인 마켓 추가",
+          "dialogDescription": "GitHub 리포지토리, Git URL 또는 로컬 폴더에서 플러그인 마켓을 추가합니다.",
+          "sourceLabel": "소스",
+          "sourcePlaceholder": "openai/plugins 또는 git@github.com:org/repo.git",
+          "refLabel": "Git 참조",
+          "refPlaceholder": "기본 브랜치",
+          "sparseLabel": "스파스 경로",
+          "sparsePlaceholder": "한 줄에 하나의 경로(예: plugins/codex)",
+          "gitUnavailable": "Git이 설치되어 있지 않거나 버전이 2.25 미만입니다. Git 소스는 사용할 수 없으며 로컬 폴더 소스는 계속 사용할 수 있습니다.",
+          "listTitle": "추가된 마켓",
+          "pluginCount": "플러그인 {{count}}개",
+          "sourceError": "읽기 실패",
+          "localBadge": "로컬",
+          "defaultRef": "기본 브랜치",
+          "neverSynced": "동기화되지 않음",
+          "refresh": "새로고침",
+          "remove": "제거",
+          "removeConfirmTitle": "마켓 \"{{name}}\"을(를) 제거할까요?",
+          "removeConfirmDescription": "제거하면 이 마켓의 플러그인이 더 이상 표시되지 않습니다. 설치된 플러그인은 유지됩니다.",
+          "close": "닫기",
+          "add": "마켓 추가",
+          "errors": {
+            "invalidSource": "소스 형식이 올바르지 않습니다. GitHub owner/repo, Git URL 또는 로컬 폴더 경로를 사용하세요.",
+            "gitUnavailable": "Git이 설치되어 있지 않거나 버전이 2.25 미만이므로 Git 소스를 추가할 수 없습니다.",
+            "cloneAuthFailed": "이 리포지토리에 접근할 수 없습니다. 비공개 리포지토리의 경우 먼저 시스템에 Git 인증(credential helper 또는 SSH key)을 구성하세요.",
+            "cloneFailed": "리포지토리를 클론하지 못했습니다. 네트워크 또는 프록시 설정을 확인한 후 다시 시도하세요.",
+            "manifestMissing": "이 소스에서 지원되는 marketplace.json 매니페스트를 찾을 수 없습니다.",
+            "duplicate": "이 마켓은 이미 추가되어 있습니다.",
+            "notFound": "이 마켓이 존재하지 않거나 이미 제거되었습니다."
+          }
+        }
       },
       "install": "플러그인 설치…",
       "empty": "아직 설치된 플러그인이 없습니다",
