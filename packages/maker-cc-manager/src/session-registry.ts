@@ -43,6 +43,16 @@ export interface SdkQueryLike extends AsyncIterable<unknown> {
   setPermissionMode(mode: string): Promise<void>;
   applyFlagSettings(settings: Record<string, unknown>): Promise<void>;
   getContextUsage?(): Promise<unknown>;
+  /**
+   * Authoritative MCP registry after settings/plugin discovery. The init event
+   * only carries names, so it cannot distinguish a harness plugin from a
+   * user/project/local MCP that normalizes to the same tool prefix.
+   */
+  mcpServerStatus?(): Promise<Array<{
+    name: string;
+    status: string;
+    scope?: string;
+  }>>;
   /** Optional — stop a single background task (SDK >= 0.2.x). */
   stopTask?(taskId: string): Promise<void>;
   // streamInput(stream: AsyncIterable<...>) is implicit — we pass our queue
@@ -188,8 +198,10 @@ interface SessionState {
   toolGuardSelectionText: string;
   /** False after an SDK result; the next accepted input starts a fresh turn. */
   toolGuardTurnActive: boolean;
-  /** Final MCP server names reported by the SDK init message. */
+  /** Connected host/user/project/local MCPs that may own a colliding prefix. */
   toolGuardMcpServerNames: ReadonlySet<string>;
+  /** Host-injected MCPs are non-harness sources even before SDK init. */
+  toolGuardHostMcpServerNames: ReadonlySet<string>;
   /**
    * forceful kill 已开始 (interrupt 发出、inputQueue 已/将 end) 但 consume
    * loop 尚未退出 — 此窗口内 alive 仍为 true, sendMessage 必须显式拒绝
@@ -345,6 +357,26 @@ export class SessionRegistry {
     // Build canUseTool callback that routes approval requests to attached client via RPC.
     const canUseTool: CanUseToolCallback | undefined = this.onApprovalRequest
       ? async (toolName, input, options) => {
+          const deniedGuard = findDeniedToolGuard(
+            opts.toolGuards,
+            toolName,
+            sessionRef?.toolGuardSelectionText ?? '',
+            sessionRef?.toolGuardMcpServerNames ?? EMPTY_MCP_SERVER_NAMES,
+          );
+          if (deniedGuard) {
+            this.logger.warn('tool denied by host routing guard in canUseTool', {
+              sessionId: opts.sessionId,
+              toolName,
+              toolNamePrefix: deniedGuard.toolNamePrefix,
+              invocation: deniedGuard.invocation,
+            });
+            return {
+              behavior: 'deny',
+              message:
+                deniedGuard.denialMessage ??
+                'This downstream tool source was not selected.',
+            };
+          }
           if (!sessionRef?.attachedNotify) {
             this.logger.warn('canUseTool fired without attached client — denying', {
               sessionId: opts.sessionId,
@@ -369,6 +401,10 @@ export class SessionRegistry {
                 ...(options.blockedPath ? { blockedPath: options.blockedPath } : {}),
                 ...(options.decisionReason ? { decisionReason: options.decisionReason } : {}),
                 ...(options.agentID ? { agentID: options.agentID } : {}),
+                // The daemon has authoritative scoped MCP provenance. This
+                // attestation tells the desktop not to repeat the route check
+                // from the provenance-less init payload.
+                capabilityRoutingChecked: true,
               },
             });
             if (result.kind === 'ask_user_question') {
@@ -481,6 +517,7 @@ export class SessionRegistry {
       ...(getOAuthToken ? { getOAuthToken } : {}),
     };
     const query = this.factory(sdkOpts);
+    const hostMcpServerNames = new Set(Object.keys(opts.mcpServers ?? {}));
     const session: SessionState = {
       sessionId: opts.sessionId,
       cwd: opts.cwd,
@@ -495,7 +532,8 @@ export class SessionRegistry {
       alive: true,
       toolGuardSelectionText: '',
       toolGuardTurnActive: false,
-      toolGuardMcpServerNames: EMPTY_MCP_SERVER_NAMES,
+      toolGuardMcpServerNames: hostMcpServerNames,
+      toolGuardHostMcpServerNames: hostMcpServerNames,
       attachedNotify: null,
       buffer: [],
       bufferCapacity: this.bufferCapacity,
@@ -831,6 +869,9 @@ export class SessionRegistry {
     session.consumeLoopDone = (async (): Promise<void> => {
       try {
         for await (const message of session.query) {
+          if (isSdkInitMessage(message)) {
+            await this.refreshToolGuardMcpServerNames(session);
+          }
           this.recordEvent(session, message);
         }
         // Generator returned normally — session completed.
@@ -858,16 +899,6 @@ export class SessionRegistry {
     // Capture SDK's session uuid from the first SDKSystemMessage (init subtype).
     if (!session.sdkSessionId && isSdkInitMessage(message)) {
       session.sdkSessionId = message.session_id;
-    }
-    if (isSdkInitMessage(message)) {
-      const mcpServers = Array.isArray(message.mcp_servers)
-        ? message.mcp_servers
-        : [];
-      session.toolGuardMcpServerNames = new Set(
-        mcpServers
-          .map((server) => server?.status === 'connected' ? server.name : undefined)
-          .filter((name): name is string => typeof name === 'string' && name.length > 0),
-      );
     }
     if (isSdkTurnResult(message)) {
       // Keep the text until the next accepted input so any SDK-managed
@@ -901,6 +932,41 @@ export class SessionRegistry {
         });
       }
     }
+  }
+
+  private async refreshToolGuardMcpServerNames(session: SessionState): Promise<void> {
+    const fallbackNames = new Set(session.toolGuardHostMcpServerNames);
+    if (!session.query.mcpServerStatus) {
+      session.toolGuardMcpServerNames = fallbackNames;
+      return;
+    }
+    try {
+      const statuses = await session.query.mcpServerStatus();
+      const connectedNonHarnessNames = new Set<string>();
+      for (const server of statuses) {
+        if (
+          server.status === 'connected' &&
+          typeof server.name === 'string' &&
+          server.name.length > 0 &&
+          (
+            session.toolGuardHostMcpServerNames.has(server.name) ||
+            isUserSettingsMcpScope(server.scope)
+          )
+        ) {
+          connectedNonHarnessNames.add(server.name);
+        }
+      }
+      session.toolGuardMcpServerNames = connectedNonHarnessNames;
+      return;
+    } catch (error) {
+      // Unknown provenance must not disable a host routing guard. Host-injected
+      // MCPs remain known non-harness sources; settings MCPs fail closed.
+      this.logger.warn('failed to read scoped MCP status for tool guards', {
+        sessionId: session.sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    session.toolGuardMcpServerNames = fallbackNames;
   }
 
   private notifyClosed(session: SessionState, reason: SessionClosedNotification['reason'], detail?: string): void {
@@ -1043,6 +1109,10 @@ function toolGuardSelectionAddedByPlanEdit(
 
 const EMPTY_MCP_SERVER_NAMES: ReadonlySet<string> = new Set();
 
+function isUserSettingsMcpScope(scope: unknown): boolean {
+  return scope === 'user' || scope === 'project' || scope === 'local';
+}
+
 function claudeMcpToolPrefix(serverId: string): string {
   return `mcp__${serverId.replace(/[^a-zA-Z0-9_-]/g, '_')}__`;
 }
@@ -1052,12 +1122,35 @@ function hasToolGuardMcpPrefixCollision(
   mcpServerNames: ReadonlySet<string>,
 ): boolean {
   if (!guard.sourceServerId) return false;
-  // SDK init reports names without settings/plugin provenance. Even an exact
-  // id may therefore be a user MCP shadowing the harness source.
+  // The caller passes only connected host/user/project/local MCPs. An exact id
+  // can therefore be a user MCP shadowing the harness source.
   for (const serverId of mcpServerNames) {
     if (claudeMcpToolPrefix(serverId) === guard.toolNamePrefix) return true;
   }
   return false;
+}
+
+function findDeniedToolGuard(
+  toolGuards: readonly QueryToolGuard[] | undefined,
+  toolName: string,
+  selectionText: string,
+  mcpServerNames: ReadonlySet<string>,
+): QueryToolGuard | undefined {
+  const guard = toolGuards?.find(
+    (candidate) =>
+      toolName.startsWith(candidate.toolNamePrefix) &&
+      !hasToolGuardMcpPrefixCollision(candidate, mcpServerNames),
+  );
+  if (!guard || guard.invocation === 'auto') return undefined;
+  if (
+    guard.invocation === 'explicit-only' &&
+    guard.explicitSelectors?.some((selector) =>
+      matchesExplicitSelector(selectionText, selector),
+    )
+  ) {
+    return undefined;
+  }
+  return guard;
 }
 
 function createToolGuardHooks(
@@ -1075,20 +1168,13 @@ function createToolGuardHooks(
       return { continue: true };
     }
     const toolName = input.tool_name;
-    const guard = toolGuards.find(
-      (candidate) =>
-        toolName.startsWith(candidate.toolNamePrefix) &&
-        !hasToolGuardMcpPrefixCollision(candidate, getMcpServerNames()),
+    const guard = findDeniedToolGuard(
+      toolGuards,
+      toolName,
+      getSelectionText(),
+      getMcpServerNames(),
     );
-    if (!guard || guard.invocation === 'auto') return { continue: true };
-    if (
-      guard.invocation === 'explicit-only' &&
-      guard.explicitSelectors?.some((selector) =>
-        matchesExplicitSelector(getSelectionText(), selector),
-      )
-    ) {
-      return { continue: true };
-    }
+    if (!guard) return { continue: true };
 
     onDeny(toolName, guard);
     return {

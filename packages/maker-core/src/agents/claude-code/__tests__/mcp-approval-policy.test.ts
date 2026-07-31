@@ -108,6 +108,15 @@ function createDeps(
 function createFakeQuery(
   initMcpServerNames: readonly string[] = [],
   failedInitMcpServerNames: readonly string[] = [],
+  mcpServerStatuses: ReadonlyArray<{
+    name: string;
+    status: string;
+    scope?: string;
+  }> = initMcpServerNames.map((name) => ({
+    name,
+    status: 'connected',
+    scope: 'dynamic',
+  })),
 ) {
   let initEmitted = false;
   return {
@@ -142,6 +151,7 @@ function createFakeQuery(
     setPermissionMode: vi.fn(async () => {}),
     setModel: vi.fn(async () => {}),
     applyFlagSettings: vi.fn(async () => {}),
+    mcpServerStatus: vi.fn(async () => [...mcpServerStatuses]),
     interrupt: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
     rewindFiles: vi.fn(async () => ({ canRewind: false })),
@@ -179,6 +189,11 @@ async function startSession(
     capabilityRouting?: CapabilityRoutingPolicy;
     initMcpServerNames?: readonly string[];
     failedInitMcpServerNames?: readonly string[];
+    mcpServerStatuses?: ReadonlyArray<{
+      name: string;
+      status: string;
+      scope?: string;
+    }>;
   },
 ) {
   const configDir = await makeTempDir();
@@ -188,6 +203,7 @@ async function startSession(
   const fakeQuery = createFakeQuery(
     options?.initMcpServerNames,
     options?.failedInitMcpServerNames,
+    options?.mcpServerStatuses,
   );
   sdkMock.query.mockReturnValue(fakeQuery);
 
@@ -273,6 +289,12 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
     const { handle, hooks } = await startSession(undefined, {
       permissionMode: 'bypassPermissions',
       capabilityRouting,
+      initMcpServerNames: ['plugin:feishu-delegate:feishu-delegate'],
+      mcpServerStatuses: [{
+        name: 'plugin:feishu-delegate:feishu-delegate',
+        status: 'connected',
+        scope: 'dynamic',
+      }],
     });
     const preToolUse = hooks?.PreToolUse?.[0]?.hooks[0];
     if (!preToolUse) throw new Error('expected capability routing hook');
@@ -368,6 +390,14 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
           'plugin:feishu-delegate:feishu-delegate',
           userServerId,
         ],
+        mcpServerStatuses: [
+          {
+            name: 'plugin:feishu-delegate:feishu-delegate',
+            status: 'connected',
+            scope: 'dynamic',
+          },
+          { name: userServerId, status: 'connected', scope: 'project' },
+        ],
       },
     );
     const preToolUse = hooks?.PreToolUse?.[0]?.hooks[0];
@@ -393,6 +423,11 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
       capabilityRouting,
       mcpServerNames: [],
       initMcpServerNames: ['plugin:feishu-delegate:feishu-delegate'],
+      mcpServerStatuses: [{
+        name: 'plugin:feishu-delegate:feishu-delegate',
+        status: 'connected',
+        scope: 'user',
+      }],
     });
     const exactPreToolUse = exact.hooks?.PreToolUse?.[0]?.hooks[0];
     if (!exactPreToolUse) throw new Error('expected capability routing hook');
@@ -1186,6 +1221,7 @@ describe('remote sessions share the same permission semantics', () => {
         kind: 'permission',
         toolName: `mcp__${userServerId}__read_messages`,
         input: {},
+        metadata: { capabilityRoutingChecked: true },
       }),
     ).resolves.toMatchObject({ behavior: 'allow' });
     expect(permissionRequests(remote.seen)).toHaveLength(1);
@@ -1205,6 +1241,7 @@ describe('remote sessions share the same permission semantics', () => {
         toolName:
           'mcp__plugin_feishu-delegate_feishu-delegate__read_messages',
         input: {},
+        metadata: { capabilityRoutingChecked: true },
       }),
     ).resolves.toMatchObject({ behavior: 'allow' });
     expect(permissionRequests(exact.seen)).toHaveLength(1);

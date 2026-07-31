@@ -71,6 +71,13 @@ function buildFakeFactory(): SdkQueryFactory {
       async setModel() {},
       async setPermissionMode() {},
       async applyFlagSettings() {},
+      async mcpServerStatus() {
+        return Object.keys(opts.mcpServers ?? {}).map((name) => ({
+          name,
+          status: 'connected',
+          scope: 'local',
+        }));
+      },
       async stopTask() {},
       async getContextUsage() {
         return {
@@ -365,9 +372,6 @@ describe('sdk-handlers end-to-end', () => {
       cwd: '/a',
       model: 'm',
       env: {},
-      mcpServers: {
-        'plugin:guard': { type: 'stdio', command: 'true' },
-      },
       toolGuards: [
         {
           toolNamePrefix: '  mcp__plugin_guard__  ',

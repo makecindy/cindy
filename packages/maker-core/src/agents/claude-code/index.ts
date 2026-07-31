@@ -396,6 +396,10 @@ function userMessageTextForCapabilityRouting(content: UserMessage['content']): s
     .join('\n');
 }
 
+function isUserSettingsMcpScope(scope: unknown): boolean {
+  return scope === 'user' || scope === 'project' || scope === 'local';
+}
+
 /**
  * Anthropic Messages SDK 错误 → OneShotError 分类映射。
  * 参考自 apps/desktop/src/main/skillReview/claudeSdkReviewer.ts:mapApiError,
@@ -1080,15 +1084,17 @@ export class ClaudeCodeAgent extends BaseAgent {
      * 一律解析失败 → MCP 策略不参与判定, 维持原权限链。
      */
     let registeredMcpServerNames: ReadonlySet<string> = new Set();
-    const noteSdkInitMcpServerNames = (message: unknown): void => {
-      if (!message || typeof message !== 'object') return;
+    let hostMcpServerNames: ReadonlySet<string> = new Set();
+    let nonHarnessMcpServerNames: ReadonlySet<string> = new Set();
+    const noteSdkInitMcpServerNames = (message: unknown): boolean => {
+      if (!message || typeof message !== 'object') return false;
       const record = message as Record<string, unknown>;
       if (
         record.type !== 'system' ||
         record.subtype !== 'init' ||
         !Array.isArray(record.mcp_servers)
       ) {
-        return;
+        return false;
       }
       const finalNames = record.mcp_servers
         .map((server) => {
@@ -1103,10 +1109,56 @@ export class ClaudeCodeAgent extends BaseAgent {
       // Replace instead of unioning so a query rebuild cannot retain a server
       // removed from user/project/local settings and disable a guard forever.
       registeredMcpServerNames = new Set(finalNames);
+      return true;
+    };
+    const refreshSdkMcpProvenance = async (currentQ: Query): Promise<void> => {
+      const fallbackNames = new Set(hostMcpServerNames);
+      const queryWithStatus = currentQ as Query & {
+        mcpServerStatus?: () => Promise<Array<{
+          name: string;
+          status: string;
+          scope?: string;
+        }>>;
+      };
+      if (typeof queryWithStatus.mcpServerStatus !== 'function') {
+        if (currentQ === q) nonHarnessMcpServerNames = fallbackNames;
+        return;
+      }
+      try {
+        const statuses = await queryWithStatus.mcpServerStatus();
+        const connectedNonHarnessNames = new Set<string>();
+        for (const server of statuses) {
+          if (
+            server.status === 'connected' &&
+            typeof server.name === 'string' &&
+            server.name.length > 0 &&
+            (
+              hostMcpServerNames.has(server.name) ||
+              isUserSettingsMcpScope(server.scope)
+            )
+          ) {
+            connectedNonHarnessNames.add(server.name);
+          }
+        }
+        if (currentQ === q) nonHarnessMcpServerNames = connectedNonHarnessNames;
+        return;
+      } catch (error) {
+        // Init names have no provenance. On status failure, preserve only
+        // host-injected MCPs and keep settings/plugin routing fail-closed.
+        log.warn('failed to read scoped MCP status for capability routing', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      if (currentQ === q) nonHarnessMcpServerNames = fallbackNames;
     };
     const buildMcpServers = (): Record<string, McpServerConfig> | undefined => {
       const providers = mcpProviders;
-      if (providers.length === 0) return undefined;
+      if (providers.length === 0) {
+        hostMcpServerNames = new Set();
+        registeredMcpServerNames = hostMcpServerNames;
+        nonHarnessMcpServerNames = hostMcpServerNames;
+        return undefined;
+      }
       const context: McpProviderContext = {
         agentKind: 'claude-code' as const,
         workingDir: opts.workingDir,
@@ -1147,7 +1199,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
       // canUseTool 只认这批真实注册过的 server 名, 不靠 `mcp__` 工具名切分猜归属
       // (见 resolveMcpToolTarget: 自定义 server id 可以含 `__`, 盲切会被冒名顶替)。
-      registeredMcpServerNames = new Set(Object.keys(out));
+      hostMcpServerNames = new Set(Object.keys(out));
+      registeredMcpServerNames = hostMcpServerNames;
+      nonHarnessMcpServerNames = hostMcpServerNames;
       // 交回普通对象: SDK / RPC 序列化路径按普通对象处理(有的实现会调 obj.hasOwnProperty)。
       // spread 走 CreateDataProperty, 不触发 `__proto__` setter, 所以这一步是安全的。
       return Object.keys(out).length > 0 ? { ...out } : undefined;
@@ -1196,7 +1250,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             replacement: route.replacement?.id,
           });
         },
-        () => registeredMcpServerNames,
+        () => nonHarnessMcpServerNames,
       ),
       this.deps.claudeHooks,
     );
@@ -1204,7 +1258,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       const route = findClaudeMcpCapabilityRoute(
         this.deps.capabilityRouting,
         toolName,
-        registeredMcpServerNames,
+        nonHarnessMcpServerNames,
       );
       return route &&
         !isCapabilityRouteInvocationAllowed(route, activeCapabilitySelectionText)
@@ -2302,7 +2356,12 @@ export class ClaudeCodeAgent extends BaseAgent {
             }
             // permission kind
             const remoteToolName = params.toolName ?? '';
-            const capabilityRoute = deniedCapabilityRoute(remoteToolName);
+            // Remote cc-manager checks the route with authoritative scoped MCP
+            // provenance before forwarding canUseTool. Old managers do not add
+            // this attestation, so retain the desktop-side fail-closed fallback.
+            const capabilityRoute = params.metadata?.capabilityRoutingChecked === true
+              ? undefined
+              : deniedCapabilityRoute(remoteToolName);
             if (capabilityRoute) {
               log.warn('cc remote: downstream MCP source denied by host capability route', {
                 toolName: remoteToolName,
@@ -2413,9 +2472,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         // cindy_orca / orca_worker_bridge, 见 maker-host remoteCcQueryFactory),
         // 审批归属快照必须按注入后的最终清单定稿, 否则 canUseTool 的
         // resolveMcpToolTarget 认不出 orca server 名, 归属判定缺失。
-        registeredMcpServerNames = new Set(
+        hostMcpServerNames = new Set(
           Object.keys((startParams as { mcpServers?: Record<string, unknown> }).mcpServers ?? {}),
         );
+        registeredMcpServerNames = hostMcpServerNames;
+        nonHarnessMcpServerNames = hostMcpServerNames;
         // 记入 closure: handle.close / U2 兜底需要 await remoteQuery.close()。
         activeRemoteQuery = remoteQuery as unknown as { close: () => Promise<void>; detach?: () => Promise<void> };
 
@@ -2913,7 +2974,9 @@ export class ClaudeCodeAgent extends BaseAgent {
               bridgeSuppressedDoneData = undefined;
             }
             const rawType = (rawMsg as { type?: string } | null)?.type;
-            noteSdkInitMcpServerNames(rawMsg);
+            if (noteSdkInitMcpServerNames(rawMsg)) {
+              await refreshSdkMcpProvenance(currentQ);
+            }
             const expectedResumeSessionId = resumeValidationPending ? configuredResumeSessionId : undefined;
             const inBandInvalidConversationId =
               expectedResumeSessionId ?? (freshSessionValidationPending ? sdkSessionId : undefined);
