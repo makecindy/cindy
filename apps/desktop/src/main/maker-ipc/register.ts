@@ -1512,13 +1512,29 @@ function getPendingInteractionsForSession(
   return out;
 }
 
-function hasPendingInteractionForSession(sessionId: string): boolean {
+/**
+ * Agent-owned interactions are queue/zombie boundaries. Desktop-only confirms
+ * are Host tool waiters: they are recoverable UI state, but must not block a
+ * later user turn or be cleared by turn-idle reconciliation.
+ */
+function hasPendingAgentInteractionForSession(sessionId: string): boolean {
   return (
     Array.from(pendingInteractionResolvers.values()).some((entry) => entry.sessionId === sessionId) ||
-    issueConfirmBridge.pendingSnapshots(sessionId).length > 0 ||
-    renameSessionsConfirmBridge.pendingSnapshots(sessionId).length > 0 ||
-    ghostGrantConfirmBridge.pendingSnapshots(sessionId).length > 0 ||
     ghostSetupInteractionBridge.pendingSnapshots(sessionId).length > 0
+  );
+}
+
+function isPendingDesktopOnlyConfirmation(requestId: string): boolean {
+  return (
+    issueConfirmBridge
+      .pendingSnapshots()
+      .some(({ request }) => request.requestId === requestId) ||
+    renameSessionsConfirmBridge
+      .pendingSnapshots()
+      .some(({ request }) => request.requestId === requestId) ||
+    ghostGrantConfirmBridge
+      .pendingSnapshots()
+      .some(({ request }) => request.requestId === requestId)
   );
 }
 
@@ -1618,7 +1634,7 @@ function defaultDecisionForPending(kind: InteractionRequest['kind'], reason: str
   return { kind, behavior: 'deny', reason } as InteractionDecision;
 }
 
-function cleanupPendingInteractionsForSession(sessionId: string, reason: string): void {
+function cleanupPendingAgentInteractionsForSession(sessionId: string, reason: string): void {
   const entries = Array.from(pendingInteractionResolvers.entries())
     .filter(([, entry]) => entry.sessionId === sessionId);
   for (const [requestId, entry] of entries) {
@@ -1627,8 +1643,16 @@ function cleanupPendingInteractionsForSession(sessionId: string, reason: string)
     entry.resolve(defaultDecisionForPending(entry.kind, reason));
     dismissRendererInteraction(entry, requestId, reason, 'deny');
   }
-  // issue 确认卡同会话清理(单点收口,覆盖 session_closed / session_aborted /
-  // orca_disable / turn_idle_reconcile 全部调用方)。
+  ghostSetupInteractionBridge.cleanupForSession(
+    sessionId,
+    reason === 'session_closed' ? 'session_closed' : 'session_aborted',
+  );
+}
+
+function cleanupPendingInteractionsForSession(sessionId: string, reason: string): void {
+  cleanupPendingAgentInteractionsForSession(sessionId, reason);
+  // Desktop-only 确认只跟随真实会话终止/中止清理。权威 NO_ACTIVE_TURN 的
+  // turn-idle reconcile 只处理 Agent-owned 僵尸，不能取消仍有效的 Host 工具等待。
   issueConfirmBridge.cleanupForSession(
     sessionId,
     reason === 'session_closed' ? 'session_closed' : 'session_aborted',
@@ -1641,13 +1665,9 @@ function cleanupPendingInteractionsForSession(sessionId: string, reason: string)
     sessionId,
     reason === 'session_closed' ? 'session_closed' : 'session_aborted',
   );
-  ghostSetupInteractionBridge.cleanupForSession(
-    sessionId,
-    reason === 'session_closed' ? 'session_closed' : 'session_aborted',
-  );
   // fs 槽 workdir 写确认的会话级记忆只在会话真正关闭时清(防 Set 无界增长)。
-  // 本函数在 session_aborted(用户点停止)/ turn_idle_reconcile 等瞬态也会被
-  // 调,那些场景确认卡该收、但"同目录本会话免弹"的记忆要保住——否则用户每
+  // 本函数在 session_aborted(用户点停止)等瞬态也会被调,那些场景确认卡该收、
+  // 但"同目录本会话免弹"的记忆要保住——否则用户每
   // 次 Stop 后同目录又要重新点一遍允许,与卡片文案承诺不符(review P2)。
   if (reason === 'session_closed') {
     getGhostFsSlot().cleanupForSession(sessionId);
@@ -7346,7 +7366,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (sess?.isTurnRunning()) return;
       const trackerStale = sessionTurnActivityTracker.isSessionInTurn(sessionId) ||
         sessionTurnActivityTracker.isSessionTurnDispatchBoundaryBusy(sessionId);
-      const hadZombieInteraction = hasPendingInteractionForSession(sessionId);
+      const hadZombieInteraction = hasPendingAgentInteractionForSession(sessionId);
       if (!trackerStale && !hadZombieInteraction) return;
       log.warn('reconcileTurnIdle: clearing stale busy state after authoritative NO_ACTIVE_TURN', {
         sessionId,
@@ -7357,10 +7377,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       markSessionTurnEnded(sessionId);
       noteClaudeSessionTurnState(sessionId, false);
       if (hadZombieInteraction) {
-        cleanupPendingInteractionsForSession(sessionId, 'turn_idle_reconcile');
+        cleanupPendingAgentInteractionsForSession(sessionId, 'turn_idle_reconcile');
       }
     },
-    hasPendingInteraction: hasPendingInteractionForSession,
+    hasPendingInteraction: hasPendingAgentInteractionForSession,
     getAgentKind: (sessionId) => maker.getSession(sessionId)?.agentKind ?? null,
     getSdkSessionId: async (sessionId) => {
       const meta = await maker.getSessionMeta(sessionId).catch(() => null);
@@ -8186,9 +8206,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('INVALID_PARAMS', 'invalid plugin setup decision');
     }
     // permission / ask / plan and setup cancellation remain remotely
-    // resolvable, but Host-owned setup side effects may only originate from
-    // the trusted local Desktop.
-    assertResolveInteractionOrigin(decision);
+    // resolvable. Host-owned setup side effects and Desktop-only confirmations
+    // may only originate from the trusted local Desktop.
+    assertResolveInteractionOrigin(
+      decision,
+      isPendingDesktopOnlyConfirmation(requestId),
+    );
     let pluginSetupResponseTarget: GhostSetupInteractionResponseTarget | undefined;
     if (isPluginSetupInteractionDecision(decision) && !isDeviceLinkInvoke()) {
       assertTrustedAppRendererEvent(event);

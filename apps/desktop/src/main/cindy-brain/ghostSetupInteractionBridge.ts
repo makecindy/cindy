@@ -338,15 +338,34 @@ export function sanitizeGhostSetupRequestForRemote<T>(request: T): T {
   ) as T;
 }
 
+function isDesktopOnlyConfirmationRequest(request: unknown): boolean {
+  if (!request || typeof request !== 'object' || Array.isArray(request)) return false;
+  const kind = (request as { kind?: unknown }).kind;
+  return (
+    kind === 'issue_confirm' || kind === 'rename_sessions_confirm' || kind === 'ghost_grant_confirm'
+  );
+}
+
+/**
+ * Host-owned confirmations stay on the trusted Desktop. This keeps their
+ * request ids and local payload details (for example file paths and previews)
+ * out of Device Link while preserving the existing sanitized plugin-setup
+ * projection used for remote status/cancellation.
+ */
+export function projectInteractionRequestForRemote<T>(request: T): T | null {
+  if (isDesktopOnlyConfirmationRequest(request)) return null;
+  return sanitizeGhostSetupRequestForRemote(request);
+}
+
 export function projectPendingInteractionsForRemote<T extends { request: unknown }>(
   pending: T[],
   remote: boolean,
 ): T[] {
   if (!remote) return pending;
-  return pending.map((entry) => ({
-    ...entry,
-    request: sanitizeGhostSetupRequestForRemote(entry.request),
-  }));
+  return pending.flatMap((entry) => {
+    const request = projectInteractionRequestForRemote(entry.request);
+    return request === null ? [] : [{ ...entry, request }];
+  });
 }
 
 export function parseGhostSetupInteractionCommand(
