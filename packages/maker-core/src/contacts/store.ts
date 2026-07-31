@@ -11,7 +11,8 @@
  *  - db 文件路径与生命周期(manager 创建并持有 close)
  *  - 功能开关(host 设置层)与工具暴露(@cindy/mcps 层)
  *
- * 并发: better-sqlite3 同步 API + 单进程单实例(manager 池保证), 无跨进程写者。
+ * 并发: 常规调用由 manager 复用单实例；同步 worker 的跨连接写通过 SQLite
+ * IMMEDIATE 事务把主表快照与 FTS 更新串成一致提交。
  */
 
 import { randomUUID } from 'node:crypto';
@@ -74,6 +75,8 @@ export interface MakerContactsStoreDeps {
   db: Database.Database;
   logger: Logger;
   config?: Partial<ContactsConfig>;
+  /** one-shot sync worker 已由 runtime cold prepare 做过维护时可跳过重复全表扫描。 */
+  skipStartupMaintenance?: boolean;
 }
 
 export class MakerContactsStore {
@@ -83,6 +86,7 @@ export class MakerContactsStore {
   private readonly syncRepo: ContactsSyncRepository;
   private readonly logger: Logger;
   private readonly config: ContactsConfig;
+  private readonly skipStartupMaintenance: boolean;
   private initialized = false;
   private ftsDirty = false;
 
@@ -91,6 +95,7 @@ export class MakerContactsStore {
     this.fts = new ContactsFts(deps.db);
     this.logger = deps.logger;
     this.config = { ...DEFAULT_CONTACTS_CONFIG, ...(deps.config ?? {}) };
+    this.skipStartupMaintenance = deps.skipStartupMaintenance ?? false;
     this.groupsRepo = new ContactsGroupsRepo(deps.db, this.config);
     this.syncRepo = new ContactsSyncRepository(deps.db, this.logger.child('sync'));
   }
@@ -99,8 +104,10 @@ export class MakerContactsStore {
   init(): void {
     if (this.initialized) return;
     initContactsSchema(this.db);
-    this.sanityCheck();
-    this.renormalizePhoneKeys();
+    if (!this.skipStartupMaintenance) {
+      this.sanityCheck();
+      this.renormalizePhoneKeys();
+    }
     this.initialized = true;
   }
 
@@ -255,12 +262,7 @@ export class MakerContactsStore {
     const affected = this.relatedContactIds(id);
     // ON DELETE CASCADE 带走 identities/events/group members/relations
     this.db.prepare(`DELETE FROM contacts WHERE id = ?`).run(id);
-    try {
-      this.fts.delete(id);
-    } catch (e) {
-      this.ftsDirty = true;
-      this.logger.warn('contacts fts delete failed (row removed, rebuild will heal)', { id, error: String(e) });
-    }
+    this.reindexSafe(id);
     for (const otherId of affected) this.reindexSafe(otherId);
   }
 
@@ -724,12 +726,7 @@ export class MakerContactsStore {
     });
     tx();
 
-    try {
-      this.fts.delete(sourceId);
-    } catch (e) {
-      this.ftsDirty = true;
-      this.logger.warn('merge: fts delete of source failed', { sourceId, error: String(e) });
-    }
+    this.reindexSafe(sourceId);
     this.reindexSafe(targetId);
     for (const otherId of affected) this.reindexSafe(otherId);
     return {
@@ -804,11 +801,39 @@ export class MakerContactsStore {
     return result;
   }
 
+  /**
+   * Worker 专用：在同一个 IMMEDIATE 事务内协调同步状态与 FTS 投影。
+   * 先拿 SQLite 写锁再读取主表，避免另一个连接在快照读取与 FTS 重建之间插入写入。
+   */
+  prepareDeviceSyncStateForTransfer(): {
+    state: ContactsSyncState;
+    materialized: boolean;
+  } {
+    this.init();
+    const tx = this.db.transaction(() => {
+      const result = this.syncRepo.readState() ?? this.syncRepo.activate();
+      if (result.materialized || this.ftsDirty) this.rebuildFtsStrict();
+      return result;
+    });
+    return tx.immediate();
+  }
+
   mergeDeviceSyncState(state: unknown): boolean {
     this.init();
     const changed = this.syncRepo.mergeRemoteState(state);
     if (changed || this.ftsDirty) this.rebuildFtsSafe();
     return changed;
+  }
+
+  /** Worker 专用：远端状态、SQLite 投影与 FTS 要么一起提交，要么一起回滚。 */
+  mergeDeviceSyncStateForTransfer(state: unknown): boolean {
+    this.init();
+    const tx = this.db.transaction(() => {
+      const changed = this.syncRepo.mergeRemoteState(state);
+      if (changed || this.ftsDirty) this.rebuildFtsStrict();
+      return changed;
+    });
+    return tx.immediate();
   }
 
   // ── 统计 / 重置 ──────────────────────────────────────────────────────────
@@ -827,19 +852,19 @@ export class MakerContactsStore {
   /** 清空整个通讯录(UI 二次确认后调). 慎用 */
   resetAll(): { removedCount: number } {
     this.init();
-    const c = (this.db.prepare(`SELECT COUNT(*) AS c FROM contacts`).get() as { c: number }).c;
     const tx = this.db.transaction(() => {
+      const c = (this.db.prepare(`SELECT COUNT(*) AS c FROM contacts`).get() as { c: number }).c;
       this.db.exec(`DELETE FROM contacts; DELETE FROM contact_groups;`);
+      try {
+        this.fts.rebuild([]);
+        this.ftsDirty = false;
+      } catch {
+        this.ftsDirty = true;
+        // 保持既有语义：主表是 source of truth，FTS 失败留给下次 sanity 自愈。
+      }
+      return c;
     });
-    tx();
-    try {
-      this.fts.rebuild([]);
-      this.ftsDirty = false;
-    } catch {
-      this.ftsDirty = true;
-      /* rebuild on next sanity */
-    }
-    return { removedCount: c };
+    return { removedCount: tx.immediate() };
   }
 
   // ── 内部 ─────────────────────────────────────────────────────────────────
@@ -913,9 +938,8 @@ export class MakerContactsStore {
 
   private rebuildFtsSafe(): void {
     try {
-      const docs = buildAllFtsDocs(this.db);
-      this.fts.rebuild(docs);
-      this.ftsDirty = false;
+      const tx = this.db.transaction(() => this.rebuildFtsStrict());
+      tx.immediate();
     } catch (e) {
       this.ftsDirty = true;
       this.logger.warn('contacts fts rebuild after sync failed (init sanity will heal)', {
@@ -924,11 +948,21 @@ export class MakerContactsStore {
     }
   }
 
+  private rebuildFtsStrict(): void {
+    const docs = buildAllFtsDocs(this.db);
+    this.fts.rebuild(docs);
+    this.ftsDirty = false;
+  }
+
   /** 拍平一个 contact 的全部可检索文本, 重建其 FTS 行. 失败只 warn(rebuild 自愈) */
   private reindexSafe(contactId: string): void {
     try {
-      const doc = buildFtsDoc(this.db, contactId);
-      if (doc) this.fts.reindex(doc);
+      const tx = this.db.transaction(() => {
+        const doc = buildFtsDoc(this.db, contactId);
+        if (doc) this.fts.reindex(doc);
+        else this.fts.delete(contactId);
+      });
+      tx.immediate();
     } catch (e) {
       this.ftsDirty = true;
       this.logger.warn('contacts fts reindex failed (will heal on next rebuild)', {
@@ -940,13 +974,16 @@ export class MakerContactsStore {
 
   /** 主表投影与 FTS 内容不一致 → 全量 rebuild */
   private sanityCheck(): void {
-    const total = (this.db.prepare(`SELECT COUNT(*) AS c FROM contacts`).get() as { c: number }).c;
-    const ftsCount = this.fts.count();
-    const docs = buildAllFtsDocs(this.db);
-    if (!this.fts.isConsistent(docs)) {
-      this.logger.info('contacts fts inconsistent, rebuilding', { total, ftsCount });
-      this.fts.rebuild(docs);
-    }
-    this.ftsDirty = false;
+    const tx = this.db.transaction(() => {
+      const total = (this.db.prepare(`SELECT COUNT(*) AS c FROM contacts`).get() as { c: number }).c;
+      const ftsCount = this.fts.count();
+      const docs = buildAllFtsDocs(this.db);
+      if (!this.fts.isConsistent(docs)) {
+        this.logger.info('contacts fts inconsistent, rebuilding', { total, ftsCount });
+        this.fts.rebuild(docs);
+      }
+      this.ftsDirty = false;
+    });
+    tx.immediate();
   }
 }

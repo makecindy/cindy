@@ -1,11 +1,8 @@
-import {
-  createContactsSyncDelta,
-  type ContactsSyncClock,
-  type ContactsSyncState,
-} from '@cindy/maker-core';
+import type { ContactsSyncClock } from '@cindy/maker-core';
 
 import type { LanContactsSyncTransport } from './lanTransport.js';
-import { encodeContactsSyncMessage, type ContactsSyncWireFrame } from './wire.js';
+import type { ContactsSyncDatabaseSource } from './contactsSyncCodec.js';
+import { encodeContactsSyncDatabaseState, type ContactsSyncWireFrame } from './wire.js';
 
 interface OutboundTransport {
   getSelfDeviceId(): string | null;
@@ -34,8 +31,9 @@ interface ContactsSyncOutboundDependencies {
   isEnabled(): boolean;
   getIdentity(): { privateKey: string; publicKey: string };
   getPeerPublicKey(deviceId: string): string | null;
-  readLocalState(): ContactsSyncState;
+  getDatabaseSource(): ContactsSyncDatabaseSource;
   getKnownClocks(deviceId: string): ContactsSyncClock[] | undefined;
+  onLocalMaterialized(): void;
   announceKey(deviceId: string): void;
   onError(error: unknown): void;
 }
@@ -105,14 +103,11 @@ export class ContactsSyncOutbound {
       this.deps.announceKey(deviceId);
       return;
     }
-    const fullState = this.deps.readLocalState();
     const knownClocks = this.deps.getKnownClocks(deviceId);
-    const state = knownClocks ? createContactsSyncDelta(fullState, knownClocks) : fullState;
-    const frames = await encodeContactsSyncMessage({
-      message: {
-        version: 1,
-        type: 'state',
-        state,
+    const encoded = await encodeContactsSyncDatabaseState({
+      database: {
+        source: this.deps.getDatabaseSource(),
+        ...(knownClocks ? { knownClocks } : {}),
         ...(requestReply ? { requestReply: true } : {}),
       },
       ownPrivateKey: identity.privateKey,
@@ -123,8 +118,9 @@ export class ContactsSyncOutbound {
       signal: context.codecAbortSignal,
     });
     if (!this.canSend(context, deviceId)) return;
+    if (encoded.materialized) this.deps.onLocalMaterialized();
 
-    for (const frame of frames) {
+    for (const frame of encoded.frames) {
       if (!this.canSend(context, deviceId)) return;
       let sentDirect: boolean | undefined;
       try {

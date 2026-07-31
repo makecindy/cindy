@@ -6,7 +6,7 @@
  * 确定性程序逻辑，不调用模型、不产生 token 消耗。
  */
 
-import { type ContactsSyncClock, type ContactsSyncState } from '@cindy/maker-core';
+import type { ContactsSyncClock } from '@cindy/maker-core';
 
 import { createLogger } from '../logger.js';
 import { activeOwnerScopeKey, getActiveAppSession } from '../appSessionState.js';
@@ -22,6 +22,12 @@ import {
   readContactsChangeToken,
 } from '../maker-host/contacts-change-events.js';
 import { broadcastContactsChanged } from '../maker-host/contacts-change-broadcast.js';
+import {
+  resolveBetterSqliteModuleEntry,
+  resolveBetterSqliteNativeBinding,
+} from '../localDb/betterSqliteFactory.js';
+import type { ContactsSyncDatabaseSource } from './contactsSyncCodec.js';
+import { prepareContactsSyncDatabase } from './contactsSyncCodecWorkerClient.js';
 import { contactsSyncKeyStore } from './keyStore.js';
 import { LanContactsSyncTransport } from './lanTransport.js';
 import {
@@ -84,6 +90,13 @@ let initialized = false;
 let unsubscribeLocalChanges: (() => void) | null = null;
 let runtimeGeneration = 0;
 let codecAbortController = new AbortController();
+let localPreparation:
+  | {
+      generation: number;
+      ownerScopeKey: string;
+      promise: Promise<void>;
+    }
+  | null = null;
 const announcedTo = new Map<string, number>();
 const respondedToKeyAnnouncement = new Map<string, number>();
 const statusListeners = new Set<(status: ContactsDeviceSyncStatus) => void>();
@@ -109,8 +122,9 @@ const outbound = new ContactsSyncOutbound({
   isEnabled,
   getIdentity: () => contactsSyncKeyStore.getIdentity(),
   getPeerPublicKey: (deviceId) => contactsSyncKeyStore.getPeerPublicKey(deviceId),
-  readLocalState,
+  getDatabaseSource: getContactsSyncDatabaseSource,
   getKnownClocks: (deviceId) => peerKnownClocks.get(deviceId),
+  onLocalMaterialized: () => broadcastContactsChanged({ origin: 'remote' }),
   announceKey,
   onError: recordError,
 });
@@ -158,6 +172,7 @@ export function stopContactsDeviceSyncRuntime(): void {
   runtimeGeneration += 1;
   codecAbortController.abort();
   codecAbortController = new AbortController();
+  localPreparation = null;
   lan?.stop();
   lan = null;
   decoder.reset();
@@ -394,9 +409,11 @@ export async function broadcastContactsNow(requestReply = true): Promise<void> {
   setPhase('syncing');
   // 用户强制同步、重连和首次启用都做完整校准；普通本地变化走已知版本增量。
   if (requestReply) peerKnownClocks.clear();
-  await Promise.all(
-    peers.map((peer) => outbound.ensureKeyThenSend(peer.deviceId, requestReply, context)),
-  );
+  // DB-bound encode 有意串行：N 台在线设备不应把正常 fan-out 塞爆全局 worker 队列。
+  for (const peer of peers) {
+    if (!outbound.isCurrent(context)) break;
+    await outbound.ensureKeyThenSend(peer.deviceId, requestReply, context);
+  }
   if (outbound.isCurrent(context)) scheduleSyncAttemptTimeout();
 }
 
@@ -562,21 +579,23 @@ function handleIncomingCipherFrame(
       frame,
       ownPrivateKey: identity.privateKey,
       expectedPeerPublicKey: peerKey,
+      databaseSource: getContactsSyncDatabaseSource(),
     });
     if (!message || !isCurrent()) return;
+    if (message.type !== 'applied-state') {
+      throw new Error('contacts sync worker did not apply the decoded state');
+    }
 
-    const changed = getDesktopContactsManager().getStore().mergeDeviceSyncState(message.state);
-    const remoteState = message.state as ContactsSyncState;
     peerKnownClocks.set(
       srcDeviceId,
-      remoteState.clocks.map((clock) => ({ ...clock })),
+      message.clocks.map((clock) => ({ ...clock })),
     );
     recordSuccessfulSync(srcDeviceId, route);
-    if (changed) {
+    if (message.changed) {
       broadcastContactsChanged({ origin: 'remote' });
       log.info(`merged contacts state from ${shortId(srcDeviceId)} via ${route}`);
     }
-    if (changed || message.requestReply === true) {
+    if (message.changed || message.requestReply === true) {
       runSyncTask(() => outbound.send(srcDeviceId, false));
     }
   });
@@ -607,20 +626,54 @@ function sendKeyAnnouncement(deviceId: string, announcedAt: number): void {
   announcedTo.set(deviceId, announcedAt);
 }
 
-async function prepareLocalSync(): Promise<void> {
+function prepareLocalSync(): Promise<void> {
   if (!isCloudSession()) {
-    throw new Error('contacts device sync requires a signed-in cloud account');
+    return Promise.reject(new Error('contacts device sync requires a signed-in cloud account'));
   }
-  const result = getDesktopContactsManager().getStore().activateDeviceSyncWithResult();
-  if (result.materialized) broadcastContactsChanged({ origin: 'remote' });
-  await contactsSyncKeyStore.prepare();
+  const generation = runtimeGeneration;
+  const ownerScopeKey = activeOwnerScopeKey();
+  if (
+    localPreparation?.generation === generation &&
+    localPreparation.ownerScopeKey === ownerScopeKey
+  ) {
+    return localPreparation.promise;
+  }
+
+  const promise = (async () => {
+    await contactsSyncKeyStore.prepare();
+    const result = await prepareContactsSyncDatabase(
+      getContactsSyncDatabaseSource(),
+      codecAbortController.signal,
+    );
+    if (
+      result.materialized &&
+      runtimeGeneration === generation &&
+      activeOwnerScopeKey() === ownerScopeKey
+    ) {
+      broadcastContactsChanged({ origin: 'remote' });
+    }
+  })();
+  const preparation = { generation, ownerScopeKey, promise };
+  localPreparation = preparation;
+  void promise.catch(() => {
+    if (localPreparation === preparation) localPreparation = null;
+  });
+  return promise;
 }
 
-function readLocalState(): ContactsSyncState {
-  const store = getDesktopContactsManager().getStore();
-  const result = store.readDeviceSyncStateWithResult() ?? store.activateDeviceSyncWithResult();
-  if (result.materialized) broadcastContactsChanged({ origin: 'remote' });
-  return result.state;
+let contactsSyncDatabaseRuntime:
+  | Pick<ContactsSyncDatabaseSource, 'betterSqliteModulePath' | 'nativeBinding'>
+  | undefined;
+
+function getContactsSyncDatabaseSource(): ContactsSyncDatabaseSource {
+  contactsSyncDatabaseRuntime ??= {
+    betterSqliteModulePath: resolveBetterSqliteModuleEntry(),
+    nativeBinding: resolveBetterSqliteNativeBinding(),
+  };
+  return {
+    dbPath: getDesktopContactsManager().getDbPath(),
+    ...contactsSyncDatabaseRuntime,
+  };
 }
 
 function startLan(): void {
@@ -720,6 +773,23 @@ function recordSuccessfulSync(deviceId: string, route: 'lan' | 'relay'): void {
 }
 
 function recordError(error: unknown): void {
+  const databaseMayHaveChanged =
+    typeof error === 'object' &&
+    error !== null &&
+    'contactsDatabaseMayHaveChanged' in error &&
+    error.contactsDatabaseMayHaveChanged === true;
+  if (databaseMayHaveChanged) {
+    // 原子事务可能已提交但 ACK 尚未返回；保守刷新覆盖这个窄窗口。
+    localPreparation = null;
+    broadcastContactsChanged({ origin: 'remote' });
+    if (deviceLinkOwnerActive && isEnabled() && !debounceTimer) {
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        prepareAndRun(() => broadcastContactsNow(true));
+      }, BROADCAST_DEBOUNCE_MS);
+      debounceTimer.unref?.();
+    }
+  }
   if (syncAttemptTimer) clearTimeout(syncAttemptTimer);
   syncAttemptTimer = null;
   const message = error instanceof Error ? error.message : String(error);
@@ -845,6 +915,7 @@ function ensureCurrentOwnerStatus(): void {
   runtimeGeneration += 1;
   codecAbortController.abort();
   codecAbortController = new AbortController();
+  localPreparation = null;
   lan?.stop();
   lan = null;
   decoder.reset();

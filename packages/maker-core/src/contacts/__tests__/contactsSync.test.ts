@@ -263,6 +263,28 @@ describe("contacts device sync", () => {
     expect(restarted.search("启动后应恢复名称")[0]?.contactId).toBe(person.id);
   });
 
+  it("worker 合并在 FTS 重建失败时原子回滚主表和同步状态", () => {
+    const a = createStore();
+    const b = createStore();
+    a.prepareDeviceSyncStateForTransfer();
+    b.prepareDeviceSyncStateForTransfer();
+    const person = a.createContact({
+      kind: "person",
+      displayName: "必须原子落库",
+    });
+    const remote = a.prepareDeviceSyncStateForTransfer().state;
+
+    const restore = failFtsRebuild(b);
+    expect(() => b.mergeDeviceSyncStateForTransfer(remote)).toThrow(
+      /transient fts failure/,
+    );
+    restore();
+    expect(b.listContacts()).toHaveLength(0);
+
+    expect(b.mergeDeviceSyncStateForTransfer(remote)).toBe(true);
+    expect(b.search("必须原子落库")[0]?.contactId).toBe(person.id);
+  });
+
   it("分组成员移出后可以重新加入，并把后续再次移出同步给其他设备", () => {
     const a = createStore();
     const b = createStore();

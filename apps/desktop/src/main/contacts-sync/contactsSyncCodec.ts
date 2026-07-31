@@ -13,6 +13,7 @@ import {
   CONTACTS_SYNC_WIRE_VERSION,
   type ContactsSyncCipherChunkFrame,
 } from '@cindy/device-link';
+import type { ContactsSyncClock } from '@cindy/maker-core';
 
 import {
   decryptContactsSyncBytes,
@@ -22,7 +23,7 @@ import {
 
 export const CONTACTS_SYNC_MAX_COMPRESSED_BYTES =
   CONTACTS_SYNC_CHUNK_BYTES * CONTACTS_SYNC_MAX_CHUNKS;
-const MAX_DECOMPRESSED_BYTES = 128 * 1024 * 1024;
+export const CONTACTS_SYNC_MAX_DECOMPRESSED_BYTES = 128 * 1024 * 1024;
 
 export interface ContactsSyncStateMessage {
   version: 1;
@@ -31,14 +32,37 @@ export interface ContactsSyncStateMessage {
   requestReply?: boolean;
 }
 
-export interface ContactsSyncEncodeOptions {
-  message: ContactsSyncStateMessage;
+interface ContactsSyncEncodeCommonOptions {
   ownPrivateKey: string;
   ownPublicKey: string;
   peerPublicKey: string;
   srcDeviceId: string;
   dstDeviceId: string;
 }
+
+export interface ContactsSyncDatabaseSource {
+  dbPath: string;
+  betterSqliteModulePath?: string;
+  nativeBinding?: string;
+}
+
+export interface ContactsSyncMessageEncodeOptions extends ContactsSyncEncodeCommonOptions {
+  message: ContactsSyncStateMessage;
+  database?: never;
+}
+
+export interface ContactsSyncDatabaseEncodeOptions extends ContactsSyncEncodeCommonOptions {
+  message?: never;
+  database: {
+    source: ContactsSyncDatabaseSource;
+    knownClocks?: ContactsSyncClock[];
+    requestReply?: boolean;
+  };
+}
+
+export type ContactsSyncEncodeOptions =
+  | ContactsSyncMessageEncodeOptions
+  | ContactsSyncDatabaseEncodeOptions;
 
 export interface ContactsSyncDecodeOptions {
   ciphertext: Uint8Array;
@@ -50,22 +74,53 @@ export interface ContactsSyncDecodeOptions {
   dstDeviceId: string;
   transferId: string;
   totalChunks: number;
+  databaseSource?: ContactsSyncDatabaseSource;
+}
+
+export interface ContactsSyncAppliedStateResult {
+  version: 1;
+  type: 'applied-state';
+  changed: boolean;
+  clocks: ContactsSyncClock[];
+  requestReply?: boolean;
+}
+
+export type ContactsSyncDecodeResult = ContactsSyncStateMessage | ContactsSyncAppliedStateResult;
+
+export interface ContactsSyncEncodeResult {
+  frames: ContactsSyncCipherChunkFrame[];
+  materialized: boolean;
+}
+
+export interface ContactsSyncEncodedPayload {
+  transferId: string;
+  total: number;
+  iv: string;
+  tag: string;
+  ciphertext: Uint8Array<ArrayBuffer>;
+  materialized: boolean;
 }
 
 export interface ContactsSyncCodec {
   encode(
     options: ContactsSyncEncodeOptions,
     signal?: AbortSignal,
-  ): Promise<ContactsSyncCipherChunkFrame[]>;
+  ): Promise<ContactsSyncEncodeResult>;
   decode(
     options: ContactsSyncDecodeOptions,
     signal?: AbortSignal,
-  ): Promise<ContactsSyncStateMessage>;
+  ): Promise<ContactsSyncDecodeResult>;
 }
 
-export type ContactsSyncCodecWorkerRequest =
-  | { id: string; type: 'encode'; options: ContactsSyncEncodeOptions }
-  | { id: string; type: 'decode'; options: ContactsSyncDecodeOptions };
+export type ContactsSyncCodecWorkerRequest = {
+  id: string;
+  cancellation?: SharedArrayBuffer;
+} &
+  (
+    | { type: 'encode'; options: ContactsSyncEncodeOptions }
+    | { type: 'decode'; options: ContactsSyncDecodeOptions }
+    | { type: 'prepare'; source: ContactsSyncDatabaseSource }
+  );
 
 export interface ContactsSyncCodecWorkerResponse {
   id: string;
@@ -75,10 +130,28 @@ export interface ContactsSyncCodecWorkerResponse {
 }
 
 export function encodeContactsSyncMessageInProcess(
-  options: ContactsSyncEncodeOptions,
-): ContactsSyncCipherChunkFrame[] {
+  options: ContactsSyncMessageEncodeOptions,
+): ContactsSyncEncodeResult {
+  const payload = encodeContactsSyncJsonInProcess(
+    Buffer.from(JSON.stringify(options.message), 'utf8'),
+    options,
+  );
+  return {
+    frames: createContactsSyncFrames(payload, options.ownPublicKey),
+    materialized: false,
+  };
+}
+
+export function encodeContactsSyncJsonInProcess(
+  json: Uint8Array,
+  options: ContactsSyncEncodeCommonOptions,
+  materialized = false,
+): ContactsSyncEncodedPayload {
+  if (json.byteLength > CONTACTS_SYNC_MAX_DECOMPRESSED_BYTES) {
+    throw new Error(`contacts sync state is too large (${json.byteLength} decompressed bytes)`);
+  }
   const transferId = randomUUID();
-  const compressed = gzipSync(Buffer.from(JSON.stringify(options.message), 'utf8'));
+  const compressed = gzipSync(json);
   if (compressed.length > CONTACTS_SYNC_MAX_COMPRESSED_BYTES) {
     throw new Error(`contacts sync state is too large (${compressed.length} compressed bytes)`);
   }
@@ -95,22 +168,31 @@ export function encodeContactsSyncMessageInProcess(
     options.peerPublicKey,
     context,
   );
+  const ciphertext = copyBytes(encrypted.ciphertext);
+  return { transferId, total, iv: encrypted.iv, tag: encrypted.tag, ciphertext, materialized };
+}
+
+export function createContactsSyncFrames(
+  payload: ContactsSyncEncodedPayload,
+  senderPublicKey: string,
+): ContactsSyncCipherChunkFrame[] {
   const frames: ContactsSyncCipherChunkFrame[] = [];
-  for (let index = 0; index < total; index += 1) {
+  const ciphertext = Buffer.from(payload.ciphertext);
+  for (let index = 0; index < payload.total; index += 1) {
     frames.push({
       version: CONTACTS_SYNC_WIRE_VERSION,
       type: 'cipher-chunk',
-      senderPublicKey: options.ownPublicKey,
-      transferId,
+      senderPublicKey,
+      transferId: payload.transferId,
       index,
-      total,
-      iv: encrypted.iv,
-      tag: encrypted.tag,
+      total: payload.total,
+      iv: payload.iv,
+      tag: payload.tag,
       compression: 'gzip',
-      data: encrypted.ciphertext
+      data: ciphertext
         .subarray(
           index * CONTACTS_SYNC_CHUNK_BYTES,
-          Math.min((index + 1) * CONTACTS_SYNC_CHUNK_BYTES, encrypted.ciphertext.length),
+          Math.min((index + 1) * CONTACTS_SYNC_CHUNK_BYTES, ciphertext.length),
         )
         .toString('base64'),
     });
@@ -133,7 +215,9 @@ export function decodeContactsSyncMessageInProcess(
     options.expectedPeerPublicKey,
     context,
   );
-  const json = gunzipSync(compressed, { maxOutputLength: MAX_DECOMPRESSED_BYTES }).toString('utf8');
+  const json = gunzipSync(compressed, {
+    maxOutputLength: CONTACTS_SYNC_MAX_DECOMPRESSED_BYTES,
+  }).toString('utf8');
   const message: unknown = JSON.parse(json);
   if (!isContactsSyncStateMessage(message)) throw new Error('invalid contacts sync message');
   return message;
@@ -150,10 +234,19 @@ export function isContactsSyncStateMessage(value: unknown): value is ContactsSyn
 }
 
 export const inProcessContactsSyncCodec: ContactsSyncCodec = {
-  encode: async (options) => encodeContactsSyncMessageInProcess(options),
+  encode: async (options) => {
+    if (!options.message) throw new Error('in-process contacts codec requires a message');
+    return encodeContactsSyncMessageInProcess(options);
+  },
   decode: async (options) => decodeContactsSyncMessageInProcess(options),
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function copyBytes(value: Uint8Array): Uint8Array<ArrayBuffer> {
+  const copy = new Uint8Array(new ArrayBuffer(value.byteLength));
+  copy.set(value);
+  return copy;
 }

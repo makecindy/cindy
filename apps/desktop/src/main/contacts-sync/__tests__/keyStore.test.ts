@@ -3,7 +3,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { ContactsSyncKeyStore } from '../keyStore.js';
+import {
+  ContactsSyncKeyStore,
+  isContactsSyncSecureStorageAvailable,
+} from '../keyStore.js';
 import { generateContactsSyncIdentity } from '../crypto.js';
 
 describe('contacts sync key store', () => {
@@ -116,6 +119,30 @@ describe('contacts sync key store', () => {
     const { store, file } = createStore({ encryptionAvailable: false });
     await expect(store.prepare()).rejects.toThrow(/secure storage is unavailable/);
     expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('Linux basic_text 后端即使声称可加密也 fail closed', () => {
+    expect(
+      isContactsSyncSecureStorageAvailable({
+        platform: 'linux',
+        encryptionAvailable: true,
+        backend: 'basic_text',
+      }),
+    ).toBe(false);
+    expect(
+      isContactsSyncSecureStorageAvailable({
+        platform: 'linux',
+        encryptionAvailable: true,
+        backend: 'gnome_libsecret',
+      }),
+    ).toBe(true);
+    expect(
+      isContactsSyncSecureStorageAvailable({
+        platform: 'darwin',
+        encryptionAvailable: true,
+        backend: 'basic_text',
+      }),
+    ).toBe(true);
   });
 
   it('等待另一实例的锁时不阻塞事件循环', async () => {

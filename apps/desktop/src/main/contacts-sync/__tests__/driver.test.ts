@@ -37,11 +37,16 @@ const harness = vi.hoisted(() => {
     emptyState,
     syncMaterialized: false,
     activateSync: vi.fn(() => emptyState),
+    prepareDatabase: vi.fn(async () => ({ materialized: harness.syncMaterialized })),
+    decoderAccept: vi.fn(async (...args: unknown[]) => {
+      void args;
+      return null;
+    }),
     broadcastContactsChanged: vi.fn(),
     wireFrames,
     encodeContactsSyncMessage: vi.fn(async (options?: { signal?: AbortSignal }) => {
       void options;
-      return wireFrames;
+      return { frames: wireFrames, materialized: false };
     }),
     peerPublicKey: 'peer-public' as string | null,
     prepareKeyStore: vi.fn(async (): Promise<void> => undefined),
@@ -97,6 +102,7 @@ vi.mock('../../appSessionState.js', () => ({
 
 vi.mock('../../maker-host/maker-contacts-host.js', () => ({
   getDesktopContactsManager: () => ({
+    getDbPath: () => '/tmp/test-contacts.db',
     getStore: () => ({
       activateDeviceSync: harness.activateSync,
       readDeviceSyncState: () => harness.emptyState,
@@ -111,6 +117,15 @@ vi.mock('../../maker-host/maker-contacts-host.js', () => ({
       mergeDeviceSyncState: () => false,
     }),
   }),
+}));
+
+vi.mock('../../localDb/betterSqliteFactory.js', () => ({
+  resolveBetterSqliteModuleEntry: () => '/tmp/better-sqlite3.js',
+  resolveBetterSqliteNativeBinding: () => undefined,
+}));
+
+vi.mock('../contactsSyncCodecWorkerClient.js', () => ({
+  prepareContactsSyncDatabase: harness.prepareDatabase,
 }));
 
 vi.mock('../../maker-host/contacts-settings-store.js', () => ({
@@ -162,12 +177,12 @@ vi.mock('../lanTransport.js', () => ({
 
 vi.mock('../wire.js', () => ({
   createContactsSyncKeyFrame: () => ({ version: 1, type: 'key', publicKey: 'own-public' }),
-  encodeContactsSyncMessage: harness.encodeContactsSyncMessage,
+  encodeContactsSyncDatabaseState: harness.encodeContactsSyncMessage,
   isContactsSyncWireFrame: (raw: unknown) =>
     typeof raw === 'object' && raw !== null && 'type' in raw,
   ContactsSyncWireDecoder: class {
-    async accept(): Promise<null> {
-      return null;
+    async accept(...args: unknown[]): Promise<null> {
+      return harness.decoderAccept(...args);
     }
     reset(): void {}
   },
@@ -200,9 +215,18 @@ beforeEach(() => {
   harness.runtimeStatus = null;
   harness.syncMaterialized = false;
   harness.activateSync.mockClear();
+  harness.prepareDatabase.mockClear();
+  harness.prepareDatabase.mockImplementation(async () => ({
+    materialized: harness.syncMaterialized,
+  }));
+  harness.decoderAccept.mockReset();
+  harness.decoderAccept.mockResolvedValue(null);
   harness.broadcastContactsChanged.mockClear();
   harness.encodeContactsSyncMessage.mockReset();
-  harness.encodeContactsSyncMessage.mockImplementation(async () => harness.wireFrames);
+  harness.encodeContactsSyncMessage.mockImplementation(async () => ({
+    frames: harness.wireFrames,
+    materialized: false,
+  }));
   harness.peerPublicKey = 'peer-public';
   harness.pinPeerPublicKey.mockClear();
   harness.prepareKeyStore.mockClear();
@@ -294,7 +318,7 @@ describe('contacts sync runtime ownership', () => {
     let oldOwnerSignal: AbortSignal | undefined;
     harness.encodeContactsSyncMessage.mockImplementation(
       (options?: { signal?: AbortSignal }) =>
-        new Promise<typeof harness.wireFrames>((_, reject) => {
+        new Promise<{ frames: typeof harness.wireFrames; materialized: boolean }>((_, reject) => {
           oldOwnerSignal = options?.signal;
           options?.signal?.addEventListener(
             'abort',
@@ -333,7 +357,7 @@ describe('contacts sync runtime ownership', () => {
     harness.settings.set('owner-a', true);
     driver.pollContactsDeviceSyncSettingChange();
     await vi.waitFor(() => {
-      expect(harness.activateSync).toHaveBeenCalled();
+      expect(harness.prepareDatabase).toHaveBeenCalled();
       expect(driver.getContactsDeviceSyncStatus()).toMatchObject({
         enabled: true,
         phase: 'waiting',
@@ -814,6 +838,77 @@ describe('contacts sync runtime ownership', () => {
       publicKey: 'peer-public',
     });
     await vi.waitFor(() => expect(keyFrameCount()).toBe(2));
+  });
+
+  it('shares one cold database preparation across a max-size 128-chunk transfer', async () => {
+    harness.settings.set('owner-a', true);
+    let releasePreparation!: (value: { materialized: boolean }) => void;
+    harness.prepareDatabase.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releasePreparation = resolve;
+        }),
+    );
+    driver.initContactsDeviceSync({
+      getSelfDeviceId: () => 'self-device',
+      listOnlineDesktopDevices: () => [{ deviceId: 'peer-device', deviceName: 'Peer Desktop' }],
+      isPeerAllowed: (deviceId) => deviceId === 'peer-device',
+      sendRelayFrame: harness.relaySend,
+    });
+    driver.setContactsDeviceLinkOwnerActive(true);
+    await vi.waitFor(() => expect(harness.prepareDatabase).toHaveBeenCalledTimes(1));
+
+    for (let index = 0; index < 128; index += 1) {
+      driver.handleIncomingContactsRelayFrame('peer-device', {
+        version: 1,
+        type: 'cipher-chunk',
+        senderPublicKey: 'peer-public',
+        transferId: 'large-transfer',
+        index,
+        total: 128,
+        iv: 'iv',
+        tag: 'tag',
+        compression: 'gzip',
+        data: 'data',
+      });
+    }
+    expect(harness.prepareDatabase).toHaveBeenCalledTimes(1);
+
+    releasePreparation({ materialized: false });
+    await vi.waitFor(() => expect(harness.decoderAccept).toHaveBeenCalledTimes(128));
+    expect(harness.prepareDatabase).toHaveBeenCalledTimes(1);
+  });
+
+  it('serializes database encoding when broadcasting to more peers than the worker queue', async () => {
+    harness.settings.set('owner-a', true);
+    let activeEncodes = 0;
+    let maxActiveEncodes = 0;
+    harness.encodeContactsSyncMessage.mockImplementation(async () => {
+      activeEncodes += 1;
+      maxActiveEncodes = Math.max(maxActiveEncodes, activeEncodes);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      activeEncodes -= 1;
+      return { frames: harness.wireFrames, materialized: false };
+    });
+    const peers = Array.from({ length: 12 }, (_, index) => ({
+      deviceId: `peer-${index}`,
+      deviceName: `Peer ${index}`,
+    }));
+    driver.initContactsDeviceSync({
+      getSelfDeviceId: () => 'self-device',
+      listOnlineDesktopDevices: () => peers,
+      isPeerAllowed: () => true,
+      sendRelayFrame: harness.relaySend,
+    });
+    driver.setContactsDeviceLinkOwnerActive(true);
+
+    await vi.waitFor(() =>
+      expect(
+        harness.relaySend.mock.calls.filter(([, frame]) => frame.type === 'cipher-chunk'),
+      ).toHaveLength(12),
+    );
+    expect(harness.encodeContactsSyncMessage).toHaveBeenCalledTimes(12);
+    expect(maxActiveEncodes).toBe(1);
   });
 
   it('broadcasts a contact change written by another shared-userData instance', async () => {

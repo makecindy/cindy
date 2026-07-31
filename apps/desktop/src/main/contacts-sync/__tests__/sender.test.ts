@@ -18,7 +18,10 @@ const harness = vi.hoisted(() => ({
 }));
 
 vi.mock('../wire.js', () => ({
-  encodeContactsSyncMessage: async () => harness.frames,
+  encodeContactsSyncDatabaseState: async () => ({
+    frames: harness.frames,
+    materialized: false,
+  }),
 }));
 
 const { ContactsSyncOutbound } = await import('../sender.js');
@@ -49,17 +52,9 @@ describe('contacts sync outbound', () => {
       isEnabled: () => true,
       getIdentity: () => ({ privateKey: 'own-private', publicKey: 'own-public' }),
       getPeerPublicKey: () => 'peer-public',
-      readLocalState: () => ({
-        version: 1,
-        clocks: [],
-        contacts: [],
-        identities: [],
-        events: [],
-        groups: [],
-        memberships: [],
-        relations: [],
-      }),
+      getDatabaseSource: () => ({ dbPath: '/tmp/test-contacts.db' }),
       getKnownClocks: () => undefined,
+      onLocalMaterialized: vi.fn(),
       announceKey: vi.fn(),
       onError: vi.fn(),
     });

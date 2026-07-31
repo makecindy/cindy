@@ -19,6 +19,10 @@ import { isValidContactsSyncPublicKey } from './crypto.js';
 import {
   CONTACTS_SYNC_MAX_COMPRESSED_BYTES,
   type ContactsSyncCodec,
+  type ContactsSyncDatabaseEncodeOptions,
+  type ContactsSyncDatabaseSource,
+  type ContactsSyncDecodeResult,
+  type ContactsSyncEncodeResult,
   type ContactsSyncEncodeOptions,
   type ContactsSyncStateMessage,
 } from './contactsSyncCodec.js';
@@ -51,6 +55,14 @@ export function encodeContactsSyncMessage(
   codec: ContactsSyncCodec = workerContactsSyncCodec,
 ): Promise<ContactsSyncCipherChunkFrame[]> {
   const { signal, ...codecOptions } = options;
+  return codec.encode(codecOptions, signal).then((result) => result.frames);
+}
+
+export function encodeContactsSyncDatabaseState(
+  options: ContactsSyncDatabaseEncodeOptions & { signal?: AbortSignal },
+  codec: ContactsSyncCodec = workerContactsSyncCodec,
+): Promise<ContactsSyncEncodeResult> {
+  const { signal, ...codecOptions } = options;
   return codec.encode(codecOptions, signal);
 }
 
@@ -75,8 +87,9 @@ export class ContactsSyncWireDecoder {
     frame: ContactsSyncCipherChunkFrame;
     ownPrivateKey: string;
     expectedPeerPublicKey: string;
+    databaseSource?: ContactsSyncDatabaseSource;
     now?: number;
-  }): Promise<ContactsSyncStateMessage | null> {
+  }): Promise<ContactsSyncDecodeResult | null> {
     const now = options.now ?? Date.now();
     this.prune(now);
     const frame = options.frame;
@@ -161,6 +174,7 @@ export class ContactsSyncWireDecoder {
           dstDeviceId: options.dstDeviceId,
           transferId: frame.transferId,
           totalChunks: frame.total,
+          ...(options.databaseSource ? { databaseSource: options.databaseSource } : {}),
         },
         decodeSignal,
       );

@@ -12,9 +12,30 @@ import {
   encodeContactsSyncMessage,
   isContactsSyncWireFrame,
 } from '../wire.js';
-import { inProcessContactsSyncCodec } from '../contactsSyncCodec.js';
+import {
+  CONTACTS_SYNC_MAX_DECOMPRESSED_BYTES,
+  encodeContactsSyncJsonInProcess,
+  inProcessContactsSyncCodec,
+} from '../contactsSyncCodec.js';
 
 describe('contacts sync crypto and wire', () => {
+  it('发送端在压缩前拒绝超过接收端明文上限的状态', () => {
+    const a = generateContactsSyncIdentity();
+    const b = generateContactsSyncIdentity();
+    const oversized = {
+      byteLength: CONTACTS_SYNC_MAX_DECOMPRESSED_BYTES + 1,
+    } as Uint8Array;
+    expect(() =>
+      encodeContactsSyncJsonInProcess(oversized, {
+        ownPrivateKey: a.privateKey,
+        ownPublicKey: a.publicKey,
+        peerPublicKey: b.publicKey,
+        srcDeviceId: 'device-a',
+        dstDeviceId: 'device-b',
+      }),
+    ).toThrow(/decompressed bytes/);
+  });
+
   it('两台设备派生同一共享密钥，服务端拿到公钥仍不能解密', () => {
     const a = generateContactsSyncIdentity();
     const b = generateContactsSyncIdentity();

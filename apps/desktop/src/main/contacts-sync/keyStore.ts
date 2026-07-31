@@ -250,9 +250,33 @@ function assertDeviceId(deviceId: string): void {
 
 const desktopDeps: ContactsSyncKeyStoreDeps = {
   filePath: () => (getActiveAppSession().dataOwnerId ? ownerScopedUserDataPath(FILE_NAME) : null),
-  isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
+  isEncryptionAvailable: isDesktopContactsSyncSecureStorageAvailable,
   encrypt: (plaintext) => safeStorage.encryptString(plaintext),
   decrypt: (ciphertext) => safeStorage.decryptString(ciphertext),
 };
 
 export const contactsSyncKeyStore = new ContactsSyncKeyStore();
+
+function isDesktopContactsSyncSecureStorageAvailable(): boolean {
+  try {
+    return isContactsSyncSecureStorageAvailable({
+      platform: process.platform,
+      encryptionAvailable: safeStorage.isEncryptionAvailable(),
+      backend:
+        process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : undefined,
+    });
+  } catch {
+    return false;
+  }
+}
+
+export function isContactsSyncSecureStorageAvailable(options: {
+  platform: NodeJS.Platform;
+  encryptionAvailable: boolean;
+  backend?: string;
+}): boolean {
+  return (
+    options.encryptionAvailable &&
+    (options.platform !== 'linux' || options.backend !== 'basic_text')
+  );
+}
