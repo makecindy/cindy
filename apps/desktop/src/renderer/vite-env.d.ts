@@ -4704,7 +4704,8 @@ interface ElectronAPI {
             | 'ghost-needs-setup'
             | 'ghost-needs-reauth'
             | 'ghost-blocked'
-            | 'ghost-degraded';
+            | 'ghost-degraded'
+            | 'ghost-unknown';
           ghostName?: string;
         }>;
       }>;
