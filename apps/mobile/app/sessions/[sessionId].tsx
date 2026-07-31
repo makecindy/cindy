@@ -371,6 +371,8 @@ import {
   shouldKeepOlderMessagesAffordance,
 } from '@/session/messagePaging';
 import {
+  HISTORY_BACKFILL_MAX_GAPS_PER_VISIT,
+  HISTORY_GAP_MAX_CONSIDERED_PER_VISIT,
   HISTORY_GAP_PROBE_LIMIT,
   backfillHistoryWindowGap,
   findHistoryWindowGap,
@@ -3846,21 +3848,28 @@ export default function SessionScreen() {
     failed: Set<string>;
   } | null>(null);
   /**
-   * 飞行中的补齐属于哪个会话。两个刻意的选择:
+   * 飞行中的那一轮补齐:会话 id + **单调递增的运行序号**。
    *
-   *  - **带会话 id**,不是裸 boolean:屏实例会被原地复用,会话 A 的补齐还在飞时切到 B,裸标记
-   *    会把 B 的补齐一并挡掉(A 那次自己会在下一次 isCancelled 上收手,不该连坐 B)。
-   *  - **可观察 state**,不是 ref:ref 在 `finally` 里改写不会触发重渲染,于是 B 的空洞在本次
-   *    访问期间再也不会被检测,要等新消息到达或重开会话(#1210 review 的 P1)。用 state 后
-   *    清除标记本身就是一次重跑,同一次访问里可以接着补下一处。
+   * 为什么必须有 seq、且一切判据都对着它比:所有"当前状态是否仍等于启动时状态"的判据都不可靠,
+   * 因为会话 id 会**摆回来** —— A 的补齐在飞时切到 B 再快速切回 A,`sessionId === 'A'` 会重新
+   * 成立,于是旧那一轮的取消被撤销、effect 又放行一轮新的 A,同一会话并发翻页;旧轮收尾时还会
+   * 按 sid 把新轮的飞行标记误清,继续放行更多轮(#1210 review 的 P1)。seq 只增不减,"我还是不是
+   * 本会话最新那一轮"是单调判据,撤销不了。
+   *
+   * 用 state 而不是 ref 的理由不变:ref 在 `finally` 里改写不触发重渲染,那样本次访问里就不会
+   * 再检测下一处空洞,要等新消息或重开会话。互斥仍只按 `sid` 判 —— 别的会话残留的那一轮不连坐
+   * 当前会话(它自己会在下一次 isCancelled 上收手)。
    */
-  const [backfillInFlightSessionId, setBackfillInFlightSessionId] = useState<string | null>(null);
-  // 当前屏幕的会话 id 镜像:补齐是后台异步的,不能靠 effect 闭包里的 sessionId 判断"是否已切走"
-  // (那个值恒等于启动时的值)。本 effect 声明在补齐 effect **之前**,切会话时同一 commit 里先
-  // 更新镜像,飞行中的补齐随即在下一次 isCancelled 上收手。
-  const backfillSessionRef = useRef(sessionId);
+  const [backfillInFlightRun, setBackfillInFlightRun] = useState<{ sid: string; seq: number } | null>(null);
+  /** 单调递增的补齐轮次计数器;`latest` 是本屏最新那一轮的序号(旧轮据此自我作废)。 */
+  const backfillRunSeqRef = useRef(0);
+  const backfillLatestRunSeqRef = useRef(0);
+  // 切会话即作废在飞的那一轮:占掉一个序号但不启动任何轮,于是在飞的旧轮在下一次 isCancelled 上
+  // 收手 —— 用户已经离开的会话不值得继续花翻页请求。走同一个单调序号而不是"比较当前会话 id",
+  // 是因为后者会随切回来而摆回、把取消撤销掉(#1210 review 的 P1);序号只增不减,作废是终态。
   useEffect(() => {
-    backfillSessionRef.current = sessionId;
+    backfillRunSeqRef.current += 1;
+    backfillLatestRunSeqRef.current = backfillRunSeqRef.current;
   }, [sessionId]);
   useEffect(() => {
     if (!deviceId || !sessionId) return;
@@ -3871,8 +3880,8 @@ export default function SessionScreen() {
     // 既有单一来源(见它的声明处),这里直接复用。
     if (readAckSyncedKey !== `${sessionId}:${connectionEpoch}`) return;
     // 与「加载更早」互斥:两者都按 before 游标翻页,同时跑只会让窗口反复 merge、白拉页。
-    // 飞行判定只挡**同一会话**,别的会话残留的那次不连坐(见 backfillInFlightSessionId)。
-    if (loading || loadingEarlier || backfillInFlightSessionId === sessionId) return;
+    // 飞行判定只挡**同一会话**,别的会话残留的那一轮不连坐(见 backfillInFlightRun)。
+    if (loading || loadingEarlier || backfillInFlightRun?.sid === sessionId) return;
     // 换会话时整体重置;同一会话内换了连接代只清 failed —— 断线那次不该把这处空洞永久钉死,
     // 重连并重新同步后要能再试(#1210 review)。contiguous / backfilled 是与连接无关的结论,
     // 重连后不必重来。
@@ -3891,9 +3900,6 @@ export default function SessionScreen() {
       gapState.failed.clear();
     }
     backfillGapStateRef.current = gapState;
-    // 额度只算真的翻过页的那些:每次访问最多翻 3 段历史。正常停顿(contiguous)与失败重试
-    // 不消耗它 —— 否则窗口里几处隔夜停顿就能把额度吃光,更早的真实缺行永远排不到。
-    if (gapState.backfilled.size >= 3) return;
     // 跳过表是三类的并集:contiguous 那种"不 merge、跳变留在窗口里"的结局若不跳过,检测会永远
     // 返回同一处,更早处的真实缺行进不了探测。
     const consideredKeys = new Set<string>([
@@ -3901,12 +3907,22 @@ export default function SessionScreen() {
       ...gapState.backfilled,
       ...gapState.failed,
     ]);
+    // 两道闸各管一件事,都不能省(常量注释里有完整理由):
+    //  - 翻页额度只算真花了翻页请求的结局 —— 正常停顿不该把它吃光,否则更早的真实缺行排不到;
+    //  - 考察总闸管住探测本身 —— 跨数百天的会话可能有上百处正常停顿,只有翻页额度的话会串行
+    //    发出上百次 limit=1 探测。
+    if (gapState.backfilled.size >= HISTORY_BACKFILL_MAX_GAPS_PER_VISIT) return;
+    if (consideredKeys.size >= HISTORY_GAP_MAX_CONSIDERED_PER_VISIT) return;
     const gap = findHistoryWindowGap(messages, consideredKeys);
     if (!gap) return;
     const gapKey = historyWindowGapKey(gap);
-    setBackfillInFlightSessionId(sessionId);
     const sessionIdAtStart = sessionId;
     const epochAtStart = connectionEpoch;
+    // 本轮的身份:单调序号。启动即成为"最新一轮",此前还在飞的那一轮由此自我作废。
+    const runSeq = backfillRunSeqRef.current + 1;
+    backfillRunSeqRef.current = runSeq;
+    backfillLatestRunSeqRef.current = runSeq;
+    setBackfillInFlightRun({ sid: sessionIdAtStart, seq: runSeq });
     void backfillHistoryWindowGap(gap, {
       listPage: async (before, limit) => {
         const page = await listMessagesWithPayloadRetry(
@@ -3921,15 +3937,19 @@ export default function SessionScreen() {
         if (rows.length > 0) remoteSessionStore.mergeMessages(sessionIdAtStart, rows);
       },
       // 两个收手条件:
-      //  - 会话已切走 —— 补进来的行属于另一个屏幕的窗口;
+      //  - **我不再是最新那一轮** —— 屏幕已经为别的会话(或切回来后的同一会话)起了新的一轮。
+      //    判据必须是单调的 seq,不能比"当前会话 id 是否仍等于启动时的":会话切走再切回时后者会
+      //    重新成立,取消被撤销、同一会话并发翻页(#1210 review 的 P1)。
       //  - 空洞较新一侧那行已不在窗口里 —— /clear、rewind 或整窗替换把它拿掉了,继续 merge 会
       //    把刚被移除的历史(甚至 clearedAt 之前的消息)塞回窗口。锚点没了就等于这处空洞不存在了。
-      isCancelled: () => backfillSessionRef.current !== sessionIdAtStart
+      isCancelled: () => backfillLatestRunSeqRef.current !== runSeq
         || !remoteSessionStore.getMessages(sessionIdAtStart).some((row) => row.id === gap.newerId),
     }).then((outcome) => {
       // 按结局归类(容器的三类语义见 backfillGapStateRef 的注释)。归类发生在**收尾**而不是发起
       // 前:发起期间的重入由飞行标记挡住,不需要预先占位。切会话 / 换连接代之后落地的旧结局
       // 一律丢弃 —— 它属于上一个容器,写进新容器会污染当前会话的判断。
+      // 已被新一轮取代的旧轮不写结论:它看到的窗口已经不是当前的了。
+      if (backfillLatestRunSeqRef.current !== runSeq) return;
       const state = backfillGapStateRef.current;
       if (!state || state.sid !== sessionIdAtStart || state.epoch !== epochAtStart) return;
       // cancelled 刻意**不记**:它的两个触发条件本身就不会招来立刻重试 —— 会话切走时当前会话
@@ -3939,11 +3959,12 @@ export default function SessionScreen() {
       else if (outcome === 'failed') state.failed.add(gapKey);
       else if (outcome !== 'cancelled') state.backfilled.add(gapKey);
     }).finally(() => {
-      // 函数式更新:切会话后新会话可能已经起了自己的那一轮,不能被这次收尾误清。
-      setBackfillInFlightSessionId((current) => (current === sessionIdAtStart ? null : current));
+      // 按 **seq** 精确匹配再清:切会话(甚至切回同一会话)后可能已经起了新的一轮,按 sid 比会把
+      // 新轮的标记误清、于是又放行一轮,越滚越多(#1210 review 的 P1)。
+      setBackfillInFlightRun((current) => (current?.seq === runSeq ? null : current));
     });
   }, [
-    backfillInFlightSessionId,
+    backfillInFlightRun,
     connectionEpoch,
     deviceId,
     loading,
