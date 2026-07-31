@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import {
   findLastUserInputClientId,
   findLastUserMessageClientId,
+  isAutoResumeRowInFlight,
 } from '../components/chat/MessageStream';
 import type { ChatMessage } from '@/lib/makerChatStore';
 
@@ -71,5 +72,58 @@ describe('findLastUserInputClientId', () => {
   it('连续两次重连 → 取后一条', () => {
     const messages = [synthetic('resume1'), synthetic('resume2')];
     expect(findLastUserInputClientId(messages)).toBe('resume2');
+  });
+});
+
+describe('isAutoResumeRowInFlight', () => {
+  const base = {
+    isContinuationInFlight: false,
+    sessionRunning: true,
+    isLastUserInput: true,
+    isSeenContinuationInFlight: false,
+    projectionCapability: 'supported' as const,
+  };
+
+  it('current-id 精确匹配覆盖首个流事件之前的窗口', () => {
+    expect(
+      isAutoResumeRowInFlight({
+        ...base,
+        isContinuationInFlight: true,
+        sessionRunning: false,
+      }),
+    ).toBe(true);
+  });
+
+  it('新版 supported + seen marker 接住 steer 窗口', () => {
+    expect(isAutoResumeRowInFlight({ ...base, isSeenContinuationInFlight: true })).toBe(true);
+  });
+
+  it('新版 supported 未见过边界 → 不把无关 Goal turn 误判成重连', () => {
+    expect(isAutoResumeRowInFlight(base)).toBe(false);
+  });
+
+  it('尚未收到投影的 unknown fail closed', () => {
+    expect(isAutoResumeRowInFlight({ ...base, projectionCapability: 'unknown' })).toBe(false);
+  });
+
+  it('旧被控端字段缺省时保留 running + last-input 兼容兜底', () => {
+    expect(isAutoResumeRowInFlight({ ...base, projectionCapability: 'legacy' })).toBe(true);
+  });
+
+  it('旧端兼容兜底仍要求会话在跑且该行是最后一条非 steer 输入', () => {
+    expect(
+      isAutoResumeRowInFlight({
+        ...base,
+        projectionCapability: 'legacy',
+        sessionRunning: false,
+      }),
+    ).toBe(false);
+    expect(
+      isAutoResumeRowInFlight({
+        ...base,
+        projectionCapability: 'legacy',
+        isLastUserInput: false,
+      }),
+    ).toBe(false);
   });
 });

@@ -36,7 +36,11 @@ import {
   isDeliveryProseText,
 } from '@cindy/maker-shared/message-render';
 
-import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
+import type {
+  AgentTaskUpdate,
+  ChatMessage,
+  ContinuationInFlightProjectionCapability,
+} from '@/hooks/useCCAgentChat';
 import { Spinner } from '@/components/ui/spinner';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
 import type { KnownLocalFileRef } from '@/lib/localPathResolver';
@@ -227,6 +231,11 @@ interface MessageStreamProps {
    * 「续跑已落库、turn 还没吐事件」那一小段不会闪成静态。旧被控端可能缺省 → null。
    */
   continuationInFlightClientId?: string | null;
+  /**
+   * 当前投影是否支持上面的精确字段。legacy 只用于旧被控端的兼容兜底；尚未收到投影的
+   * unknown fail closed，避免初始化窗口把历史行误判为仍在飞。
+   */
+  continuationInFlightProjectionCapability?: ContinuationInFlightProjectionCapability;
   /**
    * 本次运行期内**观察到过**占边界的续跑项 clientId（store 里只增不减，见那边注释）。
    * 自愈重连行的第二支判据用它挡住"从未占过边界的历史行"。
@@ -588,6 +597,28 @@ export function findLastUserInputClientId(messages: readonly ChatMessage[]): str
     }
   }
   return null;
+}
+
+/**
+ * 自愈落库行是否仍属于当前运行中的续跑 turn。
+ *
+ * 新端以 current-id / 本运行期 observed-id 做精确关联；只有 wire 上确实缺省 current-id 的
+ * 旧被控端才恢复历史启发式。旧端无法区分「自动续跑正在跑」与不落 user 行的 Goal turn，
+ * 这是协议信息不足时的兼容降级，不能扩散到 supported / unknown 两种状态。
+ */
+export function isAutoResumeRowInFlight(args: {
+  isContinuationInFlight: boolean;
+  sessionRunning: boolean;
+  isLastUserInput: boolean;
+  isSeenContinuationInFlight: boolean;
+  projectionCapability: ContinuationInFlightProjectionCapability;
+}): boolean {
+  return (
+    args.isContinuationInFlight ||
+    (args.sessionRunning &&
+      args.isLastUserInput &&
+      (args.isSeenContinuationInFlight || args.projectionCapability === 'legacy'))
+  );
 }
 
 export function shouldBlockAssistantFork(
@@ -2040,6 +2071,8 @@ function renderWorkGroupChild(
     lastUserInputClientId: string | null;
     /** 正占着 dispatch/turn 边界的 continue 项 clientId(自愈重连行的首选判据)。 */
     continuationInFlightClientId: string | null;
+    /** 精确续跑边界字段的能力；旧端缺省时开启受限兼容兜底。 */
+    continuationInFlightProjectionCapability: ContinuationInFlightProjectionCapability;
     /** 本次运行期内见过占边界的续跑项 clientId(第二支判据)。 */
     seenContinuationInFlightClientId: string | null;
     localFileRefs: readonly KnownLocalFileRef[];
@@ -2085,6 +2118,7 @@ function renderWorkGroupChild(
       isLastUserMessage={item.message.clientId === props.lastUserMessageClientId}
       isLastUserInput={item.message.clientId === props.lastUserInputClientId}
       isContinuationInFlight={item.message.clientId === props.continuationInFlightClientId}
+      continuationInFlightProjectionCapability={props.continuationInFlightProjectionCapability}
       isSeenContinuationInFlight={
         item.message.clientId === props.seenContinuationInFlightClientId
       }
@@ -2188,6 +2222,7 @@ export function MessageStream({
   taskUpdates,
   isSessionStreaming = false,
   continuationInFlightClientId = null,
+  continuationInFlightProjectionCapability = 'unknown',
   seenContinuationInFlightClientId = null,
   onLoadMore,
   isLoadingMore,
@@ -3569,6 +3604,7 @@ export function MessageStream({
                               lastUserMessageClientId,
                               lastUserInputClientId,
                               continuationInFlightClientId,
+                              continuationInFlightProjectionCapability,
                               seenContinuationInFlightClientId,
                               localFileRefs,
                               singleResultMap,
@@ -3691,6 +3727,9 @@ export function MessageStream({
                           isLastUserMessage={msg.clientId === lastUserMessageClientId}
                           isLastUserInput={msg.clientId === lastUserInputClientId}
                           isContinuationInFlight={msg.clientId === continuationInFlightClientId}
+                          continuationInFlightProjectionCapability={
+                            continuationInFlightProjectionCapability
+                          }
                           isSeenContinuationInFlight={
                             msg.clientId === seenContinuationInFlightClientId
                           }
@@ -3767,6 +3806,7 @@ const MessageItem = memo(function MessageItem({
   isLastUserMessage,
   isLastUserInput,
   isContinuationInFlight,
+  continuationInFlightProjectionCapability,
   isSeenContinuationInFlight,
   isLastMessage,
   localFileRefs,
@@ -3812,6 +3852,8 @@ const MessageItem = memo(function MessageItem({
    * 判据：它从派发一开始就为真，覆盖「续跑已落库、turn 还没吐事件」那一小段。
    */
   isContinuationInFlight?: boolean;
+  /** 当前投影对精确续跑边界字段的支持状态；legacy 才允许启用旧端兼容兜底。 */
+  continuationInFlightProjectionCapability?: ContinuationInFlightProjectionCapability;
   /**
    * 这条消息在本次运行期内**曾经**占过 dispatch/turn 边界
    * （`seenContinuationInFlightClientId`）。第二支"仍在飞"判据的必要条件。
@@ -3831,27 +3873,17 @@ const MessageItem = memo(function MessageItem({
         cardType={message.systemCardType}
         data={message.systemCardData}
         sessionId={sessionId}
-        // 「这条自愈记录此刻真的在飞吗」——两支判据的或，都以**观察到的事实**为依据：
-        //
-        //  · `isContinuationInFlight`：它正占着 coordinator 的 dispatch/turn 边界。
-        //    **从派发一开始就为真**，因此「续跑已落库、turn 还没吐出第一个流事件」那一小段
-        //    也算在飞，不会闪一下静态（`sessionRunning` 取自 `isStreaming`，要等首个流事件）。
-        //  · `sessionRunning && isLastUserInput && isSeenContinuationInFlight`：它**曾经**占过
-        //    边界、且至今没有更新的用户侧输入顶替它。这一支专治 steer —— 插话被接受时
-        //    coordinator 会替换 activeTurn，上面那支随之失效，可 vendor turn 还是原来那个。
-        //
-        // 第三个条件（曾占过边界）是必须的：goal-host 的续轮走 `session.send` 直发、不落
-        // user 行（controller.fireTurn），少了它，app 退出后遗留的历史重连行会在一个无关的
-        // Goal turn 里被误判成"正在重连"（codex P2）。历史行在本次运行期从未占过边界。
-        //
-        // 两支都不成立才是静态：这条记录的 turn 已经不在了 —— 只可能是 app 在结算前退出 /
-        // 崩溃后重开对话看到的历史行，那时任务确实已经断了。
-        autoResumeInFlight={
-          isContinuationInFlight === true ||
-          (sessionRunning === true &&
-            isLastUserInput === true &&
-            isSeenContinuationInFlight === true)
-        }
+        // 「这条自愈记录此刻真的在飞吗」：
+        //  · current-id 精确匹配覆盖首个流事件之前的窗口；
+        //  · supported + observed-id 接住 steer，同时挡住无关 Goal turn；
+        //  · legacy 旧被控端没有 current-id，只能受限回落到 running + last-input。
+        autoResumeInFlight={isAutoResumeRowInFlight({
+          isContinuationInFlight: isContinuationInFlight === true,
+          sessionRunning: sessionRunning === true,
+          isLastUserInput: isLastUserInput === true,
+          isSeenContinuationInFlight: isSeenContinuationInFlight === true,
+          projectionCapability: continuationInFlightProjectionCapability ?? 'unknown',
+        })}
       />
     );
   }

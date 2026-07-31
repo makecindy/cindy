@@ -737,6 +737,8 @@ export interface AgentSwitchIntentRecord {
   fastMode?: boolean;
 }
 
+export type ContinuationInFlightProjectionCapability = 'unknown' | 'supported' | 'legacy';
+
 export interface SessionChatState {
   /**
    * 该 session 用哪个 agent (Claude / Codex)。 sendMessage 据此走 maker.send 时
@@ -820,6 +822,13 @@ export interface SessionChatState {
    * 保持熄灭，同时不影响用户取消仍在队列中的 Continue 后恢复横幅。
    */
   continuationInFlightClientId: string | null;
+  /**
+   * 当前 projection 是否支持 `continuationInFlightClientId`：
+   * unknown = 尚未收到投影；supported = 字段显式存在（值可以是 null）；
+   * legacy = 旧被控端完全缺省字段，只能回落到 running + 最后一条输入的兼容判据。
+   * 不能用 `?? null` 推断：新版显式 null 需要挡住无关 Goal turn，旧版缺省需要兼容。
+   */
+  continuationInFlightProjectionCapability: ContinuationInFlightProjectionCapability;
   /**
    * 本次 app 运行期内**观察到过**占据 dispatch/turn 边界的那条续跑项 clientId（只增不减）。
    *
@@ -1027,6 +1036,7 @@ export type SessionChatLightState = Pick<
   | 'errorRetryText'
   | 'credentialSwitchWait'
   | 'continuationInFlightClientId'
+  | 'continuationInFlightProjectionCapability'
   | 'seenContinuationInFlightClientId'
   | 'isLoadingMore'
   | 'hasMoreMessages'
@@ -1079,6 +1089,7 @@ function createInitialState(): SessionChatState {
     errorRetryText: null,
     credentialSwitchWait: null,
     continuationInFlightClientId: null,
+    continuationInFlightProjectionCapability: 'unknown',
     seenContinuationInFlightClientId: null,
     isLoadingMore: false,
     hasMoreMessages: true,
@@ -1144,6 +1155,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   errorRetryText: null,
   credentialSwitchWait: null,
   continuationInFlightClientId: null,
+  continuationInFlightProjectionCapability: 'unknown',
   seenContinuationInFlightClientId: null,
   isLoadingMore: false,
   hasMoreMessages: false,
@@ -1568,6 +1580,12 @@ const AUTO_RESUME_PENDING_CLIENT_ID = '__auto_resume_pending__';
 
 function applyInputProjection(projection: AgentInputProjection): void {
   if (!projection.sessionId) return;
+  // wire 上「字段缺省」就是旧被控端的能力信号；新版没有续跑项时也会显式发 null。
+  // 必须在 `?? null` 归一化前按 own property 读取，不能让 undefined/null 混淆版本。
+  const continuationInFlightProjectionCapability: ContinuationInFlightProjectionCapability =
+    Object.prototype.hasOwnProperty.call(projection, 'continuationInFlightClientId')
+      ? 'supported'
+      : 'legacy';
   setState(projection.sessionId, (s) => {
     // Only trigger if the retried message is still stuck in the pending queue:
     // projection.error is queue-level (string | null, no clientId), so we correlate
@@ -1669,6 +1687,7 @@ function applyInputProjection(projection: AgentInputProjection): void {
       errorRetryText: projection.errorRetryText,
       credentialSwitchWait: projection.credentialSwitchWait ?? null,
       continuationInFlightClientId: projection.continuationInFlightClientId ?? null,
+      continuationInFlightProjectionCapability,
       // 只增不减:字段变回 null(如 steer 顶替了 activeTurn)时保留上次观察到的值。
       seenContinuationInFlightClientId:
         projection.continuationInFlightClientId ?? s.seenContinuationInFlightClientId,
@@ -4771,6 +4790,7 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     errorRetryText: state.errorRetryText,
     credentialSwitchWait: state.credentialSwitchWait,
     continuationInFlightClientId: state.continuationInFlightClientId,
+    continuationInFlightProjectionCapability: state.continuationInFlightProjectionCapability,
     seenContinuationInFlightClientId: state.seenContinuationInFlightClientId,
     isLoadingMore: state.isLoadingMore,
     hasMoreMessages: state.hasMoreMessages,
@@ -4810,6 +4830,8 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.errorRetryText === b.errorRetryText &&
     a.credentialSwitchWait === b.credentialSwitchWait &&
     a.continuationInFlightClientId === b.continuationInFlightClientId &&
+    a.continuationInFlightProjectionCapability ===
+      b.continuationInFlightProjectionCapability &&
     a.seenContinuationInFlightClientId === b.seenContinuationInFlightClientId &&
     a.isLoadingMore === b.isLoadingMore &&
     a.hasMoreMessages === b.hasMoreMessages &&

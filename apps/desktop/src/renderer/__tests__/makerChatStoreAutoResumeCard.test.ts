@@ -121,12 +121,19 @@ function projection(over: Record<string, unknown> = {}) {
     queueInteractionLocks: [],
     queueEditLocks: [],
     queueAbortPending: false,
+    continuationInFlightClientId: null,
     error: null,
     recovery: null,
     errorRetryText: null,
     credentialSwitchWait: null,
     ...over,
   };
+}
+
+/** 旧被控端 wire 形状：字段完全不存在；不能用显式 undefined 伪装（own property 仍存在）。 */
+function legacyProjection(over: Record<string, unknown> = {}) {
+  const { continuationInFlightClientId: _unsupported, ...legacy } = projection(over);
+  return legacy;
 }
 
 describe('mapServerMessages auto-resume 分隔线', () => {
@@ -311,7 +318,8 @@ describe('applyInputProjection 自愈进行中提示', () => {
 // 「见过占边界」标记是"仍在飞"第二支判据的必要条件:steer 顶替 activeTurn 后
 // continuationInFlightClientId 变 null,靠它接住;而 goal-host 续轮走 session.send 直发、
 // 不落 user 行,靠它挡住"app 退出后遗留的历史重连行被无关 Goal turn 误判成正在重连"。
-describe('seenContinuationInFlightClientId(只增不减)', () => {
+// capability 另行保留 wire 上的「字段缺省」事实，只给旧被控端开启兼容兜底。
+describe('续跑边界投影能力与 seen marker', () => {
   beforeEach(() => {
     (globalThis as { window?: unknown }).window = { electronAPI: makeElectronApiStub() };
     makerChatStore.initGlobalListeners();
@@ -321,12 +329,22 @@ describe('seenContinuationInFlightClientId(只增不减)', () => {
     makerChatStore.purgeSession(SID);
   });
 
-  it('初始为 null;观察到非空即记下', () => {
+  it('尚未收到投影时 capability=unknown，不能提前猜成旧端', () => {
+    const snap = makerChatStore.getSnapshot(SID);
+    expect(snap.continuationInFlightProjectionCapability).toBe('unknown');
+    expect(snap.seenContinuationInFlightClientId).toBeNull();
+  });
+
+  it('新版显式 null 与观察到非空都标记 supported；非空即记入 seen', () => {
     inputProjectionCb!(projection());
-    expect(makerChatStore.getSnapshot(SID).seenContinuationInFlightClientId).toBeNull();
+    let snap = makerChatStore.getSnapshot(SID);
+    expect(snap.continuationInFlightProjectionCapability).toBe('supported');
+    expect(snap.seenContinuationInFlightClientId).toBeNull();
 
     inputProjectionCb!(projection({ continuationInFlightClientId: 'resume-1' }));
-    expect(makerChatStore.getSnapshot(SID).seenContinuationInFlightClientId).toBe('resume-1');
+    snap = makerChatStore.getSnapshot(SID);
+    expect(snap.continuationInFlightProjectionCapability).toBe('supported');
+    expect(snap.seenContinuationInFlightClientId).toBe('resume-1');
   });
 
   it('字段变回 null(steer 顶替 activeTurn)时保留上次观察值', () => {
@@ -343,10 +361,20 @@ describe('seenContinuationInFlightClientId(只增不减)', () => {
     expect(makerChatStore.getSnapshot(SID).seenContinuationInFlightClientId).toBe('resume-2');
   });
 
-  it('缺省该投影字段(旧被控端)→ 始终为 null,第二支判据不成立', () => {
-    inputProjectionCb!(projection());
-    inputProjectionCb!(projection());
-    expect(makerChatStore.getSnapshot(SID).seenContinuationInFlightClientId).toBeNull();
+  it('字段完全缺省(旧被控端)→ capability=legacy，seen 仍为 null', () => {
+    inputProjectionCb!(legacyProjection());
+    const snap = makerChatStore.getSnapshot(SID);
+    expect(snap.continuationInFlightProjectionCapability).toBe('legacy');
+    expect(snap.continuationInFlightClientId).toBeNull();
+    expect(snap.seenContinuationInFlightClientId).toBeNull();
+  });
+
+  it('同一会话的被控端升级后，显式字段会从 legacy 前进到 supported', () => {
+    inputProjectionCb!(legacyProjection());
+    inputProjectionCb!(projection({ continuationInFlightClientId: null }));
+    expect(makerChatStore.getSnapshot(SID).continuationInFlightProjectionCapability).toBe(
+      'supported',
+    );
   });
 });
 

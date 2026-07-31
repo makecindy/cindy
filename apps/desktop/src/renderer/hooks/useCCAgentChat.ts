@@ -34,6 +34,7 @@ import {
   type AskUserDraft,
   type AskUserViewerState,
   type ChatMessage,
+  type ContinuationInFlightProjectionCapability,
   type PendingPermission,
   type PendingAskUser,
   type PendingPluginSetup,
@@ -64,6 +65,7 @@ export type {
   AskUserDraft,
   AskUserViewerState,
   ChatMessage,
+  ContinuationInFlightProjectionCapability,
   PendingPermission,
   PendingAskUser,
   PendingPlanReview,
@@ -184,6 +186,8 @@ interface UseCCAgentChatReturn {
   credentialSwitchWait: { clientId?: string; blockedBySessionIds: string[] } | null;
   /** 已离队、正在 coordinator dispatch/turn 边界内的 Continue clientId。 */
   continuationInFlightClientId: string | null;
+  /** 续跑边界投影能力；legacy 时保留旧被控端的兼容兜底。 */
+  continuationInFlightProjectionCapability: ContinuationInFlightProjectionCapability;
   /** 本次运行期内见过占边界的续跑项 clientId(自愈重连行判"仍在飞"的第二支判据)。 */
   seenContinuationInFlightClientId: string | null;
   /** F-SYNC-2: Load older messages (prepend to top) */
@@ -835,6 +839,8 @@ export function useCCAgentChat(
     errorRetryText: lightState.errorRetryText,
     credentialSwitchWait: lightState.credentialSwitchWait,
     continuationInFlightClientId: lightState.continuationInFlightClientId,
+    continuationInFlightProjectionCapability:
+      lightState.continuationInFlightProjectionCapability,
     seenContinuationInFlightClientId: lightState.seenContinuationInFlightClientId,
     loadOlderMessages,
     isLoadingMore: lightState.isLoadingMore,
