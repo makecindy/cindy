@@ -48,7 +48,11 @@ function restoreBackupIfMainMissing(filePath: string): 'restored' | 'not-needed'
 
 /**
  * 读取由 `atomicWriteFileSync` 维护的文件:主文件缺失时先从 `.bak` 恢复再读。
- * 文件确实不存在返回 null,由调用方决定空值语义。
+ * 文件确实不存在(`ENOENT`)返回 null,由调用方决定空值语义。
+ *
+ * **只有 ENOENT 才算"不存在"**,其余读取错误一律上抛:文件明明在,只是被
+ * Windows 文件锁、权限或瞬时 I/O 挡住时若返回 null,调用方会解释成空状态,
+ * 随后那次写入就用空状态派生的快照覆盖原文件,其余来源/安装记录永久丢失。
  *
  * `.bak` 在场但恢复不了时抛 `AtomicBackupUnrecoverableError` —— **不要**把它
  * 降级成 null:那等于把"有一份救得回来的数据"说成"没有数据",后续写入会清掉它。
@@ -57,8 +61,9 @@ export function readAtomicFileSync(filePath: string): string | null {
   restoreBackupIfMainMissing(filePath);
   try {
     return fs.readFileSync(filePath, 'utf8');
-  } catch {
-    return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
+    throw error;
   }
 }
 

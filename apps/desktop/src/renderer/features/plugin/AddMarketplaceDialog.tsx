@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/contexts/AuthContext';
 import { extractIpcError } from '@/utils/ipcError';
 import type { MarketSourceSummary } from '../../../shared/pluginMarket';
 
@@ -48,6 +49,8 @@ export function AddMarketplaceDialog({
   onSourcesChanged,
 }: AddMarketplaceDialogProps) {
   const { t } = useTranslation();
+  // 账号/模式作为来源列表的作用域键:切号必须清掉上一账号的来源摘要。
+  const { mode, dataOwnerId } = useAuth();
   const [sources, setSources] = useState<MarketSourceSummary[] | null>(null);
   const [gitReady, setGitReady] = useState<boolean | null>(null);
   const [sourceInput, setSourceInput] = useState('');
@@ -87,17 +90,27 @@ export function AddMarketplaceDialog({
     }
   }, []);
 
+  // 来源摘要里有私有仓库 URL 与本地绝对路径,属于上一账号的数据。Main 的返回前
+  // generation 校验只能拒掉新请求,撤不回 Renderer 已经缓存并正在展示的列表——
+  // 所以账号/模式一变就立刻清空本地状态并关掉来源管理子对话框,再按新账号重载。
+  useEffect(() => {
+    setSources(null);
+    setSourcesOpen(false);
+    setOperationError(null);
+    if (!open) return;
+    void loadSources();
+  }, [mode, dataOwnerId, open, loadSources]);
+
   useEffect(() => {
     if (!open) return;
     setSourceInput('');
     setRefInput('');
     setSparseInput('');
-    void loadSources();
     void window.electronAPI.pluginMarket
       .gitPreflight()
       .then((result) => setGitReady(result.ok))
       .catch(() => setGitReady(null));
-  }, [open, loadSources]);
+  }, [open]);
 
   const sourceIsLocal = looksLikeLocalPath(sourceInput);
   const addDisabled =

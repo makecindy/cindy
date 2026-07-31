@@ -51,6 +51,7 @@ import {
   releaseCachePath,
   removeCachePath,
   retainCachePath,
+  settleCachePathRemovals,
 } from './cacheLease.js';
 import { discoverMarketplace, type DiscoveredMarketplace, type DiscoverError } from './discover.js';
 import {
@@ -426,6 +427,10 @@ export class MarketSourceManager {
       // 写新版本 —— 所以必须带上"槽已被配置占用则放弃删除"的再核对(本方法末尾
       // store.add 之后该槽即为已配置),否则那笔延迟删除会把刚添加的缓存删掉。
       await this.removeCacheDir(slot, { skipIf: () => this.slotIsConfigured(slot) });
+      // 还要等**已经启动**的删除跑完:`skipIf` 只挡得住尚未开始的那笔。移除来源后
+      // 立刻重新添加同名同源时,旧槽删除可能正在途中,不等它结束就写入,新版本会被
+      // 它顺手带走(配置有效但来源持续报缓存缺失)。
+      await settleCachePathRemovals(slot);
       await fs.promises.mkdir(this.versionsDir(slot), { recursive: true });
       await fs.promises.rename(discoveredRoot, dir);
       atomicWriteFileSync(this.currentPointer(slot), version);
@@ -492,6 +497,9 @@ export class MarketSourceManager {
     const [fastForwardDir, cloneDir] = staging;
     for (const dir of staging) retainCachePath(dir);
     try {
+      // 刷新同样往这个槽里写:先等与它重叠的在途删除结束,免得新版本被一笔"移除
+      // 来源"遗留的在途整槽删除带走。
+      await settleCachePathRemovals(slot);
       await fs.promises.mkdir(path.dirname(fastForwardDir), { recursive: true });
       await fs.promises.mkdir(this.versionsDir(slot), { recursive: true });
       // 快进要整目录复制当前版本并在其上 fetch:登记读取引用,否则并发刷新的

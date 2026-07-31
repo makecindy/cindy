@@ -80,17 +80,18 @@ export class PluginMarketLedger {
   }
 
   read(): PluginMarketLedgerData {
+    // 读取入口恢复 .bak:主文件缺失时若直接读成空账本,调用方随后的写入会用这份
+    // 空数据永久覆盖唯一有效快照(安装溯源全丢)。
+    //
+    // 读失败与解析失败必须分开处理:文件不存在(ENOENT)才是空账本;文件在但读不到
+    // (文件锁/权限/瞬时 I/O)或备份救不回来时一律**上抛**——降级成空账本会让紧接着
+    // 的写入把真实记录覆盖掉。只有"内容确实不是合法 JSON"才按空账本重建。
+    const text = readAtomicFileSync(this.filePath());
+    if (text === null) return emptyLedger();
     let raw: unknown;
     try {
-      // 读取入口恢复 .bak:主文件缺失时若直接读成空账本,调用方随后的写入会
-      // 用这份空数据永久覆盖唯一有效快照(安装溯源全丢)。
-      const text = readAtomicFileSync(this.filePath());
-      if (text === null) return emptyLedger();
       raw = JSON.parse(text);
-    } catch (error) {
-      // "备份在场但恢复不了"必须上抛:降级成空账本等于把一份救得回来的溯源
-      // 数据判死,后续写入会把它清掉。其余读取/解析失败才按空账本处理。
-      if (isAtomicBackupUnrecoverable(error)) throw error;
+    } catch {
       return emptyLedger();
     }
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return emptyLedger();

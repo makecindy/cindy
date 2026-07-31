@@ -111,17 +111,18 @@ export class MarketSourceStore {
   }
 
   private read(): MarketSourcesData {
+    // 读取入口恢复 .bak:主文件缺失时若直接读成空来源表,调用方随后的写入会用这份
+    // 空数据永久覆盖唯一有效快照(全部自定义来源配置丢失)。
+    //
+    // 读失败与解析失败分开处理:文件不存在(ENOENT)才是空来源表;文件在但读不到
+    // (文件锁/权限/瞬时 I/O)或备份救不回来时一律**上抛**。只有"内容确实不是合法
+    // JSON"才按空来源表重建。
+    const text = readAtomicFileSync(this.filePath());
+    if (text === null) return emptySources();
     let raw: unknown;
     try {
-      // 读取入口恢复 .bak:主文件缺失时若直接读成空来源表,调用方随后的写入会
-      // 用这份空数据永久覆盖唯一有效快照(全部自定义来源配置丢失)。
-      const text = readAtomicFileSync(this.filePath());
-      if (text === null) return emptySources();
       raw = JSON.parse(text);
-    } catch (error) {
-      // "备份在场但恢复不了"必须上抛:降级成空来源表会让后续写入清掉唯一快照,
-      // 用户添加过的全部自定义市场来源永久丢失。其余失败才按空来源表处理。
-      if (isAtomicBackupUnrecoverable(error)) throw error;
+    } catch {
       return emptySources();
     }
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return emptySources();

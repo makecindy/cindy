@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   isCachePathLeased,
@@ -23,6 +23,7 @@ import {
   removeCachePath,
   resetCacheLeasesForTest,
   retainCachePath,
+  settleCachePathRemovals,
   withCachePath,
 } from '../sources/cacheLease';
 
@@ -113,6 +114,33 @@ describe('cacheLease 删除守卫', () => {
     stillCurrent = false;
     await removeCachePath(tree.version, { skipIf: () => stillCurrent });
     expect(fs.existsSync(tree.version)).toBe(false);
+  });
+
+  it('lets callers await an already-started removal before reusing the path', async () => {
+    const tree = makeTree();
+    // 让 rm 变慢,模拟"删除已经启动、还没跑完"这个窗口。skipIf 只挡得住尚未开始的
+    // 删除;已经在跑的那笔必须能被复用方等到,否则它会落在刚重建出来的内容上。
+    const realRm = fs.promises.rm;
+    const spy = vi.spyOn(fs.promises, 'rm').mockImplementation(async (target, options) => {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return realRm(target as never, options as never);
+    });
+    try {
+      retainCachePath(tree.version);
+      await removeCachePath(tree.slot);
+      releaseCachePath(tree.version); // 触发推迟删除:此刻它开始跑但没结束
+
+      await settleCachePathRemovals(tree.slot);
+      // 等到之后重建:内容不能再被那笔在途删除带走。
+      fs.mkdirSync(tree.version, { recursive: true });
+      fs.writeFileSync(path.join(tree.version, 'file.txt'), 'rebuilt');
+      // 等待必须**长于**上面模拟的 rm 耗时(40ms),否则在途删除还没落地就断言完了,
+      // 用例会在缺少 settleCachePathRemovals 时照样通过(没有牙齿)。
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(fs.readFileSync(path.join(tree.version, 'file.txt'), 'utf8')).toBe('rebuilt');
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('counts nested leases so an inner release does not unblock deletion', async () => {

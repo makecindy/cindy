@@ -73,6 +73,23 @@ describe('readAtomicFileSync', () => {
     expect(readAtomicFileSync(file)).toBeNull();
   });
 
+  it('rethrows non-ENOENT read failures instead of reporting empty', () => {
+    const file = makeFile('real-content');
+    // 文件明明在,只是被 Windows 文件锁/权限/瞬时 I/O 挡住。返回 null 会让调用方
+    // 解释成空状态,那次写入随即用空状态派生的快照覆盖真实内容。
+    const spy = vi.spyOn(fs, 'readFileSync').mockImplementation(() => {
+      throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+    });
+    try {
+      expect(() => readAtomicFileSync(file)).toThrow(/EBUSY/);
+    } finally {
+      spy.mockRestore();
+    }
+    // 真的不存在时仍按"空"处理。
+    fs.rmSync(file);
+    expect(readAtomicFileSync(file)).toBeNull();
+  });
+
   it('throws instead of reporting empty when the .bak cannot be restored', () => {
     const file = makeFile('only-snapshot');
     fs.renameSync(file, `${file}.bak`);

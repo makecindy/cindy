@@ -30,6 +30,13 @@ const leases = new Map<string, number>();
 /** 因租约冲突被推迟的删除:绝对路径 → 执行前的最后一道否决条件。 */
 const deferred = new Map<string, DeferredRemoval>();
 
+/**
+ * 已经启动、尚未结束的删除:绝对路径 → 该删除的 Promise。
+ * `skipIf` 只能挡住"还没开始"的删除;已经在跑的那笔必须能被复用方等到,否则它会
+ * 落在刚重建出来的内容上(见 `settleCachePathRemovals`)。
+ */
+const inFlight = new Map<string, Promise<void>>();
+
 interface DeferredRemoval {
   /** 返回 true 表示放弃删除(例如该版本目录已重新成为 current)。 */
   skipIf?: () => boolean;
@@ -98,12 +105,47 @@ export async function removeCachePath(
   }
   deferred.delete(target);
   if (options.skipIf?.()) return false;
-  try {
-    await fs.promises.rm(target, { recursive: true, force: true });
-  } catch (error) {
-    options.onError?.(error);
-  }
+  await runRemoval(target, options);
   return true;
+}
+
+/**
+ * 真正执行删除,并把它登记进 `inFlight`。
+ *
+ * 登记是必需的:`skipIf` 只在**启动前**核对一次,一旦 rm 开始跑,调用方就再也无法
+ * 取消或等待它。旧槽删除正在途中、而重新添加同名同源的来源刚好把新版本落进同一个
+ * 槽,那笔在途删除就会把新内容删掉(配置有效但来源持续报缓存缺失)。要复用某个路径
+ * 的调用方必须先 `settleCachePathRemovals` 等它结束。
+ */
+async function runRemoval(target: string, options: DeferredRemoval): Promise<void> {
+  const task = fs.promises
+    .rm(target, { recursive: true, force: true })
+    .catch((error: unknown) => {
+      options.onError?.(error);
+    });
+  inFlight.set(target, task);
+  try {
+    await task;
+  } finally {
+    if (inFlight.get(target) === task) inFlight.delete(target);
+  }
+}
+
+/**
+ * 等待与该路径重叠的在途删除全部结束。**复用一个刚被删除过的路径前必须调用**
+ * (例如移除来源后重新添加同名同源会复用同一个缓存槽)。
+ *
+ * 循环是因为等待期间可能又有租约释放、触发新的推迟删除;上限只是防御性兜底,
+ * 正常情况下一两轮就空了。
+ */
+export async function settleCachePathRemovals(target: string): Promise<void> {
+  for (let round = 0; round < 8; round += 1) {
+    const pending = [...inFlight]
+      .filter(([path]) => overlaps(path, target))
+      .map(([, task]) => task);
+    if (pending.length === 0) return;
+    await Promise.allSettled(pending);
+  }
 }
 
 /** 执行所有已不再被租约挡住的推迟删除。 */
@@ -112,9 +154,8 @@ function drainDeferred(): void {
     if (isCachePathLeased(target)) continue;
     deferred.delete(target);
     if (options.skipIf?.()) continue;
-    void fs.promises.rm(target, { recursive: true, force: true }).catch((error: unknown) => {
-      options.onError?.(error);
-    });
+    // 释放路径是同步的,这里不能 await;但删除会登记进 inFlight,复用方能等到它。
+    void runRemoval(target, options);
   }
 }
 
@@ -122,4 +163,5 @@ function drainDeferred(): void {
 export function resetCacheLeasesForTest(): void {
   leases.clear();
   deferred.clear();
+  inFlight.clear();
 }
