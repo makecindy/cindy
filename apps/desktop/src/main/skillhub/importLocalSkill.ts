@@ -23,7 +23,9 @@ import {
   classifyImportSourcePath,
   extractSkillMetadataFromMd,
   findZipSkillPackageRoot,
+  fitsUncompressedBudget,
   relativizeZipEntry,
+  resolveImportInstallPath,
   type ImportLocalErrorCode,
   type SkillImportMetadata,
 } from './importLocalSkill.pure.js';
@@ -35,6 +37,8 @@ const log = createLogger('skillhub:importLocal');
 
 const MAX_SKILL_ZIP = 200 * 1024 * 1024;
 const MAX_SKILL_UNCOMPRESSED = 500 * 1024 * 1024;
+/** Cap a single SKILL.md inflate/read so inspect cannot OOM on one entry. */
+const MAX_SKILL_MD = 2 * 1024 * 1024;
 const MAX_SKILL_ZIP_ENTRIES = 10_000;
 
 export interface InspectLocalParams {
@@ -64,10 +68,6 @@ export type ImportLocalResult =
 
 function rand(): string {
   return crypto.randomBytes(4).toString('hex');
-}
-
-function globalSkillsDir(): string {
-  return path.join(os.homedir(), '.agents', 'skills');
 }
 
 function backupsRoot(): string {
@@ -101,6 +101,56 @@ function busyMessage(skillName: string): string {
   if (owner === 'learn-apply') return `${skillName} 正在应用学习产物，请稍后再导入`;
   if (owner === 'local-import') return `${skillName} 正在导入中`;
   return `${skillName} 正在被其它安装任务占用`;
+}
+
+function getDeclaredUncompressedSize(entry: JSZip.JSZipObject): number | null {
+  const raw = (entry as { _data?: { uncompressedSize?: unknown } })._data?.uncompressedSize;
+  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : null;
+}
+
+/**
+ * Inflate a zip entry with a hard byte ceiling so a zip bomb cannot fully
+ * materialize into memory before the budget check runs.
+ */
+async function readZipEntryLimited(
+  entry: JSZip.JSZipObject,
+  maxBytes: number,
+): Promise<Buffer> {
+  const declared = getDeclaredUncompressedSize(entry);
+  if (declared != null && declared > maxBytes) {
+    throw new Error(`zip entry 解压后大小超过上限：${maxBytes} bytes`);
+  }
+
+  // JSZip typings expose a DOM ReadableStream; runtime returns a Node stream.
+  const stream = entry.nodeStream('nodebuffer') as unknown as NodeJS.ReadableStream & {
+    destroy?: (error?: Error) => void;
+  };
+  return await new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let settled = false;
+    const fail = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      stream.destroy?.(err);
+      reject(err);
+    };
+    stream.on('data', (chunk: Buffer | string) => {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += buf.byteLength;
+      if (total > maxBytes) {
+        fail(new Error(`zip entry 解压后大小超过上限：${maxBytes} bytes`));
+        return;
+      }
+      chunks.push(buf);
+    });
+    stream.on('error', (err: Error) => fail(err));
+    stream.on('end', () => {
+      if (settled) return;
+      settled = true;
+      resolve(Buffer.concat(chunks));
+    });
+  });
 }
 
 async function moveDir(src: string, dst: string): Promise<void> {
@@ -144,12 +194,27 @@ async function loadPackageFromPath(filePath: string): Promise<
   if (kindResult.kind === 'md') {
     let content: string;
     try {
+      const st = await fs.promises.stat(abs);
+      if (st.size > MAX_SKILL_MD) {
+        return {
+          ok: false,
+          errorCode: 'EXTRACT_FAILED',
+          message: `SKILL.md 过大：${st.size} bytes（上限 ${MAX_SKILL_MD}）`,
+        };
+      }
       content = await fs.promises.readFile(abs, 'utf-8');
     } catch (err) {
       return {
         ok: false,
         errorCode: 'INVALID_FILE',
         message: `读取文件失败：${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+    if (Buffer.byteLength(content, 'utf-8') > MAX_SKILL_MD) {
+      return {
+        ok: false,
+        errorCode: 'EXTRACT_FAILED',
+        message: `SKILL.md 过大（上限 ${MAX_SKILL_MD} bytes）`,
       };
     }
     const meta = extractSkillMetadataFromMd(content);
@@ -226,9 +291,39 @@ async function loadPackageFromPath(filePath: string): Promise<
     return { ok: false, errorCode: 'MISSING_SKILL_MD', message: '压缩包中未找到 SKILL.md' };
   }
 
+  // Reject zip bombs before any inflate: sum declared uncompressed sizes for
+  // package file entries (directories ignored). Unknown sizes are skipped here
+  // and enforced by the streaming reader below.
+  const declaredSizes: number[] = [];
+  for (const entry of entries) {
+    if (entry.dir) continue;
+    const rel = relativizeZipEntry(entry.name, packageRoot);
+    if (rel == null || rel === '') continue;
+    const declared = getDeclaredUncompressedSize(entry);
+    if (declared == null) continue;
+    declaredSizes.push(declared);
+  }
+  if (!fitsUncompressedBudget(declaredSizes, MAX_SKILL_UNCOMPRESSED)) {
+    return {
+      ok: false,
+      errorCode: 'EXTRACT_FAILED',
+      message: `zip 解压后大小超过上限：${MAX_SKILL_UNCOMPRESSED} bytes`,
+    };
+  }
+
+  const skillMdDeclared = getDeclaredUncompressedSize(skillEntry);
+  if (skillMdDeclared != null && skillMdDeclared > MAX_SKILL_MD) {
+    return {
+      ok: false,
+      errorCode: 'EXTRACT_FAILED',
+      message: `SKILL.md 过大：${skillMdDeclared} bytes（上限 ${MAX_SKILL_MD}）`,
+    };
+  }
+
   let skillMdContent: string;
   try {
-    skillMdContent = await skillEntry.async('string');
+    const skillMdBuf = await readZipEntryLimited(skillEntry, MAX_SKILL_MD);
+    skillMdContent = skillMdBuf.toString('utf8');
   } catch (err) {
     return {
       ok: false,
@@ -259,7 +354,11 @@ async function loadPackageFromPath(filePath: string): Promise<
             continue;
           }
           await fs.promises.mkdir(path.dirname(dest), { recursive: true });
-          const buf = await entry.async('nodebuffer');
+          const remaining = MAX_SKILL_UNCOMPRESSED - totalUncompressedBytes;
+          if (remaining <= 0) {
+            throw new Error(`zip 解压后大小超过上限：${MAX_SKILL_UNCOMPRESSED} bytes`);
+          }
+          const buf = await readZipEntryLimited(entry, remaining);
           totalUncompressedBytes += buf.byteLength;
           if (totalUncompressedBytes > MAX_SKILL_UNCOMPRESSED) {
             throw new Error(`zip 解压后大小超过上限：${MAX_SKILL_UNCOMPRESSED} bytes`);
@@ -284,17 +383,7 @@ function resolveFinalDir(
   name: string,
   installPath?: string,
 ): { finalDir: string } | { errorCode: ImportLocalErrorCode; message: string } {
-  if (installPath) {
-    const finalDir = path.normalize(installPath);
-    if (path.basename(finalDir) !== name) {
-      return {
-        errorCode: 'INTERNAL',
-        message: `installPath 的 basename "${path.basename(finalDir)}" 与 name "${name}" 不符`,
-      };
-    }
-    return { finalDir };
-  }
-  return { finalDir: path.join(globalSkillsDir(), name) };
+  return resolveImportInstallPath(name, installPath, os.homedir());
 }
 
 async function reconcileProjectLinks(...skillPaths: string[]): Promise<string | undefined> {

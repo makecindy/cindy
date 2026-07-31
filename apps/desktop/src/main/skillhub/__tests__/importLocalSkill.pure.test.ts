@@ -4,8 +4,10 @@ import {
   classifyImportSourcePath,
   extractSkillMetadataFromMd,
   findZipSkillPackageRoot,
+  fitsUncompressedBudget,
   isValidImportSkillName,
   relativizeZipEntry,
+  resolveImportInstallPath,
 } from '../importLocalSkill.pure';
 
 describe('isValidImportSkillName', () => {
@@ -109,5 +111,48 @@ description: x
 ---
 `),
     ).toMatchObject({ ok: false, errorCode: 'INVALID_NAME' });
+  });
+});
+
+describe('resolveImportInstallPath', () => {
+  const home = '/Users/sam';
+
+  it('defaults to global ~/.agents/skills/<name>', () => {
+    expect(resolveImportInstallPath('demo', undefined, home)).toEqual({
+      finalDir: '/Users/sam/.agents/skills/demo',
+    });
+    expect(resolveImportInstallPath('demo', '  ', home)).toEqual({
+      finalDir: '/Users/sam/.agents/skills/demo',
+    });
+  });
+
+  it('accepts absolute project .agents/skills paths', () => {
+    expect(
+      resolveImportInstallPath('demo', '/repo/.agents/skills/demo', home),
+    ).toEqual({ finalDir: '/repo/.agents/skills/demo' });
+  });
+
+  it('rejects relative paths, basename mismatch, and non-skill roots', () => {
+    expect(resolveImportInstallPath('demo', 'relative/demo', home)).toMatchObject({
+      errorCode: 'INTERNAL',
+      message: expect.stringContaining('绝对路径'),
+    });
+    expect(
+      resolveImportInstallPath('demo', '/repo/.agents/skills/other', home),
+    ).toMatchObject({ errorCode: 'INTERNAL' });
+    expect(
+      resolveImportInstallPath('demo', '/tmp/demo', home),
+    ).toMatchObject({
+      errorCode: 'INTERNAL',
+      message: expect.stringContaining('.agents/skills'),
+    });
+  });
+});
+
+describe('fitsUncompressedBudget', () => {
+  it('accepts totals within the budget and rejects overflow / invalid sizes', () => {
+    expect(fitsUncompressedBudget([10, 20, 30], 100)).toBe(true);
+    expect(fitsUncompressedBudget([60, 50], 100)).toBe(false);
+    expect(fitsUncompressedBudget([-1], 100)).toBe(false);
   });
 });

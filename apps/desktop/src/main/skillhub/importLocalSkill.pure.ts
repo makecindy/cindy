@@ -3,6 +3,8 @@
  * No fs / Electron — unit-testable without I/O.
  */
 
+import path from 'node:path';
+
 import matter from 'gray-matter';
 
 import { parseAndValidateFrontmatter } from './frontmatterValidation.js';
@@ -159,4 +161,80 @@ export function classifyImportSourcePath(
     return { error: '单独导入时文件名须为 SKILL.md' };
   }
   return { error: '仅支持 .zip 压缩包或 SKILL.md 文件' };
+}
+
+function pathNameEquals(actual: string, expected: string): boolean {
+  return process.platform === 'win32'
+    ? actual.toLowerCase() === expected.toLowerCase()
+    : actual === expected;
+}
+
+/**
+ * Resolve the final install directory for a local import.
+ * - omit installPath → `~/.agents/skills/<name>`
+ * - otherwise require an absolute path whose basename is `name`, under
+ *   `<root>/.agents/skills/<name>` or `<root>/.claude/skills/<name>`
+ */
+export function resolveImportInstallPath(
+  name: string,
+  installPath: string | undefined,
+  homeDir: string,
+): { finalDir: string } | { errorCode: ImportLocalErrorCode; message: string } {
+  if (installPath == null || !installPath.trim()) {
+    return { finalDir: path.join(homeDir, '.agents', 'skills', name) };
+  }
+
+  const trimmed = installPath.trim();
+  if (!path.isAbsolute(trimmed)) {
+    return {
+      errorCode: 'INTERNAL',
+      message: 'installPath 必须是绝对路径',
+    };
+  }
+
+  const finalDir = path.normalize(trimmed);
+  if (!pathNameEquals(path.basename(finalDir), name)) {
+    return {
+      errorCode: 'INTERNAL',
+      message: `installPath 的 basename "${path.basename(finalDir)}" 与 name "${name}" 不符`,
+    };
+  }
+
+  const skillsDir = path.dirname(finalDir);
+  const discoveryDir = path.dirname(skillsDir);
+  if (!pathNameEquals(path.basename(skillsDir), 'skills')) {
+    return {
+      errorCode: 'INTERNAL',
+      message: 'installPath 必须位于 .agents/skills 或 .claude/skills 目录下',
+    };
+  }
+  const discoveryRoot = path.basename(discoveryDir);
+  if (
+    !pathNameEquals(discoveryRoot, '.agents') &&
+    !pathNameEquals(discoveryRoot, '.claude')
+  ) {
+    return {
+      errorCode: 'INTERNAL',
+      message: 'installPath 必须位于 .agents/skills 或 .claude/skills 目录下',
+    };
+  }
+
+  return { finalDir };
+}
+
+/**
+ * Running total of declared uncompressed sizes. Returns false as soon as the
+ * budget is exceeded (used to reject zip bombs before inflate).
+ */
+export function fitsUncompressedBudget(
+  sizes: ReadonlyArray<number>,
+  maxTotal: number,
+): boolean {
+  let total = 0;
+  for (const size of sizes) {
+    if (!Number.isFinite(size) || size < 0) return false;
+    total += size;
+    if (total > maxTotal) return false;
+  }
+  return true;
 }
