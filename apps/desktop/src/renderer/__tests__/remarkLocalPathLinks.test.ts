@@ -122,6 +122,26 @@ describe('remarkLocalPathLinks', () => {
     expect(linkUrls(runOnText('见 src/old~.ts'))).toEqual(['src/old~.ts']);
   });
 
+  it('未支持字符把 token 断开时,不从中段起匹配', () => {
+    // `( ) # %` 不在 SEG 里,会断开一条真实路径,而左边界不挡它们(review 实捉)。
+    // 判据是「同一 run 内已出现分隔符」,这类字符不需要逐个枚举。
+    expect(linkUrls(runOnText('见 packages/foo(bar)/src/index.ts'))).toEqual([]);
+    expect(linkUrls(runOnText('见 docs/50%off/a.md'))).toEqual([]);
+    expect(linkUrls(runOnText('见 docs/a#b/c.md'))).toEqual([]);
+    // 列表分隔符后允许重启;括号包裹整条路径照常识别。
+    expect(linkUrls(runOnText('改了 src/a.ts,src/b.ts'))).toEqual(['src/a.ts', 'src/b.ts']);
+    expect(linkUrls(runOnText('见(src/a.ts)'))).toEqual(['src/a.ts']);
+  });
+
+  it('行号后缀被截断时整条拒绝,不留错误行号', () => {
+    // 正则的右边界只管到扩展名,整段 LINE_SUFFIX 之后没有边界(review 实捉)。
+    expect(linkUrls(runOnText('见 src/a.ts:12345678'))).toEqual([]);
+    expect(linkUrls(runOnText('见 src/a.ts:12foo'))).toEqual([]);
+    // 合法行号照常;`:` 不进右边界,句末冒号不判废整条路径。
+    expect(linkUrls(runOnText('见 src/a.png:12 行'))).toEqual(['src/a.png:12']);
+    expect(linkUrls(runOnText('见 src/a.ts:'))).toEqual(['src/a.ts']);
+  });
+
   it('含空格路径的中段不动 —— 切出的后缀是错误目标', () => {
     // 左边界不挡空格,正则会从空格后重新起匹配(review 实捉)。
     expect(linkUrls(runOnText('日志在 C:\\Program Files\\Cindy\\app.log'))).toEqual([]);

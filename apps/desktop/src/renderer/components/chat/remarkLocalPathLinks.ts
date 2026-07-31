@@ -120,32 +120,63 @@ interface PathMatch {
 }
 
 /**
- * 命中是否落在**含空格路径的中段**。含空格路径本就不支持(词法要求段内无空白),从空格后
- * 重新起匹配只会切出一个错误后缀:`C:\Program Files\Cindy\app.log` → `Files\Cindy\app.log`,
- * join 到 workdir 后指向一个不存在的地址;而它形状上是「分隔符+扩展名」= 非歧义,断链时
- * 还会被乐观点亮、点开错误目标(PR #1144 review 实捉)。
+ * 边界后置过滤 —— 一条统一判据,替掉「一轮补一个字符类」。
  *
- * 判据:左边是空格 / 制表符,且它前面那个连续非空白片段**含分隔符、但不以扩展名收尾**。
+ * 词法层是「在散文里用正向正则定位路径」(按空白切 token 再剥边在中文里不成立,见本文件
+ * 头部的说明),所以必须自己保证:**命中要独占它所在的路径 token,不许从中段起、也不许把
+ * 紧跟的字符截断**。前四轮 review 各捉到这条规格的一个缺口(扩展名长度 / 右边界字符 /
+ * 空格中段 / `( ) # %` 等未支持字符 + 行号后缀),逐个补字符类注定一轮一个,故改成:
  *
- * 「不以扩展名收尾」这一条不能省 —— 只判「含分隔符」会把 `src/a.ts src/b.ts` 这种空格
- * 相邻的两条真路径连坐掉:前一条以 `.ts` 收尾说明它自己就是一条完整路径,而不是被空格
- * 截断的前半段。已知误伤:`见 /etc src/a.ts` 里的 `src/a.ts` 会被拒(前片段 `/etc` 含
- * 分隔符、无扩展名)。代价是少点亮一条、文本仍可读,方向与 DESIGN.md §14.5「宁可少点亮
- * 一个真目录,不可多点亮一片假链接」一致。
+ *   左侧:同一非空白 run 内,命中点之前若已出现路径分隔符 → 拒绝(说明我们落在
+ *         `packages/foo(bar)/src/index.ts`、`docs/50%off/a.md` 这类**未支持字符**把
+ *         token 断开后的中段);列表分隔符(`, ; , ; 、`)紧邻时允许重启 —— 那是
+ *         `src/a.ts,src/b.ts` 这种真的两条路径。
+ *         命中点前是空白时,看空白前那个 run:含分隔符**且不以扩展名收尾** → 拒绝
+ *         (`C:\Program Files\Cindy\app.log` 被空格截断的后半段)。「不以扩展名收尾」
+ *         不能省,否则 `src/a.ts src/b.ts` 里的第二条会被连坐。
+ *   右侧:命中之后紧跟 token 字符 → 拒绝。正则自带的右边界只管到扩展名,整段行号后缀
+ *         之后没有边界,于是 `src/a.ts:12345678` 被截成 `:1234567`、`src/a.ts:12foo`
+ *         截成 `:12`(错误行号 + 正文残留)。
  *
- * 换行不算:`\n` 之后是新的一行,不是同一条被空格截断的路径。
+ * 好处是 `( ) # % [ ]` 之类**不需要枚举**:它们由「run 前缀已含分隔符」自动覆盖,以后
+ * 出现别的未支持字符也一样,不必再来一轮。
+ *
+ * 已知误伤(显式取舍,有用例钉住):散文里紧挨着一个「含分隔符、无扩展名」的片段时会被
+ * 连坐,如 `见 /etc src/a.ts`。代价是少点亮一条、文本仍可读,方向与 DESIGN.md §14.5
+ * 「宁可少点亮一个真目录,不可多点亮一片假链接」一致。
  */
-function startsMidSpacedPath(text: string, start: number): boolean {
+const TOKEN_CHAR_RE = new RegExp(`[A-Za-z0-9_~@+\\-${CJK}\\\\/]`);
+const LIST_DELIM_RE = /[,;\uff0c\uff1b\u3001]/;
+const SEP_IN_RUN_RE = /[\\/]/;
+const TRAILING_EXT_RE = /\.[A-Za-z0-9]{1,10}$/;
+
+/** 命中是否从路径 token 的**中段**起(见上方说明)。 */
+function startsMidPathToken(text: string, start: number): boolean {
   if (start === 0) return false;
-  if (text[start - 1] !== ' ' && text[start - 1] !== '\t') return false;
+  // (1) 同一非空白 run 内已经出现过分隔符 → 中段起匹配。
+  let runStart = start - 1;
+  while (runStart >= 0 && !/\s/.test(text[runStart])) runStart -= 1;
+  const runPrefix = text.slice(runStart + 1, start);
+  if (runPrefix.length > 0) {
+    if (!SEP_IN_RUN_RE.test(runPrefix)) return false;
+    return !LIST_DELIM_RE.test(text[start - 1]);
+  }
+  // (2) 命中点前是空白:看空白前那个 run 是不是「被空格截断的前半段」。
+  //     只跨空格 / 制表符,不跨换行 —— 换行之后是新的一行,不是同一条路径。
   let i = start - 1;
   while (i >= 0 && (text[i] === ' ' || text[i] === '\t')) i -= 1;
-  if (i < 0) return false;
+  if (i < 0 || i === start - 1) return false;
   let j = i;
   while (j >= 0 && !/\s/.test(text[j])) j -= 1;
-  const prev = text.slice(j + 1, i + 1);
-  if (!prev.includes('/') && !prev.includes('\\')) return false;
-  return !/\.[A-Za-z0-9]{1,10}$/.test(prev);
+  const prevRun = text.slice(j + 1, i + 1);
+  if (!SEP_IN_RUN_RE.test(prevRun)) return false;
+  return !TRAILING_EXT_RE.test(prevRun);
+}
+
+/** 命中之后是否紧跟 token 字符(= 我们截断了它,见上方说明)。 */
+function endsMidPathToken(text: string, end: number): boolean {
+  const next = text[end];
+  return next !== undefined && TOKEN_CHAR_RE.test(next);
 }
 
 /** 在一段纯文本里定位所有"带分隔符、可解析形状"的路径 token。 */
@@ -159,8 +190,9 @@ function findPathMatches(text: string): PathMatch[] {
     const pathPart = splitLocalLineSuffix(value).href;
     if (!looksLikeFilePath(pathPart)) continue;
     const start = m.index + (m[0].length - value.length);
-    // 含空格路径的中段:切出的后缀是错误目标(见 startsMidSpacedPath 的说明)。
-    if (startsMidSpacedPath(text, start)) continue;
+    // 边界后置过滤:命中必须独占它所在的路径 token(见 startsMidPathToken 的说明)。
+    if (startsMidPathToken(text, start)) continue;
+    if (endsMidPathToken(text, start + value.length)) continue;
     matches.push({ start, end: start + value.length, value });
   }
   return matches;

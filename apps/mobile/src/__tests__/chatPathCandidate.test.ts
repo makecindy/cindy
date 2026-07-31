@@ -506,6 +506,30 @@ describe('findBareFilePathMatch(正文纯文本裸路径词法)', () => {
     expect(allValues('见 src/old~.ts')).toEqual(['src/old~.ts']);
   });
 
+  it('未支持字符把 token 断开时,不从中段起匹配', () => {
+    // `( ) # %` 等字符不在 SEG 里,会把一条真实路径断开,而左边界不挡它们 → 正则从
+    // 断点后重新起匹配,切出的后缀(往往还是绝对路径)是错误目标,断链时会被乐观点亮
+    // (PR #1144 review 实捉)。判据是「同一 run 内已出现分隔符」,所以这类字符**不需要
+    // 逐个枚举**,以后出现别的未支持字符也自动覆盖。
+    expect(allValues('见 packages/foo(bar)/src/index.ts')).toEqual([]);
+    expect(allValues('见 docs/50%off/a.md')).toEqual([]);
+    expect(allValues('见 docs/a#b/c.md')).toEqual([]);
+    // 但列表分隔符后允许重启 —— 那是真的两条路径,不是被断开的一条。
+    expect(allValues('改了 src/a.ts,src/b.ts')).toEqual(['src/a.ts', 'src/b.ts']);
+    // 括号包裹整条路径(而不是出现在路径中间)照常识别。
+    expect(allValues('见(src/a.ts)')).toEqual(['src/a.ts']);
+  });
+
+  it('行号后缀被截断时整条拒绝,不留错误行号', () => {
+    // 正则自带的右边界只管到扩展名,整段 LINE_SUFFIX 之后没有边界:超长行号会被截成
+    // 合法长度、非数字尾巴会被丢在正文里,点开还会跳到错误行(review 实捉)。
+    expect(allValues('见 src/a.ts:12345678')).toEqual([]);
+    expect(allValues('见 src/a.ts:12foo')).toEqual([]);
+    // 合法行号照常;`:` 不进右边界,所以句末冒号不会把整条路径判废。
+    expect(allValues('见 src/a.png:12 行')).toEqual(['src/a.png:12']);
+    expect(allValues('见 src/a.ts:')).toEqual(['src/a.ts']);
+  });
+
   it('含空格路径的中段不识别 —— 切出的后缀是错误目标', () => {
     // 含空格路径本就不支持(段内不许有空白),但左边界不挡空格,正则会从空格后重新起
     // 匹配,切出一个错误后缀 join 到 workdir 上;它形状是「分隔符+扩展名」= 非歧义,
