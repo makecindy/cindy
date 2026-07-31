@@ -140,18 +140,18 @@ describe('model price override sparse persistence', () => {
     const values = __testing.sparseValues(
       {
         currency: 'CNY',
-        inputPerMtok: 2,
-        outputPerMtok: 6,
-        cacheReadPerMtok: 0.2,
+        inputPerMtok: 3,
+        outputPerMtok: 9,
+        cacheReadPerMtok: 0.3,
         cacheCreatePerMtok: null,
       },
       reference,
     );
     expect(values).toEqual({
       currency: 'CNY',
-      inputPerMtok: 2,
-      outputPerMtok: 6,
-      cacheReadPerMtok: 0.2,
+      inputPerMtok: 3,
+      outputPerMtok: 9,
+      cacheReadPerMtok: 0.3,
       cacheCreatePerMtok: null,
     });
     expect(
@@ -175,9 +175,9 @@ describe('model price override sparse persistence', () => {
       inputTokenPriceBands: [
         {
           minInputTokens: 200_001,
-          inputPerMtok: 2,
-          outputPerMtok: 6,
-          cacheReadPerMtok: 0.2,
+          inputPerMtok: 6,
+          outputPerMtok: 18,
+          cacheReadPerMtok: 0.6,
         },
       ],
     });

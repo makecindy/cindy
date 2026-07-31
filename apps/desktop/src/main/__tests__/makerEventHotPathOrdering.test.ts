@@ -373,7 +373,9 @@ describe('maker:event hot path ordering', () => {
     expect(claudeDoneSource).toContain('billingRoute,');
     expect(claudeDoneSource).toContain('recordTurnSpend(turnMoney);');
     expect(claudeDoneSource).toContain('recordSessionTurnSpend(session.id, turnMoney);');
-    expect(claudeDoneSource).toContain('money: m.money,');
+    expect(claudeDoneSource).toContain(
+      "money: m.money?.kind === 'actual-cost' ? m.money : null,",
+    );
     // 订阅轮 (Claude Anthropic 订阅或 bridge 订阅直连) 打 #billing=subscription 标记,
     // 仪表盘按订阅估算价折算; 其余轮仍写归一化裸 id。
     expect(claudeDoneSource).toContain(

@@ -257,17 +257,54 @@ function mergedQuote(
     values.cacheCreatePerMtok === null
       ? undefined
       : (values.cacheCreatePerMtok ?? reference?.cacheCreatePerMtok);
+  const currencyChanged =
+    values.currency !== undefined &&
+    reference !== undefined &&
+    values.currency !== reference.currency;
+  const projectBandValue = (
+    bandValue: number | undefined,
+    referenceValue: number | undefined,
+    overrideValue: number,
+  ): number | undefined => {
+    if (bandValue === undefined) return undefined;
+    // A currency switch gives us a new base quote, not an exchange rate. Preserve each remote
+    // tier's relative multiplier instead of either relabelling old values or flattening every
+    // long-context tier to the new base price.
+    return currencyChanged && referenceValue !== undefined && referenceValue > 0
+      ? (bandValue / referenceValue) * overrideValue
+      : overrideValue;
+  };
   const inputTokenPriceBands = reference?.inputTokenPriceBands?.map((band) => {
     const merged = { ...band };
-    if (values.inputPerMtok !== undefined) merged.inputPerMtok = values.inputPerMtok;
-    if (values.outputPerMtok !== undefined) merged.outputPerMtok = values.outputPerMtok;
+    if (values.inputPerMtok !== undefined) {
+      merged.inputPerMtok = projectBandValue(
+        band.inputPerMtok,
+        reference.inputPerMtok,
+        values.inputPerMtok,
+      );
+    }
+    if (values.outputPerMtok !== undefined) {
+      merged.outputPerMtok = projectBandValue(
+        band.outputPerMtok,
+        reference.outputPerMtok,
+        values.outputPerMtok,
+      );
+    }
     if (values.cacheReadPerMtok === null) delete merged.cacheReadPerMtok;
     else if (values.cacheReadPerMtok !== undefined) {
-      merged.cacheReadPerMtok = values.cacheReadPerMtok;
+      merged.cacheReadPerMtok = projectBandValue(
+        band.cacheReadPerMtok,
+        reference.cacheReadPerMtok,
+        values.cacheReadPerMtok,
+      );
     }
     if (values.cacheCreatePerMtok === null) delete merged.cacheCreatePerMtok;
     else if (values.cacheCreatePerMtok !== undefined) {
-      merged.cacheCreatePerMtok = values.cacheCreatePerMtok;
+      merged.cacheCreatePerMtok = projectBandValue(
+        band.cacheCreatePerMtok,
+        reference.cacheCreatePerMtok,
+        values.cacheCreatePerMtok,
+      );
     }
     return merged;
   });

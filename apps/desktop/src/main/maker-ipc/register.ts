@@ -3163,7 +3163,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             modelUsageWrites.push(recordModelTurnUsage({
               agentKind: 'claude-code',
               model: isClaudeSubscriptionValueRow ? claudeSubscriptionUsageModelKey(m.model) : m.model,
-              money: m.money,
+              // daily_model_usage does not persist RegionalMoney.kind. Keep reference estimates
+              // out of this actual-cost row so they cannot be reconstructed as real API spend.
+              money: m.money?.kind === 'actual-cost' ? m.money : null,
               inputTokensDelta: m.deltas.inputTokens,
               outputTokensDelta: m.deltas.outputTokens,
               cacheReadTokensDelta: m.deltas.cacheReadTokens,

@@ -322,7 +322,10 @@ async function cleanupLegacyCatalogCache(): Promise<void> {
 
 let activeLoaded = false;
 let activeInflight: Promise<Catalog> | null = null;
-let catalogRefreshInflight: Promise<Catalog> | null = null;
+let catalogRefreshInflight: {
+  sourceKey: string;
+  promise: Promise<Catalog>;
+} | null = null;
 let activeCatalogSourceKey: string | null = null;
 let endpointReloadGeneration = 0;
 let endpointReloadInflight: {
@@ -467,11 +470,23 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
  */
 export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
   await ensureActiveCatalogLoaded();
-  if (catalogRefreshInflight) return catalogRefreshInflight;
-  const flight = loadCatalogWithSource(buildSource(), io)
+  const sourceConfig = buildSource();
+  const sourceKey = catalogSourceKey(sourceConfig);
+  if (catalogRefreshInflight?.sourceKey === sourceKey) {
+    return catalogRefreshInflight.promise;
+  }
+  const generation = endpointReloadGeneration;
+  const flight = loadCatalogWithSource(sourceConfig, io)
     .then(({ catalog, source }) => {
       if (source === 'bundled') {
         throw new Error('catalog refresh exhausted configured sources; keeping current snapshot');
+      }
+      if (
+        endpointReloadGeneration !== generation ||
+        activeCatalogSourceKey !== sourceKey ||
+        catalogSourceKey(buildSource()) !== sourceKey
+      ) {
+        return getActiveCatalog();
       }
       setProviderModelsFromCatalog('xai', catalog);
       setModelRegistryFromCatalog(catalog);
@@ -479,9 +494,9 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
       return getActiveCatalog();
     })
     .finally(() => {
-      if (catalogRefreshInflight === flight) catalogRefreshInflight = null;
+      if (catalogRefreshInflight?.promise === flight) catalogRefreshInflight = null;
     });
-  catalogRefreshInflight = flight;
+  catalogRefreshInflight = { sourceKey, promise: flight };
   return flight;
 }
 

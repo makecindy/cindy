@@ -10,6 +10,10 @@ const h = vi.hoisted(() => ({
     source: Record<string, unknown>;
     resolve: (catalog: unknown) => void;
   }>,
+  refreshLoads: [] as Array<{
+    source: Record<string, unknown>;
+    resolve: (result: unknown) => void;
+  }>,
 }));
 
 vi.mock('electron', () => ({
@@ -26,6 +30,12 @@ vi.mock('@cindy/model-providers', async (importOriginal) => {
       (source: Record<string, unknown>) =>
         new Promise((resolve) => {
           h.loads.push({ source, resolve });
+        }),
+    ),
+    loadCatalogWithSource: vi.fn(
+      (source: Record<string, unknown>) =>
+        new Promise((resolve) => {
+          h.refreshLoads.push({ source, resolve });
         }),
     ),
   };
@@ -107,13 +117,17 @@ import { getActiveCatalog } from '../active-catalog.js';
 import {
   __testing,
   ensureActiveCatalogLoaded,
+  refreshActiveCatalogFromSource,
   reloadActiveCatalogForEndpointChange,
   shouldDisableCatalogFetch,
 } from '../createDesktopProviderService.js';
 
-function catalogNamed(name: string): Catalog {
+function catalogNamed(name: string, updatedAt?: string): Catalog {
   return {
     ...BUNDLED_CATALOG,
+    ...(updatedAt && BUNDLED_CATALOG.modelRegistry
+      ? { modelRegistry: { ...BUNDLED_CATALOG.modelRegistry, updatedAt } }
+      : {}),
     providers: BUNDLED_CATALOG.providers.map((provider, index) =>
       index === 0 ? { ...provider, name } : provider,
     ),
@@ -217,5 +231,41 @@ describe('provider catalog realm reload', () => {
     h.loads[2]!.resolve(catalogNamed('catalog-cn-latest'));
     await cnReload;
     expect(activeMarker()).toBe('catalog-cn-latest');
+  });
+
+  it('ignores an automatic refresh response from a superseded realm', async () => {
+    const staleRefresh = refreshActiveCatalogFromSource();
+    await Promise.resolve();
+    expect(h.refreshLoads[0]?.source).toMatchObject({
+      baseUrl: 'https://model.cn.example',
+    });
+
+    h.endpoint = 'https://model.global.example';
+    const globalReloadIndex = h.loads.length;
+    const globalReload = reloadActiveCatalogForEndpointChange();
+    h.loads[globalReloadIndex]!.resolve(
+      catalogNamed('catalog-global-current', '2026-07-31T12:00:00.000Z'),
+    );
+    await globalReload;
+
+    const currentRefresh = refreshActiveCatalogFromSource();
+    await Promise.resolve();
+    expect(h.refreshLoads[1]?.source).toMatchObject({
+      baseUrl: 'https://model.global.example',
+    });
+    h.refreshLoads[1]!.resolve({
+      catalog: catalogNamed('catalog-global-refreshed', '2026-07-31T12:30:00.000Z'),
+      source: 'remote',
+    });
+    await currentRefresh;
+
+    h.refreshLoads[0]!.resolve({
+      catalog: catalogNamed('catalog-cn-stale', '2026-07-31T13:00:00.000Z'),
+      source: 'remote',
+    });
+    await staleRefresh;
+
+    expect(activeMarker()).toBe('catalog-global-current');
+    expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-07-31T12:30:00.000Z');
   });
 });
