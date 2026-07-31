@@ -888,7 +888,10 @@ export function GhostPluginPage() {
         />
       }
     >
-      <main className="min-h-0 w-full flex-1 overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]">
+      <main
+        data-cindy-skin-transparent-layer="true"
+        className="min-h-0 w-full flex-1 overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]"
+      >
         <PluginManagementPage>
           <header className="plugin-motion-page-header pb-2">
             <div className="min-w-0">
@@ -1015,7 +1018,13 @@ export function GhostPluginPage() {
             ) : null}
 
             {catalogItems.length > 0 ? (
-              <div className={cn('plugin-motion-stagger', PLUGIN_MANAGEMENT_CARD_GRID_CLASS)}>
+              <div
+                className={cn(
+                  'plugin-motion-stagger',
+                  PLUGIN_MANAGEMENT_CARD_GRID_CLASS,
+                  legacyRecoveryStatus && 'mt-3',
+                )}
+              >
                 {catalogItems.map((catalogItem) =>
                   catalogItem.kind === 'installed' ? (
                     <GhostPluginCard

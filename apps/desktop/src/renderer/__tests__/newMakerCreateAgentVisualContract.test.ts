@@ -212,6 +212,11 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(vendorSwitcherSource).toContain('bg-[var(--create-agent-segment-track-bg)]');
     expect(vendorSwitcherSource).toContain('text-[var(--create-agent-segment-inactive-text)]');
     expect(vendorSwitcherSource).toContain('border-[var(--create-agent-control-border)]');
+    expect(vendorSwitcherSource).toContain('bg-[var(--model-agent-switch-track-bg)]');
+    expect(vendorSwitcherSource).toContain('border-[var(--model-agent-switch-border)]');
+    expect(vendorSwitcherSource).toContain('bg-[var(--model-agent-switch-selected-bg)]');
+    expect(vendorSwitcherSource).toContain('text-[var(--model-agent-switch-selected-text)]');
+    expect(vendorSwitcherSource).toContain('text-[var(--model-agent-switch-inactive-text)]');
 
     // 权限/模型 trigger 已统一为裸态无框(create-agent 与会话内共用同一套),不再用 create-agent-control 边框
     expect(permissionSelectorSource).not.toContain('border-[var(--create-agent-control-border)]');

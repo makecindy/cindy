@@ -17,7 +17,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq, lt, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, lt, ne, or, sql } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 
 import { getDbClient } from '../localDb/client/current';
@@ -53,6 +53,12 @@ function defaultDb(): LedgerDb {
  * 'profile-avatar':用户自定义头像(设置 → 用户卡片编辑),refId = 登录用户
  * id。跨会话持久(removeSessionRefs 不碰),同 refId 只保留最新指纹——换头像时
  * 由 profileEdit 用 removeRefsExceptHash 清旧引用,恢复默认头像时 removeRefs 清空。
+ * 'skin-background' / 'skin-brand-icon' / 'skin-brand-logo':当前用户正在使用
+ * 的 Cindy 皮肤图片，refId 恒为 'active'；与会话、插件安装生命周期解耦，
+ * 替换或恢复默认时由外观存储清理。
+ * 'skin-preset':用户保存的皮肤预设图片，refId =
+ * `<preset id>:background|brand-icon|brand-logo`；切换或恢复默认不清理，仅在
+ * 更新 / 删除对应预设时释放。
  */
 export type MediaRefKind =
   | 'message'
@@ -63,7 +69,11 @@ export type MediaRefKind =
   | 'ghost-deposit'
   | 'import'
   | 'integration-cache'
-  | 'profile-avatar';
+  | 'profile-avatar'
+  | 'skin-background'
+  | 'skin-brand-icon'
+  | 'skin-brand-logo'
+  | 'skin-preset';
 /** 出生来源类型。 */
 export type MediaOriginKind = 'ghost' | 'tool' | 'user' | 'integration';
 
@@ -191,6 +201,28 @@ export async function hasRef(
   return rows.length > 0;
 }
 
+/** 同一业务 ref/hash 下确认是否存在属于指定意识的出生引用。 */
+export async function hasGhostOwnedRef(
+  params: { hash: string; refKind: MediaRefKind; refId: string; ghostId: string },
+  db: LedgerDb = defaultDb(),
+): Promise<boolean> {
+  const rows = await db
+    .select({ one: sql`1` })
+    .from(mediaRefs)
+    .where(
+      and(
+        eq(mediaRefs.hash, params.hash),
+        eq(mediaRefs.refKind, params.refKind),
+        eq(mediaRefs.refId, params.refId),
+        eq(mediaRefs.originKind, 'ghost'),
+        eq(mediaRefs.originId, params.ghostId),
+      ),
+    )
+    .limit(1)
+    .all();
+  return rows.length > 0;
+}
+
 /**
  * 删会话的引用清理(会话删除钩子唯一入口):
  *   - session-attachment / import:refId 就是会话 id,直接删;
@@ -250,6 +282,26 @@ export async function removeRefs(
   const result = await db
     .delete(mediaRefs)
     .where(and(eq(mediaRefs.refKind, params.refKind), eq(mediaRefs.refId, params.refId)))
+    .run();
+  return result.changes;
+}
+
+/** 精确撤销某意识在指定业务引用上的出生权限，不影响其他来源的同 hash 引用。 */
+export async function removeGhostOwnedRefs(
+  params: { ghostId: string; refKinds: MediaRefKind[]; refId?: string },
+  db: LedgerDb = defaultDb(),
+): Promise<number> {
+  if (params.refKinds.length === 0) return 0;
+  const result = await db
+    .delete(mediaRefs)
+    .where(
+      and(
+        eq(mediaRefs.originKind, 'ghost'),
+        eq(mediaRefs.originId, params.ghostId),
+        inArray(mediaRefs.refKind, params.refKinds),
+        ...(params.refId ? [eq(mediaRefs.refId, params.refId)] : []),
+      ),
+    )
     .run();
   return result.changes;
 }

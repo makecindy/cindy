@@ -165,7 +165,10 @@ export function SkillhubHomeView() {
       searchPlaceholder={t('skillhub.home.search')}
       clearSearchLabel={t('skillhub.home.clearSearch')}
     >
-      <main className="relative h-full w-full overflow-x-hidden overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]">
+      <main
+        data-cindy-skin-transparent-layer="true"
+        className="relative h-full w-full overflow-x-hidden overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]"
+      >
         <PluginManagementPage className="gap-10">
           <header className="plugin-motion-page-header flex items-start justify-between gap-4">
             <div className="min-w-0 pt-1">

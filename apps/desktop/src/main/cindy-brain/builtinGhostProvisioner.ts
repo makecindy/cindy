@@ -98,6 +98,11 @@ export interface ProvisionDeps {
   /** 回收删除某个意识目录之前的钩子(index.ts 用它先熄灯沙箱,防 Windows 文件锁)。 */
   beforeRemove?: (id: string) => void | Promise<void>;
   /**
+   * 自定义整段删除边界。提供时替代 beforeRemove + 默认目录删除；调用方必须执行
+   * removePackage。index.ts 用它把 appearance marker、包删除与失败撤销放进同一串行区。
+   */
+  removeInstalled?: (id: string, removePackage: () => Promise<void>) => Promise<void>;
+  /**
    * 首次真实变更(装/覆盖/回收)动手前回调,整轮至多一次 —— index.ts 用它
    * 广播"播种进行中"的 UI 提示;指纹全一致的 no-op 轮永不触发(不闪提示)。
    */
@@ -370,8 +375,7 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
         if (!matchesAudience(config.get(id)?.audience, identity)) {
           if (seeded.has(id) && installedExists) {
             markApplyStart();
-            await deps.beforeRemove?.(id);
-            await fs.promises.rm(installedDir, { recursive: true, force: true });
+            await removeInstalledGhost(deps, id, installedDir);
             seeded.delete(id);
             outcome.removed.push(id);
             log?.info('builtin ghost removed: audience no longer matches', { id });
@@ -429,8 +433,7 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
       if (fs.existsSync(path.join(installedDir, GHOST_MANIFEST_FILE))) {
         try {
           markApplyStart();
-          await deps.beforeRemove?.(id);
-          await fs.promises.rm(installedDir, { recursive: true, force: true });
+          await removeInstalledGhost(deps, id, installedDir);
           outcome.removed.push(id);
           log?.info('builtin ghost removed: seed no longer bundled', { id });
         } catch (err) {
@@ -449,6 +452,20 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
     writeState(repoRootDir, { removed: [...tombstones], seeded: [...seeded].sort() }, log);
   }
   return outcome;
+}
+
+async function removeInstalledGhost(
+  deps: ProvisionDeps,
+  id: string,
+  installedDir: string,
+): Promise<void> {
+  const removePackage = () => fs.promises.rm(installedDir, { recursive: true, force: true });
+  if (deps.removeInstalled) {
+    await deps.removeInstalled(id, removePackage);
+    return;
+  }
+  await deps.beforeRemove?.(id);
+  await removePackage();
 }
 
 /** 「已抽离、可一键恢复」的内置意识摘要(设置页灰态占位行的数据源)。 */

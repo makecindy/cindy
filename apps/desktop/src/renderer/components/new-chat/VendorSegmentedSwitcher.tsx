@@ -77,6 +77,7 @@ export function VendorSegmentedSwitcher({
   ariaLabel,
 }: VendorSegmentedSwitcherProps) {
   const isCreateAgentVariant = visualVariant === 'create-agent';
+  const isDropdownVariant = visualVariant === 'dropdown';
   return (
     <div
       className={cn(
@@ -87,11 +88,17 @@ export function VendorSegmentedSwitcher({
               'bg-[var(--create-agent-segment-track-bg)]',
               'focus-within:ring-2 focus-within:ring-[var(--create-agent-focus-ring)]',
             ]
-          : [
-              'gap-0.5 p-[3px]',
-              dense ? 'h-[30px]' : 'h-9',
-              'bg-[var(--chat-input-bg)] dark:border dark:border-[var(--cmd-palette-border)]',
-            ],
+          : isDropdownVariant
+            ? [
+                'gap-0.5 border border-[var(--model-agent-switch-border)] p-[3px]',
+                dense ? 'h-[30px]' : 'h-9',
+                'bg-[var(--model-agent-switch-track-bg)]',
+              ]
+            : [
+                'gap-0.5 p-[3px]',
+                dense ? 'h-[30px]' : 'h-9',
+                'bg-[var(--chat-input-bg)] dark:border dark:border-[var(--cmd-palette-border)]',
+              ],
         disabled && 'opacity-60 pointer-events-none',
         className,
       )}
@@ -130,10 +137,8 @@ export function VendorSegmentedSwitcher({
                     'font-medium',
                     isCreateAgentVariant
                       ? 'border border-[var(--create-agent-control-border)] bg-[var(--create-agent-control-bg)] text-[var(--create-agent-control-text)]'
-                      : visualVariant === 'dropdown'
-                        ? // 浮层内:黑白反转强对比(同 emptyState CTA 的 token 对),
-                          // default 的 Card 色凸起在深色浮层表面上分不出来。
-                          'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]'
+                      : isDropdownVariant
+                        ? 'bg-[var(--model-agent-switch-selected-bg)] text-[var(--model-agent-switch-selected-text)]'
                         : [
                             // Active: Card 色凸起 + 1px Board 描边
                             'bg-[var(--chat-input-chip-bg)] text-[var(--chat-input-chip-text)] border border-[var(--cmd-palette-border)]',
@@ -144,7 +149,9 @@ export function VendorSegmentedSwitcher({
                     'font-normal',
                     isCreateAgentVariant
                       ? 'text-[var(--create-agent-segment-inactive-text)] hover:text-[var(--create-agent-control-text)]'
-                      : 'text-[var(--cmd-palette-item-meta)] hover:text-[var(--msg-assistant-text)]',
+                      : isDropdownVariant
+                        ? 'text-[var(--model-agent-switch-inactive-text)] hover:text-[var(--model-item-text)]'
+                        : 'text-[var(--cmd-palette-item-meta)] hover:text-[var(--msg-assistant-text)]',
                   ),
             )}
           >

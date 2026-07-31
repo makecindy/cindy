@@ -513,8 +513,8 @@ describe('FORGE_GUIDE', () => {
       'minimize',
       '最小化为浮动气泡',
       // 2026-07-25 skill 槽:随包捆绑 Agent Skills,声明一致性 + 全局作用域披露。
-      // 卡槽总数标记随 workspace 槽合入更新为十五个。
-      '十五个卡槽',
+      // 卡槽总数标记随 appearance 槽合入更新为十六个。
+      '十六个卡槽',
       '捆绑 Agent Skills(skill 槽)',
       'skill.items',
       'SKILL.md',
@@ -533,6 +533,11 @@ describe('FORGE_GUIDE', () => {
       '发布到官方插件仓的额外门禁',
       'makecindy/cindy-official-plugins',
       '四语言 locale 缺一不可',
+      '修改 Cindy 外观(appearance 槽)',
+      'appearance-request',
+      "palette: 'ocean'",
+      '已有图片不需要由本插件',
+      'msg.args.attachments',
       // 2026-07-29 寄存通道(#784):§2 的 media 类目 + §4.0.1 章节,
       // 以及 §6 沙箱红线里"改图只认名下媒体"的口径更新。
       "kind: 'deposit_media'",

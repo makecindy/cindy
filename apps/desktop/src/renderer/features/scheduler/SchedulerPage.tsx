@@ -504,7 +504,10 @@ export function SchedulerPage() {
   const isEmpty = !loading && !error && schedules.length === 0;
 
   return (
-    <div className="flex h-full w-full flex-col bg-[hsl(var(--content-area))]">
+    <div
+      data-cindy-skin-transparent-layer="true"
+      className="flex h-full w-full flex-col bg-[hsl(var(--content-area))]"
+    >
       {/* Header — 无 loading 守卫（CLAUDE.md §12：避免 loading→loaded 那一帧
           count / New 按钮突然出现导致整行抖动）。空数据时 New 按钮藏起来留给 EmptyState
           的主 CTA 接盘，避免双 CTA。 */}

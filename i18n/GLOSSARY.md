@@ -27,10 +27,12 @@
 | --- | --- | --- | --- | --- |
 | **Active** | 活跃 | アクティブ | 활성 | zh-CN: 活动（仅当英文含 Active） |
 | **Agent** | `Agent`（保留英文） | `Agent`（保留英文） | `Agent`（保留英文） | zh-CN: 智能体；zh-CN: 代理（仅当英文含 Agent） |
+| **Appearance style** | 外观风格 | 外観スタイル | 외관 스타일 | — |
 | **Author** | 作者 | 作成者 | 작성자 | zh-CN: 提交者（仅当英文含 Author）；zh-CN: 提出者（仅当英文含 Author） |
 | **Automation** | 自动化 | 自動化 | 자동화 | ja: オートメーション；ko: 오토메이션 |
 | **Balance** | 余额 | 残高 | 잔액 | zh-CN: 额度（仅当英文含 Balance） |
 | **Chat** | 对话 | チャット | 채팅 | zh-CN: 聊天 |
+| **Cindy appearance** | Cindy 外观 | Cindy の外観 | Cindy 외관 | — |
 | **Collaboration** | 协同 | 協同 | 협업 | zh-CN: 协作（仅当英文含 Collaboration） |
 | **Collapse** | 收起 | 折りたたむ | 접기 | zh-CN: 折叠（仅当英文含 Collapse） |
 | **Credits** | 点数 | クレジット | 크레딧 | zh-CN: 额度（仅当英文含 Credit） |
@@ -39,6 +41,7 @@
 | **Effort** | 推理强度 | 推論強度 | 추론 강도 | zh-CN: 思考强度；zh-CN: 思考深度；zh-CN: 推理深度；zh-CN: 努力程度；zh-CN: 推理力度；ja: 推論レベル；ja: 推論の強度 |
 | **Issue** | `Issue`（保留英文） | `Issue`（保留英文） | 이슈 | zh-CN: 工单；zh-CN: 议题；ja: 課題（仅当英文含 Issue） |
 | **Plugin** | 插件 | プラグイン | 플러그인 | zh-CN: Plugin；zh-CN: plugin |
+| **Plugin skin** | 插件皮肤 | プラグインスキン | 플러그인 스킨 | — |
 | **Project** | 项目 | プロジェクト | 프로젝트 | zh-CN: Project |
 | **Provider** | 供应商 | プロバイダー | 제공자 | zh-CN: 提供方；zh-CN: 提供商；ja: 提供元（仅当英文含 Provider）；ja: 事業者（仅当英文含 Provider）；ko: 공급자；ko: 제공업체 |
 | **Proxy** | `Proxy`（保留英文） | プロキシ | 프록시 | zh-CN: 代理（仅当英文含 Proxy） |
@@ -84,11 +87,13 @@
   - 豁免范围：`desktop:settings.computerUse.directControl.permissions.windowsHint`
 - **Agent** — 产品一级概念，四语统一保留英文原词。zh-CN 现状 44:5 已是主流；ja / ko 实测拉丁 Agent 同样是主流（59:38 / 58:39），故三语一致（2026-07 修正：此前误按抽样声明为片假名 エージェント / 한글 에이전트，那是少数派）。「代理」一词在中文 UI 里整体废弃——Agent 与 Proxy 都保留英文，不共用这个译名；「代理」按英文源分别登记在 agent / subagent / proxy 三条下（条件禁用），不再统一挂 proxy——统一登记会让自动替换无法确定目标：2026-07 一次批量重放就把 "Agent"→「代理」的 4 处和 "Subagent models" 的 4 处一并换成了 Proxy，产出「子 Proxy 模型」这种错译。引入术语表时全仓仅 9 处「代理」，已全部清理为 Agent / Subagent / Proxy。豁免 settings.remote 整段：那里的 agent 指 ssh-agent（英文原文即 "SSH agent" / "probe agent"），是与产品 Agent 同形的另一个概念。
   - 豁免范围：`desktop:settings.remote.`
+- **Appearance style** — 决定 Cindy 具体长相的互斥选择：普通主题、本地主题或插件皮肤只生效一个。显示模式单独决定 Light / Dark 变体。
 - **Author** — 中文用「作者」（现状 9:4）。典型的同模块自相矛盾：issueTracker 同一个页面里，assignee.labelAuthor 写「提交者」、list.filterAuthor 写「提出者」、visibility.onlyAuthorCanChange 写「作者」——同一个字段三种叫法。条件禁用避免误伤 Committer / Reporter 等其它英文词的正确译法。
 - **Automation** — 模块名 / 能力名用「自动化」（现状 88 处主流）；指单条实例时用「自动任务」，这是刻意保留的场景差异——一刀切会写出「查看你的自动化」这类别扭中文。特别注意 Automation 在本产品里指两个不同概念：scheduler 的定时任务，以及 settings.computerUse 的操控电脑能力；后者用「自动操作电脑 / 浏览器」，改成「自动化电脑」反而不通。因此不设 forbidden。（2026-07 修正：ja 原声明 オートメーション 仅 37/121，主流是 自動化；ko 的 자동화 75/121 本就正确。）豁免通讯录授权提示的两个 key:那里指的是 macOS 系统设置里的面板名,日文官方标签是「オートメーション」而非产品术语「自動化」——照产品术语改会让用户按提示在系统设置里找不到对应项,授权恢复路径直接断掉。zh-CN 的「自动化」与 ko 的「자동화」恰好就是各自的 macOS 官方标签,不受影响。
   - 豁免范围：`desktop:settings.contacts.import.permissionDenied`、`desktop:settings.contacts.ipcError.PERMISSION_DENIED`
 - **Balance** — 账户余额用「余额」。原先被并入「额度」（可用额度 / 额度更新于 / 剩余额度），与 Credits、Quota 混同。Balance 是「账上还剩多少」，Credits 是「可购买消耗的计数单位」，Quota 是「周期内上限」——三者是不同层面的量，中文必须分开。
 - **Chat** — 在本产品里 Chat 与 Session 指同一个东西，中文统一叫「对话」（2026-07 裁决），不再区分「聊天 / 会话 / 对话」三套说法。原先 22 处「聊天」（聊天正文、聊天区、聊天记录…）已一并改为「对话」。ja / ko 保留各自既有译法，两语没有中文这种三词混用问题。
+- **Cindy appearance** — 外观是显示模式、外观风格与字体设置的上位概念；插件皮肤是宿主受控、可恢复的一种外观风格。
 - **Collaboration** — Orca 多 Agent 功能名，中文用「协同」（现状 21:2）。可见 bug：设置导航项写「协作」，点进去页面标题写「协同」。条件禁用：settings.contacts 里的「协作经历」是 collaboration history，属另一个语义，英文源不含独立 Collaboration 一词时不判违规。
   - 豁免范围：`desktop:settings.contacts.`
 - **Collapse** — 中文用「收起」（现状 29:7），与反义词「展开」（Expand，29/30 已统一）配对。ccAgent 与 rightSidebar 内部各自「收起 / 折叠」混用，是同模块自相矛盾。条件禁用：「折叠」在别处可能是正常中文，只在英文源含 Collapse 时判违规。
@@ -99,6 +104,7 @@
 - **Issue** — 保留英文（2026-07 裁决）。现状「工单」32 /「议题」4 是既有 bug 的来源：列表按钮写「新建议题」、点进去页面标题写「新建工单」。「问题」不入 forbidden——它在「修复问题和失败」这类泛指语境下是正常中文，不是 Issue 的误译。checkCase 关闭：issue 同时是常用英语单词，prompt 模板里的 "fix the issue" 是正常用法，做大小写约束会制造 9 处假阳性。（2026-07 修正：ko 原声明 Issue 仅 3 处，实测 이슈 45 处才是主流，改随本语言主流；ja 的 Issue 43:2 保持不变。）ja 的「課題」同样是多义词（问题 / 课题），按 whenEn=Issue 条件禁用——插件创建 prompt 里的 "define the problem" 用「課題」是正确的。豁免两个 Jira capability:那里指的是 Jira 自己的记录类型,日文 UI 的既定叫法是「課題」,保留英文反而与用户实际看到的 Jira 界面对不上。产品自身的 Issue 不受影响。
   - 豁免范围：`desktop:scheduler.editor.script.capabilityDescs.jira_comment`、`desktop:scheduler.editor.script.capabilityDescs.jira_read`
 - **Plugin** — 中文一律「插件」，不保留英文原词（现状 94:4）。历史上 Ghost / Plugin 两种叫法并存，对外统一为「插件」。
+- **Plugin skin** — 插件通过 appearance 槽提交的宿主受控外观风格；不与普通主题叠加。
 - **Project** — 中文一律「项目」（现状 119:15）。同一个侧边栏里筛选叫「项目」、批量操作提示叫「Project」是既有 bug。小写 project 不入 forbidden——它常出现在路径与文件名里（project.json）。
 - **Provider** — 中文用「供应商」（现状 36:18 领先简称）。全称「模型供应商」在需要消歧的位置仍可用。「提供商」「提供方」是同义漂移，禁用——设置页标题写「模型供应商」、它自己的表单写「提供商」是既有 bug。豁免 ssoVerificationSubtitle：那里的「身份提供方」是 SSO / SAML 领域 Identity Provider 的标准中文术语，与模型供应商是两个概念。该文案在 desktop locale 与 mobile 影子 catalog 各有一份副本，两处都要豁免。（2026-07 修正：ko 原声明 제공업체 仅 6 处，实测 제공자 32 处为主流，改随主流。）ja 的「提供元」是多义词——同时表示 "source"（来源），因此按 whenEn=Provider 条件禁用；无条件禁会把「共有元の提供元を信頼できるか」这类 source 语境一并换掉。豁免 creditParity 两条:那里的 third-party providers 指支付渠道/收单机构,不是模型供应商——ja 用「事業者」、zh-CN 用「第三方渠道」都对,套上「プロバイダー」反而会让用户以为是模型服务商在收钱。(2026-07 更新:billing 弃用「点数」概念改用金额/余额,creditParityCny/Usd 两条文案已删除,对应豁免一并移除。)
   - 豁免范围：`desktop:login.ssoVerificationSubtitle`、`mobile/loginMessages:ssoVerificationSubtitle`

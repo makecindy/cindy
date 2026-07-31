@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronDown, ChevronRight, Download, FileUp, RefreshCw } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Download, FileUp, Minus, RefreshCw } from 'lucide-react';
 
 import { basename, cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -45,6 +45,55 @@ type ImportListItem =
   | { type: 'dialogue'; key: string; item: ImportCandidate; updatedAtMs: number };
 
 let cachedSessionImportScan: ScanResult | null = null;
+
+function SessionImportCheckbox({
+  checked,
+  indeterminate = false,
+  onChange,
+  ariaLabel,
+  className,
+}: {
+  checked: boolean;
+  indeterminate?: boolean;
+  onChange: () => void;
+  ariaLabel?: string;
+  className?: string;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (inputRef.current) inputRef.current.indeterminate = indeterminate;
+  }, [indeterminate]);
+
+  return (
+    <span className={cn('relative inline-flex h-4 w-4 shrink-0', className)}>
+      <input
+        ref={inputRef}
+        type="checkbox"
+        checked={checked}
+        onChange={onChange}
+        aria-label={ariaLabel}
+        className="peer absolute inset-0 z-10 m-0 h-full w-full cursor-pointer opacity-0"
+      />
+      <span
+        aria-hidden="true"
+        className={cn(
+          'flex h-4 w-4 items-center justify-center rounded-[3px] border transition-colors',
+          'peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--settings-checkbox-focus-ring)]',
+          checked || indeterminate
+            ? 'border-[var(--settings-checkbox-checked-border)] bg-[var(--settings-checkbox-checked-bg)] text-[var(--settings-checkbox-icon)]'
+            : 'border-[var(--settings-checkbox-border)] bg-[var(--settings-checkbox-bg)]',
+        )}
+      >
+        {indeterminate ? (
+          <Minus size={11} strokeWidth={2.5} />
+        ) : checked ? (
+          <Check size={11} strokeWidth={2.5} />
+        ) : null}
+      </span>
+    </span>
+  );
+}
 
 export function SessionImportSection() {
   const { t } = useTranslation();
@@ -245,17 +294,12 @@ export function SessionImportSection() {
             <div className="flex min-h-0 flex-1 flex-col">
               {listItems.length > 0 && (
                 <label className="flex shrink-0 cursor-pointer items-center gap-2 border-b border-[var(--settings-input-border)] px-4 py-2.5 hover:bg-[var(--settings-menu-bg-hover)] select-none">
-                  <input
-                    type="checkbox"
+                  <SessionImportCheckbox
                     checked={visibleCandidates.length > 0 && visibleSelectedCount === visibleCandidates.length}
-                    ref={(node) => {
-                      if (node) {
-                        node.indeterminate =
-                          visibleSelectedCount > 0 && visibleSelectedCount < visibleCandidates.length;
-                      }
-                    }}
+                    indeterminate={
+                      visibleSelectedCount > 0 && visibleSelectedCount < visibleCandidates.length
+                    }
                     onChange={toggleAllVisible}
-                    className="h-4 w-4 accent-[var(--settings-menu-text-selected)]"
                   />
                   <span className="text-12 font-medium text-[var(--settings-section-sublabel)]">
                     {t('settings.sessionImport.selectAll', { count: visibleCandidates.length })}
@@ -292,14 +336,10 @@ export function SessionImportSection() {
                     return (
                       <div key={group.key} className="border-b border-[var(--settings-input-border)] last:border-b-0">
                         <div className="grid min-h-14 grid-cols-[16px_20px_minmax(0,1fr)_auto] items-center gap-x-2 px-4 py-2">
-                          <input
-                            type="checkbox"
+                          <SessionImportCheckbox
                             checked={selectedCount === group.items.length}
-                            ref={(node) => {
-                              if (node) node.indeterminate = selectedCount > 0 && selectedCount < group.items.length;
-                            }}
+                            indeterminate={selectedCount > 0 && selectedCount < group.items.length}
                             onChange={() => toggleGroupSelection(group.items)}
-                            className="h-4 w-4 accent-[var(--settings-menu-text-selected)]"
                             aria-label={t('settings.sessionImport.selectGroup')}
                           />
                           <button
@@ -553,11 +593,10 @@ function SessionImportRow({
         isProjectChild ? 'pl-[40px] pr-4' : 'px-4',
       )}
     >
-      <input
-        type="checkbox"
+      <SessionImportCheckbox
         checked={checked}
         onChange={onToggle}
-        className="mt-1 h-4 w-4 shrink-0 accent-[var(--settings-menu-text-selected)]"
+        className="mt-1"
       />
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2 overflow-hidden">

@@ -65,7 +65,10 @@ export function PluginManagementLayout({
   headerActions,
 }: PluginManagementLayoutProps) {
   return (
-    <div className="plugin-management-layout-root plugin-motion-root flex h-full min-h-0 w-full flex-col bg-[var(--surface)]">
+    <div
+      data-cindy-skin-transparent-layer="true"
+      className="plugin-management-layout-root plugin-motion-root flex h-full min-h-0 w-full flex-col bg-[var(--surface)]"
+    >
       <PluginManagementHeader
         activeTab={activeTab}
         query={query}

@@ -997,6 +997,26 @@ registerColor('model-dropdown-border', {
   light: 'var(--border-default)',
   dark: 'var(--border-default)',
 }, 'Board');
+registerColor('model-agent-switch-track-bg', {
+  light: 'var(--chat-input-bg)',
+  dark: 'var(--chat-input-bg)',
+}, 'Model dropdown Claude / Codex segmented track');
+registerColor('model-agent-switch-border', {
+  light: 'transparent',
+  dark: 'var(--cmd-palette-border)',
+}, 'Model dropdown Claude / Codex segmented border');
+registerColor('model-agent-switch-selected-bg', {
+  light: 'var(--accent-cta-bg)',
+  dark: 'var(--accent-cta-bg)',
+}, 'Model dropdown Claude / Codex selected segment');
+registerColor('model-agent-switch-selected-text', {
+  light: 'var(--accent-pure-cta-fg)',
+  dark: 'var(--accent-pure-cta-fg)',
+}, 'Model dropdown Claude / Codex selected foreground');
+registerColor('model-agent-switch-inactive-text', {
+  light: 'var(--cmd-palette-item-meta)',
+  dark: 'var(--cmd-palette-item-meta)',
+}, 'Model dropdown Claude / Codex inactive foreground');
 registerColor('model-item-hover', {
   light: 'var(--surface-hover)',
   dark: 'var(--surface-hover)',
@@ -1604,6 +1624,62 @@ registerColor('settings-logout-hover-bg', {
   light: 'var(--surface-hover-soft)',
   dark: 'var(--surface-hover-soft)',
 }, 'Surface — gentle hover');
+registerColor('settings-checkbox-bg', {
+  light: 'transparent',
+  dark: 'transparent',
+}, 'Settings checkbox unchecked background');
+registerColor('settings-checkbox-border', {
+  light: 'var(--text-tertiary)',
+  dark: 'var(--text-tertiary)',
+}, 'Settings checkbox unchecked border');
+registerColor('settings-checkbox-checked-bg', {
+  light: 'var(--accent-cta-bg)',
+  dark: 'var(--accent-cta-bg)',
+}, 'Settings checkbox checked / indeterminate background');
+registerColor('settings-checkbox-checked-border', {
+  light: 'var(--accent-cta-bg)',
+  dark: 'var(--accent-cta-bg)',
+}, 'Settings checkbox checked / indeterminate border');
+registerColor('settings-checkbox-icon', {
+  light: 'var(--accent-pure-cta-fg)',
+  dark: 'var(--accent-pure-cta-fg)',
+}, 'Settings checkbox check / indeterminate icon');
+registerColor('settings-checkbox-focus-ring', {
+  light: 'var(--focus-ring)',
+  dark: 'var(--focus-ring)',
+}, 'Settings checkbox keyboard focus ring');
+registerColor('settings-shortcut-description', {
+  light: 'var(--text-secondary)',
+  dark: 'var(--text-secondary)',
+}, 'Keyboard shortcut description');
+registerColor('settings-shortcut-key-bg', {
+  light: 'var(--surface-chip)',
+  dark: 'var(--surface-chip)',
+}, 'Keyboard shortcut keycap background');
+registerColor('settings-shortcut-key-border', {
+  light: 'var(--settings-theme-card-border)',
+  dark: 'var(--settings-theme-card-border)',
+}, 'Keyboard shortcut keycap border');
+registerColor('settings-shortcut-key-text', {
+  light: 'var(--text-secondary)',
+  dark: 'var(--text-secondary)',
+}, 'Keyboard shortcut keycap text');
+registerColor('settings-shortcut-key-muted-text', {
+  light: 'var(--text-tertiary)',
+  dark: 'var(--text-tertiary)',
+}, 'Keyboard shortcut unset keycap text');
+registerColor('settings-shortcut-action-icon', {
+  light: 'var(--text-tertiary)',
+  dark: 'var(--text-tertiary)',
+}, 'Keyboard shortcut row action icon');
+registerColor('settings-shortcut-action-icon-hover', {
+  light: 'var(--text-primary)',
+  dark: 'var(--text-primary)',
+}, 'Keyboard shortcut row action icon hover');
+registerColor('settings-shortcut-action-bg-hover', {
+  light: 'var(--surface-chip)',
+  dark: 'var(--surface-chip)',
+}, 'Keyboard shortcut row action hover background');
 
 // Settings - Integrations row (Google + future providers)
 registerColor('settings-integration-avatar-bg', {

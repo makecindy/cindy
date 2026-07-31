@@ -28,6 +28,7 @@ import {
   MoreVertical,
   PanelLeft,
   PanelRight,
+  Palette,
   Radio,
   Sparkles,
   Terminal,
@@ -94,6 +95,7 @@ const PERMISSION_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   preview: AppWindow,
   skill: GraduationCap,
   workspace: FolderPlus,
+  appearance: Palette,
 };
 
 /** Chooses a visual affordance without changing the host-owned permission title or meaning. */
@@ -188,7 +190,10 @@ export function GhostPluginDetailView({
   }, [detail.id, summary]);
 
   return (
-    <main className="plugin-motion-root h-full min-h-0 w-full overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]">
+    <main
+      data-cindy-skin-transparent-layer="true"
+      className="plugin-motion-root h-full min-h-0 w-full overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]"
+    >
       <article className="plugin-detail-frame mx-auto w-full max-w-[824px] px-8 pb-16 pt-5 max-[760px]:px-6">
         <button
           type="button"

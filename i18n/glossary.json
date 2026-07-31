@@ -13,6 +13,39 @@
   ],
   "terms": [
     {
+      "id": "cindy-appearance",
+      "status": "decided",
+      "en": "Cindy appearance",
+      "translations": {
+        "zh-CN": "Cindy 外观",
+        "ja": "Cindy の外観",
+        "ko": "Cindy 외관"
+      },
+      "note": "外观是显示模式、外观风格与字体设置的上位概念；插件皮肤是宿主受控、可恢复的一种外观风格。"
+    },
+    {
+      "id": "appearance-style",
+      "status": "decided",
+      "en": "Appearance style",
+      "translations": {
+        "zh-CN": "外观风格",
+        "ja": "外観スタイル",
+        "ko": "외관 스타일"
+      },
+      "note": "决定 Cindy 具体长相的互斥选择：普通主题、本地主题或插件皮肤只生效一个。显示模式单独决定 Light / Dark 变体。"
+    },
+    {
+      "id": "plugin-skin",
+      "status": "decided",
+      "en": "Plugin skin",
+      "translations": {
+        "zh-CN": "插件皮肤",
+        "ja": "プラグインスキン",
+        "ko": "플러그인 스킨"
+      },
+      "note": "插件通过 appearance 槽提交的宿主受控外观风格；不与普通主题叠加。"
+    },
+    {
       "id": "active",
       "status": "decided",
       "en": "Active",

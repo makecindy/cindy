@@ -8,8 +8,10 @@ import {
   tryGetFamily,
 } from '../themes/families';
 import { onLocalThemesChange } from '../themes/local-themes';
+import { resolveSkinTheme } from '../themes/skin-theme';
 import { themeService } from '../themes/theme-service';
 import type { ThemeType } from '../themes/types';
+import { getSkinAppearanceSnapshot, useSkinAppearance } from '../cindy-brain/skinAppearanceStore';
 
 export type Theme = 'system' | 'light' | 'dark';
 
@@ -18,6 +20,8 @@ interface ThemeContextValue {
   setTheme: (theme: Theme) => void;
   familyId: string;
   setFamily: (familyId: string) => void;
+  /** 普通主题与插件皮肤互斥；familyId 在皮肤生效时仅保留为停用后的回退选择。 */
+  appearanceSource: 'theme' | 'skin';
   /**
    * 当前家族在请求 type 下没变体, 已 fallback 到另一个 type 时, 这里
    * 返回 "请求的 type" (供 UI 显示 "无浅色 / 无深色" 提示)。否则 null。
@@ -96,7 +100,16 @@ export function getStoredFamilyId(): string {
 
 function resolveActiveTheme(mode: Theme) {
   const isDark = resolveIsDark(mode);
-  return resolveFamilyVariant(getStoredFamilyId(), isDark ? 'dark' : 'light');
+  const requestedType: ThemeType = isDark ? 'dark' : 'light';
+  const skin = getSkinAppearanceSnapshot();
+  if (skin) {
+    return {
+      theme: resolveSkinTheme(skin, requestedType),
+      fallback: false,
+      requestedType,
+    };
+  }
+  return resolveFamilyVariant(getStoredFamilyId(), requestedType);
 }
 
 // 切主题时临时禁掉所有 transition,避免带 transition-colors 的元素(顶栏图标、
@@ -221,6 +234,7 @@ export function endLoginFirstLaunchLightGate(): void {
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<Theme>(getStoredTheme);
   const [familyId, setFamilyIdState] = useState<string>(getStoredFamilyId);
+  const skinAppearance = useSkinAppearance();
   // 跟踪系统色偏好, 让 fallbackFromType 在 OS theme 变化时也能正确刷新。
   const [systemPrefersDark, setSystemPrefersDark] = useState<boolean>(() =>
     typeof window === 'undefined' || typeof window.matchMedia !== 'function'
@@ -274,6 +288,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     applyThemeClass(theme);
   }, [theme]);
 
+  // 皮肤由 Main IPC 异步恢复；收到快照或恢复普通主题时，强制用当前显示模式
+  // 重新解析完整 Theme。普通 familyId 只作为停用皮肤后的回退，不参与皮肤合并。
+  useEffect(() => {
+    if (skinAppearance !== undefined) applyThemeClass(theme, true);
+  }, [skinAppearance, theme]);
+
   useEffect(() => {
     window.electronAPI?.setUpdateRelaunchTheme?.(
       document.documentElement.classList.contains('dark') ? 'dark' : 'light',
@@ -320,21 +340,25 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('storage', onStorage);
   }, []);
 
-  // E4D 毛玻璃(R1 audit,用户裁决透壁纸 2026-07-17):family/theme 变化或 mount 时
-  // 通知 main 开关 macOS vibrancy(仅 CINDY family 启用,其他恢复不透明)。覆盖
-  // setFamily/storage 跨窗口同步/mount 三个场景(任一变化都重应用)。
+  // E4D 毛玻璃(R1 audit,用户裁决透壁纸 2026-07-17):普通 CINDY family
+  // 可用 macOS 原生 vibrancy 采样桌面壁纸；插件皮肤的壁纸在应用内部，
+  // 必须关闭原生 vibrancy，避免侧栏错误采样桌面而不是当前皮肤背景。
   useEffect(() => {
-    window.electronAPI?.theme?.applyVibrancy?.(familyId, resolveIsDark(theme));
-  }, [familyId, theme, systemPrefersDark]);
+    window.electronAPI?.theme?.applyVibrancy?.(
+      skinAppearance ? 'plugin-skin' : familyId,
+      resolveIsDark(theme),
+    );
+  }, [familyId, skinAppearance, theme, systemPrefersDark]);
 
   const fallbackFromType = useMemo<ThemeType | null>(() => {
     void localThemeRev;
+    if (skinAppearance) return null;
     const family = tryGetFamily(familyId);
     if (!family) return null;
     const isDarkRequested = theme === 'dark' || (theme === 'system' && systemPrefersDark);
     const requestedType: ThemeType = isDarkRequested ? 'dark' : 'light';
     return family[requestedType] === null ? requestedType : null;
-  }, [familyId, theme, systemPrefersDark, localThemeRev]);
+  }, [familyId, skinAppearance, theme, systemPrefersDark, localThemeRev]);
 
   return createElement(
     ThemeContext.Provider,
@@ -344,6 +368,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
         setTheme,
         familyId,
         setFamily,
+        appearanceSource: skinAppearance ? 'skin' : 'theme',
         fallbackFromType,
       },
     },

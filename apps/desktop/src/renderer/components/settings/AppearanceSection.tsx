@@ -10,6 +10,7 @@ import {
   FolderOpen,
   Import as ImportIcon,
   RefreshCw,
+  Trash2,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -41,6 +42,15 @@ import { Tip } from '@/components/ui/tooltip';
 import { Slider } from '@/components/ui/slider';
 import { extractIpcError } from '@/utils/ipcError';
 import { FontFamilyPicker, type FontPreset } from './FontFamilyPicker';
+import {
+  publishSkinAppearanceState,
+  useSkinAppearance,
+  useSkinAppearancePresets,
+} from '@/cindy-brain/skinAppearanceStore';
+import { getSkinPaletteSurface } from '@/themes/skin-theme';
+import { themeService } from '@/themes/theme-service';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import type { GhostAppearancePalette } from '../../../shared/ghost';
 
 const log = createLogger('settings/AppearanceSection');
 
@@ -204,25 +214,39 @@ function LocalThemeIconButton({
   );
 }
 
-interface FamilyDropdownProps {
+interface AppearanceStyleOption {
+  id: string;
   label: string;
-  ariaLabel: string;
-  families: ThemeFamily[];
-  selectedId: string;
-  onSelect: (familyId: string) => void;
-  getLabel: (family: ThemeFamily) => string;
+  description: string;
+  kind: 'theme' | 'skin';
+  familyId?: string;
+  palette?: GhostAppearancePalette;
+  presetId?: string;
 }
 
-function FamilyDropdown({
+interface AppearanceStyleDropdownProps {
+  label: string;
+  ariaLabel: string;
+  options: AppearanceStyleOption[];
+  selectedId: string;
+  busy: boolean;
+  onSelect: (option: AppearanceStyleOption) => void;
+  onDelete: (option: AppearanceStyleOption) => void;
+  deleteLabel: (name: string) => string;
+}
+
+function AppearanceStyleDropdown({
   label,
   ariaLabel,
-  families,
+  options,
   selectedId,
+  busy,
   onSelect,
-  getLabel,
-}: FamilyDropdownProps) {
+  onDelete,
+  deleteLabel,
+}: AppearanceStyleDropdownProps) {
   const [open, setOpen] = useState(false);
-  const selected = families.find((f) => f.id === selectedId) ?? families[0];
+  const selected = options.find((option) => option.id === selectedId) ?? options[0];
 
   return (
     <div className="flex flex-col gap-2">
@@ -238,6 +262,7 @@ function FamilyDropdown({
           <button
             type="button"
             aria-label={ariaLabel}
+            disabled={busy}
             className={cn(
               'flex h-10 w-full items-center justify-between rounded-xl px-3',
               'border border-[var(--settings-input-border)]',
@@ -246,7 +271,7 @@ function FamilyDropdown({
             )}
           >
             <span className="truncate text-13 font-medium text-[var(--settings-input-text)]">
-              {getLabel(selected)}
+              {selected.label}
             </span>
             <ChevronDown size={14} className="shrink-0 text-[var(--settings-eye-icon)]" />
           </button>
@@ -262,32 +287,83 @@ function FamilyDropdown({
             'bg-[var(--settings-theme-card-bg)]',
           )}
         >
-          <div className="flex flex-col gap-[2px]" role="listbox" aria-label={ariaLabel}>
-            {families.map((family) => {
-              const isSelected = selectedId === family.id;
+          <div className="flex flex-col gap-[2px]" role="menu" aria-label={ariaLabel}>
+            {options.map((option) => {
+              const isSelected = selectedId === option.id;
+              const lightSurface = option.palette
+                ? getSkinPaletteSurface(option.palette, 'light')
+                : null;
+              const darkSurface = option.palette
+                ? getSkinPaletteSurface(option.palette, 'dark')
+                : null;
               return (
-                <button
-                  key={family.id}
-                  type="button"
-                  role="option"
-                  aria-selected={isSelected}
-                  onClick={() => {
-                    onSelect(family.id);
-                    setOpen(false);
-                  }}
+                <div
+                  key={option.id}
                   className={cn(
-                    'flex w-full items-center justify-between rounded-[8px] px-3 py-2',
+                    'flex w-full items-center rounded-[8px]',
                     'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
                     isSelected && 'bg-[var(--settings-menu-bg-hover)]',
                   )}
                 >
-                  <span className="text-13 font-medium text-[var(--settings-input-text)]">
-                    {getLabel(family)}
-                  </span>
-                  {isSelected ? (
-                    <Check size={16} className="shrink-0 text-[var(--settings-theme-icon-active)]" />
+                  <button
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={isSelected}
+                    disabled={busy}
+                    onClick={() => {
+                      onSelect(option);
+                      setOpen(false);
+                    }}
+                    className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left"
+                  >
+                    {lightSurface && darkSurface ? (
+                      <span
+                        aria-hidden="true"
+                        className="flex h-6 w-6 shrink-0 overflow-hidden rounded-full border border-[var(--settings-input-border)]"
+                      >
+                        <span
+                          className="h-full w-1/2"
+                          style={{ backgroundColor: `hsl(${lightSurface})` }}
+                        />
+                        <span
+                          className="h-full w-1/2"
+                          style={{ backgroundColor: `hsl(${darkSurface})` }}
+                        />
+                      </span>
+                    ) : null}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-13 font-medium text-[var(--settings-input-text)]">
+                        {option.label}
+                      </span>
+                      <span className="block truncate text-12 text-[var(--settings-section-sublabel)]">
+                        {option.description}
+                      </span>
+                    </span>
+                    {isSelected ? (
+                      <Check
+                        size={16}
+                        className="shrink-0 text-[var(--settings-theme-icon-active)]"
+                      />
+                    ) : null}
+                  </button>
+                  {option.presetId ? (
+                    <Tip text={deleteLabel(option.label)}>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        aria-label={deleteLabel(option.label)}
+                        disabled={busy}
+                        onClick={() => {
+                          setOpen(false);
+                          onDelete(option);
+                        }}
+                        className="mr-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--settings-eye-icon)] hover:bg-[var(--surface-hover)]"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </Tip>
                   ) : null}
-                </button>
+                </div>
               );
             })}
           </div>
@@ -298,7 +374,7 @@ function FamilyDropdown({
 }
 
 export function AppearanceSection() {
-  const { theme, setTheme, familyId, setFamily, fallbackFromType } = useTheme();
+  const { theme, setTheme, familyId, setFamily, appearanceSource, fallbackFromType } = useTheme();
   const {
     uiFamily,
     codeFamily,
@@ -315,11 +391,136 @@ export function AppearanceSection() {
   } = useFontSettings();
   const { mode: sidebarViewMode, setMode: setSidebarViewMode } = useSidebarCardMode();
   const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  const skinAppearance = useSkinAppearance();
+  const skinPresets = useSkinAppearancePresets();
+  const [appearanceBusy, setAppearanceBusy] = useState(false);
   const [localThemesVersion, setLocalThemesVersion] = useState(0);
   const [uiSizeInput, setUiSizeInput] = useState(String(uiSize));
   const [codeSizeInput, setCodeSizeInput] = useState(String(codeSize));
   const families = useMemo(() => getThemeFamilies(), [localThemesVersion]);
   const selectedFamily = families.find((f) => f.id === familyId) ?? families[0];
+
+  const getFamilyLabel = useCallback(
+    (family: ThemeFamily) =>
+      isLocalThemeId(family.id)
+        ? `${family.name} ${t('settings.appearance.localBadge')}`
+        : family.name,
+    [t],
+  );
+
+  const activeSkinPreset = useMemo(
+    () =>
+      skinAppearance
+        ? skinPresets.find(
+            (preset) =>
+              preset.name.normalize('NFKC').toLowerCase() ===
+                skinAppearance.name?.normalize('NFKC').toLowerCase() &&
+              preset.palette === skinAppearance.palette &&
+              preset.sourceGhostId === skinAppearance.sourceGhostId,
+          )
+        : undefined,
+    [skinAppearance, skinPresets],
+  );
+
+  const appearanceStyleOptions = useMemo<AppearanceStyleOption[]>(() => {
+    const themeOptions = families.map((family) => ({
+      id: `theme:${family.id}`,
+      label: getFamilyLabel(family),
+      description: isLocalThemeId(family.id)
+        ? t('settings.appearance.style.localTheme')
+        : t('settings.appearance.style.theme'),
+      kind: 'theme' as const,
+      familyId: family.id,
+    }));
+    const skinOptions: AppearanceStyleOption[] = skinPresets.map((preset) => ({
+      id: `skin:${preset.id}`,
+      label: preset.name,
+      description: preset.sourceGhostName
+        ? t('settings.appearance.style.fromPlugin', { name: preset.sourceGhostName })
+        : t('settings.appearance.style.pluginSkin'),
+      kind: 'skin' as const,
+      palette: preset.palette,
+      presetId: preset.id,
+    }));
+    if (skinAppearance && !activeSkinPreset) {
+      skinOptions.unshift({
+        id: 'skin:active',
+        label: skinAppearance.name ?? t('settings.appearance.style.customSkin'),
+        description: t('settings.appearance.style.pluginSkin'),
+        kind: 'skin',
+        palette: skinAppearance.palette,
+      });
+    }
+    return [...themeOptions, ...skinOptions];
+  }, [activeSkinPreset, families, getFamilyLabel, skinAppearance, skinPresets, t]);
+
+  const activeAppearanceStyleId =
+    appearanceSource === 'skin'
+      ? activeSkinPreset
+        ? `skin:${activeSkinPreset.id}`
+        : 'skin:active'
+      : `theme:${familyId}`;
+
+  const selectAppearanceStyle = useCallback(
+    async (option: AppearanceStyleOption) => {
+      if (appearanceBusy || option.id === activeAppearanceStyleId) return;
+      setAppearanceBusy(true);
+      try {
+        if (option.kind === 'theme') {
+          const nextFamilyId = option.familyId;
+          if (!nextFamilyId) return;
+          if (skinAppearance) {
+            // 皮肤仍生效时先记录回退主题，不会改变当前画面；reset 成功后一次切到
+            // 目标主题，避免先闪回旧主题再切换。失败则恢复原偏好。
+            setFamily(nextFamilyId);
+            try {
+              const state = await window.electronAPI.ghosts.resetAppearance();
+              publishSkinAppearanceState(state.appearance, state.presets);
+            } catch (error) {
+              setFamily(familyId);
+              throw error;
+            }
+          } else {
+            setFamily(nextFamilyId);
+          }
+        } else if (option.presetId) {
+          const state = await window.electronAPI.ghosts.activateAppearancePreset(option.presetId);
+          publishSkinAppearanceState(state.appearance, state.presets);
+        }
+      } catch (error) {
+        log.warn('failed to switch appearance style', { error });
+        toast.error(t('settings.appearance.style.switchFailed'));
+      } finally {
+        setAppearanceBusy(false);
+      }
+    },
+    [activeAppearanceStyleId, appearanceBusy, familyId, setFamily, skinAppearance, t],
+  );
+
+  const deleteSkinPreset = useCallback(
+    async (option: AppearanceStyleOption) => {
+      if (!option.presetId || appearanceBusy) return;
+      const accepted = await confirm({
+        title: t('settings.appearance.style.deleteTitle', { name: option.label }),
+        description: t('settings.appearance.style.deleteDescription'),
+        confirmText: t('settings.appearance.style.deleteConfirm'),
+      });
+      if (!accepted) return;
+      setAppearanceBusy(true);
+      try {
+        const state = await window.electronAPI.ghosts.deleteAppearancePreset(option.presetId);
+        publishSkinAppearanceState(state.appearance, state.presets);
+        toast.success(t('settings.appearance.style.deleted', { name: option.label }));
+      } catch (error) {
+        log.warn('failed to delete skin preset', { error });
+        toast.error(t('settings.appearance.style.deleteFailed'));
+      } finally {
+        setAppearanceBusy(false);
+      }
+    },
+    [appearanceBusy, confirm, t],
+  );
 
   useEffect(() => {
     void refreshLocalThemes();
@@ -360,19 +561,13 @@ export function AppearanceSection() {
     [theme, setTheme],
   );
 
-  const getFamilyLabel = useCallback(
-    (family: ThemeFamily) => isLocalThemeId(family.id)
-      ? `${family.name} ${t('settings.appearance.localBadge')}`
-      : family.name,
-    [t],
-  );
-
   const handleExport = useCallback(async () => {
     const isDark = resolveIsDark(theme);
-    const { theme: activeTheme } = resolveFamilyVariant(
-      familyId,
-      isDark ? 'dark' : 'light',
-    );
+    const activeTheme =
+      appearanceSource === 'skin'
+        ? themeService.getCurrentTheme() ??
+          resolveFamilyVariant(familyId, isDark ? 'dark' : 'light').theme
+        : resolveFamilyVariant(familyId, isDark ? 'dark' : 'light').theme;
     const { baseId, theme: themeJson } = buildCopyFromTheme(activeTheme);
     const result = await window.electronAPI.localThemes.write({
       baseId,
@@ -395,7 +590,7 @@ export function AppearanceSection() {
     toast.success(
       t('settings.appearance.localThemes.exportSuccess', { file: basename(result.path) }),
     );
-  }, [familyId, t, theme]);
+  }, [appearanceSource, familyId, t, theme]);
 
   const handleImport = useCallback(async () => {
     let result;
@@ -516,12 +711,15 @@ export function AppearanceSection() {
         >
           {t('settings.appearance.modeLabel')}
         </p>
+        <p className="-mt-2 text-12 leading-[1.5] text-[var(--settings-section-sublabel)]">
+          {t('settings.appearance.modeDescription')}
+        </p>
 
         {/* Theme options — gap 12 */}
         <div
           className="flex gap-3"
           role="radiogroup"
-          aria-label={t('settings.appearance.themeAriaLabel')}
+          aria-label={t('settings.appearance.modeAria')}
         >
           <ThemeCard
             value="light"
@@ -568,13 +766,19 @@ export function AppearanceSection() {
           />
         </div>
 
-        <FamilyDropdown
-          label={t('settings.appearance.themeLabel')}
-          ariaLabel={t('settings.appearance.themeAriaLabel')}
-          families={families}
-          selectedId={familyId}
-          onSelect={setFamily}
-          getLabel={getFamilyLabel}
+        <AppearanceStyleDropdown
+          label={t('settings.appearance.style.label')}
+          ariaLabel={t('settings.appearance.style.aria')}
+          options={appearanceStyleOptions}
+          selectedId={activeAppearanceStyleId}
+          busy={appearanceBusy}
+          onSelect={(option) => {
+            void selectAppearanceStyle(option);
+          }}
+          onDelete={(option) => {
+            void deleteSkinPreset(option);
+          }}
+          deleteLabel={(name) => t('settings.appearance.style.deleteAria', { name })}
         />
 
         <div className="flex flex-col gap-2 pt-1">

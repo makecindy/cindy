@@ -8,6 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
+import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -92,6 +93,62 @@ describe('addRef / removeRefs(引用增删)', () => {
     await ledger.addRef({ hash: HASH_A, refKind: 'message', refId: 'msg-1', originSessionId: 'sess-1' }, db);
     db.delete(schema.mediaBlobs).run();
     expect(db.select().from(schema.mediaRefs).all()).toHaveLength(0);
+  });
+});
+
+describe('意识出生引用撤销', () => {
+  it('同 hash 的活动皮肤接管后只撤销旧意识权限', async () => {
+    await seedBlob(HASH_A);
+    await ledger.addRef(
+      {
+        hash: HASH_A,
+        refKind: 'skin-background',
+        refId: 'active',
+        originKind: 'ghost',
+        originId: 'old-skin',
+      },
+      db,
+    );
+    await ledger.addRef(
+      {
+        hash: HASH_A,
+        refKind: 'skin-background',
+        refId: 'active',
+        originKind: 'ghost',
+        originId: 'current-skin',
+      },
+      db,
+    );
+
+    expect(
+      await ledger.hasGhostOwnedRef(
+        {
+          hash: HASH_A,
+          refKind: 'skin-background',
+          refId: 'active',
+          ghostId: 'current-skin',
+        },
+        db,
+      ),
+    ).toBe(true);
+    await ledger.removeGhostOwnedRefs(
+      {
+        ghostId: 'old-skin',
+        refKinds: ['skin-background', 'skin-brand-icon', 'skin-brand-logo'],
+        refId: 'active',
+      },
+      db,
+    );
+
+    expect(await ledger.ghostCanRead(HASH_A, 'old-skin', db)).toBe(false);
+    expect(await ledger.ghostCanRead(HASH_A, 'current-skin', db)).toBe(true);
+    expect(
+      db
+        .select()
+        .from(schema.mediaRefs)
+        .where(eq(schema.mediaRefs.originId, 'current-skin'))
+        .all(),
+    ).toHaveLength(1);
   });
 });
 

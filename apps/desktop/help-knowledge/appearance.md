@@ -9,8 +9,12 @@ Settings > General controls how the app looks and how it notifies you.
 
 **Appearance:**
 
-- **Theme**: light, dark, or system (follows your OS).
-- **Theme family**: pick from the registered theme families; each family supplies its own colors for light and dark. The app uses a VSCode-style token system (see docs/design-rules/cindy-design-system.md) so themes only override what they need.
+- **Display mode**: light, dark, or system (follows your OS). It only decides
+  brightness; the selected appearance style supplies the matching variant.
+- **Appearance style**: choose one built-in theme, local theme, or plugin skin.
+  These are mutually exclusive. A plugin skin uses Cindy's host-owned Light /
+  Dark foundation plus its controlled palette, background and brand assets; it
+  never mixes with the previously selected theme.
 - **Fonts and sidebar density**: the same section also has UI / code font-family pickers with font-size sliders, and a selector for the sidebar's session card mode.
 - **Local theme brand identity**: this is an optional power-user feature configured in the local theme JSON. The settings page intentionally keeps only create-copy, open-folder, and refresh actions. New copies include self-explanatory example paths directly in the JSON.
 - **Export / open local theme files**: export the current theme's tokens to a file or open a local theme JSON for inspection / sharing. To replace the icon and logo used on the new-chat page:
@@ -38,4 +42,5 @@ Settings > General controls how the app looks and how it notifies you.
 **Notes:**
 
 - Theme changes apply immediately; no restart needed.
+- Turning off a plugin skin returns to the previously selected regular theme.
 - Language changes apply immediately, but a few static strings may need a window reload to update.

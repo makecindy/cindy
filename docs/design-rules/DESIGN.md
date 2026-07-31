@@ -22,6 +22,25 @@ What makes this system distinctive is the combination of a single geometric sans
 - No mascots or decorative artwork in the working UI — brand imagery appears only on sanctioned brand surfaces (see §15.7 / §16)
 - Extreme content restraint — each surface presents one clear idea
 
+**User-invoked skin exception (2026-07-28, semantics clarified 2026-07-29):** an explicitly
+appearance-capable plugin may provide a host-controlled **appearance style** that places a
+user-requested image behind the working UI, replaces the sanctioned home-screen avatar /
+logo brand lockup, and tints neutral surfaces. A plugin skin and a regular theme are mutually
+exclusive appearance sources: the skin resolves from the matching Cindy Light / Dark
+foundation into one complete semantic Theme and never layers on the user's previously
+selected built-in or local theme. Display mode remains independent and selects the skin's
+host-owned Light or Dark variant; font preferences remain independent.
+This is opt-in personalization, not a new default visual language. The host owns the fixed
+palette, dual-mode mapping, contrast surfaces, persistence, preset management, and return to
+the user's previous regular theme. Plugins cannot inject CSS, access the host DOM, provide
+arbitrary colors/URLs, or override semantic permission, danger, focus, status, or diff
+colors. Skin brand images never replace account identity or login branding, and must fall
+back to Cindy defaults when unavailable. Content surfaces remain sufficiently opaque for
+legibility.
+The home logo remains a horizontal typographic wordmark—not an avatar, emblem, square tile,
+or app icon. Generated wordmarks use a plain white working canvas that the host converts to
+transparent pixels and trims before display.
+
 ## 2. Color Palette & Roles
 
 > **Multi-theme note**: the values in this section are the concrete **Default Light / Default Dark** (base theme) palette, given as the visual-spec reference sample. At runtime **every color is consumed through a token** (see §10 Theme System & Token Reference), so the same component automatically renders each theme's own colors under other themes (Eclipse / One Dark Pro / Monokai Pro, …). **When implementing components, always write tokens, never hex** — rules in §10.
