@@ -39,6 +39,8 @@ export interface InlineReferenceChipProps {
    * `false`:那里 chip 是一个整体被选中 / 删除的原子节点,内部文字不参与 selection。
    */
   textSelectable?: boolean;
+  /** Exclude visual chrome from session-search text/range collection. */
+  sessionSearchIgnore?: boolean;
 }
 
 /** Theme-aware 12px reference pill with a formal full-content tooltip. */
@@ -56,6 +58,7 @@ export function InlineReferenceChip({
   className,
   labelClassName,
   textSelectable = true,
+  sessionSearchIgnore = false,
 }: InlineReferenceChipProps) {
   const interactive = Boolean(onClick || onContextMenu);
   const sharedClassName = cn(
@@ -101,6 +104,7 @@ export function InlineReferenceChip({
       role={interactive ? 'button' : undefined}
       tabIndex={interactive ? 0 : undefined}
       aria-label={ariaLabel}
+      data-session-search-ignore={sessionSearchIgnore ? '' : undefined}
       onClick={onClick}
       onContextMenu={onContextMenu}
       onKeyDown={interactive ? handleKeyDown : undefined}

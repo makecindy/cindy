@@ -167,14 +167,16 @@ export function PlanReviewBubble({
             {t('chat.planReviewBubble.feedbackLabel')}
           </span>
           {/* 反馈是用户自己敲的原话,保持纯文本(不当 Markdown 解析)。 */}
-          <p
-            className={cn(
-              'whitespace-pre-wrap break-words text-14 leading-[1.6]',
-              'text-[var(--plan-bubble-body-text)]',
-            )}
-          >
-            {feedback || t('chat.planReviewBubble.noFeedback')}
-          </p>
+          <div data-session-search-body="">
+            <p
+              className={cn(
+                'whitespace-pre-wrap break-words text-14 leading-[1.6]',
+                'text-[var(--plan-bubble-body-text)]',
+              )}
+            >
+              {feedback || t('chat.planReviewBubble.noFeedback')}
+            </p>
+          </div>
         </div>
       )}
 

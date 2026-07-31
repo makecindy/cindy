@@ -37,6 +37,13 @@ import {
   providerOffersModel,
 } from '@cindy/model-providers';
 import { getGhostCardSnapshot, subscribeGhostCards } from '@/cindy-brain/ghostCardStore';
+import { splitGhostDirective } from '@/cindy-brain/ghostCommand';
+import {
+  joinChatQuoteTextSegments,
+  parseChatQuoteSegments,
+} from '@/lib/chatQuotes';
+import { stripGoalVerdictBlock } from '@/lib/goalVerdict';
+import { isSyntheticTriggerText } from '../../../shared/interruptedTurn';
 import { visibleMarkdownTextForSearch } from '../../../shared/conversationSearch';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import {
@@ -624,7 +631,7 @@ export function CCAgentSessionView({
         return;
       }
       void makerChatStore
-        .loadAroundMessage(sessionId, hit.messageId, { radius: 60 })
+        .loadAroundMessageClientId(sessionId, hit.messageClientId, { radius: 60 })
         .then((message) => {
           if (message) requestFocusMessage(message.clientId, hit.occurrenceIndex);
         })
@@ -654,6 +661,7 @@ export function CCAgentSessionView({
 
     const normalizedQuery = query.toLocaleLowerCase();
     const currentMessages = makerChatStore.getSnapshot(sessionId).messages;
+    const hiddenGhostMessageClientIds = new Set<string>();
     const localHits = currentMessages
       .filter(
         (message) =>
@@ -665,10 +673,46 @@ export function CCAgentSessionView({
       .filter((message) => {
         if (message.role !== 'assistant') return true;
         const entry = ghostCardSnapshot.byCallId.get(message.clientId);
-        return !(entry?.status === 'ready');
+        if (entry?.status === 'ready') {
+          hiddenGhostMessageClientIds.add(message.clientId);
+          return false;
+        }
+        return true;
       })
       .flatMap((message) => {
-        const content = visibleMarkdownTextForSearch(message.content).toLocaleLowerCase();
+        const rawContent = message.content;
+        let visibleContent = rawContent;
+        if (message.role === 'assistant') {
+          visibleContent = stripGoalVerdictBlock(visibleContent);
+        } else if (message.role === 'user') {
+          try {
+            const parsed = JSON.parse(visibleContent) as unknown;
+            if (
+              parsed &&
+              typeof parsed === 'object' &&
+              !Array.isArray(parsed) &&
+              ((parsed as { orcaSource?: unknown }).orcaSource === 'lead' ||
+                (parsed as { orcaSource?: unknown }).orcaSource === 'worker') &&
+              typeof (parsed as { content?: unknown }).content === 'string'
+            ) {
+              visibleContent = (parsed as { content: string }).content;
+            }
+          } catch {
+            // 普通用户消息不是 Orca JSON,保留原文。
+          }
+          if (message.hookSource) {
+            visibleContent = message.hookSource.userText ?? visibleContent;
+          }
+          const ghostSplit = splitGhostDirective(visibleContent);
+          if (ghostSplit) visibleContent = ghostSplit.body;
+          if (message.quotesEncoded) {
+            visibleContent = joinChatQuoteTextSegments(
+              parseChatQuoteSegments(visibleContent),
+            );
+          }
+        }
+        if (isSyntheticTriggerText(visibleContent)) return [];
+        const content = visibleMarkdownTextForSearch(visibleContent).toLocaleLowerCase();
         const hits: Array<{
           messageId: string;
           messageClientId: string;
@@ -705,9 +749,14 @@ export function CCAgentSessionView({
           const seen = new Set(localHits.map((hit) => hit.messageClientId));
           const remoteHits = response.results.flatMap((result) =>
             result.contentHits
-              .filter((hit) => !seen.has(hit.messageClientId))
+              .filter(
+                (hit) =>
+                  !seen.has(hit.messageClientId) &&
+                  !hiddenGhostMessageClientIds.has(hit.messageClientId) &&
+                  hit.occurrenceCount > 0,
+              )
               .flatMap((hit) =>
-                Array.from({ length: Math.max(1, hit.occurrenceCount) }, (_, occurrenceIndex) => ({
+                Array.from({ length: hit.occurrenceCount }, (_, occurrenceIndex) => ({
                   messageId: hit.messageId,
                   messageClientId: hit.messageClientId,
                   occurrenceIndex,
@@ -716,7 +765,9 @@ export function CCAgentSessionView({
           );
           const hits = [...localHits, ...remoteHits];
           setSessionSearchHits(hits);
-          setSessionSearchActive(hits.length > 0 ? 0 : -1);
+          setSessionSearchActive((active) =>
+            active >= 0 || hits.length === 0 ? active : 0,
+          );
           if (hits[0] && localHits.length === 0) focusSessionSearchHit(hits[0]);
           setSessionSearchPending(false);
         })
