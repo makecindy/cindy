@@ -806,6 +806,21 @@ export class GhostCindySlot {
    * 在途 running(含本单即将占用的名额)都会落成完成记录,一并计入预留,
    * 上限在任何并发时序下都不被突破。
    */
+  /**
+   * 是否有任意异步代办(mode:'submit' 的图片 / 视频生成)仍在途。
+   *
+   * 给「这个破坏性动作会打断什么」这类全局判定用(更新重启前的阻断探针)。这些 job 由
+   * `void runExec()` 脱离调用链跑、只活在本对象的 jobs Map 里:发起它的 turn 结束后,
+   * SessionTurnActivityTracker、loopback 模型活动、card-action 跟踪器全都看不到它,而
+   * forceQuit() 会连 Ghost Node runtime 一起 destroyAll —— 正在生成的图 / 视频直接没了。
+   */
+  anyAsyncJobRunning(): boolean {
+    for (const job of this.jobs.values()) {
+      if (job.status === 'running') return true;
+    }
+    return false;
+  }
+
   private evictSettledJobs(ghostId: string): void {
     const entries = [...this.jobs.entries()].filter(([, j]) => j.ghostId === ghostId);
     const running = entries.filter(([, j]) => j.status === 'running').length;

@@ -5,10 +5,8 @@
  * 绕过 before-quit 链、destroyAll() 掉 Ghost Node runtime、process.exit(0)。所以点下去
  * 之前必须回答一个问题:**当前有没有正在跑的活会被这一下打断?**
  *
- * 这个问题的难点不在判断,而在**来源分散**:仓里「活动」由五个互不相干的跟踪器各自维护,
- * 谁都不知道其它几个的存在。此前 renderer 侧逐个枚举来源,结果是每加一个新来源就漏一次
- * (PR #1197 的 review 里连续被指出四轮),而漏掉的后果是静默打断用户任务、不可撤销。
- * 所以判定收在这里一处,renderer 只问一次结论:
+ * 这个问题的难点不在判断,而在**来源分散**:仓里「活动」由六个互不相干的跟踪器各自维护,
+ * 谁都不知道其它几个的存在。判定收在这里一处,renderer 只问一次结论 —— 新增来源只改这里:
  *
  *   1. 逻辑 turn        —— SessionTurnActivityTracker + live session 的 isTurnRunning()
  *   2. Claude 后台活动  —— turn 已结束但 CC 子进程仍在调模型(后台 subagent;**不含**后台 Bash)
@@ -20,8 +18,16 @@
  *      所以永远点不亮来源 2 的 loopback 信号(useBackgroundBashTasks.ts 的头注释明写这一点);
  *      也不折算 makerChatStore 的 running,所以来源 1 同样看不到。快照来源是每个 live session
  *      的 listBackgroundTasks()
+ *   6. Cindy slot 的异步代办 —— mode:'submit' 的图片 / 视频生成。cindySlot.ts 用
+ *      `void runExec()` 脱离调用链跑,job 只活在 GhostCindySlot 自己的 jobs Map 里,发起它的
+ *      turn 结束后前五个来源全看不到
  *
- * 新增第 6 个来源时改这一个函数,不必再去翻每个调用点。
+ * 新增第 7 个来源时改这一个函数,不必再去翻每个调用点。
+ *
+ * 一个刻意的边界:这份清单**不保证完备** —— 仓里的异步活动持有者是开放集合,每个模块各自在
+ * 私有结构里管在途状态,没有统一注册处。但漏掉某个来源**不构成回归**:改动前那次二次确认
+ * 同样不做任何活动判定(文案只是「应用会自动重启」),对所有来源都是「点一下就 forceQuit」。
+ * 所以覆盖到的来源是净收益,没覆盖到的与改动前行为一致。发现新来源就往这里加一条。
  *
  * **fail closed**:任一来源读取抛错都按「有活动」处理。理由是这里服务的是不可撤销的破坏性
  * 动作,「无法确认」不能当成「确认没有」;同样口径见 bootstrap-electron 托盘退出的
@@ -32,7 +38,7 @@
  * (setUpdateAutoRelaunchBusyProbe),不该管手动重启 —— 用户主动点重启时,「有远程设备在看
  * 会话列表」不构成「会被打断的任务」,纳进来只会产生误报警告。
  *
- * 四个内存源同步、scheduler 源要查 SQLite,所以整体是 async:先读同步源,**都空闲**才去
+ * 五个内存源同步、scheduler 源要查 SQLite,所以整体是 async:先读同步源,**都空闲**才去
  * 查 scheduler(省掉绝大多数情况下的一次 SQLite 往返);拿到 scheduler 结果后再复采一次同步源,
  * 关掉「查库期间新 turn 起来了」的窗口 —— 同样的二次采样理由见 updateRelaunchSafety.ts 的
  * hasUpdateRelaunchBusyActivity。
@@ -54,6 +60,12 @@ export interface RelaunchBusyActivitySources {
    */
   anyBackgroundBashRunning: () => boolean;
   /**
+   * 是否有任意 Cindy slot 异步代办(mode:'submit' 的图片 / 视频生成)在途。
+   * **必须单独查**:这些 job 脱离调用链执行、只记在 GhostCindySlot 的私有 jobs Map 里,
+   * 发起 turn 结束后其它来源全看不到,而 forceQuit() 会连 Ghost Node runtime 一起销毁。
+   */
+  anyCindySlotJobRunning: () => boolean;
+  /**
    * scheduler 里是否有 run 处于 running。**必须单独查**:script 模式与 pre-run hook 阶段
    * 都不创建 session,内存来源全看不到它们,而重启会让 run 来不及落终态、脚本子进程变成
    * 失联进程。走 SQLite,所以是异步。
@@ -69,8 +81,8 @@ export interface RelaunchBusyActivity {
 }
 
 /**
- * 四个内存来源每次都全查(不短路),让 reasons 能完整反映现场 —— 诊断「为什么拦了我」时,
- * 只知道第一个命中的来源不够用。成本是四次内存读,可忽略。
+ * 五个内存来源每次都全查(不短路),让 reasons 能完整反映现场 —— 诊断「为什么拦了我」时,
+ * 只知道第一个命中的来源不够用。成本是五次内存读,可忽略。
  */
 export async function evaluateRelaunchBusyActivity(
   sources: RelaunchBusyActivitySources,
@@ -90,6 +102,7 @@ export async function evaluateRelaunchBusyActivity(
     probe('claude-background-activity', () => sources.listClaudeBackgroundSessions().length > 0);
     probe('ghost-background-activity', () => sources.anyGhostSessionBusy());
     probe('background-bash', () => sources.anyBackgroundBashRunning());
+    probe('cindy-slot-async-job', () => sources.anyCindySlotJobRunning());
     return hits;
   };
 

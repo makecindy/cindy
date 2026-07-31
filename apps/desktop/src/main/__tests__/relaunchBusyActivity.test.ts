@@ -1,8 +1,8 @@
 /**
- * 手动更新重启的阻断判定 —— 五个活动来源的聚合与 fail-closed。
+ * 手动更新重启的阻断判定 —— 六个活动来源的聚合与 fail-closed。
  *
  * 这个判定服务的是不可撤销的破坏性动作(forceQuit → process.exit(0)),所以两条不变量:
- *  1. **任一来源报忙就是忙**（五源等价，没有主次）;
+ *  1. **任一来源报忙就是忙**（六源等价，没有主次）;
  *  2. **任一来源读不出来也算忙**（「无法确认」不等于「确认没有」）。
  * 每个来源各有一条独立用例 —— 少一条就意味着少覆盖一个真实的静默中断入口。
  *
@@ -20,6 +20,7 @@ const idle = {
   listClaudeBackgroundSessions: () => [] as readonly string[],
   anyGhostSessionBusy: () => false,
   anyBackgroundBashRunning: () => false,
+  anyCindySlotJobRunning: () => false,
   anySchedulerRunRunning: async () => false,
 };
 
@@ -56,6 +57,7 @@ describe('evaluateRelaunchBusyActivity', () => {
       listClaudeBackgroundSessions: () => ['sess-a'],
       anyGhostSessionBusy: () => true,
       anyBackgroundBashRunning: () => true,
+      anyCindySlotJobRunning: () => true,
     });
     expect(r.busy).toBe(true);
     expect(r.reasons).toEqual([
@@ -63,6 +65,7 @@ describe('evaluateRelaunchBusyActivity', () => {
       'claude-background-activity',
       'ghost-background-activity',
       'background-bash',
+      'cindy-slot-async-job',
     ]);
   });
 
@@ -71,6 +74,7 @@ describe('evaluateRelaunchBusyActivity', () => {
     ['listClaudeBackgroundSessions', 'claude-background-activity'],
     ['anyGhostSessionBusy', 'ghost-background-activity'],
     ['anyBackgroundBashRunning', 'background-bash'],
+    ['anyCindySlotJobRunning', 'cindy-slot-async-job'],
   ] as const)('%s 抛错时 fail closed 并标记探针失败', async (key, label) => {
     const r = await evaluateRelaunchBusyActivity({
       ...idle,
@@ -100,6 +104,17 @@ describe('evaluateRelaunchBusyActivity', () => {
     });
     expect(r.busy).toBe(true);
     expect(r.reasons).toEqual(['background-bash']);
+  });
+
+  // Cindy slot 异步代办(mode:'submit' 的图片 / 视频生成):void runExec() 脱链执行,只记在
+  // GhostCindySlot 私有 jobs Map,发起 turn 结束后其它来源全看不到。
+  it('Cindy slot 异步代办在途时阻断', async () => {
+    const r = await evaluateRelaunchBusyActivity({
+      ...idle,
+      anyCindySlotJobRunning: () => true,
+    });
+    expect(r.busy).toBe(true);
+    expect(r.reasons).toEqual(['cindy-slot-async-job']);
   });
 
   // scheduler:script 模式与 pre-run hook 阶段的 run 都不创建 session,内存探针看不到 ——
