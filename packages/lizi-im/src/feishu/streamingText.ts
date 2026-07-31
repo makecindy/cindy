@@ -58,6 +58,9 @@ function fitCardToLimit(
   let low = 0;
   let high = chars.length;
   let fitted = buildCard(suffix);
+  if (cardRequestBytes(fitted) > FEISHU_CARD_REQUEST_MAX_BYTES) {
+    return buildMarkdownCardV2(transportMessages.streaming.deliveryFailed);
+  }
   while (low <= high) {
     const middle = Math.floor((low + high) / 2);
     const candidate = buildCard(`${chars.slice(0, middle).join('')}${suffix}`);

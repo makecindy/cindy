@@ -20,6 +20,10 @@ function markdownContent(card: unknown): string {
   return (card as { body: { elements: Array<{ content: string }> } }).body.elements[0].content;
 }
 
+function requestBytes(card: unknown): number {
+  return Buffer.byteLength(JSON.stringify({ content: JSON.stringify(card) }), 'utf8');
+}
+
 describe('feishu streaming text', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -48,12 +52,19 @@ describe('feishu streaming text', () => {
     await handle.finalize(longMarkdown);
 
     const card = mocks.patchCardRaw.mock.calls[0][1];
-    const requestBytes = Buffer.byteLength(
-      JSON.stringify({ content: JSON.stringify(card) }),
-      'utf8',
-    );
-    expect(requestBytes).toBeLessThanOrEqual(FEISHU_CARD_REQUEST_MAX_BYTES);
+    expect(requestBytes(card)).toBeLessThanOrEqual(FEISHU_CARD_REQUEST_MAX_BYTES);
     expect(markdownContent(card)).toContain('完整内容仍可在 Cindy 桌面端查看');
+  });
+
+  it('uses a bounded plain card when image elements alone exceed the limit', async () => {
+    mocks.uploadImage.mockImplementation(async (path: string) => `${path}-${'x'.repeat(128)}`);
+    const handle = await start('ou_owner');
+    for (let i = 0; i < 200; i++) handle.addExtraImageAbsPath?.(`/tmp/${i}.png`);
+    await handle.finalize('正文');
+
+    const card = mocks.patchCardRaw.mock.calls[0][1];
+    expect(requestBytes(card)).toBeLessThanOrEqual(FEISHU_CARD_REQUEST_MAX_BYTES);
+    expect(markdownContent(card)).toBe(messages.streaming.deliveryFailed);
   });
 
   it('patches a short user-visible notice when the final card shape is rejected', async () => {
