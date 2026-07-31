@@ -15,7 +15,10 @@ import {
   readContactsSettings,
   writeContactsDeviceSyncEnabled,
 } from '../maker-host/contacts-settings-store.js';
-import { onLocalContactsChanged } from '../maker-host/contacts-change-events.js';
+import {
+  onLocalContactsChanged,
+  readContactsChangeToken,
+} from '../maker-host/contacts-change-events.js';
 import { broadcastContactsChanged } from '../maker-host/contacts-change-broadcast.js';
 import { contactsSyncKeyStore } from './keyStore.js';
 import { LanContactsSyncTransport } from './lanTransport.js';
@@ -74,6 +77,7 @@ const statusListeners = new Set<(status: ContactsDeviceSyncStatus) => void>();
 let liveStatus: ContactsDeviceSyncStatus = emptyContactsDeviceSyncStatus();
 /** undefined 强制首次 init/get 按当前 owner 装载，避免模块求值期提前碰 userData。 */
 let statusOwnerId: string | null | undefined;
+let observedContactsChangeToken: string | null | undefined;
 const outbound = new ContactsSyncOutbound({
   getGeneration: () => runtimeGeneration,
   getOwnerId: () => getActiveAppSession().dataOwnerId,
@@ -241,6 +245,7 @@ export function handleContactsDeviceLinkStatusChanged(online: boolean): void {
 
 /** 通讯录本地写入后的去抖入口；远端物化不走这里，避免广播风暴。 */
 export function notifyLocalContactsChanged(): void {
+  observedContactsChangeToken = readContactsChangeToken();
   if (!isEnabled() || !initialized) return;
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
@@ -248,6 +253,20 @@ export function notifyLocalContactsChanged(): void {
     runSyncTask(() => broadcastContactsNow(false));
   }, BROADCAST_DEBOUNCE_MS);
   debounceTimer.unref?.();
+}
+
+/** Device Link 持有者调用；发现其它共享 userData 实例的本地写入后立即补发。 */
+export function pollContactsDeviceSyncDataChange(): void {
+  ensureCurrentOwnerStatus();
+  const token = readContactsChangeToken();
+  if (observedContactsChangeToken === undefined) {
+    observedContactsChangeToken = token;
+    return;
+  }
+  if (token === observedContactsChangeToken) return;
+  observedContactsChangeToken = token;
+  if (!isEnabled() || !initialized) return;
+  runSyncTask(() => broadcastContactsNow(false));
 }
 
 export function handleContactsPeerPresenceChanged(peer: {
@@ -529,6 +548,7 @@ function ensureCurrentOwnerStatus(): void {
   syncAttemptTimer = null;
   contactsSyncKeyStore.resetMemory();
   statusOwnerId = ownerId;
+  observedContactsChangeToken = readContactsChangeToken();
   liveStatus = buildInitialStatus();
   emitStatus();
 }
@@ -541,6 +561,7 @@ export const __testing = {
   reset(): void {
     disposeContactsDeviceSync();
     statusOwnerId = getActiveAppSession().dataOwnerId;
+    observedContactsChangeToken = readContactsChangeToken();
     liveStatus = buildInitialStatus();
     statusListeners.clear();
   },

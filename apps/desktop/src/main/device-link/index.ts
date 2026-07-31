@@ -81,6 +81,7 @@ import {
   handleContactsPeerPresenceChanged,
   handleIncomingContactsRelayFrame,
   initContactsDeviceSync,
+  pollContactsDeviceSyncDataChange,
   pollContactsDeviceSyncSettingChange,
 } from '../contacts-sync/driver';
 
@@ -483,6 +484,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       client?.start();
       refreshAppliedSettingsSnapshot();
       pollContactsDeviceSyncSettingChange();
+      pollContactsDeviceSyncDataChange();
     },
     onDemote: () => {
       appliedSettingsSnapshot = null;
@@ -800,6 +802,7 @@ function refreshAppliedSettingsSnapshot(): void {
 function pollExternalSettingsChange(): void {
   if (!client || !arbiter?.isOwner()) return;
   pollContactsDeviceSyncSettingChange();
+  pollContactsDeviceSyncDataChange();
   const prev = appliedSettingsSnapshot;
   const { remoteControlEnabled, revokedControllers } = readDeviceLinkSettings();
   appliedSettingsSnapshot = { remoteControlEnabled, revokedControllers: [...revokedControllers] };

@@ -366,6 +366,35 @@ describe("contacts device sync", () => {
     expect(stateOf(store)).toEqual(before);
   });
 
+  it("首次激活捕获超限本地表时回滚且不留下损坏状态", () => {
+    const store = createStore();
+    const person = store.createContact({
+      kind: "person",
+      displayName: "超限联系人",
+    });
+    const db = databases.at(-1)!;
+    db.prepare(
+      `WITH RECURSIVE seq(n) AS (
+         SELECT 1
+         UNION ALL
+         SELECT n + 1 FROM seq WHERE n < ?
+       )
+       INSERT INTO contact_events(id, contact_id, date, text, source, created_at)
+       SELECT 'event-' || n, ?, '2026-07-31', '事件', '', '2026-07-31T00:00:00.000Z'
+       FROM seq`,
+    ).run(CONTACTS_SYNC_MAX_ROWS_PER_TABLE + 1, person.id);
+
+    expect(() => store.activateDeviceSync()).toThrow(
+      /contacts sync state exceeds limits/,
+    );
+    expect(
+      db.prepare(`SELECT COUNT(*) AS count FROM contacts_sync_state`).get(),
+    ).toEqual({ count: 0 });
+
+    db.prepare(`DELETE FROM contact_events`).run();
+    expect(store.activateDeviceSync().events).toHaveLength(0);
+  });
+
   it("同 stamp 的异常值按规范化 JSON 裁决，不受对象 key 顺序影响", () => {
     const stamp = { counter: 1, nodeId: "node-a" };
     const left = {

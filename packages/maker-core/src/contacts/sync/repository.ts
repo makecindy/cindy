@@ -190,6 +190,7 @@ export class ContactsSyncRepository {
     state: ContactsSyncState,
     projection: ContactsDataSnapshot,
   ): void {
+    this.assertPersistableState(state);
     this.db
       .prepare(
         `INSERT INTO contacts_sync_state(singleton, node_id, state_json, projection_json)
@@ -204,6 +205,7 @@ export class ContactsSyncRepository {
     state: ContactsSyncState,
     projection: ContactsDataSnapshot,
   ): void {
+    this.assertPersistableState(state);
     this.db
       .prepare(
         `UPDATE contacts_sync_state
@@ -211,5 +213,15 @@ export class ContactsSyncRepository {
          WHERE singleton = 1`,
       )
       .run(nodeId, JSON.stringify(state), JSON.stringify(projection));
+  }
+
+  /** 所有本地捕获路径共用的最终写盘门，拒绝后由外层事务完整回滚。 */
+  private assertPersistableState(state: ContactsSyncState): void {
+    if (!isValidContactsSyncState(state)) {
+      throw new ContactsError(
+        "invalid-params",
+        "contacts sync state exceeds limits",
+      );
+    }
   }
 }

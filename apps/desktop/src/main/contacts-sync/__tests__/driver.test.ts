@@ -15,6 +15,7 @@ const harness = vi.hoisted(() => {
     mode: 'cloud' as 'cloud' | 'local' | 'signed-out',
     ownerId: 'owner-a' as string | null,
     settings: new Map<string, boolean>(),
+    contactsChangeToken: 'initial-token' as string | null,
     emptyState,
     activateSync: vi.fn(() => emptyState),
     peerPublicKey: 'peer-public' as string | null,
@@ -69,6 +70,7 @@ vi.mock('../../maker-host/contacts-settings-store.js', () => ({
 
 vi.mock('../../maker-host/contacts-change-events.js', () => ({
   onLocalContactsChanged: () => vi.fn(),
+  readContactsChangeToken: () => harness.contactsChangeToken,
 }));
 
 vi.mock('../../maker-host/contacts-change-broadcast.js', () => ({
@@ -138,6 +140,7 @@ beforeEach(() => {
   harness.mode = 'cloud';
   harness.ownerId = 'owner-a';
   harness.settings.clear();
+  harness.contactsChangeToken = 'initial-token';
   harness.activateSync.mockClear();
   harness.peerPublicKey = 'peer-public';
   harness.pinPeerPublicKey.mockClear();
@@ -258,5 +261,34 @@ describe('contacts sync runtime ownership', () => {
       publicKey: 'peer-public',
     });
     expect(keyFrameCount()).toBe(2);
+  });
+
+  it('broadcasts a contact change written by another shared-userData instance', async () => {
+    harness.settings.set('owner-a', true);
+    harness.lanSend.mockResolvedValue(false);
+    driver.initContactsDeviceSync({
+      getSelfDeviceId: () => 'self-device',
+      listOnlineDesktopDevices: () => [{ deviceId: 'peer-device', deviceName: 'Peer Desktop' }],
+      isPeerAllowed: (deviceId) => deviceId === 'peer-device',
+      sendRelayFrame: harness.relaySend,
+    });
+    await vi.waitFor(() =>
+      expect(harness.relaySend.mock.calls.some(([, frame]) => frame.type === 'cipher-chunk')).toBe(
+        true,
+      ),
+    );
+    harness.relaySend.mockClear();
+
+    harness.contactsChangeToken = 'passive-instance-write';
+    driver.pollContactsDeviceSyncDataChange();
+    await vi.waitFor(() =>
+      expect(harness.relaySend.mock.calls.some(([, frame]) => frame.type === 'cipher-chunk')).toBe(
+        true,
+      ),
+    );
+
+    const sent = harness.relaySend.mock.calls.length;
+    driver.pollContactsDeviceSyncDataChange();
+    expect(harness.relaySend).toHaveBeenCalledTimes(sent);
   });
 });
