@@ -3162,6 +3162,7 @@
         },
         "status": {
           "loading": "正在读取同步状态…",
+          "signInRequired": "登录 Cindy 账号后可在设备间同步",
           "off": "同步已关闭",
           "waiting": "等待其他已开启同步的桌面设备上线",
           "syncing": "正在安全同步…",

@@ -5,7 +5,11 @@
  * 因唯一约束被确定性隐藏的远端冲突行不会被误判成“本机删除”。
  */
 
-import { nextContactsSyncStamp } from "./merge.js";
+import {
+  compareContactsSyncText,
+  nextContactsSyncStamp,
+  stableContactsSyncJson,
+} from "./merge.js";
 import {
   type ContactsDataSnapshot,
   type ContactsSnapshotContact,
@@ -17,7 +21,7 @@ import {
 } from "./types.js";
 
 function equal(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+  return stableContactsSyncJson(a) === stableContactsSyncJson(b);
 }
 
 function stamped<T>(
@@ -105,7 +109,9 @@ function captureContacts(
       records.set(id, { ...existing, deleted: stamp });
     }
   }
-  return [...records.values()].sort((a, b) => a.id.localeCompare(b.id));
+  return [...records.values()].sort((a, b) =>
+    compareContactsSyncText(a.id, b.id),
+  );
 }
 
 type RowWithId = { id: string };
@@ -147,7 +153,9 @@ function captureEntities<T extends RowWithId>(
       records.set(id, { ...existing, deleted: stamp });
     }
   }
-  return [...records.values()].sort((a, b) => a.id.localeCompare(b.id));
+  return [...records.values()].sort((a, b) =>
+    compareContactsSyncText(a.id, b.id),
+  );
 }
 
 export function captureContactsSnapshot(

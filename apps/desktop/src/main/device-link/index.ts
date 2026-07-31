@@ -16,6 +16,7 @@ import WebSocket from 'ws';
 import {
   DeviceLinkClient,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  DL_CONTACTS_SYNC_CHANNEL,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
   type DeviceLinkConnectionIssue,
@@ -80,7 +81,6 @@ import {
   handleIncomingContactsRelayFrame,
   initContactsDeviceSync,
 } from '../contacts-sync/driver';
-import { DL_CONTACTS_SYNC_CHANNEL } from '../contacts-sync/wire';
 
 // register.ts 从 device-link/index 导入 setBusyProbe;改用 busyReporter 后在此 re-export 保持其导入不变。
 export { setBusyProbe };
@@ -109,8 +109,10 @@ let ownershipStoreCache: { db: unknown; store: OwnershipStore } | null = null;
  * settings 文件(被动实例的设置页也能改授权,见 settings-store 多实例语义):持有者
  * 每 5s 对比快照,变化则补发 presence / 踢断新撤销的控制端。非持有者恒为 null。
  */
-let appliedSettingsSnapshot: { remoteControlEnabled: boolean; revokedControllers: string[] } | null =
-  null;
+let appliedSettingsSnapshot: {
+  remoteControlEnabled: boolean;
+  revokedControllers: string[];
+} | null = null;
 /**
  * 「保持电脑唤醒」已应用基线。与被控授权不同:keepAwake 是**每个进程各自持有**一个
  * blocker、与 relay 持有权无关,故所有实例(含被动实例)都要跟随共享 settings 的改写
@@ -316,8 +318,8 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 流动),但撤销过的设备必须排除 —— 判定统一走 shouldExchangeDictionaryWith,
     // 三个入口共用一份条件。
     if (
-      wasOnline !== true
-      && shouldExchangeDictionaryWith({
+      wasOnline !== true &&
+      shouldExchangeDictionaryWith({
         online: snap.online,
         platform: snap.platform,
         revoked: isDeviceRevoked(snap.deviceId),
@@ -371,11 +373,13 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       // 入站与出站走同一份准入判定:这条通道承载的是可写 CRDT 状态,只接受电脑
       // 对端。手机在这套设计里是只读消费者(走 invoke 拉快照),不该能推状态过来
       // 改桌面词典 —— 出站已经这么把关了,入站漏掉就等于白设。
-      if (shouldExchangeDictionaryWith({
-        online: true,
-        platform: presencePlatformByDevice.get(env.src),
-        revoked: isDeviceRevoked(env.src),
-      })) {
+      if (
+        shouldExchangeDictionaryWith({
+          online: true,
+          platform: presencePlatformByDevice.get(env.src),
+          revoked: isDeviceRevoked(env.src),
+        })
+      ) {
         handleIncomingDictionaryState(env.src, p.payload);
       }
       return;
@@ -406,11 +410,13 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     },
     listOnlineDesktopDevices: () =>
       [...presenceOnlineByDevice.entries()]
-        .filter(([deviceId, online]) => shouldExchangeDictionaryWith({
-          online,
-          platform: presencePlatformByDevice.get(deviceId),
-          revoked: isDeviceRevoked(deviceId),
-        }))
+        .filter(([deviceId, online]) =>
+          shouldExchangeDictionaryWith({
+            online,
+            platform: presencePlatformByDevice.get(deviceId),
+            revoked: isDeviceRevoked(deviceId),
+          }),
+        )
         .map(([deviceId]) => deviceId),
   });
   initContactsDeviceSync({
@@ -900,11 +906,13 @@ export async function remoteSubscribe(
   if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
   return client.invoke(deviceId, {
     channel: DL_SUBSCRIBE_CHANNEL,
-    args: [{
-      topics,
-      controllerName: deviceName(),
-      capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
-    }],
+    args: [
+      {
+        topics,
+        controllerName: deviceName(),
+        capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
+      },
+    ],
   });
 }
 

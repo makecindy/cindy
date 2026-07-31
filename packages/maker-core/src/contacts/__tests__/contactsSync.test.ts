@@ -8,6 +8,12 @@ import {
   createContactsSyncDelta,
   mergeContactsSyncStates,
 } from "../sync/merge.js";
+import { materializeContactsSyncState } from "../sync/materialize.js";
+import {
+  CONTACTS_SYNC_MAX_ROWS_PER_TABLE,
+  isValidContactsSyncState,
+} from "../sync/validation.js";
+import { createEmptyContactsSyncState } from "../sync/types.js";
 
 function noopLogger(): Logger {
   const noop = () => {};
@@ -106,7 +112,10 @@ describe("contacts device sync", () => {
     a.activateDeviceSync();
     b.activateDeviceSync();
     const first = a.createContact({ kind: "person", displayName: "已同步" });
-    const untouched = a.createContact({ kind: "org", displayName: "未修改组织" });
+    const untouched = a.createContact({
+      kind: "org",
+      displayName: "未修改组织",
+    });
     exchange(b, a);
     const bBefore = stateOf(b);
 
@@ -259,5 +268,85 @@ describe("contacts device sync", () => {
     );
     expect(store.getContact(person.id).displayName).toBe("安全边界");
     expect(stateOf(store)).toEqual(before);
+  });
+
+  it("同 stamp 的异常值按规范化 JSON 裁决，不受对象 key 顺序影响", () => {
+    const stamp = { counter: 1, nodeId: "node-a" };
+    const left = {
+      ...createEmptyContactsSyncState(),
+      clocks: [{ nodeId: "node-a", counter: 1 }],
+      groups: [
+        {
+          id: "same-group",
+          value: {
+            stamp,
+            value: { name: "A", description: "", createdAt: "2026-01-01" },
+          },
+        },
+      ],
+    };
+    const right = {
+      ...createEmptyContactsSyncState(),
+      clocks: [{ nodeId: "node-a", counter: 1 }],
+      groups: [
+        {
+          id: "same-group",
+          value: {
+            stamp,
+            value: { createdAt: "2026-01-01", description: "", name: "Z" },
+          },
+        },
+      ],
+    };
+
+    expect(
+      materializeContactsSyncState(mergeContactsSyncStates(left, right))
+        .groups[0]?.name,
+    ).toBe("Z");
+    expect(
+      materializeContactsSyncState(mergeContactsSyncStates(right, left))
+        .groups[0]?.name,
+    ).toBe("Z");
+  });
+
+  it("深度校验要求 clocks 覆盖全部内容 stamp", () => {
+    const store = createStore();
+    store.activateDeviceSync();
+    const person = store.createContact({
+      kind: "person",
+      displayName: "时钟覆盖",
+    });
+    stateOf(store);
+    store.updateContact(person.id, { summary: "第二次写入" });
+    const state = stateOf(store);
+    expect(isValidContactsSyncState(state)).toBe(true);
+
+    const poisoned = structuredClone(state);
+    const nodeId = poisoned.contacts[0]!.summary.stamp.nodeId;
+    const clock = poisoned.clocks.find((entry) => entry.nodeId === nodeId)!;
+    clock.counter = poisoned.contacts[0]!.summary.stamp.counter - 1;
+    expect(clock.counter).toBeGreaterThan(0);
+    expect(isValidContactsSyncState(poisoned)).toBe(false);
+  });
+
+  it("磁盘 projection 对每张表执行行数上限", () => {
+    const store = createStore();
+    store.activateDeviceSync();
+    const db = databases.at(-1)!;
+    const projection = {
+      contacts: new Array(CONTACTS_SYNC_MAX_ROWS_PER_TABLE + 1).fill(null),
+      identities: [],
+      events: [],
+      groups: [],
+      memberships: [],
+      relations: [],
+    };
+    db.prepare(
+      `UPDATE contacts_sync_state SET projection_json = ? WHERE singleton = 1`,
+    ).run(JSON.stringify(projection));
+
+    expect(() => store.readDeviceSyncState()).toThrow(
+      /stored contacts sync projection is invalid/,
+    );
   });
 });

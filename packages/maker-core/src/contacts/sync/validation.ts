@@ -15,7 +15,7 @@ import {
   type ContactsSyncState,
 } from "./types.js";
 
-const MAX_ROWS_PER_TABLE = 100_000;
+export const CONTACTS_SYNC_MAX_ROWS_PER_TABLE = 100_000;
 const MAX_ID_LENGTH = 160;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -76,7 +76,8 @@ function isEntityArray<T>(
   validate: (candidate: unknown) => candidate is T,
   validateId: (candidate: unknown) => candidate is string = isId,
 ): value is Array<ContactsSyncEntity<T>> {
-  if (!Array.isArray(value) || value.length > MAX_ROWS_PER_TABLE) return false;
+  if (!Array.isArray(value) || value.length > CONTACTS_SYNC_MAX_ROWS_PER_TABLE)
+    return false;
   const ids = new Set<string>();
   for (const candidate of value) {
     if (
@@ -243,7 +244,7 @@ export function isValidContactsSyncState(
   }
   if (
     !Array.isArray(value.contacts) ||
-    value.contacts.length > MAX_ROWS_PER_TABLE
+    value.contacts.length > CONTACTS_SYNC_MAX_ROWS_PER_TABLE
   )
     return false;
   const contactIds = new Set<string>();
@@ -268,5 +269,45 @@ export function isValidContactsSyncState(
     )
       return false;
   }
-  return isEntityArray(value.relations, isRelation);
+  if (!isEntityArray(value.relations, isRelation)) return false;
+  return clocksCoverEveryStamp(value as unknown as ContactsSyncState);
+}
+
+function clocksCoverEveryStamp(state: ContactsSyncState): boolean {
+  const clocks = new Map(
+    state.clocks.map((clock) => [clock.nodeId, clock.counter]),
+  );
+  const covered = (stamp: ContactsSyncStamp | undefined): boolean =>
+    !stamp || (clocks.get(stamp.nodeId) ?? 0) >= stamp.counter;
+  for (const contact of state.contacts) {
+    if (
+      !covered(contact.kind.stamp) ||
+      !covered(contact.displayName.stamp) ||
+      !covered(contact.aliases.stamp) ||
+      !covered(contact.summary.stamp) ||
+      !covered(contact.narrative.stamp) ||
+      !covered(contact.agentNotes.stamp) ||
+      !covered(contact.status.stamp) ||
+      !covered(contact.source.stamp) ||
+      !covered(contact.createdAt.stamp) ||
+      !covered(contact.updatedAt.stamp) ||
+      !covered(contact.deleted)
+    ) {
+      return false;
+    }
+  }
+  for (const records of [
+    state.identities,
+    state.events,
+    state.groups,
+    state.memberships,
+    state.relations,
+  ]) {
+    for (const record of records) {
+      if (!covered(record.value.stamp) || !covered(record.deleted)) {
+        return false;
+      }
+    }
+  }
+  return true;
 }

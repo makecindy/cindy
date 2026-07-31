@@ -116,7 +116,8 @@ export function createContactsIpcHandlers(deps: ContactsIpcDeps): Record<string,
       return { enabled: state.value.enabled, isCustomized: state.isCustomized };
     },
     [MAKER_INVOKE.CONTACTS_SETTINGS_SET]: async (enabled) => {
-      if (typeof enabled !== 'boolean') throwIpcError('INVALID_PARAMS', 'enabled required (boolean)');
+      if (typeof enabled !== 'boolean')
+        throwIpcError('INVALID_PARAMS', 'enabled required (boolean)');
       const changed = deps.readSettingsState().value.enabled !== enabled;
       // Claude 侧生效点在下次 session start(mcp provider isEnabled 现读); Codex 的
       // MCP flags 冻在 codexEnvironment 的 cached spawn 配置里, 值真变化时还要失效
@@ -148,38 +149,51 @@ export function createContactsIpcHandlers(deps: ContactsIpcDeps): Record<string,
       if (typeof enabled !== 'boolean') {
         throwIpcError('INVALID_PARAMS', 'device sync enabled required (boolean)');
       }
-      if (!deps.setDeviceSyncEnabled) throwIpcError('INTERNAL', 'contacts sync is unavailable');
+      if (!deps.setDeviceSyncEnabled || !deps.readDeviceSyncStatus) {
+        throwIpcError('INTERNAL', 'contacts sync is unavailable');
+      }
       try {
         await deps.setDeviceSyncEnabled(enabled);
-        return await deps.readDeviceSyncStatus?.();
+        return await deps.readDeviceSyncStatus();
       } catch (err) {
         rethrowAsIpcError(err);
       }
     },
     [MAKER_INVOKE.CONTACTS_SYNC_NOW]: async () => {
-      if (!deps.syncNow) throwIpcError('INTERNAL', 'contacts sync is unavailable');
+      if (!deps.syncNow || !deps.readDeviceSyncStatus) {
+        throwIpcError('INTERNAL', 'contacts sync is unavailable');
+      }
       try {
         await deps.syncNow();
-        return await deps.readDeviceSyncStatus?.();
+        return await deps.readDeviceSyncStatus();
       } catch (err) {
         rethrowAsIpcError(err);
       }
     },
 
     [MAKER_INVOKE.CONTACTS_LIST]: async (opts) =>
-      query(() => store().listContacts((opts ?? {}) as Parameters<ReturnType<typeof store>['listContacts']>[0])),
-    [MAKER_INVOKE.CONTACTS_GET]: async (id) => query(() => store().getContact(requireString(id, 'id'))),
+      query(() =>
+        store().listContacts(
+          (opts ?? {}) as Parameters<ReturnType<typeof store>['listContacts']>[0],
+        ),
+      ),
+    [MAKER_INVOKE.CONTACTS_GET]: async (id) =>
+      query(() => store().getContact(requireString(id, 'id'))),
     [MAKER_INVOKE.CONTACTS_CREATE]: async (input) =>
       mutate(() =>
         store().createContact(
-          requireObject(input, 'input') as unknown as Parameters<ReturnType<typeof store>['createContact']>[0],
+          requireObject(input, 'input') as unknown as Parameters<
+            ReturnType<typeof store>['createContact']
+          >[0],
         ),
       ),
     [MAKER_INVOKE.CONTACTS_UPDATE]: async (id, patch) =>
       mutate(() =>
         store().updateContact(
           requireString(id, 'id'),
-          requireObject(patch, 'patch') as unknown as Parameters<ReturnType<typeof store>['updateContact']>[1],
+          requireObject(patch, 'patch') as unknown as Parameters<
+            ReturnType<typeof store>['updateContact']
+          >[1],
         ),
       ),
     [MAKER_INVOKE.CONTACTS_DELETE]: async (id) =>
@@ -188,7 +202,9 @@ export function createContactsIpcHandlers(deps: ContactsIpcDeps): Record<string,
         return { deleted: true };
       }),
     [MAKER_INVOKE.CONTACTS_MERGE]: async (targetId, sourceId) =>
-      mutate(() => store().merge(requireString(targetId, 'targetId'), requireString(sourceId, 'sourceId'))),
+      mutate(() =>
+        store().merge(requireString(targetId, 'targetId'), requireString(sourceId, 'sourceId')),
+      ),
     [MAKER_INVOKE.CONTACTS_RESOLVE]: async (value, opts) =>
       query(() =>
         store().resolve(
@@ -209,7 +225,9 @@ export function createContactsIpcHandlers(deps: ContactsIpcDeps): Record<string,
       mutate(() =>
         store().addIdentity(
           requireString(contactId, 'contactId'),
-          requireObject(input, 'input') as unknown as Parameters<ReturnType<typeof store>['addIdentity']>[1],
+          requireObject(input, 'input') as unknown as Parameters<
+            ReturnType<typeof store>['addIdentity']
+          >[1],
         ),
       ),
     [MAKER_INVOKE.CONTACTS_REMOVE_IDENTITY]: async (identityId) =>
@@ -221,14 +239,18 @@ export function createContactsIpcHandlers(deps: ContactsIpcDeps): Record<string,
       mutate(() =>
         store().appendEvent(
           requireString(contactId, 'contactId'),
-          requireObject(input, 'input') as unknown as Parameters<ReturnType<typeof store>['appendEvent']>[1],
+          requireObject(input, 'input') as unknown as Parameters<
+            ReturnType<typeof store>['appendEvent']
+          >[1],
         ),
       ),
     [MAKER_INVOKE.CONTACTS_ADD_RELATION]: async (fromId, input) =>
       mutate(() =>
         store().addRelation(
           requireString(fromId, 'fromId'),
-          requireObject(input, 'input') as unknown as Parameters<ReturnType<typeof store>['addRelation']>[1],
+          requireObject(input, 'input') as unknown as Parameters<
+            ReturnType<typeof store>['addRelation']
+          >[1],
         ),
       ),
     [MAKER_INVOKE.CONTACTS_REMOVE_RELATION]: async (relationId) =>
@@ -266,8 +288,12 @@ export function createContactsIpcHandlers(deps: ContactsIpcDeps): Record<string,
       mutate(() => {
         const gid = requireString(groupId, 'groupId');
         const p = requireObject(payload, 'payload') as { add?: unknown; remove?: unknown };
-        const add = Array.isArray(p.add) ? p.add.filter((x): x is string => typeof x === 'string') : [];
-        const remove = Array.isArray(p.remove) ? p.remove.filter((x): x is string => typeof x === 'string') : [];
+        const add = Array.isArray(p.add)
+          ? p.add.filter((x): x is string => typeof x === 'string')
+          : [];
+        const remove = Array.isArray(p.remove)
+          ? p.remove.filter((x): x is string => typeof x === 'string')
+          : [];
         if (add.length > 0) store().addToGroup(gid, add);
         if (remove.length > 0) store().removeFromGroup(gid, remove);
         return { added: add.length, removed: remove.length };
@@ -295,9 +321,7 @@ export function createContactsIpcHandlers(deps: ContactsIpcDeps): Record<string,
 }
 
 /** 向所有窗口广播通讯录变更(IPC mutate 与 MCP 写类工具共用 — agent 直写 store 不经 IPC 层) */
-export function broadcastContactsChanged(
-  options: { origin?: 'local' | 'remote' } = {},
-): void {
+export function broadcastContactsChanged(options: { origin?: 'local' | 'remote' } = {}): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send(CONTACTS_CHANGED_CHANNEL);
   }
@@ -345,18 +369,25 @@ export function registerContactsIpc(): void {
         const { restartCodexAfterAuthModeChange } = await import('../maker-host/index.js');
         await restartCodexAfterAuthModeChange();
       } catch (err) {
-        log.warn('restartCodexAfterAuthModeChange on contacts toggle failed — codex keeps stale MCP config until app restart or re-toggle', {
-          error: err instanceof Error ? err.message : String(err),
-        });
+        log.warn(
+          'restartCodexAfterAuthModeChange on contacts toggle failed — codex keeps stale MCP config until app restart or re-toggle',
+          {
+            error: err instanceof Error ? err.message : String(err),
+          },
+        );
         throw err;
       }
       try {
-        const { shutdownCodexEnvironment } = await import('../mcp-integrations/codexEnvironment.js');
+        const { shutdownCodexEnvironment } =
+          await import('../mcp-integrations/codexEnvironment.js');
         await shutdownCodexEnvironment();
       } catch (err) {
-        log.warn('shutdownCodexEnvironment on contacts toggle failed — cached spawn config still stale', {
-          error: err instanceof Error ? err.message : String(err),
-        });
+        log.warn(
+          'shutdownCodexEnvironment on contacts toggle failed — cached spawn config still stale',
+          {
+            error: err instanceof Error ? err.message : String(err),
+          },
+        );
         throw err;
       }
     },

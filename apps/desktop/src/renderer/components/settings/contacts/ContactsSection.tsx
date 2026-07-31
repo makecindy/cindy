@@ -131,6 +131,7 @@ export function ContactsSection() {
   };
   const syncSummary = (() => {
     if (!syncStatus) return t('settings.contacts.sync.status.loading');
+    if (!syncStatus.available) return t('settings.contacts.sync.status.signInRequired');
     if (syncStatus.phase === 'error' && syncStatus.errorCode) {
       return t(`settings.contacts.sync.error.${syncStatus.errorCode}`);
     }
@@ -155,13 +156,15 @@ export function ContactsSection() {
   const handleSyncToggle = useCallback(
     async (next: boolean) => {
       const previous = syncStatus;
-      setSyncStatus((current) => current ? { ...current, enabled: next } : current);
+      setSyncStatus((current) => (current ? { ...current, enabled: next } : current));
       setSyncPending(true);
       try {
         const status = await contactsService.syncEnabledSet(next);
         setSyncStatus(status);
         toast.success(
-          t(next ? 'settings.contacts.sync.toast.enabled' : 'settings.contacts.sync.toast.disabled'),
+          t(
+            next ? 'settings.contacts.sync.toast.enabled' : 'settings.contacts.sync.toast.disabled',
+          ),
         );
       } catch (err) {
         log.warn('contacts syncEnabledSet failed', err);
@@ -312,13 +315,15 @@ export function ContactsSection() {
                 'disabled:cursor-not-allowed disabled:opacity-50',
               )}
             >
-              <RefreshCw size={13} className={cn(syncPending && 'animate-spin')} />
+              <span className={cn('inline-flex', syncPending && 'animate-spin')} aria-hidden="true">
+                <RefreshCw size={13} />
+              </span>
               {t('settings.contacts.sync.syncNow')}
             </button>
           )}
           <Switch
             checked={syncStatus?.enabled ?? false}
-            disabled={syncPending || syncStatus === null}
+            disabled={syncPending || syncStatus === null || !syncStatus.available}
             onCheckedChange={(value) => void handleSyncToggle(value)}
             aria-label={t('settings.contacts.sync.toggleAria')}
           />

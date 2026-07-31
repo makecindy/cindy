@@ -7,8 +7,9 @@
  *  - allowlist: 远程 IPC 隧道的 channel 白名单(默认拒绝制)
  *  - client: DeviceLinkClient(重连 / 心跳 / 请求配对状态机)
  */
-export * from './protocol.js';
-export * from './allowlist.js';
-export * from './client.js';
-export * from './topics.js';
-export * from './attachmentOssRef.js';
+export * from "./protocol.js";
+export * from "./allowlist.js";
+export * from "./client.js";
+export * from "./topics.js";
+export * from "./attachmentOssRef.js";
+export * from "./contactsSyncProtocol.js";

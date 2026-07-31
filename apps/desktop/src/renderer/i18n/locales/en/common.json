@@ -3164,6 +3164,7 @@
         },
         "status": {
           "loading": "Reading sync status…",
+          "signInRequired": "Sign in to your Cindy account to sync between devices",
           "off": "Sync is off",
           "waiting": "Waiting for another sync-enabled desktop to come online",
           "syncing": "Syncing securely…",

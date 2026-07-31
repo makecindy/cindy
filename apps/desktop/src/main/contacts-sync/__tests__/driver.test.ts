@@ -12,6 +12,7 @@ const harness = vi.hoisted(() => {
     relations: [],
   };
   return {
+    mode: 'cloud' as 'cloud' | 'local' | 'signed-out',
     ownerId: 'owner-a' as string | null,
     settings: new Map<string, boolean>(),
     emptyState,
@@ -36,7 +37,7 @@ vi.mock('../../logger.js', () => ({
 }));
 
 vi.mock('../../appSessionState.js', () => ({
-  getActiveAppSession: () => ({ dataOwnerId: harness.ownerId }),
+  getActiveAppSession: () => ({ mode: harness.mode, dataOwnerId: harness.ownerId }),
 }));
 
 vi.mock('../../maker-host/maker-contacts-host.js', () => ({
@@ -52,9 +53,7 @@ vi.mock('../../maker-host/maker-contacts-host.js', () => ({
 vi.mock('../../maker-host/contacts-settings-store.js', () => ({
   readContactsSettings: () => ({
     enabled: false,
-    deviceSyncEnabled: harness.ownerId
-      ? (harness.settings.get(harness.ownerId) ?? false)
-      : false,
+    deviceSyncEnabled: harness.ownerId ? (harness.settings.get(harness.ownerId) ?? false) : false,
   }),
   writeContactsDeviceSyncEnabled: (enabled: boolean) => {
     if (harness.ownerId) harness.settings.set(harness.ownerId, enabled);
@@ -128,6 +127,7 @@ vi.mock('../statusStore.js', () => ({
 const driver = await import('../driver.js');
 
 beforeEach(() => {
+  harness.mode = 'cloud';
   harness.ownerId = 'owner-a';
   harness.settings.clear();
   harness.lanSend.mockReset();
@@ -142,6 +142,29 @@ afterEach(() => {
 });
 
 describe('contacts sync runtime ownership', () => {
+  it('local mode reports sign-in required and cannot enable device sync', async () => {
+    harness.mode = 'local';
+    harness.ownerId = 'local-v1';
+    driver.__testing.reset();
+    driver.initContactsDeviceSync({
+      getSelfDeviceId: () => null,
+      listOnlineDesktopDevices: () => [],
+      isPeerAllowed: () => false,
+      sendRelayFrame: harness.relaySend,
+    });
+
+    expect(driver.getContactsDeviceSyncStatus()).toMatchObject({
+      available: false,
+      enabled: false,
+      phase: 'off',
+    });
+    await expect(driver.setContactsDeviceSyncEnabled(true)).rejects.toThrow(
+      /signed-in cloud account/,
+    );
+    expect(harness.settings.get('local-v1')).toBeUndefined();
+    expect(harness.relaySend).not.toHaveBeenCalled();
+  });
+
   it('does not relay an old owner transfer after the active account changes mid-send', async () => {
     let finishLanSend: ((sent: boolean) => void) | null = null;
     harness.lanSend.mockImplementation(
@@ -152,9 +175,7 @@ describe('contacts sync runtime ownership', () => {
     );
     driver.initContactsDeviceSync({
       getSelfDeviceId: () => 'self-device',
-      listOnlineDesktopDevices: () => [
-        { deviceId: 'peer-device', deviceName: 'Peer Desktop' },
-      ],
+      listOnlineDesktopDevices: () => [{ deviceId: 'peer-device', deviceName: 'Peer Desktop' }],
       isPeerAllowed: (deviceId) => deviceId === 'peer-device',
       sendRelayFrame: harness.relaySend,
     });

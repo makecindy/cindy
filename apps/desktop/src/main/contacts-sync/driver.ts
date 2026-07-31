@@ -6,10 +6,7 @@
  * 确定性程序逻辑，不调用模型、不产生 token 消耗。
  */
 
-import {
-  type ContactsSyncClock,
-  type ContactsSyncState,
-} from '@cindy/maker-core';
+import { type ContactsSyncClock, type ContactsSyncState } from '@cindy/maker-core';
 
 import { createLogger } from '../logger.js';
 import { getActiveAppSession } from '../appSessionState.js';
@@ -154,6 +151,9 @@ export function getContactsDeviceSyncStatus(): ContactsDeviceSyncStatus {
 
 export async function setContactsDeviceSyncEnabled(enabled: boolean): Promise<void> {
   ensureCurrentOwnerStatus();
+  if (enabled && !isCloudSession()) {
+    throw new Error('contacts device sync requires a signed-in cloud account');
+  }
   if (enabled === isEnabled()) {
     if (enabled) await broadcastContactsNow(true);
     return;
@@ -315,6 +315,9 @@ function announceKey(deviceId: string): void {
 }
 
 function prepareLocalSync(): void {
+  if (!isCloudSession()) {
+    throw new Error('contacts device sync requires a signed-in cloud account');
+  }
   getDesktopContactsManager().getStore().activateDeviceSync();
   contactsSyncKeyStore.getIdentity();
 }
@@ -332,7 +335,13 @@ function startLan(): void {
   lan = new LanContactsSyncTransport({
     getSelf: () => {
       const deviceId = transport?.getSelfDeviceId();
-      return deviceId ? { deviceId, publicKey: identity.publicKey } : null;
+      return deviceId
+        ? {
+            deviceId,
+            publicKey: identity.publicKey,
+            privateKey: identity.privateKey,
+          }
+        : null;
     },
     isPeerAllowed: (deviceId, publicKey) =>
       transport?.isPeerAllowed(deviceId) === true &&
@@ -421,8 +430,9 @@ function scheduleSyncAttemptTimeout(): void {
 }
 
 function buildInitialStatus(): ContactsDeviceSyncStatus {
-  if (!getActiveAppSession().dataOwnerId) return emptyContactsDeviceSyncStatus();
+  if (!isCloudSession()) return emptyContactsDeviceSyncStatus();
   return {
+    available: true,
     enabled: readContactsSettings().deviceSyncEnabled,
     phase: readContactsSettings().deviceSyncEnabled ? 'waiting' : 'off',
     onlineDeviceCount: 0,
@@ -432,7 +442,12 @@ function buildInitialStatus(): ContactsDeviceSyncStatus {
 }
 
 function isEnabled(): boolean {
-  return getActiveAppSession().dataOwnerId ? readContactsSettings().deviceSyncEnabled : false;
+  return isCloudSession() ? readContactsSettings().deviceSyncEnabled : false;
+}
+
+function isCloudSession(): boolean {
+  const session = getActiveAppSession();
+  return session.mode === 'cloud' && Boolean(session.dataOwnerId);
 }
 
 function setPhase(phase: ContactsDeviceSyncPhase): void {

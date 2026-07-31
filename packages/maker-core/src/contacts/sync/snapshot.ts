@@ -8,6 +8,7 @@
 import type Database from "better-sqlite3";
 
 import { parseAliases, type ContactRow, type IdentityRow } from "../rows.js";
+import { compareContactsSyncText } from "./merge.js";
 import {
   membershipSyncId,
   type ContactsDataSnapshot,
@@ -20,7 +21,7 @@ import {
 } from "./types.js";
 
 function byId<T extends { id: string }>(a: T, b: T): number {
-  return a.id.localeCompare(b.id);
+  return compareContactsSyncText(a.id, b.id);
 }
 
 export function readContactsSnapshot(

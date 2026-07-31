@@ -6,7 +6,7 @@
  * 不会被下一次本地捕获误记成删除，后续可以接入“待确认冲突”界面。
  */
 
-import { compareContactsSyncStamp } from "./merge.js";
+import { compareContactsSyncStamp, compareContactsSyncText } from "./merge.js";
 import { DEFAULT_CONTACTS_CONFIG } from "../types.js";
 import {
   type ContactsDataSnapshot,
@@ -21,7 +21,7 @@ import {
 } from "./types.js";
 
 function byId<T extends { id: string }>(a: T, b: T): number {
-  return a.id.localeCompare(b.id);
+  return compareContactsSyncText(a.id, b.id);
 }
 
 function liveEntities<T>(
@@ -49,7 +49,7 @@ function preferNewest<T>(
 ): Array<ContactsSyncEntity<T>> {
   return [...records].sort((a, b) => {
     const stampOrder = compareContactsSyncStamp(b.value.stamp, a.value.stamp);
-    return stampOrder !== 0 ? stampOrder : a.id.localeCompare(b.id);
+    return stampOrder !== 0 ? stampOrder : compareContactsSyncText(a.id, b.id);
   });
 }
 
@@ -90,7 +90,7 @@ export function materializeContactsSyncState(
   const contactIds = new Set(contacts.map((contact) => contact.id));
 
   const groups = uniqueBy(liveEntities(state.groups), (value) =>
-    value.name.trim().toLocaleLowerCase(),
+    value.name.trim().toLowerCase(),
   )
     .map<ContactsSnapshotGroup>((record) => ({
       id: record.id,

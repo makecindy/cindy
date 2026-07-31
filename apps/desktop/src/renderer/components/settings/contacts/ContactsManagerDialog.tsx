@@ -255,7 +255,9 @@ export function ContactsManagerDialog({
                 {t('settings.contacts.manager.title')}
               </Dialog.Title>
               {statsLine && (
-                <p className="text-12 leading-[1.4] text-[var(--cmd-palette-item-meta)]">{statsLine}</p>
+                <p className="text-12 leading-[1.4] text-[var(--cmd-palette-item-meta)]">
+                  {statsLine}
+                </p>
               )}
               {syncSummary && (
                 <p
@@ -287,7 +289,12 @@ export function ContactsManagerDialog({
                   'disabled:cursor-not-allowed disabled:opacity-50',
                 )}
               >
-                <RefreshCw size={14} className={cn(syncPending && 'animate-spin')} />
+                <span
+                  className={cn('inline-flex', syncPending && 'animate-spin')}
+                  aria-hidden="true"
+                >
+                  <RefreshCw size={14} />
+                </span>
                 {t('settings.contacts.sync.syncNow')}
               </button>
             )}

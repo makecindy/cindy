@@ -14,14 +14,17 @@ import {
   createPublicKey,
   createCipheriv,
   createDecipheriv,
+  createHmac,
   diffieHellman,
   generateKeyPairSync,
   hkdfSync,
   randomBytes,
+  timingSafeEqual,
   type KeyObject,
 } from 'node:crypto';
 
 const KEY_INFO_PREFIX = 'cindy:contacts-device-sync:v1';
+const LAN_AUTH_INFO = 'cindy:contacts-device-sync:lan-auth:v1';
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
 
@@ -41,6 +44,20 @@ export interface ContactsSyncEncryptionContext {
   dstDeviceId: string;
   transferId: string;
   totalChunks: number;
+}
+
+export interface ContactsSyncLanAuthContext {
+  kind: 'request' | 'ack';
+  srcDeviceId: string;
+  dstDeviceId: string;
+  challenge: string;
+  senderPublicKey: string;
+  transferId: string;
+  index: number;
+  total: number;
+  iv: string;
+  tag: string;
+  data: string;
 }
 
 export function generateContactsSyncIdentity(): ContactsSyncExportedIdentity {
@@ -98,24 +115,78 @@ export function decryptContactsSyncBytes(
   return Buffer.concat([decipher.update(encrypted.ciphertext), decipher.final()]);
 }
 
+/**
+ * Authenticate a LAN endpoint with the same pinned X25519 identities used for
+ * payload encryption. A replayed multicast beacon cannot produce the fresh
+ * request/ack proof, so the sender falls back to relay instead of treating a
+ * TCP write to an impostor as delivery.
+ */
+export function createContactsSyncLanProof(
+  ownPrivateKey: string,
+  peerPublicKey: string,
+  context: ContactsSyncLanAuthContext,
+): string {
+  const key = deriveSharedKey(ownPrivateKey, peerPublicKey, LAN_AUTH_INFO);
+  return createHmac('sha256', key).update(buildLanAuthMessage(context)).digest('base64');
+}
+
+export function verifyContactsSyncLanProof(
+  proof: string,
+  ownPrivateKey: string,
+  peerPublicKey: string,
+  context: ContactsSyncLanAuthContext,
+): boolean {
+  let provided: Buffer;
+  try {
+    provided = decodeExactBase64(proof, 32, 'LAN proof');
+  } catch {
+    return false;
+  }
+  const expected = Buffer.from(
+    createContactsSyncLanProof(ownPrivateKey, peerPublicKey, context),
+    'base64',
+  );
+  return timingSafeEqual(provided, expected);
+}
+
 function deriveEncryptionKey(
   ownPrivateKey: string,
   peerPublicKey: string,
   context: ContactsSyncEncryptionContext,
 ): Buffer {
+  const orderedDeviceIds = [context.srcDeviceId, context.dstDeviceId].sort().join('\u0000');
+  return deriveSharedKey(
+    ownPrivateKey,
+    peerPublicKey,
+    `${KEY_INFO_PREFIX}\u0000${orderedDeviceIds}`,
+  );
+}
+
+function deriveSharedKey(ownPrivateKey: string, peerPublicKey: string, info: string): Buffer {
   const shared = diffieHellman({
     privateKey: importPrivateKey(ownPrivateKey),
     publicKey: importPublicKey(peerPublicKey),
   });
-  const orderedDeviceIds = [context.srcDeviceId, context.dstDeviceId].sort().join('\u0000');
+  return Buffer.from(hkdfSync('sha256', shared, Buffer.alloc(0), Buffer.from(info, 'utf8'), 32));
+}
+
+function buildLanAuthMessage(context: ContactsSyncLanAuthContext): Buffer {
   return Buffer.from(
-    hkdfSync(
-      'sha256',
-      shared,
-      Buffer.alloc(0),
-      Buffer.from(`${KEY_INFO_PREFIX}\u0000${orderedDeviceIds}`, 'utf8'),
-      32,
-    ),
+    [
+      LAN_AUTH_INFO,
+      context.kind,
+      context.srcDeviceId,
+      context.dstDeviceId,
+      context.challenge,
+      context.senderPublicKey,
+      context.transferId,
+      String(context.index),
+      String(context.total),
+      context.iv,
+      context.tag,
+      context.data,
+    ].join('\u0000'),
+    'utf8',
   );
 }
 

@@ -21,7 +21,10 @@ import {
   type ContactsDataSnapshot,
   type ContactsSyncState,
 } from "./types.js";
-import { isValidContactsSyncState } from "./validation.js";
+import {
+  CONTACTS_SYNC_MAX_ROWS_PER_TABLE,
+  isValidContactsSyncState,
+} from "./validation.js";
 
 interface PersistedSyncRow {
   node_id: string;
@@ -32,13 +35,16 @@ interface PersistedSyncRow {
 function isSnapshotShape(value: unknown): value is ContactsDataSnapshot {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const candidate = value as Partial<ContactsDataSnapshot>;
+  const isBoundedArray = (entries: unknown): entries is unknown[] =>
+    Array.isArray(entries) &&
+    entries.length <= CONTACTS_SYNC_MAX_ROWS_PER_TABLE;
   return (
-    Array.isArray(candidate.contacts) &&
-    Array.isArray(candidate.identities) &&
-    Array.isArray(candidate.events) &&
-    Array.isArray(candidate.groups) &&
-    Array.isArray(candidate.memberships) &&
-    Array.isArray(candidate.relations)
+    isBoundedArray(candidate.contacts) &&
+    isBoundedArray(candidate.identities) &&
+    isBoundedArray(candidate.events) &&
+    isBoundedArray(candidate.groups) &&
+    isBoundedArray(candidate.memberships) &&
+    isBoundedArray(candidate.relations)
   );
 }
 

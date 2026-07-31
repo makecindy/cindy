@@ -1,18 +1,13 @@
 import type { PersistedContactsSyncStatus } from './statusStore.js';
 
-export type ContactsDeviceSyncPhase =
-  | 'off'
-  | 'waiting'
-  | 'syncing'
-  | 'up-to-date'
-  | 'error';
+export type ContactsDeviceSyncPhase = 'off' | 'waiting' | 'syncing' | 'up-to-date' | 'error';
 
 export type ContactsDeviceSyncErrorCode =
-  | 'secure-storage-unavailable'
-  | 'peer-identity-changed'
-  | 'sync-failed';
+  'secure-storage-unavailable' | 'peer-identity-changed' | 'sync-failed';
 
 export interface ContactsDeviceSyncStatus extends PersistedContactsSyncStatus {
+  /** Device Link is account-scoped; local/signed-out sessions cannot participate. */
+  available: boolean;
   enabled: boolean;
   phase: ContactsDeviceSyncPhase;
   onlineDeviceCount: number;
@@ -21,6 +16,7 @@ export interface ContactsDeviceSyncStatus extends PersistedContactsSyncStatus {
 
 export function emptyContactsDeviceSyncStatus(): ContactsDeviceSyncStatus {
   return {
+    available: false,
     enabled: false,
     phase: 'off',
     onlineDeviceCount: 0,

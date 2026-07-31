@@ -16,6 +16,30 @@ import {
   type ContactsSyncState,
 } from "./types.js";
 
+/** Locale-independent UTF-16 ordering used anywhere sync output must converge. */
+export function compareContactsSyncText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** JSON-compatible serialization with recursively sorted object keys. */
+export function stableContactsSyncJson(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableContactsSyncJson(entry)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record)
+    .filter((key) => record[key] !== undefined)
+    .sort(compareContactsSyncText);
+  return `{${keys
+    .map(
+      (key) => `${JSON.stringify(key)}:${stableContactsSyncJson(record[key])}`,
+    )
+    .join(",")}}`;
+}
+
 export function compareContactsSyncStamp(
   a: ContactsSyncStamp,
   b: ContactsSyncStamp,
@@ -40,8 +64,11 @@ function mergeStamped<T>(
   const order = compareContactsSyncStamp(a.stamp, b.stamp);
   if (order > 0) return a;
   if (order < 0) return b;
-  // 同 stamp 理论上来自同一次写入；异常状态仍按 JSON 值稳定裁决。
-  return JSON.stringify(a.value) >= JSON.stringify(b.value) ? a : b;
+  // 同 stamp 理论上来自同一次写入；异常状态仍按规范化 JSON 值稳定裁决，
+  // 不能让对象 key 的输入顺序影响跨设备赢家。
+  return stableContactsSyncJson(a.value) >= stableContactsSyncJson(b.value)
+    ? a
+    : b;
 }
 
 function mergeContact(
@@ -85,7 +112,7 @@ function mergeById<T>(
     });
   }
   return [...merged.values()].sort((left, right) =>
-    left.id.localeCompare(right.id),
+    compareContactsSyncText(left.id, right.id),
   );
 }
 
@@ -102,7 +129,7 @@ function mergeContacts(
     );
   }
   return [...merged.values()].sort((left, right) =>
-    left.id.localeCompare(right.id),
+    compareContactsSyncText(left.id, right.id),
   );
 }
 
@@ -119,7 +146,7 @@ function mergeClocks(
   }
   return [...clocks.entries()]
     .map(([nodeId, counter]) => ({ nodeId, counter }))
-    .sort((left, right) => left.nodeId.localeCompare(right.nodeId));
+    .sort((left, right) => compareContactsSyncText(left.nodeId, right.nodeId));
 }
 
 export function mergeContactsSyncStates(
@@ -150,40 +177,18 @@ export function nextContactsSyncStamp(
   state: ContactsSyncState,
   nodeId: string,
 ): { state: ContactsSyncState; stamp: ContactsSyncStamp } {
-  const counters = state.clocks.map((clock) => clock.counter);
-  const observe = (stamp: ContactsSyncStamp | undefined): void => {
-    if (stamp) counters.push(stamp.counter);
-  };
-  for (const contact of state.contacts) {
-    observe(contact.kind.stamp);
-    observe(contact.displayName.stamp);
-    observe(contact.aliases.stamp);
-    observe(contact.summary.stamp);
-    observe(contact.narrative.stamp);
-    observe(contact.agentNotes.stamp);
-    observe(contact.status.stamp);
-    observe(contact.source.stamp);
-    observe(contact.createdAt.stamp);
-    observe(contact.updatedAt.stamp);
-    observe(contact.deleted);
+  // 磁盘与远端状态进入仓库前都会验证 clocks 覆盖全部内容 stamp，因此本地编辑
+  // 只需扫描至多 256 个设备时钟，不再随联系人总量线性变慢。
+  let observedMax = 0;
+  for (const clock of state.clocks) {
+    observedMax = Math.max(observedMax, clock.counter);
   }
-  for (const records of [
-    state.identities,
-    state.events,
-    state.groups,
-    state.memberships,
-    state.relations,
-  ]) {
-    for (const record of records) {
-      observe(record.value.stamp);
-      observe(record.deleted);
-    }
-  }
-  // 不信任远端 clocks 完整覆盖所有 stamp；直接观察内容，避免畸形帧把本机时钟压低。
-  const counter = Math.max(0, ...counters) + 1;
+  const counter = observedMax + 1;
   const clocks = state.clocks.filter((clock) => clock.nodeId !== nodeId);
   clocks.push({ nodeId, counter });
-  clocks.sort((left, right) => left.nodeId.localeCompare(right.nodeId));
+  clocks.sort((left, right) =>
+    compareContactsSyncText(left.nodeId, right.nodeId),
+  );
   return {
     state: { ...state, clocks },
     stamp: { counter, nodeId },
