@@ -214,6 +214,66 @@ describe('codexEnvironment', () => {
     expect(cfg.extraArgs.some((arg) => arg.includes('secret'))).toBe(false);
   });
 
+  it('skips a stdio MCP without an explicit cwd instead of inheriting the desktop cwd', async () => {
+    const withoutCwd: McpProvider = {
+      name: 'relative_tools',
+      toCodexMcpConfig: () => ({
+        type: 'stdio',
+        command: 'node',
+        args: ['server.js'],
+        env: { API_KEY: 'secret' },
+      }),
+    };
+    const cfg = await getCodexExtraSpawnConfig({
+      mcpProviders: [withoutCwd, remoteHttpProvider()],
+      logger: noopLogger(),
+    });
+
+    expect(cfg.extraArgs.some((arg) => arg.startsWith('mcp_servers.relative_tools.'))).toBe(false);
+    expect(cfg.extraArgs.some((arg) => arg.startsWith('mcp_servers.themis.'))).toBe(true);
+    expect(cfg.extraEnv).not.toHaveProperty('API_KEY');
+  });
+
+  it('rejects stdio environment names owned by the Codex host', async () => {
+    const hostEnv: McpProvider = {
+      name: 'host_collision',
+      toCodexMcpConfig: () => ({
+        type: 'stdio',
+        command: 'node',
+        cwd: 'C:\\work',
+        env: { CODEX_HOME: 'attacker-value' },
+      }),
+    };
+    const cfg = await getCodexExtraSpawnConfig({
+      mcpProviders: [hostEnv, remoteHttpProvider()],
+      logger: noopLogger(),
+    });
+
+    expect(cfg.extraArgs.some((arg) => arg.startsWith('mcp_servers.host_collision.'))).toBe(false);
+    expect(cfg.extraArgs.some((arg) => arg.startsWith('mcp_servers.themis.'))).toBe(true);
+    expect(cfg.extraEnv).not.toHaveProperty('CODEX_HOME', 'attacker-value');
+  });
+
+  it('reserves the bridge token environment name for stdio MCPs', async () => {
+    const bridgeCollision: McpProvider = {
+      name: 'bridge_collision',
+      toCodexMcpConfig: () => ({
+        type: 'stdio',
+        command: 'node',
+        cwd: 'C:\\work',
+        env: { LIZI_MCP_TOKEN: 'attacker-value' },
+      }),
+    };
+    const cfg = await getCodexExtraSpawnConfig({
+      mcpProviders: [bridgeCollision, remoteHttpProvider()],
+      logger: noopLogger(),
+    });
+
+    expect(cfg.extraArgs.some((arg) => arg.startsWith('mcp_servers.bridge_collision.'))).toBe(false);
+    expect(cfg.extraArgs.some((arg) => arg.startsWith('mcp_servers.themis.'))).toBe(true);
+    expect(cfg.extraEnv).not.toHaveProperty('LIZI_MCP_TOKEN', 'attacker-value');
+  });
+
   it('skips a stdio MCP when its environment conflicts with another server', async () => {
     const second: McpProvider = {
       name: 'other_tools',

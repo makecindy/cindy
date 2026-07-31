@@ -245,6 +245,26 @@ describe('mcp:custom:* CRUD handlers', () => {
     });
   });
 
+  it('deletes the config when env cleanup is unavailable', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      readCustomMcpEnvForMutation: vi.fn(() => {
+        throw new Error('safeStorage unavailable');
+      }),
+      removeCustomMcpEnvForMutation: vi.fn(() => ({ success: false, error: 'remove_failed' })),
+    });
+    registerMcpHandlers(harness, deps);
+    await harness.invoke(MAKER_INVOKE.MCP_CUSTOM_CREATE, validConfig);
+
+    await expect(harness.invoke(MAKER_INVOKE.MCP_CUSTOM_DELETE, validConfig.id)).resolves.toEqual({
+      ok: true,
+    });
+    expect(await listCustomMcpServers()).toEqual([]);
+    expect(deps.readCustomMcpEnvForMutation).not.toHaveBeenCalled();
+    expect(deps.removeCustomMcpEnvForMutation).toHaveBeenCalledWith(validConfig.id);
+  });
+
   it('rejects empty mcpId on delete', async () => {
     mountDb();
     const harness = new IpcHarness();

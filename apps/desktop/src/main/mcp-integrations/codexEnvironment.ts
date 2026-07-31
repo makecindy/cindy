@@ -17,6 +17,19 @@ import { getRemoteMcpBridgeToken } from './remoteMcpBridgeToken.js';
 
 const TOKEN_ENV = 'LIZI_MCP_TOKEN';
 const MCP_TIMEOUT_SEC = 10 * 60;
+const CODEX_HOST_ENV_NAMES = [
+  'CODEX_HOME',
+  'NO_PROXY',
+  'no_proxy',
+  'PYTHONUTF8',
+  'PYTHONIOENCODING',
+  'NO_COLOR',
+  'CLICOLOR',
+  'FORCE_COLOR',
+  'TERM',
+  'PSStyle__OutputRendering',
+  TOKEN_ENV,
+] as const;
 
 /**
  * 把一个 header 名渲染成 codex `-c` override 里合法的 TOML dotted-key 段。
@@ -161,6 +174,12 @@ export function unregisterCodexMcpThreadContext(threadId: string): void {
 
 async function doStart(opts: GetCodexExtraSpawnConfigOptions): Promise<CodexExtraSpawnConfig> {
   const log = opts.logger.child('codex-environment');
+  // Codex's app-server and all stdio MCP children share one process environment. Include
+  // inherited names as well as env-builder names so a user MCP cannot replace host state;
+  // TOKEN_ENV is reserved even before a bridge has been started because it is injected later.
+  const reservedEnvNames = new Set(
+    [...Object.keys(process.env), ...CODEX_HOST_ENV_NAMES].map(canonicalEnvName),
+  );
 
   // 从 providers 提取 McpServer factory。每个 provider 的 toClaudeSdkConfig
   // 返回 { type: 'sdk', name, instance: McpServer } —— Claude SDK 的格式。
@@ -200,7 +219,7 @@ async function doStart(opts: GetCodexExtraSpawnConfigOptions): Promise<CodexExtr
   > = Object.create(null);
   const stdioServers: Record<
     string,
-    { command: string; args: string[]; envVars: string[]; cwd?: string }
+    { command: string; args: string[]; envVars: string[]; cwd: string }
   > = Object.create(null);
   const extraEnv: Record<string, string> = {};
   const stdioEnvByServer: Record<string, Record<string, string>> = Object.create(null);
@@ -212,6 +231,45 @@ async function doStart(opts: GetCodexExtraSpawnConfigOptions): Promise<CodexExtr
 
   for (const provider of opts.mcpProviders) {
     if (provider.isEnabled && !provider.isEnabled(ctx)) continue;
+
+    const codexConfig = provider.toCodexMcpConfig?.(ctx);
+    if (codexConfig?.type === 'stdio') {
+      if (!codexConfig.cwd) {
+        log.warn('skipping stdio MCP provider because Codex requires an explicit cwd', {
+          providerName: provider.name,
+        });
+        continue;
+      }
+      const env = codexConfig.env ?? {};
+      const reservedEnvName = Object.keys(env).find((name) =>
+        reservedEnvNames.has(canonicalEnvName(name)),
+      );
+      if (reservedEnvName) {
+        log.warn('skipping stdio MCP provider due to reserved Codex host environment variable', {
+          providerName: provider.name,
+          envName: reservedEnvName,
+        });
+        continue;
+      }
+      const conflictingEnvName =
+        findEnvConflict(stdioEnvValues, env) ?? findEnvConflict(extraEnv, env);
+      if (conflictingEnvName) {
+        log.warn('skipping stdio MCP provider due to conflicting environment variable', {
+          providerName: provider.name,
+          envName: conflictingEnvName,
+        });
+        continue;
+      }
+      stdioEnvByServer[provider.name] = env;
+      rebuildStdioEnvValues();
+      stdioServers[provider.name] = {
+        command: codexConfig.command,
+        args: codexConfig.args ?? [],
+        envVars: Object.keys(env),
+        cwd: codexConfig.cwd,
+      };
+      continue;
+    }
 
     const providerEnv = await provider.getExtraEnv?.(ctx);
     if (providerEnv) {
@@ -234,7 +292,6 @@ async function doStart(opts: GetCodexExtraSpawnConfigOptions): Promise<CodexExtr
       Object.assign(extraEnv, providerEnv);
     }
 
-    const codexConfig = provider.toCodexMcpConfig?.(ctx);
     if (codexConfig?.type === 'http') {
       if (codexConfig.bearerTokenEnvVar && !extraEnv[codexConfig.bearerTokenEnvVar]) {
         log.warn('skipping remote HTTP MCP provider - missing bearer token env', {
@@ -252,27 +309,6 @@ async function doStart(opts: GetCodexExtraSpawnConfigOptions): Promise<CodexExtr
             : {}),
         };
       }
-      continue;
-    }
-    if (codexConfig?.type === 'stdio') {
-      const env = codexConfig.env ?? {};
-      const conflictingEnvName =
-        findEnvConflict(stdioEnvValues, env) ?? findEnvConflict(extraEnv, env);
-      if (conflictingEnvName) {
-        log.warn('skipping stdio MCP provider due to conflicting environment variable', {
-          providerName: provider.name,
-          envName: conflictingEnvName,
-        });
-        continue;
-      }
-      stdioEnvByServer[provider.name] = env;
-      rebuildStdioEnvValues();
-      stdioServers[provider.name] = {
-        command: codexConfig.command,
-        args: codexConfig.args ?? [],
-        envVars: Object.keys(env),
-        ...(codexConfig.cwd ? { cwd: codexConfig.cwd } : {}),
-      };
       continue;
     }
 

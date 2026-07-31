@@ -232,17 +232,16 @@ export function registerMcpHandlers(registry: IpcHandlerRegistry, deps: McpHandl
       throwIpcError('INVALID_PARAMS', 'mcpId required');
     }
     return withMcpMutation(mcpId, async () => {
-      const envSnapshot = stageEnv(mcpId, null);
+      // Deleting the config must not depend on decrypting its optional env snapshot. If
+      // safeStorage is unavailable or the snapshot is unreadable, remove the DB row first
+      // and make secret cleanup best-effort; otherwise a broken secret store can strand a
+      // user-visible MCP that they can no longer delete.
+      await deleteCustomMcpServer(mcpId);
       try {
-        await deleteCustomMcpServer(mcpId);
-      } catch (error) {
-        if (!restoreEnv(mcpId, envSnapshot)) {
-          throwIpcError(
-            'INTERNAL',
-            'custom MCP deletion failed and environment could not be rolled back',
-          );
-        }
-        throw error;
+        deps.removeCustomMcpEnvForMutation(mcpId);
+      } catch {
+        // Best-effort cleanup: the config is already deleted and there is no safe rollback
+        // that can restore a secret whose storage is unavailable.
       }
       await afterChange();
       return { ok: true };
