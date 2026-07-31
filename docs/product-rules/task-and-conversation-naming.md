@@ -172,16 +172,43 @@ note，那里早已裁定「工作区」只留给 Workspace、working directory 
 中文的混乱有一半来自英文侧本身不统一——改名前同一个东西有**五种英文写法**，所以只改
 中文治不了根：写文案的人看到 `Dialogue` 仍会译成「对话」。
 
-| 英文 | 改名前 | 现在 |
-|---|---|---|
-| `Session` | 330 | **唯一正式写法**，指那个可打开可删除的条目 |
-| `Conversation` | 124 | 已全部改为 `Session`（英文侧不再使用） |
-| `Dialogue` | 16 | 已废弃（英文侧不再使用） |
-| `Chat` | 62 | **基本保留**，只改了 12 处明确指条目的（`New chat` / `Chats` / `chat titles` / `chat link`） |
-| `Thread` | 3 | 按 `glossary.json` 的 thread 条目分语境处理 |
+下表按**当前 HEAD 实测**（en locale，desktop + mobile；口径见本节末的复现命令）。**「改前」列是
+本次改名的 merge base，不是历史某个快照**——本仓很活跃，隔几天重跑数字会变。
+
+| 英文 | 改前 | 现在 | 去向 |
+|---|---|---|---|
+| `Session` | 365 | **476** | **唯一正式写法**，指那个可打开可删除的条目 |
+| `Conversation` | 136 | **19** | 101 → `Session`、12 → `Chat`、4 改写成别的说法；**剩下 19 处刻意保留** |
+| `Dialogue` | 16 | **0** | 14 → `Chat`、2 → `Session`；英文侧不再使用 |
+| `Chat` | 131 | 144 | **基本保留**；只把 14 处明确指条目的改成 `Session`（`New chat` / `Chats` / `chat titles` / `chat link` / `Rename Chat` / `Archive chat` 等） |
+| `Thread` | 11 | 11 | 一处没动，按 `glossary.json` 的 thread 条目分语境处理 |
+
+⚠️ **不要把这张表读成「`Conversation` 已清零」。** 它没有清零，也不该清零——保留的 19 处是
+按 §4.1 逐条判过的三类（IM 平台自己的会话、`conversation lane` 这种复合概念、隐私与合规
+文案），删掉它们会制造新的错误。同理 `Chat` 的 144 处绝大多数都必须留着。
 
 新写英文文案时：**指条目用 `Session`，指交流过程用 `Chat`**，不要再引入
-`Conversation` / `Dialogue`。
+`Conversation` / `Dialogue`；但改动既有 `Conversation` / `Chat` 之前，先用 §4.1 的分类过一遍。
+
+复现「现在」那一列（要拿「改前」列，把读文件换成 `git show <merge-base>:<file>`）：
+
+```js
+// 统计的是「值里含该词的 key 数」，不是出现次数，也不看 key 名。
+// 存成 /tmp/count-en.mjs 后 `node /tmp/count-en.mjs`（换 locale 改路径即可）。
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+const walk = (o, out = []) => {
+  for (const v of Object.values(o)) (v && typeof v === 'object') ? walk(v, out) : out.push(String(v));
+  return out;
+};
+const files = execFileSync('git', ['ls-files',
+  'apps/desktop/src/renderer/i18n/locales/en', 'apps/mobile/src/i18n/locales/en',
+], { encoding: 'utf8' }).split('\n').filter((f) => f.endsWith('.json'));
+const vals = files.flatMap((f) => walk(JSON.parse(fs.readFileSync(f, 'utf8'))));
+for (const w of ['session', 'conversation', 'dialogue', 'chat', 'thread']) {
+  console.log(w.padEnd(13), vals.filter((v) => new RegExp(w, 'i').test(v)).length);
+}
+```
 
 ### 4.1 三个词都不能批量替换（踩过的坑）
 
@@ -235,16 +262,18 @@ note，那里早已裁定「工作区」只留给 Workspace、working directory 
 最初的判断是「`セッション` / `세션` 是音译，不存在中文这种一词多义问题，不跟改」。这句话
 **只对 task/session 撞车那部分成立**，管不到另一件事：同一个概念在 ja / ko 里本来就有两种写法。
 
-改名前的实际分布（`origin/main` 基线，取英文含 `session` 的 key）：
+实际分布（**口径：key 名含 `session` 的条目**，如 `ccAgent.sidebar.sessionMenu.*`；这批 key 就是
+描述条目的。desktop + mobile 合计）：
 
-| | 主流 | 少数派 |
-|---|---|---|
-| ja | `セッション` **271** | `会話` 16 / `チャット` 2 |
-| ko | `세션` **277** | `대화` 11 / `채팅` 2 |
+| | | 主流 | 少数派 |
+|---|---|---|---|
+| ja | 改名前 → 现在 | `セッション` 124 → **143** | `会話` 23 → **4** |
+| ko | 改名前 → 现在 | `세션` 127 → **143** | `대화` 25 → **8** |
 
-也就是说 ja / ko 本来就在混用，而且主流早已是音译，那 16 / 11 处是**违反术语表自身声明**的既有
-债务。英文侧从 `Chat` / `Conversation` 收敛到 `Session` 之后，这类不一致放大到 **133 处**
-（出现 `New Session` / `新しい会話` 这种四语打架的组合），所以 2026-07-31 一并收敛到音译。
+也就是说 ja / ko 本来就在混用，而且主流早已是音译，那 23 / 25 处是**违反术语表自身声明**的既有
+债务。英文侧从 `Chat` / `Conversation` 收敛到 `Session` 之后，这类不一致会直接暴露成
+`New Session` / `新しい会話` 这种四语打架的组合，所以 2026-07-31 一并收敛到音译。剩下的
+4 / 8 处是下面那三类刻意保留。
 
 **这不是新裁决，是向既有主流靠回去**：术语表 `session` 条目本来就声明 ja = `セッション`、
 ko = `세션`。
@@ -264,16 +293,21 @@ ko = `세션`。
 
 一次性完成，四种语言同步收敛（`ja` / `ko` 的取舍见 §5.1）。
 
+**口径**：以本次改名的 merge base 为基线，按 en / zh-CN / ja / ko 四个 locale（desktop +
+mobile）的 key 逐条比对当前 HEAD。**数字会随 rebase 与 review 期间的回退漂移**——本表按最后
+一次实测更新，需要重新盘点时重跑 §4 末尾与本节的脚本，不要拿旧数字对账。
+
 | 项 | 数量 |
 |---|---|
-| 含「对话」的中文文案条目 | 565（**逐条人工判断**：改 478 / 保持「对话」87） |
-| 英文 `conversation`/`dialogue` → `Session` | 110 |
-| 英文 `conversation`/`dialogue` → `Chat`（§2.3 归属分类 + 交流过程） | 26 |
-| 英文 `conversation` 保留不动（IM 平台／复合概念／隐私文案） | 16 |
-| 英文 `chat` → `Session`（白名单，仅指条目的） | 11 |
+| 含「对话」的中文文案条目 | 565（**逐条人工判断**：改 466 / 原样保留 99） |
+| 英文 `conversation`/`dialogue` → `Session` | 103（conversation 101 + dialogue 2） |
+| 英文 `conversation`/`dialogue` → `Chat`（§2.3 归属分类 + 交流过程） | 26（conversation 12 + dialogue 14） |
+| 英文 `conversation` → 改写成别的说法（不再出现这三个词） | 4 |
+| 英文 `conversation` **保留不动**（IM 平台／复合概念／隐私文案，见 §4.1） | 19 |
+| 英文 `chat` → `Session`（白名单，仅指条目的） | 14 |
 | 「自动化任务」→「自动化」 | 23 |
-| `ja` 文案收敛到 `セッション` | 136 |
-| `ko` 文案收敛到 `세션` | 130 |
+| `ja` 由 `会話` 收敛到 `セッション` | 118（按**全部 key** 计仍含 `会話` 的 60 处，多数与 session 无关，如 `会話コンテキスト`；只看 key 名含 `session` 的那批，残留 4 处，见 §5.1） |
+| `ko` 由 `대화` 收敛到 `세션` | 115（同上口径：全部 key 残留 96，key 名含 `session` 的残留 8） |
 | 术语表条目 | 7 个：新增 4（`task` / `message` / `turn` / `working-directory`）+ 改译 3（`session` / `chat` / `thread`） |
 
 ### 6.0 落地方法：脚本只用来定位，判断必须人工
