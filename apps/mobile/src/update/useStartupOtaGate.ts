@@ -5,7 +5,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Updates from 'expo-updates';
 import { IS_OTA_SELFHOST, OTA_SERVER_BASE_URL, REVIEW_MODE } from '@/config/env';
-import { runStartupOtaUpdate, type StartupOtaOutcome } from './startupOtaUpdate';
+import {
+  runEmergencyOtaRecovery,
+  runStartupOtaUpdate,
+  type StartupOtaOutcome,
+} from './startupOtaUpdate';
 import { updateChannelRequestHeaders } from './canaryChannelStore';
 import {
   clearOtaReloadGuardIfLaunched,
@@ -86,7 +90,7 @@ export function useStartupOtaGate(isCanary = false): boolean {
     if (!enabled || started.current) return;
     started.current = true; // 只冷启一次(不随 resume 重跑)
     let cancelled = false;
-    void runStartupOtaUpdate({
+    const otaDeps = {
       enabled,
       configureUpdateUrl,
       checkForUpdateAsync: () => Updates.checkForUpdateAsync(),
@@ -94,11 +98,20 @@ export function useStartupOtaGate(isCanary = false): boolean {
       reloadAsync: () => Updates.reloadAsync(),
       isEmergencyLaunch: () => Updates.isEmergencyLaunch,
       currentUpdateId: () => Updates.updateId,
-      isReloadBlocked: async (targetUpdateId) =>
+      isReloadBlocked: async (targetUpdateId: string) =>
         shouldBlockOtaReload(await readOtaReloadGuard(), targetUpdateId),
       recordReload: recordOtaReload,
-    }).then((outcome) => {
+    };
+    void runStartupOtaUpdate(otaDeps).then((outcome) => {
       logStartupOtaLaunch(outcome);
+      // emergency launch:门已放行,修复版热更改在后台找(绝不 reload,见
+      // runEmergencyOtaRecovery)。fire-and-forget——它的结果不影响本次启动,
+      // 只是让下一次冷启动有机会跑上修复版,而不是等用户去清应用数据。
+      if (outcome === 'emergency-launch') {
+        void runEmergencyOtaRecovery(otaDeps).then((recovery) => {
+          console.info('[ota] emergency recovery', JSON.stringify({ recovery }));
+        });
+      }
       // 'reloading' 时 app 正在重启,保持 loading 门直到重启;其余情况放行进 App。
       if (!cancelled && outcome !== 'reloading') setReady(true);
     }).catch(() => {

@@ -92,8 +92,9 @@ export async function runStartupOtaUpdate(
 ): Promise<StartupOtaOutcome> {
   if (!deps.enabled) return 'skipped';
   try {
-    // emergency launch 下没有 launchedUpdate:check 必然报「有新版」,下载完 reload 也只会
-    // 回到同一个 emergency launch。不发请求、不重启,直接放行进 App。
+    // emergency launch 下没有 launchedUpdate:check 必然报「有新版」,此时 reload 只会
+    // 回到同一个 emergency launch。这道**阻塞式**门直接放行进 App,不在这里联网——
+    // 后续的修复版下载由 runEmergencyOtaRecovery 在后台做(不 reload),见该函数。
     // 放在 try 内:本函数对调用方承诺永不 reject,依赖自身抛错也必须落到 'error'。
     if (deps.isEmergencyLaunch()) return 'emergency-launch';
     deps.configureUpdateUrl();
@@ -119,6 +120,64 @@ export async function runStartupOtaUpdate(
     return 'reloading';
   } catch {
     return 'error'; // fail-open:超时/离线/服务异常 → 放行,后台下载留给下次启动
+  }
+}
+
+/** 后台恢复下载的结果(纯观测用;调用方不据此改变启动流程)。 */
+export type EmergencyOtaRecoveryOutcome =
+  | 'up-to-date'
+  /** check 没带回 id:无从判断是不是那个已知坏掉的包,不下载。 */
+  | 'unknown-id'
+  /** 线上指针还是那个已经证明装不上的 update:不重复下载。 */
+  | 'known-bad'
+  /** 已下载,等下次冷启动由原生层启动它(本函数绝不 reload)。 */
+  | 'fetched'
+  | 'error';
+
+/** 后台下载不阻塞启动,所以给足预算:整包 JS bundle 在移动网络下 8s 往往不够。 */
+const DEFAULT_RECOVERY_FETCH_TIMEOUT_MS = 60_000;
+
+/**
+ * emergency launch 后的**后台**恢复下载。
+ *
+ * 自建线 `checkAutomatically: 'NEVER'`,原生层不会自己检查更新;而 emergency launch 的
+ * 设备一直跑包内 bundle。若不做这件事,即使之后发了修复版热更,这些设备也永远拿不到,
+ * 只能靠用户清应用数据——普通用户不会知道要这么做。
+ *
+ * 安全边界(这三条共同保证它不可能变成第二个死循环):
+ *  1. **绝不 reload**——所以 deps 里没有 reloadAsync。下载完只是变成 pending update,
+ *     由下一次冷启动的原生层去选,本次启动的 UI 不受任何影响。
+ *  2. 已被闸门判定装不上的 id 不再下载(拦的是「已知坏掉的那一份」,不是「所有 emergency
+ *     launch」);拿不到 id 时同样不下载,避免每次冷启动白下十几 MB。
+ *  3. 下载成功后计一次尝试,与正常路径共用同一个计数器:同一个 id 最多试
+ *     MAX_OTA_RELOAD_ATTEMPTS 次就彻底不再碰它。
+ *
+ * 与 runStartupOtaUpdate 一样永不 reject。
+ */
+export async function runEmergencyOtaRecovery(
+  deps: Pick<
+    StartupOtaDeps,
+    'configureUpdateUrl' | 'checkForUpdateAsync' | 'fetchUpdateAsync' | 'isReloadBlocked' | 'recordReload'
+  >,
+  {
+    checkTimeoutMs = DEFAULT_CHECK_TIMEOUT_MS,
+    fetchTimeoutMs = DEFAULT_RECOVERY_FETCH_TIMEOUT_MS,
+  }: StartupOtaOptions = {},
+): Promise<EmergencyOtaRecoveryOutcome> {
+  try {
+    deps.configureUpdateUrl();
+    const check = await withTimeout(deps.checkForUpdateAsync(), checkTimeoutMs);
+    if (!check.isAvailable) return 'up-to-date';
+    const candidateId = check.manifest?.id;
+    if (!candidateId) return 'unknown-id';
+    if (await deps.isReloadBlocked(candidateId)) return 'known-bad';
+    await withTimeout(deps.fetchUpdateAsync(), fetchTimeoutMs);
+    // 计数放在下载成功之后:这里没有 reload 会打断落盘,而「下载到了」才算真的试过一次。
+    // 写失败只吞掉——后果仅是下次冷启动可能重下一次,不影响启动也不会循环。
+    await deps.recordReload(candidateId).catch(() => undefined);
+    return 'fetched';
+  } catch {
+    return 'error';
   }
 }
 

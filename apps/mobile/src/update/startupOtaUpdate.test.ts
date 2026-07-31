@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { runStartupOtaUpdate, withTimeout } from './startupOtaUpdate';
+import {
+  runEmergencyOtaRecovery,
+  runStartupOtaUpdate,
+  withTimeout,
+} from './startupOtaUpdate';
 
 function deps(overrides: Partial<Parameters<typeof runStartupOtaUpdate>[0]> = {}) {
   return {
@@ -213,6 +217,65 @@ describe('runStartupOtaUpdate', () => {
     });
     await expect(runStartupOtaUpdate(d, { fetchTimeoutMs: 20 })).resolves.toBe('error');
     expect(d.reloadAsync).not.toHaveBeenCalled();
+  });
+});
+
+describe('runEmergencyOtaRecovery', () => {
+  it('线上没有新版 → up-to-date,不下载', async () => {
+    const d = deps();
+    await expect(runEmergencyOtaRecovery(d)).resolves.toBe('up-to-date');
+    expect(d.fetchUpdateAsync).not.toHaveBeenCalled();
+  });
+
+  it('线上指针还是那个已知装不上的 update → 不重复下载十几 MB', async () => {
+    const d = deps({
+      checkForUpdateAsync: checkAvailable('bad-update'),
+      isReloadBlocked: vi.fn(async () => true),
+    });
+    await expect(runEmergencyOtaRecovery(d)).resolves.toBe('known-bad');
+    expect(d.fetchUpdateAsync).not.toHaveBeenCalled();
+    expect(d.recordReload).not.toHaveBeenCalled();
+  });
+
+  it('check 没带回 id → 无从判断是否已知坏,不下载', async () => {
+    const d = deps({ checkForUpdateAsync: checkAvailable() });
+    await expect(runEmergencyOtaRecovery(d)).resolves.toBe('unknown-id');
+    expect(d.fetchUpdateAsync).not.toHaveBeenCalled();
+  });
+
+  it('有修复版(新 id)→ 下载并计一次尝试,但绝不 reload', async () => {
+    const d = deps({ checkForUpdateAsync: checkAvailable('fixed-update') });
+    await expect(runEmergencyOtaRecovery(d)).resolves.toBe('fetched');
+    expect(d.fetchUpdateAsync).toHaveBeenCalledOnce();
+    expect(d.recordReload).toHaveBeenCalledWith('fixed-update');
+    // 后台恢复只把 update 变成 pending,交给下一次冷启动;重启本身绝不在这里发生。
+    expect(d.reloadAsync).not.toHaveBeenCalled();
+  });
+
+  it('计数写不进去也算下载成功(只影响下次是否重下,不影响启动)', async () => {
+    const d = deps({
+      checkForUpdateAsync: checkAvailable('fixed-update'),
+      recordReload: vi.fn(async () => { throw new Error('storage full'); }),
+    });
+    await expect(runEmergencyOtaRecovery(d)).resolves.toBe('fetched');
+  });
+
+  it('下载超时 / 离线 → error,永不 reject,也不 reload', async () => {
+    const d = deps({
+      checkForUpdateAsync: checkAvailable('fixed-update'),
+      fetchUpdateAsync: vi.fn((): Promise<{ isNew: boolean }> => new Promise(() => {})),
+    });
+    await expect(runEmergencyOtaRecovery(d, { fetchTimeoutMs: 20 })).resolves.toBe('error');
+    expect(d.reloadAsync).not.toHaveBeenCalled();
+  });
+
+  it('闸门状态读不出来 → error,不下载', async () => {
+    const d = deps({
+      checkForUpdateAsync: checkAvailable('fixed-update'),
+      isReloadBlocked: vi.fn(async () => { throw new Error('storage unavailable'); }),
+    });
+    await expect(runEmergencyOtaRecovery(d)).resolves.toBe('error');
+    expect(d.fetchUpdateAsync).not.toHaveBeenCalled();
   });
 });
 
