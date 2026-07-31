@@ -16,9 +16,16 @@ import {
   type InstalledGhost,
 } from '../../shared/ghost.js';
 import type {
+  MarketSourceConfig,
+  MarketSourceSummary,
   PluginMarketDetail,
   PluginMarketItem,
   PluginMarketSnapshot,
+} from '../../shared/pluginMarket.js';
+import {
+  customMarketPluginId,
+  customMarketReleaseId,
+  parseCustomMarketPluginId,
 } from '../../shared/pluginMarket.js';
 import { getCurrentUserId } from '../authManager.js';
 import {
@@ -39,10 +46,15 @@ import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { PluginMarketApi } from './api.js';
 import { downloadVerifiedPlugin } from './download.js';
+import { installCustomMarketPlugin } from './install.js';
 import {
   PluginMarketLedger,
   type PluginMarketInstallationRecord,
 } from './ledger.js';
+import type { DiscoveredMarketPlugin } from './sources/discover.js';
+import { checkGitPreflight, type GitPreflightResult } from './sources/preflight.js';
+import { MarketSourceManager } from './sources/index.js';
+import { MarketSourceStore } from './sources/store.js';
 
 const log = createLogger('plugin-market');
 const NO_DUPLICATE_GHOST_IDS: ReadonlySet<string> = new Set();
@@ -143,6 +155,26 @@ function ghostIdCounts(
   return counts;
 }
 
+/** 自定义市场发现到的单个插件条目（快照投影的原料）。 */
+interface CustomMarketEntry {
+  config: MarketSourceConfig;
+  plugin: DiscoveredMarketPlugin;
+}
+
+/** 服务端目录 + 自定义市场合并后的重复 ghostId 集合。 */
+function combinedDuplicateGhostIds(
+  plugins: readonly VisiblePluginSummary[],
+  customEntries: readonly CustomMarketEntry[],
+): ReadonlySet<string> {
+  const counts = ghostIdCounts(plugins);
+  for (const entry of customEntries) {
+    counts.set(entry.plugin.ghostId, (counts.get(entry.plugin.ghostId) ?? 0) + 1);
+  }
+  return new Set(
+    [...counts.entries()].filter(([, count]) => count > 1).map(([ghostId]) => ghostId),
+  );
+}
+
 /** Stable local facts reused while projecting one market catalog response. */
 interface LocalInstallSnapshot {
   /** Installed Ghost runtime facts indexed once for one market operation. */
@@ -164,21 +196,33 @@ export class PluginMarketService {
     private readonly ledger = new PluginMarketLedger(() =>
       ownerScopedUserDataPath('plugin-market', 'ledger.v1.json'),
     ),
+    private readonly sourceStore = new MarketSourceStore(() =>
+      ownerScopedUserDataPath('plugin-market', 'sources.v1.json'),
+    ),
   ) {}
 
   async snapshot(): Promise<PluginMarketSnapshot> {
+    // 自定义市场项完全来自本地数据，不依赖服务端与登录态；服务端不可用时
+    // 仍然返回，unavailableReason 只表达服务端部分的不可用。
+    const customEntries = await this.discoverCustomEntriesSafe();
+    const customSourceNames = this.customSourceNamesSafe();
     if (!getClientEndpoint('pluginApiBaseUrl')) {
-      return { items: [], unavailableReason: 'not-configured' };
+      return {
+        items: this.projectCustomItems(customEntries),
+        unavailableReason: customEntries.length > 0 ? null : 'not-configured',
+        customSourceNames,
+      };
     }
     let owner: ActiveAppSession;
     try {
       owner = captureMarketOwner();
     } catch {
       return {
-        items: [],
+        items: this.projectCustomItems(customEntries),
         unavailableReason: isAppSessionBoundaryPending()
           ? 'session-switching'
           : 'authentication-required',
+        customSourceNames,
       };
     }
     let plugins: VisiblePluginSummary[];
@@ -189,8 +233,9 @@ export class PluginMarketService {
         error: error instanceof Error ? error.message : String(error),
       });
       return {
-        items: [],
+        items: this.projectCustomItems(customEntries),
         unavailableReason: error instanceof Error ? error.message : String(error),
+        customSourceNames,
       };
     }
 
@@ -200,10 +245,23 @@ export class PluginMarketService {
     await this.reconcileRemovedInstallations(ledger, owner);
     await this.applyDefaultInstalls(plugins, owner, ledger);
     requireSameMarketOwner(owner);
-    return { items: this.toItems(plugins, ledger), unavailableReason: null };
+    // ghostId 冲突判定跨服务端与自定义市场合并计算（全局唯一、先装先得）。
+    const duplicateGhostIds = combinedDuplicateGhostIds(plugins, customEntries);
+    const local = this.localInstallSnapshot(ledger);
+    const serverItems = plugins.map((plugin) =>
+      this.toItem(plugin, duplicateGhostIds, local),
+    );
+    return {
+      items: [...serverItems, ...this.projectCustomItems(customEntries, duplicateGhostIds, local)],
+      unavailableReason: null,
+      customSourceNames,
+    };
   }
 
   async detail(pluginId: string): Promise<PluginMarketDetail> {
+    // 自定义市场插件走本地发现，不要求服务端可用，也不受 CUID 形状约束。
+    const customRef = parseCustomMarketPluginId(pluginId);
+    if (customRef) return this.customDetail(customRef);
     if (!isValidPluginResourceId(pluginId)) {
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin ID');
     }
@@ -237,6 +295,8 @@ export class PluginMarketService {
       allowPermissionExpansion?: boolean;
     },
   ): Promise<{ ghost: InstalledGhost }> {
+    const customRef = parseCustomMarketPluginId(pluginId);
+    if (customRef) return this.customInstall(customRef, options);
     if (!isValidPluginResourceId(pluginId)) {
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin ID');
     }
@@ -282,7 +342,11 @@ export class PluginMarketService {
   }
 
   async uninstall(pluginId: string): Promise<{ ok: true }> {
-    if (!isValidPluginResourceId(pluginId)) {
+    // 自定义市场插件的卸载走同一账本路径，仅跳过服务端 CUID 形状校验。
+    if (
+      !parseCustomMarketPluginId(pluginId) &&
+      !isValidPluginResourceId(pluginId)
+    ) {
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin ID');
     }
     const owner = captureMarketOwner();
@@ -338,6 +402,250 @@ export class PluginMarketService {
         ledger.markRemoved(ghostId, installSubject);
       });
     };
+  }
+
+  /* ---------------------------------------------------------------------- */
+  /* 自定义市场源（Git / 本地文件夹）                                         */
+  /* ---------------------------------------------------------------------- */
+
+  async listSources(): Promise<MarketSourceSummary[]> {
+    const owner = captureMarketOwner();
+    return this.sourceManagerForOwner(owner).listSources();
+  }
+
+  async addSource(input: {
+    source: string;
+    ref?: string;
+    sparsePaths?: string[];
+  }): Promise<MarketSourceSummary> {
+    const owner = captureMarketOwner();
+    // 源管理操作全局串行：添加期间发现的市场名必须唯一，并行添加会互相覆盖。
+    return this.withMutation('market-sources', async () => {
+      requireSameMarketOwner(owner);
+      return this.sourceManagerForOwner(owner).addSource(input);
+    });
+  }
+
+  async removeSource(name: string): Promise<{ ok: true }> {
+    const owner = captureMarketOwner();
+    return this.withMutation('market-sources', async () => {
+      requireSameMarketOwner(owner);
+      return this.sourceManagerForOwner(owner).removeSource(name);
+    });
+  }
+
+  async refreshSource(name: string): Promise<MarketSourceSummary> {
+    const owner = captureMarketOwner();
+    return this.withMutation('market-sources', async () => {
+      requireSameMarketOwner(owner);
+      return this.sourceManagerForOwner(owner).refreshSource(name);
+    });
+  }
+
+  async gitPreflight(): Promise<GitPreflightResult> {
+    return checkGitPreflight();
+  }
+
+  /** 自定义市场插件详情：本地发现现查，不要求服务端市场可用。 */
+  private async customDetail(ref: {
+    marketName: string;
+    ghostId: string;
+  }): Promise<PluginMarketDetail> {
+    const owner = captureMarketOwner();
+    const manager = this.sourceManagerForOwner(owner);
+    const discovered = await manager.discoverSource(ref.marketName);
+    if (!discovered.result.ok) {
+      throwIpcError(discovered.result.code, discovered.result.detail ?? discovered.result.code);
+    }
+    const plugin = discovered.result.marketplace.plugins.find(
+      (candidate) => candidate.ghostId === ref.ghostId,
+    );
+    if (!plugin) {
+      throwIpcError('NOT_FOUND', 'The Plugin is no longer listed by this marketplace');
+    }
+    return {
+      ...this.customToItem(
+        { config: discovered.config, plugin },
+        NO_DUPLICATE_GHOST_IDS,
+        this.localInstallSnapshot(this.ledgerForOwner(owner)),
+      ),
+      manifest: plugin.manifest,
+    };
+  }
+
+  /**
+   * 自定义市场插件安装/更新。与服务端 installDetail 同一组防线：
+   * release 一致性（重发现后比对 expectedReleaseId）、冲突先装先得、
+   * 权限扩张显式确认；打包与装入复用 installOrUpdateMarketGhostPackage。
+   */
+  private async customInstall(
+    ref: { marketName: string; ghostId: string },
+    options: { expectedReleaseId: string; allowPermissionExpansion?: boolean },
+  ): Promise<{ ghost: InstalledGhost }> {
+    const owner = captureMarketOwner();
+    const ledger = this.ledgerForOwner(owner);
+    const manager = this.sourceManagerForOwner(owner);
+    return this.withMutation(`custom-market:${ref.marketName}/${ref.ghostId}`, async () => {
+      requireSameMarketOwner(owner);
+      const discovered = await manager.discoverSource(ref.marketName);
+      if (!discovered.result.ok) {
+        throwIpcError(discovered.result.code, discovered.result.detail ?? discovered.result.code);
+      }
+      const plugin = discovered.result.marketplace.plugins.find(
+        (candidate) => candidate.ghostId === ref.ghostId,
+      );
+      if (!plugin) {
+        throwIpcError('NOT_FOUND', 'The Plugin is no longer listed by this marketplace');
+      }
+      const pluginId = customMarketPluginId(ref.marketName, plugin.ghostId);
+      const releaseId = customMarketReleaseId(ref.marketName, plugin.ghostId, plugin.version);
+      if (releaseId !== options.expectedReleaseId) {
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'Plugin release changed after permission review',
+        );
+      }
+      const existing = getGhostManager()
+        .list()
+        .find((ghost) => ghost.manifest.id === plugin.ghostId);
+      const currentRecord = ledger.installationForGhost(plugin.ghostId);
+      if (existing && (!currentRecord?.installed || currentRecord.pluginId !== pluginId)) {
+        throwIpcError('ALREADY_EXISTS', 'A local Plugin already uses this Plugin ID');
+      }
+      if (
+        existing &&
+        diffGhostPermissionItems(existing.manifest, plugin.manifest).added.length > 0 &&
+        options.allowPermissionExpansion !== true
+      ) {
+        throwIpcError('PRECONDITION_FAILED', 'Plugin permissions changed and require review');
+      }
+      requireSameMarketOwner(owner);
+      const ghost = await installCustomMarketPlugin({
+        pluginDir: plugin.dir,
+        expected: { ghostId: plugin.ghostId, version: plugin.version },
+      });
+      // 包目录落位后,溯源写入操作开始时捕获的 owner 账本(与服务端安装同款)。
+      await this.withCapturedLedgerMutation(ledger, () => {
+        ledger.upsertInstallation({
+          pluginId,
+          ghostId: plugin.ghostId,
+          releaseId,
+          version: plugin.version,
+          // 自定义源没有服务端内容哈希;占位值如实表达"未经内容校验"。
+          sha256: 'custom-unverified',
+          scope: 'public',
+          organizationId: null,
+          source: discovered.config.source.type === 'git' ? 'git-market' : 'local-market',
+          installed: true,
+          updatedAt: new Date().toISOString(),
+        });
+      });
+      return { ghost };
+    });
+  }
+
+  /** 已配置来源名（按添加顺序）；存储读取失败时降级为空数组。 */
+  private customSourceNamesSafe(): string[] {
+    try {
+      return this.sourceStore.list().map((source) => source.name);
+    } catch {
+      return [];
+    }
+  }
+
+  /** 快照聚合用：发现全部自定义市场条目。任何失败都降级为空，不拖垮快照。 */
+  private async discoverCustomEntriesSafe(): Promise<CustomMarketEntry[]> {
+    try {
+      const discovered = await new MarketSourceManager({
+        store: this.sourceStore,
+        cloneRoot: ownerScopedUserDataPath('plugin-market', 'sources'),
+      }).discoverAll();
+      const entries: CustomMarketEntry[] = [];
+      for (const { config, result } of discovered) {
+        if (!result.ok) {
+          log.warn('custom marketplace discovery failed', {
+            market: config.name,
+            code: result.code,
+          });
+          continue;
+        }
+        for (const plugin of result.marketplace.plugins) {
+          entries.push({ config, plugin });
+        }
+      }
+      return entries;
+    } catch (error) {
+      log.warn('custom marketplace enumeration failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+  }
+
+  private projectCustomItems(
+    entries: readonly CustomMarketEntry[],
+    duplicateGhostIds?: ReadonlySet<string>,
+    local?: LocalInstallSnapshot,
+  ): PluginMarketItem[] {
+    const duplicates =
+      duplicateGhostIds ?? combinedDuplicateGhostIds([], entries);
+    const snapshot = local ?? this.localInstallSnapshot();
+    return entries.map((entry) => this.customToItem(entry, duplicates, snapshot));
+  }
+
+  /** 自定义市场项的状态机与服务端 toItem 完全一致（冲突 / 首装 / 更新 / 已装）。 */
+  private customToItem(
+    entry: CustomMarketEntry,
+    duplicateGhostIds: ReadonlySet<string>,
+    local: LocalInstallSnapshot,
+  ): PluginMarketItem {
+    const { config, plugin } = entry;
+    const pluginId = customMarketPluginId(config.name, plugin.ghostId);
+    const releaseId = customMarketReleaseId(config.name, plugin.ghostId, plugin.version);
+    const ghost = local.ghostsById.get(plugin.ghostId);
+    const record = local.installations[plugin.ghostId];
+    const ownsInstall = Boolean(
+      ghost && record?.installed && record.pluginId === pluginId,
+    );
+    const conflict = Boolean(
+      duplicateGhostIds.has(plugin.ghostId) || (ghost && !ownsInstall),
+    );
+    const installState: PluginMarketItem['installState'] = conflict
+      ? 'conflict'
+      : !ownsInstall
+        ? 'not-installed'
+        : record?.releaseId === releaseId
+          ? 'installed'
+          : 'update-available';
+    return {
+      pluginId,
+      ghostId: plugin.ghostId,
+      name: plugin.manifest.name,
+      description: plugin.manifest.description ?? null,
+      author: plugin.manifest.author ?? null,
+      // scope 是服务端授权概念，自定义市场项无服务端身份;展示层按 sourceType 分流。
+      scope: 'public',
+      organizationId: null,
+      defaultInstall: false,
+      releaseId,
+      version: plugin.version,
+      publishedAt: config.lastSyncedAt ?? config.addedAt,
+      icon: null,
+      installState,
+      enabled: ownsInstall ? (ghost?.enabled ?? null) : null,
+      sourceType: config.source.type === 'git' ? 'git-market' : 'local-market',
+      sourceMarketName: config.name,
+    };
+  }
+
+  private sourceManagerForOwner(owner: ActiveAppSession): MarketSourceManager {
+    requireSameMarketOwner(owner);
+    return new MarketSourceManager({
+      store: this.sourceStore.bind(
+        ownerScopedUserDataPath('plugin-market', 'sources.v1.json'),
+      ),
+      cloneRoot: ownerScopedUserDataPath('plugin-market', 'sources'),
+    });
   }
 
   private async installDetail(
@@ -430,20 +738,6 @@ export class PluginMarketService {
     }
   }
 
-  private toItems(
-    plugins: readonly VisiblePluginSummary[],
-    ledger = this.ledger,
-  ): PluginMarketItem[] {
-    const counts = ghostIdCounts(plugins);
-    const duplicateGhostIds = new Set(
-      plugins
-        .filter((plugin) => (counts.get(plugin.ghostId) ?? 0) > 1)
-        .map((plugin) => plugin.ghostId),
-    );
-    const local = this.localInstallSnapshot(ledger);
-    return plugins.map((plugin) => this.toItem(plugin, duplicateGhostIds, local));
-  }
-
   private toItem(
     plugin: VisiblePluginSummary | VisiblePluginDetail,
     duplicateGhostIds: ReadonlySet<string> = NO_DUPLICATE_GHOST_IDS,
@@ -480,6 +774,8 @@ export class PluginMarketService {
       icon: plugin.currentRelease.icon,
       installState,
       enabled: ownsInstall ? (ghost?.enabled ?? null) : null,
+      sourceType: 'server',
+      sourceMarketName: null,
     };
   }
 

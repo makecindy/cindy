@@ -537,11 +537,16 @@ export async function scaffoldGhostDir(
 }
 
 /**
- * 校验 + 打包一个意识源码目录。产物写到源码目录自身(<id>-<version>.cindy,
- * 同名覆盖——同 id 同版本重打包语义上就是同一个包),用户在自己的意识目录里
- * 就能拿到成品;出错返回结构化分类,agent 按 message 修源码即可,不抛异常。
+ * 打包核心:校验 + 收集 + 生成 zip buffer,不写盘。packGhostDir(产物进源码目录)
+ * 与 packGhostDirToFile(产物去调用方指定路径,自定义市场安装管道用)共用,
+ * 保证两条路径的校验与打包规则永远一致。
  */
-export async function packGhostDir(dir: string): Promise<ForgePackResult> {
+async function buildGhostPackage(
+  dir: string,
+): Promise<
+  | { ok: true; buf: Buffer; manifest: GhostManifest }
+  | Exclude<ForgePackResult, { ok: true }>
+> {
   try {
     let stat: fs.Stats;
     try {
@@ -636,7 +641,7 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
     const maxFiles = manifest.node ? MAX_NODE_FILES : MAX_BASIC_FILES;
     const maxTotalBytes = manifest.node ? MAX_NODE_TOTAL_BYTES : MAX_BASIC_TOTAL_BYTES;
     const seenPackPaths = new Set<string>();
-    const walk = async (cur: string, relBase: string): Promise<ForgePackResult | null> => {
+    const walk = async (cur: string, relBase: string): Promise<Exclude<ForgePackResult, { ok: true }> | null> => {
       const entries = await fs.promises.readdir(cur, { withFileTypes: true });
       for (const e of entries) {
         if (shouldSkip(e.name)) continue;
@@ -674,9 +679,9 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
     const tooLarge = await walk(dir, '');
     if (tooLarge) return tooLarge;
 
-    // 5) 打包到源码目录自身(2026-07 Lizi 定案:产物跟源码住一起,拿取直观)。
-    // 文件收集在写盘之前完成 + shouldSkip 跳过 *.cindy,自身产物不会进包;
-    // 同名覆盖:同 id 同版本重打包语义上就是同一个包。
+    // 5) 生成 zip buffer。文件收集在此之前完成 + shouldSkip 跳过 *.cindy,
+    // 产物自身不会进包;写盘位置由调用方决定(packGhostDir 进源码目录,
+    // packGhostDirToFile 进调用方指定路径)。
     const zip = new JSZip();
     for (const f of files) {
       zip.file(f.rel, await fs.promises.readFile(f.abs));
@@ -690,9 +695,7 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
         message: `压缩包体积超上限(${maxCindyBytes} 字节)`,
       };
     }
-    const cindyPath = path.join(dir, `${manifest.id}-${manifest.version}.cindy`);
-    await fs.promises.writeFile(cindyPath, buf);
-    return { ok: true, cindyPath, manifest };
+    return { ok: true, buf, manifest };
   } catch (err) {
     return {
       ok: false,
@@ -700,6 +703,35 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
       message: err instanceof Error ? err.message : String(err),
     };
   }
+}
+
+/**
+ * 校验 + 打包一个意识源码目录。产物写到源码目录自身(<id>-<version>.cindy,
+ * 同名覆盖——同 id 同版本重打包语义上就是同一个包),用户在自己的意识目录里
+ * 就能拿到成品;出错返回结构化分类,agent 按 message 修源码即可,不抛异常。
+ */
+export async function packGhostDir(dir: string): Promise<ForgePackResult> {
+  const built = await buildGhostPackage(dir);
+  if (!built.ok) return built;
+  // 产物跟源码住一起(2026-07 Lizi 定案:拿取直观);文件收集在写盘之前完成
+  // + shouldSkip 跳过 *.cindy,自身产物不会进包;同名覆盖。
+  const cindyPath = path.join(dir, `${built.manifest.id}-${built.manifest.version}.cindy`);
+  await fs.promises.writeFile(cindyPath, built.buf);
+  return { ok: true, cindyPath, manifest: built.manifest };
+}
+
+/**
+ * 打包到调用方指定的绝对路径。自定义市场安装管道用:市场克隆缓存是只读事实,
+ * 产物落到临时目录,装完即删。校验与打包规则与 packGhostDir 完全一致。
+ */
+export async function packGhostDirToFile(
+  dir: string,
+  destPath: string,
+): Promise<ForgePackResult> {
+  const built = await buildGhostPackage(dir);
+  if (!built.ok) return built;
+  await fs.promises.writeFile(destPath, built.buf, { flag: 'wx' });
+  return { ok: true, cindyPath: destPath, manifest: built.manifest };
 }
 
 /**

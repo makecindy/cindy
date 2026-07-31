@@ -1,0 +1,164 @@
+/**
+ * 自定义市场来源配置的持久化（sources.v1.json）。
+ *
+ * 与 PluginMarketLedger 同一套约定：schemaVersion 闸、逐条校验、原子写
+ * （临时文件 + rename，Windows 下先删目标重试）、0o600。只存来源配置，
+ * 不复制发现到的插件数据——快照时重新发现，磁盘上的克隆目录才是事实。
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+
+import type { MarketSource, MarketSourceConfig } from '../../../shared/pluginMarket.js';
+
+const SOURCES_SCHEMA_VERSION = 1;
+
+interface MarketSourcesData {
+  schemaVersion: typeof SOURCES_SCHEMA_VERSION;
+  sources: MarketSourceConfig[];
+}
+
+function emptySources(): MarketSourcesData {
+  return { schemaVersion: SOURCES_SCHEMA_VERSION, sources: [] };
+}
+
+function validSource(value: unknown): value is MarketSource {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const source = value as Record<string, unknown>;
+  if (source.type === 'local') {
+    return typeof source.path === 'string' && source.path.length > 0;
+  }
+  if (source.type === 'git') {
+    return (
+      typeof source.url === 'string' &&
+      source.url.length > 0 &&
+      (source.ref === undefined || typeof source.ref === 'string') &&
+      Array.isArray(source.sparsePaths) &&
+      (source.sparsePaths as unknown[]).every((entry) => typeof entry === 'string')
+    );
+  }
+  return false;
+}
+
+function validConfig(value: unknown): value is MarketSourceConfig {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const config = value as Record<string, unknown>;
+  return (
+    typeof config.name === 'string' &&
+    config.name.length > 0 &&
+    typeof config.addedAt === 'string' &&
+    (config.lastSyncedAt === null || typeof config.lastSyncedAt === 'string') &&
+    (config.lastRevision === null || typeof config.lastRevision === 'string') &&
+    validSource(config.source)
+  );
+}
+
+export class MarketSourceStore {
+  constructor(private readonly filePathSource: string | (() => string)) {}
+
+  /**
+   * Binds a dynamic owner-scoped store to the path captured at operation start.
+   * Mirrors PluginMarketLedger.bind so owner switches never cross-write state.
+   */
+  bind(filePath: string): MarketSourceStore {
+    return typeof this.filePathSource === 'function'
+      ? new MarketSourceStore(filePath)
+      : this;
+  }
+
+  private filePath(): string {
+    return typeof this.filePathSource === 'function'
+      ? this.filePathSource()
+      : this.filePathSource;
+  }
+
+  list(): MarketSourceConfig[] {
+    return this.read().sources;
+  }
+
+  get(name: string): MarketSourceConfig | null {
+    return this.read().sources.find((source) => source.name === name) ?? null;
+  }
+
+  /** 追加新来源；调用方负责先完成名称与重复来源校验。 */
+  add(config: MarketSourceConfig): void {
+    const data = this.read();
+    data.sources = [...data.sources.filter((source) => source.name !== config.name), config];
+    this.write(data);
+  }
+
+  update(name: string, patch: Partial<Pick<MarketSourceConfig, 'lastSyncedAt' | 'lastRevision'>>): void {
+    const data = this.read();
+    const index = data.sources.findIndex((source) => source.name === name);
+    if (index < 0) return;
+    data.sources[index] = { ...data.sources[index]!, ...patch };
+    this.write(data);
+  }
+
+  remove(name: string): MarketSourceConfig | null {
+    const data = this.read();
+    const existing = data.sources.find((source) => source.name === name) ?? null;
+    if (!existing) return null;
+    data.sources = data.sources.filter((source) => source.name !== name);
+    this.write(data);
+    return existing;
+  }
+
+  /** 重复添加判定：来源类型 + 定位 + 引用 + 稀疏路径全部一致视为同一来源。 */
+  hasEquivalent(source: MarketSource): boolean {
+    return this.read().sources.some((config) => sourcesEqual(config.source, source));
+  }
+
+  private read(): MarketSourcesData {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(fs.readFileSync(this.filePath(), 'utf8'));
+    } catch {
+      return emptySources();
+    }
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return emptySources();
+    const value = raw as Record<string, unknown>;
+    if (value.schemaVersion !== SOURCES_SCHEMA_VERSION) return emptySources();
+    if (!Array.isArray(value.sources)) return emptySources();
+    return { schemaVersion: SOURCES_SCHEMA_VERSION, sources: value.sources.filter(validConfig) };
+  }
+
+  private write(data: MarketSourcesData): void {
+    const filePath = this.filePath();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const tempPath = `${filePath}.${crypto.randomUUID()}.tmp`;
+    try {
+      fs.writeFileSync(tempPath, `${JSON.stringify(data, null, 2)}\n`, {
+        mode: 0o600,
+        flag: 'wx',
+      });
+      try {
+        fs.renameSync(tempPath, filePath);
+      } catch (error) {
+        const code = error && typeof error === 'object' && 'code' in error
+          ? (error as NodeJS.ErrnoException).code
+          : undefined;
+        if (process.platform !== 'win32' || (code !== 'EPERM' && code !== 'EEXIST')) {
+          throw error;
+        }
+        fs.rmSync(filePath, { force: true });
+        fs.renameSync(tempPath, filePath);
+      }
+    } finally {
+      fs.rmSync(tempPath, { force: true });
+    }
+  }
+}
+
+export function sourcesEqual(a: MarketSource, b: MarketSource): boolean {
+  if (a.type !== b.type) return false;
+  if (a.type === 'local' && b.type === 'local') return a.path === b.path;
+  if (a.type === 'git' && b.type === 'git') {
+    return (
+      a.url === b.url &&
+      (a.ref ?? null) === (b.ref ?? null) &&
+      a.sparsePaths.join('\n') === b.sparsePaths.join('\n')
+    );
+  }
+  return false;
+}

@@ -1,0 +1,114 @@
+import { describe, expect, it } from 'vitest';
+
+import { parseMarketSource, resolveLocalSourcePath } from '../sources/parse';
+
+const HOME = '/home/tester';
+
+function parse(input: { source: string; ref?: string; sparsePaths?: string[] }) {
+  return parseMarketSource(input, HOME);
+}
+
+describe('parseMarketSource', () => {
+  it('parses GitHub shorthand into an https git source', () => {
+    const result = parse({ source: 'openai/plugins' });
+    expect(result).toEqual({
+      ok: true,
+      source: {
+        type: 'git',
+        url: 'https://github.com/openai/plugins.git',
+        sparsePaths: [],
+      },
+    });
+  });
+
+  it('keeps ref and sparse paths on git sources', () => {
+    const result = parse({
+      source: 'openai/plugins',
+      ref: 'v1.2',
+      sparsePaths: ['plugins/codex', ' plugins/extra ', ''],
+    });
+    expect(result).toEqual({
+      ok: true,
+      source: {
+        type: 'git',
+        url: 'https://github.com/openai/plugins.git',
+        ref: 'v1.2',
+        sparsePaths: ['plugins/codex', 'plugins/extra'],
+      },
+    });
+  });
+
+  it.each([
+    'https://github.com/org/repo.git',
+    'ssh://git@example.com/org/repo.git',
+    'git@github.com:org/repo.git',
+  ])('accepts full git URL %s', (source) => {
+    const result = parse({ source });
+    expect(result).toEqual({
+      ok: true,
+      source: { type: 'git', url: source, sparsePaths: [] },
+    });
+  });
+
+  it('resolves ~ against the injected home directory', () => {
+    const result = parse({ source: '~/team/plugins' });
+    expect(result).toEqual({
+      ok: true,
+      source: { type: 'local', path: `${HOME}/team/plugins` },
+    });
+  });
+
+  it.each(['/abs/path', './rel/path', '../up/path'])(
+    'treats %s as a local path',
+    (source) => {
+      const result = parse({ source });
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.source.type).toBe('local');
+    },
+  );
+
+  it('rejects ref and sparse paths for local sources', () => {
+    expect(parse({ source: '~/x', ref: 'main' })).toEqual({
+      ok: false,
+      code: 'REF_NOT_ALLOWED_FOR_LOCAL',
+    });
+    expect(parse({ source: '~/x', sparsePaths: ['a'] })).toEqual({
+      ok: false,
+      code: 'SPARSE_NOT_ALLOWED_FOR_LOCAL',
+    });
+  });
+
+  it('rejects empty and unrecognizable sources', () => {
+    expect(parse({ source: '   ' })).toEqual({ ok: false, code: 'EMPTY_SOURCE' });
+    expect(parse({ source: 'just-a-word' })).toEqual({
+      ok: false,
+      code: 'INVALID_SOURCE_FORMAT',
+    });
+    expect(parse({ source: 'a/b/c' })).toEqual({
+      ok: false,
+      code: 'INVALID_SOURCE_FORMAT',
+    });
+  });
+
+  it('rejects option-injection shaped refs', () => {
+    expect(parse({ source: 'openai/plugins', ref: '--upload-pack=evil' })).toEqual({
+      ok: false,
+      code: 'INVALID_REF',
+    });
+  });
+
+  it('rejects sparse paths escaping the repository', () => {
+    expect(parse({ source: 'openai/plugins', sparsePaths: ['../outside'] })).toEqual({
+      ok: false,
+      code: 'INVALID_SPARSE_PATH',
+    });
+    expect(parse({ source: 'openai/plugins', sparsePaths: ['/abs'] })).toEqual({
+      ok: false,
+      code: 'INVALID_SPARSE_PATH',
+    });
+  });
+
+  it('resolves local paths without touching the filesystem', () => {
+    expect(resolveLocalSourcePath('~/a/b', HOME)).toBe(`${HOME}/a/b`);
+  });
+});

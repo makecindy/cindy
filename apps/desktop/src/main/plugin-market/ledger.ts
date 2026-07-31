@@ -14,7 +14,7 @@ export interface PluginMarketInstallationRecord {
   sha256: string;
   scope: PluginScope;
   organizationId: string | null;
-  source: 'market' | 'legacy-adopted';
+  source: 'market' | 'legacy-adopted' | 'git-market' | 'local-market';
   installed: boolean;
   updatedAt: string;
 }
@@ -46,7 +46,10 @@ function validRecord(value: unknown): value is PluginMarketInstallationRecord {
       record.scope === 'organization' ||
       record.scope === 'personal') &&
     (record.organizationId === null || typeof record.organizationId === 'string') &&
-    (record.source === 'market' || record.source === 'legacy-adopted') &&
+    (record.source === 'market' ||
+      record.source === 'legacy-adopted' ||
+      record.source === 'git-market' ||
+      record.source === 'local-market') &&
     typeof record.installed === 'boolean' &&
     typeof record.updatedAt === 'string'
   );

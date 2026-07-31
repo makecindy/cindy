@@ -2574,6 +2574,14 @@ function rejectReservedGhostId(id: string): void {
 }
 
 /**
+ * 自定义市场（Git / 本地源）装入前的保留前缀闸。与服务端市场不同，自定义源
+ * 的包字节未经 plugin-server 绑定，不享受官方前缀豁免，语义同本地 .cindy 装入。
+ */
+export function rejectReservedGhostIdForCustomMarket(id: string): void {
+  rejectReservedGhostId(id);
+}
+
+/**
  * tokenBroker 第一方门控·装入闸:oauth 详单声明了 tokenBroker 的意识,XDT
  * server 的授权 broker(带用户登录 JWT 的服务端资产)只对官方前缀 id 开放,
  * 第三方包声明即拒装(连接闸在 /oauth connect 端点二次兜底)。不区分
