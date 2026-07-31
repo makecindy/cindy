@@ -24,6 +24,8 @@ import {
   hasSubagentMessages,
 } from '@/session/subagentGrouping';
 
+const MAX_VALID_DATE_MS = 8.64e15;
+
 export type MobileTodoItem = MessageRenderTodoItem;
 export type MobileMessageItem = MessageRenderMessageItem<NormalizedRemoteMessage>;
 export type MobileThinkingItem = MessageRenderThinkingItem<NormalizedRemoteMessage>;
@@ -83,6 +85,7 @@ export function buildMobileMessageRenderItems(
   scopeUnsettledToolsToActiveTail(normalized);
   markTurnFinalAssistants(normalized, options.isSessionStreaming === true);
   if (options.autoResumePending) {
+    const pendingCreatedAtMs = messageCreatedMs(normalized.at(-1));
     normalized.push(...normalizeRemoteMessages([{
       id: 'mobile:auto-resume-pending',
       clientId: 'mobile:auto-resume-pending',
@@ -91,7 +94,7 @@ export function buildMobileMessageRenderItems(
       content: '',
       toolUseId: null,
       agentMeta: { autoResume: true, autoResumeInfo: { ...options.autoResumePending, live: true } },
-      createdAt: '9999-12-31T23:59:59.999Z',
+      createdAt: pendingCreatedAtMs === null || pendingCreatedAtMs >= MAX_VALID_DATE_MS ? '' : new Date(pendingCreatedAtMs + 1).toISOString(),
     }]));
   }
   // 无子 agent(Claude `Agent` 嵌套)→ 走原始线性路径,并接上 live agent_task 卡:

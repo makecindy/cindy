@@ -147,8 +147,9 @@ describe('formatMobileSystemCard — 中断自动重连状态', () => {
   it('shows live progress, reason, current attempt, and conversation total', () => {
     expect(formatMobileSystemCard('auto-resume', { ...info, live: true })).toEqual({
       title: 'Reconnecting 2/5…',
+      subtitle: 'Attempt 2/5 · 3 reconnects in this conversation',
       body: 'socket hang up',
-      rows: [{ label: 'Attempt 2/5 · 3 reconnects in this conversation', value: '' }],
+      rows: [],
     });
   });
 

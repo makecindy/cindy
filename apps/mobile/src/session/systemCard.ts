@@ -141,12 +141,11 @@ function formatAutoResumeCard(data: Record<string, unknown> | undefined): System
   const outcome = data?.outcome === 'succeeded' || data?.outcome === 'failed'
     ? data.outcome
     : undefined;
-  const live = data?.live === true;
-  const hasInterruptionContext = !!(live || error || attempt || maxAttempts || sessionTotal || outcome);
+  const hasInterruptionContext = !!(data?.live === true || error || attempt || maxAttempts || sessionTotal || outcome);
   if (!hasInterruptionContext) {
     return { title: i18n.t('message.systemCard.autoResume.separator'), rows: [] };
   }
-  const title = live
+  const title = data?.live === true
     ? attempt && maxAttempts
       ? i18n.t('message.systemCard.autoResume.pendingWithProgress', { attempt, total: maxAttempts })
       : i18n.t('message.systemCard.autoResume.pending')
@@ -157,7 +156,8 @@ function formatAutoResumeCard(data: Record<string, unknown> | undefined): System
   return {
     title,
     ...(error ? { body: error } : {}),
-    rows: details ? [{ label: details, value: '' }] : [],
+    subtitle: details,
+    rows: [],
   };
 }
 
