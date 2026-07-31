@@ -1,7 +1,9 @@
 # 任务、对话、消息：面向用户的命名
 
 > **状态**：权威产品规则（authoritative）。已随本次改名落地，机器口径见
-> `i18n/glossary.json` 的 `session` / `chat` / `task` / `message` / `turn` 条目。
+> `i18n/glossary.json` 的 `session` / `agent-session` / `chat` / `task` / `message` / `turn` 条目。
+> **最容易译错的一条**：英文 `session` 在本仓是**五个**不同概念，只有中文必须把它们分开——
+> 动手前先读 §6.0.2。
 > **适用范围**：所有面向用户的中文文案、帮助内容与对外表述
 > **读取时机**：新增或修改涉及「任务 / 对话 / 消息」的 UI 文案之前
 
@@ -420,20 +422,44 @@ grep -rniE "'(New Chat|New Maker|New Conversation|Copy conversation link)'" \
 `normalized != "new maker"`）**绝对不能改**——`projectDraftSessionTitle` 那一整套机制的存在
 意义就是把这个哨兵挡在用户视线之外，改了它等于让哨兵检测全部失效。
 
-#### 6.0.2 Agent 进程会话不跟改，但要看清楚是哪一类
+#### 6.0.2 英文的 `session` 在本仓是五个概念，中文只有它们必须分开
 
-`session` 在本仓有两层含义，UI 文案里都出现：产品条目（改「任务」）和 **Agent 进程 /
-runtime 会话**（保持「会话」）。后者的判据不是词形而是**行为**——
+**这是本次改名一半返工的根因，先读这一节再动任何含 session 的文案。**
 
-落地时把 `settings.memory.agent.toast.takesEffectSuffix` 改成了「在新任务中生效」，但代码
+英文用一个 `session` 指五件不同的事，`ja` / `ko` 跟英文一样一词通用——**只有中文被迫二分**，
+所以只有中文会译错，而且英文源里没有可供机器判别的信号：
+
+| 概念 | 中文 | 术语表条目 | 例子 |
+|---|---|---|---|
+| 产品条目（可单独打开／删除／分享） | **任务** | `session` | 侧栏那一行、`/session` 列表、fork 产物 |
+| **Agent / 引擎运行时会话**（SDK Query 生命周期） | **Agent 会话** | **`agent-session`** | 设置生效范围、`Session is inactive`、`Codex session state` |
+| 登录／绑定校验会话 | 会话 | `session` 的 `exempt` | `The verification session expired` |
+| SSH 远程与传输会话 | 会话 | 同上 | `not supported in SSH remote sessions` |
+| 操作系统桌面会话 / mobile 语音连接 | 会话 | 同上 | `the current desktop session`、`voice.sessionNotConnected` |
+
+**改名前这五个概念挤在一个 `session` 条目 + 一条 39 项路径白名单里**，白名单只写了「这里允许
+出现『会话』」，没写「这里指的是哪一种」——于是逐条判断时没有可对照的名字，落地过程里
+反复把运行时会话译成「任务」（`memory` / `computerUse` / `mcp` / `forkErrors` / `rewind` 各一轮）。
+2026-08-01 把最大的那一类单独立成 **`agent-session`** 条目（占白名单 22/39，也是唯一一类
+译错会**改变用户行为**的），并加了机器规则。
+
+**门禁能拦住的部分**：`agent-session` 的 `forbidden` 是「英文源字面写了 `agent session` 时，
+中文不许出现『任务』」——精确、当前零误报（唯一的合法混用 `forkErrors.unsupportedHistory`
+已登记 exempt）。已实测：把 `computerUse.*.toggleHint` 改回犯错时的写法，门禁报 3 处违规。
+
+**门禁拦不住的部分**（必须人读英文源）：英文只写 `session` 的那批——`The Codex session state`、
+`Session is inactive`、`in-flight sessions are unaffected`。**英语本身不区分这两个意思，
+同一句里两个所指并存还是合法的**，任何词形规则都会误伤。这类只能靠下面三条判据。
+
+判据一：**这句话会不会让用户去做一个多余的动作？** 会（「新建任务才生效」）→ 说 Agent 会话。
+
+这条判据是踩出来的：落地时把 `settings.memory.agent.toast.takesEffectSuffix` 改成了「在新任务中生效」，但代码
 写着 `setMemory 只更新 memoryOverride, 影响下次 buildQuery (新 session / rewind 重启)`：
 **同一条任务里 rewind 也会生效**，说「新任务」会让用户白开一个任务、还割裂了上下文。同页
 同机制的兄弟文案（`lspMode.toast.*`、`builtinTools.toast.*`）早就写着「Agent 会话」并登记
 在 `session` 条目的 `exempt` 里——一致性证据就在隔壁，却没去看。
 
-判据：**这句话会不会让用户去做一个多余的动作？** 会（「新建任务才生效」）→ 说 Agent 会话。
-
-**但还有第二条，比第一条更容易踩：同一句里前后两半必须在同一个概念上。** 落地时把
+判据二：**同一句里前后两半必须在同一个概念上**——比第一条更容易踩。落地时把
 `computerUse.{browser,android,directControl}.toggleHint` 写成「只对之后新建的 **Agent 会话**
 生效；已在运行的**任务**不受影响」——前半句说运行时、后半句跳到产品条目，用户读完不知道
 是该重启当前任务还是新建一个。对照 en / ja / ko：三语的两个半句都用同一个 session
@@ -446,7 +472,7 @@ runtime 会话**（保持「会话」）。后者的判据不是词形而是**�
 已不可用，无法从这里开启新**任务**」）都是两个词各指其物、句意清晰，刻意保留。要看的是
 **同一个所指被换了两种叫法**。
 
-**第三条：两个词都不合适时，把名词绕开。** `maker-core` 两个 agent 的 memory
+判据三：**两个词都不合适时，把名词绕开。** `maker-core` 两个 agent 的 memory
 `description` 上，reviewer 给出过相反建议——一边说「新会话」违反 forbidden 译法、该写
 「新任务」，一边说写「新任务」会让用户以为必须新建任务。两边都对：这个 capability 描述的是
 「记忆之后会被自动召回」，而它落在 `maker-core` 里、**不是 locale 文件，没法登记
