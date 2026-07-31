@@ -79,6 +79,14 @@ function extractReadPath(toolName: string, input: unknown): string | undefined {
   return candidates.find((c) => isSensitiveCredentialPath(c)) ?? candidates[0];
 }
 
+function extractNetworkTarget(toolName: string, input: unknown): string | undefined {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const obj = input as Record<string, unknown>;
+  const key = toolName === 'WebFetch' ? 'url' : 'query';
+  const value = obj[key];
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
 /**
  * Auto-review 下对一个**内置工具调用**给出审查档位。仅在权限档为 `auto` 时调用
  * (见 claude-code/index.ts 的 canUseTool dispatcher)。纯映射,判定逻辑全在 core。
@@ -111,7 +119,11 @@ export function normalizeBuiltinToolForAutoReview(
   }
   // WebFetch/WebSearch:把 URL/搜索词送往外部(exfil 面)→ 升级。
   if (toolName === 'WebFetch' || toolName === 'WebSearch') {
-    return { kind: 'network' };
+    return {
+      kind: 'network',
+      operation: toolName,
+      target: extractNetworkTarget(toolName, input),
+    };
   }
   // 未知 / 其它一切工具 → fail-closed 升级。
   return { kind: 'other' };

@@ -8,7 +8,10 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { classifyBuiltinToolForAutoReview } from '../auto-review-policy.js';
+import {
+  classifyBuiltinToolForAutoReview,
+  normalizeBuiltinToolForAutoReview,
+} from '../auto-review-policy.js';
 
 const roots = ['/repo', '/extra']; // 工作区根:cwd + 一个额外目录
 
@@ -26,6 +29,25 @@ describe('classifyBuiltinToolForAutoReview — 只读与安全状态工具', () 
     for (const t of ['TodoWrite', 'Task', 'BashOutput', 'KillShell', 'KillBash']) {
       expect(verdict(t, {})).toBe('auto-approve');
     }
+  });
+});
+
+describe('normalizeBuiltinToolForAutoReview — network review context', () => {
+  it('preserves the concrete URL or query for the lightweight reviewer', () => {
+    expect(normalizeBuiltinToolForAutoReview('WebFetch', {
+      url: 'https://example.com/status',
+      prompt: 'Summarize the response',
+    })).toEqual({
+      kind: 'network',
+      operation: 'WebFetch',
+      target: 'https://example.com/status',
+    });
+    expect(normalizeBuiltinToolForAutoReview('WebSearch', { query: 'current release notes' }))
+      .toEqual({
+        kind: 'network',
+        operation: 'WebSearch',
+        target: 'current release notes',
+      });
   });
 });
 
