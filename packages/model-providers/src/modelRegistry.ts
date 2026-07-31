@@ -34,7 +34,50 @@ function routeModelCandidates(providerId: string, modelId: string): string[] {
   if (providerId === "openai" && modelId.startsWith("chatgpt/")) {
     ids.push(modelId.slice("chatgpt/".length));
   }
+  if (providerId === "anthropic") {
+    const undatedModel = modelId.replace(/-\d{8}$/, "");
+    if (undatedModel !== modelId) ids.push(undatedModel);
+  }
   return ids;
+}
+
+function matchingModelRegistryRoutes(
+  registry: ModelRegistry | null | undefined,
+  providerId: string,
+  modelId: string,
+  agent?: ModelAgent,
+): Array<{ entry: ModelRegistryEntry; route: ModelRegistryRoute }> {
+  if (!registry) return [];
+  const normalizedProviderId = providerId.trim();
+  const normalizedModelId = modelId.trim();
+  const candidates = new Set(
+    routeModelCandidates(normalizedProviderId, normalizedModelId),
+  );
+  const anthropicFamily =
+    normalizedProviderId === "anthropic" &&
+    (normalizedModelId === "opus" ||
+      normalizedModelId === "sonnet" ||
+      normalizedModelId === "haiku")
+      ? `claude-${normalizedModelId}-`
+      : null;
+  const matches: Array<{
+    entry: ModelRegistryEntry;
+    route: ModelRegistryRoute;
+  }> = [];
+  for (const entry of registry.models) {
+    for (const route of entry.routes) {
+      if (
+        route.providerId === normalizedProviderId &&
+        (candidates.has(route.modelId) ||
+          (anthropicFamily !== null &&
+            route.modelId.startsWith(anthropicFamily))) &&
+        (agent === undefined || route.agents.includes(agent))
+      ) {
+        matches.push({ entry, route });
+      }
+    }
+  }
+  return matches;
 }
 
 export function findModelRegistryRoute(
@@ -43,22 +86,7 @@ export function findModelRegistryRoute(
   modelId: string,
   agent?: ModelAgent,
 ): { entry: ModelRegistryEntry; route: ModelRegistryRoute } | undefined {
-  if (!registry) return undefined;
-  const normalizedProviderId = providerId.trim();
-  const normalizedModelId = modelId.trim();
-  const candidates = new Set(
-    routeModelCandidates(normalizedProviderId, normalizedModelId),
-  );
-  for (const entry of registry.models) {
-    const route = entry.routes.find(
-      (candidate) =>
-        candidate.providerId === normalizedProviderId &&
-        candidates.has(candidate.modelId) &&
-        (agent === undefined || candidate.agents.includes(agent)),
-    );
-    if (route) return { entry, route };
-  }
-  return undefined;
+  return matchingModelRegistryRoutes(registry, providerId, modelId, agent)[0];
 }
 
 /**
@@ -73,40 +101,42 @@ export function resolveModelReferencePrice(
   modelId: string,
   options: ResolveModelReferencePriceOptions = {},
 ): ResolvedModelReferencePrice | undefined {
-  const matched = findModelRegistryRoute(
+  const matches = matchingModelRegistryRoutes(
     registry,
     providerId,
     modelId,
     options.agent,
   );
-  if (!matched?.route.referencePrices) return undefined;
   const day = calendarDate(options.at);
   const inputTokens = options.inputTokens;
   const variant = options.variant ?? "standard";
-  const prices = matched.route.referencePrices
-    .filter((price) => {
-      if (price.variant !== variant) return false;
-      if (day < price.effectiveFrom) return false;
-      if (price.effectiveUntil !== undefined && day >= price.effectiveUntil)
-        return false;
-      if (inputTokens === undefined) return (price.minInputTokens ?? 0) === 0;
-      if (
-        price.minInputTokens !== undefined &&
-        inputTokens < price.minInputTokens
-      )
-        return false;
-      if (
-        price.maxInputTokens !== undefined &&
-        inputTokens >= price.maxInputTokens
-      )
-        return false;
-      return true;
-    })
-    .sort(
-      (a, b) =>
-        b.effectiveFrom.localeCompare(a.effectiveFrom) ||
-        (b.minInputTokens ?? 0) - (a.minInputTokens ?? 0),
-    );
-  const price = prices[0];
-  return price ? { ...matched, price } : undefined;
+  for (const matched of matches) {
+    const prices = matched.route.referencePrices
+      ?.filter((price) => {
+        if (price.variant !== variant) return false;
+        if (day < price.effectiveFrom) return false;
+        if (price.effectiveUntil !== undefined && day >= price.effectiveUntil)
+          return false;
+        if (inputTokens === undefined) return (price.minInputTokens ?? 0) === 0;
+        if (
+          price.minInputTokens !== undefined &&
+          inputTokens < price.minInputTokens
+        )
+          return false;
+        if (
+          price.maxInputTokens !== undefined &&
+          inputTokens >= price.maxInputTokens
+        )
+          return false;
+        return true;
+      })
+      .sort(
+        (a, b) =>
+          b.effectiveFrom.localeCompare(a.effectiveFrom) ||
+          (b.minInputTokens ?? 0) - (a.minInputTokens ?? 0),
+      );
+    const price = prices?.[0];
+    if (price) return { ...matched, price };
+  }
+  return undefined;
 }

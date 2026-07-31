@@ -106,4 +106,27 @@ describe("model registry", () => {
       })?.price,
     ).toMatchObject({ inputPerMtok: 3, outputPerMtok: 15 });
   });
+
+  it("normalizes historical Claude aliases before resolving date-effective prices", () => {
+    expect(
+      resolveModelReferencePrice(registry, "anthropic", "sonnet", {
+        agent: "claude-code",
+        at: "2026-03-01",
+      }),
+    ).toMatchObject({
+      route: { modelId: "claude-sonnet-4-6" },
+      price: { inputPerMtok: 3, outputPerMtok: 15 },
+    });
+    expect(
+      resolveModelReferencePrice(
+        registry,
+        "anthropic",
+        "claude-sonnet-4-6-20260701",
+        { agent: "claude-code", at: "2026-08-01" },
+      ),
+    ).toMatchObject({
+      route: { modelId: "claude-sonnet-4-6" },
+      price: { inputPerMtok: 3, outputPerMtok: 15 },
+    });
+  });
 });

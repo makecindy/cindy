@@ -506,6 +506,20 @@ describe('reference pricing helpers', () => {
     expect(
       getClaudeSubscriptionValuePrice('claude-sonnet-5', null, '2026-06-29'),
     ).toBeUndefined();
+    expect(
+      getClaudeSubscriptionValuePrice('sonnet', null, '2026-03-01'),
+    ).toMatchObject({ modelId: 'sonnet', inputPerMtok: 3, outputPerMtok: 15 });
+    expect(
+      getClaudeSubscriptionValuePrice(
+        'claude-sonnet-4-6-20260701',
+        null,
+        '2026-08-01',
+      ),
+    ).toMatchObject({
+      modelId: 'claude-sonnet-4-6-20260701',
+      inputPerMtok: 3,
+      outputPerMtok: 15,
+    });
   });
 
   it('returns subscription reference quotes separately from the XD cache', () => {
