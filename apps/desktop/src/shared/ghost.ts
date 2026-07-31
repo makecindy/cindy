@@ -56,7 +56,8 @@ export function parseGhostPartition(partition: unknown): string | null {
 const GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
 /**
- * 十四个卡槽(意识能力的全部出口,docs/dev-rules/plugin-security-and-authoring.md)。
+ * 卡槽清单(意识能力的全部出口,docs/dev-rules/plugin-security-and-authoring.md)。
+ * 数量随迭代增长,以本数组为准——正文不再写死个数。
  * 'cindy' = 请 Cindy 本体代办(借主机自带 AI 能力干活;2026-07-11 Lizi 定案
  * 由 'model' 更名——本质是 Cindy 在干活,与选模型无关;旧名在校验层作
  * 静默别名兼容,已装老包不消失)。
@@ -64,7 +65,14 @@ const GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
  * 内的 HTTP 经主机代发(沙箱本身保持零直连),凭证锁主机保险库按声明注入。
  * 'notify' = 系统提示(2026-07-14):意识经管子请主机弹一条轻提示(toast),
  * 意识只供纯文本,整块 UI 主机画并带意识身份头(与订阅槽红条同一信任边界);
- * 无阻塞、无按钮、无回执——确认类交互不在此槽(走面板自绘或卡槽③交互卡)。
+ * 无阻塞、无按钮、无回执——要用户点选/确认走 'confirm' 槽。
+ * 'confirm' = 确认弹窗(2026-07-31):意识经管子请主机弹**主机同款**的二选一确认框
+ * (renderer 的 ConfirmDialogProvider),拿回用户的真实点击。与 notify 的区别是它
+ * **阻塞、有按钮、有回执**,所以骚扰面也大得多,护栏对齐 pick 槽:同插件最小间隔
+ * GHOST_CONFIRM_MIN_INTERVAL_MS、全局同时只允许一个确认框在场(BUSY,不排队)、
+ * 超时/无窗口/载荷非法一律 fail closed 当「没同意」。壳、标题与身份头(图标+名字)
+ * 由主机画,意识只供被净化的正文与按钮字——伪装不了主机文案、冒充不了别的意识,
+ * 也点不了自己的按钮。桌面独占:本机对话框在 device-link 白名单里属永不放行类别。
  * 'fs' = 写文件(2026-07-14):意识经管子请主机代写文件(创建/修改)。三档
  * 目的地:自己的私有数据目录(userData/ghost-fs/<id>,免确认)、当前会话
  * workdir(跟随会话 permission 模式:免批模式直写、逐条模式弹确认卡、
@@ -107,6 +115,7 @@ export const GHOST_SLOTS = [
   'node',
   'network',
   'notify',
+  'confirm',
   'fs',
   'session-context',
   'pick',
@@ -1280,16 +1289,50 @@ export interface GhostManifestLocaleResource {
 /** 单个插件 locale JSON 的字节上限。Forge 与装入侧共用，避免两端契约漂移。 */
 export const GHOST_LOCALE_MAX_BYTES = 64 * 1024;
 
-/** 已装入主机的意识(清单 + 安装位置 + 启用态)。 */
+/**
+ * Host 对插件安装状态的批准结论。
+ *
+ * `approved` 的 revision 由 Main 在一次完整安装/更新确认事务中生成；另外两态
+ * 都不构成运行授权，更新 UI 必须把目标包的全部权限按新增项重新展示。
+ */
+export type GhostInstallApproval =
+  | { state: 'approved'; revision: string }
+  | { state: 'legacy-unapproved' }
+  | { state: 'invalid' };
+
+/** 把批准态投影成跨进程更新事务使用的稳定 token。 */
+export function ghostInstallApprovalToken(approval: GhostInstallApproval | undefined): string {
+  if (approval?.state === 'approved') return `approved:${approval.revision}`;
+  return approval?.state ?? 'legacy-unapproved';
+}
+
+/** 更新 IPC 只接受 Host 列表曾下发过的批准态 token。 */
+export function isGhostInstallApprovalToken(value: unknown): value is string {
+  return (
+    value === 'legacy-unapproved' ||
+    value === 'invalid' ||
+    (typeof value === 'string' &&
+      /^approved:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+        value,
+      ))
+  );
+}
+
+/** 已装入主机的插件(批准清单 + 安装位置 + 启用态)。 */
 export interface InstalledGhost {
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id>)。 */
   dir: string;
   /**
-   * 是否启用。停用 = 面板与能力休眠(不注册、不渲染),但意识仍装着、
-   * 布局位置保留;重新启用即恢复。真身是安装目录里的 `.disabled` 标记文件。
+   * 是否启用。停用 = 面板与能力休眠(不注册、不渲染),但插件仍装着、
+   * 布局位置保留;重新启用即恢复。批准安装的真身在 Host receipt 中；
+   * 安装目录里的 `.disabled` 只保留为旧版本兼容镜像。
    */
   enabled: boolean;
+  /** Host 是否持有一次明确安装/更新确认形成的批准快照。 */
+  approval: GhostInstallApproval;
+  /** Host-owned approval-revision snapshot root for approved skill directories. */
+  approvedSkillRoot?: string;
   /** 安装时由主机验出的来源/签名等级；作者清单不能自报。 */
   trust?: GhostTrustInfo;
   /**
@@ -1344,6 +1387,7 @@ export function ghostContentKeys(manifest: GhostManifest): string[] {
     else if (slot === 'card') keys.push('slotCard');
     else if (slot === 'network') keys.push('slotNetwork');
     else if (slot === 'notify') keys.push('slotNotify');
+    else if (slot === 'confirm') keys.push('slotConfirm');
     else if (slot === 'fs') keys.push('slotFs');
     // skill 是信任面最高的内容(给主 Agent 灌指令),详情页必须如实露出。
     else if (slot === 'skill') keys.push('slotSkill');
@@ -1409,7 +1453,7 @@ export interface GhostPermissionItem {
   /** 稳定键:更新 diff 按它对齐(内容变化视为移除+新增,如面板换边)。 */
   key: string;
   /** 图标分组(renderer 按 kind 选图标)。 */
-  kind: 'cindy' | 'agent' | 'node' | 'tool' | 'command' | 'panel' | 'code' | 'subscribe' | 'card' | 'network' | 'notify' | 'fs' | 'session-context' | 'pick' | 'preview' | 'skill' | 'workspace';
+  kind: 'cindy' | 'agent' | 'node' | 'tool' | 'command' | 'panel' | 'code' | 'subscribe' | 'card' | 'network' | 'notify' | 'confirm' | 'fs' | 'session-context' | 'pick' | 'preview' | 'skill' | 'workspace';
   /** i18n key 后缀,消费方拼 `settings.ghosts.perm.<labelKey>`。 */
   labelKey: string;
   /** i18n 插值参数(工具名、指令名、面板标题等)。 */
@@ -1743,6 +1787,11 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       items.push({ key: 'notify', kind: 'notify', labelKey: 'notify', detailKey: 'notifyDetail' });
     }
   }
+  // confirm 槽:能请主机弹一个二选一确认框(会打断操作)。装入时如实告知"它会来问",
+  // 决定权仍在用户的点击上——detailKey 的固定说明把这层讲清。
+  if (manifest.slots.includes('confirm')) {
+    items.push({ key: 'confirm', kind: 'confirm', labelKey: 'confirm', detailKey: 'confirmDetail' });
+  }
   // 常驻模式如实告知(用户要背一个后台进程);on-demand 是默认行为,不列。
   if (manifest.launch === 'resident') {
     items.push({ key: 'resident', kind: 'code', labelKey: 'resident', detailKey: 'residentDetail' });
@@ -1801,6 +1850,25 @@ export function diffGhostPermissionItems(
     }
   }
   return { added, removed, unchanged };
+}
+
+/**
+ * Compare an installed Plugin with a candidate package without trusting a
+ * mutable live manifest. Legacy or invalid installs have no approved baseline,
+ * so every permission in the candidate must be reviewed as newly requested.
+ */
+export function diffInstalledGhostPermissionItems(
+  installed: InstalledGhost,
+  next: GhostManifest,
+): GhostPermissionDiff {
+  if (installed.approval.state === 'approved') {
+    return diffGhostPermissionItems(installed.manifest, next);
+  }
+  return {
+    added: ghostPermissionItems(next),
+    removed: [],
+    unchanged: [],
+  };
 }
 
 /**
@@ -4255,6 +4323,9 @@ export const GHOST_ERRAND_JOB_TTL_MS = 30 * 60_000;
 /** 每插件相邻两次提交的最小间隔(毫秒;与 agent-request 后台档同口径)。
  *  同步等待(mode:'wait')的绝对上限直接复用 GHOST_PIPE_CALL_MAX_TOTAL_MS。 */
 export const GHOST_ERRAND_MIN_INTERVAL_MS = 10_000;
+/** sessionKey 的合法形状(1–64 位字母/数字/._-;字符集刻意排除 `#`,
+ *  存储层用 `ghostId#sessionKey` 做映射键,ghostId 字符集同样无 `#`,不会歧义)。 */
+export const GHOST_ERRAND_SESSION_KEY_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
 /**
  * errand 会话允许的权限档。plan = 只读默认档;acceptEdits / auto 由用户在
@@ -4273,8 +4344,22 @@ export type GhostPipeAgentErrandRequest =
       task: string;
       /** 可选结构化上下文:主机 JSON.stringify 后附在任务消息尾部(≤64KB)。 */
       context?: unknown;
-      /** errand 会话标题提示(仅首次创建该插件的 errand 会话时采用;1–100 字符)。 */
+      /** errand 会话标题提示(仅首次创建对应 errand 会话时采用;1–100 字符)。 */
       title?: string;
+      /**
+       * 可选的分会话钥匙(1–64 位字母/数字/._-)。不传 = 插件共用一间专属
+       * errand 会话(旧行为);传了 = 同一把钥匙复用同一间、不同钥匙各开各
+       * 的间(每单仍受"每插件同时 1 单在途"约束,分会话不放大并发)。适合
+       * 「按业务对象各聊各的」场景,如每条 PR 一间:sessionKey:'pr-123'。
+       */
+      sessionKey?: string;
+      /**
+       * 可选:请求把 errand 会话建在这个目录(绝对路径,≤1024 字符)。
+       * 只是**转述**,不是授权——主机只认用户此前在 pick 槽系统窗口里
+       * 亲手选过的目录(pickGrantsStore 台账);台账里没有 → INVALID_REQUEST。
+       * 用户在「AI 代办」卡里配置了工作目录时以用户配置优先,本字段忽略。
+       */
+      workingDir?: string;
       /**
        * 'wait' = 同步吊着等完成(管子自动续命,30 分钟天花板);缺省异步:
        * 受理后立即返回 jobId,用 kind:'query' 轮询取件。agent 干活是分钟级
@@ -4777,6 +4862,58 @@ export type GhostHostNoticeKey = (typeof GHOST_HOST_NOTICE_KEYS)[number];
 
 /** 同一意识两条提示的最小间隔 ms(超发拒收,防 toast 刷屏骚扰)。 */
 export const GHOST_NOTIFY_MIN_INTERVAL_MS = 5000;
+
+/**
+ * 上行:确认弹窗(confirm 槽,2026-07-31)。意识请主机弹**主机同款**的二选一
+ * 确认框(renderer 的 ConfirmDialogProvider),拿回用户的真实点击。
+ *
+ * 与 notify 的分工:notify 是「说一句就走」(无按钮无回执),本槽是「要一个答复」。
+ * 所以它会打断用户,骚扰面更大,护栏对齐 pick 槽(限速 + 全局单飞 + fail closed)。
+ *
+ * 信任边界:弹窗的壳、标题(主机文案「插件「X」请你确认」)与身份头(图标 + 名字)
+ * 全由主机画,身份取自已装清单而非载荷自报;意识只供 `body` 与按钮字,且一律过
+ * sanitizeGhostNoticeText 净化 + 长度上限。意识发起得了请求,点不了自己的按钮。
+ */
+export interface GhostPipeConfirm {
+  type: 'confirm-request';
+  /** 问句正文(纯文本,≤ GHOST_CONFIRM_BODY_MAX_CHARS;允许 \n 换行)。 */
+  body: string;
+  /** 主按钮文案(≤ GHOST_CONFIRM_BUTTON_MAX_CHARS);缺省用主机的「确认」。 */
+  confirmText?: string;
+  /** 次按钮文案(同上上限);缺省用主机的「取消」。 */
+  cancelText?: string;
+  /** 危险动作(删除/覆盖/改用户文件):主按钮走 destructive 语义色。缺省 false。 */
+  danger?: boolean;
+}
+
+/**
+ * confirm 的 invoke 返回。`ok:true` 只代表**问到了**;答案看 `confirmed`——
+ * false = 用户点了取消 / 按了 Esc / 点了弹窗外部。
+ * 失败分档带 errorCode,方便意识作者区分"被限速"与"用户拒绝"(两者处理完全不同)。
+ */
+export type GhostPipeConfirmResult =
+  | { ok: true; confirmed: boolean }
+  | {
+      ok: false;
+      errorCode: 'PERMISSION_DENIED' | 'INVALID_REQUEST' | 'RATE_LIMITED' | 'BUSY' | 'UNAVAILABLE' | 'INTERNAL';
+      message: string;
+    };
+
+/** 问句正文上限(比 notify 的 200 宽一点:确认要把后果说清,但仍是一眼读完的量)。 */
+export const GHOST_CONFIRM_BODY_MAX_CHARS = 300;
+
+/** 按钮文案上限(按钮就那么宽;超长会挤坏弹窗版式)。 */
+export const GHOST_CONFIRM_BUTTON_MAX_CHARS = 12;
+
+/** 同一意识两次确认请求的最小间隔 ms(按尝试记账,与 pick 槽同量级)。 */
+export const GHOST_CONFIRM_MIN_INTERVAL_MS = 3000;
+
+/**
+ * 无人应答的兜底超时 ms:到点当「没同意」。
+ * 90 秒是刻意选的——小于插件面板侧常用的 180 秒请求超时,好让面板拿到一个干净的
+ * "用户没答应"而不是自己先超时、留下一个语义不明的悬空请求。
+ */
+export const GHOST_CONFIRM_TIMEOUT_MS = 90_000;
 
 /** cindy 槽代办的质量档位:意识只表达"要多好",具体模型由主机解析表决定。 */
 export const GHOST_MODEL_TIERS = ['draft', 'standard', 'best'] as const;

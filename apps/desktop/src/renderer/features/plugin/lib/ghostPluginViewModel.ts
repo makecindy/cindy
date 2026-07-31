@@ -9,6 +9,7 @@
 import {
   ghostContentKeys,
   ghostPermissionItems,
+  type GhostInstallApproval,
   type GhostPermissionItem,
   type GhostTrustInfo,
   type GhostToolDecl,
@@ -23,6 +24,11 @@ export interface GhostPluginListItem {
   version: string;
   enabled: boolean;
   canUse: boolean;
+  /**
+   * Host 是否持有一次明确的安装/更新确认。非 `approved` 的安装不可运行,列表与
+   * 详情都必须如实说明并给出重新确认入口,而不是让它看起来只是"被关掉了"。
+   */
+  approvalState: GhostInstallApproval['state'];
   trust?: GhostTrustInfo;
   iconDataUrl?: string;
 }
@@ -165,6 +171,7 @@ export function toGhostPluginListItem(
     version: manifest.version,
     enabled: ghost.enabled,
     canUse: Boolean(manifest.command),
+    approvalState: ghost.approval.state,
     trust: ghost.trust ?? {
       level: 'unverified',
       publisherSigned: false,
@@ -196,6 +203,9 @@ export function toGhostPluginDetail(
     cindyCapabilities: [
       ...(manifest.cindy?.image ?? []).map((action) => `image.${action}`),
       ...(manifest.cindy?.video ?? []).map((action) => `video.${action}`),
+      // 文本类(快问快答)同样可钉后端:漏掉它,声明了 cindy.text 的插件在
+      // 详情页就没有任何选型入口,只能吃全局轻量链的默认档。
+      ...(manifest.cindy?.text ?? []).map((action) => `text.${action}`),
     ],
     hasErrand: manifest.agent?.errand === true,
     panelMinWidth: manifest.panel ? (manifest.panel.minWidth ?? 280) : null,

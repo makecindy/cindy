@@ -3635,8 +3635,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flexDirection: 'row',
     minHeight: MOBILE_COMPOSER_INPUT_LINE_HEIGHT,
   },
+  // 语音态占位文案渲染的就是普通态 TextInput 的 placeholder,颜色必须同源
+  // (placeholderTextColor 也是 textTertiary),否则一进语音态这行字会变色。
   voiceDraftListeningText: {
-    color: colors.statusReady,
+    color: colors.textTertiary,
     ...MOBILE_COMPOSER_DRAFT_TEXT_STYLE,
   },
   composerToolbarWrap: {

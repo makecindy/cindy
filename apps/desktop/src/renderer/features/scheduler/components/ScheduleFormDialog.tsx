@@ -36,7 +36,7 @@ import {
   resolveScheduleGenerationProviderId,
   shouldFollowBoundSessionGenerationRoute,
 } from '../lib/scheduleFormLogic';
-import type { RunMode } from '../hooks/useScheduleForm';
+import type { RunMode, ScheduleFormState } from '../hooks/useScheduleForm';
 import { BoundSessionCard } from './BoundSessionCard';
 import { TemplateGallery } from './TemplateGallery';
 import { TemplateParamForm } from './TemplateParamForm';
@@ -97,6 +97,8 @@ interface Props {
   initial: Schedule | null;
   /** 从外部推荐卡片进入新建弹窗时，直接把对应模板应用到表单。 */
   initialTemplate?: ScheduleTemplate | null;
+  /** 外部快捷入口的新建表单覆写；只负责预填，仍须用户主动提交。 */
+  initialValues?: Partial<ScheduleFormState> | null;
   onSubmit: (input: CreateScheduleInput | UpdateScheduleInput, isEdit: boolean) => Promise<void>;
   /** 项目分组里"+"按钮的便捷入口：仅预填 workingDir，等同于普通新建（用户级 schedule，
    *  不写 schedules.json，可继续选模板、改项目）。 */
@@ -110,6 +112,7 @@ export function ScheduleFormDialog({
   onOpenChange,
   initial,
   initialTemplate = null,
+  initialValues = null,
   onSubmit,
   initialWorkingDir = null,
   editProjectSchedule = false,
@@ -197,7 +200,7 @@ export function ScheduleFormDialog({
   const initialId = initial?.id;
   useEffect(() => {
     if (!open) return;
-    reset(initial);
+    reset(initial, initialValues ?? undefined);
     setMode('form');
     setSelectedTemplate(null);
     setParamValues({});
@@ -215,7 +218,17 @@ export function ScheduleFormDialog({
       setField('workspaceKind', 'project');
       setField('workingDir', prefill);
     }
-  }, [open, initialId, reset, initial, isProjectAutomationMode, projectWorkingDir, initialWorkingDir, setField]);
+  }, [
+    open,
+    initialId,
+    reset,
+    initial,
+    initialValues,
+    isProjectAutomationMode,
+    projectWorkingDir,
+    initialWorkingDir,
+    setField,
+  ]);
 
   /** 前置检查「AI 生成」:描述 → utility model 生成脚本落盘 → 命令回填输入框。 */
   const runHookGenerate = useCallback(async () => {

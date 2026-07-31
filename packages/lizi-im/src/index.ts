@@ -49,6 +49,17 @@ export {
   decodeMessageId as decodeTelegramMessageId,
 } from './telegram/codec.js';
 
+export { DingTalkIM, createDingTalkIM } from './dingtalk/index.js';
+export type {
+  DingTalkIMOptions,
+  DingTalkPublicState,
+  DingTalkStreamClient,
+} from './dingtalk/index.js';
+export {
+  decodeLaneUserId as decodeDingTalkLaneUserId,
+  encodeLaneUserId as encodeDingTalkLaneUserId,
+} from './dingtalk/codec.js';
+
 export type {
   IdentityKey,
   BindingStore,

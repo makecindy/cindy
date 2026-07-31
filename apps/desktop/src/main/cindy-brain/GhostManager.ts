@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 
 import JSZip from 'jszip';
 
@@ -9,6 +10,7 @@ import {
   GHOST_LOCALE_MAX_BYTES,
   GHOST_SKILL_MD_MAX_BYTES,
   ghostLocalePathFor,
+  ghostInstallApprovalToken,
   ghostIconMimeType,
   isValidGhostId,
   resolveGhostManifestLocale,
@@ -25,7 +27,19 @@ import {
   type GhostTrustRegistry,
 } from './ghostSignature.js';
 import { isPathInsideDir } from './dirDeposit.js';
+import {
+  collectGhostContentFiles,
+  hashGhostContentFiles,
+  resolveGhostContentPathSync,
+} from './ghostContentTree.js';
 import { checkSkillMdConsistency } from './skillSlot.js';
+import {
+  createGhostInstallReceipt,
+  GhostInstallReceiptStore,
+  hashApprovedSkillContent,
+  type GhostInstallReceipt,
+  type GhostInstallReceiptReadResult,
+} from './ghostInstallReceipt.js';
 
 /** 普通沙箱插件维持小包上限；随包 Node/CLI 允许更大的预打包产物。 */
 export const MAX_BASIC_CINDY_FILE_BYTES = 8 * 1024 * 1024;
@@ -51,15 +65,25 @@ const TRUST_METADATA_FILE = '.cindy-trust.json';
 export interface GhostManagerLogger {
   info(message: string, meta?: Record<string, unknown>): void;
   warn(message: string, meta?: Record<string, unknown>): void;
+  /** 可选:仅用于"本该收敛却失败"的状态(如撤销批准失败后转进程内隔离)。 */
+  error?(message: string, meta?: Record<string, unknown>): void;
 }
 
 export interface GhostManagerOptions {
   /** 意识仓库根目录(生产:userData/cindy-brain;测试:os.tmpdir 下临时目录)。 */
   getRootDir: () => string;
+  /** Host 批准状态根；必须位于插件安装根之外。 */
+  getStateDir?: () => string;
   /** 装/卸成功后通知(index.ts 用它广播 ghosts:changed 到所有窗口)。 */
   onChanged?: (ghosts: InstalledGhost[]) => void;
   /** 当前宿主语言；插件未提供时由 shared 契约固定回退英文。 */
   getLocale?: () => string;
+  /**
+   * `approveTrustedBundledInstall` 的 builtin-only 边界:id 是否对应一颗随包种子。
+   * 生产接线必须提供 —— 该入口不经用户确认就铸出批准,此前这条边界只靠"唯一
+   * 调用者是随包对账"的纪律,没有运行期强制。未注入时不加门(单测直接驱动)。
+   */
+  isTrustedBundledId?: (id: string) => boolean;
   /** Cindy 维护的发布者/审核公钥表；缺省为空，签名仍验完整性但不抬身份等级。 */
   trustRegistry?: GhostTrustRegistry;
   log?: GhostManagerLogger;
@@ -72,19 +96,22 @@ export type InstallRejection =
   | { code: 'already-installed'; reason: string }
   | { code: 'not-installed'; reason: string }
   | { code: 'command-conflict'; reason: string }
+  | { code: 'state-changed'; reason: string }
   | { code: 'io'; reason: string };
 
 export type UninstallRejection =
   | { code: 'invalid-id'; reason: string }
   | { code: 'not-installed'; reason: string }
+  | { code: 'approval-required'; reason: string }
   | { code: 'io'; reason: string };
 
 /**
- * 意识仓库的 main 端管理者:一个意识一个子目录(rootDir/<id>/),目录即事实。
+ * 插件仓库的 main 端管理者:一个插件一个内容目录(rootDir/<id>/)，Host
+ * receipt 才是 manifest / trust / enabled / revision 的授权事实。
  *
  * 设计要点:
- * - **目录即注册表**:没有额外的 DB / 索引文件,list() 每次实扫磁盘 ——
- *   装了什么打开文件夹一目了然,坏一个目录只影响那一个意识(跳过 + warn);
+ * - **目录只证明在装**:list() 实扫内容目录，但批准状态来自安装根之外的
+ *   receipt；旧安装没有 receipt 时保持不可运行，更新需完整重新确认；
  * - **装载先落 staging 再切正式**(对齐 skillhub/installService 的做法):
  *   解压全程发生在 `.cindy-installing-*` 临时目录,校验全过才 rename 到
  *   rootDir/<id>,任何一步失败都不会留下半截安装;
@@ -94,7 +121,106 @@ export type UninstallRejection =
  *   目标是 rootDir 的直接子目录,杜绝借 id 删任意路径。
  */
 export class GhostManager {
-  constructor(private readonly options: GhostManagerOptions) {}
+  private readonly receiptStore: GhostInstallReceiptStore;
+  private mutationTail: Promise<void> = Promise.resolve();
+  /**
+   * 本进程内被判定"批准状态不可信"的插件 id。
+   *
+   * 用途只有一个:撤销陈旧批准**失败**时的兜底。撤销失败的成因(状态根不可写)与
+   * 写批准失败的成因是同一个,所以不能再指望往状态根写任何东西来表达"已失效" ——
+   * 内存标记是此时唯一还能用的机制。下次启动重新对账,成功即自愈;仍然失败就仍然
+   * 隔离,始终 fail closed。
+   */
+  private readonly untrustedApprovals = new Set<string>();
+
+  constructor(private readonly options: GhostManagerOptions) {
+    this.receiptStore = new GhostInstallReceiptStore(
+      options.getStateDir ??
+        (() => {
+          const root = path.resolve(options.getRootDir());
+          return path.join(path.dirname(root), `${path.basename(root)}-install-state`);
+        }),
+    );
+    const contentRoot = path.resolve(options.getRootDir());
+    const stateRoot = this.receiptStore.rootDir();
+    if (
+      isPathInsideDir(contentRoot, stateRoot) ||
+      isPathInsideDir(stateRoot, contentRoot)
+    ) {
+      throw new Error('ghost install content and approval state roots must be disjoint');
+    }
+  }
+
+  /** Forge 等 Host 能力必须排除的受管根（内容根 + 批准状态根）。 */
+  managedRootDirs(): string[] {
+    return [path.resolve(this.options.getRootDir()), this.receiptStore.rootDir()];
+  }
+
+  approvalStateRoot(): string {
+    return this.receiptStore.rootDir();
+  }
+
+  /**
+   * 读批准状态的**唯一入口**:进程内隔离优先于磁盘上的 receipt。
+   *
+   * 所有消费方(list / setEnabled / update 的 token 比对)都必须走这里 —— 各自直接
+   * 调 receiptStore.read() 会让隔离在某条路径上失效,那类"同一判定散落多处"的分叉
+   * 正是本 PR 前几轮反复出问题的原因。
+   */
+  private readApproval(id: string): GhostInstallReceiptReadResult {
+    if (this.untrustedApprovals.has(id)) {
+      return { state: 'invalid', reason: '批准状态已被判定不可信(撤销失败)' };
+    }
+    return this.receiptStore.read(id);
+  }
+
+  /**
+   * 技能链接对账前重新核验批准快照。
+   *
+   * `list()` 是首帧同步 API,不能在里面流式重算目录摘要；因此由异步 reconciler
+   * 对每个准备挂链的插件调用本入口。receipt revision 若已变化、快照缺失/不可读、
+   * 含非普通条目或字节不符一律 false,让对账器撤掉已有链接并拒绝新建。
+   */
+  async verifyApprovedSkillSnapshot(ghost: InstalledGhost): Promise<boolean> {
+    if (
+      ghost.approval.state !== 'approved' ||
+      !ghost.manifest.skill?.items.length ||
+      !ghost.approvedSkillRoot
+    ) {
+      return false;
+    }
+    const current = this.readApproval(ghost.manifest.id);
+    if (
+      current.state !== 'approved' ||
+      current.receipt.revision !== ghost.approval.revision
+    ) {
+      return false;
+    }
+    const expectedRoot = this.receiptStore.skillSnapshotRoot(
+      current.receipt.id,
+      current.receipt.revision,
+    );
+    if (path.resolve(ghost.approvedSkillRoot) !== path.resolve(expectedRoot)) {
+      return false;
+    }
+    return this.receiptStore.skillSnapshotMatchesReceipt(current.receipt, expectedRoot);
+  }
+
+  /** Serialize content-directory and approval-receipt mutations as one Host transaction lane. */
+  async runExclusiveMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.mutationTail;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.mutationTail = previous.then(() => gate);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  }
 
   /** 扫描已装意识(同步 —— renderer 首帧 sendSync 拉取,目录极小不卡启动)。 */
   list(): InstalledGhost[] {
@@ -111,6 +237,41 @@ export class GhostManager {
       if (!entry.isDirectory()) continue;
       if (entry.name.startsWith('.')) continue; // staging / 系统目录
       const dir = path.join(root, entry.name);
+      if (!isValidGhostId(entry.name)) {
+        this.options.log?.warn('ghost dir skipped: invalid directory id', { dir });
+        continue;
+      }
+      const approvalResult = this.readApproval(entry.name);
+      if (approvalResult.state === 'approved') {
+        const receipt = approvalResult.receipt;
+        const localizedManifest = this.localizeApprovedManifest(receipt);
+        result.push({
+          manifest: localizedManifest,
+          dir,
+          enabled: receipt.enabled,
+          approval: { state: 'approved', revision: receipt.revision },
+          trust: receipt.trust,
+          ...(receipt.manifest.skill?.items.length
+            ? {
+                approvedSkillRoot: this.receiptStore.skillSnapshotRoot(
+                  receipt.id,
+                  receipt.revision,
+                ),
+              }
+            : {}),
+          ...(receipt.iconDataUrl !== undefined ? { iconDataUrl: receipt.iconDataUrl } : {}),
+        });
+        continue;
+      }
+      if (approvalResult.state === 'invalid') {
+        this.options.log?.warn('ghost approval receipt invalid; plugin kept disabled', {
+          id: entry.name,
+          reason: approvalResult.reason,
+        });
+      }
+
+      // 老安装没有 Host 批准快照，或快照损坏：只读取清单用于设置页恢复，
+      // 不把 live manifest / trust / enabled 当成运行授权。
       const manifestPath = path.join(dir, GHOST_MANIFEST_FILE);
       let raw: unknown;
       try {
@@ -137,17 +298,30 @@ export class GhostManager {
       // icon 读失败只降级为无图标(warn),不影响意识本体可用。
       const iconDataUrl = this.readInstalledIconDataUrl(dir, v.manifest);
       const localizedManifest = this.readInstalledLocalizedManifest(dir, v.manifest);
-      const trust = this.readInstalledTrust(dir);
       result.push({
         manifest: localizedManifest,
         dir,
-        enabled: !fs.existsSync(path.join(dir, DISABLED_MARKER_FILE)),
-        ...(trust ? { trust } : {}),
+        enabled: false,
+        approval: { state: approvalResult.state },
         ...(iconDataUrl !== null ? { iconDataUrl } : {}),
       });
     }
     result.sort((a, b) => a.manifest.id.localeCompare(b.manifest.id));
     return result;
+  }
+
+  /** receipt 内的 base manifest + 已批准 locale 资源；不再读取可变安装目录。 */
+  private localizeApprovedManifest(receipt: GhostInstallReceipt): GhostManifest {
+    const requestedLocale = this.options.getLocale?.();
+    const runtimeManifest = withGhostResolvedLocale(receipt.manifest, requestedLocale);
+    const localePath = ghostLocalePathFor(receipt.manifest, requestedLocale);
+    const fallbackPath = receipt.manifest.locales?.en;
+    const candidates = [...new Set([localePath, fallbackPath].filter((value): value is string => Boolean(value)))];
+    for (const candidate of candidates) {
+      const resource = receipt.localeResources[candidate];
+      if (resource) return resolveGhostManifestLocale(runtimeManifest, resource);
+    }
+    return runtimeManifest;
   }
 
   /**
@@ -163,17 +337,18 @@ export class GhostManager {
     const candidates = [...new Set([localePath, fallbackPath].filter((value): value is string => Boolean(value)))];
     for (const candidatePath of candidates) {
       try {
-        const absPath = path.join(dir, ...candidatePath.split('/'));
+        // 逐段解析(判据与批准侧 readApprovedLocaleResources、技能目录同源)。
+        // 上一版在这里用 realpath + 目录钳制自成一套:同一件事两种写法,改了一处
+        // 忘另一处正是这条链路反复出问题的形态,现在统一成"链接一律拒"。
+        const absPath = resolveGhostContentPathSync(dir, candidatePath, {
+          expect: 'file',
+          label: 'ghost locale',
+        });
         const stat = fs.lstatSync(absPath);
-        if (!stat.isFile() || stat.size > GHOST_LOCALE_MAX_BYTES) {
+        if (stat.size > GHOST_LOCALE_MAX_BYTES) {
           throw new Error(`locale 文件缺失或超过 ${GHOST_LOCALE_MAX_BYTES} 字节`);
         }
-        const realDir = fs.realpathSync.native(dir);
-        const realLocalePath = fs.realpathSync.native(absPath);
-        if (!isPathInsideDir(realDir, realLocalePath)) {
-          throw new Error('locale 文件经软链解析后位于插件目录之外');
-        }
-        const raw = JSON.parse(fs.readFileSync(realLocalePath, 'utf8'));
+        const raw = JSON.parse(fs.readFileSync(absPath, 'utf8'));
         const validated = validateGhostManifestLocaleResource(raw, manifest);
         if (!validated.ok) throw new Error(validated.reason);
         return resolveGhostManifestLocale(runtimeManifest, validated.resource);
@@ -193,10 +368,24 @@ export class GhostManager {
   }
 
   /**
-   * 启用 / 停用一张意识。停用不删任何东西,只在安装目录里放一个 `.disabled`
-   * 标记文件(目录即事实:打开文件夹一眼可见);启用即删掉标记。幂等。
+   * 启用 / 停用一张意识。停用不删任何东西,只把批准 receipt 的 enabled 翻过来
+   * (安装目录里的 `.disabled` 只作为旧版本兼容镜像同步维护)。幂等。
+   *
+   * 两个方向不对称:**启用需要有效批准状态**(无批准的存量安装必须先重新确认
+   * 权限),**停用必须永远能成功** —— 停用是安全的收敛方向,不能因为技能快照
+   * 被外部删掉之类的环境问题把插件卡在"既不能用也不能关"。
    */
-  async setEnabled(id: string, enabled: boolean): Promise<{ ok: true } | { rejection: UninstallRejection }> {
+  async setEnabled(
+    id: string,
+    enabled: boolean,
+  ): Promise<{ ok: true } | { rejection: UninstallRejection }> {
+    return this.runExclusiveMutation(() => this.setEnabledUnlocked(id, enabled));
+  }
+
+  private async setEnabledUnlocked(
+    id: string,
+    enabled: boolean,
+  ): Promise<{ ok: true } | { rejection: UninstallRejection }> {
     if (!isValidGhostId(id)) {
       return { rejection: { code: 'invalid-id', reason: '非法意识 id' } };
     }
@@ -204,14 +393,41 @@ export class GhostManager {
     if (!(await pathExists(dir))) {
       return { rejection: { code: 'not-installed', reason: `意识 ${id} 未装入` } };
     }
+    const receiptResult = this.readApproval(id);
+    if (receiptResult.state !== 'approved' && enabled) {
+      return {
+        rejection: {
+          code: 'approval-required',
+          reason: `插件 ${id} 缺少有效的安装批准状态，请重新选择安装包并确认权限`,
+        },
+      };
+    }
     const marker = path.join(dir, DISABLED_MARKER_FILE);
+    const previousEnabled =
+      receiptResult.state === 'approved' ? receiptResult.receipt.enabled : false;
     try {
       if (enabled) {
         await fs.promises.rm(marker, { force: true });
       } else {
         await fs.promises.writeFile(marker, '');
       }
+      if (receiptResult.state === 'approved') {
+        // 快照被外部删掉时从当前安装目录重建(内容与批准 manifest 的一致性由
+        // ensureSkillSnapshot 的 SKILL.md 逐字校验兜住);停用方向即使重建不了
+        // 也照样落盘，由技能对账把落链撤掉。
+        await this.receiptStore.write(
+          { ...receiptResult.receipt, enabled },
+          { skillSourceDir: dir, requireSkillSnapshot: enabled },
+        );
+      }
     } catch (err) {
+      // `.disabled` 是旧版本兼容镜像；receipt 写失败时尽力把镜像回滚，
+      // 避免降级运行旧客户端时看到与批准状态相反的启用态。
+      if (previousEnabled) {
+        await fs.promises.rm(marker, { force: true }).catch(() => undefined);
+      } else {
+        await fs.promises.writeFile(marker, '').catch(() => undefined);
+      }
       return { rejection: { code: 'io', reason: err instanceof Error ? err.message : String(err) } };
     }
     this.options.log?.info('ghost enabled state changed', { id, enabled });
@@ -225,34 +441,21 @@ export class GhostManager {
    */
   private readInstalledIconDataUrl(dir: string, manifest: GhostManifest): string | null {
     if (manifest.icon === undefined) return null;
-    const iconPath = path.join(dir, ...manifest.icon.split('/'));
     try {
-      const stat = fs.statSync(iconPath);
-      if (!stat.isFile() || stat.size > MAX_GHOST_ICON_BYTES) {
+      // 逐段解析而不是 `stat` 直读:`stat` 静默穿透链接,会把插件目录之外的字节
+      // 读成 icon 下发给 renderer 并钉进 receipt。判据与技能目录 / locale 同源。
+      const iconPath = resolveGhostContentPathSync(dir, manifest.icon, {
+        expect: 'file',
+        label: 'ghost icon',
+      });
+      const stat = fs.lstatSync(iconPath);
+      if (stat.size > MAX_GHOST_ICON_BYTES) {
         this.options.log?.warn('ghost icon skipped: missing or oversize', { dir, icon: manifest.icon });
         return null;
       }
       return buildIconDataUrl(manifest.icon, fs.readFileSync(iconPath));
     } catch {
       this.options.log?.warn('ghost icon skipped: unreadable', { dir, icon: manifest.icon });
-      return null;
-    }
-  }
-
-  /** 读取主机安装时写下的签名验证快照；坏文件只降级未显示，不信作者自报。 */
-  private readInstalledTrust(dir: string): GhostTrustInfo | null {
-    try {
-      const raw = JSON.parse(fs.readFileSync(path.join(dir, TRUST_METADATA_FILE), 'utf8')) as GhostTrustInfo;
-      if (
-        !raw ||
-        typeof raw !== 'object' ||
-        !['cindy-official', 'reviewed', 'verified-publisher', 'unverified'].includes(raw.level) ||
-        typeof raw.publisherSigned !== 'boolean' ||
-        typeof raw.publisherVerified !== 'boolean' ||
-        typeof raw.reviewed !== 'boolean'
-      ) return null;
-      return raw;
-    } catch {
       return null;
     }
   }
@@ -289,6 +492,8 @@ export class GhostManager {
   ): Promise<
     | {
         manifest: GhostManifest;
+        approvedManifest: GhostManifest;
+        localeResources: Record<string, GhostManifestLocaleResource>;
         trust: GhostTrustInfo;
         packageSha256: string;
         iconDataUrl?: string;
@@ -425,6 +630,7 @@ export class GhostManager {
       };
     }
     let localizedManifest = withGhostResolvedLocale(v.manifest, this.options.getLocale?.());
+    const localeResources: Record<string, GhostManifestLocaleResource> = {};
     if (v.manifest.locales !== undefined) {
       const resources = new Map<string, GhostManifestLocaleResource>();
       for (const localePath of Object.values(v.manifest.locales)) {
@@ -465,6 +671,7 @@ export class GhostManager {
           };
         }
         resources.set(localePath, validated.resource);
+        localeResources[localePath] = validated.resource;
       }
       const localePath = ghostLocalePathFor(v.manifest, this.options.getLocale?.());
       const resource = localePath ? resources.get(localePath) : undefined;
@@ -563,6 +770,8 @@ export class GhostManager {
 
     return {
       manifest: localizedManifest,
+      approvedManifest: v.manifest,
+      localeResources,
       trust: signature.trust,
       packageSha256: crypto.createHash('sha256').update(buf).digest('hex'),
       ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
@@ -572,6 +781,13 @@ export class GhostManager {
   }
 
   async install(
+    lizFilePath: string,
+    opts?: { initiallyEnabled?: boolean; expectedPackageSha256?: string },
+  ) {
+    return this.runExclusiveMutation(() => this.installUnlocked(lizFilePath, opts));
+  }
+
+  private async installUnlocked(
     lizFilePath: string,
     opts?: { initiallyEnabled?: boolean; expectedPackageSha256?: string },
   ): Promise<{ ghost: InstalledGhost } | { rejection: InstallRejection }> {
@@ -592,7 +808,16 @@ export class GhostManager {
         },
       };
     }
-    const { manifest, trust, iconDataUrl, allEntries, prefix } = parsed;
+    const {
+      manifest,
+      approvedManifest,
+      localeResources,
+      trust,
+      packageSha256,
+      iconDataUrl,
+      allEntries,
+      prefix,
+    } = parsed;
 
     // 4) 目标目录冲突检查
     const root = this.options.getRootDir();
@@ -621,6 +846,9 @@ export class GhostManager {
 
     // 5) 解压到 staging(zip-slip / zip bomb 防御),全过才切正式目录
     const stagingDir = path.join(root, `.cindy-installing-${manifest.id}-${crypto.randomBytes(4).toString('hex')}`);
+    // receipt 在内容落到 finalDir 之后才创建:技能字节指纹必须从这次批准的内容
+    // 目录现算,不能凭空构造。
+    let receipt: GhostInstallReceipt | undefined;
     try {
       // 初始沉睡:标记在 staging 阶段就位,rename 后首个广播即沉睡态,
       // 不存在"先启用一帧再熄灯"的跳变(规则 7)。
@@ -632,6 +860,22 @@ export class GhostManager {
         trust,
       });
       await fs.promises.rename(stagingDir, finalDir);
+      try {
+        receipt = createGhostInstallReceipt({
+          manifest: approvedManifest,
+          localeResources,
+          enabled: initiallyEnabled,
+          trust,
+          skillContentSha256: await hashApprovedSkillContent(approvedManifest, finalDir),
+          packageSha256,
+          ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
+        });
+        await this.receiptStore.write(receipt, { skillSourceDir: finalDir });
+        this.untrustedApprovals.delete(manifest.id);
+      } catch (error) {
+        await fs.promises.rm(finalDir, { recursive: true, force: true }).catch(() => undefined);
+        throw error;
+      }
     } catch (err) {
       await fs.promises.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
       if (err instanceof InstallExtractError) {
@@ -639,11 +883,15 @@ export class GhostManager {
       }
       return { rejection: { code: 'io', reason: err instanceof Error ? err.message : String(err) } };
     }
+    if (!receipt) {
+      return { rejection: { code: 'io', reason: '安装批准状态未能生成' } };
+    }
 
     const ghost: InstalledGhost = {
       manifest,
       dir: finalDir,
       enabled: initiallyEnabled,
+      approval: { state: 'approved', revision: receipt.revision },
       trust,
       ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
     };
@@ -663,7 +911,14 @@ export class GhostManager {
    */
   async update(
     lizFilePath: string,
-    opts?: { expectedPackageSha256?: string },
+    opts: { expectedInstalledApproval: string; expectedPackageSha256?: string },
+  ) {
+    return this.runExclusiveMutation(() => this.updateUnlocked(lizFilePath, opts));
+  }
+
+  private async updateUnlocked(
+    lizFilePath: string,
+    opts: { expectedInstalledApproval: string; expectedPackageSha256?: string },
   ): Promise<{ ghost: InstalledGhost } | { rejection: InstallRejection }> {
     const parsed = await this.parse(lizFilePath);
     if ('rejection' in parsed) return parsed;
@@ -678,15 +933,40 @@ export class GhostManager {
         },
       };
     }
-    const { manifest, trust, iconDataUrl, allEntries, prefix } = parsed;
+    const {
+      manifest,
+      approvedManifest,
+      localeResources,
+      trust,
+      packageSha256,
+      iconDataUrl,
+      allEntries,
+      prefix,
+    } = parsed;
 
     const root = this.options.getRootDir();
     const finalDir = path.join(root, manifest.id);
     if (!(await pathExists(finalDir))) {
       return { rejection: { code: 'not-installed', reason: `意识 ${manifest.id} 未装入,无从更新` } };
     }
-    // 延续当前唤醒/沉睡状态。
-    const enabled = !fs.existsSync(path.join(finalDir, DISABLED_MARKER_FILE));
+    const approvalResult = this.readApproval(manifest.id);
+    const actualApproval = approvalTokenFor(approvalResult);
+    if (actualApproval !== opts.expectedInstalledApproval) {
+      return {
+        rejection: {
+          code: 'state-changed',
+          reason: '插件批准状态在确认后发生了变化，请重新检查权限',
+        },
+      };
+    }
+    // 延续当前唤醒/沉睡状态。旧安装尚无 receipt 时只在完整重新确认后
+    // 采用原 `.disabled` 镜像；损坏 receipt 一律保持停用。
+    const enabled =
+      approvalResult.state === 'approved'
+        ? approvalResult.receipt.enabled
+        : approvalResult.state === 'legacy-unapproved'
+          ? !fs.existsSync(path.join(finalDir, DISABLED_MARKER_FILE))
+          : false;
 
     // 指令查重同 install,但豁免自己(新版本沿用/改名自己的指令都合法)。
     if (manifest.command !== undefined) {
@@ -740,18 +1020,174 @@ export class GhostManager {
       await fs.promises.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
       return { rejection: { code: 'io', reason: err instanceof Error ? err.message : String(err) } };
     }
+    // 与 install 同理:技能字节指纹从这次换入的内容目录现算。
+    let receipt: GhostInstallReceipt;
+    try {
+      receipt = createGhostInstallReceipt({
+        manifest: approvedManifest,
+        localeResources,
+        enabled,
+        trust,
+        skillContentSha256: await hashApprovedSkillContent(approvedManifest, finalDir),
+        packageSha256,
+        ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
+      });
+      await this.receiptStore.write(receipt, { skillSourceDir: finalDir });
+      this.untrustedApprovals.delete(manifest.id);
+    } catch (err) {
+      await fs.promises.rm(finalDir, { recursive: true, force: true }).catch(() => undefined);
+      await fs.promises.rename(backupDir, finalDir).catch(() => undefined);
+      return { rejection: { code: 'io', reason: err instanceof Error ? err.message : String(err) } };
+    }
     await fs.promises.rm(backupDir, { recursive: true, force: true }).catch(() => {});
 
     const ghost: InstalledGhost = {
       manifest,
       dir: finalDir,
       enabled,
+      approval: { state: 'approved', revision: receipt.revision },
       trust,
       ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
     };
     this.options.log?.info('ghost updated', { id: manifest.id, version: manifest.version });
     this.options.onChanged?.(this.list());
     return { ghost };
+  }
+
+  /**
+   * 随包种子已经由 provisioning 层逐字节对账后，为其建立 Host 批准状态。
+   * 该入口不得用于市场包或任意本地目录；它不替代用户安装确认。id 必须落在注入的
+   * 随包种子清单里(`isTrustedBundledId`)。
+   *
+   * `markerEnabled` 是安装目录 `.disabled` 兼容镜像的读数,**只往停用方向合并,
+   * 不往启用方向翻**:receipt 才是授权事实,镜像文件可被外部因素移除(AV 隔离
+   * 恢复/同步冲突解析/手动清理),拿它覆写 receipt 会让用户显式停用的插件在下一轮
+   * 对账被静默重新启用 —— 无确认、无审计,且带 skill 槽的插件会随之重新挂进全局
+   * 技能链。反方向(镜像说停用、receipt 说启用)必须照办:停用是安全方向,而且
+   * 旧客户端只会写镜像文件。重新启用只有用户显式 `setEnabled(true)` 一条路。
+   */
+  async approveTrustedBundledInstall(
+    manifest: GhostManifest,
+    markerEnabled: boolean,
+  ): Promise<boolean> {
+    if (this.options.isTrustedBundledId?.(manifest.id) === false) {
+      throw new Error(
+        `approveTrustedBundledInstall 只服务随包种子插件:${manifest.id} 不在种子清单里`,
+      );
+    }
+    const dir = path.join(this.options.getRootDir(), manifest.id);
+    const localeResources = this.readApprovedLocaleResources(dir, manifest);
+    const iconDataUrl = this.readInstalledIconDataUrl(dir, manifest) ?? undefined;
+    const packageSha256 = await hashApprovedDirectory(dir);
+    const skillContentSha256 = await hashApprovedSkillContent(manifest, dir);
+    const trust: GhostTrustInfo = {
+      level: 'cindy-official',
+      publisherSigned: false,
+      publisherVerified: false,
+      reviewed: true,
+    };
+    const current = this.readApproval(manifest.id);
+    // priorEnabled 直接读盘上的 receipt 而不是 readApproval 的投影:进程内隔离态的
+    // receipt 不可作授权事实,但"曾经停用"这个位只用于往下拉,是 fail closed 方向,
+    // 采纳它只会更保守 —— 否则"隔离 + 镜像同时丢失"的组合会让自愈把插件带回启用。
+    const persisted =
+      current.state === 'approved' ? current : this.receiptStore.read(manifest.id);
+    const priorEnabled =
+      persisted.state === 'approved' ? persisted.receipt.enabled : undefined;
+    const enabled =
+      priorEnabled === undefined ? markerEnabled : markerEnabled && priorEnabled;
+    if (enabled !== markerEnabled) {
+      // receipt 钉着停用而镜像丢了:把 `.disabled` 补写回去,守住"回滚到旧客户端时
+      // 按镜像判启停"的降级承诺。写不进不影响批准事实,receipt 仍是权威。
+      try {
+        fs.writeFileSync(path.join(dir, DISABLED_MARKER_FILE), '');
+      } catch (err) {
+        this.options.log?.warn('ghost disabled mirror rewrite failed', {
+          id: manifest.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    if (
+      current.state === 'approved' &&
+      isDeepStrictEqual(current.receipt.manifest, manifest) &&
+      isDeepStrictEqual(current.receipt.localeResources, localeResources) &&
+      isDeepStrictEqual(current.receipt.trust, trust) &&
+      isDeepStrictEqual(current.receipt.skillContentSha256, skillContentSha256) &&
+      current.receipt.packageSha256 === packageSha256 &&
+      current.receipt.iconDataUrl === iconDataUrl
+    ) {
+      if (current.receipt.enabled !== enabled) {
+        await this.receiptStore.write({
+          ...current.receipt,
+          enabled,
+        });
+        this.untrustedApprovals.delete(manifest.id);
+        return true;
+      }
+      return false;
+    }
+    await this.receiptStore.write(
+      createGhostInstallReceipt({
+        manifest,
+        localeResources,
+        enabled,
+        trust,
+        skillContentSha256,
+        packageSha256,
+        ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
+      }),
+      { skillSourceDir: dir },
+    );
+    this.untrustedApprovals.delete(manifest.id);
+    return true;
+  }
+
+  /**
+   * 撤销 Host 批准。**契约是"调用返回后该插件一定不再被授权运行"**：正常路径删掉
+   * receipt 与技能快照；删不掉(状态根不可写等)时退回进程内隔离，不把失败原样抛给
+   * 调用方去自己 fail closed —— 那正是上一版留下 fail-open 的地方。
+   */
+  async removeInstallApproval(id: string): Promise<void> {
+    try {
+      await this.receiptStore.remove(id);
+      this.untrustedApprovals.delete(id);
+    } catch (err) {
+      this.untrustedApprovals.add(id);
+      // 这行是"插件已转进程内隔离"的唯一可观测信号,不能因为注入的 logger 没实现
+      // error 就静默丢掉 —— 退化到 warn。
+      const log = this.options.log;
+      (log?.error ?? log?.warn)?.call(
+        log,
+        'ghost approval could not be removed; kept untrusted in-process',
+        { id, error: err instanceof Error ? err.message : String(err) },
+      );
+    }
+  }
+
+  private readApprovedLocaleResources(
+    dir: string,
+    manifest: GhostManifest,
+  ): Record<string, GhostManifestLocaleResource> {
+    const resources: Record<string, GhostManifestLocaleResource> = {};
+    for (const localePath of Object.values(manifest.locales ?? {})) {
+      if (!localePath) continue;
+      // 逐段解析:只 lstat 最终段挡不住"中间段被换成链接"——那会把插件目录之外的
+      // JSON 读成已批准的界面文案钉进 receipt。判据与技能目录同源。
+      const absPath = resolveGhostContentPathSync(dir, localePath, {
+        expect: 'file',
+        label: 'bundled locale',
+      });
+      const stat = fs.lstatSync(absPath);
+      if (stat.size > GHOST_LOCALE_MAX_BYTES) {
+        throw new Error(`bundled locale missing or oversized: ${localePath}`);
+      }
+      const raw = JSON.parse(fs.readFileSync(absPath, 'utf8')) as unknown;
+      const validated = validateGhostManifestLocaleResource(raw, manifest);
+      if (!validated.ok) throw new Error(`bundled locale invalid: ${localePath}`);
+      resources[localePath] = validated.resource;
+    }
+    return resources;
   }
 
   /** 解压 zip 条目到 staging 目录(install / update 共用;含 zip-slip / bomb 防御)。 */
@@ -798,6 +1234,13 @@ export class GhostManager {
   async uninstall(
     id: string,
     options: { notify?: boolean } = {},
+  ) {
+    return this.runExclusiveMutation(() => this.uninstallUnlocked(id, options));
+  }
+
+  private async uninstallUnlocked(
+    id: string,
+    options: { notify?: boolean } = {},
   ): Promise<{ ok: true } | { rejection: UninstallRejection }> {
     if (!isValidGhostId(id)) {
       return { rejection: { code: 'invalid-id', reason: '非法意识 id' } };
@@ -816,6 +1259,10 @@ export class GhostManager {
     } catch (err) {
       return { rejection: { code: 'io', reason: err instanceof Error ? err.message : String(err) } };
     }
+    // 走同一个撤销入口:成功即清掉隔离记录,失败由该入口转进程内隔离并记日志。
+    // 内容目录已经删除，插件不可能再运行；孤立 receipt 与 skill snapshot 仅是待回收
+    // 状态，不能把“清理延后”误报成“插件仍已安装”。
+    await this.removeInstallApproval(id);
     this.options.log?.info('ghost uninstalled', { id });
     if (options.notify !== false) this.options.onChanged?.(this.list());
     return { ok: true };
@@ -824,6 +1271,15 @@ export class GhostManager {
 
 /** staging 期的"内容不合格"错误(与环境 IO 错误区分,映射 file-invalid)。 */
 class InstallExtractError extends Error {}
+
+function approvalTokenFor(result: GhostInstallReceiptReadResult): string {
+  return result.state === 'approved'
+    ? ghostInstallApprovalToken({
+        state: 'approved',
+        revision: result.receipt.revision,
+      })
+    : ghostInstallApprovalToken({ state: result.state });
+}
 
 /** 流式读取 zip 单条目；超过上限立刻停流，不先分配整个恶意条目。 */
 async function readZipEntryBufferWithLimit(
@@ -906,6 +1362,24 @@ async function pathExists(p: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * 安装目录内容指纹(`packageSha256`,审计用的漂移检测器,不作授权判据)。
+ *
+ * 遍历、类型判定与指纹格式全部取自 `ghostContentTree`,与技能指纹
+ * `hashApprovedSkillContent`、随包种子指纹 `fingerprintDirContent` 同一份实现;
+ * 这里的显式策略是"点开头条目不算内容、非普通条目一律拒"。跟随链接在这条路径上
+ * 最多多写一次批准、不构成绕过,判据对齐是因为"同一判据散落多处且各处不一致"
+ * 本身就是缺陷温床。
+ */
+async function hashApprovedDirectory(root: string): Promise<string> {
+  const { files } = await collectGhostContentFiles(root, {
+    dotEntries: 'skip',
+    nonRegular: 'throw',
+    label: 'bundled Plugin',
+  });
+  return hashGhostContentFiles(root, files);
 }
 
 /**

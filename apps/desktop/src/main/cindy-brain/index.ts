@@ -15,6 +15,7 @@ import {
   GHOST_CARD_HEIGHT_MIN,
   GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL,
   GHOST_NOTIFY_MIN_INTERVAL_MS,
+  isGhostInstallApprovalToken,
   ghostWebviewEntryPaths,
   isCindyAccountGhostId,
   isOfficialGhostId,
@@ -80,10 +81,12 @@ import {
 import {
   evaluateGhostSetupAssessment,
   evaluateGhostSetup,
+  foldRejectedSecretsIntoAssessment,
   handleGhostSetupStatusRequest,
 } from './ghostSetupStatus.js';
 import { getGhostSetupChangeBus } from './ghostSetupChangeBus.js';
 import {
+  applyGhostSetupChangeToRejections,
   createGhostCredentialRejectionsStore,
   ghostCredentialRejectionsPath,
 } from './ghostCredentialRejections.js';
@@ -155,10 +158,16 @@ import { GhostErrandSlot, type GhostErrandRunner } from './errandSlot.js';
 import { readGhostErrandConfig, writeGhostErrandConfig } from './errandPrefsStore.js';
 import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
 import { GhostPickSlot } from './pickSlot.js';
+import { recordGhostPickedDir } from './pickGrantsStore.js';
 import { GhostPreviewSlot } from './previewSlot.js';
 import { GhostWorkspaceSlot, type WorkspaceSessionService } from './workspaceSlot.js';
 import type { GhostTrustRegistry } from './ghostSignature.js';
 import { GhostNotifySlot, sanitizeGhostNoticeText } from './notifySlot.js';
+import { GhostConfirmSlot } from './confirmSlot.js';
+import {
+  getGhostConfirmDialogBridge,
+  initGhostConfirmDialogBridge,
+} from './ghostConfirmDialogBridge.js';
 import { GhostNetworkSlot } from './networkSlot.js';
 import { GhostFsSlot } from './fsSlot.js';
 import { getGhostGrantConfirmBridge } from './ghostGrantConfirmBridge.js';
@@ -187,6 +196,8 @@ import { projectProviderCatalogForBuildRegion } from '../maker-host/provider-acc
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { getUtilityModelChainProfiles } from '../utility-model/UtilityModelSelection.js';
+import { utilityModelPinOptions } from '../../shared/utilityModelProfiles.js';
 import {
   CINDY_CAPABILITY_KEYS,
   readGhostCindyOverrides,
@@ -570,13 +581,10 @@ export function armGhostLifecyclePush(): void {
   // 多次唤醒只算一次投影/序列化(记账仍逐事件同步执行,不丢清账)。
   let coalesced = false;
   getGhostSetupChangeBus().subscribeAll((event) => {
-    // 凭证重存 = 用户已处置被拒记录(主写入路径已在 emit 前清账;此处幂等
-    // 兜底,覆盖未来新增的写入路径)。清账后照常重投影广播。
-    if (event.source === 'secret') {
-      if (event.ref) {
-        ghostCredentialRejections().clearSecret(event.ghostId, event.ref);
-      }
-    }
+    // 凭证/连接重存 = 用户已处置被拒记录(主写入路径已在 emit 前清账;此处
+    // 幂等兜底,覆盖未来新增的写入路径)。判定见
+    // applyGhostSetupChangeToRejections;清账后照常重投影广播。
+    applyGhostSetupChangeToRejections(ghostCredentialRejections(), event);
     if (coalesced) return;
     coalesced = true;
     queueMicrotask(() => {
@@ -758,6 +766,15 @@ function migrateGhostKvOnRename(fromId: string, toId: string): void {
 /** 单轮对账:播种 → (有变化时)广播 + 首装停靠 + 常驻点火。 */
 async function reconcileBuiltinGhosts(reason: string): Promise<void> {
   const manager = getGhostManager();
+  await manager.runExclusiveMutation(() =>
+    reconcileBuiltinGhostsLocked(reason, manager),
+  );
+}
+
+async function reconcileBuiltinGhostsLocked(
+  reason: string,
+  manager: GhostManager,
+): Promise<void> {
   // 改名前置:用户自主状态(墓碑=卸载过 / .disabled=停用)随改名带到新 id,
   // 不能让"明确卸载/停用过"的用户在升级后被以新 id 重新装上并点亮(播种器
   // "用户自主权豁免"支柱)。墓碑:旧 id 有 → 给新 id 记墓碑并清掉旧墓碑
@@ -786,11 +803,12 @@ async function reconcileBuiltinGhosts(reason: string): Promise<void> {
       repoRootDir: brainRootDir(),
       identity: currentProvisionIdentity(),
       // 回收先熄灯沙箱再删目录(Windows 文件锁:运行中的电子脑可能占着句柄)。
-      beforeRemove: (id) => {
+      beforeRemove: async (id) => {
         getGhostRuntime().stop(id);
         getGhostNodeRuntimeBroker().stop(id);
         getGhostAgentSlot().clearGhost(id);
         getGhostErrandSlot().clearGhost(id);
+        await manager.removeInstallApproval(id);
       },
       onApplyStart: () => {
         tipShown = true;
@@ -832,12 +850,58 @@ async function reconcileBuiltinGhosts(reason: string): Promise<void> {
       });
     }
   }
-  if (outcome.installed.length === 0 && outcome.updated.length === 0 && outcome.removed.length === 0) return;
+  let approvalChanged = false;
+  for (const manifest of outcome.approved) {
+    try {
+      approvalChanged =
+        (await manager.approveTrustedBundledInstall(
+          manifest,
+          // `.disabled` 镜像的读数只作停用方向的输入:receipt 已钉停用时,镜像被
+          // 外部移除不会把插件翻回启用(合并规则见 approveTrustedBundledInstall
+          // 头注释;重新启用只有用户显式 setEnabled 一条路)。
+          !fs.existsSync(path.join(brainRootDir(), manifest.id, '.disabled')),
+        )) || approvalChanged;
+    } catch (err) {
+      // 走到这里内容目录可能已经换成新种子字节，旧 receipt 却还是授权事实 ——
+      // 留着它就是拿旧批准跑新代码(新版删掉的 slot 仍被授予、版本与技能快照
+      // 也停在旧 revision)。
+      //
+      // removeInstallApproval 的契约是"返回后该插件一定不再被授权运行":删得掉就
+      // 删 receipt，删不掉(状态根不可写 —— 与这里写批准失败同一个成因)就转进程内
+      // 隔离。所以这里不需要、也不应该再自己判断撤销成不成功:那正是上一版在
+      // cleanup 失败时留下 fail-open 的地方。随包插件下一轮启动对账会重新补批准，
+      // 自愈，不需要用户介入。
+      await manager.removeInstallApproval(manifest.id);
+      // 撤销只让后续的 Host 能力调用与技能落链失效,不会自己结束已经跑起来的沙箱
+      // 进程 —— 登录触发对账时插件可能正在运行。与 beforeRemove 同款四连熄灯
+      // (含 errand slot:漏掉它会让节流状态与在途任务记录留到同会话的自愈之后,
+      // 变成不必要的 rate-limit／"已有在途任务"阻塞),让"撤销后不再被授权运行"
+      // 这句话对运行中的实例也成立。
+      getGhostRuntime().stop(manifest.id);
+      getGhostNodeRuntimeBroker().stop(manifest.id);
+      getGhostAgentSlot().clearGhost(manifest.id);
+      getGhostErrandSlot().clearGhost(manifest.id);
+      approvalChanged = true;
+      log.warn('builtin ghost approval receipt failed; approval revoked', {
+        id: manifest.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  if (
+    outcome.installed.length === 0 &&
+    outcome.updated.length === 0 &&
+    outcome.removed.length === 0 &&
+    !approvalChanged
+  ) {
+    return;
+  }
   log.info('builtin ghost reconcile applied changes', {
     reason,
     installed: outcome.installed.map((m) => m.id),
     updated: outcome.updated.map((m) => m.id),
     removed: outcome.removed,
+    approvalChanged,
   });
   // 播种绕过 manager 写盘,广播由这里补上(renderer 首帧 sendSync 早于对账
   // 完成时,靠 ghosts:changed 热更新兜底,多窗口同一套通道)。
@@ -864,9 +928,13 @@ export function getGhostManager(): GhostManager {
   if (!managerSingleton) {
     managerSingleton = new GhostManager({
       getRootDir: brainRootDir,
+      getStateDir: () => ownerScopedUserDataPath('ghost-install-state'),
       onChanged: broadcastGhostsChanged,
       getLocale: getResolvedMainLocale,
       trustRegistry: loadGhostTrustRegistry(),
+      // 随包批准入口的 builtin-only 边界:id 必须对应一颗随包种子。该入口不经用户
+      // 确认就铸出批准,不能只靠"唯一调用者是随包对账"这条纪律。
+      isTrustedBundledId: (id) => listBuiltinSeedIds(builtinSeedRootDirs()).includes(id),
       log,
     });
     getGhostSetupManifestTracker().seed(managerSingleton.list());
@@ -1613,6 +1681,50 @@ export function getGhostNotifySlot(): GhostNotifySlot {
   return notifySlotSingleton;
 }
 
+let confirmSlotSingleton: GhostConfirmSlot | null = null;
+
+/** 意识确认弹窗通道(main → **单个**窗口;renderer 用主机同款 ConfirmDialog 渲染)。 */
+export const GHOST_CONFIRM_CHANNEL = 'ghosts:confirm-request';
+
+/**
+ * 确认弹窗槽单例(confirm):资格审/净化/限速/单飞在 GhostConfirmSlot,往返与
+ * 超时兜底在 GhostConfirmDialogBridge,这里只组装"投给哪个窗口"。
+ *
+ * 只投**一个**窗口(focused ?? 第一个),不像 notify 那样广播:模态确认框广播
+ * 出去会在每个窗口各弹一个、收回多份答案。没有可投窗口时 sendToWindow 回
+ * false → 桥 reject → 槽回 UNAVAILABLE(明确区别于"用户拒绝")。
+ */
+export function getGhostConfirmSlot(): GhostConfirmSlot {
+  if (!confirmSlotSingleton) {
+    const bridge =
+      getGhostConfirmDialogBridge() ??
+      initGhostConfirmDialogBridge({
+        sendToWindow: (payload) => {
+          const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+          if (!win || win.isDestroyed()) return false;
+          win.webContents.send(GHOST_CONFIRM_CHANNEL, payload);
+          return true;
+        },
+        log,
+      });
+    confirmSlotSingleton = new GhostConfirmSlot({
+      getGhost: findAvailableGhost,
+      showConfirm: (params) =>
+        bridge.request({
+          ghostId: params.ghostId,
+          ghostName: params.ghostName,
+          ...(params.iconDataUrl ? { iconDataUrl: params.iconDataUrl } : {}),
+          body: params.body,
+          confirmText: params.confirmText,
+          cancelText: params.cancelText,
+          danger: params.danger,
+        }),
+      log,
+    });
+  }
+  return confirmSlotSingleton;
+}
+
 let pickSlotSingleton: GhostPickSlot | null = null;
 
 /**
@@ -1641,6 +1753,8 @@ export function getGhostPickSlot(): GhostPickSlot {
       // (与确认卡点允许同强度;dirDeposit 注释的授权语义包含本通道)。
       depositDir: (ghostId, dirAbs) =>
         getDirDepositVault().deposit({ ghostId, dirAbs, workdirAbs: null, userGranted: true }),
+      // 亲选事实进台账:errand 的 workingDir 转述据此对账(pickGrantsStore)。
+      recordPickedDir: recordGhostPickedDir,
       log,
     });
   }
@@ -2091,12 +2205,16 @@ export function getGhostCindySlot(): GhostCindySlot {
       // 模块顶层读 electron app 路径,静态引入会把这条链拽进所有 import 本
       // 模块的单测(hook-script-generator 同款做法)。失败面折叠成 slot 层
       // 的三档 reason;attempts 细节只进日志,不给沙箱探测面。
-      oneshotText: async ({ prompt, maxTokens, timeoutMs }) => {
+      oneshotText: async ({ prompt, maxTokens, timeoutMs, pinnedProfileId }) => {
         const [{ requestUtilityText }, { getMaker }] = await Promise.all([
           import('../utility-model/oneShotCandidates.js'),
           import('../maker-host/index.js'),
         ]);
-        const r = await requestUtilityText(getMaker(), prompt, { maxTokens, timeoutMs });
+        const r = await requestUtilityText(getMaker(), prompt, {
+          maxTokens,
+          timeoutMs,
+          pinnedProfileId,
+        });
         if (r.ok) {
           return { ok: true, text: r.text, model: `${r.providerId}/${r.model}` };
         }
@@ -2404,28 +2522,12 @@ export function getGhostSetupAssessment(ghostId: string): GhostSetupAssessment {
       }),
     },
   );
-  // 运行期凭证被拒台账折算:被 401/403 拒绝过的 secret 按 expired 上报——
-  // 与 OAuth 过期同一语义(修复动作 = 重新配置),readiness 随之降
-  // needs_reauth,发现层 / 插件页在下一次投影即知。
-  const rejected = ghostCredentialRejections().rejectedKeys(ghostId);
-  if (rejected.length === 0) return assessment;
-  const groups = assessment.groups.map((group) => ({
-    ...group,
-    items: group.items.map((item) =>
-      item.kind === 'secret' &&
-      item.state === 'satisfied' &&
-      rejected.includes(item.ref.replace(/^secret:/, ''))
-        ? { ...item, state: 'expired' as const }
-        : item,
-    ),
-  }));
-  return {
-    ...assessment,
-    state: groups.every((group) => group.items.some((item) => item.state === 'satisfied'))
-      ? 'ready'
-      : 'required',
-    groups,
-  };
+  // 运行期凭证被拒台账折算走 ghostSetupStatus 的共享实现(与插件页投影同一
+  // 份口径,发现层 / 插件页在下一次投影即知)。
+  return foldRejectedSecretsIntoAssessment(
+    assessment,
+    ghostCredentialRejections().rejectedKeys(ghostId),
+  );
 }
 
 /**
@@ -2811,6 +2913,8 @@ function throwInstallError(rejection: InstallRejection): never {
       throwIpcError('NOT_FOUND', rejection.reason);
     case 'command-conflict':
       throwIpcError('GHOST_COMMAND_CONFLICT', rejection.reason);
+    case 'state-changed':
+      throwIpcError('PRECONDITION_FAILED', rejection.reason);
     default:
       throwIpcError('INTERNAL', rejection.reason);
   }
@@ -2823,6 +2927,8 @@ function throwUninstallError(rejection: UninstallRejection): never {
       throwIpcError('INVALID_PARAMS', rejection.reason);
     case 'not-installed':
       throwIpcError('NOT_FOUND', rejection.reason);
+    case 'approval-required':
+      throwIpcError('PRECONDITION_FAILED', rejection.reason);
     default:
       throwIpcError('INTERNAL', rejection.reason);
   }
@@ -2876,6 +2982,7 @@ export async function installOrUpdateMarketGhostPackage(
   expected: {
     ghostId: string;
     version: string;
+    expectedInstalledApproval?: string;
   },
 ): Promise<InstalledGhost> {
   const mutationOwner = captureGhostMutationOwner();
@@ -2919,7 +3026,15 @@ export async function installOrUpdateMarketGhostPackage(
     getGhostErrandSlot().clearGhost(expected.ghostId);
     let result: Awaited<ReturnType<typeof manager.update>>;
     try {
-      result = await manager.update(cindyFilePath);
+      if (!expected.expectedInstalledApproval) {
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'Plugin approval state was not bound to the market update',
+        );
+      }
+      result = await manager.update(cindyFilePath, {
+        expectedInstalledApproval: expected.expectedInstalledApproval,
+      });
     } catch (error) {
       spawnIfResident(installed);
       throw error;
@@ -3639,7 +3754,28 @@ export function registerGhostIpc(): void {
     if (type === 'notify') {
       return getGhostNotifySlot().handleNotify(id, payload);
     }
+    // confirm-request = 确认弹窗(confirm 槽):资格审/净化/限速/单飞在
+    // confirmSlot,往返与超时兜底在 ghostConfirmDialogBridge。invoke 返回值即
+    // 结构化结果:ok:true 只代表问到了,答案看 confirmed。
+    if (type === 'confirm-request') {
+      return getGhostConfirmSlot().handleRequest(id, payload);
+    }
     throwIpcError('INVALID_PARAMS', '未知的管子消息类型');
+  });
+
+  // ── 确认弹窗回包(confirm 槽)────────────────────────────────────────
+  // renderer 上的确认框被用户点掉之后,把答案送回 main 结算那条挂起的管子请求。
+  // 不校验 sender 归属:requestId 是 main 自己铸的 randomUUID,只在本机 renderer
+  // 手里;陌生/重复的 id 由桥直接忽略(返回 handled:false),没有可利用面。
+  // 非布尔的 confirmed 在桥里一律按"没同意"兜底,不给靠畸形回包骗到同意的路。
+  ipcMain.handle('ghosts:confirm:resolve', async (_event, raw: unknown) => {
+    const p = raw as { requestId?: unknown; confirmed?: unknown } | null;
+    if (!p || typeof p.requestId !== 'string' || p.requestId.length === 0 || p.requestId.length > 128) {
+      throwIpcError('INVALID_PARAMS', 'requestId must be a non-empty string');
+    }
+    const bridge = getGhostConfirmDialogBridge();
+    if (!bridge) return { handled: false };
+    return { handled: bridge.resolve(p.requestId, p.confirmed) };
   });
 
   // ── 意识聊天卡片取件(卡槽③;宿主 renderer 历史回放用)──────────────
@@ -3877,10 +4013,21 @@ export function registerGhostIpc(): void {
           standard === undefined ? null : (cfg.models.find((m) => m.id === standard) ?? null),
       };
     };
+    // 文本类(快问快答)的可选项不来自媒体目录,而是轻量任务模型链的档位表
+    // ——每一项就是一组供应商×模型。defaultModel = 当前"跟随默认"实际会用的
+    // 那一档(链首),让用户看得见跟的是谁。
+    const textChain = getUtilityModelChainProfiles();
+    const textOptions = utilityModelPinOptions();
+    const textDefaultId = textChain[0]?.id ?? null;
     event.returnValue = {
       overrides,
       image: byKind(getCatalogImageConfig()),
       video: byKind(getCatalogVideoConfig()),
+      text: {
+        options: textOptions,
+        defaultModel:
+          textDefaultId === null ? null : (textOptions.find((o) => o.id === textDefaultId) ?? null),
+      },
     };
   });
   // ── 目录级禁用(ghostWorkdirPrefs;插件页的项目范围视图)──
@@ -4003,13 +4150,25 @@ export function registerGhostIpc(): void {
     if (typeof lizFilePath !== 'string' || lizFilePath.trim().length === 0) {
       throwIpcError('INVALID_PARAMS', 'lizFilePath must be a non-empty string');
     }
-    const expectedPackageSha256 = (opts as { expectedPackageSha256?: unknown } | undefined)
-      ?.expectedPackageSha256;
+    const updateOptions = opts as
+      | {
+          expectedPackageSha256?: unknown;
+          expectedInstalledApproval?: unknown;
+        }
+      | undefined;
+    const expectedPackageSha256 = updateOptions?.expectedPackageSha256;
+    const expectedInstalledApproval = updateOptions?.expectedInstalledApproval;
     if (
       typeof expectedPackageSha256 !== 'string' ||
       !/^[a-f0-9]{64}$/.test(expectedPackageSha256)
     ) {
       throwIpcError('INVALID_PARAMS', 'expectedPackageSha256 must come from ghosts:inspect');
+    }
+    if (!isGhostInstallApprovalToken(expectedInstalledApproval)) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        'expectedInstalledApproval must come from ghosts:list',
+      );
     }
     const inspected = await manager.inspect(lizFilePath);
     if ('rejection' in inspected) throwInstallError(inspected.rejection);
@@ -4025,7 +4184,10 @@ export function registerGhostIpc(): void {
     getGhostErrandSlot().clearGhost(inspected.manifest.id);
     let result: Awaited<ReturnType<typeof manager.update>>;
     try {
-      result = await manager.update(lizFilePath, { expectedPackageSha256 });
+      result = await manager.update(lizFilePath, {
+        expectedPackageSha256,
+        expectedInstalledApproval,
+      });
     } catch (err) {
       // 更新失败:恢复旧版本的常驻 Node 工作进程(如果是 resident 且已启用)
       if (previousGhost) spawnIfResident(previousGhost);
@@ -4081,7 +4243,14 @@ export function registerGhostIpc(): void {
     // 官方前缀在 inspect 就拒(确认弹窗都不该弹出来),install/update 双保险再拦。
     rejectReservedGhostId(result.manifest.id);
     rejectUnauthorizedTokenBroker(result.manifest);
-    return result;
+    return {
+      manifest: result.manifest,
+      trust: result.trust,
+      packageSha256: result.packageSha256,
+      ...(result.iconDataUrl !== undefined
+        ? { iconDataUrl: result.iconDataUrl }
+        : {}),
+    };
   });
 
   ipcMain.handle('ghosts:uninstall', async (_event, id: unknown) => {
@@ -4458,6 +4627,9 @@ function scheduleGhostSkillReconcile(): void {
           const result = await reconcileGhostSkillLinks({
             ghosts: getGhostManager().list(),
             brainRoot: brainRootDir(),
+            approvalStateRoot: getGhostManager().approvalStateRoot(),
+            validateApprovedSkillSnapshot: (ghost) =>
+              getGhostManager().verifyApprovedSkillSnapshot(ghost),
           });
           if (result.warnings.length > 0) {
             log.warn('ghost skill reconcile warnings', { warnings: result.warnings });

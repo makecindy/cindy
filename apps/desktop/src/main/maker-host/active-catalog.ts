@@ -63,6 +63,8 @@ export interface XdGatewayAgentOverride {
  * 命名沿用历史("聊天"),但条目本身不保证是聊天模型——是否聊天模型看 mode,
  * 服务端目前只透传已经过它自己 chat 过滤的条目,过滤范围以后可能放开(issue #882);
  * 客户端一律用 isChatEligible 判定,不依赖本类型名字或服务端过滤范围。
+ *
+ * 能力字段已由服务端一次归一化,客户端不再二次转换(见 model-access/index.ts)。
  */
 export interface XdGatewayModelInfo {
   id: string;
@@ -82,6 +84,7 @@ export interface XdGatewayModelInfo {
   group?: string;
   description?: string;
   contextWindow?: number;
+  maxOutputTokens?: number;
   efforts?: string[];
   defaultEffort?: string | null;
   sortOrder?: number;
@@ -91,6 +94,7 @@ export interface XdGatewayModelInfo {
   defaultEnabled?: boolean;
   /** 展示图标 id(AI Gateway 设定;缺省 / 未知值渲染层回落来源供应商标)。 */
   icon?: string;
+  modalities?: { input: string[]; output: string[] };
   /** per-tab 能力覆盖。 */
   perAgent?: Partial<Record<AgentKind, XdGatewayAgentOverride>>;
 }
@@ -572,7 +576,11 @@ function computeMerged(): Catalog {
             : rawEfforts.filter((e): e is Effort => VALID_EFFORTS.has(e));
         const rawDefault = ov.defaultEffort !== undefined ? ov.defaultEffort : gm.defaultEffort;
         const defaultEffort: Effort | null =
-          rawDefault && VALID_EFFORTS.has(rawDefault) && efforts.includes(rawDefault as Effort)
+          rawDefault === null
+            ? null
+            : rawDefault &&
+                VALID_EFFORTS.has(rawDefault) &&
+                efforts.includes(rawDefault as Effort)
             ? (rawDefault as Effort)
             : efforts.includes('high')
               ? 'high'
@@ -586,6 +594,7 @@ function computeMerged(): Catalog {
           name: gm.name ?? gm.id,
           group: gm.group ?? 'custom:xd',
           contextWindow: ov.contextWindow ?? gm.contextWindow ?? 200_000,
+          ...(gm.maxOutputTokens !== undefined ? { maxOutput: gm.maxOutputTokens } : {}),
           // override 或 gateway 模型显式给了才算真实上限;落到 200_000 兜底的不标记。
           ...(ov.contextWindow !== undefined || gm.contextWindow !== undefined
             ? { contextWindowVerified: true }
@@ -599,6 +608,7 @@ function computeMerged(): Catalog {
           ...(defaultEnabled !== undefined ? { defaultEnabled } : {}),
           ...(gm.icon !== undefined ? { icon: gm.icon } : {}),
           ...(cost ? { cost } : {}),
+          ...(gm.modalities !== undefined ? { modalities: gm.modalities } : {}),
         };
         models[agent]!.push(merged);
       }

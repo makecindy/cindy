@@ -63,6 +63,7 @@ export function normalizeInputProjection(value: unknown, fallbackSessionId = '')
     error: readString(record?.error),
     recovery: record?.recovery,
     errorRetryText: readString(record?.errorRetryText),
+    autoResumePending: readRecord(record?.autoResumePending),
     credentialSwitchWait: readCredentialSwitchWait(record?.credentialSwitchWait),
   };
 }

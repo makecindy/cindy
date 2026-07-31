@@ -17,6 +17,10 @@ export function ghostInstallErrorKey(code: string | undefined): string {
       return 'settings.ghosts.errors.sourceMissing';
     case 'SETUP_STATUS_UNAVAILABLE':
       return 'settings.ghosts.errors.setupStatusUnavailable';
+    // 批准状态相关的前置条件失败在这条链路上只有一种下一步动作:重新确认权限。
+    // 缺少批准记录(启用存量安装)与批准态在确认后变化(更新)都归到这里。
+    case 'PRECONDITION_FAILED':
+      return 'settings.ghosts.errors.approvalRequired';
     default:
       return 'settings.ghosts.errors.generic';
   }

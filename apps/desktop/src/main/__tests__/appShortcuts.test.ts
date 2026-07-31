@@ -6,7 +6,9 @@ import {
   appShortcutScopesOverlap,
   comboToElectronAccelerator,
   createAppShortcutComboFromEvent,
+  findAppShortcutConflict,
   formatAppShortcutCombo,
+  getAppShortcutDefinition,
   getEffectiveAppShortcuts,
   isAppShortcutAvailableOnPlatform,
   isAppShortcutComboBindable,
@@ -14,6 +16,7 @@ import {
   matchesKeyboardEvent,
   normalizeAppShortcutCombo,
   normalizeAppShortcutOverrides,
+  SWITCH_SESSION_SHORTCUT_IDS,
   type AppShortcutCombo,
 } from '../../shared/appShortcuts';
 import { isMacReservedShortcut, isWindowsReservedShortcut } from '../../shared/keyboardReserved';
@@ -313,5 +316,84 @@ describe('shared reserved-shortcut tables (extracted from voice-input)', () => {
     expect(isWindowsReservedShortcut({ code: 'PageDown', meta: false, ctrl: true, alt: false, shift: false })).toBe(false);
     expect(isWindowsReservedShortcut({ code: 'Tab', meta: false, ctrl: true, alt: false, shift: false })).toBe(false);
     expect(isWindowsReservedShortcut({ code: 'Tab', meta: false, ctrl: true, alt: false, shift: true })).toBe(false);
+  });
+});
+
+describe('switch-session slots (mod+1..9)', () => {
+  it('binds the nine slots to Digit1..9 in order with mod per platform', () => {
+    expect(SWITCH_SESSION_SHORTCUT_IDS).toHaveLength(9);
+    SWITCH_SESSION_SHORTCUT_IDS.forEach((id, index) => {
+      const def = getAppShortcutDefinition(id);
+      expect(def.scope).toBe('app');
+      expect(def.rebindable).toBe(true);
+      expect(def.hiddenInSettings).toBe(true);
+      expect(def.getDefaultCombos('darwin')).toEqual([combo(`Digit${index + 1}`, { meta: true })]);
+      expect(def.getDefaultCombos('win32')).toEqual([combo(`Digit${index + 1}`, { ctrl: true })]);
+      expect(def.getDefaultCombos('linux')).toEqual([combo(`Digit${index + 1}`, { ctrl: true })]);
+    });
+  });
+
+  it('default combos convert to accelerators and display labels', () => {
+    const mac = getAppShortcutDefinition('switch-session-1').getDefaultCombos('darwin')[0];
+    expect(comboToElectronAccelerator(mac, 'darwin')).toBe('Command+1');
+    expect(formatAppShortcutCombo(mac, 'darwin')).toBe('⌘1');
+    const win = getAppShortcutDefinition('switch-session-9').getDefaultCombos('win32')[0];
+    expect(comboToElectronAccelerator(win, 'win32')).toBe('Ctrl+9');
+    expect(formatAppShortcutCombo(win, 'win32')).toBe('Ctrl+9');
+  });
+
+  it('default combos are not reserved on either platform', () => {
+    for (const id of SWITCH_SESSION_SHORTCUT_IDS) {
+      const def = getAppShortcutDefinition(id);
+      expect(isMacReservedShortcut(def.getDefaultCombos('darwin')[0])).toBe(false);
+      expect(isWindowsReservedShortcut(def.getDefaultCombos('win32')[0])).toBe(false);
+    }
+  });
+
+  // 升级路径:老版本用户把可改绑快捷键改绑到 mod+N(当时空闲、写入合法),
+  // 升级后与隐藏槽位默认撞键。冲突只在写入时校验、load 不重查,且隐藏条目
+  // 用户看不到也解不开 —— 生效表合并必须让用户 override 获胜,否则一次按键
+  // 双动作并发。
+  it('stale user override wins over a hidden slot default (upgrade path)', () => {
+    const stale = combo('Digit1', { meta: true });
+    const effective = getEffectiveAppShortcuts({ 'toggle-sidebar': stale }, 'darwin');
+    expect(effective.get('toggle-sidebar')).toEqual([stale]);
+    expect(effective.get('switch-session-1')).toEqual([]);
+    expect(effective.get('switch-session-2')).toEqual([combo('Digit2', { meta: true })]);
+  });
+
+  it('binding onto an un-overridden hidden slot default is not a conflict', () => {
+    expect(findAppShortcutConflict('toggle-sidebar', combo('Digit1', { meta: true }), {}, 'darwin')).toBeNull();
+  });
+
+  // registry 之外体系(语音输入)的历史键位同样让隐藏槽位默认让位 ——
+  // 消费端把语音快捷键转成 combo 后经 yieldToCombos 传入。
+  it('hidden slot defaults yield to external combos (voice input shortcut)', () => {
+    const voiceCombo = combo('Digit3', { ctrl: true });
+    const effective = getEffectiveAppShortcuts({}, 'win32', [voiceCombo]);
+    expect(effective.get('switch-session-3')).toEqual([]);
+    expect(effective.get('switch-session-4')).toEqual([combo('Digit4', { ctrl: true })]);
+    // 可见条目不受 yieldToCombos 影响
+    expect(effective.get('toggle-sidebar')).toEqual([combo('KeyB', { ctrl: true })]);
+  });
+
+  it('visible defaults still conflict as before', () => {
+    expect(findAppShortcutConflict('toggle-sidebar', combo('KeyF', { meta: true }), {}, 'darwin')).toBe(
+      'find-in-page',
+    );
+  });
+
+  // 让位范围严格限定 yieldsToUserBindings 槽位:save-file / open-settings 等
+  // 同样 hiddenInSettings 的惯例键不让位 —— 否则把别的键改绑到 ⌘S 会被放行,
+  // 用户静默失去保存快捷键(Codex review P2)。
+  it('conventional hidden defaults (save-file / open-settings) neither yield nor stop conflicting', () => {
+    const sCombo = combo('KeyS', { meta: true });
+    expect(findAppShortcutConflict('find-in-page', sCombo, {}, 'darwin')).toBe('save-file');
+    expect(findAppShortcutConflict('find-in-page', combo('Comma', { meta: true }), {}, 'darwin')).toBe(
+      'open-settings',
+    );
+    // 防御:即便异常写入了撞 ⌘S 的 override,save-file 的默认也不被过滤。
+    const effective = getEffectiveAppShortcuts({ 'find-in-page': sCombo }, 'darwin');
+    expect(effective.get('save-file')).toEqual([sCombo]);
   });
 });

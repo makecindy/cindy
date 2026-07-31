@@ -8,7 +8,7 @@ export type ImDefaultEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 
  * 刻意读 global(channel=undefined, 见 hook-control/session-runner.ts), 不落
  * 在这个键上 — 两者互不影响。
  */
-export type ImDefaultSettingsChannel = 'feishu' | 'slack' | 'discord' | 'wechat' | 'telegram';
+export type ImDefaultSettingsChannel = 'feishu' | 'slack' | 'discord' | 'wechat' | 'telegram' | 'dingtalk';
 
 export interface ImDefaultAgentSettings {
   providerId: string | null;
@@ -57,6 +57,7 @@ export const IM_DEFAULT_SETTINGS_CHANNELS: readonly ImDefaultSettingsChannel[] =
   'discord',
   'wechat',
   'telegram',
+  'dingtalk',
 ];
 
 export const IM_DEFAULT_EFFORT_OVERRIDES: Readonly<Partial<Record<string, ImDefaultEffort>>> = {

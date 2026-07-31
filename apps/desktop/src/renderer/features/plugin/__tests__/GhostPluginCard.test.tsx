@@ -37,6 +37,7 @@ const installedPlugin: GhostPluginListItem = {
   version: '1.0.0',
   enabled: true,
   canUse: true,
+  approvalState: 'approved',
 };
 
 const marketPlugin: PluginMarketItem = {
@@ -185,6 +186,65 @@ describe('GhostPluginCard', () => {
     expect(onAction).not.toHaveBeenCalled();
     // The direct Use entry is replaced by Update while a new release is pending.
     expect(screen.queryByRole('button', { name: 'settings.ghosts.page.useAria' })).toBeNull();
+  });
+
+  it.each(['legacy-unapproved', 'invalid'] as const)(
+    'states the %s approval and offers review instead of a silent disabled switch',
+    (approvalState) => {
+      const onReapprove = vi.fn();
+      const onToggle = vi.fn();
+      const onAction = vi.fn();
+      render(
+        <GhostPluginCard
+          item={{ ...installedPlugin, approvalState, enabled: false }}
+          onSelect={vi.fn()}
+          onAction={onAction}
+          onUpdate={vi.fn()}
+          updateVersion="1.1.1"
+          onReapprove={onReapprove}
+          onToggle={onToggle}
+        />,
+      );
+
+      expect(screen.getByText('settings.ghosts.reapproval.badge')).toBeTruthy();
+      // 缺批准时状态说明优先于"可更新",不给用户两个互相打架的下一步。
+      expect(screen.queryByText('settings.ghosts.market.updateAvailable')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'settings.ghosts.page.useAria' })).toBeNull();
+      expect(
+        screen.queryByRole('button', { name: 'settings.ghosts.market.updateAria' }),
+      ).toBeNull();
+
+      // 开关不给点:点了 Main 也会拒,这里不制造"看着能开却开不了"。
+      const toggle = screen.getByRole('switch') as HTMLButtonElement;
+      expect(toggle.disabled).toBe(true);
+      fireEvent.click(toggle);
+      expect(onToggle).not.toHaveBeenCalled();
+
+      fireEvent.click(
+        screen.getByRole('button', { name: 'settings.ghosts.reapproval.actionAria' }),
+      );
+      expect(onReapprove).toHaveBeenCalledTimes(1);
+      expect(onAction).not.toHaveBeenCalled();
+    },
+  );
+
+  it('keeps the approved card on the normal Use and update affordances', () => {
+    render(
+      <GhostPluginCard
+        item={installedPlugin}
+        onSelect={vi.fn()}
+        onAction={vi.fn()}
+        onReapprove={vi.fn()}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText('settings.ghosts.reapproval.badge')).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: 'settings.ghosts.reapproval.actionAria' }),
+    ).toBeNull();
+    expect((screen.getByRole('switch') as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByRole('button', { name: 'settings.ghosts.page.useAria' })).toBeTruthy();
   });
 
   it('keeps the update action interactive while Use is locked, and blocks it when busy', () => {

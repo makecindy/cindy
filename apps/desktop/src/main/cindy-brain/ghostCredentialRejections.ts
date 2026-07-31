@@ -44,6 +44,37 @@ export function ghostConnectionRejectionRef(declKey: string, connectionId: strin
   return `connection:${declKey}:${connectionId}`;
 }
 
+/**
+ * setup change 事件 → 台账清账(幂等兜底面,抽出可测)。
+ *
+ * 主写入路径(保险库重存 / 连接 token 更新)都在 emit 之前自己清过账;这里
+ * 是订阅侧的兜底,覆盖未来新增的写入路径。返回是否有实际变化。
+ *
+ * 三条不清账的情形:
+ * - `ghostId` 为空:`emitAll` 在无 keyed 订阅者时发的纯唤醒信号(共享宿主
+ *   配置变更),不指向具体插件,没有可清的账;
+ * - 无 `ref`:事件没说清是哪一项,不能按插件整体清(会误清其它被拒 key);
+ * - `source: 'connection'` 但 ref 只有 declKey:清单类变更定位不到具体连接。
+ */
+export function applyGhostSetupChangeToRejections(
+  store: GhostCredentialRejectionsStore,
+  event: { ghostId: string; source: string; ref?: string },
+): boolean {
+  if (!event.ghostId || !event.ref) return false;
+  if (event.source === 'secret') return store.clearSecret(event.ghostId, event.ref);
+  if (event.source !== 'connection') return false;
+  // 连接类记账 ref 是 `connection:<declKey>:<connectionId>`,而 bus 上的
+  // connection ref 是 `<declKey>` 或 `<declKey>:<connectionId>`。declKey 字符集
+  // 为 [a-z0-9_](manifest 校验保证)、connectionId 是 UUID,首个冒号即分界。
+  const separator = event.ref.indexOf(':');
+  if (separator <= 0 || separator >= event.ref.length - 1) return false;
+  return store.clearConnection(
+    event.ghostId,
+    event.ref.slice(0, separator),
+    event.ref.slice(separator + 1),
+  );
+}
+
 export function createGhostCredentialRejectionsStore(args: {
   filePath: string;
   log?: { warn: (msg: string, meta?: Record<string, unknown>) => void };

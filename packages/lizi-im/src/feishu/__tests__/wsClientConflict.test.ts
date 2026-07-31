@@ -1,13 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { feishuEvents } from '../events.js';
 import { messages as transportMessages } from '../messages.js';
@@ -19,6 +10,7 @@ interface CapturingLogger {
 
 interface MockSdkOptions {
   logger: CapturingLogger;
+  domain?: string;
   onReady?: () => void;
   onError?: (error: Error) => void;
 }
@@ -65,6 +57,7 @@ vi.doMock('@larksuiteoapi/node-sdk', () => ({
     }
   },
   LoggerLevel: { info: 'info' },
+  Domain: { Feishu: 'feishu-domain', Lark: 'lark-domain' },
 }));
 
 vi.doMock('../outbound.js', () => ({
@@ -94,6 +87,7 @@ let wsClient: typeof import('../wsClient.js');
 const credentials = {
   appId: 'cli_conflict_test',
   appSecret: 'secret',
+  service: 'feishu' as const,
 };
 
 function latestClient() {
@@ -138,13 +132,13 @@ describe('Feishu WebSocket conflict handling', () => {
     feishuEvents.on('conflict', onConflict);
 
     try {
-      const connecting = wsClient.start(credentials, { announceLifecycle: false });
+      const connecting = wsClient.start(credentials, {
+        announceLifecycle: false,
+      });
       const sdkClient = latestClient();
 
       sdkClient.options.onError?.(
-        new Error(
-          'pullConnectConfig failed: code=1000040350, msg=exceed_conn_limit',
-        ),
+        new Error('pullConnectConfig failed: code=1000040350, msg=exceed_conn_limit'),
       );
       sdkClient.options.onReady?.();
       expect(wsClient.getCurrentStatus()).not.toBe('connected');
@@ -164,7 +158,9 @@ describe('Feishu WebSocket conflict handling', () => {
     feishuEvents.on('conflict', onConflict);
 
     try {
-      const connecting = wsClient.start(credentials, { announceLifecycle: false });
+      const connecting = wsClient.start(credentials, {
+        announceLifecycle: false,
+      });
       const sdkClient = latestClient();
       sdkClient.options.onReady?.();
 
@@ -183,7 +179,9 @@ describe('Feishu WebSocket conflict handling', () => {
   });
 
   it('keeps SDK error-log parsing as a conflict fallback', async () => {
-    const connecting = wsClient.start(credentials, { announceLifecycle: false });
+    const connecting = wsClient.start(credentials, {
+      announceLifecycle: false,
+    });
     const sdkClient = latestClient();
 
     sdkClient.logger.error('[ws]', 'code: 1000040350, exceed_conn_limit');
@@ -202,7 +200,9 @@ describe('Feishu owner binding updates', () => {
     feishuEvents.on('status', onStatus);
 
     try {
-      const connecting = wsClient.start(credentials, { announceLifecycle: false });
+      const connecting = wsClient.start(credentials, {
+        announceLifecycle: false,
+      });
       latestClient().options.onReady?.();
       await expect(connecting).resolves.toBe('connected');
 
@@ -224,7 +224,9 @@ describe('Feishu owner binding updates', () => {
     const onStatus = vi.fn();
 
     try {
-      const connecting = wsClient.start(credentials, { announceLifecycle: false });
+      const connecting = wsClient.start(credentials, {
+        announceLifecycle: false,
+      });
       latestClient().options.onReady?.();
       await expect(connecting).resolves.toBe('connected');
       feishuEvents.on('status', onStatus);
@@ -259,7 +261,9 @@ describe('Feishu owner binding updates', () => {
     mocks.clearOwner.mockImplementationOnce(() => {
       mocks.firstAllowed.mockReturnValue(null);
     });
-    const connecting = wsClient.start(credentials, { announceLifecycle: false });
+    const connecting = wsClient.start(credentials, {
+      announceLifecycle: false,
+    });
     latestClient().options.onReady?.();
     await expect(connecting).resolves.toBe('connected');
     const onStatus = vi.fn();
@@ -291,7 +295,9 @@ describe('Feishu owner binding updates', () => {
     });
     mocks.sendText.mockResolvedValue({ messageId: 'om_lifecycle' });
 
-    const connecting = wsClient.start(credentials, { announceLifecycle: false });
+    const connecting = wsClient.start(credentials, {
+      announceLifecycle: false,
+    });
     latestClient().options.onReady?.();
     await expect(connecting).resolves.toBe('connected');
     await wsClient.stop({
@@ -306,6 +312,7 @@ describe('Feishu owner binding updates', () => {
     const replacementCredentials = {
       appId: 'cli_replacement',
       appSecret: 'replacement-secret',
+      service: 'feishu' as const,
     };
     const replacementConnecting = wsClient.start(replacementCredentials, {
       announceLifecycle: false,
@@ -328,5 +335,19 @@ describe('Feishu owner binding updates', () => {
       'ou_replacement_owner',
       transportMessages.lifecycle.offlineNotice,
     );
+  });
+});
+
+describe('IM service routing', () => {
+  it('selects the Lark SDK domain for Lark credentials', async () => {
+    const connecting = wsClient.start(
+      { ...credentials, service: 'lark' },
+      { announceLifecycle: false },
+    );
+    const sdkClient = latestClient();
+
+    expect(sdkClient.options.domain).toBe('lark-domain');
+    sdkClient.options.onReady?.();
+    await expect(connecting).resolves.toBe('connected');
   });
 });

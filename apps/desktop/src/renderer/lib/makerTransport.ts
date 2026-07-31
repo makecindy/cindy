@@ -151,6 +151,23 @@ export function makerApiFor(sessionId: string): RoutableMaker {
   return deviceId ? makerApiForDevice(deviceId) : window.electronAPI.maker;
 }
 
+/**
+ * 粘滞归属版 maker 入口:曾解析到 deviceId 的会话,在 relay 瞬时重连清空注册表的窗口内
+ * 仍走隧道,不会退回本机。
+ *
+ * 用于「误判本机会产生副作用」的 **mutation**(与 isRemoteSessionSticky 同一判据,只是那条
+ * 服务于 gating、这条服务于调用)。协同开关就是典型:enableOrca / disableOrca 在瞬断窗口内
+ * 被误判成本机,会在**控制端本机**建出或销毁一个 team —— 本机恰好存在同 id 会话时还会操作
+ * 错对象,而用户看到的入口(按粘滞 remoteDeviceId 渲染)分明指向被控端(issue #1170 codex P2)。
+ *
+ * 普通高频操作(send / setModel / …)仍用 makerApiFor:它们本就跟随会话来源的实时判定,
+ * 且误判的代价是一次失败重试,不是在错误的机器上留下持久状态。
+ */
+export function makerApiForSticky(sessionId: string): RoutableMaker {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  return deviceId ? makerApiForDevice(deviceId) : window.electronAPI.maker;
+}
+
 /** 是否远程(device-link)会话。 */
 export function isRemoteSession(sessionId: string): boolean {
   return getSessionDeviceId(sessionId) !== undefined;
@@ -321,6 +338,31 @@ export function estimatedSessionValueFor(sessionId: string): Promise<{
   return invokeRemote(deviceId, 'local-db:messages:estimatedSessionValue', [
     sessionId,
   ]) as ReturnType<typeof estimatedSessionValueFor>;
+}
+
+/**
+ * 插件启停状态(只读):**按目标设备**读项目级 / 用户级 collab 等开关。
+ *
+ * device-link 会话与草稿的 workingDir 是**被控端**机器上的路径,拿它在控制端本机查
+ * `.cindy/plugins.json` 读到的是控制端自己的用户级开关 —— 与被控端 main 的权威授权
+ * (assertCollabProjectEnabled)可能相反,于是入口看得见却开不起来(issue #1170)。
+ * 所以这里按 deviceId 分流:本机 → 真 IPC;远程 → 隧道到被控端读它自己的真相。
+ *
+ * 路径归一化由调用方在控制端完成:normalizeWorkingDirForProjectSettings 是纯路径形态
+ * 推导(不依赖 process.platform / 本机 userData),跨 macOS ↔ Windows 控制同样成立。
+ *
+ * 老被控端未收录该 channel 时隧道回 DEVICE_LINK_CHANNEL_NOT_ALLOWED,调用方据此
+ * fail-closed 置灰入口并说明「设备版本过旧」,不会放行到 enableOrca 才撞错。
+ */
+export function pluginEnableStateFor(
+  deviceId: string | null | undefined,
+  pluginId: string,
+  workingDir?: string,
+): ReturnType<typeof window.electronAPI.maker.plugins.getState> {
+  if (!deviceId) return window.electronAPI.maker.plugins.getState(pluginId, workingDir);
+  return invokeRemote(deviceId, 'maker:plugins:get-state', [pluginId, workingDir]) as ReturnType<
+    typeof window.electronAPI.maker.plugins.getState
+  >;
 }
 
 /** 会话内搜索跳转定位:远程走隧道 local-db:messages:around(否则查控制端空库,跳转必失败)。 */
@@ -572,6 +614,15 @@ function remoteOrcaWorkflows(deviceId: string): RoutableOrcaWorkflows {
 export function orcaWorkflowsFor(contextSessionId: string): RoutableOrcaWorkflows {
   const deviceId = getSessionDeviceId(contextSessionId);
   return deviceId ? remoteOrcaWorkflows(deviceId) : window.electronAPI.localDb.orcaWorkflows;
+}
+
+/**
+ * 已知稳定 deviceId 时直接返回远程 orca 适配器,不重新读取易失的 session origin
+ * (与 makerApiForDevice 同款)。用于「调用方手里已经握着权威 deviceId」的场景 ——
+ * 例如刚在该被控端建出会话、要回查它的权威团队终态。
+ */
+export function orcaWorkflowsForDevice(deviceId: string): RoutableOrcaWorkflows {
+  return remoteOrcaWorkflows(deviceId);
 }
 
 /**

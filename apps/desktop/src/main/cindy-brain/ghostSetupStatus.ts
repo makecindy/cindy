@@ -333,6 +333,42 @@ export function evaluateGhostSetupAssessment(
 }
 
 /**
+ * 运行期凭证被拒台账折算:被 401/403 拒绝过的 secret 按 expired 上报——与
+ * OAuth 过期同一语义(修复动作 = 重新配置),readiness 随之降 needs_reauth。
+ * 折完按同一 any_of 口径重算 state,不然会留下「组内无 satisfied 却仍 ready」。
+ *
+ * 插件页投影(evaluateGhostSetup)与运行期权威判定
+ * (cindy-brain/index.ts 的 getGhostSetupAssessment,ghost_call 派发闸门)
+ * 共用这一份实现——两处曾各留一份逐字相同的副本,任一侧改动都会无声脱同步,
+ * 而 index.ts 依赖 Electron 进程状态、测不到。收成单一实现后由本模块的单测
+ * 同时覆盖两条链路。
+ */
+export function foldRejectedSecretsIntoAssessment(
+  assessment: GhostSetupAssessment,
+  rejectedSecretKeys: readonly string[] | undefined,
+): GhostSetupAssessment {
+  if (!rejectedSecretKeys || rejectedSecretKeys.length === 0) return assessment;
+  const rejected = new Set(rejectedSecretKeys);
+  const groups = assessment.groups.map((group) => ({
+    ...group,
+    items: group.items.map((item) =>
+      item.kind === 'secret' &&
+      item.state === 'satisfied' &&
+      rejected.has(item.ref.replace(/^secret:/, ''))
+        ? { ...item, state: 'expired' as const }
+        : item,
+    ),
+  }));
+  return {
+    ...assessment,
+    state: groups.every((group) => group.items.some((item) => item.state === 'satisfied'))
+      ? 'ready'
+      : 'required',
+    groups,
+  };
+}
+
+/**
  * 判定一段意识的配置就绪状态。纯函数:清单 + 探针进,状态出;探针全同步
  * (底层是文件存在性 / 内存清单读取),点击时现查、不缓存。
  */
@@ -341,32 +377,15 @@ export function evaluateGhostSetup(
   probes: GhostSetupProbes,
   options: EvaluateGhostSetupStatusOptions = {},
 ): GhostSetupStatus {
-  let assessment = evaluateGhostSetupAssessment(manifest, probes, {
-    revision: 0,
-    strict: false,
-    additionalGroups: options.additionalGroups,
-    rejectedConnectionRefs: options.rejectedConnectionRefs,
-  });
-  if (options.rejectedSecretKeys && options.rejectedSecretKeys.length > 0) {
-    const rejected = new Set(options.rejectedSecretKeys);
-    const groups = assessment.groups.map((group) => ({
-      ...group,
-      items: group.items.map((item) =>
-        item.kind === 'secret' &&
-        item.state === 'satisfied' &&
-        rejected.has(item.ref.replace(/^secret:/, ''))
-          ? { ...item, state: 'expired' as const }
-          : item,
-      ),
-    }));
-    assessment = {
-      ...assessment,
-      state: groups.every((group) => group.items.some((item) => item.state === 'satisfied'))
-        ? 'ready'
-        : 'required',
-      groups,
-    };
-  }
+  const assessment = foldRejectedSecretsIntoAssessment(
+    evaluateGhostSetupAssessment(manifest, probes, {
+      revision: 0,
+      strict: false,
+      additionalGroups: options.additionalGroups,
+      rejectedConnectionRefs: options.rejectedConnectionRefs,
+    }),
+    options.rejectedSecretKeys,
+  );
   const missingGroups: GhostSetupStatusItem[][] = [];
   const reauth: GhostSetupStatusItem[] = [];
   const seenReauthRefs = new Set<string>();

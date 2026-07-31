@@ -10,7 +10,8 @@ import {
 import { app, type WebContents } from 'electron';
 
 import {
-  diffGhostPermissionItems,
+  diffInstalledGhostPermissionItems,
+  ghostInstallApprovalToken,
   isOfficialGhostId,
   validateGhostManifest,
   type InstalledGhost,
@@ -234,6 +235,7 @@ export class PluginMarketService {
       /** Renderer 确认框实际展示过的 release。Main 重拉详情后必须仍一致,
        *  否则用户审阅 A、实际安装/启用 B(review P1)。 */
       expectedReleaseId: string;
+      expectedInstalledApproval?: string;
       allowPermissionExpansion?: boolean;
     },
   ): Promise<{ ghost: InstalledGhost }> {
@@ -266,12 +268,13 @@ export class PluginMarketService {
       }
       const existing = getGhostManager()
         .list()
-        .some((ghost) => ghost.manifest.id === plugin.ghostId);
+        .find((ghost) => ghost.manifest.id === plugin.ghostId);
       return {
         ghost: await this.installDetail(
           plugin,
           {
-            expectedInstalled: existing,
+            expectedInstalled: Boolean(existing),
+            expectedInstalledApproval: options.expectedInstalledApproval,
             allowPermissionExpansion: options.allowPermissionExpansion === true,
           },
           owner,
@@ -344,6 +347,7 @@ export class PluginMarketService {
     plugin: VisiblePluginDetail,
     options: {
       allowPermissionExpansion?: boolean;
+      expectedInstalledApproval?: string;
       /** 确认操作时的安装意图;下载窗口期目标被另一窗口卸载时拒绝滑入首装。 */
       expectedInstalled: boolean;
     } = { expectedInstalled: false },
@@ -361,6 +365,16 @@ export class PluginMarketService {
     if (existing && (!currentRecord?.installed || currentRecord.pluginId !== plugin.id)) {
       throwIpcError('ALREADY_EXISTS', 'A local Plugin already uses this Plugin ID');
     }
+    if (
+      existing &&
+      ghostInstallApprovalToken(existing.approval) !==
+        options.expectedInstalledApproval
+    ) {
+      throwIpcError(
+        'PRECONDITION_FAILED',
+        'Plugin approval state changed after permission review',
+      );
+    }
 
     const compatible = validateGhostManifest(plugin.currentRelease.manifest);
     if (!compatible.ok) {
@@ -368,7 +382,7 @@ export class PluginMarketService {
     }
     if (
       existing &&
-      diffGhostPermissionItems(existing.manifest, compatible.manifest).added.length > 0 &&
+      diffInstalledGhostPermissionItems(existing, compatible.manifest).added.length > 0 &&
       options.allowPermissionExpansion !== true
     ) {
       throwIpcError('PRECONDITION_FAILED', 'Plugin permissions changed and require review');
@@ -396,7 +410,7 @@ export class PluginMarketService {
       if (options.expectedInstalled) {
         const stillInstalled = getGhostManager()
           .list()
-          .some((ghost) => ghost.manifest.id === plugin.ghostId);
+          .find((ghost) => ghost.manifest.id === plugin.ghostId);
         if (!stillInstalled) {
           // 用户确认的是更新；下载期间若另一窗口已卸载目标,不能把操作
           // 降级成首装并自动启用。按状态变化拒绝,由 renderer 刷新重试。
@@ -405,12 +419,36 @@ export class PluginMarketService {
             'Plugin was uninstalled while the update was downloading',
           );
         }
+        if (
+          ghostInstallApprovalToken(stillInstalled.approval) !==
+          options.expectedInstalledApproval
+        ) {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'Plugin approval state changed while the update was downloading',
+          );
+        }
+      } else if (
+        getGhostManager()
+          .list()
+          .some((ghost) => ghost.manifest.id === plugin.ghostId)
+      ) {
+        // 用户确认的是首装；下载期间出现同 id 安装时，不能静默把它升级为
+        // “更新现有插件”。即使 Renderer 恰好带了一个可匹配 token，也必须
+        // 刷新详情并按更新流程重新审阅。
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'Plugin was installed while the package was downloading',
+        );
       }
       // 市场首装一律装完即开(2026-07-26 定案,见 installOrUpdateMarketGhostPackage);
       // 已装过则走原位更新,唤醒/沉睡状态延续当前值。
       const ghost = await installOrUpdateMarketGhostPackage(tempPath, {
         ghostId: plugin.ghostId,
         version: plugin.currentRelease.version,
+        ...(options.expectedInstalledApproval
+          ? { expectedInstalledApproval: options.expectedInstalledApproval }
+          : {}),
       });
       // Once the package directory is committed, finish provenance against the
       // owner captured at operation start even if the active session changes.

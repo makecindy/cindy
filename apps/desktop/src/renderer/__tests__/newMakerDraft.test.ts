@@ -508,11 +508,95 @@ describe('newMakerDraft store', () => {
       expect(getDraft().deviceLinkDeviceName).toBeNull();
     });
 
-    it('device-link 草稿禁用协同的既有不变量不受影响', async () => {
+    // issue #1170:device-link 草稿曾被硬编码禁用协同,而同一个项目建成会话后入口又出现。
+    // 现在草稿与会话页共用同一份判定(resolveCollabEntryPolicy),device-link **项目**可开协同;
+    // 关掉协同的只剩「对话模式」这一条(workingDir == null)。
+    it('选设备但没选项目(对话模式)→ 协同仍然关闭', async () => {
       const { getDraft, patchDraft } = await loadModule();
+      patchDraft({ workingDir: '/local/proj' });
       patchDraft({ collab: { enabled: true, worker: 'cc' } });
       patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio Mac', workingDir: null });
       expect(getDraft().collab.enabled).toBe(false);
+    });
+
+    it('选设备上的项目 → 协同开关保留(不再被 device-link 一刀切关掉)', async () => {
+      const { getDraft, patchDraft } = await loadModule();
+      patchDraft({ workingDir: '/local/proj' });
+      patchDraft({ collab: { enabled: true, worker: 'cc' } });
+      patchDraft({
+        deviceLinkDeviceId: 'dev-a',
+        deviceLinkDeviceName: 'Studio Mac',
+        workingDir: '/host/proj',
+      });
+      expect(getDraft().collab.enabled).toBe(true);
+      expect(getDraft().collab.worker).toBe('cc');
+    });
+
+    // model / providerId / effort / fast 都是设备作用域:原样带到另一台机器会撞被控端的
+    // 精确 preflight,协同静默降级成单会话 —— 正是 #1170 抱怨的「入口能点但走不完」。
+    it('换目标设备 → 清掉 Worker 富配置,但保留协同开关与 worker 类型', async () => {
+      const { getDraft, patchDraft } = await loadModule();
+      patchDraft({ workingDir: '/local/proj' });
+      patchDraft({
+        collab: {
+          enabled: true,
+          worker: 'codex',
+          workerConfig: {
+            role: 'developer',
+            model: 'codex/gpt-5.5',
+            effort: 'high',
+            fast: false,
+            providerId: 'prov-local',
+            initialTask: '先跑一遍测试',
+          },
+        },
+      });
+      patchDraft({
+        deviceLinkDeviceId: 'dev-a',
+        deviceLinkDeviceName: 'Studio Mac',
+        workingDir: '/host/proj',
+      });
+      expect(getDraft().collab.enabled).toBe(true);
+      expect(getDraft().collab.worker).toBe('codex');
+      expect(getDraft().collab.workerConfig).toBeUndefined();
+    });
+
+    it('本机 → 设备 A → 设备 B 的每一跳都清 Worker 配置', async () => {
+      const { getDraft, patchDraft, patchCollab } = await loadModule();
+      patchDraft({
+        deviceLinkDeviceId: 'dev-a',
+        deviceLinkDeviceName: 'Studio Mac',
+        workingDir: '/host-a/proj',
+      });
+      patchCollab({
+        enabled: true,
+        worker: 'cc',
+        workerConfig: { role: 'reviewer', model: 'claude-opus-4-7' },
+      });
+      expect(getDraft().collab.workerConfig?.model).toBe('claude-opus-4-7');
+      patchDraft({
+        deviceLinkDeviceId: 'dev-b',
+        deviceLinkDeviceName: 'Laptop',
+        workingDir: '/host-b/proj',
+      });
+      expect(getDraft().collab.workerConfig).toBeUndefined();
+      expect(getDraft().collab.enabled).toBe(true);
+    });
+
+    it('同一台设备内换项目 → Worker 配置保留(模型目录没变)', async () => {
+      const { getDraft, patchDraft, patchCollab } = await loadModule();
+      patchDraft({
+        deviceLinkDeviceId: 'dev-a',
+        deviceLinkDeviceName: 'Studio Mac',
+        workingDir: '/host-a/proj',
+      });
+      patchCollab({
+        enabled: true,
+        worker: 'cc',
+        workerConfig: { role: 'reviewer', model: 'claude-opus-4-7' },
+      });
+      patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio Mac', workingDir: '/host-a/other' });
+      expect(getDraft().collab.workerConfig?.model).toBe('claude-opus-4-7');
     });
   });
 });

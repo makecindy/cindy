@@ -286,12 +286,17 @@ import {
 import { recordModelMismatchOnMessage } from '../modelMismatchBroadcaster.js';
 import { detectClaudeModelMismatch } from '../../shared/modelMismatch.js';
 import { triggerClaudeAccountUsageRefresh } from '../usage/claudeAccountUsage.js';
-import { getCodexSubscriptionValuePrice, getModelPriceQuote, getModelPricing, getModelPricingForModel, getSubscriptionDirectValuePrice } from '../usage/modelPricing.js';
+import { getCodexSubscriptionValuePrice, getGatewayAccountCurrency, getModelPriceQuote, getModelPricing, getModelPricingForModel, getSubscriptionDirectValuePrice } from '../usage/modelPricing.js';
 import { computeModelUsageDeltas, type ModelUsageCumulative, type ModelUsageDeltaEntry } from '../usage/modelUsageDelta.js';
 import { claudeSubscriptionUsageModelKey, codexApiUsageModelKey, codexSubscriptionUsageModelKey } from '../usage/usageHistory.js';
 import { buildClaudeTurnUsageDetails, computePriceQuoteTurnMoney, estimateClaudeSubscriptionTurnValue, isAnthropicModel, normalizeModelIdForPricing, resolveClaudeTurnCostSinks, type BillingRoute } from '../usage/turnCostCalculator.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX, isSubscriptionDirectModel } from '../../shared/subscriptionModels.js';
-import { addRegionalMoney, regionalizeUsd, type RegionalMoney } from '../../shared/regionalMoney.js';
+import {
+  addRegionalMoney,
+  usdToLedgerCurrency,
+  type RegionalMoney,
+} from '../../shared/regionalMoney.js';
+import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { triggerClaudeSubscriptionUsageRefresh, triggerCodexAccountUsageRefresh } from './usage.js';
 import {
@@ -426,7 +431,10 @@ import {
 import { getActiveCatalog, setDiscoveredProviderModels } from '../maker-host/active-catalog.js';
 import { testProviderConnection } from '../maker-host/provider-diagnostics.js';
 import { fetchProviderModels } from '../maker-host/provider-model-fetch.js';
-import { beginProviderRouteMutation } from '../maker-host/provider-route.js';
+import {
+  beginProviderRouteMutation,
+  isUserProviderSession,
+} from '../maker-host/provider-route.js';
 import {
   getAnthropicModelDiscoveryFailure,
   refreshAnthropicModelsFromHttp,
@@ -565,6 +573,7 @@ import {
   readGhostErrandSessionId,
   writeGhostErrandSessionId,
 } from '../cindy-brain/errandPrefsStore.js';
+import { isGhostPickedDir } from '../cindy-brain/pickGrantsStore.js';
 import { createGhostErrandRunner } from './ghostErrandRunner.js';
 import {
   createGhostErrandSession,
@@ -827,10 +836,32 @@ async function applyMemoryChangeWithCodexRestart<T extends object>(
           agentInputCoordinatorHolder?.wakeSession(sessionId, 'deferred-codex-restart-superseded');
         }
       },
+      takePendingApplyRuntime: () => deferredCodexRestartHolder?.takePendingApplyRuntime() ?? null,
       logger: log,
     },
     parts,
   );
+}
+
+/**
+ * 子代理 spawn 配置(`-c agents.*`)变更的统一执行体:复用 Memory 设置的
+ * 「能立即软重启就重启,busy 就延迟到全部本地 Codex 会话空闲」链路。子代理配置
+ * 自身没有 native 热推维度(唯一杠杆是重启后新 spawn 现读 store),applyRuntime
+ * 有意缺省 —— 跨设置域接续由基础设施原子完成,不在这里快照(peek-then-schedule
+ * 会被 prepare 的 await 窗口打断,盖掉窗口内 Memory 新登记的回调,review 第 2 轮):
+ * busy 路径 service.schedule 对缺省回调做 preserve;立即路径执行体经
+ * takePendingApplyRuntime 把排队工作原地补执行后再重启。
+ * 调用方(bootstrap-electron 的 SET/RESET)负责先判定变更是否触及 spawn 注入键。
+ */
+export async function applyCodexSpawnConfigChangeWithRestart<T extends object>(
+  persist: () => Promise<T>,
+  stillValid?: () => boolean,
+): Promise<T & { codexRestartDeferred: boolean }> {
+  return applyMemoryChangeWithCodexRestart({
+    persist,
+    reason: 'subagent-spawn-config-change',
+    stillValid,
+  });
 }
 
 // ─── Sessions push helpers ────────────────────────────────────────────────
@@ -3177,14 +3208,14 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               const value = computePriceQuoteTurnMoney(
                 m.deltas,
                 quote ?? undefined,
-                CURRENT_CINDY_REGION,
+                currentLedgerCurrency(),
               );
               if (value?.amount) estimatedValues.push(value);
             }
             if (isClaudeSubscriptionSession) {
               const claudeEstimated = estimateClaudeSubscriptionTurnValue(
                 perModel,
-                CURRENT_CINDY_REGION,
+                currentLedgerCurrency(),
               );
               if (claudeEstimated?.amount) estimatedValues.push(claudeEstimated);
             }
@@ -3233,7 +3264,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                     ? 'provider-api'
                     : 'unknown';
             if (route === 'subscription' || route === 'xd-gateway') return;
-            const money = regionalizeUsd(rawDelta, CURRENT_CINDY_REGION);
+            const ledgerCurrency =
+              (await getGatewayAccountCurrency()) ?? currentLedgerCurrency();
+            const money = usdToLedgerCurrency(rawDelta, ledgerCurrency);
             const turnUsageDetails = buildClaudeTurnUsageDetails(doneData?.usage, undefined, resolvedModel);
             recordTurnSpend(money);
             recordSessionTurnSpend(session.id, money);
@@ -3271,6 +3304,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // 「是否走订阅(不计网关费)」改由 spawn 注入 + 该会话是否显式选了 XD 网关决定。
       const sessionProvider = getSessionProvider(session.id);
       const isRemoteCodexSession = Boolean(session.remoteHostId);
+      const isCustomProviderRoute =
+        !isRemoteCodexSession && isUserProviderSession(session.id);
       const codexAuthInjection = isRemoteCodexSession ? null : getCodexProxyAuthInjection();
       const modelPromise = turnModelPromiseBySession.get(session.id) ?? readSessionModelForUsage(session.id);
       turnModelPromiseBySession.delete(session.id);
@@ -3304,11 +3339,18 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           } catch {
             // 模型读取失败时仍记录 token, 聚合 UI 会归到 unknown。
           }
-          const isCodexBudgetRoute = pricingModel.startsWith('codex/');
-          const isCodexXaiProviderRoute = pricingModel.startsWith(XAI_MODEL_PREFIX);
+          const isCodexBudgetRoute =
+            (sessionProvider == null || sessionProvider === 'xd')
+            && pricingModel.startsWith('codex/');
+          const isCodexXaiProviderRoute =
+            (sessionProvider == null || sessionProvider === 'xai')
+            && pricingModel.startsWith(XAI_MODEL_PREFIX);
+          const isCodexOpenAiProviderRoute =
+            sessionProvider == null || sessionProvider === 'openai';
           const hasGatewayKey = Boolean(readClaudeApiKey());
           const hasEffectiveGatewayRoute =
             !isRemoteCodexSession &&
+            !isCustomProviderRoute &&
             (
               codexAuthInjection === 'env-key' ||
               isCodexBudgetRoute ||
@@ -3316,7 +3358,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             );
           const isSubscriptionValue = isRemoteCodexSession ||
             isCodexXaiProviderRoute ||
-            (codexAuthInjection === 'oauth-bearer' && !hasEffectiveGatewayRoute);
+            (
+              isCodexOpenAiProviderRoute
+              && codexAuthInjection === 'oauth-bearer'
+              && !hasEffectiveGatewayRoute
+            );
           const modelUsageKey = isSubscriptionValue
             ? codexSubscriptionUsageModelKey(pricingModel)
             : codexApiUsageModelKey(pricingModel);
@@ -3340,18 +3386,20 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           try {
             const pricing = isSubscriptionValue && !isCodexXaiProviderRoute
               ? await getModelPricing()
-              : isSubscriptionValue
-                ? null
-                : await getModelPricingForModel('xd', pricingModel);
+              : hasEffectiveGatewayRoute
+                ? await getModelPricingForModel('xd', pricingModel)
+                : null;
             const price = isCodexXaiProviderRoute
               ? getSubscriptionDirectValuePrice(pricingModel)
               : isSubscriptionValue
                 ? getCodexSubscriptionValuePrice(pricingModel, pricing)
-                : getModelPriceQuote(pricing, 'xd', pricingModel);
+                : hasEffectiveGatewayRoute
+                  ? getModelPriceQuote(pricing, 'xd', pricingModel)
+                  : undefined;
             const money = computePriceQuoteTurnMoney(
               codexUsageToTokens(u),
               price ?? undefined,
-              CURRENT_CINDY_REGION,
+              currentLedgerCurrency(),
             );
             if (!isSubscriptionValue && money) {
               await recordModelTurnUsage({
@@ -3397,6 +3445,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         .then((model) => {
           const hasGatewayKey = Boolean(readClaudeApiKey());
           if (!isRemoteCodexSession &&
+            !isCustomProviderRoute &&
             !model.startsWith(XAI_MODEL_PREFIX) &&
             (codexAuthInjection === 'env-key' || model.startsWith('codex/') || (sessionProvider === 'xd' && hasGatewayKey))) {
             void triggerClaudeAccountUsageRefresh();
@@ -3876,7 +3925,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // 自定义供应商的发现结果 additions-only 持久化进配置（重启后仍在）;内置供应商走
         // 内存 augment（静态目录 first-wins）。任何一步失败都只降级为纯静态,不影响登录结果。
         try {
-          const fetched = new Map<string, { id: string; name: string }[] | null>();
+          const fetched = new Map<
+            string,
+            { id: string; name: string; contextWindow?: number }[] | null
+          >();
           let customChanged = false;
           for (const agent of provider.agents) {
             if (!isCurrent()) break;
@@ -3908,7 +3960,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 models.map((m) => ({
                   id: m.id,
                   name: m.name,
-                  contextWindow: 200_000,
+                  // 端点上报的窗口值优先,缺省才落 200K 保守默认(review P1):
+                  // 之前无条件写死 200K,发现的 1M 模型仍会显示并按 200K 压缩。
+                  contextWindow: m.contextWindow ?? 200_000,
+                  // 只有端点真给了才算已核实,可以拿去收敛运行期上报窗口;落 200K
+                  // 兜底的不标记 —— 否则 resolveVerifiedContextWindow 会拒收缺失
+                  // 标记的条目,inflate 的运行期值压不下来(review P1)。
+                  ...(m.contextWindow !== undefined ? { contextWindowVerified: true } : {}),
                   efforts: [],
                   defaultEffort: null,
                   group: `custom:${providerId}`,
@@ -5858,6 +5916,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       getGhostName: getInstalledGhostName,
       getDraftDefaults: getWorkerDefaultsFromNewMaker,
       normalizeWorkingDir: (dir) => normalizeWorkingDirForStorage(dir),
+      isUserPickedDir: isGhostPickedDir,
       isSessionBusy: isSessionInTurn,
       dispatch: async ({ targetSessionId, message }) => {
         const r = await sendToSessionInternal({ targetSessionId, message });

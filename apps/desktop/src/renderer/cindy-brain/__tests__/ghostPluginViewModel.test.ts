@@ -54,6 +54,7 @@ function installed(overrides: Partial<InstalledGhost> = {}): InstalledGhost {
     manifest: manifest(),
     dir: '/tmp/cindy-brain/xd-mivo',
     enabled: true,
+    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
     ...overrides,
   };
 }
@@ -101,6 +102,7 @@ describe('ghostPluginViewModel', () => {
         version: '1',
         enabled: true,
         canUse: true,
+        approvalState: 'approved',
       },
       {
         id: 'lizi-mivo',
@@ -109,6 +111,7 @@ describe('ghostPluginViewModel', () => {
         version: '1',
         enabled: true,
         canUse: true,
+        approvalState: 'approved',
       },
       {
         id: 'slack',
@@ -117,6 +120,7 @@ describe('ghostPluginViewModel', () => {
         version: '1',
         enabled: true,
         canUse: true,
+        approvalState: 'approved',
       },
     ] satisfies GhostPluginListItem[];
 
@@ -210,6 +214,16 @@ describe('ghostPluginViewModel', () => {
     expect(item).not.toHaveProperty('usageCount');
     expect(item).not.toHaveProperty('certified');
     expect(item).not.toHaveProperty('whenToUse');
+  });
+
+  it('carries the Host approval state so the list can explain an unrunnable install', () => {
+    expect(toGhostPluginListItem(installed()).approvalState).toBe('approved');
+    expect(
+      toGhostPluginListItem(installed({ approval: { state: 'legacy-unapproved' } })).approvalState,
+    ).toBe('legacy-unapproved');
+    expect(
+      toGhostPluginDetail(installed({ approval: { state: 'invalid' } })).approvalState,
+    ).toBe('invalid');
   });
 
   it('derives detail permissions and runtime declarations from the manifest', () => {

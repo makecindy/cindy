@@ -26,6 +26,7 @@ function makeGhost(slots: string[]): InstalledGhost {
     },
     dir: '/tmp/fake-install-dir',
     enabled: true,
+    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
   };
 }
 

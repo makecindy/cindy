@@ -356,7 +356,11 @@ describe('messageMarkdown', () => {
           {
             key: 'tr:5:2',
             cells: [
-              [{ type: 'text', text: 'Downloads\\RJ406835.zip' }],
+              // 表格单元格同样过 inline 分词:`Downloads\RJ406835.zip` 是「带分隔符 +
+              // 扩展名」的相对路径形态,按裸路径识别成 link 候选(渲染层再经被控端
+              // stat 决定点亮 chip 还是保持纯文本)。本用例断言的是紧凑表格的分块,
+              // 路径形态的口径见 describe('bare file paths(正文纯文本形态)')。
+              [{ type: 'link', text: 'Downloads\\RJ406835.zip', url: 'Downloads\\RJ406835.zip', bare: true }],
               [{ type: 'text', text: '8.42GB' }],
               [{ type: 'text', text: '删除前再确认' }],
             ],
@@ -1078,6 +1082,27 @@ describe('local path links(文件 chip 链路的链接形态)', () => {
     ]);
   });
 
+  it('带可选 title 的本地链接完整成链,不被裸路径 matcher 拆成三段', () => {
+    // 回归:destination 原先卡在 `[^)\s]+`,带 title 的整段不匹配 → 退回字面文本,
+    // 而裸路径 matcher 会从括号里命中 `src/App.ts`,渲染成
+    // 「字面 `[源码](` + 可点路径 + 字面 ` "实现")`」(PR #1144 review 实捉)。
+    expect(parseMobileMarkdownInlines('见 [源码](src/App.ts "实现") 的实现')).toEqual([
+      { type: 'text', text: '见 ' },
+      { type: 'link', text: '源码', url: 'src/App.ts' },
+      { type: 'text', text: ' 的实现' },
+    ]);
+    // 单引号 title、括号 title、尖括号包裹含空格路径,同图片侧一套口径。
+    expect(parseMobileMarkdownInlines("[配置](src/a.json '说明')")).toEqual([
+      { type: 'link', text: '配置', url: 'src/a.json' },
+    ]);
+    expect(parseMobileMarkdownInlines('[配置](src/a.json (说明))')).toEqual([
+      { type: 'link', text: '配置', url: 'src/a.json' },
+    ]);
+    expect(parseMobileMarkdownInlines('[图](<docs/a b.png>)')).toEqual([
+      { type: 'link', text: '图', url: 'docs/a b.png' },
+    ]);
+  });
+
   it('非路径形状的 [x](y) 保持字面文本', () => {
     expect(parseMobileMarkdownInlines('数组 [1](2) 形态')).toEqual([
       { type: 'text', text: '数组 [1](2) 形态' },
@@ -1087,6 +1112,198 @@ describe('local path links(文件 chip 链路的链接形态)', () => {
   it('![alt](/abs.png) 图片语法由本地图片能力接管,不被链接规则吞掉', () => {
     expect(parseMobileMarkdownInlines('![图](/Users/me/a.png)')).toEqual([
       { type: 'image', alt: '图', url: '/Users/me/a.png' },
+    ]);
+  });
+});
+
+describe('bare file paths(正文纯文本形态)', () => {
+  // 与桌面 remarkLocalPathLinks 补齐的同一个入口:正文里裸写的路径切成 link inline,
+  // 与 `[label](path)` 形态共用 LinkPathChipSpan → 远端 stat → 点亮 chip / 纯文本。
+  // 词法口径(哪些形状算路径、CJK 已知限制)由 chatPathCandidate.test.ts 固化,
+  // 这里只钉「分词结果」与「不抢走既有包裹语法」。
+
+  it('句中裸路径切成 link,前后纯文本保留', () => {
+    expect(parseMobileMarkdownInlines('见 src/App.tsx 第 20 行')).toEqual([
+      { type: 'text', text: '见 ' },
+      { type: 'link', text: 'src/App.tsx', url: 'src/App.tsx', bare: true },
+      { type: 'text', text: ' 第 20 行' },
+    ]);
+  });
+
+  it('绝对路径 / 行号后缀 / 一段多条', () => {
+    expect(parseMobileMarkdownInlines('图在 /Users/me/out/hero.png')).toEqual([
+      { type: 'text', text: '图在 ' },
+      { type: 'link', text: '/Users/me/out/hero.png', url: '/Users/me/out/hero.png', bare: true },
+    ]);
+    expect(parseMobileMarkdownInlines('见 src/App.tsx:42 那行')).toEqual([
+      { type: 'text', text: '见 ' },
+      { type: 'link', text: 'src/App.tsx:42', url: 'src/App.tsx:42', bare: true },
+      { type: 'text', text: ' 那行' },
+    ]);
+    expect(parseMobileMarkdownInlines('对比 a/b.ts 和 c/d.ts')).toEqual([
+      { type: 'text', text: '对比 ' },
+      { type: 'link', text: 'a/b.ts', url: 'a/b.ts', bare: true },
+      { type: 'text', text: ' 和 ' },
+      { type: 'link', text: 'c/d.ts', url: 'c/d.ts', bare: true },
+    ]);
+  });
+
+  it('裸文件名不识别(严于 inline code:反引号是作者的显式格式信号)', () => {
+    expect(parseMobileMarkdownInlines('改一下 package.json 配置')).toEqual([
+      { type: 'text', text: '改一下 package.json 配置' },
+    ]);
+    expect(parseMobileMarkdownInlines('改一下 `package.json` 配置')).toEqual([
+      { type: 'text', text: '改一下 ' },
+      { type: 'code', text: 'package.json' },
+      { type: 'text', text: ' 配置' },
+    ]);
+  });
+
+  // ── 不抢走既有包裹语法(index 升序排序天然保证,这里把它钉住) ──
+
+  it('inline code 里的路径仍归 code,不被裸路径抢走', () => {
+    expect(parseMobileMarkdownInlines('见 `src/App.tsx` 那个')).toEqual([
+      { type: 'text', text: '见 ' },
+      { type: 'code', text: 'src/App.tsx' },
+      { type: 'text', text: ' 那个' },
+    ]);
+  });
+
+  it('markdown 链接 / 图片形态不被裸路径抢走(标签里含路径也不拆)', () => {
+    expect(parseMobileMarkdownInlines('[src/App.tsx](/abs/src/App.tsx)')).toEqual([
+      { type: 'link', text: 'src/App.tsx', url: '/abs/src/App.tsx' },
+    ]);
+    expect(parseMobileMarkdownInlines('![图](/Users/me/a.png)')).toEqual([
+      { type: 'image', alt: '图', url: '/Users/me/a.png' },
+    ]);
+  });
+
+  it('裸 URL 不被切出内部路径段', () => {
+    expect(parseMobileMarkdownInlines('图在 https://x.com/a/b.png 这里')).toEqual([
+      { type: 'text', text: '图在 ' },
+      { type: 'link', text: 'https://x.com/a/b.png', url: 'https://x.com/a/b.png' },
+      { type: 'text', text: ' 这里' },
+    ]);
+  });
+
+  it('未闭合反引号不构成 code span,裸路径照常识别(与桌面 remark 同口径)', () => {
+    // 流式中途的常见中间态;闭合后下一轮重解析自然回到 code 形态。
+    expect(parseMobileMarkdownInlines('见 `src/App.tsx 还没闭合')).toEqual([
+      { type: 'text', text: '见 `' },
+      { type: 'link', text: 'src/App.tsx', url: 'src/App.tsx', bare: true },
+      { type: 'text', text: ' 还没闭合' },
+    ]);
+  });
+
+  it('HTML 注释里的裸路径不识别(桌面侧注释是 html 节点、插件看不到)', () => {
+    expect(parseMobileMarkdownInlines('<!-- 见 src/App.tsx -->')).toEqual([
+      { type: 'text', text: '<!-- 见 src/App.tsx -->' },
+    ]);
+    // 注释外的照常识别,注释内的压制。
+    expect(parseMobileMarkdownInlines('<!-- a/b.ts --> 但 c/d.ts 要改')).toEqual([
+      { type: 'text', text: '<!-- a/b.ts --> 但 ' },
+      { type: 'link', text: 'c/d.ts', url: 'c/d.ts', bare: true },
+      { type: 'text', text: ' 要改' },
+    ]);
+  });
+
+  it('跨块注释状态同样压制(段起点仍在上一块开启的注释里)', () => {
+    expect(parseMobileMarkdownInlines('见 src/App.tsx --> 之后 c/d.ts', true)).toEqual([
+      { type: 'text', text: '见 src/App.tsx --> 之后 ' },
+      { type: 'link', text: 'c/d.ts', url: 'c/d.ts', bare: true },
+    ]);
+  });
+
+  it('标签标记内部的路径不识别(属性值命中会拆坏标签结构)', () => {
+    // `<span title="src/App.tsx">x</span>` 若命中会被拆成
+    // `<span title="` + 链接 + `">x</span>` —— 那是在破坏标签,不是给正文加链接
+    // (PR #1144 review 实捉)。
+    expect(parseMobileMarkdownInlines('<span title="src/App.tsx">x</span>')).toEqual([
+      { type: 'text', text: '<span title="src/App.tsx">x</span>' },
+    ]);
+    expect(parseMobileMarkdownInlines('<img src="docs/a.png" alt="x">')).toEqual([
+      { type: 'text', text: '<img src="docs/a.png" alt="x">' },
+    ]);
+  });
+
+  it('属性值里合法的 `>` 不截断标签区间(守卫的覆盖面要等于它声称的范围)', () => {
+    // 带引号的属性值里出现 `>` 完全合法。按 `[^<>]*` 扫会在属性内的 `>` 提前收尾,
+    // 后面的 src/App.tsx 重新暴露给裸路径 matcher,标签被拆成三段 —— 守卫在它自称
+    // 保护的一部分属性值上失效(PR #1144 review 实捉)。
+    expect(parseMobileMarkdownInlines('<span title="a > src/App.tsx">x</span>')).toEqual([
+      { type: 'text', text: '<span title="a > src/App.tsx">x</span>' },
+    ]);
+    // 单引号同理;同一标签内混用两种引号也要整段吃掉。
+    expect(parseMobileMarkdownInlines("<img src=\"a.png\" alt='b > docs/c.png'>")).toEqual([
+      { type: 'text', text: "<img src=\"a.png\" alt='b > docs/c.png'>" },
+    ]);
+    // 未闭合引号已是坏 HTML:退化为「不成立标签区间」,与本守卫加入前一致,
+    // 不为它另造语义(这条同时钉住修法没有把区间贪心延伸到段尾)。
+    expect(parseMobileMarkdownInlines('<span title="x > src/App.tsx')).toEqual([
+      { type: 'text', text: '<span title="x > ' },
+      { type: 'link', text: 'src/App.tsx', url: 'src/App.tsx', bare: true },
+    ]);
+  });
+
+  it('元素内容里的路径照常识别(与既有 strong / code / 裸 URL matcher 同口径)', () => {
+    // 刻意**不**挡元素内容:实测既有 matcher 在字面 HTML 的内容里同样会解析
+    // (`<div>**加粗**</div>` → strong、`<div>https://x.com</div>` → link),
+    // 单独把裸路径排除反而造成本文件内部不一致。
+    expect(parseMobileMarkdownInlines('<div>src/App.tsx</div>')).toEqual([
+      { type: 'text', text: '<div>' },
+      { type: 'link', text: 'src/App.tsx', url: 'src/App.tsx', bare: true },
+      { type: 'text', text: '</div>' },
+    ]);
+    // 同段的既有行为作对照,证明口径一致而非特例。
+    expect(parseMobileMarkdownInlines('<div>**加粗**</div>')).toEqual([
+      { type: 'text', text: '<div>' },
+      { type: 'strong', text: '加粗' },
+      { type: 'text', text: '</div>' },
+    ]);
+  });
+
+  it('散文里的 `<` 不构成标签区间,不影响路径识别', () => {
+    expect(parseMobileMarkdownInlines('若 a < b 则看 src/App.tsx')).toEqual([
+      { type: 'text', text: '若 a < b 则看 ' },
+      { type: 'link', text: 'src/App.tsx', url: 'src/App.tsx', bare: true },
+    ]);
+  });
+
+  it('已知取舍:被强调包裹的路径不成 chip(手机 inline 模型扁平,不支持嵌套)', () => {
+    // 桌面 remark 能在 strong 的子 text 里继续 linkify;手机端 inline 无嵌套,
+    // 强调整段吃掉。属既有架构限制,本次不扩,先把现状钉住。
+    expect(parseMobileMarkdownInlines('**src/App.tsx**')).toEqual([
+      { type: 'strong', text: 'src/App.tsx' },
+    ]);
+  });
+
+  it('标题 / 列表项 / 引用 / 表格单元格都走同一条分词', () => {
+    expect(parseMobileMarkdown('## 见 src/a.ts')[0]).toMatchObject({
+      type: 'heading',
+      inlines: [
+        { type: 'text', text: '见 ' },
+        { type: 'link', text: 'src/a.ts', url: 'src/a.ts', bare: true },
+      ],
+    });
+    expect(parseMobileMarkdown('- 改 src/a.ts')[0]).toMatchObject({
+      type: 'list_item',
+      inlines: [
+        { type: 'text', text: '改 ' },
+        { type: 'link', text: 'src/a.ts', url: 'src/a.ts', bare: true },
+      ],
+    });
+    expect(parseMobileMarkdown('> 见 src/a.ts')[0]).toMatchObject({
+      type: 'blockquote',
+      inlines: [
+        { type: 'text', text: '见 ' },
+        { type: 'link', text: 'src/a.ts', url: 'src/a.ts', bare: true },
+      ],
+    });
+  });
+
+  it('代码围栏内是字面代码,不进 inline 分词', () => {
+    expect(parseMobileMarkdown(['```', '见 src/App.tsx', '```'].join('\n'))).toEqual([
+      { type: 'code', key: 'code:0:0', language: undefined, text: '见 src/App.tsx' },
     ]);
   });
 });
@@ -1232,5 +1449,30 @@ describe('LaTeX math(块级 $$ 围栏与 inline $ 定界符)', () => {
     const blocks = parseMobileMarkdown('段落一\n$$\nx=1\n$$\n段落二');
     const groups = groupMobileMarkdownSelectableBlocks(blocks);
     expect(groups.map((group) => group.type)).toEqual(['text_run', 'single', 'text_run']);
+  });
+});
+
+describe('title 剥离不得灾难性回溯(ReDoS)', () => {
+  // 引号内的字符类若写成 `[^\n]`,它与 `\\.` 在反斜杠上重叠:一个 `\` 既能被前者当
+  // 1 个字符吃、也能作为后者的开头吃 2 个,一串反斜杠就有 Fib(n) 种切法;引号未闭合时
+  // 末尾的 `\2$` 必然失配,回溯把所有切法枚举一遍 → 时间指数增长(实测 42 个反斜杠
+  // 3575ms,每 +4 慢约 7 倍)。触发面是聊天正文里一条 `[x](a "\\…`,而本函数在渲染热
+  // 路径上,手机端会冻住整个 JS 线程(PR #1144 review 实捉)。
+  //
+  // 断言用时间上限:改前 46 个反斜杠约 25s,改后恒 0ms,1s 的上限有 20 倍以上余量,
+  // 不会因 CI 抖动误报。
+  it('未闭合引号 + 长反斜杠串:必须线性完成', () => {
+    const payload = `[x](a "${'\\'.repeat(46)}`;
+    const started = Date.now();
+    parseMobileMarkdownInlines(payload);
+    expect(Date.now() - started, 'title 剥离出现灾难性回溯').toBeLessThan(1000);
+  });
+
+  it('合法 title 仍被正确剥离(修法未改变功能)', () => {
+    expect(parseMobileMarkdownInlines('见 [说明](/abs/a.md "标题") 补充')).toEqual([
+      { type: 'text', text: '见 ' },
+      { type: 'link', text: '说明', url: '/abs/a.md' },
+      { type: 'text', text: ' 补充' },
+    ]);
   });
 });

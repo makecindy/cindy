@@ -355,6 +355,14 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'maker:scan-at-resources',
   // —— 插件列表(只读)——
   'maker:plugins:list',
+  // 单个插件的启停状态(只读)。与 maker:plugins:list 同类,差别只在它不跳过
+  // HOSTED_ELSEWHERE 插件、且按 id 精确查。准入三条:handler 只读 settings + 项目
+  // `.cindy/plugins.json`,不依赖 event.sender、无 UI/shell 副作用;插件启停真相在
+  // 被控端(控制端拿被控端的路径查自己本机只会读到自己的用户级开关,判定可能与被控端
+  // main 的 assertCollabProjectEnabled 相反 —— issue #1170 的「入口能点但走不完」)。
+  // 用途:device-link 项目的协同入口按被控端的项目级 collab 开关置灰。老被控端无此
+  // channel → CHANNEL_NOT_ALLOWED → 控制端 fail-closed 置灰并提示设备版本过旧。
+  'maker:plugins:get-state',
   // —— 路径解析(被控端解析语义正确;新建会话选目录用)——
   'fs:resolve-path',
   'fs:resolve-path-batch',

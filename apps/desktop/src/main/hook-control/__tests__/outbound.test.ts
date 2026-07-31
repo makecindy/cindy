@@ -33,8 +33,19 @@ describe('buildHookPromptNote', () => {
     expect(buildHookPromptNote('slack')).not.toContain('[Telegram 回复格式]');
   });
 
+  it('X 平台名正确且给出纯文本回帖格式约束, 不复用 Telegram/Slack 提示', () => {
+    const x = buildHookPromptNote('x');
+    expect(x).toContain('本会话来自 X。');
+    expect(x).toContain('[X 回复格式]');
+    expect(x).toContain('纯文本');
+    expect(x).not.toContain('[Telegram 回复格式]');
+    expect(x).not.toContain('本会话来自 Slack');
+    // 未接线前的回归写法: x 曾被三元兜底误标成 Slack。
+    expect(buildHookPromptNote('slack')).not.toContain('[X 回复格式]');
+  });
+
   it('两个平台都在开头声明「不是用户消息」,防止模型把渠道说明当成用户请求(2026-07 实踩)', () => {
-    for (const im of ['telegram', 'slack'] as const) {
+    for (const im of ['telegram', 'slack', 'x'] as const) {
       const note = buildHookPromptNote(im);
       // guard 必须在附件正文之前出现,才能在模型读到附件指令前先定性。
       expect(note).toContain('不是用户发来的消息');

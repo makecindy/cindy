@@ -308,11 +308,15 @@ function RootDivider({
   };
 
   /**
-   * 一侧能让出的份额余量 = min(账面余量, 实测余量, 账本地板余量),三条都不能越:
-   * - **账面余量** share × avail − 面板最小宽:在场份额口径下账面即画面,拖动
-   *   从第一像素就跟手;
-   * - **实测余量** 实测元素宽 − 面板最小宽:面板被 CSS 收成 0 宽(折叠态)或被
-   *   min-width 顶住时,账面会高估它能让出的地方,实测才是真相;
+   * 一侧能让出的份额余量 = min(可让像素余量, 账本地板余量),两条都不能越:
+   * - **可让像素余量** 该面板当前宽 − 面板最小宽。**量得到实测宽就以实测为准** ——
+   *   账面(share × avail)两头都会错:面板被 CSS 收成 0 宽(折叠态)或被 min-width
+   *   顶住时账面**高估**;弹性 chat 吸收了折叠邻居(如收起的右侧栏)让出的地方时,
+   *   那份空间记在邻居账上、画面却归了 chat,账面又**低估** chat 能让的地方。
+   *   (2026-07-31 Lizi 实测:右侧栏折叠成 0 宽时拖别的面板变大,chat 到一半就卡 ——
+   *   旧实现取 min(账面, 实测) 用了低估的账面,把 chat 真实可让空间压没了。)
+   *   量不到实测(jsdom / 元素未挂载)才回退,并对回退值保留 min(账面, 回退) 下限
+   *   ——历史行为,避免无实测时凭账面高估空拖一段。
    * - **地板余量** (树份额 − 0.05) / scale:transferSplitFraction 对让某一侧跌破
    *   0.05 的转移整单拒绝 —— 实时拖动必须同受此限,否则松手写树失败、整段位移
    *   作废,界面弹回原宽(2026-07-29 Lizi 实测右栏拖到最大就回弹的根因:树里
@@ -322,8 +326,10 @@ function RootDivider({
     if (!(avail > 0)) return 0; // 可用宽异常:不给余量,免得 0/0 产出 NaN 份额
     const minPx = paneMinPx(entry.node);
     const ledgerPx = entry.share * avail;
-    const realPx = measuredPanePx(entry.node) ?? fallbackPx ?? ledgerPx;
-    const pxRoom = Math.min(ledgerPx, realPx) - minPx;
+    const measured = measuredPanePx(entry.node);
+    // 实测可信直接用;量不到才回退账面/兜底,并保留 min 下限(与历史一致,不扰动)。
+    const basisPx = measured ?? Math.min(ledgerPx, fallbackPx ?? ledgerPx);
+    const pxRoom = basisPx - minPx;
     const floorRoom =
       shareScale > 0 ? (entry.fraction - MIN_SPLIT_CHILD_FRACTION) / shareScale : 0;
     return Math.max(0, Math.min(pxRoom / avail, floorRoom));

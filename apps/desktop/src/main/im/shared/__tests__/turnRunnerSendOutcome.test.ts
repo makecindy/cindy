@@ -57,6 +57,7 @@ const mocks = vi.hoisted(() => ({
   resolveXdtImageUrl: vi.fn(),
   generateAndPersistFbotTitle: vi.fn(),
   desktopSessionRows: vi.fn(),
+  materializeLocalMarkdownImages: vi.fn(),
 }));
 
 vi.mock('../../../logger', () => ({
@@ -96,6 +97,10 @@ vi.mock('../../../localDb/schema', () => ({
 
 vi.mock('../../../imageCacheStore', () => ({
   resolveSafe: mocks.resolveXdtImageUrl,
+}));
+
+vi.mock('../localMarkdownImages', () => ({
+  materializeLocalMarkdownImages: mocks.materializeLocalMarkdownImages,
 }));
 
 vi.mock('../sessionRepo', () => ({
@@ -501,6 +506,7 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     });
     mocks.takePendingInteractionsForSession.mockReturnValue([]);
     mocks.checkDestructiveToolCall.mockReturnValue({ destructive: false });
+    mocks.materializeLocalMarkdownImages.mockResolvedValue({ absPaths: [], text: '' });
   });
 
   afterEach(async () => {
@@ -1264,6 +1270,49 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
         text: 'complete text only',
         terminal: 'done',
         threadTs: undefined,
+      });
+    } finally {
+      fakeAdapter.output = previousOutput;
+    }
+  });
+
+  it('materializes local Markdown images before committing chunked-text output', async () => {
+    const previousOutput = fakeAdapter.output;
+    const commitFinal = vi.fn(async () => undefined);
+    fakeAdapter.output = {
+      kind: 'chunked-text',
+      im: mocks.feishuIm as unknown as ChannelIM,
+      commitFinal,
+    };
+    mocks.materializeLocalMarkdownImages.mockResolvedValue({
+      absPaths: ['C:\\cindy-media\\generated.png'],
+      text: '测试图片',
+    });
+    try {
+      const h = setupSession(async () => ({ accepted: true }));
+      const { turnPromise } = await startDefaultTurn();
+      await turnPromise;
+
+      h.emit({
+        type: 'text',
+        data: { text: '![测试图片](F:\\XDMaker\\generated.png)', isFinal: true },
+      });
+      h.emit({ type: 'done', data: {} });
+      await flushMicrotasks();
+
+      expect(mocks.materializeLocalMarkdownImages).toHaveBeenCalledWith({
+        text: '![测试图片](F:\\XDMaker\\generated.png)',
+        workingDir: 'F:\\XDMaker',
+        sessionId: 'feishu-session',
+        maxImages: 4,
+        existingAbsPaths: [],
+      });
+      expect(commitFinal).toHaveBeenCalledWith({
+        userId: 'ou_user',
+        text: '测试图片',
+        terminal: 'done',
+        threadTs: undefined,
+        mediaAbsPaths: ['C:\\cindy-media\\generated.png'],
       });
     } finally {
       fakeAdapter.output = previousOutput;

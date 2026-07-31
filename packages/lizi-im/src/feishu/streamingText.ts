@@ -24,7 +24,7 @@
  * `[name](xdt-file:///abs/path)`).
  */
 
-import { sendCardRaw, patchCardRaw, uploadImage, sendFile } from './outbound.js';
+import { sendCardRaw, patchCardRaw, uploadImage, sendFile, sendText } from './outbound.js';
 import { buildMarkdownCardV2, buildMixedMarkdownCardV2 } from './cards.js';
 import { getLog } from './moduleScope.js';
 import { messages as transportMessages } from './messages.js';
@@ -39,6 +39,40 @@ import {
 } from '../xdtRefs.js';
 
 const PATCH_THROTTLE_MS = 1500;
+/** Feishu caps serialized card request bodies at 30 KB. */
+export const FEISHU_CARD_REQUEST_MAX_BYTES = 30 * 1024;
+
+function cardRequestBytes(card: unknown): number {
+  return Buffer.byteLength(JSON.stringify({ content: JSON.stringify(card) }), 'utf8');
+}
+
+function fitCardToLimit(
+  text: string,
+  fullCard: unknown,
+  buildCard: (visibleText: string) => unknown,
+): unknown {
+  if (cardRequestBytes(fullCard) <= FEISHU_CARD_REQUEST_MAX_BYTES) return fullCard;
+
+  const chars = Array.from(text);
+  const suffix = transportMessages.streaming.replyTruncated;
+  let low = 0;
+  let high = chars.length;
+  let fitted = buildCard(suffix);
+  if (cardRequestBytes(fitted) > FEISHU_CARD_REQUEST_MAX_BYTES) {
+    return buildMarkdownCardV2(transportMessages.streaming.deliveryFailed);
+  }
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const candidate = buildCard(`${chars.slice(0, middle).join('')}${suffix}`);
+    if (cardRequestBytes(candidate) <= FEISHU_CARD_REQUEST_MAX_BYTES) {
+      fitted = candidate;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return fitted;
+}
 
 class FeishuStreamingTextHandle implements StreamingTextHandle {
   readonly messageId: string;
@@ -272,11 +306,30 @@ class FeishuStreamingTextHandle implements StreamingTextHandle {
       } else {
         card = buildMarkdownCardV2(cardTextTrimmed.length > 0 ? cardText : transportMessages.streaming.emptyReply);
       }
+      card = fitCardToLimit(cardText, card, (visibleText) =>
+        hasAnyImage
+          ? buildMixedMarkdownCardV2(visibleText, imageMap, extraImageKeys)
+          : buildMarkdownCardV2(visibleText),
+      );
       await patchCardRaw(this.messageId, card);
       this.flushed = this.buffer;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.warn(`[feishu/streamingText] finalize patch failed: ${msg}`);
+      const notice = transportMessages.streaming.deliveryFailed;
+      try {
+        await patchCardRaw(this.messageId, buildMarkdownCardV2(notice));
+      } catch (fallbackErr) {
+        const fallbackMsg =
+          fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+        log.warn(`[feishu/streamingText] fallback patch failed: ${fallbackMsg}`);
+        try {
+          await sendText(this.openId, notice);
+        } catch (textErr) {
+          const textMsg = textErr instanceof Error ? textErr.message : String(textErr);
+          log.error(`[feishu/streamingText] fallback text failed: ${textMsg}`);
+        }
+      }
     }
   }
 }

@@ -10,6 +10,7 @@ import { validateGhostManifest, type GhostManifest } from '../../../shared/ghost
 import {
   evaluateGhostSetup,
   evaluateGhostSetupAssessment,
+  foldRejectedSecretsIntoAssessment,
   GhostSetupAssessmentError,
   handleGhostSetupStatusRequest,
   type GhostSetupProbes,
@@ -714,5 +715,104 @@ describe('handleGhostSetupStatusRequest · IPC handler 主体(规则 14)', () =>
           }),
       }),
     ).toThrow('vault io failed');
+  });
+});
+
+/**
+ * 运行期凭证被拒折算(dispatch 闸门口径)。
+ *
+ * cindy-brain/index.ts 的 getGhostSetupAssessment 是 ghost_call 是否真派发的
+ * 运行时权威判定,但它依赖 Electron 进程状态、单测里导不进来;折算逻辑收成
+ * 本模块的共享纯函数后,由这一组用例直接盯住闸门语义。
+ */
+describe('foldRejectedSecretsIntoAssessment · 被拒 secret 折算', () => {
+  const twoKeyManifest = () =>
+    manifest({
+      slots: ['tool', 'network'],
+      tools: [{ name: 'search', description: '搜' }],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['api.search.example'],
+        secrets: [
+          { key: 'brave_api_key', label: 'Brave API Key', inject: INJECT },
+          { key: 'tavily_api_key', label: 'Tavily API Key', inject: INJECT },
+        ],
+      },
+    });
+
+  /** 与 getGhostSetupAssessment 同款:strict 判定 + 真实 revision。 */
+  const assess = (saved: (key: string) => boolean) =>
+    evaluateGhostSetupAssessment(twoKeyManifest(), probes({ secretSaved: saved }), {
+      revision: 7,
+      strict: true,
+    });
+
+  const stateOf = (assessment: ReturnType<typeof assess>, ref: string) =>
+    assessment.groups.flatMap((group) => group.items).find((item) => item.ref === ref)?.state;
+
+  it('空台账原样返回(不复制、不重算)', () => {
+    const assessment = assess(() => true);
+    expect(foldRejectedSecretsIntoAssessment(assessment, [])).toBe(assessment);
+    expect(foldRejectedSecretsIntoAssessment(assessment, undefined)).toBe(assessment);
+  });
+
+  it('部分被拒:同组另一 key 仍 satisfied → 保持 ready(闸门照常放行)', () => {
+    const folded = foldRejectedSecretsIntoAssessment(assess(() => true), ['tavily_api_key']);
+    expect(folded.state).toBe('ready');
+    expect(stateOf(folded, 'secret:tavily_api_key')).toBe('expired');
+    expect(stateOf(folded, 'secret:brave_api_key')).toBe('satisfied');
+    expect(folded.revision).toBe(7); // revision 不被折算改写
+  });
+
+  it('整组被拒 → state 降 required(闸门阻断派发)', () => {
+    const folded = foldRejectedSecretsIntoAssessment(assess(() => true), [
+      'brave_api_key',
+      'tavily_api_key',
+    ]);
+    expect(folded.state).toBe('required');
+    expect(stateOf(folded, 'secret:brave_api_key')).toBe('expired');
+    expect(stateOf(folded, 'secret:tavily_api_key')).toBe('expired');
+  });
+
+  it('唯一已配置的 key 被拒 → required(另一 key 本就 missing,不被误标 expired)', () => {
+    const folded = foldRejectedSecretsIntoAssessment(
+      assess((key) => key === 'tavily_api_key'),
+      ['tavily_api_key', 'brave_api_key'],
+    );
+    expect(folded.state).toBe('required');
+    expect(stateOf(folded, 'secret:tavily_api_key')).toBe('expired');
+    // 未保存的项保持 missing:折算只降级「已满足却被服务端拒了」的项
+    expect(stateOf(folded, 'secret:brave_api_key')).toBe('missing');
+  });
+
+  it('台账里记的是裸 key,与 assessment 的 `secret:` 前缀 ref 对得上', () => {
+    // 反例:把带前缀的 ref 当台账 key 传进来时不该匹配到任何项
+    const folded = foldRejectedSecretsIntoAssessment(assess(() => true), [
+      'secret:tavily_api_key',
+    ]);
+    expect(folded.state).toBe('ready');
+    expect(stateOf(folded, 'secret:tavily_api_key')).toBe('satisfied');
+  });
+
+  it('非 secret 类 requirement 不受影响(同名 kv key 不被折算)', () => {
+    const m = manifest({
+      slots: ['tool'],
+      tools: [{ name: 'go', description: '走' }],
+      settingsHtml: 'settings.html',
+      setup: {
+        requires: [{ anyOf: [{ kv: 'workspace', label: '工作区' }] }],
+      },
+    });
+    const assessment = evaluateGhostSetupAssessment(
+      m,
+      probes({ kvValue: () => 'acme' }),
+      { revision: 1, strict: true },
+    );
+    expect(assessment.state).toBe('ready');
+    const folded = foldRejectedSecretsIntoAssessment(assessment, ['workspace']);
+    expect(folded.state).toBe('ready');
+    expect(folded.groups.flatMap((group) => group.items).map((item) => item.state)).toEqual([
+      'satisfied',
+    ]);
   });
 });

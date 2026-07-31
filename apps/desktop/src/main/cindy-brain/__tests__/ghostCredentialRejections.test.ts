@@ -4,7 +4,11 @@ import path from 'node:path';
 
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { createGhostCredentialRejectionsStore } from '../ghostCredentialRejections';
+import {
+  applyGhostSetupChangeToRejections,
+  createGhostCredentialRejectionsStore,
+  ghostConnectionRejectionRef,
+} from '../ghostCredentialRejections';
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-cred-rej-'));
 const filePath = path.join(tmpDir, 'ledger.json');
@@ -66,6 +70,97 @@ describe('ghostCredentialRejections 台账', () => {
     const returnedKeys = store.rejectedKeys('web-search') as string[];
     returnedKeys.push('injected_key');
 
+    expect(store.rejectedKeys('web-search')).toEqual(['brave_api_key']);
+  });
+});
+
+describe('applyGhostSetupChangeToRejections 兜底清账', () => {
+  it('secret 事件按 ref 精确清账,不动同插件其它被拒 key', () => {
+    const store = createGhostCredentialRejectionsStore({ filePath });
+    store.markRejected('web-search', 'brave_api_key');
+    store.markRejected('web-search', 'tavily_api_key');
+
+    expect(
+      applyGhostSetupChangeToRejections(store, {
+        ghostId: 'web-search',
+        source: 'secret',
+        ref: 'brave_api_key',
+      }),
+    ).toBe(true);
+    expect(store.rejectedKeys('web-search')).toEqual(['tavily_api_key']);
+
+    // 幂等:同一事件重放不再产生变化
+    expect(
+      applyGhostSetupChangeToRejections(store, {
+        ghostId: 'web-search',
+        source: 'secret',
+        ref: 'brave_api_key',
+      }),
+    ).toBe(false);
+  });
+
+  it('connection 事件带 connectionId 时按连接 identity 清账', () => {
+    const store = createGhostCredentialRejectionsStore({ filePath });
+    store.markRejected('cindy-gitlab', ghostConnectionRejectionRef('gitlab', 'conn-1'));
+    store.markRejected('cindy-gitlab', ghostConnectionRejectionRef('gitlab', 'conn-2'));
+
+    expect(
+      applyGhostSetupChangeToRejections(store, {
+        ghostId: 'cindy-gitlab',
+        source: 'connection',
+        ref: 'gitlab:conn-1',
+      }),
+    ).toBe(true);
+    expect(store.rejectedKeys('cindy-gitlab')).toEqual([
+      ghostConnectionRejectionRef('gitlab', 'conn-2'),
+    ]);
+  });
+
+  it('connection 事件只带 declKey 时不清账(定位不到具体连接)', () => {
+    const store = createGhostCredentialRejectionsStore({ filePath });
+    const ref = ghostConnectionRejectionRef('gitlab', 'conn-1');
+    store.markRejected('cindy-gitlab', ref);
+
+    expect(
+      applyGhostSetupChangeToRejections(store, {
+        ghostId: 'cindy-gitlab',
+        source: 'connection',
+        ref: 'gitlab',
+      }),
+    ).toBe(false);
+    expect(store.rejectedKeys('cindy-gitlab')).toEqual([ref]);
+  });
+
+  it('emitAll 的空 ghostId 唤醒信号不触碰任何台账', () => {
+    const store = createGhostCredentialRejectionsStore({ filePath });
+    store.markRejected('', 'stray_key'); // 就算历史上存在空 id 的账也不该被它清
+    store.markRejected('web-search', 'brave_api_key');
+
+    expect(
+      applyGhostSetupChangeToRejections(store, {
+        ghostId: '',
+        source: 'secret',
+        ref: 'brave_api_key',
+      }),
+    ).toBe(false);
+    expect(store.rejectedKeys('')).toEqual(['stray_key']);
+    expect(store.rejectedKeys('web-search')).toEqual(['brave_api_key']);
+  });
+
+  it('无 ref 或非凭证类来源不清账', () => {
+    const store = createGhostCredentialRejectionsStore({ filePath });
+    store.markRejected('web-search', 'brave_api_key');
+
+    expect(
+      applyGhostSetupChangeToRejections(store, { ghostId: 'web-search', source: 'secret' }),
+    ).toBe(false);
+    expect(
+      applyGhostSetupChangeToRejections(store, {
+        ghostId: 'web-search',
+        source: 'host_config',
+        ref: 'brave_api_key',
+      }),
+    ).toBe(false);
     expect(store.rejectedKeys('web-search')).toEqual(['brave_api_key']);
   });
 });

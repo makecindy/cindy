@@ -155,21 +155,26 @@ const DEVICE_LINK_CODE_MAP: Record<string, IpcErrorCode> = {
   VERSION_MISMATCH: 'DEVICE_LINK_VERSION_MISMATCH',
   NOT_CONNECTED: 'DEVICE_LINK_NOT_CONNECTED',
   LINK_NOT_OPEN: 'DEVICE_LINK_NOT_CONNECTED',
+  BACKPRESSURE: 'DEVICE_LINK_NOT_CONNECTED',
 };
 
 /**
  * unsubscribe 失败后是否应**恢复引用重试**。判据是「失败后远端订阅是否仍存活」:
- *  - 仅当链路仍在、只是这一帧 unsubscribe 丢了/超时(INVOKE_TIMEOUT)→ 远端订阅还在 → 恢复,让
+ *  - 链路仍在但这一帧 unsubscribe 丢了/超时(INVOKE_TIMEOUT)，或本地背压在发送前拒绝
+ *    (BACKPRESSURE)→ 远端订阅还在 → 恢复,让
  *    后续 unsubscribe / 窗口销毁重试把它清掉。
  *  - 其它失败(NOT_CONNECTED / LINK_NOT_OPEN / DEVICE_OFFLINE 链路断;ACCESS_REVOKED / REMOTE_DISABLED
  *    被控端已 clearController 清掉本控制端订阅表;CHANNEL_NOT_ALLOWED 老被控端根本不支持该 channel)→
  *    远端无存活订阅可清 → **不恢复**:恢复只会留下永不释放的 phantom ref(阻断别窗口的真实退订 →
  *    被控端对已无 UI 订阅者的 topic 持续推送)。
  * 注:抛出的 DeviceLinkError 只覆盖链路/超时类码;ACCESS_REVOKED / REMOTE_DISABLED 等终态走的是
- * `!result.ok` 结果分支(那里一律不恢复),故本函数只需放行 INVOKE_TIMEOUT。
+ * `!result.ok` 结果分支(那里一律不恢复),故本函数只需放行发送状态不确定/未发送的两类错误。
  */
 function isRetryableUnsubscribeError(err: unknown): boolean {
-  return err instanceof DeviceLinkError && err.code === 'INVOKE_TIMEOUT';
+  return (
+    err instanceof DeviceLinkError
+    && (err.code === 'INVOKE_TIMEOUT' || err.code === 'BACKPRESSURE')
+  );
 }
 
 function rethrowDeviceLinkError(err: unknown): never {
@@ -607,7 +612,8 @@ export async function handleUnsubscribe(
   try {
     result = await deps.unsubscribe(deviceId, toUnsub);
   } catch (err) {
-    // 仅链路仍在、单帧丢失(INVOKE_TIMEOUT)才恢复引用重试;链路断等其它异常不恢复(见 isRetryableUnsubscribeError)。
+    // 链路仍在但单帧丢失(INVOKE_TIMEOUT)，或发送前被本地背压拒绝(BACKPRESSURE)时，
+    // 恢复引用等待重试；链路断开等其它异常不恢复(见 isRetryableUnsubscribeError)。
     if (isRetryableUnsubscribeError(err)) recordSubscribe(windowId, deviceId, toUnsub);
     rethrowDeviceLinkError(err);
   }

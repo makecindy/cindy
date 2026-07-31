@@ -123,7 +123,7 @@
       "personalization": "Personalization",
       "chipMetrics": "Usage indicator",
       "memory": "Memory",
-      "subagentModels": "Subagent models",
+      "subagentModels": "Subagents",
       "compaction": "Context compaction",
       "terminalShell": "Default terminal shell",
       "linkOpen": "Link open behavior",
@@ -464,9 +464,9 @@
       "sessionDoneLabel": "Show desktop notification when a session finishes",
       "sessionDoneHint": "Only shown while the window is unfocused, to avoid foreground interruption.",
       "sessionDoneAria": "Toggle session-done desktop notifications",
-      "feishuLabel": "Send a FeiShu DM when a session finishes or needs reply",
-      "feishuHint": "Sends a private message via the linked FeiShu bot; only when the window is unfocused.",
-      "feishuDisabledHint": "First set up the bot in \"FeiShu Bot\" and DM it once to complete binding.",
+      "feishuLabel": "Send a Feishu / Lark DM when a session finishes or needs a reply",
+      "feishuHint": "Sends a private message via the linked Feishu or Lark bot; only when the window is unfocused.",
+      "feishuDisabledHint": "First set up the bot in \"Feishu / Lark Bot\" and DM it once to complete binding.",
       "feishuAria": "Toggle session-done FeiShu notifications"
     },
     "windowBehavior": {
@@ -1286,6 +1286,8 @@
           "models": "Models",
           "modelIdPlaceholder": "model-id",
           "modelNamePlaceholder": "Display name",
+          "modelContextWindowPlaceholder": "Context (tokens)",
+          "modelContextWindowTitle": "Context window in tokens. Leave empty for the conservative 200K default; affects the window display and compaction threshold.",
           "addModel": "Add model",
           "headers": "Headers (optional)",
           "headerNamePlaceholder": "Header-Name",
@@ -1311,6 +1313,7 @@
           "nameRequired": "Display name is required",
           "runtimeRequired": "Configure at least one runtime (its base URL and models)",
           "baseUrlInvalid": "Base URL must be a valid http(s) address",
+          "contextWindowInvalid": "Context window must be a valid positive integer (separators allowed between digit groups)",
           "requestPathInvalid": "Begin the exact request path with a single /. Do not use fragments or . and .. path segments; percent-encode spaces and unsafe characters.",
           "modelRequired": "Add at least one model",
           "oauthInvalid": "Incomplete OAuth config: all fields are required and both endpoints must be secure https URLs"
@@ -1578,9 +1581,15 @@
       "saveFailed": "Failed to save Git safety setting"
     },
     "feishuBot": {
-      "title": "Feishu Bot",
-      "description": "Connect to {{appName}} via Feishu Bot to work anywhere, anytime.",
-      "statusAria": "FeiShu Bot status: {{status}}",
+      "title": "Feishu / Lark Bot",
+      "description": "Connect to {{appName}} via a Feishu or Lark bot to work anywhere, anytime.",
+      "statusAria": "Feishu / Lark Bot status: {{status}}",
+      "serviceLabel": "Service",
+      "serviceAria": "Select an IM service",
+      "services": {
+        "feishu": "Feishu",
+        "lark": "Lark"
+      },
       "status": {
         "needsConfig": "Needs configuration",
         "connecting": "Connecting…",
@@ -1590,16 +1599,17 @@
         "error": "Connection failed"
       },
       "connected": {
-        "heading": "Feishu Bot connected",
+        "heading": "{{service}} Bot connected",
         "note": "Bound to the current scanning user; private messages from other people are silently ignored.",
+        "serviceLabel": "Service",
         "appIdLabel": "App ID",
         "ownerLabel": "Owner",
         "ownerWaiting": "Waiting for first private-message bind",
-        "reconnect": "Reconnect Feishu Bot",
+        "reconnect": "Reconnect {{service}} Bot",
         "clear": "Unbind"
       },
       "saved": {
-        "heading": "Feishu Bot is bound",
+        "heading": "{{service}} Bot is bound",
         "connectingNote": "Bot credentials are saved. Establishing the connection now.",
         "reconnectingNote": "Bot credentials are saved. Restoring the connection now.",
         "conflictNote": "Bot credentials are saved, but this App ID is currently in use on another device.",
@@ -1612,11 +1622,11 @@
       "appSecretPlaceholder": "sec_xxxxxxxxxxxxxxxxxx",
       "showSecret": "Show secret",
       "hideSecret": "Hide secret",
-      "createLink": "Click here to create ↗",
+      "createLink": "Create on {{service}} Open Platform ↗",
       "createLinkSuffix": ", then fill in the credentials",
-      "clearAria": "Unbind Feishu Bot",
+      "clearAria": "Unbind IM bot",
       "clearConfirm": {
-        "title": "Unbind Feishu Bot?",
+        "title": "Unbind IM bot?",
         "description": "Unbinding will close the WebSocket connection and remove the locally stored App ID / App Secret / owner openId. To re-enable, you'll need to recreate or re-enter the credentials.",
         "confirm": "Unbind",
         "cancel": "Cancel"
@@ -1909,6 +1919,49 @@
         }
       }
     },
+    "dingtalkBot": {
+      "title": "DingTalk Bot",
+      "description": "Connect your own DingTalk bot and use {{appName}} in DMs and group chats through Stream mode.",
+      "status": {
+        "needsConfig": "Needs setup",
+        "connecting": "Connecting…",
+        "connected": "Connected",
+        "error": "Connection failed"
+      },
+      "connected": {
+        "heading": "DingTalk bot connected",
+        "ownerBound": "The owner is linked. DM the bot or @mention it in a group to begin.",
+        "waitingOwner": "DM the bot first. The first direct sender is securely linked as the owner.",
+        "ownerLabel": "Owner user ID",
+        "notBound": "Waiting for first DM"
+      },
+      "appKeyLabel": "Client ID",
+      "appKeyPlaceholder": "Paste the bot application's Client ID",
+      "appSecretLabel": "Client Secret",
+      "appSecretPlaceholder": "Paste the bot application's Client Secret",
+      "appSecretSavedPlaceholder": "Saved securely; leave blank to reconnect",
+      "showSecret": "Show Client Secret",
+      "hideSecret": "Hide Client Secret",
+      "formHint": "Credentials are encrypted locally. The first DM links the owner after connection.",
+      "errorHint": "Connection failed. Check the credentials, Stream mode, and your network, then retry.",
+      "connect": "Connect",
+      "reconnect": "Reconnect",
+      "disconnect": "Unbind",
+      "disconnectConfirm": {
+        "title": "Unbind DingTalk bot?",
+        "description": "This disconnects the bot and removes the locally saved Client ID, Client Secret, and owner link.",
+        "confirm": "Unbind",
+        "cancel": "Cancel"
+      },
+      "guide": {
+        "title": "Setup guide",
+        "step1": "Create an internal app in the DingTalk developer portal and add bot capability.",
+        "step2": "Enable Stream mode for the bot and publish an app version.",
+        "step3": "Copy the Client ID and Client Secret from App Credentials and enter them above.",
+        "step4": "After connecting, DM the bot once to link the owner. @mention it in group chats.",
+        "openPortal": "Open DingTalk developer portal ↗"
+      }
+    },
     "logout": {
       "button": "Log out",
       "aria": "Log out"
@@ -1969,12 +2022,30 @@
       }
     },
     "subagentModels": {
-      "title": "Subagent models",
-      "description": "Choose the default model used for sub tasks in Claude Code and Codex. The setting applies per entry, not per model.",
+      "title": "Subagents",
+      "description": "Choose the default model used for sub tasks in Claude Code and Codex, and set guardrails for Codex subagents. The setting applies per entry, not per model.",
       "unspecified": "Not specified (use default behavior)",
-      "codexUnavailable": "Safe overrides are unavailable in this Codex version",
-      "hint": "Available models depend on your connected model sources. Leave it unspecified to use the agent's normal default. Claude Code changes apply to new sessions; the current Codex version does not support subagent model overrides.",
-      "saveFailed": "Failed to save subagent model"
+      "hint": "Available models depend on your connected model sources. Leave it unspecified to use the agent's normal default. Claude Code changes apply to new sessions; Codex changes restart the local Codex runtime right away when idle, or after running sessions finish their current task.",
+      "codexV2ModelHint": "The subagent default must be a model from Codex's own catalog; models outside it (such as third-party models connected through the compatibility bridge) are rejected by Codex. Sol / Terra (multi-agent V2) further only accept V2 catalog models (currently gpt-5.6-sol and gpt-5.6-terra); legacy multi-agent (V1) has no V2 restriction.",
+      "saveFailed": "Failed to save subagent settings",
+      "guardrails": {
+        "title": "Codex subagent guardrails",
+        "enableHint": "Allow Codex to spawn one-off subagents while working. Turning this off applies to both legacy multi-agent (V1) and Sol / Terra (V2).",
+        "enableAria": "Allow Codex subagents",
+        "concurrencyLabel": "Concurrent subagent limit",
+        "concurrencyHint": "Maximum number of subagents running at the same time. Each subagent consumes model quota; Codex warns when concurrency reaches 8 at Ultra reasoning.",
+        "concurrencyFollowDefault": "Follow Codex default (6 for legacy V1, 3 for Sol / Terra)",
+        "concurrencyAria": "Adjust the Codex concurrent subagent limit",
+        "concurrencyCustomAria": "Customize the Codex concurrent subagent limit",
+        "nestedLabel": "Allow subagents to spawn subagents",
+        "nestedHint": "Only applies to legacy multi-agent (V1); Sol / Terra (V2) ignore this setting.",
+        "nestedAria": "Allow subagents to spawn subagents",
+        "localOnlyHint": "These guardrails only apply to Codex running on this machine; Codex over SSH remotes is not affected."
+      },
+      "toast": {
+        "saved": "Subagent settings saved",
+        "deferredSuffix": " — running Codex sessions will apply this after their current task finishes"
+      }
     },
     "compaction": {
       "title": "Context compaction",
@@ -2406,6 +2477,11 @@
         "slackDescription": "Bind Slack workspaces and hand tasks to Cindy from Slack.",
         "slackDisabledHint": "Turn on the switch to start Slack authorization; once bound you can dispatch tasks from Slack.",
         "slackBoundHint": "Binding complete. Turning the switch off unbinds this device; turning it back on requires authorizing again.",
+        "lifecycleAnnouncement": {
+          "label": "Online/Offline Notifications",
+          "cellLabel": "Message Notifications",
+          "hint": "Have the Slack Bot send a message when this device goes online or offline"
+        },
         "toggleAria": "Toggle the Slack connection",
         "installApp": "Install Slack App",
         "status": {
@@ -2481,7 +2557,7 @@
           "disabledHint": "Turn on the switch, then follow the prompts in Telegram to link your account.",
           "toggleAria": "Toggle the Telegram connection",
           "connect": "Link Telegram",
-          "openTelegram": "Open Telegram",
+          "openApp": "Open Telegram",
           "cancel": "Cancel Linking",
           "retry": "Retry Linking",
           "openBot": "Open Bot",
@@ -2503,6 +2579,33 @@
             "revoked": "Link removed",
             "superseded": "Linked to another device"
           }
+        },
+        "x": {
+          "description": "Link your X (Twitter) account and dispatch tasks by mentioning the Cindy bot on X.",
+          "disabledHint": "Turn on the switch, then follow the prompts to authorize your X account.",
+          "toggleAria": "Toggle X connection",
+          "connect": "Link X",
+          "openApp": "Open X to authorize",
+          "cancel": "Cancel linking",
+          "retry": "Retry linking",
+          "openBot": "View bot on X",
+          "unlink": "Unlink X",
+          "unlinkConfirmTitle": "Unlink X?",
+          "unlinkConfirmDescription": "After unlinking, X can no longer dispatch tasks to this device; local projects and other channels are unaffected.",
+          "status": {
+            "checking": "Checking server support…",
+            "unavailable": "Not yet available on this server",
+            "disabled": "Disabled",
+            "none": "Not linked",
+            "pending": "Open X to authorize your account",
+            "awaiting_confirmation": "Confirm the authorization on X",
+            "confirmed": "{{user}} linked to {{bot}}",
+            "denied": "Authorization denied",
+            "expired": "Authorization link expired",
+            "failed": "Linking failed",
+            "revoked": "Unlinked",
+            "superseded": "Linked on another device"
+          }
         }
       },
       "summary": {
@@ -2521,7 +2624,7 @@
     "tina": {
       "chat": {
         "title": "Chat",
-        "description": "Plain conversations without any repository; select \"chat\" from Slack or Telegram, one session per conversation lane."
+        "description": "Plain conversations without any repository; select \"chat\" from Slack, Telegram, or X, one session per conversation lane."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -2530,6 +2633,7 @@
         "permissionLabel": "Permission mode",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
+        "providerX": "X",
         "requireConnected": "Editable once {{provider}} is connected (enable its switch above and wait for the connection).",
         "requireBinding": "Complete {{provider}} account linking first.",
         "serverUnsupported": "Server is too old or not responding; preferences cannot be loaded.",
@@ -2608,7 +2712,7 @@
       "tips": {
         "cindy": "Cindy is the official shared bot — no credentials needed. Connect Slack and just @Cindy to hand off tasks.",
         "personal": "Personal connections include WeChat scan authorization and your own Feishu / Discord / Telegram credentials. Each channel keeps independent new-conversation settings.",
-        "personalFeishuOnly": "Personal connections include WeChat scan authorization and your own Feishu credentials. Each channel keeps independent new-conversation settings."
+        "personalFeishuOnly": "Personal connections include WeChat scan authorization plus your own Feishu and DingTalk credentials. Each channel keeps independent new-conversation settings."
       },
       "defaults": {
         "title": "New Conversation Configuration",
@@ -2617,7 +2721,8 @@
           "slack": "New Slack threads use this Agent and model.",
           "discord": "New Discord conversations use this Agent and model. Send /new in an existing DM to apply it.",
           "wechat": "New WeChat conversations use this Agent, model, and permission mode. Send /new in an existing chat to apply them.",
-          "telegram": "New Telegram conversations use this Agent and model. Send /new in an existing conversation to apply it."
+          "telegram": "New Telegram conversations use this Agent and model. Send /new in an existing conversation to apply it.",
+          "dingtalk": "New DingTalk conversations use this Agent and model. Send /new in an existing conversation to apply it."
         },
         "agentLabel": "Agent",
         "modelLabel": "Model Configuration",
@@ -2716,6 +2821,42 @@
         "open-terminal": {
           "label": "Open terminal",
           "description": "Open a terminal in the right sidebar (focuses the existing one)"
+        },
+        "switch-session-1": {
+          "label": "Go to session 1",
+          "description": "Jump to the 1st visible session in the sidebar"
+        },
+        "switch-session-2": {
+          "label": "Go to session 2",
+          "description": "Jump to the 2nd visible session in the sidebar"
+        },
+        "switch-session-3": {
+          "label": "Go to session 3",
+          "description": "Jump to the 3rd visible session in the sidebar"
+        },
+        "switch-session-4": {
+          "label": "Go to session 4",
+          "description": "Jump to the 4th visible session in the sidebar"
+        },
+        "switch-session-5": {
+          "label": "Go to session 5",
+          "description": "Jump to the 5th visible session in the sidebar"
+        },
+        "switch-session-6": {
+          "label": "Go to session 6",
+          "description": "Jump to the 6th visible session in the sidebar"
+        },
+        "switch-session-7": {
+          "label": "Go to session 7",
+          "description": "Jump to the 7th visible session in the sidebar"
+        },
+        "switch-session-8": {
+          "label": "Go to session 8",
+          "description": "Jump to the 8th visible session in the sidebar"
+        },
+        "switch-session-9": {
+          "label": "Go to session 9",
+          "description": "Jump to the 9th visible session in the sidebar"
         }
       },
       "none": "Not set",
@@ -2786,6 +2927,14 @@
         "installConfirmTitle": "Install “{{name}}”?",
         "installConfirmDescription": "The package will be verified for integrity and manifest compatibility. The plugin is enabled automatically after install; you can disable it or adjust its setup anytime.",
         "updateConfirmDescription": "The package will be verified for integrity and manifest compatibility, then replace the installed version. Its current enabled state stays unchanged."
+      },
+      "reapproval": {
+        "badge": "Permission review needed",
+        "action": "Review Permissions",
+        "actionAria": "Review permissions for plugin {{name}}",
+        "noticeTitle": "Permission review needed",
+        "bodyLegacy": "Cindy has no record of a permission review for this plugin, so it stays disabled. Choose Review Permissions to go through what it asks for and confirm it again.",
+        "bodyInvalid": "The permission review record for this plugin is damaged, so it stays disabled. Choose Review Permissions to go through what it asks for and confirm it again."
       },
       "install": "Install Plugin…",
       "empty": "No plugins installed yet",
@@ -2928,6 +3077,8 @@
         "cardExternalLinkDetail": "Clicking a card link shows a confirmation dialog; the URL opens in your system browser only after you approve. Only http/https addresses are allowed.",
         "notify": "Can show system tips (light banner at the top of the screen)",
         "notifyDetail": "Tip text is provided by this plugin and labeled with its name; tips fade automatically and never block your work.",
+        "confirm": "Can ask for your confirmation in a dialog",
+        "confirmDetail": "Before acting it can open a dialog that looks like Cindy's own to ask you. The question comes from the plugin and the dialog is labeled with its name; only you can click confirm or cancel — the plugin cannot. At most one dialog at a time, and asking too often is blocked.",
         "fsWrite": "Can write files (create / modify)",
         "fsWriteDetail": "Its own private data folder is always writable. Writes into the current session's working directory follow the session's permission mode (auto-approve modes write directly; per-action modes ask you first). Any other folder always requires your confirmation. Files are always written by the host — the plugin itself never touches your file system.",
         "networkHost": "Accesses the network domain {{host}}",
@@ -2968,6 +3119,7 @@
       "errors": {
         "fileInvalid": "Not a valid .cindy plugin file",
         "alreadyInstalled": "This plugin is already installed",
+        "approvalRequired": "This plugin's permissions must be reviewed again before continuing.",
         "commandConflict": "Its command conflicts with an installed plugin. Uninstall the other one or rename the command.",
         "idReserved": "This id uses the reserved official prefix cindy-; it is only available to plugins bundled with the app",
         "sourceMissing": "The selected file could not be found",
@@ -3007,7 +3159,8 @@
             "image.generate": "Image generation",
             "image.edit": "Image editing",
             "video.generate": "Video generation",
-            "video.edit": "Image-to-video"
+            "video.edit": "Image-to-video",
+            "text.oneshot": "Quick answer (text)"
           },
           "defaultOption": "{{model}} (default)",
           "noModels": "No models available"
@@ -3017,21 +3170,12 @@
           "desc": "How this plugin's tasks run when it hands work to the Cindy Agent. Unset fields follow your new-draft preferences; the helper is read-only by default and works in a dedicated folder.",
           "agent": "Agent",
           "model": "Model",
-          "effort": "Reasoning effort",
-          "fast": "Fast mode",
-          "fastOn": "On",
-          "fastOff": "Off",
           "permission": "Write access",
-          "permissionMode": {
-            "plan": "Read-only (default): can look and think, cannot change anything",
-            "acceptEdits": "Can edit files: may modify files in the working folder",
-            "auto": "Auto: routine actions in the working folder no longer ask each time"
-          },
+          "permissionDisabled": "Not available for errand sessions",
           "workdir": "Working folder",
           "workdirDefault": "Plugin's dedicated folder (default)",
           "workdirPick": "Choose…",
-          "workdirClear": "Reset to default folder",
-          "followDefault": "Follow default"
+          "workdirClear": "Reset to default folder"
         },
         "toolsTitle": "Tools",
         "permissionsTitle": "Permissions",
@@ -3083,6 +3227,9 @@
       "pick": {
         "dialogTitle": "Choose a folder",
         "dialogMessage": "Plugin “{{name}}” is asking you to choose a folder"
+      },
+      "confirm": {
+        "dialogTitle": "Plugin “{{name}}” needs your confirmation"
       },
       "workspace": {
         "dialogTitle": "Choose a project folder",
@@ -3558,6 +3705,7 @@
     },
     "dailyLimitLabel": "Today {{spend}}/{{limit}}",
     "monthlyLimitLabel": "Cycle {{spend}}/{{limit}}",
+    "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "Session {{cost}}",
     "codex": {
       "waiting": "Codex --",
@@ -3602,6 +3750,7 @@
     "tooltip": {
       "todayUsedSoftLimit": "Today used ${{today}} / soft limit ${{limit}} ({{pct}}%)",
       "sessionUsed": "This session used {{cost}}",
+      "creditUsed": "Account used {{used}} · total {{total}}",
       "monthlyUnavailable": "⚠️ Monthly quota is temporarily unavailable",
       "dailyUnavailable": "⚠️ Today's usage details are temporarily unavailable",
       "softLimitFormula": "Soft limit formula: monthly quota ÷ 30 × {{factor}}",
@@ -3692,14 +3841,24 @@
     "maximizeAria": "Maximize panel",
     "restoreAria": "Restore panel size",
     "detachAria": "Open in a new window",
-    "minimizeAria": "Minimize to floating bubble"
+    "minimizeAria": "Minimize to floating bubble",
+    "closeAria": "Close panel and disable plugin"
+  },
+  "ghostPanel": {
+    "disableConfirm": {
+      "title": "Disable \"{{name}}\"?",
+      "body": "Closing this panel disables the whole plugin — its panel and capabilities will pause. You can re-enable it anytime from Plugins in the sidebar.",
+      "confirm": "Disable"
+    }
   },
   "ghostPanelWindow": {
     "mergeBack": "Merge back into main window",
     "unavailable": "This plugin panel is currently unavailable"
   },
   "ghostPanelBubble": {
-    "restoreAria": "Restore {{name}} panel"
+    "restoreAria": "Restore {{name}} panel",
+    "stackExpandAria": "{{count}} plugin panels minimized. Click to expand",
+    "stackCollapseAria": "Collapse the plugin panel list"
   },
   "rightSidebar": {
     "ariaLabel": "Right sidebar",
@@ -4143,14 +4302,13 @@
       "preparingButton": "Preparing",
       "preparingTooltip": "Preparing newer version…",
       "preparingAria": "Preparing newer version, please wait",
-      "confirmTitle": "Restart to update?",
-      "confirmHint": "The app will restart automatically",
-      "confirmBusyHint": "A task is still running. Restarting will interrupt it",
-      "confirmButton": "Restart now",
+      "confirmTitle": "A task is still running",
+      "confirmBusyHint": "Restarting will interrupt it",
+      "confirmButton": "Restart App Anyway",
       "cancel": "Cancel",
-      "confirmTooltip": "Confirm restart to apply the update",
+      "confirmTooltip": "A task is still running — restarting will interrupt it",
       "cancelTooltip": "Cancel",
-      "confirmAria": "Confirm restart to apply the update",
+      "confirmAria": "Restart anyway and apply the update, interrupting the running task",
       "cancelAria": "Cancel update",
       "dismiss": "Later",
       "dismissAria": "Dismiss update banner for now"
@@ -4262,12 +4420,12 @@
   },
   "imBot": {
     "conflictDialog": {
-      "title": "This Feishu Bot App is already in use",
+      "title": "This {{service}} Bot App is already in use",
       "bodyPrefix": "The current App",
       "bodyMain": "is already running a long-lived connection on another device — likely a colleague using the same App ID. An App can only bind to one device at a time, so this client has automatically disconnected to avoid contention.",
       "suggestionsHeading": "Two suggested approaches:",
       "suggestion1": "1. Coordinate with the other user to use it at different times. Have them clear the credential on their device, then reconnect here.",
-      "suggestion2": "2. Create your own dedicated App on the Feishu Open Platform so you and your colleague each have your own.",
+      "suggestion2": "2. Create your own dedicated App on the {{service}} Open Platform so you and your colleague each have your own.",
       "dismiss": "Dismiss",
       "createOwnApp": "Create my App ↗"
     }
@@ -4630,6 +4788,10 @@
       "openHint": "Bring in a Worker to help",
       "disabledHint": "Collaboration is disabled for this project. Enable it in project settings.",
       "unavailableHint": "Unable to verify this project's collaboration setting. Try again shortly.",
+      "unsupportedRemoteHint": "The controlled device is too old to support collaboration.",
+      "remoteContinueNotice": " This message is still being sent as a single conversation.",
+      "handoffRecoveredMessage": "Collaboration startup was interrupted last time. Your unsent message has been restored to the composer.",
+      "handoffRecoveredGoal": "Collaboration startup was interrupted last time. The goal was not started; its text has been restored to the composer.",
       "loadingHint": "Still checking this project's collaboration setting. Try again shortly.",
       "stopHint": "Stop collaboration",
       "stopAria": "Stop collaboration",
@@ -4940,6 +5102,8 @@
       "retryTitle": "Resend the last message",
       "cancelTitle": "Dismiss error",
       "retry": "Retry",
+      "continueAfterReset": "Continue After Reset",
+      "continueAfterResetTitle": "Create a one-time Automation to continue this task after usage resets",
       "credentialSwitchBusy": "Another Codex task is still running, so the provider for this session can't be applied yet (the shared Codex process needs a restart). Retry after those tasks finish.",
       "codexThreadStale": "Codex auth mode changed — this session can't continue. Start a new session to apply it.",
       "budgetModelHint": "If this keeps failing, try switching to the standard GPT model.",
@@ -6185,6 +6349,10 @@
       "promptHeading": "No Automations yet",
       "promptDescription": "Create a cron Automation to let Claude Code or Codex run your prompt on a schedule."
     },
+    "usageLimitRecovery": {
+      "name": "Continue Task After Usage Resets",
+      "prompt": "Continue the current task from where it stopped."
+    },
     "template": {
       "useTemplate": "Getting Started",
       "blank": "Blank",
@@ -6500,6 +6668,7 @@
     },
     "chips": {
       "selectProject": "Select project",
+      "chooseTime": "Choose time",
       "recent": "Recent",
       "browseFolder": "Choose a different folder",
       "advanced": "Advanced",
@@ -7518,16 +7687,16 @@
     "toasts": {
       "googleConnected": "Google connected",
       "codexConnected": "ChatGPT account connected",
-      "feishuBotConnected": "FeiShu bot connected",
-      "feishuBotReconnected": "Feishu bot reconnected",
-      "feishuBotReconnectFailed": "Reconnect failed. Check the Feishu configuration and try again",
+      "feishuBotConnected": "IM bot connected",
+      "feishuBotReconnected": "IM bot reconnected",
+      "feishuBotReconnectFailed": "Reconnect failed. Check the IM bot configuration and try again",
       "feishuBotConflict": "This App is already in use — a colleague may be using the same App ID",
       "feishuBotConnectFailed": "Connection failed, check App ID / Secret",
       "feishuBotSaveFailed": "Save failed: {{message}}",
-      "feishuBotCleared": "FeiShu bot credentials cleared",
+      "feishuBotCleared": "IM bot credentials cleared",
       "feishuBotClearFailed": "Clear failed: {{message}}",
-      "feishuBotCreatedConnected": "FeiShu bot created and connected",
-      "feishuBotCreatedCheck": "FeiShu bot created, please check connection status",
+      "feishuBotCreatedConnected": "IM bot created and connected",
+      "feishuBotCreatedCheck": "IM bot created. Check the connection status",
       "discordBotConnected": "Discord bot configuration saved",
       "discordBotConnectFailed": "Discord bot connection failed; check the token and permissions",
       "discordBotSaveFailed": "Save failed: {{message}}",
@@ -7550,7 +7719,14 @@
       "telegramBotConnectFailed": "Telegram bot connection failed; check the token and your network",
       "telegramBotSaveFailed": "Save failed: {{message}}",
       "telegramBotDisconnected": "Telegram bot unbound",
-      "telegramBotDisconnectFailed": "Unbind failed: {{message}}"
+      "telegramBotDisconnectFailed": "Unbind failed: {{message}}",
+      "dingtalkBotConnected": "DingTalk bot connected",
+      "dingtalkBotConnectFailed": "DingTalk bot connection failed; check credentials, Stream mode, and your network",
+      "dingtalkBotAuthFailed": "DingTalk rejected the credentials. Confirm that the Client ID and Client Secret belong to the same app",
+      "dingtalkBotNetworkFailed": "Cannot reach DingTalk Open Platform. Check your network or proxy and try again",
+      "dingtalkBotStreamFailed": "Credentials are valid, but the Stream connection was not established. Enable the bot, select Stream mode, and publish the app version",
+      "dingtalkBotDisconnected": "DingTalk bot unbound",
+      "dingtalkBotDisconnectFailed": "Failed to unbind DingTalk bot"
     },
     "errors": {
       "openFileFailed": "Cannot open file in system",
@@ -7575,7 +7751,8 @@
       "discordOwnerUserIdFormat": "Discord user ID must be 17-20 digits",
       "telegramFieldsRequired": "Bot Token and Telegram user ID are both required",
       "telegramTokenFormat": "Invalid token format: expected the \"digits:secret\" shape generated by BotFather",
-      "telegramOwnerUserIdFormat": "Telegram user ID must be numeric"
+      "telegramOwnerUserIdFormat": "Telegram user ID must be numeric",
+      "dingtalkFieldsRequired": "Client ID and Client Secret are both required"
     },
     "confirm": {
       "logoutTitle": "Log out",
@@ -7683,6 +7860,7 @@
     "menuAria": "Composer actions",
     "tooltipEmpty": "More actions",
     "tooltipCount": "{{count}} reference directories",
+    "addFiles": "Add files, images, or videos…",
     "pluginsTitle": "Installed Plugins",
     "pluginDisabled": "Disabled",
     "pluginNoCommand": "Not available here",

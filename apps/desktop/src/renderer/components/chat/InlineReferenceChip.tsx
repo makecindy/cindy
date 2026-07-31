@@ -63,7 +63,12 @@ export function InlineReferenceChip({
     !textSelectable && 'select-none',
     'gap-1.5 rounded-full border px-2 py-0.5 text-[12px] font-normal leading-5',
     'bg-[var(--surface-chip)] text-[var(--text-primary)]',
-    interactive && 'cursor-pointer transition-colors hover:bg-[var(--surface-hover)]',
+    // 下划线跟着 `interactive` 一起给:DESIGN.md §14.5 要求「下划线 ⇔ 可点」双向成立,
+    // 而本组件同时服务可点的会话 / 项目深链 chip 与不可点的静态 chip(sidebar-embedded
+    // 等不注入 onClick / onContextMenu 的调用点)。判据只有 `interactive` 这一处,
+    // cursor 与下划线同源,不可能一边有一边没有(PR #1144 review 实捉:改前这些 chip
+    // 有 onClick 却无下划线,是「可点但无下划线」的反例)。
+    interactive && 'cursor-pointer underline underline-offset-2 transition-colors hover:bg-[var(--surface-hover)]',
     className,
   );
   const style = {

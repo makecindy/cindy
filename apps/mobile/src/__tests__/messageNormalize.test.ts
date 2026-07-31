@@ -941,13 +941,15 @@ describe('normalizeRemoteMessages', () => {
     expect(items[1].turnCompleted).toBeUndefined();
   });
 
-  it('renders silent-stop auto-resume rows as system cards instead of user bubbles', () => {
+  it('renders auto-resume rows as system cards with interruption outcome metadata', () => {
     const items = normalizeRemoteMessages([
       message({
         id: 'auto-resume',
         role: 'user',
         content: '继续',
-        agentMeta: { delivery: 'turn', autoResume: true },
+        agentMeta: { delivery: 'turn', autoResume: true, autoResumeInfo: {
+          error: 'socket hang up', attempt: 2, maxAttempts: 5, sessionTotal: 3,
+        }, autoResumeOutcome: 'failed' },
       }),
     ]);
 
@@ -957,6 +959,7 @@ describe('normalizeRemoteMessages', () => {
       label: 'user',
       body: '',
       systemCardType: 'auto-resume',
+      systemCardData: { error: 'socket hang up', attempt: 2, maxAttempts: 5, sessionTotal: 3, outcome: 'failed' },
       align: 'agent',
     });
   });
