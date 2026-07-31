@@ -3914,6 +3914,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                   // 端点上报的窗口值优先,缺省才落 200K 保守默认(review P1):
                   // 之前无条件写死 200K,发现的 1M 模型仍会显示并按 200K 压缩。
                   contextWindow: m.contextWindow ?? 200_000,
+                  // 只有端点真给了才算已核实,可以拿去收敛运行期上报窗口;落 200K
+                  // 兜底的不标记 —— 否则 resolveVerifiedContextWindow 会拒收缺失
+                  // 标记的条目,inflate 的运行期值压不下来(review P1)。
+                  ...(m.contextWindow !== undefined ? { contextWindowVerified: true } : {}),
                   efforts: [],
                   defaultEffort: null,
                   group: `custom:${providerId}`,
