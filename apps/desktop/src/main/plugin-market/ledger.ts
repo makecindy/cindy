@@ -1,8 +1,7 @@
 import fs from 'node:fs';
-import path from 'node:path';
-import crypto from 'node:crypto';
 
 import type { PluginScope } from '@cindy/plugin-protocol';
+import { atomicWriteFileSync } from '../utils/atomicWriteFile.js';
 
 const LEDGER_SCHEMA_VERSION = 1;
 
@@ -138,31 +137,6 @@ export class PluginMarketLedger {
   }
 
   private write(data: PluginMarketLedgerData): void {
-    const filePath = this.filePath();
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    const tempPath = `${filePath}.${crypto.randomUUID()}.tmp`;
-    try {
-      fs.writeFileSync(tempPath, `${JSON.stringify(data, null, 2)}\n`, {
-        mode: 0o600,
-        flag: 'wx',
-      });
-      try {
-        fs.renameSync(tempPath, filePath);
-      } catch (error) {
-        // Windows refuses to replace an existing file with renameSync. The
-        // destination is only the previous ledger snapshot, so remove it and
-        // retry while retaining the freshly flushed temp file.
-        const code = error && typeof error === 'object' && 'code' in error
-          ? (error as NodeJS.ErrnoException).code
-          : undefined;
-        if (process.platform !== 'win32' || (code !== 'EPERM' && code !== 'EEXIST')) {
-          throw error;
-        }
-        fs.rmSync(filePath, { force: true });
-        fs.renameSync(tempPath, filePath);
-      }
-    } finally {
-      fs.rmSync(tempPath, { force: true });
-    }
+    atomicWriteFileSync(this.filePath(), `${JSON.stringify(data, null, 2)}\n`);
   }
 }

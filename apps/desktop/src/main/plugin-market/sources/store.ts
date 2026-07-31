@@ -6,10 +6,9 @@
  * 不复制发现到的插件数据——快照时重新发现，磁盘上的克隆目录才是事实。
  */
 import fs from 'node:fs';
-import path from 'node:path';
-import crypto from 'node:crypto';
 
 import type { MarketSource, MarketSourceConfig } from '../../../shared/pluginMarket.js';
+import { atomicWriteFileSync } from '../../utils/atomicWriteFile.js';
 
 const SOURCES_SCHEMA_VERSION = 1;
 
@@ -124,29 +123,7 @@ export class MarketSourceStore {
   }
 
   private write(data: MarketSourcesData): void {
-    const filePath = this.filePath();
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    const tempPath = `${filePath}.${crypto.randomUUID()}.tmp`;
-    try {
-      fs.writeFileSync(tempPath, `${JSON.stringify(data, null, 2)}\n`, {
-        mode: 0o600,
-        flag: 'wx',
-      });
-      try {
-        fs.renameSync(tempPath, filePath);
-      } catch (error) {
-        const code = error && typeof error === 'object' && 'code' in error
-          ? (error as NodeJS.ErrnoException).code
-          : undefined;
-        if (process.platform !== 'win32' || (code !== 'EPERM' && code !== 'EEXIST')) {
-          throw error;
-        }
-        fs.rmSync(filePath, { force: true });
-        fs.renameSync(tempPath, filePath);
-      }
-    } finally {
-      fs.rmSync(tempPath, { force: true });
-    }
+    atomicWriteFileSync(this.filePath(), `${JSON.stringify(data, null, 2)}\n`);
   }
 }
 

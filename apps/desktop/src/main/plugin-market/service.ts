@@ -243,6 +243,9 @@ export class PluginMarketService {
       log.warn('market list unavailable', {
         error: error instanceof Error ? error.message : String(error),
       });
+      // 本函数捕获 owner 后的每个 return 出口都必须先过 generation 校验:
+      // listAll 失败(常因切号)时,不能把按旧账号发现的自定义项返回给当前会话。
+      requireSameMarketOwner(owner);
       return {
         items: this.projectCustomItems(customEntries),
         unavailableReason: error instanceof Error ? error.message : String(error),

@@ -430,6 +430,21 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     runtime.session = { mode: 'cloud', dataOwnerId: 'user-1', generation: 1 };
   });
 
+  it('rejects the snapshot when listAll fails after an account switch', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+
+    // listAll 因切号失败:catch 分支不能把按 user-1 发现的自定义项返回当前会话。
+    h.api.listAll.mockImplementation(async () => {
+      runtime.session = { mode: 'cloud', dataOwnerId: 'user-2', generation: 2 };
+      throw new Error('session changed');
+    });
+    await expect(h.service.snapshot()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    runtime.session = { mode: 'cloud', dataOwnerId: 'user-1', generation: 1 };
+  });
+
   it('rejects refreshSource when the account switches during refresh', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);

@@ -33,6 +33,9 @@ import { checkGitPreflight as checkGitPreflightImpl } from './preflight.js';
 import { parseMarketSource } from './parse.js';
 import { MarketSourceStore } from './store.js';
 
+/** 交换哨兵过期阈值:超过即视为进程崩溃残留,允许自愈拉回备份。 */
+const SWAP_SENTINEL_TTL_MS = 10 * 60 * 1000;
+
 export interface MarketSourceManagerDeps {
   store: MarketSourceStore;
   /** Git 克隆缓存根目录（owner 作用域）。 */
@@ -95,8 +98,21 @@ export class MarketSourceManager {
     const cloneDir = this.cloneDir(config);
     const backup = `${cloneDir}.backup`;
     if (fs.existsSync(cloneDir) || !fs.existsSync(backup)) return;
+    // 进行中的刷新交换(cloneDir 已改名 .backup、staging 未落位)与"遗留故障"
+    // 瞬态同形。交换段会写 .swapping 哨兵;见新哨兵说明有刷新正持有备份,
+    // 不得抢占拉回(否则会顶掉 staging 落位目标并使回滚失效)。仅当无哨兵、
+    // 或哨兵过期(进程崩溃残留)时才判定为遗留故障并自愈。
+    const swapping = `${cloneDir}.swapping`;
+    try {
+      const stat = fs.statSync(swapping);
+      if (Date.now() - stat.mtimeMs < SWAP_SENTINEL_TTL_MS) return;
+      this.log.warn('removing stale marketplace swap sentinel', { name: config.name });
+    } catch {
+      // 无哨兵:确属遗留故障,继续自愈。
+    }
     try {
       await fs.promises.rename(backup, cloneDir);
+      await fs.promises.rm(swapping, { force: true }).catch(() => undefined);
       this.log.warn('recovered marketplace cache from backup', { name: config.name });
     } catch (error) {
       this.log.error('failed to recover marketplace cache from backup', {
@@ -286,8 +302,12 @@ export class MarketSourceManager {
     // 落位；任一步失败都从备份恢复 cloneDir。备份用固定名(不带随机后缀),
     // 以便连续失败(落位失败且恢复也失败)后,后续市场操作仍能自愈找回缓存。
     const backup = `${cloneDir}.backup`;
+    const swapping = `${cloneDir}.swapping`;
     let backupActive = false;
     try {
+      // 交换开始的瞬态(cloneDir 已改名、staging 未落位)与遗留故障同形,
+      // 写哨兵让并发的 recoverCloneCache 识别为"进行中"而不抢占拉回。
+      await fs.promises.writeFile(swapping, String(Date.now()), { flag: 'wx' }).catch(() => undefined);
       await fs.promises.rm(backup, { recursive: true, force: true }).catch(() => undefined);
       await fs.promises.rename(cloneDir, backup);
       backupActive = true;
@@ -318,9 +338,11 @@ export class MarketSourceManager {
         });
         throwIpcError('INTERNAL', 'Plugin marketplace cache swap failed');
       }
+      await fs.promises.rm(swapping, { force: true }).catch(() => undefined);
       throw error;
     }
     await fs.promises.rm(backup, { recursive: true, force: true }).catch(() => undefined);
+    await fs.promises.rm(swapping, { force: true }).catch(() => undefined);
     if (!discovered) {
       throwIpcError('INTERNAL', 'marketplace discovery did not produce a result');
     }
