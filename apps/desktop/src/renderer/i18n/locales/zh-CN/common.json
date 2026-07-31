@@ -1699,11 +1699,11 @@
         "unbind": "解绑"
       },
       "workingDir": {
-        "title": "新任务工作目录",
-        "hint": "微信首个任务或发送 /new 后使用。更改不会移动当前上下文。",
+        "title": "新对话工作目录",
+        "hint": "微信首次对话或发送 /new 后使用。更改不会移动当前上下文。",
         "managed": "使用 Cindy 管理的专用目录",
         "reset": "恢复默认",
-        "unavailable": "已选目录当前不可访问；新任务将暂时使用 Cindy 管理的专用目录。"
+        "unavailable": "已选目录当前不可访问；新对话将暂时使用 Cindy 管理的专用目录。"
       },
       "unbind": {
         "title": "解绑个人微信？",
@@ -1716,8 +1716,8 @@
         "cancelFailed": "取消微信授权失败",
         "unbound": "个人微信已解绑",
         "unbindFailed": "解绑失败，请稍后重试",
-        "workingDirSaved": "微信新任务工作目录已更新",
-        "workingDirReset": "微信新任务已恢复使用默认目录",
+        "workingDirSaved": "微信新对话工作目录已更新",
+        "workingDirReset": "微信新对话已恢复使用默认目录",
         "workingDirFailed": "更新工作目录失败，请重新选择"
       }
     },
@@ -1851,9 +1851,9 @@
       },
       "commandMenu": {
         "start": "查看欢迎信息和用法",
-        "new": "开启新任务",
+        "new": "开启新对话",
         "help": "查看命令帮助",
-        "stop": "停止当前任务",
+        "stop": "中止当前执行",
         "session": "最近任务列表，选中即续聊",
         "project": "切换项目工作区",
         "model": "查看或切换模型",

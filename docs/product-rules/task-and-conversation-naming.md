@@ -383,6 +383,59 @@ runtime 会话**（保持「会话」）。后者的判据不是词形而是**�
 判据：**这句话会不会让用户去做一个多余的动作？** 会（「新建任务才生效」）→ 说 Agent 会话；
 只是描述影响范围（「已在运行的任务不受影响」）→ 说任务没问题。
 
+#### 6.0.3 `/new` 不产生新任务：按落库行为定名，不按命令名字
+
+IM 渠道的 `/new` 看着像「新建」，实际走 `im/shared/sessionRepo.ts::resetSessionToDefaults` ——
+`db.update(sessions).where(eq(sessions.id, …))`：**保留同一条 session 行**，只清 `sdkSessionId`、
+按渠道默认重置工作目录与上下文。侧边栏里的条目数不变，也没有新条目可以单独打开。
+
+所以凡是描述这条路径的中文，一律说**「新对话」**。说「新任务」会让用户去侧边栏找一条根本不
+存在的新条目。这条不变量的全部对称路径：
+
+| 触点 | 底层 | 说法 |
+|---|---|---|
+| IM 平台**首次**私聊 | `INSERT` 新 session 行 | 确实是新任务 |
+| 已有私聊发 `/new` | `UPDATE` 原行 | **不是**新任务 |
+| 消息操作菜单 fork | `INSERT` 新 session 行 | 确实是新任务（「开启一个新任务」） |
+| `/ctr` → ➕ 新建 | `INSERT` 新 session 行 | 确实是新任务 |
+
+前两条**共用同一份设置、同一句文案**，所以文案必须取两者都成立的说法 = 「新对话」。落地时
+这一族被指出过三轮，每轮漏一处：`settings.imBot.defaults.*`（设置项标题）→
+`settings.wechatBot.workingDir.*` 与 `toasts.workingDir*`（工作目录那组）→
+`settings.telegramBot.commandMenu.new`（Telegram 斜杠菜单说明）。**判据一律回到落库行为。**
+
+英文侧同理：`Start a new session` 也不准确，已一并改成 `Start a new chat`（ja「新しい会話を
+開始」/ ko「새 대화 시작」）。en 的 `session` 词义比中文「任务」宽、读起来不刺眼，但既然中文
+已按落库行为定名，四语就该说同一件事（§4.2）。
+
+#### 6.0.4 兄弟渠道必须成组改：一处 IM 文案改动 = 四个包一起过
+
+`apps/desktop/src/main/im/{telegram,discord,feishu,wechat}/uiText.ts` 是四份**近亲文案包**
+（结构同形、大量句子逐字相同；刻意不共享，以免渠道措辞互相串味）。落地时只改了 telegram，
+于是后面每轮 review 点出一个兄弟包——典型的逐条打补丁。
+
+**规则：改任一渠道的 IM 文案，必须同一轮把四个包一起过。** 判据不是「reviewer 点了哪个」，
+而是「这句话在别的包里有没有同形副本」。
+
+配套要区分**不跟改**的「会话」。本轮枚举全仓硬编码字符串共 102 处含「会话」，按读者归类：
+
+| 类别 | 例子 | 处理 |
+|---|---|---|
+| 渠道直接发给用户 | 四个 `uiText.ts` | **改**（已清零） |
+| main 抛给 renderer 的 `Error` message | `maker-orchestration/fork.ts` 的 `forkError('SOURCE_NEVER_RAN', '原会话尚未运行…')` | **不改**：renderer 按 code 渲染 i18n（`chat.userMessage.forkErrors.sourceNeverRan`），这串只进日志。`rewind.ts` → `chat.rewind.errors.*` 同理 |
+| 插件 / MCP / LLM 读的字符串 | `cindy-brain/*Slot.ts`、`mcp-integrations/ghost.ts` | **不改**：不是 UI 文案，且多数确实指 Agent 进程会话（§6.0.2） |
+| Orca 协同术语 | `packages/maker-shared/src/sessionIdentity.ts` | **不改**：归 `orca-team-architecture.md` |
+| 测试 fixture | `packages/maker-shared/src/fixtures.ts` | **不改** |
+
+另有一类**刻意保留的渠道人格用词**：discord / feishu / wechat 把 session 叫「存档」、把接管
+叫「上号」（`feishu/uiText.ts` 文件头写明了这个基调：「偶尔带点游戏味的隐喻（上号、存档、
+副本、AFK 之类）」）。那不是错译而是渠道语气，本次只清 forbidden 词「会话」，不动「存档」。
+
+**禁用词的判定要看条件，不要顺手断言原因。** `sessionActionStrip.ts` 的
+`filesDisabledReason` 原文是「Dialogue 会话没有远程工作目录」，改名时顺势写成「不绑项目的
+任务没有…」，但实际判据只是 `!!session.workingDir`：旧数据或异常行同样会缺 workingDir，被
+这句话解释成「因为任务类型」。文案只陈述状态（「这个任务没有远程工作目录」），不断言原因。
+
 ### 6.1 门禁怎么表达「同一个词分场合」
 
 **不能简单把「对话」加进 `Session` 的 `forbidden`**——那会把「对话区」「对话正文」这些
@@ -423,6 +476,12 @@ runtime 会话**（保持「会话」）。后者的判据不是词形而是**�
   不齐，届时再单独补
 - **`task` 未全量改写**：不同句、语境清晰时仍用「任务」（104 处）。只在与 session 同句时
   强制消解，见 §3.1。后续若发现新的歧义句，按同一原则改写即可
+- **IM 渠道的「存档 / 上号」人格用词未统一**：discord / feishu / wechat 仍把 session 叫
+  「存档」（见 §6.0.4）。本次只清了 forbidden 词「会话」，因此这三个渠道会同时出现「任务」
+  与「存档」。要不要把「存档」也收敛成「任务」是语气取舍而非错译，留给产品单独裁决
+- **`apps/mobile/src/session/messageActionMenu.ts` 仍是硬编码中文**：`origin/main` 就如此
+  （文件注释写明「那边走 i18n，这里暂为硬编码」），en/ja/ko locale 下也显示中文。迁到 i18n
+  是独立重构，本 PR 只保证它的中文与桌面端同款 key 一致
 - **代码标识符与内部注释仍以 Session 为主**：刻意不动。仅当中文注释被测试当作源码锚点、
   且新旧术语冲突时才跟进（本次有 1 处：`apps/mobile/app/sessions/new.tsx` 的
   「新建任务默认运行配置」）

@@ -1700,11 +1700,11 @@
         "unbind": "Unbind"
       },
       "workingDir": {
-        "title": "Working directory for new sessions",
-        "hint": "Used for the first WeChat session and after /new. Changing it does not move the current context.",
+        "title": "Working directory for new conversations",
+        "hint": "Used for the first WeChat conversation and after /new. Changing it does not move the current context.",
         "managed": "Use a Cindy-managed directory",
         "reset": "Restore default",
-        "unavailable": "The selected directory is unavailable. New sessions temporarily use a Cindy-managed directory."
+        "unavailable": "The selected directory is unavailable. New conversations temporarily use a Cindy-managed directory."
       },
       "unbind": {
         "title": "Unbind personal WeChat?",
@@ -1717,8 +1717,8 @@
         "cancelFailed": "Could not cancel WeChat authorization",
         "unbound": "Personal WeChat unbound",
         "unbindFailed": "Unbind failed. Try again later.",
-        "workingDirSaved": "Working directory for new WeChat sessions updated",
-        "workingDirReset": "New WeChat sessions now use the default directory",
+        "workingDirSaved": "Working directory for new WeChat conversations updated",
+        "workingDirReset": "New WeChat conversations now use the default directory",
         "workingDirFailed": "Could not update the working directory. Select it again."
       }
     },
@@ -1852,7 +1852,7 @@
       },
       "commandMenu": {
         "start": "Welcome and usage",
-        "new": "Start a new session",
+        "new": "Start a new chat",
         "help": "Show command help",
         "stop": "Stop the current task",
         "session": "Recent sessions, pick one to continue",

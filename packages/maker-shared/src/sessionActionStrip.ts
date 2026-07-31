@@ -127,7 +127,9 @@ function buildActionStripActions(
 ): SessionActionStripAction[] {
   const queueDisabledReason = queueActionDisabledReason(input);
   const searchDisabledReason = input.messageCount > 0 ? null : '当前没有可搜索的消息。';
-  const filesDisabledReason = filesEnabled ? null : '不绑项目的任务没有远程工作目录，不能浏览文件。';
+  // 判据只是 `!!session.workingDir`(见 filesEnabled) —— 不绑项目的任务是最常见的
+  // 命中场景, 但旧数据/异常行同样会缺 workingDir, 所以文案只陈述状态、不断言原因。
+  const filesDisabledReason = filesEnabled ? null : '这个任务没有远程工作目录，不能浏览文件。';
   return [
     {
       accessibilityLabel: '打开任务设置',

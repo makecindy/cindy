@@ -1699,11 +1699,11 @@
         "unbind": "연동 해제"
       },
       "workingDir": {
-        "title": "새 세션 작업 디렉터리",
-        "hint": "WeChat 첫 세션과 /new 이후에 사용합니다. 변경해도 현재 컨텍스트는 이동하지 않습니다.",
+        "title": "새 대화 작업 디렉터리",
+        "hint": "WeChat 첫 대화와 /new 이후에 사용합니다. 변경해도 현재 컨텍스트는 이동하지 않습니다.",
         "managed": "Cindy 관리 전용 디렉터리 사용",
         "reset": "기본값 복원",
-        "unavailable": "선택한 디렉터리에 접근할 수 없습니다. 새 세션은 임시로 Cindy 관리 디렉터리를 사용합니다."
+        "unavailable": "선택한 디렉터리에 접근할 수 없습니다. 새 대화는 임시로 Cindy 관리 디렉터리를 사용합니다."
       },
       "unbind": {
         "title": "개인 WeChat 연동을 해제하시겠습니까?",
@@ -1716,8 +1716,8 @@
         "cancelFailed": "WeChat 인증을 취소하지 못했습니다",
         "unbound": "개인 WeChat 연동이 해제되었습니다",
         "unbindFailed": "연동 해제에 실패했습니다. 잠시 후 다시 시도하세요.",
-        "workingDirSaved": "WeChat 새 세션 작업 디렉터리가 업데이트되었습니다",
-        "workingDirReset": "WeChat 새 세션이 기본 디렉터리를 사용합니다",
+        "workingDirSaved": "WeChat 새 대화 작업 디렉터리가 업데이트되었습니다",
+        "workingDirReset": "WeChat 새 대화가 기본 디렉터리를 사용합니다",
         "workingDirFailed": "작업 디렉터리를 업데이트하지 못했습니다. 다시 선택하세요."
       }
     },
@@ -1851,7 +1851,7 @@
       },
       "commandMenu": {
         "start": "환영 메시지와 사용법 보기",
-        "new": "새 세션 시작",
+        "new": "새 대화 시작",
         "help": "명령어 도움말 보기",
         "stop": "현재 작업 중지",
         "session": "최근 세션 목록에서 이어서 대화",

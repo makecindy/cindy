@@ -892,7 +892,7 @@ const CAPABILITIES: Capabilities = {
   memory: {
     supported: { supported: true },
     displayName: '记忆 (实验性)',
-    description: '从聊天中生成新记忆并在新任务中召回 (Codex Feature::MemoryTool, 默认关)',
+    description: '从对话中生成新记忆并在新任务中召回 (Codex Feature::MemoryTool, 默认关)',
     stage: 'experimental',
     defaultEnabled: false,
     resettable: true,
