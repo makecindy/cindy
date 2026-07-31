@@ -566,16 +566,24 @@ function isChannelNotAllowedError(err: unknown): boolean {
 }
 
 /**
- * NOT_CONNECTED 判定。注意它**不保证请求未送达**:多数来自发送前的本地拒绝
+ * enqueue 可自动重试的瞬时传输错误。NOT_CONNECTED **不保证请求未送达**:多数来自发送前的本地拒绝
  * (未连接 / 有界等待超时),但断连瞬间 in-flight 的 invoke 也会被 failAllPending
  * 批量 reject 成 NOT_CONNECTED——请求可能已出、只是 ack 丢了。因此命中它只代表
- * 「值得自动重试」,重发前仍必须先做权威对账(见 send 内 enqueue 重试循环)。
+ * 「值得评估自动重试」,仍必须同时通过 inFlight 守卫。BACKPRESSURE 要么发生在本地
+ * 发送前,要么是被控端 admission 明确拒绝执行,可直接进入同一退避重试路径。
  */
-function isNotConnectedError(err: unknown): boolean {
-  return formatRemoteError(err).includes('NOT_CONNECTED');
+function isRetryableEnqueueTransportError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (code === 'NOT_CONNECTED' || code === 'BACKPRESSURE') return true;
+  const formatted = formatRemoteError(err);
+  return (
+    formatted.includes('[NOT_CONNECTED]')
+    || formatted.includes('[DEVICE_LINK_NOT_CONNECTED]')
+    || formatted.includes('[BACKPRESSURE]')
+  );
 }
 
-/** enqueue 对 NOT_CONNECTED 的自动重试次数与退避(每次重试前 transport 还会有界等待重连)。 */
+/** enqueue 对可安全重发的瞬时传输错误做有界退避。 */
 const ENQUEUE_RECONNECT_RETRIES = 3;
 const ENQUEUE_RECONNECT_BACKOFF_MS = 300;
 
@@ -4483,7 +4491,7 @@ export default function SessionScreen() {
     // 不要在这一帧闪成排队 icon 再回来(也不能谎报「已入队」)。
     markQueueItemSending(queued.clientId);
     try {
-      // 弱网重试与写序边界同 send() 原路径(仅「保证未发出」的 NOT_CONNECTED 自动重发)。
+      // 弱网重试与写序边界同 send() 原路径(仅明确可安全重发的瞬时传输错误)。
       let projection: InputProjection | undefined;
       for (let attempt = 0; ; attempt++) {
         try {
@@ -4492,7 +4500,7 @@ export default function SessionScreen() {
         } catch (err) {
           if (
             attempt >= ENQUEUE_RECONNECT_RETRIES
-            || !isNotConnectedError(err)
+            || !isRetryableEnqueueTransportError(err)
             || isInFlightDeviceLinkError(err)
           ) throw err;
           await new Promise((resolve) => setTimeout(resolve, ENQUEUE_RECONNECT_BACKOFF_MS * 2 ** attempt));
@@ -5215,12 +5223,12 @@ export default function SessionScreen() {
       try {
         // 弱网重试:切基站 / 短暂断连时自动补发,不让用户为一次抖动手动重发。
         // 写序边界(codex review P1 + auto-review P1):只有「保证未发出」的
-        // NOT_CONNECTED(发送前本地拒绝,inFlight 未置位)才允许自动重发——
+        // NOT_CONNECTED 仅在 inFlight 未置位时允许自动重发——
         // in-flight 被断连批量 reject 的 NOT_CONNECTED 可能已送达(ack 丢失),
         // 且 projection 无法证明未入队(空闲 agent 下消息瞬间进 activeTurn、
         // 不在 pendingQueue 里),盲重会双入队;这类歧义失败直接交给下方 catch
-        // 的回滚/报错路径。被控端 enqueue 侧另有 clientId 幂等去重兜底
-        // (agent-input-coordinator),双保险。
+        // 的回滚/报错路径。BACKPRESSURE 在本地发送前或被控端 admission 拒绝
+        // 执行时产生,可安全重发。被控端 enqueue 侧另有 clientId 幂等去重兜底。
         let projection: InputProjection | undefined;
         for (let attempt = 0; ; attempt++) {
           try {
@@ -5229,7 +5237,7 @@ export default function SessionScreen() {
           } catch (err) {
             if (
               attempt >= ENQUEUE_RECONNECT_RETRIES
-              || !isNotConnectedError(err)
+              || !isRetryableEnqueueTransportError(err)
               || isInFlightDeviceLinkError(err)
             ) throw err;
             await new Promise((resolve) => setTimeout(resolve, ENQUEUE_RECONNECT_BACKOFF_MS * 2 ** attempt));

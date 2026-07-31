@@ -187,6 +187,8 @@ describe('sessionMenu ai rename failure text', () => {
       .toBe('被控设备不在线，稍后再试。');
     expect(aiRenameFailureText(new Error('[NOT_CONNECTED] relay not connected')))
       .toBe('被控设备不在线，稍后再试。');
+    expect(aiRenameFailureText(new Error('[BACKPRESSURE] buffer full')))
+      .toBe('被控设备不在线，稍后再试。');
     expect(aiRenameFailureText(new Error('[INVOKE_TIMEOUT] no invoke-result within 15000ms')))
       .toBe('被控设备不在线，稍后再试。');
     // 非链路类全大写超时码不允许误判为离线(review P2 反馈的误命中场景)。

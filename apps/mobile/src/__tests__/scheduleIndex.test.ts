@@ -338,28 +338,31 @@ describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
     expect(load).toHaveBeenCalledTimes(2);
   });
 
-  it('瞬态失败(NOT_CONNECTED)的负缓存在重连失效钩子后立即重拉(review P1)', async () => {
+  it.each(['NOT_CONNECTED', 'BACKPRESSURE'])(
+    '瞬态失败(%s)的负缓存在重连失效钩子后立即重拉(review P1)',
+    async (code) => {
     // 普通断线的负缓存若挺过重连,30s 内 reseed 会吃旧 rejected promise,
     // 详情页替换成空索引且无人补拉;rehydrate 开始时调用失效钩子解决。
     resetScheduleIndexThrottleForTesting();
     const load = vi.fn()
-      .mockRejectedValueOnce(Object.assign(new Error('not connected'), { code: 'NOT_CONNECTED' }))
+      .mockRejectedValueOnce(Object.assign(new Error('not connected'), { code }))
       .mockResolvedValueOnce(new Map<string, RemoteSessionScheduleInfo>());
     const now = () => 1000;
     await expect(loadSessionScheduleIndexThrottled('dev-n', load, { now })).rejects.toMatchObject({
-      code: 'NOT_CONNECTED',
+      code,
     });
     await Promise.resolve();
     // 失效前:TTL 内复用负缓存
     await expect(loadSessionScheduleIndexThrottled('dev-n', load, { now })).rejects.toMatchObject({
-      code: 'NOT_CONNECTED',
+      code,
     });
     expect(load).toHaveBeenCalledTimes(1);
     // 重连(rehydrate 开始)→ 瞬态负缓存失效 → 立即重拉
     invalidateTransientScheduleIndexFailures();
     await expect(loadSessionScheduleIndexThrottled('dev-n', load, { now })).resolves.toBeInstanceOf(Map);
     expect(load).toHaveBeenCalledTimes(2);
-  });
+    },
+  );
 
   it('DEVICE_OFFLINE 负缓存:仅该设备 presence 恢复时失效,全局重连钩子不碰(review P1)', async () => {
     // DEVICE_OFFLINE 是逐设备状态:若挂在全局重连钩子上,B 设备的任何 rehydrate

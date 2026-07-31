@@ -53,6 +53,7 @@ import {
   setControllersChangedListener,
   setRemoteInvokeBusyChangedListener,
   dropAllControllers,
+  forgetControllerInvokeState,
   handleControllerOffline,
 } from './dispatch';
 import { setBusyProbe, helloBusy, pollBusyChange, resetBusyDedupe } from './busyReporter';
@@ -663,7 +664,12 @@ export async function revokeController(deviceId: string): Promise<void> {
     latest.includes(deviceId) ? latest : [...latest, deviceId],
   );
   // 在线连着的:发 link-close('revoked'),控制端据此立即移除本机项目/对话 + 标记「已撤销」。
-  client?.closeLink(deviceId, 'revoked');
+  try {
+    client?.closeLink(deviceId, 'revoked');
+  } catch (err) {
+    log.warn(`closeLink failed while revoking ${deviceId.slice(0, 8)}: ${String(err)}`);
+  }
+  forgetControllerInvokeState(deviceId);
   // 踢掉它的订阅 registry + 重算转发/横幅(复用对等下线的单设备清理路径)。
   handleControllerOffline(deviceId);
   // 末尾再 poll 一次(而非仅刷新基线):写锁释放到这里之间,别的实例可能已插入
@@ -748,7 +754,14 @@ function pollExternalSettingsChange(): void {
 
   const newlyRevoked = revokedControllers.filter((id) => !prev.revokedControllers.includes(id));
   for (const deviceId of newlyRevoked) {
-    client.closeLink(deviceId, 'revoked');
+    try {
+      client.closeLink(deviceId, 'revoked');
+    } catch (err) {
+      log.warn(
+        `closeLink failed while applying external revoke for ${deviceId.slice(0, 8)}: ${String(err)}`,
+      );
+    }
+    forgetControllerInvokeState(deviceId);
     handleControllerOffline(deviceId);
     log.info(`access revoked for controller ${deviceId.slice(0, 8)} (external settings change)`);
   }
