@@ -122,6 +122,25 @@ describe('remarkLocalPathLinks', () => {
     expect(linkUrls(runOnText('见 src/old~.ts'))).toEqual(['src/old~.ts']);
   });
 
+  it('未支持字符出现在**首个分隔符之前**时同样不动(白名单判据)', () => {
+    // 上一版黑名单假设未支持字符在首个分隔符之后,括号在第一个 `/` 之前就绕过去了,
+    // 还切出个绝对路径(review 实捉)。
+    expect(linkUrls(runOnText('见 foo(bar)/src/index.ts'))).toEqual([]);
+    expect(linkUrls(runOnText('见 foo#bar/src/index.ts'))).toEqual([]);
+    expect(linkUrls(runOnText('见 a%b/c.ts'))).toEqual([]);
+    // 白名单里的字符仍放行。
+    expect(linkUrls(runOnText('见(src/a.ts)'))).toEqual(['src/a.ts']);
+    expect(linkUrls(runOnText('文件:src/App.tsx。完'))).toEqual(['src/App.tsx']);
+    expect(linkUrls(runOnText('跑 --config=src/a.json'))).toEqual([]);
+  });
+
+  it('复合标点后的行号后缀截断同样拒绝', () => {
+    expect(linkUrls(runOnText('见 src/a.ts:12.5'))).toEqual([]);
+    expect(linkUrls(runOnText('见 src/a.ts:12:foo'))).toEqual([]);
+    expect(linkUrls(runOnText('见 src/a.ts.'))).toEqual(['src/a.ts']);
+    expect(linkUrls(runOnText('见 src/a.ts:'))).toEqual(['src/a.ts']);
+  });
+
   it('未支持字符把 token 断开时,不从中段起匹配', () => {
     // `( ) # %` 不在 SEG 里,会断开一条真实路径,而左边界不挡它们(review 实捉)。
     // 判据是「同一 run 内已出现分隔符」,这类字符不需要逐个枚举。

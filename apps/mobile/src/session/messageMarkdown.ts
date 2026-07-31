@@ -1001,7 +1001,16 @@ const LOCAL_MARKDOWN_IMAGE_RE = /!\[([^\]]*)\]\((<[^>\n]+>|(?:[^()\n]|\([^()\n]*
  */
 function parseLocalMarkdownDestination(raw: string): string {
   let destination = raw.trim();
-  const quotedTitle = destination.match(/^(.*\S)[ \t]+(["'])(?:[^\n]|\\.)*\2$/);
+  // ⚠️ 引号内的字符类**必须排除反斜杠**(`[^\n\\]` 而不是 `[^\n]`)。写成 `[^\n]` 时它与
+  // `\\.` 两个分支在反斜杠上重叠 —— 一个 `\` 既能被 `[^\n]` 当 1 个字符吃、也能作为
+  // `\\.` 的开头吃 2 个,于是一串反斜杠有 Fib(n) 种切法;引号未闭合时末尾的 `\2$` 必然
+  // 失配,回溯会把所有切法枚举一遍,时间指数增长(实测:26 个反斜杠 8ms、34 个 75ms、
+  // 38 个 518ms、42 个 3575ms,每 +4 慢约 7 倍)。触发面就是聊天正文里一条
+  // `[x](a "\\\\…`,而本函数在渲染热路径上(图片与链接共用),手机端会冻住整个 JS 线程。
+  // 两个分支互斥后即为线性(实测同样输入恒 0ms)。回归用例见 messageMarkdown.test.ts
+  // 「title 剥离不得灾难性回溯」。(PR #1144 review 实捉;本 PR 把链接 destination 也接进
+  // 本函数,阅读器 buildSelectableMarkdownHtml 同样走这条,所以接触面比原来的图片更广。)
+  const quotedTitle = destination.match(/^(.*\S)[ \t]+(["'])(?:[^\n\\]|\\.)*\2$/);
   const parenthesizedTitle = destination.match(/^(.*\S)[ \t]+\([^()\n]*\)$/);
   destination = (quotedTitle?.[1] ?? parenthesizedTitle?.[1] ?? destination).trim();
   if (destination.startsWith('<') && destination.endsWith('>')) {

@@ -127,39 +127,55 @@ interface PathMatch {
  * 紧跟的字符截断**。前四轮 review 各捉到这条规格的一个缺口(扩展名长度 / 右边界字符 /
  * 空格中段 / `( ) # %` 等未支持字符 + 行号后缀),逐个补字符类注定一轮一个,故改成:
  *
- *   左侧:同一非空白 run 内,命中点之前若已出现路径分隔符 → 拒绝(说明我们落在
- *         `packages/foo(bar)/src/index.ts`、`docs/50%off/a.md` 这类**未支持字符**把
- *         token 断开后的中段);列表分隔符(`, ; , ; 、`)紧邻时允许重启 —— 那是
- *         `src/a.ts,src/b.ts` 这种真的两条路径。
+ *   左侧:命中点前是**同一 run 内的字符**时,只有少数字符可以合法地紧邻一条路径 ——
+ *         开括号 / 引号 / 冒号 / 列表分隔符。其余一律拒绝(说明我们落在
+ *         `foo(bar)/src/index.ts`、`docs/50%off/a.md`、`foo#bar/x/a.ts` 这类**未支持字符**
+ *         把 token 断开后的中段)。这里刻意用**白名单**:上一版用「run 前缀已含分隔符」
+ *         的黑名单,假设了未支持字符出现在首个分隔符之后,于是 `foo(bar)/src/index.ts`
+ *         (括号在第一个 `/` 之前)绕过去、还切出个绝对路径 `/src/index.ts`。白名单让未知
+ *         字符**默认拒绝**,与本节「宁可少点亮」同向,不必再逐个补。
  *         命中点前是空白时,看空白前那个 run:含分隔符**且不以扩展名收尾** → 拒绝
  *         (`C:\Program Files\Cindy\app.log` 被空格截断的后半段)。「不以扩展名收尾」
  *         不能省,否则 `src/a.ts src/b.ts` 里的第二条会被连坐。
  *   右侧:命中之后紧跟 token 字符 → 拒绝。正则自带的右边界只管到扩展名,整段行号后缀
  *         之后没有边界,于是 `src/a.ts:12345678` 被截成 `:1234567`、`src/a.ts:12foo`
- *         截成 `:12`(错误行号 + 正文残留)。
+ *         截成 `:12`(错误行号 + 正文残留)。`.` 与 `:` 本身不算 token 字符(句末句点
+ *         `见 src/a.ts.`、句末冒号 `见 src/a.ts:` 要保住),但**它们后面还跟 token 字符**
+ *         时同样拒绝 —— 否则 `src/a.ts:12.5` / `src/a.ts:12:foo` 会留下错误行号 + 正文
+ *         残渣,而且这种前缀在链路正常时也会点亮。
  *
- * 好处是 `( ) # % [ ]` 之类**不需要枚举**:它们由「run 前缀已含分隔符」自动覆盖,以后
- * 出现别的未支持字符也一样,不必再来一轮。
+ * 好处是 `( ) # % [ ]` 之类**不需要枚举**:白名单之外一律拒绝,以后出现别的未支持字符
+ * 也自动覆盖,不必再来一轮。
  *
  * 已知误伤(显式取舍,有用例钉住):散文里紧挨着一个「含分隔符、无扩展名」的片段时会被
  * 连坐,如 `见 /etc src/a.ts`。代价是少点亮一条、文本仍可读,方向与 DESIGN.md §14.5
  * 「宁可少点亮一个真目录,不可多点亮一片假链接」一致。
  */
 const TOKEN_CHAR_RE = new RegExp(`[A-Za-z0-9_~@+\\-${CJK}\\\\/]`);
-const LIST_DELIM_RE = /[,;\uff0c\uff1b\u3001]/;
+/**
+ * 可以合法地紧邻一条裸路径的字符(同一 run 内)。白名单而非黑名单:未知字符默认拒绝。
+ * 开括号与引号 —— 路径被包裹(`见(src/a.ts)`);冒号 —— `文件:src/x.ts`;
+ * 列表分隔符 —— `src/a.ts,src/b.ts` 是真的两条路径。
+ * `>` 也放行:字面 HTML 的**元素内容**里的路径按既有口径仍识别(`<div>src/App.tsx</div>`,
+ * 与 strong / inlineCode / 裸 URL matcher 同口径,见 messageMarkdown 的说明),而 `>` 不可能
+ * 出现在路径段内,放行它不会带来错误前缀。
+ * 注意闭括号 `)` `]` 刻意**不在**表里:它只可能出现在被断开的 token 中间。
+ * `=` 同样不在表里:`--config=src/a.json` 因此不点亮 —— 那是可有可无的便利,而放行 `=` 会
+ * 让 `docs/a=b/c.md` 切出错误前缀 `b/c.md`(§14.5:宁可少点亮一个,不可多点亮一片)。
+ */
+const ALLOWED_BEFORE_RE = /[([{（【「『"'`:：,;，；、>]/;
 const SEP_IN_RUN_RE = /[\\/]/;
 const TRAILING_EXT_RE = /\.[A-Za-z0-9]{1,10}$/;
 
 /** 命中是否从路径 token 的**中段**起(见上方说明)。 */
 function startsMidPathToken(text: string, start: number): boolean {
   if (start === 0) return false;
-  // (1) 同一非空白 run 内已经出现过分隔符 → 中段起匹配。
+  // (1) 同一非空白 run 内:只有白名单字符可以紧邻路径,其余说明是被断开的中段。
   let runStart = start - 1;
   while (runStart >= 0 && !/\s/.test(text[runStart])) runStart -= 1;
   const runPrefix = text.slice(runStart + 1, start);
   if (runPrefix.length > 0) {
-    if (!SEP_IN_RUN_RE.test(runPrefix)) return false;
-    return !LIST_DELIM_RE.test(text[start - 1]);
+    return !ALLOWED_BEFORE_RE.test(text[start - 1]);
   }
   // (2) 命中点前是空白:看空白前那个 run 是不是「被空格截断的前半段」。
   //     只跨空格 / 制表符,不跨换行 —— 换行之后是新的一行,不是同一条路径。
@@ -176,7 +192,15 @@ function startsMidPathToken(text: string, start: number): boolean {
 /** 命中之后是否紧跟 token 字符(= 我们截断了它,见上方说明)。 */
 function endsMidPathToken(text: string, end: number): boolean {
   const next = text[end];
-  return next !== undefined && TOKEN_CHAR_RE.test(next);
+  if (next === undefined) return false;
+  if (TOKEN_CHAR_RE.test(next)) return true;
+  // `.` / `:` 本身要放过(句末句点 / 句末冒号),但它们后面还跟 token 字符时说明我们把
+  // 一段复合后缀截断了:`src/a.ts:12.5`、`src/a.ts:12:foo`。
+  if (next === '.' || next === ':') {
+    const after = text[end + 1];
+    return after !== undefined && TOKEN_CHAR_RE.test(after);
+  }
+  return false;
 }
 
 /** 在一段纯文本里定位所有"带分隔符、可解析形状"的路径 token。 */

@@ -506,6 +506,32 @@ describe('findBareFilePathMatch(正文纯文本裸路径词法)', () => {
     expect(allValues('见 src/old~.ts')).toEqual(['src/old~.ts']);
   });
 
+  it('未支持字符出现在**首个分隔符之前**时同样不识别(白名单判据)', () => {
+    // 上一版用「run 前缀已含分隔符」的黑名单,假设未支持字符在首个分隔符之后,于是
+    // 括号在第一个 `/` 之前的形态绕过去了,还切出个绝对路径(PR #1144 review 实捉)。
+    expect(allValues('见 foo(bar)/src/index.ts')).toEqual([]);
+    expect(allValues('见 foo#bar/src/index.ts')).toEqual([]);
+    expect(allValues('见 a%b/c.ts')).toEqual([]);
+    // 白名单里的字符仍放行:包裹用的开括号 / 引号、`文件:` 冒号、列表分隔符、
+    // 以及字面 HTML 的 `>`(元素内容里的路径按既有口径仍识别)。
+    expect(allValues('见(src/a.ts)')).toEqual(['src/a.ts']);
+    expect(allValues('文件:src/App.tsx。完')).toEqual(['src/App.tsx']);
+    expect(allValues('改了 src/a.ts,src/b.ts')).toEqual(['src/a.ts', 'src/b.ts']);
+    // `=` 刻意不在白名单:`--config=src/a.json` 不点亮,换取 `docs/a=b/c.md` 不切出错误前缀。
+    expect(allValues('跑 --config=src/a.json')).toEqual([]);
+  });
+
+  it('复合标点后的行号后缀截断同样拒绝', () => {
+    // `.` / `:` 本身要放过(句末句点 / 冒号),但它们后面还跟 token 字符时说明截断了
+    // 一段复合后缀,留下错误行号 + 正文残渣,而且链路正常时也会点亮(review 实捉)。
+    expect(allValues('见 src/a.ts:12.5')).toEqual([]);
+    expect(allValues('见 src/a.ts:12:foo')).toEqual([]);
+    // 句末标点仍保住。
+    expect(allValues('见 src/a.ts.')).toEqual(['src/a.ts']);
+    expect(allValues('见 src/a.ts:')).toEqual(['src/a.ts']);
+    expect(allValues('见 src/a.png:12 行')).toEqual(['src/a.png:12']);
+  });
+
   it('未支持字符把 token 断开时,不从中段起匹配', () => {
     // `( ) # %` 等字符不在 SEG 里,会把一条真实路径断开,而左边界不挡它们 → 正则从
     // 断点后重新起匹配,切出的后缀(往往还是绝对路径)是错误目标,断链时会被乐观点亮

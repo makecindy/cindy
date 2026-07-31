@@ -1451,3 +1451,28 @@ describe('LaTeX math(块级 $$ 围栏与 inline $ 定界符)', () => {
     expect(groups.map((group) => group.type)).toEqual(['text_run', 'single', 'text_run']);
   });
 });
+
+describe('title 剥离不得灾难性回溯(ReDoS)', () => {
+  // 引号内的字符类若写成 `[^\n]`,它与 `\\.` 在反斜杠上重叠:一个 `\` 既能被前者当
+  // 1 个字符吃、也能作为后者的开头吃 2 个,一串反斜杠就有 Fib(n) 种切法;引号未闭合时
+  // 末尾的 `\2$` 必然失配,回溯把所有切法枚举一遍 → 时间指数增长(实测 42 个反斜杠
+  // 3575ms,每 +4 慢约 7 倍)。触发面是聊天正文里一条 `[x](a "\\…`,而本函数在渲染热
+  // 路径上,手机端会冻住整个 JS 线程(PR #1144 review 实捉)。
+  //
+  // 断言用时间上限:改前 46 个反斜杠约 25s,改后恒 0ms,1s 的上限有 20 倍以上余量,
+  // 不会因 CI 抖动误报。
+  it('未闭合引号 + 长反斜杠串:必须线性完成', () => {
+    const payload = `[x](a "${'\\'.repeat(46)}`;
+    const started = Date.now();
+    parseMobileMarkdownInlines(payload);
+    expect(Date.now() - started, 'title 剥离出现灾难性回溯').toBeLessThan(1000);
+  });
+
+  it('合法 title 仍被正确剥离(修法未改变功能)', () => {
+    expect(parseMobileMarkdownInlines('见 [说明](/abs/a.md "标题") 补充')).toEqual([
+      { type: 'text', text: '见 ' },
+      { type: 'link', text: '说明', url: '/abs/a.md' },
+      { type: 'text', text: ' 补充' },
+    ]);
+  });
+});
