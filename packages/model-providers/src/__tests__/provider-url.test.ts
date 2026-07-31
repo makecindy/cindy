@@ -135,6 +135,18 @@ describe('splitProviderEndpointUrl', () => {
     });
   });
 
+  it('splits a full endpoint with a trailing slash', () => {
+    expect(
+      splitProviderEndpointUrl(
+        'https://token-plan.example/apps/anthropic/v1/messages/',
+        '/v1/messages',
+      ),
+    ).toEqual({
+      baseUrl: 'https://token-plan.example/apps/anthropic',
+      requestPath: '',
+    });
+  });
+
   it('moves an endpoint query into the explicit request path', () => {
     expect(
       splitProviderEndpointUrl(

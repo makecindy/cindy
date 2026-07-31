@@ -82,16 +82,19 @@ export function splitProviderEndpointUrl(
   }
   try {
     const url = new URL(value.trim());
+    const endpointPathname = defaultRequestPath === '/'
+      ? url.pathname
+      : url.pathname.replace(/\/+$/, '');
     if (
       (url.protocol !== 'http:' && url.protocol !== 'https:')
       || url.username
       || url.password
       || url.hash
-      || !url.pathname.endsWith(defaultRequestPath)
+      || !endpointPathname.endsWith(defaultRequestPath)
     ) {
       return null;
     }
-    const basePath = url.pathname.slice(0, -defaultRequestPath.length).replace(/\/+$/, '');
+    const basePath = endpointPathname.slice(0, -defaultRequestPath.length).replace(/\/+$/, '');
     url.pathname = basePath || '/';
     const requestPath = url.search ? `${defaultRequestPath}${url.search}` : '';
     url.search = '';
