@@ -57,7 +57,7 @@ export interface AgentRuntimeConfig {
    *
    * Claude maps this to `CLAUDE_CODE_SUBAGENT_MODEL`. Codex does not consume this field:
    * the desktop host injects its subagent default via spawn-time `-c agents.default_subagent_model`
-   * overrides instead (see apps/desktop maker-host/codex-subagent-config.ts) — the bundled
+   * overrides instead (see apps/desktop/src/main/maker-host/codex-subagent-config.ts) — the bundled
    * codex binary treats it as a fallback that explicit spawn params may still override.
    *
    * ⚠️ 该 env 在 cc 的解析顺序里是**最高优先级**,不仅压过 agent frontmatter 的 `model:`,
