@@ -224,13 +224,6 @@ interface MessageStreamProps {
    *  state via useExpandedBlockMemory). The session-level "is streaming"
    *  state lives on each ChatMessage's own `isStreaming` field instead. */
   isSessionStreaming?: boolean;
-  /**
-   * 正占着 coordinator dispatch/turn 边界的那条 `continue` 合成项的 clientId
-   * （投影字段，见 AgentInputProjection）。自愈重连行用它判断「此刻正在跑的就是我」——
-   * 它从**派发一开始**就为真，比 `isSessionStreaming`（要等首个流事件）早，因此
-   * 「续跑已落库、turn 还没吐事件」那一小段不会闪成静态。旧被控端可能缺省 → null。
-   */
-  continuationInFlightClientId?: string | null;
   /** 当前 vendor turn 的续跑发起项 clientId；steer 顶替 activeTurn 后仍保持。 */
   continuationTurnClientId?: string | null;
   /** 旧被控端缺省该字段时才启用兼容兜底；unknown 在首个投影前 fail closed。 */
@@ -583,9 +576,8 @@ export function findLastUserInputClientId(messages: readonly ChatMessage[]): str
     // 提前停转退回静态（codex P2 / greptile P1）。本文件里其它 turn 边界判断（见上方
     // `hasFollowingUserTurn` 等）也都显式排除 steer，此处保持一致。
     //
-    // 注意这一支同时是**兜底判据**能否成立的关键：steer 被接受时 coordinator 会替换
-    // `activeTurn`，`continuationInFlightClientId` 随之变 null，首选判据在 steer 期间失效，
-    // 全靠这一支把「turn 还在跑」接住。
+    // 首选判据直接使用 main 投影的 vendor-turn owner；旧被控端缺省 owner 字段时，
+    // 才由下面的兼容分支按最后一条非 steer 用户输入兜底。
     if (messages[i].role === 'user' && messages[i].delivery !== 'steer') {
       return messages[i].clientId;
     }

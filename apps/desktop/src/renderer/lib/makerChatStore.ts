@@ -1697,9 +1697,14 @@ function markSessionHasUserMessage(sessionId: string): void {
 function requestInputProjection(sessionId: string): void {
   if (!sessionId) return;
   if (typeof window === 'undefined' || !window.electronAPI?.maker?.input?.getProjection) return;
+  const origin = remoteProjectsStore.getSessionDeviceId(sessionId);
+  const epoch = noteInputProjectionOrigin(sessionId, origin);
   makerApiFor(sessionId)
     .input.getProjection(sessionId)
-    .then(applyInputProjection)
+    .then((projection) => {
+      if (!isCurrentInputProjectionRequest(sessionId, origin, epoch)) return;
+      applyInputProjection(projection);
+    })
     .catch((err) => log.warn('get input projection failed:', err));
 }
 
@@ -5295,6 +5300,46 @@ const _historyFetchInFlight = new Set<string>();
 const _historyLoadOrigin = new Map<string, string | undefined>();
 
 /**
+ * input projection 请求的来源与代际守卫。
+ *
+ * projection 查询可能跨过 device-link origin 切换:启动时先按本机来源发起的请求,可能在
+ * 远程来源已经接管后才返回。若无守卫,旧本机 projection 会覆盖远程 projection(尤其把
+ * continuationTurnClientId 从非空写回 null),让仍在运行的续跑行停止转圈。
+ *
+ * origin 变化时 epoch 单调递增,因此即使来源经历 A→undefined→A 的 ABA 也不会重新放行
+ * 更早请求。请求回写同时检查捕获的 origin 与 epoch;推送事件和当前操作的直接响应仍走
+ * applyInputProjection,它们不属于这条可跨来源的查询竞态。
+ */
+const _inputProjectionOrigin = new Map<string, string | undefined>();
+const _inputProjectionEpoch = new Map<string, number>();
+
+function noteInputProjectionOrigin(sessionId: string, origin: string | undefined): number {
+  const previous = _inputProjectionOrigin.get(sessionId);
+  if (!_inputProjectionOrigin.has(sessionId)) {
+    _inputProjectionOrigin.set(sessionId, origin);
+    return _inputProjectionEpoch.get(sessionId) ?? 0;
+  }
+  if (previous !== origin) {
+    _inputProjectionOrigin.set(sessionId, origin);
+    const nextEpoch = (_inputProjectionEpoch.get(sessionId) ?? 0) + 1;
+    _inputProjectionEpoch.set(sessionId, nextEpoch);
+    return nextEpoch;
+  }
+  return _inputProjectionEpoch.get(sessionId) ?? 0;
+}
+
+function isCurrentInputProjectionRequest(
+  sessionId: string,
+  origin: string | undefined,
+  epoch: number,
+): boolean {
+  return (
+    remoteProjectsStore.getSessionDeviceId(sessionId) === origin &&
+    (_inputProjectionEpoch.get(sessionId) ?? 0) === epoch
+  );
+}
+
+/**
  * 会话消息切片的代际号:整体重置切片的路径递增——reloadMessages(rewind / origin
  * 漂移重载)、clearSessionAfterGuard(/clear)、_purgeSession(删除 / 归档 / LRU 驱逐)、
  * dropMessagesFromClientId(edit-last 截断)、removeMessagesByClientIds(分组删除)、
@@ -5847,6 +5892,9 @@ function dropMessagesFromClientId(sessionId: string, clientId: string): void {
 function reconcileOpenSessionOrigins(): void {
   for (const sessionId of sessions.keys()) {
     const current = remoteProjectsStore.getSessionDeviceId(sessionId);
+    // 即使当前来源暂时为空也要推进 projection 代际:否则 A→断连→A 的 ABA 会让
+    // 最初按 A 发起的旧查询在来源恢复后重新通过检查,覆盖恢复后的权威投影。
+    noteInputProjectionOrigin(sessionId, current);
     if (current === undefined) continue;
     const loaded = _historyLoadOrigin.get(sessionId);
     if (current === loaded) continue;
