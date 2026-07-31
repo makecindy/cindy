@@ -44,6 +44,7 @@ function countingSources(busy: boolean) {
     anySessionInTurn: (): boolean => { h.reads += 1; return busy; },
     listClaudeBackgroundSessions: (): readonly string[] => { h.reads += 1; return []; },
     anyGhostSessionBusy: (): boolean => { h.reads += 1; return false; },
+    anyBackgroundBashRunning: (): boolean => { h.reads += 1; return false; },
     anySchedulerRunRunning: async (): Promise<boolean> => { h.reads += 1; return false; },
   });
 }

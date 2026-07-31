@@ -3826,7 +3826,12 @@ const registerIpcHandlers = () => {
         anySessionInTurn: () => anySessionInTurn(getMakerCore()),
         listClaudeBackgroundSessions: () => listActiveClaudeBackgroundActivitySessions(),
         anyGhostSessionBusy: () => getGhostSessionActivityTracker().anySessionBusy(),
-        // script 模式 / pre-run hook 阶段的 run 不创建 session,前三个来源看不到它们。
+        // run_in_background 的 Bash 不调模型、也不折算 running,前两个来源都看不到它。
+        anyBackgroundBashRunning: () =>
+          getMakerCore()
+            .listActiveSessions()
+            .some((session) => session.listBackgroundTasks().length > 0),
+        // script 模式 / pre-run hook 阶段的 run 不创建 session,内存来源看不到它们。
         anySchedulerRunRunning: () =>
           readUpdateRelaunchScheduleBusy(getScheduleStorageIfInitialized()),
       }));

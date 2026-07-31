@@ -1,13 +1,14 @@
 /**
- * 手动更新重启的阻断判定 —— 三个活动来源的聚合与 fail-closed。
+ * 手动更新重启的阻断判定 —— 五个活动来源的聚合与 fail-closed。
  *
  * 这个判定服务的是不可撤销的破坏性动作(forceQuit → process.exit(0)),所以两条不变量:
- *  1. **任一来源报忙就是忙**（四源等价，没有主次）;
+ *  1. **任一来源报忙就是忙**（五源等价，没有主次）;
  *  2. **任一来源读不出来也算忙**（「无法确认」不等于「确认没有」）。
  * 每个来源各有一条独立用例 —— 少一条就意味着少覆盖一个真实的静默中断入口。
  *
- * scheduler 源尤其不能省:script 模式与 pre-run hook 阶段的 run 都不创建 session,三个内存
- * 探针全看不到它们。
+ * 有两个来源特别容易被漏，各自都有独立证据：scheduler 的 script 模式 / pre-run hook 阶段不
+ * 创建 session；run_in_background 的 Bash 不调模型（点不亮 loopback 信号）也不折算 running。
+ * 两者都只能单独查。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -18,6 +19,7 @@ const idle = {
   anySessionInTurn: () => false,
   listClaudeBackgroundSessions: () => [] as readonly string[],
   anyGhostSessionBusy: () => false,
+  anyBackgroundBashRunning: () => false,
   anySchedulerRunRunning: async () => false,
 };
 
@@ -53,12 +55,14 @@ describe('evaluateRelaunchBusyActivity', () => {
       anySessionInTurn: () => true,
       listClaudeBackgroundSessions: () => ['sess-a'],
       anyGhostSessionBusy: () => true,
+      anyBackgroundBashRunning: () => true,
     });
     expect(r.busy).toBe(true);
     expect(r.reasons).toEqual([
       'session-in-turn',
       'claude-background-activity',
       'ghost-background-activity',
+      'background-bash',
     ]);
   });
 
@@ -66,6 +70,7 @@ describe('evaluateRelaunchBusyActivity', () => {
     ['anySessionInTurn', 'session-in-turn'],
     ['listClaudeBackgroundSessions', 'claude-background-activity'],
     ['anyGhostSessionBusy', 'ghost-background-activity'],
+    ['anyBackgroundBashRunning', 'background-bash'],
   ] as const)('%s 抛错时 fail closed 并标记探针失败', async (key, label) => {
     const r = await evaluateRelaunchBusyActivity({
       ...idle,
@@ -84,6 +89,17 @@ describe('evaluateRelaunchBusyActivity', () => {
     });
     expect(r.busy).toBe(true);
     expect(r.reasons).toEqual(['session-in-turn-probe-failed', 'ghost-background-activity']);
+  });
+
+  // 后台 Bash(run_in_background):不调模型 → 点不亮 Claude 后台活动信号;不折算 running →
+  // 逻辑 turn 也看不到。重启会直接杀掉 dev server / 长跑脚本这类子进程。
+  it('后台 Bash 任务在跑时阻断(其它内存源全空闲也要拦)', async () => {
+    const r = await evaluateRelaunchBusyActivity({
+      ...idle,
+      anyBackgroundBashRunning: () => true,
+    });
+    expect(r.busy).toBe(true);
+    expect(r.reasons).toEqual(['background-bash']);
   });
 
   // scheduler:script 模式与 pre-run hook 阶段的 run 都不创建 session,内存探针看不到 ——
