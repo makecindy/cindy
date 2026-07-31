@@ -70,7 +70,11 @@ function timePartsAt(
         part.type === 'hour' ||
         part.type === 'minute'
       ) {
-        parts[part.type] = Number(part.value);
+        const value = Number(part.value);
+        if (!Number.isFinite(value)) continue;
+        // Keep parity with maker-scheduler's wallClock(): some Intl
+        // implementations report midnight as 24 even with hourCycle=h23.
+        parts[part.type] = part.type === 'hour' && value === 24 ? 0 : value;
       }
     }
     if (

@@ -1,8 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { extractUsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
 
 const NOW = Date.parse('2026-01-24T10:00:00.000Z');
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe('usage limit recovery detection', () => {
   it('uses Claude structured rate-limit data and a structured reset timestamp', () => {
@@ -40,6 +44,33 @@ describe('usage limit recovery detection', () => {
         NOW,
       ),
     ).toEqual({ resetAtMs: Date.parse('2026-01-24T13:10:00.000Z') });
+  });
+
+  it('normalizes Intl midnight hour 24 while parsing a time-of-day reset', () => {
+    const originalFormatToParts = Intl.DateTimeFormat.prototype.formatToParts;
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'formatToParts').mockImplementation(function (
+      this: Intl.DateTimeFormat,
+      date,
+    ) {
+      return [
+        ...originalFormatToParts
+          .call(this, date)
+          .map((part) =>
+            part.type === 'hour' && part.value === '00' ? { ...part, value: '24' } : part,
+          ),
+        { type: 'weekday', value: 'not-a-number' },
+      ];
+    });
+
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          sdkError: 'rate_limit',
+          message: "You've hit your session limit · resets 12:00am (UTC)",
+        },
+        Date.parse('2026-01-24T23:00:00.000Z'),
+      ),
+    ).toEqual({ resetAtMs: Date.parse('2026-01-25T00:00:00.000Z') });
   });
 
   it('keeps weekly limits actionable without guessing an unsupported weekday reset time', () => {

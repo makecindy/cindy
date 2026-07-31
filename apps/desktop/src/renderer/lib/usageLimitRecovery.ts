@@ -135,7 +135,21 @@ function partsInTimeZone(timestamp: number, timeZone: string): Record<string, nu
     });
     const parts: Record<string, number> = {};
     for (const part of formatter.formatToParts(new Date(timestamp))) {
-      if (part.type !== 'literal') parts[part.type] = Number(part.value);
+      if (
+        part.type !== 'year' &&
+        part.type !== 'month' &&
+        part.type !== 'day' &&
+        part.type !== 'hour' &&
+        part.type !== 'minute' &&
+        part.type !== 'second'
+      ) {
+        continue;
+      }
+      const value = Number(part.value);
+      if (!Number.isFinite(value)) continue;
+      // Keep parity with maker-scheduler's wallClock(): some Intl
+      // implementations report midnight as 24 even with hourCycle=h23.
+      parts[part.type] = part.type === 'hour' && value === 24 ? 0 : value;
     }
     return parts;
   } catch {

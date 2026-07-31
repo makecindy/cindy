@@ -1598,6 +1598,13 @@ function applyInputProjection(projection: AgentInputProjection): void {
     // 折叠:同一次中断事件里,ephemeral 进行中行与它前面那些已落库的重连行只显示最新
     // 一条(否则第 2 次重连时会看到「未成功」+「重新连接中 2/5」两行并存)。
     const messages = collapseConsecutiveAutoResumeRows(withPendingCard);
+    // main 可能重复投影同一条 error。相对时间（如 "Try again in 1h"）只能在错误首次出现
+    // 时锚定；每次都按新的 Date.now() 重算会让恢复时间持续后移，也会制造无意义的新对象。
+    const usageLimitRecovery = !projection.error
+      ? null
+      : projection.error === s.error
+        ? s.usageLimitRecovery
+        : extractUsageLimitRecoveryHint({ message: projection.error });
     return {
       ...s,
       messages,
@@ -1609,9 +1616,7 @@ function applyInputProjection(projection: AgentInputProjection): void {
       queueEditLocks: projection.queueEditLocks,
       queueAbortPending: projection.queueAbortPending,
       error: projection.error,
-      usageLimitRecovery: projection.error
-        ? extractUsageLimitRecoveryHint({ message: projection.error })
-        : null,
+      usageLimitRecovery,
       // projection 覆盖 error(dispatch 失败等,无 reason 语义)→ reason 一并清,
       // 避免 silent-stop 的「继续」按钮挂在一条不相干的错误上。
       errorReason: null,
