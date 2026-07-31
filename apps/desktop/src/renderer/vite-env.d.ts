@@ -2734,6 +2734,34 @@ interface ElectronAPI {
       | { success: true }
       | { success: false; errorCode: string; message: string }
     >;
+    /** 在 main 内选择并检查本地包，成功时签发绑定当前 renderer 的短期导入授权。 */
+    pickLocal: () => Promise<
+      | { success: true; canceled: true }
+      | {
+          success: true;
+          canceled: false;
+          grantToken: string;
+          name: string;
+          description: string;
+          version: string;
+        }
+      | { success: false; errorCode: string; message: string }
+    >;
+    /** 使用 main 签发的文件授权导入；registry origin=imported。 */
+    importLocal: (params: {
+      grantToken: string;
+      installPath?: string;
+      force?: boolean;
+    }) => Promise<
+      | {
+          success: true;
+          name: string;
+          description: string;
+          version: string;
+          absolutePath: string;
+        }
+      | { success: false; errorCode: string; message: string }
+    >;
     onInstallProgress: (
       callback: (event: {
         phase:
@@ -4551,6 +4579,14 @@ interface ElectronAPI {
       input: import('../shared/helpTypes').HelpFeedbackDraftInput,
     ) => Promise<import('../shared/helpTypes').HelpFeedbackDraft>;
     /** /issues 页面的「我的 Issue」列表;force=true 绕过 main 侧 60s TTL(手动刷新)。 */
+    /**
+     * /issues 首屏快照(上次查询成功时落盘的列表镜像)。进页面先渲染它,避免空等远端;
+     * fresh 一到即整体接管。**非权威**:里面没有本次查询的健康状况,它的空列表也不构成
+     * 「查证过的空」(详见 main/github-issue/myIssuesSnapshotStore.ts)。
+     */
+    getMyIssuesSnapshot: () => Promise<
+      import('../shared/myIssues').MyIssuesSnapshot | null
+    >;
     listMyIssues: (options?: { force?: boolean }) => Promise<
       | ({ success: true } & import('../shared/myIssues').MyIssuesResult)
       | {
@@ -4559,6 +4595,7 @@ interface ElectronAPI {
           error: import('../shared/myIssues').MyIssuesErrorCode;
           items: [];
           githubEnhancement: null;
+          githubEnhancementFailed: false;
           degraded: null;
           truncated: false;
         }
@@ -4954,8 +4991,8 @@ interface StoredInstall {
   installedAt: number;
   /** unix seconds。update / publish 同步时刷新。 */
   updatedAt: number;
-  /** 本地来源：installed=从市场安装，published=本地创建后发布，learned=/learn 蒸馏产物。历史数据无此字段。 */
-  origin?: 'installed' | 'published' | 'learned';
+  /** 本地来源：installed=从市场安装，published=本地创建后发布，learned=/learn 蒸馏产物，imported=本地 zip/SKILL.md 导入。历史数据无此字段。 */
+  origin?: 'installed' | 'published' | 'learned' | 'imported';
   /** 是否由产品自动同步流程安装。用于区分普通市场安装与用户可 opt-out 的自动同步安装。 */
   autoSynced?: boolean;
   /** /learn 蒸馏产物的溯源(仅 origin='learned')。personal=true ⇒ publish 拦截。 */

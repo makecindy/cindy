@@ -6862,6 +6862,7 @@
     "mine": {
       "refresh": "Refresh",
       "emptyTitle": "No issues submitted yet",
+      "emptyTitleUnverified": "Couldn't find your issues right now",
       "startIssueChat": "Start a new chat with /issue",
       "statusUnknown": "Status unknown",
       "sourceCindy": "Submitted from Cindy",
@@ -6875,6 +6876,8 @@
       "notSignedInHint": "Sign in to your Cindy account to see every issue you've filed, along with its current status.",
       "fetchFailedHint": "Couldn't load the latest status. Showing only submissions recorded on this device, so this list may be incomplete.",
       "fetchFailedPartialHint": "Couldn't load the latest status, so some issues may show incomplete status.",
+      "enhancementFailedHint": "Couldn't read the issues filed from your GitHub account. The Cindy GitHub plugin's access token may not have enough permissions — check it on the plugin page.",
+      "enhancementFailedGenericHint": "Couldn't read the issues filed from your GitHub account — likely a network hiccup or GitHub rate limit. Try refreshing in a moment.",
       "truncatedHint": "There are more issues than shown here — open GitHub for the full list."
     },
     "redirect": {
@@ -7141,7 +7144,13 @@
       "installed": "Installed",
       "globalScope": "Global",
       "sourceSkillhub": "SkillHub",
-      "sourceLocal": "Local"
+      "sourceLocal": "Local",
+      "import": "Import skill",
+      "importAria": "Import a skill from a local zip or SKILL.md",
+      "importPickerTitle": "Choose import location",
+      "importPickerSubtitle": "{{name}} · {{description}}",
+      "importSuccess": "{{name}} imported{{suffix}}",
+      "importFailed": "Failed to import skill"
     },
     "common": {
       "openFolderFailed": "Failed to open folder",

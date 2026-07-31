@@ -2459,6 +2459,36 @@ contextBridge.exposeInMainWorld('electronAPI', {
       | { success: false; errorCode: string; message: string }
     > => ipcRenderer.invoke('skillhub:uninstall', { absolutePath }),
 
+    /** 在 main 内选择并检查本地包，成功时签发绑定当前 renderer 的短期导入授权。 */
+    pickLocal: (): Promise<
+      | { success: true; canceled: true }
+      | {
+          success: true;
+          canceled: false;
+          grantToken: string;
+          name: string;
+          description: string;
+          version: string;
+        }
+      | { success: false; errorCode: string; message: string }
+    > => ipcRenderer.invoke('skillhub:pick-local'),
+
+    /** 使用 main 签发的文件授权导入到全局或指定 installPath；registry origin=imported。 */
+    importLocal: (params: {
+      grantToken: string;
+      installPath?: string;
+      force?: boolean;
+    }): Promise<
+      | {
+          success: true;
+          name: string;
+          description: string;
+          version: string;
+          absolutePath: string;
+        }
+      | { success: false; errorCode: string; message: string }
+    > => ipcRenderer.invoke('skillhub:import-local', params),
+
     // 订阅 install 进度事件
     onInstallProgress: (
       cb: (event: {
@@ -4895,6 +4925,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       input: import('../shared/helpTypes').HelpFeedbackDraftInput,
     ): Promise<import('../shared/helpTypes').HelpFeedbackDraft> =>
       ipcRenderer.invoke('maker:help:feedback:create', input),
+    // /issues 首屏快照(上次结果的落盘镜像);没有 / 坏掉返回 null。非权威,fresh 一到即接管。
+    getMyIssuesSnapshot: (): Promise<import('../shared/myIssues').MyIssuesSnapshot | null> =>
+      ipcRenderer.invoke('maker:issues:snapshot-mine'),
     // /issues 页面的「我的 Issue」列表;force=true 绕过 main 侧 60s TTL(手动刷新)。
     listMyIssues: (
       options?: { force?: boolean },

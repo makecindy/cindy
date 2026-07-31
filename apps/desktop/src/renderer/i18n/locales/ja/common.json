@@ -3801,7 +3801,7 @@
     "close": "閉じる",
     "menuItems": {
       "help": "ヘルプ",
-      "issues": "問題",
+      "issues": "フィードバック",
       "checkForUpdates": "更新を確認"
     },
     "updateCheckToast": {
@@ -6852,6 +6852,7 @@
     "mine": {
       "refresh": "更新",
       "emptyTitle": "送信した Issue はまだありません",
+      "emptyTitleUnverified": "現在 Issue を取得できません",
       "startIssueChat": "/issue で新しいチャットを開始",
       "statusUnknown": "ステータス不明",
       "sourceCindy": "Cindy から送信",
@@ -6864,6 +6865,8 @@
       "notSignedInHint": "Cindy アカウントにサインインすると、送信したすべての Issue と最新のステータスを表示できます。",
       "fetchFailedHint": "最新ステータスを取得できませんでした。この端末に記録された送信分のみを表示しているため、一覧が不完全な場合があります。",
       "fetchFailedPartialHint": "最新ステータスを取得できませんでした。一部の Issue はステータスが不完全な場合があります。",
+      "enhancementFailedHint": "あなたの GitHub アカウントで作成した Issue を読み取れませんでした。Cindy GitHub プラグインのアクセストークンの権限が不足している可能性があります。プラグインページで確認してください。",
+      "enhancementFailedGenericHint": "あなたの GitHub アカウントで作成した Issue を読み取れませんでした。ネットワークまたは GitHub のレート制限が原因の可能性があります。しばらくしてから再読み込みしてください。",
       "truncatedHint": "Issue が多いため一部のみ表示しています。全件は GitHub で確認してください。"
     },
     "redirect": {
@@ -7130,7 +7133,13 @@
       "installed": "インストール済み",
       "globalScope": "グローバル",
       "sourceSkillhub": "SkillHub",
-      "sourceLocal": "ローカル"
+      "sourceLocal": "ローカル",
+      "import": "スキルをインポート",
+      "importAria": "ローカルの zip または SKILL.md からスキルをインポート",
+      "importPickerTitle": "インポート先を選択",
+      "importPickerSubtitle": "{{name}} · {{description}}",
+      "importSuccess": "{{name}} をインポートしました{{suffix}}",
+      "importFailed": "スキルのインポートに失敗しました"
     },
     "common": {
       "openFolderFailed": "フォルダを開けませんでした",

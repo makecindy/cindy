@@ -94,6 +94,7 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
           resolutions: ['480p', '720p', '1080p'],
           ratios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
           fps: [24],
+          maxImagesByRefMode: { first_and_last_frame: 2, reference_image: 9 },
         }
       : null,
   );
@@ -321,6 +322,8 @@ describe('视频画面参数', () => {
       prompt: '让它动起来',
       model: 'seedance-fast',
       imagePaths: [`/disk/${HASH_S}.png`],
+      // refMode 有缺省值(不是"传了才出现"的可选键),始终随载荷下发
+      refMode: 'first_and_last_frame',
       resolution: '480p',
     });
   });
@@ -495,6 +498,8 @@ describe('视频代办(gen_video / edit_video)', () => {
       prompt: '让它动起来',
       model: 'seedance-fast',
       imagePaths: [`/disk/${HASH_S}.png`],
+      // 不传 refMode 的老调用方落首尾帧
+      refMode: 'first_and_last_frame',
     });
     const over = await slot.handleModelRequest('art', {
       type: 'cindy-request',
@@ -504,6 +509,103 @@ describe('视频代办(gen_video / edit_video)', () => {
     });
     expect(over).toMatchObject({ ok: false });
     expect((over as { message: string }).message).toContain('上限 2');
+  });
+
+  it('refMode:reference_image → 上限放宽到 9 张并原样透传', async () => {
+    const { slot, editVideo } = makeSlot();
+    const r = await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'edit_video',
+      prompt: '[Image 1] 的人穿着 [Image 2] 的衣服',
+      refMode: 'reference_image',
+      hashes: Array(3).fill(HASH_S),
+    });
+    expect(r).toMatchObject({ ok: true });
+    expect(editVideo).toHaveBeenLastCalledWith({
+      prompt: '[Image 1] 的人穿着 [Image 2] 的衣服',
+      model: 'seedance-fast',
+      imagePaths: Array(3).fill(`/disk/${HASH_S}.png`),
+      refMode: 'reference_image',
+    });
+  });
+
+  it('refMode:reference_image 超过 9 张 → 协议层粗筛拒', async () => {
+    const { slot, editVideo } = makeSlot();
+    const r = await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'edit_video',
+      prompt: 'x',
+      refMode: 'reference_image',
+      hashes: Array(10).fill(HASH_S),
+    });
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { message: string }).message).toContain('上限 9');
+    expect(editVideo).not.toHaveBeenCalled();
+  });
+
+  it('型号不支持该 refMode → 明拒,不降级成另一种用法', async () => {
+    const { slot, editVideo } = makeSlot({
+      videoCapabilities: vi.fn(() => ({
+        durations: [5],
+        resolutions: ['720p'],
+        ratios: ['16:9'],
+        fps: [24],
+        // 只有首尾帧用法
+        maxImagesByRefMode: { first_and_last_frame: 1 },
+      })) as unknown as CindySlotDeps['videoCapabilities'],
+    });
+    const r = await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'edit_video',
+      prompt: 'x',
+      refMode: 'reference_image',
+      hashes: [HASH_S],
+    });
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { message: string }).message).toContain('不支持参考图用法');
+    expect(editVideo).not.toHaveBeenCalled();
+  });
+
+  it('型号张数上限低于协议层粗筛 → 按型号拒并报该型号的上限', async () => {
+    const { slot, editVideo } = makeSlot({
+      videoCapabilities: vi.fn(() => ({
+        durations: [5],
+        resolutions: ['720p'],
+        ratios: ['16:9'],
+        fps: [24],
+        maxImagesByRefMode: { first_and_last_frame: 1, reference_image: 9 },
+      })) as unknown as CindySlotDeps['videoCapabilities'],
+    });
+    // 协议层首尾帧上限是 2,这个型号只吃 1 张(happyhorse i2v 的情形)
+    const r = await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'edit_video',
+      prompt: 'x',
+      hashes: [HASH_S, HASH_S],
+    });
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { message: string }).message).toContain('最多 1 张参考图');
+    expect(editVideo).not.toHaveBeenCalled();
+  });
+
+  it('refMode 值域粗筛 + 只认 edit_video(带错代办类型明拒)', async () => {
+    const { slot } = makeSlot();
+    const bogus = await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'edit_video',
+      prompt: 'x',
+      refMode: 'last_frame_only',
+      hashes: [HASH_S],
+    });
+    expect(bogus).toMatchObject({ ok: false });
+    expect((bogus as { message: string }).message).toContain('未知参考图用法');
+
+    const wrongKind = await slot.handleModelRequest('art', {
+      ...VREQ,
+      refMode: 'reference_image',
+    });
+    expect(wrongKind).toMatchObject({ ok: false });
+    expect((wrongKind as { message: string }).message).toContain('仅支持 edit_video');
   });
 
   it('详单只有 image → 视频代办拒且提示补声明(类目粒度资格审)', async () => {

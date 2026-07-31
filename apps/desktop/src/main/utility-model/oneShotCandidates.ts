@@ -45,6 +45,8 @@ export type UtilityTextCandidate = {
 export type UtilityTextRequestOptions = {
   maxTokens?: number;
   timeoutMs?: number;
+  /** Optional lightweight reasoning hint for short internal classifiers. */
+  reasoningEffort?: 'low' | 'medium' | 'high';
   /** 显式任务来源；存在时禁止跨来源 fallback。 */
   providerId?: string;
   agentKind?: AgentKind;
@@ -411,6 +413,7 @@ async function requestExplicitProviderText(
       transport,
       maxTokens: opts.maxTokens,
       timeoutMs: opts.timeoutMs,
+      reasoningEffort: opts.reasoningEffort,
     });
   }
 
@@ -503,6 +506,7 @@ async function requestExplicitProviderText(
       prompt: text,
       maxTokens: requestOpts?.maxTokens,
       timeoutMs: requestOpts?.timeoutMs,
+      reasoningEffort: requestOpts?.reasoningEffort,
     }),
   };
   return executeCandidates([candidate], prompt, [], opts);
@@ -515,6 +519,12 @@ function inferProviderAgent(provider: ReturnType<typeof getActiveCatalog>['provi
   return undefined;
 }
 
+/** Matches the xAI bridge capability gate: coding/build variants reject `reasoning`. */
+function supportsXaiReasoning(model: string): boolean {
+  const normalized = model.replace(/^xai\//, '');
+  return !(normalized.startsWith('grok-code') || normalized.startsWith('grok-build'));
+}
+
 async function requestBuiltinProviderText(
   prompt: string,
   input: {
@@ -524,6 +534,7 @@ async function requestBuiltinProviderText(
     transport: UtilityModelTransport;
     maxTokens?: number;
     timeoutMs?: number;
+    reasoningEffort?: 'low' | 'medium' | 'high';
   },
 ): Promise<UtilityTextResult> {
   const profile: UtilityModelProfile = {
@@ -557,6 +568,7 @@ async function requestBuiltinProviderText(
         prompt: text,
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
+        reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
       }),
     }], prompt, [], input);
   }
@@ -583,6 +595,7 @@ async function requestBuiltinProviderText(
         prompt: text,
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
+        reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
       }),
     }], prompt, [], input);
   }
@@ -618,6 +631,11 @@ async function requestBuiltinProviderText(
         prompt: text,
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
+        reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
+        // ChatGPT's private Codex Responses endpoint rejects this public API
+        // parameter with HTTP 400. The Auto reviewer enforces its own compact
+        // output ceiling after the response instead.
+        supportsMaxOutputTokens: false,
       }),
     }], prompt, [], input);
   }
@@ -642,6 +660,8 @@ async function requestBuiltinProviderText(
         prompt: text,
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
+        reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
+        supportsReasoning: supportsXaiReasoning(input.model),
       }),
     }], prompt, [], input);
   }
@@ -756,6 +776,7 @@ function resolveLiteLlmCandidate(profile: UtilityModelProfile): UtilityTextCandi
         prompt,
         maxTokens: opts?.maxTokens,
         timeoutMs: opts?.timeoutMs,
+        reasoningEffort: opts?.reasoningEffort,
       }),
     },
   };
@@ -768,6 +789,7 @@ async function requestLiteLlmText(input: {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
+  reasoningEffort?: 'low' | 'medium' | 'high';
 }): Promise<string> {
   const controller = new AbortController();
   const timeoutMs = input.timeoutMs ?? 20_000;
@@ -783,6 +805,7 @@ async function requestLiteLlmText(input: {
       body: JSON.stringify({
         model: input.model,
         ...(input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
+        ...(input.reasoningEffort ? { reasoning_effort: input.reasoningEffort } : {}),
         messages: [{ role: 'user', content: input.prompt }],
       }),
     });
@@ -872,20 +895,43 @@ async function requestProviderHttpText(input: {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
+  reasoningEffort?: 'low' | 'medium' | 'high';
+  /** Some coding-specialized models reject their wire's reasoning field. */
+  supportsReasoning?: boolean;
+  /** Unknown custom routes may reject optional fields from an otherwise compatible wire. */
+  retryWithMinimalBodyOnInvalidRequest?: boolean;
+  /** Some private Responses-compatible endpoints reject max_output_tokens. */
+  supportsMaxOutputTokens?: boolean;
 }): Promise<string> {
   const controller = new AbortController();
   const timeoutMs = input.timeoutMs ?? 90_000;
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const body = input.wire === 'responses'
+    const supportsRequestedReasoning = Boolean(
+      input.wire !== 'anthropic-messages'
+      && input.reasoningEffort
+      && input.supportsReasoning !== false,
+    );
+    const hasOptionalRequestFields = input.wire === 'responses'
+      || input.maxTokens !== undefined
+      || supportsRequestedReasoning;
+    const buildBody = (minimal: boolean) => input.wire === 'responses'
       ? {
         model: input.model,
         input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: input.prompt }] }],
-        tools: [],
-        tool_choice: 'auto',
-        parallel_tool_calls: false,
-        store: false,
-        stream: true,
+        ...(!minimal ? {
+          tools: [],
+          tool_choice: 'auto',
+          parallel_tool_calls: false,
+          store: false,
+          stream: true,
+        } : {}),
+        ...(!minimal && input.maxTokens !== undefined && input.supportsMaxOutputTokens !== false
+          ? { max_output_tokens: input.maxTokens }
+          : {}),
+        ...(!minimal && supportsRequestedReasoning
+          ? { reasoning: { effort: input.reasoningEffort } }
+          : {}),
       }
       : input.wire === 'anthropic-messages'
         ? {
@@ -895,18 +941,32 @@ async function requestProviderHttpText(input: {
         }
         : {
           model: input.model,
-          ...(input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
+          ...(!minimal && input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
+          ...(!minimal && supportsRequestedReasoning
+            ? { reasoning_effort: input.reasoningEffort }
+            : {}),
           messages: [{ role: 'user', content: input.prompt }],
         };
-    const response = await undiciFetch(input.endpoint, {
+    const send = (minimal: boolean) => undiciFetch(input.endpoint, {
       method: 'POST',
       signal: controller.signal,
       headers: {
         ...(input.headers ?? {}),
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(buildBody(minimal)),
     });
+    let response = await send(false);
+    if (
+      !response.ok
+      && (response.status === 400 || response.status === 422)
+      && input.wire !== 'anthropic-messages'
+      && hasOptionalRequestFields
+      && input.retryWithMinimalBodyOnInvalidRequest
+    ) {
+      await response.body?.cancel().catch(() => undefined);
+      response = await send(true);
+    }
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
       throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status });
@@ -956,6 +1016,7 @@ async function requestCustomProviderText(input: {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
+  reasoningEffort?: 'low' | 'medium' | 'high';
 }): Promise<string> {
   const headers: Record<string, string> = {
     ...(input.headers ?? {}),
@@ -1000,6 +1061,8 @@ async function requestCustomProviderText(input: {
     prompt: input.prompt,
     maxTokens: input.maxTokens,
     timeoutMs: input.timeoutMs,
+    reasoningEffort: input.reasoningEffort,
+    retryWithMinimalBodyOnInvalidRequest: true,
   });
 }
 

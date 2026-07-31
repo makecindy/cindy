@@ -115,6 +115,64 @@ describe('message normalize shared model', () => {
     expect(pairing.resultContentFor(sorted[0], parseMessageToolUse(sorted[0]))).toBe('legacy file contents');
   });
 
+  it('结束时刻只认 toolUseId 精确配对，不吃邻接兜底', () => {
+    // 回归(#1210 review):邻接兜底按"紧邻的下一条 tool_result"猜归属,在稀疏窗口里会猜错 ——
+    // 孤岛窗口的旧段末尾 tool_use 恰好与新段开头某条不相关的 tool_result 相邻时,若结束时刻也
+    // 吃这份兜底,旧工具的 settledAt 会变成几小时后那条结果的时刻,渲染层 tool_group 的结束锚点
+    // 被推过去,真实的窗口空洞不再触发切组 —— 兜底正好在最需要它的场景失效。
+    // 内容与 settled 状态照旧走邻接(猜错最坏是显示串了,live 中按 id 到达即自愈);时刻不猜。
+    const sorted = sortMessagesByCreatedAt([
+      message({
+        id: 'island-tail-tool',
+        role: 'tool_use',
+        content: { toolName: 'Read', input: { file_path: '/repo/a.ts' } },
+        createdAt: '2026-07-31T06:00:00.000Z',
+      }),
+      message({
+        id: 'next-island-result',
+        role: 'tool_result',
+        content: 'unrelated result from two hours later',
+        createdAt: '2026-07-31T08:20:00.000Z',
+      }),
+    ]);
+
+    const pairing = buildMessageToolResultPairing(sorted);
+    const tool = parseMessageToolUse(sorted[0]);
+    expect(pairing.resultContentFor(sorted[0], tool)).toBe('unrelated result from two hours later');
+    expect(pairing.hasResultFor(sorted[0], tool)).toBe(true);
+    expect(pairing.resultCreatedAtFor(sorted[0], tool)).toBeUndefined();
+  });
+
+  it('结束时刻按 toolUseId 命中时取最晚一条结果', () => {
+    const sorted = sortMessagesByCreatedAt([
+      message({
+        id: 'paired-tool',
+        role: 'tool_use',
+        toolUseId: 'tu_end',
+        content: { toolUseId: 'tu_end', toolName: 'Bash', input: { command: 'sleep' } },
+        createdAt: '2026-07-31T06:00:00.000Z',
+      }),
+      message({
+        id: 'paired-result-early',
+        role: 'tool_result',
+        toolUseId: 'tu_end',
+        content: 'partial',
+        createdAt: '2026-07-31T06:10:00.000Z',
+      }),
+      message({
+        id: 'paired-result-late',
+        role: 'tool_result',
+        toolUseId: 'tu_end',
+        content: 'done',
+        createdAt: '2026-07-31T06:20:00.000Z',
+      }),
+    ]);
+
+    const pairing = buildMessageToolResultPairing(sorted);
+    expect(pairing.resultCreatedAtFor(sorted[0], parseMessageToolUse(sorted[0])))
+      .toBe('2026-07-31T06:20:00.000Z');
+  });
+
   it('suppresses empty Orca communication results but keeps user-facing details', () => {
     const sorted = sortMessagesByCreatedAt([
       message({

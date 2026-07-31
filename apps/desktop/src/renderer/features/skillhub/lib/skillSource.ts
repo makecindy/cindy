@@ -3,7 +3,7 @@
  *
  * 用户视角只关心一份本地 skill 是「从 SkillHub 安装下来的副本」还是「自己的」:
  *   - 'installed'            → 走 SkillHub 市场安装的版本            → 'skillhub'
- *   - 'published' / 'learned' / 无 origin → 自己开发/发布/学习得到的本地版本 → 'local'
+ *   - 'published' / 'learned' / 'imported' / 无 origin → 自己开发/发布/学习/导入的本地版本 → 'local'
  * ('published' 的本地目录是作者自己的 dev 副本,不是从 hub 拉下来的,故归 'local'。)
  *
  * 历史遗留数据(v0.6 引入 origin 之前的 registry 记录)可能有 registry 记录但
@@ -23,13 +23,13 @@ export type SkillSource = 'skillhub' | 'local';
  * @param isMine           server 权威归属:true=我的 / false=他人 / null|undefined=未知
  */
 export function deriveSkillSource(
-  origin: 'installed' | 'published' | 'learned' | null | undefined,
+  origin: 'installed' | 'published' | 'learned' | 'imported' | null | undefined,
   hasRegistryEntry: boolean,
   isMine: boolean | null | undefined,
 ): SkillSource {
   if (origin === 'installed') return 'skillhub';
-  // published / learned 都是本地创作(learned = /learn 蒸馏产物)
-  if (origin === 'published' || origin === 'learned') return 'local';
+  // published / learned / imported 都是本地侧产物
+  if (origin === 'published' || origin === 'learned' || origin === 'imported') return 'local';
   // origin 缺失:仅当有 registry 记录且 server 明确说不是我的(他人历史安装)才算 skillhub。
   if (hasRegistryEntry && isMine === false) return 'skillhub';
   return 'local';

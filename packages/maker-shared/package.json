@@ -25,6 +25,7 @@
     "./file-browser-grid": "./src/fileBrowserGrid.ts",
     "./file-preview": "./src/filePreview.ts",
     "./fixtures": "./src/fixtures.ts",
+    "./history-gap": "./src/historyGap.ts",
     "./interaction": "./src/interaction.ts",
     "./math-markdown": "./src/mathMarkdown.ts",
     "./mention-ref": "./src/mentionRef.ts",

@@ -10,8 +10,12 @@
 
 import { ipcMain } from 'electron';
 
-import type { MyIssuesErrorCode, MyIssuesResult } from '../../shared/myIssues.js';
-import { getMyIssuesService } from '../github-issue/myIssuesRuntime.js';
+import type {
+  MyIssuesErrorCode,
+  MyIssuesResult,
+  MyIssuesSnapshot,
+} from '../../shared/myIssues.js';
+import { getMyIssuesService, getMyIssuesSnapshot } from '../github-issue/myIssuesRuntime.js';
 import { isStaleAccountScopeError } from '../github-issue/myIssuesService.js';
 import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
@@ -27,9 +31,14 @@ export type MyIssuesListResponse =
       error: MyIssuesErrorCode;
       items: [];
       githubEnhancement: null;
+      githubEnhancementFailed: false;
       degraded: null;
       truncated: false;
     };
+
+export interface MyIssuesSnapshotDeps {
+  read: () => MyIssuesSnapshot | null;
+}
 
 export interface MyIssuesListDeps {
   list: (options: { force?: boolean }) => Promise<MyIssuesResult>;
@@ -62,13 +71,39 @@ export async function handleMyIssuesList(
       error: stale ? 'stale-account-scope' : 'unexpected',
       items: [],
       githubEnhancement: null,
+      githubEnhancementFailed: false,
       degraded: null,
       truncated: false,
     };
   }
 }
 
+/**
+ * 首屏快照读取。与 list 分开一条 channel 而不是给 list 加 `cachedOnly` 参数:
+ * 那样得再引入一个字段区分「缓存是空列表」与「根本没有缓存」,把 list 的契约搞混。
+ *
+ * 失败一律当「没有快照」返回 null —— 首屏加速拿不到只是回到旧体验,不该变成错误态。
+ */
+export async function handleMyIssuesSnapshot(
+  deps: MyIssuesSnapshotDeps = { read: getMyIssuesSnapshot },
+): Promise<MyIssuesSnapshot | null> {
+  try {
+    return deps.read();
+  } catch (err) {
+    log.warn('reading the my-issues snapshot failed', {
+      detail: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
 export function registerMyIssuesIpc(): void {
+  ipcMain.handle(MAKER_INVOKE.MY_ISSUES_SNAPSHOT, (event) => {
+    // 快照含 issue 标题与 GitHub 用户名,与 list 同属账号私有数据 —— 同一道来源闸。
+    assertTrustedAppRendererEvent(event);
+    return handleMyIssuesSnapshot();
+  });
+
   ipcMain.handle(MAKER_INVOKE.MY_ISSUES_LIST, (event, raw: unknown) => {
     // issue 列表含标题、编号与 GitHub 用户名,是账号私有数据,且这条 handler 会代为
     // 发起带登录态的平台请求。只允许 Cindy 自有顶层页面调用:WebView、Ghost 页面、

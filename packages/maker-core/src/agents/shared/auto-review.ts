@@ -58,7 +58,7 @@ export type ReviewableAction =
   | { kind: 'session-state' }
   | { kind: 'file-write'; path: string | undefined }
   | { kind: 'exec'; command: string }
-  | { kind: 'network' }
+  | { kind: 'network'; target?: string; operation?: string }
   | { kind: 'other' };
 
 /**

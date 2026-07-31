@@ -6852,6 +6852,7 @@
     "mine": {
       "refresh": "새로 고침",
       "emptyTitle": "아직 제출한 이슈가 없습니다",
+      "emptyTitleUnverified": "현재 이슈를 가져올 수 없습니다",
       "startIssueChat": "/issue 로 새 채팅 시작",
       "statusUnknown": "상태 알 수 없음",
       "sourceCindy": "Cindy에서 제출",
@@ -6864,6 +6865,8 @@
       "notSignedInHint": "Cindy 계정에 로그인하면 제출한 모든 이슈와 최신 상태를 볼 수 있습니다.",
       "fetchFailedHint": "최신 상태를 가져오지 못했습니다. 이 기기에 기록된 제출 항목만 표시하므로 목록이 완전하지 않을 수 있습니다.",
       "fetchFailedPartialHint": "최신 상태를 가져오지 못했습니다. 일부 이슈의 상태가 완전하지 않을 수 있습니다.",
+      "enhancementFailedHint": "GitHub 계정으로 등록한 이슈를 읽지 못했습니다. Cindy GitHub 플러그인의 액세스 토큰 권한이 부족할 수 있습니다. 플러그인 페이지에서 확인해 주세요.",
+      "enhancementFailedGenericHint": "GitHub 계정으로 등록한 이슈를 읽지 못했습니다. 네트워크 문제이거나 GitHub 요청 제한일 수 있습니다. 잠시 후 다시 시도해 주세요.",
       "truncatedHint": "이슈가 많아 일부만 표시했습니다. 전체 목록은 GitHub에서 확인하세요."
     },
     "redirect": {
@@ -7130,7 +7133,13 @@
       "installed": "설치됨",
       "globalScope": "전역",
       "sourceSkillhub": "SkillHub",
-      "sourceLocal": "로컬"
+      "sourceLocal": "로컬",
+      "import": "스킬 가져오기",
+      "importAria": "로컬 zip 또는 SKILL.md에서 스킬 가져오기",
+      "importPickerTitle": "가져오기 위치 선택",
+      "importPickerSubtitle": "{{name}} · {{description}}",
+      "importSuccess": "{{name}} 가져오기 완료{{suffix}}",
+      "importFailed": "스킬 가져오기 실패"
     },
     "common": {
       "openFolderFailed": "폴더 열기 실패",

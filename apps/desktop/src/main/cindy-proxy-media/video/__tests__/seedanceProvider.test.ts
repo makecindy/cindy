@@ -32,8 +32,11 @@ describe('seedance provider · capabilities', () => {
       true,
     );
   });
-  it('declares maxImages=2 for first+last frame transition', () => {
-    expect(p.capabilities.maxImages).toBe(2);
+  it('首尾帧模式上限 2 张,参考图模式 9 张(同一个 2.0 模型的两种 role)', () => {
+    expect(p.capabilities.maxImagesByRefMode).toEqual({
+      first_and_last_frame: 2,
+      reference_image: 9,
+    });
   });
 });
 
@@ -121,6 +124,51 @@ describe('seedance provider · submit body shape', () => {
     const body = JSON.parse(init.body as string);
     expect(body.model).toBe('doubao-seedance-2-0-260128');
     expect(body.content).toHaveLength(3);
+    expect(body.content[1].role).toBe('first_frame');
+    expect(body.content[2].role).toBe('last_frame');
+  });
+
+  it('refMode:reference_image → 每张图都是 role:reference_image,顺序原样保留', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ id: 'cgt-FAKE-4' }), { status: 200 }),
+    ) as unknown as typeof fetch;
+    const p = makeProvider(fetchMock);
+    await p.submit(
+      {
+        prompt: '[图片1] 的女孩戴着 [图片2] 的耳环',
+        refMode: 'reference_image',
+        images: [
+          'data:image/png;base64,ONE',
+          'data:image/png;base64,TWO',
+          'data:image/png;base64,THREE',
+        ],
+      },
+      'seedance-fast',
+    );
+    const init = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit;
+    const body = JSON.parse(init.body as string);
+    expect(body.content).toHaveLength(4);
+    // 顺序 = 提示词里的「图片1/2/3」序号,不能重排
+    expect(body.content.slice(1)).toEqual([
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,ONE' }, role: 'reference_image' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,TWO' }, role: 'reference_image' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,THREE' }, role: 'reference_image' },
+    ]);
+    // 参考图模式下不混发首尾帧 role
+    expect(body.content.some((c: { role?: string }) => c.role === 'first_frame')).toBe(false);
+  });
+
+  it('不传 refMode 时仍是首尾帧(老调用方逐字节同形)', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ id: 'cgt-FAKE-5' }), { status: 200 }),
+    ) as unknown as typeof fetch;
+    const p = makeProvider(fetchMock);
+    await p.submit(
+      { prompt: '动起来', images: ['data:image/png;base64,A', 'data:image/png;base64,B'] },
+      'seedance-fast',
+    );
+    const init = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit;
+    const body = JSON.parse(init.body as string);
     expect(body.content[1].role).toBe('first_frame');
     expect(body.content[2].role).toBe('last_frame');
   });

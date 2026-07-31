@@ -1579,11 +1579,18 @@ function renderItemEndMs(item: RenderItem): number | null {
     return startMs === null ? item.resultTsMs : Math.max(startMs, item.resultTsMs);
   }
   if (item.type === 'work_group') {
-    for (let i = item.children.length - 1; i >= 0; i--) {
-      const childMs = renderItemEndMs(item.children[i]);
-      if (childMs !== null) return childMs;
+    // 全量取 max,不是"最后一个 child":children 按**发起**时刻排列,并行的 Agent/Task 乱序完成时
+    // 真正的结束时刻可能落在更靠前的 child 上(先发起、更晚 settle)。取最后一个会低估组的结束
+    // 时间,于是空洞判定的锚点变小、把本来连续的 turn 误判成空洞切开 —— 与本函数 tool_segment
+    // 分支、以及 groupWorkRuns 里 prevEndMs 的 Math.max 是同一条理由(#676 review codex P1)。
+    // 手机端同款函数(maker-shared 的 itemEndTimestamp)已按此收敛,#1210 review 指出这里镜像存在。
+    let latest: number | null = null;
+    for (const child of item.children) {
+      const childMs = renderItemEndMs(child);
+      if (childMs === null) continue;
+      latest = latest === null ? childMs : Math.max(latest, childMs);
     }
-    return null;
+    return latest;
   }
   // thinking 的 createdAt 是块**开始**的时刻,真正结束要加 thinkingDurationMs
   // (与 workRunEndTs 同口径)。一个想了半小时以上的 thinking 块后面紧跟工具或正文时,

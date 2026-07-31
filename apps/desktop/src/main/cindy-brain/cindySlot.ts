@@ -55,12 +55,16 @@ import {
   GHOST_ONESHOT_TEXT_TIMEOUT_MS,
   GHOST_VIDEO_MAX_DURATION_SECONDS,
   GHOST_VIDEO_MAX_FPS,
+  GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE,
   GHOST_VIDEO_RATIOS,
+  GHOST_VIDEO_REF_MODE_DEFAULT,
+  GHOST_VIDEO_REF_MODES,
   GHOST_VIDEO_RESOLUTIONS,
   type GhostImageAspectRatio,
   type GhostModelTier,
   type GhostPipeModelResult,
   type GhostVideoRatio,
+  type GhostVideoRefMode,
   type GhostVideoResolution,
   type GhostVideoResultParams,
   type InstalledGhost,
@@ -94,6 +98,11 @@ export interface CindyVideoCapabilities {
   resolutions: readonly string[];
   ratios: readonly string[];
   fps: readonly number[];
+  /**
+   * 逐参考图用法的张数上限。缺席某个 refMode 键 = 该型号不支持这种用法。
+   * 整个字段缺席(老注入实现)= 跳过按型号校验,只剩协议层粗筛。
+   */
+  maxImagesByRefMode?: Readonly<Partial<Record<GhostVideoRefMode, number>>>;
 }
 
 export interface CindySlotDeps {
@@ -122,9 +131,19 @@ export interface CindySlotDeps {
   generateVideo(
     params: { prompt: string; model: string } & CindyVideoParams,
   ): Promise<{ buffer: Uint8Array; mimeType: string; videoParams?: GhostVideoResultParams }>;
-  /** 主机统一视频通道·参考图生视频(1 张=首帧,2 张=首尾帧;源图以磁盘路径注入)。 */
+  /**
+   * 主机统一视频通道·参考图生视频(源图以磁盘路径注入)。`refMode` 决定这
+   * 几张图怎么用:`first_and_last_frame` = 1 张首帧 / 2 张首尾帧,
+   * `reference_image` = 多张参考图锁主体。imagePaths 顺序有意义,注入实现
+   * 不得重排。
+   */
   editVideo(
-    params: { prompt: string; model: string; imagePaths: string[] } & CindyVideoParams,
+    params: {
+      prompt: string;
+      model: string;
+      imagePaths: string[];
+      refMode: GhostVideoRefMode;
+    } & CindyVideoParams,
   ): Promise<{ buffer: Uint8Array; mimeType: string; videoParams?: GhostVideoResultParams }>;
   /**
    * 该视频型号的画面参数支持集(provider capabilities;registry 缺席或查无
@@ -230,8 +249,12 @@ const MAX_PROMPT_LEN = 4000;
 /** 改图单次源图上限(沿用原 lizi_art 多图融合的常用量级)。 */
 const MAX_EDIT_SOURCES = 4;
 
-/** 图生视频参考图上限(1 张=首帧动画,2 张=首尾帧过渡;provider 层同上限)。 */
-const MAX_VIDEO_SOURCES = 2;
+/**
+ * 图生视频参考图上限的**兜底值**(首尾帧用法的上界)。edit_video 实际用的是
+ * 随 refMode 变化的 GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE,见请求解析处;这里
+ * 留着只为 KIND_INFO 表形状统一。
+ */
+const MAX_VIDEO_SOURCES = GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE.first_and_last_frame;
 
 /** 归因号长度上限(tool-call 配对号量级;超长视为沙箱乱填,拒单防日志注水)。 */
 const MAX_CALL_ID_LEN = 128;
@@ -396,6 +419,7 @@ export class GhostCindySlot {
       duration?: unknown;
       fps?: unknown;
       hashes?: unknown;
+      refMode?: unknown;
       callId?: unknown;
       mode?: unknown;
       jobId?: unknown;
@@ -530,6 +554,22 @@ export class GhostCindySlot {
       ...(p.fps !== undefined ? { fps: p.fps as number } : {}),
     };
 
+    // 参考图用法(可选,仅 edit_video):协议层做值域粗筛,该型号支不支持这种
+    // 用法在选型解析之后二次校验。不传 = 首尾帧,与本字段出现之前同形。
+    if (p.refMode !== undefined && kind !== 'edit_video') {
+      return {
+        ok: false,
+        message: 'refMode 仅支持 edit_video(它描述参考图怎么用;文生视频没有参考图)',
+      };
+    }
+    if (
+      p.refMode !== undefined &&
+      !(GHOST_VIDEO_REF_MODES as readonly unknown[]).includes(p.refMode)
+    ) {
+      return { ok: false, message: `未知参考图用法(可用:${GHOST_VIDEO_REF_MODES.join(' / ')})` };
+    }
+    const refMode = (p.refMode as GhostVideoRefMode | undefined) ?? GHOST_VIDEO_REF_MODE_DEFAULT;
+
     const ghost = this.deps.getGhost(ghostId);
     if (!ghost || !ghost.enabled) {
       return { ok: false, message: '意识不在可用状态' };
@@ -612,11 +652,15 @@ export class GhostCindySlot {
     // 归属查账在下面占名额后做。
     let hashes: string[] = [];
     if (info.usesSources) {
+      // edit_video 的上限随 refMode 走(首尾帧 2 / 参考图 9),其余代办用
+      // KIND_INFO 的静态值。型号实际上限更低的情况在下面按型号二次校验。
+      const maxSources =
+        kind === 'edit_video' ? GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE[refMode] : info.maxSources;
       if (!Array.isArray(p.hashes) || p.hashes.length === 0) {
         return { ok: false, message: `${info.verb}需要至少 1 张源图指纹(hashes)` };
       }
-      if (p.hashes.length > info.maxSources) {
-        return { ok: false, message: `源图过多(上限 ${info.maxSources} 张)` };
+      if (p.hashes.length > maxSources) {
+        return { ok: false, message: `源图过多(上限 ${maxSources} 张)` };
       }
       for (const h of p.hashes) {
         if (typeof h !== 'string' || !HASH_RE.test(h)) {
@@ -624,6 +668,31 @@ export class GhostCindySlot {
         }
       }
       hashes = p.hashes as string[];
+    }
+
+    // 参考图用法与张数按**解析出的型号**二次校验:两种用法在不同型号上是
+    // 不同的上游模型(如 happyhorse 首尾帧走 i2v、参考图走 r2v),支持集和
+    // 张数上限都不一样。不支持即明拒,不降级成另一种用法——降级会出一条
+    // 用户没要的片子,还照样计费。
+    if (kind === 'edit_video') {
+      const caps = this.deps.videoCapabilities?.(model) ?? null;
+      const perModelMax = caps?.maxImagesByRefMode?.[refMode];
+      if (caps?.maxImagesByRefMode !== undefined) {
+        const label = cfg.models.find((m) => m.id === model)?.label ?? model;
+        if (perModelMax === undefined) {
+          const supported = Object.keys(caps.maxImagesByRefMode);
+          return {
+            ok: false,
+            message: `模型「${label}」不支持参考图用法 ${refMode}(可用:${supported.join(' / ') || '无'})`,
+          };
+        }
+        if (hashes.length > perModelMax) {
+          return {
+            ok: false,
+            message: `模型「${label}」在 ${refMode} 用法下最多 ${perModelMax} 张参考图(本次 ${hashes.length} 张)`,
+          };
+        }
+      }
     }
 
     // 在途并发闸:默认不限;用户给该意识配了上限才拦(计数始终在记,
@@ -687,7 +756,7 @@ export class GhostCindySlot {
             ...(aspectRatio !== undefined ? { aspectRatio } : {}),
           });
         } else if (kind === 'edit_video') {
-          generated = await this.deps.editVideo({ prompt, model, imagePaths, ...videoParams });
+          generated = await this.deps.editVideo({ prompt, model, imagePaths, refMode, ...videoParams });
         } else {
           generated = await this.deps.generateVideo({ prompt, model, ...videoParams });
         }

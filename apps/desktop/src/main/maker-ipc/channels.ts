@@ -226,6 +226,11 @@ export const MAKER_INVOKE = {
    * 风格而不是 throwIpcError(见 engineering-conventions §2 的例外)。
    */
   MY_ISSUES_LIST: 'maker:issues:list-mine',
+  /**
+   * /issues 的**首屏快照**(上次查询成功时落盘的列表镜像)。进页面先渲染它,
+   * 避免空等远端;fresh 一到即整体接管。非权威、可重建,详见 myIssuesSnapshotStore。
+   */
+  MY_ISSUES_SNAPSHOT: 'maker:issues:snapshot-mine',
   WRITE_PLAN_FILE: 'maker:write-plan-file',
   // Rewind / Fork (Stage 2 C2) — 取代老 cc-agent:rewind:* + local-db:sessions:fork
   REWIND_PREVIEW: 'maker:rewind:preview',
