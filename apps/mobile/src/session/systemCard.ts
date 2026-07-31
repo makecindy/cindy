@@ -131,34 +131,22 @@ export function formatMobileSystemCard(
 }
 
 function formatAutoResumeCard(data: Record<string, unknown> | undefined): SystemCardPresentation {
-  const number = (value: unknown) => (
-    typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
-  );
+  const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
   const error = typeof data?.error === 'string' && data.error.trim() ? data.error : undefined;
   const attempt = number(data?.attempt);
   const maxAttempts = number(data?.maxAttempts);
   const sessionTotal = number(data?.sessionTotal);
-  const outcome = data?.outcome === 'succeeded' || data?.outcome === 'failed'
-    ? data.outcome
-    : undefined;
+  const outcome = data?.outcome === 'succeeded' || data?.outcome === 'failed' ? data.outcome : undefined;
   const hasInterruptionContext = !!(data?.live === true || error || attempt || maxAttempts || sessionTotal || outcome);
-  if (!hasInterruptionContext) {
-    return { title: i18n.t('message.systemCard.autoResume.separator'), rows: [] };
-  }
+  if (!hasInterruptionContext) return { title: i18n.t('message.systemCard.autoResume.separator'), rows: [] };
   const title = data?.live === true
     ? attempt && maxAttempts
       ? i18n.t('message.systemCard.autoResume.pendingWithProgress', { attempt, total: maxAttempts })
       : i18n.t('message.systemCard.autoResume.pending')
     : i18n.t(`message.systemCard.autoResume.${outcome ?? 'neutral'}`);
-  const details = attempt && maxAttempts && sessionTotal
-    ? i18n.t('message.systemCard.autoResume.details', { attempt, total: maxAttempts, count: sessionTotal })
-    : undefined;
-  return {
-    title,
-    ...(error ? { body: error } : {}),
-    subtitle: details,
-    rows: [],
-  };
+  const subtitle = attempt && maxAttempts && sessionTotal
+    ? i18n.t('message.systemCard.autoResume.details', { attempt, total: maxAttempts, count: sessionTotal }) : undefined;
+  return { title, ...(error ? { body: error } : {}), subtitle, rows: [] };
 }
 
 /**

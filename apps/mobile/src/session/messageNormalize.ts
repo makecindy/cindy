@@ -319,6 +319,7 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
         label: 'user',
         body: '',
         systemCardType: 'auto-resume',
+        isSyntheticTrigger: true,
         systemCardData: {
           ...autoResumeInfo,
           ...(autoResumeOutcome === 'succeeded' || autoResumeOutcome === 'failed'

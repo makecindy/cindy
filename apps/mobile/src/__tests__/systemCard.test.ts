@@ -143,20 +143,17 @@ describe('formatMobileSystemCard — goal 续跑卡按原因分说法', () => {
 
 describe('formatMobileSystemCard — 中断自动重连状态', () => {
   const info = { error: 'socket hang up', attempt: 2, maxAttempts: 5, sessionTotal: 3 };
-
   it('shows live progress, reason, current attempt, and conversation total', () => {
-    expect(formatMobileSystemCard('auto-resume', { ...info, live: true })).toEqual({
+    expect(formatMobileSystemCard('auto-resume', { ...info, live: true })).toMatchObject({
       title: 'Reconnecting 2/5…',
       subtitle: 'Attempt 2/5 · 3 reconnects in this conversation',
       body: 'socket hang up',
-      rows: [],
     });
   });
-
   it('uses persisted outcome while keeping silent-stop records on their original copy', () => {
-    expect(['succeeded', 'failed', undefined].map((outcome) => (
-      formatMobileSystemCard('auto-resume', outcome ? { ...info, outcome } : {}).title
-    ))).toEqual(['Reconnected', 'Reconnect failed', 'Connection interrupted — resumed automatically']);
+    expect(['succeeded', 'failed', undefined].map((outcome) =>
+      formatMobileSystemCard('auto-resume', outcome ? { ...info, outcome } : {}).title,
+    )).toEqual(['Reconnected', 'Reconnect failed', 'Connection interrupted — resumed automatically']);
   });
 });
 

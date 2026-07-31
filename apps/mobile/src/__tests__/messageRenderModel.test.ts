@@ -39,12 +39,13 @@ function toolUse(id: string, toolName: string, input: unknown, seconds: number):
 }
 
 describe('messageRenderModel', () => {
-  it('appends the live auto-resume projection as an ephemeral system card', () => {
-    const items = buildMobileMessageRenderItems([message({ id: 'a', role: 'assistant', content: 'partial', agentMeta: { isStreaming: true } })], {
+  it('appends live auto-resume state while folding an earlier retry from the same interruption', () => {
+    const priorRetry = message({ id: 'retry-1', role: 'user', content: '', agentMeta: { autoResume: true } });
+    const items = buildMobileMessageRenderItems([message({ id: 'a', role: 'assistant', content: 'partial', agentMeta: { isStreaming: true } }), priorRetry], {
       isSessionStreaming: true,
       autoResumePending: { error: 'socket hang up', attempt: 2, maxAttempts: 5, sessionTotal: 3 },
     });
-    expect(expectType(items[0], 'message').message.isTurnFinalAssistant).toBeUndefined();
+    expect(expectType(items[0], 'message').message.isTurnFinalAssistant).toBe(true);
     expect(expectType(items[1], 'message').message).toMatchObject({
       systemCardType: 'auto-resume',
       systemCardData: { error: 'socket hang up', attempt: 2, maxAttempts: 5, sessionTotal: 3, live: true },

@@ -3547,12 +3547,7 @@ export default function SessionScreen() {
         // remoteSessionRunning(activity 推送 / 活跃快照会先置 true,重连场景渲染先于清理)。
         buildMobileMessageRenderItems(
           messages,
-          {
-            autoResumePending: inputProjection.autoResumePending,
-            isSessionStreaming,
-            renderOrphanTaskUpdates: makerTurnRunning,
-            sessionId,
-          },
+          { autoResumePending: inputProjection.autoResumePending, isSessionStreaming, renderOrphanTaskUpdates: makerTurnRunning, sessionId },
           taskUpdates,
         ),
         forkOrigin,

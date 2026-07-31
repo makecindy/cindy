@@ -25,7 +25,6 @@ import {
 } from '@/session/subagentGrouping';
 
 const MAX_VALID_DATE_MS = 8.64e15;
-
 export type MobileTodoItem = MessageRenderTodoItem;
 export type MobileMessageItem = MessageRenderMessageItem<NormalizedRemoteMessage>;
 export type MobileThinkingItem = MessageRenderThinkingItem<NormalizedRemoteMessage>;
@@ -97,6 +96,7 @@ export function buildMobileMessageRenderItems(
       createdAt: pendingCreatedAtMs === null || pendingCreatedAtMs >= MAX_VALID_DATE_MS ? '' : new Date(pendingCreatedAtMs + 1).toISOString(),
     }]));
   }
+  collapseConsecutiveAutoResumeCards(normalized);
   // 无子 agent(Claude `Agent` 嵌套)→ 走原始线性路径,并接上 live agent_task 卡:
   // Task / collab:* 工具调用按 toolUseId→clientId 链接;无对应工具调用的孤儿更新兜底
   // 仅在会话运行中(isSessionStreaming)生效——空闲时孤儿是 stale 残留(工具调用已滑出
@@ -122,8 +122,24 @@ export function buildMobileMessageRenderItems(
  */
 function dropSyntheticTriggerItems(items: MobileMessageRenderItem[]): MobileMessageRenderItem[] {
   return items.filter(
-    (item) => !(item.type === 'message' && item.message.isSyntheticTrigger === true),
+    (item) => !(item.type === 'message' && item.message.isSyntheticTrigger === true && !item.message.systemCardType),
   );
+}
+
+/** 同一次中断只展示最新状态；旧行仍作为 turn boundary 留在 normalized 流中。 */
+function collapseConsecutiveAutoResumeCards(messages: NormalizedRemoteMessage[]): void {
+  let hasNewerCard = false;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message.systemCardType === 'auto-resume') {
+      if (hasNewerCard) delete message.systemCardType;
+      hasNewerCard = true;
+    } else if (
+      message.systemCardType
+      || (message.isSyntheticTrigger !== true && message.kind !== 'thinking'
+        && (message.kind === 'tool' || !!message.attachments?.length || /[^\s\p{Cf}\p{Cc}]/u.test(message.body)))
+    ) hasNewerCard = false;
+  }
 }
 
 export function extractTodosFromMessage(message: RemoteMessage): MobileTodoItem[] | null {
