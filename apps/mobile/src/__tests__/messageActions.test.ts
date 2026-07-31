@@ -7,6 +7,7 @@ import {
   formatMessageAbsoluteTime,
   formatMessageRelativeTime,
   formatMessageTurnCost,
+  mobileMessageShowsActionBar,
 } from '@/session/messageActions';
 import type { NormalizedRemoteMessage } from '@/session/messageNormalize';
 import type { RemoteMoney, RemoteMoneyCurrency } from '@/session/remoteMoney';
@@ -44,6 +45,42 @@ describe('messageActions', () => {
       canRewind: true,
       isStreaming: true,
     })).toEqual([]);
+  });
+
+  it('hangs the completed action bar only on real turn-final utterances', () => {
+    const base = {
+      hasSystemCard: false,
+      isStreamingAssistant: false,
+      isTurnFinalAssistant: false,
+    };
+
+    // user 消息与本轮收尾正文照常挂。
+    expect(mobileMessageShowsActionBar({ ...base, kind: 'user' })).toBe(true);
+    expect(mobileMessageShowsActionBar({
+      ...base,
+      kind: 'assistant',
+      isTurnFinalAssistant: true,
+    })).toBe(true);
+
+    // turn 中间句不挂;流式 assistant 只显示「生成中」也不挂。
+    expect(mobileMessageShowsActionBar({ ...base, kind: 'assistant' })).toBe(false);
+    expect(mobileMessageShowsActionBar({
+      ...base,
+      kind: 'assistant',
+      isStreamingAssistant: true,
+      isTurnFinalAssistant: true,
+    })).toBe(false);
+
+    // 系统边界卡整行不挂:跨 Agent 切换分隔线(kind='system')、goal 卡(role
+    // assistant 派生),以及「user 行渲染系统卡」被渲染层降级前后的 auto-resume 行。
+    expect(mobileMessageShowsActionBar({ ...base, hasSystemCard: true, kind: 'system' })).toBe(false);
+    expect(mobileMessageShowsActionBar({
+      ...base,
+      hasSystemCard: true,
+      kind: 'assistant',
+      isTurnFinalAssistant: true,
+    })).toBe(false);
+    expect(mobileMessageShowsActionBar({ ...base, hasSystemCard: true, kind: 'user' })).toBe(false);
   });
 
   it('builds desktop-compatible copy text with attachment names', () => {

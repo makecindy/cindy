@@ -141,6 +141,7 @@ import {
   formatMessageRelativeTime,
   formatMessageTurnCost,
   formatModelShortLabel,
+  mobileMessageShowsActionBar,
   writeClipboardText,
   type MobileMessageControlActionId,
   type CopyMessageStatus,
@@ -1558,13 +1559,16 @@ function MessageBubble({
   const isFirstUserMessage = item.message.kind === 'user' && clientId === actions.firstUserMessageClientId;
   const copyText = buildMobileMessageCopyText(item.message);
   const canUseCompletedActions = !isStreamingAssistant;
-  // 操作行只挂在每轮收尾正文(对齐桌面 #456):任务执行过程中的中间句不再逐条
-  // 带一行复制/分叉/时间,消息流更紧凑。user 消息、流式「生成中」状态与正文
-  // 的文本选择(canSelectVisibleText)不受影响。
-  const suppressAssistantActions = item.message.kind === 'assistant'
-    && !isStreamingAssistant
-    && item.message.isTurnFinalAssistant !== true;
-  const showCompletedActionBar = canUseCompletedActions && !suppressAssistantActions;
+  // 操作行只挂在每轮收尾正文、且该行确实是一条发言(判据见
+  // mobileMessageShowsActionBar):中间句不再逐条带复制/分叉/时间,系统边界卡整行
+  // 不挂。user 消息、流式「生成中」状态与正文的文本选择(canSelectVisibleText)
+  // 不受影响。
+  const showCompletedActionBar = mobileMessageShowsActionBar({
+    hasSystemCard: !!item.message.systemCardType,
+    isStreamingAssistant,
+    isTurnFinalAssistant: item.message.isTurnFinalAssistant === true,
+    kind: item.message.kind,
+  });
   const canCopy = showCompletedActionBar && copyText.trim().length > 0;
   const canSelectVisibleText = canUseCompletedActions && copyText.trim().length > 0;
   const relativeTime = showCompletedActionBar ? formatMessageRelativeTime(item.message.createdAt) : '';
