@@ -8,6 +8,7 @@ import {
   isCnPersonalIdentity,
   showCindyGroup,
   showDiscordBot,
+  showLarkBot,
   type ImBotIdentity,
 } from '../imBotVisibility';
 
@@ -16,17 +17,19 @@ function identity(overrides: Partial<ImBotIdentity>): ImBotIdentity {
 }
 
 describe('imBotVisibility', () => {
-  it('hides both the Cindy group and Discord for cn-build personal cloud accounts', () => {
+  it('hides the Cindy group, Discord, and Lark for cn-build personal cloud accounts', () => {
     const cnPersonal = identity({});
     expect(isCnPersonalIdentity(cnPersonal)).toBe(true);
     expect(showCindyGroup(cnPersonal)).toBe(false);
     expect(showDiscordBot(cnPersonal)).toBe(false);
+    expect(showLarkBot(cnPersonal)).toBe(false);
   });
 
   it('treats the dev region as cn for the personal-account rule', () => {
     const devPersonal = identity({ region: 'dev' });
     expect(showCindyGroup(devPersonal)).toBe(false);
     expect(showDiscordBot(devPersonal)).toBe(false);
+    expect(showLarkBot(devPersonal)).toBe(false);
   });
 
   it('keeps everything for cn-build org accounts', () => {
@@ -34,12 +37,14 @@ describe('imBotVisibility', () => {
     expect(isCnPersonalIdentity(cnOrg)).toBe(false);
     expect(showCindyGroup(cnOrg)).toBe(true);
     expect(showDiscordBot(cnOrg)).toBe(true);
+    expect(showLarkBot(cnOrg)).toBe(true);
   });
 
   it('keeps everything for global-build personal accounts', () => {
     const globalPersonal = identity({ region: 'global' });
     expect(showCindyGroup(globalPersonal)).toBe(true);
     expect(showDiscordBot(globalPersonal)).toBe(true);
+    expect(showLarkBot(globalPersonal)).toBe(true);
   });
 
   it('keeps the existing local-mode rule: no Cindy group, Discord stays', () => {
@@ -47,9 +52,11 @@ describe('imBotVisibility', () => {
     expect(isCnPersonalIdentity(cnLocal)).toBe(false);
     expect(showCindyGroup(cnLocal)).toBe(false);
     expect(showDiscordBot(cnLocal)).toBe(true);
+    expect(showLarkBot(cnLocal)).toBe(true);
 
     const globalLocal = identity({ region: 'global', mode: 'local', membershipKind: null });
     expect(showCindyGroup(globalLocal)).toBe(false);
     expect(showDiscordBot(globalLocal)).toBe(true);
+    expect(showLarkBot(globalLocal)).toBe(true);
   });
 });

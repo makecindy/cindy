@@ -40,6 +40,11 @@ export function showDiscordBot(identity: ImBotIdentity): boolean {
   return !isCnPersonalIdentity(identity);
 }
 
+/** 个人分栏是否提供 Lark 配置——与 Discord 共用同一身份和区域规则。 */
+export function showLarkBot(identity: ImBotIdentity): boolean {
+  return showDiscordBot(identity);
+}
+
 /** 个人分栏是否提供 Telegram 机器人配置 — 可见性规则与 Discord 同组。 */
 export function showTelegramBot(identity: ImBotIdentity): boolean {
   return !isCnPersonalIdentity(identity);

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff, Trash2, Check, RefreshCw } from 'lucide-react';
 
@@ -16,6 +16,8 @@ const APP_LAUNCHER_URL: Record<FeishuBotService, string> = {
   feishu: 'https://open.feishu.cn/page/launcher?from=backend_oneclick',
   lark: 'https://open.larksuite.com/page/launcher?from=backend_oneclick',
 };
+const FEISHU_SERVICES = ['feishu', 'lark'] as const;
+const FEISHU_ONLY = ['feishu'] as const;
 
 const statusKey: Record<FeishuBotStatus, string> = {
   idle: 'settings.feishuBot.status.needsConfig',
@@ -54,9 +56,11 @@ function maskTail(value: string): string {
 export function FeishuBotSection({
   expanded,
   onToggle,
+  showLark,
 }: {
   expanded: boolean;
   onToggle: () => void;
+  showLark: boolean;
 }) {
   const {
     service,
@@ -83,8 +87,20 @@ export function FeishuBotSection({
   const { confirm } = useConfirmDialog();
   const { t } = useTranslation();
 
-  const canSave = appId.trim().length > 0 && appSecret.trim().length > 0 && !isSaving;
   const showSavedCredentialsCard = shouldShowSavedCredentialsCard(hasSavedCreds);
+  // 已保存的 Lark 凭证仍允许查看和清除，身份限制只影响新的配置入口。
+  const configurableService = showLark || hasSavedCreds ? service : 'feishu';
+  const canSave =
+    service === configurableService &&
+    appId.trim().length > 0 &&
+    appSecret.trim().length > 0 &&
+    !isSaving;
+
+  useEffect(() => {
+    if (!showLark && !hasSavedCreds && service === 'lark') {
+      setService('feishu');
+    }
+  }, [hasSavedCreds, service, setService, showLark]);
 
   const handleClearClick = useCallback(async () => {
     const confirmed = await confirm({
@@ -98,8 +114,8 @@ export function FeishuBotSection({
   }, [confirm, clear, t]);
 
   const openLauncher = useCallback(() => {
-    window.electronAPI.openExternal?.(APP_LAUNCHER_URL[service]);
-  }, [service]);
+    window.electronAPI.openExternal?.(APP_LAUNCHER_URL[configurableService]);
+  }, [configurableService]);
 
   return (
     <ImChannelSettingsCard
@@ -151,8 +167,9 @@ export function FeishuBotSection({
         />
       ) : (
         <ManualConfig
-          service={service}
+          service={configurableService}
           setService={setService}
+          showLark={showLark}
           appId={appId}
           setAppId={setAppId}
           appSecret={appSecret}
@@ -299,6 +316,7 @@ function SavedCredentialsCard(props: {
 function ManualConfig(props: {
   service: FeishuBotService;
   setService: (service: FeishuBotService) => void;
+  showLark: boolean;
   appId: string;
   setAppId: (v: string) => void;
   appSecret: string;
@@ -323,11 +341,14 @@ function ManualConfig(props: {
           {t('settings.feishuBot.serviceLabel')}
         </legend>
         <div
-          className="grid grid-cols-2 gap-1 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] p-1"
+          className={cn(
+            'grid gap-1 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] p-1',
+            props.showLark ? 'grid-cols-2' : 'grid-cols-1',
+          )}
           role="radiogroup"
           aria-label={t('settings.feishuBot.serviceAria')}
         >
-          {(['feishu', 'lark'] as const).map((service) => {
+          {(props.showLark ? FEISHU_SERVICES : FEISHU_ONLY).map((service) => {
             const selected = props.service === service;
             return (
               <button
