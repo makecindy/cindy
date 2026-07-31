@@ -117,6 +117,10 @@ import { i18n } from '@/i18n';
 import { toast } from '@/lib/toast';
 import { openUrlInSidebarBrowser } from '@/features/right-sidebar/lib/openInSidebarBrowser';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
+import {
+  extractUsageLimitRecoveryHint,
+  type UsageLimitRecoveryHint,
+} from '@/lib/usageLimitRecovery';
 
 import {
   materializeAnnotatedAttachmentsForSend,
@@ -760,6 +764,8 @@ export interface SessionChatState {
   isStreaming: boolean;
   agentStatus: AgentStatus;
   error: string | null;
+  /** 当前 terminal error 是否为可恢复的账号用量限制，以及可识别的重置时刻。 */
+  usageLimitRecovery?: UsageLimitRecoveryHint | null;
   /**
    * 当前 terminal error 的稳定 reason key(maker-core/main 下发,如
    * 'silent-stop-exhausted')。ErrorBanner 据此渲染专用 action(「继续」按钮);
@@ -989,6 +995,7 @@ export type SessionChatLightState = Pick<
   | 'agentStatus'
   | 'isStreaming'
   | 'error'
+  | 'usageLimitRecovery'
   | 'errorReason'
   | 'recoverableError'
   | 'errorRetryText'
@@ -1038,6 +1045,7 @@ function createInitialState(): SessionChatState {
       startedAt: null,
     },
     error: null,
+    usageLimitRecovery: null,
     errorReason: null,
     recoverableError: null,
     activeTurnRetryText: null,
@@ -1101,6 +1109,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
     startedAt: null,
   },
   error: null,
+  usageLimitRecovery: null,
   errorReason: null,
   recoverableError: null,
   activeTurnRetryText: null,
@@ -1406,7 +1415,9 @@ function leaveView(sessionId: string): void {
     setState(sessionId, (s) => ({
       ...s,
       ...(s.historyLoaded ? { historyLoaded: false } : {}),
-      ...(s.error ? { error: null, errorRetryText: null } : {}),
+      ...(s.error
+        ? { error: null, usageLimitRecovery: null, errorRetryText: null }
+        : {}),
     }));
   }
   _trimMessagesIfNeeded(sessionId);
@@ -1598,6 +1609,9 @@ function applyInputProjection(projection: AgentInputProjection): void {
       queueEditLocks: projection.queueEditLocks,
       queueAbortPending: projection.queueAbortPending,
       error: projection.error,
+      usageLimitRecovery: projection.error
+        ? extractUsageLimitRecoveryHint({ message: projection.error })
+        : null,
       // projection 覆盖 error(dispatch 失败等,无 reason 语义)→ reason 一并清,
       // 避免 silent-stop 的「继续」按钮挂在一条不相干的错误上。
       errorReason: null,
@@ -2600,6 +2614,7 @@ export function handleStreamEvent(
         return {
           ...state,
           error: null,
+          usageLimitRecovery: null,
           // 非终止 error 此前恒清 reason(那时没有任何非终止 error 带 reason)。过载
           // 重投是第一个需要它的: renderer 靠 reason 判定"是否过载"来渲染本地化的
           // 重试进度, 而重投恰恰只在**非终止**态发生 —— 清掉就等于 UI 侧只能回退
@@ -2636,6 +2651,9 @@ export function handleStreamEvent(
       return {
         ...finalized,
         error: isPlannedUpgradeClose ? null : errMsg,
+        usageLimitRecovery: isPlannedUpgradeClose
+          ? null
+          : extractUsageLimitRecoveryHint(event.data),
         errorReason: isPlannedUpgradeClose ? null : (reason ?? null),
         recoverableError: null,
         errorRetryText: derivedRetryText ?? preservedRetryText,
@@ -3181,6 +3199,7 @@ function handleStatusUpdate(
     // 的后台 turn 误报成「执行失败」通知(bot review P2)。skipTurnReset 的
     // side-channel running 信号已在上方早退,不会误清。
     error: isTurnStart ? null : state.error,
+    usageLimitRecovery: isTurnStart ? null : state.usageLimitRecovery,
     errorReason: isTurnStart ? null : state.errorReason,
     errorRetryText: isTurnStart || (isTurnComplete && !state.error) ? null : state.errorRetryText,
     recoverableError: isTurnComplete ? null : state.recoverableError,
@@ -4328,7 +4347,9 @@ function initGlobalListeners(): void {
                 setState(ep.sessionId, (s) => ({
                   ...s,
                   ...(s.historyLoaded ? { historyLoaded: false } : {}),
-                  ...(s.error ? { error: null, errorRetryText: null } : {}),
+                  ...(s.error
+                    ? { error: null, usageLimitRecovery: null, errorRetryText: null }
+                    : {}),
                 }));
               }
             }
@@ -4419,7 +4440,9 @@ function initGlobalListeners(): void {
       setState(p.sessionId, (s) => ({
         ...s,
         ...(s.historyLoaded ? { historyLoaded: false } : {}),
-        ...(s.error ? { error: null, errorRetryText: null } : {}),
+        ...(s.error
+          ? { error: null, usageLimitRecovery: null, errorRetryText: null }
+          : {}),
       }));
     },
     'local-db-session-error-persisted',
@@ -4670,6 +4693,7 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     agentStatus: state.agentStatus,
     isStreaming: state.isStreaming,
     error: state.error,
+    usageLimitRecovery: state.usageLimitRecovery,
     errorReason: state.errorReason,
     recoverableError: state.recoverableError,
     errorRetryText: state.errorRetryText,
@@ -4707,6 +4731,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.agentStatus === b.agentStatus &&
     a.isStreaming === b.isStreaming &&
     a.error === b.error &&
+    a.usageLimitRecovery === b.usageLimitRecovery &&
     a.errorReason === b.errorReason &&
     a.recoverableError === b.recoverableError &&
     a.errorRetryText === b.errorRetryText &&
@@ -5037,6 +5062,7 @@ function syncActiveTurnsFromMain(): void {
             ...(agentKindPatch ? { agentKind: agentKindPatch } : {}),
             isStreaming: true,
             error: null,
+            usageLimitRecovery: null,
             errorReason: null,
             recoverableError: null,
             activeTurnRetryText: null,
@@ -7110,6 +7136,7 @@ async function sendMessageCore(
           ? s.messages.filter((m) => !(m.clientId === queued.clientId && m.isPendingPersist))
           : s.messages,
         error: message,
+        usageLimitRecovery: null,
         errorReason: null,
         recoverableError: null,
         errorRetryText: null,
@@ -7151,6 +7178,7 @@ function compactSession(
       setState(sessionId, (s) => ({
         ...s,
         error: message,
+        usageLimitRecovery: null,
         recoverableError: null,
         errorRetryText: null,
       }));
@@ -7293,6 +7321,7 @@ function steerMessageCore(
       setState(sessionId, (s) => ({
         ...s,
         error: message,
+        usageLimitRecovery: null,
         recoverableError: null,
         errorRetryText: null,
       }));
@@ -7417,6 +7446,7 @@ function steerQueuedMessage(sessionId: string, clientId: string): Promise<boolea
       setState(sessionId, (s) => ({
         ...s,
         error: message,
+        usageLimitRecovery: null,
         recoverableError: null,
         errorRetryText: null,
       }));
@@ -7550,8 +7580,22 @@ function clearError(sessionId: string): void {
     .then(applyInputProjection)
     .catch((err) => log.warn('clearError failed:', err));
   setState(sessionId, (s) => {
-    if (s.error == null && s.recoverableError == null && s.errorRetryText == null) return s;
-    return { ...s, error: null, errorReason: null, recoverableError: null, errorRetryText: null };
+    if (
+      s.error == null &&
+      s.usageLimitRecovery == null &&
+      s.recoverableError == null &&
+      s.errorRetryText == null
+    ) {
+      return s;
+    }
+    return {
+      ...s,
+      error: null,
+      usageLimitRecovery: null,
+      errorReason: null,
+      recoverableError: null,
+      errorRetryText: null,
+    };
   });
 }
 
@@ -7578,7 +7622,13 @@ function continueAfterSilentStop(sessionId: string): void {
   if (!sessionId) return;
   void sendUiTrigger(sessionId, CONTINUE_AFTER_ERROR_PROMPT).then(
     () => {
-      setState(sessionId, (s) => ({ ...s, error: null, errorReason: null, errorRetryText: null }));
+      setState(sessionId, (s) => ({
+        ...s,
+        error: null,
+        usageLimitRecovery: null,
+        errorReason: null,
+        errorRetryText: null,
+      }));
     },
     (err) => {
       log.warn('continueAfterSilentStop failed:', err);
@@ -7714,6 +7764,7 @@ async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Pro
       // 卡住(#676 review)。
       isLoadingMore: false,
       error: null,
+      usageLimitRecovery: null,
       errorReason: null,
       recoverableError: null,
       activeTurnRetryText: null,
