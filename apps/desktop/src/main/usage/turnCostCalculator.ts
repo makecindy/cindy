@@ -129,16 +129,18 @@ export function computePriceQuoteTurnMoney(
     price.source === 'subscription-reference' ||
     price.source === 'provider-reference' ||
     price.source === 'user-override';
+  const estimateReasons =
+    price.source === 'subscription-reference'
+      ? (['subscription-value', 'reference-price'] as const)
+      : valueEstimate || price.approximate
+        ? (['reference-price'] as const)
+        : undefined;
   const money: RegionalMoney = {
     amount: Math.max(0, amount),
     currency: price.currency,
     approximate: price.approximate || valueEstimate,
     kind: valueEstimate ? 'value-estimate' : 'actual-cost',
-    ...(valueEstimate
-      ? { estimateReasons: ['subscription-value', 'reference-price'] }
-      : price.approximate
-        ? { estimateReasons: ['reference-price'] }
-        : {}),
+    ...(estimateReasons ? { estimateReasons: [...estimateReasons] } : {}),
   };
   // Gateway 报价的币种就是该账号的实际结算币种,原样记账才能与账单对账 —— 不做任何换算。
   // 否则以 USD 结算的账号在 CN 构建上,turn 会被 USD_TO_CNY_FIXED_RATE 折成 CNY,而同一

@@ -139,6 +139,19 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  it('persists only a digest of a catalog scope that may contain URL credentials', () => {
+    const scope = 'https://catalog.example/models?access_token=do-not-persist';
+    const envelope = __testing.catalogLkgEnvelope(scope, '{"schemaVersion":1}');
+
+    expect(envelope).toMatchObject({
+      version: 2,
+      scopeHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      catalog: '{"schemaVersion":1}',
+    });
+    expect(JSON.stringify(envelope)).not.toContain(scope);
+    expect(JSON.stringify(envelope)).not.toContain('do-not-persist');
+  });
+
   it('replaces an existing LKG through a Windows-safe backup path', async () => {
     const files = new Set(['/catalog.json', '/catalog.tmp']);
     const calls: Array<[string, string]> = [];

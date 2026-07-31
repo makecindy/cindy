@@ -7,6 +7,7 @@ import {
 } from '../ledgerCurrency';
 import {
   buildClaudeTurnUsageDetails,
+  computePriceQuoteTurnMoney,
   computeGatewayTurnCost,
   estimateClaudeSubscriptionTurnValue,
   isAnthropicModel,
@@ -219,6 +220,37 @@ describe('computeGatewayTurnCost', () => {
         boundedReference,
       ),
     ).toBeNull();
+  });
+});
+
+describe('computePriceQuoteTurnMoney', () => {
+  const tokens = {
+    inputTokens: 1_000_000,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreateTokens: 0,
+  };
+
+  it('only marks subscription estimates with the subscription-value reason', () => {
+    expect(
+      computePriceQuoteTurnMoney(
+        tokens,
+        quote('subscription-model', 2, 10, {
+          source: 'subscription-reference',
+          approximate: true,
+        }),
+        'USD',
+      )?.estimateReasons,
+    ).toEqual(['subscription-value', 'reference-price']);
+    for (const source of ['provider-reference', 'user-override'] as const) {
+      expect(
+        computePriceQuoteTurnMoney(
+          tokens,
+          quote('reference-model', 2, 10, { source, approximate: true }),
+          'USD',
+        )?.estimateReasons,
+      ).toEqual(['reference-price']);
+    }
   });
 });
 

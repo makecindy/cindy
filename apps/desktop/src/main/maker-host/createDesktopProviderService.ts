@@ -147,11 +147,11 @@ function fetchText(url: string, timeoutMs: number): Promise<string> {
   });
 }
 
-const CATALOG_LKG_VERSION = 1;
+const CATALOG_LKG_VERSION = 2;
 
 interface CatalogLkgEnvelope {
   version: typeof CATALOG_LKG_VERSION;
-  scope: string;
+  scopeHash: string;
   catalog: string;
 }
 
@@ -160,9 +160,25 @@ interface CatalogLkgFileIo {
   rm(target: string, options: { force: boolean }): Promise<void>;
 }
 
+function catalogScopeHash(scope: string): string {
+  return createHash('sha256').update(scope).digest('hex');
+}
+
 function catalogLkgPath(scope: string): string {
-  const digest = createHash('sha256').update(scope).digest('hex').slice(0, 24);
-  return path.join(app.getPath('userData'), 'cache', 'model-catalog', `${digest}.json`);
+  return path.join(
+    app.getPath('userData'),
+    'cache',
+    'model-catalog',
+    `${catalogScopeHash(scope).slice(0, 24)}.json`,
+  );
+}
+
+function catalogLkgEnvelope(scope: string, catalog: string): CatalogLkgEnvelope {
+  return {
+    version: CATALOG_LKG_VERSION,
+    scopeHash: catalogScopeHash(scope),
+    catalog,
+  };
 }
 
 async function readCatalogLkg(scope: string): Promise<string | null> {
@@ -173,7 +189,7 @@ async function readCatalogLkg(scope: string): Promise<string | null> {
         await fsp.readFile(candidate, 'utf8'),
       ) as Partial<CatalogLkgEnvelope>;
       return envelope.version === CATALOG_LKG_VERSION &&
-        envelope.scope === scope &&
+        envelope.scopeHash === catalogScopeHash(scope) &&
         typeof envelope.catalog === 'string'
         ? envelope.catalog
         : null;
@@ -230,11 +246,7 @@ async function writeCatalogLkg(scope: string, catalog: string): Promise<void> {
   const file = catalogLkgPath(scope);
   const temporary = `${file}.${process.pid}.tmp`;
   await fsp.mkdir(path.dirname(file), { recursive: true });
-  const envelope: CatalogLkgEnvelope = {
-    version: CATALOG_LKG_VERSION,
-    scope,
-    catalog,
-  };
+  const envelope = catalogLkgEnvelope(scope, catalog);
   await fsp.writeFile(temporary, JSON.stringify(envelope), 'utf8');
   try {
     await replaceCatalogLkgFile(temporary, file);
@@ -464,9 +476,9 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
 }
 
 /**
- * 手动重载 xAI 模型目录。先确保启动期动态发现已完成，再复用同一 `loadCatalog`
- * 源选择与 bundled fallback；只投影 xAI 的静态模型列表，当前 routing/auth 以及其它
- * provider 全部保持不变，避免活跃 turn 中途被整份远端目录切换路由。
+ * 手动重载 xAI 模型目录与统一 modelRegistry。先确保启动期动态发现已完成，再复用同一
+ * `loadCatalog` 源选择与 bundled fallback；xAI 只投影静态模型列表，当前 routing/auth
+ * 以及其它 provider 保持不变；modelRegistry 仅接受不旧于当前版本的快照。
  */
 export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
   await ensureActiveCatalogLoaded();
@@ -695,4 +707,4 @@ export function getDesktopProviderService(): ProviderService {
   return singleton;
 }
 
-export const __testing = { replaceCatalogLkgFile };
+export const __testing = { catalogLkgEnvelope, replaceCatalogLkgFile };
