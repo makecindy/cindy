@@ -145,6 +145,13 @@ describe('capability route resolution', () => {
       ),
     ).toBeUndefined();
     expect(
+      findClaudeMcpCapabilityRoute(
+        policy,
+        'mcp__plugin_feishu-delegate_feishu-delegate__feishu_read_messages',
+        new Set(['plugin:feishu-delegate:feishu-delegate']),
+      ),
+    ).toBeUndefined();
+    expect(
       findClaudeMcpCapabilityRoute(policy, 'mcp__other__read'),
     ).toBeUndefined();
   });

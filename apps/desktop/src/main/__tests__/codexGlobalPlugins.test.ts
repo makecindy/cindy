@@ -203,6 +203,23 @@ describe('prepareCodexGlobalPluginsBridge', () => {
       expect.objectContaining({ name: marketplace, status: 'kept' }),
     ]);
 
+    await fs.writeFile(
+      isolatedMetadata,
+      'policy:\n  allow_implicit_invocation: true\n',
+      'utf8',
+    );
+    const repaired = await prepareCodexGlobalPluginsBridge(codexHome, {
+      homeDir,
+      capabilityRouting,
+    });
+    expect(repaired.marketplaces).toEqual([
+      expect.objectContaining({ name: marketplace, status: 'linked' }),
+    ]);
+    const repairedMetadata = yaml.load(
+      await fs.readFile(isolatedMetadata, 'utf8'),
+    ) as { policy?: { allow_implicit_invocation?: boolean } };
+    expect(repairedMetadata.policy?.allow_implicit_invocation).toBe(false);
+
     const restored = await prepareCodexGlobalPluginsBridge(codexHome, { homeDir });
     expect(restored.changed).toBe(true);
     expect(
@@ -258,11 +275,15 @@ describe('prepareCodexGlobalPluginsBridge', () => {
     });
 
     expect(result.routingFailures).toEqual([]);
+    const isolatedMcpFile = path.join(
+      paths.cacheDir,
+      marketplace,
+      plugin,
+      version,
+      '.mcp.json',
+    );
     const isolatedMcp = JSON.parse(
-      await fs.readFile(
-        path.join(paths.cacheDir, marketplace, plugin, version, '.mcp.json'),
-        'utf8',
-      ),
+      await fs.readFile(isolatedMcpFile, 'utf8'),
     ) as {
       mcpServers: Record<
         string,
@@ -297,6 +318,33 @@ describe('prepareCodexGlobalPluginsBridge', () => {
     expect(
       userMcp.mcpServers['feishu-delegate']?.tools?.feishu_read_messages?.approval_mode,
     ).toBe('approve');
+
+    await fs.writeFile(
+      isolatedMcpFile,
+      JSON.stringify({
+        mcpServers: {
+          'feishu-delegate': {
+            command: 'node',
+            default_tools_approval_mode: 'approve',
+          },
+        },
+      }),
+      'utf8',
+    );
+    const repaired = await prepareCodexGlobalPluginsBridge(codexHome, {
+      homeDir,
+      capabilityRouting: isolatedFeishuPolicy(),
+    });
+    expect(repaired.marketplaces).toEqual([
+      expect.objectContaining({ name: marketplace, status: 'linked' }),
+    ]);
+    const repairedMcp = JSON.parse(
+      await fs.readFile(isolatedMcpFile, 'utf8'),
+    ) as { mcpServers: Record<string, unknown> };
+    expect(repairedMcp.mcpServers).toHaveProperty(
+      'cindy-routed-feishu-delegate',
+    );
+    expect(repairedMcp.mcpServers).not.toHaveProperty('feishu-delegate');
   });
 
   it('rebuilds the isolated overlay when the source plugin changes', async () => {

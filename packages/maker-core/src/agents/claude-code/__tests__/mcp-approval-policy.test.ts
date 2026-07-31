@@ -389,10 +389,29 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
     expect(permissionRequests(seen)).toHaveLength(1);
     await handle.close();
 
-    const failed = await startSession(() => 'prompt', {
+    const exact = await startSession(() => 'prompt', {
       capabilityRouting,
       mcpServerNames: [],
       initMcpServerNames: ['plugin:feishu-delegate:feishu-delegate'],
+    });
+    const exactPreToolUse = exact.hooks?.PreToolUse?.[0]?.hooks[0];
+    if (!exactPreToolUse) throw new Error('expected capability routing hook');
+    await exact.handle.send({ type: 'user', content: '查一下康康的飞书消息' });
+    await vi.waitFor(async () => {
+      await expect(
+        exactPreToolUse({
+          hook_event_name: 'PreToolUse',
+          tool_name:
+            'mcp__plugin_feishu-delegate_feishu-delegate__read_messages',
+        }),
+      ).resolves.toEqual({ continue: true });
+    });
+    await exact.handle.close();
+
+    const failed = await startSession(() => 'prompt', {
+      capabilityRouting,
+      mcpServerNames: [],
+      initMcpServerNames: [],
       failedInitMcpServerNames: [userServerId],
     });
     const failedPreToolUse = failed.hooks?.PreToolUse?.[0]?.hooks[0];
@@ -1172,11 +1191,30 @@ describe('remote sessions share the same permission semantics', () => {
     expect(permissionRequests(remote.seen)).toHaveLength(1);
     await remote.handle.close();
 
-    const failed = await startRemoteSession(() => 'prompt', {
+    const exact = await startRemoteSession(() => 'prompt', {
       attachResolver: () => ({ kind: 'permission', behavior: 'allow' }),
       capabilityRouting,
       mcpServerNames: [userServerId],
       initMcpServerNames: ['plugin:feishu-delegate:feishu-delegate'],
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await expect(
+      exact.onApprovalRequest({
+        requestId: 'r-exact-settings-mcp-collision',
+        kind: 'permission',
+        toolName:
+          'mcp__plugin_feishu-delegate_feishu-delegate__read_messages',
+        input: {},
+      }),
+    ).resolves.toMatchObject({ behavior: 'allow' });
+    expect(permissionRequests(exact.seen)).toHaveLength(1);
+    await exact.handle.close();
+
+    const failed = await startRemoteSession(() => 'prompt', {
+      attachResolver: () => ({ kind: 'permission', behavior: 'allow' }),
+      capabilityRouting,
+      mcpServerNames: [userServerId],
+      initMcpServerNames: [],
       failedInitMcpServerNames: [userServerId],
     });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));

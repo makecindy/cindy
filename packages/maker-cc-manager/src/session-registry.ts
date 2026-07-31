@@ -1052,8 +1052,9 @@ function hasToolGuardMcpPrefixCollision(
   mcpServerNames: ReadonlySet<string>,
 ): boolean {
   if (!guard.sourceServerId) return false;
+  // SDK init reports names without settings/plugin provenance. Even an exact
+  // id may therefore be a user MCP shadowing the harness source.
   for (const serverId of mcpServerNames) {
-    if (serverId === guard.sourceServerId) continue;
     if (claudeMcpToolPrefix(serverId) === guard.toolNamePrefix) return true;
   }
   return false;

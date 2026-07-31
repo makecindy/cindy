@@ -1,6 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import yaml from 'js-yaml';
 import type { CapabilityRoutingPolicy } from '@cindy/maker-core';
@@ -103,6 +104,8 @@ interface ManagedOverlayMarker {
   schemaVersion: 1;
   source: string;
   sourceSnapshot: string;
+  /** Digest of routing-critical files in the isolated, derived overlay. */
+  overlaySnapshot?: string;
   skills: Array<{ pluginKey: string; skillName: string }>;
   mcpServers?: Array<{
     pluginKey: string;
@@ -298,6 +301,8 @@ async function readManagedOverlayMarker(
       parsed.schemaVersion !== 1 ||
       typeof parsed.source !== 'string' ||
       typeof parsed.sourceSnapshot !== 'string' ||
+      (parsed.overlaySnapshot !== undefined &&
+        typeof parsed.overlaySnapshot !== 'string') ||
       !Array.isArray(parsed.skills)
     ) {
       return null;
@@ -334,8 +339,136 @@ function stableOverlayMcpServers(overlays: readonly CodexMcpOverlay[]) {
     });
 }
 
-function sameOverlayMarker(a: ManagedOverlayMarker, b: ManagedOverlayMarker): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+function sameOverlayConfiguration(
+  marker: ManagedOverlayMarker,
+  desired: ManagedOverlayMarker,
+): boolean {
+  return (
+    marker.schemaVersion === desired.schemaVersion &&
+    marker.source === desired.source &&
+    marker.sourceSnapshot === desired.sourceSnapshot &&
+    JSON.stringify(marker.skills) === JSON.stringify(desired.skills) &&
+    JSON.stringify(marker.mcpServers ?? []) ===
+      JSON.stringify(desired.mcpServers ?? [])
+  );
+}
+
+async function routingArtifactDigest(
+  marketplaceDir: string,
+  file: string,
+): Promise<{ path: string; sha256: string } | { path: string; missing: true }> {
+  const relativePath = path.relative(marketplaceDir, file);
+  try {
+    const content = await fsp.readFile(file);
+    return {
+      path: relativePath,
+      sha256: createHash('sha256').update(content).digest('hex'),
+    };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { path: relativePath, missing: true };
+    }
+    throw err;
+  }
+}
+
+/**
+ * Snapshot only files that decide whether routed Skills and MCP servers stay
+ * constrained. This keeps the reuse check cheap while still detecting a
+ * deleted/rewritten policy, manifest pointer, or MCP configuration.
+ */
+async function mcpRoutingArtifactDigests(
+  marketplaceDir: string,
+  pluginVersionDir: string,
+): Promise<unknown[]> {
+  const artifacts: unknown[] = [];
+  let manifest: Record<string, unknown> | null = null;
+  for (const relativeManifest of DISCOVERABLE_PLUGIN_MANIFEST_PATHS) {
+    const candidate = path.join(pluginVersionDir, relativeManifest);
+    try {
+      await fsp.access(candidate);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw err;
+    }
+    manifest = await readJsonObject(candidate);
+    artifacts.push(await routingArtifactDigest(marketplaceDir, candidate));
+    break;
+  }
+
+  const declaration = manifest?.['mcpServers'];
+  if (isRecord(declaration)) return artifacts;
+  const configFile =
+    typeof declaration === 'string'
+      ? resolvePluginOwnedPath(pluginVersionDir, declaration)
+      : path.join(pluginVersionDir, '.mcp.json');
+  artifacts.push(await routingArtifactDigest(marketplaceDir, configFile));
+  return artifacts;
+}
+
+async function capabilityRoutingPluginSnapshot(
+  marketplaceDir: string,
+  pluginName: string,
+  overlays: readonly CodexPluginOverlay[],
+): Promise<unknown> {
+  const pluginDir = path.join(marketplaceDir, pluginName);
+  const versions = await listDirectoryNames(pluginDir);
+  const artifacts: unknown[] = [];
+  const skillOverlays = overlays.filter(
+    (overlay): overlay is CodexSkillOverlay => overlay.kind === 'skill',
+  );
+  const hasMcpOverlays = overlays.some((overlay) => overlay.kind === 'mcp');
+
+  for (const version of versions) {
+    const pluginVersionDir = path.join(pluginDir, version);
+    for (const overlay of skillOverlays) {
+      const skillDir = path.join(
+        pluginVersionDir,
+        'skills',
+        overlay.skillName,
+      );
+      if (!(await isDirectory(skillDir))) continue;
+      artifacts.push(
+        await routingArtifactDigest(
+          marketplaceDir,
+          path.join(skillDir, 'agents', 'openai.yaml'),
+        ),
+      );
+    }
+    if (hasMcpOverlays) {
+      artifacts.push(
+        ...(await mcpRoutingArtifactDigests(
+          marketplaceDir,
+          pluginVersionDir,
+        )),
+      );
+    }
+  }
+  return { pluginName, versions, artifacts };
+}
+
+async function capabilityRoutingOverlaySnapshot(
+  marketplaceDir: string,
+  overlays: readonly CodexPluginOverlay[],
+): Promise<string> {
+  const overlaysByPlugin = new Map<string, CodexPluginOverlay[]>();
+  for (const overlay of overlays) {
+    const current = overlaysByPlugin.get(overlay.pluginName) ?? [];
+    current.push(overlay);
+    overlaysByPlugin.set(overlay.pluginName, current);
+  }
+  const plugins = await Promise.all(
+    [...overlaysByPlugin.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([pluginName, pluginOverlays]) =>
+        capabilityRoutingPluginSnapshot(
+          marketplaceDir,
+          pluginName,
+          pluginOverlays,
+        ),
+      ),
+  );
+  return JSON.stringify(plugins);
 }
 
 async function applyExplicitOnlySkillPolicy(
@@ -590,8 +723,21 @@ async function ensureOverlayMarketplace(
 
   const rawCurrentMarker = await readManagedOverlayMarker(marketplaceDir);
   const currentMarker = rawCurrentMarker?.source === sourceReal ? rawCurrentMarker : null;
-  if (currentMarker && sameOverlayMarker(currentMarker, desiredMarker)) {
-    return 'kept';
+  if (
+    currentMarker?.overlaySnapshot &&
+    sameOverlayConfiguration(currentMarker, desiredMarker)
+  ) {
+    try {
+      const currentOverlaySnapshot = await capabilityRoutingOverlaySnapshot(
+        marketplaceDir,
+        overlays,
+      );
+      if (currentOverlaySnapshot === currentMarker.overlaySnapshot) {
+        return 'kept';
+      }
+    } catch {
+      // A broken derived overlay is rebuilt from the already-snapshotted source.
+    }
   }
 
   try {
@@ -651,6 +797,10 @@ async function ensureOverlayMarketplace(
       });
       await applyCapabilityRoutingOverlay(stagedPlugin, pluginOverlays);
     }
+    desiredMarker.overlaySnapshot = await capabilityRoutingOverlaySnapshot(
+      staging,
+      overlays,
+    );
     await fsp.writeFile(
       path.join(staging, MANAGED_OVERLAY_MARKER),
       `${JSON.stringify(desiredMarker, null, 2)}\n`,

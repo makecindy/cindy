@@ -239,6 +239,8 @@ export function claudeMcpToolPrefix(serverId: string): string {
  * A harness plugin id such as `plugin:foo:bar` therefore aliases a perfectly
  * valid user MCP id such as `plugin_foo_bar`. Once flattened, PreToolUse only
  * receives the tool name and cannot recover which server produced it.
+ * The same ambiguity exists when a user registration uses the exact harness
+ * id: the SDK registry reports only the id, not its settings/plugin origin.
  *
  * Prefer the known non-harness registration in that ambiguous case. This may
  * narrow a harness guard for the session, but it never silently disables a
@@ -250,7 +252,6 @@ export function hasClaudeMcpPrefixCollision(
 ): boolean {
   const harnessPrefix = claudeMcpToolPrefix(harnessServerId);
   for (const serverId of nonHarnessServerIds) {
-    if (serverId === harnessServerId) continue;
     if (claudeMcpToolPrefix(serverId) === harnessPrefix) return true;
   }
   return false;
