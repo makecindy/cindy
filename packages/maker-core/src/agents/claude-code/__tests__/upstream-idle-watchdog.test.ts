@@ -200,6 +200,23 @@ function assistantToolUse(id: string, command = 'sleep 999'): Record<string, unk
   };
 }
 
+function assistantTaskOutput(id: string): Record<string, unknown> {
+  return {
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_use',
+          id,
+          name: 'TaskOutput',
+          input: { task_id: 'task-1', block: true, timeout: 30_000 },
+        },
+      ],
+    },
+  };
+}
+
 function userToolResult(id: string, content = 'done'): Record<string, unknown> {
   return {
     type: 'user',
@@ -350,6 +367,30 @@ describe('DeepSeek tool-loop guard runtime integration', () => {
     stream.emit(successResult());
 
     await pumpUntil(() => handle.isTurnRunning?.() === false, 'long DeepSeek turn done');
+    expect(toolLoopError(events)).toBeUndefined();
+    expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('真实 SDK 事件流中的稳定 TaskOutput 轮询不会中断 turn', async () => {
+    const { handle, stream, events, fakeQuery } = await startSessionWithStream(
+      'deepseek/deepseek-v4-flash',
+    );
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    await handle.send({ type: 'user', content: 'wait for the background task' });
+
+    for (let i = 0; i < 30; i += 1) {
+      const id = `toolu_task_output_${i}`;
+      stream.emit(assistantTaskOutput(id));
+      stream.emit(userToolResult(id, 'still running'));
+    }
+    stream.emit(successResult());
+
+    await pumpUntil(() => handle.isTurnRunning?.() === false, 'TaskOutput polling turn done');
     expect(toolLoopError(events)).toBeUndefined();
     expect(fakeQuery.interrupt).not.toHaveBeenCalled();
 

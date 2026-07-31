@@ -62,66 +62,65 @@ describe('ToolLoopGuard', () => {
     }
   });
 
-  // ── 第 3 层:长窗口进展代理 ────────────────────────────────────────────────
-  it('三种调用与对应结果都重复六轮时判 stagnation,不会逃过短窗口', () => {
-    const g = new ToolLoopGuard({
-      stagnationWindowSize: 18,
-      stagnationCycleRepeats: 6,
-    });
-    for (let i = 0; i < 18; i += 1) {
-      const v = feed(
-        g,
-        `id${i}`,
-        ['Read', 'Bash', 'WebFetch'][i % 3],
-        { target: `fixed-${i % 3}` },
-        `stable-output-${i % 3}`,
-      );
-      if (i < 17) expect(v.kind).toBe('ok');
-      else expect(v).toMatchObject({ kind: 'hard', reason: 'stagnation', count: 18 });
-    }
-  });
-
-  it('九种调用循环也会按重复序列判 stagnation,不依赖固定 distinct 阈值', () => {
+  // ── 合法长 turn / 原生轮询工具 ───────────────────────────────────────────
+  it('TaskOutput 状态长期不变仍放行,不会被通用重复判据中断', () => {
     const g = new ToolLoopGuard();
-    for (let i = 0; i < 54; i += 1) {
-      const position = i % 9;
-      const v = feed(
-        g,
-        `id${i}`,
-        'TaskOutput',
-        { taskId: `task-${position}` },
-        `stable-status-${position}`,
-      );
-      if (i < 53) expect(v.kind).toBe('ok');
-      else expect(v).toMatchObject({ kind: 'hard', reason: 'stagnation', count: 54 });
-    }
-  });
-
-  it('固定八个目标轮询时只要对应结果持续推进就不判 stagnation', () => {
-    const g = new ToolLoopGuard();
-    for (let i = 0; i < 48; i += 1) {
-      const position = i % 8;
-      const round = Math.floor(i / 8);
+    for (let i = 0; i < 250; i += 1) {
       expect(
         feed(
           g,
           `id${i}`,
           'TaskOutput',
-          { taskId: `task-${position}` },
-          `progress-${position}-${round}`,
+          { task_id: 'task-1', block: true, timeout: 30_000 },
+          'still running',
         ).kind,
       ).toBe('ok');
     }
   });
 
-  it('参数持续变化时即使结果高度重复也不判 stagnation', () => {
+  it('TaskOutput 会切断普通工具在等待前后的重复累计', () => {
+    const g = new ToolLoopGuard();
+    for (let i = 0; i < 3; i += 1) {
+      expect(feed(g, `before-${i}`, 'Bash', { cmd: 'ls' }, 'same').kind).toBe('ok');
+    }
+    expect(
+      feed(
+        g,
+        'poll',
+        'TaskOutput',
+        { task_id: 'task-1', block: true, timeout: 30_000 },
+        'still running',
+      ).kind,
+    ).toBe('ok');
+    for (let i = 0; i < 3; i += 1) {
+      expect(feed(g, `after-${i}`, 'Bash', { cmd: 'ls' }, 'same').kind).toBe('ok');
+    }
+  });
+
+  it('三十三项固定序列不会被有限窗口冒充为通用硬上限', () => {
+    const g = new ToolLoopGuard();
+    for (let i = 0; i < 198; i += 1) {
+      const position = i % 33;
+      expect(
+        feed(
+          g,
+          `id${i}`,
+          'Read',
+          { file: `project-${position}.json` },
+          `stable-${position}`,
+        ).kind,
+      ).toBe('ok');
+    }
+  });
+
+  it('参数持续变化时即使结果高度重复也不判 hard', () => {
     const g = new ToolLoopGuard();
     for (let i = 0; i < 250; i += 1) {
       expect(feed(g, `id${i}`, 'Read', { file: `missing-${i}.ts` }, 'not found').kind).toBe('ok');
     }
   });
 
-  it('参数持续变化且结果为空或纯空白时也不判 stagnation', () => {
+  it('参数持续变化且结果为空或纯空白时也不判 hard', () => {
     const g = new ToolLoopGuard();
     for (let i = 0; i < 250; i += 1) {
       const output = i % 2 === 0 ? '' : '   ';

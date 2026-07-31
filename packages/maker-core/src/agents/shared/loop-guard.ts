@@ -16,21 +16,14 @@ const DEFAULT_WINDOW_SIZE = 12;
 /** 第 2 层:窗口填满后, distinct 指纹数 ≤ 此值即判循环(2 = 一直在 ≤2 种调用里转)。 */
 const DEFAULT_WINDOW_DISTINCT_LIMIT = 2;
 /**
- * 第 3 层(进展代理):保留足够长的历史,用于识别短窗口刻意放过的 3+ 调用循环。
- * 192 次可覆盖最多 32 种调用重复 6 轮,同时保持内存有界。
+ * TaskOutput 是 SDK 明确定义的等待/轮询工具。状态文本不变只代表任务仍在等待,
+ * 不能作为模型死循环证据;它也会切断前后的普通调用序列,避免跨等待阶段累计。
  */
-const DEFAULT_STAGNATION_WINDOW_SIZE = 192;
-/** 第 3 层:同一调用序列及其对应结果连续重复多少轮才判停滞。 */
-const DEFAULT_STAGNATION_CYCLE_REPEATS = 6;
+const LOOP_GUARD_EXEMPT_TOOL_NAMES = new Set(['TaskOutput']);
 
 interface PendingToolUse {
   name: string;
   input: unknown;
-}
-
-interface CompletedToolCall {
-  callFingerprint: string;
-  outputFingerprint: string;
 }
 
 export interface ToolLoopGuardOptions {
@@ -40,26 +33,24 @@ export interface ToolLoopGuardOptions {
   windowSize?: number;
   /** 第 2 层:窗口内 distinct 指纹 ≤ 此值判循环。 */
   windowDistinctLimit?: number;
-  /** 第 3 层:进展代理窗口大小。 */
-  stagnationWindowSize?: number;
-  /** 第 3 层:同一调用序列及其对应结果连续重复多少轮才判停滞。 */
-  stagnationCycleRepeats?: number;
 }
 
-/** 命中哪一层判据。consecutive=机械重复 / pingpong=短循环 / stagnation=长窗口无进展。 */
-export type ToolLoopReason = 'consecutive' | 'pingpong' | 'stagnation';
+/** 命中哪一层判据。consecutive=机械重复 / pingpong=短循环。 */
+export type ToolLoopReason = 'consecutive' | 'pingpong';
 
 export type ToolLoopGuardVerdict =
   | { kind: 'ok' }
   | { kind: 'hard'; reason: ToolLoopReason; count: number; toolName: string };
 
 /**
- * Result-aware tool loop detector(三层防御)。
+ * Result-aware tool loop detector(两层防御)。
  *
- * 只在工具结果返回后判断。任一层命中即返回 hard, 由调用方决定如何中断:
+ * 只在非轮询工具结果返回后判断。任一层命中即返回 hard, 由调用方决定如何中断:
  *   1. 连续完全相同(name+input+output)—— 快路径, 零误判;
  *   2. name+input 滑动窗口多样性坍缩 —— 抓 ABAB 交替 / output 易变的重复;
- *   3. 同一调用序列重复多轮且对应结果不变 —— 抓真正无进展的 3+ 调用循环;
+ *
+ * 不按调用总数或任意长度的重复序列硬中断:仅凭工具 trace 无法区分合法批处理、
+ * 稳定状态轮询与死循环,有限窗口也只能移动误判/漏判边界。
  *
  * 类本身不依赖 Electron / SDK / provider, 也不做 IO;调用方决定何时启用和如何中断。
  */
@@ -67,8 +58,6 @@ export class ToolLoopGuard {
   readonly consecutiveLimit: number;
   readonly windowSize: number;
   readonly windowDistinctLimit: number;
-  readonly stagnationWindowSize: number;
-  readonly stagnationCycleRepeats: number;
 
   private pendingToolUses = new Map<string, PendingToolUse>();
 
@@ -79,17 +68,10 @@ export class ToolLoopGuard {
   // 第 2 层状态: 最近 windowSize 个 name+input 指纹
   private callWindow: string[] = [];
 
-  // 第 3 层状态:更长窗口里的调用与结果指纹,用于区分固定目标轮询和真正无进展。
-  private stagnationWindow: CompletedToolCall[] = [];
-
   constructor(options: ToolLoopGuardOptions = {}) {
     this.consecutiveLimit = options.consecutiveLimit ?? DEFAULT_CONSECUTIVE_LIMIT;
     this.windowSize = options.windowSize ?? DEFAULT_WINDOW_SIZE;
     this.windowDistinctLimit = options.windowDistinctLimit ?? DEFAULT_WINDOW_DISTINCT_LIMIT;
-    this.stagnationWindowSize =
-      options.stagnationWindowSize ?? DEFAULT_STAGNATION_WINDOW_SIZE;
-    this.stagnationCycleRepeats =
-      options.stagnationCycleRepeats ?? DEFAULT_STAGNATION_CYCLE_REPEATS;
   }
 
   /**
@@ -103,13 +85,17 @@ export class ToolLoopGuard {
   }
 
   /**
-   * 工具结果到达后配对并按三层判据判断。没有配到完整 tool_use 时直接放行,
+   * 工具结果到达后配对并按两层判据判断。没有配到完整 tool_use 时直接放行,
    * 避免用不完整信息误判。
    */
   onToolResult(toolUseId: string, output: string): ToolLoopGuardVerdict {
     const toolUse = this.pendingToolUses.get(toolUseId);
     this.pendingToolUses.delete(toolUseId);
     if (!toolUse) return { kind: 'ok' };
+    if (LOOP_GUARD_EXEMPT_TOOL_NAMES.has(toolUse.name)) {
+      this.resetPatternState();
+      return { kind: 'ok' };
+    }
 
     // 第 1 层: 连续 name+input+output 完全相同
     const fullFingerprint = fingerprintToolCall(toolUse.name, toolUse.input, output);
@@ -144,76 +130,20 @@ export class ToolLoopGuard {
       }
     }
 
-    // 第 3 层:长窗口进展代理。固定目标轮询、批量读取、无 stdout 的成功命令都是
-    // 合法任务;只有同一调用序列重复多轮,且每个位置的对应结果也没有变化,才认为停滞。
-    this.stagnationWindow.push({
-      callFingerprint,
-      outputFingerprint: fingerprintToolOutput(output),
-    });
-    if (this.stagnationWindow.length > this.stagnationWindowSize) {
-      this.stagnationWindow.shift();
-    }
-    const stagnantCycleLength = findRepeatedStagnantCycleLength(
-      this.stagnationWindow,
-      this.stagnationCycleRepeats,
-    );
-    if (stagnantCycleLength !== null) {
-      return {
-        kind: 'hard',
-        reason: 'stagnation',
-        count: stagnantCycleLength * this.stagnationCycleRepeats,
-        toolName: toolUse.name,
-      };
-    }
-
     return { kind: 'ok' };
   }
 
   /** 每个 user turn 开始时重置, 避免跨 turn 的合法重复被累计。 */
   resetTurn(): void {
     this.pendingToolUses.clear();
+    this.resetPatternState();
+  }
+
+  private resetPatternState(): void {
     this.lastFullFingerprint = null;
     this.consecutiveStreak = 0;
     this.callWindow = [];
-    this.stagnationWindow = [];
   }
-}
-
-/**
- * 检查历史末尾是否由同一段 3+ 调用序列重复组成,且每轮对应结果完全相同。
- * 1 个调用的机械重复由第 1 层处理,2 个调用的往返由第 2 层处理。
- */
-function findRepeatedStagnantCycleLength(
-  history: CompletedToolCall[],
-  repeats: number,
-): number | null {
-  if (repeats < 2) return null;
-
-  const maxCycleLength = Math.floor(history.length / repeats);
-  for (let cycleLength = 3; cycleLength <= maxCycleLength; cycleLength += 1) {
-    const start = history.length - cycleLength * repeats;
-    let matches = true;
-
-    for (let repeat = 1; repeat < repeats && matches; repeat += 1) {
-      for (let offset = 0; offset < cycleLength; offset += 1) {
-        const baseline = history[start + offset];
-        const candidate = history[start + repeat * cycleLength + offset];
-        if (
-          !baseline ||
-          !candidate ||
-          baseline.callFingerprint !== candidate.callFingerprint ||
-          baseline.outputFingerprint !== candidate.outputFingerprint
-        ) {
-          matches = false;
-          break;
-        }
-      }
-    }
-
-    if (matches) return cycleLength;
-  }
-
-  return null;
 }
 
 /**
@@ -231,10 +161,6 @@ function fingerprintToolCall(toolName: string, input: unknown, output: string | 
     hash.update(output);
   }
   return hash.digest('hex');
-}
-
-function fingerprintToolOutput(output: string): string {
-  return createHash('sha256').update(output).digest('hex');
 }
 
 /**
