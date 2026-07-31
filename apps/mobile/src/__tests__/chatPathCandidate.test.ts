@@ -270,10 +270,72 @@ describe('歧义候选的点亮门槛(DESIGN.md §14.5 规则 5)', () => {
     }
   });
 
-  it('显式 markdown 链接与正文裸路径不进歧义档(作者已声明 / 词法已要求分隔符)', () => {
-    // `[配置](package.json)` 里的 package.json 不可能"其实是属性访问"。
-    expect(classifyChatPathLinkTarget('package.json')?.ambiguousShape).toBe(false);
-    expect(classifyChatPathLinkTarget('src/components')?.ambiguousShape).toBe(false);
+  // ── 点亮门槛对**所有候选来源**同口径(不变量 B)────────────────────────────
+  // 这里曾断言「显式链接不进歧义档」并钉住了实现 —— 那是把 §14.5 **规则 4(候选门槛)**
+  // 的来源豁免误用到**规则 5(点亮门槛)**上。作者声明「这是链接」并不能让远端在链路断
+  // 时知道 package.json 是否存在,而点亮了却点不开正是规则 1 要防的反例;桌面
+  // isAmbiguousPathShape 对全部 local-candidate 一视同仁,两端曾因此不对称
+  // (PR #1144 review 实捉,2026-07-31 检查点统一)。
+  const linkAmbiguity = (url: string) => {
+    const c = classifyChatPathLinkTarget(url);
+    if (!c) return 'not-candidate';
+    return c.ambiguousShape ? 'needs-confirmation' : 'optimistic-ok';
+  };
+
+  it('显式链接的点亮门槛与行内 code 完全一致(逐样本对照,不留来源豁免)', () => {
+    for (const sample of [
+      '/Users/me/out/hero.png', 'src/App.tsx', 'C:\\proj\\a.ts', 'src/components/',
+      'package.json', 'array.map', 'src/components', 'and/or', 'text/plain',
+    ]) {
+      expect(linkAmbiguity(sample), `链接入口 ${sample} 与行内 code 不同档`)
+        .toBe(ambiguity(sample));
+    }
+  });
+
+  it('候选门槛的来源豁免仍在:链接入口比行内 code 宽(规则 4 未被连带收紧)', () => {
+    // 宽松兜底(looksLikeLocalHref)是链接入口独有的;修点亮门槛不得顺手砍掉它,
+    // 否则这些目标会连候选都进不去、连 stat 都不发,变成能力倒退。
+    expect(classifyChatPathLinkTarget('2')).toBeNull(); // 非路径形状仍拒
+    for (const sample of ['package.json', 'src/components']) {
+      expect(classifyChatPathLinkTarget(sample), `${sample} 掉出候选`).not.toBeNull();
+    }
+  });
+
+  it('file:// 永不歧义 —— 最明确的形态不得被判成最可疑的', () => {
+    // looksLikeFilePath 会被 URL_SCHEME_RE 挡掉而回 false,直接照抄它就会把
+    // file:///abs/a.md 打进歧义档(2026-07-31 检查点自查发现,reviewer 未提)。
+    expect(linkAmbiguity('file:///Users/me/a.md')).toBe('optimistic-ok');
+    expect(linkAmbiguity('file:///Users/me/no-ext-dir')).toBe('optimistic-ok');
+  });
+
+  it('正文裸路径入口不受影响:词法强制带扩展名 → 恒非歧义', () => {
+    // 这条钉住「修链接入口不是一刀切全判歧义」:裸路径的能力必须一寸不退。
+    const prose = '见 src/App.tsx、./a/b.py、../x/y.json、/abs/hero.png 与 C:\\p\\a.ts';
+    let from = 0;
+    const hits: string[] = [];
+    for (;;) {
+      const m = findBareFilePathMatch(prose, from);
+      if (!m) break;
+      hits.push(m.value);
+      from = m.end;
+    }
+    expect(hits.length).toBeGreaterThanOrEqual(5);
+    for (const value of hits) {
+      expect(linkAmbiguity(value), `裸路径 ${value} 被降级成需确认`).toBe('optimistic-ok');
+    }
+  });
+});
+
+describe('ambiguousShape 只能由单一判据产出(源码级守卫)', () => {
+  // 三个入口(行内 code / 显式链接 / 裸路径)历史上各自硬写过字面量,于是同一语义
+  // 在代码里有三份判据、改一处漏两处。收敛后只允许调 isAmbiguousChatPathShape。
+  it('chatPathCandidate.ts 里不出现 `ambiguousShape: true/false` 字面量', () => {
+    const src = readFileSync(
+      join(process.cwd(), 'src/session/chatPathCandidate.ts'),
+      'utf8',
+    ).replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+    expect(src, 'ambiguousShape 被硬写成字面量 —— 应统一走 isAmbiguousChatPathShape')
+      .not.toMatch(/ambiguousShape:\s*(true|false)\b/);
   });
 });
 

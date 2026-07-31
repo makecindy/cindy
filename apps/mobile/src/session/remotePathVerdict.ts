@@ -6,8 +6,10 @@
  * renderer/lib/remoteFileOpen.ts 的 verdict 层同语义:
  *
  *   - `file` / `directory` → 点亮;`nonfile`(远端明确不存在)→ 保持纯文本;
- *   - `unknown`(链路断 / stat 异常等无法判定)→ 乐观点亮,点击后由预览页
- *     自己的错误 UX 兜底——绝不因为断链把整条消息的 chip 全灭掉;
+ *   - `unknown`(链路断 / stat 异常等无法判定)→ **按形状分档**:形状明确是路径的
+ *     乐观点亮(点击后由预览页自己的错误 UX 兜底,绝不因为断链把整条消息的 chip
+ *     全灭掉),歧义形状必须等确定答案(判据 chatPathCandidate.isAmbiguousChatPathShape,
+ *     门槛落地在 MessageRenderer.ChatPathChipSpan;DESIGN.md §14.5 规则 5);
  *   - 确定态(file/directory/nonfile)按 (deviceId, workdir, absPath) 缓存,
  *     无 TTL、容量兜底:聊天引用的文件在视图生命周期内视作不变,切会话回来
  *     chip 必须同步点亮不闪烁;

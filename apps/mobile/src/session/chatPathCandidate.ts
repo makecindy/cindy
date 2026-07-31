@@ -169,6 +169,28 @@ export interface ChatPathCandidate {
 }
 
 /**
+ * 「形状上无法与普通代码 / 散文区分」的唯一判据 —— 与桌面
+ * `markdownTarget.isAmbiguousPathShape` **逐字同形**(两端需同步)。
+ *
+ * 所有候选入口(行内 code / 显式 markdown 链接 / 正文裸路径)都必须经它算
+ * `ambiguousShape`,不得按来源硬写 true/false:DESIGN.md §14.5 的**规则 4(候选门槛)**
+ * 对显式链接有来源豁免,**规则 5(点亮门槛)没有** —— 混淆两者会让「有下划线 = 可点」
+ * 在某一个入口上失效(PR #1144 review 实捉:这里曾对链接入口恒 false)。
+ *
+ * `originalHref` 传原始文本:尾斜杠在 classify* 里会被剥掉,而尾斜杠是作者显式给出的
+ * 目录信号、形状明确 → 不歧义。只看剥完的 href 会把 `src/components/` 误判成歧义。
+ */
+export function isAmbiguousChatPathShape(href: string, originalHref?: string): boolean {
+  const raw = originalHref ?? href;
+  if (looksLikeDirectoryPath(raw)) return false;
+  // `file://` 是显式写出的绝对路径 scheme,不可能与散文 / 属性访问同形 → 永不歧义。
+  // 必须单列:looksLikeFilePath 会被 URL_SCHEME_RE 挡掉而回 false(那条排除是为
+  // 「别把 https:// 当本地路径」服务的),照抄会把最明确的形态判成最可疑的。
+  if (/^file:\/\//i.test(raw)) return false;
+  return !looksLikeFilePath(href);
+}
+
+/**
  * inline code 文本 → 路径候选(与桌面 classifyInlineCodeTarget 同语义)。
  * 首尾空白 / 多行 / scheme 前缀(`mailto:`、`git+ssh://`)一律不候选;
  * 候选 ≠ 点亮,存在性由 remotePathVerdict 远端 stat 决定。
@@ -188,8 +210,8 @@ export function classifyInlineCodePathCandidate(text: string): ChatPathCandidate
   if (looksLikeDirectoryPath(href)) {
     const stripped = href.replace(/[\\/]+$/, '');
     if (!stripped) return null;
-    // 尾斜杠是作者显式给出的目录信号,形状明确 → 不算歧义。
-    return { href: stripped, directoryShape: true, ambiguousShape: false };
+    // 尾斜杠是作者显式给出的目录信号,形状明确 → 不算歧义(判据同下,不硬写字面量)。
+    return { href: stripped, directoryShape: true, ambiguousShape: isAmbiguousChatPathShape(stripped, raw) };
   }
   if (!looksLikeFilePath(href) && !looksLikeBareFileReference(href) && !looksLikeLocalHref(href)) {
     return null;
@@ -197,9 +219,7 @@ export function classifyInlineCodePathCandidate(text: string): ChatPathCandidate
   return {
     href,
     directoryShape: false,
-    // 明确的路径形状 = 绝对路径 ∨ (分隔符 ∧ 扩展名),两者都由 looksLikeFilePath 覆盖;
-    // 其余(裸名、分隔符无扩展)进歧义档,需远端明确确认才点亮。
-    ambiguousShape: !looksLikeFilePath(href),
+    ambiguousShape: isAmbiguousChatPathShape(href, raw),
     ...(lineInfo.line !== undefined ? { line: lineInfo.line } : {}),
     ...(lineInfo.column !== undefined ? { column: lineInfo.column } : {}),
   };
@@ -209,12 +229,18 @@ export function classifyInlineCodePathCandidate(text: string): ChatPathCandidate
  * markdown 链接目标 → 路径候选(与桌面 classifyMarkdownLinkTarget 的 local 分支
  * 同语义):`[README.md](/abs/path/README.md:17)` 这类模型高频输出的本地路径链接。
  * http(s) / 锚点 / 非 file 的 scheme 一律不候选(那些走原有 link 渲染分支);
- * 与 inline code 版的两处差异:
+ * 与 inline code 版的差异只有两处:
  *   ① 不要求原文无首尾空白(URL 在括号里,天然精确);
- *   ② 这里**保留** looksLikeLocalHref 的宽松兜底,且 ambiguousShape 恒 false——
- *      `[配置](package.json)` 是作者(或模型)显式写出的链接目标,不存在「其实是
- *      属性访问」的歧义,所以不需要 inline code 那道降级门。裸路径入口
- *      (findBareFilePathMatch)同理:它的词法本就要求带分隔符。
+ *   ② 这里**保留** looksLikeLocalHref 的宽松兜底 —— `[配置](package.json)` 是作者
+ *      (或模型)显式写出的链接目标,不存在「其实是属性访问」的歧义,所以进不进候选
+ *      不必按形状卡(DESIGN.md §14.5 **规则 4** 的来源豁免)。
+ *
+ * ⚠️ 但**点亮门槛(规则 5)没有来源豁免**:ambiguousShape 照样按形状算。作者声明了
+ * 「这是链接」并不能让远端在链路断时知道 `package.json` / `src/components` 是否存在,
+ * 而点亮了却点不开就正是规则 1 要防的反例。此处曾恒写 false,与桌面
+ * (isAmbiguousPathShape 对全部 local-candidate 一视同仁)不对称,PR #1144 review 实捉。
+ * 对裸路径入口(findBareFilePathMatch)这是**无操作**:它的词法强制末段带扩展名,
+ * looksLikeFilePath 必然为真 → 恒非歧义,能力不受影响(有用例钉住)。
  */
 export function classifyChatPathLinkTarget(url: string): ChatPathCandidate | null {
   const raw = url.trim();
@@ -228,13 +254,13 @@ export function classifyChatPathLinkTarget(url: string): ChatPathCandidate | nul
   if (looksLikeDirectoryPath(href)) {
     const stripped = href.replace(/[\\/]+$/, '');
     if (!stripped) return null;
-    return { href: stripped, directoryShape: true, ambiguousShape: false };
+    return { href: stripped, directoryShape: true, ambiguousShape: isAmbiguousChatPathShape(stripped, raw) };
   }
   if (!looksLikeLocalHref(href)) return null;
   return {
     href,
     directoryShape: false,
-    ambiguousShape: false,
+    ambiguousShape: isAmbiguousChatPathShape(href, raw),
     ...(lineInfo.line !== undefined ? { line: lineInfo.line } : {}),
     ...(lineInfo.column !== undefined ? { column: lineInfo.column } : {}),
   };

@@ -77,17 +77,40 @@ describe('聊天正文的可点性信号(DESIGN.md §14.5)', () => {
       .toMatch(/delete safeProps\[BARE_PATH_ATTR\]/);
   });
 
-  it('规则⑤:远程会话的 unknown 只对非歧义形状乐观点亮(sync + async 两条分支都要有门槛)', () => {
+  it('规则⑤:远程会话的 unknown 只对非歧义形状乐观点亮,且门槛只有一处判据', () => {
     const src = stripComments(read(CHAT_BODY_FILES[0]));
     // 远程会话 fs:stat 回 unknown 时,歧义形状(裸名 `array.map`、分隔符无扩展
     // `and/or`)不得乐观升级成 resolved-local —— 否则加了常显下划线后,普通行内 code
     // 会被展示成可点文件、点了必失败(PR #1144 review 实捉桌面侧漏了这道门槛)。
-    const gates = [...src.matchAll(/isAmbiguousPathShape\(/g)];
-    expect(gates.length, 'sync 与 async 两条远程分支都要过 isAmbiguousPathShape')
-      .toBeGreaterThanOrEqual(2);
-    // unknown 不得再无条件出现在乐观点亮的条件里。
+    expect(src, 'unknown 的歧义门槛不见了').toMatch(/isAmbiguousPathShape\(/);
+    // unknown 不得无条件出现在乐观点亮的条件里。
     expect(src, "unknown 仍被无条件当成可点亮")
       .not.toMatch(/verdict === 'file' \|\| verdict === 'unknown' \|\| verdict === 'directory'/);
+
+    // ⚠️ 这条断言方向刻意与直觉相反:门槛必须**恰好一处**。
+    // 本用例首版要求「sync + async 两条分支各有一处」(≥2),那是在 unknown 会被
+    // peek 返回的年代写的。2026-07-31 检查点把 unknown 收进短 TTL 负缓存、令
+    // peekRemotePathVerdict 只返回确定态之后,sync 分支的 unknown 分档已不可达,
+    // 判据只应留在 async 一处;继续要求 ≥2 等于强制把同一语义复制两份 ——
+    // 而「同一判据散落多处、改一处漏一处」正是本 PR 前四轮反复被 review 捉到的
+    // 根因。守卫要钉不变量,不能钉调用点个数。
+    const gates = [...src.matchAll(/isAmbiguousPathShape\(/g)];
+    expect(gates.length, '歧义判据出现了多处 —— 应只在 async 验证回调里判一次')
+      .toBe(1);
+  });
+
+  it('规则⑤前置:sync 分支不得把 unknown 当结论(peek 只返回确定态)', () => {
+    // 不变量 A(详见 remoteFileOpen 头注释与 remotePathVerdictCache.test.ts):
+    // unknown 走短 TTL 负缓存、不进 peek。所以 sync 分支里不该再出现对 unknown 的
+    // 判断 —— 出现了就说明有人把 unknown 写回了确定态缓存,那会让一次断链把路径
+    // 永久钉死在纯文本上(PR #1144 review 实捉)。
+    const src = stripComments(read(CHAT_BODY_FILES[0]));
+    const syncBlock = src.slice(
+      src.indexOf('const syncResolved'),
+      src.indexOf('const [asyncResolved'),
+    );
+    expect(syncBlock.length, '未定位到 syncResolved 块').toBeGreaterThan(0);
+    expect(syncBlock, 'sync 分支又开始消费 unknown 了').not.toContain("'unknown'");
   });
 
   it('规则①:可点的引用 chip 带下划线,不可点的静态 chip 不带(判据单点)', () => {

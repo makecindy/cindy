@@ -171,13 +171,19 @@ function classifyLocalCandidate(
  * 解析不到一律纯文本,没有「无法判定」这个中间态。
  */
 export function isAmbiguousPathShape(href: string, originalHref?: string): boolean {
+  const raw = originalHref ?? href;
   // 尾斜杠是作者显式给出的目录信号,形状明确 → **不歧义**(DESIGN.md §14.5 的表里
   // 「尾斜杠目录」与绝对路径同列)。但 classifyInlineCodeTarget /
   // classifyMarkdownLinkTarget 在产出 candidate 前就把尾斜杠剥掉了(href 全链路
   // 统一无尾杠形态),所以这里必须回看 originalHref,否则 `src/components/` 会被
   // 误判成歧义、在断链时退化成纯文本 —— 与移动端 candidate.directoryShape 等价
   // (PR #1144 review 实捉)。
-  if (looksLikeDirectoryPath(originalHref ?? href)) return false;
+  if (looksLikeDirectoryPath(raw)) return false;
+  // `file://` 是显式写出的绝对路径 scheme,不可能与散文 / 属性访问同形 → 永不歧义。
+  // 必须在这里单列:looksLikeFilePath 会被 URL_SCHEME_RE 挡掉而回 false(那条排除是
+  // 为「别把 https:// 当本地路径」服务的),照抄它会把最明确的形态判成最可疑的
+  // (2026-07-31 检查点自查发现,非 reviewer 提出)。
+  if (/^file:\/\//i.test(raw)) return false;
   return !looksLikeFilePath(href);
 }
 

@@ -186,8 +186,11 @@ describe('阅读器里「有下划线 = 可点」不得出现反例(DESIGN.md §
     expect(body, 'a 不得写死具体颜色').not.toMatch(/color:\s*(#|rgb|hsl)/i);
   });
 
-  it('点不动的 chip 一律不带下划线,也不带 pointer', () => {
-    for (const selector of ['.xdt-image-chip', '.xdt-session-chip']) {
+  it('点不动的元素一律不带下划线,也不带 pointer', () => {
+    // `img` 是直连图片(![图](https://...)):这个面没有 postMessage bridge、生成的
+    // <img> 也不在链接内,点它毫无响应。上一轮只清了两个 chip、漏了这对称的另一半
+    // (PR #1144 review 实捉),所以它必须和 chip 同列在这个循环里。
+    for (const selector of ['img', '.xdt-image-chip', '.xdt-session-chip']) {
       const body = ruleBody(selector);
       expect(body, `${selector} 点不动却带了下划线 —— 会成为「有下划线 = 可点」的反例`)
         .not.toMatch(/text-decoration:\s*underline/);

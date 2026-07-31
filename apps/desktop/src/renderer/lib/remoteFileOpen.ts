@@ -105,23 +105,51 @@ export async function revealRemoteChatFile(
 
 // ── chip 点亮预检(远端精确 stat)──────────────────────────────────────────
 // 远程会话下 chip 点亮前先问远端「这是不是个文件」:目录 / 不存在 / SSH workdir
-// 外保持纯文本(与本机"存在且唯一才点亮"的语义对齐);链路断等无法判定的情况
-// 乐观点亮(点击链路自带 NOT_FOUND / stale 兜底)。结果按 (端点, workdir, absPath)
-// 缓存——与本机 smartResolveCache 同款「无 TTL、容量兜底」策略,聊天引用的文件
-// 在视图生命周期内视作不变。
+// 外保持纯文本(与本机"存在且唯一才点亮"的语义对齐);链路断等无法判定的情况按
+// 形状分档乐观点亮(DESIGN.md §14.5 规则 5,判据见 markdownTarget.isAmbiguousPathShape)。
+//
+// ⚠️ **`unknown` 不是结论,只是「这一次没问到」**,因此绝不能和 file / directory /
+// nonfile 同层缓存(不变量 A,与移动端 session/remotePathVerdict.ts 逐条对称):
+//   - 确定态(file/directory/nonfile)按 (端点, workdir, absPath) 无 TTL 缓存——与本机
+//     smartResolveCache 同款「无 TTL、容量兜底」策略,聊天引用的文件在视图生命周期内
+//     视作不变,切走再回来 chip 必须同步点亮不闪烁;
+//   - `unknown` 只落**短 TTL 负缓存**,不进 verdictCache、因此也不进 peek。它存在的
+//     唯一理由是限流:链路差时长转录反复挂卸 chip,每次重挂都重发 stat 会打满通道
+//     (移动端 2026-07 线上实捉)。TTL 过后重挂自愈重验。
+//     曾把 unknown 写进 verdictCache:一次断链就把该路径永久钉成「已验证 = unknown」,
+//     peek 有值 → 异步 effect 直接 return → 链路恢复后再也不重验;叠上歧义形状不吃
+//     乐观点亮这道门槛,`src/components` 会永久停在纯文本(PR #1144 review 实捉)。
+//     代价:断链期间乐观点亮的引用每次重挂会先画一帧纯文本再点亮(peek 拿不到
+//     unknown)。这是刻意取舍——让「peek 有值」严格等价于「有确定结论」,
+//     「把 unknown 当结论」这个错误在类型与结构上不可表达,比省一帧重绘值钱。
 
 export type RemotePathVerdict = 'file' | 'directory' | 'nonfile' | 'unknown';
 
 const VERDICT_CACHE_CAP = 1000;
+/** unknown 负缓存 TTL:链路差时同 key 最多每 30s 重验一次(与移动端同值)。 */
+const UNKNOWN_TTL_MS = 30_000;
+const UNKNOWN_CACHE_CAP = 1000;
 const verdictCache = new Map<string, RemotePathVerdict>();
 const verdictInflight = new Map<string, Promise<RemotePathVerdict>>();
+/** key → 负缓存过期时刻(epoch ms)。只存 unknown,永不与确定态混放。 */
+const unknownUntil = new Map<string, number>();
+
+function capMapSize(map: Map<string, unknown>, cap: number): void {
+  if (map.size < cap) return;
+  const oldest = map.keys().next().value;
+  if (oldest !== undefined) map.delete(oldest);
+}
 
 function verdictKey(origin: RemoteFileOrigin, workdir: string, absPath: string): string {
   const endpoint = origin.kind === 'device' ? `dev:${origin.deviceId}` : `ssh:${origin.remoteHostId}`;
   return `${endpoint}|${workdir}|${absPath}`;
 }
 
-/** 同步读已验证结论(未验证 → undefined,调用方走异步验证)。 */
+/**
+ * 同步读**确定结论**(未验证 / 仅负缓存 unknown → undefined,调用方走异步验证)。
+ * 返回值有值 ⇔ 远端给过确定答案 —— 调用方可以直接把「peek 有值」当作「不必重验」,
+ * 不会把一次断链的 unknown 误当成终态(见本节头注释的不变量 A)。
+ */
 export function peekRemotePathVerdict(
   origin: RemoteFileOrigin,
   workdir: string,
@@ -141,6 +169,12 @@ export function verifyRemotePathCached(
   if (hit) return Promise.resolve(hit);
   const pending = verdictInflight.get(key);
   if (pending) return pending;
+  const negativeUntil = unknownUntil.get(key);
+  if (negativeUntil !== undefined) {
+    // TTL 内不再发 stat(限流),但语义仍是「没问到」:TTL 过后下一次调用重验自愈。
+    if (negativeUntil > Date.now()) return Promise.resolve('unknown');
+    unknownUntil.delete(key);
+  }
   const wireOrigin =
     origin.kind === 'device'
       ? ({ kind: 'device', deviceId: origin.deviceId } as const)
@@ -150,16 +184,26 @@ export function verifyRemotePathCached(
     .then((res) => res.verdict)
     .catch(() => 'unknown' as const)
     .then((verdict) => {
-      if (verdictCache.size >= VERDICT_CACHE_CAP) {
-        const oldest = verdictCache.keys().next().value;
-        if (oldest !== undefined) verdictCache.delete(oldest);
+      if (verdict === 'unknown') {
+        // 短 TTL 负缓存,**不进 verdictCache**(见本节头注释的不变量 A)。
+        capMapSize(unknownUntil, UNKNOWN_CACHE_CAP);
+        unknownUntil.set(key, Date.now() + UNKNOWN_TTL_MS);
+      } else {
+        capMapSize(verdictCache, VERDICT_CACHE_CAP);
+        verdictCache.set(key, verdict);
       }
-      verdictCache.set(key, verdict);
       return verdict;
     })
     .finally(() => verdictInflight.delete(key));
   verdictInflight.set(key, p);
   return p;
+}
+
+/** Test-only:清空确定态缓存、unknown 负缓存与在途请求(对称于移动端同名出口)。 */
+export function _clearRemotePathVerdictCache(): void {
+  verdictCache.clear();
+  verdictInflight.clear();
+  unknownUntil.clear();
 }
 
 /** 远程会话「复制文件」:取回缓存副本后以副本作为剪贴板文件引用。 */

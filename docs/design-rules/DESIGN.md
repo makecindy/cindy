@@ -758,9 +758,59 @@ PR #1144 的两轮 review 各捉到一个**同族**缺陷:「有下划线却点�
 这里,它的可点性由 `ChatPathChipSpan` 的 `lit` 单点裁决(同样是一个判据)。源码级守卫见
 `chatPathCandidate.test.ts` →「markdownLink 只能经 clickableInlineStyle 取用」。
 
-契约测试:`apps/mobile/src/__tests__/chatPathCandidate.test.ts`(候选精度 + 分级门槛)、
-`apps/mobile/src/__tests__/selectableMarkdownHtml.test.ts`(阅读器可点元素均带下划线)、
-`apps/desktop/src/renderer/__tests__/markdownTarget.test.ts`(行内 code 不收宽松兜底)。
+#### 第二次检查点(2026-07-31,第 5 轮):`unknown` 的生命周期与门槛的来源无关性
+
+第 5 轮 review 又出现同族缺陷,故按止损规则再做一次检查点。这轮的三条都不是「某处写错」,
+而是上一条不变量**没写完整**:它只约束了「谁该有下划线」,没约束「凭什么判定可点」的两个
+前提。补两条:
+
+> **不变量 A:`unknown` 不是结论,只是「这一次没问到」。** 它不得与 `file` / `directory` /
+> `nonfile` 同层缓存,必须能自愈重验;「已缓存」的判据只能是「有确定结论」。
+
+`unknown` 一旦被当成终态缓存,叠上规则 5 的歧义门槛就会**永久**把真实路径钉死在纯文本上:
+peek 有值 → 调用方跳过重验 → 链路恢复后也不再问。两端一律「确定态无 TTL 缓存 + `unknown`
+落 30s 负缓存且不进 peek」:
+
+| 端 | 确定态 | `unknown` |
+|---|---|---|
+| 桌面 `lib/remoteFileOpen.ts` | `verdictCache`,无 TTL | `unknownUntil`,30s,**不进 `peek`** |
+| 移动 `session/remotePathVerdict.ts` | `verdictCache`,无 TTL | `unknownUntil`,30s,**不进 `peek`** |
+
+代价是断链期间乐观点亮的引用每次重挂会先画一帧纯文本。刻意取舍:让「peek 有值」严格等价于
+「有确定结论」,「把 unknown 当结论」在结构上不可表达,比省一帧重绘值钱。
+(桌面侧曾把 `unknown` 写进 `verdictCache`,PR #1144 review 实捉。)
+
+> **不变量 B:点亮门槛(规则 5)对所有候选来源同口径。** 与候选门槛(规则 4)的来源豁免
+> **无关** —— 两者是两道独立的门,显式 markdown 链接只豁免前者。
+
+作者写下 `[配置](package.json)` 只声明了「我想让它可点」,并不能让远端在链路断时知道它是否
+存在;点亮了却点不开正是规则 1 要防的反例。判据在两端各只有一份、且**逐字同形**:桌面
+`markdownTarget.isAmbiguousPathShape`、移动 `chatPathCandidate.isAmbiguousChatPathShape`;
+所有入口都调它,**不得按来源硬写 `true` / `false`**(移动端曾对链接入口恒 `false`,与桌面
+不对称,review 实捉)。
+
+| 候选来源 | 桌面入口 | 移动入口 | 走门槛? |
+|---|---|---|---|
+| 行内 code | `classifyInlineCodeTarget` | `classifyInlineCodePathCandidate` | ✅ |
+| 显式 markdown 链接 | `classifyMarkdownLinkTarget` | `classifyChatPathLinkTarget` | ✅ |
+| 正文裸写路径 | `remarkLocalPathLinks` → 同上 | `matchBareFilePathLink` → 同上 | ✅(词法强制带扩展名 → 恒非歧义,实际无影响) |
+| 尾斜杠目录 | 回看 `originalHref` → 非歧义 | 同左 | ✅ |
+| `file://` 绝对路径 | 单列为非歧义 | 同左 | ✅ |
+
+> `file://` 必须在判据里**单列**:`looksLikeFilePath` 会被 `URL_SCHEME_RE` 挡掉而回 `false`
+> (那条排除是为「别把 `https://` 当本地路径」服务的),照抄它会把最明确的形态判成最可疑的。
+> 这条是检查点自查 grep 出来的,不是 reviewer 提的 —— 也说明「表要从代码 grep」这条有用。
+
+**给守卫测试的一条元规则**:守卫要钉**不变量**,不能钉**调用点个数**。本轮就有一条第 3 轮写的
+守卫要求歧义判据「至少出现 2 处(sync + async 各一)」,而收敛后它只该有 1 处 —— 那条守卫在
+反向阻止判据单点化。计数式断言只在「必须存在」时用,不要用它表达「必须重复」。
+
+契约测试:`apps/mobile/src/__tests__/chatPathCandidate.test.ts`(候选精度 + 分级门槛 + 门槛
+来源无关性)、`apps/mobile/src/__tests__/selectableMarkdownHtml.test.ts`(阅读器点不动的元素
+一律无下划线无 pointer)、`apps/desktop/src/renderer/__tests__/markdownTarget.test.ts`
+(行内 code 不收宽松兜底)、`apps/desktop/src/renderer/__tests__/remotePathVerdictCache.test.ts`
+(不变量 A,含三种错误修法各自的反例)、
+`apps/desktop/src/renderer/__tests__/chatClickabilitySignal.test.ts`(源码级守卫)。
 
 ## 15. CINDY Skin Family(品牌化可选 family)
 

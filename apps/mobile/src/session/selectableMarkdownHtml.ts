@@ -326,15 +326,18 @@ function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): str
       color: inherit;
       text-decoration: underline;
     }
+    /* 直连图片:本模块的唯一消费方 MarkdownFileReader 没有 postMessage bridge,
+       生成的 <img> 也不在链接内 —— 点它毫无响应,所以**不带 pointer**(与下面的
+       .xdt-image-chip 同一条判据:这个面上「像能点」的反馈一律不给)。
+       上一轮只清了 chip、漏了直连图片这对称的另一半,PR #1144 review 实捉。 */
     img {
       border-radius: 8px;
-      cursor: pointer;
       display: inline-block;
       height: auto;
       max-width: 100%;
-      /* 气泡内渲染高度上限,与 bridge 预留封顶(320px)对齐:无尺寸 ![](url) 的长图加载后
-         不再无界长高(intrinsic 比例在 max-width/max-height 双约束下保持,宽随高等比收缩),
-         加载后的跳变被封在预留值与上限的差以内;点开 lightbox 看全图。 */
+      /* 渲染高度上限 320px:无尺寸 ![](url) 的长图加载后不再无界长高(intrinsic 比例在
+         max-width/max-height 双约束下保持,宽随高等比收缩),加载后的跳变被封在这个
+         上限以内。 */
       max-height: 320px;
       vertical-align: middle;
     }
