@@ -309,7 +309,15 @@ function pageTailRow(page: readonly RemoteMessage[]): RemoteMessage | null {
   return null;
 }
 
-/** 同一处空洞的稳定标识:补齐失败 / 判定为真安静之后,不再对同一处重复发请求。 */
+/**
+ * 同一处空洞的稳定标识:补齐失败 / 判定为真安静之后,不再对同一处重复发请求。
+ *
+ * 身份取**两侧的时刻对**,不是两侧的行 id:一处跳变的本质是"这两个时刻之间没有东西",而两侧各自
+ * 是同毫秒组里的哪一行是不确定的(见 `HISTORY_GAP_PROBE_MAX_STEPS`)。用 id 组 key 时,只要探测
+ * 往组内 merge 进一行、而它的 id 在字典序上排到原锚点之后,下一轮检测就会挑出**同一处停顿**的
+ * 另一个 id 组合 → key 变了 → 同一处被重新探测,一处停顿吃掉两次考察额度,更早的真实空洞在本次
+ * 访问里仍然补不上(#1210 review)。时刻对不受组内成员变化影响。
+ */
 export function historyWindowGapKey(gap: HistoryWindowGap): string {
-  return `${gap.olderId}→${gap.newerId}`;
+  return `${gap.olderMs}→${gap.newerMs}`;
 }

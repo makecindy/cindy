@@ -70,9 +70,22 @@ describe('findHistoryWindowGap', () => {
     expect(findHistoryWindowGap([row('a', 0), broken, row('b', 5)])).toBeNull();
   });
 
-  it('空洞 key 稳定可用于去重', () => {
-    const gap = findHistoryWindowGap([row('older', 0), row('newer', 140)]) as HistoryWindowGap;
-    expect(historyWindowGapKey(gap)).toBe('older→newer');
+  it('空洞 key 取两侧时刻对，同毫秒组换了锚点也不变', () => {
+    // 回归:key 若取两侧的行 id,探测往同毫秒组内 merge 进一行、且它的 id 字典序排到原锚点之后
+    // 时,下一轮检测会挑出**同一处停顿**的另一个 id 组合 → key 变了 → 同一处被重新探测,一处
+    // 停顿吃掉两次考察额度,更早的真实空洞在本次访问里仍然补不上（#1210 review）。
+    const before = findHistoryWindowGap([row('older', 0), row('zzz-newer', 140)]) as HistoryWindowGap;
+    // 同一毫秒又并进来一行,且 id 字典序排在原锚点之前 → 成为新的锚点。
+    const after = findHistoryWindowGap([
+      row('older', 0),
+      row('aaa-newer', 140),
+      row('zzz-newer', 140),
+    ]) as HistoryWindowGap;
+
+    expect(after.newerId).not.toBe(before.newerId);
+    expect(historyWindowGapKey(after)).toBe(historyWindowGapKey(before));
+    // key 只由两侧时刻决定。
+    expect(historyWindowGapKey(before)).toBe(`${BASE_MS}→${BASE_MS + 140 * 60_000}`);
   });
 
   it('跳过已考察的跳变，继续往更早处找', () => {

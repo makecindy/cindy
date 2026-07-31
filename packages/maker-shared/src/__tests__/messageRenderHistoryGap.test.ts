@@ -190,6 +190,22 @@ describe('工作组分组 — 历史窗口空洞', () => {
     expect(headDuration).toBe(40 * 60_000);
   });
 
+  it('缺 settledAt 的工具行按调用发起时刻算结束，空洞照常切开', () => {
+    // 与 messageNormalize 那条「结束时刻只认 toolUseId 精确配对」配套:归属不确定时 settledAt
+    // 缺失,这里退回调用发起时刻。代价只是可能多切一个折叠条;反过来（吃邻接兜底猜出来的时刻）
+    // 会把结束锚点推到几小时后,真实空洞不再触发切组 —— 渲染兜底正好在最需要它的场景失效
+    // （#1210 review）。
+    const items = buildMessageRenderItems<GapFixtureMessage>([
+      // 没有 settledAt 的工具行(归属不确定,上游刻意不给时刻)
+      toolItem('no-settled-tool', 0),
+      // ↓ 空洞另一侧:窗口里"相邻",实际属于两小时后的另一段工作
+      toolItem('tail-tool', 140, 140),
+      assistantItem('answer', 141, '最终回复'),
+    ]);
+
+    expect(typesOf(items)).toEqual(['work_group', 'work_group', 'message']);
+  });
+
   it('窗口连续时分组不变（user 行照常是唯一边界）', () => {
     const items = buildMessageRenderItems<GapFixtureMessage>([
       userItem('user-1', 0, '第一问'),
