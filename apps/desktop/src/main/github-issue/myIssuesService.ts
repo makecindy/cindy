@@ -144,6 +144,34 @@ function staleAccountScopeError(): Error {
   );
 }
 
+/**
+ * 这一次的结果**配不配写进首屏快照**。不配写时保留上一份,不覆盖也不清空。
+ *
+ * 判据是「这一次有没有丢内容」,**不是**「有没有降级」—— 两者不等价,混起来会直接废掉
+ * 整个首屏快照:`platform-unavailable`(服务端读接口还没上线)是当前**所有**用户的常态,
+ * 把它算作不配写,快照就永远写不出来。
+ *
+ * 所以逐个 reason 判,因为它们性质不同:
+ *  - `null` —— 平台通道正常,完整;
+ *  - `platform-unavailable` —— 平台侧**根本还没有这份数据可给**,不算丢。账本 + GitHub
+ *    增强就是当下能拿到的全部,写它是对的(也正是这个快照目前唯一的现实场景);
+ *  - `fetch-failed` / `not-signed-in` —— 平台**本该有**却这次没拿到,内容真的少了。
+ *
+ * 增强那一路同理:`githubEnhancementFailed` 表示配了却没用上,少掉的恰是「用户绕过 Cindy
+ * 直接在 GitHub 上提的那些」—— 平台侧不知道它们,只有增强查得到。
+ *
+ * `truncated` 刻意**不**拦:它说的是「还有更多」,不是「显示的这些不对」。首屏本来只需要
+ * 第一页,与 UI 当场展示的内容一致。
+ *
+ * 与 renderer 侧的 `canTrustEmptyList` 刻意**不是同一个判据,别去合并**:那边问「能不能
+ * 断言用户从未提交」,空列表 + `platform-unavailable` 必须答否;这边问「这些内容能不能
+ * 原样留给下次首屏」,同样的组合答是。一个管断言缺失,一个管展示已有 —— 方向相反。
+ */
+export function isSnapshotWorthy(result: MyIssuesResult): boolean {
+  if (result.githubEnhancementFailed) return false;
+  return result.degraded === null || result.degraded === 'platform-unavailable';
+}
+
 interface CacheEntry {
   at: number;
   scope: string;
@@ -219,16 +247,26 @@ export class MyIssuesService {
     }
     if (this.cacheEpoch === epochAtStart) {
       this.cache = { at: this.now(), scope, result };
-      // 落盘快照与内存缓存**同一个判据**,不为它另立一套:epoch 变了说明期间有提交成功过,
-      // 落一份已知过时的首屏镜像没有收益(下次进页面反正要查)。刻意只带 items 与身份 ——
-      // degraded / failed / truncated 是「这一次查得怎么样」,缓存它们会让用户进页面
-      // 就看到过期的错误提示。
-      this.persistSnapshot(result);
+      // 落盘快照比内存缓存**多一条**门槛(isSnapshotWorthy):内存缓存 60s 后自然过期,
+      // 而快照要跨进程活到下一次冷启动,还刻意不带健康状况 —— 用一份缩水的结果覆盖它,
+      // 用户下次进页面看到的就是残缺列表加零提示。
+      if (isSnapshotWorthy(result)) {
+        this.persistSnapshot(result);
+      } else {
+        log.debug('skipped the my-issues snapshot write; this result lost content', {
+          degraded: result.degraded,
+          enhancementFailed: result.githubEnhancementFailed,
+        });
+      }
     }
     return result;
   }
 
-  /** 快照是 best-effort 的首屏加速:写失败只记日志,绝不能把一次成功的查询翻成失败。 */
+  /**
+   * 快照是 best-effort 的首屏加速:写失败只记日志,绝不能把一次成功的查询翻成失败。
+   * 刻意只带 items 与身份 —— degraded / failed / truncated 是「这一次查得怎么样」,
+   * 缓存它们会让用户进页面就看到一条过期的错误提示。
+   */
   private persistSnapshot(result: MyIssuesResult): void {
     const write = this.deps.writeSnapshot;
     if (!write) return;
@@ -351,11 +389,20 @@ export class MyIssuesService {
     // 总超时触发时也要能回传已经解析成功的身份:header 照常显示并入了谁名下的 issue,
     // 只是这一次没并进内容。所以把它记在闭包外。
     let resolved: GithubEnhancementViewer | null = null;
+    /**
+     * 身份解析**自己报错了**(区别于「解析出 null = 没配」,也区别于总超时)。
+     * 约定:resolveGithubEnhancement 返回 null 只表示没配,失败一律抛出。所以抛出
+     * 就等于「配了却用不上」—— 即使 viewer 因此始终为 null,也必须算 failed。
+     */
+    let resolutionFailed = false;
     const budgetMs = this.deps.enhancementTimeoutMs ?? DEFAULT_ENHANCEMENT_TIMEOUT_MS;
     const startedAt = this.now();
     try {
       return await this.withDeadline(async () => {
-        resolved = await this.deps.resolveGithubEnhancement();
+        resolved = await this.deps.resolveGithubEnhancement().catch((err: unknown) => {
+          resolutionFailed = true;
+          throw err;
+        });
         const viewer = resolved;
         // 没配增强是**正常状态**,不是失败。
         if (!viewer) return { viewer: null, issues: [], truncated: false, failed: false };
@@ -379,11 +426,20 @@ export class MyIssuesService {
         }
       }, budgetMs, 'enhancement');
     } catch (err) {
-      // 没有 GitHub 身份是正常状态;解析失败与总超时同样只是「这次没有增强」。
+      // 没有 GitHub 身份是正常状态;这一路失败也从不打挂整页。
       log.debug('github enhancement unavailable', { error: errorText(err) });
-      // 身份已经解析出来却走到这里 = 配了但这次用不上(搜索连兜底一起超时),
-      // 要让 UI 有机会说明;身份都没拿到时无从区分「没配」与「配了失效」,保持静默。
-      return { viewer: resolved, issues: [], truncated: false, failed: resolved !== null };
+      // failed 的两条来源,少任一条都会让「配了却没用上」被静静吞掉:
+      //  1. 身份已解析出来却走到这里 = 搜索连兜底一起超时;
+      //  2. 身份解析自己报错 = 配了却问不出身份(token 过期 / 撤销 / GitHub 限流)。
+      //     这条曾经缺失 —— runtime 把异常咽成 null,于是与「没配」不可区分,页面
+      //     静静少掉用户直接在 GitHub 提的那些 issue,一个字都不说。
+      // 只剩「总超时且期间连身份都没解析完」时保持静默:那种情况确实无从区分。
+      return {
+        viewer: resolved,
+        issues: [],
+        truncated: false,
+        failed: resolved !== null || resolutionFailed,
+      };
     }
   }
 

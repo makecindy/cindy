@@ -140,6 +140,15 @@ function mapPlatformFailure(err: unknown): MyIssuesDegradedReason {
  * 这里锁定的只是**身份来源**,不代表数据也只能从那条通道取 —— 两者曾被混为一谈:
  * 插件报出身份后 gh CLI 就再也不会被尝试,于是 PAT 搜不动本仓时整路放弃。取数的回退
  * 在 service 层(searchAuthoredIssuesFallback),与身份来源解耦。
+ *
+ * **返回 null 表示「没配这一路」,抛出表示「配了却问不出身份」。** 两者对 service 是不同
+ * 结论:没配是正常状态(静默),配了却用不上要提示,且不许拿缩水的结果覆盖首屏快照。
+ * 上一版把 gh 身份查询的异常咽成 null,于是 token 过期 / 被撤销 / GitHub 限流时,用户
+ * 直接在 GitHub 提的那些 issue 静静消失,页面一个字都不说。
+ *
+ * 插件那一步刻意**不**按这个口径抛:`isCindyGithubGhostUsable` 为真只说明插件装了且启用,
+ * 问不出 login 最常见的原因是**用户从未授权** —— 那属于「没配」。对它抛错会让所有只装了
+ * 插件的用户都看到一条失败提示。这一步含糊,所以落在静默那边(下一步 gh 仍会照常尝试)。
  */
 async function resolveGithubEnhancement(): Promise<GithubEnhancementViewer | null> {
   const ghostDeps = getSharedGithubUserSubmitterDeps();
@@ -150,16 +159,14 @@ async function resolveGithubEnhancement(): Promise<GithubEnhancementViewer | nul
   }
 
   const token = await getSharedGhCliTokenSource().readToken();
+  // 没有 token = 这一路没配(没装 gh / 没登录),正常状态。
   if (!token) return null;
-  try {
-    const user = await userScopedClient(token).getCurrentUser();
-    if (typeof user.login === 'string' && user.login.length > 0) {
-      return { source: 'gh-cli', login: user.login, token };
-    }
-  } catch (err) {
-    log.debug('gh cli viewer lookup failed', { error: errorText(err) });
+  // 有 token 却问不出身份,是配了却用不上 —— 抛出去,不伪装成「没配」。
+  const user = await userScopedClient(token).getCurrentUser();
+  if (typeof user.login !== 'string' || user.login.length === 0) {
+    throw new Error('gh cli viewer lookup returned no login');
   }
-  return null;
+  return { source: 'gh-cli', login: user.login, token };
 }
 
 async function readGhostViewerLogin(

@@ -34,6 +34,9 @@ function result(over: Partial<MyIssuesResult> = {}): MyIssuesResult {
   };
 }
 
+/** 配好且身份可用的插件通道增强 —— 多组用例共用。 */
+const enhanced = { login: 'octocat', source: 'ghost' as const };
+
 describe('selectMyIssuesNotices', () => {
   it('一切正常时不打扰用户', () => {
     expect(selectMyIssuesNotices(result({ items: [item()] }))).toEqual([]);
@@ -121,14 +124,15 @@ describe('selectMyIssuesNotices', () => {
   });
 
   it('增强配了却没用上:单独一条提示,排在主来源之后', () => {
-    expect(selectMyIssuesNotices(result({ githubEnhancementFailed: true }))).toEqual([
+    // 显式给出 ghost 来源:提示分了版本,插件专属那条只在确知是插件通道时才给
+    // (来源见「增强失败提示按来源分版」那组用例),所以这里不能靠 fixture 默认值。
+    const ghostFailed = { githubEnhancementFailed: true, githubEnhancement: enhanced } as const;
+    expect(selectMyIssuesNotices(result(ghostFailed))).toEqual([
       'issueTracker.mine.enhancementFailedHint',
     ]);
     // 两路各自出问题时两条都要说,顺序稳定(平台是主来源,排前面)。
     expect(
-      selectMyIssuesNotices(
-        result({ degraded: 'platform-unavailable', githubEnhancementFailed: true }),
-      ),
+      selectMyIssuesNotices(result({ degraded: 'platform-unavailable', ...ghostFailed })),
     ).toEqual([
       'issueTracker.mine.platformUnavailableHint',
       'issueTracker.mine.enhancementFailedHint',
@@ -145,8 +149,6 @@ describe('selectMyIssuesNotices', () => {
   });
 
   describe('canTrustEmptyList', () => {
-    const enhanced = { login: 'octocat', source: 'ghost' as const };
-
     it('三路都真查过且成功才可确证「真的没有」', () => {
       expect(canTrustEmptyList(result({ githubEnhancement: enhanced }))).toBe(true);
     });
@@ -192,6 +194,18 @@ describe('selectMyIssuesNotices', () => {
             githubEnhancementFailed: true,
             githubEnhancement: { login: 'octocat', source: 'gh-cli' },
           }),
+        ),
+      ).toEqual(['issueTracker.mine.enhancementFailedGenericHint']);
+    });
+
+    it('连来源都不知道(配了却问不出身份)→ 也用通用版,不指向插件页', () => {
+      // 新可达的组合:runtime 不再把 gh 身份查询的异常咽成 null,所以
+      // githubEnhancement=null 且 failed=true 会真的出现(token 过期 / 撤销 / 限流)。
+      // 判据写成「是不是 ghost」而不是「是不是 gh-cli」,未知情况才会落在保守那版 ——
+      // 反过来写会把这里误判成插件故障。
+      expect(
+        selectMyIssuesNotices(
+          result({ githubEnhancementFailed: true, githubEnhancement: null }),
         ),
       ).toEqual(['issueTracker.mine.enhancementFailedGenericHint']);
     });

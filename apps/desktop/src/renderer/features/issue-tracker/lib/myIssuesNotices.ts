@@ -77,15 +77,23 @@ export function selectMyIssuesNotices(data: MyIssuesResult): string[] {
   // 可选增强配了却没用上:主来源的提示在前,这条补充说明「你 GitHub 那部分也没进来」。
   // 只在**兜底通道也没救回来**时出现 —— 回退成功就没有可见损失,不打扰用户。
   //
-  // 按来源分两版:githubEnhancementFailed 在 source === 'gh-cli' 时同样为 true
-  // (searchViaFallback 对非 ghost 主通道直接判失败,因为它自己就是兜底)。那种用户
-  // 根本没在用插件,给他「插件令牌权限不足、去插件页检查」等于指向不存在的页面,
-  // 排障方向也错 —— gh 用的是完整 OAuth token,失败多为网络或额度。
+  // 按来源分两版,**默认落在通用版**,只有确知是插件通道才给插件专属排障。
+  //
+  // 三种 failed 现场,只有第一种能指向插件页:
+  //  - source === 'ghost' —— 插件 PAT 搜不动本仓(实测 422),提示去插件页检查是对的;
+  //  - source === 'gh-cli' —— 用户根本没在用插件,gh 用的是完整 OAuth token,
+  //    失败多为网络或额度,指向插件页等于指向一个不存在的页面;
+  //  - githubEnhancement === null —— 配了却连身份都没问出来(token 过期 / 撤销 / 限流),
+  //    此时**连来源都不知道**,更不能断言是插件的问题。
+  //
+  // 判据刻意写成「是不是 ghost」而不是「是不是 gh-cli」:未知情况必须落在保守那一版。
+  // 反过来写(`=== 'gh-cli' ? 通用 : 插件`)会把上面第三种现场误判成插件故障 ——
+  // 与本页反复栽的同一个坑:default 分支断言了自己并不知道的事。
   if (data.githubEnhancementFailed) {
     notices.push(
-      data.githubEnhancement?.source === 'gh-cli'
-        ? 'issueTracker.mine.enhancementFailedGenericHint'
-        : 'issueTracker.mine.enhancementFailedHint',
+      data.githubEnhancement?.source === 'ghost'
+        ? 'issueTracker.mine.enhancementFailedHint'
+        : 'issueTracker.mine.enhancementFailedGenericHint',
     );
   }
   if (data.truncated) {

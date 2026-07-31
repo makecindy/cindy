@@ -7,9 +7,11 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { SubmittedIssueRecord } from '../../../shared/myIssues';
+import type { MyIssuesResult, SubmittedIssueRecord } from '../../../shared/myIssues';
 import {
   MyIssuesService,
+  SEARCH_PAGE_SIZE,
+  isSnapshotWorthy,
   isStaleAccountScopeError,
   issueTypeFromLabels,
   mergeIssues,
@@ -60,6 +62,31 @@ function makeDeps(over: Partial<MyIssuesServiceDeps> = {}): MyIssuesServiceDeps 
     ...over,
   };
 }
+
+describe('isSnapshotWorthy', () => {
+  /**
+   * 判据矩阵直接钉一遍 —— 这个谓词的两侧都会有人想「顺手收紧」:改成 `degraded === null`
+   * 会当场废掉全部用户的首屏快照,去掉增强那半条会让缩水列表覆盖完整列表。
+   */
+  const base = {
+    items: [],
+    githubEnhancement: null,
+    githubEnhancementFailed: false,
+    degraded: null,
+    truncated: false,
+  } satisfies MyIssuesResult;
+
+  it.each([
+    ['平台正常', {}, true],
+    ['平台接口还没上线 —— 平台侧没这份数据可给,不算丢', { degraded: 'platform-unavailable' }, true],
+    ['被截断 —— 「还有更多」不等于「这些不对」', { truncated: true }, true],
+    ['网络 / 服务端异常 —— 平台本该有却没拿到', { degraded: 'fetch-failed' }, false],
+    ['登录态不可用 —— 同样缺了平台那部分', { degraded: 'not-signed-in' }, false],
+    ['配了增强却没用上 —— 少掉直接在 GitHub 提的那些', { githubEnhancementFailed: true }, false],
+  ] as const)('%s → %s', (_label, over, expected) => {
+    expect(isSnapshotWorthy({ ...base, ...over })).toBe(expected);
+  });
+});
 
 describe('mergeIssues', () => {
   it('账本 only 的条目状态标 unknown,标题用账本记的那一版', () => {
@@ -330,6 +357,48 @@ describe('MyIssuesService.list', () => {
     expect(result.githubEnhancementFailed).toBe(true);
   });
 
+  /**
+   * 身份解析的约定:**返回 null = 没配(静默),失败一律抛出 = 配了却用不上(要提示)**。
+   * 上一版 runtime 把 gh 身份查询的异常咽成 null,于是两者不可区分 —— token 过期 /
+   * 被撤销 / GitHub 限流时,用户直接在 GitHub 提的那些 issue 静静消失,页面一个字都不说,
+   * 而缩水的结果还会覆盖首屏快照。
+   */
+  it('身份解析抛错 = 配了却用不上:算 failed,且不许覆盖快照', async () => {
+    const writeSnapshot = vi.fn();
+    const service = new MyIssuesService(
+      makeDeps({
+        readLedger: () => [ledgerRecord()],
+        resolveGithubEnhancement: async () => {
+          throw new Error('HTTP 401 Bad credentials');
+        },
+        writeSnapshot,
+      }),
+    );
+
+    const result = await service.list();
+    // 主列表照常出来 —— 这一路失败从不打挂整页。
+    expect(result.items.map((i) => i.number)).toEqual([1001]);
+    expect(result.githubEnhancementFailed).toBe(true);
+    // 连来源都不知道,所以身份为 null;UI 据此选不提插件的那版提示。
+    expect(result.githubEnhancement).toBeNull();
+    expect(writeSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('身份解析返回 null = 没配:正常状态,不算 failed,照常写快照', async () => {
+    const writeSnapshot = vi.fn();
+    const service = new MyIssuesService(
+      makeDeps({
+        readLedger: () => [ledgerRecord()],
+        resolveGithubEnhancement: async () => null,
+        writeSnapshot,
+      }),
+    );
+
+    const result = await service.list();
+    expect(result.githubEnhancementFailed).toBe(false);
+    expect(writeSnapshot).toHaveBeenCalledTimes(1);
+  });
+
   describe('首屏快照写入', () => {
     it('落地成功后写快照,只带 items 与身份', async () => {
       const writeSnapshot = vi.fn();
@@ -372,6 +441,91 @@ describe('MyIssuesService.list', () => {
       await expect(service.list()).rejects.toSatisfy(isStaleAccountScopeError);
       // 快照按 owner 路径落盘,写进去就等于把 A 的 issue 塞进 B 的首屏。
       expect(writeSnapshot).not.toHaveBeenCalled();
+    });
+
+    /**
+     * 快照跨进程活到下一次冷启动,又刻意不带健康状况 —— 一次离线刷新把完整快照覆盖成
+     * 残缺列表后,用户冷启动会看到缩水的内容加零提示;若他仍然离线,那份完整列表就永久没了。
+     *
+     * 判据是「有没有丢内容」而非「有没有降级」,两个方向都要钉住:下面第一组必须**照常写**
+     * (否则整个首屏快照当场废掉),第二组必须**不写**。
+     */
+    it('平台接口还没上线(platform-unavailable)→ 照常写快照,这是当前所有用户的常态', async () => {
+      const writeSnapshot = vi.fn();
+      const service = new MyIssuesService(
+        makeDeps({
+          readLedger: () => [ledgerRecord()],
+          fetchPlatformIssues: async () => ({ ok: false as const, reason: 'platform-unavailable' }),
+          writeSnapshot,
+        }),
+      );
+
+      await service.list();
+      // 平台侧根本还没有这份数据可给 —— 账本 + 增强就是当下能拿到的全部,不算丢内容。
+      // 把它当成「不配写」等于让快照永远写不出来,首屏加速整个失效。
+      expect(writeSnapshot).toHaveBeenCalledTimes(1);
+      expect(writeSnapshot.mock.calls[0]![0].items.map((i: { number: number }) => i.number)).toEqual(
+        [1001],
+      );
+    });
+
+    it('结果被截断 → 照常写快照(「还有更多」不等于「这些不对」)', async () => {
+      const writeSnapshot = vi.fn();
+      const service = new MyIssuesService(
+        makeDeps({
+          fetchPlatformIssues: async () => ({
+            ok: true as const,
+            page: {
+              issues: Array.from({ length: SEARCH_PAGE_SIZE }, (_, i) =>
+                remoteIssue({ number: i + 1 }),
+              ),
+              totalCount: SEARCH_PAGE_SIZE + 40,
+            },
+          }),
+          writeSnapshot,
+        }),
+      );
+
+      await expect(service.list()).resolves.toMatchObject({ truncated: true });
+      expect(writeSnapshot).toHaveBeenCalledTimes(1);
+    });
+
+    it('这一次丢了内容 → 不写快照,保留上一份完整的', async () => {
+      for (const [label, over] of [
+        // 平台本该有却没拿到:网络 / 服务端异常。
+        [
+          'fetch-failed',
+          { fetchPlatformIssues: async () => Promise.reject(new Error('ECONNRESET')) },
+        ],
+        // 登录态不可用,平台那部分同样缺了。
+        [
+          'not-signed-in',
+          {
+            fetchPlatformIssues: async () => ({ ok: false as const, reason: 'not-signed-in' as const }),
+          },
+        ],
+        // 配了增强却没用上:少掉的正是用户直接在 GitHub 上提的那些。
+        [
+          'githubEnhancementFailed',
+          {
+            resolveGithubEnhancement: async () => GHOST_VIEWER,
+            searchAuthoredIssues: async () => {
+              throw new Error('HTTP 422 Validation Failed');
+            },
+          },
+        ],
+      ] as const) {
+        const writeSnapshot = vi.fn();
+        const service = new MyIssuesService(
+          makeDeps({ readLedger: () => [ledgerRecord()], writeSnapshot, ...over }),
+        );
+
+        // 结果照常交付(降级不是错误),只是不许覆盖快照。
+        await expect(service.list()).resolves.toMatchObject({
+          items: [expect.objectContaining({ number: 1001 })],
+        });
+        expect(writeSnapshot, label).not.toHaveBeenCalled();
+      }
     });
 
     it('期间有提交成功(epoch 变了)→ 不写快照,与内存缓存同一判据', async () => {
