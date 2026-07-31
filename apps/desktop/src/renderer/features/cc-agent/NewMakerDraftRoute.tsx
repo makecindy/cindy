@@ -88,7 +88,11 @@ import {
   setProviderModelFast,
   useProviderModelMemoryVersion,
 } from '@/state/providerModelMemory';
-import { setPending, setPendingGoal } from '@/state/pendingFirstMessage';
+import {
+  rememberRecoverableHandoff,
+  setPending,
+  setPendingGoal,
+} from '@/state/pendingFirstMessage';
 import {
   clearDraftAndNotify as clearComposerDraftAndNotify,
   getDraft as getComposerDraft,
@@ -2223,6 +2227,14 @@ export function NewMakerDraftRoute() {
                 ? { slashCommandRanges: opts.slashCommandRanges }
                 : {}),
             });
+            // 登记的**同一刻**落一份可恢复副本(codex P1 第四轮)。
+            //
+            // 副本不能等到 SessionView 消费时再落:那个 effect 要等 historyLoaded,而
+            // device-link 会话的历史要走隧道拉。被控端此刻离线、或首次拉历史超过
+            // PENDING_TTL_MS(60s),effect 根本轮不到执行,内存项却已被 TTL 删掉 ——
+            // 链路恢复后 consumePending 只能拿到 null,而磁盘上从来没写过。
+            // 登记即落副本,窗口就从「消费之后」提前覆盖到「登记之后」的全程。
+            rememberRecoverableHandoff(remoteSessionId, 'message', message);
             opts?.onAccepted?.();
             clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
             attachmentState.clearFiles();
@@ -2782,6 +2794,8 @@ export function NewMakerDraftRoute() {
                 }
               : {}),
           });
+          // 与发送分支同口径:登记即落可恢复副本,不等消费(理由见那段注释)。
+          rememberRecoverableHandoff(remoteSessionId, 'goal', objective);
           // 自动起名:goal 首轮走 GoalController 的 session.send、不经 maker:input:enqueue,
           // 被控端 deviceLinkAutoTitle 不会触发(Codex review #548)—— 与本地分支的
           // autoNameSession 对位:先立即用目标文案截断占位(Codex 式,侧边栏不停留在

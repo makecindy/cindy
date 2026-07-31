@@ -78,10 +78,10 @@ describe('NewMakerDraftRoute worktree send flow', () => {
       rawDerive,
     );
     // sendGuard 现在读合并后的 sessionHandoffPreparing —— 「会话正在准备」多了一档
-    // (device-link 远程开协同的交接,见 remoteCollabPreparing),两档必须共用同一个
+    // (device-link 远程交接,见 remoteHandoffPreparing),两档必须共用同一个
     // 下游判据,否则又是「同一语义两处判定」。worktree 这一档仍是它的组成项。
     const preparingMerge = sessionViewSource.indexOf(
-      'const sessionHandoffPreparing = worktreePreparing || remoteCollabPreparing;',
+      'const sessionHandoffPreparing = worktreePreparing || remoteHandoffPreparing;',
       worktreePreparing,
     );
     const sendGuard = sessionViewSource.indexOf(

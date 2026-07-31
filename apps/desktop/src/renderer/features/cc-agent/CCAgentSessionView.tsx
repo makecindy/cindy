@@ -148,7 +148,6 @@ import {
   consumePending,
   consumePendingGoal,
   forgetRecoverableHandoff,
-  rememberRecoverableHandoff,
   takeRecoverableHandoff,
   type RecoverableHandoffKind,
 } from '@/state/pendingFirstMessage';
@@ -1562,14 +1561,18 @@ export function CCAgentSessionView({
   // overlay 渲染) 全部统一从这一个值读, 保证语义一致 (overlay 在 = 输入禁用)。
   const worktreePreparing = smoothedWorktreeCreating;
 
-  // device-link 草稿开了协同时,首轮要等被控端 enableOrca 定性(见下方 pending 消费)。
-  // 那段 await 可能持续数十秒,期间会话看起来是空的 —— 用户很容易以为没发出去而再打一条。
-  // 那条会先进 Lead,草稿提交的首条反而排到它后面,消息顺序倒置,首轮还可能在协同尚未
-  // 就绪时跑掉(codex review P2)。所以按 worktree 创建同款处理:交接期间锁住发送。
+  // device-link 远程草稿的交接要等隧道往返(见下方 pending 消费):开协同要等被控端起
+  // Worker,起目标另有 subscribe 与 setGoal —— 每一段都可能走到 30s 超时。期间会话看起来
+  // 是空的,用户很容易以为没发出去而再打一条:那条会先进 Lead,草稿提交的首条反而排到它
+  // 后面,消息顺序倒置,首轮还可能在协同尚未就绪时跑掉(codex review P2 ×2)。
+  // 所以按 worktree 创建同款处理:交接**全程**锁住发送,而不只是开协同那一段。
+  //
+  // 命名刻意不叫 remoteCollabPreparing —— 它现在覆盖的是整条远程交接(含没开协同的
+  // 起目标路径),叫 collab 会让下一个人以为只在开协同时为真。
   // 与 worktreePreparing 合成一个 sessionHandoffPreparing,下游只读这一个值,避免两个
   // "会话正在准备"的判据各自接一半闸门。
-  const [remoteCollabPreparing, setRemoteCollabPreparing] = useState(false);
-  const sessionHandoffPreparing = worktreePreparing || remoteCollabPreparing;
+  const [remoteHandoffPreparing, setRemoteHandoffPreparing] = useState(false);
+  const sessionHandoffPreparing = worktreePreparing || remoteHandoffPreparing;
 
   // ---------------------------------------------------------------------------
   // F-AUQ-MIN-1 / F-AUQ-MIN-5 验收第 4 条：会话切换后 askUserViewerState 重置为 'expanded'。
@@ -2671,14 +2674,16 @@ export function CCAgentSessionView({
       // 拿不到 cindy_orca 工具。等待放在这里而不是 draft route,是为了不让「对端会话已
       // 建好、用户输入还只在内存里」的窗口跟着一次可能 30s 的隧道往返一起变长(见
       // remoteCollabHandoff 文件头)。开不起来时如实提示并照单会话继续。
-      if (pending.remoteCollab) {
-        // 进等待前先落一份可恢复副本:consumePending 已经把内存那份删了,而下面这段
-        // await 慢设备上可能几十秒,期间 app 被关掉正文就没有第二份了(greptile P1)。
-        rememberRecoverableHandoff(sessionId, 'message', pending.text);
-        // 交接期间锁住 composer(见 remoteCollabPreparing 的声明处):这段 await 可能
-        // 数十秒,不锁住的话用户补发的消息会插到首条之前。finally 保证任何终态都解锁。
-        setRemoteCollabPreparing(true);
-        try {
+      // 副本已在草稿路由登记 pending 的同一刻落下(见那里的注释),这里不再重复落 ——
+      // 落在这里等于要求 effect 先跑起来,而这条 effect 要等 historyLoaded。
+      //
+      // 锁要覆盖**整条交接**(消费 pending → 首轮发出),不能只包住开协同那段 await:
+      // 解锁后到 sendMessage 之间还有一次 await(命令派发),那个窗口里用户补发的消息
+      // 会抢在草稿提交的首条之前。远程交接才上锁 —— 本机交接没有远程等待。
+      const holdComposer = !!pending.remoteCollab;
+      if (holdComposer) setRemoteHandoffPreparing(true);
+      try {
+        if (pending.remoteCollab) {
           const ok = await consumePendingRemoteCollab(pending.remoteCollab, {
             leadSessionId: sessionId,
             logTag: 'pending first message',
@@ -2696,44 +2701,44 @@ export function CCAgentSessionView({
               log.warn('revealOrcaWorkersTab after pending collab failed', revealErr);
             });
           }
-        } finally {
-          setRemoteCollabPreparing(false);
         }
-      }
-      if (await maybeDispatchDesktopSlashCommand(pending.text, pending.files)) {
-        // 正文已交给命令派发,副本使命完成(下同)。
+        if (await maybeDispatchDesktopSlashCommand(pending.text, pending.files)) {
+          // 正文已交给命令派发,副本使命完成(下同)。
+          forgetRecoverableHandoff(sessionId);
+          return;
+        }
+        sendMessage(
+          pending.text,
+          session.model,
+          session.effort as Effort,
+          session.permissionMode as PermissionMode,
+          workingDir,
+          pending.files,
+          pending.mentions,
+          pending.vendorOptions ||
+            pending.quotesEncoded ||
+            pending.agentReferences?.length ||
+            pending.pastedTextRanges?.length ||
+            pending.slashCommandRanges !== undefined
+            ? {
+                ...(pending.vendorOptions ? { vendorOptions: pending.vendorOptions } : {}),
+                ...(pending.quotesEncoded ? { quotesEncoded: true } : {}),
+                ...(pending.agentReferences?.length
+                  ? { agentReferences: pending.agentReferences }
+                  : {}),
+                ...(pending.pastedTextRanges?.length
+                  ? { pastedTextRanges: pending.pastedTextRanges }
+                  : {}),
+                ...(pending.slashCommandRanges !== undefined
+                  ? { slashCommandRanges: pending.slashCommandRanges }
+                  : {}),
+              }
+            : undefined,
+        );
         forgetRecoverableHandoff(sessionId);
-        return;
+      } finally {
+        if (holdComposer) setRemoteHandoffPreparing(false);
       }
-      sendMessage(
-        pending.text,
-        session.model,
-        session.effort as Effort,
-        session.permissionMode as PermissionMode,
-        workingDir,
-        pending.files,
-        pending.mentions,
-        pending.vendorOptions ||
-          pending.quotesEncoded ||
-          pending.agentReferences?.length ||
-          pending.pastedTextRanges?.length ||
-          pending.slashCommandRanges !== undefined
-          ? {
-              ...(pending.vendorOptions ? { vendorOptions: pending.vendorOptions } : {}),
-              ...(pending.quotesEncoded ? { quotesEncoded: true } : {}),
-              ...(pending.agentReferences?.length
-                ? { agentReferences: pending.agentReferences }
-                : {}),
-              ...(pending.pastedTextRanges?.length
-                ? { pastedTextRanges: pending.pastedTextRanges }
-                : {}),
-              ...(pending.slashCommandRanges !== undefined
-                ? { slashCommandRanges: pending.slashCommandRanges }
-                : {}),
-            }
-          : undefined,
-      );
-      forgetRecoverableHandoff(sessionId);
     })();
   }, [
     historyLoaded,
@@ -2764,41 +2769,34 @@ export function CCAgentSessionView({
     }
     pendingGoalConsumedRef.current = true;
     void (async () => {
+      // 锁必须覆盖**从消费 pendingGoal 到 setGoal 结束**的全程,不能只包住开协同那段:
+      // 前面的 subscribe 与后面的 setGoal 同样是隧道 invoke、同样可能走到 30s 超时,
+      // 锁在它们之外的话,这两个窗口里用户补发的消息会抢在目标首轮之前跑
+      // (codex P2 第四轮)。pendingGoal 只有远程草稿会登记,所以无条件上锁。
+      setRemoteHandoffPreparing(true);
       try {
         const deviceId = getSessionDeviceId(sessionId);
-        // 副本要落在**任何一次远程等待之前**,不能只挡在开协同那一段前面:下面的
-        // subscribe 同样是一次隧道 invoke,同样可能走到 30s 超时,而 consumePendingGoal
-        // 早就把内存那份删了。所以判据是「这是不是一次远程交接」,不是「开没开协同」
-        // (greptile P1 第二轮)。目标正文也是用户敲进去的,丢了同样要重打。
-        if (deviceId || pendingGoal.remoteCollab) {
-          rememberRecoverableHandoff(sessionId, 'goal', pendingGoal.objective);
-        }
         if (deviceId) {
           await window.electronAPI.deviceLink.subscribe(deviceId, [`session:${sessionId}`]);
         }
         // 与首条消息同款:目标首轮同样要排在协同之后(见上方 pending 消费的注释)。
         if (pendingGoal.remoteCollab) {
-          setRemoteCollabPreparing(true);
-          try {
-            const ok = await consumePendingRemoteCollab(pendingGoal.remoteCollab, {
-              leadSessionId: sessionId,
-              logTag: 'pending goal',
-              onFailed: (err) =>
-                toast.error(
-                  getCollaborationStartErrorMessage(err, t, {
-                    remoteDevice: true,
-                    continueAsSingleSession: true,
-                  }),
-                ),
+          const ok = await consumePendingRemoteCollab(pendingGoal.remoteCollab, {
+            leadSessionId: sessionId,
+            logTag: 'pending goal',
+            onFailed: (err) =>
+              toast.error(
+                getCollaborationStartErrorMessage(err, t, {
+                  remoteDevice: true,
+                  continueAsSingleSession: true,
+                }),
+              ),
+          });
+          if (ok) {
+            void sessionsStore.forceRefresh('active');
+            void revealOrcaWorkersTab(sessionId).catch((revealErr) => {
+              log.warn('revealOrcaWorkersTab after pending goal collab failed', revealErr);
             });
-            if (ok) {
-              void sessionsStore.forceRefresh('active');
-              void revealOrcaWorkersTab(sessionId).catch((revealErr) => {
-                log.warn('revealOrcaWorkersTab after pending goal collab failed', revealErr);
-              });
-            }
-          } finally {
-            setRemoteCollabPreparing(false);
           }
         }
         await goalApiFor(sessionId).setGoal({
@@ -2813,6 +2811,8 @@ export function CCAgentSessionView({
       } catch (err) {
         log.warn('pending goal setGoal failed:', err);
         toast.error(t('goal.toast.failed'));
+      } finally {
+        setRemoteHandoffPreparing(false);
       }
     })();
   }, [historyLoaded, restoreRecoverableHandoff, sessionId, t]);
@@ -3461,7 +3461,7 @@ export function CCAgentSessionView({
                   isAgentBusy={isAgentBusy}
                   onStop={handleStopSession}
                   pendingQueue={pendingQueue}
-                  disabled={remoteSessionUnavailable || remoteCollabPreparing}
+                  disabled={remoteSessionUnavailable || remoteHandoffPreparing}
                   queuePaused={queuePaused}
                   queueExpanded={queueExpanded}
                   onQueueExpandedChange={setQueueExpanded}

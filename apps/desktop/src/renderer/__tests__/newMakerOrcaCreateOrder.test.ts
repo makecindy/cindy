@@ -96,27 +96,32 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     ).toHaveLength(2);
   });
 
-  it('locks the composer while the pending remote collab handoff runs', () => {
+  it('locks the composer for the whole remote handoff, not just the collab wait', () => {
     // 交接期间(可能数十秒)会话看起来是空的,用户很容易以为没发出去而再打一条 —— 那条会
     // 先进 Lead,草稿提交的首条反而排到它后面,顺序倒置,首轮还可能在协同未就绪时跑掉
-    // (codex review P2)。按 worktree 创建同款处理:交接期间锁住发送。
-    expect(sessionViewSource).toContain('const [remoteCollabPreparing, setRemoteCollabPreparing]');
+    // (codex review P2 ×2)。按 worktree 创建同款处理:交接**全程**锁住发送。
+    //
+    // 名字不叫 remoteCollabPreparing:它现在也覆盖没开协同的远程起目标路径,
+    // 叫 collab 会误导下一个人以为只在开协同时为真。
+    expect(sessionViewSource).toContain(
+      'const [remoteHandoffPreparing, setRemoteHandoffPreparing]',
+    );
     // 两处 pending 消费都要置位,且都用 finally 解锁(任何终态都不能把 composer 锁死)。
-    expect(sessionViewSource.match(/setRemoteCollabPreparing\(true\)/g)).toHaveLength(2);
-    expect(sessionViewSource.match(/setRemoteCollabPreparing\(false\)/g)).toHaveLength(2);
+    expect(sessionViewSource.match(/setRemoteHandoffPreparing\(true\)/g)).toHaveLength(2);
+    expect(sessionViewSource.match(/setRemoteHandoffPreparing\(false\)/g)).toHaveLength(2);
     const finallyUnlocks = sessionViewSource.match(
-      /\} finally \{\s*\n\s*setRemoteCollabPreparing\(false\);/g,
+      /\} finally \{\s*\n\s*(?:if \(holdComposer\) )?setRemoteHandoffPreparing\(false\);/g,
     );
     expect(finallyUnlocks).toHaveLength(2);
 
     // 「会话正在准备」只允许有一个下游判据:handleSend 拦截读合并值,ChatInput 也禁用。
     expect(sessionViewSource).toContain(
-      'const sessionHandoffPreparing = worktreePreparing || remoteCollabPreparing;',
+      'const sessionHandoffPreparing = worktreePreparing || remoteHandoffPreparing;',
     );
     expect(sessionViewSource).toContain('if (sessionHandoffPreparing) return false;');
     expect(sessionViewSource).not.toContain('if (worktreePreparing) return false;');
     expect(sessionViewSource).toContain(
-      'disabled={remoteSessionUnavailable || remoteCollabPreparing}',
+      'disabled={remoteSessionUnavailable || remoteHandoffPreparing}',
     );
   });
 
@@ -211,11 +216,11 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     expect(source).toContain('if (policy.enabled && !policy.unavailable) {');
   });
 
-  // 远程协同等待期间用户输入必须有第二份副本(greptile P1)。
-  // consumePending 已经把内存那份删了,而随后的 await 慢设备上可到 30s 超时 + 6×3s 回查;
-  // 这段时间 app 被关掉,正文就只剩 localStorage 那一份。顺序是全部要害:
-  // remember 必须在 await **之前**,forget 必须在交出去**之后**。
-  describe('远程协同等待期间的可恢复副本', () => {
+  // 远程交接期间用户输入必须有第二份副本(greptile P1 + codex P1)。
+  // 关键是副本落在**登记那一刻**,不是消费那一刻:消费 effect 要等 historyLoaded,
+  // 而被控端离线 / 首次拉历史超过 PENDING_TTL_MS(60s)时它根本轮不到跑,
+  // 内存项却已被 TTL 删掉 —— 副本落在消费处等于没落。
+  describe('远程交接的可恢复副本', () => {
     const messageBranch = () => {
       const start = sessionViewSource.indexOf('const pending = consumePending(sessionId);');
       const end = sessionViewSource.indexOf('const pendingGoalConsumedRef', start);
@@ -229,41 +234,61 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       return sessionViewSource.slice(start, start + 4000);
     };
 
-    it('首条消息:落副本 → 等协同 → 发送 → 清副本', () => {
+    it('副本在草稿路由登记 pending 的同一刻落下,不等会话视图消费', () => {
+      // 两条 device-link 分支都要落,且必须排在各自的 setPending / setPendingGoal 之后、
+      // navigate 之前 —— 登记完就有副本,后面无论多久没被消费都捞得回来。
+      const sendRemember = source.indexOf(
+        "rememberRecoverableHandoff(remoteSessionId, 'message', message)",
+      );
+      const goalRemember = source.indexOf(
+        "rememberRecoverableHandoff(remoteSessionId, 'goal', objective)",
+      );
+      expect(sendRemember).toBeGreaterThan(-1);
+      expect(goalRemember).toBeGreaterThan(-1);
+      expect(source.lastIndexOf('setPending(remoteSessionId, {', sendRemember)).toBeGreaterThan(-1);
+      expect(source.lastIndexOf('setPendingGoal(remoteSessionId, {', goalRemember)).toBeGreaterThan(
+        -1,
+      );
+      expect(sendRemember).toBeLessThan(
+        source.indexOf('navigate(`/cc-agent/${remoteSessionId}`', sendRemember),
+      );
+      // 会话视图不再自己落副本(落在那里要等 historyLoaded,等于没落)。
+      expect(sessionViewSource).not.toContain('rememberRecoverableHandoff(');
+    });
+
+    it('首条消息:等协同 → 发送 → 清副本,且锁覆盖整条交接', () => {
       const branch = messageBranch();
-      const remember = branch.indexOf("rememberRecoverableHandoff(sessionId, 'message', pending.text)");
+      const lock = branch.indexOf('if (holdComposer) setRemoteHandoffPreparing(true)');
       const awaitCollab = branch.indexOf('await consumePendingRemoteCollab(pending.remoteCollab');
       const send = branch.indexOf('sendMessage(');
       const forget = branch.lastIndexOf('forgetRecoverableHandoff(sessionId)');
+      const unlock = branch.indexOf('if (holdComposer) setRemoteHandoffPreparing(false)');
 
-      expect(remember).toBeGreaterThan(-1);
-      // 副本必须先于等待落下 —— 反过来就等于没有副本。
-      expect(remember).toBeLessThan(awaitCollab);
+      expect(lock).toBeGreaterThan(-1);
       expect(awaitCollab).toBeLessThan(send);
       expect(send).toBeLessThan(forget);
+      // 解锁必须排在 sendMessage **之后**:提前解锁的话,命令派发那次 await 里
+      // 用户补发的消息会抢在草稿提交的首条之前。
+      expect(lock).toBeLessThan(awaitCollab);
+      expect(send).toBeLessThan(unlock);
     });
 
-    it('新建目标:副本要早于**任何**远程等待,且 setGoal 成功后才清副本', () => {
+    it('新建目标:锁从消费一路盖到 setGoal 结束,setGoal 成功后才清副本', () => {
       const branch = goalBranch();
-      const remember = branch.indexOf(
-        "rememberRecoverableHandoff(sessionId, 'goal', pendingGoal.objective)",
-      );
+      const lock = branch.indexOf('setRemoteHandoffPreparing(true)');
       const awaitSubscribe = branch.indexOf('await window.electronAPI.deviceLink.subscribe(');
       const awaitCollab = branch.indexOf('await consumePendingRemoteCollab(pendingGoal.remoteCollab');
       const setGoal = branch.indexOf('await goalApiFor(sessionId).setGoal(');
       const forget = branch.indexOf('forgetRecoverableHandoff(sessionId)');
+      const unlock = branch.indexOf('setRemoteHandoffPreparing(false)');
 
-      expect(remember).toBeGreaterThan(-1);
-      // subscribe 同样是隧道 invoke、同样可能走到 30s 超时,而内存那份已经删了。
-      // 所以副本必须排在它前面,不能只挡在开协同那一段之前。
-      expect(remember).toBeLessThan(awaitSubscribe);
-      expect(remember).toBeLessThan(awaitCollab);
-      // 判据是「这是不是远程交接」,不是「开没开协同」。
-      expect(branch).toContain('if (deviceId || pendingGoal.remoteCollab) {');
+      // subscribe 与 setGoal 同样是隧道 invoke、同样可能 30s;锁必须把它们都包住。
+      expect(lock).toBeLessThan(awaitSubscribe);
+      expect(lock).toBeLessThan(awaitCollab);
       expect(awaitCollab).toBeLessThan(setGoal);
-      // setGoal 失败时刻意保留副本 → forget 只能排在 setGoal 之后。挪进上面那个
-      // 协同 finally(或 setGoal 之前的任何位置)都会让这条断言失败。
+      // setGoal 失败时刻意保留副本 → forget 只能排在 setGoal 之后。
       expect(setGoal).toBeLessThan(forget);
+      expect(setGoal).toBeLessThan(unlock);
     });
 
     it('内存里没有 pending 时才走恢复,且只回填输入框、不自动补发', () => {
