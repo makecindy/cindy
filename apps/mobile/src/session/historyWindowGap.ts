@@ -113,7 +113,10 @@ export type HistoryBackfillOutcome =
 
 export interface HistoryBackfillDeps {
   /**
-   * 按 `before` 游标取一页(实现方负责 payload 降级重试)。返回的行序不限,本模块只按 id 判定。
+   * 按 `before` 游标取一页(实现方负责 payload 降级重试)。
+   *
+   * **必须保持服务端返回顺序**(`local-db:messages:list` 是最新在前、页尾最旧):下一页的游标按
+   * 页尾取,见 `nextPageCursor` 的说明。实现方不要在这里重排。
    */
   listPage(before: string, limit: number): Promise<readonly RemoteMessage[]>;
   /** 把取回的行并入窗口(按 key 合并,不覆盖更完整的既有行)。 */
@@ -183,7 +186,7 @@ export async function backfillHistoryWindowGap(
     }
     deps.merge(probe);
 
-    let before = oldestRowId(probe) ?? gap.newerId;
+    let before = nextPageCursor(probe) ?? gap.newerId;
     let rows = probe.length;
     let requests = 1;
     while (rows < HISTORY_BACKFILL_MAX_ROWS && requests < HISTORY_BACKFILL_MAX_REQUESTS) {
@@ -194,7 +197,7 @@ export async function backfillHistoryWindowGap(
       deps.merge(page);
       rows += page.length;
       if (page.some((row) => row.id === gap.olderId)) return 'covered';
-      const nextBefore = oldestRowId(page);
+      const nextBefore = nextPageCursor(page);
       // 游标没有前进(整页都是没有 id 的行,或被控端反复返回同一段)→ 停手,避免死循环。
       if (!nextBefore || nextBefore === before) return 'exhausted';
       before = nextBefore;
@@ -205,17 +208,28 @@ export async function backfillHistoryWindowGap(
   }
 }
 
-function oldestRowId(page: readonly RemoteMessage[]): string | null {
-  let oldest: { id: string; ms: number } | null = null;
-  for (const message of page) {
+/**
+ * 下一页的 `before` 游标:按**服务端返回顺序**取页尾那一行,不自己按时间戳排序。
+ *
+ * `local-db:messages:list` 的分页契约是 `ORDER BY createdAt DESC, rowid DESC`(见桌面
+ * `localDb/ipc/messages.ts`),也就是**最新在前、页尾最旧**;device-link 隧道的裁行只截前缀
+ * (`sliceRemoteMessageWindowForChannel`),不改顺序。
+ *
+ * 为什么不能自己排:同一毫秒落库的多行在客户端只剩相同的 `createdAt`,再拿消息 id 的字典序做
+ * 次级键就与服务端的 `rowid` 次序脱钩(id 是 cuid 之类,与插入顺序无关)。于是可能挑中页内**较
+ * 新**的那一行当游标,下一页把已经 merge 过的行再取回来 —— 连续同毫秒消息时,补齐会在 12 次
+ * 请求预算里只前进几行,然后把这处空洞永久记成 `budget`,历史仍然缺失(#1210 review)。
+ * rowid 不在手机端的 `RemoteMessage` 契约里(compact 后也不保证带上),所以只能依赖顺序。
+ *
+ * 跳过本地合成的系统卡(`mobile-system-*`):它们没有服务端对应行,当游标什么都匹配不上。
+ */
+function nextPageCursor(page: readonly RemoteMessage[]): string | null {
+  for (let index = page.length - 1; index >= 0; index--) {
+    const message = page[index];
     if (!message.id || message.id.startsWith('mobile-system-')) continue;
-    const ms = Date.parse(message.createdAt);
-    if (!Number.isFinite(ms)) continue;
-    if (!oldest || ms < oldest.ms || (ms === oldest.ms && message.id.localeCompare(oldest.id) < 0)) {
-      oldest = { id: message.id, ms };
-    }
+    return message.id;
   }
-  return oldest?.id ?? null;
+  return null;
 }
 
 /** 同一处空洞的稳定标识:补齐失败 / 判定为真安静之后,不再对同一处重复发请求。 */

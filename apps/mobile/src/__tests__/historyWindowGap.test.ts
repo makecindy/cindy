@@ -109,10 +109,11 @@ describe('backfillHistoryWindowGap', () => {
 
   it('探测发现别的行 → 继续翻页直到取回目标行', async () => {
     const merged: string[] = [];
+    // 每页按服务端契约排列:最新在前、页尾最旧(见 nextPageCursor)。
     const pages: Record<string, RemoteMessage[]> = {
       tail: [row('mid-1', 100)],
-      'mid-1': [row('mid-2', 60), row('mid-3', 80)],
-      'mid-2': [row('head', 2), row('head-2', 4)],
+      'mid-1': [row('mid-3', 80), row('mid-2', 60)],
+      'mid-2': [row('head-2', 4), row('head', 2)],
     };
     const listPage = vi.fn(async (before: string) => pages[before] ?? []);
     const outcome = await backfillHistoryWindowGap(gap, {
@@ -122,7 +123,29 @@ describe('backfillHistoryWindowGap', () => {
     });
 
     expect(outcome).toBe('covered');
-    expect(merged).toEqual(['mid-1', 'mid-2', 'mid-3', 'head', 'head-2']);
+    expect(merged).toEqual(['mid-1', 'mid-3', 'mid-2', 'head-2', 'head']);
+    // 游标按页尾取,所以第二页是从 mid-2（页内最旧）继续往前翻。
+    expect(listPage.mock.calls.map((call) => call[0])).toEqual(['tail', 'mid-1', 'mid-2']);
+  });
+
+  it('同一毫秒的多行按服务端顺序取页尾，不按 id 字典序', async () => {
+    // 回归:同毫秒落库的行在客户端只剩相同 createdAt,拿 id 字典序当次级键会与服务端的
+    // rowid 次序脱钩,可能挑中页内**较新**那行当游标 → 下一页把已 merge 的行再取回来,
+    // 补齐在预算内只前进几行就把空洞记成 budget（#1210 review）。
+    const pages: Record<string, RemoteMessage[]> = {
+      // 服务端顺序（最新在前）恰好与 id 字典序相反:页尾是 zzz,字典序最小是 aaa。
+      tail: [row('aaa', 100), row('mmm', 100), row('zzz', 100)],
+      zzz: [row('head', 2)],
+    };
+    const listPage = vi.fn(async (before: string) => pages[before] ?? []);
+    const outcome = await backfillHistoryWindowGap(gap, {
+      listPage,
+      merge: () => undefined,
+      isCancelled: () => false,
+    });
+
+    expect(outcome).toBe('covered');
+    expect(listPage.mock.calls.map((call) => call[0])).toEqual(['tail', 'zzz']);
   });
 
   it('判定只看本页取回的行，不看合并后的窗口', async () => {

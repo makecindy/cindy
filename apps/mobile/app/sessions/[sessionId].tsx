@@ -3864,13 +3864,17 @@ export default function SessionScreen() {
   /** 单调递增的补齐轮次计数器;`latest` 是本屏最新那一轮的序号(旧轮据此自我作废)。 */
   const backfillRunSeqRef = useRef(0);
   const backfillLatestRunSeqRef = useRef(0);
-  // 切会话即作废在飞的那一轮:占掉一个序号但不启动任何轮,于是在飞的旧轮在下一次 isCancelled 上
-  // 收手 —— 用户已经离开的会话不值得继续花翻页请求。走同一个单调序号而不是"比较当前会话 id",
-  // 是因为后者会随切回来而摆回、把取消撤销掉(#1210 review 的 P1);序号只增不减,作废是终态。
+  // 两种情况要作废在飞的那一轮:占掉一个序号但不启动任何轮,于是它在下一次 isCancelled 上收手。
+  //  - **切会话**:用户已经离开的会话不值得继续花翻页请求;
+  //  - **用户手动开始「加载更早」**:两者都按 before 游标翻页,并发只会重复拉取、反复 merge。
+  //    启动前那道 `loadingEarlier` 守卫只挡住"手动先开始"的顺序,挡不住"自动先开始、用户随后
+  //    点击"——那一轮已经在飞,必须由这里作废(#1210 review)。
+  // 作废走同一个单调序号,而不是在 isCancelled 里比"当前会话 id / loadingEarlier 是否变了":
+  // 那类判据会随状态摆回而把取消撤销掉(#1210 review 的 P1);序号只增不减,作废是终态。
   useEffect(() => {
     backfillRunSeqRef.current += 1;
     backfillLatestRunSeqRef.current = backfillRunSeqRef.current;
-  }, [sessionId]);
+  }, [sessionId, loadingEarlier]);
   useEffect(() => {
     if (!deviceId || !sessionId) return;
     // 同步门槛必须按 **session + 连接代** 判定,不能用 lastSyncedAt:屏实例复用、原地从会话 A

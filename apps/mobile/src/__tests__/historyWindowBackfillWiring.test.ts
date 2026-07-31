@@ -34,8 +34,10 @@ describe('history window backfill wiring', () => {
     expect(source).toContain('if (backfillLatestRunSeqRef.current !== runSeq) return;');
     // 收尾按 seq 精确清标记:按 sid 比会把切回同一会话后新起那一轮的标记误清。
     expect(source).toContain('setBackfillInFlightRun((current) => (current?.seq === runSeq ? null : current));');
-    // 切会话即占掉一个序号作废在飞的那一轮(单向,不启动新轮)。
+    // 切会话、或用户手动开始「加载更早」时占掉一个序号作废在飞的那一轮(单向,不启动新轮)。
+    // loadingEarlier 必须在依赖里:启动前守卫只挡"手动先开始",挡不住"自动先开始、用户随后点"。
     expect(source).toContain('backfillRunSeqRef.current += 1;');
+    expect(source).toContain('}, [sessionId, loadingEarlier]);');
     // 已退役的可摆动判据不得回归。
     expect(source).not.toContain('backfillSessionRef');
     expect(source).not.toContain('backfillInFlightRef');
