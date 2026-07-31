@@ -158,8 +158,10 @@ export interface CindySlotDeps {
   /**
    * 指纹 → 磁盘路径,且仅当该媒体在此意识名下(出生或画廊,查账本);
    * 不属于它 / 查无此账 / 文件缺失一律 null(不区分,不给探测空间)。
+   * ownerScopeKey 是任务受理时捕获的稳定作用域；宿主须锁定同一 DB，并在
+   * 每个查询 await 边界复核，禁止通过动态 defaultDb 跨到新账号。
    */
-  resolveOwnedMedia(ghostId: string, hash: string): Promise<string | null>;
+  resolveOwnedMedia(ghostId: string, hash: string, ownerScopeKey: string): Promise<string | null>;
   /**
    * 意识专属后端覆盖(解析表第②层,用户在意识详情页钉的);无覆盖返回
    * null。capability 为能力键(image.generate / video.edit …);返回值仍过
@@ -738,7 +740,7 @@ export class GhostCindySlot {
       // (统一话术不泄露细节)。异步模式也在受理期同步校验,拒绝立即可见。
       const imagePaths: string[] = [];
       for (const hash of hashes) {
-        const abs = await this.deps.resolveOwnedMedia(ghostId, hash);
+        const abs = await this.deps.resolveOwnedMedia(ghostId, hash, ownerScopeKey);
         assertOwnerScopeCurrent();
         if (!abs) {
           return { ok: false, message: '源图不在本意识名下(仅能改自己生成或画廊里的媒体)' };

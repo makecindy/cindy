@@ -495,7 +495,7 @@ describe('视频代办(gen_video / edit_video)', () => {
       hashes: [HASH_S],
     });
     expect(r).toMatchObject({ ok: true });
-    expect(resolveOwnedMedia).toHaveBeenCalledWith('art', HASH_S);
+    expect(resolveOwnedMedia).toHaveBeenCalledWith('art', HASH_S, 'cloud:test-owner:1');
     expect(editVideo).toHaveBeenCalledWith({
       prompt: '让它动起来',
       model: 'seedance-fast',
@@ -854,7 +854,7 @@ describe('改图代办(edit_image)', () => {
     const { slot, editImage, resolveOwnedMedia, saveGhostMedia } = makeSlot();
     const r = await slot.handleModelRequest('art', EDIT_REQ);
     expect(r).toMatchObject({ ok: true, hash: 'a'.repeat(64) });
-    expect(resolveOwnedMedia).toHaveBeenCalledWith('art', HASH_S);
+    expect(resolveOwnedMedia).toHaveBeenCalledWith('art', HASH_S, 'cloud:test-owner:1');
     expect(editImage).toHaveBeenCalledWith({
       prompt: '加顶帽子',
       model: 'gpt-image-2',
@@ -888,6 +888,30 @@ describe('改图代办(edit_image)', () => {
     });
     expect(r).toMatchObject({ ok: false });
     expect((r as { message: string }).message).toContain('名下');
+    expect(editImage).not.toHaveBeenCalled();
+  });
+
+  it('解析源图期间切换账号时丢弃任务,且解析器收到受理时的稳定作用域', async () => {
+    let ownerScopeKey = 'cloud:owner-a:1';
+    const resolveOwnedMedia = vi.fn(
+      async (_ghostId: string, hash: string, taskOwnerScopeKey: string) => {
+        expect(taskOwnerScopeKey).toBe('cloud:owner-a:1');
+        ownerScopeKey = 'cloud:owner-b:2';
+        return `/disk/${hash}.png`;
+      },
+    );
+    const editImage = vi.fn();
+    const { slot } = makeSlot({
+      getOwnerScopeKey: () => ownerScopeKey,
+      resolveOwnedMedia,
+      editImage,
+    } as Partial<CindySlotDeps>);
+
+    const result = await slot.handleModelRequest('art', EDIT_REQ);
+
+    expect(result).toMatchObject({ ok: false });
+    expect((result as { message: string }).message).toContain('账号已切换');
+    expect(resolveOwnedMedia).toHaveBeenCalledWith('art', HASH_S, 'cloud:owner-a:1');
     expect(editImage).not.toHaveBeenCalled();
   });
 });

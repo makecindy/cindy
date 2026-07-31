@@ -2155,17 +2155,35 @@ export function getGhostCindySlot(): GhostCindySlot {
           return null;
         }
       },
-      resolveOwnedMedia: async (ghostId, hash) => {
+      resolveOwnedMedia: async (ghostId, hash, ownerScopeKey) => {
+        const assertOwnerScopeCurrent = (): void => {
+          if (
+            isAppSessionBoundaryPending() ||
+            activeOwnerScopeKey() !== ownerScopeKey
+          ) {
+            throw new Error('媒体任务期间账号已切换,本次结果已丢弃');
+          }
+        };
         // 归属(账本)→ 落盘元数据(账本)→ 磁盘路径(指纹仓校验),
-        // 任一环查无即 null;modelSlot 对外统一话术不泄露差异。
-        if (!(await ledger.ghostCanRead(hash, ghostId))) return null;
-        const info = await ledger.getBlobInfo(hash);
+        // 任一环查无即 null;modelSlot 对外统一话术不泄露差异。defaultDb
+        // 会随账号动态变化，因此先在稳定 scope 下捕获一次 DB，并让两次查询
+        // 始终复用它；每个 await 后再 fail closed，绝不读取新账号账本。
+        assertOwnerScopeCurrent();
+        const db = getDbClient().drizzle;
+        const canRead = await ledger.ghostCanRead(hash, ghostId, db);
+        assertOwnerScopeCurrent();
+        if (!canRead) return null;
+        const info = await ledger.getBlobInfo(hash, db);
+        assertOwnerScopeCurrent();
         if (!info) return null;
+        let absPath: string;
         try {
-          return blobStore.resolveHashRef(hash, info.ext).absPath;
+          absPath = blobStore.resolveHashRef(hash, info.ext).absPath;
         } catch {
           return null;
         }
+        assertOwnerScopeCurrent();
+        return absPath;
       },
       saveGhostMedia: async ({ ghostId, buffer, mimeType, ownerScopeKey, label, callId }) => {
         const assertOwnerScopeCurrent = (): void => {
