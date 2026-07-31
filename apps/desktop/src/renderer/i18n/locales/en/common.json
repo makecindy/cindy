@@ -4914,6 +4914,9 @@
       "lastTool": "Last tool: {{tool}}",
       "outputFile": "Output: {{path}}"
     },
+    "planPill": {
+      "step": "Step {{current}} / {{total}}"
+    },
     "forkOrigin": {
       "label": "Created from another conversation"
     },

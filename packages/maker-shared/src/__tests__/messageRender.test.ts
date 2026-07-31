@@ -4,6 +4,7 @@ import {
   dedupeToolMediaByUrl,
   extractPlanTodos,
   extractTodosFromSourceMessage,
+  findLatestMessageTodoInsertion,
   findMessageTodoInsertions,
   formatDuration,
   type MessageRenderItem,
@@ -830,6 +831,42 @@ describe('message render todo grouping', () => {
     const insertions = findMessageTodoInsertions([done, next]);
 
     expect([...insertions.values()].map((item) => item.key)).toEqual(['todo-todo1', 'todo-todo2']);
+  });
+
+  // findLatestMessageTodoInsertion:桌面钉住式计划面板(PinnedPlanPanel)的数据源 ——
+  // 面板只展示"当前计划"一份,跨 source 取最近一次更新的 session 快照。
+
+  it('findLatestMessageTodoInsertion picks the most recently updated plan session across sources', () => {
+    const codex = tool('plan1', 'update_plan', {
+      plan: [{ step: 'Check desktop', status: 'in_progress' }],
+    });
+    const create = tool('task1', 'TaskCreate', { subject: 'Collect logs' }, 'create-1');
+
+    const latest = findLatestMessageTodoInsertion([
+      codex,
+      create,
+      result('create-1', 'Task #abc created successfully: Collect logs'),
+    ]);
+
+    expect(latest).toMatchObject({ key: 'todo-task1', source: 'task' });
+  });
+
+  it('findLatestMessageTodoInsertion returns the merged session snapshot with the FIRST call key', () => {
+    const first = tool('todo1', 'TodoWrite', {
+      todos: [{ content: 'Read code', status: 'in_progress' }],
+    });
+    const second = tool('todo2', 'TodoWrite', {
+      todos: [{ content: 'Read code', status: 'completed' }],
+    });
+
+    expect(findLatestMessageTodoInsertion([first, second])).toMatchObject({
+      key: 'todo-todo1',
+      todos: [{ content: 'Read code', status: 'completed' }],
+    });
+  });
+
+  it('findLatestMessageTodoInsertion returns null when the conversation has no plan calls', () => {
+    expect(findLatestMessageTodoInsertion([tool('t1', 'Bash', {})])).toBeNull();
   });
 
   it('parses Codex update_plan text and structured plan statuses', () => {

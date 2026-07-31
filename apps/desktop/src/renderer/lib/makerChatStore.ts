@@ -6186,7 +6186,8 @@ function loadOlderMessages(sessionId: string): void {
  * 为什么不再按 role / 工具名折算:折算模型必须逐一追平 buildRenderItems 的每种 item
  * 展开规则,而那套规则会持续演化。#676 的 review 连着四轮各挖出一种被低估的展开路径:
  * agent_task 卡(每个 Agent/Task/Workflow 调用 1:1)、按空洞切段后的孤立单行调用、
- * ghost_call 配卡后的独立 ghost_card、TodoWrite / update_plan 的 agent_plan 卡、
+ * ghost_call 配卡后的独立 ghost_card、TodoWrite / update_plan 的 agent_plan 卡
+ * (该卡现已移出流内,计划改钉在 composer 上方的 PinnedPlanPanel;历史结论不变)、
  * 以及结果含媒体时额外产出的 tool_media —— 每次都是"某行额外产生 item",而折算恰恰
  * 假设"多行合成一个 item"。低估预算的方向是危险的那一侧(放进更多实际渲染量),所以
  * 不再猜比例:一行最多产出一个可见 item 的量级,直接按行数当上界。

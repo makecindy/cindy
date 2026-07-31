@@ -4913,6 +4913,9 @@
       "lastTool": "최근 도구: {{tool}}",
       "outputFile": "출력: {{path}}"
     },
+    "planPill": {
+      "step": "단계 {{current}} / {{total}}"
+    },
     "forkOrigin": {
       "label": "원래 대화에서 생성됨"
     },

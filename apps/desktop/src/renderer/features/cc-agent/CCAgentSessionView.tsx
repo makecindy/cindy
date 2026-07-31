@@ -48,6 +48,7 @@ import { setRemoteReceiptDisplayReady } from '@/lib/sessionAttentionStore';
 import { shortSessionId } from '@/lib/sessionId';
 import { ChatInput } from '@/components/new-chat/ChatInput';
 import { GoalIndicator } from '@/components/new-chat/GoalIndicator';
+import { PinnedPlanPanel } from '@/components/new-chat/PinnedPlanPanel';
 import { sessionsStore } from '@/lib/sessionsStore';
 import { useStopOrcaCollab } from './hooks/useStopOrcaCollab';
 import { CreateWorkerPopover, type CreateWorkerForm } from './CreateWorkerPopover';
@@ -3242,6 +3243,12 @@ export function CCAgentSessionView({
               </InteractionPromptHost>
               {/* 会话内 /goal 进行中状态条(composer 上方);无 goal 时返回 null 不占位。 */}
               <GoalIndicator sessionId={sessionId} />
+              {/* Codex IDE 扩展式常驻计划面板 —— 计划在流内不再渲染,这里是唯一
+                 呈现处:钉在输入框上方原地更新。plan review 大卡接管底部区
+                 (FP-7)时隐藏,避免两块大面积 UI 叠高。 */}
+              {!pendingPlanReview && (
+                <PinnedPlanPanel messages={messages} animated={isStreaming} width={inputWidth} />
+              )}
               {/* 互斥:有任意 pending interaction 时,下方 takeover/overlay/ChatInput
                  全部静默 — 跟改造前 ternary 链 (Plan ? : Perm ? : Ask ? :
                  Takeover ? : ChatInput) 的语义一致。

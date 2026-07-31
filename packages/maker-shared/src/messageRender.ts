@@ -426,6 +426,27 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
   return out;
 }
 
+/**
+ * 常驻计划面板(composer 上方钉住式)用:取整段会话里**最近一次更新**的 plan
+ * session 快照 —— 跨 source(TodoWrite / update_plan / Task*)按 lastIndex 取
+ * 最大者。面板只展示"当前计划"一份,历史 session 不再逐张呈现。
+ * 没有任何 plan 调用时返回 null(面板不渲染、不占位)。
+ */
+export function findLatestMessageTodoInsertion<TMessage extends MessageRenderSourceMessageLike>(
+  messages: readonly TMessage[],
+  options: MessageRenderTodoGroupingOptions = {},
+): MessageRenderTodoInsertion | null {
+  let latest: MessageRenderTodoInsertion | null = null;
+  let latestIndex = -1;
+  for (const [index, insertion] of findMessageTodoInsertions(messages, options)) {
+    if (index > latestIndex) {
+      latestIndex = index;
+      latest = insertion;
+    }
+  }
+  return latest;
+}
+
 export interface CodexPlanSnapshotApplyResult<
   TMessage extends MessageRenderSourceMessageLike,
 > {
