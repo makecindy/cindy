@@ -16,6 +16,7 @@ import { useHookWorkspacePrefs } from '../HookWorkspacePrefsEditor';
 
 const BASE_HOOK: SlackHookView = {
   enabled: true,
+  lifecycleAnnouncement: false,
   url: 'wss://im.example.test',
   workspaces: { cindy: '/repos/cindy' },
   status: 'connected',

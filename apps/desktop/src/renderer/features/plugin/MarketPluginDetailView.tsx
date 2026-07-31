@@ -1,12 +1,12 @@
-import { ArrowLeft, Download, ShieldCheck } from 'lucide-react';
+import { Download, ShieldCheck } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { cn } from '@/lib/utils';
 import { ghostPermissionItems } from '../../../shared/ghost';
 import type { PluginMarketDetail } from '../../../shared/pluginMarket';
 import { GhostPluginIcon } from './GhostPluginIcon';
 import { pluginPresentationOrigin } from './lib/pluginMarketPresentation';
+import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
 
 interface MarketPluginDetailViewProps {
   detail: PluginMarketDetail;
@@ -24,6 +24,7 @@ export function MarketPluginDetailView({
   onIconLoadError,
 }: MarketPluginDetailViewProps) {
   const { t } = useTranslation();
+  const { scrolled, onScroll } = usePluginDetailScrolled();
   const permissions = ghostPermissionItems(detail.manifest);
   const presentationOrigin = pluginPresentationOrigin(detail);
   const actionKey =
@@ -38,18 +39,16 @@ export function MarketPluginDetailView({
     busy || detail.installState === 'installed' || detail.installState === 'conflict';
 
   return (
-    <main className="plugin-motion-root h-full min-h-0 w-full overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]">
+    <main
+      className="plugin-motion-root h-full min-h-0 w-full overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]"
+      onScroll={onScroll}
+    >
+      <PluginDetailTopBar
+        label={t('settings.ghosts.detail.backToList')}
+        onBack={onBack}
+        scrolled={scrolled}
+      />
       <article className="plugin-detail-frame mx-auto w-full max-w-[824px] px-8 pb-16 pt-5 max-[760px]:px-6">
-        <button
-          type="button"
-          onClick={onBack}
-          className="-ml-3 mb-7 inline-flex h-9 items-center gap-2 rounded-full px-3 text-13 text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-          style={WINDOW_NO_DRAG_STYLE}
-        >
-          <ArrowLeft size={16} aria-hidden="true" />
-          {t('settings.ghosts.detail.backToList')}
-        </button>
-
         <header>
           <div className="plugin-detail-hero grid grid-cols-[64px_minmax(0,1fr)_auto] items-center gap-3">
             <GhostPluginIcon

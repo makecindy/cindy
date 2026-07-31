@@ -2175,8 +2175,12 @@ await cindy.agent.run({
 const r = await cindy.agent.errand({
   task: '阅读工作目录下的 README 并总结要点(200 字以内)',
   // context: { anything: '结构化上下文,主机 JSON 化后附在任务消息尾部' },
-  // title: '我的插件 · 代办',   // 仅首次创建 errand 会话时用作标题
+  // title: '我的插件 · 代办',   // 仅首次创建对应 errand 会话时用作标题
   // workingDir: repoDir,        // 可选:请求建在某目录(只认用户亲选过的,见下)
+  // sessionKey: 'pr-123',       // 可选:分会话钥匙(1–64 位字母/数字/._-)。
+  //                             // 不传 = 插件共用一间;同钥匙同间、异钥匙各间,
+  //                             // 适合按业务对象各聊各的(如每条 PR 一间,标题
+  //                             // 在该间首次创建时用 title 定,正好带上对象编号)
   // mode: 'wait',               // 同步等到完成(30 分钟顶);默认不传 = 异步
   callId: msg.callId,
 });
@@ -2204,6 +2208,7 @@ const q = await cindy.agent.queryErrand({ jobId: r.jobId });
   选一次目录;用户在「AI 代办」卡里配置了目录时,以用户配置优先、本字段忽略;
 - 每插件同时 1 单在途、相邻提交至少隔 10 秒;结果超过 64K 字符会截断(尾部带
   标记);完成结果保留 30 分钟,应用重启后查无此单(按可重新提交处理);
+  \`sessionKey\` 只是分间,**不放大并发**——不同钥匙的两单同样要排队;
 - \`errorCode:'BUSY'\` = 你已有一单在途,或用户恰好正在 errand 会话里说话;
   \`'NO_CANDIDATE'\` 不存在于此——但会话创建/派发失败有 \`'SESSION_UNAVAILABLE'\`,
   超时有 \`'TIMEOUT'\`(任务可能仍在会话里继续,提示用户打开会话查看)。

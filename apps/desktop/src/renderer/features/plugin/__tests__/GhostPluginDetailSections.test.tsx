@@ -152,13 +152,20 @@ describe('Ghost plugin detail sections', () => {
 
     const scrollSurface = container.querySelector('main');
     const detailFrame = container.querySelector('article');
-    const backButton = detailFrame?.querySelector(':scope > button');
+    // 返回按钮住在吸顶顶栏里(mac 的窗口拖拽区)。顶栏内层复用同一条 824px
+    // 内容框,与正文左缘对齐。
+    const topBar = container.querySelector('[data-testid="plugin-detail-top-bar"]');
+    const topBarFrame = topBar?.querySelector(':scope > div');
+    const backButton = topBar?.querySelector('button');
     const detailHero = detailFrame?.querySelector('.plugin-detail-hero');
     const detailActions = detailFrame?.querySelector('.plugin-detail-actions');
     expect(scrollSurface?.className).toContain('[scrollbar-gutter:stable_both-edges]');
     expect(detailFrame?.className).toContain('plugin-detail-frame');
     expect(detailFrame?.className).toContain('mx-auto');
     expect(detailFrame?.className).toContain('max-w-[824px]');
+    expect(topBar?.className).toContain('sticky');
+    expect(topBarFrame?.className).toContain('mx-auto');
+    expect(topBarFrame?.className).toContain('max-w-[824px]');
     expect(backButton?.className).toContain('-ml-3');
     expect(detailHero?.className).toContain('grid-cols-[64px_minmax(0,1fr)_auto]');
     expect(detailActions?.className).toContain('flex-nowrap');

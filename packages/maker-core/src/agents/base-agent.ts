@@ -398,6 +398,21 @@ export interface AgentDeps {
   }) => void;
 
   /**
+   * Codex 专用：WS turn 命中仅 HTTP proxy 能处理的请求体恢复错误时，通知宿主把
+   * 该 thread 的后续 WS upgrade 导回 HTTP。
+   *
+   * 宿主负责按自己的 recovery rules 识别错误并登记 transport policy；返回稳定
+   * reason 表示已登记，null 表示不匹配。调用必须同步、纯内存且不得抛错。
+   * maker-core 只在零产出 turn 上据此自动重投一次，不解析供应商错误协议。
+   */
+  armCodexHttpRecovery?: (args: {
+    sessionId: string;
+    threadId: string;
+    message: string;
+    additionalDetails?: string | null;
+  }) => string | null;
+
+  /**
    * Codex 专用：登记 Guardian 子线程回到父业务 session 时应使用的主模型。
    *
    * Codex app-server 的模型目录由共享进程持有，不能代表单个 session 的实际

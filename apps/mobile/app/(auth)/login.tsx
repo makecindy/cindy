@@ -1,3 +1,4 @@
+import { Stack } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Animated, Easing, Keyboard, Linking, Platform, Pressable, StyleSheet, View } from 'react-native';
@@ -5,6 +6,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { AccountDeletionStatus, SocialProvider, VerificationKind } from '@cindy/auth-client';
 
 import { useAuth } from '@/auth/AuthContext';
+import { useLoginFirstLaunchLight } from '@/auth/loginFirstLaunchGate';
+import { resolveStartupSplashHandoff } from '@/auth/startupSplashContinuity';
 import {
   CN_PHONE_PREFIX,
   isCompleteCnPhone,
@@ -87,6 +90,13 @@ export default function LoginScreen() {
   const auth = useAuth();
   const stage = useLoginSurface();
   const insets = useSafeAreaInsets();
+  // 舞台有效主题(首启亮色门可强制 light,与系统主题可能不一致):状态栏样式
+  // 必须跟舞台而不是系统,经 screen option 走 VC-based 通道(见 _layout 注释)。
+  const { mode: systemTheme } = useTheme();
+  const firstLaunchGate = useLoginFirstLaunchLight();
+  const stageTheme =
+    resolveStartupSplashHandoff(firstLaunchGate, systemTheme).targetTheme ??
+    systemTheme;
   const handoff = useLoginHandoffOptional();
   const handoffDispatch = handoff?.dispatch;
   // readiness 锚之一(v6.3):登录面板已挂载(防面板未挂载先播 panel 步)
@@ -1163,6 +1173,15 @@ export default function LoginScreen() {
       keyboardShiftPx={keyboardShift}
       testID="login.screen"
     >
+      {/* 渲染为 null,仅把状态栏样式写进本屏 screen options。iOS 专用:
+          Android 由舞台内组件式 StatusBar 控制,不走 RNS 双轨 */}
+      {Platform.OS === 'ios' ? (
+        <Stack.Screen
+          options={{
+            statusBarStyle: stageTheme === 'dark' ? 'light' : 'dark',
+          }}
+        />
+      ) : null}
       {/* 外层未变换测量 wrapper(v5 冻结拓扑):持布局基线,不参与任何 translate */}
       <View
         collapsable={false}

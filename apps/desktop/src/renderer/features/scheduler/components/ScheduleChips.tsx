@@ -386,10 +386,13 @@ export function ScheduleChip({
       : INTERVAL_MENU_MODES)
     : SCHEDULE_MENU_MODES;
   const intervalIsPreset = timingPresentation.kind !== 'intervalExact';
+  const scheduleUnset = intervalMs === undefined && cronExpr.trim() === '';
   const scheduleSummary = intervalMs === undefined
     ? summarizeConfig(normalizeScheduleConfig(config))
     : formatIntervalDuration(intervalMs, i18n.resolvedLanguage ?? i18n.language);
-  const chipLabel = t(`scheduler.chips.timingMode.${timingMode}Chip`, { schedule: scheduleSummary });
+  const chipLabel = scheduleUnset
+    ? t('scheduler.chips.chooseTime')
+    : t(`scheduler.chips.timingMode.${timingMode}Chip`, { schedule: scheduleSummary });
 
   const update = (patch: Partial<CodexScheduleConfig>) => {
     const next = normalizeScheduleConfig({ ...config, ...patch });

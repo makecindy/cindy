@@ -58,8 +58,15 @@ export interface SlackHookConfigState {
   workspaces: Record<string, string>;
   /** (multi-team)本地绑定缓存; 老 server / 从未多绑定时恒空数组。 */
   bindingsCache: HookBindingCacheEntry[];
+  /**
+   * Slack 上下线通知的显式覆写。null = 跟随产品默认值，便于后续调整默认
+   * 而不把从未操作过开关的用户永久钉死在旧值。
+   */
+  lifecycleAnnouncementOverride: boolean | null;
   telegramBindingCache: ProviderBindingCacheEntry | null;
 }
+
+export const DEFAULT_SLACK_LIFECYCLE_ANNOUNCEMENT = false;
 
 export interface SlackHookStoreDeps {
   filePath: string;
@@ -151,6 +158,7 @@ export interface SlackHookStore {
   setWorkspaces(workspaces: Record<string, string>): SlackHookConfigState;
   /** (multi-team)覆写本地绑定缓存(bind.state / 绑定行变化后由 manager 调用)。 */
   setBindingsCache(entries: HookBindingCacheEntry[]): SlackHookConfigState;
+  setLifecycleAnnouncementOverride(enabled: boolean | null): SlackHookConfigState;
   setTelegramBindingCache(entry: ProviderBindingCacheEntry | null): SlackHookConfigState;
 }
 
@@ -158,7 +166,11 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
   const { filePath, legacyFilePath, cleanupLegacySecrets, log } = deps;
 
   interface AccountState {
-    slack: { enabled: boolean; bindingsCache: HookBindingCacheEntry[] };
+    slack: {
+      enabled: boolean;
+      bindingsCache: HookBindingCacheEntry[];
+      lifecycleAnnouncementOverride: boolean | null;
+    };
     telegram: { enabled: boolean; bindingCache: ProviderBindingCacheEntry | null };
   }
 
@@ -199,6 +211,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
         urlOverride: null, // 旧 url 是自部署地址, 不迁移 —— 新形态用内置中心服务器
         workspaces,
         bindingsCache: [], // 旧多连接时代没有绑定缓存概念
+        lifecycleAnnouncementOverride: null,
         telegramBindingCache: null,
       };
       // 清理旧文件与旧 secret(best-effort, 失败只记日志)
@@ -224,7 +237,11 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
   }
 
   const EMPTY_ACCOUNT = (): AccountState => ({
-    slack: { enabled: false, bindingsCache: [] },
+    slack: {
+      enabled: false,
+      bindingsCache: [],
+      lifecycleAnnouncementOverride: null,
+    },
     telegram: { enabled: false, bindingCache: null },
   });
 
@@ -286,6 +303,10 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       slack: {
         enabled: slack.enabled === true,
         bindingsCache: parseBindingsCache(slack.bindingsCache),
+        lifecycleAnnouncementOverride:
+          typeof slack.lifecycleAnnouncementOverride === 'boolean'
+            ? slack.lifecycleAnnouncementOverride
+            : null,
       },
       telegram: {
         enabled: telegram.enabled === true,
@@ -317,6 +338,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
         slack: {
           enabled: state.enabled,
           bindingsCache: state.bindingsCache.map((e) => ({ ...e })),
+          lifecycleAnnouncementOverride: state.lifecycleAnnouncementOverride,
         },
         telegram: { enabled: false, bindingCache: null },
       },
@@ -371,6 +393,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
         urlOverride,
         workspaces,
         bindingsCache: parseBindingsCache(row.bindingsCache),
+        lifecycleAnnouncementOverride: null,
         telegramBindingCache: null,
       });
     } catch (err) {
@@ -408,6 +431,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       urlOverride: document.urlOverride,
       workspaces: { ...document.workspaces },
       bindingsCache: account.slack.bindingsCache.map((entry) => ({ ...entry })),
+      lifecycleAnnouncementOverride: account.slack.lifecycleAnnouncementOverride,
       telegramBindingCache: account.telegram.bindingCache
         ? { ...account.telegram.bindingCache }
         : null,
@@ -458,6 +482,11 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       // 缓存条目由 manager 从协议帧生成(形状可信), 这里只做浅拷贝防外部改动
       return mutateAccount((account) => {
         account.slack.bindingsCache = entries.map((e) => ({ ...e }));
+      });
+    },
+    setLifecycleAnnouncementOverride(enabled) {
+      return mutateAccount((account) => {
+        account.slack.lifecycleAnnouncementOverride = enabled;
       });
     },
     setTelegramBindingCache(entry) {

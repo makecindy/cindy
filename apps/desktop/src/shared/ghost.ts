@@ -4249,6 +4249,9 @@ export const GHOST_ERRAND_JOB_TTL_MS = 30 * 60_000;
 /** 每插件相邻两次提交的最小间隔(毫秒;与 agent-request 后台档同口径)。
  *  同步等待(mode:'wait')的绝对上限直接复用 GHOST_PIPE_CALL_MAX_TOTAL_MS。 */
 export const GHOST_ERRAND_MIN_INTERVAL_MS = 10_000;
+/** sessionKey 的合法形状(1–64 位字母/数字/._-;字符集刻意排除 `#`,
+ *  存储层用 `ghostId#sessionKey` 做映射键,ghostId 字符集同样无 `#`,不会歧义)。 */
+export const GHOST_ERRAND_SESSION_KEY_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
 /**
  * errand 会话允许的权限档。plan = 只读默认档;acceptEdits / auto 由用户在
@@ -4267,8 +4270,15 @@ export type GhostPipeAgentErrandRequest =
       task: string;
       /** 可选结构化上下文:主机 JSON.stringify 后附在任务消息尾部(≤64KB)。 */
       context?: unknown;
-      /** errand 会话标题提示(仅首次创建该插件的 errand 会话时采用;1–100 字符)。 */
+      /** errand 会话标题提示(仅首次创建对应 errand 会话时采用;1–100 字符)。 */
       title?: string;
+      /**
+       * 可选的分会话钥匙(1–64 位字母/数字/._-)。不传 = 插件共用一间专属
+       * errand 会话(旧行为);传了 = 同一把钥匙复用同一间、不同钥匙各开各
+       * 的间(每单仍受"每插件同时 1 单在途"约束,分会话不放大并发)。适合
+       * 「按业务对象各聊各的」场景,如每条 PR 一间:sessionKey:'pr-123'。
+       */
+      sessionKey?: string;
       /**
        * 可选:请求把 errand 会话建在这个目录(绝对路径,≤1024 字符)。
        * 只是**转述**,不是授权——主机只认用户此前在 pick 槽系统窗口里

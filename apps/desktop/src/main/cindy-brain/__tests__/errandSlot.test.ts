@@ -99,6 +99,10 @@ describe('载荷校验', () => {
       { ...RUN, workingDir: '   ' },
       { ...RUN, workingDir: 42 },
       { ...RUN, workingDir: 'x'.repeat(1025) },
+      { ...RUN, sessionKey: '' },
+      { ...RUN, sessionKey: 'pr#1' },
+      { ...RUN, sessionKey: 'x'.repeat(65) },
+      { ...RUN, sessionKey: 42 },
     ];
     for (const payload of cases) {
       expect(await slot.handleRequest('helper', payload)).toMatchObject({
@@ -126,6 +130,15 @@ describe('载荷校验', () => {
     await slot.handleRequest('helper', { ...RUN, context: { a: 1 } });
     const req = runner.mock.calls[0][0] as { message: string };
     expect(req.message).toBe('总结 README\n\n[结构化上下文 JSON]\n{"a":1}');
+  });
+
+  it('sessionKey 合法时原样透传 runner;不传则请求里不带该字段', async () => {
+    const { slot, runner, clock } = makeSlot();
+    await slot.handleRequest('helper', { ...RUN, sessionKey: 'pr-123' });
+    expect((runner.mock.calls[0][0] as { sessionKey?: string }).sessionKey).toBe('pr-123');
+    clock.now += GHOST_ERRAND_MIN_INTERVAL_MS;
+    await slot.handleRequest('helper', RUN);
+    expect('sessionKey' in (runner.mock.calls[1][0] as object)).toBe(false);
   });
 
   it('workingDir 原样透传给 runner(是否亲选目录由 runner 对台账把关)', async () => {

@@ -29,6 +29,8 @@ export const HOOK_CONTROL_INVOKE = {
   GET: 'maker:hook-control:get',
   /** 总开关。 */
   SET_ENABLED: 'maker:hook-control:set-enabled',
+  /** Slack Bot 是否发送本设备上下线通知。 */
+  SET_LIFECYCLE_ANNOUNCEMENT: 'maker:hook-control:set-lifecycle-announcement',
   /** 覆写工作目录清单(别名 -> 本地绝对路径, 全量替换)。 */
   SET_WORKSPACES: 'maker:hook-control:set-workspaces',
   /** 发起 Slack 账号绑定(bind.start; SIWS OIDC, 无参数)。 */
@@ -241,6 +243,8 @@ export type HookConnectionStatus = 'disabled' | 'connecting' | 'connected' | 'st
 /** 渲染层可见的 Cindy IM 快照；顶层字段保持 Slack 兼容。 */
 export interface SlackHookView {
   enabled: boolean;
+  /** Slack Bot 是否发送本设备上下线私聊通知。 */
+  lifecycleAnnouncement: boolean;
   /** 实际生效的服务器地址(默认内置值; 被 urlOverride 覆写时为覆写值)。 */
   url: string;
   /** 工作区别名 -> 本地绝对路径。协议里只跑别名, 路径不出本机。 */

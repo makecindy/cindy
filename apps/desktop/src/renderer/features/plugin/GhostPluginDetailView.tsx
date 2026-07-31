@@ -2,7 +2,8 @@
  * Plugin detail presentation for configuration, Tools, permissions, and factual metadata.
  *
  * Inputs: the renderer-safe Plugin detail model plus the installed Ghost when available.
- * Outputs: accessible detail interactions and a single-row responsive action hero.
+ * Outputs: accessible detail interactions, a single-row responsive action hero, and the sticky
+ * top bar that carries the back affordance plus this page's macOS window-drag region.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -11,7 +12,6 @@ import * as Dialog from '@radix-ui/react-dialog';
 import {
   AppWindow,
   Bot,
-  ArrowLeft,
   ChevronDown,
   Copy,
   Cpu,
@@ -58,6 +58,7 @@ import type { GhostPermissionItem, GhostToolDecl, InstalledGhost } from '../../.
 import { type GhostPluginDetail } from './lib/ghostPluginViewModel';
 import { GhostPluginIcon } from './GhostPluginIcon';
 import { ghostPluginSummary } from './lib/ghostPluginDetailModel';
+import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
 import './plugin-motion.css';
 
 interface GhostPluginDetailViewProps {
@@ -141,6 +142,7 @@ export function GhostPluginDetailView({
   onIconLoadError,
 }: GhostPluginDetailViewProps) {
   const { t } = useTranslation();
+  const { scrolled, onScroll } = usePluginDetailScrolled();
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [descriptionOverflows, setDescriptionOverflows] = useState(false);
   const descriptionRef = useRef<HTMLParagraphElement>(null);
@@ -194,18 +196,16 @@ export function GhostPluginDetailView({
   }, [detail.id, summary]);
 
   return (
-    <main className="plugin-motion-root h-full min-h-0 w-full overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]">
+    <main
+      className="plugin-motion-root h-full min-h-0 w-full overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]"
+      onScroll={onScroll}
+    >
+      <PluginDetailTopBar
+        label={t('settings.ghosts.detail.backToList')}
+        onBack={onBack}
+        scrolled={scrolled}
+      />
       <article className="plugin-detail-frame mx-auto w-full max-w-[824px] px-8 pb-16 pt-5 max-[760px]:px-6">
-        <button
-          type="button"
-          onClick={onBack}
-          className="-ml-3 mb-7 inline-flex h-9 w-fit select-none items-center gap-2 rounded-full px-3 text-13 text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-          style={WINDOW_NO_DRAG_STYLE}
-        >
-          <ArrowLeft size={16} aria-hidden="true" />
-          {t('settings.ghosts.detail.backToList')}
-        </button>
-
         <header>
           <div className="plugin-detail-hero grid grid-cols-[64px_minmax(0,1fr)_auto] items-center gap-3">
             <GhostPluginIcon

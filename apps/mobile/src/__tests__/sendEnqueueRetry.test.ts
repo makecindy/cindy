@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
  * enqueue 弱网重试的写序边界(codex review P1 + auto-review P1 回归锚点):
  * - NOT_CONNECTED 不保证未送达——断连时 in-flight invoke 会被 failAllPending 批量
  *   reject 成 NOT_CONNECTED(请求可能已出、ack 丢失);
+ * - BACKPRESSURE 要么在本地发送前拒绝,要么由被控端 admission 明确拒绝执行;
  * - projection 也无法证明未入队——空闲 agent 下 enqueue-immediate 会把消息瞬间
  *   slice 进 activeTurn,pendingQueue 里查不到;
  * 因此自动重发只允许发生在「保证未发出」的失败上(inFlight 未置位),in-flight
@@ -30,13 +31,15 @@ describe('send enqueue weak-network retry ordering', () => {
     return loops;
   };
 
-  it('重试门槛必须同时要求 NOT_CONNECTED 且非 in-flight(send 与 outbox 派发两条路径)', () => {
+  it('重试门槛必须要求可安全重发的传输错误且非 in-flight(send 与 outbox 两条路径)', () => {
     expect(source).toContain("import { isInFlightDeviceLinkError } from '@cindy/device-link';");
+    expect(source).toContain("code === 'NOT_CONNECTED' || code === 'BACKPRESSURE'");
+    expect(source).toContain("formatted.includes('[BACKPRESSURE]')");
     const loops = extractRetryLoops();
     expect(loops).toHaveLength(2);
     for (const loopBody of loops) {
       expect(loopBody).toContain('|| isInFlightDeviceLinkError(err)');
-      expect(loopBody).toContain('|| !isNotConnectedError(err)');
+      expect(loopBody).toContain('|| !isRetryableEnqueueTransportError(err)');
     }
   });
 

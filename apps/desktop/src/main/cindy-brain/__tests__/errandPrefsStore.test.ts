@@ -80,8 +80,28 @@ describe('normalize(整文件清洗)', () => {
     });
   });
 
+  it('带钥匙的 sessions 条目(ghostId#key)原样保留', () => {
+    expect(
+      __testing.normalize({
+        errand: {},
+        sessions: { helper: 'sess-1', 'helper#pr-123': 'sess-2' },
+      }),
+    ).toEqual({
+      errand: {},
+      sessions: { helper: 'sess-1', 'helper#pr-123': 'sess-2' },
+    });
+  });
+
   it('非对象/缺区 → 全空', () => {
     expect(__testing.normalize(null)).toEqual({ errand: {}, sessions: {} });
     expect(__testing.normalize({})).toEqual({ errand: {}, sessions: {} });
+  });
+});
+
+describe('sessionMapKey(会话映射键)', () => {
+  it('缺省 = ghostId 本身;带钥匙 = ghostId#key(两侧字符集都不含 #,无歧义)', () => {
+    expect(__testing.sessionMapKey('helper')).toBe('helper');
+    expect(__testing.sessionMapKey('helper', undefined)).toBe('helper');
+    expect(__testing.sessionMapKey('helper', 'pr-123')).toBe('helper#pr-123');
   });
 });
