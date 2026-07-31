@@ -14,7 +14,7 @@
  */
 
 import { BUNDLED_CATALOG, parseCatalog } from './catalog.js';
-import type { Catalog, Provider } from './types.js';
+import type { AgentKind, Catalog, Provider, ProviderPreset } from './types.js';
 
 /** 公共模型目录 API 路径。发布版由 model-access-server 匿名提供完整 Catalog。 */
 export const CATALOG_API_PATH = '/api/model-catalog/catalog';
@@ -98,6 +98,40 @@ function legacyAccessFor(primary: Provider, bundled: Provider): Provider['access
 }
 
 /**
+ * 同 id preset 仍以远端为主；bundled 只给远端仍保留的同 runtime / 同 model
+ * 回填缺失的 contextWindow。这样旧远端不会把已核实的长上下文元数据降级，同时远端
+ * 仍可通过移除 runtime / model 停止新建，或用显式窗口覆盖 bundled。
+ */
+function backfillPresetContextWindows(
+  primary: ProviderPreset,
+  bundled: ProviderPreset,
+): ProviderPreset {
+  let changed = false;
+  const runtimes: ProviderPreset['runtimes'] = {};
+  for (const [agent, runtime] of Object.entries(primary.runtimes) as [
+    AgentKind,
+    NonNullable<ProviderPreset['runtimes'][AgentKind]>,
+  ][]) {
+    const bundledRuntime = bundled.runtimes[agent];
+    if (!bundledRuntime) {
+      runtimes[agent] = runtime;
+      continue;
+    }
+    const bundledModels = new Map(bundledRuntime.models.map((model) => [model.id, model]));
+    let runtimeChanged = false;
+    const models = runtime.models.map((model) => {
+      const bundledContextWindow = bundledModels.get(model.id)?.contextWindow;
+      if (model.contextWindow !== undefined || bundledContextWindow === undefined) return model;
+      runtimeChanged = true;
+      changed = true;
+      return { ...model, contextWindow: bundledContextWindow };
+    });
+    runtimes[agent] = runtimeChanged ? { ...runtime, models } : runtime;
+  }
+  return changed ? { ...primary, runtimes } : primary;
+}
+
+/**
  * 把远端 / 本地目录与内置 bundled 合并：以输入目录为主，bundled 补它缺失的
  * provider（按 id），并给旧目录中同 id provider 补缺失的 access 元数据。primary
  * 明确提供的 access 永远优先，不被 bundled 覆盖。
@@ -122,9 +156,20 @@ export function mergeWithBundled(primary: Catalog): Catalog {
   for (const p of withAccess) {
     if (!bundledById.has(p.id)) merged.push(p);
   }
-  // presets 同理兜底：远端带了用远端的，远端没带回落 bundled 的（预设是纯 UI 模板数据）。
-  const presets = primary.presets ?? BUNDLED_CATALOG.presets;
-  // cindyModelMeta 同 presets 兜底语义透传(消费点见 types.ts:服务端 + 客户端展示元数据基线)。
+  // presets 与 providers 同样按 id 合并：bundled 保序兜底，同 id 远端内容优先，
+  // 远端独有项按远端原序追加。避免旧远端的非空 presets 整段遮掉新版客户端内置条目。
+  const primaryPresets = primary.presets ?? [];
+  const bundledPresets = BUNDLED_CATALOG.presets ?? [];
+  const primaryPresetsById = new Map(primaryPresets.map((preset) => [preset.id, preset]));
+  const bundledPresetIds = new Set(bundledPresets.map((preset) => preset.id));
+  const presets = bundledPresets.map((bundled) => {
+    const remote = primaryPresetsById.get(bundled.id);
+    return remote ? backfillPresetContextWindows(remote, bundled) : bundled;
+  });
+  for (const preset of primaryPresets) {
+    if (!bundledPresetIds.has(preset.id)) presets.push(preset);
+  }
+  // cindyModelMeta 仍按整段缺省兜底透传(消费点见 types.ts:服务端 + 客户端展示元数据基线)。
   const cindyModelMeta = primary.cindyModelMeta ?? BUNDLED_CATALOG.cindyModelMeta;
   return {
     version: primary.version,
