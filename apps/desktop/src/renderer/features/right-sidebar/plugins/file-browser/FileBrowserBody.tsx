@@ -36,6 +36,7 @@ import { cn } from '@/lib/utils';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { toast } from '@/lib/toast';
 import { Tip } from '@/components/ui/tooltip';
+import { ImageLightbox } from '@/components/chat/ImageLightbox';
 import {
   useSessionScopedTreeWidth,
   TREE_MIN_WIDTH,
@@ -77,6 +78,7 @@ import {
 
 import type { TabKindHostContext } from '../../types';
 import type { FileBrowserState } from './index';
+import { buildFileTreeImagePreviewUrl } from './fileTreeImagePreview';
 import {
   countFileDragItems,
   hasFileDragPayload,
@@ -137,6 +139,7 @@ function FileBrowserBodyWithWorkdir({
   const tree = useFileTree({ workdir, hideMetaFiles: true, remoteHostId, deviceId });
   const fileContent = useFileContent(workdir, state.selectedFilePath, remoteHostId, deviceId);
   const [externalFile, setExternalFile] = useState<ExternalFileSelection | null>(null);
+  const [imageLightboxSrc, setImageLightboxSrc] = useState<string | null>(null);
   const externalFileContent = useFileContent(externalFile?.workdir ?? workdir, externalFile?.relPath ?? null);
   const fileDragDepthRef = useRef(0);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
@@ -328,6 +331,23 @@ function FileBrowserBodyWithWorkdir({
       }
     },
     [workdir, t],
+  );
+
+  const handlePreviewImage = useCallback(
+    (entry: DirEntry) => {
+      const src = buildFileTreeImagePreviewUrl({
+        workdir,
+        relPath: entry.relPath,
+        remoteHostId,
+        deviceId,
+      });
+      if (!src) {
+        toast.warning(t('ccAgent.workdirBrowse.unrenderable.remoteNotSupported'));
+        return;
+      }
+      setImageLightboxSrc(src);
+    },
+    [deviceId, remoteHostId, t, workdir],
   );
 
   const handleRevealInFolder = useCallback(
@@ -644,6 +664,7 @@ function FileBrowserBodyWithWorkdir({
                 tree={tree}
                 selectedPath={state.selectedFilePath}
                 onSelectFile={handleSelectFile}
+                onPreviewImage={handlePreviewImage}
                 onCopyFilePath={!isRemote ? handleCopyFilePath : undefined}
                 onRevealInFolder={!isRemote ? handleRevealInFolder : undefined}
                 onOpenInFileBrowser={ctx.sessionId ? handleOpenInFileBrowser : undefined}
@@ -677,6 +698,13 @@ function FileBrowserBodyWithWorkdir({
           aria-hidden="true"
         />
       )}
+      {imageLightboxSrc ? (
+        <ImageLightbox
+          src={imageLightboxSrc}
+          sessionId={ctx.sessionId}
+          onClose={() => setImageLightboxSrc(null)}
+        />
+      ) : null}
     </div>
   );
 }

@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { AlertCircle, Check, GitFork, Play, RotateCcw, RefreshCw, X } from 'lucide-react';
+import { AlertCircle, Check, GitFork, Play, RotateCcw, RefreshCw, Timer, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
@@ -41,6 +41,8 @@ interface ErrorBannerProps {
   onCancel?: () => void;
   /** silent-stop 耗尽横幅「继续」:清横幅 + 发隐藏续跑指令(见 makerChatStore)。 */
   onSilentStopContinue?: () => void;
+  /** 账号用量限制：打开预填好的一次性 Automation，由用户确认后创建。 */
+  onContinueAfterUsageReset?: () => void;
   /** 当前 session 的 agent kind。codex 的 401 / Missing bearer 必须 hide Retry,
    *  否则 retry 撞同一个 in-memory auth retry-loop 产生重复失败 turn。 */
   agentKind?: 'cc' | 'codex';
@@ -75,6 +77,7 @@ export function ErrorBanner({
   onRetry,
   onCancel,
   onSilentStopContinue,
+  onContinueAfterUsageReset,
   agentKind,
   remoteHostId,
   deviceLinkDeviceId,
@@ -448,6 +451,21 @@ export function ErrorBanner({
         >
           <Play size={12} />
           {t('chat.errorBanner.silentStopContinue')}
+        </button>
+      )}
+      {onContinueAfterUsageReset && (
+        <button
+          type="button"
+          onClick={onContinueAfterUsageReset}
+          className={cn(
+            'shrink-0 flex items-center gap-1 text-xs font-medium',
+            'text-[var(--error-fg)]',
+            'hover:opacity-70 transition-opacity',
+          )}
+          title={t('chat.errorBanner.continueAfterResetTitle')}
+        >
+          <Timer size={12} />
+          {t('chat.errorBanner.continueAfterReset')}
         </button>
       )}
       {safeRetryText && (

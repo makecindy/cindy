@@ -85,8 +85,20 @@ vi.mock('@cindy/anthropic-compat-proxy', () => ({
   createInstructionsInjectionTransform: mockState.createInstructionsInjectionTransform,
   createActiveStripTransform: () => (() => null),
   createThreadStripController: () => ({ markActive: () => {}, reconcile: () => {}, shouldStrip: () => false, clear: () => {} }),
-  createEncryptedContentRecoveryRule: () => ({ id: 'encrypted_content', enabled: () => false, matches: () => false, strip: () => null }),
-  createImageGenerationIdRecoveryRule: () => ({ id: 'image_generation_id', enabled: () => true, matches: () => false, strip: () => null }),
+  createEncryptedContentRecoveryRule: (opts: { enabled: () => boolean }) => ({
+    id: 'encrypted_content',
+    enabled: opts.enabled,
+    matches: (text: string) =>
+      /invalid_encrypted_content|could not decrypt the provided encrypted_content/i.test(text),
+    strip: () => null,
+  }),
+  createImageGenerationIdRecoveryRule: () => ({
+    id: 'image_generation_id',
+    enabled: () => true,
+    matches: (text: string) =>
+      /image generation items without [`']?id[`']? are not supported/i.test(text),
+    strip: () => null,
+  }),
   stripEncryptedContentFromBody: () => null,
   stripImageGenerationItemsWithoutIdFromBody: () => null,
   stripNonAnthropicFields: mockState.stripNonAnthropicFields,
@@ -322,7 +334,7 @@ describe('codex gateway config', () => {
     expect(args).toContain('model_providers.cindy_openai.base_url="http://127.0.0.1:12345"');
     expect(args).toContain('model_providers.cindy_openai.wire_api="responses"');
     expect(args).toContain('model_providers.cindy_openai.requires_openai_auth=true');
-    expect(args).toContain('model_providers.cindy_openai.supports_websockets=false');
+    expect(args).toContain('model_providers.cindy_openai.supports_websockets=true');
     // is_openai + OAuth 命中时 codex 默认 zstd 压缩请求体,loopback proxy 无法解析,必须关。
     expect(args).toContain('features.enable_request_compression=false');
   });
@@ -1527,6 +1539,175 @@ describe('codex proxy host', () => {
       upstream: () => string;
     };
     expect(proxyOpts.upstream()).toBe(`${XD_GATEWAY_BASE_URL}/v1`);
+  });
+
+  it('only resolves the websocket upstream for the oauth-bearer spawn identity', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+
+    const proxyOpts = mockState.createAnthropicCompatProxy.mock.calls[0][0] as {
+      resolveWebSocketUpstream: (ctx: {
+        url: string;
+        headers: Readonly<Record<string, string>>;
+      }) => string | null;
+    };
+    const ctx = { url: '/v1/responses', headers: {} };
+
+    host.setCodexProxyAuthInjection('env-key');
+    expect(proxyOpts.resolveWebSocketUpstream(ctx)).toBeNull();
+    host.setCodexProxyAuthInjection('provider-oauth');
+    expect(proxyOpts.resolveWebSocketUpstream(ctx)).toBeNull();
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    expect(proxyOpts.resolveWebSocketUpstream(ctx)).toBe(
+      'https://chatgpt.com/backend-api/codex',
+    );
+  });
+
+  it('declines the next websocket upgrade after a body recovery error is armed', async () => {
+    const host = await freshCodexProxyHost();
+    const disconnectWebSocketsForThread = vi.fn(() => 2);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      disconnectWebSocketsForThread,
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.setCodexProxyAuthInjection('oauth-bearer');
+
+    const proxyOpts = mockState.createAnthropicCompatProxy.mock.calls[0][0] as {
+      resolveWebSocketUpstream: (ctx: {
+        url: string;
+        headers: Readonly<Record<string, string>>;
+      }) => string | null;
+    };
+    const ctxForThread = (threadId: string) => ({
+      url: '/v1/responses',
+      headers: { 'thread-id': threadId },
+    });
+
+    expect(proxyOpts.resolveWebSocketUpstream(ctxForThread('thread-safe'))).toBe(
+      'https://chatgpt.com/backend-api/codex',
+    );
+    expect(host.armCodexHttpRecovery({
+      sessionId: 'session-encrypted',
+      threadId: 'thread-encrypted',
+      message: 'invalid_encrypted_content',
+    })).toBe('encrypted_content');
+    expect(host.armCodexHttpRecovery({
+      sessionId: 'session-image',
+      threadId: 'thread-image',
+      message: 'Image generation items without `id` are not supported for this request.',
+    })).toBe('image_generation_id');
+
+    expect(proxyOpts.resolveWebSocketUpstream(ctxForThread('thread-encrypted'))).toBeNull();
+    expect(proxyOpts.resolveWebSocketUpstream(ctxForThread('thread-image'))).toBeNull();
+    expect(proxyOpts.resolveWebSocketUpstream(ctxForThread('thread-safe'))).toBe(
+      'https://chatgpt.com/backend-api/codex',
+    );
+    expect(disconnectWebSocketsForThread).toHaveBeenCalledWith('thread-encrypted');
+    expect(disconnectWebSocketsForThread).toHaveBeenCalledWith('thread-image');
+  });
+
+  it('keeps native websocket behavior when no scoped socket can be recovered safely', async () => {
+    const host = await freshCodexProxyHost();
+    const disconnectWebSocketsForThread = vi.fn(() => 0);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      disconnectWebSocketsForThread,
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.setCodexProxyAuthInjection('oauth-bearer');
+
+    const proxyOpts = mockState.createAnthropicCompatProxy.mock.calls[0][0] as {
+      resolveWebSocketUpstream: (ctx: {
+        url: string;
+        headers: Readonly<Record<string, string>>;
+      }) => string | null;
+    };
+    const ctx = {
+      url: '/v1/responses',
+      headers: { 'thread-id': 'thread-unscoped' },
+    };
+
+    expect(host.armCodexHttpRecovery({
+      sessionId: 'session-unscoped',
+      threadId: 'thread-unscoped',
+      message: 'invalid_encrypted_content',
+    })).toBeNull();
+    expect(disconnectWebSocketsForThread).toHaveBeenCalledWith('thread-unscoped');
+    expect(proxyOpts.resolveWebSocketUpstream(ctx)).toBe(
+      'https://chatgpt.com/backend-api/codex',
+    );
+  });
+
+  it('arming recovery for a child thread preserves its parent and sibling routes', async () => {
+    const host = await freshCodexProxyHost();
+    const disconnectWebSocketsForThread = vi.fn(() => 2);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      disconnectWebSocketsForThread,
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.setCodexProxyAuthInjection('oauth-bearer');
+
+    host.registerComposed('session-family', 'thread-parent', 'PRODUCT_PROMPT');
+    expect(host.registerChildThread('thread-parent', 'thread-child')).toBe(true);
+    expect(host.registerChildThread('thread-parent', 'thread-sibling')).toBe(true);
+
+    expect(host.armCodexHttpRecovery({
+      sessionId: 'session-family',
+      threadId: 'thread-child',
+      message: 'invalid_encrypted_content',
+    })).toBe('encrypted_content');
+
+    expect(mockState.capturedRegistry?.get('thread-parent')).toBe('PRODUCT_PROMPT');
+    expect(mockState.capturedRegistry?.get('thread-child')).toBe('PRODUCT_PROMPT');
+    expect(mockState.capturedRegistry?.get('thread-sibling')).toBe('PRODUCT_PROMPT');
+    expect(disconnectWebSocketsForThread).toHaveBeenCalledWith('thread-child');
+
+    host.unregister('session-family');
+    expect(mockState.capturedRegistry?.get('thread-parent')).toBeUndefined();
+    expect(mockState.capturedRegistry?.get('thread-child')).toBeUndefined();
+    expect(mockState.capturedRegistry?.get('thread-sibling')).toBeUndefined();
+  });
+
+  it('clears the websocket recovery fallback when its session is unregistered', async () => {
+    const host = await freshCodexProxyHost();
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      disconnectWebSocketsForThread: vi.fn(() => 1),
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.setCodexProxyAuthInjection('oauth-bearer');
+
+    const proxyOpts = mockState.createAnthropicCompatProxy.mock.calls[0][0] as {
+      resolveWebSocketUpstream: (ctx: {
+        url: string;
+        headers: Readonly<Record<string, string>>;
+      }) => string | null;
+    };
+    const ctx = {
+      url: '/v1/responses',
+      headers: { 'thread-id': 'thread-recovery' },
+    };
+    expect(host.armCodexHttpRecovery({
+      sessionId: 'session-recovery',
+      threadId: 'thread-recovery',
+      message: 'invalid_encrypted_content',
+    })).toBe('encrypted_content');
+    expect(proxyOpts.resolveWebSocketUpstream(ctx)).toBeNull();
+
+    host.unregister('session-recovery');
+    expect(proxyOpts.resolveWebSocketUpstream(ctx)).toBe(
+      'https://chatgpt.com/backend-api/codex',
+    );
   });
 
   it('falls back to direct gateway /v1 endpoint when proxy is not ready', async () => {

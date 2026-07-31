@@ -17,6 +17,7 @@ import { useTranslation } from 'react-i18next';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
+import { ImageHoverPreview } from '@/components/chat/ImageHoverPreview';
 import { formatBytes, TextLightbox } from '@/components/chat/TextLightbox';
 import { AttachmentTypeThumb } from './AttachmentTypeThumb';
 import { useEditor, EditorContent } from '@tiptap/react';
@@ -5951,18 +5952,18 @@ function ThumbnailItem({
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const [textLightboxOpen, setTextLightboxOpen] = useState(false);
 
-  // Recalculate portal position when hover state changes
+  // 非图片附件仍使用路径 tooltip；图片定位由共享 ImageHoverPreview 自己负责。
   useLayoutEffect(() => {
-    if (isHovered && thumbRef.current) {
+    if (isHovered && file.category !== 'image' && thumbRef.current) {
       const rect = thumbRef.current.getBoundingClientRect();
       setPopoverPos({
-        top: rect.top, // top edge of the thumbnail
-        left: rect.left + rect.width / 2, // horizontal center
+        top: rect.top,
+        left: rect.left + rect.width / 2,
       });
     } else {
       setPopoverPos(null);
     }
-  }, [isHovered]);
+  }, [file.category, isHovered]);
 
   const handleOpenPreview = useCallback(async () => {
     // attachment-thumb-click polish (2026-04-19): clicking opens the lightbox
@@ -6087,30 +6088,14 @@ function ThumbnailItem({
       </button>
 
       {/* Hover preview / tooltip (F-FI-4) — rendered via portal to escape overflow clipping */}
-      {isHovered &&
-        popoverPos &&
-        file.category === 'image' &&
-        (file.url || file.base64) &&
-        createPortal(
-          <div
-            className="pointer-events-none fixed z-50 overflow-hidden rounded-lg shadow-lg"
-            style={{
-              top: popoverPos.top - 12, // 12px gap above thumbnail
-              left: popoverPos.left,
-              transform: 'translate(-50%, -100%)',
-              maxWidth: 224,
-              maxHeight: 168,
-            }}
-          >
-            <img
-              src={file.url ?? `data:${file.mimeType};base64,${file.base64}`}
-              alt={file.name}
-              className="max-h-[168px] max-w-[224px] object-contain"
-              draggable={false}
-            />
-          </div>,
-          document.body,
-        )}
+      {file.category === 'image' && (file.url || file.base64) ? (
+        <ImageHoverPreview
+          open={isHovered}
+          anchorRef={thumbRef}
+          src={file.url ?? `data:${file.mimeType};base64,${file.base64}`}
+          alt={file.name}
+        />
+      ) : null}
       {isHovered &&
         popoverPos &&
         file.category !== 'image' &&

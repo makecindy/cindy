@@ -76,6 +76,19 @@ describe('Markdown target rendering contract', () => {
     expect(chipBody).not.toContain('select-none');
   });
 
+  it('shows the composer-equivalent hover preview for resolved image chips', () => {
+    const chipStart = markdownRenderer.indexOf('function FileTargetChip');
+    const chipEnd = markdownRenderer.indexOf('\n/**\n * ResolvedLocalLink', chipStart);
+    const chipBody = markdownRenderer.slice(chipStart, chipEnd);
+
+    expect(chipBody).toContain("localKind !== 'image'");
+    expect(chipBody).toContain('onPointerEnter');
+    expect(chipBody).toContain('onPointerLeave');
+    expect(chipBody).toContain('<ImageHoverPreview');
+    expect(chipBody).toContain('anchorRef={chipRef}');
+    expect(chipBody).toContain('setImagePreviewOpen(false)');
+  });
+
   it('resolves targets through the renderer cache so session switches do not re-flash', () => {
     // Eager render-time resolution (chip only when unique) re-fires the IPC and
     // re-flashes plain-text → chip on every session switch unless results are

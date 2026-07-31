@@ -221,6 +221,7 @@ describe('applyInputProjection 自愈进行中提示', () => {
     makerChatStore.__teardownGlobalListeners();
     delete (globalThis as { window?: unknown }).window;
     inputProjectionCb = null;
+    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -263,6 +264,23 @@ describe('applyInputProjection 自愈进行中提示', () => {
       .getSnapshot(SID)
       .messages.filter((m) => m.clientId === PENDING_CARD_ID);
     expect(cards).toHaveLength(1);
+  });
+
+  it('重复投影同一条相对时间限额错误时复用首次解析结果', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-24T10:00:00.000Z'));
+    const error = 'Usage limit reached. Try again in 1h.';
+
+    inputProjectionCb!(projection({ error }));
+    const first = makerChatStore.getSnapshot(SID).usageLimitRecovery;
+    expect(first?.resetAtMs).toBe(Date.parse('2026-01-24T11:00:00.000Z'));
+
+    vi.setSystemTime(new Date('2026-01-24T10:15:00.000Z'));
+    inputProjectionCb!(projection({ error }));
+    const second = makerChatStore.getSnapshot(SID).usageLimitRecovery;
+
+    expect(second).toBe(first);
+    expect(second?.resetAtMs).toBe(Date.parse('2026-01-24T11:00:00.000Z'));
   });
 
   it('接管结束后撤掉提示卡', () => {

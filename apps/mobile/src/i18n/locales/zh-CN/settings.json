@@ -31,6 +31,7 @@
     "upToDate": "已是最新版本",
     "bundleUpToDateNoOta": "整包已是最新，当前版本不支持热更新",
     "downloadedRestarting": "更新已下载，正在重启",
+    "downloadedRestartRequired": "更新已下载，完全退出 App 后重新打开即可生效",
     "bundleCheckFailed": "无法检查整包更新，请稍后重试",
     "checkFailedDetail": "检查更新失败：{{detail}}",
     "checkFailed": "检查更新失败，请稍后重试"
@@ -76,15 +77,19 @@
   },
   "updateInfo": {
     "embedded": "随整包",
+    "embeddedFallback": "随整包（热更未生效）",
     "unknown": "未知",
     "source": "运行来源",
     "sourceEmbedded": "内置版本(随包)",
+    "sourceEmergencyFallback": "内置版本(应急启动，热更未生效)",
     "sourceOta": "OTA 热更新",
     "updateId": "更新 ID",
     "updatedAt": "更新时间",
     "channel": "Channel",
     "runtime": "Runtime",
-    "otaMarker": "热更标记"
+    "otaMarker": "热更标记",
+    "emergencyLaunch": "应急启动",
+    "emergencyLaunchYes": "是（本次运行内热更无法生效）"
   },
   "legal": {
     "sectionTitle": "备案信息",

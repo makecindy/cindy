@@ -52,6 +52,7 @@ describe('默认态与持久化', () => {
       urlOverride: null,
       workspaces: {},
       bindingsCache: [],
+      lifecycleAnnouncementOverride: null,
       telegramBindingCache: null,
     });
     expect(store.effectiveUrl()).toBe(TEST_DEFAULT_URL);
@@ -170,8 +171,21 @@ describe('旧多连接文件迁移', () => {
       urlOverride: null,
       workspaces: {},
       bindingsCache: [],
+      lifecycleAnnouncementOverride: null,
       telegramBindingCache: null,
     });
+  });
+});
+
+describe('Slack 上下线通知偏好', () => {
+  it('默认跟随产品值，用户切换后按账号持久化显式覆写', () => {
+    expect(makeStore().get().lifecycleAnnouncementOverride).toBeNull();
+
+    makeStore().setLifecycleAnnouncementOverride(true);
+    expect(makeStore().get().lifecycleAnnouncementOverride).toBe(true);
+
+    makeStore().setLifecycleAnnouncementOverride(false);
+    expect(makeStore().get().lifecycleAnnouncementOverride).toBe(false);
   });
 });
 

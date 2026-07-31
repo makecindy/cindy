@@ -2449,6 +2449,11 @@
         "slackDescription": "Bind Slack workspaces and hand tasks to Cindy from Slack.",
         "slackDisabledHint": "Turn on the switch to start Slack authorization; once bound you can dispatch tasks from Slack.",
         "slackBoundHint": "Binding complete. Turning the switch off unbinds this device; turning it back on requires authorizing again.",
+        "lifecycleAnnouncement": {
+          "label": "Online/Offline Notifications",
+          "cellLabel": "Message Notifications",
+          "hint": "Have the Slack Bot send a message when this device goes online or offline"
+        },
         "toggleAria": "Toggle the Slack connection",
         "installApp": "Install Slack App",
         "status": {
@@ -2964,6 +2969,8 @@
         "cardExternalLinkDetail": "Clicking a card link shows a confirmation dialog; the URL opens in your system browser only after you approve. Only http/https addresses are allowed.",
         "notify": "Can show system tips (light banner at the top of the screen)",
         "notifyDetail": "Tip text is provided by this plugin and labeled with its name; tips fade automatically and never block your work.",
+        "confirm": "Can ask for your confirmation in a dialog",
+        "confirmDetail": "Before acting it can open a dialog that looks like Cindy's own to ask you. The question comes from the plugin and the dialog is labeled with its name; only you can click confirm or cancel — the plugin cannot. At most one dialog at a time, and asking too often is blocked.",
         "fsWrite": "Can write files (create / modify)",
         "fsWriteDetail": "Its own private data folder is always writable. Writes into the current session's working directory follow the session's permission mode (auto-approve modes write directly; per-action modes ask you first). Any other folder always requires your confirmation. Files are always written by the host — the plugin itself never touches your file system.",
         "networkHost": "Accesses the network domain {{host}}",
@@ -3109,6 +3116,9 @@
       "pick": {
         "dialogTitle": "Choose a folder",
         "dialogMessage": "Plugin “{{name}}” is asking you to choose a folder"
+      },
+      "confirm": {
+        "dialogTitle": "Plugin “{{name}}” needs your confirmation"
       },
       "workspace": {
         "dialogTitle": "Choose a project folder",
@@ -4977,6 +4987,8 @@
       "retryTitle": "Resend the last message",
       "cancelTitle": "Dismiss error",
       "retry": "Retry",
+      "continueAfterReset": "Continue After Reset",
+      "continueAfterResetTitle": "Create a one-time Automation to continue this task after usage resets",
       "credentialSwitchBusy": "Another Codex task is still running, so the provider for this session can't be applied yet (the shared Codex process needs a restart). Retry after those tasks finish.",
       "codexThreadStale": "Codex auth mode changed — this session can't continue. Start a new session to apply it.",
       "budgetModelHint": "If this keeps failing, try switching to the standard GPT model.",
@@ -6222,6 +6234,10 @@
       "promptHeading": "No Automations yet",
       "promptDescription": "Create a cron Automation to let Claude Code or Codex run your prompt on a schedule."
     },
+    "usageLimitRecovery": {
+      "name": "Continue Task After Usage Resets",
+      "prompt": "Continue the current task from where it stopped."
+    },
     "template": {
       "useTemplate": "Getting Started",
       "blank": "Blank",
@@ -6532,6 +6548,7 @@
     },
     "chips": {
       "selectProject": "Select project",
+      "chooseTime": "Choose time",
       "recent": "Recent",
       "browseFolder": "Choose a different folder",
       "advanced": "Advanced",

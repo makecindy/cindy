@@ -385,13 +385,17 @@ import {
   dropAllControllers,
 } from '../device-link/dispatch';
 import { hasBroadcastTapListener, tapWindowBroadcast } from '../device-link/broadcast-tap';
-import { SESSION_ACTIVITY_CHANNEL, type Envelope } from '@cindy/device-link';
+import {
+  DeviceLinkError,
+  SESSION_ACTIVITY_CHANNEL,
+  type Envelope,
+} from '@cindy/device-link';
 import { DEVICE_LINK_RECONCILIATION_PROBE_MARKER } from '@cindy/maker-shared/device-link-contract';
 import { MAKER_PUSH } from '../maker-ipc/channels';
 
 /** 最小 fake client:捕获 onFrame handler,记录出站调用 */
 function makeFakeClient() {
-  let frameHandler: ((env: Envelope) => void) | null = null;
+  let frameHandler: ((env: Envelope) => unknown | Promise<unknown>) | null = null;
   const calls = {
     linkAccept: [] as Array<{ dst: string; requestId: string }>,
     closed: [] as Array<{ dst: string; reason: string }>,
@@ -399,7 +403,7 @@ function makeFakeClient() {
     invokeResult: [] as Array<{ dst: string; requestId: string; payload: unknown }>,
   };
   const client = {
-    onFrame: (cb: (env: Envelope) => void) => {
+    onFrame: (cb: (env: Envelope) => unknown | Promise<unknown>) => {
       frameHandler = cb;
       return () => {};
     },
@@ -451,6 +455,62 @@ describe('被控端控制链路生命周期', () => {
     feed({ v: 1, kind: 'link-open', id: 'r2', src: 'ctrl-b', payload: { controllerName: 'X', protocolVersion: 1, appVersion: '1' } });
     expect(calls.linkAccept).toHaveLength(0);
     expect(getActiveControllers()).toHaveLength(0);
+  });
+
+  it('link-accept 发送失败时不提交幽灵控制端订阅', async () => {
+    remoteControlEnabled = true;
+    const { client, feed } = makeFakeClient();
+    const mutableClient = client as unknown as {
+      sendLinkAccept: (dst: string, requestId: string) => void;
+    };
+    mutableClient.sendLinkAccept = () => {
+      throw new DeviceLinkError('BACKPRESSURE', 'socket buffer full');
+    };
+    wireInboundDispatch(client);
+
+    feed({
+      v: 1,
+      kind: 'link-open',
+      id: 'r-accept-backpressure',
+      src: 'ctrl-accept-backpressure',
+      payload: {
+        controllerName: 'Blocked',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(getActiveControllers()).toEqual([]);
+    expect(hasBroadcastTapListener()).toBe(false);
+  });
+
+  it('弱网下 link-close 写 socket 失败也会完成本地 dropAll 清理', () => {
+    remoteControlEnabled = true;
+    const { client, feed } = makeFakeClient();
+    const mutableClient = client as unknown as {
+      closeLink: (dst: string, reason: string) => void;
+    };
+    wireInboundDispatch(client);
+    feed({
+      v: 1,
+      kind: 'link-open',
+      id: 'r-drop-backpressure',
+      src: 'ctrl-drop',
+      payload: {
+        controllerName: 'Drop',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+      },
+    });
+    mutableClient.closeLink = () => {
+      throw new DeviceLinkError('BACKPRESSURE', 'socket buffer full');
+    };
+
+    expect(() => dropAllControllers(client, 'user')).not.toThrow();
+    expect(getActiveControllers()).toEqual([]);
+    expect(hasBroadcastTapListener()).toBe(false);
   });
 
   it('link-open capability controls whether provider projection includes new logo kinds', async () => {
@@ -581,7 +641,7 @@ describe('被控端控制链路生命周期', () => {
       payload: { channel: 'maker:list-active', args: [] },
     });
 
-    expect(hasInFlightRemoteInvokes()).toBe(true);
+    await vi.waitFor(() => expect(hasInFlightRemoteInvokes()).toBe(true));
     expect(busyChanges).toEqual([true]);
     resolveInvoke?.(['s1']);
     await vi.waitFor(() => expect(hasInFlightRemoteInvokes()).toBe(false));
@@ -591,6 +651,742 @@ describe('被控端控制链路生命周期', () => {
       requestId: 'invoke-1',
       payload: { ok: true, result: ['s1'] },
     });
+  });
+
+  it('同一控制端重复 invoke 复用在途/已完成结果，不重复执行副作用', async () => {
+    remoteControlEnabled = true;
+    let resolveInvoke: ((value: string[]) => void) | undefined;
+    const handler = vi.fn(
+      () =>
+        new Promise<string[]>((resolve) => {
+          resolveInvoke = resolve;
+        }),
+    );
+    registry.register('maker:list-active', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const duplicate: Envelope = {
+      v: 1,
+      kind: 'invoke',
+      id: 'invoke-duplicate',
+      src: 'ctrl-a',
+      payload: { channel: 'maker:list-active', args: [] },
+    };
+
+    feed(duplicate);
+    feed(duplicate);
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    resolveInvoke?.(['s1']);
+    await vi.waitFor(() => expect(
+      calls.invokeResult.filter((call) => call.requestId === 'invoke-duplicate'),
+    ).toHaveLength(2));
+
+    feed(duplicate);
+    await vi.waitFor(() => expect(
+      calls.invokeResult.filter((call) => call.requestId === 'invoke-duplicate'),
+    ).toHaveLength(3));
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(calls.invokeResult.filter((call) => call.requestId === 'invoke-duplicate')).toEqual([
+      { dst: 'ctrl-a', requestId: 'invoke-duplicate', payload: { ok: true, result: ['s1'] } },
+      { dst: 'ctrl-a', requestId: 'invoke-duplicate', payload: { ok: true, result: ['s1'] } },
+      { dst: 'ctrl-a', requestId: 'invoke-duplicate', payload: { ok: true, result: ['s1'] } },
+    ]);
+  });
+
+  it('invoke-result 本地发送背压时进入有界 outbox，恢复后原结果补发且不重复执行', async () => {
+    remoteControlEnabled = true;
+    const handler = vi.fn(() => ['s1']);
+    registry.register('maker:list-active', handler);
+    const { client, calls, feed } = makeFakeClient();
+    const mutableClient = client as unknown as {
+      sendInvokeResult: (dst: string, requestId: string, payload: unknown) => void;
+    };
+    const sendInvokeResult = mutableClient.sendInvokeResult;
+    let blocked = true;
+    mutableClient.sendInvokeResult = (dst, requestId, payload) => {
+      if (blocked) throw new DeviceLinkError('BACKPRESSURE', 'socket buffer full');
+      sendInvokeResult(dst, requestId, payload);
+    };
+    wireInboundDispatch(client);
+    const invoke: Envelope = {
+      v: 1,
+      kind: 'invoke',
+      id: 'invoke-outbox',
+      src: 'ctrl-a',
+      payload: { channel: 'maker:list-active', args: [] },
+    };
+
+    feed(invoke);
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    expect(calls.invokeResult).toEqual([]);
+    expect(dispatchTesting.remoteInvokeResultOutboxSize()).toBe(1);
+
+    feed({
+      ...invoke,
+      payload: { channel: 'maker:list-active', args: ['reused-with-different-payload'] },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(dispatchTesting.remoteInvokeResultOutboxSize()).toBe(1);
+
+    // presence offline 是弱网瞬断信号，不能把已执行但未发出的结果清掉。
+    handleControllerOffline('ctrl-a');
+    blocked = false;
+    dispatchTesting.flushRemoteInvokeResultOutbox();
+
+    expect(calls.invokeResult).toEqual([
+      { dst: 'ctrl-a', requestId: 'invoke-outbox', payload: { ok: true, result: ['s1'] } },
+    ]);
+    expect(dispatchTesting.remoteInvokeResultOutboxSize()).toBe(0);
+
+    feed(invoke);
+    await vi.waitFor(() => expect(calls.invokeResult).toHaveLength(2));
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('outbox 补发降级裁剪时保留原始锚点参数', async () => {
+    remoteControlEnabled = true;
+    const largeField = 'x'.repeat(1024 * 1024);
+    registry.register('local-db:messages:around-client-id', () => [
+      { id: 'm-anchor', clientId: 'anchor', role: 'user', content: 'anchor', largeField },
+      { id: 'm-middle', clientId: 'middle', role: 'assistant', content: 'middle', largeField },
+      { id: 'm-tail', clientId: 'tail', role: 'assistant', content: 'tail', largeField },
+    ]);
+    const { client, calls, feed } = makeFakeClient();
+    const mutableClient = client as unknown as {
+      sendInvokeResult: (dst: string, requestId: string, payload: unknown) => void;
+    };
+    const sendInvokeResult = mutableClient.sendInvokeResult;
+    let firstAttempt = true;
+    mutableClient.sendInvokeResult = (dst, requestId, payload) => {
+      if (firstAttempt) {
+        firstAttempt = false;
+        throw new DeviceLinkError('BACKPRESSURE', 'socket buffer full');
+      }
+      if (JSON.stringify(payload).length > 2 * 1024 * 1024) {
+        throw new DeviceLinkError('PAYLOAD_TOO_LARGE', 'legacy frame too large');
+      }
+      sendInvokeResult(dst, requestId, payload);
+    };
+    wireInboundDispatch(client);
+
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'invoke-anchor-outbox',
+      src: 'ctrl-a',
+      payload: {
+        channel: 'local-db:messages:around-client-id',
+        args: ['s1', 'anchor', { radius: 20 }],
+      },
+    });
+    await vi.waitFor(() => expect(dispatchTesting.remoteInvokeResultOutboxSize()).toBe(1));
+
+    dispatchTesting.flushRemoteInvokeResultOutbox();
+
+    expect(calls.invokeResult).toHaveLength(1);
+    const payload = calls.invokeResult[0]?.payload as {
+      ok: true;
+      result: Array<{ clientId?: string }>;
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.result.some((message) => message.clientId === 'anchor')).toBe(true);
+    expect(dispatchTesting.remoteInvokeResultOutboxSize()).toBe(0);
+  });
+
+  it('显式 link-close 后丢弃旧世代晚到 IPC 结果，快速重开也不串进新链路', async () => {
+    remoteControlEnabled = true;
+    let resolveInvoke: ((value: string[]) => void) | undefined;
+    registry.register('maker:list-active', () => new Promise<string[]>((resolve) => {
+      resolveInvoke = resolve;
+    }));
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'invoke-old-link',
+      src: 'ctrl-a',
+      payload: { channel: 'maker:list-active', args: [] },
+    });
+    await vi.waitFor(() => expect(hasInFlightRemoteInvokes()).toBe(true));
+
+    feed({ v: 1, kind: 'link-close', src: 'ctrl-a', payload: { reason: 'user' } });
+    feed({
+      v: 1,
+      kind: 'link-open',
+      id: 'open-new-link',
+      src: 'ctrl-a',
+      payload: {
+        controllerName: 'reopened',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+      },
+    });
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'invoke-old-link',
+      src: 'ctrl-a',
+      payload: { channel: 'maker:list-active', args: [] },
+    });
+    resolveInvoke?.(['stale']);
+    await vi.waitFor(() => expect(hasInFlightRemoteInvokes()).toBe(false));
+
+    expect(calls.invokeResult.some((call) => call.requestId === 'invoke-old-link')).toBe(false);
+    expect(calls.linkAccept).toContainEqual({ dst: 'ctrl-a', requestId: 'open-new-link' });
+  });
+
+  it('已完成缓存淘汰仍不绕过 outbox 的 requestId 去重', async () => {
+    remoteControlEnabled = true;
+    const handler = vi.fn((_event: unknown, value: unknown) => value);
+    registry.register('maker:list-active', handler);
+    const { client, calls, feed } = makeFakeClient();
+    const mutableClient = client as unknown as {
+      sendInvokeResult: (dst: string, requestId: string, payload: unknown) => void;
+    };
+    const sendInvokeResult = mutableClient.sendInvokeResult;
+    mutableClient.sendInvokeResult = (dst, requestId, payload) => {
+      if (requestId === 'invoke-outbox-evicted') {
+        throw new DeviceLinkError('BACKPRESSURE', 'socket buffer full');
+      }
+      sendInvokeResult(dst, requestId, payload);
+    };
+    wireInboundDispatch(client);
+    const queuedInvoke: Envelope = {
+      v: 1,
+      kind: 'invoke',
+      id: 'invoke-outbox-evicted',
+      src: 'ctrl-a',
+      payload: { channel: 'maker:list-active', args: ['original'] },
+    };
+    feed(queuedInvoke);
+    await vi.waitFor(() => expect(dispatchTesting.remoteInvokeResultOutboxSize()).toBe(1));
+
+    // 用不同 requestId 推进 completed cache，确保最早的 original 已被容量淘汰。
+    let sent = 0;
+    for (const batchSize of [50, 50, 30]) {
+      for (let offset = 0; offset < batchSize; offset++) {
+        const index = sent + offset;
+        feed({
+          v: 1,
+          kind: 'invoke',
+          id: `invoke-cache-pressure-${index}`,
+          src: `ctrl-cache-pressure-${index}`,
+          payload: { channel: 'maker:list-active', args: [`value-${index}`] },
+        });
+      }
+      sent += batchSize;
+      await vi.waitFor(() => expect(calls.invokeResult).toHaveLength(sent));
+    }
+    expect(handler).toHaveBeenCalledTimes(131);
+
+    feed(queuedInvoke);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(handler).toHaveBeenCalledTimes(131);
+    expect(dispatchTesting.remoteInvokeResultOutboxSize()).toBe(1);
+  });
+
+  it('单个控制端达到 invoke-result outbox 上限后拒绝继续积压并停止执行新副作用', async () => {
+    const client = {
+      sendInvokeResult: () => {
+        throw new DeviceLinkError('BACKPRESSURE', 'socket buffer full');
+      },
+    } as never;
+    for (
+      let index = 0;
+      index < dispatchTesting.remoteInvokeResultOutboxPerControllerLimit;
+      index++
+    ) {
+      expect(dispatchTesting.sendInvokeResultSafe(
+        client,
+        'ctrl-a',
+        `invoke-outbox-${index}`,
+        { ok: true, result: index },
+        'maker:list-active',
+      )).toBe(true);
+    }
+
+    expect(dispatchTesting.remoteInvokeResultOutboxSize()).toBe(
+      dispatchTesting.remoteInvokeResultOutboxPerControllerLimit,
+    );
+    expect(dispatchTesting.sendInvokeResultSafe(
+      client,
+      'ctrl-a',
+      'invoke-outbox-over-limit',
+      { ok: true, result: 'overflow' },
+      'maker:list-active',
+    )).toBe(false);
+
+    const handler = vi.fn(() => ['must-not-run']);
+    registry.register('maker:list-active', handler);
+    const h = makeFakeClient();
+    wireInboundDispatch(h.client);
+    h.feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'invoke-after-outbox-full',
+      src: 'ctrl-a',
+      payload: { channel: 'maker:list-active', args: [] },
+    });
+    await vi.waitFor(() => expect(h.calls.invokeResult).toContainEqual({
+      dst: 'ctrl-a',
+      requestId: 'invoke-after-outbox-full',
+      payload: {
+        ok: false,
+        error: {
+          code: 'BACKPRESSURE',
+          message: 'remote invoke execution queue is full',
+        },
+      },
+    }));
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('多个控制端的 invoke-result outbox 仍受全局消息上限保护', () => {
+    const client = {
+      sendInvokeResult: () => {
+        throw new DeviceLinkError('BACKPRESSURE', 'socket buffer full');
+      },
+    } as never;
+    const controllerCount = Math.ceil(
+      dispatchTesting.remoteInvokeResultOutboxLimit
+        / dispatchTesting.remoteInvokeResultOutboxPerControllerLimit,
+    );
+    let queued = 0;
+    for (let controller = 0; controller < controllerCount; controller++) {
+      for (
+        let index = 0;
+        index < dispatchTesting.remoteInvokeResultOutboxPerControllerLimit
+          && queued < dispatchTesting.remoteInvokeResultOutboxLimit;
+        index++
+      ) {
+        expect(dispatchTesting.sendInvokeResultSafe(
+          client,
+          `ctrl-${controller}`,
+          `invoke-global-outbox-${queued}`,
+          { ok: true, result: queued },
+          'maker:list-active',
+        )).toBe(true);
+        queued++;
+      }
+    }
+    expect(dispatchTesting.remoteInvokeResultOutboxSize()).toBe(
+      dispatchTesting.remoteInvokeResultOutboxLimit,
+    );
+    expect(dispatchTesting.sendInvokeResultSafe(
+      client,
+      'ctrl-over',
+      'invoke-global-outbox-over-limit',
+      { ok: true, result: 'overflow' },
+      'maker:list-active',
+    )).toBe(false);
+  });
+
+  it('invoke-result outbox 字节预算包含 request fingerprint', () => {
+    const client = {
+      sendInvokeResult: () => {
+        throw new DeviceLinkError('BACKPRESSURE', 'socket buffer full');
+      },
+    } as never;
+    const fingerprint = 'x'.repeat(1_500_000);
+
+    for (let index = 0; index < 2; index++) {
+      expect(dispatchTesting.sendInvokeResultSafe(
+        client,
+        'ctrl-a',
+        `invoke-large-fingerprint-${index}`,
+        { ok: true, result: index },
+        'maker:list-active',
+        [],
+        `${fingerprint}${index}`,
+      )).toBe(true);
+    }
+    expect(dispatchTesting.sendInvokeResultSafe(
+      client,
+      'ctrl-a',
+      'invoke-large-fingerprint-overflow',
+      { ok: true, result: 'overflow' },
+      'maker:list-active',
+      [],
+      `${fingerprint}overflow`,
+    )).toBe(false);
+  });
+
+  it('不可 JSON 序列化的 IPC 结果转为明确错误并缓存，不留下已 ACK 黑洞', async () => {
+    remoteControlEnabled = true;
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    const handler = vi.fn(() => circular);
+    registry.register('maker:list-active', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const invoke: Envelope = {
+      v: 1,
+      kind: 'invoke',
+      id: 'invoke-circular-result',
+      src: 'ctrl-a',
+      payload: { channel: 'maker:list-active', args: [] },
+    };
+
+    feed(invoke);
+    await vi.waitFor(() => expect(calls.invokeResult).toContainEqual({
+      dst: 'ctrl-a',
+      requestId: 'invoke-circular-result',
+      payload: {
+        ok: false,
+        error: {
+          code: 'IPC_ERROR',
+          message: '[SERIALIZATION_ERROR] remote invoke result is not JSON serializable',
+        },
+      },
+    }));
+
+    feed(invoke);
+    await vi.waitFor(() => expect(calls.invokeResult).toHaveLength(2));
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('超缓存上限的大结果以 compact wire 结果去重，不因原对象自淘汰而重复执行', async () => {
+    remoteControlEnabled = true;
+    const oversizedContent = 'x'.repeat(17 * 1024 * 1024);
+    const handler = vi.fn(() => [{
+      id: 'm-large',
+      role: 'assistant',
+      content: oversizedContent,
+    }]);
+    registry.register('local-db:messages:list', handler);
+    const { client, calls, feed } = makeFakeClient();
+    const mutableClient = client as unknown as {
+      sendInvokeResult: (dst: string, requestId: string, payload: unknown) => void;
+    };
+    const sendInvokeResult = mutableClient.sendInvokeResult;
+    mutableClient.sendInvokeResult = (dst, requestId, payload) => {
+      if (JSON.stringify(payload).length > 1024 * 1024) {
+        throw new DeviceLinkError('PAYLOAD_TOO_LARGE', 'frame too large');
+      }
+      sendInvokeResult(dst, requestId, payload);
+    };
+    wireInboundDispatch(client);
+    const invoke: Envelope = {
+      v: 1,
+      kind: 'invoke',
+      id: 'invoke-large-result-cache',
+      src: 'ctrl-a',
+      payload: { channel: 'local-db:messages:list', args: ['s1'] },
+    };
+
+    feed(invoke);
+    await vi.waitFor(() => expect(calls.invokeResult).toHaveLength(1));
+    feed(invoke);
+    await vi.waitFor(() => expect(calls.invokeResult).toHaveLength(2));
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(calls.invokeResult[0].payload).length).toBeLessThan(1024 * 1024);
+    expect(calls.invokeResult[1].payload).toEqual(calls.invokeResult[0].payload);
+  });
+
+  it('永久挂起 IPC 到孤儿期限后释放执行槽和 busy lease，同 requestId 不重复执行', async () => {
+    vi.useFakeTimers();
+    try {
+      remoteControlEnabled = true;
+      const handler = vi.fn(() => new Promise<never>(() => {}));
+      registry.register('maker:list-active', handler);
+      const busyChanges: boolean[] = [];
+      setRemoteInvokeBusyChangedListener((busy) => busyChanges.push(busy));
+      const { client, calls, feed } = makeFakeClient();
+      wireInboundDispatch(client);
+      const invoke: Envelope = {
+        v: 1,
+        kind: 'invoke',
+        id: 'invoke-orphan',
+        src: 'ctrl-a',
+        payload: { channel: 'maker:list-active', args: [] },
+      };
+
+      feed(invoke);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(hasInFlightRemoteInvokes()).toBe(true);
+      expect(busyChanges).toEqual([true]);
+
+      await vi.advanceTimersByTimeAsync(dispatchTesting.remoteInvokeOrphanTimeoutMs);
+
+      expect(calls.invokeResult).toContainEqual({
+        dst: 'ctrl-a',
+        requestId: 'invoke-orphan',
+        payload: {
+          ok: false,
+          error: {
+            code: 'IPC_ERROR',
+            message: expect.stringContaining('[TIMEOUT]'),
+          },
+        },
+      });
+      expect(hasInFlightRemoteInvokes()).toBe(false);
+      expect(busyChanges).toEqual([true, false]);
+
+      feed(invoke);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(calls.invokeResult).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('同一 requestId 换 payload 不复用在途或已完成结果', async () => {
+    remoteControlEnabled = true;
+    let resolveInvoke: ((value: string[]) => void) | undefined;
+    const handler = vi.fn(
+      () =>
+        new Promise<string[]>((resolve) => {
+          resolveInvoke = resolve;
+        }),
+    );
+    registry.register('maker:list-active', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const original: Envelope = {
+      v: 1,
+      kind: 'invoke',
+      id: 'invoke-reused-id',
+      src: 'ctrl-a',
+      payload: { channel: 'maker:list-active', args: [] },
+    };
+    const changed: Envelope = {
+      ...original,
+      payload: { channel: 'maker:list-active', args: ['different'] },
+    };
+
+    feed(original);
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    feed(changed);
+    await vi.waitFor(() => expect(calls.invokeResult).toContainEqual({
+      dst: 'ctrl-a',
+      requestId: 'invoke-reused-id',
+      payload: {
+        ok: false,
+        error: {
+          code: 'INTERNAL',
+          message: 'request id reused with different payload',
+        },
+      },
+    }));
+
+    resolveInvoke?.(['s1']);
+    await vi.waitFor(() => expect(calls.invokeResult).toContainEqual({
+      dst: 'ctrl-a',
+      requestId: 'invoke-reused-id',
+      payload: { ok: true, result: ['s1'] },
+    }));
+    feed(changed);
+    await vi.waitFor(() => expect(
+      calls.invokeResult.filter((call) => (
+        call.requestId === 'invoke-reused-id'
+        && (call.payload as { error?: { message?: string } }).error?.message
+          === 'request id reused with different payload'
+      )),
+    ).toHaveLength(2));
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('撤权检查优先于 requestId 结果缓存', async () => {
+    remoteControlEnabled = true;
+    const handler = vi.fn(() => ['s1']);
+    registry.register('maker:list-active', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const invoke: Envelope = {
+      v: 1,
+      kind: 'invoke',
+      id: 'invoke-before-revoke',
+      src: 'ctrl-a',
+      payload: { channel: 'maker:list-active', args: [] },
+    };
+
+    feed(invoke);
+    await vi.waitFor(() => expect(calls.invokeResult).toContainEqual({
+      dst: 'ctrl-a',
+      requestId: 'invoke-before-revoke',
+      payload: { ok: true, result: ['s1'] },
+    }));
+    revokedControllers = ['ctrl-a'];
+    feed(invoke);
+    await vi.waitFor(() => expect(calls.invokeResult).toContainEqual({
+      dst: 'ctrl-a',
+      requestId: 'invoke-before-revoke',
+      payload: {
+        ok: false,
+        error: {
+          code: 'ACCESS_REVOKED',
+          message: 'access revoked by target device',
+        },
+      },
+    }));
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('执行边界外的异常也会返回并缓存 IPC_ERROR，不让已 ACK 请求只剩超时', async () => {
+    remoteControlEnabled = true;
+    const handler = vi.fn(() => ({ session: { id: 'must-not-run' } }));
+    registry.register('maker:create-session', handler as never);
+    setRemoteWorkingDirGuard(async () => {
+      throw new Error('guard crashed');
+    });
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const invoke: Envelope = {
+      v: 1,
+      kind: 'invoke',
+      id: 'invoke-guard-crash',
+      src: 'ctrl-a',
+      payload: {
+        channel: 'maker:create-session',
+        args: [{ workingDir: '/project' }],
+      },
+    };
+
+    feed(invoke);
+    await vi.waitFor(() => expect(calls.invokeResult).toContainEqual({
+      dst: 'ctrl-a',
+      requestId: 'invoke-guard-crash',
+      payload: {
+        ok: false,
+        error: {
+          code: 'IPC_ERROR',
+          message: 'guard crashed',
+        },
+      },
+    }));
+    expect(handler).not.toHaveBeenCalled();
+    expect(hasInFlightRemoteInvokes()).toBe(false);
+
+    feed(invoke);
+    await vi.waitFor(() => expect(
+      calls.invokeResult.filter((call) => call.requestId === 'invoke-guard-crash'),
+    ).toHaveLength(2));
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('耗时 invoke 执行队列有界，超限立即返回 BACKPRESSURE', async () => {
+    remoteControlEnabled = true;
+    const releases: Array<() => void> = [];
+    const handler = vi.fn(
+      () =>
+        new Promise<string[]>((resolve) => {
+          releases.push(() => resolve([]));
+        }),
+    );
+    registry.register('maker:list-active', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+
+    for (let index = 0; index < dispatchTesting.remoteInvokeInFlightLimit; index++) {
+      feed({
+        v: 1,
+        kind: 'invoke',
+        id: `invoke-bounded-${index}`,
+        src: `ctrl-${Math.floor(index / dispatchTesting.remoteInvokeInFlightPerControllerLimit)}`,
+        payload: { channel: 'maker:list-active', args: [] },
+      });
+    }
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'invoke-over-limit',
+      src: 'ctrl-over',
+      payload: { channel: 'maker:list-active', args: [] },
+    });
+
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(
+      dispatchTesting.remoteInvokeInFlightLimit,
+    ));
+    expect(calls.invokeResult).toContainEqual({
+      dst: 'ctrl-over',
+      requestId: 'invoke-over-limit',
+      payload: {
+        ok: false,
+        error: {
+          code: 'BACKPRESSURE',
+          message: 'remote invoke execution queue is full',
+        },
+      },
+    });
+
+    for (const release of releases) release();
+    await vi.waitFor(() => expect(calls.invokeResult).toHaveLength(
+      dispatchTesting.remoteInvokeInFlightLimit + 1,
+    ));
+  });
+
+  it('单个控制端达到配额时，不阻塞其他控制端的 invoke', async () => {
+    remoteControlEnabled = true;
+    const releases: Array<() => void> = [];
+    const handler = vi.fn(
+      () =>
+        new Promise<string[]>((resolve) => {
+          releases.push(() => resolve([]));
+        }),
+    );
+    registry.register('maker:list-active', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+
+    for (let index = 0; index < dispatchTesting.remoteInvokeInFlightPerControllerLimit; index++) {
+      feed({
+        v: 1,
+        kind: 'invoke',
+        id: `invoke-controller-a-${index}`,
+        src: 'ctrl-a',
+        payload: { channel: 'maker:list-active', args: [] },
+      });
+    }
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'invoke-controller-a-over-limit',
+      src: 'ctrl-a',
+      payload: { channel: 'maker:list-active', args: [] },
+    });
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'invoke-controller-b-admitted',
+      src: 'ctrl-b',
+      payload: { channel: 'maker:list-active', args: [] },
+    });
+
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(
+      dispatchTesting.remoteInvokeInFlightPerControllerLimit + 1,
+    ));
+    expect(calls.invokeResult).toContainEqual({
+      dst: 'ctrl-a',
+      requestId: 'invoke-controller-a-over-limit',
+      payload: {
+        ok: false,
+        error: {
+          code: 'BACKPRESSURE',
+          message: 'remote invoke execution queue is full',
+        },
+      },
+    });
+    expect(calls.invokeResult).not.toContainEqual(expect.objectContaining({
+      dst: 'ctrl-b',
+      requestId: 'invoke-controller-b-admitted',
+      payload: expect.objectContaining({
+        error: expect.objectContaining({ code: 'BACKPRESSURE' }),
+      }),
+    }));
+
+    for (const release of releases) release();
+    await vi.waitFor(() => expect(calls.invokeResult).toHaveLength(
+      dispatchTesting.remoteInvokeInFlightPerControllerLimit + 2,
+    ));
   });
 
   it.each([
@@ -652,7 +1448,7 @@ describe('被控端控制链路生命周期', () => {
       payload: { channel: 'local-db:sessions:get', args: ['s1'] },
     });
 
-    expect(hasInFlightRemoteInvokes()).toBe(true);
+    await vi.waitFor(() => expect(hasInFlightRemoteInvokes()).toBe(true));
     expect(busyChanges).toEqual([true]);
     resolveInvoke?.({ id: 's1' });
     await vi.waitFor(() => expect(hasInFlightRemoteInvokes()).toBe(false));
@@ -726,7 +1522,7 @@ function subFrame(
   return {
     v: 1,
     kind: 'invoke',
-    id: `q-${src}-${topics.join(',')}`,
+    id: `q-${src}-${topics.join(',')}${channel === UNSUB ? '-unsubscribe' : ''}`,
     src,
     payload: {
       channel,

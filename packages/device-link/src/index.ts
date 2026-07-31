@@ -10,5 +10,6 @@
 export * from './protocol.js';
 export * from './allowlist.js';
 export * from './client.js';
+export * from './transport.js';
 export * from './topics.js';
 export * from './attachmentOssRef.js';
