@@ -450,10 +450,41 @@ IM 渠道的 `/new` 看着像「新建」，实际走 `im/shared/sessionRepo.ts:
 | 2 | IM 渠道 `uiText.ts` | 共享层扫完就以为齐了 |
 | 3 | discord / feishu / wechat（telegram 的同形副本） | 按 reviewer 点到的那个文件改 |
 | 4 | main 抛错 → `projection.error` → `ErrorBanner` | 按文件类别一刀切，没追这一条的实际渲染 |
+| 5 | `notificationService.buildFeishuText` → 飞书私聊 | 前四轮都在追「报错」，没想到**成功态通知**也是一条 |
 
 所以改术语时，对每一处候选串问：**它从哪里被渲染出来？** 三种答案对应三种处理——
 renderer 按 code 取 i18n（不改这串，改 i18n key）／原样进 UI（必须改）／只进日志或给
 LLM（不改）。拿不准就搜一次调用链，代价比多一轮 review 低得多。
+
+##### main 侧「直接送到用户眼前」的出口清单
+
+连续五轮都是同一族返工，所以第 5 轮做了检查点：不再逐条等 reviewer 点，把 main 侧的出口
+（sink）一次枚举干净。判据不是文件在哪个目录，而是**这个函数把字符串送去了哪里**。
+
+| 出口 | 送到哪 | 本次处理 |
+|---|---|---|
+| `im/{telegram,discord,feishu,wechat}/uiText.ts` | 渠道消息 / 卡片 | 四包已清零（§6.0.4） |
+| `notificationService.buildFeishuText()` | 飞书私聊完成通知 | 「会话「X」」→「任务「X」」；测试断言同步 |
+| `notificationService.showDesktopSessionEvent()` 的 `safeTitle` 兜底 | 系统 toast 标题 | `'会话'` → `'任务'` |
+| `im/desktopConfirmNotice.buildDesktopConfirmNoticeText(what)` | 飞书私聊确认提醒 | 3 个调用点，只有「批量重命名会话」含术语词 → 改 |
+| `hook-control/interactions.ts` · `dispatcher.ts` | Slack / IM 权限卡与通知 | 已改（§6.0.1） |
+| `SessionReferenceError` → `projection.error` → `ErrorBanner` | 对话区错误横幅 | 14 处已改 |
+| `device-link/ipc.ts` 的 `throwIpcError(SESSION_REFERENCE_*)` | 同上（`ipcError.*` 里**没有**这两个 code 的 i18n，所以原样展示） | 3 处已改 |
+| `ORCA_WORKER_READY_MESSAGE` | 注入 worker 对话流的系统消息 | 「Orca Worker 会话已就绪」→「Orca Worker 已就绪」（去掉冗余名词，不动 Orca 自己的 Worker / Lead 术语） |
+| `scheduler-host/notifier.ts` | 自动化飞书卡片 | 无术语词，不动 |
+| `cindy-brain/*Slot.ts` · `mcp-integrations/ghost.ts` · `maker-ipc/ghostErrandRunner.ts` | 插件 / LLM 读 | 不动（§6.0.2） |
+| `maker-orchestration/{fork,rewind}.ts` | renderer 按 error code 取 i18n | 不动（改的是 i18n key） |
+| `device-link/mediaFetch.ts` · `file-browser/ssh-media.ts` | SSH 连接会话，另一种 session | 不动（§6.0.2） |
+
+复现这份清单的办法（改术语时先跑一遍，比等 review 便宜）：
+
+```bash
+# 1. 找出 main 侧所有「送给用户」的出口调用点
+grep -rnE 'sendMarkdownText|sendFeishuText|desktopConfirmImNotifier|showDesktopToast|new Notification' \
+  apps/desktop/src/main --include='*.ts' | grep -v __tests__
+# 2. 反向:列出 main 侧所有含术语词的字符串字面量,逐条回答"它从哪个出口出去"
+grep -rn '会话' apps/desktop/src/main --include='*.ts' | grep -vE '__tests__|:[0-9]+:\s*(//|\*)'
+```
 
 **顺带修掉一处 `origin/main` 既有乱码**：`sessionReferenceResolver.ts` 有两句
 `来源设备返回了无效的会话历史` 被存成了 UTF-8 字节按 GBK 解过一遍的形态
