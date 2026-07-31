@@ -85,6 +85,36 @@ describe('model price override sparse persistence', () => {
     ).toBe(false);
   });
 
+  it('keeps remote long-context bands when applying a sparse local override', () => {
+    const inputTokenPriceBands = [
+      {
+        minInputTokens: 200_001,
+        inputPerMtok: 4,
+        outputPerMtok: 12,
+      },
+    ];
+    expect(
+      __testing.mergedQuote(
+        { providerId: 'custom', agent: 'codex', modelId: 'model' },
+        {
+          providerId: 'custom',
+          modelId: 'model',
+          currency: 'USD',
+          source: 'provider-reference',
+          approximate: true,
+          inputPerMtok: 2,
+          outputPerMtok: 6,
+          inputTokenPriceBands,
+        },
+        { outputPerMtok: 8 },
+      ),
+    ).toMatchObject({
+      source: 'user-override',
+      outputPerMtok: 8,
+      inputTokenPriceBands,
+    });
+  });
+
   it('drops malformed records instead of accepting poisoned local state', () => {
     expect(
       __testing.normalize({

@@ -44,13 +44,15 @@ export function findModelRegistryRoute(
   agent?: ModelAgent,
 ): { entry: ModelRegistryEntry; route: ModelRegistryRoute } | undefined {
   if (!registry) return undefined;
+  const normalizedProviderId = providerId.trim();
+  const normalizedModelId = modelId.trim();
   const candidates = new Set(
-    routeModelCandidates(providerId.trim(), modelId.trim()),
+    routeModelCandidates(normalizedProviderId, normalizedModelId),
   );
   for (const entry of registry.models) {
     const route = entry.routes.find(
       (candidate) =>
-        candidate.providerId === providerId &&
+        candidate.providerId === normalizedProviderId &&
         candidates.has(candidate.modelId) &&
         (agent === undefined || candidate.agents.includes(agent)),
     );

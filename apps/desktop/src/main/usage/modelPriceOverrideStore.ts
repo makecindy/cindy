@@ -253,6 +253,9 @@ function mergedQuote(
     approximate: true,
     inputPerMtok,
     outputPerMtok,
+    ...(reference?.inputTokenPriceBands
+      ? { inputTokenPriceBands: reference.inputTokenPriceBands }
+      : {}),
     ...(cacheReadPerMtok !== undefined ? { cacheReadPerMtok } : {}),
     ...(cacheCreatePerMtok !== undefined ? { cacheCreatePerMtok } : {}),
   };
@@ -374,4 +377,5 @@ export const __testing = {
   overrideKey,
   sparseValues,
   sameComparable,
+  mergedQuote,
 };

@@ -24,6 +24,16 @@ describe("model registry", () => {
     expect(
       findModelRegistryRoute(
         registry,
+        "  anthropic  ",
+        "  claude-opus-5  ",
+        "claude-code",
+      ),
+    ).toMatchObject({
+      route: { providerId: "anthropic", modelId: "claude-opus-5" },
+    });
+    expect(
+      findModelRegistryRoute(
+        registry,
         "other-provider",
         "claude-opus-5",
         "claude-code",
