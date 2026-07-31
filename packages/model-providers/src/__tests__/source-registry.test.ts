@@ -29,7 +29,7 @@ import {
   effectiveSourceIdForModel,
   resolveRoute,
 } from '../registry.js';
-import type { Catalog, CatalogModel } from '../types.js';
+import type { Catalog, CatalogModel, Provider } from '../types.js';
 
 const MINIMAL: Catalog = {
   version: 'test',
@@ -143,6 +143,21 @@ describe('mergeWithBundled', () => {
       providers: MINIMAL.providers.map((p) => ({ ...p, access: { kind: 'api' } })),
     };
     expect(mergeWithBundled(primary).providers.find((p) => p.id === 'anthropic')?.access).toEqual({ kind: 'api' });
+  });
+
+  it('旧远端未声明媒体能力时继承 bundled;显式空清单仍可停用', () => {
+    const bundledXai = BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')!;
+    const oldRemoteXai = JSON.parse(JSON.stringify(bundledXai)) as Provider;
+    delete oldRemoteXai.imageModels;
+    const inherited = mergeWithBundled({ version: '2', providers: [oldRemoteXai] });
+    expect(inherited.providers.find((p) => p.id === 'xai')?.imageModels)
+      .toEqual(bundledXai.imageModels);
+
+    const explicitlyDisabled = mergeWithBundled({
+      version: '2',
+      providers: [{ ...oldRemoteXai, imageModels: [] }],
+    });
+    expect(explicitlyDisabled.providers.find((p) => p.id === 'xai')?.imageModels).toEqual([]);
   });
 
   it('does not infer bundled billing when a same-id primary changes auth or upstream', () => {

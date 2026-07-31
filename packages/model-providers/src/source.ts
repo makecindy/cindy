@@ -133,8 +133,8 @@ function backfillPresetContextWindows(
 
 /**
  * 把远端 / 本地目录与内置 bundled 合并：以输入目录为主，bundled 补它缺失的
- * provider（按 id），并给旧目录中同 id provider 补缺失的 access 元数据。primary
- * 明确提供的 access 永远优先，不被 bundled 覆盖。
+ * provider（按 id），并给旧目录中同 id provider 补缺失的 access 与图像能力元数据。
+ * primary 明确提供的值（包括显式空图像清单）永远优先，不被 bundled 覆盖。
  *
  * **顺序契约**：结果按 bundled 数组序稳定排列（anthropic → openai → xai → xd），
  * bundled 之外的远端新增供应商按远端原序追加在后。v2 远端目录只承载 xai 段，
@@ -143,17 +143,33 @@ function backfillPresetContextWindows(
 export function mergeWithBundled(primary: Catalog): Catalog {
   const byId = new Map(primary.providers.map((p) => [p.id, p]));
   const bundledById = new Map(BUNDLED_CATALOG.providers.map((p) => [p.id, p]));
-  const withAccess = primary.providers.map((p) => {
+  const withBundledMetadata = primary.providers.map((p) => {
     const bundled = bundledById.get(p.id);
     const bundledAccess = bundled ? legacyAccessFor(p, bundled) : undefined;
-    return p.access === undefined && bundledAccess !== undefined ? { ...p, access: bundledAccess } : p;
+    if (!bundled) return p;
+    const inheritImage = p.imageModels === undefined && bundled.imageModels !== undefined;
+    if (!(p.access === undefined && bundledAccess !== undefined) && !inheritImage) {
+      return p;
+    }
+    return {
+      ...p,
+      ...(p.access === undefined && bundledAccess !== undefined ? { access: bundledAccess } : {}),
+      ...(inheritImage
+        ? {
+            imageModels: bundled.imageModels,
+            ...(p.imageDefaults === undefined && bundled.imageDefaults !== undefined
+              ? { imageDefaults: bundled.imageDefaults }
+              : {}),
+          }
+        : {}),
+    };
   });
-  const primaryById = new Map(withAccess.map((p) => [p.id, p]));
+  const primaryById = new Map(withBundledMetadata.map((p) => [p.id, p]));
   // bundled 序在前(同 id 取 primary 内容),远端独有的追加在后(保持远端原序)。
   const merged: Provider[] = BUNDLED_CATALOG.providers.map(
     (bundled) => primaryById.get(bundled.id) ?? bundled,
   );
-  for (const p of withAccess) {
+  for (const p of withBundledMetadata) {
     if (!bundledById.has(p.id)) merged.push(p);
   }
   // presets 与 providers 同样按 id 合并：bundled 保序兜底，同 id 远端内容优先，

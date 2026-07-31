@@ -180,6 +180,8 @@ import {
 } from '../secrets/providerSecretStore.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { projectProviderCatalogForBuildRegion } from '../maker-host/provider-access-policy.js';
+import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.js';
+import { invalidateXaiBridgeAuth } from '../maker-host/xai-auth-invalidation-host.js';
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
@@ -202,6 +204,7 @@ import {
   loadGhostRecentIds,
   markGhostRecentlyUsed,
 } from './ghostRecentUsageStore.js';
+import { createXaiImageChannel } from './xaiImageClient.js';
 import { getCindyProxyMediaService } from '../mcp-integrations/cindyProxyMedia.js';
 import { ImageChannelRegistry, decodeImageResponse } from './imageChannelRegistry.js';
 import { createGeminiImageChannel } from './geminiImageClient.js';
@@ -1947,6 +1950,13 @@ function getImageChannelRegistry(): ImageChannelRegistry {
           ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
         }),
     });
+    registry.register('xai', createXaiImageChannel({
+      hasOAuthLogin: () => hasGrokOAuthLogin(),
+      getAccessToken: () => getGrokAccessToken(),
+      fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+      beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
+      onAuthRejected: (failure) => invalidateXaiBridgeAuth(failure),
+    }));
     // Gemini(BYO API key,generateContent wire):ready = key 已配置。停用轴
     // 派发前重查经 beforeDispatch 注入(与 xd 通道的 cindyProxyMedia beforeDispatch
     // 同语义 —— xd 的挂在网关客户端装配处,gemini 的挂在这里)。
