@@ -807,16 +807,25 @@ export class GhostCindySlot {
    * 上限在任何并发时序下都不被突破。
    */
   /**
-   * 是否有任意异步代办(mode:'submit' 的图片 / 视频生成)仍在途。
+   * 是否有**任意**在途的 Cindy 代办 —— 同步与异步两种都算。
    *
-   * 给「这个破坏性动作会打断什么」这类全局判定用(更新重启前的阻断探针)。这些 job 由
-   * `void runExec()` 脱离调用链跑、只活在本对象的 jobs Map 里:发起它的 turn 结束后,
-   * SessionTurnActivityTracker、loopback 模型活动、card-action 跟踪器全都看不到它,而
-   * forceQuit() 会连 Ghost Node runtime 一起 destroyAll —— 正在生成的图 / 视频直接没了。
+   * 给「这个破坏性动作会打断什么」这类全局判定用(更新重启前的阻断探针)。两半状态各自独立
+   * 维护,只查一半就等于漏一半:
+   *  - `jobs`:mode:'submit' 的异步图 / 视频生成。由 `void runExec()` 脱离调用链跑,发起它的
+   *    turn 结束后就没有任何 turn 级信号还亮着。
+   *  - `inflight`:同步代办的 per-ghost 在途计数(不带 mode:'submit' 的 gen_image / gen_video、
+   *    明确不进会话的 oneshot_text)。插件面板发起的请求不一定伴随 turn 或 card-action,
+   *    所以同样可能所有其它探针都不命中。
+   *
+   * 两者都会被 forceQuit() 连着 Ghost Node runtime 一起 destroyAll —— 正在生成的付费结果
+   * 直接丢掉。所以这里给的是「所有 Cindy slot 在途工作」的统一快照,而不是某一种。
    */
-  anyAsyncJobRunning(): boolean {
+  anyInflightWork(): boolean {
     for (const job of this.jobs.values()) {
       if (job.status === 'running') return true;
+    }
+    for (const count of this.inflight.values()) {
+      if (count > 0) return true;
     }
     return false;
   }

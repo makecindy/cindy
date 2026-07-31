@@ -1307,3 +1307,60 @@ describe('快问快答(oneshot_text)', () => {
     });
   });
 });
+
+/**
+ * 更新重启前的阻断探针要问「Cindy slot 现在有没有在干活」。两半状态各自独立记账
+ * (异步 jobs / 同步 inflight),只查一半就会漏一半 —— 而漏掉的后果是 forceQuit()
+ * 连 Ghost Node runtime 一起销毁,正在生成的付费结果直接丢掉。
+ */
+describe('anyInflightWork（更新重启阻断探针）', () => {
+  it('空闲时为 false', () => {
+    const { slot } = makeSlot();
+    expect(slot.anyInflightWork()).toBe(false);
+  });
+
+  it('同步代办在途期间为 true，结算后回到 false', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const { slot } = makeSlot({
+      generateImage: vi.fn(async () => {
+        // 请求已计入 inflight、但还没结算的那一刻。
+        expect(slot.anyInflightWork()).toBe(true);
+        await gate;
+        return { buffer: new Uint8Array([1]), mimeType: 'image/png' };
+      }),
+    } as unknown as Partial<CindySlotDeps>);
+
+    const pending = slot.handleModelRequest('art', REQ);
+    release();
+    await pending;
+    expect(slot.anyInflightWork()).toBe(false);
+  });
+
+  // 异步提交只对视频类开放（图像代办秒级完成，走同步等待）。
+  it('异步视频代办（mode:submit）受理后为 true', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const { slot } = makeSlot({
+      generateVideo: vi.fn(async () => {
+        await gate;
+        return {
+          buffer: new Uint8Array([1]),
+          mimeType: 'video/mp4',
+          videoParams: { durationSeconds: 4, resolution: '720p', ratio: '16:9', fps: 24 },
+        };
+      }),
+    } as unknown as Partial<CindySlotDeps>);
+
+    const res = await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'gen_video',
+      prompt: '一只猫奔跑',
+      mode: 'submit',
+    });
+    expect(res).toMatchObject({ ok: true, status: 'running' });
+    // 受理即返回，job 仍在途 —— 此时没有任何 turn 级信号还亮着。
+    expect(slot.anyInflightWork()).toBe(true);
+    release();
+  });
+});

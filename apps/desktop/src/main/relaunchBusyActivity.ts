@@ -18,9 +18,10 @@
  *      所以永远点不亮来源 2 的 loopback 信号(useBackgroundBashTasks.ts 的头注释明写这一点);
  *      也不折算 makerChatStore 的 running,所以来源 1 同样看不到。快照来源是每个 live session
  *      的 listBackgroundTasks()
- *   6. Cindy slot 的异步代办 —— mode:'submit' 的图片 / 视频生成。cindySlot.ts 用
- *      `void runExec()` 脱离调用链跑,job 只活在 GhostCindySlot 自己的 jobs Map 里,发起它的
- *      turn 结束后前五个来源全看不到
+ *   6. Cindy slot 的在途代办 —— 异步(mode:'submit' 的视频生成,`void runExec()` 脱链跑)与
+ *      同步(gen_image / gen_video 的同步等待、不进会话的 oneshot_text)两半,在 GhostCindySlot
+ *      里分别记在 jobs 与 inflight 两个 Map。插件面板发起的请求还可能完全不伴随 turn 或
+ *      card-action,所以前五个来源都可能不命中
  *
  * 新增第 7 个来源时改这一个函数,不必再去翻每个调用点。
  *
@@ -60,9 +61,9 @@ export interface RelaunchBusyActivitySources {
    */
   anyBackgroundBashRunning: () => boolean;
   /**
-   * 是否有任意 Cindy slot 异步代办(mode:'submit' 的图片 / 视频生成)在途。
-   * **必须单独查**:这些 job 脱离调用链执行、只记在 GhostCindySlot 的私有 jobs Map 里,
-   * 发起 turn 结束后其它来源全看不到,而 forceQuit() 会连 Ghost Node runtime 一起销毁。
+   * 是否有任意 Cindy slot 在途代办(异步 jobs + 同步 inflight 两半都算)。
+   * **必须单独查**:两半各自独立记账、都可能不伴随 turn 或 card-action,而 forceQuit() 会连
+   * Ghost Node runtime 一起销毁 —— 正在生成的付费结果直接丢掉。
    */
   anyCindySlotJobRunning: () => boolean;
   /**

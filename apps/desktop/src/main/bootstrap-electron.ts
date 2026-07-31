@@ -3832,8 +3832,9 @@ const registerIpcHandlers = () => {
           getMakerCore()
             .listActiveSessions()
             .some((session) => session.listBackgroundTasks().length > 0),
-        // mode:'submit' 的图片 / 视频生成脱离调用链跑,只记在 GhostCindySlot 的 jobs Map 里。
-        anyCindySlotJobRunning: () => getGhostCindySlot().anyAsyncJobRunning(),
+        // Cindy slot 的全部在途工作:异步(mode:'submit' 的图 / 视频)与同步代办各自独立记账,
+        // 都可能不伴随任何 turn 或 card-action,只查一半就漏一半。
+        anyCindySlotJobRunning: () => getGhostCindySlot().anyInflightWork(),
         // script 模式 / pre-run hook 阶段的 run 不创建 session,内存来源看不到它们。
         anySchedulerRunRunning: () =>
           readUpdateRelaunchScheduleBusy(getScheduleStorageIfInitialized()),
