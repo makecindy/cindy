@@ -1333,6 +1333,9 @@ export class DeviceLinkClient {
           const peer = this.getPeerTransport(env.src);
           peer.linkReady = false;
           peer.explicitlyClosed = true;
+          // 对端关闭与本地 closeLink 语义对称：撤掉 streaming 可靠层，
+          // 后续不依赖 link-open 的 listing/control invoke 可回退 legacy。
+          peer.reliable = false;
           peer.remoteStreamId = null;
           peer.remoteBaseSeq = 1;
           peer.receive.clear();

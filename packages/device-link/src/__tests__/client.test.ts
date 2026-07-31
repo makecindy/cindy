@@ -634,6 +634,26 @@ describe('DeviceLinkClient', () => {
     });
 
     await expect(invoke).rejects.toMatchObject({ code: 'NOT_CONNECTED', inFlight: true });
+
+    const listing = h.client.invoke('dev-b', { channel: 'local-db:sessions:list', args: [] });
+    const sentListing = h.current().sent.at(-1)!;
+    expect(sentListing).toMatchObject({
+      kind: 'invoke',
+      dst: 'dev-b',
+      payload: { channel: 'local-db:sessions:list', args: [] },
+    });
+    expect(parseTransportPayload(sentListing.payload)).toBeNull();
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke-result',
+      id: sentListing.id,
+      src: 'dev-b',
+      payload: { ok: true, result: ['session-after-peer-close'] },
+    });
+    await expect(listing).resolves.toMatchObject({
+      ok: true,
+      result: ['session-after-peer-close'],
+    });
     h.client.stop();
   });
 
