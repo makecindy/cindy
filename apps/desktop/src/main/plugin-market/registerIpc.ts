@@ -1,7 +1,6 @@
 import { ipcMain } from 'electron';
 
 import { isIpcError } from '../../shared/ipc-errors.js';
-import { isGhostInstallApprovalToken } from '../../shared/ghost.js';
 import { setGhostUninstallLedgerPreparer } from '../cindy-brain/index.js';
 import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
@@ -59,28 +58,14 @@ export function registerPluginMarketIpc(): void {
         typeof options === 'object' && options !== null
           ? (options as {
               expectedReleaseId?: unknown;
-              expectedInstalledApproval?: unknown;
               allowPermissionExpansion?: unknown;
             })
           : null;
       const expectedReleaseId = requireString(obj?.expectedReleaseId, 'expectedReleaseId');
-      const expectedInstalledApproval = obj?.expectedInstalledApproval;
-      if (
-        expectedInstalledApproval !== undefined &&
-        !isGhostInstallApprovalToken(expectedInstalledApproval)
-      ) {
-        throwIpcError(
-          'INVALID_PARAMS',
-          'expectedInstalledApproval must come from ghosts:list',
-        );
-      }
       const allowPermissionExpansion = obj?.allowPermissionExpansion === true;
       return invokePluginMarket(() =>
         service().install(requireString(pluginId, 'pluginId'), {
           expectedReleaseId,
-          ...(expectedInstalledApproval !== undefined
-            ? { expectedInstalledApproval }
-            : {}),
           allowPermissionExpansion,
         }),
       );

@@ -64,12 +64,7 @@ function ghost(id: string, opts: { enabled?: boolean; position?: 'left' | 'tab' 
       ...(opts.position !== undefined ? { position: opts.position } : {}),
     },
   };
-  return {
-    manifest,
-    dir: `/fake/${id}`,
-    enabled: opts.enabled ?? true,
-    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
-  };
+  return { manifest, dir: `/fake/${id}`, enabled: opts.enabled ?? true };
 }
 
 function makeHarness(detachableIds: Set<string>) {

@@ -867,10 +867,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('ghosts:install', lizFilePath, opts),
     update: (
       lizFilePath: string,
-      opts: {
-        expectedPackageSha256: string;
-        expectedInstalledApproval: string;
-      },
+      opts: { expectedPackageSha256: string },
     ): Promise<{ ghost: unknown }> =>
       ipcRenderer.invoke('ghosts:update', lizFilePath, opts),
     cindyPrefsSync: (
@@ -1016,11 +1013,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('plugin-market:detail', pluginId),
     install: (
       pluginId: string,
-      options: {
-        expectedReleaseId: string;
-        expectedInstalledApproval?: string;
-        allowPermissionExpansion?: boolean;
-      },
+      options: { expectedReleaseId: string; allowPermissionExpansion?: boolean },
     ): Promise<{ ghost: import('../shared/ghost').InstalledGhost }> =>
       ipcRenderer.invoke('plugin-market:install', pluginId, options),
     uninstall: (pluginId: string): Promise<{ ok: true }> =>

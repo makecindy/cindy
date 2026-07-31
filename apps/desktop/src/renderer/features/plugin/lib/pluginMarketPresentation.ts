@@ -5,7 +5,6 @@
  * public Plugin is installed by default is an installation policy, not a source.
  * An installed Ghost without a matching market record remains local.
  */
-import type { GhostInstallApproval } from '../../../../shared/ghost';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
 export type PluginPresentationOrigin =
@@ -39,36 +38,6 @@ export function pluginUpdateForInstalledVersion(
   item: PluginMarketItem | null | undefined,
 ): PluginMarketItem | null {
   return item?.installState === 'update-available' ? item : null;
-}
-
-/**
- * Whether the market install flow may run against an already-installed Plugin.
- *
- * A pending release is the usual case. The same release is also allowed when the
- * install carries no Host approval: re-installing that exact release is how such
- * an install gets reviewed again, and the flow shows every permission as newly
- * requested. An approved install at the current release has nothing to review.
- */
-export function marketReviewTargetsInstalledGhost(
-  item: Pick<PluginMarketItem, 'installState'> | null | undefined,
-  approvalState: GhostInstallApproval['state'] | undefined,
-): boolean {
-  if (item?.installState === 'update-available') return true;
-  return item?.installState === 'installed' && approvalState !== undefined && approvalState !== 'approved';
-}
-
-/**
- * Where an unapproved install gets reviewed again. Market-owned installs replay
- * the market confirmation; anything else needs the user to point at a `.cindy`
- * package. Both routes end in the same permission confirmation — there is no
- * path that restores an install without one.
- */
-export function ghostReapprovalRoute(
-  item: Pick<PluginMarketItem, 'installState'> | null | undefined,
-): 'market' | 'local-package' {
-  return item?.installState === 'installed' || item?.installState === 'update-available'
-    ? 'market'
-    : 'local-package';
 }
 
 /**

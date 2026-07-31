@@ -27,12 +27,7 @@ function ghost(id: string, panel?: GhostManifest['panel'], enabled = true): Inst
     slots: ['panel'],
     panel: panel ?? { html: 'panel.html', position: 'tab' },
   };
-  return {
-    manifest,
-    dir: `/fake/${id}`,
-    enabled,
-    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
-  };
+  return { manifest, dir: `/fake/${id}`, enabled };
 }
 
 afterEach(() => {

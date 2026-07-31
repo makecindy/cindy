@@ -99,7 +99,6 @@ const detail: GhostPluginDetail = {
   version: '1.2.3',
   enabled: true,
   canUse: true,
-  approvalState: 'approved',
   author: 'XD',
   contents: ['code'],
   permissions: [],
@@ -146,7 +145,6 @@ describe('Ghost plugin detail sections', () => {
         onToggle={vi.fn()}
         onUse={vi.fn()}
         onUpdate={vi.fn()}
-        onReapprove={vi.fn()}
         onUninstall={vi.fn()}
         toggleDisabled={false}
       />,
@@ -195,7 +193,6 @@ describe('Ghost plugin detail sections', () => {
         onToggle={vi.fn()}
         onUse={vi.fn()}
         onUpdate={vi.fn()}
-        onReapprove={vi.fn()}
         onUninstall={vi.fn()}
         toggleDisabled={false}
         onIconLoadError={onIconLoadError}
@@ -226,7 +223,6 @@ describe('Ghost plugin detail sections', () => {
         onToggle={vi.fn()}
         onUse={vi.fn()}
         onUpdate={onUpdate}
-        onReapprove={vi.fn()}
         updateVersion={detail.version}
         onUninstall={vi.fn()}
         toggleDisabled={false}
@@ -240,56 +236,6 @@ describe('Ghost plugin detail sections', () => {
 
     expect(onUpdate).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button', { name: 'settings.ghosts.market.updateTo' })).toBeNull();
-  });
-
-  it.each([
-    ['legacy-unapproved', 'settings.ghosts.reapproval.bodyLegacy'],
-    ['invalid', 'settings.ghosts.reapproval.bodyInvalid'],
-  ] as const)('explains the %s approval state and routes to a fresh review', (approvalState, bodyKey) => {
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
-    const onReapprove = vi.fn();
-    const onUpdate = vi.fn();
-    const onToggle = vi.fn();
-    render(
-      <GhostPluginDetailView
-        ghost={null}
-        detail={{ ...detail, approvalState }}
-        panelStatus="Docked"
-        onBack={vi.fn()}
-        onToggle={onToggle}
-        onUse={vi.fn()}
-        onUpdate={onUpdate}
-        onReapprove={onReapprove}
-        updateVersion="1.2.4"
-        onUninstall={vi.fn()}
-        toggleDisabled={false}
-      />,
-    );
-
-    expect(screen.getByText('settings.ghosts.reapproval.noticeTitle')).toBeTruthy();
-    expect(screen.getByText(bodyKey)).toBeTruthy();
-    // 缺批准时"使用"与"更新"都不该顶在最前面,主动作是重新确认。
-    expect(screen.queryByRole('button', { name: 'settings.ghosts.market.updateTo' })).toBeNull();
-    expect(
-      (screen.getByRole('button', { name: 'settings.ghosts.detail.useAction' }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true);
-
-    const toggle = screen.getByRole('switch') as HTMLButtonElement;
-    expect(toggle.disabled).toBe(true);
-    fireEvent.click(toggle);
-    expect(onToggle).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.reapproval.action' }));
-    expect(onReapprove).toHaveBeenCalledTimes(1);
-    expect(onUpdate).not.toHaveBeenCalled();
   });
 
   it('disables every market update entry while an update is busy', async () => {
@@ -312,7 +258,6 @@ describe('Ghost plugin detail sections', () => {
         onToggle={vi.fn()}
         onUse={vi.fn()}
         onUpdate={onUpdate}
-        onReapprove={vi.fn()}
         updateLabel="Update from market"
         updateVersion="1.2.4"
         updateBusy
@@ -354,7 +299,6 @@ describe('Ghost plugin detail sections', () => {
       onUse: vi.fn(),
       onUpdate: vi.fn(),
       onUninstall: vi.fn(),
-      onReapprove: vi.fn(),
       toggleDisabled: false,
     };
 

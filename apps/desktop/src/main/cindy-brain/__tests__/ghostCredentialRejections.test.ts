@@ -9,6 +9,7 @@ import {
   createGhostCredentialRejectionsStore,
   ghostConnectionRejectionRef,
 } from '../ghostCredentialRejections';
+import { foldRejectedSecretsIntoAssessment } from '../ghostSetupStatus';
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-cred-rej-'));
 const filePath = path.join(tmpDir, 'ledger.json');
@@ -161,6 +162,58 @@ describe('applyGhostSetupChangeToRejections 兜底清账', () => {
         ref: 'brave_api_key',
       }),
     ).toBe(false);
+    expect(store.rejectedKeys('web-search')).toEqual(['brave_api_key']);
+  });
+});
+
+/**
+ * 存量安装升级契约(plugin-security-and-authoring.md 第 5 节红线)。
+ *
+ * 本台账是这条链路唯一新增的落盘物。老版本的 userData 里没有这个文件,升级后
+ * 用户什么都不做时必须仍然照旧可用——空账、不降级、不要求重新配置。
+ */
+describe('存量安装升级:台账缺失即空账,不降级已配置的插件', () => {
+  it('旧布局(台账文件不存在)→ 空账,已满足的判定原样放行', () => {
+    expect(fs.existsSync(filePath)).toBe(false); // 老版本 userData 的真实形态
+    const store = createGhostCredentialRejectionsStore({ filePath });
+    expect(store.rejectedKeys('web-search')).toEqual([]);
+    // 读一次不会顺手把文件创建出来(老版本回退后看到的目录形态不变)
+    expect(fs.existsSync(filePath)).toBe(false);
+  });
+
+  it('无台账时折算是恒等变换:ready 不会被折成 required', () => {
+    const store = createGhostCredentialRejectionsStore({ filePath });
+    const assessment = {
+      state: 'ready' as const,
+      revision: 0,
+      groups: [
+        {
+          id: 'manifest:1',
+          mode: 'any_of' as const,
+          items: [
+            {
+              ref: 'secret:brave_api_key',
+              kind: 'secret' as const,
+              label: 'Brave API Key',
+              state: 'satisfied' as const,
+              actions: [],
+            },
+          ],
+        },
+      ],
+    };
+    expect(
+      foldRejectedSecretsIntoAssessment(assessment, store.rejectedKeys('web-search')),
+    ).toBe(assessment);
+  });
+
+  it('未知字段被忽略而不判损坏(新版写出的台账回退到旧版仍可读)', () => {
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify({ ghosts: { 'web-search': ['brave_api_key'] }, futureField: { v: 2 } }),
+      'utf8',
+    );
+    const store = createGhostCredentialRejectionsStore({ filePath });
     expect(store.rejectedKeys('web-search')).toEqual(['brave_api_key']);
   });
 });

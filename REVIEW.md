@@ -71,6 +71,15 @@ P1／P2。按下表转换，**不要**把仓库口径的 P2 改写成评论里�
   usage 计量。见 `docs/dev-rules/maker-core-and-agent-behavior.md`。
 - **插件沙箱**：`.cindy` 运行时的权限、能力 slot、网络／凭证／文件交接。见
   `docs/dev-rules/plugin-security-and-authoring.md`。
+- **存量插件兼容（红线，优先级等同凭证与安全）**：改了批准 receipt 的 schema／必填字段／
+  落盘位置、指纹或摘要编码、manifest 校验、slot 形态、技能快照与链接命名、安装根／状态根
+  路径、`.cindy` 包格式、管子协议或内置插件 id 时，必须按用户**升级后什么都不做**来判：
+  已装、已批准、已启用的插件是否照旧可用。新增必填字段或新校验只有拒绝分支、没有从旧版
+  授权事实 backfill 的迁移路径，就是 **P1（不改不能合）**——"老数据缺新字段"是历史状态，
+  不是篡改。自动迁移做不到时，必须有明确提示 + 一次性批量恢复入口（不能只留"去市场
+  重装"）、不清掉用户已存的凭证与偏好、且新状态被旧版本读到不判损坏。还要看有没有基于
+  旧布局 fixture 的升级用例——只测全新安装不算覆盖，这类回归只在存量数据上出现。判据见
+  `docs/dev-rules/plugin-security-and-authoring.md` 第 5 节与 Review 清单 6.6。
 - **UI 双模式**：新增或修改的界面必须同时实现 Light 与 Dark，颜色走语义 token；
   只适配一种模式的硬编码或条件补丁视为未完成。见 `docs/design-rules/DESIGN.md`。
 - **跨平台**：macOS 与 Windows 的路径、进程、文件系统差异。

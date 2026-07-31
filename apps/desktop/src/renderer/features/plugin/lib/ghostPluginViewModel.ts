@@ -9,7 +9,6 @@
 import {
   ghostContentKeys,
   ghostPermissionItems,
-  type GhostInstallApproval,
   type GhostPermissionItem,
   type GhostTrustInfo,
   type GhostToolDecl,
@@ -24,11 +23,6 @@ export interface GhostPluginListItem {
   version: string;
   enabled: boolean;
   canUse: boolean;
-  /**
-   * Host 是否持有一次明确的安装/更新确认。非 `approved` 的安装不可运行,列表与
-   * 详情都必须如实说明并给出重新确认入口,而不是让它看起来只是"被关掉了"。
-   */
-  approvalState: GhostInstallApproval['state'];
   trust?: GhostTrustInfo;
   iconDataUrl?: string;
 }
@@ -171,7 +165,6 @@ export function toGhostPluginListItem(
     version: manifest.version,
     enabled: ghost.enabled,
     canUse: Boolean(manifest.command),
-    approvalState: ghost.approval.state,
     trust: ghost.trust ?? {
       level: 'unverified',
       publisherSigned: false,

@@ -9,10 +9,6 @@ const runtime = vi.hoisted(() => ({
     manifest: Record<string, unknown>;
     dir: string;
     enabled: boolean;
-    approval?: {
-      state: 'approved';
-      revision: string;
-    };
   }>,
   install: vi.fn(),
   uninstall: vi.fn(),
@@ -49,16 +45,7 @@ vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('../../cindy-brain/index.js', () => ({
-  getGhostManager: () => ({
-    list: () =>
-      runtime.ghosts.map((ghost) => ({
-        ...ghost,
-        approval: ghost.approval ?? {
-          state: 'approved',
-          revision: '00000000-0000-4000-8000-000000000001',
-        },
-      })),
-  }),
+  getGhostManager: () => ({ list: () => runtime.ghosts }),
   isGhostAvailableForActiveSession: vi.fn(() => runtime.accountGhostAvailable),
   installOrUpdateMarketGhostPackage: runtime.install,
   isBuiltinGhostRemovedByUser: (id: string) => runtime.builtinRemoved.has(id),
@@ -76,8 +63,6 @@ import type { PluginMarketApi } from '../api';
 
 const roots: string[] = [];
 const PLUGIN_ID = `c${'a'.repeat(24)}`;
-const APPROVED_INSTALL_TOKEN =
-  'approved:00000000-0000-4000-8000-000000000001';
 
 afterEach(() => {
   runtime.ghosts = [];
@@ -705,7 +690,6 @@ describe('PluginMarketService migration and defaultInstall', () => {
     await expect(
       h.service.install(item.id, {
         expectedReleaseId: item.currentRelease.id,
-        expectedInstalledApproval: APPROVED_INSTALL_TOKEN,
         allowPermissionExpansion: true,
       }),
     ).resolves.toMatchObject({
@@ -741,77 +725,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     });
 
     await expect(
-      h.service.install(item.id, {
-        expectedReleaseId: item.currentRelease.id,
-        expectedInstalledApproval: APPROVED_INSTALL_TOKEN,
-      }),
-    ).rejects.toThrow('[PRECONDITION_FAILED]');
-    expect(runtime.install).not.toHaveBeenCalled();
-  });
-
-  it('rejects a first install when the same Plugin appears during download', async () => {
-    const item = summary();
-    const h = harness([item]);
-    h.api.download.mockImplementationOnce(async () => {
-      runtime.ghosts = [
-        {
-          manifest: manifest(),
-          dir: '/userData/cindy-brain/cindy-test',
-          enabled: true,
-        },
-      ];
-      return {
-        url: 'https://downloads.test.invalid/plugin.cindy',
-        expiresAt: '2099-01-01T00:00:00.000Z',
-        sha256: item.currentRelease.sha256,
-        sizeBytes: item.currentRelease.sizeBytes,
-      };
-    });
-
-    await expect(
-      h.service.install(item.id, {
-        expectedReleaseId: item.currentRelease.id,
-        expectedInstalledApproval: APPROVED_INSTALL_TOKEN,
-      }),
-    ).rejects.toThrow('[PRECONDITION_FAILED]');
-    expect(runtime.install).not.toHaveBeenCalled();
-  });
-
-  it('rejects an update when the approved revision changes during download', async () => {
-    const item = summary({
-      currentRelease: { ...summary().currentRelease, version: '2.0.0' },
-    });
-    const h = harness([item]);
-    h.ledger.upsertInstallation({
-      ...recordForTest(item),
-      releaseId: 'release-0',
-      version: '1.0.0',
-    });
-    runtime.ghosts = [
-      {
-        manifest: manifest('cindy-test', '1.0.0'),
-        dir: '/userData/cindy-brain/cindy-test',
-        enabled: true,
-      },
-    ];
-    h.api.download.mockImplementationOnce(async () => {
-      runtime.ghosts[0]!.approval = {
-        state: 'approved',
-        revision: '00000000-0000-4000-8000-000000000002',
-      };
-      return {
-        url: 'https://downloads.test.invalid/plugin.cindy',
-        expiresAt: '2099-01-01T00:00:00.000Z',
-        sha256: item.currentRelease.sha256,
-        sizeBytes: item.currentRelease.sizeBytes,
-      };
-    });
-
-    await expect(
-      h.service.install(item.id, {
-        expectedReleaseId: item.currentRelease.id,
-        expectedInstalledApproval: APPROVED_INSTALL_TOKEN,
-      }),
+      h.service.install(item.id, { expectedReleaseId: item.currentRelease.id }),
     ).rejects.toThrow('[PRECONDITION_FAILED]');
     expect(runtime.install).not.toHaveBeenCalled();
   });

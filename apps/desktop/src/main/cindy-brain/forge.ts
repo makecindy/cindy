@@ -15,7 +15,6 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { promisify } from 'node:util';
 
 import JSZip from 'jszip';
 
@@ -25,12 +24,7 @@ import {
   validateGhostManifest,
   type GhostManifest,
 } from '../../shared/ghost.js';
-import {
-  classifyGhostDirEntry,
-  resolveGhostContentPath,
-} from './ghostContentTree.js';
 import { validateGhostLocaleResourcesInDirectory } from './ghostLocaleFiles.js';
-import { isPathInsideDir } from './dirDeposit.js';
 import { checkSkillMdConsistency } from './skillSlot.js';
 
 /** 与 GhostManager 装入侧同一量级的上限(打包侧提前拦,fail fast)。 */
@@ -53,13 +47,7 @@ export type ForgePackResult =
   | { ok: true; cindyPath: string; manifest: GhostManifest }
   | {
       ok: false;
-      errorCode:
-        | 'DIR_NOT_FOUND'
-        | 'SOURCE_IS_INSTALLED_PLUGIN'
-        | 'MANIFEST_INVALID'
-        | 'ENTRY_MISSING'
-        | 'TOO_LARGE'
-        | 'INTERNAL';
+      errorCode: 'DIR_NOT_FOUND' | 'MANIFEST_INVALID' | 'ENTRY_MISSING' | 'TOO_LARGE' | 'INTERNAL';
       message: string;
     };
 
@@ -408,25 +396,14 @@ function hasFsErrorCode(err: unknown, code: string): boolean {
 }
 
 /**
- * realpath 一律走 `.native` 变体:与 dirDeposit / ghostLocalPathGrant 等其余钳制点
- * 同一口径(受管根判定的最终比较虽已做 win32 大小写折叠,但解析器本身也不该是
- * 全仓唯一的例外)。`fs.promises.realpath` 没有 native 变体,promisify 一次。
- */
-const realpathNative = promisify(fs.realpath.native);
-
-/**
  * 创建一份不覆盖任何现有内容的插件源码骨架。
  *
  * 文件先写进同目录临时文件夹，全部成功后再一次 rename 到目标；目标已经
  * 存在时直接拒绝，因此并发调用也不会把用户原文件覆盖一半。
- *
- * `forbiddenRootDirs` 与打包侧同源(Host 受管的安装根 + 批准状态根):骨架也不
- * 许落进已安装插件或状态目录 —— 那既会改写已批准插件的内容(随包种子还会因此
- * 翻转播种指纹被整目录换回),又会诱导作者继续在安装目录里改代码。
  */
 export async function scaffoldGhostDir(
   input: ForgeScaffoldInput,
-  options?: { sessionWorkdir?: string | null; forbiddenRootDirs?: readonly string[] },
+  options?: { sessionWorkdir?: string | null },
 ): Promise<ForgeScaffoldResult> {
   const template = input.template;
   if (!FORGE_SCAFFOLD_TEMPLATES.includes(template)) {
@@ -448,51 +425,33 @@ export async function scaffoldGhostDir(
   // 就取「已存在的最深祖先」的真身再拼回剩余段。
   let realWorkdir: string;
   try {
-    realWorkdir = await realpathNative(path.resolve(workdir));
+    realWorkdir = await fs.promises.realpath(path.resolve(workdir));
   } catch {
     return { ok: false, errorCode: 'INVALID_INPUT', message: '会话工作目录不存在,无法确定骨架输出位置' };
   }
-  // 「已存在的最深祖先取真身再拼回剩余段」与打包侧受管根解析共用同一个 helper ——
-  // 这段 walk 原来在这里手写了一份,同一判定两份实现正是这条链路反复出问题的形态。
-  let realTarget: string;
-  try {
-    realTarget = await resolveThroughExistingAncestor(resolved);
-  } catch (err) {
-    return {
-      ok: false,
-      errorCode: 'INTERNAL',
-      message: err instanceof Error ? err.message : String(err),
-    };
+  let realAncestor = resolved;
+  const pendingSegments: string[] = [];
+  for (;;) {
+    try {
+      realAncestor = await fs.promises.realpath(realAncestor);
+      break;
+    } catch (err) {
+      if (!hasFsErrorCode(err, 'ENOENT')) {
+        return {
+          ok: false,
+          errorCode: 'INTERNAL',
+          message: err instanceof Error ? err.message : String(err),
+        };
+      }
+      const parent = path.dirname(realAncestor);
+      if (parent === realAncestor) break; // 到根了,根一定存在,防御性兜底
+      pendingSegments.unshift(path.basename(realAncestor));
+      realAncestor = parent;
+    }
   }
+  const realTarget = path.join(realAncestor, ...pendingSegments);
   if (!realTarget.startsWith(`${realWorkdir}${path.sep}`) && realTarget !== realWorkdir) {
     return { ok: false, errorCode: 'INVALID_INPUT', message: 'dir 必须在当前会话工作目录内' };
-  }
-  for (const forbiddenRoot of options?.forbiddenRootDirs ?? []) {
-    let resolvedForbiddenRoot: string;
-    try {
-      resolvedForbiddenRoot = await resolveThroughExistingAncestor(forbiddenRoot);
-    } catch (err) {
-      return {
-        ok: false,
-        errorCode: 'INTERNAL',
-        message: err instanceof Error ? err.message : String(err),
-      };
-    }
-    // 与打包侧同形的双向判定。祖先方向这一半在这里是 defense-in-depth 而不是修洞:
-    // 骨架目标若是受管根的祖先,该目录必然已存在,最终 rename 会以 TARGET_EXISTS 拒掉。
-    // 仍然写出来,是为了不让"上游守卫够不够用"依赖读者去推断下游 rename 的语义 ——
-    // 判定散落且各自只覆盖一半,正是这条链路反复出问题的成因。
-    if (
-      isPathInsideDir(resolvedForbiddenRoot, realTarget) ||
-      isPathInsideDir(realTarget, resolvedForbiddenRoot)
-    ) {
-      return {
-        ok: false,
-        errorCode: 'INVALID_INPUT',
-        message:
-          'dir 不能落在已安装插件目录或 Host 管理的状态目录内,也不能是它们的上级目录;请在工作目录里换一个独立的作者目录',
-      };
-    }
   }
   const files = scaffoldFiles(input);
   // 显式收窄而非 as 断言:manifest 恒为 JSON 字符串,二进制项(占位图标)另存;
@@ -582,10 +541,7 @@ export async function scaffoldGhostDir(
  * 同名覆盖——同 id 同版本重打包语义上就是同一个包),用户在自己的意识目录里
  * 就能拿到成品;出错返回结构化分类,agent 按 message 修源码即可,不抛异常。
  */
-export async function packGhostDir(
-  dir: string,
-  options: { forbiddenRootDirs?: readonly string[] } = {},
-): Promise<ForgePackResult> {
+export async function packGhostDir(dir: string): Promise<ForgePackResult> {
   try {
     let stat: fs.Stats;
     try {
@@ -595,25 +551,6 @@ export async function packGhostDir(
     }
     if (!stat.isDirectory()) {
       return { ok: false, errorCode: 'DIR_NOT_FOUND', message: `不是目录:${dir}` };
-    }
-    const realSourceDir = await realpathNative(dir);
-    for (const forbiddenRoot of options.forbiddenRootDirs ?? []) {
-      const resolvedForbiddenRoot = await resolveThroughExistingAncestor(forbiddenRoot);
-      // 判定必须**双向**:源目录落在受管根内要拒(拿已安装插件当源码),源目录是受管根的
-      // 祖先也要拒 —— 后者下面的递归打包会走进 cindy-brain / ghost-install-state,把
-      // 已安装插件字节、批准 receipt 与技能快照一并打进 .cindy。单向判定时,只要在
-      // owner 数据目录里放一个 ghost.json 就能触发。
-      if (
-        isPathInsideDir(resolvedForbiddenRoot, realSourceDir) ||
-        isPathInsideDir(realSourceDir, resolvedForbiddenRoot)
-      ) {
-        return {
-          ok: false,
-          errorCode: 'SOURCE_IS_INSTALLED_PLUGIN',
-          message:
-            'Forge source must not be an installed Plugin or a Host-managed state directory; copy the source into the current session workdir first',
-        };
-      }
     }
 
     // 1) 清单先行:与装入侧同一套校验,错在打包期就报清楚。
@@ -655,16 +592,10 @@ export async function packGhostDir(
     for (const item of manifest.skill?.items ?? []) mustExist.push(`${item.dir}/SKILL.md`);
     for (const rel of mustExist) {
       try {
-        // 逐段解析(判据同装入侧 ghostContentTree):`stat` 会穿透链接,让"声明的
-        // 文件是链接"通过检查,而下面的收集步按类型跳过链接 —— 包就少了这个文件,
-        // 错误延迟到用户装入时才现形。这里直接拒,报清楚。
-        await resolveGhostContentPath(dir, rel, { expect: 'file', label: 'forge source' });
+        const st = await fs.promises.stat(path.join(dir, rel));
+        if (!st.isFile()) throw new Error('not a file');
       } catch {
-        return {
-          ok: false,
-          errorCode: 'ENTRY_MISSING',
-          message: `清单声明的文件不存在或不是普通文件(链接不可打包):${rel}`,
-        };
+        return { ok: false, errorCode: 'ENTRY_MISSING', message: `清单声明的文件不存在:${rel}` };
       }
     }
 
@@ -720,16 +651,10 @@ export async function packGhostDir(
           };
         }
         seenPackPaths.add(foldedRel);
-        // 类型判定走 ghostContentTree(一律 lstat,不信 Dirent 类型位):非普通条目
-        // 既不递归也不收集 —— 递归进一条指向 cindy-brain / ghost-install-state 的
-        // 链接就会把已安装插件字节、批准 receipt 与技能快照打进 .cindy。源目录与
-        // 受管根的**双向**包含判定挡住了"源目录是受管根祖先"那一半,这里挡的是
-        // "源目录里放一条链接指进去"那一半,两半都要在。
-        const kind = await classifyGhostDirEntry(abs);
-        if (kind === 'directory') {
+        if (e.isDirectory()) {
           const bad = await walk(abs, rel);
           if (bad) return bad;
-        } else if (kind === 'file') {
+        } else if (e.isFile()) {
           files.push({ rel, abs });
           totalBytes += (await fs.promises.stat(abs)).size;
           if (files.length > maxFiles) {
@@ -774,27 +699,6 @@ export async function packGhostDir(
       errorCode: 'INTERNAL',
       message: err instanceof Error ? err.message : String(err),
     };
-  }
-}
-
-/**
- * Resolve symlinks/junctions in the existing prefix while retaining a
- * non-existent tail. This keeps managed roots comparable before first use.
- */
-async function resolveThroughExistingAncestor(inputPath: string): Promise<string> {
-  let cursor = path.resolve(inputPath);
-  const tail: string[] = [];
-  while (true) {
-    try {
-      const real = await realpathNative(cursor);
-      return path.join(real, ...tail);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      const parent = path.dirname(cursor);
-      if (parent === cursor) return path.resolve(inputPath);
-      tail.unshift(path.basename(cursor));
-      cursor = parent;
-    }
   }
 }
 
@@ -2824,19 +2728,13 @@ if (r.ok && r.confirmed) {
 ## 7. 打包与测试
 
 1. 新插件先调 \`ghost_forge_scaffold\` 生成骨架，或把已有源码放在用户工作目录下的
-   一个文件夹里(如 \`my-ghost/\`)；脚手架目标必须是新目录，绝不覆盖已有文件，
-   也不能落在已安装插件目录或 Host 状态目录内(会被拒，理由同下一条)；
-2. **Forge 源码必须是当前会话工作目录里的独立作者目录**。已安装插件目录以及
-   Host 管理的状态目录都不是源码区，禁止直接修改、打包或用路径别名绕过；若要继续
-   开发已有插件，先把源码复制/迁出到工作目录中的新目录，再从该副本制作；
-3. 调 \`ghost_forge_pack({ dir: '<绝对路径>' })\`——校验 + 打包 + 弹装入确认框;
+   一个文件夹里(如 \`my-ghost/\`)；脚手架目标必须是新目录，绝不覆盖已有文件；
+2. 调 \`ghost_forge_pack({ dir: '<绝对路径>' })\`——校验 + 打包 + 弹装入确认框;
    产物落在源码目录里(\`<id>-<version>.cindy\`,同版本覆盖,下次打包自动跳过);
-   若返回 \`SOURCE_IS_INSTALLED_PLUGIN\`，不要重试或换大小写、软链接、junction 绕过，
-   按上一步迁出源码后再打包；
-4. **告知用户去点弹窗**(装入默认沉睡,提醒用户勾"立即开启"或到主界面侧边栏「插件」中唤醒);
-5. 改代码后重新 pack:同 id 会弹"更新 vX → vY",唤醒状态与面板位置自动保留
+3. **告知用户去点弹窗**(装入默认沉睡,提醒用户勾"立即开启"或到主界面侧边栏「插件」中唤醒);
+4. 改代码后重新 pack:同 id 会弹"更新 vX → vY",唤醒状态与面板位置自动保留
    (记得 bump ghost.json 的 version);
-6. 验证:让用户 \`$<command> <内容>\` 试一单,看聊天图卡/面板是否符合预期。
+5. 验证:让用户 \`$<command> <内容>\` 试一单,看聊天图卡/面板是否符合预期。
 
 ## 8. 发布签名与审核
 
