@@ -4147,7 +4147,7 @@
       "preparingAria": "正在准备新版本，请稍候",
       "confirmTitle": "仍有任务在运行中",
       "confirmBusyHint": "重启会中断运行中的任务",
-      "confirmButton": "仍要重启",
+      "confirmButton": "仍要重启应用",
       "cancel": "取消",
       "confirmTooltip": "仍有任务在运行中，重启会中断它",
       "cancelTooltip": "取消",

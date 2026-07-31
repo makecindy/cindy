@@ -4147,7 +4147,7 @@
       "preparingAria": "新しいバージョンを準備中、お待ちください",
       "confirmTitle": "実行中のタスクがあります",
       "confirmBusyHint": "再起動すると中断されます",
-      "confirmButton": "それでも再起動",
+      "confirmButton": "それでもアプリを再起動",
       "cancel": "キャンセル",
       "confirmTooltip": "実行中のタスクがあります — 再起動すると中断されます",
       "cancelTooltip": "キャンセル",

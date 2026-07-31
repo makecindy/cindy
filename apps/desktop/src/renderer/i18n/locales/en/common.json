@@ -4148,7 +4148,7 @@
       "preparingAria": "Preparing newer version, please wait",
       "confirmTitle": "A task is still running",
       "confirmBusyHint": "Restarting will interrupt it",
-      "confirmButton": "Restart anyway",
+      "confirmButton": "Restart App Anyway",
       "cancel": "Cancel",
       "confirmTooltip": "A task is still running — restarting will interrupt it",
       "cancelTooltip": "Cancel",

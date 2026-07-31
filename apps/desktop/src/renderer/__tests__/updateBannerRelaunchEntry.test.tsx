@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
 /**
- * UpdateBanner 的重启入口判定 —— 与关窗链路(WindowControls.handleCloseClick)同构:
- * 点入口先查 anySessionInTurn(),没有任务在跑就直接重启,有才拦一次并说明「会打断
- * 进行中的任务」。探针失败按「没有任务」处理。
+ * UpdateBanner 的重启入口判定:点入口先查 anySessionInTurn(),确认没有任务在跑才直接重启,
+ * 有任务(或探针拿不到可信答案)就拦一次并说明「会打断进行中的任务」。探针失败刻意 fail
+ * closed —— 重启会不可撤销地杀掉 in-flight turn,「无法确认」不能当成「确认没有」。
  *
  * 另一半是**不变量:一次点击的探针结论,只有在这次点击仍然有效时才能驱动副作用**。
  * 探针在飞期间 dismiss、组件卸载、status 离开 ready 都必须让它作废 —— 三条对称路径
@@ -110,7 +110,9 @@ describe('UpdateBanner relaunch entry', () => {
     expect(screen.queryByText('update.banner.confirmBusyHint')).toBeNull();
   });
 
-  it('relaunches when the busy probe throws synchronously (bridge unavailable)', async () => {
+  // 探针拿不到可信答案时 fail closed:「无法确认」不能当成「确认没有」,重启会不可撤销地
+  // 杀掉 in-flight turn。口径同 main 侧托盘退出路径的 hasActiveTurn(catch → true)。
+  it('falls back to the warning state when the busy probe throws synchronously', async () => {
     anySessionInTurn.mockImplementation(() => {
       throw new Error('electron bridge is not registered');
     });
@@ -118,8 +120,18 @@ describe('UpdateBanner relaunch entry', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
 
-    await waitFor(() => expect(relaunchToUpdate).toHaveBeenCalledTimes(1));
-    expect(screen.queryByText('update.banner.confirmBusyHint')).toBeNull();
+    await screen.findByText('update.banner.confirmBusyHint');
+    expect(relaunchToUpdate).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the warning state when the busy probe rejects', async () => {
+    anySessionInTurn.mockRejectedValue(new Error('ipc channel closed'));
+    render(<UpdateBanner isCollapsed={false} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
+
+    await screen.findByText('update.banner.confirmBusyHint');
+    expect(relaunchToUpdate).not.toHaveBeenCalled();
   });
 
   it('ignores repeat clicks while the busy probe is still in flight', async () => {

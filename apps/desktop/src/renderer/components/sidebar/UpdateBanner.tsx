@@ -7,10 +7,11 @@
  * content slot and UserInfoSection in the Sidebar shell.
  *
  * 点「立即重启」不再无条件多要一次确认:先查 anySessionInTurn(),**只有真的有任务在跑
- * 时**才就地切换成确认态,没有任务就直接重启。这与关窗链路(WindowControls 的
- * handleCloseClick)是同一套判定 —— 探针为 false(含桥不可用的 catch 兜底)就直接执行,
- * 为 true 才拦一次。原先那句「应用会自动重启」的中性二次确认纯属多一次点击、不带信息,
- * 已退役。
+ * 时**才就地切换成确认态,确认没有任务就直接重启。原先那句「应用会自动重启」的中性二次
+ * 确认纯属多一次点击、不带信息,已退役。
+ *
+ * 探针拿不到可信答案时 fail closed(当作有任务),因为重启会杀掉 in-flight turn:「无法确认」
+ * 不能当成「确认没有」。这条口径跟的是 main 侧托盘退出路径,而不是 WindowControls 关窗那半。
  *
  * 因此 confirming 态的语义收窄为**「有任务在进行中,重启会打断它」的中断警告**:标题点明
  * 状态、副标题讲后果(警告色)、主按钮「仍要重启」占据入口按钮原位(鼠标零位移),「取消」
@@ -212,10 +213,13 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   // 入口「立即重启」/ 收起态火焰按钮的点击。展开态与收起态共用一份判定:
   //   - 有任务在跑 → 进 confirming 态,把「会打断进行中的任务」这件事说清楚,由用户拍板;
   //   - 没有        → 直接重启,不再多要一次无信息量的确认。
-  // 探针失败(splash / login 阶段 handler 未注册,或桥同步 throw)按 false 处理 —— 与
-  // WindowControls.handleCloseClick 完全同构;banner 只在主界面出现,那时 handler 早已注册。
-  // main 侧的 anySessionInTurn 是纯同步 snapshot(maker-ipc/register.ts),不会因运行期
-  // 状态切换而 reject。
+  // 探针失败 = **无法确认**,不等于「没有任务」。重启会杀掉 in-flight turn,属于不可撤销的
+  // 破坏性动作,所以这里 fail closed:退化成中断警告让用户自己拍板,而不是静默重启。口径对齐
+  // main 侧托盘退出路径(bootstrap-electron.ts 的 hasActiveTurn:「A failed busy probe must
+  // not turn the tray into an unguarded exit path.」)—— 同样是「破坏性入口 + 探针不可确认」。
+  // 代价只有探针真失败时多出来的一次确认;正常路径(handler 已注册,main 侧是纯同步 snapshot)
+  // 不受影响。注意 WindowControls.handleCloseClick 的 catch 走的是 false,那条是既有行为,
+  // 本 PR 不改它,但新入口不跟随更宽松的那一半。
   //
   // await 之后的两道复核是必需的,不是防御性冗余:探针在飞期间用户可能 dismiss、组件可能
   // 卸载、已就绪补丁可能被 superseding 顶掉。少了它们,「点了稍后却重启」「装回旧补丁」
@@ -224,11 +228,12 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
     if (relaunchProbeRef.current) return;
     relaunchProbeRef.current = true;
     const epoch = relaunchEpochRef.current;
-    let hasInFlight = false;
+    // 初值取 true:探针没给出可信答案的任何路径(reject、桥同步 throw)都落在保守的那一侧。
+    let hasInFlight = true;
     try {
       hasInFlight = await window.electronAPI.anySessionInTurn();
     } catch {
-      hasInFlight = false;
+      hasInFlight = true;
     } finally {
       relaunchProbeRef.current = false;
     }
