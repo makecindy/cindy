@@ -150,6 +150,24 @@ describe('Codex system credential suppression marker', () => {
     expect(fs.existsSync(localAuth)).toBe(false);
   });
 
+  it('suppresses a matching local credential after server-side token invalidation', () => {
+    const { codexHome, systemAuth, localAuth } = fixture();
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.writeFileSync(localAuth, JSON.stringify({ tokens: { access_token: 'invalid-token' } }));
+    expect(
+      writeInvalidatedSystemCodexAuthMarker(
+        codexHome,
+        systemAuth,
+        'token_invalidated',
+        localAuth,
+      ),
+    ).toBe(true);
+
+    expect(shouldSuppressLocalCodexAuth(codexHome, localAuth)).toBe(true);
+    fs.writeFileSync(localAuth, JSON.stringify({ tokens: { access_token: 'new-token' } }));
+    expect(shouldSuppressLocalCodexAuth(codexHome, localAuth)).toBe(false);
+  });
+
   it('blocks every token read when a Windows lock leaves the disconnected local file behind', async () => {
     const { codexHome: fixtureCodexHome, systemAuth } = fixture();
     h.userDataDir = path.join(path.dirname(fixtureCodexHome), 'user-data');

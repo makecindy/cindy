@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -6,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   bound: true,
   suppressed: false,
-  userData: `/tmp/cindy-codex-oauth-readiness-${process.pid}`,
+  userData: '',
 }));
 
 vi.mock('electron', () => ({ app: { getPath: () => h.userData } }));
@@ -19,17 +20,19 @@ vi.mock('../codex-auth-invalidation.js', () => ({
 
 import { hasCodexOAuthLoginReadOnly } from '../codex-oauth-readiness.js';
 
-const authPath = path.join(h.userData, 'codex-home', 'auth.json');
+const authPath = () => path.join(h.userData, 'codex-home', 'auth.json');
 
 beforeEach(async () => {
   h.bound = true;
   h.suppressed = false;
-  await fs.mkdir(path.dirname(authPath), { recursive: true });
-  await fs.writeFile(authPath, JSON.stringify({ tokens: { access_token: 'oauth-token' } }));
+  h.userData = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-codex-oauth-readiness-'));
+  await fs.mkdir(path.dirname(authPath()), { recursive: true });
+  await fs.writeFile(authPath(), JSON.stringify({ tokens: { access_token: 'oauth-token' } }));
 });
 
 afterEach(async () => {
   await fs.rm(h.userData, { recursive: true, force: true });
+  h.userData = '';
 });
 
 describe('hasCodexOAuthLoginReadOnly', () => {
@@ -44,11 +47,11 @@ describe('hasCodexOAuthLoginReadOnly', () => {
   });
 
   it('auth 文件缺失、损坏或 token 为空时 fail-closed', async () => {
-    await fs.writeFile(authPath, '{bad json');
+    await fs.writeFile(authPath(), '{bad json');
     expect(hasCodexOAuthLoginReadOnly()).toBe(false);
-    await fs.writeFile(authPath, JSON.stringify({ tokens: { access_token: '' } }));
+    await fs.writeFile(authPath(), JSON.stringify({ tokens: { access_token: '' } }));
     expect(hasCodexOAuthLoginReadOnly()).toBe(false);
-    await fs.rm(authPath);
+    await fs.rm(authPath());
     expect(hasCodexOAuthLoginReadOnly()).toBe(false);
   });
 });

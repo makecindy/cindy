@@ -1988,6 +1988,12 @@ function getImageChannelRegistry(): ImageChannelRegistry {
         );
         return getChatgptBridgeAuth();
       },
+      onAuthFailure: async (failure) => {
+        const { invalidateChatgptBridgeAuth } = await import(
+          '../maker-host/anthropic-responses-bridge-host.js'
+        );
+        await invalidateChatgptBridgeAuth(failure);
+      },
       fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
       beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
     });

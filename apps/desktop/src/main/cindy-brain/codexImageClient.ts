@@ -11,11 +11,15 @@ import fs from 'node:fs/promises';
 
 import type { ImageChannel, ImageChannelResult } from './imageChannelRegistry.js';
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
+import { createLogger } from '../logger.js';
 
 const CODEX_RESPONSES_URL = 'https://chatgpt.com/backend-api/codex/responses';
 const HOST_MODEL = 'gpt-5.5';
 const IMAGE_MODEL = 'gpt-image-2';
 const USER_AGENT = `codex_cli_rs/cindy (${process.platform}; ${process.arch})`;
+const SSE_EVENT_BOUNDARY = /(?:\r\n|\r|\n){2}/;
+const SSE_LINE_ENDING = /\r\n|\r|\n/;
+const log = createLogger('codex-image');
 const SIZE_BY_ASPECT = {
   '1:1': '1024x1024',
   '3:2': '1536x1024',
@@ -25,6 +29,12 @@ const SIZE_BY_ASPECT = {
 export interface CreateCodexImageChannelOptions {
   hasOAuthLogin(): boolean;
   getAuth(): Promise<{ accessToken: string; accountId: string | null }>;
+  /** Best-effort handoff to the shared token-aware invalidation coordinator. */
+  onAuthFailure?(failure: {
+    status: number;
+    body: string;
+    failedAccessToken: string;
+  }): void | Promise<void>;
   fetchImplementation?: typeof fetch;
   beforeDispatch?(model: string): void;
 }
@@ -57,7 +67,7 @@ async function collectImageB64(response: Response): Promise<string | null> {
 
   const consume = (block: string): void => {
     const data = block
-      .split(/\r?\n/)
+      .split(SSE_LINE_ENDING)
       .filter((line) => line.startsWith('data:'))
       .map((line) => line.slice(5).trimStart())
       .join('\n');
@@ -75,11 +85,11 @@ async function collectImageB64(response: Response): Promise<string | null> {
       const { done, value } = await reader.read();
       if (value) buffer += decoder.decode(value, { stream: !done });
       if (done) buffer += decoder.decode();
-      let match = /\r?\n\r?\n/.exec(buffer);
+      let match = SSE_EVENT_BOUNDARY.exec(buffer);
       while (match?.index !== undefined) {
         consume(buffer.slice(0, match.index));
         buffer = buffer.slice(match.index + match[0].length);
-        match = /\r?\n\r?\n/.exec(buffer);
+        match = SSE_EVENT_BOUNDARY.exec(buffer);
       }
       if (done) {
         if (buffer.trim()) consume(buffer);
@@ -101,8 +111,20 @@ async function inputImage(path: string): Promise<{ type: 'input_image'; image_ur
   return { type: 'input_image', image_url: `data:${mime};base64,${bytes.toString('base64')}` };
 }
 
-async function httpError(response: Response): Promise<never> {
+async function httpError(
+  response: Response,
+  failedAccessToken: string,
+  onAuthFailure: CreateCodexImageChannelOptions['onAuthFailure'],
+): Promise<never> {
   const raw = await response.text().catch(() => '');
+  try {
+    await onAuthFailure?.({ status: response.status, body: raw, failedAccessToken });
+  } catch (err) {
+    // 失效态协调失败不能覆盖用户真正收到的上游 HTTP 错误，也不能记录 token。
+    log.warn('Codex image auth invalidation failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
   let detail = raw.slice(0, 500);
   try {
     const parsed = JSON.parse(raw) as { error?: { message?: unknown } };
@@ -167,7 +189,7 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
         ],
       }),
     });
-    if (!response.ok) await httpError(response);
+    if (!response.ok) await httpError(response, auth.accessToken, opts.onAuthFailure);
     const b64 = await collectImageB64(response);
     if (!b64) throw new Error('Codex 返回中没有图片,请重试或改用 OpenAI Platform API key');
     return { data: [{ b64_json: b64 }], output_format: 'png' };

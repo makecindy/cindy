@@ -8,12 +8,17 @@ function sseResponse(events: unknown[], status = 200): Response {
   return new Response(body, { status, headers: { 'Content-Type': 'text/event-stream' } });
 }
 
-function makeChannel(fetchImplementation: typeof fetch, beforeDispatch?: (model: string) => void) {
+function makeChannel(
+  fetchImplementation: typeof fetch,
+  beforeDispatch?: (model: string) => void,
+  onAuthFailure?: Parameters<typeof createCodexImageChannel>[0]['onAuthFailure'],
+) {
   return createCodexImageChannel({
     hasOAuthLogin: () => true,
     getAuth: async () => ({ accessToken: 'oauth-token', accountId: 'account-id' }),
     fetchImplementation,
     beforeDispatch,
+    onAuthFailure,
   });
 }
 
@@ -111,6 +116,45 @@ describe('codexImageClient', () => {
     } finally {
       releaseLock.mockRestore();
     }
+  });
+
+  it('兼容单 CR 的 SSE 事件与行结束符', async () => {
+    const body = [
+      'data: {bad json}\r\r',
+      `data: ${JSON.stringify({ partial_image_b64: 'cr-only' })}\r\r`,
+      'data: [DONE]\r\r',
+    ].join('');
+    const channel = makeChannel(
+      vi.fn<typeof fetch>(
+        async () =>
+          new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } }),
+      ),
+    );
+
+    await expect(
+      channel.generateImage({ model: 'openai/gpt-image-2', prompt: 'p' }),
+    ).resolves.toMatchObject({ data: [{ b64_json: 'cr-only' }] });
+  });
+
+  it('把认证失败与本次 token 交给失效协调器,且不让协调器异常覆盖 HTTP 错误', async () => {
+    const raw = '{"error":{"code":"token_invalidated"}}';
+    const onAuthFailure = vi.fn(async () => {
+      throw new Error('invalidation failed');
+    });
+    const channel = makeChannel(
+      vi.fn<typeof fetch>(async () => new Response(raw, { status: 401 })),
+      undefined,
+      onAuthFailure,
+    );
+
+    await expect(
+      channel.generateImage({ model: 'openai/gpt-image-2', prompt: 'p' }),
+    ).rejects.toThrow('HTTP 401');
+    expect(onAuthFailure).toHaveBeenCalledWith({
+      status: 401,
+      body: raw,
+      failedAccessToken: 'oauth-token',
+    });
   });
 
   it('登录态决定 ready;缺 token 与空图片响应明确失败', async () => {
