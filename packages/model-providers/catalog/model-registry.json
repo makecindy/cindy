@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-07-31T00:00:00.000Z",
+  "updatedAt": "2026-08-01T00:00:00.000Z",
   "models": [
     {
       "id": "openai/gpt-5.6-sol",
@@ -8,9 +8,9 @@
       "status": "active",
       "group": "gpt",
       "description": "GPT-5.6-Sol for coding tasks",
-      "contextWindow": 372000,
+      "contextWindow": 1050000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh"],
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
       "defaultEffort": "high",
       "sortOrder": 18,
       "supportsFastMode": true,
@@ -19,6 +19,7 @@
           "supportsFastMode": false
         },
         "codex": {
+          "contextWindow": 372000,
           "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
         }
       },
@@ -40,7 +41,7 @@
               "source": {
                 "kind": "provider-official",
                 "url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
-                "verifiedAt": "2026-07-31"
+                "verifiedAt": "2026-08-01"
               }
             },
             {
@@ -55,7 +56,7 @@
               "source": {
                 "kind": "provider-official",
                 "url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
-                "verifiedAt": "2026-07-31"
+                "verifiedAt": "2026-08-01"
               }
             }
           ]
@@ -73,9 +74,9 @@
       "status": "active",
       "group": "gpt",
       "description": "GPT-5.6-Terra for coding tasks",
-      "contextWindow": 372000,
+      "contextWindow": 1050000,
       "maxOutputTokens": 128000,
-      "efforts": ["low", "medium", "high", "xhigh"],
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
       "defaultEffort": "high",
       "sortOrder": 19,
       "supportsFastMode": true,
@@ -84,6 +85,7 @@
           "supportsFastMode": false
         },
         "codex": {
+          "contextWindow": 372000,
           "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
         }
       },
@@ -105,7 +107,7 @@
               "source": {
                 "kind": "provider-official",
                 "url": "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
-                "verifiedAt": "2026-07-31"
+                "verifiedAt": "2026-08-01"
               }
             },
             {
@@ -120,7 +122,7 @@
               "source": {
                 "kind": "provider-official",
                 "url": "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
-                "verifiedAt": "2026-07-31"
+                "verifiedAt": "2026-08-01"
               }
             }
           ]
@@ -139,6 +141,7 @@
       "group": "gpt",
       "contextWindow": 1050000,
       "maxOutputTokens": 128000,
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
       "sortOrder": 17,
       "routes": [
         {
@@ -158,7 +161,7 @@
               "source": {
                 "kind": "provider-official",
                 "url": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
-                "verifiedAt": "2026-07-31"
+                "verifiedAt": "2026-08-01"
               }
             },
             {
@@ -173,7 +176,7 @@
               "source": {
                 "kind": "provider-official",
                 "url": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
-                "verifiedAt": "2026-07-31"
+                "verifiedAt": "2026-08-01"
               }
             }
           ]
@@ -191,7 +194,7 @@
       "status": "active",
       "group": "gpt",
       "description": "OpenAI Codex (GPT-5.5) for coding tasks",
-      "contextWindow": 272000,
+      "contextWindow": 1050000,
       "maxOutputTokens": 128000,
       "efforts": ["low", "medium", "high", "xhigh"],
       "defaultEffort": "high",
@@ -200,8 +203,11 @@
       "defaultEnabled": false,
       "perAgent": {
         "claude-code": {
-          "contextWindow": 1000000,
+          "contextWindow": 1050000,
           "supportsFastMode": false
+        },
+        "codex": {
+          "contextWindow": 272000
         }
       },
       "routes": [
@@ -221,7 +227,7 @@
               "source": {
                 "kind": "provider-official",
                 "url": "https://developers.openai.com/api/docs/models/gpt-5.5",
-                "verifiedAt": "2026-07-31"
+                "verifiedAt": "2026-08-01"
               }
             },
             {
@@ -235,7 +241,7 @@
               "source": {
                 "kind": "provider-official",
                 "url": "https://developers.openai.com/api/docs/models/gpt-5.5",
-                "verifiedAt": "2026-07-31"
+                "verifiedAt": "2026-08-01"
               }
             }
           ]
@@ -253,7 +259,7 @@
       "status": "active",
       "group": "gpt",
       "description": "OpenAI Codex (GPT-5.4) for coding tasks",
-      "contextWindow": 1000000,
+      "contextWindow": 1050000,
       "maxOutputTokens": 128000,
       "efforts": ["low", "medium", "high", "xhigh"],
       "defaultEffort": "high",
@@ -282,7 +288,7 @@
               "source": {
                 "kind": "provider-official",
                 "url": "https://developers.openai.com/api/docs/models/gpt-5.4",
-                "verifiedAt": "2026-07-31"
+                "verifiedAt": "2026-08-01"
               }
             },
             {
@@ -296,7 +302,7 @@
               "source": {
                 "kind": "provider-official",
                 "url": "https://developers.openai.com/api/docs/models/gpt-5.4",
-                "verifiedAt": "2026-07-31"
+                "verifiedAt": "2026-08-01"
               }
             }
           ]
@@ -314,7 +320,7 @@
       "status": "active",
       "group": "gpt",
       "description": "Faster, lighter Codex variant — speed-optimized for quick edits",
-      "contextWindow": 272000,
+      "contextWindow": 400000,
       "maxOutputTokens": 128000,
       "efforts": ["low", "medium", "high", "xhigh"],
       "defaultEffort": "high",
@@ -342,7 +348,7 @@
               "source": {
                 "kind": "provider-official",
                 "url": "https://developers.openai.com/api/docs/models/gpt-5.4-mini",
-                "verifiedAt": "2026-07-31"
+                "verifiedAt": "2026-08-01"
               }
             }
           ]
@@ -629,6 +635,7 @@
       "group": "anthropic",
       "description": "Earlier Opus generation",
       "contextWindow": 200000,
+      "maxOutputTokens": 64000,
       "efforts": ["low", "medium", "high"],
       "defaultEffort": "high",
       "sortOrder": 5,
@@ -772,6 +779,7 @@
       "group": "anthropic",
       "description": "Earlier Sonnet generation",
       "contextWindow": 200000,
+      "maxOutputTokens": 64000,
       "efforts": [],
       "sortOrder": 8,
       "supportsFastMode": false,
@@ -875,7 +883,7 @@
               "source": {
                 "kind": "provider-official",
                 "url": "https://docs.x.ai/developers/pricing",
-                "verifiedAt": "2026-07-31"
+                "verifiedAt": "2026-08-01"
               }
             },
             {
@@ -889,7 +897,7 @@
               "source": {
                 "kind": "provider-official",
                 "url": "https://docs.x.ai/developers/pricing",
-                "verifiedAt": "2026-07-31"
+                "verifiedAt": "2026-08-01"
               }
             }
           ]
@@ -903,9 +911,9 @@
       "group": "grok",
       "description": "xAI Grok 4.3 通用旗舰,1M 上下文(SuperGrok 订阅直连)",
       "contextWindow": 1000000,
-      "efforts": ["low", "medium", "high", "xhigh"],
+      "efforts": ["low", "medium", "high"],
       "defaultEffort": "high",
-      "sortOrder": 50,
+      "sortOrder": 51,
       "perAgent": {
         "codex": {
           "efforts": ["low", "medium", "high"]
@@ -928,7 +936,7 @@
               "source": {
                 "kind": "provider-official",
                 "url": "https://docs.x.ai/developers/pricing",
-                "verifiedAt": "2026-07-31"
+                "verifiedAt": "2026-08-01"
               }
             },
             {
@@ -942,7 +950,199 @@
               "source": {
                 "kind": "provider-official",
                 "url": "https://docs.x.ai/developers/pricing",
-                "verifiedAt": "2026-07-31"
+                "verifiedAt": "2026-08-01"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "xai/grok-build-0.1",
+      "name": "Grok Build 0.1",
+      "status": "active",
+      "group": "grok",
+      "description": "xAI agentic coding model,256k 上下文(SuperGrok 订阅直连)",
+      "contextWindow": 256000,
+      "efforts": [],
+      "sortOrder": 50,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "xai",
+          "modelId": "xai/grok-build-0.1",
+          "agents": ["claude-code", "codex"],
+          "referencePrices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 1,
+              "outputPerMtok": 2,
+              "cacheReadPerMtok": 0.2,
+              "maxInputTokens": 200000,
+              "effectiveFrom": "2026-05-15",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://docs.x.ai/developers/pricing",
+                "verifiedAt": "2026-08-01"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 4,
+              "cacheReadPerMtok": 0.4,
+              "minInputTokens": 200000,
+              "effectiveFrom": "2026-05-15",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://docs.x.ai/developers/pricing",
+                "verifiedAt": "2026-08-01"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "xai/grok-4.20-multi-agent-0309",
+      "name": "Grok 4.20 Multi-Agent",
+      "status": "active",
+      "group": "grok",
+      "description": "xAI Grok 4.20 multi-agent model,1M 上下文(SuperGrok 订阅直连)",
+      "contextWindow": 1000000,
+      "efforts": [],
+      "sortOrder": 52,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "xai",
+          "modelId": "xai/grok-4.20-multi-agent-0309",
+          "agents": ["claude-code", "codex"],
+          "referencePrices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 1.25,
+              "outputPerMtok": 2.5,
+              "cacheReadPerMtok": 0.2,
+              "maxInputTokens": 200000,
+              "effectiveFrom": "2026-03-09",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://docs.x.ai/developers/pricing",
+                "verifiedAt": "2026-08-01"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 2.5,
+              "outputPerMtok": 5,
+              "cacheReadPerMtok": 0.4,
+              "minInputTokens": 200000,
+              "effectiveFrom": "2026-03-09",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://docs.x.ai/developers/pricing",
+                "verifiedAt": "2026-08-01"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "xai/grok-4.20-0309-reasoning",
+      "name": "Grok 4.20 Reasoning",
+      "status": "active",
+      "group": "grok",
+      "description": "xAI Grok 4.20 reasoning model,1M 上下文(SuperGrok 订阅直连)",
+      "contextWindow": 1000000,
+      "efforts": [],
+      "sortOrder": 53,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "xai",
+          "modelId": "xai/grok-4.20-0309-reasoning",
+          "agents": ["claude-code", "codex"],
+          "referencePrices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 1.25,
+              "outputPerMtok": 2.5,
+              "cacheReadPerMtok": 0.2,
+              "maxInputTokens": 200000,
+              "effectiveFrom": "2026-03-09",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://docs.x.ai/developers/pricing",
+                "verifiedAt": "2026-08-01"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 2.5,
+              "outputPerMtok": 5,
+              "cacheReadPerMtok": 0.4,
+              "minInputTokens": 200000,
+              "effectiveFrom": "2026-03-09",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://docs.x.ai/developers/pricing",
+                "verifiedAt": "2026-08-01"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "xai/grok-4.20-0309-non-reasoning",
+      "name": "Grok 4.20 Non-Reasoning",
+      "status": "active",
+      "group": "grok",
+      "description": "xAI Grok 4.20 non-reasoning model,1M 上下文(SuperGrok 订阅直连)",
+      "contextWindow": 1000000,
+      "efforts": [],
+      "sortOrder": 54,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "xai",
+          "modelId": "xai/grok-4.20-0309-non-reasoning",
+          "agents": ["claude-code", "codex"],
+          "referencePrices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 1.25,
+              "outputPerMtok": 2.5,
+              "cacheReadPerMtok": 0.2,
+              "maxInputTokens": 200000,
+              "effectiveFrom": "2026-03-09",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://docs.x.ai/developers/pricing",
+                "verifiedAt": "2026-08-01"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 2.5,
+              "outputPerMtok": 5,
+              "cacheReadPerMtok": 0.4,
+              "minInputTokens": 200000,
+              "effectiveFrom": "2026-03-09",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://docs.x.ai/developers/pricing",
+                "verifiedAt": "2026-08-01"
               }
             }
           ]
@@ -951,14 +1151,14 @@
     },
     {
       "id": "xai/grok-4.20",
-      "name": "Grok 4.20 Reasoning",
-      "status": "active",
+      "name": "Grok 4.20 Legacy Alias",
+      "status": "deprecated",
       "group": "grok",
-      "description": "xAI Grok 4.20 推理版(SuperGrok 订阅直连)",
+      "description": "旧版兼容 alias;新会话请使用明确的 Grok 4.20 model ID",
       "contextWindow": 1000000,
       "efforts": ["low", "medium", "high", "xhigh"],
       "defaultEffort": "high",
-      "sortOrder": 51,
+      "sortOrder": 98,
       "defaultEnabled": false,
       "perAgent": {
         "codex": {
@@ -982,7 +1182,7 @@
               "source": {
                 "kind": "provider-official",
                 "url": "https://docs.x.ai/developers/pricing",
-                "verifiedAt": "2026-07-31"
+                "verifiedAt": "2026-08-01"
               }
             },
             {
@@ -996,7 +1196,7 @@
               "source": {
                 "kind": "provider-official",
                 "url": "https://docs.x.ai/developers/pricing",
-                "verifiedAt": "2026-07-31"
+                "verifiedAt": "2026-08-01"
               }
             }
           ]
@@ -1005,13 +1205,13 @@
     },
     {
       "id": "xai/grok-code-fast",
-      "name": "Grok Code Fast",
+      "name": "Grok Code Fast (Deprecated)",
       "status": "deprecated",
       "group": "grok",
-      "description": "xAI 编码模型 grok-code-fast,不支持思维深度调节(SuperGrok 订阅直连)",
+      "description": "旧版兼容 alias;新会话请使用 grok-build-0.1",
       "contextWindow": 256000,
       "efforts": [],
-      "sortOrder": 52,
+      "sortOrder": 99,
       "defaultEnabled": false,
       "routes": [
         {
@@ -1022,15 +1222,29 @@
             {
               "currency": "USD",
               "variant": "standard",
-              "inputPerMtok": 1.25,
-              "outputPerMtok": 2.5,
+              "inputPerMtok": 1,
+              "outputPerMtok": 2,
               "cacheReadPerMtok": 0.2,
               "maxInputTokens": 200000,
               "effectiveFrom": "2026-05-15",
               "source": {
                 "kind": "provider-official",
                 "url": "https://docs.x.ai/developers/migration/may-15-retirement",
-                "verifiedAt": "2026-07-31"
+                "verifiedAt": "2026-08-01"
+              }
+            },
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 2,
+              "outputPerMtok": 4,
+              "cacheReadPerMtok": 0.4,
+              "minInputTokens": 200000,
+              "effectiveFrom": "2026-05-15",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://docs.x.ai/developers/migration/may-15-retirement",
+                "verifiedAt": "2026-08-01"
               }
             }
           ]
@@ -1347,10 +1561,35 @@
     {
       "id": "openai/gpt-5.4-nano",
       "name": "GPT-5.4-Nano",
+      "status": "active",
       "group": "gpt",
+      "description": "OpenAI GPT-5.4 nano for simple, high-volume tasks",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "efforts": ["low", "medium", "high", "xhigh"],
       "sortOrder": 101,
       "defaultEnabled": false,
       "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "gpt-5.4-nano",
+          "agents": ["claude-code", "codex"],
+          "referencePrices": [
+            {
+              "currency": "USD",
+              "variant": "standard",
+              "inputPerMtok": 0.2,
+              "outputPerMtok": 1.25,
+              "cacheReadPerMtok": 0.02,
+              "effectiveFrom": "2026-03-17",
+              "source": {
+                "kind": "provider-official",
+                "url": "https://developers.openai.com/api/docs/models/gpt-5.4-nano",
+                "verifiedAt": "2026-08-01"
+              }
+            }
+          ]
+        },
         {
           "providerId": "xd",
           "modelId": "gpt-5.4-nano",

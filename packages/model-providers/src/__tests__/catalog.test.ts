@@ -27,7 +27,16 @@ import type { AgentKind, Catalog, CatalogModel } from '../types.js';
 const DYNAMIC_PROVIDER_IDS = ['anthropic', 'openai', 'xd'] as const;
 
 /** xai 静态清单(唯一活在目录文件里的模型清单)。 */
-const EXPECTED_XAI_IDS = ['xai/grok-4.5', 'xai/grok-4.3', 'xai/grok-4.20', 'xai/grok-code-fast'];
+const EXPECTED_XAI_IDS = [
+  'xai/grok-4.5',
+  'xai/grok-4.3',
+  'xai/grok-build-0.1',
+  'xai/grok-4.20-multi-agent-0309',
+  'xai/grok-4.20-0309-reasoning',
+  'xai/grok-4.20-0309-non-reasoning',
+  'xai/grok-4.20',
+  'xai/grok-code-fast',
+];
 
 function provider(id: string) {
   const p = BUNDLED_CATALOG.providers.find((x) => x.id === id);
