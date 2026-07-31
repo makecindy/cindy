@@ -102,6 +102,7 @@ describe('xaiImageClient', () => {
     });
     expect(result.data[0]?.b64_json).toBe(png.toString('base64'));
     expect(doFetch).toHaveBeenCalledTimes(2);
+    expect(doFetch.mock.calls[1]?.[1]).toMatchObject({ redirect: 'manual' });
 
     const untrusted = vi.fn<typeof fetch>(
       async () =>
@@ -115,6 +116,21 @@ describe('xaiImageClient', () => {
     await expect(
       channel(untrusted).generateImage({ model: 'xai/grok-imagine-image', prompt: 'p' }),
     ).rejects.toThrow('不可信');
+
+    const redirected = vi.fn<typeof fetch>(async (input) =>
+      String(input).includes('/images/generations')
+        ? new Response(JSON.stringify({ data: [{ url: 'https://imgen.x.ai/output.png' }] }), {
+            status: 200,
+          })
+        : new Response(null, {
+            status: 302,
+            headers: { Location: 'https://example.com/output.png' },
+          }),
+    );
+    await expect(
+      channel(redirected).generateImage({ model: 'xai/grok-imagine-image', prompt: 'p' }),
+    ).rejects.toThrow('HTTP 302');
+    expect(redirected.mock.calls[1]?.[1]).toMatchObject({ redirect: 'manual' });
   });
 
   it('登录态决定 ready;派发拦截、源图上限与 OAuth 拒绝均在出网边界处理', async () => {
@@ -122,7 +138,9 @@ describe('xaiImageClient', () => {
     const unavailable = channel(doFetch, { hasOAuthLogin: () => false });
     expect(unavailable.ready()).toBe(false);
 
+    const getAccessToken = vi.fn(async () => 'grok-oauth-token');
     const blocked = channel(doFetch, {
+      getAccessToken,
       beforeDispatch: () => {
         throw new Error('模型已停用');
       },
@@ -131,6 +149,7 @@ describe('xaiImageClient', () => {
       blocked.generateImage({ model: 'xai/grok-imagine-image', prompt: 'p' }),
     ).rejects.toThrow('模型已停用');
     expect(doFetch).not.toHaveBeenCalled();
+    expect(getAccessToken).not.toHaveBeenCalled();
 
     await expect(
       channel(doFetch).editImage({

@@ -78,6 +78,9 @@ export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): Image
     if (paths.length > MAX_EDIT_SOURCES) {
       throw new Error(`xAI 图像编辑最多支持 ${MAX_EDIT_SOURCES} 张源图`);
     }
+    // 先在任何凭证刷新或本地文件读取之前拦截已停用模型；后面的二次检查
+    // 继续覆盖准备请求期间发生的配置变化。
+    opts.beforeDispatch?.(params.model);
     const [token, images] = await Promise.all([
       opts.getAccessToken(),
       Promise.all(paths.map(sourceImage)),
@@ -138,7 +141,7 @@ export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): Image
     if (first?.url) {
       // Imagine URLs are short-lived. Materialize immediately so the shared media
       // pipeline receives stable bytes instead of persisting an expiring URL.
-      const imageResponse = await doFetch(assertXaiImageUrl(first.url));
+      const imageResponse = await doFetch(assertXaiImageUrl(first.url), { redirect: 'manual' });
       if (!imageResponse.ok) {
         throw new Error(`xAI 图片下载失败(HTTP ${imageResponse.status})`);
       }

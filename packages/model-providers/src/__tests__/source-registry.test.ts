@@ -160,6 +160,38 @@ describe('mergeWithBundled', () => {
     expect(explicitlyDisabled.providers.find((p) => p.id === 'xai')?.imageModels).toEqual([]);
   });
 
+  it('旧远端改变鉴权或路由形状时不继承 bundled 图像能力', () => {
+    const bundledXai = BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')!;
+    const oldRemoteXai = JSON.parse(JSON.stringify(bundledXai)) as Provider;
+    delete oldRemoteXai.imageModels;
+
+    const apiKeyXai: Provider = {
+      ...oldRemoteXai,
+      auth: { method: 'apiKey' },
+    };
+    const alternateRouteXai: Provider = {
+      ...oldRemoteXai,
+      routing: {
+        ...oldRemoteXai.routing,
+        codex: {
+          ...oldRemoteXai.routing.codex!,
+          upstream: 'https://oauth-proxy.example.test',
+        },
+      },
+    };
+
+    expect(
+      mergeWithBundled({ version: '2', providers: [apiKeyXai] }).providers.find(
+        (p) => p.id === 'xai',
+      )?.imageModels,
+    ).toBeUndefined();
+    expect(
+      mergeWithBundled({ version: '2', providers: [alternateRouteXai] }).providers.find(
+        (p) => p.id === 'xai',
+      )?.imageModels,
+    ).toBeUndefined();
+  });
+
   it('does not infer bundled billing when a same-id primary changes auth or upstream', () => {
     const apiKeyPrimary: Catalog = {
       ...MINIMAL,

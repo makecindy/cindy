@@ -141,13 +141,15 @@ function backfillPresetContextWindows(
  * 不排序的话 xai 会窜到首位，选择器分段顺序漂移。
  */
 export function mergeWithBundled(primary: Catalog): Catalog {
-  const byId = new Map(primary.providers.map((p) => [p.id, p]));
   const bundledById = new Map(BUNDLED_CATALOG.providers.map((p) => [p.id, p]));
   const withBundledMetadata = primary.providers.map((p) => {
     const bundled = bundledById.get(p.id);
     const bundledAccess = bundled ? legacyAccessFor(p, bundled) : undefined;
     if (!bundled) return p;
-    const inheritImage = p.imageModels === undefined && bundled.imageModels !== undefined;
+    const inheritImage =
+      p.imageModels === undefined &&
+      bundled.imageModels !== undefined &&
+      bundledAccess !== undefined;
     if (!(p.access === undefined && bundledAccess !== undefined) && !inheritImage) {
       return p;
     }
