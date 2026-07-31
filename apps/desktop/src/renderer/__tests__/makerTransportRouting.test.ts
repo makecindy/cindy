@@ -24,6 +24,7 @@ function stubElectron() {
     closeSession: vi.fn(),
     enableOrca: vi.fn(),
     disableOrca: vi.fn(),
+    plugins: { getState: vi.fn().mockResolvedValue({ effectiveEnabled: true }) },
     input: { clearSession: vi.fn(), compact: vi.fn() },
   };
   const orcaWorkflows = {
@@ -200,6 +201,36 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     await estimatedSessionValueFor('local-sess');
     expect(localMessages.estimatedSessionValue).toHaveBeenCalledWith('local-sess');
     expect(invoke).not.toHaveBeenCalled();
+  });
+
+  // issue #1170:协同入口的项目级 collab 开关此前一律查控制端本机 —— 拿被控端的路径查
+  // 自己的 fs,读到的是控制端自己的用户级开关,与被控端 main 的权威授权可能相反。
+  it('pluginEnableStateFor:传了 deviceId 就隧道查被控端;没传才查本机', async () => {
+    const { makerSpies, invoke } = stubElectron();
+    invoke.mockResolvedValue({ effectiveEnabled: false });
+    const { pluginEnableStateFor } = await import('@/lib/makerTransport');
+
+    await expect(pluginEnableStateFor('dev-1', 'collab', '/host/proj')).resolves.toEqual({
+      effectiveEnabled: false,
+    });
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:plugins:get-state', [
+      'collab',
+      '/host/proj',
+    ]);
+    expect(makerSpies.plugins.getState).not.toHaveBeenCalled();
+
+    invoke.mockClear();
+    await pluginEnableStateFor(null, 'collab', '/local/proj');
+    expect(makerSpies.plugins.getState).toHaveBeenCalledWith('collab', '/local/proj');
+    expect(invoke).not.toHaveBeenCalled();
+
+    // skipQuery 档(SSH 远端):不传 workingDir → 落用户级/全局级,两条路由都要保持原样透传。
+    invoke.mockClear();
+    makerSpies.plugins.getState.mockClear();
+    await pluginEnableStateFor('dev-1', 'collab', undefined);
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:plugins:get-state', ['collab', undefined]);
+    await pluginEnableStateFor(undefined, 'collab', undefined);
+    expect(makerSpies.plugins.getState).toHaveBeenCalledWith('collab', undefined);
   });
 });
 

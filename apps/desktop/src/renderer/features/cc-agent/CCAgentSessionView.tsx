@@ -159,6 +159,7 @@ import {
 } from '@/lib/fileDrop';
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
 import { useCollabProjectPolicy } from './hooks/useCollabProjectPolicy';
+import { resolveCollabEntryPolicy } from './collabEntryPolicy';
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
 import { localizeAgentStatus } from './lib/localizeAgentStatus';
 import { createSessionRefreshSequence } from './lib/sessionRefreshSequence';
@@ -1811,25 +1812,35 @@ export function CCAgentSessionView({
     sessionId,
     shouldFirstFrameRevealOrcaWorkers,
   ]);
-  // Lead 允许 Claude / Codex 本地项目会话走 toggle。Codex 的 MCP bridge 通过
-  // threadId -> business sessionId 映射在工具调用时恢复 per-session ctx;
-  // 远端会话 (codex / cc) 经 SSH remote-forward 直连本机 MCP bridge,worker
-  // 创建继承 remoteHostId,两端协同均已接通。
+  // Lead 允许 Claude / Codex 项目会话走 toggle,判定与新建草稿共用
+  // resolveCollabEntryPolicy(issue #1170:两处各写一份判据,同一个 device-link 项目在
+  // 草稿里没入口、进会话页又冒出来)。Codex 的 MCP bridge 通过 threadId -> business
+  // sessionId 映射在工具调用时恢复 per-session ctx;SSH 远端会话 (codex / cc) 经
+  // remote-forward 直连本机 MCP bridge、worker 创建继承 remoteHostId;device-link 会话的
+  // Lead / Worker / team 真身都在被控端,enableOrca 与团队读写经隧道路由过去 ——
+  // 三类都已接通,不再按 agent 或远端形态限流。
   // 注意:doc rail (isCompactRail) 也允许显示 toggle —— WorkdirBrowseRoute 已经
   // 针对 Lead session 接入了 OrcaSplitView toggle 布局,普通 session 必须能从
   // ChatInput 工具行启用协同变成 Lead,否则 doc 模式下首次开启入口完全没有。
   // 工具行同时传 denseToolbar=true,协同 pill 自动收成 icon-only,窄 rail 视觉 OK。
-  const collabPolicyEligible =
-    !orcaMode &&
-    session?.orcaRole !== 'worker' &&
-    // 远端会话 codex 与 cc 都已接通协同(worker 创建继承 remoteHostId,
-    // 远端 agent 经 SSH remote-forward 直连本机 MCP bridge),不再按 agent 限流。
-    session?.workspaceKind === 'project' &&
-    !!session?.workingDir;
+  const collabEntry = resolveCollabEntryPolicy({
+    workspaceKind: session?.workspaceKind,
+    workingDir: session?.workingDir,
+    orcaRole: session?.orcaRole,
+    remoteHostId: session?.remoteHostId,
+    // 粘滞归属:relay 瞬时重连清空注册表的窗口内不把远程会话误判成本机 —— 误判会让
+    // 协同策略退回查控制端本机,读到的是另一台机器的开关。
+    deviceLinkDeviceId: remoteDeviceId,
+  });
+  const collabPolicyEligible = !orcaMode && collabEntry.eligible;
   const collabPolicy = useCollabProjectPolicy(session?.workingDir, collabPolicyEligible, {
-    // 远端会话的 workingDir 是远端路径, 跳过项目级查询; 用户级/全局级 collab
+    // SSH 远端会话的 workingDir 是远端主机路径, 跳过项目级查询; 用户级/全局级 collab
     // 开关仍生效 (与 main 侧 remote 分支同口径)。
-    skipQuery: !!session?.remoteHostId,
+    skipQuery: collabEntry.skipProjectQuery,
+    // device-link 会话:项目级开关的真相在被控端(那里 enable-orca 是本地会话, 走的正是
+    // 本机项目级分支)。控制端拿被控端的路径查自己本机只会读到自己的用户级开关, 可能与
+    // 被控端 main 的授权相反 —— 于是入口看着能点、真开时被拒(issue #1170)。
+    deviceId: collabEntry.policyDeviceId ?? null,
   });
   const allowCollabToggle = !orcaMode && collabPolicyEligible;
   // 把 sessionId 抽出来给 useEffect 用 (linter 偏好稳定的标量依赖)
@@ -3334,8 +3345,9 @@ export function CCAgentSessionView({
                   disableAutofocus={isCompactRail}
                   focusOnStorageKeyChange={ownsRoute}
                   // F-COLLAB: 协同模式 toggle。在以下场景渲染:
-                  // - 普通主会话视图 (含 doc rail) 的本地 Claude / Codex 项目会话
-                  // 排除 worker 子会话(worker 自己不能再开协同)和远端会话。
+                  // - 普通主会话视图 (含 doc rail) 的 Claude / Codex 项目会话,本地 /
+                  //   SSH 远端 / device-link 被控端三类都算(判定见 collabEntry)。
+                  // 排除 worker 子会话(worker 自己不能再开协同)与对话模式(无项目目录)。
                   // orcaMode 路由下 toggle 也保留显示 — ON 态的 orange pill 本身就是
                   // 关闭按钮 (点击触发 onChange({enabled:false}),走 requestStopCollab)。
                   // doc rail 的 denseToolbar=true 会把 pill 收成 icon-only 形态。
@@ -3376,17 +3388,22 @@ export function CCAgentSessionView({
                           disabled:
                             !collabEnabled &&
                             (collabPolicy.loading || !collabPolicy.enabled),
+                          // unsupported(被控端版本过旧、没有 maker:plugins:get-state)
+                          // 排在 unavailable 之前:它是确定性的不支持,给「稍后重试」是
+                          // 误导,上面的 onDisabledActivate 也只挂在 unavailable 上。
                           disabledReason:
                             !collabEnabled
                               ? collabPolicy.loading
                                 ? t('newChat.collaboration.loadingHint')
-                                : collabPolicy.unavailable || !collabPolicy.enabled
-                                  ? t(
-                                      collabPolicy.unavailable
-                                        ? 'newChat.collaboration.unavailableHint'
-                                        : 'newChat.collaboration.disabledHint',
-                                    )
-                                  : undefined
+                                : collabPolicy.unsupported
+                                  ? t('newChat.collaboration.unsupportedRemoteHint')
+                                  : collabPolicy.unavailable || !collabPolicy.enabled
+                                    ? t(
+                                        collabPolicy.unavailable
+                                          ? 'newChat.collaboration.unavailableHint'
+                                          : 'newChat.collaboration.disabledHint',
+                                      )
+                                    : undefined
                               : undefined,
                         }
                       : undefined

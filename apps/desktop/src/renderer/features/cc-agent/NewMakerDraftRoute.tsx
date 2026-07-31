@@ -115,7 +115,9 @@ import { useRefreshWorktrees } from '@/contexts/WorktreeContext';
 import { crossAgentConvertService } from '@/lib/crossAgentConvertService';
 import { useCrossAgentMigrationDialog } from '@/hooks/useCrossAgentConvertPrompt';
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
+import { resolveCollabEntryPolicy } from './collabEntryPolicy';
 import { useCollabProjectPolicy } from './hooks/useCollabProjectPolicy';
+import { enableRemoteCollabForSession } from './remoteCollabHandoff';
 import { CrossAgentConvertDialog } from '@/components/ui/cross-agent-convert-dialog';
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import {
@@ -698,13 +700,23 @@ export function NewMakerDraftRoute() {
   const showProviderOnboardingCard = providerOnboarding.visible && !isDeviceLinkDraft;
   const effectiveExtraDirs = draft.extraDirs;
   const effectiveCollab = collab;
-  const collabPolicyEligible =
-    effectiveWorkingDir != null &&
-    effectiveDeviceLinkDeviceId == null;
+  // 协同入口判定与会话视图共用同一个 helper(issue #1170:两处各写一份判据,于是同一个
+  // device-link 项目在草稿里没入口、进会话页又有)。草稿的 workspaceKind 显式按
+  // "有没有选项目目录" 给出 —— 与它提交给 createSession 的值同源,不让 helper 反推。
+  const collabEntry = resolveCollabEntryPolicy({
+    workspaceKind: effectiveWorkingDir ? 'project' : 'dialogue',
+    workingDir: effectiveWorkingDir,
+    remoteHostId: effectiveRemoteHostId,
+    deviceLinkDeviceId: effectiveDeviceLinkDeviceId,
+  });
+  const collabPolicyEligible = collabEntry.eligible;
   const collabPolicy = useCollabProjectPolicy(effectiveWorkingDir, collabPolicyEligible, {
-    // 远端 draft 的 workingDir 是远端路径, 本机项目级查询无意义, 跳过;
+    // SSH 远端 draft 的 workingDir 是远端主机路径, 本机项目级查询无意义, 跳过;
     // 用户级/全局级 collab 开关仍生效 (与 main 侧 remote 分支同口径)。
-    skipQuery: effectiveRemoteHostId != null,
+    skipQuery: collabEntry.skipProjectQuery,
+    // device-link draft:项目级开关的真相在被控端, 隧道过去查(控制端本机查那条远端
+    // 路径只会读到自己的用户级开关, 可能与被控端 main 的授权相反)。
+    deviceId: collabEntry.policyDeviceId ?? null,
   });
   const projectPickerOptions = useProjectPickerOptions();
   /**
@@ -1935,6 +1947,8 @@ export function NewMakerDraftRoute() {
       }
       let policyEnabled = collabPolicy.enabled;
       let policyUnavailable = collabPolicy.unavailable;
+      // 被控端版本过旧 → 确定性不支持,重取毫无意义(下面的 refresh 只对 unavailable 触发)。
+      let policyUnsupported = collabPolicy.unsupported;
       if (effectiveCollab.enabled && policyUnavailable) {
         // 这是 handleSend 里**第一个** await,必须先上在途锁(Codex review P1):不上锁的话,协同策略
         // 重取期间设备 pill / 工作区 pill 仍可点,而本次调用的闭包持有的是旧设备与旧工作区 ——
@@ -1949,16 +1963,19 @@ export function NewMakerDraftRoute() {
           const refreshed = await collabPolicy.refresh();
           policyEnabled = refreshed.enabled;
           policyUnavailable = refreshed.unavailable;
+          policyUnsupported = refreshed.unsupported;
         } finally {
           markSendInFlight(false);
         }
       }
-      if (effectiveCollab.enabled && (policyUnavailable || !policyEnabled)) {
+      if (effectiveCollab.enabled && (policyUnavailable || policyUnsupported || !policyEnabled)) {
         toast.warning(
           t(
-            policyUnavailable
-              ? 'newChat.collaboration.unavailableHint'
-              : 'newChat.collaboration.disabledHint',
+            policyUnsupported
+              ? 'newChat.collaboration.unsupportedRemoteHint'
+              : policyUnavailable
+                ? 'newChat.collaboration.unavailableHint'
+                : 'newChat.collaboration.disabledHint',
           ),
         );
         return false;
@@ -2145,6 +2162,29 @@ export function NewMakerDraftRoute() {
               nowIso: new Date().toISOString(),
               logTag: 'draft send',
             });
+            // F-COLLAB / device-link:草稿开了协同 → 隧道到被控端 enableOrca 拉起 Worker
+            // (Lead / Worker / team 的真身都在被控端,控制端只是镜像)。与本机分支同口径放在
+            // setPending **之前**:Lead 的第一个 turn 必须已经带上协同 MCP,否则用户开了协同
+            // 却发现首轮 Lead 根本没有 cindy_orca 工具。两条时序约束(等 enableOrca、不等镜像
+            // 回流)与它们各自的理由都在 enableRemoteCollabForSession 里。
+            let dlOrcaReveal: { focusWorkerSessionId: string } | null = null;
+            if (shouldEnableCollab) {
+              try {
+                dlOrcaReveal = await enableRemoteCollabForSession({
+                  deviceId,
+                  leadSessionId: remoteSessionId,
+                  options: draftEnableOrcaOptions(
+                    effectiveCollab,
+                    deviceProviders,
+                    !deviceProvidersLoading,
+                  ),
+                  logTag: 'draft send',
+                });
+              } catch (err) {
+                log.error('[draft send] remote enableOrca failed (continuing as single session)', err);
+                toast.error(getCollaborationStartErrorMessage(err, t, { remoteDevice: true }));
+              }
+            }
             const rehydratedFiles = await rehomeDraftAttachments(files, remoteSessionId);
             setPending(remoteSessionId, {
               text: message,
@@ -2163,7 +2203,12 @@ export function NewMakerDraftRoute() {
             clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
             attachmentState.clearFiles();
             resetDraftWorkspaceAfterSend();
-            navigate(`/cc-agent/${remoteSessionId}`, { replace: true });
+            // reveal 走 navigate state,由 CCAgentSessionView mount 后消费(当前路由还在
+            // /cc-agent/new,直接 dispatch 会被分离侧栏控制器判成 stale-context)。
+            navigate(`/cc-agent/${remoteSessionId}`, {
+              replace: true,
+              state: dlOrcaReveal ? { orcaWorkersReveal: dlOrcaReveal } : undefined,
+            });
             return;
           }
 
@@ -2537,6 +2582,7 @@ export function NewMakerDraftRoute() {
       isDeviceLinkDraft,
       capabilitiesLoading,
       remoteDraftState.loaded,
+      deviceProviders,
       deviceProvidersLoading,
       effectiveDeviceLinkDeviceId,
       effectiveDeviceLinkDeviceName,
@@ -2554,12 +2600,14 @@ export function NewMakerDraftRoute() {
       collabPolicy.loading,
       collabPolicy.refresh,
       collabPolicy.unavailable,
+      collabPolicy.unsupported,
       effectiveCollab.worker,
       // workerConfig 也要进依赖:只改角色/模型/effort/初始任务(worker 类型不变)时,
       // 少了它 handleSend 会闭包吃旧的 effectiveCollab,起 Worker 用错配置(codex P2)。
       effectiveCollab.workerConfig,
       // draftEnableOrcaOptions 现按 live 目录收窄草稿来源:快照与 loading 都要进
       // 依赖,否则闭包吃旧快照,来源连/断后仍按陈旧目录收窄(codex review)。
+      // device-link 分支按**被控端**目录收窄,同理两项都要进。
       localProviders,
       localProvidersLoading,
       vendorAuthGate,
@@ -2602,8 +2650,15 @@ export function NewMakerDraftRoute() {
           if (collabPolicy.loading) {
             throw new Error(t('newChat.collaboration.loadingHint'));
           }
+          // 被控端版本过旧:确定性不支持,不走重取(与 handleSend 同口径)。
+          if (collabPolicy.unsupported) {
+            throw new Error(t('newChat.collaboration.unsupportedRemoteHint'));
+          }
           if (collabPolicy.unavailable) {
             const refreshed = await collabPolicy.refresh();
+            if (refreshed.unsupported) {
+              throw new Error(t('newChat.collaboration.unsupportedRemoteHint'));
+            }
             if (refreshed.unavailable) {
               throw new Error(t('newChat.collaboration.unavailableHint'));
             }
@@ -2685,6 +2740,29 @@ export function NewMakerDraftRoute() {
             nowIso: new Date().toISOString(),
             logTag: 'draft goal',
           });
+          // F-COLLAB / device-link:与发送路径同口径 —— 草稿开了协同就隧道到被控端
+          // enableOrca 拉起 Worker,否则用户开了协同却走「新建目标」会得到一个没有 Worker
+          // 的 Lead(本机分支的 codex P2 在远程侧同样成立)。失败降级单会话,不阻断目标创建。
+          // 与发送分支共用同一个 helper,时序约束因此不会只在一条路径上被修好
+          // (这条路径丢的还不止首条消息,还有只存在于弹窗内存里的目标文案)。
+          let remoteGoalOrcaReveal: { focusWorkerSessionId: string } | null = null;
+          if (shouldEnableCollab) {
+            try {
+              remoteGoalOrcaReveal = await enableRemoteCollabForSession({
+                deviceId,
+                leadSessionId: remoteSessionId,
+                options: draftEnableOrcaOptions(
+                  effectiveCollab,
+                  deviceProviders,
+                  !deviceProvidersLoading,
+                ),
+                logTag: 'draft goal',
+              });
+            } catch (err) {
+              log.error('[draft goal] remote enableOrca failed (continuing as single session)', err);
+              toast.error(getCollaborationStartErrorMessage(err, t, { remoteDevice: true }));
+            }
+          }
           // setGoal 不在这里发:重 topic session:<id> 订阅要等 CCAgentSessionView
           // mount 才建立,在 /cc-agent/new 就起 goal 首轮会让 maker:event/status 推送
           // 掉在订阅建立前的窗口里(Codex review #548)。与首条消息同款交接 ——
@@ -2766,7 +2844,10 @@ export function NewMakerDraftRoute() {
           })();
           clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
           resetDraftWorkspaceAfterSend();
-          navigate(`/cc-agent/${remoteSessionId}`, { replace: true });
+          navigate(`/cc-agent/${remoteSessionId}`, {
+            replace: true,
+            state: remoteGoalOrcaReveal ? { orcaWorkersReveal: remoteGoalOrcaReveal } : undefined,
+          });
           return;
         }
         const selectedWorkingDir = effectiveWorkingDir?.trim() || undefined;
@@ -2796,7 +2877,8 @@ export function NewMakerDraftRoute() {
         }
         // 草稿开了协同 → 新建目标路径也要拉起 Worker(与 Send 路径同口径);否则用户开了协同
         // 却走「新建目标」会得到一个没有 Worker 的 lead session(codex P2)。失败 toast + 降级
-        // 单会话,不阻断目标创建。仅本地项目 draft 可达(device-link 分支上面已 return)。
+        // 单会话,不阻断目标创建。本机 / SSH 项目 draft 走这里;device-link 在上面的分支里用
+        // 同口径隧道到被控端 enableOrca 后已 return。
         // reveal 不在此处直接 dispatch:当前路由还在 /cc-agent/new,分离侧栏控制器会因
         // session 不匹配返回 stale-context(codex P2)——与 Send 路径同口径,把 reveal
         // 塞进 navigate state,由 CCAgentSessionView mount 后消费。
@@ -2843,6 +2925,7 @@ export function NewMakerDraftRoute() {
       isDeviceLinkDraft,
       capabilitiesLoading,
       remoteDraftState.loaded,
+      deviceProviders,
       deviceProvidersLoading,
       vendorAuthGate,
       authVendor,
@@ -2863,6 +2946,7 @@ export function NewMakerDraftRoute() {
       collabPolicy.loading,
       collabPolicy.refresh,
       collabPolicy.unavailable,
+      collabPolicy.unsupported,
       collabPolicy.enabled,
       // 同 handleSend:草稿来源收窄依赖 live 目录快照。
       localProviders,
@@ -3163,9 +3247,10 @@ export function NewMakerDraftRoute() {
                         disabled={wtCreating}
                       />
                     }
-                    // 协同 toggle(与对话界面同一控件):本地与 SSH 远端项目 draft 均可用
-                    // (远端 worker 创建继承 remoteHostId, 两端 MCP 注入已接通); 对话模式(无
-                    // workingDir)/ device-link 不支持(state 层 normalize + patchDraft 同口径)。Lead = 当前
+                    // 协同 toggle(与对话界面同一控件):本地 / SSH 远端 / device-link 项目 draft
+                    // 均可用 —— eligible 由 resolveCollabEntryPolicy 单点判定,与会话视图同一份
+                    // (issue #1170:两处各写一份判据造成入口前后不一致)。仍然不支持的只有对话
+                    // 模式(无 workingDir)。Lead = 当前
                     // vendor(上方 VendorSegmentedSwitcher)。onOpenDetails 打开「开启协同」富弹窗
                     // (CreateWorkerPopover:role/agent/model/初始任务),与会话内完全一致;OFF 态点击
                     // 走它而非简单 worker popover。ON 态点击 onChange(enabled:false) 关闭协同。
@@ -3191,14 +3276,19 @@ export function NewMakerDraftRoute() {
                               (collabPolicy.loading ||
                                 collabPolicy.unavailable ||
                                 !collabPolicy.enabled),
+                            // unsupported(被控端版本过旧、没有 maker:plugins:get-state)排在
+                            // unavailable 之前:它是确定性的不支持,给「稍后重试」是误导,
+                            // 上面的 onDisabledActivate 也只挂在 unavailable 上。
                             disabledReason:
                               collabPolicy.loading
                                 ? t('newChat.collaboration.loadingHint')
-                                : collabPolicy.unavailable
-                                  ? t('newChat.collaboration.unavailableHint')
-                                  : !collabPolicy.enabled
-                                    ? t('newChat.collaboration.disabledHint')
-                                    : undefined,
+                                : collabPolicy.unsupported
+                                  ? t('newChat.collaboration.unsupportedRemoteHint')
+                                  : collabPolicy.unavailable
+                                    ? t('newChat.collaboration.unavailableHint')
+                                    : !collabPolicy.enabled
+                                      ? t('newChat.collaboration.disabledHint')
+                                      : undefined,
                           }
                         : undefined
                     }
@@ -3362,7 +3452,9 @@ export function NewMakerDraftRoute() {
 
         {/* 「开启协同」富弹窗:与会话内 CCAgentSessionView 同一组件/标题。草稿态没有 sessionId,
             不立刻 enableOrca —— onCreate 把 Worker 富配置写进 draft.collab,createSession 后由
-            draftEnableOrcaOptions 透传给 enableOrca(见本文件 F-COLLAB 段)。deviceId 省略(协同仅本地)。 */}
+            draftEnableOrcaOptions 透传给 enableOrca(见本文件 F-COLLAB 段)。
+            device-link 草稿传 deviceId:Worker 在**被控端** spawn,模型 / 来源清单必须来自那台
+            设备,拿控制端的目录配出来的模型在被控端多半不存在(issue #1170)。 */}
         <CreateWorkerPopover
           open={createWorkerOpen}
           onClose={() => setCreateWorkerOpen(false)}
@@ -3383,6 +3475,7 @@ export function NewMakerDraftRoute() {
           }}
           title={t('orca.createWorker.enableCollabTitle')}
           submitLabel={t('orca.createWorker.enableCollabSubmit')}
+          deviceId={effectiveDeviceLinkDeviceId ?? undefined}
           // SSH 远程草稿(draft.remoteHostId):worker 在远端 spawn,模型清单按 SSH
           // 口径过滤,与本路由 ChatInput 候选及 main 侧 remote-worker guard 同口径。
           sshRemote={!!effectiveRemoteHostId}

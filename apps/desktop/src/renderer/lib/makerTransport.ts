@@ -323,6 +323,31 @@ export function estimatedSessionValueFor(sessionId: string): Promise<{
   ]) as ReturnType<typeof estimatedSessionValueFor>;
 }
 
+/**
+ * 插件启停状态(只读):**按目标设备**读项目级 / 用户级 collab 等开关。
+ *
+ * device-link 会话与草稿的 workingDir 是**被控端**机器上的路径,拿它在控制端本机查
+ * `.cindy/plugins.json` 读到的是控制端自己的用户级开关 —— 与被控端 main 的权威授权
+ * (assertCollabProjectEnabled)可能相反,于是入口看得见却开不起来(issue #1170)。
+ * 所以这里按 deviceId 分流:本机 → 真 IPC;远程 → 隧道到被控端读它自己的真相。
+ *
+ * 路径归一化由调用方在控制端完成:normalizeWorkingDirForProjectSettings 是纯路径形态
+ * 推导(不依赖 process.platform / 本机 userData),跨 macOS ↔ Windows 控制同样成立。
+ *
+ * 老被控端未收录该 channel 时隧道回 DEVICE_LINK_CHANNEL_NOT_ALLOWED,调用方据此
+ * fail-closed 置灰入口并说明「设备版本过旧」,不会放行到 enableOrca 才撞错。
+ */
+export function pluginEnableStateFor(
+  deviceId: string | null | undefined,
+  pluginId: string,
+  workingDir?: string,
+): ReturnType<typeof window.electronAPI.maker.plugins.getState> {
+  if (!deviceId) return window.electronAPI.maker.plugins.getState(pluginId, workingDir);
+  return invokeRemote(deviceId, 'maker:plugins:get-state', [pluginId, workingDir]) as ReturnType<
+    typeof window.electronAPI.maker.plugins.getState
+  >;
+}
+
 /** 会话内搜索跳转定位:远程走隧道 local-db:messages:around(否则查控制端空库,跳转必失败)。 */
 export function aroundMessagesFor(
   sessionId: string,

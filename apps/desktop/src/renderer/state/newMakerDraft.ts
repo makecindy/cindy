@@ -414,12 +414,24 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
     next.deviceLinkDeviceId = null;
     next.deviceLinkDeviceName = null;
   }
-  // device-link 草稿同样禁用协同(同 remoteHostId:worker 创建拿不到 deviceId)。
-  if (next.deviceLinkDeviceId != null && next.collab.enabled) {
-    next.collab = { ...next.collab, enabled: false };
+  // 换目标设备(含本机 ↔ 被控设备、被控设备 A ↔ B)→ 丢掉 Worker 富配置,只留
+  // enabled + worker。model / providerId / effort / fast 都是**设备作用域**的:被控端
+  // 装的模型目录、连的供应商都是它自己那一套,原样透传过去会撞被控端 main 的精确
+  // preflight(INVALID_PARAMS / PROVIDER_ROUTE_UNAVAILABLE),协同静默降级成单会话 ——
+  // 正是 issue #1170 抱怨的「入口能点但走不完」。清掉后由被控端按自己的默认值起
+  // Worker,与草稿里模型 pill 换设备重新校准的既有行为一致。
+  //
+  // 放在 store 层而不是 applyDraftTarget:换设备有四条路径(设备 pill、设备域浏览器、
+  // 工作区 picker、所选设备失效后的自动回落),挂在这里全部自动覆盖,新增第五条也不用
+  // 再对齐一格(与 NewMakerDraftRoute.applyDraftTarget 的「按什么变了而不是走了哪条
+  // 路径」同一思路)。
+  if (currentDraft.deviceLinkDeviceId !== next.deviceLinkDeviceId && next.collab.workerConfig) {
+    next.collab = { ...next.collab, workerConfig: undefined };
   }
-  // remote 项目 draft 的协同 codex / cc 均已接通(worker 创建已继承
-  // remoteHostId,远端 MCP 注入两端落地),不再按 vendor 强制关闭。
+  // device-link 与 SSH remote 项目 draft 的协同都已接通(device-link 的 enableOrca /
+  // worker 创建 / 团队读写经隧道在被控端执行;SSH 的 worker 创建继承 remoteHostId、
+  // 远端 MCP 注入两端落地),不再按目标或 vendor 强制关闭。仍然关闭的只有「对话模式」
+  // (workingDir == null,见上方级联)与 Orca Worker 子会话(会话侧判定)。
   currentDraft = next;
   scheduleWrite(currentDraft);
   emit();

@@ -4643,6 +4643,7 @@
       "openHint": "Worker 를 불러 함께 작업",
       "disabledHint": "이 프로젝트에서는 협업 모드가 비활성화되어 있습니다. 프로젝트 설정에서 활성화하세요.",
       "unavailableHint": "이 프로젝트의 협업 설정을 확인할 수 없습니다. 잠시 후 다시 시도하세요.",
+      "unsupportedRemoteHint": "제어 대상 기기의 버전이 오래되어 협업을 사용할 수 없습니다.",
       "loadingHint": "이 프로젝트의 협업 설정을 확인하는 중입니다. 잠시 후 다시 시도하세요.",
       "stopHint": "협업 중지",
       "stopAria": "협업 중지",
