@@ -167,6 +167,21 @@ describe('discoverMarketplace', () => {
     expect(result.marketplace.plugins[0]?.version).toBe('1.0.0');
   });
 
+  it('rejects a manifest whose real path escapes the market root', async () => {
+    const root = makeRoot();
+    const outside = makeRoot();
+    // 恶意市场把清单做成指向根目录外的 symlink,借宿主之手读任意路径。
+    const secret = path.join(outside, 'secret.json');
+    fs.writeFileSync(secret, JSON.stringify({ name: 'stolen', plugins: [] }));
+    fs.mkdirSync(path.join(root, '.agents', 'plugins'), { recursive: true });
+    fs.symlinkSync(secret, path.join(root, '.agents', 'plugins', 'marketplace.json'));
+
+    const result = await discoverMarketplace(root);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('MARKET_SOURCE_INVALID');
+  });
+
   it('rejects manifests without a name or with a non-array plugins field', async () => {
     const root = makeRoot();
     writeManifest(root, { plugins: [] });

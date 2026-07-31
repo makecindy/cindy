@@ -143,6 +143,29 @@ describe('cacheLease 删除守卫', () => {
     }
   });
 
+  it('blocks a still-queued removal from starting while the path is leased for reuse', async () => {
+    const tree = makeTree();
+    // 场景:移除来源时旧安装仍持有版本租约 → 整槽删除进 deferred(尚未启动)。
+    retainCachePath(tree.version);
+    let configured = false;
+    await removeCachePath(tree.slot, { skipIf: () => configured });
+
+    // 复用方对整个槽持租约后再重建:此时 deferred 里那笔删除**启动不了**——
+    // 只等 inFlight 是不够的,它当时还没开始跑。
+    retainCachePath(tree.slot);
+    releaseCachePath(tree.version); // 旧租约释放,但槽租约仍在
+    fs.mkdirSync(tree.version, { recursive: true });
+    fs.writeFileSync(path.join(tree.version, 'file.txt'), 'rebuilt');
+    await settle();
+    expect(fs.readFileSync(path.join(tree.version, 'file.txt'), 'utf8')).toBe('rebuilt');
+
+    // 配置在释放槽租约之前写入 → 释放时 skipIf 直接否决那笔删除。
+    configured = true;
+    releaseCachePath(tree.slot);
+    await settle();
+    expect(fs.readFileSync(path.join(tree.version, 'file.txt'), 'utf8')).toBe('rebuilt');
+  });
+
   it('counts nested leases so an inner release does not unblock deletion', async () => {
     const tree = makeTree();
     retainCachePath(tree.version);

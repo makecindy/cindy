@@ -60,6 +60,14 @@ import { MarketSourceStore } from './sources/store.js';
 const log = createLogger('plugin-market');
 const NO_DUPLICATE_GHOST_IDS: ReadonlySet<string> = new Set();
 
+/**
+ * 来源增删改的互斥键。**安装的提交段(所有权复核 + 包落位)也要拿这把锁**:
+ * 否则复核通过后、真正改动 Ghost 运行时之前,另一窗口能添加声明同一 ghostId 的
+ * 来源,让已冲突的插件照样装上。与按 pluginId 的安装锁嵌套无环(来源操作不反向
+ * 获取 pluginId 锁),不会死锁。
+ */
+const SOURCE_MUTATION_KEY = 'market-sources';
+
 function captureMarketOwner(): ActiveAppSession {
   const session = getActiveAppSession();
   if (
@@ -470,7 +478,7 @@ export class PluginMarketService {
   }): Promise<MarketSourceSummary> {
     // 源管理操作全局串行：添加期间发现的市场名必须唯一，并行添加会互相覆盖。
     return this.runForOwner((owner) =>
-      this.withMutation('market-sources', async () => {
+      this.withMutation(SOURCE_MUTATION_KEY, async () => {
         requireSameMarketOwner(owner);
         return this.sourceManagerForOwner(owner).addSource(input);
       }),
@@ -479,7 +487,7 @@ export class PluginMarketService {
 
   async removeSource(name: string): Promise<{ ok: true }> {
     return this.runForOwner((owner) =>
-      this.withMutation('market-sources', async () => {
+      this.withMutation(SOURCE_MUTATION_KEY, async () => {
         requireSameMarketOwner(owner);
         return this.sourceManagerForOwner(owner).removeSource(name);
       }),
@@ -488,7 +496,7 @@ export class PluginMarketService {
 
   async refreshSource(name: string): Promise<MarketSourceSummary> {
     return this.runForOwner((owner) =>
-      this.withMutation('market-sources', async () => {
+      this.withMutation(SOURCE_MUTATION_KEY, async () => {
         requireSameMarketOwner(owner);
         return this.sourceManagerForOwner(owner).refreshSource(name);
       }),
@@ -650,6 +658,9 @@ export class PluginMarketService {
             requireSameMarketOwner(owner);
             await this.assertSourceOwnsGhostId({ owner, ghostId: plugin.ghostId, ownsInstall });
           },
+          // 复核与落位共用来源锁:beforeCommit 返回后包检查还要跑一段,期间不能让
+          // 来源被增删,否则复核结论在真正落位前就过期了。
+          withCommitLock: (fn) => this.withMutation(SOURCE_MUTATION_KEY, fn),
         });
         // 包目录落位后,溯源写入操作开始时捕获的 owner 账本(与服务端安装同款)。
         await this.withCapturedLedgerMutation(ledger, () => {
@@ -873,14 +884,18 @@ export class PluginMarketService {
           );
         }
       }
-      // 改动 Ghost 运行时之前的最后一道:跨来源 ghostId 所有权按当前事实重算。
-      await options.recheckOwnership?.();
-      requireSameMarketOwner(owner);
-      // 市场首装一律装完即开(2026-07-26 定案,见 installOrUpdateMarketGhostPackage);
-      // 已装过则走原位更新,唤醒/沉睡状态延续当前值。
-      const ghost = await installOrUpdateMarketGhostPackage(tempPath, {
-        ghostId: plugin.ghostId,
-        version: plugin.currentRelease.version,
+      // 复核 + 落位在同一把来源锁内完成:`installOrUpdateMarketGhostPackage` 会先
+      // await 包检查才开始改动运行时,复核若在锁外做,结论会在这段等待里过期。
+      const ghost = await this.withMutation(SOURCE_MUTATION_KEY, async () => {
+        // 改动 Ghost 运行时之前的最后一道:跨来源 ghostId 所有权按当前事实重算。
+        await options.recheckOwnership?.();
+        requireSameMarketOwner(owner);
+        // 市场首装一律装完即开(2026-07-26 定案,见 installOrUpdateMarketGhostPackage);
+        // 已装过则走原位更新,唤醒/沉睡状态延续当前值。
+        return installOrUpdateMarketGhostPackage(tempPath, {
+          ghostId: plugin.ghostId,
+          version: plugin.currentRelease.version,
+        });
       });
       // Once the package directory is committed, finish provenance against the
       // owner captured at operation start even if the active session changes.

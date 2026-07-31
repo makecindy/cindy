@@ -660,6 +660,48 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     }
   });
 
+  it('holds the source lock across the install commit so sources cannot interleave', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const rivalDir = writeLocalMarket(root, 'rival-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    const pluginId = customMarketPluginId('team-lib', 'alpha');
+    const reviewed = await h.service.detail(pluginId);
+
+    // 落位期间(installOrUpdateMarketGhostPackage 还在 await 包检查)另一窗口尝试
+    // 添加声明同一 ghostId 的来源。提交段持有来源锁,这次 addSource 必须排在落位
+    // 之后 —— 否则复核结论在真正落位前就过期了。
+    let addSourceStarted = false;
+    let installFinished = false;
+    runtime.install.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      installFinished = true;
+      return { manifest: ghostManifest('alpha'), dir: '/ghosts/alpha', enabled: true };
+    });
+
+    const installing = h.service.install(pluginId, {
+      expectedReleaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
+      expectedManifest: reviewed.manifest,
+    });
+    // 等安装真正进入落位段再发起来源添加。
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const adding = h.service
+      .addSource({ source: rivalDir })
+      .then(() => {
+        addSourceStarted = true;
+      })
+      .catch(() => {
+        addSourceStarted = true;
+      });
+
+    await installing;
+    // 落位完成时,来源添加还没被放行(它在锁后面排队)。
+    expect(installFinished).toBe(true);
+    expect(addSourceStarted).toBe(false);
+    await adding;
+  });
+
   it('uninstalls a custom market plugin through the shared uninstall path', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);

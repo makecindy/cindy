@@ -2,10 +2,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MarketSourceManager, marketCloneSlug } from '../sources/index';
 import type { GitExecutor } from '../sources/git';
+import { releaseCachePath, retainCachePath } from '../sources/cacheLease';
 import { MarketSourceStore } from '../sources/store';
 
 const roots: string[] = [];
@@ -611,6 +612,86 @@ describe('MarketSourceManager git sources', () => {
     ).toBe(true);
     const rediscovered = await remover.discoverSource('hub');
     expect(rediscovered.result.ok).toBe(true);
+  });
+
+  it('survives a queued slot removal that unblocks while the slot is being reused', async () => {
+    const root = makeRoot();
+    const { executor } = fakeGit('hub', [{ rel: 'p', id: 'alpha' }]);
+    const store = new MarketSourceStore(path.join(root, 'sources.v1.json'));
+    const deps = {
+      store,
+      cloneRoot: path.join(root, 'sources'),
+      homeDir: root,
+      gitExecutor: executor,
+    };
+    const manager = new MarketSourceManager(deps);
+    await manager.addSource({ source: 'openai/plugins' });
+
+    const slot = path.join(
+      root,
+      'sources',
+      marketCloneSlug('hub', {
+        type: 'git',
+        url: 'https://github.com/openai/plugins.git',
+        sparsePaths: [],
+      }),
+    );
+    const held = fs.readFileSync(path.join(slot, 'current'), 'utf8').trim();
+    const heldDir = path.join(slot, 'versions', held);
+
+    // 安装打包仍持有旧版本 → 移除来源时整槽删除只能进 deferred(尚未启动)。
+    retainCachePath(heldDir);
+    await new MarketSourceManager(deps).removeSource('hub');
+
+    // 精确命中危险窗口:旧租约在"等完在途删除之后、写回配置之前"释放。此刻
+    // slotIsConfigured() 还是 false,那笔 deferred 删除会启动并与落位并发。
+    // 只有整个复用段持有槽租约才挡得住它。
+    const realRename = fs.promises.rename;
+    const renameSpy = vi
+      .spyOn(fs.promises, 'rename')
+      .mockImplementation(async (from, to) => {
+        if (String(to).includes(`${path.sep}versions${path.sep}`)) {
+          releaseCachePath(heldDir);
+          await new Promise((resolve) => setTimeout(resolve, 40));
+        }
+        return realRename(from as never, to as never);
+      });
+    try {
+      await new MarketSourceManager(deps).addSource({ source: 'openai/plugins' });
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const current = fs.readFileSync(path.join(slot, 'current'), 'utf8').trim();
+    expect(
+      fs.existsSync(path.join(slot, 'versions', current, '.agents', 'plugins', 'marketplace.json')),
+    ).toBe(true);
+  });
+
+  it('resolves the current version from current.bak when the pointer is missing', async () => {
+    const root = makeRoot();
+    const { executor } = fakeGit('hub', [{ rel: 'p', id: 'alpha' }]);
+    const manager = makeManager(root, executor);
+    await manager.addSource({ source: 'openai/plugins' });
+
+    const slot = path.join(
+      root,
+      'sources',
+      marketCloneSlug('hub', {
+        type: 'git',
+        url: 'https://github.com/openai/plugins.git',
+        sparsePaths: [],
+      }),
+    );
+    // 备份交换连续失败时,唯一有效的指针留在 current.bak。只看主文件会把仍有完整
+    // 版本的缓存判成缺失,整个来源报 market root missing。
+    fs.renameSync(path.join(slot, 'current'), path.join(slot, 'current.bak'));
+
+    const discovered = await manager.discoverSource('hub');
+    expect(discovered.result.ok).toBe(true);
+    // 读取入口顺带把指针恢复回主文件。
+    expect(fs.existsSync(path.join(slot, 'current'))).toBe(true);
   });
 
   it('prunes dead incoming staging directories left by a killed refresh', async () => {

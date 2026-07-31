@@ -44,6 +44,15 @@ export async function installCustomMarketPlugin(input: {
    * 声明同一 ghostId 的来源。
    */
   beforeCommit?: () => void | Promise<void>;
+  /**
+   * 提交段(复核 + 落位)的互斥包装,与来源增删共享同一把锁。
+   *
+   * 只在 `beforeCommit` 里复核不够:它返回后 `installOrUpdateMarketGhostPackage`
+   * 还要先 await 包检查才开始真正改动运行时,那段时间另一窗口仍能添加声明同一
+   * ghostId 的来源,复核结论在落位前就过期了。把"复核 + 落位"整段放进锁里,
+   * 来源变更插不进来。
+   */
+  withCommitLock?: <T>(fn: () => Promise<T>) => Promise<T>;
 }): Promise<InstalledGhost> {
   let raw: unknown;
   try {
@@ -86,11 +95,15 @@ export async function installCustomMarketPlugin(input: {
       );
     }
     // 装出前最后防线:打包期间账号可能已切换、也可能有别的来源声明了同一 ghostId。
-    await input.beforeCommit?.();
-    return await installOrUpdateMarketGhostPackage(tempPath, {
-      ghostId: validated.manifest.id,
-      version: validated.manifest.version,
-    });
+    // 复核与落位必须在同一把锁内完成,否则复核结论会在落位前过期。
+    const commit = async (): Promise<InstalledGhost> => {
+      await input.beforeCommit?.();
+      return installOrUpdateMarketGhostPackage(tempPath, {
+        ghostId: validated.manifest.id,
+        version: validated.manifest.version,
+      });
+    };
+    return await (input.withCommitLock ? input.withCommitLock(commit) : commit());
   } finally {
     await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
   }

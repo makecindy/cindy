@@ -5,7 +5,7 @@
  * 刷新、移除操作。刷新与移除失败时在列表上方内联展示本地化引导 +
  * （git 类错误的）消毒后原始输出。
  */
-import { useCallback, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { RefreshCw, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -60,6 +60,17 @@ export function MarketplaceSourcesDialog({
       detail: ipc && GIT_DETAIL_CODES.has(ipc.code) ? ipc.message : null,
     };
   };
+
+  // 移除确认框由 `pendingRemove` 独立驱动:父对话框被关掉(含切号时父级清空状态并
+  // 关闭)时它不会自动消失,用户随后确认会对**当前账号**执行 removeSource ——
+  // 若新账号恰有同名来源,就会在还显示旧账号来源名的确认框里误删新账号的配置。
+  // 所以父级一关就立刻清空待移除项,并让确认框的打开状态受父级 open 约束。
+  useEffect(() => {
+    if (open) return;
+    setPendingRemove(null);
+    setBusySource(null);
+    setOperationError(null);
+  }, [open]);
 
   const handleRefresh = useCallback(
     async (name: string) => {
@@ -236,8 +247,9 @@ export function MarketplaceSourcesDialog({
           </div>
         </Dialog.Content>
       </Dialog.Portal>
+      {/* 父级关闭即视为确认框关闭:切号时父级会先关掉,不能让它独立存活。 */}
       <ConfirmDialog
-        open={pendingRemove !== null}
+        open={open && pendingRemove !== null}
         onOpenChange={(nextOpen) => {
           if (!nextOpen) setPendingRemove(null);
         }}

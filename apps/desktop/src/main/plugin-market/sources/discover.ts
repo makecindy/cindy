@@ -118,9 +118,38 @@ export async function discoverMarketplace(marketRoot: string): Promise<DiscoverR
   }
   if (!manifestPath) return { ok: false, code: 'MARKET_MANIFEST_MISSING' };
 
+  // 清单读取也必须按真实路径做包含性判定(与 resolvePluginDir 同一套):候选路径是
+  // 我们自己拼的,挡不住仓库内的 symlink —— 恶意市场可以把
+  // `.agents/plugins/marketplace.json` 做成指向市场根目录外的链接,从而让宿主去读
+  // 任意路径。realpath 落在根目录外一律拒。
+  let realManifestPath: string;
+  try {
+    const [realRoot, realManifest] = await Promise.all([
+      fs.promises.realpath(marketRoot),
+      fs.promises.realpath(manifestPath),
+    ]);
+    const realRootWithSep = realRoot.endsWith(path.sep) ? realRoot : `${realRoot}${path.sep}`;
+    if (!realManifest.startsWith(realRootWithSep)) {
+      return {
+        ok: false,
+        code: 'MARKET_SOURCE_INVALID',
+        detail: 'marketplace manifest escapes the marketplace root',
+      };
+    }
+    realManifestPath = realManifest;
+  } catch (error) {
+    return {
+      ok: false,
+      code: 'MARKET_SOURCE_INVALID',
+      detail: error instanceof Error ? error.message : String(error),
+    };
+  }
+
   let raw: RawMarketplaceManifest;
   try {
-    raw = JSON.parse(await fs.promises.readFile(manifestPath, 'utf8')) as RawMarketplaceManifest;
+    raw = JSON.parse(
+      await fs.promises.readFile(realManifestPath, 'utf8'),
+    ) as RawMarketplaceManifest;
   } catch (error) {
     return {
       ok: false,

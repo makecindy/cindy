@@ -46,7 +46,7 @@ import type {
 } from '../../../shared/pluginMarket.js';
 import { createLogger } from '../../logger.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
-import { atomicWriteFileSync } from '../../utils/atomicWriteFile.js';
+import { atomicWriteFileSync, readAtomicFileSync } from '../../utils/atomicWriteFile.js';
 import {
   releaseCachePath,
   removeCachePath,
@@ -141,10 +141,12 @@ export class MarketSourceManager {
   ): string | null {
     const slot = this.cacheSlot(config);
     const pointer = this.currentPointer(slot);
-    // 已有指针:按指针解析。
-    if (fs.existsSync(pointer)) {
+    // 已有指针:按指针解析。指针也是原子写维护的文件,备份交换连续失败时唯一有效
+    // 的那份会留在 `current.bak` —— 只看主文件会把仍有完整版本的缓存判成缺失,
+    // 整个来源报 market root missing。所以经 readAtomicFileSync 读,让它先恢复。
+    if (fs.existsSync(pointer) || fs.existsSync(`${pointer}.bak`)) {
       try {
-        const version = fs.readFileSync(pointer, 'utf8').trim();
+        const version = (readAtomicFileSync(pointer) ?? '').trim();
         // 版本名必须是 versions/ 下的直接子目录名,拒绝绝对路径与穿越。
         if (version && !version.includes('/') && !version.includes('\\') && version !== '..' && version !== '.') {
           const dir = path.join(this.versionsDir(slot), version);
@@ -153,6 +155,9 @@ export class MarketSourceManager {
         this.log.warn('marketplace cache pointer invalid', { name: config.name, version });
         return null;
       } catch (error) {
+        // 指针读不出来(含备份也恢复不了)按"无可用缓存"处理即可 —— 与 ledger /
+        // 来源配置不同,缓存是可重建的:返回 null 会让下次刷新整目录重克隆,
+        // 不存在"用空数据覆盖用户资产"的风险。
         this.log.error('failed to read marketplace cache pointer', {
           name: config.name,
           error: error instanceof Error ? error.message : String(error),
@@ -423,17 +428,30 @@ export class MarketSourceManager {
       const slot = this.cacheSlot(config);
       const version = crypto.randomUUID();
       const dir = path.join(this.versionsDir(slot), version);
-      // 清掉同 slug 的历史残骸。有租约时守卫会推迟,而本次添加随后就会往这个槽里
-      // 写新版本 —— 所以必须带上"槽已被配置占用则放弃删除"的再核对(本方法末尾
-      // store.add 之后该槽即为已配置),否则那笔延迟删除会把刚添加的缓存删掉。
-      await this.removeCacheDir(slot, { skipIf: () => this.slotIsConfigured(slot) });
-      // 还要等**已经启动**的删除跑完:`skipIf` 只挡得住尚未开始的那笔。移除来源后
-      // 立刻重新添加同名同源时,旧槽删除可能正在途中,不等它结束就写入,新版本会被
-      // 它顺手带走(配置有效但来源持续报缓存缺失)。
-      await settleCachePathRemovals(slot);
-      await fs.promises.mkdir(this.versionsDir(slot), { recursive: true });
-      await fs.promises.rename(discoveredRoot, dir);
-      atomicWriteFileSync(this.currentPointer(slot), version);
+      // 复用缓存槽的全过程(清残骸 → 落位 → 切指针 → 写配置)都对**整个槽**持租约。
+      //
+      // 这是必需的,而且比"先清理 + 等在途删除"更强:那两步只能处理"已经启动"的
+      // 删除,而移除来源留下的那笔可能仍躺在 deferred 里,会在 settle 返回后、
+      // store.add 之前因旧租约释放而启动 —— 那时 slotIsConfigured() 还是 false,
+      // 于是它与紧随的 mkdir/rename 并发,把刚重建的槽删掉。持槽租约则让守卫
+      // 无法启动这笔删除,等本段结束释放时配置已写入,skipIf 直接否决它。
+      retainCachePath(slot);
+      try {
+        // 清掉同 slug 的历史残骸(带"槽已被配置占用则放弃"的再核对);此刻本方法
+        // 自己持有槽租约,所以它必然被推迟,由本段末尾释放后统一判定。
+        await this.removeCacheDir(slot, { skipIf: () => this.slotIsConfigured(slot) });
+        // 已经启动的删除仍要等它跑完——租约挡不住早于它启动的那笔。
+        await settleCachePathRemovals(slot);
+        await fs.promises.mkdir(this.versionsDir(slot), { recursive: true });
+        await fs.promises.rename(discoveredRoot, dir);
+        atomicWriteFileSync(this.currentPointer(slot), version);
+        // 配置必须在**释放槽租约之前**写入:这样任何被推迟的整槽删除在释放时
+        // 立刻看到"槽已被配置占用"并放弃,不存在中间空档。
+        this.deps.store.add(config);
+      } finally {
+        releaseCachePath(slot);
+      }
+      return this.toSummary(config, discovered.marketplace);
     }
     this.deps.store.add(config);
     return this.toSummary(config, discovered.marketplace);
