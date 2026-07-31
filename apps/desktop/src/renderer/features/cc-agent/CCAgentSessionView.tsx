@@ -2779,7 +2779,11 @@ export function CCAgentSessionView({
       // (codex P2 第四轮)。pendingGoal 只有远程草稿会登记,所以无条件上锁。
       setRemoteHandoffPreparing(true);
       try {
-        const deviceId = getSessionDeviceId(sessionId);
+        // 归属必须走**粘滞**解析:relay 瞬断会 clear 掉 remoteProjectsStore 的注册表,
+        // 非粘滞版此刻返回 undefined → 跳过订阅;而下面的 goalApiFor 走的是粘滞归属,
+        // setGoal 照样发到被控端 —— 于是目标首轮的 maker:event/status 推送落在
+        // 没有订阅者的窗口里(greptile P1)。这正是本 PR 不变量 #3 的一处漏网。
+        const deviceId = getStickySessionDeviceId(sessionId);
         if (deviceId) {
           await window.electronAPI.deviceLink.subscribe(deviceId, [`session:${sessionId}`]);
         }

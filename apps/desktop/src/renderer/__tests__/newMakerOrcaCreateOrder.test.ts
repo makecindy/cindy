@@ -250,12 +250,23 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       );
       expect(sendRemember).toBeGreaterThan(-1);
       expect(goalRemember).toBeGreaterThan(-1);
-      expect(source.lastIndexOf('setPending(remoteSessionId, {', sendRemember)).toBeGreaterThan(-1);
+      // 副本要**紧贴提交点**:排在 commitRemoteSessionHandoff 之后,但在附件迁移那次
+      // await 之前 —— 提交点之后每多一次 await,「对端会话已建好、正文却还没有第二份」
+      // 的窗口就长一分(codex P2 第五轮)。
+      const sendCommit = source.lastIndexOf("logTag: 'draft send',", sendRemember);
+      const rehome = source.indexOf('await rehomeDraftAttachments(', sendCommit);
+      expect(sendCommit).toBeGreaterThan(-1);
+      expect(sendCommit).toBeLessThan(sendRemember);
+      expect(sendRemember).toBeLessThan(rehome);
       expect(source.lastIndexOf('setPendingGoal(remoteSessionId, {', goalRemember)).toBeGreaterThan(
         -1,
       );
       expect(sendRemember).toBeLessThan(
         source.indexOf('navigate(`/cc-agent/${remoteSessionId}`', sendRemember),
+      );
+      // 只落一次,别两处都落。
+      expect(source.match(/rememberRecoverableHandoff\(remoteSessionId, 'message'/g)).toHaveLength(
+        1,
       );
       // 会话视图不再自己落副本(落在那里要等 historyLoaded,等于没落)。
       expect(sessionViewSource).not.toContain('rememberRecoverableHandoff(');
@@ -284,6 +295,9 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       const branch = goalBranch();
       const lock = branch.indexOf('setRemoteHandoffPreparing(true)');
       const awaitSubscribe = branch.indexOf('await window.electronAPI.deviceLink.subscribe(');
+      // 归属走粘滞解析:非粘滞版在 relay 瞬断窗口会返回 undefined → 跳过订阅,
+      // 而 goalApiFor 仍按粘滞归属把 setGoal 发到被控端(greptile P1,不变量 #3)。
+      expect(branch).toContain('const deviceId = getStickySessionDeviceId(sessionId);');
       const awaitCollab = branch.indexOf('await consumePendingRemoteCollab(pendingGoal.remoteCollab');
       const setGoal = branch.indexOf('await goalApiFor(sessionId).setGoal(');
       const forget = branch.indexOf('deliverRecoverableHandoff(sessionId, async () => {');

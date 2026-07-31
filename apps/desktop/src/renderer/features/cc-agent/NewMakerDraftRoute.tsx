@@ -2190,6 +2190,11 @@ export function NewMakerDraftRoute() {
               nowIso: new Date().toISOString(),
               logTag: 'draft send',
             });
+            // 可恢复副本紧贴提交点落下,**排在下面的附件迁移 await 之前**(codex P2 第五轮)。
+            // 提交点之后每多一次 await,「对端会话已建好、正文却还没有第二份」的窗口就长一分;
+            // rehomeDraftAttachments 是本机 IPC,但含 base64 / 草稿缓存图片时并不快,期间
+            // 应用退出或崩溃,正文就没了。副本只存正文、不依赖附件迁移结果,所以可以先落。
+            rememberRecoverableHandoff(remoteSessionId, 'message', message);
             // F-COLLAB / device-link:草稿开了协同 → **不在这里 await**,把「开协同」连同
             // 首条消息一起交接给 SessionView(见 pendingFirstMessage.PendingRemoteCollab)。
             //
@@ -2227,14 +2232,6 @@ export function NewMakerDraftRoute() {
                 ? { slashCommandRanges: opts.slashCommandRanges }
                 : {}),
             });
-            // 登记的**同一刻**落一份可恢复副本(codex P1 第四轮)。
-            //
-            // 副本不能等到 SessionView 消费时再落:那个 effect 要等 historyLoaded,而
-            // device-link 会话的历史要走隧道拉。被控端此刻离线、或首次拉历史超过
-            // PENDING_TTL_MS(60s),effect 根本轮不到执行,内存项却已被 TTL 删掉 ——
-            // 链路恢复后 consumePending 只能拿到 null,而磁盘上从来没写过。
-            // 登记即落副本,窗口就从「消费之后」提前覆盖到「登记之后」的全程。
-            rememberRecoverableHandoff(remoteSessionId, 'message', message);
             opts?.onAccepted?.();
             clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
             attachmentState.clearFiles();
@@ -2794,7 +2791,8 @@ export function NewMakerDraftRoute() {
                 }
               : {}),
           });
-          // 与发送分支同口径:登记即落可恢复副本,不等消费(理由见那段注释)。
+          // 与发送分支同口径:副本紧贴提交点落下,不等消费(理由见那段注释)。
+          // 这条分支的提交点与 setPendingGoal 之间没有 await,所以落在这里即等价于贴着提交点。
           rememberRecoverableHandoff(remoteSessionId, 'goal', objective);
           // 自动起名:goal 首轮走 GoalController 的 session.send、不经 maker:input:enqueue,
           // 被控端 deviceLinkAutoTitle 不会触发(Codex review #548)—— 与本地分支的

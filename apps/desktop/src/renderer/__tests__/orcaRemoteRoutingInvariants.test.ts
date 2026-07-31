@@ -69,6 +69,22 @@ describe('orca 远程路由接线不变式', () => {
     expect(stop).not.toContain('makerApiFor(leadSessionId).disableOrca(');
   });
 
+  // 同一条不变量的第三处漏网(greptile P1 第五轮):远程草稿起目标时,「要不要订阅
+  // session:<id>」曾用非粘滞 getSessionDeviceId 判断,而真正发 setGoal 的 goalApiFor
+  // 走粘滞归属 —— 瞬断窗口内订阅被跳过、setGoal 照样发到被控端,目标首轮的
+  // maker:event/status 推送就落在没有订阅者的窗口里。判据必须与执行端归属同口径。
+  it('远程起目标的订阅判据与 setGoal 的归属同口径(都用粘滞)', () => {
+    const view = read('features/cc-agent/CCAgentSessionView.tsx');
+    const goalConsumer = view.slice(
+      view.indexOf('const pendingGoal = consumePendingGoal(sessionId);'),
+    );
+    const branch = goalConsumer.slice(0, goalConsumer.indexOf('const learnCardsRestoredRef'));
+    expect(branch).toContain('const deviceId = getStickySessionDeviceId(sessionId);');
+    expect(branch).not.toContain('const deviceId = getSessionDeviceId(sessionId);');
+    expect(branch).toContain('deviceLink.subscribe(deviceId,');
+    expect(branch).toContain('goalApiFor(sessionId).setGoal(');
+  });
+
   it('makerApiForSticky 住在传输层(归属判定只有一处可改)', () => {
     const src = read('lib/makerTransport.ts');
     expect(src).toContain('export function makerApiForSticky(');

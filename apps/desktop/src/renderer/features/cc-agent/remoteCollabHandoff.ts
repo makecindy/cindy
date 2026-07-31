@@ -46,6 +46,19 @@ const log = createLogger('remoteCollabHandoff');
  */
 const TIMEOUT_RECOVERY_ATTEMPTS = 6;
 const TIMEOUT_RECOVERY_DELAY_MS = 3000;
+/**
+ * 整段回查的总时限。
+ *
+ * 只限次数不限时间是不够的:链路「可连但每个 invoke 都黑洞」时,每次 listWorkersByLead
+ * 自己就要走满 30s 隧道超时,6 次串行 + 5×3s 退避 ≈ 3 分钟 —— 而这段时间 composer 是
+ * 锁住的、首轮压着不发。次数上限只约束了退避总和(15s),没约束探针自身的耗时
+ * (codex P2 第五轮)。
+ *
+ * 所以再加一道总 deadline:两者谁先到都停,回查最坏 30s 收尾,叠加最初 enableOrca 的
+ * 30s 超时,composer 最坏锁约 1 分钟而不是 3 分钟。超时后仍走 fail-closed 降级,
+ * 并由 finally 的镜像回流让被控端稍后提交的情况自愈。
+ */
+const TIMEOUT_RECOVERY_DEADLINE_MS = 30_000;
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -72,7 +85,16 @@ function isAmbiguousTimeout(err: unknown): boolean {
 async function recoverTimedOutTeam(
   p: RemoteCollabEnableParams,
 ): Promise<{ focusWorkerSessionId: string } | null> {
+  const deadline = Date.now() + TIMEOUT_RECOVERY_DEADLINE_MS;
   for (let attempt = 0; attempt < TIMEOUT_RECOVERY_ATTEMPTS; attempt += 1) {
+    // 次数与时间两道闸,谁先到都停 —— 探针自身可能各走满 30s 隧道超时(见常量注释)。
+    if (Date.now() >= deadline) {
+      log.warn(`[${p.logTag}] remote team probe hit the overall deadline`, {
+        leadSessionId: p.leadSessionId,
+        attempt,
+      });
+      return null;
+    }
     if (attempt > 0) await delay(TIMEOUT_RECOVERY_DELAY_MS);
     try {
       const workers = await orcaWorkflowsForDevice(p.deviceId).listWorkersByLead(p.leadSessionId);
