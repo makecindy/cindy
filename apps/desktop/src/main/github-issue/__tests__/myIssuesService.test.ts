@@ -7,11 +7,12 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { MyIssuesResult, SubmittedIssueRecord } from '../../../shared/myIssues';
+import type { SubmittedIssueRecord } from '../../../shared/myIssues';
 import {
   MyIssuesService,
   SEARCH_PAGE_SIZE,
   isSnapshotWorthy,
+  type ChannelHealth,
   isStaleAccountScopeError,
   issueTypeFromLabels,
   mergeIssues,
@@ -65,26 +66,33 @@ function makeDeps(over: Partial<MyIssuesServiceDeps> = {}): MyIssuesServiceDeps 
 
 describe('isSnapshotWorthy', () => {
   /**
-   * 判据矩阵直接钉一遍 —— 这个谓词的两侧都会有人想「顺手收紧」:改成 `degraded === null`
-   * 会当场废掉全部用户的首屏快照,去掉增强那半条会让缩水列表覆盖完整列表。
+   * 判据矩阵直接钉一遍。两侧都会有人想「顺手收紧 / 顺手放宽」:把 absent 也算成丢内容,
+   * 会当场废掉全部用户的首屏快照(接口未上线是常态);把 unknown 当成正常放行,
+   * 缩水的列表就会覆盖完整快照。
    */
-  const base = {
-    items: [],
-    githubEnhancement: null,
-    githubEnhancementFailed: false,
-    degraded: null,
-    truncated: false,
-  } satisfies MyIssuesResult;
+  const ok: ChannelHealth = { platform: 'ok', ledger: 'ok', enhancement: 'ok' };
 
-  it.each([
-    ['平台正常', {}, true],
-    ['平台接口还没上线 —— 平台侧没这份数据可给,不算丢', { degraded: 'platform-unavailable' }, true],
-    ['被截断 —— 「还有更多」不等于「这些不对」', { truncated: true }, true],
-    ['网络 / 服务端异常 —— 平台本该有却没拿到', { degraded: 'fetch-failed' }, false],
-    ['登录态不可用 —— 同样缺了平台那部分', { degraded: 'not-signed-in' }, false],
-    ['配了增强却没用上 —— 少掉直接在 GitHub 提的那些', { githubEnhancementFailed: true }, false],
-  ] as const)('%s → %s', (_label, over, expected) => {
-    expect(isSnapshotWorthy({ ...base, ...over })).toBe(expected);
+  it('三路都 ok ⇒ 配写', () => {
+    expect(isSnapshotWorthy(ok)).toBe(true);
+  });
+
+  it('absent 放行 —— 没配 / 那边压根没这份数据,不是丢内容', () => {
+    expect(isSnapshotWorthy({ ...ok, platform: 'absent' })).toBe(true);
+    expect(isSnapshotWorthy({ ...ok, enhancement: 'absent' })).toBe(true);
+    // 当前所有用户的真实形态:接口未上线 + 没配增强。这条要是 false,快照永远写不出来。
+    expect(isSnapshotWorthy({ platform: 'absent', ledger: 'ok', enhancement: 'absent' })).toBe(true);
+  });
+
+  it('任一路 failed ⇒ 拒写(逐路都要拦,漏一路就是一次永久数据丢失)', () => {
+    for (const key of ['platform', 'ledger', 'enhancement'] as const) {
+      expect(isSnapshotWorthy({ ...ok, [key]: 'failed' }), key).toBe(false);
+    }
+  });
+
+  it('任一路 unknown ⇒ 拒写 —— 不确定时保守,别覆盖上一份完整快照', () => {
+    for (const key of ['platform', 'ledger', 'enhancement'] as const) {
+      expect(isSnapshotWorthy({ ...ok, [key]: 'unknown' }), key).toBe(false);
+    }
   });
 });
 
@@ -526,6 +534,52 @@ describe('MyIssuesService.list', () => {
         });
         expect(writeSnapshot, label).not.toHaveBeenCalled();
       }
+    });
+
+    it('账本读取失败 → 不写快照(丢的是只有本机才有的那些记录)', async () => {
+      // readLedgerSafely 会把失败静默换成空数组 —— 那是刻意的(不能拖累另两路),
+      // 但**不能不记录**:否则「丢了全部本机记录」和「本来就没有记录」长得一模一样,
+      // 缩水的列表照样覆盖完整快照,用户下次冷启动就永久少掉平台还没上线时唯一的来源。
+      const writeSnapshot = vi.fn();
+      const service = new MyIssuesService(
+        makeDeps({
+          readLedger: () => {
+            throw new Error('EACCES: permission denied');
+          },
+          fetchPlatformIssues: async () => ({
+            ok: true as const,
+            page: { issues: [remoteIssue({ number: 7 })], totalCount: 1 },
+          }),
+          writeSnapshot,
+        }),
+      );
+
+      // 主列表照常出(账本失败不拖累另两路)。
+      await expect(service.list()).resolves.toMatchObject({
+        items: [expect.objectContaining({ number: 7 })],
+      });
+      expect(writeSnapshot).not.toHaveBeenCalled();
+    });
+
+    it('身份解析还在飞就整体超时 → 不写快照,但也不提示(连配没配都不知道)', async () => {
+      // 这条钉住两个方向相反的结论来自同一个 unknown:
+      //  - 快照侧保守拒写 —— 可能真丢了内容,不能覆盖上一份完整的;
+      //  - 提示侧保守静默 —— 对没配增强的用户说「增强没用上」是在断言我们不知道的事。
+      // 只标记「已 reject」的实现会把这里当成「没配」,两条都判错。
+      const writeSnapshot = vi.fn();
+      const service = new MyIssuesService(
+        makeDeps({
+          enhancementTimeoutMs: 5,
+          readLedger: () => [ledgerRecord()],
+          resolveGithubEnhancement: () => new Promise(() => {}),
+          writeSnapshot,
+        }),
+      );
+
+      const result = await service.list();
+      expect(result.items.map((i) => i.number)).toEqual([1001]);
+      expect(result.githubEnhancementFailed).toBe(false);
+      expect(writeSnapshot).not.toHaveBeenCalled();
     });
 
     it('期间有提交成功(epoch 变了)→ 不写快照,与内存缓存同一判据', async () => {

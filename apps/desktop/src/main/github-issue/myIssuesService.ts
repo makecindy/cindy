@@ -145,31 +145,58 @@ function staleAccountScopeError(): Error {
 }
 
 /**
+ * 单条输入通道这一次的健康状况。
+ *
+ * 四态而不是布尔,是因为**「没给出内容」有四种性质完全不同的原因**,而下游两个消费者
+ * 对它们的处置方向相反(见 `isSnapshotWorthy` 与 `githubEnhancementFailed`):
+ *  - `ok`      —— 查了,拿到了(可能就是空的,那是真的空);
+ *  - `absent`  —— **没配 / 那边压根还没有这份数据**。正常状态,不是损失;
+ *  - `failed`  —— 本该有却这次没拿到。内容真的少了一块;
+ *  - `unknown` —— 连「配没配」都没问出来(整体超时打断在半路)。既不能说它失败,
+ *                 也不能当它正常。
+ */
+export type ChannelState = 'ok' | 'absent' | 'failed' | 'unknown';
+
+/**
+ * 三路输入各自的健康状况。
+ *
+ * **为什么要有这个类型**:此前判据直接从 `MyIssuesResult` 推断「这次丢没丢内容」,而那份
+ * 结果里的健康信息是**残缺的** —— 平台的挤在 `degraded`、增强的挤在
+ * `githubEnhancementFailed`、**账本的根本没有位置**(读失败时被静默换成空数组)。信息不在
+ * 输入里,判据就必然漏;本 PR 因此连续三轮被指出漏输入(先 degraded、再身份解析失败、
+ * 再账本失败与身份超时),每次都是补一个特例而不是补上缺的那一维。
+ *
+ * 现在三路都必须显式报状态,判据从这里推导。再加第四路输入时,这个类型会强迫调用方声明
+ * 它的健康 —— 漏输入从「靠人记得」变成结构上不可能。
+ */
+export interface ChannelHealth {
+  platform: ChannelState;
+  ledger: ChannelState;
+  enhancement: ChannelState;
+}
+
+/**
  * 这一次的结果**配不配写进首屏快照**。不配写时保留上一份,不覆盖也不清空。
  *
- * 判据是「这一次有没有丢内容」,**不是**「有没有降级」—— 两者不等价,混起来会直接废掉
- * 整个首屏快照:`platform-unavailable`(服务端读接口还没上线)是当前**所有**用户的常态,
- * 把它算作不配写,快照就永远写不出来。
+ * 判据:**三路都没丢内容**(全部 `ok` 或 `absent`)。`failed` 与 `unknown` 都拦下 ——
+ * 快照要跨进程活到下一次冷启动,又刻意不带健康状况,拿一份缩水的结果覆盖它,用户下次
+ * 进页面看到的就是残缺列表加零提示;仍然离线的话,那份完整列表就永久没了。所以这一侧
+ * 遇到不确定必须保守拒写。
  *
- * 所以逐个 reason 判,因为它们性质不同:
- *  - `null` —— 平台通道正常,完整;
- *  - `platform-unavailable` —— 平台侧**根本还没有这份数据可给**,不算丢。账本 + GitHub
- *    增强就是当下能拿到的全部,写它是对的(也正是这个快照目前唯一的现实场景);
- *  - `fetch-failed` / `not-signed-in` —— 平台**本该有**却这次没拿到,内容真的少了。
- *
- * 增强那一路同理:`githubEnhancementFailed` 表示配了却没用上,少掉的恰是「用户绕过 Cindy
- * 直接在 GitHub 上提的那些」—— 平台侧不知道它们,只有增强查得到。
+ * `absent` 放行是关键:`platform-unavailable`(服务端读接口还没上线)是当前**所有**用户的
+ * 常态,把它当成丢内容,快照就永远写不出来、整个首屏加速当场失效。「没配增强」同理。
  *
  * `truncated` 刻意**不**拦:它说的是「还有更多」,不是「显示的这些不对」。首屏本来只需要
  * 第一页,与 UI 当场展示的内容一致。
  *
  * 与 renderer 侧的 `canTrustEmptyList` 刻意**不是同一个判据,别去合并**:那边问「能不能
- * 断言用户从未提交」,空列表 + `platform-unavailable` 必须答否;这边问「这些内容能不能
- * 原样留给下次首屏」,同样的组合答是。一个管断言缺失,一个管展示已有 —— 方向相反。
+ * 断言用户从未提交」,空列表 + 平台 `absent` 必须答否;这边问「这些内容能不能原样留给
+ * 下次首屏」,同样的组合答是。一个管断言缺失,一个管展示已有 —— 方向相反。
  */
-export function isSnapshotWorthy(result: MyIssuesResult): boolean {
-  if (result.githubEnhancementFailed) return false;
-  return result.degraded === null || result.degraded === 'platform-unavailable';
+export function isSnapshotWorthy(health: ChannelHealth): boolean {
+  return [health.platform, health.ledger, health.enhancement].every(
+    (state) => state === 'ok' || state === 'absent',
+  );
 }
 
 interface CacheEntry {
@@ -222,7 +249,7 @@ export class MyIssuesService {
       return this.inFlight.promise;
     }
     const promise = this.load()
-      .then((result) => this.settle(result, scope, epochAtStart))
+      .then(({ result, health }) => this.settle(result, health, scope, epochAtStart))
       .finally(() => {
         // 只清自己那条,别把切号后新起的在途请求误清掉。
         if (this.inFlight?.promise === promise) this.inFlight = null;
@@ -241,7 +268,12 @@ export class MyIssuesService {
    *     所以照常**返回**(拒绝只会让刚提交完的用户看到一次假错误),但**不得落缓存** ——
    *     否则接下来 60s 都会命中这个不含新 issue 的旧快照。
    */
-  private settle(result: MyIssuesResult, scope: string, epochAtStart: number): MyIssuesResult {
+  private settle(
+    result: MyIssuesResult,
+    health: ChannelHealth,
+    scope: string,
+    epochAtStart: number,
+  ): MyIssuesResult {
     if (this.deps.readScope() !== scope) {
       throw staleAccountScopeError();
     }
@@ -249,14 +281,12 @@ export class MyIssuesService {
       this.cache = { at: this.now(), scope, result };
       // 落盘快照比内存缓存**多一条**门槛(isSnapshotWorthy):内存缓存 60s 后自然过期,
       // 而快照要跨进程活到下一次冷启动,还刻意不带健康状况 —— 用一份缩水的结果覆盖它,
-      // 用户下次进页面看到的就是残缺列表加零提示。
-      if (isSnapshotWorthy(result)) {
+      // 用户下次进页面看到的就是残缺列表加零提示。判据吃的是三路健康而不是 result:
+      // result 里没有账本那一路的位置,只看它必然漏(本 PR 已因此栽过三次)。
+      if (isSnapshotWorthy(health)) {
         this.persistSnapshot(result);
       } else {
-        log.debug('skipped the my-issues snapshot write; this result lost content', {
-          degraded: result.degraded,
-          enhancementFailed: result.githubEnhancementFailed,
-        });
+        log.debug('skipped the my-issues snapshot write; this result lost content', health);
       }
     }
     return result;
@@ -293,7 +323,7 @@ export class MyIssuesService {
     this.cacheEpoch += 1;
   }
 
-  private async load(): Promise<MyIssuesResult> {
+  private async load(): Promise<{ result: MyIssuesResult; health: ChannelHealth }> {
     const ledger = this.readLedgerSafely();
 
     // 两路互不阻塞:平台通道挂了不能连可选增强一起拖掉,反之亦然。
@@ -302,14 +332,25 @@ export class MyIssuesService {
       this.loadGithubEnhancement(),
     ]);
 
-    return {
-      items: mergeIssues(ledger, enhancement.issues, platform.issues),
+    const result: MyIssuesResult = {
+      items: mergeIssues(ledger.records, enhancement.issues, platform.issues),
       githubEnhancement: enhancement.viewer
         ? { login: enhancement.viewer.login, source: enhancement.viewer.source }
         : null,
-      githubEnhancementFailed: enhancement.failed,
+      // 只有确知失败才提示。`unknown`(整体超时打断在半路,连配没配都没问出来)保持
+      // 静默 —— 对没配增强的用户说「增强没用上」是在断言我们并不知道的事。
+      // 快照那一侧对 `unknown` 的处置正相反(拒写),两者由同一份 health 各自推导。
+      githubEnhancementFailed: enhancement.state === 'failed',
       degraded: platform.degraded,
       truncated: platform.truncated || enhancement.truncated,
+    };
+    return {
+      result,
+      health: {
+        platform: platform.state,
+        ledger: ledger.state,
+        enhancement: enhancement.state,
+      },
     };
   }
 
@@ -323,15 +364,19 @@ export class MyIssuesService {
    *
    * 不计入 degraded:那三个 reason 讲的都是平台通道的状态。账本读不到时,平台正常
    * 就能给出完整列表(没有可见损失),平台也失败则用户已经看到对应提示。
+   *
+   * 但**必须报出状态**:读失败时静默换成空数组,会让「丢了全部本机记录」的结果看起来
+   * 和「本来就没有记录」一模一样,于是那份缩水的列表照样覆盖掉完整的首屏快照 ——
+   * 用户下次冷启动就永久少掉了只有账本才有的那些 issue。不提示是一回事,不记录是另一回事。
    */
-  private readLedgerSafely(): SubmittedIssueRecord[] {
+  private readLedgerSafely(): { records: SubmittedIssueRecord[]; state: ChannelState } {
     try {
-      return this.deps.readLedger();
+      return { records: this.deps.readLedger(), state: 'ok' };
     } catch (err) {
       log.warn('reading the submitted-issue ledger failed; continuing without it', {
         error: err instanceof Error ? err.message : String(err),
       });
-      return [];
+      return { records: [], state: 'failed' };
     }
   }
 
@@ -339,6 +384,7 @@ export class MyIssuesService {
     issues: RemoteIssue[];
     degraded: MyIssuesDegradedReason | null;
     truncated: boolean;
+    state: ChannelState;
   }> {
     let outcome: PlatformIssuesOutcome;
     try {
@@ -353,16 +399,24 @@ export class MyIssuesService {
     } catch (err) {
       // fetchPlatformIssues 约定不抛;超时或它真抛了都不能把整页打挂。
       log.warn('platform issues fetch failed', { error: errorText(err) });
-      return { issues: [], degraded: 'fetch-failed', truncated: false };
+      return { issues: [], degraded: 'fetch-failed', truncated: false, state: 'failed' };
     }
     if (!outcome.ok) {
       log.debug('platform issues unavailable', { reason: outcome.reason });
-      return { issues: [], degraded: outcome.reason, truncated: false };
+      return {
+        issues: [],
+        degraded: outcome.reason,
+        truncated: false,
+        // 接口还没上线 = 平台侧**压根没有这份数据可给**,不是丢内容(而且这是当前所有
+        // 用户的常态,当成丢的话首屏快照永远写不出来)。未登录 / 网络异常则是本该有却没拿到。
+        state: outcome.reason === 'platform-unavailable' ? 'absent' : 'failed',
+      };
     }
     return {
       issues: outcome.page.issues,
       degraded: null,
       truncated: isTruncated(outcome.page),
+      state: 'ok',
     };
   }
 
@@ -383,32 +437,49 @@ export class MyIssuesService {
     viewer: GithubEnhancementViewer | null;
     issues: RemoteIssue[];
     truncated: boolean;
-    /** 配置了却没能用上(主通道失败且兜底也没救回来)。没配 / 回退成功都是 false。 */
-    failed: boolean;
+    state: ChannelState;
   }> {
     // 总超时触发时也要能回传已经解析成功的身份:header 照常显示并入了谁名下的 issue,
     // 只是这一次没并进内容。所以把它记在闭包外。
     let resolved: GithubEnhancementViewer | null = null;
     /**
-     * 身份解析**自己报错了**(区别于「解析出 null = 没配」,也区别于总超时)。
-     * 约定:resolveGithubEnhancement 返回 null 只表示没配,失败一律抛出。所以抛出
-     * 就等于「配了却用不上」—— 即使 viewer 因此始终为 null,也必须算 failed。
+     * 身份解析**有没有了结**,以及了结成什么样。三态缺一不可:
+     *  - `pending` —— 还在飞。总 deadline 先到时就停在这里,此时**连配没配都不知道**;
+     *  - `none`    —— 返回了 null = 没配(约定:失败一律抛出,返回 null 只表示没配);
+     *  - `failed`  —— 自己抛了 = 配了却问不出身份。
+     *
+     * `pending` 曾经缺失:只标记「已 reject」的话,gh CLI 有 token 但 getCurrentUser
+     * 挂住超过总预算时,promise 还没 reject,于是「配了但超时」被当成「没配」——
+     * 既不提示,缩水的结果还照样覆盖完整快照。
      */
-    let resolutionFailed = false;
+    // 包在对象里而不是裸 let:赋值发生在回调内,TS 的控制流分析追不到,读的时候会把
+    // 类型窄成初始值 'pending'。
+    const resolution: { at: 'pending' | 'none' | 'resolved' | 'failed' } = { at: 'pending' };
     const budgetMs = this.deps.enhancementTimeoutMs ?? DEFAULT_ENHANCEMENT_TIMEOUT_MS;
     const startedAt = this.now();
     try {
       return await this.withDeadline(async () => {
-        resolved = await this.deps.resolveGithubEnhancement().catch((err: unknown) => {
-          resolutionFailed = true;
-          throw err;
-        });
+        resolved = await this.deps.resolveGithubEnhancement().then(
+          (viewer) => {
+            resolution.at = viewer ? 'resolved' : 'none';
+            return viewer;
+          },
+          (err: unknown) => {
+            resolution.at = 'failed';
+            throw err;
+          },
+        );
         const viewer = resolved;
         // 没配增强是**正常状态**,不是失败。
-        if (!viewer) return { viewer: null, issues: [], truncated: false, failed: false };
+        if (!viewer) return { viewer: null, issues: [], truncated: false, state: 'absent' as const };
         try {
           const page = await this.deps.searchAuthoredIssues(viewer, viewer.login);
-          return { viewer, issues: page.issues, truncated: isTruncated(page), failed: false };
+          return {
+            viewer,
+            issues: page.issues,
+            truncated: isTruncated(page),
+            state: 'ok' as const,
+          };
         } catch (err) {
           // 提到 warn:身份能报出来却搜不到是异常,而这条路的失败对用户是静默的 ——
           // 记 debug 等于线上不可诊断(排查这个 bug 时日志里就只有平台通道的 404)。
@@ -421,25 +492,30 @@ export class MyIssuesService {
               : 'github enhancement search failed; no fallback channel to try',
             { source: viewer.source, error: errorText(err) },
           );
-          if (!willRetry) return { viewer, issues: [], truncated: false, failed: true };
+          if (!willRetry) {
+            return { viewer, issues: [], truncated: false, state: 'failed' as const };
+          }
           return await this.searchViaFallback(viewer);
         }
       }, budgetMs, 'enhancement');
     } catch (err) {
       // 没有 GitHub 身份是正常状态;这一路失败也从不打挂整页。
       log.debug('github enhancement unavailable', { error: errorText(err) });
-      // failed 的两条来源,少任一条都会让「配了却没用上」被静静吞掉:
-      //  1. 身份已解析出来却走到这里 = 搜索连兜底一起超时;
-      //  2. 身份解析自己报错 = 配了却问不出身份(token 过期 / 撤销 / GitHub 限流)。
-      //     这条曾经缺失 —— runtime 把异常咽成 null,于是与「没配」不可区分,页面
-      //     静静少掉用户直接在 GitHub 提的那些 issue,一个字都不说。
-      // 只剩「总超时且期间连身份都没解析完」时保持静默:那种情况确实无从区分。
-      return {
-        viewer: resolved,
-        issues: [],
-        truncated: false,
-        failed: resolved !== null || resolutionFailed,
-      };
+      // 走到这里 = 整条路径被总 deadline 打断(或 withDeadline 自己抛)。按身份解析
+      // 停在哪一步定性,三条都必须区分:
+      //  - 身份已拿到 ⇒ 搜索连兜底一起超时,配了却没用上 ⇒ failed;
+      //  - 身份解析自己抛了 ⇒ 配了却问不出身份 ⇒ failed;
+      //  - 身份返回了 null ⇒ 确实没配 ⇒ absent(正常状态,静默);
+      //  - 身份还在飞 ⇒ **连配没配都不知道** ⇒ unknown。不提示(不能对没配的人说
+      //    「增强没用上」),但也不许覆盖快照(可能真丢了内容)。两个消费者方向相反,
+      //    正是它必须独立于 failed 存在的原因。
+      const state: ChannelState =
+        resolution.at === 'resolved' || resolution.at === 'failed'
+          ? 'failed'
+          : resolution.at === 'none'
+            ? 'absent'
+            : 'unknown';
+      return { viewer: resolved, issues: [], truncated: false, state };
     }
   }
 
@@ -475,25 +551,25 @@ export class MyIssuesService {
     viewer: GithubEnhancementViewer;
     issues: RemoteIssue[];
     truncated: boolean;
-    failed: boolean;
+    state: ChannelState;
   }> {
     const fallback = this.deps.searchAuthoredIssuesFallback;
     if (!fallback) {
-      return { viewer, issues: [], truncated: false, failed: true };
+      return { viewer, issues: [], truncated: false, state: 'failed' };
     }
     try {
       const page = await fallback(viewer.login);
       if (!page) {
         log.warn('no fallback channel available for the github enhancement');
-        return { viewer, issues: [], truncated: false, failed: true };
+        return { viewer, issues: [], truncated: false, state: 'failed' };
       }
       log.info('github enhancement recovered through the fallback channel', {
         count: page.issues.length,
       });
-      return { viewer, issues: page.issues, truncated: isTruncated(page), failed: false };
+      return { viewer, issues: page.issues, truncated: isTruncated(page), state: 'ok' };
     } catch (err) {
       log.warn('github enhancement fallback search failed too', { error: errorText(err) });
-      return { viewer, issues: [], truncated: false, failed: true };
+      return { viewer, issues: [], truncated: false, state: 'failed' };
     }
   }
 
