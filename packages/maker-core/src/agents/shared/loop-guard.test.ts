@@ -63,10 +63,10 @@ describe('ToolLoopGuard', () => {
   });
 
   // ── 第 3 层:长窗口进展代理 ────────────────────────────────────────────────
-  it('三种调用循环会在长窗口判 stagnation,不会逃过短窗口', () => {
+  it('三种调用与对应结果都重复六轮时判 stagnation,不会逃过短窗口', () => {
     const g = new ToolLoopGuard({
       stagnationWindowSize: 18,
-      stagnationCallDistinctLimit: 3,
+      stagnationCycleRepeats: 6,
     });
     for (let i = 0; i < 18; i += 1) {
       const v = feed(
@@ -74,10 +74,43 @@ describe('ToolLoopGuard', () => {
         `id${i}`,
         ['Read', 'Bash', 'WebFetch'][i % 3],
         { target: `fixed-${i % 3}` },
-        `changing-output-${i}`,
+        `stable-output-${i % 3}`,
       );
       if (i < 17) expect(v.kind).toBe('ok');
       else expect(v).toMatchObject({ kind: 'hard', reason: 'stagnation', count: 18 });
+    }
+  });
+
+  it('九种调用循环也会按重复序列判 stagnation,不依赖固定 distinct 阈值', () => {
+    const g = new ToolLoopGuard();
+    for (let i = 0; i < 54; i += 1) {
+      const position = i % 9;
+      const v = feed(
+        g,
+        `id${i}`,
+        'TaskOutput',
+        { taskId: `task-${position}` },
+        `stable-status-${position}`,
+      );
+      if (i < 53) expect(v.kind).toBe('ok');
+      else expect(v).toMatchObject({ kind: 'hard', reason: 'stagnation', count: 54 });
+    }
+  });
+
+  it('固定八个目标轮询时只要对应结果持续推进就不判 stagnation', () => {
+    const g = new ToolLoopGuard();
+    for (let i = 0; i < 48; i += 1) {
+      const position = i % 8;
+      const round = Math.floor(i / 8);
+      expect(
+        feed(
+          g,
+          `id${i}`,
+          'TaskOutput',
+          { taskId: `task-${position}` },
+          `progress-${position}-${round}`,
+        ).kind,
+      ).toBe('ok');
     }
   });
 
