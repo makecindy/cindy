@@ -277,6 +277,7 @@ export default function SettingsScreen() {
         checkOtaUpdate: () => Updates.checkForUpdateAsync(),
         fetchOtaUpdate: () => Updates.fetchUpdateAsync(),
         reload: () => Updates.reloadAsync(),
+        isEmergencyLaunch: () => currentlyRunning.isEmergencyLaunch,
         onPhase: (phase) => setUpdatePhase(phase),
       });
       setUpdateOutcome(outcome);
@@ -299,7 +300,14 @@ export default function SettingsScreen() {
     } finally {
       updateCheckInFlightRef.current = false;
     }
-  }, [bundleCheckEnabled, checkBundleUpdate, t, updateCheckEnabled, updatesEnabled]);
+  }, [
+    bundleCheckEnabled,
+    checkBundleUpdate,
+    currentlyRunning.isEmergencyLaunch,
+    t,
+    updateCheckEnabled,
+    updatesEnabled,
+  ]);
 
   const updateSelfDeviceNameDraft = useCallback((value: string) => {
     selfDeviceNameDraftRef.current = value;

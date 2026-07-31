@@ -31,6 +31,11 @@ export interface ManualUpdateCheckDeps {
   /** isNew 表示确实落盘了一个新 bundle(reload 失败时用它区分"已下载待重启"与"什么都没拿到")。 */
   fetchOtaUpdate: () => Promise<{ isNew: boolean }>;
   reload: () => Promise<void>;
+  /**
+   * expo-updates 是否处于 emergency launch(没有 launchedUpdate,reload 必被原生层拒绝)。
+   * 只有这个状态才把 reload 失败判成"已下载待重启";其余 reload 失败仍按失败报,保留详情。
+   */
+  isEmergencyLaunch: () => boolean;
   onPhase: (phase: ManualUpdateCheckPhase) => void;
 }
 
@@ -44,6 +49,7 @@ export async function runManualUpdateCheck({
   checkOtaUpdate,
   fetchOtaUpdate,
   reload,
+  isEmergencyLaunch,
   onPhase,
 }: ManualUpdateCheckDeps): Promise<ManualUpdateCheckOutcome> {
   onPhase('checking');
@@ -72,10 +78,10 @@ export async function runManualUpdateCheck({
     await reload();
     return { kind: 'reloading' };
   } catch (error) {
-    // reload 失败但 bundle 已落盘时不能报"检查更新失败":更新其实拿到了,只是这个进程
-    // 重启不了(如 expo-updates 处于 emergency launch、没有 launchedUpdate 可重启),
-    // 下次冷启动就会生效 —— 告诉用户重开 App,而不是把它当成一次失败的检查。
-    if (fetchedNewBundle) return { kind: 'restart-required' };
+    // emergency launch(没有 launchedUpdate)下 reload 必被原生层拒绝,而 bundle 已经落盘、
+    // 下次冷启动就会生效:这不是一次失败的检查,报"检查更新失败"只会让用户无从下手。
+    // 反过来,其它原因的 reload 失败不套用这条 —— 那种情况原始详情才是唯一线索,不能吞掉。
+    if (fetchedNewBundle && isEmergencyLaunch()) return { kind: 'restart-required' };
     const detail = error instanceof Error ? error.message.trim() : String(error).trim();
     return {
       kind: 'error',
