@@ -89,7 +89,7 @@ describe('xaiImageClient', () => {
     expect(body.images.every((image) => image.url.startsWith('data:image/png;base64,'))).toBe(true);
   });
 
-  it('短效 URL 响应会立刻下载成字节;非 xAI URL 被拒绝', async () => {
+  it('短效 URL 响应会立刻有界下载成字节;非 xAI URL 被拒绝', async () => {
     const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
     const doFetch = vi.fn<typeof fetch>(async (input) =>
       String(input).includes('/images/generations')
@@ -105,6 +105,42 @@ describe('xaiImageClient', () => {
     expect(result.data[0]?.b64_json).toBe(png.toString('base64'));
     expect(doFetch).toHaveBeenCalledTimes(2);
     expect(doFetch.mock.calls[1]?.[1]).toMatchObject({ redirect: 'manual' });
+
+    const declaredOversize = vi.fn<typeof fetch>(async (input) =>
+      String(input).includes('/images/generations')
+        ? new Response(JSON.stringify({ data: [{ url: 'https://imgen.x.ai/output.png' }] }), {
+            status: 200,
+          })
+        : new Response(png, { status: 200, headers: { 'Content-Length': '17' } }),
+    );
+    await expect(
+      channel(declaredOversize, { maxImageDownloadBytes: 16 }).generateImage({
+        model: 'xai/grok-imagine-image',
+        prompt: 'p',
+      }),
+    ).rejects.toThrow('超过大小上限');
+
+    const cancel = vi.fn();
+    const streamedOversize = vi.fn<typeof fetch>(async (input) =>
+      String(input).includes('/images/generations')
+        ? new Response(JSON.stringify({ data: [{ url: 'https://imgen.x.ai/output.png' }] }), {
+            status: 200,
+          })
+        : new Response(new ReadableStream({
+            start(controller) {
+              controller.enqueue(png.subarray(0, 8));
+              controller.enqueue(png.subarray(8));
+            },
+            cancel,
+          }), { status: 200 }),
+    );
+    await expect(
+      channel(streamedOversize, { maxImageDownloadBytes: 15 }).generateImage({
+        model: 'xai/grok-imagine-image',
+        prompt: 'p',
+      }),
+    ).rejects.toThrow('超过大小上限');
+    expect(cancel).toHaveBeenCalled();
 
     const untrusted = vi.fn<typeof fetch>(
       async () =>

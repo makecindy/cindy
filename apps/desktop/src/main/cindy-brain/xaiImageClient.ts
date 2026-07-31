@@ -14,6 +14,7 @@ import type { ImageChannel, ImageChannelResult } from './imageChannelRegistry.js
 
 const XAI_API_BASE = 'https://api.x.ai/v1';
 const MAX_EDIT_SOURCES = 3;
+const MAX_IMAGE_DOWNLOAD_BYTES = 25 * 1024 * 1024;
 
 interface XaiImageResponse {
   data?: Array<{
@@ -30,6 +31,8 @@ export interface CreateXaiImageChannelOptions {
   getOwnerScopeKey(): string;
   isOwnerBoundaryPending(): boolean;
   fetchImplementation?: typeof fetch;
+  /** 测试/宿主可收紧下载上限，但不能放宽生产硬顶。 */
+  maxImageDownloadBytes?: number;
   beforeDispatch?(model: string): void;
   onAuthRejected?(failure: {
     status: number;
@@ -85,8 +88,51 @@ function assertOwnerScopeCurrent(opts: CreateXaiImageChannelOptions, expected: s
   }
 }
 
+async function readBoundedImageResponse(
+  response: Response,
+  maxBytes: number,
+  assertStillCurrent: () => void,
+): Promise<Buffer> {
+  const declared = Number(response.headers.get('content-length') ?? Number.NaN);
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(`xAI 图片下载超过大小上限(${maxBytes} 字节)`);
+  }
+
+  const body = response.body;
+  if (!body) return Buffer.alloc(0);
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      assertStillCurrent();
+      if (done) break;
+      if (!value || value.byteLength === 0) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        throw new Error(`xAI 图片下载超过大小上限(${maxBytes} 字节)`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    // 超限、账号切换或流异常时立即断开上游；正常读完时 cancel 是 no-op。
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, total);
+}
+
 export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): ImageChannel {
   const doFetch = opts.fetchImplementation ?? fetch;
+  const requestedDownloadLimit = opts.maxImageDownloadBytes;
+  const maxImageDownloadBytes =
+    typeof requestedDownloadLimit === 'number' &&
+    Number.isSafeInteger(requestedDownloadLimit) &&
+    requestedDownloadLimit > 0
+      ? Math.min(requestedDownloadLimit, MAX_IMAGE_DOWNLOAD_BYTES)
+      : MAX_IMAGE_DOWNLOAD_BYTES;
 
   async function call(params: {
     model: string;
@@ -170,8 +216,11 @@ export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): Image
       if (!imageResponse.ok) {
         throw new Error(`xAI 图片下载失败(HTTP ${imageResponse.status})`);
       }
-      const bytes = Buffer.from(await imageResponse.arrayBuffer());
-      assertOwnerScopeCurrent(opts, ownerScopeKey);
+      const bytes = await readBoundedImageResponse(
+        imageResponse,
+        maxImageDownloadBytes,
+        () => assertOwnerScopeCurrent(opts, ownerScopeKey),
+      );
       const mime = sniffMediaMime(bytes);
       if (!mime?.startsWith('image/')) throw new Error('xAI 图片下载结果不是有效图片');
       return { data: [{ b64_json: bytes.toString('base64') }], output_format: mime.split('/')[1] };
@@ -181,6 +230,7 @@ export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): Image
 
   return {
     ready: opts.hasOAuthLogin,
+    maxEditImages: MAX_EDIT_SOURCES,
     generateImage: ({ model, prompt, aspectRatio }) => call({ model, prompt, aspectRatio }),
     editImage: ({ model, prompt, imagePaths, aspectRatio }) =>
       call({ model, prompt, imagePaths, aspectRatio }),

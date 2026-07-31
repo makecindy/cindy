@@ -98,6 +98,7 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
         }
       : null,
   );
+  const imageCapabilities = vi.fn(() => null);
   const resolveOwnedMedia = vi.fn(async (_ghostId: string, hash: string) => `/disk/${hash}.png`);
   const getOverride = vi.fn((_ghostId: string, _capability: string) => null as string | null);
   const getImageConfig = vi.fn(() => ({
@@ -146,6 +147,7 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
     getOverride,
     getImageConfig,
     getVideoConfig,
+    imageCapabilities,
     videoCapabilities,
     saveGhostMedia,
     sniffDepositMime,
@@ -874,6 +876,40 @@ describe('改图代办(edit_image)', () => {
       await slot.handleModelRequest('art', { ...EDIT_REQ, hashes: Array(5).fill(HASH_S) }),
     ).toMatchObject({ ok: false });
     expect(editImage).not.toHaveBeenCalled();
+  });
+
+  it('通用契约允许四图；provider 上限更低时按选中型号在读图前明拒', async () => {
+    const generic = makeSlot();
+    const four = await generic.slot.handleModelRequest('art', {
+      ...EDIT_REQ,
+      hashes: Array(4).fill(HASH_S),
+    });
+    expect(four).toMatchObject({ ok: true });
+    expect(generic.editImage).toHaveBeenCalledWith(expect.objectContaining({
+      imagePaths: Array(4).fill(`/disk/${HASH_S}.png`),
+    }));
+
+    const xaiConfig = vi.fn(() => ({
+      models: [{ id: 'xai/grok-imagine-image', label: 'Grok Imagine Image' }],
+      defaults: {
+        standard: 'xai/grok-imagine-image',
+        draft: 'xai/grok-imagine-image',
+        best: 'xai/grok-imagine-image',
+      },
+    }));
+    const xai = makeSlot({
+      getImageConfig: xaiConfig,
+      imageCapabilities: vi.fn(() => ({ maxEditImages: 3 })),
+    });
+    const rejected = await xai.slot.handleModelRequest('art', {
+      ...EDIT_REQ,
+      hashes: Array(4).fill(HASH_S),
+    });
+    expect(rejected).toMatchObject({ ok: false });
+    expect((rejected as { message: string }).message).toContain('Grok Imagine Image');
+    expect((rejected as { message: string }).message).toContain('最多支持 3 张源图');
+    expect(xai.resolveOwnedMedia).not.toHaveBeenCalled();
+    expect(xai.editImage).not.toHaveBeenCalled();
   });
 
   it('任一源图不在本意识名下 → 整单拒(统一话术)', async () => {

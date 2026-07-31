@@ -105,6 +105,11 @@ export interface CindyVideoCapabilities {
   maxImagesByRefMode?: Readonly<Partial<Record<GhostVideoRefMode, number>>>;
 }
 
+/** 某个图像型号的 provider 实际编辑能力，用于通用 1–4 图契约的二次校验。 */
+export interface CindyImageCapabilities {
+  maxEditImages?: number;
+}
+
 export interface CindySlotDeps {
   getGhost(id: string): InstalledGhost | null;
   /** 当前账号作用域；跨 await 的媒体任务必须捕获并持续复核。 */
@@ -126,6 +131,11 @@ export interface CindySlotDeps {
     imagePaths: string[];
     aspectRatio?: GhostImageAspectRatio;
   }): Promise<{ buffer: Uint8Array; mimeType: string }>;
+  /**
+   * 该图像型号的 provider 实际能力。缺席/查无 = 只执行通用 1–4 图粗筛；
+   * provider 上限更低时，slot 在读源图与出网前给出型号级明确拒绝。
+   */
+  imageCapabilities?(model: string): CindyImageCapabilities | null;
   /**
    * 主机统一视频通道·文生视频(art 视频 provider 层复用,submit→
    * 轮询→下载一条龙在注入实现里完成);返回视频字节与 mime,外加实际
@@ -676,6 +686,17 @@ export class GhostCindySlot {
         }
       }
       hashes = p.hashes as string[];
+    }
+
+    if (kind === 'edit_image') {
+      const perModelMax = this.deps.imageCapabilities?.(model)?.maxEditImages;
+      if (perModelMax !== undefined && hashes.length > perModelMax) {
+        const label = cfg.models.find((m) => m.id === model)?.label ?? model;
+        return {
+          ok: false,
+          message: `模型「${label}」最多支持 ${perModelMax} 张源图(本次 ${hashes.length} 张)`,
+        };
+      }
     }
 
     // 参考图用法与张数按**解析出的型号**二次校验:两种用法在不同型号上是

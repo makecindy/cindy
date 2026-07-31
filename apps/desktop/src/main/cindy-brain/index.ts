@@ -138,6 +138,7 @@ import { submitAndAwaitVideo } from '../cindy-proxy-media/video/run.js';
 import { deriveCindyMediaConfig, type CindyMediaCatalogConfig } from './cindyMediaCatalog.js';
 import {
   GhostCindySlot,
+  type CindyImageCapabilities,
   type CindyVideoCapabilities,
   type CindyVideoParams,
 } from './cindySlot.js';
@@ -1911,6 +1912,15 @@ function getGhostVideoCapabilities(model: string): CindyVideoCapabilities | null
   }
 }
 
+/** 图像 provider 的型号级编辑上限；slot 用它在文件 IO / 凭证读取前早拒。 */
+function getGhostImageCapabilities(model: string): CindyImageCapabilities | null {
+  try {
+    return { maxEditImages: resolveImageChannelForModel(model, 'edit').maxEditImages };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 意识画幅意图 → XD Gateway size。三档尺寸是 gpt-image 系的原生枚举
  * (1024x1024 / 1536x1024 / 1024x1536,比例即枚举名);Gemini 系由网关按
@@ -2096,6 +2106,7 @@ export function getGhostCindySlot(): GhostCindySlot {
         }
       },
       // 画面参数按型号二次校验的数据源(registry capabilities)。
+      imageCapabilities: getGhostImageCapabilities,
       videoCapabilities: getGhostVideoCapabilities,
       getOverride: (ghostId, capability) => {
         return readGhostCindyOverrides(ghostId)[capability as CindyCapabilityKey] ?? null;
