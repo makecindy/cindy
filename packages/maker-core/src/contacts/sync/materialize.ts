@@ -89,9 +89,9 @@ export function materializeContactsSyncState(
     .sort(byId);
   const contactIds = new Set(contacts.map((contact) => contact.id));
 
-  const groups = uniqueBy(liveEntities(state.groups), (value) =>
-    value.name.trim().toLowerCase(),
-  )
+  // contact_groups.name 的 UNIQUE 与 ContactsGroupsRepo 都是精确字符串语义；
+  // A / a 可以合法共存，同步层不能自行收紧成大小写不敏感而吞掉其中一组。
+  const groups = uniqueBy(liveEntities(state.groups), (value) => value.name)
     .map<ContactsSnapshotGroup>((record) => ({
       id: record.id,
       ...record.value.value,

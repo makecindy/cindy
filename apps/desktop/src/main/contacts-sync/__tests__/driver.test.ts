@@ -16,6 +16,7 @@ const harness = vi.hoisted(() => {
     ownerId: 'owner-a' as string | null,
     settings: new Map<string, boolean>(),
     emptyState,
+    activateSync: vi.fn(() => emptyState),
     lanSend: vi.fn(),
     lanStop: vi.fn(),
     relaySend: vi.fn(),
@@ -43,7 +44,7 @@ vi.mock('../../appSessionState.js', () => ({
 vi.mock('../../maker-host/maker-contacts-host.js', () => ({
   getDesktopContactsManager: () => ({
     getStore: () => ({
-      activateDeviceSync: () => harness.emptyState,
+      activateDeviceSync: harness.activateSync,
       readDeviceSyncState: () => harness.emptyState,
       mergeDeviceSyncState: () => false,
     }),
@@ -130,6 +131,7 @@ beforeEach(() => {
   harness.mode = 'cloud';
   harness.ownerId = 'owner-a';
   harness.settings.clear();
+  harness.activateSync.mockClear();
   harness.lanSend.mockReset();
   harness.lanStop.mockReset();
   harness.relaySend.mockReset();
@@ -193,5 +195,30 @@ describe('contacts sync runtime ownership', () => {
 
     expect(harness.relaySend).not.toHaveBeenCalled();
     expect(driver.getContactsDeviceSyncStatus().phase).toBe('off');
+  });
+
+  it('applies a sync toggle written by another shared-userData instance', () => {
+    driver.initContactsDeviceSync({
+      getSelfDeviceId: () => 'self-device',
+      listOnlineDesktopDevices: () => [],
+      isPeerAllowed: () => false,
+      sendRelayFrame: harness.relaySend,
+    });
+
+    harness.settings.set('owner-a', true);
+    driver.pollContactsDeviceSyncSettingChange();
+    expect(harness.activateSync).toHaveBeenCalled();
+    expect(driver.getContactsDeviceSyncStatus()).toMatchObject({
+      enabled: true,
+      phase: 'waiting',
+    });
+
+    harness.settings.set('owner-a', false);
+    driver.pollContactsDeviceSyncSettingChange();
+    expect(harness.lanStop).toHaveBeenCalledTimes(1);
+    expect(driver.getContactsDeviceSyncStatus()).toMatchObject({
+      enabled: false,
+      phase: 'off',
+    });
   });
 });

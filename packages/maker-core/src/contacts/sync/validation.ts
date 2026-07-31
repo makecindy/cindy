@@ -222,7 +222,9 @@ function isRelation(value: unknown): value is {
     isId(value.fromId) &&
     isId(value.toId) &&
     isString(value.relation, DEFAULT_CONTACTS_CONFIG.maxRelationLen, false) &&
-    isString(value.note, 16_384) &&
+    // 本地 addRelation 对 note 没有长度上限；设备帧已有整包解压上限，不能在
+    // 同步层另设更窄的 16 KiB 域，否则既有合法关系会让首次激活自我毒化。
+    typeof value.note === "string" &&
     isString(value.createdAt, 64, false)
   );
 }

@@ -81,6 +81,7 @@ import {
   handleContactsPeerPresenceChanged,
   handleIncomingContactsRelayFrame,
   initContactsDeviceSync,
+  pollContactsDeviceSyncSettingChange,
 } from '../contacts-sync/driver';
 
 // register.ts 从 device-link/index 导入 setBusyProbe;改用 busyReporter 后在此 re-export 保持其导入不变。
@@ -481,6 +482,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       linkTornDown = false;
       client?.start();
       refreshAppliedSettingsSnapshot();
+      pollContactsDeviceSyncSettingChange();
     },
     onDemote: () => {
       appliedSettingsSnapshot = null;
@@ -797,6 +799,7 @@ function refreshAppliedSettingsSnapshot(): void {
  */
 function pollExternalSettingsChange(): void {
   if (!client || !arbiter?.isOwner()) return;
+  pollContactsDeviceSyncSettingChange();
   const prev = appliedSettingsSnapshot;
   const { remoteControlEnabled, revokedControllers } = readDeviceLinkSettings();
   appliedSettingsSnapshot = { remoteControlEnabled, revokedControllers: [...revokedControllers] };

@@ -179,6 +179,25 @@ export async function setContactsDeviceSyncEnabled(enabled: boolean): Promise<vo
   setPhase('off');
 }
 
+/** Device Link 持有者定期调用，应用其它共享 userData 实例写入的同步开关。 */
+export function pollContactsDeviceSyncSettingChange(): void {
+  ensureCurrentOwnerStatus();
+  const enabled = isEnabled();
+  if (enabled === liveStatus.enabled) return;
+  if (!enabled) {
+    liveStatus = { ...liveStatus, enabled: false, errorCode: null };
+    stopContactsDeviceSyncRuntime();
+    setPhase('off');
+    return;
+  }
+
+  liveStatus = { ...liveStatus, enabled: true, errorCode: null };
+  prepareAndRun(() => {
+    setPhase(onlinePeers().length > 0 ? 'syncing' : 'waiting');
+    runSyncTask(() => broadcastContactsNow(true));
+  });
+}
+
 export async function broadcastContactsNow(requestReply = true): Promise<void> {
   ensureCurrentOwnerStatus();
   if (!isEnabled() || !transport) return;

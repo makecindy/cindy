@@ -225,6 +225,43 @@ describe("contacts device sync", () => {
     expect(b.getContact(person.id).groups).toEqual([]);
   });
 
+  it("保留仅大小写不同的合法分组及各自成员", () => {
+    const a = createStore();
+    const b = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    const person = a.createContact({ kind: "person", displayName: "分组成员" });
+    const upper = a.createGroup("A");
+    const lower = a.createGroup("a");
+    a.addToGroup(upper.id, [person.id]);
+    a.addToGroup(lower.id, [person.id]);
+
+    exchange(b, a);
+
+    expect(b.listGroups().map((group) => group.name)).toEqual(["A", "a"]);
+    expect(
+      b
+        .getContact(person.id)
+        .groups.map((group) => group.name)
+        .sort(),
+    ).toEqual(["A", "a"]);
+  });
+
+  it("同步接受并保留本地合法的长关系备注", () => {
+    const a = createStore();
+    const b = createStore();
+    const person = a.createContact({ kind: "person", displayName: "成员" });
+    const org = a.createContact({ kind: "org", displayName: "组织" });
+    const note = "长".repeat(16_385);
+    a.addRelation(person.id, { toId: org.id, relation: "任职", note });
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+
+    expect(isValidContactsSyncState(stateOf(a))).toBe(true);
+    exchange(b, a);
+    expect(b.getContact(person.id).relations[0]?.note).toBe(note);
+  });
+
   it("首次激活会纳入已有数据，之后能补记未经过 facade 的崩溃窗口写入", () => {
     const store = createStore();
     const person = store.createContact({
