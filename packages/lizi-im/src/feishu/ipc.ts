@@ -131,7 +131,6 @@ export function registerFeishuIpc(): void {
         begin.deviceCode,
         begin.interval,
         begin.expiresIn,
-        service,
         accountScope,
       );
       return { ok: true, ...begin };
@@ -254,25 +253,34 @@ async function pollRegistrationInBackground(
   deviceCode: string,
   interval: number,
   expiresIn: number,
-  service: LarkBrand,
   accountScope: CapturedAccountScope,
 ): Promise<void> {
   const host = getHost();
   const log = getLog();
   const deadline = Date.now() + expiresIn * 1000;
   let currentInterval = Math.max(interval, 1);
+  let pollBrand: LarkBrand = 'feishu';
+  let pollWithoutDelay = false;
 
   while (
     Date.now() < deadline &&
     runId === registrationRunId &&
     isAccountScopeCurrent(accountScope)
   ) {
-    await delay(currentInterval * 1000);
-    if (runId !== registrationRunId || !isAccountScopeCurrent(accountScope)) return;
+    if (!pollWithoutDelay) {
+      await delay(currentInterval * 1000);
+      if (runId !== registrationRunId || !isAccountScopeCurrent(accountScope)) return;
+    }
+    pollWithoutDelay = false;
 
     let result: AppRegistrationPollResult;
     try {
-      result = await pollAppRegistration(host.httpPostForm, 'feishu', deviceCode, currentInterval);
+      result = await pollAppRegistration(
+        host.httpPostForm,
+        pollBrand,
+        deviceCode,
+        currentInterval,
+      );
     } catch (err) {
       if (runId !== registrationRunId || !isAccountScopeCurrent(accountScope)) return;
       const error = err instanceof Error ? err.message : String(err);
@@ -283,6 +291,14 @@ async function pollRegistrationInBackground(
       return;
     }
     if (runId !== registrationRunId || !isAccountScopeCurrent(accountScope)) return;
+
+    const discoveredBrand =
+      result.status === 'success' ? result.result.tenantBrand : result.tenantBrand;
+    if (pollBrand === 'feishu' && discoveredBrand === 'lark') {
+      pollBrand = 'lark';
+      pollWithoutDelay = true;
+      continue;
+    }
 
     if (result.status === 'pending') {
       host.ipc.broadcast('feishuBot:registration-status', {
@@ -300,24 +316,12 @@ async function pollRegistrationInBackground(
     }
 
     if (result.status === 'success') {
-      let success = result.result;
-      if (success.tenantBrand === 'lark' && !success.clientSecret) {
-        const larkResult = await pollAppRegistration(
-          host.httpPostForm,
-          'lark',
-          deviceCode,
-          currentInterval,
-        );
-        if (runId !== registrationRunId || !isAccountScopeCurrent(accountScope)) return;
-        if (larkResult.status === 'success') success = larkResult.result;
-      }
-
+      const success = result.result;
       if (!success.clientId || !success.clientSecret) {
         host.ipc.broadcast('feishuBot:registration-status', {
-          status: 'error',
-          error: 'app registration succeeded but missing client_id or client_secret',
+          status: 'pending',
         });
-        return;
+        continue;
       }
 
       let verdict: 'connected' | 'conflict' | 'error' | 'pending';
@@ -326,7 +330,7 @@ async function pollRegistrationInBackground(
           return saveAndConnect(
             success.clientId,
             success.clientSecret,
-            success.tenantBrand ?? service,
+            success.tenantBrand ?? pollBrand,
             {
               replacementOwnerOpenId: success.ownerOpenId,
             },

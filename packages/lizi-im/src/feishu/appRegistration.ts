@@ -17,13 +17,18 @@ export interface AppRegistrationSuccessResult {
   tenantBrand: LarkBrand | null;
 }
 
+interface AppRegistrationBrandDiscovery {
+  /** Brand reported before credentials are complete (including pending responses). */
+  tenantBrand?: LarkBrand;
+}
+
 export type AppRegistrationPollResult =
-  | { status: 'pending' }
-  | { status: 'slow_down'; interval: number }
+  | ({ status: 'pending' } & AppRegistrationBrandDiscovery)
+  | ({ status: 'slow_down'; interval: number } & AppRegistrationBrandDiscovery)
   | { status: 'success'; result: AppRegistrationSuccessResult }
-  | { status: 'expired'; message: string }
-  | { status: 'denied'; message: string }
-  | { status: 'error'; message: string };
+  | ({ status: 'expired'; message: string } & AppRegistrationBrandDiscovery)
+  | ({ status: 'denied'; message: string } & AppRegistrationBrandDiscovery)
+  | ({ status: 'error'; message: string } & AppRegistrationBrandDiscovery);
 
 type HttpPostForm = (
   url: string,
@@ -123,10 +128,11 @@ export async function pollAppRegistration(
   const res = await httpPostForm(registrationEndpoint(brand), form);
   const data = asRecord(res.body);
   const err = getString(data, 'error');
+  const userInfo = asRecord(data.user_info);
+  const tenantBrand = normalizeBrand(getString(userInfo, 'tenant_brand'));
+  const brandDiscovery = tenantBrand ? { tenantBrand } : {};
 
   if (!err && getString(data, 'client_id')) {
-    const userInfo = asRecord(data.user_info);
-    const tenantBrand = normalizeBrand(getString(userInfo, 'tenant_brand'));
     return {
       status: 'success',
       result: {
@@ -138,27 +144,33 @@ export async function pollAppRegistration(
     };
   }
 
+  if (!err && res.status < 400) {
+    return { status: 'pending', ...brandDiscovery };
+  }
+
   switch (err) {
     case 'authorization_pending':
-      return { status: 'pending' };
+      return { status: 'pending', ...brandDiscovery };
     case 'slow_down':
-      return { status: 'slow_down', interval: Math.min(interval + 5, 60) };
+      return { status: 'slow_down', interval: Math.min(interval + 5, 60), ...brandDiscovery };
     case 'access_denied':
       return {
         status: 'denied',
         message: getString(data, 'error_description') || 'Authorization denied by user',
+        ...brandDiscovery,
       };
     case 'expired_token':
     case 'invalid_grant':
       return {
         status: 'expired',
         message: getString(data, 'error_description') || 'Device code expired, please try again',
+        ...brandDiscovery,
       };
   }
 
   const msg = getString(data, 'error_description') || err || `HTTP ${res.status}`;
   log.warn(`[feishu/appRegistration] poll failed brand=${brand}: ${msg}`);
-  return { status: 'error', message: msg };
+  return { status: 'error', message: msg, ...brandDiscovery };
 }
 
 function normalizeBrand(value: string): LarkBrand | null {

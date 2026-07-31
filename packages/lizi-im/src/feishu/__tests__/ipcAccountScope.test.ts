@@ -159,7 +159,74 @@ describe('Feishu IPC account scope', () => {
     cancelAppRegistration();
   });
 
-  it('discovers Lark through Feishu and fetches the complete credentials from Lark', async () => {
+  it('switches to Lark immediately when Feishu reports the tenant while pending', async () => {
+    vi.useFakeTimers();
+    mocks.requestRegistration.mockResolvedValue({
+      deviceCode: 'device-code',
+      userCode: 'user-code',
+      verificationUrl: 'https://open.larksuite.com/page/cli',
+      interval: 1,
+      expiresIn: 600,
+    });
+    mocks.pollRegistration
+      .mockResolvedValueOnce({
+        status: 'pending',
+        tenantBrand: 'lark',
+      })
+      .mockResolvedValueOnce({
+        status: 'pending',
+      })
+      .mockResolvedValueOnce({
+        status: 'success',
+        result: {
+          clientId: 'cli_lark',
+          clientSecret: 'lark-secret',
+          tenantBrand: null,
+          ownerOpenId: 'ou_lark_owner',
+        },
+      });
+
+    const begin = handlers.get('feishuBot:registration-begin');
+    await expect(
+      Promise.resolve(begin?.({ service: 'lark' })),
+    ).resolves.toMatchObject({
+      ok: true,
+    });
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(mocks.pollRegistration).toHaveBeenNthCalledWith(
+      1,
+      host.httpPostForm,
+      'feishu',
+      'device-code',
+      1,
+    );
+    expect(mocks.pollRegistration).toHaveBeenNthCalledWith(
+      2,
+      host.httpPostForm,
+      'lark',
+      'device-code',
+      1,
+    );
+    expect(mocks.writeCredentials).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(mocks.pollRegistration).toHaveBeenNthCalledWith(
+      3,
+      host.httpPostForm,
+      'lark',
+      'device-code',
+      1,
+    );
+    expect(mocks.writeCredentials).toHaveBeenCalledWith({
+      appId: 'cli_lark',
+      appSecret: 'lark-secret',
+      service: 'lark',
+    });
+  });
+
+  it('keeps polling Lark when the first cross-domain poll is still pending', async () => {
     vi.useFakeTimers();
     mocks.requestRegistration.mockResolvedValue({
       deviceCode: 'device-code',
@@ -178,6 +245,7 @@ describe('Feishu IPC account scope', () => {
           ownerOpenId: 'ou_lark_owner',
         },
       })
+      .mockResolvedValueOnce({ status: 'pending' })
       .mockResolvedValueOnce({
         status: 'success',
         result: {
@@ -189,7 +257,9 @@ describe('Feishu IPC account scope', () => {
       });
 
     const begin = handlers.get('feishuBot:registration-begin');
-    await expect(Promise.resolve(begin?.({ service: 'lark' }))).resolves.toMatchObject({
+    await expect(
+      Promise.resolve(begin?.({ service: 'lark' })),
+    ).resolves.toMatchObject({
       ok: true,
     });
     await vi.advanceTimersByTimeAsync(1000);
@@ -203,6 +273,17 @@ describe('Feishu IPC account scope', () => {
     );
     expect(mocks.pollRegistration).toHaveBeenNthCalledWith(
       2,
+      host.httpPostForm,
+      'lark',
+      'device-code',
+      1,
+    );
+    expect(mocks.writeCredentials).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(mocks.pollRegistration).toHaveBeenNthCalledWith(
+      3,
       host.httpPostForm,
       'lark',
       'device-code',
