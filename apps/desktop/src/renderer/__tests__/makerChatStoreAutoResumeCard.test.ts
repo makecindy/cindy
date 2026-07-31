@@ -122,6 +122,7 @@ function projection(over: Record<string, unknown> = {}) {
     queueEditLocks: [],
     queueAbortPending: false,
     continuationInFlightClientId: null,
+    continuationTurnClientId: null,
     error: null,
     recovery: null,
     errorRetryText: null,
@@ -132,7 +133,7 @@ function projection(over: Record<string, unknown> = {}) {
 
 /** 旧被控端 wire 形状：字段完全不存在；不能用显式 undefined 伪装（own property 仍存在）。 */
 function legacyProjection(over: Record<string, unknown> = {}) {
-  const { continuationInFlightClientId: _unsupported, ...legacy } = projection(over);
+  const { continuationTurnClientId: _unsupported, ...legacy } = projection(over);
   return legacy;
 }
 
@@ -315,11 +316,8 @@ describe('applyInputProjection 自愈进行中提示', () => {
   });
 });
 
-// 「见过占边界」标记是"仍在飞"第二支判据的必要条件:steer 顶替 activeTurn 后
-// continuationInFlightClientId 变 null,靠它接住;而 goal-host 续轮走 session.send 直发、
-// 不落 user 行,靠它挡住"app 退出后遗留的历史重连行被无关 Goal turn 误判成正在重连"。
-// capability 另行保留 wire 上的「字段缺省」事实，只给旧被控端开启兼容兜底。
-describe('续跑边界投影能力与 seen marker', () => {
+// Main now owns the vendor-turn continuation identity; Renderer mirrors it without a sticky seen marker.
+describe('续跑边界投影能力与 vendor turn owner', () => {
   beforeEach(() => {
     (globalThis as { window?: unknown }).window = { electronAPI: makeElectronApiStub() };
     makerChatStore.initGlobalListeners();
@@ -329,49 +327,41 @@ describe('续跑边界投影能力与 seen marker', () => {
     makerChatStore.purgeSession(SID);
   });
 
-  it('尚未收到投影时 capability=unknown，不能提前猜成旧端', () => {
+  it('尚未收到投影时 capability=unknown，owner 为 null', () => {
     const snap = makerChatStore.getSnapshot(SID);
     expect(snap.continuationInFlightProjectionCapability).toBe('unknown');
-    expect(snap.seenContinuationInFlightClientId).toBeNull();
+    expect(snap.continuationTurnClientId).toBeNull();
   });
 
-  it('新版显式 null 与观察到非空都标记 supported；非空即记入 seen', () => {
+  it('新版显式 null 与非空 owner 都标记 supported，并原样镜像', () => {
     inputProjectionCb!(projection());
     let snap = makerChatStore.getSnapshot(SID);
     expect(snap.continuationInFlightProjectionCapability).toBe('supported');
-    expect(snap.seenContinuationInFlightClientId).toBeNull();
+    expect(snap.continuationTurnClientId).toBeNull();
 
-    inputProjectionCb!(projection({ continuationInFlightClientId: 'resume-1' }));
+    inputProjectionCb!(projection({ continuationTurnClientId: 'resume-1' }));
     snap = makerChatStore.getSnapshot(SID);
     expect(snap.continuationInFlightProjectionCapability).toBe('supported');
-    expect(snap.seenContinuationInFlightClientId).toBe('resume-1');
+    expect(snap.continuationTurnClientId).toBe('resume-1');
   });
 
-  it('字段变回 null(steer 顶替 activeTurn)时保留上次观察值', () => {
-    inputProjectionCb!(projection({ continuationInFlightClientId: 'resume-1' }));
-    inputProjectionCb!(projection({ continuationInFlightClientId: null }));
+  it('owner 变回 null 时同步清除，不保留跨 turn 记忆', () => {
+    inputProjectionCb!(projection({ continuationTurnClientId: 'resume-1' }));
+    inputProjectionCb!(projection({ continuationTurnClientId: null }));
     const snap = makerChatStore.getSnapshot(SID);
-    expect(snap.continuationInFlightClientId, '当前占位已让给 steer').toBeNull();
-    expect(snap.seenContinuationInFlightClientId, '"见过"不该被抹掉').toBe('resume-1');
+    expect(snap.continuationTurnClientId).toBeNull();
   });
 
-  it('换成新的续跑项时跟着前进', () => {
-    inputProjectionCb!(projection({ continuationInFlightClientId: 'resume-1' }));
-    inputProjectionCb!(projection({ continuationInFlightClientId: 'resume-2' }));
-    expect(makerChatStore.getSnapshot(SID).seenContinuationInFlightClientId).toBe('resume-2');
-  });
-
-  it('字段完全缺省(旧被控端)→ capability=legacy，seen 仍为 null', () => {
+  it('字段完全缺省(旧被控端)→ capability=legacy', () => {
     inputProjectionCb!(legacyProjection());
     const snap = makerChatStore.getSnapshot(SID);
     expect(snap.continuationInFlightProjectionCapability).toBe('legacy');
-    expect(snap.continuationInFlightClientId).toBeNull();
-    expect(snap.seenContinuationInFlightClientId).toBeNull();
+    expect(snap.continuationTurnClientId).toBeNull();
   });
 
   it('同一会话的被控端升级后，显式字段会从 legacy 前进到 supported', () => {
     inputProjectionCb!(legacyProjection());
-    inputProjectionCb!(projection({ continuationInFlightClientId: null }));
+    inputProjectionCb!(projection({ continuationTurnClientId: null }));
     expect(makerChatStore.getSnapshot(SID).continuationInFlightProjectionCapability).toBe(
       'supported',
     );

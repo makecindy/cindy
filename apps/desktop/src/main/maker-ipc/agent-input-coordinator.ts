@@ -296,6 +296,8 @@ interface ActiveTurn {
   sendStarted: boolean;
   dispatchLifecycle: ActiveTurnDispatchLifecycle;
   pendingTerminalEvent: ActiveTurnTerminalEvent | null;
+  /** 当前 vendor turn 由哪条 Continue 合成项发起；同轮 steer 会继承它。 */
+  continuationOwnerClientId: string | null;
   controlKind?: 'compact';
 }
 
@@ -1037,6 +1039,7 @@ export class AgentInputCoordinator {
       sendStarted: false,
       dispatchLifecycle: 'preparing',
       pendingTerminalEvent: null,
+      continuationOwnerClientId: null,
       controlKind: 'compact',
     };
     state.activeTurn = active;
@@ -1341,6 +1344,8 @@ export class AgentInputCoordinator {
     const priorError = accepted.error;
     const priorStickyError = accepted.stickyError;
     const priorRecovery = accepted.recovery;
+    const priorContinuationOwnerClientId =
+      accepted.activeTurn?.continuationOwnerClientId ?? null;
     accepted.error = null;
     accepted.stickyError = null;
     accepted.recovery = null;
@@ -1356,6 +1361,10 @@ export class AgentInputCoordinator {
       sendStarted: true,
       dispatchLifecycle: 'dispatched',
       pendingTerminalEvent: null,
+      continuationOwnerClientId:
+        item.originalSyntheticTrigger === 'continue'
+          ? item.clientId
+          : priorContinuationOwnerClientId,
     };
     this.emit(sessionId);
 
@@ -2154,6 +2163,7 @@ export class AgentInputCoordinator {
         state.activeTurn?.item?.originalSyntheticTrigger === 'continue'
           ? state.activeTurn.item.clientId
           : null,
+      continuationTurnClientId: state.activeTurn?.continuationOwnerClientId ?? null,
       steeringQueueClientIds: [...state.steeringQueueClientIds],
       queuePaused: state.queuePaused,
       queueExpanded: state.queueExpanded,
@@ -2293,6 +2303,8 @@ export class AgentInputCoordinator {
       sendStarted: false,
       dispatchLifecycle: 'preparing',
       pendingTerminalEvent: null,
+      continuationOwnerClientId:
+        head.originalSyntheticTrigger === 'continue' ? head.clientId : null,
     };
     state.activeTurn = active;
     this.emit(sessionId);

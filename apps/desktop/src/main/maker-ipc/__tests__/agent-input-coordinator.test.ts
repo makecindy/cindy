@@ -5055,6 +5055,33 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     expect(projection.continuationInFlightClientId).toBeNull();
   });
 
+  it('preserves the continuation vendor-turn owner after an accepted steer', async () => {
+    const h = createHarness();
+    const sid = 'continue-owner-survives-steer';
+
+    h.coordinator.enqueue(
+      sid,
+      makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT),
+      { resumeRestorePausedQueue: true },
+    );
+    await flush();
+
+    let projection = latestProjection(h.projections);
+    expect(projection.continuationInFlightClientId).toBe('q-continue');
+    expect(projection.continuationTurnClientId).toBe('q-continue');
+
+    await h.coordinator.steer(sid, makeItem('q-steer', 'additional context'));
+    await flush();
+
+    projection = latestProjection(h.projections);
+    expect(projection.continuationInFlightClientId).toBeNull();
+    expect(projection.continuationTurnClientId).toBe('q-continue');
+
+    h.coordinator.onTurnEvent(sid, 'done');
+    projection = latestProjection(h.projections);
+    expect(projection.continuationTurnClientId).toBeNull();
+  });
+
   it('does not retain an in-flight continuation marker when the user cancels it in the queue', async () => {
     const h = createHarness();
     const sid = 'continue-cancelled-while-queued';

@@ -77,28 +77,23 @@ describe('findLastUserInputClientId', () => {
 
 describe('isAutoResumeRowInFlight', () => {
   const base = {
-    isContinuationInFlight: false,
+    isContinuationTurnOwner: false,
     sessionRunning: true,
     isLastUserInput: true,
-    isSeenContinuationInFlight: false,
     projectionCapability: 'supported' as const,
   };
 
-  it('current-id 精确匹配覆盖首个流事件之前的窗口', () => {
+  it('main owner 精确匹配覆盖首个流事件之前的窗口', () => {
     expect(
       isAutoResumeRowInFlight({
         ...base,
-        isContinuationInFlight: true,
+        isContinuationTurnOwner: true,
         sessionRunning: false,
       }),
     ).toBe(true);
   });
 
-  it('新版 supported + seen marker 接住 steer 窗口', () => {
-    expect(isAutoResumeRowInFlight({ ...base, isSeenContinuationInFlight: true })).toBe(true);
-  });
-
-  it('新版 supported 未见过边界 → 不把无关 Goal turn 误判成重连', () => {
+  it('新版 supported 未匹配 owner → 不把无关 Goal turn 误判成重连', () => {
     expect(isAutoResumeRowInFlight(base)).toBe(false);
   });
 

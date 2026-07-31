@@ -823,24 +823,17 @@ export interface SessionChatState {
    */
   continuationInFlightClientId: string | null;
   /**
-   * 当前 projection 是否支持 `continuationInFlightClientId`：
+   * 当前 vendor turn 的续跑发起项 clientId。它由 main 绑定在 ActiveTurn 上，steer 顶替
+   * activeTurn 后仍保持原值，因此 Renderer 重载 / 新窗口也能恢复归属。
+   */
+  continuationTurnClientId: string | null;
+  /**
+   * 当前 projection 是否支持 `continuationTurnClientId`：
    * unknown = 尚未收到投影；supported = 字段显式存在（值可以是 null）；
    * legacy = 旧被控端完全缺省字段，只能回落到 running + 最后一条输入的兼容判据。
    * 不能用 `?? null` 推断：新版显式 null 需要挡住无关 Goal turn，旧版缺省需要兼容。
    */
   continuationInFlightProjectionCapability: ContinuationInFlightProjectionCapability;
-  /**
-   * 本次 app 运行期内**观察到过**占据 dispatch/turn 边界的那条续跑项 clientId（只增不减）。
-   *
-   * 为什么需要它：`steer` 被接受时 coordinator 会替换 activeTurn，`continuationInFlightClientId`
-   * 随之变 null —— 可那个 vendor turn 还是原来那个续跑 turn。自愈重连行靠这个"见过"标记 +
-   * 「它仍是最后一条用户侧输入」把那段接住。
-   *
-   * 为什么**不能**只靠「最后一条用户侧输入 + 会话在跑」：goal-host 的续轮走 `session.send` 直发、
-   * 不落 user 行（controller.fireTurn），于是 app 退出后遗留的历史重连行会在一个无关 Goal turn
-   * 里被误判成"正在重连"（codex P2）。历史行在本次运行期从未占过边界，这个标记正好把它挡住。
-   */
-  seenContinuationInFlightClientId: string | null;
   isLoadingMore: boolean;
   hasMoreMessages: boolean;
   /**
@@ -1036,8 +1029,8 @@ export type SessionChatLightState = Pick<
   | 'errorRetryText'
   | 'credentialSwitchWait'
   | 'continuationInFlightClientId'
+  | 'continuationTurnClientId'
   | 'continuationInFlightProjectionCapability'
-  | 'seenContinuationInFlightClientId'
   | 'isLoadingMore'
   | 'hasMoreMessages'
   | 'isFirstMessage'
@@ -1089,8 +1082,8 @@ function createInitialState(): SessionChatState {
     errorRetryText: null,
     credentialSwitchWait: null,
     continuationInFlightClientId: null,
+    continuationTurnClientId: null,
     continuationInFlightProjectionCapability: 'unknown',
-    seenContinuationInFlightClientId: null,
     isLoadingMore: false,
     hasMoreMessages: true,
     historyWindowHasIsland: false,
@@ -1155,8 +1148,8 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   errorRetryText: null,
   credentialSwitchWait: null,
   continuationInFlightClientId: null,
+  continuationTurnClientId: null,
   continuationInFlightProjectionCapability: 'unknown',
-  seenContinuationInFlightClientId: null,
   isLoadingMore: false,
   hasMoreMessages: false,
   historyWindowHasIsland: false,
@@ -1583,7 +1576,7 @@ function applyInputProjection(projection: AgentInputProjection): void {
   // wire 上「字段缺省」就是旧被控端的能力信号；新版没有续跑项时也会显式发 null。
   // 必须在 `?? null` 归一化前按 own property 读取，不能让 undefined/null 混淆版本。
   const continuationInFlightProjectionCapability: ContinuationInFlightProjectionCapability =
-    Object.prototype.hasOwnProperty.call(projection, 'continuationInFlightClientId')
+    Object.prototype.hasOwnProperty.call(projection, 'continuationTurnClientId')
       ? 'supported'
       : 'legacy';
   setState(projection.sessionId, (s) => {
@@ -1687,10 +1680,8 @@ function applyInputProjection(projection: AgentInputProjection): void {
       errorRetryText: projection.errorRetryText,
       credentialSwitchWait: projection.credentialSwitchWait ?? null,
       continuationInFlightClientId: projection.continuationInFlightClientId ?? null,
+      continuationTurnClientId: projection.continuationTurnClientId ?? null,
       continuationInFlightProjectionCapability,
-      // 只增不减:字段变回 null(如 steer 顶替了 activeTurn)时保留上次观察到的值。
-      seenContinuationInFlightClientId:
-        projection.continuationInFlightClientId ?? s.seenContinuationInFlightClientId,
       ...(authRetryProjectionError ? { _authRetryPersistOnProjectionError: undefined } : {}),
     };
   });
@@ -4790,8 +4781,8 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     errorRetryText: state.errorRetryText,
     credentialSwitchWait: state.credentialSwitchWait,
     continuationInFlightClientId: state.continuationInFlightClientId,
+    continuationTurnClientId: state.continuationTurnClientId,
     continuationInFlightProjectionCapability: state.continuationInFlightProjectionCapability,
-    seenContinuationInFlightClientId: state.seenContinuationInFlightClientId,
     isLoadingMore: state.isLoadingMore,
     hasMoreMessages: state.hasMoreMessages,
     isFirstMessage: state.isFirstMessage,
@@ -4830,10 +4821,11 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.errorRetryText === b.errorRetryText &&
     a.credentialSwitchWait === b.credentialSwitchWait &&
     a.continuationInFlightClientId === b.continuationInFlightClientId &&
+    a.continuationTurnClientId === b.continuationTurnClientId &&
     a.continuationInFlightProjectionCapability ===
       b.continuationInFlightProjectionCapability &&
-    a.seenContinuationInFlightClientId === b.seenContinuationInFlightClientId &&
     a.isLoadingMore === b.isLoadingMore &&
+
     a.hasMoreMessages === b.hasMoreMessages &&
     a.isFirstMessage === b.isFirstMessage &&
     a.historyLoaded === b.historyLoaded &&
