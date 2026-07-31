@@ -40,8 +40,9 @@ const LINK = 'update.banner.viewNotes';
 
 // 入口按钮现在先查 busy 探针再决定「直接重启 vs 进中断警告态」,所以这个文件也需要
 // 一个 electronAPI 桩;默认没有任务在跑(本文件只关心文字链,不关心重启)。
-const { anySessionInTurn, relaunchToUpdate } = vi.hoisted(() => ({
+const { anySessionInTurn, listSessionBackgroundActivity, relaunchToUpdate } = vi.hoisted(() => ({
   anySessionInTurn: vi.fn<() => Promise<boolean>>(),
+  listSessionBackgroundActivity: vi.fn<() => Promise<{ sessionIds: string[] }>>(),
   relaunchToUpdate: vi.fn(),
 }));
 
@@ -51,12 +52,15 @@ beforeEach(() => {
   fetchReleaseNotes.mockResolvedValue(NOTES);
   anySessionInTurn.mockReset();
   anySessionInTurn.mockResolvedValue(false);
+  listSessionBackgroundActivity.mockReset();
+  listSessionBackgroundActivity.mockResolvedValue({ sessionIds: [] });
   relaunchToUpdate.mockReset();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
       anySessionInTurn,
       relaunchToUpdate,
+      maker: { listSessionBackgroundActivity },
       clientEndpoints: { websiteUrl: 'https://cindy.ai' },
     } as unknown as Window['electronAPI'],
   });

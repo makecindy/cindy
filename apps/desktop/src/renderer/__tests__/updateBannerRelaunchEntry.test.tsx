@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
 
 /**
- * UpdateBanner 的重启入口判定:点入口先查 anySessionInTurn(),确认没有任务在跑才直接重启,
- * 有任务(或探针拿不到可信答案)就拦一次并说明「会打断进行中的任务」。探针失败刻意 fail
- * closed —— 重启会不可撤销地杀掉 in-flight turn,「无法确认」不能当成「确认没有」。
+ * UpdateBanner 的重启入口判定:点入口先查「有没有任务在跑」,确认没有才直接重启,有任务
+ * (或探针拿不到可信答案)就拦一次并说明「会打断进行中的任务」。探针失败刻意 fail closed
+ * —— 重启会不可撤销地杀掉 in-flight turn,「无法确认」不能当成「确认没有」。
+ *
+ * 「有任务在跑」有**两个独立来源**,各有一条用例:逻辑 turn(anySessionInTurn)与 turn 已
+ * 结束但仍在调模型的后台活动(listSessionBackgroundActivity)。漏任一个都是无保护入口。
  *
  * 另一半是**不变量:一次点击的探针结论,只有在这次点击仍然有效时才能驱动副作用**。
  * 探针在飞期间 dismiss、组件卸载、status 离开 ready 都必须让它作废 —— 三条对称路径
@@ -13,8 +16,11 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { anySessionInTurn, relaunchToUpdate, updateStatus, dismissState } = vi.hoisted(() => ({
+const {
+  anySessionInTurn, listSessionBackgroundActivity, relaunchToUpdate, updateStatus, dismissState,
+} = vi.hoisted(() => ({
   anySessionInTurn: vi.fn<() => Promise<boolean>>(),
+  listSessionBackgroundActivity: vi.fn<() => Promise<{ sessionIds: string[] }>>(),
   relaunchToUpdate: vi.fn(),
   updateStatus: {
     current: { status: 'ready', version: '1.2.3', errorCode: null } as {
@@ -65,6 +71,9 @@ function deferredProbe(): (busy: boolean) => void {
 
 beforeEach(() => {
   anySessionInTurn.mockReset();
+  listSessionBackgroundActivity.mockReset();
+  // 默认没有后台活动 —— 每条用例只需声明它关心的那个来源。
+  listSessionBackgroundActivity.mockResolvedValue({ sessionIds: [] });
   relaunchToUpdate.mockReset();
   updateStatus.current = { status: 'ready', version: '1.2.3', errorCode: null };
   dismissState.dismissed = false;
@@ -73,6 +82,7 @@ beforeEach(() => {
     value: {
       anySessionInTurn,
       relaunchToUpdate,
+      maker: { listSessionBackgroundActivity },
       clientEndpoints: { websiteUrl: 'https://cindy.ai' },
     } as unknown as Window['electronAPI'],
   });
@@ -108,6 +118,33 @@ describe('UpdateBanner relaunch entry', () => {
     // 没有任务在跑时不该再出现第二步 —— 那句「应用会自动重启」不带任何信息量。
     expect(screen.queryByRole('button', { name: 'update.banner.confirmAria' })).toBeNull();
     expect(screen.queryByText('update.banner.confirmBusyHint')).toBeNull();
+  });
+
+  // 第二个来源:turn 已结束但 CC 子进程仍在调模型(后台子 agent / run_in_background 的
+  // Bash)。anySessionInTurn 查不到它 —— 改成单击直达前,这个缺口被无条件二次确认盖着。
+  it('warns when only post-turn background activity is running', async () => {
+    anySessionInTurn.mockResolvedValue(false);
+    listSessionBackgroundActivity.mockResolvedValue({ sessionIds: ['sess-bg-1'] });
+    render(<UpdateBanner isCollapsed={false} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
+
+    await screen.findByText('update.banner.confirmBusyHint');
+    expect(relaunchToUpdate).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'update.banner.confirmAria' }));
+    expect(relaunchToUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the warning state when the background-activity query rejects', async () => {
+    anySessionInTurn.mockResolvedValue(false);
+    listSessionBackgroundActivity.mockRejectedValue(new Error('ipc channel closed'));
+    render(<UpdateBanner isCollapsed={false} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
+
+    await screen.findByText('update.banner.confirmBusyHint');
+    expect(relaunchToUpdate).not.toHaveBeenCalled();
   });
 
   // 探针拿不到可信答案时 fail closed:「无法确认」不能当成「确认没有」,重启会不可撤销地
