@@ -164,8 +164,6 @@ export function normalizeMessages(input: readonly unknown[]): Record<string, unk
  * 逐字段比较越容易短路,冷开时不会出现 cached→fresh 的可见重渲染。
  */
 const HEAVY_BLOB_KEYS = new Set(['base64']);
-/** content 里疑似内联 base64 的 JSON 字符串:超过这个长度才值得解析 → 剥 → 回写。 */
-const CONTENT_PARSE_THRESHOLD = 16_000;
 const MAX_CONTENT_DEPTH = 12;
 
 export function stripInlineMedia(value: unknown, depth: number): unknown {
@@ -186,9 +184,11 @@ export function stripInlineMedia(value: unknown, depth: number): unknown {
 function stripInlineMediaString(value: string, depth: number): string {
   // data:...;base64,... 内联大块 → 丢弃(留空串占位),渲染走 url。
   if (value.startsWith('data:') && value.includes(';base64,')) return '';
-  // 用户消息的 content 常是 JSON 字符串;只有"够大且疑似内联了 base64"时才解析,
-  // 否则原样返回以保逐字节一致。
-  if (value.length > CONTENT_PARSE_THRESHOLD && value.includes('base64')) {
+  // 用户消息的 content 常是 JSON 字符串;**疑似内联了 base64** 就解析→剥→回写,不看长度 ——
+  // 一小段 `{"images":[{"base64":"…"}]}` 同样是 cindy-media 账本之外的未受管副本,几十 KB
+  // 与几百字节在"是不是多出一份明文媒体"这件事上没有区别(review: codex P1)。
+  // 不含 base64 的常规文本仍然原样返回(逐字节一致 → renderer 判等能短路)。
+  if (value.includes('base64')) {
     const trimmed = value.trim();
     if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
       try {
@@ -339,6 +339,14 @@ export class MirrorCachePurgeError extends Error {
      * 发起时取的,而账号基线是在 put 开始时才采样的(已在自增之后),两项都会"对上"。
      */
     readonly barriers: string[] = [],
+    /**
+     * 还挂着的**「清理没确认完成」墓碑** scope(`<root>.control/pending/` 下的名字)。
+     *
+     * 墓碑存在期间该 owner 的缓存读一律不命中(fail-closed)。所以它必须能被**退役**:
+     * 一次瞬时删除失败若让墓碑永远挂着,整个账号的冷缓存就此关闭,直到刚好又清一次同一台
+     * 设备(review: codex P1)。因此把 scope 一起交给 purge 队列,补删成功后由队列撤掉。
+     */
+    readonly tombstones: string[] = [],
   ) {
     super(`device-link mirror cache purge incomplete: ${remaining.length} file(s) remain`);
     this.name = 'MirrorCachePurgeError';
@@ -766,12 +774,21 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // 墓碑与计数一起落在删除之前:计数只记"清过几代",记不住"这一代清到一半就崩了" ——
       // 进程在自增之后、扫描之前退出时,正文还在盘上而计数前后一致,重启后读路径照样命中
       // (review: codex P1)。墓碑存在期间该 root 的读一律不命中,清完才撤。
+      // 落不下墓碑就**在第一次删除之前中止**(同 clearAll):若照常往下扫,而进程在扫描途中
+      // 退出,盘上既没有墓碑、重试也还没登记(登记发生在这个异常被 IPC 接住之后),没删掉的
+      // 文件在重启后会因为"计数稳定"被读路径当成有效缓存(review: codex P1)。
+      // 什么都还没动 → 盘上状态自洽,交给调用方登记整根重试即可。
       try {
         await markClearPending(rootAtStart, deviceClearKey(id));
       } catch (err) {
         log.error(`mirror cache: failed to mark clear pending for ${id.slice(0, 8)}`, err);
-        stuck.push(rootAtStart);
-        stuckBarriers.push(deviceClearKey(id), CLEARED_ANY);
+        throw new MirrorCachePurgeError(
+          rootAtStart,
+          [rootAtStart],
+          err,
+          [deviceClearKey(id), CLEARED_ANY],
+          [deviceClearKey(id)],
+        );
       }
       try {
         await bumpClearCounters(rootAtStart, id);
@@ -879,7 +896,13 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       const remaining = [...new Set(stuck)];
       if (remaining.length > 0) {
         // 有东西没清掉 → **保留墓碑**:读继续被挡,直到某次清理真的做完。
-        throw new MirrorCachePurgeError(rootAtStart, remaining, null, [...new Set(stuckBarriers)]);
+        throw new MirrorCachePurgeError(
+          rootAtStart,
+          remaining,
+          null,
+          [...new Set(stuckBarriers)],
+          [deviceClearKey(id)],
+        );
       }
       // 确认清完了才撤墓碑。撤不掉不致命(只是这台设备的缓存读继续被挡)。
       await clearPendingMark(rootAtStart, deviceClearKey(id)).catch((err: unknown) => {
@@ -1178,7 +1201,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
           await bumpClearedCounter(root, CLEARED_ACCOUNT);
         } catch (err) {
           purgeAllInFlight -= 1; // 下面的 finally 不会执行(还没进 try)
-          throw new MirrorCachePurgeError(root, [root], err, [CLEARED_ACCOUNT]);
+          throw new MirrorCachePurgeError(root, [root], err, [CLEARED_ACCOUNT], [CLEARED_ACCOUNT]);
         }
         let failure: MirrorCachePurgeError | null = null;
         try {
@@ -1189,7 +1212,14 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
           const remaining = await purgeContents(root);
           if (remaining.length === 0)
             log.debug(`mirror cache purged but root dir remains: ${root}`, err);
-          else failure = new MirrorCachePurgeError(root, remaining, err);
+          else
+            failure = new MirrorCachePurgeError(
+              root,
+              remaining,
+              err,
+              [CLEARED_ACCOUNT],
+              [CLEARED_ACCOUNT],
+            );
         } finally {
           purgeAllInFlight -= 1;
           // 收尾再自增一次代际(同 clearDevice):互斥让"清理期间发起"的写入排到清理之后才执行,
@@ -1203,7 +1233,13 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
         try {
           await bumpClearedCounter(root, CLEARED_ACCOUNT);
         } catch (err) {
-          failure ??= new MirrorCachePurgeError(root, [root], err, [CLEARED_ACCOUNT]);
+          failure ??= new MirrorCachePurgeError(
+            root,
+            [root],
+            err,
+            [CLEARED_ACCOUNT],
+            [CLEARED_ACCOUNT],
+          );
         }
         if (failure) throw failure; // 没清完 → 保留墓碑,读继续被挡
         await clearPendingMark(root, CLEARED_ACCOUNT).catch((err: unknown) => {

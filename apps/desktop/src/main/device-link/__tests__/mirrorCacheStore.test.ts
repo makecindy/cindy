@@ -176,6 +176,22 @@ describe('内联媒体字节剥离', () => {
     expect(parsed.images[0]).not.toHaveProperty('base64');
   });
 
+  it('短 JSON 字符串里的 base64 同样被剥(不看长度)', () => {
+    // review(codex P1):原先只在超过 16000 字符时才解析,一小段
+    // `{"images":[{"base64":"…"}]}` 会原样写进镜像目录 —— 同样是 cindy-media 账本之外的
+    // 未受管副本,几百字节与几十 KB 在这件事上没有区别。
+    const payload = JSON.stringify({ text: 'hi', images: [{ url: 'u', base64: 'QUJD' }] });
+    expect(payload.length).toBeLessThan(200);
+    const [only] = normalizeMessages([row('m1', '2026-01-01T00:00:00.000Z', { content: payload })]);
+    const parsed = JSON.parse(only.content as string) as {
+      text: string;
+      images: Array<Record<string, unknown>>;
+    };
+    expect(parsed.text).toBe('hi');
+    expect(parsed.images[0].url).toBe('u');
+    expect(parsed.images[0]).not.toHaveProperty('base64');
+  });
+
   it('常规文本 content 逐字节不变(缓存行与 fresh 行判等要能短路)', () => {
     const text = 'x'.repeat(2_000);
     const [only] = normalizeMessages([row('m1', '2026-01-01T00:00:00.000Z', { content: text })]);
@@ -1327,6 +1343,38 @@ describe('跨进程互斥(锁 + 清理完成标记)', () => {
       expect(
         (await c.readMessagesWithInvalidation('dev-2', 'sess-2')).messages.map((m) => m.id),
       ).toEqual(['m2']);
+    });
+
+    it('墓碑落不下去 → 在第一次删除之前中止,盘上什么都没动', async () => {
+      // review(codex P1):照常往下扫而进程在扫描途中退出时,盘上既没有墓碑、重试也还没登记
+      // (登记发生在异常被 IPC 接住之后),没删掉的文件重启后会因为"计数稳定"被当成有效缓存。
+      const c = cache();
+      await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+      const file = path.join(messagesDir(), messageFileName('dev-1', 'sess-1'));
+      const original = fsp.mkdir;
+      const spy = vi.spyOn(fsp, 'mkdir').mockImplementation((async (
+        target: unknown,
+        ...rest: unknown[]
+      ) => {
+        if (typeof target === 'string' && target === path.join(`${root}.control`, 'pending')) {
+          throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+        }
+        return (original as (...args: unknown[]) => Promise<unknown>)(target, ...rest);
+      }) as unknown as typeof fsp.mkdir);
+      try {
+        const err = await c.clearDevice('dev-1').then(
+          () => null,
+          (e: unknown) => e,
+        );
+        expect(err).toBeInstanceOf(MirrorCachePurgeError);
+        // 整根待重试 + 待补屏障 + 待退役墓碑都带上了。
+        expect((err as MirrorCachePurgeError).remaining).toEqual([root]);
+        expect((err as MirrorCachePurgeError).tombstones.length).toBeGreaterThan(0);
+      } finally {
+        spy.mockRestore();
+      }
+      // 一次删除都没做(盘上状态自洽,交给整根重试)。
+      expect(fs.existsSync(file)).toBe(true);
     });
 
     it('clearAll 同样先落墓碑,清完才撤', async () => {

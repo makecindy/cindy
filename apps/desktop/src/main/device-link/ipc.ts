@@ -819,6 +819,7 @@ export async function handleMirrorCachePutMessages(
     root: string,
     paths?: readonly string[],
     barriers?: readonly string[],
+    tombstones?: readonly string[],
   ) => Promise<void> = enqueuePurge,
   expectedInvalidation?: unknown,
 ): Promise<{ ok: true; invalidation?: number }> {
@@ -870,6 +871,7 @@ export async function handleMirrorCachePutSessionList(
     root: string,
     paths?: readonly string[],
     barriers?: readonly string[],
+    tombstones?: readonly string[],
   ) => Promise<void> = enqueuePurge,
 ): Promise<{ ok: true }> {
   if (!Array.isArray(devices)) throwIpcError('INVALID_PARAMS', 'devices must be an array');
@@ -910,6 +912,7 @@ async function queuePurgeRetry(
     root: string,
     paths?: readonly string[],
     barriers?: readonly string[],
+    tombstones?: readonly string[],
   ) => Promise<void>,
   where: string,
 ): Promise<void> {
@@ -917,9 +920,13 @@ async function queuePurgeRetry(
   log.error(`${where} left ${err.remaining.length} path(s) behind; queued for retry`, err);
   // barriers = 自增失败的作废计数器 key:队列在补删前替我们自增,否则"内容取自清理之前、
   // put 迟到"的写入会在消化之后通过比对(见 MirrorCachePurgeError.barriers)。
-  await enqueueRetry(err.root, err.remaining, err.barriers).catch((queueErr: unknown) => {
-    log.error(`failed to queue ${where} purge retry`, queueErr);
-  });
+  // tombstones = 还挂着的"清理没确认完成"墓碑 scope:补删成功后由队列撤掉,否则一次瞬时失败
+  // 会让整个账号的缓存读永久不命中(见 MirrorCachePurgeError.tombstones)。
+  await enqueueRetry(err.root, err.remaining, err.barriers, err.tombstones).catch(
+    (queueErr: unknown) => {
+      log.error(`failed to queue ${where} purge retry`, queueErr);
+    },
+  );
 }
 
 /**
@@ -938,6 +945,7 @@ export async function handleMirrorCacheClear(
     root: string,
     paths?: readonly string[],
     barriers?: readonly string[],
+    tombstones?: readonly string[],
   ) => Promise<void> = enqueuePurge,
 ): Promise<{ ok: true }> {
   const device = requireCacheId(deviceId, 'deviceId');

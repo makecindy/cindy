@@ -196,9 +196,7 @@ describe('mirror-cache IPC 授权边界', () => {
 
   it('clear 这个 IPC 永远碰不到 clearAll(整体清理只在 main 内部)', async () => {
     await call(DEVICE_LINK_INVOKE.MIRROR_CACHE_CLEAR, { deviceId: 'dev-1' });
-    await expect(call(DEVICE_LINK_INVOKE.MIRROR_CACHE_CLEAR, {})).rejects.toThrow(
-      /INVALID_PARAMS/,
-    );
+    await expect(call(DEVICE_LINK_INVOKE.MIRROR_CACHE_CLEAR, {})).rejects.toThrow(/INVALID_PARAMS/);
     expect(h.cache.clearAll).not.toHaveBeenCalled();
   });
 });

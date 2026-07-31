@@ -292,6 +292,45 @@ describe('文件级条目(clearDevice 删不掉时用)', () => {
     expect((await __testing.readQueue())[0]?.barriers).toEqual(['sess-a', 'sess-b']);
   });
 
+  // review(codex P1):clearDevice 删不掉文件时刻意保留墓碑,而墓碑对整个 root 的读都生效 ——
+  // 队列补删成功却不撤墓碑的话,一次瞬时失败就把整个账号的冷缓存永久关掉了。
+  it('补删成功后退役墓碑(否则一次瞬时失败会永久关掉该账号的缓存)', async () => {
+    const root = await makeOwnerCache('owner-1');
+    const target = path.join(root, 'messages', 'a.json');
+    const mark = path.join(`${root}.control`, 'pending', 'dev-key');
+    await fsp.mkdir(path.dirname(mark), { recursive: true });
+    await fsp.writeFile(mark, '1', 'utf8');
+
+    await enqueuePurge(root, [target], ['dev-key'], ['dev-key']);
+    expect((await __testing.readQueue())[0]?.tombstones).toEqual(['dev-key']);
+
+    expect(await drainPurgeQueue()).toEqual({ purged: 1, pending: 0 });
+    expect(fs.existsSync(mark)).toBe(false);
+  });
+
+  it('补删没成功 → 墓碑保留(读继续被挡)', async () => {
+    const root = await makeOwnerCache('owner-1');
+    const target = path.join(root, 'messages', 'a.json');
+    const mark = path.join(`${root}.control`, 'pending', 'dev-key');
+    await fsp.mkdir(path.dirname(mark), { recursive: true });
+    await fsp.writeFile(mark, '1', 'utf8');
+    await enqueuePurge(root, [target], ['dev-key'], ['dev-key']);
+
+    const originalRm = fsp.rm;
+    const spy = vi.spyOn(fsp, 'rm').mockImplementation((async (t: unknown, ...rest: unknown[]) => {
+      if (typeof t === 'string' && t === target) {
+        throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+      }
+      return (originalRm as (...args: unknown[]) => Promise<unknown>)(t, ...rest);
+    }) as unknown as typeof fsp.rm);
+    try {
+      expect(await drainPurgeQueue()).toEqual({ purged: 0, pending: 1 });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(fs.existsSync(mark)).toBe(true);
+  });
+
   it('屏障修不好(计数读不出数字)→ 条目留着重试,不当成清干净了', async () => {
     const root = await makeOwnerCache('owner-1');
     const target = path.join(root, 'messages', 'a.json');

@@ -339,9 +339,9 @@ describe('清理失败登记重试', () => {
       handleMirrorCachePutMessages(cache, 'dev-1', 'sess-1', [], enqueue),
     ).resolves.toEqual({ ok: true });
 
-    // 第三个参数是待补自增的作废屏障 key(见 MirrorCachePurgeError.barriers);这些用例造的
-    // 错误没带 key,于是传空数组。
-    expect(enqueue).toHaveBeenCalledWith('/data/owners/x/device-link-mirror-cache', stuck, []);
+    // 第三、四个参数是待补自增的作废屏障 key 与待退役的墓碑 scope(见 MirrorCachePurgeError);
+    // 这些用例造的错误两者都没带,于是传空数组。
+    expect(enqueue).toHaveBeenCalledWith('/data/owners/x/device-link-mirror-cache', stuck, [], []);
   });
 
   it('列表快照的删除类失败 → 登记进 purge 队列,IPC 仍返回 ok', async () => {
@@ -355,9 +355,9 @@ describe('清理失败登记重试', () => {
       ok: true,
     });
 
-    // 第三个参数是待补自增的作废屏障 key(见 MirrorCachePurgeError.barriers);这些用例造的
-    // 错误没带 key,于是传空数组。
-    expect(enqueue).toHaveBeenCalledWith('/data/owners/x/device-link-mirror-cache', stuck, []);
+    // 第三、四个参数是待补自增的作废屏障 key 与待退役的墓碑 scope(见 MirrorCachePurgeError);
+    // 这些用例造的错误两者都没带,于是传空数组。
+    expect(enqueue).toHaveBeenCalledWith('/data/owners/x/device-link-mirror-cache', stuck, [], []);
   });
 
   it('写入的非 purge 类错误照常抛出', async () => {
@@ -419,9 +419,9 @@ describe('clear', () => {
 
     await expect(handleMirrorCacheClear(cache, 'dev-1', enqueue)).resolves.toEqual({ ok: true });
 
-    // 第三个参数是待补自增的作废屏障 key(见 MirrorCachePurgeError.barriers);这些用例造的
-    // 错误没带 key,于是传空数组。
-    expect(enqueue).toHaveBeenCalledWith('/data/owners/x/device-link-mirror-cache', stuck, []);
+    // 第三、四个参数是待补自增的作废屏障 key 与待退役的墓碑 scope(见 MirrorCachePurgeError);
+    // 这些用例造的错误两者都没带,于是传空数组。
+    expect(enqueue).toHaveBeenCalledWith('/data/owners/x/device-link-mirror-cache', stuck, [], []);
   });
 
   it('登记重试本身失败也不让 IPC 失败(已记 error,清理是 best-effort)', async () => {

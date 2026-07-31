@@ -30,7 +30,12 @@ import { createHash, randomBytes } from 'node:crypto';
 
 import { createLogger } from '../logger';
 import { withCrossProcessLock } from './crossProcessLock';
-import { bumpClearedCounter, cacheLockPath, CLEARED_ACCOUNT } from './mirrorCacheBarrier';
+import {
+  bumpClearedCounter,
+  cacheLockPath,
+  clearPendingMark,
+  CLEARED_ACCOUNT,
+} from './mirrorCacheBarrier';
 
 const log = createLogger('device-link:mirror-cache-purge');
 
@@ -58,6 +63,12 @@ interface PurgeEntry {
    * 而账号基线在 put 开始时才采样(已在自增之后),两项都会"对上"。
    */
   barriers?: string[];
+  /**
+   * 还挂着的**「清理没确认完成」墓碑** scope(`<root>.control/pending/` 下的名字)。
+   * 补删成功后由这里撤掉 —— 墓碑挂着期间该 owner 的缓存读一律不命中,一次瞬时删除失败若让它
+   * 永远挂着,整个账号的冷缓存就此关闭(review: codex P1)。
+   */
+  tombstones?: string[];
   /** 首次记录时间(毫秒),仅供排查。 */
   since: number;
   /** 已经尝试过多少次。 */
@@ -290,6 +301,9 @@ async function readQueueFile(file: string): Promise<PurgeEntry[] | null> {
           return {
             root: entry.root,
             barriers: safeBarrierKeys(Array.isArray(entry.barriers) ? entry.barriers : undefined),
+            tombstones: safeBarrierKeys(
+              Array.isArray(entry.tombstones) ? entry.tombstones : undefined,
+            ),
             // 文件级清单超上限(理论上写不出来,只可能来自被改写的队列文件):降级成整根条目
             // 而不是截断 —— 截断会静默漏掉待清路径,整根是超集(见 compactEntries)。
             paths: paths && paths.length > MAX_PATHS_PER_ENTRY ? undefined : paths,
@@ -328,10 +342,15 @@ function compactEntries(entries: readonly PurgeEntry[]): PurgeEntry[] {
     // 就只能退回账号级,而账号基线是 put 开始时才采样的,救不了会话级那个洞
     // (review: codex P1)。整根删除是路径的超集,屏障却必须逐个保留。
     const barriers = safeBarrierKeys([...(existing?.barriers ?? []), ...(entry.barriers ?? [])]);
+    const tombstones = safeBarrierKeys([
+      ...(existing?.tombstones ?? []),
+      ...(entry.tombstones ?? []),
+    ]);
     byRoot.set(key, {
       root: entry.root,
       paths: undefined,
       ...(barriers.length > 0 ? { barriers } : {}),
+      ...(tombstones.length > 0 ? { tombstones } : {}),
       since: existing ? Math.min(existing.since, entry.since) : entry.since,
       attempts: Math.max(existing?.attempts ?? 0, entry.attempts),
     });
@@ -440,14 +459,16 @@ export async function enqueuePurge(
   root: string,
   paths?: readonly string[],
   barriers?: readonly string[],
+  tombstones?: readonly string[],
 ): Promise<void> {
-  return withQueueLock((held) => enqueuePurgeLocked(root, paths, barriers, held));
+  return withQueueLock((held) => enqueuePurgeLocked(root, paths, barriers, tombstones, held));
 }
 
 async function enqueuePurgeLocked(
   root: string,
   paths?: readonly string[],
   barriers?: readonly string[],
+  tombstones?: readonly string[],
   lockHeld = true,
 ): Promise<void> {
   const base = ownersRoot();
@@ -479,10 +500,12 @@ async function enqueuePurgeLocked(
       root,
       paths: chunk,
       barriers: safeBarrierKeys(barriers),
+      tombstones: safeBarrierKeys(tombstones),
       since: Date.now(),
       attempts: 1,
     };
     if (entry.barriers?.length === 0) delete entry.barriers;
+    if (entry.tombstones?.length === 0) delete entry.tombstones;
     const key = entryKey(entry);
     const existing = (await readQueue()).find((candidate) => entryKey(candidate) === key);
     if (existing) {
@@ -492,6 +515,8 @@ async function enqueuePurgeLocked(
       // 不能把先前那个待修的 key 丢掉(丢了就等于漏修屏障)。
       const merged = safeBarrierKeys([...(existing.barriers ?? []), ...(entry.barriers ?? [])]);
       if (merged.length > 0) entry.barriers = merged;
+      const marks = safeBarrierKeys([...(existing.tombstones ?? []), ...(entry.tombstones ?? [])]);
+      if (marks.length > 0) entry.tombstones = marks;
     }
     // 内存兜底先落:即使接下来落盘失败,本进程后续的 drain 仍会重试。
     memoryQueue.set(key, entry);
@@ -622,6 +647,12 @@ async function drainPurgeQueueLocked(
         // 的写入 —— 它入口读到的已是第一次自增之后的值,只靠第一次挡不住它。自增失败即视为
         // 没清完,整条留着重试。
         for (const key of keysToBump) await bumpClearedCounter(entry.root, key);
+        // 删干净了 → 退役"清理没确认完成"墓碑。不撤的话,一次瞬时删除失败会让该 owner 的
+        // 缓存读永久不命中(hasPendingClears 对整个 root 生效)(review: codex P1)。
+        // 撤墓碑排在最后:前面任何一步抛错都会让条目留在队列里,墓碑也就继续挡着读。
+        for (const scope of safeBarrierKeys(entry.tombstones)) {
+          await clearPendingMark(entry.root, scope);
+        }
       });
       purged += 1;
       purgedKeys.add(key);
