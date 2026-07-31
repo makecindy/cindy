@@ -112,9 +112,15 @@ export class ContactsSyncRepository {
           "merged contacts sync state exceeds limits",
         );
       }
-      if (JSON.stringify(merged) === JSON.stringify(local.state)) return false;
-
       const projection = materializeContactsSyncState(merged);
+      const stateUnchanged =
+        JSON.stringify(merged) === JSON.stringify(local.state);
+      const projectionUnchanged =
+        JSON.stringify(projection) === JSON.stringify(local.projection);
+      // CRDT 状态相同不代表 SQLite 投影一定最新：唯一约束隐藏的并发输家在
+      // 赢家后续改名后可能重新可见。只有状态和当前投影都一致才可以幂等返回。
+      if (stateUnchanged && projectionUnchanged) return false;
+
       writeContactsSnapshot(this.db, projection);
       this.updateRow(row.node_id, merged, projection);
       return true;

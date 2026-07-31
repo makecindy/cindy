@@ -310,6 +310,37 @@ describe("contacts device sync", () => {
     ).toEqual(["A", "a"]);
   });
 
+  it("状态相同但唯一约束赢家改名后会重新物化此前隐藏的分组", () => {
+    const a = createStore();
+    const b = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    a.createGroup("并发同名");
+    b.createGroup("并发同名");
+
+    exchange(a, b);
+    exchange(b, a);
+    expect(a.listGroups()).toHaveLength(1);
+    expect(b.listGroups()).toHaveLength(1);
+
+    const visibleWinner = a.listGroups()[0]!;
+    a.updateGroup(visibleWinner.id, { name: "赢家已改名" });
+    const aState = stateOf(a);
+    expect(b.mergeDeviceSyncState(aState)).toBe(true);
+    expect(b.listGroups()).toHaveLength(2);
+
+    // B 回传的状态与 A 已保存的 CRDT 完全相同，但 A 的 SQLite 投影仍缺一组。
+    const bState = stateOf(b);
+    expect(bState).toEqual(aState);
+    expect(a.mergeDeviceSyncState(bState)).toBe(true);
+    expect(
+      a
+        .listGroups()
+        .map((group) => group.name)
+        .sort(),
+    ).toEqual(["并发同名", "赢家已改名"]);
+  });
+
   it("同步接受并保留本地合法的长关系备注", () => {
     const a = createStore();
     const b = createStore();
