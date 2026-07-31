@@ -3474,9 +3474,11 @@ const registerIpcHandlers = () => {
   // 内置 API-key 供应商专用 IPC(查/写/删,has 只回存在性,永不回读明文)。
   // 业务体(白名单/类型/长度校验 + 统一错误协议)在 secrets/builtinApiKeyBridge.ts,
   // 边界行为有单测;这里只做 sender 守卫 + 依赖装配。
+  const builtinApiKeyLog = createLogger('secrets:builtin-api-key');
   const builtinApiKeyDeps: BuiltinApiKeyBridgeDeps = {
     store: getProviderSecretStore(),
     onKeyChanged: (id) => notifyProviderKeyChanged(id),
+    logError: (message, err) => builtinApiKeyLog.error(message, err),
   };
 
   ipcMain.handle(

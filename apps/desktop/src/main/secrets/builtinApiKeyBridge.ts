@@ -37,7 +37,7 @@ export function isBuiltinApiKeyProviderId(providerId: unknown): providerId is Pr
  */
 export const BUILTIN_API_KEY_MAX_LENGTH = 1024;
 
-/** 依赖注入面:providerSecretStore 的读写切片 + key 变更广播。 */
+/** 依赖注入面:providerSecretStore 的读写切片 + key 变更广播 + 统一日志。 */
 export interface BuiltinApiKeyBridgeDeps {
   store: {
     set(id: ProviderSecretId, value: string): boolean;
@@ -45,6 +45,11 @@ export interface BuiltinApiKeyBridgeDeps {
     has(id: ProviderSecretId): boolean;
   };
   onKeyChanged: (providerId: ProviderSecretId) => void;
+  /**
+   * 查询路径吞掉的异常经此进 main 统一 logger(级别/轮转/持久化,规约 §1);
+   * 本模块保持零 electron 依赖,logger 由装配方注入。
+   */
+  logError: (message: string, err: unknown) => void;
 }
 
 function requireBuiltinApiKeyProviderId(providerId: unknown): ProviderSecretId {
@@ -90,7 +95,7 @@ export function builtinApiKeyHas(deps: BuiltinApiKeyBridgeDeps, providerId: unkn
   try {
     return deps.store.has(providerId);
   } catch (err) {
-    console.error('[builtin-api-key-has]', err);
+    deps.logError('[builtin-api-key-has] secret store query failed', err);
     return false;
   }
 }

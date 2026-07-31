@@ -22,8 +22,9 @@ function makeDeps(overrides?: Partial<BuiltinApiKeyBridgeDeps['store']>) {
     ...overrides,
   };
   const onKeyChanged = vi.fn<BuiltinApiKeyBridgeDeps['onKeyChanged']>();
-  const deps: BuiltinApiKeyBridgeDeps = { store, onKeyChanged };
-  return { deps, store, onKeyChanged };
+  const logError = vi.fn<BuiltinApiKeyBridgeDeps['logError']>();
+  const deps: BuiltinApiKeyBridgeDeps = { store, onKeyChanged, logError };
+  return { deps, store, onKeyChanged, logError };
 }
 
 /** 断言抛出的是统一 IPC 协议错误(err.code + [CODE] 前缀话术)。 */
@@ -112,14 +113,16 @@ describe('builtinApiKeyHas', () => {
     expect(store.has).not.toHaveBeenCalled();
   });
 
-  it('透传存储层结果;存储层异常回 false(UI 按未配置渲染)', () => {
+  it('透传存储层结果;存储层异常回 false(UI 按未配置渲染)并进注入 logger', () => {
     const ok = makeDeps({ has: vi.fn(() => true) });
     expect(builtinApiKeyHas(ok.deps, 'openai-images')).toBe(true);
+    expect(ok.logError).not.toHaveBeenCalled();
     const boom = makeDeps({
       has: vi.fn(() => {
         throw new Error('io');
       }),
     });
     expect(builtinApiKeyHas(boom.deps, 'gemini')).toBe(false);
+    expect(boom.logError).toHaveBeenCalledOnce();
   });
 });
