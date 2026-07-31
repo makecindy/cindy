@@ -4488,7 +4488,9 @@ export function registerGhostIpc(): void {
     return withGhostInstallLock(inspected.manifest.id, async () => {
       const previousGhost = manager.list().find((g) => g.manifest.id === inspected.manifest.id);
       runtime.stop(inspected.manifest.id);
-      getGhostNodeRuntimeBroker().stop(inspected.manifest.id);
+      // Windows 上 stop() 只是发出终止信号；必须等旧 utilityProcess 真正退出，
+      // 否则它还会占用插件目录，接下来的原子 rename 可能报 EPERM。
+      await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);
       getGhostAgentSlot().clearGhost(inspected.manifest.id);
       getGhostErrandSlot().clearGhost(inspected.manifest.id);
       let result: Awaited<ReturnType<typeof manager.update>>;
@@ -4498,7 +4500,6 @@ export function registerGhostIpc(): void {
         // 更新失败:恢复旧版本的常驻 Node 工作进程(如果是 resident 且已启用)
         if (previousGhost) spawnIfResident(previousGhost);
         throw err;
-      }
       if ('rejection' in result) {
         if (previousGhost) spawnIfResident(previousGhost);
         throwInstallError(result.rejection);

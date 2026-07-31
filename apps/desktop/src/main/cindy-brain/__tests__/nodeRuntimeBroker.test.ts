@@ -209,6 +209,31 @@ describe('nodeRuntimeBroker · 进程生命周期', () => {
     expect(broker.stateOf('node-ghost')).toBe('off');
   });
 
+  it('stopAndWait 在工作进程实际退出前不返回', async () => {
+    const ghost = fakeGhost({ lifecycle: 'resident' });
+    const child = new FakeNodeProcess();
+    const kill = vi.spyOn(child, 'kill').mockImplementation(() => {
+      child.killed = true;
+      return true;
+    });
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+    });
+    await broker.startResident(ghost);
+
+    let settled = false;
+    const stopping = broker.stopAndWait('node-ghost').then(() => {
+      settled = true;
+    });
+    expect(kill).toHaveBeenCalledWith('SIGTERM');
+    expect(settled).toBe(false);
+
+    child.emit('exit', null, 'SIGTERM');
+    await stopping;
+    expect(settled).toBe(true);
+  });
+
   it('按需进程空闲两分钟后自动关闭', async () => {
     vi.useFakeTimers();
     const ghost = fakeGhost();

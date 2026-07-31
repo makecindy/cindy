@@ -7,7 +7,8 @@
  * - 子进程只有 JSON-RPC stdio，不能直接拿到 Cindy IPC。所有 Cindy 能力仍须
  *   Node → main.js → contextBridge → 主机，并再次经过对应 slot 守门；
  * - 一段启用的意识最多一个 Node 进程，多会话复用；按需启动、闲置关闭，
- *   停用/更新/卸载/主机退出时由上层 stop；
+ *   停用/更新/卸载/主机退出时由上层 stop；原位更新另用 stopAndWait，等旧进程
+ *   真正退出后才可替换其安装目录；
  * - MCP 只开放 client→server 调用。server 反向请求 Cindy 能力恒回 -32601。
  * - 代启子进程(childSpawn)不是上述铁律的例外:控制帧走引导层私藏的
  *   parentPort(插件代码摸不到),能要到的唯一东西是"再跑一个包内申报过的
@@ -849,6 +850,30 @@ export class GhostNodeRuntimeBroker {
     for (const [key, entry] of [...this.workers]) {
       if (entry.ghost.manifest.id === ghostId) this.stopWorker(key, entry);
     }
+  }
+
+  /**
+   * 停止并等待当前已运行的 Node 进程退出。
+   *
+   * 原位更新会把整个插件目录 rename 到备份位。在 Windows 上，即使已经向
+   * utilityProcess 发出 SIGTERM，只要旧进程尚未触发 exit，目录中的入口文件
+   * 仍可能被占用而让 rename 报 EPERM。这里先订阅 exit、再 stop，避免在两步
+   * 之间漏掉极快退出的事件；stopWorker 自身仍保留 SIGKILL 兜底。
+   */
+  async stopAndWait(ghostId: string): Promise<void> {
+    const active = [...this.workers.values()].filter(
+      (entry) => entry.ghost.manifest.id === ghostId,
+    );
+    const exited = active
+      .flatMap((entry) => [entry.child, ...entry.children.values().map((child) => child.proc)])
+      .map(
+        (process) =>
+          new Promise<void>((resolve) => {
+            process.once('exit', () => resolve());
+          }),
+      );
+    this.stop(ghostId);
+    await Promise.all(exited);
   }
 
   private stopWorker(key: string, entry: WorkerEntry): void {
