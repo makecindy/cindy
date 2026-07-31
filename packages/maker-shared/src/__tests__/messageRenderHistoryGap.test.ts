@@ -174,6 +174,22 @@ describe('工作组分组 — 历史窗口空洞', () => {
     expect(headDuration).toBe(20 * 60_000);
   });
 
+  it('无 nextItem 时组时长取全体子项结束时刻的最大值，不是最后一个子项', () => {
+    // 子项按**发起**时刻排序,但并行动作会乱序完成:想了 40 分钟的 thinking 排在前,紧随其后
+    // 2 分钟就结束的工具排在后。取"最后一个子项的结束时刻"会把 40 分钟丢掉(#1210 review)。
+    const items = buildMessageRenderItems<GapFixtureMessage>([
+      thinkingItem('long-thinking', 0, 40 * 60_000),
+      toolItem('quick-tool', 5, 7),
+      // ↓ 空洞:让这一段没有 nextItem 可作结算边界
+      toolItem('tail-tool', 140, 140),
+      assistantItem('answer', 141, '最终回复'),
+    ]);
+
+    expect(typesOf(items)).toEqual(['work_group', 'work_group', 'message']);
+    const [headDuration] = groupDurations(items);
+    expect(headDuration).toBe(40 * 60_000);
+  });
+
   it('窗口连续时分组不变（user 行照常是唯一边界）', () => {
     const items = buildMessageRenderItems<GapFixtureMessage>([
       userItem('user-1', 0, '第一问'),

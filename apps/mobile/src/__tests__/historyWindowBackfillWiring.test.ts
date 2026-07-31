@@ -34,12 +34,26 @@ describe('history window backfill wiring', () => {
     expect(source).not.toContain('backfillInFlightRef');
   });
 
-  it('每处空洞每次访问只考察一次、设总闸，且已考察集合作为检测的跳过表', () => {
-    expect(source).toContain('if (attempted.keys.size >= 3) return;');
-    expect(source).toContain('findHistoryWindowGap(messages, attempted.keys)');
-    expect(source).toContain('attempted.keys.add(historyWindowGapKey(gap));');
-    // 换会话时连同 sid 一起重置,否则上个会话的已考察集合会压住新会话的补齐。
-    expect(source).toContain('backfillAttemptedGapsRef.current?.sid === sessionId');
+  it('已考察空洞按结局分三类：额度只算翻过页的，失败绑连接代，跳过表取并集', () => {
+    // 额度只看 backfilled:正常停顿(contiguous)不该吃掉额度,否则几处隔夜间隔就能让更早的
+    // 真实缺行永远排不到探测。
+    expect(source).toContain('if (gapState.backfilled.size >= 3) return;');
+    expect(source).toContain('findHistoryWindowGap(messages, consideredKeys)');
+    expect(source).toContain('...gapState.contiguous,');
+    expect(source).toContain('...gapState.backfilled,');
+    expect(source).toContain('...gapState.failed,');
+    // 断线那次不得把空洞永久钉死:换连接代只清 failed,重连后同一处可以再试。
+    expect(source).toContain('gapState.failed.clear();');
+    // 换会话时整体重置,否则上个会话的已考察集合会压住新会话的补齐。
+    expect(source).toContain('existingState?.sid === sessionId');
+  });
+
+  it('结局归类在收尾而非发起前，且丢弃跨会话/跨连接代落地的旧结局', () => {
+    expect(source).toContain("if (outcome === 'contiguous') state.contiguous.add(gapKey);");
+    expect(source).toContain("else if (outcome === 'failed') state.failed.add(gapKey);");
+    // cancelled 不记:会话切走后回来理应重新考察,锚点行被移除时那处跳变本身也不在了。
+    expect(source).toContain("else if (outcome !== 'cancelled') state.backfilled.add(gapKey);");
+    expect(source).toContain('state.sid !== sessionIdAtStart || state.epoch !== epochAtStart');
   });
 
   it('取消判定走会话镜像 ref 与锚点行是否仍在窗口，不是 effect 闭包里的 sessionId', () => {
@@ -49,7 +63,7 @@ describe('history window backfill wiring', () => {
   });
 
   it('补齐失败不写 error / loadingEarlier：它是静默自愈，不占用户可见的加载态', () => {
-    const effectStart = source.indexOf('const backfillAttemptedGapsRef');
+    const effectStart = source.indexOf('const backfillGapStateRef');
     const effectEnd = source.indexOf('const selectSlashCommand', effectStart);
     expect(effectStart).toBeGreaterThan(0);
     expect(effectEnd).toBeGreaterThan(effectStart);

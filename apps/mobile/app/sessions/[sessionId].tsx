@@ -3823,7 +3823,28 @@ export default function SessionScreen() {
    * 后台跑、不阻塞首屏,也不写 `error` / `loadingEarlier`:补齐是静默自愈,失败时渲染层的
    * `HISTORY_GAP_SPLIT_MS` 守卫兜底(不谎报时长),用户仍可用「加载更早」自己往上翻。
    */
-  const backfillAttemptedGapsRef = useRef<{ sid: string; keys: Set<string> } | null>(null);
+  /**
+   * 本次访问考察过的空洞,按**结局**分三类 —— 它们的"遗忘条件"和"是否消耗额度"都不同,合成
+   * 一个集合会同时踩两个坑(#1210 review):
+   *
+   *  - `contiguous`:探测确认服务端两行本来就相邻(隔夜等正常停顿)。这是**事实**,与连接状态
+   *    无关,所以本次访问内永久跳过;但它一个请求的翻页都没花,**不占额度** —— 否则窗口里
+   *    只要有三处正常停顿,更早处的真实缺行就永远排不到探测。
+   *  - `backfilled`:真的翻过页(covered / budget / exhausted)。跳过 + **占额度**,额度限制的
+   *    正是"一次访问最多翻多少段历史"。
+   *  - `failed`:请求异常(断线等)。跳过是为了防抖(messages 每变一次就重试会打成请求风暴),
+   *    但**绑在连接代上**:`connectionEpoch` 变化即清空,重连后同一处可以再试。不占额度。
+   *    `cancelled` 也归这里 —— 会话切走 / 锚点行被 /clear、rewind 拿掉,都属于"这次没做成"。
+   *
+   * 检测的跳过表是三者的并集;额度只看 `backfilled`。
+   */
+  const backfillGapStateRef = useRef<{
+    sid: string;
+    epoch: number;
+    contiguous: Set<string>;
+    backfilled: Set<string>;
+    failed: Set<string>;
+  } | null>(null);
   /**
    * 飞行中的补齐属于哪个会话。两个刻意的选择:
    *
@@ -3852,21 +3873,40 @@ export default function SessionScreen() {
     // 与「加载更早」互斥:两者都按 before 游标翻页,同时跑只会让窗口反复 merge、白拉页。
     // 飞行判定只挡**同一会话**,别的会话残留的那次不连坐(见 backfillInFlightSessionId)。
     if (loading || loadingEarlier || backfillInFlightSessionId === sessionId) return;
-    // 每处空洞每次访问只考察一次(判定为真安静、超预算或失败都算考察过)。已考察的集合同时
-    // 作为检测的跳过表:否则 contiguous 那种"不 merge、跳变留在窗口里"的结局会让检测永远返回
-    // 同一处,更早处的真实缺行进不了探测(#1210 review)。换会话时连同 sid 一起重置。
-    const attempted = backfillAttemptedGapsRef.current?.sid === sessionId
-      ? backfillAttemptedGapsRef.current
-      : { sid: sessionId, keys: new Set<string>() };
-    backfillAttemptedGapsRef.current = attempted;
-    // 每次访问最多起 3 轮补齐:多段拼接的窗口确实可能有几处洞,但不设总闸就成了一路往上翻
-    // 整场历史。超出后交给渲染层守卫 + 用户手动「加载更早」。
-    if (attempted.keys.size >= 3) return;
-    const gap = findHistoryWindowGap(messages, attempted.keys);
+    // 换会话时整体重置;同一会话内换了连接代只清 failed —— 断线那次不该把这处空洞永久钉死,
+    // 重连并重新同步后要能再试(#1210 review)。contiguous / backfilled 是与连接无关的结论,
+    // 重连后不必重来。
+    const existingState = backfillGapStateRef.current;
+    const gapState = existingState?.sid === sessionId
+      ? existingState
+      : {
+        sid: sessionId,
+        epoch: connectionEpoch,
+        contiguous: new Set<string>(),
+        backfilled: new Set<string>(),
+        failed: new Set<string>(),
+      };
+    if (gapState.epoch !== connectionEpoch) {
+      gapState.epoch = connectionEpoch;
+      gapState.failed.clear();
+    }
+    backfillGapStateRef.current = gapState;
+    // 额度只算真的翻过页的那些:每次访问最多翻 3 段历史。正常停顿(contiguous)与失败重试
+    // 不消耗它 —— 否则窗口里几处隔夜停顿就能把额度吃光,更早的真实缺行永远排不到。
+    if (gapState.backfilled.size >= 3) return;
+    // 跳过表是三类的并集:contiguous 那种"不 merge、跳变留在窗口里"的结局若不跳过,检测会永远
+    // 返回同一处,更早处的真实缺行进不了探测。
+    const consideredKeys = new Set<string>([
+      ...gapState.contiguous,
+      ...gapState.backfilled,
+      ...gapState.failed,
+    ]);
+    const gap = findHistoryWindowGap(messages, consideredKeys);
     if (!gap) return;
-    attempted.keys.add(historyWindowGapKey(gap));
+    const gapKey = historyWindowGapKey(gap);
     setBackfillInFlightSessionId(sessionId);
     const sessionIdAtStart = sessionId;
+    const epochAtStart = connectionEpoch;
     void backfillHistoryWindowGap(gap, {
       listPage: async (before, limit) => {
         const page = await listMessagesWithPayloadRetry(
@@ -3886,6 +3926,18 @@ export default function SessionScreen() {
       //    把刚被移除的历史(甚至 clearedAt 之前的消息)塞回窗口。锚点没了就等于这处空洞不存在了。
       isCancelled: () => backfillSessionRef.current !== sessionIdAtStart
         || !remoteSessionStore.getMessages(sessionIdAtStart).some((row) => row.id === gap.newerId),
+    }).then((outcome) => {
+      // 按结局归类(容器的三类语义见 backfillGapStateRef 的注释)。归类发生在**收尾**而不是发起
+      // 前:发起期间的重入由飞行标记挡住,不需要预先占位。切会话 / 换连接代之后落地的旧结局
+      // 一律丢弃 —— 它属于上一个容器,写进新容器会污染当前会话的判断。
+      const state = backfillGapStateRef.current;
+      if (!state || state.sid !== sessionIdAtStart || state.epoch !== epochAtStart) return;
+      // cancelled 刻意**不记**:它的两个触发条件本身就不会招来立刻重试 —— 会话切走时当前会话
+      // 的检测看的是另一个窗口,回到这个会话时理应重新考察;锚点行被 /clear、rewind 拿掉时那处
+      // 跳变也随之消失,检测不会再返回它。记下来只会让"切走再回来"白白丢掉一次自愈机会。
+      if (outcome === 'contiguous') state.contiguous.add(gapKey);
+      else if (outcome === 'failed') state.failed.add(gapKey);
+      else if (outcome !== 'cancelled') state.backfilled.add(gapKey);
     }).finally(() => {
       // 函数式更新:切会话后新会话可能已经起了自己的那一轮,不能被这次收尾误清。
       setBackfillInFlightSessionId((current) => (current === sessionIdAtStart ? null : current));
