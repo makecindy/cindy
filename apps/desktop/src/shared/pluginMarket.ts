@@ -75,6 +75,20 @@ export interface MarketSourceSummary extends MarketSourceConfig {
 }
 
 /**
+ * 来源的规范化指纹。市场名是 marketplace.json 自报的、**可复用**——移除来源 A 后
+ * 添加一个同名的来源 B,`customMarketPluginId` 完全相同;账本所有权若只锚在
+ * pluginId 上,无关甚至恶意仓库就能借同名市场"更新"A 装出来的插件。所以自定义
+ * 安装的账本记录同时记下这个指纹,所有权校验必须两者都对上。
+ * 与 sources/store 的 sourcesEqual、sources/index 的 marketCloneSlug 同一套
+ * 判定维度(type + 定位 + ref + 稀疏路径)。
+ */
+export function marketSourceKey(source: MarketSource): string {
+  return source.type === 'local'
+    ? `local:${source.path}`
+    : `git:${source.url}#${source.ref ?? ''}:${source.sparsePaths.join(',')}`;
+}
+
+/**
  * 自定义市场插件的合成 pluginId。与服务端 CUID（^c[a-z0-9]{24}$）互不相交，
  * Main 在 detail/install/uninstall 入口据此分流，Renderer 无需感知差异。
  */

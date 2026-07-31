@@ -26,6 +26,7 @@ import type {
 import {
   customMarketPluginId,
   customMarketReleaseId,
+  marketSourceKey,
   parseCustomMarketPluginId,
 } from '../../shared/pluginMarket.js';
 import { getCurrentUserId } from '../authManager.js';
@@ -631,12 +632,19 @@ export class PluginMarketService {
           .list()
           .find((ghost) => ghost.manifest.id === plugin.ghostId);
         const currentRecord = ledger.installationForGhost(plugin.ghostId);
-        if (existing && (!currentRecord?.installed || currentRecord.pluginId !== pluginId)) {
+        // 所有权 = pluginId 与来源指纹**同时**对上。市场名是 marketplace.json
+        // 自报的、可复用:移除来源 A 后添加同名来源 B,pluginId 完全相同,只锚
+        // pluginId 会让无关甚至恶意仓库借同名市场"更新"A 装出来的插件。
+        const sourceKey = marketSourceKey(discovered.config.source);
+        const ownsInstall = Boolean(
+          existing &&
+            currentRecord?.installed &&
+            currentRecord.pluginId === pluginId &&
+            currentRecord.sourceKey === sourceKey,
+        );
+        if (existing && !ownsInstall) {
           throwIpcError('ALREADY_EXISTS', 'A local Plugin already uses this Plugin ID');
         }
-        const ownsInstall = Boolean(
-          existing && currentRecord?.installed && currentRecord.pluginId === pluginId,
-        );
         await this.assertSourceOwnsGhostId({ owner, ghostId: plugin.ghostId, ownsInstall });
         if (
           existing &&
@@ -656,6 +664,17 @@ export class PluginMarketService {
           // Ghost 运行时之前把所有权再算一遍,而不是只依赖打包前那一次。
           beforeCommit: async () => {
             requireSameMarketOwner(owner);
+            // 所选来源必须**仍然存在且仍是同一个来源**:移除来源会先拿
+            // SOURCE_MUTATION_KEY 删掉配置,租约只保住了目录字节;没有这道核对,
+            // 安装会把一个已经没有对应来源的包装进运行时并写下孤儿账本记录。
+            // 同名异源的重加也在这里被指纹拦下。
+            const live = manager.getConfig(ref.marketName);
+            if (!live || marketSourceKey(live.source) !== sourceKey) {
+              throwIpcError(
+                'PRECONDITION_FAILED',
+                'The marketplace source changed during the install',
+              );
+            }
             await this.assertSourceOwnsGhostId({ owner, ghostId: plugin.ghostId, ownsInstall });
           },
           // 复核与落位共用来源锁:beforeCommit 返回后包检查还要跑一段,期间不能让
@@ -676,6 +695,8 @@ export class PluginMarketService {
             source: discovered.config.source.type === 'git' ? 'git-market' : 'local-market',
             installed: true,
             updatedAt: new Date().toISOString(),
+            // 来源指纹与 pluginId 一起构成所有权:同名异源的重加对不上它。
+            sourceKey,
           });
         });
         return { ghost };
@@ -751,11 +772,16 @@ export class PluginMarketService {
     const releaseId = customMarketReleaseId(config.name, plugin.ghostId, plugin.version);
     const ghost = local.ghostsById.get(plugin.ghostId);
     const record = local.installations[plugin.ghostId];
+    // 所有权 = pluginId + 来源指纹都对上,与 customInstall 同口径:同名异源的
+    // 重加不是所有者,列表如实标 conflict 而不是 update-available。
     const ownsInstall = Boolean(
-      ghost && record?.installed && record.pluginId === pluginId,
+      ghost &&
+        record?.installed &&
+        record.pluginId === pluginId &&
+        record.sourceKey === marketSourceKey(config.source),
     );
     // 已拥有当前安装记录的来源保留所有权（installed / update-available）；
-    // duplicate 只把未拥有安装的竞争来源标为冲突，避免“先安装者优先”被降格。
+    // duplicate 只把未拥有安装的竞争来源标为冲突，避免“先装先得”被降格。
     const conflict = Boolean(
       (duplicateGhostIds.has(plugin.ghostId) && !ownsInstall) || (ghost && !ownsInstall),
     );

@@ -131,4 +131,90 @@ describe('PluginMarketLedger', () => {
     const after = h.ledger.read().installations;
     expect(Object.keys(after).sort()).toEqual(['cindy-added', 'cindy-kept']);
   });
+
+  it('keeps custom-market provenance out of the main ledger file', () => {
+    const h = harness();
+    const customPath = path.join(path.dirname(h.filePath), 'custom-ledger.v1.json');
+    h.ledger.upsertInstallation(record({ ghostId: 'cindy-server', source: 'market' }));
+    h.ledger.upsertInstallation(
+      record({
+        ghostId: 'cindy-custom',
+        pluginId: 'custom:team-lib/cindy-custom',
+        source: 'git-market',
+        sourceKey: 'git:https://x.test/r.git#:',
+      }),
+    );
+
+    // 主账本文件不得出现旧版本不认识的 source:旧版 validRecord 是封闭枚举,
+    // 会把它们过滤并重写落盘,自定义安装的溯源随降级永久丢失。
+    const main = JSON.parse(fs.readFileSync(h.filePath, 'utf8'));
+    expect(Object.keys(main.installations)).toEqual(['cindy-server']);
+    const custom = JSON.parse(fs.readFileSync(customPath, 'utf8'));
+    expect(Object.keys(custom.installations)).toEqual(['cindy-custom']);
+    // 合并读仍是完整视图。
+    expect(Object.keys(h.ledger.read().installations).sort()).toEqual([
+      'cindy-custom',
+      'cindy-server',
+    ]);
+  });
+
+  it('survives an old-version rewrite that drops unknown sources from the main ledger', () => {
+    const h = harness();
+    h.ledger.upsertInstallation(record({ ghostId: 'cindy-server', source: 'market' }));
+    h.ledger.upsertInstallation(
+      record({
+        ghostId: 'cindy-custom',
+        pluginId: 'custom:team-lib/cindy-custom',
+        source: 'local-market',
+        sourceKey: 'local:/tmp/team-lib',
+      }),
+    );
+
+    // 模拟降级后的旧版本写入:旧版 read() 只保留 market/legacy-adopted,
+    // 任意一次写入都会把过滤后的主账本整份重写。
+    const main = JSON.parse(fs.readFileSync(h.filePath, 'utf8'));
+    main.installations = Object.fromEntries(
+      Object.entries(main.installations).filter(([, value]) =>
+        ['market', 'legacy-adopted'].includes((value as { source: string }).source),
+      ),
+    );
+    fs.writeFileSync(h.filePath, JSON.stringify(main));
+
+    // 再升级:自定义溯源在独立文件里,原样还在,不会被投影成本地冲突项。
+    expect(h.ledger.read().installations['cindy-custom']).toMatchObject({
+      source: 'local-market',
+      sourceKey: 'local:/tmp/team-lib',
+      installed: true,
+    });
+  });
+
+  it('migrates stray custom records out of the main ledger on the next write', () => {
+    const h = harness();
+    const customPath = path.join(path.dirname(h.filePath), 'custom-ledger.v1.json');
+    // 早期开发版把自定义记录直接写进了主账本。
+    fs.mkdirSync(path.dirname(h.filePath), { recursive: true });
+    fs.writeFileSync(
+      h.filePath,
+      JSON.stringify({
+        schemaVersion: 1,
+        installations: {
+          'cindy-custom': record({
+            ghostId: 'cindy-custom',
+            pluginId: 'custom:team-lib/cindy-custom',
+            source: 'git-market',
+          }),
+        },
+        defaultInstallOptOuts: {},
+      }),
+    );
+
+    // 读取兼容合并;任意一次写入即按 source 归位。
+    expect(h.ledger.read().installations['cindy-custom']).toBeDefined();
+    h.ledger.upsertInstallation(record({ ghostId: 'cindy-server', source: 'market' }));
+
+    const main = JSON.parse(fs.readFileSync(h.filePath, 'utf8'));
+    expect(Object.keys(main.installations)).toEqual(['cindy-server']);
+    const custom = JSON.parse(fs.readFileSync(customPath, 'utf8'));
+    expect(Object.keys(custom.installations)).toEqual(['cindy-custom']);
+  });
 });

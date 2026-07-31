@@ -669,6 +669,53 @@ describe('MarketSourceManager git sources', () => {
     ).toBe(true);
   });
 
+  it('does not run a deferred deletion against a version referenced only by current.bak', async () => {
+    const root = makeRoot();
+    let failFetch = false;
+    const executor: GitExecutor = async (args) => {
+      if (args[0] === '--version') return { stdout: 'git version 2.43.0\n', stderr: '' };
+      if (args[0] === 'clone') {
+        writeMarketplace(String(args[args.length - 1]), 'hub', [{ rel: 'p', id: 'alpha' }]);
+        return { stdout: '', stderr: '' };
+      }
+      if (args[0] === 'pull' || args[0] === 'fetch') {
+        if (failFetch) throw Object.assign(new Error('rejected'), { stderr: 'non-fast-forward' });
+        return { stdout: '', stderr: '' };
+      }
+      if (args[0] === 'rev-parse') return { stdout: 'def456\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    };
+    const manager = makeManager(root, executor);
+    await manager.addSource({ source: 'openai/plugins' });
+
+    const slot = path.join(
+      root,
+      'sources',
+      marketCloneSlug('hub', {
+        type: 'git',
+        url: 'https://github.com/openai/plugins.git',
+        sparsePaths: [],
+      }),
+    );
+    const v1 = fs.readFileSync(path.join(slot, 'current'), 'utf8').trim();
+    const v1Dir = path.join(slot, 'versions', v1);
+
+    // 读者持有 v1 → 刷新切到 v2,v1 的删除进推迟队列(skipIf = 是否为 current)。
+    retainCachePath(v1Dir);
+    failFetch = true;
+    await manager.refreshSource('hub');
+
+    // 并发刷新把指针切回 v1 后,Windows 备份交换失败:主文件缺失,唯一有效指针
+    // 留在 current.bak。skipIf 执行时若裸读主文件,会把"v1 是 current"误判成
+    // "不是",让推迟的删除把当前生效版本删掉。
+    fs.writeFileSync(path.join(slot, 'current.bak'), v1);
+    fs.rmSync(path.join(slot, 'current'));
+
+    releaseCachePath(v1Dir);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(fs.existsSync(path.join(v1Dir, '.agents', 'plugins', 'marketplace.json'))).toBe(true);
+  });
+
   it('resolves the current version from current.bak when the pointer is missing', async () => {
     const root = makeRoot();
     const { executor } = fakeGit('hub', [{ rel: 'p', id: 'alpha' }]);

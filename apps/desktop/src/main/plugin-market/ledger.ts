@@ -1,11 +1,18 @@
+import path from 'node:path';
+
 import type { PluginScope } from '@cindy/plugin-protocol';
 import {
   atomicWriteFileSync,
-  isAtomicBackupUnrecoverable,
   readAtomicFileSync,
 } from '../utils/atomicWriteFile.js';
 
 const LEDGER_SCHEMA_VERSION = 1;
+
+/** 自定义市场溯源的独立账本文件名（与 ledger.v1.json 同目录）。 */
+const CUSTOM_LEDGER_FILE = 'custom-ledger.v1.json';
+
+/** 服务端市场安装的溯源来源（旧版本也认识的封闭集合）。 */
+const SERVER_SOURCES = new Set(['market', 'legacy-adopted']);
 
 export interface PluginMarketInstallationRecord {
   pluginId: string;
@@ -18,6 +25,12 @@ export interface PluginMarketInstallationRecord {
   source: 'market' | 'legacy-adopted' | 'git-market' | 'local-market';
   installed: boolean;
   updatedAt: string;
+  /**
+   * 自定义来源的规范化指纹（marketSourceKey）。市场名可复用——移除来源后添加
+   * 同名异源的市场会得到相同 pluginId,所有权校验必须同时对上这个指纹。
+   * 仅自定义安装记录携带;服务端记录没有此字段。
+   */
+  sourceKey?: string;
 }
 
 interface PluginMarketLedgerData {
@@ -32,6 +45,10 @@ function emptyLedger(): PluginMarketLedgerData {
     installations: {},
     defaultInstallOptOuts: {},
   };
+}
+
+function isCustomRecord(record: PluginMarketInstallationRecord): boolean {
+  return record.source === 'git-market' || record.source === 'local-market';
 }
 
 function validRecord(value: unknown): value is PluginMarketInstallationRecord {
@@ -52,13 +69,55 @@ function validRecord(value: unknown): value is PluginMarketInstallationRecord {
       record.source === 'git-market' ||
       record.source === 'local-market') &&
     typeof record.installed === 'boolean' &&
-    typeof record.updatedAt === 'string'
+    typeof record.updatedAt === 'string' &&
+    (record.sourceKey === undefined || typeof record.sourceKey === 'string')
   );
+}
+
+/** 读取并解析一个账本 JSON 文件的 installations 段;文件不存在返回空。 */
+function readInstallationsFile(
+  filePath: string,
+): { installations: Record<string, PluginMarketInstallationRecord>; raw: Record<string, unknown> | null } {
+  // 读失败与解析失败分开处理:文件不存在(ENOENT)才是空;文件在但读不到(文件锁/
+  // 权限/瞬时 I/O)或备份救不回来时由 readAtomicFileSync **上抛**——降级成空会让
+  // 紧接着的写入把真实记录覆盖掉。只有"内容确实不是合法 JSON"才按空重建。
+  const text = readAtomicFileSync(filePath);
+  if (text === null) return { installations: {}, raw: null };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { installations: {}, raw: null };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { installations: {}, raw: null };
+  }
+  const value = parsed as Record<string, unknown>;
+  if (value.schemaVersion !== LEDGER_SCHEMA_VERSION) return { installations: {}, raw: null };
+  const installations: Record<string, PluginMarketInstallationRecord> = {};
+  if (value.installations && typeof value.installations === 'object') {
+    for (const [ghostId, record] of Object.entries(value.installations)) {
+      if (validRecord(record) && record.ghostId === ghostId) installations[ghostId] = record;
+    }
+  }
+  return { installations, raw: value };
 }
 
 /**
  * Plugin 市场来源账本。包目录仍是 runtime 安装事实；本账本只记录 server
  * Plugin ID、Release 溯源和 defaultInstall 退订，不复制 manifest/凭证。
+ *
+ * **存储分两个文件（存量兼容红线）**：
+ * - `ledger.v1.json`:服务端安装（market / legacy-adopted）与 defaultInstall 退订。
+ *   schema 与旧版本完全一致——旧版 `validRecord()` 是封闭枚举,任何它不认识的
+ *   source 都会在下一次写入时被过滤并重写落盘。
+ * - `custom-ledger.v1.json`:自定义市场安装（git-market / local-market）。旧版本
+ *   不认识也不会触碰这个文件,用户降级再升级,自定义安装的溯源原样还在。
+ * 若把自定义记录混进主账本,降级后旧版的任意一次写入都会把它们永久丢掉,该插件
+ * 再升级后会被投影成"占用 ghostId 的本地冲突项"、无法从原市场更新。
+ *
+ * 早期开发版把自定义记录写进了主账本:读取时兼容合并,任意一次写入即按 source
+ * 归位迁移（写路径本来就整份重写两个文件）。
  */
 export class PluginMarketLedger {
   constructor(private readonly filePathSource: string | (() => string)) {}
@@ -79,33 +138,29 @@ export class PluginMarketLedger {
       : this.filePathSource;
   }
 
+  /** 自定义溯源账本与主账本同目录（同一 owner 作用域）。 */
+  private customFilePath(): string {
+    return path.join(path.dirname(this.filePath()), CUSTOM_LEDGER_FILE);
+  }
+
   read(): PluginMarketLedgerData {
-    // 读取入口恢复 .bak:主文件缺失时若直接读成空账本,调用方随后的写入会用这份
-    // 空数据永久覆盖唯一有效快照(安装溯源全丢)。
-    //
-    // 读失败与解析失败必须分开处理:文件不存在(ENOENT)才是空账本;文件在但读不到
-    // (文件锁/权限/瞬时 I/O)或备份救不回来时一律**上抛**——降级成空账本会让紧接着
-    // 的写入把真实记录覆盖掉。只有"内容确实不是合法 JSON"才按空账本重建。
-    const text = readAtomicFileSync(this.filePath());
-    if (text === null) return emptyLedger();
-    let raw: unknown;
-    try {
-      raw = JSON.parse(text);
-    } catch {
-      return emptyLedger();
-    }
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return emptyLedger();
-    const value = raw as Record<string, unknown>;
-    if (value.schemaVersion !== LEDGER_SCHEMA_VERSION) return emptyLedger();
+    const main = readInstallationsFile(this.filePath());
+    const custom = readInstallationsFile(this.customFilePath());
+
     const installations: Record<string, PluginMarketInstallationRecord> = {};
-    if (value.installations && typeof value.installations === 'object') {
-      for (const [ghostId, record] of Object.entries(value.installations)) {
-        if (validRecord(record) && record.ghostId === ghostId) installations[ghostId] = record;
-      }
+    for (const [ghostId, record] of Object.entries(main.installations)) {
+      // 主账本里的自定义记录是早期开发版写入的存量,一并纳入(下次写入时归位)。
+      installations[ghostId] = record;
     }
+    for (const [ghostId, record] of Object.entries(custom.installations)) {
+      if (!isCustomRecord(record)) continue; // 自定义账本只承载自定义溯源
+      installations[ghostId] = record;
+    }
+
     const defaultInstallOptOuts: Record<string, string[]> = {};
-    if (value.defaultInstallOptOuts && typeof value.defaultInstallOptOuts === 'object') {
-      for (const [userId, pluginIds] of Object.entries(value.defaultInstallOptOuts)) {
+    const rawOptOuts = main.raw?.defaultInstallOptOuts;
+    if (rawOptOuts && typeof rawOptOuts === 'object') {
+      for (const [userId, pluginIds] of Object.entries(rawOptOuts)) {
         if (!Array.isArray(pluginIds)) continue;
         defaultInstallOptOuts[userId] = [
           ...new Set(pluginIds.filter((id): id is string => typeof id === 'string')),
@@ -147,6 +202,33 @@ export class PluginMarketLedger {
   }
 
   private write(data: PluginMarketLedgerData): void {
-    atomicWriteFileSync(this.filePath(), `${JSON.stringify(data, null, 2)}\n`);
+    // 按 source 分仓落盘:主账本只出现旧版本认识的 source,自定义溯源全部进
+    // 独立文件。混写过的存量(早期开发版)由此在任意一次写入时自动归位。
+    const server: Record<string, PluginMarketInstallationRecord> = {};
+    const custom: Record<string, PluginMarketInstallationRecord> = {};
+    for (const [ghostId, record] of Object.entries(data.installations)) {
+      if (isCustomRecord(record)) custom[ghostId] = record;
+      else if (SERVER_SOURCES.has(record.source)) server[ghostId] = record;
+    }
+    atomicWriteFileSync(
+      this.filePath(),
+      `${JSON.stringify(
+        {
+          schemaVersion: LEDGER_SCHEMA_VERSION,
+          installations: server,
+          defaultInstallOptOuts: data.defaultInstallOptOuts,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    atomicWriteFileSync(
+      this.customFilePath(),
+      `${JSON.stringify(
+        { schemaVersion: LEDGER_SCHEMA_VERSION, installations: custom },
+        null,
+        2,
+      )}\n`,
+    );
   }
 }

@@ -39,10 +39,11 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
-import type {
-  MarketSource,
-  MarketSourceConfig,
-  MarketSourceSummary,
+import {
+  marketSourceKey,
+  type MarketSource,
+  type MarketSourceConfig,
+  type MarketSourceSummary,
 } from '../../../shared/pluginMarket.js';
 import { createLogger } from '../../logger.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
@@ -82,11 +83,12 @@ export interface DiscoveredSource {
 
 /** 克隆目录名：可读的市场名片段 + 来源指纹，避免同名不同源互相覆盖。 */
 export function marketCloneSlug(name: string, source: MarketSource): string {
-  const key =
-    source.type === 'local'
-      ? `local:${source.path}`
-      : `git:${source.url}#${source.ref ?? ''}:${source.sparsePaths.join(',')}`;
-  const hash = crypto.createHash('sha256').update(key).digest('hex').slice(0, 10);
+  // 指纹定义与账本所有权校验共用 marketSourceKey,两处永不漂移。
+  const hash = crypto
+    .createHash('sha256')
+    .update(marketSourceKey(source))
+    .digest('hex')
+    .slice(0, 10);
   const base =
     name
       .toLowerCase()
@@ -230,9 +232,14 @@ export class MarketSourceManager {
     // 版本目录布局固定为 <slot>/versions/<version>。
     const slot = path.dirname(path.dirname(dir));
     try {
-      return fs.readFileSync(this.currentPointer(slot), 'utf8').trim() === path.basename(dir);
+      // 经 readAtomicFileSync:主文件缺失但 current.bak 是唯一有效指针时,
+      // 裸读会把当前版本误判成"非 current",让延迟删除把它删掉。
+      const text = readAtomicFileSync(this.currentPointer(slot));
+      if (text === null) return false;
+      return text.trim() === path.basename(dir);
     } catch {
-      return false;
+      // 指针读不出来(文件锁/备份救不回来):事实不明,宁可不删。
+      return true;
     }
   }
 
@@ -298,11 +305,15 @@ export class MarketSourceManager {
    * 详情/安装打包使用,守卫会把删除推迟到最后一个租约释放。
    */
   private async pruneStaleVersions(slot: string): Promise<void> {
-    const pointer = this.currentPointer(slot);
-    if (!fs.existsSync(pointer)) return;
+    // 指针经 readAtomicFileSync 读取(含 .bak 恢复):Windows 备份交换失败后
+    // 主文件缺失但 current.bak 仍是唯一有效指针,裸读会把"有 current"误判成
+    // "无 current",清理逻辑与实际生效版本脱节。读不出指针(null / 抛错)一律
+    // 不清理——事实不明时宁可多留磁盘,不冒删错的险。
     let current: string;
     try {
-      current = (await fs.promises.readFile(pointer, 'utf8')).trim();
+      const text = readAtomicFileSync(this.currentPointer(slot));
+      if (text === null) return;
+      current = text.trim();
     } catch {
       return;
     }

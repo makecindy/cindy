@@ -59,7 +59,7 @@ vi.mock('../download.js', () => ({
 import type { VisiblePluginSummary } from '@cindy/plugin-protocol';
 
 import type { MarketSourceConfig } from '../../../shared/pluginMarket';
-import { customMarketPluginId, customMarketReleaseId } from '../../../shared/pluginMarket';
+import { customMarketPluginId, customMarketReleaseId, marketSourceKey } from '../../../shared/pluginMarket';
 import { PluginMarketLedger } from '../ledger';
 import { PluginMarketService } from '../service';
 import { MarketSourceStore } from '../sources/store';
@@ -270,6 +270,8 @@ describe('PluginMarketService 自定义市场聚合', () => {
       source: 'local-market',
       installed: true,
       updatedAt: '2026-07-30T02:00:00.000Z',
+      // 所有权 = pluginId + 来源指纹:缺指纹的记录不再被认作本来源的安装。
+      sourceKey: marketSourceKey({ type: 'local', path: dir }),
     });
 
     const snapshot = await h.service.snapshot();
@@ -700,6 +702,83 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     expect(installFinished).toBe(true);
     expect(addSourceStarted).toBe(false);
     await adding;
+  });
+
+  it('denies a re-added same-name source with a different origin from owning the install', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    // 来源 B 与当初安装用的来源 A 市场名相同(marketplace.json 自报、可复用),
+    // 但指向完全不同的目录。pluginId 因此完全相同,所有权必须由来源指纹裁决。
+    const dirB = writeLocalMarket(root, 'team-lib', [
+      { rel: 'plugins/alpha', id: 'alpha', version: '2.0.0' },
+    ]);
+    const h = harness([], [{ name: 'team-lib', dir: dirB }]);
+    runtime.ghosts = [
+      { manifest: ghostManifest('alpha', '1.0.0'), dir: '/ghosts/alpha', enabled: true },
+    ];
+    h.ledger.upsertInstallation({
+      pluginId: customMarketPluginId('team-lib', 'alpha'),
+      ghostId: 'alpha',
+      releaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
+      version: '1.0.0',
+      sha256: 'custom-unverified',
+      scope: 'public',
+      organizationId: null,
+      source: 'local-market',
+      installed: true,
+      updatedAt: '2026-07-30T02:00:00.000Z',
+      // 当初的安装来自另一个目录(来源 A)。
+      sourceKey: marketSourceKey({ type: 'local', path: path.join(root, 'origin-a') }),
+    });
+
+    // 列表:同 pluginId 但指纹不符 → 不是所有者,如实标 conflict 而不是把
+    // "无关仓库的 2.0.0"呈现成本插件的可用更新。
+    const snapshot = await h.service.snapshot();
+    expect(snapshot.items[0]?.installState).toBe('conflict');
+
+    // 安装:同样被拒,恶意/无关仓库不能借同名市场"更新"别人装出来的插件。
+    const reviewed = await h.service.detail(customMarketPluginId('team-lib', 'alpha'));
+    await expect(
+      h.service.install(customMarketPluginId('team-lib', 'alpha'), {
+        expectedReleaseId: customMarketReleaseId('team-lib', 'alpha', '2.0.0'),
+        expectedManifest: reviewed.manifest,
+      }),
+    ).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it('rejects the install when the source vanishes before the commit point', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    const pluginId = customMarketPluginId('team-lib', 'alpha');
+    const reviewed = await h.service.detail(pluginId);
+
+    // 打包期间另一窗口移除了该来源(移除先拿 SOURCE_MUTATION_KEY 删配置,租约只
+    // 保住目录字节)。用"入口发现之后 store.get 开始返回 null"精确模拟这个时序:
+    // 提交点必须确认来源仍在,否则会装出一个没有对应来源的包并写孤儿账本记录。
+    const realGet = MarketSourceStore.prototype.get;
+    let gets = 0;
+    const spy = vi
+      .spyOn(MarketSourceStore.prototype, 'get')
+      .mockImplementation(function (this: MarketSourceStore, name: string) {
+        gets += 1;
+        if (gets > 1) return null;
+        return realGet.call(this, name);
+      });
+    try {
+      await expect(
+        h.service.install(pluginId, {
+          expectedReleaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
+          expectedManifest: reviewed.manifest,
+        }),
+      ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      expect(runtime.install).not.toHaveBeenCalled();
+      expect(gets).toBeGreaterThan(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('uninstalls a custom market plugin through the shared uninstall path', async () => {
