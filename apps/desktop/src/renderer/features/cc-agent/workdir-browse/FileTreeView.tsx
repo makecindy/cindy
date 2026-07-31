@@ -676,11 +676,11 @@ function FileTreeRow({
               onPreviewImage?.(entry);
             }}
             className={cn(
-              'invisible flex size-5 shrink-0 select-none items-center justify-center rounded-full',
-              'opacity-0 transition-[color,background-color,opacity] duration-[var(--motion-fast)] active:scale-[0.98]',
-              'group-hover/file-row:visible group-hover/file-row:opacity-100',
-              'group-focus-within/file-row:visible group-focus-within/file-row:opacity-100',
-              'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--focus-ring)]',
+              'pointer-events-none flex size-5 shrink-0 select-none items-center justify-center rounded-full opacity-0',
+              'transition-[color,background-color,opacity] duration-[var(--motion-fast)] active:scale-[0.98]',
+              'group-hover/file-row:pointer-events-auto group-hover/file-row:opacity-100',
+              'group-focus-within/file-row:pointer-events-auto group-focus-within/file-row:opacity-100',
+              'focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--focus-ring)]',
               selected
                 ? 'text-sidebar-item-active-foreground'
                 : 'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground',

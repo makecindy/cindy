@@ -11,6 +11,7 @@ interface PreviewPosition {
   top: number;
   left: number;
   side: 'above' | 'below';
+  maxWidth: number;
   maxHeight: number;
 }
 
@@ -69,41 +70,42 @@ export function ImageHoverPreview({ open, anchorRef, src, alt }: ImageHoverPrevi
             ? Math.min(Math.max(anchorCenter, minLeft), maxLeft)
             : window.innerWidth / 2,
         side,
+        maxWidth: viewportPreviewWidth,
         maxHeight: Math.max(0, Math.min(PREVIEW_MAX_HEIGHT, availableHeight)),
       });
     };
 
     updatePosition();
     window.addEventListener('resize', updatePosition);
-    window.addEventListener('scroll', updatePosition, true);
+    const scrollListenerOptions = { capture: true, passive: true } as const;
+    window.addEventListener('scroll', updatePosition, scrollListenerOptions);
     return () => {
       window.removeEventListener('resize', updatePosition);
-      window.removeEventListener('scroll', updatePosition, true);
+      window.removeEventListener('scroll', updatePosition, scrollListenerOptions);
     };
   }, [anchorRef, open]);
 
   if (!open || !position) return null;
 
   const displaySize = naturalSize
-    ? containImageSize(naturalSize, PREVIEW_MAX_WIDTH, position.maxHeight)
+    ? containImageSize(naturalSize, position.maxWidth, position.maxHeight)
     : null;
 
   return createPortal(
     <div
-      className="pointer-events-none fixed z-50 overflow-hidden rounded-lg shadow-[var(--shadow-menu)]"
+      className="pointer-events-none fixed z-50 overflow-hidden rounded-xl shadow-[var(--shadow-menu)]"
       style={{
         top: position.top,
         left: position.left,
-        transform:
-          position.side === 'above' ? 'translate(-50%, -100%)' : 'translate(-50%, 0)',
-        maxWidth: `min(${PREVIEW_MAX_WIDTH}px, calc(100vw - ${VIEWPORT_PADDING * 2}px))`,
+        transform: position.side === 'above' ? 'translate(-50%, -100%)' : 'translate(-50%, 0)',
+        maxWidth: position.maxWidth,
         maxHeight: position.maxHeight,
       }}
     >
       <img
         src={src}
         alt={alt}
-        className="max-w-[224px] object-contain"
+        className="max-w-full object-contain"
         style={{
           width: displaySize?.width,
           height: displaySize?.height,

@@ -49,10 +49,19 @@ describe('FileTreeView image preview action', () => {
         name: 'ccAgent.workdirBrowse.imagePreview.viewLarge',
       }),
     ).toHaveLength(2);
+    const previewButton = screen.getAllByRole('button', {
+      name: 'ccAgent.workdirBrowse.imagePreview.viewLarge',
+    })[0];
+    expect(previewButton.tabIndex).toBe(0);
+    expect(previewButton.className).not.toContain('invisible');
+    expect(previewButton.className).toContain('focus-visible:opacity-100');
     expect(
-      within(container.querySelector<HTMLElement>('[data-relpath="README.md"]')!).queryByRole('button', {
-        name: 'ccAgent.workdirBrowse.imagePreview.viewLarge',
-      }),
+      within(container.querySelector<HTMLElement>('[data-relpath="README.md"]')!).queryByRole(
+        'button',
+        {
+          name: 'ccAgent.workdirBrowse.imagePreview.viewLarge',
+        },
+      ),
     ).toBeNull();
   });
 
