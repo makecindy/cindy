@@ -2698,7 +2698,13 @@ const registerIpcHandlers = () => {
     // 命名空间(appSessionState.activeOwnerScopeKey 的跨 await 写入契约,codex
     // review P1)。过期即拒,不静默落盘。
     const ownerScopeKey = activeOwnerScopeKey();
-    const stillValid = () => activeOwnerScopeKey() === ownerScopeKey;
+    // 有效性 = scope 未变 **且** 没有 owner boundary 在途:beginAppSessionBoundary
+    // 只加 boundaryDepth,scope key 的 generation 要等 boundary 后的稳定会话 commit
+    // 才变 —— teardown 已经 clearDeferredCodexRestartForOwnerBoundary 而 scope-only
+    // 检查仍为 true 的窗口里,过期请求会重新落盘/登记(codex review P1 第 4 轮)。
+    // boundary 在途一律 fail-closed。
+    const stillValid = () =>
+      !isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerScopeKey;
     return applyCodexSpawnConfigChangeWithRestart(async () => {
       if (!stillValid()) {
         throwIpcError('PRECONDITION_FAILED', 'app session changed during codex restart; write dropped');
@@ -2721,9 +2727,11 @@ const registerIpcHandlers = () => {
       return { ...subagentModelSettingsWire(), codexRestartDeferred: false };
     }
     // 同 SET:跨 await 的 owner-scoped 写入必须绑定 scope,过期即拒(codex review P1);
-    // stillValid 传给执行体守住 persist→登记 的窗口(codex review P1 第 3 轮)。
+    // stillValid 传给执行体守住 persist→登记 的窗口,并把 boundary 在途并入判定
+    // (scope key 在 boundary commit 前不变,codex review P1 第 3/4 轮)。
     const ownerScopeKey = activeOwnerScopeKey();
-    const stillValid = () => activeOwnerScopeKey() === ownerScopeKey;
+    const stillValid = () =>
+      !isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerScopeKey;
     return applyCodexSpawnConfigChangeWithRestart(async () => {
       if (!stillValid()) {
         throwIpcError('PRECONDITION_FAILED', 'app session changed during codex restart; reset dropped');
