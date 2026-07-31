@@ -21,8 +21,26 @@ import { extractIpcError } from '@/utils/ipcError';
 import { DEVICE_LINK_RECONCILIATION_PROBE_MARKER } from '@cindy/maker-shared/device-link-contract';
 import { remoteProjectsStore } from './remoteProjectsStore';
 import { removeRemoteSessionActivityEntry } from './remoteSessionActivityStore';
+import type { CachedDeviceSessionsSnapshot } from './mirrorCacheClient';
 
 const log = createLogger('device-link-refresh');
+
+/**
+ * 把 store 当前的全部设备分片摊成可缓存的快照(字段瘦身与 live 态剔除在 main 侧
+ * 白名单里做,见 mirrorCacheStore.coerceCachedSession)。
+ *
+ * 用 `getAllDeviceIds()` 而不是 `getDeviceIds()`:后者只返回 **connected** 分片,于是
+ * 「A 设备离线、B 设备刚完成 refresh」时这次整份回写会把 A 从缓存里抹掉,下次冷启动就
+ * 再也恢复不出那台离线设备和它的会话 —— 而离线可见恰恰是这份缓存存在的理由
+ * (review: codex P1)。断连分片是**有意保留**的,快照必须带上它们。
+ */
+export function collectSessionListSnapshot(): CachedDeviceSessionsSnapshot[] {
+  return remoteProjectsStore.getAllDeviceIds().map((deviceId) => ({
+    deviceId,
+    deviceName: remoteProjectsStore.getDeviceName(deviceId) ?? deviceId,
+    sessions: [...remoteProjectsStore.getDeviceSessions(deviceId)],
+  }));
+}
 
 /** 与 listing tier 的拉取上限一致(useDeviceLinkRemoteProjects 的 LIST_LIMIT)。 */
 const LIST_LIMIT = 200;

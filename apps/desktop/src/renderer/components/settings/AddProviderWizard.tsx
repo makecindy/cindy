@@ -23,6 +23,7 @@ import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import { createCustomProvider, type RuntimeKeys } from '@/lib/customProviders';
+import { PROVIDER_SECRET_IDS } from '../../../shared/providerSecrets';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
 import { providerMonogram } from '@/lib/providerModels';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
@@ -61,7 +62,10 @@ interface AddProviderWizardProps {
 }
 
 type Selection =
-  { kind: 'oauth'; provider: ProviderView } | { kind: 'preset'; preset: ProviderPreset };
+  | { kind: 'oauth'; provider: ProviderView }
+  | { kind: 'preset'; preset: ProviderPreset }
+  /** 内置 API-key 供应商(如 Gemini 图像来源,2026-07):保存 key 即连接,无自定义供应商落库。 */
+  | { kind: 'builtinApiKey'; provider: ProviderView };
 
 type PresetBaseUrls = Partial<Record<AgentKind, string>>;
 
@@ -280,9 +284,12 @@ export function AddProviderWizard({
   // entry(左栏检测建议 / 引导卡直达):目录里找得到该渠道才直达授权步,否则回落目录页。
   const entryProvider =
     entry?.kind === 'builtin' ? providers.find((x) => x.id === entry.providerId) : undefined;
-  const [sel, setSel] = useState<Selection | null>(() =>
-    entryProvider ? { kind: 'oauth', provider: entryProvider } : null,
-  );
+  const [sel, setSel] = useState<Selection | null>(() => {
+    if (!entryProvider) return null;
+    return entryProvider.auth?.method === 'apiKey'
+      ? { kind: 'builtinApiKey', provider: entryProvider }
+      : { kind: 'oauth', provider: entryProvider };
+  });
   // 预设表单态
   const [name, setName] = useState('');
   const [apiKey, setApiKey] = useState('');
@@ -345,6 +352,19 @@ export function AddProviderWizard({
       ),
     [providers],
   );
+  // 内置 API-key 渠道(auth.method 'apiKey' 的 builtin 条目,今天只有 gemini 图像来源):
+  // 已连接的不再进向导;声明了媒体清单才展示(纯占位条目没有可配置的能力面)。
+  const builtinApiKeyChoices = useMemo(
+    () =>
+      providers.filter(
+        (p) =>
+          p.source === 'builtin' &&
+          p.auth.method === 'apiKey' &&
+          !p.connected &&
+          ((p.imageModels?.length ?? 0) > 0 || (p.videoModels?.length ?? 0) > 0),
+      ),
+    [providers],
+  );
   const sortedPresets = useMemo(
     () => sortPresetsForLocale(presets, i18n.language),
     [presets, i18n.language],
@@ -369,6 +389,13 @@ export function AddProviderWizard({
     fetchSeqRef.current += 1;
     setManualModelIds({});
     setSel({ kind: 'oauth', provider });
+    setStep(2);
+  }, []);
+  const pickBuiltinApiKey = useCallback((provider: ProviderView) => {
+    fetchSeqRef.current += 1;
+    setManualModelIds({});
+    setSel({ kind: 'builtinApiKey', provider });
+    setApiKey('');
     setStep(2);
   }, []);
   const pickPreset = useCallback(
@@ -645,6 +672,35 @@ export function AddProviderWizard({
   );
 
   // ── 完成创建(预设)────────────────────────────────────────────────────
+  /**
+   * 内置 API-key 供应商(如 Gemini):保存 = 把 key 写进该供应商在册的 safeStorage 键
+   * (providerSecrets SSoT),连接态(provider-service 的 builtinApiKeyConnected)与
+   * 图像通道 ready 都以「key 已存」为准 —— 无自定义供应商落库、无模型拉取步。
+   */
+  const handleSaveBuiltinApiKey = useCallback(async () => {
+    if (!sel || sel.kind !== 'builtinApiKey') return;
+    const id = sel.provider.id;
+    if (!(PROVIDER_SECRET_IDS as readonly string[]).includes(id)) {
+      // 目录出现了未在 providerSecrets 登记的内置 API-key 供应商 = 数据/代码脱节,
+      // 明确报错让问题在配置期暴露,不静默写错键。
+      toast.error(t('settings.providers.wizard.authorizeFailed', { name: sel.provider.name }));
+      return;
+    }
+    const key = apiKey.trim();
+    if (!key) return;
+    setSaving(true);
+    try {
+      // 失败经统一 IPC 错误协议抛出(throwIpcError),这里 catch 即失败。
+      await window.electronAPI.builtinApiKeyStore(id, key);
+      toast.success(t('settings.providers.wizard.authorizedToast', { name: sel.provider.name }));
+      onDone(id);
+    } catch {
+      toast.error(t('settings.providers.wizard.authorizeFailed', { name: sel.provider.name }));
+    } finally {
+      setSaving(false);
+    }
+  }, [sel, apiKey, onDone, t]);
+
   const handleFinish = useCallback(async () => {
     if (!sel || sel.kind !== 'preset') return;
     const preset = sel.preset;
@@ -801,9 +857,9 @@ export function AddProviderWizard({
               {sel
                 ? t('settings.providers.wizard.titleWith', {
                     name:
-                      sel.kind === 'oauth'
-                        ? sel.provider.name
-                        : presetDisplayName(sel.preset, i18n.language),
+                      sel.kind === 'preset'
+                        ? presetDisplayName(sel.preset, i18n.language)
+                        : sel.provider.name,
                   })
                 : t('settings.providers.wizard.title')}
             </h3>
@@ -903,10 +959,21 @@ export function AddProviderWizard({
                 </>
               )}
 
-              {filteredPresets.length > 0 && (
+              {(filteredPresets.length > 0 || builtinApiKeyChoices.length > 0) && (
                 <>
                   <GroupLabel>{t('settings.providers.wizard.groupApiKey')}</GroupLabel>
                   <div className="grid grid-cols-3 gap-2">
+                    {builtinApiKeyChoices
+                      .filter((p) => !q || p.name.toLowerCase().includes(q))
+                      .map((p) => (
+                        <ProviderCard
+                          key={p.id}
+                          icon={cardIcon({ providerId: p.id, name: p.name })}
+                          name={p.name}
+                          meta={t('settings.providers.wizard.metaApiKey')}
+                          onClick={() => pickBuiltinApiKey(p)}
+                        />
+                      ))}
                     {filteredPresets.map((p) => (
                       <ProviderCard
                         key={p.id}
@@ -1068,6 +1135,52 @@ export function AddProviderWizard({
                 <OAuthDeviceCodeCard deviceCode={genericDeviceCode} />
               )}
               {oauthSingleAgentNote && <InfoLine text={oauthSingleAgentNote} />}
+            </div>
+          )}
+
+          {step === 2 && sel?.kind === 'builtinApiKey' && (
+            <div className="flex flex-col gap-4">
+              <div className="flex items-center gap-3">
+                <span
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+                  style={{
+                    backgroundColor: 'var(--settings-integration-avatar-bg)',
+                    border: '1px solid var(--settings-integration-avatar-border)',
+                    color: 'var(--settings-integration-avatar-icon)',
+                  }}
+                >
+                  {cardIcon({ providerId: sel.provider.id, name: sel.provider.name })}
+                </span>
+                <div className="flex min-w-0 flex-col">
+                  <span
+                    className="text-14 font-semibold"
+                    style={{ color: 'var(--settings-section-title)' }}
+                  >
+                    {sel.provider.name}
+                  </span>
+                  <span className="text-12" style={{ color: 'var(--text-tertiary)' }}>
+                    {t('settings.providers.wizard.builtinApiKey.subtitle')}
+                  </span>
+                </div>
+              </div>
+              <InfoLine text={t('settings.providers.wizard.builtinApiKey.note')} />
+              <div className="flex flex-col gap-1.5">
+                <label className="text-12 font-medium" style={{ color: 'var(--text-secondary)' }}>
+                  {t('settings.providers.custom.fields.apiKey')}
+                </label>
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  autoComplete="off"
+                  className="h-9 rounded-full border px-4 font-mono text-13 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
+                  style={{
+                    borderColor: 'var(--border-default)',
+                    backgroundColor: 'var(--surface-elevated)',
+                    color: 'var(--settings-section-title)',
+                  }}
+                />
+              </div>
             </div>
           )}
 
@@ -1372,6 +1485,23 @@ export function AddProviderWizard({
             >
               {t('settings.providers.wizard.cancel')}
             </button>
+            {sel?.kind === 'builtinApiKey' && step === 2 && (
+              <button
+                type="button"
+                onClick={() => void handleSaveBuiltinApiKey()}
+                disabled={saving || apiKey.trim().length === 0}
+                className={cn(
+                  'flex h-9 items-center justify-center gap-2 rounded-full px-5 text-13 font-medium transition-opacity',
+                  saving || apiKey.trim().length === 0
+                    ? 'cursor-not-allowed opacity-50'
+                    : 'hover:opacity-90',
+                )}
+                style={{ backgroundColor: 'var(--accent-cta-bg)', color: 'var(--surface-on-card)' }}
+              >
+                {saving && <Spinner size={13} />}
+                {t('settings.providers.wizard.finish')}
+              </button>
+            )}
             {sel?.kind === 'preset' && step === 2 && (
               <button
                 type="button"

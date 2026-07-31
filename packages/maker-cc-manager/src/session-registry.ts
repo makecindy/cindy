@@ -105,6 +105,14 @@ export interface SdkQueryFactoryOptions {
    * If not provided, SDK uses its own permissionMode logic (acceptEdits default).
    */
   canUseTool?: CanUseToolCallback;
+  /**
+   * SDK oauth_token_refresh callback — remote cc hit 401 on its subscription
+   * OAuth token; forwarded to the attached desktop via reverse-request RPC.
+   * Only wired when the session env carries CLAUDE_CODE_OAUTH_TOKEN (the SDK
+   * auto-injects CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH=1 when the callback exists,
+   * so wiring it for gateway-key sessions would misroute API-key 401s).
+   */
+  getOAuthToken?: () => Promise<string | null>;
 }
 
 /**
@@ -204,6 +212,17 @@ export type ApprovalRequestForwarder = (
   params: import('./protocol.js').ApprovalRequestParams,
 ) => Promise<import('./protocol.js').ApprovalRequestResult>;
 
+/**
+ * Callback that the session registry invokes when SDK's getOAuthToken fires
+ * for a session (subscription token expired mid-turn). The implementation
+ * should forward this as a reverse-request to the attached client and return
+ * the fresh token (or null when refresh failed / client too old).
+ */
+export type OAuthRefreshForwarder = (
+  sessionId: string,
+  params: import('./protocol.js').OAuthRefreshParams,
+) => Promise<import('./protocol.js').OAuthRefreshResult>;
+
 export interface SessionRegistryOptions {
   sdkQueryFactory: SdkQueryFactory;
   /**
@@ -229,6 +248,12 @@ export interface SessionRegistryOptions {
    * provided (or if no client is attached), the registry defaults to 'deny'.
    */
   onApprovalRequest?: ApprovalRequestForwarder;
+  /**
+   * Called when a session's SDK getOAuthToken fires (401 on the subscription
+   * token). Implementation should send a reverse-request RPC to the client.
+   * If not provided, sessions get no refresh callback (pre-refresh behavior).
+   */
+  onOAuthRefresh?: OAuthRefreshForwarder;
   logger?: {
     debug(msg: string, ctx?: Record<string, unknown>): void;
     info(msg: string, ctx?: Record<string, unknown>): void;
@@ -247,6 +272,7 @@ export class SessionRegistry {
   private readonly logger: NonNullable<SessionRegistryOptions['logger']>;
   private readonly bufferCapacity: number;
   private readonly onApprovalRequest?: ApprovalRequestForwarder;
+  private readonly onOAuthRefresh?: OAuthRefreshForwarder;
   private readonly killSettleWatchdogMs: number;
   private readonly killCloseGraceMs: number;
 
@@ -254,6 +280,7 @@ export class SessionRegistry {
     this.factory = opts.sdkQueryFactory;
     this.bufferCapacity = opts.bufferCapacity ?? DEFAULT_BUFFER_CAPACITY;
     this.onApprovalRequest = opts.onApprovalRequest;
+    this.onOAuthRefresh = opts.onOAuthRefresh;
     this.killSettleWatchdogMs = opts.killSettleWatchdogMs ?? DEFAULT_KILL_SETTLE_WATCHDOG_MS;
     this.killCloseGraceMs = opts.killCloseGraceMs ?? DEFAULT_KILL_CLOSE_GRACE_MS;
     this.logger =
@@ -348,6 +375,39 @@ export class SessionRegistry {
         }
       : undefined;
 
+    // Wire the SDK's oauth refresh callback only for sessions whose env carries
+    // a subscription OAuth token — the SDK injects CLAUDE_CODE_SDK_HAS_OAUTH_REFRESH=1
+    // whenever the callback exists, and gateway-key sessions must not have their
+    // API-key 401s misrouted into a subscription refresh (mirrors the local
+    // maker-core wiring in claude-code/index.ts).
+    const getOAuthToken: (() => Promise<string | null>) | undefined =
+      this.onOAuthRefresh && opts.env.CLAUDE_CODE_OAUTH_TOKEN
+        ? async () => {
+            if (!sessionRef?.attachedNotify) {
+              this.logger.warn('getOAuthToken fired without attached client — returning null', {
+                sessionId: opts.sessionId,
+              });
+              return null;
+            }
+            try {
+              const result = await this.onOAuthRefresh!(opts.sessionId, {
+                sessionId: opts.sessionId,
+              });
+              // 不回写 opts.env:远端 daemon 不会用旧 env 重建 Query(rewind/fork 不支持),
+              // 重连 fresh-start 的 env 由 desktop 重新下发(desktop 侧才是 token 事实源)。
+              return result.token ?? null;
+            } catch (err) {
+              // Old desktop (UNKNOWN_METHOD) / RPC timeout / refresh failure all land
+              // here — null lets the SDK surface the auth error (pre-refresh behavior).
+              this.logger.warn('onOAuthRefresh failed — returning null', {
+                sessionId: opts.sessionId,
+                error: (err as Error).message,
+              });
+              return null;
+            }
+          }
+        : undefined;
+
     const sdkOpts: SdkQueryFactoryOptions = {
       inputStream: inputQueue,
       cwd: opts.cwd,
@@ -363,6 +423,7 @@ export class SessionRegistry {
       ...(opts.resumeSdkSessionId ? { resume: opts.resumeSdkSessionId } : {}),
       ...(opts.extraOptions ? { extraOptions: opts.extraOptions } : {}),
       ...(canUseTool ? { canUseTool } : {}),
+      ...(getOAuthToken ? { getOAuthToken } : {}),
     };
     const query = this.factory(sdkOpts);
     const session: SessionState = {

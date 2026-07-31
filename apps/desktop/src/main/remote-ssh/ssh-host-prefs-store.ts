@@ -26,15 +26,32 @@ import { createLogger } from '../logger.js';
 
 const log = createLogger('ssh-host-prefs-store');
 
+// pref 联合类型 / URL 校验 / 迁移缺省端口的真源在 shared (preload 与
+// renderer 表单共用同一份, 消除手写镜像的结构漂移) — 这里 re-export 保持
+// main 侧既有引用点不变。旧数据 ({enabled, localHost, localPort} 无 mode,
+// PR #715 动态端口方案) 迁移为 mode='tunnel' + LEGACY_AGENT_PROXY_REMOTE_PORT。
+import {
+  LEGACY_AGENT_PROXY_REMOTE_PORT,
+  normalizeAgentProxyUrl,
+  redactAgentProxyUrlForLog,
+  type SshHostAgentProxyPref,
+} from '../../shared/agentProxyConfig.js';
+
+export { LEGACY_AGENT_PROXY_REMOTE_PORT, normalizeAgentProxyUrl };
+export type { SshHostAgentProxyPref };
+
+function isValidPort(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 65535;
+}
+
 /**
- * Agent 流量经 SSH 隧道走本地 Proxy 的 per-host 配置。
- * Cindy 不提供 Proxy, 只建隧道: 远端 127.0.0.1:<forwardPort> → 本地
- * localHost:localPort (用户自己的 Proxy, 如 Clash 的 7890 混合端口)。
+ * 固定远端端口拒收特权/知名服务端口 (<1024): 隧道保活的残留清理会定点
+ * kill 占着固定端口的 sshd 会话, 若用户把端口配成 22 (SSH 服务) 等, 清理
+ * 路径可能误杀系统 sshd 主服务 (review: PR #992 codex-connector P1)。
+ * 高端口 (>=1024) 由用户显式指定、归属自担; 低端口一刀切拒收。
  */
-export interface SshHostAgentProxyPref {
-  enabled: boolean;
-  localHost: string;
-  localPort: number;
+export function isAllowedAgentProxyRemotePort(v: unknown): v is number {
+  return isValidPort(v) && (v as number) >= 1024;
 }
 
 export interface SshHostPref {
@@ -51,16 +68,42 @@ function settingsFilePath(): string {
 function normalizeAgentProxy(raw: unknown): SshHostAgentProxyPref | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const v = raw as Record<string, unknown>;
+  if (v.mode === 'env') {
+    const proxyUrl = normalizeAgentProxyUrl(v.proxyUrl);
+    if (!proxyUrl) {
+      log.warn('invalid agentProxy.proxyUrl in prefs — dropping (was it hand-edited?)', {
+        proxyUrl: redactAgentProxyUrlForLog(v.proxyUrl),
+      });
+      return undefined;
+    }
+    return { enabled: v.enabled === true, mode: 'env', proxyUrl };
+  }
+  // mode='tunnel' 或缺省 (旧数据迁移路径)。
   const localHost = typeof v.localHost === 'string' ? v.localHost.trim() : '';
   const localPort = typeof v.localPort === 'number' ? v.localPort : NaN;
   // 引号与空白同样拒 (与 IPC normalizeAgentProxyInput / renderer 校验对齐,
   // review: PR #715 copilot R8): 手编 prefs 的脏值不应在启动时被恢复成
   // 可用 pref, 然后晚到 net.connect 才以难懂的方式失败。
   if (!localHost || /\s/.test(localHost) || localHost.includes("'") || localHost.includes('"')) {
+    log.warn('invalid agentProxy.localHost in prefs — dropping (was it hand-edited?)', {
+      localHost: '[redacted]',
+    });
     return undefined;
   }
-  if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) return undefined;
-  return { enabled: v.enabled === true, localHost, localPort };
+  if (!isValidPort(localPort)) {
+    log.warn('invalid agentProxy.localPort in prefs — dropping (was it hand-edited?)', {
+      localPort: v.localPort,
+    });
+    return undefined;
+  }
+  if (!isAllowedAgentProxyRemotePort(v.remotePort ?? LEGACY_AGENT_PROXY_REMOTE_PORT)) {
+    log.warn('agentProxy.remotePort in privileged/service range — dropping (must be >=1024)', {
+      remotePort: v.remotePort,
+    });
+    return undefined;
+  }
+  const remotePort = isValidPort(v.remotePort) ? v.remotePort : LEGACY_AGENT_PROXY_REMOTE_PORT;
+  return { enabled: v.enabled === true, mode: 'tunnel', localHost, localPort, remotePort };
 }
 
 function normalize(raw: unknown): SshHostPrefs {
@@ -128,10 +171,18 @@ export function setSshHostAgentProxy(hostId: string, agentProxy: SshHostAgentPro
   }
   current[hostId] = next;
   writePrefs(current);
+  const ap = next.agentProxy;
   log.info('ssh host agentProxy written', {
     hostId,
-    enabled: next.agentProxy?.enabled === true,
-    localTarget: next.agentProxy ? `${next.agentProxy.localHost}:${next.agentProxy.localPort}` : null,
+    enabled: ap?.enabled === true,
+    mode: ap?.mode ?? null,
+    // 脱敏: proxyUrl 即使将来校验放宽也不原样进日志 (review: PR #992
+    // copilot — URL 可能带 userinfo), 只记录 scheme://host:port。
+    target: ap
+      ? ap.mode === 'tunnel'
+        ? `remote:${ap.remotePort} -> ${ap.localHost}:${ap.localPort}`
+        : redactAgentProxyUrlForLog(ap.proxyUrl)
+      : null,
   });
 }
 

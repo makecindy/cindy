@@ -602,14 +602,14 @@ export class Session {
 
   // ── 运行时切换 ─────────────────────────────────────────────────────────────
 
-  async setModel(model: string): Promise<void> {
+  async setModel(model: string, opts?: { providerId?: string | null }): Promise<void> {
     if (!this.capabilities.switchModel.supported) {
       throw new NotSupportedError('switchModel', this.capabilities.switchModel);
     }
     if (!this.handle.setModel) {
       throw new NotSupportedError('switchModel', { supported: false, reason: 'not-implemented' });
     }
-    await this.handle.setModel(model);
+    await this.handle.setModel(model, opts);
   }
 
   async setEffort(effort: Effort): Promise<void> {
@@ -892,7 +892,8 @@ export class Session {
    *
    * 片尾若发现壁钟走得远超本片时长,说明进程被冻结过 —— 这段不计入额度,重新起片。
    * 只有"清醒地"连续静默满 turnStallMs 才判卡死。与 scheduler 侧
-   * absorbSuspendGap / tick 的挂起处理同源。
+   * absorbSuspendGap / tick 的挂起处理,以及 codex(armUpstreamIdleSlice)、
+   * claude-code(armUpstreamResponseIdleSlice)两个 upstream-idle 看门狗同源。
    */
   private armTurnStallSlice(): void {
     const slice = Math.min(this.turnStallRemainingMs, TURN_STALL_SLICE_MS);
@@ -1001,8 +1002,8 @@ export class Session {
     // 宽限也要**排除系统挂起**:合盖睡眠期间 transport 一个字节都收不到,而裸定时器一旦在
     // 唤醒后到期就立刻开火 —— 一次午休就能让"给 interrupt 的 10s / 60s"变成 0s 有效时间,
     // 复核于是关掉一条其实还响应得动的会话(第十八轮 P1)。与 armTurnStallSlice、codex 的
-    // armUpstreamIdleSlice、scheduler 的 absorbSuspendGap、排队派发的
-    // QUEUED_DISPATCH_SUSPEND_GAP_MS 同源:壁钟差 ≠ 清醒时间。
+    // armUpstreamIdleSlice、claude-code 的 armUpstreamResponseIdleSlice、scheduler 的
+    // absorbSuspendGap、排队派发的 QUEUED_DISPATCH_SUSPEND_GAP_MS 同源:壁钟差 ≠ 清醒时间。
     this.armAbortRecoverySlice(generation, graceMs, graceMs, trigger);
   }
 

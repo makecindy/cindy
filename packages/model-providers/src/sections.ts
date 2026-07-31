@@ -12,6 +12,7 @@
 
 import type { AgentKind, CatalogModel, Effort } from './types.js';
 import type { ProviderView } from './registry.js';
+import { isAgentSelectableModel } from './classification.js';
 import { deriveModelList, deriveModelSections } from './modelList.js';
 
 /**
@@ -113,12 +114,20 @@ export function visibleModelUnion(
   //   2. 条目带 3 个额外可枚举字段(sourceProviderId / sourceConnected / 可选 sourceAccess),
   //      类型层不可见 —— **禁止把条目整对象 JSON.stringify / spread 进 IPC・协议・持久化**,
   //      过 wire 前必须显式投影字段(现存 5 个消费方已核查合规;键集有测试锁)。
+  // excludeModel: 同 buildProviderSections 的理由(issue #882 第 3 点,2026-07 review)——
+  // 现存 5 个调用方(Orca sub-agent 可用性 / 设置页 sub-agent 模型 / 新对话选择器 /
+  // Slack `/model` 卡片 / hook session-runner 实际执行)都是"挑一个能聊天/能跑的模型",
+  // 非聊天模型不该出现,更不该被 session-runner 当成可执行模型选中。
   return deriveModelList({
     providers,
     agent,
     providerScope: 'connected-for-agent',
     isVisible,
     dedupe: 'first-wins',
+    // provider-aware 谓词:用户自定义供应商显式配置的模型带未知 group,id 撞上能力
+    // 启发式(如 flux-image-x)时不能被误杀(2026-07 review 第 25 轮)。
+    excludeModel: (model, provider) =>
+      !isAgentSelectableModel(model, { userProvider: provider.source === 'user' }),
   });
 }
 
@@ -136,10 +145,15 @@ export function buildProviderSections(args: {
   //   - 选中豁免仅在 selectedProviderId **非空**时生效(旧实现 provider.id === null
   //     恒 false,即 flat 语义的「null = 匹配任意行」在这里不适用);
   //   - 字段拷贝保持条件性(undefined 字段不写 key),对象形状逐字节一致。
+  // excludeModel:本函数目前的三个调用方(desktop ModelSelector 分段视图 / IM /model
+  // 卡片 / mobile 模型选择)都是"挑一个能聊天的模型",不是设置页的完整模型管理——
+  // 非聊天模型(issue #882 第 3 点)统一在这里挡掉,调用方不用各自记得过滤(2026-07 review)。
   const sections = deriveModelSections({
     providers: args.providers,
     agent: args.agent,
     providerScope: 'as-given',
+    excludeModel: (model, provider) =>
+      !isAgentSelectableModel(model, { userProvider: provider.source === 'user' }),
     isVisible: (providerId, model) => args.isVisible(providerId, model.id),
     ...(args.selectedModelId !== undefined &&
     args.selectedProviderId !== undefined &&

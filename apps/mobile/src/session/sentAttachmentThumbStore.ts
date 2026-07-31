@@ -22,6 +22,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSyncExternalStore } from 'react';
 import { isAttachmentOssRef } from '@/session/attachmentOssRef';
+import { isPayloadDesktopLocalMediaUrl } from '@cindy/maker-shared/payload-summary';
 
 const STORAGE_KEY = 'xdt.sentAttachmentThumbs.v1';
 /** documentDirectory 下的自有子目录(不放 cache:系统清缓存会把兜底图清裂)。 */
@@ -147,6 +148,19 @@ async function hydrateInternal(deps: SentAttachmentThumbFsDeps): Promise<void> {
 }
 
 /**
+ * 哪些引用值得留本地底片。
+ *
+ * 除了手机自己上传产生的 `xdt-oss-attach://`,还包括桌面本地媒体引用
+ * (`cindy-media://blobs/<指纹>` 等):粘贴图片时字节会先进媒体总仓,附件 url 就是这种
+ * 引用,手机本地没有对应文件。原先这里只认 OSS 引用,这类图一律不留底,于是发出后
+ * 气泡只能画空占位格、必须等远端取件才有图。粘贴那一刻前端手里同时握着本地文件与远端
+ * 引用,应当当场记下对应关系 —— 留底之后气泡第一帧就有图,远端取件退化为后备。
+ */
+function isThumbBackedRef(value: unknown): value is string {
+  return isAttachmentOssRef(value) || isPayloadDesktopLocalMediaUrl(value);
+}
+
+/**
  * 注册一条兜底映射:把 sourceUri(实际上传的文件,降采样产物或原图)拷贝进
  * 自有目录并持久化 ossRef → 文件名。全程静默失败——兜底是增强,不挡主流程。
  */
@@ -155,7 +169,7 @@ export async function registerSentAttachmentThumb(
   sourceUri: string,
   deps: SentAttachmentThumbFsDeps = defaultFsDeps,
 ): Promise<void> {
-  if (!isAttachmentOssRef(ossRef) || !sourceUri) return;
+  if (!isThumbBackedRef(ossRef) || !sourceUri) return;
   try {
     await ensureSentAttachmentThumbsHydrated(deps);
     if (entries.has(ossRef)) return;

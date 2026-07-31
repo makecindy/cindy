@@ -189,6 +189,58 @@ describe('maker SEND transaction', () => {
     );
   });
 
+  it('threads the autoResume flag into persisted agentMeta', async () => {
+    // 中断自动续跑补发的「继续」经 coordinator drain 透传 autoResume(见
+    // AgentInputQueuedMessage.autoResume)。它必须落进 agentMeta:renderer 靠它隐藏气泡,
+    // host 的 createDbMessage 靠它跳过额度充值(不跳就是自我充值 → 死循环)。
+    const { deps } = createDeps();
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted(
+      'session-1',
+      { type: 'user', content: 'continue' },
+      undefined,
+      {
+        messageUuid: 'message-uuid',
+        persistUserMessage: {
+          clientId: 'client-1',
+          content: 'continue',
+          sdkSessionId: 'sdk-1',
+          delivery: 'turn',
+          autoResume: true,
+        },
+      },
+    );
+
+    expect(deps.createDbMessage).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({
+        agentMeta: expect.objectContaining({ autoResume: true }),
+      }),
+      undefined,
+    );
+  });
+
+  it('omits autoResume for ordinary user sends', async () => {
+    const { deps } = createDeps();
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted(
+      'session-1',
+      { type: 'user', content: 'hello' },
+      undefined,
+      {
+        messageUuid: 'message-uuid',
+        persistUserMessage: { clientId: 'client-1', content: 'hello', delivery: 'turn' },
+      },
+    );
+
+    const persisted = vi.mocked(deps.createDbMessage).mock.calls[0]?.[1] as
+      | { agentMeta?: Record<string, unknown> }
+      | undefined;
+    expect(persisted?.agentMeta).not.toHaveProperty('autoResume');
+  });
+
   it('awaits the direct-send baseline hook before vendor dispatch', async () => {
     const events: string[] = [];
     const beforeDispatchDirectUserTurn = vi.fn(async () => {

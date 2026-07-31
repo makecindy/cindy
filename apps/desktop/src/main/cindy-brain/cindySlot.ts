@@ -524,7 +524,12 @@ export class GhostCindySlot {
     }
     if (p.model !== undefined) {
       if (typeof p.model !== 'string' || !whitelist.has(p.model)) {
-        return { ok: false, message: '不支持的模型(不在主机白名单内)' };
+        // 拒绝话术带上当前可用清单:插件侧不再维护模型枚举(白名单单源执法,
+        // 2026-07),AI 点名失败时靠这份清单自愈,不用猜主机认哪些 id。
+        return {
+          ok: false,
+          message: `不支持的模型(不在主机白名单内)。当前可用:${cfg.models.length > 0 ? cfg.models.map((m) => m.id).join(' / ') : '(暂无可用型号)'}`,
+        };
       }
       model = p.model;
     }

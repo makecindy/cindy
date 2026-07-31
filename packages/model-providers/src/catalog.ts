@@ -12,6 +12,7 @@
  */
 
 import type { Catalog, Provider, CatalogModel, AgentKind, Effort, ProviderPreset } from './types.js';
+import { withVerifiedStaticWindows } from './builtin.js';
 import { findReservedOAuthExtraParam } from './provider-oauth.js';
 import { isProviderRequestPath } from './provider-url.js';
 
@@ -184,7 +185,16 @@ function validateProvider(p: Provider): void {
     p.auth.method === 'oauth' || p.auth.oauth === undefined,
     `provider '${p.id}' auth.oauth not allowed for ${p.auth.method} method`,
   );
-  assert(Array.isArray(p.agents) && p.agents.length > 0, `provider.agents missing for '${p.id}'`);
+  // agents 允许为空**当且仅当**声明了媒体清单(媒体-only 供应商,如 Gemini 图像
+  // API key 来源,2026-07 图像多来源):图像/视频模型不经 agent runtime,由主机
+  // 图像通道直调,不需要任何 agent 路由;没有媒体清单的空 agents 仍是无效数据。
+  const hasMediaModels =
+    (Array.isArray(p.imageModels) && p.imageModels.length > 0) ||
+    (Array.isArray(p.videoModels) && p.videoModels.length > 0);
+  assert(
+    Array.isArray(p.agents) && (p.agents.length > 0 || hasMediaModels),
+    `provider.agents missing for '${p.id}'`,
+  );
   assert(p.agents.every(isAgentKind), `provider.agents has invalid kind for '${p.id}'`);
   assert(p.routing && typeof p.routing === 'object', `provider.routing missing for '${p.id}'`);
   assert(
@@ -509,5 +519,11 @@ export function parseCatalog(input: string | unknown): Catalog {
   const presets = sanitizePresets((catalog as { presets?: unknown }).presets);
   if (presets.length > 0) catalog.presets = presets;
   else delete catalog.presets;
-  return catalog;
+  // 远端下发目录与 bundled 同格式:静态条目的窗口是产品侧写定的真实上限,标记为已核实
+  // (幂等;条目自己表过态时尊重原值)。动态发现的模型不经这里 —— 见 withVerifiedStaticWindows。
+  //
+  // 刻意**不**原地替换 catalog.providers:入参可能就是 BUNDLED_CATALOG(共享的 import 对象),
+  // 原地改会把标记悄悄写回那份共享目录 —— 既是跨调用方的副作用,也会让「bundled 自己有没有
+  // 标记」这类断言变成假通过。
+  return { ...catalog, providers: catalog.providers.map(withVerifiedStaticWindows) };
 }

@@ -67,7 +67,7 @@ export function GhostPanelError({
 }
 
 /** 面板媒体右键菜单的一次弹出:坐标(宿主窗口系)+ 主机换发的地址与类别。 */
-interface GhostPanelMediaMenuState {
+export interface GhostPanelMediaMenuState {
   x: number;
   y: number;
   /** 主机拼装的 cindy-media:// 地址(过闸产物,直接喂通用媒体 IPC)。 */
@@ -81,8 +81,9 @@ interface GhostPanelMediaMenuState {
  * 目录(showItemInFolder)。菜单是宿主自绘(webview 里的右键经 Electron
  * context-menu 事件转出,面板自己画不了也伪造不了),地址已过 main 闸换发,
  * 两个动作走与聊天媒体完全相同的通用 IPC。
+ * (导出给 pooledGhostPanelBody 复用 —— 常驻池形态的面板体右键走同一套菜单。)
  */
-function GhostPanelMediaMenu({
+export function GhostPanelMediaMenu({
   menu,
   onClose,
 }: {

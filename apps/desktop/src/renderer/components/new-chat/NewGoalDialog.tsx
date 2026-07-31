@@ -90,6 +90,13 @@ export function NewGoalDialog({ sessionId, open, onOpenChange, onCreate, initial
             event.preventDefault();
             textareaRef.current?.focus();
           }}
+          onEscapeKeyDown={(event) => {
+            // 启动中不许 Esc 关掉(Codex review):AlertDialog 默认拦外部点击、但 Esc 照样生效,
+            // 于是用户能在「创建远程会话 → 起目标」的异步过程中按 Esc 把弹窗关掉,以为取消了 ——
+            // 实际那次创建仍会跑完并跳转。取消按钮在 saving 期间已 disabled,Esc 也该同口径。
+            // (真正防止「关掉后改目标设备」的是调用方的在途锁;这里只是不让 UI 撒谎。)
+            if (saving) event.preventDefault();
+          }}
         >
           <AlertDialog.Title className="text-[15px] font-medium" style={{ color: 'var(--text-primary)' }}>
             {t('goal.newGoalDialog.title')}

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Flame, Shield, Smartphone } from 'lucide-react';
+import { Flame, Shield, Smartphone, UserRound } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
@@ -46,6 +46,9 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
   if (!user && !isLocal) return null;
 
   const initial = displayName.charAt(0).toUpperCase();
+  // 未登录(跳过登录)态没有身份可展示:头像兜底用中性人形图标,而不是拿状态文案
+  // 取首字——那会渲染成「未」/「N」这类无意义字符,且四语各不相同。
+  const showNotSignedInGlyph = !user && isLocal;
   const appDisplayVersion = window.electronAPI.appDisplayVersion;
   const appDisplayVersionDetail = window.electronAPI.appDisplayVersionDetail;
   // 版本行的区域前缀。「哪些区域要标」只有 CINDY_REGION_CODE 一个事实源(issue
@@ -131,7 +134,11 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
                     'border border-sidebar-border bg-sidebar-item-hover text-base font-medium text-foreground',
                   )}
                 >
-                  {initial}
+                  {showNotSignedInGlyph ? (
+                    <UserRound aria-hidden="true" size={18} strokeWidth={1.75} />
+                  ) : (
+                    initial
+                  )}
                 </div>
               )}
               {isCanary && (
@@ -199,7 +206,11 @@ export function UserInfoSection({ isCollapsed, onOpenUpdateNotice }: UserInfoSec
                   'border border-[var(--sidebar-user-card-border)] bg-[var(--sidebar-user-card-bg)] text-[14px] font-medium text-[var(--sidebar-user-card-text)]',
                 )}
               >
-                {initial}
+                {showNotSignedInGlyph ? (
+                  <UserRound aria-hidden="true" size={15} strokeWidth={1.75} />
+                ) : (
+                  initial
+                )}
               </div>
             )}
             {isCanary && (

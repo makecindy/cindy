@@ -220,12 +220,38 @@ export interface CatalogModel {
    */
   group?: string;
   /**
+   * Gateway 原生模型能力类型(issue #882:'chat' / 'embedding' / 'image_generation' /
+   * 'audio_speech' / ... ,字段值不改名,原样透传)。是否为聊天模型、进哪个
+   * ModelMode 展示分类均以此为权威;缺省时回退 id 正则兜底
+   * (`classification.ts` classifyModel)。只有 XD 网关来源目前会填充,静态
+   * 内置目录留空。
+   */
+  mode?: string;
+  /**
    * 展示排序权重（升序）。渲染层按它对模型排序、并据每个分组的最小 sortOrder 决定分组先后。
    * 缺省排到末尾。仅影响选择器展示顺序，不影响 host 派生的 availableModels 数组序（后者保序）。
    */
   sortOrder?: number;
   /** 上下文窗口（tokens）。该 agent 下的权威值(host 派生进 ModelDescriptor.contextWindow)。 */
   contextWindow: number;
+  /**
+   * `contextWindow` 是否为**显式声明**的真实上限,而非派生时补的兜底值。
+   *
+   * 目录条目的窗口可能来自产品目录写定 / 上游明示 / 用户填写(都算显式),也可能是
+   * 上游不给元数据时补的常量(codex `model/list` 一律 272K、自定义 provider 未填时的
+   * 200K、Anthropic 未知模型启发式)。两者数值上无法区分,但只有前者能用来收敛
+   * 运行期上报的窗口 —— 拿兜底值当上限会把真实窗口压小。
+   *
+   * 缺省(undefined)一律按未核实处理。
+   *
+   * **这份 provenance 只活在 host 侧的目录里,刻意不进跨端 `ModelDescriptor`**
+   * (host 的 `toDescriptor` 不透传它)。原因:`availableModels` 是跨 provider union +
+   * 首见去重的扁平表,同一 model id 由多个 provider 提供时归属已丢,按 id 回查会命中
+   * 另一条路由的元数据 —— 拿错路由的上限去收敛比不收敛更糟。收敛统一走
+   * maker-core 的 `AgentDeps.resolveVerifiedContextWindow`,由 host 按
+   * (providerId, modelId) 解析。
+   */
+  contextWindowVerified?: boolean;
   maxOutput?: number;
   /** 支持的 effort 档；空数组 = 不支持切换（如 Haiku / 部分 provider-managed 模型）。 */
   efforts: Effort[];

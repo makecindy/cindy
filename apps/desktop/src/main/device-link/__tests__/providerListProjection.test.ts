@@ -50,9 +50,11 @@ describe('controller capability metadata', () => {
   it('distinguishes an absent subscribe field from an explicit empty capability set', () => {
     expect(__testing.optionalControllerCapabilities({})).toBeUndefined();
     expect(__testing.optionalControllerCapabilities({ capabilities: [] })).toEqual([]);
-    expect(__testing.optionalControllerCapabilities({
-      capabilities: ['provider-logo-kinds-v2', 42, 'provider-logo-kinds-v2'],
-    })).toEqual(['provider-logo-kinds-v2']);
+    expect(
+      __testing.optionalControllerCapabilities({
+        capabilities: ['provider-logo-kinds-v2', 42, 'provider-logo-kinds-v2'],
+      }),
+    ).toEqual(['provider-logo-kinds-v2']);
   });
 });
 
@@ -80,7 +82,14 @@ function xdProviderWithFullRouting() {
     },
     models: {
       'claude-code': [
-        { id: 'claude-opus-4-8', name: 'Opus 4.8', contextWindow: 1000000, efforts: [], defaultEffort: null, supportsFastMode: true },
+        {
+          id: 'claude-opus-4-8',
+          name: 'Opus 4.8',
+          contextWindow: 1000000,
+          efforts: [],
+          defaultEffort: null,
+          supportsFastMode: true,
+        },
       ],
     },
   };
@@ -134,15 +143,22 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
     expect(routing.codex).toEqual({ disabled: true });
     expect(routing['claude-code']).toEqual({});
     expect(connectedProvidersForAgent(providers as unknown as ProviderView[], 'codex')).toEqual([]);
-    expect(connectedProvidersForAgent(providers as unknown as ProviderView[], 'claude-code'))
-      .toHaveLength(1);
+    expect(
+      connectedProvidersForAgent(providers as unknown as ProviderView[], 'claude-code'),
+    ).toHaveLength(1);
     expect(JSON.stringify(routing)).not.toContain(XD_GATEWAY_BASE_URL);
   });
 
   it('models[agent] 原样透传（Fast 显隐数据源:per-provider supportsFastMode）', () => {
     const { providers } = project({ providers: [xdProviderWithFullRouting()] });
-    const models = providers[0].models as Record<string, { id: string; supportsFastMode?: boolean }[]>;
-    expect(models['claude-code'][0]).toMatchObject({ id: 'claude-opus-4-8', supportsFastMode: true });
+    const models = providers[0].models as Record<
+      string,
+      { id: string; supportsFastMode?: boolean }[]
+    >;
+    expect(models['claude-code'][0]).toMatchObject({
+      id: 'claude-opus-4-8',
+      supportsFastMode: true,
+    });
   });
 
   it('保留模型显示 override 快照并过滤非布尔值', () => {
@@ -201,13 +217,15 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
 
   it('新 logo kind 不发给独立更新的旧版 mobile，避免旧路径表索引 undefined', () => {
     const { providers } = project({
-      providers: [{
-        ...xdProviderWithFullRouting(),
-        id: 'my-renamed-vercel-provider',
-        routing: {
-          codex: { upstream: 'https://ai-gateway.vercel.sh/v1' },
+      providers: [
+        {
+          ...xdProviderWithFullRouting(),
+          id: 'my-renamed-vercel-provider',
+          routing: {
+            codex: { upstream: 'https://ai-gateway.vercel.sh/v1' },
+          },
         },
-      }],
+      ],
     });
 
     expect(providers[0]).not.toHaveProperty('logoKind');
@@ -216,13 +234,15 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
 
   it('声明完整 logo 能力的当前控制端收到新 logo kind', () => {
     const { providers } = projectForCurrentController({
-      providers: [{
-        ...xdProviderWithFullRouting(),
-        id: 'my-renamed-vercel-provider',
-        routing: {
-          codex: { upstream: 'https://ai-gateway.vercel.sh/v1' },
+      providers: [
+        {
+          ...xdProviderWithFullRouting(),
+          id: 'my-renamed-vercel-provider',
+          routing: {
+            codex: { upstream: 'https://ai-gateway.vercel.sh/v1' },
+          },
         },
-      }],
+      ],
     });
 
     expect(providers[0].logoKind).toBe('vercel');
@@ -231,15 +251,17 @@ describe('projectInvokeResultForTunnel — maker:provider:list 投影', () => {
 
   it('混合品牌 routing 不产生 logoKind,也不透传伪造值', () => {
     const { providers } = project({
-      providers: [{
-        ...xdProviderWithFullRouting(),
-        id: 'mixed-provider',
-        logoKind: 'xai',
-        routing: {
-          codex: { upstream: 'https://api.openai.com/v1' },
-          'claude-code': { upstream: 'https://api.anthropic.com/v1' },
+      providers: [
+        {
+          ...xdProviderWithFullRouting(),
+          id: 'mixed-provider',
+          logoKind: 'xai',
+          routing: {
+            codex: { upstream: 'https://api.openai.com/v1' },
+            'claude-code': { upstream: 'https://api.anthropic.com/v1' },
+          },
         },
-      }],
+      ],
     });
 
     expect(providers[0]).not.toHaveProperty('logoKind');

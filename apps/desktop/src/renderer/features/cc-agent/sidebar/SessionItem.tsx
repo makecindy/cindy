@@ -66,11 +66,12 @@ import { createLogger } from '@/lib/logger';
 import { formatSidebarTime, formatSidebarTimeAbsolute } from '../lib/formatSidebarTime';
 import { highlightSegments } from '../lib/highlightSegments';
 import { scrollIntoNearestView } from '../lib/scrollIntoNearestView';
+import { isAutomationGeneratedSession } from '../lib/scheduledSessionGrouping';
 import {
-  getAutomationSessionDisplayTitle,
-  isAutomationGeneratedSession,
-  isScheduledSession,
-} from '../lib/scheduledSessionGrouping';
+  canHighlightSessionDisplayTitle,
+  getSessionDisplayTitle,
+  isEmptyDraftSession,
+} from '../lib/sessionDisplayTitle';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { loadScheduleSidebarIndexRuns, type ScheduleSidebarIndexRun } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
 import { useSchedulesSnapshot } from '@/features/scheduler/lib/schedulesStore';
@@ -195,7 +196,7 @@ export const SessionItem = memo(function SessionItem({
   const { t } = useTranslation();
   const prRefs = usePrRefsForSession(session.id);
   const isPinned = session.pinnedAt != null;
-  const isEmpty = session.title === 'New Maker' && (session._count?.messages ?? 0) === 0;
+  const isEmpty = isEmptyDraftSession(session);
   // 取 userSendAt 与 updatedAt 中较新的值，兼容存量 DB 行（旧版只写 userSendAt），
   // 与 projectGrouping/dateSessionGrouping 的排序时间轴保持一致。
   const activityIso =
@@ -325,8 +326,8 @@ export const SessionItem = memo(function SessionItem({
       );
     }
   }, [effectiveScheduleId, t]);
-  const displayTitle = getAutomationSessionDisplayTitle(session);
-  const canHighlightDisplayTitle = !isScheduledSession(session);
+  const displayTitle = getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'));
+  const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session);
   // F-PJ-10：archived 视图下的 session 走特殊视觉/菜单分支
   //   - 左侧 status icon 由 CircleDashed 换成 Archive
   //   - 右侧 ⋮ 菜单只显示 Rename + Unarchive（屏蔽 Pin/Delete/Archive 等无意义项）

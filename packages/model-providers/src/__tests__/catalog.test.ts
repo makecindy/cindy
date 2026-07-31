@@ -79,7 +79,7 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
 
   it('has exactly the built-in providers in stable order', () => {
     // 顺序契约:决定选择器分段顺序与 deriveAvailableModels first-wins 优先级。
-    expect(BUNDLED_CATALOG.providers.map((p) => p.id)).toEqual(['anthropic', 'openai', 'xai', 'xd']);
+    expect(BUNDLED_CATALOG.providers.map((p) => p.id)).toEqual(['anthropic', 'openai', 'xai', 'xd', 'gemini']);
     expect(BUNDLED_CATALOG.providers.every((p) => p.source === 'builtin')).toBe(true);
   });
 
@@ -446,6 +446,41 @@ describe('vendor grouping metadata (xai 静态清单)', () => {
       }
     }
   });
+
+  // 静态目录里的窗口是产品侧逐条写定的真实上限 —— 必须标记为已核实,否则运行期收敛不掉
+  // 上游报的虚高窗口(例:256K 的 xai/grok-code-fast 被报成基础模型的更大值)。
+  it('静态清单的 contextWindow 标记为已核实(可用于收敛上报值)', () => {
+    const xai = provider('xai');
+    for (const agent of xai.agents) {
+      for (const m of xai.models[agent] ?? []) {
+        expect(m.contextWindow, `${m.id} contextWindow`).toBeGreaterThan(0);
+        expect(m.contextWindowVerified, `${m.id} contextWindowVerified`).toBe(true);
+      }
+    }
+  });
+
+  // 远端下发目录与 bundled 同格式,同样要在解析时标记;条目自己表过态时尊重原值。
+  it('parseCatalog 给远端下发的静态条目补标记,但不覆盖显式表态', () => {
+    const parsed = parseCatalog({
+      version: '2',
+      providers: [
+        {
+          ...provider('xai'),
+          models: {
+            codex: [
+              { id: 'remote/known', name: 'Known', contextWindow: 262_144, efforts: [], defaultEffort: null, group: 'grok', sortOrder: 1 },
+              { id: 'remote/opted-out', name: 'Opted Out', contextWindow: 272_000, contextWindowVerified: false, efforts: [], defaultEffort: null, group: 'grok', sortOrder: 2 },
+            ],
+          },
+          agents: ['codex'],
+          titleModel: 'remote/known',
+        },
+      ],
+    });
+    const models = parsed.providers[0].models.codex ?? [];
+    expect(models.find((m) => m.id === 'remote/known')?.contextWindowVerified).toBe(true);
+    expect(models.find((m) => m.id === 'remote/opted-out')?.contextWindowVerified).toBe(false);
+  });
 });
 
 describe('provider OAuth and upstream URL validation', () => {
@@ -540,5 +575,31 @@ describe('buildRegistry 的清单发现失败投影', () => {
     expect(views.find((p) => p.id === 'anthropic')?.modelDiscoveryFailure).toBeUndefined();
     const bare = buildRegistry(BUNDLED_CATALOG, { anthropic: true });
     expect(bare.find((p) => p.id === 'anthropic')?.modelDiscoveryFailure).toBeUndefined();
+  });
+});
+
+describe('媒体清单跨供应商契约(2026-07 图像多来源)', () => {
+  // deriveCindyMediaConfig(desktop 侧)按目录序 first-wins 选默认与归属:
+  // BUILTIN 顺序里 openai/xai 排在 xd 前面,任何非 xd 供应商声明 imageDefaults
+  // 都会把 xd 的出厂默认顶掉;同 id 撞车会把 xd 条目的归属抢走(派发错通道)。
+  // 这两条是数据契约,在目录层锁死,不等运行时踩雷。
+  it('声明 imageDefaults / videoDefaults 的内置供应商只能是 xd(防 first-wins 顶默认)', () => {
+    for (const p of BUNDLED_CATALOG.providers) {
+      if (p.id === 'xd') continue;
+      expect(p.imageDefaults, `${p.id} 不得声明 imageDefaults`).toBeUndefined();
+      expect(p.videoDefaults, `${p.id} 不得声明 videoDefaults`).toBeUndefined();
+    }
+  });
+
+  it('非 xd 内置供应商的媒体模型 id 必须带 "<providerId>/" 前缀(防 first-wins 归属漂移)', () => {
+    for (const p of BUNDLED_CATALOG.providers) {
+      if (p.id === 'xd') continue;
+      for (const m of [...(p.imageModels ?? []), ...(p.videoModels ?? [])]) {
+        expect(
+          m.id.startsWith(`${p.id}/`),
+          `${p.id} 的媒体模型 ${m.id} 必须带 "${p.id}/" 前缀`,
+        ).toBe(true);
+      }
+    }
   });
 });

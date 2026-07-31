@@ -29,6 +29,23 @@ export interface CreateGatewayImageClientOptions {
    * 抛错即取消本次付费提交(PR #744 review 第二十一轮)。缺席 = 不查。
    */
   beforeDispatch?(model: string): void;
+  /**
+   * 错误话术里的来源品牌名(2026-07 图像多来源:同一 OpenAI-images 兼容客户端被
+   * xd 网关之外的来源复用,报错必须说清是哪家失败)。缺省 'XD Gateway'。
+   */
+  brandLabel?: string;
+  /**
+   * 该来源是否支持改图端点。false 时 editImage 直接人话明拒(不发请求)——
+   * 不支持的来源静默把 edit 发到 generate 端点或吞参数都是错误路由。缺省 true。
+   */
+  supportsEdit?: boolean;
+  /**
+   * 该来源是否接受 size / quality 参数。false 时带这两个参数的请求明拒,
+   * 不静默剥掉——静默降级会让调用方以为画幅/档位生效了。缺省 true。
+   */
+  allowSizeQuality?: boolean;
+  /** 未配置凭证时的人话报错(各来源引导不同:xd 是登录飞书,BYO key 是去设置填 key)。 */
+  missingKeyMessage?: string;
 }
 
 function gatewayErrorCode(body: unknown): string | null {
@@ -45,6 +62,7 @@ function requestErrorMessage(params: {
   status: number;
   model: string;
   message: string;
+  brandLabel: string;
   body?: unknown;
 }): string {
   const code = gatewayErrorCode(params.body);
@@ -53,10 +71,14 @@ function requestErrorMessage(params: {
     `model ${JSON.stringify(params.model)}`,
     ...(code ? [`code ${JSON.stringify(code)}`] : []),
   ].join(', ');
-  return `XD Gateway image request failed (${context}): ${params.message}`;
+  return `${params.brandLabel} image request failed (${context}): ${params.message}`;
 }
 
-async function parseResponse(res: Response, model: string): Promise<GatewayImageResponse> {
+async function parseResponse(
+  res: Response,
+  model: string,
+  brandLabel: string,
+): Promise<GatewayImageResponse> {
   const text = await res.text();
   let parsed: unknown;
   try {
@@ -66,6 +88,7 @@ async function parseResponse(res: Response, model: string): Promise<GatewayImage
       requestErrorMessage({
         status: res.status,
         model,
+        brandLabel,
         message: `non-JSON response: ${text.slice(0, 200)}`,
       }),
       res.status,
@@ -76,9 +99,9 @@ async function parseResponse(res: Response, model: string): Promise<GatewayImage
   if (!res.ok) {
     const errMsg =
       (parsed as { error?: { message?: string } })?.error?.message ??
-      `XD Gateway HTTP ${res.status}`;
+      `${brandLabel} HTTP ${res.status}`;
     throw new GatewayImageError(
-      requestErrorMessage({ status: res.status, model, message: errMsg, body: parsed }),
+      requestErrorMessage({ status: res.status, model, brandLabel, message: errMsg, body: parsed }),
       res.status,
       parsed,
     );
@@ -90,6 +113,7 @@ async function parseResponse(res: Response, model: string): Promise<GatewayImage
       requestErrorMessage({
         status: res.status,
         model,
+        brandLabel,
         message: 'response missing data[]',
         body: parsed,
       }),
@@ -119,6 +143,9 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
   ): Promise<GatewayImageResponse>;
 } {
   const beforeDispatch = opts.beforeDispatch;
+  const brandLabel = opts.brandLabel ?? 'XD Gateway';
+  const supportsEdit = opts.supportsEdit ?? true;
+  const allowSizeQuality = opts.allowSizeQuality ?? true;
   const baseUrl = normalizeBaseUrl(opts.proxy.baseUrl);
   const generateUrl = joinProxyUrl(baseUrl, opts.proxy.generatePath);
   const editUrl = joinProxyUrl(baseUrl, opts.proxy.editPath);
@@ -128,23 +155,35 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
     const key = await Promise.resolve(opts.getApiKey());
     if (!key) {
       throw new GatewayImageError(
-        'XD Gateway api key not found - please log in via Feishu first',
+        opts.missingKeyMessage ?? 'XD Gateway api key not found - please log in via Feishu first',
         401,
       );
     }
     return key;
   }
 
+  function assertSizeQualityAllowed(params: { size?: string; quality?: string }): void {
+    if (allowSizeQuality) return;
+    if (params.size !== undefined || params.quality !== undefined) {
+      throw new GatewayImageError(
+        `${brandLabel} 图像通道不支持画幅/档位参数(size/quality),请去掉后重试`,
+        400,
+      );
+    }
+  }
+
   async function generateImage(
     params: GatewayImageGenerateParams,
     signal?: AbortSignal,
   ): Promise<GatewayImageResponse> {
+    assertSizeQualityAllowed(params);
     const apiKey = await requireApiKey();
     const body: Record<string, unknown> = {
       model: params.model,
       prompt: params.prompt,
       n: params.n ?? 1,
-      size: params.size ?? 'auto',
+      // 不接受 size 的来源连缺省 'auto' 也不发(assert 只能挡显式参数)。
+      ...(allowSizeQuality ? { size: params.size ?? 'auto' } : {}),
     };
     if (params.quality) body.quality = params.quality;
 
@@ -160,13 +199,17 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
       body: JSON.stringify(body),
       signal,
     });
-    return parseResponse(res, params.model);
+    return parseResponse(res, params.model, brandLabel);
   }
 
   async function editImage(
     params: GatewayImageEditParams,
     signal?: AbortSignal,
   ): Promise<GatewayImageResponse> {
+    if (!supportsEdit) {
+      throw new GatewayImageError(`${brandLabel} 图像通道不支持改图,请换支持改图的模型`, 400);
+    }
+    assertSizeQualityAllowed(params);
     const apiKey = await requireApiKey();
     if (params.imagePaths.length === 0) {
       throw new GatewayImageError('image_edit requires at least 1 image', 400);
@@ -176,7 +219,8 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
     form.append('model', params.model);
     form.append('prompt', params.prompt);
     form.append('n', String(params.n ?? 1));
-    form.append('size', params.size ?? 'auto');
+    // 同 generateImage:不接受 size 的来源连缺省 'auto' 也不发。
+    if (allowSizeQuality) form.append('size', params.size ?? 'auto');
     if (params.quality) form.append('quality', params.quality);
 
     for (const p of params.imagePaths) {
@@ -195,7 +239,7 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
       body: form as unknown as BodyInit,
       signal,
     });
-    return parseResponse(res, params.model);
+    return parseResponse(res, params.model, brandLabel);
   }
 
   return { generateImage, editImage };

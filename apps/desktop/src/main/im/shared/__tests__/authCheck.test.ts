@@ -9,6 +9,7 @@ import {
   checkImRouteAuth,
   checkImRouteAuthDetailed,
   hasAuthForImRoute,
+  resolveEffectiveProvider,
   type ImAuthCheckDeps,
 } from '../authCheck';
 
@@ -237,5 +238,50 @@ describe('checkImRouteAuth', () => {
       missing: null,
     });
     await expect(hasAuthForImRoute(row(), providerSnapshot, authDeps)).resolves.toBe(true);
+  });
+});
+
+describe('resolveEffectiveProvider', () => {
+  // issue #882 第 3 点(2026-07 review):同一 model id 在不同来源上 mode 不一致时,
+  // 鉴权解析不能只看"这个来源提供这个 id",还要看这个来源上这个 id 是不是聊天模型
+  // ——否则会去校验一个非聊天来源的凭证,校验"通过"也不代表这个会话真能发聊天请求。
+  it('rejects an explicit providerId whose copy of the model is non-chat, even though the id exists there', () => {
+    const nonChat = provider({
+      id: 'xd',
+      strategy: 'gateway-key',
+      models: { 'claude-code': [{ ...model('shared-id'), efforts: [] as const, defaultEffort: null, mode: 'image_generation' }] },
+    });
+    const chat = provider({
+      id: 'openai',
+      strategy: 'oauth-passthrough',
+      models: { 'claude-code': [{ ...model('shared-id'), efforts: [] as const, defaultEffort: null, mode: 'chat' }] },
+    });
+
+    expect(
+      resolveEffectiveProvider(
+        row({ model: 'shared-id', providerId: 'xd' }),
+        [nonChat, chat],
+      ),
+    ).toEqual({ kind: 'explicit-invalid' });
+  });
+
+  it('falls back to the chat-eligible source when no explicit providerId is given, skipping a non-chat copy of the same id', () => {
+    const nonChat = provider({
+      id: 'xd',
+      strategy: 'gateway-key',
+      models: { 'claude-code': [{ ...model('shared-id'), efforts: [] as const, defaultEffort: null, mode: 'image_generation' }] },
+    });
+    const chat = provider({
+      id: 'openai',
+      strategy: 'oauth-passthrough',
+      models: { 'claude-code': [{ ...model('shared-id'), efforts: [] as const, defaultEffort: null, mode: 'chat' }] },
+    });
+
+    const resolution = resolveEffectiveProvider(
+      row({ model: 'shared-id', providerId: null }),
+      [nonChat, chat],
+    );
+    expect(resolution.kind).toBe('provider');
+    expect(resolution.kind === 'provider' ? resolution.provider.id : null).toBe('openai');
   });
 });

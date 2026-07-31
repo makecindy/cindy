@@ -26,6 +26,10 @@ export function findMobileMessageSearchHits(
     if (item.type === 'fork_origin') {
       continue;
     }
+    // 待发送气泡不进搜索:它还不是会话记录,命中它无法定位/跳转(回流后正式消息会被索引)。
+    if (item.type === 'pending_send') {
+      continue;
+    }
     if (item.type === 'subagent_group') {
       const hit = searchSubagentGroup(item, query);
       if (hit) hits.push(hit);

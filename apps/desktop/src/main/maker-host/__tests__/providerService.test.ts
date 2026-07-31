@@ -16,7 +16,18 @@ describe('createProviderService', () => {
     });
     const providers = await svc.listProviders();
     const byId = Object.fromEntries(providers.map((p) => [p.id, p.connected]));
-    expect(byId).toEqual({ anthropic: false, openai: false, xai: false, xd: true });
+    // gemini(内置 API-key 供应商)未注入 builtinApiKeyConnected ⇒ 缺省未连接。
+    expect(byId).toEqual({ anthropic: false, openai: false, xai: false, xd: true, gemini: false });
+  });
+
+  it('builtin API-key provider connection follows builtinApiKeyConnected (2026-07 图像多来源)', async () => {
+    const svc = createProviderService({
+      getCatalog: bundledCatalog,
+      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
+      builtinApiKeyConnected: (id) => id === 'gemini',
+    });
+    const providers = await svc.listProviders();
+    expect(providers.find((p) => p.id === 'gemini')?.connected).toBe(true);
   });
 
   it('reflects live connection changes (catalog read fresh each call)', async () => {

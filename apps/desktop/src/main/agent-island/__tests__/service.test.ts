@@ -1257,10 +1257,39 @@ describe('AgentIslandService native publishing', () => {
       '/goal 测试一下是不是支持目标模式',
     );
     await vi.waitFor(() => expect(mocks.getSessionRowSnapshot).toHaveBeenCalledTimes(1));
+    // cache-miss 加载路径同样要过显示投影:发给 native 的是本地化兜底文案,而不是
+    // DB 里那个 locale-independent 的英文哨兵(PR #1031 review P1)。此前只有读路径
+    // hydrateMeta 做了投影,这条断言正好固化了漏掉的那一半。
     await vi.waitFor(() => expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
-      title: 'New Maker',
+      title: 'Untitled session',
       projectName: null,
     }));
+    // 另一条写路径(metadata patch)同样过投影;权威标题到达后照常原样发布 ——
+    // 投影只作用于哨兵,不会把真实标题也顶掉。
+    service.handleSessionMetadataPatch('s1', { title: '登录失败排查' });
+    await vi.waitFor(() => expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+      title: '登录失败排查',
+    }));
+    service.handleSessionMetadataPatch('s1', { title: 'New Maker' });
+    await vi.waitFor(() => expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+      title: 'Untitled session',
+    }));
+    // 切换应用语言后必须**立刻**换语言:投影发生在构建 payload 那一刻,而 state / cache
+    // 存的是原始哨兵,所以 refreshLocalization() 的这次 republish 自然带新语言。若把投影
+    // 固化进 state,这里会一直停在上一语言,直到下一次 metadata 事件(PR #1031 review P1)。
+    {
+      const { setMainLocale } = await import('../../i18n.js');
+      setMainLocale('zh-CN');
+      service.refreshLocalization();
+      await vi.waitFor(() => expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+        title: '未命名对话',
+      }));
+      setMainLocale('en');
+      service.refreshLocalization();
+      await vi.waitFor(() => expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+        title: 'Untitled session',
+      }));
+    }
     expect(publish.mock.calls.at(-1)?.[0].strings).toMatchObject({
       appName: BRAND_NAME,
       newMessage: 'New message',
@@ -4233,5 +4262,51 @@ describe('AgentIslandService session attention cleared bridge (error read semant
     // 显式清除(renderer 确认报错 UI 真实展示):生效并重新 publish。
     service.handleSessionAttentionCleared('s-err', 'explicit');
     expect(publishSpy.mock.calls.length).toBeGreaterThan(publishCountAfterError);
+  });
+});
+
+describe('会话关闭原因决定条目去留', () => {
+  it('进程关闭保留仍在展示的完成卡片,归档/删除照常硬删', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+    syncEnabledForTest(service, publish);
+    const sessions = (
+      service as unknown as { state: { sessions: Map<string, unknown> } }
+    ).state.sessions;
+
+    // 临时会话调度的真实时序:done 之后 runner 的 fire finally 立刻 closeSession。
+    // 此刻完成卡片刚弹出来,硬删条目会让它当场消失(用户看到「弹一下就收起」)。
+    service.handleAgentEvent({ sessionId: 'ephemeral' }, doneEvent());
+    expect(sessions.has('ephemeral')).toBe(true);
+    service.handleSessionClosed('ephemeral', { reason: 'process-closed' });
+    expect(sessions.has('ephemeral')).toBe(true);
+
+    // 会话被归档 / 删除(默认 reason)语义是「这条记录不该再存在」→ 照常硬删。
+    service.handleSessionClosed('ephemeral');
+    expect(sessions.has('ephemeral')).toBe(false);
+  });
+
+  it('进程关闭时若已无展示需求,条目照常删除', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+    syncEnabledForTest(service, publish);
+    const sessions = (
+      service as unknown as { state: { sessions: Map<string, unknown> } }
+    ).state.sessions;
+
+    // 只是跑起来、没有任何终态未读 → 进程一关就没有保留价值。
+    service.handleUserPrompt({ sessionId: 'plain', agentKind: 'codex' }, 'hi');
+    expect(sessions.has('plain')).toBe(true);
+
+    service.handleSessionClosed('plain', { reason: 'process-closed' });
+    expect(sessions.has('plain')).toBe(false);
   });
 });

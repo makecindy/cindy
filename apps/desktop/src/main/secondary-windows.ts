@@ -157,6 +157,17 @@ export function openSessionInNewWindow(
 }
 
 // E4D 毛玻璃(lead 裁决副窗同处理):遍历副窗 set,用同 resolveVibrancyConfig 映射
+/**
+ * 是不是本模块开出来的会话副窗口。
+ *
+ * 给 main 侧那些「只想放行承载应用外壳(router / MainLayout)的窗口」的闸用：副窗口跑的是
+ * 同一套路由,设置页在里面照样打得开;而 appContentWindows 那个 WeakSet 还包含右侧栏、
+ * Ghost 面板 —— 它们不承载路由,不该拿到这类能力。
+ */
+export function isSecondaryAppWindow(win: BrowserWindow | null | undefined): boolean {
+  return Boolean(win && !win.isDestroyed() && secondaryWindows.has(win));
+}
+
 // 开关 vibrancy(仅 CINDY 透壁纸)。副窗 renderer 首帧/切 family 时 IPC theme:apply-vibrancy
 // → main applyWindowVibrancy → 调主窗 + 本函数(副窗)。
 export function applyVibrancyToSecondaryWindows(familyId: string, isDark: boolean): void {

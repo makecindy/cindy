@@ -40,6 +40,7 @@ import {
   invalidateSessionCaches,
 } from '@/features/right-sidebar/store';
 import { browserWebviewPool } from '@/features/right-sidebar/lib/browserWebviewPool';
+import { ghostPanelWebviewPool } from '@/cindy-brain/ghostPanelWebviewPool';
 import { markAllPtyDetached } from '@/features/right-sidebar/plugins/terminal/lib/xtermPool';
 import {
   bootstrapRsbWindowState,
@@ -68,6 +69,7 @@ import { requestNewWorkerFromShortcut } from '@/features/cc-agent/lib/newWorkerS
 import { useCorruptionRestoredToast } from '@/hooks/useCorruptionRestoredToast';
 // #37 schema-drift release-side toast
 import { useSchemaDriftWarningToast } from '@/hooks/useSchemaDriftWarningToast';
+import { useVoiceInputShortcutRecoveryToast } from '@/hooks/useVoiceInputShortcutRecoveryToast';
 import { requestProjectFocus } from '@/state/pendingProjectFocus';
 import { patchDraft } from '@/state/newMakerDraft';
 import { cn } from '@/lib/utils';
@@ -355,6 +357,7 @@ export function MainLayout() {
     loadVersion: noticeLoadVersion,
     dismiss: dismissNotice,
     onOpen: openNotice,
+    onOpenVersion: openVersionNotice,
   } = useUpdateNotice();
   const navigate = useNavigate();
   const location = useLocation();
@@ -463,6 +466,8 @@ export function MainLayout() {
   useCorruptionRestoredToast();
   // #37：release 端未知 schema drift 一次性 toast(提示用户升级或联系支持)
   useSchemaDriftWarningToast();
+  // 语音快捷键在设置页之外自动恢复失败 —— 那时设置页的 toast 不在,只能由常挂载的这里提示。
+  useVoiceInputShortcutRecoveryToast();
   // device-link 跨设备远程控制:同账号在线 + 开了被控的设备,其项目自动并入侧边栏
   useDeviceLinkRemoteProjects();
 
@@ -831,6 +836,9 @@ export function MainLayout() {
     if (rsbDetached) {
       setIsRightSidebarMaximized(false);
       browserWebviewPool.releaseAll();
+      // 钉住插件面板的常驻池同场景同命运:宿主迁移后本 renderer 的面板 webview
+      // 全是僵尸,子窗口接管时按需重建。
+      ghostPanelWebviewPool.releaseAll();
       // 终端 entry 的 ptyAttached 是 per-renderer 标记:宿主迁移后本窗的标记必然
       // 过期(PTY sink 会被对方窗口 re-attach 抢走),两个方向都要复位,否则
       // "弹出 → 合并回主窗"往返后 guard 跳过 re-attach,终端失活。
@@ -1172,6 +1180,7 @@ export function MainLayout() {
               onDragStart={handleDragStart}
               onResetWidth={resetWidth}
               onOpenUpdateNotice={openNotice}
+              onOpenVersionNotice={openVersionNotice}
               peekState={sidebarPeek.isPeekVisible ? sidebarPeek.peekState : null}
               peekDrawerProps={sidebarPeek.drawerProps}
             />

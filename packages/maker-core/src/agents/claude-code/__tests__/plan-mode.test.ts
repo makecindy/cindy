@@ -212,6 +212,211 @@ describe('ClaudeCodeAgent plan mode', () => {
     await handle.close();
   });
 
+  it('overrides remote cc-manager env with a host-materialized Claude route', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const starts: Array<Record<string, unknown>> = [];
+    const fakeQuery = createFakeQuery();
+
+    const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async (args) => {
+      starts.push(args.startParams);
+      return fakeQuery as never;
+    };
+    const resolveRemoteClaudeRoute = vi.fn(async () => ({
+      endpoint: 'https://provider.example/v1',
+      env: {
+        ANTHROPIC_API_KEY: 'k-route',
+        ANTHROPIC_CUSTOM_HEADERS: 'authorization: Bearer k-route\nx-tenant: acme',
+      },
+    }));
+    const agent = new ClaudeCodeAgent(createDeps({
+      // Empty gateway endpoint would fail the old remote gateway guard; routed sessions must not depend on it.
+      runtimeConfig: { remoteEndpoint: '' },
+      remoteCcQueryFactory,
+      resolveRemoteClaudeRoute,
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-materialized-route',
+      model: 'custom-model',
+      providerId: 'custom-provider',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+
+    expect(resolveRemoteClaudeRoute).toHaveBeenCalledWith({
+      providerId: 'custom-provider',
+      model: 'custom-model',
+    });
+    expect(starts).toHaveLength(1);
+    const env = starts[0]?.env as Record<string, string> | undefined;
+    expect(env?.ANTHROPIC_BASE_URL).toBe('https://provider.example/v1');
+    expect(env?.ANTHROPIC_API_KEY).toBe('k-route');
+    expect(env?.ANTHROPIC_CUSTOM_HEADERS).toBe('authorization: Bearer k-route\nx-tenant: acme');
+    expect(env?.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    await handle.close();
+  });
+
+  // 凭证形态回落不变量: 远端 route 为 null(网关路径)时必须按 gateway-key 构建 env,
+  // 不能让 getAuthEnv 的本地 fallback(订阅 token)与网关 endpoint 并存 —— 否则订阅
+  // token 会被发往网关(泄漏)。resolver 未注入(旧 host)同理。
+  function createGatewayAwareAuth(): AuthAdapter {
+    return {
+      async getState() {
+        return { authenticated: true };
+      },
+      async triggerLogin() {
+        return { authenticated: true };
+      },
+      async logout() {},
+      async getAuthEnv(options) {
+        return options?.credentialMode === 'gateway-key'
+          ? { ANTHROPIC_API_KEY: 'gw-key' }
+          : { CLAUDE_CODE_OAUTH_TOKEN: 'tok-sub' }; // 本地 fallback: 订阅已连
+      },
+    };
+  }
+
+  async function startRemoteGatewaySession(depOverrides: Partial<AgentDeps>) {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const starts: Array<Record<string, unknown>> = [];
+    const fakeQuery = createFakeQuery();
+    const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async (args) => {
+      starts.push(args.startParams);
+      return fakeQuery as never;
+    };
+    const agent = new ClaudeCodeAgent(createDeps({
+      auth: createGatewayAwareAuth(),
+      runtimeConfig: { remoteEndpoint: 'https://gw.example/claude' },
+      remoteCcQueryFactory,
+      ...depOverrides,
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-gateway-fallback',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+    return { starts, handle };
+  }
+
+  it('keeps the remote gateway credential shape when the resolved route is null', async () => {
+    const resolveRemoteClaudeRoute = vi.fn(async () => null);
+    const { starts, handle } = await startRemoteGatewaySession({ resolveRemoteClaudeRoute });
+
+    expect(resolveRemoteClaudeRoute).toHaveBeenCalledOnce();
+    expect(starts).toHaveLength(1);
+    const env = starts[0]?.env as Record<string, string> | undefined;
+    expect(env?.ANTHROPIC_BASE_URL).toBe('https://gw.example/claude');
+    expect(env?.ANTHROPIC_API_KEY).toBe('gw-key');
+    expect(env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    await handle.close();
+  });
+
+  it('keeps the remote gateway credential shape when no route resolver is injected (old host)', async () => {
+    const { starts, handle } = await startRemoteGatewaySession({});
+
+    expect(starts).toHaveLength(1);
+    const env = starts[0]?.env as Record<string, string> | undefined;
+    expect(env?.ANTHROPIC_BASE_URL).toBe('https://gw.example/claude');
+    expect(env?.ANTHROPIC_API_KEY).toBe('gw-key');
+    expect(env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    await handle.close();
+  });
+
+  // 远端订阅 token 续命:route env 带 CLAUDE_CODE_OAUTH_TOKEN 且 host 实现强刷时,
+  // remoteCcQueryFactory 必须拿到 onOAuthRefresh;回调返回新 token 并把 remoteEnv
+  // 原地写新(单一事实源,重连 fresh-start 直接用新 token 起跑)。网关路径绝不接线。
+  it('wires onOAuthRefresh for native-OAuth remote routes and refreshes the env in place', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const factoryArgs: Array<{
+      startParams: Record<string, unknown>;
+      onOAuthRefresh?: (params: unknown) => Promise<unknown>;
+    }> = [];
+    const fakeQuery = createFakeQuery();
+    const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async (args) => {
+      factoryArgs.push(args);
+      return fakeQuery as never;
+    };
+    const getFreshSubscriptionToken = vi.fn(async () => 'tok-new');
+    const auth: AuthAdapter = {
+      async getState() {
+        return { authenticated: true };
+      },
+      async triggerLogin() {
+        return { authenticated: true };
+      },
+      async logout() {},
+      async getAuthEnv() {
+        return {};
+      },
+      getFreshSubscriptionToken,
+    };
+    const agent = new ClaudeCodeAgent(createDeps({
+      auth,
+      runtimeConfig: { remoteEndpoint: '' },
+      remoteCcQueryFactory,
+      resolveRemoteClaudeRoute: async () => ({
+        endpoint: 'https://api.anthropic.com',
+        env: { CLAUDE_CODE_OAUTH_TOKEN: 'tok-old' },
+      }),
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-oauth-refresh',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+
+    expect(factoryArgs).toHaveLength(1);
+    expect(factoryArgs[0]?.onOAuthRefresh).toBeDefined();
+    await expect(factoryArgs[0]!.onOAuthRefresh!({ sessionId: 'x' })).resolves.toEqual({
+      token: 'tok-new',
+    });
+    expect(getFreshSubscriptionToken).toHaveBeenCalledWith('tok-old');
+    const env = factoryArgs[0]?.startParams.env as Record<string, string>;
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('tok-new');
+    await handle.close();
+  });
+
+  it('does not wire onOAuthRefresh for gateway-path remote sessions', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const factoryArgs: Array<{ onOAuthRefresh?: (params: unknown) => Promise<unknown> }> = [];
+    const fakeQuery = createFakeQuery();
+    const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async (args) => {
+      factoryArgs.push(args);
+      return fakeQuery as never;
+    };
+    const auth = createGatewayAwareAuth();
+    auth.getFreshSubscriptionToken = vi.fn(async () => 'tok-new');
+    const agent = new ClaudeCodeAgent(createDeps({
+      auth,
+      runtimeConfig: { remoteEndpoint: 'https://gw.example/claude' },
+      remoteCcQueryFactory,
+      resolveRemoteClaudeRoute: async () => null,
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-gateway-no-refresh',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+
+    expect(factoryArgs).toHaveLength(1);
+    expect(factoryArgs[0]?.onOAuthRefresh).toBeUndefined();
+    await handle.close();
+  });
+
   it('setPlanMode toggles the SDK between plan and the underlying mode', async () => {
     const { handle, fakeQuery } = await startPlanSession(false);
 
@@ -233,8 +438,9 @@ describe('ClaudeCodeAgent plan mode', () => {
     expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
 
     await handle.setPlanMode?.(false);
-    // 退出计划模式落到最新的底层档。
-    expect(fakeQuery.setPermissionMode).toHaveBeenLastCalledWith('auto');
+    // 退出计划模式落到最新的底层档。Cindy 档 'auto'(Auto-review)映射到 SDK 'default'
+    // —— 不再透传 'auto' 给 CC(canUseTool 才会触发,由 Cindy 策略审查),见 toSdkPermissionMode。
+    expect(fakeQuery.setPermissionMode).toHaveBeenLastCalledWith('default');
     await handle.close();
   });
 
@@ -340,6 +546,197 @@ describe('ClaudeCodeAgent plan mode', () => {
     expect(result.behavior).toBe('deny');
     expect(handle.getPlanMode?.()).toBe(true);
     expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('remote setModel rejects route-changing model switches', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const fakeQuery = createFakeQuery();
+    const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async () =>
+      fakeQuery as never;
+    const resolveRemoteClaudeRoute = vi.fn(async (args: { model: string }) =>
+      args.model.startsWith('claude-')
+        ? { endpoint: 'https://api.anthropic.com', env: { CLAUDE_CODE_OAUTH_TOKEN: 'tok' } }
+        : null,
+    );
+    const agent = new ClaudeCodeAgent(createDeps({
+      runtimeConfig: { remoteEndpoint: 'https://gw.example/claude' },
+      remoteCcQueryFactory,
+      resolveRemoteClaudeRoute,
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-setmodel',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+
+    // 同一路由(native OAuth)→ 放行,SDK setModel 被调。
+    await handle.setModel?.('claude-sonnet-5');
+    expect(fakeQuery.setModel).toHaveBeenCalled();
+
+    // 路由变化(native OAuth → 网关 null)→ 拒绝,不更新模型。
+    await expect(handle.setModel?.('deepseek/deepseek-v4-flash')).rejects.toThrow(
+      /REMOTE_MODEL_SWITCH_ROUTE_CHANGE/,
+    );
+    expect(resolveRemoteClaudeRoute).toHaveBeenCalledTimes(3); // startSession + 两次 setModel
+    await handle.close();
+  });
+
+  it('remote setModel allows same-route switch despite token rotation', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const fakeQuery = createFakeQuery();
+    const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async () =>
+      fakeQuery as never;
+    // 后台刷新后 nextRoute.env 是新 token,但 remoteEnv(远端 daemon)还是旧值 ——
+    // token 值轮换不算路由变化,同路由放行(codex P2 三轮)。
+    let callCount = 0;
+    const resolveRemoteClaudeRoute = vi.fn(async () => {
+      callCount += 1;
+      return {
+        endpoint: 'https://api.anthropic.com',
+        env: { CLAUDE_CODE_OAUTH_TOKEN: callCount === 1 ? 'tok-old' : 'tok-new' },
+      };
+    });
+    const agent = new ClaudeCodeAgent(createDeps({
+      runtimeConfig: { remoteEndpoint: 'https://gw.example/claude' },
+      remoteCcQueryFactory,
+      resolveRemoteClaudeRoute,
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-token-rotation',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+
+    // token 值不同(轮换)但 endpoint + token 存在性一致 → 放行。
+    await handle.setModel?.('claude-sonnet-5');
+    expect(fakeQuery.setModel).toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('remote setModel allows same-route switch despite subscription metadata drift', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const fakeQuery = createFakeQuery();
+    const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async () =>
+      fakeQuery as never;
+    // 登录后 backfill 补齐 subscriptionType/rateLimitTier(用户零操作)—— 与 token 同组
+    // 按存在性比对,不按值,不误拒(Fable 5 评估 B1)。
+    let callCount = 0;
+    const resolveRemoteClaudeRoute = vi.fn(async () => {
+      callCount += 1;
+      return {
+        endpoint: 'https://api.anthropic.com',
+        env:
+          callCount === 1
+            ? { CLAUDE_CODE_OAUTH_TOKEN: 'tok' }
+            : {
+                CLAUDE_CODE_OAUTH_TOKEN: 'tok',
+                CLAUDE_CODE_SUBSCRIPTION_TYPE: 'max',
+                CLAUDE_CODE_RATE_LIMIT_TIER: 'tier-1',
+              },
+      };
+    });
+    const agent = new ClaudeCodeAgent(createDeps({
+      runtimeConfig: { remoteEndpoint: 'https://gw.example/claude' },
+      remoteCcQueryFactory,
+      resolveRemoteClaudeRoute,
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-metadata-drift',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+
+    await handle.setModel?.('claude-sonnet-5');
+    expect(fakeQuery.setModel).toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('remote setModel rejects when a custom provider key changes (no refresh channel)', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const fakeQuery = createFakeQuery();
+    const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async () =>
+      fakeQuery as never;
+    // 自定义供应商 ANTHROPIC_API_KEY 无 oauth/refresh 通道:用户在设置里改 key 后,
+    // 远端 daemon 仍带旧 key,持续 401 —— 必须拒绝(Greptile 六轮)。
+    let callCount = 0;
+    const resolveRemoteClaudeRoute = vi.fn(async () => {
+      callCount += 1;
+      return {
+        endpoint: 'https://provider.example/v1',
+        env: { ANTHROPIC_API_KEY: callCount === 1 ? 'k-old' : 'k-new' },
+      };
+    });
+    const agent = new ClaudeCodeAgent(createDeps({
+      runtimeConfig: { remoteEndpoint: 'https://gw.example/claude' },
+      remoteCcQueryFactory,
+      resolveRemoteClaudeRoute,
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-key-change',
+      model: 'custom-model',
+      providerId: 'custom-provider',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+
+    await expect(handle.setModel?.('another-custom-model')).rejects.toThrow(
+      /REMOTE_MODEL_SWITCH_ROUTE_CHANGE/,
+    );
+    await handle.close();
+  });
+
+  it('remote setModel rejects when the target route drops a custom header', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    const fakeQuery = createFakeQuery();
+    const remoteCcQueryFactory: NonNullable<AgentDeps['remoteCcQueryFactory']> = async () =>
+      fakeQuery as never;
+    // 初次解析带 x-tenant 定制头;切模时目标路由把它删了 —— 远端 daemon 仍烤着旧头,
+    // 必须拒绝(Greptile review #1035:只取 nextRoute 的 key 会把删除误判成一致)。
+    let callCount = 0;
+    const resolveRemoteClaudeRoute = vi.fn(async () => {
+      callCount += 1;
+      return callCount === 1
+        ? {
+            endpoint: 'https://provider.example/v1',
+            env: { ANTHROPIC_API_KEY: 'k', ANTHROPIC_CUSTOM_HEADERS: 'x-tenant: acme' },
+          }
+        : { endpoint: 'https://provider.example/v1', env: { ANTHROPIC_API_KEY: 'k' } };
+    });
+    const agent = new ClaudeCodeAgent(createDeps({
+      runtimeConfig: { remoteEndpoint: 'https://gw.example/claude' },
+      remoteCcQueryFactory,
+      resolveRemoteClaudeRoute,
+    }));
+    const handle = await agent.startSession({
+      sessionId: 'session-remote-drop-header',
+      model: 'custom-model',
+      providerId: 'custom-provider',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'auto',
+    });
+
+    await expect(handle.setModel?.('another-custom-model')).rejects.toThrow(
+      /REMOTE_MODEL_SWITCH_ROUTE_CHANGE/,
+    );
     await handle.close();
   });
 });

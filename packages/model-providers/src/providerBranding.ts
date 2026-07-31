@@ -62,6 +62,7 @@ const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
   openai: 'openai',
   xd: 'xd',
   xai: 'xai',
+  gemini: 'google',
   openrouter: 'openrouter',
   deepseek: 'deepseek',
   'zhipu-glm-cn': 'zhipu',

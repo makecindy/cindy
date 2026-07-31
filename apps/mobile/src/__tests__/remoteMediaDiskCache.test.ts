@@ -76,13 +76,14 @@ describe('remoteMediaDiskCache', () => {
     // IO 不支持(memoryIO 默认不带 writeFileBase64):静默跳过。
     const base = memoryIO();
     const cacheNoIo = createRemoteMediaDiskCache(base.io);
-    await expect(cacheNoIo.storeBytes(URL_A, 'aGVsbG8=', 'image/webp')).resolves.toBeUndefined();
+    // 返回 false = 本次没写入新字节(见 store 返回值契约)。
+    await expect(cacheNoIo.storeBytes(URL_A, 'aGVsbG8=', 'image/webp')).resolves.toBe(false);
     expect(await cacheNoIo.lookup(URL_A)).toBeNull();
 
     // 写失败(返回 null,契约保证不动现有文件):不登记条目。
     const failing = memoryIO({ writeFileBase64: vi.fn(() => null) });
     const cacheFail = createRemoteMediaDiskCache(failing.io);
-    await cacheFail.storeBytes(URL_B, 'aGVsbG8=', 'image/webp');
+    await expect(cacheFail.storeBytes(URL_B, 'aGVsbG8=', 'image/webp')).resolves.toBe(false);
     expect(await cacheFail.lookup(URL_B)).toBeNull();
   });
 
@@ -275,5 +276,63 @@ describe('remoteMediaDiskCache', () => {
     expect(cacheKeyOf(URL_A)).toBe(cacheKeyOf(URL_A));
     expect(cacheKeyOf(URL_A)).not.toBe(cacheKeyOf(URL_B));
     expect(cacheKeyOf(URL_A)).toMatch(/^[0-9a-f]{18}$/);
+  });
+
+  // store 的返回值是「本次是否真的写入了新字节」。调用方靠它决定能否改用本地文件;
+  // 只看 promise resolve 会把**已被证伪的旧文件**当成本次结果(PR #1125 review)。
+  describe('store reports whether new bytes actually landed', () => {
+    it('reports true only when the write is registered', async () => {
+      const { io } = memoryIO();
+      const cache = createRemoteMediaDiskCache(io);
+      await expect(cache.store(URL_A, 'https://oss.example/a?sig=1', 'image/png')).resolves.toBe(true);
+      await expect(cache.storeBytes(URL_B, 'YWJj', 'image/webp')).resolves.toBe(false); // 无 writeFileBase64
+    });
+
+    it('reports false when the object alone exceeds the budget (nothing downloaded)', async () => {
+      const { io } = memoryIO();
+      const cache = createRemoteMediaDiskCache(io, { maxBytes: 100 });
+      await expect(cache.store(URL_A, 'https://oss.example/a?sig=1', 'image/png', 1_000)).resolves.toBe(false);
+      expect(io.download).not.toHaveBeenCalled();
+    });
+
+    it('reports false when the download fails and the existing good file is kept', async () => {
+      // 这是 review 指出的坏路径:强制重取下载失败时旧文件被刻意保留,若报 true
+      // 调用方就会把刚刚加载失败的同一个文件当本次结果、还标成永不过期。
+      let failNext = false;
+      const { io, files } = memoryIO({
+        download: vi.fn(async (_url: string, name: string) => {
+          // 契约:失败时原子落位失败,不得破坏已存在的同名好文件。
+          if (failNext) return null;
+          files.set(name, 1000);
+          return 1000;
+        }),
+      });
+      const cache = createRemoteMediaDiskCache(io);
+      await expect(cache.store(URL_A, 'https://oss.example/a?sig=1', 'image/png')).resolves.toBe(true);
+
+      failNext = true;
+      await expect(cache.store(URL_A, 'https://oss.example/a?sig=2', 'image/png')).resolves.toBe(false);
+      // 旧条目仍可命中(不误删),但调用方已被告知本次没写成功
+      expect(await cache.lookup(URL_A)).not.toBeNull();
+    });
+
+    it('reports false when the write lands as a zero-byte file', async () => {
+      const { io } = memoryIO({
+        download: vi.fn(async (_url: string, name: string) => 0),
+      });
+      const cache = createRemoteMediaDiskCache(io);
+      await expect(cache.store(URL_A, 'https://oss.example/a?sig=1', 'image/png')).resolves.toBe(false);
+      expect(await cache.lookup(URL_A)).toBeNull();
+    });
+
+    it('reports false when quota reclaim evicts the very entry just written', async () => {
+      // 单对象接近 maxBytes 时可能刚登记就被自己触发的 LRU 逐出,盘上已无本次字节。
+      const { io } = memoryIO({
+        download: vi.fn(async (_url: string, _name: string) => 1000),
+      });
+      const cache = createRemoteMediaDiskCache(io, { maxBytes: 500 });
+      await expect(cache.store(URL_C, 'https://oss.example/c?sig=1', 'image/png')).resolves.toBe(false);
+      expect(await cache.lookup(URL_C)).toBeNull();
+    });
   });
 });

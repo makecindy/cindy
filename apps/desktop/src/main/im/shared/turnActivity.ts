@@ -207,6 +207,23 @@ function formatElapsed(ms: number): string {
  * turn 上, 那是渠道消息唯一可能整段静止的窗口(见 TurnActivityState.notice)。
  * 此时省掉"N 项"段 —— 报"0 项"没有信息量。
  */
+/**
+ * 单行紧凑状态 — Telegram DM 草稿占位专用。draft 通道容不下多行时间线
+ * (反复重排会打断客户端草稿动画), 但工具期一直停在纯 "Thinking…" 占位又是
+ * 哑巴(桌面端有工作时间线, 渠道零信息)。一行讲清"这一刻在干什么":
+ * `⚙️ <最近一步> · N 项 · 21s`。notice(过载重试等)优先; 零进展返回空串
+ * (保持原生 Thinking 占位)。
+ */
+export function renderActivityLine(activity: TurnActivityState, now: number): string {
+  if (activity.notice !== null) return `⏳ ${activity.notice}`;
+  const latest = activity.recentSteps[activity.recentSteps.length - 1];
+  if (!latest) return '';
+  const prefix = latest.kind === 'thinking' ? '✦ ' : '';
+  const elapsed = formatElapsed(now - activity.startedAt);
+  const count = activity.totalSteps > 1 ? ` · ${activity.totalSteps} 项` : '';
+  return `⚙️ ${prefix}${latest.label}${count} · ${elapsed}`;
+}
+
 export function renderActivity(activity: TurnActivityState, now: number): string {
   if (activity.totalSteps === 0 && activity.notice === null) return '';
   const elapsed = formatElapsed(now - activity.startedAt);

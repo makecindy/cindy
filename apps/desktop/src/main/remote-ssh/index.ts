@@ -33,13 +33,14 @@ import {
   uninstallRemoteAgent,
   checkRemoteCodexAuth,
   pushRemoteCodexAuth,
+  FileHostKeyStore,
+  RemoteHost,
   type AddHostInput,
   type CodexAuthState,
   type HostConfig,
   type HostSnapshot,
   type InstallProgressEvent,
   type RemoteAgentKind,
-  type RemoteHost,
 } from '@cindy/maker-remote-ssh';
 
 import { createLogger } from '../logger.js';
@@ -57,6 +58,9 @@ import {
   getSshHostAgentProxy,
   getSshHostAutoConnect,
   hasAnyAutoConnectHost,
+  isAllowedAgentProxyRemotePort,
+  LEGACY_AGENT_PROXY_REMOTE_PORT,
+  normalizeAgentProxyUrl,
   readSshHostPrefs,
   removeSshHostPref,
   setSshHostAgentProxy,
@@ -65,14 +69,15 @@ import {
 } from './ssh-host-prefs-store.js';
 import {
   applyAgentProxyForHost,
-  buildAgentProxyEnvUppercase,
   clearAgentProxyTunnelState,
-  ensureAgentProxyTunnel,
+  disposeAllTunnels,
   getAgentProxyTunnelState,
+  getRemoteAgentProxyEnvUppercase,
+  handleAgentProxyMainHostDown,
   initAgentProxy,
   killRemoteCodexDaemon,
-  markAgentProxyTunnelInactive,
   reconcileCodexAgentProxyEnv,
+  teardownAgentProxyOnUserDisconnect,
   type AgentProxyTunnelState,
 } from './agent-proxy.js';
 import {
@@ -191,19 +196,32 @@ const VALID_AGENT_KINDS: ReadonlyArray<RemoteAgentKind> = ['claude-code', 'codex
 let pool: ConnectionPool | null = null;
 let initPromise: Promise<void> | null = null;
 let registered = false;
+/** 与 pool 共享的 host-key store — agent-proxy 隧道专用连接也用它做 TOFU 校验。 */
+let sharedHostKeyStore: FileHostKeyStore | null = null;
+
+function getSharedHostKeyStore(): FileHostKeyStore {
+  if (!sharedHostKeyStore) {
+    // Maker-owned host-key TOFU store. Kept out of the user's real
+    // ~/.ssh/known_hosts so we never mutate their OpenSSH state.
+    sharedHostKeyStore = new FileHostKeyStore(
+      path.join(app.getPath('userData'), 'remote-ssh', 'known-hosts.json'),
+    );
+  }
+  return sharedHostKeyStore;
+}
+
+const poolLogger = {
+  debug: (msg: string, ctx?: Record<string, unknown>) => log.debug(msg, ctx),
+  info: (msg: string, ctx?: Record<string, unknown>) => log.info(msg, ctx),
+  warn: (msg: string, ctx?: Record<string, unknown>) => log.warn(msg, ctx),
+  error: (msg: string, ctx?: Record<string, unknown>) => log.error(msg, ctx),
+};
 
 function getPool(): ConnectionPool {
   if (!pool) {
     pool = new ConnectionPool({
-      logger: {
-        debug: (msg, ctx) => log.debug(msg, ctx),
-        info: (msg, ctx) => log.info(msg, ctx),
-        warn: (msg, ctx) => log.warn(msg, ctx),
-        error: (msg, ctx) => log.error(msg, ctx),
-      },
-      // Maker-owned host-key TOFU store. Kept out of the user's real
-      // ~/.ssh/known_hosts so we never mutate their OpenSSH state.
-      knownHostsPath: path.join(app.getPath('userData'), 'remote-ssh', 'known-hosts.json'),
+      logger: poolLogger,
+      hostKeys: getSharedHostKeyStore(),
     });
   }
   return pool;
@@ -507,6 +525,17 @@ function normalizeAgentProxyInput(raw: unknown): SshHostAgentProxyPref | null | 
   const obj = requireObject(raw, 'agentProxy');
   const enabled = obj.enabled === true;
   if (!enabled) return null;
+  const mode = obj.mode === 'env' ? 'env' : 'tunnel'; // 缺省 tunnel (旧 renderer 兼容)
+  if (mode === 'env') {
+    const proxyUrl = normalizeAgentProxyUrl(obj.proxyUrl);
+    if (!proxyUrl) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        'agentProxy.proxyUrl must be a remote-reachable http(s)/socks5 URL without whitespace/quotes, e.g. http://127.0.0.1:7890',
+      );
+    }
+    return { enabled: true, mode: 'env', proxyUrl };
+  }
   const localHost = requireString(obj.localHost, 'agentProxy.localHost').trim();
   // localHost 是本机隧道转发目标 (net.connect 的目的地; 远端 env 永远指向
   // 127.0.0.1:<隧道口>, 不含这个值)。空白/引号在这里虽无注入面, 但必然是
@@ -521,7 +550,12 @@ function normalizeAgentProxyInput(raw: unknown): SshHostAgentProxyPref | null | 
   if (!Number.isInteger(localPort)) {
     throwIpcError('INVALID_PARAMS', 'agentProxy.localPort must be an integer in 1..65535');
   }
-  return { enabled: true, localHost, localPort };
+  // 固定远端端口 — env 静态化的关键; 旧 renderer 不传时沿用迁移缺省。
+  const remotePortRaw = obj.remotePort === undefined ? LEGACY_AGENT_PROXY_REMOTE_PORT : obj.remotePort;
+  if (!isAllowedAgentProxyRemotePort(remotePortRaw)) {
+    throwIpcError('INVALID_PARAMS', 'agentProxy.remotePort must be an integer in 1024..65535 (privileged/service ports are rejected)');
+  }
+  return { enabled: true, mode: 'tunnel', localHost, localPort, remotePort: remotePortRaw };
 }
 
 function normalizeAddInput(raw: unknown): AddHostInput & { agentProxy?: SshHostAgentProxyPref | null } {
@@ -565,24 +599,25 @@ export function registerRemoteSshIpc(): void {
       const host = getPool().get(snap.config.id);
       if (host) void applyAgentProxyForHost(host);
     } else {
-      // 断连 / 重连中: 隧道已 disarm, 状态标非活跃, detail 面板不显示
-      // 过期的「已建立」(review: PR #715 copilot R3)。reconnect ready 时
-      // 上面的 apply 会重建并重新标活跃。
-      // 先标非活跃再广播 (mark 自带一次 emitState 推送): 事件流里不出现
-      // status≠ready 但 tunnel.active=true 的 stale 帧, renderer 不会
-      // 闪一帧「已建立」再翻「等待连接」(review: PR #715 收官审查 P2)。
-      markAgentProxyTunnelInactive(snap.config.id);
+      // 主连接断连 / 重连中: 隧道保活挂起 (存活的独立隧道连接不拆 — 它
+      // 可能还在正常服务 LLM 流量); 主连接恢复 ready 时上面的 apply 恢复
+      // 保活。状态帧由 keeper 经 onState 汇报, 不在这里手工翻转。
+      handleAgentProxyMainHostDown(snap.config.id);
       const host = getPool().get(snap.config.id);
       broadcastStatus(host ? host.snapshot() : snap);
     }
   });
   // agent-proxy 内部状态 (隧道成败 / 端口) 变化 → 推一版最新 snapshot,
-  // 让 detail 面板的隧道状态行即时刷新。
+  // 让 detail 面板的隧道状态行即时刷新。隧道走独立 SSH 连接 (与控制面
+  // 隔离, 大流量不拖累 MCP/transport), 共享同一个 host-key store。
   initAgentProxy({
     broadcast: (hostId) => {
       const host = getPool().get(hostId);
       if (host) broadcastStatus(host.snapshot());
     },
+    createTunnelHost: (cfg) =>
+      new RemoteHost(cfg, { logger: poolLogger, hostKeys: getSharedHostKeyStore() }),
+    getMainHost: (hostId) => getPool().get(hostId) ?? null,
   });
 
   ipcMain.handle(REMOTE_SSH_INVOKE.LIST, async () => {
@@ -746,6 +781,14 @@ export function registerRemoteSshIpc(): void {
   ipcMain.handle(REMOTE_SSH_INVOKE.DISCONNECT, async (_event, args: unknown) => {
     const obj = requireObject(args);
     const id = requireString(obj.id, 'id');
+    // 显式断开 = 切断这台机器的全部 SSH 连通 — 独立隧道连接一并拆
+    // (与断线/重连的 pause 语义区分, review: PR #992 codex-connector P1)。
+    await teardownAgentProxyOnUserDisconnect(id).catch((err) => {
+      log.warn('agent-proxy tunnel teardown on user disconnect failed', {
+        hostId: id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
     await getPool().disconnect(id);
     return { host: getPool().get(id)?.snapshot() ?? null };
   });
@@ -840,7 +883,7 @@ export function registerRemoteSshIpc(): void {
     // ~/.codex/auth.json on the remote (synced via "Sync auth").
     //
     // agentProxy pref 开启时把代理 env 一并注入 (quick test 因此同时验证
-    // 隧道链路是否可用): claude 走 envBlock (gatekeeper 只收大写), codex
+    // 代理链路是否可用): claude 走 envBlock (gatekeeper 只收大写), codex
     // 的 wrapper 统一 source agent-proxy.env marker, 与 daemon 行为一致。
     let envBlock: string | null = null;
     if (agentKind === 'claude-code') {
@@ -851,18 +894,26 @@ export function registerRemoteSshIpc(): void {
           'Cindy AI is not connected in Cindy; connect it in Settings → Model Providers first',
         );
       }
-      const proxyTunnel = await ensureAgentProxyTunnel(host);
-      const envWithProxy = proxyTunnel
-        ? { ...env, ...buildAgentProxyEnvUppercase(proxyTunnel.remotePort) }
-        : env;
+      // tunnel 模式内部会等隧道 armed (超时抛错, fail-closed 不静默直连);
+      // env 模式直接注入用户给的 URL。
+      const proxyEnv = await getRemoteAgentProxyEnvUppercase(host);
+      const envWithProxy = proxyEnv ? { ...env, ...proxyEnv } : env;
       envBlock = serializeEnvBlock(envWithProxy);
     } else {
       // codex one-shot: wrapper 读的是 marker 文件而非直接 env — 先跑
-      // reconcile (隧道 + marker 对账), 保证 quick test 与真实 daemon 链路一致。
+      // reconcile (marker 对账), 保证 quick test 与真实 daemon 链路一致。
       // markerChanged && !daemonRestarted = 旧 daemon 活着跑旧 env, marker 已
       // 回滚 — one-shot 若继续会 source 不到新 proxy marker 而直连, 与
       // daemon-probe 路径的 fail-closed 不一致 (codex R12 P1): 显式失败。
+      // deferredForLiveTurn = 有远端任务在跑, 对账推迟 — quick test 会以
+      // 旧 env 运行, 提示用户稍后再试而不是 mid-turn 杀 daemon。
       const reconciled = await reconcileCodexAgentProxyEnv(host);
+      if (reconciled.deferredForLiveTurn) {
+        throwIpcError(
+          'INTERNAL',
+          'agent-proxy settings changed while a remote turn is running; quick test deferred — retry after the current task finishes',
+        );
+      }
       if (reconciled.markerChanged && !reconciled.daemonRestarted) {
         throwIpcError(
           'INTERNAL',
@@ -1566,8 +1617,9 @@ function shellQuoteSh(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
-/** Tear down all live connections. Hook into onQuit. */
+/** Tear down all live connections (含 agent-proxy 隧道专用连接). Hook into onQuit. */
 export async function disposeRemoteSshPool(): Promise<void> {
+  await disposeAllTunnels().catch(() => undefined);
   if (!pool) return;
   await pool.dispose();
   pool = null;

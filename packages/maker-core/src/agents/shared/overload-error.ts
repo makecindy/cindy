@@ -27,6 +27,23 @@
  *    与 network-error 两端一致性同款惯例）。修改 pattern 时两处同步。
  */
 
+/**
+ * 过载 error 事件上带的**稳定 reason key**。
+ *
+ * 判定依据按进程边界分层：main 侧（goal-host / IM）直接消费 error data，吃 codex 的
+ * 原始 `codexErrorInfo` tag；renderer 隔着 IPC 投影，吃这个我们自己定义的 key。
+ * 后者不随 vendor 协议演进而变，也不用把 vendor 枚举搬进 renderer bundle。
+ *
+ * 走 `reason` 这个既有通道而不是新增字段：`reason` 本就是「maker-core 用稳定 key 告诉
+ * renderer 这是什么错误」的现成语义（`empty-response` / `turn-failed` 同款），store 侧
+ * 已随 error 一起清理，不必再引入一条平行的清理链（漏清会让过载标记残留到下一条
+ * 非过载错误上）。
+ *
+ * renderer 侧有同名常量镜像（`apps/desktop/src/renderer/utils/overloadError.ts`），
+ * 两处同步。
+ */
+export const UPSTREAM_OVERLOAD_REASON = 'upstream-overload';
+
 /** 过载形态。决定由谁重试，以及用户看到哪条文案。 */
 export type OverloadErrorKind = 'capacity' | 'overloaded';
 
@@ -35,8 +52,23 @@ export interface OverloadError {
 }
 
 /**
- * 识别服务过载类错误。`errorStatus` 传 translator 已抽出的 HTTP 状态码时，529
- * 直接判定为 `overloaded`（比文本匹配可靠）。
+ * 识别服务过载类错误。判定依据按可靠性排序，命中即返回：
+ *
+ * 1. `codexErrorInfoTag`（最可靠）：Codex app-server 的结构化错误标识，
+ *    `serverOverloaded` 即上游临时过载。**这是 Codex 侧的首选依据** ——
+ *    详见下面「为什么不能只靠文案」。
+ * 2. `errorStatus === 529`：Anthropic 的 HTTP 状态码。
+ * 3. 文案 pattern：老 daemon（不发 `codexErrorInfo`）与 Anthropic 侧的兜底。
+ *
+ * **为什么不能只靠文案**：`Selected model is at capacity. Please try a different
+ * model.` 是 codex 二进制里硬编码的用户可见提示语（`CodexErr::ServerOverloaded`
+ * 上的 `#[error(...)]`，见 codex-rs/protocol/src/error.rs），不是 API 契约。
+ * codex 改一次措辞，靠它驱动的整套退避重投就**静默失效**：用户回到秒失败，日志
+ * 里没有任何东西指向原因，而用同一句文案写的测试仍然全绿。Cindy 捆绑 codex 并
+ * 跟着升级，所以这不是假想风险。结构化 tag 由 schema 承诺，不随文案漂移。
+ *
+ * 文案 pattern 仍然**保留**而不是删掉：远端可能跑着旧 daemon，Anthropic 侧也只有
+ * 文案和状态码可用。它从「唯一依据」降级为「兜底」。
  *
  * pattern 说明：capacity 要求 `at capacity` 精确短语，避免误伤业务文案里的
  * "capacity"（如缓存容量、队列容量）；overloaded 认 529 状态码与 Anthropic 的
@@ -46,7 +78,9 @@ export interface OverloadError {
 export function parseOverloadError(
   message: string,
   errorStatus?: number,
+  codexErrorInfoTag?: string,
 ): OverloadError | null {
+  if (codexErrorInfoTag === 'serverOverloaded') return { kind: 'capacity' };
   if (errorStatus === 529) return { kind: 'overloaded' };
   if (/\bat capacity\b/i.test(message)) return { kind: 'capacity' };
   if (/\boverloaded_error\b|\b529\b/.test(message)) return { kind: 'overloaded' };
@@ -54,8 +88,12 @@ export function parseOverloadError(
 }
 
 /** 是否是服务过载类错误。只需布尔判定时用这个，省掉解构。 */
-export function isOverloadErrorMessage(message: string, errorStatus?: number): boolean {
-  return parseOverloadError(message, errorStatus) !== null;
+export function isOverloadErrorMessage(
+  message: string,
+  errorStatus?: number,
+  codexErrorInfoTag?: string,
+): boolean {
+  return parseOverloadError(message, errorStatus, codexErrorInfoTag) !== null;
 }
 
 /**

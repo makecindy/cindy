@@ -161,6 +161,7 @@ import { GhostExternalLinkGate, GhostPreviewGate, resolveGhostPanelMedia } from 
 import {
   ghostSecretSaved,
   readGhostSecret,
+  getProviderSecretStore,
   readGhostSecretTail,
   removeGhostSecret,
   removeGhostSecrets,
@@ -189,7 +190,9 @@ import {
   markGhostRecentlyUsed,
 } from './ghostRecentUsageStore.js';
 import { getCindyProxyMediaService } from '../mcp-integrations/cindyProxyMedia.js';
-import type { GatewayImageModel } from '../cindy-proxy-media/types.js';
+import { ImageChannelRegistry } from './imageChannelRegistry.js';
+import { createGeminiImageChannel } from './geminiImageClient.js';
+import { createGatewayImageClient } from '../cindy-proxy-media/api/gatewayImageClient.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { ingestMedia, supportedMime } from '../cindy-media/ingest.js';
@@ -1692,6 +1695,17 @@ function getCatalogMediaConfig(kind: 'image' | 'video'): CindyMediaCatalogConfig
       (providerId, modelId) =>
         isProviderDisabled(access, providerId) ||
         isModelDisabled(access, providerId, modelId),
+      // 执行通道凭证就绪过滤(未就绪的来源整段不进白名单,见 imageChannelRegistry
+      // 头注)。图像走 registry;视频通道今天只有 xd 一家、不经 registry,但同样要求
+      // 网关能力在场 —— 未登录本地模式(canUseCindyGateway=false)下 xd 的视频型号
+      // 不能进清单,否则用户在本地模式钉选/点名视频型号就是"可选但必失败"
+      // (2026-07 review:与图像的就绪语义对齐)。
+      kind === 'image'
+        ? (providerId) => getImageChannelRegistry().isProviderReady(providerId)
+        : (providerId) => providerId !== 'xd' || getAppCapabilities().canUseCindyGateway,
+      // 编辑就绪过滤:仅支持生成的来源(supportsEdit: false)的模型不进编辑清单,
+      // 防用户把该型号钉到 image.edit 偏好后在 editImage 路径拿到确定性 400。
+      kind === 'image' ? (providerId) => getImageChannelRegistry().isProviderEditReady(providerId) : undefined,
     );
   } catch (err) {
     // 目录读取异常 = 拿不到可用性证明,同「空清单」处理(不静默顶一份旧名单)。
@@ -1715,8 +1729,8 @@ function assertMediaModelStillEnabled(kind: 'image' | 'video', model: string): v
   if (!getCatalogMediaConfig(kind).models.some((m) => m.id === model)) {
     throw new Error(
       kind === 'image'
-        ? '图像模型已在设置中停用,本次生成已取消'
-        : '视频模型已在设置中停用,本次生成已取消',
+        ? '图像模型不可用(可能已停用或来源凭证未就绪),本次生成已取消'
+        : '视频模型不可用(可能已停用或来源凭证未就绪),本次生成已取消',
     );
   }
 }
@@ -1814,6 +1828,107 @@ const GHOST_ASPECT_TO_GATEWAY_SIZE: Record<GhostImageAspectRatio, string> = {
   '2:3': '1024x1536',
 };
 
+/**
+ * 图像执行通道注册表单例(见 imageChannelRegistry.ts 头注)。xd 通道在此登记:
+ * ready 跟随网关能力(canUseCindyGateway;key 缺失时 requireApiKey 在派发时人话拒,
+ * 与历史行为一致),backend 是 cindyProxyMedia 的网关客户端,aspectRatio → 网关
+ * size 枚举的翻译在适配层完成(通道各家 wire 不同,意图翻译是通道自己的知识)。
+ * 后续来源(gemini / openai / xai)在各自 PR 里追加注册。
+ */
+let imageChannelRegistrySingleton: ImageChannelRegistry | null = null;
+function getImageChannelRegistry(): ImageChannelRegistry {
+  if (!imageChannelRegistrySingleton) {
+    const registry = new ImageChannelRegistry();
+    registry.register('xd', {
+      ready: () => getAppCapabilities().canUseCindyGateway,
+      generateImage: ({ model, prompt, aspectRatio }) =>
+        getCindyProxyMediaService().backend.generateImage({
+          model,
+          prompt,
+          // 不带画幅意图时不传 size,网关缺省 'auto'(模型自定)。
+          ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
+        }),
+      editImage: ({ model, prompt, imagePaths, aspectRatio }) =>
+        getCindyProxyMediaService().backend.editImage({
+          model,
+          prompt,
+          imagePaths,
+          // 改图的 auto 语义 = 跟随源图画幅,与放开之前行为一致。
+          ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
+        }),
+    });
+    // Gemini(BYO API key,generateContent wire):ready = key 已配置。停用轴
+    // 派发前重查经 beforeDispatch 注入(与 xd 通道的 cindyProxyMedia beforeDispatch
+    // 同语义 —— xd 的挂在网关客户端装配处,gemini 的挂在这里)。
+    registry.register('gemini', createGeminiImageChannel({
+      getApiKey: () => getProviderSecretStore().get('gemini'),
+      // googleapis 境外端点经 outboundFetch 吃系统代理:main 的裸 fetch 不读系统
+      // 代理设置,代理软件非 TUN 模式下会直连失败(xd 网关域名境内直连,不注)。
+      fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+      beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
+    }));
+    // OpenAI 平台 images API(BYO 平台 key;ChatGPT 订阅 OAuth 调不了平台面,实测
+    // 401/403 缺 scope):与 xd 网关同 wire(OpenAI-images 兼容面),整个客户端复用,
+    // 只换 baseUrl/品牌话术/凭证读取。目录 id 带 openai/ 前缀(跨供应商契约),
+    // 上游只认裸 id,适配层剥前缀。
+    const openaiImagesClient = createGatewayImageClient({
+      getApiKey: () => getProviderSecretStore().get('openai-images'),
+      // 境外端点吃系统代理(outboundFetch):main 的裸 fetch 不读系统代理设置,
+      // 代理软件非 TUN 模式下会直连失败(2026-07 review;xd 网关通道不注 ——
+      // 网关域名境内直连,与现状一致)。
+      fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+      proxy: {
+        baseUrl: 'https://api.openai.com',
+        generatePath: '/v1/images/generations',
+        editPath: '/v1/images/edits',
+      },
+      brandLabel: 'OpenAI',
+      missingKeyMessage:
+        'OpenAI 图像 API key 未配置,请到「设置 → 模型供应商 → OpenAI」填入后重试',
+      beforeDispatch: (model) => assertMediaModelStillEnabled('image', `openai/${model}`),
+    });
+    const stripOpenaiPrefix = (id: string) =>
+      id.startsWith('openai/') ? id.slice('openai/'.length) : id;
+    registry.register('openai', {
+      // trim-nonempty 与 gemini 通道同口径:空白 key 不算就绪。
+      ready: () => (getProviderSecretStore().get('openai-images')?.trim() ?? '') !== '',
+      generateImage: ({ model, prompt, aspectRatio }) =>
+        openaiImagesClient.generateImage({
+          model: stripOpenaiPrefix(model),
+          prompt,
+          ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
+        }),
+      editImage: ({ model, prompt, imagePaths, aspectRatio }) =>
+        openaiImagesClient.editImage({
+          model: stripOpenaiPrefix(model),
+          prompt,
+          imagePaths,
+          ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
+        }),
+    });
+    imageChannelRegistrySingleton = registry;
+  }
+  return imageChannelRegistrySingleton;
+}
+
+/**
+ * 按解析出的模型定位归属来源并取执行通道。归属 = 白名单条目的 providerId
+ * (cindyMediaCatalog first-wins 定格);白名单查无该模型时视同已停用
+ * (assertMediaModelStillEnabled 同窗口语义)。
+ */
+function resolveImageChannelForModel(model: string, operation: 'generate' | 'edit' = 'generate') {
+  const entry = getCatalogMediaConfig('image').models.find((m) => m.id === model);
+  if (!entry) {
+    const slash = model.indexOf('/');
+    if (slash > 0) getImageChannelRegistry().resolve(model.slice(0, slash));
+    throw new Error('图像模型不可用,本次生成已取消');
+  }
+  if (operation === 'edit' && !entry.supportsEdit) {
+    throw new Error(`图像来源 ${entry.providerId} 不支持图像编辑,请在设置中选择支持编辑的来源`);
+  }
+  return getImageChannelRegistry().resolve(entry.providerId);
+}
+
 /** XD Gateway 图片响应 → 字节 + mime(gen / edit 同一解码口径)。 */
 function decodeImageResponse(res: {
   data: Array<{ b64_json?: string }>;
@@ -1831,19 +1946,18 @@ function decodeImageResponse(res: {
 export function getGhostCindySlot(): GhostCindySlot {
   if (!cindySlotSingleton) {
     cindySlotSingleton = new GhostCindySlot({
-      getGhost: (id) =>
-        getAppCapabilities().canUseCindyGateway ? findAvailableGhost(id) : null,
-      // model 已在 modelSlot 按白名单校验(白名单 = GatewayImageModel 全集),
-      // 这里收窄类型是安全的。
+      getGhost: (id) => findAvailableGhost(id),
+      // model 已在 modelSlot 按白名单校验;归属来源(providerId)按白名单条目
+      // 定位,经 imageChannelRegistry 取对应执行通道(2026-07 图像多来源)。
       generateImage: async ({ prompt, model, aspectRatio }) => {
         try {
           assertMediaModelStillEnabled('image', model);
+          const channel = resolveImageChannelForModel(model);
           return decodeImageResponse(
-            await getCindyProxyMediaService().backend.generateImage({
-              model: model as GatewayImageModel,
+            await channel.generateImage({
+              model,
               prompt,
-              // 不带画幅意图时不传 size,网关缺省 'auto'(模型自定)。
-              ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
+              ...(aspectRatio ? { aspectRatio } : {}),
             }),
           );
         } catch (err) {
@@ -1853,14 +1967,13 @@ export function getGhostCindySlot(): GhostCindySlot {
       editImage: async ({ prompt, model, imagePaths, aspectRatio }) => {
         try {
           assertMediaModelStillEnabled('image', model);
+          const channel = resolveImageChannelForModel(model, 'edit');
           return decodeImageResponse(
-            await getCindyProxyMediaService().backend.editImage({
-              model: model as GatewayImageModel,
+            await channel.editImage({
+              model,
               prompt,
               imagePaths,
-              // 同 generateImage:不带画幅意图时不传 size,网关缺省 'auto'
-              // (改图的 auto 语义 = 跟随源图画幅,与放开之前行为一致)。
-              ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
+              ...(aspectRatio ? { aspectRatio } : {}),
             }),
           );
         } catch (err) {
@@ -3480,7 +3593,8 @@ export function registerGhostIpc(): void {
     }
     // 白名单按能力键类目取(video.* 钉的是视频清单里的 alias)。
     const cfg = (capability as string).startsWith('video.') ? getCatalogVideoConfig() : getCatalogImageConfig();
-    if (model !== null && !cfg.models.some((m) => m.id === model)) {
+    const isEditCap = capability === 'image.edit';
+    if (model !== null && !cfg.models.some((m) => m.id === model && (!isEditCap || m.supportsEdit))) {
       throwIpcError('INVALID_PARAMS', 'model must be null or a catalog model of the capability category');
     }
     const overrides = writeGhostCindyOverride(

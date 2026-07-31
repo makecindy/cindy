@@ -21,7 +21,7 @@
  * useLayoutEffect(paint 前),不会闪一帧再跳位(规则 7)。
  */
 
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { SlidersHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -34,6 +34,7 @@ import {
   type BrowserCommentDesignPreviewPayload,
   type BrowserCommentStyleChange,
 } from '../../../../../shared/browserComment';
+import type { BrowserCommentEditorDraft } from './browserCommentEditorDraft';
 
 interface BrowserCommentPopoverProps {
   /** 锚点(slot 内坐标,px)。 */
@@ -41,6 +42,9 @@ interface BrowserCommentPopoverProps {
   submitting: boolean;
   /** 样式编辑基线(元素点选才有;null = 不显示样式编辑入口)。 */
   designBaseline: BrowserCommentDesignBaseline | null;
+  /** 由稳定的 Host 控制器持有，避免 WebView LRU 换代卸载气泡时丢失输入。 */
+  editorDraft: BrowserCommentEditorDraft;
+  onEditorDraftChange: (draft: BrowserCommentEditorDraft) => void;
   onSubmit: (text: string, styleChanges?: BrowserCommentStyleChange[]) => void;
   onCancel: () => void;
   /** 样式编辑实时预览(全量当前编辑状态)。 */
@@ -105,17 +109,17 @@ export function BrowserCommentPopover({
   anchor,
   submitting,
   designBaseline,
+  editorDraft,
+  onEditorDraftChange,
   onSubmit,
   onCancel,
   onPreviewDesign,
   onResetDesign,
 }: BrowserCommentPopoverProps) {
   const { t } = useTranslation();
-  const [text, setText] = useState('');
-  // 样式编辑状态:只存"被用户改过"的属性(与 baseline 的 diff)。
+  // 展开 / 收起只影响本次挂载的布局；真正的文本与样式草稿由 Host 控制器持有。
   const [showStyles, setShowStyles] = useState(false);
-  const [styleEdits, setStyleEdits] = useState<Record<string, string>>({});
-  const [textEdit, setTextEdit] = useState<string | null>(null);
+  const { text, styleEdits, textEdit } = editorDraft;
   const rootRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   // 初始按锚点下方摆;useLayoutEffect 量完实际尺寸后 clamp,一次到位。
@@ -150,10 +154,14 @@ export function BrowserCommentPopover({
   const buildChanges = useCallback((): BrowserCommentStyleChange[] => {
     if (!designBaseline) return [];
     const changes: BrowserCommentStyleChange[] = [];
-    if (textEdit !== null && textEdit !== (designBaseline.editableText ?? '')) {
+    if (
+      designBaseline.editableText !== null &&
+      textEdit !== null &&
+      textEdit !== designBaseline.editableText
+    ) {
       changes.push({
         property: 'text content',
-        previousValue: designBaseline.editableText ?? '',
+        previousValue: designBaseline.editableText,
         value: textEdit,
       });
     }
@@ -179,36 +187,59 @@ export function BrowserCommentPopover({
         }
       }
       const textChanged =
-        nextText !== null && nextText !== (designBaseline.editableText ?? '');
+        designBaseline.editableText !== null &&
+        nextText !== null &&
+        nextText !== designBaseline.editableText;
       onPreviewDesign({ styles, text: textChanged ? nextText : null });
     },
     [designBaseline, onPreviewDesign],
   );
 
+  /**
+   * LRU 恢复草稿可能绑定到一个包含子元素、不能安全改写 textContent 的新
+   * target。此时旧 textEdit 与新 baseline 不兼容：预览必须发 null，并从
+   * Host 草稿中删除该字段，避免稍后提交虚假的文本变更或破坏子 DOM。
+   */
+  useEffect(() => {
+    if (!designBaseline || designBaseline.editableText !== null || textEdit === null) return;
+    onEditorDraftChange({ ...editorDraft, textEdit: null });
+  }, [designBaseline, editorDraft, onEditorDraftChange, textEdit]);
+
+  /**
+   * 预览由受控草稿派生，而不是只在 input handler 内发送。这样 WebView LRU
+   * 换代后，Popover 绑定新 target 的首次挂载也会自动重放恢复的文本 / CSS
+   * 编辑，保证页面截图与最终提交的 styleChanges 始终一致。
+   */
+  useEffect(() => {
+    pushPreview(styleEdits, textEdit);
+  }, [pushPreview, styleEdits, textEdit]);
+
   const setStyleEdit = useCallback(
     (property: string, value: string) => {
-      setStyleEdits((prev) => {
-        const next = { ...prev, [property]: value };
-        pushPreview(next, textEdit);
-        return next;
+      const next = { ...styleEdits, [property]: value };
+      onEditorDraftChange({
+        ...editorDraft,
+        styleEdits: next,
       });
     },
-    [pushPreview, textEdit],
+    [editorDraft, onEditorDraftChange, styleEdits],
   );
 
   const handleTextEdit = useCallback(
     (value: string) => {
-      setTextEdit(value);
-      pushPreview(styleEdits, value);
+      onEditorDraftChange({ ...editorDraft, textEdit: value });
     },
-    [pushPreview, styleEdits],
+    [editorDraft, onEditorDraftChange],
   );
 
   const handleResetStyles = useCallback(() => {
-    setStyleEdits({});
-    setTextEdit(null);
+    onEditorDraftChange({
+      ...editorDraft,
+      styleEdits: {},
+      textEdit: null,
+    });
     onResetDesign();
-  }, [onResetDesign]);
+  }, [editorDraft, onEditorDraftChange, onResetDesign]);
 
   const changes = buildChanges();
   const canSubmit = (text.trim().length > 0 || changes.length > 0) && !submitting;
@@ -249,7 +280,7 @@ export function BrowserCommentPopover({
       <textarea
         ref={textareaRef}
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => onEditorDraftChange({ ...editorDraft, text: e.target.value })}
         onKeyDown={handleKeyDown}
         rows={3}
         disabled={submitting}

@@ -224,6 +224,18 @@ describe('mapAnthropicSdkModels', () => {
     expect(out[0].model.name).toBe('Sonnet 5'); // dated 先出现,first-wins
   });
 
+  it('[1m] 长上下文后缀归一并去重(顶栏误报「已断开」回归):目录基线按裸 id 命中', () => {
+    const out = mapAnthropicSdkModels([
+      { value: 'claude-fable-5[1m]', displayName: 'Fable 5' },
+      { value: 'claude-fable-5', displayName: 'Fable 5 dup' },
+      { value: 'claude-opus-4-8-20260401[1m]', displayName: 'Opus 4.8' },
+    ]);
+    expect(out.map((e) => e.model.id)).toEqual(['claude-fable-5', 'claude-opus-4-8']);
+    expect(out[0].model.name).toBe('Fable 5'); // first-wins
+    // 归一化前 [1m] id 查不到 cindyModelMeta 基线,会塌回合成三档;归一化后按裸 id 命中。
+    expect(out[0].model.efforts).toContain('xhigh');
+  });
+
   it('坏输入安全:非数组 / 空条目 / 缺 value 全部跳过', () => {
     expect(mapAnthropicSdkModels(null)).toEqual([]);
     expect(mapAnthropicSdkModels([null, {}, { value: '' }, 42])).toEqual([]);
@@ -273,6 +285,8 @@ describe('mapAnthropicHttpModels', () => {
     expect(out[0].explicitContextWindow).toBe(900_000);
     expect(out[0].model).toMatchObject({
       contextWindow: 900_000, // max_input_tokens 优先于 1M 规则
+      // HTTP 明说的窗口是已核实的真实上限,可用于收敛运行期上报值。
+      contextWindowVerified: true,
       efforts: ['low', 'high', 'max'],
       supportsFastMode: true,
     });
@@ -289,6 +303,15 @@ describe('mapAnthropicHttpModels', () => {
       ['claude-opus-4-5', 200_000],
       ['claude-sonnet-4-5', 200_000],
     ]);
+  });
+
+  it('未知新模型的启发式窗口不标记为已核实(不得拿它收敛上报值)', () => {
+    const out = mapAnthropicHttpModels([
+      { id: 'claude-sonnet-9-unknown', display_name: 'Sonnet 9', type: 'model' },
+    ]);
+    // 目录没有该模型、HTTP 也没给 max_input_tokens → 1M 是猜的,只能展示。
+    expect(out[0].model.contextWindow).toBe(1_000_000);
+    expect(out[0].model.contextWindowVerified).toBeUndefined();
   });
 
   it('HTTP 未知新模型缺 capability 时同样使用 5 档临时基线', () => {
@@ -538,6 +561,47 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
       releaseWrite();
       writeSpy.mockRestore();
     }
+  });
+
+  it('磁盘缓存脏 id 自愈:历史缓存里的 [1m] 后缀 id 加载时归一化 + 去重 + 记账跟随', async () => {
+    const cacheDir = path.join(TEST_USER_DATA, 'model-discovery');
+    await fsp.mkdir(cacheDir, { recursive: true });
+    const dirtyModel = (id: string, name: string, sortOrder: number) => ({
+      id,
+      name,
+      group: 'anthropic',
+      sortOrder,
+      contextWindow: 1_000_000,
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
+      supportsFastMode: false,
+      status: 'active',
+    });
+    await fsp.writeFile(
+      path.join(cacheDir, 'anthropic-models.json'),
+      JSON.stringify({
+        fetchedAt: '2026-07-30T00:00:00.000Z',
+        models: [
+          dirtyModel('claude-fable-5[1m]', 'Fable 5', 0),
+          dirtyModel('claude-fable-5', 'Fable 5 dup', 1),
+          dirtyModel('claude-opus-4-8', 'Opus 4.8', 2),
+        ],
+        explicitWindows: { 'claude-fable-5[1m]': 800_000 },
+        explicitEffortModelIds: ['claude-fable-5[1m]'],
+      }),
+      'utf-8',
+    );
+
+    await loadAnthropicModelsFromDiskCache();
+    // 脏 id 归一化 + first-wins 去重:选中 claude-fable-5 的会话恢复来源匹配。
+    expect(anthropicIds()).toEqual(['claude-fable-5', 'claude-opus-4-8']);
+    expect(anthropicModel('claude-fable-5')?.name).toBe('Fable 5');
+
+    // explicitWindows / explicitEffort 记账按归一化 id 跟随:后续 SDK 捕获(注册表仍报
+    // [1m] 变体)归一化后能命中记账——精确窗口不被打回猜测值,已精化档位不被抹掉。
+    noteAnthropicSdkSupportedModels([{ value: 'claude-fable-5[1m]', displayName: 'Fable 5' }]);
+    expect(anthropicModel('claude-fable-5')?.contextWindow).toBe(800_000);
+    expect(anthropicModel('claude-fable-5')?.efforts).toEqual(['low', 'medium', 'high']);
   });
 
   it('退化捕获只合并同 id 能力、不缩减清单;正常演进照常生效', () => {
@@ -867,6 +931,89 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
     // SDK 覆盖能力字段,但窗口保留 HTTP 明说的 900k,不回退 contextWindowFor 的 1M。
     expect(anthropicModel('claude-opus-4-8')).toMatchObject({
       contextWindow: 900_000,
+      efforts: ['low', 'high'],
+    });
+  });
+
+  // 磁盘缓存里可能带着上一版目录算出的 contextWindowVerified。若该模型在新版目录里被移除、
+  // 且不在 explicitWindows(命中目录的窗口不进那张表)里,重载会走启发式分支 —— 残留的
+  // true 会盖在猜测值上,得到一个「已核实」的启发式窗口。Haiku 这种残留 200K 而运行期真实
+  // 1M 的情形,反倒会把上报值压小,正是本 PR 要消除的失败模式。
+  it('磁盘缓存重载抹掉旧 provenance,不让启发式窗口冒充已核实', async () => {
+    const cacheDir = path.join(TEST_USER_DATA, 'model-discovery');
+    await fsp.mkdir(cacheDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(cacheDir, 'anthropic-models.json'),
+      JSON.stringify({
+        fetchedAt: '2026-07-19T00:00:00.000Z',
+        models: [
+          {
+            // 目录里没有这个 id、也没有 explicitWindows 记录 → 重载必须落到启发式。
+            id: 'claude-haiku-removed-from-catalog',
+            name: 'Haiku (removed)',
+            group: 'anthropic',
+            sortOrder: 0,
+            contextWindow: 200_000,
+            contextWindowVerified: true, // 上一版目录留下的陈旧标记
+            efforts: [],
+            defaultEffort: null,
+            supportsFastMode: false,
+            status: 'active',
+          },
+        ],
+      }),
+      'utf-8',
+    );
+    await loadAnthropicModelsFromDiskCache();
+
+    const reloaded = anthropicModel('claude-haiku-removed-from-catalog');
+    // 窗口按启发式重算(id 含 haiku → 200K),但**不得**再声称已核实。
+    expect(reloaded?.contextWindow).toBe(200_000);
+    expect(reloaded?.contextWindowVerified).toBeUndefined();
+  });
+
+  // 目录里**没有**的新模型:HTTP 的 max_input_tokens 是它唯一的已核实窗口。SDK 通道
+  // 重新映射时走「无 explicit」分支(落到启发式、不带标记),恢复 explicitWindows 时
+  // 只覆盖 contextWindow 会把 provenance 静默擦掉 —— 之后就不再用这个真实上限收敛
+  // 虚高的上报值了。
+  it('SDK 重映射不得擦掉 HTTP 明说窗口的 provenance(目录未覆盖的新模型)', async () => {
+    const cacheDir = path.join(TEST_USER_DATA, 'model-discovery');
+    await fsp.mkdir(cacheDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(cacheDir, 'anthropic-models.json'),
+      JSON.stringify({
+        fetchedAt: '2026-07-19T00:00:00.000Z',
+        models: [
+          {
+            id: 'claude-brandnew-9',
+            name: 'Brand New 9',
+            group: 'anthropic',
+            sortOrder: 0,
+            contextWindow: 640_000,
+            contextWindowVerified: true,
+            efforts: ['low', 'medium', 'high'],
+            defaultEffort: 'high',
+            supportsFastMode: false,
+            status: 'active',
+          },
+        ],
+        explicitWindows: { 'claude-brandnew-9': 640_000 },
+      }),
+      'utf-8',
+    );
+    await loadAnthropicModelsFromDiskCache();
+    expect(anthropicModel('claude-brandnew-9')).toMatchObject({
+      contextWindow: 640_000,
+      contextWindowVerified: true,
+    });
+
+    noteAnthropicSdkSupportedModels([
+      { value: 'claude-brandnew-9', displayName: 'Brand New 9', supportsEffort: true, supportedEffortLevels: ['low', 'high'] },
+    ]);
+    expect(anthropicModel('claude-brandnew-9')).toMatchObject({
+      contextWindow: 640_000,
+      // 关键:标记必须一起恢复,不能只留数值。
+      contextWindowVerified: true,
       efforts: ['low', 'high'],
     });
   });
