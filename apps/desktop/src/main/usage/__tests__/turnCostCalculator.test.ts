@@ -150,6 +150,32 @@ describe('computeGatewayTurnCost', () => {
       ),
     ).toBeCloseTo(12.7);
   });
+
+  it('uses the matching context-length band for all token classes', () => {
+    expect(
+      computeGatewayTurnCost(
+        {
+          inputTokens: 210_000,
+          outputTokens: 10_000,
+          cacheReadTokens: 20_000,
+          cacheCreateTokens: 10_000,
+        },
+        quote('m', 2, 8, {
+          cacheReadPerMtok: 0.2,
+          cacheCreatePerMtok: 2.5,
+          inputTokenPriceBands: [
+            {
+              minInputTokens: 200_001,
+              inputPerMtok: 4,
+              outputPerMtok: 12,
+              cacheReadPerMtok: 0.4,
+              cacheCreatePerMtok: 5,
+            },
+          ],
+        }),
+      ),
+    ).toBeCloseTo(1.018);
+  });
 });
 
 describe('resolveTurnCost', () => {
@@ -271,6 +297,34 @@ describe('resolveTurnCost', () => {
     });
   });
 
+  it('uses a provider reference or user override estimate when the SDK reports no cost', () => {
+    const result = resolveTurnCost({
+      rawModel: 'custom-model',
+      tokens: {
+        inputTokens: 1_000_000,
+        outputTokens: 100_000,
+        cacheReadTokens: 0,
+        cacheCreateTokens: 0,
+      },
+      sdkCostDelta: 0,
+      pricing: catalog(
+        quote('custom-model', 2, 10, {
+          providerId: 'anthropic',
+          source: 'user-override',
+          approximate: true,
+        }),
+      ),
+      context: PROVIDER_API,
+    });
+    expect(result.source).toBe('reference');
+    expect(result.money).toMatchObject({
+      amount: 3,
+      currency: 'USD',
+      approximate: true,
+      kind: 'value-estimate',
+    });
+  });
+
   it('does not apply a Gateway discount to provider SDK cost facts', () => {
     const result = resolveTurnCost({
       rawModel: 'codex/gpt-5.5',
@@ -371,6 +425,15 @@ describe('resolveClaudeTurnCostSinks', () => {
 
 describe('subscription value and usage details', () => {
   it('estimates Anthropic subscription value from USD reference pricing', () => {
+    const pricing = catalog(
+      quote('claude-opus-4-8', 5, 25, {
+        providerId: 'anthropic',
+        source: 'provider-reference',
+        approximate: true,
+        cacheReadPerMtok: 0.5,
+        cacheCreatePerMtok: 6.25,
+      }),
+    );
     const value = estimateClaudeSubscriptionTurnValue(
       [
         resolvedModel('claude-opus-4-8', {
@@ -379,6 +442,7 @@ describe('subscription value and usage details', () => {
         }),
       ],
       'global',
+      pricing,
     );
     expect(value).toMatchObject({
       amount: 10,
@@ -397,10 +461,11 @@ describe('subscription value and usage details', () => {
           resolvedModel('claude-unknown-9', { inputTokens: 1_000_000 }),
         ],
         'global',
+        {},
       ),
     ).toBeNull();
     expect(
-      estimateClaudeSubscriptionTurnValue([resolvedModel('claude-opus-4-8')], 'global'),
+      estimateClaudeSubscriptionTurnValue([resolvedModel('claude-opus-4-8')], 'global', {}),
     ).toBeNull();
   });
 

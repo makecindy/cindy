@@ -53,6 +53,22 @@ export {
   loadCatalog,
   loadCatalogWithSource,
 } from './source.js';
+
+export {
+  findModelRegistryRoute,
+  resolveModelReferencePrice,
+} from './modelRegistry.js';
+export type {
+  ResolvedModelReferencePrice,
+  ResolveModelReferencePriceOptions,
+} from './modelRegistry.js';
+export type {
+  ModelReferencePrice,
+  ModelReferencePriceSource,
+  ModelRegistry,
+  ModelRegistryEntry,
+  ModelRegistryRoute,
+} from '@cindy/model-access-protocol';
 export type {
   CatalogSourceConfig,
   CatalogIO,

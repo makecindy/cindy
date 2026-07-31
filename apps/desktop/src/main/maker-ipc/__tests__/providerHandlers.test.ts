@@ -100,6 +100,19 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
     scanLocalCli: vi.fn(async () => []),
     setModelsDisabled: vi.fn(() => {}),
     setProviderDisabled: vi.fn(() => {}),
+    readModelPriceOverride: vi.fn((target) => ({
+      target,
+      editable: target.providerId !== 'xd',
+      reference: null,
+      effective: null,
+      override: null,
+      conflict: false,
+      registryUpdatedAt: null,
+    })),
+    writeModelPriceOverride: vi.fn(() => {}),
+    clearModelPriceOverride: vi.fn(() => {}),
+    stageClearProviderModelPriceOverrides: vi.fn(() => () => true),
+    broadcastPricingChanged: vi.fn(() => {}),
     ...over,
   };
 }
@@ -1029,6 +1042,7 @@ describe('provider:custom:* CRUD handlers', () => {
         keys.delete(agent);
         return { success: true };
       }),
+      stageClearProviderModelPriceOverrides: vi.fn(() => () => true),
     }));
     await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig);
     raw!.exec(`
@@ -1267,6 +1281,8 @@ describe('provider:custom:* CRUD handlers', () => {
     expect(await listCustomProviders()).toEqual([]);
     expect(keys.size).toBe(0);
     expect(calls).toEqual(['cancel', 'clear']);
+    expect(deps.stageClearProviderModelPriceOverrides).toHaveBeenCalledWith('openrouter');
+    expect(deps.broadcastPricingChanged).toHaveBeenCalled();
 
     await expect(harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, '')).rejects.toThrow(
       /INVALID_PARAMS/,
@@ -1354,6 +1370,80 @@ describe('provider:custom:* CRUD handlers', () => {
     await expect(del).resolves.toEqual({ ok: true });
     await expect(set).rejects.toThrow(/INVALID_PARAMS.*unknown providerId/);
     expect(deps.setModelsDisabled).not.toHaveBeenCalled();
+  });
+});
+
+describe('model price override handlers', () => {
+  const target = {
+    providerId: 'openrouter',
+    agent: 'codex' as const,
+    modelId: 'meta/llama-4',
+  };
+
+  it('reads and writes a catalog member through the trusted visual settings path', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      listProviders: async () => [
+        catalogView('openrouter', { codex: ['meta/llama-4'] }),
+      ],
+    });
+    registerProviderHandlers(harness, deps);
+
+    await harness.invoke(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_GET, target);
+    expect(deps.readModelPriceOverride).toHaveBeenCalledWith(target);
+
+    const desired = {
+      currency: 'USD' as const,
+      inputPerMtok: 1.25,
+      outputPerMtok: 5,
+      cacheReadPerMtok: null,
+    };
+    await harness.invoke(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_SET, target, desired);
+    expect(deps.writeModelPriceOverride).toHaveBeenCalledWith(target, desired);
+    expect(deps.broadcastPricingChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects unknown models, malformed prices, and XD sale-price overrides', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      listProviders: async () => [
+        catalogView('openrouter', { codex: ['meta/llama-4'] }),
+        catalogView('xd', { codex: ['gpt-5.5'] }),
+      ],
+    });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_GET, {
+        ...target,
+        modelId: 'missing',
+      }),
+    ).rejects.toThrow(/INVALID_PARAMS/);
+    await expect(
+      harness.invoke(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_SET, target, {
+        currency: 'USD',
+        inputPerMtok: -1,
+        outputPerMtok: 5,
+      }),
+    ).rejects.toThrow(/INVALID_PARAMS/);
+    await expect(
+      harness.invoke(
+        MAKER_INVOKE.MODEL_PRICE_OVERRIDE_SET,
+        { providerId: 'xd', agent: 'codex', modelId: 'gpt-5.5' },
+        { currency: 'USD', inputPerMtok: 1, outputPerMtok: 2 },
+      ),
+    ).rejects.toThrow(/server-controlled/);
+    expect(deps.writeModelPriceOverride).not.toHaveBeenCalled();
+  });
+
+  it('resets an orphaned sparse override without requiring the model to remain listed', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerProviderHandlers(harness, deps);
+
+    await harness.invoke(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_RESET, target);
+    expect(deps.clearModelPriceOverride).toHaveBeenCalledWith(target);
+    expect(deps.broadcastPricingChanged).toHaveBeenCalledTimes(1);
   });
 });
 

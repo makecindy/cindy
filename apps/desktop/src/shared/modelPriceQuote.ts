@@ -1,7 +1,10 @@
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
+import {
+  resolveModelReferencePrice,
+  type AgentKind,
+  type ModelRegistry,
+} from '@cindy/model-providers';
 
-import { getClaudeSubscriptionValueFallbackPrice } from './claudeSubscriptionValue.js';
-import { CODEX_SUBSCRIPTION_VALUE_PRICING } from './codexSubscriptionValue.js';
 import type { ModelAccessGatewayModel } from './modelAccess.js';
 import {
   gatewayCurrencyForRegion,
@@ -9,21 +12,6 @@ import {
   type ModelPricingCatalog,
 } from './regionalMoney.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from './subscriptionModels.js';
-
-const XAI_SUBSCRIPTION_VALUE_PRICING: Record<
-  string,
-  {
-    inputPerMtok: number;
-    outputPerMtok: number;
-    cacheReadPerMtok?: number;
-    cacheCreatePerMtok?: number;
-  }
-> = {
-  'grok-4.5': { inputPerMtok: 2, outputPerMtok: 6, cacheReadPerMtok: 0.5 },
-  'grok-4.3': { inputPerMtok: 3, outputPerMtok: 15 },
-  'grok-4.20': { inputPerMtok: 3, outputPerMtok: 15 },
-  'grok-code-fast': { inputPerMtok: 0.2, outputPerMtok: 1.5 },
-};
 
 function isNonNegativeFinite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
@@ -37,6 +25,57 @@ function normalizedCostDiscount(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 1
     ? value
     : undefined;
+}
+
+function gatewayInputTokenPriceBands(
+  model: ModelAccessGatewayModel,
+): ModelPriceQuote['inputTokenPriceBands'] {
+  const explicit = model.tieredPricing
+    ?.map((tier) => {
+      const inputPerMtok = perMtok(tier.inputCostPerToken);
+      const outputPerMtok = perMtok(tier.outputCostPerToken);
+      const cacheReadPerMtok = perMtok(tier.cacheReadInputTokenCost);
+      const cacheCreatePerMtok = perMtok(tier.cacheCreationInputTokenCost);
+      if (
+        inputPerMtok === undefined &&
+        outputPerMtok === undefined &&
+        cacheReadPerMtok === undefined &&
+        cacheCreatePerMtok === undefined
+      ) {
+        return null;
+      }
+      return {
+        minInputTokens: tier.range[0],
+        maxInputTokens: tier.range[1],
+        ...(inputPerMtok !== undefined ? { inputPerMtok } : {}),
+        ...(outputPerMtok !== undefined ? { outputPerMtok } : {}),
+        ...(cacheReadPerMtok !== undefined ? { cacheReadPerMtok } : {}),
+        ...(cacheCreatePerMtok !== undefined ? { cacheCreatePerMtok } : {}),
+      };
+    })
+    .filter((tier): tier is NonNullable<typeof tier> => tier !== null);
+  if (explicit?.length) return explicit;
+
+  const thresholdBands = [
+    {
+      minInputTokens: 200_001,
+      inputPerMtok: perMtok(model.inputCostPerTokenAbove200kTokens),
+      outputPerMtok: perMtok(model.outputCostPerTokenAbove200kTokens),
+      cacheReadPerMtok: perMtok(model.cacheReadInputTokenCostAbove200kTokens),
+    },
+    {
+      minInputTokens: 272_001,
+      inputPerMtok: perMtok(model.inputCostPerTokenAbove272kTokens),
+      outputPerMtok: perMtok(model.outputCostPerTokenAbove272kTokens),
+      cacheReadPerMtok: perMtok(model.cacheReadInputTokenCostAbove272kTokens),
+    },
+  ].filter(
+    (tier) =>
+      tier.inputPerMtok !== undefined ||
+      tier.outputPerMtok !== undefined ||
+      tier.cacheReadPerMtok !== undefined,
+  );
+  return thresholdBands.length > 0 ? thresholdBands : undefined;
 }
 
 /**
@@ -72,6 +111,7 @@ export function gatewayModelPriceQuote(
   // quote 保留标准价供模型选择器展示原价；所有 Gateway 模型统一把
   // costDiscount 带入计费计算，CatalogModel.cost 继续承载折后展示价。
   const costDiscount = normalizedCostDiscount(model.costDiscount);
+  const inputTokenPriceBands = gatewayInputTokenPriceBands(model);
   return {
     providerId: 'xd',
     modelId,
@@ -82,6 +122,7 @@ export function gatewayModelPriceQuote(
     outputPerMtok,
     ...(cacheReadPerMtok !== undefined ? { cacheReadPerMtok } : {}),
     ...(cacheCreatePerMtok !== undefined ? { cacheCreatePerMtok } : {}),
+    ...(inputTokenPriceBands ? { inputTokenPriceBands } : {}),
     ...(costDiscount !== undefined ? { costDiscount } : {}),
   };
 }
@@ -98,7 +139,7 @@ export function gatewayPricingCatalog(
   return Object.keys(xd).length > 0 ? { xd } : {};
 }
 
-function subscriptionQuote(
+function referenceQuote(
   providerId: string,
   modelId: string,
   price: {
@@ -106,13 +147,14 @@ function subscriptionQuote(
     outputPerMtok: number;
     cacheReadPerMtok?: number;
     cacheCreatePerMtok?: number;
+    inputTokenPriceBands?: ModelPriceQuote['inputTokenPriceBands'];
   },
 ): ModelPriceQuote {
   return {
     providerId,
     modelId,
     currency: 'USD',
-    source: 'subscription-reference',
+    source: 'provider-reference',
     approximate: true,
     ...price,
   };
@@ -121,68 +163,114 @@ function subscriptionQuote(
 export function providerReferencePriceQuote(
   providerId: string,
   modelId: string,
+  registry: ModelRegistry | null | undefined,
+  options: {
+    agent?: AgentKind;
+    inputTokens?: number;
+    at?: string | Date;
+    variant?: 'standard' | 'priority' | 'batch' | 'fast';
+  } = {},
 ): ModelPriceQuote | undefined {
-  if (providerId === 'anthropic') {
-    const price = getClaudeSubscriptionValueFallbackPrice(modelId);
-    if (!price) return undefined;
-    return subscriptionQuote(providerId, modelId, {
-      inputPerMtok: price.inputUsdPerMtok,
-      outputPerMtok: price.outputUsdPerMtok,
-      ...(price.cacheReadUsdPerMtok !== undefined
-        ? { cacheReadPerMtok: price.cacheReadUsdPerMtok }
+  const resolved = resolveModelReferencePrice(registry, providerId, modelId, options);
+  if (!resolved) return undefined;
+  const day =
+    options.at instanceof Date
+      ? options.at.toISOString().slice(0, 10)
+      : typeof options.at === 'string'
+        ? options.at.slice(0, 10)
+        : new Date().toISOString().slice(0, 10);
+  const variant = options.variant ?? 'standard';
+  const inputTokenPriceBands = resolved.route.referencePrices
+    ?.filter(
+      (price) =>
+        price.variant === variant &&
+        day >= price.effectiveFrom &&
+        (price.effectiveUntil === undefined || day < price.effectiveUntil),
+    )
+    .map((price) => ({
+      minInputTokens: price.minInputTokens ?? 0,
+      ...(price.maxInputTokens !== undefined
+        ? { maxInputTokens: price.maxInputTokens }
         : {}),
-      ...(price.cacheCreateUsdPerMtok !== undefined
-        ? { cacheCreatePerMtok: price.cacheCreateUsdPerMtok }
+      inputPerMtok: price.inputPerMtok,
+      outputPerMtok: price.outputPerMtok,
+      ...(price.cacheReadPerMtok !== undefined
+        ? { cacheReadPerMtok: price.cacheReadPerMtok }
         : {}),
-    });
+      ...(price.cacheWritePerMtok !== undefined
+        ? { cacheCreatePerMtok: price.cacheWritePerMtok }
+        : {}),
+    }))
+    .sort((a, b) => a.minInputTokens - b.minInputTokens);
+  return referenceQuote(providerId, modelId, {
+    inputPerMtok: resolved.price.inputPerMtok,
+    outputPerMtok: resolved.price.outputPerMtok,
+    ...(resolved.price.cacheReadPerMtok !== undefined
+      ? { cacheReadPerMtok: resolved.price.cacheReadPerMtok }
+      : {}),
+    ...(resolved.price.cacheWritePerMtok !== undefined
+      ? { cacheCreatePerMtok: resolved.price.cacheWritePerMtok }
+      : {}),
+    ...(inputTokenPriceBands && inputTokenPriceBands.length > 1
+      ? { inputTokenPriceBands }
+      : {}),
+  });
+}
+
+export function registryPricingCatalog(
+  registry: ModelRegistry | null | undefined,
+): ModelPricingCatalog {
+  const catalog: ModelPricingCatalog = {};
+  if (!registry) return catalog;
+  for (const entry of registry.models) {
+    for (const route of entry.routes) {
+      const quote = providerReferencePriceQuote(route.providerId, route.modelId, registry);
+      if (!quote) continue;
+      (catalog[route.providerId] ??= {})[route.modelId] = quote;
+    }
   }
-  if (providerId === 'openai') {
-    const bareModel = modelId.startsWith(CHATGPT_MODEL_PREFIX)
-      ? modelId.slice(CHATGPT_MODEL_PREFIX.length)
-      : modelId;
-    const price = CODEX_SUBSCRIPTION_VALUE_PRICING[bareModel];
-    if (!price) return undefined;
-    return subscriptionQuote(providerId, modelId, {
-      inputPerMtok: price.inputUsdPerMtok,
-      outputPerMtok: price.outputUsdPerMtok,
-      ...(price.cacheReadUsdPerMtok !== undefined
-        ? { cacheReadPerMtok: price.cacheReadUsdPerMtok }
-        : {}),
-      ...(price.cacheCreateUsdPerMtok !== undefined
-        ? { cacheCreatePerMtok: price.cacheCreateUsdPerMtok }
-        : {}),
-    });
-  }
-  if (providerId === 'xai') {
-    const bareModel = modelId.startsWith(XAI_MODEL_PREFIX)
-      ? modelId.slice(XAI_MODEL_PREFIX.length)
-      : modelId;
-    const price = XAI_SUBSCRIPTION_VALUE_PRICING[bareModel];
-    return price ? subscriptionQuote(providerId, modelId, price) : undefined;
-  }
-  return undefined;
+  return catalog;
+}
+
+export function modelPricingKey(modelId: string, agent?: AgentKind): string {
+  return agent ? `${modelId}\u0000${agent}` : modelId;
 }
 
 export function getModelPriceQuote(
   pricing: ModelPricingCatalog | null | undefined,
   providerId: string | null | undefined,
   modelId: string,
+  agent?: AgentKind,
 ): ModelPriceQuote | undefined {
   const normalizedProvider = providerId?.trim();
   const normalizedModel = modelId.trim();
   if (!normalizedProvider || !normalizedModel) return undefined;
-  return (
-    pricing?.[normalizedProvider]?.[normalizedModel] ??
-    providerReferencePriceQuote(normalizedProvider, normalizedModel)
-  );
+  const providerPricing = pricing?.[normalizedProvider];
+  if (!providerPricing) return undefined;
+  if (agent && providerPricing[modelPricingKey(normalizedModel, agent)]) {
+    return providerPricing[modelPricingKey(normalizedModel, agent)];
+  }
+  if (providerPricing[normalizedModel]) return providerPricing[normalizedModel];
+  if (normalizedProvider === 'openai' && normalizedModel.startsWith(CHATGPT_MODEL_PREFIX)) {
+    const bareModel = normalizedModel.slice(CHATGPT_MODEL_PREFIX.length);
+    if (agent && providerPricing[modelPricingKey(bareModel, agent)]) {
+      return providerPricing[modelPricingKey(bareModel, agent)];
+    }
+    return providerPricing[bareModel];
+  }
+  return undefined;
 }
 
-export function subscriptionDirectPriceQuote(modelId: string): ModelPriceQuote | undefined {
+export function subscriptionDirectPriceQuote(
+  modelId: string,
+  registry: ModelRegistry | null | undefined,
+  agent?: AgentKind,
+): ModelPriceQuote | undefined {
   if (modelId.startsWith(CHATGPT_MODEL_PREFIX)) {
-    return providerReferencePriceQuote('openai', modelId);
+    return providerReferencePriceQuote('openai', modelId, registry, { agent });
   }
   if (modelId.startsWith(XAI_MODEL_PREFIX)) {
-    return providerReferencePriceQuote('xai', modelId);
+    return providerReferencePriceQuote('xai', modelId, registry, { agent });
   }
   return undefined;
 }

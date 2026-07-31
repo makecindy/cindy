@@ -155,7 +155,37 @@ describe('gateway model pricing projection', () => {
         },
       },
     });
-    expect(mocks.send).toHaveBeenCalledWith(MODEL_PRICING_CHANGED_CHANNEL, pricing);
+    expect(mocks.send).toHaveBeenCalledWith(
+      MODEL_PRICING_CHANGED_CHANNEL,
+      expect.objectContaining(pricing),
+    );
+  });
+
+  it('preserves Gateway context-length tiers in the effective quote', () => {
+    const pricing = replaceGatewayModelPricing([
+      {
+        id: 'gpt-tiered',
+        inputCostPerToken: 0.000002,
+        outputCostPerToken: 0.000008,
+        tieredPricing: [
+          {
+            range: [200_001, 1_000_001],
+            inputCostPerToken: 0.000004,
+            outputCostPerToken: 0.000012,
+            cacheReadInputTokenCost: 0.0000004,
+          },
+        ],
+      },
+    ]);
+
+    const [band] = pricing?.xd?.['gpt-tiered']?.inputTokenPriceBands ?? [];
+    expect(band).toMatchObject({
+      minInputTokens: 200_001,
+      maxInputTokens: 1_000_001,
+      inputPerMtok: 4,
+      outputPerMtok: 12,
+    });
+    expect(band?.cacheReadPerMtok).toBeCloseTo(0.4);
   });
 
   it('keeps legal zero tiers but drops missing, invalid and 0/0 standard prices', () => {
@@ -201,11 +231,14 @@ describe('gateway model pricing projection', () => {
     expect(await getModelPricing()).not.toBeNull();
 
     expect(replaceGatewayModelPricing([{ id: 'unpriced' }])).toEqual({});
-    expect(await getModelPricing()).toEqual({});
-    expect(mocks.send).toHaveBeenLastCalledWith(MODEL_PRICING_CHANGED_CHANNEL, {});
+    expect((await getModelPricing())?.xd).toBeUndefined();
+    expect(mocks.send).toHaveBeenLastCalledWith(
+      MODEL_PRICING_CHANGED_CHANNEL,
+      expect.objectContaining({ openai: expect.any(Object) }),
+    );
 
     clearGatewayModelPricing();
-    expect(await getModelPricing()).toEqual({});
+    expect((await getModelPricing())?.xd).toBeUndefined();
   });
 
   it('hydrates a successful empty pricing snapshot as loaded', async () => {
@@ -222,7 +255,10 @@ describe('gateway model pricing projection', () => {
     });
 
     __resetModelPricingCacheForTesting();
-    await expect(getModelPricing()).resolves.toEqual({});
+    await expect(getModelPricing()).resolves.toMatchObject({
+      openai: expect.any(Object),
+      anthropic: expect.any(Object),
+    });
   });
 });
 
@@ -236,6 +272,13 @@ describe('pricing cache lifecycle', () => {
         inputCostPerToken: 0.000005,
         outputCostPerToken: 0.00003,
         costDiscount: 0.2,
+        tieredPricing: [
+          {
+            range: [272_001, 1_000_001],
+            inputCostPerToken: 0.00001,
+            outputCostPerToken: 0.000045,
+          },
+        ],
       },
     ]);
 
@@ -249,7 +292,7 @@ describe('pricing cache lifecycle', () => {
     });
 
     __resetModelPricingCacheForTesting();
-    await expect(getModelPricing()).resolves.toEqual(pricing);
+    await expect(getModelPricing()).resolves.toMatchObject(pricing);
     await prewarmModelPricing();
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -276,7 +319,7 @@ describe('pricing cache lifecycle', () => {
     });
 
     mocks.getCurrentDbClientUserId.mockReturnValue('user-a');
-    await expect(getModelPricing()).resolves.toEqual(pricing);
+    await expect(getModelPricing()).resolves.toMatchObject(pricing);
   });
 
   it('does not hydrate another account pricing snapshot', async () => {
@@ -305,7 +348,9 @@ describe('pricing cache lifecycle', () => {
     );
     mocks.getCurrentDbClientUserId.mockReturnValue('user-b');
 
-    await expect(getModelPricing()).resolves.toBeNull();
+    await expect(getModelPricing()).resolves.toMatchObject({
+      openai: expect.any(Object),
+    });
   });
 
   it('does not hydrate pricing written for an older gateway key identity', async () => {
@@ -331,7 +376,9 @@ describe('pricing cache lifecycle', () => {
       ctimeNs: 7n,
     });
 
-    await expect(getModelPricing()).resolves.toBeNull();
+    await expect(getModelPricing()).resolves.toMatchObject({
+      openai: expect.any(Object),
+    });
   });
 
   it('rejects malformed or non-gateway disk quotes', async () => {
@@ -348,7 +395,7 @@ describe('pricing cache lifecycle', () => {
               providerId: 'xd',
               modelId: 'bad',
               currency: 'USD',
-              source: 'subscription-reference',
+              source: 'provider-reference',
               approximate: true,
               inputPerMtok: -1,
               outputPerMtok: 2,
@@ -358,7 +405,9 @@ describe('pricing cache lifecycle', () => {
       }),
       'utf8',
     );
-    await expect(getModelPricing()).resolves.toBeNull();
+    await expect(getModelPricing()).resolves.toMatchObject({
+      openai: expect.any(Object),
+    });
   });
 
   it('requires provider identity on accounting lookups', async () => {
@@ -412,7 +461,7 @@ describe('reference pricing helpers', () => {
       providerId: 'openai',
       modelId: 'gpt-5.5',
       currency: 'USD',
-      source: 'subscription-reference',
+      source: 'provider-reference',
       approximate: true,
       inputPerMtok: 5,
       outputPerMtok: 30,
@@ -421,7 +470,7 @@ describe('reference pricing helpers', () => {
     expect(getSubscriptionDirectValuePrice('chatgpt/gpt-5.5')).toMatchObject({
       providerId: 'openai',
       modelId: 'chatgpt/gpt-5.5',
-      source: 'subscription-reference',
+      source: 'provider-reference',
     });
     expect(getSubscriptionDirectValuePrice('unknown')).toBeUndefined();
   });

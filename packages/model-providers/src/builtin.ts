@@ -24,11 +24,14 @@
  */
 
 import catalogJson from '../catalog/providers.json' with { type: 'json' };
+import modelRegistryJson from '../catalog/model-registry.json' with { type: 'json' };
 
+import type { ModelRegistry } from '@cindy/model-access-protocol';
 import type { Catalog, Provider } from './types.js';
 
 /** 仓内 v2 目录文件(xai 清单 + presets;同一文件发布到 OSS `cfg/providers.json`)。 */
 const catalogFile = catalogJson as unknown as Catalog;
+const bundledModelRegistry = modelRegistryJson as unknown as ModelRegistry;
 
 /**
  * 把静态目录条目的上下文窗口标记为**已核实**(不 mutate 入参)。
@@ -204,6 +207,7 @@ export const BUILTIN_PROVIDERS: Provider[] = [
 export const BUNDLED_CATALOG: Catalog = {
   version: catalogFile.version,
   providers: BUILTIN_PROVIDERS,
+  modelRegistry: bundledModelRegistry,
   ...(catalogFile.presets && catalogFile.presets.length > 0 ? { presets: catalogFile.presets } : {}),
   // cindyModelMeta 随目录透传(消费点见 types.ts:服务端 + 客户端展示元数据基线)。
   ...(catalogFile.cindyModelMeta !== undefined ? { cindyModelMeta: catalogFile.cindyModelMeta } : {}),

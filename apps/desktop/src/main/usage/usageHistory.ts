@@ -346,9 +346,8 @@ export function claudeSubscriptionUsageModelKey(model: string): string {
 
 /**
  * 订阅行的估算价选取,按 agent 分流:
- *   - codex → 订阅直连(chatgpt/ / xai/)静态价 →
- *     既有 getCodexSubscriptionValuePrice(网关价 + OpenAI 静态兜底表)
- *   - claude-code → 网关价表精确条目(带 cache 档价)→ Anthropic 家族牌价兜底
+ *   - codex → 订阅直连(chatgpt/ / xai/)registry 参考价 → OpenAI registry 参考价
+ *   - claude-code → Anthropic registry 参考价
  * 两级都 miss → undefined(该行只显示 token,不臆造金额)。
  */
 function getSubscriptionValuePriceFor(
@@ -358,11 +357,11 @@ function getSubscriptionValuePriceFor(
 ): ModelPriceQuote | undefined {
   if (agentKind === 'codex') {
     return (
-      getSubscriptionDirectValuePrice(model) ??
+      getSubscriptionDirectValuePrice(model, 'codex') ??
       getCodexSubscriptionValuePrice(model, pricing)
     );
   }
-  return getModelPriceQuote(pricing, 'anthropic', model);
+  return getModelPriceQuote(pricing, 'anthropic', model, 'claude-code');
 }
 
 async function hydrateFromDisk(expectedOptsKey: string): Promise<UsageHistoryPayload | null> {

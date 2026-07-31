@@ -788,7 +788,12 @@ function ModelSelectorContentView({
       (currentAgentKind
         ? resolveCurrentSourceId(providers, currentProviderId, id, currentAgentKind)
         : null);
-    const quote = getModelPriceQuote(pricing, effectiveProviderId, id);
+    const quote = getModelPriceQuote(
+      pricing,
+      effectiveProviderId,
+      id,
+      currentAgentKind ?? undefined,
+    );
     if (effectiveProviderId === 'xd' && (!quote || quote.source === 'gateway')) {
       if (!quote && pricing == null) return null;
       const effectiveProvider = providers.find((provider) => provider.id === effectiveProviderId);
@@ -1882,7 +1887,12 @@ export function ModelSelector({
   const triggerPricePresentation = (() => {
     if (deviceId || activeSourceId !== 'xd' || !triggerActiveProvider || !currentAgentKind)
       return null;
-    const quote = getModelPriceQuote(pricing, activeSourceId, modelId);
+    const quote = getModelPriceQuote(
+      pricing,
+      activeSourceId,
+      modelId,
+      currentAgentKind ?? undefined,
+    );
     if (quote && quote.source !== 'gateway') return null;
     if (!quote && pricing == null) return null;
     return modelPricePresentation(

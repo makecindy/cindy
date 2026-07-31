@@ -14,6 +14,8 @@ import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
   gatewayPricingCatalog,
   getModelPriceQuote,
+  providerReferencePriceQuote,
+  registryPricingCatalog,
   subscriptionDirectPriceQuote,
 } from '../../shared/modelPriceQuote.js';
 import type { ModelAccessGatewayModel } from '../../shared/modelAccess.js';
@@ -23,6 +25,8 @@ import { getCurrentDbClientUserId } from '../localDb/client/current.js';
 import { createLogger } from '../logger.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { resolveOwnerScopedSecretStorageKey } from '../secrets/providerSecretStore.js';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { applyModelPriceOverrides } from './modelPriceOverrideStore.js';
 
 export { getModelPriceQuote } from '../../shared/modelPriceQuote.js';
 export type {
@@ -82,6 +86,45 @@ function isNonNegativeFinite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
+function validateInputTokenPriceBands(
+  value: unknown,
+): ModelPriceQuote['inputTokenPriceBands'] {
+  if (!Array.isArray(value)) return undefined;
+  const bands: NonNullable<ModelPriceQuote['inputTokenPriceBands']> = [];
+  for (const raw of value.slice(0, 32)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const band = raw as Record<string, unknown>;
+    if (
+      !isNonNegativeFinite(band.minInputTokens) ||
+      (band.maxInputTokens !== undefined &&
+        (!isNonNegativeFinite(band.maxInputTokens) ||
+          band.maxInputTokens <= band.minInputTokens))
+    ) {
+      continue;
+    }
+    const next: NonNullable<ModelPriceQuote['inputTokenPriceBands']>[number] = {
+      minInputTokens: band.minInputTokens,
+      ...(band.maxInputTokens !== undefined
+        ? { maxInputTokens: band.maxInputTokens as number }
+        : {}),
+    };
+    let hasPrice = false;
+    for (const field of [
+      'inputPerMtok',
+      'outputPerMtok',
+      'cacheReadPerMtok',
+      'cacheCreatePerMtok',
+    ] as const) {
+      if (isNonNegativeFinite(band[field])) {
+        next[field] = band[field];
+        hasPrice = true;
+      }
+    }
+    if (hasPrice) bands.push(next);
+  }
+  return bands.length > 0 ? bands : undefined;
+}
+
 function validateQuote(
   value: unknown,
   providerId: string,
@@ -114,6 +157,10 @@ function validateQuote(
   }
   if (isNonNegativeFinite(quote.cacheCreatePerMtok)) {
     next.cacheCreatePerMtok = quote.cacheCreatePerMtok;
+  }
+  const inputTokenPriceBands = validateInputTokenPriceBands(quote.inputTokenPriceBands);
+  if (inputTokenPriceBands) {
+    next.inputTokenPriceBands = inputTokenPriceBands;
   }
   if (
     typeof quote.costDiscount === 'number' &&
@@ -222,6 +269,23 @@ function broadcastPricing(pricing: ModelPricingCatalog | null): void {
   }
 }
 
+function effectivePricingCatalog(gatewayPricing: ModelPricingCatalog | null): ModelPricingCatalog {
+  const registry = getActiveCatalog().modelRegistry;
+  const reference = registryPricingCatalog(registry);
+  return applyModelPriceOverrides(
+    {
+      ...reference,
+      ...(gatewayPricing?.xd ? { xd: gatewayPricing.xd } : {}),
+    },
+    registry,
+  );
+}
+
+export function broadcastEffectiveModelPricing(): void {
+  const scope = currentScope();
+  broadcastPricing(effectivePricingCatalog(cacheScope === scope ? cache : null));
+}
+
 /**
  * 与模型同步同快照更新 XD quote。models 非空但没有标准 input/output 价格时，
  * 价格投影会被清空，不复活旧模型价格。
@@ -241,7 +305,7 @@ export function replaceGatewayModelPricing(
   cacheAt = Date.now();
   hydratedScopes.add(scope);
   void writeDiskCache(scope, pricing, cacheAt);
-  broadcastPricing(pricing);
+  broadcastPricing(effectivePricingCatalog(pricing));
   return pricing;
 }
 
@@ -267,8 +331,8 @@ export function isModelPricingRefreshInFlight(): boolean {
 
 export async function getModelPricing(): Promise<ModelPricingCatalog | null> {
   const scope = currentScope();
-  if (cacheScope === scope) return cache;
-  return hydrateFromDisk(scope);
+  const gatewayPricing = cacheScope === scope ? cache : await hydrateFromDisk(scope);
+  return effectivePricingCatalog(gatewayPricing);
 }
 
 /**
@@ -309,11 +373,22 @@ export function getCodexSubscriptionValuePrice(
   modelId: string,
   pricing: ModelPricingCatalog | null | undefined,
 ): ModelPriceQuote | undefined {
-  return getModelPriceQuote(pricing, 'openai', modelId);
+  return (
+    getModelPriceQuote(pricing, 'openai', modelId, 'codex') ??
+    providerReferencePriceQuote(
+      'openai',
+      modelId,
+      getActiveCatalog().modelRegistry,
+      { agent: 'codex' },
+    )
+  );
 }
 
-export function getSubscriptionDirectValuePrice(modelId: string): ModelPriceQuote | undefined {
-  return subscriptionDirectPriceQuote(modelId);
+export function getSubscriptionDirectValuePrice(
+  modelId: string,
+  agent?: 'claude-code' | 'codex',
+): ModelPriceQuote | undefined {
+  return subscriptionDirectPriceQuote(modelId, getActiveCatalog().modelRegistry, agent);
 }
 
 /** 启动只读磁盘快照；真正的新价格仍由 /models 同步整体替换。 */

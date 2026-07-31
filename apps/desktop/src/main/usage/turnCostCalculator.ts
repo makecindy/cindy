@@ -4,7 +4,7 @@
 
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 
-import { getModelPriceQuote, providerReferencePriceQuote } from '../../shared/modelPriceQuote.js';
+import { getModelPriceQuote } from '../../shared/modelPriceQuote.js';
 import {
   addRegionalMoney,
   regionalizeMoney,
@@ -32,7 +32,7 @@ export interface TurnPricingContext {
   region: CindyRegion;
 }
 
-export type TurnCostSource = 'sdk' | 'gateway' | 'sdk-fallback' | 'subscription';
+export type TurnCostSource = 'sdk' | 'gateway' | 'reference' | 'sdk-fallback' | 'subscription';
 
 export interface TurnCostResolution {
   model: string;
@@ -64,11 +64,25 @@ export function computeGatewayTurnCost(
   price: ModelPriceQuote | undefined,
 ): number | null {
   if (!price) return null;
-  const cacheReadPrice = price.cacheReadPerMtok ?? price.inputPerMtok;
-  const cacheCreatePrice = price.cacheCreatePerMtok ?? price.inputPerMtok;
+  const totalInputTokens =
+    tokens.inputTokens + tokens.cacheReadTokens + tokens.cacheCreateTokens;
+  const band = price.inputTokenPriceBands
+    ?.filter(
+      (candidate) =>
+        totalInputTokens >= candidate.minInputTokens &&
+        (candidate.maxInputTokens === undefined ||
+          totalInputTokens < candidate.maxInputTokens),
+    )
+    .sort((a, b) => b.minInputTokens - a.minInputTokens)[0];
+  const inputPrice = band?.inputPerMtok ?? price.inputPerMtok;
+  const outputPrice = band?.outputPerMtok ?? price.outputPerMtok;
+  const cacheReadPrice =
+    band?.cacheReadPerMtok ?? price.cacheReadPerMtok ?? inputPrice;
+  const cacheCreatePrice =
+    band?.cacheCreatePerMtok ?? price.cacheCreatePerMtok ?? inputPrice;
   return (
-    (tokens.inputTokens * price.inputPerMtok +
-      tokens.outputTokens * price.outputPerMtok +
+    (tokens.inputTokens * inputPrice +
+      tokens.outputTokens * outputPrice +
       tokens.cacheReadTokens * cacheReadPrice +
       tokens.cacheCreateTokens * cacheCreatePrice) /
     1_000_000
@@ -92,7 +106,10 @@ export function computePriceQuoteTurnMoney(
       ? price.costDiscount
       : 0;
   const amount = standardAmount * (1 - discount);
-  const valueEstimate = price.source === 'subscription-reference';
+  const valueEstimate =
+    price.source === 'subscription-reference' ||
+    price.source === 'provider-reference' ||
+    price.source === 'user-override';
   return regionalizeMoney(
     {
       amount: Math.max(0, amount),
@@ -146,11 +163,21 @@ export function resolveTurnCost(args: {
   }
 
   const sdkAmount = Math.max(0, sdkCostDelta ?? 0);
-  const money = sdkAmount > 0 ? regionalizeUsd(sdkAmount, context.region) : null;
+  if (sdkAmount > 0) {
+    return {
+      model,
+      money: regionalizeUsd(sdkAmount, context.region),
+      source: context.billingRoute === 'provider-api' ? 'sdk' : 'sdk-fallback',
+    };
+  }
+  const providerQuote =
+    context.billingRoute === 'provider-api'
+      ? getModelPriceQuote(pricing, context.providerId, model, 'claude-code')
+      : undefined;
   return {
     model,
-    money,
-    source: context.billingRoute === 'provider-api' ? 'sdk' : 'sdk-fallback',
+    money: providerQuote ? computePriceQuoteTurnMoney(tokens, providerQuote, context.region) : null,
+    source: context.billingRoute === 'provider-api' ? 'reference' : 'sdk-fallback',
   };
 }
 
@@ -205,11 +232,12 @@ export function resolveClaudeTurnCostSinks(
 export function estimateClaudeSubscriptionTurnValue(
   perModel: ResolvedModelCost[],
   region: CindyRegion,
+  pricing: ModelPricingCatalog | null | undefined = undefined,
 ): RegionalMoney | null {
   const values: RegionalMoney[] = [];
   for (const item of perModel) {
     if (!isAnthropicModel(item.model) || item.money?.amount) continue;
-    const quote = providerReferencePriceQuote('anthropic', item.model);
+    const quote = getModelPriceQuote(pricing, 'anthropic', item.model, 'claude-code');
     if (!quote) continue;
     const value = computePriceQuoteTurnMoney(item.deltas, quote, region);
     if (value && value.amount > 0) values.push(value);

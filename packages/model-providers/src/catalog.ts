@@ -11,6 +11,8 @@
  * (anthropic 发现条目的展示元数据基线 + dev 模式 XD 元数据覆盖)。
  */
 
+import { parseModelRegistry } from '@cindy/model-access-protocol';
+
 import type { Catalog, Provider, CatalogModel, AgentKind, Effort, ProviderPreset } from './types.js';
 import { withVerifiedStaticWindows } from './builtin.js';
 import { findReservedOAuthExtraParam } from './provider-oauth.js';
@@ -513,6 +515,11 @@ export function parseCatalog(input: string | unknown): Catalog {
   const presets = sanitizePresets((catalog as { presets?: unknown }).presets);
   if (presets.length > 0) catalog.presets = presets;
   else delete catalog.presets;
+  if ((catalog as { modelRegistry?: unknown }).modelRegistry !== undefined) {
+    const registry = parseModelRegistry((catalog as { modelRegistry: unknown }).modelRegistry);
+    assert(registry.ok, registry.ok ? '' : registry.error);
+    catalog.modelRegistry = registry.value;
+  }
   // 远端下发目录与 bundled 同格式:静态条目的窗口是产品侧写定的真实上限,标记为已核实
   // (幂等;条目自己表过态时尊重原值)。动态发现的模型不经这里 —— 见 withVerifiedStaticWindows。
   //

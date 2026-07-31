@@ -7,7 +7,8 @@
  *        - release：优先从区域化 Model Access 公共接口加载，失败时回退旧 OSS 目录。
  *        - dev：关闭联网（与 manifestService 一致），可由 XDT_MODELS_PATH 指向本地文件即时生效。
  *        - env 兜底：XDT_MODELS_URL（完整覆盖 URL）/ XDT_DISABLE_MODELS_FETCH（强制不联网）。
- *      **每进程拉一次、存内存、无 TTL、无磁盘缓存**：远端目录是运行时真源，bundled 是最终兜底。
+ *      **每进程拉一次、存内存、无 TTL**：启动总是先拉远端；失败时才读按端点隔离的
+ *      last-known-good 快照，最后回退 bundled。
  *      启动期（splash）由 bootstrap-electron 在构造 Maker 前 await 一次（见 registerMakerIpcsAfterSplash）。
  *   2. `getDesktopProviderService`：把 active-catalog + 连接状态读取器注入 provider-service。
  *      连接状态直接复用现有凭证存储——XD = 托管 gateway key 是否存在、
@@ -16,6 +17,7 @@
  */
 
 import { app, net } from 'electron';
+import { createHash } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
@@ -38,6 +40,7 @@ import {
   setActiveCatalog,
   setCustomProviders,
   setDiscoveredCodexModels,
+  setModelRegistryFromCatalog,
   setProviderModelsFromCatalog,
 } from './active-catalog.js';
 import {
@@ -89,6 +92,7 @@ import {
   migrateLegacyNativeProviderAuthBindings,
 } from './nativeProviderAuthBinding.js';
 import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
+import { broadcastEffectiveModelPricing } from '../usage/modelPricing.js';
 
 const log = createLogger('provider-service');
 
@@ -143,9 +147,53 @@ function fetchText(url: string, timeoutMs: number): Promise<string> {
   });
 }
 
-/** 桌面端 CatalogIO —— net + fs 落地（无磁盘缓存：目录每进程拉一次存内存，无需落盘）。 */
+const CATALOG_LKG_VERSION = 1;
+
+interface CatalogLkgEnvelope {
+  version: typeof CATALOG_LKG_VERSION;
+  scope: string;
+  catalog: string;
+}
+
+function catalogLkgPath(scope: string): string {
+  const digest = createHash('sha256').update(scope).digest('hex').slice(0, 24);
+  return path.join(app.getPath('userData'), 'cache', 'model-catalog', `${digest}.json`);
+}
+
+async function readCatalogLkg(scope: string): Promise<string | null> {
+  try {
+    const envelope = JSON.parse(
+      await fsp.readFile(catalogLkgPath(scope), 'utf8'),
+    ) as Partial<CatalogLkgEnvelope>;
+    return envelope.version === CATALOG_LKG_VERSION &&
+      envelope.scope === scope &&
+      typeof envelope.catalog === 'string'
+      ? envelope.catalog
+      : null;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+async function writeCatalogLkg(scope: string, catalog: string): Promise<void> {
+  const file = catalogLkgPath(scope);
+  const temporary = `${file}.${process.pid}.tmp`;
+  await fsp.mkdir(path.dirname(file), { recursive: true });
+  const envelope: CatalogLkgEnvelope = {
+    version: CATALOG_LKG_VERSION,
+    scope,
+    catalog,
+  };
+  await fsp.writeFile(temporary, JSON.stringify(envelope), 'utf8');
+  await fsp.rename(temporary, file);
+}
+
+/** 桌面端 CatalogIO —— net + fs + 按端点隔离的 last-known-good 快照。 */
 const io: CatalogIO = {
   fetchText,
+  readCache: readCatalogLkg,
+  writeCache: writeCatalogLkg,
   async readFile(p) {
     try {
       return await fsp.readFile(p, 'utf-8');
@@ -189,8 +237,8 @@ function catalogSourceKey(source: CatalogSourceConfig): string {
 }
 
 /**
- * 一次性清理旧版本遗留的目录磁盘缓存（provider-catalog-cache.json + .tmp）。
- * 现版本目录每进程拉一次存内存、不落盘，这两个文件不再被读写，纯属历史孤儿。
+ * 一次性清理旧版本遗留的未分 scope 目录缓存（provider-catalog-cache.json + .tmp）。
+ * 新版 LKG 使用 cache/model-catalog/<scope-hash>.json，不读取这两个历史文件。
  * best-effort：不存在 / 删除失败都静默忽略（fsp.rm force 不因 ENOENT 抛），绝不阻塞或抛。
  */
 async function cleanupLegacyCatalogCache(): Promise<void> {
@@ -273,6 +321,7 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
       .then(async (catalog) => {
         activeCatalogSourceKey = sourceKey;
         setActiveCatalog(catalog);
+        broadcastEffectiveModelPricing();
         // 读 codex models_cache.json 得到规范化快照,由 active-catalog 同时投影到 Codex 与
         // Claude bridge。null 表示没读到有效 cache,保留现值 / 静态兜底;[] 表示合法空快照。
         try {
@@ -319,6 +368,7 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
   activeCatalogSourceKey = null;
   // 必须在网络 await 前失效：登录提交后 renderer/agent 可能立即读取目录。
   setActiveCatalog(BUNDLED_CATALOG);
+  broadcastEffectiveModelPricing();
 
   const flight = loadCatalog(source, io)
     .then((catalog) => {
@@ -330,6 +380,7 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
       }
       activeCatalogSourceKey = sourceKey;
       setActiveCatalog(catalog);
+      broadcastEffectiveModelPricing();
       return getActiveCatalog();
     })
     .finally(() => {
@@ -355,6 +406,8 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
         throw new Error('catalog refresh exhausted configured sources; keeping current snapshot');
       }
       setProviderModelsFromCatalog('xai', catalog);
+      setModelRegistryFromCatalog(catalog);
+      broadcastEffectiveModelPricing();
       return getActiveCatalog();
     })
     .finally(() => {

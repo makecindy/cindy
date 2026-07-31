@@ -1,4 +1,5 @@
 import os from 'node:os';
+import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -13,6 +14,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('electron', () => ({
   app: { getPath: () => os.tmpdir() },
+  BrowserWindow: { getAllWindows: () => [] },
   net: { request: vi.fn() },
 }));
 
@@ -42,6 +44,7 @@ vi.mock('../../authManager.js', () => ({
 }));
 vi.mock('../../appSessionState.js', () => ({
   getActiveAppSession: () => ({ mode: 'signed-out', dataOwnerId: null }),
+  ownerScopedUserDataPath: (...segments: string[]) => path.join(os.tmpdir(), ...segments),
 }));
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: () => ({ canUseCindyGateway: false }),

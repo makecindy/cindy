@@ -286,7 +286,8 @@ import {
 import { recordModelMismatchOnMessage } from '../modelMismatchBroadcaster.js';
 import { detectClaudeModelMismatch } from '../../shared/modelMismatch.js';
 import { triggerClaudeAccountUsageRefresh } from '../usage/claudeAccountUsage.js';
-import { getCodexSubscriptionValuePrice, getModelPriceQuote, getModelPricing, getModelPricingForModel, getSubscriptionDirectValuePrice } from '../usage/modelPricing.js';
+import { broadcastEffectiveModelPricing, getCodexSubscriptionValuePrice, getModelPriceQuote, getModelPricing, getModelPricingForModel, getSubscriptionDirectValuePrice } from '../usage/modelPricing.js';
+import { clearModelPriceOverride, stageProviderModelPriceOverridesClear, readModelPriceOverrideView, setModelPriceOverride } from '../usage/modelPriceOverrideStore.js';
 import { computeModelUsageDeltas, type ModelUsageCumulative, type ModelUsageDeltaEntry } from '../usage/modelUsageDelta.js';
 import { claudeSubscriptionUsageModelKey, codexApiUsageModelKey, codexSubscriptionUsageModelKey } from '../usage/usageHistory.js';
 import { buildClaudeTurnUsageDetails, computePriceQuoteTurnMoney, estimateClaudeSubscriptionTurnValue, isAnthropicModel, normalizeModelIdForPricing, resolveClaudeTurnCostSinks, type BillingRoute } from '../usage/turnCostCalculator.js';
@@ -3173,7 +3174,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             const estimatedValues: RegionalMoney[] = [];
             for (const m of perModel) {
               if (m.source !== 'subscription') continue;
-              const quote = getSubscriptionDirectValuePrice(m.model);
+              const quote = getSubscriptionDirectValuePrice(m.model, 'claude-code');
               const value = computePriceQuoteTurnMoney(
                 m.deltas,
                 quote ?? undefined,
@@ -3185,6 +3186,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               const claudeEstimated = estimateClaudeSubscriptionTurnValue(
                 perModel,
                 CURRENT_CINDY_REGION,
+                await getModelPricing(),
               );
               if (claudeEstimated?.amount) estimatedValues.push(claudeEstimated);
             }
@@ -3317,6 +3319,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           const isSubscriptionValue = isRemoteCodexSession ||
             isCodexXaiProviderRoute ||
             (codexAuthInjection === 'oauth-bearer' && !hasEffectiveGatewayRoute);
+          const isCustomProviderEstimate =
+            !isSubscriptionValue &&
+            !isRemoteCodexSession &&
+            Boolean(sessionProvider && sessionProvider !== 'xd');
           const modelUsageKey = isSubscriptionValue
             ? codexSubscriptionUsageModelKey(pricingModel)
             : codexApiUsageModelKey(pricingModel);
@@ -3342,12 +3348,19 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               ? await getModelPricing()
               : isSubscriptionValue
                 ? null
-                : await getModelPricingForModel('xd', pricingModel);
+                : isCustomProviderEstimate
+                  ? await getModelPricing()
+                  : await getModelPricingForModel('xd', pricingModel);
             const price = isCodexXaiProviderRoute
-              ? getSubscriptionDirectValuePrice(pricingModel)
+              ? getSubscriptionDirectValuePrice(pricingModel, 'codex')
               : isSubscriptionValue
                 ? getCodexSubscriptionValuePrice(pricingModel, pricing)
-                : getModelPriceQuote(pricing, 'xd', pricingModel);
+                : getModelPriceQuote(
+                    pricing,
+                    isCustomProviderEstimate ? sessionProvider : 'xd',
+                    pricingModel,
+                    'codex',
+                  );
             const money = computePriceQuoteTurnMoney(
               codexUsageToTokens(u),
               price ?? undefined,
@@ -3372,7 +3385,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               model: turnModel,
             });
             if (money && money.amount > 0) {
-              if (!isSubscriptionValue) {
+              const isActualApiCost = !isSubscriptionValue && price?.source === 'gateway';
+              if (isActualApiCost) {
                 void recordTurnSpend(money);
                 void recordSessionTurnSpend(session.id, money);
               }
@@ -3849,6 +3863,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 停用写入的归属校验:入口捕获 / 持久化前复核,异步窗口内切账号即拒,防 A 的
     // 点击写进 B 的 owner-scoped 偏好文件(PR #744 review 第七轮)。
     currentOwnerId: () => getCurrentDataOwnerId(),
+    readModelPriceOverride: (target) =>
+      readModelPriceOverrideView(target, getActiveCatalog().modelRegistry),
+    writeModelPriceOverride: (target, desired) =>
+      setModelPriceOverride(target, desired, getActiveCatalog().modelRegistry),
+    clearModelPriceOverride,
+    stageClearProviderModelPriceOverrides: stageProviderModelPriceOverridesClear,
+    broadcastPricingChanged: broadcastEffectiveModelPricing,
     // 通用 OAuth（目录 auth.oauth 描述符驱动）：login 成功后 best-effort 拉动态模型发现
     // (additions-only merge 进 active-catalog) 并广播 PROVIDER_CHANGED 让 UI 刷新连接态。
     oauthLogin: async (providerId, isCurrent) => {

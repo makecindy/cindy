@@ -1402,7 +1402,29 @@
         "capabilityGroupHint": "Not shown in the chat model picker; used only by features like image generation.",
         "accessWriteFailed": "Couldn't save the change. Please try again.",
         "disabledGroup": "Disabled",
-        "enableAllModels": "Enable All"
+        "enableAllModels": "Enable All",
+        "priceOverride": {
+          "menu": "Edit API Price Estimate",
+          "title": "{{model}} API Price Estimate",
+          "description": "Used only to estimate usage on your own API or subscription route. This does not change the provider’s bill.",
+          "currency": "Currency",
+          "input": "Input",
+          "output": "Output",
+          "cacheRead": "Cache read",
+          "cacheWrite": "Cache write",
+          "unit": "Price per 1M tokens. Leave cache fields blank when they are not billed separately.",
+          "registryDate": "Reference updated {{date}}",
+          "conflict": "The remote reference price changed. Your local estimate is still in use; review it or reset to the new reference.",
+          "reset": "Reset to Current Reference",
+          "resetDone": "Restored the current reference price",
+          "save": "Save",
+          "cancel": "Cancel",
+          "close": "Close",
+          "saved": "API price estimate saved",
+          "invalid": "Enter valid non-negative input and output prices",
+          "loadFailed": "Couldn’t load the price estimate. Please try again.",
+          "saveFailed": "Couldn’t save the price estimate. Please try again."
+        }
       },
       "genericOAuth": {
         "subtitle": "Subscription sign-in (OAuth)",

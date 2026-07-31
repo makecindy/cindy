@@ -199,6 +199,56 @@ describe('loadCatalog', () => {
     expect(bundled).toEqual({ source: 'bundled', catalog: BUNDLED_CATALOG });
   });
 
+  it('persists a valid remote snapshot and uses its source-scoped LKG after failure', async () => {
+    const url = 'https://catalog.example.test/providers.json';
+    const writeCache = vi.fn(async () => undefined);
+    const remote = await loadCatalogWithSource(
+      { url },
+      {
+        fetchText: vi.fn(async () => JSON.stringify(MINIMAL)),
+        writeCache,
+      },
+    );
+    expect(remote.source).toBe('remote');
+    expect(writeCache).toHaveBeenCalledWith(url, JSON.stringify(MINIMAL));
+
+    const cached = await loadCatalogWithSource(
+      { url },
+      {
+        fetchText: vi.fn(async () => {
+          throw new Error('offline');
+        }),
+        readCache: vi.fn(async (scope) =>
+          scope === url ? JSON.stringify(MINIMAL) : null,
+        ),
+      },
+    );
+    expect(cached).toMatchObject({ source: 'cache', catalog: { version: 'test' } });
+  });
+
+  it('reads LKG even when the startup network budget is zero and rejects bad cache', async () => {
+    const url = 'https://catalog.example.test/providers.json';
+    const fetchText = vi.fn();
+    const cached = await loadCatalogWithSource(
+      { url, remoteBudgetMs: 0 },
+      {
+        fetchText,
+        readCache: vi.fn(async () => JSON.stringify(MINIMAL)),
+      },
+    );
+    expect(fetchText).not.toHaveBeenCalled();
+    expect(cached.source).toBe('cache');
+
+    const invalid = await loadCatalogWithSource(
+      { url, remoteBudgetMs: 0 },
+      {
+        fetchText,
+        readCache: vi.fn(async () => '{"version":"bad","providers":[]}'),
+      },
+    );
+    expect(invalid).toEqual({ source: 'bundled', catalog: BUNDLED_CATALOG });
+  });
+
   it('dev: reads local path, skips network', async () => {
     const fetchText = vi.fn();
     const io: CatalogIO = { readFile: vi.fn(async () => JSON.stringify(MINIMAL)), fetchText };
@@ -490,8 +540,13 @@ describe('registry visibility & sources(运行时注入 fixture)', () => {
           name: 'Custom',
           source: 'user',
           agents: ['claude-code'],
-          auth: { method: 'api-key' },
-          routing: { 'claude-code': { upstream: 'https://custom.test', authStrategy: 'api-key' } },
+          auth: { method: 'apiKey' },
+          routing: {
+            'claude-code': {
+              upstream: 'https://custom.test',
+              authStrategy: 'api-key-header',
+            },
+          },
           models: {
             'claude-code': [model('flux-image-x', { group: 'custom:custom-p' })],
           },

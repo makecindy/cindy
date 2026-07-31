@@ -3,11 +3,11 @@
  *
  *   - release：优先从 Model Access 公共匿名接口拉取完整 Catalog；失败时回退旧 OSS 目录。
  *   - dev：直接读仓库本地文件（`localPath`），改了即时生效、默认不联网。
- *   - 兜底优先级：本地(dev) → 公共 API → 旧 OSS → 内置 bundled。
+ *   - 兜底优先级：本地(dev) → 公共 API → 上次有效快照(LKG) → 旧 OSS → 内置 bundled。
  *
- * 目录每进程加载一次、存内存、**无 TTL**（由 host 的 active-catalog 在启动期 await 一次）；
- * 本模块刻意**不做磁盘缓存**——公共 API 与迁移期 OSS 都是远端目录源，bundled 是最终兜底，
- * 无需再引入会让「重启即拉最新」失效的磁盘新鲜窗口。
+ * 目录每进程加载一次、存内存、**无 TTL**（由 host 的 active-catalog 在启动期 await 一次）。
+ * host 可注入按源隔离的 LKG 读写：启动仍先请求最新远端，只有远端失败才读缓存，所以不会
+ * 引入“新鲜窗口”；坏 JSON / 坏 schema 永不覆盖最后一份有效快照。
  *
  * 本模块不碰文件系统 / 网络 / userData——这些能力由 host 通过 `CatalogIO` 注入，
  * 保证包可独立单测，也保证跨平台路径 / CORS 等细节留在 host。
@@ -46,11 +46,15 @@ export interface CatalogIO {
   fetchText?: (url: string, timeoutMs: number) => Promise<string>;
   /** 读本地文件（dev / localPath）；不存在返回 null。 */
   readFile?: (path: string) => Promise<string | null>;
+  /** 读取某远端 scope 的上次有效完整快照；不存在返回 null。 */
+  readCache?: (scope: string) => Promise<string | null>;
+  /** 原子保存某远端 scope 的完整有效快照。 */
+  writeCache?: (scope: string, text: string) => Promise<void>;
   /** 诊断日志（可选）。 */
   log?: (level: 'info' | 'warn' | 'error', msg: string, meta?: Record<string, unknown>) => void;
 }
 
-export type CatalogLoadSource = 'local' | 'remote' | 'bundled';
+export type CatalogLoadSource = 'local' | 'remote' | 'cache' | 'bundled';
 
 export interface CatalogLoadResult {
   catalog: Catalog;
@@ -126,10 +130,12 @@ export function mergeWithBundled(primary: Catalog): Catalog {
   const presets = primary.presets ?? BUNDLED_CATALOG.presets;
   // cindyModelMeta 同 presets 兜底语义透传(消费点见 types.ts:服务端 + 客户端展示元数据基线)。
   const cindyModelMeta = primary.cindyModelMeta ?? BUNDLED_CATALOG.cindyModelMeta;
+  const modelRegistry = primary.modelRegistry ?? BUNDLED_CATALOG.modelRegistry;
   return {
     version: primary.version,
     providers: merged,
     ...(presets && presets.length > 0 ? { presets } : {}),
+    ...(modelRegistry ? { modelRegistry } : {}),
     ...(cindyModelMeta !== undefined ? { cindyModelMeta } : {}),
   };
 }
@@ -145,7 +151,7 @@ function log(io: CatalogIO, level: 'info' | 'warn' | 'error', msg: string, meta?
  *
  * 顺序：
  *  1. dev：cfg.localPath + io.readFile → 读本地、合并 bundled、直接返回（不联网）。
- *  2. 远端依次尝试公共 API、迁移期旧 OSS（除非 disableFetch / 无 URL / 无 fetchText）。
+ *  2. 远端依次尝试公共 API、迁移期旧 OSS；每个远端失败后先尝试它自己的 LKG。
  *  3. 任意上述来源均不可用 → 内置 bundled。
  */
 export async function loadCatalogWithSource(
@@ -179,20 +185,47 @@ export async function loadCatalogWithSource(
     const deadline = now() + budgetMs;
     for (const remoteUrl of remoteUrls) {
       const remainingMs = Math.max(0, deadline - now());
-      if (remainingMs === 0) {
-        log(io, 'warn', 'remote catalog fallback budget exhausted');
-        break;
-      }
-      try {
-        const text = await io.fetchText(remoteUrl, remainingMs);
-        const parsed = parseCatalog(text);
-        log(io, 'info', 'loaded catalog from remote', { url: remoteUrl });
-        return { catalog: mergeWithBundled(parsed), source: 'remote' };
-      } catch (err) {
-        log(io, 'warn', 'remote catalog read/parse failed, trying fallback', {
+      if (remainingMs > 0) {
+        try {
+          const text = await io.fetchText(remoteUrl, remainingMs);
+          const parsed = parseCatalog(text);
+          if (io.writeCache) {
+            try {
+              await io.writeCache(remoteUrl, text);
+            } catch (err) {
+              log(io, 'warn', 'valid remote catalog loaded but LKG write failed', {
+                url: remoteUrl,
+                err: String(err),
+              });
+            }
+          }
+          log(io, 'info', 'loaded catalog from remote', { url: remoteUrl });
+          return { catalog: mergeWithBundled(parsed), source: 'remote' };
+        } catch (err) {
+          log(io, 'warn', 'remote catalog read/parse failed, trying fallback', {
+            url: remoteUrl,
+            err: String(err),
+          });
+        }
+      } else {
+        log(io, 'warn', 'remote catalog fallback budget exhausted, trying cache', {
           url: remoteUrl,
-          err: String(err),
         });
+      }
+      if (io.readCache) {
+        try {
+          const cached = await io.readCache(remoteUrl);
+          if (cached !== null) {
+            const parsed = parseCatalog(cached);
+            log(io, 'info', 'loaded last-known-good catalog snapshot', { url: remoteUrl });
+            return { catalog: mergeWithBundled(parsed), source: 'cache' };
+          }
+        } catch (err) {
+          log(io, 'warn', 'cached catalog read/parse failed, trying fallback', {
+            url: remoteUrl,
+            err: String(err),
+          });
+        }
       }
     }
   }

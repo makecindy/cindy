@@ -50,6 +50,7 @@ import {
   setModelVisibility,
   useModelVisibilityVersion,
 } from '@/state/modelVisibilityPrefs';
+import { ModelPriceOverrideDialog } from './ModelPriceOverrideDialog';
 
 import { isAgentSelectableModel } from '@cindy/model-providers';
 import type { AgentKind, CatalogModel, ProviderView } from '@cindy/model-providers';
@@ -290,8 +291,10 @@ export function UnifiedModelList({
   // useProviders 快照刷新,期间(可能上百毫秒,含凭证库读取)用本地覆盖顶住 —— 行在
   // 分组与「已停用」分区之间的迁移一次到位,不出现回跳帧(规则 7)。新快照到达即清空。
   const [pendingDisabled, setPendingDisabled] = useState<Record<string, boolean>>({});
+  const [priceRow, setPriceRow] = useState<UnionModelRow | null>(null);
   useEffect(() => {
     setPendingDisabled({});
+    setPriceRow(null);
   }, [provider]);
 
   // 折叠态:分组用 ModelCategory 作 key,「已停用」分区用 DISABLED_GROUP_KEY(默认展开)。
@@ -484,6 +487,12 @@ export function UnifiedModelList({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
+        {provider.id !== 'xd' &&
+          !isCapabilityRow(row, provider.source === 'user') && (
+            <DropdownMenuItem onClick={() => setPriceRow(row)}>
+              {t('settings.providers.models.priceOverride.menu')}
+            </DropdownMenuItem>
+          )}
         <DropdownMenuItem onClick={() => setRowDisabled(row, true)}>
           {t('settings.providers.models.disableModel')}
         </DropdownMenuItem>
@@ -825,6 +834,16 @@ export function UnifiedModelList({
           );
         })()}
       </div>
+      {priceRow && (
+        <ModelPriceOverrideDialog
+          provider={provider}
+          row={priceRow}
+          open
+          onOpenChange={(next) => {
+            if (!next) setPriceRow(null);
+          }}
+        />
+      )}
     </div>
   );
 }

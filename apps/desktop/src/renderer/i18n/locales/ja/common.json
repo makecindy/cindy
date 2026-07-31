@@ -1401,7 +1401,29 @@
         "capabilityGroupHint": "チャットのモデル選択には表示されず、画像生成などの機能でのみ使用されます。",
         "accessWriteFailed": "変更を保存できませんでした。もう一度お試しください。",
         "disabledGroup": "無効",
-        "enableAllModels": "すべて有効にする"
+        "enableAllModels": "すべて有効にする",
+        "priceOverride": {
+          "menu": "API 料金見積もりを編集",
+          "title": "{{model}} の API 料金見積もり",
+          "description": "自分の API またはサブスクリプション経路の使用量見積もりにのみ使われ、プロバイダーの実際の請求は変わりません。",
+          "currency": "通貨",
+          "input": "入力",
+          "output": "出力",
+          "cacheRead": "キャッシュ読み取り",
+          "cacheWrite": "キャッシュ書き込み",
+          "unit": "100 万トークンあたりの料金。キャッシュが個別課金されない場合は空欄にしてください。",
+          "registryDate": "参考料金の更新日 {{date}}",
+          "conflict": "リモートの参考料金が更新されました。ローカル見積もりは引き続き優先されます。確認するか新しい参考料金に戻してください。",
+          "reset": "現在の参考料金に戻す",
+          "resetDone": "現在の参考料金に戻しました",
+          "save": "保存",
+          "cancel": "キャンセル",
+          "close": "閉じる",
+          "saved": "API 料金見積もりを保存しました",
+          "invalid": "0 以上の有効な入力・出力料金を入力してください",
+          "loadFailed": "料金見積もりを読み込めませんでした。もう一度お試しください。",
+          "saveFailed": "料金見積もりを保存できませんでした。もう一度お試しください。"
+        }
       },
       "genericOAuth": {
         "subtitle": "サブスクリプション認証（OAuth）",

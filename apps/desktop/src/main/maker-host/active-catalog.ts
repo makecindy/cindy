@@ -25,6 +25,7 @@
 
 import {
   BUNDLED_CATALOG,
+  findModelRegistryRoute,
   type AgentKind,
   type Catalog,
   type CatalogModel,
@@ -320,8 +321,57 @@ interface CindyModelMetaFields {
   sortOrder?: number;
   defaultEnabled?: boolean;
   contextWindow?: number;
+  maxOutput?: number;
   efforts?: Effort[];
   defaultEffort?: Effort | null;
+  supportsFastMode?: boolean;
+  status?: CatalogModel['status'];
+}
+
+function modelRegistryMetaFields(
+  providerId: string,
+  agent: AgentKind,
+  modelId: string,
+): CindyModelMetaFields | undefined {
+  const catalog = base ?? BUNDLED_CATALOG;
+  const matched = findModelRegistryRoute(catalog.modelRegistry, providerId, modelId, agent);
+  if (!matched) return undefined;
+  const { entry } = matched;
+  const perAgent = entry.perAgent?.[agent];
+  const efforts = perAgent?.efforts ?? entry.efforts;
+  const defaultEffort = perAgent?.defaultEffort ?? entry.defaultEffort;
+  return {
+    name: entry.name,
+    ...(entry.group !== undefined ? { group: entry.group } : {}),
+    ...(entry.description !== undefined ? { description: entry.description } : {}),
+    ...(entry.sortOrder !== undefined ? { sortOrder: entry.sortOrder } : {}),
+    ...(perAgent?.defaultEnabled !== undefined || entry.defaultEnabled !== undefined
+      ? { defaultEnabled: perAgent?.defaultEnabled ?? entry.defaultEnabled }
+      : {}),
+    ...(perAgent?.contextWindow !== undefined || entry.contextWindow !== undefined
+      ? { contextWindow: perAgent?.contextWindow ?? entry.contextWindow }
+      : {}),
+    ...(entry.maxOutputTokens !== undefined ? { maxOutput: entry.maxOutputTokens } : {}),
+    ...(efforts !== undefined ? { efforts: efforts as Effort[] } : {}),
+    ...(defaultEffort !== undefined
+      ? { defaultEffort: defaultEffort as Effort }
+      : efforts?.length === 0
+        ? { defaultEffort: null }
+        : {}),
+    ...(perAgent?.supportsFastMode !== undefined || entry.supportsFastMode !== undefined
+      ? { supportsFastMode: perAgent?.supportsFastMode ?? entry.supportsFastMode }
+      : {}),
+    ...(entry.status !== undefined
+      ? {
+          status:
+            entry.status === 'preview'
+              ? 'alpha'
+              : entry.status === 'deprecated' || entry.status === 'retired'
+                ? 'deprecated'
+                : 'active',
+        }
+      : {}),
+  };
 }
 
 /**
@@ -379,26 +429,33 @@ function buildEffectiveCindyModelMetaIndex(): Map<string, CindyModelMetaFields> 
   if (effectiveCindyModelMetaIndex) return effectiveCindyModelMetaIndex;
 
   const bundled = buildCindyModelMetaIndex(BUNDLED_CATALOG.cindyModelMeta);
-  if (!base || base.cindyModelMeta === undefined) {
-    effectiveCindyModelMetaIndex = bundled;
-    return effectiveCindyModelMetaIndex;
-  }
-
-  const activeMeta = base.cindyModelMeta;
-  if (
-    !activeMeta ||
-    typeof activeMeta !== 'object' ||
-    Array.isArray(activeMeta) ||
-    (activeMeta as { version?: unknown }).version !== 1
-  ) {
-    effectiveCindyModelMetaIndex = new Map();
-    return effectiveCindyModelMetaIndex;
-  }
-
   const effective = new Map<string, CindyModelMetaFields>();
-  for (const [id, fields] of bundled) effective.set(id, { ...fields });
-  for (const [id, fields] of buildCindyModelMetaIndex(activeMeta)) {
-    effective.set(id, { ...effective.get(id), ...fields });
+  if (!base || base.cindyModelMeta === undefined) {
+    for (const [id, fields] of bundled) effective.set(id, { ...fields });
+  } else {
+    const activeMeta = base.cindyModelMeta;
+    if (
+      activeMeta &&
+      typeof activeMeta === 'object' &&
+      !Array.isArray(activeMeta) &&
+      (activeMeta as { version?: unknown }).version === 1
+    ) {
+      for (const [id, fields] of bundled) effective.set(id, { ...fields });
+      for (const [id, fields] of buildCindyModelMetaIndex(activeMeta)) {
+        effective.set(id, { ...effective.get(id), ...fields });
+      }
+    }
+  }
+
+  // Registry 是新版统一元数据基线。这里只把 Anthropic 路由注入动态发现的
+  // fallback index；HTTP / SDK 明确返回的窗口、effort、Fast 仍由发现层优先。
+  const registry = (base ?? BUNDLED_CATALOG).modelRegistry;
+  for (const entry of registry?.models ?? []) {
+    for (const route of entry.routes) {
+      if (route.providerId !== 'anthropic' || !route.agents.includes('claude-code')) continue;
+      const fields = modelRegistryMetaFields('anthropic', 'claude-code', route.modelId);
+      if (fields) effective.set(route.modelId, { ...effective.get(route.modelId), ...fields });
+    }
   }
   effectiveCindyModelMetaIndex = effective;
   return effectiveCindyModelMetaIndex;
@@ -450,6 +507,39 @@ function overlayCindyMeta(
     ...(fields.sortOrder !== undefined ? { sortOrder: fields.sortOrder } : {}),
     ...(fields.defaultEnabled !== undefined ? { defaultEnabled: fields.defaultEnabled } : {}),
   };
+}
+
+function overlayModelRegistry(
+  providerId: string,
+  agent: AgentKind,
+  models: CatalogModel[],
+): CatalogModel[] {
+  return sortModelsByOrder(
+    models.map((model) => {
+      const fields = modelRegistryMetaFields(providerId, agent, model.id);
+      const overlaid = overlayCindyMeta(model, fields);
+      if (!fields) return overlaid;
+      if (DYNAMIC_LIST_PROVIDER_IDS.has(providerId)) {
+        return {
+          ...overlaid,
+          ...(fields.status !== undefined ? { status: fields.status } : {}),
+        };
+      }
+      return {
+        ...overlaid,
+        ...(fields.contextWindow !== undefined
+          ? { contextWindow: fields.contextWindow, contextWindowVerified: true }
+          : {}),
+        ...(fields.maxOutput !== undefined ? { maxOutput: fields.maxOutput } : {}),
+        ...(fields.efforts !== undefined ? { efforts: fields.efforts } : {}),
+        ...(fields.defaultEffort !== undefined ? { defaultEffort: fields.defaultEffort } : {}),
+        ...(fields.supportsFastMode !== undefined
+          ? { supportsFastMode: fields.supportsFastMode }
+          : {}),
+        ...(fields.status !== undefined ? { status: fields.status } : {}),
+      };
+    }),
+  );
 }
 
 /** 按 sortOrder 稳定排序(无 sortOrder 排最后,按进入序)——与 augmentModels 同口径。 */
@@ -540,6 +630,18 @@ function computeMerged(): Catalog {
         : p,
     );
   }
+
+  providers = providers.map((provider) => {
+    if (provider.id === 'xd') return provider;
+    let changed = false;
+    const models: Provider['models'] = { ...provider.models };
+    for (const [agent, entries] of Object.entries(provider.models) as [AgentKind, CatalogModel[]][]) {
+      const overlaid = overlayModelRegistry(provider.id, agent, entries);
+      if (overlaid.some((model, index) => model !== entries[index])) changed = true;
+      models[agent] = overlaid;
+    }
+    return changed ? { ...provider, models } : provider;
+  });
 
   // XD 网关权威模型清单重建。即使实时清单为空也必须重建为空:不能证明某个模型
   // 当前在网关可用就不显示。元数据**只信服务端下发 + 确定性默认值**(2026-07-19 起
@@ -697,6 +799,13 @@ export function setProviderModelsFromCatalog(providerId: string, catalog: Catalo
       provider.id === providerId ? { ...provider, models: incoming.models } : provider,
     ),
   };
+  markChanged();
+}
+
+export function setModelRegistryFromCatalog(catalog: Catalog): void {
+  if (!catalog.modelRegistry) return;
+  const current = base ?? BUNDLED_CATALOG;
+  base = { ...current, modelRegistry: catalog.modelRegistry };
   markChanged();
 }
 
