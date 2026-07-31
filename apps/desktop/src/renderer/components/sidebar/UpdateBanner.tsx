@@ -74,6 +74,18 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   // 刻意不给 loading UI(几毫秒的 spinner 只会闪一下),只用 ref 挡住连点导致的
   // 重复探针 / 重复重启。与 WindowControls 的关窗入口保持同样的「无 loading 态」处理。
   const relaunchProbeRef = useRef(false);
+  // 一次点击的有效性令牌。探针是异步的,点击那一刻成立的前提在 resolve 时可能已经不成立:
+  // 用户点了右上角「稍后再说」、新版本把已就绪补丁顶成 superseding、组件被卸载,或用户
+  // 又点了一次入口。任一情况都让 epoch 前进,在飞的 continuation 靠 epoch 不匹配自我作废。
+  // 不作废会有三个真实后果:①点了「稍后」却突然重启;②superseding 期间重启并装回旧补丁;
+  // ③dismiss 之后 setConfirming(true) 残留,下次被火焰按钮唤回时直接落在第二步(用户
+  // 并没有再点入口)。
+  const relaunchEpochRef = useRef(0);
+  // continuation 里必须读「当前」status,不能读点击时闭包捕获的旧值。刻意在 render 期间
+  // 同步镜像而不是用 effect —— effect 会晚一拍,「status 已 setState 但 effect 未执行」的
+  // 区间里探针恰好 resolve 就会读到过期的 'ready'。这个 ref 只做最新值镜像,不参与渲染输出。
+  const statusRef = useRef(status);
+  statusRef.current = status;
   // 进入确认态后把焦点移到「取消」按钮 —— 键盘用户点入口键后原触发元素会卸载,
   // 若不主动聚焦,焦点会丢失、无法继续操作。刻意聚焦「取消」而非「仍要重启」:让默认落在
   // 安全动作上,避免再按一次 Enter/Space 就打断进行中的任务(即 Radix 对破坏性操作
@@ -107,10 +119,17 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   }, [isTranslocated]);
 
   // 一旦不再是 ready(如被 superseding 顶掉 / 出错),复位确认态,避免残留一个
-  // 指向旧补丁的「仍要重启」。
+  // 指向旧补丁的「仍要重启」;同时作废在飞的探针 —— 它的结论建立在「当前补丁可装」之上。
   useEffect(() => {
-    if (status !== 'ready') setConfirming(false);
+    if (status !== 'ready') {
+      relaunchEpochRef.current += 1;
+      setConfirming(false);
+    }
   }, [status]);
+
+  // 卸载时同样作废在飞的探针。卸载后 setConfirming 只是一次无效更新,但 handleRelaunch
+  // 会真的把 app 重启掉 —— 这条 cleanup 不是防 React 警告,是防意外重启。
+  useEffect(() => () => { relaunchEpochRef.current += 1; }, []);
 
   // 新更新到达时自动 restore:isNewUpdateAfterDismiss 先检查当前 status 是否为
   // active update 态(ready / superseding),再对比 dismiss 时的快照——两个条件
@@ -167,7 +186,10 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   // 直接落在「确认重启」界面(那是两步流程的第二步,越过第一步显示不合适)。
   // 传入当前 status/version 让 store 记录快照,用于后续区分「同一更新 remount」
   // 与「真正新更新到达」,避免导航到 /settings 再回来时误 restore。
+  // 同时作废在飞的探针:用户点「稍后再说」就是明确表达「现在不要重启」,几毫秒后 resolve
+  // 的探针结论不能反过来推翻它(否则轻则 confirming 残留、重则直接重启)。
   const handleDismiss = () => {
+    relaunchEpochRef.current += 1;
     setConfirming(false);
     dismiss(status, version ?? null);
   };
@@ -192,9 +214,16 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   //   - 没有        → 直接重启,不再多要一次无信息量的确认。
   // 探针失败(splash / login 阶段 handler 未注册,或桥同步 throw)按 false 处理 —— 与
   // WindowControls.handleCloseClick 完全同构;banner 只在主界面出现,那时 handler 早已注册。
+  // main 侧的 anySessionInTurn 是纯同步 snapshot(maker-ipc/register.ts),不会因运行期
+  // 状态切换而 reject。
+  //
+  // await 之后的两道复核是必需的,不是防御性冗余:探针在飞期间用户可能 dismiss、组件可能
+  // 卸载、已就绪补丁可能被 superseding 顶掉。少了它们,「点了稍后却重启」「装回旧补丁」
+  // 「confirming 残留到下次唤回」三种都会真实发生。
   const handleRelaunchClick = async (): Promise<void> => {
     if (relaunchProbeRef.current) return;
     relaunchProbeRef.current = true;
+    const epoch = relaunchEpochRef.current;
     let hasInFlight = false;
     try {
       hasInFlight = await window.electronAPI.anySessionInTurn();
@@ -203,6 +232,11 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
     } finally {
       relaunchProbeRef.current = false;
     }
+    // 这次点击是否仍然有效(未被 dismiss / 卸载 / status 离开 ready 作废)。
+    if (epoch !== relaunchEpochRef.current) return;
+    // status 变化的作废由上面那个 effect 打点,但 effect 会晚一拍;这里直接读最新值,
+    // 关掉「已 setState 未跑 effect」的那段窗口。两道判定针对同一不变量的不同触发路径。
+    if (statusRef.current !== 'ready') return;
     if (hasInFlight) setConfirming(true);
     else handleRelaunch();
   };
