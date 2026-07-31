@@ -32,6 +32,7 @@ import { WorktreeBadge } from '@/components/sidebar/WorktreeBadge';
 import { SessionStatusIcon } from './SessionStatusIcon';
 import { ScheduleBindingBadge } from './ScheduleBindingBadge';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
+import { SessionOrdinalBadgeKbd, useSessionOrdinalBadge } from './sessionOrdinalBadges';
 import { useAgentIslandActivity } from '@/state/agentIslandActivity';
 import { makerChatStore } from '@/lib/makerChatStore';
 import {
@@ -127,6 +128,8 @@ export function SessionCard({
 }: SessionCardProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅,非按住态恒为 null。
+  const ordinalBadgeLabel = useSessionOrdinalBadge(session.id);
   // 灵动岛同源的 per-session 实时活动(执行中逐步活动 + 等待交互态)。
   const islandActivity = useAgentIslandActivity(session.id);
   const isPinned = session.pinnedAt != null;
@@ -612,6 +615,7 @@ export function SessionCard({
                 onArchiveNow={() => onAction(session.id, 'archive-now')}
                 canUnarchive={!remoteWritesBlocked}
                 onUnarchive={handleUnarchiveSelect}
+                yieldToOrdinalBadge={ordinalBadgeLabel != null}
               />
             )}
           </div>
@@ -809,6 +813,26 @@ export function SessionCard({
       </div>
       )}
 
+      {/* mod+1..9 序号徽标(按住修饰键浮现,见 sessionOrdinalBadges):贴右上
+          时间槽位置(TimeActionsSlot 同步让位),卡片多行故不垂直居中;z-20
+          压过 hover 操作钮,pointer-events-none 不挡点击。前景色与时间同色系,
+          kbd 内 text-current + currentColor 底自动跟随。编辑态让位给重命名
+          输入框。 */}
+      {!isEditing && ordinalBadgeLabel != null && (
+        <span
+          className={cn(
+            'pointer-events-none absolute right-2 top-2 z-20 flex',
+            isActive
+              ? 'text-sidebar-item-active-foreground'
+              : isMuted
+                ? 'text-[var(--text-disabled)]'
+                : 'text-[var(--text-tertiary)]',
+          )}
+        >
+          <SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />
+        </span>
+      )}
+
       {/* 右键菜单——与 SessionItem 同款 coordinate-anchored DropdownMenu */}
       {!isEditing && (
         <DropdownMenu
@@ -950,6 +974,7 @@ function TimeActionsSlot({
   onOpenMenu,
   onArchiveNow,
   onUnarchive,
+  yieldToOrdinalBadge = false,
 }: {
   sessionId: string;
   activityIso: string;
@@ -965,6 +990,8 @@ function TimeActionsSlot({
   onOpenMenu: (e: ReactMouseEvent<HTMLButtonElement>) => void;
   onArchiveNow: () => void;
   onUnarchive: () => void;
+  /** mod+1..9 序号徽标出现时让位:徽标独占右缘,不与时间/badge 并排。 */
+  yieldToOrdinalBadge?: boolean;
 }) {
   const { t } = useTranslation();
   return (
@@ -975,7 +1002,7 @@ function TimeActionsSlot({
           // duration 与操作钮的渐显同拍(120ms),让位/回归一进一出同步。
           'flex items-center gap-1 transition-opacity duration-[120ms]',
           !archivePending && 'group-hover/card:opacity-0',
-          (menuOpen || archivePending) && 'opacity-0',
+          (menuOpen || archivePending || yieldToOrdinalBadge) && 'opacity-0',
         )}
       >
         <WorktreeBadge sessionId={sessionId} size={11} className="size-3.5" />

@@ -146,4 +146,36 @@ describe('materializeLocalMarkdownImages', () => {
     expect(result).toEqual({ absPaths: [], text: '图片' });
     expect(deps.ingest).not.toHaveBeenCalled();
   });
+
+  it('existingAbsPaths 未经 realpath 规范化时仍然去重命中', async () => {
+    // 上一个用例只在 os.tmpdir() 恰好是软链的宿主上才有区分力(macOS 的 /var →
+    // /private/var);CI 是 ubuntu、/tmp 不是软链,去重键写错也照样绿。这里把
+    // realpath 整个注入,不碰文件系统,三平台同一行为:入表键若不过 realpath,
+    // 别名查不中规范路径,同一张受管图片会被重复追加。
+    const canonical = path.join(path.sep, 'canonical', 'store', 'a.png');
+    const alias = path.join(path.sep, 'alias', 'store', 'a.png');
+    const realpath = vi.fn(async (value: string) => (value === alias ? canonical : value));
+    const deps = {
+      ...makeDeps(alias),
+      realpath,
+      // 去重命中时下面两个不会被调用;留桩是为了让回退的失败表现为「多追加一张」
+      // 而不是抛错,断言才指向真正的原因。
+      stat: async () => ({ isFile: () => true, size: PNG_BYTES.length }),
+      readFile: async () => PNG_BYTES,
+    };
+
+    const result = await materializeLocalMarkdownImages(
+      {
+        text: `![图片](cindy-media://blobs/${'c'.repeat(64)}.png)`,
+        workingDir: path.join(path.sep, 'workdir'),
+        sessionId: 'session-6',
+        existingAbsPaths: [alias],
+      },
+      deps,
+    );
+
+    expect(realpath).toHaveBeenCalledWith(alias);
+    expect(result).toEqual({ absPaths: [], text: '图片' });
+    expect(deps.ingest).not.toHaveBeenCalled();
+  });
 });

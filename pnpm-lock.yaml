@@ -16,6 +16,7 @@ overrides:
   fast-uri: ^3.1.4
   sharp: ^0.35.0
   '@esbuild-kit/core-utils>esbuild': ^0.25.0
+  builder-util-runtime: ^9.7.0
 
 patchedDependencies:
   expo-paste-input@0.2.2:
@@ -5188,8 +5189,8 @@ packages:
     resolution: {integrity: sha512-lHblz4ahamxpTmnsk+MNTRWsjYKv965MwOrSJyeD588rR3Jcu7swE+0wN5F+PbL5cjgu/9ObkhfzEPuofEMwLA==}
     engines: {node: '>=10.0.0'}
 
-  builder-util-runtime@9.2.4:
-    resolution: {integrity: sha512-upp+biKpN/XZMLim7aguUyW8s0FUpDvOtK6sbanMFDAMBzpHDqdhgVYm6zc9HJ6nWo7u2Lxk60i2M6Jd3aiNrA==}
+  builder-util-runtime@9.7.0:
+    resolution: {integrity: sha512-g/kR520giAFYkSXTzcmF3kqQq7wi8F6N6SzeDgZrqTBN+VHdmgWOyTdD1yD7AATDId/yXLvuP34CxW46/BwCdw==}
     engines: {node: '>=12.0.0'}
 
   builder-util@24.13.1:
@@ -14762,7 +14763,7 @@ snapshots:
       async-exit-hook: 2.0.1
       bluebird-lst: 1.0.9
       builder-util: 24.13.1
-      builder-util-runtime: 9.2.4
+      builder-util-runtime: 9.7.0
       chromium-pickle-js: 0.2.0
       debug: 4.4.3
       dmg-builder: 24.13.3(electron-builder-squirrel-windows@24.13.3)
@@ -15109,7 +15110,7 @@ snapshots:
   buildcheck@0.0.7:
     optional: true
 
-  builder-util-runtime@9.2.4:
+  builder-util-runtime@9.7.0:
     dependencies:
       debug: 4.4.3
       sax: 1.6.0
@@ -15122,7 +15123,7 @@ snapshots:
       '@types/debug': 4.1.13
       app-builder-bin: 4.0.0
       bluebird-lst: 1.0.9
-      builder-util-runtime: 9.2.4
+      builder-util-runtime: 9.7.0
       chalk: 4.1.2
       cross-spawn: 7.0.6
       debug: 4.4.3
@@ -15885,7 +15886,7 @@ snapshots:
     dependencies:
       app-builder-lib: 24.13.3(dmg-builder@24.13.3)(electron-builder-squirrel-windows@24.13.3)
       builder-util: 24.13.1
-      builder-util-runtime: 9.2.4
+      builder-util-runtime: 9.7.0
       fs-extra: 10.1.0
       iconv-lite: 0.6.3
       js-yaml: 4.3.0
@@ -16018,7 +16019,7 @@ snapshots:
     dependencies:
       '@types/fs-extra': 9.0.13
       builder-util: 24.13.1
-      builder-util-runtime: 9.2.4
+      builder-util-runtime: 9.7.0
       chalk: 4.1.2
       fs-extra: 10.1.0
       lazy-val: 1.0.5

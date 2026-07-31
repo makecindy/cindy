@@ -84,6 +84,10 @@ import { getAllSpendDays } from '../../localDb/dailySpend';
 import { getModelUsageSince } from '../../localDb/dailyModelUsage';
 import { getModelPricing, isModelPricingRefreshInFlight } from '../modelPricing';
 import {
+  __resetActiveLedgerCurrencyForTesting,
+  setActiveLedgerCurrency,
+} from '../ledgerCurrency';
+import {
   DEFAULT_USAGE_CURRENCY,
   USD_TO_CNY_FIXED_RATE,
   zeroUsageMoney,
@@ -167,6 +171,9 @@ beforeEach(async () => {
   );
   currentDbClient.userId = 'user-a';
   __resetUsageHistoryCacheForTesting();
+  // 账本币种是跨用例的模块级状态,逐例重置回未知,让默认路径的用例始终从
+  // 构建默认币种起算,不受前一例显式设定的账号币种影响。
+  __resetActiveLedgerCurrencyForTesting();
   vi.mocked(getAllSpendDays).mockResolvedValue([]);
   vi.mocked(getModelUsageSince).mockResolvedValue([]);
   vi.mocked(getModelPricing).mockResolvedValue(null);
@@ -385,7 +392,12 @@ describe('readUsageHistoryWith', () => {
   it('keeps a USD-settled account history intact regardless of build region', async () => {
     // 结算币种由服务端按账号所属租户下发,不是构建区域。账本币种若按区域取,
     // 以 USD 结算的账号在 CN 构建上每一行都会被判成异币种归零 —— 等于这些用户不计费。
-    // 判据取自当前 Gateway 报价目录的币种。
+    //
+    // 账号币种必须在这里显式落一次:本文件把 modelPricing 整体 mock 掉了,而生产里
+    // 正是它(replaceGatewayModelPricing / 磁盘快照恢复)把报价币种写进账本币种。
+    // 不落这一笔,断言就退化成"构建默认币种恰好是 USD",在 CN 构建上必然红,
+    // 反而验不到本例声称的"与构建区域无关"。
+    setActiveLedgerCurrency('USD');
     const usdRow = (amount: number): RegionalMoney => ({
       amount,
       currency: 'USD',

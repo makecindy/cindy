@@ -34,6 +34,7 @@ import { WechatBotSection } from './WechatBotSection';
 import {
   showCindyGroup,
   showDiscordBot,
+  showLarkBot,
   showTelegramBot,
   type ImBotIdentity,
 } from './imBotVisibility';
@@ -61,12 +62,14 @@ export function isImBotSettingsGroup(value: string | null): value is ImBotSettin
   return value === 'cindy' || value === 'personal';
 }
 
-/** 个人栏内容 —— 用户自配凭证的机器人(国区个人账号无 Discord/Telegram)。 */
+/** 个人栏内容 —— 用户自配凭证的机器人(国区个人账号无 Discord/Lark/Telegram)。 */
 function PersonalGroupContent({
   showDiscord,
+  showLark,
   showTelegram,
 }: {
   showDiscord: boolean;
+  showLark: boolean;
   showTelegram: boolean;
 }) {
   const [expandedChannel, setExpandedChannel] = useState<
@@ -80,7 +83,11 @@ function PersonalGroupContent({
   return (
     <div className="flex flex-col gap-3">
       <WechatBotSection expanded={expandedChannel === 'wechat'} onToggle={() => toggle('wechat')} />
-      <FeishuBotSection expanded={expandedChannel === 'feishu'} onToggle={() => toggle('feishu')} />
+      <FeishuBotSection
+        expanded={expandedChannel === 'feishu'}
+        onToggle={() => toggle('feishu')}
+        showLark={showLark}
+      />
       <DingTalkBotSection
         expanded={expandedChannel === 'dingtalk'}
         onToggle={() => toggle('dingtalk')}
@@ -117,6 +124,7 @@ export function ImBotSection({
   };
   const cindyGroupAvailable = showCindyGroup(identity);
   const discordVisible = showDiscordBot(identity);
+  const larkVisible = showLarkBot(identity);
   const telegramVisible = showTelegramBot(identity);
   const availableGroups = cindyGroupAvailable
     ? IM_BOT_SETTINGS_GROUPS
@@ -189,7 +197,11 @@ export function ImBotSection({
         {effectiveGroup === 'cindy' ? (
           <HookConnectionsSection />
         ) : (
-          <PersonalGroupContent showDiscord={discordVisible} showTelegram={telegramVisible} />
+          <PersonalGroupContent
+            showDiscord={discordVisible}
+            showLark={larkVisible}
+            showTelegram={telegramVisible}
+          />
         )}
       </div>
     </div>

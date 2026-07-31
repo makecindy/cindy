@@ -77,6 +77,17 @@
       "note": "个人微信连接的产品名称，沿用微信官方品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。"
     },
     {
+      "id": "lark",
+      "status": "proposed",
+      "en": "Lark",
+      "translations": {
+        "zh-CN": "Lark",
+        "ja": "Lark",
+        "ko": "Lark"
+      },
+      "note": "Lark 国际版 IM 服务的官方品牌名，四语统一保留原品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。"
+    },
+    {
       "id": "personal-wechat",
       "status": "proposed",
       "en": "Personal WeChat",

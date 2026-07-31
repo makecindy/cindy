@@ -464,9 +464,9 @@
       "sessionDoneLabel": "セッション完了時にデスクトップ通知を表示",
       "sessionDoneHint": "ウィンドウが非アクティブの場合のみ表示し、フォアグラウンドでの中断を防ぎます。",
       "sessionDoneAria": "セッション完了時のデスクトップ通知を切り替え",
-      "feishuLabel": "セッション完了または返信が必要な時に Feishu メッセージを送信",
-      "feishuHint": "連携済みの Feishu ボットからプライベートメッセージを送信します。ウィンドウが非アクティブの場合のみ送信。",
-      "feishuDisabledHint": "先に「Feishu ボット」で設定し、ボットに 1 度メッセージを送ってバインドを完了してください。",
+      "feishuLabel": "セッション完了または返信が必要な時に Feishu / Lark メッセージを送信",
+      "feishuHint": "連携済みの Feishu または Lark ボットからプライベートメッセージを送信します。ウィンドウが非アクティブの場合のみ送信。",
+      "feishuDisabledHint": "先に「Feishu / Lark ボット」で設定し、ボットに 1 度メッセージを送ってバインドを完了してください。",
       "feishuAria": "セッション完了時の Feishu 通知を切り替え"
     },
     "windowBehavior": {
@@ -1580,9 +1580,15 @@
       "saveFailed": "Git セーフティ設定の保存に失敗しました"
     },
     "feishuBot": {
-      "title": "Feishu ボット",
-      "description": "Feishu ボット経由で {{appName}} に接続し、いつでもどこでも作業できます。",
-      "statusAria": "Feishu ボットの状態: {{status}}",
+      "title": "Feishu / Lark ボット",
+      "description": "Feishu または Lark ボット経由で {{appName}} に接続し、いつでもどこでも作業できます。",
+      "statusAria": "Feishu / Lark ボットの状態: {{status}}",
+      "serviceLabel": "サービス",
+      "serviceAria": "IM サービスを選択",
+      "services": {
+        "feishu": "Feishu",
+        "lark": "Lark"
+      },
       "status": {
         "needsConfig": "設定が必要",
         "connecting": "接続中…",
@@ -1592,16 +1598,17 @@
         "error": "接続失敗"
       },
       "connected": {
-        "heading": "Feishu ボットは接続済み",
+        "heading": "{{service}} ボットは接続済み",
         "note": "現在の QR コードスキャンユーザーにバインドされています。他の人からのプライベートメッセージは自動的に無視されます。",
+        "serviceLabel": "サービス",
         "appIdLabel": "App ID",
         "ownerLabel": "Owner",
         "ownerWaiting": "初回プライベートメッセージのバインドを待機中",
-        "reconnect": "Feishu ボットを再接続",
+        "reconnect": "{{service}} ボットを再接続",
         "clear": "連携解除"
       },
       "saved": {
-        "heading": "Feishu ボットは連携済み",
+        "heading": "{{service}} ボットは連携済み",
         "connectingNote": "ボットの認証情報は保存されています。接続しています。",
         "reconnectingNote": "ボットの認証情報は保存されています。接続を復旧しています。",
         "conflictNote": "ボットの認証情報は保存されていますが、この App ID は別のデバイスで使用中です。",
@@ -1614,11 +1621,11 @@
       "appSecretPlaceholder": "sec_xxxxxxxxxxxxxxxxxx",
       "showSecret": "シークレットを表示",
       "hideSecret": "シークレットを非表示",
-      "createLink": "クリックして作成 ↗",
+      "createLink": "{{service}} オープンプラットフォームで作成 ↗",
       "createLinkSuffix": "、作成後にここに入力します",
-      "clearAria": "Feishu ボットの連携を解除",
+      "clearAria": "IM ボットの連携を解除",
       "clearConfirm": {
-        "title": "Feishu ボットの連携を解除しますか？",
+        "title": "IM ボットの連携を解除しますか？",
         "description": "連携を解除すると WebSocket 接続が切れ、ローカルに保存された App ID / App Secret / オーナー openId が削除されます。再度使うには、再作成または再入力が必要です。",
         "confirm": "連携解除",
         "cancel": "キャンセル"
@@ -2785,6 +2792,42 @@
         "open-terminal": {
           "label": "ターミナルを開く",
           "description": "右サイドバーでターミナルを開きます（既に開いている場合はフォーカス）"
+        },
+        "switch-session-1": {
+          "label": "1番目のセッションに移動",
+          "description": "サイドバーに表示されている1番目のセッションに移動します"
+        },
+        "switch-session-2": {
+          "label": "2番目のセッションに移動",
+          "description": "サイドバーに表示されている2番目のセッションに移動します"
+        },
+        "switch-session-3": {
+          "label": "3番目のセッションに移動",
+          "description": "サイドバーに表示されている3番目のセッションに移動します"
+        },
+        "switch-session-4": {
+          "label": "4番目のセッションに移動",
+          "description": "サイドバーに表示されている4番目のセッションに移動します"
+        },
+        "switch-session-5": {
+          "label": "5番目のセッションに移動",
+          "description": "サイドバーに表示されている5番目のセッションに移動します"
+        },
+        "switch-session-6": {
+          "label": "6番目のセッションに移動",
+          "description": "サイドバーに表示されている6番目のセッションに移動します"
+        },
+        "switch-session-7": {
+          "label": "7番目のセッションに移動",
+          "description": "サイドバーに表示されている7番目のセッションに移動します"
+        },
+        "switch-session-8": {
+          "label": "8番目のセッションに移動",
+          "description": "サイドバーに表示されている8番目のセッションに移動します"
+        },
+        "switch-session-9": {
+          "label": "9番目のセッションに移動",
+          "description": "サイドバーに表示されている9番目のセッションに移動します"
         }
       },
       "none": "未設定",
@@ -4360,12 +4403,12 @@
   },
   "imBot": {
     "conflictDialog": {
-      "title": "この Feishu Bot App は既に使用中です",
+      "title": "この {{service}} Bot App は既に使用中です",
       "bodyPrefix": "現在の App",
       "bodyMain": "は別の端末で既にロングコネクションを開始しています。同僚が同じ App ID を使用している可能性があります。一つの App は一台にしか接続できないため、競合を避けるために本機では自動的に切断しました。",
       "suggestionsHeading": "対処方法は 2 つあります：",
       "suggestion1": "1. 相手と相談して時間をずらして使用し、相手側で先に資格情報をクリアしてから本機で再接続する。",
-      "suggestion2": "2. Feishu オープンプラットフォームで自分専用の App を別途作成し、同僚と分けて使用する。",
+      "suggestion2": "2. {{service}} オープンプラットフォームで自分専用の App を別途作成し、同僚と分けて使用する。",
       "dismiss": "閉じる",
       "createOwnApp": "自分の App を作成 ↗"
     }
@@ -7607,16 +7650,16 @@
     "toasts": {
       "googleConnected": "Google に接続しました",
       "codexConnected": "ChatGPT アカウントに接続しました",
-      "feishuBotConnected": "Feishu ボットに接続しました",
-      "feishuBotReconnected": "Feishu ボットを再接続しました",
-      "feishuBotReconnectFailed": "再接続に失敗しました。Feishu の設定を確認して再試行してください",
+      "feishuBotConnected": "IM ボットに接続しました",
+      "feishuBotReconnected": "IM ボットを再接続しました",
+      "feishuBotReconnectFailed": "再接続に失敗しました。IM ボットの設定を確認して再試行してください",
       "feishuBotConflict": "この App は既に使用されています。同僚が同じ App ID を使用している可能性があります",
       "feishuBotConnectFailed": "接続に失敗しました。App ID / Secret を確認してください",
       "feishuBotSaveFailed": "保存に失敗しました：{{message}}",
-      "feishuBotCleared": "Feishu ボットの認証情報を削除しました",
+      "feishuBotCleared": "IM ボットの認証情報を削除しました",
       "feishuBotClearFailed": "削除に失敗しました：{{message}}",
-      "feishuBotCreatedConnected": "Feishu ボットを作成し接続しました",
-      "feishuBotCreatedCheck": "Feishu ボットを作成しました。接続状態をご確認ください",
+      "feishuBotCreatedConnected": "IM ボットを作成し接続しました",
+      "feishuBotCreatedCheck": "IM ボットを作成しました。接続状態をご確認ください",
       "discordBotConnected": "Discord ボット設定を保存しました",
       "discordBotConnectFailed": "Discord ボットの接続に失敗しました。Token と権限を確認してください",
       "discordBotSaveFailed": "保存に失敗しました：{{message}}",
