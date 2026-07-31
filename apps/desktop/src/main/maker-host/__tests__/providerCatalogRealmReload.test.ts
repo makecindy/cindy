@@ -269,16 +269,34 @@ describe('provider catalog realm reload', () => {
     expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-07-31T12:30:00.000Z');
   });
 
-  it('does not downgrade the active registry when refresh falls back to an older cache', async () => {
+  it('does not downgrade the active catalog when refresh falls back to an older cache', async () => {
+    const activeXaiModels = getActiveCatalog().providers
+      .find((provider) => provider.id === 'xai')
+      ?.models.codex;
+    const staleCatalog = structuredClone(
+      catalogNamed('catalog-global-cached', '2026-07-31T11:00:00.000Z'),
+    );
+    const staleXai = staleCatalog.providers.find((provider) => provider.id === 'xai');
+    if (!staleXai) throw new Error('expected bundled xai provider');
+    staleXai.models.codex = [{
+      id: 'xai/stale-cache-only',
+      name: 'Stale cache only',
+      contextWindow: 1,
+      efforts: [],
+      defaultEffort: null,
+    }];
     const refresh = refreshActiveCatalogFromSource();
     await Promise.resolve();
     const load = h.refreshLoads.at(-1)!;
     load.resolve({
-      catalog: catalogNamed('catalog-global-cached', '2026-07-31T11:00:00.000Z'),
+      catalog: staleCatalog,
       source: 'cache',
     });
     await refresh;
 
     expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-07-31T12:30:00.000Z');
+    expect(
+      getActiveCatalog().providers.find((provider) => provider.id === 'xai')?.models.codex,
+    ).toEqual(activeXaiModels);
   });
 });
