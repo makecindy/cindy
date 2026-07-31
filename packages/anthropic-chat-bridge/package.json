@@ -1,0 +1,31 @@
+{
+  "name": "@cindy/anthropic-chat-bridge",
+  "version": "0.0.0",
+  "private": true,
+  "description": "In-process protocol translation handler that bridges Anthropic Messages API <-> OpenAI Chat Completions, letting Claude Code SDK drive Chat-Completions-only providers (DeepSeek, GLM, Kimi, SiliconFlow, ...) over their native wire protocol with a plain API key.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src/"
+  },
+  "author": {
+    "name": "XD Inc.",
+    "email": "feedback@cindy.app"
+  },
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/node": "*",
+    "eslint": "^9.0.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^3.2.4"
+  }
+}
