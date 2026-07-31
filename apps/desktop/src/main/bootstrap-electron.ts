@@ -1211,6 +1211,7 @@ import {
   APPLICATION_MENU_LABELS,
   type ApplicationMenuLocale,
 } from './applicationMenuLabels.js';
+import { installCindyCliCommand } from './installCliCommand.js';
 
 if (started) {
   app.quit();
@@ -1464,6 +1465,15 @@ function installApplicationMenu(
         {
           label: labels.issues,
           click: () => dispatchApplicationMenuCommand(mainWindow, 'open-issues'),
+        },
+        { type: 'separator' },
+        {
+          label: labels.installCli,
+          // 特权动作(写 PATH 目录 / 可能弹管理员授权)整段在 main 执行,
+          // 不经 renderer,也不新增 IPC 面。见 installCliCommand.ts。
+          click: () => {
+            void installCindyCliCommand(mainWindow, locale);
+          },
         },
       ],
     },

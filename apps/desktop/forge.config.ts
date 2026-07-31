@@ -760,6 +760,12 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
     base.unshift(`resources/${UPDATER_EXE}`);
   }
 
+  // macOS 「帮助 → 安装到命令行」symlink 的目标脚本(<App>/Contents/Resources/cli/cindy)。
+  // 仅 darwin 有此功能,其它平台不打进包。exec 位由 git 跟踪,extraResource 拷贝时保留。
+  if (targetPlatform === 'darwin') {
+    base.push('resources/cli');
+  }
+
   return base;
 }
 

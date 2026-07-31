@@ -1,0 +1,42 @@
+#!/bin/sh
+# Cindy 命令行启动器 —— 随 Cindy.app 分发,由「帮助 → 安装到命令行」symlink 到 PATH。
+# 用法:  cindy [路径 ...]      例如  cindy .
+#
+# 手动卸载:  rm /usr/local/bin/cindy
+#
+# 自定位:先跟随 symlink 找到本脚本的真实路径,再按包内布局
+#   <Cindy.app>/Contents/Resources/cli/cindy
+# 反推 .app 根目录。因此即使 app 被移动位置,已装好的 symlink 仍然可用,无需重装
+# (与 VS Code 的 bin/code 同一思路)。
+SELF="$0"
+while [ -h "$SELF" ]; do
+  link=$(readlink "$SELF")
+  case "$link" in
+    /*) SELF="$link" ;;
+    *) SELF="$(dirname "$SELF")/$link" ;;
+  esac
+done
+BIN_DIR=$(cd "$(dirname "$SELF")" >/dev/null 2>&1 && pwd)
+APP=$(cd "$BIN_DIR/../../.." >/dev/null 2>&1 && pwd)
+
+# 无参数:仅唤起 / 聚焦 app。
+if [ "$#" -eq 0 ]; then
+  exec open -a "$APP"
+fi
+
+# 有参数:把每个参数解析成绝对路径(cindy . → 当前目录绝对路径),再交给
+# `open -a`;目录会通过 app 的 open-file 管线落成工作目录。用 append+shift 惯用法
+# 原地重建位置参数,for 快照原始列表,循环内改写 $@ 不影响遍历。
+for arg in "$@"; do
+  if [ -d "$arg" ]; then
+    abs=$(cd "$arg" >/dev/null 2>&1 && pwd)
+  elif [ -e "$arg" ]; then
+    dir=$(cd "$(dirname "$arg")" >/dev/null 2>&1 && pwd) && abs="$dir/$(basename "$arg")"
+  else
+    abs="$arg"
+  fi
+  set -- "$@" "$abs"
+  shift
+done
+
+exec open -a "$APP" "$@"
