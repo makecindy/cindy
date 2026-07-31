@@ -156,6 +156,8 @@ export interface DeviceLinkTiming {
   transportRetryIntervalMs: number;
   /** 单个连接世代内的最大发送次数；耗尽后主动重连并在新世代继续。 */
   transportMaxRetryAttempts: number;
+  /** presence fire-and-forget 帧命中 WebSocket 背压后的合并重试间隔。 */
+  presenceRetryIntervalMs: number;
 }
 
 const DEFAULT_TIMING: DeviceLinkTiming = {
@@ -169,6 +171,7 @@ const DEFAULT_TIMING: DeviceLinkTiming = {
   handshakeTimeoutMs: 15_000,
   transportRetryIntervalMs: TRANSPORT_RETRY_INTERVAL_MS,
   transportMaxRetryAttempts: TRANSPORT_MAX_RETRY_ATTEMPTS,
+  presenceRetryIntervalMs: 500,
 };
 
 export type DeviceLinkStatus = 'stopped' | 'connecting' | 'online';
@@ -336,6 +339,9 @@ export class DeviceLinkClient {
   private legacyInboundBytes = 0;
   /** 断线/stop 后旧 handler 可能永不 settle；新连接必须与其队列 bookkeeping 隔离。 */
   private legacyInboundGeneration = 0;
+  /** presence 是覆盖语义；背压时只保留每个字段的最新值，避免异常逃逸或无界排队。 */
+  private pendingPresence: PresenceSetPayload | null = null;
+  private presenceRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
   // —— host 订阅 ——
   private statusHandlers = new Set<(s: DeviceLinkStatus) => void>();
@@ -433,6 +439,7 @@ export class DeviceLinkClient {
     this.clearPeerTransport();
     this.pendingInboundLinkOffers.clear();
     this.resetLegacyInboundQueue();
+    this.clearPendingPresence();
     const ws = this.ws;
     this.ws = null;
     this.connEpoch++;
@@ -483,7 +490,8 @@ export class DeviceLinkClient {
   /** 部分更新本机 presence(开关 / busy);离线时静默忽略(重连时 hello 会带全量) */
   sendPresence(patch: PresenceSetPayload): void {
     if (this.status !== 'online') return;
-    this.sendEnvelope({ v: PROTOCOL_VERSION, kind: 'presence-set', payload: patch });
+    this.pendingPresence = { ...this.pendingPresence, ...patch };
+    this.flushPendingPresence();
   }
 
   /** 最近一次 hello-ack 声明的 server 能力(如 SERVER_CAPABILITY_NOTIFY);老 server = 空集。 */
@@ -881,6 +889,8 @@ export class DeviceLinkClient {
   private handleDisconnect(code?: number, reason?: string): void {
     this.clearTimers();
     this.ws = null;
+    // hello 会从 host 读取完整最新状态；旧连接上尚未发出的覆盖型 patch 不跨世代重放。
+    this.clearPendingPresence();
     for (const peer of this.peerTransport.values()) {
       peer.linkReady = false;
       if (peer.retryTimer) {
@@ -995,6 +1005,45 @@ export class DeviceLinkClient {
       clearInterval(this.pingTimer);
       this.pingTimer = null;
     }
+    if (this.presenceRetryTimer) {
+      clearTimeout(this.presenceRetryTimer);
+      this.presenceRetryTimer = null;
+    }
+  }
+
+  private flushPendingPresence(): void {
+    if (!this.pendingPresence || this.status !== 'online') return;
+    const patch = this.pendingPresence;
+    try {
+      this.sendEnvelope({ v: PROTOCOL_VERSION, kind: 'presence-set', payload: patch });
+      if (this.pendingPresence === patch) this.pendingPresence = null;
+    } catch (err) {
+      if (
+        err instanceof DeviceLinkError
+        && (err.code === 'BACKPRESSURE' || err.code === 'NOT_CONNECTED')
+      ) {
+        if (err.code === 'BACKPRESSURE') this.schedulePresenceRetry();
+        else this.clearPendingPresence();
+        return;
+      }
+      throw err;
+    }
+  }
+
+  private schedulePresenceRetry(): void {
+    if (this.presenceRetryTimer || !this.pendingPresence) return;
+    this.presenceRetryTimer = setTimeout(() => {
+      this.presenceRetryTimer = null;
+      this.flushPendingPresence();
+    }, this.timing.presenceRetryIntervalMs);
+    (this.presenceRetryTimer as unknown as { unref?: () => void }).unref?.();
+  }
+
+  private clearPendingPresence(): void {
+    this.pendingPresence = null;
+    if (!this.presenceRetryTimer) return;
+    clearTimeout(this.presenceRetryTimer);
+    this.presenceRetryTimer = null;
   }
 
   // ─── 内部:入站分发 ─────────────────────────────────────────────────────────

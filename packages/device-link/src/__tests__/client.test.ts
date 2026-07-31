@@ -8,6 +8,7 @@ import { PROTOCOL_VERSION, DeviceLinkError, type Envelope } from '../protocol.js
 import {
   DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
   DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+  MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES,
   encodeReliableFrames,
   makeTransportSkipPayload,
   parseTransportPayload,
@@ -1617,6 +1618,30 @@ describe('DeviceLinkClient', () => {
     expect(h.current().sent.some((e) => e.kind === 'push')).toBe(false); // 离线那条没被补发
     h.client.sendPush('dev-b', 'maker:event', { x: 1 });
     expect(h.current().sent.some((e) => e.kind === 'push' && e.dst === 'dev-b')).toBe(true);
+    h.client.stop();
+  });
+
+  it('presence 背压时合并最新状态并有界重试，不向 host 抛异常', async () => {
+    const h = makeHarness({ timing: { presenceRetryIntervalMs: 5 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    h.current().bufferedAmount = MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES;
+
+    expect(() => h.client.sendPresence({ busy: true })).not.toThrow();
+    expect(() => h.client.sendPresence({ remoteControlEnabled: false })).not.toThrow();
+    expect(h.current().sent.some((env) => env.kind === 'presence-set')).toBe(false);
+
+    h.current().bufferedAmount = 0;
+    await tick(10);
+    expect(h.current().sent.filter((env) => env.kind === 'presence-set')).toEqual([
+      expect.objectContaining({
+        payload: {
+          busy: true,
+          remoteControlEnabled: false,
+        },
+      }),
+    ]);
     h.client.stop();
   });
 
