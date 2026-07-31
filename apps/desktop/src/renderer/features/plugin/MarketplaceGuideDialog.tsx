@@ -13,12 +13,19 @@ import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 
-const STRUCTURE_EXAMPLE = `my-marketplace/
-├── .agents/plugins/marketplace.json   ← 清单
+/**
+ * 目录结构示例。路径本身不翻译，箭头后的解释性标签必须跟随界面语言 —— 否则
+ * 英/日/韩界面下展示与复制出来的内容里会夹着中文标签。路径列宽固定，标签长度
+ * 变化不影响箭头对齐。
+ */
+function structureExample(label: (key: string) => string): string {
+  return `my-marketplace/
+├── .agents/plugins/marketplace.json   ← ${label('structureLabelManifest')}
 └── plugins/
     └── my-plugin/
-        ├── ghost.json                 ← 插件身份卡
-        └── main.js                    ← 插件入口`;
+        ├── ghost.json                 ← ${label('structureLabelGhostCard')}
+        └── main.js                    ← ${label('structureLabelEntry')}`;
+}
 
 const MANIFEST_PATHS_EXAMPLE = `.agents/plugins/marketplace.json
 .agents/plugins/api_marketplace.json
@@ -63,6 +70,8 @@ function GuideCode({ children }: { children: string }) {
 export function MarketplaceGuideDialog({ open, onOpenChange }: MarketplaceGuideDialogProps) {
   const { t } = useTranslation();
   const guideKey = (key: string) => t(`settings.ghosts.market.sources.guide.${key}`);
+  // 展示与复制共用同一份已本地化的结构树,两处内容必须一致。
+  const structure = structureExample(guideKey);
 
   /** 把整份指南按纯文本组装进剪贴板，结构树与 JSON 示例原样带上。 */
   const copyGuide = async () => {
@@ -74,7 +83,7 @@ export function MarketplaceGuideDialog({ open, onOpenChange }: MarketplaceGuideD
       `## ${guideKey('structureTitle')}`,
       guideKey('structureBody'),
       '',
-      STRUCTURE_EXAMPLE,
+      structure,
       '',
       guideKey('structureNote'),
       '',
@@ -158,7 +167,7 @@ export function MarketplaceGuideDialog({ open, onOpenChange }: MarketplaceGuideD
           <div className="mt-4 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
             <GuideSection title={t('settings.ghosts.market.sources.guide.structureTitle')}>
               <p>{t('settings.ghosts.market.sources.guide.structureBody')}</p>
-              <GuideCode>{STRUCTURE_EXAMPLE}</GuideCode>
+              <GuideCode>{structure}</GuideCode>
               <p className="mt-2">{t('settings.ghosts.market.sources.guide.structureNote')}</p>
               <GuideCode>{MANIFEST_PATHS_EXAMPLE}</GuideCode>
             </GuideSection>

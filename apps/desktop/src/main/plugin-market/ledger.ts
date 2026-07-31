@@ -1,5 +1,9 @@
 import type { PluginScope } from '@cindy/plugin-protocol';
-import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
+import {
+  atomicWriteFileSync,
+  isAtomicBackupUnrecoverable,
+  readAtomicFileSync,
+} from '../utils/atomicWriteFile.js';
 
 const LEDGER_SCHEMA_VERSION = 1;
 
@@ -83,7 +87,10 @@ export class PluginMarketLedger {
       const text = readAtomicFileSync(this.filePath());
       if (text === null) return emptyLedger();
       raw = JSON.parse(text);
-    } catch {
+    } catch (error) {
+      // "备份在场但恢复不了"必须上抛:降级成空账本等于把一份救得回来的溯源
+      // 数据判死,后续写入会把它清掉。其余读取/解析失败才按空账本处理。
+      if (isAtomicBackupUnrecoverable(error)) throw error;
       return emptyLedger();
     }
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return emptyLedger();

@@ -85,9 +85,28 @@ function errorText(error: unknown): string {
 }
 
 /**
+ * 抹掉任意绝对路径。git 自己的输出之外，OpenSSH、credential helper、杀毒钩子都会
+ * 往 stderr 写宿主路径（`/Users/<name>/.ssh/id_rsa`、`C:\Users\<name>\...`、
+ * `~/.gitconfig`），只替换已知的缓存路径盖不住这些 —— 用户名与宿主目录结构不该
+ * 经 IPC 到达 Renderer。诊断用的完整原文仍在 main 日志里。
+ */
+function redactAbsolutePaths(text: string): string {
+  return (
+    text
+      // Windows：C:\Users\name\... / \\server\share\...
+      .replace(/[A-Za-z]:\\[^\s"'<>|]*/g, '<path>')
+      .replace(/\\\\[^\s"'<>|]+/g, '<path>')
+      // POSIX：/Users/name/... 只在至少两段时替换，避免把 /dev/null 之类噪音也吃掉
+      .replace(/\/(?:[^\s"'<>|/]+\/){2,}[^\s"'<>|/]*/g, '<path>')
+      // ~ 开头的家目录相对路径
+      .replace(/~\/[^\s"'<>|]*/g, '<path>')
+  );
+}
+
+/**
  * 把原始 git 输出整理成可以回传 Renderer 的详情：只保留 stderr（execFile 的
- * message 前缀含完整命令行与内部 staging 路径）、抹掉残留的内部路径与 URL
- * 内嵌凭证。完整原文仍留在 main 日志（调用方记录）。
+ * message 前缀含完整命令行与内部 staging 路径）、抹掉 URL 内嵌凭证与任意绝对
+ * 路径。完整原文仍留在 main 日志（调用方记录）。
  */
 function sanitizeGitDetail(error: unknown, internalPaths: readonly string[]): string {
   const raw =
@@ -95,11 +114,14 @@ function sanitizeGitDetail(error: unknown, internalPaths: readonly string[]): st
       ? String((error as { stderr?: unknown }).stderr)
       : errorText(error);
   let text = raw;
+  // 已知的内部缓存路径换成有意义的占位符（比统一的 <path> 更可读）。
   for (const internalPath of internalPaths) {
     text = text.split(internalPath).join('<marketplace>');
   }
   // URL 内嵌凭证（https://user:pass@host）不进 Renderer。
   text = text.replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/g, '$1***@');
+  // 兜住其余任意绝对路径（SSH identity file、credential helper、杀毒钩子等）。
+  text = redactAbsolutePaths(text);
   return text.trim().slice(0, 512);
 }
 

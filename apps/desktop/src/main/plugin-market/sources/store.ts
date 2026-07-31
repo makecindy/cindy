@@ -6,7 +6,11 @@
  * 不复制发现到的插件数据——快照时重新发现，磁盘上的克隆目录才是事实。
  */
 import type { MarketSource, MarketSourceConfig } from '../../../shared/pluginMarket.js';
-import { atomicWriteFileSync, readAtomicFileSync } from '../../utils/atomicWriteFile.js';
+import {
+  atomicWriteFileSync,
+  isAtomicBackupUnrecoverable,
+  readAtomicFileSync,
+} from '../../utils/atomicWriteFile.js';
 
 const SOURCES_SCHEMA_VERSION = 1;
 
@@ -114,7 +118,10 @@ export class MarketSourceStore {
       const text = readAtomicFileSync(this.filePath());
       if (text === null) return emptySources();
       raw = JSON.parse(text);
-    } catch {
+    } catch (error) {
+      // "备份在场但恢复不了"必须上抛:降级成空来源表会让后续写入清掉唯一快照,
+      // 用户添加过的全部自定义市场来源永久丢失。其余失败才按空来源表处理。
+      if (isAtomicBackupUnrecoverable(error)) throw error;
       return emptySources();
     }
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return emptySources();

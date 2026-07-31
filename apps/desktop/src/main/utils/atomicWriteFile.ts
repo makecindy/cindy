@@ -3,26 +3,55 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 /**
- * 主文件缺失且 `.bak` 在场时把备份恢复回主文件,返回是否处于"曾用备份兜底"状态。
+ * 主文件缺失但 `.bak` 仍在、且无法恢复回来。
+ *
+ * 这种状态下磁盘上唯一的有效快照是那个 `.bak`,任何"按空数据继续"的行为都会把它
+ * 永久丢掉(读成空 → 用空数据写入 → 主文件出现 → 下次写入把 .bak 当陈旧残留删掉)。
+ * 因此读写两侧都必须 fail loud,把决定权交给上层而不是静默降级。
+ */
+export class AtomicBackupUnrecoverableError extends Error {
+  readonly code = 'ATOMIC_BACKUP_UNRECOVERABLE' as const;
+
+  constructor(readonly filePath: string, cause?: unknown) {
+    super(`Cannot restore ${filePath} from its .bak backup`);
+    this.name = 'AtomicBackupUnrecoverableError';
+    if (cause !== undefined) this.cause = cause;
+  }
+}
+
+/** 是否为"备份无法恢复"错误(调用方据此避免降级成空数据)。 */
+export function isAtomicBackupUnrecoverable(error: unknown): boolean {
+  return error instanceof AtomicBackupUnrecoverableError;
+}
+
+/**
+ * 主文件缺失且 `.bak` 在场时把备份恢复回主文件。
  *
  * 这是 Windows 备份交换失败后唯一的有效快照。恢复动作必须同时出现在读与写两侧:
  * 只放在写侧时,调用方会先把缺失的主文件读成空数据,再拿这份空数据发起写入 ——
  * 写入前恢复的备份随即被空快照覆盖,数据仍然永久丢失。
+ *
+ * 返回值必须区分"发现备份"与"恢复成功":恢复失败(Windows 文件锁/杀毒占用)时
+ * 按 `restored` 处理会让读取方读成空、写入方拿空数据覆盖,唯一快照照样丢 ——
+ * 所以这里抛 `AtomicBackupUnrecoverableError`,由两侧一致地拒绝继续。
  */
-function restoreBackupIfMainMissing(filePath: string): boolean {
+function restoreBackupIfMainMissing(filePath: string): 'restored' | 'not-needed' {
   const backupPath = `${filePath}.bak`;
-  if (fs.existsSync(filePath) || !fs.existsSync(backupPath)) return false;
+  if (fs.existsSync(filePath) || !fs.existsSync(backupPath)) return 'not-needed';
   try {
     fs.renameSync(backupPath, filePath);
-  } catch {
-    // 恢复失败则仍保留 .bak,调用方继续以当前磁盘状态为准。
+  } catch (error) {
+    throw new AtomicBackupUnrecoverableError(filePath, error);
   }
-  return true;
+  return 'restored';
 }
 
 /**
  * 读取由 `atomicWriteFileSync` 维护的文件:主文件缺失时先从 `.bak` 恢复再读。
- * 文件确实不存在(或恢复失败)返回 null,由调用方决定空值语义。
+ * 文件确实不存在返回 null,由调用方决定空值语义。
+ *
+ * `.bak` 在场但恢复不了时抛 `AtomicBackupUnrecoverableError` —— **不要**把它
+ * 降级成 null:那等于把"有一份救得回来的数据"说成"没有数据",后续写入会清掉它。
  */
 export function readAtomicFileSync(filePath: string): string | null {
   restoreBackupIfMainMissing(filePath);
@@ -41,6 +70,10 @@ export function readAtomicFileSync(filePath: string): string | null {
  * 再失败（文件锁/杀毒/瞬时 I/O）会把旧文件与唯一临时副本都删掉，导致配置
  * 全丢。这里兜底改为备份交换：先把旧文件改名 .bak、再让 temp 落位、成功后
  * 删 .bak；任一步失败都从 .bak 恢复，.bak 残留由下次写入时清理。
+ *
+ * `.bak` 在场但恢复不了时**直接抛错、不写入**（`AtomicBackupUnrecoverableError`）：
+ * 那时它是磁盘上唯一有效的快照，继续写入会让它先被忽略、再在下一次写入时当陈旧
+ * 残留删掉。宁可这次写失败让上层看见，也不能把唯一副本换成派生自空数据的内容。
  */
 export function atomicWriteFileSync(filePath: string, contents: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -48,8 +81,8 @@ export function atomicWriteFileSync(filePath: string, contents: string): void {
   const backupPath = `${filePath}.bak`;
   // 上次 temp 落位与恢复都失败时,主文件缺失、.bak 是唯一有效快照:
   // 先把它恢复回主文件,再写入,避免把缺失主文件读成空后覆盖唯一快照。
-  // 主文件存在时,.bak 才是陈旧残留,直接清理。
-  if (!restoreBackupIfMainMissing(filePath)) {
+  // 主文件存在时,.bak 才是陈旧残留,直接清理。恢复不了则抛错,不写入。
+  if (restoreBackupIfMainMissing(filePath) === 'not-needed') {
     fs.rmSync(backupPath, { force: true });
   }
   try {

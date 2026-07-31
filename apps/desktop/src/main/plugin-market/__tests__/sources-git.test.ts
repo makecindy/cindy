@@ -195,4 +195,34 @@ describe('classifyGitFailure', () => {
       'MARKET_CLONE_FAILED',
     );
   });
+
+  it('redacts host paths and embedded credentials from the renderer-facing detail', () => {
+    // OpenSSH / credential helper / 杀毒钩子都会往 stderr 写宿主绝对路径;
+    // 用户名与宿主目录结构不该经 IPC 到达 Renderer(完整原文只留 main 日志)。
+    const stderr = [
+      'Warning: Identity file /Users/alice/.ssh/id_market not accessible.',
+      'error: cannot run C:\\Users\\alice\\AppData\\git-credential.exe',
+      'hint: see ~/.gitconfig for details',
+      'fatal: could not read Username for https://bob:s3cr3t@github.com',
+    ].join('\n');
+    const detail = classifyGitFailure(Object.assign(new Error('boom'), { stderr })).message;
+
+    expect(detail).not.toContain('alice');
+    expect(detail).not.toContain('/Users/');
+    expect(detail).not.toContain('C:\\Users');
+    expect(detail).not.toContain('~/.gitconfig');
+    expect(detail).not.toContain('s3cr3t');
+    // 仍要保留可引导的原因文本。
+    expect(detail).toContain('Identity file');
+    expect(detail).toContain('could not read Username');
+  });
+
+  it('keeps the marketplace placeholder for known internal cache paths', () => {
+    const stderr = 'fatal: destination path /tmp/cache/slot/incoming/job already exists';
+    const detail = classifyGitFailure(
+      Object.assign(new Error('boom'), { stderr }),
+      ['/tmp/cache/slot/incoming/job'],
+    ).message;
+    expect(detail).toContain('<marketplace>');
+  });
 });

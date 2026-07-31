@@ -2,9 +2,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { atomicWriteFileSync, readAtomicFileSync } from '../atomicWriteFile';
+import {
+  AtomicBackupUnrecoverableError,
+  atomicWriteFileSync,
+  readAtomicFileSync,
+} from '../atomicWriteFile';
 
 const roots: string[] = [];
 
@@ -67,6 +71,30 @@ describe('readAtomicFileSync', () => {
     const file = makeFile();
     fs.rmSync(file);
     expect(readAtomicFileSync(file)).toBeNull();
+  });
+
+  it('throws instead of reporting empty when the .bak cannot be restored', () => {
+    const file = makeFile('only-snapshot');
+    fs.renameSync(file, `${file}.bak`);
+    // 模拟 Windows 文件锁/杀毒占用:恢复用的 rename 失败。
+    const renameSync = fs.renameSync;
+    const spy = vi.spyOn(fs, 'renameSync').mockImplementation(((from: string, to: string) => {
+      if (String(from) === `${file}.bak`) {
+        throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+      }
+      return renameSync(from as never, to as never);
+    }) as typeof fs.renameSync);
+    try {
+      // 关键:不能降级成 null。降级 = 调用方读成空数据 → 写入 → 主文件出现 →
+      // 下一次写入把 .bak 当陈旧残留删掉,唯一有效快照永久丢失。
+      expect(() => readAtomicFileSync(file)).toThrow(AtomicBackupUnrecoverableError);
+      // 写入侧同样必须拒绝,不能用派生自空数据的内容覆盖唯一快照。
+      expect(() => atomicWriteFileSync(file, '{}')).toThrow(AtomicBackupUnrecoverableError);
+      expect(fs.readFileSync(`${file}.bak`, 'utf8')).toBe('only-snapshot');
+      expect(fs.existsSync(file)).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('restores and reads .bak when the main file is missing', () => {
