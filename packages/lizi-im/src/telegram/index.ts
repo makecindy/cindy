@@ -937,11 +937,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       let ambient = false;
       const isOwner = String(m.from.id) === this.ownerUserId;
       if (!trigger && isOwner) {
-        // owner 的裸斜杠命令视为显式召唤: 群里命令语义只属于本 bot, 主人手打
-        // /project 不该因为没带 @username 而石沉大海(2026-07-31 实测反馈)。
+        // owner 的裸斜杠命令视为显式召唤: 群里主人手打 /project 不该因为没带
+        // @username 而石沉大海(2026-07-31 实测反馈)。只认**不带 @ 后缀**的
+        // 命令 token — `/cmd@其它bot` 是显式发给别的 bot 的, 不抢答(带
+        // @本bot 后缀的由 detectGroupTrigger 的 bot_command 分支处理)。
         // 成员的裸命令不在此列 — 仍走"命令 owner 专属"的静默丢弃。
         const plain = (m.text ?? '').trim();
-        if (/^\/[a-zA-Z]/.test(plain)) trigger = { text: plain };
+        const firstToken = plain.split(/\s/, 1)[0] ?? '';
+        if (/^\/[a-zA-Z][a-zA-Z0-9_]{0,63}$/.test(firstToken)) trigger = { text: plain };
       }
       if (!trigger) {
         // 全响应·自主判断(per-chat 配置): 未被召唤的消息也进 turn, 打 ambient

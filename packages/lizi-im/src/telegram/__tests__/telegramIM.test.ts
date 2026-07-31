@@ -233,10 +233,13 @@ describe('TelegramIM', () => {
     api.pushUpdates([
       groupMessage({ text: '/project', fromId: 111, messageId: 55 }),
       groupMessage({ text: '/new', fromId: 222, messageId: 56 }),
+      // 显式发给其它 bot 的命令: 本 bot 不抢答(多 bot 群, review P1)
+      groupMessage({ text: '/new@another_bot', fromId: 111, messageId: 58 }),
       groupMessage({ text: '/nonsense extra args', fromId: 111, messageId: 57 }),
     ]);
     await vi.waitFor(() => expect(events).toHaveLength(2));
-    // owner 裸命令(55/57)按原文进事件流(slash 层消费); 成员裸命令(56)静默丢弃
+    // owner 裸命令(55/57)按原文进事件流(slash 层消费);
+    // 成员裸命令(56)与发给其它 bot 的命令(58)静默丢弃
     expect(events[0]).toMatchObject({ senderId: 'g/-100200', text: '/project' });
     expect(events[1]).toMatchObject({ senderId: 'g/-100200', text: '/nonsense extra args' });
   });
