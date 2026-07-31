@@ -89,6 +89,7 @@ import { SessionHandoffCard } from './SessionHandoffCard';
 import { SessionLinkChip } from './SessionLinkChip';
 import { ProjectLinkChip } from './ProjectLinkChip';
 import { ImageLightbox } from './ImageLightbox';
+import { ImageHoverPreview } from './ImageHoverPreview';
 import { ImageMissingPlaceholder } from './ImageMissingPlaceholder';
 import { MarkdownDiffBlock } from './MarkdownDiffBlock';
 import { MarkdownMermaidBlock } from './MarkdownMermaidBlock';
@@ -893,6 +894,8 @@ function FileTargetChip({
   sessionId?: string;
 }) {
   const { t } = useTranslation();
+  const chipRef = useRef<HTMLElement>(null);
+  const [imagePreviewOpen, setImagePreviewOpen] = useState(false);
   // html + 有会话上下文:左键按用户偏好直开(内置侧边栏 / 系统浏览器,见设置 →
   // 个性化 → 链接打开方式);右键菜单额外提供「在侧边栏浏览器中打开」和
   // 「查看源文件」(TextLightbox 的入口从左键挪到这里)。
@@ -900,6 +903,19 @@ function FileTargetChip({
   // remote 会话:file:// / 系统浏览器都读本机 fs,先取回缓存副本再按偏好打开。
   const fileCtx = useChatSessionFile();
   const chipRemoteOrigin = isRemoteFileOrigin(fileCtx.origin) ? fileCtx.origin : null;
+  const imagePreviewSrc = useMemo(() => {
+    if (localKind !== 'image') return null;
+    const localUrl = toLocalFileUrl(resolvedAbsPath);
+    if (!chipRemoteOrigin) return localUrl;
+
+    // 远程图片只有在现有媒体协议能直接取件时才挂 hover 预览。SSH workdir 外
+    // 的路径需要点击后先下载缓存，不能让 xdt-file:// 误读本机同名路径。
+    const rewritten = rewriteToRemoteMediaOrigin(
+      localUrl,
+      toRemoteMediaOrigin(fileCtx.origin, fileCtx.workingDir),
+    );
+    return rewritten === localUrl ? null : rewritten;
+  }, [chipRemoteOrigin, fileCtx.origin, fileCtx.workingDir, localKind, resolvedAbsPath]);
   const htmlWithSession =
     localKind !== 'directory' && isHtmlFilePath(resolvedAbsPath) && sessionId ? sessionId : undefined;
   const sidebarTargetSessionId = useSidebarTargetSessionId(htmlWithSession);
@@ -912,6 +928,8 @@ function FileTargetChip({
   });
 
   const activate = () => {
+    // 与输入附件一致：点击打开 lightbox 前先撤掉 hover 层，避免关闭大图后残留。
+    setImagePreviewOpen(false);
     if (htmlWithSession) {
       if (chipRemoteOrigin) {
         void (async () => {
@@ -933,11 +951,16 @@ function FileTargetChip({
   return (
     <>
       <code
+        ref={chipRef}
         role="button"
         tabIndex={0}
         title={title}
         onClick={activate}
         onContextMenu={ctxMenu.onContextMenu}
+        onPointerEnter={() => {
+          if (imagePreviewSrc) setImagePreviewOpen(true);
+        }}
+        onPointerLeave={() => setImagePreviewOpen(false)}
         onKeyDown={(e) => {
           // 换掉原生按钮元素后,键盘激活要自己补回来。
           if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -956,6 +979,14 @@ function FileTargetChip({
       >
         {children}
       </code>
+      {imagePreviewSrc ? (
+        <ImageHoverPreview
+          open={imagePreviewOpen}
+          anchorRef={chipRef}
+          src={imagePreviewSrc}
+          alt={basename(resolvedAbsPath)}
+        />
+      ) : null}
       {ctxMenu.menu}
     </>
   );

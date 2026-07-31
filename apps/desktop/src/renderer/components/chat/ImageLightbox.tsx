@@ -94,6 +94,7 @@ import {
   zoomAtPoint,
 } from './lightboxGestures';
 import { ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
+import { containImageSize } from './imageDisplaySize';
 
 /** 图片不允许缩得比"适配窗口"更小,所以下限是 1 而不是共享常量的 0.2。 */
 const IMAGE_MIN_SCALE = 1;
@@ -428,12 +429,32 @@ export function ImageLightbox({
   const [isDrawing, setIsDrawing] = useState(false);
   // 图片自然尺寸:SVG viewBox 与烧录 canvas 的坐标基准。onLoad 时设置。
   const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null);
+  const [viewportSize, setViewportSize] = useState(() => ({
+    width: window.innerWidth,
+    height: window.innerHeight,
+  }));
   const imgRef = useRef<HTMLImageElement>(null);
   // once-bound keydown handler 需要读到最新标注态,与 viewportRef 同一模式。
   const isAnnotatingRef = useRef(false);
   const strokesRef = useRef<AnnotationStroke[]>([]);
   isAnnotatingRef.current = isAnnotating;
   strokesRef.current = strokes;
+
+  useEffect(() => {
+    const updateViewportSize = () => {
+      setViewportSize({ width: window.innerWidth, height: window.innerHeight });
+    };
+    window.addEventListener('resize', updateViewportSize);
+    return () => window.removeEventListener('resize', updateViewportSize);
+  }, []);
+
+  const fittedImageSize = naturalSize
+    ? containImageSize(
+        { width: naturalSize.w, height: naturalSize.h },
+        viewportSize.width - 80,
+        viewportSize.height - 80,
+      )
+    : null;
 
   const undoLastStroke = useCallback(() => {
     setStrokes((s) => s.slice(0, -1));
@@ -1101,6 +1122,10 @@ export function ImageLightbox({
           draggable={false}
           style={{
             display: 'block',
+            // viewBox-only SVG 在 shrink-to-fit 容器中仅靠 max-* 会塌成 0×0；
+            // onLoad 后写入 contain 结果，同时让标注层与真实图片盒严格同尺寸。
+            width: fittedImageSize?.width,
+            height: fittedImageSize?.height,
             maxWidth: 'calc(100vw - 80px)',
             maxHeight: 'calc(100vh - 80px)',
             objectFit: 'contain',
