@@ -1079,6 +1079,28 @@ export class ClaudeCodeAgent extends BaseAgent {
      * 一律解析失败 → MCP 策略不参与判定, 维持原权限链。
      */
     let registeredMcpServerNames: ReadonlySet<string> = new Set();
+    const noteSdkInitMcpServerNames = (message: unknown): void => {
+      if (!message || typeof message !== 'object') return;
+      const record = message as Record<string, unknown>;
+      if (
+        record.type !== 'system' ||
+        record.subtype !== 'init' ||
+        !Array.isArray(record.mcp_servers)
+      ) {
+        return;
+      }
+      const finalNames = record.mcp_servers
+        .map((server) => {
+          if (!server || typeof server !== 'object') return undefined;
+          const name = (server as Record<string, unknown>).name;
+          return typeof name === 'string' && name.length > 0 ? name : undefined;
+        })
+        .filter((name): name is string => name !== undefined);
+      // The init payload is the SDK's authoritative post-settings registry.
+      // Replace instead of unioning so a query rebuild cannot retain a server
+      // removed from user/project/local settings and disable a guard forever.
+      registeredMcpServerNames = new Set(finalNames);
+    };
     const buildMcpServers = (): Record<string, McpServerConfig> | undefined => {
       const providers = mcpProviders;
       if (providers.length === 0) return undefined;
@@ -2858,6 +2880,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               bridgeSuppressedDoneData = undefined;
             }
             const rawType = (rawMsg as { type?: string } | null)?.type;
+            noteSdkInitMcpServerNames(rawMsg);
             const expectedResumeSessionId = resumeValidationPending ? configuredResumeSessionId : undefined;
             const inBandInvalidConversationId =
               expectedResumeSessionId ?? (freshSessionValidationPending ? sdkSessionId : undefined);

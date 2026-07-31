@@ -752,6 +752,25 @@ describe('CodexAgent capability routing', () => {
     await expect(
       explicitHandlers.mcpServerElicitation(request('turn-explicit-feishu')),
     ).resolves.toEqual({ action: 'accept', content: null, _meta: null });
+    explicitHandlers.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-explicit-feishu',
+      item: {
+        id: 'colliding-user-feishu-call',
+        type: 'mcpToolCall',
+        server: 'cindy-routed-feishu-delegate',
+        tool: 'other_tool',
+        pluginId: null,
+      },
+    });
+    await expect(
+      explicitHandlers.mcpServerElicitation({
+        ...request('turn-explicit-feishu'),
+        _meta: {
+          codex_approval_kind: 'mcp_tool_call',
+        },
+      }),
+    ).resolves.toEqual({ action: 'decline', content: null, _meta: null });
 
     await implicitHandle.close();
     await explicitHandle.close();

@@ -360,6 +360,15 @@ function validateToolGuards(value: unknown): QueryToolGuard[] | undefined {
     }
     const guard = raw as Record<string, unknown>;
     requireString(guard.toolNamePrefix, `toolGuards[${index}].toolNamePrefix`);
+    if (guard.toolNamePrefix.trim().length === 0) {
+      throwInvalid(`toolGuards[${index}].toolNamePrefix must not be whitespace-only`);
+    }
+    if (guard.sourceServerId !== undefined) {
+      requireString(guard.sourceServerId, `toolGuards[${index}].sourceServerId`);
+      if (guard.sourceServerId.trim().length === 0) {
+        throwInvalid(`toolGuards[${index}].sourceServerId must not be whitespace-only`);
+      }
+    }
     if (
       guard.invocation !== 'auto' &&
       guard.invocation !== 'explicit-only' &&
@@ -390,6 +399,7 @@ function validateToolGuards(value: unknown): QueryToolGuard[] | undefined {
     }
     return {
       toolNamePrefix: guard.toolNamePrefix,
+      ...(guard.sourceServerId ? { sourceServerId: guard.sourceServerId } : {}),
       invocation: guard.invocation,
       ...(guard.explicitSelectors
         ? { explicitSelectors: [...guard.explicitSelectors] as string[] }

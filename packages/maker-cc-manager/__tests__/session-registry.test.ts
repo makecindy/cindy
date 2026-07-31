@@ -173,6 +173,7 @@ describe('SessionRegistry', () => {
         {
           toolNamePrefix:
             'mcp__plugin_feishu-delegate_feishu-delegate__',
+          sourceServerId: 'plugin:feishu-delegate:feishu-delegate',
           invocation: 'explicit-only',
           explicitSelectors: [
             '$feishu-delegate:message-feishu-coworkers',
@@ -296,6 +297,59 @@ describe('SessionRegistry', () => {
       preToolUse!({
         hook_event_name: 'PreToolUse',
         tool_name: 'mcp__plugin_guard__call',
+      }),
+    ).resolves.toEqual({ continue: true });
+  });
+
+  it('does not guard a settings MCP that collides with a normalized plugin prefix', async () => {
+    let captured: SdkQueryFactoryOptions | undefined;
+    const factory: SdkQueryFactory = (opts) => {
+      captured = opts;
+      async function* generate(): AsyncGenerator<unknown> {
+        yield {
+          type: 'system',
+          subtype: 'init',
+          session_id: 'sdk-settings-collision',
+          mcp_servers: [
+            { name: 'plugin:feishu-delegate:feishu-delegate', status: 'connected' },
+            { name: 'plugin_feishu-delegate_feishu-delegate', status: 'connected' },
+          ],
+        };
+        for await (const message of opts.inputStream) void message;
+      }
+      const query = generate();
+      return {
+        [Symbol.asyncIterator]: () => query,
+        async interrupt() {},
+        async setModel() {},
+        async setPermissionMode() {},
+        async applyFlagSettings() {},
+      };
+    };
+    const registry = new SessionRegistry({ sdkQueryFactory: factory });
+    registry.create({
+      sessionId: 's-settings-collision',
+      cwd: '/x',
+      model: 'm',
+      env: {},
+      toolGuards: [
+        {
+          toolNamePrefix: 'mcp__plugin_feishu-delegate_feishu-delegate__',
+          sourceServerId: 'plugin:feishu-delegate:feishu-delegate',
+          invocation: 'explicit-only',
+          explicitSelectors: ['/feishu-delegate:message-feishu-coworkers'],
+        },
+      ],
+    });
+    await waitFor(
+      () => registry.list()[0]?.sdkSessionId === 'sdk-settings-collision',
+    );
+    const preToolUse = captured?.hooks?.PreToolUse?.[0]?.hooks[0];
+    expect(preToolUse).toBeDefined();
+    await expect(
+      preToolUse!({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'mcp__plugin_feishu-delegate_feishu-delegate__read_messages',
       }),
     ).resolves.toEqual({ continue: true });
   });

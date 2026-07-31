@@ -188,6 +188,8 @@ interface SessionState {
   toolGuardSelectionText: string;
   /** False after an SDK result; the next accepted input starts a fresh turn. */
   toolGuardTurnActive: boolean;
+  /** Final MCP server names reported by the SDK init message. */
+  toolGuardMcpServerNames: ReadonlySet<string>;
   /**
    * forceful kill 已开始 (interrupt 发出、inputQueue 已/将 end) 但 consume
    * loop 尚未退出 — 此窗口内 alive 仍为 true, sendMessage 必须显式拒绝
@@ -432,6 +434,7 @@ export class SessionRegistry {
     const hooks = createToolGuardHooks(
       opts.toolGuards,
       () => sessionRef?.toolGuardSelectionText ?? '',
+      () => sessionRef?.toolGuardMcpServerNames ?? EMPTY_MCP_SERVER_NAMES,
       (toolName, guard) => {
         this.logger.warn('tool denied by host routing guard', {
           sessionId: opts.sessionId,
@@ -475,6 +478,7 @@ export class SessionRegistry {
       alive: true,
       toolGuardSelectionText: '',
       toolGuardTurnActive: false,
+      toolGuardMcpServerNames: EMPTY_MCP_SERVER_NAMES,
       attachedNotify: null,
       buffer: [],
       bufferCapacity: this.bufferCapacity,
@@ -838,6 +842,16 @@ export class SessionRegistry {
     if (!session.sdkSessionId && isSdkInitMessage(message)) {
       session.sdkSessionId = message.session_id;
     }
+    if (isSdkInitMessage(message)) {
+      const mcpServers = Array.isArray(message.mcp_servers)
+        ? message.mcp_servers
+        : [];
+      session.toolGuardMcpServerNames = new Set(
+        mcpServers
+          .map((server) => server?.name)
+          .filter((name): name is string => typeof name === 'string' && name.length > 0),
+      );
+    }
     if (isSdkTurnResult(message)) {
       // Keep the text until the next accepted input so any SDK-managed
       // continuation after the result retains the same explicit selection.
@@ -927,7 +941,12 @@ function raceWithTimeout(p: Promise<unknown>, timeoutMs: number): Promise<boolea
 }
 
 /** SDK's first SDKSystemMessage variant always has subtype='init' and session_id. */
-function isSdkInitMessage(msg: unknown): msg is { type: 'system'; subtype: 'init'; session_id: string } {
+function isSdkInitMessage(msg: unknown): msg is {
+  type: 'system';
+  subtype: 'init';
+  session_id: string;
+  mcp_servers?: Array<{ name?: unknown }>;
+} {
   if (typeof msg !== 'object' || msg === null) return false;
   const m = msg as Record<string, unknown>;
   return m.type === 'system' && m.subtype === 'init' && typeof m.session_id === 'string';
@@ -983,9 +1002,28 @@ function matchesExplicitSelector(text: string, selector: string): boolean {
   return false;
 }
 
+const EMPTY_MCP_SERVER_NAMES: ReadonlySet<string> = new Set();
+
+function claudeMcpToolPrefix(serverId: string): string {
+  return `mcp__${serverId.replace(/[^a-zA-Z0-9_-]/g, '_')}__`;
+}
+
+function hasToolGuardMcpPrefixCollision(
+  guard: QueryToolGuard,
+  mcpServerNames: ReadonlySet<string>,
+): boolean {
+  if (!guard.sourceServerId) return false;
+  for (const serverId of mcpServerNames) {
+    if (serverId === guard.sourceServerId) continue;
+    if (claudeMcpToolPrefix(serverId) === guard.toolNamePrefix) return true;
+  }
+  return false;
+}
+
 function createToolGuardHooks(
   toolGuards: readonly QueryToolGuard[] | undefined,
   getSelectionText: () => string,
+  getMcpServerNames: () => ReadonlySet<string>,
   onDeny: (toolName: string, guard: QueryToolGuard) => void,
 ): SdkHooks | undefined {
   if (!toolGuards || toolGuards.length === 0) return undefined;
@@ -997,8 +1035,10 @@ function createToolGuardHooks(
       return { continue: true };
     }
     const toolName = input.tool_name;
-    const guard = toolGuards.find((candidate) =>
-      toolName.startsWith(candidate.toolNamePrefix),
+    const guard = toolGuards.find(
+      (candidate) =>
+        toolName.startsWith(candidate.toolNamePrefix) &&
+        !hasToolGuardMcpPrefixCollision(candidate, getMcpServerNames()),
     );
     if (!guard || guard.invocation === 'auto') return { continue: true };
     if (

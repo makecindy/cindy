@@ -4458,7 +4458,7 @@ export class CodexAgent extends BaseAgent {
       params: McpServerElicitationRequestParams,
     ): string | null | undefined {
       const toolName = stringFromMeta(mcpElicitationMeta(params), 'tool_name');
-      let matchedPluginId: string | null | undefined;
+      const matches: ActiveToolContext[] = [];
       for (const context of activeToolContexts.values()) {
         if (
           context.type !== 'mcpToolCall' ||
@@ -4468,9 +4468,15 @@ export class CodexAgent extends BaseAgent {
         ) {
           continue;
         }
-        matchedPluginId = context.pluginId;
+        matches.push(context);
       }
-      return matchedPluginId;
+      if (matches.length === 0 || (!toolName && matches.length !== 1)) {
+        return undefined;
+      }
+      const pluginId = matches[0]?.pluginId;
+      return matches.every((context) => context.pluginId === pluginId)
+        ? pluginId
+        : undefined;
     }
 
     const mcpToolApprovalPolicy = (params: McpServerElicitationRequestParams) => {

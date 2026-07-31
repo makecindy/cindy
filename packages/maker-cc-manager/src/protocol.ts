@@ -209,6 +209,8 @@ export interface QueryStartParams {
 export interface QueryToolGuard {
   /** Exact SDK tool-name prefix, for example `mcp__plugin_x_server__`. */
   toolNamePrefix: string;
+  /** Exact harness-owned MCP server id before Claude normalizes punctuation. */
+  sourceServerId?: string;
   invocation: 'auto' | 'explicit-only' | 'disabled';
   /** Explicit command tokens that select this source for the active turn. */
   explicitSelectors?: string[];

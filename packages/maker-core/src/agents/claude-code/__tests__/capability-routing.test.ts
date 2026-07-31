@@ -128,6 +128,7 @@ describe('buildClaudeRemoteToolGuards', () => {
       {
         toolNamePrefix:
           'mcp__plugin_feishu-delegate_feishu-delegate__',
+        sourceServerId: 'plugin:feishu-delegate:feishu-delegate',
         invocation: 'explicit-only',
         explicitSelectors: [
           '$feishu-delegate:message-feishu-coworkers',
@@ -143,6 +144,12 @@ describe('buildClaudeRemoteToolGuards', () => {
         new Set(['plugin_feishu-delegate_feishu-delegate']),
       ),
     ).toEqual([]);
+    expect(
+      buildClaudeRemoteToolGuards(
+        policy,
+        new Set(['plugin:feishu-delegate:feishu-delegate']),
+      ),
+    ).toHaveLength(1);
   });
 });
 

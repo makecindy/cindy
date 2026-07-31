@@ -324,6 +324,27 @@ describe('sdk-handlers end-to-end', () => {
     }
   });
 
+  it('query/start rejects whitespace-only routing guard prefixes', async () => {
+    try {
+      await ctx!.client.request('query/start', {
+        sessionId: 's1',
+        cwd: '/a',
+        model: 'm',
+        env: {},
+        toolGuards: [
+          {
+            toolNamePrefix: '   ',
+            invocation: 'disabled',
+          },
+        ],
+      });
+      throw new Error('expected rejection');
+    } catch (err) {
+      expect(err).toBeInstanceOf(RpcClientError);
+      expect((err as RpcClientError).rpcError.code).toBe('INVALID_PARAMS');
+    }
+  });
+
   it('query/close ends consume loop → session.alive=false + closed notification', async () => {
     await ctx!.client.request('query/start', { sessionId: 's1', cwd: '/a', model: 'm', env: {} });
     await waitFor(() => ctx!.notifications.length >= 1);

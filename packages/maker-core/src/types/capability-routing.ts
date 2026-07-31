@@ -196,6 +196,7 @@ export function hasClaudeMcpPrefixCollision(
 ): boolean {
   const harnessPrefix = claudeMcpToolPrefix(harnessServerId);
   for (const serverId of nonHarnessServerIds) {
+    if (serverId === harnessServerId) continue;
     if (claudeMcpToolPrefix(serverId) === harnessPrefix) return true;
   }
   return false;

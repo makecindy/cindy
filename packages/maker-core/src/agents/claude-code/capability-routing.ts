@@ -60,6 +60,7 @@ export function buildClaudeSkillOverrides(
 
 export interface ClaudeRemoteToolGuard {
   toolNamePrefix: string;
+  sourceServerId: string;
   invocation: 'auto' | 'explicit-only' | 'disabled';
   explicitSelectors?: string[];
   denialMessage?: string;
@@ -92,6 +93,7 @@ export function buildClaudeRemoteToolGuards(
     return [
       {
         toolNamePrefix: claudeMcpToolPrefix(directive.source.id),
+        sourceServerId: directive.source.id,
         invocation: directive.invocation,
         ...(directive.explicitSelectors
           ? { explicitSelectors: [...directive.explicitSelectors] }
