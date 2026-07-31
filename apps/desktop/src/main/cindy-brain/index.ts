@@ -183,7 +183,7 @@ import { projectProviderCatalogForBuildRegion } from '../maker-host/provider-acc
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
-import { desktopCodexAuthAdapter } from '../maker-host/auth-adapters.js';
+import { hasCodexOAuthLoginReadOnly } from '../maker-host/codex-oauth-readiness.js';
 import { getUtilityModelChainProfiles } from '../utility-model/UtilityModelSelection.js';
 import { utilityModelPinOptions } from '../../shared/utilityModelProfiles.js';
 import {
@@ -1981,9 +1981,13 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     const stripOpenaiPrefix = (id: string) =>
       id.startsWith('openai/') ? id.slice('openai/'.length) : id;
     const codexImagesClient = createCodexImageChannel({
-      hasOAuthLogin: () => desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly(),
-      getAccessToken: () => desktopCodexAuthAdapter.getAccessToken(),
-      getAccountId: () => desktopCodexAuthAdapter.getAccountId(),
+      hasOAuthLogin: hasCodexOAuthLoginReadOnly,
+      getAuth: async () => {
+        const { getChatgptBridgeAuth } = await import(
+          '../maker-host/anthropic-responses-bridge-host.js'
+        );
+        return getChatgptBridgeAuth();
+      },
       fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
       beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
     });

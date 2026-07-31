@@ -24,8 +24,7 @@ const SIZE_BY_ASPECT = {
 
 export interface CreateCodexImageChannelOptions {
   hasOAuthLogin(): boolean;
-  getAccessToken(): Promise<string | null>;
-  getAccountId(): Promise<string | null>;
+  getAuth(): Promise<{ accessToken: string; accountId: string | null }>;
   fetchImplementation?: typeof fetch;
   beforeDispatch?(model: string): void;
 }
@@ -55,25 +54,40 @@ async function collectImageB64(response: Response): Promise<string | null> {
   const decoder = new TextDecoder();
   let buffer = '';
   let latest: string | null = null;
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer += decoder.decode(value, { stream: !done });
-    let boundary = buffer.indexOf('\n\n');
-    while (boundary >= 0) {
-      const block = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      const data = block
-        .split('\n')
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.slice(5).trimStart())
-        .join('\n');
-      if (data && data !== '[DONE]') {
-        const found = extractImageB64(JSON.parse(data) as unknown);
-        if (found) latest = found;
-      }
-      boundary = buffer.indexOf('\n\n');
+
+  const consume = (block: string): void => {
+    const data = block
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trimStart())
+      .join('\n');
+    if (!data || data === '[DONE]') return;
+    try {
+      const found = extractImageB64(JSON.parse(data) as unknown);
+      if (found) latest = found;
+    } catch {
+      // SSE 允许夹杂未知事件；坏帧不能让后续合法图片结果一起丢失。
     }
-    if (done) break;
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (value) buffer += decoder.decode(value, { stream: !done });
+      if (done) buffer += decoder.decode();
+      let match = /\r?\n\r?\n/.exec(buffer);
+      while (match?.index !== undefined) {
+        consume(buffer.slice(0, match.index));
+        buffer = buffer.slice(match.index + match[0].length);
+        match = /\r?\n\r?\n/.exec(buffer);
+      }
+      if (done) {
+        if (buffer.trim()) consume(buffer);
+        break;
+      }
+    }
+  } finally {
+    reader.releaseLock();
   }
   return latest;
 }
@@ -93,7 +107,9 @@ async function httpError(response: Response): Promise<never> {
   try {
     const parsed = JSON.parse(raw) as { error?: { message?: unknown } };
     if (typeof parsed.error?.message === 'string') detail = parsed.error.message.slice(0, 500);
-  } catch { /* keep bounded raw body */ }
+  } catch {
+    /* keep bounded raw body */
+  }
   throw new Error(`Codex 图像请求失败(HTTP ${response.status}):${detail || '未知错误'}`);
 }
 
@@ -106,12 +122,16 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
     imagePaths?: string[];
     aspectRatio?: '1:1' | '3:2' | '2:3';
   }): Promise<ImageChannelResult> {
-    const [token, accountId, images] = await Promise.all([
-      opts.getAccessToken(),
-      opts.getAccountId(),
+    if (params.model !== `openai/${IMAGE_MODEL}`) {
+      throw new Error(`Codex 图像通道不支持模型:${params.model}`);
+    }
+    // 先在 token 刷新 / 本地参考图读取之前拦停，后面的二次检查继续覆盖
+    // 准备请求期间发生的模型停用。
+    opts.beforeDispatch?.(params.model);
+    const [auth, images] = await Promise.all([
+      opts.getAuth(),
       Promise.all((params.imagePaths ?? []).map(inputImage)),
     ]);
-    if (!token) throw new Error('OpenAI 订阅登录已失效,请在「设置 → 模型供应商 → OpenAI」重新登录');
     opts.beforeDispatch?.(params.model);
     const content: Array<Record<string, unknown>> = [
       { type: 'input_text', text: params.prompt },
@@ -120,13 +140,13 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
     const response = await doFetch(CODEX_RESPONSES_URL, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${auth.accessToken}`,
         'Content-Type': 'application/json',
         Accept: 'text/event-stream',
         'OpenAI-Beta': 'responses=experimental',
         originator: 'codex_cli_rs',
         'User-Agent': USER_AGENT,
-        ...(accountId ? { 'ChatGPT-Account-Id': accountId } : {}),
+        ...(auth.accountId ? { 'ChatGPT-Account-Id': auth.accountId } : {}),
       },
       body: JSON.stringify({
         model: HOST_MODEL,
@@ -134,15 +154,17 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
         stream: true,
         instructions: 'Use the image_generation tool to fulfill this image request.',
         input: [{ type: 'message', role: 'user', content }],
-        tools: [{
-          type: 'image_generation',
-          model: IMAGE_MODEL,
-          size: params.aspectRatio ? SIZE_BY_ASPECT[params.aspectRatio] : '1024x1024',
-          quality: 'medium',
-          output_format: 'png',
-          background: 'opaque',
-          partial_images: 1,
-        }],
+        tools: [
+          {
+            type: 'image_generation',
+            model: IMAGE_MODEL,
+            ...(params.aspectRatio ? { size: SIZE_BY_ASPECT[params.aspectRatio] } : {}),
+            quality: 'medium',
+            output_format: 'png',
+            background: 'opaque',
+            partial_images: 1,
+          },
+        ],
       }),
     });
     if (!response.ok) await httpError(response);
