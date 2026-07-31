@@ -428,7 +428,9 @@ export function ImageLightbox({
   const [draftStroke, setDraftStroke] = useState<AnnotationStroke | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   // 图片自然尺寸:SVG viewBox 与烧录 canvas 的坐标基准。onLoad 时设置。
-  const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null);
+  const [naturalSize, setNaturalSize] = useState<{ src: string; w: number; h: number } | null>(
+    null,
+  );
   const [viewportSize, setViewportSize] = useState(() => ({
     width: window.innerWidth,
     height: window.innerHeight,
@@ -448,9 +450,12 @@ export function ImageLightbox({
     return () => window.removeEventListener('resize', updateViewportSize);
   }, []);
 
-  const fittedImageSize = naturalSize
+  // index 变化后的 effect 会在 commit 后清空状态；渲染阶段先按 src 校验，
+  // 避免新图首帧沿用上一张图的宽高比（标注坐标也必须遵守同一约束）。
+  const currentNaturalSize = naturalSize?.src === currentSrc ? naturalSize : null;
+  const fittedImageSize = currentNaturalSize
     ? containImageSize(
-        { width: naturalSize.w, height: naturalSize.h },
+        { width: currentNaturalSize.w, height: currentNaturalSize.h },
         viewportSize.width - 80,
         viewportSize.height - 80,
       )
@@ -1133,6 +1138,7 @@ export function ImageLightbox({
           }}
           onLoad={(e) => {
             setNaturalSize({
+              src: currentSrc,
               w: e.currentTarget.naturalWidth,
               h: e.currentTarget.naturalHeight,
             });
@@ -1155,9 +1161,9 @@ export function ImageLightbox({
         />
         {/* 标注层:viewBox = 图片自然尺寸,归一化笔迹 × 自然尺寸 = path 坐标,
             与烧录坐标一致(所见即所得)。pointerEvents 关闭,事件由容器接管。 */}
-        {naturalSize && (strokes.length > 0 || draftStroke) ? (
+        {currentNaturalSize && (strokes.length > 0 || draftStroke) ? (
           <svg
-            viewBox={`0 0 ${naturalSize.w} ${naturalSize.h}`}
+            viewBox={`0 0 ${currentNaturalSize.w} ${currentNaturalSize.h}`}
             preserveAspectRatio="none"
             style={{
               position: 'absolute',
@@ -1169,9 +1175,9 @@ export function ImageLightbox({
             aria-hidden
           >
             {[...strokes, ...(draftStroke ? [draftStroke] : [])].map((stroke, i) => {
-              const d = strokeToSvgPath(stroke, naturalSize.w, naturalSize.h);
+              const d = strokeToSvgPath(stroke, currentNaturalSize.w, currentNaturalSize.h);
               if (!d) return null;
-              const w = annotationStrokeWidth(naturalSize.w, naturalSize.h);
+              const w = annotationStrokeWidth(currentNaturalSize.w, currentNaturalSize.h);
               return (
                 // biome-ignore lint/suspicious/noArrayIndexKey: 笔迹列表只增/尾删,index 稳定。
                 <g key={i}>

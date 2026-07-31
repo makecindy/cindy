@@ -95,4 +95,21 @@ describe('FileTreeView image preview action', () => {
 
     expect(onSelectFile).toHaveBeenCalledWith('cat.png');
   });
+
+  it('keeps the outer row padding as part of the row selection action', () => {
+    const onSelectFile = vi.fn();
+    const { container } = render(
+      <FileTreeView
+        tree={makeTree()}
+        selectedPath={null}
+        onSelectFile={onSelectFile}
+        onPreviewImage={vi.fn()}
+      />,
+    );
+    const row = container.querySelector<HTMLElement>('[data-relpath="cat.png"]')!;
+
+    fireEvent.click(row);
+
+    expect(onSelectFile).toHaveBeenCalledWith('cat.png');
+  });
 });

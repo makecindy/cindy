@@ -611,8 +611,10 @@ function FileTreeRow({
   };
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: 行内主按钮承载键盘语义；外层 click 只补回 padding 死区，眼睛按钮会阻止冒泡。
     <div
       draggable
+      onClick={handleClick}
       onContextMenu={onContextMenu}
       onDragStart={handleDragStart}
       style={rowStyle}
@@ -630,7 +632,10 @@ function FileTreeRow({
     >
       <button
         type="button"
-        onClick={handleClick}
+        onClick={(event) => {
+          event.stopPropagation();
+          handleClick();
+        }}
         style={{ paddingLeft }}
         className="flex h-full min-w-0 flex-1 items-center gap-1.5 bg-transparent p-0 text-left text-inherit focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]"
       >
