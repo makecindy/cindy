@@ -300,4 +300,76 @@ describe('turnState.turnStartModel snapshot timing (no rewind)', () => {
 
     await handle.close();
   });
+
+  it('does not let a mid-turn setModel overwrite the attribution of a request already retrying without envelope', async () => {
+    // q.setModel() 改不了已经发出、正在无 envelope 重试的旧请求——它只能影响
+    // 尚未发出的下一次 API call。若旧请求的第一条 api_retry 已经到达(说明它
+    // 已经在网络层失败过至少一次,turnState.pendingApiError 非空),此时再热切
+    // 模型不应该覆盖这次失败最终的归因,否则 register.ts 会把旧请求的失败错误
+    // 挂到切换后的新模型上(PR review P2 ×2)。
+    const firstQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(firstQuery);
+
+    const agent = new ClaudeCodeAgent({
+      ...createDeps(),
+      capabilityAdditions: { availableModels: TEST_MODELS },
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-in-flight-retry-not-overwritten',
+      model: 'claude-opus-4-6',
+      workingDir: '/tmp',
+      permissionMode: 'acceptEdits',
+    });
+
+    const events: AgentEvent[] = [];
+    void (async () => {
+      try {
+        for await (const ev of handle.events()) events.push(ev);
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hello' });
+
+    // 旧请求(model A)已经在网络层失败过一次,进入无 envelope 的重试序列。
+    firstQuery.stream.emit({
+      type: 'system',
+      subtype: 'api_retry',
+      attempt: 1,
+      max_retries: 3,
+      retry_delay_ms: 1_000,
+      error_status: null,
+      error: 'unknown',
+    });
+
+    // 用户在这条重试序列尚未收口期间热切模型——不该追溯改写它的归因。
+    await handle.setModel?.('claude-sonnet-5');
+
+    firstQuery.stream.emit({
+      type: 'system',
+      subtype: 'api_retry',
+      attempt: 3,
+      max_retries: 3,
+      retry_delay_ms: 1_000,
+      error_status: null,
+      error: 'unknown',
+    });
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 10, output_tokens: 0 },
+    });
+
+    await vi.waitFor(() => {
+      expect(events.some((e) => e.type === 'error')).toBe(true);
+    });
+    const error = events.find((e) => e.type === 'error');
+    // 归因必须保持旧模型(请求实际发出时用的模型),不能被之后的热切覆盖。
+    expect(error?.agentMeta).toMatchObject({ model: 'claude-opus-4-6' });
+
+    await handle.close();
+  });
 });

@@ -4417,10 +4417,14 @@ export class ClaudeCodeAgent extends BaseAgent {
         // call,不经过我们显式的 dispatch 代码路径,没有等效 beginNewTurn 的快照
         // 时机)。turn 进行期间热切模型时同步刷新 turnStartModel,让它反映"这次
         // setModel 之后、turn 内任何后续 API call 实际会用的模型"——这是除了
-        // turn 起点之外唯一能可靠拿到的 dispatch 边界:调用后到下一次实际请求
-        // 之间不会再有旁的 setModel 插进来改写它(PR review P2)。turn 未在跑时
-        // 不用改:下一次 beginNewTurn 本就会用最新 mutableModel 重新打快照。
-        if (turnInFlight) turnState.turnStartModel = newModel;
+        // turn 起点之外唯一能可靠拿到的 dispatch 边界。但 q.setModel() 改不了
+        // 已经发出、正在无 envelope 重试的旧请求——turnState.pendingApiError
+        // 非空说明当前有一个尚未解决的重试序列,这次热切覆盖的必须是它,不能
+        // 覆盖已经在途的旧请求的归因(PR review P2 ×2)。turn 未在跑、或当前有
+        // 未解决的重试序列时都不改:前者下一次 beginNewTurn 会重新打快照,后者
+        // 等这条重试序列收口(拿到 envelope 或 turn 结束)后自然会被新的
+        // beginNewTurn/下一次安全时机覆盖。
+        if (turnInFlight && !turnState.pendingApiError) turnState.turnStartModel = newModel;
         autoReviewDecisionCache.clear();
         if (
           !isControlBlocked
