@@ -2376,21 +2376,21 @@
     },
     "builtinTools": {
       "title": "内置工具",
-      "description": "设置新任务默认值，或为指定项目添加覆盖。项目设置优先于用户默认值。",
+      "description": "设置 Agent 会话默认值，或为指定项目添加覆盖。项目设置优先于用户默认值。",
       "empty": "暂无可用的工具。",
       "toggleAria": "切换 {{name}} 工具",
       "toggleHint": "变更仅对新建或重启的 Agent 会话生效，正在运行的 Agent 会话不受影响。",
       "loadFailed": "加载工具列表失败",
       "scopePicker": {
         "ariaLabel": "切换内置工具设置的作用域",
-        "userDefault": "新任务默认值",
-        "userDefaultDescription": "适用于没有项目覆盖的新任务"
+        "userDefault": "Agent 会话默认值",
+        "userDefaultDescription": "适用于没有项目覆盖的 Agent 会话"
       },
       "source": {
         "project": "项目",
         "projectTooltip": "由项目设置覆盖 ({{dir}})",
         "user": "用户默认",
-        "userTooltip": "沿用新任务默认值",
+        "userTooltip": "沿用 Agent 会话默认值",
         "product": "产品默认",
         "productTooltip": "沿用 Cindy 产品默认值"
       },
