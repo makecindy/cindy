@@ -51,9 +51,36 @@ export const APP_SHORTCUT_IDS = [
   'browser-forward',
   'browser-reload',
   'cycle-permission-mode',
+  'switch-session-1',
+  'switch-session-2',
+  'switch-session-3',
+  'switch-session-4',
+  'switch-session-5',
+  'switch-session-6',
+  'switch-session-7',
+  'switch-session-8',
+  'switch-session-9',
 ] as const;
 
 export type AppShortcutId = (typeof APP_SHORTCUT_IDS)[number];
+
+/**
+ * 侧边栏对话切换槽位: mod+1..9 跳转到侧边栏第 N 个可见对话(含置顶区, 按渲染
+ * 顺序, 与 getVisibleSidebarSessionIds 同一口径)。逐 id 注册以完整复用改绑 /
+ * 冲突检测 / accelerator 转换体系; 消费端与按住修饰键浮现的序号徽标见
+ * renderer CCAgentSidebarUpper。数组序 = 槽位序 (index 0 ↔ 数字键 1)。
+ */
+export const SWITCH_SESSION_SHORTCUT_IDS = [
+  'switch-session-1',
+  'switch-session-2',
+  'switch-session-3',
+  'switch-session-4',
+  'switch-session-5',
+  'switch-session-6',
+  'switch-session-7',
+  'switch-session-8',
+  'switch-session-9',
+] as const satisfies readonly AppShortcutId[];
 
 export interface AppShortcutDefinition {
   id: AppShortcutId;
@@ -284,6 +311,20 @@ export const APP_SHORTCUT_DEFINITIONS: ReadonlyArray<AppShortcutDefinition> = [
     rebindable: true,
     getDefaultCombos: (platform) => [modCombo('KeyR', platform), combo('F5')],
   },
+  // 对话切换 9 槽位 (见 SWITCH_SESSION_SHORTCUT_IDS 注释)。设置页不逐条展示
+  // (9 行同构条目刷屏), 但 label/description i18n 仍需齐全 —— 改绑冲突提示
+  // 会引用占用者 label。
+  ...SWITCH_SESSION_SHORTCUT_IDS.map(
+    (id, index): AppShortcutDefinition => ({
+      id,
+      scope: 'app',
+      labelKey: `settings.shortcuts.items.${id}.label`,
+      descriptionKey: `settings.shortcuts.items.${id}.description`,
+      rebindable: true,
+      hiddenInSettings: true,
+      getDefaultCombos: (platform) => [modCombo(`Digit${index + 1}`, platform)],
+    }),
+  ),
 ];
 
 const DEFINITION_MAP: ReadonlyMap<AppShortcutId, AppShortcutDefinition> = new Map(
@@ -382,20 +423,51 @@ export function normalizeAppShortcutOverrides(raw: unknown, platform: string): A
  * 默认值 + override 合并出每个 id 的生效组合列表。override 为单 combo 时
  * 整体替换默认列表; null (删除绑定) → 空列表; 平台不可用的 id 不出现在
  * 结果里 (消费端对 undefined / 空列表自动不挂监听)。
+ *
+ * 隐藏可改绑条目的默认组合对用户既有绑定让位: 冲突只在写入时校验,
+ * 历史版本合法写下的绑定可能与后续版本新增的隐藏默认撞键 (如
+ * switch-session-* 一次性占入 mod+1..9)。hiddenInSettings 条目不在设置页
+ * 出现, 用户看不到占用者也无法解绑, 若不让位则一次按键触发两个动作。让位后
+ * 该槽位等效无绑定 (消费端与序号徽标端对空组合天然兼容); 可见条目不做此
+ * 处理 —— 撞键在设置页可自查自修, 维持既有行为。让位对象有两类:
+ * 1. 本 registry 内其它 id 的用户 override (overrides 参数);
+ * 2. registry 之外体系的用户键位 (yieldToCombos 参数, 如语音输入的键盘
+ *    快捷键) —— 由知道该体系的消费端传入; 无此类消费的调用点 (如 main 的
+ *    菜单 accelerator, 这些隐藏槽位本就不进菜单) 不传即可, 行为不变。
  */
 export function getEffectiveAppShortcuts(
   overrides: AppShortcutOverrides,
   platform: string,
+  yieldToCombos: ReadonlyArray<AppShortcutCombo> = [],
 ): Map<AppShortcutId, AppShortcutCombo[]> {
+  const overrideEntries: Array<{ scope: AppShortcutScope; combo: AppShortcutCombo }> = [];
+  for (const def of APP_SHORTCUT_DEFINITIONS) {
+    if (!isAppShortcutAvailableOnPlatform(def.id, platform)) continue;
+    const override = overrides[def.id];
+    if (override) overrideEntries.push({ scope: def.scope, combo: override });
+  }
   const result = new Map<AppShortcutId, AppShortcutCombo[]>();
   for (const def of APP_SHORTCUT_DEFINITIONS) {
     if (!isAppShortcutAvailableOnPlatform(def.id, platform)) continue;
     const override = overrides[def.id];
     if (override === null) {
       result.set(def.id, []);
-    } else {
-      result.set(def.id, override ? [override] : def.getDefaultCombos(platform));
+      continue;
     }
+    if (override) {
+      result.set(def.id, [override]);
+      continue;
+    }
+    let combos = def.getDefaultCombos(platform);
+    if (def.hiddenInSettings && def.rebindable) {
+      combos = combos.filter(
+        (c) =>
+          !overrideEntries.some(
+            (o) => appShortcutScopesOverlap(def.scope, o.scope) && appShortcutCombosEqual(o.combo, c),
+          ) && !yieldToCombos.some((y) => appShortcutCombosEqual(y, c)),
+      );
+    }
+    result.set(def.id, combos);
   }
   return result;
 }
@@ -686,6 +758,10 @@ export function findAppShortcutConflict(
   for (const def of APP_SHORTCUT_DEFINITIONS) {
     if (def.id === id) continue;
     if (!appShortcutScopesOverlap(selfDef.scope, def.scope)) continue;
+    // 未被 override 的隐藏可改绑默认不构成占用: 用户显式改绑获胜 ——
+    // getEffectiveAppShortcuts 会让该隐藏槽位的默认让位。否则用户想绑这些
+    // 组合时会被一个设置页里看不到、也无法解绑的条目永久卡死。
+    if (def.hiddenInSettings && def.rebindable && overrides[def.id] === undefined) continue;
     const combos = effective.get(def.id);
     if (combos?.some((c) => appShortcutCombosEqual(c, comboValue))) return def.id;
   }

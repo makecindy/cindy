@@ -2734,6 +2734,42 @@
         "open-terminal": {
           "label": "Open terminal",
           "description": "Open a terminal in the right sidebar (focuses the existing one)"
+        },
+        "switch-session-1": {
+          "label": "Go to session 1",
+          "description": "Jump to the 1st visible session in the sidebar"
+        },
+        "switch-session-2": {
+          "label": "Go to session 2",
+          "description": "Jump to the 2nd visible session in the sidebar"
+        },
+        "switch-session-3": {
+          "label": "Go to session 3",
+          "description": "Jump to the 3rd visible session in the sidebar"
+        },
+        "switch-session-4": {
+          "label": "Go to session 4",
+          "description": "Jump to the 4th visible session in the sidebar"
+        },
+        "switch-session-5": {
+          "label": "Go to session 5",
+          "description": "Jump to the 5th visible session in the sidebar"
+        },
+        "switch-session-6": {
+          "label": "Go to session 6",
+          "description": "Jump to the 6th visible session in the sidebar"
+        },
+        "switch-session-7": {
+          "label": "Go to session 7",
+          "description": "Jump to the 7th visible session in the sidebar"
+        },
+        "switch-session-8": {
+          "label": "Go to session 8",
+          "description": "Jump to the 8th visible session in the sidebar"
+        },
+        "switch-session-9": {
+          "label": "Go to session 9",
+          "description": "Jump to the 9th visible session in the sidebar"
         }
       },
       "none": "Not set",

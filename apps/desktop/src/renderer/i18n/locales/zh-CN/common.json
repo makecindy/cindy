@@ -2733,6 +2733,42 @@
         "open-terminal": {
           "label": "打开命令行",
           "description": "在右侧栏打开终端（已打开则聚焦）"
+        },
+        "switch-session-1": {
+          "label": "切换到第 1 个对话",
+          "description": "跳转到侧边栏第 1 个可见对话"
+        },
+        "switch-session-2": {
+          "label": "切换到第 2 个对话",
+          "description": "跳转到侧边栏第 2 个可见对话"
+        },
+        "switch-session-3": {
+          "label": "切换到第 3 个对话",
+          "description": "跳转到侧边栏第 3 个可见对话"
+        },
+        "switch-session-4": {
+          "label": "切换到第 4 个对话",
+          "description": "跳转到侧边栏第 4 个可见对话"
+        },
+        "switch-session-5": {
+          "label": "切换到第 5 个对话",
+          "description": "跳转到侧边栏第 5 个可见对话"
+        },
+        "switch-session-6": {
+          "label": "切换到第 6 个对话",
+          "description": "跳转到侧边栏第 6 个可见对话"
+        },
+        "switch-session-7": {
+          "label": "切换到第 7 个对话",
+          "description": "跳转到侧边栏第 7 个可见对话"
+        },
+        "switch-session-8": {
+          "label": "切换到第 8 个对话",
+          "description": "跳转到侧边栏第 8 个可见对话"
+        },
+        "switch-session-9": {
+          "label": "切换到第 9 个对话",
+          "description": "跳转到侧边栏第 9 个可见对话"
         }
       },
       "none": "未设置",

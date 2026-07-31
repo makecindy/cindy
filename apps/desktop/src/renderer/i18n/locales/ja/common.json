@@ -2733,6 +2733,42 @@
         "open-terminal": {
           "label": "ターミナルを開く",
           "description": "右サイドバーでターミナルを開きます（既に開いている場合はフォーカス）"
+        },
+        "switch-session-1": {
+          "label": "1番目のセッションに移動",
+          "description": "サイドバーに表示されている1番目のセッションに移動します"
+        },
+        "switch-session-2": {
+          "label": "2番目のセッションに移動",
+          "description": "サイドバーに表示されている2番目のセッションに移動します"
+        },
+        "switch-session-3": {
+          "label": "3番目のセッションに移動",
+          "description": "サイドバーに表示されている3番目のセッションに移動します"
+        },
+        "switch-session-4": {
+          "label": "4番目のセッションに移動",
+          "description": "サイドバーに表示されている4番目のセッションに移動します"
+        },
+        "switch-session-5": {
+          "label": "5番目のセッションに移動",
+          "description": "サイドバーに表示されている5番目のセッションに移動します"
+        },
+        "switch-session-6": {
+          "label": "6番目のセッションに移動",
+          "description": "サイドバーに表示されている6番目のセッションに移動します"
+        },
+        "switch-session-7": {
+          "label": "7番目のセッションに移動",
+          "description": "サイドバーに表示されている7番目のセッションに移動します"
+        },
+        "switch-session-8": {
+          "label": "8番目のセッションに移動",
+          "description": "サイドバーに表示されている8番目のセッションに移動します"
+        },
+        "switch-session-9": {
+          "label": "9番目のセッションに移動",
+          "description": "サイドバーに表示されている9番目のセッションに移動します"
         }
       },
       "none": "未設定",

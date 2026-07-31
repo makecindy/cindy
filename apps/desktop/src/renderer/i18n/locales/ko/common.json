@@ -2733,6 +2733,42 @@
         "open-terminal": {
           "label": "터미널 열기",
           "description": "오른쪽 사이드바에서 터미널을 엽니다(이미 열려 있으면 포커스)"
+        },
+        "switch-session-1": {
+          "label": "1번째 세션으로 이동",
+          "description": "사이드바에 표시된 1번째 세션으로 이동합니다"
+        },
+        "switch-session-2": {
+          "label": "2번째 세션으로 이동",
+          "description": "사이드바에 표시된 2번째 세션으로 이동합니다"
+        },
+        "switch-session-3": {
+          "label": "3번째 세션으로 이동",
+          "description": "사이드바에 표시된 3번째 세션으로 이동합니다"
+        },
+        "switch-session-4": {
+          "label": "4번째 세션으로 이동",
+          "description": "사이드바에 표시된 4번째 세션으로 이동합니다"
+        },
+        "switch-session-5": {
+          "label": "5번째 세션으로 이동",
+          "description": "사이드바에 표시된 5번째 세션으로 이동합니다"
+        },
+        "switch-session-6": {
+          "label": "6번째 세션으로 이동",
+          "description": "사이드바에 표시된 6번째 세션으로 이동합니다"
+        },
+        "switch-session-7": {
+          "label": "7번째 세션으로 이동",
+          "description": "사이드바에 표시된 7번째 세션으로 이동합니다"
+        },
+        "switch-session-8": {
+          "label": "8번째 세션으로 이동",
+          "description": "사이드바에 표시된 8번째 세션으로 이동합니다"
+        },
+        "switch-session-9": {
+          "label": "9번째 세션으로 이동",
+          "description": "사이드바에 표시된 9번째 세션으로 이동합니다"
         }
       },
       "none": "설정 안 됨",
