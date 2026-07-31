@@ -11,12 +11,14 @@
  * 仅图片走本组件;video / audio / 文件仍走 MessagePayloadModal。
  * lightbox 是常黑沉浸语境,黑白系颜色为刻意豁免(对齐桌面 docs/design-rules/cindy-design-system.md overlay/lightbox 语义豁免),不走主题 token。
  */
+import { useNavigation } from 'expo-router';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   ActivityIndicator,
   FlatList,
   Modal,
+  Platform,
   Pressable,
   StatusBar,
   StyleSheet,
@@ -433,6 +435,19 @@ export const ImageLightbox = memo(function ImageLightbox({
     onClose();
   }, [annotationSubmitting, isAnnotating, exitAnnotationMode, onClose]);
 
+  // iOS 沉浸式隐藏状态栏:经宿主屏的 screen option 走 VC-based 通道(iOS 27 起
+  // RN StatusBar 全局 API 失效;transparent Modal 不接管状态栏,穿透到宿主屏)。
+  // Android 继续用 Modal 内组件式 <StatusBar hidden>,不走 RNS 双轨。
+  // 只触碰 statusBarHidden 一个键,泛型收窄到最小面。
+  const navigation = useNavigation<{
+    setOptions: (options: { statusBarHidden: boolean }) => void;
+  }>();
+  useEffect(() => {
+    if (Platform.OS !== 'ios') return;
+    navigation.setOptions({ statusBarHidden: true });
+    return () => navigation.setOptions({ statusBarHidden: false });
+  }, [navigation]);
+
   return (
     <Modal
       animationType="fade"
@@ -442,7 +457,7 @@ export const ImageLightbox = memo(function ImageLightbox({
       transparent
       visible
     >
-      <StatusBar hidden />
+      {Platform.OS === 'android' ? <StatusBar hidden /> : null}
       <GestureHandlerRootView style={styles.root} testID="message.imageLightbox">
         <Animated.View pointerEvents="none" style={[styles.backdrop, backdropStyle]} />
         <FlatList
