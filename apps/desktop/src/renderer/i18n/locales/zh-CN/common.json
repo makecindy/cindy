@@ -3155,7 +3155,7 @@
         "description": "在需要参与的每台桌面设备上开启一次。设备在线时自动同步；同一局域网优先直连，否则发送端到端加密的中转数据。纯程序比对，不调用模型，也不产生 token 消耗。",
         "toggleAria": "切换通讯录设备同步",
         "syncNow": "立即同步",
-        "onlineDevices": "{{count}} 台其他设备在线",
+        "onlineDevices_other": "{{count}} 台其他设备在线",
         "route": {
           "lan": "局域网直连",
           "relay": "加密中转"
