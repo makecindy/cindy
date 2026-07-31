@@ -6980,7 +6980,13 @@
       "installed": "설치됨",
       "globalScope": "전역",
       "sourceSkillhub": "SkillHub",
-      "sourceLocal": "로컬"
+      "sourceLocal": "로컬",
+      "import": "스킬 가져오기",
+      "importAria": "로컬 zip 또는 SKILL.md에서 스킬 가져오기",
+      "importPickerTitle": "가져오기 위치 선택",
+      "importPickerSubtitle": "{{name}} · {{description}}",
+      "importSuccess": "{{name}} 가져오기 완료{{suffix}}",
+      "importFailed": "스킬 가져오기 실패"
     },
     "common": {
       "openFolderFailed": "폴더 열기 실패",

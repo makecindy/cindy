@@ -6980,7 +6980,13 @@
       "installed": "已安装",
       "globalScope": "全局",
       "sourceSkillhub": "SkillHub",
-      "sourceLocal": "本地"
+      "sourceLocal": "本地",
+      "import": "导入技能",
+      "importAria": "从本地压缩包或 SKILL.md 导入技能",
+      "importPickerTitle": "选择导入位置",
+      "importPickerSubtitle": "{{name}} · {{description}}",
+      "importSuccess": "{{name}} 已导入{{suffix}}",
+      "importFailed": "导入技能失败"
     },
     "common": {
       "openFolderFailed": "打开文件夹失败",

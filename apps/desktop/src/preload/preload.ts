@@ -2388,6 +2388,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
       | { success: false; errorCode: string; message: string }
     > => ipcRenderer.invoke('skillhub:uninstall', { absolutePath }),
 
+    /** 只读检查本地 zip / SKILL.md，返回 frontmatter 元数据（不落盘）。 */
+    inspectLocal: (params: { filePath: string }): Promise<
+      | { success: true; name: string; description: string; version: string }
+      | { success: false; errorCode: string; message: string }
+    > => ipcRenderer.invoke('skillhub:inspect-local', params),
+
+    /** 从本地 zip / SKILL.md 导入到全局或指定 installPath；registry origin=imported。 */
+    importLocal: (params: {
+      filePath: string;
+      installPath?: string;
+      force?: boolean;
+    }): Promise<
+      | {
+          success: true;
+          name: string;
+          description: string;
+          version: string;
+          absolutePath: string;
+        }
+      | { success: false; errorCode: string; message: string }
+    > => ipcRenderer.invoke('skillhub:import-local', params),
+
     // 订阅 install 进度事件
     onInstallProgress: (
       cb: (event: {

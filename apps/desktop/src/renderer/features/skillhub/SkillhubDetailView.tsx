@@ -2008,7 +2008,7 @@ export function SkillhubDetailView() {
             {/* skill 按钮组 — detailAction.status 保证市场状态/动作互斥 */}
             {isSkill && detailState && (
               <>
-            {/* D1: 卸载 — origin='installed' 才显示 */}
+            {/* D1: 卸载 — origin=installed（市场）或 imported（本地导入） */}
             {showUninstall && (
               <button
                 type="button"

@@ -6,6 +6,7 @@ import { ensureReady as ensureLocalDbReady, getRawDb } from '../localDb';
 import { createLogger } from '../logger';
 import { computeFolderHashDetailed } from './folderHash';
 import { type MdKind, parseAndValidateFrontmatter } from './frontmatterValidation';
+import * as importLocalSkill from './importLocalSkill';
 import * as installService from './installService';
 import { SkillhubMarketService, skillhubIpcError } from './marketService';
 import type { PublishParams } from './publishService';
@@ -514,6 +515,45 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
     publishService.cancel();
     return { success: true };
   });
+
+  // ── Local import (zip / SKILL.md) ────────────────────────────────────────
+  ipcMain.handle(
+    'skillhub:inspect-local',
+    async (_event, params: { filePath?: unknown }) => {
+      if (typeof params?.filePath !== 'string' || !params.filePath.trim()) {
+        return { success: false, errorCode: 'INVALID_FILE', message: '缺少 filePath' };
+      }
+      return importLocalSkill.inspectLocalSkill({ filePath: params.filePath.trim() });
+    },
+  );
+
+  ipcMain.handle(
+    'skillhub:import-local',
+    async (
+      _event,
+      params: { filePath?: unknown; installPath?: unknown; force?: unknown },
+    ) => {
+      if (typeof params?.filePath !== 'string' || !params.filePath.trim()) {
+        return { success: false, errorCode: 'INVALID_FILE', message: '缺少 filePath' };
+      }
+      const result = await importLocalSkill.importLocalSkill({
+        filePath: params.filePath.trim(),
+        ...(typeof params.installPath === 'string' && params.installPath
+          ? { installPath: params.installPath }
+          : {}),
+        ...(params.force === true ? { force: true } : {}),
+      });
+      if (!result.success) return result;
+      await refreshCodexProjectSkillCache(result.projectWorkingDir);
+      return {
+        success: true,
+        name: result.name,
+        description: result.description,
+        version: result.version,
+        absolutePath: result.absolutePath,
+      };
+    },
+  );
 
   // ── Market install / uninstall / cancel ──────────────────────────────────
   // install：异步流程，进度通过 skillhub:install-progress 推。返回值是终态。

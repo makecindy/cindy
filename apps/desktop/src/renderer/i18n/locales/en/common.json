@@ -6991,7 +6991,13 @@
       "installed": "Installed",
       "globalScope": "Global",
       "sourceSkillhub": "SkillHub",
-      "sourceLocal": "Local"
+      "sourceLocal": "Local",
+      "import": "Import skill",
+      "importAria": "Import a skill from a local zip or SKILL.md",
+      "importPickerTitle": "Choose import location",
+      "importPickerSubtitle": "{{name}} · {{description}}",
+      "importSuccess": "{{name}} imported{{suffix}}",
+      "importFailed": "Failed to import skill"
     },
     "common": {
       "openFolderFailed": "Failed to open folder",
