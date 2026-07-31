@@ -1157,6 +1157,102 @@ describe('CodexAgent capability routing', () => {
 
     await handle.close();
   });
+
+  it('records explicit capability selection after a late steer acknowledgement', async () => {
+    const steerAck = deferred<{ turnId: string }>();
+    const agent = new CodexAgent(
+      createDeps(
+        {},
+        {
+          capabilityRouting,
+          getMcpToolApprovalPolicy: () => 'auto-approve',
+        },
+      ),
+    );
+    const host = installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.TurnStart) {
+          return { turn: { id: 'turn-late-capability-steer' } };
+        }
+        if (method === Method.TurnSteer) return steerAck.promise;
+        return undefined;
+      },
+      { userAgent: 'mock-codex/0.145.0' },
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-late-capability-steer',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    await handle.send({
+      type: 'user',
+      content: '查一下飞书消息',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.mcpServerElicitation) {
+      throw new Error('expected mcpServerElicitation handler');
+    }
+    const invokeRoutedTool = async (itemId: string) => {
+      handlers.itemStarted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-late-capability-steer',
+        item: {
+          id: itemId,
+          type: 'mcpToolCall',
+          server: 'cindy-routed-feishu-delegate',
+          tool: 'feishu_read_messages',
+          pluginId: 'feishu-delegate@personal',
+        },
+      });
+      return handlers.mcpServerElicitation!({
+        threadId: 'start-thread-id',
+        turnId: 'turn-late-capability-steer',
+        serverName: 'cindy-routed-feishu-delegate',
+        mode: 'form',
+        _meta: {
+          codex_approval_kind: 'mcp_tool_call',
+          tool_name: 'feishu_read_messages',
+        },
+        message: 'Allow tool call',
+        requestedSchema: {},
+      });
+    };
+
+    vi.useFakeTimers();
+    try {
+      const steerPromise = handle.steer({
+        type: 'user',
+        content: '/feishu-delegate:message-feishu-coworkers 查一下康康',
+      });
+      for (let i = 0; i < 5; i += 1) {
+        if (host.request.mock.calls.some(([method]) => method === Method.TurnSteer)) break;
+        await Promise.resolve();
+      }
+      const timeoutAssertion = expect(steerPromise).rejects.toThrow(
+        /did not acknowledge/i,
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      await timeoutAssertion;
+
+      await expect(invokeRoutedTool('before-late-ack')).resolves.toEqual({
+        action: 'decline',
+        content: null,
+        _meta: null,
+      });
+      steerAck.resolve({ turnId: 'turn-late-capability-steer' });
+      await Promise.resolve();
+      await Promise.resolve();
+      await expect(invokeRoutedTool('after-late-ack')).resolves.toEqual({
+        action: 'accept',
+        content: null,
+        _meta: null,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    await handle.close();
+  });
 });
 
 describe('CodexAgent reference directories', () => {

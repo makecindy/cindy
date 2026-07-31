@@ -2612,6 +2612,22 @@ export class CodexAgent extends BaseAgent {
       );
     };
 
+    const recordAcceptedCapabilitySteer = (
+      turnId: string,
+      selectionText: string,
+    ): void => {
+      if (
+        closed ||
+        !isTurnInFlight ||
+        currentTurnId !== turnId ||
+        completedTurnIds.has(turnId) ||
+        terminalErroredTurnIds.has(turnId)
+      ) {
+        return;
+      }
+      appendCapabilitySelectionText(turnId, selectionText);
+    };
+
     const registerPendingCapabilitySteer = (
       turnId: string,
       selectionText: string,
@@ -2630,14 +2646,7 @@ export class CodexAgent extends BaseAgent {
       return (accepted) => {
         if (settled) return;
         settled = true;
-        if (
-          accepted &&
-          !closed &&
-          !completedTurnIds.has(turnId) &&
-          !terminalErroredTurnIds.has(turnId)
-        ) {
-          appendCapabilitySelectionText(turnId, selectionText);
-        }
+        if (accepted) recordAcceptedCapabilitySteer(turnId, selectionText);
         entries.delete(entry);
         if (entries.size === 0) pendingCapabilitySteersByTurnId.delete(turnId);
         entry.resolve();
@@ -7972,9 +7981,10 @@ export class CodexAgent extends BaseAgent {
         // turn 结束后队列再发一遍"的重复消费;这里同时给在飞 RPC 挂
         // late-resolution 观察,迟到结果留日志现场。
         assertCurrentHost('turn/steer');
+        const capabilitySelectionText = userMessageText(message.content);
         const settleCapabilitySteer = registerPendingCapabilitySteer(
           steeredTurnId,
-          userMessageText(message.content),
+          capabilitySelectionText,
         );
         let steerRpc: Promise<unknown>;
         try {
@@ -8049,6 +8059,13 @@ export class CodexAgent extends BaseAgent {
             // 防 unhandled rejection。
             steerRpc.then(
               () => {
+                // The timeout/abort already released waiting MCP requests
+                // against the previous selection. A later authoritative ACK
+                // must still update subsequent requests while this turn lives.
+                recordAcceptedCapabilitySteer(
+                  steeredTurnId,
+                  capabilitySelectionText,
+                );
                 log.warn('turn/steer acknowledged after local timeout/abort; message may already be injected', {
                   threadId,
                   turnId: steeredTurnId,
