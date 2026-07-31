@@ -1,4 +1,5 @@
-const SKIPPED_TEXT_ANCESTOR = 'button,input,textarea,select,script,style,[aria-hidden="true"]';
+const SKIPPED_TEXT_ANCESTOR =
+  'button,input,textarea,select,script,style,[aria-hidden="true"],[data-session-search-ignore]';
 
 interface TextSegment {
   node: Text;
@@ -26,12 +27,24 @@ export function findSessionSearchRanges(root: Element, query: string): Range[] {
 
   const normalizedText = text.toLocaleLowerCase();
   const ranges: Range[] = [];
+  let startSegmentIndex = 0;
+  let endSegmentIndex = 0;
   let offset = normalizedText.indexOf(normalizedQuery);
   while (offset >= 0) {
     const end = offset + normalizedQuery.length;
-    const startSegment = segments.find((segment) => segment.start <= offset && offset < segment.end);
-    const endSegment = segments.find((segment) => segment.start < end && end <= segment.end);
-    if (startSegment && endSegment) {
+    while (segments[startSegmentIndex]?.end <= offset) startSegmentIndex += 1;
+    endSegmentIndex = Math.max(endSegmentIndex, startSegmentIndex);
+    while (segments[endSegmentIndex]?.end < end) endSegmentIndex += 1;
+    const startSegment = segments[startSegmentIndex];
+    const endSegment = segments[endSegmentIndex];
+    if (
+      startSegment &&
+      endSegment &&
+      startSegment.start <= offset &&
+      offset < startSegment.end &&
+      endSegment.start < end &&
+      end <= endSegment.end
+    ) {
       const range = document.createRange();
       range.setStart(startSegment.node, offset - startSegment.start);
       range.setEnd(endSegment.node, end - endSegment.start);

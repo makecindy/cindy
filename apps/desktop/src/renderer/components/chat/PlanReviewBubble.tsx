@@ -273,6 +273,7 @@ function PlanMarkdownBody({
         }
       >
         <div
+          data-session-search-body=""
           ref={bodyRef}
           className={cn(
             'min-w-0 text-14 leading-[1.6]',

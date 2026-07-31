@@ -24,6 +24,18 @@ describe('findSessionSearchRanges', () => {
     expect(ranges[0].toString()).toBe('GPT');
   });
 
+  it('limits ranges to the supplied message body', () => {
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = '<span>GPT label</span><div data-session-search-body>GPT body GPT</div>';
+    const body = wrapper.querySelector('[data-session-search-body]');
+
+    expect(body).not.toBeNull();
+    expect(findSessionSearchRanges(body!, 'GPT').map((range) => range.toString())).toEqual([
+      'GPT',
+      'GPT',
+    ]);
+  });
+
   it('skips interactive and aria-hidden text', () => {
     const root = document.createElement('div');
     root.innerHTML = '<p>GPT</p><button>GPT</button><span aria-hidden="true">GPT</span>';

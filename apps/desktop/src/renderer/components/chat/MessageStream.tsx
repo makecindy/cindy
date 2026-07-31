@@ -2547,6 +2547,14 @@ export function MessageStream({
   }, [allRenderItems, focusMessageClientId, focusMessageRequestId, visibleRenderItems]);
 
   useLayoutEffect(() => {
+    if (
+      typeof CSS === 'undefined' ||
+      typeof CSS.escape !== 'function' ||
+      !CSS.highlights ||
+      typeof Highlight === 'undefined'
+    ) {
+      return;
+    }
     const highlights = CSS.highlights;
     const matchKey = 'cindy-session-search-match';
     const activeKey = 'cindy-session-search-active';
@@ -2557,8 +2565,9 @@ export function MessageStream({
     const target = root?.querySelector(
       `[data-message-client-id="${CSS.escape(focusMessageClientId)}"]`,
     );
-    if (!target) return;
-    const ranges = findSessionSearchRanges(target, searchQuery);
+    const body = target?.querySelector('[data-session-search-body]');
+    if (!body) return;
+    const ranges = findSessionSearchRanges(body, searchQuery);
     if (ranges.length === 0) return;
     highlights.set(matchKey, new Highlight(...ranges));
     const activeRange = ranges[Math.min(focusMessageOccurrenceIndex ?? 0, ranges.length - 1)];

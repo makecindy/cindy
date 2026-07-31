@@ -271,6 +271,41 @@ describe('conversationSearch.pure', () => {
     });
   });
 
+  it('matches and counts the complete query phrase', () => {
+    expect(
+      normalizeConversationContentPreview(
+        'assistant',
+        'error then timeout; error timeout and ERROR TIMEOUT',
+        'error timeout',
+      ),
+    ).toMatchObject({
+      keywordMatchedVisibleText: true,
+      occurrenceCount: 2,
+    });
+    expect(
+      normalizeConversationContentPreview(
+        'assistant',
+        'error happened before a later timeout',
+        'error timeout',
+      ),
+    ).toMatchObject({
+      keywordMatchedVisibleText: false,
+      occurrenceCount: 0,
+    });
+  });
+
+  it('keeps visible code text while excluding Markdown source details', () => {
+    const preview = normalizeConversationContentPreview(
+      'assistant',
+      '`<div>` and `a < b`\n\n```html\n<section>visible code</section>\n```',
+      '<section>visible code</section>',
+    );
+
+    expect(preview.keywordMatchedVisibleText).toBe(true);
+    expect(preview.preview).toContain('<div>');
+    expect(preview.preview).toContain('a < b');
+  });
+
   it('excludes Markdown link destinations from visible search text', () => {
     const preview = normalizeConversationContentPreview(
       'assistant',

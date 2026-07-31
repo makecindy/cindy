@@ -121,10 +121,30 @@ export interface ConversationSearchResponse {
 
 /** Remove Markdown/HTML source details that are not rendered as visible message text. */
 export function visibleMarkdownTextForSearch(source: string): string {
-  let text = source.replace(/<!--[\s\S]*?-->/g, '');
+  const protectedCode: string[] = [];
+  let markerPrefix = 'cindy-search-code-';
+  while (source.includes(markerPrefix)) markerPrefix += '-';
+  const markerSuffix = '';
+  let text = source.replace(/```[^\n]*\n?[\s\S]*?```|~~~[^\n]*\n?[\s\S]*?~~~|`[^`\n]*`/g, (code) => {
+    const index = protectedCode.push(visibleCodeText(code)) - 1;
+    return `${markerPrefix}${index}${markerSuffix}`;
+  });
+  text = text.replace(/<!--[\s\S]*?-->/g, '');
   text = text.replace(/<[^>]+>/g, '');
   text = stripMarkdownLinkDestinations(text);
-  return text;
+  return text.replace(
+    new RegExp(`${markerPrefix}(\\d+)${markerSuffix}`, 'g'),
+    (_marker, index: string) => protectedCode[Number(index)] ?? '',
+  );
+}
+
+function visibleCodeText(source: string): string {
+  if (source.startsWith('```') || source.startsWith('~~~')) {
+    const openingEnd = source.indexOf('\n');
+    const bodyStart = openingEnd >= 0 ? openingEnd + 1 : 3;
+    return source.slice(bodyStart, -3);
+  }
+  return source.slice(1, -1);
 }
 
 function stripMarkdownLinkDestinations(source: string): string {

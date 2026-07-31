@@ -1313,6 +1313,7 @@ export function UserMessage({
                     )}
                     {inlineQuoteCount > 0 ? (
                       <div
+                        data-session-search-body=""
                         className={cn(
                           'min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]',
                           longMessageCollapsed && (automationOrigin ? 'line-clamp-3' : 'line-clamp-10'),
@@ -1379,6 +1380,7 @@ export function UserMessage({
                       </div>
                     ) : displayBubbleBody.trim() ? (
                       <div
+                        data-session-search-body=""
                         className={cn(
                           'whitespace-pre-wrap [overflow-wrap:anywhere]',
                           longMessageCollapsed && (automationOrigin ? 'line-clamp-3' : 'line-clamp-10'),

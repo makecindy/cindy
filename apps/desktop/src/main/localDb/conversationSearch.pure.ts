@@ -361,26 +361,18 @@ function preferredObjectText(obj: Record<string, unknown>): string {
 }
 
 function keywordRanges(text: string, query: string): Array<{ start: number; end: number }> {
-  const tokens = [...new Set(query.match(/[\p{L}\p{N}]+/gu) ?? [])]
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0)
-    .sort((a, b) => b.length - a.length);
-  if (tokens.length === 0 || !text) return [];
+  const phrase = query.trim();
+  if (!phrase || !text) return [];
 
   const lowerText = text.toLocaleLowerCase();
+  const lowerPhrase = phrase.toLocaleLowerCase();
   const ranges: Array<{ start: number; end: number }> = [];
-  for (const token of tokens) {
-    const lowerToken = token.toLocaleLowerCase();
-    let index = lowerText.indexOf(lowerToken);
-    while (index >= 0) {
-      const next = { start: index, end: index + token.length };
-      if (!ranges.some((range) => rangesOverlap(range, next))) {
-        ranges.push(next);
-      }
-      index = lowerText.indexOf(lowerToken, index + lowerToken.length);
-    }
+  let index = lowerText.indexOf(lowerPhrase);
+  while (index >= 0) {
+    ranges.push({ start: index, end: index + phrase.length });
+    index = lowerText.indexOf(lowerPhrase, index + lowerPhrase.length);
   }
-  return ranges.sort((a, b) => a.start - b.start);
+  return ranges;
 }
 
 function visibleSnippet(text: string, range: { start: number; end: number }, max: number): string {
@@ -393,10 +385,6 @@ function visibleSnippet(text: string, range: { start: number; end: number }, max
   const prefix = start > 0 ? '...' : '';
   const suffix = end < text.length ? '...' : '';
   return `${prefix}${text.slice(start, end).trim()}${suffix}`;
-}
-
-function rangesOverlap(a: { start: number; end: number }, b: { start: number; end: number }): boolean {
-  return a.start < b.end && b.start < a.end;
 }
 
 function extractText(value: unknown): string {
