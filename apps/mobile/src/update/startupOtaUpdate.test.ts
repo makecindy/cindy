@@ -244,7 +244,10 @@ describe('runEmergencyOtaRecovery', () => {
   });
 
   it('有修复版(新 id)→ 下载并计一次尝试,但绝不 reload', async () => {
-    const d = deps({ checkForUpdateAsync: checkAvailable('fixed-update') });
+    const d = deps({
+      checkForUpdateAsync: checkAvailable('fixed-update'),
+      fetchUpdateAsync: fetchedNewUpdate('fixed-update'),
+    });
     await expect(runEmergencyOtaRecovery(d)).resolves.toBe('fetched');
     expect(d.fetchUpdateAsync).toHaveBeenCalledOnce();
     expect(d.recordReload).toHaveBeenCalledWith('fixed-update');
@@ -252,9 +255,40 @@ describe('runEmergencyOtaRecovery', () => {
     expect(d.reloadAsync).not.toHaveBeenCalled();
   });
 
+  it('指针在 check 与 fetch 之间变了 → 按真正拿到手的 id 记账', async () => {
+    const d = deps({
+      checkForUpdateAsync: checkAvailable('first-fix'),
+      fetchUpdateAsync: fetchedNewUpdate('second-fix'),
+    });
+    await expect(runEmergencyOtaRecovery(d)).resolves.toBe('fetched');
+    expect(d.recordReload).toHaveBeenCalledWith('second-fix');
+    expect(d.recordReload).not.toHaveBeenCalledWith('first-fix');
+  });
+
+  it('拿到手的却是已知坏包(指针变化)→ 不记账,别把它的额度再放一次', async () => {
+    const d = deps({
+      checkForUpdateAsync: checkAvailable('first-fix'),
+      fetchUpdateAsync: fetchedNewUpdate('bad-update'),
+      isReloadBlocked: vi.fn(async (id: string) => id === 'bad-update'),
+    });
+    await expect(runEmergencyOtaRecovery(d)).resolves.toBe('known-bad');
+    expect(d.recordReload).not.toHaveBeenCalled();
+    expect(d.reloadAsync).not.toHaveBeenCalled();
+  });
+
+  it('fetch 什么都没落盘(isNew=false)→ up-to-date,不记一次尝试', async () => {
+    const d = deps({
+      checkForUpdateAsync: checkAvailable('fixed-update'),
+      fetchUpdateAsync: vi.fn(async () => ({ isNew: false })),
+    });
+    await expect(runEmergencyOtaRecovery(d)).resolves.toBe('up-to-date');
+    expect(d.recordReload).not.toHaveBeenCalled();
+  });
+
   it('计数写不进去也算下载成功(只影响下次是否重下,不影响启动)', async () => {
     const d = deps({
       checkForUpdateAsync: checkAvailable('fixed-update'),
+      fetchUpdateAsync: fetchedNewUpdate('fixed-update'),
       recordReload: vi.fn(async () => { throw new Error('storage full'); }),
     });
     await expect(runEmergencyOtaRecovery(d)).resolves.toBe('fetched');

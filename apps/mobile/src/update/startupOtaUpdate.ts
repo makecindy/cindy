@@ -171,10 +171,16 @@ export async function runEmergencyOtaRecovery(
     const candidateId = check.manifest?.id;
     if (!candidateId) return 'unknown-id';
     if (await deps.isReloadBlocked(candidateId)) return 'known-bad';
-    await withTimeout(deps.fetchUpdateAsync(), fetchTimeoutMs);
+    const fetched = await withTimeout(deps.fetchUpdateAsync(), fetchTimeoutMs);
+    if (!fetched.isNew) return 'up-to-date'; // 什么都没落盘,不该记一次尝试
+    // 记账必须按**真正拿到手的** id:指针可能在 check 与 fetch 之间变过,记在过期的
+    // candidateId 上会让已经试满的那个坏包在下次冷启动又被放行一次(正常路径同样
+    // 在 fetch 之后重判,见 runStartupOtaUpdate)。
+    const fetchedId = fetched.manifest?.id ?? candidateId;
+    if (await deps.isReloadBlocked(fetchedId)) return 'known-bad';
     // 计数放在下载成功之后:这里没有 reload 会打断落盘,而「下载到了」才算真的试过一次。
     // 写失败只吞掉——后果仅是下次冷启动可能重下一次,不影响启动也不会循环。
-    await deps.recordReload(candidateId).catch(() => undefined);
+    await deps.recordReload(fetchedId).catch(() => undefined);
     return 'fetched';
   } catch {
     return 'error';
