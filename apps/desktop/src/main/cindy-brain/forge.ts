@@ -882,8 +882,9 @@ key、未知字段、原清单没有的条目、类型或长度不合格、文�
 node secretBindings key、setup kv key——都不能使用 \`__proto__\`、\`constructor\` 或
 \`prototype\`；这些名称是宿主保留键，打包时会直接拒绝。
 
-十五个卡槽:\`tool\`(注册工具给 AI)、\`cindy\`(请 Cindy 本体代办:出图/改图)、\`agent\`(让
-当前 Agent 开始一个普通用户回合,见 §4.11)、\`panel\`(常驻
+十五个卡槽:\`tool\`(注册工具给 AI)、\`cindy\`(请 Cindy 本体代办:出图/改图/快问快答,
+见 §4 与 §4.0.2)、\`agent\`(让
+当前 Agent 开始一个普通用户回合,或派活取回结果,见 §4.11 / §4.11.1)、\`panel\`(常驻
 面板)、\`card\`(聊天卡片:自绘工具调用的过程与结果,见 §4.5)、\`subscribe\`(旁听会话
 事件 + 拦截用户消息,见 §4.6)、\`network\`(访问自带服务的域名白名单 HTTP,主机代发,
 见 §4.7)、\`notify\`(弹系统轻提示,主机画壳带你的身份头,见 §4.9)、\`fs\`(请主机
@@ -899,6 +900,9 @@ Claude Code 与 Codex 都能发现,见 §4.16)、\`workspace\`(请主机为项�
 聊天卡片后发起一次 Agent 回合；这一档不写配套字段。若确实需要没有当次点击也能
 自动发起，额外写 \`"agent": { "background": true }\`。后台档会在装入确认框单独
 显示为更高风险权限，而且仍只能使用用户曾通过点击卡片与你建立关联的会话。
+要把任务交给 Agent 干并**取回结果**(而不是发进用户的会话),另写
+\`"agent": { "errand": true }\`(可与 background 并存),见 §4.11.1;同样是装入
+确认框单列的高风险档。
 
 **node 工作进程详单**(声明 node 槽时必写,详见 §4.12):
 
@@ -1271,6 +1275,39 @@ await cindy.send({ type: 'cindy-request', kind: 'release_media', hash: r.hash })
 用户装你的插件时,确认框会单独出现一行「可将它手中的图片、视频或音频存入你的
 媒体库」并写明上限——这是唯一一条"不花钱就能写用户媒体库"的能力,所以要用户
 单独点头。别为了省事把它当默认能力申请:不做面板素材加工的插件不要声明。
+
+### 4.0.2 快问快答:向 Cindy 的快速通道要一段文字(oneshot_text)
+
+需要"问一句、拿一段文字答案"(总结、分类、改写、抽取)而不需要 Agent 动用
+任何工具时,不要发起 Agent 回合——用快问快答,几秒到几十秒出结果,便宜得多:
+
+\`\`\`js
+// 需声明:"slots": [..., "cindy"], "cindy": { "text": ["oneshot"] }
+const r = await cindy.send({
+  type: 'cindy-request',
+  kind: 'oneshot_text',
+  prompt: '把下面的反馈按情绪分成 正面/负面/中性,只回类别词:\\n' + feedback,
+  // expectJson: true,     // 可选:要求只输出 JSON,主机校验可解析
+  // maxTokens: 256,       // 可选:回答预算(1–4096,缺省 1024)
+  callId: msg.callId,      // tool-call 触发时务必带上(归因)
+});
+// 成功:{ ok:true, text:'…', model:'…' }(model = 实际应答的通道/型号,仅诊断)
+// 失败:{ ok:false, message, errorCode }
+\`\`\`
+
+规矩与边界:
+
+- 它走主机的**轻量任务模型链**(用户在设置里配置的快速通道,与会话自动起
+  标题同一条),不拉起 Agent、没有工具、碰不到用户文件、不进任何会话——
+  要"干活"(读文件、查资料、多步操作)请用派活(§4.11.1);
+- 选型不在你手里,也没有 tier/model 参数:链由用户配置,主机逐候选兜底;
+- \`errorCode:'NO_CANDIDATE'\` = 用户当前没有可用的快速通道(未配置或凭证
+  不可用)。**这是正常失败面**:如实提示用户,不要重试轰炸;
+- \`expectJson: true\` 时主机会剥掉代码围栏并校验 JSON.parse,解析失败返回
+  \`errorCode:'BAD_MODEL_OUTPUT'\`(message 带原始输出开头供排查)。字段结构
+  在 prompt 里自己描述,主机不做逐字段 schema 校验;
+- prompt ≤32768 字符;同步返回,没有异步单;每插件在途上限与媒体代办共用
+  (用户可配);装入确认框会单列一行「可向 Cindy 的快速通道提问」。
 
 ## 4.1 宿主公开上下文(request,无需卡槽)
 
@@ -2127,6 +2164,45 @@ await cindy.agent.run({
 一条 Agent 请求，后台请求之间至少间隔 10 秒。这个能力可能自动产生模型费用，只在
 产品确实需要时申请，不要把 \`sessionId\` 当作任意跨会话控制口。
 
+### 4.11.1 派活取件:让 Agent 替你干活并取回结果(errand)
+
+\`agent.run\` 把回合发进**用户的会话**,结果是给用户看的;派活(errand)相反:
+任务在**你的专属 errand 会话**里跑,Agent 的最终回复文字交回**你**手里继续用。
+需声明 \`"slots": [..., "agent"]\` + \`"agent": { "errand": true }\`(装入确认高风险单列)。
+
+\`\`\`js
+// 提交(默认异步:先拿单号,再轮询取件——Agent 干活是分钟级的):
+const r = await cindy.agent.errand({
+  task: '阅读工作目录下的 README 并总结要点(200 字以内)',
+  // context: { anything: '结构化上下文,主机 JSON 化后附在任务消息尾部' },
+  // title: '我的插件 · 代办',   // 仅首次创建 errand 会话时用作标题
+  // mode: 'wait',               // 同步等到完成(30 分钟顶);默认不传 = 异步
+  callId: msg.callId,
+});
+// 受理:{ ok:true, jobId, status:'running', sessionId }
+// 轮询取件(建议间隔 ≥5s;做成"提交 + 查询"两个工具让 AI 自己掌握节奏):
+const q = await cindy.agent.queryErrand({ jobId: r.jobId });
+// 进行中:{ ok:true, jobId, status:'running', sessionId, elapsedSeconds }
+// 完成:  { ok:true, jobId, status:'done', sessionId, text, agentKind, model }
+// 失败:  { ok:false, errorCode, message }
+\`\`\`
+
+主机强制的边界(都不是建议):
+
+- **任务只进普通 user 消息**,绝不进 system prompt;
+- errand 会话在**侧边栏可见**,用户可随时旁观、叫停——没有隐身会话;
+- 用哪个 agent/模型/思考强度、多大动手权限、在哪个目录干活,全部由**用户**在
+  你的插件详情页「AI 代办」卡里配置;缺省跟随用户新建草稿的选择,权限档缺省
+  **只读**(不能改任何文件),目录缺省是插件专属文件夹。别假设你能写文件——
+  只读档下让 Agent"分析/回答"没问题,"修改"类任务要在文案里引导用户先放开
+  权限档;
+- 每插件同时 1 单在途、相邻提交至少隔 10 秒;结果超过 64K 字符会截断(尾部带
+  标记);完成结果保留 30 分钟,应用重启后查无此单(按可重新提交处理);
+- \`errorCode:'BUSY'\` = 你已有一单在途,或用户恰好正在 errand 会话里说话;
+  \`'NO_CANDIDATE'\` 不存在于此——但会话创建/派发失败有 \`'SESSION_UNAVAILABLE'\`,
+  超时有 \`'TIMEOUT'\`(任务可能仍在会话里继续,提示用户打开会话查看)。
+- 这个能力必然产生模型费用且耗时分钟级:能用快问快答(§4.0.2)解决的,不要派活。
+
 ## 4.12 随包 Node 工作进程与 stdio MCP(node 槽)
 
 \`main.js\` 永远还是浏览器沙箱代码。声明 node 槽后，主机额外为**这一段意识**按需
@@ -2652,7 +2728,7 @@ const ensured = await cindy.workspace({
 - panel.systemButtons 格式错(不是对象、未知键、值非布尔,或 position:"tab" 时声明——页签形态没有标准头)
 - keywords(已废弃字段,旧包兼容保留,新意识别写)有单字词 · kind 写了但不是 "chip"(可省略) · schemaVersion 不是 2
 - cindy 详单格式错(未知类目/动作、空数组、有详单但 slots 没有 "cindy")
-- agent 详单格式错(有详单但 slots 没有 "agent"，或 background 不是 true；只需点击触发时应省略 agent 字段)
+- agent 详单格式错(有详单但 slots 没有 "agent"，或 background / errand 都不是 true；只需点击触发时应省略 agent 字段)
 - node 详单格式错(槽/详单不成对、entry 不是包内 CommonJS .js/.cjs、protocol 不在 json-rpc-stdio / mcp-stdio、
   写了 command/args/shell/env、resident 又写 idleTimeoutSeconds)
 - id 用了 \`cindy-\` / \`filo-\` / \`xd-\` 前缀(官方保留,正式版用户通道拒装;给自己的意识换个前缀)

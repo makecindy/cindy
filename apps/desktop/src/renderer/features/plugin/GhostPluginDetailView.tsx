@@ -15,6 +15,7 @@ import {
   ChevronDown,
   Copy,
   Cpu,
+  Download,
   FileCode2,
   FilePen,
   FolderOpen,
@@ -39,6 +40,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { CindyCapabilityPrefs } from '@/cindy-brain/CindyCapabilityPrefs';
+import { GhostErrandPrefs } from '@/cindy-brain/GhostErrandPrefs';
 import { GhostSettingsWebview } from '@/cindy-brain/GhostSettingsWebview';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import {
@@ -72,6 +74,8 @@ interface GhostPluginDetailViewProps {
   updateVersion?: string;
   updateBusy?: boolean;
   onUninstall: () => void;
+  /** 导出 .cindy;当前详情非已装插件(纯市场视图)时缺省,菜单项不渲染。 */
+  onExport?: () => void;
   toggleDisabled: boolean;
   onIconLoadError?: () => void;
 }
@@ -132,6 +136,7 @@ export function GhostPluginDetailView({
   updateVersion,
   updateBusy = false,
   onUninstall,
+  onExport,
   toggleDisabled,
   onIconLoadError,
 }: GhostPluginDetailViewProps) {
@@ -142,7 +147,8 @@ export function GhostPluginDetailView({
   const enabled = enabledOverride ?? detail.enabled;
   const canUse = enabled && detail.canUse;
   const cindyCapabilities = detail.cindyCapabilities;
-  const hasConfiguration = detail.hasSettingsUi || cindyCapabilities.length > 0;
+  const hasConfiguration =
+    detail.hasSettingsUi || cindyCapabilities.length > 0 || detail.hasErrand;
   const summary = ghostPluginSummary(detail.description, detail.id);
 
   useLayoutEffect(() => {
@@ -280,6 +286,15 @@ export function GhostPluginDetailView({
                   >
                     {updateLabel ?? t('settings.ghosts.detail.updateFromFile')}
                   </DropdownMenuItem>
+                  {onExport ? (
+                    <DropdownMenuItem
+                      onSelect={onExport}
+                      className="h-10 gap-2.5 rounded-lg px-3 text-13 focus:bg-[var(--surface-hover-soft)]"
+                    >
+                      <Download size={15} aria-hidden="true" />
+                      {t('settings.ghosts.detail.exportPackage')}
+                    </DropdownMenuItem>
+                  ) : null}
                   <DropdownMenuSeparator className="mx-2 my-1 h-px bg-[var(--border-default)]" />
                   <DropdownMenuItem
                     onSelect={onUninstall}
@@ -363,6 +378,9 @@ export function GhostPluginDetailView({
                   capabilities={cindyCapabilities}
                   appearance="plugin"
                 />
+              ) : null}
+              {detail.hasErrand ? (
+                <GhostErrandPrefs ghostId={detail.id} appearance="plugin" />
               ) : null}
             </div>
           </section>

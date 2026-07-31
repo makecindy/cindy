@@ -410,6 +410,18 @@ export interface AgentDeps {
   registerCodexReviewerRouteContext?: (args: CodexReviewerRouteContextArgs) => boolean;
 
   /**
+   * Codex 专用：app-server 创建子 Agent thread 后，把明确的父子 thread 关系同步给宿主。
+   *
+   * 子 thread 会独立发起 Responses 请求，但仍属于父业务 session；宿主据此继承
+   * provider / bridge 路由和 proxy prompt。该钩子必须是同步内存操作，确保在子
+   * thread 首个网络请求前完成登记。
+   */
+  registerCodexChildThreadForParent?: (args: {
+     parentThreadId: string;
+     childThreadId: string;
+   }) => void;
+
+  /**
    * Claude 专用: host 明确认定可无提示执行的只读工具名, 透传到 SDK
    * `options.allowedTools`。maker-core 不维护任何产品工具名, 也不做 wildcard /
    * 前缀推断; 远端 cc-manager 分支必须透传同一份列表, 避免本地与 SSH 会话权限

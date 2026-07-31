@@ -230,14 +230,9 @@ function validateProvider(p: Provider): void {
           `provider '${p.id}' routing[${agent}] cannot use openai-chat`,
         );
       }
-      // Codex host 只实现原生 Responses 与本地 Responses→Chat 桥;anthropic-messages 会掉进
-      // 透明路由、把 Responses body 直发上游 → 确定性 4xx。热更目录里的坏 runtime 在此拦下。
-      if (agent === 'codex') {
-        assert(
-          routing.wireProtocol !== 'anthropic-messages',
-          `provider '${p.id}' routing[${agent}] cannot use anthropic-messages`,
-        );
-      }
+      // Codex supports native Responses, Responses→Chat and Responses→Anthropic local
+      // bridges. The latter is deliberately a local handler path; transparent forwarding
+      // must never be used for an Anthropic Messages runtime.
     }
     if (routing.requestPath !== undefined) {
       assert(
@@ -387,7 +382,6 @@ function isValidPreset(v: unknown): v is ProviderPreset {
     }
     if (r.wireProtocol !== undefined && !isWireProtocol(r.wireProtocol)) return false;
     if (agent === 'claude-code' && r.wireProtocol === 'openai-chat') return false;
-    if (agent === 'codex' && r.wireProtocol === 'anthropic-messages') return false;
     if (r.headers !== undefined) {
       if (!r.headers || typeof r.headers !== 'object' || Array.isArray(r.headers)) return false;
       if (Object.values(r.headers as Record<string, unknown>).some((x) => typeof x !== 'string')) return false;

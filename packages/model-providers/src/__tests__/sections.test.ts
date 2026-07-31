@@ -160,6 +160,30 @@ describe('buildProviderSections', () => {
     expect(models.find((m) => m.id === 'claude-fable-5')?.icon).toBe('claude');
     expect('icon' in (models.find((m) => m.id === 'gpt-5.5') ?? {})).toBe(false);
   });
+
+  it('模型级 Codex bridge 协议透传进 SectionModel;缺省不带字段', () => {
+    const bridged = provider('xd', 'XD', [
+      {
+        ...model('claude-opus-4-8', 'Opus 4.8'),
+        codexCompatibilityWireProtocol: 'anthropic-messages',
+      },
+      model('gpt-5.5', 'GPT-5.5'),
+    ]);
+    bridged.agents = ['codex'];
+    bridged.models = { codex: bridged.models['claude-code'] };
+    const sections = buildProviderSections({
+      providers: [bridged],
+      agent: 'codex',
+      isVisible: () => true,
+    });
+    const models = sections[0].models;
+    expect(models.find((m) => m.id === 'claude-opus-4-8')?.codexCompatibilityWireProtocol).toBe(
+      'anthropic-messages',
+    );
+    expect('codexCompatibilityWireProtocol' in (models.find((m) => m.id === 'gpt-5.5') ?? {})).toBe(
+      false,
+    );
+  });
 });
 
 describe('resolveModelIconKind', () => {

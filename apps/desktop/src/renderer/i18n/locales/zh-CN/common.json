@@ -1296,14 +1296,16 @@
         "wireProtocol": {
           "responses": "OpenAI Responses（原生）",
           "chat": "Chat Completions（Cindy 桥接）",
+          "anthropic": "Anthropic Messages（Cindy 桥接）",
           "responsesHelp": "供应商原生支持 Responses API，Cindy 透明转发完整事件。",
-          "chatHelp": "适用于仅提供 Chat Completions 的供应商。Cindy 转换流式文本和函数工具调用；部分高级 Responses 能力不可用。"
+          "chatHelp": "适用于仅提供 Chat Completions 的供应商。Cindy 转换流式文本和函数工具调用；部分高级 Responses 能力不可用。",
+          "anthropicHelp": "适用于提供 Anthropic Messages API 的供应商。Cindy 转换 Responses 消息、图片、工具、推理内容与流式事件。"
         },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code 遵循 Anthropic 协议(用 x-api-key 鉴权)。填该来源用于 Claude Code 的 baseURL、密钥与模型，留空则此来源不提供 Claude Code。",
           "codex": "Codex",
-          "codexDesc": "Codex 使用 OpenAI Responses 协议。上游可选择原生 Responses，或由 Cindy 桥接仅支持 Chat Completions 的供应商。填该来源用于 Codex 的 baseURL、密钥与模型，留空则此来源不提供 Codex。"
+          "codexDesc": "Codex 使用 OpenAI Responses 协议。上游可选择原生 Responses，或由 Cindy 桥接 Chat Completions、Anthropic Messages。填该来源用于 Codex 的 baseURL、密钥与模型，留空则此来源不提供 Codex。"
         },
         "errors": {
           "nameRequired": "请填写显示名称",
@@ -2838,6 +2840,8 @@
         "uninstalled": "已卸载「{{name}}」",
         "installedAsleep": "已安装「{{name}}」(未生效，可在此开启)",
         "updated": "「{{name}}」已更新到 v{{version}}",
+        "exported": "已导出「{{name}}」的 .cindy 文件",
+        "exportFailed": "导出「{{name}}」失败，请重试",
         "projectDisabled": "已在此项目停用「{{name}}」(新对话生效)",
         "projectEnabled": "「{{name}}」在此项目恢复跟随全局"
       },
@@ -2883,10 +2887,14 @@
         "cindyVideoEdit": "图生视频(请 Cindy 代办，参考图仅限它名下的图)",
         "cindyMediaDeposit": "可将它手中的图片、视频或音频存入你的媒体库",
         "cindyMediaDepositDetail": "用于让你在插件里粘贴或拖入的素材也能被 AI 加工。存入的内容记在这个插件名下，最多占用 {{quota}}，卸载插件时一并清理。",
+        "cindyTextOneshot": "可向 Cindy 的快速通道提问并获得文字回答",
+        "cindyTextOneshotDetail": "走系统的轻量任务模型链(与自动起标题同一条通道)，不动用 Agent、碰不到你的文件，可能产生模型费用。",
         "agentUserAction": "用户点击插件卡片后，可让 Agent 开始新一轮工作",
         "agentUserActionDetail": "每次点击只允许启动一次，并且只能使用这张卡所属的对话。",
         "agentBackground": "可在后台自动让 Agent 开始新一轮工作",
         "agentBackgroundDetail": "不需要当次点击，但只能使用你曾为这个插件建立过关联的对话，可能产生模型费用。",
+        "agentErrand": "可把任务交给 Cindy Agent 代办并取回结果",
+        "agentErrandDetail": "任务在这个插件的专属对话里进行，你随时可以在侧边栏看到并叫停；默认只能读不能改，要放开需你在插件配置里亲手调整，可能产生模型费用。",
         "nodeRuntime": "可在本机运行随插件附带的 Node 程序",
         "nodeMcp": "可在本机运行随插件附带的 stdio MCP",
         "nodeRuntimeDetail": "高风险：它和你本人一样，可以读取或修改你账号能访问的本机文件、访问网络并启动其它程序。Cindy 不能用浏览器沙箱限制它。",
@@ -2990,10 +2998,32 @@
             "image.generate": "出图",
             "image.edit": "改图",
             "video.generate": "生成视频",
-            "video.edit": "图生视频"
+            "video.edit": "图生视频",
+            "text.oneshot": "快问快答(文字)"
           },
           "defaultOption": "{{model}}(默认)",
           "noModels": "暂无可用模型"
+        },
+        "errandPrefs": {
+          "title": "AI 代办",
+          "desc": "这个插件把任务交给 Cindy Agent 时用哪套配置干活。不配就跟随你新建草稿时的选择；帮工默认只能看不能改，工作目录默认是插件专属文件夹。",
+          "agent": "Agent",
+          "model": "模型",
+          "effort": "推理强度",
+          "fast": "Fast 模式",
+          "fastOn": "开",
+          "fastOff": "关",
+          "permission": "动手权限",
+          "permissionMode": {
+            "plan": "只读(默认)：只能看和想，不能改东西",
+            "acceptEdits": "可改文件：允许修改工作目录里的文件",
+            "auto": "自动：工作目录内的常规操作不再逐次询问"
+          },
+          "workdir": "工作目录",
+          "workdirDefault": "插件专属文件夹(默认)",
+          "workdirPick": "选择…",
+          "workdirClear": "恢复默认目录",
+          "followDefault": "跟随默认"
         },
         "toolsTitle": "Tools",
         "permissionsTitle": "权限",
@@ -3005,6 +3035,8 @@
         "useDisabled": "请先开启插件",
         "moreActions": "更多插件操作",
         "updateFromFile": "从 .cindy 文件更新…",
+        "exportPackage": "导出 .cindy 文件…",
+        "exportFileType": "Cindy 插件",
         "settingsTitle": "{{name}} 设置",
         "settingsUnavailableUntilRestore": "恢复插件后可继续使用这项配置。",
         "configurationTitle": "配置",
@@ -3673,6 +3705,8 @@
       "addAria": "添加标签",
       "addFailed": "添加标签失败",
       "tabCloseAria": "关闭标签",
+      "pinAria": "钉住，在所有对话中保留",
+      "unpinAria": "取消钉住，仅保留在当前对话",
       "menu": {
         "addLabel": "添加标签",
         "comingSoon": "即将支持",
@@ -3698,7 +3732,9 @@
       "contextMenu": {
         "close": "关闭",
         "closeOthers": "关闭其他",
-        "closeAll": "关闭所有"
+        "closeAll": "关闭所有",
+        "pin": "钉住",
+        "unpin": "取消钉住"
       },
       "empty": {
         "eyebrow": "右侧栏",
@@ -4436,6 +4472,7 @@
       },
       "meta": {
         "context": "{{value}} 上下文",
+        "codexCompatibilityMode": "Codex 兼容模式",
         "price": "{{input}}/{{output}} / 百万",
         "fastBadge": "快速",
         "budgetDiscount": "特别折扣"

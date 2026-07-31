@@ -31,7 +31,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 import { DL_SESSION_REFERENCE_CAPABILITY_CHANNEL } from '@cindy/device-link';
-import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron';
 import { getActiveAppSession } from '../appSessionState.js';
 import type { AgentMeta } from '../../renderer/lib/ccAgent.types';
@@ -555,13 +555,23 @@ import {
   hasEnabledUserMessageHookGhost,
   screenGhostUserMessage,
   setGhostAgentTurnRunner,
+  setGhostErrandRunner,
   setGhostWorkspaceSessionService,
   notifyGhostSessionEvent,
+  getInstalledGhostName,
 } from '../cindy-brain/index.js';
 import {
+  readGhostErrandConfig,
+  readGhostErrandSessionId,
+  writeGhostErrandSessionId,
+} from '../cindy-brain/errandPrefsStore.js';
+import { createGhostErrandRunner } from './ghostErrandRunner.js';
+import {
+  createGhostErrandSession,
   createPluginDraftSession,
   findActiveSessionByWorkdir,
 } from '../localDb/ipc/pluginWorkspaceSessions.js';
+import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { openMainWindowSession } from '../deepLink.js';
 
 const log = createLogger('maker-ipc');
@@ -5810,6 +5820,76 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       disposition: 'forked',
     };
   });
+
+  // Ghost 的派活取件(agent 槽 errand 加档):守门在 cindy-brain/errandSlot,
+  // 这里注入真实执行链——专属会话确保/统一投递/turn 收口。投递仍走
+  // sendToSessionInternal 这一条主机通路(消息落库、进程拉起与用户亲发一致);
+  // 收口复用 hook-control 的 observeHookTurn(与飞书 bot 同一套 turn 观察语义)。
+  setGhostErrandRunner(
+    createGhostErrandRunner({
+      readConfig: readGhostErrandConfig,
+      readSessionId: readGhostErrandSessionId,
+      writeSessionId: writeGhostErrandSessionId,
+      getSessionRow: async (sessionId) => {
+        const [row] = await getDbClient().drizzle
+          .select({
+            status: sessions.status,
+            agentKind: sessions.agentKind,
+            model: sessions.model,
+            permissionMode: sessions.permissionMode,
+            workingDir: sessions.workingDir,
+            workspaceKind: sessions.workspaceKind,
+          })
+          .from(sessions)
+          .where(eq(sessions.id, sessionId))
+          .limit(1);
+        return row ?? null;
+      },
+      createSession: async (params) => {
+        const sessionId = await createGhostErrandSession({
+          ...params,
+          notifySessionCreated: (info) => notifyGhostSessionEvent('created', info),
+        });
+        // errand 会话在侧边栏可见(与 workspace 槽同通道刷新)——透明是这个
+        // 能力的安全边界之一,不做隐藏会话。
+        broadcastSessionCreated(sessionId);
+        return sessionId;
+      },
+      getGhostName: getInstalledGhostName,
+      getDraftDefaults: getWorkerDefaultsFromNewMaker,
+      normalizeWorkingDir: (dir) => normalizeWorkingDirForStorage(dir),
+      isSessionBusy: isSessionInTurn,
+      dispatch: async ({ targetSessionId, message }) => {
+        const r = await sendToSessionInternal({ targetSessionId, message });
+        if (!r.ok) return { ok: false, errorCode: r.errorCode, message: r.message };
+        return { ok: true, wakeKind: r.wakeKind };
+      },
+      getObservableSession: (sessionId) => maker.getSession(sessionId) ?? null,
+      onSilentStopSettled,
+      readLatestAssistantText: async (sessionId, sinceMs) => {
+        const [row] = await getDbClient().drizzle
+          .select({ content: messages.content })
+          .from(messages)
+          .where(
+            and(
+              eq(messages.sessionId, sessionId),
+              eq(messages.role, 'assistant'),
+              isNull(messages.rewindAt),
+              gte(messages.createdAt, sinceMs),
+            ),
+          )
+          .orderBy(desc(messages.createdAt), desc(messages.id))
+          .limit(1);
+        if (!row) return null;
+        const text = visibleMessageTextForConversationSearch('assistant', row.content ?? '');
+        return text.length > 0 ? text : null;
+      },
+      log: {
+        info: (message, meta) => log.info(message, meta),
+        warn: (message, meta) => log.warn(message, meta),
+      },
+    }),
+  );
 
   // Ghost 的 workspace 槽:判重/创建走 localDb 服务,创建后广播与 scheduler
   // 同一条 `local-db:sessions:created` 通道让侧边栏刷新;focus 复用 deep link

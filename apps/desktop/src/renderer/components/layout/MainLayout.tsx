@@ -40,6 +40,7 @@ import {
   invalidateSessionCaches,
 } from '@/features/right-sidebar/store';
 import { browserWebviewPool } from '@/features/right-sidebar/lib/browserWebviewPool';
+import { ghostPanelWebviewPool } from '@/cindy-brain/ghostPanelWebviewPool';
 import { markAllPtyDetached } from '@/features/right-sidebar/plugins/terminal/lib/xtermPool';
 import {
   bootstrapRsbWindowState,
@@ -835,6 +836,9 @@ export function MainLayout() {
     if (rsbDetached) {
       setIsRightSidebarMaximized(false);
       browserWebviewPool.releaseAll();
+      // 钉住插件面板的常驻池同场景同命运:宿主迁移后本 renderer 的面板 webview
+      // 全是僵尸,子窗口接管时按需重建。
+      ghostPanelWebviewPool.releaseAll();
       // 终端 entry 的 ptyAttached 是 per-renderer 标记:宿主迁移后本窗的标记必然
       // 过期(PTY sink 会被对方窗口 re-attach 抢走),两个方向都要复位,否则
       // "弹出 → 合并回主窗"往返后 guard 跳过 re-attach,终端失活。

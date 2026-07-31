@@ -48,6 +48,15 @@ import {
   setTabCloseInterceptor,
   subscribe,
 } from './store';
+import {
+  AUTO_PINNED_GHOST_TAB_STATE,
+  getLastFocusedPinnedGhostKind,
+  ghostIdOfTabKind,
+  isAutoPinnedGhostTabState,
+  isGhostTabPinned,
+  setLastFocusedPinnedGhostKind,
+  useGhostTabPinsVersion,
+} from './lib/pinnedGhostTabs';
 import type { TabKindHostContext, TabKindId, TabState } from './types';
 // Side-effect import:触发各 plugin 模块顶层 registerTabKind(...)。Phase 3 注册
 // file-browser;Phase 5 注册 web-browser。Shell 不直接消费 plugin 实例,只通过
@@ -208,6 +217,78 @@ export function RightSidebarShell({
   // 注册表是模块级 Map,不在 React 数据流里 —— 版本号是唯一变化信号,拿它当 dep。
   const ghostTabMetas = useMemo(() => listGhostTabMenuMetas(), [tabRegistryVersion]);
 
+  // 钉住偏好版本号:钉/取消钉都要驱动下方维护 effect 与 pill 重渲。
+  const ghostPinsVersion = useGhostTabPinsVersion();
+
+  // 钉住面板页签的跨会话维护(hydrate 之后跑,幂等,串行 await 防 reorder 竞态):
+  //  1) 清扫:自动补挂(state 带 autoPinned 标记)但插件已不再钉住的页签关掉
+  //     —— 取消钉住在别的会话里也要收干净,不留残影;用户手动开的页签无标记,
+  //     不受清扫影响(取消钉住 = 回到"仅当前会话"语义)。
+  //  2) 补挂:钉住且已注册(启用中)的面板页签,本会话没有 → 追加。默认
+  //     activate:false 不抢焦点;会话本来就没有激活 tab 时兜底激活,避免
+  //     "有 pill 无内容"的空面板。
+  //  3) 粘性激活:上一会话正看着某钉住面板 → 切会话后把同一面板带到前台
+  //     (每个 sessionId 只做一次,用户随后在本会话内的切换不被打扰)。
+  // 插件被停用时 kind 未注册 → 跳过补挂;已存在的页签保留(落 Placeholder,
+  // 与"停用隐藏、重启用复活"的既有语义一致)。
+  const stickyAppliedSessionRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!sessionId || !bucket.hydrated) return;
+    let cancelled = false;
+    const run = async () => {
+      // 1) 清扫
+      for (const tab of bucket.tabs) {
+        if (cancelled) return;
+        const gid = ghostIdOfTabKind(tab.kind);
+        if (!gid) continue;
+        if (isAutoPinnedGhostTabState(tab.state) && !isGhostTabPinned(gid)) {
+          try {
+            await closeTab(sessionId, tab.id);
+          } catch (err) {
+            log.error('pinned ghost tab sweep failed', { sessionId, tabId: tab.id, err });
+          }
+        }
+      }
+      // 2) 补挂
+      for (const meta of listGhostTabMenuMetas()) {
+        if (cancelled) return;
+        const gid = ghostIdOfTabKind(meta.kind);
+        if (!gid || !isGhostTabPinned(gid)) continue;
+        if (getBucket(sessionId).tabs.some((t) => t.kind === meta.kind)) continue;
+        try {
+          await addTab(sessionId, meta.kind, AUTO_PINNED_GHOST_TAB_STATE, { activate: false });
+        } catch (err) {
+          // 典型失败:MAX_TABS_PER_SESSION 满。补挂失败不重试,本会话手动管理。
+          log.error('pinned ghost tab auto-add failed', { sessionId, kind: meta.kind, err });
+        }
+      }
+      if (cancelled) return;
+      // 3) 粘性激活 + 空激活位兜底
+      const applySticky = stickyAppliedSessionRef.current !== sessionId;
+      stickyAppliedSessionRef.current = sessionId;
+      const now = getBucket(sessionId);
+      let target: string | null = null;
+      const stickyKind = applySticky ? getLastFocusedPinnedGhostKind() : null;
+      if (stickyKind) {
+        target = now.tabs.find((t) => t.kind === stickyKind)?.id ?? null;
+      }
+      if (!target && now.activeTabId === null && now.tabs.length > 0) {
+        target = now.tabs[0].id;
+      }
+      if (target && target !== now.activeTabId) {
+        try {
+          await setActiveTab(sessionId, target);
+        } catch (err) {
+          log.error('pinned ghost tab activate failed', { sessionId, target, err });
+        }
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, bucket.hydrated, bucket.tabs, ghostPinsVersion, tabRegistryVersion]);
+
   // 关掉最后一个 tab → 通知 host 自动收起侧栏。只在 tab 数「从 >0 变 0」的转变时
   // 触发,不是"等于 0"就触发:
   //   - hydrated 后首帧 prev===null 不触发(区分"刚加载出来就是空"与"关到空");
@@ -243,6 +324,9 @@ export function RightSidebarShell({
       const action = isSingleton
         ? addOrFocusSingletonTab(sessionId, kind, initialState)
         : addTab(sessionId, kind, initialState);
+      // 新开 tab 即成为焦点:是钉住面板 → 记粘性焦点,其余 → 清。
+      // (addOrFocusSingletonTab 已同步写入默认钉住条目,此处读到的是新状态。)
+      setLastFocusedPinnedGhostKind(kind);
       void action.catch((err) => {
         // TODO(Phase 7): toast 暴露 RIGHT_SIDEBAR_TOO_MANY_TABS / STATE_TOO_LARGE 等错误码。
         log.error('handleAdd failed', { sessionId, kind, err });
@@ -264,6 +348,9 @@ export function RightSidebarShell({
   const handleActivate = useCallback(
     (tabId: string) => {
       if (!sessionId) return;
+      // 用户显式聚焦:钉住面板 → 记粘性焦点(切会话跟着走);其它 tab → 清。
+      const kind = getBucket(sessionId).tabs.find((t) => t.id === tabId)?.kind ?? null;
+      setLastFocusedPinnedGhostKind(kind);
       void setActiveTab(sessionId, tabId).catch((err) => {
         log.error('handleActivate failed', { sessionId, tabId, err });
       });
@@ -295,6 +382,8 @@ export function RightSidebarShell({
           : (activeIndex + (direction === 'next' ? 1 : -1) + tabs.length) % tabs.length;
       const nextTabId = tabs[nextIndex]?.id;
       if (!nextTabId || nextTabId === activeTabId) return false;
+      // 快捷键轮换也是显式聚焦 —— 与 handleActivate 同口径维护粘性焦点。
+      setLastFocusedPinnedGhostKind(tabs[nextIndex]?.kind ?? null);
       void setActiveTab(sessionId, nextTabId).catch((err) => {
         log.error('cycle right sidebar tab failed', { sessionId, direction, nextTabId, err });
       });

@@ -171,6 +171,52 @@ describe('utility one-shot candidates', () => {
     });
   });
 
+  it('pinnedProfileId 钉住某一档时只用它,绕开默认链', async () => {
+    // 默认链(mock)是 codex-mini + litellm-mini;钉 deepseek 应当完全绕开它们,
+    // 只解析出 deepseek 这一个候选(取自真实档位表,不受链 mock 影响)。
+    readKey.mockReturnValue('proxy-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'pinned text' } }] }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'hello', {
+      maxTokens: 10,
+      pinnedProfileId: 'litellm-deepseek-v4-flash',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      text: 'pinned text',
+      providerId: 'litellm-deepseek-v4-flash',
+      model: 'deepseek/deepseek-v4-flash',
+    });
+    // 钉住后链上的 mini 一次都不该被下单
+    expect(JSON.parse(String(vi.mocked(fetchMock).mock.calls[0]?.[1]?.body))).toMatchObject({
+      model: 'deepseek/deepseek-v4-flash',
+    });
+  });
+
+  it('不认的 pinnedProfileId 忽略,回落默认链', async () => {
+    readKey.mockReturnValue('proxy-key');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'chain text' } }] }),
+    } as never);
+
+    const result = await requestUtilityText(makerMock(false), 'hello', {
+      maxTokens: 10,
+      pinnedProfileId: 'no-such-profile',
+    });
+
+    // 回落到链上第一个可用候选(codex 无凭证被跳过 → litellm-mini)
+    expect(result).toMatchObject({
+      ok: true,
+      providerId: 'litellm-gpt-5.4-mini',
+      model: 'gpt-5.4-mini',
+    });
+  });
+
   it('preserves failed candidate and HTTP status diagnostics without response bodies', async () => {
     readKey.mockReturnValue('proxy-key');
     const maker = makerMock(true);

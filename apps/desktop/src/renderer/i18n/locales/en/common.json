@@ -1296,14 +1296,16 @@
         "wireProtocol": {
           "responses": "OpenAI Responses (native)",
           "chat": "Chat Completions (Cindy bridge)",
+          "anthropic": "Anthropic Messages (Cindy bridge)",
           "responsesHelp": "The provider supports the Responses API natively, so Cindy forwards its event stream unchanged.",
-          "chatHelp": "For providers that only expose Chat Completions. Cindy converts streaming text and function tool calls; some advanced Responses features are unavailable."
+          "chatHelp": "For providers that only expose Chat Completions. Cindy converts streaming text and function tool calls; some advanced Responses features are unavailable.",
+          "anthropicHelp": "For providers that expose the Anthropic Messages API. Cindy converts Responses messages, images, tools, reasoning, and streaming events."
         },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code follows the Anthropic protocol (auth via x-api-key). Enter this source's baseURL, key, and models for Claude Code; leave blank to skip Claude Code for this source.",
           "codex": "Codex",
-          "codexDesc": "Codex speaks the OpenAI Responses protocol. Choose a native Responses upstream or let Cindy bridge a provider that only supports Chat Completions. Enter this source's base URL, key, and models for Codex; leave blank to skip Codex for this source."
+          "codexDesc": "Codex speaks the OpenAI Responses protocol. Choose native Responses, or let Cindy bridge Chat Completions or Anthropic Messages. Enter this source's base URL, key, and models for Codex; leave blank to skip Codex for this source."
         },
         "errors": {
           "nameRequired": "Display name is required",
@@ -2839,6 +2841,8 @@
         "uninstalled": "Uninstalled \"{{name}}\"",
         "installedAsleep": "Installed \"{{name}}\" (disabled — enable it here anytime)",
         "updated": "\"{{name}}\" updated to v{{version}}",
+        "exported": "Exported the .cindy file for \"{{name}}\"",
+        "exportFailed": "Couldn't export \"{{name}}\" — try again",
         "projectDisabled": "Turned off \"{{name}}\" for this project (applies to new sessions)",
         "projectEnabled": "\"{{name}}\" now follows the global setting in this project"
       },
@@ -2884,10 +2888,14 @@
         "cindyVideoEdit": "Image-to-video (delegated to Cindy, reference images from its own media only)",
         "cindyMediaDeposit": "Can save images, video or audio it holds into your media library",
         "cindyMediaDepositDetail": "This lets AI work on material you paste or drop into the plugin. Saved items are recorded under this plugin, use at most {{quota}}, and are cleaned up when you uninstall it.",
+        "cindyTextOneshot": "Can ask Cindy's fast lane a question and receive a text answer",
+        "cindyTextOneshotDetail": "Uses the system's lightweight utility model chain (the same lane as auto titles). No Agent involved and no file access. Model charges may apply.",
         "agentUserAction": "Can start a new Agent turn after you click a plugin card",
         "agentUserActionDetail": "Each click permits one turn only, and only in the session that owns the card.",
         "agentBackground": "Can automatically start new Agent turns in the background",
         "agentBackgroundDetail": "Does not require a click each time, but can only use sessions you previously connected to this plugin. Model charges may apply.",
+        "agentErrand": "Can hand tasks to the Cindy Agent and collect the result",
+        "agentErrandDetail": "Tasks run in this plugin's dedicated session, always visible in the sidebar and stoppable at any time. Read-only by default; raising the level requires your change in the plugin settings. Model charges may apply.",
         "nodeRuntime": "Can run a bundled Node program on this computer",
         "nodeMcp": "Can run a bundled stdio MCP on this computer",
         "nodeRuntimeDetail": "High risk: it has the same local access as your user account, including files, network, and starting other programs. Cindy cannot contain it in the browser sandbox.",
@@ -2991,10 +2999,32 @@
             "image.generate": "Image generation",
             "image.edit": "Image editing",
             "video.generate": "Video generation",
-            "video.edit": "Image-to-video"
+            "video.edit": "Image-to-video",
+            "text.oneshot": "Quick answer (text)"
           },
           "defaultOption": "{{model}} (default)",
           "noModels": "No models available"
+        },
+        "errandPrefs": {
+          "title": "AI errands",
+          "desc": "How this plugin's tasks run when it hands work to the Cindy Agent. Unset fields follow your new-draft preferences; the helper is read-only by default and works in a dedicated folder.",
+          "agent": "Agent",
+          "model": "Model",
+          "effort": "Reasoning effort",
+          "fast": "Fast mode",
+          "fastOn": "On",
+          "fastOff": "Off",
+          "permission": "Write access",
+          "permissionMode": {
+            "plan": "Read-only (default): can look and think, cannot change anything",
+            "acceptEdits": "Can edit files: may modify files in the working folder",
+            "auto": "Auto: routine actions in the working folder no longer ask each time"
+          },
+          "workdir": "Working folder",
+          "workdirDefault": "Plugin's dedicated folder (default)",
+          "workdirPick": "Choose…",
+          "workdirClear": "Reset to default folder",
+          "followDefault": "Follow default"
         },
         "toolsTitle": "Tools",
         "permissionsTitle": "Permissions",
@@ -3006,6 +3036,8 @@
         "useDisabled": "Enable this Plugin before using it",
         "moreActions": "More Plugin Actions",
         "updateFromFile": "Update from .cindy File…",
+        "exportPackage": "Export .cindy File…",
+        "exportFileType": "Cindy Plugin",
         "settingsTitle": "{{name}} Settings",
         "settingsUnavailableUntilRestore": "Restore the plugin to use this configuration again.",
         "configurationTitle": "Configuration",
@@ -3674,6 +3706,8 @@
       "addAria": "Add tab",
       "addFailed": "Failed to add tab",
       "tabCloseAria": "Close tab",
+      "pinAria": "Pin — keep in all conversations",
+      "unpinAria": "Unpin — keep only in this conversation",
       "menu": {
         "addLabel": "Add tab",
         "comingSoon": "Coming soon",
@@ -3699,7 +3733,9 @@
       "contextMenu": {
         "close": "Close",
         "closeOthers": "Close others",
-        "closeAll": "Close all"
+        "closeAll": "Close all",
+        "pin": "Pin",
+        "unpin": "Unpin"
       },
       "empty": {
         "eyebrow": "Right Sidebar",
@@ -4437,6 +4473,7 @@
       },
       "meta": {
         "context": "{{value}} context",
+        "codexCompatibilityMode": "Codex compatibility mode",
         "price": "{{input}}/{{output}} per 1M",
         "fastBadge": "Fast",
         "budgetDiscount": "Special discount"

@@ -108,9 +108,16 @@ function isValidEditablePresetBaseUrl(value: string): boolean {
  * (缺省由 baseUrl 推导 …/v1/models,见 provider-model-fetch);同时内置少量
  * 推荐模型兜底——拉取因网络/限流失败时降级为「仅推荐模型」仍可完成创建,
  * 不把用户堵死(与目录预设同语义;Greptile P1 反馈 2026-07-24)。
- * cc runtime 需 Anthropic 兼容端点、codex 需 OpenAI 兼容端点,故 openai/xai
- * 仅声明 codex(两家无 Anthropic 兼容端点),表单会自动展示「仅支持 X」说明行。
+ * 每个 runtime 都独立声明 wire protocol：Anthropic API 同时提供 Claude Code 的
+ * Messages 与 Codex 桥接所需的 Messages 端点；openai/xai 仅声明 Codex(两家无
+ * Anthropic 兼容端点),表单会自动展示「仅支持 X」说明行。
  */
+const ANTHROPIC_API_MODELS = [
+  { id: 'claude-opus-5', name: 'Claude Opus 5', contextWindow: 1_000_000 },
+  { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', contextWindow: 1_000_000 },
+  { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', contextWindow: 200_000 },
+];
+
 const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
   anthropic: {
     id: 'anthropic-api',
@@ -122,11 +129,15 @@ const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
         // contextWindow 必须与目录(providers.json)一致:保存时它是窗口的唯一来源
         // (拉取的模型列表不带窗口),缺省会落 200k 默认 → toSdkModelString 剥掉
         // 1M 模型的 [1m] 路由,用户拿到 1/5 窗口。
-        models: [
-          { id: 'claude-opus-5', name: 'Claude Opus 5', contextWindow: 1_000_000 },
-          { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', contextWindow: 1_000_000 },
-          { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', contextWindow: 200_000 },
-        ],
+        models: ANTHROPIC_API_MODELS,
+      },
+      // Codex 通过 Responses → Anthropic Messages 本地桥接访问同一官方 API。
+      // 这不是 Claude.ai OAuth 路由：API key 由该 runtime 独立存储，出站只使用
+      // x-api-key，Codex 自带的 OpenAI Authorization 永不透传到 Anthropic。
+      codex: {
+        wireProtocol: 'anthropic-messages',
+        baseUrl: 'https://api.anthropic.com',
+        models: ANTHROPIC_API_MODELS,
       },
     },
   },
@@ -598,6 +609,7 @@ export function AddProviderWizard({
             authMethod: preset.authMethod ?? 'apiKey',
             modelsUrl: rt.modelsUrl ?? null,
             apiKey: apiKey.trim() || null,
+            ...(rt.wireProtocol ? { wireProtocol: rt.wireProtocol } : {}),
             ...(rt.headers ? { headers: rt.headers } : {}),
           });
           return { agent, ok: !!(r.ok && r.models), models: r.models ?? [] };

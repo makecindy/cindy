@@ -1296,14 +1296,16 @@
         "wireProtocol": {
           "responses": "OpenAI Responses(네이티브)",
           "chat": "Chat Completions(Cindy 브리지)",
+          "anthropic": "Anthropic Messages(Cindy 브리지)",
           "responsesHelp": "제공자가 Responses API를 네이티브로 지원하므로 Cindy가 이벤트 스트림을 그대로 전달합니다.",
-          "chatHelp": "Chat Completions만 제공하는 업체용입니다. Cindy가 스트리밍 텍스트와 함수 도구 호출을 변환하며 일부 고급 Responses 기능은 사용할 수 없습니다."
+          "chatHelp": "Chat Completions만 제공하는 업체용입니다. Cindy가 스트리밍 텍스트와 함수 도구 호출을 변환하며 일부 고급 Responses 기능은 사용할 수 없습니다.",
+          "anthropicHelp": "Anthropic Messages API를 제공하는 업체용입니다. Cindy가 Responses 메시지, 이미지, 도구, 추론 내용 및 스트리밍 이벤트를 변환합니다."
         },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code는 Anthropic 프로토콜을 따릅니다(x-api-key 인증). 이 제공자의 Claude Code용 baseURL・키・모델을 입력하세요. 비워 두면 이 제공자는 Claude Code를 제공하지 않습니다.",
           "codex": "Codex",
-          "codexDesc": "Codex는 OpenAI Responses 프로토콜을 사용합니다. Responses를 네이티브로 지원하는 업스트림이나 Chat Completions만 지원하는 제공자를 Cindy로 브리지하는 방식을 선택할 수 있습니다. 이 제공자의 Codex용 기본 URL, 키와 모델을 입력하세요. 비워 두면 Codex에서 사용하지 않습니다."
+          "codexDesc": "Codex는 OpenAI Responses 프로토콜을 사용합니다. Responses를 네이티브로 사용하거나 Chat Completions 또는 Anthropic Messages를 Cindy로 브리지하는 방식을 선택할 수 있습니다. 이 제공자의 Codex용 기본 URL, 키와 모델을 입력하세요. 비워 두면 Codex에서 사용하지 않습니다."
         },
         "errors": {
           "nameRequired": "표시 이름을 입력하세요",
@@ -2838,6 +2840,8 @@
         "uninstalled": "\"{{name}}\" 제거됨",
         "installedAsleep": "\"{{name}}\" 설치 완료 (비활성 상태이며 여기에서 언제든 활성화할 수 있습니다)",
         "updated": "\"{{name}}\"이(가) v{{version}}(으)로 업데이트되었습니다",
+        "exported": "\"{{name}}\"의 .cindy 파일을 내보냈습니다",
+        "exportFailed": "\"{{name}}\"을(를) 내보내지 못했습니다. 다시 시도하세요",
         "projectDisabled": "이 프로젝트에서 \"{{name}}\"을(를) 껐습니다(새 세션부터 적용)",
         "projectEnabled": "\"{{name}}\"이(가) 이 프로젝트에서 전역 설정을 따릅니다"
       },
@@ -2883,10 +2887,14 @@
         "cindyVideoEdit": "이미지로 영상 만들기(Cindy에게 대행 요청, 참조 이미지는 자신 소유만)",
         "cindyMediaDeposit": "보유한 이미지·영상·오디오를 내 미디어 라이브러리에 저장할 수 있음",
         "cindyMediaDepositDetail": "플러그인에 붙여넣거나 끌어다 놓은 소재도 AI가 편집할 수 있게 하는 권한입니다. 저장된 항목은 이 플러그인 이름으로 기록되며 최대 {{quota}}까지 사용하고, 플러그인을 삭제하면 함께 정리됩니다.",
+        "cindyTextOneshot": "Cindy의 빠른 채널에 질문하고 텍스트 답변을 받을 수 있음",
+        "cindyTextOneshotDetail": "시스템의 경량 작업 모델 체인(자동 제목과 같은 경로)을 사용합니다. Agent를 사용하지 않고 파일에도 접근하지 않습니다. 모델 비용이 발생할 수 있습니다.",
         "agentUserAction": "플러그인 카드를 클릭한 뒤 Agent의 새 작업을 시작할 수 있음",
         "agentUserActionDetail": "클릭 한 번마다 한 번만 시작할 수 있으며, 해당 카드가 속한 세션에서만 사용할 수 있습니다.",
         "agentBackground": "백그라운드에서 Agent의 새 작업을 자동으로 시작할 수 있음",
         "agentBackgroundDetail": "매번 클릭할 필요는 없지만, 이전에 이 플러그인과 연결한 세션에서만 사용할 수 있습니다. 모델 비용이 발생할 수 있습니다.",
+        "agentErrand": "Cindy Agent에게 작업을 맡기고 결과를 받아올 수 있음",
+        "agentErrandDetail": "작업은 이 플러그인 전용 세션에서 실행되며, 사이드바에서 언제든 확인하고 중단할 수 있습니다. 기본은 읽기 전용이며, 권한 상향은 플러그인 설정에서 직접 해야 합니다. 모델 비용이 발생할 수 있습니다.",
         "nodeRuntime": "함께 제공된 Node 프로그램을 이 컴퓨터에서 실행할 수 있음",
         "nodeMcp": "함께 제공된 stdio MCP를 이 컴퓨터에서 실행할 수 있음",
         "nodeRuntimeDetail": "고위험:사용자 계정과 같은 권한으로 로컬 파일을 읽거나 수정하고, 네트워크에 접근하며, 다른 프로그램을 시작할 수 있습니다. Cindy의 브라우저 샌드박스로 격리할 수 없습니다.",
@@ -2990,10 +2998,32 @@
             "image.generate": "이미지 생성",
             "image.edit": "이미지 편집",
             "video.generate": "영상 생성",
-            "video.edit": "이미지로 영상"
+            "video.edit": "이미지로 영상",
+            "text.oneshot": "빠른 답변(텍스트)"
           },
           "defaultOption": "{{model}} (기본값)",
           "noModels": "사용 가능한 모델 없음"
+        },
+        "errandPrefs": {
+          "title": "AI 대행",
+          "desc": "이 플러그인이 Cindy Agent에게 작업을 맡길 때 사용하는 실행 설정입니다. 설정하지 않은 항목은 새 초안 선택을 따르며, 기본은 읽기 전용이고 전용 폴더에서 작업합니다.",
+          "agent": "Agent",
+          "model": "모델",
+          "effort": "추론 강도",
+          "fast": "Fast 모드",
+          "fastOn": "켬",
+          "fastOff": "끔",
+          "permission": "쓰기 권한",
+          "permissionMode": {
+            "plan": "읽기 전용(기본): 보고 생각만 할 수 있고 변경은 불가",
+            "acceptEdits": "파일 수정 가능: 작업 폴더 안의 파일을 수정할 수 있음",
+            "auto": "자동: 작업 폴더 안의 일반 작업은 매번 묻지 않음"
+          },
+          "workdir": "작업 폴더",
+          "workdirDefault": "플러그인 전용 폴더(기본)",
+          "workdirPick": "선택…",
+          "workdirClear": "기본 폴더로 되돌리기",
+          "followDefault": "기본값 따르기"
         },
         "toolsTitle": "Tools",
         "permissionsTitle": "권한",
@@ -3005,6 +3035,8 @@
         "useDisabled": "사용하기 전에 Plugin을 활성화하세요",
         "moreActions": "Plugin 추가 작업",
         "updateFromFile": ".cindy 파일에서 업데이트…",
+        "exportPackage": ".cindy 파일 내보내기…",
+        "exportFileType": "Cindy 플러그인",
         "settingsTitle": "{{name}} 설정",
         "settingsUnavailableUntilRestore": "이 설정을 다시 사용하려면 플러그인을 복원하세요.",
         "configurationTitle": "설정",
@@ -3673,6 +3705,8 @@
       "addAria": "탭 추가",
       "addFailed": "탭을 추가하지 못했습니다",
       "tabCloseAria": "탭 닫기",
+      "pinAria": "고정 — 모든 세션에서 유지",
+      "unpinAria": "고정 해제 — 현재 세션에서만 유지",
       "menu": {
         "addLabel": "탭 추가",
         "comingSoon": "지원 예정",
@@ -3698,7 +3732,9 @@
       "contextMenu": {
         "close": "닫기",
         "closeOthers": "다른 탭 닫기",
-        "closeAll": "모두 닫기"
+        "closeAll": "모두 닫기",
+        "pin": "고정",
+        "unpin": "고정 해제"
       },
       "empty": {
         "eyebrow": "오른쪽 사이드바",
@@ -4436,6 +4472,7 @@
       },
       "meta": {
         "context": "컨텍스트 {{value}}",
+        "codexCompatibilityMode": "Codex 호환 모드",
         "price": "{{input}}/{{output}} / 100만",
         "fastBadge": "고속",
         "budgetDiscount": "특별 할인"

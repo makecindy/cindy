@@ -75,7 +75,9 @@ describe('mobile session main layer desktop-first noise budget', () => {
   });
 
   it('lets Lead sessions compose messages while gating write-orchestration on the write read-only reason', () => {
-    const source = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+    // Windows checkout 使用 CRLF；源码契约中的多行 LF 片段必须先统一行尾再比较。
+    const source = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8')
+      .replace(/\r\n/g, '\n');
 
     // composer 能力(buildSessionOperationLayout)与 header 徽标走 composer-only reason(Lead=可发消息)。
     expect(source).toContain('const composerReadOnlyReason = useMemo(');

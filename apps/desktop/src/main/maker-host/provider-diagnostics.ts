@@ -21,6 +21,7 @@ import {
   type AgentKind,
   type ProviderWireProtocol,
 } from '@cindy/model-providers';
+import { joinAnthropicMessagesUrl } from '@cindy/responses-anthropic-bridge';
 
 import {
   classifyProviderError,
@@ -81,33 +82,41 @@ export function setDiagnosticsKeyReader(reader: KeyReader): void {
 function withoutCredentialHeaders(
   headers: Record<string, string> | undefined,
 ): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(headers ?? {}).filter(([name]) => {
-      const normalized = name.toLowerCase();
-      return normalized !== 'authorization' && normalized !== 'x-api-key';
-    }),
-  );
+  const normalized: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers ?? {})) {
+    const lower = name.toLowerCase();
+    if (lower !== 'authorization' && lower !== 'x-api-key') normalized[lower] = value;
+  }
+  return normalized;
+}
+
+function normalizedHeaders(headers: Record<string, string> | undefined): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers ?? {})) {
+    normalized[name.toLowerCase()] = value;
+  }
+  return normalized;
 }
 
 /** 构造探测请求（纯函数，单测直断言）。header 组合与 provider-route 的 api-key-header 分支对齐。 */
 export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init: RequestInit } {
   const mustStripCredentialHeaders =
     !!spec.apiKey || spec.authMethod === 'none' || spec.authMethod === 'oauth';
-  const headers: Record<string, string> = {
-    'content-type': 'application/json',
-    ...(mustStripCredentialHeaders
-      ? withoutCredentialHeaders(spec.headers)
-      : (spec.headers ?? {})),
-  };
-  if (spec.agent === 'claude-code') {
-    // Anthropic Messages wire。anthropic-version 为兼容端点普遍要求的必带头。
+  const headers = mustStripCredentialHeaders
+    ? withoutCredentialHeaders(spec.headers)
+    : normalizedHeaders(spec.headers);
+  headers['content-type'] = 'application/json';
+  const anthropicMessages =
+    spec.wireProtocol === 'anthropic-messages'
+    || (spec.wireProtocol === undefined && spec.agent === 'claude-code');
+  if (anthropicMessages) {
     headers['anthropic-version'] = headers['anthropic-version'] ?? '2023-06-01';
     if (spec.apiKey) {
       headers['x-api-key'] = spec.apiKey;
       headers['authorization'] = `Bearer ${spec.apiKey}`;
     }
     return {
-      url: appendProviderRequestPath(spec.baseUrl, spec.requestPath ?? '/v1/messages'),
+      url: joinAnthropicMessagesUrl(spec.baseUrl, spec.requestPath ?? '/v1/messages'),
       init: {
         method: 'POST',
         headers,

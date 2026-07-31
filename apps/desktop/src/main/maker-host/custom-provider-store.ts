@@ -113,7 +113,7 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
   if (r.wireProtocol !== undefined) {
     const allowed = agent === 'claude-code'
       ? ['anthropic-messages']
-      : ['openai-responses', 'openai-chat'];
+      : ['openai-responses', 'openai-chat', 'anthropic-messages'];
     if (typeof r.wireProtocol !== 'string' || !allowed.includes(r.wireProtocol)) {
       return invalid(`runtime '${agent}' wireProtocol invalid`);
     }

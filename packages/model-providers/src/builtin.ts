@@ -69,7 +69,11 @@ const ANTHROPIC_PROVIDER: Provider = {
   id: 'anthropic',
   name: 'Anthropic',
   source: 'builtin',
-  agents: ['claude-code'],
+  // Claude.ai OAuth can be used by both native Claude Code and the Codex →
+  // Anthropic Messages bridge.  The two runtimes deliberately use different
+  // auth strategies below: Claude Code may pass its native OAuth through,
+  // while Codex must receive a host-owned Claude.ai token.
+  agents: ['claude-code', 'codex'],
   auth: { method: 'oauth' },
   access: { kind: 'subscription', product: 'Claude.ai' },
   titleModel: 'claude-haiku-4-5',
@@ -78,8 +82,18 @@ const ANTHROPIC_PROVIDER: Provider = {
       upstream: 'https://api.anthropic.com',
       authStrategy: 'oauth-passthrough',
     },
+    codex: {
+      upstream: 'https://api.anthropic.com',
+      wireProtocol: 'anthropic-messages',
+      authStrategy: 'provider-oauth-header',
+      headerOverride: {
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
+      },
+      headerDelete: ['chatgpt-account-id', 'openai-beta', 'originator', 'session_id'],
+    },
   },
-  models: { 'claude-code': [] },
+  models: { 'claude-code': [], codex: [] },
 };
 
 /** OpenAI(ChatGPT 订阅 OAuth)。模型清单来自 codex 注册表,此处恒为空。 */
