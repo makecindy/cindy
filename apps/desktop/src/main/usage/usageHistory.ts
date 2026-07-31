@@ -24,6 +24,7 @@ import { getModelUsageSince, type DailyModelUsageRow } from '../localDb/dailyMod
 import { getCurrentDbClientUserId } from '../localDb/client/current';
 import { createLogger } from '../logger';
 import {
+  getClaudeSubscriptionValuePrice,
   getCodexSubscriptionValuePrice,
   getModelPricing,
   getSubscriptionDirectValuePrice,
@@ -31,9 +32,6 @@ import {
   type ModelPricingMap,
 } from './modelPricing';
 import { computePriceQuoteTurnMoney } from './turnCostCalculator';
-import {
-  getModelPriceQuote,
-} from '../../shared/modelPriceQuote.js';
 import { currentLedgerCurrency } from './ledgerCurrency.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
@@ -353,14 +351,15 @@ function getSubscriptionValuePriceFor(
   agentKind: 'claude-code' | 'codex',
   model: string,
   pricing: ModelPricingMap | null,
+  at?: string | Date,
 ): ModelPriceQuote | undefined {
   if (agentKind === 'codex') {
     return (
-      getSubscriptionDirectValuePrice(model, 'codex', pricing) ??
-      getCodexSubscriptionValuePrice(model, pricing)
+      getSubscriptionDirectValuePrice(model, 'codex', pricing, at) ??
+      getCodexSubscriptionValuePrice(model, pricing, at)
     );
   }
-  return getModelPriceQuote(pricing, 'anthropic', model, 'claude-code');
+  return getClaudeSubscriptionValuePrice(model, pricing, at);
 }
 
 async function hydrateFromDisk(expectedOptsKey: string): Promise<UsageHistoryPayload | null> {
@@ -572,6 +571,7 @@ export async function readUsageHistoryWith(
       r.agentKind === 'codex' ? 'codex' : 'claude-code',
       displayModelName(r.model),
       pricing,
+      r.day,
     ),
   );
   const estimatesPending =
@@ -579,6 +579,7 @@ export async function readUsageHistoryWith(
     deps.isModelPricingRefreshInFlight();
 
   const byKey = new Map<string, UsageHistoryModel>();
+  const subscriptionEstimatesByKey = new Map<string, RegionalMoney[]>();
   let todayTokens = 0;
   let last30DaysTokens = 0;
   for (const row of modelRows) {
@@ -616,15 +617,25 @@ export async function readUsageHistoryWith(
     agg.outputTokens += row.outputTokens;
     agg.cacheReadTokens += row.cacheReadTokens;
     agg.cacheCreateTokens += row.cacheCreateTokens;
-  }
-  for (const [key, m] of byKey) {
-    const modelKey = key.slice(key.indexOf('\u0000') + 1);
-    if (m.money.amount === 0 && isSubscriptionUsageModel(modelKey)) {
-      m.estimatedMoney = computePriceQuoteTurnMoney(
-        m,
-        getSubscriptionValuePriceFor(m.agentKind, m.model, pricing),
+    if (row.money.amount === 0 && isSubscriptionUsageModel(row.model)) {
+      const estimate = computePriceQuoteTurnMoney(
+        row,
+        getSubscriptionValuePriceFor(agentKind, model, pricing, row.day),
         ledgerCurrency,
       );
+      if (estimate?.amount) {
+        const estimates = subscriptionEstimatesByKey.get(key) ?? [];
+        estimates.push(estimate);
+        subscriptionEstimatesByKey.set(key, estimates);
+      }
+    }
+  }
+  for (const [key, m] of byKey) {
+    if (m.money.amount === 0) {
+      const estimates = subscriptionEstimatesByKey.get(key);
+      if (estimates?.length) {
+        m.estimatedMoney = addCompatibleRegionalMoney(estimates, ledgerCurrency);
+      }
     }
   }
   const models = [...byKey.values()];
@@ -639,7 +650,7 @@ export async function readUsageHistoryWith(
       apiMoney.amount === 0 && isSubscriptionUsageModel(row.model)
         ? (computePriceQuoteTurnMoney(
             row,
-            getSubscriptionValuePriceFor(agentKind, model, pricing),
+            getSubscriptionValuePriceFor(agentKind, model, pricing, row.day),
             ledgerCurrency,
           ) ?? zeroEstimate())
         : zeroEstimate();

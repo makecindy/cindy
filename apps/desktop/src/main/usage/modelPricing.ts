@@ -440,31 +440,53 @@ export async function getModelPricingForModel(
 export function getCodexSubscriptionValuePrice(
   modelId: string,
   pricing: ModelPricingCatalog | null | undefined,
+  at?: string | Date,
 ): ModelPriceQuote | undefined {
-  return (
-    getModelPriceQuote(pricing, 'openai', modelId, 'codex') ??
-    providerReferencePriceQuote(
-      'openai',
-      modelId,
-      getActiveCatalog().modelRegistry,
-      { agent: 'codex' },
-    )
+  const effective = getModelPriceQuote(pricing, 'openai', modelId, 'codex');
+  if (effective?.source === 'user-override') return effective;
+  const reference = providerReferencePriceQuote(
+    'openai',
+    modelId,
+    getActiveCatalog().modelRegistry,
+    { agent: 'codex', at },
   );
+  return reference ?? (at === undefined ? effective : undefined);
+}
+
+export function getClaudeSubscriptionValuePrice(
+  modelId: string,
+  pricing: ModelPricingCatalog | null | undefined,
+  at?: string | Date,
+): ModelPriceQuote | undefined {
+  const effective = getModelPriceQuote(pricing, 'anthropic', modelId, 'claude-code');
+  if (effective?.source === 'user-override') return effective;
+  const reference = providerReferencePriceQuote(
+    'anthropic',
+    modelId,
+    getActiveCatalog().modelRegistry,
+    { agent: 'claude-code', at },
+  );
+  return reference ?? (at === undefined ? effective : undefined);
 }
 
 export function getSubscriptionDirectValuePrice(
   modelId: string,
   agent?: 'claude-code' | 'codex',
   pricing?: ModelPricingCatalog | null,
+  at?: string | Date,
 ): ModelPriceQuote | undefined {
+  const registry = getActiveCatalog().modelRegistry;
   const fallback = subscriptionDirectPriceQuote(
     modelId,
-    getActiveCatalog().modelRegistry,
+    registry,
     agent,
+    at,
   );
-  if (!fallback) return undefined;
-  const effective = getModelPriceQuote(pricing, fallback.providerId, modelId, agent);
-  const quote = effective ?? fallback;
+  const routingQuote = fallback ?? subscriptionDirectPriceQuote(modelId, registry, agent);
+  if (!routingQuote) return undefined;
+  const effective = getModelPriceQuote(pricing, routingQuote.providerId, modelId, agent);
+  const quote = effective?.source === 'user-override' ? effective : fallback;
+  if (!quote) return undefined;
   return {
     ...quote,
     modelId,

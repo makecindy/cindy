@@ -243,24 +243,53 @@ function mergedQuote(
   target: ModelPriceOverrideTarget,
   reference: ModelPriceQuote | undefined,
   values: ModelPriceOverrideValues | undefined,
+  baseReference?: ComparablePrice | null,
 ): ModelPriceQuote | undefined {
   if (!values) return reference;
-  const currency = values.currency ?? reference?.currency;
-  const inputPerMtok = values.inputPerMtok ?? reference?.inputPerMtok;
-  const outputPerMtok = values.outputPerMtok ?? reference?.outputPerMtok;
+  // A sparse numeric patch was entered in the saved base currency. If the remote
+  // route later changes currency, merging it into the new quote would silently
+  // relabel the user's number (for example 4 USD as 4 CNY). Keep using the saved
+  // reference as the merge base until the user accepts/reset the conflict.
+  const mergeReference =
+    values.currency === undefined &&
+    reference &&
+    baseReference &&
+    baseReference.currency !== reference.currency
+      ? {
+          providerId: reference.providerId,
+          modelId: reference.modelId,
+          source: reference.source,
+          approximate: reference.approximate,
+          currency: baseReference.currency,
+          inputPerMtok: baseReference.inputPerMtok,
+          outputPerMtok: baseReference.outputPerMtok,
+          ...(baseReference.cacheReadPerMtok !== null
+            ? { cacheReadPerMtok: baseReference.cacheReadPerMtok }
+            : {}),
+          ...(baseReference.cacheCreatePerMtok !== null
+            ? { cacheCreatePerMtok: baseReference.cacheCreatePerMtok }
+            : {}),
+          ...(baseReference.inputTokenPriceBands
+            ? { inputTokenPriceBands: baseReference.inputTokenPriceBands }
+            : {}),
+        }
+      : reference;
+  const currency = values.currency ?? mergeReference?.currency;
+  const inputPerMtok = values.inputPerMtok ?? mergeReference?.inputPerMtok;
+  const outputPerMtok = values.outputPerMtok ?? mergeReference?.outputPerMtok;
   if (!currency || inputPerMtok === undefined || outputPerMtok === undefined) return undefined;
   const cacheReadPerMtok =
     values.cacheReadPerMtok === null
       ? undefined
-      : (values.cacheReadPerMtok ?? reference?.cacheReadPerMtok);
+      : (values.cacheReadPerMtok ?? mergeReference?.cacheReadPerMtok);
   const cacheCreatePerMtok =
     values.cacheCreatePerMtok === null
       ? undefined
-      : (values.cacheCreatePerMtok ?? reference?.cacheCreatePerMtok);
+      : (values.cacheCreatePerMtok ?? mergeReference?.cacheCreatePerMtok);
   const currencyChanged =
     values.currency !== undefined &&
-    reference !== undefined &&
-    values.currency !== reference.currency;
+    mergeReference !== undefined &&
+    values.currency !== mergeReference.currency;
   const projectBandValue = (
     bandValue: number | undefined,
     referenceValue: number | undefined,
@@ -274,19 +303,19 @@ function mergedQuote(
       ? (bandValue / referenceValue) * overrideValue
       : overrideValue;
   };
-  const inputTokenPriceBands = reference?.inputTokenPriceBands?.map((band) => {
+  const inputTokenPriceBands = mergeReference?.inputTokenPriceBands?.map((band) => {
     const merged = { ...band };
     if (values.inputPerMtok !== undefined) {
       merged.inputPerMtok = projectBandValue(
         band.inputPerMtok,
-        reference.inputPerMtok,
+        mergeReference.inputPerMtok,
         values.inputPerMtok,
       );
     }
     if (values.outputPerMtok !== undefined) {
       merged.outputPerMtok = projectBandValue(
         band.outputPerMtok,
-        reference.outputPerMtok,
+        mergeReference.outputPerMtok,
         values.outputPerMtok,
       );
     }
@@ -294,7 +323,7 @@ function mergedQuote(
     else if (values.cacheReadPerMtok !== undefined) {
       merged.cacheReadPerMtok = projectBandValue(
         band.cacheReadPerMtok,
-        reference.cacheReadPerMtok,
+        mergeReference.cacheReadPerMtok,
         values.cacheReadPerMtok,
       );
     }
@@ -302,7 +331,7 @@ function mergedQuote(
     else if (values.cacheCreatePerMtok !== undefined) {
       merged.cacheCreatePerMtok = projectBandValue(
         band.cacheCreatePerMtok,
-        reference.cacheCreatePerMtok,
+        mergeReference.cacheCreatePerMtok,
         values.cacheCreatePerMtok,
       );
     }
@@ -351,7 +380,7 @@ export function readModelPriceOverrideView(
       ? remoteReference
       : undefined;
   const record = readEntries()[overrideKey(target)];
-  const merged = mergedQuote(target, reference, record?.values);
+  const merged = mergedQuote(target, reference, record?.values, record?.baseReference);
   return {
     target,
     editable: target.providerId !== 'xd',
@@ -457,7 +486,7 @@ export function applyModelPriceOverrides(
     const reference = providerReferencePriceQuote(record.providerId, record.modelId, registry, {
       agent: record.agent,
     });
-    const quote = mergedQuote(record, reference, record.values);
+    const quote = mergedQuote(record, reference, record.values, record.baseReference);
     if (!quote || !currencyCanProjectToLedger(quote.currency, ledgerCurrency)) continue;
     (next[record.providerId] ??= {})[modelPricingKey(record.modelId, record.agent)] = quote;
   }

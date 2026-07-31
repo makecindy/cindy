@@ -3468,7 +3468,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // stale 快返并后台刷新,
           // 拉不到 / 模型无条目 → 本轮不显示。
           try {
-            const pricing = isSubscriptionValue && !isCodexXaiProviderRoute
+            const pricing = isSubscriptionValue
               ? await getModelPricing()
               : hasEffectiveGatewayRoute
                 ? await getModelPricingForModel('xd', pricingModel)

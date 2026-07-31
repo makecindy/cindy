@@ -325,12 +325,13 @@ export function subscriptionDirectPriceQuote(
   modelId: string,
   registry: ModelRegistry | null | undefined,
   agent?: AgentKind,
+  at?: string | Date,
 ): ModelPriceQuote | undefined {
   let quote: ModelPriceQuote | undefined;
   if (modelId.startsWith(CHATGPT_MODEL_PREFIX)) {
-    quote = providerReferencePriceQuote('openai', modelId, registry, { agent });
+    quote = providerReferencePriceQuote('openai', modelId, registry, { agent, at });
   } else if (modelId.startsWith(XAI_MODEL_PREFIX)) {
-    quote = providerReferencePriceQuote('xai', modelId, registry, { agent });
+    quote = providerReferencePriceQuote('xai', modelId, registry, { agent, at });
   }
   return quote
     ? {

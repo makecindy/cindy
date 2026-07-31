@@ -62,6 +62,7 @@ import {
 import {
   __resetModelPricingCacheForTesting,
   clearGatewayModelPricing,
+  getClaudeSubscriptionValuePrice,
   getCodexSubscriptionValuePrice,
   getModelPricing,
   getModelPricingForModel,
@@ -495,6 +496,18 @@ describe('pricing cache lifecycle', () => {
 });
 
 describe('reference pricing helpers', () => {
+  it('resolves historical subscription prices by their effective date', () => {
+    expect(
+      getClaudeSubscriptionValuePrice('claude-sonnet-5', null, '2026-08-31'),
+    ).toMatchObject({ inputPerMtok: 2, outputPerMtok: 10 });
+    expect(
+      getClaudeSubscriptionValuePrice('claude-sonnet-5', null, '2026-09-01'),
+    ).toMatchObject({ inputPerMtok: 3, outputPerMtok: 15 });
+    expect(
+      getClaudeSubscriptionValuePrice('claude-sonnet-5', null, '2026-06-29'),
+    ).toBeUndefined();
+  });
+
   it('returns subscription reference quotes separately from the XD cache', () => {
     expect(getCodexSubscriptionValuePrice('gpt-5.5', null)).toMatchObject({
       providerId: 'openai',
