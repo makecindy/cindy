@@ -764,11 +764,19 @@ function handleSystem(
     // 用户可能在这次失败请求发出之后、甚至在第一条 api_retry 到达之前就把
     // 模型热切走(gateway host 可直接复用 provider-oauth、setModel 即时生效),
     // 这两种取法都会把归因指向切换后的新模型,而不是这次实际失败请求发出时
-    // 用的模型。ctx.turn.turnStartModel 是 index.ts 的 beginNewTurn 在请求真正
-    // dispatch 前打的快照,turn 内不会变,才是可靠来源(PR review P2 ×3)。
+    // 用的模型。ctx.turn.turnStartModel 是 index.ts 的 beginNewTurn / 入队时刻
+    // 打的快照,只覆盖我们自己显式 dispatch 的请求(turn 首次发送 / invalid-resume
+    // 重放),不覆盖工具调用后 SDK 自己发起的后续 API call(没有等效 dispatch
+    // 代码路径可以挂快照,index.ts 也不再尝试在 setModel 里同步刷新它——那样
+    // 无法区分"热切影响的是尚未发出的下一次调用"还是"影响的是已经发出、正在
+    // 无 envelope 重试的这一次调用",两者用同一个 setModel 时机分不出来,会把
+    // 旧请求的失败错误归因到热切后的新模型(PR review P2 ×4)。因此只在
+    // ctx.turn.apiCalls === 0(本 turn 还没有任何一次 API call 成功推进到过
+    // message_start,即当前必然仍在我们自己 dispatch 的那一次调用的重试
+    // 生命周期内)才信任这份快照;apiCalls > 0 时没有可靠信号,宁可跳过也不猜。
     const noSubagentEverLaunched = ctx.rt.resolvedSubagentModelByParentToolUseId.size === 0
       && ctx.rt.subagentParentToolUseIdByTaskId.size === 0;
-    const fallbackMeta = !hasAssistantEnvelope && noSubagentEverLaunched
+    const fallbackMeta = !hasAssistantEnvelope && noSubagentEverLaunched && ctx.turn.apiCalls === 0
       ? { model: ctx.turn.turnStartModel ?? ctx.getModel() }
       : undefined;
     const sdkError = redactSensitiveText(hasAssistantEnvelope ? previous.sdkError : (msg.error || 'unknown'));

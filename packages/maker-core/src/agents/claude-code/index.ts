@@ -4413,18 +4413,17 @@ export class ClaudeCodeAgent extends BaseAgent {
           authState.authSource,
         );
         mutableModel = newModel;
-        // 一个 turn 内 apiCalls 可以大于 1(工具调用后 SDK 自己发起下一次 API
-        // call,不经过我们显式的 dispatch 代码路径,没有等效 beginNewTurn 的快照
-        // 时机)。turn 进行期间热切模型时同步刷新 turnStartModel,让它反映"这次
-        // setModel 之后、turn 内任何后续 API call 实际会用的模型"——这是除了
-        // turn 起点之外唯一能可靠拿到的 dispatch 边界。但 q.setModel() 改不了
-        // 已经发出、正在无 envelope 重试的旧请求——turnState.pendingApiError
-        // 非空说明当前有一个尚未解决的重试序列,这次热切覆盖的必须是它,不能
-        // 覆盖已经在途的旧请求的归因(PR review P2 ×2)。turn 未在跑、或当前有
-        // 未解决的重试序列时都不改:前者下一次 beginNewTurn 会重新打快照,后者
-        // 等这条重试序列收口(拿到 envelope 或 turn 结束)后自然会被新的
-        // beginNewTurn/下一次安全时机覆盖。
-        if (turnInFlight && !turnState.pendingApiError) turnState.turnStartModel = newModel;
+        // 特意**不**在这里同步刷新 turnStartModel。一个 turn 内 apiCalls 可以
+        // 大于 1(工具调用后 SDK 自己发起下一次 API call,不经过我们显式的
+        // dispatch 代码路径),这次 setModel 之后、下一次实际 API 请求何时真正
+        // 发出、抑或是否还有一个更早的请求仍在无 envelope 重试(此时
+        // q.setModel() 根本改不了那个已经发出的旧请求),我们都拿不到任何可靠
+        // 信号——之前几轮尝试过"turn 内热切即刷新"“仅在没有未解决重试序列时
+        // 刷新”,都还留有旧请求已发出但尚未收到第一条 api_retry 的窗口
+        // (review P2 ×3)。翻译层(translator.ts)改为只在 apiCalls === 0(当前
+        // 仍在本 turn**第一次**、由 beginNewTurn/入队时已可靠打过快照的那次
+        // API 调用)才使用 turnStartModel 兜底,apiCalls > 0 时没有可靠信号,
+        // 宁可跳过归因也不猜(与拿不到 agentMeta 时的既有原则一致)。
         autoReviewDecisionCache.clear();
         if (
           !isControlBlocked

@@ -240,12 +240,12 @@ describe('turnState.turnStartModel snapshot timing (no rewind)', () => {
     await handle.close();
   });
 
-  it('refreshes turnStartModel on a mid-turn setModel, picking up a hot-switch before the next tool-continuation API call', async () => {
-    // 一个 turn 内 apiCalls 可以大于 1(工具调用后 SDK 自己发起下一次 API call,
-    // 不经过我们显式的 dispatch 代码路径,没有等效 beginNewTurn 的快照时机)。
-    // turn 进行期间热切模型必须同步刷新 turnStartModel,否则该 turn 内后续一次
-    // 以无 envelope 的 api_retry 终止的 API call 会被错误归因到 turn 起点的旧
-    // 模型(PR review P2)。
+  it('does not let a post-dispatch setModel change the attribution before the first api_retry ever arrives', async () => {
+    // q.setModel() 改不了已经发出的旧请求;send() resolve 时消息已经真正入队
+    // (真实网络请求已经用旧模型发出),哪怕这之后、第一条 api_retry 到达之前
+    // 就热切模型,turnStartModel 也不该被这次热切覆盖——index.ts 不再尝试在
+    // setModel 里同步刷新它,因为无法区分"热切影响的是尚未发出的下一次调用"
+    // 还是"影响的是已经发出、正在无 envelope 重试的这一次调用"(PR review P2 ×4)。
     const firstQuery = createFakeQuery();
     sdkMock.query.mockReturnValue(firstQuery);
 
@@ -254,7 +254,7 @@ describe('turnState.turnStartModel snapshot timing (no rewind)', () => {
       capabilityAdditions: { availableModels: TEST_MODELS },
     });
     const handle = await agent.startSession({
-      sessionId: 'session-mid-turn-model-switch',
+      sessionId: 'session-post-dispatch-model-switch',
       model: 'claude-opus-4-6',
       workingDir: '/tmp',
       permissionMode: 'acceptEdits',
@@ -270,8 +270,8 @@ describe('turnState.turnStartModel snapshot timing (no rewind)', () => {
     })();
 
     await handle.send({ type: 'user', content: 'hello' });
-    // turn 仍在跑(未收到 result/done)时热切模型 —— 模拟一次工具调用后、下一次
-    // API call 发出前的窗口。
+    // send() 已 resolve(消息已入队、请求已用旧模型发出),第一条 api_retry
+    // 到达前热切模型。
     await handle.setModel?.('claude-sonnet-5');
 
     // 无 assistant envelope 的连接失败:先 api_retry 耗尽重试,再 is_error 终态。
@@ -296,7 +296,71 @@ describe('turnState.turnStartModel snapshot timing (no rewind)', () => {
       expect(events.some((e) => e.type === 'error')).toBe(true);
     });
     const error = events.find((e) => e.type === 'error');
-    expect(error?.agentMeta).toMatchObject({ model: 'claude-sonnet-5' });
+    // 归因必须保持请求实际发出时用的旧模型,不能被之后的热切覆盖。
+    expect(error?.agentMeta).toMatchObject({ model: 'claude-opus-4-6' });
+
+    await handle.close();
+  });
+
+  it('does not guess an attribution for a no-envelope failure past the first API call of the turn', async () => {
+    // apiCalls > 0 说明本 turn 已经有至少一次 API call 成功推进到过
+    // message_start——之后工具调用触发的下一次 API call 没有等效 beginNewTurn
+    // 的 dispatch 边界可以挂快照,turnStartModel 只反映 turn 起点那一次调用。
+    // 没有可靠信号时宁可不归因,也不能拿 turn 起点的旧快照去猜(PR review P2 ×4)。
+    const firstQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(firstQuery);
+
+    const agent = new ClaudeCodeAgent({
+      ...createDeps(),
+      capabilityAdditions: { availableModels: TEST_MODELS },
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-mid-turn-no-envelope-no-guess',
+      model: 'claude-opus-4-6',
+      workingDir: '/tmp',
+      permissionMode: 'acceptEdits',
+    });
+
+    const events: AgentEvent[] = [];
+    void (async () => {
+      try {
+        for await (const ev of handle.events()) events.push(ev);
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hello' });
+
+    // 第一次 API call 成功推进到 message_start(apiCalls 变成 1),随后工具调用
+    // 触发的下一次 API call 以无 envelope 的 api_retry 终止。
+    firstQuery.stream.emit({
+      type: 'stream_event',
+      event: { type: 'message_start', message: { model: 'claude-opus-4-6', usage: { input_tokens: 10 } } },
+    });
+    firstQuery.stream.emit({
+      type: 'system',
+      subtype: 'api_retry',
+      attempt: 3,
+      max_retries: 3,
+      retry_delay_ms: 1_000,
+      error_status: null,
+      error: 'unknown',
+    });
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 10, output_tokens: 0 },
+    });
+
+    await vi.waitFor(() => {
+      expect(events.some((e) => e.type === 'error')).toBe(true);
+    });
+    const error = events.find((e) => e.type === 'error');
+    // 没有可靠信号时不归因,不能猜成 turn 起点的旧模型。
+    expect(error?.agentMeta?.model).toBeUndefined();
 
     await handle.close();
   });
