@@ -130,11 +130,19 @@ export function visibleMarkdownTextForSearch(source: string): string {
     return `${markerPrefix}${index}${markerSuffix}`;
   });
   text = text.replace(/<!--[\s\S]*?-->/g, '');
+  text = preserveMarkdownAutolinks(text);
   text = text.replace(/<[^>]+>/g, '');
   text = stripMarkdownLinkDestinations(text);
   return text.replace(
     new RegExp(`${markerPrefix}(\\d+)${markerSuffix}`, 'g'),
     (_marker, index: string) => protectedCode[Number(index)] ?? '',
+  );
+}
+
+function preserveMarkdownAutolinks(source: string): string {
+  return source.replace(
+    /<((?:https?:\/\/|mailto:)[^<>\s]+|[^<>\s@]+@[^<>\s@]+)>/gi,
+    (_match, visible: string) => visible.replace(/^mailto:/i, ''),
   );
 }
 

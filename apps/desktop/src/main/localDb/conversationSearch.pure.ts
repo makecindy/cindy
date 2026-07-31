@@ -1,4 +1,5 @@
 import { visibleMarkdownTextForSearch } from '../../shared/conversationSearch.js';
+import { stripGoalVerdictBlock } from '../../shared/goalVerdict.js';
 import type {
   ConversationSearchContentHit,
   ConversationSearchResultItem,
@@ -291,7 +292,9 @@ function userVisibleTextRaw(content: unknown): string {
 }
 
 function assistantVisibleText(content: unknown): string {
-  if (typeof content === 'string') return visibleMarkdownTextForSearch(content);
+  if (typeof content === 'string') {
+    return visibleMarkdownTextForSearch(stripGoalVerdictBlock(content));
+  }
   const blocksText = textBlocksText(content);
   if (blocksText) return blocksText;
   if (

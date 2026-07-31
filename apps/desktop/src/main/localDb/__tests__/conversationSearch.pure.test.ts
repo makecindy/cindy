@@ -318,6 +318,41 @@ describe('conversationSearch.pure', () => {
     expect(preview.preview).toBe('visible label');
   });
 
+  it('keeps Markdown autolinks visible while excluding raw HTML tags', () => {
+    const preview = normalizeConversationContentPreview(
+      'assistant',
+      '<https://example.com/ticket-123> <span>hidden tag</span>',
+      'ticket-123',
+    );
+
+    expect(preview.keywordMatchedVisibleText).toBe(true);
+    expect(preview.preview).toContain('https://example.com/ticket-123');
+    expect(preview.preview).not.toContain('<span>');
+  });
+
+  it('excludes trailing goal protocol blocks from assistant search text', () => {
+    const content = 'Visible answer.\n\n```json\n{"goal_status":"done","note":"hidden token"}\n```';
+
+    expect(normalizeConversationContentPreview('assistant', content, 'hidden token')).toMatchObject({
+      keywordMatchedVisibleText: false,
+      occurrenceCount: 0,
+      preview: 'Visible answer.',
+    });
+  });
+
+  it('normalizes whitespace for complete phrase matching', () => {
+    expect(
+      normalizeConversationContentPreview(
+        'assistant',
+        'error\n\t timeout',
+        'error timeout',
+      ),
+    ).toMatchObject({
+      keywordMatchedVisibleText: true,
+      occurrenceCount: 1,
+    });
+  });
+
   it('extracts visible AskUser and plan review text for conversation search', () => {
     expect(visibleMessageTextForConversationSearch('ask_user', {
       questions: [{ question: 'Which branch should I use?' }],

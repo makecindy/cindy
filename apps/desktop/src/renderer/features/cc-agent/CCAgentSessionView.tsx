@@ -659,7 +659,7 @@ export function CCAgentSessionView({
       return;
     }
 
-    const normalizedQuery = query.toLocaleLowerCase();
+    const normalizedQuery = query.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
     const currentMessages = makerChatStore.getSnapshot(sessionId).messages;
     const hiddenGhostMessageClientIds = new Set<string>();
     const localHits = currentMessages
@@ -712,7 +712,10 @@ export function CCAgentSessionView({
           }
         }
         if (isSyntheticTriggerText(visibleContent)) return [];
-        const content = visibleMarkdownTextForSearch(visibleContent).toLocaleLowerCase();
+        const content = visibleMarkdownTextForSearch(visibleContent)
+          .replace(/\s+/g, ' ')
+          .trim()
+          .toLocaleLowerCase();
         const hits: Array<{
           messageId: string;
           messageClientId: string;

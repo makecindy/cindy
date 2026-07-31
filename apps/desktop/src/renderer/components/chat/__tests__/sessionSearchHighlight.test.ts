@@ -36,6 +36,16 @@ describe('findSessionSearchRanges', () => {
     ]);
   });
 
+  it('matches collapsed whitespace and maps the range back to rendered text', () => {
+    const root = document.createElement('div');
+    root.innerHTML = '<span>error</span>\n  <strong>timeout</strong>';
+
+    const ranges = findSessionSearchRanges(root, 'error timeout');
+
+    expect(ranges).toHaveLength(1);
+    expect(ranges[0].toString()).toBe('error\n  timeout');
+  });
+
   it('skips interactive and aria-hidden text', () => {
     const root = document.createElement('div');
     root.innerHTML = '<p>GPT</p><button>GPT</button><span aria-hidden="true">GPT</span>';
