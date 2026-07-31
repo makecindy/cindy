@@ -52,6 +52,22 @@ describe('findLastUserInputClientId', () => {
     expect(findLastUserInputClientId(messages)).toBe('u2');
   });
 
+  it('插话(steer)不夺走归属:自愈 turn 里插一句,重连行仍在飞', () => {
+    // steer 是同一个正在跑的 turn 内的追加输入,不是新 turn 的发起者。算进来的话正在跑的
+    // 重连行会提前停转、退回静态(codex P2 / greptile P1)。这一支还是兜底判据成立的关键:
+    // steer 被接受时 coordinator 会替换 activeTurn,首选判据(continuationInFlight)随之失效。
+    const steer = { ...mk('s1', 'user'), delivery: 'steer' } as ChatMessage;
+    const messages = [mk('u1', 'user'), synthetic('resume1'), steer];
+    expect(findLastUserInputClientId(messages)).toBe('resume1');
+  });
+
+  it('插话之后又来一条真实用户消息(delivery=turn)→ 正常交接', () => {
+    const steer = { ...mk('s1', 'user'), delivery: 'steer' } as ChatMessage;
+    const real = { ...mk('u2', 'user'), delivery: 'turn' } as ChatMessage;
+    const messages = [synthetic('resume1'), steer, real];
+    expect(findLastUserInputClientId(messages)).toBe('u2');
+  });
+
   it('连续两次重连 → 取后一条', () => {
     const messages = [synthetic('resume1'), synthetic('resume2')];
     expect(findLastUserInputClientId(messages)).toBe('resume2');

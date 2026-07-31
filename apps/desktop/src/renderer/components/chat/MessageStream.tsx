@@ -570,7 +570,17 @@ export function findLastUserMessageClientId(messages: readonly ChatMessage[]): s
  */
 export function findLastUserInputClientId(messages: readonly ChatMessage[]): string | null {
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === 'user') return messages[i].clientId;
+    // **插话（`delivery === 'steer'`）不算新 turn 的发起者** —— 它是同一个正在跑的 turn 内
+    // 的追加输入。算进来的话，用户在自愈 turn 里插一句，正在跑的重连行会立刻被"夺走归属"、
+    // 提前停转退回静态（codex P2 / greptile P1）。本文件里其它 turn 边界判断（见上方
+    // `hasFollowingUserTurn` 等）也都显式排除 steer，此处保持一致。
+    //
+    // 注意这一支同时是**兜底判据**能否成立的关键：steer 被接受时 coordinator 会替换
+    // `activeTurn`，`continuationInFlightClientId` 随之变 null，首选判据在 steer 期间失效，
+    // 全靠这一支把「turn 还在跑」接住。
+    if (messages[i].role === 'user' && messages[i].delivery !== 'steer') {
+      return messages[i].clientId;
+    }
   }
   return null;
 }
