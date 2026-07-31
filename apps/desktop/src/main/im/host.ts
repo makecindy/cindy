@@ -13,7 +13,13 @@
 import path from 'node:path';
 import { app, ipcMain, BrowserWindow, net, shell } from 'electron';
 
-import { createIM, createDiscordIM, createFeishuIM, type IMHost } from '@cindy/im';
+import {
+  createIM,
+  createDiscordIM,
+  createFeishuIM,
+  createTelegramIM,
+  type IMHost,
+} from '@cindy/im';
 import { TencentIlinkTransport } from '@cindy/wechat-ilink';
 
 import { createLogger } from '../logger';
@@ -27,6 +33,16 @@ import {
 import { pinBlob } from '../cindy-media/ledger';
 import { t } from '../i18n';
 import { discordUiText } from './discord/uiText';
+import { telegramUiText } from './telegram/uiText';
+import {
+  patchTelegramBehavior,
+  patchTelegramPersona,
+  readTelegramBehavior,
+  readTelegramPersona,
+  setTelegramGroupActivation,
+} from './telegram/behaviorStore';
+import { listTelegramKnownGroups } from './telegram/groupWindow';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { imHostAccountScope } from './accountScopeBridge';
 import { ownerScopedImSecrets } from './ownerScopedStorage';
 import { captureImAccountGeneration, isImAccountGenerationCurrent } from './accountBoundary';
@@ -51,6 +67,7 @@ const host: IMHost = {
   paths: {
     feishuMediaDir: path.join(app.getPath('userData'), 'cc-agent', 'feishu-media'),
     discordMediaDir: path.join(app.getPath('userData'), 'cc-agent', 'discord-media'),
+    telegramMediaDir: path.join(app.getPath('userData'), 'cc-agent', 'telegram-media'),
   },
   // cindy-media 媒体总仓回调(规则 25):IM 入站图片按平台 token
   // 免重下、内容寻址去重、isCache=true 吃缓存回收策略;包侧只摸字节和字符串。
@@ -97,7 +114,13 @@ const host: IMHost = {
   secrets: ownerScopedImSecrets,
   ipc: {
     handle(channel, handler) {
-      ipcMain.handle(channel, (_e, payload) => handler(payload));
+      // IM 凭证/配置通道(set-config/get-status/disconnect 等)全部是敏感面:
+      // 统一在适配器入口验可信 app renderer, 包侧 handler 拿不到 event 也
+      // 不会漏鉴权(review P1 — 不受信 WebContents 不得读 owner id/换 token)。
+      ipcMain.handle(channel, (e, payload) => {
+        assertTrustedAppRendererEvent(e);
+        return handler(payload);
+      });
     },
     broadcast(channel, payload) {
       for (const w of BrowserWindow.getAllWindows()) {
@@ -127,6 +150,79 @@ export const discordIm = createDiscordIM(host, {
   expiredCardNotice: discordUiText.expiredCardNotice,
   ownerNoticeText: (phase) => t(`settings.discordBot.ownerNotice.${phase}`),
 });
+export const telegramIm = createTelegramIM(host, {
+  resolveImageUrl: resolveManagedImageAbsPath,
+  expiredCardNotice: telegramUiText.expiredCardNotice,
+  ownerNoticeText: (phase) => t(`settings.telegramBot.ownerNotice.${phase}`),
+  // 行为配置 getter: transport 每次使用时现读 → 设置卡改动即生效。
+  behavior: readTelegramBehavior,
+  // owner 私聊的 "/" 命令菜单(BotCommandScopeChat 只发 owner, 其他人不可见)。
+  commandMenu: ['start', 'new', 'help', 'stop', 'session', 'project', 'model', 'permission', 'ctr', 'exctr'].map(
+    (command) => ({
+      command,
+      description: t(`settings.telegramBot.commandMenu.${command}`),
+    }),
+  ),
+});
+/**
+ * Telegram 个人 bot 的行为/人格/群参与配置 IPC(设置卡数据通道)。
+ * 必须由 bootstrap 显式调用(与 im.registerIpc() 同期) — 不能放模块顶层:
+ * host.ts 被 mock 掉 electron 的单测传递 import 时, 顶层 ipcMain.handle
+ * 会在收集期炸掉(2026-07-30 全量门禁 device-link TEST_COLLECT_FAILED 教训)。
+ * payload 在 store 内白名单校验, 未知字段/非法值一律丢弃。
+ */
+export function registerTelegramBotConfigIpc(): void {
+  // 每个 handler 先验事件来自可信 app renderer(与 bootstrap 内敏感通道同口径):
+  // 共享的 host.ipc.handle 适配器会丢弃 event, 所以这组通道直接走 ipcMain。
+  ipcMain.handle('telegramBot:get-behavior', (e) => {
+    assertTrustedAppRendererEvent(e);
+    return readTelegramBehavior();
+  });
+  ipcMain.handle('telegramBot:set-behavior', (e, patch) => {
+    assertTrustedAppRendererEvent(e);
+    return patchTelegramBehavior((patch ?? {}) as Parameters<typeof patchTelegramBehavior>[0]);
+  });
+  // 群聊节: 已知群列表(窗口表 distinct chat)+ per-chat 参与模式读写。
+  ipcMain.handle('telegramBot:list-groups', async (e) => {
+    assertTrustedAppRendererEvent(e);
+    const groups = await listTelegramKnownGroups(telegramIm.botContextId);
+    const activation = readTelegramBehavior().groupActivation ?? {};
+    return {
+      groups: groups.map((g) => ({
+        chatId: g.chatId,
+        chatName: g.chatName,
+        activation: activation[g.chatId] ?? 'mention',
+      })),
+    };
+  });
+  ipcMain.handle('telegramBot:set-group-activation', (e, payload) => {
+    assertTrustedAppRendererEvent(e);
+    const p = (payload ?? {}) as { chatId?: string; mode?: string };
+    const chatId = typeof p.chatId === 'string' && /^-?\d+$/.test(p.chatId) ? p.chatId : null;
+    const mode = p.mode === 'always' ? 'always' : 'mention';
+    if (!chatId) return readTelegramBehavior();
+    return setTelegramGroupActivation(chatId, mode);
+  });
+  // 人格配置(soul + 名字); 保存后可选把名字同步到 Telegram 资料页(setMyName)。
+  ipcMain.handle('telegramBot:get-persona', (e) => {
+    assertTrustedAppRendererEvent(e);
+    return readTelegramPersona();
+  });
+  ipcMain.handle('telegramBot:set-persona', async (e, payload) => {
+    assertTrustedAppRendererEvent(e);
+    const p = (payload ?? {}) as { botName?: string; soul?: string; syncProfile?: boolean };
+    const persona = patchTelegramPersona({
+      ...(typeof p.botName === 'string' ? { botName: p.botName } : {}),
+      ...(typeof p.soul === 'string' ? { soul: p.soul } : {}),
+    });
+    let profileSynced: boolean | undefined;
+    if (p.syncProfile === true) {
+      profileSynced = await telegramIm.syncBotProfileName(persona.botName);
+    }
+    return { persona, ...(profileSynced !== undefined ? { profileSynced } : {}) };
+  });
+}
+
 export const wechatCompatibilityPolicy = new WechatCompatibilityPolicyService({
   ...WECHAT_COMPATIBILITY_POLICY_PRODUCTION_CONFIG,
   cachePath: () =>
@@ -170,4 +266,4 @@ wechatCompatibilityPolicy.subscribe((decision) => {
     log.warn('failed to apply personal WeChat compatibility policy');
   });
 });
-export const im = createIM([feishuIm, discordIm, wechatIm]);
+export const im = createIM([feishuIm, discordIm, wechatIm, telegramIm]);

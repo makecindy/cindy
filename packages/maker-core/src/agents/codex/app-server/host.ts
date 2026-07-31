@@ -122,6 +122,7 @@ function extractThreadId(method: string, params: unknown): string | null {
 
 export interface ThreadEventHandlers {
   threadStarted?: (params: ThreadStartedNotification['params']) => void;
+  descendantThreadStarted?: (params: ThreadStartedNotification['params']) => void;
   turnStarted?: (params: TurnStartedNotification['params']) => void;
   turnCompleted?: (params: TurnCompletedNotification['params']) => void;
   /** 每次 turn 都会推一次 (turn 完成前), 与 turn/completed 在同 turnId 下成对出现。 */
@@ -252,6 +253,8 @@ export class AppServerHost {
   private startPromise: Promise<InitializeResponse> | null = null;
 
   private readonly subscribers = new Map<string, ThreadEventHandlers>();
+  /** root / descendant threadId → 当前拥有该子树订阅的 root threadId。 */
+  private readonly lineageRoots = new Map<string, string>();
   /** 找不到 subscriber 时按 threadId 暂存的 notification, drain on subscribe。 */
   private readonly buffered = new Map<string, BufferedNotification[]>();
   /**
@@ -360,7 +363,7 @@ export class AppServerHost {
     // 防 server 在握手过程中就发出 approval (虽然实际不会, 但 defensive)。
     client.setRequestHandler(Method.CommandExecutionRequestApproval, async (rawParams) => {
       const params = rawParams as CommandExecutionRequestApprovalParams;
-      const handlers = this.subscribers.get(params.threadId);
+      const handlers = this.handlersForThread(params.threadId);
       if (!handlers?.commandExecutionApproval) {
         this.logger.warn('commandExecution approval without subscriber → decline', {
           threadId: params.threadId,
@@ -381,7 +384,7 @@ export class AppServerHost {
 
     client.setRequestHandler(Method.FileChangeRequestApproval, async (rawParams) => {
       const params = rawParams as FileChangeRequestApprovalParams;
-      const handlers = this.subscribers.get(params.threadId);
+      const handlers = this.handlersForThread(params.threadId);
       if (!handlers?.fileChangeApproval) {
         this.logger.warn('fileChange approval without subscriber → decline', {
           threadId: params.threadId,
@@ -402,7 +405,7 @@ export class AppServerHost {
 
     client.setRequestHandler(Method.McpServerElicitationRequest, async (rawParams) => {
       const params = rawParams as McpServerElicitationRequestParams;
-      const handlers = this.subscribers.get(params.threadId);
+      const handlers = this.handlersForThread(params.threadId);
       if (!handlers?.mcpServerElicitation) {
         this.logger.warn('MCP server elicitation without subscriber -> decline', {
           threadId: params.threadId,
@@ -424,7 +427,7 @@ export class AppServerHost {
 
     client.setRequestHandler(Method.PermissionsRequestApproval, async (rawParams) => {
       const params = rawParams as PermissionsRequestApprovalParams;
-      const handlers = this.subscribers.get(params.threadId);
+      const handlers = this.handlersForThread(params.threadId);
       if (!handlers?.permissionsApproval) {
         this.logger.warn('permissions approval without subscriber → decline', {
           threadId: params.threadId,
@@ -444,7 +447,7 @@ export class AppServerHost {
 
     client.setRequestHandler(Method.ToolRequestUserInput, async (rawParams, meta) => {
       const params = rawParams as ToolRequestUserInputParams;
-      const handlers = this.subscribers.get(params.threadId);
+      const handlers = this.handlersForThread(params.threadId);
       if (!handlers?.requestUserInput) {
         this.logger.warn('requestUserInput without subscriber -> empty response', {
           threadId: params.threadId,
@@ -466,7 +469,7 @@ export class AppServerHost {
 
     client.setRequestHandler(Method.DynamicToolCall, async (rawParams, meta) => {
       const params = rawParams as DynamicToolCallParams;
-      const handlers = this.subscribers.get(params.threadId);
+      const handlers = this.handlersForThread(params.threadId);
       if (!handlers?.dynamicToolCall) {
         this.logger.warn('dynamicToolCall without subscriber -> failed result', {
           threadId: params.threadId,
@@ -589,6 +592,7 @@ export class AppServerHost {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
     this.subscribers.clear();
+    this.lineageRoots.clear();
     this.buffered.clear();
     const c = this.client;
     this.client = null;
@@ -651,6 +655,7 @@ export class AppServerHost {
       this.logger.warn('overwriting thread subscription', { threadId });
     }
     this.subscribers.set(threadId, handlers);
+    this.lineageRoots.set(threadId, threadId);
 
     // 排空缓存 (thread/started 比 subscribe 早到的固有竞争)
     const buf = this.buffered.get(threadId);
@@ -660,6 +665,7 @@ export class AppServerHost {
         this.dispatchToHandlers(handlers, item.method, item.params);
       }
     }
+    this.replayBufferedDescendantThreadStarts(threadId);
 
     // 账号配额 snapshot replay — 让新 session 立即看到当前账号配额, 不必等下次 turn。
     if (this.lastAccountRateLimits && handlers.accountRateLimitsUpdated) {
@@ -686,6 +692,7 @@ export class AppServerHost {
             return Promise.resolve();
           }
           this.subscribers.delete(threadId);
+          this.deleteLineageForRoot(threadId);
           this.buffered.delete(threadId);
           localReleased = true;
         } else if (this.subscribers.has(threadId)) {
@@ -745,6 +752,9 @@ export class AppServerHost {
       this.logger.warn('notification missing threadId', { method });
       return;
     }
+    if (method === 'thread/started') {
+      this.routeDescendantThreadStarted(params as ThreadStartedNotification['params']);
+    }
     const handlers = this.subscribers.get(threadId);
     if (handlers) {
       this.dispatchToHandlers(handlers, method, params);
@@ -753,6 +763,79 @@ export class AppServerHost {
     // subscribe 还没到 — 暂存 + TTL 清理。Codex 协议保证 server 内同 thread 顺序,
     // drain 时按到达顺序 dispatch 不会乱。
     this.bufferNotification(threadId, method, params);
+  }
+
+  /**
+   * Server requests from descendant threads must use the root subscription's
+   * handlers, just like descendant notifications. The app-server only knows
+   * the concrete child thread id, while approvals / elicitation / dynamic
+   * tool callbacks belong to the Cindy session that owns the root thread.
+   */
+  private handlersForThread(threadId: string): ThreadEventHandlers | undefined {
+    const rootThreadId = this.lineageRoots.get(threadId)
+      ?? (this.subscribers.has(threadId) ? threadId : null);
+    return rootThreadId ? this.subscribers.get(rootThreadId) : undefined;
+  }
+
+  private routeDescendantThreadStarted(params: ThreadStartedNotification['params']): void {
+    const childThreadId = params.thread.id;
+    const parentThreadId = params.thread.parentThreadId;
+    if (!parentThreadId || parentThreadId === childThreadId) return;
+
+    const rootThreadId = this.lineageRoots.get(parentThreadId)
+      ?? (this.subscribers.has(parentThreadId) ? parentThreadId : null);
+    if (!rootThreadId) return;
+    if (this.lineageRoots.get(childThreadId) === rootThreadId) return;
+
+    const handlers = this.subscribers.get(rootThreadId);
+    if (!handlers) return;
+
+    this.lineageRoots.set(childThreadId, rootThreadId);
+    if (!handlers.descendantThreadStarted) return;
+    try {
+      handlers.descendantThreadStarted(params);
+    } catch (e) {
+      this.logger.error('descendant thread handler threw', {
+        rootThreadId,
+        parentThreadId,
+        childThreadId,
+        message: (e as Error).message,
+      });
+    }
+  }
+
+  private replayBufferedDescendantThreadStarts(rootThreadId: string): void {
+    // thread/started is buffered under the child id. A root subscription therefore
+    // cannot drain those entries directly; rebuild the lineage iteratively so an
+    // already-buffered child can unlock an already-buffered grandchild as well.
+    for (;;) {
+      let discovered = 0;
+      for (const notifications of this.buffered.values()) {
+        for (const item of notifications) {
+          if (item.method !== 'thread/started') continue;
+          const params = item.params as ThreadStartedNotification['params'];
+          const childThreadId = params.thread?.id;
+          const parentThreadId = params.thread?.parentThreadId;
+          if (
+            !childThreadId
+            || !parentThreadId
+            || this.lineageRoots.has(childThreadId)
+            || this.lineageRoots.get(parentThreadId) !== rootThreadId
+          ) continue;
+          this.routeDescendantThreadStarted(params);
+          if (this.lineageRoots.get(childThreadId) === rootThreadId) discovered += 1;
+        }
+      }
+      if (discovered === 0) return;
+    }
+  }
+
+  private deleteLineageForRoot(rootThreadId: string): void {
+    for (const [threadId, ownerRootThreadId] of this.lineageRoots) {
+      if (ownerRootThreadId === rootThreadId) {
+        this.lineageRoots.delete(threadId);
+      }
+    }
   }
 
   private dispatchToHandlers(handlers: ThreadEventHandlers, method: string, params: unknown): void {

@@ -135,7 +135,14 @@ export interface ModelDescriptor {
   id: string;
   displayName: string;
   description?: string;
-  /** 上下文窗口大小 (tokens), SDK result.modelUsage 缺值时的 fallback。 */
+  /**
+   * 上下文窗口大小 (tokens), SDK result.modelUsage 缺值时的 fallback。
+   *
+   * **只用于展示与兜底,不要拿它去收敛运行期上报的窗口**: 这张清单是跨 provider 去重后的
+   * 扁平表, 同一 model id 由多个 provider 提供时归属已丢, 而且这里的值可能是派生时补的
+   * 兜底常量(上游不给元数据时)。收敛需要「该路由已核实的上限」,走
+   * AgentDeps.resolveVerifiedContextWindow。
+   */
   contextWindow: number;
   /** 该模型支持的 effort 列表; 空数组表示不支持 effort 切换 (如 Haiku)。 */
   efforts: readonly Effort[];
@@ -160,6 +167,20 @@ export interface ModelDescriptor {
    * 展示排序权重（纯展示元数据，源自目录）。渲染层据此排序;缺省排末尾。maker-core 运行时不读它。
    */
   sortOrder?: number;
+  /**
+   * Gateway 原生 mode（issue #882，纯展示/判定元数据，源自目录 CatalogModel.mode）。
+   * availableModels 派生时已经过 isChatEligible 过滤，这里透传只是为了让下游（如
+   * resolveSourceSwitch 之类按 model 二次判定分组的逻辑）拿到 mode 而不必回读目录——
+   * 2026-07 review：ModelDescriptor 曾经丢弃 mode，下游对象只能靠 id/group 猜，
+   * 与本条目"已经聊天可用"的事实脱节。maker-core 运行时不读它。
+   */
+  mode?: string;
+  /**
+   * 该模型在选择器里**默认是否可见**（源自目录 `defaultEnabled`，host 派生时透传；
+   * 缺省 ⇒ 可见）。渲染层取种子默认模型时据它跳过默认收起的 legacy 模型 ——
+   * 否则默认模型可能是用户在清单里根本看不到的那个。maker-core 运行时不读它。
+   */
+  defaultEnabled?: boolean;
 }
 
 /**

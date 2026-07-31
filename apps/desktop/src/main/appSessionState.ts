@@ -98,6 +98,23 @@ export function getActiveAppSession(): ActiveAppSession {
 }
 
 /**
+ * Opaque key identifying "which account is active right now".
+ *
+ * Any owner-scoped read or write that spans an `await` must capture this before
+ * the wait and re-check it after, then drop the operation when it no longer
+ * matches — otherwise account A's data lands in account B's storage or UI.
+ * `generation` advances on every mode/owner commit, so the key changes even if
+ * the same owner is re-committed.
+ *
+ * Single source of truth on purpose: this invariant was first fixed per-call-site
+ * and each missed call site became its own bug.
+ */
+export function activeOwnerScopeKey(): string {
+  const session = ensureLoaded();
+  return `${session.mode}:${session.dataOwnerId ?? 'none'}:${session.generation}`;
+}
+
+/**
  * Fail closed while owner-bound runtimes are being torn down or replaced.
  * The returned release function is idempotent so error paths can safely use it
  * from `finally` blocks.

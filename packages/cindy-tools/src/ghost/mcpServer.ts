@@ -32,12 +32,18 @@ const D_GHOST_LIST = [
   "(例外:用户消息的[插件指令]已附带目标插件的工具清单时,可直接 ghost_call 免查)。",
   "返回条目含 id、name、command(用户显式点名用的 $指令)与 tools(名称/说明/参数)。",
   "调用具体工具用 ghost_call({ghost_id, tool, args})。清单为空 = 用户没有可用的插件工具。",
+  "若某插件 tools 仅含 list_tools / call_tool,它是二级分派型:具体操作名须作 call_tool 的",
+  "name 参数下发(args:{name:\"<操作名>\", args:{...}}),不能直接当 tool 调。",
 ].join("\n");
 
 const D_GHOST_CALL = [
   "调用某个插件(Ghost)提供的工具。ghost_id 与 tool 来自 ghost_list 的返回,",
   "或用户消息[插件指令]附带的工具清单;",
   "args 按该工具声明的参数 schema 传 JSON 对象。",
+  "部分插件(如 cindy-github / cindy-gitlab)采用二级分派:ghost_list 只暴露 list_tools 与",
+  "call_tool 两个工具,具体操作(如 create_pull_request_review)不是顶层 tool,必须经 call_tool",
+  '下发——ghost_call({ghost_id, tool:"call_tool", args:{name:"<操作名>", args:{...}}});',
+  "把操作名当 tool 直接调会返回 TOOL_NOT_FOUND,此时按上述形态改写重试,不要判定插件无此能力。",
   "执行发生在该插件的独立沙箱中(无文件/网络访问,用 AI 走主机统一通道)。",
   "用户的图片/媒体文件要交给插件处理时,把其地址放进顶层 attachments",
   "(不是塞进 args):主机会把图过户给该插件并以指纹注入 args.attachments,插件",
@@ -54,17 +60,20 @@ const D_GHOST_CALL = [
   "——用户只需在一张卡上批一次;跳过预授权会让用户被迫一张张点允许。",
   "结构化错误:GHOST_NOT_FOUND(未安装或已卸载)/ GHOST_ASLEEP(未启用,可提示用户到主界面侧边栏「插件」中启用)/",
   "GHOST_DISABLED_IN_WORKDIR(用户在当前工作目录停用了该插件——不要重试,改用其它方式完成)/",
-  "TOOL_NOT_FOUND / GHOST_CRASHED / TIMEOUT / ATTACHMENT_INVALID(附件过户失败,查 message)/",
+  "TOOL_NOT_FOUND(常见是把二级分派操作名当成了顶层 tool,按上文 call_tool 形态改写后重试)/ GHOST_CRASHED /",
+  "TIMEOUT / ATTACHMENT_INVALID(附件过户失败,查 message)/",
   "DIR_INVALID(目录过户失败,查 message)/ INTERNAL。遇到 NOT_FOUND 类错误先重新 ghost_list。",
 ].join("\n");
 
 const D_GHOST_FORGE_GUIDE = [
   "获取《插件(Ghost)编写手册》——为用户制作/修改插件(.cindy 能力包)前必读。",
-  "手册随主机版本走,包含:ghost.json 身份卡全字段、十个卡槽、管子 API(cindy.send)、",
-  "面板与主题、沙箱红线、打包与测试流程。整本超出单次工具结果上限,分章取用:",
-  '不传参数返回目录,传 section(章号如 "4.7" 或章标题关键词如 "network")返回单章正文。',
-  '用户说"帮我做一个 XX 插件 / 改一下某插件"时,先取目录、按需读相关章,',
-  "新插件可用 ghost_forge_scaffold 生成骨架,修改完成后再用 ghost_forge_pack 打包装入。",
+  "手册随主机版本走,包含:设计对齐提问清单、ghost.json 身份卡全字段、全部卡槽、",
+  "管子 API(cindy.send)、面板与主题、沙箱红线、打包与测试流程。整本超出单次工具",
+  '结果上限,分章取用:不传参数返回目录,传 section(章号如 "4.7" 或章标题关键词如',
+  '"network")返回单章正文。用户说"帮我做一个 XX 插件 / 改一下某插件"时,先取目录、',
+  "先按第 0 章「设计对齐」用带选项的提问卡片和用户确认界面形态(停靠面板/右侧栏页签/",
+  "纯工具)等关键决策,再按需读相关章;新插件可用 ghost_forge_scaffold 生成骨架,",
+  "修改完成后再用 ghost_forge_pack 打包装入。",
 ].join("\n");
 
 const D_GHOST_FORGE_SCAFFOLD = [

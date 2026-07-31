@@ -25,6 +25,7 @@ import {
   providerOffersModel,
   getModel,
   sourcesForModel,
+  chatEligibleSourcesForModel,
   effectiveSourceIdForModel,
   resolveRoute,
 } from '../registry.js';
@@ -58,7 +59,9 @@ function runtimeCatalog(): Catalog {
   const clone = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
   for (const p of clone.providers) {
     if (p.id === 'anthropic') {
-      p.models['claude-code'] = [model('claude-opus-4-8', { name: 'Opus 4.8', contextWindow: 1_000_000 })];
+      const models = [model('claude-opus-4-8', { name: 'Opus 4.8', contextWindow: 1_000_000 })];
+      p.models['claude-code'] = models;
+      p.models.codex = models;
     }
     if (p.id === 'openai') {
       p.models.codex = [model('gpt-5.5', { name: 'GPT-5.5' })];
@@ -111,7 +114,7 @@ describe('mergeWithBundled', () => {
       providers: [JSON.parse(JSON.stringify(BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')))],
     };
     const merged = mergeWithBundled(v2Remote);
-    expect(merged.providers.map((p) => p.id)).toEqual(['anthropic', 'openai', 'xai', 'xd']);
+    expect(merged.providers.map((p) => p.id)).toEqual(['anthropic', 'openai', 'xai', 'xd', 'gemini']);
     // 远端独有的新供应商追加在 bundled 之后。
     const withExtra: Catalog = {
       version: '2',
@@ -121,7 +124,7 @@ describe('mergeWithBundled', () => {
       ],
     };
     expect(mergeWithBundled(withExtra).providers.map((p) => p.id)).toEqual([
-      'anthropic', 'openai', 'xai', 'xd', 'newvendor',
+      'anthropic', 'openai', 'xai', 'xd', 'gemini', 'newvendor',
     ]);
   });
 
@@ -331,7 +334,7 @@ describe('loadCatalog', () => {
     };
     const cat = await loadCatalog({ url: 'https://x/y.json' }, io);
     expect(cat.version).toBe(BUNDLED_CATALOG.version);
-    expect(cat.providers.map((p) => p.id).sort()).toEqual(['anthropic', 'openai', 'xai', 'xd']);
+    expect(cat.providers.map((p) => p.id).sort()).toEqual(['anthropic', 'gemini', 'openai', 'xai', 'xd']);
   });
 
   it('disableFetch → bundled (no network)', async () => {
@@ -347,7 +350,7 @@ describe('registry visibility & sources(运行时注入 fixture)', () => {
 
   it('providersForAgent ignores connection', () => {
     expect(providersForAgent(views, 'claude-code').map((p) => p.id).sort()).toEqual(['anthropic', 'openai', 'xai', 'xd']);
-    expect(providersForAgent(views, 'codex').map((p) => p.id).sort()).toEqual(['openai', 'xai', 'xd']);
+    expect(providersForAgent(views, 'codex').map((p) => p.id).sort()).toEqual(['anthropic', 'openai', 'xai', 'xd']);
   });
 
   it('connectedProvidersForAgent honors connection', () => {
@@ -431,6 +434,78 @@ describe('registry visibility & sources(运行时注入 fixture)', () => {
       effectiveSourceIdForModel(all, 'openai', 'claude-opus-4-8', 'claude-code'),
     ).toBe('xd');
   });
+
+  it('effectiveSourceIdForModel 不把请求路由到非聊天来源(issue #882 第 3 点,2026-07 review):同一 id 在不同来源上 mode 不一致时,只信聊天来源', () => {
+    const mixedModeCatalog: Catalog = {
+      version: 'test',
+      providers: [
+        {
+          id: 'xd',
+          name: 'XD',
+          source: 'builtin',
+          agents: ['claude-code'],
+          auth: { method: 'managed' },
+          routing: { 'claude-code': { upstream: 'https://xd.test', authStrategy: 'gateway-key' } },
+          models: {
+            'claude-code': [model('shared-id', { mode: 'image_generation' })],
+          },
+        },
+        {
+          id: 'openai',
+          name: 'OpenAI',
+          source: 'builtin',
+          agents: ['claude-code'],
+          auth: { method: 'oauth' },
+          routing: { 'claude-code': { upstream: 'https://api.openai.com', authStrategy: 'oauth-passthrough' } },
+          models: {
+            'claude-code': [model('shared-id', { mode: 'chat' })],
+          },
+        },
+      ],
+    };
+    const views = buildRegistry(mixedModeCatalog, { xd: true, openai: true });
+    // 显式指定的 providerId 恰好是非聊天来源(xd)时,不接受它——落到真正聊天的来源(openai)。
+    expect(effectiveSourceIdForModel(views, 'xd', 'shared-id', 'claude-code')).toBe('openai');
+    // 未显式指定 providerId 时,默认来源同样只能是聊天来源。
+    expect(effectiveSourceIdForModel(views, null, 'shared-id', 'claude-code')).toBe('openai');
+
+    // chatEligibleSourcesForModel 是这份过滤的共享底层——直接断言它自己的输出,
+    // 保证 UI 侧的"有没有可发送来源"判断(ChatInput/useConnectedSource/
+    // isSelectedSourceDisconnected)与路由解析用的是同一份口径,不会互相打架。
+    expect(chatEligibleSourcesForModel(views, 'shared-id', 'claude-code').map((p) => p.id)).toEqual([
+      'openai',
+    ]);
+  });
+
+  it('chatEligibleSourcesForModel 不误杀用户自定义供应商显式配置的模型(2026-07 review 第 25 轮)', () => {
+    // flux-image-x 的 id 撞上 /image/ 启发式,但它来自 source:'user' 的自定义供应商且
+    // group 是未知的 custom:*——isAgentSelectableModel 的 userProvider 例外有意放行
+    // (用户显式配置的就是聊天模型)。裸 isChatEligible 会把它从路由/发送门禁里删掉,
+    // 用户配好的模型 UI 显示"没有已连接的来源"、请求发不出去。
+    const userProviderCatalog: Catalog = {
+      version: 'test',
+      providers: [
+        {
+          id: 'custom-p',
+          name: 'Custom',
+          source: 'user',
+          agents: ['claude-code'],
+          auth: { method: 'api-key' },
+          routing: { 'claude-code': { upstream: 'https://custom.test', authStrategy: 'api-key' } },
+          models: {
+            'claude-code': [model('flux-image-x', { group: 'custom:custom-p' })],
+          },
+        },
+      ],
+    };
+    const views = buildRegistry(userProviderCatalog, { 'custom-p': true });
+    expect(
+      chatEligibleSourcesForModel(views, 'flux-image-x', 'claude-code').map((p) => p.id),
+    ).toEqual(['custom-p']);
+    expect(effectiveSourceIdForModel(views, 'custom-p', 'flux-image-x', 'claude-code')).toBe(
+      'custom-p',
+    );
+  });
 });
 
 describe('resolveRoute(运行时注入 fixture)', () => {
@@ -442,6 +517,19 @@ describe('resolveRoute(运行时注入 fixture)', () => {
     const r = resolveRoute(views, 'anthropic', 'claude-opus-4-8', 'claude-code');
     expect(r?.routing.upstream).toBe('https://api.anthropic.com');
     expect(r?.routing.authStrategy).toBe('oauth-passthrough');
+  });
+
+  it('anthropic claude (codex) → Anthropic Messages bridge + host-owned OAuth', () => {
+    const r = resolveRoute(views, 'anthropic', 'claude-opus-4-8', 'codex');
+    expect(r?.routing).toMatchObject({
+      upstream: 'https://api.anthropic.com',
+      wireProtocol: 'anthropic-messages',
+      authStrategy: 'provider-oauth-header',
+      headerOverride: {
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
+      },
+    });
   });
 
   it('xd claude (claude-code) → gateway, gateway-key, 不删 anthropic-beta(fast 经网关透传)', () => {
@@ -467,7 +555,6 @@ describe('resolveRoute(运行时注入 fixture)', () => {
 
   it('rejects unsupported (provider, model, agent) combos', () => {
     expect(resolveRoute(views, 'anthropic', 'gpt-5.5', 'claude-code')).toBeNull();
-    expect(resolveRoute(views, 'anthropic', 'claude-opus-4-8', 'codex')).toBeNull();
     expect(resolveRoute(views, 'openai', 'claude-opus-4-8', 'codex')).toBeNull();
     expect(resolveRoute(views, 'nope', 'claude-opus-4-8', 'claude-code')).toBeNull();
   });

@@ -38,6 +38,23 @@ export const DEVICE_LINK_INVOKE = {
   REVOKE: 'device-link:revoke',
   /** 被控端:恢复某控制端的访问权限 */
   RESTORE: 'device-link:restore',
+  // —— 控制端:远程会话镜像的本地冷缓存(见 main/device-link/mirrorCacheStore.ts)——
+  // 纯本机读写,**不进 device-link 隧道 allowlist**:缓存是每台控制端自己的首屏加速物,
+  // 远程/手机控制端有各自的本地缓存,谁也不需要读别人的。
+  /** 读某 (设备, 会话) 缓存的最近一页消息 */
+  MIRROR_CACHE_GET_MESSAGES: 'device-link:mirror-cache:messages:get',
+  /** 写某 (设备, 会话) 缓存的最近一页消息(空数组 = 清掉该条) */
+  MIRROR_CACHE_PUT_MESSAGES: 'device-link:mirror-cache:messages:put',
+  /** 读侧边栏远程会话列表快照 */
+  MIRROR_CACHE_GET_SESSION_LIST: 'device-link:mirror-cache:session-list:get',
+  /** 写侧边栏远程会话列表快照 */
+  MIRROR_CACHE_PUT_SESSION_LIST: 'device-link:mirror-cache:session-list:put',
+  /**
+   * 清某台设备的缓存。deviceId 必填(缺失 / 空白一律 INVALID_PARAMS)——
+   * 「整体清」刻意不开放给 renderer:登出走 main 内部的 clearAll()(见
+   * teardownAuthAccountBoundary)。
+   */
+  MIRROR_CACHE_CLEAR: 'device-link:mirror-cache:clear',
 } as const;
 
 /** main → renderer push */

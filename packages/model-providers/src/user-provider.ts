@@ -54,6 +54,9 @@ function toCatalogModel(
     id: m.id,
     name: m.name,
     contextWindow: m.contextWindow ?? DEFAULT_CUSTOM_CONTEXT_WINDOW,
+    // 用户自己填了才算显式声明;走 DEFAULT_CUSTOM_CONTEXT_WINDOW 兜底的不标记 ——
+    // 那是「仅用于展示」的保守默认,不能拿去收敛运行期上报的窗口。
+    ...(m.contextWindow !== undefined ? { contextWindowVerified: true } : {}),
     efforts,
     defaultEffort: efforts.length > 0 ? DEFAULT_CUSTOM_EFFORT : null,
     // 选择器右栏按 group 聚合：同一自定义来源的模型聚成一组（渲染层用 provider 名兜底标签）。

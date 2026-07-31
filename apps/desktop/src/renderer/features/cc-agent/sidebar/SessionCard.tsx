@@ -57,11 +57,12 @@ import { createLogger } from '@/lib/logger';
 import { formatSidebarTime, formatSidebarTimeAbsolute } from '../lib/formatSidebarTime';
 import { highlightSegments } from '../lib/highlightSegments';
 import { scrollIntoNearestView } from '../lib/scrollIntoNearestView';
+import { isAutomationGeneratedSession } from '../lib/scheduledSessionGrouping';
 import {
-  getAutomationSessionDisplayTitle,
-  isAutomationGeneratedSession,
-  isScheduledSession,
-} from '../lib/scheduledSessionGrouping';
+  canHighlightSessionDisplayTitle,
+  getSessionDisplayTitle,
+  isEmptyDraftSession,
+} from '../lib/sessionDisplayTitle';
 import { SessionProjectMoveSubmenu } from './SessionProjectMoveSubmenu';
 import { SessionRenameInput } from '../SessionRenameInput';
 import type { SessionItemProps } from './SessionItem';
@@ -129,7 +130,7 @@ export function SessionCard({
   // 灵动岛同源的 per-session 实时活动(执行中逐步活动 + 等待交互态)。
   const islandActivity = useAgentIslandActivity(session.id);
   const isPinned = session.pinnedAt != null;
-  const isEmpty = session.title === 'New Maker' && (session._count?.messages ?? 0) === 0;
+  const isEmpty = isEmptyDraftSession(session);
   const activityIso = session.updatedAt;
   const remoteIconKind = session.deviceLinkDeviceId ? 'device-link' : session.remoteHostId ? 'ssh' : null;
   const remoteIconConnectionStatus = session.deviceLinkDeviceId
@@ -140,8 +141,8 @@ export function SessionCard({
   const boundSchedules = useSessionBoundSchedules(session.id);
   const showScheduleBindingBadge = boundSchedules.length > 0;
   const showAutomationTimer = !showScheduleBindingBadge && isAutomationGenerated;
-  const displayTitle = getAutomationSessionDisplayTitle(session);
-  const canHighlightDisplayTitle = !isScheduledSession(session);
+  const displayTitle = getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'));
+  const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session);
   const isArchived = session.status === 'archived';
   const canQuickArchive = !isArchived && !isEmpty && !remoteWritesBlocked;
   // 卡片/列表的正文固定给预览区域。list 保留 main 既有实时执行文案;

@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { connectedProvidersForAgent, providerOffersModel, visibleModelUnion } from '@cindy/model-providers';
+import { connectedProvidersForAgent, getModel, isAgentSelectableModel, visibleModelUnion } from '@cindy/model-providers';
 
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
@@ -57,7 +57,13 @@ export function SubagentModelSection() {
       const provider = connectedProvidersForAgent(providers, 'claude-code').find(
         (p) => p.id === providerId,
       );
-      return provider && providerOffersModel(provider, modelId, 'claude-code')
+      if (!provider) return null;
+      // 只看 id 是否存在不够(issue #882 第 3 点,2026-07 review 第 18 轮):该来源这份
+      // 具体条目若是非聊天类型,不能落成子代理模型的显式来源,否则派发会打进
+      // image/audio/embedding 端点。
+      const catalogModel = getModel(provider, modelId, 'claude-code');
+      return catalogModel &&
+        isAgentSelectableModel(catalogModel, { userProvider: provider.source === 'user' })
         ? providerId
         : null;
     },
@@ -119,12 +125,17 @@ export function SubagentModelSection() {
   const sourceDisconnected = Boolean(
     !providersLoading &&
       settings.claudeCodeProviderId &&
-      !connectedProvidersForAgent(providers, 'claude-code').some(
-        (p) =>
-          p.id === settings.claudeCodeProviderId &&
-          (settings.claudeCode === null ||
-            providerOffersModel(p, settings.claudeCode, 'claude-code')),
-      ),
+      !connectedProvidersForAgent(providers, 'claude-code').some((p) => {
+        if (p.id !== settings.claudeCodeProviderId) return false;
+        if (settings.claudeCode === null) return true;
+        // 只查 id 会漏掉「该来源这份具体条目已经是非聊天类型」的情况(issue #882
+        // 第 3 点,2026-07 review 第 18 轮)——同样算「不可用」,需要断开态提示。
+        const catalogModel = getModel(p, settings.claudeCode, 'claude-code');
+        return (
+          catalogModel !== undefined &&
+          isAgentSelectableModel(catalogModel, { userProvider: p.source === 'user' })
+        );
+      }),
   );
   // 「连接来源」CTA 只在「目录层面零可选模型」时接线:零已连接来源,或来源连接着
   // 但动态模型发现返回空清单 —— 两者面板都是零分段 no-results,需要恢复入口

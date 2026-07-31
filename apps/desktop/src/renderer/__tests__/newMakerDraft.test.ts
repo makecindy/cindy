@@ -55,7 +55,12 @@ describe('newMakerDraft store', () => {
     expect(d.lastByVendor.cc.model.length).toBeGreaterThan(0);
     expect(d.lastByVendor.codex.permissionMode).toBe('auto');
     expect(d.lastByVendor.codex.effort).toBe('high');
-    expect(d.lastByVendor.codex.model).toBe('gpt-5.4');
+    // 种子模型不再写死在 store 里（原先是 'gpt-5.4'，与 modelDefinitions 写死的 'gpt-5.5'
+    // 漂移，且两者在目录里都是默认隐藏的模型）。现在统一从 getDefaultModelForVendor 取，
+    // capabilities 未加载时它给冷启动占位 id —— 这里只锁「非空且与那个入口同源」。
+    const { coldStartModelIdForVendor } = await import('@/lib/modelDefinitions');
+    expect(d.lastByVendor.codex.model).toBe(coldStartModelIdForVendor('codex'));
+    expect(d.lastByVendor.cc.model).toBe(coldStartModelIdForVendor('cc'));
     expect(d.fastModeByModel).toEqual({});
     expect(d.effortByModel).toEqual({});
   });

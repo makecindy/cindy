@@ -25,6 +25,8 @@ import type {
   RsbBrowserBridgeTabOpResult,
 } from '../../../../shared/rsbBrowserBridge';
 
+import { createLogger } from '@/lib/logger';
+
 import { browserWebviewPool } from './browserWebviewPool';
 import {
   addTab,
@@ -32,8 +34,16 @@ import {
   setActiveTab,
   getBucket,
   ensureHydrated,
+  findSessionIdByTabId,
 } from '../store';
 import { requestRightSidebarVisibility } from './sidebarCommands';
+import { isPopupSpawnedTab } from './popupTabs';
+
+const log = createLogger('rightSidebar.rsbBrowserBridge');
+
+/** guest 自关收尾对 closeTab 瞬态失败的重试延迟表(close 事件不重发,不重试
+ *  即静默丢关闭意图)。 */
+const GUEST_CLOSE_RETRY_DELAYS_MS = [50, 150, 400] as const;
 
 /** Subset of `window.electronAPI.rsbBrowserBridge` actually used here. */
 interface RsbBrowserBridgeIpcSubset {
@@ -166,6 +176,30 @@ export function forceKillBrowserTab(tabId: string): Promise<void> {
 }
 
 /**
+ * guest 自关的 per-session 串行队列。
+ *
+ * "两次关闭的 store 变更不许交错"由 `store.closeTab` 自己的 per-session 队列保证
+ * (它覆盖所有关闭入口,包括用户手关)。这里这一层管的是**自关的整套收尾**:
+ * 存在性重取 → closeTab → pool.release → "最后一个 tab 才收侧栏" 判定。这些
+ * 步骤在 closeTab 之外,store 的队列管不到 —— 同 session 两个 popup 同时自关时
+ * 不排队,两套收尾会读到彼此中途的 bucket。
+ *
+ * 同 session 排队,跨 session 并行。
+ */
+const guestCloseQueues = new Map<string, Promise<void>>();
+
+function enqueueGuestClose(sessionId: string, task: () => Promise<void>): Promise<void> {
+  const prev = guestCloseQueues.get(sessionId) ?? Promise.resolve();
+  const next = prev.then(task).catch(() => undefined);
+  guestCloseQueues.set(sessionId, next);
+  // 队尾自清 —— 不把已完成的 promise(及其闭包)长期挂在 map 上。
+  void next.then(() => {
+    if (guestCloseQueues.get(sessionId) === next) guestCloseQueues.delete(sessionId);
+  });
+  return next;
+}
+
+/**
  * Bind the renderer ↔ main bridge. Returns a teardown function that's safe to
  * call multiple times.
  *
@@ -193,9 +227,67 @@ export function initRsbBrowserBridge(): () => void {
   const unsubRelease = browserWebviewPool.onRelease((tabId) => {
     const reported = lastReportedWebContentsId.get(tabId);
     lastReportedWebContentsId.delete(tabId);
+    // 注意:这里**不能**清 popup 标记 —— pool release ≠ tab 关闭。LRU 淘汰 /
+    // 宿主迁移只销毁 webview 实例,tab 仍在 store;重新激活后 OAuth callback 的
+    // window.close() 仍要能命中标记自关。标记随 tab 关闭清理(见 guestClose)。
     void api
       .release(reported === undefined ? { tabId } : { tabId, webContentsId: reported })
       .catch(() => undefined);
+  });
+
+  // guest `window.close()` → 自动关对应 tab。只放行 popup 催生的 tab(与真实
+  // 浏览器 "script-opened 才能 script-close" 语义对齐,防任意网页关掉用户 tab)。
+  // OAuth callback 页授权完成后的标准收尾就是 window.close() —— 不接这个事件,
+  // 每次授权都残留一个空 tab。关到最后一个 tab 时联动收起侧栏,与 main 端
+  // close tab-op 的可见性策略一致。
+  const unsubGuestClose = browserWebviewPool.onGuestClose((tabId) => {
+    if (!isPopupSpawnedTab(tabId)) return;
+    const sessionId = findSessionIdByTabId(tabId);
+    if (!sessionId) return;
+    void enqueueGuestClose(sessionId, async () => {
+      // closeTab 的瞬态失败(DB overload / worker 短暂不可用)必须重试:guest 的
+      // close 事件不会重发,静默丢弃等于让"残留空 tab"被瞬态失败原样复活。
+      // 有限重试后仍失败 → log.error 留痕收手(fail-safe 方向是少关一个 tab,
+      // 用户手关兜底;popup 标记未清,理论上后续还有自关机会)。
+      for (let attempt = 0; ; attempt += 1) {
+        // 每轮重取存在性:排在前面的自关 / 用户手关 / 上一轮部分成功都可能已把
+        // 这个 tab 关掉。
+        if (!getBucket(sessionId).tabs.some((t) => t.id === tabId)) return;
+        const beforeCount = getBucket(sessionId).tabs.length;
+        try {
+          await storeCloseTab(sessionId, tabId);
+        } catch (err) {
+          if (attempt < GUEST_CLOSE_RETRY_DELAYS_MS.length) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, GUEST_CLOSE_RETRY_DELAYS_MS[attempt]),
+            );
+            continue;
+          }
+          log.error('guest-close: closeTab failed after retries; tab left in place', {
+            sessionId,
+            tabId,
+            err,
+          });
+          return;
+        }
+        // closeTab 可能被 close interceptor 拦下(tab 留在 bucket)——此时不动资源,
+        // 保持"没关成"的完整语义(popup 标记同理:store 只在真正关成时才清)。
+        const stillPresent = getBucket(sessionId).tabs.some((t) => t.id === tabId);
+        if (stillPresent) return;
+        // 后台自关(BrowserTabBody 未挂载)没有 unmount cleanup 兜底,必须显式
+        // release:销毁 guest webContents、经 onRelease 链同步 main 端 TabRegistry。
+        // 前台场景 TabBody 的关闭路径先 release 过也没关系 —— release 幂等。
+        browserWebviewPool.release(tabId);
+        // detach/reattach 竞态防护:closeTab await 期间 invalidateSessionCaches()
+        // 可能把 bucket 清为 EMPTY_BUCKET(hydrated=false, tabs=[])——此时
+        // afterCount===0 不代表会话真的没有 tab 了,不应折叠侧边栏。
+        const afterBucket = getBucket(sessionId);
+        if (beforeCount > 0 && afterBucket.hydrated && afterBucket.tabs.length === 0) {
+          requestRightSidebarVisibility('close', { sessionId });
+        }
+        return;
+      }
+    });
   });
 
   // Main → pool pin sync. Main owns the pin authority; renderer pool only
@@ -245,6 +337,7 @@ export function initRsbBrowserBridge(): () => void {
 
   teardown = () => {
     unsubRelease();
+    unsubGuestClose();
     unsubPin();
     unsubUnpin();
     unsubTabOp();
@@ -448,8 +541,9 @@ async function handleTabOpRequest(
       // what's left after. Bucket reads are synchronous off the store cache.
       const beforeCount = getBucket(req.sessionId).tabs.length;
       await storeCloseTab(req.sessionId, req.tabId);
-      const afterCount = getBucket(req.sessionId).tabs.length;
-      if (beforeCount > 0 && afterCount === 0) {
+      // detach/reattach 竞态防护:同 guest-close 路径,需确认 bucket 仍由本 renderer 持有。
+      const afterBucket = getBucket(req.sessionId);
+      if (beforeCount > 0 && afterBucket.hydrated && afterBucket.tabs.length === 0) {
         requestRightSidebarVisibility('close', { sessionId: req.sessionId });
       }
       result = { reqId, ok: true, tabId: req.tabId };
@@ -490,7 +584,7 @@ function pickDefaultBrowserTab(
  * 已 attach 过的 entry(getWebContentsId 可取)走幂等 re-report 快路径,
  * 不再动 src(避免把用户正在看的页面重新导航)。
  */
-async function eagerSpawnAndReport(
+export async function eagerSpawnAndReport(
   sessionId: string,
   tabId: string,
   url: string,
@@ -510,8 +604,23 @@ async function eagerSpawnAndReport(
     const finish = () => {
       if (settled) return;
       settled = true;
+      entry.webview.removeEventListener('did-attach', onAttach);
       entry.webview.removeEventListener('dom-ready', onReady);
       resolve();
+    };
+    // 早期上报:did-attach 在导航提交前就触发,此时 getWebContentsId 已可取。
+    // 只等 dom-ready 会留一个竞态窗口 —— 页面 head 里的同步脚本能在 dom-ready
+    // 之前 window.open(),那时 registry 还没有本 tab 的记录,popup 的 opener
+    // 反查落空、归属丢失。这里提早把映射送进 main,把窗口压缩到"IPC 在途"的
+    // 毫秒级(guest 脚本要跑起来至少要等导航提交,晚于 did-attach)。
+    // report 幂等(同 tabId 重报只是替换记录),与下面 dom-ready 的兜底上报共存。
+    const onAttach = () => {
+      try {
+        const webContentsId = entry.webview.getWebContentsId();
+        void reportRsbBrowserTab({ sessionId, tabId, webContentsId });
+      } catch {
+        /* attach 尚未完成到可取 id —— dom-ready 兜底。 */
+      }
     };
     const onReady = () => {
       try {
@@ -528,6 +637,7 @@ async function eagerSpawnAndReport(
       }
       finish();
     };
+    entry.webview.addEventListener('did-attach', onAttach);
     entry.webview.addEventListener('dom-ready', onReady);
     // 8s fallback so a broken site / network failure doesn't make the
     // backend op hang forever. Tab persists in the bucket; user switching
@@ -553,5 +663,6 @@ export function _resetRsbBrowserBridgeForTests(): void {
   lastReportedWebContentsId.clear();
   pendingKillCauses.clear();
   resourceEventListeners.clear();
+  guestCloseQueues.clear();
   currentForegroundTabId = null;
 }

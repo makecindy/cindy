@@ -22,6 +22,7 @@ import hostSystemPrompt from './host-system-prompt.md?raw';
 import { readCompactionPct } from './compaction-settings-store.js';
 import { readMemorySettings } from './memory-settings-store.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
+import { toolchainThreadCapEnv } from './toolchain-thread-cap.js';
 
 // host 层 system prompt 拼接：先 host 共用段 (host-system-prompt.md)，再 agent 专属段
 // (claude-system-prompt.md / codex-system-prompt.md)。空段被过滤，避免出现孤零零的 \n\n。
@@ -128,11 +129,15 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
     // 调用 —— gateway-key spawn(显式 XD source / SSH remote)保持禁归因且不读钥匙串,
     // 其余形态按**当时**的 Claude.ai 订阅连接态决定(判据与 proxy 同源)。会话中途
     // 连/断订阅只影响新 spawn —— 与 cc 子进程凭证冻结语义一致。
-    behaviorFlags: (ctx) =>
-      claudeBehaviorFlagsForSpawn({
+    behaviorFlags: (ctx) => ({
+      ...claudeBehaviorFlagsForSpawn({
         credentialMode: ctx.credentialMode,
         oauthConnected: hasClaudeAiOAuth,
       }),
+      // 工具链限核 env(agent 资源占用治理):只对本机 spawn 注入 —— 值按本机
+      // 核数算,远端机器的资源不归本设置管。设置关闭时为空对象,零影响。
+      ...(ctx.spawnMode === 'remote' ? {} : toolchainThreadCapEnv()),
+    }),
     // xdt-maker 产品级 system prompt 注入：host 共用段 (host-system-prompt.md)
     // + Claude 专属段 (claude-system-prompt.md)，按顺序拼接后给 maker-core append。
     systemPrompt: composeHostPrompt(claudeSystemPrompt),
@@ -222,11 +227,16 @@ function resolveSubagentModelForRoute(
 }
 
 /**
- * Codex 运行时配置：当前没有 proxy URL 覆盖，也没有业务 flag。
+ * Codex 运行时配置：当前没有 proxy URL 覆盖。
  * systemPrompt 已接通 —— codex agent 在 thread/start 时跟 engine append 拼成
  * developerInstructions 注入 codex 子进程 (见 codex/index.ts)。
  */
 export const desktopCodexRuntimeConfig: AgentRuntimeConfig = {
+  // 工具链限核 env(agent 资源占用治理)。注意:远端 codex spawn 也会执行
+  // buildCodexEnv(其产物随后被远端 transport 整体丢弃,见 codex/index.ts:1917
+  // 附近注释),所以这里仍按 spawnMode 分流让代码自证,不依赖"远端不走本函数"
+  // 这种会过期的假设(对抗式预审发现)。
+  behaviorFlags: (ctx) => (ctx.spawnMode === 'remote' ? {} : toolchainThreadCapEnv()),
   // host 共用段 (host-system-prompt.md) + Codex 专属段 (codex-system-prompt.md)。
   systemPrompt: composeHostPrompt(codexSystemPrompt),
   pathPrepends: [bundledRipgrepDir()],

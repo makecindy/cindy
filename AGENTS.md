@@ -105,6 +105,9 @@
 - commit、push 和创建 PR 的执行时机由开发者或 Codex、Claude Code、Cindy 等宿主
   工作流决定；仓库规则本身不额外授权外部写操作。
 - 提交 PR 时遵循 `.github/PULL_REQUEST_TEMPLATE.md`，如实说明改动、验证和风险。
+- 非 fork 的非 draft PR 会触发自动 code review（`.github/workflows/pr-code-review.yml`），
+  审阅口径见根目录 `REVIEW.md`。它是**建议性**检查，不替代人工 review，也不替代
+  `client-ci` 的机器门禁；改动上述两份文件前先读 `REVIEW.md` 开头的说明。
 - **DCO 签名（硬性要求）**：本仓每个 commit 都必须带 `Signed-off-by` trailer，且其中的
   名字与邮箱都要与 commit 的 author（或 committer）一致，用 `git commit -s` 生成；
   agent 的自动提交同样适用。PR 上的 DCO check（DCO GitHub App，配置见

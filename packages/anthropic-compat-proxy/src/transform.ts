@@ -521,6 +521,511 @@ export function stripEmptyAssistantMessagesFromBody(rawBody: Buffer): Buffer | n
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// Tool exchange 结构修复 —— 与 kimi code 官方客户端的投影修复同构
+// (kosong normalizeToolCallIdsForProvider + agent-core projector),移植到
+// Anthropic Messages wire 格式:
+//   - tool_use 块在 assistant 消息 content 内;tool_result 块在 user 消息
+//     content 内(kimi 内部格式里 tool result 是独立的 role:'tool' 消息)。
+//   - 两个 transform 都是**检测即修**:扫描发现协议级异常才改写,无异常返回
+//     null(cache 安全契约:字节透传,正常会话零影响)。不需要 ThreadStripController
+//     —— 重复 id / 配对断裂在请求体里可直接检测,不像 encrypted_content 要靠
+//     撞 400 才能判定该剥。
+// ───────────────────────────────────────────────────────────────────────────
+
+function isToolUseBlock(block: unknown): block is Record<string, unknown> & { id: string } {
+  return (
+    isPlainObject(block) &&
+    block.type === 'tool_use' &&
+    typeof block.id === 'string' &&
+    block.id.length > 0
+  );
+}
+
+function isToolResultBlock(
+  block: unknown,
+): block is Record<string, unknown> & { tool_use_id: string } {
+  return (
+    isPlainObject(block) &&
+    block.type === 'tool_result' &&
+    typeof block.tool_use_id === 'string' &&
+    block.tool_use_id.length > 0
+  );
+}
+
+/**
+ * 重复 tool_use id 唯一化(检测即修),返回新 messages;无重复 → null。
+ *
+ * 背景: moonshot/kimi 系的 tool_call id 是服务端按序号铸造的(`Edit_306` /
+ * `Bash_256` 这类 `${name}_${index}` 形态,经 LiteLLM 字符清洗后冒号变下划线)。
+ * 长会话里序号生成会卡住,同一个 id 被跨 turn 反复复用(2026-07 两个独立会话
+ * 实测各复用 20+ 次)——模型看回放历史时工具交换错乱,表现为"工具调用凭空
+ * 消失"、安静瘫痪。kimi code 官方对原始重复 id 的处理是 400 后 strict resend
+ * 丢弃(agent-core projector dedupeDuplicateToolCalls),但 moonshot 容忍重复
+ * id 不报 400,strict 路径永远触发不了 → 这里改为发送前检测即修。
+ *
+ * 与 kimi strict 的**丢弃**不同,这里选择**重写**(kosong normalize 思路):
+ * 首现保留,第 N 次出现重写为 `${id}_${N}`(与现存 id 撞车时顺延后缀),
+ * 顺序配对的第 N 个 tool_result 同步改写。每个重复对背后是不同的逻辑调用,
+ * 丢弃会抹历史;重写保持配对完整,且 `_N` 后缀在 Anthropic id 合法字符集
+ * (`[a-zA-Z0-9_-]`)内,对任何上游都是协议修复而非篡改。
+ *
+ * 配对规则: 按出现顺序,第 N 个 result 配第 N 个 call(正常历史里 result 紧跟
+ * 其 call,顺序配对即真实配对)。result 比 call 多的尾部块保持原样(指向首现
+ * call;超编残留的清理由 repairToolExchangeAdjacency 负责)。
+ *
+ * 边界(刻意不做): id 字符集 sanitize(kimi kosong 会把 `Edit:306` 的冒号洗成
+ * 下划线)不在本 transform 范围 —— 本链路上游(LiteLLM)已做过清洗,非法字符
+ * id 无实测证据;实测命中再扩。`_N` 后缀只含合法字符,不会把合法 id 改非法。
+ *
+ * rename key 用 ` ` 分隔 id 与出现序号:Anthropic 合法 id 字符集不含空格,
+ * 不会与真实 id 撞 key;病态含空格 id 的重写结果仍由 usedIds 保证唯一。
+ */
+function dedupeToolUseIdsInMessages(messages: unknown[]): unknown[] | null {
+  // pass 1: 统计每个 call id 出现次数。usedIds(后缀撞车判定)只在确有重复、
+  // 进入改名阶段时才从 counts.keys() 构建 —— clean 请求(绝大多数)零 Set 分配。
+  const counts = new Map<string, number>();
+  for (const msg of messages) {
+    if (!isPlainObject(msg) || msg.role !== 'assistant' || !Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      if (!isToolUseBlock(block)) continue;
+      counts.set(block.id, (counts.get(block.id) ?? 0) + 1);
+    }
+  }
+  let hasDuplicate = false;
+  for (const n of counts.values()) {
+    if (n > 1) {
+      hasDuplicate = true;
+      break;
+    }
+  }
+  if (!hasDuplicate) return null; // cache 安全契约:无重复 → 透传
+
+  // pass 2a: 给每个 call 的第 N(N≥2) 次出现分配全局唯一新 id。
+  const usedIds = new Set(counts.keys());
+  const renameByOccurrence = new Map<string, string>();
+  const callSeen = new Map<string, number>();
+  for (const msg of messages) {
+    if (!isPlainObject(msg) || msg.role !== 'assistant' || !Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      if (!isToolUseBlock(block)) continue;
+      const n = (callSeen.get(block.id) ?? 0) + 1;
+      callSeen.set(block.id, n);
+      if (n === 1) continue;
+      let suffix = n;
+      let candidate = `${block.id}_${suffix}`;
+      while (usedIds.has(candidate)) {
+        suffix += 1;
+        candidate = `${block.id}_${suffix}`;
+      }
+      usedIds.add(candidate);
+      renameByOccurrence.set(`${block.id} ${n}`, candidate);
+    }
+  }
+
+  // pass 2b: 重写 call 与顺序配对的 result(第 N 个 result 查第 N 次 call 的改名;
+  // 查不到 = 该 result 无对应第 N 个 call,保持原样)。
+  const callWriteSeen = new Map<string, number>();
+  const resultSeen = new Map<string, number>();
+  const nextMessages = messages.map((msg) => {
+    if (!isPlainObject(msg) || !Array.isArray(msg.content)) return msg;
+    let msgChanged = false;
+    const nextContent = msg.content.map((block) => {
+      if (msg.role === 'assistant' && isToolUseBlock(block)) {
+        const n = (callWriteSeen.get(block.id) ?? 0) + 1;
+        callWriteSeen.set(block.id, n);
+        const renamed = renameByOccurrence.get(`${block.id} ${n}`);
+        if (renamed === undefined) return block;
+        msgChanged = true;
+        return { ...block, id: renamed };
+      }
+      if (msg.role === 'user' && isToolResultBlock(block)) {
+        const n = (resultSeen.get(block.tool_use_id) ?? 0) + 1;
+        resultSeen.set(block.tool_use_id, n);
+        const renamed = renameByOccurrence.get(`${block.tool_use_id} ${n}`);
+        if (renamed === undefined) return block;
+        msgChanged = true;
+        return { ...block, tool_use_id: renamed };
+      }
+      return block;
+    });
+    return msgChanged ? { ...msg, content: nextContent } : msg;
+  });
+  return nextMessages;
+}
+
+/**
+ * Buffer 版: 重复 tool_use id 唯一化。供 400 recovery(``tool_use` ids must be
+ * unique`)与主动 transform 共用同一份修复逻辑。
+ */
+export function dedupeDuplicateToolUseIdsFromBody(rawBody: Buffer): Buffer | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawBody.toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(parsed)) return null;
+  const messages = parsed.messages;
+  if (!Array.isArray(messages)) return null;
+  const nextMessages = dedupeToolUseIdsInMessages(messages);
+  if (nextMessages === null) return null;
+  parsed.messages = nextMessages;
+  try {
+    return Buffer.from(JSON.stringify(parsed), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 主动 transform 版: body 已由 proxy 解析为 plain object。
+ * 无重复返回 null,保持 clean request 的字节级透传语义。
+ */
+export const dedupeDuplicateToolUseIds: RequestTransform = (body) => {
+  if (!isPlainObject(body)) return null;
+  const messages = body.messages;
+  if (!Array.isArray(messages)) return null;
+  const nextMessages = dedupeToolUseIdsInMessages(messages);
+  if (nextMessages === null) return null;
+  return { ...body, messages: nextMessages };
+};
+
+/**
+ * 未配对 call 的合成占位 result 文本(与 kimi code projector 的
+ * SYNTHETIC_TOOL_RESULT_TEXT 同文案同语义:明确告知结果缺失、禁止假设成功;
+ * 不设 is_error —— "上下文里结果不可用"≠"工具执行失败",避免模型误重试)。
+ */
+const SYNTHETIC_TOOL_RESULT_TEXT =
+  'Tool result is not available in the current context. Do not assume the tool completed successfully.';
+
+/**
+ * tool_use/tool_result 配对断裂修复(检测即修),返回新 messages;无断裂 → null。
+ *
+ * 与 kimi code projector 的 repairToolExchangeAdjacency + dropOrphanResults
+ * 同构(consumed-scan),移植到 Anthropic 格式:
+ *   1. 位置配对优先: 每个 call 先消费紧邻下一条消息里同 id 的未消费 result
+ *      块(CC 投影的正常形态,位置证据最强的配对);全部 call(含 trailing)
+ *      做完位置配对后才进入接力 —— 否则较早的同 id 缺口 call 会抢走较晚
+ *      call 紧邻位置的真实 result,造成张冠李戴。
+ *   2. 接力补缺 + 错位重排: 位置配对失败的 call 从结果池取**归属区间**(本
+ *      assistant 消息到下一条含同 id call 的 assistant 消息之间 —— agentic
+ *      loop 串行,出现在下一个同 id exchange 之后的 result 只属于后面的
+ *      exchange,较早缺口不得越界抢走;同消息 parallel calls 的归属不可判定
+ *      时按稳定 tie-breaker 沿 call 块顺序配序,该约定受典型 client
+ *      serializer 支持但非 wire 可证明)内的第一个未消费块;不在合法位置
+ *      (跨消息,或同消息内落在 text 之后)的前移至紧邻消息的前导
+ *      tool_result 区间,原位置移除。Anthropic 要求 result 紧跟 call 所在
+ *      assistant 且居于 text 前,留在错误位置仍是 400。
+ *   3. 缺失合成: 非 trailing 的 call 无候选 → 紧邻位置合成占位(kimi 同文案
+ *      同语义;不设 is_error —— "结果不可用"≠"执行失败")。插入规则与重排
+ *      相同;string content 转等价数组,空白 string 不附加 text 块。
+ *   4. 丢弃: 孤儿 result(全历史无匹配 call)、池中剩余(前置 result —— 引用
+ *      未来 call 本身非法;同 id 超编残留 —— 一个 call 恰应有一个应答)全部
+ *      移除;user 消息 content 因此清空 → 整条丢弃。
+ *   5. trailing 豁免: 最后一个「对话推进点」处的 assistant(末尾交换)只消费
+ *      不修复 —— 缺失 result 可能真在飞,不合成、不重排;其后的纯 result
+ *      消息视为交换一部分,不会误判为残留丢弃。
+ */
+/**
+ * 最后一个「对话推进点」下标: assistant 消息,或含非 tool_result 内容的 user
+ * 消息(纯 tool_result 的 user 消息可能是 trailing 交换的一部分,不算推进点);
+ * 异常形态(非 plain object / string content)保守按推进点计。无 → -1。
+ */
+function findLastConversationIndex(messages: unknown[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!isPlainObject(msg)) return i;
+    if (msg.role === 'assistant' || !Array.isArray(msg.content)) return i;
+    if (msg.role === 'user' && msg.content.some((block) => !isToolResultBlock(block))) return i;
+  }
+  return -1;
+}
+
+/**
+ * content 前导 tool_result 区间的长度(开头连续 tool_result 块数)。
+ * Anthropic 惯例(CC 原生形态): 一条 user 消息里所有 tool_result 块在最前,
+ * text 等其它块在后;result 落在 text 之后 = 块级错位,需重排进前导区间。
+ */
+function leadingToolResultCount(content: unknown[]): number {
+  let k = 0;
+  while (k < content.length && isToolResultBlock(content[k])) k += 1;
+  return k;
+}
+
+function repairToolExchangeAdjacencyInMessages(messages: unknown[]): unknown[] | null {
+  // pass A: 全历史 call id 集合 + result 块位置池(per id 按出现升序)。
+  // 孤儿 result(无匹配 call)不入池,直接进丢弃清单。
+  const callIds = new Set<string>();
+  for (const msg of messages) {
+    if (!isPlainObject(msg) || msg.role !== 'assistant' || !Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      if (isToolUseBlock(block)) callIds.add(block.id);
+    }
+  }
+  const resultPool = new Map<string, Array<{ msgIdx: number; blockIdx: number }>>();
+  const drops: Array<{ msgIdx: number; blockIdx: number }> = [];
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (!isPlainObject(msg) || msg.role !== 'user' || !Array.isArray(msg.content)) continue;
+    for (let b = 0; b < msg.content.length; b++) {
+      const block = msg.content[b];
+      if (!isToolResultBlock(block)) continue;
+      if (!callIds.has(block.tool_use_id)) {
+        drops.push({ msgIdx: i, blockIdx: b });
+        continue;
+      }
+      const list = resultPool.get(block.tool_use_id) ?? [];
+      list.push({ msgIdx: i, blockIdx: b });
+      resultPool.set(block.tool_use_id, list);
+    }
+  }
+
+  // pass B1: 位置配对 —— 每个 call 优先消费紧邻下一条消息里同 id 的未消费
+  // result 块(CC 投影的正常形态,位置证据最强的配对)。**全部 call(含
+  // trailing)先做完位置配对再做接力**:否则较早的同 id 缺口 call 会在接力时
+  // 抢走较晚 call 紧邻位置的真实 result(张冠李戴,Greptile P1 实测反例:
+  // call#1 缺 result、call#2 有真实 result → call#1 越权消费、call#2 反得
+  // 合成占位)。trailing call 参与位置配对(消费合法尾部 result)但不做修复。
+  const lastConversationIndex = findLastConversationIndex(messages);
+  const consumed = new Set<string>(); // `${msgIdx}:${blockIdx}`
+  // assistant 下标 → (call 块下标 → 要插入的 result 块),按 call 顺序组装。
+  const insertPlans = new Map<number, Map<number, unknown>>();
+  const recordInsert = (assistantIdx: number, callBlockIdx: number, block: unknown) => {
+    const plan = insertPlans.get(assistantIdx) ?? new Map<number, unknown>();
+    plan.set(callBlockIdx, block);
+    insertPlans.set(assistantIdx, plan);
+  };
+  const missingCalls: Array<{ i: number; id: string; trailing: boolean; callBlockIdx: number }> = [];
+  for (let i = 0; i <= lastConversationIndex; i++) {
+    const msg = messages[i];
+    if (!isPlainObject(msg) || msg.role !== 'assistant' || !Array.isArray(msg.content)) continue;
+    const trailing = i >= lastConversationIndex;
+    const nextMsg = messages[i + 1];
+    const nextContent =
+      isPlainObject(nextMsg) && nextMsg.role === 'user' && Array.isArray(nextMsg.content)
+        ? nextMsg.content
+        : null;
+    for (let cb = 0; cb < msg.content.length; cb++) {
+      const block = msg.content[cb];
+      if (!isToolUseBlock(block)) continue;
+      const id = block.id;
+      let hit: { msgIdx: number; blockIdx: number } | undefined;
+      if (nextContent !== null) {
+        for (let b = 0; b < nextContent.length; b++) {
+          const cand = nextContent[b];
+          if (isToolResultBlock(cand) && cand.tool_use_id === id && !consumed.has(`${i + 1}:${b}`)) {
+            hit = { msgIdx: i + 1, blockIdx: b };
+            break;
+          }
+        }
+      }
+      if (hit !== undefined) {
+        consumed.add(`${hit.msgIdx}:${hit.blockIdx}`);
+        // 已邻接判定到块级: 位于前导 tool_result 区间则不动;落在 text 之后
+        // = 块级错位 → 前移进前导区间( trailing 只消费不修复)。
+        if (!trailing && hit.blockIdx >= leadingToolResultCount(nextContent!)) {
+          drops.push(hit);
+          recordInsert(i, cb, nextContent![hit.blockIdx]);
+        }
+      } else {
+        missingCalls.push({ i, id, trailing, callBlockIdx: cb });
+      }
+    }
+  }
+
+  // pass B2: 接力 —— 位置配对失败的 call,从结果池取**归属区间**内的第一个
+  // 未消费块前移(错位重排);无候选 → 非 trailing 合成占位。
+  //
+  // 归属区间 = (本 assistant 消息下标, 下一条含同 id call 的 assistant 消息
+  // 下标) —— 即"同 id exchange"边界。依据 agentic loop 串行:下一个 exchange
+  // 的同 id call 发出时,本 exchange 的同 id result 必已回来(或丢失),出现在
+  // 下一个 exchange 之后的 result 只属于后面的 exchange;较早缺口 exchange
+  // 不得越界抢较晚 exchange 的错位真实结果(Greptile 第二轮反例)。
+  //
+  // 边界粒度刻意是 exchange(消息)而非单个 call:同一条 assistant 消息内的
+  // parallel 同 id calls 同批发出、result 同批回来,其中一个丢失时归属在
+  // 原理上不可判定(信息论:两种归属的世界序列化后字节完全相同,缺失不留
+  // 位置痕迹)—— 此时采用**稳定 tie-breaker**:区间内涵 call 块顺序配序。
+  // 该约定受典型 client serializer 支持(CC SDK 的 Tool Runner 以
+  // Promise.all 并发执行、但结果数组保持输入 tool_use 顺序),可复现且最大
+  // 保留信息;但只是默认约定,不是 wire 可证明的归属 —— 真正消除歧义只能
+  // 在丢失前由 source adapter 持久化 occurrence/call index(provenance),
+  // 本层对已有 body 无法补造这个 bit。
+  //
+  // trailing missing call 同样消费区间内的块,但**只消费不修复**(不移、不
+  // 合成)——保护 trailing 交换的合法尾部 result(如 parallel trailing calls
+  // 的 result 分多条消息回来)不被下方"池剩余丢弃"误杀。
+  const callIndicesById = new Map<string, number[]>();
+  for (let i = 0; i <= lastConversationIndex; i++) {
+    const msg = messages[i];
+    if (!isPlainObject(msg) || msg.role !== 'assistant' || !Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      if (!isToolUseBlock(block)) continue;
+      const list = callIndicesById.get(block.id) ?? [];
+      list.push(i);
+      callIndicesById.set(block.id, list);
+    }
+  }
+  for (const mc of missingCalls) {
+    const pool = resultPool.get(mc.id) ?? [];
+    const indices = callIndicesById.get(mc.id) ?? [];
+    let nextIdx = Number.POSITIVE_INFINITY;
+    for (const idx of indices) {
+      if (idx > mc.i) {
+        nextIdx = idx;
+        break;
+      }
+    }
+    let hit: { msgIdx: number; blockIdx: number } | undefined;
+    for (const cand of pool) {
+      const key = `${cand.msgIdx}:${cand.blockIdx}`;
+      if (consumed.has(key)) continue;
+      if (cand.msgIdx <= mc.i || cand.msgIdx >= nextIdx) continue; // 区间外(前置/归后面的 call)
+      hit = cand;
+      break;
+    }
+    if (hit !== undefined) {
+      consumed.add(`${hit.msgIdx}:${hit.blockIdx}`);
+      if (!mc.trailing) {
+        drops.push(hit);
+        const srcMsg = messages[hit.msgIdx] as Record<string, unknown>;
+        recordInsert(mc.i, mc.callBlockIdx, (srcMsg.content as unknown[])[hit.blockIdx]);
+      }
+      // trailing: 仅 consumed 保护,不动位置。
+    } else if (!mc.trailing) {
+      recordInsert(mc.i, mc.callBlockIdx, {
+        type: 'tool_result',
+        tool_use_id: mc.id,
+        content: SYNTHETIC_TOOL_RESULT_TEXT,
+      });
+    }
+  }
+  // 池中剩余(前置 / 超编 / 永不配对)→ 全部丢弃。
+  for (const pool of resultPool.values()) {
+    for (const cand of pool) {
+      const key = `${cand.msgIdx}:${cand.blockIdx}`;
+      if (consumed.has(key)) continue;
+      drops.push(cand);
+      consumed.add(key);
+    }
+  }
+  // 每个 assistant 的插入块按 call 块顺序拼装(位置配对与接力分两遍收集,
+  // 顺序不一定与 call 顺序一致)。
+  const insertBlocksAfter = new Map<number, unknown[]>();
+  for (const [assistantIdx, plan] of insertPlans) {
+    insertBlocksAfter.set(
+      assistantIdx,
+      [...plan.entries()].sort((a, b) => a[0] - b[0]).map(([, block]) => block),
+    );
+  }
+
+  if (drops.length === 0 && insertBlocksAfter.size === 0) return null; // cache 安全契约
+
+  // pass C: 单遍组装。drops 按消息分组过滤;插入计划落在 assistant 之后 ——
+  // 下一条是 user 消息则标记 prepend(遍历到它时并入其 content 的前导
+  // tool_result 区间末尾,保持 result 在前、与 call 顺序一致),否则就地新建
+  // user 消息。user 消息过滤后(含 prepend)content 空 → 整条丢。
+  const dropsByMsg = new Map<number, Set<number>>();
+  for (const d of drops) {
+    const set = dropsByMsg.get(d.msgIdx) ?? new Set<number>();
+    set.add(d.blockIdx);
+    dropsByMsg.set(d.msgIdx, set);
+  }
+  const prependByMsg = new Map<number, unknown[]>();
+  const out: unknown[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    let current = msg;
+    if (isPlainObject(msg) && msg.role === 'user') {
+      const dropsHere = dropsByMsg.get(i);
+      const prepend = prependByMsg.get(i);
+      if (Array.isArray(msg.content) && (dropsHere !== undefined || prepend !== undefined)) {
+        const filtered = dropsHere ? msg.content.filter((_, b) => !dropsHere.has(b)) : [...msg.content];
+        const k = leadingToolResultCount(filtered);
+        const content = [...filtered.slice(0, k), ...(prepend ?? []), ...filtered.slice(k)];
+        if (content.length === 0) continue; // content 清空 → 整条丢
+        current = { ...msg, content };
+      } else if (typeof msg.content === 'string' && prepend !== undefined) {
+        // string content 转等价数组并入;空白 string 不附加 text 块(避免新造
+        // 空 text 块,转头命中 "text content blocks must be non-empty" 400)。
+        const text = msg.content.trim().length > 0 ? [{ type: 'text', text: msg.content }] : [];
+        current = { ...msg, content: [...prepend, ...text] };
+      }
+    }
+    out.push(current);
+    const inserts = insertBlocksAfter.get(i);
+    if (inserts !== undefined && inserts.length > 0) {
+      const next = messages[i + 1];
+      if (isPlainObject(next) && next.role === 'user') {
+        prependByMsg.set(i + 1, [...(prependByMsg.get(i + 1) ?? []), ...inserts]);
+      } else {
+        out.push({ role: 'user', content: inserts });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Buffer 版: 配对断裂修复。供 400 recovery(tool_call_id not found /
+ * unexpected tool_use_id / tool_use without tool_result)与主动 transform 共用。
+ */
+export function repairToolExchangeAdjacencyFromBody(rawBody: Buffer): Buffer | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawBody.toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (!isPlainObject(parsed)) return null;
+  const messages = parsed.messages;
+  if (!Array.isArray(messages)) return null;
+  const nextMessages = repairToolExchangeAdjacencyInMessages(messages);
+  if (nextMessages === null) return null;
+  parsed.messages = nextMessages;
+  try {
+    return Buffer.from(JSON.stringify(parsed), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 主动 transform 版: body 已由 proxy 解析为 plain object。
+ * 无断裂返回 null,保持 clean request 的字节级透传语义。
+ */
+export const repairToolExchangeAdjacency: RequestTransform = (body) => {
+  if (!isPlainObject(body)) return null;
+  const messages = body.messages;
+  if (!Array.isArray(messages)) return null;
+  const nextMessages = repairToolExchangeAdjacencyInMessages(messages);
+  if (nextMessages === null) return null;
+  return { ...body, messages: nextMessages };
+};
+
+/**
+ * 组合结构修复: 先 adjacency 接力配对,再重复 id 唯一化 —— 顺序不可颠倒。
+ *
+ * 为什么必须 repair 在前: dedupe 的「第 N 个 result 配第 N 个 call」依赖
+ * result 顺序与 call 顺序一一对应,而病态历史里的前置 result(在 call 之前)
+ * 会白占一个序号,把本属前一个 call 的 result 改名给后一个 call,repair 再按
+ * 改名后的 id 配对 → 张冠李戴(复审实测反例: call#1 收到 call#2 的真实结果、
+ * call#1 自己的结果被丢)。repair 先跑会丢弃前置/超编块、把错位块归位,产出的
+ * 结构合法历史上 result 与 call 严格同序,dedupe 的顺序配对才等于真实配对。
+ *
+ * 供两条 recovery rule 共用: server.ts 的透明重试是「命中规则先 strip,其余按
+ * 数组顺序顺手应用」,命中顺序会打乱数组里声明的修复顺序,只有组合函数能强制
+ * repair → dedupe。两步各自检测驱动,无对应异常时该步原样传递。
+ */
+export function repairToolExchangeStructureFromBody(rawBody: Buffer): Buffer | null {
+  const afterRepair = repairToolExchangeAdjacencyFromBody(rawBody);
+  const stage1 = afterRepair ?? rawBody;
+  const afterDedupe = dedupeDuplicateToolUseIdsFromBody(stage1);
+  if (afterRepair === null && afterDedupe === null) return null; // 两步都无改动
+  return afterDedupe ?? stage1;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // Per-model handlers ——
 // 每个 model 一个独立函数,内部自由实现 strip / 翻译 / 改值。
 // 加新 case: 写一个 handler + 在下面 STRIP_HANDLERS 字典里登记。
@@ -713,6 +1218,29 @@ const IMAGE_GENERATION_WITHOUT_ID_RE =
 const TOOL_USE_PROVIDER_SPECIFIC_FIELDS_RE =
   /\.tool_use\.provider_specific_fields[^"\r\n|]*extra inputs are not permitted|extra inputs are not permitted[^"\r\n|]*\.tool_use\.provider_specific_fields/i;
 
+// Anthropic 400: "messages: `tool_use` ids must be unique"(kimi kosong
+// STRUCTURAL_REQUEST 同族正则)。moonshot 实测容忍重复 id 不报错(静默错乱),
+// 但 LiteLLM 版本差异 / 真 Anthropic 上游会报;命中时用与主动 transform
+// 相同的唯一化 strip 重发。
+const DUPLICATE_TOOL_USE_ID_RE = /tool_use[\s\S]*ids must be unique/i;
+
+// tool 配对断裂 400 家族(kimi kosong TOOL_EXCHANGE_ADJACENCY 同族,按本链路
+// 可见措辞收敛):
+//   - Moonshot(chatcmpl 校验透出): "tool_call_id  is not found"(孤儿 result,
+//     原文双空格;锚定 tool_call_id,404 类 "not found" 不会误命中)
+//   - Anthropic 孤儿 result: "unexpected `tool_use_id` found in `tool_result`
+//     blocks"(两个锚点都限定,避免命中非 tool_result 上下文的 unexpected)
+//   - Anthropic 未配对 call: "`tool_use` ids were found without `tool_result`
+//     blocks immediately after"
+//   - OpenAI 系(LiteLLM 版本差异可能透出): 孤儿 tool 消息 "unexpected
+//     `tool_result`" / "messages with role 'tool' must be a response to a
+//     preceding message with 'tool_calls'";未配对 call "the following
+//     tool_call_ids did not have response messages: ..."
+// roles-must-alternate / first-message-must-be-user 不在此列: 本修复不处理
+// 合并与 leading 裁剪,匹配了也 strip 不出东西(实测命中再扩)。
+const TOOL_EXCHANGE_ADJACENCY_RE =
+  /tool_call_id[\s\S]*not found|unexpected\s+`?tool_use_id`?[\s\S]*tool_result|unexpected\s+`?tool_result|`?tool_use`?\s+ids were found without|tool_call_ids? did not have response messages|role\s+['"`]?tool['"`]?\s+must be a response to a preceding message/i;
+
 /**
  * invalid_encrypted_content 恢复规则: 剥掉请求体里所有 encrypted_content 重发。
  * 受 enabled() gate(由 host 接 silentEncryptedRetry 设置,默认关)。
@@ -825,6 +1353,49 @@ export function createEmptyAssistantMessageRecoveryRule(opts: {
     enabled: opts.enabled ?? (() => true),
     matches: (text) => EMPTY_ASSISTANT_MESSAGE_RE.test(text),
     strip: stripEmptyAssistantMessagesFromBody,
+    onRetry: opts.onRetry,
+    threadIdHeaders: opts.threadIdHeaders,
+  };
+}
+
+/**
+ * 重复 tool_use id 恢复规则: 上游 400 ``tool_use` ids must be unique` →
+ * 组合结构修复(先 adjacency 后唯一化,顺序约束见
+ * repairToolExchangeStructureFromBody)后重发。默认 always-on(修复是协议
+ * 级的,无异常时 strip 返回 null 自然跳过)。kimi code 的 strict resend 同族处理。
+ */
+export function createDuplicateToolUseIdRecoveryRule(opts: {
+  enabled?: () => boolean;
+  onRetry?: (threadId: string, model: string) => void;
+  threadIdHeaders?: readonly string[];
+} = {}): RecoveryRule {
+  return {
+    id: 'duplicate_tool_use_id',
+    enabled: opts.enabled ?? (() => true),
+    matches: (text) => DUPLICATE_TOOL_USE_ID_RE.test(text),
+    strip: repairToolExchangeStructureFromBody,
+    onRetry: opts.onRetry,
+    threadIdHeaders: opts.threadIdHeaders,
+  };
+}
+
+/**
+ * tool 配对断裂恢复规则: 孤儿 result / 未配对 call 的 400(moonshot
+ * `tool_call_id is not found` / Anthropic `unexpected tool_use_id` /
+ * `tool_use ids were found without tool_result` / OpenAI 系 wording)→
+ * 组合结构修复后重发。默认 always-on(与 kimi code projector 的 adjacency
+ * 修复同构)。
+ */
+export function createToolExchangeAdjacencyRecoveryRule(opts: {
+  enabled?: () => boolean;
+  onRetry?: (threadId: string, model: string) => void;
+  threadIdHeaders?: readonly string[];
+} = {}): RecoveryRule {
+  return {
+    id: 'tool_exchange_adjacency',
+    enabled: opts.enabled ?? (() => true),
+    matches: (text) => TOOL_EXCHANGE_ADJACENCY_RE.test(text),
+    strip: repairToolExchangeStructureFromBody,
     onRetry: opts.onRetry,
     threadIdHeaders: opts.threadIdHeaders,
   };

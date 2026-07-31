@@ -65,6 +65,9 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   const { dismissed, dismiss, restore, isNewUpdateAfterDismiss } = useUpdateBannerDismiss();
   // 就地确认态:替代原先的屏幕中央 ConfirmDialog。
   const [confirming, setConfirming] = useState(false);
+  // 复用关闭窗口保护链路的权威 busy 探针：只统计仍在执行的逻辑 turn，
+  // 不把 keepalive、已结束但仍在渲染收尾的状态误判为运行中任务。
+  const [hasSessionInTurn, setHasSessionInTurn] = useState(false);
   // 进入确认态后把焦点移到「取消」按钮 —— 键盘用户点入口键后原触发元素会卸载,
   // 若不主动聚焦,焦点会丢失、无法继续操作。刻意聚焦「取消」而非「确认」:让默认落在
   // 安全动作上,避免再按一次 Enter/Space 就直接更新的误操作(即 Radix 对破坏性操作
@@ -102,6 +105,33 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   useEffect(() => {
     if (status !== 'ready') setConfirming(false);
   }, [status]);
+
+  // 每次进入确认态都重新查询，避免沿用上一次打开弹层时的 busy 结果。
+  // handler 在 splash / login 阶段尚未注册时可能 reject；此 banner 只会在
+  // ready 主界面出现，但仍与 WindowControls 保持同样的安全兜底语义。
+  useEffect(() => {
+    if (!confirming) {
+      setHasSessionInTurn(false);
+      return;
+    }
+
+    let cancelled = false;
+    setHasSessionInTurn(false);
+    // Start the probe in a microtask so a synchronously unavailable IPC bridge
+    // is converted into a rejected promise and handled by the same fallback.
+    void Promise.resolve()
+      .then(() => window.electronAPI.anySessionInTurn())
+      .then((busy) => {
+        if (!cancelled) setHasSessionInTurn(busy);
+      })
+      .catch(() => {
+        if (!cancelled) setHasSessionInTurn(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [confirming]);
 
   // 新更新到达时自动 restore:isNewUpdateAfterDismiss 先检查当前 status 是否为
   // active update 态(ready / superseding),再对比 dismiss 时的快照——两个条件
@@ -351,11 +381,22 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
             延伸而不是第三段独立文案;没有链接时这个 wrapper 只有一个子元素,布局与
             加链接前完全一致。 */}
         <div className="flex flex-col items-center gap-1">
-          <p className="text-xs text-sidebar-muted">
+          <p
+            className={cn(
+              'text-center text-xs',
+              !isPreparing && confirming && hasSessionInTurn
+                ? 'text-[var(--warning-fg)]'
+                : 'text-sidebar-muted',
+            )}
+          >
             {isPreparing
               ? t('update.banner.preparingSubtitle')
               : confirming
-                ? t('update.banner.confirmHint')
+                ? t(
+                    hasSessionInTurn
+                      ? 'update.banner.confirmBusyHint'
+                      : 'update.banner.confirmHint',
+                  )
                 : t('update.banner.subtitle')}
           </p>
           {notesVersion && (

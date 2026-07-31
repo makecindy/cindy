@@ -4,6 +4,8 @@ import {
   formatRemoteMediaSize,
   isDesktopLocalMediaUrl,
   isResolvedRemoteMediaFresh,
+  localCopyResolvedMedia,
+  REMOTE_MEDIA_NEVER_EXPIRES,
   resolveMobileRemoteMedia,
 } from '@/session/remoteMedia';
 
@@ -100,6 +102,56 @@ describe('mobile remote media', () => {
     expect(isResolvedRemoteMediaFresh({ expiresAt: '2026-06-16T10:02:00.000Z' }, now)).toBe(true);
     expect(isResolvedRemoteMediaFresh({ expiresAt: '2026-06-16T10:00:30.000Z' }, now)).toBe(false);
     expect(isResolvedRemoteMediaFresh({ expiresAt: 'bad-date' }, now)).toBe(false);
+  });
+
+  describe('localCopyResolvedMedia', () => {
+    const resolved = {
+      url: 'https://oss.example/obj?sig=abc',
+      ossKey: 'user/obj-1',
+      mimeType: 'image/png',
+      size: 3_000_000,
+      expiresAt: '2026-06-16T11:00:00.000Z',
+      previewable: true,
+    };
+
+    it('swaps the presigned url for the local file and keeps the oss key', () => {
+      // 保留 ossKey 是硬要求:对象仍在世,退屏清理靠它 DELETE。
+      expect(localCopyResolvedMedia(resolved, {
+        uri: 'file:///cache/obj-1.png',
+        mimeType: 'image/png',
+        size: 2_999_888,
+      })).toEqual({
+        url: 'file:///cache/obj-1.png',
+        ossKey: 'user/obj-1',
+        mimeType: 'image/png',
+        size: 2_999_888,
+        expiresAt: REMOTE_MEDIA_NEVER_EXPIRES,
+        previewable: true,
+      });
+    });
+
+    it('falls back to the presigned entry when the disk copy is unusable', () => {
+      // 落盘被跳过(单对象超预算)/ 失败 / 落成了非图片:回落原条目,不能返回坏地址。
+      expect(localCopyResolvedMedia(resolved, null)).toBeNull();
+      expect(localCopyResolvedMedia(resolved, undefined)).toBeNull();
+      expect(localCopyResolvedMedia(resolved, { uri: '', mimeType: 'image/png', size: 1 })).toBeNull();
+      expect(localCopyResolvedMedia(resolved, {
+        uri: 'file:///cache/obj-1.bin',
+        mimeType: 'application/octet-stream',
+        size: 1,
+      })).toBeNull();
+    });
+
+    it('marks the local copy as non-expiring so reopening skips the network', () => {
+      const local = localCopyResolvedMedia(resolved, {
+        uri: 'file:///cache/obj-1.png',
+        mimeType: 'image/png',
+        size: 10,
+      });
+      // 队列按 isResolvedRemoteMediaFresh 判缓存可用性:本地文件必须恒 fresh,
+      // 否则再次点开又会回到「重新取件 + 重新下载」。
+      expect(local && isResolvedRemoteMediaFresh(local, Date.parse('2030-01-01T00:00:00.000Z'))).toBe(true);
+    });
   });
 
   it('formats byte sizes compactly', () => {

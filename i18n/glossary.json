@@ -55,6 +55,17 @@
       "note": "远端主机上由 Cindy 管理的 Codex 凭证目录（~/.xdt-server/v1/codex-home/），与用户本机 ~/.codex 相区分。四语统一保留英文原词（home 小写），避免各语言自造「Codex 主目录」等不同说法；syncAuth 与 codexAuthMissing 等远端登录态文案使用。"
     },
     {
+      "id": "anthropic-messages",
+      "status": "proposed",
+      "en": "Anthropic Messages",
+      "translations": {
+        "zh-CN": "Anthropic Messages",
+        "ja": "Anthropic Messages",
+        "ko": "Anthropic Messages"
+      },
+      "note": "Anthropic Messages API / wire protocol 的用户可见名称。四语统一保留官方英文名称，避免与普通的“消息”概念混译；先登记为 proposed，待产品术语评审后固化。"
+    },
+    {
       "id": "wechat",
       "status": "proposed",
       "en": "WeChat",
@@ -598,6 +609,17 @@
       "exempt": []
     },
     {
+      "id": "pin",
+      "status": "proposed",
+      "en": "Pin",
+      "translations": {
+        "zh-CN": "钉住",
+        "ja": "ピン留め",
+        "ko": "고정"
+      },
+      "note": "右侧栏插件面板页签的图钉:钉住 = 面板在所有对话中保留。动词对:Pin=钉住 / Unpin=取消钉住。2026-07-31 随图钉功能提出,待裁决。"
+    },
+    {
       "id": "project",
       "status": "decided",
       "en": "Project",
@@ -775,6 +797,11 @@
         "desktop:settings.lspMode.toast.enabled",
         "desktop:settings.personalization.placeholder",
         "desktop:settings.subagentModels.hint",
+        "desktop:newChat.modelSelector.subscriptionDirectDisabled.chatgpt",
+        "desktop:newChat.modelSelector.subscriptionDirectDisabled.xai",
+        "desktop:newChat.modelSelector.subscriptionDirectDisabled.generic",
+        "desktop:ccAgent.draft.remoteProviderUnsupported",
+        "desktop:ipcError.REMOTE_PROVIDER_UNSUPPORTED",
         "mobile/composer:voice.invalidSession",
         "mobile/composer:voice.missingConnectionProvider",
         "mobile/composer:voice.missingRefinerTargetProvider",
@@ -989,6 +1016,50 @@
       "exempt": [
         "desktop:sessionShare.import.useWorktreeHint"
       ]
+    },
+    {
+      "id": "model-category-tts",
+      "status": "proposed",
+      "en": "Text to Speech",
+      "translations": {
+        "zh-CN": "语音合成",
+        "ja": "音声合成",
+        "ko": "음성 합성"
+      },
+      "note": "issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=audio_speech 的语音合成模型（如 elevenlabs/eleven_v3）。原先与语音转写、实时音频混在一个笼统的「音频语音」分类里，本次拆分为独立类型。"
+    },
+    {
+      "id": "model-category-stt",
+      "status": "proposed",
+      "en": "Speech to Text",
+      "translations": {
+        "zh-CN": "语音转写",
+        "ja": "音声認識",
+        "ko": "음성 인식"
+      },
+      "note": "issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=audio_transcription 的语音转写/ASR 模型（如 gpt-4o-transcribe）。"
+    },
+    {
+      "id": "model-category-realtime",
+      "status": "proposed",
+      "en": "Realtime Audio",
+      "translations": {
+        "zh-CN": "实时语音",
+        "ja": "リアルタイム音声",
+        "ko": "실시간 음성"
+      },
+      "note": "issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mode=realtime 的实时多模态模型（如 gpt-realtime-2、gemini-omni-flash-preview）。"
+    },
+    {
+      "id": "model-category-compression",
+      "status": "proposed",
+      "en": "Compression",
+      "translations": {
+        "zh-CN": "压缩",
+        "ja": "圧縮",
+        "ko": "압축"
+      },
+      "note": "issue #882：模型管理/新对话选择器的分类标签，对应网关的文档压缩类模型（如 ai-gateway-doc）。此前被硬编码为笼统的 other 分类。"
     }
   ]
 }

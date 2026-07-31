@@ -34,6 +34,8 @@ export interface GhostPluginDetail extends GhostPluginListItem {
   tools: readonly GhostToolDecl[];
   hasSettingsUi: boolean;
   cindyCapabilities: readonly string[];
+  /** 申请了派活取件(agent.errand)——详情页据此渲染宿主统一的「AI 代办」配置卡。 */
+  hasErrand: boolean;
   panelMinWidth: number | null;
   installDir: string | null;
 }
@@ -195,6 +197,7 @@ export function toGhostPluginDetail(
       ...(manifest.cindy?.image ?? []).map((action) => `image.${action}`),
       ...(manifest.cindy?.video ?? []).map((action) => `video.${action}`),
     ],
+    hasErrand: manifest.agent?.errand === true,
     panelMinWidth: manifest.panel ? (manifest.panel.minWidth ?? 280) : null,
     installDir: ghost.dir,
   };

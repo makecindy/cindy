@@ -159,14 +159,19 @@ import { RendererBootGuard } from './renderer-boot-guard';
 import yaml from 'js-yaml';
 import matter from 'gray-matter';
 import type { Maker } from '@cindy/maker-core';
-import { im, feishuIm, startImOrchestrators, startImConnection, stopImConnection } from './im';
+import { im, feishuIm, registerTelegramBotConfigIpc, startImOrchestrators, startImConnection, stopImConnection } from './im';
 import * as authManager from './authManager';
 import { hasPersistedSessionHint } from './authSessionHint';
 import { createAccountDeletionIpcHandlers } from './accountDeletionIpc';
 import * as profileEdit from './profileEdit';
 import { uploadPublicAsset } from './ossPublicUpload';
 import { removeRefs as removeMediaRefs } from './cindy-media/ledger';
-import { installWebviewHardener } from './webview-security';
+import {
+  installWebviewHardener,
+  setRsbPopupHostResolver,
+  setRsbPopupOpenerReportSubscriber,
+  setRsbPopupOpenerResolver,
+} from './webview-security';
 import {
   installSelectionContextMenu,
   setSelectionContextMenuLocale,
@@ -260,6 +265,7 @@ import {
   installVoiceInputPowerRelease,
 } from './voice-input/powerReleaseNotifier';
 import { reapClaudeOrphansSync } from './claude-orphan-reaper';
+import { startAgentProcessPriorityWatcher } from './agent-process-priority';
 import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService';
 import { initNotificationService } from './notificationService';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
@@ -284,7 +290,10 @@ import {
   registerDeviceLinkIpc,
   defaultDeps as deviceLinkIpcDeps,
   handleInvoke as deviceLinkHandleInvoke,
+  setMirrorCacheReadGate,
 } from './device-link/ipc';
+import { getMirrorCache, MirrorCachePurgeError } from './device-link/mirrorCacheStore';
+import { drainPurgeQueue, enqueuePurge } from './device-link/mirrorCachePurgeQueue';
 import { assertCaptureHealthy } from './device-link/invoke-registry';
 // worktree-parallel-sessions: IPC 注册 + close-session 内的 fire-and-forget 删除钩子
 import {
@@ -426,8 +435,14 @@ import {
   resetSilentEncryptedRetrySettings,
   writeSilentEncryptedRetryEnabled,
 } from './maker-host/silent-encrypted-retry-store.js';
-import { resolveOwnerScopedSecretStorageKey } from './secrets/providerSecretStore.js';
-import { isRendererAccessibleSafeStorageKey } from '../shared/providerSecrets.js';
+import {
+  resolveOwnerScopedSecretStorageKey,
+  getProviderSecretStore,
+} from './secrets/providerSecretStore.js';
+import {
+  isRendererAccessibleSafeStorageKey,
+  type ProviderSecretId,
+} from '../shared/providerSecrets.js';
 import {
   readCompactionPct,
   readCompactionState,
@@ -462,6 +477,7 @@ import { registerContactsIpc } from './maker-ipc/contacts-ipc.js';
 import { disposeDesktopContactsManager } from './maker-host/maker-contacts-host.js';
 import { registerMakerHelpIpc } from './maker-ipc/help.js';
 import { registerHelpFeedbackIpc } from './maker-ipc/help-feedback.js';
+import { registerMyIssuesIpc } from './maker-ipc/my-issues.js';
 import { registerMakerPlanWriteIpc } from './maker-ipc/plan-write.js';
 import { registerMakerRewindIpc } from './maker-ipc/rewind.js';
 import { registerMakerForkIpc } from './maker-ipc/fork.js';
@@ -507,6 +523,7 @@ import {
 } from './window-behavior-settings-store.js';
 import {
   hideWindowToWindowsTray,
+  popUpWindowsTrayMenu,
   requestWindowsCloseBehavior,
   requestWindowsTrayQuit,
 } from './windowsTrayLifecycle.js';
@@ -522,10 +539,7 @@ import {
 } from '../shared/windowBehavior.js';
 import { getDesktopCommandRegistry, registerBuiltinDesktopCommands } from './commands/index.js';
 import { registerRemoteCmdIpc } from './commands/remoteCmdIpc.js';
-import {
-  resolvePreferredSystemLocale,
-  resolveSystemLocale,
-} from '../shared/locale.js';
+import { resolvePreferredSystemLocale, resolveSystemLocale } from '../shared/locale.js';
 import {
   IM_DEFAULT_SETTINGS,
   isImDefaultAgentKind,
@@ -848,6 +862,33 @@ async function ensureLifecycleDbClient(userId: string) {
 
 async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   skillhubAutoSyncService.cancelInFlight();
+  // 远程会话的镜像冷缓存里是别的设备的聊天内容。owner 命名空间已经保证下一个账号读不到
+  // 它,但登出后不该在盘上留着 —— 这里 owner 还指向**旧账号**(commitActiveAppSession 在
+  // teardown 之后才切),正是唯一能清准的时机。
+  //
+  // 删不掉时(Windows 文件锁 / 权限 / 并发写)**不阻断登出** —— 卡住登出比缓存残留更糟 ——
+  // 但也不能只记一行日志了事:把待清目录持久化进重试队列,下次启动与下次账号边界各消化
+  // 一次,直到真正删掉(review: codex P1)。顺手先消化一次历史遗留。
+  try {
+    await drainPurgeQueue();
+  } catch (err) {
+    authBoundaryLog.warn(`drain mirror cache purge queue on ${reason} failed:`, err);
+  }
+  try {
+    await getMirrorCache().clearAll();
+  } catch (err) {
+    authBoundaryLog.error(`clear device-link mirror cache on ${reason} failed:`, err);
+    if (err instanceof MirrorCachePurgeError) {
+      // remaining / barriers / tombstones 三样都要带上(同 IPC 侧的 queuePurgeRetry):
+      // 只传 root 的话,补删成功后队列既不知道该补自增哪个作废计数,也不会退役 `_account`
+      // 墓碑 —— 墓碑一直挂着就等于这个 owner 的缓存读被永久压住(review: codex P1)。
+      await enqueuePurge(err.root, err.remaining, err.barriers, err.tombstones).catch(
+        (enqueueErr: unknown) => {
+          authBoundaryLog.error('failed to enqueue mirror cache purge retry:', enqueueErr);
+        },
+      );
+    }
+  }
   // Cindy relay owns long-lived transports plus account-scoped task/binding
   // state. Drain ingress before discarding the owner-scoped store; otherwise a
   // late Telegram/Slack callback could write through the next account boundary.
@@ -972,6 +1013,15 @@ try {
   createLogger('claude-orphan-reaper').warn('initial reap threw', { error: String(err) });
 }
 
+// ── agent 进程优先级降档 watcher(agent 资源占用治理)─────────────────────
+// 设置(processPriority)为 normal 且无欠恢复进程时,每 tick 零成本(不扫进程表);
+// interval 已 unref,进程退出不被它拖住。所有失败 best-effort,不影响启动。
+try {
+  startAgentProcessPriorityWatcher();
+} catch (err) {
+  createLogger('agent-process-priority').warn('watcher start threw', { error: String(err) });
+}
+
 // ── 启动诊断 (issue #758) ────────────────────────────────────────────────
 // 上次异常退出尸检 (run marker) + Crashpad 本地 minidump + crash dump 扫描。
 // 必须在 app ready 前 (crashReporter.start 约束)、userData 定型后 (index.ts 的
@@ -988,9 +1038,14 @@ initStartupDiagnostics();
 //
 // packaged 下绝不开 — 任何带 9222 端口的 Chromium 进程都能被本机其他程序
 // 注入 JS, 是远程代码执行口子。dev 机器自然不在 attack surface 内。
+//
+// 端口可用 XDT_CDP_PORT 覆写(仅数字生效):并行多开沙箱时 9222 只有先起的
+// 实例能绑上, 后起实例要保住 CDP 调试面就换个端口。
 
 if (!app.isPackaged) {
-  app.commandLine.appendSwitch('remote-debugging-port', '9222');
+  const cdpPortOverride = process.env.XDT_CDP_PORT;
+  const cdpPort = cdpPortOverride && /^\d{2,5}$/.test(cdpPortOverride) ? cdpPortOverride : '9222';
+  app.commandLine.appendSwitch('remote-debugging-port', cdpPort);
 }
 
 // ── Webview hardener (RSB Phase 4) ──────────────────────────────────────
@@ -1093,6 +1148,21 @@ registerRsbBrowserBridgeIpc({
   getHostWebContents: () => rsbWindowController.getHostWebContents(),
   logger: createLogger('rsb-browser-bridge-bootstrap'),
 });
+// popup opener 反查:webview-security 的 popup 路由据此把 window.open 的目标
+// tab 归属到发起方 tab 的 session(而不是用户正在看的 session)。
+setRsbPopupOpenerResolver((webContentsId) => {
+  const record = getRsbBrowserBridge().findByWebContentsId(webContentsId);
+  return record ? { tabId: record.tabId, sessionId: record.sessionId } : null;
+});
+// report 到达事件订阅:归属等待从固定轮询窗口升级为事件驱动 —— report 落地的
+// 瞬间完成反查,超时只兜"report 永不来"的极端场景。
+setRsbPopupOpenerReportSubscriber((listener) =>
+  getRsbBrowserBridge().onReport((record) => listener(record.webContentsId)),
+);
+// popup 路由目标 host 动态解析:异步等待(归属反查 / deferred URL 捕获)期间用户
+// detach 侧边栏或切视图后,捕获时的 hostContents 已过时 —— 发送时刻按当前宿主
+// 形态解析(与 tab-op bridge 同一来源),消息才能落到活着的订阅者。
+setRsbPopupHostResolver(() => rsbWindowController.getHostWebContents());
 // Tab-op result handler for the main → renderer request/response bridge —
 // RsbWebviewBackend (Phase 3) uses this to drive `open` / `focus` / `close`
 // against the renderer's RSB store.
@@ -1172,10 +1242,7 @@ protocol.registerSchemesAsPrivileged([
 
 import started from 'electron-squirrel-startup';
 
-import {
-  APPLICATION_MENU_LABELS,
-  type ApplicationMenuLocale,
-} from './applicationMenuLabels.js';
+import { APPLICATION_MENU_LABELS, type ApplicationMenuLocale } from './applicationMenuLabels.js';
 
 if (started) {
   app.quit();
@@ -1476,7 +1543,7 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   if (mainWindow) {
     installApplicationMenu(mainWindow, currentApplicationMenuLocale);
   }
-  updateWindowsTrayMenu();
+  invalidateWindowsTrayMenu();
   getAgentIslandService()?.refreshLocalization();
   return { ok: true };
 });
@@ -1575,23 +1642,55 @@ const updatePresentationRecovery = isUpdateRelaunchCandidate
 // 让窗口 close handler 放行真正的销毁。
 let isQuitting = false;
 let windowsTray: Tray | null = null;
+// 当前的托盘菜单。我们自己 popUp(见 popUpWindowsTrayMenu 的注释),菜单对象必须由
+// JS 侧持有,不能只作为实参交出去。语言切换时置 null,下一次右键按新语言重建。
+let windowsTrayMenu: Menu | null = null;
+const windowsTrayLog = createLogger('windows-tray');
 const WINDOWS_CLOSE_PROMPT_FALLBACK_DELAY_MS = 2_000;
 
-function updateWindowsTrayMenu(): void {
-  if (!windowsTray || windowsTray.isDestroyed()) return;
-  windowsTray.setContextMenu(
-    Menu.buildFromTemplate([
-      {
-        label: t('settings.windowBehavior.trayMenu.show'),
-        click: () => focusMainWindow(),
-      },
-      { type: 'separator' },
-      {
-        label: t('settings.windowBehavior.trayMenu.quit'),
-        click: () => quitFromWindowsTray(),
-      },
-    ]),
-  );
+function buildWindowsTrayMenu(): Menu {
+  return Menu.buildFromTemplate([
+    {
+      label: t('settings.windowBehavior.trayMenu.show'),
+      click: () => focusMainWindow(),
+    },
+    { type: 'separator' },
+    {
+      label: t('settings.windowBehavior.trayMenu.quit'),
+      click: () => quitFromWindowsTray(),
+    },
+  ]);
+}
+
+/** 语言切换后丢弃缓存的菜单,下一次右键按新语言重建。 */
+function invalidateWindowsTrayMenu(): void {
+  windowsTrayMenu = null;
+}
+
+function openWindowsTrayMenu(): void {
+  // 这条日志是长期诊断留的,不是临时排查: 上游那条弹不出的 bug 是静默失败(不抛错),
+  // 所以日志里有没有这一行,是区分 "右键事件没到" 与 "事件到了但菜单没弹" 的唯一依据。
+  // 再有用户报 "右键没反应" 时,先让他看这行。
+  // 用 info 而不是 debug: packaged 的默认级别就是 info (logger.ts 的 level 解析),
+  // debug 会被 shouldLog 过滤掉 —— 那样它恰好在唯一需要它的场景(用户手上的正式包)
+  // 里不会出现。频率上也不担心刷屏: 只有用户真的右键托盘图标才会走到这里。
+  windowsTrayLog.info('tray right-click received, opening tray menu');
+  popUpWindowsTrayMenu<Menu>({
+    tray: windowsTray,
+    menu: windowsTrayMenu,
+    buildMenu: buildWindowsTrayMenu,
+    retainMenu: (menu) => {
+      windowsTrayMenu = menu;
+    },
+    onUnavailable: (reason) => {
+      windowsTrayLog.warn('tray menu requested without a live tray icon', { reason });
+    },
+    onError: (error) => {
+      windowsTrayLog.error('failed to open Windows tray menu', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  });
 }
 
 function quitFromWindowsTray(): void {
@@ -1622,30 +1721,39 @@ function quitFromWindowsTray(): void {
 function destroyWindowsTray(): void {
   windowsTray?.destroy();
   windowsTray = null;
+  windowsTrayMenu = null;
 }
 
 function ensureWindowsTray(): boolean {
-  if (windowsTray && !windowsTray.isDestroyed()) {
-    updateWindowsTrayMenu();
-    return true;
-  }
+  if (windowsTray && !windowsTray.isDestroyed()) return true;
 
+  let tray: Tray | null = null;
   try {
     const iconPath = app.isPackaged
       ? path.join(process.resourcesPath, 'icon.png')
       : path.join(__dirname, '../../resources/icon.png');
     const icon = nativeImage.createFromPath(iconPath);
     if (icon.isEmpty()) throw new Error(`tray icon is empty: ${iconPath}`);
-    windowsTray = new Tray(icon.resize({ width: 16, height: 16 }));
-    windowsTray.setToolTip(BRAND_NAME);
-    windowsTray.on('click', () => focusMainWindow());
-    updateWindowsTrayMenu();
+    tray = new Tray(icon.resize({ width: 16, height: 16 }));
+    tray.setToolTip(BRAND_NAME);
+    tray.on('click', () => focusMainWindow());
+    tray.on('right-click', () => openWindowsTrayMenu());
+    windowsTray = tray;
+    windowsTrayMenu = null;
     return true;
   } catch (err) {
-    createLogger('windows-tray').error('failed to create Windows tray icon', {
+    // 图标可能已经进了通知区域: 只置 null 会留下一个仍响应左键、却再也引用不到的
+    // 僵尸图标(destroyWindowsTray 摸不到它,右键也没有菜单可弹)。
+    try {
+      tray?.destroy();
+    } catch {
+      /* 已经没了,忽略 */
+    }
+    windowsTrayLog.error('failed to create Windows tray icon', {
       error: err instanceof Error ? err.message : String(err),
     });
     windowsTray = null;
+    windowsTrayMenu = null;
     return false;
   }
 }
@@ -3241,6 +3349,12 @@ const registerIpcHandlers = () => {
       source: 'host_config',
       ref: `provider:${providerId}`,
     });
+    // 向所有窗口广播 PROVIDER_CHANGED:useProviders 依赖此消息刷新连接态快照(多窗口同步)。
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) {
+        try { win.webContents.send(MAKER_PUSH.PROVIDER_CHANGED, {}); } catch { /* no-op */ }
+      }
+    }
   };
 
   ipcMain.handle(
@@ -3372,6 +3486,75 @@ const registerIpcHandlers = () => {
           error: 'remove_failed',
         };
       }
+    },
+  );
+
+  // 内置 API-key 供应商专用 IPC(查/写/删,has 只回存在性,永不回读明文)。
+  // 这些键在 MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS 里,通用 safeStorage IPC 已拦截;
+  // 此处是唯一合法的 renderer 访问通道。mutation 错误走统一 IPC 协议(throwIpcError),
+  // renderer 经 extractIpcError 解码;has 是查询,失败回 false 供 UI 按未配置渲染。
+  const BUILTIN_API_KEY_PROVIDER_IDS = new Set<ProviderSecretId>(['gemini', 'openai-images']);
+  // 真实 API key 远短于此(gemini ~39 / OpenAI 平台 ~200 字符);上限挡的是被攻陷
+  // renderer 塞超大字符串让 main 同步加密落盘耗资源(副作用前验证 payload 长度)。
+  const BUILTIN_API_KEY_MAX_LENGTH = 1024;
+  const requireBuiltinApiKeyProviderId = (providerId: unknown): ProviderSecretId => {
+    if (
+      typeof providerId !== 'string' ||
+      !BUILTIN_API_KEY_PROVIDER_IDS.has(providerId as ProviderSecretId)
+    ) {
+      throwIpcError('INVALID_PARAMS', `unsupported builtin api-key provider: ${String(providerId)}`);
+    }
+    return providerId as ProviderSecretId;
+  };
+
+  ipcMain.handle(
+    'builtin-api-key-has',
+    async (event: Electron.IpcMainInvokeEvent, providerId: unknown): Promise<boolean> => {
+      assertTrustedAppRendererEvent(event);
+      if (
+        typeof providerId !== 'string' ||
+        !BUILTIN_API_KEY_PROVIDER_IDS.has(providerId as ProviderSecretId)
+      ) {
+        return false;
+      }
+      try {
+        return getProviderSecretStore().has(providerId as ProviderSecretId);
+      } catch (err) {
+        console.error('[builtin-api-key-has]', err);
+        return false;
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'builtin-api-key-store',
+    async (event: Electron.IpcMainInvokeEvent, providerId: unknown, value: unknown): Promise<void> => {
+      assertTrustedAppRendererEvent(event);
+      const id = requireBuiltinApiKeyProviderId(providerId);
+      if (typeof value !== 'string' || value.length > BUILTIN_API_KEY_MAX_LENGTH) {
+        throwIpcError('INVALID_PARAMS', 'api key must be a string within the length limit');
+      }
+      const trimmed = value.trim();
+      if (!trimmed) {
+        throwIpcError('INVALID_PARAMS', 'api key must not be empty');
+      }
+      if (!getProviderSecretStore().set(id, trimmed)) {
+        throwIpcError('INTERNAL', 'failed to store the api key');
+      }
+      notifyProviderKeyChanged(id);
+    },
+  );
+
+  ipcMain.handle(
+    'builtin-api-key-remove',
+    async (event: Electron.IpcMainInvokeEvent, providerId: unknown): Promise<void> => {
+      assertTrustedAppRendererEvent(event);
+      const id = requireBuiltinApiKeyProviderId(providerId);
+      const result = getProviderSecretStore().remove(id);
+      if (!result.success) {
+        throwIpcError('INTERNAL', 'failed to remove the api key');
+      }
+      notifyProviderKeyChanged(id);
     },
   );
 
@@ -4341,8 +4524,7 @@ const registerIpcHandlers = () => {
       // final component was swapped to a symlink in the realpath→open race it
       // fails (ELOOP) instead of following into a denied file. Falls back to 0
       // where the platform lacks the flag (Windows), matching saveChatAttachment.
-      const noFollow =
-        typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
+      const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
       return readFileBytesForPreview(params, {
         isPathAllowed: (p) => isPathAllowedAgainst(p, getSensitiveMediaBlocklist()),
         realpath: (p) => fs.promises.realpath(p),
@@ -5426,6 +5608,11 @@ app.on('ready', async () => {
   // 本机 FS 目录浏览(项目选择器「添加远程项目」逐级浏览;device-link 经隧道在被控端执行)。
   // 无 DB / 无登录依赖,随其它顶层 handler 一起注册即可。
   registerFsBrowseIpc();
+  // 「我的 Issue」列表查询。刻意注册在这里而不是 registerMakerIpcsAfterSplash:
+  // 它不依赖 Maker 与 agent 二进制,而 /issues 在 splash check-environment 完成前
+  // (或二进制 provision 失败时)就可能被打开 —— 挂在 splash 之后会让页面拿到
+  // "No handler registered" 且不会自动恢复。
+  registerMyIssuesIpc();
   // chat-data-localization F2/F5：注册 localDb IPC + 干净退出快照钩子。
   // 不立即开 db；ensureReady 由 AuthContext 在登录成功后通过 IPC 触发。
   // onReady 回调 → scheduler-host 启动重试入口 (Phase 3)：splash 跑早于 user login
@@ -5512,11 +5699,7 @@ app.on('ready', async () => {
       // and unable to claim the owner from its first p2p message.
       startAccountIntegrationsAfterOwnerDbReady(userId, {
         isOwnerCurrent: (ownerId) =>
-          isLocalDbOwnerCurrent(
-            authManager.getAuthState(),
-            ownerId,
-            isAppSessionBoundaryPending(),
-          ),
+          isLocalDbOwnerCurrent(authManager.getAuthState(), ownerId, isAppSessionBoundaryPending()),
         startHookControlAccount,
         startImConnection,
         log: dbClientLog,
@@ -5582,6 +5765,13 @@ app.on('ready', async () => {
             });
           }
         }
+        // 账号数据就绪 = 启动链路上最早能确定「owner 绑定已认领、网关凭证已下发」的时机，
+        // 也是模型清单该被刷新到最新的时机。在这里强制跑一遍（无视冷却），别再等用户去打开
+        // 设置页或模型选择器把清单逼出来 —— 那是全新机器首启只看到少数模型的直接原因。
+        //
+        // 必须排在上面 codex 重启序列**之后**：那条序列末尾会按 auth 边界重读
+        // models_cache（cache miss 即清空防串号），并发跑会让刚发现的清单被空快照覆盖。
+        void requestProviderModelAutoRefresh('startup');
       })();
       void sweepStartupDraftImages({
         dbClient: getDbClient(),
@@ -5662,6 +5852,9 @@ app.on('ready', async () => {
   // IPC handlers 必须无条件注册:用户在 Settings 页保存凭证时, renderer 走这些
   // channel 跟 main 通信, 跟用户登录态无关。
   im.registerIpc();
+  // Telegram 个人 bot 行为/人格/群参与配置的 IPC(设置卡数据面),与 im.registerIpc
+  // 同期无条件注册;不能放 host.ts 模块顶层(mock electron 的单测收集期会炸)。
+  registerTelegramBotConfigIpc();
   // 挂业务 orchestrator: 订阅 feishuIm.onMessage / .onCardAction。orchestrator
   // 必须在 createWindow 前挂好,避免 renderer 起来后第一波 IPC / event 找不到
   // handler。FeishuBot 的 WS 长连接必须等当前用户 localDb ready 后再启动。
@@ -5696,15 +5889,29 @@ app.on('ready', async () => {
   let updateRelaunchRemoteBusy = false;
   initDeviceLinkService({
     onUpdateRelaunchBusyChanged: (busy) => {
-      const transition = decideUpdateRelaunchBusyTransition(
-        updateRelaunchRemoteBusy,
-        busy,
-      );
+      const transition = decideUpdateRelaunchBusyTransition(updateRelaunchRemoteBusy, busy);
       updateRelaunchRemoteBusy = transition.nextBusy;
       if (transition.shouldNotify) notifyUpdateAutoRelaunchBusyStateChanged();
     },
   });
+  // 上次登出时没删干净的远程会话镜像缓存(文件锁 / 权限占用),开机再清一次。
+  // 不阻塞启动关键路径,失败留在队列里等下一次(见 mirrorCachePurgeQueue)。
+  // 但**缓存读**要等它落定:否则 renderer 的 hydrate 可能读到正在被删的那份明文,
+  // 而 drain 完成也收不回已经画到屏上的行(review: codex P1)。
+  // 顺序有讲究:drain 与 gate 必须排在 registerDeviceLinkIpc() **之前** —— handler 一注册
+  // renderer 就可能发起缓存读,而 gate 默认是"已放行"(review: copilot)。
+  const startupPurgeDrain = drainPurgeQueue();
+  setMirrorCacheReadGate(startupPurgeDrain);
   registerDeviceLinkIpc();
+  void startupPurgeDrain
+    .then(({ purged, pending }) => {
+      if (purged > 0 || pending > 0) {
+        createLogger('device-link:mirror-cache-purge').info(
+          `startup purge drain: purged=${purged} pending=${pending}`,
+        );
+      }
+    })
+    .catch(() => undefined);
   // 注:invoke-capture 自检(assertCaptureHealthy)不在这里——maker:create-session / maker:send
   // 由 splash 后的 registerMakerIpcsAfterSplash 延迟注册,此刻尚未注册。自检已挪到该函数末尾
   // (见上方),那里所有 sentinel 都已就位,结果才准确。

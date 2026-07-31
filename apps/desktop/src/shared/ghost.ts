@@ -131,9 +131,21 @@ export interface GhostCardNeeds {
  * 申请 `agent` 槽默认只允许消费宿主在真实用户点击插件卡片时签发的
  * 一次性通行票。`background: true` 额外允许插件在没有当次点击票据时，
  * 对已经由用户建立过关联的会话发起回合；这是更高一档权限，安装时单列。
+ *
+ * `errand: true` = 派活取件(2026-07-31 开闸):允许插件把任务交给 Cindy
+ * agent 在**插件专属 errand 会话**里跑一轮,并把最终回复文字取回。与
+ * background 同为高风险加档,安装时单列。安全边界(全部主机代码强制):
+ * - 任务文本只进普通 user 消息,绝不进 system prompt(与 agent-request 同纪律);
+ * - errand 会话默认跑在专属对话目录、权限档默认 plan(只读);用户可在
+ *   设置里按插件放开到 acceptEdits/auto,**永不提供 bypassPermissions**
+ *   (2026-07-31 Lizi 定案);
+ * - errand 会话在侧边栏可见、可旁观、可随时停,不存在隐身会话;
+ * - 每插件同时最多 1 单在途,任务表在内存(重启即丢,查询按"查无此单、
+ *   可重新提交"处理)。
  */
 export interface GhostAgentNeeds {
   background?: boolean;
+  errand?: boolean;
 }
 
 /** 插件随包本地 Node 工作进程使用的 stdio 协议。 */
@@ -387,6 +399,18 @@ export const GHOST_CINDY_MEDIA_ACTIONS = ['deposit'] as const;
 export type GhostCindyMediaAction = (typeof GHOST_CINDY_MEDIA_ACTIONS)[number];
 
 /**
+ * cindy 槽·文本类可申请的动作(2026-07-31 开闸)。
+ *
+ * `oneshot` = 快问快答:意识递一段文字,主机经**轻量任务模型链**(与会话
+ * 起标题、任务一句话总结同一条通道,见 utility-model/oneShotCandidates.ts)
+ * 直答一次并把文字原样递回。不拉起 agent、无工具、无用户权限、不进任何
+ * 会话——它与 agent 派活(agent 槽 errand)是两条信任面完全不同的路:
+ * 这条只花模型额度,拿不到任何宿主能力。
+ */
+export const GHOST_CINDY_TEXT_ACTIONS = ['oneshot'] as const;
+export type GhostCindyTextAction = (typeof GHOST_CINDY_TEXT_ACTIONS)[number];
+
+/**
  * cindy 槽能力详单(卡槽⑤配套,原名模型槽,2026-07-11 设计定案):声明"这个意识被允许
  * 向主机点哪几类代办"——只有类目与动作,**不含任何具体模型/供应商信息**
  * (选型权在主机的解析表:调用时显式点名 > 意识专属覆盖 > 用户能力偏好 >
@@ -399,6 +423,8 @@ export interface GhostCindyNeeds {
   video?: GhostModelVideoAction[];
   /** 媒体类:deposit=寄存自己手里的媒体字节入总仓(换指纹,兼授权 release_media)。 */
   media?: GhostCindyMediaAction[];
+  /** 文本类:oneshot=快问快答(轻量任务模型链直答一次,无 agent 无工具)。 */
+  text?: GhostCindyTextAction[];
 }
 
 /**
@@ -1401,6 +1427,7 @@ const GHOST_CINDY_PERM_LABEL: Record<string, string> = {
   'video.generate': 'cindyVideoGenerate',
   'video.edit': 'cindyVideoEdit',
   'media.deposit': 'cindyMediaDeposit',
+  'text.oneshot': 'cindyTextOneshot',
 };
 
 /**
@@ -1410,6 +1437,7 @@ const GHOST_CINDY_PERM_LABEL: Record<string, string> = {
  */
 const GHOST_CINDY_PERM_DETAIL: Record<string, string> = {
   'media.deposit': 'cindyMediaDepositDetail',
+  'text.oneshot': 'cindyTextOneshotDetail',
 };
 
 /**
@@ -1479,6 +1507,16 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
         kind: 'agent',
         labelKey: 'agentBackground',
         detailKey: 'agentBackgroundDetail',
+      });
+    }
+    // 派活取件与 background 同级高风险,unshift 到清单上部单列——"能让
+    // agent 替它干活并拿走结果"必须在装入前看得清清楚楚。
+    if (manifest.agent?.errand === true) {
+      items.unshift({
+        key: 'agent:errand',
+        kind: 'agent',
+        labelKey: 'agentErrand',
+        detailKey: 'agentErrandDetail',
       });
     }
   }
@@ -2718,6 +2756,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       image: GHOST_MODEL_IMAGE_ACTIONS,
       video: GHOST_MODEL_VIDEO_ACTIONS,
       media: GHOST_CINDY_MEDIA_ACTIONS,
+      text: GHOST_CINDY_TEXT_ACTIONS,
     };
     for (const [category, actionsRaw] of Object.entries(cindyRaw)) {
       const allowed = actionTable[category];
@@ -2748,9 +2787,15 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       if (category === 'image') cindy.image = actions as GhostModelImageAction[];
       else if (category === 'video') cindy.video = actions as GhostModelVideoAction[];
       else if (category === 'media') cindy.media = actions as GhostCindyMediaAction[];
+      else if (category === 'text') cindy.text = actions as GhostCindyTextAction[];
       else return { ok: false, reason: `cindy 能力类目 ${JSON.stringify(category)} 尚未接线(主机缺陷)` };
     }
-    if (cindy.image === undefined && cindy.video === undefined && cindy.media === undefined) {
+    if (
+      cindy.image === undefined &&
+      cindy.video === undefined &&
+      cindy.media === undefined &&
+      cindy.text === undefined
+    ) {
       return { ok: false, reason: 'cindy 能力详单不能是空对象' };
     }
   }
@@ -2766,7 +2811,9 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       return { ok: false, reason: '声明了 agent 能力详单但 slots 未包含 "agent"' };
     }
     const agentRaw = raw.agent as Record<string, unknown>;
-    const unknownAgentField = Object.keys(agentRaw).find((key) => key !== 'background');
+    const unknownAgentField = Object.keys(agentRaw).find(
+      (key) => key !== 'background' && key !== 'errand',
+    );
     if (unknownAgentField) {
       return {
         ok: false,
@@ -2776,13 +2823,20 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     if (agentRaw.background !== undefined && typeof agentRaw.background !== 'boolean') {
       return { ok: false, reason: 'agent.background 必须是布尔值' };
     }
-    if (agentRaw.background !== true) {
+    if (agentRaw.errand !== undefined && typeof agentRaw.errand !== 'boolean') {
+      return { ok: false, reason: 'agent.errand 必须是布尔值' };
+    }
+    if (agentRaw.background !== true && agentRaw.errand !== true) {
       return {
         ok: false,
-        reason: 'agent 能力详单目前只有 background: true 这一项；仅需用户点击触发时请省略 agent 字段',
+        reason:
+          'agent 能力详单只有 background: true / errand: true 两项加档；仅需用户点击触发时请省略 agent 字段',
       };
     }
-    agent = { background: true };
+    agent = {
+      ...(agentRaw.background === true ? { background: true } : {}),
+      ...(agentRaw.errand === true ? { errand: true } : {}),
+    };
   }
 
   // node 槽详单:只收包内入口 + 固定 stdio 协议 + 生命周期。这里刻意采用
@@ -4176,6 +4230,99 @@ export type GhostPipeAgentResult =
       message: string;
     };
 
+/* ── agent 槽·派活取件(errand,2026-07-31 开闸)──────────────────────────
+ * 与 agent-request(把回合发进用户会话,结果给用户看)相对:errand 把任务
+ * 交给插件**专属 errand 会话**里的 agent 跑一轮,最终回复文字取回给插件。
+ * 须声明 'agent' 卡槽 + `agent.errand: true`(装入确认高风险单列)。
+ * agent/模型/effort/fast/供应商/权限档/工作目录由用户在插件详情页配置
+ * (缺省跟随新建草稿偏好;权限档默认 plan 只读,永不提供 bypassPermissions,
+ * 2026-07-31 Lizi 定案);任务文本只进普通 user 消息,绝不进 system prompt。 */
+
+/** 任务描述上限(与 agent-request 的最终消息同量级)。 */
+export const GHOST_ERRAND_MAX_TASK_CHARS = 32_768;
+/** 结构化上下文 JSON 化后的上限(与 agent-request 的 event 同量级)。 */
+export const GHOST_ERRAND_MAX_CONTEXT_JSON_CHARS = 65_536;
+/** 取回结果的截断上限(超长从头保留;截断时结果尾部带明示标记)。 */
+export const GHOST_ERRAND_MAX_RESULT_CHARS = 65_536;
+/** 完成结果保留时长(毫秒;同 cindy 异步代办:过期即清,查询按查无此单)。 */
+export const GHOST_ERRAND_JOB_TTL_MS = 30 * 60_000;
+/** 每插件相邻两次提交的最小间隔(毫秒;与 agent-request 后台档同口径)。
+ *  同步等待(mode:'wait')的绝对上限直接复用 GHOST_PIPE_CALL_MAX_TOTAL_MS。 */
+export const GHOST_ERRAND_MIN_INTERVAL_MS = 10_000;
+
+/**
+ * errand 会话允许的权限档。plan = 只读默认档;acceptEdits / auto 由用户在
+ * 插件详情页显式放开。**bypassPermissions 刻意不在此列**(2026-07-31 定案:
+ * 被骗的插件配上不设防会话 = 无人看守的用户全权,风险不可接受)。
+ */
+export const GHOST_ERRAND_PERMISSION_MODES = ['plan', 'acceptEdits', 'auto'] as const;
+export type GhostErrandPermissionMode = (typeof GHOST_ERRAND_PERMISSION_MODES)[number];
+
+/** 上行:派活提交与取件查询。 */
+export type GhostPipeAgentErrandRequest =
+  | {
+      type: 'agent-errand-request';
+      kind: 'run';
+      /** 任务描述(1–32768 字符;进 errand 会话的普通 user 消息)。 */
+      task: string;
+      /** 可选结构化上下文:主机 JSON.stringify 后附在任务消息尾部(≤64KB)。 */
+      context?: unknown;
+      /** errand 会话标题提示(仅首次创建该插件的 errand 会话时采用;1–100 字符)。 */
+      title?: string;
+      /**
+       * 'wait' = 同步吊着等完成(管子自动续命,30 分钟天花板);缺省异步:
+       * 受理后立即返回 jobId,用 kind:'query' 轮询取件。agent 干活是分钟级
+       * 的,推荐缺省异步 + 插件自己掌握轮询节奏。
+       */
+      mode?: 'wait';
+      /** 归因号(tool-call 触发时把 callId 原样带上;同 cindy-request 语义)。 */
+      callId?: string;
+    }
+  | {
+      type: 'agent-errand-request';
+      kind: 'query';
+      /** 提交受理时返回的任务号(仅本插件自己的任务可查)。 */
+      jobId: string;
+    };
+
+/** errand 结构化错误码(稳定契约,新增值不改旧值语义)。 */
+export type GhostAgentErrandErrorCode =
+  | 'INVALID_REQUEST'
+  | 'PERMISSION_DENIED'
+  | 'BUSY'
+  | 'RATE_LIMITED'
+  | 'HOST_NOT_READY'
+  | 'JOB_NOT_FOUND'
+  | 'SESSION_UNAVAILABLE'
+  | 'TURN_FAILED'
+  | 'TIMEOUT'
+  | 'INTERNAL';
+
+/** 下行(invoke 返回值):受理/进行中、完成、失败三态。 */
+export type GhostPipeAgentErrandResult =
+  | {
+      /** 受理(kind:'run' 异步)与查询进行中(kind:'query')共用本分支。 */
+      ok: true;
+      jobId: string;
+      status: 'running';
+      /** errand 会话 id(用户可在侧边栏找到它旁观)。 */
+      sessionId?: string;
+      /** 已耗时(秒;仅查询返回)。 */
+      elapsedSeconds?: number;
+    }
+  | {
+      /** 完成态:text 即 agent 本轮的最终回复(超长按上限截断并带标记)。 */
+      ok: true;
+      jobId: string;
+      status: 'done';
+      sessionId: string;
+      text: string;
+      /** 实际干活的 agent 与模型(用户配置的解析结果;诊断展示用)。 */
+      agentKind?: string;
+      model?: string;
+    }
+  | { ok: false; errorCode: GhostAgentErrandErrorCode; message: string };
+
 /**
  * node-request 长任务绝对上限(毫秒,15 分钟):声明 maxTotalMs 后请求最长
  * 可以吊多久的天花板——盖住旧 Bridge 约 12 分钟的构建时长,又不给真死掉的
@@ -4721,6 +4868,18 @@ export const GHOST_CINDY_DEPOSIT_BURST = 8;
 export const GHOST_CINDY_DEPOSIT_REFILL_MS = 1000;
 
 /**
+ * ── oneshot_text 政策参数(2026-07-31 开闸)────────────────────────────
+ * 快问快答走轻量任务模型链,秒级到几十秒,只有同步形态(没有 submit 档:
+ * 一单等不起的文本问答本身就是用错了通道)。上限对齐 agent-request 的
+ * 消息量级;回答预算钳在小额度——这是"快问快答",不是长文生成通道。
+ */
+export const GHOST_ONESHOT_TEXT_MAX_PROMPT_CHARS = 32_768;
+export const GHOST_ONESHOT_TEXT_MAX_TOKENS = 4096;
+export const GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS = 1024;
+/** 单次快问快答的等待上限(毫秒;超时按结构化失败收单,不吊管子)。 */
+export const GHOST_ONESHOT_TEXT_TIMEOUT_MS = 60_000;
+
+/**
  * 上行:cindy 槽代办请求(请 Cindy 本体出图 / 改图)。协议 type 为
  * 'cindy-request'(2026-07-11 由 'model-request' 更名,主机对旧名保持
  * 静默兼容)。选型双轨:
@@ -4864,6 +5023,33 @@ export type GhostPipeCindyRequest =
       kind: 'release_media';
       /** 要撤回的寄存指纹(sha256)。 */
       hash: string;
+    }
+  | {
+      /**
+       * 快问快答(2026-07-31 开闸):把 prompt 交给主机的轻量任务模型链
+       * 直答一次,答案文字随本次 invoke 的返回值递回。不拉起 agent、无
+       * 工具、无用户权限、不进任何会话。须声明 'cindy' 卡槽 +
+       * `cindy.text: ["oneshot"]`。
+       *
+       * 选型不在意识手里:走主机的轻量任务模型链(用户在设置里配置的
+       * 快速通道,与会话起标题同一条),链上无可用候选时收到
+       * errorCode:'NO_CANDIDATE' 的结构化失败——意识必须把它当正常失败面
+       * 处理(典型场景:用户只登了订阅、没配可用的快速通道凭证)。
+       */
+      type: 'cindy-request';
+      kind: 'oneshot_text';
+      /** 要问的内容(1–32768 字符)。 */
+      prompt: string;
+      /**
+       * 期望模型只输出 JSON:主机在提示里注明并校验返回可解析,解析失败
+       * 按 errorCode:'BAD_MODEL_OUTPUT' 收单(text 里带原始输出,便于排查)。
+       * 具体字段结构写进 prompt 里描述;主机不做 schema 逐字段校验。
+       */
+      expectJson?: boolean;
+      /** 回答长度预算(token;1–4096,缺省 1024)。 */
+      maxTokens?: number;
+      /** 归因号(同 gen_image 分支)。 */
+      callId?: string;
     };
 
 /**
@@ -4958,7 +5144,27 @@ export type GhostPipeModelResult =
       quotaUsedBytes: number;
       quotaLimitBytes: number;
     }
-  | { ok: false; message: string };
+  | {
+      /**
+       * oneshot_text 成功(独立成员:有 `text`、无 `url`/`status`,可与
+       * 其它成功分支可靠判别)。
+       */
+      ok: true;
+      text: string;
+      /** 实际应答的供应商/模型标识(轻量链解析结果;仅诊断展示用)。 */
+      model?: string;
+    }
+  | {
+      ok: false;
+      message: string;
+      /**
+       * 结构化错误码(2026-07-31 起 oneshot_text 填写;媒体代办暂只有
+       * message)。稳定值:'NO_CANDIDATE'(快速通道无可用模型/凭证)、
+       * 'BAD_MODEL_OUTPUT'(expectJson 下输出不可解析)、'RATE_LIMITED'、
+       * 'TIMEOUT'、'PERMISSION_DENIED'、'INVALID_PARAMS'、'INTERNAL'。
+       */
+      errorCode?: string;
+    };
 
 /* ── 订阅槽①:事件协议(2026-07-12 定案:一种事件模型,两个类型)──────
  * did- 旁听:fire-and-forget,主机投完即走,意识崩/慢不影响任何会话;

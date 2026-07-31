@@ -29,6 +29,14 @@ import {
   snapshotRsbBrowserTabs,
   subscribeTabResourceEvent,
 } from '../rsbBrowserBridge';
+import { _resetPopupTabsForTests, markPopupSpawnedTab } from '../popupTabs';
+import {
+  _resetStore,
+  addTab,
+  ensureHydrated,
+  getBucket,
+  setTabCloseInterceptor,
+} from '../../store';
 
 interface FakeIpcApi {
   report: ReturnType<typeof vi.fn>;
@@ -102,10 +110,14 @@ function clearIpc(): void {
 
 beforeEach(() => {
   _resetRsbBrowserBridgeForTests();
+  _resetPopupTabsForTests();
+  _resetStore();
 });
 
 afterEach(() => {
   _resetRsbBrowserBridgeForTests();
+  _resetPopupTabsForTests();
+  _resetStore();
   clearIpc();
   // Drain the pool — tests share the singleton.
   for (const tabId of browserWebviewPool.inspectTabIds()) {
@@ -193,6 +205,134 @@ describe('rsbBrowserBridge — initialization & teardown', () => {
     browserWebviewPool.release('tab-a');
 
     expect(api.release).toHaveBeenCalledWith({ tabId: 'tab-a' });
+  });
+
+  it('guest window.close() auto-closes a popup-spawned tab (残留空 tab 修复)', async () => {
+    installFakeIpc();
+    initRsbBrowserBridge();
+
+    // memory-only store 路径:无持久化 IPC,addTab 直接写 cache。
+    await ensureHydrated('sess-oauth');
+    const tab = await addTab('sess-oauth', 'web-browser', { url: 'https://cb.example' });
+    markPopupSpawnedTab(tab.id);
+    const entry = browserWebviewPool.acquire(tab.id);
+
+    // OAuth callback 页授权完成后的标准收尾:window.close() → webview 'close' 事件。
+    entry.webview.dispatchEvent(new Event('close'));
+
+    await vi.waitFor(() => {
+      expect(getBucket('sess-oauth').tabs).toHaveLength(0);
+      // 后台自关没有 BrowserTabBody unmount cleanup 兜底,bridge 必须显式释放
+      // pool entry(销毁 guest webContents + 同步 main 端 registry)。放进
+      // waitFor:closeTab 的乐观更新先于 release 落地,分开断言会撞时序。
+      expect(browserWebviewPool.peek(tab.id)).toBeNull();
+    });
+  });
+
+  it('guest 自关对 closeTab 瞬态失败按延迟重试,不静默丢弃关闭意图', async () => {
+    installFakeIpc();
+    // 装 localDb stub 让 store 走持久化路径 —— memory-only 下 closeTab 不会失败,
+    // 测不到重试分支。close 事件不重发,首次 overload 若被吞掉 = 空 tab 复活。
+    const tabsIpc = {
+      list: vi.fn(async () => ({ tabs: [], activeTabId: null })),
+      upsert: vi.fn(async () => ({ ok: true })),
+      close: vi.fn(async () => ({ ok: true })),
+      setActive: vi.fn(async () => ({ ok: true })),
+      reorder: vi.fn(async () => ({ ok: true })),
+    };
+    (
+      window as unknown as { electronAPI: { localDb?: unknown } }
+    ).electronAPI.localDb = { rightSidebarTabs: tabsIpc };
+    initRsbBrowserBridge();
+
+    await ensureHydrated('sess-retry');
+    const tab = await addTab('sess-retry', 'web-browser', { url: 'https://cb.example' });
+    markPopupSpawnedTab(tab.id);
+    const entry = browserWebviewPool.acquire(tab.id);
+
+    tabsIpc.close.mockRejectedValueOnce(new Error('db worker RPC queue overloaded'));
+    entry.webview.dispatchEvent(new Event('close'));
+
+    await vi.waitFor(
+      () => {
+        expect(getBucket('sess-retry').tabs).toHaveLength(0);
+      },
+      { timeout: 2000 },
+    );
+    // 首次失败 + 重试成功 = 恰好 2 次。
+    expect(tabsIpc.close).toHaveBeenCalledTimes(2);
+  });
+
+  it('pool release (LRU 淘汰) 不清 popup 标记 —— tab 重建后仍能自关', async () => {
+    installFakeIpc();
+    initRsbBrowserBridge();
+
+    await ensureHydrated('sess-lru');
+    const tab = await addTab('sess-lru', 'web-browser', { url: 'https://cb.example' });
+    markPopupSpawnedTab(tab.id);
+    browserWebviewPool.acquire(tab.id);
+
+    // 模拟 LRU 淘汰:webview 实例销毁,但 tab 仍在 store bucket 里。
+    browserWebviewPool.release(tab.id);
+    expect(getBucket('sess-lru').tabs).toHaveLength(1);
+
+    // 用户切回该 tab → webview 重建,callback 页重新加载后 window.close()。
+    // 若 release 误清了标记,这次自关会被忽略、空 tab 再次残留。
+    const revived = browserWebviewPool.acquire(tab.id);
+    revived.webview.dispatchEvent(new Event('close'));
+
+    await vi.waitFor(() => {
+      expect(getBucket('sess-lru').tabs).toHaveLength(0);
+    });
+  });
+
+  it('同 session 两个 popup 同时自关时串行处理,不互相覆盖乐观删除', async () => {
+    installFakeIpc();
+    initRsbBrowserBridge();
+
+    await ensureHydrated('sess-both');
+    const first = await addTab('sess-both', 'web-browser', { url: 'https://a.example' });
+    const second = await addTab('sess-both', 'web-browser', { url: 'https://b.example' });
+    markPopupSpawnedTab(first.id);
+    markPopupSpawnedTab(second.id);
+    const firstEntry = browserWebviewPool.acquire(first.id);
+    const secondEntry = browserWebviewPool.acquire(second.id);
+    // close interceptor 让 closeTab 在"抓完 bucket 快照"和"写回 cache"之间真的
+    // 让出一次 microtask —— 真实场景里这个让出点来自 interceptor /
+    // plugin.onBeforeClose / 持久化 IPC,并发窗口就开在这里。
+    for (const id of [first.id, second.id]) {
+      setTabCloseInterceptor(id, async () => {
+        await Promise.resolve();
+        return true;
+      });
+    }
+
+    // 两个 OAuth 流几乎同时收尾。closeTab 在入口抓 bucket 快照、await 后才落盘,
+    // 并发跑会让后完成的那条把对方已删的 tab 写回 cache(或回滚掉两次删除)。
+    firstEntry.webview.dispatchEvent(new Event('close'));
+    secondEntry.webview.dispatchEvent(new Event('close'));
+
+    await vi.waitFor(() => {
+      expect(getBucket('sess-both').tabs).toHaveLength(0);
+    });
+    // 复活检测:再多跑几个 microtask/timer tick,确认没有 tab 被写回。
+    await new Promise((r) => setTimeout(r, 10));
+    expect(getBucket('sess-both').tabs).toHaveLength(0);
+  });
+
+  it('guest window.close() on a NON-popup tab is ignored (script-opened-only 语义)', async () => {
+    installFakeIpc();
+    initRsbBrowserBridge();
+
+    await ensureHydrated('sess-user');
+    const tab = await addTab('sess-user', 'web-browser', { url: 'https://page.example' });
+    const entry = browserWebviewPool.acquire(tab.id);
+
+    entry.webview.dispatchEvent(new Event('close'));
+
+    // 恶意 / 意外的 window.close() 不得关掉用户自己开的 tab。
+    await new Promise((r) => setTimeout(r, 10));
+    expect(getBucket('sess-user').tabs).toHaveLength(1);
   });
 
   it('binds main → pool pin/unpin sync', () => {

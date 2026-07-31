@@ -1,15 +1,18 @@
 /**
- * agent-proxy 策略层单测。
+ * agent-proxy 策略层单测 (固定端口 + 双模式版)。
  *
  * 覆盖:
  *   - buildAgentProxyEnv / buildAgentProxyEnvUppercase / buildAgentProxyMarkerContent
- *     的内容契约 (env 键集、URL 形态、NO_PROXY)
+ *     的内容契约 (env 键集、URL 透传、NO_PROXY)
  *   - reconcileCodexAgentProxyEnv 的对账状态机:
- *     marker 一致 → 零副作用; 漂移 → 重写 + pkill; 关闭 → 删除 + pkill
- *   - ensureAgentProxyTunnel 的 pref gate (关 → null, 开 → 建隧道)
+ *     marker 一致 → 零副作用; 漂移 → 重写 + pkill; 关闭 → 删除 + pkill;
+ *     live turn → 推迟 (不写不杀); env 模式 marker 用用户 URL
+ *   - applyAgentProxyForHost 的失败上报与 per-host 串行化
+ *   - prefs store 的双模式 round-trip 与旧数据迁移
  *
  * prefs store 依赖 electron app.getPath, 用 vi.mock 替换; RemoteHost 用
- * 最小 fake (exec 脚本断言 + ensureRemoteForward stub)。
+ * 最小 fake (exec 脚本断言)。代建隧道的保活器在 agent-proxy-tunnel.test.ts
+ * 单独测 — 本文件不 initAgentProxy, keeper 未装配时相关入口是 no-op。
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -47,16 +50,22 @@ import {
   buildAgentProxyEnv,
   buildAgentProxyEnvUppercase,
   buildAgentProxyMarkerContent,
-  ensureAgentProxyTunnel,
+  clearAgentProxyTunnelState,
   getAgentProxyTunnelState,
+  getRemoteAgentProxyEnv,
+  hasPendingAgentProxyReconcile,
+  initAgentProxy,
   killRemoteCodexDaemon,
   reconcileCodexAgentProxyEnv,
+  resolveAgentProxyUrl,
+  setAgentProxyLiveTurnChecker,
 } from '../agent-proxy';
 import {
   getSshHostAgentProxy,
   getSshHostAutoConnect,
   setSshHostAgentProxy,
   setSshHostAutoConnect,
+  type SshHostAgentProxyPref,
 } from '../ssh-host-prefs-store';
 
 interface ExecCall {
@@ -65,15 +74,23 @@ interface ExecCall {
 }
 
 /** 最小 RemoteHost fake: 记录 exec, cat/rm marker + pkill 走脚本内容断言。 */
-function makeFakeHost(opts: { marker?: string | null; remotePort?: number } = {}) {
+function makeFakeHost(opts: { marker?: string | null } = {}) {
   const state = {
     marker: opts.marker ?? null,
     execCalls: [] as ExecCall[],
     pkillCount: 0,
-    forwards: [] as Array<{ localHost: string; localPort: number; remotePort: number }>,
   };
   const host = {
     id: 'test-host',
+    config: {
+      id: 'test-host',
+      hostname: '10.0.0.1',
+      port: 22,
+      user: 'deploy',
+      authMethod: 'agent',
+      source: 'manual',
+    },
+    getStatus: () => 'ready',
     async exec(cmd: string, execOpts?: { input?: string }) {
       state.execCalls.push({ cmd, input: execOpts?.input });
       if (cmd.includes('cat "') && cmd.includes('agent-proxy.env')) {
@@ -93,36 +110,43 @@ function makeFakeHost(opts: { marker?: string | null; remotePort?: number } = {}
       }
       return { stdout: '', stderr: '', exitCode: 0, signal: null };
     },
-    async ensureRemoteForward(spec: { localHost: string; localPort: number }) {
-      const remotePort = opts.remotePort ?? 17893;
-      state.forwards.push({ ...spec, remotePort });
-      return { remotePort, close: async () => {} };
-    },
-    async closeAllRemoteForwards() {
-      state.forwards = [];
-    },
-    async closeRemoteForward(localHost: string, localPort: number) {
-      state.forwards = state.forwards.filter(
-        (f) => !(f.localHost === localHost && f.localPort === localPort),
-      );
-    },
-    listRemoteForwards() {
-      return state.forwards.map((f) => ({ ...f, armed: true }));
-    },
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return { host: host as any, state };
 }
 
-const PREF = { enabled: true, localHost: '127.0.0.1', localPort: 7890 };
+const TUNNEL_PREF: SshHostAgentProxyPref = {
+  enabled: true,
+  mode: 'tunnel',
+  localHost: '127.0.0.1',
+  localPort: 7890,
+  remotePort: 17893,
+};
+
+const ENV_PREF: SshHostAgentProxyPref = {
+  enabled: true,
+  mode: 'env',
+  proxyUrl: 'http://127.0.0.1:7890',
+};
 
 beforeEach(() => {
   prefsFileContent = null;
+  // prefs cache / tunnel state 都是模块级 — 显式清空, 防跨用例串味。
+  setSshHostAgentProxy('test-host', null);
+  clearAgentProxyTunnelState('test-host');
+  setAgentProxyLiveTurnChecker(() => false);
+});
+
+describe('resolveAgentProxyUrl', () => {
+  it('tunnel mode pins the fixed remote port; env mode passes the URL through', () => {
+    expect(resolveAgentProxyUrl(TUNNEL_PREF)).toBe('http://127.0.0.1:17893');
+    expect(resolveAgentProxyUrl(ENV_PREF)).toBe('http://127.0.0.1:7890');
+  });
 });
 
 describe('buildAgentProxyEnv', () => {
-  it('builds dual-case proxy env pointing at the tunnel port', () => {
-    const env = buildAgentProxyEnv(17893);
+  it('builds dual-case proxy env pointing at the proxy URL', () => {
+    const env = buildAgentProxyEnv('http://127.0.0.1:17893');
     expect(env.HTTPS_PROXY).toBe('http://127.0.0.1:17893');
     expect(env.HTTP_PROXY).toBe('http://127.0.0.1:17893');
     expect(env.https_proxy).toBe('http://127.0.0.1:17893');
@@ -132,17 +156,18 @@ describe('buildAgentProxyEnv', () => {
   });
 
   it('uppercase-only variant satisfies the env-block gatekeeper', () => {
-    const env = buildAgentProxyEnvUppercase(17893);
+    const env = buildAgentProxyEnvUppercase('socks5://10.0.0.5:1080');
     for (const key of Object.keys(env)) {
       expect(key).toMatch(/^[A-Z_][A-Z0-9_]*$/);
     }
     expect(Object.keys(env)).toEqual(['HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY']);
+    expect(env.HTTPS_PROXY).toBe('socks5://10.0.0.5:1080');
   });
 });
 
 describe('buildAgentProxyMarkerContent', () => {
-  it('is a sourceable shell snippet with the tunnel URL', () => {
-    const content = buildAgentProxyMarkerContent(18000);
+  it('is a sourceable shell snippet with the proxy URL', () => {
+    const content = buildAgentProxyMarkerContent('http://127.0.0.1:18000');
     expect(content).toContain("export HTTPS_PROXY='http://127.0.0.1:18000'");
     expect(content).toContain("export https_proxy='http://127.0.0.1:18000'");
     expect(content).toContain("export NO_PROXY='localhost,127.0.0.1,::1'");
@@ -150,44 +175,32 @@ describe('buildAgentProxyMarkerContent', () => {
   });
 });
 
-describe('ensureAgentProxyTunnel', () => {
+describe('getRemoteAgentProxyEnv', () => {
   it('returns null when the pref is off', async () => {
-    const { host, state } = makeFakeHost();
-    const result = await ensureAgentProxyTunnel(host);
-    expect(result).toBeNull();
-    expect(state.forwards).toHaveLength(0);
+    const { host } = makeFakeHost();
+    expect(await getRemoteAgentProxyEnv(host)).toBeNull();
   });
 
-  it('opens the forward to the pref target when enabled', async () => {
-    setSshHostAgentProxy('test-host', PREF);
+  it('env mode returns the user URL without touching any tunnel', async () => {
+    setSshHostAgentProxy('test-host', ENV_PREF);
     const { host, state } = makeFakeHost();
-    const result = await ensureAgentProxyTunnel(host);
-    expect(result).toEqual({ remotePort: 17893, staleForwards: [] });
-    expect(state.forwards).toEqual([{ localHost: '127.0.0.1', localPort: 7890, remotePort: 17893 }]);
+    const env = await getRemoteAgentProxyEnv(host);
+    expect(env?.HTTPS_PROXY).toBe('http://127.0.0.1:7890');
+    expect(state.execCalls).toHaveLength(0);
   });
 
-  it('closes stale forwards whose target no longer matches the pref (review R5)', async () => {
-    // pref 目标被编辑 (7890 → 1080): 旧目标的 forward 必须拆掉, 否则残留并
-    // 随重连 re-arm, 远端多暴露一个隧道口。
-    setSshHostAgentProxy('test-host', PREF);
-    const { host, state } = makeFakeHost();
-    await ensureAgentProxyTunnel(host);
-    expect(state.forwards).toHaveLength(1);
-
-    setSshHostAgentProxy('test-host', { ...PREF, localPort: 1080 });
-    const result = await ensureAgentProxyTunnel(host);
-    expect(result).toMatchObject({ remotePort: 17893 });
-    expect(result?.staleForwards).toHaveLength(1);
-    expect(result?.staleForwards[0]).toMatchObject({ localHost: '127.0.0.1', localPort: 7890 });
-    // 旧 7890 已拆 (默认 closeStale 立即拆), 只剩新 1080。
-    expect(state.forwards).toEqual([{ localHost: '127.0.0.1', localPort: 1080, remotePort: 17893 }]);
+  it('tunnel mode rejects when the keeper is not armed (fail-closed, no silent direct)', async () => {
+    // 本测试文件不 initAgentProxy — keeper 未装配, ensureTunnelUp 立即拒绝。
+    setSshHostAgentProxy('test-host', TUNNEL_PREF);
+    const { host } = makeFakeHost();
+    await expect(getRemoteAgentProxyEnv(host)).rejects.toThrow();
   });
 });
 
 describe('reconcileCodexAgentProxyEnv', () => {
-  it('no-ops when the marker already matches the desired content', async () => {
-    setSshHostAgentProxy('test-host', PREF);
-    const desired = buildAgentProxyMarkerContent(17893).trim();
+  it('no-ops when the marker already matches the desired content (tunnel mode)', async () => {
+    setSshHostAgentProxy('test-host', TUNNEL_PREF);
+    const desired = buildAgentProxyMarkerContent('http://127.0.0.1:17893').trim();
     const { host, state } = makeFakeHost({ marker: desired });
     const result = await reconcileCodexAgentProxyEnv(host);
     expect(result).toEqual({ markerChanged: false, daemonRestarted: false });
@@ -195,16 +208,51 @@ describe('reconcileCodexAgentProxyEnv', () => {
   });
 
   it('writes the marker and kills the daemon when drifted', async () => {
-    setSshHostAgentProxy('test-host', PREF);
+    setSshHostAgentProxy('test-host', TUNNEL_PREF);
     const { host, state } = makeFakeHost({ marker: null });
     const result = await reconcileCodexAgentProxyEnv(host);
     expect(result).toEqual({ markerChanged: true, daemonRestarted: true });
-    expect(state.marker).toBe(buildAgentProxyMarkerContent(17893).trim());
+    expect(state.marker).toBe(buildAgentProxyMarkerContent('http://127.0.0.1:17893').trim());
     expect(state.pkillCount).toBe(1);
   });
 
+  it('env mode writes the user URL verbatim into the marker', async () => {
+    setSshHostAgentProxy('test-host', { ...ENV_PREF, proxyUrl: 'socks5://10.0.0.5:1080' });
+    const { host, state } = makeFakeHost({ marker: null });
+    const result = await reconcileCodexAgentProxyEnv(host);
+    expect(result).toEqual({ markerChanged: true, daemonRestarted: true });
+    expect(state.marker).toContain("export HTTPS_PROXY='socks5://10.0.0.5:1080'");
+  });
+
+  it('defers (no write, no kill) when a live turn is running on the host', async () => {
+    // 漂移生效要重启 daemon → 会断 live turn: 必须推迟, 漂移持久,
+    // turn-done / 下次 session start 补刀。
+    setSshHostAgentProxy('test-host', TUNNEL_PREF);
+    setAgentProxyLiveTurnChecker((hostId) => hostId === 'test-host');
+    const { host, state } = makeFakeHost({ marker: null });
+    const result = await reconcileCodexAgentProxyEnv(host);
+    expect(result).toEqual({ markerChanged: false, daemonRestarted: false, deferredForLiveTurn: true });
+    expect(state.marker).toBeNull();
+    expect(state.pkillCount).toBe(0);
+
+    // turn 结束后同一调用点重试 → 正常收敛。
+    setAgentProxyLiveTurnChecker(() => false);
+    const retry = await reconcileCodexAgentProxyEnv(host);
+    expect(retry).toEqual({ markerChanged: true, daemonRestarted: true });
+    expect(state.pkillCount).toBe(1);
+  });
+
+  it('live turn does not defer the fast path (marker already consistent)', async () => {
+    setSshHostAgentProxy('test-host', TUNNEL_PREF);
+    setAgentProxyLiveTurnChecker(() => true);
+    const desired = buildAgentProxyMarkerContent('http://127.0.0.1:17893').trim();
+    const { host, state } = makeFakeHost({ marker: desired });
+    const result = await reconcileCodexAgentProxyEnv(host);
+    expect(result).toEqual({ markerChanged: false, daemonRestarted: false });
+    expect(state.pkillCount).toBe(0);
+  });
+
   it('deletes the marker and kills the daemon when the pref is off', async () => {
-    // 模块级 prefs cache 跨用例共享 — 显式清除, 模拟 "pref 关闭" 场景。
     setSshHostAgentProxy('test-host', null);
     const { host, state } = makeFakeHost({ marker: "export HTTPS_PROXY='http://127.0.0.1:17893'" });
     const result = await reconcileCodexAgentProxyEnv(host);
@@ -222,9 +270,7 @@ describe('reconcileCodexAgentProxyEnv', () => {
   });
 
   it('fails closed when the marker write fails: throws and does not kill the daemon (codex R7 P1)', async () => {
-    // exec 对非零退出码 resolve 不 throw — 写失败必须显式挡, 否则 reconcile
-    // 继续 pkill, daemon 起来没 marker 直连, fail-closed 破。
-    setSshHostAgentProxy('test-host', PREF);
+    setSshHostAgentProxy('test-host', TUNNEL_PREF);
     const { host, state } = makeFakeHost({ marker: null });
     const baseExec = host.exec.bind(host);
     host.exec = async (cmd: string, execOpts?: { input?: string }) => {
@@ -252,9 +298,6 @@ describe('reconcileCodexAgentProxyEnv', () => {
   });
 
   it('rolls the marker back when pkill fails so the next reconcile retries the kill (codex R10 P2)', async () => {
-    // disable 场景 (desired=null, current=旧 proxy marker): pkill 失败时若让
-    // marker 停在 null, 下次 reconcile 命中 fast path (null===null) 永不重试
-    // kill — 存活 daemon 握着指向已拆隧道的 proxy env 一直跑到手动重启。
     setSshHostAgentProxy('test-host', null);
     const staleMarker = "export HTTPS_PROXY='http://127.0.0.1:17893'";
     const { host, state } = makeFakeHost({ marker: staleMarker });
@@ -284,78 +327,27 @@ describe('reconcileCodexAgentProxyEnv', () => {
     const second = await reconcileCodexAgentProxyEnv(host);
     expect(second).toEqual({ markerChanged: true, daemonRestarted: true });
     expect(state.marker).toBeNull();
-    // 两次 reconcile 各发了一次 pkill: 第一次失败 (mock 拦截), 第二次重试成功。
     expect(failedPkillCount).toBe(1);
     expect(state.pkillCount).toBe(1);
   });
 
-  it('closes the old forward only after the daemon restart succeeds during a rebind (codex R17 P2)', async () => {
-    // rebind (7890 → 1080): reconcile 先建后拆 — daemon 重启成功后才拆旧。
-    setSshHostAgentProxy('test-host', PREF);
+  it('reconnect does not create drift: marker content is static per pref (fixed port)', async () => {
+    // 旧方案的回归靶: 动态端口重连重绑 → marker 漂移 → pkill 正在跑的
+    // daemon。固定端口下同一 pref 的 desired 恒定, 重复 reconcile 恒 fast path。
+    setSshHostAgentProxy('test-host', TUNNEL_PREF);
     const { host, state } = makeFakeHost({ marker: null });
-    // 端口递增分配, 让 rebind 后 desired marker 与旧 marker 不同 (fake 默认
-    // 恒 17893 时 marker 内容不变会走 fast path, 测不到拆旧时机)。
-    let nextPort = 17893;
-    host.ensureRemoteForward = async (spec: { localHost: string; localPort: number }) => {
-      const remotePort = nextPort;
-      nextPort += 1;
-      state.forwards.push({ ...spec, remotePort });
-      return { remotePort, close: async () => {} };
-    };
-    // 先 enable 成功 (旧目标 7890: forward + marker 都就位)。
     await reconcileCodexAgentProxyEnv(host);
-    expect(state.forwards).toEqual([{ localHost: '127.0.0.1', localPort: 7890, remotePort: 17893 }]);
-
-    setSshHostAgentProxy('test-host', { ...PREF, localPort: 1080 });
-    const result = await reconcileCodexAgentProxyEnv(host);
-    expect(result).toEqual({ markerChanged: true, daemonRestarted: true });
-    // daemon 重启成功 → 旧 7890 已拆, 只剩新 1080。
-    expect(state.forwards).toEqual([{ localHost: '127.0.0.1', localPort: 1080, remotePort: 17894 }]);
-  });
-
-  it('keeps the old forward when the daemon survives pkill during a rebind (codex R17 P2)', async () => {
-    // rebind + pkill 失败: marker 回滚 (R10), 旧 7890 forward 保留 (存活
-    // daemon 流量不断), 新 1080 forward 闲置待下轮 reconcile 复用。
-    setSshHostAgentProxy('test-host', PREF);
-    const { host, state } = makeFakeHost({ marker: null });
-    let nextPort = 17893;
-    host.ensureRemoteForward = async (spec: { localHost: string; localPort: number }) => {
-      const remotePort = nextPort;
-      nextPort += 1;
-      state.forwards.push({ ...spec, remotePort });
-      return { remotePort, close: async () => {} };
-    };
-    await reconcileCodexAgentProxyEnv(host);
-    const oldMarker = state.marker;
-
-    setSshHostAgentProxy('test-host', { ...PREF, localPort: 1080 });
-    const baseExec = host.exec.bind(host);
-    host.exec = async (cmd: string, execOpts?: { input?: string }) => {
-      if (cmd.includes('pkill')) {
-        return {
-          stdout: '',
-          stderr: 'daemon still alive after TERM(5s)+KILL(2s)',
-          exitCode: 3,
-          signal: null,
-        };
-      }
-      return baseExec(cmd, execOpts);
-    };
-    const result = await reconcileCodexAgentProxyEnv(host);
-    expect(result).toEqual({ markerChanged: true, daemonRestarted: false });
-    // marker 回滚到旧值; 旧 7890 保留; 新 1080 闲置 (不拆任何 forward)。
-    expect(state.marker).toBe(oldMarker);
-    expect(state.forwards).toEqual([
-      { localHost: '127.0.0.1', localPort: 7890, remotePort: 17893 },
-      { localHost: '127.0.0.1', localPort: 1080, remotePort: 17894 },
-    ]);
+    expect(state.pkillCount).toBe(1);
+    for (let i = 0; i < 3; i++) {
+      const again = await reconcileCodexAgentProxyEnv(host);
+      expect(again).toEqual({ markerChanged: false, daemonRestarted: false });
+    }
+    expect(state.pkillCount).toBe(1);
   });
 });
 
 describe('killRemoteCodexDaemon', () => {
   it('waits for the daemon to actually exit after TERM before returning (greptile R6 P2)', async () => {
-    // pkill 只保证信号送达 — 脚本必须 TERM 后轮询等进程消失, 没死透再 KILL,
-    // 防旧 daemon 在 dying 窗口里响应探活被复用 (旧 env, marker 变更静默落空)。
     const { host, state } = makeFakeHost();
     const result = await killRemoteCodexDaemon(host);
     expect(result).toEqual({ ok: true });
@@ -384,17 +376,20 @@ describe('killRemoteCodexDaemon', () => {
   });
 });
 
-describe('applyAgentProxyForHost disable path', () => {
-  it('reports apply error when the daemon survives pkill during proxy disable (codex R9 P2)', async () => {
-    // 先 enable 建隧道 (marker 已就位)。
-    setSshHostAgentProxy('test-host', PREF);
-    const { host } = makeFakeHost({ marker: "export HTTPS_PROXY='http://127.0.0.1:17893'" });
+describe('applyAgentProxyForHost', () => {
+  it('env mode: reconcile succeeds and records applied evidence (phase=active)', async () => {
+    // UI 只在确有应用证据时显示「已注入」(R1 review P2) — apply 成功落
+    // phase='active', 未应用/推迟中无状态则渲染等待态。
+    setSshHostAgentProxy('test-host', ENV_PREF);
+    const { host, state } = makeFakeHost({ marker: null });
     await applyAgentProxyForHost(host);
-    expect(getAgentProxyTunnelState('test-host')?.active).toBe(true);
+    expect(state.marker).toContain("export HTTPS_PROXY='http://127.0.0.1:7890'");
+    expect(getAgentProxyTunnelState('test-host')).toEqual({ phase: 'active' });
+  });
 
-    // disable: 隧道拆 + marker 清, 但 daemon 没死透 — 旧 daemon 还握着指向
-    // 已关闭端口的 proxy env, 卡片必须落错误而不是谎称「已关闭」。
+  it('reports apply error when the daemon survives pkill during proxy disable (codex R9 P2)', async () => {
     setSshHostAgentProxy('test-host', null);
+    const { host } = makeFakeHost({ marker: "export HTTPS_PROXY='http://127.0.0.1:17893'" });
     const baseExec = host.exec.bind(host);
     host.exec = async (cmd: string, execOpts?: { input?: string }) => {
       if (cmd.includes('pkill')) {
@@ -409,26 +404,30 @@ describe('applyAgentProxyForHost disable path', () => {
     };
     await applyAgentProxyForHost(host);
     const state = getAgentProxyTunnelState('test-host');
-    expect(state?.active).toBe(false);
+    expect(state?.phase).toBe('error');
     expect(state?.lastError).toMatch(/survived pkill/);
   });
 
+  it('live-turn defer is not an apply error (state untouched, retried at turn-done)', async () => {
+    setSshHostAgentProxy('test-host', ENV_PREF);
+    setAgentProxyLiveTurnChecker(() => true);
+    const { host, state } = makeFakeHost({ marker: null });
+    await applyAgentProxyForHost(host);
+    expect(state.marker).toBeNull();
+    expect(state.pkillCount).toBe(0);
+    // defer 不是失败 — 不落 error 状态。
+    expect(getAgentProxyTunnelState('test-host')?.lastError).toBeUndefined();
+  });
+
   it('serializes concurrent reconciles per host so a fast-path caller never probes mid-restart (codex R9 P2)', async () => {
-    // 并发 reconcile (两个 transport 的 beforeDaemonProbe 同时触发): 第一个
-    // 还在等 killRemoteCodexDaemon 时, 第二个必须排队, 不得走 marker-match
-    // fast path 直接去 probe 旧 daemon。
-    setSshHostAgentProxy('test-host', PREF);
+    setSshHostAgentProxy('test-host', TUNNEL_PREF);
     const { host, state } = makeFakeHost({ marker: null });
 
     let killStarted = false;
-    // 对象持有 release: TS 不对属性做 closure 收窄 (let 声明会被 narrow 成
-    // undefined → CI typecheck TS2349 "Type 'never' has no call signatures")。
     const killGate: { release?: () => void } = {};
     const baseExec = host.exec.bind(host);
     host.exec = async (cmd: string, execOpts?: { input?: string }) => {
       if (cmd.includes('pkill')) {
-        // 进入 kill-and-wait 即翻牌 (baseExec 的记录要等释放后才有,
-        // 不能拿 execCalls 当等待信号)。
         killStarted = true;
         await new Promise<void>((resolve) => {
           killGate.release = resolve;
@@ -442,7 +441,6 @@ describe('applyAgentProxyForHost disable path', () => {
       order.push('first-done');
       return r;
     });
-    // 等第一个写完 marker 并卡在 kill-and-wait 阶段。
     await vi.waitFor(() => {
       expect(killStarted).toBe(true);
     });
@@ -450,7 +448,6 @@ describe('applyAgentProxyForHost disable path', () => {
       order.push('second-done');
       return r;
     });
-    // 第二个已入队但不得开工: 给它一拍机会, 确认没有第二个 cat/pkill 发生。
     await Promise.resolve();
     const execCountWhileFirstBlocked = state.execCalls.length;
     await Promise.resolve();
@@ -460,20 +457,199 @@ describe('applyAgentProxyForHost disable path', () => {
     const [r1, r2] = await Promise.all([first, second]);
     expect(r1.markerChanged).toBe(true);
     expect(r1.daemonRestarted).toBe(true);
-    // 第二个在第一个完成后才走对账: 此时 marker 已一致 → fast path 零副作用。
     expect(r2).toEqual({ markerChanged: false, daemonRestarted: false });
     expect(order).toEqual(['first-done', 'second-done']);
     expect(state.pkillCount).toBe(1);
   });
 });
 
-describe('applyAgentProxyForHost enable path', () => {
-  it('reports apply error and rolls the marker back when the daemon survives pkill (codex R10 P1)', async () => {
-    // marker 漂移 (null → 新 proxy marker) 但 pkill 失败: 旧 daemon 还活着跑
-    // 旧 env — 不得按成功落 active, 卡片显示错误; marker 回滚到 null 供下次
-    // reconcile 重试。
-    setSshHostAgentProxy('test-host', PREF);
-    const { host, state } = makeFakeHost({ marker: null });
+describe('ssh-host-prefs-store agentProxy', () => {
+  it('round-trips a tunnel-mode pref', () => {
+    setSshHostAgentProxy('h1', TUNNEL_PREF);
+    expect(getSshHostAgentProxy('h1')).toEqual(TUNNEL_PREF);
+  });
+
+  it('round-trips an env-mode pref', () => {
+    setSshHostAgentProxy('h1', ENV_PREF);
+    expect(getSshHostAgentProxy('h1')).toEqual(ENV_PREF);
+  });
+
+  it('returns null for disabled / cleared / unknown hosts', () => {
+    setSshHostAgentProxy('h1', { ...TUNNEL_PREF, enabled: false });
+    expect(getSshHostAgentProxy('h1')).toBeNull();
+    setSshHostAgentProxy('h2', TUNNEL_PREF);
+    setSshHostAgentProxy('h2', null);
+    expect(getSshHostAgentProxy('h2')).toBeNull();
+    expect(getSshHostAgentProxy('never-set')).toBeNull();
+  });
+
+  it('keeps autoConnect when writing agentProxy and vice versa', () => {
+    setSshHostAutoConnect('h1', true);
+    setSshHostAgentProxy('h1', TUNNEL_PREF);
+    expect(getSshHostAutoConnect('h1')).toBe(true);
+    expect(getSshHostAgentProxy('h1')).toEqual(TUNNEL_PREF);
+    setSshHostAutoConnect('h1', false);
+    expect(getSshHostAgentProxy('h1')).toEqual(TUNNEL_PREF);
+    expect(getSshHostAutoConnect('h1')).toBe(false);
+    setSshHostAutoConnect('h1', true);
+    setSshHostAgentProxy('h1', null);
+    expect(getSshHostAgentProxy('h1')).toBeNull();
+    expect(getSshHostAutoConnect('h1')).toBe(true);
+  });
+
+  it('rejects malformed prefs at write time', () => {
+    expect(() =>
+      setSshHostAgentProxy('h1', { ...TUNNEL_PREF, localHost: 'bad host' }),
+    ).toThrow(/invalid agentProxy/);
+    expect(() =>
+      setSshHostAgentProxy('h1', { ...TUNNEL_PREF, localPort: 0 }),
+    ).toThrow(/invalid agentProxy/);
+    expect(() =>
+      setSshHostAgentProxy('h1', { ...TUNNEL_PREF, localHost: `12'7.0.0.1` }),
+    ).toThrow(/invalid agentProxy/);
+    // env 模式: 非法 URL / 带引号 / 不支持的 scheme 都拒。
+    expect(() =>
+      setSshHostAgentProxy('h1', { ...ENV_PREF, proxyUrl: 'not a url' }),
+    ).toThrow(/invalid agentProxy/);
+    expect(() =>
+      setSshHostAgentProxy('h1', { ...ENV_PREF, proxyUrl: "http://x'y:1" }),
+    ).toThrow(/invalid agentProxy/);
+    expect(() =>
+      setSshHostAgentProxy('h1', { ...ENV_PREF, proxyUrl: 'ftp://127.0.0.1:21' }),
+    ).toThrow(/invalid agentProxy/);
+    expect(() =>
+      setSshHostAgentProxy('h1', { ...ENV_PREF, proxyUrl: 'socks5://127.0.0.1:1080' }),
+    ).not.toThrow();
+  });
+});
+
+describe('reconcile × tunnel keeper 集成 (事务边界, R2 review P1/P3)', () => {
+  class FakeTunnelConn {
+    status = 'disconnected';
+    armCalls: Array<Record<string, unknown>> = [];
+    disconnectCount = 0;
+    constructor(public id: string) {}
+    getStatus() {
+      return this.status;
+    }
+    onStatus() {
+      return () => {};
+    }
+    async connect() {
+      this.status = 'ready';
+    }
+    async ensureRemoteForward(spec: Record<string, unknown>) {
+      this.armCalls.push(spec);
+      return { remotePort: spec.preferredRemotePort as number, close: async () => {} };
+    }
+    async exec() {
+      return { stdout: '', stderr: '', exitCode: 10, signal: null };
+    }
+    async disconnect() {
+      this.disconnectCount += 1;
+      this.status = 'disconnected';
+    }
+  }
+
+  let conns: FakeTunnelConn[] = [];
+
+  beforeEach(() => {
+    conns = [];
+  });
+
+  function initKeeperWith(host: { id: string }) {
+    initAgentProxy({
+      broadcast: () => {},
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      createTunnelHost: (cfg) => {
+        const c = new FakeTunnelConn(cfg.id);
+        conns.push(c);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return c as any;
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      getMainHost: () => host as any,
+    });
+  }
+
+  it('local target 变更 (remotePort 不变) 经 reconcile 迁移隧道, 不重启 daemon', async () => {
+    // marker 只编码远端端口 — 该场景 marker 无漂移, 旧实现会永远沿用旧隧道
+    // (R2 review P1)。
+    setSshHostAgentProxy('test-host', TUNNEL_PREF);
+    const desired = buildAgentProxyMarkerContent('http://127.0.0.1:17893').trim();
+    const { host, state } = makeFakeHost({ marker: desired });
+    initKeeperWith(host);
+    await reconcileCodexAgentProxyEnv(host);
+    expect(conns).toHaveLength(1);
+    expect(conns[0]!.armCalls[0]).toMatchObject({ localPort: 7890 });
+
+    setSshHostAgentProxy('test-host', { ...TUNNEL_PREF, localPort: 1080 });
+    const result = await reconcileCodexAgentProxyEnv(host);
+    // tunnel-only 迁移: 不写 marker、不杀 daemon。
+    expect(result).toEqual({ markerChanged: false, daemonRestarted: false });
+    expect(state.pkillCount).toBe(0);
+    expect(conns).toHaveLength(2);
+    expect(conns[0]!.disconnectCount).toBe(1);
+    expect(conns[1]!.armCalls[0]).toMatchObject({ localPort: 1080, preferredRemotePort: 17893 });
+    expect(hasPendingAgentProxyReconcile('test-host')).toBe(false);
+  });
+
+  it('tunnel 漂移 (含 local target 变更) 同样受 live-turn gate 保护', async () => {
+    setSshHostAgentProxy('test-host', TUNNEL_PREF);
+    const desired = buildAgentProxyMarkerContent('http://127.0.0.1:17893').trim();
+    const { host } = makeFakeHost({ marker: desired });
+    initKeeperWith(host);
+    await reconcileCodexAgentProxyEnv(host);
+    expect(conns).toHaveLength(1);
+
+    setSshHostAgentProxy('test-host', { ...TUNNEL_PREF, localPort: 1080 });
+    setAgentProxyLiveTurnChecker(() => true);
+    const deferred = await reconcileCodexAgentProxyEnv(host);
+    expect(deferred).toMatchObject({ deferredForLiveTurn: true });
+    // 隧道原样不动, pending 记账等 turn-done 补刀。
+    expect(conns).toHaveLength(1);
+    expect(conns[0]!.disconnectCount).toBe(0);
+    expect(hasPendingAgentProxyReconcile('test-host')).toBe(true);
+
+    setAgentProxyLiveTurnChecker(() => false);
+    await reconcileCodexAgentProxyEnv(host);
+    expect(conns).toHaveLength(2);
+    expect(hasPendingAgentProxyReconcile('test-host')).toBe(false);
+  });
+
+  it('marker 写失败时旧隧道原样保留 (迁移在 write/kill 之后)', async () => {
+    setSshHostAgentProxy('test-host', TUNNEL_PREF);
+    const desired = buildAgentProxyMarkerContent('http://127.0.0.1:17893').trim();
+    const { host } = makeFakeHost({ marker: desired });
+    initKeeperWith(host);
+    await reconcileCodexAgentProxyEnv(host);
+    expect(conns).toHaveLength(1);
+
+    // 远端端口迁移 17893 → 18000, 但 marker 写失败。
+    setSshHostAgentProxy('test-host', { ...TUNNEL_PREF, remotePort: 18000 });
+    const baseExec = host.exec.bind(host);
+    host.exec = async (cmd: string, execOpts?: { input?: string }) => {
+      if (cmd.includes('cat > "') && cmd.includes('agent-proxy.env')) {
+        return { stdout: '', stderr: 'Read-only file system', exitCode: 1, signal: null };
+      }
+      return baseExec(cmd, execOpts);
+    };
+    await expect(reconcileCodexAgentProxyEnv(host)).rejects.toThrow(/write agent-proxy marker failed/);
+    // 旧隧道未被拆 (R2 review P1), 失败已记 pending (R2 review P2)。
+    expect(conns).toHaveLength(1);
+    expect(conns[0]!.disconnectCount).toBe(0);
+    expect(hasPendingAgentProxyReconcile('test-host')).toBe(true);
+  });
+
+  it('pkill 失败回滚时旧隧道原样保留', async () => {
+    setSshHostAgentProxy('test-host', TUNNEL_PREF);
+    const desired = buildAgentProxyMarkerContent('http://127.0.0.1:17893').trim();
+    const { host, state } = makeFakeHost({ marker: desired });
+    initKeeperWith(host);
+    await reconcileCodexAgentProxyEnv(host);
+    expect(conns).toHaveLength(1);
+
+    setSshHostAgentProxy('test-host', { ...TUNNEL_PREF, remotePort: 18000 });
     const baseExec = host.exec.bind(host);
     host.exec = async (cmd: string, execOpts?: { input?: string }) => {
       if (cmd.includes('pkill')) {
@@ -486,65 +662,89 @@ describe('applyAgentProxyForHost enable path', () => {
       }
       return baseExec(cmd, execOpts);
     };
-    await applyAgentProxyForHost(host);
-    const tunnelState = getAgentProxyTunnelState('test-host');
-    expect(tunnelState?.active).toBe(false);
-    expect(tunnelState?.lastError).toMatch(/survived pkill/);
-    // 原 marker 为 null → 回滚即删除。
+    const result = await reconcileCodexAgentProxyEnv(host);
+    expect(result).toEqual({ markerChanged: true, daemonRestarted: false });
+    // marker 已回滚, 存活 daemon 仍指旧端口 — 旧隧道保留兜底。
+    expect(state.marker).toBe(desired);
+    expect(conns).toHaveLength(1);
+    expect(conns[0]!.disconnectCount).toBe(0);
+    expect(hasPendingAgentProxyReconcile('test-host')).toBe(true);
+  });
+
+  it('远端端口迁移成功: marker → kill → 隧道迁移的完整事务', async () => {
+    setSshHostAgentProxy('test-host', TUNNEL_PREF);
+    const desired = buildAgentProxyMarkerContent('http://127.0.0.1:17893').trim();
+    const { host, state } = makeFakeHost({ marker: desired });
+    initKeeperWith(host);
+    await reconcileCodexAgentProxyEnv(host);
+
+    setSshHostAgentProxy('test-host', { ...TUNNEL_PREF, remotePort: 18000 });
+    const result = await reconcileCodexAgentProxyEnv(host);
+    expect(result).toEqual({ markerChanged: true, daemonRestarted: true });
+    expect(state.marker).toBe(buildAgentProxyMarkerContent('http://127.0.0.1:18000').trim());
+    expect(state.pkillCount).toBe(1);
+    expect(conns).toHaveLength(2);
+    expect(conns[0]!.disconnectCount).toBe(1);
+    expect(conns[1]!.armCalls[0]).toMatchObject({ preferredRemotePort: 18000 });
+    expect(hasPendingAgentProxyReconcile('test-host')).toBe(false);
+  });
+
+  it('pref 关闭: daemon 以空 env 重启成功后才拆隧道', async () => {
+    setSshHostAgentProxy('test-host', TUNNEL_PREF);
+    const desired = buildAgentProxyMarkerContent('http://127.0.0.1:17893').trim();
+    const { host, state } = makeFakeHost({ marker: desired });
+    initKeeperWith(host);
+    await reconcileCodexAgentProxyEnv(host);
+    expect(conns).toHaveLength(1);
+
+    setSshHostAgentProxy('test-host', null);
+    const result = await reconcileCodexAgentProxyEnv(host);
+    expect(result).toEqual({ markerChanged: true, daemonRestarted: true });
     expect(state.marker).toBeNull();
+    expect(conns[0]!.disconnectCount).toBe(1);
   });
 });
 
-describe('ssh-host-prefs-store agentProxy', () => {
-  it('round-trips an enabled pref', () => {
-    setSshHostAgentProxy('h1', PREF);
-    expect(getSshHostAgentProxy('h1')).toEqual(PREF);
+describe('ssh-host-prefs-store legacy migration', () => {
+  it('migrates a pre-mode pref ({enabled,localHost,localPort}) to tunnel mode with the legacy fixed port', async () => {
+    // 旧 PR #715 数据形态直接落盘 → 重新加载模块 (绕过内存 cache) 读回。
+    prefsFileContent = JSON.stringify({
+      'legacy-host': {
+        autoConnect: true,
+        agentProxy: { enabled: true, localHost: '127.0.0.1', localPort: 7890 },
+      },
+    });
+    vi.resetModules();
+    const fresh = await import('../ssh-host-prefs-store');
+    expect(fresh.getSshHostAgentProxy('legacy-host')).toEqual({
+      enabled: true,
+      mode: 'tunnel',
+      localHost: '127.0.0.1',
+      localPort: 7890,
+      remotePort: fresh.LEGACY_AGENT_PROXY_REMOTE_PORT,
+    });
+    expect(fresh.getSshHostAutoConnect('legacy-host')).toBe(true);
   });
 
-  it('returns null for disabled / cleared / unknown hosts', () => {
-    setSshHostAgentProxy('h1', { ...PREF, enabled: false });
-    expect(getSshHostAgentProxy('h1')).toBeNull();
-    setSshHostAgentProxy('h2', PREF);
-    setSshHostAgentProxy('h2', null);
-    expect(getSshHostAgentProxy('h2')).toBeNull();
-    expect(getSshHostAgentProxy('never-set')).toBeNull();
-  });
-
-  it('keeps autoConnect when writing agentProxy and vice versa', () => {
-    // 双向共存回归 (review: PR #715 五轮审核 P2 — 原测试只写了两次 agentProxy,
-    // 没真正交叉 autoConnect): prefs 是同一 JSON 文件里的 sibling 字段,
-    // 任一侧写入不得把另一侧冲掉。
-    setSshHostAutoConnect('h1', true);
-    setSshHostAgentProxy('h1', PREF);
-    expect(getSshHostAutoConnect('h1')).toBe(true);
-    expect(getSshHostAgentProxy('h1')).toEqual(PREF);
-    // 反向: 先写 agentProxy 再改 autoConnect, agentProxy 不丢。
-    setSshHostAutoConnect('h1', false);
-    expect(getSshHostAgentProxy('h1')).toEqual(PREF);
-    expect(getSshHostAutoConnect('h1')).toBe(false);
-    // 清 agentProxy 不影响 autoConnect。
-    setSshHostAutoConnect('h1', true);
-    setSshHostAgentProxy('h1', null);
-    expect(getSshHostAgentProxy('h1')).toBeNull();
-    expect(getSshHostAutoConnect('h1')).toBe(true);
-  });
-
-  it('rejects malformed prefs at write time', () => {
-    expect(() =>
-      setSshHostAgentProxy('h1', { enabled: true, localHost: 'bad host', localPort: 7890 }),
-    ).toThrow(/invalid agentProxy/);
-    expect(() =>
-      setSshHostAgentProxy('h1', { enabled: true, localPort: 7890, localHost: '127.0.0.1' }),
-    ).not.toThrow();
-    expect(() =>
-      setSshHostAgentProxy('h1', { enabled: true, localHost: '127.0.0.1', localPort: 0 }),
-    ).toThrow(/invalid agentProxy/);
-    // 引号同样拒 (与 IPC / renderer 校验对齐, review: PR #715 copilot R8)。
-    expect(() =>
-      setSshHostAgentProxy('h1', { enabled: true, localHost: `12'7.0.0.1`, localPort: 7890 }),
-    ).toThrow(/invalid agentProxy/);
-    expect(() =>
-      setSshHostAgentProxy('h1', { enabled: true, localHost: '12"7.0.0.1', localPort: 7890 }),
-    ).toThrow(/invalid agentProxy/);
+  it('rejects hand-edited invalid agentProxy values instead of silently resurrecting them', async () => {
+    // 用户手编 prefs 写了非法值 (端口 0 / 带引号 host): 迁移时被丢弃为
+    // 「未配置」而不是恢复成可用 pref (review: 迁移边界 — 否则功能看似
+    // 开着实际已静默失效, 连警告都没有)。
+    prefsFileContent = JSON.stringify({
+      'bad-port-host': {
+        autoConnect: true,
+        agentProxy: { enabled: true, localHost: '127.0.0.1', localPort: 0 },
+      },
+      'bad-quote-host': {
+        autoConnect: false,
+        agentProxy: { enabled: true, localHost: `12'7.0.0.1`, localPort: 7890 },
+      },
+    });
+    vi.resetModules();
+    const fresh = await import('../ssh-host-prefs-store');
+    expect(fresh.getSshHostAgentProxy('bad-port-host')).toBeNull();
+    expect(fresh.getSshHostAgentProxy('bad-quote-host')).toBeNull();
+    // autoConnect 等兄弟字段不受 agentProxy 非法影响。
+    expect(fresh.getSshHostAutoConnect('bad-port-host')).toBe(true);
   });
 });

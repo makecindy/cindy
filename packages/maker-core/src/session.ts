@@ -602,14 +602,14 @@ export class Session {
 
   // ── 运行时切换 ─────────────────────────────────────────────────────────────
 
-  async setModel(model: string): Promise<void> {
+  async setModel(model: string, opts?: { providerId?: string | null }): Promise<void> {
     if (!this.capabilities.switchModel.supported) {
       throw new NotSupportedError('switchModel', this.capabilities.switchModel);
     }
     if (!this.handle.setModel) {
       throw new NotSupportedError('switchModel', { supported: false, reason: 'not-implemented' });
     }
-    await this.handle.setModel(model);
+    await this.handle.setModel(model, opts);
   }
 
   async setEffort(effort: Effort): Promise<void> {

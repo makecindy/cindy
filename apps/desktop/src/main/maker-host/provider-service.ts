@@ -64,6 +64,12 @@ export interface ProviderServiceDeps {
    */
   genericOAuthConnected?: (providerId: string) => boolean;
   /**
+   * 内置 API-key 供应商(auth.method 'apiKey' 且 source 'builtin',如 Gemini 图像来源,
+   * 2026-07)的连接态判定:连接 = 该供应商的 key 已存(生产 = providerSecretStore.has)。
+   * 缺省 = 一律未连接。
+   */
+  builtinApiKeyConnected?: (providerId: string) => boolean;
+  /**
    * 动态清单发现的最近一次失败（生产 = anthropic 的 getAnthropicModelDiscoveryFailure）。
    * 只有「清单唯一来源是动态发现」的供应商需要，缺席 = 该供应商没有这种失败态。
    *
@@ -133,6 +139,11 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       // API key 形态的自定义（user）供应商：存在于目录即视为「已连接」——用「编辑 / 删除」
       // 替代「连接 / 断开」，没有独立鉴权握手（密钥缺失则请求失败，但 UI 连接态为已配置）。
       else if (p.source === 'user') connected[p.id] = true;
+      // 内置 API-key 供应商(如 Gemini 图像来源):连接 = key 已存。与自定义供应商
+      // 不同,内置条目常驻目录,「存在即连接」会让没配 key 的用户看到一个假连接行。
+      else if (p.auth.method === 'apiKey' && !(p.id in connected)) {
+        connected[p.id] = deps.builtinApiKeyConnected?.(p.id) ?? false;
+      }
     }
     const discoveryFailures: ModelDiscoveryFailureState = {};
     if (deps.modelDiscoveryFailure) {

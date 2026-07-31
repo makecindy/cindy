@@ -73,6 +73,7 @@ import type {
   ConsumeAccountRateLimitResetCreditResponse,
 } from '../../types/account-rate-limits.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
+import { reviewAction, type ReviewableAction } from '../shared/auto-review.js';
 import { UsageTracker } from '../shared/usage-tracker.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
 import { pickTurnStartStatus, type OneShotState } from '../shared/turn-start-phrases.js';
@@ -109,6 +110,10 @@ import { createStdioTransport } from './app-server/stdioTransport.js';
 import { CodexInteractionBroker } from './interaction-broker.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_CODEX_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
 import { MAKER_MEMORY_RULES } from '../../memory/system-prompt.js';
+import {
+  CONTACTS_RULES_DISABLED,
+  CONTACTS_RULES_ENABLED,
+} from '../../contacts/system-prompt.js';
 import { MemoryFlushController } from '../../memory/flush-controller.js';
 import { buildMemoryScopeKey } from '../../memory/storage.js';
 import { CODEX_AGENT_COMMANDS } from './commands.js';
@@ -257,6 +262,7 @@ function hasUnsafeForkRolloutPayload(line: string): boolean {
 
 function buildCodexDeveloperInstructions(parts: {
   makerMemoryRules?: string;
+  contactsRules?: string;
   runtimeSystemPrompt?: string;
   makerMemoryIndex?: string;
   userPrompt?: string;
@@ -264,6 +270,7 @@ function buildCodexDeveloperInstructions(parts: {
   return [
     MAKER_CODEX_SYSTEM_PROMPT_APPEND,
     parts.makerMemoryRules,
+    parts.contactsRules,
     parts.runtimeSystemPrompt,
     parts.makerMemoryIndex,
     parts.userPrompt,
@@ -2191,6 +2198,52 @@ export class CodexAgent extends BaseAgent {
     const eventQueue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
     const usageTracker = new UsageTracker();
     const translatorRt: CodexRuntimeState = newCodexRuntimeState();
+    /**
+     * 本 turn 用于**目录查找**的模型 id, 在构造 turnParams 时快照(取 mutableCatalogModel,
+     * 不是送上游的 wire 值 —— 见该变量注释)。
+     *
+     * 不能在 usage 事件里读 mutableModel: setModel 虽然文档写「下一 turn 才生效」,
+     * 赋值却是**即时**的, 于是活跃 turn 期间切模型会让这一 turn 还在产出的用量
+     * 按**下一个**模型的目录窗口收敛。turn 结束后不清空 —— 迟到的 usage 事件
+     * 归属的仍是它那一 turn 的模型。
+     */
+    let activeTurnModel: string | undefined = opts.model;
+    /**
+     * 本 turn 实际路由的 provider,与 activeTurnModel 同时快照。
+     *
+     * 不能用 opts.providerId: 它是**会话创建时**冻结的值,而 idle 会话可以热切 provider ——
+     * host 的 applyRuntimeSetModelChange 会带着 `{ providerId }` 调 setModel。窗口上限按
+     * (provider, model) 解析, 只更新 model 会让下一 turn 拿新模型去问**旧路由**。
+     */
+    let activeTurnProviderId: string | null | undefined = opts.providerId;
+    /**
+     * 把 app-server 上报的 modelContextWindow 收敛到模型目录的真实上限。
+     *
+     * app-server 对网关路由的模型常报**基础模型**的窗口, 忽略该路由的实际限制 ——
+     * 例如目录 372K 的 GPT-5.6-Sol 会被报成 1M。虚高值会让上下文占比被低估,
+     * memory flush 阈值也跟着推迟, 所以两者都有时取小值。
+     *
+     * 两个约束都不是可省的细节:
+     * - **按 turn 归属模型**, 不读 mutableModel: 见 activeTurnModel 注释。
+     * - **取值交给 host 的 resolveVerifiedContextWindow**, 不自己查 availableModels:
+     *   那张表是跨 provider 去重后的扁平结构, 同一 model id 由多个 provider 提供时
+     *   归属已丢(订阅直连发现的 `gpt-5.6-sol` 与网关下发的同 id), 按 id 回查可能命中
+     *   另一条路由的元数据 —— 用错路由的上限收敛比不收敛更糟。host 同时持有完整目录、
+     *   provider 维度与「这个窗口是显式声明还是派生兜底」的信息, 也天然读的是 live 目录
+     *   (模型发现 / 切账号 / 自定义 provider 增删改都即时反映), 见该 dep 的注释。
+     *
+     * 拿不到已核实窗口时(host 未注入、目录未覆盖、'gpt-5' 这类 server 默认哨兵、只有
+     * 兜底值、或 provider 归属有歧义)沿用上报值 —— 即改动前行为; 上报值反过来比它小时
+     * 同样取上报值(路由真被降窗)。
+     */
+    const capContextWindow = (reported: number | null): number | null => {
+      const verified = activeTurnModel
+        ? (this.deps.resolveVerifiedContextWindow?.(activeTurnProviderId, activeTurnModel) ?? null)
+        : null;
+      if (!verified || verified <= 0) return reported;
+      if (!reported || reported <= 0) return verified;
+      return Math.min(verified, reported);
+    };
 
     let sdkSessionId: string | undefined;
     let currentTurnId: string | null = null;
@@ -2457,6 +2510,22 @@ export class CodexAgent extends BaseAgent {
 
     /** Phase 3: mutable 配置, 下一个 turn/start 透传; resume 时也透传一次。 */
     let mutableModel = opts.model;
+    /**
+     * 运行时 provider 路由(会话创建时取 opts.providerId,setModel 可带新值覆盖)。
+     * host 侧的 provider route 与它必须同步,窗口上限按 (provider, model) 解析。
+     */
+    let mutableProviderId: string | null | undefined = opts.providerId;
+    /**
+     * 用于**目录查找**的模型 id —— 与 mutableModel(送上游的 wire 值)刻意分开。
+     *
+     * server 的 thread/settings/updated 会把请求的 id 规范化后回带(实测:`gpt-5.4` →
+     * `gpt-5.4-codex`),那个变体在产品目录里并不存在。窗口上限是按目录条目精确查的,
+     * 若拿 wire 值去查就查不到、于是不再收敛,虚高的上报值原样留下。
+     *
+     * 所以只有「用户选的模型」和「'gpt-5' 哨兵被解析成真实模型」这两种情况更新它;
+     * server 的 wire 规范化只动 mutableModel。
+     */
+    let mutableCatalogModel: string | undefined = opts.model;
     let mutableEffort: Effort = opts.effort ?? 'high';
     let mutablePermissionMode: PermissionMode = opts.permissionMode ?? 'ask';
     let mutableExtraDirs = [...(opts.extraDirs ?? [])];
@@ -2632,6 +2701,11 @@ export class CodexAgent extends BaseAgent {
         : path.join(this.codexHome ?? '', sub);
     const codexExtraWritableRoots = this.codexHome ? [joinCodexHome('memories')] : [];
     const runtimeWorkspaceRoots = (): string[] => [opts.workingDir, ...mutableExtraDirs];
+    // Auto-review 传给 core 的会话平台(决定是否抹平 macOS /private firmlink)。远端会话的 host
+    // process.platform 不代表远端 OS(host 可能 macOS、远端 Linux)——远端 OS 未接入前保守传 'linux'
+    // 关掉抹平 → fail-closed(不把远端 /private/tmp 误当 /tmp 区内)。本地用真实 process.platform。
+    // 定义在此(startSession 作用域,opts=session)以避开 awaitApprovalDecision 内层 opts 的遮蔽。
+    const sessionReviewPlatform: NodeJS.Platform = opts.remoteHostId ? 'linux' : process.platform;
     const readonlyReferencesConfig: Record<string, unknown> = {
       [`permissions.${READONLY_REFERENCES_PERMISSION_PROFILE}`]: {
         filesystem: {
@@ -2704,6 +2778,18 @@ export class CodexAgent extends BaseAgent {
       } catch (e) {
         log.warn('unregisterCodexMcpThreadContext threw', { error: String(e) });
       }
+    };
+    const descendantMcpThreadIds = new Set<string>();
+    const registerDescendantCodexMcpContext = (descendantThreadId: string): void => {
+      if (descendantThreadId === threadId || descendantMcpThreadIds.has(descendantThreadId)) return;
+      descendantMcpThreadIds.add(descendantThreadId);
+      registerCodexMcpContext(descendantThreadId);
+    };
+    const unregisterDescendantCodexMcpContexts = (): void => {
+      for (const descendantThreadId of descendantMcpThreadIds) {
+        unregisterCodexMcpContext(descendantThreadId);
+      }
+      descendantMcpThreadIds.clear();
     };
     function currentApprovalConfig(): CodexPermissionConfig {
       return mapPermissionToCodex(
@@ -2958,8 +3044,23 @@ export class CodexAgent extends BaseAgent {
         resumeSessionId: opts.resumeSessionId,
       });
     }
+    // 智能通讯录两态段: session 启动求值一次, host 未注入 getContactsPromptState
+    // 则缺省。remote 会话不注入(远端 spawn 无本地 MCP flags, cindy_contacts 不可达)。
+    // host 的有效状态计算已含: 全局开关 ∧ 工作区/用户覆盖 ∧ 实际应用到 running
+    // app-server 的 spawn 快照(失效失败留下 stale 配置时返回 unavailable, 本段
+    // 静默, 不指挥模型调 stale 桥里没有的工具)。
+    const contactsState = opts.remoteHostId
+      ? undefined
+      : this.deps.getContactsPromptState?.({ workingDir: opts.workingDir });
+    const contactsRules =
+      contactsState === 'enabled'
+        ? CONTACTS_RULES_ENABLED
+        : contactsState === 'disabled'
+          ? CONTACTS_RULES_DISABLED
+          : '';
     const developerInstructions = buildCodexDeveloperInstructions({
       makerMemoryRules,
+      contactsRules,
       runtimeSystemPrompt: this.deps.runtimeConfig.systemPrompt,
       makerMemoryIndex,
       userPrompt: opts.userPrompt,
@@ -3044,6 +3145,9 @@ export class CodexAgent extends BaseAgent {
         }
         if (mutableModel === 'gpt-5' && resp.model) {
           mutableModel = resp.model;
+          // 'gpt-5' 是「用 server 默认」的占位、本身不是目录条目,解析出的真实 id 才是
+          // 我们能拿到的最佳目录线索(与下方 wire 规范化不同,后者不更新它)。
+          mutableCatalogModel = resp.model;
         }
         threadId = resp.thread.id;
         registerCodexReviewerRouteContext(threadId);
@@ -3079,15 +3183,18 @@ export class CodexAgent extends BaseAgent {
         throw new Error(message);
       }
     } else {
-      // developerInstructions 五段拼接 (协议见 thread/start.developerInstructions):
+      // developerInstructions 六段拼接 (协议见 thread/start.developerInstructions):
       //   [2] MAKER_CODEX_SYSTEM_PROMPT_APPEND — maker engine (system-prompt-append.md)
       //   [3] makerMemoryRules                 — maker memory 写入规范 (条件式)
-      //   [4] runtimeConfig.systemPrompt       — host runtime (host 维护的 .md)
-      //   [5] makerMemoryIndex                 — 当前 workdir MEMORY.md 内容 (条件式,
+      //   [4] contactsRules                    — 智能通讯录两态段 (条件式: host 注入
+      //                                          getContactsPromptState 才有)
+      //   [5] runtimeConfig.systemPrompt       — host runtime (host 维护的 .md)
+      //   [6] makerMemoryIndex                 — 当前 workdir MEMORY.md 内容 (条件式,
       //                                          紧邻 userPrompt 高优先级, 启动时快照)
-      //   [6] opts.userPrompt                  — per-call 用户级 (renderer 本地 storage,
+      //   [7] opts.userPrompt                  — per-call 用户级 (renderer 本地 storage,
       //                                          每次 startSession 透传, 优先级最高)
-      // 跟 claude-code 六段语义对齐。空段被 .filter 跳过,
+      // 段序语义与 claude-code 对齐(claude 的 [1] 是 SDK 内嵌 preset, 此处无对应段,
+      // 故编号从 [2] 起、共六段)。空段被 .filter 跳过,
       // 内容为空时不发送 developerInstructions 字段。
       const params: ThreadStartParams = {
         cwd: opts.workingDir,
@@ -3110,6 +3217,9 @@ export class CodexAgent extends BaseAgent {
         }
         if (mutableModel === 'gpt-5' && resp.model) {
           mutableModel = resp.model;
+          // 'gpt-5' 是「用 server 默认」的占位、本身不是目录条目,解析出的真实 id 才是
+          // 我们能拿到的最佳目录线索(与下方 wire 规范化不同,后者不更新它)。
+          mutableCatalogModel = resp.model;
         }
         threadId = resp.thread.id;
         registerCodexReviewerRouteContext(threadId);
@@ -3533,9 +3643,9 @@ export class CodexAgent extends BaseAgent {
       requestId: string,
       kind: 'commandExecution' | 'fileChange' | 'mcpServerElicitation',
       req: InteractionRequest,
-      opts?: { forcePrompt?: boolean },
+      opts?: { forcePrompt?: boolean; autoReviewAction?: ReviewableAction },
     ): Promise<ApprovalDecision> {
-      const forcePrompt =
+      let forcePrompt =
         opts?.forcePrompt === true ||
         (req.kind === 'permission' &&
           forceTurnConfirmation(req.toolName, req.input));
@@ -3550,15 +3660,55 @@ export class CodexAgent extends BaseAgent {
       ) {
         return Promise.resolve('accept');
       }
-      // Policy turns deliberately route otherwise-unattended Auto actions back
-      // through the host. Preserve Auto semantics by accepting non-forced
-      // callbacks without opening Desktop UI.
+      // Policy turns (unattended: feishu bot / 定时任务) 以 untrusted + read-only 发射,把命令/文件
+      // 升级请求发回 host 后自动接受非强制回调 —— 保留该无人值守语义,但**仍对危险桶 fail-closed**:
+      // 无人值守时没有人能批准一个 destructive / 凭证 / 远程执行动作,应拒绝,而不是让它逃出 read-only
+      // 沙箱静默执行(与交互式 Auto 共用同一张 Cindy core 安全网)。安全 / 仅需升级的动作照常自动
+      // 接受,不影响正常无人值守自动化(真需要跑危险命令的自动化应走 bypassPermissions,不受此影响)。
       if (
         !forcePrompt &&
         activeTurnPermissionPolicy &&
         mutablePermissionMode === 'auto'
       ) {
+        if (opts?.autoReviewAction) {
+          const verdict = reviewAction(
+            opts.autoReviewAction,
+            runtimeWorkspaceRoots().filter((d): d is string => typeof d === 'string' && d.length > 0),
+            { platform: sessionReviewPlatform },
+          );
+          // 无人值守:只接受 core 判为 auto-approve 的安全动作。prompt / prompt-each-time 都意味着
+          // "需人确认"而此路径无人在场 → 一律 fail-closed decline(AGENTS.md 无人值守安全底线)。
+          return verdict === 'auto-approve' ? Promise.resolve('accept') : Promise.resolve('decline');
+        }
+        // 命令/文件类审批却没有可分类的 action(如 permissions 能力升级)——无法审查的高权限动作 →
+        // 同样 fail-closed 拒绝。mcpServerElicitation(交互输入)有自己的 forceConfirmToolCall 门,保留 auto-accept。
+        if (kind === 'commandExecution' || kind === 'fileChange') {
+          return Promise.resolve('decline');
+        }
         return Promise.resolve('accept');
+      }
+      // Auto-review 兜底路径:非 OAuth 路由下 approvalsReviewer='user',app-server 把越界/网络
+      // 等审批请求发回 host(OAuth 原生 auto_review 则由 server 内部裁决、根本不到这里 —— 天然
+      // "原生优先、Cindy 兜底")。这些请求不再一律转发用户,先过 harness 无关的 Cindy core:
+      // 安全的(如 curl 抓取)静默放行、危险的必问、其余升级。与 Claude 侧同一套 core,模型无关。
+      // **仅在有 interactionResolver 时生效**:没有 resolver = 没有能撤销误判的人在场,与 Claude
+      // canUseTool 的 no-resolver 分支一致 fail-closed(下面 dispatchInteraction 无 resolver 直接
+      // deny),不做任何自动放行。
+      if (
+        interactionResolver &&
+        !forcePrompt &&
+        mutablePermissionMode === 'auto' &&
+        opts?.autoReviewAction
+      ) {
+        const verdict = reviewAction(
+          opts.autoReviewAction,
+          runtimeWorkspaceRoots().filter((d): d is string => typeof d === 'string' && d.length > 0),
+          { platform: sessionReviewPlatform },
+        );
+        if (verdict === 'auto-approve') return Promise.resolve('accept');
+        // prompt-each-time:高风险,强制逐次弹窗且剥离会话级 suggestion(不许"总是允许")。
+        if (verdict === 'prompt-each-time') forcePrompt = true;
+        // 'prompt':落到下面的 dispatchInteraction,照常升级用户(可"本会话记住")。
       }
       const routedRequest =
         forcePrompt && req.kind === 'permission'
@@ -4019,7 +4169,7 @@ export class CodexAgent extends BaseAgent {
         description: params.reason ?? undefined,
         suggestions: commandSupportsAcceptForSession(params) ? codexSessionApprovalSuggestions() : undefined,
         metadata: params.reason ? { reason: params.reason } : undefined,
-      });
+      }, { autoReviewAction: { kind: 'exec', command: params.command ?? '' } });
       return { decision };
     };
 
@@ -4040,7 +4190,7 @@ export class CodexAgent extends BaseAgent {
         description: params.reason ?? undefined,
         suggestions: codexSessionApprovalSuggestions(),
         metadata: params.reason ? { reason: params.reason } : undefined,
-      });
+      }, { autoReviewAction: { kind: 'file-write', path: params.grantRoot ?? undefined } });
       return { decision };
     };
 
@@ -4215,6 +4365,8 @@ export class CodexAgent extends BaseAgent {
       if (turnGate === false) return { permissions: {}, scope: 'turn' };
       if (turnGate instanceof Promise && !(await turnGate)) return { permissions: {}, scope: 'turn' };
       const requestId = params.itemId ?? params.turnId;
+      // kind 借用 'commandExecution' 仅为复用其 fail-closed 语义(见 awaitApprovalDecision:无 action /
+      // 无人值守时 decline)——权限升级请求本就该 fail-closed。此处不是命令执行,只是共用同一条兜底路径。
       const decision = await awaitApprovalDecision(requestId, 'commandExecution', {
         kind: 'permission',
         requestId,
@@ -5737,6 +5889,16 @@ export class CodexAgent extends BaseAgent {
           eventQueue.push({ type: 'session_id', data: sdkSessionId, source: 'codex' });
         }
       },
+      descendantThreadStarted: (params) => {
+        const childThreadId = params.thread.id;
+        const parentThreadId = params.thread.parentThreadId;
+        if (!parentThreadId || childThreadId === parentThreadId) return;
+        registerDescendantCodexMcpContext(childThreadId);
+        this.deps.registerCodexChildThreadForParent?.({
+          parentThreadId,
+          childThreadId,
+        });
+      },
       turnStarted: (params) => {
         // turn/start RPC 已失败(超时/拒绝)但 daemon 实际已建 turn — 迟到的孤儿
         // turnStarted 不得重新激活已报终态错误的会话 (greptile P1): 立墓碑 +
@@ -5840,7 +6002,7 @@ export class CodexAgent extends BaseAgent {
         const last = params.tokenUsage?.last;
         if (!last) return;
         lastTurnTokenUsage = last;
-        lastModelContextWindow = params.tokenUsage?.modelContextWindow ?? null;
+        lastModelContextWindow = capContextWindow(params.tokenUsage?.modelContextWindow ?? null);
         usageTracker.setContextWindow(lastModelContextWindow ?? 0);
         const cached = last.cachedInputTokens ?? 0;
         const totalInput = last.inputTokens ?? 0;
@@ -5982,6 +6144,9 @@ export class CodexAgent extends BaseAgent {
         const before = mutableServiceTier ?? null;
         const beforeModel = mutableModel;
         mutableServiceTier = normalizeServiceTier(s.serviceTier) ?? null;
+        // 只对齐 wire 值: server 会把请求 id 规范化(`gpt-5.4` → `gpt-5.4-codex`),那个变体
+        // 目录里没有。**刻意不动 mutableCatalogModel** —— 否则窗口上限会因为查不到目录条目
+        // 而停止收敛(见该变量注释)。
         if (typeof s.model === 'string' && s.model) mutableModel = s.model;
         if (mutableModel !== beforeModel) {
           registerCodexReviewerRouteContext(params.threadId);
@@ -6422,6 +6587,10 @@ export class CodexAgent extends BaseAgent {
           ...(mutableServiceTier !== undefined ? { serviceTier: mutableServiceTier } : {}),
           ...(collaborationMode ? { collaborationMode } : {}),
         };
+        // 这一 turn 的用量按这里发出去的 (provider, model) 归属上下文窗口 —— 之后 setModel
+        // 立即改这两个值也不会串到还在产出的本 turn (见 activeTurnModel / capContextWindow)。
+        activeTurnModel = mutableCatalogModel;
+        activeTurnProviderId = mutableProviderId;
         const markTurnConfigAccepted = (): void => {
           threadMayHaveRollout = true;
           if (turnParams.collaborationMode?.mode === 'plan') {
@@ -6754,6 +6923,10 @@ export class CodexAgent extends BaseAgent {
               });
               if (mutableModel === resumeModel && resumeModel === 'gpt-5' && resumeResp.model) {
                 mutableModel = resumeResp.model;
+                // 与 thread/start 的哨兵解析同理:'gpt-5' 是占位、不是目录条目, 解析出的真实
+                // id 才能用来查窗口上限。漏掉这行会让恢复后的 turn 一直按 'gpt-5' 去查(查不到
+                // → 不收敛), 这也是本文件第三处哨兵解析, 三处必须一致。
+                mutableCatalogModel = resumeResp.model;
               }
               if (
                 Object.hasOwn(resumeResp, 'serviceTier') &&
@@ -6769,6 +6942,10 @@ export class CodexAgent extends BaseAgent {
               } else {
                 delete turnParams.model;
               }
+              // 恢复路径可能把 'gpt-5' 哨兵解析成具体路由模型 —— 重投的 turn 用的是新值,
+              // 窗口归属必须跟着改写走, 否则查不到目录条目、沿用 app-server 的基础模型窗口。
+              activeTurnModel = mutableCatalogModel;
+              activeTurnProviderId = mutableProviderId;
               if (mutableServiceTier !== undefined) {
                 turnParams.serviceTier = mutableServiceTier ?? null;
               } else {
@@ -7091,6 +7268,7 @@ export class CodexAgent extends BaseAgent {
         closed = true;
         resetUpstreamIdleForTurnEnd();
         unregisterCodexMcpContext(threadId);
+        unregisterDescendantCodexMcpContexts();
         // close 时 buffer 里可能还有等对账的挂起请求 (codex R17 P2):
         // 统一按拒绝释放, 否则 handler 永远悬挂, dispatchServerRequest
         // 永不返回, server 侧请求卡死。
@@ -7121,15 +7299,38 @@ export class CodexAgent extends BaseAgent {
       },
 
       // ── Phase 3: 运行时切换 (下一 turn 才生效, 内部已是 mutable 闭包) ──
-      async setModel(newModel: string) {
+      async setModel(newModel: string, setOpts?: { providerId?: string | null }) {
+        // provider 可能在 model 不变时单独切换(同一 id 换路由), 所以先记 provider 再做 model 去重。
+        // 窗口上限按 (provider, model) 解析, 漏掉这一步会让后续 turn 拿新模型去问旧路由。
+        const prevProviderId = mutableProviderId;
+        if (setOpts && Object.hasOwn(setOpts, 'providerId')) mutableProviderId = setOpts.providerId;
         if (newModel === mutableModel) return; // 去重: 值没变不重推 (renderer 单次切换会全量重调 set*)
-        log.debug('setModel', { from: mutableModel, to: newModel });
+        const prevModel = mutableModel;
+        const prevCatalogModel = mutableCatalogModel;
+        log.debug('setModel', { from: mutableModel, to: newModel, providerId: mutableProviderId ?? null });
         mutableModel = newModel;
-        registerCodexReviewerRouteContext(threadId);
-        // thread 已启动 → 立即经 thread/settings/update 推给 server (sticky); 未启动则由
-        // 首个 thread/start 携带。沿用 turn/start 的 'gpt-5'=server 默认哨兵约定 (省略),
-        // 避免把占位 model id 发给 server。失败时 turn/start 透传仍是兜底。
-        if (newModel && newModel !== 'gpt-5') await pushThreadSettings({ model: newModel });
+        // 用户显式选的一定是目录 id(选择器就是从目录渲染的)。
+        mutableCatalogModel = newModel;
+        try {
+          registerCodexReviewerRouteContext(threadId);
+          // thread 已启动 → 立即经 thread/settings/update 推给 server (sticky); 未启动则由
+          // 首个 thread/start 携带。沿用 turn/start 的 'gpt-5'=server 默认哨兵约定 (省略),
+          // 避免把占位 model id 发给 server。失败时 turn/start 透传仍是兜底。
+          if (newModel && newModel !== 'gpt-5') await pushThreadSettings({ model: newModel });
+        } catch (e) {
+          // 抛回调用方前把三个快照恢复原值。host 的 applyRuntimeSetModelChange 在异常分支
+          // 会把 session 的 provider route 恢复成旧值; 我们这边若留着新值, 下一 turn 就会
+          // 走旧路由却按新 (provider, model) 解析窗口上限 —— 两边分叉正是收敛出错的根源。
+          //
+          // 当前**走不到这里**: 上面两个调用各自内部都已 catch(registerCodexReviewer…
+          // 落 warn 后保留安全路由; pushThreadSettings 吞掉 RPC 失败, 靠 turn/start 透传
+          // 兜底)。留这层是结构性防御 —— 以后有人往这段加会抛的步骤时, 快照不会悄悄与
+          // 实际路由分叉。也因为当前不可达, 没有对应单测能触发它。
+          mutableProviderId = prevProviderId;
+          mutableModel = prevModel;
+          mutableCatalogModel = prevCatalogModel;
+          throw e;
+        }
       },
 
       async setEffort(newEffort: Effort) {
@@ -7231,6 +7432,9 @@ export class CodexAgent extends BaseAgent {
         // host bridge see runtime Orca role/workflow updates by reference.
         Object.assign(vo, patch);
         registerCodexMcpContext(threadId);
+        for (const descendantThreadId of descendantMcpThreadIds) {
+          registerCodexMcpContext(descendantThreadId);
+        }
         log.debug('setVendorOptions', {
           patchKeys: Object.keys(patch),
         });

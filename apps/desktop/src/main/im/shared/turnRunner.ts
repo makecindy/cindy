@@ -101,6 +101,7 @@ import {
   markActivityWriting,
   pushToolStep,
   renderActivity,
+  renderActivityLine,
   setActivityNotice,
   type TurnActivityState,
 } from './turnActivity';
@@ -285,6 +286,11 @@ export interface ImRunAgentTurnArgs {
   attachments: IMAttachment[];
   /** thread = session 模型的会话维度键(slack);feishu 不传。 */
   scopeKey?: string;
+  /**
+   * 发给 agent 的正文覆盖(群上下文前缀拼装, 见 adapter.prepareAgentTurnText)。
+   * 缺省 = text。落库(persistUserMessage)与标题生成恒用 text(渠道原文)。
+   */
+  agentText?: string;
   outputCardMessageId?: string;
   outputCardPrefix?: string;
   onTurnComplete?: () => void;
@@ -539,7 +545,6 @@ export function createTurnRunner(
       target = created.target;
     }
     const row = target.row;
-    args.onRouteResolved?.(row.id);
     if (!target.authChecked) {
       const auth = await checkImRouteAuthDetailed(row, undefined, authCheckDeps());
       if (!auth.ok) {
@@ -554,6 +559,10 @@ export function createTurnRunner(
         return { kind: 'rejected', reason: 'missing_auth' };
       }
     }
+    // onRouteResolved 必须在鉴权通过之后才算"路由解析成功" —— 群窗口游标的
+    // commit 挂在它上面, 鉴权失败被拒的消息若先触发它, 这批群上下文会被游标
+    // 永久跳过(prepareAgentTurnText 的契约: 路由失败不推进游标)。
+    args.onRouteResolved?.(row.id);
 
     // ── thread 名片卡(threadScoped 新 thread 会话)─────────────────────────
     // 在 bot 第一条回复之前发进 thread, 让用户第一眼理解"这个 thread = 一条
@@ -681,7 +690,7 @@ export function createTurnRunner(
 
     const item: QueuedSend = {
       turn,
-      userMessage: buildImUserMessage(text, attachments, target.attached),
+      userMessage: buildImUserMessage(args.agentText ?? text, attachments, target.attached),
       rowId: row.id,
       text,
       attachments,
@@ -1424,13 +1433,29 @@ export function createTurnRunner(
    * 早已 resolve,也可能仍在飞行中),拿到 reaction token 后调 removeReaction。
    * 任何环节失败都吞掉，这是 ack 的清理动作，不能影响 turn 结束流程。
    */
-  async function cancelAckReaction(turn: TurnState): Promise<void> {
+  async function cancelAckReaction(
+    turn: TurnState,
+    opts: { terminal?: boolean } = {},
+  ): Promise<void> {
     if (!turn.ackReactionIdPromise || !turn.userMessageId) return;
     const promise = turn.ackReactionIdPromise;
     turn.ackReactionIdPromise = null;
     try {
       const reactionId = await promise;
       if (!reactionId) return;
+      // 真正跑完的 turn 可把"已收到"替换成结果表情(telegram: 👍/👎;
+      // setMessageReaction 整组替换, 旧 ack 一并被顶掉)。
+      const terminalEmoji =
+        opts.terminal && adapter.terminalReactionEmoji
+          ? adapter.terminalReactionEmoji(turn.terminalKind)
+          : null;
+      if (terminalEmoji) {
+        // 替换成功(返回 token)即顶掉旧 ack;返回 null = 渠道本轮拒放表情
+        // (如 telegram 在 turn 进行中被切到 emoji off)— 必须回落撤 ack,
+        // 否则 👀 永久卡在用户消息上。
+        const replaced = await im.reactToMessage?.(turn.userMessageId, terminalEmoji);
+        if (replaced) return;
+      }
       await im.removeMessageReaction?.(turn.userMessageId, reactionId);
     } catch {
       /* 忽略失败：表情清理是尽力而为。 */
@@ -1617,6 +1642,14 @@ export function createTurnRunner(
   function composeStreamingView(turn: TurnState): string {
     const body = turn.outputCardPrefix ? turn.outputCardPrefix + turn.buffer : turn.buffer;
     if (turn.done) return body;
+    if (adapter.answerOnlyProgress?.(turn.userId)) {
+      // Telegram 私聊: 多行过程时间线会打断客户端的草稿动画渲染 → 中间态
+      // 只发正文; 正文出来之前用单行紧凑状态(当前工具/思考 · N 项 · 时长)
+      // 顶住草稿占位 —— 工具期停在纯 "Thinking…" 是哑巴(桌面端有时间线,
+      // 渠道零信息, Chris 2026-07-30 实测点名)。notice(过载重试)含在内。
+      if (body) return body;
+      return renderActivityLine(turn.activity, Date.now());
+    }
     const act = renderActivity(turn.activity, Date.now());
     if (!act) return body;
     return body ? `${act}\n\n${body}` : act;
@@ -1881,8 +1914,9 @@ export function createTurnRunner(
     releaseAttachedImTurnHeadless(turn);
     // terminal done/error 的普通收口路径。撤 ack 是不等待的尽力清理，
     // 失败由 cancelAckReaction 内部吞掉；pre-dispatch failure 需要更严格
-    // 顺序，走 completeTurnCallbackAfterAck。
-    void cancelAckReaction(turn);
+    // 顺序，走 completeTurnCallbackAfterAck(不带 terminal — 没跑过的 turn
+    // 不放结果表情)。
+    void cancelAckReaction(turn, { terminal: true });
     invokeTurnCompleteCallback(turn);
   }
 

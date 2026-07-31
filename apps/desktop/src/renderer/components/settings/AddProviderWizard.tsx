@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { createCustomProvider, type RuntimeKeys } from '@/lib/customProviders';
+import { PROVIDER_SECRET_IDS } from '../../../shared/providerSecrets';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
 import { providerMonogram } from '@/lib/providerModels';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
@@ -60,7 +61,10 @@ interface AddProviderWizardProps {
 }
 
 type Selection =
-  { kind: 'oauth'; provider: ProviderView } | { kind: 'preset'; preset: ProviderPreset };
+  | { kind: 'oauth'; provider: ProviderView }
+  | { kind: 'preset'; preset: ProviderPreset }
+  /** 内置 API-key 供应商(如 Gemini 图像来源,2026-07):保存 key 即连接,无自定义供应商落库。 */
+  | { kind: 'builtinApiKey'; provider: ProviderView };
 
 type PresetBaseUrls = Partial<Record<AgentKind, string>>;
 
@@ -103,9 +107,16 @@ function isValidEditablePresetBaseUrl(value: string): boolean {
  * (缺省由 baseUrl 推导 …/v1/models,见 provider-model-fetch);同时内置少量
  * 推荐模型兜底——拉取因网络/限流失败时降级为「仅推荐模型」仍可完成创建,
  * 不把用户堵死(与目录预设同语义;Greptile P1 反馈 2026-07-24)。
- * cc runtime 需 Anthropic 兼容端点、codex 需 OpenAI 兼容端点,故 openai/xai
- * 仅声明 codex(两家无 Anthropic 兼容端点),表单会自动展示「仅支持 X」说明行。
+ * 每个 runtime 都独立声明 wire protocol：Anthropic API 同时提供 Claude Code 的
+ * Messages 与 Codex 桥接所需的 Messages 端点；openai/xai 仅声明 Codex(两家无
+ * Anthropic 兼容端点),表单会自动展示「仅支持 X」说明行。
  */
+const ANTHROPIC_API_MODELS = [
+  { id: 'claude-opus-5', name: 'Claude Opus 5', contextWindow: 1_000_000 },
+  { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', contextWindow: 1_000_000 },
+  { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', contextWindow: 200_000 },
+];
+
 const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
   anthropic: {
     id: 'anthropic-api',
@@ -117,11 +128,15 @@ const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
         // contextWindow 必须与目录(providers.json)一致:保存时它是窗口的唯一来源
         // (拉取的模型列表不带窗口),缺省会落 200k 默认 → toSdkModelString 剥掉
         // 1M 模型的 [1m] 路由,用户拿到 1/5 窗口。
-        models: [
-          { id: 'claude-opus-5', name: 'Claude Opus 5', contextWindow: 1_000_000 },
-          { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', contextWindow: 1_000_000 },
-          { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', contextWindow: 200_000 },
-        ],
+        models: ANTHROPIC_API_MODELS,
+      },
+      // Codex 通过 Responses → Anthropic Messages 本地桥接访问同一官方 API。
+      // 这不是 Claude.ai OAuth 路由：API key 由该 runtime 独立存储，出站只使用
+      // x-api-key，Codex 自带的 OpenAI Authorization 永不透传到 Anthropic。
+      codex: {
+        wireProtocol: 'anthropic-messages',
+        baseUrl: 'https://api.anthropic.com',
+        models: ANTHROPIC_API_MODELS,
       },
     },
   },
@@ -245,9 +260,12 @@ export function AddProviderWizard({
   // entry(左栏检测建议 / 引导卡直达):目录里找得到该渠道才直达授权步,否则回落目录页。
   const entryProvider =
     entry?.kind === 'builtin' ? providers.find((x) => x.id === entry.providerId) : undefined;
-  const [sel, setSel] = useState<Selection | null>(() =>
-    entryProvider ? { kind: 'oauth', provider: entryProvider } : null,
-  );
+  const [sel, setSel] = useState<Selection | null>(() => {
+    if (!entryProvider) return null;
+    return entryProvider.auth?.method === 'apiKey'
+      ? { kind: 'builtinApiKey', provider: entryProvider }
+      : { kind: 'oauth', provider: entryProvider };
+  });
   // 预设表单态
   const [name, setName] = useState('');
   const [apiKey, setApiKey] = useState('');
@@ -310,6 +328,19 @@ export function AddProviderWizard({
       ),
     [providers],
   );
+  // 内置 API-key 渠道(auth.method 'apiKey' 的 builtin 条目,今天只有 gemini 图像来源):
+  // 已连接的不再进向导;声明了媒体清单才展示(纯占位条目没有可配置的能力面)。
+  const builtinApiKeyChoices = useMemo(
+    () =>
+      providers.filter(
+        (p) =>
+          p.source === 'builtin' &&
+          p.auth.method === 'apiKey' &&
+          !p.connected &&
+          ((p.imageModels?.length ?? 0) > 0 || (p.videoModels?.length ?? 0) > 0),
+      ),
+    [providers],
+  );
   const sortedPresets = useMemo(
     () => sortPresetsForLocale(presets, i18n.language),
     [presets, i18n.language],
@@ -334,6 +365,13 @@ export function AddProviderWizard({
     fetchSeqRef.current += 1;
     setManualModelIds({});
     setSel({ kind: 'oauth', provider });
+    setStep(2);
+  }, []);
+  const pickBuiltinApiKey = useCallback((provider: ProviderView) => {
+    fetchSeqRef.current += 1;
+    setManualModelIds({});
+    setSel({ kind: 'builtinApiKey', provider });
+    setApiKey('');
     setStep(2);
   }, []);
   const pickPreset = useCallback(
@@ -545,6 +583,7 @@ export function AddProviderWizard({
             authMethod: preset.authMethod ?? 'apiKey',
             modelsUrl: rt.modelsUrl ?? null,
             apiKey: apiKey.trim() || null,
+            ...(rt.wireProtocol ? { wireProtocol: rt.wireProtocol } : {}),
             ...(rt.headers ? { headers: rt.headers } : {}),
           });
           return { agent, ok: !!(r.ok && r.models), models: r.models ?? [] };
@@ -619,6 +658,35 @@ export function AddProviderWizard({
   );
 
   // ── 完成创建(预设)────────────────────────────────────────────────────
+  /**
+   * 内置 API-key 供应商(如 Gemini):保存 = 把 key 写进该供应商在册的 safeStorage 键
+   * (providerSecrets SSoT),连接态(provider-service 的 builtinApiKeyConnected)与
+   * 图像通道 ready 都以「key 已存」为准 —— 无自定义供应商落库、无模型拉取步。
+   */
+  const handleSaveBuiltinApiKey = useCallback(async () => {
+    if (!sel || sel.kind !== 'builtinApiKey') return;
+    const id = sel.provider.id;
+    if (!(PROVIDER_SECRET_IDS as readonly string[]).includes(id)) {
+      // 目录出现了未在 providerSecrets 登记的内置 API-key 供应商 = 数据/代码脱节,
+      // 明确报错让问题在配置期暴露,不静默写错键。
+      toast.error(t('settings.providers.wizard.authorizeFailed', { name: sel.provider.name }));
+      return;
+    }
+    const key = apiKey.trim();
+    if (!key) return;
+    setSaving(true);
+    try {
+      // 失败经统一 IPC 错误协议抛出(throwIpcError),这里 catch 即失败。
+      await window.electronAPI.builtinApiKeyStore(id, key);
+      toast.success(t('settings.providers.wizard.authorizedToast', { name: sel.provider.name }));
+      onDone(id);
+    } catch {
+      toast.error(t('settings.providers.wizard.authorizeFailed', { name: sel.provider.name }));
+    } finally {
+      setSaving(false);
+    }
+  }, [sel, apiKey, onDone, t]);
+
   const handleFinish = useCallback(async () => {
     if (!sel || sel.kind !== 'preset') return;
     const preset = sel.preset;
@@ -695,11 +763,11 @@ export function AddProviderWizard({
     }
   }, [sel, picks, name, apiKey, presetBaseUrls, providers, onDone, t, i18n.language]);
 
-  // ── 步骤指示(OAuth 路径只有 2 步)─────────────────────────────────────
-  // 目录步默认按完整路径显示三步(选择供应商 → 连接 → 选择模型);只有选中
-  // OAuth 渠道(授权成功即完成,真的没有第 3 步)才收成两步。未选择时就显示
-  // 两步会让「选择模型」凭空消失/出现(2026-07-30 用户反馈)。
-  const totalSteps = sel?.kind === 'oauth' ? 2 : 3;
+  // ── 步骤指示 ─────────────────────────────────────────────────────────
+  // 目录步默认按完整路径显示三步(选择供应商 → 连接 → 选择模型);选中真的
+  // 没有第 3 步的两步流程(OAuth 授权即完成、内置 API Key 保存即连接)才收成
+  // 两步。未选择时就显示两步会让「选择模型」凭空消失/出现(2026-07-30 用户反馈)。
+  const totalSteps = sel == null || sel.kind === 'preset' ? 3 : 2;
   const stepLabels = [
     t('settings.providers.wizard.stepPick'),
     t('settings.providers.wizard.stepConnect'),
@@ -783,9 +851,9 @@ export function AddProviderWizard({
             {sel
               ? t('settings.providers.wizard.titleWith', {
                   name:
-                    sel.kind === 'oauth'
-                      ? sel.provider.name
-                      : presetDisplayName(sel.preset, i18n.language),
+                    sel.kind === 'preset'
+                      ? presetDisplayName(sel.preset, i18n.language)
+                      : sel.provider.name,
                 })
               : t('settings.providers.wizard.title')}
           </h3>
@@ -889,9 +957,20 @@ export function AddProviderWizard({
                   </>
                 )}
 
-                {filteredPresets.length > 0 && (
+                {(filteredPresets.length > 0 || builtinApiKeyChoices.length > 0) && (
                   <>
                     <GroupLabel>{t('settings.providers.wizard.groupApiKey')}</GroupLabel>
+                    {builtinApiKeyChoices
+                      .filter((p) => !q || p.name.toLowerCase().includes(q))
+                      .map((p) => (
+                        <ProviderRow
+                          key={p.id}
+                          icon={cardIcon({ providerId: p.id, name: p.name })}
+                          name={p.name}
+                          meta={t('settings.providers.wizard.metaApiKey')}
+                          onClick={() => pickBuiltinApiKey(p)}
+                        />
+                      ))}
                     {filteredPresets.map((p) => (
                       <ProviderRow
                         key={p.id}
@@ -1055,6 +1134,52 @@ export function AddProviderWizard({
                 <OAuthDeviceCodeCard deviceCode={genericDeviceCode} />
               )}
               {oauthSingleAgentNote && <InfoLine text={oauthSingleAgentNote} />}
+            </div>
+          )}
+
+          {step === 2 && sel?.kind === 'builtinApiKey' && (
+            <div className="flex flex-col gap-4">
+              <div className="flex items-center gap-3">
+                <span
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+                  style={{
+                    backgroundColor: 'var(--settings-integration-avatar-bg)',
+                    border: '1px solid var(--settings-integration-avatar-border)',
+                    color: 'var(--settings-integration-avatar-icon)',
+                  }}
+                >
+                  {cardIcon({ providerId: sel.provider.id, name: sel.provider.name })}
+                </span>
+                <div className="flex min-w-0 flex-col">
+                  <span
+                    className="text-14 font-semibold"
+                    style={{ color: 'var(--settings-section-title)' }}
+                  >
+                    {sel.provider.name}
+                  </span>
+                  <span className="text-12" style={{ color: 'var(--text-tertiary)' }}>
+                    {t('settings.providers.wizard.builtinApiKey.subtitle')}
+                  </span>
+                </div>
+              </div>
+              <InfoLine text={t('settings.providers.wizard.builtinApiKey.note')} />
+              <div className="flex flex-col gap-1.5">
+                <label className="text-12 font-medium" style={{ color: 'var(--text-secondary)' }}>
+                  {t('settings.providers.custom.fields.apiKey')}
+                </label>
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  autoComplete="off"
+                  className="h-9 rounded-full border px-4 font-mono text-13 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
+                  style={{
+                    borderColor: 'var(--border-default)',
+                    backgroundColor: 'var(--surface-elevated)',
+                    color: 'var(--settings-section-title)',
+                  }}
+                />
+              </div>
             </div>
           )}
 
@@ -1357,6 +1482,23 @@ export function AddProviderWizard({
             >
               {t('settings.providers.wizard.cancel')}
             </button>
+            {sel?.kind === 'builtinApiKey' && step === 2 && (
+              <button
+                type="button"
+                onClick={() => void handleSaveBuiltinApiKey()}
+                disabled={saving || apiKey.trim().length === 0}
+                className={cn(
+                  'flex h-9 items-center justify-center gap-2 rounded-full px-5 text-13 font-medium transition-opacity',
+                  saving || apiKey.trim().length === 0
+                    ? 'cursor-not-allowed opacity-50'
+                    : 'hover:opacity-90',
+                )}
+                style={{ backgroundColor: 'var(--accent-cta-bg)', color: 'var(--surface-on-card)' }}
+              >
+                {saving && <Spinner size={13} />}
+                {t('settings.providers.wizard.finish')}
+              </button>
+            )}
             {sel?.kind === 'preset' && step === 2 && (
               <button
                 type="button"

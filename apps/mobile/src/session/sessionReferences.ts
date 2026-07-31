@@ -32,6 +32,19 @@ export interface MobileSessionReferenceMessage {
   createdAt?: number;
 }
 
+/**
+ * Safe terminal-state hint for a quoted session.
+ *
+ * The persisted error row is intentionally not copied into the quote: its
+ * body may contain provider-specific details.  This additive marker lets the
+ * receiving agent distinguish a genuinely interrupted turn from a response
+ * that simply ended at the last visible text.
+ */
+export interface MobileSessionReferenceTerminal {
+  status: 'error';
+  createdAt?: number;
+}
+
 export interface MobileSessionReferenceContext {
   sessionId: string;
   title?: string;
@@ -42,6 +55,8 @@ export interface MobileSessionReferenceContext {
   range: 'recent' | 'around-anchor';
   messageCount: number;
   truncated: boolean;
+  /** Present only when the recent snapshot ends in a persisted turn error on the source device. */
+  terminal?: MobileSessionReferenceTerminal;
 }
 
 /** 展示安全的落库摘要；不含任何被引用消息正文。 */
@@ -387,6 +402,20 @@ interface RemoteHistoryPage {
   items: Record<string, unknown>[];
   hasMore: boolean;
   nextCursor: RemoteHistoryCursor | null;
+  terminal: MobileSessionReferenceTerminal | undefined;
+}
+
+/** Rebuild the optional terminal marker from validated fields only (trust boundary). */
+function parseRemoteTerminal(value: unknown): MobileSessionReferenceTerminal | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (record.status !== 'error') return undefined;
+  return {
+    status: 'error',
+    ...(typeof record.createdAt === 'number' && Number.isFinite(record.createdAt)
+      ? { createdAt: record.createdAt }
+      : {}),
+  };
 }
 
 function parseRemoteHistoryPage(ref: MobileSessionReference, value: unknown): RemoteHistoryPage {
@@ -407,6 +436,7 @@ function parseRemoteHistoryPage(ref: MobileSessionReference, value: unknown): Re
     items: page.items.filter((row): row is Record<string, unknown> =>
       !!row && typeof row === 'object' && !Array.isArray(row) && row.sessionId === ref.sessionId),
     hasMore: page.hasMore,
+    terminal: parseRemoteTerminal(page.terminal),
     nextCursor: page.nextCursor === null || page.nextCursor === undefined
       ? null
       : (() => {
@@ -480,15 +510,27 @@ async function readRemoteHistory(
   order: 'asc' | 'desc',
   fromMs: number | null,
   cursor: RemoteHistoryCursor | null = null,
-): Promise<{ items: Record<string, unknown>[]; sourceTruncated: boolean }> {
+): Promise<{
+  items: Record<string, unknown>[];
+  sourceTruncated: boolean;
+  terminal: MobileSessionReferenceTerminal | undefined;
+}> {
   const items: Record<string, unknown>[] = [];
   let sourceTruncated = false;
+  // 被控端把 terminal 与页面在同一 handler 调用内算好,只有第一页的标记
+  // 与本次快照同源;后续翻页捎带的标记忽略。
+  let terminal: MobileSessionReferenceTerminal | undefined;
+  let firstPage = true;
   const seenCursors = new Set<string>();
   while (true) {
     const rawPage = await invokeSource<unknown>(invoke, ref, DL_HISTORY_MESSAGES_CHANNEL, [
       remoteHistoryRequest(ref, Math.max(1, limit), order, fromMs, cursor),
     ]);
     const page = parseRemoteHistoryPage(ref, rawPage);
+    if (firstPage) {
+      terminal = page.terminal;
+      firstPage = false;
+    }
     items.push(...page.items);
     sourceTruncated ||= remoteRowsWereTrimmed(page.items);
     const visibleCount = items.reduce((count, row) => count + (toReferenceMessage(row) ? 1 : 0), 0);
@@ -507,6 +549,7 @@ async function readRemoteHistory(
   return {
     items,
     sourceTruncated: sourceTruncated || (limit === 0 && items.length > 0),
+    terminal,
   };
 }
 
@@ -596,8 +639,12 @@ async function resolveRemoteReference(
   let mapped: MobileSessionReferenceMessage[];
   let anchorIndex: number | undefined;
   let sourceTruncated = false;
+  // 终态标记由被控端与首个历史页在同一 handler 调用内算好(见
+  // readRemoteHistory),与消息快照天然同源;锚点路径不带终态。
+  let terminal: MobileSessionReferenceTerminal | undefined;
   if (!ref.messageClientId) {
     const page = await readRemoteHistory(invoke, ref, messageLimit, 'desc', clearedAt);
+    terminal = page.terminal;
     const visibleRows = page.items
       .map(toReferenceMessage)
       .filter((row): row is MobileSessionReferenceMessage => row !== null)
@@ -684,6 +731,7 @@ async function resolveRemoteReference(
       range: ref.messageClientId ? 'around-anchor' : 'recent',
       messageCount: fitted.messages.length,
       truncated: sourceTruncated || fitted.truncated,
+      ...(terminal ? { terminal } : {}),
     },
     usedTokens: fitted.usedTokens,
   };

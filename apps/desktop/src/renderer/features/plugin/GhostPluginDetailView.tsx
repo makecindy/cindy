@@ -39,6 +39,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { CindyCapabilityPrefs } from '@/cindy-brain/CindyCapabilityPrefs';
+import { GhostErrandPrefs } from '@/cindy-brain/GhostErrandPrefs';
 import { GhostSettingsWebview } from '@/cindy-brain/GhostSettingsWebview';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import {
@@ -142,7 +143,8 @@ export function GhostPluginDetailView({
   const enabled = enabledOverride ?? detail.enabled;
   const canUse = enabled && detail.canUse;
   const cindyCapabilities = detail.cindyCapabilities;
-  const hasConfiguration = detail.hasSettingsUi || cindyCapabilities.length > 0;
+  const hasConfiguration =
+    detail.hasSettingsUi || cindyCapabilities.length > 0 || detail.hasErrand;
   const summary = ghostPluginSummary(detail.description, detail.id);
 
   useLayoutEffect(() => {
@@ -363,6 +365,9 @@ export function GhostPluginDetailView({
                   capabilities={cindyCapabilities}
                   appearance="plugin"
                 />
+              ) : null}
+              {detail.hasErrand ? (
+                <GhostErrandPrefs ghostId={detail.id} appearance="plugin" />
               ) : null}
             </div>
           </section>

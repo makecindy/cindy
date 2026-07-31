@@ -1754,6 +1754,37 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     );
   });
 
+  it('does not report route resolution before auth passes on an existing route', async () => {
+    // 群窗口游标的 commit 挂在 onRouteResolved 上(prepareAgentTurnText 契约):
+    // 鉴权失败被拒的消息若先触发它, 这批群上下文会被游标永久跳过。
+    mocks.readXdGatewayApiKey.mockReturnValue(null);
+    mocks.findActiveSession.mockResolvedValue({
+      id: 'feishu-session',
+      agentKind: 'claude-code',
+      workingDir: 'F:\\XDMaker',
+      model: 'claude-opus-4-8',
+      effort: 'xhigh',
+      permissionMode: 'auto',
+      fastMode: false,
+      sdkSessionId: null,
+      providerId: null,
+    });
+    const onRouteResolved = vi.fn();
+
+    await getRunner().runAgentTurn({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      userMessageId: 'msg-auth-order',
+      text: 'message that must not advance the group cursor',
+      attachments: [],
+      onRouteResolved,
+    });
+
+    expect(onRouteResolved).not.toHaveBeenCalled();
+    // 用户收到鉴权缺失提示(消息被拒), 而不是静默吞掉
+    expect(mocks.feishuIm.sendText).toHaveBeenCalled();
+  });
+
   it('does not create a route target for config commands when the default route is unauthenticated', async () => {
     mocks.readXdGatewayApiKey.mockReturnValue(null);
     mocks.findActiveSession.mockResolvedValue(null);

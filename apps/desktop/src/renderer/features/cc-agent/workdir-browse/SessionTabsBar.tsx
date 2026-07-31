@@ -44,6 +44,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import type { AgentKind, Session } from '@/lib/ccAgent.types';
 import { makerChatStore } from '@/lib/makerChatStore';
+import { getSessionDisplayTitle, toStoredSessionTitle } from '../lib/sessionDisplayTitle';
 
 export interface SessionTabsBarProps {
   /** 当前 URL :sessionId 指向的 session；null 表示无 active（极少出现）。 */
@@ -86,6 +87,7 @@ export function SessionTabsBar({
   onRename,
 }: SessionTabsBarProps) {
   const { t } = useTranslation();
+  const unnamedLabel = t('ccAgent.common.unnamedSession');
   // 订阅 running session map —— 与 sidebar SessionItem 同源(都来自
   // makerChatStore),保证 doc 模式 tab 上的 vendor icon 呼吸态与项目侧
   // session 行的呼吸完全同步出现/消失。多个订阅者 useSyncExternalStore
@@ -124,9 +126,17 @@ export function SessionTabsBar({
     setRenamingId(null);
     if (!id) return;
     const trimmed = editValue.trim();
-    const original = sessions.find((s) => s.id === id)?.title ?? '';
-    if (trimmed && trimmed !== original) onRename(id, trimmed);
-  }, [renamingId, editValue, sessions, onRename]);
+    const target = sessions.find((s) => s.id === id);
+    const original = target?.title ?? '';
+    // 显示标题也算「没改」(与 SessionContentHeader 同口径):未起名的会话 tab 上
+    // 预填的是本地化兜底文案,它不等于库里的英文哨兵 —— 只比原始 title 的话,
+    // 用户双击后原样回车会把兜底文案写进库、冲掉哨兵,自动起名从此跳过这个会话。
+    const displayed = target ? getSessionDisplayTitle(target, unnamedLabel) : '';
+    if (!trimmed || trimmed === original || trimmed === displayed) return;
+    // 预填是显示标题(legacy automation 会话已剥掉 `[Schedule] ` 前缀),落库前还原,
+    // 否则会话会从 automation 分组里消失(PR #1031 review P1)。
+    onRename(id, target ? toStoredSessionTitle(target, trimmed) : trimmed);
+  }, [renamingId, editValue, sessions, onRename, unnamedLabel]);
 
   // 进编辑态后自动 focus + 全选 input。
   useEffect(() => {
@@ -238,7 +248,7 @@ export function SessionTabsBar({
       >
         {sessions.map((session) => {
           const sessionId = session.id;
-          const title = session.title?.trim() || t('ccAgent.common.unnamedSession');
+          const title = getSessionDisplayTitle(session, unnamedLabel).trim() || unnamedLabel;
           const vendor = session.agentKind;
           const isActive = sessionId === activeSessionId;
           const isRunning = runningMap.has(sessionId);

@@ -710,13 +710,44 @@ export const FORGE_GUIDE = `# 意识(Ghost)编写手册
 
 意识是 Cindy 的第三方能力包,文件形态是 \`.cindy\`(zip 包)。装入后可给
 主机叠加:AI 可调用的工具、常驻界面面板、模型代办能力。本手册教你(agent)替用户
-写一个意识。**流程:先取手册目录,按需用 section 读透相关章(动手前至少读完
-"沙箱红线"与"打包与测试"两章) → 在工作目录写源码文件 → ghost_forge_pack 打包 →
-用户在弹窗上确认装入。**
+写一个意识。**流程:先取手册目录 → 按 §0 用提问卡片和用户对齐设计 → 按需用 section
+读透相关章(动手前至少读完"沙箱红线"与"打包与测试"两章) → 在工作目录写源码文件 →
+ghost_forge_pack 打包 → 用户在弹窗上确认装入。**
 
 从零开始时优先调用 \`ghost_forge_scaffold\` 生成一份不会覆盖现有文件的骨架，再在
 骨架上修改。可选模板:\`plain\`(普通沙箱工具)、\`agent-action\`(卡片点击后让 Agent
 继续工作)、\`node-json-rpc\`(普通随包 Node 服务)、\`node-mcp\`(随包 stdio MCP)。
+
+## 0. 设计对齐:动手前用提问卡片确认关键决策
+
+用户通常不知道意识能做成哪些形态——你不主动摆出来,他就只会得到一个"默认样子"的
+插件。所以写任何代码之前,先用**带选项的提问**和用户对齐设计:宿主支持带选项的
+提问卡片(用户点选项即可回答)就优先用卡片;没有就一次只问一个问题、正文里给出
+编号选项。规则:
+
+- 一张卡片聚焦一个决策,给 2–4 个具体选项并标注你的**推荐项**,不问开放式的"你想要什么"。
+- 选项用用户听得懂的话描述效果与代价(如"常驻会一直占一份后台资源")。
+- 只问需求推不出来的;能从用户描述直接推断的不要问,一般 3–6 个决策问完。
+
+值得主动摆出来让用户选的"隐藏"设计选项(详见对应章节):
+
+- **界面形态**:无界面(纯工具)/ 聊天卡片(card 槽,§4.5)/ 停靠面板(panel.position
+  left,§5)/ 右侧栏页签(position "tab",§5)。
+- **唤起方式**:只靠 AI 按 whenToUse 自动想起,还是同时声明 \`command\` 点名词让用户
+  显式点名(推荐,§2)。
+- **启动模式**:on-demand 按需拉起(缺省,推荐)/ resident 常驻(仅订阅型、要秒响应
+  的场景,§2)。
+- **后台能力**:要不要旁听事件(subscribe 槽,§4.6)、发系统提示(notify 槽,§4.9)。
+- **联网与凭证**:要不要 network 槽白名单联网(§4.7);要用户填 key 就需要 setup
+  就绪声明与 settingsHtml 设置区(§4.7、§4.8)。
+- **运行形态**:纯沙箱 main.js 够用,还是要随包 Node 进程装依赖跑重活(node 槽,§4.12)。
+- **媒体代办**:要不要让主机代生成/改图/视频(cindy 槽,§2、§4.0.1)。
+
+问完后把选择复述成一份简短设计小结(要解决的问题/目标用户/交互流程/所选形态/
+权限边界/验收标准),并顺带说明源码会放在工作目录的哪个文件夹——位置不需要用户选
+(骨架只能建在会话工作目录内,装入后归主机统一管理),让用户知情即可。用户确认
+小结后再动手。**修改现有意识同样适用**:先读现有 ghost.json 与源码,列出改动会
+影响哪些已选形态,再让用户确认。
 
 ## 1. 目录结构(最小可用)
 
@@ -851,8 +882,9 @@ key、未知字段、原清单没有的条目、类型或长度不合格、文�
 node secretBindings key、setup kv key——都不能使用 \`__proto__\`、\`constructor\` 或
 \`prototype\`；这些名称是宿主保留键，打包时会直接拒绝。
 
-十五个卡槽:\`tool\`(注册工具给 AI)、\`cindy\`(请 Cindy 本体代办:出图/改图)、\`agent\`(让
-当前 Agent 开始一个普通用户回合,见 §4.11)、\`panel\`(常驻
+十五个卡槽:\`tool\`(注册工具给 AI)、\`cindy\`(请 Cindy 本体代办:出图/改图/快问快答,
+见 §4 与 §4.0.2)、\`agent\`(让
+当前 Agent 开始一个普通用户回合,或派活取回结果,见 §4.11 / §4.11.1)、\`panel\`(常驻
 面板)、\`card\`(聊天卡片:自绘工具调用的过程与结果,见 §4.5)、\`subscribe\`(旁听会话
 事件 + 拦截用户消息,见 §4.6)、\`network\`(访问自带服务的域名白名单 HTTP,主机代发,
 见 §4.7)、\`notify\`(弹系统轻提示,主机画壳带你的身份头,见 §4.9)、\`fs\`(请主机
@@ -868,6 +900,9 @@ Claude Code 与 Codex 都能发现,见 §4.16)、\`workspace\`(请主机为项�
 聊天卡片后发起一次 Agent 回合；这一档不写配套字段。若确实需要没有当次点击也能
 自动发起，额外写 \`"agent": { "background": true }\`。后台档会在装入确认框单独
 显示为更高风险权限，而且仍只能使用用户曾通过点击卡片与你建立关联的会话。
+要把任务交给 Agent 干并**取回结果**(而不是发进用户的会话),另写
+\`"agent": { "errand": true }\`(可与 background 并存),见 §4.11.1;同样是装入
+确认框单列的高风险档。
 
 **node 工作进程详单**(声明 node 槽时必写,详见 §4.12):
 
@@ -1241,6 +1276,39 @@ await cindy.send({ type: 'cindy-request', kind: 'release_media', hash: r.hash })
 媒体库」并写明上限——这是唯一一条"不花钱就能写用户媒体库"的能力,所以要用户
 单独点头。别为了省事把它当默认能力申请:不做面板素材加工的插件不要声明。
 
+### 4.0.2 快问快答:向 Cindy 的快速通道要一段文字(oneshot_text)
+
+需要"问一句、拿一段文字答案"(总结、分类、改写、抽取)而不需要 Agent 动用
+任何工具时,不要发起 Agent 回合——用快问快答,几秒到几十秒出结果,便宜得多:
+
+\`\`\`js
+// 需声明:"slots": [..., "cindy"], "cindy": { "text": ["oneshot"] }
+const r = await cindy.send({
+  type: 'cindy-request',
+  kind: 'oneshot_text',
+  prompt: '把下面的反馈按情绪分成 正面/负面/中性,只回类别词:\\n' + feedback,
+  // expectJson: true,     // 可选:要求只输出 JSON,主机校验可解析
+  // maxTokens: 256,       // 可选:回答预算(1–4096,缺省 1024)
+  callId: msg.callId,      // tool-call 触发时务必带上(归因)
+});
+// 成功:{ ok:true, text:'…', model:'…' }(model = 实际应答的通道/型号,仅诊断)
+// 失败:{ ok:false, message, errorCode }
+\`\`\`
+
+规矩与边界:
+
+- 它走主机的**轻量任务模型链**(用户在设置里配置的快速通道,与会话自动起
+  标题同一条),不拉起 Agent、没有工具、碰不到用户文件、不进任何会话——
+  要"干活"(读文件、查资料、多步操作)请用派活(§4.11.1);
+- 选型不在你手里,也没有 tier/model 参数:链由用户配置,主机逐候选兜底;
+- \`errorCode:'NO_CANDIDATE'\` = 用户当前没有可用的快速通道(未配置或凭证
+  不可用)。**这是正常失败面**:如实提示用户,不要重试轰炸;
+- \`expectJson: true\` 时主机会剥掉代码围栏并校验 JSON.parse,解析失败返回
+  \`errorCode:'BAD_MODEL_OUTPUT'\`(message 带原始输出开头供排查)。字段结构
+  在 prompt 里自己描述,主机不做逐字段 schema 校验;
+- prompt ≤32768 字符;同步返回,没有异步单;每插件在途上限与媒体代办共用
+  (用户可配);装入确认框会单列一行「可向 Cindy 的快速通道提问」。
+
 ## 4.1 宿主公开上下文(request,无需卡槽)
 
 电子脑需要按宿主构建身份或当前语言选择公开配置/界面文案时,走只读 request。当前只暴露
@@ -1365,6 +1433,11 @@ cindy.onHostMessage(async function (msg) {
 - 卡片上方主机画一枚小 chip(你的头像 + 名字 + 运行/完成状态点;可点开看本次
   调用参数),你画不了也冒充不了——它是"这块内容由某意识渲染"的信任签名;chip
   以下整块画布归你,主机不再叠边框/底色/内边距;
+- **不铺底色 = 真透明**(全出血海报的推荐姿势):主机不叠底色,同时在上面那段注入块
+  里声明了 \`color-scheme: light|dark\`(跟宿主主题实时切),卡片画布因此在两种模式下
+  都是透明的、直接透出聊天背景。所以图片顶满卡片、四边不留边是安全的,**不需要**
+  为了"避免白底"去自己铺一层 \`--msg-tool-card-bg\`;反过来,别自己写死
+  \`color-scheme\`,那会让卡内原生控件在另一种模式下反档;
 - 供卡的调用,聊天不再渲染 \`xdt_image_urls\` 的通用图卡(被你的卡替换);其它
   工具/其它调用不受影响。**但 \`xdt_image_urls\` 本身仍必须照发**(数据通道,
   IM/远程会话出站与手机端靠它),图画进卡时结果带 \`xdt_images_in_card: true\`
@@ -2091,6 +2164,45 @@ await cindy.agent.run({
 一条 Agent 请求，后台请求之间至少间隔 10 秒。这个能力可能自动产生模型费用，只在
 产品确实需要时申请，不要把 \`sessionId\` 当作任意跨会话控制口。
 
+### 4.11.1 派活取件:让 Agent 替你干活并取回结果(errand)
+
+\`agent.run\` 把回合发进**用户的会话**,结果是给用户看的;派活(errand)相反:
+任务在**你的专属 errand 会话**里跑,Agent 的最终回复文字交回**你**手里继续用。
+需声明 \`"slots": [..., "agent"]\` + \`"agent": { "errand": true }\`(装入确认高风险单列)。
+
+\`\`\`js
+// 提交(默认异步:先拿单号,再轮询取件——Agent 干活是分钟级的):
+const r = await cindy.agent.errand({
+  task: '阅读工作目录下的 README 并总结要点(200 字以内)',
+  // context: { anything: '结构化上下文,主机 JSON 化后附在任务消息尾部' },
+  // title: '我的插件 · 代办',   // 仅首次创建 errand 会话时用作标题
+  // mode: 'wait',               // 同步等到完成(30 分钟顶);默认不传 = 异步
+  callId: msg.callId,
+});
+// 受理:{ ok:true, jobId, status:'running', sessionId }
+// 轮询取件(建议间隔 ≥5s;做成"提交 + 查询"两个工具让 AI 自己掌握节奏):
+const q = await cindy.agent.queryErrand({ jobId: r.jobId });
+// 进行中:{ ok:true, jobId, status:'running', sessionId, elapsedSeconds }
+// 完成:  { ok:true, jobId, status:'done', sessionId, text, agentKind, model }
+// 失败:  { ok:false, errorCode, message }
+\`\`\`
+
+主机强制的边界(都不是建议):
+
+- **任务只进普通 user 消息**,绝不进 system prompt;
+- errand 会话在**侧边栏可见**,用户可随时旁观、叫停——没有隐身会话;
+- 用哪个 agent/模型/思考强度、多大动手权限、在哪个目录干活,全部由**用户**在
+  你的插件详情页「AI 代办」卡里配置;缺省跟随用户新建草稿的选择,权限档缺省
+  **只读**(不能改任何文件),目录缺省是插件专属文件夹。别假设你能写文件——
+  只读档下让 Agent"分析/回答"没问题,"修改"类任务要在文案里引导用户先放开
+  权限档;
+- 每插件同时 1 单在途、相邻提交至少隔 10 秒;结果超过 64K 字符会截断(尾部带
+  标记);完成结果保留 30 分钟,应用重启后查无此单(按可重新提交处理);
+- \`errorCode:'BUSY'\` = 你已有一单在途,或用户恰好正在 errand 会话里说话;
+  \`'NO_CANDIDATE'\` 不存在于此——但会话创建/派发失败有 \`'SESSION_UNAVAILABLE'\`,
+  超时有 \`'TIMEOUT'\`(任务可能仍在会话里继续,提示用户打开会话查看)。
+- 这个能力必然产生模型费用且耗时分钟级:能用快问快答(§4.0.2)解决的,不要派活。
+
 ## 4.12 随包 Node 工作进程与 stdio MCP(node 槽)
 
 \`main.js\` 永远还是浏览器沙箱代码。声明 node 槽后，主机额外为**这一段意识**按需
@@ -2527,6 +2639,10 @@ const ensured = await cindy.workspace({
   \`var(--surface, #f7f7f5)\`、\`var(--text-primary, #1a1a1a)\`、
   \`var(--border-default, #e4e4e0)\`;面板/侧边栏背景用 \`--panel-bg\`(已注册,
   alias 到 --surface,与宿主面板同源);
+- **明暗档主机已代你声明**:注入块里带了 \`color-scheme: light|dark\`(跟宿主主题
+  实时切),所以你不写一行样式,原生控件(滚动条、\`<input>\`/\`<select>\`/复选框、
+  日期选择器)也会落在正确的明暗档上。别自己写死 \`color-scheme\`,否则暗色主题下
+  这些控件会反档;真要覆盖就跟着主机主题一起换;
 - 滚动条统一规范:12px 槽 + 6px 圆角 thumb,滚动时加 \`.is-scrolling\` 显形
   (颜色用 \`var(--msg-scrollbar)\` / \`var(--msg-scrollbar-hover)\`),2 秒无活动移除。
 
@@ -2612,7 +2728,7 @@ const ensured = await cindy.workspace({
 - panel.systemButtons 格式错(不是对象、未知键、值非布尔,或 position:"tab" 时声明——页签形态没有标准头)
 - keywords(已废弃字段,旧包兼容保留,新意识别写)有单字词 · kind 写了但不是 "chip"(可省略) · schemaVersion 不是 2
 - cindy 详单格式错(未知类目/动作、空数组、有详单但 slots 没有 "cindy")
-- agent 详单格式错(有详单但 slots 没有 "agent"，或 background 不是 true；只需点击触发时应省略 agent 字段)
+- agent 详单格式错(有详单但 slots 没有 "agent"，或 background / errand 都不是 true；只需点击触发时应省略 agent 字段)
 - node 详单格式错(槽/详单不成对、entry 不是包内 CommonJS .js/.cjs、protocol 不在 json-rpc-stdio / mcp-stdio、
   写了 command/args/shell/env、resident 又写 idleTimeoutSeconds)
 - id 用了 \`cindy-\` / \`filo-\` / \`xd-\` 前缀(官方保留,正式版用户通道拒装;给自己的意识换个前缀)

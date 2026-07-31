@@ -60,19 +60,23 @@ const AGENT_LABEL: Record<AgentKind, string> = {
 };
 
 /**
- * 分组折叠态(仅 UI 展示,按设备记忆)。非对话类型组(图像/音频/视频/向量/其它)默认折叠——
- * 它们是能力模型,不参与对话模型选择,默认收起让列表清爽;对话厂商组默认展开;
- * 底部「已停用」分区(key = '__disabled')默认**展开**——区里有东西说明是用户主动停的,
- * 找回路径要一眼可见。只存用户显式改过的组(与 modelVisibilityPrefs 同哲学),搜索时强制全展开。
+ * 分组折叠态(仅 UI 展示,按设备记忆)。非对话类型组(图像/视频/语音合成/语音转写/
+ * 实时音频/向量/压缩/其它)默认折叠——它们是网关多出的、不能当 agent 用的模型,默认
+ * 收起让列表清爽;对话厂商组默认展开;底部「已停用」分区(key = '__disabled')默认
+ * **展开**——区里有东西说明是用户主动停的,找回路径要一眼可见。只存用户显式改过的组
+ * (与 modelVisibilityPrefs 同哲学:未改的跟随默认),搜索时强制全展开。
  * CAPABILITY_CATEGORIES 同时就是「能力模型组」的判定(成员 = classification 的非 agent 分组)。
  */
 const COLLAPSE_STORAGE_KEY = 'xdt:modelListCollapsedGroups:v1';
 const DISABLED_GROUP_KEY = '__disabled';
 const CAPABILITY_CATEGORIES = new Set<ModelCategory>([
   'image',
-  'audio',
   'video',
+  'tts',
+  'stt',
+  'realtime',
   'embedding',
+  'compression',
   'other',
 ]);
 const DEFAULT_COLLAPSED_CATEGORIES = CAPABILITY_CATEGORIES;

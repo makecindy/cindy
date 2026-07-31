@@ -1,6 +1,10 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
-import { createRemoteMediaResolveQueue, type RemoteMediaRequest } from '@/session/remoteMediaResolveQueue';
+import {
+  createRemoteMediaResolveQueue,
+  type RemoteMediaRequest,
+  type RemoteMediaResolveHooks,
+} from '@/session/remoteMediaResolveQueue';
 import type { MobileResolvedRemoteMedia } from '@/session/remoteMedia';
 
 // 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
@@ -30,9 +34,15 @@ function manualResolver() {
     media: RemoteMediaRequest;
     resolve: (m: MobileResolvedRemoteMedia) => void;
     reject: (e: unknown) => void;
+    /** 队列绑定到本次请求缓存键的落盘回写钩子(见 RemoteMediaResolveHooks)。 */
+    hooks?: RemoteMediaResolveHooks;
   }> = [];
-  const resolve = vi.fn((media: RemoteMediaRequest, _opts?: { skipCache?: boolean }) => new Promise<MobileResolvedRemoteMedia>((res, rej) => {
-    pending.push({ media, resolve: res, reject: rej });
+  const resolve = vi.fn((
+    media: RemoteMediaRequest,
+    _opts?: { skipCache?: boolean },
+    hooks?: RemoteMediaResolveHooks,
+  ) => new Promise<MobileResolvedRemoteMedia>((res, rej) => {
+    pending.push({ media, resolve: res, reject: rej, hooks });
   }));
   return { pending, resolve };
 }
@@ -257,10 +267,12 @@ describe('remoteMediaResolveQueue', () => {
 
     const first = await queue.request(imageRequest('a.png'));
     expect(first.url).toBe('https://oss.example/v1');
-    expect(resolve).toHaveBeenNthCalledWith(1, expect.objectContaining({ url: 'xdt-image://cache/a.png' }), undefined);
+    // 第三参是队列绑定的落盘回写钩子,每次 resolve 都带(见 RemoteMediaResolveHooks)。
+    const localCopyHooks = expect.objectContaining({ onLocalCopy: expect.any(Function) });
+    expect(resolve).toHaveBeenNthCalledWith(1, expect.objectContaining({ url: 'xdt-image://cache/a.png' }), undefined, localCopyHooks);
     const refreshed = await queue.request(imageRequest('a.png'), { forceRefresh: true });
     expect(refreshed.url).toBe('https://oss.example/v2');
-    expect(resolve).toHaveBeenNthCalledWith(2, expect.objectContaining({ url: 'xdt-image://cache/a.png' }), { skipCache: true });
+    expect(resolve).toHaveBeenNthCalledWith(2, expect.objectContaining({ url: 'xdt-image://cache/a.png' }), { skipCache: true }, localCopyHooks);
     expect(queue.peekFresh('xdt-image://cache/a.png')?.url).toBe('https://oss.example/v2');
   });
 
@@ -439,5 +451,106 @@ describe('remoteMediaResolveQueue', () => {
     expect(onOrphanResolved).toHaveBeenCalledTimes(1);
     expect(onOrphanResolved).toHaveBeenCalledWith(expect.objectContaining({ ossKey: 'key/a.png' }));
     expect(queue.peekFresh('xdt-image://cache/a.png')).toBeNull();
+  });
+
+  // 落盘完成后的缓存升级(PR #1125 review):presign 会被当 fresh 缓存反复命中,
+  // 同键请求再也不会重进磁盘 lookup,盘上的本地副本永远轮不到用。
+  describe('local-copy upgrade', () => {
+    const localCopy = (ossKey: string): MobileResolvedRemoteMedia => ({
+      url: 'file:///cache/a.png',
+      ossKey,
+      mimeType: 'image/png',
+      size: 1024,
+      expiresAt: '9999-12-31T00:00:00.000Z',
+      previewable: true,
+    });
+
+    it('serves the local file to later requests without re-resolving', async () => {
+      const { pending, resolve } = manualResolver();
+      const queue = createRemoteMediaResolveQueue({ resolve });
+
+      const p1 = queue.request(imageRequest('a.png'));
+      await flush();
+      pending[0]?.resolve(resolvedMedia('a.png'));
+      await expect(p1).resolves.toMatchObject({ url: 'https://oss.example/a.png?sig=1' });
+
+      // 后台落盘完成 → 队列条目升级成本地文件
+      pending[0]?.hooks?.onLocalCopy(localCopy('key/a.png'));
+
+      await expect(queue.request(imageRequest('a.png'))).resolves.toMatchObject({
+        url: 'file:///cache/a.png',
+      });
+      // 关键:没有再次进入取件(否则就等于每次点开都重下一整张原图)
+      expect(resolve).toHaveBeenCalledTimes(1);
+      expect(queue.peekFresh('xdt-image://cache/a.png')?.url).toBe('file:///cache/a.png');
+    });
+
+    it('keeps the oss key so leaving the screen still deletes the object', async () => {
+      const { pending, resolve } = manualResolver();
+      const queue = createRemoteMediaResolveQueue({ resolve });
+
+      const p1 = queue.request(imageRequest('a.png'));
+      await flush();
+      pending[0]?.resolve(resolvedMedia('a.png'));
+      await p1;
+      pending[0]?.hooks?.onLocalCopy(localCopy('key/a.png'));
+
+      // 升级后对象仍在世,必须照常出现在退屏清理里
+      expect(queue.releaseAll()).toEqual([
+        expect.objectContaining({ url: 'file:///cache/a.png', ossKey: 'key/a.png' }),
+      ]);
+    });
+
+    it('drops an upgrade whose object was already replaced by a forced refresh', async () => {
+      const { pending, resolve } = manualResolver();
+      const queue = createRemoteMediaResolveQueue({ resolve });
+
+      const p1 = queue.request(imageRequest('a.png'));
+      await flush();
+      pending[0]?.resolve(resolvedMedia('a.png', { ossKey: 'key/old' }));
+      await p1;
+
+      // 强制重取换到新对象
+      const p2 = queue.request(imageRequest('a.png'), { forceRefresh: true });
+      await flush();
+      pending[1]?.resolve(resolvedMedia('a.png', { ossKey: 'key/new' }));
+      await p2;
+
+      // 旧对象的落盘迟到:ossKey 不匹配,必须丢弃,不能把新条目覆盖成旧字节
+      pending[0]?.hooks?.onLocalCopy(localCopy('key/old'));
+      expect(queue.peekFresh('xdt-image://cache/a.png')).toMatchObject({
+        ossKey: 'key/new',
+        url: 'https://oss.example/a.png?sig=1',
+      });
+    });
+
+    it('drops an upgrade that lands after releaseAll instead of reviving the entry', async () => {
+      const { pending, resolve } = manualResolver();
+      const queue = createRemoteMediaResolveQueue({ resolve });
+
+      const p1 = queue.request(imageRequest('a.png'));
+      await flush();
+      pending[0]?.resolve(resolvedMedia('a.png'));
+      await p1;
+      queue.releaseAll();
+
+      pending[0]?.hooks?.onLocalCopy(localCopy('key/a.png'));
+      // 退屏后缓存归统一清理接管,升级不得凭空复活条目
+      expect(queue.peekFresh('xdt-image://cache/a.png')).toBeNull();
+    });
+
+    it('does not create a cache entry when the key was never cached', async () => {
+      const { pending, resolve } = manualResolver();
+      const queue = createRemoteMediaResolveQueue({ resolve });
+
+      const p1 = queue.request(imageRequest('a.png'));
+      await flush();
+      pending[0]?.reject(new Error('boom'));
+      await expect(p1).rejects.toThrow('boom');
+
+      // 取件失败没有缓存条目;迟到的落盘升级不得凭空建一条
+      pending[0]?.hooks?.onLocalCopy(localCopy('key/a.png'));
+      expect(queue.peekFresh('xdt-image://cache/a.png')).toBeNull();
+    });
   });
 });
