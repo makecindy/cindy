@@ -56,7 +56,8 @@ export function parseGhostPartition(partition: unknown): string | null {
 const GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
 /**
- * 十四个卡槽(意识能力的全部出口,docs/dev-rules/plugin-security-and-authoring.md)。
+ * 卡槽清单(意识能力的全部出口,docs/dev-rules/plugin-security-and-authoring.md)。
+ * 数量随迭代增长,以本数组为准——正文不再写死个数。
  * 'cindy' = 请 Cindy 本体代办(借主机自带 AI 能力干活;2026-07-11 Lizi 定案
  * 由 'model' 更名——本质是 Cindy 在干活,与选模型无关;旧名在校验层作
  * 静默别名兼容,已装老包不消失)。
@@ -64,7 +65,14 @@ const GHOST_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
  * 内的 HTTP 经主机代发(沙箱本身保持零直连),凭证锁主机保险库按声明注入。
  * 'notify' = 系统提示(2026-07-14):意识经管子请主机弹一条轻提示(toast),
  * 意识只供纯文本,整块 UI 主机画并带意识身份头(与订阅槽红条同一信任边界);
- * 无阻塞、无按钮、无回执——确认类交互不在此槽(走面板自绘或卡槽③交互卡)。
+ * 无阻塞、无按钮、无回执——要用户点选/确认走 'confirm' 槽。
+ * 'confirm' = 确认弹窗(2026-07-31):意识经管子请主机弹**主机同款**的二选一确认框
+ * (renderer 的 ConfirmDialogProvider),拿回用户的真实点击。与 notify 的区别是它
+ * **阻塞、有按钮、有回执**,所以骚扰面也大得多,护栏对齐 pick 槽:同插件最小间隔
+ * GHOST_CONFIRM_MIN_INTERVAL_MS、全局同时只允许一个确认框在场(BUSY,不排队)、
+ * 超时/无窗口/载荷非法一律 fail closed 当「没同意」。壳、标题与身份头(图标+名字)
+ * 由主机画,意识只供被净化的正文与按钮字——伪装不了主机文案、冒充不了别的意识,
+ * 也点不了自己的按钮。桌面独占:本机对话框在 device-link 白名单里属永不放行类别。
  * 'fs' = 写文件(2026-07-14):意识经管子请主机代写文件(创建/修改)。三档
  * 目的地:自己的私有数据目录(userData/ghost-fs/<id>,免确认)、当前会话
  * workdir(跟随会话 permission 模式:免批模式直写、逐条模式弹确认卡、
@@ -107,6 +115,7 @@ export const GHOST_SLOTS = [
   'node',
   'network',
   'notify',
+  'confirm',
   'fs',
   'session-context',
   'pick',
@@ -1338,6 +1347,7 @@ export function ghostContentKeys(manifest: GhostManifest): string[] {
     else if (slot === 'card') keys.push('slotCard');
     else if (slot === 'network') keys.push('slotNetwork');
     else if (slot === 'notify') keys.push('slotNotify');
+    else if (slot === 'confirm') keys.push('slotConfirm');
     else if (slot === 'fs') keys.push('slotFs');
     // skill 是信任面最高的内容(给主 Agent 灌指令),详情页必须如实露出。
     else if (slot === 'skill') keys.push('slotSkill');
@@ -1403,7 +1413,7 @@ export interface GhostPermissionItem {
   /** 稳定键:更新 diff 按它对齐(内容变化视为移除+新增,如面板换边)。 */
   key: string;
   /** 图标分组(renderer 按 kind 选图标)。 */
-  kind: 'cindy' | 'agent' | 'node' | 'tool' | 'command' | 'panel' | 'code' | 'subscribe' | 'card' | 'network' | 'notify' | 'fs' | 'session-context' | 'pick' | 'preview' | 'skill' | 'workspace';
+  kind: 'cindy' | 'agent' | 'node' | 'tool' | 'command' | 'panel' | 'code' | 'subscribe' | 'card' | 'network' | 'notify' | 'confirm' | 'fs' | 'session-context' | 'pick' | 'preview' | 'skill' | 'workspace';
   /** i18n key 后缀,消费方拼 `settings.ghosts.perm.<labelKey>`。 */
   labelKey: string;
   /** i18n 插值参数(工具名、指令名、面板标题等)。 */
@@ -1736,6 +1746,11 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     else if (slot === 'notify') {
       items.push({ key: 'notify', kind: 'notify', labelKey: 'notify', detailKey: 'notifyDetail' });
     }
+  }
+  // confirm 槽:能请主机弹一个二选一确认框(会打断操作)。装入时如实告知"它会来问",
+  // 决定权仍在用户的点击上——detailKey 的固定说明把这层讲清。
+  if (manifest.slots.includes('confirm')) {
+    items.push({ key: 'confirm', kind: 'confirm', labelKey: 'confirm', detailKey: 'confirmDetail' });
   }
   // 常驻模式如实告知(用户要背一个后台进程);on-demand 是默认行为,不列。
   if (manifest.launch === 'resident') {
@@ -4788,6 +4803,58 @@ export type GhostHostNoticeKey = (typeof GHOST_HOST_NOTICE_KEYS)[number];
 
 /** 同一意识两条提示的最小间隔 ms(超发拒收,防 toast 刷屏骚扰)。 */
 export const GHOST_NOTIFY_MIN_INTERVAL_MS = 5000;
+
+/**
+ * 上行:确认弹窗(confirm 槽,2026-07-31)。意识请主机弹**主机同款**的二选一
+ * 确认框(renderer 的 ConfirmDialogProvider),拿回用户的真实点击。
+ *
+ * 与 notify 的分工:notify 是「说一句就走」(无按钮无回执),本槽是「要一个答复」。
+ * 所以它会打断用户,骚扰面更大,护栏对齐 pick 槽(限速 + 全局单飞 + fail closed)。
+ *
+ * 信任边界:弹窗的壳、标题(主机文案「插件「X」请你确认」)与身份头(图标 + 名字)
+ * 全由主机画,身份取自已装清单而非载荷自报;意识只供 `body` 与按钮字,且一律过
+ * sanitizeGhostNoticeText 净化 + 长度上限。意识发起得了请求,点不了自己的按钮。
+ */
+export interface GhostPipeConfirm {
+  type: 'confirm-request';
+  /** 问句正文(纯文本,≤ GHOST_CONFIRM_BODY_MAX_CHARS;允许 \n 换行)。 */
+  body: string;
+  /** 主按钮文案(≤ GHOST_CONFIRM_BUTTON_MAX_CHARS);缺省用主机的「确认」。 */
+  confirmText?: string;
+  /** 次按钮文案(同上上限);缺省用主机的「取消」。 */
+  cancelText?: string;
+  /** 危险动作(删除/覆盖/改用户文件):主按钮走 destructive 语义色。缺省 false。 */
+  danger?: boolean;
+}
+
+/**
+ * confirm 的 invoke 返回。`ok:true` 只代表**问到了**;答案看 `confirmed`——
+ * false = 用户点了取消 / 按了 Esc / 点了弹窗外部。
+ * 失败分档带 errorCode,方便意识作者区分"被限速"与"用户拒绝"(两者处理完全不同)。
+ */
+export type GhostPipeConfirmResult =
+  | { ok: true; confirmed: boolean }
+  | {
+      ok: false;
+      errorCode: 'PERMISSION_DENIED' | 'INVALID_REQUEST' | 'RATE_LIMITED' | 'BUSY' | 'UNAVAILABLE' | 'INTERNAL';
+      message: string;
+    };
+
+/** 问句正文上限(比 notify 的 200 宽一点:确认要把后果说清,但仍是一眼读完的量)。 */
+export const GHOST_CONFIRM_BODY_MAX_CHARS = 300;
+
+/** 按钮文案上限(按钮就那么宽;超长会挤坏弹窗版式)。 */
+export const GHOST_CONFIRM_BUTTON_MAX_CHARS = 12;
+
+/** 同一意识两次确认请求的最小间隔 ms(按尝试记账,与 pick 槽同量级)。 */
+export const GHOST_CONFIRM_MIN_INTERVAL_MS = 3000;
+
+/**
+ * 无人应答的兜底超时 ms:到点当「没同意」。
+ * 90 秒是刻意选的——小于插件面板侧常用的 180 秒请求超时,好让面板拿到一个干净的
+ * "用户没答应"而不是自己先超时、留下一个语义不明的悬空请求。
+ */
+export const GHOST_CONFIRM_TIMEOUT_MS = 90_000;
 
 /** cindy 槽代办的质量档位:意识只表达"要多好",具体模型由主机解析表决定。 */
 export const GHOST_MODEL_TIERS = ['draft', 'standard', 'best'] as const;

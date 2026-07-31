@@ -27,6 +27,7 @@ const SESSION_SOURCES = [
   'telegram',
   'discord',
   'wechat',
+  'dingtalk',
   'scheduler',
   'learn',
   'shared',

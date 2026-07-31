@@ -148,6 +148,11 @@ import { GhostPreviewSlot } from './previewSlot.js';
 import { GhostWorkspaceSlot, type WorkspaceSessionService } from './workspaceSlot.js';
 import type { GhostTrustRegistry } from './ghostSignature.js';
 import { GhostNotifySlot, sanitizeGhostNoticeText } from './notifySlot.js';
+import { GhostConfirmSlot } from './confirmSlot.js';
+import {
+  getGhostConfirmDialogBridge,
+  initGhostConfirmDialogBridge,
+} from './ghostConfirmDialogBridge.js';
 import { GhostNetworkSlot } from './networkSlot.js';
 import { GhostFsSlot } from './fsSlot.js';
 import { getGhostGrantConfirmBridge } from './ghostGrantConfirmBridge.js';
@@ -1552,6 +1557,50 @@ export function getGhostNotifySlot(): GhostNotifySlot {
     });
   }
   return notifySlotSingleton;
+}
+
+let confirmSlotSingleton: GhostConfirmSlot | null = null;
+
+/** 意识确认弹窗通道(main → **单个**窗口;renderer 用主机同款 ConfirmDialog 渲染)。 */
+export const GHOST_CONFIRM_CHANNEL = 'ghosts:confirm-request';
+
+/**
+ * 确认弹窗槽单例(confirm):资格审/净化/限速/单飞在 GhostConfirmSlot,往返与
+ * 超时兜底在 GhostConfirmDialogBridge,这里只组装"投给哪个窗口"。
+ *
+ * 只投**一个**窗口(focused ?? 第一个),不像 notify 那样广播:模态确认框广播
+ * 出去会在每个窗口各弹一个、收回多份答案。没有可投窗口时 sendToWindow 回
+ * false → 桥 reject → 槽回 UNAVAILABLE(明确区别于"用户拒绝")。
+ */
+export function getGhostConfirmSlot(): GhostConfirmSlot {
+  if (!confirmSlotSingleton) {
+    const bridge =
+      getGhostConfirmDialogBridge() ??
+      initGhostConfirmDialogBridge({
+        sendToWindow: (payload) => {
+          const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+          if (!win || win.isDestroyed()) return false;
+          win.webContents.send(GHOST_CONFIRM_CHANNEL, payload);
+          return true;
+        },
+        log,
+      });
+    confirmSlotSingleton = new GhostConfirmSlot({
+      getGhost: findAvailableGhost,
+      showConfirm: (params) =>
+        bridge.request({
+          ghostId: params.ghostId,
+          ghostName: params.ghostName,
+          ...(params.iconDataUrl ? { iconDataUrl: params.iconDataUrl } : {}),
+          body: params.body,
+          confirmText: params.confirmText,
+          cancelText: params.cancelText,
+          danger: params.danger,
+        }),
+      log,
+    });
+  }
+  return confirmSlotSingleton;
 }
 
 let pickSlotSingleton: GhostPickSlot | null = null;
@@ -3413,7 +3462,28 @@ export function registerGhostIpc(): void {
     if (type === 'notify') {
       return getGhostNotifySlot().handleNotify(id, payload);
     }
+    // confirm-request = 确认弹窗(confirm 槽):资格审/净化/限速/单飞在
+    // confirmSlot,往返与超时兜底在 ghostConfirmDialogBridge。invoke 返回值即
+    // 结构化结果:ok:true 只代表问到了,答案看 confirmed。
+    if (type === 'confirm-request') {
+      return getGhostConfirmSlot().handleRequest(id, payload);
+    }
     throwIpcError('INVALID_PARAMS', '未知的管子消息类型');
+  });
+
+  // ── 确认弹窗回包(confirm 槽)────────────────────────────────────────
+  // renderer 上的确认框被用户点掉之后,把答案送回 main 结算那条挂起的管子请求。
+  // 不校验 sender 归属:requestId 是 main 自己铸的 randomUUID,只在本机 renderer
+  // 手里;陌生/重复的 id 由桥直接忽略(返回 handled:false),没有可利用面。
+  // 非布尔的 confirmed 在桥里一律按"没同意"兜底,不给靠畸形回包骗到同意的路。
+  ipcMain.handle('ghosts:confirm:resolve', async (_event, raw: unknown) => {
+    const p = raw as { requestId?: unknown; confirmed?: unknown } | null;
+    if (!p || typeof p.requestId !== 'string' || p.requestId.length === 0 || p.requestId.length > 128) {
+      throwIpcError('INVALID_PARAMS', 'requestId must be a non-empty string');
+    }
+    const bridge = getGhostConfirmDialogBridge();
+    if (!bridge) return { handled: false };
+    return { handled: bridge.resolve(p.requestId, p.confirmed) };
   });
 
   // ── 意识聊天卡片取件(卡槽③;宿主 renderer 历史回放用)──────────────

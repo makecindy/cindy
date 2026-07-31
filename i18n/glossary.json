@@ -88,6 +88,17 @@
       "note": "个人微信连接在设置页中的产品名称；先登记为 proposed，待产品术语评审后再决定是否固化。"
     },
     {
+      "id": "dingtalk",
+      "status": "proposed",
+      "en": "DingTalk",
+      "translations": {
+        "zh-CN": "钉钉",
+        "ja": "DingTalk",
+        "ko": "DingTalk"
+      },
+      "note": "钉钉机器人连接的产品名称，沿用官方品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。"
+    },
+    {
       "id": "openclaw",
       "status": "proposed",
       "en": "OpenClaw",
@@ -1027,6 +1038,17 @@
       "exempt": [
         "desktop:sessionShare.import.useWorktreeHint"
       ]
+    },
+    {
+      "id": "token-plan",
+      "status": "proposed",
+      "en": "Token Plan",
+      "translations": {
+        "zh-CN": "Token Plan",
+        "ja": "Token Plan",
+        "ko": "Token Plan"
+      },
+      "note": "阿里云百炼与小米 MiMo 的外部订阅产品名称，四语统一保留官方英文写法；与 Coding Plan 是不同套餐和凭证类型，先登记为 proposed，避免供应商预设中混用产品名。"
     },
     {
       "id": "model-category-tts",

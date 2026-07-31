@@ -1879,28 +1879,6 @@ export function ModelSelector({
     triggerActiveProvider && currentAgentKind
       ? getModel(triggerActiveProvider, modelId, currentAgentKind)?.icon
       : undefined;
-  const triggerPricePresentation = (() => {
-    if (deviceId || activeSourceId !== 'xd' || !triggerActiveProvider || !currentAgentKind)
-      return null;
-    const quote = getModelPriceQuote(pricing, activeSourceId, modelId);
-    if (quote && quote.source !== 'gateway') return null;
-    if (!quote && pricing == null) return null;
-    return modelPricePresentation(
-      quote ?? null,
-      getModel(triggerActiveProvider, modelId, currentAgentKind)?.cost,
-    );
-  })();
-  const triggerPromotionLabel =
-    triggerPricePresentation?.kind === 'free'
-      ? t('newChat.modelSelector.pricing.free')
-      : triggerPricePresentation?.kind === 'priced' &&
-          triggerPricePresentation.discount !== undefined
-        ? t(
-            'newChat.modelSelector.pricing.discount',
-            modelPriceDiscountLabelValues(triggerPricePresentation.discount),
-          )
-        : null;
-  // 断开态同一规则,只是来源取「真实断开来源」(currentProviderId)。
   const disconnectedProvider = currentProviderId
     ? providers.find((p) => p.id === currentProviderId)
     : undefined;
@@ -2137,9 +2115,6 @@ export function ModelSelector({
           >
             {displayLabel}
           </span>
-          {!fallbackOption?.active && triggerPromotionLabel && !isCompactToolbar && (
-            <ModelPromotionBadge>{triggerPromotionLabel}</ModelPromotionBadge>
-          )}
           {effortLabel && !isCompactToolbar && (
             <>
               <span

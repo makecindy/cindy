@@ -11,7 +11,7 @@
  *   into Markdown image nodes before HTML filtering.
  */
 
-import { createElement, memo, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
+import { createElement, memo, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -22,7 +22,7 @@ import 'katex/dist/katex.min.css';
 import remarkTruncateCjkUrls from './remarkTruncateCjkUrls';
 import remarkStrictInlineMath from './remarkStrictInlineMath';
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
-import remarkLocalPathLinks from './remarkLocalPathLinks';
+import remarkLocalPathLinks, { BARE_PATH_ATTR } from './remarkLocalPathLinks';
 import remarkHtmlImages from './remarkHtmlImages';
 import remarkPreserveLocalImagePaths, {
   RAW_LOCAL_IMAGE_SRC_PROP,
@@ -51,6 +51,7 @@ import {
 import {
   classifyInlineCodeTarget,
   classifyMarkdownLinkTarget,
+  decideRemoteLit,
   looksLikeBareFileReference,
   splitLocalLineSuffix,
   type MarkdownLocalKind,
@@ -71,7 +72,10 @@ import { isRemoteFileOrigin, type SessionFileOrigin } from '@/lib/sessionFileOri
 import {
   fetchChatFileWithToasts,
   peekRemotePathVerdict,
+  peekRemotePathVerdictForRender,
+  remotePathVerdictKey,
   revealRemoteChatFile,
+  subscribeRemotePathVerdictChange,
   verifyRemotePathCached,
 } from '@/lib/remoteFileOpen';
 import { i18n } from '@/i18n';
@@ -213,7 +217,27 @@ const REHYPE_PLUGINS: PluggableList = [
   rehypeHighlight,
   rehypeFencedCodeMarker,
 ];
-const MARKDOWN_LINK_CLASS = 'text-[var(--msg-link)] underline underline-offset-2 cursor-pointer [overflow-wrap:anywhere]';
+/**
+ * 聊天正文里一切「可点」的行内元素共用这一套外观:**正文色 + 常显下划线**。
+ *
+ * 两条拍板规则(2026-07-30,权威正文见 docs/design-rules/DESIGN.md「聊天正文的
+ * 可点性信号」):
+ *   ① **下划线常显 = 可点**,且是唯一的交互信号。markdown 里粗体占了字重、斜体占了
+ *      倾斜、行内 code 占了等宽+底色,下划线是唯一没被排版语义占用的通道 —— 所以把
+ *      它专门留给交互语义。反过来:**没有下划线的一律不可点**,行内 code 的等宽+底色
+ *      从此只表示「这是代码/路径」这一层排版含义,不再兼职表达可点。
+ *      (改前:可点的 FileTargetChip 用实色底 1.26:1,不可点的行内 code 用半透明底
+ *      dark 1.26~1.28:1 —— 静止状态下数值几乎相同,只能靠 hover 与指针形状区分,
+ *      等于「必须拿鼠标扫一遍才知道哪个能点」。)
+ *   ② **外链与本地文件不做外观区分**,只表达「可点」;去哪由文本自身可读性承担
+ *      (斜杠路径 vs `https://` 前缀)。
+ *
+ * 因此这里**刻意不用** `--msg-link`:它是主题契约(10 个内置主题各自定义,solarized
+ * 绿 / monokai 黄 / eclipse 青,用户导入 VS Code 主题时 linkColor 也映射到它),而手机端
+ * 根本没有链接色概念。要「两端统一 + 外链本地同形」,聊天正文就得退出这个 token。
+ * token 本身保留(其它界面仍在用),只是不再进 markdown 正文。
+ */
+const MARKDOWN_LINK_CLASS = 'underline underline-offset-2 cursor-pointer [overflow-wrap:anywhere]';
 /**
  * markdown 行内 code —— 几何与底色对齐 GitHub(6px 圆角 + 左右内距 + 半透明淡底,
  * 见 --msg-md-inline-code-bg 的说明)。
@@ -970,8 +994,19 @@ function FileTargetChip({
         className={cn(
           'inline rounded-[6px] border-0 px-1 py-0.5',
           'font-mono text-14 align-baseline',
-          'bg-[var(--msg-code-inline-bg)]',
-          'text-[var(--msg-assistant-text)]',
+          // 底色改用 markdown 行内 code 的同一个 token:按新规则底色只表示「这是
+          // 代码/路径」这层排版含义,可点性由下划线单独承担 —— 可点的路径与不可点的
+          // 行内 code 本来就是同一种排版物,底色理应相同。顺带解掉旧的撞色问题:
+          // 原先实色 --msg-code-inline-bg(1.26:1)与行内 code 半透明底(dark
+          // 1.26~1.28:1)数值几乎一样,却被指望承担「可点」信号。
+          'bg-[var(--msg-md-inline-code-bg)]',
+          // 刻意**不**钉 text-,与 INLINE_CODE_CLASS 一样让文字色继承上下文
+          // (对齐 GitHub:`.markdown-body code` 不定义 color)。这样可点 chip 与
+          // 不可点行内 code 在任何上下文里都同色,差别只剩那条下划线;原先钉
+          // --msg-assistant-text 在助手气泡里与继承值相同,但在引用块等压暗/变色
+          // 上下文里会分叉。
+          // 常显下划线 = 唯一的可点信号(不是 hover 才出现)。
+          'underline underline-offset-2',
           'text-left break-all',
           'transition-colors',
           'cursor-pointer hover:bg-[var(--cmd-palette-item-hover)]',
@@ -1167,71 +1202,83 @@ function useResolvedMarkdownTarget(
   const { origin: fileOrigin } = useChatSessionFile();
   const remoteOrigin = isRemoteFileOrigin(fileOrigin) ? fileOrigin : null;
 
-  // Synchronous resolution from the renderer cache. A reference that resolved
-  // on a previous mount (e.g. before the user switched away and back) repaints
-  // its chip on the very first render — no plain-text → chip flash, no repeat
-  // IPC. Recomputed on dep change so an in-place href/line change is covered.
-  const syncResolved = useMemo<MarkdownTarget | null>(() => {
+  // 远程点亮态**只有一个真值来源:模块缓存**;本组件不自己存任何结论,只存「缓存的
+  // 哪一版」。原来是 syncResolved(useMemo)?? asyncResolved(useState)两处并存 —— memo
+  // 不吃缓存变化、state 靠早返回跳过重算,于是每出现一条新的状态迁移就漏一条边:
+  //   第 8 轮 = TTL 到期没有通道通知;
+  //   第 9 轮 = 派生值没跟着新结论被覆盖(nonfile 降级);
+  //   第 10 轮 = 另一个挂载点写入的确定态传不过来。
+  // 三条都是「组件自己存了一份、而真值在可变缓存里」的同一个病。合并成纯派生后,
+  // 任何一条边都只有 resolveFromCache 一个地方需要改对(PR #1144 第 10 轮止损重构)。
+  const remoteAbsPath = useMemo(() => {
+    if (isStreaming || target.kind !== 'local-candidate' || !remoteOrigin) return '';
+    return resolveLocalPath(target.href, workingDir) || '';
+  }, [isStreaming, target, workingDir, remoteOrigin]);
+
+  // 缓存里**本 key** 的状态变了(确定态落库 / unknown 负缓存到期)→ 递增 → 重新派生。
+  // 按 key 过滤:一屏几十个引用,全量通知会让首屏 N 次 stat 引发 N×N 次重渲染。
+  const [cacheGen, setCacheGen] = useState(0);
+  useEffect(() => {
+    if (!remoteAbsPath || !remoteOrigin) return;
+    const mine = remotePathVerdictKey(remoteOrigin, workingDir, remoteAbsPath);
+    return subscribeRemotePathVerdictChange((key) => {
+      if (key === mine) setCacheGen((n) => n + 1);
+    });
+  }, [remoteAbsPath, remoteOrigin, workingDir]);
+
+  /** 当前缓存状态 → 该渲染成什么。纯函数式派生,所有触发点都走它。 */
+  const resolveFromCache = useCallback((): MarkdownTarget | null => {
     if (isStreaming || target.kind !== 'local-candidate') return null;
     const candidate = target;
     if (remoteOrigin) {
-      const absPath = resolveLocalPath(candidate.href, workingDir);
-      if (!absPath) return null;
-      const verdict = peekRemotePathVerdict(remoteOrigin, workingDir, absPath);
-      if (verdict === 'file' || verdict === 'unknown' || verdict === 'directory') {
-        return resolvedLocalFromResult(candidate, {
-          status: 'unique',
-          absPath,
-          kind: verdict === 'directory' ? 'directory' : 'file',
-        });
-      }
-      return null; // nonfile → 纯文本;未验证 → 异步 effect 验证后点亮
+      if (!remoteAbsPath) return null;
+      // ForRender 版会把 TTL 未过期的负缓存回成 'unknown',于是「断链期间的乐观点亮」
+      // 也是缓存的派生,不需要组件自己记住(见 remoteFileOpen 里两个 peek 的分工)。
+      const verdict = peekRemotePathVerdictForRender(remoteOrigin, workingDir, remoteAbsPath);
+      const decision = decideRemoteLit(verdict, candidate.href, candidate.originalHref);
+      if (!decision.lit) return null;
+      return resolvedLocalFromResult(candidate, {
+        status: 'unique',
+        absPath: remoteAbsPath,
+        kind: decision.kind,
+      });
     }
     const cached = peekResolveLocalPathSmart(candidate.href, workingDir);
     return cached ? resolvedLocalFromResult(candidate, cached) : null;
-  }, [isStreaming, target, workingDir, remoteOrigin]);
+  }, [isStreaming, target, workingDir, remoteOrigin, remoteAbsPath]);
 
-  // Async resolution for cache misses only. The synchronous path above shadows
-  // this whenever it has an answer, so a first-view (cold) ref flashes once,
-  // then the result is cached and every later mount hits the sync path.
-  const [asyncResolved, setAsyncResolved] = useState<MarkdownTarget | null>(null);
+  // 惰性初值:上次已解析过的引用第一帧就画成 chip,不闪纯文本(这是原 syncResolved
+  // memo 的唯一职责,合并进初值即可)。
+  const [resolved, setResolved] = useState<MarkdownTarget | null>(resolveFromCache);
 
   useEffect(() => {
-    setAsyncResolved(null);
+    // **无条件**按当前缓存重新派生。缓存说什么就是什么,不存在「保留旧结论」的分支 ——
+    // 那正是前三轮漏边的形状。
+    setResolved(resolveFromCache());
     if (isStreaming || target.kind !== 'local-candidate') return;
     const candidate = target;
+    let cancelled = false;
     if (remoteOrigin) {
-      const absPath = resolveLocalPath(candidate.href, workingDir);
-      if (!absPath || peekRemotePathVerdict(remoteOrigin, workingDir, absPath)) return;
-      let cancelled = false;
-      void verifyRemotePathCached(remoteOrigin, workingDir, absPath).then((verdict) => {
-        if (cancelled || verdict === 'nonfile') return;
-        setAsyncResolved(
-          resolvedLocalFromResult(candidate, {
-            status: 'unique',
-            absPath,
-            kind: verdict === 'directory' ? 'directory' : 'file',
-          }),
-        );
+      // 有确定结论就不必重验;unknown 的限流由 verifyRemotePathCached 内部的负缓存承担。
+      if (!remoteAbsPath || peekRemotePathVerdict(remoteOrigin, workingDir, remoteAbsPath)) return;
+      void verifyRemotePathCached(remoteOrigin, workingDir, remoteAbsPath).then(() => {
+        // 不看返回值:结论已落缓存,统一重新派生(降级 / 升级都走同一条路)。
+        if (!cancelled) setResolved(resolveFromCache());
       });
       return () => {
         cancelled = true;
       };
     }
     if (peekResolveLocalPathSmart(candidate.href, workingDir)) return;
-
-    let cancelled = false;
-    void resolveLocalPathSmartCached(candidate.href, workingDir).then((result) => {
-      if (cancelled) return;
-      setAsyncResolved(resolvedLocalFromResult(candidate, result));
+    void resolveLocalPathSmartCached(candidate.href, workingDir).then(() => {
+      if (!cancelled) setResolved(resolveFromCache());
     });
-
     return () => {
       cancelled = true;
     };
-  }, [isStreaming, remoteOrigin, target, workingDir]);
+    // cacheGen:本 key 的缓存状态变化(TTL 到期 / 别处写入确定态)→ 重新派生。
+  }, [isStreaming, remoteOrigin, target, workingDir, remoteAbsPath, resolveFromCache, cacheGen]);
 
-  const resolved = syncResolved ?? asyncResolved;
   return isResolvedForTarget(resolved, target) ? resolved : target;
 }
 
@@ -1323,6 +1370,7 @@ function MarkdownTargetLink({
   setModelLightboxPath,
   anchorProps,
   allowPrivilegedLinks,
+  fromBarePath,
   remoteMediaOrigin,
   sessionId,
 }: {
@@ -1336,6 +1384,12 @@ function MarkdownTargetLink({
   setModelLightboxPath: (absPath: string | null) => void;
   anchorProps: Record<string, unknown>;
   allowPrivilegedLinks: boolean;
+  /**
+   * 这条 link 由 remarkLocalPathLinks 从正文纯文本切出(不是作者手写的
+   * `[label](path)`)。为 true 时点亮**只加下划线、不套等宽 chip**——见下方
+   * shouldRenderCodeReferenceLabel 的调用点与 DESIGN.md §14.5。
+   */
+  fromBarePath?: boolean;
   /** 远程会话媒体来源:把 xdt-audio:// 等链接改写到 cindy-remote-media://;本地 undefined。 */
   remoteMediaOrigin?: RemoteMediaOrigin;
   /** 当前会话 id;就位时外链 / html 文件左键弹"打开方式"菜单。 */
@@ -1379,7 +1433,11 @@ function MarkdownTargetLink({
         setTextLightboxFile,
         setModelLightboxPath,
       );
-    if (!shouldRenderCodeReferenceLabel(target, children)) {
+    // 正文裸写的路径:一律走下划线链接形态,不进等宽 chip 分支。它的未点亮态是普通
+    // 正文,套上等宽会让同一句里点亮/未点亮的两条路径在字体、底色、下划线三处齐变
+    // (DESIGN.md §14.5「可点态只多一条下划线」)。作者手写的 `[README.md](path)`
+    // 不受影响 —— 那是作者的排版意图,继续按 label 形态决定 chip。
+    if (fromBarePath || !shouldRenderCodeReferenceLabel(target, children)) {
       return (
         <ResolvedLocalLink
           resolvedAbsPath={target.absPath}
@@ -1666,7 +1724,12 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
         // currently inject className on <a>, but relying on that is fragile.
         // Explicit drop guarantees our link styling is never overridden by an
         // upstream change. `node` is the mdast node — not a valid DOM prop.
-        const safeProps = omitMarkdownInternalProps(props as Record<string, unknown>);
+        const rawProps = props as Record<string, unknown>;
+        // remarkLocalPathLinks 打的标记:这条 link 来自正文裸写的路径,不是作者手写的
+        // `[label](path)`。读完即从 DOM props 里剥掉(它只是内部信道,不该落到 <a> 上)。
+        const fromBarePath = BARE_PATH_ATTR in rawProps;
+        const safeProps = omitMarkdownInternalProps(rawProps);
+        delete safeProps[BARE_PATH_ATTR];
         if (allowPrivilegedLinks && href != null && hasDeepLinkPathPrefix(href, 'session-card/')) {
           const parsed = parseSessionCardHref(href);
           if (parsed) {
@@ -1712,6 +1775,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
             setModelLightboxPath={setModelLightboxPath}
             anchorProps={safeProps}
             allowPrivilegedLinks={allowPrivilegedLinks}
+            fromBarePath={fromBarePath}
             remoteMediaOrigin={remoteMediaOrigin}
             sessionId={currentSessionId}
           >

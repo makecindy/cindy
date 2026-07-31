@@ -179,6 +179,7 @@ import {
 } from '@/session/sessionReferences';
 import {
   canOpenChatPathChip,
+  chatPathLabelReadsAsFileReference,
   classifyChatPathLinkTarget,
   classifyInlineCodePathCandidate,
   resolveChatAbsPath,
@@ -188,6 +189,9 @@ import {
 import { ChatFilePathContext, type ChatFilePathTarget } from '@/session/chatFilePathContext';
 import {
   peekRemotePathVerdict,
+  peekRemotePathVerdictForRender,
+  remotePathVerdictKey,
+  subscribeRemotePathVerdictChange,
   verifyRemotePathCached,
   type RemotePathVerdict,
 } from '@/session/remotePathVerdict';
@@ -3570,32 +3574,67 @@ function ChatPathChipSpan({
     const absPath = resolveChatAbsPath(candidate.href, ctx.workdir);
     return { absPath, relPath: toWorkdirRel(ctx.workdir, absPath) };
   }, [candidate, ctx]);
-  const [verdict, setVerdict] = useState<RemotePathVerdict | undefined>(() =>
-    ctx && target ? peekRemotePathVerdict(ctx.deviceId, ctx.workdir, target.absPath) : undefined,
+  // verdict 是**缓存的纯派生**,chip 不自己存结论:ForRender 版会把 TTL 未过期的负缓存
+  // 回成 'unknown',于是断链期间的乐观点亮也来自缓存。自存一份的话收不到缓存变化 ——
+  // 同一路径出现在多个 chip 上时,A 按 unknown 点亮、B 拿到确定的 nonfile,A 会一直
+  // 带着下划线可点(PR #1144 review 实捉,桌面同款)。
+  const readVerdict = useCallback(
+    () =>
+      ctx && target
+        ? peekRemotePathVerdictForRender(ctx.deviceId, ctx.workdir, target.absPath)
+        : undefined,
+    [ctx, target],
   );
+  const [verdict, setVerdict] = useState<RemotePathVerdict | undefined>(readVerdict);
+
+  // 本 key 的缓存变化(确定态落库 / 负缓存到期)→ 递增,**驱动下面的验证副作用重跑**。
+  // 按 key 过滤:一屏几十个 chip 各自订阅,全量广播会让首屏 N 次 stat 引发 N×N 次重渲染。
+  //
+  // ⚠️ 这里必须递增一个计数、不能只 setVerdict(readVerdict()):`readVerdict` 是
+  // `[ctx, target]` 的稳定 useCallback,通知**不改变验证副作用的任何依赖**,那个副作用
+  // 就不会重跑 → 再也不发 verifyRemotePathCached。TTL 到期时负缓存已被删、又没有确定态,
+  // ForRender 回 undefined,于是 chip 只完成「降级成纯文本」、没完成「重验」,挂载期间
+  // 永不自愈 —— 比重构前(一直乐观点亮)更糟。桌面同一处把 cacheGen 放进了验证副作用的
+  // 依赖,手机漏了这一环(PR #1144 review 实捉:第 10 轮重构只做对了桌面那一半)。
+  const [cacheGen, setCacheGen] = useState(0);
   useEffect(() => {
-    if (!ctx || !target) {
-      setVerdict(undefined);
-      return;
-    }
-    const cached = peekRemotePathVerdict(ctx.deviceId, ctx.workdir, target.absPath);
-    if (cached) {
-      setVerdict(cached);
-      return;
-    }
-    setVerdict(undefined);
+    if (!ctx || !target) return;
+    const mine = remotePathVerdictKey(ctx.deviceId, ctx.workdir, target.absPath);
+    return subscribeRemotePathVerdictChange((key) => {
+      if (key === mine) setCacheGen((n) => n + 1);
+    });
+  }, [ctx, target]);
+
+  useEffect(() => {
+    // 无条件按当前缓存重新派生(升级 / 降级同一条路)。
+    setVerdict(readVerdict());
+    if (!ctx || !target) return;
+    // 有确定结论就不必重验;unknown 的限流由 verifyRemotePathCached 的负缓存承担。
+    if (peekRemotePathVerdict(ctx.deviceId, ctx.workdir, target.absPath)) return;
     // 流式中不发验证:半截路径会产生大量无意义 stat(与桌面 isStreaming gate 同理)。
     if (streaming) return;
     let cancelled = false;
-    void verifyRemotePathCached(ctx.deviceId, ctx.workdir, target.absPath, ctx.statPath).then((v) => {
-      if (!cancelled) setVerdict(v);
+    void verifyRemotePathCached(ctx.deviceId, ctx.workdir, target.absPath, ctx.statPath).then(() => {
+      // 不看返回值:结论已落缓存,统一重新派生。
+      if (!cancelled) setVerdict(readVerdict());
     });
     return () => {
       cancelled = true;
     };
-  }, [ctx, streaming, target]);
+    // cacheGen:本 key 的缓存状态变化(TTL 到期 / 别处写入确定态)→ 重新派生 + 必要时重验。
+  }, [ctx, streaming, target, readVerdict, cacheGen]);
 
-  const lit = !!ctx && !!candidate && !!target && verdict !== undefined && verdict !== 'nonfile';
+  // 点亮门槛分两档(见 ChatPathCandidate.ambiguousShape 的说明):
+  //   - 形状明确是路径(绝对路径 / 尾斜杠目录 / 分隔符+扩展名):unknown(链路断 /
+  //     stat 异常)照旧乐观点亮,绝不因断链把整条消息的 chip 全灭掉;
+  //   - 歧义形状(裸名 `array.map`、分隔符无扩展 `and/or`——与 `package.json`、
+  //     `src/components` 词法同形,分不开):必须等远端明确回 file / directory 才点亮。
+  //     否则链路一抖,满屏普通行内 code 都变成可点的假链接——「可点」的视觉信号一旦
+  //     不可信,加强它只会让误判更醒目(DESIGN.md §14.5 规则 5)。
+  const verdictAllowsLit = candidate?.ambiguousShape
+    ? verdict === 'file' || verdict === 'directory'
+    : verdict !== undefined && verdict !== 'nonfile';
+  const lit = !!ctx && !!candidate && !!target && verdictAllowsLit;
   if (!lit) {
     return <SpanText style={plainStyle}>{display}</SpanText>;
   }
@@ -3622,6 +3661,29 @@ function ChatPathChipSpan({
   );
 }
 
+/**
+ * 「下划线 ⇔ 可点」的**唯一判据**(DESIGN.md §14.5 规则①要求双向成立:可点的一定有
+ * 下划线,有下划线的一定可点)。onPress 缺席时不给 `markdownLink`,所以在结构上
+ * 无法造出「有下划线却点不动」的元素。
+ *
+ * 为什么要收成一处:PR #1144 的两轮 review 各捉到一个反例(文件阅读器的会话 chip、
+ * 以及同一面上本就带下划线 + pointer 的图片 chip),根因都是「加不加下划线」与
+ * 「有没有 onPress」在各自的分支里独立决定 —— 判据分散必然漂移。本文件的会话 chip /
+ * 图片 chip 的 onPress 也是条件式的(handler 由上层可选注入),同款隐患成立。
+ *
+ * 所有可点 inline 一律经此取样式,**不要在 case 分支里直接写 `styles.markdownLink`**
+ * (chatPathCandidate.test.ts 有源码级守卫钉住这条)。路径 chip 不走这里:它的可点性
+ * 由 ChatPathChipSpan 的 `lit` 单点裁决,同样是「一个判据」。
+ */
+function clickableInlineStyle(
+  styles: ReturnType<typeof makeStyles>,
+  onPress: undefined | (() => void),
+  base: StyleProp<TextStyle>,
+  extra?: StyleProp<TextStyle>,
+): StyleProp<TextStyle> {
+  return [base, onPress ? styles.markdownLink : undefined, extra];
+}
+
 /** 本地路径链接形态的路径 chip 包装:candidate 按 url memo,保证引用稳定——
  *  renderInline 是普通函数,若在其内直接 classify 会每次 render 产新对象,
  *  击穿 ChatPathChipSpan 的 memo/effect 依赖,unknown verdict(不落缓存)的
@@ -3629,6 +3691,7 @@ function ChatPathChipSpan({
 function LinkPathChipSpan({
   url,
   display,
+  bare,
   baseStyle,
   SpanText,
   styles,
@@ -3636,17 +3699,35 @@ function LinkPathChipSpan({
 }: {
   url: string;
   display: string;
+  /** 正文裸写的路径(非作者手写的 `[label](url)`),决定点亮后是否套等宽 chip。 */
+  bare?: boolean;
   baseStyle?: StyleProp<TextStyle>;
   SpanText: typeof Text;
   styles: ReturnType<typeof makeStyles>;
   streaming?: boolean;
 }) {
   const candidate = useMemo(() => classifyChatPathLinkTarget(url), [url]);
+  // 点亮后是否套等宽 chip,按 DESIGN.md §14.5 的落地推论分三档(与桌面
+  // shouldRenderCodeReferenceLabel 的分流一一对应):
+  //   - 正文裸写的路径 → **不套**。它的未点亮态是普通正文,套上会让同一句里点亮的
+  //     `src/a.ts` 与未点亮的 `src/b.ts` 在字体、底色、下划线三处齐变。
+  //   - 作者手写、label 读起来是文件引用(`[README.md](path)`)→ **套**。那是作者的
+  //     排版意图,对齐桌面 FileTargetChip。
+  //   - 作者手写、散文 label(`[看这份规则](path)`)→ 不套,对齐桌面 ResolvedLocalLink。
+  const codeStyled = useMemo(
+    () => !bare && candidate !== null && chatPathLabelReadsAsFileReference(display, candidate, url),
+    [bare, candidate, display, url],
+  );
   return (
     <ChatPathChipSpan
       candidate={candidate}
-      chipStyle={[baseStyle, styles.markdownInlineCode, styles.markdownPathChip]}
+      chipStyle={
+        codeStyled
+          ? [baseStyle, styles.markdownInlineCode, styles.markdownPathChip]
+          : [baseStyle, styles.markdownPathChip]
+      }
       display={display}
+      // 未点亮一律回落正文样式(与桌面一致:未解析的 local-candidate 渲染成纯 span)。
       plainStyle={baseStyle}
       SpanText={SpanText}
       streaming={streaming}
@@ -3759,6 +3840,7 @@ function renderInline(
         return (
           <LinkPathChipSpan
             key={spanKey(`path-link:${index}:${inline.url}`)}
+            bare={inline.bare}
             baseStyle={ctx.baseStyle}
             display={inline.text}
             SpanText={SpanText}
@@ -3768,13 +3850,15 @@ function renderInline(
           />
         );
       }
+      // onPress 与下划线取同一个值,不可能一边有一边没有。
+      const openExternalUrl = () => {
+        void Linking.openURL(inline.url).catch(() => undefined);
+      };
       return (
         <SpanText
           key={spanKey(`link:${index}:${inline.url}`)}
-          onPress={() => {
-            void Linking.openURL(inline.url).catch(() => undefined);
-          }}
-          style={[ctx.baseStyle, styles.markdownLink]}
+          onPress={openExternalUrl}
+          style={clickableInlineStyle(styles, openExternalUrl, ctx.baseStyle)}
         >
           {inline.text}
         </SpanText>
@@ -3807,14 +3891,17 @@ function renderInline(
         </SpanText>
       );
     case 'image': {
+      // openImage 由上层可选注入 → 缺席时 chip 不可点,下划线也必须跟着不加
+      // (clickableInlineStyle 保证两者同源)。
+      const openImageChip = openImage ? () => openImage(inline.url, inline.alt) : undefined;
       // xdt 系非直连图:RN Image 无法直接加载内部 scheme,渲染可点 chip,
       // 点开后由 ImageLightbox 经 remote-media resolver 取图。
       if (!isMobileMarkdownImageDirectUrl(inline.url)) {
         return (
           <SpanText
             key={spanKey(`image:${index}:${inline.url}`)}
-            onPress={openImage ? () => openImage(inline.url, inline.alt) : undefined}
-            style={[ctx.baseStyle, styles.markdownLink]}
+            onPress={openImageChip}
+            style={clickableInlineStyle(styles, openImageChip, ctx.baseStyle)}
             testID="message.markdownInlineImageChip"
           >
             {inline.alt || i18n.t('message.renderer.imageFallbackTitle')}
@@ -3881,10 +3968,13 @@ function MarkdownSessionLinkSpan({
   const detail = sessionReferenceDetails?.[
     mobileSessionReferenceMetadataKey(session.sessionId, session.messageClientId)
   ];
+  // handler 由上层可选注入 → 缺席时 chip 不可点,下划线也必须跟着不加
+  // (clickableInlineStyle 保证两者同源)。
+  const openSessionLink = onOpenSessionLink ? () => onOpenSessionLink(inline.url) : undefined;
   return (
     <SpanText
-      onPress={onOpenSessionLink ? () => onOpenSessionLink(inline.url) : undefined}
-      style={[baseStyle, styles.markdownLink, styles.sessionLinkChipText]}
+      onPress={openSessionLink}
+      style={clickableInlineStyle(styles, openSessionLink, baseStyle, styles.sessionLinkChipText)}
     >
       {`${session.messageClientId ? '❝' : '↳'} ${title}${detail ? ` · ${detail}` : ''}`}
     </SpanText>
@@ -5924,17 +6014,24 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     lineHeight: lineHeight.caption,
   },
   markdownBody: { gap: 10 },
+  // 外链 / 会话深链等一切可点行内元素:**只有下划线**,不加粗、不换色、不换字体
+  // (DESIGN.md §14.5;GitHub 的 `.markdown-body a` 同样只有 text-decoration)。
+  //
+  // 刻意**不写 color**:必须继承所在上下文的颜色。表头(markdownTableHeaderCell 用
+  // textSecondary)、引用块等非正文色上下文里,写死 textPrimary 会让链接相对周围的
+  // 不可点文本**除下划线之外还变色**,违反「可点态只多一条横线」(PR #1144 review 实捉)。
   markdownLink: {
-    color: colors.textPrimary,
-    fontWeight: fontWeight.medium,
     textDecorationLine: 'underline',
   },
   // 会话深链 chip(非 selectable 原生 Text 路径):嵌套 Text 只支持背景色不支持
   // 圆角,用 surfaceChip 底色近似 chip 观感;WebView 路径的 .xdt-session-chip
   // 才是完整圆角版本。
+  //
+  // 下划线**不再**关掉:会话 chip 是可点的,而「下划线常显 = 可点」是聊天正文的唯一
+  // 交互信号(见 docs/design-rules/DESIGN.md「聊天正文的可点性信号」)。原先靠底色
+  // 单独表达可点,但底色同时被行内 code 等排版语义占用,读者无法据此判断可点性。
   sessionLinkChipText: {
     backgroundColor: colors.surfaceChip,
-    textDecorationLine: 'none',
   },
   // 对齐桌面聊天 markdown:<strong> 走浏览器默认 700,与 400 正文拉开明显对比。
   markdownStrong: { fontWeight: fontWeight.bold },
@@ -5954,12 +6051,17 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontSize: typeScale.code,
     lineHeight: lineHeight.code,
   },
-  // 已验证存在的文件/目录路径 chip:靠「正文色 + medium + 下划线」区别于普通行内
-  // code(后者压暗)。color 必须显式钉回 textPrimary —— 本样式总是叠在
-  // markdownInlineCode 之后,不写就会继承那份压暗色,可点的反而比不可点的更淡。
+  // 已验证存在的文件/目录路径 chip:**只加一条下划线,其它什么都不动**
+  // (权威规则见 docs/design-rules/DESIGN.md §14.5,对齐 GitHub 的口径 ——
+  // `.markdown-body code` 刻意不定义 color、纯靠继承,可点与不可点的行内 code
+  // 差别只在那条横线)。
+  //
+  // 刻意**不**再写 color 与 fontWeight:本样式总是叠在 markdownInlineCode 之后,
+  // 于是可点的行内 code 与不可点的行内 code 同色同字重,只差下划线 —— 差异越单一,
+  // 「有横线 = 能点」这条规则越可信。早先这里钉 textPrimary + medium 是因为当时
+  // 下划线还不是主信号,怕可点的比不可点的更淡;现在信号收敛到下划线,压暗是行内
+  // code 的排版语义,继承它才是对的。
   markdownPathChip: {
-    color: colors.textPrimary,
-    fontWeight: fontWeight.medium,
     textDecorationLine: 'underline',
   },
   markdownInlineImage: {

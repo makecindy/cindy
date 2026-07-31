@@ -1912,6 +1912,49 @@
         }
       }
     },
+    "dingtalkBot": {
+      "title": "DingTalk Bot",
+      "description": "Connect your own DingTalk bot and use {{appName}} in DMs and group chats through Stream mode.",
+      "status": {
+        "needsConfig": "Needs setup",
+        "connecting": "Connecting…",
+        "connected": "Connected",
+        "error": "Connection failed"
+      },
+      "connected": {
+        "heading": "DingTalk bot connected",
+        "ownerBound": "The owner is linked. DM the bot or @mention it in a group to begin.",
+        "waitingOwner": "DM the bot first. The first direct sender is securely linked as the owner.",
+        "ownerLabel": "Owner user ID",
+        "notBound": "Waiting for first DM"
+      },
+      "appKeyLabel": "Client ID",
+      "appKeyPlaceholder": "Paste the bot application's Client ID",
+      "appSecretLabel": "Client Secret",
+      "appSecretPlaceholder": "Paste the bot application's Client Secret",
+      "appSecretSavedPlaceholder": "Saved securely; leave blank to reconnect",
+      "showSecret": "Show Client Secret",
+      "hideSecret": "Hide Client Secret",
+      "formHint": "Credentials are encrypted locally. The first DM links the owner after connection.",
+      "errorHint": "Connection failed. Check the credentials, Stream mode, and your network, then retry.",
+      "connect": "Connect",
+      "reconnect": "Reconnect",
+      "disconnect": "Unbind",
+      "disconnectConfirm": {
+        "title": "Unbind DingTalk bot?",
+        "description": "This disconnects the bot and removes the locally saved Client ID, Client Secret, and owner link.",
+        "confirm": "Unbind",
+        "cancel": "Cancel"
+      },
+      "guide": {
+        "title": "Setup guide",
+        "step1": "Create an internal app in the DingTalk developer portal and add bot capability.",
+        "step2": "Enable Stream mode for the bot and publish an app version.",
+        "step3": "Copy the Client ID and Client Secret from App Credentials and enter them above.",
+        "step4": "After connecting, DM the bot once to link the owner. @mention it in group chats.",
+        "openPortal": "Open DingTalk developer portal ↗"
+      }
+    },
     "logout": {
       "button": "Log out",
       "aria": "Log out"
@@ -2634,7 +2677,7 @@
       "tips": {
         "cindy": "Cindy is the official shared bot — no credentials needed. Connect Slack and just @Cindy to hand off tasks.",
         "personal": "Personal connections include WeChat scan authorization and your own Feishu / Discord / Telegram credentials. Each channel keeps independent new-conversation settings.",
-        "personalFeishuOnly": "Personal connections include WeChat scan authorization and your own Feishu credentials. Each channel keeps independent new-conversation settings."
+        "personalFeishuOnly": "Personal connections include WeChat scan authorization plus your own Feishu and DingTalk credentials. Each channel keeps independent new-conversation settings."
       },
       "defaults": {
         "title": "New Conversation Configuration",
@@ -2643,7 +2686,8 @@
           "slack": "New Slack threads use this Agent and model.",
           "discord": "New Discord conversations use this Agent and model. Send /new in an existing DM to apply it.",
           "wechat": "New WeChat conversations use this Agent, model, and permission mode. Send /new in an existing chat to apply them.",
-          "telegram": "New Telegram conversations use this Agent and model. Send /new in an existing conversation to apply it."
+          "telegram": "New Telegram conversations use this Agent and model. Send /new in an existing conversation to apply it.",
+          "dingtalk": "New DingTalk conversations use this Agent and model. Send /new in an existing conversation to apply it."
         },
         "agentLabel": "Agent",
         "modelLabel": "Model Configuration",
@@ -2947,6 +2991,8 @@
         "cardExternalLinkDetail": "Clicking a card link shows a confirmation dialog; the URL opens in your system browser only after you approve. Only http/https addresses are allowed.",
         "notify": "Can show system tips (light banner at the top of the screen)",
         "notifyDetail": "Tip text is provided by this plugin and labeled with its name; tips fade automatically and never block your work.",
+        "confirm": "Can ask for your confirmation in a dialog",
+        "confirmDetail": "Before acting it can open a dialog that looks like Cindy's own to ask you. The question comes from the plugin and the dialog is labeled with its name; only you can click confirm or cancel — the plugin cannot. At most one dialog at a time, and asking too often is blocked.",
         "fsWrite": "Can write files (create / modify)",
         "fsWriteDetail": "Its own private data folder is always writable. Writes into the current session's working directory follow the session's permission mode (auto-approve modes write directly; per-action modes ask you first). Any other folder always requires your confirmation. Files are always written by the host — the plugin itself never touches your file system.",
         "networkHost": "Accesses the network domain {{host}}",
@@ -3092,6 +3138,9 @@
       "pick": {
         "dialogTitle": "Choose a folder",
         "dialogMessage": "Plugin “{{name}}” is asking you to choose a folder"
+      },
+      "confirm": {
+        "dialogTitle": "Plugin “{{name}}” needs your confirmation"
       },
       "workspace": {
         "dialogTitle": "Choose a project folder",
@@ -7602,7 +7651,14 @@
       "telegramBotConnectFailed": "Telegram bot connection failed; check the token and your network",
       "telegramBotSaveFailed": "Save failed: {{message}}",
       "telegramBotDisconnected": "Telegram bot unbound",
-      "telegramBotDisconnectFailed": "Unbind failed: {{message}}"
+      "telegramBotDisconnectFailed": "Unbind failed: {{message}}",
+      "dingtalkBotConnected": "DingTalk bot connected",
+      "dingtalkBotConnectFailed": "DingTalk bot connection failed; check credentials, Stream mode, and your network",
+      "dingtalkBotAuthFailed": "DingTalk rejected the credentials. Confirm that the Client ID and Client Secret belong to the same app",
+      "dingtalkBotNetworkFailed": "Cannot reach DingTalk Open Platform. Check your network or proxy and try again",
+      "dingtalkBotStreamFailed": "Credentials are valid, but the Stream connection was not established. Enable the bot, select Stream mode, and publish the app version",
+      "dingtalkBotDisconnected": "DingTalk bot unbound",
+      "dingtalkBotDisconnectFailed": "Failed to unbind DingTalk bot"
     },
     "errors": {
       "openFileFailed": "Cannot open file in system",
@@ -7627,7 +7683,8 @@
       "discordOwnerUserIdFormat": "Discord user ID must be 17-20 digits",
       "telegramFieldsRequired": "Bot Token and Telegram user ID are both required",
       "telegramTokenFormat": "Invalid token format: expected the \"digits:secret\" shape generated by BotFather",
-      "telegramOwnerUserIdFormat": "Telegram user ID must be numeric"
+      "telegramOwnerUserIdFormat": "Telegram user ID must be numeric",
+      "dingtalkFieldsRequired": "Client ID and Client Secret are both required"
     },
     "confirm": {
       "logoutTitle": "Log out",

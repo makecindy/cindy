@@ -28,7 +28,7 @@ import type {
 import type { ChannelIM, ImOutputDriver, IMMessageEvent, IMUnsupportedEntry } from '@cindy/im';
 
 /** 渠道名 — 同时是 sessions.source 列值与 IdentityKey.channel 的值域。 */
-export type ImChannelName = 'feishu' | 'slack' | 'discord' | 'wechat' | 'telegram';
+export type ImChannelName = 'feishu' | 'slack' | 'discord' | 'wechat' | 'telegram' | 'dingtalk';
 
 /**
  * IM 编排层的产品默认配置(由 main/im/index.ts 产品接线层注入)。
@@ -183,6 +183,11 @@ export interface ImUiTextPack {
      */
     start?: string;
     unknownCommand: (cmd: string) => string;
+    /**
+     * Text-only channels use this when a slash command requires interactive
+     * cards. Missing copy falls back to unknownCommand.
+     */
+    interactiveCommandUnsupported?: (cmd: string) => string;
     detachedBySlash: string;
     detachedByRevoke: string;
     notAttached: string;

@@ -556,7 +556,7 @@
           "models": [
             {
               "id": "qwen3.7-plus",
-              "name": "Qwen3.7 Plus"
+              "name": "Qwen 3.7 Plus"
             },
             {
               "id": "qwen3-coder-next",
@@ -574,7 +574,7 @@
           "models": [
             {
               "id": "qwen3.7-plus",
-              "name": "Qwen3.7 Plus"
+              "name": "Qwen 3.7 Plus"
             },
             {
               "id": "qwen3-coder-next",
@@ -583,6 +583,260 @@
             {
               "id": "qwen3-coder-plus",
               "name": "Qwen3 Coder Plus"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "aliyun-bailian-token-plan-cn",
+      "name": "阿里云百炼 Token Plan（个人版）",
+      "nameEn": "Alibaba Cloud Bailian Token Plan (Personal)",
+      "docsUrl": "https://help.aliyun.com/zh/model-studio/token-plan-personal-overview",
+      "regionHint": "cn",
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+          "modelsUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/models",
+          "models": [
+            {
+              "id": "qwen3.8-max-preview",
+              "name": "Qwen 3.8 Max Preview",
+              "contextWindow": 983616
+            },
+            {
+              "id": "qwen3.7-max",
+              "name": "Qwen 3.7 Max",
+              "contextWindow": 992000
+            },
+            {
+              "id": "qwen3.7-plus",
+              "name": "Qwen 3.7 Plus",
+              "contextWindow": 1000000
+            },
+            {
+              "id": "qwen3.6-flash",
+              "name": "Qwen 3.6 Flash",
+              "contextWindow": 1000000
+            },
+            {
+              "id": "glm-5.2",
+              "name": "GLM-5.2",
+              "contextWindow": 1000000
+            },
+            {
+              "id": "deepseek-v4-pro",
+              "name": "DeepSeek V4 Pro",
+              "contextWindow": 1048576
+            }
+          ]
+        },
+        "codex": {
+          "baseUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+          "wireProtocol": "openai-chat",
+          "modelsUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/models",
+          "models": [
+            {
+              "id": "qwen3.8-max-preview",
+              "name": "Qwen 3.8 Max Preview",
+              "contextWindow": 983616
+            },
+            {
+              "id": "qwen3.7-max",
+              "name": "Qwen 3.7 Max",
+              "contextWindow": 992000
+            },
+            {
+              "id": "qwen3.7-plus",
+              "name": "Qwen 3.7 Plus",
+              "contextWindow": 1000000
+            },
+            {
+              "id": "qwen3.6-flash",
+              "name": "Qwen 3.6 Flash",
+              "contextWindow": 1000000
+            },
+            {
+              "id": "glm-5.2",
+              "name": "GLM-5.2",
+              "contextWindow": 1000000
+            },
+            {
+              "id": "deepseek-v4-pro",
+              "name": "DeepSeek V4 Pro",
+              "contextWindow": 1048576
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "aliyun-bailian-token-plan-team-cn",
+      "name": "阿里云百炼 Token Plan（团队版）",
+      "nameEn": "Alibaba Cloud Bailian Token Plan (Team)",
+      "docsUrl": "https://help.aliyun.com/zh/model-studio/token-plan-team-overview",
+      "regionHint": "cn",
+      "runtimes": {
+        "claude-code": {
+          "baseUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+          "modelsUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/models",
+          "models": [
+            {
+              "id": "qwen3.8-max-preview",
+              "name": "Qwen 3.8 Max Preview",
+              "contextWindow": 983616
+            },
+            {
+              "id": "qwen3.7-max",
+              "name": "Qwen 3.7 Max",
+              "contextWindow": 992000
+            },
+            {
+              "id": "qwen3.7-plus",
+              "name": "Qwen 3.7 Plus",
+              "contextWindow": 1000000
+            },
+            {
+              "id": "qwen3.6-plus",
+              "name": "Qwen 3.6 Plus",
+              "contextWindow": 1000000
+            },
+            {
+              "id": "qwen3.6-flash",
+              "name": "Qwen 3.6 Flash",
+              "contextWindow": 1000000
+            },
+            {
+              "id": "deepseek-v4-pro",
+              "name": "DeepSeek V4 Pro",
+              "contextWindow": 1048576
+            },
+            {
+              "id": "deepseek-v4-flash",
+              "name": "DeepSeek V4 Flash",
+              "contextWindow": 1048576
+            },
+            {
+              "id": "deepseek-v3.2",
+              "name": "DeepSeek V3.2",
+              "contextWindow": 131072
+            },
+            {
+              "id": "kimi-k2.7-code",
+              "name": "Kimi K2.7 Code",
+              "contextWindow": 262144
+            },
+            {
+              "id": "kimi-k2.6",
+              "name": "Kimi K2.6",
+              "contextWindow": 262144
+            },
+            {
+              "id": "kimi-k2.5",
+              "name": "Kimi K2.5",
+              "contextWindow": 262144
+            },
+            {
+              "id": "glm-5.2",
+              "name": "GLM-5.2",
+              "contextWindow": 1000000
+            },
+            {
+              "id": "glm-5.1",
+              "name": "GLM-5.1",
+              "contextWindow": 202752
+            },
+            {
+              "id": "glm-5",
+              "name": "GLM-5",
+              "contextWindow": 202752
+            },
+            {
+              "id": "MiniMax-M2.5",
+              "name": "MiniMax M2.5",
+              "contextWindow": 196608
+            }
+          ]
+        },
+        "codex": {
+          "baseUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+          "wireProtocol": "openai-chat",
+          "modelsUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/models",
+          "models": [
+            {
+              "id": "qwen3.8-max-preview",
+              "name": "Qwen 3.8 Max Preview",
+              "contextWindow": 983616
+            },
+            {
+              "id": "qwen3.7-max",
+              "name": "Qwen 3.7 Max",
+              "contextWindow": 992000
+            },
+            {
+              "id": "qwen3.7-plus",
+              "name": "Qwen 3.7 Plus",
+              "contextWindow": 1000000
+            },
+            {
+              "id": "qwen3.6-plus",
+              "name": "Qwen 3.6 Plus",
+              "contextWindow": 1000000
+            },
+            {
+              "id": "qwen3.6-flash",
+              "name": "Qwen 3.6 Flash",
+              "contextWindow": 1000000
+            },
+            {
+              "id": "deepseek-v4-pro",
+              "name": "DeepSeek V4 Pro",
+              "contextWindow": 1048576
+            },
+            {
+              "id": "deepseek-v4-flash",
+              "name": "DeepSeek V4 Flash",
+              "contextWindow": 1048576
+            },
+            {
+              "id": "deepseek-v3.2",
+              "name": "DeepSeek V3.2",
+              "contextWindow": 131072
+            },
+            {
+              "id": "kimi-k2.7-code",
+              "name": "Kimi K2.7 Code",
+              "contextWindow": 262144
+            },
+            {
+              "id": "kimi-k2.6",
+              "name": "Kimi K2.6",
+              "contextWindow": 262144
+            },
+            {
+              "id": "kimi-k2.5",
+              "name": "Kimi K2.5",
+              "contextWindow": 262144
+            },
+            {
+              "id": "glm-5.2",
+              "name": "GLM-5.2",
+              "contextWindow": 1000000
+            },
+            {
+              "id": "glm-5.1",
+              "name": "GLM-5.1",
+              "contextWindow": 202752
+            },
+            {
+              "id": "glm-5",
+              "name": "GLM-5",
+              "contextWindow": 202752
+            },
+            {
+              "id": "MiniMax-M2.5",
+              "name": "MiniMax M2.5",
+              "contextWindow": 196608
             }
           ]
         }

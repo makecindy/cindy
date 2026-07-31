@@ -31,6 +31,9 @@ import { contextBridge, ipcRenderer } from 'electron';
  *   的语法糖;URL 白名单守门在主机侧 previewSlot。
  * - workspace(req):workspace 槽的便捷口——send({type:'workspace-request',
  *   …req}) 的语法糖;目录授权与会话创建守门全在主机侧 workspaceSlot。
+ * - confirm(req):confirm 槽的便捷口——send({type:'confirm-request', …req}) 的
+ *   语法糖;主机弹自己那套确认框并把用户的真实点击回给沙箱,资格审/净化/限速/
+ *   单飞/超时兜底全在主机侧 confirmSlot 与 ghostConfirmDialogBridge。
  */
 
 type HostMessageListener = (payload: unknown) => void;
@@ -73,4 +76,6 @@ contextBridge.exposeInMainWorld('cindy', {
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'preview-request' }),
   workspace: (req: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'workspace-request' }),
+  confirm: (req: Record<string, unknown>): Promise<unknown> =>
+    ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'confirm-request' }),
 });

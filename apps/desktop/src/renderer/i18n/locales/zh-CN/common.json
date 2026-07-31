@@ -1911,6 +1911,49 @@
         }
       }
     },
+    "dingtalkBot": {
+      "title": "钉钉机器人",
+      "description": "连接你自建的钉钉机器人，通过 Stream 模式在私聊和群聊中使用 {{appName}}。",
+      "status": {
+        "needsConfig": "需要配置",
+        "connecting": "连接中…",
+        "connected": "已连接",
+        "error": "连接失败"
+      },
+      "connected": {
+        "heading": "钉钉机器人已连接",
+        "ownerBound": "主人已绑定；私聊或在群里 @ 机器人即可开始。",
+        "waitingOwner": "请先私聊机器人，第一位私聊者会安全绑定为主人。",
+        "ownerLabel": "主人用户 ID",
+        "notBound": "等待首次私聊"
+      },
+      "appKeyLabel": "Client ID",
+      "appKeyPlaceholder": "粘贴机器人应用的 Client ID",
+      "appSecretLabel": "Client Secret",
+      "appSecretPlaceholder": "粘贴机器人应用的 Client Secret",
+      "appSecretSavedPlaceholder": "已安全保存；留空可直接重新连接",
+      "showSecret": "显示 Client Secret",
+      "hideSecret": "隐藏 Client Secret",
+      "formHint": "凭证仅加密保存在本机；连接后首次私聊会绑定主人。",
+      "errorHint": "连接失败，请检查凭证、Stream 模式和网络后重试。",
+      "connect": "连接",
+      "reconnect": "重新连接",
+      "disconnect": "解绑",
+      "disconnectConfirm": {
+        "title": "解绑钉钉机器人？",
+        "description": "解绑后会断开连接，并清除本机保存的 Client ID、Client Secret 和主人绑定。",
+        "confirm": "解绑",
+        "cancel": "取消"
+      },
+      "guide": {
+        "title": "配置引导",
+        "step1": "在钉钉开放平台创建企业内部应用，并添加机器人能力。",
+        "step2": "为机器人启用 Stream 模式，并发布应用版本。",
+        "step3": "从应用凭证页复制 Client ID 和 Client Secret，填入上方。",
+        "step4": "连接成功后先私聊机器人完成主人绑定；群聊中需要 @ 机器人。",
+        "openPortal": "打开钉钉开放平台 ↗"
+      }
+    },
     "logout": {
       "button": "退出登录",
       "aria": "退出登录"
@@ -2633,7 +2676,7 @@
       "tips": {
         "cindy": "Cindy 是官方提供的共享机器人：无需申请任何凭证，连接 Slack 后 @Cindy 即可直接派活。",
         "personal": "个人连接包括微信扫码，以及使用自有凭证接入飞书 / Discord / Telegram；各渠道独立保存新对话配置。",
-        "personalFeishuOnly": "个人连接包括微信扫码，以及使用自有凭证接入飞书；各渠道独立保存新对话配置。"
+        "personalFeishuOnly": "个人连接包括微信扫码，以及使用自有凭证接入飞书和钉钉；各渠道独立保存新对话配置。"
       },
       "defaults": {
         "title": "新对话配置",
@@ -2642,7 +2685,8 @@
           "slack": "Slack 新 thread 会使用这组 Agent 和模型。",
           "discord": "Discord 新对话会使用这组 Agent 和模型；已有私聊发送 /new 后应用。",
           "wechat": "微信新对话会使用这组 Agent、模型和权限模式；已有私聊发送 /new 后应用。",
-          "telegram": "Telegram 新对话会使用这组 Agent 和模型；已有对话发送 /new 后应用。"
+          "telegram": "Telegram 新对话会使用这组 Agent 和模型；已有对话发送 /new 后应用。",
+          "dingtalk": "钉钉新对话会使用这组 Agent 和模型；已有对话发送 /new 后应用。"
         },
         "agentLabel": "Agent",
         "modelLabel": "模型配置",
@@ -2946,6 +2990,8 @@
         "cardExternalLinkDetail": "卡片中的链接点击后会弹出确认框，你同意后才会在系统浏览器中打开；仅限 http/https 地址。",
         "notify": "可弹出系统提示(屏幕顶部的轻提示)",
         "notifyDetail": "提示内容由这个插件提供，提示上会标注它的名字；自动消失，不会打断你的操作。",
+        "confirm": "可弹出确认框征求你同意",
+        "confirmDetail": "它动手前可以弹一个和 Cindy 同款的确认框来问你，问句由它提供、框上会标注它的名字；同意还是取消都由你亲手点，它自己点不了。同时最多一个确认框，弹得太频会被拦下。",
         "fsWrite": "可写入文件(创建/修改)",
         "fsWriteDetail": "它自己的专属数据目录随时可写；当前对话的工作目录跟随对话的权限模式(免批模式直接写，逐条确认模式先征求你同意)；其它目录每次都需要你确认。文件始终由主机代写，插件本身无法直接访问你的文件系统。",
         "networkHost": "访问网络域名 {{host}}",
@@ -3091,6 +3137,9 @@
       "pick": {
         "dialogTitle": "选择文件夹",
         "dialogMessage": "插件「{{name}}」请求你选择一个文件夹"
+      },
+      "confirm": {
+        "dialogTitle": "插件「{{name}}」请你确认"
       },
       "workspace": {
         "dialogTitle": "选择项目文件夹",
@@ -7590,7 +7639,14 @@
       "telegramBotConnectFailed": "Telegram 机器人连接失败，请检查 Token 和网络",
       "telegramBotSaveFailed": "保存失败：{{message}}",
       "telegramBotDisconnected": "已解绑 Telegram 机器人",
-      "telegramBotDisconnectFailed": "解绑失败：{{message}}"
+      "telegramBotDisconnectFailed": "解绑失败：{{message}}",
+      "dingtalkBotConnected": "钉钉机器人已连接",
+      "dingtalkBotConnectFailed": "钉钉机器人连接失败，请检查凭证、Stream 模式和网络",
+      "dingtalkBotAuthFailed": "钉钉未通过凭证校验，请确认 Client ID 和 Client Secret 来自同一个应用",
+      "dingtalkBotNetworkFailed": "无法访问钉钉开放平台，请检查网络或 Proxy 后重试",
+      "dingtalkBotStreamFailed": "凭证有效，但 Stream 连接未建立；请确认已启用机器人、选择 Stream 模式并发布应用版本",
+      "dingtalkBotDisconnected": "已解绑钉钉机器人",
+      "dingtalkBotDisconnectFailed": "钉钉机器人解绑失败"
     },
     "errors": {
       "openFileFailed": "无法在系统中打开文件",
@@ -7615,7 +7671,8 @@
       "discordOwnerUserIdFormat": "Discord 用户 ID 必须是 17-20 位纯数字",
       "telegramFieldsRequired": "Bot Token 和 Telegram 用户 ID 都需要填写",
       "telegramTokenFormat": "Token 格式不对：应为 BotFather 生成的「1234567:xxxx」形态",
-      "telegramOwnerUserIdFormat": "Telegram 用户 ID 必须是纯数字"
+      "telegramOwnerUserIdFormat": "Telegram 用户 ID 必须是纯数字",
+      "dingtalkFieldsRequired": "Client ID 和 Client Secret 都需要填写"
     },
     "confirm": {
       "logoutTitle": "退出登录",

@@ -96,6 +96,7 @@ import {
   type ImAuthCheckDeps,
 } from './authCheck';
 import { FBOT_DRAFT_TITLE, generateAndPersistFbotTitle } from './fbotTitle';
+import { materializeLocalMarkdownImages } from './localMarkdownImages';
 import {
   createTurnActivity,
   markActivityWriting,
@@ -207,6 +208,8 @@ interface SessionState {
   makerSession: MakerSession;
   /** 渠道 user id of the bot's owner — kept here so listeners can address replies. */
   userId: string;
+  /** 当前 session 的受管工作目录；本地生成图片仅允许从这里物化。 */
+  workingDir: string;
   /** FIFO of turns. Events route to queue[0]; done/error shifts. */
   queue: TurnState[];
   /** 等待当前 turn 结束后再 send 的消息 — FIFO, 见模块头"消息排队"。 */
@@ -1174,6 +1177,7 @@ export function createTurnRunner(
     const state: SessionState = {
       makerSession,
       userId,
+      workingDir: row.workingDir,
       scopeKey: target.scopeKey,
       queue: [],
       sendQueue: [],
@@ -2207,6 +2211,7 @@ export function createTurnRunner(
     // wireSessionToIpcExternal,由 messagePersistBroadcaster 单点落库(含
     // tool_use / tool_result / thinking 过程消息,desktop 重开历史能完整回放)。
     // 这里再写一份会产生重复记录。
+    await materializeTurnLocalImages(state, turn);
     if (!turn.streamingHandle && turn.streamingHandlePromise) {
       try {
         await turn.streamingHandlePromise;
@@ -2286,6 +2291,7 @@ export function createTurnRunner(
     // 而下面 composeStreamingView 会把它一起写进 finalize 的正文——最终卡片会在
     // 失败说明的正上方永久显示"仍在重试"（review #844 codex P1）。
     if (turn) setActivityNotice(turn.activity, null);
+    if (turn) await materializeTurnLocalImages(state, turn);
     // 建卡请求可能还在飞: 过载重试提示会惰性建一张进度卡(handleRetryNoticeEvent),
     // 而终态错误可能恰好在 startStreamingText 回来之前到达。此时 streamingHandle
     // 还是 null → 走下面"另发一条错误消息"的分支并把 turn 出队, 随后那个 promise
@@ -2331,6 +2337,27 @@ export function createTurnRunner(
     if (finishDeferredDetachIfIdle(state)) return;
     // error 收口同样要继续放行排队消息 — 一条失败不能卡死后面的队列。
     maybeDispatchNextQueued(state, userId);
+  }
+
+  async function materializeTurnLocalImages(state: SessionState, turn: TurnState): Promise<void> {
+    if (output.kind !== 'chunked-text' || !turn.buffer.includes('![')) return;
+    try {
+      const materialized = await materializeLocalMarkdownImages({
+        text: turn.buffer,
+        workingDir: state.workingDir,
+        sessionId: state.makerSession.id,
+        maxImages: 4,
+        existingAbsPaths: [...turn.mediaAbsPaths],
+      });
+      turn.buffer = materialized.text;
+      for (const absPath of materialized.absPaths) {
+        if (!turn.mediaAbsPaths.includes(absPath)) turn.mediaAbsPaths.push(absPath);
+      }
+    } catch (err) {
+      log.warn(
+        `local markdown image materialization failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   async function persistSdkSessionId(localSessionId: string, data: unknown): Promise<void> {

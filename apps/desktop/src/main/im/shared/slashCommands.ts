@@ -38,6 +38,14 @@ import { bindingStore, executeDetach } from '../binding';
 import type { IdentityKey } from '@cindy/im';
 import type { ImChannelAdapter } from './types';
 
+const INTERACTIVE_SLASH_COMMANDS = new Set([
+  '/model',
+  '/permission',
+  '/ctr',
+  '/session',
+  '/project',
+]);
+
 /** Quick text-only check; treat anything starting with '/' (no spaces before) as a command. */
 export function looksLikeSlashCommand(text: string): boolean {
   return text.startsWith('/');
@@ -86,6 +94,14 @@ export function createSlashHandlers(
   async function handleSlashCommand(text: string, ctx: SlashCtx): Promise<boolean> {
     const [cmd] = text.trim().split(/\s+/);
     log.info(`slash cmd=${cmd} userId=...${ctx.userId.slice(-8)}`);
+
+    if (adapter.output.kind === 'chunked-text' && INTERACTIVE_SLASH_COMMANDS.has(cmd)) {
+      await safeSendText(
+        ctx.userId,
+        ui.slash.interactiveCommandUnsupported?.(cmd) ?? ui.slash.unknownCommand(cmd),
+      );
+      return true;
+    }
 
     switch (cmd) {
       case '/help':
