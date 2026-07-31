@@ -2,8 +2,8 @@
  * 同步状态的 SQLite 持久层。
  *
  * 同步未激活时表里没有 singleton 行，现有通讯录零额外写放大。首次激活会把
- * 当前库捕获为本设备状态；之后即使用户暂时关闭传输，本地变化仍会进入状态，
- * 下次开启时可以完整补发。
+ * 当前库捕获为本设备状态；之后即使用户暂时关闭传输，下次读取也会从上次投影
+ * 补记全部离线变化，重新开启时可以完整补发。
  */
 
 import { randomUUID } from "node:crypto";
@@ -66,19 +66,6 @@ export class ContactsSyncRepository {
       );
       this.insertRow(nodeId, captured.state, current);
       return captured.state;
-    });
-    return tx();
-  }
-
-  /**
-   * 记录同步激活后的本地变化。失败只影响之后的发送，不回滚用户已完成的通讯录写入；
-   * 下次 init/readState 会用 projection diff 自动补记。
-   */
-  captureLocalChanges(): boolean {
-    const tx = this.db.transaction(() => {
-      const row = this.readRow();
-      if (!row) return false;
-      return this.reconcile(row).changed;
     });
     return tx();
   }

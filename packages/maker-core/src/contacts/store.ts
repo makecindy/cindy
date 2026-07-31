@@ -99,7 +99,6 @@ export class MakerContactsStore {
     initContactsSchema(this.db);
     this.sanityCheck();
     this.renormalizePhoneKeys();
-    this.captureSyncSafe();
     this.initialized = true;
   }
 
@@ -886,14 +885,6 @@ export class MakerContactsStore {
 
   private touch(contactId: string): void {
     this.db.prepare(`UPDATE contacts SET updated_at = ? WHERE id = ?`).run(new Date().toISOString(), contactId);
-  }
-
-  private captureSyncSafe(): void {
-    try {
-      this.syncRepo.captureLocalChanges();
-    } catch (e) {
-      this.logger.warn('contacts sync capture failed (will retry)', { error: String(e) });
-    }
   }
 
   private rebuildFtsSafe(): void {
