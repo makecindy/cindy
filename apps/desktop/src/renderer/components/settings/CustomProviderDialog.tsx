@@ -668,51 +668,50 @@ export function CustomProviderDialog({
     if (chosen.length === 0) return;
     const pickerIds = new Set(picker.models.map((m) => m.id));
     // 重映射靠 id 而不是行号:picker 确认会任意增删/重排该 runtime 的行,旧行号
-    // 不能直接套到新数组。rtRef 是 setRtSynced 在状态计算的同一刻同步镜像的最新
-    // 值(见上方注释),patch() 调用后立即读取即可拿到刚提交的 merged 数组,不必
-    // 在 patch 外重复一遍合并逻辑(review P1:全量清空会连还在编辑、仍保留的行
-    // 一并清掉)。
+    // 不能直接套到新数组。合并结果必须同步算出一份普通数组,同时喂给状态更新和
+    // 草稿重映射——不能指望 patch() 调用后立即读 rtRef 拿到刚提交的值:rtRef 只
+    // 在 setRtSynced 传给 setRt 的函数式 updater**内部**才写,而 React 不保证这个
+    // updater 会在 setRt() 调用后的下一行同步跑完;picker 移除/重排行、且 setRt
+    // 已有排队工作时,这次读到的可能仍是 previousModels,导致草稿按旧下标错配到
+    // 一个已经不存在的行上(review P1)。
     const previousModels = rtRef.current[picker.agent].models;
-    patch(picker.agent, (x) => {
-      const latestById = new Map<string, ModelRow>();
-      for (const m of x.models) {
-        const id = m.id.trim();
-        if (id && !latestById.has(id)) latestById.set(id, m);
-      }
-      const merged: ModelRow[] = chosen.map((m) => {
-        const latest = latestById.get(m.id);
-        const contextWindow = latest?.contextWindow ?? m.contextWindow;
-        const defaultEnabled = latest?.defaultEnabled ?? m.defaultEnabled;
-        return {
-          id: m.id,
-          name: latest?.name.trim() ? latest.name.trim() : m.name,
-          ...(contextWindow !== undefined ? { contextWindow } : {}),
-          ...(defaultEnabled === false ? { defaultEnabled: false } : {}),
-        };
-      });
-      for (const m of x.models) {
-        const id = m.id.trim();
-        if (id && !pickerIds.has(id) && !merged.some((r) => r.id === id)) {
-          merged.push({
-            id,
-            name: m.name.trim() || id,
-            ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
-            ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-          });
-        }
-      }
-      return { ...x, models: merged };
+    const latestById = new Map<string, ModelRow>();
+    for (const pm of previousModels) {
+      const id = pm.id.trim();
+      if (id && !latestById.has(id)) latestById.set(id, pm);
+    }
+    const merged: ModelRow[] = chosen.map((m) => {
+      const latest = latestById.get(m.id);
+      const contextWindow = latest?.contextWindow ?? m.contextWindow;
+      const defaultEnabled = latest?.defaultEnabled ?? m.defaultEnabled;
+      return {
+        id: m.id,
+        name: latest?.name.trim() ? latest.name.trim() : m.name,
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+        ...(defaultEnabled === false ? { defaultEnabled: false } : {}),
+      };
     });
-    const mergedModels = rtRef.current[picker.agent].models;
+    for (const m of previousModels) {
+      const id = m.id.trim();
+      if (id && !pickerIds.has(id) && !merged.some((r) => r.id === id)) {
+        merged.push({
+          id,
+          name: m.name.trim() || id,
+          ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
+          ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
+        });
+      }
+    }
+    patch(picker.agent, (x) => ({ ...x, models: merged }));
     const oldIndexToId = new Map(previousModels.map((m, i) => [i, m.id.trim()]));
     const newIndexById = new Map<string, number>();
-    mergedModels.forEach((m, i) => {
+    merged.forEach((m, i) => {
       if (!newIndexById.has(m.id)) newIndexById.set(m.id, i);
     });
     // 合并逻辑(上面的 latestById / 第二个 for 循环)对重复 id 都是「先遇到的旧行
-    // 赢」——按 x.models(= previousModels)的原始顺序扫到的第一条。存活进 merged
-    // 的就是那一条,不是随便哪条同 id 旧行。草稿重映射必须认准同一条,否则会把
-    // 已被丢弃的重复行的草稿错配到存活行上(review P1 ×2)。
+    // 赢」——按 previousModels 的原始顺序扫到的第一条。存活进 merged 的就是那
+    // 一条,不是随便哪条同 id 旧行。草稿重映射必须认准同一条,否则会把已被丢弃的
+    // 重复行的草稿错配到存活行上(review P1 ×2)。
     const survivingOldIndexById = new Map<string, number>();
     previousModels.forEach((m, i) => {
       const id = m.id.trim();
