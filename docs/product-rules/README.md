@@ -15,3 +15,5 @@
   Core 边界，以及 Agent、Skill、插件的产品分工。
 - [`region-and-editions.md`](region-and-editions.md)：Global 与中国大陆版的关系、
   身份命名与默认值方向、区域相关 UI 标注与对外口径。
+- [`task-and-conversation-naming.md`](task-and-conversation-naming.md)：`session` 的中文
+  叫「任务」，任务 / 对话 / 消息的分层定义与判定规则，以及「任务」与 `task` 的歧义处理。

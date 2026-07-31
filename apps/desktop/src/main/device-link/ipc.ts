@@ -458,13 +458,13 @@ export async function handleInvoke(
       if (capability.error.code === 'CHANNEL_NOT_ALLOWED') {
         throwIpcError(
           'SESSION_REFERENCE_UNSUPPORTED',
-          '目标设备版本不支持会话引用，请升级目标设备后重试',
+          '目标设备版本不支持任务引用，请升级目标设备后重试',
         );
       }
       if (capability.error.code === 'IPC_ERROR') {
         throwIpcError(
           'SESSION_REFERENCE_UNAVAILABLE',
-          '目标设备仍在启动，会话引用暂不可用，请稍后重试',
+          '目标设备仍在启动，任务引用暂不可用，请稍后重试',
         );
       }
       throwIpcError(
@@ -489,7 +489,7 @@ export async function handleInvoke(
     ) {
       throwIpcError(
         'SESSION_REFERENCE_UNSUPPORTED',
-        '目标设备版本不支持会话引用，请升级目标设备后重试',
+        '目标设备版本不支持任务引用，请升级目标设备后重试',
       );
     }
   }

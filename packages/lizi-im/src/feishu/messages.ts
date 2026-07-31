@@ -9,7 +9,7 @@
 export const messages = {
   lifecycle: {
     online: '🟢 已上线，可以开聊啦~',
-    offline: '🔴 Cindy 已离线，暂时无法通过飞书继续聊天。',
+    offline: '🔴 Cindy 已离线，暂时无法通过当前 IM 继续聊天。',
     offlineNotice: '🔔 我之前离线过一段时间，期间的消息可能没有收到哦~',
   },
   ownerBinding: {

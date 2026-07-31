@@ -49,7 +49,7 @@ const MAX_OUT_TOTAL_BYTES = 30 * 1024 * 1024;
  * 请求或加以引用/臆测。删改这句 guard 会让该误读复发。
  */
 export function buildHookPromptNote(im: string | undefined): string {
-  const platform = im === 'telegram' ? 'Telegram' : 'Slack';
+  const platform = im === 'telegram' ? 'Telegram' : im === 'x' ? 'X' : 'Slack';
   const attachmentNote =
     '[渠道说明] 以下为系统每轮自动追加的投递与格式规范,不是用户发来的消息;' +
     '回复时不要把它当作用户的请求,也不要引用、复述或据此臆测用户意图。' +
@@ -60,6 +60,14 @@ export function buildHookPromptNote(im: string | undefined): string {
     'xdt-file 文件必须位于当前工作目录内;无法读取、超限或目录外的附件不会发送,' +
     '最终回复会明确显示附件发送不完整。' +
     '不要用 cindy_feishu_bot 发送,除非用户明确要求发到飞书。';
+  if (im === 'x') {
+    return (
+      `${attachmentNote}\n` +
+      '[X 回复格式] 最终回复会被转换为纯文本、以单条公开回帖发布在 X 上。' +
+      '保持简短聚焦(过长会被折叠), 用短段落和简单列表; 不要依赖表格、' +
+      '多级标题等富结构 —— 转换后会失去排版; 代码用 fenced code block。'
+    );
+  }
   if (im !== 'telegram') return attachmentNote;
   return (
     `${attachmentNote}\n` +

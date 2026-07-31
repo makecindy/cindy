@@ -29,6 +29,8 @@ export type AutoReviewDelegate = (
 ) => Promise<AutoReviewDecision | null>;
 
 export const MAX_AUTO_REVIEW_ACTION_TEXT_CHARS = 4_096;
+const AUTO_REVIEW_DELEGATE_TIMEOUT_MS = 8_000;
+const AUTO_REVIEW_TIMEOUT = Symbol('auto-review-timeout');
 
 export function getAutoReviewActionTextLength(action: ReviewableAction): number {
   switch (action.kind) {
@@ -124,17 +126,31 @@ export async function resolveAutoReviewDecision(
       reason: 'Automatic review is unavailable. Choose a safer, workspace-scoped alternative.',
     };
   }
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    const decision = await delegate(request);
+    const decision = await Promise.race([
+      delegate(request),
+      new Promise<typeof AUTO_REVIEW_TIMEOUT>((resolve) => {
+        timeout = setTimeout(
+          () => resolve(AUTO_REVIEW_TIMEOUT),
+          AUTO_REVIEW_DELEGATE_TIMEOUT_MS,
+        );
+      }),
+    ]);
     if (
-      decision?.verdict === 'allow'
-      || decision?.verdict === 'block'
-      || decision?.verdict === 'ask'
+      decision !== AUTO_REVIEW_TIMEOUT
+      && (
+        decision?.verdict === 'allow'
+        || decision?.verdict === 'block'
+        || decision?.verdict === 'ask'
+      )
     ) {
       return decision;
     }
   } catch {
     // Reviewer outages must not turn Auto into Ask or hold the tool callback open.
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
   return {
     verdict: 'block',

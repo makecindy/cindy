@@ -36,6 +36,8 @@ const deviceLinkProjectsHookSource = readSource('hooks', 'useDeviceLinkProjects.
 
 const remoteSessionHandoffSource = readSource('features', 'cc-agent', 'remoteSessionHandoff.ts');
 
+const remoteCollabHandoffSource = readSource('features', 'cc-agent', 'remoteCollabHandoff.ts');
+
 const deviceSwitcherPillSource = readSource('components', 'new-chat', 'DeviceSwitcherPill.tsx');
 
 const controllableDevicesHookSource = readSource('hooks', 'useControllableDevices.ts');
@@ -701,8 +703,11 @@ describe('Shared create project picker', () => {
     // 手写回流必须彻底消失,否则提交点后仍有可抛的一步。
     expect(newMakerDraftRouteSource).not.toContain("'local-db:sessions:list'");
     expect(newMakerDraftRouteSource).not.toContain('setDeviceSessions(');
-    // 组件也不该再自己 import 回流函数 —— 它只经 handoff 使用。
+    // 组件也不该再自己 import 回流函数 —— 它只经共享 helper 使用。issue #1170 之后
+    // 有第二个回流触发点(device-link 开协同后要把被控端刚建的 worker session 拉进
+    // 镜像),它住在 remoteCollabHandoff 里,同样是 fire-and-forget、同样不在组件内联。
     expect(newMakerDraftRouteSource).not.toContain('refreshRemoteDeviceSessions');
+    expect(remoteCollabHandoffSource).toContain('void refreshRemoteDeviceSessions(p.deviceId)');
   });
 
   // #807 review 第十七轮:归属必须在**回流之前**登记。回流失败(gave-up / superseded)时镜像里
@@ -729,7 +734,7 @@ describe('Shared create project picker', () => {
    *
    * refreshRemoteDeviceSessions 对瞬态错误退避重试,窗口最长约 6.75 秒。原来 handoff `await` 它才
    * 返回,于是这段时间里应用被关掉 → 对端**已经**有了新会话,而用户的首条消息(或目标弹窗里刚写的
-   * 内容)还没被 setPending / setPendingGoal 记录下来 → 重开再试就在对端建出第二个会话,第一个空着
+   * 内容)还没被 setPending / setPendingGoal 记录下来 → 重开再试就在对端建出第二个任务,第一个空着
    * 滞留;建目标那条还会连同只存在于弹窗内存里的编辑一起丢。
    *
    * 交接本来就不需要等权威快照 —— 临时行(带对端真正分配的 workDir)已经足够让 SessionView 的

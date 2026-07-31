@@ -10,7 +10,7 @@ import type {
   OrcaWorkerCreationResult,
 } from './orcaWorkerCreationService.js';
 
-export const ORCA_WORKER_READY_MESSAGE = '[系统] Orca Worker 会话已就绪，等待 Lead 分配任务。';
+export const ORCA_WORKER_READY_MESSAGE = '[系统] Orca Worker 已就绪，等待 Lead 分配任务。';
 
 /** 开启协同时的一次性入参；负责把 UI/MCP 的 worker 偏好归一到 worker 创建内核。 */
 export interface OrcaEnableTeamParams {

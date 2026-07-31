@@ -10,7 +10,9 @@ describe('mobile shared Cindy source card wiring', () => {
     expect(source).toContain("item.message.kind === 'user' && item.message.hookSource");
     expect(source).toContain("kind: 'system' as const, align: 'agent' as const");
     expect(source).toContain('testID="message.hookSource"');
-    expect(source).toContain("hookSource.im === 'telegram' ? 'Telegram' : 'Slack'");
+    expect(source).toContain(
+      "hookSource.im === 'telegram' ? 'Telegram' : hookSource.im === 'x' ? 'X' : 'Slack'",
+    );
     expect(source).toContain('{hookSource.channelName}');
     expect(source).toContain('(isUser || hookSource !== undefined)');
     expect(source).toContain("(item.message.kind === 'user' || hookSource !== undefined)");

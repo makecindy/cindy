@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ErrorBanner } from '../ErrorBanner';
 import { useCodexAuth } from '@/hooks/useCodexAuth';
 import { useCodexSessionExpiredPrompt } from '@/hooks/useCodexSessionExpiredPrompt';
+import { CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON } from '../../../../shared/claudeGatewayError';
 
 type AuthStateChangedPayload = {
   agentKind: 'claude-code' | 'codex';
@@ -551,14 +552,103 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(onContinueAfterUsageReset).toHaveBeenCalledOnce();
 
     rerender(
-      <ErrorBanner
-        error="A normal failure"
-        retryText="retry this turn"
-        onRetry={vi.fn()}
-      />,
+      <ErrorBanner error="A normal failure" retryText="retry this turn" onRetry={vi.fn()} />,
     );
     expect(
       screen.queryByRole('button', { name: 'chat.errorBanner.continueAfterReset' }),
     ).toBeNull();
+  });
+
+  it('replaces the misleading Claude Pro error with its XD Gateway attribution', () => {
+    render(
+      <ErrorBanner
+        error="Claude Opus is not available with the Claude Pro plan. Run /logout and /login."
+        errorReason={CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON}
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+        agentKind="cc"
+        modelId="claude-opus-5"
+      />,
+    );
+
+    expect(screen.getByText('chat.errorBanner.claudeGatewayOpusPlanMismatch')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'chat.errorBanner.retry' })).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: 'chat.errorBanner.switchClaudeSubscription' }),
+    ).toBeNull();
+  });
+
+  it('switches the conversation to Claude.ai through the explicit recovery action', async () => {
+    const switching = deferred<void>();
+    const onSwitchToClaudeSubscription = vi.fn(() => switching.promise);
+    render(
+      <ErrorBanner
+        error="Claude Opus is not available with the Claude Pro plan."
+        errorReason={CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON}
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+        onSwitchToClaudeSubscription={onSwitchToClaudeSubscription}
+        agentKind="cc"
+        modelId="claude-opus-5"
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'chat.errorBanner.switchClaudeSubscription' }),
+    );
+    expect(onSwitchToClaudeSubscription).toHaveBeenCalledOnce();
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'chat.errorBanner.switchingClaudeSubscription',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+
+    await act(async () => {
+      switching.resolve();
+      await switching.promise;
+    });
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'chat.errorBanner.switchClaudeSubscription',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
+  });
+
+  it('restores the Claude.ai recovery action when switching fails', async () => {
+    const onSwitchToClaudeSubscription = vi.fn(async () => {
+      throw new Error('route update failed');
+    });
+    render(
+      <ErrorBanner
+        error="Claude Opus is not available with the Claude Pro plan."
+        errorReason={CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON}
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+        onSwitchToClaudeSubscription={onSwitchToClaudeSubscription}
+        agentKind="cc"
+        modelId="claude-opus-5"
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'chat.errorBanner.switchClaudeSubscription' }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        'chat.errorBanner.claudeSubscriptionSwitchFailed',
+      ),
+    );
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'chat.errorBanner.switchClaudeSubscription',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
   });
 });

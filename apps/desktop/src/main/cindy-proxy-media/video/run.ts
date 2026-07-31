@@ -10,8 +10,10 @@
  */
 
 import type { VideoProviderRegistry } from './registry.js';
+import { DEFAULT_VIDEO_REF_MODE } from './types.js';
 import type {
   VideoGenerationRequest,
+  VideoRefMode,
   VideoTaskHandle,
   VideoTaskStatus,
 } from './types.js';
@@ -70,10 +72,16 @@ export interface SubmitAndAwaitVideoParams {
   alias: string;
   prompt: string;
   /**
-   * 0–2 张参考图(base64 data URI):1 张=首帧动画,2 张=首尾帧过渡。
-   * 超出目标模型的 maxImages 直接抛错(调用方折叠成结构化拒绝)。
+   * 参考图(base64 data URI)。张数上限随 refMode 走,超出即抛错(调用方
+   * 折叠成结构化拒绝)。
    */
   imageDataUris?: string[];
+  /**
+   * 参考图用法(见 VideoRefMode)。不传 = 'first_and_last_frame',与 2026-07
+   * 之前的行为逐字节同形。目标模型不支持该用法时抛错,不做静默降级——
+   * 降成首尾帧会出一条用户没要的片子,还照样计费。
+   */
+  refMode?: VideoRefMode;
   /**
    * 画面参数(全部可选,2026-07 放开):不传的项落该模型的出厂默认,
    * 与放开之前的行为逐字节同形。传了但该模型不支持 → 抛错,不做最近似
@@ -126,10 +134,22 @@ export async function submitAndAwaitVideo(
   const resolved = registry.resolveByAlias(params.alias);
   const caps = resolved.provider.capabilities;
   const images = params.imageDataUris ?? [];
-  if (images.length > caps.maxImages) {
-    throw new Error(
-      `art: model '${params.alias}' supports at most ${caps.maxImages} reference image(s), got ${images.length}`,
-    );
+  const refMode = params.refMode ?? DEFAULT_VIDEO_REF_MODE;
+  // 无图 = 文生视频,与参考图用法无关,不查 refMode(否则只支持某一种用法
+  // 的 provider 会连文生视频都被误拒)。
+  if (images.length > 0) {
+    const maxImages = caps.maxImagesByRefMode[refMode];
+    if (maxImages === undefined) {
+      const supported = Object.keys(caps.maxImagesByRefMode);
+      throw new Error(
+        `art: model '${params.alias}' does not support refMode '${refMode}' (supported: ${supported.join(', ') || 'none'})`,
+      );
+    }
+    if (images.length > maxImages) {
+      throw new Error(
+        `art: model '${params.alias}' supports at most ${maxImages} reference image(s) in refMode '${refMode}', got ${images.length}`,
+      );
+    }
   }
   assertParamSupported(params.alias, 'duration', params.duration, caps.supportedDurations);
   assertParamSupported(params.alias, 'resolution', params.resolution, caps.supportedResolutions);
@@ -146,6 +166,7 @@ export async function submitAndAwaitVideo(
     prompt: params.prompt,
     ...submitted,
     images: images.length > 0 ? images : undefined,
+    refMode,
   };
   const handle = await resolved.provider.submit(req, params.alias, params.signal);
   const expected = caps.expectedSecondsByAlias[params.alias] ?? 120;

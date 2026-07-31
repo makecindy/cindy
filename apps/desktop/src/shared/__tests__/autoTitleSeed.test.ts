@@ -384,7 +384,7 @@ describe('deriveAutoTitleSeed — 用户一个字没写', () => {
 describe('deriveAutoTitleSeed — 会话/项目引用', () => {
   const HREF = 'cindy://session/src-1';
 
-  it('只拖一个会话引用 → 用被引用会话的标题,而不是 [Referenced conversation] 机器块', () => {
+  it('只拖一个任务引用 → 用被引用会话的标题,而不是 [Referenced conversation] 机器块', () => {
     const seed = deriveAutoTitleSeed(
       queued({
         text: HREF,

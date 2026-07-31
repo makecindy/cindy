@@ -23,10 +23,7 @@ import * as Lark from '@larksuiteoapi/node-sdk';
 
 import { getLog } from './moduleScope.js';
 import { buildInteractiveCardV1 } from './cards.js';
-import type {
-  InteractiveCardSpec,
-  SendFileResult,
-} from '../types.js';
+import type { InteractiveCardSpec, SendFileResult } from '../types.js';
 import type { BotCredentials } from './internal-types.js';
 
 /** 30 MB per file — feishu's upper limit for `im.file.create`. */
@@ -39,7 +36,11 @@ let creds: BotCredentials | null = null;
 
 export function bindClient(c: BotCredentials): void {
   creds = c;
-  client = new Lark.Client({ appId: c.appId, appSecret: c.appSecret });
+  client = new Lark.Client({
+    appId: c.appId,
+    appSecret: c.appSecret,
+    domain: c.service === 'lark' ? Lark.Domain.Lark : Lark.Domain.Feishu,
+  });
 }
 
 export function unbindClient(): void {
@@ -56,16 +57,14 @@ export function getBoundCreds(): BotCredentials | null {
 }
 
 function ensureClient(): Lark.Client {
-  if (!client) throw new Error('[feishu/outbound] Lark.Client not bound — feishu connection not established');
+  if (!client)
+    throw new Error('[feishu/outbound] Lark.Client not bound — feishu connection not established');
   return client;
 }
 
 // ── basic text ────────────────────────────────────────────────────────────────
 
-export async function sendText(
-  openId: string,
-  text: string,
-): Promise<{ messageId: string }> {
+export async function sendText(openId: string, text: string): Promise<{ messageId: string }> {
   const res = await ensureClient().im.v1.message.create({
     params: { receive_id_type: 'open_id' },
     data: {
@@ -87,10 +86,7 @@ export async function sendText(
  * - 飞书规则:只有原始添加者(此处是 bot 自己)能删除该 reaction,所以
  *   reaction_id 必须配对持有,跨进程/重启不可恢复 → 调用方负责短期持有。
  */
-export async function addReaction(
-  messageId: string,
-  emojiType: string,
-): Promise<string | null> {
+export async function addReaction(messageId: string, emojiType: string): Promise<string | null> {
   const log = getLog();
   try {
     const res = await ensureClient().im.v1.messageReaction.create({
@@ -109,10 +105,7 @@ export async function addReaction(
  * 撤销之前 addReaction 返回的 reaction_id 对应的表情。
  * 失败 swallow,因为这是 ack 的清理动作,不应影响 turn 结束流程。
  */
-export async function removeReaction(
-  messageId: string,
-  reactionId: string,
-): Promise<void> {
+export async function removeReaction(messageId: string, reactionId: string): Promise<void> {
   const log = getLog();
   try {
     await ensureClient().im.v1.messageReaction.delete({
@@ -157,10 +150,7 @@ export async function updateInteractive(
 
 // ── raw card patch (used by streamingText for v2 markdown patching) ───────────
 
-export async function patchCardRaw(
-  messageId: string,
-  cardJson: unknown,
-): Promise<void> {
+export async function patchCardRaw(messageId: string, cardJson: unknown): Promise<void> {
   await ensureClient().im.v1.message.patch({
     path: { message_id: messageId },
     data: { content: JSON.stringify(cardJson) },
@@ -283,9 +273,7 @@ export async function uploadImage(absPath: string): Promise<string | null> {
     }
     const stat = fs.statSync(absPath);
     if (stat.size === 0 || stat.size > FEISHU_IMAGE_MAX_BYTES) {
-      log.warn(
-        `[feishu/outbound] uploadImage size ineligible ${stat.size} for ${absPath}`,
-      );
+      log.warn(`[feishu/outbound] uploadImage size ineligible ${stat.size} for ${absPath}`);
       return null;
     }
     const res = await ensureClient().im.v1.image.create({

@@ -33,7 +33,7 @@ import {
 } from './githubUserIssueSubmitter';
 
 export { IssueConfirmBridge } from './issueConfirmBridge';
-export type { IssueConfirmDecision } from './issueConfirmBridge';
+export type { IssueConfirmDecision, IssueConfirmInteractionSnapshot } from './issueConfirmBridge';
 
 const log = createLogger('github-issue');
 

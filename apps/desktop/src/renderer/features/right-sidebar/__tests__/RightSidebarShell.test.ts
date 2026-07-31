@@ -907,7 +907,7 @@ describe('RightSidebarShell 钉住面板粘性展开(切会话把收着的侧栏
     });
     setGhostTabPinned('pr-signoff', true); // 无条目 = 不算钉住,先钉上
     tabsIpc = makeRightSidebarTabsIpc();
-    // 两个会话都带同一块钉住面板页签(补挂在真环境由注册表驱动,单测无插件
+    // 两个任务都带同一块钉住面板页签(补挂在真环境由注册表驱动,单测无插件
     // 注册,直接让存档里就有)。
     tabsIpc.list.mockImplementation(async () => ({
       tabs: [{ id: 'tab-ghost', kind: GHOST_KIND, state: null }],
@@ -997,7 +997,7 @@ describe('RightSidebarShell 钉住面板粘性展开(切会话把收着的侧栏
     expect(requests).toHaveLength(0);
   });
 
-  it('首帧(启动进第一个会话)不算切换 → 不弹', async () => {
+  it('首帧(启动进第一个任务)不算切换 → 不弹', async () => {
     writePanelCollapsed('right-tabs', { sessionId: 's1' }, true);
     setLastFocusedPinnedGhostKind(GHOST_KIND);
 

@@ -45,7 +45,10 @@ import { startJsStallWatchdog } from '@/debug/jsStallWatchdog';
 import { initMobileTapdb } from '@/analytics/mobileTapdb';
 import { useBundleUpdatePrompt } from '@/update/useBundleUpdatePrompt';
 import { useResumeUpdateCheck } from '@/update/useResumeUpdateCheck';
-import { useStartupOtaGate } from '@/update/useStartupOtaGate';
+import {
+  markStartupOtaLaunchSuccess,
+  useStartupOtaGate,
+} from '@/update/useStartupOtaGate';
 import { useCanaryChannelGate } from '@/update/useCanaryChannelGate';
 import { useStartupEndpointGate } from '@/config/useStartupEndpointGate';
 import { IS_OTA_SELFHOST } from '@/config/env';
@@ -81,6 +84,12 @@ function NavigationGate() {
   useEffect(() => {
     if (auth.initialized) releaseSplash();
   }, [auth.initialized, releaseSplash]);
+
+  // 启动链走完 = 本次热更 reload(如果有)确实落地:清掉 reload 闸门记录。
+  // 只在目标 update 已成为当前运行版本时才清,判定在 markStartupOtaLaunchSuccess 内。
+  useEffect(() => {
+    if (auth.initialized) markStartupOtaLaunchSuccess();
+  }, [auth.initialized]);
 
   useEffect(() => {
     if (!auth.initialized) return;

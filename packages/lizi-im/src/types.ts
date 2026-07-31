@@ -85,7 +85,7 @@ export interface IMHost {
 export interface IMHostMediaCache {
   /** 图片字节入 host 总仓;返回仓内绝对路径(喂 agent)+ 渲染 URL(cindy-media://)。 */
   cacheImage(params: {
-    integration: 'feishu' | 'discord' | 'telegram';
+    integration: 'feishu' | 'discord' | 'telegram' | 'dingtalk';
     /** 平台侧稳定 token(feishu image_key / discord attachment id / telegram file_id),host 据此免重下。 */
     token: string;
     buffer: Uint8Array;
@@ -93,11 +93,20 @@ export interface IMHostMediaCache {
   }): Promise<{ absPath: string; url: string }>;
   /** 按 token 查已缓存图片;未缓存返回 null(调用方去真下载)。 */
   getCachedImage(
-    integration: 'feishu' | 'discord' | 'telegram',
+    integration: 'feishu' | 'discord' | 'telegram' | 'dingtalk',
     token: string,
   ): Promise<{ absPath: string; url: string; mimeType: string } | null>;
   /** host 托管媒体 URL(cindy-media://)→ 绝对路径;认不出返回 null(出站上传用)。 */
   resolveMediaUrl(url: string): string | null;
+  /**
+   * 下载公开 HTTPS 图片供 IM 出站上传或拉取平台签发的临时媒体 URL。
+   * host 必须逐跳执行 SSRF / DNS rebinding 防护并在读取过程中执行
+   * maxBytes 上限；返回字节不落盘。
+   */
+  fetchRemoteImage?(
+    url: string,
+    maxBytes: number,
+  ): Promise<{ buffer: Uint8Array; mimeType?: string }>;
 }
 
 export interface IMAttachment {

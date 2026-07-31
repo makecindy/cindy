@@ -204,13 +204,23 @@ describe('skillhub/installService', () => {
     expect(fs.readFileSync(path.join(finalDir, 'SKILL.md'), 'utf-8')).toBe('old content');
   });
 
-  it('rejects uninstall outside a cloud capability boundary', async () => {
-    const finalDir = path.join(TEST_ROOT, 'skills', 'local-only');
+  it('rejects uninstall outside a cloud capability boundary for market installs', async () => {
+    const finalDir = path.join(TEST_ROOT, '.agents', 'skills', 'market-only');
     fs.mkdirSync(finalDir, { recursive: true });
+    fs.writeFileSync(path.join(finalDir, 'SKILL.md'), 'content', 'utf-8');
     const { getAppCapabilities } = await import('../../appCapabilities.js');
+    const { registryService } = await import('../registry');
     const { uninstall } = await import('../installService');
 
-    vi.mocked(getAppCapabilities).mockReturnValue({
+    vi.mocked(registryService.getInstall).mockResolvedValueOnce({
+      version: '1.0.0',
+      authorId: 'owner',
+      folderHash: 'hash',
+      installedAt: 1,
+      updatedAt: 1,
+      origin: 'installed',
+    });
+    vi.mocked(getAppCapabilities).mockReturnValueOnce({
       canUseCindyAccountServices: false,
       canUseCindyGateway: false,
       canUseDeviceLink: false,
@@ -225,14 +235,57 @@ describe('skillhub/installService', () => {
       message: 'SkillHub 卸载需要 Cindy 云端账号',
     });
     expect(fs.existsSync(finalDir)).toBe(true);
-    vi.mocked(getAppCapabilities).mockImplementation(() => ({
-      canUseCindyAccountServices: true,
-      canUseCindyGateway: true,
-      canUseDeviceLink: true,
-      canUseSkillHubCloud: true,
-      canUseCindyOAuthBroker: true,
-      canUseCindyHeartbeat: true,
-    }));
+  });
+
+  it('allows uninstalling an imported skill without cloud login', async () => {
+    const finalDir = path.join(TEST_ROOT, '.agents', 'skills', 'imported-offline');
+    fs.mkdirSync(finalDir, { recursive: true });
+    fs.writeFileSync(path.join(finalDir, 'SKILL.md'), 'content', 'utf-8');
+
+    const { getCurrentUserId } = await import('../../authManager');
+    const { getAppCapabilities } = await import('../../appCapabilities.js');
+    const { registryService } = await import('../registry');
+    const { uninstall } = await import('../installService');
+
+    vi.mocked(getCurrentUserId).mockReturnValueOnce(null);
+    vi.mocked(registryService.getInstall).mockResolvedValueOnce({
+      version: '0.1.0',
+      authorId: '',
+      folderHash: 'hash',
+      installedAt: 1,
+      updatedAt: 1,
+      origin: 'imported',
+    });
+    vi.mocked(registryService.removeInstall).mockResolvedValue(undefined);
+    // imported 路径不读 canUseSkillHubCloud；这里刻意关掉云能力，确认仍可卸载。
+    vi.mocked(getAppCapabilities).mockReturnValue({
+      canUseCindyAccountServices: false,
+      canUseCindyGateway: false,
+      canUseDeviceLink: false,
+      canUseSkillHubCloud: false,
+      canUseCindyOAuthBroker: false,
+      canUseCindyHeartbeat: false,
+    });
+
+    try {
+      const result = await uninstall(finalDir);
+
+      expect(result).toEqual({ success: true });
+      expect(fs.existsSync(finalDir)).toBe(false);
+      expect(registryService.removeInstall).toHaveBeenCalledWith(
+        'imported-offline',
+        expect.stringMatching(/[/\\]imported-offline$/),
+      );
+    } finally {
+      vi.mocked(getAppCapabilities).mockImplementation(() => ({
+        canUseCindyAccountServices: true,
+        canUseCindyGateway: true,
+        canUseDeviceLink: true,
+        canUseSkillHubCloud: true,
+        canUseCindyOAuthBroker: true,
+        canUseCindyHeartbeat: true,
+      }));
+    }
   });
 
   it('rejects archives that exceed the entry count limit before replacing the target', async () => {
@@ -904,17 +957,26 @@ describe('skillhub/installService', () => {
     });
   });
 
-  it('rejects local mode uninstall while the registry is shared', async () => {
+  it('rejects local mode uninstall of a market-installed skill while cloud is unavailable', async () => {
     const finalDir = path.join(TEST_ROOT, 'local-project', '.agents', 'skills', 'local-skill');
     fs.mkdirSync(finalDir, { recursive: true });
     fs.writeFileSync(path.join(finalDir, 'SKILL.md'), 'content', 'utf-8');
 
     const { getCurrentDataOwnerId, getCurrentUserId } = await import('../../authManager');
     const { getAppCapabilities } = await import('../../appCapabilities.js');
+    const { registryService } = await import('../registry');
     const { uninstall } = await import('../installService');
-    vi.mocked(getCurrentUserId).mockReturnValue(null);
-    vi.mocked(getCurrentDataOwnerId).mockReturnValueOnce('local-v1');
-    vi.mocked(getAppCapabilities).mockReturnValue({
+    vi.mocked(getCurrentUserId).mockReturnValueOnce(null);
+    vi.mocked(getCurrentDataOwnerId).mockReturnValue('local-v1');
+    vi.mocked(registryService.getInstall).mockResolvedValueOnce({
+      version: '1.0.0',
+      authorId: 'owner',
+      folderHash: 'hash',
+      installedAt: 1,
+      updatedAt: 1,
+      origin: 'installed',
+    });
+    vi.mocked(getAppCapabilities).mockReturnValueOnce({
       canUseCindyAccountServices: false,
       canUseCindyGateway: false,
       canUseDeviceLink: false,
@@ -930,14 +992,7 @@ describe('skillhub/installService', () => {
       errorCode: 'AUTH_REQUIRED',
     });
     expect(fs.existsSync(finalDir)).toBe(true);
-    vi.mocked(getAppCapabilities).mockImplementation(() => ({
-      canUseCindyAccountServices: true,
-      canUseCindyGateway: true,
-      canUseDeviceLink: true,
-      canUseSkillHubCloud: true,
-      canUseCindyOAuthBroker: true,
-      canUseCindyHeartbeat: true,
-    }));
+    vi.mocked(getCurrentDataOwnerId).mockReturnValue('user-1');
   });
 
   it('uninstalls a linked install when the scanner passes its physical path', async () => {

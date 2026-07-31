@@ -152,9 +152,11 @@ async function resolveNewSessionConfig(
   const channel =
     sourceIm === 'telegram'
       ? ('telegram' as const)
-      : sourceIm === 'slack'
-        ? ('slack' as const)
-        : null;
+      : sourceIm === 'x'
+        ? ('x' as const)
+        : sourceIm === 'slack'
+          ? ('slack' as const)
+          : null;
   const workdirProviderId =
     channel !== null && workspaceCtx?.alias
       ? getWorkspaceProviderSource(channel, workspaceCtx.teamId, workspaceCtx.alias)
@@ -471,7 +473,12 @@ export function createMakerHookSessionRunner(deps: {
         ...(req.isNew
           ? {
               vendorOptions: {
-                source: req.source?.im === 'telegram' ? 'telegram' : 'slack-hook',
+                source:
+                  req.source?.im === 'telegram'
+                    ? 'telegram'
+                    : req.source?.im === 'x'
+                      ? 'x'
+                      : 'slack-hook',
               },
             }
           : {}),
@@ -517,7 +524,7 @@ export function createMakerHookSessionRunner(deps: {
           `hook run aborted: live session ${req.sessionId} runs in a directory that is no longer in the workspace map`,
         );
         return fail(
-          '这个对话正在一个已不在工作目录映射里的目录中运行，本条消息没有执行。把该目录加进 设置 → 远程连接 → 工作目录映射，或在桌面端关掉这个对话后重发。',
+          '这个任务正在一个已不在工作目录映射里的目录中运行，本条消息没有执行。把该目录加进 设置 → 远程连接 → 工作目录映射，或在桌面端关掉这个任务后重发。',
         );
       }
 
@@ -630,8 +637,8 @@ export function createMakerHookSessionRunner(deps: {
         if (providerId) {
           await setSessionProviderIdInDb(session.id, providerId);
         }
-        if (req.source?.im === 'telegram') {
-          await setSessionSourceInDb(session.id, 'telegram');
+        if (req.source?.im === 'telegram' || req.source?.im === 'x') {
+          await setSessionSourceInDb(session.id, req.source.im);
         }
         broadcastSessionCreated(session.id);
       }

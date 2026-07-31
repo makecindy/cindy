@@ -118,6 +118,10 @@ export type IpcErrorCode =
   | 'MODEL_ACCESS_DISABLED' // 服务端灰度未启用(503)——走手填兜底
   | 'MODEL_ACCESS_UNSUPPORTED' // 企业未接入(403)——XD 网关不可用,不重试
   | 'PLAN_CHANGE_NOT_AVAILABLE' // 当前订阅不能切换到目标套餐，可返回候选列表重选
+  // 钉钉机器人连接
+  | 'DINGTALK_AUTH_FAILED' // Client ID / Client Secret 被钉钉拒绝
+  | 'DINGTALK_NETWORK_FAILED' // 钉钉凭证校验接口不可达
+  | 'DINGTALK_STREAM_CONNECTION_FAILED' // 凭证有效，但 Stream WebSocket 未建立
   // 个人资料自助修改(settings → 用户卡片;服务端直写)
   | 'PROFILE_AVATAR_UPLOAD_FAILED' // 头像经 oss-server 预签名直传失败(presign 或 PUT 阶段)
   | 'PROFILE_UPDATE_FAILED' // PATCH /api/me/profile 失败(网络 / 服务端拒绝)
@@ -233,6 +237,9 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'MODEL_ACCESS_DISABLED',
   'MODEL_ACCESS_UNSUPPORTED',
   'PLAN_CHANGE_NOT_AVAILABLE',
+  'DINGTALK_AUTH_FAILED',
+  'DINGTALK_NETWORK_FAILED',
+  'DINGTALK_STREAM_CONNECTION_FAILED',
   'PROFILE_AVATAR_UPLOAD_FAILED',
   'PROFILE_UPDATE_FAILED',
   'SHARE_FILE_INVALID',

@@ -115,7 +115,7 @@
   },
   "rewind": {
     "readError": "Couldn't read the rewind preview. Sync again and retry.",
-    "noFilesNote": "No files to roll back; only the conversation after this message will be truncated.",
+    "noFilesNote": "No files to roll back; only the chat after this message will be truncated.",
     "moreFiles": "{{count}} more files",
     "stats": "{{count}} files · +{{insertions}} / -{{deletions}} lines",
     "gotIt": "Got it",
@@ -125,11 +125,11 @@
     "confirming": "Rewinding",
     "titleLoading": "Checking rewind impact",
     "titleDefault": "Rewind to this message?",
-    "titleEmpty": "Rewind conversation only",
+    "titleEmpty": "Rewind chat only",
     "titleError": "Can't rewind",
     "detailLoading": "Reading the file rewind preview from your computer.",
-    "detailDefault": "This rolls back the files below and truncates the conversation after this message.",
-    "detailEmpty": "No files to roll back; confirming truncates only the conversation after this message.",
+    "detailDefault": "This rolls back the files below and truncates the chat after this message.",
+    "detailEmpty": "No files to roll back; confirming truncates only the chat after this message.",
     "detailError": "Your computer declined this rewind."
   },
   "collab": {

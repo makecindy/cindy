@@ -99,6 +99,10 @@ export const CLIENT_ENDPOINT_KEYS = [
   // Telegram hook is deployed independently from Slack; empty means the
   // current environment has not rolled out Telegram yet.
   'telegramHookWsUrl',
+  // X (Twitter) hook, same deployment model as Telegram; empty (or a manifest
+  // that omits the key entirely) means X has not rolled out yet — the Settings
+  // card stays hidden, which is the intended gradual-rollout switch.
+  'xHookWsUrl',
   'slackHookWsUrl',
   'websiteUrl',
   // model-access-server(登录后自动下发 LLM 网关凭据)的 API 基址。
@@ -165,6 +169,7 @@ const FIELD_PROTOCOLS: Record<ClientEndpointKey, readonly string[]> = {
   ossApiBaseUrl: ['https:'],
   heartbeatUrl: ['https:'],
   telegramHookWsUrl: ['wss:'],
+  xHookWsUrl: ['wss:'],
   slackHookWsUrl: ['wss:'],
   websiteUrl: ['https:'],
   modelAccessApiBaseUrl: ['https:'],

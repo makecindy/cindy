@@ -16,10 +16,11 @@ import {
   type ResolvedModelCost,
   type TurnPricingContext,
 } from '../turnCostCalculator';
-import type {
-  ModelPriceQuote,
-  ModelPricingCatalog,
-  RegionalMoney,
+import {
+  DEFAULT_USAGE_CURRENCY,
+  type ModelPriceQuote,
+  type ModelPricingCatalog,
+  type RegionalMoney,
 } from '../../../shared/regionalMoney';
 
 const XD_GATEWAY: TurnPricingContext = {
@@ -190,7 +191,12 @@ describe('resolveTurnCost', () => {
     expect(claude.money?.amount).toBe(5);
   });
 
-  it('keeps the SDK USD fallback for Global when the Gateway quote is missing', () => {
+  it('lets the build default ledger currency decide the SDK fallback when the Gateway quote is missing', () => {
+    // 没有活动账本币种(冷启动、目录还没同步下来)时由构建默认币种定夺,断言因此
+    // 跟着构建区域走:Global(USD 账本)直接按 SDK 的 USD 兜底记账;中国大陆版
+    // (CNY 账本)按 resolveTurnCost 里 sdk-fallback 的币种守卫这一轮不记。
+    // 不能写死 USD —— 那样只有 Global 构建下能过,等于把构建默认值当成了常量。
+    __resetActiveLedgerCurrencyForTesting();
     const result = resolveTurnCost({
       rawModel: 'unknown-model',
       tokens: {
@@ -204,12 +210,16 @@ describe('resolveTurnCost', () => {
       context: XD_GATEWAY,
     });
     expect(result.source).toBe('sdk-fallback');
-    expect(result.money).toEqual({
-      amount: 1.23,
-      currency: 'USD',
-      approximate: false,
-      kind: 'actual-cost',
-    });
+    expect(result.money).toEqual(
+      DEFAULT_USAGE_CURRENCY === 'USD'
+        ? {
+            amount: 1.23,
+            currency: 'USD',
+            approximate: false,
+            kind: 'actual-cost',
+          }
+        : null,
+    );
   });
 
   it('falls back to the SDK USD amount for a USD-settled account on a CN build', () => {
@@ -384,19 +394,26 @@ describe('resolveTurnCost', () => {
   });
 
   it('does not apply a Gateway discount to provider SDK cost facts', () => {
-    const result = resolveTurnCost({
-      rawModel: 'codex/gpt-5.5',
-      tokens: {
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheReadTokens: 0,
-        cacheCreateTokens: 0,
-      },
-      sdkCostDelta: 10,
-      pricing: null,
-      context: PROVIDER_API,
-    });
-    expect(result.money?.amount).toBe(10);
+    // 本例只验"折扣不落到第三方 SDK 实报值上",所以把账号币种显式钉成 USD:
+    // 否则 CNY 账本会按固定汇率投影,金额不再等于 SDK 原值,验的就不是折扣了。
+    try {
+      setActiveLedgerCurrency('USD');
+      const result = resolveTurnCost({
+        rawModel: 'codex/gpt-5.5',
+        tokens: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+        },
+        sdkCostDelta: 10,
+        pricing: null,
+        context: PROVIDER_API,
+      });
+      expect(result.money?.amount).toBe(10);
+    } finally {
+      __resetActiveLedgerCurrencyForTesting();
+    }
   });
 
   it('subscription routes and explicit subscription model prefixes never become actual cost', () => {

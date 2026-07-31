@@ -15,7 +15,7 @@
  *
  * 可见性(imBotVisibility 单点):本地模式与「国区构建 + 个人账号登录」都
  * 没有 Cindy 分栏(深链/兜底一律落「个人」);国区个人账号的个人分栏进一步
- * 隐藏 Discord 机器人,只剩飞书(Tips 换 personalFeishuOnly 文案)。
+ * 隐藏 Discord / Telegram 机器人，保留中国大陆可用的个人连接。
  */
 
 import { Lightbulb } from 'lucide-react';
@@ -26,6 +26,7 @@ import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { DiscordBotSection } from './DiscordBotSection';
+import { DingTalkBotSection } from './DingTalkBotSection';
 import { FeishuBotSection } from './FeishuBotSection';
 import { HookConnectionsSection } from './HookConnectionsSection';
 import { TelegramBotSection } from './TelegramBotSection';
@@ -33,6 +34,7 @@ import { WechatBotSection } from './WechatBotSection';
 import {
   showCindyGroup,
   showDiscordBot,
+  showLarkBot,
   showTelegramBot,
   type ImBotIdentity,
 } from './imBotVisibility';
@@ -60,26 +62,36 @@ export function isImBotSettingsGroup(value: string | null): value is ImBotSettin
   return value === 'cindy' || value === 'personal';
 }
 
-/** 个人栏内容 —— 用户自配凭证的机器人(国区个人账号无 Discord/Telegram)。 */
+/** 个人栏内容 —— 用户自配凭证的机器人(国区个人账号无 Discord/Lark/Telegram)。 */
 function PersonalGroupContent({
   showDiscord,
+  showLark,
   showTelegram,
 }: {
   showDiscord: boolean;
+  showLark: boolean;
   showTelegram: boolean;
 }) {
   const [expandedChannel, setExpandedChannel] = useState<
-    'wechat' | 'feishu' | 'discord' | 'telegram' | null
+    'wechat' | 'feishu' | 'discord' | 'telegram' | 'dingtalk' | null
   >(null);
 
-  const toggle = (channel: 'wechat' | 'feishu' | 'discord' | 'telegram') => {
+  const toggle = (channel: 'wechat' | 'feishu' | 'discord' | 'telegram' | 'dingtalk') => {
     setExpandedChannel((current) => (current === channel ? null : channel));
   };
 
   return (
     <div className="flex flex-col gap-3">
       <WechatBotSection expanded={expandedChannel === 'wechat'} onToggle={() => toggle('wechat')} />
-      <FeishuBotSection expanded={expandedChannel === 'feishu'} onToggle={() => toggle('feishu')} />
+      <FeishuBotSection
+        expanded={expandedChannel === 'feishu'}
+        onToggle={() => toggle('feishu')}
+        showLark={showLark}
+      />
+      <DingTalkBotSection
+        expanded={expandedChannel === 'dingtalk'}
+        onToggle={() => toggle('dingtalk')}
+      />
       {showDiscord && (
         <DiscordBotSection
           expanded={expandedChannel === 'discord'}
@@ -112,6 +124,7 @@ export function ImBotSection({
   };
   const cindyGroupAvailable = showCindyGroup(identity);
   const discordVisible = showDiscordBot(identity);
+  const larkVisible = showLarkBot(identity);
   const telegramVisible = showTelegramBot(identity);
   const availableGroups = cindyGroupAvailable
     ? IM_BOT_SETTINGS_GROUPS
@@ -184,7 +197,11 @@ export function ImBotSection({
         {effectiveGroup === 'cindy' ? (
           <HookConnectionsSection />
         ) : (
-          <PersonalGroupContent showDiscord={discordVisible} showTelegram={telegramVisible} />
+          <PersonalGroupContent
+            showDiscord={discordVisible}
+            showLark={larkVisible}
+            showTelegram={telegramVisible}
+          />
         )}
       </div>
     </div>

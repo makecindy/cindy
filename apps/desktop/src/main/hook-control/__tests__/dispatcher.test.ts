@@ -471,7 +471,7 @@ describe('dispatcher 核心语义', () => {
     fr.finish({ finalText: '新对话的回答' });
     await tick();
     const finalText = c.last('turn.end')!.payload.finalText;
-    expect(finalText).toContain('原对话已不在可用的工作目录里');
+    expect(finalText).toContain('原任务已不在可用的工作目录里');
     expect(finalText).toContain('把它所在的目录加进来');
     expect(finalText).toContain('新对话的回答');
   });
@@ -818,7 +818,7 @@ describe('dispatcher 核心语义', () => {
     fr.finish({ finalText: '新会话的回答' });
     await tick();
     const finalText = c.last('turn.end')!.payload.finalText;
-    expect(finalText).toContain('原对话已不在可用的工作目录里');
+    expect(finalText).toContain('原任务已不在可用的工作目录里');
     expect(finalText).toContain('新会话的回答');
   });
 
@@ -867,7 +867,7 @@ describe('dispatcher 核心语义', () => {
     fr.finish({ finalText: '新的回答' });
     await tick();
     // 措辞留余地: inspect 的 null 也可能是读库瞬时失败, 不能一口咬定会话没了
-    expect(c.last('turn.end')!.payload.finalText).toContain('原对话现在读不到');
+    expect(c.last('turn.end')!.payload.finalText).toContain('原任务现在读不到');
   });
 
   it('切账号期间异步定位失败也不回写旧代 rejected ack', async () => {
@@ -2004,7 +2004,7 @@ describe('turn.reopen: 失败任务在桌面端被续跑后接回原消息', () 
         undispatchListeners.add(listener);
         return () => undispatchListeners.delete(listener);
       }) as NonNullable<HookDispatcherDeps['subscribeUiTurnUndispatched']>,
-      /** 模拟"桌面端在这个会话里做了与续跑无关的事"。 */
+      /** 模拟"桌面端在这个任务里做了与续跑无关的事"。 */
       intervene: (sessionId: string) => {
         for (const l of [...interveners]) l(sessionId);
       },
@@ -2139,7 +2139,7 @@ describe('turn.reopen: 失败任务在桌面端被续跑后接回原消息', () 
 
   it('同 session 又来了新的 hook 任务 -> 撤销在观察的续跑并作废记账', async () => {
     const { cr, sig, c, d, sessionId } = await failOneTask();
-    // 让后续 dispatch 沿 binding 落回同一个会话(否则 inspect 查不到会重建)。
+    // 让后续 dispatch 沿 binding 落回同一个任务(否则 inspect 查不到会重建)。
     cr.sessions[sessionId] = { workingDir: WS_DIR, usable: true };
     sig.retry(sessionId);
     await tick();
@@ -2358,7 +2358,7 @@ describe('turn.reopen: 失败任务在桌面端被续跑后接回原消息', () 
     expect(cr.watches).toHaveLength(0);
     expect(c.ofType('turn.reopen')).toHaveLength(0);
 
-    // 而且它同时作废了意图与记账: 与 enqueue 侧同一条规则 —— 这个会话被无关内容推进过,
+    // 而且它同时作废了意图与记账: 与 enqueue 侧同一条规则 —— 这个任务被无关内容推进过,
     // 就不再把任何结果接回那条旧消息。哪怕目标那条随后真的 dispatch 也不接。
     // 取舍是明确的: 这里判错的代价是"渠道消息停在失败上"(本能力之前的状态), 反过来
     // 放行则是"把无关输出写进用户那条消息", 后者是真的错。
@@ -2667,7 +2667,7 @@ describe('turn.reopen: 失败任务在桌面端被续跑后接回原消息', () 
     await tick();
 
     // 同一 externalKey 的新 hook 任务跑起来, 并同样以失败收口 -> 记账换成它的 requestId。
-    // (让 inspect 看见这个 session, 第二条派发才会落到同一个会话上。)
+    // (让 inspect 看见这个 session, 第二条派发才会落到同一个任务上。)
     cr.sessions[sessionId] = { workingDir: WS_DIR, usable: true };
     d.handleDispatch('conn-1', dispatch({ requestId: 'req-take-over', prompt: '新任务' }), c.send);
     await tick();

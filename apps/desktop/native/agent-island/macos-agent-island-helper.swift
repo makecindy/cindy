@@ -1441,8 +1441,8 @@ struct AgentIslandStrings: Codable, Equatable {
 
   static let fallback = AgentIslandStrings(
     appName: "Cindy",
-    newConversationTitle: "New Maker",
-    newConversationHint: "Start a new conversation",
+    newConversationTitle: "New Session",
+    newConversationHint: "Start a new session",
     muteSound: "Mute Agent Island",
     enableSound: "Enable Agent Island sound",
     settings: "Agent Island settings",

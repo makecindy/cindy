@@ -164,23 +164,24 @@ describe('GhostPanelBubbleLayer', () => {
     const childB = screen.getByTestId('ghost-panel-bubble-b');
     fireEvent.pointerDown(stack, { button: 0, pointerId: 1, clientX: 500, clientY: 500 });
     fireEvent.pointerMove(stack, { pointerId: 1, clientX: 420, clientY: 430 });
-    // jsdom 视口 1024x768:默认锚点 (964, 58),拖 (-80, -70) 后 y 被 clamp 回
-    // 顶部下限 58 → 锚点 (884, 58),子气泡向下排在 114 / 170(还没松手)。
+    // jsdom 视口 1024x768:默认锚点 (964, 58),拖 (-80, -70) → (884, -12),y 被
+    // clamp 到四边边距 12(顶部无额外下限)→ 锚点 (884, 12),子气泡向下排在
+    // 68 / 124(还没松手)。
     // 落位断言 left/top 而非 transform:app-region 挖洞按布局矩形算,定位
     // 必须走布局属性(2026-07-31 草稿页拖不动的修复口径)。
     expect((childA as HTMLElement).style.left).toBe('884px');
-    expect((childA as HTMLElement).style.top).toBe('114px');
+    expect((childA as HTMLElement).style.top).toBe('68px');
     expect((childB as HTMLElement).style.left).toBe('884px');
-    expect((childB as HTMLElement).style.top).toBe('170px');
+    expect((childB as HTMLElement).style.top).toBe('124px');
     fireEvent.pointerUp(stack, { pointerId: 1, clientX: 420, clientY: 430 });
     fireEvent.click(stack);
     // 拖后 click 被吞:展开态不翻转,子气泡还在,且落在与拖动终点一致的位置。
     const settledA = screen.getByTestId('ghost-panel-bubble-a') as HTMLElement;
     const settledB = screen.getByTestId('ghost-panel-bubble-b') as HTMLElement;
     expect(settledA.style.left).toBe('884px');
-    expect(settledA.style.top).toBe('114px');
+    expect(settledA.style.top).toBe('68px');
     expect(settledB.style.left).toBe('884px');
-    expect(settledB.style.top).toBe('170px');
+    expect(settledB.style.top).toBe('124px');
   });
 
   it('拖动幽灵球:落点持久化到独立键、随后的 click 被吞(不展开)、拖完清理', () => {
@@ -198,6 +199,9 @@ describe('GhostPanelBubbleLayer', () => {
     expect(raw).toBeTruthy();
     const parsed = JSON.parse(raw as string) as { x: number; y: number };
     expect(Number.isFinite(parsed.x) && Number.isFinite(parsed.y)).toBe(true);
+    // 往上拖过头只被四边边距 12 拦住(不再卡在顶部拖动带下沿 58):
+    // 默认位 y=58 + dy(-70) = -12 → 12。
+    expect(parsed.y).toBe(12);
     expect(document.body.classList.contains('resizing-pane')).toBe(false);
   });
 

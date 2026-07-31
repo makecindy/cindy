@@ -253,7 +253,7 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       { re: /updater|release-notes|session-import|migration/, why: 'updater / 导入 / 迁移' },
     ];
     // 显式豁免:
-    //  - `maker:goal:set` 是 per-session 域动作(入参带 sessionId,只影响单个会话的
+    //  - `maker:goal:set` 是 per-session 域动作(入参带 sessionId,只影响单个任务的
     //    目标状态机),与 compat-mode:set / memory:set 这类全局设置写不同类,同类的
     //    maker:set-permission-mode 本就放行;仅命名撞上 `:set$` 模式。
     //  - `maker:api-key:present` 是 presence-only 探测:只回 { present: boolean },

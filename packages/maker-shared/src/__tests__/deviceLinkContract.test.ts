@@ -132,8 +132,8 @@ describe('device-link shared contract', () => {
     expect(humanizeRemoteError(Object.assign(new Error('revoked'), { code: 'ACCESS_REVOKED' })))
       .toContain('撤销手机访问权限');
     // 识别不了的错误原文透出(含普通 Error 与非 Error 值)
-    expect(humanizeRemoteError(new Error('找不到这个会话所属电脑，请重新同步后再试。')))
-      .toBe('找不到这个会话所属电脑，请重新同步后再试。');
+    expect(humanizeRemoteError(new Error('找不到这个任务所属电脑，请重新同步后再试。')))
+      .toBe('找不到这个任务所属电脑，请重新同步后再试。');
     expect(humanizeRemoteError('plain failure')).toBe('plain failure');
   });
 

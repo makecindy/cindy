@@ -45,6 +45,7 @@ type FeishuState = {
   hasSecret: boolean;
   ownerOpenId: string | null;
   lifecycleAnnouncement: boolean;
+  service?: 'feishu' | 'lark';
 };
 
 function installFeishuApi() {
@@ -124,6 +125,36 @@ describe('useFeishuBot', () => {
     expect(second.result.current.ownerOpenId).toBe('ou_new_owner');
   });
 
+  it('hydrates and saves the selected Lark service', async () => {
+    const { api } = installFeishuApi();
+    api.getState.mockResolvedValueOnce({
+      status: 'idle',
+      appId: null,
+      appSecret: null,
+      hasSecret: false,
+      ownerOpenId: null,
+      lifecycleAnnouncement: true,
+      service: 'lark',
+    });
+    api.save.mockResolvedValueOnce({ verdict: 'connected' });
+    const hook = renderHook(() => useFeishuBot());
+
+    await waitFor(() => expect(hook.result.current.service).toBe('lark'));
+    act(() => {
+      hook.result.current.setAppId('cli_1234567890');
+      hook.result.current.setAppSecret('sec_test');
+    });
+    await act(async () => {
+      await hook.result.current.save();
+    });
+
+    expect(api.save).toHaveBeenCalledWith({
+      appId: 'cli_1234567890',
+      appSecret: 'sec_test',
+      service: 'lark',
+    });
+  });
+
   it('does not let an older getState response overwrite a newer owner push', async () => {
     let resolveState!: (state: {
       status: 'connected';
@@ -187,9 +218,7 @@ describe('useFeishuBot', () => {
 
     const hook = renderHook(() => useFeishuBot());
 
-    await waitFor(() =>
-      expect(hook.result.current.ownerOpenId).toBe('ou_mount_race_owner'),
-    );
+    await waitFor(() => expect(hook.result.current.ownerOpenId).toBe('ou_mount_race_owner'));
   });
 
   it('does not let an older reload overwrite a newer registration reload', async () => {

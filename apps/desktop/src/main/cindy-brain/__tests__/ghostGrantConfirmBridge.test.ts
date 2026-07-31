@@ -56,6 +56,10 @@ describe('GhostGrantConfirmBridge', () => {
       },
     });
     expect((payload as { request: { requestId: string } }).request.requestId).toBeTruthy();
+    expect(bridge.pendingSnapshots('other-session')).toEqual([]);
+    expect(bridge.pendingSnapshots('sess-1')).toEqual([
+      { sessionId: 'sess-1', request: (payload as { request: unknown }).request },
+    ]);
   });
 
   it('resolve 允许 → promise settle 为 confirmed:true,并广播 DISMISSED(allow)', async () => {
@@ -75,7 +79,9 @@ describe('GhostGrantConfirmBridge', () => {
     const broadcast = vi.fn();
     const bridge = new GhostGrantConfirmBridge({ broadcast });
     const promise = bridge.request('sess-1', PAYLOAD);
-    expect(bridge.resolve(lastRequestId(broadcast), { confirmed: true, allowDirs: true })).toBe(true);
+    expect(bridge.resolve(lastRequestId(broadcast), { confirmed: true, allowDirs: true })).toBe(
+      true,
+    );
     await expect(promise).resolves.toEqual({ confirmed: true, allowDirs: true });
   });
 
@@ -110,6 +116,7 @@ describe('GhostGrantConfirmBridge', () => {
     const promise = bridge.request('sess-1', PAYLOAD);
     vi.advanceTimersByTime(1001);
     await expect(promise).resolves.toEqual({ confirmed: false, reason: 'timeout' });
+    expect(bridge.pendingSnapshots()).toEqual([]);
   });
 
   it('cleanupForSession 只清本会话的 pending', async () => {
@@ -119,6 +126,8 @@ describe('GhostGrantConfirmBridge', () => {
     const p2 = bridge.request('sess-2', PAYLOAD);
     bridge.cleanupForSession('sess-1', 'session_closed');
     await expect(p1).resolves.toEqual({ confirmed: false, reason: 'session_closed' });
+    expect(bridge.pendingSnapshots('sess-1')).toEqual([]);
+    expect(bridge.pendingSnapshots('sess-2')).toHaveLength(1);
     // sess-2 仍挂起:resolve 它以免测试悬挂。
     const requestId2 = lastRequestId(broadcast);
     expect(bridge.resolve(requestId2, { confirmed: true })).toBe(true);

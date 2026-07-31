@@ -97,6 +97,19 @@ function legacyAccessFor(primary: Provider, bundled: Provider): Provider['access
   return sameRoutes ? bundled.access : undefined;
 }
 
+/** 图片能力只可沿用到未声明 access，或仍明确属于同一 bundled 订阅的旧条目。 */
+function allowsBundledImageInheritance(
+  primaryAccess: Provider['access'],
+  bundledAccess: Provider['access'],
+): boolean {
+  if (primaryAccess === undefined) return true;
+  if (bundledAccess === undefined || primaryAccess.kind !== bundledAccess.kind) return false;
+  return (
+    primaryAccess.kind !== 'subscription' ||
+    (bundledAccess.kind === 'subscription' && primaryAccess.product === bundledAccess.product)
+  );
+}
+
 /**
  * 同 id preset 仍以远端为主；bundled 只给远端仍保留的同 runtime / 同 model
  * 回填缺失的 contextWindow。这样旧远端不会把已核实的长上下文元数据降级，同时远端
@@ -133,27 +146,47 @@ function backfillPresetContextWindows(
 
 /**
  * 把远端 / 本地目录与内置 bundled 合并：以输入目录为主，bundled 补它缺失的
- * provider（按 id），并给旧目录中同 id provider 补缺失的 access 元数据。primary
- * 明确提供的 access 永远优先，不被 bundled 覆盖。
+ * provider（按 id），并给旧目录中同 id provider 补缺失的 access 与图像能力元数据。
+ * primary 明确提供的值（包括显式空图像清单）永远优先，不被 bundled 覆盖。
  *
  * **顺序契约**：结果按 bundled 数组序稳定排列（anthropic → openai → xai → xd），
  * bundled 之外的远端新增供应商按远端原序追加在后。v2 远端目录只承载 xai 段，
  * 不排序的话 xai 会窜到首位，选择器分段顺序漂移。
  */
 export function mergeWithBundled(primary: Catalog): Catalog {
-  const byId = new Map(primary.providers.map((p) => [p.id, p]));
   const bundledById = new Map(BUNDLED_CATALOG.providers.map((p) => [p.id, p]));
-  const withAccess = primary.providers.map((p) => {
+  const withBundledMetadata = primary.providers.map((p) => {
     const bundled = bundledById.get(p.id);
     const bundledAccess = bundled ? legacyAccessFor(p, bundled) : undefined;
-    return p.access === undefined && bundledAccess !== undefined ? { ...p, access: bundledAccess } : p;
+    if (!bundled) return p;
+    const inheritImage =
+      p.id === 'xai' &&
+      p.imageModels === undefined &&
+      bundled.imageModels !== undefined &&
+      bundledAccess !== undefined &&
+      allowsBundledImageInheritance(p.access, bundledAccess);
+    if (!(p.access === undefined && bundledAccess !== undefined) && !inheritImage) {
+      return p;
+    }
+    return {
+      ...p,
+      ...(p.access === undefined && bundledAccess !== undefined ? { access: bundledAccess } : {}),
+      ...(inheritImage
+        ? {
+            imageModels: bundled.imageModels,
+            ...(p.imageDefaults === undefined && bundled.imageDefaults !== undefined
+              ? { imageDefaults: bundled.imageDefaults }
+              : {}),
+          }
+        : {}),
+    };
   });
-  const primaryById = new Map(withAccess.map((p) => [p.id, p]));
+  const primaryById = new Map(withBundledMetadata.map((p) => [p.id, p]));
   // bundled 序在前(同 id 取 primary 内容),远端独有的追加在后(保持远端原序)。
   const merged: Provider[] = BUNDLED_CATALOG.providers.map(
     (bundled) => primaryById.get(bundled.id) ?? bundled,
   );
-  for (const p of withAccess) {
+  for (const p of withBundledMetadata) {
     if (!bundledById.has(p.id)) merged.push(p);
   }
   // presets 与 providers 同样按 id 合并：bundled 保序兜底，同 id 远端内容优先，

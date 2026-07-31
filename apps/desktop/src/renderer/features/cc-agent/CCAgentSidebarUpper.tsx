@@ -29,6 +29,15 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { refreshPendingAlerts, usePendingAlertAttention } from '@/hooks/usePendingAlertAttention';
+import { useAppShortcut } from '@/hooks/useAppShortcut';
+import { useModifierHold } from '@/hooks/useModifierHold';
+import { isSecondaryWindow } from '@/lib/secondaryWindow';
+import { getAppShortcutCombos, getAppShortcutPlatform } from '@/lib/appShortcutStore';
+import {
+  formatAppShortcutCombo,
+  SWITCH_SESSION_SHORTCUT_IDS,
+} from '../../../shared/appShortcuts';
+import { setSessionOrdinalBadges } from './sidebar/sessionOrdinalBadges';
 import { useSidebarCollapsedState } from '../feature-context';
 import { stripTrailingPathSeparators } from '../../../shared/pathText';
 import { useRefreshWorktrees } from '@/contexts/WorktreeContext';
@@ -1492,6 +1501,80 @@ function ExpandedView({
     // schedule 真变时换)。至此 onClick 在运行期与切换时都不再换引用。
     [navigate, clearNotification, markAutomationSessionRunsRead],
   );
+
+  /* ---- mod+1..9 快速切换对话 + 按住修饰键浮现序号徽标(复刻 Codex 桌面版) ----
+   * 序号口径 = getVisibleSidebarSessionIds 的渲染顺序(含置顶区),与 shift 范围
+   * 多选 / 删除后跳转同一权威实现。副窗不启用:副窗侧栏默认折叠,快捷键切副窗
+   * 自己的列表反直觉。搜索 overlay 打开(search.trimmed 非空)时同样让路:
+   * overlay 盖住列表,槽位仍指向被盖住的行会无提示跳到看不见的目标,徽标也
+   * 被遮住。折叠态自然失效:隐藏 wrapper 里的行被可见性过滤剔除,handler
+   * 拿不到目标返回 false 让路。 */
+  const sessionSwitchEnabled = !isSecondaryWindow() && !search.trimmed;
+  const handleSwitchSessionSlot = useCallback(
+    (slotIndex: number) => {
+      const visibleIds = getVisibleSidebarSessionIds(sidebarScrollRef.current);
+      const id = visibleIds[slotIndex];
+      if (!id) return false;
+      // 复用行点击唯一入口,继承清通知 / 同对话去重 / Orca 角色路由。
+      void handleSessionClick(id);
+      return true;
+    },
+    [handleSessionClick],
+  );
+  useAppShortcut('switch-session-1', () => handleSwitchSessionSlot(0), { enabled: sessionSwitchEnabled });
+  useAppShortcut('switch-session-2', () => handleSwitchSessionSlot(1), { enabled: sessionSwitchEnabled });
+  useAppShortcut('switch-session-3', () => handleSwitchSessionSlot(2), { enabled: sessionSwitchEnabled });
+  useAppShortcut('switch-session-4', () => handleSwitchSessionSlot(3), { enabled: sessionSwitchEnabled });
+  useAppShortcut('switch-session-5', () => handleSwitchSessionSlot(4), { enabled: sessionSwitchEnabled });
+  useAppShortcut('switch-session-6', () => handleSwitchSessionSlot(5), { enabled: sessionSwitchEnabled });
+  useAppShortcut('switch-session-7', () => handleSwitchSessionSlot(6), { enabled: sessionSwitchEnabled });
+  useAppShortcut('switch-session-8', () => handleSwitchSessionSlot(7), { enabled: sessionSwitchEnabled });
+  useAppShortcut('switch-session-9', () => handleSwitchSessionSlot(8), { enabled: sessionSwitchEnabled });
+
+  // 按住态徽标 map:按当前可见顺序构建,并在按住期间用 MutationObserver 跟随
+  // 列表变化重建 —— 后台事件(自动化会话冒顶、远程会话上线等)可实时重排列表,
+  // 徽标必须与执行侧 handler 的实时取值保持同一口径,否则显示的序号会指向
+  // 重排前的行。标签取生效组合的显示形(mac '⌘1' / win 'Ctrl+1',跟随用户
+  // 改绑),删除绑定或让位后的槽位无徽标。写入 sessionOrdinalBadges 模块
+  // store,由 SessionItem / SessionCard 精准订阅。
+  const switchModifierHeld = useModifierHold({ enabled: sessionSwitchEnabled });
+  useEffect(() => {
+    if (!switchModifierHeld) return;
+    let lastSerialized: string | null = null;
+    const rebuild = () => {
+      const visibleIds = getVisibleSidebarSessionIds(sidebarScrollRef.current);
+      const platform = getAppShortcutPlatform();
+      const badges = new Map<string, string>();
+      SWITCH_SESSION_SHORTCUT_IDS.forEach((shortcutId, index) => {
+        const sessionId = visibleIds[index];
+        if (!sessionId) return;
+        const combo = getAppShortcutCombos(shortcutId)[0];
+        if (!combo) return;
+        badges.set(sessionId, formatAppShortcutCombo(combo, platform));
+      });
+      // 内容级去重:徽标自身的插入/移除同样触发 observer 回调,相同内容不再
+      // 写 store,切断 set → 渲染 → observe → set 的空转循环。
+      const serialized = JSON.stringify([...badges]);
+      if (serialized === lastSerialized) return;
+      lastSerialized = serialized;
+      setSessionOrdinalBadges(badges);
+    };
+    rebuild();
+    const root = sidebarScrollRef.current;
+    const observer = root == null ? null : new MutationObserver(rebuild);
+    if (root != null && observer != null) {
+      observer.observe(root, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['class', 'hidden'],
+      });
+    }
+    return () => {
+      observer?.disconnect();
+      setSessionOrdinalBadges(null);
+    };
+  }, [switchModifierHeld]);
 
   /* ---- Project 行内的 + 按钮：对标顶部 "+ New"——预填该 project 的 workingDir 后进 draft 路由 ----
    * patchNewMakerDraft({ workingDir }) 把目录写进 transient draft store,

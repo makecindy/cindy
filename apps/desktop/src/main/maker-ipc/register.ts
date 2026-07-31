@@ -49,8 +49,15 @@ import { normalizeWorkingDirForProjectSettings } from '../../shared/workingDir.j
 import { buildTurnUsageDetails } from '../../shared/turnUsageDetails.js';
 import type { DesktopCommandContext } from '../commands/index.js';
 import { getDesktopCommandRegistry } from '../commands/index.js';
-import { initGithubIssueSubmit, IssueConfirmBridge } from '../github-issue/index.js';
-import { initGhostGrantConfirmBridge } from '../cindy-brain/ghostGrantConfirmBridge.js';
+import {
+  initGithubIssueSubmit,
+  IssueConfirmBridge,
+  type IssueConfirmInteractionSnapshot,
+} from '../github-issue/index.js';
+import {
+  initGhostGrantConfirmBridge,
+  type GhostGrantConfirmInteractionSnapshot,
+} from '../cindy-brain/ghostGrantConfirmBridge.js';
 import { createFeishuDesktopConfirmNotifier } from '../im/desktopConfirmNoticeWiring.js';
 import {
   initGhostSetupInteractionBridge,
@@ -78,6 +85,7 @@ import {
 import {
   initRenameSessionsConfirm,
   RenameSessionsConfirmBridge,
+  type RenameSessionsConfirmInteractionSnapshot,
 } from '../session-title-rename/index.js';
 import {
   getBrowserAvailability,
@@ -492,6 +500,7 @@ import {
   setClaudeBackgroundActivityBroadcaster,
 } from '../maker-host/claude-session-background-activity.js';
 import { readClaudeSessionRoute } from '../maker-host/claude-session-route-registry.js';
+import { consumeClaudeGatewayOpusPlanMismatch } from '../maker-host/claude-gateway-error-observer.js';
 import { setLiveCcSessionBridge } from '../maker-host/claude-transcript-relocation.js';
 import {
   CredentialModeSwitchBusyError,
@@ -1336,7 +1345,7 @@ const renameSessionsConfirmBridge = new RenameSessionsConfirmBridge({
   broadcast: (channel, payload) => broadcastToAllWindows(channel, payload),
   logger: log,
   onDesktopOnlyConfirmPending: (sessionId) =>
-    desktopConfirmImNotifier(sessionId, '「批量重命名会话」的确认卡'),
+    desktopConfirmImNotifier(sessionId, '「批量重命名任务」的确认卡'),
 });
 
 /**
@@ -1463,23 +1472,39 @@ function clearPendingInteraction(requestId: string): PendingInteractionEntry | n
   return entry;
 }
 
+type RecoverableInteractionSnapshot =
+  | InteractionRequest
+  | GhostSetupInteractionSnapshot
+  | IssueConfirmInteractionSnapshot
+  | RenameSessionsConfirmInteractionSnapshot
+  | GhostGrantConfirmInteractionSnapshot;
+
+type PendingInteractionSnapshotEntry = {
+  request: RecoverableInteractionSnapshot;
+  persistId?: string;
+};
+
 /**
- * 快照:某会话当前所有挂起的 agent interaction(permission / ask_user / plan_review)。
+ * 快照:某会话当前所有挂起的 agent interaction 与 Host-owned 确认卡。
  * 供 renderer 在「打开 / 重连 / 刷新」会话时重建可操作面板 —— pending 状态原本只由实时
  * INTERACTION_REQUEST push 设置,后加入的窗口会错过那条 push,靠这个查询补回。
  * 纯内存读;O(N) 其中 N = 全局挂起交互数(极小)。
  */
 function getPendingInteractionsForSession(
   sessionId: string,
-): Array<{ request: InteractionRequest | GhostSetupInteractionSnapshot; persistId?: string }> {
-  const out: Array<{
-    request: InteractionRequest | GhostSetupInteractionSnapshot;
-    persistId?: string;
-  }> = [];
+): PendingInteractionSnapshotEntry[] {
+  const out: PendingInteractionSnapshotEntry[] = [];
   for (const entry of pendingInteractionResolvers.values()) {
     if (entry.sessionId === sessionId) out.push({ request: entry.request, persistId: entry.persistId });
   }
   out.push(
+    ...issueConfirmBridge.pendingSnapshots(sessionId).map(({ request }) => ({ request })),
+    ...renameSessionsConfirmBridge
+      .pendingSnapshots(sessionId)
+      .map(({ request }) => ({ request })),
+    ...ghostGrantConfirmBridge
+      .pendingSnapshots(sessionId)
+      .map(({ request }) => ({ request })),
     ...ghostSetupInteractionBridge
       .pendingSnapshots(sessionId)
       .map(({ request }) => ({ request })),
@@ -1487,10 +1512,29 @@ function getPendingInteractionsForSession(
   return out;
 }
 
-function hasPendingInteractionForSession(sessionId: string): boolean {
+/**
+ * Agent-owned interactions are queue/zombie boundaries. Desktop-only confirms
+ * are Host tool waiters: they are recoverable UI state, but must not block a
+ * later user turn or be cleared by turn-idle reconciliation.
+ */
+function hasPendingAgentInteractionForSession(sessionId: string): boolean {
   return (
     Array.from(pendingInteractionResolvers.values()).some((entry) => entry.sessionId === sessionId) ||
     ghostSetupInteractionBridge.pendingSnapshots(sessionId).length > 0
+  );
+}
+
+function isPendingDesktopOnlyConfirmation(requestId: string): boolean {
+  return (
+    issueConfirmBridge
+      .pendingSnapshots()
+      .some(({ request }) => request.requestId === requestId) ||
+    renameSessionsConfirmBridge
+      .pendingSnapshots()
+      .some(({ request }) => request.requestId === requestId) ||
+    ghostGrantConfirmBridge
+      .pendingSnapshots()
+      .some(({ request }) => request.requestId === requestId)
   );
 }
 
@@ -1590,7 +1634,7 @@ function defaultDecisionForPending(kind: InteractionRequest['kind'], reason: str
   return { kind, behavior: 'deny', reason } as InteractionDecision;
 }
 
-function cleanupPendingInteractionsForSession(sessionId: string, reason: string): void {
+function cleanupPendingAgentInteractionsForSession(sessionId: string, reason: string): void {
   const entries = Array.from(pendingInteractionResolvers.entries())
     .filter(([, entry]) => entry.sessionId === sessionId);
   for (const [requestId, entry] of entries) {
@@ -1599,8 +1643,16 @@ function cleanupPendingInteractionsForSession(sessionId: string, reason: string)
     entry.resolve(defaultDecisionForPending(entry.kind, reason));
     dismissRendererInteraction(entry, requestId, reason, 'deny');
   }
-  // issue 确认卡同会话清理(单点收口,覆盖 session_closed / session_aborted /
-  // orca_disable / turn_idle_reconcile 全部调用方)。
+  ghostSetupInteractionBridge.cleanupForSession(
+    sessionId,
+    reason === 'session_closed' ? 'session_closed' : 'session_aborted',
+  );
+}
+
+function cleanupPendingInteractionsForSession(sessionId: string, reason: string): void {
+  cleanupPendingAgentInteractionsForSession(sessionId, reason);
+  // Desktop-only 确认只跟随真实会话终止/中止清理。权威 NO_ACTIVE_TURN 的
+  // turn-idle reconcile 只处理 Agent-owned 僵尸，不能取消仍有效的 Host 工具等待。
   issueConfirmBridge.cleanupForSession(
     sessionId,
     reason === 'session_closed' ? 'session_closed' : 'session_aborted',
@@ -1613,13 +1665,9 @@ function cleanupPendingInteractionsForSession(sessionId: string, reason: string)
     sessionId,
     reason === 'session_closed' ? 'session_closed' : 'session_aborted',
   );
-  ghostSetupInteractionBridge.cleanupForSession(
-    sessionId,
-    reason === 'session_closed' ? 'session_closed' : 'session_aborted',
-  );
   // fs 槽 workdir 写确认的会话级记忆只在会话真正关闭时清(防 Set 无界增长)。
-  // 本函数在 session_aborted(用户点停止)/ turn_idle_reconcile 等瞬态也会被
-  // 调,那些场景确认卡该收、但"同目录本会话免弹"的记忆要保住——否则用户每
+  // 本函数在 session_aborted(用户点停止)等瞬态也会被调,那些场景确认卡该收、
+  // 但"同目录本会话免弹"的记忆要保住——否则用户每
   // 次 Stop 后同目录又要重新点一遍允许,与卡片文案承诺不符(review P2)。
   if (reason === 'session_closed') {
     getGhostFsSlot().cleanupForSession(sessionId);
@@ -2620,7 +2668,27 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   // 转发事件到所有 window。interaction_dismissed 单独走专用 channel,
   // 让 renderer chat store 不必扫所有 vendor-raw 找它。
   registration.disposers.push(session.onEvent((event: AgentEvent) => {
-    const broadcastEvent = redactEventForRenderer(event);
+    let attributedEvent = event;
+    if (event.type === 'error' && isTerminalTurnErrorEvent(event)) {
+      const reason = !session.remoteHostId && session.agentKind === 'claude-code'
+        ? consumeClaudeGatewayOpusPlanMismatch(session.id)
+        : null;
+      if (reason) {
+        const eventData = event.data && typeof event.data === 'object' && !Array.isArray(event.data)
+          ? (event.data as Record<string, unknown>)
+          : {};
+        attributedEvent = {
+          ...event,
+          data: { ...eventData, reason },
+        };
+        log.warn('Claude Opus plan error attributed to XD Gateway route', {
+          sessionId: session.id,
+          model: session.model,
+          reason,
+        });
+      }
+    }
+    const broadcastEvent = redactEventForRenderer(attributedEvent);
     if (event.type === 'interaction_dismissed') {
       const data = event.data as { requestId?: unknown; reason?: unknown };
       if (typeof data.requestId === 'string') {
@@ -2764,8 +2832,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       if (event.source === 'claude-code' || event.source === 'codex') {
         turnModelPromiseBySession.delete(session.id);
       }
-      const errData = event.type === 'error'
-        ? (event.data as
+      const errData = attributedEvent.type === 'error'
+        ? (attributedEvent.data as
             | { message?: unknown; reason?: unknown; sdkError?: unknown; errorStatus?: unknown }
             | undefined)
         : undefined;
@@ -2967,14 +3035,18 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       ) {
         onTurnErrorEvent(
           session.id,
-          event.data as { message?: unknown; reason?: unknown; sdkError?: unknown } | null,
+          attributedEvent.data as {
+            message?: unknown;
+            reason?: unknown;
+            sdkError?: unknown;
+          } | null,
           eventAgentMeta,
         );
       }
       // 压住的错误详情必须在这里存一份:决策推迟场景下 onResumableTurnError 还没被调用过
       // (它自己那份 set 发生在接管成立时),不存就无从补落。同 clientId 内容,覆盖无害。
       if (autoResumeSuppressesPersist) {
-        autoResumeBookkeeping.stashSuppressedError(session.id, event.data);
+        autoResumeBookkeeping.stashSuppressedError(session.id, attributedEvent.data);
       }
       // deferred 路径保存 turn 开始时刻:isRemoteAuthRetry 时 onTurnErrorEvent 被跳过，
       // renderer 会稍后调 persistTurnErrorDeferred IPC。在 resetTurnPersistState 清掉
@@ -5252,7 +5324,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               return {
                 ok: false,
                 errorCode: 'INVALID_ARGS',
-                message: 'working_dir 暂不支持远程会话(远端路径无法在本机校验)',
+                message: 'working_dir 暂不支持远程任务(远端路径无法在本机校验)',
               };
             }
             const checked = await validateHandoffWorkingDir(workingDirOverride);
@@ -5835,7 +5907,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return {
         ok: false,
         errorCode: 'NO_PRIOR_ASSISTANT',
-        message: '原会话还没有可用于分叉的 Agent 回复',
+        message: '原任务还没有可用于分叉的 Agent 回复',
       };
     }
 
@@ -7315,7 +7387,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (sess?.isTurnRunning()) return;
       const trackerStale = sessionTurnActivityTracker.isSessionInTurn(sessionId) ||
         sessionTurnActivityTracker.isSessionTurnDispatchBoundaryBusy(sessionId);
-      const hadZombieInteraction = hasPendingInteractionForSession(sessionId);
+      const hadZombieInteraction = hasPendingAgentInteractionForSession(sessionId);
       if (!trackerStale && !hadZombieInteraction) return;
       log.warn('reconcileTurnIdle: clearing stale busy state after authoritative NO_ACTIVE_TURN', {
         sessionId,
@@ -7326,10 +7398,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       markSessionTurnEnded(sessionId);
       noteClaudeSessionTurnState(sessionId, false);
       if (hadZombieInteraction) {
-        cleanupPendingInteractionsForSession(sessionId, 'turn_idle_reconcile');
+        cleanupPendingAgentInteractionsForSession(sessionId, 'turn_idle_reconcile');
       }
     },
-    hasPendingInteraction: hasPendingInteractionForSession,
+    hasPendingInteraction: hasPendingAgentInteractionForSession,
     getAgentKind: (sessionId) => maker.getSession(sessionId)?.agentKind ?? null,
     getSdkSessionId: async (sessionId) => {
       const meta = await maker.getSessionMeta(sessionId).catch(() => null);
@@ -8155,9 +8227,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('INVALID_PARAMS', 'invalid plugin setup decision');
     }
     // permission / ask / plan and setup cancellation remain remotely
-    // resolvable, but Host-owned setup side effects may only originate from
-    // the trusted local Desktop.
-    assertResolveInteractionOrigin(decision);
+    // resolvable. Host-owned setup side effects and Desktop-only confirmations
+    // may only originate from the trusted local Desktop.
+    assertResolveInteractionOrigin(
+      decision,
+      isPendingDesktopOnlyConfirmation(requestId),
+    );
     let pluginSetupResponseTarget: GhostSetupInteractionResponseTarget | undefined;
     if (isPluginSetupInteractionDecision(decision) && !isDeviceLinkInvoke()) {
       assertTrustedAppRendererEvent(event);

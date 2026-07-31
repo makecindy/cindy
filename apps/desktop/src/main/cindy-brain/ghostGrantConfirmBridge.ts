@@ -21,6 +21,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { MAKER_PUSH } from '../maker-ipc/channels';
+import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
 
 /**
  * 过户通道:attachments = 媒体文件进总仓;dir = 上行读票据;save_dir = 下行
@@ -67,19 +68,24 @@ export type GhostGrantConfirmDecision =
     }
   | { confirmed: false; reason: 'cancelled' | 'timeout' | 'session_closed' | 'session_aborted' };
 
+/** Renderer 可重放的文件授权确认请求；主进程持有它直到确认流程 settle。 */
+export interface GhostGrantConfirmInteractionSnapshot extends GhostGrantConfirmPayload {
+  kind: 'ghost_grant_confirm';
+  requestId: string;
+}
+
 export interface GhostGrantConfirmBridgeDeps {
   broadcast: (channel: string, payload: unknown) => void;
-  /** 确认超时,默认 10 分钟(对齐 permission prompt / issue 确认卡)。测试注小值。 */
+  /** 确认超时,默认 9 分钟,须早于外层 MCP 的 10 分钟 deadline。测试注小值。 */
   timeoutMs?: number;
   logger?: { warn: (...args: unknown[]) => void };
   /** 同 IssueConfirmBridgeDeps.onDesktopOnlyConfirmPending(#926):IM 侧「去桌面确认」提示。 */
   onDesktopOnlyConfirmPending?: (sessionId: string) => void;
 }
 
-const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
-
 interface PendingGrantEntry {
   sessionId: string;
+  request: GhostGrantConfirmInteractionSnapshot;
   resolve: (decision: GhostGrantConfirmDecision) => void;
   timeoutId: ReturnType<typeof setTimeout>;
 }
@@ -90,17 +96,25 @@ export class GhostGrantConfirmBridge {
   constructor(private readonly deps: GhostGrantConfirmBridgeDeps) {}
 
   /** 向 renderer 派发确认卡片,挂起直到用户响应/超时/会话清理。 */
-  request(sessionId: string, payload: GhostGrantConfirmPayload): Promise<GhostGrantConfirmDecision> {
+  request(
+    sessionId: string,
+    payload: GhostGrantConfirmPayload,
+  ): Promise<GhostGrantConfirmDecision> {
     const requestId = randomUUID();
+    const request: GhostGrantConfirmInteractionSnapshot = {
+      kind: 'ghost_grant_confirm',
+      requestId,
+      ...payload,
+    };
     return new Promise<GhostGrantConfirmDecision>((resolve) => {
-      const timeoutMs = this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      const timeoutMs = this.deps.timeoutMs ?? HOST_CONFIRM_TIMEOUT_MS;
       const timeoutId = setTimeout(() => {
         this.settle(requestId, { confirmed: false, reason: 'timeout' }, 'timeout');
       }, timeoutMs);
-      this.pending.set(requestId, { sessionId, resolve, timeoutId });
+      this.pending.set(requestId, { sessionId, request, resolve, timeoutId });
       this.deps.broadcast(MAKER_PUSH.INTERACTION_REQUEST, {
         sessionId,
-        request: { kind: 'ghost_grant_confirm', requestId, ...payload },
+        request,
       });
       try {
         this.deps.onDesktopOnlyConfirmPending?.(sessionId);
@@ -113,6 +127,16 @@ export class GhostGrantConfirmBridge {
         });
       }
     });
+  }
+
+  /** 打开、重连或刷新会话时供 renderer 补回错过的确认卡。 */
+  pendingSnapshots(sessionId?: string): Array<{
+    sessionId: string;
+    request: GhostGrantConfirmInteractionSnapshot;
+  }> {
+    return Array.from(this.pending.values())
+      .filter((entry) => sessionId === undefined || entry.sessionId === sessionId)
+      .map((entry) => ({ sessionId: entry.sessionId, request: entry.request }));
   }
 
   /**
@@ -193,7 +217,9 @@ let bridgeSingleton: GhostGrantConfirmBridge | null = null;
  * getGhostGrantConfirmBridge 消费;未初始化(极早期/单测环境)时返回 null,
  * 调用方按「确认通道未就绪」拒绝,不抛。
  */
-export function initGhostGrantConfirmBridge(deps: GhostGrantConfirmBridgeDeps): GhostGrantConfirmBridge {
+export function initGhostGrantConfirmBridge(
+  deps: GhostGrantConfirmBridgeDeps,
+): GhostGrantConfirmBridge {
   bridgeSingleton = new GhostGrantConfirmBridge(deps);
   return bridgeSingleton;
 }
