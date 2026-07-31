@@ -19,6 +19,8 @@ const MAX_USER_INTENT_CHARS = 2_000;
 const MAX_ACTION_TEXT_CHARS = 4_096;
 const MAX_WORKSPACE_ROOTS = 8;
 const MAX_WORKSPACE_ROOT_CHARS = 512;
+const REVIEW_TIMEOUT_MS = 8_000;
+const REVIEW_TIMEOUT = Symbol('auto-review-timeout');
 
 function compactText(value: string, maxChars: number): string {
   if (value.length <= maxChars) return value;
@@ -38,9 +40,26 @@ function compactAction(action: AutoReviewRequest['action']): AutoReviewRequest['
       return action.path
         ? { ...action, path: compactText(action.path, MAX_ACTION_TEXT_CHARS) }
         : action;
+    case 'network':
+      return {
+        ...action,
+        ...(action.target
+          ? { target: compactText(action.target, MAX_ACTION_TEXT_CHARS) }
+          : {}),
+        ...(action.operation
+          ? { operation: compactText(action.operation, 256) }
+          : {}),
+      };
     default:
       return action;
   }
+}
+
+/** Keep the XML-style boundary structural even when untrusted strings contain closing tags. */
+function serializeUntrustedPayload(value: unknown): string {
+  return JSON.stringify(value)
+    .replaceAll('<', '\\u003c')
+    .replaceAll('>', '\\u003e');
 }
 
 /**
@@ -71,7 +90,7 @@ export function buildAutoPermissionReviewPrompt(request: AutoReviewRequest): str
     '- Prefer allow over block for ordinary workspace-scoped coding. Prefer block over ask whenever a safer retry can avoid interrupting the user.',
     '',
     '<review_input>',
-    JSON.stringify(payload),
+    serializeUntrustedPayload(payload),
     '</review_input>',
   ].join('\n');
 }
@@ -111,8 +130,23 @@ export function createAutoPermissionReviewer(
 ): (request: AutoReviewRequest) => Promise<AutoReviewDecision | null> {
   return async (request) => {
     const startedAt = Date.now();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      const text = await deps.requestText(request, buildAutoPermissionReviewPrompt(request));
+      const text = await Promise.race([
+        deps.requestText(request, buildAutoPermissionReviewPrompt(request)),
+        new Promise<typeof REVIEW_TIMEOUT>((resolve) => {
+          timeout = setTimeout(() => resolve(REVIEW_TIMEOUT), REVIEW_TIMEOUT_MS);
+        }),
+      ]);
+      if (text === REVIEW_TIMEOUT) {
+        deps.logger.warn('auto permission reviewer timed out', {
+          agentKind: request.agentKind,
+          providerId: request.providerId ?? null,
+          model: request.model,
+          durationMs: Date.now() - startedAt,
+        });
+        return null;
+      }
       if (!text) return null;
       const decision = parseAutoPermissionReviewDecision(text);
       if (!decision) {
@@ -141,6 +175,8 @@ export function createAutoPermissionReviewer(
         error: error instanceof Error ? error.message : String(error),
       });
       return null;
+    } finally {
+      if (timeout) clearTimeout(timeout);
     }
   };
 }

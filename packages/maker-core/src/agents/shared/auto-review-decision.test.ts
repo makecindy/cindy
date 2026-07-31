@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  classifyLocalAutoReviewTier,
   extractAutoReviewUserIntent,
   resolveAutoReviewDecision,
   type AutoReviewRequest,
@@ -22,6 +23,11 @@ function request(action: AutoReviewRequest['action']): AutoReviewRequest {
 }
 
 describe('resolveAutoReviewDecision', () => {
+  it('names the legacy prompt result as an internal needs-review tier, not a UI prompt', () => {
+    expect(classifyLocalAutoReviewTier(request({ kind: 'other' }))).toBe('needs-review');
+    expect(classifyLocalAutoReviewTier(request({ kind: 'read' }))).toBe('auto-approve');
+  });
+
   it('does not call the model for deterministic allow or ask decisions', async () => {
     let called = false;
     const delegate = async () => {

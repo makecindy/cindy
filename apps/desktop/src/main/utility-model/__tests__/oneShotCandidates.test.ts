@@ -1223,10 +1223,47 @@ describe('utility one-shot candidates', () => {
       providerId: 'xai',
       agentKind: 'codex',
       model: 'xai/grok-4.3',
+      reasoningEffort: 'low',
     });
 
     expect(result).toMatchObject({ ok: true, providerId: 'xai', model: 'xai/grok-4.3' });
     expect(fetchMock).toHaveBeenCalledWith('https://xai.example/v1/responses', expect.anything());
-    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({ model: 'grok-4.3' });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      model: 'grok-4.3',
+      reasoning: { effort: 'low' },
+    });
   });
+
+  it.each(['xai/grok-code-fast', 'xai/grok-build-preview'])(
+    'omits reasoning for xAI model %s that rejects the field',
+    async (model) => {
+      activeCatalog.mockReturnValue({
+        providers: [{
+          id: 'xai',
+          name: 'xAI',
+          source: 'builtin',
+          agents: ['codex'],
+          auth: { method: 'oauth' },
+          routing: { codex: { upstream: 'https://xai.example/v1', authStrategy: 'provider-oauth-header' } },
+          models: { codex: [{ id: model, name: 'Grok Code', contextWindow: 256_000 }] },
+        }],
+      } as never);
+      readGrokToken.mockResolvedValue('xai-token');
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        text: async () => 'data: {"type":"response.output_text.delta","delta":"script"}\ndata: [DONE]\n',
+      } as never);
+
+      const result = await requestUtilityText(makerMock(false), 'generate', {
+        providerId: 'xai',
+        agentKind: 'codex',
+        model,
+        reasoningEffort: 'low',
+      });
+
+      expect(result).toMatchObject({ ok: true, providerId: 'xai', model });
+      const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
+      expect(body).not.toHaveProperty('reasoning');
+    },
+  );
 });

@@ -519,6 +519,12 @@ function inferProviderAgent(provider: ReturnType<typeof getActiveCatalog>['provi
   return undefined;
 }
 
+/** Matches the xAI bridge capability gate: coding/build variants reject `reasoning`. */
+function supportsXaiReasoning(model: string): boolean {
+  const normalized = model.replace(/^xai\//, '');
+  return !(normalized.startsWith('grok-code') || normalized.startsWith('grok-build'));
+}
+
 async function requestBuiltinProviderText(
   prompt: string,
   input: {
@@ -655,6 +661,7 @@ async function requestBuiltinProviderText(
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
         reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
+        supportsReasoning: supportsXaiReasoning(input.model),
       }),
     }], prompt, [], input);
   }
@@ -886,6 +893,8 @@ async function requestProviderHttpText(input: {
   maxTokens?: number;
   timeoutMs?: number;
   reasoningEffort?: 'low' | 'medium' | 'high';
+  /** Some coding-specialized xAI models reject the Responses reasoning field. */
+  supportsReasoning?: boolean;
   /** Some private Responses-compatible endpoints reject max_output_tokens. */
   supportsMaxOutputTokens?: boolean;
 }): Promise<string> {
@@ -903,7 +912,9 @@ async function requestProviderHttpText(input: {
         ...(input.maxTokens !== undefined && input.supportsMaxOutputTokens !== false
           ? { max_output_tokens: input.maxTokens }
           : {}),
-        ...(input.reasoningEffort ? { reasoning: { effort: input.reasoningEffort } } : {}),
+        ...(input.reasoningEffort && input.supportsReasoning !== false
+          ? { reasoning: { effort: input.reasoningEffort } }
+          : {}),
         store: false,
         stream: true,
       }
