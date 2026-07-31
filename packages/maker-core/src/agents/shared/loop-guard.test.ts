@@ -81,23 +81,18 @@ describe('ToolLoopGuard', () => {
     }
   });
 
-  it('参数持续变化但结果高度重复时判 stagnation', () => {
-    const g = new ToolLoopGuard({
-      stagnationWindowSize: 18,
-      stagnationCallDistinctLimit: 3,
-      stagnationOutputDistinctLimit: 2,
-    });
-    for (let i = 0; i < 18; i += 1) {
-      const v = feed(g, `id${i}`, 'Read', { file: `missing-${i}.ts` }, 'not found');
-      if (i < 17) expect(v.kind).toBe('ok');
-      else expect(v).toMatchObject({ kind: 'hard', reason: 'stagnation', count: 18 });
+  it('参数持续变化时即使结果高度重复也不判 stagnation', () => {
+    const g = new ToolLoopGuard();
+    for (let i = 0; i < 250; i += 1) {
+      expect(feed(g, `id${i}`, 'Read', { file: `missing-${i}.ts` }, 'not found').kind).toBe('ok');
     }
   });
 
-  it('超过 100 次且每次调用都不同的合法长任务不误判', () => {
+  it('参数持续变化且结果为空或纯空白时也不判 stagnation', () => {
     const g = new ToolLoopGuard();
     for (let i = 0; i < 250; i += 1) {
-      expect(feed(g, `id${i}`, 'Read', { file: `f${i}.ts` }, `content-${i}`).kind).toBe('ok');
+      const output = i % 2 === 0 ? '' : '   ';
+      expect(feed(g, `id${i}`, 'Write', { file: `f${i}.ts` }, output).kind).toBe('ok');
     }
   });
 

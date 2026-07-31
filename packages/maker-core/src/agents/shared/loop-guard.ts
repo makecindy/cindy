@@ -16,14 +16,12 @@ const DEFAULT_WINDOW_SIZE = 12;
 /** 第 2 层:窗口填满后, distinct 指纹数 ≤ 此值即判循环(2 = 一直在 ≤2 种调用里转)。 */
 const DEFAULT_WINDOW_DISTINCT_LIMIT = 2;
 /**
- * 第 3 层(进展代理):更长的窗口,用于识别短窗口刻意放过的 3+ 调用循环,以及
- * 参数持续变化但结果高度重复的循环。48 次约等于最多 8 种调用重复 6 轮。
+ * 第 3 层(进展代理):更长的窗口,用于识别短窗口刻意放过的 3+ 调用循环。
+ * 48 次约等于最多 8 种调用重复 6 轮。
  */
 const DEFAULT_STAGNATION_WINDOW_SIZE = 48;
 /** 第 3 层:长窗口内 name+input 指纹不超过此值,视为有限调用集反复循环。 */
 const DEFAULT_STAGNATION_CALL_DISTINCT_LIMIT = 8;
-/** 第 3 层:长窗口内结果指纹不超过此值,视为参数变化但没有获得新结果。 */
-const DEFAULT_STAGNATION_OUTPUT_DISTINCT_LIMIT = 4;
 
 interface PendingToolUse {
   name: string;
@@ -41,8 +39,6 @@ export interface ToolLoopGuardOptions {
   stagnationWindowSize?: number;
   /** 第 3 层:窗口内 distinct name+input 指纹 ≤ 此值判停滞。 */
   stagnationCallDistinctLimit?: number;
-  /** 第 3 层:窗口内 distinct output 指纹 ≤ 此值判停滞。 */
-  stagnationOutputDistinctLimit?: number;
 }
 
 /** 命中哪一层判据。consecutive=机械重复 / pingpong=短循环 / stagnation=长窗口无进展。 */
@@ -58,7 +54,7 @@ export type ToolLoopGuardVerdict =
  * 只在工具结果返回后判断。任一层命中即返回 hard, 由调用方决定如何中断:
  *   1. 连续完全相同(name+input+output)—— 快路径, 零误判;
  *   2. name+input 滑动窗口多样性坍缩 —— 抓 ABAB 交替 / output 易变的重复;
- *   3. 长窗口里调用或结果多样性坍缩 —— 抓 3+ 调用循环 / 参数漂移循环;
+ *   3. 长窗口里调用多样性坍缩 —— 抓 3+ 调用循环;
  *
  * 类本身不依赖 Electron / SDK / provider, 也不做 IO;调用方决定何时启用和如何中断。
  */
@@ -68,7 +64,6 @@ export class ToolLoopGuard {
   readonly windowDistinctLimit: number;
   readonly stagnationWindowSize: number;
   readonly stagnationCallDistinctLimit: number;
-  readonly stagnationOutputDistinctLimit: number;
 
   private pendingToolUses = new Map<string, PendingToolUse>();
 
@@ -79,9 +74,8 @@ export class ToolLoopGuard {
   // 第 2 层状态: 最近 windowSize 个 name+input 指纹
   private callWindow: string[] = [];
 
-  // 第 3 层状态:更长窗口里的调用与结果指纹,作为“是否获得新证据”的保守代理。
+  // 第 3 层状态:更长窗口里的调用指纹,用于识别更大的有限调用循环。
   private stagnationCallWindow: string[] = [];
-  private stagnationOutputWindow: string[] = [];
 
   constructor(options: ToolLoopGuardOptions = {}) {
     this.consecutiveLimit = options.consecutiveLimit ?? DEFAULT_CONSECUTIVE_LIMIT;
@@ -91,8 +85,6 @@ export class ToolLoopGuard {
       options.stagnationWindowSize ?? DEFAULT_STAGNATION_WINDOW_SIZE;
     this.stagnationCallDistinctLimit =
       options.stagnationCallDistinctLimit ?? DEFAULT_STAGNATION_CALL_DISTINCT_LIMIT;
-    this.stagnationOutputDistinctLimit =
-      options.stagnationOutputDistinctLimit ?? DEFAULT_STAGNATION_OUTPUT_DISTINCT_LIMIT;
   }
 
   /**
@@ -106,7 +98,7 @@ export class ToolLoopGuard {
   }
 
   /**
-   * 工具结果到达后配对并按两层判据判断。没有配到完整 tool_use 时直接放行,
+   * 工具结果到达后配对并按三层判据判断。没有配到完整 tool_use 时直接放行,
    * 避免用不完整信息误判。
    */
   onToolResult(toolUseId: string, output: string): ToolLoopGuardVerdict {
@@ -147,21 +139,16 @@ export class ToolLoopGuard {
       }
     }
 
-    // 第 3 层:长窗口进展代理。不能用绝对调用次数判断——批量读取数百个项目是合法任务;
-    // 只有调用集合反复复用,或参数虽在变化但结果高度重复时,才认为没有获得新证据。
+    // 第 3 层:长窗口进展代理。不能用绝对调用次数或低输出多样性判断——批量读取、
+    // 无 stdout 的成功命令、Write / MCP null result 都是合法任务;只有调用集合本身
+    // 反复复用时才认为停滞。参数不同即视为在处理新目标,不猜测工具语义。
     this.stagnationCallWindow.push(callFingerprint);
-    this.stagnationOutputWindow.push(fingerprintToolOutput(output));
     if (this.stagnationCallWindow.length > this.stagnationWindowSize) {
       this.stagnationCallWindow.shift();
-      this.stagnationOutputWindow.shift();
     }
     if (this.stagnationCallWindow.length >= this.stagnationWindowSize) {
       const distinctCalls = new Set(this.stagnationCallWindow).size;
-      const distinctOutputs = new Set(this.stagnationOutputWindow).size;
-      if (
-        distinctCalls <= this.stagnationCallDistinctLimit ||
-        distinctOutputs <= this.stagnationOutputDistinctLimit
-      ) {
+      if (distinctCalls <= this.stagnationCallDistinctLimit) {
         return {
           kind: 'hard',
           reason: 'stagnation',
@@ -181,12 +168,7 @@ export class ToolLoopGuard {
     this.consecutiveStreak = 0;
     this.callWindow = [];
     this.stagnationCallWindow = [];
-    this.stagnationOutputWindow = [];
   }
-}
-
-function fingerprintToolOutput(output: string): string {
-  return createHash('sha256').update('output:').update(output).digest('hex');
 }
 
 /**

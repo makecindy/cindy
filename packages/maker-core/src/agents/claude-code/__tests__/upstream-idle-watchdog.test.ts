@@ -334,7 +334,7 @@ describe('upstream-response-idle watchdog suspend awareness', () => {
 });
 
 describe('DeepSeek tool-loop guard runtime integration', () => {
-  it('真实 SDK 事件流中的 150 次不同调用与结果可以完成同一个 turn', async () => {
+  it('真实 SDK 事件流中的 150 次不同调用与空结果可以完成同一个 turn', async () => {
     const { handle, stream, events, fakeQuery } = await startSessionWithStream(
       'deepseek/deepseek-v4-flash',
     );
@@ -345,7 +345,7 @@ describe('DeepSeek tool-loop guard runtime integration', () => {
     for (let i = 0; i < 150; i += 1) {
       const id = `toolu_project_${i}`;
       stream.emit(assistantToolUse(id, `read-project-${i}`));
-      stream.emit(userToolResult(id, `project-update-${i}`));
+      stream.emit(userToolResult(id, ''));
     }
     stream.emit(successResult());
 
