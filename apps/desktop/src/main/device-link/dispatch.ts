@@ -360,7 +360,9 @@ const REMOTE_INVOKE_RESULT_CACHE_LIMIT = 128;
 const REMOTE_INVOKE_RESULT_CACHE_BYTES = 16 * 1024 * 1024;
 /** 本地发送背压时保留已执行结果；与 transport pending 分层且同样严格有界。 */
 const REMOTE_INVOKE_RESULT_OUTBOX_LIMIT = 64;
+const REMOTE_INVOKE_RESULT_OUTBOX_PER_CONTROLLER_LIMIT = 16;
 const REMOTE_INVOKE_RESULT_OUTBOX_BYTES = 16 * 1024 * 1024;
+const REMOTE_INVOKE_RESULT_OUTBOX_PER_CONTROLLER_BYTES = 4 * 1024 * 1024;
 const REMOTE_INVOKE_RESULT_OUTBOX_RETRY_MS = 500;
 const REMOTE_INVOKE_MAX_CLIENT_WAIT_MS = Math.max(
   30_000,
@@ -1224,20 +1226,35 @@ function invokeResultOutboxBytes(
   return invokeResultWireBytes(result) + (fingerprint === undefined ? 0 : encodedByteLength(fingerprint));
 }
 
+function remoteInvokeResultOutboxState(src: string): { messages: number; bytes: number } {
+  let messages = 0;
+  let bytes = 0;
+  for (const entry of remoteInvokeResultOutbox.values()) {
+    if (entry.src !== src) continue;
+    messages += 1;
+    bytes += entry.bytes;
+  }
+  return { messages, bytes };
+}
+
 function enqueueRemoteInvokeResult(entry: QueuedRemoteInvokeResult): boolean {
   const key = `${entry.src}\u0000${entry.requestId}`;
   if (remoteInvokeResultOutbox.has(key)) {
     scheduleRemoteInvokeResultOutboxFlush();
     return true;
   }
+  const controllerOutbox = remoteInvokeResultOutboxState(entry.src);
   if (
     entry.bytes <= 0
+    || controllerOutbox.messages >= REMOTE_INVOKE_RESULT_OUTBOX_PER_CONTROLLER_LIMIT
+    || controllerOutbox.bytes + entry.bytes > REMOTE_INVOKE_RESULT_OUTBOX_PER_CONTROLLER_BYTES
     || remoteInvokeResultOutbox.size >= REMOTE_INVOKE_RESULT_OUTBOX_LIMIT
     || remoteInvokeResultOutboxBytes + entry.bytes > REMOTE_INVOKE_RESULT_OUTBOX_BYTES
   ) {
     log.error(
       `invoke-result outbox full for ${entry.channel ?? '?'} to ${shortId(entry.src)} ` +
-      `(messages=${remoteInvokeResultOutbox.size}, bytes=${remoteInvokeResultOutboxBytes})`,
+      `(controllerMessages=${controllerOutbox.messages}, controllerBytes=${controllerOutbox.bytes}, ` +
+      `messages=${remoteInvokeResultOutbox.size}, bytes=${remoteInvokeResultOutboxBytes})`,
     );
     return false;
   }
@@ -1862,6 +1879,7 @@ export const __testing = {
   remoteInvokeInFlightPerControllerLimit: REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_LIMIT,
   remoteInvokeOrphanTimeoutMs: REMOTE_INVOKE_ORPHAN_TIMEOUT_MS,
   remoteInvokeResultOutboxLimit: REMOTE_INVOKE_RESULT_OUTBOX_LIMIT,
+  remoteInvokeResultOutboxPerControllerLimit: REMOTE_INVOKE_RESULT_OUTBOX_PER_CONTROLLER_LIMIT,
   remoteInvokeResultOutboxSize: () => remoteInvokeResultOutbox.size,
   flushRemoteInvokeResultOutbox,
   forwardPush,

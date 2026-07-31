@@ -889,13 +889,17 @@ describe('被控端控制链路生命周期', () => {
     expect(dispatchTesting.remoteInvokeResultOutboxSize()).toBe(1);
   });
 
-  it('invoke-result outbox 达到消息上限后拒绝继续积压并停止执行新副作用', async () => {
+  it('单个控制端达到 invoke-result outbox 上限后拒绝继续积压并停止执行新副作用', async () => {
     const client = {
       sendInvokeResult: () => {
         throw new DeviceLinkError('BACKPRESSURE', 'socket buffer full');
       },
     } as never;
-    for (let index = 0; index < dispatchTesting.remoteInvokeResultOutboxLimit; index++) {
+    for (
+      let index = 0;
+      index < dispatchTesting.remoteInvokeResultOutboxPerControllerLimit;
+      index++
+    ) {
       expect(dispatchTesting.sendInvokeResultSafe(
         client,
         'ctrl-a',
@@ -906,7 +910,7 @@ describe('被控端控制链路生命周期', () => {
     }
 
     expect(dispatchTesting.remoteInvokeResultOutboxSize()).toBe(
-      dispatchTesting.remoteInvokeResultOutboxLimit,
+      dispatchTesting.remoteInvokeResultOutboxPerControllerLimit,
     );
     expect(dispatchTesting.sendInvokeResultSafe(
       client,
@@ -941,15 +945,55 @@ describe('被控端控制链路生命周期', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it('多个控制端的 invoke-result outbox 仍受全局消息上限保护', () => {
+    const client = {
+      sendInvokeResult: () => {
+        throw new DeviceLinkError('BACKPRESSURE', 'socket buffer full');
+      },
+    } as never;
+    const controllerCount = Math.ceil(
+      dispatchTesting.remoteInvokeResultOutboxLimit
+        / dispatchTesting.remoteInvokeResultOutboxPerControllerLimit,
+    );
+    let queued = 0;
+    for (let controller = 0; controller < controllerCount; controller++) {
+      for (
+        let index = 0;
+        index < dispatchTesting.remoteInvokeResultOutboxPerControllerLimit
+          && queued < dispatchTesting.remoteInvokeResultOutboxLimit;
+        index++
+      ) {
+        expect(dispatchTesting.sendInvokeResultSafe(
+          client,
+          `ctrl-${controller}`,
+          `invoke-global-outbox-${queued}`,
+          { ok: true, result: queued },
+          'maker:list-active',
+        )).toBe(true);
+        queued++;
+      }
+    }
+    expect(dispatchTesting.remoteInvokeResultOutboxSize()).toBe(
+      dispatchTesting.remoteInvokeResultOutboxLimit,
+    );
+    expect(dispatchTesting.sendInvokeResultSafe(
+      client,
+      'ctrl-over',
+      'invoke-global-outbox-over-limit',
+      { ok: true, result: 'overflow' },
+      'maker:list-active',
+    )).toBe(false);
+  });
+
   it('invoke-result outbox 字节预算包含 request fingerprint', () => {
     const client = {
       sendInvokeResult: () => {
         throw new DeviceLinkError('BACKPRESSURE', 'socket buffer full');
       },
     } as never;
-    const fingerprint = 'x'.repeat(4 * 1024 * 1024);
+    const fingerprint = 'x'.repeat(1_500_000);
 
-    for (let index = 0; index < 3; index++) {
+    for (let index = 0; index < 2; index++) {
       expect(dispatchTesting.sendInvokeResultSafe(
         client,
         'ctrl-a',
