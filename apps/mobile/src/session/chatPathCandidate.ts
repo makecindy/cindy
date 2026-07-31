@@ -443,6 +443,17 @@ const BARE_PATH_ANCHOR = `(?:[A-Za-z]:[${BARE_PATH_SEP}]|\\.{1,2}[${BARE_PATH_SE
 // 明确拒绝以 `~/` `~\` 开头的 token(实测过:只删锚点里的 `~` 时 `~/logs/app.log`
 // 仍然命中)。
 const BARE_PATH_NO_HOME = '(?!~[\\\\/])';
+// 右边界:匹配**不得停在段内字符或分隔符之前**。只排除字母数字是不够的 —— SEG 还允许
+// `_ ~ @ + -` 与 CJK,分隔符也会漏过去,于是这些形态会被切出一个错误前缀、后半段留成
+// 普通文本,而那个前缀形状上是「分隔符+扩展名」= 非歧义,断链时会被点亮、点开错误地址:
+//   src/foo.ts/bar → `src/foo.ts` + 文本 `/bar`
+//   src/file.tsx_backup → `src/file.tsx` + 文本 `_backup`
+//   src/foo.ts~ → `src/foo.ts` + 文本 `~`
+// (PR #1144 review 实捉;上一轮只挡住了「超长扩展名」这一种。)
+//
+// **`.` 刻意不排除**:句末英文句点是最常见的紧随字符,把它加进来会让 `见 src/a.ts.`
+// 整条失配(SEG 含 `.`,回溯也救不回来)。`:` 同理留给合法的 `:line` 后缀。
+const BARE_PATH_RIGHT_BOUNDARY = `(?![A-Za-z0-9_~@+\\-${BARE_PATH_CJK}${BARE_PATH_SEP}])`;
 // 路径主体:要么有锚点(中间段可有可无),要么是「段+分隔符」至少一组(保证含分隔符);
 // 末段必须以扩展名收尾。
 //
@@ -453,7 +464,7 @@ const BARE_PATH_NO_HOME = '(?!~[\\\\/])';
 // (退回纯文本),这才是想要的语义(PR #1144 review 实捉,桌面 remarkLocalPathLinks 同步)。
 const BARE_PATH_BODY =
   `(?:${BARE_PATH_ANCHOR}(?:${BARE_PATH_SEG}[${BARE_PATH_SEP}])*`
-  + `|(?:${BARE_PATH_SEG}[${BARE_PATH_SEP}])+)${BARE_PATH_SEG}\\.[A-Za-z0-9]{1,10}(?![A-Za-z0-9])`;
+  + `|(?:${BARE_PATH_SEG}[${BARE_PATH_SEP}])+)${BARE_PATH_SEG}\\.[A-Za-z0-9]{1,10}${BARE_PATH_RIGHT_BOUNDARY}`;
 // 可选 `:line[:column]` 行号后缀。
 const BARE_PATH_LINE_SUFFIX = '(?::[1-9]\\d{0,6}(?::[1-9]\\d{0,6})?)?';
 // 左边界:前一个字符不能是路径字符 / 分隔符(`:` 不算,允许 `文件:src/x.ts`)。

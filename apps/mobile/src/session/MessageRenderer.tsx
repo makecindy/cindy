@@ -3583,15 +3583,23 @@ function ChatPathChipSpan({
   );
   const [verdict, setVerdict] = useState<RemotePathVerdict | undefined>(readVerdict);
 
-  // 本 key 的缓存变化(确定态落库 / 负缓存到期)→ 重新派生。按 key 过滤:一屏几十个
-  // chip 各自订阅,全量广播会让首屏 N 次 stat 引发 N×N 次重渲染。
+  // 本 key 的缓存变化(确定态落库 / 负缓存到期)→ 递增,**驱动下面的验证副作用重跑**。
+  // 按 key 过滤:一屏几十个 chip 各自订阅,全量广播会让首屏 N 次 stat 引发 N×N 次重渲染。
+  //
+  // ⚠️ 这里必须递增一个计数、不能只 setVerdict(readVerdict()):`readVerdict` 是
+  // `[ctx, target]` 的稳定 useCallback,通知**不改变验证副作用的任何依赖**,那个副作用
+  // 就不会重跑 → 再也不发 verifyRemotePathCached。TTL 到期时负缓存已被删、又没有确定态,
+  // ForRender 回 undefined,于是 chip 只完成「降级成纯文本」、没完成「重验」,挂载期间
+  // 永不自愈 —— 比重构前(一直乐观点亮)更糟。桌面同一处把 cacheGen 放进了验证副作用的
+  // 依赖,手机漏了这一环(PR #1144 review 实捉:第 10 轮重构只做对了桌面那一半)。
+  const [cacheGen, setCacheGen] = useState(0);
   useEffect(() => {
     if (!ctx || !target) return;
     const mine = remotePathVerdictKey(ctx.deviceId, ctx.workdir, target.absPath);
     return subscribeRemotePathVerdictChange((key) => {
-      if (key === mine) setVerdict(readVerdict());
+      if (key === mine) setCacheGen((n) => n + 1);
     });
-  }, [ctx, target, readVerdict]);
+  }, [ctx, target]);
 
   useEffect(() => {
     // 无条件按当前缓存重新派生(升级 / 降级同一条路)。
@@ -3609,7 +3617,8 @@ function ChatPathChipSpan({
     return () => {
       cancelled = true;
     };
-  }, [ctx, streaming, target, readVerdict]);
+    // cacheGen:本 key 的缓存状态变化(TTL 到期 / 别处写入确定态)→ 重新派生 + 必要时重验。
+  }, [ctx, streaming, target, readVerdict, cacheGen]);
 
   // 点亮门槛分两档(见 ChatPathCandidate.ambiguousShape 的说明):
   //   - 形状明确是路径(绝对路径 / 尾斜杠目录 / 分隔符+扩展名):unknown(链路断 /

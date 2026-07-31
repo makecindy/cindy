@@ -122,6 +122,16 @@ describe('remarkLocalPathLinks', () => {
     expect(linkUrls(runOnText('见 src/old~.ts'))).toEqual(['src/old~.ts']);
   });
 
+  it('右边界覆盖全部段内字符与分隔符,不切出错误前缀', () => {
+    // 只排除字母数字不够:SEG 还允许 `_ ~ @ + -` 与 CJK,分隔符也会漏过去(review 实捉)。
+    expect(linkUrls(runOnText('见 src/foo.ts/bar'))).toEqual([]);
+    expect(linkUrls(runOnText('见 src/file.tsx_backup'))).toEqual([]);
+    expect(linkUrls(runOnText('见 src/foo.ts~'))).toEqual([]);
+    // `.` 与 `:` 刻意不排除:句末句点与 `:line` 后缀是最常见的紧随字符。
+    expect(linkUrls(runOnText('见 src/a.ts.'))).toEqual(['src/a.ts']);
+    expect(linkUrls(runOnText('见 src/a.png:12 行'))).toEqual(['src/a.png:12']);
+  });
+
   it('超长扩展名整条不动,**不得截断成前 10 个字符**', () => {
     // 没有右边界时 `\.[A-Za-z0-9]{1,10}` 会贪心吃前 10 个字符然后收工:
     //   src/file.typescriptreact → 链接 `src/file.typescript` + 正文残留 `react`

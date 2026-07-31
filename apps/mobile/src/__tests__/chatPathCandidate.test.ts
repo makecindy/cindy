@@ -506,6 +506,22 @@ describe('findBareFilePathMatch(正文纯文本裸路径词法)', () => {
     expect(allValues('见 src/old~.ts')).toEqual(['src/old~.ts']);
   });
 
+  it('右边界覆盖全部段内字符与分隔符,不切出错误前缀', () => {
+    // 只排除字母数字不够:SEG 还允许 `_ ~ @ + -` 与 CJK,分隔符也会漏过去。切出的前缀
+    // 形状上是「分隔符+扩展名」= 非歧义,断链时会被点亮、点开错误地址,后半段还留成
+    // 孤立文本(PR #1144 review 实捉;上一轮只挡住「超长扩展名」一种)。
+    expect(allValues('见 src/foo.ts/bar')).toEqual([]);
+    expect(allValues('见 src/file.tsx_backup')).toEqual([]);
+    expect(allValues('见 src/foo.ts~')).toEqual([]);
+    // 但 `.` 与 `:` 刻意不排除 —— 句末英文句点与合法行号后缀是最常见的紧随字符,
+    // 把 `.` 加进边界会让整条失配(SEG 含 `.`,回溯也救不回来)。
+    expect(allValues('见 src/a.ts.')).toEqual(['src/a.ts']);
+    expect(allValues('见 src/a.png:12 行')).toEqual(['src/a.png:12']);
+    // 既有行为不变:CJK 黏连仍整串吞(已知限制)、多段扩展名与查询串照旧。
+    expect(allValues('改了 a/b.ts和c/d.ts')).toEqual(['a/b.ts和c/d.ts']);
+    expect(allValues('解包 dist/app.tar.gz')).toEqual(['dist/app.tar.gz']);
+  });
+
   it('超长扩展名整条不识别,**不得截断成前 10 个字符**', () => {
     // 没有右边界时 `\.[A-Za-z0-9]{1,10}` 会贪心吃前 10 个字符然后收工:
     //   src/file.typescriptreact → 候选 `src/file.typescript` + 正文残留 `react`
@@ -639,5 +655,34 @@ describe('路径 chip 的可点信号(源码级守卫)', () => {
       if (inline === -1 || chip === -1) continue;
       expect(chip, `叠加顺序反了:${site}`).toBeGreaterThan(inline);
     }
+  });
+});
+
+describe('远端 verdict 通知必须驱动重验,不能只驱动重绘(源码级守卫)', () => {
+  // 第 10 轮把点亮态改成缓存的纯派生时,桌面把 cacheGen 放进了验证副作用的依赖、
+  // 手机只在订阅回调里 setVerdict —— 而 readVerdict 是稳定的 useCallback,通知不改变
+  // 验证副作用的任何依赖,于是 TTL 到期后 chip 只完成「降级成纯文本」、没完成「重验」,
+  // 挂载期间永不自愈,比重构前(一直乐观点亮)更糟(PR #1144 review 实捉)。
+  //
+  // 这类 bug 的形状是「依赖数组漏了触发源」,没有类型保护、行为测试又要 RN 渲染,
+  // 所以在源码层钉住:通知必须递增计数,且计数必须出现在验证副作用的依赖里。
+  const src = readFileSync(join(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+
+  it('订阅回调递增计数(而不是只重绘)', () => {
+    const cb = /subscribeRemotePathVerdictChange\(\(key\) => \{([\s\S]*?)\}\);/.exec(src);
+    expect(cb, '未找到订阅回调').not.toBeNull();
+    expect(cb![1], '订阅回调只重绘、没驱动重验 —— TTL 到期后 chip 会降级且永不自愈')
+      .toMatch(/setCacheGen/);
+  });
+
+  it('计数出现在验证副作用的依赖数组里', () => {
+    // 验证副作用的标志是它调用 verifyRemotePathCached;取其后最近的依赖数组。
+    const idx = src.indexOf('verifyRemotePathCached(');
+    expect(idx, '未找到验证副作用').toBeGreaterThan(-1);
+    const deps = /\}, \[([^\]]*)\]\);/.exec(src.slice(idx));
+    expect(deps, '未找到验证副作用的依赖数组').not.toBeNull();
+    expect(deps![1], 'cacheGen 不在依赖里 —— 缓存变化不会触发重验').toMatch(/cacheGen/);
   });
 });
