@@ -61,9 +61,16 @@ export function buildCodexCapabilityConfigOverrides(
         directive.source.surface === 'plugin'
           ? directive.source.id
           : directive.source.containerId;
-      if (pluginId) {
-        config[`plugins.${quoteTomlKeySegment(pluginId)}.enabled`] = false;
+      if (!pluginId) {
+        const requiredField =
+          directive.source.surface === 'plugin'
+            ? 'source.id'
+            : 'source.containerId';
+        throw new Error(
+          `Cannot enforce explicit-only Codex capability ${directive.capabilityId} without an isolated plugin overlay: ${requiredField} is required for ${directive.source.surface} source ${directive.source.id}`,
+        );
       }
+      config[`plugins.${quoteTomlKeySegment(pluginId)}.enabled`] = false;
       continue;
     }
     if (

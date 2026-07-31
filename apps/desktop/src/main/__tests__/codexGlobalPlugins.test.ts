@@ -662,6 +662,95 @@ describe('prepareCodexGlobalPluginsBridge', () => {
     ).toEqual({ enabled: false });
   });
 
+  it.skipIf(process.platform === 'win32')(
+    'does not block Codex when a disabled protected plugin cannot be snapshotted',
+    async () => {
+      const { homeDir, codexHome, paths } = await setup();
+      const unreadableDir = path.join(
+        paths.sourceCacheDir,
+        'personal',
+        'feishu-delegate',
+        '1.0.0',
+        'unreadable',
+      );
+      await writePluginCache(
+        paths.sourceCacheDir,
+        'personal',
+        'feishu-delegate',
+      );
+      await fs.mkdir(unreadableDir, { recursive: true });
+      await fs.chmod(unreadableDir, 0o000);
+      await writePluginEnabledState(
+        paths.configFile,
+        'feishu-delegate',
+        'personal',
+        false,
+      );
+
+      let result: Awaited<ReturnType<typeof prepareCodexGlobalPluginsBridge>>;
+      try {
+        result = await prepareCodexGlobalPluginsBridge(codexHome, {
+          homeDir,
+          capabilityRouting: explicitOnlySkillPolicy(),
+        });
+      } finally {
+        await fs.chmod(unreadableDir, 0o700);
+      }
+
+      expect(result.marketplaces).toEqual([
+        expect.objectContaining({ name: 'personal', status: 'error' }),
+      ]);
+      expect(result.routingFailures).toEqual([]);
+      expect(result.warnings).toEqual([
+        expect.stringContaining('cannot snapshot Codex capability-routing source'),
+      ]);
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'fails closed when an enabled protected plugin cannot be snapshotted',
+    async () => {
+      const { homeDir, codexHome, paths } = await setup();
+      const unreadableDir = path.join(
+        paths.sourceCacheDir,
+        'personal',
+        'feishu-delegate',
+        '1.0.0',
+        'unreadable',
+      );
+      await writePluginCache(
+        paths.sourceCacheDir,
+        'personal',
+        'feishu-delegate',
+      );
+      await fs.mkdir(unreadableDir, { recursive: true });
+      await fs.chmod(unreadableDir, 0o000);
+      await writePluginEnabledState(
+        paths.sourceConfigFile,
+        'feishu-delegate',
+        'personal',
+        true,
+      );
+
+      let result: Awaited<ReturnType<typeof prepareCodexGlobalPluginsBridge>>;
+      try {
+        result = await prepareCodexGlobalPluginsBridge(codexHome, {
+          homeDir,
+          capabilityRouting: explicitOnlySkillPolicy(),
+        });
+      } finally {
+        await fs.chmod(unreadableDir, 0o700);
+      }
+
+      expect(result.marketplaces).toEqual([
+        expect.objectContaining({ name: 'personal', status: 'error' }),
+      ]);
+      expect(result.routingFailures).toEqual([
+        expect.stringContaining('feishu-delegate@personal'),
+      ]);
+    },
+  );
+
   it('links marketplace cache dirs and appends missing [plugins] entries', async () => {
     const { homeDir, codexHome, paths } = await setup();
     await writePluginCache(paths.sourceCacheDir, 'superpowers-dev', 'superpowers');

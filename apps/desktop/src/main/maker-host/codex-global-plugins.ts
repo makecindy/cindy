@@ -564,17 +564,25 @@ async function ensureOverlayMarketplace(
 ): Promise<ManagedLinkStatus> {
   const sourceReal = await realPathOrNull(source);
   if (!sourceReal) return 'missing';
-  const desiredMarker: ManagedOverlayMarker = {
-    schemaVersion: 1,
-    source: sourceReal,
-    sourceSnapshot: await sourceMarketplaceSnapshot(source, overlays),
-    skills: stableOverlaySkills(
-      overlays.filter((overlay): overlay is CodexSkillOverlay => overlay.kind === 'skill'),
-    ),
-    mcpServers: stableOverlayMcpServers(
-      overlays.filter((overlay): overlay is CodexMcpOverlay => overlay.kind === 'mcp'),
-    ),
-  };
+  let desiredMarker: ManagedOverlayMarker;
+  try {
+    desiredMarker = {
+      schemaVersion: 1,
+      source: sourceReal,
+      sourceSnapshot: await sourceMarketplaceSnapshot(source, overlays),
+      skills: stableOverlaySkills(
+        overlays.filter((overlay): overlay is CodexSkillOverlay => overlay.kind === 'skill'),
+      ),
+      mcpServers: stableOverlayMcpServers(
+        overlays.filter((overlay): overlay is CodexMcpOverlay => overlay.kind === 'mcp'),
+      ),
+    };
+  } catch (err) {
+    warnings.push(
+      `cannot snapshot Codex capability-routing source ${source}: ${(err as Error).message}`,
+    );
+    return 'error';
+  }
 
   const rawCurrentMarker = await readManagedOverlayMarker(marketplaceDir);
   const currentMarker = rawCurrentMarker?.source === sourceReal ? rawCurrentMarker : null;
@@ -737,6 +745,7 @@ async function cleanupStaleLinks(cacheDir: string, liveNames: Set<string>): Prom
 
 async function collectCapabilityRoutingFailures(
   cacheDir: string,
+  sourceCacheDir: string,
   overlaysByMarketplace: ReadonlyMap<string, readonly CodexPluginOverlay[]>,
   marketplaces: readonly CodexGlobalPluginsMarketplaceResult[],
   enabledPluginKeys: ReadonlySet<string>,
@@ -752,13 +761,17 @@ async function collectCapabilityRoutingFailures(
       overlays.map((overlay) => [overlay.pluginKey, overlay.pluginName] as const),
     );
     for (const [pluginKey, pluginName] of protectedPlugins) {
-      // A stale cache directory does not make a plugin active. The isolated
+      // A cache directory alone does not make a plugin active. The isolated
       // config is authoritative because syncPluginEntries deliberately keeps
       // an existing `enabled = false` choice and does not invent entries for
-      // cache-only plugins. Only an active source can make a failed overlay
-      // fatal to Codex startup.
+      // cache-only plugins. Once enabled, either the source or isolated cache
+      // can supply the plugin, so an unenforced overlay must be fatal.
       if (!enabledPluginKeys.has(pluginKey)) continue;
-      if (!(await isDirectory(path.join(cacheDir, marketplace, pluginName)))) continue;
+      const [isolatedPluginExists, sourcePluginExists] = await Promise.all([
+        isDirectory(path.join(cacheDir, marketplace, pluginName)),
+        isDirectory(path.join(sourceCacheDir, marketplace, pluginName)),
+      ]);
+      if (!isolatedPluginExists && !sourcePluginExists) continue;
       failures.push(
         `cannot enforce Cindy capability routing for installed Codex plugin ${pluginName}@${marketplace} (marketplace status: ${status ?? 'unmanaged'})`,
       );
@@ -1007,6 +1020,7 @@ export async function prepareCodexGlobalPluginsBridge(
         : new Set<string>();
     const routingFailures = await collectCapabilityRoutingFailures(
       paths.cacheDir,
+      paths.sourceCacheDir,
       overlaysByMarketplace,
       marketplaces,
       enabledPluginKeys,
@@ -1028,6 +1042,7 @@ export async function prepareCodexGlobalPluginsBridge(
       : new Set<string>();
   const routingFailures = await collectCapabilityRoutingFailures(
     paths.cacheDir,
+    paths.sourceCacheDir,
     overlaysByMarketplace,
     marketplaces,
     enabledPluginKeys,

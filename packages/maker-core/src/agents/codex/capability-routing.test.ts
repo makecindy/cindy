@@ -154,4 +154,27 @@ describe('buildCodexCapabilityConfigOverrides', () => {
       'plugins."computer-use@openai-bundled".enabled': false,
     });
   });
+
+  it('fails closed when a remote explicit-only route has no owning plugin id', () => {
+    const policy = {
+      overrides: [
+        {
+          capabilityId: 'feishu',
+          source: {
+            kind: 'harness-plugin',
+            harness: 'codex',
+            surface: 'skill',
+            id: 'feishu-delegate:message-feishu-coworkers',
+          },
+          invocation: 'explicit-only',
+        },
+      ],
+    } as const satisfies CapabilityRoutingPolicy;
+
+    expect(() =>
+      buildCodexCapabilityConfigOverrides(policy, {
+        isolatedPluginOverlays: false,
+      }),
+    ).toThrowError(/source\.containerId is required/);
+  });
 });
