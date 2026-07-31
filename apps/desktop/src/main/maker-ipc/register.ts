@@ -1346,7 +1346,7 @@ const renameSessionsConfirmBridge = new RenameSessionsConfirmBridge({
   broadcast: (channel, payload) => broadcastToAllWindows(channel, payload),
   logger: log,
   onDesktopOnlyConfirmPending: (sessionId) =>
-    desktopConfirmImNotifier(sessionId, '「批量重命名会话」的确认卡'),
+    desktopConfirmImNotifier(sessionId, '「批量重命名任务」的确认卡'),
 });
 
 /**

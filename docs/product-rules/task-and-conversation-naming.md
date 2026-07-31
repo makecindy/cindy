@@ -422,7 +422,7 @@ IM 渠道的 `/new` 看着像「新建」，实际走 `im/shared/sessionRepo.ts:
 | 类别 | 例子 | 处理 |
 |---|---|---|
 | 渠道直接发给用户 | 四个 `uiText.ts` | **改**（已清零） |
-| main 抛给 renderer 的 `Error` message | `maker-orchestration/fork.ts` 的 `forkError('SOURCE_NEVER_RAN', '原会话尚未运行…')` | **不改**：renderer 按 code 渲染 i18n（`chat.userMessage.forkErrors.sourceNeverRan`），这串只进日志。`rewind.ts` → `chat.rewind.errors.*` 同理 |
+| main 抛给 renderer 的 `Error` message | 见下方「一句一句追展示路径」——**按 code 映射 i18n 的不改，原样展示的必须改**，不能按文件一刀切 |
 | 插件 / MCP / LLM 读的字符串 | `cindy-brain/*Slot.ts`、`mcp-integrations/ghost.ts` | **不改**：不是 UI 文案，且多数确实指 Agent 进程会话（§6.0.2） |
 | Orca 协同术语 | `packages/maker-shared/src/sessionIdentity.ts` | **不改**：归 `orca-team-architecture.md` |
 | 测试 fixture | `packages/maker-shared/src/fixtures.ts` | **不改** |
@@ -430,6 +430,35 @@ IM 渠道的 `/new` 看着像「新建」，实际走 `im/shared/sessionRepo.ts:
 另有一类**刻意保留的渠道人格用词**：discord / feishu / wechat 把 session 叫「存档」、把接管
 叫「上号」（`feishu/uiText.ts` 文件头写明了这个基调：「偶尔带点游戏味的隐喻（上号、存档、
 副本、AFK 之类）」）。那不是错译而是渠道语气，本次只清 forbidden 词「会话」，不动「存档」。
+
+#### 一句一句追展示路径，别按文件归类
+
+上面那张表最初把「main 抛给 renderer 的 `Error` message」整类判成不改，理由是 fork / rewind
+确实按 error code 渲染 i18n（`chat.userMessage.forkErrors.*` / `chat.rewind.errors.*`），main 侧
+那串只进日志。**这个推广是错的**：`maker-ipc/sessionReferenceResolver.ts` 抛的
+`SessionReferenceError` 经 `agent-input-coordinator.ts::resolveReferenceContexts` 直接落进
+`projection.error`，`CCAgentSessionView` 的 `ErrorBanner` **原样展示**（同文件测试
+`expect(latestProjection(...).error).toContain('snapshot is missing')` 就钉着这条链路）。于是
+用户粘贴「任务链接」后失败时看到的是「找不到本机会话 …」「最多引用 N 个会话」。
+
+**判据只有一条：这句话会不会原样出现在用户眼前。** 回答它必须追一次展示路径，不能靠文件目录
+推断。落地时连续四轮返工，每轮都是漏了一条**展示路径**（不是漏了一个目录）：
+
+| 轮次 | 漏掉的路径 | 为什么没扫到 |
+|---|---|---|
+| 1 | `packages/maker-shared/**` | 只 diff 了 locale 文件 |
+| 2 | IM 渠道 `uiText.ts` | 共享层扫完就以为齐了 |
+| 3 | discord / feishu / wechat（telegram 的同形副本） | 按 reviewer 点到的那个文件改 |
+| 4 | main 抛错 → `projection.error` → `ErrorBanner` | 按文件类别一刀切，没追这一条的实际渲染 |
+
+所以改术语时，对每一处候选串问：**它从哪里被渲染出来？** 三种答案对应三种处理——
+renderer 按 code 取 i18n（不改这串，改 i18n key）／原样进 UI（必须改）／只进日志或给
+LLM（不改）。拿不准就搜一次调用链，代价比多一轮 review 低得多。
+
+**顺带修掉一处 `origin/main` 既有乱码**：`sessionReferenceResolver.ts` 有两句
+`来源设备返回了无效的会话历史` 被存成了 UTF-8 字节按 GBK 解过一遍的形态
+（`鏉ユ簮璁惧杩斿洖浜嗘棤鏁堢殑浼氳瘇鍘嗗彶`），真触发时用户看到的是乱码。既然本轮要改这一组
+文案，一并修正为「来源设备返回了无效的对话记录」。
 
 **禁用词的判定要看条件，不要顺手断言原因。** `sessionActionStrip.ts` 的
 `filesDisabledReason` 原文是「Dialogue 会话没有远程工作目录」，改名时顺势写成「不绑项目的

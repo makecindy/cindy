@@ -344,7 +344,7 @@ export function registerBuiltinDesktopCommands(
   registry.register({
     name: 'clear',
     description:
-      'Equivalent of the sidebar\'s "New Chat" button — opens a fresh empty draft and switches to it. Discards the current conversation context.',
+      'Same as the sidebar\'s new-session entry — opens a fresh empty draft and switches to it. Discards the current chat context.',
     execute: (ctx) => broadcastDesktopCommand(buildPayload('clear', ctx)),
   });
 
@@ -573,7 +573,7 @@ export function registerBuiltinDesktopCommands(
 
   registry.register({
     name: 'jump-session',
-    description: '输入 sessionId 后直接跳转到该会话。',
+    description: '输入 sessionId 后直接跳转到该任务。',
     // 实际执行在 renderer 本地拦截(navigationCommands.ts)；这里仅负责让命令出现在
     // `/` 菜单并提供描述，不走 executeDesktopCommand broadcast。
     execute: () => {},
