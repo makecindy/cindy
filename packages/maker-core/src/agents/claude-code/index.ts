@@ -110,10 +110,7 @@ import {
   type AutoReviewDecision,
 } from '../shared/auto-review-decision.js';
 import type { ReviewableAction } from '../shared/auto-review.js';
-import {
-  resolveAgentCredentialMode,
-  resolveEffectiveCredentialModeFromAuthSource,
-} from '../credential-mode.js';
+import { resolveAgentCredentialMode } from '../credential-mode.js';
 import { repairForkedClaudeSessionJsonl, type RepairForkedClaudeJsonlResult } from './fork-jsonl-repair.js';
 import { ensureClaudeTranscriptInWorkingDir } from './transcript-relocation.js';
 import { isClaudeResumeSessionNotFound } from './invalid-resume.js';
@@ -885,11 +882,6 @@ export class ClaudeCodeAgent extends BaseAgent {
         `claude-code not authenticated: ${authState.errorReason ?? 'no_key'}`,
       );
     }
-    const effectiveCredentialMode = resolveEffectiveCredentialModeFromAuthSource(
-      credentialMode,
-      authState.authSource,
-    );
-
     // 箭头别名捕获 this —— 下方 replayRuntimeDrift(普通 function)与 handle 对象
     // 字面量方法里没有类实例 this,统一经它取 wire 串。
     const sdkModelFor = (model: string): string => this.sdkModelFor(model);
@@ -1714,12 +1706,8 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 必须在 buildQuery / forward loop 之前声明, 否则 ctx getter 会捕获到 TDZ。
     let mutableModel = opts.model;
     let mutableProviderId = opts.providerId ?? null;
-    let mutableAutoReviewCredentialMode = effectiveCredentialMode;
-    let nativeAutoReviewUnavailable = false;
     let currentAutoReviewIntent = '';
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
-    const usesNativeClaudeAutoReview = (): boolean =>
-      !nativeAutoReviewUnavailable && mutableAutoReviewCredentialMode === 'oauth-bearer';
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
       autoReviewDecisionCache.clear();
@@ -1766,12 +1754,12 @@ export class ClaudeCodeAgent extends BaseAgent {
     let sdkInPlanMode = false;
     // SDK PermissionMode union 没有 'ask' (我们对 ChatInput 暴露的统一名字), SDK 侧当 default。
     type SdkPermissionMode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions';
-    // 官方 Claude OAuth 路由保留 CC 原生 Auto classifier。第三方/网关路由及原生
-    // classifier 故障后的会话映射到 default，使 canUseTool 回调进入 Cindy 轻量 fallback。
-    const toSdkPermissionMode = (mode: PermissionMode): SdkPermissionMode => {
-      if (mode === 'auto') return usesNativeClaudeAutoReview() ? 'auto' : 'default';
-      return (mode === 'ask' ? 'default' : mode) as SdkPermissionMode;
-    };
+    // Claude SDK 的 auto 会完全绕过 canUseTool。宿主在该回调里承载的不只是通用审查，
+    // 还有 MCP 产品策略、prompt-each-time、turn 强制确认和 AskUserQuestion 交互；这些
+    // 语义无法与 SDK 原生 classifier 组合。因此 Cindy 的 Auto 必须映射到 SDK default，
+    // 再由 canUseTool 做确定性策略 + 当前会话模型的轻量灰区审查。
+    const toSdkPermissionMode = (mode: PermissionMode): SdkPermissionMode =>
+      (mode === 'ask' || mode === 'auto' ? 'default' : mode) as SdkPermissionMode;
     /**
      * SDK 实际起 turn 时应用的权限档: 计划模式武装中(下一 turn arm)或本轮 plan turn
      * 进行中都恒为 plan, 否则跟随底层权限档。**含 arm 态**, 用于 buildQuery 起 turn。
@@ -4337,25 +4325,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (!isControlBlocked) {
           await q.setModel(sdkModel);
         }
-        const usedNativeAutoReview = usesNativeClaudeAutoReview();
         mutableProviderId = targetProviderId ?? null;
-        mutableAutoReviewCredentialMode = resolveEffectiveCredentialModeFromAuthSource(
-          resolveAgentCredentialMode({
-            agentKind: 'claude-code',
-            providerId: mutableProviderId,
-            model: newModel,
-          }),
-          authState.authSource,
-        );
         mutableModel = newModel;
         autoReviewDecisionCache.clear();
-        if (
-          !isControlBlocked
-          && mutablePermissionMode === 'auto'
-          && usedNativeAutoReview !== usesNativeClaudeAutoReview()
-        ) {
-          await q.setPermissionMode(toSdkPermissionMode('auto'));
-        }
         const newContextWindow = modelContextWindows.get(mutableModel);
         if (newContextWindow === undefined) {
           // setContextWindow(0) 是 no-op —— tracker 会静默沿用旧模型窗口直到下一个
@@ -4452,18 +4424,10 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       async useCindyAutoReviewFallback() {
-        if (nativeAutoReviewUnavailable) return;
-        nativeAutoReviewUnavailable = true;
+        // 兼容 host 的跨 harness fallback 协议。Claude Auto 已恒走 canUseTool + Cindy
+        // reviewer，无需切换 SDK 档位；清掉缓存即可避免复用故障前的挂起判定。
         autoReviewDecisionCache.clear();
-        if (
-          mutablePermissionMode === 'auto'
-          && !mutablePlanMode
-          && !planTurnActive
-          && !controlRequestsBlocked()
-        ) {
-          await q.setPermissionMode('default');
-        }
-        log.warn('Claude native Auto reviewer unavailable; keeping Auto with Cindy fallback', {
+        log.debug('Claude Auto already uses the Cindy reviewer through canUseTool', {
           providerId: mutableProviderId,
           model: mutableModel,
         });

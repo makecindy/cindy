@@ -1,6 +1,6 @@
 /**
- * Auto-review 接线集成测试:官方 Claude OAuth 保留原生 Auto classifier；第三方路由
- * 映射到 SDK default，让 canUseTool 走 Cindy 当前模型轻量 fallback。
+ * Auto-review 接线集成测试:所有 Claude 路由都映射到 SDK default，保留 canUseTool
+ * 中的产品级审批语义，并由 Cindy 当前模型做轻量灰区审查。
  *
  * 覆盖(靶心是接线,而非策略本身 —— 策略逐规则由 auto-review-policy.test.ts 覆盖):
  *   - auto + 安全内置(只读 / 区内写 / 只读 shell)→ 静默 allow,不惊动 resolver
@@ -155,14 +155,29 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((d) => fs.rm(d, { recursive: true, force: true })));
 });
 
-describe('Auto-review wiring: native first, Cindy fallback', () => {
-  it('keeps SDK auto for official Claude OAuth', async () => {
-    const { handle, queryPermissionMode, reviewAutoPermissionAction } = await startSession('auto', {
+describe('Auto-review wiring: preserve host approval callbacks', () => {
+  it('uses SDK default for official Claude OAuth so canUseTool remains mandatory', async () => {
+    const {
+      handle,
+      canUseTool,
+      queryPermissionMode,
+      reviewAutoPermissionAction,
+      seen,
+    } = await startSession('auto', {
       providerId: 'anthropic',
       authSource: 'oauth',
+      reviewVerdict: 'ask',
     });
-    expect(queryPermissionMode).toBe('auto');
-    expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
+    expect(queryPermissionMode).toBe('default');
+    await canUseTool(
+      'Bash',
+      { command: 'npm install left-pad' },
+      { toolUseID: 'official-oauth-gray-action', suggestions: SESSION_SUGGESTION },
+    );
+    expect(reviewAutoPermissionAction).toHaveBeenCalledOnce();
+    const reqs = permissionRequests(seen);
+    expect(reqs).toHaveLength(1);
+    expect(reqs[0]?.suggestions).toBeUndefined();
     await handle.close();
   });
 
@@ -189,7 +204,7 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     await handle.close();
   });
 
-  it('keeps the product mode on Auto and switches only the runtime reviewer after native failure', async () => {
+  it('keeps the product mode on Auto when the host reports a native-reviewer failure', async () => {
     const {
       handle,
       canUseTool,
@@ -203,7 +218,7 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     });
 
     await handle.useCindyAutoReviewFallback?.();
-    expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('default');
+    expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
     const result = await canUseTool(
       'Bash',
       { command: 'npx tsc --noEmit' },
