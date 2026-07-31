@@ -82,6 +82,7 @@ import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.js
 import { ingestMedia, supportedMime as isCindyMediaMime } from '../cindy-media/ingest.js';
 import { worktreeStore, WorktreeManager } from '../worktree/index.js';
 import { readImDefaultSettings } from '../im/defaultSettingsStore.js';
+import { createTelegramGuestTurnPermissionPolicy } from '../im/telegram/permissionPolicy.js';
 import { getWorkspaceProviderSource } from './workspaceProviderSourceStore.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { beginHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInteractionSurface.js';
@@ -130,7 +131,10 @@ async function resolveNewSessionConfig(
 
   const resolved = resolveHookSessionConfig(
     {
-      readDefaults: () => readImDefaultSettings(sourceIm === 'slack' ? 'slack' : undefined),
+      readDefaults: () =>
+        readImDefaultSettings(
+          sourceIm === 'slack' ? 'slack' : sourceIm === 'telegram' ? 'telegram' : undefined,
+        ),
       // 可执行清单按**启用**口径,不叠加「显示 / 隐藏」偏好:隐藏只是陈列过滤
       // (选择器不列),被 IM 显式点名或兜底选中仍然合法;停用的模型与供应商已由
       // visibleModelUnion 内建的准入过滤(model.disabled / suspended)剔除,点名
@@ -822,6 +826,13 @@ export function createMakerHookSessionRunner(deps: {
         const sendResult = await session.send(outgoingMessage, {
           origin,
           planMode: false,
+          ...(req.source?.im === 'telegram' && req.laneKind === 'group'
+            ? {
+                turnPermissionPolicy: createTelegramGuestTurnPermissionPolicy(
+                  req.source.triggerMessageId ?? req.sessionId,
+                ),
+              }
+            : {}),
           beforeProviderStart: () => {
             const routeOrigin: RoutedTurnOrigin =
               req.source?.im === 'slack'

@@ -1,5 +1,5 @@
 /**
- * groupWindow(group-relay-v1 本地群窗口)单测: 入窗幂等、GC、lane 解析、
+ * groupWindow(group-relay-v1 本地群窗口)单测: 入窗幂等、永久留存、lane 解析、
  * 上下文拼装(trigger 剔重 / 游标增量 / 字符预算)。DB 用内存 better-sqlite3
  * 直接执行 0083 migration SQL, 经 drizzle 同步 driver 假装成 DbClient。
  */
@@ -22,6 +22,7 @@ vi.mock('../../localDb/client/current.js', () => ({
 import {
   buildGroupContextPrefix,
   groupLaneOf,
+  listTelegramKnownGroups,
   recordGroupMessage,
   resetGroupContextCursors,
   sweepGroupWindowExpired,
@@ -76,31 +77,31 @@ describe('groupLaneOf', () => {
 describe('recordGroupMessage', () => {
   it('同一条消息重放只落一行(幂等)', async () => {
     const payload = frame({ messageId: '4213' });
-    await recordGroupMessage(payload);
-    await recordGroupMessage(payload);
+    await expect(recordGroupMessage(payload)).resolves.toBe(true);
+    await expect(recordGroupMessage(payload)).resolves.toBe(false);
     const rows = sqlite.prepare('SELECT COUNT(*) AS n FROM hook_group_messages').get() as {
       n: number;
     };
     expect(rows.n).toBe(1);
   });
 
-  it('每键行数超限时保最新', async () => {
+  it('群历史永久保留，500 只是单次上下文读取预算', async () => {
     for (let i = 0; i < 502; i += 1) {
       await recordGroupMessage(frame({ messageId: `m${i}`, text: `msg ${i}` }));
     }
     const rows = sqlite
       .prepare('SELECT COUNT(*) AS n FROM hook_group_messages WHERE chat_id = ?')
       .get('-900') as { n: number };
-    expect(rows.n).toBe(500);
+    expect(rows.n).toBe(502);
     const oldest = sqlite
       .prepare('SELECT message_id FROM hook_group_messages ORDER BY id ASC LIMIT 1')
       .get() as { message_id: string };
-    expect(oldest.message_id).toBe('m2');
+    expect(oldest.message_id).toBe('m0');
   });
 });
 
 describe('sweepGroupWindowExpired', () => {
-  it('启动清扫在无流量时也清掉过期行(强制绕过间隔门控)', async () => {
+  it('兼容启动入口不再删除旧群历史', async () => {
     const fresh = frame({ messageId: 'fresh' });
     await recordGroupMessage(fresh);
     // 直接落一条 8 天前的过期行, 模拟群早已不活跃(无按键 GC 机会)。
@@ -115,7 +116,29 @@ describe('sweepGroupWindowExpired', () => {
     const ids = sqlite
       .prepare('SELECT message_id AS id FROM hook_group_messages ORDER BY id ASC')
       .all() as Array<{ id: string }>;
-    expect(ids.map((row) => row.id)).toEqual(['fresh']);
+    expect(ids.map((row) => row.id)).toEqual(['fresh', 'stale']);
+  });
+});
+
+describe('listTelegramKnownGroups', () => {
+  it('按最近活跃列出官方群，并忽略 personal 命名空间', async () => {
+    await recordGroupMessage(
+      frame({ chatId: '-901', chatName: 'Older', messageId: '1', sentAt: 1 }),
+    );
+    await recordGroupMessage(
+      frame({ chatId: '-902', chatName: 'Newer', messageId: '2', sentAt: 2 }),
+    );
+    sqlite
+      .prepare(
+        `INSERT INTO hook_group_messages
+          (provider, chat_id, thread_id, message_id, chat_name, author, is_bot, text, file_names, sent_at, created_at)
+         VALUES ('telegram-personal:1', '-999', '', '3', 'Personal', '@x', 0, 'x', NULL, 3, 3)`,
+      )
+      .run();
+    await expect(listTelegramKnownGroups()).resolves.toEqual([
+      { chatId: '-902', chatName: 'Newer' },
+      { chatId: '-901', chatName: 'Older' },
+    ]);
   });
 });
 

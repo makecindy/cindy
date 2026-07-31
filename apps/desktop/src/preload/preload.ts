@@ -463,6 +463,9 @@ const fanOutHookControlPrefs = createIpcFanOut('maker:hook-control:prefs-changed
 const fanOutHookControlProviderPrefs = createIpcFanOut(
   'maker:hook-control:provider-prefs-changed',
 );
+const fanOutHookControlTelegramBehavior = createIpcFanOut(
+  'maker:hook-control:telegram-behavior-changed',
+);
 // 目录模型来源偏好全量推送(本地写入后广播, 多窗口设置页同步)。
 const fanOutHookControlWorkspaceProviderSource = createIpcFanOut(
   'maker:hook-control:workspace-provider-source-changed',
@@ -3560,6 +3563,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
       patch: Record<string, string | null>,
     ): Promise<{ prefs: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:provider-prefs-set', { provider, workspace, patch }),
+    getTelegramBehavior: (): Promise<{ behavior: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:telegram-behavior-get'),
+    setTelegramBehavior: (patch: Record<string, string>): Promise<{ behavior: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:telegram-behavior-set', { patch }),
+    listTelegramGroups: (): Promise<{ groups: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:telegram-groups-list'),
+    setTelegramGroupActivation: (
+      chatId: string,
+      mode: 'mention' | 'always',
+    ): Promise<{ behavior: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:telegram-group-activation-set', { chatId, mode }),
     // 工作目录模型来源偏好(纯本地, 不经 WS; providerId=null 清除条目)
     getWorkspaceProviderSources: (): Promise<{ entries: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:workspace-provider-source-get'),
@@ -3572,6 +3586,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:hook-control:workspace-provider-source-set', payload),
     onPrefsChanged: fanOutHookControlPrefs,
     onProviderPrefsChanged: fanOutHookControlProviderPrefs,
+    onTelegramBehaviorChanged: fanOutHookControlTelegramBehavior,
     onWorkspaceProviderSourcesChanged: fanOutHookControlWorkspaceProviderSource,
     onStatusChanged: fanOutHookControlStatus,
   },

@@ -2577,6 +2577,37 @@
             "failed": "关联失败",
             "revoked": "已解除关联",
             "superseded": "已关联到另一台设备"
+          },
+          "behavior": {
+            "title": "回应与引用",
+            "emojiLabel": "表情回应",
+            "emojiOption": { "off": "关闭", "minimal": "基础", "expressive": "生动" },
+            "emojiHint": {
+              "off": "不放任何表情回应。",
+              "minimal": "收到消息 👀，完成 👍，失败 👎。",
+              "expressive": "完成与失败分别从正向、负向表情池随机选择。"
+            },
+            "groupQuoteLabel": "群里回复时引用提问",
+            "quoteOption": { "off": "不引用", "first": "首条引用", "all": "每条引用" },
+            "groupQuoteHint": {
+              "off": "群里的回答不挂回提问消息。",
+              "first": "每次触发的第一条回答挂回提问（推荐）。",
+              "all": "本次回答的每条消息都挂回提问。"
+            },
+            "dmQuoteLabel": "私聊回复时引用消息",
+            "dmQuoteHint": {
+              "off": "私聊回答不引用你的消息（默认）。",
+              "first": "第一条回答引用你发的那条消息。"
+            }
+          },
+          "groups": {
+            "title": "群聊参与模式",
+            "hint": "官方 bot 见过的群会出现在这里。「全响应」仅对已绑定账号的每条发言生效；其他成员只进入本机群聊上下文，不会触发任务。",
+            "empty": "还没有群。把 bot 拉进群，并用已绑定账号发一条消息后就会出现在这里。",
+            "contactsOn": "群里其他发言人会自动记入智能通讯录。",
+            "contactsOff": "智能通讯录未开启，群里其他成员不会被自动记住。",
+            "contactsEnable": "开启",
+            "mode": { "mention": "仅 @", "always": "全响应" }
           }
         },
         "x": {

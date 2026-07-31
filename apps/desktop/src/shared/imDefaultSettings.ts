@@ -4,11 +4,11 @@ export type ImDefaultPermissionMode =
 export type ImDefaultEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 /**
  * IM channel scopes that keep independent new-conversation routing preferences.
- * 'telegram' 指个人 Telegram bot(main/im/telegram);官方 Telegram hook 通道
- * 刻意读 global(channel=undefined, 见 hook-control/session-runner.ts), 不落
- * 在这个键上 — 两者互不影响。
+ * 'telegram' 由个人 Telegram bot 与官方 Telegram hook 共用；两种入口的新
+ * 会话保持同一套 Agent / 模型默认值，官方卡也直接编辑这个 channel。
  */
-export type ImDefaultSettingsChannel = 'feishu' | 'slack' | 'discord' | 'wechat' | 'telegram' | 'dingtalk';
+export type ImDefaultSettingsChannel =
+  'feishu' | 'slack' | 'discord' | 'wechat' | 'telegram' | 'dingtalk';
 
 export interface ImDefaultAgentSettings {
   providerId: string | null;

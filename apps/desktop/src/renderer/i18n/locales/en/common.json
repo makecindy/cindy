@@ -2578,6 +2578,37 @@
             "failed": "Linking failed",
             "revoked": "Link removed",
             "superseded": "Linked to another device"
+          },
+          "behavior": {
+            "title": "Reactions & quoting",
+            "emojiLabel": "Emoji reactions",
+            "emojiOption": { "off": "Off", "minimal": "Basic", "expressive": "Lively" },
+            "emojiHint": {
+              "off": "No emoji reactions at all.",
+              "minimal": "👀 on receipt, 👍 on success, 👎 on failure.",
+              "expressive": "Finishes pick randomly from separate positive and negative reaction pools."
+            },
+            "groupQuoteLabel": "Quote the question in groups",
+            "quoteOption": { "off": "Never", "first": "First reply", "all": "Every reply" },
+            "groupQuoteHint": {
+              "off": "Group answers are not attached to the question.",
+              "first": "The first reply quotes the question (recommended).",
+              "all": "Every message in the answer quotes the question."
+            },
+            "dmQuoteLabel": "Quote your message in DM",
+            "dmQuoteHint": {
+              "off": "DM answers are sent without quoting (default).",
+              "first": "The first reply quotes your message."
+            }
+          },
+          "groups": {
+            "title": "Group participation",
+            "hint": "Groups seen by the official bot appear here. Active mode applies to every message from your linked account only; other members add local context but cannot trigger tasks.",
+            "empty": "No groups yet. Add the bot to a group and send a message from your linked account.",
+            "contactsOn": "Other people who speak in groups are auto-added to Smart Contacts.",
+            "contactsOff": "Smart Contacts is off, so other group members will not be remembered automatically.",
+            "contactsEnable": "Turn on",
+            "mode": { "mention": "@ only", "always": "Active" }
           }
         },
         "x": {

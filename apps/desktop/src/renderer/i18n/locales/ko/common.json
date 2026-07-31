@@ -2577,6 +2577,37 @@
             "failed": "연결 실패",
             "revoked": "연결 해제됨",
             "superseded": "다른 기기에 연결됨"
+          },
+          "behavior": {
+            "title": "리액션과 인용",
+            "emojiLabel": "이모지 리액션",
+            "emojiOption": { "off": "끄기", "minimal": "기본", "expressive": "생동감" },
+            "emojiHint": {
+              "off": "이모지 리액션을 달지 않습니다.",
+              "minimal": "수신 시 👀, 성공 👍, 실패 👎.",
+              "expressive": "성공과 실패로 나눈 리액션 풀에서 무작위로 선택합니다."
+            },
+            "groupQuoteLabel": "그룹에서 질문 인용해 답장",
+            "quoteOption": { "off": "안 함", "first": "첫 답장만", "all": "매번" },
+            "groupQuoteHint": {
+              "off": "그룹 답변을 질문에 연결하지 않습니다.",
+              "first": "각 답변의 첫 메시지가 질문을 인용합니다(권장).",
+              "all": "답변의 모든 메시지가 질문을 인용합니다."
+            },
+            "dmQuoteLabel": "DM에서 메시지 인용해 답장",
+            "dmQuoteHint": {
+              "off": "DM 답변은 인용 없이 보냅니다(기본).",
+              "first": "첫 답장이 보낸 메시지를 인용합니다."
+            }
+          },
+          "groups": {
+            "title": "그룹 참여 모드",
+            "hint": "공식 봇이 본 그룹이 표시됩니다. 활성 모드는 연결된 계정의 모든 발언에만 적용되며, 다른 멤버의 발언은 로컬 문맥에만 추가되고 작업을 시작할 수 없습니다.",
+            "empty": "아직 그룹이 없습니다. 봇을 추가하고 연결된 계정으로 메시지를 보내세요.",
+            "contactsOn": "그룹의 다른 발언자는 스마트 연락처에 자동 등록됩니다.",
+            "contactsOff": "스마트 연락처가 꺼져 있어 다른 멤버가 자동 등록되지 않습니다.",
+            "contactsEnable": "켜기",
+            "mode": { "mention": "@만", "always": "활성" }
           }
         },
         "x": {

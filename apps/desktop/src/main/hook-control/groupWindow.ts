@@ -14,7 +14,7 @@
  * 剔除(旧 server 不发时降级为不剔重, 仅多一条重复)。
  */
 
-import { and, desc, eq, gt, lt, notLike } from 'drizzle-orm';
+import { and, desc, eq, gt, sql } from 'drizzle-orm';
 
 import type { GroupMessagePayload, TaskDispatchPayload } from '@cindy/slack-hook-protocol';
 
@@ -24,10 +24,8 @@ import { createLogger } from '../logger.js';
 
 const log = createLogger('hook-group-window');
 
-/** 每个群/topic 键保留的最大行数(插入时 GC)。 */
-const WINDOW_KEEP_PER_KEY = 500;
-/** 条目 TTL: 超过即在插入时顺手清除(上下文只有近期值)。 */
-const WINDOW_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** 单次上下文拼装最多读取的增量行数(读取预算，不是存储上限)。 */
+const CONTEXT_READ_LIMIT = 500;
 /** 拼进 prompt 的上下文字符预算(保新丢旧, 与 Slack 通道同策略)。 */
 const CONTEXT_MAX_CHARS = 4_000;
 /** 单条上下文行的正文截断。 */
@@ -40,9 +38,7 @@ const ENTRY_TEXT_MAX_CHARS = 500;
  *   telegram:topic:<botId>:<chatId>:<threadId>:<principal>:g<n>
  * DM lane 与其它 provider 返回 null(无群窗口)。
  */
-export function groupLaneOf(
-  externalKey: string,
-): { chatId: string; threadId: string } | null {
+export function groupLaneOf(externalKey: string): { chatId: string; threadId: string } | null {
   const parts = externalKey.split(':');
   if (parts[0] !== 'telegram') return null;
   if (parts[1] === 'group' && parts.length >= 7 && parts[3]) {
@@ -54,13 +50,19 @@ export function groupLaneOf(
   return null;
 }
 
-/** group.message 帧入窗(幂等: 重放/重连的同一条消息按唯一键直接忽略)。 */
-export async function recordGroupMessage(payload: GroupMessagePayload): Promise<void> {
-  await sweepExpiredRows();
+/**
+ * group.message 帧入窗。返回 true 表示本次确实插入，供调用方在幂等入窗后
+ * 执行一次自动通讯录登记；重放/重连的同一条消息返回 false。
+ *
+ * 存储永久保留：官方 bot 与个人 bot 一样，本机群窗口是唯一可供 Cindy
+ * 回忆的群聊来源。只限制单条正文、单次读取与 prompt 字符预算，不自动 TTL
+ * 或删历史；数据仍只在当前账号的本地数据库里。
+ */
+export async function recordGroupMessage(payload: GroupMessagePayload): Promise<boolean> {
   const db = getDbClient().drizzle;
   const now = Date.now();
   const threadId = payload.threadId ?? '';
-  await db
+  const inserted = await db
     .insert(hookGroupMessages)
     .values({
       provider: payload.provider,
@@ -78,68 +80,17 @@ export async function recordGroupMessage(payload: GroupMessagePayload): Promise<
       sentAt: payload.sentAt,
       createdAt: now,
     })
-    .onConflictDoNothing();
-
-  const keyFilter = and(
-    eq(hookGroupMessages.provider, payload.provider),
-    eq(hookGroupMessages.chatId, payload.chatId),
-    eq(hookGroupMessages.threadId, threadId),
-  );
-  // GC: TTL 过期行 + 每键行数上限(保最新)。
-  await db.delete(hookGroupMessages).where(and(keyFilter, lt(hookGroupMessages.sentAt, now - WINDOW_TTL_MS)));
-  const overflow = await db
-    .select({ id: hookGroupMessages.id })
-    .from(hookGroupMessages)
-    .where(keyFilter)
-    .orderBy(desc(hookGroupMessages.id))
-    .limit(1)
-    .offset(WINDOW_KEEP_PER_KEY - 1);
-  const threshold = overflow[0]?.id;
-  if (threshold !== undefined) {
-    await db.delete(hookGroupMessages).where(and(keyFilter, lt(hookGroupMessages.id, threshold)));
-  }
+    .onConflictDoNothing()
+    .returning({ id: hookGroupMessages.id });
+  return inserted.length > 0;
 }
 
 /**
- * 全局 TTL 清扫: 不活跃群(不再有新消息触发按键 GC)的过期行也要清理。
- * 每次入窗/拼装时最多每 6 小时全表扫一次(sent_at 无全局索引, 行量有
- * 每键 500 上限, 全表量级可控)。
- */
-let lastGlobalSweepAt = 0;
-const GLOBAL_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
-
-async function sweepExpiredRows(): Promise<void> {
-  const now = Date.now();
-  if (now - lastGlobalSweepAt < GLOBAL_SWEEP_INTERVAL_MS) return;
-  // 先占位挡住并发重复清扫; 失败时归零放行下次调用重试, 不吞掉 6h 窗口。
-  lastGlobalSweepAt = now;
-  try {
-    const db = getDbClient().drizzle;
-    // 只清官方 hook 通道自己的行: 个人 Telegram bot 的窗口(provider
-    // 'telegram-personal[:botId]', 见 im/telegram/groupWindow.ts)是永久保留
-    // 的长期记忆, 不参与本 TTL(2026-07-30 产品拍板, review P1 堵共享表漏扫)。
-    await db
-      .delete(hookGroupMessages)
-      .where(
-        and(
-          lt(hookGroupMessages.sentAt, now - WINDOW_TTL_MS),
-          notLike(hookGroupMessages.provider, 'telegram-personal%'),
-        ),
-      );
-  } catch (err) {
-    lastGlobalSweepAt = 0;
-    throw err;
-  }
-}
-
-/**
- * 启动清扫入口: 账号 DB 就绪后强制跑一次全局 TTL 清扫(绕过间隔门控)。
- * 流量路径的清扫只在有群消息/派发时触发, 群不再活跃或 Telegram 通道
- * 关闭后, 7 天留存承诺要靠这里在每次启动兜底。
+ * 兼容旧生命周期入口。群窗口改为永久本地记忆后不再做 TTL 清扫；保留 async
+ * API，避免账号启动编排出现不必要分叉。
  */
 export async function sweepGroupWindowExpired(): Promise<void> {
-  lastGlobalSweepAt = 0;
-  await sweepExpiredRows();
+  await Promise.resolve();
 }
 
 /**
@@ -179,7 +130,6 @@ export async function buildGroupContextPrefix(
 ): Promise<GroupContextAssembly> {
   const lane = groupLaneOf(payload.externalKey);
   if (lane === null) return NO_CONTEXT;
-  await sweepExpiredRows();
   const db = getDbClient().drizzle;
   const cursorKey = cursorKeyOf(payload.externalKey);
   const cursor = contextCursors.get(cursorKey) ?? 0;
@@ -202,7 +152,7 @@ export async function buildGroupContextPrefix(
       ),
     )
     .orderBy(desc(hookGroupMessages.id))
-    .limit(WINDOW_KEEP_PER_KEY);
+    .limit(CONTEXT_READ_LIMIT);
 
   // 从最新往回累加, 超出预算保新丢旧(rows 已是新→旧序)。
   const lines: string[] = [];
@@ -245,12 +195,9 @@ export async function buildGroupContextPrefix(
       : (): void => undefined;
   if (lines.length === 0) return { prefix: '', commit };
   if (truncated) lines.unshift('[... 更早的消息已省略 ...]');
-  const header =
-    cursor > 0 ? '[自你上次请求后群里新增的消息]' : '[群里最近的消息]';
+  const header = cursor > 0 ? '[自你上次请求后群里新增的消息]' : '[群里最近的消息]';
   // lane 标识含 IM 聊天 id, 不写日志(同 manager/session-runner 的约定)。
-  log.info(
-    `group context assembled: entries=${lines.length}${truncated ? ' (truncated)' : ''}`,
-  );
+  log.info(`group context assembled: entries=${lines.length}${truncated ? ' (truncated)' : ''}`);
   // 显式数据栅栏: 群消息是未受信任的第三方数据, 用 tag 块与指令区隔开
   // (与 Slack 通道的 thread_context 块同一约定)。自然语言栅栏不能根绝
   // 注入 —— 强制边界仍是会话权限模式(非 bypass 档的工具调用走交互卡确认)。
@@ -265,5 +212,22 @@ export async function buildGroupContextPrefix(
 /** 测试与登出清理: 重置内存游标(窗口行随 DB 生命周期)。 */
 export function resetGroupContextCursors(): void {
   contextCursors.clear();
-  lastGlobalSweepAt = 0;
+}
+
+/** 设置卡数据源：官方群窗口里出现过的群，按最近活跃排序。 */
+export async function listTelegramKnownGroups(): Promise<
+  Array<{ chatId: string; chatName: string | null }>
+> {
+  const db = getDbClient().drizzle;
+  const rows = await db
+    .select({
+      chatId: hookGroupMessages.chatId,
+      chatName: sql<string | null>`max(${hookGroupMessages.chatName})`,
+    })
+    .from(hookGroupMessages)
+    .where(eq(hookGroupMessages.provider, 'telegram'))
+    .groupBy(hookGroupMessages.chatId)
+    .orderBy(sql`max(${hookGroupMessages.sentAt}) desc`)
+    .limit(50);
+  return rows.map((row) => ({ chatId: row.chatId, chatName: row.chatName }));
 }

@@ -79,6 +79,17 @@ vi.mock('../HookWorkspacePrefsEditor', () => ({
   },
 }));
 
+vi.mock('../ImDefaultSettingsSection', () => ({
+  ImDefaultSettingsSection: ({ channel }: { channel: string }) => (
+    <div data-testid={`im-defaults-${channel}`} />
+  ),
+}));
+
+vi.mock('../TelegramBehaviorSettings', () => ({
+  TelegramBehaviorSettings: () => <div data-testid="telegram-behavior" />,
+  TelegramGroupActivationSettings: () => <div data-testid="telegram-groups" />,
+}));
+
 import { deriveAlias, HookConnectionsSection, workspaceRowsToMap } from '../HookConnectionsSection';
 
 /** 渠道卡收起时内容卸载(Collapse), 交互前先点开对应卡的头部行。 */
@@ -262,9 +273,7 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     );
 
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(
-        'settings.remoteControl.hook.toast.actionFailed',
-      ),
+      expect(toast.error).toHaveBeenCalledWith('settings.remoteControl.hook.toast.actionFailed'),
     );
   });
 
@@ -793,6 +802,39 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     });
 
     expect(ipc.providerBindRevoke).not.toHaveBeenCalled();
+  });
+
+  it('shows Telegram defaults, behavior, and group settings only after linking', async () => {
+    ipc.get.mockResolvedValue({
+      hook: {
+        ...BASE_HOOK,
+        telegram: {
+          ...BASE_HOOK.telegram,
+          behaviorAvailable: true,
+          binding: {
+            provider: 'telegram',
+            state: 'confirmed',
+            attemptId: null,
+            bindingId: 'binding-settings',
+            principalId: '12345',
+            principalName: 'Cindy User',
+            scopeId: 'bot-1',
+            scopeName: 'cindy_example_bot',
+            connectUrl: null,
+            expiresAt: null,
+            reason: null,
+            remediationUrl: 'https://t.me/cindy_example_bot',
+            actions: ['revoke'],
+          },
+        },
+      },
+    });
+
+    render(<HookConnectionsSection />);
+    await expandChannelCard(TELEGRAM_CARD);
+    expect(await screen.findByTestId('im-defaults-telegram')).toBeTruthy();
+    expect(screen.getByTestId('telegram-behavior')).toBeTruthy();
+    expect(screen.getByTestId('telegram-groups')).toBeTruthy();
   });
 
   it('does not remove a changed Slack binding from a stale confirmation', async () => {

@@ -64,6 +64,11 @@ import {
 type NeutralCardProvider = 'telegram' | 'x';
 import { useHookWorkspacePrefs, WorkspacePrefsEditor } from './HookWorkspacePrefsEditor';
 import { ImChannelSettingsCard } from './ImChannelSettingsCard';
+import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
+import {
+  TelegramBehaviorSettings,
+  TelegramGroupActivationSettings,
+} from './TelegramBehaviorSettings';
 
 /** 「官方」栏的渠道手风琴卡(同刻最多展开一张, 交互对齐「个人」栏)。 */
 type CindyImCard = 'slack' | 'telegram' | 'x';
@@ -306,10 +311,9 @@ export function HookConnectionsSection() {
 
   const handleLifecycleAnnouncementToggle = useCallback(
     (enabled: boolean) => {
-      runHookAction(
-        () => window.electronAPI.hookControl.setLifecycleAnnouncement(enabled),
-        { localizedErrorOnly: true },
-      );
+      runHookAction(() => window.electronAPI.hookControl.setLifecycleAnnouncement(enabled), {
+        localizedErrorOnly: true,
+      });
     },
     [runHookAction],
   );
@@ -475,11 +479,13 @@ export function HookConnectionsSection() {
     provider: NeutralCardProvider,
     action: 'connect' | 'provider' | 'add-to-group',
   ) => {
-    void window.electronAPI.hookControl.openProviderAction(provider, action).catch((err: unknown) => {
-      toast.error(
-        extractIpcError(err)?.message ?? t('settings.remoteControl.hook.toast.actionFailed'),
-      );
-    });
+    void window.electronAPI.hookControl
+      .openProviderAction(provider, action)
+      .catch((err: unknown) => {
+        toast.error(
+          extractIpcError(err)?.message ?? t('settings.remoteControl.hook.toast.actionFailed'),
+        );
+      });
   };
 
   const handleCopyProviderLink = async (provider: NeutralCardProvider) => {
@@ -637,11 +643,9 @@ export function HookConnectionsSection() {
     // A configured endpoint is the rollout gate. Capability negotiation starts
     // only after the user enables the provider, so the disabled card cannot
     // depend on an already-received welcome to become discoverable.
-    const visible =
-      view.url.length > 0 || view.capabilityPending || view.available || view.enabled;
+    const visible = view.url.length > 0 || view.capabilityPending || view.available || view.enabled;
     const confirmed = state === 'confirmed';
-    const inProgress =
-      view.enabled && (state === 'pending' || state === 'awaiting_confirmation');
+    const inProgress = view.enabled && (state === 'pending' || state === 'awaiting_confirmation');
     const canStartLink =
       state === 'none' ||
       ((state === 'failed' ||
@@ -660,7 +664,10 @@ export function HookConnectionsSection() {
       : view.status === 'error'
         ? { tone: 'error', label: t('settings.remoteControl.hook.status.error') }
         : view.capabilityPending
-          ? { tone: 'progress', label: t(`settings.remoteControl.hook.${provider}.status.checking`) }
+          ? {
+              tone: 'progress',
+              label: t(`settings.remoteControl.hook.${provider}.status.checking`),
+            }
           : !view.available
             ? {
                 tone: 'attention',
@@ -684,7 +691,19 @@ export function HookConnectionsSection() {
       view.lastError === 'not logged in'
         ? t('settings.remoteControl.hook.loginRequired')
         : view.lastError;
-    return { binding, actions, state, visible, confirmed, inProgress, canStartLink, toggleChecked, badge, bindingLine, errorText };
+    return {
+      binding,
+      actions,
+      state,
+      visible,
+      confirmed,
+      inProgress,
+      canStartLink,
+      toggleChecked,
+      badge,
+      bindingLine,
+      errorText,
+    };
   };
   const workdirCount = Object.keys(hook.workspaces).length;
   const hasActiveSlackBinding = multiUi
@@ -975,11 +994,17 @@ export function HookConnectionsSection() {
 
           {/* 工作目录映射(清单共享, 偏好取本 provider 那份) */}
           {view.enabled ? renderWorkdirSection(prefsState) : null}
+          {provider === 'telegram' && cs.confirmed && view.behaviorAvailable === true ? (
+            <div className="mt-2 flex flex-col gap-5 border-t border-[var(--border-default)] pt-4">
+              <ImDefaultSettingsSection channel="telegram" embedded />
+              <TelegramBehaviorSettings source="official" />
+              <TelegramGroupActivationSettings source="official" />
+            </div>
+          ) : null}
         </div>
       </ImChannelSettingsCard>
     );
   };
-
 
   return (
     <div className="flex flex-col gap-3">

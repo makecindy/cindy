@@ -878,6 +878,20 @@ describe('进度快照(turn.progress 链路)', () => {
         }),
       );
       await flush();
+      const session = await fakeMaker.createSession.mock.results[0].value;
+      const sendOptions = session.send.mock.calls[0]?.[1] as {
+        turnPermissionPolicy?: {
+          origin: { kind: string; channel?: string };
+          forceConfirmToolCall?: (toolName: string, input: unknown) => boolean;
+        };
+      };
+      expect(sendOptions.turnPermissionPolicy?.origin).toMatchObject({
+        kind: 'im',
+        channel: 'telegram',
+      });
+      expect(sendOptions.turnPermissionPolicy?.forceConfirmToolCall?.('file_change', {})).toBe(
+        true,
+      );
       const cb = h.eventCbs.get('sess-new')!;
 
       // 与 DM(answer-only)不同: 群 lane 只有工具活动、还没有正文时,
@@ -1537,6 +1551,25 @@ describe('providerId(来源/供应商)贯通 —— issue #854 回归', () => {
     expect(h.setSessionProvider).toHaveBeenCalledWith('sess-new', 'openai');
     expect(h.setSessionProviderIdInDb).toHaveBeenCalledWith('sess-new', 'openai');
     expect(h.listProviders).toHaveBeenCalledTimes(1);
+  });
+
+  it('官方 Telegram 新会话读取 telegram 渠道默认设置', async () => {
+    h.useActualDefaults = true;
+    h.readImDefaultSettings.mockReturnValue({
+      agentKind: 'claude-code',
+      agents: {
+        'claude-code': { providerId: null, model: 'test-model', effort: 'high' },
+        codex: { providerId: null, model: 'gpt-5.6', effort: 'high' },
+      },
+    });
+    h.listProviders.mockResolvedValueOnce([connectedProvider('xd', [catalogModel('test-model')])]);
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(
+      baseReq({ source: { im: 'telegram', userText: 'hello' }, laneKind: 'dm' }),
+    );
+
+    expect(outcome.status).toBe('ok');
+    expect(h.readImDefaultSettings).toHaveBeenCalledWith('telegram');
   });
 
   it('新建: 当前无任何已连接来源时保持无 providerId(no-break)', async () => {
