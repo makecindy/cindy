@@ -334,8 +334,49 @@ describe('loadCatalog', () => {
   });
 
   it('falls back from public API to legacy OSS before bundled', async () => {
+    const writeCache = vi.fn(async (_scope: string, _text: string) => undefined);
     const fetchText = vi.fn()
       .mockRejectedValueOnce(new Error('api unavailable'))
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          ...MINIMAL,
+          cindyModelMeta: { version: 1, models: { retired: { contextWindow: 1 } } },
+        }),
+      );
+    const cat = await loadCatalog(
+      {
+        baseUrl: 'https://model-access.example.com',
+        fallbackBaseUrl: 'https://cdn.example.com/cindy',
+        now: () => 0,
+      },
+      { fetchText, writeCache },
+    );
+    expect(fetchText).toHaveBeenNthCalledWith(
+      1,
+      'https://model-access.example.com/api/model-catalog/catalog',
+      15_000,
+    );
+    expect(fetchText).toHaveBeenNthCalledWith(
+      2,
+      'https://cdn.example.com/cindy/cfg/providers.json',
+      expect.any(Number),
+    );
+    expect(cat.version).toBe('test');
+    expect(cat).not.toHaveProperty('cindyModelMeta');
+    expect(writeCache).toHaveBeenCalledWith(
+      'https://cdn.example.com/cindy/cfg/providers.json',
+      expect.any(String),
+    );
+    expect(JSON.parse(writeCache.mock.calls[0]![1])).not.toHaveProperty('cindyModelMeta');
+  });
+  it('falls back from invalid public API payload to legacy OSS before bundled', async () => {
+    const fetchText = vi.fn()
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          ...MINIMAL,
+          cindyModelMeta: { version: 1, models: {} },
+        }),
+      )
       .mockResolvedValueOnce(JSON.stringify(MINIMAL));
     const cat = await loadCatalog(
       {
@@ -357,29 +398,29 @@ describe('loadCatalog', () => {
     );
     expect(cat.version).toBe('test');
   });
-  it('falls back from invalid public API payload to legacy OSS before bundled', async () => {
-    const fetchText = vi.fn()
-      .mockResolvedValueOnce('{"version":"broken","providers":[]}')
-      .mockResolvedValueOnce(JSON.stringify(MINIMAL));
-    const cat = await loadCatalog(
+
+  it('loads a legacy OSS LKG after removing its retired metadata block', async () => {
+    const legacyUrl = 'https://cdn.example.com/cindy/cfg/providers.json';
+    const fetchText = vi.fn().mockRejectedValue(new Error('offline'));
+    const readCache = vi.fn(async (scope: string) =>
+      scope === legacyUrl
+        ? JSON.stringify({
+            ...MINIMAL,
+            cindyModelMeta: { version: 1, models: {} },
+          })
+        : null,
+    );
+    const result = await loadCatalogWithSource(
       {
         baseUrl: 'https://model-access.example.com',
         fallbackBaseUrl: 'https://cdn.example.com/cindy',
         now: () => 0,
       },
-      { fetchText },
+      { fetchText, readCache },
     );
-    expect(fetchText).toHaveBeenNthCalledWith(
-      1,
-      'https://model-access.example.com/api/model-catalog/catalog',
-      15_000,
-    );
-    expect(fetchText).toHaveBeenNthCalledWith(
-      2,
-      'https://cdn.example.com/cindy/cfg/providers.json',
-      expect.any(Number),
-    );
-    expect(cat.version).toBe('test');
+    expect(result.source).toBe('cache');
+    expect(result.catalog.version).toBe('test');
+    expect(result.catalog).not.toHaveProperty('cindyModelMeta');
   });
 
   it('shares one remote budget across the public API and legacy OSS fallback', async () => {

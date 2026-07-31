@@ -83,6 +83,20 @@ export function resolveFallbackCatalogUrl(cfg: CatalogSourceConfig): string | nu
   return trimTrailingSlashes(cfg.fallbackBaseUrl.trim()) + CATALOG_CFG_PATH;
 }
 
+/**
+ * The migration-only OSS snapshot used to carry cindyModelMeta beside the provider
+ * catalog. Strip that one retired block only at the legacy source boundary; canonical
+ * API, local dev files, and parseCatalog itself remain strict about unknown fields.
+ */
+function parseRemoteCatalog(input: string, allowLegacyModelMeta: boolean): Catalog {
+  if (!allowLegacyModelMeta) return parseCatalog(input);
+  const raw: unknown = JSON.parse(input);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return parseCatalog(raw);
+  const migrated = { ...(raw as Record<string, unknown>) };
+  delete migrated.cindyModelMeta;
+  return parseCatalog(migrated);
+}
+
 /** 只给仍保持 bundled 鉴权与上游路由形状的旧条目迁移 access，不能仅凭 provider id 猜计费。 */
 function legacyAccessFor(primary: Provider, bundled: Provider): Provider['access'] {
   if (primary.auth.method !== bundled.auth.method) return undefined;
@@ -250,26 +264,32 @@ export async function loadCatalogWithSource(
   const url = resolveCatalogUrl(cfg);
   const fallbackUrl = resolveFallbackCatalogUrl(cfg);
   if (!cfg.disableFetch && io.fetchText) {
-    const remoteUrls = cfg.url?.trim()
-      ? [url].filter((value): value is string => !!value)
-      : [url, fallbackUrl].filter((value): value is string => !!value);
+    const remoteSources = cfg.url?.trim()
+      ? url
+        ? [{ url, allowLegacyModelMeta: false }]
+        : []
+      : [
+          ...(url ? [{ url, allowLegacyModelMeta: false }] : []),
+          ...(fallbackUrl ? [{ url: fallbackUrl, allowLegacyModelMeta: true }] : []),
+        ];
     const now = cfg.now ?? Date.now;
     const configuredBudget = cfg.remoteBudgetMs ?? DEFAULT_REMOTE_CATALOG_BUDGET_MS;
     const budgetMs = Number.isFinite(configuredBudget) ? Math.max(0, configuredBudget) : 0;
     const deadline = now() + budgetMs;
-    for (const remoteUrl of remoteUrls) {
+    for (const { url: remoteUrl, allowLegacyModelMeta } of remoteSources) {
       const remainingMs = Math.max(0, deadline - now());
       if (remainingMs > 0) {
         try {
           const text = await io.fetchText(remoteUrl, remainingMs);
-          let parsed = parseCatalog(text);
-          let cacheText = text;
+          let parsed = parseRemoteCatalog(text, allowLegacyModelMeta);
+          // Never propagate the retired compatibility block into a newly written LKG.
+          let cacheText = allowLegacyModelMeta ? JSON.stringify(parsed) : text;
           const remoteRegistryUpdatedAt = registryUpdatedAt(parsed);
           if (io.readCache) {
             try {
               const cachedText = await io.readCache(remoteUrl);
               if (cachedText !== null) {
-                const cached = parseCatalog(cachedText);
+                const cached = parseRemoteCatalog(cachedText, allowLegacyModelMeta);
                 const merged = preserveNewerCachedRegistry(parsed, cached);
                 if (merged !== parsed) {
                   parsed = merged;
@@ -315,7 +335,7 @@ export async function loadCatalogWithSource(
         try {
           const cached = await io.readCache(remoteUrl);
           if (cached !== null) {
-            const parsed = parseCatalog(cached);
+            const parsed = parseRemoteCatalog(cached, allowLegacyModelMeta);
             log(io, 'info', 'loaded last-known-good catalog snapshot', { url: remoteUrl });
             return { catalog: mergeWithBundled(parsed), source: 'cache' };
           }
