@@ -274,7 +274,7 @@ export function extractUsageLimitRecoveryHint(
     codexErrorInfo === 'usageLimitExceeded' ||
     root.usageLimit === true ||
     status === 429 ||
-    /\b(?:rate.?limit|usage.?limit|too\s+many\s+requests|quota\s+(?:exceeded|exhausted)|you(?:'|’)ve\s+hit\s+your\s+limit)\b/i.test(
+    /\b(?:rate.?limit|usage.?limit|too\s+many\s+requests|quota\s+(?:exceeded|exhausted)|you(?:'|’)ve\s+hit\s+your\s+(?:(?:session|weekly)\s+)?limit)\b/i.test(
       text,
     );
   if (!isUsageLimit) return null;

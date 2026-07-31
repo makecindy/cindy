@@ -38,7 +38,6 @@ describe('usage limit recovery detection', () => {
     expect(
       extractUsageLimitRecoveryHint(
         {
-          sdkError: 'rate_limit',
           message: "You've hit your session limit · resets 9:10pm (Asia/Shanghai)",
         },
         NOW,
@@ -77,7 +76,6 @@ describe('usage limit recovery detection', () => {
     expect(
       extractUsageLimitRecoveryHint(
         {
-          sdkError: 'rate_limit',
           message: "You've hit your weekly limit · resets Mon 12:00am (Asia/Shanghai)",
         },
         NOW,
