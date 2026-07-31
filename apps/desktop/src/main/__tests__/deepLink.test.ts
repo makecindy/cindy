@@ -42,6 +42,7 @@ import {
   openMainWindowVoiceSettings,
   setDeepLinkMainWindow,
 } from '../deepLink';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 describe('internal main-window navigation', () => {
   it('focuses the main window and routes voice settings to the requested tab', () => {
@@ -65,7 +66,7 @@ describe('internal main-window navigation', () => {
     expect(mainWindow.show).toHaveBeenCalledOnce();
     expect(mainWindow.restore).toHaveBeenCalledOnce();
     expect(mainWindow.focus).toHaveBeenCalledOnce();
-    expect(send).toHaveBeenCalledWith('deep-link:navigate', {
+    expect(send).toHaveBeenCalledWith(IPC_CHANNELS.DEEP_LINK.NAVIGATE, {
       type: 'settings',
       tab: 'providers',
     });

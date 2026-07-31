@@ -2,6 +2,7 @@ import type { BrowserWindow, WebContents } from 'electron';
 
 import { matchesElectronInput } from '../../shared/appShortcuts.js';
 import { getAppShortcutStore, isAppShortcutRecordingActive } from './index.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 /** Tracks WebContents already wired to prevent duplicate key dispatch. */
 const installedWebContents = new WeakSet<WebContents>();
@@ -27,6 +28,6 @@ export function installNewMakerWindowShortcut(
 
     event.preventDefault();
     // Keep physical shortcuts distinct from Agent Island's semantic "New message" action.
-    window.webContents.send('app-menu:command', 'new-maker-shortcut');
+    window.webContents.send(IPC_CHANNELS.APP_MENU.COMMAND, 'new-maker-shortcut');
   });
 }

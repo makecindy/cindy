@@ -1,3 +1,4 @@
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 /**
  * remoteBrowseAdapters —— 「添加远程项目」弹窗的统一目录浏览适配器。
  *
@@ -78,7 +79,7 @@ export function deviceLinkBrowseAdapter(deviceId: string): RemoteBrowseAdapter {
         resolvedPath: string;
         entries: { name: string; kind: 'dir' | 'symlink'; path: string }[];
         parent: string | null;
-      }>('fs:list-dir', path);
+      }>(IPC_CHANNELS.FS.LIST_DIR, path);
       return {
         resolvedPath: res.resolvedPath,
         entries: res.entries.map((e) => ({ name: e.name, kind: e.kind, childPath: e.path })),
@@ -86,7 +87,7 @@ export function deviceLinkBrowseAdapter(deviceId: string): RemoteBrowseAdapter {
       };
     },
     statPath: (path) =>
-      invoke<{ kind: 'dir' | 'file' | 'missing'; resolvedPath: string }>('fs:stat-path', path),
-    mkdirP: (path) => invoke<{ resolvedPath: string }>('fs:mkdir-p', path),
+      invoke<{ kind: 'dir' | 'file' | 'missing'; resolvedPath: string }>(IPC_CHANNELS.FS.STAT_PATH, path),
+    mkdirP: (path) => invoke<{ resolvedPath: string }>(IPC_CHANNELS.FS.MKDIR_P, path),
   };
 }

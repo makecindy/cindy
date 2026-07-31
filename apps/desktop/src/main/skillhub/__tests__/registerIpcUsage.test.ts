@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const handlers = new Map<string, (...args: unknown[]) => unknown>();
 const showOpenDialog = vi.fn();
@@ -212,7 +213,7 @@ describe('registerSkillhubIpc usage handlers', () => {
       .mockRejectedValueOnce(new Error('localDb not ready: pending'))
       .mockResolvedValueOnce({ success: true, summary: { totalUseCount: 1 }, refreshing: false });
 
-    const handler = handlers.get('skillhub:get-usage-summary');
+    const handler = handlers.get(IPC_CHANNELS.SKILLHUB.GET_USAGE_SUMMARY);
     expect(handler).toBeTypeOf('function');
     const result = await handler?.({}, { name: 'word-doc' });
 
@@ -224,7 +225,7 @@ describe('registerSkillhubIpc usage handlers', () => {
   it('returns a structured failure when usage summary still fails', async () => {
     getLocalSkillUsageSummary.mockRejectedValueOnce(new Error('bad transcript'));
 
-    const handler = handlers.get('skillhub:get-usage-summary');
+    const handler = handlers.get(IPC_CHANNELS.SKILLHUB.GET_USAGE_SUMMARY);
     const result = await handler?.({}, { name: 'word-doc' });
 
     expect(result).toEqual({ success: false, error: 'bad transcript' });
@@ -237,7 +238,7 @@ describe('registerSkillhubIpc usage handlers', () => {
       context: { prompt: 'diagnose' },
     });
 
-    const handler = handlers.get('skillhub:get-usage-diagnosis-context');
+    const handler = handlers.get(IPC_CHANNELS.SKILLHUB.GET_USAGE_DIAGNOSIS_CONTEXT);
     const result = await handler?.({}, { name: 'word-doc', mdPath: 'C:\\skills\\word-doc\\SKILL.md' });
 
     expect(readSkillRawFile).toHaveBeenCalledWith({ filePath: 'C:\\skills\\word-doc\\SKILL.md' });
@@ -257,7 +258,7 @@ describe('registerSkillhubIpc usage handlers', () => {
       absolutePath: '/tmp/demo-oa-skill',
     });
     const sender = { send: vi.fn() };
-    const handler = handlers.get('skillhub:install');
+    const handler = handlers.get(IPC_CHANNELS.SKILLHUB.INSTALL);
 
     const result = await handler?.(
       { sender },
@@ -299,7 +300,7 @@ describe('registerSkillhubIpc usage handlers', () => {
     });
     listAgentSkills.mockResolvedValueOnce({ skills: [] });
     const sender = { send: vi.fn() };
-    const handler = handlers.get('skillhub:install');
+    const handler = handlers.get(IPC_CHANNELS.SKILLHUB.INSTALL);
 
     const result = await handler?.(
       { sender },
@@ -328,7 +329,7 @@ describe('registerSkillhubIpc usage handlers', () => {
       projectWorkingDir: '/project',
     });
     listAgentSkills.mockResolvedValueOnce({ skills: [] });
-    const handler = handlers.get('skillhub:uninstall');
+    const handler = handlers.get(IPC_CHANNELS.SKILLHUB.UNINSTALL);
 
     const result = await handler?.({}, {
       absolutePath: '/project/.agents/skills/project-skill',

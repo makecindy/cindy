@@ -1,0 +1,5 @@
+export const UPDATE_SET_RELAUNCH_THEME_CHANNELS = {
+  UPDATE_SET_RELAUNCH_THEME: "update-set-relaunch-theme",
+} as const;
+
+export type UPDATE_SET_RELAUNCH_THEMEChannel = typeof UPDATE_SET_RELAUNCH_THEME_CHANNELS[keyof typeof UPDATE_SET_RELAUNCH_THEME_CHANNELS];

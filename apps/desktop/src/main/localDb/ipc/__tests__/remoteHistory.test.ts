@@ -12,6 +12,7 @@ vi.mock('electron', () => ({
 }));
 
 import { registerRemoteHistoryIpc, type RemoteHistoryIpcDeps } from '../history';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 /** Tests default to "no terminal tail"; individual cases override readTerminal. */
 function register(
@@ -33,7 +34,7 @@ const request = {
   order: 'asc' as const,
 };
 
-describe('local-db:history:messages', () => {
+describe(IPC_CHANNELS.LOCAL_DB.HISTORY_MESSAGES, () => {
   beforeEach(() => {
     handlers.clear();
     vi.clearAllMocks();

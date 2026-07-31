@@ -6,6 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadAllCommands } from '@/lib/slashCommands';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 beforeEach(() => {
   vi.unstubAllGlobals();
@@ -24,8 +25,8 @@ function stubElectron() {
   const listAgentCommands = vi.fn(async () => ({ success: true, commands: [c('compact', 'agent-builtin')] }));
   const listAgentSkills = vi.fn(async () => ({ success: true, skills: [c('localskill', 'agent-skill')] }));
   const invoke = vi.fn(async (_deviceId: string, channel: string) => {
-    if (channel === 'maker:list-agent-commands') return { success: true, commands: [c('host-cmd', 'agent-builtin')] };
-    if (channel === 'maker:list-agent-skills') return { success: true, skills: [c('host-skill', 'agent-skill')] };
+    if (channel === IPC_CHANNELS.MAKER_INVOKE.LIST_AGENT_COMMANDS) return { success: true, commands: [c('host-cmd', 'agent-builtin')] };
+    if (channel === IPC_CHANNELS.MAKER_INVOKE.LIST_AGENT_SKILLS) return { success: true, skills: [c('host-skill', 'agent-skill')] };
     return { success: false };
   });
   vi.stubGlobal('window', {
@@ -64,7 +65,7 @@ describe('loadAllCommands deviceId', () => {
     expect(s.listAgentSkills).not.toHaveBeenCalled();
     expect(s.invoke).not.toHaveBeenCalledWith(
       expect.anything(),
-      'maker:list-agent-skills',
+      IPC_CHANNELS.MAKER_INVOKE.LIST_AGENT_SKILLS,
       expect.anything(),
     );
     expect(cmds.some((x) => x.kind === 'agent-skill')).toBe(false);
@@ -86,8 +87,8 @@ describe('loadAllCommands deviceId', () => {
     // agent-builtin / agent-skill 不走本地、走隧道
     expect(s.listAgentCommands).not.toHaveBeenCalled();
     expect(s.listAgentSkills).not.toHaveBeenCalled();
-    expect(s.invoke).toHaveBeenCalledWith('dev-1', 'maker:list-agent-commands', ['claude-code']);
-    expect(s.invoke).toHaveBeenCalledWith('dev-1', 'maker:list-agent-skills', [
+    expect(s.invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.LIST_AGENT_COMMANDS, ['claude-code']);
+    expect(s.invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.LIST_AGENT_SKILLS, [
       'claude-code',
       { workingDir: '/host/path' },
     ]);
@@ -102,7 +103,7 @@ describe('loadAllCommands deviceId', () => {
     const cmds = await loadAllCommands('claude-code', null, undefined, 'dev-1');
 
     expect(s.listAgentSkills).not.toHaveBeenCalled();
-    expect(s.invoke).toHaveBeenCalledWith('dev-1', 'maker:list-agent-skills', [
+    expect(s.invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.LIST_AGENT_SKILLS, [
       'claude-code',
       {},
     ]);

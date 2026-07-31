@@ -23,6 +23,7 @@ import {
   normalizeWorkingDirForGrouping,
   normalizeWorkingDirForStorage,
 } from '../../../shared/workingDir.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('session-import');
 
@@ -81,7 +82,7 @@ let sessionImportScanCacheVersion = 0;
 export function registerSessionImportIpc(): void {
   invalidateSessionImportScanCache();
 
-  ipcMain.handle('local-db:session-import:scan', async (_e, request?: SessionImportScanRequest): Promise<SessionImportScanResult> => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.SESSION_IMPORT_SCAN, async (_e, request?: SessionImportScanRequest): Promise<SessionImportScanResult> => {
     const force = request?.force === true;
     const cacheScope = currentSessionImportScanCacheScope();
     if (
@@ -122,7 +123,7 @@ export function registerSessionImportIpc(): void {
     return scanPromise;
   });
 
-  ipcMain.handle('local-db:session-import:import', async (_e, request: SessionImportRequest) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.SESSION_IMPORT_IMPORT, async (_e, request: SessionImportRequest) => {
     const selected = normalizeImportRequest(request);
     const codexIds = selected.filter((item) => item.source === 'codex').map((item) => item.id);
     const claudeIds = selected.filter((item) => item.source === 'claude').map((item) => item.id);
@@ -138,7 +139,7 @@ export function registerSessionImportIpc(): void {
     };
   });
 
-  ipcMain.handle('local-db:session-import:link-codex-project', async (_e, request: CodexProjectLinkRequest) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.SESSION_IMPORT_LINK_CODEX_PROJECT, async (_e, request: CodexProjectLinkRequest) => {
     const projectDir = normalizeWorkingDir(typeof request?.workingDir === 'string' ? request.workingDir : null);
     if (!projectDir) {
       throwIpcError('INVALID_PARAMS', 'workingDir is required');

@@ -8,6 +8,7 @@ import {
   APP_SHORTCUTS_FILE_NAME,
   type AppShortcutOverrideRejection,
 } from './AppShortcutStore.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 /**
  * 应用级快捷键 override 的进程级单例 + IPC 注册。
@@ -65,14 +66,14 @@ export function registerAppShortcutIpc(): void {
   ipcRegistered = true;
   const store = getAppShortcutStore();
 
-  ipcMain.on('app-shortcuts:get', (event) => {
+  ipcMain.on(IPC_CHANNELS.APP_SHORTCUTS.GET, (event) => {
     event.returnValue = {
       overrides: store.getOverrides(),
       platform: process.platform,
     };
   });
 
-  ipcMain.handle('app-shortcuts:set-override', (_event, id: unknown, combo: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.APP_SHORTCUTS.SET_OVERRIDE, (_event, id: unknown, combo: unknown) => {
     const rejection = runStoreMutation(() => store.setOverride(id, combo));
     if (rejection) {
       throwIpcError('INVALID_PARAMS', rejectionMessage(rejection, id));
@@ -80,17 +81,17 @@ export function registerAppShortcutIpc(): void {
     return { overrides: store.getOverrides() };
   });
 
-  ipcMain.handle('app-shortcuts:clear-override', (_event, id: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.APP_SHORTCUTS.CLEAR_OVERRIDE, (_event, id: unknown) => {
     runStoreMutation(() => store.clearOverride(id));
     return { overrides: store.getOverrides() };
   });
 
-  ipcMain.handle('app-shortcuts:reset-all', () => {
+  ipcMain.handle(IPC_CHANNELS.APP_SHORTCUTS.RESET_ALL, () => {
     runStoreMutation(() => store.resetAll());
     return { overrides: store.getOverrides() };
   });
 
-  ipcMain.on('app-shortcuts:set-recording', (event, active: unknown) => {
+  ipcMain.on(IPC_CHANNELS.APP_SHORTCUTS.SET_RECORDING, (event, active: unknown) => {
     setRecordingActive(active === true);
     // renderer 的 effect cleanup 在窗口直接销毁 / 渲染进程崩溃时不保证执行,
     // set-recording(false) 可能永远送不到 —— recordingActive 卡 true 会让重
@@ -142,6 +143,6 @@ function rejectionMessage(rejection: AppShortcutOverrideRejection, id: unknown):
 function broadcastAppShortcutsChanged(overrides: AppShortcutOverrides): void {
   BrowserWindow.getAllWindows().forEach((window) => {
     if (window.isDestroyed()) return;
-    window.webContents.send('app-shortcuts:changed', { overrides });
+    window.webContents.send(IPC_CHANNELS.APP_SHORTCUTS.CHANGED, { overrides });
   });
 }

@@ -55,6 +55,7 @@ import {
   rebroadcastAgentSwitchBoundary,
 } from './messages';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('sessions');
 const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt']);
@@ -103,20 +104,20 @@ export function broadcastSessionPatched(
   const hasCapturedScope = ownerScope !== undefined && ownerScope !== null;
   const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();
   if (hasCapturedScope) {
-    broadcastTap.tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
+    broadcastTap.tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED, { sessionId, patch }, ownerStamp);
   } else if (ownerStamp === undefined) {
-    broadcastTap.tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch });
+    broadcastTap.tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED, { sessionId, patch });
   } else {
-    broadcastTap.tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
+    broadcastTap.tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED, { sessionId, patch }, ownerStamp);
   }
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) {
       if (hasCapturedScope) {
-        w.webContents.send('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
+        w.webContents.send(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED, { sessionId, patch }, ownerStamp);
       } else if (ownerStamp === undefined) {
-        w.webContents.send('local-db:sessions:patched', { sessionId, patch });
+        w.webContents.send(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED, { sessionId, patch });
       } else {
-        w.webContents.send('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
+        w.webContents.send(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED, { sessionId, patch }, ownerStamp);
       }
     }
   }
@@ -136,7 +137,7 @@ export function broadcastSessionPatched(
  */
 function broadcastWorktreeChanged(sessionId: string): void {
   for (const w of BrowserWindow.getAllWindows()) {
-    if (!w.isDestroyed()) w.webContents.send('worktree:changed', { sessionId });
+    if (!w.isDestroyed()) w.webContents.send(IPC_CHANNELS.WORKTREE.CHANGED, { sessionId });
   }
 }
 
@@ -828,7 +829,7 @@ export function registerSessionIpc(
     captureOwnerScope,
   );
   ipcMain.handle(
-    'local-db:sessions:list',
+    IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST,
     async (_e, limit: unknown, status: unknown, options: unknown) => {
       const startedAt = performance.now();
       const db = getDbClient().drizzle;
@@ -896,7 +897,7 @@ export function registerSessionIpc(
     },
   );
 
-  ipcMain.handle('local-db:sessions:create', async (_e, body) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATE, async (_e, body) => {
     const db = getDbClient().drizzle;
     const now = Date.now();
     const bodyObj = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
@@ -943,7 +944,7 @@ export function registerSessionIpc(
       remoteHostId: insertRow.remoteHostId,
       sessionId: id,
       autoSnapshotEnabled: readGitSafetySettings().autoSnapshotEnabled,
-      source: 'local-db:sessions:create',
+      source: IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATE,
     });
     await db.insert(sessions).values(insertRow);
     const [row] = await db.select().from(sessions).where(eq(sessions.id, id));
@@ -976,7 +977,7 @@ export function registerSessionIpc(
   // interrupted-turn-resume:「疑似中断」(startedAt > endedAt)的 active 会话 id。
   // ⚠️ 只在**启动首拉**时消费:该判定对正在跑的 turn 天然成立,只有启动时刻才能
   // 断定飞行中的 turn 来自上一个进程。周期性重跑会把运行中的会话误判为中断。
-  ipcMain.handle('local-db:sessions:interrupted-pending', async () => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.SESSIONS_INTERRUPTED_PENDING, async () => {
     return listInterruptedPendingSessionIds();
   });
 
@@ -990,7 +991,7 @@ export function registerSessionIpc(
   // §5 —— 存量未迁完不构成新 handler 省略校验的理由)。这两个 channel 都**不在**
   // device-link allowlist 里,只由本机顶层 renderer 调用,所以 guard 不会挡掉隧道
   // dispatch;将来若要放行跨端,必须连这道 guard 一起重新设计。
-  ipcMain.handle('local-db:sessions:error-tail-pending', async (event) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.SESSIONS_ERROR_TAIL_PENDING, async (event) => {
     assertTrustedAppRendererEvent(event);
     return listErrorTailPendingSessionIds();
   });
@@ -1008,7 +1009,7 @@ export function registerSessionIpc(
   // 单个 id 也要有界:session id 是 UUID / cuid(≤ 36 字符),128 是宽松上限。
   // 只限数组长度不够 —— 500 个超长字符串同样能让 main 侧白留一大块内存并做无谓比较。
   const MAX_SESSION_ID_LENGTH = 128;
-  ipcMain.handle('local-db:sessions:dismiss-pending-alerts', async (event, ids: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.SESSIONS_DISMISS_PENDING_ALERTS, async (event, ids: unknown) => {
     // 认证来源再做任何写:payload 有界 ≠ 来源可信(见上方 guard 说明)。
     assertTrustedAppRendererEvent(event);
     if (!Array.isArray(ids)) throwIpcError('INVALID_PARAMS', 'sessionIds 必须是数组');
@@ -1061,7 +1062,7 @@ export function registerSessionIpc(
   // interrupted-turn-resume:用户对「疑似中断」提示点「忽略」/「继续」——写一次
   // 正常收尾时刻,startedAt > endedAt 不再成立,banner 与红点跨重启不复现。
   // 幂等窄写,device-link 远程会话经隧道调用(allowlist 收录)。
-  ipcMain.handle('local-db:sessions:ack-interrupted', async (_e, id: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.SESSIONS_ACK_INTERRUPTED, async (_e, id: unknown) => {
     const sid = requireString(id, 'id');
     // renderer 的「忽略」立即走本 IPC；「继续任务」由执行端 maker send 事务 /
     // coordinator 在 dispatch 成功后用进入 vendor 前冻结的本机时间戳直调 durable 写。
@@ -1075,7 +1076,7 @@ export function registerSessionIpc(
     return { ok: true };
   });
 
-  ipcMain.handle('local-db:sessions:get', async (_e, id: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.SESSIONS_GET, async (_e, id: unknown) => {
     const sid = requireString(id, 'id');
     const db = getDbClient().drizzle;
     const row = await selectSessionWithCount(db, sid);
@@ -1087,7 +1088,7 @@ export function registerSessionIpc(
    * 批量解析 scheduler 持有的会话引用。普通列表会隐藏软删除墓碑，renderer 不能
    * 再靠“列表中是否存在”推断可打开状态；单次有界查询也避免每张 run 卡各发 IPC。
    */
-  ipcMain.handle('local-db:sessions:resolve-references', async (_e, value: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.SESSIONS_RESOLVE_REFERENCES, async (_e, value: unknown) => {
     if (!Array.isArray(value)) throwIpcError('INVALID_PARAMS', 'sessionIds must be an array');
     if (value.length > 200) throwIpcError('INVALID_PARAMS', 'sessionIds exceeds limit 200');
 
@@ -1127,7 +1128,7 @@ export function registerSessionIpc(
    * 先 get 再 update 的 TOCTOU 竞态覆盖较新的状态。
    */
   ipcMain.handle(
-    'local-db:sessions:restore-if-archived',
+    IPC_CHANNELS.LOCAL_DB.SESSIONS_RESTORE_IF_ARCHIVED,
     async (_e, id: unknown, expected: unknown) => {
       const sid = requireString(id, 'id');
       const ownerScope = captureOwnerScope();
@@ -1194,7 +1195,7 @@ export function registerSessionIpc(
     },
   );
 
-  ipcMain.handle('local-db:sessions:update', async (_e, id: unknown, patch: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.SESSIONS_UPDATE, async (_e, id: unknown, patch: unknown) => {
     const sid = requireString(id, 'id');
     const ownerScope = captureOwnerScope();
     const p = requireObject(patch, 'patch');
@@ -1353,7 +1354,7 @@ export function registerSessionIpc(
   // sdkSessionId/orcaRole/clearedAt…),故意不进 allowlist;这个 handler 只放行白名单内的
   // 用户可编辑元数据,是「写库必须经业务 handler、不开裸写」原则下的窄能力(规则 9/13)。
   // 仅被隧道(远程操作)调到 —— 本机操作走 sessions:update + renderer 乐观更新。
-  ipcMain.handle('local-db:sessions:patch-meta', async (_e, id: unknown, patch: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCH_META, async (_e, id: unknown, patch: unknown) => {
     const sid = requireString(id, 'id');
     const p = requireObject(patch, 'patch');
     const updated = await patchSessionMetaInDb(
@@ -1371,7 +1372,7 @@ export function registerSessionIpc(
   // 故意与 sessions:update 解耦——update 会同步刷 updated_at（mapper.ts:165），
   // 那是给"字段类改动"用的；touchUserSend 只标记"对话活跃"，绝不污染 updated_at。
   ipcMain.handle(
-    'local-db:sessions:touchUserSend',
+    IPC_CHANNELS.LOCAL_DB.SESSIONS_TOUCH_USER_SEND,
     async (_e, id: unknown, atMs: unknown): Promise<void> => {
       const sid = requireString(id, 'id');
       await touchUserSendInDb(sid, typeof atMs === 'number' ? atMs : undefined);

@@ -23,6 +23,7 @@ import {
   resetDirtyWorktreePreflightCache,
   resolveWorktreeRemovalPreflight,
 } from '@/lib/worktreeRemovalWarning';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -78,7 +79,7 @@ describe('worktree removal preflight — three states', () => {
 
     expect(mocks.deviceLinkInvoke).toHaveBeenCalledWith(
       'device-a',
-      'worktree:removal-preview',
+      IPC_CHANNELS.WORKTREE.REMOVAL_PREVIEW,
       ['remote-1'],
     );
     expect(mocks.worktreeRemovalPreview).not.toHaveBeenCalled();

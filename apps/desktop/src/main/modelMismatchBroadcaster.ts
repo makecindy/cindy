@@ -20,12 +20,13 @@ import { patchMessageAgentMeta } from './localDb/ipc/messages.js';
 import { enqueueDurableWrite } from './messagePersistBroadcaster.js';
 import { createLogger } from './logger.js';
 import * as broadcastTap from './device-link/broadcast-tap.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('modelMismatchBroadcaster');
 type OwnerScope = ReturnType<typeof broadcastTap.captureDataOwnerBroadcastScope> | null;
 
 /** IPC channel: main → renderer 推单条消息的模型降级标记。 */
-export const MESSAGE_MODEL_MISMATCH_CHANGED = 'usage:message-model-mismatch';
+export const MESSAGE_MODEL_MISMATCH_CHANGED = IPC_CHANNELS.USAGE.MESSAGE_MODEL_MISMATCH;
 
 export interface MessageModelMismatchPayload {
   sessionId: string;

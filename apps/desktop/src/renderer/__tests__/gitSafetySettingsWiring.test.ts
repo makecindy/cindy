@@ -14,6 +14,7 @@ import {
   useGitSafetyAutoSnapshotEnabledForDevice,
   useGitSafetySettings,
 } from '@/hooks/useGitSafetySettings';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 type GitSafetyWire = {
   autoSnapshotEnabled: boolean;
@@ -142,7 +143,7 @@ describe('Git safety settings wiring', () => {
 
     expect(result.current).toBe(false);
     await waitFor(() => expect(result.current).toBe(true));
-    expect(api.deviceLinkInvoke).toHaveBeenCalledWith('remote-git-safety-on', 'maker:git-safety:get', []);
+    expect(api.deviceLinkInvoke).toHaveBeenCalledWith('remote-git-safety-on', IPC_CHANNELS.MAKER_INVOKE.GIT_SAFETY_GET, []);
     expect(api.gitSafetyGet).not.toHaveBeenCalled();
   });
 
@@ -183,7 +184,7 @@ describe('Git safety settings wiring', () => {
     const { result } = renderHook(() => useGitSafetyAutoSnapshotEnabledForDevice('remote-git-safety-off'));
 
     await waitFor(() => expect(api.deviceLinkInvoke).toHaveBeenCalledTimes(1));
-    expect(api.deviceLinkInvoke).toHaveBeenCalledWith('remote-git-safety-off', 'maker:git-safety:get', []);
+    expect(api.deviceLinkInvoke).toHaveBeenCalledWith('remote-git-safety-off', IPC_CHANNELS.MAKER_INVOKE.GIT_SAFETY_GET, []);
     expect(result.current).toBe(false);
   });
 });

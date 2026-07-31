@@ -30,6 +30,7 @@ import {
   throwIpcError,
 } from '../../utils/ipcValidate';
 import { createLogger } from '../../logger';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('rightSidebarTabs');
 
@@ -95,7 +96,7 @@ function serializeState(value: unknown): string {
 }
 
 export function registerRightSidebarTabsIpc(): void {
-  ipcMain.handle('local-db:right-sidebar-tabs:list', async (_e, payload: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.RIGHT_SIDEBAR_TABS_LIST, async (_e, payload: unknown) => {
     const obj = requireObject(payload, 'list payload');
     const sessionId = requireString(obj.sessionId, 'sessionId');
     const db = getDbClient().drizzle;
@@ -126,7 +127,7 @@ export function registerRightSidebarTabsIpc(): void {
 
   // upsert: 新增或更新 tab(state / position / kind)。kind 不变(新 tab 注册时定),
   // 但接口允许传以保持 IPC 形态对称(renderer 拿到 unknown kind 时可以 fallback)。
-  ipcMain.handle('local-db:right-sidebar-tabs:upsert', async (_e, payload: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.RIGHT_SIDEBAR_TABS_UPSERT, async (_e, payload: unknown) => {
     const obj = requireObject(payload, 'upsert payload');
     const id = requireString(obj.id, 'id');
     const sessionId = requireString(obj.sessionId, 'sessionId');
@@ -166,7 +167,7 @@ export function registerRightSidebarTabsIpc(): void {
     return { ok: true };
   });
 
-  ipcMain.handle('local-db:right-sidebar-tabs:close', async (_e, payload: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.RIGHT_SIDEBAR_TABS_CLOSE, async (_e, payload: unknown) => {
     const obj = requireObject(payload, 'close payload');
     const id = requireString(obj.id, 'id');
     const db = getDbClient().drizzle;
@@ -187,7 +188,7 @@ export function registerRightSidebarTabsIpc(): void {
   // setActive: 先把 session 内所有 tab 设 inactive,再设 target 为 active(targetId=null
   // 表示无激活态,close last tab 时使用)。两步操作不在事务里 —— 单 session 内 tab 数 ≤ 20,
   // 失败概率极低;真出现中间态 next list 时 UI 会展示"无激活 tab",用户重新点一下就好。
-  ipcMain.handle('local-db:right-sidebar-tabs:setActive', async (_e, payload: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.RIGHT_SIDEBAR_TABS_SET_ACTIVE, async (_e, payload: unknown) => {
     const obj = requireObject(payload, 'setActive payload');
     const sessionId = requireString(obj.sessionId, 'sessionId');
     const targetId = obj.id === null ? null : requireString(obj.id, 'id');
@@ -224,7 +225,7 @@ export function registerRightSidebarTabsIpc(): void {
 
   // reorder: 一次性重写 same session 内全部 tab 的 position;orderedIds 数组下标 = 新 position。
   // 数组里漏的 id 不会被改动 —— renderer 端调用时应该传完整 orderedIds(同 session 当前全部 tab id)。
-  ipcMain.handle('local-db:right-sidebar-tabs:reorder', async (_e, payload: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.LOCAL_DB.RIGHT_SIDEBAR_TABS_REORDER, async (_e, payload: unknown) => {
     const obj = requireObject(payload, 'reorder payload');
     const sessionId = requireString(obj.sessionId, 'sessionId');
     if (!Array.isArray(obj.orderedIds)) {

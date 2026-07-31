@@ -61,6 +61,9 @@ importers:
       '@cindy/browser-control-runtime':
         specifier: workspace:*
         version: link:../../packages/browser-control-runtime
+      '@cindy/cindy-ipc':
+        specifier: workspace:*
+        version: link:../../packages/cindy-ipc
       '@cindy/device-link':
         specifier: workspace:*
         version: link:../../packages/device-link
@@ -867,6 +870,12 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
 
+  packages/cindy-ipc:
+    devDependencies:
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
   packages/cindy-tools:
     dependencies:
       '@modelcontextprotocol/sdk':
@@ -888,6 +897,9 @@ importers:
 
   packages/device-link:
     dependencies:
+      '@cindy/cindy-ipc':
+        specifier: workspace:*
+        version: link:../cindy-ipc
       '@cindy/device-link-protocol':
         specifier: workspace:*
         version: link:../../cindy-protocol/packages/device-link-protocol

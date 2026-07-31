@@ -62,6 +62,7 @@ import {
   prefetchDeviceGitSafetySettings,
 } from '@/hooks/useGitSafetySettings';
 import { extractIpcError } from '@/utils/ipcError';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('device-link-remote-projects');
 
@@ -575,7 +576,7 @@ export function useDeviceLinkRemoteProjects(): void {
     // 被控端 active-catalog 变化：供应商目录与 capabilities.availableModels 必须同代刷新。
     // 两套缓存订阅会把完整结果原子推给已挂载选择器，刷新期间保留旧列表避免空白跳变。
     const offRemotePush = window.electronAPI.deviceLink.onRemotePush((push, localOwnerStamp) => {
-      if (disposed || push.channel !== 'maker:provider:changed' || !eligible.has(push.deviceId))
+      if (disposed || push.channel !== IPC_CHANNELS.MAKER_PUSH.PROVIDER_CHANGED || !eligible.has(push.deviceId))
         return;
       if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
       evictDeviceProviders(push.deviceId);

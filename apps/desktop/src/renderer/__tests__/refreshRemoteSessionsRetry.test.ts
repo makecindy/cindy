@@ -27,6 +27,7 @@ import {
   clearRemoteSessionActivity,
   getRemoteSessionActivity,
 } from '@/features/device-link/remoteSessionActivityStore';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const invoke = vi.fn();
 let n = 0;
@@ -296,7 +297,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
 
     await refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep });
 
-    expect(invoke).toHaveBeenCalledWith(d, 'local-db:sessions:list', [
+    expect(invoke).toHaveBeenCalledWith(d, IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST, [
       200,
       'active',
       { includePinned: true },
@@ -331,7 +332,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
     expect(merged).toHaveLength(201);
     expect(merged.map((s) => s.id)).toContain('outside-window');
     expect(merged[0].title).toBe('new');
-    expect(invoke).toHaveBeenNthCalledWith(2, d, 'local-db:sessions:get', [
+    expect(invoke).toHaveBeenNthCalledWith(2, d, IPC_CHANNELS.LOCAL_DB.SESSIONS_GET, [
       'outside-window',
       DEVICE_LINK_RECONCILIATION_PROBE_MARKER,
     ]);
@@ -429,7 +430,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
     const outside = Array.from({ length: 12 }, (_, index) => session(`outside-${index}`));
     remoteProjectsStore.setDeviceSessions(d, 'Mac B', outside);
     invoke.mockImplementation(async (_deviceId, channel, args) => {
-      if (channel === 'local-db:sessions:list') return recent;
+      if (channel === IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST) return recent;
       return session(String(args[0]), { status: 'active' });
     });
 
@@ -438,7 +439,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
       snapshotMode: 'merge',
     });
 
-    const probes = invoke.mock.calls.filter(([, channel]) => channel === 'local-db:sessions:get');
+    const probes = invoke.mock.calls.filter(([, channel]) => channel === IPC_CHANNELS.LOCAL_DB.SESSIONS_GET);
     expect(probes).toHaveLength(8);
     expect(remoteProjectsStore.getMergedRemoteSessions()).toHaveLength(212);
   });
@@ -449,7 +450,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
     const outside = Array.from({ length: 20 }, (_, index) => session(`outside-${index}`));
     remoteProjectsStore.setDeviceSessions(d, 'Mac B', outside);
     invoke.mockImplementation(async (_deviceId, channel, args) => {
-      if (channel === 'local-db:sessions:list') return recent;
+      if (channel === IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST) return recent;
       return session(String(args[0]), { status: 'active' });
     });
 
@@ -458,7 +459,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
       snapshotMode: 'merge',
     });
     const firstProbeIds = invoke.mock.calls
-      .filter(([, channel]) => channel === 'local-db:sessions:get')
+      .filter(([, channel]) => channel === IPC_CHANNELS.LOCAL_DB.SESSIONS_GET)
       .map(([, , args]) => String(args[0]));
 
     invoke.mockClear();
@@ -467,7 +468,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
       snapshotMode: 'merge',
     });
     const secondProbeIds = invoke.mock.calls
-      .filter(([, channel]) => channel === 'local-db:sessions:get')
+      .filter(([, channel]) => channel === IPC_CHANNELS.LOCAL_DB.SESSIONS_GET)
       .map(([, , args]) => String(args[0]));
 
     expect(firstProbeIds).toHaveLength(8);
@@ -482,7 +483,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
     const outside = Array.from({ length: 20 }, (_, index) => session(`outside-${index}`));
     remoteProjectsStore.setDeviceSessions(d, 'Mac B', outside);
     invoke.mockImplementation(async (_deviceId, channel, args) => {
-      if (channel === 'local-db:sessions:list') return recent;
+      if (channel === IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST) return recent;
       const sessionId = String(args[0]);
       return session(sessionId, {
         status: sessionId === 'outside-0' || sessionId === 'outside-1' ? 'archived' : 'active',
@@ -500,7 +501,7 @@ describe('refreshRemoteDeviceSessions retry', () => {
       snapshotMode: 'merge',
     });
     const secondProbeIds = invoke.mock.calls
-      .filter(([, channel]) => channel === 'local-db:sessions:get')
+      .filter(([, channel]) => channel === IPC_CHANNELS.LOCAL_DB.SESSIONS_GET)
       .map(([, , args]) => String(args[0]));
 
     expect(secondProbeIds).toEqual(outside.slice(8, 16).map((item) => item.id));

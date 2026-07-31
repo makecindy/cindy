@@ -5,6 +5,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Session } from '@/lib/ccAgent.types';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 beforeEach(() => {
   vi.resetModules();
@@ -70,15 +71,15 @@ describe('orcaWorkflowsFor 路由', () => {
     await orca.endTeam('lead');
     await orca.getCollaborationSettings();
 
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:orca-workflows:list-workers-by-lead', ['lead']);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:orca-workflows:get-by-lead', ['lead']);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:worker:create', [{ leadSessionId: 'lead', role: 'developer' }]);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:worker:switch-focus', [{ leadSessionId: 'lead', workerIdOrLabel: 'w1' }]);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:worker:idle', [{ leadSessionId: 'lead', workerId: 'w1' }]);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:worker:acknowledge-done', [{ leadSessionId: 'lead', workerId: 'w1' }]);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:worker:archive', [{ leadSessionId: 'lead', workerId: 'w1' }]);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:team:end', ['lead']);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:collaboration-settings:get', []);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.LOCAL_DB.ORCA_WORKFLOWS_LIST_WORKERS_BY_LEAD, ['lead']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.LOCAL_DB.ORCA_WORKFLOWS_GET_BY_LEAD, ['lead']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.WORKER_CREATE, [{ leadSessionId: 'lead', role: 'developer' }]);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.WORKER_SWITCH_FOCUS, [{ leadSessionId: 'lead', workerIdOrLabel: 'w1' }]);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.WORKER_IDLE, [{ leadSessionId: 'lead', workerId: 'w1' }]);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.WORKER_ACKNOWLEDGE_DONE, [{ leadSessionId: 'lead', workerId: 'w1' }]);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.WORKER_ARCHIVE, [{ leadSessionId: 'lead', workerId: 'w1' }]);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.TEAM_END, ['lead']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.COLLABORATION_SETTINGS_GET, []);
     // 注:setCollaborationSetting / create / addWorker / updateWorkerStatus 刻意不在远程可路由集
     // (channel 不在 allowlist、无远程调用方);本机走 window.electronAPI.localDb.orcaWorkflows。
   });
@@ -90,7 +91,7 @@ describe('orcaWorkflowsFor 路由', () => {
     remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('worker-1')]);
 
     await orcaWorkflowsFor('worker-1').getByWorkerSession('worker-1');
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:orca-workflows:get-by-worker-session', ['worker-1']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.LOCAL_DB.ORCA_WORKFLOWS_GET_BY_WORKER_SESSION, ['worker-1']);
   });
 
   it('本机 lead:走本机 orcaWorkflows,不经隧道(零回归)', async () => {
@@ -136,9 +137,9 @@ describe('subscribeOrcaWorkerChanged 分流', () => {
     expect(orcaSpies.onOrcaWorkerChanged).not.toHaveBeenCalled();
 
     const handler = onRemotePush.mock.calls[0][0];
-    handler({ deviceId: 'dev-1', channel: 'maker:orca:worker-changed', payload: { leadSessionId: 'rlead' } }); // match
-    handler({ deviceId: 'dev-1', channel: 'maker:event', payload: { sessionId: 'rlead' } }); // wrong channel
-    handler({ deviceId: 'dev-1', channel: 'maker:orca:worker-changed', payload: { leadSessionId: 'other' } }); // wrong lead
+    handler({ deviceId: 'dev-1', channel: IPC_CHANNELS.MAKER_PUSH.ORCA_WORKER_CHANGED, payload: { leadSessionId: 'rlead' } }); // match
+    handler({ deviceId: 'dev-1', channel: IPC_CHANNELS.MAKER_PUSH.EVENT, payload: { sessionId: 'rlead' } }); // wrong channel
+    handler({ deviceId: 'dev-1', channel: IPC_CHANNELS.MAKER_PUSH.ORCA_WORKER_CHANGED, payload: { leadSessionId: 'other' } }); // wrong lead
     expect(cb).toHaveBeenCalledTimes(1);
   });
 

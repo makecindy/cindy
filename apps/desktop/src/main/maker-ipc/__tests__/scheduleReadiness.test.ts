@@ -59,6 +59,7 @@ import {
   attachSchedulerEventListeners,
   __resetReadinessForTest,
 } from '../schedule';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 // Minimal stand-ins — holder 只持有引用并 resolve 出去,不调任何方法。
 const scheduler1 = { id: 'scheduler-1' } as never;
@@ -246,8 +247,8 @@ describe('scheduler readiness holder', () => {
     const event = { type: 'completed', scheduleId: 'schedule-1', runId: 'run-1' } as never;
     expect(() => handlers.get('completed')!(event)).not.toThrow();
 
-    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('maker:schedule:event', event);
-    expect(h.webContentsSend).toHaveBeenCalledWith('maker:schedule:event', event);
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith(IPC_CHANNELS.MAKER_PUSH.SCHEDULE_EVENT, event);
+    expect(h.webContentsSend).toHaveBeenCalledWith(IPC_CHANNELS.MAKER_PUSH.SCHEDULE_EVENT, event);
     expect(h.handleScheduleEvent).toHaveBeenCalledWith(event);
     expect(h.webContentsSend.mock.invocationCallOrder[0]).toBeLessThan(
       h.handleScheduleEvent.mock.invocationCallOrder[0],

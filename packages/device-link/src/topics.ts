@@ -1,3 +1,4 @@
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 /**
  * device-link 推送 topic 路由(client-agnostic,被控端 + 未来 mobile/web 共享)。
  * ---------------------------------------------------------------------------
@@ -28,10 +29,10 @@
 export type Topic = 'sessions' | `session:${string}` | `fs-watch:${string}`;
 
 /** 被控端文件树变更事件的 push channel(与 desktop FILE_BROWSER_PUSH.EVENT 同名约定)。 */
-export const FILE_BROWSER_EVENT_CHANNEL = 'maker:file-browser:event';
+export const FILE_BROWSER_EVENT_CHANNEL = IPC_CHANNELS.MAKER_EXTRA.FILE_BROWSER_EVENT;
 
 /** 远程文件浏览的聚合 invoke channel(单 channel:老被控端 CHANNEL_NOT_ALLOWED 即全无能力)。 */
-export const FILE_BROWSER_REMOTE_OP_CHANNEL = 'file-browser:remote-op';
+export const FILE_BROWSER_REMOTE_OP_CHANNEL = IPC_CHANNELS.FILE_BROWSER.REMOTE_OP;
 
 const FS_WATCH_TOPIC_PREFIX = 'fs-watch:';
 
@@ -57,7 +58,7 @@ export interface SessionActivityPayload {
 }
 
 /** 会话列表级实时活动摘要 channel。归 `sessions` topic,不触发 active-control 横幅。 */
-export const SESSION_ACTIVITY_CHANNEL = 'local-db:sessions:activity';
+export const SESSION_ACTIVITY_CHANNEL = IPC_CHANNELS.LOCAL_DB.SESSIONS_ACTIVITY;
 
 /**
  * 会话**列表级**读模型 channel:会话行的增 / 改。归 `sessions` topic。
@@ -68,16 +69,16 @@ export const SESSION_ACTIVITY_CHANNEL = 'local-db:sessions:activity';
  * 保证任何控制端都能收到并把已缓存会话的 historyLoaded 置 false。
  */
 const SESSION_LIST_CHANNELS: ReadonlySet<string> = new Set([
-  'local-db:sessions:created',
-  'local-db:sessions:patched',
-  'local-db:session:error-persisted',
+  IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED,
+  IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED,
+  IPC_CHANNELS.LOCAL_DB.SESSION_ERROR_PERSISTED,
   SESSION_ACTIVITY_CHANNEL,
   // session 终身累计 cost / token(sessions 行级字段的裸 UPDATE 补偿推送):归 sessions
   // topic 而非 session:<id> —— 会话未在控制端打开时 session:<id> 无人订阅,镜像会停在
   // 旧值,下次打开 chip 先显示过期累计;列表订阅常开保证镜像始终新鲜。低频(turn 结束
   // 各一条)、payload 极小。
-  'usage:session-spend-changed',
-  'usage:session-tokens-changed',
+  IPC_CHANNELS.USAGE.SESSION_SPEND_CHANGED,
+  IPC_CHANNELS.USAGE.SESSION_TOKENS_CHANGED,
 ]);
 
 /**
@@ -86,16 +87,16 @@ const SESSION_LIST_CHANNELS: ReadonlySet<string> = new Set([
  */
 const ACCOUNT_CHANNELS: ReadonlySet<string> = new Set([
   // provider 目录是设备级快照；控制端订阅 sessions 后按来源 deviceId 精确刷新。
-  'maker:provider:changed',
-  'maker:schedule:event',
-  'maker:project-automation:event',
+  IPC_CHANNELS.MAKER_PUSH.PROVIDER_CHANGED,
+  IPC_CHANNELS.MAKER_PUSH.SCHEDULE_EVENT,
+  IPC_CHANNELS.MAKER_PUSH.PROJECT_AUTOMATION_EVENT,
   // 被控端「当前 New Maker 草稿」全量变更:账号 / 全局级(无 sessionId),并入 `sessions` topic
   // 随设备列表订阅一起走(控制端打开远程项目草稿时据此实时刷新),不另开一档 topic。
-  'maker:new-maker-draft:changed',
+  IPC_CHANNELS.MAKER_PUSH.NEW_MAKER_DRAFT_CHANGED,
   // /learn run 状态机流转:payload = { type, run },run 同时关联触发会话与蒸馏会话
   // (状态卡两处都渲染),按单一 sessionId 路由会漏一边 → 按账号级并入 `sessions` topic
   // (低频状态机事件,量极小)。
-  'learn:event',
+  IPC_CHANNELS.LEARN.EVENT,
 ]);
 
 /** 从 unknown payload 安全读一个字符串字段。 */
@@ -127,7 +128,7 @@ export function topicForPush(channel: string, payload: unknown): Topic | null {
     const workdir = readStringField(payload, 'workdir');
     return workdir ? fsWatchTopic(workdir) : null;
   }
-  if (channel === 'maker:orca:worker-changed') {
+  if (channel === IPC_CHANNELS.MAKER_PUSH.ORCA_WORKER_CHANGED) {
     const lead = readStringField(payload, 'leadSessionId');
     return lead ? `session:${lead}` : null;
   }

@@ -5,6 +5,7 @@ import {
   setGitSafetyAutoSnapshotEnabled,
   subscribeGitSafetyAutoSnapshotEnabled,
 } from '@/lib/gitSafetySettingsStore';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 interface DeviceLinkShape {
   invoke: (deviceId: string, channel: string, args: unknown[]) => Promise<unknown>;
@@ -49,7 +50,7 @@ async function fetchRemoteGitSafetyAutoSnapshotEnabled(
 
   const dl = getDeviceLink();
   if (!dl) throw new Error('device-link IPC not available');
-  const p = dl.invoke(deviceId, 'maker:git-safety:get', [])
+  const p = dl.invoke(deviceId, IPC_CHANNELS.MAKER_INVOKE.GIT_SAFETY_GET, [])
     .then((settings) => (isGitSafetyWire(settings) ? settings.autoSnapshotEnabled : false))
     .then((enabled) => {
       if (isCurrent()) {

@@ -18,6 +18,7 @@ vi.mock('../../logger', () => ({
 
 import { rewriteOutboundMedia, __testing } from '../outboundMedia';
 import { parseAttachmentOssRef, isAttachmentOssRef } from '../../../shared/attachmentOssRef';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const SHA256 = 'a'.repeat(64);
 
@@ -40,19 +41,19 @@ beforeEach(() => {
 describe('rewriteOutboundMedia — channel gating', () => {
   it('非媒体 channel → 原样,不上传', async () => {
     const args = [{ a: 1 }];
-    const out = await rewriteOutboundMedia('maker:set-model', args);
+    const out = await rewriteOutboundMedia(IPC_CHANNELS.MAKER_INVOKE.SET_MODEL, args);
     expect(out).toBe(args);
     expect(uploadLocalFile).not.toHaveBeenCalled();
   });
 
   it('send 纯文本(string message)→ 原样', async () => {
-    const out = await rewriteOutboundMedia('maker:send', ['sess', 'hello']);
+    const out = await rewriteOutboundMedia(IPC_CHANNELS.MAKER_INVOKE.SEND, ['sess', 'hello']);
     expect(out[1]).toBe('hello');
     expect(uploadLocalFile).not.toHaveBeenCalled();
   });
 
   it('send 无附件 content → 不上传', async () => {
-    await rewriteOutboundMedia('maker:send', [
+    await rewriteOutboundMedia(IPC_CHANNELS.MAKER_INVOKE.SEND, [
       'sess',
       { type: 'user', content: [{ type: 'text', text: 'hi' }] },
     ]);
@@ -195,7 +196,7 @@ describe('rewriteOutboundMedia — send/steer content-block 形态', () => {
 
   it('xdt-image:// 块 → resolveSafe → uploadLocalFile → block.path 变 OSS 引用,base64 清掉', async () => {
     resolveSafe.mockReturnValue({ absPath: '/cache/a.png', mimeType: 'image/png' });
-    const out = await rewriteOutboundMedia('maker:send', [
+    const out = await rewriteOutboundMedia(IPC_CHANNELS.MAKER_INVOKE.SEND, [
       'sess',
       {
         type: 'user',
@@ -213,7 +214,7 @@ describe('rewriteOutboundMedia — send/steer content-block 形态', () => {
   });
 
   it('base64 块 → uploadBuffer', async () => {
-    const out = await rewriteOutboundMedia('maker:steer', [
+    const out = await rewriteOutboundMedia(IPC_CHANNELS.MAKER_INVOKE.STEER, [
       'sess',
       {
         type: 'user',
@@ -229,7 +230,7 @@ describe('rewriteOutboundMedia — send/steer content-block 形态', () => {
   });
 
   it('绝对路径块 → uploadLocalFile(原路径)', async () => {
-    await rewriteOutboundMedia('maker:send', [
+    await rewriteOutboundMedia(IPC_CHANNELS.MAKER_INVOKE.SEND, [
       'sess',
       {
         type: 'user',
@@ -244,7 +245,7 @@ describe('rewriteOutboundMedia — send/steer content-block 形态', () => {
 
 describe('rewriteOutboundMedia — enqueue files 形态', () => {
   it('item.files[] 上传 + url/path 变引用、base64 清掉(buildMakerUserMessage 取 url)', async () => {
-    const out = await rewriteOutboundMedia('maker:input:enqueue', [
+    const out = await rewriteOutboundMedia(IPC_CHANNELS.MAKER_INVOKE.INPUT_ENQUEUE, [
       'sess',
       {
         text: 'hi',
@@ -267,13 +268,13 @@ describe('rewriteOutboundMedia — enqueue files 形态', () => {
 
   it('enqueue 无 files → 原样', async () => {
     const item = { text: 'hi' };
-    const out = await rewriteOutboundMedia('maker:input:enqueue', ['sess', item]);
+    const out = await rewriteOutboundMedia(IPC_CHANNELS.MAKER_INVOKE.INPUT_ENQUEUE, ['sess', item]);
     expect(out[1]).toBe(item);
     expect(uploadLocalFile).not.toHaveBeenCalled();
   });
 
   it('maker:input:steer 同 enqueue 形态(steer 带附件也必须改写)', async () => {
-    const out = await rewriteOutboundMedia('maker:input:steer', [
+    const out = await rewriteOutboundMedia(IPC_CHANNELS.MAKER_INVOKE.INPUT_STEER, [
       'sess',
       {
         text: 'hi',
@@ -292,7 +293,7 @@ describe('rewriteOutboundMedia — 失败传播', () => {
   it('上传失败 → 抛错(handleInvoke 转 MEDIA_TRANSFER_FAILED,整条不发)', async () => {
     uploadLocalFile.mockRejectedValue(new Error('OSS PUT 失败 (403)'));
     await expect(
-      rewriteOutboundMedia('maker:send', [
+      rewriteOutboundMedia(IPC_CHANNELS.MAKER_INVOKE.SEND, [
         'sess',
         { type: 'user', content: [{ type: 'image', path: '/abs/a.png' }] },
       ]),
@@ -301,7 +302,7 @@ describe('rewriteOutboundMedia — 失败传播', () => {
 
   it('clipboard 占位 → 抛错', async () => {
     await expect(
-      rewriteOutboundMedia('maker:send', [
+      rewriteOutboundMedia(IPC_CHANNELS.MAKER_INVOKE.SEND, [
         'sess',
         { type: 'user', content: [{ type: 'image', path: 'clipboard://paste-1' }] },
       ]),

@@ -7,6 +7,7 @@ import {
   getRemoteSessionActivity,
   subscribeRemoteSessionActivity,
 } from '@/features/device-link/remoteSessionActivityStore';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 /**
  * 卡片/rail 瓷砖角标语义(决定 AttentionDot 颜色,全端与灵动岛统一):
@@ -265,7 +266,7 @@ function sendRemoteReceipt(sessionId: string, receiptClass: RemoteReceiptClass):
     if (attentionEraOf(sessionId) !== eraAtSend) {
       throw new Error(RECEIPT_SUPERSEDED);
     }
-    return invoke(deviceId, 'notification:clear-session-attention', [sessionId, wireIntent]);
+    return invoke(deviceId, IPC_CHANNELS.NOTIFICATION.CLEAR_SESSION_ATTENTION, [sessionId, wireIntent]);
   }).then(
     () => releaseInflight(),
     (err) => {

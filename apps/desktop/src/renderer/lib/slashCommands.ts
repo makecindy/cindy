@@ -19,6 +19,7 @@
 import type { UnifiedCommand, AgentKind } from '@cindy/maker-core';
 
 import { createLogger } from '@/lib/logger';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('SlashCommands');
 
@@ -106,7 +107,7 @@ export async function loadAllCommands(
   const desktopP: Promise<CmdRes> = api.listDesktopCommands().catch(() => ({ success: false }));
   const builtinP: Promise<CmdRes> = (
     deviceId
-      ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:list-agent-commands', [agentKind]) as Promise<CmdRes>)
+      ? (window.electronAPI.deviceLink.invoke(deviceId, IPC_CHANNELS.MAKER_INVOKE.LIST_AGENT_COMMANDS, [agentKind]) as Promise<CmdRes>)
       : api.listAgentCommands(agentKind)
   ).catch(() => ({ success: false }));
   const shouldLoadSkills = !opts?.skipAgentSkills;
@@ -117,7 +118,7 @@ export async function loadAllCommands(
   const skillP: Promise<SkillRes> = shouldLoadSkills
     ? (
         deviceId
-          ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:list-agent-skills', [
+          ? (window.electronAPI.deviceLink.invoke(deviceId, IPC_CHANNELS.MAKER_INVOKE.LIST_AGENT_SKILLS, [
               agentKind,
               skillParams,
             ]) as Promise<SkillRes>)

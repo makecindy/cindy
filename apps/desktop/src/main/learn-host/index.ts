@@ -57,6 +57,7 @@ import {
   unfreezeProposal,
   writeReferenceFiles,
 } from './staging';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 export interface StartLearnHostDeps {
   maker: Maker;
@@ -290,11 +291,11 @@ export function startLearnHost(deps: StartLearnHostDeps): LearnController {
       // broadcastSessionCreated 同款(该 helper 各模块本地复制是既有惯例,见其
       // 注释);放在 backfill 之后,renderer 重拉时 source='learn' 已就位,直接
       // 落自动化分组不跳变。
-      tapWindowBroadcast('local-db:sessions:created', { sessionId });
+      tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED, { sessionId });
       for (const win of BrowserWindow.getAllWindows()) {
         if (win.isDestroyed()) continue;
         try {
-          win.webContents.send('local-db:sessions:created', { sessionId });
+          win.webContents.send(IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED, { sessionId });
         } catch {
           // best-effort UI refresh,失败不影响业务
         }

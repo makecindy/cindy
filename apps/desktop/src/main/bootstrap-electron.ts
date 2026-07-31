@@ -1410,6 +1410,7 @@ import started from 'electron-squirrel-startup';
 
 import { APPLICATION_MENU_LABELS, type ApplicationMenuLocale } from './applicationMenuLabels.js';
 import { installCindyCliCommand, CLI_COMMAND_NAME } from './installCliCommand.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 if (started) {
   app.quit();
@@ -1488,7 +1489,7 @@ function dispatchApplicationMenuCommand(
 
   const sendCommand = () => {
     if (!mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('app-menu:command', command);
+      mainWindow.webContents.send(IPC_CHANNELS.APP_MENU.COMMAND, command);
     }
   };
 
@@ -1754,18 +1755,18 @@ function reinstallApplicationMenuIfPresent(): void {
 getAppShortcutStore().subscribe(reinstallApplicationMenuIfPresent);
 subscribeAppShortcutRecording(reinstallApplicationMenuIfPresent);
 
-ipcMain.on('app-locale:get-preferred-system-locale-sync', (event) => {
+ipcMain.on(IPC_CHANNELS.APP_LOCALE.GET_PREFERRED_SYSTEM_LOCALE_SYNC, (event) => {
   event.returnValue = getPreferredApplicationLocale();
 });
 
 // renderer 侧 MainLayout mount 后主动拉一次冷启动期间缓存的 deep link /
 // --open-folder payload。pull-on-mount 路径专用,take 一次清空,重复调安全。
 // 详见 deepLink.ts 的 pending buffer 段。
-ipcMain.handle('deep-link:take-pending', () => {
+ipcMain.handle(IPC_CHANNELS.DEEP_LINK.TAKE_PENDING, () => {
   return takePendingDeepLink();
 });
 
-ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } => {
+ipcMain.handle(IPC_CHANNELS.APP_MENU.SET_LOCALE, (_event, locale: unknown): { ok: true } => {
   currentApplicationMenuLocale = resolveApplicationMenuLocale(
     typeof locale === 'string' ? locale : null,
   );
@@ -2583,12 +2584,12 @@ const createWindow = () => {
   let inFullscreen = false;
   mainWindow.on('enter-full-screen', () => {
     inFullscreen = true;
-    mainWindow.webContents.send('fullscreen-change', true);
+    mainWindow.webContents.send(IPC_CHANNELS.FULLSCREEN_CHANGE.FULLSCREEN_CHANGE, true);
   });
   mainWindow.on('leave-full-screen', () => {
     if (!inFullscreen) return;
     inFullscreen = false;
-    mainWindow.webContents.send('fullscreen-change', false);
+    mainWindow.webContents.send(IPC_CHANNELS.FULLSCREEN_CHANGE.FULLSCREEN_CHANGE, false);
   });
   mainWindow.on('resize', () => {
     if (!inFullscreen) return;
@@ -2596,7 +2597,7 @@ const createWindow = () => {
     const display = screen.getDisplayMatching(bounds);
     if (bounds.width < display.bounds.width || bounds.height < display.bounds.height) {
       inFullscreen = false;
-      mainWindow.webContents.send('fullscreen-change', false);
+      mainWindow.webContents.send(IPC_CHANNELS.FULLSCREEN_CHANGE.FULLSCREEN_CHANGE, false);
     }
   });
 
@@ -2616,7 +2617,7 @@ const createWindow = () => {
   // Find-in-page: forward Chromium's match results back to the renderer overlay.
   // The renderer drives findInPage / stopFindInPage via IPC (see registerIpcHandlers).
   mainWindow.webContents.on('found-in-page', (_event, result) => {
-    mainWindow.webContents.send('find-in-page:result', {
+    mainWindow.webContents.send(IPC_CHANNELS.FIND_IN_PAGE.RESULT, {
       requestId: result.requestId,
       activeMatchOrdinal: result.activeMatchOrdinal,
       matches: result.matches,
@@ -2830,15 +2831,15 @@ const registerIpcHandlers = () => {
     applyVibrancyToSecondaryWindows(familyId, isDark);
   }
 
-  ipcMain.on('theme:apply-vibrancy', (_event, payload: { familyId: string; isDark: boolean }) => {
+  ipcMain.on(IPC_CHANNELS.THEME.APPLY_VIBRANCY, (_event, payload: { familyId: string; isDark: boolean }) => {
     applyWindowVibrancy(payload.familyId, payload.isDark);
   });
 
-  ipcMain.on('get-app-version', (event) => {
+  ipcMain.on(IPC_CHANNELS.GET_APP_VERSION.GET_APP_VERSION, (event) => {
     event.returnValue = app.getVersion();
   });
 
-  ipcMain.on('get-os-release', (event) => {
+  ipcMain.on(IPC_CHANNELS.GET_OS_RELEASE.GET_OS_RELEASE, (event) => {
     event.returnValue = os.release();
   });
 
@@ -2846,18 +2847,18 @@ const registerIpcHandlers = () => {
   // 任何渲染前判定「真首启」,localStorage 为空但主进程持有存量会话(持久化
   // refresh token / local 模式)时不得激活亮色门,否则已登录暗色用户会先看到
   // 亮色首帧。必须 sendSync——判定发生在首帧之前,异步 IPC 赶不上。
-  ipcMain.on('auth:has-persisted-session-hint-sync', (event) => {
+  ipcMain.on(IPC_CHANNELS.AUTH.HAS_PERSISTED_SESSION_HINT_SYNC, (event) => {
     event.returnValue = hasPersistedSessionHint({ userDataPath: app.getPath('userData') });
   });
 
-  ipcMain.on('get-app-display-version-info', (event) => {
+  ipcMain.on(IPC_CHANNELS.GET_APP_DISPLAY_VERSION_INFO.GET_APP_DISPLAY_VERSION_INFO, (event) => {
     event.returnValue = getAppDisplayVersionInfo();
   });
 
   // Renderer → main 日志转发:走 unified logger 的 writeFromRenderer,
   // 让 main 的 level filter 生效(scope 加 r: 前缀以区分来源)。
   ipcMain.on(
-    'renderer:log',
+    IPC_CHANNELS.RENDERER.LOG,
     (
       _e,
       level: 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal',
@@ -3279,10 +3280,10 @@ const registerIpcHandlers = () => {
   // 窗口控件按 event.sender 解析目标窗口 —— 「在新窗口打开」会有多个完整窗口,
   // min/max 必须操作"点按钮的那个窗口"而非全局主窗。fallback 到 mainWindowRef 兜底
   // 极端情况(sender 已销毁等)。
-  ipcMain.on('window-minimize', (event) => {
+  ipcMain.on(IPC_CHANNELS.WINDOW_MINIMIZE.WINDOW_MINIMIZE, (event) => {
     (BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef)?.minimize();
   });
-  ipcMain.on('window-maximize', (event) => {
+  ipcMain.on(IPC_CHANNELS.WINDOW_MAXIMIZE.WINDOW_MAXIMIZE, (event) => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef;
     if (!win) return;
     if (win.isMaximized()) {
@@ -3299,12 +3300,12 @@ const registerIpcHandlers = () => {
   // 不 fallback 主窗:多窗口下副窗的延迟消息若落到主窗上,start 会让主窗
   // 意外粘附光标并误停他窗的合法拖拽,stop 会误停主窗拖拽。已销毁窗口的
   // 拖拽由 controller 的 isDestroyed 巡检自停,无需兜底。
-  ipcMain.on('window-drag-move-start', (event) => {
+  ipcMain.on(IPC_CHANNELS.WINDOW_DRAG_MOVE_START.WINDOW_DRAG_MOVE_START, (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win) return;
     windowManualDrag.start(win);
   });
-  ipcMain.on('window-drag-move-stop', (event) => {
+  ipcMain.on(IPC_CHANNELS.WINDOW_DRAG_MOVE_STOP.WINDOW_DRAG_MOVE_STOP, (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win) return;
     windowManualDrag.stop(win);
@@ -3316,7 +3317,7 @@ const registerIpcHandlers = () => {
   //    等都收掉;否则 voice overlay 这种 hidden BrowserWindow 还活着,window-all-closed
   //    不 fire,残留进程。
   //  - 「在新窗口打开」的副窗: 只关自己, 不退出 app(会话活在主进程, 不受影响)。
-  ipcMain.on('window-close', (event) => {
+  ipcMain.on(IPC_CHANNELS.WINDOW_CLOSE.WINDOW_CLOSE, (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win || win === mainWindowRef) {
       if (process.platform === 'win32' && win) {
@@ -3332,10 +3333,10 @@ const registerIpcHandlers = () => {
   // role close, 即对 sender 窗口 win.close() —— 主窗在 mac 上被 close handler
   // preventDefault 成隐藏, 副窗 / 子窗正常关闭。与上面 'window-close'(自定义
   // X 按钮, 主窗 = 退出 app)是两种不同语义, 不能合并。
-  ipcMain.on('window-close-self', (event) => {
+  ipcMain.on(IPC_CHANNELS.WINDOW_CLOSE_SELF.WINDOW_CLOSE_SELF, (event) => {
     BrowserWindow.fromWebContents(event.sender)?.close();
   });
-  ipcMain.handle('page-zoom:in', async (event) => {
+  ipcMain.handle(IPC_CHANNELS.PAGE_ZOOM.IN, async (event) => {
     assertTrustedAppRendererEvent(event);
     const settings = await updatePersistedWindowZoom(PAGE_ZOOM_FACTOR_STEP);
     return {
@@ -3343,7 +3344,7 @@ const registerIpcHandlers = () => {
       zoomFactor: settings.windowZoom,
     };
   });
-  ipcMain.handle('page-zoom:out', async (event) => {
+  ipcMain.handle(IPC_CHANNELS.PAGE_ZOOM.OUT, async (event) => {
     assertTrustedAppRendererEvent(event);
     const settings = await updatePersistedWindowZoom(-PAGE_ZOOM_FACTOR_STEP);
     return {
@@ -3351,7 +3352,7 @@ const registerIpcHandlers = () => {
       zoomFactor: settings.windowZoom,
     };
   });
-  ipcMain.handle('page-zoom:reset', async (event) => {
+  ipcMain.handle(IPC_CHANNELS.PAGE_ZOOM.RESET, async (event) => {
     assertTrustedAppRendererEvent(event);
     const settings = await updatePersistedWindowZoom(null);
     return {
@@ -3363,7 +3364,7 @@ const registerIpcHandlers = () => {
   // Fullscreen state query — renderer calls this on mount to recover from the
   // race where `enter-full-screen` fires before the renderer subscribes (e.g.
   // when window-state restores a fullscreen window on launch).
-  ipcMain.handle('get-fullscreen-state', (): boolean => {
+  ipcMain.handle(IPC_CHANNELS.GET_FULLSCREEN_STATE.GET_FULLSCREEN_STATE, (): boolean => {
     const win = getWindow();
     if (!win) return false;
     return win.isFullScreen() || win.isSimpleFullScreen();
@@ -3373,7 +3374,7 @@ const registerIpcHandlers = () => {
   // start: returns the requestId Chromium assigns; renderer correlates with the
   // result event sent from createWindow's `found-in-page` listener.
   ipcMain.handle(
-    'find-in-page:start',
+    IPC_CHANNELS.FIND_IN_PAGE.START,
     (
       event,
       params: {
@@ -3393,7 +3394,7 @@ const registerIpcHandlers = () => {
     },
   );
   ipcMain.on(
-    'find-in-page:stop',
+    IPC_CHANNELS.FIND_IN_PAGE.STOP,
     (
       event,
       action: 'clearSelection' | 'keepSelection' | 'activateSelection' = 'clearSelection',
@@ -3406,7 +3407,7 @@ const registerIpcHandlers = () => {
 
   // Device ID (hardware-based, survives app reinstall)
   const machineId = machineIdSync();
-  ipcMain.handle('get-device-id', () => machineId);
+  ipcMain.handle(IPC_CHANNELS.GET_DEVICE_ID.GET_DEVICE_ID, () => machineId);
 
   // CC 网络调试开关 — renderer Settings → Experimental "CC 网络调试日志" 操作此值。
   // 改写 process.env.XDT_CC_DEBUG_NET, 让 buildClaudeEnv 在下次 spawn cc 时注入
@@ -3549,7 +3550,7 @@ const registerIpcHandlers = () => {
   // dev 模式默认 trace, 不需要也不应被这里改 (会反向降级)。
   // 关回去时恢复原级别 (release 默认 info)。
   let levelBeforeDebugNet: LogLevel | null = null;
-  ipcMain.handle('cc:set-debug-net', (_event, enabled: boolean): { ok: true } => {
+  ipcMain.handle(IPC_CHANNELS.CC.SET_DEBUG_NET, (_event, enabled: boolean): { ok: true } => {
     if (enabled) {
       process.env.XDT_CC_DEBUG_NET = '1';
       // release: 抬级。dev: 已经是 trace, 跳过。
@@ -3576,14 +3577,14 @@ const registerIpcHandlers = () => {
 
   // Release notes (per-version, fetched from CDN). Platform is resolved
   // inside the service so renderer never needs to pass it.
-  ipcMain.handle('release-notes:fetch', async (_event, version: string) => {
+  ipcMain.handle(IPC_CHANNELS.RELEASE_NOTES.FETCH, async (_event, version: string) => {
     return fetchReleaseNotes(version);
   });
 
   // Release notes index — sorted list of every version with a notice on the
   // CDN. Used by the renderer to compute the unread range on cross-version
   // upgrade and pull every intermediate notice.
-  ipcMain.handle('release-notes:fetch-index', async () => {
+  ipcMain.handle(IPC_CHANNELS.RELEASE_NOTES.FETCH_INDEX, async () => {
     return fetchReleaseNotesIndex();
   });
 
@@ -3661,7 +3662,7 @@ const registerIpcHandlers = () => {
   };
 
   ipcMain.handle(
-    'safe-storage-store',
+    IPC_CHANNELS.SAFE_STORAGE_STORE.SAFE_STORAGE_STORE,
     async (event: Electron.IpcMainInvokeEvent, key: string, value: string): Promise<boolean> => {
       try {
         assertTrustedAppRendererEvent(event);
@@ -3710,7 +3711,7 @@ const registerIpcHandlers = () => {
   );
 
   ipcMain.handle(
-    'safe-storage-read',
+    IPC_CHANNELS.SAFE_STORAGE_READ.SAFE_STORAGE_READ,
     async (event: Electron.IpcMainInvokeEvent, key: string): Promise<string | null> => {
       try {
         assertTrustedAppRendererEvent(event);
@@ -3739,7 +3740,7 @@ const registerIpcHandlers = () => {
   );
 
   ipcMain.handle(
-    'safe-storage-remove',
+    IPC_CHANNELS.SAFE_STORAGE_REMOVE.SAFE_STORAGE_REMOVE,
     async (
       event: Electron.IpcMainInvokeEvent,
       key: string,
@@ -3812,7 +3813,7 @@ const registerIpcHandlers = () => {
   };
 
   ipcMain.handle(
-    'builtin-api-key-has',
+    IPC_CHANNELS.BUILTIN_API_KEY_HAS.BUILTIN_API_KEY_HAS,
     async (event: Electron.IpcMainInvokeEvent, providerId: unknown): Promise<boolean> => {
       assertTrustedAppRendererEvent(event);
       return builtinApiKeyHas(builtinApiKeyDeps, providerId);
@@ -3820,7 +3821,7 @@ const registerIpcHandlers = () => {
   );
 
   ipcMain.handle(
-    'builtin-api-key-store',
+    IPC_CHANNELS.BUILTIN_API_KEY_STORE.BUILTIN_API_KEY_STORE,
     async (
       event: Electron.IpcMainInvokeEvent,
       providerId: unknown,
@@ -3832,7 +3833,7 @@ const registerIpcHandlers = () => {
   );
 
   ipcMain.handle(
-    'builtin-api-key-remove',
+    IPC_CHANNELS.BUILTIN_API_KEY_REMOVE.BUILTIN_API_KEY_REMOVE,
     async (event: Electron.IpcMainInvokeEvent, providerId: unknown): Promise<void> => {
       assertTrustedAppRendererEvent(event);
       builtinApiKeyRemove(builtinApiKeyDeps, providerId);
@@ -3841,7 +3842,7 @@ const registerIpcHandlers = () => {
 
   // ── Auth IPC handlers (delegated to authManager) ──
 
-  ipcMain.handle('auth:initialize', async () => {
+  ipcMain.handle(IPC_CHANNELS.AUTH.INITIALIZE, async () => {
     try {
       let pendingCompletion: Promise<authManager.AuthState> | null = null;
       const state = await authManager.initialize({
@@ -3870,7 +3871,7 @@ const registerIpcHandlers = () => {
           'AUTH_INIT_FAILED',
           err instanceof Error ? err.message : String(err),
           {
-            phase: 'auth:initialize',
+            phase: IPC_CHANNELS.AUTH.INITIALIZE,
           },
         );
       }
@@ -3878,13 +3879,13 @@ const registerIpcHandlers = () => {
     }
   });
 
-  ipcMain.handle('auth:get-login-state', async () => authManager.getLoginState());
+  ipcMain.handle(IPC_CHANNELS.AUTH.GET_LOGIN_STATE, async () => authManager.getLoginState());
 
-  ipcMain.handle('auth:dispatch-login-action', async (_event, action: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.AUTH.DISPATCH_LOGIN_ACTION, async (_event, action: unknown) => {
     return authManager.dispatchLoginAction(action);
   });
 
-  ipcMain.handle('auth:logout', async () => {
+  ipcMain.handle(IPC_CHANNELS.AUTH.LOGOUT, async () => {
     const releaseBoundary = beginAppSessionBoundary();
     try {
       await teardownAuthAccountBoundary('logout');
@@ -3894,7 +3895,7 @@ const registerIpcHandlers = () => {
     }
   });
 
-  ipcMain.handle('auth:enter-local', async () => {
+  ipcMain.handle(IPC_CHANNELS.AUTH.ENTER_LOCAL, async () => {
     if (getActiveAppSession().mode === 'local') {
       return authManager.getAuthState();
     }
@@ -3908,7 +3909,7 @@ const registerIpcHandlers = () => {
     }
   });
 
-  ipcMain.handle('auth:exit-local', async () => {
+  ipcMain.handle(IPC_CHANNELS.AUTH.EXIT_LOCAL, async () => {
     if (getActiveAppSession().mode !== 'local') {
       throwIpcError('PRECONDITION_FAILED', 'Local mode is not active.');
     }
@@ -3921,7 +3922,7 @@ const registerIpcHandlers = () => {
     }
   });
 
-  ipcMain.handle('auth:refresh', async () => {
+  ipcMain.handle(IPC_CHANNELS.AUTH.REFRESH, async () => {
     return authManager.refresh();
   });
 
@@ -3943,20 +3944,20 @@ const registerIpcHandlers = () => {
     logWarn: (message, error) => accountDeletionLog.warn(message, error),
   });
 
-  ipcMain.handle('auth:account-deletion:get-availability', () =>
+  ipcMain.handle(IPC_CHANNELS.AUTH.ACCOUNT_DELETION_GET_AVAILABILITY, () =>
     accountDeletionHandlers.getAvailability(),
   );
-  ipcMain.handle('auth:account-deletion:request-challenge', () =>
+  ipcMain.handle(IPC_CHANNELS.AUTH.ACCOUNT_DELETION_REQUEST_CHALLENGE, () =>
     accountDeletionHandlers.requestChallenge(),
   );
-  ipcMain.handle('auth:account-deletion:confirm', (_event, input: unknown) =>
+  ipcMain.handle(IPC_CHANNELS.AUTH.ACCOUNT_DELETION_CONFIRM, (_event, input: unknown) =>
     accountDeletionHandlers.confirm(input),
   );
-  ipcMain.handle('auth:account-deletion:get-status', () => accountDeletionHandlers.getStatus());
-  ipcMain.handle('auth:account-deletion:clear-receipt', () =>
+  ipcMain.handle(IPC_CHANNELS.AUTH.ACCOUNT_DELETION_GET_STATUS, () => accountDeletionHandlers.getStatus());
+  ipcMain.handle(IPC_CHANNELS.AUTH.ACCOUNT_DELETION_CLEAR_RECEIPT, () =>
     accountDeletionHandlers.clearReceipt(),
   );
-  ipcMain.handle('auth:account-deletion:consume-restored-notice', () =>
+  ipcMain.handle(IPC_CHANNELS.AUTH.ACCOUNT_DELETION_CONSUME_RESTORED_NOTICE, () =>
     accountDeletionHandlers.consumeRestoredNotice(),
   );
 
@@ -3999,17 +4000,17 @@ const registerIpcHandlers = () => {
     }
   };
 
-  ipcMain.handle('profile:get-state', async () => {
+  ipcMain.handle(IPC_CHANNELS.PROFILE.GET_STATE, async () => {
     requireCloudProfile();
     return profileEdit.getProfileEditState(profileEditDeps);
   });
 
-  ipcMain.handle('profile:choose-avatar', async () => {
+  ipcMain.handle(IPC_CHANNELS.PROFILE.CHOOSE_AVATAR, async () => {
     requireCloudProfile();
     return profileEdit.chooseAvatarFile(profileEditDeps);
   });
 
-  ipcMain.handle('profile:update', async (_event, params: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.PROFILE.UPDATE, async (_event, params: unknown) => {
     requireCloudProfile();
     return profileEdit.updateProfile(profileEditDeps, params);
   });
@@ -4247,7 +4248,7 @@ const registerIpcHandlers = () => {
   // 否则不带标签（splash 显示单一 "唤醒 Cindy 中..." 文案）。
   // pi 是可选实验 agent:清单无资产 / 下载失败都不算环境检查失败(失败不广播
   // failed payload),本次不注册 pi。
-  ipcMain.handle('check-environment', async () => {
+  ipcMain.handle(IPC_CHANNELS.CHECK_ENVIRONMENT.CHECK_ENVIRONMENT, async () => {
     // splash 首个 invoke = renderer 存活的强信号(与 renderer:log 双保险)。
     rendererBootGuard?.markAlive();
     const platform = process.platform as 'darwin' | 'win32' | 'linux';
@@ -4410,7 +4411,7 @@ const registerIpcHandlers = () => {
   // Open external URL in system default browser, plus a small allowlist of
   // macOS Privacy panes that Settings uses for permission onboarding.
   ipcMain.handle(
-    'shell:open-external',
+    IPC_CHANNELS.SHELL.OPEN_EXTERNAL,
     async (_event: Electron.IpcMainInvokeEvent, url: string): Promise<{ success: boolean }> => {
       try {
         const parsed = new URL(url);
@@ -4431,7 +4432,7 @@ const registerIpcHandlers = () => {
   // ChatGPT Desktop 当前注册 `codex:` 协议（macOS bundle id com.openai.codex；
   // Windows 安装包也由系统协议注册表接管）。独立无参 IPC 保持最小权限，不能借此
   // 打开 renderer 提供的任意自定义 scheme / deep link。
-  ipcMain.handle('shell:open-chatgpt-app', async (event): Promise<{ success: boolean }> =>
+  ipcMain.handle(IPC_CHANNELS.SHELL.OPEN_CHATGPT_APP, async (event): Promise<{ success: boolean }> =>
     handleOpenChatGPTApp(event, {
       assertTrustedSender: assertTrustedAppRendererEvent,
       openExternal: (url) => shell.openExternal(url),
@@ -4440,7 +4441,7 @@ const registerIpcHandlers = () => {
 
   // Show native directory picker dialog
   ipcMain.handle(
-    'show-open-directory-dialog',
+    IPC_CHANNELS.SHOW_OPEN_DIRECTORY_DIALOG.SHOW_OPEN_DIRECTORY_DIALOG,
     async (): Promise<{ canceled: boolean; path?: string }> => {
       const targetWin = getWindow() ?? BrowserWindow.getFocusedWindow();
       if (!targetWin) return { canceled: true };
@@ -4469,7 +4470,7 @@ const registerIpcHandlers = () => {
   // Performance: BFS with a hard cap (default 2000) and ignore list. On a
   // medium repo this completes in <500ms (spec target).
   ipcMain.handle(
-    'workspace:scan-at-resources',
+    IPC_CHANNELS.WORKSPACE.SCAN_AT_RESOURCES,
     async (
       _event: Electron.IpcMainInvokeEvent,
       params: { workingDir: string; cap?: number },
@@ -4618,7 +4619,7 @@ const registerIpcHandlers = () => {
   // user-defined slash commands / skills (command-palette F1).
   // Returns [] if dirs don't exist. No recursion.
   ipcMain.handle(
-    'workspace:scan-slash-commands',
+    IPC_CHANNELS.WORKSPACE.SCAN_SLASH_COMMANDS,
     async (
       _event: Electron.IpcMainInvokeEvent,
       params: { workingDir: string },
@@ -4760,7 +4761,7 @@ const registerIpcHandlers = () => {
 
   // ── Dialog: 目录选择器（v0.6 新增，与旧 show-open-directory-dialog 并存） ──
   ipcMain.handle(
-    'dialog:show-open-directory',
+    IPC_CHANNELS.DIALOG.SHOW_OPEN_DIRECTORY,
     async (_event, { defaultPath }: { defaultPath?: string } = {}) => {
       const targetWin = getWindow() ?? BrowserWindow.getFocusedWindow();
       if (!targetWin) return { success: true, path: null };
@@ -4779,7 +4780,7 @@ const registerIpcHandlers = () => {
 
   // ── Dialog: 文件选择器(前置检查脚本选取等通用场景;与目录选择器同形) ──
   ipcMain.handle(
-    'dialog:show-open-file',
+    IPC_CHANNELS.DIALOG.SHOW_OPEN_FILE,
     async (
       _event,
       { defaultPath, filters }: { defaultPath?: string; filters?: Electron.FileFilter[] } = {},
@@ -4800,7 +4801,7 @@ const registerIpcHandlers = () => {
 
   // ── Dialog: @ 资源入口的系统选择器 ──
   ipcMain.handle(
-    'dialog:show-open-resource',
+    IPC_CHANNELS.DIALOG.SHOW_OPEN_RESOURCE,
     async (
       event: Electron.IpcMainInvokeEvent,
       payload: unknown = {},
@@ -4852,7 +4853,7 @@ const registerIpcHandlers = () => {
 
   // ── File attachment IPC (F-FI-7) ──
   ipcMain.handle(
-    'read-file-for-attachment',
+    IPC_CHANNELS.READ_FILE_FOR_ATTACHMENT.READ_FILE_FOR_ATTACHMENT,
     async (
       _event: Electron.IpcMainInvokeEvent,
       params: {
@@ -4928,7 +4929,7 @@ const registerIpcHandlers = () => {
   // protocol it replaced would have refused it. Sibling ImagePreview still goes
   // through xdt-file://, so this keeps one policy across the file browser.
   ipcMain.handle(
-    'read-file-bytes',
+    IPC_CHANNELS.READ_FILE_BYTES.READ_FILE_BYTES,
     async (
       event: Electron.IpcMainInvokeEvent,
       params: { filePath: string; maxSize?: number },
@@ -4973,7 +4974,7 @@ const registerIpcHandlers = () => {
   //   - has no maxSize restriction (peek a head of any file size)
   //   - permission policy may evolve independently
   ipcMain.handle(
-    'peek-file-header',
+    IPC_CHANNELS.PEEK_FILE_HEADER.PEEK_FILE_HEADER,
     async (
       _event: Electron.IpcMainInvokeEvent,
       params: {
@@ -5043,7 +5044,7 @@ const registerIpcHandlers = () => {
   // renderer can render the Oversize body without re-statting the file.
   // Reuses the same `isPathAllowed` blocklist as file-attachment IPCs.
   ipcMain.handle(
-    'text-file:read-preview',
+    IPC_CHANNELS.TEXT_FILE.READ_PREVIEW,
     async (
       _event: Electron.IpcMainInvokeEvent,
       params: { filePath: string },
@@ -5129,7 +5130,7 @@ const registerIpcHandlers = () => {
   // handler just enforces the IPC contract and injects `isPathAllowed` so
   // candidates are subject to the same allow-list as direct file reads.
   ipcMain.handle(
-    'fs:resolve-path',
+    IPC_CHANNELS.FS.RESOLVE_PATH,
     async (
       _event: Electron.IpcMainInvokeEvent,
       params: { href: string; workingDir: string },
@@ -5156,7 +5157,7 @@ const registerIpcHandlers = () => {
   // its own full *synchronous* workspace BFS — the main process froze for
   // seconds. This collapses one render pass's hrefs into a single async walk.
   ipcMain.handle(
-    'fs:resolve-path-batch',
+    IPC_CHANNELS.FS.RESOLVE_PATH_BATCH,
     async (
       _event: Electron.IpcMainInvokeEvent,
       params: { hrefs: string[]; workingDir: string },
@@ -5168,7 +5169,7 @@ const registerIpcHandlers = () => {
           isPathAllowed,
         });
       } catch (err) {
-        createLogger('fs:resolve-path-batch').error('failed', { error: String(err) });
+        createLogger(IPC_CHANNELS.FS.RESOLVE_PATH_BATCH).error('failed', { error: String(err) });
         const fallback: Record<
           string,
           { status: 'unique' | 'multiple' | 'none'; candidates: string[] }
@@ -5186,14 +5187,14 @@ const registerIpcHandlers = () => {
   // 处理器(绝大多数 OS 上 .html/.htm 都映射到默认浏览器)。和
   // `shell:open-external` 分开是因为后者只放行 http(s) 防滥用;这里收窄到
   // 受控的扩展名集合后,放行 file:// 是可控的。
-  const openFileInBrowserLog = createLogger('shell:open-file-in-browser');
+  const openFileInBrowserLog = createLogger(IPC_CHANNELS.SHELL.OPEN_FILE_IN_BROWSER);
   const openFileUrlWithWindowsHandler = createWindowsFileUrlOpener({
     platform: process.platform,
     windowsDir: process.env.WINDIR,
     execFile: (file, args, options, callback) => execFile(file, args, options, callback),
   });
   ipcMain.handle(
-    'shell:open-file-in-browser',
+    IPC_CHANNELS.SHELL.OPEN_FILE_IN_BROWSER,
     async (
       event: Electron.IpcMainInvokeEvent,
       filePathOrUrl: string,
@@ -5234,7 +5235,7 @@ const registerIpcHandlers = () => {
   // (e.g. .log → Notepad / Console, .ts → editor of choice). Mirrors the
   // `shell:open-external` policy: only allow paths that pass `isPathAllowed`.
   ipcMain.handle(
-    'shell:open-path',
+    IPC_CHANNELS.SHELL.OPEN_PATH,
     async (
       event: Electron.IpcMainInvokeEvent,
       filePathOrUrl: string,
@@ -5320,11 +5321,11 @@ const registerIpcHandlers = () => {
         child.unref();
       },
     });
-    ipcMain.handle('open-with:list', (event, params: { filePath: string }) => {
+    ipcMain.handle(IPC_CHANNELS.OPEN_WITH.LIST, (event, params: { filePath: string }) => {
       assertTrustedAppRendererEvent(event);
       return openWith.list(params);
     });
-    ipcMain.handle('open-with:open', (event, params: { filePath: string; appId: string }) => {
+    ipcMain.handle(IPC_CHANNELS.OPEN_WITH.OPEN, (event, params: { filePath: string; appId: string }) => {
       assertTrustedAppRendererEvent(event);
       return openWith.open(params);
     });
@@ -5390,13 +5391,13 @@ const registerIpcHandlers = () => {
     },
   });
   ipcMain.handle(
-    'chat-attachment:stage',
+    IPC_CHANNELS.CHAT_ATTACHMENT.STAGE,
     (event, params: { sourcePath?: unknown; suggestedName?: unknown }) => {
       assertTrustedAppRendererEvent(event);
       return stageChatAttachment(params);
     },
   );
-  ipcMain.handle('chat-attachment:cleanup', async (event, filePaths: readonly string[]) => {
+  ipcMain.handle(IPC_CHANNELS.CHAT_ATTACHMENT.CLEANUP, async (event, filePaths: readonly string[]) => {
     assertTrustedAppRendererEvent(event);
     if (!Array.isArray(filePaths)) return;
     const ownerScopeKey = activeOwnerScopeKey();
@@ -5414,7 +5415,7 @@ const registerIpcHandlers = () => {
     });
   });
   ipcMain.handle(
-    'chat-attachment:save-as',
+    IPC_CHANNELS.CHAT_ATTACHMENT.SAVE_AS,
     (event, params: { sourcePath?: unknown; suggestedName?: unknown }) => {
       assertTrustedAppRendererEvent(event);
       return saveChatAttachment(params);
@@ -5424,7 +5425,7 @@ const registerIpcHandlers = () => {
   // Settings → About: 打开 <userData>/logs 在系统文件管理器。
   // 路径在主进程派生（renderer 不需要也不应该知道 userData 全路径）。
   // 目录不存在时先创建，避免空安装首次点击失败。
-  ipcMain.handle('app:open-logs-dir', async (): Promise<{ success: boolean; error?: string }> => {
+  ipcMain.handle(IPC_CHANNELS.APP.OPEN_LOGS_DIR, async (): Promise<{ success: boolean; error?: string }> => {
     try {
       const logDir = path.join(app.getPath('userData'), 'logs');
       fs.mkdirSync(logDir, { recursive: true });
@@ -5500,7 +5501,7 @@ const registerIpcHandlers = () => {
   // (resolved via the matching cache store) or an absolute file path. On
   // success, reveals the file in the OS file manager (Explorer / Finder).
   ipcMain.handle(
-    'shell:show-item-in-folder',
+    IPC_CHANNELS.SHELL.SHOW_ITEM_IN_FOLDER,
     async (
       _event: Electron.IpcMainInvokeEvent,
       params: { url?: string; filePath?: string },
@@ -5555,7 +5556,7 @@ const registerIpcHandlers = () => {
   // it into Explorer / Finder, chat apps, video editors, etc.
   // Mirrors the URL-or-absolute-path contract of `shell:show-item-in-folder`.
   ipcMain.handle(
-    'media:copy-to-clipboard',
+    IPC_CHANNELS.MEDIA.COPY_TO_CLIPBOARD,
     async (
       _event: Electron.IpcMainInvokeEvent,
       params: { url?: string; filePath?: string },
@@ -5724,17 +5725,17 @@ const registerIpcHandlers = () => {
       now: () => Date.now(),
     });
 
-    ipcMain.handle('media:open-with-default-app', (_event, params: { url: string }) =>
+    ipcMain.handle(IPC_CHANNELS.MEDIA.OPEN_WITH_DEFAULT_APP, (_event, params: { url: string }) =>
       lightboxMedia.openWithDefaultApp(params),
     );
-    ipcMain.handle('media:save-as', (_event, params: { url: string }) =>
+    ipcMain.handle(IPC_CHANNELS.MEDIA.SAVE_AS, (_event, params: { url: string }) =>
       lightboxMedia.saveAs(params),
     );
     ipcMain.handle(
-      'media:cache-for-session',
+      IPC_CHANNELS.MEDIA.CACHE_FOR_SESSION,
       (_event, params: { url: string; sessionId: string }) => lightboxMedia.cacheForSession(params),
     );
-    ipcMain.handle('media:read-image-bytes', (_event, params: { url: string }) =>
+    ipcMain.handle(IPC_CHANNELS.MEDIA.READ_IMAGE_BYTES, (_event, params: { url: string }) =>
       lightboxMedia.readImageBytes(params),
     );
   }
@@ -5743,7 +5744,7 @@ const registerIpcHandlers = () => {
   // 高权限入口——先过 sender 闸,再由 readFileThumbnail 做路径策略与 payload 校验;
   // 任何失败都回 null,由 renderer 回落到自绘文件图标。
   ipcMain.handle(
-    'file:thumbnail',
+    IPC_CHANNELS.FILE.THUMBNAIL,
     async (
       event: Electron.IpcMainInvokeEvent,
       params: { path: string; size: number; revalidate?: boolean },
@@ -5770,7 +5771,7 @@ const registerIpcHandlers = () => {
   // 引用(=晋升)。sessionId 参数保留兼容 renderer 签名,不再决定落盘位置。
   // F1: drag drop → blob 仓,returns cindy-media:// url
   ipcMain.handle(
-    'image-cache:from-path',
+    IPC_CHANNELS.IMAGE_CACHE.FROM_PATH,
     async (
       _event: Electron.IpcMainInvokeEvent,
       params: { sessionId: string; sourcePath: string; originalName: string },
@@ -5784,7 +5785,7 @@ const registerIpcHandlers = () => {
 
   // F1: clipboard paste → blob 仓,returns cindy-media:// url
   ipcMain.handle(
-    'image-cache:from-buffer',
+    IPC_CHANNELS.IMAGE_CACHE.FROM_BUFFER,
     async (
       _event: Electron.IpcMainInvokeEvent,
       params: {
@@ -5806,7 +5807,7 @@ const registerIpcHandlers = () => {
   {
     // 各窗口草稿附件 URL 上报(composerDraftStore mutator 尾部推送;多窗口
     // 时清理取全窗口并集,防误删别的窗口的草稿图)。fire-and-forget send。
-    ipcMain.on('cindy-media:report-draft-urls', (event, urls: string[]) => {
+    ipcMain.on(IPC_CHANNELS.CINDY_MEDIA.REPORT_DRAFT_URLS, (event, urls: string[]) => {
       registerWindowDraftUrls(event.sender, urls);
     });
 
@@ -5815,12 +5816,12 @@ const registerIpcHandlers = () => {
       loadSnapshotPayloads: loadAllQueueSnapshotPayloads,
       getRegisteredDraftUrls: getAllRegisteredDraftUrls,
     });
-    ipcMain.handle('cindy-media:storage-stats', () => storageHandlers.stats());
-    ipcMain.handle('cindy-media:storage-scan', (_event, params: { draftUrls: string[] }) =>
+    ipcMain.handle(IPC_CHANNELS.CINDY_MEDIA.STORAGE_STATS, () => storageHandlers.stats());
+    ipcMain.handle(IPC_CHANNELS.CINDY_MEDIA.STORAGE_SCAN, (_event, params: { draftUrls: string[] }) =>
       storageHandlers.scan(params),
     );
     ipcMain.handle(
-      'cindy-media:storage-cleanup',
+      IPC_CHANNELS.CINDY_MEDIA.STORAGE_CLEANUP,
       (
         _event,
         params: {
@@ -5832,14 +5833,14 @@ const registerIpcHandlers = () => {
         },
       ) => storageHandlers.cleanup(params),
     );
-    ipcMain.handle('cindy-media:storage-reconcile', () => storageHandlers.reconcile());
+    ipcMain.handle(IPC_CHANNELS.CINDY_MEDIA.STORAGE_RECONCILE, () => storageHandlers.reconcile());
   }
 
   // F5: SDK send-time temporary base64 read (renderer-initiated; main-initiated
   // is the primary path inside agentManager.buildContentBlocks).
   // 双世界:cindy-media 新地址走 blob 仓,老 xdt-image 地址走冻结的老 store。
   ipcMain.handle(
-    'image-cache:read-base64',
+    IPC_CHANNELS.IMAGE_CACHE.READ_BASE64,
     async (
       _event: Electron.IpcMainInvokeEvent,
       params: { url: string },
@@ -5854,7 +5855,7 @@ const registerIpcHandlers = () => {
 
   // F7: cleanup an entire session's cache directory (delete session)
   ipcMain.handle(
-    'image-cache:cleanup-session',
+    IPC_CHANNELS.IMAGE_CACHE.CLEANUP_SESSION,
     async (_event: Electron.IpcMainInvokeEvent, sessionId: string): Promise<void> => {
       await imageCacheStore.removeSession(sessionId);
       // 媒体总仓对应清理:删本会话名下的媒体引用行(附件/导入/
@@ -5873,7 +5874,7 @@ const registerIpcHandlers = () => {
 
   // F7: cleanup a list of files (移除输入框 chip / 丢弃截图草稿)
   ipcMain.handle(
-    'image-cache:cleanup-files',
+    IPC_CHANNELS.IMAGE_CACHE.CLEANUP_FILES,
     async (_event: Electron.IpcMainInvokeEvent, urls: string[]): Promise<void> => {
       if (!Array.isArray(urls)) return;
       const cleanupLog = createLogger('image-cache');
@@ -6500,7 +6501,7 @@ app.on('ready', async () => {
   // localDb.ensureReady 成功之后调一次。Hook 与 FeishuBot 的权威启动已由
   // localDb onReady 排到 provider readiness 之后；这里同样等待屏障，再为旧时序
   // 与瞬时失败保留幂等重试。
-  ipcMain.handle('app:ready-for-bot', async (event) => {
+  ipcMain.handle(IPC_CHANNELS.APP.READY_FOR_BOT, async (event) => {
     assertTrustedAppRendererEvent(event);
     await waitForCurrentAccountProviderModelsReady();
     startHookControlAccount();

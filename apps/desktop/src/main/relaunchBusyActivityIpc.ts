@@ -16,8 +16,9 @@ import { ipcMain } from 'electron';
 import { createLogger } from './logger.js';
 import { evaluateRelaunchBusyActivity, type RelaunchBusyActivitySources } from './relaunchBusyActivity.js';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
-export const RELAUNCH_BLOCKING_ACTIVITY_CHANNEL = 'update-relaunch:blocking-activity';
+export const RELAUNCH_BLOCKING_ACTIVITY_CHANNEL = IPC_CHANNELS.UPDATE_RELAUNCH.BLOCKING_ACTIVITY;
 
 const log = createLogger('relaunch-activity');
 

@@ -50,37 +50,38 @@ import { getRemoteFileBrowser } from './remote-deps.js';
 import { getRemoteWatchRegistry } from './remote-watch.js';
 import { throwRemoteFsIpcError } from './remote.js';
 import { watcherManager, type FileTreeEvent } from './watcher.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('file-browser/ipc');
 
 export const FILE_BROWSER_INVOKE = {
   /** 大文件取回:>2MiB inline 上限的远程文件拉到本地缓存(SSH 分片 / device OSS)。 */
-  FETCH_REMOTE: 'maker:file-browser:fetch-remote',
+  FETCH_REMOTE: IPC_CHANNELS.MAKER_EXTRA.FILE_BROWSER_FETCH_REMOTE,
   /** 读缓存副本内容(cached 态的应用内文本预览;路径限缓存目录内)。 */
-  READ_CACHED: 'maker:file-browser:read-cached',
+  READ_CACHED: IPC_CHANNELS.MAKER_EXTRA.FILE_BROWSER_READ_CACHED,
   /** 远程小文件读成功后的写穿(断线兜底对大小文件语义一致)。 */
-  CACHE_PUT: 'maker:file-browser:cache-put',
-  LIST_DIR: 'maker:file-browser:list-dir',
+  CACHE_PUT: IPC_CHANNELS.MAKER_EXTRA.FILE_BROWSER_CACHE_PUT,
+  LIST_DIR: IPC_CHANNELS.MAKER_EXTRA.FILE_BROWSER_LIST_DIR,
   /** 项目级文件名扁平列表(走 ripgrep `--files` honor .gitignore),给 RSB 快速
    *  文件筛选 / Cmd+P 风格 fuzzy finder 用。详见 listAllFiles.ts。 */
-  LIST_ALL: 'maker:file-browser:list-all',
-  READ_FILE: 'maker:file-browser:read-file',
-  WRITE_FILE: 'maker:file-browser:write-file',
-  CREATE_FILE: 'maker:file-browser:create-file',
-  CREATE_FOLDER: 'maker:file-browser:create-folder',
-  RENAME_ENTRY: 'maker:file-browser:rename-entry',
-  DELETE_ENTRY: 'maker:file-browser:delete-entry',
-  STAT: 'maker:file-browser:stat',
-  START_WATCH: 'maker:file-browser:start-watch',
-  STOP_WATCH: 'maker:file-browser:stop-watch',
+  LIST_ALL: IPC_CHANNELS.MAKER_EXTRA.FILE_BROWSER_LIST_ALL,
+  READ_FILE: IPC_CHANNELS.MAKER_EXTRA.FILE_BROWSER_READ_FILE,
+  WRITE_FILE: IPC_CHANNELS.MAKER_EXTRA.FILE_BROWSER_WRITE_FILE,
+  CREATE_FILE: IPC_CHANNELS.MAKER_EXTRA.FILE_BROWSER_CREATE_FILE,
+  CREATE_FOLDER: IPC_CHANNELS.MAKER_EXTRA.FILE_BROWSER_CREATE_FOLDER,
+  RENAME_ENTRY: IPC_CHANNELS.MAKER_EXTRA.FILE_BROWSER_RENAME_ENTRY,
+  DELETE_ENTRY: IPC_CHANNELS.MAKER_EXTRA.FILE_BROWSER_DELETE_ENTRY,
+  STAT: IPC_CHANNELS.MAKER_EXTRA.FILE_BROWSER_STAT,
+  START_WATCH: IPC_CHANNELS.MAKER_EXTRA.FILE_BROWSER_START_WATCH,
+  STOP_WATCH: IPC_CHANNELS.MAKER_EXTRA.FILE_BROWSER_STOP_WATCH,
   /** 聊天流文件类交互的远程取回(fetch-到缓存-再操作,见 chat-file.ts)。 */
-  CHAT_FILE_FETCH: 'maker:chat-file:fetch',
+  CHAT_FILE_FETCH: IPC_CHANNELS.MAKER_EXTRA.CHAT_FILE_FETCH,
   /** 聊天流文件 chip 点亮预检(远端精确 stat,见 chat-file.ts statChatFile)。 */
-  CHAT_FILE_STAT: 'maker:chat-file:stat',
+  CHAT_FILE_STAT: IPC_CHANNELS.MAKER_EXTRA.CHAT_FILE_STAT,
 } as const;
 
 export const FILE_BROWSER_PUSH = {
-  EVENT: 'maker:file-browser:event',
+  EVENT: IPC_CHANNELS.MAKER_EXTRA.FILE_BROWSER_EVENT,
   /** 大文件取回进度(仅发给发起窗口):{ workdir, relPath, received, total }。 */
   TRANSFER: 'maker:file-browser:transfer',
 } as const;

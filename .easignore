@@ -48,6 +48,8 @@ apps/mobile/visual-*.png
 packages/*
 !packages/auth-client
 !packages/auth-client/**
+!packages/cindy-ipc
+!packages/cindy-ipc/**
 !packages/device-link
 !packages/device-link/**
 !packages/maker-shared

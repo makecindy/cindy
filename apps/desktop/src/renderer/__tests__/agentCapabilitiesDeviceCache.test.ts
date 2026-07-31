@@ -5,6 +5,7 @@
  * 模块级缓存:每个用例 vi.resetModules() + 动态 import 拿到干净模块。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 beforeEach(() => {
   vi.resetModules();
@@ -190,9 +191,9 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     const { getCapabilities, invoke } = stubElectron();
     const mod = await import('@/hooks/useAgentCapabilities');
     await mod.prefetchDeviceCapabilities('dev-1');
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:get-capabilities', ['claude-code']);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:get-capabilities', ['codex']);
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:get-capabilities', ['pi']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.GET_CAPABILITIES, ['claude-code']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.GET_CAPABILITIES, ['codex']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.GET_CAPABILITIES, ['pi']);
     expect(getCapabilities).not.toHaveBeenCalled();
     expect(mod.getCachedCapabilities('claude-code', 'dev-1')?.availableModels[0].displayName).toBe(
       'dev-1:claude-code',

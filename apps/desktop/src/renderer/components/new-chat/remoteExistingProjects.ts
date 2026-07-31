@@ -15,6 +15,7 @@
 
 import { extractDisplayName } from '@/features/cc-agent/lib/projectGrouping';
 import type { Session } from '@/lib/ccAgent.types';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 export interface ExistingRemoteProject {
   /** 添加时透传给 onProjectAdded 的原始路径(device-link=被控端 native 形态;SSH=远端 POSIX)。 */
@@ -91,7 +92,7 @@ export async function loadDeviceLinkExistingProjects(
 ): Promise<ExistingRemoteProject[]> {
   const rows: unknown = await window.electronAPI.deviceLink.invoke(
     deviceId,
-    'local-db:recent-workdirs:list',
+    IPC_CHANNELS.LOCAL_DB.RECENT_WORKDIRS_LIST,
     [],
   );
   // 只有明确返回数组才是权威结果；null / undefined 是协议或连接异常，不能伪装成
@@ -107,7 +108,9 @@ export async function removeDeviceLinkExistingProject(
   deviceId: string,
   path: string,
 ): Promise<void> {
-  await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:recent-workdirs:remove', [
-    { path },
-  ]);
+  await window.electronAPI.deviceLink.invoke(
+    deviceId,
+    IPC_CHANNELS.LOCAL_DB.RECENT_WORKDIRS_REMOVE,
+    [{ path }],
+  );
 }

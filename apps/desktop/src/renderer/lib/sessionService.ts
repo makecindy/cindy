@@ -16,6 +16,7 @@ import { extractIpcError } from '@/utils/ipcError';
 import { makerApiFor } from '@/lib/makerTransport';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import type { SessionReference } from '../../shared/sessionReference';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 /**
  * status 过滤器：对应 Sidebar Filter 的 Active/Archived/All 三选。
@@ -169,7 +170,7 @@ export async function patchMeta(
   const deviceId = getStickySessionDeviceId(sessionId);
   if (deviceId) {
     return wrap(
-      window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:patch-meta', [
+      window.electronAPI.deviceLink.invoke(deviceId, IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCH_META, [
         sessionId,
         patch,
       ]) as Promise<Session>,

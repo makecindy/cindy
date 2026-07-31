@@ -49,6 +49,7 @@ import {
 import { voiceInputOverlayPositionStore } from './overlayPositionStore.js';
 import { voiceInputDataStore } from './VoiceInputDataStore.js';
 import { installWindowHiddenBroadcast } from '../windowHiddenBroadcast.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('voice-input-global');
 type GlobalVoiceInputShortcutPhase = 'start' | 'tap' | 'end';
@@ -130,7 +131,7 @@ const macModifierShortcutListener = new MacModifierShortcutListener({
         modifierShortcutRecordingWebContentsIds.delete(webContentsId);
         continue;
       }
-      window.webContents.send('voice-input:modifier-shortcut-keys', { keys });
+      window.webContents.send(IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_KEYS, { keys });
     }
   },
 });
@@ -852,7 +853,7 @@ function notifyPendingShortcutRecoveryFailed(): void {
   pendingShortcutRecoveryFailure = true;
   for (const window of BrowserWindow.getAllWindows()) {
     try {
-      window.webContents.send('voice-input:shortcut-recovery-failed');
+      window.webContents.send(IPC_CHANNELS.VOICE_INPUT.SHORTCUT_RECOVERY_FAILED);
     } catch {
       /* renderer 已销毁 */
     }
@@ -1005,7 +1006,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
    * 这也是为什么挂起要显式带 intent：它传的 null 恰恰故意与存盘不同，靠值本身分不出来。
    */
   ipcMain.handle(
-    'voice-input:global-shortcut:set',
+    IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET,
     async (
       event,
       shortcut: VoiceInputShortcut | null | undefined,
@@ -1060,7 +1061,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
   );
 
   ipcMain.handle(
-    'voice-input:settings:update-shortcut',
+    IPC_CHANNELS.VOICE_INPUT.SETTINGS_UPDATE_SHORTCUT,
     async (_event, shortcut: VoiceInputShortcut | null | undefined): Promise<VoiceInputSettingsUpdateResult> => {
       return queueShortcutMutation(async () => {
         const nextShortcut = shortcut ?? null;
@@ -1093,7 +1094,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
   );
 
   ipcMain.handle(
-    'voice-input:modifier-shortcut-recording:start',
+    IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_RECORDING_START,
     async (event): Promise<VoiceInputGlobalResult> => {
       // 授权先于一切：这条 IPC 会把 sender 登记进 keys 转发名单，而转发出去的不止修饰键
       // （helper 对非修饰键发 `KeyCode:<n>`），等于一路系统级按键流。平台判断放在它后面。
@@ -1143,7 +1144,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
   );
 
   ipcMain.handle(
-    'voice-input:modifier-shortcut-recording:stop',
+    IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_RECORDING_STOP,
     (event): VoiceInputGlobalResult => {
       modifierShortcutRecordingWebContentsIds.delete(event.sender.id);
       modifierShortcutRecordingSessionIds.delete(event.sender.id);
@@ -1155,7 +1156,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
   );
 
   ipcMain.handle(
-    'voice-input:global-paste',
+    IPC_CHANNELS.VOICE_INPUT.GLOBAL_PASTE,
     async (_event, payload: { text?: string; rawTranscriptText?: string } | undefined): Promise<VoiceInputGlobalResult> => {
       const text = payload?.text ?? '';
       const rawTranscriptText = payload?.rawTranscriptText?.trim() || undefined;
@@ -1192,7 +1193,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
   );
 
   ipcMain.handle(
-    'voice-input:global-overlay-close',
+    IPC_CHANNELS.VOICE_INPUT.GLOBAL_OVERLAY_CLOSE,
     async (_event, options: { preservePasteTarget?: boolean } | undefined): Promise<{ ok: true }> => {
       const preservePasteTarget = Boolean(options?.preservePasteTarget);
       log.debug('global overlay close requested', {
@@ -1204,7 +1205,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
     },
   );
 
-  ipcMain.handle('voice-input:global-overlay-show-passive', (): VoiceInputGlobalResult => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.GLOBAL_OVERLAY_SHOW_PASSIVE, (): VoiceInputGlobalResult => {
     const window = getOverlayWindow();
     log.debug('global overlay passive show requested', {
       overlayVisible: Boolean(window?.isVisible()),
@@ -1215,7 +1216,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
   });
 
   ipcMain.handle(
-    'voice-input:open-settings',
+    IPC_CHANNELS.VOICE_INPUT.OPEN_SETTINGS,
     async (event, tab: unknown): Promise<{ ok: true }> => {
       const window = getOverlayWindow();
       if (!window || event.sender !== window.webContents) {
@@ -1239,7 +1240,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
   // fire-and-forget 通道驱动 main 移动窗口。move tick 在 renderer 侧按
   // requestAnimationFrame 节流；main 每 tick 从拖动起点无状态重算（clamp +
   // 中线吸附都在 resolveDraggedOverlayBounds 纯函数里），不写盘。
-  ipcMain.on('voice-input:global-overlay-drag-start', (event) => {
+  ipcMain.on(IPC_CHANNELS.VOICE_INPUT.GLOBAL_OVERLAY_DRAG_START, (event) => {
     const window = getOverlayWindow();
     if (!window || event.sender !== window.webContents) return;
     overlayDragSession = {
@@ -1248,7 +1249,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
     };
   });
 
-  ipcMain.on('voice-input:global-overlay-drag-move', (event) => {
+  ipcMain.on(IPC_CHANNELS.VOICE_INPUT.GLOBAL_OVERLAY_DRAG_MOVE, (event) => {
     const window = getOverlayWindow();
     if (!window || event.sender !== window.webContents) return;
     const session = overlayDragSession;
@@ -1264,7 +1265,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
     }));
   });
 
-  ipcMain.on('voice-input:global-overlay-drag-end', (event) => {
+  ipcMain.on(IPC_CHANNELS.VOICE_INPUT.GLOBAL_OVERLAY_DRAG_END, (event) => {
     const window = getOverlayWindow();
     if (!window || event.sender !== window.webContents) return;
     if (!overlayDragSession) return;
@@ -1286,7 +1287,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
     log.debug('global overlay drag position saved', { x: bounds.x, y: bounds.y });
   });
 
-  ipcMain.handle('voice-input:global-overlay-position-reset', (event): { ok: true } => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.GLOBAL_OVERLAY_POSITION_RESET, (event): { ok: true } => {
     const window = getOverlayWindow();
     if (window && event.sender === window.webContents) {
       overlayDragSession = null;
@@ -1302,7 +1303,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
     return { ok: true };
   });
 
-  ipcMain.on('voice-input:global-shortcut-claim', (event, payload: { id?: unknown } | undefined) => {
+  ipcMain.on(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_CLAIM, (event, payload: { id?: unknown } | undefined) => {
     const id = typeof payload?.id === 'string' ? payload.id : '';
     const pending = pendingFocusedWindowShortcutClaim;
     if (!pending || pending.id !== id || pending.webContentsId !== event.sender.id) return;
@@ -1316,14 +1317,14 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
     if (queuedPhase) {
       setImmediate(() => {
         if (!event.sender.isDestroyed()) {
-          event.sender.send('voice-input:global-shortcut-trigger', { phase: queuedPhase });
+          event.sender.send(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_TRIGGER, { phase: queuedPhase });
         }
       });
     }
     log.debug('focused window claimed global shortcut', { id });
   });
 
-  ipcMain.handle('voice-input:open-accessibility-settings', async (): Promise<VoiceInputGlobalResult> => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.OPEN_ACCESSIBILITY_SETTINGS, async (): Promise<VoiceInputGlobalResult> => {
     if (process.platform !== 'darwin') {
       return {
         ok: false,
@@ -1356,7 +1357,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
    * 闸用通用的可信 renderer 校验（不是应用外壳窗口那道收窄闸）：这条只读一个布尔、不触发
    * 任何系统弹窗。
    */
-  ipcMain.handle('voice-input:consume-shortcut-recovery-failure', (event): { failed: boolean } => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.CONSUME_SHORTCUT_RECOVERY_FAILURE, (event): { failed: boolean } => {
     assertTrustedAppRendererEvent(event);
     if (!pendingShortcutRecoveryFailure) return { failed: false };
     const senderId = event.sender.id;
@@ -1368,7 +1369,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
     return { failed: true };
   });
 
-  ipcMain.handle('voice-input:open-input-monitoring-settings', async (event): Promise<VoiceInputGlobalResult> => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.OPEN_INPUT_MONITORING_SETTINGS, async (event): Promise<VoiceInputGlobalResult> => {
     // 同下面的 request handler：这条也会触发 CGRequestListenEventAccess 弹系统授权窗，
     // 攻击面完全相同，所以一并上闸——只给新 handler 加等于没关洞。
     assertVoiceSettingsWindowSender(event, deps);
@@ -1404,7 +1405,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
   // - 失败走 throwIpcError 而不是 return { ok: false }：这是动作型 handler，renderer
   //   不需要失败时的结构化 fallback（它随后会重新查权限），按 IPC 错误协议应当抛。
   ipcMain.handle(
-    'voice-input:request-input-monitoring-permission',
+    IPC_CHANNELS.VOICE_INPUT.REQUEST_INPUT_MONITORING_PERMISSION,
     async (event): Promise<VoiceInputInputMonitoringRequestResult> => {
       assertVoiceSettingsWindowSender(event, deps);
       if (process.platform !== 'darwin') {
@@ -1427,7 +1428,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
   );
 
   ipcMain.handle(
-    'voice-input:dictionary-toast-show',
+    IPC_CHANNELS.VOICE_INPUT.DICTIONARY_TOAST_SHOW,
     (_event, payload: unknown): { ok: true } | { ok: false; error: string } => {
       const entries = normalizeDictionaryToastEntries(payload);
       if (entries.length === 0) return { ok: false, error: 'Dictionary toast payload is incomplete.' };
@@ -1437,12 +1438,12 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
     },
   );
 
-  ipcMain.handle('voice-input:dictionary-toast-close', (): { ok: true } => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.DICTIONARY_TOAST_CLOSE, (): { ok: true } => {
     closeDictionaryToastWindow();
     return { ok: true };
   });
 
-  ipcMain.on('voice-input:global-overlay-ready', (event) => {
+  ipcMain.on(IPC_CHANNELS.VOICE_INPUT.GLOBAL_OVERLAY_READY, (event) => {
     const window = getOverlayWindow();
     if (!window || event.sender !== window.webContents) return;
     overlayLoaded = true;
@@ -1463,7 +1464,7 @@ export function registerGlobalVoiceInputIpc(deps: GlobalVoiceInputIpcDeps): void
     startLoadedOverlaySession(window, start.shortcutInvokedAt);
   });
 
-  ipcMain.handle('voice-input:global-restore-target-focus', async (): Promise<VoiceInputGlobalResult> => {
+  ipcMain.handle(IPC_CHANNELS.VOICE_INPUT.GLOBAL_RESTORE_TARGET_FOCUS, async (): Promise<VoiceInputGlobalResult> => {
     try {
       const target = await resolveOverlayPasteTarget();
       log.debug(PASTE_DEBUG_TAG, 'restore target focus requested', {
@@ -1689,7 +1690,7 @@ function handleGlobalVoiceInputShortcut(phase?: Extract<GlobalVoiceInputShortcut
       pendingModifierOverlaySuppressNextTap = false;
       pendingModifierOverlaySuppressNextRelease = true;
     }
-    overlay.webContents.send('voice-input:global-overlay-command', { type: 'submit' });
+    overlay.webContents.send(IPC_CHANNELS.VOICE_INPUT.GLOBAL_OVERLAY_COMMAND, { type: 'submit' });
     return;
   }
   if (overlay && overlay.isVisible()) {
@@ -1733,12 +1734,12 @@ function handleGlobalVoiceInputShortcutTap(): void {
   if (sendShortcutToActiveInlineVoiceInput('tap')) return;
   const overlay = getOverlayWindow();
   if (overlay && isOverlayPresentationOpen(overlay)) {
-    overlay.webContents.send('voice-input:global-overlay-command', { type: 'submit' });
+    overlay.webContents.send(IPC_CHANNELS.VOICE_INPUT.GLOBAL_OVERLAY_COMMAND, { type: 'submit' });
     return;
   }
   const focusedWindow = BrowserWindow.getFocusedWindow();
   if (focusedWindow) {
-    focusedWindow.webContents.send('voice-input:global-shortcut-trigger', { phase: 'tap' });
+    focusedWindow.webContents.send(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_TRIGGER, { phase: 'tap' });
   }
 }
 
@@ -1752,7 +1753,7 @@ function handleGlobalVoiceInputShortcutSubmit(): void {
   if (sendShortcutToActiveInlineVoiceInput('end')) return;
   const overlay = getOverlayWindow();
   if (overlay && overlayPresentationActive) {
-    overlay.webContents.send('voice-input:global-overlay-command', { type: 'submit' });
+    overlay.webContents.send(IPC_CHANNELS.VOICE_INPUT.GLOBAL_OVERLAY_COMMAND, { type: 'submit' });
     return;
   }
   if (pendingOverlayStart) {
@@ -1766,7 +1767,7 @@ function handleGlobalVoiceInputShortcutSubmit(): void {
 
   const focusedWindow = BrowserWindow.getFocusedWindow();
   if (focusedWindow) {
-    focusedWindow.webContents.send('voice-input:global-shortcut-trigger', { phase: 'end' });
+    focusedWindow.webContents.send(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_TRIGGER, { phase: 'end' });
   }
 }
 
@@ -1806,7 +1807,7 @@ function sendShortcutToFocusedWindowOrFallback(
     webContentsId: focusedWindow.webContents.id,
     timer,
   };
-  focusedWindow.webContents.send('voice-input:global-shortcut-trigger', { id, phase });
+  focusedWindow.webContents.send(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_TRIGGER, { id, phase });
 }
 
 function sendShortcutToActiveInlineVoiceInput(phase?: GlobalVoiceInputShortcutPhase): boolean {
@@ -1822,7 +1823,7 @@ function sendShortcutToActiveInlineVoiceInput(phase?: GlobalVoiceInputShortcutPh
       phase,
     });
     const shouldRestoreFocus = BrowserWindow.getFocusedWindow()?.webContents.id !== webContentsId;
-    window.webContents.send('voice-input:global-shortcut-trigger', { phase });
+    window.webContents.send(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_TRIGGER, { phase });
     if (shouldRestoreFocus) {
       focusActiveInlineVoiceInputWindow(window);
     }
@@ -2026,7 +2027,7 @@ function registerOverlayCancelShortcut(): void {
   const ok = globalShortcut.register(OVERLAY_CANCEL_ACCELERATOR, () => {
     const overlay = getOverlayWindow();
     if (!overlay) return;
-    overlay.webContents.send('voice-input:global-overlay-command', { type: 'cancel' });
+    overlay.webContents.send(IPC_CHANNELS.VOICE_INPUT.GLOBAL_OVERLAY_COMMAND, { type: 'cancel' });
   });
   if (!ok) {
     log.warn('overlay cancel shortcut registration failed', { accelerator: OVERLAY_CANCEL_ACCELERATOR });
@@ -2047,7 +2048,7 @@ async function showOverlayWindow(shortcutInvokedAt = Date.now()): Promise<void> 
   // 显示」这段窗口，否则等待期内的第二次按键会再开一次呈现，renderer 收到重复
   // start 会忽略，用户那一下等于丢了。
   if (existing && (existing.isVisible() || isOverlayPresentationOpen(existing))) {
-    existing.webContents.send('voice-input:global-overlay-command', { type: 'submit' });
+    existing.webContents.send(IPC_CHANNELS.VOICE_INPUT.GLOBAL_OVERLAY_COMMAND, { type: 'submit' });
     return;
   }
 
@@ -2381,7 +2382,7 @@ function startLoadedOverlaySession(window: BrowserWindow, shortcutInvokedAt: num
     visibleOnFullScreen: true,
     skipTransformProcessType: process.platform === 'darwin',
   });
-  window.webContents.send('voice-input:global-overlay-command', { type: 'start' });
+  window.webContents.send(IPC_CHANNELS.VOICE_INPUT.GLOBAL_OVERLAY_COMMAND, { type: 'start' });
   if (pendingModifierOverlaySubmit) {
     pendingModifierOverlaySubmit = false;
     setImmediate(() => {
@@ -2392,7 +2393,7 @@ function startLoadedOverlaySession(window: BrowserWindow, shortcutInvokedAt: num
         log.debug('pending modifier submit dropped: presentation no longer current');
         return;
       }
-      window.webContents.send('voice-input:global-overlay-command', { type: 'submit' });
+      window.webContents.send(IPC_CHANNELS.VOICE_INPUT.GLOBAL_OVERLAY_COMMAND, { type: 'submit' });
     });
   }
   const show = (): void => {
@@ -3352,7 +3353,7 @@ function publishExternalDictionaryLearningEvidence(
       pendingDictionaryToastAnchors.shift();
     }
   }
-  window.webContents.send('voice-input:dictionary-learning-evidence', { evidence });
+  window.webContents.send(IPC_CHANNELS.VOICE_INPUT.DICTIONARY_LEARNING_EVIDENCE, { evidence });
 }
 
 /** 拍下「当前这次浮窗现场」，供之后给它的词典 toast 定位。 */

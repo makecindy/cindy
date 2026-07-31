@@ -24,8 +24,9 @@ import {
 import { readXdGatewayApiKey } from '../shared/apiKey';
 import { checkImRouteAuth, type ImAuthCheckDeps, type ImAuthMissing } from '../shared/authCheck';
 import type { ImOrchestratorConfig } from '../shared/types';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
-export const TELEGRAM_SESSION_AUTH_CHECK_CHANNEL = 'telegramBot:check-session-auth';
+export const TELEGRAM_SESSION_AUTH_CHECK_CHANNEL = IPC_CHANNELS.TELEGRAM_BOT.CHECK_SESSION_AUTH;
 
 type AuthRow = Pick<ResolvedImSessionDefaults, 'agentKind' | 'model' | 'providerId'>;
 

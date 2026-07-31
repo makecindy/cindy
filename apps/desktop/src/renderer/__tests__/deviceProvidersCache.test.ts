@@ -10,6 +10,7 @@ import {
   visibleModelUnion,
   type ProviderView,
 } from '@cindy/model-providers';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 beforeEach(() => {
   vi.resetModules();
@@ -60,7 +61,7 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     const invoke = stubDeviceLink();
     const mod = await import('@/hooks/useDeviceProviders');
     await mod.prefetchDeviceProviders('dev-1');
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:provider:list', [
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.PROVIDER_LIST, [
       {
         capabilities: ['provider-logo-kinds-v2'],
       },
@@ -317,12 +318,12 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     const mod = await import('@/hooks/useDeviceProviders');
     await mod.prefetchDeviceProviders('dev-1');
     await mod.prefetchDeviceProviders('dev-2');
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:provider:list', [
+    expect(invoke).toHaveBeenCalledWith('dev-1', IPC_CHANNELS.MAKER_INVOKE.PROVIDER_LIST, [
       {
         capabilities: ['provider-logo-kinds-v2'],
       },
     ]);
-    expect(invoke).toHaveBeenCalledWith('dev-2', 'maker:provider:list', [
+    expect(invoke).toHaveBeenCalledWith('dev-2', IPC_CHANNELS.MAKER_INVOKE.PROVIDER_LIST, [
       {
         capabilities: ['provider-logo-kinds-v2'],
       },

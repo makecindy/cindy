@@ -13,14 +13,15 @@
 import { BrowserWindow } from 'electron';
 
 import { tapWindowBroadcast } from '../../device-link/broadcast-tap';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 /** 广播「session 行已创建」到本机所有窗口 + device-link 控制端。best-effort。 */
 export function broadcastSessionCreated(sessionId: string): void {
-  tapWindowBroadcast('local-db:sessions:created', { sessionId });
+  tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED, { sessionId });
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
-      win.webContents.send('local-db:sessions:created', { sessionId });
+      win.webContents.send(IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED, { sessionId });
     } catch {
       // best-effort UI 刷新失败不影响 IM 业务
     }

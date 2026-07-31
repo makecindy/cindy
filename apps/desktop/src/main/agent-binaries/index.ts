@@ -46,6 +46,7 @@ import type {
   VendorKey,
   VendorRuntimeState,
 } from './types.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 // ── kind 配置表 ──────────────────────────────────────────────────────────────
 //
@@ -150,7 +151,7 @@ export function isVettedAgentBinaryPath(kind: AgentBinaryKind, candidate: string
 export function broadcastBinaryDownloadProgress(data: BinaryDownloadProgressPayload): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
-      win.webContents.send('binary-download-progress', data);
+      win.webContents.send(IPC_CHANNELS.BINARY_DOWNLOAD_PROGRESS.BINARY_DOWNLOAD_PROGRESS, data);
     }
   }
 }

@@ -46,6 +46,7 @@ import {
 import { noteQuitDisposersCompleted, noteShutdownBegin } from './startup-diagnostics';
 import { isGhostSandboxWebContentsId } from './cindy-brain/runtime/electronSandboxAdapter';
 import { isRsbNativePopupWebContentsId } from './rsb-browser-bridge/native-popup-surfaces';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 /**
  * 瞬时网络错误的 wire payload (main → renderer)。code 永远存在 (Node 的 ErrnoException
@@ -77,7 +78,7 @@ function broadcastTransientNetworkErrorTip(err: NodeJS.ErrnoException): void {
     if (typeof e.port === 'number') payload.port = e.port;
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {
-        win.webContents.send('system:transient-network-error', payload);
+        win.webContents.send(IPC_CHANNELS.SYSTEM.TRANSIENT_NETWORK_ERROR, payload);
       }
     }
   } catch (broadcastErr) {

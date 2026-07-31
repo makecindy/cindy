@@ -23,6 +23,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 type IpcHandler = (event: unknown, payload: unknown) => Promise<void> | void;
 
@@ -143,7 +144,7 @@ async function freshService() {
 }
 
 async function invokeHandler(payload: unknown): Promise<void> {
-  const handler = registeredHandlers.get('notification:show-session-event');
+  const handler = registeredHandlers.get(IPC_CHANNELS.NOTIFICATION.SHOW_SESSION_EVENT);
   if (!handler) throw new Error('handler not registered');
   await handler({} as unknown, payload);
 }
@@ -171,7 +172,7 @@ describe('notificationService — channels 分发', () => {
   it('同步并校验 renderer 持久化的桌面通知总开关', async () => {
     const { getDesktopNotificationsEnabled, initNotificationService } = await freshService();
     initNotificationService(baseDeps(makeFeishuIm('ou_owner')));
-    const handler = registeredHandlers.get('notification:set-desktop-enabled');
+    const handler = registeredHandlers.get(IPC_CHANNELS.NOTIFICATION.SET_DESKTOP_ENABLED);
     expect(handler).toBeDefined();
 
     await handler?.({}, false);

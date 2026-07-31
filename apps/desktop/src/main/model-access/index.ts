@@ -35,6 +35,7 @@ import {
 } from './modelsSyncRefresh.js';
 import { getGhostSetupChangeBus } from '../cindy-brain/ghostSetupChangeBus.js';
 import { hasAuthSessionIdentityChanged } from './authSessionIdentity.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 export { isModelAccessReady } from './readiness.js';
 
 const log = createLogger('modelAccess');
@@ -381,16 +382,16 @@ export function initModelAccess(): void {
   if (initial.isAuthenticated) {
     noteAuthState(true, initial.user?.id ?? null, authManager.getActiveAuthRealm());
   }
-  ipcMain.handle('model-access:get-status', () => sync.getStatus());
+  ipcMain.handle(IPC_CHANNELS.MODEL_ACCESS.GET_STATUS, () => sync.getStatus());
 
-  ipcMain.handle('model-access:retry', async (): Promise<ModelAccessStatus> => {
+  ipcMain.handle(IPC_CHANNELS.MODEL_ACCESS.RETRY, async (): Promise<ModelAccessStatus> => {
     if (!getAppCapabilities().canUseCindyGateway) {
       throwIpcError('PERMISSION_DENIED', 'Cindy AI requires a Cindy account.');
     }
     return sync.retry();
   });
 
-  ipcMain.handle('model-access:rotate', async (): Promise<ModelAccessStatus> => {
+  ipcMain.handle(IPC_CHANNELS.MODEL_ACCESS.ROTATE, async (): Promise<ModelAccessStatus> => {
     if (!getAppCapabilities().canUseCindyGateway) {
       throwIpcError('PERMISSION_DENIED', 'Cindy AI requires a Cindy account.');
     }

@@ -85,6 +85,7 @@ import {
 import { createLogger, getLogDir } from './logger';
 import { ENDPOINT_MANIFEST_BASE_URL, ENDPOINT_MANIFEST_PEER_BASE_URL } from '../shared/endpoints';
 import { resolvePreferredSystemLocale } from '../shared/locale';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('clientEndpoints');
 
@@ -144,7 +145,7 @@ const AUTO_RETRY_DELAYS_MS: readonly number[] = [800, 2400];
  */
 const DIAGNOSIS_TOTAL_BUDGET_MS = 15_000;
 
-export const CLIENT_ENDPOINTS_SYNC_CHANNEL = 'client-endpoints:get-sync';
+export const CLIENT_ENDPOINTS_SYNC_CHANNEL = IPC_CHANNELS.CLIENT_ENDPOINTS.GET_SYNC;
 
 // ── 清单来源解析(纯函数,规则 14:内存 harness 可测) ─────────────────────
 

@@ -1,0 +1,24 @@
+{
+  "name": "@cindy/cindy-ipc",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Cindy Electron and device-link IPC channel constants. Zero runtime dependencies.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit"
+  },
+  "author": {
+    "name": "XD Inc.",
+    "email": "feedback@cindy.app"
+  },
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}

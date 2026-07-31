@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DbClient } from '../client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../client/current.js';
 import * as schema from '../schema.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const h = vi.hoisted(() => ({
   tapWindowBroadcast: vi.fn(),
@@ -88,11 +89,11 @@ describe('orcaTeamStore', () => {
       { id: 'worker-session-1', status: 'archived' },
       { id: 'worker-session-2', status: 'archived' },
     ]);
-    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED, {
       sessionId: 'worker-session-1',
       patch: { status: 'archived' },
     });
-    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED, {
       sessionId: 'worker-session-2',
       patch: { status: 'archived' },
     });

@@ -42,6 +42,7 @@ import {
   maxCharsForTier,
   hasSummarizableMaterial,
 } from './sessionTaskSummary.logic.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('sessionTaskSummary');
 
@@ -58,11 +59,11 @@ const lastGeneratedAt = new Map<string, number>();
  * 等下一次全量 reseed)——与 localDb/ipc/sessions.ts broadcastSessionPatched 同口径。
  */
 function broadcastPatched(sessionId: string, patch: Record<string, unknown>): void {
-  tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch });
+  tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED, { sessionId, patch });
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
-      win.webContents.send('local-db:sessions:patched', { sessionId, patch });
+      win.webContents.send(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED, { sessionId, patch });
     } catch {
       /* swallow */
     }

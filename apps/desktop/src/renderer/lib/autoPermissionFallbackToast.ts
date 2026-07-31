@@ -9,6 +9,7 @@ import { i18n } from '@/i18n';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 
 import { toast } from './toast';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 export interface AutoPermissionFallbackPayload {
   sessionId: string;
@@ -41,7 +42,7 @@ export function installAutoPermissionFallbackToastListener(): () => void {
   const offRemote = window.electronAPI.deviceLink?.onRemotePush?.((push, localOwnerStamp) => {
     if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
     if (
-      push.channel === 'maker:auto-permission:fallback' &&
+      push.channel === IPC_CHANNELS.MAKER_PUSH.AUTO_PERMISSION_FALLBACK &&
       isAutoPermissionFallbackPayload(push.payload)
     ) {
       handleAutoPermissionFallback();

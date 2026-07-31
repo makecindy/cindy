@@ -14,6 +14,7 @@ import {
   sshBrowseAdapter,
   deviceLinkBrowseAdapter,
 } from '@/components/new-chat/remoteBrowseAdapters';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const listRemoteDir = vi.fn();
 const statRemotePath = vi.fn();
@@ -80,7 +81,7 @@ describe('deviceLinkBrowseAdapter', () => {
       parent: 'C:\\Users',
     });
     const res = await deviceLinkBrowseAdapter('dev-A').listDir('~');
-    expect(invoke).toHaveBeenCalledWith('dev-A', 'fs:list-dir', [{ path: '~' }]);
+    expect(invoke).toHaveBeenCalledWith('dev-A', IPC_CHANNELS.FS.LIST_DIR, [{ path: '~' }]);
     expect(res.resolvedPath).toBe('C:\\Users\\cindy');
     expect(res.entries).toEqual([{ name: 'Code', kind: 'dir', childPath: 'C:\\Users\\cindy\\Code' }]);
     expect(res.parent).toBe('C:\\Users');
@@ -90,7 +91,7 @@ describe('deviceLinkBrowseAdapter', () => {
     invoke.mockResolvedValueOnce({ resolvedPath: '/x' });
     await deviceLinkBrowseAdapter('dev-A').statPath('~/x');
     await deviceLinkBrowseAdapter('dev-A').mkdirP('~/x');
-    expect(invoke).toHaveBeenNthCalledWith(1, 'dev-A', 'fs:stat-path', [{ path: '~/x' }]);
-    expect(invoke).toHaveBeenNthCalledWith(2, 'dev-A', 'fs:mkdir-p', [{ path: '~/x' }]);
+    expect(invoke).toHaveBeenNthCalledWith(1, 'dev-A', IPC_CHANNELS.FS.STAT_PATH, [{ path: '~/x' }]);
+    expect(invoke).toHaveBeenNthCalledWith(2, 'dev-A', IPC_CHANNELS.FS.MKDIR_P, [{ path: '~/x' }]);
   });
 });

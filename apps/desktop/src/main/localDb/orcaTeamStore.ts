@@ -23,6 +23,7 @@ import {
   isActiveWorkerStatus,
   type OrcaWorkerStatus,
 } from '../../shared/orca-worker-status.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 export { ACTIVE_WORKER_STATUSES, isActiveWorkerStatus, type OrcaWorkerStatus };
 
 export interface OrcaTeamRecord {
@@ -621,11 +622,11 @@ function msToIso(ms: number | null | undefined): string | null {
 
 function broadcastSessionPatch(sessionId: string, patch: Record<string, unknown>): void {
   notifyAgentIslandSessionPatch(sessionId, patch);
-  tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch });
+  tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED, { sessionId, patch });
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
-      win.webContents.send('local-db:sessions:patched', { sessionId, patch });
+      win.webContents.send(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED, { sessionId, patch });
     } catch {
       // best effort only
     }

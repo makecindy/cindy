@@ -19,6 +19,7 @@ import {
   listGhostGallery as listGhostGalleryFromLedger,
 } from '../../cindy-media/ledger.js';
 import type { SandboxHandle, SandboxHostAdapter } from './GhostRuntime.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 /**
  * Electron 沙箱宿主(docs/dev-rules/plugin-security-and-authoring.md):
@@ -95,7 +96,7 @@ export function sendToGhostLogic(ghostId: string, payload: unknown): boolean {
     if (gid !== ghostId) continue;
     const wc = webContents.fromId(wcId);
     if (wc && !wc.isDestroyed()) {
-      wc.send('ghost-pipe:message', payload);
+      wc.send(IPC_CHANNELS.GHOST_PIPE.MESSAGE, payload);
       return true;
     }
   }

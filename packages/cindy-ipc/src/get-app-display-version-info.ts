@@ -1,0 +1,5 @@
+export const GET_APP_DISPLAY_VERSION_INFO_CHANNELS = {
+  GET_APP_DISPLAY_VERSION_INFO: "get-app-display-version-info",
+} as const;
+
+export type GET_APP_DISPLAY_VERSION_INFOChannel = typeof GET_APP_DISPLAY_VERSION_INFO_CHANNELS[keyof typeof GET_APP_DISPLAY_VERSION_INFO_CHANNELS];

@@ -58,48 +58,48 @@ beforeEach(() => {
 describe('runInvoke 双层校验', () => {
   it('开关关闭 → REMOTE_DISABLED', async () => {
     remoteControlEnabled = false;
-    const r = await runInvoke('ctrl', { channel: 'maker:list-active', args: [] });
+    const r = await runInvoke('ctrl', { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] });
     expect(r).toMatchObject({ ok: false, error: { code: 'REMOTE_DISABLED' } });
   });
 
   it('非 allowlist channel → CHANNEL_NOT_ALLOWED', async () => {
-    const r = await runInvoke('ctrl', { channel: 'shell:open-path', args: [] });
+    const r = await runInvoke('ctrl', { channel: IPC_CHANNELS.SHELL.OPEN_PATH, args: [] });
     expect(r).toMatchObject({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED' } });
   });
 
   it('已撤销访问权限的控制端 → ACCESS_REVOKED(早于 allowlist 判定)', async () => {
     revokedControllers = ['ctrl'];
-    registry.register('maker:list-active', () => ['s']); // 即便 channel 合法也被挡
-    const r = await runInvoke('ctrl', { channel: 'maker:list-active', args: [] });
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, () => ['s']); // 即便 channel 合法也被挡
+    const r = await runInvoke('ctrl', { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] });
     expect(r).toMatchObject({ ok: false, error: { code: 'ACCESS_REVOKED' } });
   });
 
   it('黑名单只挡命中的控制端,其它控制端不受影响', async () => {
     revokedControllers = ['other-ctrl'];
-    registry.register('maker:list-active', () => ['s']);
-    const r = await runInvoke('ctrl', { channel: 'maker:list-active', args: [] });
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, () => ['s']);
+    const r = await runInvoke('ctrl', { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] });
     expect(r).toEqual({ ok: true, result: ['s'] });
   });
 
   it('allowlist channel:dispatch 到本机 handler 并回传 result', async () => {
-    registry.register('maker:list-active', () => ['session-x']);
-    const r = await runInvoke('ctrl', { channel: 'maker:list-active', args: [] });
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, () => ['session-x']);
+    const r = await runInvoke('ctrl', { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] });
     expect(r).toEqual({ ok: true, result: ['session-x'] });
   });
 
   it('远程 invoke 期间给本机 handler 暴露 device-link 上下文,结束后不泄漏', async () => {
-    registry.register('maker:list-active', () => ({
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, () => ({
       active: isDeviceLinkInvoke(),
       context: getDeviceLinkInvokeContext(),
     }));
 
-    const r = await runInvoke('ctrl-a', { channel: 'maker:list-active', args: [] });
+    const r = await runInvoke('ctrl-a', { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] });
 
     expect(r).toEqual({
       ok: true,
       result: {
         active: true,
-        context: { controllerDeviceId: 'ctrl-a', channel: 'maker:list-active' },
+        context: { controllerDeviceId: 'ctrl-a', channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE },
       },
     });
     expect(isDeviceLinkInvoke()).toBe(false);
@@ -130,11 +130,11 @@ describe('runInvoke 双层校验', () => {
   });
 
   it('本机 handler 抛 throwIpcError → IPC_ERROR 透传 [CODE] message', async () => {
-    registry.register('maker:send', () => {
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.SEND, () => {
       const e = new Error('[SESSION_RUNNING] busy');
       throw e;
     });
-    const r = await runInvoke('ctrl', { channel: 'maker:send', args: [] });
+    const r = await runInvoke('ctrl', { channel: IPC_CHANNELS.MAKER_INVOKE.SEND, args: [] });
     expect(r).toMatchObject({
       ok: false,
       error: { code: 'IPC_ERROR', message: '[SESSION_RUNNING] busy' },
@@ -142,7 +142,7 @@ describe('runInvoke 双层校验', () => {
   });
 
   it('handler 不存在(未注册)→ IPC_ERROR NOT_FOUND', async () => {
-    const r = await runInvoke('ctrl', { channel: 'maker:create-session', args: [] });
+    const r = await runInvoke('ctrl', { channel: IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION, args: [] });
     expect(r).toMatchObject({ ok: false, error: { code: 'IPC_ERROR' } });
     expect((r as { error: { message: string } }).error.message).toMatch(/NOT_FOUND/);
   });
@@ -154,18 +154,18 @@ describe('runInvoke 双层校验', () => {
 
   it('create-session 的 workingDir 不在被控端已知集合 → CHANNEL_NOT_ALLOWED,不落到 handler', async () => {
     const handler = vi.fn(() => ({ session: { id: 's1' } }));
-    registry.register('maker:create-session', handler as never);
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION, handler as never);
     setRemoteWorkingDirGuard((dir) => dir === '/allowed/proj');
 
     const denied = await runInvoke('ctrl', {
-      channel: 'maker:create-session',
+      channel: IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION,
       args: [{ workingDir: '/etc' }],
     });
     expect(denied).toMatchObject({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED' } });
     expect(handler).not.toHaveBeenCalled();
 
     const allowed = await runInvoke('ctrl', {
-      channel: 'maker:create-session',
+      channel: IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION,
       args: [{ workingDir: '/allowed/proj' }],
     });
     expect(allowed).toMatchObject({ ok: true });
@@ -174,11 +174,11 @@ describe('runInvoke 双层校验', () => {
 
   it('create-session 的网络目录探测超时 → 明确 IPC 错误,不落到 handler', async () => {
     const handler = vi.fn(() => ({ session: { id: 's-timeout' } }));
-    registry.register('maker:create-session', handler as never);
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION, handler as never);
     setRemoteWorkingDirGuard(async () => ({ allowed: false, reason: 'timeout' }));
 
     const result = await runInvoke('ctrl', {
-      channel: 'maker:create-session',
+      channel: IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION,
       args: [{ workingDir: 'Z:\\offline-project' }],
     });
 
@@ -193,9 +193,9 @@ describe('runInvoke 双层校验', () => {
   });
 
   it('未注入 workingDir guard 时不阻断 create-session(生产未就绪态放行)', async () => {
-    registry.register('maker:create-session', () => ({ session: { id: 's2' } }));
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION, () => ({ session: { id: 's2' } }));
     const r = await runInvoke('ctrl', {
-      channel: 'maker:create-session',
+      channel: IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION,
       args: [{ workingDir: '/whatever' }],
     });
     expect(r).toMatchObject({ ok: true });
@@ -206,7 +206,7 @@ describe('runInvoke media:fetch 拦截(入方向媒体)', () => {
   it('device-link:media:fetch → 调 fetchLocalMediaToOss 并回 { ok, result },不落 ipcMain', async () => {
     fetchLocalMediaToOssMock.mockResolvedValue({ ossKey: 'k', mimeType: 'image/png', size: 10 });
     const r = await runInvoke('ctrl', {
-      channel: 'device-link:media:fetch',
+      channel: IPC_CHANNELS.DEVICE_LINK.MEDIA_FETCH,
       args: [{ url: 'xdt-image://s/x.png' }],
     });
     expect(fetchLocalMediaToOssMock).toHaveBeenCalledWith({ url: 'xdt-image://s/x.png' });
@@ -215,20 +215,20 @@ describe('runInvoke media:fetch 拦截(入方向媒体)', () => {
 
   it('解析/上传失败 → MEDIA_FETCH_FAILED', async () => {
     fetchLocalMediaToOssMock.mockRejectedValue(new Error('boom'));
-    const r = await runInvoke('ctrl', { channel: 'device-link:media:fetch', args: [{ url: 'bad' }] });
+    const r = await runInvoke('ctrl', { channel: IPC_CHANNELS.DEVICE_LINK.MEDIA_FETCH, args: [{ url: 'bad' }] });
     expect(r).toMatchObject({ ok: false, error: { code: 'MEDIA_FETCH_FAILED', message: 'boom' } });
   });
 
   it('已撤销控制端 media:fetch → ACCESS_REVOKED,不触发解析', async () => {
     revokedControllers = ['ctrl'];
-    const r = await runInvoke('ctrl', { channel: 'device-link:media:fetch', args: [{ url: 'x' }] });
+    const r = await runInvoke('ctrl', { channel: IPC_CHANNELS.DEVICE_LINK.MEDIA_FETCH, args: [{ url: 'x' }] });
     expect(r).toMatchObject({ ok: false, error: { code: 'ACCESS_REVOKED' } });
     expect(fetchLocalMediaToOssMock).not.toHaveBeenCalled();
   });
 
   it('开关关闭 → REMOTE_DISABLED,不触发解析', async () => {
     remoteControlEnabled = false;
-    const r = await runInvoke('ctrl', { channel: 'device-link:media:fetch', args: [{ url: 'x' }] });
+    const r = await runInvoke('ctrl', { channel: IPC_CHANNELS.DEVICE_LINK.MEDIA_FETCH, args: [{ url: 'x' }] });
     expect(r).toMatchObject({ ok: false, error: { code: 'REMOTE_DISABLED' } });
     expect(fetchLocalMediaToOssMock).not.toHaveBeenCalled();
   });
@@ -244,7 +244,7 @@ describe('runInvoke voice:transcribe 拦截(手机语音输入)', () => {
     });
     const req = { ossKey: 'cindy/device-link/u/voice.m4a', mimeType: 'audio/mp4' };
     const r = await runInvoke('ctrl', {
-      channel: 'device-link:voice:transcribe',
+      channel: IPC_CHANNELS.DEVICE_LINK.VOICE_TRANSCRIBE,
       args: [req],
     });
     expect(transcribeRemoteVoiceInputMock).toHaveBeenCalledWith(req);
@@ -262,7 +262,7 @@ describe('runInvoke voice:transcribe 拦截(手机语音输入)', () => {
   it('转写失败 → VOICE_TRANSCRIBE_FAILED', async () => {
     transcribeRemoteVoiceInputMock.mockRejectedValue(new Error('asr down'));
     const r = await runInvoke('ctrl', {
-      channel: 'device-link:voice:transcribe',
+      channel: IPC_CHANNELS.DEVICE_LINK.VOICE_TRANSCRIBE,
       args: [{ ossKey: 'k' }],
     });
     expect(r).toMatchObject({ ok: false, error: { code: 'VOICE_TRANSCRIBE_FAILED', message: 'asr down' } });
@@ -271,7 +271,7 @@ describe('runInvoke voice:transcribe 拦截(手机语音输入)', () => {
   it('已撤销控制端 voice:transcribe → ACCESS_REVOKED,不触发转写', async () => {
     revokedControllers = ['ctrl'];
     const r = await runInvoke('ctrl', {
-      channel: 'device-link:voice:transcribe',
+      channel: IPC_CHANNELS.DEVICE_LINK.VOICE_TRANSCRIBE,
       args: [{ ossKey: 'k' }],
     });
     expect(r).toMatchObject({ ok: false, error: { code: 'ACCESS_REVOKED' } });
@@ -282,7 +282,7 @@ describe('runInvoke voice:transcribe 拦截(手机语音输入)', () => {
 describe('runInvoke voice:credential-sync 拦截(能力已下线,保留可读拒绝)', () => {
   it('device-link:voice:credential-sync → VOICE_CREDENTIAL_SYNC_REMOVED(不再穿透桌面 key)', async () => {
     const r = await runInvoke('ctrl', {
-      channel: 'device-link:voice:credential-sync',
+      channel: IPC_CHANNELS.DEVICE_LINK.VOICE_CREDENTIAL_SYNC,
       args: [],
     });
     expect(r).toMatchObject({
@@ -297,7 +297,7 @@ describe('runInvoke voice:credential-sync 拦截(能力已下线,保留可读拒
   it('已撤销控制端 voice:credential-sync → ACCESS_REVOKED(早于能力下线拒绝)', async () => {
     revokedControllers = ['ctrl'];
     const r = await runInvoke('ctrl', {
-      channel: 'device-link:voice:credential-sync',
+      channel: IPC_CHANNELS.DEVICE_LINK.VOICE_CREDENTIAL_SYNC,
       args: [],
     });
     expect(r).toMatchObject({ ok: false, error: { code: 'ACCESS_REVOKED' } });
@@ -331,7 +331,7 @@ describe('runInvoke voice:dictionary-learning 拦截(手机语音词典学习回
     };
 
     const r = await runInvoke('ctrl', {
-      channel: 'device-link:voice:dictionary-learning',
+      channel: IPC_CHANNELS.DEVICE_LINK.VOICE_DICTIONARY_LEARNING,
       args: [req],
     });
 
@@ -367,7 +367,7 @@ describe('runInvoke voice:dictionary-learning 拦截(手机语音词典学习回
   it('词典学习失败 → VOICE_DICTIONARY_LEARNING_FAILED', async () => {
     adviseAndRecordVoiceInputDictionaryLearningMock.mockRejectedValue(new Error('advisor down'));
     const r = await runInvoke('ctrl', {
-      channel: 'device-link:voice:dictionary-learning',
+      channel: IPC_CHANNELS.DEVICE_LINK.VOICE_DICTIONARY_LEARNING,
       args: [{ source: 'mobile', beforeText: 'a', afterText: 'b' }],
     });
     expect(r).toMatchObject({
@@ -379,7 +379,7 @@ describe('runInvoke voice:dictionary-learning 拦截(手机语音词典学习回
   it('已撤销控制端 voice:dictionary-learning → ACCESS_REVOKED,不触发词典学习', async () => {
     revokedControllers = ['ctrl'];
     const r = await runInvoke('ctrl', {
-      channel: 'device-link:voice:dictionary-learning',
+      channel: IPC_CHANNELS.DEVICE_LINK.VOICE_DICTIONARY_LEARNING,
       args: [{ source: 'mobile', beforeText: 'a', afterText: 'b' }],
     });
     expect(r).toMatchObject({ ok: false, error: { code: 'ACCESS_REVOKED' } });
@@ -390,8 +390,8 @@ describe('runInvoke voice:dictionary-learning 拦截(手机语音词典学习回
 describe('dispatchLocalInvoke', () => {
   it('转发 args 给 handler 并 await 异步结果', async () => {
     const handler = vi.fn(async (_e: unknown, a: number, b: number) => a + b);
-    registry.register('maker:set-model', handler as never);
-    const result = await dispatchLocalInvoke('maker:set-model', [2, 3]);
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.SET_MODEL, handler as never);
+    const result = await dispatchLocalInvoke(IPC_CHANNELS.MAKER_INVOKE.SET_MODEL, [2, 3]);
     expect(result).toBe(5);
     // 合成 event 作为首参
     expect(handler).toHaveBeenCalledWith(expect.anything(), 2, 3);
@@ -424,6 +424,7 @@ import {
 } from '@cindy/device-link';
 import { DEVICE_LINK_RECONCILIATION_PROBE_MARKER } from '@cindy/maker-shared/device-link-contract';
 import { MAKER_PUSH } from '../maker-ipc/channels';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 /** 最小 fake client:捕获 onFrame handler,记录出站调用 */
 function makeFakeClient(initialStatus: 'stopped' | 'connecting' | 'online' = 'online') {
@@ -586,7 +587,7 @@ describe('被控端控制链路生命周期', () => {
   it('link-open capability controls whether provider projection includes new logo kinds', async () => {
     const { client, feed } = makeFakeClient();
     wireInboundDispatch(client);
-    registry.register('maker:provider:list', () => ({
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.PROVIDER_LIST, () => ({
       providers: [{
         id: 'renamed-vercel',
         name: 'Team gateway',
@@ -618,8 +619,8 @@ describe('被控端控制链路生命周期', () => {
       },
     });
 
-    const current = await runInvoke('ctrl-cap', { channel: 'maker:provider:list', args: [] });
-    const legacy = await runInvoke('ctrl-legacy', { channel: 'maker:provider:list', args: [] });
+    const current = await runInvoke('ctrl-cap', { channel: IPC_CHANNELS.MAKER_INVOKE.PROVIDER_LIST, args: [] });
+    const legacy = await runInvoke('ctrl-legacy', { channel: IPC_CHANNELS.MAKER_INVOKE.PROVIDER_LIST, args: [] });
     expect(current).toMatchObject({
       ok: true,
       result: { providers: [{ logoKind: 'vercel', routing: { codex: {} } }] },
@@ -633,7 +634,7 @@ describe('被控端控制链路生命周期', () => {
   });
 
   it('listing-only invoke can negotiate new logo kinds without link-open', async () => {
-    registry.register('maker:provider:list', () => ({
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.PROVIDER_LIST, () => ({
       providers: [{
         id: 'renamed-vercel',
         name: 'Team gateway',
@@ -642,7 +643,7 @@ describe('被控端控制链路生命周期', () => {
     }));
 
     const current = await runInvoke('ctrl-list-only', {
-      channel: 'maker:provider:list',
+      channel: IPC_CHANNELS.MAKER_INVOKE.PROVIDER_LIST,
       args: [{ capabilities: ['provider-logo-kinds-v2'] }],
     });
     expect(current).toMatchObject({
@@ -704,7 +705,7 @@ describe('被控端控制链路生命周期', () => {
     remoteControlEnabled = true;
     let resolveInvoke: ((value: string[]) => void) | undefined;
     registry.register(
-      'maker:list-active',
+      IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE,
       () =>
         new Promise<string[]>((resolve) => {
           resolveInvoke = resolve;
@@ -720,7 +721,7 @@ describe('被控端控制链路生命周期', () => {
       kind: 'invoke',
       id: 'invoke-1',
       src: 'ctrl-a',
-      payload: { channel: 'maker:list-active', args: [] },
+      payload: { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] },
     });
 
     await vi.waitFor(() => expect(hasInFlightRemoteInvokes()).toBe(true));
@@ -744,7 +745,7 @@ describe('被控端控制链路生命周期', () => {
           resolveInvoke = resolve;
         }),
     );
-    registry.register('maker:list-active', handler);
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, handler);
     const { client, calls, feed } = makeFakeClient();
     wireInboundDispatch(client);
     const duplicate: Envelope = {
@@ -752,7 +753,7 @@ describe('被控端控制链路生命周期', () => {
       kind: 'invoke',
       id: 'invoke-duplicate',
       src: 'ctrl-a',
-      payload: { channel: 'maker:list-active', args: [] },
+      payload: { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] },
     };
 
     feed(duplicate);
@@ -778,7 +779,7 @@ describe('被控端控制链路生命周期', () => {
   it('invoke-result 本地发送背压时进入有界 outbox，恢复后原结果补发且不重复执行', async () => {
     remoteControlEnabled = true;
     const handler = vi.fn(() => ['s1']);
-    registry.register('maker:list-active', handler);
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, handler);
     const { client, calls, feed } = makeFakeClient();
     const mutableClient = client as unknown as {
       sendInvokeResult: (dst: string, requestId: string, payload: unknown) => void;
@@ -795,7 +796,7 @@ describe('被控端控制链路生命周期', () => {
       kind: 'invoke',
       id: 'invoke-outbox',
       src: 'ctrl-a',
-      payload: { channel: 'maker:list-active', args: [] },
+      payload: { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] },
     };
 
     feed(invoke);
@@ -805,7 +806,7 @@ describe('被控端控制链路生命周期', () => {
 
     feed({
       ...invoke,
-      payload: { channel: 'maker:list-active', args: ['reused-with-different-payload'] },
+      payload: { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: ['reused-with-different-payload'] },
     });
     await Promise.resolve();
     await Promise.resolve();
@@ -830,7 +831,7 @@ describe('被控端控制链路生命周期', () => {
   it('outbox 补发降级裁剪时保留原始锚点参数', async () => {
     remoteControlEnabled = true;
     const largeField = 'x'.repeat(1024 * 1024);
-    registry.register('local-db:messages:around-client-id', () => [
+    registry.register(IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND_CLIENT_ID, () => [
       { id: 'm-anchor', clientId: 'anchor', role: 'user', content: 'anchor', largeField },
       { id: 'm-middle', clientId: 'middle', role: 'assistant', content: 'middle', largeField },
       { id: 'm-tail', clientId: 'tail', role: 'assistant', content: 'tail', largeField },
@@ -859,7 +860,7 @@ describe('被控端控制链路生命周期', () => {
       id: 'invoke-anchor-outbox',
       src: 'ctrl-a',
       payload: {
-        channel: 'local-db:messages:around-client-id',
+        channel: IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND_CLIENT_ID,
         args: ['s1', 'anchor', { radius: 20 }],
       },
     });
@@ -880,7 +881,7 @@ describe('被控端控制链路生命周期', () => {
   it('显式 link-close 后丢弃旧世代晚到 IPC 结果，快速重开也不串进新链路', async () => {
     remoteControlEnabled = true;
     let resolveInvoke: ((value: string[]) => void) | undefined;
-    registry.register('maker:list-active', () => new Promise<string[]>((resolve) => {
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, () => new Promise<string[]>((resolve) => {
       resolveInvoke = resolve;
     }));
     const { client, calls, feed } = makeFakeClient();
@@ -890,7 +891,7 @@ describe('被控端控制链路生命周期', () => {
       kind: 'invoke',
       id: 'invoke-old-link',
       src: 'ctrl-a',
-      payload: { channel: 'maker:list-active', args: [] },
+      payload: { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] },
     });
     await vi.waitFor(() => expect(hasInFlightRemoteInvokes()).toBe(true));
 
@@ -911,7 +912,7 @@ describe('被控端控制链路生命周期', () => {
       kind: 'invoke',
       id: 'invoke-old-link',
       src: 'ctrl-a',
-      payload: { channel: 'maker:list-active', args: [] },
+      payload: { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] },
     });
     resolveInvoke?.(['stale']);
     await vi.waitFor(() => expect(hasInFlightRemoteInvokes()).toBe(false));
@@ -923,7 +924,7 @@ describe('被控端控制链路生命周期', () => {
   it('已完成缓存淘汰仍不绕过 outbox 的 requestId 去重', async () => {
     remoteControlEnabled = true;
     const handler = vi.fn((_event: unknown, value: unknown) => value);
-    registry.register('maker:list-active', handler);
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, handler);
     const { client, calls, feed } = makeFakeClient();
     const mutableClient = client as unknown as {
       sendInvokeResult: (dst: string, requestId: string, payload: unknown) => void;
@@ -941,7 +942,7 @@ describe('被控端控制链路生命周期', () => {
       kind: 'invoke',
       id: 'invoke-outbox-evicted',
       src: 'ctrl-a',
-      payload: { channel: 'maker:list-active', args: ['original'] },
+      payload: { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: ['original'] },
     };
     feed(queuedInvoke);
     await vi.waitFor(() => expect(dispatchTesting.remoteInvokeResultOutboxSize()).toBe(1));
@@ -956,7 +957,7 @@ describe('被控端控制链路生命周期', () => {
           kind: 'invoke',
           id: `invoke-cache-pressure-${index}`,
           src: `ctrl-cache-pressure-${index}`,
-          payload: { channel: 'maker:list-active', args: [`value-${index}`] },
+          payload: { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [`value-${index}`] },
         });
       }
       sent += batchSize;
@@ -987,7 +988,7 @@ describe('被控端控制链路生命周期', () => {
         'ctrl-a',
         `invoke-outbox-${index}`,
         { ok: true, result: index },
-        'maker:list-active',
+        IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE,
       )).toBe(true);
     }
 
@@ -999,11 +1000,11 @@ describe('被控端控制链路生命周期', () => {
       'ctrl-a',
       'invoke-outbox-over-limit',
       { ok: true, result: 'overflow' },
-      'maker:list-active',
+      IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE,
     )).toBe(false);
 
     const handler = vi.fn(() => ['must-not-run']);
-    registry.register('maker:list-active', handler);
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, handler);
     const h = makeFakeClient();
     wireInboundDispatch(h.client);
     h.feed({
@@ -1011,7 +1012,7 @@ describe('被控端控制链路生命周期', () => {
       kind: 'invoke',
       id: 'invoke-after-outbox-full',
       src: 'ctrl-a',
-      payload: { channel: 'maker:list-active', args: [] },
+      payload: { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] },
     });
     await vi.waitFor(() => expect(h.calls.invokeResult).toContainEqual({
       dst: 'ctrl-a',
@@ -1050,7 +1051,7 @@ describe('被控端控制链路生命周期', () => {
           `ctrl-${controller}`,
           `invoke-global-outbox-${queued}`,
           { ok: true, result: queued },
-          'maker:list-active',
+          IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE,
         )).toBe(true);
         queued++;
       }
@@ -1063,7 +1064,7 @@ describe('被控端控制链路生命周期', () => {
       'ctrl-over',
       'invoke-global-outbox-over-limit',
       { ok: true, result: 'overflow' },
-      'maker:list-active',
+      IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE,
     )).toBe(false);
   });
 
@@ -1081,7 +1082,7 @@ describe('被控端控制链路生命周期', () => {
         'ctrl-a',
         `invoke-large-fingerprint-${index}`,
         { ok: true, result: index },
-        'maker:list-active',
+        IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE,
         [],
         `${fingerprint}${index}`,
       )).toBe(true);
@@ -1091,7 +1092,7 @@ describe('被控端控制链路生命周期', () => {
       'ctrl-a',
       'invoke-large-fingerprint-overflow',
       { ok: true, result: 'overflow' },
-      'maker:list-active',
+      IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE,
       [],
       `${fingerprint}overflow`,
     )).toBe(false);
@@ -1102,7 +1103,7 @@ describe('被控端控制链路生命周期', () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;
     const handler = vi.fn(() => circular);
-    registry.register('maker:list-active', handler);
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, handler);
     const { client, calls, feed } = makeFakeClient();
     wireInboundDispatch(client);
     const invoke: Envelope = {
@@ -1110,7 +1111,7 @@ describe('被控端控制链路生命周期', () => {
       kind: 'invoke',
       id: 'invoke-circular-result',
       src: 'ctrl-a',
-      payload: { channel: 'maker:list-active', args: [] },
+      payload: { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] },
     };
 
     feed(invoke);
@@ -1139,7 +1140,7 @@ describe('被控端控制链路生命周期', () => {
       role: 'assistant',
       content: oversizedContent,
     }]);
-    registry.register('local-db:messages:list', handler);
+    registry.register(IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST, handler);
     const { client, calls, feed } = makeFakeClient();
     const mutableClient = client as unknown as {
       sendInvokeResult: (dst: string, requestId: string, payload: unknown) => void;
@@ -1157,7 +1158,7 @@ describe('被控端控制链路生命周期', () => {
       kind: 'invoke',
       id: 'invoke-large-result-cache',
       src: 'ctrl-a',
-      payload: { channel: 'local-db:messages:list', args: ['s1'] },
+      payload: { channel: IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST, args: ['s1'] },
     };
 
     feed(invoke);
@@ -1175,7 +1176,7 @@ describe('被控端控制链路生命周期', () => {
     try {
       remoteControlEnabled = true;
       const handler = vi.fn(() => new Promise<never>(() => {}));
-      registry.register('maker:list-active', handler);
+      registry.register(IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, handler);
       const busyChanges: boolean[] = [];
       setRemoteInvokeBusyChangedListener((busy) => busyChanges.push(busy));
       const { client, calls, feed } = makeFakeClient();
@@ -1185,7 +1186,7 @@ describe('被控端控制链路生命周期', () => {
         kind: 'invoke',
         id: 'invoke-orphan',
         src: 'ctrl-a',
-        payload: { channel: 'maker:list-active', args: [] },
+        payload: { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] },
       };
 
       feed(invoke);
@@ -1230,7 +1231,7 @@ describe('被控端控制链路生命周期', () => {
           resolveInvoke = resolve;
         }),
     );
-    registry.register('maker:list-active', handler);
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, handler);
     const { client, calls, feed } = makeFakeClient();
     wireInboundDispatch(client);
     const original: Envelope = {
@@ -1238,11 +1239,11 @@ describe('被控端控制链路生命周期', () => {
       kind: 'invoke',
       id: 'invoke-reused-id',
       src: 'ctrl-a',
-      payload: { channel: 'maker:list-active', args: [] },
+      payload: { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] },
     };
     const changed: Envelope = {
       ...original,
-      payload: { channel: 'maker:list-active', args: ['different'] },
+      payload: { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: ['different'] },
     };
 
     feed(original);
@@ -1280,7 +1281,7 @@ describe('被控端控制链路生命周期', () => {
   it('撤权检查优先于 requestId 结果缓存', async () => {
     remoteControlEnabled = true;
     const handler = vi.fn(() => ['s1']);
-    registry.register('maker:list-active', handler);
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, handler);
     const { client, calls, feed } = makeFakeClient();
     wireInboundDispatch(client);
     const invoke: Envelope = {
@@ -1288,7 +1289,7 @@ describe('被控端控制链路生命周期', () => {
       kind: 'invoke',
       id: 'invoke-before-revoke',
       src: 'ctrl-a',
-      payload: { channel: 'maker:list-active', args: [] },
+      payload: { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] },
     };
 
     feed(invoke);
@@ -1316,7 +1317,7 @@ describe('被控端控制链路生命周期', () => {
   it('执行边界外的异常也会返回并缓存 IPC_ERROR，不让已 ACK 请求只剩超时', async () => {
     remoteControlEnabled = true;
     const handler = vi.fn(() => ({ session: { id: 'must-not-run' } }));
-    registry.register('maker:create-session', handler as never);
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION, handler as never);
     setRemoteWorkingDirGuard(async () => {
       throw new Error('guard crashed');
     });
@@ -1328,7 +1329,7 @@ describe('被控端控制链路生命周期', () => {
       id: 'invoke-guard-crash',
       src: 'ctrl-a',
       payload: {
-        channel: 'maker:create-session',
+        channel: IPC_CHANNELS.MAKER_INVOKE.CREATE_SESSION,
         args: [{ workingDir: '/project' }],
       },
     };
@@ -1364,7 +1365,7 @@ describe('被控端控制链路生命周期', () => {
           releases.push(() => resolve([]));
         }),
     );
-    registry.register('maker:list-active', handler);
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, handler);
     const { client, calls, feed } = makeFakeClient();
     wireInboundDispatch(client);
 
@@ -1374,7 +1375,7 @@ describe('被控端控制链路生命周期', () => {
         kind: 'invoke',
         id: `invoke-bounded-${index}`,
         src: `ctrl-${Math.floor(index / dispatchTesting.remoteInvokeInFlightPerControllerLimit)}`,
-        payload: { channel: 'maker:list-active', args: [] },
+        payload: { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] },
       });
     }
     feed({
@@ -1382,7 +1383,7 @@ describe('被控端控制链路生命周期', () => {
       kind: 'invoke',
       id: 'invoke-over-limit',
       src: 'ctrl-over',
-      payload: { channel: 'maker:list-active', args: [] },
+      payload: { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] },
     });
 
     await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(
@@ -1415,7 +1416,7 @@ describe('被控端控制链路生命周期', () => {
           releases.push(() => resolve([]));
         }),
     );
-    registry.register('maker:list-active', handler);
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, handler);
     const { client, calls, feed } = makeFakeClient();
     wireInboundDispatch(client);
 
@@ -1425,7 +1426,7 @@ describe('被控端控制链路生命周期', () => {
         kind: 'invoke',
         id: `invoke-controller-a-${index}`,
         src: 'ctrl-a',
-        payload: { channel: 'maker:list-active', args: [] },
+        payload: { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] },
       });
     }
     feed({
@@ -1433,14 +1434,14 @@ describe('被控端控制链路生命周期', () => {
       kind: 'invoke',
       id: 'invoke-controller-a-over-limit',
       src: 'ctrl-a',
-      payload: { channel: 'maker:list-active', args: [] },
+      payload: { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] },
     });
     feed({
       v: 1,
       kind: 'invoke',
       id: 'invoke-controller-b-admitted',
       src: 'ctrl-b',
-      payload: { channel: 'maker:list-active', args: [] },
+      payload: { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] },
     });
 
     await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(
@@ -1472,9 +1473,9 @@ describe('被控端控制链路生命周期', () => {
   });
 
   it.each([
-    { channel: 'local-db:sessions:list', args: [] },
+    { channel: IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST, args: [] },
     {
-      channel: 'local-db:sessions:get',
+      channel: IPC_CHANNELS.LOCAL_DB.SESSIONS_GET,
       args: ['s1', DEVICE_LINK_RECONCILIATION_PROBE_MARKER],
     },
   ])(
@@ -1511,7 +1512,7 @@ describe('被控端控制链路生命周期', () => {
     remoteControlEnabled = true;
     let resolveInvoke: ((value: { id: string }) => void) | undefined;
     registry.register(
-      'local-db:sessions:get',
+      IPC_CHANNELS.LOCAL_DB.SESSIONS_GET,
       () =>
         new Promise<{ id: string }>((resolve) => {
           resolveInvoke = resolve;
@@ -1527,7 +1528,7 @@ describe('被控端控制链路生命周期', () => {
       kind: 'invoke',
       id: 'invoke-interactive-get',
       src: 'ctrl-a',
-      payload: { channel: 'local-db:sessions:get', args: ['s1'] },
+      payload: { channel: IPC_CHANNELS.LOCAL_DB.SESSIONS_GET, args: ['s1'] },
     });
 
     await vi.waitFor(() => expect(hasInFlightRemoteInvokes()).toBe(true));
@@ -1548,19 +1549,19 @@ describe('被控端控制链路生命周期', () => {
       configure: () => {
         remoteControlEnabled = false;
       },
-      payload: { channel: 'maker:list-active', args: [] },
+      payload: { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] },
     },
     {
       name: 'revoked controller',
       configure: () => {
         revokedControllers = ['ctrl-a'];
       },
-      payload: { channel: 'maker:list-active', args: [] },
+      payload: { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] },
     },
     {
       name: 'non-allowlisted channel',
       configure: () => undefined,
-      payload: { channel: 'shell:open-path', args: [] },
+      payload: { channel: IPC_CHANNELS.SHELL.OPEN_PATH, args: [] },
     },
     {
       name: 'malformed payload',
@@ -1590,8 +1591,8 @@ describe('被控端控制链路生命周期', () => {
 
 // ─── 订阅 registry + topic-scoped fan-out + set-* 持久化回流(push 驱动重构)──────
 
-const SUB = 'device-link:subscribe';
-const UNSUB = 'device-link:unsubscribe';
+const SUB = IPC_CHANNELS.DEVICE_LINK.SUBSCRIBE;
+const UNSUB = IPC_CHANNELS.DEVICE_LINK.UNSUBSCRIBE;
 
 /** feed 一个 subscribe/unsubscribe 控制帧(走 invoke 帧承载)。 */
 function subFrame(
@@ -1683,9 +1684,9 @@ describe('被控端订阅 registry + topic 转发', () => {
       payload: { ok: true, result: { ok: true } },
     });
 
-    tapWindowBroadcast('local-db:sessions:created', { sessionId: 's1' });
+    tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED, { sessionId: 's1' });
     expect(calls.push).toEqual([
-      { dst: 'ctrl-a', channel: 'local-db:sessions:created', payload: { sessionId: 's1' } },
+      { dst: 'ctrl-a', channel: IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED, payload: { sessionId: 's1' } },
     ]);
 
     calls.push.length = 0;
@@ -1704,7 +1705,7 @@ describe('被控端订阅 registry + topic 转发', () => {
 
     // 只订阅了 sessions → maker:event(session:s1)不转发(bandwidth scoping)
     calls.push.length = 0;
-    tapWindowBroadcast('maker:event', { sessionId: 's1', event: {} });
+    tapWindowBroadcast(IPC_CHANNELS.MAKER_PUSH.EVENT, { sessionId: 's1', event: {} });
     expect(calls.push).toEqual([]);
   });
 
@@ -1913,10 +1914,10 @@ describe('被控端订阅 registry + topic 转发', () => {
     feed(subFrame('ctrl-a', SUB, ['session:s1'], 'MacA'));
     expect(changes.at(-1)).toEqual([{ deviceId: 'ctrl-a', name: 'MacA' }]); // 横幅亮
 
-    tapWindowBroadcast('maker:event', { sessionId: 's1', event: { t: 1 } });
+    tapWindowBroadcast(IPC_CHANNELS.MAKER_PUSH.EVENT, { sessionId: 's1', event: { t: 1 } });
     expect(calls.push).toContainEqual({
       dst: 'ctrl-a',
-      channel: 'maker:event',
+      channel: IPC_CHANNELS.MAKER_PUSH.EVENT,
       payload: { sessionId: 's1', event: { t: 1 } },
     });
   });
@@ -1975,12 +1976,12 @@ describe('被控端订阅 registry + topic 转发', () => {
       'provider-logo-kinds-v2',
     )).toBe(true);
 
-    tapWindowBroadcast('local-db:sessions:created', { sessionId: 's1' });
-    tapWindowBroadcast('maker:event', { sessionId: 's1', event: {} });
+    tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED, { sessionId: 's1' });
+    tapWindowBroadcast(IPC_CHANNELS.MAKER_PUSH.EVENT, { sessionId: 's1', event: {} });
     expect(calls.push).toEqual([
       {
         dst: 'ctrl-modern',
-        channel: 'local-db:sessions:created',
+        channel: IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED,
         payload: { sessionId: 's1' },
       },
     ]);
@@ -2130,9 +2131,9 @@ describe('被控端订阅 registry + topic 转发', () => {
     wireInboundDispatch(client);
     feed(subFrame('ctrl-a', SUB, ['session:s1']));
     feed(subFrame('ctrl-b', SUB, ['session:s2']));
-    tapWindowBroadcast('maker:event', { sessionId: 's1', event: {} });
+    tapWindowBroadcast(IPC_CHANNELS.MAKER_PUSH.EVENT, { sessionId: 's1', event: {} });
     expect(calls.push).toEqual([
-      { dst: 'ctrl-a', channel: 'maker:event', payload: { sessionId: 's1', event: {} } },
+      { dst: 'ctrl-a', channel: IPC_CHANNELS.MAKER_PUSH.EVENT, payload: { sessionId: 's1', event: {} } },
     ]);
   });
 
@@ -2277,7 +2278,7 @@ describe('被控端订阅 registry + topic 转发', () => {
     handleControllerOffline('ctrl-a');
 
     expect(hasBroadcastTapListener()).toBe(true);
-    tapWindowBroadcast('local-db:messages:created', {
+    tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED, {
       sessionId: 's1',
       id: 'm1',
     });
@@ -2285,7 +2286,7 @@ describe('被控端订阅 registry + topic 转发', () => {
     expect(calls.push).toEqual([]);
     expect(dispatchTesting.queuedPushesFor('ctrl-a')).toEqual([
       {
-        channel: 'local-db:messages:created',
+        channel: IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED,
         payload: { sessionId: 's1', id: 'm1' },
         topic: 'session:s1',
       },
@@ -2310,8 +2311,8 @@ describe('远程 set-* 持久化回流', () => {
   it('set-model 成功后注入的 persist 被以 {model} 调用', async () => {
     const persist = vi.fn();
     setRemoteSettingsPersist(persist);
-    registry.register('maker:set-model', () => undefined);
-    const r = await runInvoke('ctrl-a', { channel: 'maker:set-model', args: ['sess-1', 'claude-x'] });
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.SET_MODEL, () => undefined);
+    const r = await runInvoke('ctrl-a', { channel: IPC_CHANNELS.MAKER_INVOKE.SET_MODEL, args: ['sess-1', 'claude-x'] });
     expect(r).toMatchObject({ ok: true });
     expect(persist).toHaveBeenCalledWith('sess-1', { model: 'claude-x' });
   });
@@ -2319,10 +2320,10 @@ describe('远程 set-* 持久化回流', () => {
   it('set-model 持久化 trim 后的 providerId', async () => {
     const persist = vi.fn();
     setRemoteSettingsPersist(persist);
-    registry.register('maker:set-model', () => undefined);
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.SET_MODEL, () => undefined);
 
     const r = await runInvoke('ctrl-a', {
-      channel: 'maker:set-model',
+      channel: IPC_CHANNELS.MAKER_INVOKE.SET_MODEL,
       args: ['sess-1', 'claude-x', '  anthropic  '],
     });
 
@@ -2366,16 +2367,16 @@ describe('远程 set-* 持久化回流', () => {
   it('set-fast-mode → {fastMode}', async () => {
     const persist = vi.fn();
     setRemoteSettingsPersist(persist);
-    registry.register('maker:set-fast-mode', () => undefined);
-    await runInvoke('ctrl-a', { channel: 'maker:set-fast-mode', args: ['sess-1', true] });
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.SET_FAST_MODE, () => undefined);
+    await runInvoke('ctrl-a', { channel: IPC_CHANNELS.MAKER_INVOKE.SET_FAST_MODE, args: ['sess-1', true] });
     expect(persist).toHaveBeenCalledWith('sess-1', { fastMode: true });
   });
 
   it('set-plan-mode → {planModeEnabled}', async () => {
     const persist = vi.fn();
     setRemoteSettingsPersist(persist);
-    registry.register('maker:set-plan-mode', () => undefined);
-    await runInvoke('ctrl-a', { channel: 'maker:set-plan-mode', args: ['sess-1', true] });
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.SET_PLAN_MODE, () => undefined);
+    await runInvoke('ctrl-a', { channel: IPC_CHANNELS.MAKER_INVOKE.SET_PLAN_MODE, args: ['sess-1', true] });
     expect(persist).toHaveBeenCalledWith('sess-1', { planModeEnabled: true });
   });
 
@@ -2386,10 +2387,10 @@ describe('远程 set-* 持久化回流', () => {
       resolvePersist = resolve;
     }));
     setRemoteSettingsPersist(persist);
-    registry.register('maker:set-model', () => 'runtime-ok');
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.SET_MODEL, () => 'runtime-ok');
 
     const pending = runInvoke('ctrl-a', {
-      channel: 'maker:set-model',
+      channel: IPC_CHANNELS.MAKER_INVOKE.SET_MODEL,
       args: ['sess-1', 'claude-x'],
     }).then((result) => {
       resolved = true;
@@ -2409,10 +2410,10 @@ describe('远程 set-* 持久化回流', () => {
       throw new Error('db write failed');
     });
     setRemoteSettingsPersist(persist);
-    registry.register('maker:set-fast-mode', () => undefined);
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.SET_FAST_MODE, () => undefined);
 
     const r = await runInvoke('ctrl-a', {
-      channel: 'maker:set-fast-mode',
+      channel: IPC_CHANNELS.MAKER_INVOKE.SET_FAST_MODE,
       args: ['sess-1', true],
     });
 
@@ -2425,14 +2426,14 @@ describe('远程 set-* 持久化回流', () => {
   it('非 set-* channel 不触发 persist', async () => {
     const persist = vi.fn();
     setRemoteSettingsPersist(persist);
-    registry.register('maker:list-active', () => []);
-    await runInvoke('ctrl-a', { channel: 'maker:list-active', args: [] });
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, () => []);
+    await runInvoke('ctrl-a', { channel: IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, args: [] });
     expect(persist).not.toHaveBeenCalled();
   });
 
   it('未注入 persist 时 set-model 仍正常(no-op 回流)', async () => {
-    registry.register('maker:set-model', () => undefined);
-    const r = await runInvoke('ctrl-a', { channel: 'maker:set-model', args: ['sess-1', 'm'] });
+    registry.register(IPC_CHANNELS.MAKER_INVOKE.SET_MODEL, () => undefined);
+    const r = await runInvoke('ctrl-a', { channel: IPC_CHANNELS.MAKER_INVOKE.SET_MODEL, args: ['sess-1', 'm'] });
     expect(r).toMatchObject({ ok: true });
   });
 });

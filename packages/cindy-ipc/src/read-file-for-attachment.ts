@@ -1,0 +1,5 @@
+export const READ_FILE_FOR_ATTACHMENT_CHANNELS = {
+  READ_FILE_FOR_ATTACHMENT: "read-file-for-attachment",
+} as const;
+
+export type READ_FILE_FOR_ATTACHMENTChannel = typeof READ_FILE_FOR_ATTACHMENT_CHANNELS[keyof typeof READ_FILE_FOR_ATTACHMENT_CHANNELS];

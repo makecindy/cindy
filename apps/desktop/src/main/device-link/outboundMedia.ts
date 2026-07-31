@@ -22,6 +22,7 @@ import {
   mayCompressOutboundImage,
 } from './outboundImageCompress';
 import { buildLegacyAttachmentOssRef, parseAttachmentOssRef } from '../../shared/attachmentOssRef';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('device-link:outboundMedia');
 
@@ -31,8 +32,14 @@ const log = createLogger('device-link:outboundMedia');
  *  - maker:input:enqueue / maker:input:steer:AgentInputQueuedMessage 形态(files[]),走 rewriteQueued。
  *    (steerMessage 经 input.steer 投递带附件的 queued item,与 enqueue 同形态,必须同样改写。)
  */
-const MESSAGE_SHAPE_CHANNELS = new Set(['maker:send', 'maker:steer']);
-const QUEUED_SHAPE_CHANNELS = new Set(['maker:input:enqueue', 'maker:input:steer']);
+const MESSAGE_SHAPE_CHANNELS = new Set<string>([
+  IPC_CHANNELS.MAKER_INVOKE.SEND,
+  IPC_CHANNELS.MAKER_INVOKE.STEER,
+]);
+const QUEUED_SHAPE_CHANNELS = new Set<string>([
+  IPC_CHANNELS.MAKER_INVOKE.INPUT_ENQUEUE,
+  IPC_CHANNELS.MAKER_INVOKE.INPUT_STEER,
+]);
 
 const EXT_BY_MIME: Record<string, string> = {
   'image/png': 'png',

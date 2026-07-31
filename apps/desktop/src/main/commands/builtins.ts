@@ -20,6 +20,7 @@ import { createLogger } from '../logger.js';
 import type { GoalController } from '../goal-host/controller.js';
 import type { LearnController } from '../learn-host/controller.js';
 import type { DesktopCommandContext, DesktopCommandRegistry } from './registry.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('desktop-commands');
 
@@ -394,7 +395,7 @@ export function registerBuiltinDesktopCommands(
         log.info('/cmd remote exec ▶', { cmdLine, cwd, deviceId: ctx.deviceId });
         let result: CmdExecutionResult;
         try {
-          result = (await deps.remoteInvoke(ctx.deviceId, 'desktop-cmd:run', [
+          result = (await deps.remoteInvoke(ctx.deviceId, IPC_CHANNELS.DESKTOP_CMD.RUN, [
             { cmdLine, cwd },
           ])) as CmdExecutionResult;
         } catch (err) {
@@ -459,9 +460,9 @@ export function registerBuiltinDesktopCommands(
       // renderer 按会话来源路由)。本机路径与远程路径的动作语义一一对应。
       const remoteGoal = ctx.deviceId
         ? {
-            clearGoal: (id: string) => deps.remoteInvoke(ctx.deviceId!, 'maker:goal:clear', [id]),
+            clearGoal: (id: string) => deps.remoteInvoke(ctx.deviceId!, IPC_CHANNELS.MAKER_INVOKE.GOAL_CLEAR, [id]),
             setGoal: (input: { sessionId: string; objective: string }) =>
-              deps.remoteInvoke(ctx.deviceId!, 'maker:goal:set', [input]),
+              deps.remoteInvoke(ctx.deviceId!, IPC_CHANNELS.MAKER_INVOKE.GOAL_SET, [input]),
           }
         : null;
       const controller = deps.getGoalController();
@@ -542,7 +543,7 @@ export function registerBuiltinDesktopCommands(
           };
       try {
         const { runId } = ctx.deviceId
-          ? ((await deps.remoteInvoke(ctx.deviceId, 'learn:start', [req])) as { runId: string })
+          ? ((await deps.remoteInvoke(ctx.deviceId, IPC_CHANNELS.LEARN.START, [req])) as { runId: string })
           : await controller!.startLearn(req);
         sendDesktopCommandToSender(ctx, { ...buildPayload('learn', ctx), learnRunId: runId });
       } catch (err) {

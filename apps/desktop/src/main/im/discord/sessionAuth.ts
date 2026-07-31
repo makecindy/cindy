@@ -15,8 +15,9 @@ import {
 import { readXdGatewayApiKey } from '../shared/apiKey';
 import { checkImRouteAuth, type ImAuthCheckDeps, type ImAuthMissing } from '../shared/authCheck';
 import type { ImOrchestratorConfig } from '../shared/types';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
-export const DISCORD_SESSION_AUTH_CHECK_CHANNEL = 'discordBot:check-session-auth';
+export const DISCORD_SESSION_AUTH_CHECK_CHANNEL = IPC_CHANNELS.DISCORD_BOT.CHECK_SESSION_AUTH;
 
 type AuthRow = Pick<ResolvedImSessionDefaults, 'agentKind' | 'model' | 'providerId'>;
 

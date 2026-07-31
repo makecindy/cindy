@@ -31,7 +31,7 @@ const h = vi.hoisted(() => {
       calls.push(`touch:${id}`);
     }),
     tapWindowBroadcast: vi.fn((channel: string, payload: { sessionId?: string }) => {
-      if (channel === 'local-db:sessions:created') {
+      if (channel === IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED) {
         calls.push(`created:${payload.sessionId}`);
       }
     }),
@@ -300,6 +300,7 @@ import { observeHookTurn } from '../turnObserver.js';
 import { buildHookPromptNote, SLACK_HOOK_PROMPT_NOTE } from '../outbound.js';
 import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.js';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = { info: vi.fn(), warn: vi.fn() };
 

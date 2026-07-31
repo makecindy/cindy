@@ -18,6 +18,7 @@ import {
   type GhostSetupInteractionResponseTarget,
   type GhostSetupInteractionSnapshot,
 } from '../ghostSetupInteractionBridge';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 function required(revision = 0): GhostSetupAssessment {
   return {
@@ -615,7 +616,7 @@ describe('GhostSetupCoordinator', () => {
       send: vi.fn(),
     };
     h.executeAction.mockImplementationOnce(async ({ responseTarget }) => {
-      responseTarget?.send('maker:plugin-setup:navigate', {
+      responseTarget?.send(IPC_CHANNELS.MAKER_PUSH.PLUGIN_SETUP_NAVIGATE, {
         sessionId: 'session-1',
         target: 'plugin_settings',
       });
@@ -672,7 +673,7 @@ describe('GhostSetupCoordinator', () => {
     h.executeAction.mockImplementation(
       ({ responseTarget }) =>
         new Promise((resolve) => {
-          responseTarget?.send('maker:plugin-setup:navigate', {
+          responseTarget?.send(IPC_CHANNELS.MAKER_PUSH.PLUGIN_SETUP_NAVIGATE, {
             sessionId: 'session-1',
             target: 'plugin_settings',
           });

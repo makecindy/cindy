@@ -68,6 +68,7 @@ import { shouldShowNativeFatalDialog, type EnsureReadyErrorCode } from './fatalD
 
 import { createLogger } from '../logger';
 import { recordDesktopDevLocalDbStartupResult } from '../devStartupStatus';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('localDb');
 
@@ -239,7 +240,7 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
       };
       for (const w of BrowserWindow.getAllWindows()) {
         try {
-          w.webContents.send('local-db:corruption-restored', payload);
+          w.webContents.send(IPC_CHANNELS.LOCAL_DB.CORRUPTION_RESTORED, payload);
         } catch {
           /* renderer 已销毁等 */
         }
@@ -569,7 +570,7 @@ async function handleSchemaDrift(filePath: string): Promise<void> {
         };
         for (const w of BrowserWindow.getAllWindows()) {
           try {
-            w.webContents.send('local-db:schema-drift-warning', payload);
+            w.webContents.send(IPC_CHANNELS.LOCAL_DB.SCHEMA_DRIFT_WARNING, payload);
           } catch {
             /* renderer 已销毁 */
           }

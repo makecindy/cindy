@@ -94,6 +94,7 @@ import { DeviceLinkError } from '@cindy/device-link';
 import { ServerApiError } from '../serverApiClient';
 import { __testing as settingsTesting } from '../device-link/settings-store';
 import { __testing as refcountTesting } from '../device-link/subscriptionRefcount';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 function makeDeps(overrides?: Partial<DeviceLinkIpcDeps>): DeviceLinkIpcDeps {
   return {
@@ -464,7 +465,7 @@ describe('device-link controller handlers', () => {
     await expect(handleOpenLink(deps, 'dev-2')).rejects.toThrowError(
       /\[DEVICE_LINK_CONTROL_DISABLED\]/,
     );
-    await expect(handleInvoke(deps, 'dev-2', 'maker:send', [])).rejects.toThrowError(
+    await expect(handleInvoke(deps, 'dev-2', IPC_CHANNELS.MAKER_INVOKE.SEND, [])).rejects.toThrowError(
       /\[DEVICE_LINK_CONTROL_DISABLED\]/,
     );
     await expect(handleSubscribe(deps, 'dev-2', ['sessions'], 1)).rejects.toThrowError(
@@ -479,7 +480,7 @@ describe('device-link controller handlers', () => {
     const deps = makeDeps({
       invoke: vi.fn().mockResolvedValue({ ok: true, result: ['s1', 's2'] }),
     });
-    await expect(handleInvoke(deps, 'dev-2', 'maker:list-active', [])).resolves.toEqual([
+    await expect(handleInvoke(deps, 'dev-2', IPC_CHANNELS.MAKER_INVOKE.LIST_ACTIVE, [])).resolves.toEqual([
       's1',
       's2',
     ]);
@@ -504,7 +505,7 @@ describe('device-link controller handlers', () => {
         error: { code: 'IPC_ERROR', message: '[SESSION_RUNNING] busy' },
       }),
     });
-    await expect(handleInvoke(deps, 'dev-2', 'maker:send', [])).rejects.toThrowError(
+    await expect(handleInvoke(deps, 'dev-2', IPC_CHANNELS.MAKER_INVOKE.SEND, [])).rejects.toThrowError(
       /\[SESSION_RUNNING\] busy/,
     );
   });
@@ -513,7 +514,7 @@ describe('device-link controller handlers', () => {
     const deps = makeDeps({
       invoke: vi.fn().mockRejectedValue(new DeviceLinkError('INVOKE_TIMEOUT', 'slow')),
     });
-    await expect(handleInvoke(deps, 'dev-2', 'maker:send', [])).rejects.toThrowError(
+    await expect(handleInvoke(deps, 'dev-2', IPC_CHANNELS.MAKER_INVOKE.SEND, [])).rejects.toThrowError(
       /\[DEVICE_LINK_TIMEOUT\]/,
     );
   });
@@ -522,7 +523,7 @@ describe('device-link controller handlers', () => {
     const deps = makeDeps({
       invoke: vi.fn().mockRejectedValue(new DeviceLinkError('BACKPRESSURE', 'buffer full')),
     });
-    await expect(handleInvoke(deps, 'dev-2', 'maker:send', [])).rejects.toThrowError(
+    await expect(handleInvoke(deps, 'dev-2', IPC_CHANNELS.MAKER_INVOKE.SEND, [])).rejects.toThrowError(
       /\[DEVICE_LINK_NOT_CONNECTED\]/,
     );
   });
@@ -533,7 +534,7 @@ describe('device-link controller handlers', () => {
       invoke,
       rewriteOutboundMedia: vi.fn().mockRejectedValue(new Error('OSS PUT 失败 (403)')),
     });
-    await expect(handleInvoke(deps, 'dev-2', 'maker:send', ['s', {}])).rejects.toThrowError(
+    await expect(handleInvoke(deps, 'dev-2', IPC_CHANNELS.MAKER_INVOKE.SEND, ['s', {}])).rejects.toThrowError(
       /\[DEVICE_LINK_MEDIA_TRANSFER_FAILED\]/,
     );
     expect(invoke).not.toHaveBeenCalled();
@@ -546,8 +547,8 @@ describe('device-link controller handlers', () => {
       invoke,
       rewriteOutboundMedia: vi.fn().mockResolvedValue(rewritten),
     });
-    await handleInvoke(deps, 'dev-2', 'maker:send', ['s', { type: 'user', content: [] }]);
-    expect(invoke).toHaveBeenCalledWith('dev-2', 'maker:send', rewritten);
+    await handleInvoke(deps, 'dev-2', IPC_CHANNELS.MAKER_INVOKE.SEND, ['s', { type: 'user', content: [] }]);
+    expect(invoke).toHaveBeenCalledWith('dev-2', IPC_CHANNELS.MAKER_INVOKE.SEND, rewritten);
   });
 
   it('invoke:附件改写期间关闭目标控制 → 改写后重新拦截,不发 invoke', async () => {
@@ -572,14 +573,14 @@ describe('device-link controller handlers', () => {
       }),
     });
 
-    await expect(handleInvoke(deps, 'dev-2', 'maker:send', ['s', {}])).rejects.toThrowError(
+    await expect(handleInvoke(deps, 'dev-2', IPC_CHANNELS.MAKER_INVOKE.SEND, ['s', {}])).rejects.toThrowError(
       /\[DEVICE_LINK_CONTROL_DISABLED\]/,
     );
     expect(invoke).not.toHaveBeenCalled();
   });
 
   it('invoke:参数校验', async () => {
-    await expect(handleInvoke(makeDeps(), '', 'maker:send', [])).rejects.toThrowError(
+    await expect(handleInvoke(makeDeps(), '', IPC_CHANNELS.MAKER_INVOKE.SEND, [])).rejects.toThrowError(
       /\[INVALID_PARAMS\]/,
     );
     await expect(handleInvoke(makeDeps(), 'dev-2', '', [])).rejects.toThrowError(

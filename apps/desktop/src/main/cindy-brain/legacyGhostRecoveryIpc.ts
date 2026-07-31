@@ -1,7 +1,8 @@
 import type { LegacyGhostRecoveryStatus } from '../../shared/legacyGhostRecovery.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
-export const LEGACY_GHOST_RECOVERY_STATUS_CHANNEL = 'ghosts:legacy-recovery-status';
-export const LEGACY_GHOST_RECOVERY_RETRY_CHANNEL = 'ghosts:retry-legacy-recovery';
+export const LEGACY_GHOST_RECOVERY_STATUS_CHANNEL = IPC_CHANNELS.GHOSTS.LEGACY_RECOVERY_STATUS;
+export const LEGACY_GHOST_RECOVERY_RETRY_CHANNEL = IPC_CHANNELS.GHOSTS.RETRY_LEGACY_RECOVERY;
 
 interface LegacyGhostRecoveryIpcDeps<Event> {
   assertTrusted(event: Event): void;

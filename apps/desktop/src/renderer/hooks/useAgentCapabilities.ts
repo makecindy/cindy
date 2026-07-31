@@ -14,6 +14,7 @@ import { useEffect, useState } from 'react';
 
 import { createLogger } from '@/lib/logger';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('useAgentCapabilities');
 
@@ -289,7 +290,7 @@ async function fetchCapabilities(
     // 远程:隧道到被控端的 maker:get-capabilities(已在 allowlist)。
     const dl = getDeviceLink();
     if (!dl) throw new Error('device-link IPC not available');
-    raw = dl.invoke(deviceId, 'maker:get-capabilities', [agentKind]) as Promise<AgentCapabilities>;
+    raw = dl.invoke(deviceId, IPC_CHANNELS.MAKER_INVOKE.GET_CAPABILITIES, [agentKind]) as Promise<AgentCapabilities>;
   } else {
     // 本机:原路径,行为不变。
     const api = getMakerApi();

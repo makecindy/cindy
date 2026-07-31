@@ -130,6 +130,7 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
 }));
 
 import { resetEpermGuidanceForTest } from '../../file-access/permissions.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 beforeEach(() => {
   mocks.getSessionRowSnapshot.mockReset();
@@ -1554,7 +1555,7 @@ describe('AgentIslandService native publishing', () => {
       'target-session',
     );
 
-    expect(send).toHaveBeenCalledWith('notification:focus-session', 'target-session');
+    expect(send).toHaveBeenCalledWith(IPC_CHANNELS.NOTIFICATION.FOCUS_SESSION, 'target-session');
     expect(publish.mock.calls.at(-1)?.[0]).toMatchObject({
       mode: 'compact',
       currentSessionId: 'target-session',
@@ -3421,7 +3422,7 @@ describe('AgentIslandService native publishing', () => {
     expect(restore).not.toHaveBeenCalled();
     expect(show).not.toHaveBeenCalled();
     expect(focus).not.toHaveBeenCalled();
-    expect(send).toHaveBeenCalledWith('app-menu:command', 'toggle-agent-island-sound');
+    expect(send).toHaveBeenCalledWith(IPC_CHANNELS.APP_MENU.COMMAND, 'toggle-agent-island-sound');
 
     dispatchCommand('open-agent-island-settings');
     dispatchCommand('new-maker');
@@ -3429,8 +3430,8 @@ describe('AgentIslandService native publishing', () => {
     expect(restore).toHaveBeenCalledTimes(2);
     expect(show).toHaveBeenCalledTimes(2);
     expect(focus).toHaveBeenCalledTimes(2);
-    expect(send).toHaveBeenNthCalledWith(2, 'app-menu:command', 'open-agent-island-settings');
-    expect(send).toHaveBeenNthCalledWith(3, 'app-menu:command', 'new-maker');
+    expect(send).toHaveBeenNthCalledWith(2, IPC_CHANNELS.APP_MENU.COMMAND, 'open-agent-island-settings');
+    expect(send).toHaveBeenNthCalledWith(3, IPC_CHANNELS.APP_MENU.COMMAND, 'new-maker');
   });
 
   it('does not route already visible secondary sessions through the main window', async () => {

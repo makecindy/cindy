@@ -51,6 +51,7 @@ import { buildMacOSUpdateScript } from './updateScriptMacOS';
 import { disposeAndroidAdb } from './mcp-integrations/android';
 import { getGhostNodeRuntimeBroker } from './cindy-brain/index';
 import { cleanOldUpdateFiles } from './updateArtifacts';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('updateService');
 
@@ -156,7 +157,7 @@ function getUpdatesDir(): string {
 function broadcastStatus(payload: UpdateStatusPayload): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
-      win.webContents.send('update-status', payload);
+      win.webContents.send(IPC_CHANNELS.UPDATE_STATUS.UPDATE_STATUS, payload);
     }
   }
 }
@@ -366,7 +367,7 @@ function broadcastUpdateProgress(payload: {
   );
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
-      win.webContents.send('app-update-progress', payload);
+      win.webContents.send(IPC_CHANNELS.APP_UPDATE_PROGRESS.APP_UPDATE_PROGRESS, payload);
     }
   }
 }
@@ -1011,7 +1012,7 @@ function forceQuit(): void {
   log.info('forceQuit() — destroying windows and exiting');
   // 本路径绕过 lifecycle 的 before-quit 链 —— 显式给 run marker 打上「更新重启」
   // 标记,否则下次启动的退出尸检会把这次强退误判成异常退出 (issue #758)。
-  noteExpectedExit('update-relaunch');
+  noteExpectedExit(IPC_CHANNELS.UPDATE_RELAUNCH.UPDATE_RELAUNCH);
   // 绕过 onQuit 链意味着 disposeAndroidAdb 不会被自动调用——显式 fire-and-forget
   // 收掉自带 adb server,避免它锁住安装目录阻碍 updater 替换文件。
   disposeAndroidAdb();
@@ -1122,7 +1123,7 @@ export function initUpdateService(): void {
   // user stays on the latest version and never triggers another updater run.
   sweepStaleUpdateTempDirs();
 
-  ipcMain.on('update-relaunch', (_event, theme: 'light' | 'dark') => {
+  ipcMain.on(IPC_CHANNELS.UPDATE_RELAUNCH.UPDATE_RELAUNCH, (_event, theme: 'light' | 'dark') => {
     // Defensive default: if an old preload is somehow loaded (or theme is
     // missing), fall back to dark — matches the renderer's getStoredTheme()
     // default and the .env'd-out look most users have.
@@ -1132,7 +1133,7 @@ export function initUpdateService(): void {
   });
 
   ipcMain.handle(
-    'update-relaunch-auto',
+    IPC_CHANNELS.UPDATE_RELAUNCH_AUTO.UPDATE_RELAUNCH_AUTO,
     async (_event, theme: 'light' | 'dark'): Promise<AutoRelaunchRequestResult> => {
       // Startup checks and the renderer's 1.5 s presentation delay create a
       // real TOCTOU window. Re-run the startup policy at the apply boundary so a
@@ -1152,15 +1153,15 @@ export function initUpdateService(): void {
     },
   );
 
-  ipcMain.handle('update-get-status', () => {
+  ipcMain.handle(IPC_CHANNELS.UPDATE_GET_STATUS.UPDATE_GET_STATUS, () => {
     return { status: currentStatus, version: readyVersion, errorCode: lastErrorCode };
   });
 
-  ipcMain.handle('update-auto-settings-get', () => {
+  ipcMain.handle(IPC_CHANNELS.UPDATE_AUTO_SETTINGS_GET.UPDATE_AUTO_SETTINGS_GET, () => {
     return autoUpdateSettingsWire();
   });
 
-  ipcMain.handle('update-auto-settings-set', (_event, payload: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.UPDATE_AUTO_SETTINGS_SET.UPDATE_AUTO_SETTINGS_SET, (_event, payload: unknown) => {
     if (!payload || typeof payload !== 'object') {
       throwIpcError('INVALID_PARAMS', 'auto update settings payload required');
     }
@@ -1173,19 +1174,19 @@ export function initUpdateService(): void {
     return autoUpdateSettingsWire();
   });
 
-  ipcMain.handle('update-auto-settings-reset', () => {
+  ipcMain.handle(IPC_CHANNELS.UPDATE_AUTO_SETTINGS_RESET.UPDATE_AUTO_SETTINGS_RESET, () => {
     resetAutoUpdateSettings();
     void evaluateAutoRelaunch('settings-reset');
     return autoUpdateSettingsWire();
   });
 
-  ipcMain.on('update-set-relaunch-theme', (_event, theme: 'light' | 'dark') => {
+  ipcMain.on(IPC_CHANNELS.UPDATE_SET_RELAUNCH_THEME.UPDATE_SET_RELAUNCH_THEME, (_event, theme: 'light' | 'dark') => {
     if (theme === 'light' || theme === 'dark') {
       resolvedRelaunchTheme = theme;
     }
   });
 
-  ipcMain.handle('update-move-to-applications', () => {
+  ipcMain.handle(IPC_CHANNELS.UPDATE_MOVE_TO_APPLICATIONS.UPDATE_MOVE_TO_APPLICATIONS, () => {
     if (process.platform !== 'darwin') return { moved: false };
     if (app.isInApplicationsFolder()) return { moved: false };
     try {
@@ -1197,7 +1198,7 @@ export function initUpdateService(): void {
     }
   });
 
-  ipcMain.handle('update-check-now', async (): Promise<{ result: CheckForUpdateResult | 'downloading' }> => {
+  ipcMain.handle(IPC_CHANNELS.UPDATE_CHECK_NOW.UPDATE_CHECK_NOW, async (): Promise<{ result: CheckForUpdateResult | 'downloading' }> => {
     // Short-circuit when a check / download is already in flight or finished:
     // we don't want the user to wait for an entire download just to see the
     // toast, and re-entering checkForUpdate() during 'downloading' would
@@ -1211,7 +1212,7 @@ export function initUpdateService(): void {
     return { result };
   });
 
-  ipcMain.handle('update-check-startup', async () => {
+  ipcMain.handle(IPC_CHANNELS.UPDATE_CHECK_STARTUP.UPDATE_CHECK_STARTUP, async () => {
     log.info('update-check-startup called');
     startupUpdateCheckInProgress = true;
     try {

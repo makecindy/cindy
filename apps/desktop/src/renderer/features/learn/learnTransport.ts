@@ -24,6 +24,7 @@ import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOr
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 
 import type { LearnEventPayload } from '../../../shared/learnTypes';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 type FullLearn = typeof window.electronAPI.learn;
 
@@ -57,11 +58,11 @@ export function learnApiFor(contextSessionId: string | null | undefined): Routab
     };
   const localApi = window.electronAPI.learn;
   return {
-    listRuns: t('learn:list-runs', localApi.listRuns) as FullLearn['listRuns'],
-    getProposalDiff: t('learn:get-proposal-diff', localApi.getProposalDiff) as FullLearn['getProposalDiff'],
-    apply: t('learn:apply', localApi.apply) as FullLearn['apply'],
-    discard: t('learn:discard', localApi.discard) as FullLearn['discard'],
-    cancel: t('learn:cancel', localApi.cancel) as FullLearn['cancel'],
+    listRuns: t(IPC_CHANNELS.LEARN.LIST_RUNS, localApi.listRuns) as FullLearn['listRuns'],
+    getProposalDiff: t(IPC_CHANNELS.LEARN.GET_PROPOSAL_DIFF, localApi.getProposalDiff) as FullLearn['getProposalDiff'],
+    apply: t(IPC_CHANNELS.LEARN.APPLY, localApi.apply) as FullLearn['apply'],
+    discard: t(IPC_CHANNELS.LEARN.DISCARD, localApi.discard) as FullLearn['discard'],
+    cancel: t(IPC_CHANNELS.LEARN.CANCEL, localApi.cancel) as FullLearn['cancel'],
   };
 }
 
@@ -83,7 +84,7 @@ export function subscribeLearnEvents(
     }
     return (
       window.electronAPI.deviceLink?.onRemotePush?.((push, localOwnerStamp) => {
-        if (push.deviceId !== deviceId || push.channel !== 'learn:event') return;
+        if (push.deviceId !== deviceId || push.channel !== IPC_CHANNELS.LEARN.EVENT) return;
         if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
         cb(push.payload as LearnEventPayload);
       }) ?? (() => {})

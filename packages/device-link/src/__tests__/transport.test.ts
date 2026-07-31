@@ -10,6 +10,7 @@ import {
   parseTransportAck,
   parseTransportPayload,
 } from '../transport.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 describe('device-link reliable transport codec', () => {
   it('UTF-8 字节计数不依赖 TextEncoder，兼容 Hermes', () => {
@@ -40,7 +41,7 @@ describe('device-link reliable transport codec', () => {
       v: 1,
       kind: 'push',
       dst: 'controller',
-      payload: { channel: 'maker:event', payload: { ok: true } },
+      payload: { channel: IPC_CHANNELS.MAKER_PUSH.EVENT, payload: { ok: true } },
     };
     const [frame] = encodeReliableFrames(env, 'stream-1', 101, 100);
     expect(parseTransportPayload(frame.payload)?.meta).toMatchObject({

@@ -32,6 +32,7 @@ import { getMobileNotifyGeneration, sendMobileSessionNotify } from './device-lin
 import { latestMessageText } from './localDb/latestMessageText';
 import { drainPersistQueue } from './messagePersistBroadcaster';
 import { createLogger } from './logger';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('notificationService');
 let desktopNotificationsEnabled = true;
@@ -133,7 +134,7 @@ function focusWindow(getWindow: () => BrowserWindow | null, sessionId: string): 
   win.show();
   win.focus();
   win.setAlwaysOnTop(false);
-  if (sessionId) win.webContents.send('notification:focus-session', sessionId);
+  if (sessionId) win.webContents.send(IPC_CHANNELS.NOTIFICATION.FOCUS_SESSION, sessionId);
 }
 
 /**
@@ -163,7 +164,7 @@ export interface NotificationServiceDeps {
 export function initNotificationService(deps: NotificationServiceDeps): void {
   const { getWindow, feishuIm } = deps;
 
-  ipcMain.handle('notification:set-desktop-enabled', (_event, enabled: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.NOTIFICATION.SET_DESKTOP_ENABLED, (_event, enabled: unknown) => {
     if (typeof enabled !== 'boolean') {
       throw new TypeError('notification desktop enabled must be a boolean');
     }
@@ -172,7 +173,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
   });
 
   ipcMain.handle(
-    'notification:show-session-event',
+    IPC_CHANNELS.NOTIFICATION.SHOW_SESSION_EVENT,
     async (_event, payload: ShowSessionEventPayload): Promise<void> => {
       // renderer payload 不可信:mobile 通道会把 title/kind 送出本机(经 relay/APNs),
       // main 必须做运行时形状校验,TS 类型不算(electron-security 规则)。正文摘要

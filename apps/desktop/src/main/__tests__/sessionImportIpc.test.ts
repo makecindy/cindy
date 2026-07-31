@@ -74,6 +74,7 @@ import {
   importExternalClaudeCodeSessions,
   scanExternalClaudeCodeSessions,
 } from '../maker-host/claude-local-sessions.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 function stubDb(): void {
   vi.mocked(getRawDb).mockReturnValue({
@@ -170,7 +171,7 @@ describe('session import IPC', () => {
       rejectedCount: 0,
     });
 
-    const scan = mocks.handlers.get('local-db:session-import:scan');
+    const scan = mocks.handlers.get(IPC_CHANNELS.LOCAL_DB.SESSION_IMPORT_SCAN);
     expect(scan).toBeDefined();
     const result = await scan?.();
 
@@ -222,7 +223,7 @@ describe('session import IPC', () => {
       rejectedCount: 0,
     });
 
-    const scan = mocks.handlers.get('local-db:session-import:scan');
+    const scan = mocks.handlers.get(IPC_CHANNELS.LOCAL_DB.SESSION_IMPORT_SCAN);
     const result = await scan?.();
     expect(result).toMatchObject({
       candidates: [{ key: 'claude:claude-fresh-cli-session' }],
@@ -311,7 +312,7 @@ describe('session import IPC', () => {
       rejectedCount: 0,
     });
 
-    const scan = mocks.handlers.get('local-db:session-import:scan');
+    const scan = mocks.handlers.get(IPC_CHANNELS.LOCAL_DB.SESSION_IMPORT_SCAN);
     const result = await scan?.() as { candidates: unknown[] };
 
     expect(result.candidates).toHaveLength(7);
@@ -378,8 +379,8 @@ describe('session import IPC', () => {
       updated: 0,
     });
 
-    const scan = mocks.handlers.get('local-db:session-import:scan');
-    const importSelected = mocks.handlers.get('local-db:session-import:import');
+    const scan = mocks.handlers.get(IPC_CHANNELS.LOCAL_DB.SESSION_IMPORT_SCAN);
+    const importSelected = mocks.handlers.get(IPC_CHANNELS.LOCAL_DB.SESSION_IMPORT_IMPORT);
     expect(scan).toBeDefined();
     expect(importSelected).toBeDefined();
 
@@ -414,7 +415,7 @@ describe('session import IPC', () => {
       rejectedCount: 0,
     });
 
-    const scan = mocks.handlers.get('local-db:session-import:scan');
+    const scan = mocks.handlers.get(IPC_CHANNELS.LOCAL_DB.SESSION_IMPORT_SCAN);
     expect(scan).toBeDefined();
 
     mocks.currentUserId = 'user-a';
@@ -448,7 +449,7 @@ describe('session import IPC', () => {
       .mockReturnValueOnce(claudeFirst.promise)
       .mockReturnValueOnce(claudeForced.promise);
 
-    const scan = mocks.handlers.get('local-db:session-import:scan');
+    const scan = mocks.handlers.get(IPC_CHANNELS.LOCAL_DB.SESSION_IMPORT_SCAN);
     expect(scan).toBeDefined();
 
     const automaticScan = scan?.();
@@ -469,7 +470,7 @@ describe('session import IPC', () => {
   it('does not link Codex projects from managed dialogue workspaces', async () => {
     const managedCwd = path.join(mocks.userDataDir, 'dialogues', '2026-05-20', 'session-1');
 
-    const link = mocks.handlers.get('local-db:session-import:link-codex-project');
+    const link = mocks.handlers.get(IPC_CHANNELS.LOCAL_DB.SESSION_IMPORT_LINK_CODEX_PROJECT);
     expect(link).toBeDefined();
     const result = await link?.(undefined, { workingDir: managedCwd });
 
@@ -506,7 +507,7 @@ describe('session import IPC', () => {
       updated: 1,
     });
 
-    const link = mocks.handlers.get('local-db:session-import:link-codex-project');
+    const link = mocks.handlers.get(IPC_CHANNELS.LOCAL_DB.SESSION_IMPORT_LINK_CODEX_PROJECT);
     expect(link).toBeDefined();
     const result = await link?.(undefined, { workingDir: 'D:\\AI\\tl_web_agent' });
 

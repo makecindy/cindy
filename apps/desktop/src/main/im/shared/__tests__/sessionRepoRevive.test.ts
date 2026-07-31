@@ -76,6 +76,7 @@ vi.mock('../../defaultSessionSettings', () => ({
 
 import { createImSessionRepo, type ImSessionRow } from '../sessionRepo';
 import type { ImOrchestratorConfig, ImSessionNamespace } from '../types';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const ns: ImSessionNamespace = {
   source: 'feishu',
@@ -143,10 +144,10 @@ describe('sessionRepo.findActiveSession 软删行复活(#748)', () => {
         val: 'feishu_bot_user',
       });
       // 广播 created 让 sidebar 重拉列表、会话重新出现
-      expect(mocks.webContentsSend).toHaveBeenCalledWith('local-db:sessions:created', {
+      expect(mocks.webContentsSend).toHaveBeenCalledWith(IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED, {
         sessionId: 'feishu_bot_user',
       });
-      expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:created', {
+      expect(mocks.tapWindowBroadcast).toHaveBeenCalledWith(IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED, {
         sessionId: 'feishu_bot_user',
       });
     },

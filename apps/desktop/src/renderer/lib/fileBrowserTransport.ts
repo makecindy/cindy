@@ -21,13 +21,14 @@ import { createLogger } from '@/lib/logger';
 import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 
 import { gzipTextToBase64, gunzipBase64ToText } from './gzipBase64';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('fileBrowserTransport');
 
 type LocalFileBrowser = typeof window.electronAPI.fileBrowser;
 
-const REMOTE_OP_CHANNEL = 'file-browser:remote-op';
-const FILE_BROWSER_EVENT_CHANNEL = 'maker:file-browser:event';
+const REMOTE_OP_CHANNEL = IPC_CHANNELS.FILE_BROWSER.REMOTE_OP;
+const FILE_BROWSER_EVENT_CHANNEL = IPC_CHANNELS.MAKER_EXTRA.FILE_BROWSER_EVENT;
 
 /**
  * writeFile 压缩阈值(UTF-16 码元数,粗粒度启发式:ASCII ≈ 64KB、CJK ≈

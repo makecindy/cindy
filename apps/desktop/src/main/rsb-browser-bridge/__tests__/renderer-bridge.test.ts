@@ -25,6 +25,7 @@ import {
   registerTabOpResultHandler,
   type RendererBridgeOptions,
 } from '../renderer-bridge.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 interface FakeWc {
   send: ReturnType<typeof vi.fn>;
@@ -85,7 +86,7 @@ describe('dispatchTabOp — happy path', () => {
     expect(typeof sent.reqId).toBe('string');
 
     // Simulate renderer answering.
-    const handler = getRegisteredHandler('rsb-browser-bridge:tab-op-result');
+    const handler = getRegisteredHandler(IPC_CHANNELS.RSB_BROWSER_BRIDGE.TAB_OP_RESULT);
     handler?.(null, { reqId: sent.reqId, ok: true, tabId: 't-fresh' });
 
     const result = await pending;
@@ -100,7 +101,7 @@ describe('dispatchTabOp — happy path', () => {
     };
     registerTabOpResultHandler(opts);
 
-    const handler = getRegisteredHandler('rsb-browser-bridge:tab-op-result');
+    const handler = getRegisteredHandler(IPC_CHANNELS.RSB_BROWSER_BRIDGE.TAB_OP_RESULT);
     const ack = handler?.(null, { reqId: 'no-such', ok: true, tabId: 't' });
     expect(ack).toEqual({ ok: true });
   });
@@ -174,7 +175,7 @@ describe('dispatchTabOp — failure paths', () => {
       await expect(pending).rejects.toThrow(/timed out/);
 
       // Now the late answer arrives. Handler must log + ack ok, NOT throw.
-      const handler = getRegisteredHandler('rsb-browser-bridge:tab-op-result');
+      const handler = getRegisteredHandler(IPC_CHANNELS.RSB_BROWSER_BRIDGE.TAB_OP_RESULT);
       const ack = handler?.(null, { reqId: sent.reqId, ok: true, tabId: 'late' });
       expect(ack).toEqual({ ok: true });
       expect(log.warn).toHaveBeenCalledWith(
@@ -292,7 +293,7 @@ describe('dispatchTabOp — ensureHost(detached 侧边栏子窗口)', () => {
     expect(wc.send).toHaveBeenCalledTimes(1);
 
     const sent = wc.send.mock.calls[0][1] as { reqId: string };
-    const handler = getRegisteredHandler('rsb-browser-bridge:tab-op-result');
+    const handler = getRegisteredHandler(IPC_CHANNELS.RSB_BROWSER_BRIDGE.TAB_OP_RESULT);
     handler?.(null, { reqId: sent.reqId, ok: true, tabId: 't1' });
     await expect(pending).resolves.toMatchObject({ ok: true, tabId: 't1' });
   });

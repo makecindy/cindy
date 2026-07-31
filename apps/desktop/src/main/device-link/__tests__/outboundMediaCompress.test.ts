@@ -34,6 +34,7 @@ vi.mock('../../logger', () => ({
 
 import { rewriteOutboundMedia } from '../outboundMedia';
 import { isAttachmentOssRef } from '../../../shared/attachmentOssRef';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const SHA256 = 'a'.repeat(64);
 
@@ -68,7 +69,7 @@ describe('base64 来源', () => {
       ext: 'jpg',
     });
     const raw = Buffer.alloc(64, 1);
-    const out = await rewriteOutboundMedia('maker:send', [
+    const out = await rewriteOutboundMedia(IPC_CHANNELS.MAKER_INVOKE.SEND, [
       'sess',
       {
         type: 'user',
@@ -89,7 +90,7 @@ describe('base64 来源', () => {
   it('压缩回退(null)→ uploadBuffer 收到原字节与原 mime', async () => {
     compressOutboundImage.mockResolvedValue(null);
     const raw = Buffer.alloc(16, 2);
-    await rewriteOutboundMedia('maker:send', [
+    await rewriteOutboundMedia(IPC_CHANNELS.MAKER_INVOKE.SEND, [
       'sess',
       {
         type: 'user',
@@ -105,7 +106,7 @@ describe('base64 来源', () => {
 
   it('超过输入体量护栏(48MB)→ 不进压缩管线,原字节直接上传', async () => {
     const raw = Buffer.alloc(48 * 1024 * 1024 + 1, 3);
-    await rewriteOutboundMedia('maker:send', [
+    await rewriteOutboundMedia(IPC_CHANNELS.MAKER_INVOKE.SEND, [
       'sess',
       {
         type: 'user',
@@ -130,7 +131,7 @@ describe('xdt-image:// 来源', () => {
       contentType: 'image/png',
       ext: 'png',
     });
-    await rewriteOutboundMedia('maker:send', [
+    await rewriteOutboundMedia(IPC_CHANNELS.MAKER_INVOKE.SEND, [
       'sess',
       {
         type: 'user',
@@ -149,7 +150,7 @@ describe('xdt-image:// 来源', () => {
     resolveSafe.mockReturnValue({ absPath: '/cache/b.jpg', mimeType: 'image/jpeg' });
     readFile.mockResolvedValue(Buffer.alloc(8, 4));
     compressOutboundImage.mockResolvedValue(null);
-    await rewriteOutboundMedia('maker:send', [
+    await rewriteOutboundMedia(IPC_CHANNELS.MAKER_INVOKE.SEND, [
       'sess',
       { type: 'user', content: [{ type: 'image', path: 'xdt-image://s/b.jpg' }] },
     ]);
@@ -160,7 +161,7 @@ describe('xdt-image:// 来源', () => {
   it('读文件失败 → 跳过压缩,uploadLocalFile 走原路径保持原错误语义', async () => {
     resolveSafe.mockReturnValue({ absPath: '/cache/gone.png', mimeType: 'image/png' });
     readFile.mockRejectedValue(new Error('ENOENT'));
-    await rewriteOutboundMedia('maker:send', [
+    await rewriteOutboundMedia(IPC_CHANNELS.MAKER_INVOKE.SEND, [
       'sess',
       {
         type: 'user',
@@ -173,7 +174,7 @@ describe('xdt-image:// 来源', () => {
 
   it('显式文件(url + 纯磁盘 path 双持)→ 字节精确,不读盘不压,流式上传缓存副本', async () => {
     resolveSafe.mockReturnValue({ absPath: '/cache/design.png', mimeType: 'image/png' });
-    await rewriteOutboundMedia('maker:input:enqueue', [
+    await rewriteOutboundMedia(IPC_CHANNELS.MAKER_INVOKE.INPUT_ENQUEUE, [
       'sess',
       {
         text: '',
@@ -203,7 +204,7 @@ describe('xdt-image:// 来源', () => {
   it('输入超过体量上限 → 不读盘不压,直接流式上传(防 main 进程内存尖峰)', async () => {
     resolveSafe.mockReturnValue({ absPath: '/cache/monster.png', mimeType: 'image/png' });
     statFile.mockResolvedValue({ size: 48 * 1024 * 1024 + 1 });
-    await rewriteOutboundMedia('maker:send', [
+    await rewriteOutboundMedia(IPC_CHANNELS.MAKER_INVOKE.SEND, [
       'sess',
       {
         type: 'user',
@@ -219,7 +220,7 @@ describe('xdt-image:// 来源', () => {
 
   it('不可压格式(gif)不整读进内存,直接流式上传', async () => {
     resolveSafe.mockReturnValue({ absPath: '/cache/anim.gif', mimeType: 'image/gif' });
-    await rewriteOutboundMedia('maker:send', [
+    await rewriteOutboundMedia(IPC_CHANNELS.MAKER_INVOKE.SEND, [
       'sess',
       {
         type: 'user',
@@ -235,7 +236,7 @@ describe('xdt-image:// 来源', () => {
 
 describe('磁盘路径来源(字节精确语义)', () => {
   it('绝对路径附件不压缩,原样 uploadLocalFile', async () => {
-    await rewriteOutboundMedia('maker:send', [
+    await rewriteOutboundMedia(IPC_CHANNELS.MAKER_INVOKE.SEND, [
       'sess',
       {
         type: 'user',

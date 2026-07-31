@@ -4,6 +4,7 @@ import type { BrowserWindow } from 'electron';
 
 import type { VoiceInputShortcut } from '../../../shared/voiceInputData.js';
 import type { GlobalVoiceInputIpcDeps } from '../global.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
@@ -317,7 +318,7 @@ describe('voice input global shortcut registration', () => {
     const { registerGlobalVoiceInputIpc } = await import('../global.js');
     registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
-    const setShortcut = mocks.handlers.get('voice-input:global-shortcut:set');
+    const setShortcut = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET);
     expect(setShortcut).toBeTypeOf('function');
 
     const f16Shortcut: VoiceInputShortcut = {
@@ -342,7 +343,7 @@ describe('voice input global shortcut registration', () => {
     mocks.registeredShortcuts.get('F16')?.();
 
     expect(mocks.focusedWindow.webContents.send).toHaveBeenCalledWith(
-      'voice-input:global-shortcut-trigger',
+      IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_TRIGGER,
       expect.objectContaining({ id: expect.any(String) }),
     );
   });
@@ -352,7 +353,7 @@ describe('voice input global shortcut registration', () => {
     const { registerGlobalVoiceInputIpc } = await import('../global.js');
     registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
-    const setShortcut = mocks.handlers.get('voice-input:global-shortcut:set');
+    const setShortcut = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET);
     expect(setShortcut).toBeTypeOf('function');
 
     const fnShortcut: VoiceInputShortcut = {
@@ -380,7 +381,7 @@ describe('voice input global shortcut registration', () => {
     const { registerGlobalVoiceInputIpc } = await import('../global.js');
     registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
-    const setShortcut = mocks.handlers.get('voice-input:global-shortcut:set');
+    const setShortcut = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET);
     expect(setShortcut).toBeTypeOf('function');
 
     const fnShortcut: VoiceInputShortcut = {
@@ -409,7 +410,7 @@ describe('voice input global shortcut registration', () => {
     setPlatform('darwin');
     const { registerGlobalVoiceInputIpc } = await import('../global.js');
     registerGlobalVoiceInputIpc(mocks.ipcDeps);
-    const setShortcut = mocks.handlers.get('voice-input:global-shortcut:set');
+    const setShortcut = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET);
 
     const first: VoiceInputShortcut = {
       trigger: 'keyboard',
@@ -453,7 +454,7 @@ describe('voice input global shortcut registration', () => {
       registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
       mocks.setStoredShortcut(bareRightOption);
-      const result = await mocks.handlers.get('voice-input:global-shortcut:set')?.({}, bareRightOption);
+      const result = await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.({}, bareRightOption);
 
       expect(result).toMatchObject({ ok: false, errorCode: 'permission' });
     });
@@ -465,7 +466,7 @@ describe('voice input global shortcut registration', () => {
       const { registerGlobalVoiceInputIpc } = await import('../global.js');
       registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
-      const result = await mocks.handlers.get('voice-input:settings:update-shortcut')?.({}, bareRightOption);
+      const result = await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.SETTINGS_UPDATE_SHORTCUT)?.({}, bareRightOption);
 
       expect(result).toMatchObject({ ok: true, pendingInputMonitoring: true });
       expect(mocks.updateSettings).toHaveBeenCalledWith({ shortcut: bareRightOption });
@@ -485,7 +486,7 @@ describe('voice input global shortcut registration', () => {
         key: 'F16',
         modifiers: { meta: false, ctrl: false, alt: false, shift: false, fn: false },
       });
-      await mocks.handlers.get('voice-input:global-shortcut:set')?.({}, {
+      await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.({}, {
         trigger: 'keyboard',
         code: 'F16',
         key: 'F16',
@@ -496,7 +497,7 @@ describe('voice input global shortcut registration', () => {
       mocks.modifierSetShortcut.mockResolvedValue({ ok: false, error: 'Could not listen for modifier shortcuts.' });
       mocks.inputMonitoringSnapshot.mockResolvedValue({ ok: false, status: 'denied', error: 'denied' });
 
-      const result = await mocks.handlers.get('voice-input:settings:update-shortcut')?.({}, bareRightOption);
+      const result = await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.SETTINGS_UPDATE_SHORTCUT)?.({}, bareRightOption);
 
       expect(result).toMatchObject({ ok: true, pendingInputMonitoring: true });
       expect(mocks.registeredShortcuts.has('F16')).toBe(false);
@@ -522,7 +523,7 @@ describe('voice input global shortcut registration', () => {
       const { registerGlobalVoiceInputIpc } = await import('../global.js');
       registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
-      const update = mocks.handlers.get('voice-input:settings:update-shortcut');
+      const update = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.SETTINGS_UPDATE_SHORTCUT);
       const stale = update?.({}, bareRightOption);
       const newer = update?.({}, f16);
 
@@ -619,7 +620,7 @@ describe('voice input global shortcut registration', () => {
 
         await focusWindow();
 
-        expect(mocks.focusedWindow.webContents.send).toHaveBeenCalledWith('voice-input:shortcut-recovery-failed');
+        expect(mocks.focusedWindow.webContents.send).toHaveBeenCalledWith(IPC_CHANNELS.VOICE_INPUT.SHORTCUT_RECOVERY_FAILED);
       });
 
       // 预筛通过之后、队列内那次执行之前,用户完全可以开始录制。队列内只重校验了快捷键
@@ -640,7 +641,7 @@ describe('voice input global shortcut registration', () => {
         await new Promise((resolve) => { setImmediate(resolve); });
 
         // preflight 还没回来,用户开始录制。
-        const start = mocks.handlers.get('voice-input:modifier-shortcut-recording:start');
+        const start = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_RECORDING_START);
         await start?.(mocks.recordingEvent);
         mocks.modifierSetShortcut.mockClear();
 
@@ -662,7 +663,7 @@ describe('voice input global shortcut registration', () => {
 
         await focusWindow();
 
-        const consume = mocks.handlers.get('voice-input:consume-shortcut-recovery-failure');
+        const consume = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.CONSUME_SHORTCUT_RECOVERY_FAILURE);
         expect(consume).toBeTypeOf('function');
         // 同一个 renderer 取第二次就没了 —— 同一个窗口不会被弹两次。
         expect(consume?.(mocks.settingsEvent)).toEqual({ failed: true });
@@ -681,7 +682,7 @@ describe('voice input global shortcut registration', () => {
 
         await focusWindow();
 
-        const consume = mocks.handlers.get('voice-input:consume-shortcut-recovery-failure');
+        const consume = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.CONSUME_SHORTCUT_RECOVERY_FAILURE);
         expect(consume?.(mocks.secondaryAppWindowEvent)).toEqual({ failed: true });
         // 副窗口先取走了,主窗口照样要能拿到。
         expect(consume?.(mocks.settingsEvent)).toEqual({ failed: true });
@@ -727,7 +728,7 @@ describe('voice input global shortcut registration', () => {
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
         // 先正常注册一次(存盘一致的同步),此后 helper 保持存活。
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.({}, bareRightOption);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.({}, bareRightOption);
         expect(mocks.modifierSetShortcut).toHaveBeenCalledWith(bareRightOption);
         mocks.modifierIsRunning.mockReturnValue(true);
         mocks.modifierSetShortcut.mockClear();
@@ -758,7 +759,7 @@ describe('voice input global shortcut registration', () => {
 
         // 没去起 helper(权限都没查出来),但用户拿到了可行动的提示。
         expect(mocks.modifierSetShortcut).not.toHaveBeenCalled();
-        const consume = mocks.handlers.get('voice-input:consume-shortcut-recovery-failure');
+        const consume = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.CONSUME_SHORTCUT_RECOVERY_FAILURE);
         expect(consume?.(mocks.settingsEvent)).toEqual({ failed: true });
       });
 
@@ -786,13 +787,13 @@ describe('voice input global shortcut registration', () => {
           modifiers: { meta: false, ctrl: false, alt: false, shift: false, fn: false },
         };
         mocks.setStoredShortcut(f16);
-        await mocks.handlers.get('voice-input:settings:update-shortcut')?.({}, f16);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.SETTINGS_UPDATE_SHORTCUT)?.({}, f16);
 
         // preflight 这才带着 unknown 迟到返回。
         settlePreflight({ ok: false, status: 'unknown', error: 'helper unavailable' });
         await new Promise((resolve) => { setImmediate(resolve); });
 
-        const consume = mocks.handlers.get('voice-input:consume-shortcut-recovery-failure');
+        const consume = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.CONSUME_SHORTCUT_RECOVERY_FAILURE);
         expect(consume?.(mocks.settingsEvent)).toEqual({ failed: false });
       });
 
@@ -808,7 +809,7 @@ describe('voice input global shortcut registration', () => {
         // 定时器**之前**:假定时器会连 queueMicrotask 一起接管, 那之后直接 await handler 会卡住。
         mocks.setStoredShortcut(bareRightOption);
         mocks.modifierIsRunning.mockReturnValue(false);
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.({}, bareRightOption);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.({}, bareRightOption);
         expect(mocks.modifierSetShortcut).toHaveBeenCalledWith(bareRightOption);
 
         setTimeoutSpy?.mockRestore();
@@ -866,7 +867,7 @@ describe('voice input global shortcut registration', () => {
           await vi.advanceTimersByTimeAsync(0);
 
           // 不下结论:既不报故障, 也不当作没事发生。
-          const consume = mocks.handlers.get('voice-input:consume-shortcut-recovery-failure');
+          const consume = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.CONSUME_SHORTCUT_RECOVERY_FAILURE);
           expect(consume?.(mocks.settingsEvent)).toEqual({ failed: false });
 
           // 那次启动失败收场 → 尾跑必须自己回来再查一遍。
@@ -892,13 +893,13 @@ describe('voice input global shortcut registration', () => {
 
         await focusWindow();
         // 先确认失败态真的置上了(否则下面那条断言会空转)。
-        expect(mocks.focusedWindow.webContents.send).toHaveBeenCalledWith('voice-input:shortcut-recovery-failed');
+        expect(mocks.focusedWindow.webContents.send).toHaveBeenCalledWith(IPC_CHANNELS.VOICE_INPUT.SHORTCUT_RECOVERY_FAILED);
 
         // 之后 renderer 的同步注册成功了。
         mocks.modifierSetShortcut.mockResolvedValue({ ok: true });
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.({}, bareRightOption);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.({}, bareRightOption);
 
-        const consume = mocks.handlers.get('voice-input:consume-shortcut-recovery-failure');
+        const consume = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.CONSUME_SHORTCUT_RECOVERY_FAILURE);
         expect(consume?.(mocks.settingsEvent)).toEqual({ failed: false });
       });
 
@@ -916,12 +917,12 @@ describe('voice input global shortcut registration', () => {
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
         // 只发挂起(没有 recording:start), 再 stop。
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.(mocks.recordingEvent, null, { suspend: true });
-        await mocks.handlers.get('voice-input:modifier-shortcut-recording:stop')?.(mocks.recordingEvent);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.(mocks.recordingEvent, null, { suspend: true });
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_RECORDING_STOP)?.(mocks.recordingEvent);
         mocks.modifierSetShortcut.mockClear();
 
         // 恢复同步必须能落地。
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.(mocks.recordingEvent, bareRightOption);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.(mocks.recordingEvent, bareRightOption);
 
         expect(mocks.modifierSetShortcut).toHaveBeenCalledWith(bareRightOption);
       });
@@ -938,12 +939,12 @@ describe('voice input global shortcut registration', () => {
 
         // 先成功注册一次, 让 registeredShortcut / registeredNativeShortcutKey 都是这一个。
         mocks.modifierIsRunning.mockReturnValue(false);
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.({}, bareRightOption);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.({}, bareRightOption);
 
         // 造一条持久失败态, 用来观察它有没有被清掉。
         mocks.modifierSetShortcut.mockResolvedValue({ ok: false, error: 'spawn ENOENT' });
         await focusWindow();
-        const consume = mocks.handlers.get('voice-input:consume-shortcut-recovery-failure');
+        const consume = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.CONSUME_SHORTCUT_RECOVERY_FAILURE);
 
         // 替补在起、还没就绪 → 同步落不到快路; 第一次 setShortcut 撞上那次失败的启动, 紧接着的
         // 同键重试成功。
@@ -954,7 +955,7 @@ describe('voice input global shortcut registration', () => {
           .mockResolvedValueOnce({ ok: false, error: 'Modifier shortcut listener did not start.' })
           .mockResolvedValue({ ok: true });
 
-        const result = await mocks.handlers.get('voice-input:global-shortcut:set')?.({}, bareRightOption);
+        const result = await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.({}, bareRightOption);
 
         expect(result).toMatchObject({ ok: true });
         // 报成功之后失败态也就过期了。
@@ -978,7 +979,7 @@ describe('voice input global shortcut registration', () => {
         // 当前注册着的是右 Option。
         mocks.modifierIsRunning.mockReturnValue(false);
         mocks.setStoredShortcut(bareRightOption);
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.({}, bareRightOption);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.({}, bareRightOption);
 
         // 换成右 Control: 新的起不来, 回滚到右 Option 成功。
         mocks.modifierSetShortcut.mockReset();
@@ -986,7 +987,7 @@ describe('voice input global shortcut registration', () => {
           .mockResolvedValueOnce({ ok: false, error: 'spawn ENOENT' })
           .mockResolvedValue({ ok: true });
 
-        const result = await mocks.handlers.get('voice-input:settings:update-shortcut')?.({}, otherBareModifier);
+        const result = await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.SETTINGS_UPDATE_SHORTCUT)?.({}, otherBareModifier);
 
         expect(result).toMatchObject({ ok: false, errorCode: 'failed' });
       });
@@ -1004,17 +1005,17 @@ describe('voice input global shortcut registration', () => {
 
         // 先成功注册一次, 让 registeredNativeShortcutKey 与存盘对上。
         mocks.modifierIsRunning.mockReturnValue(false);
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.({}, bareRightOption);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.({}, bareRightOption);
 
         // helper 挂了、兜底恢复也没救回来 → 记下持久失败态。
         mocks.modifierSetShortcut.mockResolvedValue({ ok: false, error: 'spawn ENOENT' });
         await focusWindow();
-        const consume = mocks.handlers.get('voice-input:consume-shortcut-recovery-failure');
+        const consume = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.CONSUME_SHORTCUT_RECOVERY_FAILURE);
 
         // 替补被 scheduleRestart 拉起来了: 进程在, 但还没报 ready。此刻来一次对得上存盘的同步。
         mocks.modifierIsRunning.mockReturnValue(true);
         mocks.modifierIsReady.mockReturnValue(false);
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.({}, bareRightOption);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.({}, bareRightOption);
 
         // 关键: 失败态还在, 那条「重启 Cindy 再试」的提示不能凭一个未就绪的替补被擦掉。
         expect(consume?.(mocks.settingsEvent)).toEqual({ failed: true });
@@ -1030,16 +1031,16 @@ describe('voice input global shortcut registration', () => {
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
         mocks.modifierIsRunning.mockReturnValue(false);
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.({}, bareRightOption);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.({}, bareRightOption);
 
         mocks.modifierSetShortcut.mockResolvedValue({ ok: false, error: 'spawn ENOENT' });
         await focusWindow();
-        const consume = mocks.handlers.get('voice-input:consume-shortcut-recovery-failure');
+        const consume = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.CONSUME_SHORTCUT_RECOVERY_FAILURE);
 
         // 替补起来了并且报了 ready。
         mocks.modifierIsRunning.mockReturnValue(true);
         mocks.modifierIsReady.mockReturnValue(true);
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.({}, bareRightOption);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.({}, bareRightOption);
 
         expect(consume?.(mocks.settingsEvent)).toEqual({ failed: false });
       });
@@ -1055,13 +1056,13 @@ describe('voice input global shortcut registration', () => {
 
         await focusWindow();
 
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.(
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.(
           mocks.recordingEvent,
           null,
           { suspend: true },
         );
 
-        const consume = mocks.handlers.get('voice-input:consume-shortcut-recovery-failure');
+        const consume = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.CONSUME_SHORTCUT_RECOVERY_FAILURE);
         expect(consume?.(mocks.settingsEvent)).toEqual({ failed: true });
       });
 
@@ -1085,7 +1086,7 @@ describe('voice input global shortcut registration', () => {
 
         await focusWindow();
 
-        const consume = mocks.handlers.get('voice-input:consume-shortcut-recovery-failure');
+        const consume = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.CONSUME_SHORTCUT_RECOVERY_FAILURE);
         expect(consume?.(mocks.settingsEvent)).toEqual({ failed: false });
       });
 
@@ -1101,7 +1102,7 @@ describe('voice input global shortcut registration', () => {
 
         await focusWindow();
 
-        const consume = mocks.handlers.get('voice-input:consume-shortcut-recovery-failure');
+        const consume = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.CONSUME_SHORTCUT_RECOVERY_FAILURE);
         expect(consume?.(mocks.settingsEvent)).toEqual({ failed: true });
       });
 
@@ -1116,7 +1117,7 @@ describe('voice input global shortcut registration', () => {
 
         await focusWindow();
 
-        const consume = mocks.handlers.get('voice-input:consume-shortcut-recovery-failure');
+        const consume = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.CONSUME_SHORTCUT_RECOVERY_FAILURE);
         expect(consume?.(mocks.settingsEvent)).toEqual({ failed: false });
       });
 
@@ -1167,7 +1168,7 @@ describe('voice input global shortcut registration', () => {
         const { registerGlobalVoiceInputIpc } = await import('../global.js');
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
-        const start = mocks.handlers.get('voice-input:modifier-shortcut-recording:start');
+        const start = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_RECORDING_START);
         const startResult = await start?.(mocks.recordingEvent);
         expect(startResult).toMatchObject({ ok: false, errorCode: 'permission' });
 
@@ -1193,7 +1194,7 @@ describe('voice input global shortcut registration', () => {
         await focusWindow();
 
         // 用户改成 F16:走 Electron accelerator,压根不需要监听权限。
-        const update = await mocks.handlers.get('voice-input:settings:update-shortcut')?.({}, {
+        const update = await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.SETTINGS_UPDATE_SHORTCUT)?.({}, {
           trigger: 'keyboard',
           code: 'F16',
           key: 'F16',
@@ -1201,7 +1202,7 @@ describe('voice input global shortcut registration', () => {
         });
         expect(update).toMatchObject({ ok: true });
 
-        const consume = mocks.handlers.get('voice-input:consume-shortcut-recovery-failure');
+        const consume = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.CONSUME_SHORTCUT_RECOVERY_FAILURE);
         expect(consume?.(mocks.settingsEvent)).toEqual({ failed: false });
       });
 
@@ -1257,7 +1258,7 @@ describe('voice input global shortcut registration', () => {
         const { registerGlobalVoiceInputIpc } = await import('../global.js');
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
-        const start = mocks.handlers.get('voice-input:modifier-shortcut-recording:start');
+        const start = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_RECORDING_START);
         await start?.(mocks.recordingEvent);
 
         await focusWindow();
@@ -1275,7 +1276,7 @@ describe('voice input global shortcut registration', () => {
       const { registerGlobalVoiceInputIpc } = await import('../global.js');
       registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
-      const result = await mocks.handlers.get('voice-input:settings:update-shortcut')?.({}, bareRightOption);
+      const result = await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.SETTINGS_UPDATE_SHORTCUT)?.({}, bareRightOption);
 
       expect(result).toMatchObject({ ok: false, errorCode: 'failed' });
       expect(mocks.updateSettings).not.toHaveBeenCalled();
@@ -1296,7 +1297,7 @@ describe('voice input global shortcut registration', () => {
       registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
       mocks.setStoredShortcut(bareRightOption);
-      const result = await mocks.handlers.get('voice-input:global-shortcut:set')?.({}, bareRightOption);
+      const result = await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.({}, bareRightOption);
 
       expect(result).toMatchObject({ ok: false, errorCode: 'failed' });
       expect((result as { error: string }).error).toBe('Could not start the voice input shortcut listener.');
@@ -1309,7 +1310,7 @@ describe('voice input global shortcut registration', () => {
       const { registerGlobalVoiceInputIpc } = await import('../global.js');
       registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
-      const result = await mocks.handlers.get('voice-input:modifier-shortcut-recording:start')?.(mocks.recordingEvent);
+      const result = await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_RECORDING_START)?.(mocks.recordingEvent);
 
       expect(result).toMatchObject({ ok: false, errorCode: 'failed' });
       expect((result as { error: string }).error).toBe('Could not start the voice input shortcut listener.');
@@ -1329,7 +1330,7 @@ describe('voice input global shortcut registration', () => {
       const { registerGlobalVoiceInputIpc } = await import('../global.js');
       registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
-      const start = mocks.handlers.get('voice-input:modifier-shortcut-recording:start');
+      const start = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_RECORDING_START);
       let settleA: (result: unknown) => void = () => {};
       mocks.modifierStartKeyCapture.mockImplementationOnce(
         () => new Promise((resolve) => { settleA = resolve; }),
@@ -1368,7 +1369,7 @@ describe('voice input global shortcut registration', () => {
       const { registerGlobalVoiceInputIpc } = await import('../global.js');
       registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
-      const start = mocks.handlers.get('voice-input:modifier-shortcut-recording:start');
+      const start = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_RECORDING_START);
       let settleA: (result: unknown) => void = () => {};
       mocks.modifierStartKeyCapture.mockImplementationOnce(
         () => new Promise((resolve) => { settleA = resolve; }),
@@ -1392,7 +1393,7 @@ describe('voice input global shortcut registration', () => {
       mocks.focusedWindow.webContents.send.mockClear();
       mocks.listenerOptions.onKeys?.(['Fn']);
       expect(mocks.focusedWindow.webContents.send).toHaveBeenCalledWith(
-        'voice-input:modifier-shortcut-keys',
+        IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_KEYS,
         { keys: ['Fn'] },
       );
     });
@@ -1405,7 +1406,7 @@ describe('voice input global shortcut registration', () => {
       const { registerGlobalVoiceInputIpc } = await import('../global.js');
       registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
-      const start = mocks.handlers.get('voice-input:modifier-shortcut-recording:start');
+      const start = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_RECORDING_START);
       // sender 必须对上 BrowserWindow mock 的 webContents.id，onKeys 才转发得到它。
 
       // 复现真实交错：第一轮卡在启动 listener 上，第二轮期间成功登记，第一轮才带着
@@ -1440,7 +1441,7 @@ describe('voice input global shortcut registration', () => {
       mocks.focusedWindow.webContents.send.mockClear();
       mocks.listenerOptions.onKeys?.(['Fn']);
       expect(mocks.focusedWindow.webContents.send).toHaveBeenCalledWith(
-        'voice-input:modifier-shortcut-keys',
+        IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_KEYS,
         { keys: ['Fn'] },
       );
     });
@@ -1455,7 +1456,7 @@ describe('voice input global shortcut registration', () => {
       const { registerGlobalVoiceInputIpc } = await import('../global.js');
       registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
-      const result = await mocks.handlers.get('voice-input:settings:update-shortcut')?.({}, bareRightOption);
+      const result = await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.SETTINGS_UPDATE_SHORTCUT)?.({}, bareRightOption);
 
       expect(result).toMatchObject({ ok: false, errorCode: 'superseded' });
       // 顶掉它的那一轮负责最终状态：这里不回滚（只调用了一次 setShortcut）、不查权限、
@@ -1474,7 +1475,7 @@ describe('voice input global shortcut registration', () => {
       const { registerGlobalVoiceInputIpc } = await import('../global.js');
       registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
-      const result = await mocks.handlers.get('voice-input:modifier-shortcut-recording:start')?.(mocks.recordingEvent);
+      const result = await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_RECORDING_START)?.(mocks.recordingEvent);
 
       expect(result).toMatchObject({ ok: false, errorCode: 'permission' });
     });
@@ -1494,12 +1495,12 @@ describe('voice input global shortcut registration', () => {
       // 于是 accelerator 确实是注册着的。直接在挂起之后去取回调是空转断言:挂起会把 accelerator
       // 注销掉, 回调压根取不到, 「没触发」自然成立却什么都没测到(我第一版就是这么写的)。
       async function recordElsewhereThenCommitF16(): Promise<void> {
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.(
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.(
           mocks.settingsEvent,
           null,
           { suspend: true },
         );
-        await mocks.handlers.get('voice-input:settings:update-shortcut')?.({}, f16);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.SETTINGS_UPDATE_SHORTCUT)?.({}, f16);
         expect(mocks.registeredShortcuts.has('F16')).toBe(true);
       }
 
@@ -1514,7 +1515,7 @@ describe('voice input global shortcut registration', () => {
         mocks.registeredShortcuts.get('F16')?.();
 
         expect(mocks.focusedWindow.webContents.send).not.toHaveBeenCalledWith(
-          'voice-input:global-shortcut-trigger',
+          IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_TRIGGER,
           expect.anything(),
         );
       });
@@ -1525,13 +1526,13 @@ describe('voice input global shortcut registration', () => {
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
         await recordElsewhereThenCommitF16();
-        await mocks.handlers.get('voice-input:modifier-shortcut-recording:stop')?.(mocks.settingsEvent);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_RECORDING_STOP)?.(mocks.settingsEvent);
         mocks.focusedWindow.webContents.send.mockClear();
 
         mocks.registeredShortcuts.get('F16')?.();
 
         expect(mocks.focusedWindow.webContents.send).toHaveBeenCalledWith(
-          'voice-input:global-shortcut-trigger',
+          IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_TRIGGER,
           expect.objectContaining({ id: expect.any(String) }),
         );
       });
@@ -1545,10 +1546,10 @@ describe('voice input global shortcut registration', () => {
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
         // 另一个窗口的录制框开着,且 capture 真的起来了(转发名单里有它)。
-        await mocks.handlers.get('voice-input:modifier-shortcut-recording:start')?.(mocks.recordingEvent);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_RECORDING_START)?.(mocks.recordingEvent);
         mocks.modifierStop.mockClear();
 
-        await mocks.handlers.get('voice-input:settings:update-shortcut')?.({}, f16);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.SETTINGS_UPDATE_SHORTCUT)?.({}, f16);
 
         // 关键:没有 stop 掉共享 helper,只放弃了快捷键。
         expect(mocks.modifierStop).not.toHaveBeenCalled();
@@ -1558,7 +1559,7 @@ describe('voice input global shortcut registration', () => {
         mocks.focusedWindow.webContents.send.mockClear();
         mocks.listenerOptions.onKeys?.(['Fn']);
         expect(mocks.focusedWindow.webContents.send).toHaveBeenCalledWith(
-          'voice-input:modifier-shortcut-keys',
+          IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_KEYS,
           { keys: ['Fn'] },
         );
       });
@@ -1570,7 +1571,7 @@ describe('voice input global shortcut registration', () => {
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
         mocks.modifierStop.mockClear();
 
-        await mocks.handlers.get('voice-input:settings:update-shortcut')?.({}, f16);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.SETTINGS_UPDATE_SHORTCUT)?.({}, f16);
 
         expect(mocks.modifierStop).toHaveBeenCalled();
         expect(mocks.modifierReleaseShortcut).not.toHaveBeenCalled();
@@ -1596,11 +1597,11 @@ describe('voice input global shortcut registration', () => {
         // 照送」钉成了正确行为(下面那条用例就是它漏掉的那个 bug)。
         mocks.listenerOptions.onTrigger?.('start');
         expect(mocks.focusedWindow.webContents.send).toHaveBeenCalledWith(
-          'voice-input:global-shortcut-trigger',
+          IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_TRIGGER,
           expect.objectContaining({ phase: 'start' }),
         );
 
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.(
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.(
           mocks.settingsEvent,
           null,
           { suspend: true },
@@ -1610,7 +1611,7 @@ describe('voice input global shortcut registration', () => {
         // 录制期间的新激活照旧挡掉。
         mocks.listenerOptions.onTrigger?.('tap');
         expect(mocks.focusedWindow.webContents.send).not.toHaveBeenCalledWith(
-          'voice-input:global-shortcut-trigger',
+          IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_TRIGGER,
           expect.anything(),
         );
 
@@ -1618,7 +1619,7 @@ describe('voice input global shortcut registration', () => {
         // 那个任务就永远停不下来。
         mocks.listenerOptions.onTrigger?.('end');
         expect(mocks.focusedWindow.webContents.send).toHaveBeenCalledWith(
-          'voice-input:global-shortcut-trigger',
+          IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_TRIGGER,
           { phase: 'end' },
         );
       });
@@ -1635,7 +1636,7 @@ describe('voice input global shortcut registration', () => {
           mocks.focusedWindow.webContents as unknown as Parameters<typeof registerActiveInlineVoiceInputWebContents>[0],
         );
 
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.(
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.(
           mocks.settingsEvent,
           null,
           { suspend: true },
@@ -1647,7 +1648,7 @@ describe('voice input global shortcut registration', () => {
         mocks.listenerOptions.onTrigger?.('end');
 
         expect(mocks.focusedWindow.webContents.send).not.toHaveBeenCalledWith(
-          'voice-input:global-shortcut-trigger',
+          IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_TRIGGER,
           expect.anything(),
         );
       });
@@ -1662,19 +1663,19 @@ describe('voice input global shortcut registration', () => {
           mocks.focusedWindow.webContents as unknown as Parameters<typeof registerActiveInlineVoiceInputWebContents>[0],
         );
 
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.(
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.(
           mocks.settingsEvent,
           null,
           { suspend: true },
         );
         mocks.listenerOptions.onTrigger?.('start');
-        await mocks.handlers.get('voice-input:modifier-shortcut-recording:stop')?.(mocks.settingsEvent);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_RECORDING_STOP)?.(mocks.settingsEvent);
         mocks.focusedWindow.webContents.send.mockClear();
 
         mocks.listenerOptions.onTrigger?.('end');
 
         expect(mocks.focusedWindow.webContents.send).not.toHaveBeenCalledWith(
-          'voice-input:global-shortcut-trigger',
+          IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_TRIGGER,
           expect.anything(),
         );
       });
@@ -1686,7 +1687,7 @@ describe('voice input global shortcut registration', () => {
         const { registerGlobalVoiceInputIpc } = await import('../global.js');
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.(
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.(
           mocks.settingsEvent,
           null,
           { suspend: true },
@@ -1694,7 +1695,7 @@ describe('voice input global shortcut registration', () => {
         // 系统里已被别的应用占用。
         mocks.registerShortcut.mockReturnValue(false);
 
-        const result = await mocks.handlers.get('voice-input:settings:update-shortcut')?.({}, f16);
+        const result = await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.SETTINGS_UPDATE_SHORTCUT)?.({}, f16);
 
         expect(result).toMatchObject({ ok: false });
         expect(mocks.updateSettings).not.toHaveBeenCalled();
@@ -1716,7 +1717,7 @@ describe('voice input global shortcut registration', () => {
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
         await expect(
-          mocks.handlers.get('voice-input:global-shortcut:set')?.(
+          mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.(
             mocks.secondaryWindowEvent,
             null,
             { suspend: true },
@@ -1725,7 +1726,7 @@ describe('voice input global shortcut registration', () => {
 
         // 关键:被拒的调用不能留下录制会话,否则合法的同步会一直被「录制中」守卫拒掉。
         mocks.modifierSetShortcut.mockClear();
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.({}, bareRightOption);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.({}, bareRightOption);
         expect(mocks.modifierSetShortcut).toHaveBeenCalledWith(bareRightOption);
       });
 
@@ -1738,7 +1739,7 @@ describe('voice input global shortcut registration', () => {
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
         await expect(
-          mocks.handlers.get('voice-input:modifier-shortcut-recording:start')?.(mocks.secondaryWindowEvent),
+          mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_RECORDING_START)?.(mocks.secondaryWindowEvent),
         ).rejects.toThrow(/app shell windows/);
 
         // 真正要守的后果:它没进 keys 转发名单。这个窗口在 getAllWindows 里查得到,所以一旦
@@ -1755,12 +1756,12 @@ describe('voice input global shortcut registration', () => {
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
         const result = await mocks.handlers
-          .get('voice-input:modifier-shortcut-recording:start')?.(mocks.recordingEvent);
+          .get(IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_RECORDING_START)?.(mocks.recordingEvent);
 
         expect(result).toMatchObject({ ok: true });
         mocks.listenerOptions.onKeys?.(['Fn']);
         expect(mocks.focusedWindow.webContents.send).toHaveBeenCalledWith(
-          'voice-input:modifier-shortcut-keys',
+          IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_KEYS,
           { keys: ['Fn'] },
         );
       });
@@ -1775,7 +1776,7 @@ describe('voice input global shortcut registration', () => {
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
         const result = await mocks.handlers
-          .get('voice-input:global-shortcut:set')?.(mocks.secondaryWindowEvent, bareRightOption);
+          .get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.(mocks.secondaryWindowEvent, bareRightOption);
 
         expect(result).toMatchObject({ ok: true });
       });
@@ -1801,7 +1802,7 @@ describe('voice input global shortcut registration', () => {
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
         // 迟到的回声还带着旧的裸右 Option。
-        const result = await mocks.handlers.get('voice-input:global-shortcut:set')?.({}, bareRightOption);
+        const result = await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.({}, bareRightOption);
 
         expect(result).toMatchObject({ ok: true });
         expect(mocks.modifierSetShortcut).not.toHaveBeenCalled();
@@ -1813,7 +1814,7 @@ describe('voice input global shortcut registration', () => {
         const { registerGlobalVoiceInputIpc } = await import('../global.js');
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.({}, bareRightOption);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.({}, bareRightOption);
 
         expect(mocks.modifierSetShortcut).toHaveBeenCalledWith(bareRightOption);
       });
@@ -1826,7 +1827,7 @@ describe('voice input global shortcut registration', () => {
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
         // 挂起故意与存盘不同,所以必须显式带 intent 才放行。
-        const result = await mocks.handlers.get('voice-input:global-shortcut:set')?.(
+        const result = await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.(
           mocks.recordingEvent,
           null,
           { suspend: true },
@@ -1847,7 +1848,7 @@ describe('voice input global shortcut registration', () => {
         const { registerGlobalVoiceInputIpc } = await import('../global.js');
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.(mocks.recordingEvent, null, { suspend: true });
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.(mocks.recordingEvent, null, { suspend: true });
         mocks.modifierSetShortcut.mockClear();
 
         // recording:start 还没发出来就来了一次聚焦。
@@ -1865,8 +1866,8 @@ describe('voice input global shortcut registration', () => {
         const { registerGlobalVoiceInputIpc } = await import('../global.js');
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.(mocks.recordingEvent, null, { suspend: true });
-        await mocks.handlers.get('voice-input:modifier-shortcut-recording:stop')?.(mocks.recordingEvent);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.(mocks.recordingEvent, null, { suspend: true });
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_RECORDING_STOP)?.(mocks.recordingEvent);
         mocks.modifierSetShortcut.mockClear();
 
         mocks.appListeners.get('browser-window-focus')?.();
@@ -1885,7 +1886,7 @@ describe('voice input global shortcut registration', () => {
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
         mocks.modifierStop.mockClear();
 
-        const result = await mocks.handlers.get('voice-input:global-shortcut:set')?.({}, null);
+        const result = await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.({}, null);
 
         expect(result).toMatchObject({ ok: true });
         expect(mocks.modifierStop).not.toHaveBeenCalled();
@@ -1899,7 +1900,7 @@ describe('voice input global shortcut registration', () => {
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
         mocks.modifierStop.mockClear();
 
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.({}, null);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.({}, null);
 
         expect(mocks.modifierStop).toHaveBeenCalled();
       });
@@ -1911,11 +1912,11 @@ describe('voice input global shortcut registration', () => {
         const { registerGlobalVoiceInputIpc } = await import('../global.js');
         registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
-        const start = mocks.handlers.get('voice-input:modifier-shortcut-recording:start');
+        const start = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_RECORDING_START);
         await start?.(mocks.recordingEvent);
         mocks.modifierSetShortcut.mockClear();
 
-        await mocks.handlers.get('voice-input:global-shortcut:set')?.({}, bareRightOption);
+        await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_SET)?.({}, bareRightOption);
 
         expect(mocks.modifierSetShortcut).not.toHaveBeenCalled();
       });
@@ -1926,8 +1927,8 @@ describe('voice input global shortcut registration', () => {
     // 窗口」不够，必须收窄到承载路由的应用外壳窗口(主窗口 + 会话副窗口)，否则那些窗口被
     // XSS 拿下就能在设置流程外弹权限窗。
     for (const channel of [
-      'voice-input:request-input-monitoring-permission',
-      'voice-input:open-input-monitoring-settings',
+      IPC_CHANNELS.VOICE_INPUT.REQUEST_INPUT_MONITORING_PERMISSION,
+      IPC_CHANNELS.VOICE_INPUT.OPEN_INPUT_MONITORING_SETTINGS,
     ]) {
       it(`rejects ${channel} from another registered app window`, async () => {
         setPlatform('darwin');
@@ -2017,7 +2018,7 @@ describe('voice input global shortcut registration', () => {
       const { registerGlobalVoiceInputIpc } = await import('../global.js');
       registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
-      const result = await mocks.handlers.get('voice-input:request-input-monitoring-permission')?.(
+      const result = await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.REQUEST_INPUT_MONITORING_PERMISSION)?.(
         mocks.settingsEvent,
       );
 
@@ -2037,7 +2038,7 @@ describe('voice input global shortcut registration', () => {
       const { registerGlobalVoiceInputIpc } = await import('../global.js');
       registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
-      const call = mocks.handlers.get('voice-input:request-input-monitoring-permission')?.(
+      const call = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.REQUEST_INPUT_MONITORING_PERMISSION)?.(
         mocks.settingsEvent,
       );
 
@@ -2053,7 +2054,7 @@ describe('voice input global shortcut registration', () => {
       const { registerGlobalVoiceInputIpc } = await import('../global.js');
       registerGlobalVoiceInputIpc(mocks.ipcDeps);
 
-      const result = await mocks.handlers.get('voice-input:settings:update-shortcut')?.({}, bareRightOption);
+      const result = await mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.SETTINGS_UPDATE_SHORTCUT)?.({}, bareRightOption);
 
       expect(result).toMatchObject({ ok: true });
       expect(result).not.toHaveProperty('pendingInputMonitoring');
@@ -2064,7 +2065,7 @@ describe('voice input global shortcut registration', () => {
   it('rejects settings navigation from a non-overlay sender with a typed IPC error', async () => {
     const { registerGlobalVoiceInputIpc } = await import('../global.js');
     registerGlobalVoiceInputIpc(mocks.ipcDeps);
-    const openSettings = mocks.handlers.get('voice-input:open-settings');
+    const openSettings = mocks.handlers.get(IPC_CHANNELS.VOICE_INPUT.OPEN_SETTINGS);
 
     await expect(openSettings?.({ sender: mocks.focusedWindow.webContents }, 'providers'))
       .rejects.toThrow('[PERMISSION_DENIED]');

@@ -8,6 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import path from 'node:path';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 // ── mock electron 的 ipcMain + shell ──────────────────────────────────────
 const showItemInFolderMock = vi.fn();
@@ -60,7 +61,7 @@ beforeEach(async () => {
 });
 
 function callReveal(req: unknown): Promise<unknown> {
-  const handler = handlers.get('worktree:reveal');
+  const handler = handlers.get(IPC_CHANNELS.WORKTREE.REVEAL);
   if (!handler) throw new Error('worktree:reveal handler not registered');
   return Promise.resolve(handler({}, req));
 }

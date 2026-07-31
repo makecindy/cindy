@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { TEST_CDN_BASE_URL as CDN_EXTERNAL_BASE_URL } from '../../test/vitest/clientEndpointsFixture';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const originalPlatform = process.platform;
 let TEST_ROOT: string;
@@ -214,7 +215,7 @@ async function runStartupUpdate(
   const service = await freshUpdateService(options.platform ?? 'darwin');
   if (options.busy) service.setUpdateAutoRelaunchBusyProbe(() => true);
   service.initUpdateService();
-  const handler = ipcHandlers.get('update-check-startup');
+  const handler = ipcHandlers.get(IPC_CHANNELS.UPDATE_CHECK_STARTUP.UPDATE_CHECK_STARTUP);
   if (!handler) throw new Error('update-check-startup handler not registered');
   try {
     return await handler();
@@ -291,7 +292,7 @@ describe('checkForUpdate 版本无关(占位 0.0.0)打包豁免', () => {
     const service = await freshUpdateService('win32');
     service.initUpdateService();
     try {
-      const handler = ipcHandlers.get('update-check-startup');
+      const handler = ipcHandlers.get(IPC_CHANNELS.UPDATE_CHECK_STARTUP.UPDATE_CHECK_STARTUP);
       if (!handler) throw new Error('update-check-startup handler not registered');
       const reply = (await handler()) as { hasUpdate: boolean; action: string };
       expect(reply.hasUpdate).toBe(false);
@@ -375,12 +376,12 @@ describe('startup update relaunch safety', () => {
     const service = await freshUpdateService('darwin');
     service.initUpdateService();
     try {
-      const startupHandler = ipcHandlers.get('update-check-startup');
-      const autoApplyHandler = ipcHandlers.get('update-relaunch-auto');
+      const startupHandler = ipcHandlers.get(IPC_CHANNELS.UPDATE_CHECK_STARTUP.UPDATE_CHECK_STARTUP);
+      const autoApplyHandler = ipcHandlers.get(IPC_CHANNELS.UPDATE_RELAUNCH_AUTO.UPDATE_RELAUNCH_AUTO);
       expect(startupHandler).toBeTypeOf('function');
       expect(autoApplyHandler).toBeTypeOf('function');
       // Manual "立即重启" path stays a separate, unguarded listener.
-      expect(ipcListeners.get('update-relaunch')).toBeTypeOf('function');
+      expect(ipcListeners.get(IPC_CHANNELS.UPDATE_RELAUNCH.UPDATE_RELAUNCH)).toBeTypeOf('function');
 
       await expect(startupHandler?.()).resolves.toMatchObject({ action: 'relaunch' });
 
@@ -488,7 +489,7 @@ describe('splash 启动下载 0% 显式广播', () => {
       },
     };
     browserWindowGetAllWindows.mockReturnValue([win as never]);
-    const progressSends = () => sends.filter((s) => s.channel === 'app-update-progress');
+    const progressSends = () => sends.filter((s) => s.channel === IPC_CHANNELS.APP_UPDATE_PROGRESS.APP_UPDATE_PROGRESS);
     return { sends, progressSends };
   }
 

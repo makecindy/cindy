@@ -32,13 +32,14 @@ import {
   type RegionalMoney,
 } from '../shared/regionalMoney.js';
 import { currentLedgerCurrency } from './usage/ledgerCurrency.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('sessionSpendBroadcaster');
 
 /** IPC channel: main → renderer 推单 session 累计 cost 变化。 */
-export const USAGE_SESSION_SPEND_CHANGED = 'usage:session-spend-changed';
+export const USAGE_SESSION_SPEND_CHANGED = IPC_CHANNELS.USAGE.SESSION_SPEND_CHANGED;
 /** IPC channel: main → renderer 推单 session 累计 token 变化。 */
-export const USAGE_SESSION_TOKENS_CHANGED = 'usage:session-tokens-changed';
+export const USAGE_SESSION_TOKENS_CHANGED = IPC_CHANNELS.USAGE.SESSION_TOKENS_CHANGED;
 
 /**
  * IPC channel: main → renderer 推单 session 的 context 快照变化。

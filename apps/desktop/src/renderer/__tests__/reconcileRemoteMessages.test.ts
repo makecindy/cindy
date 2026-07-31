@@ -30,6 +30,7 @@ vi.mock('@/lib/sessionService', () => ({
 
 import { makerChatStore } from '@/lib/makerChatStore';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const DEVICE_ID = 'dev-A';
 const DEVICE_B_ID = 'dev-B';
@@ -76,16 +77,16 @@ let remoteAround: Message[] = [];
 let remoteProjectionResult: Promise<unknown> | null = null;
 let remoteExpandedResult: Promise<unknown> | null = null;
 const invoke = vi.fn(async (_deviceId: string, channel: string, _args: unknown[]) => {
-  if (channel === 'local-db:messages:list') return remoteListResolver?.(_args) ?? remoteList;
-  if (channel === 'local-db:messages:around-client-id') return remoteAround;
-  if (channel === 'local-db:sessions:get') {
+  if (channel === IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST) return remoteListResolver?.(_args) ?? remoteList;
+  if (channel === IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND_CLIENT_ID) return remoteAround;
+  if (channel === IPC_CHANNELS.LOCAL_DB.SESSIONS_GET) {
     return { agentKind: 'cc', remoteHostId: null, sdkSessionId: null, fastMode: false, contextTokens: 0, contextWindow: 0, totalCostUsd: 0 };
   }
-  if (channel === 'maker:input:get-projection') {
+  if (channel === IPC_CHANNELS.MAKER_INVOKE.INPUT_GET_PROJECTION) {
     if (remoteProjectionResult) return remoteProjectionResult;
     return { sessionId: _args[0], pendingQueue: [], steeringQueueClientIds: [], queuePaused: false, queueExpanded: false, queueInteractionLocks: [], queueEditLocks: [], queueAbortPending: false, error: null, recovery: null, errorRetryText: null };
   }
-  if (channel === 'maker:input:set-expanded') {
+  if (channel === IPC_CHANNELS.MAKER_INVOKE.INPUT_SET_EXPANDED) {
     if (remoteExpandedResult) return remoteExpandedResult;
     return { sessionId: _args[0], pendingQueue: [], steeringQueueClientIds: [], queuePaused: false, queueExpanded: Boolean(_args[1]), queueInteractionLocks: [], queueEditLocks: [], queueAbortPending: false, continuationTurnClientId: null, error: null, recovery: null, errorRetryText: null };
   }
@@ -461,7 +462,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
 
     remotePush?.({
       deviceId: DEVICE_ID,
-      channel: 'local-db:sessions:activity',
+      channel: IPC_CHANNELS.LOCAL_DB.SESSIONS_ACTIVITY,
       payload: {
         sessionId: s,
         phase: 'running',
@@ -473,7 +474,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
 
     remotePush?.({
       deviceId: DEVICE_ID,
-      channel: 'maker:event',
+      channel: IPC_CHANNELS.MAKER_PUSH.EVENT,
       payload: {
         sessionId: s,
         event: {
@@ -493,7 +494,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
 
     remotePush?.({
       deviceId: DEVICE_ID,
-      channel: 'local-db:messages:created',
+      channel: IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED,
       payload: {
         sessionId: s,
         message: dbMessage(s, 'heavy-msg', 'persisted push', '2026-06-15T00:00:00.000Z'),
@@ -547,7 +548,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     await flush();
     remotePush?.({
       deviceId: DEVICE_ID,
-      channel: 'local-db:messages:created',
+      channel: IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED,
       payload: {
         sessionId: s,
         message: dbMessage(s, 'late', 'late push text', '2026-06-15T02:00:00.000Z'),
@@ -593,7 +594,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     // 控制端收到 live maker:event,但漏掉后续 local-db:messages:created echo。
     remotePush?.({
       deviceId: DEVICE_ID,
-      channel: 'maker:event',
+      channel: IPC_CHANNELS.MAKER_PUSH.EVENT,
       payload: {
         sessionId: s,
         persistId: 'client-a1',
@@ -635,7 +636,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     // 控制端只收到 live summary,但漏掉后续 tool_result_full push;DB 全文可能更短(如 "ok")。
     remotePush?.({
       deviceId: DEVICE_ID,
-      channel: 'maker:event',
+      channel: IPC_CHANNELS.MAKER_PUSH.EVENT,
       payload: {
         sessionId: s,
         persistId: 'tool-result-1',
@@ -685,7 +686,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     // 控制端先收到 live summary;首拉历史稍后拿到被控端已更新的短 DB full output。
     remotePush?.({
       deviceId: DEVICE_ID,
-      channel: 'maker:event',
+      channel: IPC_CHANNELS.MAKER_PUSH.EVENT,
       payload: {
         sessionId: s,
         persistId: 'tool-result-1',
@@ -736,7 +737,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     try {
       remotePush?.({
         deviceId: DEVICE_ID,
-        channel: 'maker:event',
+        channel: IPC_CHANNELS.MAKER_PUSH.EVENT,
         payload: {
           sessionId: s,
           persistId: 'assistant-after-thinking',
@@ -749,7 +750,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
       });
       remotePush?.({
         deviceId: DEVICE_ID,
-        channel: 'maker:event',
+        channel: IPC_CHANNELS.MAKER_PUSH.EVENT,
         payload: {
           sessionId: s,
           event: {
@@ -772,7 +773,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
 
       remotePush?.({
         deviceId: DEVICE_ID,
-        channel: 'local-db:messages:created',
+        channel: IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED,
         payload: {
           sessionId: s,
           message: thinkingDbMessage(
@@ -816,7 +817,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     try {
       remotePush?.({
         deviceId: DEVICE_ID,
-        channel: 'maker:event',
+        channel: IPC_CHANNELS.MAKER_PUSH.EVENT,
         payload: {
           sessionId: s,
           persistId: 'assistant-after-thinking',
@@ -834,7 +835,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
 
       remotePush?.({
         deviceId: DEVICE_ID,
-        channel: 'local-db:messages:created',
+        channel: IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED,
         payload: {
           sessionId: s,
           message: thinkingDbMessage(
@@ -875,7 +876,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
 
     remotePush?.({
       deviceId: DEVICE_ID,
-      channel: 'maker:event',
+      channel: IPC_CHANNELS.MAKER_PUSH.EVENT,
       payload: {
         sessionId: s,
         persistId: 'tool-result-1',
@@ -927,7 +928,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     invoke.mockClear();
     makerChatStore.reconcileRemoteMessages(s);
     await flush();
-    expect(invoke).not.toHaveBeenCalledWith(DEVICE_ID, 'local-db:messages:list', expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith(DEVICE_ID, IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST, expect.anything());
   });
 
   it('historyLoaded=false:no-op(交给 ensureInitialMessages)', async () => {
@@ -937,7 +938,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     invoke.mockClear();
     makerChatStore.reconcileRemoteMessages(s);
     await flush();
-    expect(invoke).not.toHaveBeenCalledWith(DEVICE_ID, 'local-db:messages:list', expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith(DEVICE_ID, IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST, expect.anything());
   });
 
   it('远程会话:fire-and-forget 调用不产生 unhandled rejection(请求失败时)', async () => {
@@ -1084,7 +1085,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     // 分页期间 live push 更新了其中一行。
     remotePush?.({
       deviceId: DEVICE_ID,
-      channel: 'local-db:messages:created',
+      channel: IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED,
       payload: {
         sessionId: s,
         message: dbMessage(s, 'touched', 'live newer content', '2026-06-15T00:00:00.000Z'),
@@ -1126,7 +1127,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     // 但它想了 10 天,改写后的"开始时刻"= 06-15,落在权威页范围里 → 旧写法会判连续。
     remotePush?.({
       deviceId: DEVICE_ID,
-      channel: 'local-db:messages:created',
+      channel: IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED,
       payload: {
         sessionId: s,
         message: thinkingDbMessage(
@@ -1169,7 +1170,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     // 与权威边界同毫秒,且**没有** rowid(复刻生产广播的形状)。
     remotePush?.({
       deviceId: DEVICE_ID,
-      channel: 'local-db:messages:created',
+      channel: IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED,
       payload: {
         sessionId: s,
         message: dbMessage(s, 'same-ms-no-rowid', 'no rowid in broadcast', '2026-06-20T00:00:00.000Z'),
@@ -1202,7 +1203,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     await flush();
     remotePush?.({
       deviceId: DEVICE_ID,
-      channel: 'local-db:messages:created',
+      channel: IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED,
       payload: {
         sessionId: s,
         message: {
@@ -1281,7 +1282,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     // 与权威窗口最新行**同毫秒**、但 rowid 更大(中间那行 rowid=11 没送到)。
     remotePush?.({
       deviceId: DEVICE_ID,
-      channel: 'local-db:messages:created',
+      channel: IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED,
       payload: {
         sessionId: s,
         message: {
@@ -1318,7 +1319,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     // 分页期间只送到了"最后一行"(比权威窗口更新)。
     remotePush?.({
       deviceId: DEVICE_ID,
-      channel: 'local-db:messages:created',
+      channel: IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED,
       payload: {
         sessionId: s,
         message: dbMessage(s, 'last-of-burst', 'only the last row arrived', '2026-06-30T00:00:00.000Z'),
@@ -1373,7 +1374,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     // 分页期间落地了一段**更老**的历史(补齐 / 深跳 merge 的形状)。
     remotePush?.({
       deviceId: DEVICE_ID,
-      channel: 'local-db:messages:created',
+      channel: IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED,
       payload: {
         sessionId: s,
         message: dbMessage(s, 'far-older', 'far older row', '2026-05-01T00:00:00.000Z'),
@@ -1419,7 +1420,7 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     // 对账页回来之前,被控端开始了新 turn(isRunning=true → isStreaming=true)。
     remotePush?.({
       deviceId: DEVICE_ID,
-      channel: 'maker:event',
+      channel: IPC_CHANNELS.MAKER_PUSH.EVENT,
       payload: {
         sessionId: s,
         event: {

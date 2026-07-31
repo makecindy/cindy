@@ -22,6 +22,7 @@ import {
   updateAppearanceSettingsAtomic,
   writeAppearanceSettingsPatch,
 } from './appearance-settings-store.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 export { writeAppearanceSettingsPatch } from './appearance-settings-store.js';
 
@@ -35,18 +36,18 @@ export function registerAppearanceSettingsIpc(): void {
 
   // Must be registered before BrowserWindow creation: preload reads this on
   // the first synchronous bootstrap frame.
-  ipcMain.on('appearance-settings:get-sync', (event) => {
+  ipcMain.on(IPC_CHANNELS.APPEARANCE_SETTINGS.GET_SYNC, (event) => {
     event.returnValue = isTrustedAppearanceSettingsReadEvent(event)
       ? readAppearanceSettings()
       : null;
   });
 
-  ipcMain.handle('appearance-settings:get', (event) => {
+  ipcMain.handle(IPC_CHANNELS.APPEARANCE_SETTINGS.GET, (event) => {
     assertTrustedAppRendererEvent(event);
     return readAppearanceSettingsState();
   });
 
-  ipcMain.handle('appearance-settings:set-patch', async (event, rawPatch: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.APPEARANCE_SETTINGS.SET_PATCH, async (event, rawPatch: unknown) => {
     assertTrustedAppRendererEvent(event);
     const patch = parsePatch(rawPatch);
     const settings = await writeAppearanceSettingsPatch(patch);
@@ -55,7 +56,7 @@ export function registerAppearanceSettingsIpc(): void {
     return settings;
   });
 
-  ipcMain.handle('appearance-settings:reset', async (event) => {
+  ipcMain.handle(IPC_CHANNELS.APPEARANCE_SETTINGS.RESET, async (event) => {
     assertTrustedAppRendererEvent(event);
     const settings = await resetAppearanceSettings();
     applyAppearanceToWindows(settings);

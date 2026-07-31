@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const harness = vi.hoisted(() => ({
   settings: {
@@ -107,7 +108,7 @@ describe('sidebarSettingsStore', () => {
   });
 
   it('broadcasts a validated pinned-order snapshot to every live window', () => {
-    const handler = harness.handlers.get('sidebar-settings:save-pinned-order');
+    const handler = harness.handlers.get(IPC_CHANNELS.SIDEBAR_SETTINGS.SAVE_PINNED_ORDER);
     const event = {};
     const order = ['project:local:/workspace/a', 'session-b'];
 
@@ -116,14 +117,20 @@ describe('sidebarSettingsStore', () => {
 
     expect(harness.assertTrusted).toHaveBeenCalledWith(event);
     expect(harness.settings.pinnedOrder).toEqual(order);
-    expect(harness.send).toHaveBeenCalledWith('sidebar-settings:pinned-order-changed', order);
-    expect(harness.sendSecond).toHaveBeenCalledWith('sidebar-settings:pinned-order-changed', order);
+    expect(harness.send).toHaveBeenCalledWith(
+      IPC_CHANNELS.SIDEBAR_SETTINGS.PINNED_ORDER_CHANGED,
+      order,
+    );
+    expect(harness.sendSecond).toHaveBeenCalledWith(
+      IPC_CHANNELS.SIDEBAR_SETTINGS.PINNED_ORDER_CHANGED,
+      order,
+    );
     expect(harness.untrustedSend).not.toHaveBeenCalled();
     expect(harness.destroyedSend).not.toHaveBeenCalled();
   });
 
   it('rejects malformed pinned-order payloads without persisting or broadcasting', () => {
-    const handler = harness.handlers.get('sidebar-settings:save-pinned-order');
+    const handler = harness.handlers.get(IPC_CHANNELS.SIDEBAR_SETTINGS.SAVE_PINNED_ORDER);
 
     expect(() => handler?.({}, ['valid', 42])).toThrow(
       '[INVALID_PARAMS] invalid sidebar pinned order',
@@ -134,7 +141,7 @@ describe('sidebarSettingsStore', () => {
 
   it('guards and returns the persisted order for the synchronous initial read', () => {
     harness.settings.pinnedOrder = ['project:local:/workspace/a'];
-    const listener = harness.listeners.get('sidebar-settings:load-pinned-order-sync');
+    const listener = harness.listeners.get(IPC_CHANNELS.SIDEBAR_SETTINGS.LOAD_PINNED_ORDER_SYNC);
     const event: { returnValue?: string[] } = {};
 
     listener?.(event);

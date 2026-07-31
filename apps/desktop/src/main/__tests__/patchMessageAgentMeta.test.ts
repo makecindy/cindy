@@ -78,6 +78,7 @@ import {
   extractEstimatedSessionValueEntries,
   patchMessageAgentMeta,
 } from '../localDb/ipc/messages.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -141,7 +142,7 @@ describe('patchMessageAgentMeta', () => {
 
     await expect(broadcastMessageAgentMetaUpdate('s1', 'm1')).resolves.toBe(true);
     expect(mockSend).toHaveBeenCalledWith(
-      'local-db:messages:created',
+      IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED,
       expect.objectContaining({
         sessionId: 's1',
         message: expect.objectContaining({

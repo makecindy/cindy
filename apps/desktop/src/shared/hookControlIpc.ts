@@ -1,3 +1,4 @@
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 /**
  * shared/hookControlIpc.ts
  * ---------------------------------------------------------------------------
@@ -26,73 +27,76 @@ export function slackHookInstallUrl(wsUrl: string): string {
 
 export const HOOK_CONTROL_INVOKE = {
   /** 取当前快照(配置 + 运行时状态 + 绑定状态)。 */
-  GET: 'maker:hook-control:get',
+  GET: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_GET,
   /** 总开关。 */
-  SET_ENABLED: 'maker:hook-control:set-enabled',
+  SET_ENABLED: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_SET_ENABLED,
   /** Slack Bot 是否发送本设备上下线通知。 */
-  SET_LIFECYCLE_ANNOUNCEMENT: 'maker:hook-control:set-lifecycle-announcement',
+  SET_LIFECYCLE_ANNOUNCEMENT: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_SET_LIFECYCLE_ANNOUNCEMENT,
   /** 覆写工作目录清单(别名 -> 本地绝对路径, 全量替换)。 */
-  SET_WORKSPACES: 'maker:hook-control:set-workspaces',
+  SET_WORKSPACES: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_SET_WORKSPACES,
   /**
    * 设置某个 provider 派发任务的默认工作目录(null / 「对话」= 内置伪目录)。
    * 进程内通道, 没有跨版本兼容问题 —— 原 set-x-default-workspace 直接改名。
    */
-  SET_PROVIDER_DEFAULT_WORKSPACE: 'maker:hook-control:set-provider-default-workspace',
+  SET_PROVIDER_DEFAULT_WORKSPACE: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_SET_PROVIDER_DEFAULT_WORKSPACE,
   /** 发起 Slack 账号绑定(bind.start; SIWS OIDC, 无参数)。 */
-  BIND_START: 'maker:hook-control:bind-start',
+  BIND_START: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_BIND_START,
   /** 解除 Slack 账号绑定(bind.revoke)。 */
-  BIND_REVOKE: 'maker:hook-control:bind-revoke',
+  BIND_REVOKE: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_BIND_REVOKE,
   /** 拉取绑定用户的全部目录偏好快照(经 WS prefs.get, 10s 超时)。 */
-  PREFS_GET: 'maker:hook-control:prefs-get',
+  PREFS_GET: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_PREFS_GET,
   /** 部分更新某目录偏好(经 WS prefs.set; null = 清空回默认)。 */
-  PREFS_SET: 'maker:hook-control:prefs-set',
+  PREFS_SET: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_PREFS_SET,
   /** (multi-team)添加新 Slack workspace 绑定(bind.start 空 teamId, 授权页自选)。 */
-  ADD_BINDING: 'maker:hook-control:add-binding',
+  ADD_BINDING: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_ADD_BINDING,
   /** (multi-team)给指定 team 重新授权(bind.start 带 teamId, pin 授权页)。 */
-  REBIND_TEAM: 'maker:hook-control:rebind-team',
+  REBIND_TEAM: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_REBIND_TEAM,
   /** (multi-team)解绑指定 team(bind.revoke{teamId}; displaced 行 = 仅清本地缓存)。 */
-  REVOKE_TEAM: 'maker:hook-control:revoke-team',
+  REVOKE_TEAM: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_REVOKE_TEAM,
   /** (multi-team)取消在途的添加/重绑授权(bind.revoke{pendingOnly} + 本地清 pending)。 */
-  CANCEL_PENDING_BIND: 'maker:hook-control:cancel-pending-bind',
+  CANCEL_PENDING_BIND: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_CANCEL_PENDING_BIND,
   /** 独立开关一个 Cindy IM provider；不会改动其它 provider。 */
-  SET_PROVIDER_ENABLED: 'maker:hook-control:set-provider-enabled',
+  SET_PROVIDER_ENABLED: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_SET_PROVIDER_ENABLED,
   /** 发起 provider-neutral(Telegram / X)一次性绑定。 */
-  PROVIDER_BIND_START: 'maker:hook-control:provider-bind-start',
+  PROVIDER_BIND_START: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_PROVIDER_BIND_START,
   /** 取消当前 provider-neutral 绑定尝试。 */
-  PROVIDER_BIND_CANCEL: 'maker:hook-control:provider-bind-cancel',
+  PROVIDER_BIND_CANCEL: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_PROVIDER_BIND_CANCEL,
   /** 解除当前 provider-neutral principal 与本设备的绑定。 */
-  PROVIDER_BIND_REVOKE: 'maker:hook-control:provider-bind-revoke',
+  PROVIDER_BIND_REVOKE: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_PROVIDER_BIND_REVOKE,
   /** 在本机安全打开 provider 的绑定链接 / bot 主页 / 加群链接。 */
-  PROVIDER_OPEN_ACTION: 'maker:hook-control:provider-open-action',
+  PROVIDER_OPEN_ACTION: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_PROVIDER_OPEN_ACTION,
   /** 读取 provider-neutral(Telegram / X)独立的 workspace 偏好。 */
-  PROVIDER_PREFS_GET: 'maker:hook-control:provider-prefs-get',
+  PROVIDER_PREFS_GET: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_PROVIDER_PREFS_GET,
   /** 更新 provider-neutral(Telegram / X)独立的 workspace 偏好。 */
-  PROVIDER_PREFS_SET: 'maker:hook-control:provider-prefs-set',
+  PROVIDER_PREFS_SET: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_PROVIDER_PREFS_SET,
   /** 读取官方 Telegram bot 的回应、引用与群激活设置。 */
-  TELEGRAM_BEHAVIOR_GET: 'maker:hook-control:telegram-behavior-get',
+  TELEGRAM_BEHAVIOR_GET: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_TELEGRAM_BEHAVIOR_GET,
   /** 部分更新官方 Telegram bot 的回应或引用设置。 */
-  TELEGRAM_BEHAVIOR_SET: 'maker:hook-control:telegram-behavior-set',
+  TELEGRAM_BEHAVIOR_SET: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_TELEGRAM_BEHAVIOR_SET,
   /** 列出官方 Telegram bot 已见过的群，并合并服务端激活设置。 */
-  TELEGRAM_GROUPS_LIST: 'maker:hook-control:telegram-groups-list',
+  TELEGRAM_GROUPS_LIST: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_TELEGRAM_GROUPS_LIST,
   /** 更新一个官方 Telegram 群的参与模式。 */
-  TELEGRAM_GROUP_ACTIVATION_SET: 'maker:hook-control:telegram-group-activation-set',
+  TELEGRAM_GROUP_ACTIVATION_SET:
+    IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_TELEGRAM_GROUP_ACTIVATION_SET,
   /** 读取工作目录模型来源偏好(纯本地, 不经 WS; 见 workspaceProviderSourceStore)。 */
-  WORKSPACE_PROVIDER_SOURCE_GET: 'maker:hook-control:workspace-provider-source-get',
+  WORKSPACE_PROVIDER_SOURCE_GET: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_WORKSPACE_PROVIDER_SOURCE_GET,
   /** 写/清一条工作目录模型来源偏好(纯本地)。 */
-  WORKSPACE_PROVIDER_SOURCE_SET: 'maker:hook-control:workspace-provider-source-set',
+  WORKSPACE_PROVIDER_SOURCE_SET: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_WORKSPACE_PROVIDER_SOURCE_SET,
 } as const;
 
 export const HOOK_CONTROL_EVENT = {
   /** 状态推送(完整快照; 连接与绑定状态变化都走这里)。 */
-  STATUS_CHANGED: 'maker:hook-control:status-changed',
+  STATUS_CHANGED: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_STATUS_CHANGED,
   /** 目录偏好快照推送(prefs.state; 含 Slack /model 卡改动的实时同步)。 */
-  PREFS_CHANGED: 'maker:hook-control:prefs-changed',
+  PREFS_CHANGED: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_PREFS_CHANGED,
   /** provider-neutral 偏好快照推送（Telegram / X 消费）。 */
-  PROVIDER_PREFS_CHANGED: 'maker:hook-control:provider-prefs-changed',
+  PROVIDER_PREFS_CHANGED: IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_PROVIDER_PREFS_CHANGED,
   /** 官方 Telegram 行为配置快照推送（含其它客户端写入）。 */
-  TELEGRAM_BEHAVIOR_CHANGED: 'maker:hook-control:telegram-behavior-changed',
+  TELEGRAM_BEHAVIOR_CHANGED:
+    IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_TELEGRAM_BEHAVIOR_CHANGED,
   /** 目录模型来源偏好全量推送(本地写入后广播全窗口, 多窗口设置页同步)。 */
-  WORKSPACE_PROVIDER_SOURCE_CHANGED: 'maker:hook-control:workspace-provider-source-changed',
+  WORKSPACE_PROVIDER_SOURCE_CHANGED:
+    IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_WORKSPACE_PROVIDER_SOURCE_CHANGED,
 } as const;
 
 /** 目录来源偏好条目总量上限(渠道×目录×team 现实规模远小于此;防被攻破的

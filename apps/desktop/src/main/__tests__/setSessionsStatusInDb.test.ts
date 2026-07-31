@@ -63,6 +63,7 @@ vi.mock('../worktree/sessionRemovalRecycle.js', () => ({
 }));
 
 import { setSessionsStatusInDb } from '../localDb/ipc/sessions.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -91,7 +92,7 @@ describe('setSessionsStatusInDb', () => {
     });
     // 提交后逐个广播
     expect(h.tapWindowBroadcast).toHaveBeenCalledTimes(2);
-    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith(IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED, {
       sessionId: 's1',
       patch: { status: 'archived' },
     });
@@ -182,11 +183,11 @@ describe('setSessionsStatusInDb', () => {
     });
 
     // 回收还没结束 —— 此时只该有 sessions:patched，不能提前报 worktree 已变。
-    expect(h.webContentsSend).not.toHaveBeenCalledWith('worktree:changed', expect.anything());
+    expect(h.webContentsSend).not.toHaveBeenCalledWith(IPC_CHANNELS.WORKTREE.CHANGED, expect.anything());
 
     finishRecycle();
     await vi.waitFor(() => {
-      expect(h.webContentsSend).toHaveBeenCalledWith('worktree:changed', { sessionId: 's1' });
+      expect(h.webContentsSend).toHaveBeenCalledWith(IPC_CHANNELS.WORKTREE.CHANGED, { sessionId: 's1' });
     });
   });
 
@@ -200,7 +201,7 @@ describe('setSessionsStatusInDb', () => {
     await setSessionsStatusInDb(['s1'], 'archived');
 
     await vi.waitFor(() => {
-      expect(h.webContentsSend).toHaveBeenCalledWith('worktree:changed', { sessionId: 's1' });
+      expect(h.webContentsSend).toHaveBeenCalledWith(IPC_CHANNELS.WORKTREE.CHANGED, { sessionId: 's1' });
     });
   });
 
@@ -211,7 +212,7 @@ describe('setSessionsStatusInDb', () => {
 
     await setSessionsStatusInDb(['s1'], 'active');
 
-    expect(h.webContentsSend).not.toHaveBeenCalledWith('worktree:changed', expect.anything());
+    expect(h.webContentsSend).not.toHaveBeenCalledWith(IPC_CHANNELS.WORKTREE.CHANGED, expect.anything());
   });
 
   it('keeps batch archived status wired to worktree recycle scheduling', () => {

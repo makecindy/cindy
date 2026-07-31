@@ -63,11 +63,12 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({
 import { registerMakerTitleIpc } from '../title.js';
 import { getDbClient } from '../../localDb/client/current.js';
 import { runDeviceLinkInvokeContext } from '../../device-link/invoke-context.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const EVENT = {} as Electron.IpcMainInvokeEvent;
 
 function invoke(request: unknown): Promise<unknown> {
-  const handler = h.handlers.get('maker:auto-title');
+  const handler = h.handlers.get(IPC_CHANNELS.MAKER_INVOKE.AUTO_TITLE);
   if (!handler) throw new Error('auto-title handler not registered');
   return Promise.resolve(handler(EVENT, request));
 }

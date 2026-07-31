@@ -23,6 +23,7 @@ import type { RemoteSessionListSessionLike } from '@cindy/maker-shared/session-l
 import { remoteProjectsStore } from './remoteProjectsStore';
 import { removeRemoteSessionActivityEntry } from './remoteSessionActivityStore';
 import type { CachedDeviceSessionsSnapshot } from './mirrorCacheClient';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('device-link-refresh');
 
@@ -315,7 +316,7 @@ async function probeMissingSessionStatuses(
       try {
         const value = await window.electronAPI.deviceLink.invoke(
           deviceId,
-          'local-db:sessions:get',
+          IPC_CHANNELS.LOCAL_DB.SESSIONS_GET,
           [sessionId, DEVICE_LINK_RECONCILIATION_PROBE_MARKER],
         );
         return { sessionId, value };
@@ -376,7 +377,7 @@ async function runRefreshRemoteDeviceSessions(
     // 被一次更新的重拉取代(期间又发起了新的 refresh)→ 停手,交给那一次(也避免无谓重试)。
     if (!remoteProjectsStore.isLatestSnapshotEpoch(deviceId, epoch)) return 'superseded';
     try {
-      const value = await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:sessions:list', [
+      const value = await window.electronAPI.deviceLink.invoke(deviceId, IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST, [
         LIST_LIMIT,
         'active',
         { includePinned: true },

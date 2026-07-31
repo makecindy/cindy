@@ -12,6 +12,7 @@ import { createLogger } from './logger';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 import { isAppContentWindow } from './windowFocusClassifier.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 interface SidebarSettingsShape {
   pinnedOrder: string[];
@@ -130,7 +131,7 @@ function broadcastPinnedOrderChanged(order: readonly string[]): void {
     // order 中的项目 entry 含 workingDir，只发给 Cindy 登记过的内容窗口；
     // WebView guest 和未登记 BrowserWindow 都不能收到本地路径。
     if (!isAppContentWindow(window)) continue;
-    window.webContents.send('sidebar-settings:pinned-order-changed', Array.from(order));
+    window.webContents.send(IPC_CHANNELS.SIDEBAR_SETTINGS.PINNED_ORDER_CHANGED, Array.from(order));
   }
 }
 
@@ -139,7 +140,7 @@ function broadcastHiddenProjectKeysChanged(projectKeys: readonly string[]): void
     // 项目 key 可能含本地路径；与 pinnedOrder 一样，只允许 Cindy 内容窗口接收。
     if (!isAppContentWindow(window)) continue;
     window.webContents.send(
-      'sidebar-settings:hidden-project-keys-changed',
+      IPC_CHANNELS.SIDEBAR_SETTINGS.HIDDEN_PROJECT_KEYS_CHANGED,
       Array.from(projectKeys),
     );
   }
@@ -178,11 +179,11 @@ function setProjectHidden(rawProjectKey: unknown, rawHidden: unknown): boolean {
 
 export function registerSidebarSettingsIpc(): void {
   // sync read:让 renderer 的 useState(() => load()) 不用改成异步初始化
-  ipcMain.on('sidebar-settings:load-pinned-order-sync', (event) => {
+  ipcMain.on(IPC_CHANNELS.SIDEBAR_SETTINGS.LOAD_PINNED_ORDER_SYNC, (event) => {
     assertTrustedAppRendererEvent(event);
     event.returnValue = loadPinnedOrder();
   });
-  ipcMain.handle('sidebar-settings:save-pinned-order', (event, rawOrder: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.SIDEBAR_SETTINGS.SAVE_PINNED_ORDER, (event, rawOrder: unknown) => {
     assertTrustedAppRendererEvent(event);
     const order = requirePinnedOrder(rawOrder);
     savePinnedOrder(order);
@@ -191,12 +192,12 @@ export function registerSidebarSettingsIpc(): void {
     broadcastPinnedOrderChanged(order);
   });
   // 与 pinnedOrder 一样同步首帧读取，避免启动后侧栏先闪出已移除项目。
-  ipcMain.on('sidebar-settings:load-hidden-project-keys-sync', (event) => {
+  ipcMain.on(IPC_CHANNELS.SIDEBAR_SETTINGS.LOAD_HIDDEN_PROJECT_KEYS_SYNC, (event) => {
     assertTrustedAppRendererEvent(event);
     event.returnValue = loadHiddenProjectKeys();
   });
   ipcMain.handle(
-    'sidebar-settings:set-project-hidden',
+    IPC_CHANNELS.SIDEBAR_SETTINGS.SET_PROJECT_HIDDEN,
     (event, rawProjectKey: unknown, rawHidden: unknown) => {
       assertTrustedAppRendererEvent(event);
       // Return whether this intent changed the latest main-process snapshot.

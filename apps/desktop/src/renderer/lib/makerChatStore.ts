@@ -189,14 +189,14 @@ const AGENT_RUNTIME_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
   'AUTO_REVIEW_UNAVAILABLE',
 ] as const);
 const REMOTE_HEAVY_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
-  'maker:event',
-  'maker:status-changed',
-  'maker:input:projection',
-  'maker:interaction-request',
-  'maker:interaction-dismissed',
-  'local-db:messages:created',
-  'usage:message-turn-cost',
-  'maker:session-model-pref:changed',
+  IPC_CHANNELS.MAKER_PUSH.EVENT,
+  IPC_CHANNELS.MAKER_PUSH.STATUS_CHANGED,
+  IPC_CHANNELS.MAKER_PUSH.INPUT_PROJECTION,
+  IPC_CHANNELS.MAKER_PUSH.INTERACTION_REQUEST,
+  IPC_CHANNELS.MAKER_PUSH.INTERACTION_DISMISSED,
+  IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED,
+  IPC_CHANNELS.USAGE.MESSAGE_TURN_COST,
+  IPC_CHANNELS.MAKER_PUSH.SESSION_MODEL_PREF_CHANGED,
 ]);
 
 type RemoteTerminalSessionTombstone = {
@@ -6791,7 +6791,7 @@ function initGlobalListeners(): void {
       } | null;
       const inboundSid = inboundPayload?.sessionId;
       const terminalPatch =
-        push.channel === 'local-db:sessions:patched' &&
+        push.channel === IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED &&
         push.deviceId !== undefined &&
         typeof inboundSid === 'string' &&
         (inboundPayload?.patch?.status === 'deleted' ||
@@ -6811,7 +6811,7 @@ function initGlobalListeners(): void {
         isRemoteTerminalSessionTombstoned(inboundSid, push.deviceId)
       ) {
         if (
-          push.channel === 'local-db:sessions:patched' &&
+          push.channel === IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED &&
           inboundPayload?.patch?.status === 'active'
         ) {
           requestRemoteReseed(push.deviceId);
@@ -6822,36 +6822,36 @@ function initGlobalListeners(): void {
       // 可能仍在持续抵达,但 maker:event 重 topic 已经断流;若这里也刷新会掩盖卡死。
       if (inboundSid && isRemoteHeavyInboundChannel(push.channel)) _markInboundEvent(inboundSid);
       switch (push.channel) {
-        case 'maker:event':
+        case IPC_CHANNELS.MAKER_PUSH.EVENT:
           handleMakerEventRaw(push.payload, remoteIngress);
           break;
-        case 'maker:status-changed':
+        case IPC_CHANNELS.MAKER_PUSH.STATUS_CHANGED:
           handleMakerStatusRaw(push.payload, remoteIngress);
           break;
-        case 'maker:input:projection':
+        case IPC_CHANNELS.MAKER_PUSH.INPUT_PROJECTION:
           if (!push.deviceId) break;
           handleInputProjectionRaw(push.payload, push.deviceId, remoteIngress);
           break;
-        case 'maker:interaction-request':
+        case IPC_CHANNELS.MAKER_PUSH.INTERACTION_REQUEST:
           handleLiveInteractionRequestRaw(push.payload, remoteIngress);
           break;
-        case 'maker:interaction-dismissed':
+        case IPC_CHANNELS.MAKER_PUSH.INTERACTION_DISMISSED:
           handleLiveInteractionDismissedRaw(push.payload, remoteIngress);
           break;
-        case 'local-db:messages:created':
+        case IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED:
           // 远程会话的持久化消息(接管路径)→ 注入 in-memory state(同本机)。
           handleMessageCreatedRaw(push.payload, remoteIngress);
           break;
-        case 'local-db:messages:deleted':
+        case IPC_CHANNELS.LOCAL_DB.MESSAGES_DELETED:
           handleMessageDeletedRaw(push.payload, remoteIngress);
           break;
-        case 'usage:message-turn-cost':
+        case IPC_CHANNELS.USAGE.MESSAGE_TURN_COST:
           handleUsageMessageTurnCostRaw(push.payload, remoteIngress);
           break;
-        case 'usage:message-model-mismatch':
+        case IPC_CHANNELS.USAGE.MESSAGE_MODEL_MISMATCH:
           handleUsageMessageModelMismatchRaw(push.payload, remoteIngress);
           break;
-        case 'usage:session-spend-changed': {
+        case IPC_CHANNELS.USAGE.SESSION_SPEND_CHANGED: {
           // 被控端 session 终身累计 cost 落库推送(sessionSpendBroadcaster 走裸 UPDATE、
           // 不发 sessions:patched)→ 镜像进远程项目分片;打开中的远程会话底部 $ chip 经
           // session.totalCostUsd → useSessionSpend 初值重置显示最新值。
@@ -6875,7 +6875,7 @@ function initGlobalListeners(): void {
           }
           break;
         }
-        case 'usage:session-tokens-changed': {
+        case IPC_CHANNELS.USAGE.SESSION_TOKENS_CHANGED: {
           // 同上:session 终身累计 token 镜像(chip tooltip 的 token 累计行)。
           const p = push.payload as { sessionId?: string; totalTokens?: number } | null;
           if (
@@ -6891,7 +6891,7 @@ function initGlobalListeners(): void {
           }
           break;
         }
-        case 'local-db:sessions:patched': {
+        case IPC_CHANNELS.LOCAL_DB.SESSIONS_PATCHED: {
           // 被控端会话元数据 / 设置变更 → 就地镜像到远程项目分片(取代乐观覆盖)。
           const p = push.payload as { sessionId?: string; patch?: Record<string, unknown> } | null;
           if (push.deviceId && p?.sessionId && p.patch) {
@@ -6923,18 +6923,18 @@ function initGlobalListeners(): void {
           }
           break;
         }
-        case 'local-db:sessions:activity': {
+        case IPC_CHANNELS.LOCAL_DB.SESSIONS_ACTIVITY: {
           // 被控端灵动岛 relay 的列表级实时活动(phase / attention)→ 控制端远程会话行
           // 右侧状态槽(error 红 / awaiting 蓝 / running spinner / 完成未读绿)。
           // 与手机端 applySessionActivity 同一套保留语义,详见 remoteSessionActivityStore。
           if (push.deviceId) applyRemoteSessionActivity(push.deviceId, push.payload);
           break;
         }
-        case 'local-db:sessions:created':
+        case IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED:
           // 无 row 数据 → 重拉该设备会话列表(reconcile,非直接造壳)。
           if (push.deviceId) requestRemoteReseed(push.deviceId);
           break;
-        case 'local-db:session:error-persisted': {
+        case IPC_CHANNELS.LOCAL_DB.SESSION_ERROR_PERSISTED: {
           // 被控端 terminal error 落库脏信号 → 让控制端已加载历史的远程会话同样失效,
           // 下次用户打开该会话时从被控端重拉,error 卡得以正常出现。
           // 当前正在被查看的会话:保留 live ErrorBanner 不干扰,但登记 pending,离开时再清。
@@ -6959,7 +6959,7 @@ function initGlobalListeners(): void {
           }
           break;
         }
-        case 'maker:session-model-pref:changed': {
+        case IPC_CHANNELS.MAKER_PUSH.SESSION_MODEL_PREF_CHANGED: {
           // 旧被控端 / 旧控制端的 session-scoped pref 回流兼容:只更新当前控制端显示镜像,
           // 不碰本机 providerModelMemory、不回写被控端。新链路以 NEW_MAKER_DRAFT_CHANGED 的
           // providerModelMemory 全量镜像为权威。
@@ -13127,6 +13127,7 @@ import {
   syntheticTriggerKind,
   UI_ACTION_TRIGGER_PREFIX,
 } from '../../shared/interruptedTurn.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 export { UI_ACTION_TRIGGER_PREFIX };
 
 /**

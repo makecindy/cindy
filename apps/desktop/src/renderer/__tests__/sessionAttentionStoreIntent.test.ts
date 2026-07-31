@@ -23,6 +23,7 @@ import {
   applyRemoteSessionActivity,
   removeRemoteSessionActivityEntry,
 } from '@/features/device-link/remoteSessionActivityStore';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const ipcClearMock = vi.fn(() => Promise.resolve());
 const ipcMarkMock = vi.fn(() => Promise.resolve());
@@ -184,7 +185,7 @@ describe('clearSystemSessionAttention 的远程路由', () => {
     noteRemoteSessionSyncCompleted('rs1', token);
     expect(deviceLinkInvokeMock).toHaveBeenCalledWith(
       'dev1',
-      'notification:clear-session-attention',
+      IPC_CHANNELS.NOTIFICATION.CLEAR_SESSION_ATTENTION,
       ['rs1', 'passive'],
     );
   });
@@ -199,7 +200,7 @@ describe('clearSystemSessionAttention 的远程路由', () => {
 
     expect(deviceLinkInvokeMock).toHaveBeenCalledWith(
       'dev1',
-      'notification:clear-session-attention',
+      IPC_CHANNELS.NOTIFICATION.CLEAR_SESSION_ATTENTION,
       ['rs1', 'explicit'],
     );
   });
@@ -220,7 +221,7 @@ describe('clearSystemSessionAttention 的远程路由', () => {
     expect(deviceLinkInvokeMock).toHaveBeenCalledTimes(1);
     expect(deviceLinkInvokeMock).toHaveBeenCalledWith(
       'dev1',
-      'notification:clear-session-attention',
+      IPC_CHANNELS.NOTIFICATION.CLEAR_SESSION_ATTENTION,
       ['rs1', 'explicit'],
     );
   });
@@ -244,7 +245,7 @@ describe('clearSystemSessionAttention 的远程路由', () => {
       noteRemoteSessionSyncCompleted('rs1', noteRemoteSessionSyncStarted('rs1'));
       expect(deviceLinkInvokeMock).toHaveBeenCalledWith(
         'dev1',
-        'notification:clear-session-attention',
+        IPC_CHANNELS.NOTIFICATION.CLEAR_SESSION_ATTENTION,
         ['rs1', 'explicit'],
       );
     } finally {
@@ -265,7 +266,7 @@ describe('clearSystemSessionAttention 的远程路由', () => {
     clearSystemSessionAttention('rs1', 'explicit');
     expect(deviceLinkInvokeMock).toHaveBeenCalledWith(
       'dev1',
-      'notification:clear-session-attention',
+      IPC_CHANNELS.NOTIFICATION.CLEAR_SESSION_ATTENTION,
       ['rs1', 'explicit'],
     );
   });
@@ -294,7 +295,7 @@ describe('clearSystemSessionAttention 的远程路由', () => {
     expect(deviceLinkInvokeMock).toHaveBeenCalledTimes(1);
     expect(deviceLinkInvokeMock).toHaveBeenCalledWith(
       'dev1',
-      'notification:clear-session-attention',
+      IPC_CHANNELS.NOTIFICATION.CLEAR_SESSION_ATTENTION,
       ['rs1', 'passive'],
     );
     removeRemoteSessionActivityEntry('rs1');
@@ -328,7 +329,7 @@ describe('clearSystemSessionAttention 的远程路由', () => {
       noteRemoteSessionSyncCompleted('rs1', noteRemoteSessionSyncStarted('rs1'));
       expect(deviceLinkInvokeMock).toHaveBeenCalledWith(
         'dev1',
-        'notification:clear-session-attention',
+        IPC_CHANNELS.NOTIFICATION.CLEAR_SESSION_ATTENTION,
         ['rs1', 'passive'],
       );
       removeRemoteSessionActivityEntry('rs1');
@@ -351,7 +352,7 @@ describe('clearSystemSessionAttention 的远程路由', () => {
       clearSystemSessionAttention('rs1', 'explicit');
       expect(deviceLinkInvokeMock).toHaveBeenCalledWith(
         'dev1',
-        'notification:clear-session-attention',
+        IPC_CHANNELS.NOTIFICATION.CLEAR_SESSION_ATTENTION,
         ['rs1', 'explicit'],
       );
     } finally {
@@ -378,7 +379,7 @@ describe('clearSystemSessionAttention 的远程路由', () => {
     clearSystemSessionAttention('rs1', 'explicit');
     expect(deviceLinkInvokeMock).toHaveBeenCalledWith(
       'dev1',
-      'notification:clear-session-attention',
+      IPC_CHANNELS.NOTIFICATION.CLEAR_SESSION_ATTENTION,
       ['rs1', 'explicit'],
     );
 
@@ -400,7 +401,7 @@ describe('clearSystemSessionAttention 的远程路由', () => {
     expect(deviceLinkInvokeMock).toHaveBeenCalledTimes(1);
     expect(deviceLinkInvokeMock).toHaveBeenCalledWith(
       'dev1',
-      'notification:clear-session-attention',
+      IPC_CHANNELS.NOTIFICATION.CLEAR_SESSION_ATTENTION,
       ['rs1', 'passive'],
     );
   });
@@ -414,7 +415,7 @@ describe('clearSystemSessionAttention 的远程路由', () => {
     expect(deviceLinkInvokeMock).toHaveBeenCalledTimes(1);
     expect(deviceLinkInvokeMock).toHaveBeenCalledWith(
       'dev1',
-      'notification:clear-session-attention',
+      IPC_CHANNELS.NOTIFICATION.CLEAR_SESSION_ATTENTION,
       ['rs1', 'explicit'],
     );
 
@@ -429,7 +430,7 @@ describe('clearSystemSessionAttention 的远程路由', () => {
     expect(deviceLinkInvokeMock).toHaveBeenCalledTimes(1);
     expect(deviceLinkInvokeMock).toHaveBeenCalledWith(
       'dev1',
-      'notification:clear-session-attention',
+      IPC_CHANNELS.NOTIFICATION.CLEAR_SESSION_ATTENTION,
       ['rs1', 'passive'],
     );
     setRemoteReceiptDisplayReady('rs1', false);

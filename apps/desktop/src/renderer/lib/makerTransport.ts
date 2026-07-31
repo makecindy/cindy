@@ -31,6 +31,7 @@ import type { Message, Session } from '@/lib/ccAgent.types';
 import * as messageService from '@/lib/messageService';
 import * as sessionService from '@/lib/sessionService';
 import { extractIpcError } from '@/utils/ipcError';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 type FullMaker = typeof window.electronAPI.maker;
 
@@ -132,58 +133,58 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
     (...args: unknown[]): Promise<unknown> =>
       invokeRemote(deviceId, channel, args);
   return {
-    send: t('maker:send') as FullMaker['send'],
+    send: t(IPC_CHANNELS.MAKER_INVOKE.SEND) as FullMaker['send'],
     setModel: (async (...args: SetModelArgs) =>
       invokeRemote(
         deviceId,
-        'maker:set-model',
+        IPC_CHANNELS.MAKER_INVOKE.SET_MODEL,
         buildRemoteSetModelArgs(args),
       )) as FullMaker['setModel'],
-    switchSessionAgent: t('maker:switch-session-agent') as FullMaker['switchSessionAgent'],
+    switchSessionAgent: t(IPC_CHANNELS.MAKER_INVOKE.SWITCH_SESSION_AGENT) as FullMaker['switchSessionAgent'],
     getSessionAgentSwitchIntent: t(
-      'maker:get-session-agent-switch-intent',
+      IPC_CHANNELS.MAKER_INVOKE.GET_SESSION_AGENT_SWITCH_INTENT,
     ) as FullMaker['getSessionAgentSwitchIntent'],
-    setEffort: t('maker:set-effort') as FullMaker['setEffort'],
-    setPermissionMode: t('maker:set-permission-mode') as FullMaker['setPermissionMode'],
-    setFastMode: t('maker:set-fast-mode') as FullMaker['setFastMode'],
-    setPlanMode: t('maker:set-plan-mode') as FullMaker['setPlanMode'],
-    getSessionTree: t('maker:get-session-tree') as FullMaker['getSessionTree'],
-    navigateSessionTree: t('maker:navigate-session-tree') as FullMaker['navigateSessionTree'],
-    resolveInteraction: t('maker:resolve-interaction') as FullMaker['resolveInteraction'],
+    setEffort: t(IPC_CHANNELS.MAKER_INVOKE.SET_EFFORT) as FullMaker['setEffort'],
+    setPermissionMode: t(IPC_CHANNELS.MAKER_INVOKE.SET_PERMISSION_MODE) as FullMaker['setPermissionMode'],
+    setFastMode: t(IPC_CHANNELS.MAKER_INVOKE.SET_FAST_MODE) as FullMaker['setFastMode'],
+    setPlanMode: t(IPC_CHANNELS.MAKER_INVOKE.SET_PLAN_MODE) as FullMaker['setPlanMode'],
+    getSessionTree: t(IPC_CHANNELS.MAKER_INVOKE.GET_SESSION_TREE) as FullMaker['getSessionTree'],
+    navigateSessionTree: t(IPC_CHANNELS.MAKER_INVOKE.NAVIGATE_SESSION_TREE) as FullMaker['navigateSessionTree'],
+    resolveInteraction: t(IPC_CHANNELS.MAKER_INVOKE.RESOLVE_INTERACTION) as FullMaker['resolveInteraction'],
     getPendingInteractions: t(
-      'maker:get-pending-interactions',
+      IPC_CHANNELS.MAKER_INVOKE.GET_PENDING_INTERACTIONS,
     ) as FullMaker['getPendingInteractions'],
-    deleteMessage: t('maker:message:delete') as FullMaker['deleteMessage'],
-    fork: t('maker:fork') as FullMaker['fork'],
-    forkStripEncrypted: t('maker:fork-strip-encrypted') as FullMaker['forkStripEncrypted'],
-    rewindPreview: t('maker:rewind:preview') as FullMaker['rewindPreview'],
-    rewindCommit: t('maker:rewind:commit') as FullMaker['rewindCommit'],
-    getContextUsage: t('maker:get-context-usage') as FullMaker['getContextUsage'],
-    setExtraDirs: t('maker:set-extra-dirs') as FullMaker['setExtraDirs'],
-    closeSession: t('maker:close-session') as FullMaker['closeSession'],
-    enableOrca: t('maker:session:enable-orca') as FullMaker['enableOrca'],
-    disableOrca: t('maker:session:disable-orca') as FullMaker['disableOrca'],
+    deleteMessage: t(IPC_CHANNELS.MAKER_INVOKE.DELETE_MESSAGE) as FullMaker['deleteMessage'],
+    fork: t(IPC_CHANNELS.MAKER_INVOKE.FORK) as FullMaker['fork'],
+    forkStripEncrypted: t(IPC_CHANNELS.MAKER_INVOKE.FORK_STRIP_ENCRYPTED) as FullMaker['forkStripEncrypted'],
+    rewindPreview: t(IPC_CHANNELS.MAKER_INVOKE.REWIND_PREVIEW) as FullMaker['rewindPreview'],
+    rewindCommit: t(IPC_CHANNELS.MAKER_INVOKE.REWIND_COMMIT) as FullMaker['rewindCommit'],
+    getContextUsage: t(IPC_CHANNELS.MAKER_INVOKE.GET_CONTEXT_USAGE) as FullMaker['getContextUsage'],
+    setExtraDirs: t(IPC_CHANNELS.MAKER_INVOKE.SET_EXTRA_DIRS) as FullMaker['setExtraDirs'],
+    closeSession: t(IPC_CHANNELS.MAKER_INVOKE.CLOSE_SESSION) as FullMaker['closeSession'],
+    enableOrca: t(IPC_CHANNELS.MAKER_INVOKE.SESSION_ENABLE_ORCA) as FullMaker['enableOrca'],
+    disableOrca: t(IPC_CHANNELS.MAKER_INVOKE.SESSION_DISABLE_ORCA) as FullMaker['disableOrca'],
     input: {
-      enqueue: t('maker:input:enqueue') as FullMaker['input']['enqueue'],
-      compact: t('maker:input:compact') as FullMaker['input']['compact'],
-      steer: t('maker:input:steer') as FullMaker['input']['steer'],
-      stop: t('maker:input:stop') as FullMaker['input']['stop'],
-      getProjection: t('maker:input:get-projection') as FullMaker['input']['getProjection'],
-      setExpanded: t('maker:input:set-expanded') as FullMaker['input']['setExpanded'],
-      resume: t('maker:input:resume') as FullMaker['input']['resume'],
+      enqueue: t(IPC_CHANNELS.MAKER_INVOKE.INPUT_ENQUEUE) as FullMaker['input']['enqueue'],
+      compact: t(IPC_CHANNELS.MAKER_INVOKE.INPUT_COMPACT) as FullMaker['input']['compact'],
+      steer: t(IPC_CHANNELS.MAKER_INVOKE.INPUT_STEER) as FullMaker['input']['steer'],
+      stop: t(IPC_CHANNELS.MAKER_INVOKE.INPUT_STOP) as FullMaker['input']['stop'],
+      getProjection: t(IPC_CHANNELS.MAKER_INVOKE.INPUT_GET_PROJECTION) as FullMaker['input']['getProjection'],
+      setExpanded: t(IPC_CHANNELS.MAKER_INVOKE.INPUT_SET_EXPANDED) as FullMaker['input']['setExpanded'],
+      resume: t(IPC_CHANNELS.MAKER_INVOKE.INPUT_RESUME) as FullMaker['input']['resume'],
       setInteractionLock: t(
-        'maker:input:set-interaction-lock',
+        IPC_CHANNELS.MAKER_INVOKE.INPUT_SET_INTERACTION_LOCK,
       ) as FullMaker['input']['setInteractionLock'],
-      setEditLock: t('maker:input:set-edit-lock') as FullMaker['input']['setEditLock'],
-      move: t('maker:input:move') as FullMaker['input']['move'],
-      remove: t('maker:input:remove') as FullMaker['input']['remove'],
-      updateText: t('maker:input:update-text') as FullMaker['input']['updateText'],
-      clearError: t('maker:input:clear-error') as FullMaker['input']['clearError'],
-      retryLastError: t('maker:input:retry-last-error') as FullMaker['input']['retryLastError'],
-      clearSession: t('maker:input:clear-session') as FullMaker['input']['clearSession'],
+      setEditLock: t(IPC_CHANNELS.MAKER_INVOKE.INPUT_SET_EDIT_LOCK) as FullMaker['input']['setEditLock'],
+      move: t(IPC_CHANNELS.MAKER_INVOKE.INPUT_MOVE) as FullMaker['input']['move'],
+      remove: t(IPC_CHANNELS.MAKER_INVOKE.INPUT_REMOVE) as FullMaker['input']['remove'],
+      updateText: t(IPC_CHANNELS.MAKER_INVOKE.INPUT_UPDATE_TEXT) as FullMaker['input']['updateText'],
+      clearError: t(IPC_CHANNELS.MAKER_INVOKE.INPUT_CLEAR_ERROR) as FullMaker['input']['clearError'],
+      retryLastError: t(IPC_CHANNELS.MAKER_INVOKE.INPUT_RETRY_LAST_ERROR) as FullMaker['input']['retryLastError'],
+      clearSession: t(IPC_CHANNELS.MAKER_INVOKE.INPUT_CLEAR_SESSION) as FullMaker['input']['clearSession'],
       // device-link:auth error 重试失败/放弃时在被控端落库,经隧道路由到被控端 main。
       persistTurnErrorDeferred: t(
-        'maker:persist-turn-error-deferred',
+        IPC_CHANNELS.MAKER_INVOKE.PERSIST_TURN_ERROR_DEFERRED,
       ) as FullMaker['input']['persistTurnErrorDeferred'],
     },
   };
@@ -243,7 +244,7 @@ export function isRemoteSessionSticky(sessionId: string): boolean {
 export function regenerateSessionTitleFor(sessionId: string): Promise<{ title: string | null }> {
   const deviceId = getStickySessionDeviceId(sessionId);
   if (!deviceId) return window.electronAPI.maker.regenerateSessionTitle(sessionId);
-  return invokeRemote(deviceId, 'maker:regenerate-title', [{ sessionId }]) as Promise<{
+  return invokeRemote(deviceId, IPC_CHANNELS.MAKER_INVOKE.REGENERATE_TITLE, [{ sessionId }]) as Promise<{
     title: string | null;
   }>;
 }
@@ -257,7 +258,7 @@ export function getSessionFor(sessionId: string): Promise<Session> {
   // to the wrong maker instance.
   const deviceId = getStickySessionDeviceId(sessionId);
   if (!deviceId) return sessionService.get(sessionId);
-  return invokeRemote(deviceId, 'local-db:sessions:get', [sessionId]) as Promise<Session>;
+  return invokeRemote(deviceId, IPC_CHANNELS.LOCAL_DB.SESSIONS_GET, [sessionId]) as Promise<Session>;
 }
 
 /**
@@ -269,7 +270,7 @@ export function getSessionFor(sessionId: string): Promise<Session> {
 export function isSessionTurnRunningFor(sessionId: string): Promise<boolean> {
   const deviceId = getSessionDeviceId(sessionId);
   if (!deviceId) return Promise.resolve(false);
-  return invokeRemote(deviceId, 'maker:session-in-turn', [sessionId]) as Promise<boolean>;
+  return invokeRemote(deviceId, IPC_CHANNELS.MAKER_INVOKE.SESSION_IN_TURN, [sessionId]) as Promise<boolean>;
 }
 
 /**
@@ -287,7 +288,7 @@ export function listMessagesFor(
 ): Promise<Message[]> {
   const deviceId = getSessionDeviceId(sessionId);
   if (!deviceId) return messageService.list(sessionId, opts);
-  const promise = invokeRemote(deviceId, 'local-db:messages:list', [sessionId, opts]) as Promise<
+  const promise = invokeRemote(deviceId, IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST, [sessionId, opts]) as Promise<
     Message[]
   >;
   if (!opts?.before && opts?.beforeTs == null) {
@@ -358,7 +359,7 @@ export function getWorkflowProgressFor(
   const blockedUntil = workflowProgressUnsupportedUntil.get(deviceId);
   if (blockedUntil !== undefined && blockedUntil > Date.now()) return Promise.resolve(null);
   return (
-    invokeRemote(deviceId, 'maker:get-workflow-progress', [sessionId, taskId]) as Promise<
+    invokeRemote(deviceId, IPC_CHANNELS.MAKER_INVOKE.GET_WORKFLOW_PROGRESS, [sessionId, taskId]) as Promise<
       import('../../shared/workflow-progress').WorkflowProgress | null
     >
   ).catch((err) => {
@@ -386,7 +387,7 @@ export function listSessionBackgroundTasksFor(
   const deviceId = getStickySessionDeviceId(sessionId);
   if (!deviceId) return window.electronAPI.maker.listSessionBackgroundTasks(sessionId);
   return (
-    invokeRemote(deviceId, 'maker:session-background-tasks:list', [sessionId]) as ReturnType<
+    invokeRemote(deviceId, IPC_CHANNELS.MAKER_INVOKE.LIST_SESSION_BACKGROUND_TASKS, [sessionId]) as ReturnType<
       typeof window.electronAPI.maker.listSessionBackgroundTasks
     >
   ).catch(() => ({ tasks: [] }));
@@ -410,7 +411,7 @@ export function estimatedSessionValueFor(sessionId: string): Promise<{
 }> {
   const deviceId = getStickySessionDeviceId(sessionId);
   if (!deviceId) return messageService.estimatedSessionValue(sessionId);
-  return invokeRemote(deviceId, 'local-db:messages:estimatedSessionValue', [
+  return invokeRemote(deviceId, IPC_CHANNELS.LOCAL_DB.MESSAGES_ESTIMATED_SESSION_VALUE, [
     sessionId,
   ]) as ReturnType<typeof estimatedSessionValueFor>;
 }
@@ -442,7 +443,7 @@ export function pluginEnableStateFor(
   }
   const args =
     workspaceKind === undefined ? [pluginId, workingDir] : [pluginId, workingDir, workspaceKind];
-  return invokeRemote(deviceId, 'maker:plugins:get-state', args) as ReturnType<
+  return invokeRemote(deviceId, IPC_CHANNELS.MAKER_INVOKE.PLUGINS_GET_STATE, args) as ReturnType<
     typeof window.electronAPI.maker.plugins.getState
   >;
 }
@@ -455,7 +456,7 @@ export function aroundMessagesFor(
 ): Promise<Message[]> {
   const deviceId = getSessionDeviceId(sessionId);
   if (!deviceId) return messageService.around(sessionId, messageId, opts);
-  return invokeRemote(deviceId, 'local-db:messages:around', [
+  return invokeRemote(deviceId, IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND, [
     sessionId,
     messageId,
     opts,
@@ -472,7 +473,7 @@ export function aroundMessagesFor(
 export function dismissErrorMessageFor(sessionId: string, clientId: string): Promise<unknown> {
   const deviceId = getSessionDeviceId(sessionId);
   if (!deviceId) return messageService.dismissError(sessionId, clientId);
-  return invokeRemote(deviceId, 'local-db:messages:dismiss-error', [sessionId, clientId]);
+  return invokeRemote(deviceId, IPC_CHANNELS.LOCAL_DB.MESSAGES_DISMISS_ERROR, [sessionId, clientId]);
 }
 
 /** 消息删除：user 只删目标行，assistant 删除所属整轮输出。 */
@@ -489,7 +490,7 @@ export function deleteMessageFor(
 ): Promise<MessageDeletionResult> {
   const deviceId = getSessionDeviceId(sessionId);
   if (!deviceId) return window.electronAPI.maker.deleteMessage(sessionId, clientId);
-  return invokeRemote(deviceId, 'maker:message:delete', [
+  return invokeRemote(deviceId, IPC_CHANNELS.MAKER_INVOKE.DELETE_MESSAGE, [
     sessionId,
     clientId,
   ]) as Promise<MessageDeletionResult>;
@@ -503,7 +504,7 @@ export function deleteMessageFor(
 export function ackInterruptedTurnFor(sessionId: string): Promise<unknown> {
   const deviceId = getSessionDeviceId(sessionId);
   if (!deviceId) return window.electronAPI.localDb.sessions.ackInterrupted(sessionId);
-  return invokeRemote(deviceId, 'local-db:sessions:ack-interrupted', [sessionId]);
+  return invokeRemote(deviceId, IPC_CHANNELS.LOCAL_DB.SESSIONS_ACK_INTERRUPTED, [sessionId]);
 }
 
 /** fork 来源定位:forkedAtMessageId 存的是 clientId,远程同样走被控端 DB。 */
@@ -514,7 +515,7 @@ export function aroundMessagesByClientIdFor(
 ): Promise<Message[]> {
   const deviceId = getSessionDeviceId(sessionId);
   if (!deviceId) return messageService.aroundClientId(sessionId, clientId, opts);
-  return invokeRemote(deviceId, 'local-db:messages:around-client-id', [
+  return invokeRemote(deviceId, IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND_CLIENT_ID, [
     sessionId,
     clientId,
     opts,
@@ -532,7 +533,7 @@ export function aroundMessagesByClientIdForDevice(
   clientId: string,
   opts?: { radius?: number },
 ): Promise<Message[]> {
-  return invokeRemote(deviceId, 'local-db:messages:around-client-id', [
+  return invokeRemote(deviceId, IPC_CHANNELS.LOCAL_DB.MESSAGES_AROUND_CLIENT_ID, [
     sessionId,
     clientId,
     opts,
@@ -573,17 +574,17 @@ export function goalApiFor(sessionId: string): RoutableGoal {
     };
   const localApi = window.electronAPI.maker;
   return {
-    setGoal: t('maker:goal:set', localApi.setGoal) as FullMaker['setGoal'],
-    clearGoal: t('maker:goal:clear', localApi.clearGoal) as FullMaker['clearGoal'],
-    pauseGoal: t('maker:goal:pause', localApi.pauseGoal) as FullMaker['pauseGoal'],
-    resumeGoal: t('maker:goal:resume', localApi.resumeGoal) as FullMaker['resumeGoal'],
+    setGoal: t(IPC_CHANNELS.MAKER_INVOKE.GOAL_SET, localApi.setGoal) as FullMaker['setGoal'],
+    clearGoal: t(IPC_CHANNELS.MAKER_INVOKE.GOAL_CLEAR, localApi.clearGoal) as FullMaker['clearGoal'],
+    pauseGoal: t(IPC_CHANNELS.MAKER_INVOKE.GOAL_PAUSE, localApi.pauseGoal) as FullMaker['pauseGoal'],
+    resumeGoal: t(IPC_CHANNELS.MAKER_INVOKE.GOAL_RESUME, localApi.resumeGoal) as FullMaker['resumeGoal'],
     updateGoal: ((sid: string, patch: unknown) => {
       const deviceId = resolve();
       if (!deviceId)
         return localApi.updateGoal(sid, patch as Parameters<FullMaker['updateGoal']>[1]);
-      return invokeRemote(deviceId, 'maker:goal:update', [{ sessionId: sid, patch }]);
+      return invokeRemote(deviceId, IPC_CHANNELS.MAKER_INVOKE.GOAL_UPDATE, [{ sessionId: sid, patch }]);
     }) as FullMaker['updateGoal'],
-    getGoalStatus: t('maker:goal:get-status', localApi.getGoalStatus) as FullMaker['getGoalStatus'],
+    getGoalStatus: t(IPC_CHANNELS.MAKER_INVOKE.GOAL_GET_STATUS, localApi.getGoalStatus) as FullMaker['getGoalStatus'],
   };
 }
 
@@ -610,7 +611,7 @@ export function subscribeGoalStatusChanged(
     }
     return (
       window.electronAPI.deviceLink?.onRemotePush?.((push, localOwnerStamp) => {
-        if (push.deviceId !== deviceId || push.channel !== 'maker:goal:status-changed') return;
+        if (push.deviceId !== deviceId || push.channel !== IPC_CHANNELS.MAKER_PUSH.GOAL_STATUS_CHANGED) return;
         if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
         const payload = push.payload as { sessionId?: string; goal?: GoalStatusPayload | null };
         if (payload?.sessionId !== sessionId) return;
@@ -673,22 +674,22 @@ function remoteOrcaWorkflows(deviceId: string): RoutableOrcaWorkflows {
     (...args: unknown[]): Promise<unknown> =>
       invokeRemote(deviceId, channel, args);
   return {
-    getByLeadSession: t('local-db:orca-workflows:get-by-lead') as FullOrca['getByLeadSession'],
+    getByLeadSession: t(IPC_CHANNELS.LOCAL_DB.ORCA_WORKFLOWS_GET_BY_LEAD) as FullOrca['getByLeadSession'],
     getByWorkerSession: t(
-      'local-db:orca-workflows:get-by-worker-session',
+      IPC_CHANNELS.LOCAL_DB.ORCA_WORKFLOWS_GET_BY_WORKER_SESSION,
     ) as FullOrca['getByWorkerSession'],
     listWorkersByLead: t(
-      'local-db:orca-workflows:list-workers-by-lead',
+      IPC_CHANNELS.LOCAL_DB.ORCA_WORKFLOWS_LIST_WORKERS_BY_LEAD,
     ) as FullOrca['listWorkersByLead'],
-    createWorker: t('maker:worker:create') as FullOrca['createWorker'],
-    switchFocus: t('maker:worker:switch-focus') as FullOrca['switchFocus'],
+    createWorker: t(IPC_CHANNELS.MAKER_INVOKE.WORKER_CREATE) as FullOrca['createWorker'],
+    switchFocus: t(IPC_CHANNELS.MAKER_INVOKE.WORKER_SWITCH_FOCUS) as FullOrca['switchFocus'],
     idleWorker: ((leadSessionId: string, workerId: string, expectedStatus?: 'done') => {
       if (expectedStatus === 'done') {
-        return invokeRemote(deviceId, 'maker:worker:acknowledge-done', [
+        return invokeRemote(deviceId, IPC_CHANNELS.MAKER_INVOKE.WORKER_ACKNOWLEDGE_DONE, [
           { leadSessionId, workerId },
         ]);
       }
-      return invokeRemote(deviceId, 'maker:worker:idle', [
+      return invokeRemote(deviceId, IPC_CHANNELS.MAKER_INVOKE.WORKER_IDLE, [
         {
           leadSessionId,
           workerId,
@@ -697,12 +698,12 @@ function remoteOrcaWorkflows(deviceId: string): RoutableOrcaWorkflows {
       ]);
     }) as FullOrca['idleWorker'],
     archiveWorker: ((leadSessionId: string, workerId: string) =>
-      invokeRemote(deviceId, 'maker:worker:archive', [
+      invokeRemote(deviceId, IPC_CHANNELS.MAKER_INVOKE.WORKER_ARCHIVE, [
         { leadSessionId, workerId },
       ])) as FullOrca['archiveWorker'],
-    endTeam: t('maker:team:end') as FullOrca['endTeam'],
+    endTeam: t(IPC_CHANNELS.MAKER_INVOKE.TEAM_END) as FullOrca['endTeam'],
     getCollaborationSettings: t(
-      'maker:collaboration-settings:get',
+      IPC_CHANNELS.MAKER_INVOKE.COLLABORATION_SETTINGS_GET,
     ) as FullOrca['getCollaborationSettings'],
   };
 }
@@ -748,7 +749,7 @@ export function subscribeOrcaWorkerChanged(leadSessionId: string, cb: () => void
     window.electronAPI.deviceLink?.onRemotePush?.((push, localOwnerStamp) => {
       if (
         push.deviceId === deviceId &&
-        push.channel === 'maker:orca:worker-changed' &&
+        push.channel === IPC_CHANNELS.MAKER_PUSH.ORCA_WORKER_CHANGED &&
         (push.payload as { leadSessionId?: string })?.leadSessionId === leadSessionId
       ) {
         if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;

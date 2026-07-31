@@ -738,6 +738,7 @@ import {
 } from '../localDb/ipc/pluginWorkspaceSessions.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { openMainWindowSession } from '../deepLink.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('maker-ipc');
 
@@ -1215,11 +1216,11 @@ export async function applyCodexSpawnConfigChangeWithRestart<T extends object>(
 // `local-db:sessions:created`；renderer sessionsStore.onCreated 收到后
 // forceRefreshAll 重拉所有桶。其它生命周期专属路径仍保留各自的同契约 helper。
 export function broadcastSessionCreated(sessionId: string): void {
-  tapWindowBroadcast('local-db:sessions:created', { sessionId });
+  tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED, { sessionId });
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {
-      win.webContents.send('local-db:sessions:created', { sessionId });
+      win.webContents.send(IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED, { sessionId });
     } catch {
       // best-effort UI refresh, 失败不影响业务
     }
@@ -12082,7 +12083,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           (progress) => {
             for (const win of BrowserWindow.getAllWindows()) {
               if (!win.isDestroyed()) {
-                win.webContents.send('computer-driver-update-progress', progress);
+                win.webContents.send(IPC_CHANNELS.COMPUTER_DRIVER_UPDATE_PROGRESS.COMPUTER_DRIVER_UPDATE_PROGRESS, progress);
               }
             }
           },

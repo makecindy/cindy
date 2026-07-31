@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 export type DesktopDevMode = 'remote' | 'local' | 'unknown';
 export type DesktopDevInstanceState = 'starting' | 'ready' | 'failed';
@@ -232,7 +233,7 @@ export function recordDesktopDevLocalDbStartupResult(result: {
     markDesktopDevReady();
   } else if (result.error) {
     markDesktopDevStartupFailed(result.error.code, result.error.message, {
-      phase: 'local-db:ensure-ready',
+      phase: IPC_CHANNELS.LOCAL_DB.ENSURE_READY,
     });
   }
 }

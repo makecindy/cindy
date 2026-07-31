@@ -36,6 +36,7 @@ import {
 } from '@/hooks/useDeviceProviders';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import type { AgentKind } from '@/lib/ccAgent.types';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 interface DialogCopy {
   title: string;
@@ -273,8 +274,8 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
         const providerAgent: ProviderAgentKind =
           vendor === 'codex' ? 'codex' : vendor === 'pi' ? 'pi' : 'claude-code';
         const [statusRes, providersRes] = await Promise.allSettled([
-          window.electronAPI.deviceLink.invoke(deviceId, 'maker:agent:status', [providerAgent]),
-          window.electronAPI.deviceLink.invoke(deviceId, 'maker:provider:list', []),
+          window.electronAPI.deviceLink.invoke(deviceId, IPC_CHANNELS.MAKER_INVOKE.AGENT_STATUS, [providerAgent]),
+          window.electronAPI.deviceLink.invoke(deviceId, IPC_CHANNELS.MAKER_INVOKE.PROVIDER_LIST, []),
         ]);
         const status =
           statusRes.status === 'fulfilled'

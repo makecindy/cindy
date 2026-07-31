@@ -1,3 +1,4 @@
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 /**
  * device-link(跨设备远程控制)的 IPC channel 常量。
  * main / preload / renderer 共用,禁止 hardcode 字符串。
@@ -6,55 +7,55 @@
 /** renderer → main invoke */
 export const DEVICE_LINK_INVOKE = {
   /** 本机状态:{ remoteControlEnabled, linkStatus } */
-  GET_STATE: 'device-link:get-state',
+  GET_STATE: IPC_CHANNELS.DEVICE_LINK.GET_STATE,
   /** 切换「允许同账号设备控制本机」开关 */
-  SET_ENABLED: 'device-link:set-enabled',
+  SET_ENABLED: IPC_CHANNELS.DEVICE_LINK.SET_ENABLED,
   /** 切换「保持电脑唤醒」开关(本机 powerSaveBlocker,防休眠、允许锁屏) */
-  SET_KEEP_AWAKE: 'device-link:set-keep-awake',
+  SET_KEEP_AWAKE: IPC_CHANNELS.DEVICE_LINK.SET_KEEP_AWAKE,
   /** 控制端本地偏好:切换是否主动控制某个目标设备 */
-  SET_DEVICE_CONTROL_ENABLED: 'device-link:set-device-control-enabled',
+  SET_DEVICE_CONTROL_ENABLED: IPC_CHANNELS.DEVICE_LINK.SET_DEVICE_CONTROL_ENABLED,
   /** 同账号设备列表(REST 经 main 转发,带 online/busy/开关三态) */
-  LIST_DEVICES: 'device-link:list-devices',
+  LIST_DEVICES: IPC_CHANNELS.DEVICE_LINK.LIST_DEVICES,
   /** 重命名设备 */
-  RENAME_DEVICE: 'device-link:rename-device',
+  RENAME_DEVICE: IPC_CHANNELS.DEVICE_LINK.RENAME_DEVICE,
   /** 删除离线设备档案 */
-  DELETE_DEVICE: 'device-link:delete-device',
+  DELETE_DEVICE: IPC_CHANNELS.DEVICE_LINK.DELETE_DEVICE,
   // —— 控制端:远程会话视图用 ——
   /** 与目标设备建立控制链路(进入远程设备视图时) */
-  OPEN_LINK: 'device-link:open-link',
+  OPEN_LINK: IPC_CHANNELS.DEVICE_LINK.OPEN_LINK,
   /** 解除控制链路(离开远程设备视图时) */
-  CLOSE_LINK: 'device-link:close-link',
+  CLOSE_LINK: IPC_CHANNELS.DEVICE_LINK.CLOSE_LINK,
   /** 对目标设备远程调用一个 allowlist 内的 maker/local-db channel */
-  INVOKE: 'device-link:invoke',
+  INVOKE: IPC_CHANNELS.DEVICE_LINK.INVOKE,
   /** 控制端:订阅被控端某 topic 的变更推送(push 驱动侧边栏 / 会话视图);
    *  注意与隧道 channel `device-link:subscribe` 区分:这是 renderer→main 本地 IPC,
    *  main 再封成隧道 invoke 帧发给被控端 */
-  SUBSCRIBE: 'device-link:topic-subscribe',
+  SUBSCRIBE: IPC_CHANNELS.DEVICE_LINK.TOPIC_SUBSCRIBE,
   /** 控制端:取消订阅某 topic */
-  UNSUBSCRIBE: 'device-link:topic-unsubscribe',
+  UNSUBSCRIBE: IPC_CHANNELS.DEVICE_LINK.TOPIC_UNSUBSCRIBE,
   /** 被控端:一键断开当前所有控制链路 */
-  DISCONNECT_ALL: 'device-link:disconnect-all',
+  DISCONNECT_ALL: IPC_CHANNELS.DEVICE_LINK.DISCONNECT_ALL,
   /** 被控端:撤销某控制端的访问权限(逐设备黑名单,持久化) */
-  REVOKE: 'device-link:revoke',
+  REVOKE: IPC_CHANNELS.DEVICE_LINK.REVOKE,
   /** 被控端:恢复某控制端的访问权限 */
-  RESTORE: 'device-link:restore',
+  RESTORE: IPC_CHANNELS.DEVICE_LINK.RESTORE,
   // —— 控制端:远程会话镜像的本地冷缓存(见 main/device-link/mirrorCacheStore.ts)——
   // 纯本机读写,**不进 device-link 隧道 allowlist**:缓存是每台控制端自己的首屏加速物,
   // 远程/手机控制端有各自的本地缓存,谁也不需要读别人的。
   /** 读某 (设备, 会话) 缓存的最近一页消息 */
-  MIRROR_CACHE_GET_MESSAGES: 'device-link:mirror-cache:messages:get',
+  MIRROR_CACHE_GET_MESSAGES: IPC_CHANNELS.DEVICE_LINK.MIRROR_CACHE_MESSAGES_GET,
   /** 写某 (设备, 会话) 缓存的最近一页消息(空数组 = 清掉该条) */
-  MIRROR_CACHE_PUT_MESSAGES: 'device-link:mirror-cache:messages:put',
+  MIRROR_CACHE_PUT_MESSAGES: IPC_CHANNELS.DEVICE_LINK.MIRROR_CACHE_MESSAGES_PUT,
   /** 读侧边栏远程会话列表快照 */
-  MIRROR_CACHE_GET_SESSION_LIST: 'device-link:mirror-cache:session-list:get',
+  MIRROR_CACHE_GET_SESSION_LIST: IPC_CHANNELS.DEVICE_LINK.MIRROR_CACHE_SESSION_LIST_GET,
   /** 写侧边栏远程会话列表快照 */
-  MIRROR_CACHE_PUT_SESSION_LIST: 'device-link:mirror-cache:session-list:put',
+  MIRROR_CACHE_PUT_SESSION_LIST: IPC_CHANNELS.DEVICE_LINK.MIRROR_CACHE_SESSION_LIST_PUT,
   /**
    * 清某台设备的缓存。deviceId 必填(缺失 / 空白一律 INVALID_PARAMS)——
    * 「整体清」刻意不开放给 renderer:登出走 main 内部的 clearAll()(见
    * teardownAuthAccountBoundary)。
    */
-  MIRROR_CACHE_CLEAR: 'device-link:mirror-cache:clear',
+  MIRROR_CACHE_CLEAR: IPC_CHANNELS.DEVICE_LINK.MIRROR_CACHE_CLEAR,
 } as const;
 
 /** main → renderer push */

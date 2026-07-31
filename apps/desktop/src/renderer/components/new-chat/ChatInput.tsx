@@ -293,6 +293,7 @@ import { appendMentionChip } from './mentionChipInsertion';
 // device-link 远程会话:设置变更不落本地 DB(会 404),改写远程内存层 + 运行时隧道。
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import { makerApiFor, makerApiForDevice } from '@/lib/makerTransport';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('ChatInput');
 // perf-baseline(与 MessageStream / sidebar 的 perf/session-switch 探针同通道):
@@ -4586,7 +4587,7 @@ export function ChatInput({
         return;
       }
       window.electronAPI.deviceLink
-        .invoke(remoteDeviceId, 'maker:apply-new-maker-draft-pref', [
+        .invoke(remoteDeviceId, IPC_CHANNELS.MAKER_INVOKE.APPLY_NEW_MAKER_DRAFT_PREF, [
           {
             agent: currentModelAgentKind,
             providerId: activeProviderId ?? '',

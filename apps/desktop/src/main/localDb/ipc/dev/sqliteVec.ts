@@ -7,11 +7,12 @@
 
 import { ipcMain, app } from 'electron';
 import { getSqliteVecState } from '../../sqliteVecLoader';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 export function registerDevSqliteVecIpc(): void {
   if (app.isPackaged) return;
 
-  ipcMain.handle('dev:sqlite-vec:status', () => {
+  ipcMain.handle(IPC_CHANNELS.DEV.SQLITE_VEC_STATUS, () => {
     const state = getSqliteVecState();
     return {
       available: state?.loaded ?? false,

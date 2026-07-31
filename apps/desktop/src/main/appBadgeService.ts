@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 
 import { SESSION_ATTENTION_CLEARED_CHANNEL, type SessionAttentionClearIntent } from '../shared/sessionAttention';
 import { createLogger } from './logger';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('appBadgeService');
 const attentionSessionIds = new Set<string>();
@@ -24,11 +25,11 @@ export function initAppBadgeService(deps: AppBadgeServiceDeps): void {
   getWindow = deps.getWindow;
   onSessionAttentionMarked = deps.onSessionAttentionMarked ?? null;
   onSessionAttentionCleared = deps.onSessionAttentionCleared ?? null;
-  ipcMain.handle('notification:mark-session-attention', async (_event, sessionId: unknown): Promise<void> => {
+  ipcMain.handle(IPC_CHANNELS.NOTIFICATION.MARK_SESSION_ATTENTION, async (_event, sessionId: unknown): Promise<void> => {
     if (typeof sessionId !== 'string' || sessionId.length === 0) return;
     markSessionNeedsAttention(sessionId);
   });
-  ipcMain.handle('notification:clear-session-attention', async (_event, sessionId: unknown, intent: unknown): Promise<void> => {
+  ipcMain.handle(IPC_CHANNELS.NOTIFICATION.CLEAR_SESSION_ATTENTION, async (_event, sessionId: unknown, intent: unknown): Promise<void> => {
     if (typeof sessionId !== 'string' || sessionId.length === 0) return;
     clearSessionAttention(sessionId, intent === 'explicit' ? 'explicit' : 'passive');
   });

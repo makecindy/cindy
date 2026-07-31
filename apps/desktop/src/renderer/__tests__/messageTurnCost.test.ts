@@ -60,6 +60,7 @@ import {
   __testing as dataOwnerTesting,
   setDataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 describe('formatTurnCostUsd', () => {
   it('始终保留两位小数，小于一美分显示下限', () => {
@@ -485,7 +486,7 @@ describe('makerChatStore per-turn 费用', () => {
     expect(cb).toBeTruthy();
     cb!({
       deviceId: 'dev-1',
-      channel: 'usage:message-turn-cost',
+      channel: IPC_CHANNELS.USAGE.MESSAGE_TURN_COST,
       payload: {
         sessionId: SID,
         clientId: 'a-remote',

@@ -305,6 +305,7 @@ import {
   isDataOwnerPushStamp,
   type DataOwnerPushStamp,
 } from '../../shared/dataOwnerPush.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 /**
  * 意识仓库的进程级单例 + IPC 注册。
@@ -4311,13 +4312,13 @@ export function registerGhostIpc(): void {
   // (系统级选文件夹,用户亲选即授权)/ preview-request(右侧栏开预览标签,
   // preview.hosts 白名单守门)/ workspace-request(工作区会话入口,亲选或
   // 确认卡授权,判重/创建在 workspaceSlot)。其它类型一律拒。
-  ipcMain.handle('ghost-pipe:ping', (event) => {
+  ipcMain.handle(IPC_CHANNELS.GHOST_PIPE.PING, (event) => {
     const id = ghostIdForLogicWebContents(event.sender.id);
     if (!id) throwIpcError('PERMISSION_DENIED', '非意识电子脑上下文');
     requireGhostAvailableForActiveSession(id);
     return { ok: true, id };
   });
-  ipcMain.handle('ghost-pipe:send', async (event, payload: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.GHOST_PIPE.SEND, async (event, payload: unknown) => {
     const id = ghostIdForLogicWebContents(event.sender.id);
     if (!id) throwIpcError('PERMISSION_DENIED', '非意识电子脑上下文');
     requireGhostAvailableForActiveSession(id);
@@ -4429,7 +4430,7 @@ export function registerGhostIpc(): void {
   // 不校验 sender 归属:requestId 是 main 自己铸的 randomUUID,只在本机 renderer
   // 手里;陌生/重复的 id 由桥直接忽略(返回 handled:false),没有可利用面。
   // 非布尔的 confirmed 在桥里一律按"没同意"兜底,不给靠畸形回包骗到同意的路。
-  ipcMain.handle('ghosts:confirm:resolve', async (_event, raw: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.CONFIRM_RESOLVE, async (_event, raw: unknown) => {
     const p = raw as { requestId?: unknown; confirmed?: unknown } | null;
     if (!p || typeof p.requestId !== 'string' || p.requestId.length === 0 || p.requestId.length > 128) {
       throwIpcError('INVALID_PARAMS', 'requestId must be a non-empty string');
@@ -4443,7 +4444,7 @@ export function registerGhostIpc(): void {
   // 查询型 handler:无卡返回 { card: null },renderer 据此降级为通用媒体
   // 渲染(远程会话/被 GC 的历史卡都走这条),不抛 NOT_FOUND——规则 13 的
   // 显式例外(失败面需要 fallback 语义才能正确显示)。
-  ipcMain.handle('ghosts:card:get', async (_event, callId: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.CARD_GET, async (_event, callId: unknown) => {
     if (typeof callId !== 'string' || callId.length === 0 || callId.length > 128) {
       throwIpcError('INVALID_PARAMS', 'callId must be a non-empty string');
     }
@@ -4460,14 +4461,14 @@ export function registerGhostIpc(): void {
 
   // 会话切换上报(订阅槽①;renderer MainLayout 路由 effect 单向 send,无返回):
   // 非法载荷按 null(切去非会话页)处理,去重与资格门都在 noteGhostSessionFocused 之后。
-  ipcMain.on('ghosts:session-focused', (_event, sessionId: unknown) => {
+  ipcMain.on(IPC_CHANNELS.GHOSTS.SESSION_FOCUSED, (_event, sessionId: unknown) => {
     noteGhostSessionFocused(typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : null);
   });
 
   // 会话批量取卡(卡槽③;宿主 renderer 会话打开时一次性灌 byCallId)。查询型
   // handler:失败返回 { cards: [] } 让 renderer 照常渲染(缺历史卡自动降级),
   // 不抛(规则 13 显式例外)。含 turn 级自绘卡(callId = assistant 消息 clientId)。
-  ipcMain.handle('ghosts:card:list-by-session', async (_event, sessionId: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.CARD_LIST_BY_SESSION, async (_event, sessionId: unknown) => {
     if (typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > 128) {
       throwIpcError('INVALID_PARAMS', 'sessionId must be a non-empty string');
     }
@@ -4483,7 +4484,7 @@ export function registerGhostIpc(): void {
 
   // 权威实测高回填(宿主 renderer 量高后调;可信应用层,意识面板碰不到):
   // 历史回放据此零动画首帧贴合。clamp 与供片同一对常量;行不存在静默跳过。
-  ipcMain.handle('ghosts:card:report-height', async (_event, callId: unknown, height: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.CARD_REPORT_HEIGHT, async (_event, callId: unknown, height: unknown) => {
     const parsed = parseCardHeightReport(callId, height);
     if (!parsed.ok) {
       throwIpcError('INVALID_PARAMS', parsed.error);
@@ -4501,19 +4502,19 @@ export function registerGhostIpc(): void {
   // 交互卡(v2)按钮点击回传(宿主受信桥 → 校验归属 → 唤醒意识 → 管子下发
   // card-action)。fire-and-forget:恒回 { ok } 给 renderer(reason 仅日志),
   // 派发器内部永不抛;意识随后自绘 card-update 换新卡走既有回放路径。
-  ipcMain.handle('ghosts:card:action', async (event, callId: unknown, actionId: unknown, prompt?: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.CARD_ACTION, async (event, callId: unknown, actionId: unknown, prompt?: unknown) => {
     assertTrustedAppRendererEvent(event);
     const r = await getGhostCardActionDispatcher().dispatch(callId, actionId, prompt);
     return { ok: r.ok };
   });
 
-  ipcMain.on('ghosts:list', (event) => {
+  ipcMain.on(IPC_CHANNELS.GHOSTS.LIST, (event) => {
     event.returnValue = { ghosts: availableGhosts().map(projectGhostForRenderer) };
   });
 
   // Plugin 页的已安装快捷行按最近成功使用排序。历史是主机 UI 状态，不写入
   // publisher-owned manifest；同步读保证列表首帧不先按扫描序再跳成最近序。
-  ipcMain.on('ghosts:recent-usage', (event) => {
+  ipcMain.on(IPC_CHANNELS.GHOSTS.RECENT_USAGE, (event) => {
     try {
       event.returnValue = { ids: loadGhostRecentIds() };
     } catch (error) {
@@ -4525,7 +4526,7 @@ export function registerGhostIpc(): void {
       event.returnValue = { ids: [] };
     }
   });
-  ipcMain.handle('ghosts:mark-used', (_event, id: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.MARK_USED, (_event, id: unknown) => {
     if (typeof id !== 'string' || !isValidGhostId(id)) {
       throwIpcError('INVALID_PARAMS', 'id must be a valid Ghost id');
     }
@@ -4553,7 +4554,7 @@ export function registerGhostIpc(): void {
   // 泄给导航到别处的 renderer / WebView / 插件页就是内容泄漏。
   // 这里用非抛出的判据而不是 assert:sendSync 里抛错会在 renderer 侧变成同步
   // 异常炸掉调用点,而未读只是提醒——不可信来源降级成空表即可(codex review)。
-  ipcMain.on('ghosts:unread', (event) => {
+  ipcMain.on(IPC_CHANNELS.GHOSTS.UNREAD, (event) => {
     event.returnValue = { entries: isTrustedAppRendererEvent(event) ? visibleGhostUnread() : [] };
   });
 
@@ -4561,7 +4562,7 @@ export function registerGhostIpc(): void {
   // 陈旧条目也该能被清掉,否则界面上会留一颗永远点不掉的点。
   // 来源闸同上:它会改写 owner 作用域的账本,不能让非可信 frame 拿任意合法
   // 插件 id 把别人的未读清掉(codex review)。
-  ipcMain.handle('ghosts:clear-unread', (event, id: unknown, seenAt: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.CLEAR_UNREAD, (event, id: unknown, seenAt: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof id !== 'string' || !isValidGhostId(id)) {
       throwIpcError('INVALID_PARAMS', 'id must be a valid Ghost id');
@@ -4584,7 +4585,7 @@ export function registerGhostIpc(): void {
   // 文件存在(不解密);key 有效性仍由运行期 networkSlot 出网 fail-fast 兜底。
   // 探针意外抛错不捕获——invoke reject 后 renderer 放行(fail-open),
   // 不把「查询失败」折叠成「未配置」误拦。
-  ipcMain.handle('ghosts:setup-status', (_event, id: unknown) =>
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.SETUP_STATUS, (_event, id: unknown) =>
     handleGhostSetupStatusRequest({
       id,
       getRuntimeManifest: (ghostId) => {
@@ -4634,7 +4635,7 @@ export function registerGhostIpc(): void {
   // 图片附件链路);视频附带指纹仓磁盘路径 + 体积(不复制字节,引渡侧落成与
   // 「从系统拖 .mp4 进聊天」同款的 file 类别路径附件)。失败统一 NOT_FOUND
   // (调用方 toast / 静默即可,无需区分原因)。
-  ipcMain.handle('ghosts:resolve-panel-media', async (_event, uri: unknown, purpose: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.RESOLVE_PANEL_MEDIA, async (_event, uri: unknown, purpose: unknown) => {
     if (typeof uri !== 'string') throwIpcError('INVALID_PARAMS', 'uri must be a string');
     const resolved = await resolveGhostPanelMedia(uri, purpose === 'menu' ? 'menu' : 'attach', {
       ghostCanRead: (hash, ghostId) => ledger.ghostCanRead(hash, ghostId),
@@ -4650,7 +4651,7 @@ export function registerGhostIpc(): void {
   // ── cindy 槽后端覆盖(解析表第②层;意识详情页「Cindy 能力」区)──
   // 读走 sendSync:详情页首帧要和其它信息同帧渲染(规则 7 无跳变),
   // 文件读取极小。写走 invoke,白名单在此校验(存储层不感知模型清单)。
-  ipcMain.on('ghosts:cindy-prefs', (event, ghostId: unknown) => {
+  ipcMain.on(IPC_CHANNELS.GHOSTS.CINDY_PREFS, (event, ghostId: unknown) => {
     const overrides = typeof ghostId === 'string' ? readGhostCindyOverrides(ghostId) : {};
     // 每类目一份 options + defaultModel(当前包含 image/video 两类;下拉按
     // 能力键的类目取对应清单)。defaultModel:目录默认选型的展示信息
@@ -4687,12 +4688,12 @@ export function registerGhostIpc(): void {
   // 读走 sendSync:切换范围时禁用清单要与卡片同帧渲染(规则 7 无跳变),
   // 文件读取极小且带 mtime 缓存。写走 invoke;写后广播 ghosts:changed
   // (renderer 复用同一订阅热更,多窗口同步)。
-  ipcMain.on('ghosts:workdir-prefs', (event, workdir: unknown) => {
+  ipcMain.on(IPC_CHANNELS.GHOSTS.WORKDIR_PREFS, (event, workdir: unknown) => {
     event.returnValue = {
       disabled: typeof workdir === 'string' ? listDisabledGhostIdsForWorkdir(workdir) : [],
     };
   });
-  ipcMain.handle('ghosts:workdir-prefs:set', (_event, workdir: unknown, ghostId: unknown, disabled: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.WORKDIR_PREFS_SET, (_event, workdir: unknown, ghostId: unknown, disabled: unknown) => {
     if (typeof workdir !== 'string' || workdir.trim().length === 0) {
       throwIpcError('INVALID_PARAMS', 'workdir must be a non-empty string');
     }
@@ -4716,7 +4717,7 @@ export function registerGhostIpc(): void {
     return { disabled: next };
   });
 
-  ipcMain.handle('ghosts:cindy-prefs:set', (_event, ghostId: unknown, capability: unknown, model: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.CINDY_PREFS_SET, (_event, ghostId: unknown, capability: unknown, model: unknown) => {
     if (typeof ghostId !== 'string' || ghostId.trim().length === 0) {
       throwIpcError('INVALID_PARAMS', 'ghostId must be a non-empty string');
     }
@@ -4759,12 +4760,12 @@ export function registerGhostIpc(): void {
   // permissionMode 只认 plan/acceptEdits/auto——bypassPermissions 协议上不存在)。
   // model/providerId 不在此处对目录校验:与 sessions:create 同一信任面
   // (可信 renderer 配置面),过期值由 errand runner 建会话时按 mapper 兜底。
-  ipcMain.on('ghosts:errand-prefs', (event, ghostId: unknown) => {
+  ipcMain.on(IPC_CHANNELS.GHOSTS.ERRAND_PREFS, (event, ghostId: unknown) => {
     event.returnValue = {
       config: typeof ghostId === 'string' ? readGhostErrandConfig(ghostId) : {},
     };
   });
-  ipcMain.handle('ghosts:errand-prefs:set', (_event, ghostId: unknown, config: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.ERRAND_PREFS_SET, (_event, ghostId: unknown, config: unknown) => {
     if (typeof ghostId !== 'string' || ghostId.trim().length === 0) {
       throwIpcError('INVALID_PARAMS', 'ghostId must be a non-empty string');
     }
@@ -4775,7 +4776,7 @@ export function registerGhostIpc(): void {
     return { config: saved };
   });
 
-  ipcMain.handle('ghosts:install', async (event, lizFilePath: unknown, opts: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.INSTALL, async (event, lizFilePath: unknown, opts: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof lizFilePath !== 'string' || lizFilePath.trim().length === 0) {
       throwIpcError('INVALID_PARAMS', 'lizFilePath must be a non-empty string');
@@ -4813,7 +4814,7 @@ export function registerGhostIpc(): void {
   // 原位更新(同 id 换版):先熄灯沙箱(新代码由下一次派活/面板重挂拉起),
   // 再换目录;唤醒状态与布局位置由 manager.update 保证延续。更新后走一次
   // 停靠(新版本首次声明面板时补位;已停靠则不动树)。
-  ipcMain.handle('ghosts:update', async (event, lizFilePath: unknown, opts: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.UPDATE, async (event, lizFilePath: unknown, opts: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof lizFilePath !== 'string' || lizFilePath.trim().length === 0) {
       throwIpcError('INVALID_PARAMS', 'lizFilePath must be a non-empty string');
@@ -4870,7 +4871,7 @@ export function registerGhostIpc(): void {
   // 设置页「装入意识…」第一步:系统文件选择框(按 .cindy 过滤),只选不装。
   // 后续 inspect → 确认弹窗 → install 由 renderer 编排(三个装入入口共用
   // "先验明正身再确认"的契约)。取消选择返回 { canceled: true },不算错误。
-  ipcMain.handle('ghosts:pick-file', async (event) => {
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.PICK_FILE, async (event) => {
     assertTrustedAppRendererEvent(event);
     const win = BrowserWindow.fromWebContents(event.sender);
     const opts = {
@@ -4884,13 +4885,13 @@ export function registerGhostIpc(): void {
 
   // 双击 .cindy 的待装路径:renderer 在 install-requested 信号或挂载时原子
   // 取走(取即清空),随后走与按钮/拖入完全相同的确认装入编排。
-  ipcMain.handle('ghosts:take-pending-install', (event) => {
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.TAKE_PENDING_INSTALL, (event) => {
     assertTrustedAppRendererEvent(event);
     return { filePath: takePendingCindyInstall() };
   });
 
   // 只验不装:读出 .cindy 的清单给确认弹窗展示,零副作用。
-  ipcMain.handle('ghosts:inspect', async (event, lizFilePath: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.INSPECT, async (event, lizFilePath: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof lizFilePath !== 'string' || lizFilePath.trim().length === 0) {
       throwIpcError('INVALID_PARAMS', 'lizFilePath must be a non-empty string');
@@ -4908,7 +4909,7 @@ export function registerGhostIpc(): void {
     };
   });
 
-  ipcMain.handle('ghosts:uninstall', async (_event, id: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.UNINSTALL, async (_event, id: unknown) => {
     if (typeof id !== 'string' || id.trim().length === 0) {
       throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
     }
@@ -4922,7 +4923,7 @@ export function registerGhostIpc(): void {
   // 快照是一致性快照(签名包逐文件 sha256 比对 statement;未签名包
   // 第二遍重读重哈希比对),导出与更新/卸载并发也不会产出混合版本
   // 的坏包。
-  ipcMain.handle('ghosts:export', async (event, id: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.EXPORT, async (event, id: unknown) => {
     assertTrustedAppRendererEvent(event);
     // 官方保留前缀在本地装入链路被拒,导出产物装不回——renderer 菜单
     // 只是隐藏,handler 才是真正的强制边界(评审 P1)。
@@ -4976,7 +4977,7 @@ export function registerGhostIpc(): void {
   // 内置意识状态(sendSync:设置页与已装清单同帧渲染,规则 7 无跳变)——
   // builtinIds 给列表分组/打"内置"标,enterpriseIds(其子集)把企业档单列
   // 一组,restorable 给"已抽离可恢复"灰态行。
-  ipcMain.on('ghosts:builtin-status', (event) => {
+  ipcMain.on(IPC_CHANNELS.GHOSTS.BUILTIN_STATUS, (event) => {
     try {
       event.returnValue = {
         builtinIds: listBuiltinSeedIds(builtinSeedRootDirs()).filter(
@@ -5000,7 +5001,7 @@ export function registerGhostIpc(): void {
   });
 
   // 恢复被抽离的内置意识:清墓碑 + 立即对账(串行链上排队,装回原位)。
-  ipcMain.handle('ghosts:restore-builtin', async (_event, id: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.RESTORE_BUILTIN, async (_event, id: unknown) => {
     if (typeof id !== 'string' || id.trim().length === 0) {
       throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
     }
@@ -5015,7 +5016,7 @@ export function registerGhostIpc(): void {
   });
 
   // 启用 / 停用(停用 = 面板休眠,布局位置保留;详见 GhostManager.setEnabled)。
-  ipcMain.handle('ghosts:set-enabled', async (event, id: unknown, enabled: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.SET_ENABLED, async (event, id: unknown, enabled: unknown) => {
     // 启用 Node 插件会获得本机进程能力；即使按钮在 Renderer 里，来源判定也
     // 必须由 Main 按真实顶层 frame 完成，不能信任页面自报。
     assertTrustedAppRendererEvent(event);
@@ -5052,10 +5053,10 @@ export function registerGhostIpc(): void {
   });
 
   // 运行时状态快照(面板错误接管态的首帧数据源;广播只覆盖后续变化)。
-  ipcMain.handle('ghosts:runtime-states', () => ({ states: runtime.listStates() }));
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.RUNTIME_STATES, () => ({ states: runtime.listStates() }));
 
   // 面板错误态的「重载意识」:清熔断记账 + 重新拉起沙箱。
-  ipcMain.handle('ghosts:reload', async (_event, id: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.GHOSTS.RELOAD, async (_event, id: unknown) => {
     if (typeof id !== 'string' || id.trim().length === 0) {
       throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
     }
@@ -5072,7 +5073,7 @@ export function registerGhostIpc(): void {
   // dev-only 运行时控制通道(QA:能起 / 能停 / 能崩 / 能看状态)。
   // packaged 版不注册;正式的按需拉起 / 闲置熄灯由上层自动策略负责。
   if (!app.isPackaged) {
-    ipcMain.handle('ghosts:dev-runtime', async (event, action: unknown, id: unknown, payload: unknown) => {
+    ipcMain.handle(IPC_CHANNELS.GHOSTS.DEV_RUNTIME, async (event, action: unknown, id: unknown, payload: unknown) => {
       assertTrustedAppRendererEvent(event);
       if (action === 'status') return { states: runtime.listStates() };
       if (typeof id !== 'string' || id.trim().length === 0) {
@@ -5258,7 +5259,7 @@ export function resolveGhostWebviewAttach(partition: unknown, src: unknown): Ins
 
 /** 播种进行中提示广播(renderer 显示/收起非阻塞胶囊;与退出 overlay 同款视觉)。 */
 function broadcastGhostProvisioning(active: boolean): void {
-  broadcastGhostWindowPush('ghosts:provisioning', { active });
+  broadcastGhostWindowPush(IPC_CHANNELS.GHOSTS.PROVISIONING, { active });
 }
 
 /**
@@ -5286,7 +5287,7 @@ function broadcastGhostsChanged(
   const visible = ghosts
     .filter((ghost) => isGhostAvailableForActiveSession(ghost.manifest.id))
     .map(projectGhostForRenderer);
-  broadcastGhostWindowPush('ghosts:changed', { ghosts: visible });
+  broadcastGhostWindowPush(IPC_CHANNELS.GHOSTS.CHANGED, { ghosts: visible });
   // 与 renderer 同一份可见清单喂给观察者(独立窗口 controller reconcile 等);
   // 观察者异常不拖垮广播本体。
   if (ghostsChangedObserver) {
@@ -5374,11 +5375,11 @@ export function refreshGhostLocalization(): void {
 
 /** Plugin 顶部快捷行的 host-owned MRU 快照，多窗口同步。 */
 function broadcastGhostRecentUsageChanged(ids: string[]): void {
-  broadcastGhostWindowPush('ghosts:recent-usage-changed', { ids });
+  broadcastGhostWindowPush(IPC_CHANNELS.GHOSTS.RECENT_USAGE_CHANGED, { ids });
 }
 
 /** 运行时状态广播(→ 意识面板的错误接管态:crashed / fused 原地显示)。 */
 function broadcastGhostRuntimeStates(): void {
   const states = runtimeSingleton?.listStates() ?? {};
-  broadcastGhostWindowPush('ghosts:runtime-changed', { states });
+  broadcastGhostWindowPush(IPC_CHANNELS.GHOSTS.RUNTIME_CHANGED, { states });
 }

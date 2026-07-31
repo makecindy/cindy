@@ -24,11 +24,12 @@ import { createLogger } from '../logger.js';
 import { throwIpcError, requireString, requireObject } from '../utils/ipcValidate.js';
 import { isRemoteWorkingDirAllowed } from '../device-link/remote-workdir-guard.js';
 import { runShellCommand, type CmdExecutionResult } from './builtins.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('desktop-commands:remote-cmd');
 
 /** desktop-cmd:run channel 常量(allowlist / 控制端 builtins 同名字符串消费)。 */
-export const DESKTOP_CMD_RUN_CHANNEL = 'desktop-cmd:run';
+export const DESKTOP_CMD_RUN_CHANNEL = IPC_CHANNELS.DESKTOP_CMD.RUN;
 
 /** 幂等保护:与 registerLearnIpc 同款 —— 可重试注册块内二次执行不 throw。 */
 let _registered = false;

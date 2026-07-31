@@ -50,6 +50,7 @@ import {
   setDataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
 import * as messageService from '@/lib/messageService';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const DEVICE_ID = 'dev-A';
 let n = 0;
@@ -92,8 +93,8 @@ function dbPlanToolMessage(sessionId: string, id: string, ts: string): Message {
 let remoteList: Message[] = [];
 let remoteListPromise: Promise<Message[]> | null = null;
 const invoke = vi.fn(async (_deviceId: string, channel: string, args: unknown[]) => {
-  if (channel === 'local-db:messages:list') return remoteListPromise ?? remoteList;
-  if (channel === 'local-db:sessions:get') {
+  if (channel === IPC_CHANNELS.LOCAL_DB.MESSAGES_LIST) return remoteListPromise ?? remoteList;
+  if (channel === IPC_CHANNELS.LOCAL_DB.SESSIONS_GET) {
     return {
       agentKind: 'cc',
       remoteHostId: null,
@@ -104,7 +105,7 @@ const invoke = vi.fn(async (_deviceId: string, channel: string, args: unknown[])
       totalCostUsd: 0,
     };
   }
-  if (channel === 'maker:input:get-projection' || channel === 'maker:input:clear-session') {
+  if (channel === IPC_CHANNELS.MAKER_INVOKE.INPUT_GET_PROJECTION || channel === IPC_CHANNELS.MAKER_INVOKE.INPUT_CLEAR_SESSION) {
     // clear-session 必须返回合法 projection:返回 null 会让 applyInputProjection 抛出
     // 未捕获拒绝(那条链在 clearSessionAfterGuard 里没有 catch),整轮 vitest 会因此失败。
     return emptyProjection(String(args[0]));
