@@ -850,6 +850,10 @@ function codexPermissionStrictnessRank(mode: PermissionMode): number {
 // (codex-rs/tui/src/chatwidget/plan_implementation.rs 的
 // PLAN_IMPLEMENTATION_CODING_MESSAGE), 模型对这句有训练分布上的既有理解。
 const PLAN_IMPLEMENTATION_MESSAGE = 'Implement the plan.';
+const CODEX_INHERITED_CAPABILITY_SELECTION = Symbol('codexInheritedCapabilitySelection');
+type CodexInternalSendOptions = SendOptions & {
+  [CODEX_INHERITED_CAPABILITY_SELECTION]?: string;
+};
 const SYSTEM_PLAN_REVIEW_DISMISSAL_REASONS = new Set([
   'no_listener_attached',
   'no_interaction_resolver',
@@ -3677,9 +3681,19 @@ export class CodexAgent extends BaseAgent {
      *   - 取消 / 无反馈的 deny (会话关闭 / 交互被 dismiss): 结束本轮循环, 下一条
      *     消息回到常规模式(想再规划需重新勾选), 不发起任何新 turn。
      */
-    async function runPlanReviewFlow(plan: string, turnId: string): Promise<void> {
+    async function runPlanReviewFlow(
+      plan: string,
+      turnId: string,
+      inheritedCapabilitySelectionText: string,
+    ): Promise<void> {
       planReviewSeq += 1;
       const requestId = `codex-plan-review:${turnId}:${planReviewSeq}`;
+      const planFollowUpSendOptions = (): CodexInternalSendOptions => ({
+        ...(activeTurnPermissionPolicy
+          ? { turnPermissionPolicy: activeTurnPermissionPolicy }
+          : {}),
+        [CODEX_INHERITED_CAPABILITY_SELECTION]: inheritedCapabilitySelectionText,
+      });
       const emitPlanFollowUpStartFailure = (kind: 'implementation' | 'revision', error: unknown): void => {
         log.warn(`plan ${kind} turn failed to start`, { error: String(error) });
         // If handle.send throws before it can emit its own terminal event (for
@@ -3719,9 +3733,7 @@ export class CodexAgent extends BaseAgent {
         try {
           await handle.send(
             { type: 'user', content: message },
-            activeTurnPermissionPolicy
-              ? { turnPermissionPolicy: activeTurnPermissionPolicy }
-              : undefined,
+            planFollowUpSendOptions(),
           );
         } catch (e) {
           emitPlanFollowUpStartFailure('implementation', e);
@@ -3746,9 +3758,7 @@ export class CodexAgent extends BaseAgent {
       try {
         await handle.send(
           { type: 'user', content: feedback },
-          activeTurnPermissionPolicy
-            ? { turnPermissionPolicy: activeTurnPermissionPolicy }
-            : undefined,
+          planFollowUpSendOptions(),
         );
       } catch (e) {
         planCycleActive = false;
@@ -4451,12 +4461,16 @@ export class CodexAgent extends BaseAgent {
       const activePluginId = capabilityRoute
         ? mcpToolPluginId(params)
         : undefined;
+      if (capabilityRoute && activePluginId === undefined) {
+        log.warn('Codex MCP invocation blocked because plugin provenance is unavailable', {
+          serverName: params.serverName,
+          capabilityId: capabilityRoute.capabilityId,
+        });
+        return { action: 'decline', content: null, _meta: null };
+      }
       const isRoutedSource =
         capabilityRoute != null &&
-        (
-          activePluginId === undefined ||
-          activePluginId === capabilityRoute.source.containerId
-        );
+        activePluginId === capabilityRoute.source.containerId;
       if (
         capabilityRoute &&
         isRoutedSource &&
@@ -5360,6 +5374,8 @@ export class CodexAgent extends BaseAgent {
       // 同一个墓碑也负责拦截该 turn 随后迟到的 item / reasoning / started 事件。
       if (completedTurnIds.has(turn.id)) return;
       completedTurnIds.add(turn.id);
+      const completedCapabilitySelectionText =
+        capabilitySelectionTextByTurnId.get(turn.id) ?? '';
       capabilitySelectionTextByTurnId.delete(turn.id);
       const suppressTerminalUi = terminalErroredTurnIds.has(turn.id);
       deferredTerminalTurnCompletions.delete(turn.id);
@@ -5535,7 +5551,11 @@ export class CodexAgent extends BaseAgent {
       proposedPlanText = null;
       if (completedTurnWasPlanMode && planCycleActive) {
         if (planForReview) {
-          void runPlanReviewFlow(planForReview, turn.id);
+          void runPlanReviewFlow(
+            planForReview,
+            turn.id,
+            completedCapabilitySelectionText,
+          );
         } else {
           log.debug('plan turn produced no proposed plan — plan cycle ends', { turnId: turn.id });
           planCycleActive = false;
@@ -6807,7 +6827,10 @@ export class CodexAgent extends BaseAgent {
         }
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
         activeTurnPermissionPolicy = sendOpts?.turnPermissionPolicy ?? null;
-        const capabilitySelectionText = userMessageText(message.content);
+        const capabilitySelectionText =
+          (sendOpts as CodexInternalSendOptions | undefined)?.[
+            CODEX_INHERITED_CAPABILITY_SELECTION
+          ] ?? userMessageText(message.content);
         assertCurrentHost('turn/start');
         resubscribeAfterTransportErrorIfNeeded();
         // 新 turn 总是携带当前 (可能已收紧的) 策略, 上一轮残留的延迟中断标记

@@ -733,12 +733,130 @@ describe('CodexAgent capability routing', () => {
     if (!explicitHandlers?.mcpServerElicitation) {
       throw new Error('expected mcpServerElicitation handler');
     }
+    // The routed runtime name alone is not enough: without app-server
+    // provenance we cannot distinguish the plugin overlay from another source.
+    await expect(
+      explicitHandlers.mcpServerElicitation(request('turn-explicit-feishu')),
+    ).resolves.toEqual({ action: 'decline', content: null, _meta: null });
+    explicitHandlers.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-explicit-feishu',
+      item: {
+        id: 'routed-feishu-call',
+        type: 'mcpToolCall',
+        server: 'cindy-routed-feishu-delegate',
+        tool: 'feishu_read_messages',
+        pluginId: 'feishu-delegate@personal',
+      },
+    });
     await expect(
       explicitHandlers.mcpServerElicitation(request('turn-explicit-feishu')),
     ).resolves.toEqual({ action: 'accept', content: null, _meta: null });
 
     await implicitHandle.close();
     await explicitHandle.close();
+  });
+
+  it('keeps explicit capability selection across internal plan follow-up turns', async () => {
+    const cases = [
+      {
+        label: 'implementation',
+        decision: { kind: 'plan_review', behavior: 'allow' } as const,
+      },
+      {
+        label: 'revision',
+        decision: {
+          kind: 'plan_review',
+          behavior: 'deny',
+          reason: '再补充消息范围',
+        } as const,
+      },
+    ];
+
+    for (const testCase of cases) {
+      let turnSeq = 0;
+      const agent = new CodexAgent(
+        createDeps(
+          {},
+          {
+            capabilityRouting,
+            getMcpToolApprovalPolicy: () => 'auto-approve',
+          },
+        ),
+      );
+      const host = installFakeHost(
+        agent,
+        (method) => {
+          if (method === Method.TurnStart) {
+            turnSeq += 1;
+            return { turn: { id: `${testCase.label}-turn-${turnSeq}` } };
+          }
+          return undefined;
+        },
+        { userAgent: 'mock-codex/0.145.0' },
+      );
+      const handle = await agent.startSession({
+        sessionId: `session-plan-${testCase.label}-capability-routing`,
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+        planMode: true,
+      });
+      handle.setInteractionResolver(async () => testCase.decision);
+      await handle.send({
+        type: 'user',
+        content: '用 $feishu-delegate:message-feishu-coworkers 制定查询计划',
+      });
+
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.mcpServerElicitation) {
+        throw new Error('expected mcpServerElicitation handler');
+      }
+      const planTurnId = `${testCase.label}-turn-1`;
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: planTurnId } });
+      handlers.itemCompleted?.({
+        threadId: 'start-thread-id',
+        turnId: planTurnId,
+        item: { type: 'plan', id: `${planTurnId}-plan`, text: '1. 查询消息' },
+      } as never);
+      handlers.turnCompleted?.({
+        threadId: 'start-thread-id',
+        turn: { id: planTurnId, status: 'completed' },
+      });
+
+      await vi.waitFor(() => {
+        expect(
+          host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+        ).toHaveLength(2);
+      });
+      const followUpTurnId = `${testCase.label}-turn-2`;
+      handlers.itemStarted?.({
+        threadId: 'start-thread-id',
+        turnId: followUpTurnId,
+        item: {
+          id: `${testCase.label}-routed-feishu-call`,
+          type: 'mcpToolCall',
+          server: 'cindy-routed-feishu-delegate',
+          tool: 'feishu_read_messages',
+          pluginId: 'feishu-delegate@personal',
+        },
+      });
+      await expect(
+        handlers.mcpServerElicitation({
+          threadId: 'start-thread-id',
+          turnId: followUpTurnId,
+          serverName: 'cindy-routed-feishu-delegate',
+          mode: 'form',
+          _meta: {
+            codex_approval_kind: 'mcp_tool_call',
+            tool_name: 'feishu_read_messages',
+          },
+          message: 'Allow tool call',
+          requestedSchema: {},
+        }),
+      ).resolves.toEqual({ action: 'accept', content: null, _meta: null });
+
+      await handle.close();
+    }
   });
 
   it('does not unlock a downstream MCP when an explicit steering message is rejected', async () => {
