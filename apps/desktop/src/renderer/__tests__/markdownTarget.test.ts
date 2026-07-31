@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   classifyInlineCodeTarget,
+  isAmbiguousPathShape,
   classifyMarkdownLinkTarget,
   looksLikeBareFileReference,
   splitLocalLineSuffix,
@@ -238,5 +239,26 @@ describe('classifyInlineCodeTarget', () => {
     expect(classifyInlineCodeTarget('useState')).toBeNull();
     expect(classifyInlineCodeTarget('npm run build')).toBeNull();
     expect(classifyInlineCodeTarget('https://example.com/a.ts')).toBeNull();
+  });
+});
+
+describe('isAmbiguousPathShape(远程会话 unknown 的乐观点亮门槛)', () => {
+  // 与移动端 chatPathCandidate 的 ambiguousShape 同一判据,两端需同步。
+  it('形状明确是路径 → 不歧义(断链仍可乐观点亮)', () => {
+    for (const p of ['/Users/me/a.png', 'C:\\proj\\a.ts', 'src/App.tsx', './docs/readme.md']) {
+      expect(isAmbiguousPathShape(p), p).toBe(false);
+    }
+  });
+
+  it('无分隔符裸名 → 歧义(与属性访问同形)', () => {
+    for (const p of ['package.json', 'array.map', 'console.log', 'Date.now', '1.2']) {
+      expect(isAmbiguousPathShape(p), p).toBe(true);
+    }
+  });
+
+  it('有分隔符但无扩展名 → 歧义(src/components 与 and/or 词法同形)', () => {
+    for (const p of ['src/components', 'and/or', 'n/a', 'read/write', 'text/plain']) {
+      expect(isAmbiguousPathShape(p), p).toBe(true);
+    }
   });
 });

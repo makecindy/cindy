@@ -154,6 +154,26 @@ function classifyLocalCandidate(
   };
 }
 
+/**
+ * 「形状上无法与普通代码 / 散文区分」的歧义路径引用(与移动端
+ * chatPathCandidate 的 `ambiguousShape` 同一判据,两端需同步):
+ *   - 无分隔符裸名:`package.json` 与 `array.map` / `Date.now` 结构完全同形
+ *     (`.map` / `.log` / `.now` 既是真实扩展名也是方法名);
+ *   - 有分隔符但无扩展名:`src/components` 与 `and/or` / `n/a` 结构完全同形。
+ *
+ * 用途:**远程会话**里 `fs:stat` 回 `unknown`(链路断 / 超时)时是否允许乐观点亮。
+ * 形状明确是路径的(绝对路径 / 分隔符 + 扩展名,即 looksLikeFilePath)照旧乐观点亮,
+ * 不因断链把整条消息的 chip 全灭;歧义形状必须等远端明确回 file / directory,否则
+ * 链路一抖,`array.map`、`and/or` 这类普通行内 code 就会被展示成可点文件、点了必失败
+ * (DESIGN.md §14.5 规则 5;PR #1144 review 实捉桌面侧漏了这道门槛)。
+ *
+ * 本机会话不需要这道门槛:那边走 resolveLocalPathSmart 的真实存在性检查,
+ * 解析不到一律纯文本,没有「无法判定」这个中间态。
+ */
+export function isAmbiguousPathShape(href: string): boolean {
+  return !looksLikeFilePath(href);
+}
+
 export function classifyMarkdownLinkTarget(
   href: string | undefined,
   files?: readonly KnownLocalFileRef[],

@@ -77,6 +77,36 @@ describe('聊天正文的可点性信号(DESIGN.md §14.5)', () => {
       .toMatch(/delete safeProps\[BARE_PATH_ATTR\]/);
   });
 
+  it('规则⑤:远程会话的 unknown 只对非歧义形状乐观点亮(sync + async 两条分支都要有门槛)', () => {
+    const src = stripComments(read(CHAT_BODY_FILES[0]));
+    // 远程会话 fs:stat 回 unknown 时,歧义形状(裸名 `array.map`、分隔符无扩展
+    // `and/or`)不得乐观升级成 resolved-local —— 否则加了常显下划线后,普通行内 code
+    // 会被展示成可点文件、点了必失败(PR #1144 review 实捉桌面侧漏了这道门槛)。
+    const gates = [...src.matchAll(/isAmbiguousPathShape\(/g)];
+    expect(gates.length, 'sync 与 async 两条远程分支都要过 isAmbiguousPathShape')
+      .toBeGreaterThanOrEqual(2);
+    // unknown 不得再无条件出现在乐观点亮的条件里。
+    expect(src, "unknown 仍被无条件当成可点亮")
+      .not.toMatch(/verdict === 'file' \|\| verdict === 'unknown' \|\| verdict === 'directory'/);
+  });
+
+  it('规则①:可点的引用 chip 带下划线,不可点的静态 chip 不带(判据单点)', () => {
+    const src = read('src/renderer/components/chat/InlineReferenceChip.tsx');
+    // 会话 / 项目深链 chip 复用本组件;改前它只有底色 + 边框 + pointer,没有下划线,
+    // 是「可点但无下划线」的反例。判据只能是 interactive 一处,cursor 与下划线同源。
+    const interactiveLine = src
+      .split('\n')
+      .find((l) => l.includes('interactive &&') && l.includes('cursor-pointer'));
+    expect(interactiveLine, '未找到 interactive 的样式分支').toBeDefined();
+    expect(interactiveLine!, '可点 chip 缺常显下划线').toMatch(/underline/);
+    // underline 只能出现在 interactive 那一行 —— 否则就是脱离判据无条件给出,
+    // 静态 chip 也会跟着变成「有下划线却点不动」。
+    const underlineLines = stripComments(src)
+      .split('\n')
+      .filter((l) => l.includes('underline'));
+    expect(underlineLines, '下划线出现在 interactive 之外的地方').toEqual([interactiveLine!]);
+  });
+
   it('规则①:用户消息气泡里的链接同样常显下划线,不靠 hover', () => {
     for (const rel of [CHAT_BODY_FILES[1], CHAT_BODY_FILES[2]]) {
       const code = stripComments(read(rel));

@@ -313,8 +313,10 @@ function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): str
       color: ${textColor};
       font-size: inherit;
     }
+    /* 可点的 http(s) 链接:**只有下划线**,颜色继承上下文(DESIGN.md §14.5 —— 可点态
+       相对不可点态只多一条横线)。刻意不写 color:表头等非正文色上下文里写死 textColor
+       会让链接除下划线之外还变色(PR #1144 review 实捉)。 */
     a {
-      color: ${textColor};
       text-decoration: underline;
     }
     img {

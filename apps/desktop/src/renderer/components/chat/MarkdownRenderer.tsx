@@ -51,6 +51,7 @@ import {
 import {
   classifyInlineCodeTarget,
   classifyMarkdownLinkTarget,
+  isAmbiguousPathShape,
   looksLikeBareFileReference,
   splitLocalLineSuffix,
   type MarkdownLocalKind,
@@ -1178,14 +1179,19 @@ function useResolvedMarkdownTarget(
       const absPath = resolveLocalPath(candidate.href, workingDir);
       if (!absPath) return null;
       const verdict = peekRemotePathVerdict(remoteOrigin, workingDir, absPath);
-      if (verdict === 'file' || verdict === 'unknown' || verdict === 'directory') {
+      // unknown(链路断 / stat 异常)只对**形状明确是路径**的引用乐观点亮。歧义形状
+      // (裸名 `array.map`、分隔符无扩展 `and/or`)必须等远端明确回 file / directory,
+      // 否则链路一抖,普通行内 code 会被展示成带下划线的可点文件、点了必失败
+      // (DESIGN.md §14.5 规则 5;移动端同款门槛在 ChatPathChipSpan)。
+      const optimisticOk = verdict === 'unknown' && !isAmbiguousPathShape(candidate.href);
+      if (verdict === 'file' || verdict === 'directory' || optimisticOk) {
         return resolvedLocalFromResult(candidate, {
           status: 'unique',
           absPath,
           kind: verdict === 'directory' ? 'directory' : 'file',
         });
       }
-      return null; // nonfile → 纯文本;未验证 → 异步 effect 验证后点亮
+      return null; // nonfile / 歧义形状未确认 → 纯文本;未验证 → 异步 effect 验证后点亮
     }
     const cached = peekResolveLocalPathSmart(candidate.href, workingDir);
     return cached ? resolvedLocalFromResult(candidate, cached) : null;
@@ -1206,6 +1212,8 @@ function useResolvedMarkdownTarget(
       let cancelled = false;
       void verifyRemotePathCached(remoteOrigin, workingDir, absPath).then((verdict) => {
         if (cancelled || verdict === 'nonfile') return;
+        // 与 sync 分支同一道门槛(见那边的说明):歧义形状不吃 unknown 的乐观点亮。
+        if (verdict === 'unknown' && isAmbiguousPathShape(candidate.href)) return;
         setAsyncResolved(
           resolvedLocalFromResult(candidate, {
             status: 'unique',

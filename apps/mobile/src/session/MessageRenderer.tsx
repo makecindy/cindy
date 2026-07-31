@@ -5982,11 +5982,13 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     lineHeight: lineHeight.caption,
   },
   markdownBody: { gap: 10 },
-  // 外链 / 会话深链等一切可点行内元素:正文色 + 常显下划线,**不加粗、不换色**
-  // (DESIGN.md §14.5;GitHub 的 `.markdown-body a` 同样只是 text-decoration,
-  // 没有 font-weight)。color 显式写出是为了不被外层压暗样式带走,值就是正文色本身。
+  // 外链 / 会话深链等一切可点行内元素:**只有下划线**,不加粗、不换色、不换字体
+  // (DESIGN.md §14.5;GitHub 的 `.markdown-body a` 同样只有 text-decoration)。
+  //
+  // 刻意**不写 color**:必须继承所在上下文的颜色。表头(markdownTableHeaderCell 用
+  // textSecondary)、引用块等非正文色上下文里,写死 textPrimary 会让链接相对周围的
+  // 不可点文本**除下划线之外还变色**,违反「可点态只多一条横线」(PR #1144 review 实捉)。
   markdownLink: {
-    color: colors.textPrimary,
     textDecorationLine: 'underline',
   },
   // 会话深链 chip(非 selectable 原生 Text 路径):嵌套 Text 只支持背景色不支持
