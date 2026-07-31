@@ -50,6 +50,28 @@ describe('overloadRetryNotice', () => {
     expect(overloadRetryNotice({})).toBeNull();
     expect(overloadRetryNotice({ message: 42 })).toBeNull();
   });
+
+  it('结构化 codexErrorInfo 命中时不依赖文案措辞', () => {
+    // codex 改了过载文案后, 只认文案会让整段退避窗口在渠道侧一个字都不动 —— 也就是
+    // 本文件开头描述的那个"卡死了"观感复发。
+    expect(
+      overloadRetryNotice({
+        message: 'The upstream declined this request. (auto-retry 2/4)',
+        codexErrorInfo: 'serverOverloaded',
+      }),
+    ).toBe('模型服务繁忙，正在自动重试（2/4）…');
+    // 只有 tag、没有 message 时也要出提示(空 payload 守卫不能把它挡掉)。
+    expect(overloadRetryNotice({ codexErrorInfo: 'serverOverloaded' })).toBe(
+      '模型服务繁忙，正在自动重试…',
+    );
+  });
+
+  it('非过载的结构化 tag 保持静默', () => {
+    expect(
+      overloadRetryNotice({ message: 'stream gone', codexErrorInfo: 'responseStreamDisconnected' }),
+    ).toBeNull();
+    expect(overloadRetryNotice({ message: 'boom', codexErrorInfo: 'usageLimitExceeded' })).toBeNull();
+  });
 });
 
 describe('overloadFailureNotice', () => {
@@ -79,6 +101,21 @@ describe('overloadFailureNotice', () => {
     expect(overloadFailureNotice('process exited with code 1')).toBeNull();
     expect(overloadFailureNotice('Request timed out', 504)).toBeNull();
   });
+
+  it('结构化 codexErrorInfo 命中时不依赖文案措辞', () => {
+    // 只认文案时, codex 改措辞会让这条终态说明退回裸英文原文推给渠道用户。
+    const notice = overloadFailureNotice(
+      'The upstream declined this request.',
+      undefined,
+      'serverOverloaded',
+    );
+    expect(notice).toContain('模型服务繁忙');
+    expect(notice).toContain('在这里重发这条消息');
+  });
+
+  it('非过载的结构化 tag 不改写原文', () => {
+    expect(overloadFailureNotice('stream gone', undefined, 'responseStreamDisconnected')).toBeNull();
+  });
 });
 
 describe('terminalErrorText', () => {
@@ -98,6 +135,14 @@ describe('terminalErrorText', () => {
     expect(terminalErrorText({ message: 'SDK API request failed', errorStatus: 529 })).toContain(
       '模型服务繁忙',
     );
+  });
+
+  it('结构化 codexErrorInfo 从 data 里被取出并透传(三条终态路径共用)', () => {
+    const text = terminalErrorText({
+      message: 'The upstream declined this request.',
+      codexErrorInfo: 'serverOverloaded',
+    });
+    expect(text).toContain('模型服务繁忙');
   });
 
   it('非过载终态沿用上游原文', () => {

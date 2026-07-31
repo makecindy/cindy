@@ -9,8 +9,8 @@
  *   - 协议帧: 全部经 @cindy/slack-hook-protocol —— 出帧走构造器 + serialize, 入帧
  *     一律先过 parseHookMessage, 坏帧记日志丢弃(规则 9)。
  *   - 生命周期: open -> 发 hello -> 等 welcome(此后状态才算 connected) ->
- *     心跳(定期 ping + 空闲看门狗); 断开按指数退避重连(1s -> 30s 封顶),
- *     welcome 到达后退避归零。
+ *     心跳(定期 ping + 空闲看门狗); 断开按指数退避重连(1s -> 30s 封顶, 带向下
+ *     抖动), welcome 到达后退避归零。
  *   - ping 自动回 pong 在本层处理(纯协议行为); 其余消息透传给上层
  *     (manager 决定业务响应, 如 dispatch 的 stub ack)。
  */
@@ -56,6 +56,8 @@ export interface HookTransportOpts {
   onStatus: (status: HookTransportStatus, lastError: string | null) => void;
   /** 测试注入重连时间参数；生产缺省 1s → 30s。 */
   timing?: { backoffBaseMs?: number; backoffMaxMs?: number; standbyRetryMs?: number };
+  /** 测试注入退避抖动的随机源（返回 [0,1)）；生产缺省 Math.random。 */
+  random?: () => number;
   log: { info(msg: string): void; warn(msg: string): void; debug?(msg: string): void };
 }
 
@@ -66,6 +68,41 @@ export interface HookTransport {
 
 const BACKOFF_BASE_MS = 1000;
 const BACKOFF_MAX_MS = 30_000;
+/**
+ * 退避抖动下界：实际延迟取 [BACKOFF_JITTER_MIN_RATIO, 1.0] × 退避值。
+ *
+ * 上端闭合是实现事实，不是笔误：注入的 random() 契约为 [0,1)、取不到 1，但
+ * computeBackoffDelayMs 末尾的 Math.round 会把逼近满值的比例舍入上去，因此实际
+ * 延迟可以恰好等于退避值本身。
+ *
+ * 与 device-link 同口径（`packages/device-link/src/client.ts` 的 scheduleReconnect）。
+ * hook-server 是所有 desktop 共连的中心服务，而退避序列本身是确定性的
+ * （1s/2s/4s…30s），一旦服务重启或中间网络恢复，全端客户端会齐步撞上来。向下
+ * 抖动把这批重连打散开。
+ *
+ * 取向下（而非双向）抖动，是为了让 backoffMaxMs 仍然是真实上限——闭区间的上端
+ * 恰好是 backoffMaxMs，opts 承诺的「30s 封顶」不会被抖动抬高。
+ */
+const BACKOFF_JITTER_MIN_RATIO = 0.7;
+
+/**
+ * 计算第 `attempt` 次重连的退避延迟：指数增长 → maxMs 封顶 → 向下抖动。
+ *
+ * 抽成纯函数是为了让抖动边界能被直接断言（免 socket、免 timer）；`random` 由调用方
+ * 注入，生产传 Math.random。
+ */
+export function computeBackoffDelayMs(
+  attempt: number,
+  baseMs: number,
+  maxMs: number,
+  random: () => number,
+): number {
+  const capped = Math.min(baseMs * 2 ** attempt, maxMs);
+  return Math.round(
+    capped * (BACKOFF_JITTER_MIN_RATIO + random() * (1 - BACKOFF_JITTER_MIN_RATIO)),
+  );
+}
+
 /** 服务端 first-wins：同账号同 deviceId 的后续 hello 被此 close code 拒绝。 */
 const DUPLICATE_DEVICE_CLOSE_CODE = 4000;
 const DUPLICATE_DEVICE_CLOSE_REASON = 'device already connected';
@@ -83,6 +120,7 @@ export function createHookTransport(opts: HookTransportOpts): HookTransport {
   const backoffBaseMs = opts.timing?.backoffBaseMs ?? BACKOFF_BASE_MS;
   const backoffMaxMs = opts.timing?.backoffMaxMs ?? BACKOFF_MAX_MS;
   const standbyRetryMs = opts.timing?.standbyRetryMs ?? STANDBY_RETRY_MS;
+  const random = opts.random ?? Math.random;
 
   let ws: WebSocket | null = null;
   let stopped = false;
@@ -122,8 +160,10 @@ export function createHookTransport(opts: HookTransportOpts): HookTransport {
 
   function scheduleRetry(delayOverrideMs?: number): void {
     if (stopped || retryTimer) return;
+    // 显式周期（standby 低频探测）不抖动：它表达的是「多久探一次首实例是否退出」，
+    // 是一个产品语义上的固定节奏，不是用来防重连风暴的退避。
     const delay =
-      delayOverrideMs ?? Math.min(backoffBaseMs * 2 ** attempt, backoffMaxMs);
+      delayOverrideMs ?? computeBackoffDelayMs(attempt, backoffBaseMs, backoffMaxMs, random);
     attempt += 1;
     retryTimer = setTimeout(() => {
       retryTimer = null;

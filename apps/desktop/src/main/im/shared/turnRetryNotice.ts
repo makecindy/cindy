@@ -38,11 +38,16 @@ import { parseOverloadError, parseOverloadRetryProgress } from '@cindy/maker-cor
  */
 export function overloadRetryNotice(data: unknown): string | null {
   if (!data || typeof data !== 'object') return null;
-  const record = data as { message?: unknown; errorStatus?: unknown };
+  const record = data as { message?: unknown; errorStatus?: unknown; codexErrorInfo?: unknown };
   const message = typeof record.message === 'string' ? record.message : '';
   const errorStatus = typeof record.errorStatus === 'number' ? record.errorStatus : undefined;
-  if (message.length === 0 && errorStatus === undefined) return null;
-  if (parseOverloadError(message, errorStatus) === null) return null;
+  // 结构化 tag 一并取: codex 改过载文案后, 只认文案会让整段退避窗口(约 22-38s)在
+  // 渠道侧重新变回"一个字都不动", 也就是本文件开头描述的那个"卡死了"观感复发。
+  const codexErrorInfo =
+    typeof record.codexErrorInfo === 'string' ? record.codexErrorInfo : undefined;
+  // 空 payload 守卫也要算上 tag, 否则「无 message + 只有结构化 tag」会被提前挡掉。
+  if (message.length === 0 && errorStatus === undefined && codexErrorInfo === undefined) return null;
+  if (parseOverloadError(message, errorStatus, codexErrorInfo) === null) return null;
   const progress = parseOverloadRetryProgress(message);
   // 次数缺省(上游没带 attempt/max_retries)时不编造分母, 只说明正在重试。
   return progress
@@ -58,8 +63,12 @@ export function overloadRetryNotice(data: unknown): string | null {
  * 键, 那一轮已经收口)。所以这里必须把"在原渠道重发这条消息"说出来 —— 否则用户
  * 在桌面端点了重试、任务确实在跑, 但渠道那条消息永远停在失败上, 只能干等。
  */
-export function overloadFailureNotice(message: string, errorStatus?: number): string | null {
-  if (parseOverloadError(message, errorStatus) === null) return null;
+export function overloadFailureNotice(
+  message: string,
+  errorStatus?: number,
+  codexErrorInfo?: string,
+): string | null {
+  if (parseOverloadError(message, errorStatus, codexErrorInfo) === null) return null;
   // 刻意**不**声称"自动重试多次后仍未成功": 走到终态的原因不止预算耗尽, 还包括
   // "本 turn 已有产出所以不重投"(maker-core 的 currentTurnProducedOutput 守卫)与接管
   // 条件不满足, 那些情况下一次自动重试都没发生过(review #844 codex P1)。真重试过时
@@ -85,7 +94,7 @@ export function overloadFailureNotice(message: string, errorStatus?: number): st
 export function terminalErrorText(data: unknown): string {
   const record =
     data && typeof data === 'object'
-      ? (data as { message?: unknown; errorStatus?: unknown })
+      ? (data as { message?: unknown; errorStatus?: unknown; codexErrorInfo?: unknown })
       : null;
   // 判**值**而不是判 key 是否存在: 上游 payload 带一个 message: undefined 时, 'in' 判定
   // 会成立并 String(undefined) 出字面量 "undefined" 给用户看, 同时让过载文案映射取决于这个
@@ -95,5 +104,7 @@ export function terminalErrorText(data: unknown): string {
       ? String(record.message)
       : String(data);
   const errorStatus = typeof record?.errorStatus === 'number' ? record.errorStatus : undefined;
-  return overloadFailureNotice(message, errorStatus) ?? message;
+  const codexErrorInfo =
+    typeof record?.codexErrorInfo === 'string' ? record.codexErrorInfo : undefined;
+  return overloadFailureNotice(message, errorStatus, codexErrorInfo) ?? message;
 }

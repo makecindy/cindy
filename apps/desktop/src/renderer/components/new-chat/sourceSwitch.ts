@@ -11,43 +11,39 @@
 import type { Effort } from '@/lib/userPreferences.types';
 import type { ProviderModelChoice } from '@/state/providerModelMemory';
 import {
+  CATEGORY_ORDER,
+  CHAT_VENDOR_CATEGORY_ORDER,
+  categorize,
+  chatEligibleSourcesForModel,
+  classifyModel,
   connectedProvidersForAgent,
-  providerOffersModel,
-  sourcesForModel,
+  getModel,
+  groupModelsForDisplay,
+  groupOf,
+  isAgentSelectableModel,
+  isChatEligible,
   type AgentKind,
+  type DisplayModel,
+  type ModelCategory,
   type ProviderView,
 } from '@cindy/model-providers';
-import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from '../../../shared/subscriptionModels';
 
-// 仅用于二级菜单分组展示, 不参与持久化或 onModelChange 数据流。
-// 对话厂商组(anthropic..china)在前;非对话类型组(image/audio/video/embedding/other)在后——
-// 后者收纳网关多出的图像 / 语音 / 视频 / 向量等模型(它们默认关、不能当 agent 用,仅分类展示)。
-export type ModelCategory =
-  | 'anthropic'
-  | 'gpt'
-  | 'gpt-budget'
-  | 'grok'
-  | 'google'
-  | 'china'
-  | 'image'
-  | 'audio'
-  | 'video'
-  | 'embedding'
-  | 'other';
-
-export const CATEGORY_ORDER: ModelCategory[] = [
-  'anthropic',
-  'gpt-budget',
-  'gpt',
-  'grok',
-  'google',
-  'china',
-  'image',
-  'audio',
-  'video',
-  'embedding',
-  'other',
-];
+/**
+ * 厂商分类 / 分组展示 / chat 准入判定的单点权威实现已收口到共享包
+ * `@cindy/model-providers`(issue #882:mode 优先分类,id 正则只作兜底)。
+ * 这里 re-export 保持 renderer 既有 import 路径(ModelSelector / ChatInput 等)不变,
+ * 不再维护第二份 categorize/groupOf 拷贝——两份拷贝曾经各自修 bug、互相漂移。
+ */
+export {
+  CATEGORY_ORDER,
+  categorize,
+  classifyModel,
+  groupModelsForDisplay,
+  groupOf,
+  isChatEligible,
+  type DisplayModel,
+  type ModelCategory,
+};
 
 /**
  * 厂商分组小标题的 i18n key 表(规则 18)。多处复用:ModelSelector 右栏分组标题、
@@ -62,85 +58,26 @@ export const CATEGORY_LABEL_KEY: Record<ModelCategory, string> = {
   google: 'newChat.modelSelector.category.google',
   china: 'newChat.modelSelector.category.china',
   image: 'newChat.modelSelector.category.image',
-  audio: 'newChat.modelSelector.category.audio',
   video: 'newChat.modelSelector.category.video',
+  tts: 'newChat.modelSelector.category.tts',
+  stt: 'newChat.modelSelector.category.stt',
+  realtime: 'newChat.modelSelector.category.realtime',
   embedding: 'newChat.modelSelector.category.embedding',
+  compression: 'newChat.modelSelector.category.compression',
   other: 'newChat.modelSelector.category.other',
 };
 
-// 按 model.id 前缀粗分类: claude-* → Anthropic, gpt-* → GPT, codex/* → 折扣GPT (gateway 低价路由),
-// gemini-* → Google, 其余 (moonshotai/qwen/glm/...) 一律落到 China。新增国产模型不需要改这里。
-export function categorize(id: string): ModelCategory {
-  if (id.startsWith('claude-')) return 'anthropic';
-  // 非对话类型(向量/图像/音频语音/视频)必须在通用 gpt- / gemini- 厂商规则**之前**判定,
-  // 否则 gpt-image-2 / gemini-3-pro-image / gpt-4o-transcribe 会被误归到 gpt / google。
-  // 这些是网关多返回的、不能当 agent 用的模型,默认关、仅按类型归类展示。
-  if (/embedding/.test(id) || id.startsWith('voyage/')) return 'embedding';
-  if (/image/.test(id)) return 'image';
-  if (
-    id.startsWith('elevenlabs/') ||
-    id.startsWith('gpt-4o-realtime') ||
-    /transcribe|audio|speech|tts|whisper|asr|gemini-omni/.test(id)
-  )
-    return 'audio';
-  if (/seedance|happyhorse|video|-t2v|-i2v|-r2v/.test(id)) return 'video';
-  if (id === 'ai-gateway-doc') return 'other';
-  // 订阅直连 GPT(chatgpt/ 前缀,经 responses-bridge)与网关 gpt- 同归 GPT 组;前缀常量走
-  // shared/subscriptionModels 单一入口,防与路由 / 记账 gate 漂移。
-  if (id.startsWith('gpt-') || id.startsWith(CHATGPT_MODEL_PREFIX)) return 'gpt';
-  if (id.startsWith('codex/')) return 'gpt-budget';
-  if (id.startsWith(XAI_MODEL_PREFIX) || id.startsWith('grok')) return 'grok';
-  if (id.startsWith('gemini-')) return 'google';
-  return 'china';
-}
-
-const KNOWN_CATEGORIES = new Set<string>(CATEGORY_ORDER);
-
 /**
- * 决定一个模型的厂商分组 —— **数据优先**:目录里带了合法 `group` 就用它,
- * 否则回退到 id 前缀归类(categorize)。未知的 group 值(渲染层没有对应标签)也回退,
- * 避免出现没有 i18n 标签的空分组。
+ * resolveSourceSwitch 的最小模型形状:id + 该模型支持的 effort 档,外加可选的
+ * `group`/`mode`——reconcile 候选过滤要靠 classifyModel 做 mode 优先判定
+ * (issue #882 review:只传 id 时 mode 信号会丢,可能把非聊天模型选成 reconcile
+ * 目标,见下方 resolveSourceSwitch 用法),不传时行为与历史一致(回退 id 正则)。
  */
-export function groupOf(model: { id: string; group?: string }): ModelCategory {
-  if (model.group && KNOWN_CATEGORIES.has(model.group)) return model.group as ModelCategory;
-  return categorize(model.id);
-}
-
-/** groupModelsForDisplay 的最小模型形状(只需 id + 可选 group / sortOrder)。 */
-export interface DisplayModel {
-  id: string;
-  group?: string;
-  sortOrder?: number;
-}
-
-/**
- * 选择器右栏的「分组 + 排序」纯逻辑 —— **完全由目录数据驱动**:
- *   1. 先按 `sortOrder` 升序稳定排序(缺省排末尾,相等时保持入参顺序);
- *   2. 按 `groupOf`(group 字段优先 / 前缀兜底)分桶;
- *   3. 桶的先后 = 桶内首个模型在已排序列表里的出现序(= 该桶最小 sortOrder)。
- * 返回有序的 { category, models } 列表;不依赖写死的 CATEGORY_ORDER 决定展示顺序。
- */
-export function groupModelsForDisplay<T extends DisplayModel>(
-  models: readonly T[],
-): Array<{ category: ModelCategory; models: T[] }> {
-  const sorted = [...models].sort(
-    (a, b) =>
-      (a.sortOrder ?? Number.POSITIVE_INFINITY) - (b.sortOrder ?? Number.POSITIVE_INFINITY),
-  );
-  const map = new Map<ModelCategory, T[]>();
-  for (const m of sorted) {
-    const cat = groupOf(m);
-    const list = map.get(cat) ?? [];
-    list.push(m);
-    map.set(cat, list);
-  }
-  return [...map.entries()].map(([category, list]) => ({ category, models: list }));
-}
-
-/** resolveSourceSwitch 的最小模型形状(只需 id + 该模型支持的 effort 档)。 */
 export interface SwitchModel {
   id: string;
   efforts: readonly Effort[];
+  group?: string;
+  mode?: string;
 }
 
 /**
@@ -159,6 +96,27 @@ export interface SwitchModel {
  * 返回的 reconciledModelId 仅在「模型确实变化」时给出(等于当前模型视为不变,返 undefined);
  * reconciledEffort 仅在能从记忆恢复时给出。两者都为空 = 调用方保持当前 model/effort。
  */
+/**
+ * 目标 provider 上**这个具体条目**是否是聊天模型(issue #882 第 3 点,2026-07
+ * review)。resolveSourceSwitch 决定的是"切到 provider 之后用哪个 model",必须验
+ * provider 自己的那份数据——`visibleModels`(跨 provider 的并集)里的同 id 条目可能
+ * 来自另一个 provider 的聊天分类,和目标 provider 自己的这份 mode 可能不一致;
+ * providerOffersModel 同理只看 id 是否存在,不看 mode。两者都不能替代这个检查。
+ */
+function isModelChatEligibleOnProvider(
+  provider: ProviderView,
+  modelId: string,
+  agent: AgentKind,
+): boolean {
+  const model = getModel(provider, modelId, agent);
+  // provider-aware 谓词:用户自定义供应商显式配置的模型带未知 group,id 撞上能力
+  // 启发式时不能被误杀(2026-07 review 第 25 轮)。
+  return (
+    model !== undefined &&
+    isAgentSelectableModel(model, { userProvider: provider.source === 'user' })
+  );
+}
+
 export function resolveSourceSwitch(args: {
   provider: ProviderView;
   agent: AgentKind;
@@ -174,7 +132,7 @@ export function resolveSourceSwitch(args: {
 
   const memUsable =
     !!remembered &&
-    providerOffersModel(provider, remembered.model, agent) &&
+    isModelChatEligibleOnProvider(provider, remembered.model, agent) &&
     visibleModels.some((m) => m.id === remembered.model) &&
     isVisible(remembered.model);
 
@@ -182,12 +140,19 @@ export function resolveSourceSwitch(args: {
     targetModel = remembered.model;
     const tm = visibleModels.find((m) => m.id === remembered.model);
     if (tm && tm.efforts.includes(remembered.effort)) targetEffort = remembered.effort;
-  } else if (currentModelId && !providerOffersModel(provider, currentModelId, agent)) {
-    const ordered = CATEGORY_ORDER.filter(
-      (c) => c !== 'image' && c !== 'audio' && c !== 'video' && c !== 'embedding' && c !== 'other',
-    ).flatMap((c) => visibleModels.filter((m) => categorize(m.id) === c));
+  } else if (
+    currentModelId &&
+    !isModelChatEligibleOnProvider(provider, currentModelId, agent)
+  ) {
+    // 只在聊天厂商组里找候选(issue #882):非聊天类型(image/video/tts/stt/realtime/
+    // embedding/compression/other)不该被 reconcile 选中。用 classifyModel(mode 优先,
+    // 无 mode 才回退 id 正则)而不是纯 id 正则的 categorize——否则 mode 标为非聊天、
+    // 但 id 落进 categorize 兜底组(如 china)的模型会绕过准入被选中(2026-07 review)。
+    const ordered = CHAT_VENDOR_CATEGORY_ORDER.flatMap((c) =>
+      visibleModels.filter((m) => classifyModel(m) === c),
+    );
     targetModel = ordered.find(
-      (m) => providerOffersModel(provider, m.id, agent) && isVisible(m.id),
+      (m) => isModelChatEligibleOnProvider(provider, m.id, agent) && isVisible(m.id),
     )?.id;
   }
 
@@ -221,11 +186,16 @@ export function isSelectedSourceDisconnected(args: {
 }): boolean {
   const { providers, agent, modelId, selectedProviderId, providersLoading } = args;
   if (providersLoading || !agent || !selectedProviderId) return false;
-  // 实际路由口径(includeDisabled):本判定只回答「选中来源还连着吗」,服务的是
-  // **已建会话**的显示与发送门禁。停用(suspended / 该拷贝 disabled)是准入轴,
-  // 不打断运行中的会话 —— 按准入过滤后的 rail 判会把停用当断开,Send 被误禁
-  // (PR #744 review 第十轮)。
-  const sources = sourcesForModel(providers, modelId, agent, { includeDisabled: true });
+  // chatEligibleSourcesForModel + includeDisabled:选中来源若还在但这个 id 在它上面
+  // 已经不是聊天模型了(mode 变化),也要判"断连"——否则这里说"没断连"、
+  // effectiveSourceIdForModel 却解析不出可用来源,界面显示能发、实际发不出去
+  // (2026-07 review:UI 可用性判断与路由解析必须同一份口径)。但停用(suspended /
+  // 该拷贝 disabled)是**另一根**准入轴,不打断运行中的会话 —— 按准入过滤后的
+  // rail 判会把停用当断开,Send 被误禁(PR #744 review 第十轮),故传
+  // includeDisabled。
+  const sources = chatEligibleSourcesForModel(providers, modelId, agent, {
+    includeDisabled: true,
+  });
   return !sources.some((p) => p.id === selectedProviderId);
 }
 

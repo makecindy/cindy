@@ -400,6 +400,41 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     expect(() => resolveSavedProbeSpec('my-relay', 'codex')).toThrow(/no runtime/);
   });
 
+  it('跳过非聊天模型挑第一个聊天模型探测(issue #882 第 3 点,2026-07 review):探测发的是聊天形状请求,挑到 embedding/image 模型会得到与配置无关的假失败结论', () => {
+    const provider = buildUserProvider(config);
+    setCustomProviders([
+      {
+        ...provider,
+        models: {
+          ...provider.models,
+          'claude-code': [
+            { id: 'text-embedding-3-large', name: 'Embedding', contextWindow: 8191, efforts: [], defaultEffort: null, mode: 'embedding' },
+            { id: 'glm-5.2', name: 'GLM', contextWindow: 128_000, efforts: [], defaultEffort: null },
+          ],
+        },
+      },
+    ]);
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    expect(resolveSavedProbeSpec('my-relay', 'claude-code').modelId).toBe('glm-5.2');
+  });
+
+  it('全是非聊天模型时抛「无聊天模型」错误,而不是静默探测一个 embedding 模型', () => {
+    const provider = buildUserProvider(config);
+    setCustomProviders([
+      {
+        ...provider,
+        models: {
+          ...provider.models,
+          'claude-code': [
+            { id: 'text-embedding-3-large', name: 'Embedding', contextWindow: 8191, efforts: [], defaultEffort: null, mode: 'embedding' },
+          ],
+        },
+      },
+    ]);
+    setDiagnosticsKeyReader(() => 'sk-saved');
+    expect(() => resolveSavedProbeSpec('my-relay', 'claude-code')).toThrow(/no chat models/);
+  });
+
   it('testProviderConnection(saved) 端到端（注入 fetch 断言 URL 与 key）', async () => {
     setCustomProviders([buildUserProvider(config)]);
     setDiagnosticsKeyReader(() => 'sk-saved');

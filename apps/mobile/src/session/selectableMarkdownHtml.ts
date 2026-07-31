@@ -301,7 +301,12 @@ function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): str
       font-size: ${codeFontSize}px;
     }
     /* 代码块内不压暗:pre 已有底色与描边把它划成独立区块,里面还要承载语法着色,
-       正文片段必须留在正文色上。不写这条 color 就会继承上面 code 的压暗。 */
+       正文片段必须留在正文色上。不写这条 color 就会继承上面 code 的压暗。
+       background 同理复位(与 GitHub 的 pre code 规则同形):判据是**祖先结构**,
+       不是语言标注 —— 无语言围栏一样在 pre 里,一样要复位。桌面端因为按
+       className(只有带语言标注才有)近似判断,曾把无语言围栏整块套上行内底色,
+       修法是给 pre 的 code 打结构标记(见 desktop 的 rehypeFencedCodeMarker)。
+       别当这条规则冗余删掉,回归测试见 selectableMarkdownHtml.test.ts。 */
     pre code {
       background: transparent;
       color: ${textColor};

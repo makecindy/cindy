@@ -167,12 +167,33 @@ export function createMessageHandler(
     }
 
     // ── invoke agent ────────────────────────────────────────────────────────
+    // 送模型正文改写钩子(群上下文拼装): 失败按"不改写"降级, 不阻断消息。
+    let prepared: { agentText: string; commit?: () => void } | null = null;
+    if (adapter.prepareAgentTurnText) {
+      try {
+        prepared = await adapter.prepareAgentTurnText(event);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`prepareAgentTurnText failed (degraded to raw text): ${msg}`);
+      }
+    }
+    // 按事件挂 per-turn 权限策略(telegram 群成员触发 → 破坏性调用强确认)。
+    const turnPermissionPolicy = adapter.turnPermissionPolicyFor?.(event);
     try {
       await turnRunner.runAgentTurn({
         botContextId: event.contextId,
         userId: event.senderId,
         userMessageId: event.messageId,
         text: event.text,
+        ...(turnPermissionPolicy ? { turnPermissionPolicy } : {}),
+        ...(prepared ? { agentText: prepared.agentText } : {}),
+        ...(prepared?.commit
+          ? {
+              // 路由解析成功 = 消息确定会被派发/排队 — 群窗口游标此刻才推进,
+              // 路由失败(鉴权缺失等)不推进, 上下文批次下次仍进 prompt。
+              onRouteResolved: () => prepared?.commit?.(),
+            }
+          : {}),
         attachments: event.attachments,
         // threadScoped 渠道: scopeKey = thread root ts(thread = session 路由键)
         scopeKey: threadScoped ? event.scopeKey : undefined,

@@ -541,4 +541,72 @@ describe('resolveMobileSessionReferences', () => {
     )).rejects.toMatchObject({ code: 'SESSION_REFERENCE_INVALID' });
     expect(neverInvoke).not.toHaveBeenCalled();
   });
+
+  it('attaches the validated first-page terminal without leaking the source error body', async () => {
+    const invoke = asInvoke(async (_deviceId, channel, args) => {
+      if (channel === 'local-db:sessions:get') return { id: args[0], title: 'Source' };
+      if (channel === DL_HISTORY_MESSAGES_CHANNEL) {
+        return {
+          items: [message('s1', '1', 'c1', '半截回复', 'assistant')],
+          hasMore: false,
+          terminal: {
+            status: 'error',
+            createdAt: 103,
+            message: 'provider secret must not cross the quote boundary',
+            injected: 'junk',
+          },
+        };
+      }
+      throw new Error(`unexpected channel ${channel}`);
+    });
+
+    const [context] = await resolveMobileSessionReferences([
+      { sessionId: 's1', deviceId: 'dev-a' },
+    ], invoke);
+
+    expect(context.terminal).toEqual({ status: 'error', createdAt: 103 });
+    const serialized = serializeMobileSessionReferencePayload([context]);
+    expect(serialized).not.toContain('provider secret');
+    expect(serialized).not.toContain('junk');
+  });
+
+  it('degrades to no terminal when the source page predates the terminal field', async () => {
+    const invoke = asInvoke(async (_deviceId, channel, args) => {
+      if (channel === 'local-db:sessions:get') return { id: args[0], title: 'Source' };
+      if (channel === DL_HISTORY_MESSAGES_CHANNEL) {
+        return {
+          items: [message('s1', '1', 'c1', 'partial', 'assistant')],
+          hasMore: false,
+        };
+      }
+      throw new Error(`unexpected channel ${channel}`);
+    });
+
+    const [context] = await resolveMobileSessionReferences([
+      { sessionId: 's1', deviceId: 'dev-a' },
+    ], invoke);
+
+    expect(context.messages).toHaveLength(1);
+    expect(context.terminal).toBeUndefined();
+  });
+
+  it('ignores the page terminal for anchor quotes', async () => {
+    const invoke = asInvoke(async (_deviceId, channel, args) => {
+      if (channel === 'local-db:sessions:get') return { id: args[0], title: 'Anchored' };
+      if (channel === 'local-db:messages:around-client-id') {
+        return [message('s1', '1', 'anchor', 'anchor body', 'user', 1_000)];
+      }
+      if (channel === DL_HISTORY_MESSAGES_CHANNEL) {
+        return { items: [], hasMore: false, terminal: { status: 'error', createdAt: 9 } };
+      }
+      return null;
+    });
+
+    const [context] = await resolveMobileSessionReferences([
+      { sessionId: 's1', messageClientId: 'anchor', deviceId: 'dev-a' },
+    ], invoke);
+
+    expect(context.range).toBe('around-anchor');
+    expect(context.terminal).toBeUndefined();
+  });
 });

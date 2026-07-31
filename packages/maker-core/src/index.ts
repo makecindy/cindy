@@ -68,6 +68,11 @@ export { MAKER_MEMORY_RULES } from './memory/system-prompt.js';
 
 // maker contacts (agent-native 智能通讯录, 全局人物实体库)
 export * from './contacts/types.js';
+export {
+  CONTACTS_RULES_DISABLED,
+  CONTACTS_RULES_ENABLED,
+  type ContactsPromptState,
+} from './contacts/system-prompt.js';
 export { initContactsSchema, CONTACTS_SCHEMA_VERSION } from './contacts/schema.js';
 export { ContactsFts, type ContactFtsDoc } from './contacts/fts.js';
 export {

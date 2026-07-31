@@ -160,6 +160,9 @@ describe('mapCodexAppServerModelsToCatalog', () => {
     });
     expect(out[1].defaultEnabled).toBe(false);
     expect(out[1].sortOrder).toBe(17.003);
+    // live 协议不给 context_window,这 272k 是统一兜底 → 一律不得标记为已核实。
+    // 标了它就会被拿去收敛运行期上报的窗口,把真实更大的窗口压成 272k。
+    expect(out.every((model) => model.contextWindowVerified === undefined)).toBe(true);
   });
 });
 

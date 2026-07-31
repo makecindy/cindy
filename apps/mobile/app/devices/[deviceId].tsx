@@ -270,11 +270,13 @@ export default function DeviceDetailScreen() {
       // 自动化任务作用域页无筛选 UI 且承诺"全部 N 次运行",statusFilter 固定 'all'
       // (本页 statusFilter state 停留在初值 'active',若沿用会把归档 run 滤掉)。
       statusFilter: automationScopeKey ? 'all' : statusFilter,
+      // 未起名会话的显示文案:共享层不兜中文串,由这里给已解析的 i18n 值。
+      unnamedLabel: t('session.menu.unnamedTitle'),
       // 项目作用域精简页与完整设备详情页都折叠自动化组(HomeSessionRow / SessionRow 均支持组行
       // 展开,与首页交互一致);自动化任务作用域页本身就是"某任务的全部运行",必须平铺不折叠。
       groupAutomations: !automationScopeKey,
     }),
-    [automationScopeKey, groupMode, messagePreviewIndex, pendingInteractionIndex, scheduleIndex, searchQuery, sessions, statusFilter],
+    [automationScopeKey, groupMode, messagePreviewIndex, pendingInteractionIndex, scheduleIndex, searchQuery, sessions, statusFilter, t],
   );
   const listContext = useMemo(
     () => buildRemoteSessionListContext({

@@ -41,7 +41,6 @@ vi.mock('../../../maker-host/claude-transcript-relocation.js', () => ({
 import {
   getOverwritableAutoTitle,
   isUntitledSessionAwaitingAutoTitle,
-  normalizeAutoTitle,
   persistSessionTitleIfStillDraft,
 } from '../sessions';
 
@@ -123,14 +122,8 @@ function currentTitle(): string {
   }).title;
 }
 
-describe('normalizeAutoTitle', () => {
-  it('折叠空白 → trim → 截断 40 字(先 trim 再截断)', () => {
-    expect(normalizeAutoTitle('  帮我\n排查  登录失败 ')).toBe('帮我 排查 登录失败');
-    expect(normalizeAutoTitle(`\n${' '.repeat(50)}real text`)).toBe('real text');
-    expect(normalizeAutoTitle('排'.repeat(60))).toBe('排'.repeat(40));
-    expect(normalizeAutoTitle('   ')).toBe('');
-  });
-});
+// normalizeAutoTitle 的用例随实现搬到 packages/maker-shared/src/__tests__/sessionTitle.test.ts
+// (main / renderer / mobile 共用同一份实现,单测跟着实现走)。
 
 describe('persistSessionTitleIfStillDraft — 条件写', () => {
   beforeEach(() => createDb('New Maker'));

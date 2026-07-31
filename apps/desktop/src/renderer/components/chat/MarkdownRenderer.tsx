@@ -29,6 +29,7 @@ import remarkPreserveLocalImagePaths, {
 } from './remarkPreserveLocalImagePaths';
 import remarkSessionLinks from './remarkSessionLinks';
 import { rehypeMathBlockMarker } from './rehypeMathBlockMarker';
+import { FENCED_CODE_PROP, rehypeFencedCodeMarker } from './rehypeFencedCodeMarker';
 import { CopyAsImageBlock, mathBlockToLatex, tableToTsv } from './CopyAsImageBlock';
 import type { Components, UrlTransform } from 'react-markdown';
 import type { PluggableList } from 'unified';
@@ -201,11 +202,15 @@ const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
 // rehypeMathBlockMarker 紧随 rehypeKatex:把裸 `<span class="katex-display">`
 // 包进 `<div data-math-block>`,让下方 div 渲染器能挂「复制为图片」工具栏
 // (components 映射只认 tagName,认不了 class)。
+// rehypeFencedCodeMarker 必须排在最后:katex 已消费掉 `$$…$$` 的 `<pre><code>`、
+// highlight 已注入 hljs span,此时剩下的 `pre > code` 就是真正的代码块,给它们
+// 打 data-fenced-code 供下方 code 渲染器按结构(而非语言标注)分派。
 const REHYPE_PLUGINS: PluggableList = [
   rehypeSlug,
   [rehypeKatex, { strict: 'ignore', errorColor: 'var(--error-fg)' }],
   rehypeMathBlockMarker,
   rehypeHighlight,
+  rehypeFencedCodeMarker,
 ];
 const MARKDOWN_LINK_CLASS = 'text-[var(--msg-link)] underline underline-offset-2 cursor-pointer [overflow-wrap:anywhere]';
 /**
@@ -1577,10 +1582,17 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
         );
       },
       // text-lightbox-trigger-extension v2: inline `<code>` whose content
-      // looks like a file path becomes a clickable preview entry. Fenced
-      // code blocks (className=language-*) bypass the path check.
-      code: ({ className, children, ...props }) => {
-        const isInline = !className;
+      // looks like a file path becomes a clickable preview entry. 代码块
+      // (`pre > code`)一律绕开路径检测与行内底色。
+      //
+      // 判据是 rehypeFencedCodeMarker 打的结构标记,不是「有没有 className」:
+      // className 由 rehype-highlight 按语言标注下发,```(无语言)围栏和 4 空格
+      // 缩进代码块都没有,曾因此被整块套上行内底色 + 内距(inline 元素逐行画底,
+      // 一行一个灰条),内容还被拿去做路径检测。这与 GitHub 用 `pre code` 祖先
+      // 选择器复位底色是同一条判据。
+      code: ({ className, children, node, ...props }) => {
+        const isFencedCode = node?.properties?.[FENCED_CODE_PROP] !== undefined;
+        const isInline = !isFencedCode && !className;
         if (!isInline) {
           return (
             <code className={cn(className, 'font-mono text-[length:var(--app-code-font-size)]')} {...props}>

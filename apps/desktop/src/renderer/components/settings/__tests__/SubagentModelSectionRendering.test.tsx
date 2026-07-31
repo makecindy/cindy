@@ -43,7 +43,10 @@ vi.mock('@/state/modelVisibilityPrefs', () => ({
 const providersMock = vi.hoisted(() => ({
   loading: false,
   // 可按用例清空:provider 连接着但动态模型发现为空清单的场景。
-  claudeModels: [{ id: 'claude-opus-5' }, { id: 'claude-haiku-4-5' }] as Array<{ id: string }>,
+  claudeModels: [{ id: 'claude-opus-5' }, { id: 'claude-haiku-4-5' }] as Array<{
+    id: string;
+    mode?: string;
+  }>,
 }));
 vi.mock('@/hooks/useProviders', () => ({
   useProviders: () => ({
@@ -212,6 +215,32 @@ describe('SubagentModelSection standard panel contract', () => {
       claudeCode: 'claude-opus-5',
       claudeCodeProviderId: null,
     });
+  });
+
+  it('narrows to null when the picked provider only offers a non-chat copy of the model id (issue #882 第 3 点, 2026-07 review 第 18 轮)', async () => {
+    // 只查 id 存在(旧 providerOffersModel)会误放行:anthropic 上的 claude-opus-5
+    // 这份具体条目已经是非聊天类型,不能落成子代理模型的显式来源。
+    providersMock.claudeModels = [
+      { id: 'claude-opus-5', mode: 'embedding' },
+      { id: 'claude-haiku-4-5' },
+    ];
+    render(<SubagentModelSection />);
+    fireEvent.click(await screen.findByTestId('pick-provider-row'));
+    await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1));
+    expect(settingsSet).toHaveBeenCalledWith({
+      claudeCode: 'claude-opus-5',
+      claudeCodeProviderId: null,
+    });
+  });
+
+  it('flags a connected provider as disconnected when its model entry is non-chat (issue #882 第 3 点, 2026-07 review 第 18 轮)', async () => {
+    providersMock.claudeModels = [{ id: 'claude-opus-5', mode: 'embedding' }];
+    settingsGet.mockResolvedValue(
+      makeState({ claudeCode: 'claude-opus-5', claudeCodeProviderId: 'anthropic' }),
+    );
+    render(<SubagentModelSection />);
+    const selector = await screen.findByTestId('model-selector');
+    expect(selector.dataset.sourceDisconnected).toBe('true');
   });
 
   it('clears both model and providerId when returning to unspecified', async () => {

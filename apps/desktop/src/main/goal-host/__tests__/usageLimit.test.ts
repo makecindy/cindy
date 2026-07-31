@@ -80,6 +80,29 @@ describe('classifyTurnOverload', () => {
     expect(classifyTurnOverload({})).toBe(false);
   });
 
+  it('结构化 codexErrorInfo 命中时不依赖文案措辞', () => {
+    // 这条锁的是「codex 改了过载文案后 goal 侧仍能自动续跑」。message 故意完全不含
+    // `at capacity`：只认文案时这里会返回 false，finalizeTurn 就把 goal 判 blocked，
+    // 而不是走 OVERLOAD_RESUME_DELAY_MS 的短窗口续跑 —— 可自愈的容量抖动变成死局。
+    expect(
+      classifyTurnOverload({
+        message: 'The upstream declined this request.',
+        codexErrorInfo: 'serverOverloaded',
+      }),
+    ).toBe(true);
+    // 连 message 都没有时同样成立（host 合成的错误可能不带文案）。
+    expect(classifyTurnOverload({ codexErrorInfo: 'serverOverloaded' })).toBe(true);
+  });
+
+  it('非过载的结构化 tag 不误判成过载', () => {
+    // usageLimitExceeded 要走限额通道等账号周期重置，不能被拽进一分钟短窗口。
+    expect(classifyTurnOverload({ message: 'boom', codexErrorInfo: 'usageLimitExceeded' })).toBe(false);
+    expect(classifyTurnOverload({ message: 'boom', codexErrorInfo: 'contextWindowExceeded' })).toBe(false);
+    expect(
+      classifyTurnOverload({ message: 'stream gone', codexErrorInfo: 'responseStreamDisconnected' }),
+    ).toBe(false);
+  });
+
   it('529 命中两条判定，靠调用方优先判过载来消歧', () => {
     // controller 必须先问 classifyTurnOverload：走限额分支会因为账号并未被限流而
     // 拿不到 resetAt，目标就停在 usageLimited 等人手动 resume。

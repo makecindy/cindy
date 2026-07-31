@@ -940,7 +940,12 @@ function groupAnsweredTurnItems<
 
   for (let index = 0; index < items.length; index++) {
     const item = items[index];
-    if (!sealedAnswers.has(index) && !isRunningAgentTaskItem(item) && isWorkChild(item)) {
+    if (
+      !sealedAnswers.has(index)
+      && !isRunningAgentTaskItem(item)
+      && !isDeliveryProseItem(item)
+      && isWorkChild(item)
+    ) {
       run.push(item);
     } else {
       flushRun(item);
@@ -1041,6 +1046,62 @@ function isCompactBoundaryItem<TMessage extends MessageRenderNormalizedMessage>(
   return item.type === 'message'
     && item.message.kind === 'system'
     && item.message.label === 'system:compact';
+}
+
+/**
+ * 「交付正文」长度阈值:超过它的 assistant 正文一律当本轮产出,不折进「工作过程」。
+ * 取 600 字符 —— 进度旁白（「先运行脚本」「继续读剩余 diff」）都在几十字量级,
+ * 而值得留在消息流里的简报、分析、总结普遍远超它。
+ */
+const DELIVERY_PROSE_MIN_LENGTH = 600;
+
+/** 块级 markdown 标题:交付正文最强的结构信号,进度旁白不会给自己写标题。 */
+const MARKDOWN_HEADING_RE = /^[ \t]{0,3}#{1,6}[ \t]+\S/m;
+
+/**
+ * 表格分隔行(`| --- | :-: |`)。刻意要求同一行里既有 `-{3,}` 又有 `|`:
+ * 只有成型的表格会这样,单独的 `---` 水平线不算交付信号。
+ */
+const MARKDOWN_TABLE_DIVIDER_RE = /^[ \t]{0,3}\|?[ \t]*:?-{3,}:?[ \t]*\|[-:| \t]*$/m;
+
+/** 块级列表项(无序 / 有序)。 */
+const MARKDOWN_LIST_ITEM_RE = /^[ \t]{0,3}(?:[-*+][ \t]+|\d{1,3}[.)][ \t]+)\S/gm;
+
+/** 列表要 ≥3 项才算交付结构:「我要做两件事」这类旁白也会顺手列两条。 */
+const DELIVERY_PROSE_MIN_LIST_ITEMS = 3;
+
+/**
+ * 这段 assistant 正文是不是「交付内容」(而非进度旁白)。
+ *
+ * 判据刻意与位置无关:长度达阈值,或带块级 markdown 结构(标题 / 表格 /
+ * ≥3 项列表)。两端共用这一份口径,不各自实现。
+ */
+export function isDeliveryProseText(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return false;
+  if (trimmed.length >= DELIVERY_PROSE_MIN_LENGTH) return true;
+  if (MARKDOWN_HEADING_RE.test(trimmed)) return true;
+  if (MARKDOWN_TABLE_DIVIDER_RE.test(trimmed)) return true;
+  // /g 正则不用 test():lastIndex 会在调用之间残留。
+  const listItems = trimmed.match(MARKDOWN_LIST_ITEM_RE);
+  return (listItems?.length ?? 0) >= DELIVERY_PROSE_MIN_LIST_ITEMS;
+}
+
+/**
+ * 交付正文 item —— 无论落在 turn 的哪个位置都不折进「工作过程」。
+ *
+ * 为什么只靠 seal 位置不够:「最终答复」只认最后一次动作之后的正文,而 agent
+ * 常见「先输出正文 → 再执行一个收尾副作用(发通知 / 落库 / 提交) → 再说一句
+ * 已完成」。这时真正的交付内容排在收尾动作之前,会被整段折起来,只剩收尾那句
+ * 元数据留在消息流里(实例:2026-07-31 定时巡检的产品决策简报 3250 字被折,
+ * 外面只剩 110 字的「已触发通知」)。
+ */
+function isDeliveryProseItem<TMessage extends MessageRenderNormalizedMessage>(
+  item: MessageRenderItem<TMessage>,
+): boolean {
+  return item.type === 'message'
+    && item.message.kind === 'assistant'
+    && isDeliveryProseText(item.message.body);
 }
 
 function isWorkChild<

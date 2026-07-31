@@ -8,6 +8,8 @@
 import type { TFunction } from 'i18next';
 import { extractIpcError } from '@/utils/ipcError';
 
+export type AndroidConnectionGuideKind = 'connect' | 'unauthorized' | 'offline';
+
 export function androidStatusFallback(err: unknown): AndroidStatusSummary {
   const ipcError = extractIpcError(err);
   return {
@@ -85,6 +87,37 @@ export function describeAndroidStatus(status: AndroidStatusSummary, t: TFunction
   return t('settings.computerUse.android.status.unknownIssue', {
     issue: status.issue,
   });
+}
+
+/**
+ * Return the actionable connection guide for a device state.
+ *
+ * When a configured default is present, its concrete unauthorized/offline
+ * state takes priority even if another device is ready. A stale configured
+ * default can also force the aggregate issue to NO_DEVICE, so when no device is
+ * ready we inspect the listed device states before falling back to that issue.
+ */
+export function getAndroidConnectionGuideKind(
+  status: AndroidStatusSummary | null,
+): AndroidConnectionGuideKind | null {
+  if (!status?.adb_available) return null;
+
+  const configuredDefault = status.configured_default_device_serial?.trim();
+  const configuredDevice = configuredDefault
+    ? status.devices.find((device) => device.device_serial === configuredDefault)
+    : undefined;
+  if (configuredDevice?.state === 'unauthorized') return 'unauthorized';
+  if (configuredDevice?.state === 'offline') return 'offline';
+
+  const hasReadyDevice = status.devices.some((device) => device.state === 'device');
+  if (hasReadyDevice) return null;
+
+  if (status.devices.some((device) => device.state === 'unauthorized')) return 'unauthorized';
+  if (status.devices.some((device) => device.state === 'offline')) return 'offline';
+  if (status.issue === 'DEVICE_UNAUTHORIZED') return 'unauthorized';
+  if (status.issue === 'DEVICE_OFFLINE') return 'offline';
+  if (status.issue === 'NO_DEVICE' || !status.issue) return 'connect';
+  return null;
 }
 
 export function describeAndroidDeviceStatus(

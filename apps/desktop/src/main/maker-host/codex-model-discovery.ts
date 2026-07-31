@@ -110,7 +110,9 @@ export function mapCodexModelsToCatalog(raw: unknown): CatalogModel[] {
           .filter((e): e is string => e != null && CODEX_EFFORTS.has(e))
       : [];
     const displayName = str(m.display_name) ?? slug;
-    const contextWindow = typeof m.context_window === 'number' ? m.context_window : 272_000;
+    // cache 明示了才算真实上限;缺字段时补的 272k 只够展示(见下方 app-server mapper 注释)。
+    const contextWindowVerified = typeof m.context_window === 'number';
+    const contextWindow = contextWindowVerified ? (m.context_window as number) : 272_000;
     const defaultEffort =
       str(m.default_reasoning_level) && CODEX_EFFORTS.has(m.default_reasoning_level as string)
         ? (m.default_reasoning_level as CatalogModel['defaultEffort'])
@@ -127,6 +129,7 @@ export function mapCodexModelsToCatalog(raw: unknown): CatalogModel[] {
       sortOrder: sortOrderForPriority(priority),
       description: str(m.description) ?? undefined,
       contextWindow,
+      ...(contextWindowVerified ? { contextWindowVerified: true } : {}),
       efforts: efforts as CatalogModel['efforts'],
       defaultEffort,
       status: 'active',
@@ -182,6 +185,9 @@ export function mapCodexAppServerModelsToCatalog(
       // app-server 已按官方 picker 顺序返回；给每项稳定的小数锚点保住该顺序。
       sortOrder: 17 + index / 1000,
       ...(str(raw.description) ? { description: raw.description } : {}),
+      // 刻意**不**设 contextWindowVerified: live 协议不给 context_window, 这 272k 是
+      // 统一兜底而非该模型的真实上限。标了它就会被拿去收敛运行期上报的窗口, 把真实
+      // 更大的窗口(例如 400k 的 gpt-5.6)压成 272k, 上下文占比与 memory flush 全偏早。
       contextWindow: 272_000,
       efforts: efforts as CatalogModel['efforts'],
       defaultEffort,

@@ -86,6 +86,9 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
   setProviderSecretsClearedListener: () => {},
   addProviderSecretsClearedListener: () => {},
   readCustomProviderKey: () => null,
+  // builtinApiKeyConnected(gemini)在 listProviders 里读 key 存在性;本测试不关心
+  // 该供应商,恒返回 null = 未配置。
+  getProviderSecretStore: () => ({ get: () => null }),
 }));
 
 import {

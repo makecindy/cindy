@@ -72,6 +72,24 @@ describe('resolveBoundSessionGenerationRoute', () => {
         : provider),
     })).toBeNull();
   });
+
+  it('fails closed when the explicit source only offers a non-chat copy of the persisted model id (issue #882 第 3 点, 2026-07 review 第 17 轮)', () => {
+    const providersWithNonChatCopy = providers.map((provider) => provider.id === 'custom-claude'
+      ? {
+        ...provider,
+        models: {
+          'claude-code': [
+            { id: 'claude-connect-4-6', name: 'Claude Connect', contextWindow: 200_000, mode: 'embedding' },
+          ],
+        },
+      }
+      : provider) as unknown as ProviderView[];
+    expect(resolveBoundSessionGenerationRoute({
+      session: { agentKind: 'claude-code', model: 'claude-connect-4-6' },
+      sessionProviderId: 'custom-claude',
+      providers: providersWithNonChatCopy,
+    })).toBeNull();
+  });
 });
 
 describe('shouldResolveBoundSessionGenerationRoute', () => {

@@ -441,4 +441,165 @@ describe('resolveImSessionDefaults', () => {
       providerId: null,
     });
   });
+
+  // issue #882 第 3 点(2026-07 review):live provider 快照路径原来不做 chat 准入判定,
+  // 一个非聊天模型 id 若恰好被保存为默认值,或排序靠前成为兜底,会被当成 IM 新会话的
+  // 有效默认模型——发消息必失败。下面两条锁住 hasModel / firstModel 都必须过 isChatEligible。
+  it('rejects a saved default that points at a non-chat gateway model even though a provider offers that id', async () => {
+    mocks.listProviders.mockResolvedValue([
+      {
+        ...providers[0],
+        models: {
+          ...providers[0].models,
+          'claude-code': [
+            { ...claudeModels[0], mode: 'chat' },
+            { id: 'gpt-image-2', displayName: 'GPT Image 2', contextWindow: 0, efforts: [], defaultEffort: null, mode: 'image_generation' },
+          ],
+        },
+      },
+      providers[1],
+    ]);
+    mocks.readImDefaultSettings.mockReturnValue({
+      agentKind: 'claude-code',
+      agents: {
+        'claude-code': {
+          providerId: null,
+          model: 'gpt-image-2', // saved default is a non-chat model — must not be accepted as-is
+          effort: 'high',
+        },
+        codex: { providerId: null, model: 'codex/gpt-5.5', effort: 'high' },
+      },
+    });
+
+    await expect(resolveImSessionDefaults(config)).resolves.toMatchObject({
+      agentKind: 'claude-code',
+      model: 'claude-opus-4-8', // falls back to the system default model, not the non-chat id
+    });
+  });
+
+  it('skips a non-chat model that sorts first when falling back to "first model for the agent"', async () => {
+    mocks.listProviders.mockResolvedValue([
+      {
+        ...providers[0],
+        models: {
+          ...providers[0].models,
+          codex: [
+            { id: 'gpt-image-2', displayName: 'GPT Image 2', contextWindow: 0, efforts: [], defaultEffort: null, mode: 'image_generation' },
+            ...codexModels,
+          ],
+        },
+      },
+      providers[1],
+    ]);
+    mocks.readImDefaultSettings.mockReturnValue({
+      agentKind: 'codex',
+      agents: {
+        'claude-code': { providerId: null, model: 'claude-opus-4-8', effort: 'xhigh' },
+        codex: { providerId: null, model: 'missing-model', effort: 'high' }, // forces the firstModel() fallback path
+      },
+    });
+
+    await expect(resolveImSessionDefaults(config)).resolves.toMatchObject({
+      agentKind: 'codex',
+      model: 'codex/gpt-5.5', // the image model sorts first but must be skipped
+    });
+  });
+
+  it('reroutes the session to the chat-eligible provider when the saved provider copy of the model is non-chat (2026-07 review: fresh evidence + 第 25 轮)', async () => {
+    // Same model id 'shared-id' exists on both providers with DIFFERENT modes:
+    // 'xd' (the saved providerId) marks it non-chat; 'openai' marks it chat.
+    // hasModel() passes because *some* source is eligible, but resolveProviderId
+    // must independently reject binding the session to the specific non-chat source.
+    // Returning null is NOT enough: null means implicit default routing, which lands
+    // back on the native default source — and 'xd' IS the native default for
+    // claude-code, so null would send the request right back to the non-chat copy.
+    // The eligible fallback source must be resolved and persisted explicitly.
+    mocks.listProviders.mockResolvedValue([
+      {
+        ...providers[0],
+        models: {
+          ...providers[0].models,
+          'claude-code': [
+            ...claudeModels,
+            { id: 'shared-id', displayName: 'Shared', contextWindow: 0, efforts: [], defaultEffort: null, mode: 'image_generation' },
+          ],
+        },
+      },
+      {
+        ...providers[1],
+        agents: ['claude-code'],
+        routing: {
+          ...providers[1].routing,
+          'claude-code': { upstream: 'https://api.openai.com', authStrategy: 'oauth-passthrough' },
+        },
+        models: {
+          ...providers[1].models,
+          'claude-code': [
+            { id: 'shared-id', displayName: 'Shared', contextWindow: 200_000, efforts: [], defaultEffort: null, mode: 'chat' },
+          ],
+        },
+      },
+    ]);
+    mocks.readImDefaultSettings.mockReturnValue({
+      agentKind: 'claude-code',
+      agents: {
+        'claude-code': { providerId: 'xd', model: 'shared-id', effort: 'high' },
+        codex: { providerId: null, model: 'codex/gpt-5.5', effort: 'high' },
+      },
+    });
+
+    await expect(resolveImSessionDefaults(config)).resolves.toMatchObject({
+      agentKind: 'claude-code',
+      model: 'shared-id',
+      // must not stay pinned to 'xd' (its copy is not chat-eligible), and must not
+      // fall back to null either (implicit routing lands back on 'xd', the native
+      // default) — the chat-eligible source must be selected explicitly.
+      providerId: 'openai',
+    });
+  });
+
+  it('resolves effort from the chat-eligible copy of the model, not an earlier non-chat copy with different effort metadata (2026-07 review: fresh evidence)', async () => {
+    // 'xd' (checked first) has a non-chat copy with empty efforts; 'openai' (checked
+    // second) has the real chat copy with efforts=[low,medium,high]. A requested effort
+    // that only the chat copy can validate ('xhigh', unsupported) must be clamped using
+    // the chat copy's metadata, not silently accepted via the non-chat copy's empty efforts.
+    mocks.listProviders.mockResolvedValue([
+      {
+        ...providers[0],
+        models: {
+          ...providers[0].models,
+          'claude-code': [
+            { id: 'shared-id', displayName: 'Shared', contextWindow: 0, efforts: [], defaultEffort: null, mode: 'image_generation' },
+          ],
+        },
+      },
+      {
+        ...providers[1],
+        agents: ['claude-code'],
+        routing: {
+          ...providers[1].routing,
+          'claude-code': { upstream: 'https://api.openai.com', authStrategy: 'oauth-passthrough' },
+        },
+        models: {
+          ...providers[1].models,
+          'claude-code': [
+            { id: 'shared-id', displayName: 'Shared', contextWindow: 200_000, efforts: ['low', 'medium', 'high'], defaultEffort: 'medium', mode: 'chat' },
+          ],
+        },
+      },
+    ]);
+    mocks.readImDefaultSettings.mockReturnValue({
+      agentKind: 'claude-code',
+      agents: {
+        'claude-code': { providerId: null, model: 'shared-id', effort: 'xhigh' }, // unsupported by the chat copy
+        codex: { providerId: null, model: 'codex/gpt-5.5', effort: 'high' },
+      },
+    });
+
+    await expect(resolveImSessionDefaults(config)).resolves.toMatchObject({
+      agentKind: 'claude-code',
+      model: 'shared-id',
+      effort: 'medium', // clamped using the chat copy's defaultEffort, not silently passed through
+    });
+  });
 });

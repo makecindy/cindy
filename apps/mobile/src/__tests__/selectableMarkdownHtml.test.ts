@@ -85,3 +85,39 @@ describe('buildSelectableMarkdownHtml 代码块语法着色', () => {
     expect(html).toContain('&lt;b&gt;');
   });
 });
+
+/**
+ * 代码块里的 `<code>` 不带行内 code 的装饰 —— 三端同一条判据:**看祖先结构,
+ * 不看语言标注**。
+ *
+ * - 这里(WebView 面):`pre code` 祖先选择器复位,与 GitHub 的
+ *   `pre code { background: transparent; padding: 0 }` 同形。
+ * - 原生聊天流:解析阶段就分出 code 块 / 行内 code 两个类型(见
+ *   messageMarkdown.test.ts 的无语言围栏用例)。
+ * - 桌面端:rehypeFencedCodeMarker 给 `pre > code` 打结构标记(见 apps/desktop 的
+ *   markdownFencedCodeInline.test.ts)。桌面端曾按「有没有 className」近似判断,
+ *   ```(无语言)围栏因此被整块套上行内底色,一行一个灰条。
+ *
+ * 这条 CSS 规则是纯样式、没有行为面,靠代码 review 容易被当冗余删掉,所以在这里
+ * 钉住。
+ */
+describe('buildSelectableMarkdownHtml 代码块内不套行内 code 装饰', () => {
+  const css = (): string => buildSelectableMarkdownHtml('# 标题');
+
+  it('存在 pre code 复位规则,且把底色清成 transparent', () => {
+    const rule = css().match(/pre code \{([^}]*)\}/);
+    expect(rule, '找不到 pre code 复位规则').toBeTruthy();
+    expect(rule![1]).toMatch(/background:\s*transparent/);
+  });
+
+  it('行内 code 自己的规则仍在(复位只针对代码块内,不是全局取消)', () => {
+    // `code { ... }` 独立规则:行内 code 的压暗色与等宽字体。
+    expect(css()).toMatch(/\n\s*code \{[^}]*font-family/);
+  });
+
+  it('无语言标注的围栏同样进 pre(复位规则因此对它生效)', () => {
+    const html = buildSelectableMarkdownHtml(['```', '任务(Session)', '```'].join('\n'));
+    expect(html).toContain('<pre>');
+    expect(html).toContain('<code>');
+  });
+});

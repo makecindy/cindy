@@ -11,7 +11,7 @@
  *     ACCESS_REVOKED 等目标设备正常应答的错误)都重置计数并关熔断;
  *   - NOT_CONNECTED / relay 层错误 / 发送前本地中止是本机链路问题,不定论
  *     (inconclusive):既不计失败,也不当作设备健康的证据;
- *   - 连续 failureThreshold 次超时 → open:该设备的新请求快速失败
+ *   - 连续 failureThreshold 个独立超时批次 → open:该设备的新请求快速失败
  *     (DEVICE_UNRESPONSIVE,permanent 不重试);
  *   - half-open:open 后按退避窗口(10s 起 ×2,封顶 120s)放行**单个**探测请求
  *     (单飞),真实回包即 close,再超时回 open 并加深退避。
@@ -28,12 +28,13 @@ export type BreakerAcquireDecision = 'allow' | 'probe' | 'reject';
  * settle 时代数不匹配 = 这是恢复(或清除)之前派出的旧请求,其结果一律不采信
  * (review P1:熔断 open 前派出的 30/40s 长超时请求,会在探测成功关熔断之后
  * 才陆续超时,若照常计数,3 条陈旧超时会立刻把刚恢复的熔断重新打开)。
- * 无状态时的 responded 不翻代(review:否则健康并发下一个快回包会作废同期
- * 在途请求的超时,连续超时被低估、熔断反而难打开)。
+ * cohort 由已知 fan-out 调用方显式分配并传入:同一批请求因一次链路抖动一起
+ * 超时只贡献一次 strike;未传 cohort 的普通请求各自创建独立观测。
  */
 export interface BreakerSendSlot {
   decision: BreakerAcquireDecision;
   generation: number;
+  cohort: number;
 }
 
 export type BreakerSettleOutcome =
@@ -49,7 +50,7 @@ export const BREAKER_PROBE_BACKOFF_BASE_MS = 10_000;
 export const BREAKER_PROBE_BACKOFF_MAX_MS = 120_000;
 
 export interface DeviceResponsivenessBreakerOptions {
-  /** 连续超时多少次进入 open;默认 3。 */
+  /** 连续多少个独立超时批次进入 open;默认 3。 */
   failureThreshold?: number;
   /** open 后首个探测窗口;默认 10s。 */
   probeBackoffBaseMs?: number;
@@ -62,12 +63,13 @@ export interface DeviceResponsivenessBreakerOptions {
 }
 
 export interface DeviceResponsivenessBreaker {
+  /** 为一轮明确的 fan-out 批次分配共享 id;该批 acquire 必须原样传回。 */
+  createCohort(deviceId: string): number;
   /**
-   * 发送前门禁:closed → 'allow';open 且探测窗口已到、无在途探测 → 'probe'
-   * (调用方必须把返回的票据原样带给 settle 以释放单飞);其余 → 'reject'
-   * (调用方应快速失败,不上管道)。
+   * 发送前门禁:closed → 'allow';同一 fan-out 可传共享 cohort,省略则每次调用
+   * 创建独立 cohort。open 且探测窗口已到、无在途探测 → 'probe';其余 → 'reject'。
    */
-  acquire(deviceId: string): BreakerSendSlot;
+  acquire(deviceId: string, cohort?: number): BreakerSendSlot;
   /** 请求收尾上报。slot 必须是 acquire 返回的票据;代数不匹配的旧请求被忽略。 */
   settle(deviceId: string, slot: BreakerSendSlot, outcome: BreakerSettleOutcome): void;
   isOpen(deviceId: string): boolean;
@@ -108,23 +110,35 @@ export function createDeviceResponsivenessBreaker(
   // 采信「派发时代数仍是当前代」的结果——恢复前派出的长超时请求晚到的超时
   // 不再污染新一代计数。
   const generations = new Map<string, number>();
+  const nextCohorts = new Map<string, number>();
+  const countedTimeoutCohorts = new Map<string, Set<number>>();
   const generationOf = (deviceId: string): number => generations.get(deviceId) ?? 0;
   const bumpGeneration = (deviceId: string): void => {
     generations.set(deviceId, generationOf(deviceId) + 1);
+    // cohort id 保持单调递增:它可能先于 acquire 被补齐流程暂存,翻代后若从 1
+    // 重新发号,会与新一代普通请求碰撞并把独立 timeout 误判成已计数。
+    countedTimeoutCohorts.delete(deviceId);
+  };
+  const newCohort = (deviceId: string): number => {
+    const next = (nextCohorts.get(deviceId) ?? 0) + 1;
+    nextCohorts.set(deviceId, next);
+    return next;
   };
 
-  const acquire = (deviceId: string): BreakerSendSlot => {
+  const acquire = (deviceId: string, cohort?: number): BreakerSendSlot => {
     // 首次发放即登记(review):仅 acquire 过、还没有任何 settle/state 的设备也
     // 必须被 resetAll 的全量翻篇覆盖,否则登出前的在途请求会在切号后按当前代
     // 被采信,把旧账号的超时累进新账号的计数。
     if (!generations.has(deviceId)) generations.set(deviceId, 0);
     const generation = generationOf(deviceId);
     const state = states.get(deviceId);
-    if (!state?.open) return { decision: 'allow', generation };
-    if (state.probeInFlight) return { decision: 'reject', generation };
-    if (now() - state.openedAt < state.probeBackoffMs) return { decision: 'reject', generation };
+    if (!state?.open) return { decision: 'allow', generation, cohort: cohort ?? newCohort(deviceId) };
+    if (state.probeInFlight) return { decision: 'reject', generation, cohort: 0 };
+    if (now() - state.openedAt < state.probeBackoffMs) {
+      return { decision: 'reject', generation, cohort: 0 };
+    }
     state.probeInFlight = true;
-    return { decision: 'probe', generation };
+    return { decision: 'probe', generation, cohort: 0 };
   };
 
   const settle = (deviceId: string, slot: BreakerSendSlot, outcome: BreakerSettleOutcome): void => {
@@ -159,6 +173,10 @@ export function createDeviceResponsivenessBreaker(
       }
       return;
     }
+    const counted = countedTimeoutCohorts.get(deviceId) ?? new Set<number>();
+    if (counted.has(slot.cohort)) return;
+    counted.add(slot.cohort);
+    countedTimeoutCohorts.set(deviceId, counted);
     const next = state ?? {
       consecutiveTimeouts: 0,
       open: false,
@@ -177,6 +195,7 @@ export function createDeviceResponsivenessBreaker(
   };
 
   return {
+    createCohort: newCohort,
     acquire,
     settle,
     isOpen: (deviceId) => states.get(deviceId)?.open === true,
@@ -200,6 +219,8 @@ export function createDeviceResponsivenessBreaker(
       }
       const openIds = [...states.entries()].filter(([, s]) => s.open).map(([id]) => id);
       states.clear();
+      nextCohorts.clear();
+      countedTimeoutCohorts.clear();
       for (const deviceId of openIds) options.onOpenChanged?.(deviceId, false);
     },
   };

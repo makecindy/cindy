@@ -65,14 +65,14 @@ describe('rewriteQueued — persistedContent 同批改写 + 去重单上传', ()
   it('files[] 与 persistedContent 的同一附件用同一 OSS 引用,只上传一次', async () => {
     resolveSafe.mockReturnValue({ absPath: '/abs/a.png', mimeType: 'image/png' });
     uploadLocalFile
-       .mockResolvedValueOnce({
-         key: 'cindy/device-link/u/img.png',
+      .mockResolvedValueOnce({
+        key: 'cindy/device-link/u/img.png',
         size: 1,
         contentType: 'image/png',
         sha256: SHA256,
       })
       .mockResolvedValueOnce({
-         key: 'cindy/device-link/u/doc.pdf',
+        key: 'cindy/device-link/u/doc.pdf',
         size: 1,
         contentType: 'application/pdf',
         sha256: SHA256,
@@ -116,8 +116,8 @@ describe('rewriteQueued — persistedContent 同批改写 + 去重单上传', ()
   });
 
   it('persistedContent 解析失败 → 原样保留(降级),files[] 仍照常改写', async () => {
-     uploadLocalFile.mockResolvedValue({
-       key: 'cindy/device-link/u/x.png',
+    uploadLocalFile.mockResolvedValue({
+      key: 'cindy/device-link/u/x.png',
       size: 1,
       contentType: 'image/png',
       sha256: SHA256,

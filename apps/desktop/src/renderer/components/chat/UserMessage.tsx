@@ -826,16 +826,16 @@ export function UserMessage({
     () => (quotesEncoded ? quoteSegmentsToComposerDocument(quoteSegments) : undefined),
     [quoteSegments, quotesEncoded],
   );
-  // $指令 开头且确认命中意识时,消息走"合并形态":不渲文字气泡,prompt
-  // (剥掉指令 token 的余文)收进召唤卡卡身;普通消息里的 $word 不受影响。
+  // $指令 开头且确认命中意识时,气泡正文渲剥掉指令 token 的余文($token 的
+  // 语义由气泡内的召唤标注行承载,正文不重复报幕);普通消息里的 $word 不受
+  // 影响。2026-07-29 起取消「卡片即消息」合并形态:正文永远回归文字气泡。
   const ghostCmdWord =
     ghostDirective?.kind === 'command' ? parseGhostCommandWord(bubbleBody) : null;
   // 触发符恒为 1 个字符($ 或全角变体),token = 触发符 + 指令词。
   const ghostCmdToken = ghostCmdWord ? bubbleBody.slice(0, 1 + ghostCmdWord.length) : null;
   const ghostPromptBody = ghostCmdToken ? bubbleBody.slice(ghostCmdToken.length).trim() : '';
   // 软提示兑现(语义调用):本条消息触发的那一轮 AI 真调了被提及的意识时,
-  // 与硬指令走同一合并形态——不渲文字气泡,整条正文作为 prompt 收进召唤卡,
-  // 语义调用与 $ 显式召唤最终渲染一致。判据来自 GhostFulfillmentContext
+  // 升级为与硬指令同形态的召唤标注行。判据来自 GhostFulfillmentContext
   // (MessageStream 从会话历史现算,重启幂等)。
   const ghostFulfillment = useContext(GhostFulfillmentContext);
   const ghostFulfilledIds = messageClientId ? ghostFulfillment.get(messageClientId) : undefined;
@@ -845,8 +845,8 @@ export function UserMessage({
       ghostFulfilledIds && ghostDirective.ghosts.some((g) => ghostFulfilledIds.has(g.ghostId)),
     );
   // 语义自主召唤:消息一个触发词都没命中(无任何追加段),AI 本轮仍真调了
-  // ghost_call → 合成 semantic 展示数据,同样走合并大卡(与硬指令/兑现软
-  // 提示渲染一致)。orca / hook 消息不参与(它们本就不经意识展开)。
+  // ghost_call → 合成 semantic 展示数据,渲染同一行召唤标注(与硬指令/兑现
+  // 软提示渲染一致)。orca / hook 消息不参与(它们本就不经意识展开)。
   const ghostSemanticDisplay: GhostSummonDisplay | null =
     !ghostDirective &&
     !orcaCommunication &&
@@ -855,23 +855,22 @@ export function UserMessage({
     ghostFulfilledIds.size > 0
       ? { kind: 'semantic', ghostIds: [...ghostFulfilledIds] }
       : null;
-  // 召唤卡的最终展示数据(追加段解析优先;没有追加段才可能是 semantic)。
+  // 召唤展示数据(追加段解析优先;没有追加段才可能是 semantic),按形态分流:
+  // - 标注行(chip):硬指令 / 软提示已兑现 / semantic → 嵌进气泡顶部;
+  // - 胶囊(pill):软提示未兑现 → 保持原低调形态,留在气泡下方。
   const ghostCardDisplay: GhostSummonDisplay | null = ghostDirective ?? ghostSemanticDisplay;
-  // 兑现驱动的合并(软提示兑现 / 语义召唤)对自动化任务消息豁免:模板化
-  // 调度 prompt 每轮重复出现,靠专门的低阈值收起反刷屏(见 collapseThreshold),
-  // 合并进卡身会绕过收起、每轮全文刷屏——自动化消息保留气泡 + 收起,召唤卡
-  // 照渲但不吞正文(subagent review P1)。$指令 合并不受影响(用户显式点名)。
-  const ghostFulfillMerge =
-    !automationOrigin && (ghostMentionFulfilled || ghostSemanticDisplay !== null);
-  // 合并形态总开关:$指令 / 软提示兑现 / 语义自主召唤,都是"卡片即消息"。
-  const ghostMergedForm = Boolean(ghostCmdToken) || ghostFulfillMerge;
-  // 合并形态下收进卡身的 prompt 原文:硬指令剥 $token 余文;其余整条正文。
-  const ghostCardPromptBody = ghostCmdToken ? ghostPromptBody : ghostFulfillMerge ? bubbleBody : '';
-  const ghostCardPromptSourceStart = useMemo(() => {
-    if (!ghostCardPromptBody || ghostBodySourceStart === null) return null;
-    const localStart = ghostBody.indexOf(ghostCardPromptBody);
+  const ghostPillForm = ghostDirective?.kind === 'mention' && !ghostMentionFulfilled;
+  const ghostChipDisplay = ghostPillForm ? null : ghostCardDisplay;
+  const ghostPillDisplay = ghostPillForm ? ghostDirective : null;
+  // 气泡实际显示的正文与其在原始 content 中的起点(粘贴块/斜杠命令高亮的
+  // 偏移投影用):硬指令剥 $token,其余原样。
+  const displayBubbleBody = ghostCmdToken ? ghostPromptBody : bubbleBody;
+  const displayBubbleSourceStart = useMemo(() => {
+    if (!ghostCmdToken) return ghostBodySourceStart;
+    if (!ghostPromptBody || ghostBodySourceStart === null) return null;
+    const localStart = ghostBody.indexOf(ghostPromptBody);
     return localStart >= 0 ? ghostBodySourceStart + localStart : null;
-  }, [ghostBody, ghostBodySourceStart, ghostCardPromptBody]);
+  }, [ghostCmdToken, ghostPromptBody, ghostBody, ghostBodySourceStart]);
   // 长消息收起以真实排版为准:粗筛命中的消息在气泡里挂隐藏镜像节点实测
   // 视觉行数,窗口缩放 / 侧栏开合导致气泡宽度变化时由 ResizeObserver 重算。
   // 自动化任务注入的消息(模板化调度 prompt,每轮重复出现)用更低的收起
@@ -879,26 +878,27 @@ export function UserMessage({
   const collapseThreshold = automationOrigin
     ? AUTOMATION_USER_MESSAGE_VISUAL_LINE_THRESHOLD
     : LONG_USER_MESSAGE_VISUAL_LINE_THRESHOLD;
-  // 粘贴段在 bubbleBody 局部坐标下的 range(与下方富渲染同一份投影)。
+  // 粘贴段在气泡展示正文(displayBubbleBody)局部坐标下的 range(与下方
+  // 富渲染同一份投影;硬指令剥 $token 后起点用 displayBubbleSourceStart)。
   const bubblePastedRanges = useMemo(
-    () => projectSentRanges(pastedTextRanges ?? [], ghostBodySourceStart, bubbleBody.length),
-    [bubbleBody.length, ghostBodySourceStart, pastedTextRanges],
+    () =>
+      projectSentRanges(pastedTextRanges ?? [], displayBubbleSourceStart, displayBubbleBody.length),
+    [displayBubbleBody.length, displayBubbleSourceStart, pastedTextRanges],
   );
   // 测量与收起态渲染共用的投影正文:粘贴段按胶囊文案计量,不再拿被折叠掉的
-  // 几百行原文去撞收起阈值(issue #946)。偏移只在 bubbleBody 与 ghostBody 同源时
-  // 精确 —— 引用交错的消息(quote 块被 join 掉,偏移会整体前移)保持原文测量。
+  // 几百行原文去撞收起阈值(issue #946)。偏移只在 bubbleBody 与 ghostBody 同源
+  // (无引用交错)时精确 —— quote 块被 join 掉的消息偏移会整体前移,保持原文
+  // 测量;硬指令剥 $token 不影响精确性(displayBubbleSourceStart 已重定位)。
   const collapseMeasureBody = useMemo(
     () =>
       bubbleBody === ghostBody
-        ? projectSentPastedPlainText(bubbleBody, bubblePastedRanges)
-        : bubbleBody,
-    [bubbleBody, bubblePastedRanges, ghostBody],
+        ? projectSentPastedPlainText(displayBubbleBody, bubblePastedRanges)
+        : displayBubbleBody,
+    [bubbleBody, ghostBody, displayBubbleBody, bubblePastedRanges],
   );
-  // 合并形态($指令 / 软提示兑现 / 语义召唤)不渲文字气泡,镜像测量无处挂载,直接关掉。
   const collapseMeasureEnabled =
     !orcaCommunication &&
     !hookSource &&
-    !ghostMergedForm &&
     mayExceedVisualLineThreshold(collapseMeasureBody, collapseThreshold);
   const { mirrorRef: collapseMirrorRef, shouldCollapse: shouldCollapseLongMessage } =
     useUserMessageAutoCollapse(collapseMeasureBody, collapseMeasureEnabled, collapseThreshold);
@@ -1288,8 +1288,10 @@ export function UserMessage({
               />
             ) : (
               <>
-                {/* 合并形态下用户正文由召唤卡承载,但引用上下文仍留在原消息中。 */}
-                {(inlineQuoteCount > 0 || (bubbleBody.trim() && !ghostMergedForm)) && (
+                {/* 召唤标注行(chip)嵌进气泡顶部;正文永远回归文字气泡(2026-07-29
+            取消合并形态)。气泡在有标注、有引用或有正文任一时渲染——$指令
+            无余文时气泡只剩标注行。 */}
+                {(inlineQuoteCount > 0 || displayBubbleBody.trim() || ghostChipDisplay) && (
                   <div
                     className={cn(
                       // overflow-wrap:anywhere（不是 break-words）才能让超长无空格序列
@@ -1305,6 +1307,22 @@ export function UserMessage({
                       'select-text',
                     )}
                   >
+                    {ghostChipDisplay && (
+                      /* ghost-summon-chip:标注行(法阵 + 意识名 + 状态 + 展开
+                 caret)。running = 本条消息触发的 turn 仍在执行(最后一条
+                 user 消息 + 会话流式中),期间法阵旋转,turn 结束播终态编舞。
+                 下方有正文/引用时加分隔线,单独成泡时不加。 */
+                      <GhostSummonCard
+                        directive={ghostChipDisplay}
+                        running={Boolean(sessionRunning) && Boolean(isLastUserMessage)}
+                        {...(messageClientId ? { messageClientId } : {})}
+                        className={
+                          inlineQuoteCount > 0 || displayBubbleBody.trim()
+                            ? 'mb-2.5 border-b border-[var(--msg-user-border)] pb-2.5'
+                            : undefined
+                        }
+                      />
+                    )}
                     {collapseMeasureEnabled && (
                       /* 收起判定的测量镜像:与正文同宽(inset-x-4 对应 px-4)、同字号
                  同换行规则的纯文本。max-h-0 + overflow-hidden 让它不占布局、
@@ -1336,7 +1354,7 @@ export function UserMessage({
                             >
                               <QuoteChip quote={segment.quote} />
                             </span>
-                          ) : ghostMergedForm ? null : (
+                          ) : (
                             <span
                               // biome-ignore lint/suspicious/noArrayIndexKey: 已发送消息内容不可变,顺序稳定。
                               key={index}
@@ -1386,7 +1404,7 @@ export function UserMessage({
                           ),
                         )}
                       </div>
-                    ) : (
+                    ) : displayBubbleBody.trim() ? (
                       <div
                         className={cn(
                           'whitespace-pre-wrap [overflow-wrap:anywhere]',
@@ -1401,7 +1419,7 @@ export function UserMessage({
                             // 且与上方测量镜像同一份文本(issue #946)。
                             collapseMeasureBody
                           : renderContent(
-                              bubbleBody,
+                              displayBubbleBody,
                               workingDir,
                               async (abs, name, chip) => {
                                 if (!(await shouldOpenTextLightboxForOrigin(sessionFileCtx, abs)))
@@ -1421,14 +1439,14 @@ export function UserMessage({
                                 ? undefined
                                 : projectSentRanges(
                                     slashCommandRanges,
-                                    ghostBodySourceStart,
-                                    bubbleBody.length,
+                                    displayBubbleSourceStart,
+                                    displayBubbleBody.length,
                                   ),
                               sessionReferences,
                               handlePastedTextChipClick,
                             )}
                       </div>
-                    )}
+                    ) : null}
                     {shouldCollapseLongMessage && (
                       <button
                         type="button"
@@ -1454,55 +1472,12 @@ export function UserMessage({
                     )}
                   </div>
                 )}
-                {/* ghost-summon-card:硬指令 / 软提示被兑现 / 语义自主召唤都走合并
-            形态(卡片即消息,prompt 富渲染后收进卡身,附件/引用仍在上方
-            各自的区块);未兑现的软提示保持低调胶囊。机器追加段的原文收进
-            卡片展开区(semantic 无追加段,展开区为来由说明)。running =
-            本条消息触发的 turn 仍在执行(最后一条 user 消息 + 会话流式中),
-            期间印记环旋转作 loading,turn 结束自动停。 */}
-                {ghostCardDisplay && (
+                {/* ghost-summon-pill:未兑现的软提示保持低调胶囊,留在气泡下方
+            (chip 标注行形态见气泡内部;提示原文仍可点开查看)。 */}
+                {ghostPillDisplay && (
                   <GhostSummonCard
-                    directive={ghostCardDisplay}
-                    running={Boolean(sessionRunning) && Boolean(isLastUserMessage)}
+                    directive={ghostPillDisplay}
                     {...(messageClientId ? { messageClientId } : {})}
-                    prompt={
-                      ghostCardPromptBody
-                        ? renderContent(
-                            ghostCardPromptBody,
-                            workingDir,
-                            async (abs, name, chip) => {
-                              if (!(await shouldOpenTextLightboxForOrigin(sessionFileCtx, abs)))
-                                return;
-                              activeFileChipRef.current = chip;
-                              setTextLightboxFile({ path: abs, name });
-                            },
-                            (xdtFileUrl) => setLightboxSrc(xdtFileUrl),
-                            t,
-                            sessionId,
-                            isRemoteFileOrigin(sessionFileCtx.origin),
-                            projectSentRanges(
-                              pastedTextRanges ?? [],
-                              ghostCardPromptSourceStart,
-                              ghostCardPromptBody.length,
-                            ),
-                            slashCommandRanges === undefined
-                              ? undefined
-                              : projectSentRanges(
-                                  slashCommandRanges,
-                                  ghostCardPromptSourceStart,
-                                  ghostCardPromptBody.length,
-                                ),
-                            // 召唤卡 prompt 与气泡正文用同一份 sessionReferences:它按
-                            // sessionId / messageClientId 匹配,不依赖文本偏移,不需要像
-                            // pastedTextRanges / slashCommandRanges 那样投影到 prompt 局部
-                            // 坐标。此前这里漏传(实参列表止于 slashCommandRanges),导致
-                            // prompt 里的会话深链 chip 少了 referenceMetadata 的 tooltip
-                            // 明细行,与正文渲染不一致(PR #966 review)。
-                            sessionReferences,
-                            handlePastedTextChipClick,
-                          )
-                        : undefined
-                    }
                   />
                 )}
                 {/* 订阅槽①:被意识钩子拦下 —— 气泡照常显示(未发出),下方渲一条

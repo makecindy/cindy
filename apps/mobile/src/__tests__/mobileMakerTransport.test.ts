@@ -271,6 +271,7 @@ describe('mobile maker transport', () => {
     await maker.setExtraDirs('s1', ['/repo/docs']);
     await maker.listAgentCommands('claude-code');
     await maker.listAgentSkills('claude-code', { workingDir: '/repo' });
+    await maker.listAgentSkills('codex', {});
     await maker.scanAtResources('claude-code', { workingDir: '/repo', cap: 2000, query: 'session' });
     await maker.fetchRemoteMedia('xdt-image://local/a.png');
     await maker.transcribeVoice({ ossKey: 'voice-key', mimeType: 'audio/mp4', fileName: 'voice.m4a' });
@@ -312,6 +313,7 @@ describe('mobile maker transport', () => {
       ['maker:set-extra-dirs', ['s1', ['/repo/docs']]],
       ['maker:list-agent-commands', ['claude-code']],
       ['maker:list-agent-skills', ['claude-code', { workingDir: '/repo' }]],
+      ['maker:list-agent-skills', ['codex', {}]],
       ['maker:scan-at-resources', ['claude-code', { workingDir: '/repo', cap: 2000, query: 'session' }]],
       ['device-link:media:fetch', [{ url: 'xdt-image://local/a.png' }]],
       ['device-link:voice:transcribe', [{ ossKey: 'voice-key', mimeType: 'audio/mp4', fileName: 'voice.m4a' }]],

@@ -26,12 +26,25 @@ export interface ModelDescriptor {
   displayName: string;
   /** 目录分组 id(如 'gpt-budget'): 折扣版与官方版 displayName 同名, 靠它区分。 */
   group?: string;
+  /**
+   * Gateway 原生 mode(issue #882)。availableModels 派生时已经过 isChatEligible
+   * 过滤,这里透传只是让下游按 model 二次分类的逻辑(如 resolveSourceSwitch 的
+   * classifyModel)拿到 mode,不必回读目录(2026-07 review)。
+   */
+  mode?: string;
   description?: string;
   contextWindow: number;
   efforts: readonly Effort[];
   effortDisplayNames?: Partial<Record<Effort, string>>;
   defaultEffort: Effort | null;
   supportsFastMode?: boolean;
+  /** 目录展示排序权重;缺省排末尾。 */
+  sortOrder?: number;
+  /**
+   * 选择器里默认是否可见(源自目录 defaultEnabled,缺省 ⇒ 可见)。
+   * 消费点见 modelDefinitions.getDefaultModelForVendor:种子默认只从默认可见的模型里取。
+   */
+  defaultEnabled?: boolean;
 }
 
 export interface EffortDescriptor {
@@ -273,6 +286,12 @@ export function useAgentCapabilities(
     const cached = cache.get(cacheKey(agentKind, deviceId));
     if (cached) {
       setCapabilities(cached);
+      // 缓存命中 = 数据已就绪,必须把上一目标遗留的 loading / error 一并清掉。
+      // 漏了会卡死:从「能力还在加载」的设备切到已缓存的设备时走到这里直接 return,
+      // 后续既没有请求也没有 listener 事件来收尾,loading 就永久停在 true,而创建页的
+      // send / goal guard 正是看 capabilitiesLoading —— 于是在路由重挂载前一直拒绝创建。
+      setLoading(false);
+      setError(null);
       return;
     }
     let cancelled = false;

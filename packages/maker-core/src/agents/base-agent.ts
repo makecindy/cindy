@@ -30,6 +30,7 @@ import type { AgentKind, Effort, PermissionMode, ReasoningDisplay, UserMessage, 
 import type { Capabilities, EffortDescriptor, ModelDescriptor } from '../types/capabilities.js';
 import { NotSupportedError } from '../types/capabilities.js';
 import type { AgentCredentialMode, AuthLoginOptions } from '../interfaces/auth-adapter.js';
+import type { ContactsPromptState } from '../contacts/system-prompt.js';
 import type {
   MemoryStatus,
   MemorySetResult,
@@ -78,6 +79,12 @@ export interface CodexMcpThreadContextArgs {
    */
   remoteHostId?: string;
   vendorOptions: Record<string, unknown>;
+}
+
+export interface CodexReviewerRouteContextArgs {
+  threadId: string;
+  sessionId: string;
+  model: string;
 }
 
 /**
@@ -180,6 +187,26 @@ export interface AgentDeps {
    * needs to replace built-in behavior.
    */
   capabilityAdditions?: AgentCapabilityAdditions;
+
+  /**
+   * 解析某条**具体路由**上该模型已核实的上下文窗口上限（host 注入）；没有则返回 null。
+   *
+   * 用于把上游上报的窗口收敛到真实上限：app-server 对网关路由的模型常报**基础模型**的窗口
+   * （例：目录 372K 的 GPT-5.6-Sol 被报成 1M），虚高值会让上下文占比被低估、memory flush
+   * 阈值跟着推迟。
+   *
+   * 为什么不让 agent 自己查 `capabilities.availableModels`：那是跨 provider 去重后的扁平表，
+   * 同一 model id 由多个 provider 提供时归属已丢，按 id 回查可能命中另一条路由的元数据 ——
+   * 用错路由的上限收敛比不收敛更糟。host 同时持有完整目录与 provider 维度，由它按
+   * (providerId, modelId) 定夺；目录里那些**派生兜底**的窗口（上游不给元数据时补的常量）
+   * 一律不作为上限。
+   *
+   * 返回 null / 缺省不注入 = 不收敛，直接采信上报值（改动前行为）。
+   */
+  resolveVerifiedContextWindow?: (
+    providerId: string | null | undefined,
+    modelId: string,
+  ) => number | null;
 
   /**
    * Agent 起 session 时追加到 system prompt 末尾的字符串（host 注入）。
@@ -300,6 +327,24 @@ export interface AgentDeps {
   makerMemory?: MakerMemoryManager;
 
   /**
+   * 智能通讯录「本会话有效状态」(host 注入)。决定注入哪段 contacts prompt
+   * (enabled = 使用规范, disabled = 可选功能告示, unavailable = 不注入, 语义见
+   * contacts/system-prompt.ts 的 ContactsPromptState)。host 必须按**有效策略**
+   * 计算, 不能只读全局开关: desktop 侧 = 全局开关 ∧ PluginRegistry 的
+   * 工作区/用户覆盖(workingDir 传入即为此), codex 侧还要与实际应用到 running
+   * app-server 的 spawn 快照对齐(失效失败时 stale 配置里没有新工具面)。
+   * 求值时机与 MCP 工具注册对齐, 保证 prompt 状态与工具可用性不分叉:
+   *  - claude-code: 每次 buildQuery(含 rewind/fresh 重建)与 buildMcpServers
+   *    同点求值, enabled 还会与本次 build 实际注册的 server 集合取交;
+   *    单次 build 内恒定, 前缀缓存不受影响。
+   *  - codex: session 启动求值一次(MCP flags 冻结在 spawn 配置)。
+   * remote 会话两端都不注入(cindy_contacts 不随远端转发)。
+   *
+   * 缺省 / undefined → 两段都不注入 (host 未接线, 与改造前行为一致)。
+   */
+  getContactsPromptState?: (ctx: { workingDir?: string }) => ContactsPromptState;
+
+  /**
    * Host-side MCP approval policy, shared by **both** agents. `auto-approve`
    * skips the permission prompt; `prompt` preserves the normal approval UI and
    * its optional session grant; `prompt-each-time` always asks and never
@@ -351,6 +396,18 @@ export interface AgentDeps {
     threadId: string;
     text: string;
   }) => void;
+
+  /**
+   * Codex 专用：登记 Guardian 子线程回到父业务 session 时应使用的主模型。
+   *
+   * Codex app-server 的模型目录由共享进程持有，不能代表单个 session 的实际
+   * Provider。host/proxy 通过 Guardian 请求的 x-codex-parent-thread-id 找回
+   * 此上下文，在非 OpenAI 路由把隐藏 codex-auto-review 改写为当前主模型。
+   *
+   * 只有明确返回 true 才表示路由已就绪；缺省、false 或抛错都必须继续使用
+   * user reviewer，不能让未知路由进入无人值守审批。
+   */
+  registerCodexReviewerRouteContext?: (args: CodexReviewerRouteContextArgs) => boolean;
 
   /**
    * Claude 专用: host 明确认定可无提示执行的只读工具名, 透传到 SDK
@@ -451,7 +508,62 @@ export interface AgentDeps {
      * 调不存在的工具。缺省视为 false。
      */
     makerMemoryEnabled?: boolean;
+    /**
+     * Callback for daemon-side subscription OAuth refresh (remote cc hit 401
+     * mid-turn). ClaudeCodeAgent wires it to auth.getFreshSubscriptionToken —
+     * only when the remote env actually carries CLAUDE_CODE_OAUTH_TOKEN
+     * (native OAuth route), never for gateway-key sessions.
+     *
+     * Params/Result follow `@cindy/maker-cc-manager` OAuthRefreshParams/Result
+     * ({ sessionId } → { token: string | null }), typed as unknown
+     * to avoid cross-package dependency.
+     */
+    onOAuthRefresh?: (params: unknown) => Promise<unknown>;
   }) => Promise<Query>;
+
+  /**
+   * 远端 Claude Code 会话的「路由 materialization」(host 注入)。
+   *
+   * 背景:本地会话按模型在「订阅直连 / 网关 / 自定义供应商」之间分流的逻辑活在本机
+   * loopback compat-proxy 里(按请求覆盖 upstream + 鉴权头)。远端 cc-mgr 会话够不到这个
+   * proxy,因此必须把「该会话应走的上游 + 鉴权 + 定制请求头」在 spawn 前解析好,直接烤进
+   * 远端 cc 子进程的 env(ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY | ANTHROPIC_AUTH_TOKEN /
+   * ANTHROPIC_CUSTOM_HEADERS / CLAUDE_CODE_OAUTH_TOKEN…)。host 层用当前生效目录的
+   * RoutingDescriptor + 本地凭证读取器解析(catalog / safeStorage 都在 host 侧),
+   * maker-core 只负责把结果覆盖进远端 env。
+   *
+   * 返回值:
+   *   - 非 null:用 `endpoint` 作 ANTHROPIC_BASE_URL,`env` 覆盖鉴权 / 定制头字段
+   *     (native OAuth 订阅、自定义 Claude Code 供应商都走这条)。
+   *   - null:该会话的有效路由就是 XD 网关(或默认回落网关)—— ClaudeCodeAgent 把远端
+   *     credentialMode 回落 'gateway-key',env 走网关 key + remoteEndpoint,与升级前
+   *     「远端恒用网关」字节级一致。**不回落会出现凭证形态漂移**:getAuthEnv 按本地
+   *     fallback 注入订阅 token / 占位 key,却打网关 endpoint(泄漏或 401)。
+   *   - throw:显式选定的供应商在远端无法表达(如声明了自定义 requestPath / modelIdRewrite,
+   *     cc env 无对应旋钮),host 抛出明确错误,由 startSession 透传给 renderer,不静默错路由。
+   *
+   * 缺省 / undefined(旧 host)→ ClaudeCodeAgent 同样回落 'gateway-key',保持既有
+   * 「远端恒用网关」行为。
+   */
+  resolveRemoteClaudeRoute?: (opts: {
+    providerId?: string | null;
+    model: string;
+  }) => Promise<RemoteClaudeRoute | null>;
+}
+
+/**
+ * 远端 Claude Code 会话解析出的上游 + 鉴权 env(见 AgentDeps.resolveRemoteClaudeRoute)。
+ */
+export interface RemoteClaudeRoute {
+  /** 远端 cc 子进程 ANTHROPIC_BASE_URL 的最终取值(供应商真上游,绝不是本机 loopback)。 */
+  endpoint: string;
+  /**
+   * 覆盖进远端 env 的鉴权 / 定制头字段。恰好携带一个鉴权门(ANTHROPIC_API_KEY 或
+   * ANTHROPIC_AUTH_TOKEN 或 CLAUDE_CODE_OAUTH_TOKEN),其余需要下发的请求头(含另一个
+   * 鉴权头、供应商定制头)统一放进 ANTHROPIC_CUSTOM_HEADERS —— 避免同时设两个鉴权 env
+   * 触发 cc 的 shouldDisableAuth(见 claude-code/index.ts 远端分支实测记录)。
+   */
+  env: Record<string, string>;
 }
 
 export interface OneShotOptions {
@@ -682,7 +794,7 @@ export interface SendOptions {
 
 export type TurnPermissionOrigin =
   | { kind: 'desktop' }
-  | { kind: 'im'; channel: 'feishu' | 'discord' | 'slack' | 'wechat'; taskId?: string }
+  | { kind: 'im'; channel: 'feishu' | 'discord' | 'slack' | 'wechat' | 'telegram'; taskId?: string }
   | { kind: 'scheduler' }
   | { kind: 'hook'; source: string };
 
@@ -812,7 +924,7 @@ export interface AgentSessionHandle {
   setInteractionResolver(resolver: InteractionResolver): void;
 
   /** 运行时切换模型 —— 不支持时抛 NotSupportedError */
-  setModel?(model: string): Promise<void>;
+  setModel?(model: string, opts?: { providerId?: string | null }): Promise<void>;
 
   /** 运行时切换 effort */
   setEffort?(effort: Effort): Promise<void>;

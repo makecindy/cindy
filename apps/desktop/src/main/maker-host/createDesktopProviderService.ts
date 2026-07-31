@@ -62,7 +62,7 @@ import {
 } from './generic-oauth.js';
 import { genericOAuthSecretIo, addProviderSecretsClearedListener } from '../secrets/providerSecretStore.js';
 import { readClaudeApiKey, desktopCodexAuthAdapter } from './auth-adapters.js';
-import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
+import { getProviderSecretStore, readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import { hasClaudeAiOAuth, hasClaudeAiOAuthUnbound } from './claude-credentials-store.js';
 import {
   getGrokAccessToken,
@@ -506,6 +506,9 @@ export function getDesktopProviderService(): ProviderService {
     },
     // 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）：连接态 = 本机凭证 blob 是否存在。
     genericOAuthConnected: (providerId) => hasGenericOAuthLogin(providerId),
+    // 内置 API-key 供应商(如 gemini 图像来源):连接态 = key 已存(providerSecretStore)。
+    builtinApiKeyConnected: (providerId) =>
+      providerId === 'gemini' ? Boolean(getProviderSecretStore().get('gemini')?.trim()) : false,
     // 动态清单发现的失败归因：目前只有 anthropic 是「清单唯一来源是动态发现」的供应商，
     // 拉不到就是零模型 —— UI 要据此讲明失败理由，而不是一直说「正在发现」。
     //
