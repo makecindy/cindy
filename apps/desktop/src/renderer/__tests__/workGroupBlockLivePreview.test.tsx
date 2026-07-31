@@ -269,6 +269,11 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     // 即使运行中的工作组没有更多内容可供外层展开，思考预览行本身也应可点击查看全文。
     const thinkingPreview = screen.getByText('checking the current state').closest('button');
     if (!thinkingPreview) throw new Error('Missing expandable live thinking row');
+    thinkingPreview.focus();
+    expect(document.activeElement).toBe(thinkingPreview);
+    expect(thinkingPreview.className).toContain(
+      'focus-visible:ring-[var(--focus-ring)]',
+    );
     expect(thinkingPreview.getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(thinkingPreview);
     expect(thinkingPreview.getAttribute('aria-expanded')).toBe('true');

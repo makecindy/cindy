@@ -81,7 +81,7 @@ function thinkingActivityForMessage(
 ): ProjectedThinkingActivity | null {
   if (message.thinkingRedacted) return null;
   const rawContent = message.content.trim();
-  const content = rawContent.replace(/\s+/g, ' ').trim();
+  const content = rawContent.replace(/\s+/g, ' ');
   return content
     ? { kind: 'thinking', key: message.clientId, rawContent, content }
     : null;
@@ -163,7 +163,7 @@ function ThinkingActivityRow({
       aria-expanded={canExpand ? expanded : undefined}
       onClick={() => setExpanded((value) => !value)}
       className={cn(
-        'flex w-full min-w-0 items-start gap-[6px] px-2 py-[3px] text-left',
+        'flex w-full min-w-0 items-start gap-[6px] px-2 py-[3px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
         canExpand && 'cursor-pointer hover:opacity-80 transition-opacity',
       )}
     >
@@ -252,7 +252,7 @@ function ExpandedThinkingRow({ message }: { message: ChatMessage }) {
       disabled={!canExpand}
       aria-expanded={canExpand ? expanded : undefined}
       className={cn(
-        'flex w-full min-w-0 items-start gap-[6px] px-2 py-[3px] text-left',
+        'flex w-full min-w-0 items-start gap-[6px] px-2 py-[3px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
         canExpand && 'cursor-pointer hover:opacity-80 transition-opacity',
       )}
     >

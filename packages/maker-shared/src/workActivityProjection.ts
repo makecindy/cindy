@@ -210,7 +210,7 @@ function projectThinkingMessage<TMessage extends WorkActivityMessageLike>(
 ): ProjectedThinkingActivity | null {
   if (message.thinkingRedacted) return null;
   const rawContent = message.content.trim();
-  const content = rawContent.replace(/\s+/g, ' ').trim();
+  const content = rawContent.replace(/\s+/g, ' ');
   return content
     ? { kind: 'thinking', key: message.clientId, rawContent, content }
     : null;
