@@ -32,6 +32,20 @@ async function writePluginCache(
   await fs.writeFile(path.join(dir, 'plugin.json'), `{"name":"${plugin}"}`, 'utf8');
 }
 
+async function writePluginEnabledState(
+  configFile: string,
+  plugin: string,
+  marketplace: string,
+  enabled: boolean,
+): Promise<void> {
+  await fs.mkdir(path.dirname(configFile), { recursive: true });
+  await fs.writeFile(
+    configFile,
+    `[plugins."${plugin}@${marketplace}"]\nenabled = ${enabled}\n`,
+    'utf8',
+  );
+}
+
 async function sameRealPath(a: string, b: string): Promise<boolean> {
   const [ra, rb] = await Promise.all([fs.realpath(a), fs.realpath(b)]);
   const normalize = (value: string) =>
@@ -330,6 +344,12 @@ describe('prepareCodexGlobalPluginsBridge', () => {
     const { homeDir, codexHome, paths } = await setup();
     const marketplace = 'personal';
     await writePluginCache(paths.sourceCacheDir, marketplace, 'feishu-delegate', '0.1.0');
+    await writePluginEnabledState(
+      paths.sourceConfigFile,
+      'feishu-delegate',
+      marketplace,
+      true,
+    );
     await prepareCodexGlobalPluginsBridge(codexHome, { homeDir });
 
     const result = await prepareCodexGlobalPluginsBridge(codexHome, {
@@ -376,6 +396,12 @@ describe('prepareCodexGlobalPluginsBridge', () => {
         path.join(pluginDir, 'skills', 'message-feishu-coworkers'),
         'dir',
       );
+      await writePluginEnabledState(
+        paths.sourceConfigFile,
+        'feishu-delegate',
+        'personal',
+        true,
+      );
 
       const result = await prepareCodexGlobalPluginsBridge(codexHome, {
         homeDir,
@@ -414,6 +440,12 @@ describe('prepareCodexGlobalPluginsBridge', () => {
         realPluginDir,
         path.join(marketplaceDir, 'feishu-delegate'),
         'dir',
+      );
+      await writePluginEnabledState(
+        paths.sourceConfigFile,
+        'feishu-delegate',
+        'personal',
+        true,
       );
 
       const result = await prepareCodexGlobalPluginsBridge(codexHome, {
@@ -484,6 +516,12 @@ describe('prepareCodexGlobalPluginsBridge', () => {
     await fs.mkdir(path.join(paths.cacheDir, marketplace, plugin, version), {
       recursive: true,
     });
+    await writePluginEnabledState(
+      paths.sourceConfigFile,
+      plugin,
+      marketplace,
+      true,
+    );
 
     const result = await prepareCodexGlobalPluginsBridge(codexHome, {
       homeDir,
@@ -496,6 +534,76 @@ describe('prepareCodexGlobalPluginsBridge', () => {
     expect(result.routingFailures).toEqual([
       expect.stringContaining(`installed Codex plugin ${plugin}@${marketplace}`),
     ]);
+  });
+
+  it('does not fail routing for a protected plugin that exists only in cache', async () => {
+    const { homeDir, codexHome, paths } = await setup();
+    const marketplace = 'personal';
+    const plugin = 'feishu-delegate';
+    const version = '0.1.0';
+    const skill = 'message-feishu-coworkers';
+    await writePluginCache(paths.sourceCacheDir, marketplace, plugin, version);
+    await fs.mkdir(
+      path.join(paths.sourceCacheDir, marketplace, plugin, version, 'skills', skill),
+      { recursive: true },
+    );
+    await fs.mkdir(path.join(paths.cacheDir, marketplace, plugin, version), {
+      recursive: true,
+    });
+
+    const result = await prepareCodexGlobalPluginsBridge(codexHome, {
+      homeDir,
+      capabilityRouting: explicitOnlySkillPolicy(plugin, marketplace, skill),
+    });
+
+    expect(result.marketplaces).toEqual([
+      expect.objectContaining({ name: marketplace, status: 'conflict' }),
+    ]);
+    expect(result.routingFailures).toEqual([]);
+  });
+
+  it('does not fail routing when the isolated config keeps the plugin disabled', async () => {
+    const { homeDir, codexHome, paths } = await setup();
+    const marketplace = 'personal';
+    const plugin = 'feishu-delegate';
+    const version = '0.1.0';
+    const skill = 'message-feishu-coworkers';
+    await writePluginCache(paths.sourceCacheDir, marketplace, plugin, version);
+    await fs.mkdir(
+      path.join(paths.sourceCacheDir, marketplace, plugin, version, 'skills', skill),
+      { recursive: true },
+    );
+    await fs.mkdir(path.join(paths.cacheDir, marketplace, plugin, version), {
+      recursive: true,
+    });
+    await writePluginEnabledState(
+      paths.sourceConfigFile,
+      plugin,
+      marketplace,
+      true,
+    );
+    await writePluginEnabledState(
+      paths.configFile,
+      plugin,
+      marketplace,
+      false,
+    );
+
+    const result = await prepareCodexGlobalPluginsBridge(codexHome, {
+      homeDir,
+      capabilityRouting: explicitOnlySkillPolicy(plugin, marketplace, skill),
+    });
+
+    expect(result.marketplaces).toEqual([
+      expect.objectContaining({ name: marketplace, status: 'conflict' }),
+    ]);
+    expect(result.addedPluginEntries).toEqual([]);
+    expect(result.routingFailures).toEqual([]);
+    expect(
+      pluginsTableOf(await fs.readFile(paths.configFile, 'utf8'))[
+        `${plugin}@${marketplace}`
+      ],
+    ).toEqual({ enabled: false });
   });
 
   it('links marketplace cache dirs and appends missing [plugins] entries', async () => {

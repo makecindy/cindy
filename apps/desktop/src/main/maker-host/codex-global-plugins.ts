@@ -62,7 +62,7 @@ export interface CodexGlobalPluginsPrepareResult {
   /** 本轮新追加进隔离 config.toml 的插件 key(`name@marketplace`)。 */
   addedPluginEntries: string[];
   /**
-   * 已安装、但 Cindy 无法在隔离 home 中可靠收紧的下游能力。
+   * 已启用、但 Cindy 无法在隔离 home 中可靠收紧的下游能力。
    *
    * 调用方必须把非空结果当成 session 启动失败，不能静默退回用户原始
    * marketplace 链接，否则 explicit-only Skill 会重新变成隐式可调用。
@@ -733,6 +733,7 @@ async function collectCapabilityRoutingFailures(
   cacheDir: string,
   overlaysByMarketplace: ReadonlyMap<string, readonly CodexPluginOverlay[]>,
   marketplaces: readonly CodexGlobalPluginsMarketplaceResult[],
+  enabledPluginKeys: ReadonlySet<string>,
 ): Promise<string[]> {
   const statusByMarketplace = new Map(
     marketplaces.map(({ name, status }) => [name, status] as const),
@@ -741,7 +742,16 @@ async function collectCapabilityRoutingFailures(
   for (const [marketplace, overlays] of overlaysByMarketplace) {
     const status = statusByMarketplace.get(marketplace);
     if (status === 'linked' || status === 'kept') continue;
-    for (const pluginName of new Set(overlays.map((overlay) => overlay.pluginName))) {
+    const protectedPlugins = new Map(
+      overlays.map((overlay) => [overlay.pluginKey, overlay.pluginName] as const),
+    );
+    for (const [pluginKey, pluginName] of protectedPlugins) {
+      // A stale cache directory does not make a plugin active. The isolated
+      // config is authoritative because syncPluginEntries deliberately keeps
+      // an existing `enabled = false` choice and does not invent entries for
+      // cache-only plugins. Only an active source can make a failed overlay
+      // fatal to Codex startup.
+      if (!enabledPluginKeys.has(pluginKey)) continue;
       if (!(await isDirectory(path.join(cacheDir, marketplace, pluginName)))) continue;
       failures.push(
         `cannot enforce Cindy capability routing for installed Codex plugin ${pluginName}@${marketplace} (marketplace status: ${status ?? 'unmanaged'})`,
@@ -782,6 +792,26 @@ async function readPluginsTable(file: string): Promise<{
         ? (plugins as Record<string, unknown>)
         : {},
   };
+}
+
+async function readEnabledPluginKeys(
+  configFile: string,
+  warnings: string[],
+): Promise<Set<string>> {
+  let config: Awaited<ReturnType<typeof readPluginsTable>>;
+  try {
+    config = await readPluginsTable(configFile);
+  } catch (err) {
+    warnings.push(
+      `cannot confirm enabled plugins in isolated codex config ${configFile}: ${(err as Error).message}`,
+    );
+    return new Set();
+  }
+  return new Set(
+    Object.entries(config.plugins).flatMap(([key, value]) =>
+      isRecord(value) && value['enabled'] !== false ? [key] : [],
+    ),
+  );
 }
 
 /**
@@ -965,10 +995,15 @@ export async function prepareCodexGlobalPluginsBridge(
 
     const added = await syncPluginEntries(paths, liveNames, warnings);
     changed = changed || added.length > 0;
+    const enabledPluginKeys =
+      overlaysByMarketplace.size > 0
+        ? await readEnabledPluginKeys(paths.configFile, warnings)
+        : new Set<string>();
     const routingFailures = await collectCapabilityRoutingFailures(
       paths.cacheDir,
       overlaysByMarketplace,
       marketplaces,
+      enabledPluginKeys,
     );
     return {
       codexHome,
@@ -981,10 +1016,15 @@ export async function prepareCodexGlobalPluginsBridge(
     };
   }
 
+  const enabledPluginKeys =
+    overlaysByMarketplace.size > 0
+      ? await readEnabledPluginKeys(paths.configFile, warnings)
+      : new Set<string>();
   const routingFailures = await collectCapabilityRoutingFailures(
     paths.cacheDir,
     overlaysByMarketplace,
     marketplaces,
+    enabledPluginKeys,
   );
   return {
     codexHome,
