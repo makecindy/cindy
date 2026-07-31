@@ -48,6 +48,12 @@ describe('buildMobileUpdateInfoRows', () => {
       isEmergencyLaunch: true,
       emergencyLaunchReason: 'No launchable update was found.',
     });
+    // 运行来源不能报「OTA 热更新」:应急启动跑的是内置 bundle,否则同一区块自相矛盾。
+    expect(rows[0]).toEqual({
+      id: 'source',
+      label: '运行来源',
+      value: '内置版本(应急启动，热更未生效)',
+    });
     expect(rows.at(-1)).toEqual({
       id: 'emergencyLaunch',
       label: '应急启动',

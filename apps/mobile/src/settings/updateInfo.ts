@@ -54,9 +54,13 @@ export function buildMobileUpdateInfoRows(currentlyRunning: MobileUpdateInfoInpu
     {
       id: 'source',
       label: i18n.t('settings.updateInfo.source'),
+      // 应急启动跑的也是内置 bundle(只是没走 embedded update 记录,isEmbeddedLaunch 为 false),
+      // 报「OTA 热更新」会跟同一区块里的应急启动行、以及「热更版本」自相矛盾。
       value: currentlyRunning.isEmbeddedLaunch
         ? i18n.t('settings.updateInfo.sourceEmbedded')
-        : i18n.t('settings.updateInfo.sourceOta'),
+        : currentlyRunning.isEmergencyLaunch
+          ? i18n.t('settings.updateInfo.sourceEmergencyFallback')
+          : i18n.t('settings.updateInfo.sourceOta'),
     },
     { id: 'updateId', label: i18n.t('settings.updateInfo.updateId'), value: updateId ? updateId.slice(0, 8) : '—' },
     { id: 'updatedAt', label: i18n.t('settings.updateInfo.updatedAt'), value: createdAt ? formatMobileUpdateTime(createdAt) : '—' },

@@ -81,6 +81,7 @@
     "unknown": "未知",
     "source": "运行来源",
     "sourceEmbedded": "内置版本(随包)",
+    "sourceEmergencyFallback": "内置版本(应急启动，热更未生效)",
     "sourceOta": "OTA 热更新",
     "updateId": "更新 ID",
     "updatedAt": "更新时间",

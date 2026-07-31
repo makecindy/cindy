@@ -81,6 +81,7 @@
     "unknown": "알 수 없음",
     "source": "실행 소스",
     "sourceEmbedded": "내장 버전 (패키지 포함)",
+    "sourceEmergencyFallback": "내장 버전 (긴급 실행, OTA 미적용)",
     "sourceOta": "OTA 업데이트",
     "updateId": "업데이트 ID",
     "updatedAt": "업데이트 시간",

@@ -81,6 +81,7 @@
     "unknown": "Unknown",
     "source": "Running Source",
     "sourceEmbedded": "Embedded (with app package)",
+    "sourceEmergencyFallback": "Embedded (emergency launch; OTA not applied)",
     "sourceOta": "OTA update",
     "updateId": "Update ID",
     "updatedAt": "Updated At",
