@@ -775,7 +775,14 @@ export interface DynamicToolCallResponse {
  */
 export interface ThreadStartedNotification {
   method: 'thread/started';
-  params: { thread: { id: string; [k: string]: unknown }; [k: string]: unknown };
+  params: {
+    thread: {
+      id: string;
+      parentThreadId?: string | null;
+      [k: string]: unknown;
+    };
+    [k: string]: unknown;
+  };
 }
 
 export interface TurnStartedNotification {

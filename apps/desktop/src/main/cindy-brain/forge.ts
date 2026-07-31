@@ -15,6 +15,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
 import JSZip from 'jszip';
 
@@ -24,7 +25,12 @@ import {
   validateGhostManifest,
   type GhostManifest,
 } from '../../shared/ghost.js';
+import {
+  classifyGhostDirEntry,
+  resolveGhostContentPath,
+} from './ghostContentTree.js';
 import { validateGhostLocaleResourcesInDirectory } from './ghostLocaleFiles.js';
+import { isPathInsideDir } from './dirDeposit.js';
 import { checkSkillMdConsistency } from './skillSlot.js';
 
 /** 与 GhostManager 装入侧同一量级的上限(打包侧提前拦,fail fast)。 */
@@ -47,7 +53,13 @@ export type ForgePackResult =
   | { ok: true; cindyPath: string; manifest: GhostManifest }
   | {
       ok: false;
-      errorCode: 'DIR_NOT_FOUND' | 'MANIFEST_INVALID' | 'ENTRY_MISSING' | 'TOO_LARGE' | 'INTERNAL';
+      errorCode:
+        | 'DIR_NOT_FOUND'
+        | 'SOURCE_IS_INSTALLED_PLUGIN'
+        | 'MANIFEST_INVALID'
+        | 'ENTRY_MISSING'
+        | 'TOO_LARGE'
+        | 'INTERNAL';
       message: string;
     };
 
@@ -396,14 +408,25 @@ function hasFsErrorCode(err: unknown, code: string): boolean {
 }
 
 /**
+ * realpath 一律走 `.native` 变体:与 dirDeposit / ghostLocalPathGrant 等其余钳制点
+ * 同一口径(受管根判定的最终比较虽已做 win32 大小写折叠,但解析器本身也不该是
+ * 全仓唯一的例外)。`fs.promises.realpath` 没有 native 变体,promisify 一次。
+ */
+const realpathNative = promisify(fs.realpath.native);
+
+/**
  * 创建一份不覆盖任何现有内容的插件源码骨架。
  *
  * 文件先写进同目录临时文件夹，全部成功后再一次 rename 到目标；目标已经
  * 存在时直接拒绝，因此并发调用也不会把用户原文件覆盖一半。
+ *
+ * `forbiddenRootDirs` 与打包侧同源(Host 受管的安装根 + 批准状态根):骨架也不
+ * 许落进已安装插件或状态目录 —— 那既会改写已批准插件的内容(随包种子还会因此
+ * 翻转播种指纹被整目录换回),又会诱导作者继续在安装目录里改代码。
  */
 export async function scaffoldGhostDir(
   input: ForgeScaffoldInput,
-  options?: { sessionWorkdir?: string | null },
+  options?: { sessionWorkdir?: string | null; forbiddenRootDirs?: readonly string[] },
 ): Promise<ForgeScaffoldResult> {
   const template = input.template;
   if (!FORGE_SCAFFOLD_TEMPLATES.includes(template)) {
@@ -425,33 +448,51 @@ export async function scaffoldGhostDir(
   // 就取「已存在的最深祖先」的真身再拼回剩余段。
   let realWorkdir: string;
   try {
-    realWorkdir = await fs.promises.realpath(path.resolve(workdir));
+    realWorkdir = await realpathNative(path.resolve(workdir));
   } catch {
     return { ok: false, errorCode: 'INVALID_INPUT', message: '会话工作目录不存在,无法确定骨架输出位置' };
   }
-  let realAncestor = resolved;
-  const pendingSegments: string[] = [];
-  for (;;) {
-    try {
-      realAncestor = await fs.promises.realpath(realAncestor);
-      break;
-    } catch (err) {
-      if (!hasFsErrorCode(err, 'ENOENT')) {
-        return {
-          ok: false,
-          errorCode: 'INTERNAL',
-          message: err instanceof Error ? err.message : String(err),
-        };
-      }
-      const parent = path.dirname(realAncestor);
-      if (parent === realAncestor) break; // 到根了,根一定存在,防御性兜底
-      pendingSegments.unshift(path.basename(realAncestor));
-      realAncestor = parent;
-    }
+  // 「已存在的最深祖先取真身再拼回剩余段」与打包侧受管根解析共用同一个 helper ——
+  // 这段 walk 原来在这里手写了一份,同一判定两份实现正是这条链路反复出问题的形态。
+  let realTarget: string;
+  try {
+    realTarget = await resolveThroughExistingAncestor(resolved);
+  } catch (err) {
+    return {
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: err instanceof Error ? err.message : String(err),
+    };
   }
-  const realTarget = path.join(realAncestor, ...pendingSegments);
   if (!realTarget.startsWith(`${realWorkdir}${path.sep}`) && realTarget !== realWorkdir) {
     return { ok: false, errorCode: 'INVALID_INPUT', message: 'dir 必须在当前会话工作目录内' };
+  }
+  for (const forbiddenRoot of options?.forbiddenRootDirs ?? []) {
+    let resolvedForbiddenRoot: string;
+    try {
+      resolvedForbiddenRoot = await resolveThroughExistingAncestor(forbiddenRoot);
+    } catch (err) {
+      return {
+        ok: false,
+        errorCode: 'INTERNAL',
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+    // 与打包侧同形的双向判定。祖先方向这一半在这里是 defense-in-depth 而不是修洞:
+    // 骨架目标若是受管根的祖先,该目录必然已存在,最终 rename 会以 TARGET_EXISTS 拒掉。
+    // 仍然写出来,是为了不让"上游守卫够不够用"依赖读者去推断下游 rename 的语义 ——
+    // 判定散落且各自只覆盖一半,正是这条链路反复出问题的成因。
+    if (
+      isPathInsideDir(resolvedForbiddenRoot, realTarget) ||
+      isPathInsideDir(realTarget, resolvedForbiddenRoot)
+    ) {
+      return {
+        ok: false,
+        errorCode: 'INVALID_INPUT',
+        message:
+          'dir 不能落在已安装插件目录或 Host 管理的状态目录内,也不能是它们的上级目录;请在工作目录里换一个独立的作者目录',
+      };
+    }
   }
   const files = scaffoldFiles(input);
   // 显式收窄而非 as 断言:manifest 恒为 JSON 字符串,二进制项(占位图标)另存;
@@ -543,6 +584,7 @@ export async function scaffoldGhostDir(
  */
 async function buildGhostPackage(
   dir: string,
+  options: { forbiddenRootDirs?: readonly string[] } = {},
 ): Promise<
   | { ok: true; buf: Buffer; manifest: GhostManifest }
   | Exclude<ForgePackResult, { ok: true }>
@@ -556,6 +598,25 @@ async function buildGhostPackage(
     }
     if (!stat.isDirectory()) {
       return { ok: false, errorCode: 'DIR_NOT_FOUND', message: `不是目录:${dir}` };
+    }
+    const realSourceDir = await realpathNative(dir);
+    for (const forbiddenRoot of options.forbiddenRootDirs ?? []) {
+      const resolvedForbiddenRoot = await resolveThroughExistingAncestor(forbiddenRoot);
+      // 判定必须**双向**:源目录落在受管根内要拒(拿已安装插件当源码),源目录是受管根的
+      // 祖先也要拒 —— 后者下面的递归打包会走进 cindy-brain / ghost-install-state,把
+      // 已安装插件字节、批准 receipt 与技能快照一并打进 .cindy。单向判定时,只要在
+      // owner 数据目录里放一个 ghost.json 就能触发。
+      if (
+        isPathInsideDir(resolvedForbiddenRoot, realSourceDir) ||
+        isPathInsideDir(realSourceDir, resolvedForbiddenRoot)
+      ) {
+        return {
+          ok: false,
+          errorCode: 'SOURCE_IS_INSTALLED_PLUGIN',
+          message:
+            'Forge source must not be an installed Plugin or a Host-managed state directory; copy the source into the current session workdir first',
+        };
+      }
     }
 
     // 1) 清单先行:与装入侧同一套校验,错在打包期就报清楚。
@@ -597,10 +658,16 @@ async function buildGhostPackage(
     for (const item of manifest.skill?.items ?? []) mustExist.push(`${item.dir}/SKILL.md`);
     for (const rel of mustExist) {
       try {
-        const st = await fs.promises.stat(path.join(dir, rel));
-        if (!st.isFile()) throw new Error('not a file');
+        // 逐段解析(判据同装入侧 ghostContentTree):`stat` 会穿透链接,让"声明的
+        // 文件是链接"通过检查,而下面的收集步按类型跳过链接 —— 包就少了这个文件,
+        // 错误延迟到用户装入时才现形。这里直接拒,报清楚。
+        await resolveGhostContentPath(dir, rel, { expect: 'file', label: 'forge source' });
       } catch {
-        return { ok: false, errorCode: 'ENTRY_MISSING', message: `清单声明的文件不存在:${rel}` };
+        return {
+          ok: false,
+          errorCode: 'ENTRY_MISSING',
+          message: `清单声明的文件不存在或不是普通文件(链接不可打包):${rel}`,
+        };
       }
     }
 
@@ -656,10 +723,16 @@ async function buildGhostPackage(
           };
         }
         seenPackPaths.add(foldedRel);
-        if (e.isDirectory()) {
+        // 类型判定走 ghostContentTree(一律 lstat,不信 Dirent 类型位):非普通条目
+        // 既不递归也不收集 —— 递归进一条指向 cindy-brain / ghost-install-state 的
+        // 链接就会把已安装插件字节、批准 receipt 与技能快照打进 .cindy。源目录与
+        // 受管根的**双向**包含判定挡住了"源目录是受管根祖先"那一半,这里挡的是
+        // "源目录里放一条链接指进去"那一半,两半都要在。
+        const kind = await classifyGhostDirEntry(abs);
+        if (kind === 'directory') {
           const bad = await walk(abs, rel);
           if (bad) return bad;
-        } else if (e.isFile()) {
+        } else if (kind === 'file') {
           files.push({ rel, abs });
           totalBytes += (await fs.promises.stat(abs)).size;
           if (files.length > maxFiles) {
@@ -710,8 +783,11 @@ async function buildGhostPackage(
  * 同名覆盖——同 id 同版本重打包语义上就是同一个包),用户在自己的意识目录里
  * 就能拿到成品;出错返回结构化分类,agent 按 message 修源码即可,不抛异常。
  */
-export async function packGhostDir(dir: string): Promise<ForgePackResult> {
-  const built = await buildGhostPackage(dir);
+export async function packGhostDir(
+  dir: string,
+  options: { forbiddenRootDirs?: readonly string[] } = {},
+): Promise<ForgePackResult> {
+  const built = await buildGhostPackage(dir, options);
   if (!built.ok) return built;
   // 产物跟源码住一起(2026-07 Lizi 定案:拿取直观);文件收集在写盘之前完成
   // + shouldSkip 跳过 *.cindy,自身产物不会进包;同名覆盖。
@@ -735,8 +811,9 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
 export async function packGhostDirToFile(
   dir: string,
   destPath: string,
+  options: { forbiddenRootDirs?: readonly string[] } = {},
 ): Promise<ForgePackResult> {
-  const built = await buildGhostPackage(dir);
+  const built = await buildGhostPackage(dir, options);
   if (!built.ok) return built;
   try {
     await fs.promises.writeFile(destPath, built.buf, { flag: 'wx' });
@@ -748,6 +825,27 @@ export async function packGhostDirToFile(
     };
   }
   return { ok: true, cindyPath: destPath, manifest: built.manifest };
+}
+
+/**
+ * Resolve symlinks/junctions in the existing prefix while retaining a
+ * non-existent tail. This keeps managed roots comparable before first use.
+ */
+async function resolveThroughExistingAncestor(inputPath: string): Promise<string> {
+  let cursor = path.resolve(inputPath);
+  const tail: string[] = [];
+  while (true) {
+    try {
+      const real = await realpathNative(cursor);
+      return path.join(real, ...tail);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      const parent = path.dirname(cursor);
+      if (parent === cursor) return path.resolve(inputPath);
+      tail.unshift(path.basename(cursor));
+      cursor = parent;
+    }
+  }
 }
 
 /**
@@ -785,7 +883,8 @@ ghost_forge_pack 打包 → 用户在弹窗上确认装入。**
   显式点名(推荐,§2)。
 - **启动模式**:on-demand 按需拉起(缺省,推荐)/ resident 常驻(仅订阅型、要秒响应
   的场景,§2)。
-- **后台能力**:要不要旁听事件(subscribe 槽,§4.6)、发系统提示(notify 槽,§4.9)。
+- **后台能力**:要不要旁听事件(subscribe 槽,§4.6)、发系统提示(notify 槽,§4.9)、
+  动手前弹确认框征求同意(confirm 槽,§4.18)。
 - **联网与凭证**:要不要 network 槽白名单联网(§4.7);要用户填 key 就需要 setup
   就绪声明与 settingsHtml 设置区(§4.7、§4.8)。
 - **运行形态**:纯沙箱 main.js 够用,还是要随包 Node 进程装依赖跑重活(node 槽,§4.12)。
@@ -930,12 +1029,13 @@ key、未知字段、原清单没有的条目、类型或长度不合格、文�
 node secretBindings key、setup kv key——都不能使用 \`__proto__\`、\`constructor\` 或
 \`prototype\`；这些名称是宿主保留键，打包时会直接拒绝。
 
-十五个卡槽:\`tool\`(注册工具给 AI)、\`cindy\`(请 Cindy 本体代办:出图/改图/快问快答,
+十六个卡槽:\`tool\`(注册工具给 AI)、\`cindy\`(请 Cindy 本体代办:出图/改图/快问快答,
 见 §4 与 §4.0.2)、\`agent\`(让
 当前 Agent 开始一个普通用户回合,或派活取回结果,见 §4.11 / §4.11.1)、\`panel\`(常驻
 面板)、\`card\`(聊天卡片:自绘工具调用的过程与结果,见 §4.5)、\`subscribe\`(旁听会话
 事件 + 拦截用户消息,见 §4.6)、\`network\`(访问自带服务的域名白名单 HTTP,主机代发,
-见 §4.7)、\`notify\`(弹系统轻提示,主机画壳带你的身份头,见 §4.9)、\`fs\`(请主机
+见 §4.7)、\`notify\`(弹系统轻提示,主机画壳带你的身份头,见 §4.9)、\`confirm\`(弹主机
+同款确认框征求用户同意并拿回真实点击,见 §4.18)、\`fs\`(请主机
 代写文件:私有数据目录/会话工作目录/过户目录三档,见 §4.10)、\`node\`(运行随包
 Node 工作进程或 stdio MCP,见 §4.12)、\`session-context\`(派活时主机把当前会话的
 可信 session_id / workdir / 只读状态注入 args,见 §4.13)、\`pick\`(请主机弹系统选文件夹窗口,
@@ -2098,8 +2198,9 @@ const r = await cindy.send({ type: 'notify', text: '视频已生成,点面板查
   别拿它刷进度条,进度走聊天卡片的过程版(§4.5);
 - **身份头主机画**:提示上自动带你的图标和名字,冒充不了主机通知、也冒充不了别的
   意识;正文里不用再自报家门;
-- 提示自动消失、无按钮、无回执——**不是确认框**。需要用户点选/确认的交互,用面板
-  自绘控件或交互卡(§4.5 的 data-ghost-action)。
+- 提示自动消失、无按钮、无回执——**不是确认框**。要用户点「同意/取消」并把答案交回
+  给你,用 §4.18 的 confirm 槽(主机同款确认框);要在聊天流里放按钮用交互卡
+  (§4.5 的 data-ghost-action)。
 
 ## 4.10 写文件(fs 槽)
 
@@ -2223,7 +2324,12 @@ await cindy.agent.run({
 const r = await cindy.agent.errand({
   task: '阅读工作目录下的 README 并总结要点(200 字以内)',
   // context: { anything: '结构化上下文,主机 JSON 化后附在任务消息尾部' },
-  // title: '我的插件 · 代办',   // 仅首次创建 errand 会话时用作标题
+  // title: '我的插件 · 代办',   // 仅首次创建对应 errand 会话时用作标题
+  // workingDir: repoDir,        // 可选:请求建在某目录(只认用户亲选过的,见下)
+  // sessionKey: 'pr-123',       // 可选:分会话钥匙(1–64 位字母/数字/._-)。
+  //                             // 不传 = 插件共用一间;同钥匙同间、异钥匙各间,
+  //                             // 适合按业务对象各聊各的(如每条 PR 一间,标题
+  //                             // 在该间首次创建时用 title 定,正好带上对象编号)
   // mode: 'wait',               // 同步等到完成(30 分钟顶);默认不传 = 异步
   callId: msg.callId,
 });
@@ -2244,8 +2350,14 @@ const q = await cindy.agent.queryErrand({ jobId: r.jobId });
   **只读**(不能改任何文件),目录缺省是插件专属文件夹。别假设你能写文件——
   只读档下让 Agent"分析/回答"没问题,"修改"类任务要在文案里引导用户先放开
   权限档;
+- 目录有一个受控例外:run 请求可带 \`workingDir\`(绝对路径)**转述**一个目录,
+  让 errand 会话建在项目里(Agent 能看到代码)。这不是授权——主机只认用户
+  此前在 pick 槽(§4.14)系统选目录窗口里**亲手选过**的目录(主机自己记的
+  台账),别的路径一律 \`INVALID_REQUEST\`,此时应引导用户去你的设置页重新
+  选一次目录;用户在「AI 代办」卡里配置了目录时,以用户配置优先、本字段忽略;
 - 每插件同时 1 单在途、相邻提交至少隔 10 秒;结果超过 64K 字符会截断(尾部带
   标记);完成结果保留 30 分钟,应用重启后查无此单(按可重新提交处理);
+  \`sessionKey\` 只是分间,**不放大并发**——不同钥匙的两单同样要排队;
 - \`errorCode:'BUSY'\` = 你已有一单在途,或用户恰好正在 errand 会话里说话;
   \`'NO_CANDIDATE'\` 不存在于此——但会话创建/派发失败有 \`'SESSION_UNAVAILABLE'\`,
   超时有 \`'TIMEOUT'\`(任务可能仍在会话里继续,提示用户打开会话查看)。
@@ -2528,7 +2640,10 @@ if (picked.ok) {
 - 未声明 node 槽的插件必须 \`deposit: true\`(没有票据你什么都拿不到,请求会被拒);
   票据收集有上限(500 文件/单文件 50MB/总 256MB),超限会签发失败;
 - \`path\` 只发给声明了 node 槽的插件:Node 侧本就有用户级本机权限,给路径不扩权,
-  价值是把"用户选了哪个目录"这一事实可信地交过去。
+  价值是把"用户选了哪个目录"这一事实可信地交过去;
+- 用户每次亲选成功,主机自己也会记一笔「亲选目录台账」(每插件最近 8 条)——
+  派活(§4.11.1)的 \`workingDir\` 转述只对台账里的目录放行。台账建立在真实
+  点选上,你存在 /kv 里的路径不算数。
 
 ## 4.15 面板预览(preview 槽)
 
@@ -2639,6 +2754,49 @@ const ensured = await cindy.workspace({
 - 创建的是**空会话**:不拉起 agent、不发消息、不自动开始任何任务;要让 Agent
   立即干活请配合 agent 槽(§4.11)。
 
+## 4.18 确认弹窗(confirm 槽)
+
+动手之前要用户点头(切分支、覆盖文件、发不可撤回的东西)时,声明 \`confirm\` 槽,
+经管子请主机弹一个**和 Cindy 自己一模一样**的确认框,并拿回用户的真实点击:
+
+\`\`\`js
+const r = await cindy.confirm({
+  body: '把项目目录从 main 切到 fix/xxx 分支?你没提交的改动可能被带走。',  // 必填,≤300 字
+  confirmText: '切换',      // 可选,≤12 字;不给就用主机缺省的「确认」
+  cancelText: '先不切',     // 可选,同上上限;不给就用主机缺省的「取消」
+  danger: true              // 可选,危险动作(删除/覆盖/改用户文件)主按钮变红
+});
+if (r.ok && r.confirmed) {
+  // 用户点了主按钮 → 干活
+} else if (r.ok) {
+  // 用户点了取消 / 按了 Esc / 点了弹窗外面 → 什么都别做,也别再弹一次
+} else {
+  // r.errorCode: PERMISSION_DENIED / INVALID_REQUEST / RATE_LIMITED / BUSY /
+  //              UNAVAILABLE / INTERNAL —— 这是"没问到",不是"用户拒绝"
+}
+\`\`\`
+
+规则与红线:
+
+- **\`ok:true\` 只代表问到了,答案看 \`confirmed\`**。把 \`ok\` 当同意是最常见的写错法;
+- 弹窗的壳、标题(主机文案「插件「你的名字」请你确认」)与身份头(你的图标+名字)
+  **由主机画**,身份取自已装清单而不是你自报;你只供 \`body\` 与按钮字,且会被净化
+  (控制字符剥除)+ 卡长度。**伪装不了主机文案、冒充不了别的插件,也点不了自己的
+  按钮**——点击链路主机独占;
+- 同一插件两次请求最小间隔 3 秒(RATE_LIMITED),**全局同时只有一个确认框**
+  (BUSY,不排队)。模态框比提示更打扰人,排队就是骚扰队列;
+- 没人应答 90 秒 → 当成**没同意**。同理:没有可挂靠窗口回 UNAVAILABLE。一切
+  "问不出来"的情况一律 fail closed,你收不到假的同意;
+- **尊重取消**:用户点了取消就别换个说法再弹一次。反复弹会撞上限速,也会让用户
+  直接停用你;
+- 没有「下次不再提示」,也没有三选一和复选框:确认的价值就在于每次都是真点击,
+  给了"永久免问"等于没确认;
+- **桌面独占**:本机弹窗不进远程/手机版通道(平台白名单里属永不放行类别)。手机端
+  或远程控制端跑到这里会拿到失败分档,你的逻辑要能接住(当"没同意"处理);
+- 真正的守门仍在你自己手里:确认只是问一句,**该校验的前置条件(文件在不在、
+  工作区干不干净)确认前后都要自己再查一遍**——用户点确认和你真动手之间,
+  世界可能已经变了。
+
 ## 5. 面板(panel.html/css/js)
 
 - 显示形态由 \`panel.position\` 决定:\`left\`(缺省)= 停靠主聊天窗左侧的常驻
@@ -2716,13 +2874,19 @@ const ensured = await cindy.workspace({
 ## 7. 打包与测试
 
 1. 新插件先调 \`ghost_forge_scaffold\` 生成骨架，或把已有源码放在用户工作目录下的
-   一个文件夹里(如 \`my-ghost/\`)；脚手架目标必须是新目录，绝不覆盖已有文件；
-2. 调 \`ghost_forge_pack({ dir: '<绝对路径>' })\`——校验 + 打包 + 弹装入确认框;
+   一个文件夹里(如 \`my-ghost/\`)；脚手架目标必须是新目录，绝不覆盖已有文件，
+   也不能落在已安装插件目录或 Host 状态目录内(会被拒，理由同下一条)；
+2. **Forge 源码必须是当前会话工作目录里的独立作者目录**。已安装插件目录以及
+   Host 管理的状态目录都不是源码区，禁止直接修改、打包或用路径别名绕过；若要继续
+   开发已有插件，先把源码复制/迁出到工作目录中的新目录，再从该副本制作；
+3. 调 \`ghost_forge_pack({ dir: '<绝对路径>' })\`——校验 + 打包 + 弹装入确认框;
    产物落在源码目录里(\`<id>-<version>.cindy\`,同版本覆盖,下次打包自动跳过);
-3. **告知用户去点弹窗**(装入默认沉睡,提醒用户勾"立即开启"或到主界面侧边栏「插件」中唤醒);
-4. 改代码后重新 pack:同 id 会弹"更新 vX → vY",唤醒状态与面板位置自动保留
+   若返回 \`SOURCE_IS_INSTALLED_PLUGIN\`，不要重试或换大小写、软链接、junction 绕过，
+   按上一步迁出源码后再打包；
+4. **告知用户去点弹窗**(装入默认沉睡,提醒用户勾"立即开启"或到主界面侧边栏「插件」中唤醒);
+5. 改代码后重新 pack:同 id 会弹"更新 vX → vY",唤醒状态与面板位置自动保留
    (记得 bump ghost.json 的 version);
-5. 验证:让用户 \`$<command> <内容>\` 试一单,看聊天图卡/面板是否符合预期。
+6. 验证:让用户 \`$<command> <内容>\` 试一单,看聊天图卡/面板是否符合预期。
 
 ## 8. 发布签名与审核
 

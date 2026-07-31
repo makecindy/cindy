@@ -27,11 +27,11 @@ import { createLogger } from './logger';
 import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
 import {
   addRegionalMoney,
-  DEFAULT_USAGE_CURRENCY,
   legacyUsdMoney,
   normalizeRegionalMoney,
   type RegionalMoney,
 } from '../shared/regionalMoney.js';
+import { currentLedgerCurrency } from './usage/ledgerCurrency.js';
 
 const log = createLogger('sessionSpendBroadcaster');
 
@@ -81,17 +81,21 @@ export async function recordSessionTurnSpend(
   if (!sessionId) return;
   const normalized = normalizeRegionalMoney(money);
   if (!normalized || normalized.amount < 1e-10) return;
-  if (normalized.currency !== DEFAULT_USAGE_CURRENCY) {
+  // 只接受本账号的结算币种。基准取 currentLedgerCurrency() 而不是构建区域 —— 结算币种
+  // 由服务端按账号所属租户下发,不保证等于发行区域;按区域判会让以 USD 结算的账号
+  // 「本对话」金额永远停在 0。异币种(脏数据 / 上游 bug)仍然拒收。
+  const ledgerCurrency = currentLedgerCurrency();
+  if (normalized.currency !== ledgerCurrency) {
     log.warn(
-      `recordSessionTurnSpend rejected currency mismatch: ${normalized.currency} != ${DEFAULT_USAGE_CURRENCY}`,
+      `recordSessionTurnSpend rejected currency mismatch: ${normalized.currency} != ${ledgerCurrency}`,
     );
     return;
   }
   try {
     const db = getDbClient().drizzle;
-    // 单币种累计列:恢复旧会话时若累计仍是旧币种，首笔当前币种费用重新
-    // 起算聚合列；消息历史保持原样，不猜测旧总额应如何换算。CASE 与写入
-    // 在同一条 UPDATE 里，避免并发混加不同单位。
+    // 单币种累计列:恢复旧会话时若累计仍是旧币种，首笔当前币种费用重新起算聚合列；
+    // 消息历史保持原样，不猜测旧总额应如何换算。CASE 与写入在同一条 UPDATE 里，
+    // 避免并发混加不同单位。
     const sameCurrency = sql`(${sessions.totalCostCurrency} IS NULL OR ${sessions.totalCostCurrency} = ${normalized.currency})`;
     await db
       .update(sessions)

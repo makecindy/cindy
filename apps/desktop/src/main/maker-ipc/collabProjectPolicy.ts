@@ -14,6 +14,12 @@ export interface CollabProjectPolicyContext {
  * per-query http 注入 + persistent token 与 ?session= 路由),cindy_orca
  * 在两端都可用。
  *
+ * device-link(跨设备远程控制)不需要在这里开任何例外:控制端的 enable-orca
+ * 经隧道路由到**被控端**执行,到了那一侧它就是一个普通本地会话
+ * (remoteHostId 为空、workingDir 是被控端真实路径),自然走下面的本机项目级
+ * 分支。控制端 renderer 会先隧道读被控端的 collab 开关来置灰入口(见
+ * makerTransport.pluginEnableStateFor),那只是体验层的提前告知。
+ *
  * 这是主进程的最终授权边界；Renderer 的入口状态只是用户体验层，
  * 不能替代这里的校验。
  */

@@ -283,9 +283,12 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(chatInputSource).toContain(
       "className={isCreateAgentVariant && !useNarrowToolbar ? 'ml-[7px]' : undefined}",
     );
+    // 本机会话可选附件,但远程或身份尚未回流的已建会话不能摄入控制端绝对路径。
+    expect(chatInputSource).toContain('const localAttachmentPickerEnabled =');
     expect(chatInputSource).toContain(
-      '(extraDirs !== undefined && onExtraDirsChange)',
+      'onAddFiles={localAttachmentPickerEnabled ? addFiles : undefined}',
     );
+    expect(chatInputSource).not.toContain('(extraDirs !== undefined && onExtraDirsChange)');
     expect(chatInputSource).not.toContain(
       "vendorKey === 'cc' && extraDirs !== undefined && onExtraDirsChange",
     );

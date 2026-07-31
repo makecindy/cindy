@@ -33,7 +33,10 @@ export function UserMessageUrlLink({ url, sessionId }: { url: string; sessionId?
     <>
       <a
         href={url}
-        className="text-[var(--msg-link)] hover:underline cursor-pointer"
+        // 可点 = 正文色 + 常显下划线(见 MarkdownRenderer.MARKDOWN_LINK_CLASS 的
+        // 规则说明)。改前是 --msg-link + hover:underline —— 静止状态下只有颜色、
+        // 悬停才出下划线,而用户消息气泡里同样需要「不动鼠标就能看出哪个能点」。
+        className="underline underline-offset-2 cursor-pointer"
         onClick={handleClick}
         onContextMenu={(event) => {
           if (!openWith.isEnabled) return;

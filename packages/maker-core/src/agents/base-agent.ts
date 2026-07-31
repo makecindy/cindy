@@ -398,6 +398,21 @@ export interface AgentDeps {
   }) => void;
 
   /**
+   * Codex 专用：WS turn 命中仅 HTTP proxy 能处理的请求体恢复错误时，通知宿主把
+   * 该 thread 的后续 WS upgrade 导回 HTTP。
+   *
+   * 宿主负责按自己的 recovery rules 识别错误并登记 transport policy；返回稳定
+   * reason 表示已登记，null 表示不匹配。调用必须同步、纯内存且不得抛错。
+   * maker-core 只在零产出 turn 上据此自动重投一次，不解析供应商错误协议。
+   */
+  armCodexHttpRecovery?: (args: {
+    sessionId: string;
+    threadId: string;
+    message: string;
+    additionalDetails?: string | null;
+  }) => string | null;
+
+  /**
    * Codex 专用：登记 Guardian 子线程回到父业务 session 时应使用的主模型。
    *
    * Codex app-server 的模型目录由共享进程持有，不能代表单个 session 的实际
@@ -408,6 +423,18 @@ export interface AgentDeps {
    * user reviewer，不能让未知路由进入无人值守审批。
    */
   registerCodexReviewerRouteContext?: (args: CodexReviewerRouteContextArgs) => boolean;
+
+  /**
+   * Codex 专用：app-server 创建子 Agent thread 后，把明确的父子 thread 关系同步给宿主。
+   *
+   * 子 thread 会独立发起 Responses 请求，但仍属于父业务 session；宿主据此继承
+   * provider / bridge 路由和 proxy prompt。该钩子必须是同步内存操作，确保在子
+   * thread 首个网络请求前完成登记。
+   */
+  registerCodexChildThreadForParent?: (args: {
+     parentThreadId: string;
+     childThreadId: string;
+   }) => void;
 
   /**
    * Claude 专用: host 明确认定可无提示执行的只读工具名, 透传到 SDK
@@ -794,7 +821,7 @@ export interface SendOptions {
 
 export type TurnPermissionOrigin =
   | { kind: 'desktop' }
-  | { kind: 'im'; channel: 'feishu' | 'discord' | 'slack' | 'wechat' | 'telegram'; taskId?: string }
+  | { kind: 'im'; channel: 'feishu' | 'discord' | 'slack' | 'wechat' | 'telegram' | 'dingtalk'; taskId?: string }
   | { kind: 'scheduler' }
   | { kind: 'hook'; source: string };
 

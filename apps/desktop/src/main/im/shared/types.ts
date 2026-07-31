@@ -28,7 +28,7 @@ import type {
 import type { ChannelIM, ImOutputDriver, IMMessageEvent, IMUnsupportedEntry } from '@cindy/im';
 
 /** 渠道名 — 同时是 sessions.source 列值与 IdentityKey.channel 的值域。 */
-export type ImChannelName = 'feishu' | 'slack' | 'discord' | 'wechat' | 'telegram';
+export type ImChannelName = 'feishu' | 'slack' | 'discord' | 'wechat' | 'telegram' | 'dingtalk';
 
 /**
  * IM 编排层的产品默认配置(由 main/im/index.ts 产品接线层注入)。
@@ -85,7 +85,7 @@ export interface ImSessionNamespace {
    * 缺省时 threadScoped 渠道回落 FBot 前缀, 非 threadScoped 渠道不起名
    * (保持 defaultTitle)。接管 session 一律沿用 FBot 前缀, 不走这里。
    */
-  generatedTitlePrefix?: string;
+  generatedTitlePrefix?: string | (() => string);
 }
 
 /**
@@ -133,10 +133,7 @@ export interface ImChannelAdapter {
    * Text-only channels can still resolve agent interactions without rich cards.
    * The callback owns channel-specific correlation and parsing.
    */
-  handleTextInteraction?(
-    userId: string,
-    request: InteractionRequest,
-  ): Promise<InteractionDecision>;
+  handleTextInteraction?(userId: string, request: InteractionRequest): Promise<InteractionDecision>;
   /** Durable channels may promote task-scoped attachments after message persistence succeeds. */
   onUserMessagePersisted?(args: {
     sessionId: string;
@@ -183,6 +180,11 @@ export interface ImUiTextPack {
      */
     start?: string;
     unknownCommand: (cmd: string) => string;
+    /**
+     * Text-only channels use this when a slash command requires interactive
+     * cards. Missing copy falls back to unknownCommand.
+     */
+    interactiveCommandUnsupported?: (cmd: string) => string;
     detachedBySlash: string;
     detachedByRevoke: string;
     notAttached: string;

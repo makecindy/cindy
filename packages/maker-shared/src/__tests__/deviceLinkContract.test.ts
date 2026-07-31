@@ -140,6 +140,8 @@ describe('device-link shared contract', () => {
   it('classifies transient errors and retries only those failures', async () => {
     expect(isTransientRemoteError(new Error('DbClient not ready'))).toBe(true);
     expect(isTransientRemoteError(Object.assign(new Error('client is not ready'), { code: 'NOT_CONNECTED' }))).toBe(true);
+    expect(isTransientRemoteError(Object.assign(new Error('link is reopening'), { code: 'LINK_NOT_OPEN' }))).toBe(true);
+    expect(isTransientRemoteError(Object.assign(new Error('buffer is full'), { code: 'BACKPRESSURE' }))).toBe(true);
     expect(isTransientRemoteError(Object.assign(new Error('target offline'), { code: 'DEVICE_OFFLINE' }))).toBe(true);
     expect(isTransientRemoteError('[DEVICE_LINK_TIMEOUT] no result')).toBe(true);
     // HTTP 层弱网错误(超时 / 离线 / RN 原生 fetch 原文)同属瞬时,必须可重试

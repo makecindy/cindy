@@ -19,11 +19,29 @@
  */
 
 import type { GhostImageAspectRatio } from '../../shared/ghost.js';
+import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 
-/** 通道适配层的出参(与 decodeImageResponse 的入参同形:字节 + mime 由各通道自决)。 */
+/** 通道适配层的出参(decodeImageResponse 的入参:字节 base64;声明格式仅作参考)。 */
 export interface ImageChannelResult {
   data: Array<{ b64_json?: string }>;
   output_format?: string;
+}
+
+/**
+ * 图片通道响应 → 字节 + mime(所有来源 gen / edit 的统一解码口径)。
+ * mime 由字节魔数(sniffMediaMime)决定,不信任上游声明的 output_format:
+ * 上游或出站代理返回非图片字节时在此拒绝,不落 cindy-media、不挂作品账本
+ * (媒体规则:自报格式不能单独作为可信依据)。
+ */
+export function decodeImageResponse(res: ImageChannelResult): { buffer: Buffer; mimeType: string } {
+  const first = res.data[0];
+  if (!first?.b64_json) throw new Error('图片通道返回为空');
+  const buffer = Buffer.from(first.b64_json, 'base64');
+  const sniffed = sniffMediaMime(buffer);
+  if (!sniffed || !sniffed.startsWith('image/')) {
+    throw new Error('图片通道返回的数据不是有效图片,本次生成已取消');
+  }
+  return { buffer, mimeType: sniffed };
 }
 
 /**

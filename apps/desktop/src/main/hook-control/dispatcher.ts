@@ -1531,7 +1531,9 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           payload.prompt,
           bareKey,
           payload.source?.teamName ??
-            (payload.source?.im === 'telegram' ? payload.source.channelName : null),
+            (payload.source?.im === 'telegram' || payload.source?.im === 'x'
+              ? payload.source.channelName
+              : null),
         ),
         prompt: payload.prompt,
         attachments: payload.attachments,

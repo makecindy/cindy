@@ -59,10 +59,19 @@ import { and, eq, like, ne, sql } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current';
 import { sessions } from '../localDb/schema';
-import { im, feishuIm, discordIm, telegramIm, wechatCompatibilityPolicy, wechatIm } from './host';
+import {
+  im,
+  feishuIm,
+  discordIm,
+  telegramIm,
+  dingtalkIm,
+  wechatCompatibilityPolicy,
+  wechatIm,
+} from './host';
 import { wireFeishuOrchestrator, type FeishuOrchestratorConfig } from './feishu';
 import { wireDiscordOrchestrator } from './discord';
 import { wireTelegramOrchestrator } from './telegram';
+import { wireDingTalkOrchestrator } from './dingtalk';
 import { wireWechatOrchestrator } from './wechat';
 import { resetTelegramGroupContextCursors } from './telegram/groupWindow';
 import { getImOrchestrator, listImOrchestrators } from './shared/orchestrator';
@@ -89,7 +98,15 @@ import {
   writeWechatWorkingDir,
 } from './wechat/channelSettings';
 
-export { registerTelegramBotConfigIpc, im, feishuIm, discordIm, telegramIm, wechatIm } from './host';
+export {
+  registerTelegramBotConfigIpc,
+  im,
+  feishuIm,
+  discordIm,
+  telegramIm,
+  dingtalkIm,
+  wechatIm,
+} from './host';
 
 const log = createLogger('main:im');
 
@@ -158,6 +175,13 @@ const TELEGRAM_CONFIG: ImOrchestratorConfig = {
   effortOverrides: IM_DEFAULT_EFFORT_OVERRIDES,
 };
 
+const DINGTALK_CONFIG: ImOrchestratorConfig = {
+  agentKind: IM_DEFAULT_SETTINGS.agentKind,
+  defaultModel: IM_DEFAULT_SETTINGS.agents[IM_DEFAULT_SETTINGS.agentKind].model,
+  defaultPermissionMode: 'auto',
+  effortOverrides: IM_DEFAULT_EFFORT_OVERRIDES,
+};
+
 const WECHAT_CONFIG: ImOrchestratorConfig = {
   agentKind: IM_DEFAULT_SETTINGS.agentKind,
   defaultModel: IM_DEFAULT_SETTINGS.agents[IM_DEFAULT_SETTINGS.agentKind].model,
@@ -183,6 +207,7 @@ export function startImOrchestrators(): void {
   wireFeishuOrchestrator(feishuIm, FEISHU_CONFIG);
   wireDiscordOrchestrator(discordIm, DISCORD_CONFIG);
   wireTelegramOrchestrator(telegramIm, TELEGRAM_CONFIG);
+  wireDingTalkOrchestrator(dingtalkIm, DINGTALK_CONFIG);
   wireWechatOrchestrator(wechatIm, WECHAT_CONFIG);
 
   ipcMain.handle('wechatBot:get-state', (event) => {

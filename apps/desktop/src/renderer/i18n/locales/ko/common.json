@@ -123,7 +123,7 @@
       "personalization": "개인화",
       "chipMetrics": "사용량 표시기",
       "memory": "메모리",
-      "subagentModels": "하위 에이전트 모델",
+      "subagentModels": "하위 에이전트",
       "compaction": "컨텍스트 압축",
       "terminalShell": "기본 터미널 셸",
       "linkOpen": "링크 열기 방식",
@@ -464,9 +464,9 @@
       "sessionDoneLabel": "세션 완료 시 데스크톱 알림 표시",
       "sessionDoneHint": "창이 비활성 상태일 때만 표시되어 포그라운드 방해를 방지합니다.",
       "sessionDoneAria": "세션 완료 데스크톱 알림 전환",
-      "feishuLabel": "세션 완료 또는 응답 필요 시 Feishu 메시지 전송",
-      "feishuHint": "연동된 Feishu 봇을 통해 개인 메시지를 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
-      "feishuDisabledHint": "먼저 \"Feishu 봇\"에서 봇을 설정하고 한 번 메시지를 보내 바인딩을 완료하세요.",
+      "feishuLabel": "세션 완료 또는 응답 필요 시 Feishu / Lark 메시지 전송",
+      "feishuHint": "연동된 Feishu 또는 Lark 봇을 통해 개인 메시지를 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
+      "feishuDisabledHint": "먼저 \"Feishu / Lark 봇\"에서 봇을 설정하고 한 번 메시지를 보내 바인딩을 완료하세요.",
       "feishuAria": "세션 완료 Feishu 알림 전환"
     },
     "windowBehavior": {
@@ -1286,6 +1286,8 @@
           "models": "모델",
           "modelIdPlaceholder": "model-id",
           "modelNamePlaceholder": "표시 이름",
+          "modelContextWindowPlaceholder": "컨텍스트(tokens)",
+          "modelContextWindowTitle": "컨텍스트 윈도우(토큰 수). 비워 두면 보수적 기본값 200K가 적용되며, 윈도우 표시와 압축 임계값에 영향을 줍니다.",
           "addModel": "모델 추가",
           "headers": "요청 헤더(선택)",
           "headerNamePlaceholder": "Header-Name",
@@ -1296,19 +1298,22 @@
         "wireProtocol": {
           "responses": "OpenAI Responses(네이티브)",
           "chat": "Chat Completions(Cindy 브리지)",
+          "anthropic": "Anthropic Messages(Cindy 브리지)",
           "responsesHelp": "제공자가 Responses API를 네이티브로 지원하므로 Cindy가 이벤트 스트림을 그대로 전달합니다.",
-          "chatHelp": "Chat Completions만 제공하는 업체용입니다. Cindy가 스트리밍 텍스트와 함수 도구 호출을 변환하며 일부 고급 Responses 기능은 사용할 수 없습니다."
+          "chatHelp": "Chat Completions만 제공하는 업체용입니다. Cindy가 스트리밍 텍스트와 함수 도구 호출을 변환하며 일부 고급 Responses 기능은 사용할 수 없습니다.",
+          "anthropicHelp": "Anthropic Messages API를 제공하는 업체용입니다. Cindy가 Responses 메시지, 이미지, 도구, 추론 내용 및 스트리밍 이벤트를 변환합니다."
         },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code는 Anthropic 프로토콜을 따릅니다(x-api-key 인증). 이 제공자의 Claude Code용 baseURL・키・모델을 입력하세요. 비워 두면 이 제공자는 Claude Code를 제공하지 않습니다.",
           "codex": "Codex",
-          "codexDesc": "Codex는 OpenAI Responses 프로토콜을 사용합니다. Responses를 네이티브로 지원하는 업스트림이나 Chat Completions만 지원하는 제공자를 Cindy로 브리지하는 방식을 선택할 수 있습니다. 이 제공자의 Codex용 기본 URL, 키와 모델을 입력하세요. 비워 두면 Codex에서 사용하지 않습니다."
+          "codexDesc": "Codex는 OpenAI Responses 프로토콜을 사용합니다. Responses를 네이티브로 사용하거나 Chat Completions 또는 Anthropic Messages를 Cindy로 브리지하는 방식을 선택할 수 있습니다. 이 제공자의 Codex용 기본 URL, 키와 모델을 입력하세요. 비워 두면 Codex에서 사용하지 않습니다."
         },
         "errors": {
           "nameRequired": "표시 이름을 입력하세요",
           "runtimeRequired": "Runtime을 하나 이상 구성하세요(기본 URL과 모델)",
           "baseUrlInvalid": "기본 URL은 유효한 http(s) 주소여야 합니다",
+          "contextWindowInvalid": "컨텍스트 윈도우는 유효한 양의 정수여야 합니다(숫자 그룹 사이에 구분 기호 사용 가능)",
           "requestPathInvalid": "정확한 요청 경로는 단일 /로 시작해야 하며 프래그먼트나 . 또는 .. 경로 세그먼트를 포함하면 안 됩니다. 공백과 안전하지 않은 문자는 퍼센트 인코딩하세요.",
           "modelRequired": "모델을 하나 이상 추가하세요",
           "oauthInvalid": "OAuth 설정이 불완전합니다. 모든 필드는 필수이며 두 엔드포인트는 안전한 https URL이어야 합니다"
@@ -1575,9 +1580,15 @@
       "saveFailed": "Git 안전 설정 저장에 실패했습니다"
     },
     "feishuBot": {
-      "title": "Feishu 봇",
-      "description": "Feishu 봇을 통해 언제 어디서나 {{appName}}에 연결하여 작업하세요.",
-      "statusAria": "Feishu 봇 상태: {{status}}",
+      "title": "Feishu / Lark 봇",
+      "description": "Feishu 또는 Lark 봇을 통해 언제 어디서나 {{appName}}에 연결하여 작업하세요.",
+      "statusAria": "Feishu / Lark 봇 상태: {{status}}",
+      "serviceLabel": "서비스",
+      "serviceAria": "IM 서비스 선택",
+      "services": {
+        "feishu": "Feishu",
+        "lark": "Lark"
+      },
       "status": {
         "needsConfig": "구성 필요",
         "connecting": "연결 중…",
@@ -1587,16 +1598,17 @@
         "error": "연결 실패"
       },
       "connected": {
-        "heading": "Feishu 봇이 연결됨",
+        "heading": "{{service}} 봇이 연결됨",
         "note": "현재 QR 스캔 사용자에 바인딩되어 있으며, 다른 사람의 개인 메시지는 자동으로 무시됩니다.",
+        "serviceLabel": "서비스",
         "appIdLabel": "App ID",
         "ownerLabel": "Owner",
         "ownerWaiting": "첫 개인 메시지 바인딩 대기 중",
-        "reconnect": "Feishu 봇 다시 연결",
+        "reconnect": "{{service}} 봇 다시 연결",
         "clear": "연동 해제"
       },
       "saved": {
-        "heading": "Feishu 봇이 연동됨",
+        "heading": "{{service}} 봇이 연동됨",
         "connectingNote": "봇 자격 증명이 저장되어 있습니다. 연결하는 중입니다.",
         "reconnectingNote": "봇 자격 증명이 저장되어 있습니다. 연결을 복구하는 중입니다.",
         "conflictNote": "봇 자격 증명이 저장되어 있지만 이 App ID는 다른 기기에서 사용 중입니다.",
@@ -1609,11 +1621,11 @@
       "appSecretPlaceholder": "sec_xxxxxxxxxxxxxxxxxx",
       "showSecret": "시크릿 표시",
       "hideSecret": "시크릿 숨기기",
-      "createLink": "여기를 클릭해 생성 ↗",
+      "createLink": "{{service}} 오픈 플랫폼에서 생성 ↗",
       "createLinkSuffix": ", 생성 후 자격 증명을 입력하세요",
-      "clearAria": "Feishu 봇 연동 해제",
+      "clearAria": "IM 봇 연동 해제",
       "clearConfirm": {
-        "title": "Feishu 봇 연동을 해제하시겠습니까?",
+        "title": "IM 봇 연동을 해제하시겠습니까?",
         "description": "연동을 해제하면 WebSocket 연결이 끊기고, 로컬에 저장된 App ID / App Secret / 소유자 openId가 삭제됩니다. 다시 사용하려면 재생성하거나 자격 증명을 다시 입력해야 합니다.",
         "confirm": "연동 해제",
         "cancel": "취소"
@@ -1906,6 +1918,49 @@
         }
       }
     },
+    "dingtalkBot": {
+      "title": "DingTalk 봇",
+      "description": "직접 만든 DingTalk 봇을 연결하고 Stream 모드로 DM과 그룹에서 {{appName}}를 사용합니다.",
+      "status": {
+        "needsConfig": "설정 필요",
+        "connecting": "연결 중…",
+        "connected": "연결됨",
+        "error": "연결 실패"
+      },
+      "connected": {
+        "heading": "DingTalk 봇 연결됨",
+        "ownerBound": "소유자가 연결되었습니다. DM을 보내거나 그룹에서 멘션해 시작하세요.",
+        "waitingOwner": "먼저 봇에게 DM을 보내세요. 첫 번째 발신자가 소유자로 안전하게 연결됩니다.",
+        "ownerLabel": "소유자 사용자 ID",
+        "notBound": "첫 DM 대기 중"
+      },
+      "appKeyLabel": "Client ID",
+      "appKeyPlaceholder": "봇 애플리케이션의 Client ID 붙여넣기",
+      "appSecretLabel": "Client Secret",
+      "appSecretPlaceholder": "봇 애플리케이션의 Client Secret 붙여넣기",
+      "appSecretSavedPlaceholder": "안전하게 저장됨. 비워 두고 다시 연결할 수 있습니다",
+      "showSecret": "Client Secret 표시",
+      "hideSecret": "Client Secret 숨기기",
+      "formHint": "자격 증명은 로컬에 암호화됩니다. 연결 후 첫 DM으로 소유자를 연결합니다.",
+      "errorHint": "연결 실패. 자격 증명, Stream 모드, 네트워크를 확인한 후 다시 시도하세요.",
+      "connect": "연결",
+      "reconnect": "다시 연결",
+      "disconnect": "연동 해제",
+      "disconnectConfirm": {
+        "title": "DingTalk 봇 연동을 해제하시겠습니까?",
+        "description": "연결을 끊고 저장된 Client ID, Client Secret, 소유자 연결을 삭제합니다.",
+        "confirm": "연동 해제",
+        "cancel": "취소"
+      },
+      "guide": {
+        "title": "설정 가이드",
+        "step1": "DingTalk 개발자 포털에서 내부 앱을 만들고 봇 기능을 추가합니다.",
+        "step2": "봇의 Stream 모드를 활성화하고 앱 버전을 게시합니다.",
+        "step3": "앱 자격 증명에서 Client ID와 Client Secret을 복사해 입력합니다.",
+        "step4": "연결 후 봇에게 먼저 DM을 보내 소유자를 연결합니다. 그룹에서는 멘션하세요.",
+        "openPortal": "DingTalk 개발자 포털 열기 ↗"
+      }
+    },
     "logout": {
       "button": "로그아웃",
       "aria": "로그아웃"
@@ -1966,12 +2021,30 @@
       }
     },
     "subagentModels": {
-      "title": "하위 에이전트 모델",
-      "description": "Claude Code와 Codex가 하위 작업을 실행할 때 사용할 기본 모델을 설정합니다. 설정은 진입점별로 적용되며 모델별로 저장되지 않습니다.",
+      "title": "하위 에이전트",
+      "description": "Claude Code와 Codex가 하위 작업을 실행할 때 사용할 기본 모델을 설정하고 Codex 하위 에이전트의 가드레일을 구성합니다. 설정은 진입점별로 적용되며 모델별로 저장되지 않습니다.",
       "unspecified": "지정 안 함(기본 동작 사용)",
-      "codexUnavailable": "현재 Codex 버전에서는 안전한 재정의를 지원하지 않습니다",
-      "hint": "선택 가능한 모델은 연결된 모델 소스에 따라 달라집니다. 지정하지 않으면 Agent의 기본 설정을 사용합니다. Claude Code 변경 사항은 새 세션부터 적용되며, 현재 Codex 버전은 하위 에이전트 모델 재정의를 지원하지 않습니다.",
-      "saveFailed": "하위 에이전트 모델 저장 실패"
+      "hint": "선택 가능한 모델은 연결된 모델 소스에 따라 달라집니다. 지정하지 않으면 Agent의 기본 설정을 사용합니다. Claude Code 변경 사항은 새 세션부터 적용됩니다. Codex 변경 사항은 유휴 상태에서 즉시 재시작되어 반영되며, 작업 실행 중에는 로컬 Codex 세션이 모두 유휴 상태가 된 후 자동 적용됩니다.",
+      "codexV2ModelHint": "하위 에이전트 기본 모델은 Codex 자체 모델 카탈로그에 있는 모델이어야 하며, 카탈로그 외부 모델(호환 브리지로 연결된 서드파티 모델 등)은 Codex가 거부합니다. Sol / Terra(멀티 에이전트 V2)는 나아가 V2 카탈로그 모델(현재 gpt-5.6-sol과 gpt-5.6-terra)만 허용합니다. 이전 버전 멀티 에이전트(V1)에는 V2 제한이 없습니다.",
+      "saveFailed": "하위 에이전트 설정 저장 실패",
+      "guardrails": {
+        "title": "Codex 하위 에이전트 가드레일",
+        "enableHint": "Codex가 작업 중 일회성 하위 에이전트를 생성하도록 허용합니다. 끄면 이전 버전 멀티 에이전트(V1)와 Sol / Terra(V2) 모두에 적용됩니다.",
+        "enableAria": "Codex 하위 에이전트 허용",
+        "concurrencyLabel": "하위 에이전트 동시 실행 한도",
+        "concurrencyHint": "동시에 실행할 수 있는 하위 에이전트 수의 상한입니다. 하위 에이전트는 각각 모델 할당량을 소비합니다. Ultra 단계에서 동시 실행이 8에 도달하면 Codex가 경고합니다.",
+        "concurrencyFollowDefault": "Codex 기본값 따르기(이전 버전 V1은 6, Sol / Terra는 3)",
+        "concurrencyAria": "Codex 하위 에이전트 동시 실행 한도 조정",
+        "concurrencyCustomAria": "Codex 하위 에이전트 동시 실행 한도 사용자 지정",
+        "nestedLabel": "하위 에이전트의 하위 에이전트 생성 허용",
+        "nestedHint": "이전 버전 멀티 에이전트(V1)에만 적용되며 Sol / Terra(V2)는 이 설정을 무시합니다.",
+        "nestedAria": "하위 에이전트의 하위 에이전트 생성 허용",
+        "localOnlyHint": "이 가드레일은 이 컴퓨터에서 실행되는 Codex에만 적용되며 SSH 원격의 Codex에는 영향을 주지 않습니다."
+      },
+      "toast": {
+        "saved": "하위 에이전트 설정이 저장되었습니다",
+        "deferredSuffix": " — 실행 중인 Codex 세션에는 현재 작업이 끝난 후 적용됩니다"
+      }
     },
     "compaction": {
       "title": "컨텍스트 압축",
@@ -2403,6 +2476,11 @@
         "slackDescription": "Slack 워크스페이스를 연결하고 Slack에서 Cindy에게 작업을 맡기세요.",
         "slackDisabledHint": "스위치를 켜면 Slack 인증이 시작됩니다. 연결이 완료되면 Slack에서 작업을 맡길 수 있습니다.",
         "slackBoundHint": "연결이 완료되었습니다. 스위치를 끄면 연결이 해제되며 다시 켜려면 재인증이 필요합니다.",
+        "lifecycleAnnouncement": {
+          "label": "온라인/오프라인 알림",
+          "cellLabel": "메시지 알림",
+          "hint": "이 기기가 온라인 또는 오프라인 상태가 되면 Slack Bot이 알림 메시지를 보냅니다"
+        },
         "toggleAria": "Slack 연결 활성 상태 전환",
         "installApp": "Slack 앱 설치",
         "status": {
@@ -2478,7 +2556,7 @@
           "disabledHint": "스위치를 켠 뒤 Telegram의 안내에 따라 계정 연결을 완료하세요.",
           "toggleAria": "Telegram 연결 전환",
           "connect": "Telegram 연결",
-          "openTelegram": "Telegram 열기",
+          "openApp": "Telegram 열기",
           "cancel": "연결 취소",
           "retry": "연결 다시 시도",
           "openBot": "봇 열기",
@@ -2500,6 +2578,33 @@
             "revoked": "연결 해제됨",
             "superseded": "다른 기기에 연결됨"
           }
+        },
+        "x": {
+          "description": "X (Twitter) 계정을 연결하고 X에서 Cindy bot을 멘션해 작업을 요청하세요.",
+          "disabledHint": "스위치를 켠 뒤 안내에 따라 X 계정 인증을 완료하세요.",
+          "toggleAria": "X 연결 전환",
+          "connect": "X 연결",
+          "openApp": "X 열어 인증하기",
+          "cancel": "연결 취소",
+          "retry": "다시 연결",
+          "openBot": "X에서 bot 보기",
+          "unlink": "X 연결 해제",
+          "unlinkConfirmTitle": "X 연결을 해제할까요?",
+          "unlinkConfirmDescription": "해제하면 X에서 이 기기로 작업을 보낼 수 없습니다. 로컬 프로젝트와 다른 채널 연결에는 영향이 없습니다.",
+          "status": {
+            "checking": "서버 지원 확인 중…",
+            "unavailable": "이 서버에서는 아직 사용할 수 없습니다",
+            "disabled": "비활성화됨",
+            "none": "연결되지 않음",
+            "pending": "X를 열어 계정 인증을 완료하세요",
+            "awaiting_confirmation": "X에서 인증을 확인하세요",
+            "confirmed": "{{user}} 님이 {{bot}} 과 연결됨",
+            "denied": "인증이 거부되었습니다",
+            "expired": "인증 링크가 만료되었습니다",
+            "failed": "연결에 실패했습니다",
+            "revoked": "연결이 해제되었습니다",
+            "superseded": "다른 기기에서 연결됨"
+          }
         }
       },
       "summary": {
@@ -2518,7 +2623,7 @@
     "tina": {
       "chat": {
         "title": "대화",
-        "description": "저장소에 연결되지 않은 대화입니다. Slack 또는 Telegram에서 \"chat\"을 선택하면 대화 lane마다 세션을 사용할 수 있습니다."
+        "description": "저장소에 연결되지 않은 대화입니다. Slack, Telegram 또는 X에서 \"chat\"을 선택하면 대화 lane마다 세션을 사용할 수 있습니다."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -2527,6 +2632,7 @@
         "permissionLabel": "권한 모드",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
+        "providerX": "X",
         "requireConnected": "{{provider}} 연결 후 편집할 수 있습니다(위의 스위치를 켜고 연결을 기다려 주세요).",
         "requireBinding": "먼저 {{provider}} 계정 연결을 완료해 주세요.",
         "serverUnsupported": "서버 버전이 오래되었거나 응답이 없어 설정을 불러올 수 없습니다.",
@@ -2605,7 +2711,7 @@
       "tips": {
         "cindy": "Cindy는 공식 제공 공유 봇입니다. 자격 증명을 신청할 필요 없이 Slack을 연결하고 @Cindy를 멘션하면 바로 작업을 맡길 수 있습니다.",
         "personal": "개인 연결에는 WeChat 스캔 인증과 직접 발급한 Feishu / Discord / Telegram 인증 정보 연결이 포함됩니다. 새 대화 설정은 채널별로 저장됩니다.",
-        "personalFeishuOnly": "개인 연결에는 WeChat 스캔 인증과 직접 발급한 Feishu 인증 정보 연결이 포함됩니다. 새 대화 설정은 채널별로 저장됩니다."
+        "personalFeishuOnly": "개인 연결에는 WeChat 스캔 인증과 직접 발급한 Feishu 및 DingTalk 자격 증명 연결이 포함됩니다. 새 대화 설정은 채널별로 저장됩니다."
       },
       "defaults": {
         "title": "새 대화 설정",
@@ -2614,7 +2720,8 @@
           "slack": "새 Slack 스레드는 이 Agent와 모델을 사용합니다.",
           "discord": "새 Discord 대화는 이 Agent와 모델을 사용합니다. 기존 DM에는 /new를 보내 적용하세요.",
           "wechat": "새 WeChat 대화는 이 Agent, 모델, 권한 모드를 사용합니다. 기존 채팅에는 /new를 보내 적용하세요.",
-          "telegram": "새 Telegram 대화는 이 Agent와 모델을 사용합니다. 기존 대화에는 /new를 보내 적용하세요."
+          "telegram": "새 Telegram 대화는 이 Agent와 모델을 사용합니다. 기존 대화에는 /new를 보내 적용하세요.",
+          "dingtalk": "새 DingTalk 대화는 이 Agent와 모델을 사용합니다. 기존 대화에는 /new를 보내 적용하세요."
         },
         "agentLabel": "Agent",
         "modelLabel": "모델 설정",
@@ -2713,6 +2820,42 @@
         "open-terminal": {
           "label": "터미널 열기",
           "description": "오른쪽 사이드바에서 터미널을 엽니다(이미 열려 있으면 포커스)"
+        },
+        "switch-session-1": {
+          "label": "1번째 세션으로 이동",
+          "description": "사이드바에 표시된 1번째 세션으로 이동합니다"
+        },
+        "switch-session-2": {
+          "label": "2번째 세션으로 이동",
+          "description": "사이드바에 표시된 2번째 세션으로 이동합니다"
+        },
+        "switch-session-3": {
+          "label": "3번째 세션으로 이동",
+          "description": "사이드바에 표시된 3번째 세션으로 이동합니다"
+        },
+        "switch-session-4": {
+          "label": "4번째 세션으로 이동",
+          "description": "사이드바에 표시된 4번째 세션으로 이동합니다"
+        },
+        "switch-session-5": {
+          "label": "5번째 세션으로 이동",
+          "description": "사이드바에 표시된 5번째 세션으로 이동합니다"
+        },
+        "switch-session-6": {
+          "label": "6번째 세션으로 이동",
+          "description": "사이드바에 표시된 6번째 세션으로 이동합니다"
+        },
+        "switch-session-7": {
+          "label": "7번째 세션으로 이동",
+          "description": "사이드바에 표시된 7번째 세션으로 이동합니다"
+        },
+        "switch-session-8": {
+          "label": "8번째 세션으로 이동",
+          "description": "사이드바에 표시된 8번째 세션으로 이동합니다"
+        },
+        "switch-session-9": {
+          "label": "9번째 세션으로 이동",
+          "description": "사이드바에 표시된 9번째 세션으로 이동합니다"
         }
       },
       "none": "설정 안 됨",
@@ -2842,6 +2985,14 @@
           }
         }
       },
+      "reapproval": {
+        "badge": "권한 재확인 필요",
+        "action": "권한 다시 확인",
+        "actionAria": "플러그인 {{name}}의 권한 다시 확인",
+        "noticeTitle": "권한 재확인 필요",
+        "bodyLegacy": "Cindy에 이 플러그인의 권한 확인 기록이 없어 사용 중지한 상태입니다. [권한 다시 확인]에서 요청하는 권한을 확인하고 다시 허용해 주세요.",
+        "bodyInvalid": "이 플러그인의 권한 확인 기록이 손상되어 사용 중지한 상태입니다. [권한 다시 확인]에서 요청하는 권한을 확인하고 다시 허용해 주세요."
+      },
       "install": "플러그인 설치…",
       "empty": "아직 설치된 플러그인이 없습니다",
       "emptyHint": "마켓에서 설치하거나 위 메뉴에서 .cindy 파일을 가져올 수 있습니다",
@@ -2896,6 +3047,8 @@
         "uninstalled": "\"{{name}}\" 제거됨",
         "installedAsleep": "\"{{name}}\" 설치 완료 (비활성 상태이며 여기에서 언제든 활성화할 수 있습니다)",
         "updated": "\"{{name}}\"이(가) v{{version}}(으)로 업데이트되었습니다",
+        "exported": "\"{{name}}\"의 .cindy 파일을 내보냈습니다",
+        "exportFailed": "\"{{name}}\"을(를) 내보내지 못했습니다. 다시 시도하세요",
         "projectDisabled": "이 프로젝트에서 \"{{name}}\"을(를) 껐습니다(새 세션부터 적용)",
         "projectEnabled": "\"{{name}}\"이(가) 이 프로젝트에서 전역 설정을 따릅니다"
       },
@@ -2974,6 +3127,8 @@
         "cardExternalLinkDetail": "카드의 링크를 클릭하면 확인 대화 상자가 표시되며, 승인 후에만 시스템 브라우저에서 열립니다. http/https 주소만 허용됩니다.",
         "notify": "시스템 알림 표시 가능(화면 상단의 가벼운 알림)",
         "notifyDetail": "알림 내용은 이 플러그인이 제공하며 알림에는 이름이 표시됩니다. 자동으로 사라지며 작업을 방해하지 않습니다.",
+        "confirm": "확인 대화상자로 동의를 요청할 수 있음",
+        "confirmDetail": "작업 전에 Cindy 자체와 동일한 확인 대화상자를 열어 물어볼 수 있습니다. 질문 내용은 플러그인이 제공하며 대화상자에는 그 이름이 표시됩니다. 확인이든 취소든 직접 클릭해야 하고 플러그인은 스스로 누를 수 없습니다. 동시에 하나만 열 수 있으며 너무 자주 요청하면 차단됩니다.",
         "fsWrite": "파일을 쓸 수 있음(생성/수정)",
         "fsWriteDetail": "전용 데이터 폴더에는 언제든지 쓸 수 있습니다. 현재 세션의 작업 디렉터리 쓰기는 세션의 권한 모드를 따릅니다(자동 승인 모드에서는 바로 쓰고, 개별 확인 모드에서는 먼저 승인을 요청합니다). 그 외 폴더에 쓰려면 매번 확인이 필요합니다. 파일은 항상 호스트가 대신 기록하며 플러그인 자체는 파일 시스템에 직접 접근할 수 없습니다.",
         "networkHost": "네트워크 도메인 {{host}}에 접근",
@@ -3014,6 +3169,7 @@
       "errors": {
         "fileInvalid": "유효한 .cindy 플러그인 파일이 아닙니다",
         "alreadyInstalled": "이 플러그인은 이미 설치되어 있습니다",
+        "approvalRequired": "계속하려면 이 플러그인의 권한을 다시 확인해야 합니다",
         "commandConflict": "명령어가 설치된 플러그인과 충돌합니다. 먼저 상대를 제거하거나 명령어 이름을 변경하세요.",
         "idReserved": "이 id는 공식 예약 접두사 cindy-를 사용합니다. 앱에 내장된 플러그인만 사용할 수 있습니다",
         "sourceMissing": "선택한 파일을 찾을 수 없습니다",
@@ -3052,7 +3208,8 @@
             "image.generate": "이미지 생성",
             "image.edit": "이미지 편집",
             "video.generate": "영상 생성",
-            "video.edit": "이미지로 영상"
+            "video.edit": "이미지로 영상",
+            "text.oneshot": "빠른 답변(텍스트)"
           },
           "defaultOption": "{{model}} (기본값)",
           "noModels": "사용 가능한 모델 없음"
@@ -3062,21 +3219,12 @@
           "desc": "이 플러그인이 Cindy Agent에게 작업을 맡길 때 사용하는 실행 설정입니다. 설정하지 않은 항목은 새 초안 선택을 따르며, 기본은 읽기 전용이고 전용 폴더에서 작업합니다.",
           "agent": "Agent",
           "model": "모델",
-          "effort": "추론 강도",
-          "fast": "Fast 모드",
-          "fastOn": "켬",
-          "fastOff": "끔",
           "permission": "쓰기 권한",
-          "permissionMode": {
-            "plan": "읽기 전용(기본): 보고 생각만 할 수 있고 변경은 불가",
-            "acceptEdits": "파일 수정 가능: 작업 폴더 안의 파일을 수정할 수 있음",
-            "auto": "자동: 작업 폴더 안의 일반 작업은 매번 묻지 않음"
-          },
+          "permissionDisabled": "대행 세션에서는 선택할 수 없음",
           "workdir": "작업 폴더",
           "workdirDefault": "플러그인 전용 폴더(기본)",
           "workdirPick": "선택…",
-          "workdirClear": "기본 폴더로 되돌리기",
-          "followDefault": "기본값 따르기"
+          "workdirClear": "기본 폴더로 되돌리기"
         },
         "toolsTitle": "Tools",
         "permissionsTitle": "권한",
@@ -3088,6 +3236,8 @@
         "useDisabled": "사용하기 전에 Plugin을 활성화하세요",
         "moreActions": "Plugin 추가 작업",
         "updateFromFile": ".cindy 파일에서 업데이트…",
+        "exportPackage": ".cindy 파일 내보내기…",
+        "exportFileType": "Cindy 플러그인",
         "settingsTitle": "{{name}} 설정",
         "settingsUnavailableUntilRestore": "이 설정을 다시 사용하려면 플러그인을 복원하세요.",
         "configurationTitle": "설정",
@@ -3125,6 +3275,9 @@
       "pick": {
         "dialogTitle": "폴더 선택",
         "dialogMessage": "플러그인 \"{{name}}\"이(가) 폴더 선택을 요청합니다"
+      },
+      "confirm": {
+        "dialogTitle": "플러그인 \"{{name}}\"이(가) 확인을 요청합니다"
       },
       "workspace": {
         "dialogTitle": "프로젝트 폴더 선택",
@@ -3600,6 +3753,7 @@
     },
     "dailyLimitLabel": "오늘 {{spend}}/{{limit}}",
     "monthlyLimitLabel": "주기 {{spend}}/{{limit}}",
+    "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "세션 {{cost}}",
     "codex": {
       "waiting": "Codex --",
@@ -3644,6 +3798,7 @@
     "tooltip": {
       "todayUsedSoftLimit": "오늘 사용 ${{today}} / 소프트 한도 ${{limit}} ({{pct}}%)",
       "sessionUsed": "이 세션에서 {{cost}} 사용",
+      "creditUsed": "계정 사용 {{used}} · 총액 {{total}}",
       "monthlyUnavailable": "⚠️ 월간 할당량을 일시적으로 가져올 수 없습니다",
       "dailyUnavailable": "⚠️ 오늘 사용량 세부 정보를 일시적으로 가져올 수 없습니다",
       "softLimitFormula": "소프트 한도 공식: 월 할당량 ÷ 30 × {{factor}}",
@@ -3734,14 +3889,24 @@
     "maximizeAria": "패널 최대화",
     "restoreAria": "패널 크기 복원",
     "detachAria": "새 창에서 열기",
-    "minimizeAria": "플로팅 버블로 최소화"
+    "minimizeAria": "플로팅 버블로 최소화",
+    "closeAria": "패널 닫기 및 플러그인 비활성화"
+  },
+  "ghostPanel": {
+    "disableConfirm": {
+      "title": "\"{{name}}\" 플러그인을 비활성화할까요?",
+      "body": "이 패널을 닫으면 플러그인 전체가 비활성화되어 패널과 기능이 중지됩니다. 사이드바의 '플러그인'에서 언제든지 다시 활성화할 수 있습니다.",
+      "confirm": "비활성화"
+    }
   },
   "ghostPanelWindow": {
     "mergeBack": "메인 창으로 되돌리기",
     "unavailable": "이 플러그인 패널은 현재 사용할 수 없습니다"
   },
   "ghostPanelBubble": {
-    "restoreAria": "{{name}} 패널 복원"
+    "restoreAria": "{{name}} 패널 복원",
+    "stackExpandAria": "플러그인 패널 {{count}}개가 최소화됨. 클릭하여 펼치기",
+    "stackCollapseAria": "플러그인 패널 목록 접기"
   },
   "rightSidebar": {
     "ariaLabel": "오른쪽 사이드바",
@@ -4185,14 +4350,13 @@
       "preparingButton": "준비 중",
       "preparingTooltip": "새 버전 준비 중…",
       "preparingAria": "새 버전 준비 중입니다. 잠시만 기다려 주세요",
-      "confirmTitle": "재시작하여 업데이트?",
-      "confirmHint": "앱이 자동으로 재시작됩니다",
-      "confirmBusyHint": "아직 실행 중인 작업이 있습니다. 재시작하면 작업이 중단됩니다",
-      "confirmButton": "재시작",
+      "confirmTitle": "아직 실행 중인 작업이 있습니다",
+      "confirmBusyHint": "재시작하면 작업이 중단됩니다",
+      "confirmButton": "그래도 앱 재시작",
       "cancel": "취소",
-      "confirmTooltip": "재시작하여 업데이트 적용",
+      "confirmTooltip": "아직 실행 중인 작업이 있습니다 — 재시작하면 중단됩니다",
       "cancelTooltip": "취소",
-      "confirmAria": "재시작하여 업데이트 적용",
+      "confirmAria": "그래도 재시작하여 업데이트를 적용하고 실행 중인 작업을 중단",
       "cancelAria": "업데이트 취소",
       "dismiss": "나중에",
       "dismissAria": "업데이트 알림 일시 숨김"
@@ -4304,12 +4468,12 @@
   },
   "imBot": {
     "conflictDialog": {
-      "title": "이 Feishu Bot App은 이미 사용 중입니다",
+      "title": "이 {{service}} Bot App은 이미 사용 중입니다",
       "bodyPrefix": "현재 App",
       "bodyMain": "은 다른 기기에서 이미 장시간 연결을 시작했습니다. 동료가 동일한 App ID를 사용 중일 수 있습니다. 하나의 App은 한 기기에만 바인딩될 수 있으므로 충돌을 피하기 위해 본 기기에서 자동으로 연결이 해제되었습니다.",
       "suggestionsHeading": "두 가지 처리 방법:",
       "suggestion1": "1. 상대방과 협의해 시간대를 분리해 사용하고, 상대방이 자신의 기기에서 인증 정보를 먼저 지운 뒤 본 기기에서 재연결합니다.",
-      "suggestion2": "2. Feishu 오픈 플랫폼에서 자신만의 별도 App을 만들어 동료와 각자 사용합니다.",
+      "suggestion2": "2. {{service}} 오픈 플랫폼에서 자신만의 별도 App을 만들어 동료와 각자 사용합니다.",
       "dismiss": "무시",
       "createOwnApp": "내 App 만들기 ↗"
     }
@@ -4523,6 +4687,7 @@
       },
       "meta": {
         "context": "컨텍스트 {{value}}",
+        "codexCompatibilityMode": "Codex 호환 모드",
         "price": "{{input}}/{{output}} / 100만",
         "fastBadge": "고속",
         "budgetDiscount": "특별 할인"
@@ -4670,6 +4835,10 @@
       "openHint": "Worker 를 불러 함께 작업",
       "disabledHint": "이 프로젝트에서는 협업 모드가 비활성화되어 있습니다. 프로젝트 설정에서 활성화하세요.",
       "unavailableHint": "이 프로젝트의 협업 설정을 확인할 수 없습니다. 잠시 후 다시 시도하세요.",
+      "unsupportedRemoteHint": "제어 대상 기기의 버전이 오래되어 협업을 사용할 수 없습니다.",
+      "remoteContinueNotice": " 이 메시지는 단일 대화로 계속 전송됩니다.",
+      "handoffRecoveredMessage": "지난번 협업 시작이 중단되었습니다. 전송되지 않은 메시지를 입력창에 복원했습니다.",
+      "handoffRecoveredGoal": "지난번 협업 시작이 중단되었습니다. 목표가 시작되지 않아 내용을 입력창에 복원했습니다.",
       "loadingHint": "이 프로젝트의 협업 설정을 확인하는 중입니다. 잠시 후 다시 시도하세요.",
       "stopHint": "협업 중지",
       "stopAria": "협업 중지",
@@ -4980,6 +5149,8 @@
       "retryTitle": "마지막 메시지 다시 보내기",
       "cancelTitle": "오류 알림 닫기",
       "retry": "다시 시도",
+      "continueAfterReset": "재설정 후 계속",
+      "continueAfterResetTitle": "사용량 제한 재설정 후 현재 작업을 계속할 일회성 자동화 만들기",
       "credentialSwitchBusy": "다른 Codex 작업이 실행 중이어서 이 대화에서 선택한 제공자로 아직 전환할 수 없습니다(공유 Codex 프로세스 재시작 필요). 다른 작업이 끝난 후 ‘재시도’를 눌러 주세요.",
       "codexThreadStale": "Codex 인증 모드가 변경되었습니다. 이 대화는 계속할 수 없습니다. 새 대화를 시작하세요.",
       "budgetModelHint": "계속 실패하면 일반 GPT 모델로 전환해 보세요.",
@@ -6216,6 +6387,10 @@
       "promptHeading": "자동화가 아직 없습니다",
       "promptDescription": "cron 자동화를 만들어 Claude Code 또는 Codex로 프롬프트를 일정에 따라 실행하세요."
     },
+    "usageLimitRecovery": {
+      "name": "사용량 제한 재설정 후 작업 계속",
+      "prompt": "중단된 지점부터 현재 작업을 계속하세요."
+    },
     "template": {
       "useTemplate": "초보자 도움말",
       "blank": "빈 항목",
@@ -6526,6 +6701,7 @@
     },
     "chips": {
       "selectProject": "프로젝트 선택",
+      "chooseTime": "시간 선택",
       "recent": "최근",
       "browseFolder": "다른 폴더 선택",
       "advanced": "고급",
@@ -7543,16 +7719,16 @@
     "toasts": {
       "googleConnected": "Google에 연결됨",
       "codexConnected": "ChatGPT 계정 연결됨",
-      "feishuBotConnected": "Feishu 봇에 연결됨",
-      "feishuBotReconnected": "Feishu 봇이 다시 연결됨",
-      "feishuBotReconnectFailed": "다시 연결하지 못했습니다. Feishu 구성을 확인한 후 다시 시도하세요",
+      "feishuBotConnected": "IM 봇에 연결됨",
+      "feishuBotReconnected": "IM 봇이 다시 연결됨",
+      "feishuBotReconnectFailed": "다시 연결하지 못했습니다. IM 봇 구성을 확인한 후 다시 시도하세요",
       "feishuBotConflict": "이 App은 이미 사용 중입니다. 동료가 같은 App ID를 사용하고 있을 수 있습니다",
       "feishuBotConnectFailed": "연결 실패. App ID / Secret을 확인하세요",
       "feishuBotSaveFailed": "저장 실패: {{message}}",
-      "feishuBotCleared": "Feishu 봇 자격 증명이 삭제됨",
+      "feishuBotCleared": "IM 봇 자격 증명이 삭제됨",
       "feishuBotClearFailed": "삭제 실패: {{message}}",
-      "feishuBotCreatedConnected": "Feishu 봇이 생성되어 연결됨",
-      "feishuBotCreatedCheck": "Feishu 봇이 생성됨. 연결 상태를 확인하세요",
+      "feishuBotCreatedConnected": "IM 봇이 생성되어 연결됨",
+      "feishuBotCreatedCheck": "IM 봇이 생성됨. 연결 상태를 확인하세요",
       "discordBotConnected": "Discord 봇 구성이 저장됨",
       "discordBotConnectFailed": "Discord 봇 연결 실패. Token과 권한을 확인하세요",
       "discordBotSaveFailed": "저장 실패: {{message}}",
@@ -7575,7 +7751,14 @@
       "telegramBotConnectFailed": "Telegram 봇 연결 실패. Token과 네트워크를 확인하세요",
       "telegramBotSaveFailed": "저장 실패: {{message}}",
       "telegramBotDisconnected": "Telegram 봇 연동이 해제됨",
-      "telegramBotDisconnectFailed": "연동 해제 실패: {{message}}"
+      "telegramBotDisconnectFailed": "연동 해제 실패: {{message}}",
+      "dingtalkBotConnected": "DingTalk 봇이 연결됨",
+      "dingtalkBotConnectFailed": "DingTalk 봇 연결 실패. 자격 증명, Stream 모드, 네트워크를 확인하세요",
+      "dingtalkBotAuthFailed": "DingTalk에서 자격 증명을 거부했습니다. Client ID와 Client Secret이 동일한 앱의 것인지 확인하세요",
+      "dingtalkBotNetworkFailed": "DingTalk 오픈 플랫폼에 연결할 수 없습니다. 네트워크 또는 프록시를 확인한 후 다시 시도하세요",
+      "dingtalkBotStreamFailed": "자격 증명은 유효하지만 Stream 연결이 설정되지 않았습니다. 봇을 활성화하고 Stream 모드를 선택한 뒤 앱 버전을 게시하세요",
+      "dingtalkBotDisconnected": "DingTalk 봇 연동이 해제됨",
+      "dingtalkBotDisconnectFailed": "DingTalk 봇 연동 해제 실패"
     },
     "errors": {
       "openFileFailed": "시스템에서 파일을 열 수 없습니다",
@@ -7600,7 +7783,8 @@
       "discordOwnerUserIdFormat": "Discord 사용자 ID는 17-20자리 숫자여야 합니다",
       "telegramFieldsRequired": "Bot Token과 Telegram 사용자 ID 둘 다 입력해야 합니다",
       "telegramTokenFormat": "Token 형식이 잘못되었습니다. BotFather가 생성한 \"숫자:시크릿\" 형태여야 합니다",
-      "telegramOwnerUserIdFormat": "Telegram 사용자 ID는 숫자여야 합니다"
+      "telegramOwnerUserIdFormat": "Telegram 사용자 ID는 숫자여야 합니다",
+      "dingtalkFieldsRequired": "Client ID와 Client Secret을 모두 입력해야 합니다"
     },
     "confirm": {
       "logoutTitle": "로그아웃",
@@ -7707,6 +7891,7 @@
     "menuAria": "작업 메뉴",
     "tooltipEmpty": "더 많은 작업",
     "tooltipCount": "참조 디렉터리 {{count}}개",
+    "addFiles": "파일, 이미지 또는 동영상 추가…",
     "pluginsTitle": "설치된 플러그인",
     "pluginDisabled": "비활성화됨",
     "pluginNoCommand": "여기에서 사용할 수 없음",

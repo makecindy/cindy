@@ -10,6 +10,7 @@
 export type {
   AgentKind,
   ProviderWireProtocol,
+  CodexCompatibilityWireProtocol,
   Effort,
   ProviderSource,
   AuthMethod,
@@ -29,6 +30,8 @@ export type {
   OAuthDeviceCodeDescriptor,
   OAuthProviderDescriptor,
 } from './types.js';
+
+export { resolveCodexCompatibilityWireProtocol } from './codexCompatibility.js';
 
 export { BUNDLED_CATALOG, BUILTIN_PROVIDERS, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForLocale } from './catalog.js';
 

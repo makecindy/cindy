@@ -239,6 +239,7 @@ type ImDefaultSettingsState = import('../shared/imDefaultSettings').ImDefaultSet
 type ImDefaultSettingsChannel = import('../shared/imDefaultSettings').ImDefaultSettingsChannel;
 type SubagentModelSettingsPatch = import('../shared/subagentModelSettings').SubagentModelSettingsPatch;
 type SubagentModelSettingsState = import('../shared/subagentModelSettings').SubagentModelSettingsState;
+type SubagentModelSettingsWriteResult = import('../shared/subagentModelSettings').SubagentModelSettingsWriteResult;
 
 /** Agent 资源占用设置的 IPC wire 形状(main 侧 agentResourceSettingsWire)。 */
 type AgentResourceProcessPriority = 'normal' | 'low' | 'lowest';
@@ -410,6 +411,8 @@ type TelegramBotTransportStatus =
   | { kind: 'connected'; appId: string }
   | { kind: 'conflict'; appId: string }
   | { kind: 'error'; reason: string };
+
+type DingTalkBotTransportStatus = DiscordBotTransportStatus;
 
 type WechatBotPhase =
   | 'disconnected'
@@ -1104,7 +1107,10 @@ interface ElectronAPI {
     /** 原位更新(同 id 换版):唤醒状态与面板位置延续,沙箱熄灯待重拉。 */
     update: (
       lizFilePath: string,
-      opts: { expectedPackageSha256: string },
+      opts: {
+        expectedPackageSha256: string;
+        expectedInstalledApproval: string;
+      },
     ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
     /**
      * cindy 槽后端覆盖:首帧同步读(规则 7);overrides 键为 "image.generate"
@@ -1117,6 +1123,8 @@ interface ElectronAPI {
       overrides: Record<string, string>;
       image: { options: Array<{ id: string; label: string }>; defaultModel: { id: string; label: string } | null };
       video: { options: Array<{ id: string; label: string }>; defaultModel: { id: string; label: string } | null };
+      /** 文本类(快问快答):选项是轻量任务模型链的档位(供应商×模型),不是媒体目录模型。 */
+      text: { options: Array<{ id: string; label: string }>; defaultModel: { id: string; label: string } | null };
     };
     /** 写/清一项覆盖(model=null 即恢复跟随默认);返回该意识最新覆盖表。 */
     setCindyPref: (
@@ -1144,6 +1152,10 @@ interface ElectronAPI {
       iconDataUrl?: string;
     }>;
     uninstall: (id: string) => Promise<{ ok: true }>;
+    /** 详情页「导出 .cindy」:打包安装目录 → 保存对话框落盘。 */
+    export: (
+      id: string,
+    ) => Promise<{ status: 'saved'; savedPath: string } | { status: 'canceled' }>;
     /** 启用/停用(停用 = 面板休眠,布局位置保留)。 */
     setEnabled: (id: string, enabled: boolean) => Promise<{ ok: true }>;
     /** 目录级禁用清单(插件页项目范围视图;sendSync 切换同帧渲染)。 */
@@ -1288,6 +1300,23 @@ interface ElectronAPI {
         tone: 'info' | 'success' | 'warning' | 'error';
       }) => void,
     ) => () => void;
+    /** confirm 槽:插件请求弹主机同款确认框(main 已资格审+净化+限速+单飞)。
+     *  main 只投单个窗口,所以收到即本窗口负责弹;答案用 resolveConfirm 回包。
+     *  confirmText/cancelText 为 null 时用 renderer 自己的缺省文案(跟语言走)。 */
+    onConfirmRequest: (
+      callback: (payload: {
+        requestId: string;
+        ghostId: string;
+        ghostName: string;
+        iconDataUrl?: string;
+        body: string;
+        confirmText: string | null;
+        cancelText: string | null;
+        danger: boolean;
+      }) => void,
+    ) => () => void;
+    /** confirm 槽回包:把用户的点击送回 main 结算挂起的管子请求。 */
+    resolveConfirm: (requestId: string, confirmed: boolean) => Promise<{ handled: boolean }>;
     /** preview 槽:插件请求在右侧栏内置浏览器开预览标签(main 已白名单守门+限速)。 */
     onPreviewOpen: (
       callback: (payload: {
@@ -1322,6 +1351,7 @@ interface ElectronAPI {
       options: {
         expectedReleaseId: string;
         expectedManifest?: import('../shared/ghost').GhostManifest;
+        expectedInstalledApproval?: string;
         allowPermissionExpansion?: boolean;
       },
     ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
@@ -1699,8 +1729,9 @@ interface ElectronAPI {
       ownerOpenId: string | null;
       error?: string;
       lifecycleAnnouncement: boolean;
+      service: 'feishu' | 'lark';
     }>;
-    save: (payload: { appId: string; appSecret: string }) => Promise<{
+    save: (payload: { appId: string; appSecret: string; service: 'feishu' | 'lark' }) => Promise<{
       verdict: 'connected' | 'conflict' | 'error' | 'pending';
     }>;
     reconnect: () => Promise<{
@@ -1708,7 +1739,7 @@ interface ElectronAPI {
     }>;
     clear: () => Promise<{ ok: true }>;
     setLifecycleAnnouncement: (enabled: boolean) => Promise<{ ok: true }>;
-    registrationBegin: () => Promise<FeishuBotRegistrationBeginResult>;
+    registrationBegin: (service: 'feishu' | 'lark') => Promise<FeishuBotRegistrationBeginResult>;
     registrationCancel: () => Promise<{ ok: true }>;
     onStatusChange: (
       callback: (update: {
@@ -1781,6 +1812,33 @@ interface ElectronAPI {
         botUsername: string | null;
       }) => void,
     ) => () => void;
+  };
+
+  // ── Personal DingTalk Bot (Settings → IM Bot → Personal) ──
+  dingtalkBot: {
+    getState: () => Promise<{
+      status: DingTalkBotTransportStatus;
+      appKey: string | null;
+      hasSecret: boolean;
+      ownerUserId: string | null;
+    }>;
+    save: (payload: { appKey: string; appSecret: string }) => Promise<{
+      status: DingTalkBotTransportStatus;
+      appKey: string | null;
+      hasSecret: boolean;
+      ownerUserId: string | null;
+    }>;
+    reconnect: () => Promise<{
+      status: DingTalkBotTransportStatus;
+      appKey: string | null;
+      hasSecret: boolean;
+      ownerUserId: string | null;
+    }>;
+    clear: () => Promise<{ ok: true }>;
+    onStatusChange: (
+      callback: (update: { status: DingTalkBotTransportStatus }) => void,
+    ) => () => void;
+    onOwnerChange: (callback: (update: { ownerUserId: string }) => void) => () => void;
   };
 
   // ── Personal WeChat (Settings → IM Bot → Personal) ──
@@ -2816,6 +2874,11 @@ interface ElectronAPI {
   checkForUpdate: () => Promise<{
     result: 'ready' | 'idle' | 'downloading' | 'manifest_failed' | 'download_failed' | 'manual_download';
   }>;
+  /**
+   * 现在重启会不会打断正在跑的活(逻辑 turn / Claude 后台活动 / Ghost card-action 后台活动
+   * 三源聚合,判定在 main 侧一处)。UpdateBanner 用它决定「直接重启」还是「先弹中断警告」。
+   */
+  anyActivityBlockingRelaunch: () => Promise<boolean>;
   /** Tell main process to apply the update and relaunch the app.
    *  `theme` is the renderer's *resolved* light/dark (after collapsing 'system'),
    *  forwarded to cindy-updater so its splash matches the app the user is seeing. */
@@ -3119,8 +3182,11 @@ interface ElectronAPI {
     setEnabled: (
       enabled: boolean,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
+    setLifecycleAnnouncement: (
+      enabled: boolean,
+    ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     setProviderEnabled: (
-      provider: 'telegram',
+      provider: 'telegram' | 'x',
       enabled: boolean,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     setWorkspaces: (
@@ -3137,11 +3203,18 @@ interface ElectronAPI {
       teamId: string,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     cancelPendingBind: () => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
-    providerBindStart: () => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
-    providerBindCancel: () => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
-    providerBindRevoke: () => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
-    openTelegramAction: (
-      action: import('../shared/hookControlIpc').TelegramOpenAction,
+    providerBindStart: (
+      provider: 'telegram' | 'x',
+    ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
+    providerBindCancel: (
+      provider: 'telegram' | 'x',
+    ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
+    providerBindRevoke: (
+      provider: 'telegram' | 'x',
+    ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
+    openProviderAction: (
+      provider: 'telegram' | 'x',
+      action: import('../shared/hookControlIpc').ProviderOpenAction,
     ) => Promise<{ ok: true }>;
     getWorkspacePrefs: () => Promise<{
       prefs: import('../shared/hookControlIpc').HookPrefsView;
@@ -3151,10 +3224,11 @@ interface ElectronAPI {
       patch: import('../shared/hookControlIpc').HookPrefsPatch,
       teamId?: string | null,
     ) => Promise<{ prefs: import('../shared/hookControlIpc').HookPrefsView }>;
-    getProviderWorkspacePrefs: () => Promise<{
+    getProviderWorkspacePrefs: (provider: 'telegram' | 'x') => Promise<{
       prefs: import('../shared/hookControlIpc').ProviderPrefsView;
     }>;
     setProviderWorkspacePrefs: (
+      provider: 'telegram' | 'x',
       workspace: string,
       patch: import('../shared/hookControlIpc').HookPrefsPatch,
     ) => Promise<{ prefs: import('../shared/hookControlIpc').ProviderPrefsView }>;
@@ -3162,7 +3236,7 @@ interface ElectronAPI {
       entries: import('../shared/hookControlIpc').HookWorkspaceProviderSourceEntry[];
     }>;
     setWorkspaceProviderSource: (payload: {
-      channel: 'slack' | 'telegram';
+      channel: 'slack' | 'telegram' | 'x';
       teamId: string | null;
       workspace: string;
       providerId: string | null;
@@ -3767,12 +3841,13 @@ interface ElectronAPI {
       agent: 'claude-code' | 'codex';
       baseUrl: string;
       authMethod: 'apiKey' | 'oauth' | 'none';
+      wireProtocol?: import('@cindy/model-providers').ProviderWireProtocol;
       modelsUrl?: string | null;
       apiKey?: string | null;
       headers?: Record<string, string>;
     }) => Promise<{
       ok: boolean;
-      models?: { id: string; name: string }[];
+      models?: { id: string; name: string; contextWindow?: number }[];
       code?: import('../shared/providerErrors').ProviderErrorCode;
       status?: number;
       detail?: string;
@@ -4321,8 +4396,8 @@ interface ElectronAPI {
 
     /** 子代理模型覆盖。null 表示不注入覆盖，仅对新建 agent 会话生效。 */
     subagentModelSettingsGet: () => Promise<SubagentModelSettingsState>;
-    subagentModelSettingsSet: (patch: SubagentModelSettingsPatch) => Promise<SubagentModelSettingsState>;
-    subagentModelSettingsReset: () => Promise<SubagentModelSettingsState>;
+    subagentModelSettingsSet: (patch: SubagentModelSettingsPatch) => Promise<SubagentModelSettingsWriteResult>;
+    subagentModelSettingsReset: () => Promise<SubagentModelSettingsWriteResult>;
 
     /** Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。 */
     agentResourceSettingsGet: () => Promise<AgentResourceSettingsWire>;
@@ -4607,6 +4682,7 @@ interface ElectronAPI {
         cb: (p: {
           spend: number;
           maxBudget: number;
+          currency: import('../shared/regionalMoney').MoneyCurrency;
           budgetResetAt?: string | null;
           todaySpend: number | null;
           fetchedAt: number;

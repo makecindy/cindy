@@ -77,6 +77,7 @@ import { loadScheduleSidebarIndexRuns, type ScheduleSidebarIndexRun } from '@/fe
 import { useSchedulesSnapshot } from '@/features/scheduler/lib/schedulesStore';
 import { scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { ScheduleBindingBadge } from './ScheduleBindingBadge';
+import { SessionOrdinalBadgeKbd, useSessionOrdinalBadge } from './sessionOrdinalBadges';
 import { SessionProjectMoveSubmenu } from './SessionProjectMoveSubmenu';
 import type { SessionMoveTarget } from './sessionMoveTarget';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
@@ -195,6 +196,9 @@ export const SessionItem = memo(function SessionItem({
 }: SessionItemProps) {
   const { t } = useTranslation();
   const prRefs = usePrRefsForSession(session.id);
+  // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅(性能不变量第 2 条),
+  // 非按住态恒为 null,不惊动 memo。
+  const ordinalBadgeLabel = useSessionOrdinalBadge(session.id);
   const isPinned = session.pinnedAt != null;
   const isEmpty = isEmptyDraftSession(session);
   // 取 userSendAt 与 updatedAt 中较新的值，兼容存量 DB 行（旧版只写 userSendAt），
@@ -764,6 +768,8 @@ export const SessionItem = memo(function SessionItem({
               !archivePending && 'group-hover:opacity-0 group-focus-within/slot:opacity-0',
               menuPos !== null && 'opacity-0',
               archivePending && 'opacity-0',
+              // mod+1..9 序号徽标出现时同样让位:徽标独占行尾,不与时间/badge 并排。
+              ordinalBadgeLabel != null && 'opacity-0',
             )}
           >
             <WorktreeBadge sessionId={session.id} size={12} className="size-4" />
@@ -931,6 +937,22 @@ export const SessionItem = memo(function SessionItem({
             </div>
           )}
         </div>
+      )}
+
+      {/* mod+1..9 序号徽标(按住修饰键浮现,见 sessionOrdinalBadges):绝对定位
+          在右侧时间槽位置(与行 pr-2 对齐),时间/badge 容器同步让位淡出;
+          z-20 压过 hover 操作钮,pointer-events-none 不挡点击。前景色给到
+          容器:普通行次级灰、active 反色行用 active foreground,kbd 内
+          text-current + currentColor 底自动跟随。编辑态让位给重命名输入框。 */}
+      {!isEditing && ordinalBadgeLabel != null && (
+        <span
+          className={cn(
+            'pointer-events-none absolute inset-y-0 right-2 z-20 flex items-center',
+            isActive ? 'text-sidebar-item-active-foreground' : 'text-sidebar-action-icon',
+          )}
+        >
+          <SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />
+        </span>
       )}
 
       {/* 右键菜单：与 ProjectNode 同款 coordinate-anchored DropdownMenu —

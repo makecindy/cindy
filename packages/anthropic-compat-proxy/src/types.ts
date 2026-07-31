@@ -247,6 +247,34 @@ export interface ProxyOptions {
    */
   resolveOutboundProxy?: OutboundProxyResolver;
   /**
+   * 可选: WebSocket upgrade 的上游解析器。**不传 = 完全不接受 upgrade**
+   * (Claude Code 侧的 proxy 就不传, 行为与扩展前逐字节一致)。
+   *
+   * 返回上游 URL → 接受 upgrade 并把两端 socket 对接到该上游;
+   * 返回 **null → 回 426 Upgrade Required**, codex 据此优雅退回 HTTP transport
+   * (426 是它唯一认作降级信号的状态码, 见 codex core/src/client.rs 的
+   * `StatusCode::UPGRADE_REQUIRED` 分支; 其余错误一律 Err 抛出 = 用户吃报错)。
+   * 而 codex 侧的降级是 **session 级**的(一个 turn 触发后同 session 后续 turn
+   * 都走 HTTP), 所以一次 426 即稳定, 不会在两种传输之间抖动。
+   *
+   * 因此 null 的语义不是"拒绝服务", 而是"这个会话走 HTTP 更合适" —— 宿主可以据此
+   * 把需要 body 级能力(recoveryRules / responseObserver)的会话导回 HTTP 路径,
+   * 而不牺牲其余会话的 WS 长连接。
+   *
+   * **为什么不复用 routingTransform 来定 WS 上游**: 那条路按请求体里的 model 分流,
+   * 而 upgrade 请求没有 body、也未必带 session/thread header, 会 fallback 到默认
+   * 上游。开了 WS 的 provider 是明确且唯一的, 上游可以直接给定, 不需要推导。
+   *
+   * **WS 流量上以下能力一律不生效**(proxy 只做 socket 级转发, 不解析 WS 帧):
+   * requestTransform / routingTransform 的 body 改写、recoveryRules、
+   * responseObserver、maxRequestBodyBytes。放开某个 provider 的 WS 前必须确认
+   * 它不依赖这些。
+   */
+  resolveWebSocketUpstream?: (ctx: {
+    readonly url: string;
+    readonly headers: Readonly<Record<string, string>>;
+  }) => string | null;
+  /**
    * 可选: debug 级别下是否 dump 入站请求 body(截断到 64KiB)。默认 false ——
    * dev 的日志级别默认 trace,若默认 dump,agent 高并发场景(code-review 扇出 +
    * 429 重试,2026-07-17 实测峰值 80 req/s)每请求几十 KiB 的 util.format /
@@ -265,6 +293,13 @@ export interface ProxyOptions {
 export interface ProxyHandle {
   /** Claude Code 子进程应该用的 ANTHROPIC_BASE_URL,例: http://127.0.0.1:54321 */
   readonly url: string;
+  /**
+   * 强制断开指定 thread 当前已建立或正在握手的 WS 隧道，返回断开的隧道数。
+   *
+   * 用于宿主把已命中 HTTP-only recovery 的 Codex thread 从预热连接池中逐出；
+   * 否则下一次请求会复用旧 WS，无法通过新的 upgrade 响应触发 transport fallback。
+   */
+  disconnectWebSocketsForThread?(threadId: string): number;
   /** 优雅关闭 —— close listener + 等待 in-flight 请求结束(2s 超时强关) */
   dispose(): Promise<void>;
 }

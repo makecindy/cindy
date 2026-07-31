@@ -77,11 +77,22 @@ describe('NewMakerDraftRoute worktree send flow', () => {
       'const worktreePreparing = smoothedWorktreeCreating',
       rawDerive,
     );
-    const sendGuard = sessionViewSource.indexOf('if (worktreePreparing) return false', worktreePreparing);
+    // sendGuard 现在读合并后的 sessionHandoffPreparing —— 「会话正在准备」多了一档
+    // (device-link 远程交接,见 remoteHandoffPreparing),两档必须共用同一个
+    // 下游判据,否则又是「同一语义两处判定」。worktree 这一档仍是它的组成项。
+    const preparingMerge = sessionViewSource.indexOf(
+      'const sessionHandoffPreparing = worktreePreparing || remoteHandoffPreparing;',
+      worktreePreparing,
+    );
+    const sendGuard = sessionViewSource.indexOf(
+      'if (sessionHandoffPreparing) return false',
+      preparingMerge,
+    );
     const overlayLock = sessionViewSource.indexOf('worktreePreparing && smoothedBranchName', sendGuard);
 
     expect(hookSubscription).toBeGreaterThan(-1);
     expect(rawDerive).toBeGreaterThan(hookSubscription);
+    expect(preparingMerge).toBeGreaterThan(worktreePreparing);
     expect(worktreePreparing).toBeGreaterThan(rawDerive);
     expect(sendGuard).toBeGreaterThan(worktreePreparing);
     expect(overlayLock).toBeGreaterThan(sendGuard);

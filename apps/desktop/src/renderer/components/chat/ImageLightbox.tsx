@@ -94,6 +94,7 @@ import {
   zoomAtPoint,
 } from './lightboxGestures';
 import { ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
+import { containImageSize } from './imageDisplaySize';
 
 /** 图片不允许缩得比"适配窗口"更小,所以下限是 1 而不是共享常量的 0.2。 */
 const IMAGE_MIN_SCALE = 1;
@@ -427,13 +428,38 @@ export function ImageLightbox({
   const [draftStroke, setDraftStroke] = useState<AnnotationStroke | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   // 图片自然尺寸:SVG viewBox 与烧录 canvas 的坐标基准。onLoad 时设置。
-  const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null);
+  const [naturalSize, setNaturalSize] = useState<{ src: string; w: number; h: number } | null>(
+    null,
+  );
+  const [viewportSize, setViewportSize] = useState(() => ({
+    width: window.innerWidth,
+    height: window.innerHeight,
+  }));
   const imgRef = useRef<HTMLImageElement>(null);
   // once-bound keydown handler 需要读到最新标注态,与 viewportRef 同一模式。
   const isAnnotatingRef = useRef(false);
   const strokesRef = useRef<AnnotationStroke[]>([]);
   isAnnotatingRef.current = isAnnotating;
   strokesRef.current = strokes;
+
+  useEffect(() => {
+    const updateViewportSize = () => {
+      setViewportSize({ width: window.innerWidth, height: window.innerHeight });
+    };
+    window.addEventListener('resize', updateViewportSize);
+    return () => window.removeEventListener('resize', updateViewportSize);
+  }, []);
+
+  // index 变化后的 effect 会在 commit 后清空状态；渲染阶段先按 src 校验，
+  // 避免新图首帧沿用上一张图的宽高比（标注坐标也必须遵守同一约束）。
+  const currentNaturalSize = naturalSize?.src === currentSrc ? naturalSize : null;
+  const fittedImageSize = currentNaturalSize
+    ? containImageSize(
+        { width: currentNaturalSize.w, height: currentNaturalSize.h },
+        viewportSize.width - 80,
+        viewportSize.height - 80,
+      )
+    : null;
 
   const undoLastStroke = useCallback(() => {
     setStrokes((s) => s.slice(0, -1));
@@ -1101,6 +1127,10 @@ export function ImageLightbox({
           draggable={false}
           style={{
             display: 'block',
+            // viewBox-only SVG 在 shrink-to-fit 容器中仅靠 max-* 会塌成 0×0；
+            // onLoad 后写入 contain 结果，同时让标注层与真实图片盒严格同尺寸。
+            width: fittedImageSize?.width,
+            height: fittedImageSize?.height,
             maxWidth: 'calc(100vw - 80px)',
             maxHeight: 'calc(100vh - 80px)',
             objectFit: 'contain',
@@ -1108,6 +1138,7 @@ export function ImageLightbox({
           }}
           onLoad={(e) => {
             setNaturalSize({
+              src: currentSrc,
               w: e.currentTarget.naturalWidth,
               h: e.currentTarget.naturalHeight,
             });
@@ -1130,9 +1161,9 @@ export function ImageLightbox({
         />
         {/* 标注层:viewBox = 图片自然尺寸,归一化笔迹 × 自然尺寸 = path 坐标,
             与烧录坐标一致(所见即所得)。pointerEvents 关闭,事件由容器接管。 */}
-        {naturalSize && (strokes.length > 0 || draftStroke) ? (
+        {currentNaturalSize && (strokes.length > 0 || draftStroke) ? (
           <svg
-            viewBox={`0 0 ${naturalSize.w} ${naturalSize.h}`}
+            viewBox={`0 0 ${currentNaturalSize.w} ${currentNaturalSize.h}`}
             preserveAspectRatio="none"
             style={{
               position: 'absolute',
@@ -1144,9 +1175,9 @@ export function ImageLightbox({
             aria-hidden
           >
             {[...strokes, ...(draftStroke ? [draftStroke] : [])].map((stroke, i) => {
-              const d = strokeToSvgPath(stroke, naturalSize.w, naturalSize.h);
+              const d = strokeToSvgPath(stroke, currentNaturalSize.w, currentNaturalSize.h);
               if (!d) return null;
-              const w = annotationStrokeWidth(naturalSize.w, naturalSize.h);
+              const w = annotationStrokeWidth(currentNaturalSize.w, currentNaturalSize.h);
               return (
                 // biome-ignore lint/suspicious/noArrayIndexKey: 笔迹列表只增/尾删,index 稳定。
                 <g key={i}>

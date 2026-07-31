@@ -48,11 +48,18 @@ export interface GhostErrandConfig {
 interface GhostErrandPrefs {
   errand: Record<string, GhostErrandConfig>;
   /**
-   * ghostId → 专属 errand 会话 id(runner 复用映射)。放在偏好文件里而非
-   * DB:这是"哪间是它的干活间"的宿主侧记忆,丢了(手删/损坏)的后果只是
-   * 下一单重建一间,不值得动 sessions schema(migration 风险不对等)。
+   * 映射键 → 专属 errand 会话 id(runner 复用映射)。键形态两种:
+   * `ghostId` = 该插件的缺省共用间;`ghostId#sessionKey` = 按钥匙分的间
+   * (ghostId 与 sessionKey 的合法字符集都不含 `#`,拼接无歧义)。放在偏好
+   * 文件里而非 DB:这是"哪间是它的干活间"的宿主侧记忆,丢了(手删/损坏)
+   * 的后果只是下一单重建一间,不值得动 sessions schema(migration 风险不对等)。
    */
   sessions: Record<string, string>;
+}
+
+/** sessions 表的映射键(见 GhostErrandPrefs.sessions 注释)。 */
+function sessionMapKey(ghostId: string, sessionKey?: string): string {
+  return sessionKey ? `${ghostId}#${sessionKey}` : ghostId;
 }
 
 const DEFAULTS: GhostErrandPrefs = { errand: {}, sessions: {} };
@@ -144,20 +151,25 @@ export function writeGhostErrandConfig(ghostId: string, config: unknown): GhostE
   return cfg;
 }
 
-/** 读某插件的专属 errand 会话 id;null = 还没建过(或映射被清)。 */
-export function readGhostErrandSessionId(ghostId: string): string | null {
+/** 读某插件的专属 errand 会话 id(可带分会话钥匙);null = 还没建过(或映射被清)。 */
+export function readGhostErrandSessionId(ghostId: string, sessionKey?: string): string | null {
   store.invalidateIfChanged();
-  return store.read().sessions[ghostId] ?? null;
+  return store.read().sessions[sessionMapKey(ghostId, sessionKey)] ?? null;
 }
 
-/** 写/清某插件的专属 errand 会话映射(null 即清除;会话失效重建时更新)。 */
-export function writeGhostErrandSessionId(ghostId: string, sessionId: string | null): void {
+/** 写/清某插件的专属 errand 会话映射(可带分会话钥匙;null 即清除;会话失效重建时更新)。 */
+export function writeGhostErrandSessionId(
+  ghostId: string,
+  sessionId: string | null,
+  sessionKey?: string,
+): void {
   store.invalidateIfChanged();
+  const key = sessionMapKey(ghostId, sessionKey);
   const sessions = { ...store.read().sessions };
-  if (sessionId === null) delete sessions[ghostId];
-  else sessions[ghostId] = sessionId;
+  if (sessionId === null) delete sessions[key];
+  else sessions[key] = sessionId;
   store.writePatch({ sessions });
-  log.info('ghost errand session mapping written', { ghostId, sessionId });
+  log.info('ghost errand session mapping written', { ghostId, sessionKey: sessionKey ?? null, sessionId });
 }
 
-export const __testing = { normalize, normalizeConfig };
+export const __testing = { normalize, normalizeConfig, sessionMapKey };

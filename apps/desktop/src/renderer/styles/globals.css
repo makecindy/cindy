@@ -1852,9 +1852,10 @@ body.resizing-pane [data-ghost-webview] {
 /* ── 插件面板悬浮球(GhostPanelBubbleLayer)────────────────────────────
    动效按 engineering-conventions §7 红线:只动 transform/opacity、动画挂
    HTML wrapper(不挂 SVG)、常驻循环仅 hover 期间播放、减弱动效时停用。
-   任何动画都不压在气泡按钮本体上 —— 按钮的 transform 是位置(translate3d),
-   压同一元素会把气泡顶到 (0,0);圆圈与幽灵各自分层(.ghost-bubble-circle /
-   .ghost-bubble-face-jump)编排。
+   任何动画都不压在气泡按钮本体上 —— 按钮本体只管落位与 no-drag 命中区
+   (left/top 定位,app-region 挖洞按布局矩形算、不跟随 transform,见
+   GhostPanelBubbleLayer.tsx 文件头);圆圈与幽灵各自分层
+   (.ghost-bubble-circle / .ghost-bubble-face-jump)编排。
    时序(2026-07-25 Lizi 定案"两段都要有戏"):
    出现 = 面板收走 → 等 300ms → 圆圈渐显(160ms)→ 幽灵跳进来(240ms,回弹);
    消失 = 幽灵跳走(160ms)→ 圆圈渐隐(120ms 延迟 + 140ms)→ 面板滑入。 */

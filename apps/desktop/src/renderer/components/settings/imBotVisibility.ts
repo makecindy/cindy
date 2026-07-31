@@ -40,6 +40,13 @@ export function showDiscordBot(identity: ImBotIdentity): boolean {
   return !isCnPersonalIdentity(identity);
 }
 
+/** Lark 在国区只对已登录的云端企业账号开放；global 不受登录模式限制。 */
+export function showLarkBot(identity: ImBotIdentity): boolean {
+  return (
+    identity.region === 'global' || (identity.mode === 'cloud' && identity.membershipKind === 'org')
+  );
+}
+
 /** 个人分栏是否提供 Telegram 机器人配置 — 可见性规则与 Discord 同组。 */
 export function showTelegramBot(identity: ImBotIdentity): boolean {
   return !isCnPersonalIdentity(identity);

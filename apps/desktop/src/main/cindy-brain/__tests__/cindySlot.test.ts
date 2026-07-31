@@ -1307,3 +1307,102 @@ describe('快问快答(oneshot_text)', () => {
     });
   });
 });
+
+/**
+ * 更新重启前的阻断探针要问「Cindy slot 现在有没有在干活」。两半状态各自独立记账
+ * (异步 jobs / 同步 inflight),只查一半就会漏一半 —— 而漏掉的后果是 forceQuit()
+ * 连 Ghost Node runtime 一起销毁,正在生成的付费结果直接丢掉。
+ */
+describe('anyInflightWork（更新重启阻断探针）', () => {
+  it('空闲时为 false', () => {
+    const { slot } = makeSlot();
+    expect(slot.anyInflightWork()).toBe(false);
+  });
+
+  it('同步代办在途期间为 true，结算后回到 false', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const { slot } = makeSlot({
+      generateImage: vi.fn(async () => {
+        // 请求已计入 inflight、但还没结算的那一刻。
+        expect(slot.anyInflightWork()).toBe(true);
+        await gate;
+        return { buffer: new Uint8Array([1]), mimeType: 'image/png' };
+      }),
+    } as unknown as Partial<CindySlotDeps>);
+
+    const pending = slot.handleModelRequest('art', REQ);
+    release();
+    await pending;
+    expect(slot.anyInflightWork()).toBe(false);
+  });
+
+  // 寄存 / 撤回寄存在进入代办链之前就 return 了，走不到 inflight 记账；被打断会卡在
+  // blob 落盘与账本挂引用之间，所以单独记 mediaOps。
+  it('寄存在途期间为 true，结算后回到 false', async () => {
+    const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2]);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    let seenDuring: boolean | null = null;
+    const { slot } = makeSlot({
+      depositMedia: vi.fn(async () => {
+        seenDuring = slot.anyInflightWork();
+        await gate;
+        return { hash: 'a'.repeat(64), bytes: PNG_BYTES.length, usedBytes: 10, quotaBytes: 100 };
+      }),
+    } as unknown as Partial<CindySlotDeps>);
+
+    const pending = slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'deposit_media',
+      data: Buffer.from(PNG_BYTES).toString('base64'),
+    });
+    release();
+    await pending;
+    expect(seenDuring).toBe(true);
+    expect(slot.anyInflightWork()).toBe(false);
+  });
+
+  it('寄存抛错也会释放在途计数（finally）', async () => {
+    const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2]);
+    const { slot } = makeSlot({
+      depositMedia: vi.fn(async () => { throw new Error('disk is full'); }),
+    } as unknown as Partial<CindySlotDeps>);
+
+    const r = await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'deposit_media',
+      data: Buffer.from(PNG_BYTES).toString('base64'),
+    });
+    expect(r).toMatchObject({ ok: false });
+    // 计数泄漏会让重启入口从此永久卡在「有任务在跑」。
+    expect(slot.anyInflightWork()).toBe(false);
+  });
+
+  // 异步提交只对视频类开放（图像代办秒级完成，走同步等待）。
+  it('异步视频代办（mode:submit）受理后为 true', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const { slot } = makeSlot({
+      generateVideo: vi.fn(async () => {
+        await gate;
+        return {
+          buffer: new Uint8Array([1]),
+          mimeType: 'video/mp4',
+          videoParams: { durationSeconds: 4, resolution: '720p', ratio: '16:9', fps: 24 },
+        };
+      }),
+    } as unknown as Partial<CindySlotDeps>);
+
+    const res = await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'gen_video',
+      prompt: '一只猫奔跑',
+      mode: 'submit',
+    });
+    expect(res).toMatchObject({ ok: true, status: 'running' });
+    // 受理即返回，job 仍在途 —— 此时没有任何 turn 级信号还亮着。
+    expect(slot.anyInflightWork()).toBe(true);
+    release();
+  });
+});

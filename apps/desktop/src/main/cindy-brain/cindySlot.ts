@@ -194,7 +194,13 @@ export interface CindySlotDeps {
    * 不注入 = 能力在运行期不可用,资格审通过也回结构化拒绝(未接线的
    * 宿主/测试环境天然 fail closed)。
    */
-  oneshotText?(params: { prompt: string; maxTokens: number; timeoutMs: number }): Promise<
+  oneshotText?(params: {
+    prompt: string;
+    maxTokens: number;
+    timeoutMs: number;
+    /** 用户在插件详情页把 text.oneshot 钉到的轻量档位(供应商×模型);没钉 = 跟随默认链。 */
+    pinnedProfileId?: string;
+  }): Promise<
     | { ok: true; text: string; model?: string }
     | { ok: false; reason: 'no_candidate' | 'timeout' | 'failed'; message: string }
   >;
@@ -356,6 +362,12 @@ export function stripJsonFences(text: string): string {
 
 export class GhostCindySlot {
   private readonly inflight = new Map<string, number>();
+  /**
+   * 寄存 / 撤回寄存(deposit_media / release_media)的在途条数。与 inflight 分开记:那个是
+   * 代办限流账(getInflightLimit),这个只回答「重启会打断什么」—— 理由见 handleModelRequest
+   * 里那两个分支的注释。
+   */
+  private mediaOps = 0;
   /** 异步代办任务表(jobId → 记录;惰性 sweep,过期即清)。 */
   private readonly jobs = new Map<string, CindyAsyncJob>();
   /**
@@ -400,6 +412,12 @@ export class GhostCindySlot {
     // 而"永不 reject"是本类对沙箱的硬承诺(注入的嗅探/账本抛错也不许穿透)。
     if (p?.kind === 'deposit_media' || p?.kind === 'release_media') {
       const verb = p.kind === 'deposit_media' ? '寄存' : '撤回寄存';
+      // 寄存 / 撤回也要登记在途 —— 它们在这一行就 return 了,走不到下面代办链的 inflight
+      // 记账,而 ingestMedia 落盘与账本挂引用之间被 forceQuit() 打断会留下孤儿 blob。
+      // 刻意用独立计数而不并入 inflight:那个是**代办限流账**(getInflightLimit),
+      // 把面板里删素材 / 粘贴图算进去会让它们撞上「同时进行的代办已达上限」——
+      // 那是行为变更,不是本改动该做的事。这里只服务于「重启会打断什么」的判定。
+      this.mediaOps += 1;
       try {
         return p.kind === 'deposit_media'
           ? await this.handleDepositMedia(ghostId, p)
@@ -411,6 +429,8 @@ export class GhostCindySlot {
           error: message,
         });
         return { ok: false, message: `${verb}失败:${message}` };
+      } finally {
+        this.mediaOps -= 1;
       }
     }
     // 快问快答(text.oneshot):不经媒体生成链、不选型、秒级同步——单独
@@ -800,6 +820,32 @@ export class GhostCindySlot {
    * 在途 running(含本单即将占用的名额)都会落成完成记录,一并计入预留,
    * 上限在任何并发时序下都不被突破。
    */
+  /**
+   * 是否有**任意**在途的 Cindy 工作。
+   *
+   * 给「这个破坏性动作会打断什么」这类全局判定用(更新重启前的阻断探针)。三处状态各自独立
+   * 维护,只查一部分就等于漏一部分:
+   *  - `jobs`:mode:'submit' 的**异步视频**代办(异步提交只对视频开放,图像秒级完成走同步)。
+   *    由 `void runExec()` 脱离调用链跑,发起它的 turn 结束后就没有任何 turn 级信号还亮着。
+   *  - `inflight`:**同步**代办的 per-ghost 在途计数(gen_image / gen_video / edit_* 的同步
+   *    等待、明确不进会话的 oneshot_text)。插件面板发起的请求不一定伴随 turn 或 card-action,
+   *    所以同样可能所有其它探针都不命中。
+   *  - `mediaOps`:寄存 / 撤回寄存(deposit_media / release_media)。这两个分支在进入代办链
+   *    之前就 return 了、走不到 inflight 记账;被打断会卡在 blob 落盘与账本挂引用之间。
+   *
+   * 三者都会被 forceQuit() 连着 Ghost Node runtime 一起 destroyAll —— 正在生成的付费结果
+   * 直接丢掉。所以这里给的是「所有 Cindy slot 在途工作」的统一快照,而不是某一种。
+   */
+  anyInflightWork(): boolean {
+    for (const job of this.jobs.values()) {
+      if (job.status === 'running') return true;
+    }
+    for (const count of this.inflight.values()) {
+      if (count > 0) return true;
+    }
+    return this.mediaOps > 0;
+  }
+
   private evictSettledJobs(ghostId: string): void {
     const entries = [...this.jobs.entries()].filter(([, j]) => j.ghostId === ghostId);
     const running = entries.filter(([, j]) => j.status === 'running').length;
@@ -922,10 +968,14 @@ export class GhostCindySlot {
       const prompt = expectJson
         ? `${p.prompt}\n\n(只输出 JSON 本体,不要任何解释、前后缀或代码围栏)`
         : p.prompt;
+      // 选型仍不在意识手里,但用户可以在插件详情页把这项能力钉到某个轻量档位
+      // (与 image.*/video.* 的"钉后端"同一张覆盖表、同一条 IPC)。
+      const pinnedProfileId = this.deps.getOverride(ghostId, 'text.oneshot') ?? undefined;
       const outcome = await oneshot({
         prompt,
         maxTokens: (p.maxTokens as number | undefined) ?? GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS,
         timeoutMs: GHOST_ONESHOT_TEXT_TIMEOUT_MS,
+        pinnedProfileId,
       });
       if (!outcome.ok) {
         const errorCode =

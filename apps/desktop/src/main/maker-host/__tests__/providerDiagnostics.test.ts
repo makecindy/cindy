@@ -81,6 +81,55 @@ describe('classifyProviderError', () => {
 });
 
 describe('buildProbeRequest', () => {
+  it('Codex Anthropic Messages probe uses x-api-key and Messages endpoint', () => {
+    const { url, init } = buildProbeRequest({
+      agent: 'codex',
+      wireProtocol: 'anthropic-messages',
+      baseUrl: 'https://api.anthropic.com',
+      modelId: 'claude-opus-5',
+      apiKey: 'sk-test',
+      headers: {
+        'Anthropic-Version': 'custom-version',
+        'Content-Type': 'text/plain',
+      },
+    });
+    expect(url).toBe('https://api.anthropic.com/v1/messages');
+    const headers = init.headers as Record<string, string>;
+    expect(headers['anthropic-version']).toBe('custom-version');
+    expect(headers['Anthropic-Version']).toBeUndefined();
+    expect(headers['content-type']).toBe('application/json');
+    expect(headers['Content-Type']).toBeUndefined();
+    expect(headers['x-api-key']).toBe('sk-test');
+    expect(headers.authorization).toBe('Bearer sk-test');
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      model: 'claude-opus-5',
+      max_tokens: 1,
+    });
+  });
+
+  it('Codex Anthropic Messages probe matches runtime joining for a versioned base URL', () => {
+    const { url } = buildProbeRequest({
+      agent: 'codex',
+      wireProtocol: 'anthropic-messages',
+      baseUrl: 'https://provider.example/v1',
+      modelId: 'claude-sonnet-4-6',
+    });
+    expect(url).toBe('https://provider.example/v1/messages');
+  });
+
+  it('Codex Anthropic Messages probe preserves custom path and query joining', () => {
+    const { url } = buildProbeRequest({
+      agent: 'codex',
+      wireProtocol: 'anthropic-messages',
+      baseUrl: 'https://provider.example/api/v1?tenant=alpha',
+      requestPath: '/tenant/messages?beta=true',
+      modelId: 'claude-sonnet-4-6',
+    });
+    expect(url).toBe(
+      'https://provider.example/api/v1/tenant/messages?tenant=alpha&beta=true',
+    );
+  });
+
   it('cc wire：/v1/messages + anthropic-version + 双鉴权头（与 api-key-header 路由分支对齐）', () => {
     const { url, init } = buildProbeRequest({
       agent: 'claude-code',
@@ -218,7 +267,7 @@ describe('buildProbeRequest', () => {
     });
     expect(init.headers).toEqual({
       'content-type': 'application/json',
-      'X-Tenant': 'local',
+      'x-tenant': 'local',
     });
   });
 });
@@ -343,8 +392,10 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     });
 
     const headers = buildProbeRequest(spec).init.headers as Record<string, string>;
-    expect(headers.Authorization).toBe('Bearer stale');
-    expect(headers['X-API-Key']).toBe('stale');
+    expect(headers.authorization).toBe('Bearer stale');
+    expect(headers['x-api-key']).toBe('stale');
+    expect(headers.Authorization).toBeUndefined();
+    expect(headers['X-API-Key']).toBeUndefined();
   });
 
   it('api-key-header + openai-chat 供应商:saved 探测带上 wireProtocol → 打 /chat/completions', async () => {

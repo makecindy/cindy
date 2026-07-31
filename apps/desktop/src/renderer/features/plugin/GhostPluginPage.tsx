@@ -41,9 +41,11 @@ import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkin
 import { findSplitChildByPanelKind } from '../../../shared/layoutTree';
 import { resolveSystemLocale } from '../../../shared/locale';
 import {
-  diffGhostPermissionItems,
+  diffInstalledGhostPermissionItems,
+  ghostInstallApprovalToken,
   ghostPanelKind,
   ghostPermissionItems,
+  isOfficialGhostId,
   type GhostSetupStatus,
 } from '../../../shared/ghost';
 import type {
@@ -71,6 +73,8 @@ import { GhostPluginIcon } from './GhostPluginIcon';
 import { MarketPluginDetailView } from './MarketPluginDetailView';
 import { PluginScopePicker, usePluginRecentWorkdirs } from './PluginScopePicker';
 import {
+  ghostReapprovalRoute,
+  marketReviewTargetsInstalledGhost,
   orderPluginCatalogItems,
   pluginPresentationOrigin,
   pluginUpdateForInstalledVersion,
@@ -493,21 +497,35 @@ export function GhostPluginPage() {
 
   // 市场更新流程由列表卡片和详情页共用:先取目标 release 的完整 manifest 做
   // 权限 diff,经用户确认后才安装,不做静默升级。
+  //
+  // 同版本的 `installed` 也走这里:缺少批准状态的存量安装靠"用市场包重装同一
+  // release"恢复,此时权限 diff 会把目标包的全部权限当新增项逐条列出。
   const handleMarketUpdate = useCallback(
     async (ghostId: string) => {
       const marketItem = marketByGhostId.get(ghostId);
-      if (!marketItem || marketItem.installState !== 'update-available') return;
-      const installedGhost = ghosts.find((ghost) => ghost.manifest.id === ghostId) ?? null;
+      if (!marketItem) return;
+      const installedGhost =
+        ghosts.find((ghost) => ghost.manifest.id === ghostId) ?? null;
+      if (
+        !marketReviewTargetsInstalledGhost(
+          marketItem,
+          installedGhost?.approval.state,
+        )
+      ) {
+        return;
+      }
+      if (!installedGhost) {
+        toast.error(t('settings.ghosts.market.errors.stateChanged'));
+        await refreshMarket();
+        return;
+      }
       // 列表每张卡都有直达入口,同步互斥防止并发更新互相覆盖忙碌状态。
       const marketBusyLease = acquireMarketBusy(marketItem.pluginId);
       if (!marketBusyLease) return;
       try {
         const next = await window.electronAPI.pluginMarket.detail(marketItem.pluginId);
         if (!isMarketBusyLeaseActive(marketBusyLease)) return;
-        const diff = diffGhostPermissionItems(
-          installedGhost?.manifest ?? next.manifest,
-          next.manifest,
-        );
+        const diff = diffInstalledGhostPermissionItems(installedGhost, next.manifest);
         const approved = await confirm({
           title: t('settings.ghosts.updateConfirm.title', { name: next.name }),
           description: t('settings.ghosts.updateConfirm.body', {
@@ -523,6 +541,7 @@ export function GhostPluginPage() {
         const result = await window.electronAPI.pluginMarket.install(marketItem.pluginId, {
           expectedReleaseId: next.releaseId,
           ...(next.sourceType !== 'server' ? { expectedManifest: next.manifest } : {}),
+          expectedInstalledApproval: ghostInstallApprovalToken(installedGhost.approval),
           allowPermissionExpansion: diff.added.length > 0,
         });
         if (!isMarketBusyLeaseActive(marketBusyLease)) return;
@@ -561,6 +580,22 @@ export function GhostPluginPage() {
     }
     await pickAndUpdateGhost(selectedDetail.id, { t, confirm, confirmWithCheckbox });
   }, [confirm, confirmWithCheckbox, handleMarketUpdate, selectedDetail, selectedMarketUpdate, t]);
+
+  /**
+   * 缺少批准状态时的恢复入口。市场自有的包重走市场安装确认(重新下载 + 逐项
+   * 权限确认);本地包让用户重新选一次 `.cindy`。两条路都落到同一套权限确认,
+   * 不存在"点一下就悄悄恢复运行"的分支。
+   */
+  const handleReapprove = useCallback(
+    async (ghostId: string) => {
+      if (ghostReapprovalRoute(marketByGhostId.get(ghostId)) === 'market') {
+        await handleMarketUpdate(ghostId);
+        return;
+      }
+      await pickAndUpdateGhost(ghostId, { t, confirm, confirmWithCheckbox });
+    },
+    [confirm, confirmWithCheckbox, handleMarketUpdate, marketByGhostId, t],
+  );
 
   const handleInstall = useCallback(async () => {
     const picked = await window.electronAPI.ghosts.pickFile().catch(() => null);
@@ -670,6 +705,19 @@ export function GhostPluginPage() {
       void handleUseGhost(selectedGhost.manifest.id, selectedDetail.name);
     }
   }, [handleUseGhost, selectedDetail, selectedGhost]);
+
+  // 导出当前插件的 .cindy 包:main 侧打包安装目录 → 系统保存对话框落盘。
+  // 取消选择静默返回;成功/失败都如实 toast。
+  const handleExport = useCallback(async () => {
+    if (!selectedDetail) return;
+    try {
+      const result = await window.electronAPI.ghosts.export(selectedDetail.id);
+      if (result.status === 'canceled') return;
+      toast.success(t('settings.ghosts.toast.exported', { name: selectedDetail.name }));
+    } catch {
+      toast.error(t('settings.ghosts.toast.exportFailed', { name: selectedDetail.name }));
+    }
+  }, [selectedDetail, t]);
 
   const handleUninstall = useCallback(async () => {
     if (!selectedDetail) return;
@@ -802,7 +850,7 @@ export function GhostPluginPage() {
       return;
     }
     const diff = isUpdate
-      ? diffGhostPermissionItems(installedGhost!.manifest, marketDetail.manifest)
+      ? diffInstalledGhostPermissionItems(installedGhost!, marketDetail.manifest)
       : null;
     try {
       const confirmed = await confirm({
@@ -839,6 +887,13 @@ export function GhostPluginPage() {
         expectedReleaseId: marketDetail.releaseId,
         ...(marketDetail.sourceType !== 'server'
           ? { expectedManifest: marketDetail.manifest }
+          : {}),
+        ...(isUpdate
+          ? {
+              expectedInstalledApproval: ghostInstallApprovalToken(
+                installedGhost!.approval,
+              ),
+            }
           : {}),
         ...(isUpdate && diff!.added.length > 0
           ? { allowPermissionExpansion: true }
@@ -908,6 +963,7 @@ export function GhostPluginPage() {
         onToggle={(enabled) => void handleToggle(selectedDetail.id, enabled, selectedDetail.name)}
         onUse={handleUse}
         onUpdate={() => void handleUpdate()}
+        onReapprove={() => void handleReapprove(selectedDetail.id)}
         updateLabel={
           selectedMarketUpdate
             ? t('settings.ghosts.market.update')
@@ -918,6 +974,13 @@ export function GhostPluginPage() {
         }
         updateBusy={selectedMarketUpdate !== null && marketBusyId !== null}
         onUninstall={() => void handleUninstall()}
+        // 官方保留前缀(cindy-/filo-/xd-)的插件走本地装入会被拒,
+        // 导出产物无法重装,不提供导出项。
+        onExport={
+          selectedGhost && !isOfficialGhostId(selectedDetail.id)
+            ? () => void handleExport()
+            : undefined
+        }
         toggleDisabled={scopeDir !== null && selectedGhost !== null && !selectedGhost.enabled}
         onIconLoadError={handleMarketIconLoadError}
       />
@@ -943,6 +1006,7 @@ export function GhostPluginPage() {
             ? () => void handleMarketUpdate(catalogItem.item.id)
             : undefined
         }
+        onReapprove={() => void handleReapprove(catalogItem.item.id)}
         effectiveEnabled={effectiveEnabled(
           catalogItem.item.id,
           catalogItem.item.enabled,
@@ -1394,6 +1458,7 @@ export function GhostPluginCard({
   onUpdate,
   updateVersion,
   updateBusy = false,
+  onReapprove,
   onToggle,
   effectiveEnabled,
   toggleDisabled = false,
@@ -1407,12 +1472,16 @@ export function GhostPluginCard({
   onUpdate?: () => void;
   updateVersion?: string;
   updateBusy?: boolean;
+  /** 缺少批准状态时的恢复入口;此时它取代"使用"与"更新"按钮。 */
+  onReapprove?: () => void;
   onToggle?: (enabled: boolean) => void;
   effectiveEnabled?: boolean;
   toggleDisabled?: boolean;
   onIconLoadError?: () => void;
 }) {
   const { t } = useTranslation();
+  // 未批准的安装不可运行:开关不给点(点了 Main 也会拒),主动作换成重新确认。
+  const needsReapproval = item.approvalState !== 'approved';
   return (
     <article
       className={cn(
@@ -1441,7 +1510,11 @@ export function GhostPluginCard({
             <span className="truncate text-15 font-medium text-[var(--text-primary)]">
               {item.name}
             </span>
-            {updateVersion ? (
+            {needsReapproval ? (
+              <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 font-medium leading-4 text-[var(--text-secondary)]">
+                {t('settings.ghosts.reapproval.badge')}
+              </span>
+            ) : updateVersion ? (
               <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-10 font-medium leading-4 text-[var(--text-secondary)]">
                 {t('settings.ghosts.market.updateAvailable')}
               </span>
@@ -1467,12 +1540,30 @@ export function GhostPluginCard({
         {onToggle ? (
           <Switch
             checked={effectiveEnabled ?? item.enabled}
-            disabled={toggleDisabled}
+            disabled={toggleDisabled || needsReapproval}
             onCheckedChange={onToggle}
             aria-label={t('settings.ghosts.enableAria', { name: item.name })}
           />
         ) : null}
-        {updateVersion && onUpdate ? (
+        {needsReapproval ? (
+          onReapprove ? (
+            <button
+              type="button"
+              onClick={onReapprove}
+              disabled={updateBusy}
+              className={cn(
+                'inline-flex h-8 shrink-0 items-center justify-center self-center rounded-lg border border-[var(--border-default)] bg-transparent px-3 text-12 font-medium text-[var(--text-primary)]',
+                'transition-[background-color,border-color,transform,opacity] duration-150',
+                'hover:border-[var(--text-tertiary)] hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                'disabled:cursor-wait disabled:opacity-40 disabled:active:scale-100',
+              )}
+              aria-label={t('settings.ghosts.reapproval.actionAria', { name: item.name })}
+            >
+              {t('settings.ghosts.reapproval.action')}
+            </button>
+          ) : null
+        ) : updateVersion && onUpdate ? (
           <button
             type="button"
             onClick={onUpdate}

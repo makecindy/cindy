@@ -53,7 +53,13 @@ vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: () => {}, warn: () => {}, error: () => {} }),
 }));
 vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: workingStore.makerChatStore }));
-vi.mock('../../shared/endpoints', () => ({ TAPDB_EVENT_URL: 'https://example.invalid/event' }));
+vi.mock('../../shared/endpoints', () => ({
+  TAPDB_EVENT_URL_BY_REGION: {
+    cn: 'https://example.invalid/event',
+    global: 'https://example.invalid/event',
+    dev: 'https://example.invalid/event',
+  },
+}));
 
 type SettingsPayload = {
   privacyConsentAccepted: boolean;

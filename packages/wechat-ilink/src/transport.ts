@@ -231,9 +231,8 @@ export class TencentIlinkTransport implements WechatTransport {
       ref: {
         kind: request.kind,
         encryptedQuery,
-        // iLink's sendmessage media.aes_key uses base64(hex-text), matching
-        // the official WorkBuddy client. The upload request above still uses
-        // the raw AES key as a hex string.
+        // iLink's sendmessage media.aes_key uses base64(hex-text), while the
+        // upload request above still uses the raw AES key as a hex string.
         aesKeyBase64: Buffer.from(prepared.aesKeyHex).toString("base64"),
         byteLength: request.bytes.byteLength,
         encryptedByteLength: prepared.ciphertext.byteLength,

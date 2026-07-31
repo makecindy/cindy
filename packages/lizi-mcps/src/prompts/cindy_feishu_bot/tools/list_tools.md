@@ -1,1 +1,1 @@
-探索 cindy_feishu_bot 可用工具(渐进式发现入口)。不传 category → 返回所有类目+每个类目工具数量。传 category → 返回该类目下所有工具的名称和简介,以及该类目下涉及的共享规则(rules 字段,markdown 内容,只在第一次拉取该类目时读一遍即可)。类目: bot(把消息/文件/图片直接推给当前飞书用户)。获取工具名后用 call_tool({name, args}) 执行;参数错误会返回完整 JSON Schema。
+探索 cindy_feishu_bot 可用工具(渐进式发现入口)。不传 category → 返回所有类目+每个类目工具数量。传 category → 返回该类目下所有工具的名称和简介,以及该类目下涉及的共享规则(rules 字段,markdown 内容,只在第一次拉取该类目时读一遍即可)。类目: bot(把消息/文件/图片直接推给当前飞书或 Lark 用户)。获取工具名后用 call_tool({name, args}) 执行;参数错误会返回完整 JSON Schema。

@@ -968,7 +968,10 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
     },
     async forgeScaffold(request): Promise<CindyForgeScaffoldResult> {
       const sessionWorkdir = resolveSessionContext()?.workingDir ?? null;
-      const result = await scaffoldGhostDir(request, { sessionWorkdir });
+      const result = await scaffoldGhostDir(request, {
+        sessionWorkdir,
+        forbiddenRootDirs: getGhostManager().managedRootDirs(),
+      });
       if (result.ok) {
         log.info('ghost forge scaffold created', {
           dir: result.dir,
@@ -979,7 +982,9 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
       return result;
     },
     async forgePack({ dir }): Promise<CindyForgePackResult> {
-      const packed = await packGhostDir(dir);
+      const packed = await packGhostDir(dir, {
+        forbiddenRootDirs: getGhostManager().managedRootDirs(),
+      });
       if (!packed.ok) return packed;
       // 与双击 .cindy 同一条转交通道:renderer 弹标准确认框(同 id 已装则
       // 自动转"更新 vX → vY"),用户点头才真装。

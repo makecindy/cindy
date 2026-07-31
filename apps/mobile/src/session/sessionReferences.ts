@@ -575,7 +575,8 @@ function sourceFailure(ref: MobileSessionReference, error: unknown): MobileSessi
     code === 'DEVICE_OFFLINE' ||
     code === 'LINK_NOT_OPEN' ||
     code === 'INVOKE_TIMEOUT' ||
-    code === 'NOT_CONNECTED'
+    code === 'NOT_CONNECTED' ||
+    code === 'BACKPRESSURE'
   ) {
     return new MobileSessionReferenceError(
       'SESSION_REFERENCE_OFFLINE',

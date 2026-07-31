@@ -36,7 +36,7 @@ export interface HookBindingCacheEntry {
 
 /**
  * Provider-neutral confirmed binding 的无凭证本地影子，用于关闭 provider 后
- * 稳定展示(字段与 provider.bind.* 协议词汇对齐; 当前仅 Telegram 存储槽使用)。
+ * 稳定展示(字段与 provider.bind.* 协议词汇对齐; Telegram / X 存储槽使用)。
  */
 export interface ProviderBindingCacheEntry {
   bindingId: string;
@@ -52,14 +52,24 @@ export interface SlackHookConfigState {
   enabled: boolean;
   /** Telegram provider 独立开关。 */
   telegramEnabled: boolean;
+  /** X (Twitter) provider 独立开关。 */
+  xEnabled: boolean;
   /** 服务器地址覆写(高级/调试用, 无 UI 入口); null = 跟随内置默认。 */
   urlOverride: string | null;
   /** 别名 -> 本地绝对路径。 */
   workspaces: Record<string, string>;
   /** (multi-team)本地绑定缓存; 老 server / 从未多绑定时恒空数组。 */
   bindingsCache: HookBindingCacheEntry[];
+  /**
+   * Slack 上下线通知的显式覆写。null = 跟随产品默认值，便于后续调整默认
+   * 而不把从未操作过开关的用户永久钉死在旧值。
+   */
+  lifecycleAnnouncementOverride: boolean | null;
   telegramBindingCache: ProviderBindingCacheEntry | null;
+  xBindingCache: ProviderBindingCacheEntry | null;
 }
+
+export const DEFAULT_SLACK_LIFECYCLE_ANNOUNCEMENT = false;
 
 export interface SlackHookStoreDeps {
   filePath: string;
@@ -146,20 +156,30 @@ export interface SlackHookStore {
   /** 实际生效的服务器地址(覆写优先, 否则内置默认)。 */
   effectiveUrl(): string;
   setEnabled(enabled: boolean): SlackHookConfigState;
-  setProviderEnabled(provider: 'slack' | 'telegram', enabled: boolean): SlackHookConfigState;
+  setProviderEnabled(provider: 'slack' | 'telegram' | 'x', enabled: boolean): SlackHookConfigState;
   anyProviderEnabled(): boolean;
   setWorkspaces(workspaces: Record<string, string>): SlackHookConfigState;
   /** (multi-team)覆写本地绑定缓存(bind.state / 绑定行变化后由 manager 调用)。 */
   setBindingsCache(entries: HookBindingCacheEntry[]): SlackHookConfigState;
-  setTelegramBindingCache(entry: ProviderBindingCacheEntry | null): SlackHookConfigState;
+  setLifecycleAnnouncementOverride(enabled: boolean | null): SlackHookConfigState;
+  /** provider-neutral(Telegram / X)confirmed 绑定的本地影子写入。 */
+  setProviderBindingCache(
+    provider: 'telegram' | 'x',
+    entry: ProviderBindingCacheEntry | null,
+  ): SlackHookConfigState;
 }
 
 export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
   const { filePath, legacyFilePath, cleanupLegacySecrets, log } = deps;
 
   interface AccountState {
-    slack: { enabled: boolean; bindingsCache: HookBindingCacheEntry[] };
+    slack: {
+      enabled: boolean;
+      bindingsCache: HookBindingCacheEntry[];
+      lifecycleAnnouncementOverride: boolean | null;
+    };
     telegram: { enabled: boolean; bindingCache: ProviderBindingCacheEntry | null };
+    x: { enabled: boolean; bindingCache: ProviderBindingCacheEntry | null };
   }
 
   interface StoredDocument {
@@ -196,10 +216,13 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       const migrated: SlackHookConfigState = {
         enabled: source?.enabled === true,
         telegramEnabled: false,
+        xEnabled: false,
         urlOverride: null, // 旧 url 是自部署地址, 不迁移 —— 新形态用内置中心服务器
         workspaces,
         bindingsCache: [], // 旧多连接时代没有绑定缓存概念
+        lifecycleAnnouncementOverride: null,
         telegramBindingCache: null,
+        xBindingCache: null,
       };
       // 清理旧文件与旧 secret(best-effort, 失败只记日志)
       const legacyIds = rows.map((r) => (typeof r.id === 'string' ? r.id : '')).filter(Boolean);
@@ -224,8 +247,13 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
   }
 
   const EMPTY_ACCOUNT = (): AccountState => ({
-    slack: { enabled: false, bindingsCache: [] },
+    slack: {
+      enabled: false,
+      bindingsCache: [],
+      lifecycleAnnouncementOverride: null,
+    },
     telegram: { enabled: false, bindingCache: null },
+    x: { enabled: false, bindingCache: null },
   });
 
   /** 绑定缓存条目形状校验(坏条目静默丢弃 —— 缓存是可再生数据, 不值得报错)。 */
@@ -247,7 +275,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
     return entries;
   }
 
-  function parseTelegramBindingCache(raw: unknown): ProviderBindingCacheEntry | null {
+  function parseProviderBindingCache(raw: unknown): ProviderBindingCacheEntry | null {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
     const row = raw as Record<string, unknown>;
     if (
@@ -282,14 +310,26 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       row.telegram && typeof row.telegram === 'object' && !Array.isArray(row.telegram)
         ? (row.telegram as Record<string, unknown>)
         : {};
+    const x =
+      row.x && typeof row.x === 'object' && !Array.isArray(row.x)
+        ? (row.x as Record<string, unknown>)
+        : {};
     return {
       slack: {
         enabled: slack.enabled === true,
         bindingsCache: parseBindingsCache(slack.bindingsCache),
+        lifecycleAnnouncementOverride:
+          typeof slack.lifecycleAnnouncementOverride === 'boolean'
+            ? slack.lifecycleAnnouncementOverride
+            : null,
       },
       telegram: {
         enabled: telegram.enabled === true,
-        bindingCache: parseTelegramBindingCache(telegram.bindingCache),
+        bindingCache: parseProviderBindingCache(telegram.bindingCache),
+      },
+      x: {
+        enabled: x.enabled === true,
+        bindingCache: parseProviderBindingCache(x.bindingCache),
       },
     };
   }
@@ -317,8 +357,10 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
         slack: {
           enabled: state.enabled,
           bindingsCache: state.bindingsCache.map((e) => ({ ...e })),
+          lifecycleAnnouncementOverride: state.lifecycleAnnouncementOverride,
         },
         telegram: { enabled: false, bindingCache: null },
+        x: { enabled: false, bindingCache: null },
       },
     };
   }
@@ -368,10 +410,13 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
       return fromLegacyState({
         enabled: row.enabled === true,
         telegramEnabled: false,
+        xEnabled: false,
         urlOverride,
         workspaces,
         bindingsCache: parseBindingsCache(row.bindingsCache),
+        lifecycleAnnouncementOverride: null,
         telegramBindingCache: null,
+        xBindingCache: null,
       });
     } catch (err) {
       log.warn(
@@ -405,12 +450,15 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
     return {
       enabled: account.slack.enabled,
       telegramEnabled: account.telegram.enabled,
+      xEnabled: account.x.enabled,
       urlOverride: document.urlOverride,
       workspaces: { ...document.workspaces },
       bindingsCache: account.slack.bindingsCache.map((entry) => ({ ...entry })),
+      lifecycleAnnouncementOverride: account.slack.lifecycleAnnouncementOverride,
       telegramBindingCache: account.telegram.bindingCache
         ? { ...account.telegram.bindingCache }
         : null,
+      xBindingCache: account.x.bindingCache ? { ...account.x.bindingCache } : null,
     };
   }
 
@@ -446,7 +494,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
     },
     anyProviderEnabled() {
       const state = read();
-      return state.enabled || state.telegramEnabled;
+      return state.enabled || state.telegramEnabled || state.xEnabled;
     },
     setWorkspaces(workspaces) {
       const current = currentDocument();
@@ -460,9 +508,14 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore {
         account.slack.bindingsCache = entries.map((e) => ({ ...e }));
       });
     },
-    setTelegramBindingCache(entry) {
+    setLifecycleAnnouncementOverride(enabled) {
       return mutateAccount((account) => {
-        account.telegram.bindingCache = entry ? { ...entry } : null;
+        account.slack.lifecycleAnnouncementOverride = enabled;
+      });
+    },
+    setProviderBindingCache(provider, entry) {
+      return mutateAccount((account) => {
+        account[provider].bindingCache = entry ? { ...entry } : null;
       });
     },
   };

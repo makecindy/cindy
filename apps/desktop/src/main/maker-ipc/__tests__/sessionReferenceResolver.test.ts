@@ -333,6 +333,16 @@ describe('sessionReferenceResolver', () => {
     });
   });
 
+  it.each(['NOT_CONNECTED', 'BACKPRESSURE'] as const)(
+    'maps transient remote %s responses to offline instead of not-found',
+    async (code) => {
+      remoteInvoke.mockResolvedValueOnce({ ok: false, error: { code, message: 'retry later' } });
+      await expect(resolveSessionReferences([{ sessionId: 's-1', deviceId: 'dev-1' }])).rejects.toMatchObject({
+        code: 'SESSION_REFERENCE_OFFLINE',
+      });
+    },
+  );
+
   it('rejects a missing anchor instead of silently injecting an empty quote', async () => {
     remoteInvoke
       .mockResolvedValueOnce({ ok: true, result: { id: 's-1' } })

@@ -42,10 +42,14 @@
 
 import { BrowserWindow } from 'electron';
 
+import type { MoneyCurrency } from '../../shared/regionalMoney';
+import { getAuthState } from '../authManager';
 import { createLogger } from '../logger';
 import { readClaudeApiKey } from '../maker-host/auth-adapters';
 import { outboundFetch } from '../maker-host/outbound-fetch';
 import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs';
+import { getGatewayAccountCurrency } from './modelPricing';
+import { currentLedgerCurrency } from './ledgerCurrency';
 
 const log = createLogger('claudeAccountUsage');
 
@@ -55,12 +59,13 @@ export const USAGE_CLAUDE_ACCOUNT_CHANGED = 'usage:claude-account-changed';
 export interface ClaudeAccountUsageSnapshot {
   /**
    * 当前周期(网关部署为 30d / 月度) 跨所有客户端 + 所有 API key 的累计花费,
-   * 来自 Gateway user.spend，数值保持 Gateway 原值(原生 USD 口径,展示层经
-   * gatewayMoney 标注单位,不按构建区域改标)。不只本机本壳。
+   * 来自 Gateway user.spend，数值与币种均保持 Gateway 账号口径。不只本机本壳。
    */
   spend: number;
   /** 周期内预算上限，保持 Gateway 原值 (来自 user.max_budget)。 */
   maxBudget: number;
+  /** 与当前 Model Access 模型目录声明一致的 Gateway 账号原生币种。 */
+  currency: MoneyCurrency;
   /** 下次重置时间 ISO8601 (来自 user.budget_reset_at)。 */
   budgetResetAt?: string | null;
   /**
@@ -176,6 +181,12 @@ function resolveDailyActivitySpend(activity: LiteLlmDailyActivity): { todaySpend
 }
 
 async function fetchOnce(): Promise<ClaudeAccountUsageSnapshot | null> {
+  // 币种优先取账号目录声明。取不到时**不放弃整个快照**,回落本地账本币种:
+  // 手填 XD key 是明确支持的兜底流程(Model Access 处于 disabled / failed 时),那时没有
+  // 目录可推导,若直接 return 会让这些会话永久看不到账号配额 —— 比"币种按账本回落"更糟。
+  // 回落值与账本写入侧同源(currentLedgerCurrency),不会与同一行的其它金额混排。
+  const currency =
+    (await getGatewayAccountCurrency(getAuthState().user?.id)) ?? currentLedgerCurrency();
   const apiKey = readClaudeApiKey();
   // 直连真上游,不走本地 anthropic-compat-proxy —— 这条账号查询路径跟 Claude Code 子进程
   // 无关,proxy 只服务于子进程的 chat completion 请求。
@@ -202,6 +213,7 @@ async function fetchOnce(): Promise<ClaudeAccountUsageSnapshot | null> {
     return {
       spend: cycle.spend,
       maxBudget: cycle.maxBudget,
+      currency,
       budgetResetAt: cycle.budgetResetAt,
       todaySpend,
       fetchedAt: Date.now(),

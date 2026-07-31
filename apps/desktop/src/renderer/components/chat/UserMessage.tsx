@@ -322,7 +322,8 @@ function renderTextWithLinks(
           key={`${keyPrefix}-img-${match.index}`}
           type="button"
           onClick={() => onImageClick(toLocalFileUrl(p))}
-          className="text-[var(--msg-link)] hover:underline cursor-pointer break-all"
+          // 同 UserMessageUrlLink:可点 = 正文色 + 常显下划线,不再靠 --msg-link 颜色。
+          className="underline underline-offset-2 cursor-pointer break-all"
         >
           {p}
         </button>,

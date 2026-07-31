@@ -1879,6 +1879,154 @@ describe('CodexAgent.startSession developerInstructions', () => {
     await proxyHandle.close();
   });
 
+  it('reports Codex child and descendant threads to the host-owned proxy route registry', async () => {
+    const registerCodexChildThreadForParent = vi.fn();
+    const registerCodexMcpThreadContext = vi.fn();
+    const unregisterCodexMcpThreadContext = vi.fn();
+    const agent = new CodexAgent(createDeps(
+      { systemPrompt: 'HOST PRODUCT PROMPT' },
+      {
+        registerCodexSystemPromptForThread: vi.fn(),
+        registerCodexChildThreadForParent,
+        registerCodexMcpThreadContext,
+        unregisterCodexMcpThreadContext,
+      },
+    ));
+    const host = installFakeHost(agent, undefined, { codexProxyActive: true });
+    const handle = await agent.startSession({
+      sessionId: 'session-child-route',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.descendantThreadStarted) {
+      throw new Error('expected descendantThreadStarted handler');
+    }
+    handlers.descendantThreadStarted({
+      thread: {
+        id: 'child-thread-id',
+        parentThreadId: 'start-thread-id',
+      },
+    });
+    handlers.descendantThreadStarted({
+      thread: {
+        id: 'grandchild-thread-id',
+        parentThreadId: 'child-thread-id',
+      },
+    });
+
+    expect(registerCodexChildThreadForParent).toHaveBeenNthCalledWith(1, {
+      parentThreadId: 'start-thread-id',
+      childThreadId: 'child-thread-id',
+    });
+    expect(registerCodexChildThreadForParent).toHaveBeenNthCalledWith(2, {
+      parentThreadId: 'child-thread-id',
+      childThreadId: 'grandchild-thread-id',
+    });
+    expect(registerCodexMcpThreadContext).toHaveBeenNthCalledWith(2, {
+      threadId: 'child-thread-id',
+      sessionId: 'session-child-route',
+      workingDir: '/repo',
+      vendorOptions: {},
+    });
+    expect(registerCodexMcpThreadContext).toHaveBeenNthCalledWith(3, {
+      threadId: 'grandchild-thread-id',
+      sessionId: 'session-child-route',
+      workingDir: '/repo',
+      vendorOptions: {},
+    });
+
+    await handle.close();
+    expect(unregisterCodexMcpThreadContext).toHaveBeenCalledWith('start-thread-id');
+    expect(unregisterCodexMcpThreadContext).toHaveBeenCalledWith('child-thread-id');
+    expect(unregisterCodexMcpThreadContext).toHaveBeenCalledWith('grandchild-thread-id');
+  });
+
+  it('keeps thread/start developerInstructions on the websocket provider and skips proxy registration', async () => {
+    const registerCodexSystemPromptForThread = vi.fn();
+    const agent = new CodexAgent(createDeps(
+      { systemPrompt: 'HOST PRODUCT PROMPT' },
+      { registerCodexSystemPromptForThread },
+    ));
+    const host = installFakeHost(agent, undefined, {
+      codexProxyActive: true,
+      remoteCompactionProviderId: 'cindy_openai',
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-websocket-start',
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      workingDir: '/repo',
+      userPrompt: 'USER PROMPT',
+    });
+    const params = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
+      developerInstructions?: string;
+      modelProvider?: string;
+    };
+
+    expect(params.modelProvider).toBe('cindy_openai');
+    expect(params.developerInstructions).toContain('HOST PRODUCT PROMPT');
+    expect(params.developerInstructions).toContain('USER PROMPT');
+    expect(registerCodexSystemPromptForThread).not.toHaveBeenCalled();
+    expect(handle.codexProductPromptDelivery).toEqual({
+      threadId: 'start-thread-id',
+      historyHasProductPrompt: true,
+    });
+    await handle.close();
+  });
+
+  it('reinjects websocket developerInstructions when daemon recovery resumes the thread', async () => {
+    const registerCodexSystemPromptForThread = vi.fn();
+    const agent = new CodexAgent(createDeps(
+      { systemPrompt: 'HOST PRODUCT PROMPT' },
+      { registerCodexSystemPromptForThread },
+    ));
+    let turnStarts = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        turnStarts += 1;
+        if (turnStarts === 1) throw new Error('thread not found');
+        return { turn: { id: `turn-${turnStarts}` } };
+      }
+      if (method === Method.ThreadResume) {
+        return {
+          thread: { id: 'start-thread-id' },
+          model: 'gpt-5.4',
+          modelProvider: 'cindy_openai',
+          cwd: '/repo',
+        };
+      }
+      return undefined;
+    }, {
+      codexProxyActive: true,
+      remoteCompactionProviderId: 'cindy_openai',
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-websocket-daemon-recovery',
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      workingDir: '/repo',
+      userPrompt: 'USER PROMPT',
+    });
+    await handle.send({ type: 'user', content: 'hello' });
+
+    const startParams = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { developerInstructions?: string };
+    const resumeParams = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadResume,
+    )?.[1] as { developerInstructions?: string; modelProvider?: string };
+    expect(resumeParams.modelProvider).toBe('cindy_openai');
+    expect(resumeParams.developerInstructions).toBe(startParams.developerInstructions);
+    expect(resumeParams.developerInstructions).toContain('HOST PRODUCT PROMPT');
+    expect(resumeParams.developerInstructions).toContain('USER PROMPT');
+    expect(registerCodexSystemPromptForThread).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
   it('omits thread/resume developerInstructions and registers prompt when codex proxy is active', async () => {
     const runtimeConfig = { systemPrompt: 'HOST PRODUCT PROMPT' };
     const userPrompt = [
@@ -1933,6 +2081,78 @@ describe('CodexAgent.startSession developerInstructions', () => {
 
     await startBaselineHandle.close();
     await proxyHandle.close();
+  });
+
+  it('keeps thread/resume developerInstructions on the websocket provider when history lacks them', async () => {
+    const registerCodexSystemPromptForThread = vi.fn();
+    const agent = new CodexAgent(createDeps(
+      { systemPrompt: 'HOST PRODUCT PROMPT' },
+      { registerCodexSystemPromptForThread },
+    ));
+    const host = installFakeHost(agent, undefined, {
+      codexProxyActive: true,
+      remoteCompactionProviderId: 'cindy_openai',
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-websocket-resume',
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
+      codexHistoryHasProductPrompt: false,
+      userPrompt: 'USER PROMPT',
+    });
+    const params = host.request.mock.calls.find(([method]) => method === Method.ThreadResume)?.[1] as {
+      developerInstructions?: string;
+      modelProvider?: string;
+    };
+
+    expect(params.modelProvider).toBe('cindy_openai');
+    expect(params.developerInstructions).toContain('HOST PRODUCT PROMPT');
+    expect(params.developerInstructions).toContain('USER PROMPT');
+    expect(registerCodexSystemPromptForThread).not.toHaveBeenCalled();
+    expect(handle.codexProductPromptDelivery).toEqual({
+      threadId: 'resume-thread-id',
+      historyHasProductPrompt: true,
+    });
+    await handle.close();
+  });
+
+  it('keeps thread/resume developerInstructions on the websocket provider when history already contains them', async () => {
+    const registerCodexSystemPromptForThread = vi.fn();
+    const agent = new CodexAgent(createDeps(
+      { systemPrompt: 'HOST PRODUCT PROMPT' },
+      { registerCodexSystemPromptForThread },
+    ));
+    const host = installFakeHost(agent, undefined, {
+      codexProxyActive: true,
+      remoteCompactionProviderId: 'cindy_openai',
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-websocket-resume-existing-prompt',
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
+      codexHistoryHasProductPrompt: true,
+      userPrompt: 'USER PROMPT',
+    });
+    const params = host.request.mock.calls.find(([method]) => method === Method.ThreadResume)?.[1] as {
+      developerInstructions?: string;
+      modelProvider?: string;
+    };
+
+    expect(params.modelProvider).toBe('cindy_openai');
+    expect(params.developerInstructions).toContain('HOST PRODUCT PROMPT');
+    expect(params.developerInstructions).toContain('USER PROMPT');
+    expect(registerCodexSystemPromptForThread).not.toHaveBeenCalled();
+    expect(handle.codexProductPromptDelivery).toEqual({
+      threadId: 'resume-thread-id',
+      historyHasProductPrompt: true,
+    });
+    await handle.close();
   });
 
   it('omits developerInstructions from thread/resume params when codex proxy is inactive and history already has product prompt', async () => {
@@ -4275,6 +4495,482 @@ describe('CodexAgent MCP thread context hooks', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe('websocket body recovery auto-retry', () => {
+    const ENCRYPTED_ERROR =
+      'Encrypted content could not be decrypted or parsed. code=invalid_encrypted_content';
+
+    function installRecoveryHost(agent: CodexAgent): ReturnType<typeof installFakeHost> {
+      let turnSeq = 0;
+      return installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) {
+          turnSeq += 1;
+          return { turn: { id: `turn-${turnSeq}` } };
+        }
+        return undefined;
+      });
+    }
+
+    it('arms HTTP fallback and retries the same zero-output turn once', async () => {
+      const armCodexHttpRecovery = vi.fn(() => 'encrypted_content');
+      const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
+      const host = installRecoveryHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-ws-body-recovery',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+
+      await handle.send({ type: 'user', content: 'hello' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.error || !handlers.turnCompleted) throw new Error('expected handlers');
+
+      handlers.error({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        willRetry: false,
+        error: {
+          message: 'Bad request',
+          additionalDetails: ENCRYPTED_ERROR,
+          codexErrorInfo: 'badRequest',
+        },
+      });
+      expect(
+        host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+      ).toHaveLength(1);
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: {
+          id: 'turn-1',
+          status: 'failed',
+          error: { message: ENCRYPTED_ERROR },
+        },
+      });
+
+      await waitForExpectation(() => {
+        expect(
+          host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+        ).toHaveLength(2);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+      });
+      expect(armCodexHttpRecovery).toHaveBeenCalledWith({
+        sessionId: 'session-ws-body-recovery',
+        threadId: 'start-thread-id',
+        message: 'Bad request',
+        additionalDetails: ENCRYPTED_ERROR,
+      });
+      expect(
+        events.some(
+          (event) =>
+            event.type === 'error' &&
+            (event.data as { isTerminal?: boolean }).isTerminal === true,
+        ),
+      ).toBe(false);
+
+      // 原 WS turn 的迟到终态已落墓碑，不得把 HTTP 重投收口掉。
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: {
+          id: 'turn-1',
+          status: 'failed',
+          error: { message: ENCRYPTED_ERROR },
+        },
+      });
+      expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-2', status: 'completed' },
+      });
+      await waitForExpectation(() => {
+        expect(events.some((event) => event.type === 'done')).toBe(true);
+      });
+      await handle.close();
+    });
+
+    it.each([false, true])(
+      'defers HTTP fallback until an early recovery error gets turn/start ownership (started=%s)',
+      async (startedBeforeError) => {
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const armCodexHttpRecovery = vi.fn(() => 'encrypted_content');
+        const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
+        const host = installFakeHost(agent, (method) => {
+          if (method !== Method.TurnStart) return undefined;
+          turnStarts += 1;
+          if (turnStarts === 1) return firstStart.promise;
+          return { turn: { id: `turn-${turnStarts}` } };
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-ws-body-recovery-before-start-response',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+
+        const sendPromise = handle.send({ type: 'user', content: 'hello' });
+        await waitForExpectation(() => expect(turnStarts).toBe(1));
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnStarted || !handlers.turnCompleted) {
+          throw new Error('expected handlers');
+        }
+        if (startedBeforeError) {
+          handlers.turnStarted({
+            threadId: 'start-thread-id',
+            turn: { id: 'turn-1' },
+          });
+        }
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: {
+            message: 'Bad request',
+            additionalDetails: ENCRYPTED_ERROR,
+            codexErrorInfo: 'badRequest',
+          },
+        });
+
+        await Promise.resolve();
+        expect(turnStarts).toBe(1);
+        expect(events.some(
+          (event) =>
+            event.type === 'error'
+            && (event.data as { isTerminal?: boolean }).isTerminal === true,
+        )).toBe(false);
+        handlers.turnCompleted({
+          threadId: 'start-thread-id',
+          turn: {
+            id: 'turn-1',
+            status: 'failed',
+            error: { message: ENCRYPTED_ERROR },
+          },
+        });
+        expect(turnStarts).toBe(1);
+
+        firstStart.resolve({ turn: { id: 'turn-1' } });
+        await sendPromise;
+        await waitForExpectation(() => {
+          expect(turnStarts).toBe(2);
+          expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+        });
+        expect(armCodexHttpRecovery).toHaveBeenCalledTimes(1);
+        expect(events.some(
+          (event) =>
+            event.type === 'error'
+            && (event.data as { isTerminal?: boolean }).isTerminal === true,
+        )).toBe(false);
+        await handle.close();
+      },
+    );
+
+    it.each([false, true])(
+      'defers HTTP fallback until an early failed turn/completed gets turn/start ownership (started=%s)',
+      async (startedBeforeCompletion) => {
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const armCodexHttpRecovery = vi.fn(() => 'encrypted_content');
+        const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
+        const host = installFakeHost(agent, (method) => {
+          if (method !== Method.TurnStart) return undefined;
+          turnStarts += 1;
+          if (turnStarts === 1) return firstStart.promise;
+          return { turn: { id: `turn-${turnStarts}` } };
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-ws-body-recovery-completed-before-start-response',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+
+        const sendPromise = handle.send({ type: 'user', content: 'hello' });
+        await waitForExpectation(() => expect(turnStarts).toBe(1));
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.turnCompleted || !handlers.turnStarted) throw new Error('expected handlers');
+        if (startedBeforeCompletion) {
+          handlers.turnStarted({
+            threadId: 'start-thread-id',
+            turn: { id: 'turn-1' },
+          });
+        }
+        handlers.turnCompleted({
+          threadId: 'start-thread-id',
+          turn: {
+            id: 'turn-1',
+            status: 'failed',
+            error: { message: ENCRYPTED_ERROR },
+          },
+        });
+
+        await Promise.resolve();
+        expect(turnStarts).toBe(1);
+        expect(events.some(
+          (event) =>
+            event.type === 'error'
+            && (event.data as { isTerminal?: boolean }).isTerminal === true,
+        )).toBe(false);
+
+        firstStart.resolve({ turn: { id: 'turn-1' } });
+        await sendPromise;
+        await waitForExpectation(() => {
+          expect(turnStarts).toBe(2);
+          expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+        });
+        expect(armCodexHttpRecovery).toHaveBeenCalledTimes(1);
+        expect(events.some(
+          (event) =>
+            event.type === 'error'
+            && (event.data as { isTerminal?: boolean }).isTerminal === true,
+        )).toBe(false);
+        await handle.close();
+      },
+    );
+
+    it('surfaces one terminal failure when recovery completes before turn/start rejects', async () => {
+      const firstStart = deferred<{ turn: { id: string } }>();
+      const armCodexHttpRecovery = vi.fn(() => 'encrypted_content');
+      const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return firstStart.promise;
+        return undefined;
+      });
+      const handle = await agent.startSession({
+        sessionId: 'session-ws-body-recovery-start-rejects',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+
+      const sendPromise = handle.send({ type: 'user', content: 'hello' });
+      await waitForExpectation(() => {
+        expect(
+          host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+        ).toHaveLength(1);
+      });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.error || !handlers.turnCompleted) throw new Error('expected handlers');
+      handlers.error({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        willRetry: false,
+        error: {
+          message: 'Bad request',
+          additionalDetails: ENCRYPTED_ERROR,
+          codexErrorInfo: 'badRequest',
+        },
+      });
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: {
+          id: 'turn-1',
+          status: 'failed',
+          error: { message: ENCRYPTED_ERROR },
+        },
+      });
+      firstStart.reject(new Error('turn/start transport failed'));
+      await sendPromise;
+
+      await waitForExpectation(() => {
+        expect(events.filter(
+          (event) =>
+            event.type === 'error'
+            && (event.data as { isTerminal?: boolean }).isTerminal === true,
+        )).toHaveLength(1);
+      });
+      expect(
+        host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+      ).toHaveLength(1);
+      await handle.close();
+    });
+
+    it('cancels a recorded recovery intent without replaying the turn', async () => {
+      const armCodexHttpRecovery = vi.fn(() => 'encrypted_content');
+      const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
+      const host = installRecoveryHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-ws-body-recovery-cancelled',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+
+      await handle.send({ type: 'user', content: 'hello' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.error || !handlers.turnCompleted) throw new Error('expected handlers');
+      handlers.error({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        willRetry: false,
+        error: {
+          message: 'Bad request',
+          additionalDetails: ENCRYPTED_ERROR,
+          codexErrorInfo: 'badRequest',
+        },
+      });
+
+      await handle.abort();
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: {
+          id: 'turn-1',
+          status: 'failed',
+          error: { message: ENCRYPTED_ERROR },
+        },
+      });
+      await Promise.resolve();
+
+      expect(
+        host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+      ).toHaveLength(1);
+      expect(armCodexHttpRecovery).toHaveBeenCalledTimes(1);
+      expect(handle.isTurnRunning?.()).toBe(false);
+      await handle.close();
+    });
+
+    it('does not replay a recovery error after the turn has produced output', async () => {
+      const armCodexHttpRecovery = vi.fn(() => 'image_generation_id');
+      const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
+      const host = installRecoveryHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-ws-body-recovery-output',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      await handle.send({ type: 'user', content: 'hello' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.error || !handlers.reasoningTextDelta) throw new Error('expected handlers');
+
+      handlers.reasoningTextDelta({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        itemId: 'reasoning-1',
+        contentIndex: 0,
+        delta: 'already produced output',
+      });
+      handlers.error({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        willRetry: false,
+        error: {
+          message: 'Image generation items without `id` are not supported for this request.',
+          codexErrorInfo: 'badRequest',
+        },
+      });
+      await Promise.resolve();
+
+      expect(armCodexHttpRecovery).not.toHaveBeenCalled();
+      expect(
+        host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+      ).toHaveLength(1);
+      expect(handle.isTurnRunning?.()).toBe(false);
+      await handle.close();
+    });
+
+    it('does not retry the same logical send again when the HTTP retry also fails', async () => {
+      const armCodexHttpRecovery = vi.fn(() => 'encrypted_content');
+      const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
+      const host = installRecoveryHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-ws-body-recovery-once',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+
+      await handle.send({ type: 'user', content: 'hello' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.error || !handlers.turnCompleted) throw new Error('expected handlers');
+
+      const failTurn = (turnId: string) => {
+        handlers.error?.({
+          threadId: 'start-thread-id',
+          turnId,
+          willRetry: false,
+          error: {
+            message: 'Bad request',
+            additionalDetails: ENCRYPTED_ERROR,
+            codexErrorInfo: 'badRequest',
+          },
+        });
+        handlers.turnCompleted?.({
+          threadId: 'start-thread-id',
+          turn: {
+            id: turnId,
+            status: 'failed',
+            error: { message: ENCRYPTED_ERROR },
+          },
+        });
+      };
+      failTurn('turn-1');
+      await waitForExpectation(() => {
+        expect(
+          host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+        ).toHaveLength(2);
+      });
+
+      failTurn('turn-2');
+      await waitForExpectation(() => {
+        expect(events.some(
+          (event) =>
+            event.type === 'error'
+            && (event.data as { isTerminal?: boolean }).isTerminal === true,
+        )).toBe(true);
+      });
+      expect(
+        host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+      ).toHaveLength(2);
+      expect(handle.isTurnRunning?.()).toBe(false);
+      await handle.close();
+    });
+
+    it('recovers from a failed turn/completed when no error notification was delivered', async () => {
+      const armCodexHttpRecovery = vi.fn(() => 'encrypted_content');
+      const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
+      const host = installRecoveryHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-ws-body-recovery-completed-only',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+
+      await handle.send({ type: 'user', content: 'hello' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.turnCompleted) throw new Error('expected turnCompleted handler');
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: {
+          id: 'turn-1',
+          status: 'failed',
+          error: { message: ENCRYPTED_ERROR },
+        },
+      });
+
+      await waitForExpectation(() => {
+        expect(
+          host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+        ).toHaveLength(2);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+      });
+      expect(armCodexHttpRecovery).toHaveBeenCalledTimes(1);
+      await handle.close();
+    });
   });
 
   // ── 服务过载（模型容量不足）退避重投 ──────────────────────────────────────
@@ -9895,18 +10591,21 @@ describe('CodexAgent MCP thread context hooks', () => {
       workingDir: '/repo',
     });
     const handlers = host.getThreadHandlers();
-    if (!handlers?.dynamicToolCall) throw new Error('expected dynamicToolCall handler');
+    if (!handlers?.dynamicToolCall || !handlers.requestUserInput) {
+      throw new Error('expected user input handlers');
+    }
     let requestCount = 0;
+    const pendingDecision = deferred<InteractionDecision>();
     handle.setInteractionResolver(async (req) => {
       requestCount += 1;
       expect(req).toMatchObject({
         kind: 'ask_user_question',
-        requestId: requestCount === 1 ? 'req-dynamic' : 'req-dynamic-legacy',
+        requestId: 'req-dynamic',
       });
-      return { kind: 'ask_user_question', answers: { 'What next?': 'Keep going' } };
+      return pendingDecision.promise;
     });
 
-    const result = await handlers.dynamicToolCall({
+    const resultPromise = handlers.dynamicToolCall({
       threadId: 'start-thread-id',
       turnId: 'turn-1',
       callId: 'dynamic-call-1',
@@ -9914,18 +10613,46 @@ describe('CodexAgent MCP thread context hooks', () => {
       tool: 'ask_user_question',
       arguments: {
         questions: [{
-          id: 'q1',
           header: 'Direction',
           question: 'What next?',
-          options: [{ label: 'Keep going', description: 'Continue current work' }],
         }],
       },
     }, { requestId: 'req-dynamic' });
 
+    const nativeDuplicateResultPromise = handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'native-call-duplicate',
+      questions: [{
+        id: 'native-q1',
+        header: 'Direction',
+        question: 'What next?',
+        isOther: false,
+        isSecret: false,
+        options: [],
+      }],
+    }, { requestId: 'req-native-duplicate' });
+
+    expect(requestCount).toBe(1);
+    pendingDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'What next?': 'Keep going' },
+    });
+
+    const [result, nativeDuplicateResult] = await Promise.all([
+      resultPromise,
+      nativeDuplicateResultPromise,
+    ]);
     expect(result.success).toBe(true);
     expect(result.contentItems).toEqual([
-      { type: 'inputText', text: JSON.stringify({ q1: { answers: ['Keep going'] } }) },
+      {
+        type: 'inputText',
+        text: JSON.stringify({ 'question-1': { answers: ['Keep going'] } }),
+      },
     ]);
+    expect(nativeDuplicateResult).toEqual({
+      answers: { 'native-q1': { answers: ['Keep going'] } },
+    });
 
     const legacyResult = await handlers.dynamicToolCall({
       threadId: 'start-thread-id',
@@ -9935,14 +10662,88 @@ describe('CodexAgent MCP thread context hooks', () => {
       tool: 'ask_user_question',
       arguments: {
         questions: [{
-          id: 'q1',
+          id: 'legacy-q1',
           header: 'Direction',
           question: 'What next?',
-          options: [{ label: 'Keep going', description: 'Continue current work' }],
+          options: null,
         }],
       },
     }, { requestId: 'req-dynamic-legacy' });
-    expect(legacyResult).toEqual(result);
+    expect(legacyResult.contentItems).toEqual([
+      {
+        type: 'inputText',
+        text: JSON.stringify({ 'legacy-q1': { answers: ['Keep going'] } }),
+      },
+    ]);
+    expect(requestCount).toBe(1);
+    await handle.close();
+  });
+
+  it('preserves submitted answers from different concurrent user input prompts', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-concurrent-user-input',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.dynamicToolCall) throw new Error('expected dynamicToolCall handler');
+
+    const firstDecision = deferred<InteractionDecision>();
+    const secondDecision = deferred<InteractionDecision>();
+    let requestCount = 0;
+    handle.setInteractionResolver(async (req) => {
+      if (req.kind !== 'ask_user_question') throw new Error('expected ask_user_question');
+      requestCount += 1;
+      if (req.requestId === 'req-first') return firstDecision.promise;
+      if (req.requestId === 'req-second') return secondDecision.promise;
+      return {
+        kind: 'ask_user_question',
+        answers: { [req.questions[0]?.question ?? '']: 'Unexpected repeat' },
+      };
+    });
+
+    const callQuestion = (
+      requestId: string,
+      callId: string,
+      questionId: string,
+      question: string,
+    ) => handlers.dynamicToolCall?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      callId,
+      namespace: 'cindy',
+      tool: 'ask_user_question',
+      arguments: {
+        questions: [{ id: questionId, header: 'Direction', question }],
+      },
+    }, { requestId });
+
+    const firstResultPromise = callQuestion('req-first', 'call-first', 'first', 'First question?');
+    const secondResultPromise = callQuestion('req-second', 'call-second', 'second', 'Second question?');
+    if (!firstResultPromise || !secondResultPromise) throw new Error('expected dynamic tool results');
+    expect(requestCount).toBe(2);
+
+    secondDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Second question?': 'Second answer' },
+    });
+    await secondResultPromise;
+    firstDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'First question?': 'First answer' },
+    });
+    await firstResultPromise;
+
+    const firstReplay = await callQuestion('req-first-replay', 'call-first-replay', 'first', 'First question?');
+    const secondReplay = await callQuestion('req-second-replay', 'call-second-replay', 'second', 'Second question?');
+    expect(firstReplay?.contentItems).toEqual([
+      { type: 'inputText', text: JSON.stringify({ first: { answers: ['First answer'] } }) },
+    ]);
+    expect(secondReplay?.contentItems).toEqual([
+      { type: 'inputText', text: JSON.stringify({ second: { answers: ['Second answer'] } }) },
+    ]);
     expect(requestCount).toBe(2);
     await handle.close();
   });
@@ -9958,21 +10759,29 @@ describe('CodexAgent MCP thread context hooks', () => {
     const iterator = handle.events()[Symbol.asyncIterator]();
     const handlers = host.getThreadHandlers();
     if (!handlers?.requestUserInput || !handlers.serverRequestResolved) throw new Error('expected handlers');
-    const pendingDecision = deferred<InteractionDecision>();
-    handle.setInteractionResolver(async () => pendingDecision.promise);
+    const cancelledDecision = deferred<InteractionDecision>();
+    const retryDecision = deferred<InteractionDecision>();
+    let requestCount = 0;
+    handle.setInteractionResolver(async (req) => {
+      requestCount += 1;
+      return req.requestId === 'req-resolved'
+        ? cancelledDecision.promise
+        : retryDecision.promise;
+    });
 
+    const question = {
+      id: 'q1',
+      header: 'Question',
+      question: 'Pick one',
+      isOther: false,
+      isSecret: false,
+      options: null,
+    };
     const responsePromise = handlers.requestUserInput({
       threadId: 'start-thread-id',
       turnId: 'turn-1',
       itemId: 'item-1',
-      questions: [{
-        id: 'q1',
-        header: 'Question',
-        question: 'Pick one',
-        isOther: false,
-        isSecret: false,
-        options: null,
-      }],
+      questions: [question],
     }, { requestId: 'req-resolved' });
 
     handlers.serverRequestResolved({ threadId: 'start-thread-id', requestId: 'req-resolved' });
@@ -9986,8 +10795,315 @@ describe('CodexAgent MCP thread context hooks', () => {
         resolvedAs: 'deny',
       },
     });
-    pendingDecision.resolve({ kind: 'ask_user_question', answers: { q1: 'late' } });
+
+    const retryResponsePromise = handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'item-2',
+      questions: [question],
+    }, { requestId: 'req-retry' });
+    expect(requestCount).toBe(2);
+    retryDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': 'fresh' },
+    });
+    await expect(retryResponsePromise).resolves.toEqual({
+      answers: { q1: { answers: ['fresh'] } },
+    });
+
+    cancelledDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': 'late' },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await expect(handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'item-3',
+      questions: [question],
+    }, { requestId: 'req-replay' })).resolves.toEqual({
+      answers: { q1: { answers: ['fresh'] } },
+    });
+    expect(requestCount).toBe(2);
     await handle.close();
+  });
+
+  it('does not cache a late user-input answer after local turn interruption', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
+      if (method === Method.TurnInterrupt) return {};
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-user-input-local-interrupt',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    await handle.send({ type: 'user', content: 'ask me a question' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.requestUserInput) throw new Error('expected requestUserInput handler');
+    const interruptedDecision = deferred<InteractionDecision>();
+    const replacementDecision = deferred<InteractionDecision>();
+    let requestCount = 0;
+    handle.setInteractionResolver(async () => {
+      requestCount += 1;
+      return requestCount === 1
+        ? interruptedDecision.promise
+        : replacementDecision.promise;
+    });
+
+    const question = {
+      id: 'q1',
+      header: 'Question',
+      question: 'Pick one',
+      isOther: false,
+      isSecret: false,
+      options: null,
+    };
+    const interruptedResponsePromise = handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'item-interrupted',
+      questions: [question],
+    }, { requestId: 'req-interrupted' });
+
+    await handle.abort();
+    await expect(interruptedResponsePromise).resolves.toEqual({ answers: {} });
+
+    interruptedDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': 'late' },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const replacementResponsePromise = handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'item-replacement',
+      questions: [question],
+    }, { requestId: 'req-replacement' });
+    expect(requestCount).toBe(2);
+    replacementDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': 'fresh' },
+    });
+    await expect(replacementResponsePromise).resolves.toEqual({
+      answers: { q1: { answers: ['fresh'] } },
+    });
+
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'interrupted' },
+    });
+    await handle.close();
+  });
+
+  it('reassigns a joined duplicate when the interaction owner is cancelled', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-user-input-owner-cancelled',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.requestUserInput || !handlers.dynamicToolCall || !handlers.serverRequestResolved) {
+      throw new Error('expected handlers');
+    }
+    const ownerDecision = deferred<InteractionDecision>();
+    const joinedDecision = deferred<InteractionDecision>();
+    let requestCount = 0;
+    handle.setInteractionResolver(async (req) => {
+      requestCount += 1;
+      return req.requestId === 'req-owner'
+        ? ownerDecision.promise
+        : joinedDecision.promise;
+    });
+
+    const ownerResponsePromise = handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'item-owner',
+      questions: [{
+        id: 'native-q1',
+        header: 'Question',
+        question: 'Pick one',
+        isOther: false,
+        isSecret: false,
+        options: null,
+      }],
+    }, { requestId: 'req-owner' });
+    const joinedResponsePromise = handlers.dynamicToolCall({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      callId: 'item-joined',
+      namespace: 'cindy',
+      tool: 'ask_user_question',
+      arguments: {
+        questions: [{
+          id: 'dynamic-q1',
+          header: 'Question',
+          question: 'Pick one',
+          isOther: false,
+          options: null,
+        }],
+      },
+    }, { requestId: 'req-joined' });
+    expect(requestCount).toBe(1);
+
+    handlers.serverRequestResolved({ threadId: 'start-thread-id', requestId: 'req-owner' });
+
+    await expect(ownerResponsePromise).resolves.toEqual({ answers: {} });
+    await expect(nextEvent(iterator)).resolves.toMatchObject({
+      type: 'interaction_dismissed',
+      data: {
+        requestId: 'req-owner',
+        reason: 'server_request_resolved',
+        resolvedAs: 'deny',
+      },
+    });
+    await waitForExpectation(() => {
+      expect(requestCount).toBe(2);
+    });
+
+    joinedDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': 'fresh' },
+    });
+    await expect(joinedResponsePromise).resolves.toEqual({
+      success: true,
+      contentItems: [{
+        type: 'inputText',
+        text: JSON.stringify({ 'dynamic-q1': { answers: ['fresh'] } }),
+      }],
+    });
+
+    ownerDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': 'late' },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await expect(handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'item-replay',
+      questions: [{
+        id: 'replay-q1',
+        header: 'Question',
+        question: 'Pick one',
+        isOther: false,
+        isSecret: false,
+        options: null,
+      }],
+    }, { requestId: 'req-replay' })).resolves.toEqual({
+      answers: { 'replay-q1': { answers: ['fresh'] } },
+    });
+    expect(requestCount).toBe(2);
+    await handle.close();
+  });
+
+  it.each([
+    {
+      lifecycle: 'turn completion',
+      reason: 'turn_completed',
+      trigger: (_handle: AgentSessionHandle, handlers: ThreadEventHandlers) => {
+        handlers.turnCompleted?.({
+          threadId: 'start-thread-id',
+          turn: { id: 'turn-1', status: 'completed' },
+        });
+      },
+    },
+    {
+      lifecycle: 'transport failure',
+      reason: 'transport_error',
+      trigger: (_handle: AgentSessionHandle, handlers: ThreadEventHandlers) => {
+        handlers.error?.({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          scope: 'transport',
+          error: { message: 'transport closed' },
+        });
+      },
+    },
+    {
+      lifecycle: 'session close',
+      reason: 'session_closed',
+      trigger: async (handle: AgentSessionHandle) => {
+        await handle.close();
+      },
+    },
+  ])('wakes joined user-input requests during $lifecycle cleanup', async ({ lifecycle, reason, trigger }) => {
+    const logger = createNoopLogger();
+    const debug = vi.spyOn(logger, 'debug');
+    const agent = new CodexAgent(createDeps({}, { logger }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: `session-user-input-cleanup-${lifecycle.replaceAll(' ', '-')}`,
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.requestUserInput || !handlers.dynamicToolCall) {
+      throw new Error('expected user input handlers');
+    }
+    const ownerDecision = deferred<InteractionDecision>();
+    let requestCount = 0;
+    handle.setInteractionResolver(async () => {
+      requestCount += 1;
+      return ownerDecision.promise;
+    });
+
+    const ownerResponsePromise = handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'item-owner',
+      questions: [{
+        id: 'native-q1',
+        header: 'Question',
+        question: 'Pick one',
+        isOther: false,
+        isSecret: false,
+        options: null,
+      }],
+    }, { requestId: 'req-owner' });
+    const joinedResponsePromise = handlers.dynamicToolCall({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      callId: 'item-joined',
+      namespace: 'cindy',
+      tool: 'ask_user_question',
+      arguments: {
+        questions: [{
+          id: 'dynamic-q1',
+          header: 'Question',
+          question: 'Pick one',
+          isOther: false,
+          options: null,
+        }],
+      },
+    }, { requestId: 'req-joined' });
+    expect(requestCount).toBe(1);
+
+    await trigger(handle, handlers);
+
+    await expect(ownerResponsePromise).resolves.toEqual({ answers: {} });
+    await expect(joinedResponsePromise).resolves.toEqual({
+      success: false,
+      contentItems: [{ type: 'inputText', text: `Request cancelled: ${reason}` }],
+    });
+    await waitForExpectation(() => {
+      expect(debug).toHaveBeenCalledWith(
+        'joined duplicate same-turn user input request cancelled',
+        { requestId: 'req-joined', turnId: 'turn-1' },
+      );
+    });
+    if (lifecycle !== 'session close') await handle.close();
   });
 
   it('updates the registered vendorOptions object by reference on setVendorOptions', async () => {

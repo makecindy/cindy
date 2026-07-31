@@ -1,1 +1,1 @@
-调用一个具体的 cindy_feishu_bot 工具(参数会经过 zod 校验)。先用 list_tools 获取工具名;参数错误时会返回该工具的 JSON Schema 用于自我修正。常见 errorCode: UNKNOWN_TOOL / INVALID_ARGS / NO_CHAT_CONTEXT(当前不是飞书 bot session 上下文,工具不可用) / FILE_NOT_FOUND / FILE_EMPTY / FILE_TOO_LARGE / UPLOAD_FAILED / SEND_FAILED。
+调用一个具体的 cindy_feishu_bot 工具(参数会经过 zod 校验)。先用 list_tools 获取工具名;参数错误时会返回该工具的 JSON Schema 用于自我修正。常见 errorCode: UNKNOWN_TOOL / INVALID_ARGS / NO_CHAT_CONTEXT(当前没有飞书 / Lark bot session,且 bot 也未绑定 owner,工具不可用) / FILE_NOT_FOUND / FILE_EMPTY / FILE_TOO_LARGE / UPLOAD_FAILED / SEND_FAILED。

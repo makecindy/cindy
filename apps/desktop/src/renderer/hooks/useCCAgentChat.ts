@@ -54,6 +54,7 @@ import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import { createLogger } from '@/lib/logger';
+import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
 
 const log = createLogger('UseCCAgentChat');
 
@@ -169,6 +170,8 @@ interface UseCCAgentChatReturn {
   /** F-CMD: Patch a specific local-only system card in place */
   updateSystemCardData: (clientId: string, patch: Record<string, unknown>) => void;
   error: string | null;
+  /** 可恢复的账号用量限制；resetAtMs 识别失败时为 null。 */
+  usageLimitRecovery: UsageLimitRecoveryHint | null;
   /** 当前 terminal error 的稳定 reason key(如 'silent-stop-exhausted');ErrorBanner
    *  据此渲染专用 action。仅 error 非空时有意义。 */
   errorReason: string | null;
@@ -815,6 +818,7 @@ export function useCCAgentChat(
     updateLastSystemCardData,
     updateSystemCardData,
     error: lightState.error ?? lightState.recoverableError,
+    usageLimitRecovery: lightState.error ? (lightState.usageLimitRecovery ?? null) : null,
     // 终止型沿用原语义(reason 只在 error 非空时有意义)。非终止型此前恒给 null ——
     // 那时 store 侧非终止分支也恒清 reason, 两边一致; 现在过载重投会在非终止态带上
     // 稳定 reason key(ErrorBanner 靠它渲染本地化重试进度), 必须透出, 否则 UI 只能

@@ -124,10 +124,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     return outbound.sendInteractive(openId, { body: markdown, buttons: [] });
   }
 
-  startStreamingText(
-    openId: string,
-    initial?: string,
-  ): Promise<StreamingTextHandle> {
+  startStreamingText(openId: string, initial?: string): Promise<StreamingTextHandle> {
     return streamingText.start(openId, initial);
   }
 
@@ -139,10 +136,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     return streamingText.patchMarkdown(messageId, markdown);
   }
 
-  sendInteractiveCard(
-    openId: string,
-    spec: InteractiveCardSpec,
-  ): Promise<{ messageId: string }> {
+  sendInteractiveCard(openId: string, spec: InteractiveCardSpec): Promise<{ messageId: string }> {
     return outbound.sendInteractive(openId, spec);
   }
 
@@ -150,11 +144,7 @@ export class FeishuIM extends BaseIM implements ChannelIM {
     return outbound.updateInteractive(messageId, spec);
   }
 
-  sendFile(
-    openId: string,
-    absPath: string,
-    displayName?: string,
-  ): Promise<SendFileResult> {
+  sendFile(openId: string, absPath: string, displayName?: string): Promise<SendFileResult> {
     return outbound.sendFile(openId, absPath, displayName);
   }
 
@@ -208,6 +198,11 @@ export class FeishuIM extends BaseIM implements ChannelIM {
    */
   getOwnerOpenId(): string | null {
     return ownerGuard.firstAllowed();
+  }
+
+  /** Active Open Platform service; legacy credentials default to Feishu. */
+  getService(): 'feishu' | 'lark' {
+    return storage.readCredentials()?.service ?? 'feishu';
   }
 }
 

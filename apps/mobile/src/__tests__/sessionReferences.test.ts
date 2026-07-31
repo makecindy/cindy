@@ -505,6 +505,7 @@ describe('resolveMobileSessionReferences', () => {
   it.each([
     ['ACCESS_REVOKED', 'SESSION_REFERENCE_ACCESS_DENIED'],
     ['LINK_NOT_OPEN', 'SESSION_REFERENCE_OFFLINE'],
+    ['BACKPRESSURE', 'SESSION_REFERENCE_OFFLINE'],
     ['CHANNEL_NOT_ALLOWED', 'SESSION_REFERENCE_UNSUPPORTED'],
   ] as const)('maps %s source failures to %s', async (deviceCode, referenceCode) => {
     const invoke = asInvoke(async () => {

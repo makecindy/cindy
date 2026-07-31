@@ -17,6 +17,7 @@ const VALID_MANIFEST = {
   ossApiBaseUrl: 'https://oss.example.com',
   heartbeatUrl: 'https://heartbeat.example.com',
   telegramHookWsUrl: 'wss://telegram-hook.example.com',
+  xHookWsUrl: 'wss://x-hook.example.com',
   slackHookWsUrl: 'wss://slack-hook.example.com',
   websiteUrl: 'https://www.example.com',
   modelAccessApiBaseUrl: 'https://model-access.example.com',

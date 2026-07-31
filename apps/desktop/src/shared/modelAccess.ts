@@ -84,10 +84,8 @@ export const MODEL_ACCESS_STATUS_CHANNEL = 'model-access:status-change';
 
 /**
  * 服务端下发的网关聊天模型条目(model-access-server GET /models):
- * AIGateway /model-groups 的 mode=chat 投影(存在性 + token 上限权威)+
- * 服务端内置常量表富化(agents/展示元数据)。XD 供应商模型列表的权威来源。
- * 客户端字段优先级:本条目 > 产品目录同 id 条目 > 合成默认
- * (active-catalog setXdGatewayModels)。
+ * 上游 model-groups 的公开字段 + 服务端生成的旧客户端兼容字段。
+ * 新字段优先转换为客户端 Catalog 能力；字段缺失时才回退兼容字段。
  */
 /** 单个 runtime tab 上与基线不同的能力字段(服务端 perAgent 覆盖块,客户端按 agent 应用)。 */
 export interface ModelAccessAgentOverride {
@@ -151,6 +149,18 @@ export interface ModelGroupPricing {
   tieredPricing?: ModelGroupTieredPricing[];
 }
 
+/**
+ * Model Access Server 下发的模型条目。
+ *
+ * 同一含义只有一个字段:Gateway 的能力字段(contextLength / maxInputTokens /
+ * supportedEndpoints / reasoning / supportsServiceTier / architecture)由服务端一次
+ * 归一化成这里的 contextWindow / agents / efforts + defaultEffort / supportsFastMode /
+ * modalities,上游原名字段不下发、客户端也不再二次转换(见 model-access/index.ts 的
+ * applyGatewayModels)。旧版服务端只给归一化字段,语义相同,故无需兼容分支。
+ *
+ * 其中 contextLength 与 maxInputTokens 在 Gateway 侧本就同值(文档:contextLength
+ * currently mirrors maxInputTokens),统一由 contextWindow 表达。
+ */
 export interface ModelAccessGatewayModel extends ModelGroupPricing {
   id: string;
   /**
@@ -162,8 +172,9 @@ export interface ModelAccessGatewayModel extends ModelGroupPricing {
    */
   mode?: string;
   /**
-   * Gateway 可选的币种声明。当前 Cindy AI 价格目录仍以构建 region 的渠道契约
-   * 为准；该字段仅保留 wire 兼容，不能让同一构建产生混合币种目录。
+   * Gateway 原生价格币种,是该账号计价与记账的权威来源;旧版服务端未下发时才按
+   * 运行区域回退。它不保证等于构建区域 —— 结算币种由服务端按账号所属租户下发,
+   * 消费方一律以本字段(或其派生的 currentLedgerCurrency)为准,不按区域推断。
    */
   currency?: 'USD' | 'CNY';
   /** 进哪些 runtime tab;缺省 = 仅 claude-code(网关 /v1/messages 翻译覆盖面最广)。 */
@@ -173,6 +184,8 @@ export interface ModelAccessGatewayModel extends ModelGroupPricing {
   description?: string;
   contextWindow?: number;
   maxOutputTokens?: number;
+  /** 输入 / 输出模态(服务端由 Gateway architecture 归一化而来)。 */
+  modalities?: { input: string[]; output: string[] };
   efforts?: string[];
   defaultEffort?: string | null;
   sortOrder?: number;

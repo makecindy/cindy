@@ -2,7 +2,8 @@
  * Plugin detail presentation for configuration, Tools, permissions, and factual metadata.
  *
  * Inputs: the renderer-safe Plugin detail model plus the installed Ghost when available.
- * Outputs: accessible detail interactions and a single-row responsive action hero.
+ * Outputs: accessible detail interactions, a single-row responsive action hero, and the sticky
+ * top bar that carries the back affordance plus this page's macOS window-drag region.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -11,10 +12,10 @@ import * as Dialog from '@radix-ui/react-dialog';
 import {
   AppWindow,
   Bot,
-  ArrowLeft,
   ChevronDown,
   Copy,
   Cpu,
+  Download,
   FileCode2,
   FilePen,
   FolderOpen,
@@ -25,6 +26,7 @@ import {
   LayoutTemplate,
   MapPin,
   Megaphone,
+  MessageCircleQuestion,
   MoreVertical,
   PanelLeft,
   PanelRight,
@@ -57,6 +59,7 @@ import type { GhostPermissionItem, GhostToolDecl, InstalledGhost } from '../../.
 import { type GhostPluginDetail } from './lib/ghostPluginViewModel';
 import { GhostPluginIcon } from './GhostPluginIcon';
 import { ghostPluginSummary } from './lib/ghostPluginDetailModel';
+import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
 import './plugin-motion.css';
 
 interface GhostPluginDetailViewProps {
@@ -68,11 +71,15 @@ interface GhostPluginDetailViewProps {
   onToggle: (enabled: boolean) => void;
   onUse: () => void;
   onUpdate: () => void;
+  /** 缺少批准状态时的恢复入口(重新走一次完整权限确认)。 */
+  onReapprove: () => void;
   updateLabel?: string;
   /** 市场存在新版本时的目标版本号;设置后头部展示显著的更新按钮。 */
   updateVersion?: string;
   updateBusy?: boolean;
   onUninstall: () => void;
+  /** 导出 .cindy;当前详情非已装插件(纯市场视图)时缺省,菜单项不渲染。 */
+  onExport?: () => void;
   toggleDisabled: boolean;
   onIconLoadError?: () => void;
 }
@@ -89,6 +96,7 @@ const PERMISSION_ICON: Record<GhostPermissionItem['kind'], LucideIcon> = {
   card: LayoutTemplate,
   network: Globe,
   notify: Megaphone,
+  confirm: MessageCircleQuestion,
   fs: FilePen,
   'session-context': MapPin,
   pick: FolderOpen,
@@ -129,18 +137,23 @@ export function GhostPluginDetailView({
   onToggle,
   onUse,
   onUpdate,
+  onReapprove,
   updateLabel,
   updateVersion,
   updateBusy = false,
   onUninstall,
+  onExport,
   toggleDisabled,
   onIconLoadError,
 }: GhostPluginDetailViewProps) {
   const { t } = useTranslation();
+  const { scrolled, onScroll } = usePluginDetailScrolled();
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [descriptionOverflows, setDescriptionOverflows] = useState(false);
   const descriptionRef = useRef<HTMLParagraphElement>(null);
-  const enabled = enabledOverride ?? detail.enabled;
+  // 未批准的安装不可运行:说明现状 + 给恢复入口,不让它看起来只是"被关掉了"。
+  const needsReapproval = detail.approvalState !== 'approved';
+  const enabled = (enabledOverride ?? detail.enabled) && !needsReapproval;
   const canUse = enabled && detail.canUse;
   const cindyCapabilities = detail.cindyCapabilities;
   const hasConfiguration =
@@ -190,18 +203,16 @@ export function GhostPluginDetailView({
   }, [detail.id, summary]);
 
   return (
-    <main className="plugin-motion-root h-full min-h-0 w-full overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]">
+    <main
+      className="plugin-motion-root h-full min-h-0 w-full overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]"
+      onScroll={onScroll}
+    >
+      <PluginDetailTopBar
+        label={t('settings.ghosts.detail.backToList')}
+        onBack={onBack}
+        scrolled={scrolled}
+      />
       <article className="plugin-detail-frame mx-auto w-full max-w-[824px] px-8 pb-16 pt-5 max-[760px]:px-6">
-        <button
-          type="button"
-          onClick={onBack}
-          className="-ml-3 mb-7 inline-flex h-9 w-fit select-none items-center gap-2 rounded-full px-3 text-13 text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-          style={WINDOW_NO_DRAG_STYLE}
-        >
-          <ArrowLeft size={16} aria-hidden="true" />
-          {t('settings.ghosts.detail.backToList')}
-        </button>
-
         <header>
           <div className="plugin-detail-hero grid grid-cols-[64px_minmax(0,1fr)_auto] items-center gap-3">
             <GhostPluginIcon
@@ -222,7 +233,21 @@ export function GhostPluginDetailView({
               className="plugin-detail-actions flex shrink-0 flex-nowrap items-center gap-1.5"
               style={WINDOW_NO_DRAG_STYLE}
             >
-              {updateVersion ? (
+              {needsReapproval ? (
+                <button
+                  type="button"
+                  onClick={onReapprove}
+                  disabled={updateBusy}
+                  className={cn(
+                    'inline-flex h-10 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-5 text-13 font-medium text-[var(--text-primary)]',
+                    'transition-[background-color,border-color,transform,opacity] duration-150 hover:border-[var(--text-tertiary)] hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                    'disabled:cursor-wait disabled:opacity-40 disabled:active:scale-100',
+                  )}
+                >
+                  {t('settings.ghosts.reapproval.action')}
+                </button>
+              ) : updateVersion ? (
                 <button
                   type="button"
                   onClick={onUpdate}
@@ -257,7 +282,7 @@ export function GhostPluginDetailView({
               <Switch
                 checked={enabled}
                 onCheckedChange={onToggle}
-                disabled={toggleDisabled}
+                disabled={toggleDisabled || needsReapproval}
                 aria-label={t('settings.ghosts.enableAria', { name: detail.name })}
               />
               <DropdownMenu>
@@ -282,6 +307,15 @@ export function GhostPluginDetailView({
                   >
                     {updateLabel ?? t('settings.ghosts.detail.updateFromFile')}
                   </DropdownMenuItem>
+                  {onExport ? (
+                    <DropdownMenuItem
+                      onSelect={onExport}
+                      className="h-10 gap-2.5 rounded-lg px-3 text-13 focus:bg-[var(--surface-hover-soft)]"
+                    >
+                      <Download size={15} aria-hidden="true" />
+                      {t('settings.ghosts.detail.exportPackage')}
+                    </DropdownMenuItem>
+                  ) : null}
                   <DropdownMenuSeparator className="mx-2 my-1 h-px bg-[var(--border-default)]" />
                   <DropdownMenuItem
                     onSelect={onUninstall}
@@ -320,6 +354,27 @@ export function GhostPluginDetailView({
               </button>
             ) : null}
           </div>
+
+          {needsReapproval ? (
+            <div
+              className={cn(
+                'mt-5 rounded-xl px-4 py-3.5',
+                DETAIL_SURFACE_CLASS,
+              )}
+              role="status"
+            >
+              <p className="text-13 font-medium text-[var(--text-primary)]">
+                {t('settings.ghosts.reapproval.noticeTitle')}
+              </p>
+              <p className="mt-1 text-13 leading-5 text-[var(--text-secondary)]">
+                {t(
+                  detail.approvalState === 'invalid'
+                    ? 'settings.ghosts.reapproval.bodyInvalid'
+                    : 'settings.ghosts.reapproval.bodyLegacy',
+                )}
+              </p>
+            </div>
+          ) : null}
         </header>
 
         {hasConfiguration ? (
