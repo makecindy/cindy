@@ -36,10 +36,10 @@ describe("contacts device sync", () => {
     for (const db of databases.splice(0)) db.close();
   });
 
-  function createStore(): MakerContactsStore {
+  function createStore(config?: { maxIdentityValueLen: number }): MakerContactsStore {
     const db = new DatabaseCtor(":memory:");
     databases.push(db);
-    const store = new MakerContactsStore({ db, logger: noopLogger() });
+    const store = new MakerContactsStore({ db, logger: noopLogger(), config });
     store.init();
     return store;
   }
@@ -102,6 +102,37 @@ describe("contacts device sync", () => {
     }
     expect(stateOf(a)).toEqual(stateOf(b));
     expect(stateOf(b)).toEqual(stateOf(c));
+  });
+
+  it("接受小写映射扩展后仍在统一边界内的身份值", () => {
+    const store = createStore();
+    const contact = store.createContact({
+      kind: "person",
+      displayName: "Unicode Identity",
+    });
+    store.addIdentity(contact.id, {
+      platform: "custom",
+      value: "İ".repeat(320),
+    });
+
+    const state = store.activateDeviceSync();
+    expect(state.identities[0]?.value.value.normalizedValue).toHaveLength(640);
+    expect(isValidContactsSyncState(state)).toBe(true);
+  });
+
+  it("自定义身份长度配置不能放宽同步协议上限", () => {
+    const store = createStore({ maxIdentityValueLen: 400 });
+    const contact = store.createContact({
+      kind: "person",
+      displayName: "Configured Identity Limit",
+    });
+
+    expect(() =>
+      store.addIdentity(contact.id, {
+        platform: "custom",
+        value: "x".repeat(321),
+      }),
+    ).toThrow("identity value too long (> 320)");
   });
 
   it("状态合并保持幂等、交换和结合", () => {

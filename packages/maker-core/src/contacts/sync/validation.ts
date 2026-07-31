@@ -2,6 +2,7 @@
 
 import {
   DEFAULT_CONTACTS_CONFIG,
+  MAX_NORMALIZED_IDENTITY_VALUE_LEN,
   isContactKind,
   isContactSource,
   isContactStatus,
@@ -167,7 +168,7 @@ function isIdentity(value: unknown): value is {
     isString(value.value, DEFAULT_CONTACTS_CONFIG.maxIdentityValueLen, false) &&
     isString(
       value.normalizedValue,
-      DEFAULT_CONTACTS_CONFIG.maxIdentityValueLen,
+      MAX_NORMALIZED_IDENTITY_VALUE_LEN,
       false,
     ) &&
     isUnboundedLocalText(value.label) &&

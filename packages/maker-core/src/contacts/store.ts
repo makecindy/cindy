@@ -40,6 +40,8 @@ import type { ContactsSyncState } from './sync/types.js';
 import {
   ContactsError,
   DEFAULT_CONTACTS_CONFIG,
+  getMaxNormalizedIdentityValueLen,
+  getMaxSyncableIdentityValueLen,
   isContactKind,
   isContactSource,
   isContactStatus,
@@ -152,8 +154,12 @@ export class MakerContactsStore {
       const value = i.value.trim();
       const normalized = normalizeIdentityValue(i.value, platform);
       if (!normalized) throw new ContactsError('invalid-params', 'identity value must not be empty');
-      if (value.length > this.config.maxIdentityValueLen) {
-        throw new ContactsError('invalid-params', `identity value too long (> ${this.config.maxIdentityValueLen})`);
+      const identityValueLimit = getMaxSyncableIdentityValueLen(this.config.maxIdentityValueLen);
+      if (value.length > identityValueLimit) {
+        throw new ContactsError('invalid-params', `identity value too long (> ${identityValueLimit})`);
+      }
+      if (normalized.length > getMaxNormalizedIdentityValueLen(this.config.maxIdentityValueLen)) {
+        throw new ContactsError('invalid-params', 'normalized identity value too long');
       }
       const key = `${platform}\n${normalized}`;
       if (seenIdentity.has(key)) continue;
@@ -404,8 +410,12 @@ export class MakerContactsStore {
     const value = input.value.trim();
     const normalized = normalizeIdentityValue(value, platform);
     if (!normalized) throw new ContactsError('invalid-params', 'identity value must not be empty');
-    if (value.length > this.config.maxIdentityValueLen) {
-      throw new ContactsError('invalid-params', `identity value too long (> ${this.config.maxIdentityValueLen})`);
+    const identityValueLimit = getMaxSyncableIdentityValueLen(this.config.maxIdentityValueLen);
+    if (value.length > identityValueLimit) {
+      throw new ContactsError('invalid-params', `identity value too long (> ${identityValueLimit})`);
+    }
+    if (normalized.length > getMaxNormalizedIdentityValueLen(this.config.maxIdentityValueLen)) {
+      throw new ContactsError('invalid-params', 'normalized identity value too long');
     }
     this.assertIdentityFree(platform, normalized, contactId);
     const count = (
@@ -565,9 +575,13 @@ export class MakerContactsStore {
     for (const i of input.identities ?? []) {
       try {
         normalizePlatform(i.platform);
-        if (!normalizeIdentityValue(i.value, i.platform)) throw new ContactsError('invalid-params', 'empty identity value');
-        if (i.value.trim().length > this.config.maxIdentityValueLen) {
+        const normalized = normalizeIdentityValue(i.value, i.platform);
+        if (!normalized) throw new ContactsError('invalid-params', 'empty identity value');
+        if (i.value.trim().length > getMaxSyncableIdentityValueLen(this.config.maxIdentityValueLen)) {
           throw new ContactsError('invalid-params', 'identity value too long');
+        }
+        if (normalized.length > getMaxNormalizedIdentityValueLen(this.config.maxIdentityValueLen)) {
+          throw new ContactsError('invalid-params', 'normalized identity value too long');
         }
         validIdentities.push(i);
       } catch {
