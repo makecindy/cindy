@@ -23,7 +23,7 @@ const harness = vi.hoisted(() => {
     emptyState,
     activateSync: vi.fn(() => emptyState),
     peerPublicKey: 'peer-public' as string | null,
-    prepareKeyStore: vi.fn(async () => undefined),
+    prepareKeyStore: vi.fn(async (): Promise<void> => undefined),
     pinPeerPublicKey: vi.fn(async (_: string, publicKey: string) => {
       const firstSeen = harness.peerPublicKey === null;
       harness.peerPublicKey = publicKey;
