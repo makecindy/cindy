@@ -10,6 +10,7 @@ import {
   gatewayCurrencyForRegion,
   type ModelPriceQuote,
   type ModelPricingCatalog,
+  type MoneyCurrency,
 } from './regionalMoney.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from './subscriptionModels.js';
 
@@ -78,19 +79,21 @@ function gatewayInputTokenPriceBands(
   return thresholdBands.length > 0 ? thresholdBands : undefined;
 }
 
-/**
- * Cindy AI Gateway 的价格币种由构建 region 决定。CN /models 的数字原生是
- * CNY,Global 原生是 USD；条目缺少 currency 不改变该契约。
- */
+/** Gateway 原生币种优先；旧服务端未声明时才按构建 region 回退。 */
 /** 该条目是否会产生报价(与币种无关;目录币种裁决与覆盖率统计共用此判定)。 */
 export function isPricedGatewayModel(model: ModelAccessGatewayModel): boolean {
   // 币种不影响“是否有价格”的判断，这里显式传值，避免计费 API 隐式回落 Global。
   return gatewayModelPriceQuote(model, 'global') !== undefined;
 }
 
+/**
+ * @param fallbackCurrency 该模型未声明 currency 时的回落币种。调用方(gatewayPricingCatalog)
+ *   会传同一目录里已声明的币种，让整份目录保持单一币种；缺省才按区域回落。
+ */
 export function gatewayModelPriceQuote(
   model: ModelAccessGatewayModel,
   region: CindyRegion,
+  fallbackCurrency?: MoneyCurrency,
 ): ModelPriceQuote | undefined {
   const modelId = model.id.trim();
   const inputPerMtok = perMtok(model.inputCostPerToken);
@@ -115,7 +118,7 @@ export function gatewayModelPriceQuote(
   return {
     providerId: 'xd',
     modelId,
-    currency: gatewayCurrencyForRegion(region),
+    currency: model.currency ?? fallbackCurrency ?? gatewayCurrencyForRegion(region),
     source: 'gateway',
     approximate: false,
     inputPerMtok,
@@ -131,9 +134,25 @@ export function gatewayPricingCatalog(
   models: readonly ModelAccessGatewayModel[],
   region: CindyRegion,
 ): ModelPricingCatalog {
+  // 整份目录必须是单一币种。
+  //
+  // 同一账号的目录币种本就统一，所以个别模型省略 currency 时跟随同目录已声明的币种，
+  // 而不是各自回落构建区域 —— 否则新旧字段混合的响应(一条声明 USD、一条省略)会产出
+  // 跨币种目录，那些回落成区域币种的模型金额会被账本写入守卫当异币种丢弃。
+  //
+  // 出现两种以上显式声明则整份拒绝:此时 resolveGatewayAccountCurrency 已判定该目录不可信
+  // 并让账本回退构建币种，若这里继续产出混币 catalog，非账本币种的那部分模型会被守卫
+  // 选择性丢弃 —— 形成"按模型漏记账"，比整份没有报价更难发现。
+  const declared = new Set(
+    models
+      .map((model) => model.currency)
+      .filter((currency): currency is MoneyCurrency => currency === 'CNY' || currency === 'USD'),
+  );
+  if (declared.size > 1) return {};
+  const fallbackCurrency = declared.values().next().value ?? gatewayCurrencyForRegion(region);
   const xd: Record<string, ModelPriceQuote> = {};
   for (const model of models) {
-    const quote = gatewayModelPriceQuote(model, region);
+    const quote = gatewayModelPriceQuote(model, region, fallbackCurrency);
     if (quote) xd[quote.modelId] = quote;
   }
   return Object.keys(xd).length > 0 ? { xd } : {};
@@ -224,6 +243,9 @@ export function registryPricingCatalog(
   if (!registry) return catalog;
   for (const entry of registry.models) {
     for (const route of entry.routes) {
+      // XD/Cindy AI 的售价只认登录账号对应的 Gateway /models 响应。公共 registry
+      // 只提供用户自带 API/OAuth 的参考价，绝不能在 Gateway 离线时伪装成 XD 售价。
+      if (route.providerId === 'xd') continue;
       const quote = providerReferencePriceQuote(route.providerId, route.modelId, registry);
       if (!quote) continue;
       (catalog[route.providerId] ??= {})[route.modelId] = quote;
@@ -259,6 +281,19 @@ export function getModelPriceQuote(
     return providerPricing[bareModel];
   }
   return undefined;
+}
+
+/**
+ * 从报价目录推断当前账号的 Gateway 结算币种。
+ *
+ * 结算币种由服务端按账号所属租户下发,不保证等于客户端发行区域。目录为空或出现
+ * 混合币种时返回 null,由调用方回落到当前活动账本币种。
+ */
+export function gatewayLedgerCurrency(
+  pricing: ModelPricingCatalog | null | undefined,
+): MoneyCurrency | null {
+  const currencies = new Set(Object.values(pricing?.xd ?? {}).map((quote) => quote.currency));
+  return currencies.size === 1 ? (currencies.values().next().value ?? null) : null;
 }
 
 export function subscriptionDirectPriceQuote(

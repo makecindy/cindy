@@ -60,20 +60,38 @@
  * 避免一次浮窗弹出被算成一次 PV。
  */
 
+import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import TapDBAPI from '@/vendor/tapdb/tapdb.esm.min.js';
 import { createLogger } from '@/lib/logger';
 import { makerChatStore } from '@/lib/makerChatStore';
-import { TAPDB_EVENT_URL } from '../../shared/endpoints';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
+import { TAPDB_EVENT_URL_BY_REGION } from '../../shared/endpoints';
 
 const log = createLogger('tapdb');
 
 // ── Config ──────────────────────────────────────────────────────────────────
 //
-// serverUrl 是上报全量 URL(SDK 会直接 POST 到这个地址,不会再追加路径)。
-const TAPDB_CONFIG = {
-  appId: 'gczef0ey3e8ogpmizs',
-  serverUrl: TAPDB_EVENT_URL,
-} as const;
+// TapDB 项目按构建区域二选一,appId 与采集端点(serverUrl,SDK 直接 POST、不再
+// 追加路径)必须同区配对。appId 是公开应用标识(服务端 tapdbChargeReporter 同样
+// 硬编码同一对 ID),不属于凭证。
+//
+// ⚠️ 服务端把充值(charge)事件按部署区域报进对应 TapDB 项目,而 TapDB 只统计
+// 「同一项目里通过 SDK 上报过 user_login 的 user_id」的充值。客户端曾把两个区域
+// 都报进国内项目,导致国际项目全部充值因 user_id 无效不计入收入——这里的区域
+// 配对就是那次事故的修复,两侧 ID 必须与服务端 model-access-server 的
+// TAPDB_PROJECTS 保持一致。
+//
+// dev 是内部构建身份,行为语义归 cn 系(region-and-editions.md §1.1);其上报
+// 本身已被 isReportingBuild 闸住,仅 XDT_TAPDB_DEV=1 逃生口可达。
+export const TAPDB_PROJECT_BY_REGION: Readonly<
+  Record<CindyRegion, { appId: string; serverUrl: string }>
+> = Object.freeze({
+  cn: { appId: 'gczef0ey3e8ogpmizs', serverUrl: TAPDB_EVENT_URL_BY_REGION.cn },
+  global: { appId: 'h08anxdfrvfocfs894', serverUrl: TAPDB_EVENT_URL_BY_REGION.global },
+  dev: { appId: 'gczef0ey3e8ogpmizs', serverUrl: TAPDB_EVENT_URL_BY_REGION.dev },
+});
+
+const TAPDB_CONFIG = TAPDB_PROJECT_BY_REGION[CURRENT_CINDY_REGION];
 
 // ── Internal state ──────────────────────────────────────────────────────────
 
@@ -477,7 +495,7 @@ function initSdk(): void {
     sdkInitialized = true;
     applySuperProperties();
     reportActive('app_start');
-    log.info(`initialized, appId=${TAPDB_CONFIG.appId}`);
+    log.info(`initialized, region=${CURRENT_CINDY_REGION}, appId=${TAPDB_CONFIG.appId}`);
   } catch (err) {
     // SDK 自身崩溃绝不能影响主流程
     log.error('init failed (non-fatal)', err);

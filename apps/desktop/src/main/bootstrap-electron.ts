@@ -393,6 +393,7 @@ import {
 } from './right-sidebar-window/settings-store.js';
 import {
   anySessionInTurn,
+  applyCodexSpawnConfigChangeWithRestart,
   clearDeferredCodexRestartForOwnerBoundary,
   collectAgentInputQueueScanTexts,
   createAutomationUserTurnGitBaselineHooks,
@@ -559,6 +560,10 @@ import {
   type ImDefaultSettingsPatch,
 } from '../shared/imDefaultSettings.js';
 import {
+  SUBAGENT_MODEL_SETTINGS_DEFAULTS,
+  codexSpawnConfigChanged,
+  isCodexSubagentEffort,
+  isValidCodexSubagentConcurrencyInput,
   isValidSubagentModelIdInput,
   normalizeSubagentModelId,
   reconcileSubagentModelSettingsPatch,
@@ -581,6 +586,7 @@ import { effectiveXdGatewayBaseUrl } from './model-access/effectiveEndpoint.js';
 import { isLocalDbOwnerCurrent } from './appSessionPolicy.js';
 import { getAppCapabilities, requireAppCapability } from './appCapabilities.js';
 import {
+  activeOwnerScopeKey,
   beginAppSessionBoundary,
   getActiveAppSession,
   isAppSessionBoundaryPending,
@@ -2672,20 +2678,73 @@ const registerIpcHandlers = () => {
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_GET, async () => {
     return subagentModelSettingsWire();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_SET, async (_e, patch: unknown) => {
+  ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_SET, async (event, patch: unknown) => {
+    // 本 channel 已升级为可触发进程管理(软关/重启本地 Codex 会话)的操作,
+    // 必须先验证调用方是可信主渲染器,不能让任意取得 channel 的 frame/WebView
+    // 改写 owner-scoped 配置并重启会话(codex review P1)。
+    assertTrustedAppRendererEvent(event);
     // 配对一致性按「patch 合并当前存储」判定:有效模型为 null 时来源强制清空,
     // 同时兜住「清模型漏清来源」与「模型未指定时的 provider-only patch」两类孤儿写入。
-    writeSubagentModelSettingsPatch(
-      reconcileSubagentModelSettingsPatch(
-        parseSubagentModelSettingsPatch(patch),
-        readSubagentModelSettings(),
-      ),
+    const current = readSubagentModelSettings();
+    const parsed = reconcileSubagentModelSettingsPatch(
+      parseSubagentModelSettingsPatch(patch),
+      current,
     );
-    return subagentModelSettingsWire();
+    // codex 的 -c 注入在共享 app-server 的 spawn 时刻,变更触及注入键且有存活
+    // maker 时走 DeferredCodexRestart 执行体(空闲即软重启,busy 落盘后延迟兑现);
+    // 无 maker(启动早期/已关)时新 spawn 天然现读新值,直接落盘。
+    const needsCodexRestart =
+      codexSpawnConfigChanged(current, { ...current, ...parsed }) && getMakerIfReady() !== null;
+    if (!needsCodexRestart) {
+      writeSubagentModelSettingsPatch(parsed);
+      return { ...subagentModelSettingsWire(), codexRestartDeferred: false };
+    }
+    // 执行体的 prepare(软关会话)跨多个 await,期间可能发生登出/切号;persist 按
+    // 「请求时刻的当前 owner」解析路径,不绑定 scope 会把 A 的修改写进 B / 登出
+    // 命名空间(appSessionState.activeOwnerScopeKey 的跨 await 写入契约,codex
+    // review P1)。过期即拒,不静默落盘。
+    const ownerScopeKey = activeOwnerScopeKey();
+    // 有效性 = scope 未变 **且** 没有 owner boundary 在途:beginAppSessionBoundary
+    // 只加 boundaryDepth,scope key 的 generation 要等 boundary 后的稳定会话 commit
+    // 才变 —— teardown 已经 clearDeferredCodexRestartForOwnerBoundary 而 scope-only
+    // 检查仍为 true 的窗口里,过期请求会重新落盘/登记(codex review P1 第 4 轮)。
+    // boundary 在途一律 fail-closed。
+    const stillValid = () =>
+      !isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerScopeKey;
+    return applyCodexSpawnConfigChangeWithRestart(async () => {
+      if (!stillValid()) {
+        throwIpcError('PRECONDITION_FAILED', 'app session changed during codex restart; write dropped');
+      }
+      writeSubagentModelSettingsPatch(parsed);
+      return subagentModelSettingsWire();
+    // stillValid 同时传给执行体:busy 路径 persist 与登记之间还有一个 await 边界,
+    // 该窗口内 owner boundary 清掉旧登记后,本请求不得再 schedule(codex review
+    // P1 第 3 轮)。
+    }, stillValid);
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_RESET, async () => {
-    resetSubagentModelSettings();
-    return subagentModelSettingsWire();
+  ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_RESET, async (event) => {
+    // 同 SET:restart-capable 操作,先验可信渲染器(codex review P1)。
+    assertTrustedAppRendererEvent(event);
+    const needsCodexRestart =
+      codexSpawnConfigChanged(readSubagentModelSettings(), SUBAGENT_MODEL_SETTINGS_DEFAULTS) &&
+      getMakerIfReady() !== null;
+    if (!needsCodexRestart) {
+      resetSubagentModelSettings();
+      return { ...subagentModelSettingsWire(), codexRestartDeferred: false };
+    }
+    // 同 SET:跨 await 的 owner-scoped 写入必须绑定 scope,过期即拒(codex review P1);
+    // stillValid 传给执行体守住 persist→登记 的窗口,并把 boundary 在途并入判定
+    // (scope key 在 boundary commit 前不变,codex review P1 第 3/4 轮)。
+    const ownerScopeKey = activeOwnerScopeKey();
+    const stillValid = () =>
+      !isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerScopeKey;
+    return applyCodexSpawnConfigChangeWithRestart(async () => {
+      if (!stillValid()) {
+        throwIpcError('PRECONDITION_FAILED', 'app session changed during codex restart; reset dropped');
+      }
+      resetSubagentModelSettings();
+      return subagentModelSettingsWire();
+    }, stillValid);
   });
 
   // Claude Code 自动上下文压缩阈值 IPC —— store 跟 Maker 单例无关, 提前注册。
@@ -6107,6 +6166,34 @@ function parseSubagentModelSettingsPatch(raw: unknown): SubagentModelSettingsPat
       throwIpcError('INVALID_PARAMS', `subagent model ${key} must be a valid string or null`);
     }
     patch[key] = normalizeSubagentModelId(value);
+  }
+  // 护栏/effort 字段类型各异(enum / boolean / number|null),逐字段分支校验。
+  if ('codexEffort' in input) {
+    if (input.codexEffort !== null && !isCodexSubagentEffort(input.codexEffort)) {
+      throwIpcError('INVALID_PARAMS', 'subagent codexEffort must be a known effort or null');
+    }
+    patch.codexEffort = input.codexEffort as SubagentModelSettingsPatch['codexEffort'];
+  }
+  if ('codexSubagentsEnabled' in input) {
+    if (typeof input.codexSubagentsEnabled !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'subagent codexSubagentsEnabled must be boolean');
+    }
+    patch.codexSubagentsEnabled = input.codexSubagentsEnabled;
+  }
+  if ('codexMaxConcurrentSubagents' in input) {
+    if (!isValidCodexSubagentConcurrencyInput(input.codexMaxConcurrentSubagents)) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        'subagent codexMaxConcurrentSubagents must be an integer in range or null',
+      );
+    }
+    patch.codexMaxConcurrentSubagents = input.codexMaxConcurrentSubagents;
+  }
+  if ('codexAllowNestedSubagents' in input) {
+    if (typeof input.codexAllowNestedSubagents !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'subagent codexAllowNestedSubagents must be boolean');
+    }
+    patch.codexAllowNestedSubagents = input.codexAllowNestedSubagents;
   }
   return patch;
 }

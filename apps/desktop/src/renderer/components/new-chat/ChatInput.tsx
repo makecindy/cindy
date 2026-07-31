@@ -148,6 +148,7 @@ import {
 } from './pastePipeline';
 import { upgradePastedPathsToChips, type PendingPathRange } from './pathPaste';
 import { composerDocIsEmpty } from './composerDocState';
+import { canUseLocalAttachmentPicker } from './localAttachmentPicker';
 import {
   isComposerBlankPointerTarget,
   isInteractiveFocusedElement,
@@ -1069,6 +1070,12 @@ export function ChatInput({
   addFilesRef.current = addFiles;
   const addFolderPathRef = useRef(addFolderPath);
   addFolderPathRef.current = addFolderPath;
+  const localAttachmentPickerEnabled = canUseLocalAttachmentPicker({
+    sessionId,
+    runtimeAgentKind,
+    remoteHostId,
+    deviceLinkDeviceId,
+  });
 
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounterRef = useRef(0);
@@ -5223,43 +5230,38 @@ export function ChatInput({
                   // create-agent 按 Figma 使用 hug-content pills;默认会话页仍保留左侧优先压缩。
                 )}
               >
-                {/* composer 「+」菜单(权限左侧):新建目标 + 计划模式 + 引用目录(两端通用、同级)。
-                显示条件:有新建目标入口(会话内 → 内部 NewGoalDialog;首页 → onNewGoal 回调)、
-                计划模式入口(capability + 接线齐备),或有引用目录接线。 */}
-                {(inSessionGoalEnabled ||
-                  onNewGoal ||
-                  planModeEntry ||
-                  pluginsForMenu.length > 0 ||
-                  (extraDirs !== undefined && onExtraDirsChange)) && (
-                  <ExtraDirsButton
-                    extraDirs={extraDirs ?? []}
-                    workingDir={workingDir}
-                    planMode={planModeEntry}
-                    plugins={pluginsForMenu}
-                    pluginAvailableIds={pluginAvailableIds}
-                    onPluginSelect={handlePluginSelect}
-                    onChange={onExtraDirsChange}
-                    onNewGoal={
-                      inSessionGoalEnabled || onNewGoal
-                        ? () => {
-                            // 把输入框当前文字(去空白)作为目标默认内容。
-                            const ed = editorRef.current;
-                            const draftText =
-                              ed && !ed.isDestroyed ? serializeEditorContent(ed).text.trim() : '';
-                            if (inSessionGoalEnabled) {
-                              setNewGoalInitial(draftText);
-                              setNewGoalOpen(true);
-                            } else {
-                              onNewGoal?.(draftText);
-                            }
+                {/* composer 「+」菜单(权限左侧):本机会话提供附件入口;目标、计划模式、
+                Plugin、引用目录按各自能力与接线显示。远程会话不能把控制端绝对路径
+                交给远端 agent,因此不接本机文件选择器。 */}
+                <ExtraDirsButton
+                  extraDirs={extraDirs ?? []}
+                  workingDir={workingDir}
+                  onAddFiles={localAttachmentPickerEnabled ? addFiles : undefined}
+                  planMode={planModeEntry}
+                  plugins={pluginsForMenu}
+                  pluginAvailableIds={pluginAvailableIds}
+                  onPluginSelect={handlePluginSelect}
+                  onChange={onExtraDirsChange}
+                  onNewGoal={
+                    inSessionGoalEnabled || onNewGoal
+                      ? () => {
+                          // 把输入框当前文字(去空白)作为目标默认内容。
+                          const ed = editorRef.current;
+                          const draftText =
+                            ed && !ed.isDestroyed ? serializeEditorContent(ed).text.trim() : '';
+                          if (inSessionGoalEnabled) {
+                            setNewGoalInitial(draftText);
+                            setNewGoalOpen(true);
+                          } else {
+                            onNewGoal?.(draftText);
                           }
-                        : undefined
-                    }
-                    disabled={disabled}
-                    dense={effectiveDenseToolbar}
-                    visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
-                  />
-                )}
+                        }
+                      : undefined
+                  }
+                  disabled={disabled}
+                  dense={effectiveDenseToolbar}
+                  visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
+                />
                 <PermissionSelector
                   permissionMode={activePermissionMode}
                   onPermissionModeChange={handlePermissionModeChange}

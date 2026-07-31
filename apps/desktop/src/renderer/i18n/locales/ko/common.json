@@ -123,7 +123,7 @@
       "personalization": "개인화",
       "chipMetrics": "사용량 표시기",
       "memory": "메모리",
-      "subagentModels": "하위 에이전트 모델",
+      "subagentModels": "하위 에이전트",
       "compaction": "컨텍스트 압축",
       "terminalShell": "기본 터미널 셸",
       "linkOpen": "링크 열기 방식",
@@ -1990,12 +1990,30 @@
       }
     },
     "subagentModels": {
-      "title": "하위 에이전트 모델",
-      "description": "Claude Code와 Codex가 하위 작업을 실행할 때 사용할 기본 모델을 설정합니다. 설정은 진입점별로 적용되며 모델별로 저장되지 않습니다.",
+      "title": "하위 에이전트",
+      "description": "Claude Code와 Codex가 하위 작업을 실행할 때 사용할 기본 모델을 설정하고 Codex 하위 에이전트의 가드레일을 구성합니다. 설정은 진입점별로 적용되며 모델별로 저장되지 않습니다.",
       "unspecified": "지정 안 함(기본 동작 사용)",
-      "codexUnavailable": "현재 Codex 버전에서는 안전한 재정의를 지원하지 않습니다",
-      "hint": "선택 가능한 모델은 연결된 모델 소스에 따라 달라집니다. 지정하지 않으면 Agent의 기본 설정을 사용합니다. Claude Code 변경 사항은 새 세션부터 적용되며, 현재 Codex 버전은 하위 에이전트 모델 재정의를 지원하지 않습니다.",
-      "saveFailed": "하위 에이전트 모델 저장 실패"
+      "hint": "선택 가능한 모델은 연결된 모델 소스에 따라 달라집니다. 지정하지 않으면 Agent의 기본 설정을 사용합니다. Claude Code 변경 사항은 새 세션부터 적용됩니다. Codex 변경 사항은 유휴 상태에서 즉시 재시작되어 반영되며, 작업 실행 중에는 로컬 Codex 세션이 모두 유휴 상태가 된 후 자동 적용됩니다.",
+      "codexV2ModelHint": "하위 에이전트 기본 모델은 Codex 자체 모델 카탈로그에 있는 모델이어야 하며, 카탈로그 외부 모델(호환 브리지로 연결된 서드파티 모델 등)은 Codex가 거부합니다. Sol / Terra(멀티 에이전트 V2)는 나아가 V2 카탈로그 모델(현재 gpt-5.6-sol과 gpt-5.6-terra)만 허용합니다. 이전 버전 멀티 에이전트(V1)에는 V2 제한이 없습니다.",
+      "saveFailed": "하위 에이전트 설정 저장 실패",
+      "guardrails": {
+        "title": "Codex 하위 에이전트 가드레일",
+        "enableHint": "Codex가 작업 중 일회성 하위 에이전트를 생성하도록 허용합니다. 끄면 이전 버전 멀티 에이전트(V1)와 Sol / Terra(V2) 모두에 적용됩니다.",
+        "enableAria": "Codex 하위 에이전트 허용",
+        "concurrencyLabel": "하위 에이전트 동시 실행 한도",
+        "concurrencyHint": "동시에 실행할 수 있는 하위 에이전트 수의 상한입니다. 하위 에이전트는 각각 모델 할당량을 소비합니다. Ultra 단계에서 동시 실행이 8에 도달하면 Codex가 경고합니다.",
+        "concurrencyFollowDefault": "Codex 기본값 따르기(이전 버전 V1은 6, Sol / Terra는 3)",
+        "concurrencyAria": "Codex 하위 에이전트 동시 실행 한도 조정",
+        "concurrencyCustomAria": "Codex 하위 에이전트 동시 실행 한도 사용자 지정",
+        "nestedLabel": "하위 에이전트의 하위 에이전트 생성 허용",
+        "nestedHint": "이전 버전 멀티 에이전트(V1)에만 적용되며 Sol / Terra(V2)는 이 설정을 무시합니다.",
+        "nestedAria": "하위 에이전트의 하위 에이전트 생성 허용",
+        "localOnlyHint": "이 가드레일은 이 컴퓨터에서 실행되는 Codex에만 적용되며 SSH 원격의 Codex에는 영향을 주지 않습니다."
+      },
+      "toast": {
+        "saved": "하위 에이전트 설정이 저장되었습니다",
+        "deferredSuffix": " — 실행 중인 Codex 세션에는 현재 작업이 끝난 후 적용됩니다"
+      }
     },
     "compaction": {
       "title": "컨텍스트 압축",
@@ -3031,16 +3049,9 @@
           "desc": "이 플러그인이 Cindy Agent에게 작업을 맡길 때 사용하는 실행 설정입니다. 설정하지 않은 항목은 새 초안 선택을 따르며, 기본은 읽기 전용이고 전용 폴더에서 작업합니다.",
           "agent": "Agent",
           "model": "모델",
-          "effort": "추론 강도",
-          "fast": "Fast 모드",
-          "fastOn": "켬",
-          "fastOff": "끔",
           "permission": "쓰기 권한",
-          "permissionMode": {
-            "plan": "읽기 전용(기본): 보고 생각만 할 수 있고 변경은 불가",
-            "acceptEdits": "파일 수정 가능: 작업 폴더 안의 파일을 수정할 수 있음",
-            "auto": "자동: 작업 폴더 안의 일반 작업은 매번 묻지 않음"
-          },
+          "permissionDisabled": "대행 세션에서는 선택할 수 없음",
+          "resetFollow": "기본값 따르기로 되돌리기",
           "workdir": "작업 폴더",
           "workdirDefault": "플러그인 전용 폴더(기본)",
           "workdirPick": "선택…",
@@ -3571,6 +3582,7 @@
     },
     "dailyLimitLabel": "오늘 {{spend}}/{{limit}}",
     "monthlyLimitLabel": "주기 {{spend}}/{{limit}}",
+    "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "세션 {{cost}}",
     "codex": {
       "waiting": "Codex --",
@@ -3615,6 +3627,7 @@
     "tooltip": {
       "todayUsedSoftLimit": "오늘 사용 ${{today}} / 소프트 한도 ${{limit}} ({{pct}}%)",
       "sessionUsed": "이 세션에서 {{cost}} 사용",
+      "creditUsed": "계정 사용 {{used}} · 총액 {{total}}",
       "monthlyUnavailable": "⚠️ 월간 할당량을 일시적으로 가져올 수 없습니다",
       "dailyUnavailable": "⚠️ 오늘 사용량 세부 정보를 일시적으로 가져올 수 없습니다",
       "softLimitFormula": "소프트 한도 공식: 월 할당량 ÷ 30 × {{factor}}",
@@ -3705,14 +3718,24 @@
     "maximizeAria": "패널 최대화",
     "restoreAria": "패널 크기 복원",
     "detachAria": "새 창에서 열기",
-    "minimizeAria": "플로팅 버블로 최소화"
+    "minimizeAria": "플로팅 버블로 최소화",
+    "closeAria": "패널 닫기 및 플러그인 비활성화"
+  },
+  "ghostPanel": {
+    "disableConfirm": {
+      "title": "\"{{name}}\" 플러그인을 비활성화할까요?",
+      "body": "이 패널을 닫으면 플러그인 전체가 비활성화되어 패널과 기능이 중지됩니다. 사이드바의 '플러그인'에서 언제든지 다시 활성화할 수 있습니다.",
+      "confirm": "비활성화"
+    }
   },
   "ghostPanelWindow": {
     "mergeBack": "메인 창으로 되돌리기",
     "unavailable": "이 플러그인 패널은 현재 사용할 수 없습니다"
   },
   "ghostPanelBubble": {
-    "restoreAria": "{{name}} 패널 복원"
+    "restoreAria": "{{name}} 패널 복원",
+    "stackExpandAria": "플러그인 패널 {{count}}개가 최소화됨. 클릭하여 펼치기",
+    "stackCollapseAria": "플러그인 패널 목록 접기"
   },
   "rightSidebar": {
     "ariaLabel": "오른쪽 사이드바",
@@ -7679,6 +7702,7 @@
     "menuAria": "작업 메뉴",
     "tooltipEmpty": "더 많은 작업",
     "tooltipCount": "참조 디렉터리 {{count}}개",
+    "addFiles": "파일, 이미지 또는 동영상 추가…",
     "pluginsTitle": "설치된 플러그인",
     "pluginDisabled": "비활성화됨",
     "pluginNoCommand": "여기에서 사용할 수 없음",

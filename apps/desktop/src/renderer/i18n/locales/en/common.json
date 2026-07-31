@@ -123,7 +123,7 @@
       "personalization": "Personalization",
       "chipMetrics": "Usage indicator",
       "memory": "Memory",
-      "subagentModels": "Subagent models",
+      "subagentModels": "Subagents",
       "compaction": "Context compaction",
       "terminalShell": "Default terminal shell",
       "linkOpen": "Link open behavior",
@@ -1991,12 +1991,30 @@
       }
     },
     "subagentModels": {
-      "title": "Subagent models",
-      "description": "Choose the default model used for sub tasks in Claude Code and Codex. The setting applies per entry, not per model.",
+      "title": "Subagents",
+      "description": "Choose the default model used for sub tasks in Claude Code and Codex, and set guardrails for Codex subagents. The setting applies per entry, not per model.",
       "unspecified": "Not specified (use default behavior)",
-      "codexUnavailable": "Safe overrides are unavailable in this Codex version",
-      "hint": "Available models depend on your connected model sources. Leave it unspecified to use the agent's normal default. Claude Code changes apply to new sessions; the current Codex version does not support subagent model overrides.",
-      "saveFailed": "Failed to save subagent model"
+      "hint": "Available models depend on your connected model sources. Leave it unspecified to use the agent's normal default. Claude Code changes apply to new sessions; Codex changes restart the local Codex runtime right away when idle, or after running sessions finish their current task.",
+      "codexV2ModelHint": "The subagent default must be a model from Codex's own catalog; models outside it (such as third-party models connected through the compatibility bridge) are rejected by Codex. Sol / Terra (multi-agent V2) further only accept V2 catalog models (currently gpt-5.6-sol and gpt-5.6-terra); legacy multi-agent (V1) has no V2 restriction.",
+      "saveFailed": "Failed to save subagent settings",
+      "guardrails": {
+        "title": "Codex subagent guardrails",
+        "enableHint": "Allow Codex to spawn one-off subagents while working. Turning this off applies to both legacy multi-agent (V1) and Sol / Terra (V2).",
+        "enableAria": "Allow Codex subagents",
+        "concurrencyLabel": "Concurrent subagent limit",
+        "concurrencyHint": "Maximum number of subagents running at the same time. Each subagent consumes model quota; Codex warns when concurrency reaches 8 at Ultra reasoning.",
+        "concurrencyFollowDefault": "Follow Codex default (6 for legacy V1, 3 for Sol / Terra)",
+        "concurrencyAria": "Adjust the Codex concurrent subagent limit",
+        "concurrencyCustomAria": "Customize the Codex concurrent subagent limit",
+        "nestedLabel": "Allow subagents to spawn subagents",
+        "nestedHint": "Only applies to legacy multi-agent (V1); Sol / Terra (V2) ignore this setting.",
+        "nestedAria": "Allow subagents to spawn subagents",
+        "localOnlyHint": "These guardrails only apply to Codex running on this machine; Codex over SSH remotes is not affected."
+      },
+      "toast": {
+        "saved": "Subagent settings saved",
+        "deferredSuffix": " — running Codex sessions will apply this after their current task finishes"
+      }
     },
     "compaction": {
       "title": "Context compaction",
@@ -3032,16 +3050,9 @@
           "desc": "How this plugin's tasks run when it hands work to the Cindy Agent. Unset fields follow your new-draft preferences; the helper is read-only by default and works in a dedicated folder.",
           "agent": "Agent",
           "model": "Model",
-          "effort": "Reasoning effort",
-          "fast": "Fast mode",
-          "fastOn": "On",
-          "fastOff": "Off",
           "permission": "Write access",
-          "permissionMode": {
-            "plan": "Read-only (default): can look and think, cannot change anything",
-            "acceptEdits": "Can edit files: may modify files in the working folder",
-            "auto": "Auto: routine actions in the working folder no longer ask each time"
-          },
+          "permissionDisabled": "Not available for errand sessions",
+          "resetFollow": "Reset to follow default",
           "workdir": "Working folder",
           "workdirDefault": "Plugin's dedicated folder (default)",
           "workdirPick": "Choose…",
@@ -3572,6 +3583,7 @@
     },
     "dailyLimitLabel": "Today {{spend}}/{{limit}}",
     "monthlyLimitLabel": "Cycle {{spend}}/{{limit}}",
+    "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "Session {{cost}}",
     "codex": {
       "waiting": "Codex --",
@@ -3616,6 +3628,7 @@
     "tooltip": {
       "todayUsedSoftLimit": "Today used ${{today}} / soft limit ${{limit}} ({{pct}}%)",
       "sessionUsed": "This session used {{cost}}",
+      "creditUsed": "Account used {{used}} · total {{total}}",
       "monthlyUnavailable": "⚠️ Monthly quota is temporarily unavailable",
       "dailyUnavailable": "⚠️ Today's usage details are temporarily unavailable",
       "softLimitFormula": "Soft limit formula: monthly quota ÷ 30 × {{factor}}",
@@ -3706,14 +3719,24 @@
     "maximizeAria": "Maximize panel",
     "restoreAria": "Restore panel size",
     "detachAria": "Open in a new window",
-    "minimizeAria": "Minimize to floating bubble"
+    "minimizeAria": "Minimize to floating bubble",
+    "closeAria": "Close panel and disable plugin"
+  },
+  "ghostPanel": {
+    "disableConfirm": {
+      "title": "Disable \"{{name}}\"?",
+      "body": "Closing this panel disables the whole plugin — its panel and capabilities will pause. You can re-enable it anytime from Plugins in the sidebar.",
+      "confirm": "Disable"
+    }
   },
   "ghostPanelWindow": {
     "mergeBack": "Merge back into main window",
     "unavailable": "This plugin panel is currently unavailable"
   },
   "ghostPanelBubble": {
-    "restoreAria": "Restore {{name}} panel"
+    "restoreAria": "Restore {{name}} panel",
+    "stackExpandAria": "{{count}} plugin panels minimized. Click to expand",
+    "stackCollapseAria": "Collapse the plugin panel list"
   },
   "rightSidebar": {
     "ariaLabel": "Right sidebar",
@@ -7691,6 +7714,7 @@
     "menuAria": "Composer actions",
     "tooltipEmpty": "More actions",
     "tooltipCount": "{{count}} reference directories",
+    "addFiles": "Add files, images, or videos…",
     "pluginsTitle": "Installed Plugins",
     "pluginDisabled": "Disabled",
     "pluginNoCommand": "Not available here",

@@ -171,7 +171,15 @@
     "goalComplete": "Goal reached · {{turns}} turns · took {{duration}}",
     "goalResumed": "Usage restored, continuing the goal",
     "goalCapacityRetry": "Model service was busy — retrying the goal",
-    "autoResume": "Connection dropped, resumed automatically",
+    "autoResume": {
+      "separator": "Connection interrupted — resumed automatically",
+      "succeeded": "Reconnected",
+      "failed": "Reconnect failed",
+      "neutral": "Reconnect",
+      "pending": "Reconnecting…",
+      "pendingWithProgress": "Reconnecting {{attempt}}/{{total}}…",
+      "details": "Attempt {{attempt}}/{{total}} · {{count}} reconnects in this conversation"
+    },
     "modelLabel": "Model",
     "sessionLabel": "Session",
     "sessionResumed": "Resumed",

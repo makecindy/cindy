@@ -123,7 +123,7 @@
       "personalization": "パーソナライズ",
       "chipMetrics": "使用量インジケーター",
       "memory": "メモリ",
-      "subagentModels": "サブエージェントモデル",
+      "subagentModels": "サブエージェント",
       "compaction": "コンテキスト圧縮",
       "terminalShell": "デフォルトターミナルシェル",
       "linkOpen": "リンクの開き方",
@@ -1990,12 +1990,30 @@
       }
     },
     "subagentModels": {
-      "title": "サブエージェントモデル",
-      "description": "Claude Code と Codex がサブタスクを実行するときに使用する既定のモデルを設定します。設定は入口ごとに適用され、モデルごとには保存されません。",
+      "title": "サブエージェント",
+      "description": "Claude Code と Codex がサブタスクを実行するときに使用する既定のモデルを設定し、Codex サブエージェントのガードレールを構成します。設定は入口ごとに適用され、モデルごとには保存されません。",
       "unspecified": "指定しない（既定の動作を使用）",
-      "codexUnavailable": "現在の Codex バージョンでは安全な上書きに未対応です",
-      "hint": "選択できるモデルは接続済みのモデルソースによって異なります。未指定の場合は Agent 本来の既定値を使用します。Claude Code の変更は新規セッションから有効になり、現在の Codex バージョンではサブエージェントのモデル上書きに対応していません。",
-      "saveFailed": "サブエージェントモデルの保存に失敗しました"
+      "hint": "選択できるモデルは接続済みのモデルソースによって異なります。未指定の場合は Agent 本来の既定値を使用します。Claude Code の変更は新規セッションから有効になります。Codex の変更はアイドル時に即時再起動で反映され、タスク実行中はローカルの Codex セッションがすべてアイドルになった後に自動適用されます。",
+      "codexV2ModelHint": "サブエージェントの既定モデルは Codex 自身のモデルカタログ内のモデルである必要があり、カタログ外のモデル（互換ブリッジ経由のサードパーティモデルなど）は Codex に拒否されます。Sol / Terra（マルチエージェント V2）はさらに V2 カタログモデル（現在は gpt-5.6-sol と gpt-5.6-terra）のみを受け付けます。旧版マルチエージェント（V1）に V2 の制限はありません。",
+      "saveFailed": "サブエージェント設定の保存に失敗しました",
+      "guardrails": {
+        "title": "Codex サブエージェントガードレール",
+        "enableHint": "Codex がタスク実行中に使い捨てのサブエージェントを作成することを許可します。オフにすると旧版マルチエージェント（V1）と Sol / Terra（V2）の両方に適用されます。",
+        "enableAria": "Codex のサブエージェントを許可",
+        "concurrencyLabel": "サブエージェントの同時実行上限",
+        "concurrencyHint": "同時に実行できるサブエージェント数の上限です。サブエージェントはそれぞれモデルのクォータを消費します。Ultra 段階で同時実行が 8 に達すると Codex が警告します。",
+        "concurrencyFollowDefault": "Codex の既定に従う（旧版 V1 は 6、Sol / Terra は 3）",
+        "concurrencyAria": "Codex サブエージェントの同時実行上限を調整",
+        "concurrencyCustomAria": "Codex サブエージェントの同時実行上限をカスタマイズ",
+        "nestedLabel": "サブエージェントによるサブエージェント作成を許可",
+        "nestedHint": "旧版マルチエージェント（V1）のみ有効で、Sol / Terra（V2）はこの設定を無視します。",
+        "nestedAria": "サブエージェントによるサブエージェント作成を許可",
+        "localOnlyHint": "これらのガードレールはこのマシンで実行される Codex にのみ適用され、SSH リモートの Codex には影響しません。"
+      },
+      "toast": {
+        "saved": "サブエージェント設定を保存しました",
+        "deferredSuffix": " — 実行中の Codex セッションには現在のタスク終了後に適用されます"
+      }
     },
     "compaction": {
       "title": "コンテキスト圧縮",
@@ -3031,16 +3049,9 @@
           "desc": "このプラグインが Cindy Agent にタスクを任せるときの実行設定です。未設定の項目は新規ドラフトの選択に従います。既定では読み取り専用で、専用フォルダー内で作業します。",
           "agent": "Agent",
           "model": "モデル",
-          "effort": "推論強度",
-          "fast": "Fast モード",
-          "fastOn": "オン",
-          "fastOff": "オフ",
           "permission": "書き込み権限",
-          "permissionMode": {
-            "plan": "読み取り専用(既定):閲覧と思考のみで、変更はできません",
-            "acceptEdits": "ファイル編集可:作業フォルダー内のファイルを変更できます",
-            "auto": "自動:作業フォルダー内の通常操作は毎回確認しません"
-          },
+          "permissionDisabled": "代行セッションでは選べません",
+          "resetFollow": "既定に従うに戻す",
           "workdir": "作業フォルダー",
           "workdirDefault": "プラグイン専用フォルダー(既定)",
           "workdirPick": "選択…",
@@ -3571,6 +3582,7 @@
     },
     "dailyLimitLabel": "本日 {{spend}}/{{limit}}",
     "monthlyLimitLabel": "周期 {{spend}}/{{limit}}",
+    "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "セッション {{cost}}",
     "codex": {
       "waiting": "Codex --",
@@ -3615,6 +3627,7 @@
     "tooltip": {
       "todayUsedSoftLimit": "本日使用 ${{today}} / ソフト上限 ${{limit}} ({{pct}}%)",
       "sessionUsed": "このセッションで {{cost}} 使用",
+      "creditUsed": "アカウント 使用 {{used}} · 合計 {{total}}",
       "monthlyUnavailable": "⚠️ 月次クォータを一時的に取得できません",
       "dailyUnavailable": "⚠️ 本日の使用量明細を一時的に取得できません",
       "softLimitFormula": "ソフト上限の式: 月次クォータ ÷ 30 × {{factor}}",
@@ -3705,14 +3718,24 @@
     "maximizeAria": "パネルを最大化",
     "restoreAria": "パネルのサイズを元に戻す",
     "detachAria": "新しいウィンドウで開く",
-    "minimizeAria": "フローティングバブルに最小化"
+    "minimizeAria": "フローティングバブルに最小化",
+    "closeAria": "パネルを閉じてプラグインを無効化"
+  },
+  "ghostPanel": {
+    "disableConfirm": {
+      "title": "「{{name}}」を無効にしますか？",
+      "body": "このパネルを閉じるとプラグイン全体が無効になり、パネルと機能が停止します。サイドバーの「プラグイン」からいつでも再度有効にできます。",
+      "confirm": "無効にする"
+    }
   },
   "ghostPanelWindow": {
     "mergeBack": "メインウィンドウに戻す",
     "unavailable": "このプラグインパネルは現在利用できません"
   },
   "ghostPanelBubble": {
-    "restoreAria": "{{name}} パネルを元に戻す"
+    "restoreAria": "{{name}} パネルを元に戻す",
+    "stackExpandAria": "{{count}} 個のプラグインパネルを最小化中。クリックで展開",
+    "stackCollapseAria": "プラグインパネルの一覧を畳む"
   },
   "rightSidebar": {
     "ariaLabel": "右サイドバー",
@@ -7679,6 +7702,7 @@
     "menuAria": "操作メニュー",
     "tooltipEmpty": "その他の操作",
     "tooltipCount": "参照ディレクトリ {{count}} 件",
+    "addFiles": "ファイル、画像、動画を追加…",
     "pluginsTitle": "インストール済みプラグイン",
     "pluginDisabled": "無効",
     "pluginNoCommand": "ここでは使用できません",

@@ -239,6 +239,7 @@ type ImDefaultSettingsState = import('../shared/imDefaultSettings').ImDefaultSet
 type ImDefaultSettingsChannel = import('../shared/imDefaultSettings').ImDefaultSettingsChannel;
 type SubagentModelSettingsPatch = import('../shared/subagentModelSettings').SubagentModelSettingsPatch;
 type SubagentModelSettingsState = import('../shared/subagentModelSettings').SubagentModelSettingsState;
+type SubagentModelSettingsWriteResult = import('../shared/subagentModelSettings').SubagentModelSettingsWriteResult;
 
 /** Agent 资源占用设置的 IPC wire 形状(main 侧 agentResourceSettingsWire)。 */
 type AgentResourceProcessPriority = 'normal' | 'low' | 'lowest';
@@ -4323,8 +4324,8 @@ interface ElectronAPI {
 
     /** 子代理模型覆盖。null 表示不注入覆盖，仅对新建 agent 会话生效。 */
     subagentModelSettingsGet: () => Promise<SubagentModelSettingsState>;
-    subagentModelSettingsSet: (patch: SubagentModelSettingsPatch) => Promise<SubagentModelSettingsState>;
-    subagentModelSettingsReset: () => Promise<SubagentModelSettingsState>;
+    subagentModelSettingsSet: (patch: SubagentModelSettingsPatch) => Promise<SubagentModelSettingsWriteResult>;
+    subagentModelSettingsReset: () => Promise<SubagentModelSettingsWriteResult>;
 
     /** Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。 */
     agentResourceSettingsGet: () => Promise<AgentResourceSettingsWire>;
@@ -4609,6 +4610,7 @@ interface ElectronAPI {
         cb: (p: {
           spend: number;
           maxBudget: number;
+          currency: import('../shared/regionalMoney').MoneyCurrency;
           budgetResetAt?: string | null;
           todaySpend: number | null;
           fetchedAt: number;

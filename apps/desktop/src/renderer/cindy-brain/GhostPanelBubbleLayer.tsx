@@ -14,11 +14,16 @@
  *    折叠到 0,等 300ms 圆圈渐显、幽灵再跳进来;点球展开 → 幽灵先跳走、
  *    圆圈再渐隐,计时器到点(260ms)才真正 restore,面板宽度展开回停靠位
  *    (编排见 globals.css;面板侧提交时序在 ghostPanels.tsx,减弱动效自动停);
- *  - 拖后落点持久化,重启保留;没拖过的气泡从右下角向上堆(计算不落盘,
- *    窗口缩放自动重排);渲染时 clamp 到视口,y 下限避开顶部 46px 拖动带。
+ *  - 拖后落点持久化,重启保留;没拖过的气泡默认停右上角(计算不落盘,
+ *    窗口缩放自动重排);渲染时 clamp 到视口,y 下限避开顶部 46px 拖动带;
+ *  - 堆叠模式(2026-07-31 Lizi 定案):同时最小化 ≥2 个 → 合并成**一枚**
+ *    堆叠气泡(lucide Ghost 脸 + 数量角标),点击向下(空间不够则向上)
+ *    纵向展开各插件自己的气泡,点谁恢复谁;点堆叠球或空白处收拢。堆叠球
+ *    可拖,落点单独持久化;只剩 1 个时自动回到单气泡形态(用它自己的
+ *    存储位/默认位)。
  */
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { Ghost } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -42,6 +47,30 @@ const TOP_FLOOR = 46 + EDGE_MARGIN;
  *  到点才真正 restore(与 globals.css 的 exit 编排对齐)。 */
 const EXIT_MS = 260;
 
+/** 堆叠球落点的独立持久化键(不进 ghostPanelBubbleState:那张表按 ghostId
+ *  归属、由已装清单 reconcile,塞保留键会被当孤儿清掉)。 */
+const STACK_POS_KEY = 'xdt:ghostPanelBubbleStack:v1';
+
+function loadStackPos(): { x: number; y: number } | null {
+  try {
+    const raw = window.localStorage.getItem(STACK_POS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { x?: unknown; y?: unknown };
+    if (!Number.isFinite(parsed?.x) || !Number.isFinite(parsed?.y)) return null;
+    return { x: Math.round(parsed.x as number), y: Math.round(parsed.y as number) };
+  } catch {
+    return null;
+  }
+}
+
+function saveStackPos(x: number, y: number): void {
+  try {
+    window.localStorage.setItem(STACK_POS_KEY, JSON.stringify({ x, y }));
+  } catch {
+    // 持久化失败不拦交互(隐私模式等),内存态照常生效
+  }
+}
+
 /** 视口 clamp(渲染与落点共用;store 里不 clamp,换屏不破坏存值)。 */
 function clampToViewport(x: number, y: number): { x: number; y: number } {
   const maxX = Math.max(EDGE_MARGIN, window.innerWidth - BUBBLE_SIZE - EDGE_MARGIN);
@@ -52,29 +81,31 @@ function clampToViewport(x: number, y: number): { x: number; y: number } {
   };
 }
 
-/** 没拖过的气泡默认位:右下角向上堆(defaultIndex 只数无存储位置的)。 */
+/** 没拖过的气泡默认位:右上角向下堆(defaultIndex 只数无存储位置的;
+ *  2026-07-31 Lizi 定案由右下角改到右上角,TOP_FLOOR 已避开窗口拖动带)。 */
 function defaultPosition(defaultIndex: number): { x: number; y: number } {
   return {
     x: window.innerWidth - BUBBLE_SIZE - EDGE_MARGIN,
-    y: window.innerHeight - BUBBLE_SIZE - EDGE_MARGIN - defaultIndex * (BUBBLE_SIZE + STACK_GAP),
+    y: TOP_FLOOR + defaultIndex * (BUBBLE_SIZE + STACK_GAP),
   };
 }
 
-interface BubbleProps {
-  manifest: GhostManifest;
-  iconDataUrl: string | undefined;
-  /** 渲染基准位(已 clamp)。 */
+/**
+ * 气泡拖拽(单气泡与堆叠球共用):热路径零 React,translate3d 直改 DOM;
+ * 4px 阈值区分点击与拖动;拖后第一次合成 click 由 consumeDraggedClick 吞掉。
+ * blocked = true 时不再受理新的 pointerdown(退场动画期)。
+ */
+function useBubbleDrag({
+  elRef,
+  pos,
+  blocked,
+  onDrop,
+}: {
+  elRef: RefObject<HTMLButtonElement | null>;
   pos: { x: number; y: number };
-}
-
-function Bubble({ manifest, iconDataUrl, pos }: BubbleProps): ReactNode {
-  const { t } = useTranslation();
-  const elRef = useRef<HTMLButtonElement | null>(null);
-  const [imgBroken, setImgBroken] = useState(false);
-  /** 点击后进入"缩没退场"态:播 .ghost-bubble-exit,计时器到点才 restore。 */
-  const [exiting, setExiting] = useState(false);
-  const exitTimerRef = useRef(0);
-  // 拖拽全程 ref,热路径零 React(性能口径见文件头)。
+  blocked: boolean;
+  onDrop: (x: number, y: number) => void;
+}) {
   const dragRef = useRef<{
     pointerId: number;
     startClientX: number;
@@ -94,10 +125,7 @@ function Bubble({ manifest, iconDataUrl, pos }: BubbleProps): ReactNode {
     if (el && !dragRef.current?.dragging) {
       el.style.transform = `translate3d(${pos.x}px, ${pos.y}px, 0)`;
     }
-  }, [pos.x, pos.y]);
-
-  // 卸载时清退场计时器(restore 本身是 store 调用,晚到也无害,但别留悬垂)。
-  useEffect(() => () => window.clearTimeout(exitTimerRef.current), []);
+  }, [elRef, pos.x, pos.y]);
 
   const endDragCleanup = () => {
     document.body.classList.remove('resizing-pane');
@@ -105,7 +133,7 @@ function Bubble({ manifest, iconDataUrl, pos }: BubbleProps): ReactNode {
   };
 
   const onPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
-    if (e.button !== 0 || dragRef.current || exiting) return;
+    if (e.button !== 0 || dragRef.current || blocked) return;
     dragRef.current = {
       pointerId: e.pointerId,
       startClientX: e.clientX,
@@ -152,11 +180,11 @@ function Bubble({ manifest, iconDataUrl, pos }: BubbleProps): ReactNode {
     } catch {
       /* noop */
     }
-    if (!d.dragging) return; // 纯点击:等 onClick 走退场→恢复时序
+    if (!d.dragging) return; // 纯点击:等 onClick 走各自的激活时序
     endDragCleanup();
     draggedRef.current = true; // 吞掉随后的合成 click
     if (persist) {
-      setGhostPanelBubblePosition(manifest.id, d.lastX, d.lastY);
+      onDrop(d.lastX, d.lastY);
     } else {
       // 取消:回滚到拖前基准位
       const el = elRef.current;
@@ -164,11 +192,46 @@ function Bubble({ manifest, iconDataUrl, pos }: BubbleProps): ReactNode {
     }
   };
 
-  const onClick = () => {
+  /** 拖后紧随的合成 click 返回 true(调用方直接吞掉)。 */
+  const consumeDraggedClick = (): boolean => {
     if (draggedRef.current) {
       draggedRef.current = false;
-      return;
+      return true;
     }
+    return false;
+  };
+
+  return { onPointerDown, onPointerMove, finishDrag, consumeDraggedClick };
+}
+
+interface BubbleProps {
+  manifest: GhostManifest;
+  iconDataUrl: string | undefined;
+  /** 渲染基准位(已 clamp)。 */
+  pos: { x: number; y: number };
+  /** 堆叠展开出来的子气泡不可拖(位置由堆叠球锚定,拖了也没地方记)。 */
+  draggable?: boolean;
+}
+
+function Bubble({ manifest, iconDataUrl, pos, draggable = true }: BubbleProps): ReactNode {
+  const { t } = useTranslation();
+  const elRef = useRef<HTMLButtonElement | null>(null);
+  const [imgBroken, setImgBroken] = useState(false);
+  /** 点击后进入"缩没退场"态:播 .ghost-bubble-exit,计时器到点才 restore。 */
+  const [exiting, setExiting] = useState(false);
+  const exitTimerRef = useRef(0);
+  const drag = useBubbleDrag({
+    elRef,
+    pos,
+    blocked: exiting,
+    onDrop: (x, y) => setGhostPanelBubblePosition(manifest.id, x, y),
+  });
+
+  // 卸载时清退场计时器(restore 本身是 store 调用,晚到也无害,但别留悬垂)。
+  useEffect(() => () => window.clearTimeout(exitTimerRef.current), []);
+
+  const onClick = () => {
+    if (drag.consumeDraggedClick()) return;
     if (exiting) return;
     // 展开的"过程感":幽灵先跳走、圆圈再渐隐(共 EXIT_MS),到点才真正恢复
     // 面板(面板侧再接宽度展开,见 ghostPanels.tsx 的 ghost-panel-enter)。
@@ -182,12 +245,17 @@ function Bubble({ manifest, iconDataUrl, pos }: BubbleProps): ReactNode {
       ref={elRef}
       type="button"
       data-testid={`ghost-panel-bubble-${manifest.id}`}
+      data-ghost-bubble-layer
       aria-label={t('ghostPanelBubble.restoreAria', { name })}
       title={t('ghostPanelBubble.restoreAria', { name })}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={() => finishDrag(true)}
-      onPointerCancel={() => finishDrag(false)}
+      {...(draggable
+        ? {
+            onPointerDown: drag.onPointerDown,
+            onPointerMove: drag.onPointerMove,
+            onPointerUp: () => drag.finishDrag(true),
+            onPointerCancel: () => drag.finishDrag(false),
+          }
+        : {})}
       onClick={onClick}
       // 按钮本体只管位置(translate3d)与命中区,不带视觉——圆圈(描边/底色/
       // 阴影)与幽灵分层,动画各编各的(见 globals.css 悬浮球一节)。
@@ -221,12 +289,73 @@ function Bubble({ manifest, iconDataUrl, pos }: BubbleProps): ReactNode {
   );
 }
 
+/** 堆叠球:多个最小化面板的合并入口(Ghost 脸 + 数量角标),点击切换展开。 */
+function StackBubble({
+  count,
+  pos,
+  expanded,
+  onToggle,
+  onDrop,
+}: {
+  count: number;
+  pos: { x: number; y: number };
+  expanded: boolean;
+  onToggle: () => void;
+  onDrop: (x: number, y: number) => void;
+}): ReactNode {
+  const { t } = useTranslation();
+  const elRef = useRef<HTMLButtonElement | null>(null);
+  const drag = useBubbleDrag({ elRef, pos, blocked: false, onDrop });
+  const label = expanded
+    ? t('ghostPanelBubble.stackCollapseAria')
+    : t('ghostPanelBubble.stackExpandAria', { count });
+  return (
+    <button
+      ref={elRef}
+      type="button"
+      data-testid="ghost-panel-bubble-stack"
+      data-ghost-bubble-layer
+      aria-label={label}
+      title={label}
+      aria-expanded={expanded}
+      onPointerDown={drag.onPointerDown}
+      onPointerMove={drag.onPointerMove}
+      onPointerUp={() => drag.finishDrag(true)}
+      onPointerCancel={() => drag.finishDrag(false)}
+      onClick={() => {
+        if (drag.consumeDraggedClick()) return;
+        onToggle();
+      }}
+      className="ghost-bubble ghost-bubble-enter group fixed left-0 top-0 z-[9900] flex h-12 w-12 cursor-pointer items-center justify-center will-change-transform"
+      style={{ transform: `translate3d(${pos.x}px, ${pos.y}px, 0)` }}
+    >
+      <span
+        aria-hidden
+        className="ghost-bubble-circle absolute inset-0 rounded-full border border-[var(--text-tertiary)] bg-[var(--surface-elevated)] shadow-xl transition-colors group-hover:bg-[var(--surface-chip)]"
+      />
+      <span className="relative flex items-center justify-center">
+        <Ghost size={22} className="text-[var(--text-primary)]" />
+      </span>
+      {/* 数量角标:语义 token 灰阶,不引新强调色(与图钉同纪律)。 */}
+      <span
+        aria-hidden
+        className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full border border-[var(--text-tertiary)] bg-[var(--surface-chip)] px-1 text-[10px] font-medium leading-none text-[var(--text-secondary)]"
+      >
+        {count}
+      </span>
+    </button>
+  );
+}
+
 /** 气泡层:空名单不渲染;窗口缩放防抖重渲以重算 clamp/默认位。 */
 export function GhostPanelBubbleLayer(): ReactNode {
   const ghosts = useInstalledGhosts();
   const bubbles = useGhostPanelBubbleState();
   // 订阅抽离状态:detach 期间气泡隐藏,合并回来自动复现。
   useGhostPanelWindowsState();
+  // 堆叠展开态(纯运行时,不落盘;落盘会让"重启后自动摊开一排"变成惊吓)。
+  const [expanded, setExpanded] = useState(false);
+  const [stackPos, setStackPos] = useState<{ x: number; y: number } | null>(() => loadStackPos());
 
   const [, setResizeTick] = useState(0);
   useEffect(() => {
@@ -250,8 +379,70 @@ export function GhostPanelBubbleLayer(): ReactNode {
       bubbles[g.manifest.id]?.minimized === true &&
       !isGhostPanelKindDetached(ghostPanelKind(g.manifest.id)),
   );
+  const stacked = minimized.length >= 2;
+
+  // 掉出堆叠模式(恢复到 ≤1 个)时收拢,防下次进入堆叠直接摊开一排。
+  useEffect(() => {
+    if (!stacked) setExpanded(false);
+  }, [stacked]);
+
+  // 展开期间点空白处收拢(气泡都带 data-ghost-bubble-layer;capture 期判定,
+  // 不干扰气泡自身的点击/拖拽)。
+  useEffect(() => {
+    if (!stacked || !expanded) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target;
+      if (target instanceof Element && target.closest('[data-ghost-bubble-layer]')) return;
+      setExpanded(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onPointerDown, true);
+  }, [stacked, expanded]);
+
   if (minimized.length === 0) return null;
 
+  // ── 堆叠模式(≥2):一枚堆叠球,展开时向下(不够向上)纵向排子气泡 ──
+  if (stacked) {
+    const anchor = clampToViewport(
+      stackPos?.x ?? defaultPosition(0).x,
+      stackPos?.y ?? defaultPosition(0).y,
+    );
+    const step = BUBBLE_SIZE + STACK_GAP;
+    // 展开方向:下方放得下全部子气泡就向下,否则向上(两头都放不下时 clamp
+    // 兜底,极小窗口下允许压边,不做更复杂的绕排)。
+    const fitsDown =
+      anchor.y + step * minimized.length + BUBBLE_SIZE + EDGE_MARGIN <= window.innerHeight;
+    const childPos = (index: number) =>
+      clampToViewport(anchor.x, anchor.y + (fitsDown ? 1 : -1) * step * (index + 1));
+    return createPortal(
+      <>
+        <StackBubble
+          count={minimized.length}
+          pos={anchor}
+          expanded={expanded}
+          onToggle={() => setExpanded((v) => !v)}
+          onDrop={(x, y) => {
+            saveStackPos(x, y);
+            setStackPos({ x, y });
+          }}
+        />
+        {expanded
+          ? minimized.map((g, index) => (
+              <Bubble
+                key={g.manifest.id}
+                manifest={g.manifest}
+                iconDataUrl={g.iconDataUrl}
+                pos={childPos(index)}
+                draggable={false}
+              />
+            ))
+          : null}
+      </>,
+      document.body,
+    );
+  }
+
+  // ── 单气泡模式(恰 1 个):沿用原语义(自己的存储位/默认位,可拖)──
   let defaultIndex = 0;
   const items = minimized.map((g) => {
     const entry = bubbles[g.manifest.id];

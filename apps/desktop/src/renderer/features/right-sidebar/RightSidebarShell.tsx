@@ -64,6 +64,8 @@ import type { TabKindHostContext, TabKindId, TabState } from './types';
 import './plugins';
 import { initRsbBrowserBridge } from './lib/rsbBrowserBridge';
 import { initPopupRouter, setPopupFallbackSession } from './lib/popupRouter';
+import { requestRightSidebarVisibility } from './lib/sidebarCommands';
+import { readPanelCollapsed } from '@/layout/collapsePrefs';
 
 const log = createLogger('rightSidebar.shell');
 /**
@@ -229,6 +231,11 @@ export function RightSidebarShell({
   //     "有 pill 无内容"的空面板。
   //  3) 粘性激活:上一会话正看着某钉住面板 → 切会话后把同一面板带到前台
   //     (每个 sessionId 只做一次,用户随后在本会话内的切换不被打扰)。
+  //     「带到前台」包括把收着的侧栏打开:目标会话侧栏收着(新会话默认收)时,
+  //     只激活 tab 用户什么都看不见,钉住的"跨对话保留"承诺就断了。仅在
+  //     上一会话侧栏是展开的(用户确实正看着)时才请求展开;上一会话本来就
+  //     收着 → 用户没在看面板,切会话不弹窗打扰。detached 形态下该请求走
+  //     userInitiated:false 语义,不会把子窗口抢到前台。
   // 插件被停用时 kind 未注册 → 跳过补挂;已存在的页签保留(落 Placeholder,
   // 与"停用隐藏、重启用复活"的既有语义一致)。
   const stickyAppliedSessionRef = useRef<string | null>(null);
@@ -265,12 +272,21 @@ export function RightSidebarShell({
       if (cancelled) return;
       // 3) 粘性激活 + 空激活位兜底
       const applySticky = stickyAppliedSessionRef.current !== sessionId;
+      const prevSessionId = stickyAppliedSessionRef.current;
       stickyAppliedSessionRef.current = sessionId;
       const now = getBucket(sessionId);
       let target: string | null = null;
       const stickyKind = applySticky ? getLastFocusedPinnedGhostKind() : null;
       if (stickyKind) {
         target = now.tabs.find((t) => t.kind === stickyKind)?.id ?? null;
+        if (
+          target !== null &&
+          prevSessionId !== null && // 首帧(启动进第一个会话)不算"切换",不弹
+          !readPanelCollapsed('right-tabs', { sessionId: prevSessionId }, true) &&
+          readPanelCollapsed('right-tabs', { sessionId }, true)
+        ) {
+          requestRightSidebarVisibility('open', { sessionId, userInitiated: false });
+        }
       }
       if (!target && now.activeTabId === null && now.tabs.length > 0) {
         target = now.tabs[0].id;

@@ -13,6 +13,25 @@ import { signGhostPackage } from '../ghostSignature';
 /** 测试用发布者密钥对(每次进程一对,签名/验签都走真实 ed25519)。 */
 const { privateKey: publisherKey } = crypto.generateKeyPairSync('ed25519');
 
+// Windows 未开启开发者模式且进程无特权时创建 symlink 会 EPERM。精确探测本用例
+// 需要的目录/文件两种链接能力,不可用时只跳过 symlink 专属覆盖。
+const canSymlink = (() => {
+  const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-ghost-export-symlink-probe-'));
+  try {
+    const targetDir = path.join(probeDir, 'target-dir');
+    const targetFile = path.join(targetDir, 'target.txt');
+    fs.mkdirSync(targetDir);
+    fs.writeFileSync(targetFile, 'probe');
+    fs.symlinkSync(targetDir, path.join(probeDir, 'linked-dir'));
+    fs.symlinkSync(targetFile, path.join(probeDir, 'linked-file'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(probeDir, { recursive: true, force: true });
+  }
+})();
+
 /** 每个用例独立的临时安装目录(规则 23:测试路径一律 os.tmpdir)。 */
 let workDir: string;
 let ghostDir: string;
@@ -298,7 +317,7 @@ describe('exportGhostPackage', () => {
     expect(signedZip.files['templates/empty/']?.dir).toBe(true);
   });
 
-  it('symlink 条目不跟随,不打进导出包', async () => {
+  it.skipIf(!canSymlink)('symlink 条目不跟随,不打进导出包', async () => {
     const outside = path.join(workDir, 'outside-secret');
     await fs.promises.mkdir(outside);
     await fs.promises.writeFile(path.join(outside, 'secret.txt'), 'secret');

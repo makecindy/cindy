@@ -2,13 +2,19 @@
  * Host-rendered errand (派活取件) preferences for a Plugin that declares
  * `agent.errand`. Settings 详情与 Plugin 详情共用(同 CindyCapabilityPrefs)。
  *
- * 配置语义(与 main 侧 errandPrefsStore 同一契约):
- * - 全部字段缺省 = 跟随「新建草稿」偏好;agent 跟随默认时,模型/强度/Fast
- *   一并跟随(锁定不可单独配),先选定 agent 才谈得上给它挑模型;
- * - 权限档只有 只读(默认)/可改文件/自动 三档——「完全不设防」在协议上
- *   就不存在(2026-07-31 定案),这里画不出来也传不上去;
- * - 工作目录缺省是插件专属文件夹,选真实项目目录必须经系统选文件夹窗口
- *   (用户亲手选中即授权,与 pick 槽同一哲学)。
+ * 选择器复用草稿页同一套组件(2026-07-31 Lizi 要求,不另搭下拉):
+ * - Agent = VendorSegmentedSwitcher(cc/codex 分段);
+ * - 模型/推理强度/Fast/供应商 = ModelSelector 的 field 形态(与 IM 默认
+ *   配置、Hook 工作区偏好同款嵌法);
+ * - 动手权限 = PermissionSelector(权限下拉全仓只此一份,不得私搭),
+ *   errand 不允许的档位经 disabledModes 灰置并带原因。
+ *
+ * 「跟随默认」语义(与 main 侧 errandPrefsStore 同一契约):配置里没写的
+ * 字段跟随「新建草稿」偏好。卡片默认展示草稿当下的选择(实时跟随),用户
+ * 一旦点选即钉住;「恢复跟随默认」一键清空回到跟随态。权限档与工作目录
+ * 是 errand 自己的事,不参与跟随:权限缺省 plan(只读,协议层不存在
+ * bypassPermissions),目录缺省插件专属文件夹,选真实项目必须经系统窗口
+ * 亲选(与 pick 槽同一哲学)。
  */
 
 import { useCallback, useState, type ReactNode } from 'react';
@@ -17,13 +23,18 @@ import { Bot, FolderOpen, X } from 'lucide-react';
 
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import { useAgentCapabilities, type AgentKind } from '@/hooks/useAgentCapabilities';
+import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
+import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSwitcher';
+import {
+  getEffortForModel,
+  getFastModeForModel,
+  getPersistedVendorModel,
+  useNewMakerDraft,
+} from '@/state/newMakerDraft';
+import type { Effort } from '@/lib/userPreferences.types';
 
-/** 跟随默认在 select 里的哨兵值(配置里"没有这项"= 跟随默认)。 */
-const FOLLOW_DEFAULT_VALUE = '__default__';
-
-const PERMISSION_MODES = ['plan', 'acceptEdits', 'auto'] as const;
-type ErrandPermissionMode = (typeof PERMISSION_MODES)[number];
+const PERMISSION_ALLOWED = new Set(['plan', 'acceptEdits', 'auto']);
 
 /** errand 只收 worker 同集合的思考档(minimal 不收,与 main 侧存储层一致)。 */
 const ERRAND_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
@@ -34,14 +45,8 @@ interface ErrandConfig {
   effort?: string;
   fastMode?: boolean;
   providerId?: string;
-  permissionMode?: ErrandPermissionMode;
+  permissionMode?: 'plan' | 'acceptEdits' | 'auto';
   workingDir?: string;
-}
-
-function vendorOf(config: ErrandConfig): AgentKind | null {
-  if (config.agentKind === 'cc') return 'claude-code';
-  if (config.agentKind === 'codex') return 'codex';
-  return null;
 }
 
 export function GhostErrandPrefs({
@@ -56,9 +61,9 @@ export function GhostErrandPrefs({
   const [config, setConfig] = useState<ErrandConfig>(
     () => (window.electronAPI.ghosts.errandPrefsSync(ghostId).config ?? {}) as ErrandConfig,
   );
-  const vendor = vendorOf(config);
-  // agent 跟随默认时不拉能力表(hook 收 null 即挂起),模型/强度/Fast 行锁定。
-  const { capabilities } = useAgentCapabilities(vendor);
+  // 跟随态的展示值实时来自草稿偏好(useNewMakerDraft 订阅变更):用户在
+  // 草稿页换了模型,这里的「跟随默认」立刻显示新值——所见即将用。
+  const draft = useNewMakerDraft();
 
   const save = useCallback(
     async (next: ErrandConfig) => {
@@ -78,50 +83,22 @@ export function GhostErrandPrefs({
     [config, ghostId, t],
   );
 
-  const labelCls = cn(
-    'min-w-0 text-[var(--text-secondary)]',
-    appearance === 'plugin' ? 'text-13 leading-5' : 'text-12',
-  );
-  const selectCls = cn(
-    'h-8 w-[300px] max-w-[60%] min-w-0 shrink appearance-none rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] py-0 pl-3 pr-8 text-[var(--settings-input-text)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)] disabled:opacity-50',
-    appearance === 'plugin' ? 'text-13 leading-5' : 'text-12',
-  );
-
-  // agent 显式选定后才有可配的模型清单;模型选定后强度跟着该模型的支持集走。
-  const models = (capabilities?.availableModels ?? []).filter((m) => m.defaultEnabled !== false);
-
-  /**
-   * 下拉里每一项的文案。原来只画 displayName,踩了两个坑:
-   *  1. **折扣版与官方版 displayName 同名**(见 ModelDescriptor.group 的注释),
-   *     于是列表里出现好几行一模一样的字,用户根本选不中想要的那个;
-   *  2. 主机自己的模型选择器每行都带思考强度档(如「Opus 5 超高」),这里没有,
-   *     两处看起来不像同一个产品。
-   * `<option>` 里画不了徽章,所以把这些信息拼进文字:名字 · 强度 · 折扣。
-   */
-  const modelOptionLabel = (m: (typeof models)[number]): string => {
-    const parts = [m.displayName];
-    const effort = m.defaultEffort;
-    if (effort) {
-      const effortName =
-        m.effortDisplayNames?.[effort] ??
-        capabilities?.effortLevels.find((e) => e.id === effort)?.displayName ??
-        effort;
-      parts.push(effortName);
-    }
-    // 判别与 ModelSelector 保持一致:目录分组优先,回落 id 前缀。
-    if (m.group === 'gpt-budget' || m.id.startsWith('codex/')) {
-      parts.push(t('newChat.modelSelector.meta.budgetDiscount'));
-    }
-    return parts.join(' · ');
-  };
-  const selectedModel = config.model ? models.find((m) => m.id === config.model) : undefined;
-  const effortOptions = (
-    selectedModel ? selectedModel.efforts : (capabilities?.effortLevels ?? []).map((e) => e.id)
-  ).filter((e) => ERRAND_EFFORTS.has(e));
-  const fastSupported =
-    vendor !== null &&
-    (capabilities?.hasFastMode ?? false) &&
-    (selectedModel ? selectedModel.supportsFastMode !== false : true);
+  // 展示口径:钉住的值优先,没钉的跟随草稿(vendor → 该 vendor 的草稿模型
+  // → 该模型的 per-model effort/fast 记忆)。
+  const followVendor = draft.vendor === 'codex' ? ('codex' as const) : ('cc' as const);
+  const vendor = config.agentKind ?? followVendor;
+  const shownModel = config.model ?? getPersistedVendorModel(vendor);
+  const shownEffort = (config.effort ??
+    getEffortForModel(shownModel) ??
+    draft.lastByVendor[vendor]?.effort ??
+    'high') as Effort;
+  const shownFast = config.fastMode ?? getFastModeForModel(shownModel);
+  const pinned =
+    config.agentKind !== undefined ||
+    config.model !== undefined ||
+    config.effort !== undefined ||
+    config.fastMode !== undefined ||
+    config.providerId !== undefined;
 
   const pickWorkingDir = async (): Promise<void> => {
     const result = await window.electronAPI.showOpenDirectoryDialog();
@@ -130,6 +107,10 @@ export function GhostErrandPrefs({
     }
   };
 
+  const labelCls = cn(
+    'min-w-0 shrink-0 text-[var(--text-secondary)]',
+    appearance === 'plugin' ? 'text-13 leading-5' : 'text-12',
+  );
   const row = (key: string, control: ReactNode): ReactNode => (
     <div className="flex min-w-0 items-center justify-between gap-4">
       <span className={labelCls}>{t(`settings.ghosts.detail.errandPrefs.${key}`)}</span>
@@ -156,6 +137,28 @@ export function GhostErrandPrefs({
         >
           {t('settings.ghosts.detail.errandPrefs.title')}
         </p>
+        {pinned ? (
+          <button
+            type="button"
+            onClick={() =>
+              void save({
+                ...config,
+                agentKind: undefined,
+                model: undefined,
+                effort: undefined,
+                fastMode: undefined,
+                providerId: undefined,
+              })
+            }
+            className="ml-auto text-12 text-[var(--text-tertiary)] underline-offset-2 hover:text-[var(--text-secondary)] hover:underline"
+          >
+            {t('settings.ghosts.detail.errandPrefs.resetFollow')}
+          </button>
+        ) : (
+          <span className="ml-auto text-12 text-[var(--text-tertiary)]">
+            {t('settings.ghosts.detail.errandPrefs.followDefault')}
+          </span>
+        )}
       </div>
       <p
         className={cn(
@@ -168,125 +171,84 @@ export function GhostErrandPrefs({
 
       {row(
         'agent',
-        <select
-          value={config.agentKind ?? FOLLOW_DEFAULT_VALUE}
-          onChange={(event) => {
-            const v = event.target.value;
-            // 换 agent 连带清掉模型/强度/Fast(跨 agent 的模型 id 互不通用)。
+        <VendorSegmentedSwitcher
+          value={vendor}
+          dense
+          width={200}
+          ariaLabel={t('settings.ghosts.detail.errandPrefs.agent')}
+          onChange={(next) => {
+            if (next === vendor && config.agentKind !== undefined) return;
+            // 换/钉 agent 连带清掉模型组(跨 agent 的模型 id 互不通用);
+            // 点击即钉住——分段控件没有"半跟随"态,想回跟随用右上角一键。
             void save({
               ...config,
-              agentKind: v === FOLLOW_DEFAULT_VALUE ? undefined : (v as 'cc' | 'codex'),
+              agentKind: next === 'codex' ? 'codex' : 'cc',
               model: undefined,
               effort: undefined,
               fastMode: undefined,
+              providerId: undefined,
             });
           }}
-          aria-label={t('settings.ghosts.detail.errandPrefs.agent')}
-          className={selectCls}
-        >
-          <option value={FOLLOW_DEFAULT_VALUE}>
-            {t('settings.ghosts.detail.errandPrefs.followDefault')}
-          </option>
-          <option value="cc">Claude Code</option>
-          <option value="codex">Codex</option>
-        </select>,
+        />,
       )}
 
       {row(
         'model',
-        <select
-          value={config.model ?? FOLLOW_DEFAULT_VALUE}
-          disabled={vendor === null || models.length === 0}
-          onChange={(event) => {
-            const v = event.target.value;
-            void save({
-              ...config,
-              model: v === FOLLOW_DEFAULT_VALUE ? undefined : v,
-              // 模型换了,旧强度可能不在新模型支持集里,一并回跟随。
-              effort: undefined,
-            });
-          }}
-          aria-label={t('settings.ghosts.detail.errandPrefs.model')}
-          className={selectCls}
-        >
-          <option value={FOLLOW_DEFAULT_VALUE}>
-            {t('settings.ghosts.detail.errandPrefs.followDefault')}
-          </option>
-          {models.map((m) => (
-            <option key={m.id} value={m.id}>
-              {modelOptionLabel(m)}
-            </option>
-          ))}
-        </select>,
+        <div className="min-w-0 max-w-[60%]">
+          <ModelSelector
+            modelId={shownModel}
+            effort={shownEffort}
+            fastMode={shownFast}
+            vendorKey={vendor}
+            currentProviderId={config.providerId ?? null}
+            triggerVariant="field"
+            popoverSide="bottom"
+            ariaContext={t('settings.ghosts.detail.errandPrefs.model')}
+            onModelChange={(modelId) =>
+              // 选模型即整组钉住(agent 一起钉,防草稿随后换 vendor 让模型悬空)。
+              void save({ ...config, agentKind: vendor, model: modelId, effort: undefined })
+            }
+            onEffortChange={(effort) => {
+              if (!ERRAND_EFFORTS.has(effort)) return;
+              void save({ ...config, agentKind: vendor, model: shownModel, effort });
+            }}
+            onFastModeChange={(enabled) =>
+              void save({ ...config, agentKind: vendor, model: shownModel, fastMode: enabled })
+            }
+            onProviderChange={(providerId, modelId) =>
+              void save({
+                ...config,
+                agentKind: vendor,
+                model: modelId ?? shownModel,
+                providerId: providerId ?? undefined,
+              })
+            }
+          />
+        </div>,
       )}
-
-      {row(
-        'effort',
-        <select
-          value={config.effort ?? FOLLOW_DEFAULT_VALUE}
-          disabled={vendor === null || effortOptions.length === 0}
-          onChange={(event) => {
-            const v = event.target.value;
-            void save({ ...config, effort: v === FOLLOW_DEFAULT_VALUE ? undefined : v });
-          }}
-          aria-label={t('settings.ghosts.detail.errandPrefs.effort')}
-          className={selectCls}
-        >
-          <option value={FOLLOW_DEFAULT_VALUE}>
-            {t('settings.ghosts.detail.errandPrefs.followDefault')}
-          </option>
-          {effortOptions.map((effort) => (
-            <option key={effort} value={effort}>
-              {capabilities?.effortLevels.find((e) => e.id === effort)?.displayName ?? effort}
-            </option>
-          ))}
-        </select>,
-      )}
-
-      {fastSupported
-        ? row(
-            'fast',
-            <select
-              value={
-                config.fastMode === undefined ? FOLLOW_DEFAULT_VALUE : config.fastMode ? 'on' : 'off'
-              }
-              onChange={(event) => {
-                const v = event.target.value;
-                void save({
-                  ...config,
-                  fastMode: v === FOLLOW_DEFAULT_VALUE ? undefined : v === 'on',
-                });
-              }}
-              aria-label={t('settings.ghosts.detail.errandPrefs.fast')}
-              className={selectCls}
-            >
-              <option value={FOLLOW_DEFAULT_VALUE}>
-                {t('settings.ghosts.detail.errandPrefs.followDefault')}
-              </option>
-              <option value="on">{t('settings.ghosts.detail.errandPrefs.fastOn')}</option>
-              <option value="off">{t('settings.ghosts.detail.errandPrefs.fastOff')}</option>
-            </select>,
-          )
-        : null}
 
       {row(
         'permission',
-        <select
-          value={config.permissionMode ?? 'plan'}
-          onChange={(event) => {
-            const v = event.target.value as ErrandPermissionMode;
-            // 'plan' 是缺省档:选回它就清掉显式配置(规则 20:覆盖与默认分开记)。
-            void save({ ...config, permissionMode: v === 'plan' ? undefined : v });
+        <PermissionSelector
+          permissionMode={config.permissionMode ?? 'plan'}
+          vendorKey={vendor}
+          triggerVariant="field"
+          ariaContext={t('settings.ghosts.detail.errandPrefs.permission')}
+          disabledModes={{
+            ask: t('settings.ghosts.detail.errandPrefs.permissionDisabled'),
+            default: t('settings.ghosts.detail.errandPrefs.permissionDisabled'),
+            bypassPermissions: t('settings.ghosts.detail.errandPrefs.permissionDisabled'),
           }}
-          aria-label={t('settings.ghosts.detail.errandPrefs.permission')}
-          className={selectCls}
-        >
-          {PERMISSION_MODES.map((mode) => (
-            <option key={mode} value={mode}>
-              {t(`settings.ghosts.detail.errandPrefs.permissionMode.${mode}`)}
-            </option>
-          ))}
-        </select>,
+          onPermissionModeChange={(mode) => {
+            // disabledModes 已灰置非法档;这里再执一道白名单(UI 不是安全边界,
+            // 存储层与协议层各有一道,三道口径一致)。
+            if (!PERMISSION_ALLOWED.has(mode)) return;
+            void save({
+              ...config,
+              permissionMode: mode === 'plan' ? undefined : (mode as 'acceptEdits' | 'auto'),
+            });
+          }}
+        />,
       )}
 
       {row(

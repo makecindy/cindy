@@ -53,6 +53,7 @@ afterEach(() => {
   __resetGhostPanelBubbleStateForTest();
   __resetGhostPanelWindowsStateForTest();
   __resetInstalledGhostsStoreForTest();
+  window.localStorage.removeItem('xdt:ghostPanelBubbleStack:v1');
   delete (window as unknown as { electronAPI?: unknown }).electronAPI;
 });
 
@@ -114,5 +115,72 @@ describe('GhostPanelBubbleLayer', () => {
     minimizeGhostPanel('a');
     render(<GhostPanelBubbleLayer />);
     expect(screen.queryByTestId('ghost-panel-bubble-a')).toBeNull();
+  });
+
+  it('≥2 个最小化 → 合并成一枚堆叠球(带数量),不再各画各的', () => {
+    stubGhostsBridge([ghost('a'), ghost('b')]);
+    minimizeGhostPanel('a');
+    minimizeGhostPanel('b');
+    render(<GhostPanelBubbleLayer />);
+    const stack = screen.getByTestId('ghost-panel-bubble-stack');
+    expect(stack).toBeTruthy();
+    expect(stack.textContent).toContain('2');
+    expect(screen.queryByTestId('ghost-panel-bubble-a')).toBeNull();
+    expect(screen.queryByTestId('ghost-panel-bubble-b')).toBeNull();
+  });
+
+  it('点堆叠球纵向展开子气泡;点子气泡恢复该插件,只剩 1 个时回到单气泡形态', async () => {
+    stubGhostsBridge([ghost('a'), ghost('b')]);
+    minimizeGhostPanel('a');
+    minimizeGhostPanel('b');
+    render(<GhostPanelBubbleLayer />);
+    fireEvent.click(screen.getByTestId('ghost-panel-bubble-stack'));
+    const childA = screen.getByTestId('ghost-panel-bubble-a');
+    const childB = screen.getByTestId('ghost-panel-bubble-b');
+    expect(childA).toBeTruthy();
+    expect(childB).toBeTruthy();
+    fireEvent.click(childA);
+    await waitFor(() => {
+      expect(getGhostPanelBubbleState().a?.minimized).not.toBe(true);
+    });
+    // 只剩 b:堆叠球消失,b 以单气泡形态出现(自己的位置语义)。
+    await waitFor(() => {
+      expect(screen.queryByTestId('ghost-panel-bubble-stack')).toBeNull();
+    });
+    expect(screen.getByTestId('ghost-panel-bubble-b')).toBeTruthy();
+  });
+
+  it('再点堆叠球收拢子气泡;点空白处也收拢', () => {
+    stubGhostsBridge([ghost('a'), ghost('b')]);
+    minimizeGhostPanel('a');
+    minimizeGhostPanel('b');
+    render(<GhostPanelBubbleLayer />);
+    const stack = screen.getByTestId('ghost-panel-bubble-stack');
+    fireEvent.click(stack);
+    expect(screen.getByTestId('ghost-panel-bubble-a')).toBeTruthy();
+    fireEvent.click(stack);
+    expect(screen.queryByTestId('ghost-panel-bubble-a')).toBeNull();
+    fireEvent.click(stack);
+    expect(screen.getByTestId('ghost-panel-bubble-a')).toBeTruthy();
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByTestId('ghost-panel-bubble-a')).toBeNull();
+  });
+
+  it('拖动堆叠球:落点持久化到独立键、随后的 click 被吞(不展开)', () => {
+    stubGhostsBridge([ghost('a'), ghost('b')]);
+    minimizeGhostPanel('a');
+    minimizeGhostPanel('b');
+    render(<GhostPanelBubbleLayer />);
+    const stack = screen.getByTestId('ghost-panel-bubble-stack');
+    fireEvent.pointerDown(stack, { button: 0, pointerId: 1, clientX: 500, clientY: 500 });
+    fireEvent.pointerMove(stack, { pointerId: 1, clientX: 420, clientY: 430 });
+    fireEvent.pointerUp(stack, { pointerId: 1, clientX: 420, clientY: 430 });
+    fireEvent.click(stack);
+    expect(screen.queryByTestId('ghost-panel-bubble-a')).toBeNull(); // 拖后 click 被吞
+    const raw = window.localStorage.getItem('xdt:ghostPanelBubbleStack:v1');
+    expect(raw).toBeTruthy();
+    const parsed = JSON.parse(raw as string) as { x: number; y: number };
+    expect(Number.isFinite(parsed.x) && Number.isFinite(parsed.y)).toBe(true);
+    expect(document.body.classList.contains('resizing-pane')).toBe(false);
   });
 });

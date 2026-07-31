@@ -123,7 +123,7 @@
       "personalization": "个性化",
       "chipMetrics": "用量指示器",
       "memory": "记忆",
-      "subagentModels": "Subagent 模型",
+      "subagentModels": "Subagent",
       "compaction": "上下文压缩",
       "terminalShell": "默认终端 shell",
       "linkOpen": "链接打开方式",
@@ -1990,12 +1990,30 @@
       }
     },
     "subagentModels": {
-      "title": "Subagent 模型",
-      "description": "分别设置 Claude Code 和 Codex 执行子任务时使用的默认模型。设置按入口生效，不会为每个模型单独保存。",
+      "title": "Subagent",
+      "description": "分别设置 Claude Code 和 Codex 执行子任务时使用的默认模型，并为 Codex Subagent 配置运行护栏。设置按入口生效，不会为每个模型单独保存。",
       "unspecified": "不指定（跟随原逻辑）",
-      "codexUnavailable": "当前 Codex 版本暂不支持安全覆盖",
-      "hint": "可选模型取决于已连接的模型来源；留空表示使用 Agent 原本的默认设置。Claude Code 的修改从新建的 Agent 会话开始生效，Codex 当前版本暂不支持覆盖 Subagent 模型。",
-      "saveFailed": "保存 Subagent 模型失败"
+      "hint": "可选模型取决于已连接的模型来源；留空表示使用 Agent 原本的默认设置。Claude Code 的修改从新建的 Agent 会话开始生效；Codex 的修改在空闲时立即重启生效，有任务运行时会在本地 Codex 会话全部空闲后自动应用。",
+      "codexV2ModelHint": "Subagent 默认模型必须是 Codex 自身模型目录内的模型，目录外的模型（如经兼容桥接入的第三方模型）会被 Codex 拒绝；Sol / Terra（Multi-Agent V2）进一步只接受 V2 目录模型（当前为 gpt-5.6-sol 与 gpt-5.6-terra），旧版（V1）无 V2 限制。",
+      "saveFailed": "保存 Subagent 设置失败",
+      "guardrails": {
+        "title": "Codex Subagent 护栏",
+        "enableHint": "允许 Codex 在执行任务时创建一次性 Subagent。关闭后对旧版（V1）和 Sol / Terra（V2）都生效。",
+        "enableAria": "允许 Codex 使用 Subagent",
+        "concurrencyLabel": "Subagent 并发上限",
+        "concurrencyHint": "同时运行的 Subagent 数量上限。每个 Subagent 都会消耗模型配额，调低更省；Ultra 档位下并发达到 8 时 Codex 会发出用量警告。",
+        "concurrencyFollowDefault": "跟随 Codex 默认（旧版 V1 为 6，Sol / Terra 为 3）",
+        "concurrencyAria": "调整 Codex Subagent 并发上限",
+        "concurrencyCustomAria": "自定义 Codex Subagent 并发上限",
+        "nestedLabel": "允许 Subagent 再创建 Subagent",
+        "nestedHint": "仅旧版 Codex Multi-Agent（V1）生效，Sol / Terra（V2）会忽略此设置。",
+        "nestedAria": "允许 Subagent 再创建 Subagent",
+        "localOnlyHint": "以上护栏仅对本机运行的 Codex 生效，SSH 远程连接的 Codex 不受影响。"
+      },
+      "toast": {
+        "saved": "Subagent 设置已保存",
+        "deferredSuffix": " — 运行中的 Codex 对话将在当前任务结束后应用"
+      }
     },
     "compaction": {
       "title": "上下文压缩",
@@ -3031,16 +3049,9 @@
           "desc": "这个插件把任务交给 Cindy Agent 时用哪套配置干活。不配就跟随你新建草稿时的选择；帮工默认只能看不能改，工作目录默认是插件专属文件夹。",
           "agent": "Agent",
           "model": "模型",
-          "effort": "推理强度",
-          "fast": "Fast 模式",
-          "fastOn": "开",
-          "fastOff": "关",
           "permission": "动手权限",
-          "permissionMode": {
-            "plan": "只读(默认)：只能看和想，不能改东西",
-            "acceptEdits": "可改文件：允许修改工作目录里的文件",
-            "auto": "自动：工作目录内的常规操作不再逐次询问"
-          },
+          "permissionDisabled": "派活时不提供这一档",
+          "resetFollow": "恢复跟随默认",
           "workdir": "工作目录",
           "workdirDefault": "插件专属文件夹(默认)",
           "workdirPick": "选择…",
@@ -3571,6 +3582,7 @@
     },
     "dailyLimitLabel": "今日 {{spend}}/{{limit}}",
     "monthlyLimitLabel": "本周期 {{spend}}/{{limit}}",
+    "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "本对话 {{cost}}",
     "codex": {
       "waiting": "Codex --",
@@ -3615,6 +3627,7 @@
     "tooltip": {
       "todayUsedSoftLimit": "今日已用 ${{today}} / 软限额 ${{limit}} ({{pct}}%)",
       "sessionUsed": "本对话已用 {{cost}}",
+      "creditUsed": "账号已用 {{used}} · 总额 {{total}}",
       "monthlyUnavailable": "⚠️ 月度配额暂时不可用",
       "dailyUnavailable": "⚠️ 今日用量明细暂时不可用",
       "softLimitFormula": "软限额口径：月度配额 ÷ 30 × {{factor}}",
@@ -3705,14 +3718,24 @@
     "maximizeAria": "撑满内容区",
     "restoreAria": "还原面板大小",
     "detachAria": "在独立窗口中打开",
-    "minimizeAria": "最小化为浮动气泡"
+    "minimizeAria": "最小化为浮动气泡",
+    "closeAria": "关闭面板并停用插件"
+  },
+  "ghostPanel": {
+    "disableConfirm": {
+      "title": "停用「{{name}}」？",
+      "body": "关闭这个面板会停用整个插件，它的面板和能力都会暂停。之后可以随时在侧边栏「插件」里重新开启。",
+      "confirm": "停用"
+    }
   },
   "ghostPanelWindow": {
     "mergeBack": "合并回主窗口",
     "unavailable": "该插件面板当前不可用"
   },
   "ghostPanelBubble": {
-    "restoreAria": "恢复 {{name}} 面板"
+    "restoreAria": "恢复 {{name}} 面板",
+    "stackExpandAria": "已收起 {{count}} 个插件面板，点击展开",
+    "stackCollapseAria": "收拢插件面板列表"
   },
   "rightSidebar": {
     "ariaLabel": "右侧边栏",
@@ -7679,6 +7702,7 @@
     "menuAria": "操作菜单",
     "tooltipEmpty": "更多操作",
     "tooltipCount": "{{count}} 个附加引用目录",
+    "addFiles": "添加文件、图片或视频…",
     "pluginsTitle": "已安装的插件",
     "pluginDisabled": "未生效",
     "pluginNoCommand": "不可直接使用",

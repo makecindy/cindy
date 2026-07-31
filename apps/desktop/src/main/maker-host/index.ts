@@ -161,6 +161,8 @@ import {
 } from './remote-codex-mcp-recovery.js';
 import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../mcp-integrations/codexBuiltinToolPolicy.js';
 import { buildCodexProxySpawnArgs, CODEX_OPENAI_COMPACT_PROVIDER_ID } from './codex-gateway-config.js';
+import { buildCodexSubagentSpawnArgs } from './codex-subagent-config.js';
+import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import { getOutboundPathSnapshotFor } from './outbound-proxy-resolver.js';
 import {
   createDesktopMakerMemoryManager,
@@ -1070,7 +1072,14 @@ export function getMaker(): Maker {
           ? getCodexControlPlaneProxyEndpoint(authInjection)
           : getCodexProxyEndpoint();
         return {
-          extraArgs: [...mcpExtraArgs, ...buildCodexProxySpawnArgs(endpoint, authInjection)],
+          // 子代理护栏/默认模型每次 createHost 现读 store:DeferredCodexRestart 兑现
+          // (dispose host)后的新 spawn 自动带新值。agents.* 对 control-plane 的
+          // model/list 无影响,不加 hostPurpose 分支。
+          extraArgs: [
+            ...mcpExtraArgs,
+            ...buildCodexSubagentSpawnArgs(readSubagentModelSettings()),
+            ...buildCodexProxySpawnArgs(endpoint, authInjection),
+          ],
           extraEnv: mcpExtraEnv,
           codexProxyActive: ready,
           // oauth spawn 才定义 OpenAI 身份 provider(spawn args 同源);maker-core 只对

@@ -62,8 +62,10 @@ export interface AgentRuntimeConfig {
    * - undefined / blank: do not override the agent's native selection logic
    * - non-blank: the agent implementation injects the vendor-supported deterministic override
    *
-   * Claude maps this to `CLAUDE_CODE_SUBAGENT_MODEL`. Codex does not consume it yet because
-   * its full-history fork path rejects model overrides in the currently bundled binary.
+   * Claude maps this to `CLAUDE_CODE_SUBAGENT_MODEL`. Codex does not consume this field:
+   * the desktop host injects its subagent default via spawn-time `-c agents.default_subagent_model`
+   * overrides instead (see apps/desktop/src/main/maker-host/codex-subagent-config.ts) — the bundled
+   * codex binary treats it as a fallback that explicit spawn params may still override.
    *
    * ⚠️ 该 env 在 cc 的解析顺序里是**最高优先级**,不仅压过 agent frontmatter 的 `model:`,
    * 也压过每次 Task/Agent 调用传入的 `model` 参数,而平台不提供更低优先级的槽位。
