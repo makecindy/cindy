@@ -73,6 +73,26 @@ describe('PluginDetailTopBar', () => {
     },
   );
 
+  it.each(['win32', 'linux'] as const)(
+    'leaves the top separator to the shared ContentHeader on %s',
+    (platform) => {
+      stubPlatform(platform);
+
+      render(<Harness />);
+
+      // 这两端 ContentHeader 常驻且自带 border-b(--titlebar-border 与
+      // --border-default 同值),本行只留实底,顶部分隔由那条下边框承担。
+      const bar = screen.getByTestId('plugin-detail-top-bar');
+      expect(bar.className).not.toContain('after:');
+
+      const frame = screen.getByTestId('scroll-frame');
+      Object.defineProperty(frame, 'scrollTop', { value: 24, configurable: true });
+      fireEvent.scroll(frame);
+      expect(bar.className).toContain('bg-[var(--surface)]');
+      expect(bar.className).not.toContain('after:');
+    },
+  );
+
   it.each(['darwin', 'win32', 'linux'] as const)('sticks to the top on %s', (platform) => {
     stubPlatform(platform);
 

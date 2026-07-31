@@ -57,6 +57,12 @@ export function usePluginDetailScrolled(): {
  *
  * hairline 走 after 伪元素,脱离布局流,透明态与实底态之间高度恒定;article 的
  * pt-5 之下,hero 起点为 64 + 20 = 84px。
+ *
+ * hairline 只画在 mac:那里 ContentHeader 整条隐藏,本行的 hairline 是顶栏与正文
+ * 之间唯一的边界。Windows / Linux 的 ContentHeader 常驻且自带 border-b,其
+ * --titlebar-border 是 --border-default 的 alias(cindy-light.ts:127 /
+ * cindy-dark.ts:131,两端同值),两条线同时出现即为一片 --surface 上相隔 64px 的
+ * 两条同色平行线;那两端由 ContentHeader 的下边框充当顶部分隔,本行只留实底。
  */
 export function PluginDetailTopBar({ label, onBack, scrolled }: PluginDetailTopBarProps) {
   const { isMac } = useMacFullscreen();
@@ -66,11 +72,13 @@ export function PluginDetailTopBar({ label, onBack, scrolled }: PluginDetailTopB
       data-testid="plugin-detail-top-bar"
       className={cn(
         'sticky top-0 z-20 w-full',
-        'after:pointer-events-none after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-[var(--border-default)]',
-        'transition-[background-color] duration-[var(--motion-fast,150ms)]',
-        'after:transition-opacity after:duration-[var(--motion-fast,150ms)]',
-        'motion-reduce:transition-none motion-reduce:after:transition-none',
-        scrolled ? 'bg-[var(--surface)] after:opacity-100' : 'bg-transparent after:opacity-0',
+        'transition-[background-color] duration-[var(--motion-fast,150ms)] motion-reduce:transition-none',
+        scrolled ? 'bg-[var(--surface)]' : 'bg-transparent',
+        isMac && [
+          'after:pointer-events-none after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-[var(--border-default)]',
+          'after:transition-opacity after:duration-[var(--motion-fast,150ms)] motion-reduce:after:transition-none',
+          scrolled ? 'after:opacity-100' : 'after:opacity-0',
+        ],
       )}
       style={isMac ? WINDOW_DRAG_STYLE : undefined}
     >
