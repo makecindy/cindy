@@ -138,7 +138,6 @@ import {
   createSessionRemoteHostIdReader,
   getSessionRowSnapshot,
   persistSessionFields,
-  persistSessionPermissionModeIfAuto,
 } from '../localDb/ipc/sessions.js';
 // sidebar-card-mode: turn-done 后触发任务现状摘要生成
 import { maybeGenerateSessionTaskSummary } from '../sessionTaskSummary.js';
@@ -4032,14 +4031,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     },
   });
-  // Claude Auto 分类器错误响应(status≥400,含 4xx/5xx) → 单会话切 ask + 持久化 + 结构化提示。
-  // coordinator 内部会复核 DB 仍为 auto,并按 session 去重;listener 只 fire-and-forget,
-  // 绝不阻塞 proxy 响应 pipe,也不自动重放本次 tool call。
+  // Claude 原生 Auto 分类器不可用 → 会话仍保持 Auto，只把后续审批切到 Cindy reviewer。
+  // coordinator 内部复核 DB 仍为 auto 并按 session 去重；不改偏好、不弹提示。
   const handleClaudeAutoClassifierUnavailable = createClaudeAutoPermissionFallbackCoordinator({
     getSession: (sessionId) => maker.getSession(sessionId),
     getSessionMeta: (sessionId) => maker.getSessionMeta(sessionId),
-    persistPermissionModeIfAuto: (sessionId) => persistSessionPermissionModeIfAuto(sessionId),
-    broadcast: (event) => broadcastToAllWindows(MAKER_PUSH.AUTO_PERMISSION_FALLBACK, event),
     logger: log,
   });
   setClaudeAutoClassifierUnavailableListener((signal) => {

@@ -82,12 +82,6 @@ export interface CodexMcpThreadContextArgs {
   vendorOptions: Record<string, unknown>;
 }
 
-export interface CodexReviewerRouteContextArgs {
-  threadId: string;
-  sessionId: string;
-  model: string;
-}
-
 /**
  * Metadata for an MCP tool approval decision.
  *
@@ -260,13 +254,6 @@ export interface AgentDeps {
     models: readonly CodexModelListItem[],
   ) => void | Promise<void>;
 
-  /** @deprecated Kept until the Auto-review routing PR removes the persisted Auto→Ask fallback. */
-  onAutoPermissionClassifierUnavailable?: (args: {
-    sessionId: string;
-    agentKind: 'claude-code' | 'codex';
-    status: number;
-  }) => void;
-
   /**
    * Host-owned lightweight reviewer for routes without a healthy vendor-native
    * reviewer. The host must use this session's selected provider + model and pass
@@ -413,18 +400,6 @@ export interface AgentDeps {
     message: string;
     additionalDetails?: string | null;
   }) => string | null;
-
-  /**
-   * Codex 专用：登记 Guardian 子线程回到父业务 session 时应使用的主模型。
-   *
-   * Codex app-server 的模型目录由共享进程持有，不能代表单个 session 的实际
-   * Provider。host/proxy 通过 Guardian 请求的 x-codex-parent-thread-id 找回
-   * 此上下文，在非 OpenAI 路由把隐藏 codex-auto-review 改写为当前主模型。
-   *
-   * 只有明确返回 true 才表示路由已就绪；缺省、false 或抛错都必须继续使用
-   * user reviewer，不能让未知路由进入无人值守审批。
-   */
-  registerCodexReviewerRouteContext?: (args: CodexReviewerRouteContextArgs) => boolean;
 
   /**
    * Codex 专用：app-server 创建子 Agent thread 后，把明确的父子 thread 关系同步给宿主。

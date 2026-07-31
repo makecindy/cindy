@@ -1,9 +1,8 @@
 /**
- * Auto 权限分类器故障检测与会话降级。
+ * Claude 原生 Auto 分类器故障检测与 Cindy fallback 切换。
  *
- * 观察器只读 proxy 响应元数据，不改写响应；coordinator 在确认持久态仍为 auto 后，
- * 把单个活跃 Claude 会话切到 ask。分类器不可用时 fail-to-prompt，而不是让所有工具
- * 调用继续 fail-closed。
+ * 观察器只读 proxy 响应元数据，不改写响应；coordinator 在确认会话仍为 Auto 后，
+ * 只把运行期 reviewer 切到 Cindy，不改用户设置、不广播 Auto→Ask，也不弹确认。
  */
 
 import type { PermissionMode } from '@cindy/maker-core';
@@ -19,18 +18,9 @@ export interface ClaudeAutoClassifierUnavailableSignal {
   status: number;
 }
 
-/** 广播给 renderer/device-link 的降级结果。 */
-export interface ClaudeAutoPermissionFallbackEvent {
-  sessionId: string;
-  from: 'auto';
-  to: 'ask';
-  reason: 'classifier_unavailable';
-  status: number;
-}
-
 interface FallbackSession {
   agentKind: string;
-  setPermissionMode(mode: PermissionMode): Promise<void>;
+  useCindyAutoReviewFallback?(): Promise<void>;
 }
 
 interface FallbackLogger {
@@ -42,12 +32,6 @@ interface FallbackLogger {
 export interface ClaudeAutoPermissionFallbackDeps {
   getSession(sessionId: string): FallbackSession | undefined;
   getSessionMeta(sessionId: string): Promise<{ permissionMode?: PermissionMode } | null>;
-  /**
-   * 条件持久化(SQL 级 compare-and-swap):仅当持久态仍为 'auto' 时写成 'ask'。
-   * 返回 false = 用户并发切到了其它档,写库被放弃,调用方按最新持久态回滚 runtime。
-   */
-  persistPermissionModeIfAuto(sessionId: string): Promise<boolean>;
-  broadcast(event: ClaudeAutoPermissionFallbackEvent): void;
   logger: FallbackLogger;
 }
 
@@ -59,7 +43,7 @@ export function setClaudeAutoClassifierUnavailableListener(listener: Unavailable
   unavailableListener = listener;
 }
 
-/** Vendor adapters use the same host-owned persistence/broadcast coordinator. */
+/** Vendor response observers use the same host-owned runtime fallback coordinator. */
 export function notifyAutoPermissionClassifierUnavailable(
   signal: ClaudeAutoClassifierUnavailableSignal,
 ): void {
@@ -74,7 +58,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * oauth-spawn 的 CC 默认开归因(claude-behavior-flags.ts,issue #758),会把
  * `x-anthropic-billing-header: cc_version=...` 作为 system 数组**第一个** text block
  * 注入 —— 分类器身份前缀被顶到其后。匹配前必须跳过归因块,否则 oauth-spawn 下
- * 分类器故障全部漏检、auto→ask 降级失灵。
+ * 分类器故障全部漏检、运行期无法切到 Cindy fallback。
  */
 const ATTRIBUTION_SYSTEM_BLOCK_PREFIX = 'x-anthropic-billing-header:';
 
@@ -135,7 +119,7 @@ export function isClaudeAutoClassifierRequest(requestBody: Buffer): boolean {
  * 留在无限硬失败 + 零提示的死锁里 —— 降级兜底恰恰是那种场景唯一的自救通道。
  *
  * 折中:瞬时失败按「故障段(episode)」记账,连续 EPISODE_THRESHOLD 段且中间
- * 没有任何一次分类器成功 → 视为持续故障,交给降级协调器(降 ask + 广播 toast)。
+ * 没有任何一次分类器成功 → 视为持续故障,交给协调器切 Cindy fallback。
  *
  * - EPISODE_MS:SDK 对 429/5xx 有自动重试,一次用户动作会在数秒内产生多个失败
  *   响应;30s 内的失败归并为一段,避免把一次动作的 retry storm 数成 N 次。
@@ -161,7 +145,7 @@ function isTransientClassifierStatus(status: number): boolean {
  * 仅当**该会话已有瞬时故障记账**时才 parse body 确认「分类器已恢复」并清零计数;
  * 无记账时不 parse、不返回 sink,不碰 SSE 热路径。
  *
- * 降级信号分两类:
+ * fallback 信号分两类:
  * - 非瞬时 4xx(400/401/403/404/422 等确定性错误)→ 立即通知协调器(与 #596 前一致);
  * - 瞬时 408/429/5xx → 按上方 episode 阈值记账,持续故障才通知。
  */
@@ -230,7 +214,7 @@ export function createClaudeAutoClassifierFailureObserver(
       if (episodes.length < TRANSIENT_EPISODE_THRESHOLD) return undefined;
     }
 
-    // 任何一次通知(瞬时升级或确定性 4xx 立即降级)都清零该会话的瞬时记账:降级后
+    // 任何一次通知(瞬时升级或确定性 4xx 立即切 fallback)都清零该会话的瞬时记账:
     // 用户重开 Auto 时从零累计,不因残账被单次偶发失败提前推过阈值。协调器自身有
     // in-flight 去重 + 持久态 CAS,重复信号安全。
     transientEpisodes.delete(sdkSessionId);
@@ -249,24 +233,24 @@ export function createClaudeAutoClassifierFailureObserver(
 }
 
 /**
- * coordinator 生命周期内的分类器故障累计计数。挂在每条降级成功 / 失败日志上,
+ * coordinator 生命周期内的分类器故障累计计数。挂在每条切换成功 / 失败日志上,
  * 用现有 logger 落到 apps/desktop/logs/,用于量化故障频率(不新建上报通道)。
  * detected 计每次进入 coordinator 的故障信号(含被 in-flight 去重的 retry storm),
- * downgraded 计真正落库的降级,其余分别计各类跳过原因。
+ * switched 计真正切到 Cindy fallback 的会话,其余分别计各类跳过原因。
  */
 interface FallbackCounters {
   detected: number;
-  downgraded: number;
+  switched: number;
   dedupedRetries: number;
   skippedNotAuto: number;
   skippedNonClaude: number;
-  persistRace: number;
+  skippedUnsupported: number;
   failed: number;
 }
 
 /**
  * 创建 per-session fallback coordinator。in-flight 集合只防同一轮 429 retry storm；
- * 完成后即释放，因此用户以后手动重新开启 Auto 时仍能再次降级。
+ * 完成后即释放；session handle 自身保证重复切换幂等。
  */
 export function createClaudeAutoPermissionFallbackCoordinator(
   deps: ClaudeAutoPermissionFallbackDeps,
@@ -274,11 +258,11 @@ export function createClaudeAutoPermissionFallbackCoordinator(
   const inFlight = new Set<string>();
   const counters: FallbackCounters = {
     detected: 0,
-    downgraded: 0,
+    switched: 0,
     dedupedRetries: 0,
     skippedNotAuto: 0,
     skippedNonClaude: 0,
-    persistRace: 0,
+    skippedUnsupported: 0,
     failed: 0,
   };
 
@@ -290,7 +274,6 @@ export function createClaudeAutoPermissionFallbackCoordinator(
       return false;
     }
     inFlight.add(signal.sessionId);
-    let session: FallbackSession | undefined;
     try {
       const before = await deps.getSessionMeta(signal.sessionId);
       if (before?.permissionMode !== 'auto') {
@@ -298,35 +281,18 @@ export function createClaudeAutoPermissionFallbackCoordinator(
         return false;
       }
 
-      session = deps.getSession(signal.sessionId);
+      const session = deps.getSession(signal.sessionId);
       if (!session || session.agentKind !== signalAgentKind) {
         counters.skippedNonClaude += 1;
         return false;
       }
-
-      // 先切 runtime，立刻阻止 CLI 后续动作继续进入 classifier；持久化用 SQL 级
-      // 条件写(仅持久态仍为 auto 时命中)，彻底闭合「读到 auto 之后、写库之前用户
-      // 手动切档」的窗口——未命中时以用户刚保存的选择为准恢复 runtime，不广播降级。
-      await session.setPermissionMode('ask');
-      const applied = await deps.persistPermissionModeIfAuto(signal.sessionId);
-      if (!applied) {
-        counters.persistRace += 1;
-        const latest = await deps.getSessionMeta(signal.sessionId);
-        if (latest?.permissionMode && latest.permissionMode !== 'ask') {
-          await session.setPermissionMode(latest.permissionMode);
-        }
+      if (!session.useCindyAutoReviewFallback) {
+        counters.skippedUnsupported += 1;
         return false;
       }
-      counters.downgraded += 1;
-      const event: ClaudeAutoPermissionFallbackEvent = {
-        sessionId: signal.sessionId,
-        from: 'auto',
-        to: 'ask',
-        reason: 'classifier_unavailable',
-        status: signal.status,
-      };
-      deps.broadcast(event);
-      deps.logger.info('auto permission classifier unavailable; session downgraded to ask', {
+      await session.useCindyAutoReviewFallback();
+      counters.switched += 1;
+      deps.logger.info('auto permission classifier unavailable; session kept on Auto with Cindy fallback', {
         sessionId: signal.sessionId,
         agentKind: signalAgentKind,
         status: signal.status,
@@ -334,17 +300,6 @@ export function createClaudeAutoPermissionFallbackCoordinator(
       });
       return true;
     } catch (error) {
-      // runtime 已切但持久化失败时，以 DB 真相回滚，避免 selector 与 SDK 权限档分叉。
-      if (session) {
-        try {
-          const persisted = await deps.getSessionMeta(signal.sessionId);
-          if (persisted?.permissionMode) {
-            await session.setPermissionMode(persisted.permissionMode);
-          }
-        } catch {
-          // 原错误才是诊断主因；回滚失败只保持 fail-closed，不覆盖日志。
-        }
-      }
       counters.failed += 1;
       deps.logger.warn('auto permission fallback failed', {
         sessionId: signal.sessionId,

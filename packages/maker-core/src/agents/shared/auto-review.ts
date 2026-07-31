@@ -3,27 +3,22 @@
  *
  * ## 为什么在这里(而非某个 agent 内)
  *
- * "Auto-review"(权限档 `auto`)要在**不依赖任何 CLI 原生 reviewer** 的前提下,自己判定
- * 一个动作该放行、升级还是必问。各 harness(Claude Code / Codex / 未来 pi …)的原生 auto
- * reviewer 只对自家模型校准,经 Cindy 网关接第三方模型时要么橡皮图章(#129)、要么撞不兼容
- * 路由(codex-auto-review 隐藏模型 #751/#772)。**统一到这一套 core、各 harness 只写薄
- * adapter 把自己的工具调用/审批请求翻译成归一化 `ReviewableAction`**,兼容特判就不必散落在
- * 每个 harness 里 —— harness 负责跑,review 归 Cindy。
+ * "Auto-review"(权限档 `auto`)先复用 harness 已验证可用的原生 reviewer；原生能力不存在或
+ * 运行期失效时，再由 Cindy 用当前会话模型做轻量 fallback。各 harness 只写薄 adapter，把
+ * 自己的工具调用/审批请求翻译成归一化 `ReviewableAction`，避免兼容特判散落。
  *
  * 与原生的分工(Chris 2026-07-29 定:原生优先、Cindy 兜底):harness 原生 reviewer 在已验证
  * 可用的路由上照用(如 Codex 在 OpenAI OAuth 直连的 auto_review);路由不支持/不可靠时落到
- * 本 core。Claude Code 的原生 auto 分类器对第三方模型不可靠,实际总走本 core。
+ * 本 core。Claude Code 第三方模型也走 Cindy fallback，不把原生分类器请求错误发给第三方。
  *
- * ## 判定档(借鉴 Hermes 的 green/red light + openclaw 的确定性规则,零 LLM 裁判)
+ * ## 两层判定
  *
- *   - **绿灯 → `auto-approve`**:只读、会话内状态、工作区内文件写、明确只读的 shell。静默放行。
- *   - **红灯 → `prompt`**:写工作区外、外发网络、无法判定的 shell。升级用户确认(可"本会话记住")。
- *   - **危险 → `prompt-each-time`**:destructive / 不可逆 / 触碰凭证 / 远程代码执行。必问、不可记住。
+ *   - **确定性绿灯 → `auto-approve`**：只读、会话内状态、工作区内文件写、明确只读 shell。
+ *   - **灰区 → `prompt`**：交当前会话模型判 allow / block / ask；reviewer 故障时静默 block。
+ *   - **确定性红线 → `prompt-each-time`**：凭证、提权、广泛破坏等极高风险动作才允许打扰用户。
  *
- * **不确定一律 fail-closed 升级**(返回 `prompt`),绝不因"没识别出危险"而放行(与 openclaw
- * 默认 fail-open 相反 —— auto-review 要 safe-by-default)。shell 越界只能靠命令字符串启发式
- * (shell 不可静态求解):明确只读放行、明确危险必问、其余(含一切写)一律升级;结构化 path
- * 参数的动作(file-write)才做精确的工作区边界判定。
+ * 这里的 `prompt` 是内部灰区标记，不等于 UI 弹窗。最终只有轻量 reviewer 明确返回 `ask`，
+ * 或本地规则命中确定性红线，才弹确认；拿不准与服务不可用都回主 Agent `block`，让它换安全做法。
  *
  * ## 已知静态残口(命令字符串层不可闭合,应在 env / OS / 会话配置层缓解,不在此兜底)
  *
@@ -117,7 +112,7 @@ export function reviewAction(
 // 注意:`env`/`printenv` 不在此列 —— 裸调用会把整个进程环境(含注入子进程的 provider
 // API key,见 env-builder)dump 给模型,是凭证外泄面,不能静默放行。`env VAR=x cmd` 作为
 // 包裹器仍会剥壳按内层命令判定(见 COMMAND_WRAPPERS);裸 `env` 剥壳后为空段→fail-closed 升级。
-// `cat`/`grep`/`base64` 等能读文件的仍在列,但读**凭证文件**由 DANGEROUS_PATTERNS 先行拦成
+// `cat`/`grep`/`base64` 等能读文件的仍在列,但读**凭证文件**由 ALWAYS_ASK_PATTERNS 先行拦成
 // prompt-each-time(在 classifyShellCommand 里先于分段判定),读普通文件才放行。
 const SAFE_READONLY_BINS: ReadonlySet<string> = new Set([
   'ls', 'pwd', 'echo', 'cat', 'head', 'tail', 'wc', 'stat', 'file', 'which',
@@ -160,30 +155,34 @@ export function isSensitiveCredentialPath(target: string): boolean {
 }
 
 /**
- * 危险命令模式(整段原文匹配,更抗变形)。命中即 `prompt-each-time`:必问、不可"总是允许"。
- * 覆盖:提权 / 递归删除 / 远程代码执行 / 凭证访问(路径 + keychain + 敏感环境变量展开)/ 磁盘设备 /
- * 系统控制 / 破坏性 git / fork bomb / 权限放宽。
+ * 无法由主 Agent 换安全做法绕开的高影响同意边界。命中才 `prompt-each-time`：
+ * 提权 / 系统与磁盘控制 / 凭证访问 / fork bomb / 全局权限放宽。
  */
-const DANGEROUS_PATTERNS: readonly RegExp[] = [
+const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
   /\b(?:sudo|doas)\b/,                                   // 提权
-  /\brm\b[^|;&]*(?:\s-\w*[rRfF]|\s--(?:recursive|force|dir))/, // rm 递归/强制删除(含 -R / 长 flag)
   /\b(?:mkfs|fdisk|dd)\b/,                               // 磁盘/文件系统操作
-  /\bfind\b[^|;&]*\s-delete\b/,                          // find -delete 批量删除(不可逆)
   /(?:^|\s)>\s*\/dev\/[sh]d/,                            // 写块设备
   /\b(?:shutdown|reboot|halt|poweroff)\b/,               // 系统电源
   /:\s*\(\s*\)\s*\{.*\|.*&.*\}/,                          // fork bomb :(){ :|:& };:
-  /\b(?:curl|wget)\b[^|]*\|\s*(?:sudo\s+)?(?:ba|z|)sh\b/, // 下载 | sh(远程代码执行)
-  /\|\s*(?:sudo\s+)?(?:ba|z)?sh\b/,                       // 任意 | sh / | bash
-  /\beval\b/,                                            // eval 动态执行
   /\bchmod\b[^|;&]*\s(?:-R\s+)?[0-7]*7{2,3}\b/,           // chmod 777 之类数字放宽权限
   /\bchmod\b[^|;&]*\s[ugoa]*[oa][ugoa]*[-+=][^\s]*w/,     // chmod 符号型对 other/all 开放写(a+w / o+w / a+rwx)
   ...CREDENTIAL_PATH_PATTERNS,                            // 凭证/密钥路径(见上)
   /\bsecurity\s+(?:find|dump|export|add)-/,               // macOS keychain
   /\$\{?[A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|APIKEY|_PAT)[A-Za-z0-9_]*\}?/i, // 敏感环境变量展开(echo "$API_KEY" 等)
-  // 执行影响型环境变量赋值(env NAME=val cmd 或裸 NAME=val cmd):加载器注入 / 分页器 / 外部 diff /
-  // PATH 劫持 / 解释器启动钩子 —— 让"看似只读"的命令跑任意程序。unwrapWrappers 会剥掉 NAME=val,故在此
-  // 整条命令上先拦(env PAGER=./x git log、env LD_PRELOAD=./x true、PATH=./bin ls 等)。IFS= 太常见(read 循环)不列。
-  // GIT_ALLOW_PROTOCOL / GIT_PROTOCOL_FROM_USER 放开 ext:: 等远程助手协议(RCE 面);GIT_PROXY_COMMAND / GIT_SSH 直接跑外部程序。
+];
+
+/**
+ * 高风险但通常可由主 Agent 换一条安全做法的动作。它们进入当前模型 reviewer，而不是
+ * 直接打断用户：reviewer 可 allow（明确、范围受控）、block（让 Agent 重试）或只在确实
+ * 跨越高影响边界时 ask。
+ */
+const REVIEW_REQUIRED_PATTERNS: readonly RegExp[] = [
+  /\brm\b[^|;&]*(?:\s-\w*[rRfF]|\s--(?:recursive|force|dir))/, // rm 递归/强制删除
+  /\bfind\b[^|;&]*\s-delete\b/,                          // find -delete 批量删除
+  /\b(?:curl|wget)\b[^|]*\|\s*(?:sudo\s+)?(?:ba|z|)sh\b/, // 下载 | sh
+  /\|\s*(?:sudo\s+)?(?:ba|z)?sh\b/,                       // 任意 | sh / | bash
+  /\beval\b/,                                            // eval 动态执行
+  // 执行影响型环境变量赋值：让“看似只读”的命令运行其它程序，应由 reviewer 静默拦截或判定。
   /(?:^|\s)(?:LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD_[A-Z_]+|GIT_PAGER|PAGER|GIT_SSH(?:_COMMAND)?|GIT_PROXY_COMMAND|GIT_ALLOW_PROTOCOL|GIT_PROTOCOL_FROM_USER|GIT_EXTERNAL_DIFF|GIT_CONFIG_(?:GLOBAL|SYSTEM)|BASH_ENV|PROMPT_COMMAND|PS4|PERL5LIB|PYTHONPATH|PYTHONSTARTUP|PYTHONINSPECT|NODE_OPTIONS|RUBYOPT|PATH)=/,
   /\bgit\b[^|;&]*\bpush\b[^|;&]*(?:--force\b|--force-with-lease\b|\s-f\b|\+)/, // 强推
   /\bgit\b[^|;&]*\breset\b[^|;&]*--hard/,                 // git reset --hard
@@ -526,7 +525,7 @@ function isSafeFetch(bin: string, segment: string, tokens: string[]): boolean {
 }
 
 function classifyGit(tokens: string[], segment: string): ReviewVerdict {
-  // 危险 git(强推/硬重置/clean -f)已在 DANGEROUS_PATTERNS 命中,这里分只读 vs 写。
+  // 高风险 git(强推/硬重置/clean -f)已在 REVIEW_REQUIRED_PATTERNS 命中,这里分只读 vs 写。
   // 写文件 / 跑外部程序的选项(即便子命令"只读")→ 升级:
   //   -o/--output(diff/format-patch/show 写文件,无 shell `>` 可捕获);
   //   --ext-diff(跑外部 diff 驱动=RCE);
@@ -634,18 +633,18 @@ function classifyShellSegment(segment: string): ReviewVerdict {
   if (bin === 'git') return classifyGit(tokens, deQuoted);
   if (isSafeFetch(bin, deQuoted, tokens)) return 'auto-approve';
   if (isSafeReadonlyBin(bin, deQuoted, tokens)) return 'auto-approve';
-  // 其余(含所有写操作、未知命令)fail-closed 升级 —— 交给用户确认(可本会话记住)。
+  // 其余(含所有写操作、未知命令)进入灰区，由轻量 reviewer 静默 allow/block/ask。
   return 'prompt';
 }
 
 /**
- * shell 命令整体判定:危险模式先在整条命令上查(跨段管道如 `curl … | sh` 拆段后就查不到了),
- * 再拆顶层段,每段都要过 —— 任一段危险→整体 prompt-each-time;任一段需升级→整体 prompt;
- * 全部只读→auto-approve。空/畸形命令 → prompt(fail-closed)。
+ * shell 命令整体判定:风险模式先在整条命令上查(跨段管道如 `curl … | sh` 拆段后就查不到了),
+ * 再拆顶层段,每段都要过 —— 任一段明确红线→prompt-each-time;任一段需 reviewer→prompt;
+ * 全部只读→auto-approve。空/畸形命令 → prompt(交 reviewer，故障时静默 block)。
  */
 export function classifyShellCommand(command: string, _workspaceRoots: string[]): ReviewVerdict {
   if (typeof command !== 'string' || command.trim().length === 0) return 'prompt';
-  // 匹配危险模式时跑**三个变体**,任一命中即 prompt-each-time:
+  // 两档风险模式都跑以下变体；明确红线优先，命中才 prompt-each-time：
   //  - deEscaped(去引号 + 去反斜杠转义):防 su'do' / su\do / rm -r'f' 这类把关键词拆开的绕过。
   //  - quotesOnly(只去引号、保留 `\`):Windows `\` 路径的凭证检测 —— `cat C:\Users\me\.ssh\id_rsa`
   //    里反斜杠是分隔符,若一并去掉会让凭证正则(前缀含 `\`)失配(copilot 报)。
@@ -665,8 +664,11 @@ export function classifyShellCommand(command: string, _workspaceRoots: string[])
   const deExpandedGlob = deExpanded.replace(/[[\]{}*?]/g, '');
   // deSubstituted:把 `${X:-sudo}` 等默认值代入,让藏在展开默认值里的危险关键词现形(codex 报)。
   const deSubstituted = substituteDefaults(deEscaped);
-  for (const re of DANGEROUS_PATTERNS) {
+  for (const re of ALWAYS_ASK_PATTERNS) {
     if (re.test(deEscaped) || re.test(quotesOnly) || re.test(deGlobbed) || re.test(deExpanded) || re.test(deExpandedGlob) || re.test(deSubstituted)) return 'prompt-each-time';
+  }
+  for (const re of REVIEW_REQUIRED_PATTERNS) {
+    if (re.test(deEscaped) || re.test(quotesOnly) || re.test(deGlobbed) || re.test(deExpanded) || re.test(deExpandedGlob) || re.test(deSubstituted)) return 'prompt';
   }
   const segments = splitTopLevelSegments(command);
   if (segments.length === 0) return 'prompt';
