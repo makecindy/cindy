@@ -2628,9 +2628,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         ? consumeClaudeGatewayOpusPlanMismatch(session.id)
         : null;
       if (reason) {
+        const eventData = event.data && typeof event.data === 'object' && !Array.isArray(event.data)
+          ? (event.data as Record<string, unknown>)
+          : {};
         attributedEvent = {
           ...event,
-          data: { ...(event.data as Record<string, unknown>), reason },
+          data: { ...eventData, reason },
         };
         log.warn('Claude Opus plan error attributed to XD Gateway route', {
           sessionId: session.id,

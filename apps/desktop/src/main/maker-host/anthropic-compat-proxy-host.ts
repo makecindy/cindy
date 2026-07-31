@@ -199,6 +199,7 @@ export function createModelRoutingTransform(): RoutingTransform {
     }
 
     const gatewayKey = _readGatewayKey();
+    const selectedProviderId = sessionId ? getSessionProvider(sessionId) : null;
 
     // ① 该会话显式选了供应商 → 据 catalog 统一路由。
     //    x-claude-code-session-id = cc sdkSessionId,经注入的 resolver 反解成 xdt sessionId。
@@ -206,7 +207,6 @@ export function createModelRoutingTransform(): RoutingTransform {
       // wireModel 传给 scope 门:cc 内部辅助调用(权限 auto 分类器等 claude-* 小模型请求)
       // 不在订阅直连供应商(xai / openai-cc)声明的 modelPrefixes 范围内 → 返回 null,
       // 落到下方 ② 段 spawn 默认路由,分类器照常走网关/直连(issue #886)。
-      const selectedProviderId = getSessionProvider(sessionId);
       const perSession = resolveSessionRouteDecision(sessionId, 'claude-code', gatewayKey, wireModel);
       const recordSelectedRoute = <T extends object | null>(route: T): T => {
         if (route && (selectedProviderId === 'xd' || selectedProviderId === 'anthropic')) {
@@ -242,7 +242,13 @@ export function createModelRoutingTransform(): RoutingTransform {
       apiKeyHeader !== null && apiKeyHeader !== CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY;
     if (hasUsableApiKey) {
       // gateway-spawn:自带网关 key,passthrough。
-      recordResolvedDefaultRoute('gateway');
+      if (sessionId && selectedProviderId === 'xd') {
+        // 显式 XD 会话在 live gateway key 被清除后,仍可能携带 spawn 时冻结的 x-api-key。
+        // resolveSessionRouteDecision 会因缺 key 返回 null,但这条 passthrough 仍实际进入 XD Gateway。
+        recordClaudeRequestRoute(ctx.reqId, sessionId, 'gateway');
+      } else {
+        recordResolvedDefaultRoute('gateway');
+      }
       return null;
     }
     const decision = gatewayDefaultRouteDecision('claude-code', gatewayKey);

@@ -137,6 +137,16 @@ describe('claude session route observation (routing transform ② 段)', () => {
     expect(takeClaudeRequestRoute(22)).toEqual({ sessionId: 'sess-1', route: 'subscription' });
   });
 
+  it('records gateway for an explicitly selected XD passthrough with a frozen child key', () => {
+    setSessionProvider('sess-1', 'xd');
+    const decision = createModelRoutingTransform()(
+      { model: 'claude-opus-4-8[1m]' },
+      ctxWith({ ...SESSION_HEADER, 'x-api-key': 'sk-frozen' }, 23),
+    );
+    expect(decision).toBeNull();
+    expect(takeClaudeRequestRoute(23)).toEqual({ sessionId: 'sess-1', route: 'gateway' });
+  });
+
   it('does not record ambiguous no-key non-anthropic passthroughs', () => {
     const transform = createModelRoutingTransform();
     const decision = transform(
