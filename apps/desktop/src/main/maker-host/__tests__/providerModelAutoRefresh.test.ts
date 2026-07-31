@@ -97,6 +97,27 @@ describe('provider model auto-refresh coordinator', () => {
     ]);
   });
 
+  it('applies the shared Catalog before provider discovery derives model capabilities', async () => {
+    const catalog = deferred();
+    const refreshProvider = vi.fn(async () => undefined);
+    const refreshCatalog = vi.fn(() => catalog.promise);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [view('anthropic', true)],
+      refreshProvider,
+      refreshCatalog,
+      now: () => 1_000,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+
+    const refresh = coordinator.requestAutoRefresh('providers-open');
+    await vi.waitFor(() => expect(refreshCatalog).toHaveBeenCalledOnce());
+    expect(refreshProvider).not.toHaveBeenCalled();
+
+    catalog.resolve();
+    await refresh;
+    expect(refreshProvider).toHaveBeenCalledOnce();
+  });
+
   it('manual refresh queues behind an automatic flight instead of being represented by it', async () => {
     // 行为变更（PR #1076 review，与 forced startup 同一个不变量）：手动刷新也是 forced
     // 请求，撞上**非强制**在途时不再合并进去，而是排在它后面真跑一次。

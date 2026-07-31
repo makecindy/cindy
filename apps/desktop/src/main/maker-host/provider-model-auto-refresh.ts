@@ -272,6 +272,10 @@ export function createProviderModelRefreshCoordinator(
         return;
       }
 
+      // Provider discovery may use the public registry to fill context windows and effort
+      // defaults omitted by the provider response. Apply the catalog snapshot first so a
+      // concurrent discovery cannot permanently derive capabilities from the previous one.
+      await catalogRefresh;
       syncScope();
       const connectedIds = new Set<BuiltinRefreshableProviderId>();
       for (const provider of providers) {
@@ -289,7 +293,6 @@ export function createProviderModelRefreshCoordinator(
       // 启动触发与手动刷新不会各起一次 codex app-server。
       const force = isForcedProviderModelAutoRefreshTrigger(trigger);
       const results = await Promise.allSettled(ids.map((id) => refresh(id, force)));
-      await catalogRefresh;
       results.forEach((result, index) => {
         if (result.status === 'fulfilled') return;
         deps.log.warn('provider model auto-refresh failed', {
