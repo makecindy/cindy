@@ -1185,12 +1185,20 @@ describe('utility one-shot candidates', () => {
       providerId: 'openai',
       agentKind: 'codex',
       model: 'chatgpt/gpt-5.5',
+      maxTokens: 384,
+      reasoningEffort: 'low',
     });
 
     expect(result).toMatchObject({ ok: true, providerId: 'openai', model: 'chatgpt/gpt-5.5' });
     expect(readCodexCreds).toHaveBeenCalledOnce();
     expect(fetchMock).toHaveBeenCalledWith('https://chatgpt.example/api/v1/responses', expect.anything());
-    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({ model: 'gpt-5.5' });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      model: 'gpt-5.5',
+      reasoning: { effort: 'low' },
+    });
+    // ChatGPT Codex returns HTTP 400 for this public Responses API field.
+    expect(body).not.toHaveProperty('max_output_tokens');
   });
 
   it('uses xAI OAuth and the selected xAI Responses route', async () => {

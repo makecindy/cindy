@@ -45,6 +45,8 @@ export type UtilityTextCandidate = {
 export type UtilityTextRequestOptions = {
   maxTokens?: number;
   timeoutMs?: number;
+  /** Optional lightweight reasoning hint for short internal classifiers. */
+  reasoningEffort?: 'low' | 'medium' | 'high';
   /** 显式任务来源；存在时禁止跨来源 fallback。 */
   providerId?: string;
   agentKind?: AgentKind;
@@ -411,6 +413,7 @@ async function requestExplicitProviderText(
       transport,
       maxTokens: opts.maxTokens,
       timeoutMs: opts.timeoutMs,
+      reasoningEffort: opts.reasoningEffort,
     });
   }
 
@@ -503,6 +506,7 @@ async function requestExplicitProviderText(
       prompt: text,
       maxTokens: requestOpts?.maxTokens,
       timeoutMs: requestOpts?.timeoutMs,
+      reasoningEffort: requestOpts?.reasoningEffort,
     }),
   };
   return executeCandidates([candidate], prompt, [], opts);
@@ -524,6 +528,7 @@ async function requestBuiltinProviderText(
     transport: UtilityModelTransport;
     maxTokens?: number;
     timeoutMs?: number;
+    reasoningEffort?: 'low' | 'medium' | 'high';
   },
 ): Promise<UtilityTextResult> {
   const profile: UtilityModelProfile = {
@@ -557,6 +562,7 @@ async function requestBuiltinProviderText(
         prompt: text,
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
+        reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
       }),
     }], prompt, [], input);
   }
@@ -583,6 +589,7 @@ async function requestBuiltinProviderText(
         prompt: text,
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
+        reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
       }),
     }], prompt, [], input);
   }
@@ -618,6 +625,11 @@ async function requestBuiltinProviderText(
         prompt: text,
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
+        reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
+        // ChatGPT's private Codex Responses endpoint rejects this public API
+        // parameter with HTTP 400. The Auto reviewer enforces its own compact
+        // output ceiling after the response instead.
+        supportsMaxOutputTokens: false,
       }),
     }], prompt, [], input);
   }
@@ -642,6 +654,7 @@ async function requestBuiltinProviderText(
         prompt: text,
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
+        reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
       }),
     }], prompt, [], input);
   }
@@ -872,6 +885,9 @@ async function requestProviderHttpText(input: {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
+  reasoningEffort?: 'low' | 'medium' | 'high';
+  /** Some private Responses-compatible endpoints reject max_output_tokens. */
+  supportsMaxOutputTokens?: boolean;
 }): Promise<string> {
   const controller = new AbortController();
   const timeoutMs = input.timeoutMs ?? 90_000;
@@ -884,6 +900,10 @@ async function requestProviderHttpText(input: {
         tools: [],
         tool_choice: 'auto',
         parallel_tool_calls: false,
+        ...(input.maxTokens !== undefined && input.supportsMaxOutputTokens !== false
+          ? { max_output_tokens: input.maxTokens }
+          : {}),
+        ...(input.reasoningEffort ? { reasoning: { effort: input.reasoningEffort } } : {}),
         store: false,
         stream: true,
       }
@@ -956,6 +976,7 @@ async function requestCustomProviderText(input: {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
+  reasoningEffort?: 'low' | 'medium' | 'high';
 }): Promise<string> {
   const headers: Record<string, string> = {
     ...(input.headers ?? {}),
@@ -1000,6 +1021,7 @@ async function requestCustomProviderText(input: {
     prompt: input.prompt,
     maxTokens: input.maxTokens,
     timeoutMs: input.timeoutMs,
+    reasoningEffort: input.reasoningEffort,
   });
 }
 

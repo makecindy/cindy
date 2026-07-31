@@ -61,6 +61,7 @@ import type {
   ListCustomizationsResult,
 } from '../types/customizations.js';
 import { scanWorkspaceFileResources } from './shared/palette-scanner.js';
+import type { AutoReviewDelegate } from './shared/auto-review-decision.js';
 
 export interface AgentCapabilityAdditions {
   /** Extra models exposed by the host for this agent. Existing built-in ids are ignored. */
@@ -259,18 +260,19 @@ export interface AgentDeps {
     models: readonly CodexModelListItem[],
   ) => void | Promise<void>;
 
-  /**
-   * Host-owned Auto permission fallback. A vendor reviewer timeout/unavailable
-   * result has already blocked the current action; the host persists this session
-   * from Auto to Ask and broadcasts the selector/toast update. Fire-and-forget:
-   * classifier failure handling must never hold the vendor notification loop.
-   */
+  /** @deprecated Kept until the Auto-review routing PR removes the persisted Auto→Ask fallback. */
   onAutoPermissionClassifierUnavailable?: (args: {
     sessionId: string;
     agentKind: 'claude-code' | 'codex';
-    /** HTTP status when available; Codex reviewer timeout/failure use synthetic 408/500. */
     status: number;
   }) => void;
+
+  /**
+   * Host-owned lightweight reviewer for routes without a healthy vendor-native
+   * reviewer. The host must use this session's selected provider + model and pass
+   * only the request supplied here; null/throw is treated as a silent block.
+   */
+  reviewAutoPermissionAction?: AutoReviewDelegate;
 
   /**
    * Codex-only: bind app-server thread ids back to xdt-maker session context
@@ -958,6 +960,12 @@ export interface AgentSessionHandle {
 
   /** 运行时切换 permission mode */
   setPermissionMode?(mode: PermissionMode): Promise<void>;
+
+  /**
+   * Vendor-native Auto reviewer became unavailable. Keep the product mode at
+   * Auto, but route subsequent approvals through Cindy's lightweight reviewer.
+   */
+  useCindyAutoReviewFallback?(): Promise<void>;
 
   /**
    * 运行时开关计划模式（Capabilities.planMode 支持时实现）。
