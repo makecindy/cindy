@@ -1060,7 +1060,7 @@
     },
     "sessionImport": {
       "title": "本地任务导入",
-      "description": "只读扫描本机 Claude Code 与 Codex 历史。只有列表里勾选的任务会被导入；已跳过的内部任务不会展示，也不会导入。",
+      "description": "只读扫描本机 Claude Code 与 Codex 历史。只有列表里勾选的任务会被导入；已跳过的内部 Agent 会话不会展示，也不会导入。",
       "scan": "扫描",
       "scanning": "扫描中",
       "emptyTitle": "先扫描本地历史",
@@ -1084,7 +1084,7 @@
         "dialogue": "对话",
         "dialogueHint": "Codex 标记为不属于项目的任务",
         "filtered": "已跳过",
-        "filteredHint": "内部任务或已在应用内"
+        "filteredHint": "内部 Agent 会话或已在应用内"
       },
       "filters": {
         "source": "来源",
