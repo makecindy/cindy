@@ -382,4 +382,18 @@ describe('switch-session slots (mod+1..9)', () => {
       'find-in-page',
     );
   });
+
+  // 让位范围严格限定 yieldsToUserBindings 槽位:save-file / open-settings 等
+  // 同样 hiddenInSettings 的惯例键不让位 —— 否则把别的键改绑到 ⌘S 会被放行,
+  // 用户静默失去保存快捷键(Codex review P2)。
+  it('conventional hidden defaults (save-file / open-settings) neither yield nor stop conflicting', () => {
+    const sCombo = combo('KeyS', { meta: true });
+    expect(findAppShortcutConflict('find-in-page', sCombo, {}, 'darwin')).toBe('save-file');
+    expect(findAppShortcutConflict('find-in-page', combo('Comma', { meta: true }), {}, 'darwin')).toBe(
+      'open-settings',
+    );
+    // 防御:即便异常写入了撞 ⌘S 的 override,save-file 的默认也不被过滤。
+    const effective = getEffectiveAppShortcuts({ 'find-in-page': sCombo }, 'darwin');
+    expect(effective.get('save-file')).toEqual([sCombo]);
+  });
 });

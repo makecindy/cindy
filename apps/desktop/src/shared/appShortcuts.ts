@@ -93,6 +93,16 @@ export interface AppShortcutDefinition {
   /** true = 不在设置页快捷键列表展示 (仍正常生效, 如 ⌘, 打开设置)。 */
   hiddenInSettings?: boolean;
   /**
+   * true = 本条目的默认组合对用户既有绑定让位: 与其它 id 的 override 或
+   * registry 之外体系的用户键位 (yieldToCombos) 撞键时, 默认组合被压制
+   * (该槽位等效无绑定), 写入侧 findAppShortcutConflict 也不把它算作占用。
+   * 只用于「批量占键的次要便捷槽位」(switch-session-*): 它们隐藏在设置页
+   * 之外, 用户看不到也解不开, 不让位就会一次按键双动作。save-file / ⌘, 等
+   * 惯例键虽也 hiddenInSettings 但**不得**设本字段 —— 否则用户把别的键改绑
+   * 到 ⌘S 会被放行并静默丢失保存快捷键。
+   */
+  yieldsToUserBindings?: boolean;
+  /**
    * true = darwin 上唯一触发路径是应用菜单 accelerator (无 renderer /
    * before-input-event fallback)。改绑时必须能转换为 Electron accelerator
    * (comboToElectronAccelerator 非 null), 否则 UI 显示已绑定但按键永不生效
@@ -322,6 +332,7 @@ export const APP_SHORTCUT_DEFINITIONS: ReadonlyArray<AppShortcutDefinition> = [
       descriptionKey: `settings.shortcuts.items.${id}.description`,
       rebindable: true,
       hiddenInSettings: true,
+      yieldsToUserBindings: true,
       getDefaultCombos: (platform) => [modCombo(`Digit${index + 1}`, platform)],
     }),
   ),
@@ -424,12 +435,13 @@ export function normalizeAppShortcutOverrides(raw: unknown, platform: string): A
  * 整体替换默认列表; null (删除绑定) → 空列表; 平台不可用的 id 不出现在
  * 结果里 (消费端对 undefined / 空列表自动不挂监听)。
  *
- * 隐藏可改绑条目的默认组合对用户既有绑定让位: 冲突只在写入时校验,
- * 历史版本合法写下的绑定可能与后续版本新增的隐藏默认撞键 (如
- * switch-session-* 一次性占入 mod+1..9)。hiddenInSettings 条目不在设置页
- * 出现, 用户看不到占用者也无法解绑, 若不让位则一次按键触发两个动作。让位后
- * 该槽位等效无绑定 (消费端与序号徽标端对空组合天然兼容); 可见条目不做此
- * 处理 —— 撞键在设置页可自查自修, 维持既有行为。让位对象有两类:
+ * yieldsToUserBindings 条目的默认组合对用户既有绑定让位: 冲突只在写入时
+ * 校验, 历史版本合法写下的绑定可能与后续版本新增的批量默认撞键 (如
+ * switch-session-* 一次性占入 mod+1..9)。这些槽位不在设置页出现, 用户
+ * 看不到占用者也无法解绑, 若不让位则一次按键触发两个动作。让位后该槽位
+ * 等效无绑定 (消费端与序号徽标端对空组合天然兼容); 其余条目 —— 包括
+ * save-file / open-settings 等同样 hiddenInSettings 的惯例键 —— 不让位,
+ * 维持既有行为 (见 yieldsToUserBindings 字段注释)。让位对象有两类:
  * 1. 本 registry 内其它 id 的用户 override (overrides 参数);
  * 2. registry 之外体系的用户键位 (yieldToCombos 参数, 如语音输入的键盘
  *    快捷键) —— 由知道该体系的消费端传入; 无此类消费的调用点 (如 main 的
@@ -459,7 +471,7 @@ export function getEffectiveAppShortcuts(
       continue;
     }
     let combos = def.getDefaultCombos(platform);
-    if (def.hiddenInSettings && def.rebindable) {
+    if (def.yieldsToUserBindings) {
       combos = combos.filter(
         (c) =>
           !overrideEntries.some(
@@ -758,10 +770,12 @@ export function findAppShortcutConflict(
   for (const def of APP_SHORTCUT_DEFINITIONS) {
     if (def.id === id) continue;
     if (!appShortcutScopesOverlap(selfDef.scope, def.scope)) continue;
-    // 未被 override 的隐藏可改绑默认不构成占用: 用户显式改绑获胜 ——
-    // getEffectiveAppShortcuts 会让该隐藏槽位的默认让位。否则用户想绑这些
-    // 组合时会被一个设置页里看不到、也无法解绑的条目永久卡死。
-    if (def.hiddenInSettings && def.rebindable && overrides[def.id] === undefined) continue;
+    // 未被 override 的让位槽位默认不构成占用: 用户显式改绑获胜 ——
+    // getEffectiveAppShortcuts 会让该槽位的默认让位。否则用户想绑这些
+    // 组合时会被一个设置页里看不到、也无法解绑的条目永久卡死。范围严格
+    // 限定 yieldsToUserBindings, 不含 save-file 等惯例隐藏键 (那些仍占用,
+    // 新绑定照常报冲突)。
+    if (def.yieldsToUserBindings && overrides[def.id] === undefined) continue;
     const combos = effective.get(def.id);
     if (combos?.some((c) => appShortcutCombosEqual(c, comboValue))) return def.id;
   }
