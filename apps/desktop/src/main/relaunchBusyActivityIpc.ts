@@ -30,6 +30,14 @@ const log = createLogger('relaunch-activity');
 export function registerRelaunchBusyActivityIpc(
   resolveSources: () => RelaunchBusyActivitySources,
 ): void {
+  // **幂等注册**,不是防御性冗余:调用点(bootstrap-electron 的 registerMakerIpcsAfterSplash)
+  // 在它之后还有会抛的初始化,而那个 try 的 catch 明写「下次 splash retry 再尝试」,重试时
+  // makerIpcsRegistered 仍是 false —— 于是这行会被执行第二次。ipcMain.handle 对同一 channel
+  // 第二次注册会抛「Attempted to register a second handler」,那不只是本 handler 注册失败:
+  // 异常会从这里穿出去,把**排在它后面的全部 maker IPC 注册**一起掀掉,而且每次重试都卡在
+  // 同一行 —— 结果是 maker 链路永久不可用。先 remove 再 handle,让重复调用总是收敛到
+  // 「一个当前有效的 handler」。
+  ipcMain.removeHandler(RELAUNCH_BLOCKING_ACTIVITY_CHANNEL);
   ipcMain.handle(RELAUNCH_BLOCKING_ACTIVITY_CHANNEL, async (event) => {
     assertTrustedAppRendererEvent(event);
     const result = await evaluateRelaunchBusyActivity(resolveSources());

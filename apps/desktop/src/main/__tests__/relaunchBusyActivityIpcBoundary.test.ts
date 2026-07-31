@@ -15,12 +15,22 @@ const h = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   trusted: true,
   reads: 0,
+  removed: [] as string[],
 }));
 
+// 仿 Electron 的真实行为:同一 channel 第二次 handle 直接抛。幂等注册要靠 removeHandler,
+// 用一个只会 set 的假 Map 是测不出来的。
 vi.mock('electron', () => ({
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
+      if (h.handlers.has(channel)) {
+        throw new Error(`Attempted to register a second handler for '${channel}'`);
+      }
       h.handlers.set(channel, handler);
+    }),
+    removeHandler: vi.fn((channel: string) => {
+      h.removed.push(channel);
+      h.handlers.delete(channel);
     }),
   },
 }));
@@ -57,6 +67,7 @@ beforeEach(() => {
   h.handlers.clear();
   h.trusted = true;
   h.reads = 0;
+  h.removed = [];
 });
 
 describe('registerRelaunchBusyActivityIpc', () => {
@@ -70,6 +81,18 @@ describe('registerRelaunchBusyActivityIpc', () => {
     const handler = h.handlers.get(RELAUNCH_BLOCKING_ACTIVITY_CHANNEL)!;
     await expect(handler(fakeEvent)).resolves.toBe(true);
     expect(h.reads).toBeGreaterThan(0);
+  });
+
+  // splash 首次失败会整段重试注册(bootstrap-electron 那个 catch 明写「下次 splash retry
+  // 再尝试」),此时 makerIpcsRegistered 仍是 false。若不幂等,第二次 handle 抛出的异常会
+  // 把排在后面的全部 maker IPC 注册一起掀掉,且每次重试都卡在同一行。
+  it('重复注册不抛错（splash 重试路径），且 handler 仍然可用', async () => {
+    registerRelaunchBusyActivityIpc(countingSources(true));
+    expect(() => registerRelaunchBusyActivityIpc(countingSources(true))).not.toThrow();
+    expect(h.removed).toContain(RELAUNCH_BLOCKING_ACTIVITY_CHANNEL);
+
+    const handler = h.handlers.get(RELAUNCH_BLOCKING_ACTIVITY_CHANNEL)!;
+    await expect(handler(fakeEvent)).resolves.toBe(true);
   });
 
   it('不可信 sender(WebView / 子 frame / 未登记窗口):拒绝，且一个来源都不读', async () => {
