@@ -201,8 +201,9 @@ export class MarketSourceManager {
       if (!discovered.ok) {
         throwIpcError(discovered.code, discovered.detail ?? discovered.code);
       }
-      this.deps.store.update(name, { lastSyncedAt: this.now() });
-      return this.toSummary({ ...config, lastSyncedAt: this.now() }, discovered.marketplace);
+      const syncedAt = this.now();
+      this.deps.store.update(name, { lastSyncedAt: syncedAt });
+      return this.toSummary({ ...config, lastSyncedAt: syncedAt }, discovered.marketplace);
     }
 
     const preflight = await checkGitPreflightImpl(this.deps.gitExecutor);
@@ -217,45 +218,48 @@ export class MarketSourceManager {
       { ok: true }
     >;
     let discovered: DiscoverOk | null = null;
-    let refreshedFromStaging = false;
+    // 刷新统一在 staging 完成（快进或重克隆）并先做完整发现验证，
+    // 成功后才原子替换旧缓存；任何一步失败都删除 staging、保留上一次可用内容。
+    const staging = `${cloneDir}.restage-${crypto.randomUUID()}`;
     try {
-      revision = await fetchMarketplace(cloneDir, gitSource.ref, this.deps.gitExecutor);
-    } catch {
-      refreshedFromStaging = true;
-      // 快进失败（历史改写 / 缓存损坏）：整目录重克隆 + 原子替换。
-      const staging = `${cloneDir}.restage-${crypto.randomUUID()}`;
       try {
-        revision = await cloneMarketplace(
-          {
-            url: gitSource.url,
-            ...(gitSource.ref ? { ref: gitSource.ref } : {}),
-            sparsePaths: gitSource.sparsePaths,
-          },
-          staging,
+        // 快进路径：复制现有缓存到 staging，在 staging 内快进，不触碰旧缓存。
+        await fs.promises.cp(cloneDir, staging, { recursive: true });
+        revision = await fetchMarketplace(
+          cloneDir,
+          gitSource.ref,
           this.deps.gitExecutor,
+          staging,
         );
-      } catch (error) {
-        if (error instanceof MarketGitError) throwIpcError(error.code, error.message);
-        throw error;
+      } catch {
+        // 快进失败（历史改写 / 缓存损坏）：丢弃 staging 副本，整目录重克隆。
+        await fs.promises.rm(staging, { recursive: true, force: true }).catch(() => undefined);
+        try {
+          revision = await cloneMarketplace(
+            {
+              url: gitSource.url,
+              ...(gitSource.ref ? { ref: gitSource.ref } : {}),
+              sparsePaths: gitSource.sparsePaths,
+            },
+            staging,
+            this.deps.gitExecutor,
+          );
+        } catch (error) {
+          if (error instanceof MarketGitError) throwIpcError(error.code, error.message);
+          throw error;
+        }
       }
-      // 先在 staging 完成完整发现验证，再替换旧缓存；失败时删除 staging，
-      // 保留上一次可用的市场内容。
       const staged = await discoverMarketplace(staging);
       if (!staged.ok) {
-        await fs.promises.rm(staging, { recursive: true, force: true }).catch(() => undefined);
         throwIpcError(staged.code, staged.detail ?? staged.code);
       }
       discovered = staged;
-      await fs.promises.rm(cloneDir, { recursive: true, force: true }).catch(() => undefined);
-      await fs.promises.rename(staging, cloneDir);
+    } catch (error) {
+      await fs.promises.rm(staging, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
     }
-    if (!refreshedFromStaging) {
-      const current = await discoverMarketplace(cloneDir);
-      if (!current.ok) {
-        throwIpcError(current.code, current.detail ?? current.code);
-      }
-      discovered = current;
-    }
+    await fs.promises.rm(cloneDir, { recursive: true, force: true }).catch(() => undefined);
+    await fs.promises.rename(staging, cloneDir);
     if (!discovered) {
       throwIpcError('INTERNAL', 'marketplace discovery did not produce a result');
     }

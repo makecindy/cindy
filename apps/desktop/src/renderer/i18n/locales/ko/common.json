@@ -2815,7 +2815,7 @@
             "invalidSource": "소스 형식이 올바르지 않습니다. GitHub owner/repo, Git URL 또는 로컬 폴더 경로를 사용하세요.",
             "gitUnavailable": "Git이 설치되어 있지 않거나 버전이 2.25 미만이므로 Git 소스를 추가할 수 없습니다.",
             "cloneAuthFailed": "이 리포지토리에 접근할 수 없습니다. 비공개 리포지토리의 경우 먼저 시스템에 Git 인증(credential helper 또는 SSH key)을 구성하세요.",
- "credentialsNotAllowed": "소스 URL에 사용자 이름이나 비밀번호를 포함할 수 없습니다. 시스템 Git 인증(credential helper 또는 SSH key)을 사용하세요.",
+            "credentialsNotAllowed": "소스 URL에 사용자 이름이나 비밀번호를 포함할 수 없습니다. 시스템 Git 인증(credential helper 또는 SSH key)을 사용하세요.",
             "cloneFailed": "리포지토리를 클론하지 못했습니다. 네트워크 또는 프록시 설정을 확인한 후 다시 시도하세요.",
             "refNotFound": "지정한 Git 참조를 찾을 수 없습니다. 브랜치 또는 태그 이름을 확인하세요.",
             "manifestMissing": "이 소스에서 지원되는 marketplace.json 매니페스트를 찾을 수 없습니다.",

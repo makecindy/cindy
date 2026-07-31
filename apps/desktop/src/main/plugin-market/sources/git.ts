@@ -184,19 +184,22 @@ export async function fetchMarketplace(
   marketPath: string,
   ref: string | undefined,
   executor: GitExecutor = defaultExecutor,
+  /** 默认在 marketPath 原地快进；传入 cwd 时在该工作目录执行（刷新 staging 用）。 */
+  cwd?: string,
 ): Promise<string> {
+  const workDir = cwd ?? marketPath;
   const timeoutMs = GIT_OPERATION_TIMEOUT_MS;
   try {
     if (ref) {
       // 显式引用：对齐远端该 ref（branch/tag/commit 统一用 FETCH_HEAD 落位）。
-      await executor(['fetch', 'origin', ref], { cwd: marketPath, timeoutMs });
-      await executor(['reset', '--hard', 'FETCH_HEAD'], { cwd: marketPath, timeoutMs });
+      await executor(['fetch', 'origin', ref], { cwd: workDir, timeoutMs });
+      await executor(['reset', '--hard', 'FETCH_HEAD'], { cwd: workDir, timeoutMs });
     } else {
-      await executor(['pull', '--ff-only'], { cwd: marketPath, timeoutMs });
+      await executor(['pull', '--ff-only'], { cwd: workDir, timeoutMs });
     }
-    return await currentRevision(marketPath, executor);
+    return await currentRevision(workDir, executor);
   } catch (error) {
-    throw classifyGitFailure(error, [marketPath]);
+    throw classifyGitFailure(error, [workDir]);
   }
 }
 

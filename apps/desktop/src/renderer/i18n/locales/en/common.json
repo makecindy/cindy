@@ -2816,7 +2816,7 @@
             "invalidSource": "Invalid source. Use a GitHub owner/repo, a Git URL, or a local folder path.",
             "gitUnavailable": "Git is not installed or is older than 2.25, so Git sources cannot be added.",
             "cloneAuthFailed": "Cannot access this repository. For private repositories, configure Git authentication on this machine first (credential helper or SSH key).",
- "credentialsNotAllowed": "The source URL cannot contain a username or password. Use system Git authentication instead (credential helper or SSH key).",
+            "credentialsNotAllowed": "The source URL cannot contain a username or password. Use system Git authentication instead (credential helper or SSH key).",
             "cloneFailed": "Failed to clone the repository. Check your network or proxy settings and try again.",
             "refNotFound": "The specified Git ref was not found. Check the branch or tag name.",
             "manifestMissing": "No supported marketplace.json manifest was found in this source.",

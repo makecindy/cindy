@@ -248,6 +248,35 @@ describe('MarketSourceManager git sources', () => {
     expect(refreshed.pluginCount).toBe(1);
   });
 
+  it('keeps the previous cache when the fast-forwarded marketplace content is invalid', async () => {
+    const root = makeRoot();
+    const executor: GitExecutor = async (args, opts) => {
+      if (args[0] === '--version') return { stdout: 'git version 2.43.0\n', stderr: '' };
+      if (args[0] === 'clone') {
+        writeMarketplace(String(args[args.length - 1]), 'hub', [{ rel: 'p', id: 'alpha' }]);
+        return { stdout: '', stderr: '' };
+      }
+      if (args[0] === 'pull') {
+        // 快进成功，但新内容删除了 marketplace.json（在 staging 工作目录里破坏）。
+        const cwd = String(opts?.cwd ?? '');
+        fs.rmSync(`${cwd}/.agents/plugins/marketplace.json`, { force: true });
+        return { stdout: '', stderr: '' };
+      }
+      if (args[0] === 'rev-parse') return { stdout: 'def456\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    };
+    const manager = makeManager(root, executor);
+    await manager.addSource({ source: 'openai/plugins' });
+
+    await expect(manager.refreshSource('hub')).rejects.toMatchObject({
+      code: 'MARKET_MANIFEST_MISSING',
+    });
+    // 旧缓存未被损坏的快进污染：列表仍返回插件计数。
+    const listed = await manager.listSources();
+    expect(listed[0]?.pluginCount).toBe(1);
+    expect(listed[0]?.status).toBe('ok');
+  });
+
   it('keeps the previous cache when the re-cloned marketplace is invalid', async () => {
     const root = makeRoot();
     let failFetch = false;

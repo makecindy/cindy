@@ -716,7 +716,15 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
   // 产物跟源码住一起(2026-07 Lizi 定案:拿取直观);文件收集在写盘之前完成
   // + shouldSkip 跳过 *.cindy,自身产物不会进包;同名覆盖。
   const cindyPath = path.join(dir, `${built.manifest.id}-${built.manifest.version}.cindy`);
-  await fs.promises.writeFile(cindyPath, built.buf);
+  try {
+    await fs.promises.writeFile(cindyPath, built.buf);
+  } catch (err) {
+    return {
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: `写入打包产物失败:${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
   return { ok: true, cindyPath, manifest: built.manifest };
 }
 

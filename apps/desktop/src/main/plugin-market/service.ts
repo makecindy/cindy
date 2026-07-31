@@ -493,7 +493,8 @@ export class PluginMarketService {
     const owner = captureMarketOwner();
     const ledger = this.ledgerForOwner(owner);
     const manager = this.sourceManagerForOwner(owner);
-    return this.withMutation(`custom-market:${ref.marketName}/${ref.ghostId}`, async () => {
+    // 互斥键与 uninstall 一致使用规范化 pluginId，保证同插件的安装/更新/卸载串行。
+    return this.withMutation(customMarketPluginId(ref.marketName, ref.ghostId), async () => {
       requireSameMarketOwner(owner);
       const discovered = await manager.discoverSource(ref.marketName);
       if (!discovered.result.ok) {
@@ -615,8 +616,10 @@ export class PluginMarketService {
     const ownsInstall = Boolean(
       ghost && record?.installed && record.pluginId === pluginId,
     );
+    // 已拥有当前安装记录的来源保留所有权（installed / update-available）；
+    // duplicate 只把未拥有安装的竞争来源标为冲突，避免“先安装者优先”被降格。
     const conflict = Boolean(
-      duplicateGhostIds.has(plugin.ghostId) || (ghost && !ownsInstall),
+      (duplicateGhostIds.has(plugin.ghostId) && !ownsInstall) || (ghost && !ownsInstall),
     );
     const installState: PluginMarketItem['installState'] = conflict
       ? 'conflict'
