@@ -201,7 +201,7 @@ describe('loadCatalog', () => {
 
   it('persists a valid remote snapshot and uses its source-scoped LKG after failure', async () => {
     const url = 'https://catalog.example.test/providers.json';
-    const writeCache = vi.fn(async () => undefined);
+    const writeCache = vi.fn(async (_scope: string, _text: string) => undefined);
     const remote = await loadCatalogWithSource(
       { url },
       {
@@ -249,7 +249,7 @@ describe('loadCatalog', () => {
         )),
       },
     };
-    const writeCache = vi.fn(async () => undefined);
+    const writeCache = vi.fn(async (_scope: string, _text: string) => undefined);
 
     const loaded = await loadCatalogWithSource(
       { url },

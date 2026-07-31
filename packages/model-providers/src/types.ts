@@ -499,18 +499,6 @@ export interface Catalog {
    * 的实时售卖价；动态发现与 `/api/model-access/models` 仍分别是两类事实的权威。
    */
   modelRegistry?: ModelRegistry;
-  /**
-   * model-access-server 的网关模型元数据远程覆盖表（`{ version: 1, models: {...} }`
-   * 信封，schema 归服务端所有故此处不建型）。消费方：
-   *   - 服务端热加载（XD 网关模型元数据权威）；
-   *   - 客户端 **anthropic 动态发现的元数据基线**（active-catalog 合并时用
-   *     name/group/sortOrder/description/defaultEnabled 覆盖发现条目；动态通道未下发
-   *     capability 时，efforts/defaultEffort 作为能力基线；上游显式能力始终优先；
-   *     version !== 1 整段忽略）；
-   *   - dev 模式下本地覆盖服务端下发的 XD 模型元数据以便自测
-   *     （apps/desktop model-access devMetaOverlay，packaged 不走该覆盖）。
-   */
-  cindyModelMeta?: unknown;
 }
 
 /**

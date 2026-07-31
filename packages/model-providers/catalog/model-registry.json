@@ -15,7 +15,9 @@
       "sortOrder": 18,
       "supportsFastMode": true,
       "perAgent": {
-        "claude-code": { "supportsFastMode": false },
+        "claude-code": {
+          "supportsFastMode": false
+        },
         "codex": {
           "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
         }
@@ -57,6 +59,11 @@
               }
             }
           ]
+        },
+        {
+          "providerId": "xd",
+          "modelId": "gpt-5.6-sol",
+          "agents": ["claude-code", "codex"]
         }
       ]
     },
@@ -73,7 +80,9 @@
       "sortOrder": 19,
       "supportsFastMode": true,
       "perAgent": {
-        "claude-code": { "supportsFastMode": false },
+        "claude-code": {
+          "supportsFastMode": false
+        },
         "codex": {
           "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
         }
@@ -115,6 +124,11 @@
               }
             }
           ]
+        },
+        {
+          "providerId": "xd",
+          "modelId": "gpt-5.6-terra",
+          "agents": ["claude-code", "codex"]
         }
       ]
     },
@@ -163,6 +177,11 @@
               }
             }
           ]
+        },
+        {
+          "providerId": "xd",
+          "modelId": "gpt-5.6-luna",
+          "agents": ["claude-code", "codex"]
         }
       ]
     },
@@ -180,7 +199,10 @@
       "supportsFastMode": true,
       "defaultEnabled": false,
       "perAgent": {
-        "claude-code": { "contextWindow": 1000000, "supportsFastMode": false }
+        "claude-code": {
+          "contextWindow": 1000000,
+          "supportsFastMode": false
+        }
       },
       "routes": [
         {
@@ -217,6 +239,11 @@
               }
             }
           ]
+        },
+        {
+          "providerId": "xd",
+          "modelId": "gpt-5.5",
+          "agents": ["claude-code", "codex"]
         }
       ]
     },
@@ -233,7 +260,11 @@
       "sortOrder": 21,
       "supportsFastMode": true,
       "defaultEnabled": false,
-      "perAgent": { "claude-code": { "supportsFastMode": false } },
+      "perAgent": {
+        "claude-code": {
+          "supportsFastMode": false
+        }
+      },
       "routes": [
         {
           "providerId": "openai",
@@ -269,6 +300,11 @@
               }
             }
           ]
+        },
+        {
+          "providerId": "xd",
+          "modelId": "gpt-5.4",
+          "agents": ["claude-code", "codex"]
         }
       ]
     },
@@ -285,7 +321,11 @@
       "sortOrder": 22,
       "supportsFastMode": true,
       "defaultEnabled": false,
-      "perAgent": { "claude-code": { "supportsFastMode": false } },
+      "perAgent": {
+        "claude-code": {
+          "supportsFastMode": false
+        }
+      },
       "routes": [
         {
           "providerId": "openai",
@@ -306,6 +346,11 @@
               }
             }
           ]
+        },
+        {
+          "providerId": "xd",
+          "modelId": "gpt-5.4-mini",
+          "agents": ["claude-code", "codex"]
         }
       ]
     },
@@ -343,6 +388,11 @@
               }
             }
           ]
+        },
+        {
+          "providerId": "xd",
+          "modelId": "claude-fable-5",
+          "agents": ["claude-code"]
         }
       ]
     },
@@ -424,6 +474,11 @@
               }
             }
           ]
+        },
+        {
+          "providerId": "xd",
+          "modelId": "claude-opus-5",
+          "agents": ["claude-code"]
         }
       ]
     },
@@ -473,6 +528,11 @@
               }
             }
           ]
+        },
+        {
+          "providerId": "xd",
+          "modelId": "claude-opus-4-8",
+          "agents": ["claude-code"]
         }
       ]
     },
@@ -511,6 +571,11 @@
               }
             }
           ]
+        },
+        {
+          "providerId": "xd",
+          "modelId": "claude-opus-4-7",
+          "agents": ["claude-code"]
         }
       ]
     },
@@ -549,6 +614,11 @@
               }
             }
           ]
+        },
+        {
+          "providerId": "xd",
+          "modelId": "claude-opus-4-6",
+          "agents": ["claude-code"]
         }
       ]
     },
@@ -586,6 +656,11 @@
               }
             }
           ]
+        },
+        {
+          "providerId": "xd",
+          "modelId": "claude-opus-4-5",
+          "agents": ["claude-code"]
         }
       ]
     },
@@ -639,6 +714,11 @@
               }
             }
           ]
+        },
+        {
+          "providerId": "xd",
+          "modelId": "claude-sonnet-5",
+          "agents": ["claude-code"]
         }
       ]
     },
@@ -677,6 +757,11 @@
               }
             }
           ]
+        },
+        {
+          "providerId": "xd",
+          "modelId": "claude-sonnet-4-6",
+          "agents": ["claude-code"]
         }
       ]
     },
@@ -713,6 +798,11 @@
               }
             }
           ]
+        },
+        {
+          "providerId": "xd",
+          "modelId": "claude-sonnet-4-5",
+          "agents": ["claude-code"]
         }
       ]
     },
@@ -750,6 +840,11 @@
               }
             }
           ]
+        },
+        {
+          "providerId": "xd",
+          "modelId": "claude-haiku-4-5",
+          "agents": ["claude-code"]
         }
       ]
     },
@@ -811,7 +906,11 @@
       "efforts": ["low", "medium", "high", "xhigh"],
       "defaultEffort": "high",
       "sortOrder": 50,
-      "perAgent": { "codex": { "efforts": ["low", "medium", "high"] } },
+      "perAgent": {
+        "codex": {
+          "efforts": ["low", "medium", "high"]
+        }
+      },
       "routes": [
         {
           "providerId": "xai",
@@ -861,7 +960,11 @@
       "defaultEffort": "high",
       "sortOrder": 51,
       "defaultEnabled": false,
-      "perAgent": { "codex": { "efforts": ["low", "medium", "high"] } },
+      "perAgent": {
+        "codex": {
+          "efforts": ["low", "medium", "high"]
+        }
+      },
       "routes": [
         {
           "providerId": "xai",
@@ -931,6 +1034,386 @@
               }
             }
           ]
+        }
+      ]
+    },
+    {
+      "id": "xd/codex-gpt-5.6-sol",
+      "name": "GPT-5.6-Sol",
+      "group": "gpt-budget",
+      "description": "GPT-5.6-Sol for coding tasks",
+      "contextWindow": 372000,
+      "efforts": ["low", "medium", "high", "xhigh"],
+      "defaultEffort": "high",
+      "sortOrder": 8,
+      "supportsFastMode": true,
+      "perAgent": {
+        "claude-code": {
+          "supportsFastMode": false
+        },
+        "codex": {
+          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
+        }
+      },
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "codex/gpt-5.6-sol",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "xd/codex-gpt-5.6-terra",
+      "name": "GPT-5.6-Terra",
+      "group": "gpt-budget",
+      "description": "GPT-5.6-Terra for coding tasks",
+      "contextWindow": 372000,
+      "efforts": ["low", "medium", "high", "xhigh"],
+      "defaultEffort": "high",
+      "sortOrder": 9,
+      "supportsFastMode": true,
+      "perAgent": {
+        "claude-code": {
+          "supportsFastMode": false
+        },
+        "codex": {
+          "efforts": ["low", "medium", "high", "xhigh", "max", "ultra"]
+        }
+      },
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "codex/gpt-5.6-terra",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "xd/codex-gpt-5.5",
+      "name": "GPT-5.5",
+      "group": "gpt-budget",
+      "description": "GPT-5.5 for coding tasks",
+      "contextWindow": 272000,
+      "efforts": ["low", "medium", "high", "xhigh"],
+      "defaultEffort": "high",
+      "sortOrder": 10,
+      "supportsFastMode": true,
+      "defaultEnabled": false,
+      "perAgent": {
+        "claude-code": {
+          "supportsFastMode": false
+        }
+      },
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "codex/gpt-5.5",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "xd/codex-gpt-5.4",
+      "name": "GPT-5.4",
+      "group": "gpt-budget",
+      "description": "GPT-5.4 for coding tasks",
+      "contextWindow": 272000,
+      "efforts": ["low", "medium", "high", "xhigh"],
+      "defaultEffort": "high",
+      "sortOrder": 11,
+      "supportsFastMode": true,
+      "defaultEnabled": false,
+      "perAgent": {
+        "claude-code": {
+          "supportsFastMode": false
+        }
+      },
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "codex/gpt-5.4",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "google/gemini-3.5-flash",
+      "name": "Gemini 3.5 Flash",
+      "group": "google",
+      "description": "Google Gemini 3.5 Flash — upgraded Flash with stronger reasoning",
+      "contextWindow": 1000000,
+      "efforts": ["low", "medium", "high"],
+      "defaultEffort": "high",
+      "sortOrder": 30,
+      "supportsFastMode": false,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "gemini-3.5-flash",
+          "agents": ["claude-code"]
+        }
+      ]
+    },
+    {
+      "id": "google/gemini-3.1-pro-preview",
+      "name": "Gemini 3.1 Pro",
+      "group": "google",
+      "description": "Google Gemini 3.1 Pro Preview — deepest reasoning, multimodal",
+      "contextWindow": 1000000,
+      "efforts": ["low", "medium", "high"],
+      "defaultEffort": "high",
+      "sortOrder": 31,
+      "supportsFastMode": false,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "gemini-3.1-pro-preview",
+          "agents": ["claude-code"]
+        }
+      ]
+    },
+    {
+      "id": "google/gemini-3-flash-preview",
+      "name": "Gemini 3 Flash",
+      "group": "google",
+      "description": "Google Gemini 3 Flash Preview — fast multimodal reasoning",
+      "contextWindow": 1000000,
+      "efforts": ["low", "medium", "high"],
+      "defaultEffort": "high",
+      "sortOrder": 32,
+      "supportsFastMode": false,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "gemini-3-flash-preview",
+          "agents": ["claude-code"]
+        }
+      ]
+    },
+    {
+      "id": "bytedance-seed/seed-2.1-pro",
+      "name": "Seed 2.1 Pro",
+      "group": "china",
+      "contextWindow": 256000,
+      "efforts": ["minimal", "low", "medium", "high"],
+      "defaultEffort": "minimal",
+      "supportsFastMode": false,
+      "perAgent": {
+        "claude-code": {
+          "efforts": ["low", "medium", "high"],
+          "defaultEffort": "low"
+        }
+      },
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "bytedance-seed/seed-2.1-pro",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "qwen/qwen3.8-max-preview",
+      "name": "Qwen 3.8 Max Preview",
+      "group": "china",
+      "contextWindow": 983616,
+      "efforts": ["low", "high", "xhigh"],
+      "defaultEffort": "xhigh",
+      "supportsFastMode": false,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "qwen/qwen3.8-max-preview",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "qwen/qwen3.7-max",
+      "name": "Qwen 3.7 Max",
+      "group": "china",
+      "description": "Qwen 3.7 Max agentic coding model; thinking is provider-managed",
+      "contextWindow": 992000,
+      "efforts": [],
+      "sortOrder": 40,
+      "supportsFastMode": false,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "qwen/qwen3.7-max",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "moonshotai/kimi-k2.6",
+      "name": "Kimi K2.6",
+      "group": "china",
+      "description": "Moonshot Kimi K2.6 agentic coding model; thinking is provider-managed",
+      "contextWindow": 262144,
+      "efforts": [],
+      "sortOrder": 106,
+      "supportsFastMode": false,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "moonshotai/kimi-k2.6",
+          "agents": ["claude-code"]
+        }
+      ]
+    },
+    {
+      "id": "z-ai/glm-5.1",
+      "name": "GLM-5.1",
+      "group": "china",
+      "description": "Zhipu GLM-5.1 agentic coding model; thinking is provider-managed",
+      "contextWindow": 202752,
+      "efforts": [],
+      "sortOrder": 42,
+      "supportsFastMode": false,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "z-ai/glm-5.1",
+          "agents": ["claude-code"]
+        }
+      ]
+    },
+    {
+      "id": "z-ai/glm-5.2",
+      "name": "GLM-5.2",
+      "group": "china",
+      "description": "Zhipu GLM-5.2 agentic coding model; 1M context",
+      "contextWindow": 1000000,
+      "efforts": ["minimal", "high", "max"],
+      "defaultEffort": "max",
+      "sortOrder": 43,
+      "supportsFastMode": false,
+      "perAgent": {
+        "claude-code": {
+          "efforts": ["high", "max"],
+          "defaultEffort": "max"
+        }
+      },
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "z-ai/glm-5.2",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "deepseek/deepseek-v4-pro",
+      "name": "DeepSeek V4 Pro",
+      "group": "china",
+      "description": "DeepSeek V4 Pro reasoning model; only high/max effective (low/medium→high, xhigh→max)",
+      "contextWindow": 1048576,
+      "efforts": ["high", "max"],
+      "defaultEffort": "high",
+      "sortOrder": 44,
+      "supportsFastMode": false,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "deepseek/deepseek-v4-pro",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "deepseek/deepseek-v4-flash",
+      "name": "DeepSeek V4 Flash",
+      "group": "china",
+      "description": "DeepSeek V4 Flash efficiency-optimized MoE; only high/max effective",
+      "contextWindow": 1048576,
+      "efforts": ["high", "max"],
+      "defaultEffort": "high",
+      "sortOrder": 45,
+      "supportsFastMode": false,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "deepseek/deepseek-v4-flash",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "openai/gpt-5.4-nano",
+      "name": "GPT-5.4-Nano",
+      "group": "gpt",
+      "sortOrder": 101,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "gpt-5.4-nano",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "xd/codex-gpt-5.4-mini",
+      "name": "GPT-5.4-Mini",
+      "group": "gpt-budget",
+      "sortOrder": 103,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "codex/gpt-5.4-mini",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "moonshotai/kimi-k3",
+      "name": "Kimi K3",
+      "group": "china",
+      "contextWindow": 1000000,
+      "efforts": ["low", "high", "max"],
+      "defaultEffort": "max",
+      "sortOrder": 41,
+      "supportsFastMode": false,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "moonshotai/kimi-k3",
+          "agents": ["claude-code", "codex"]
+        }
+      ]
+    },
+    {
+      "id": "qwen/qwen3.6-plus",
+      "name": "Qwen 3.6 Plus",
+      "group": "china",
+      "sortOrder": 105,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "qwen/qwen3.6-plus",
+          "agents": ["claude-code"]
+        }
+      ]
+    },
+    {
+      "id": "xd/codex-gpt-5.5-auto",
+      "name": "GPT-5.5-Auto",
+      "group": "gpt-budget",
+      "sortOrder": 12,
+      "defaultEnabled": false,
+      "routes": [
+        {
+          "providerId": "xd",
+          "modelId": "codex/gpt-5.5:auto",
+          "agents": ["claude-code", "codex"]
         }
       ]
     }

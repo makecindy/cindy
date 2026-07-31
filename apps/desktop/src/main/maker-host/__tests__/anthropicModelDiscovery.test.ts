@@ -149,13 +149,36 @@ describe('mapAnthropicSdkModels', () => {
     ]);
   });
 
-  it('active v1 元数据缺字段时仍从 bundled v1 取得窗口和 effort', () => {
+  it('active registry 快照提供窗口和 effort 基线', () => {
     const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
-    catalog.cindyModelMeta = {
-      version: 1,
-      models: {
-        'claude-sonnet-4-5': { name: 'Remote Sonnet 4.5' },
-      },
+    catalog.modelRegistry = {
+      schemaVersion: 1,
+      updatedAt: '2026-07-31T00:00:00.000Z',
+      models: [
+        {
+          id: 'anthropic/claude-sonnet-4-5',
+          name: 'Remote Sonnet 4.5',
+          contextWindow: 200_000,
+          efforts: [],
+          routes: [{
+            providerId: 'anthropic',
+            modelId: 'claude-sonnet-4-5',
+            agents: ['claude-code'],
+          }],
+        },
+        {
+          id: 'anthropic/claude-opus-5',
+          name: 'Opus 5',
+          contextWindow: 1_000_000,
+          efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+          defaultEffort: 'high',
+          routes: [{
+            providerId: 'anthropic',
+            modelId: 'claude-opus-5',
+            agents: ['claude-code'],
+          }],
+        },
+      ],
     };
     setActiveCatalog(catalog);
 
@@ -232,7 +255,7 @@ describe('mapAnthropicSdkModels', () => {
     ]);
     expect(out.map((e) => e.model.id)).toEqual(['claude-fable-5', 'claude-opus-4-8']);
     expect(out[0].model.name).toBe('Fable 5'); // first-wins
-    // 归一化前 [1m] id 查不到 cindyModelMeta 基线,会塌回合成三档;归一化后按裸 id 命中。
+    // 归一化前 [1m] id 查不到 registry 基线,会塌回合成三档;归一化后按裸 id 命中。
     expect(out[0].model.efforts).toContain('xhigh');
   });
 
