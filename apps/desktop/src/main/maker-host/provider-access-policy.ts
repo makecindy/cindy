@@ -55,7 +55,7 @@ export function projectProviderCatalogForBuildRegion(
       const models = Object.fromEntries(
         Object.entries(provider.models).map(([agent, list]) => [
           agent,
-          list.filter((model) => classifyModel(model) !== 'video'),
+          (list ?? []).filter((model) => classifyModel(model) !== 'video'),
         ]),
       ) as Provider['models'];
       const hasVideoModels = Object.values(provider.models).some(
@@ -84,7 +84,7 @@ export function projectProviderCatalogForBuildRegion(
     const models = Object.fromEntries(
       Object.entries(provider.models).map(([agent, list]) => [
         agent,
-        list.filter((model) => {
+        (list ?? []).filter((model) => {
           const group = classifyModel(model);
           return group !== 'image' && (group !== 'video' || MAINLAND_VIDEO_MODEL_IDS.has(model.id));
         }),

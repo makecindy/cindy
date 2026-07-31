@@ -55,6 +55,7 @@ function catalog(): Catalog {
     draft: 'happyhorse',
     best: 'seedance-pro',
   };
+  xd.models.codex = undefined;
   return {
     version: 'test',
     providers: [
@@ -114,6 +115,7 @@ describe('provider access policy', () => {
         'seedance-fast',
         'seedance-pro',
       ]);
+      expect(xd?.models.codex).toEqual([]);
     },
   );
 });
@@ -171,6 +173,7 @@ describe('projectProviderCatalogForBuildRegion — 用户自有媒体来源', ()
             { ...model('third/image'), group: 'image' },
             model('chat-model'),
           ],
+          codex: undefined,
         },
         imageModels: [{ id: 'third/image', name: 'Third Image' }],
         imageDefaults: { standard: 'third/image' },
@@ -185,6 +188,7 @@ describe('projectProviderCatalogForBuildRegion — 用户自有媒体来源', ()
       const third = projected.providers.find((p) => p.id === 'third');
       expect(third).not.toBe(thirdParty);
       expect(third?.models['claude-code']?.map((m) => m.id)).toEqual(['third/image', 'chat-model']);
+      expect(third?.models.codex).toEqual([]);
       expect(third?.imageModels).toBe(thirdParty.imageModels);
       expect(third?.imageDefaults).toBe(thirdParty.imageDefaults);
       expect(third?.videoModels).toEqual([]);
