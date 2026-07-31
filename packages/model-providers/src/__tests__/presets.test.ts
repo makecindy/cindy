@@ -426,7 +426,7 @@ describe('官方渠道预设契约', () => {
     }));
   });
 
-  it('阿里云百炼 Coding Plan 与 Token Plan 使用各自的专属端点', () => {
+  it('阿里云百炼 Coding Plan 与 Token Plan 使用各自的专属端点并保留模型上下文窗口', () => {
     const codingPlan = preset('aliyun-bailian-coding');
     const tokenPlan = preset('aliyun-bailian-token-plan-cn');
     const codingPlanModels = [
@@ -435,12 +435,12 @@ describe('官方渠道预设契约', () => {
       { id: 'qwen3-coder-plus', name: 'Qwen3 Coder Plus' },
     ];
     const tokenPlanModels = [
-      { id: 'qwen3.8-max-preview', name: 'Qwen 3.8 Max Preview' },
-      { id: 'qwen3.7-max', name: 'Qwen 3.7 Max' },
-      { id: 'qwen3.7-plus', name: 'Qwen 3.7 Plus' },
-      { id: 'qwen3.6-flash', name: 'Qwen 3.6 Flash' },
-      { id: 'glm-5.2', name: 'GLM-5.2' },
-      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+      { id: 'qwen3.8-max-preview', name: 'Qwen 3.8 Max Preview', contextWindow: 983_616 },
+      { id: 'qwen3.7-max', name: 'Qwen 3.7 Max', contextWindow: 992_000 },
+      { id: 'qwen3.7-plus', name: 'Qwen 3.7 Plus', contextWindow: 1_000_000 },
+      { id: 'qwen3.6-flash', name: 'Qwen 3.6 Flash', contextWindow: 1_000_000 },
+      { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 1_000_000 },
+      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1_048_576 },
     ];
     const tokenPlanModelsUrl =
       'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/models';

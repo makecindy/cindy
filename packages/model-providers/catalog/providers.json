@@ -599,27 +599,33 @@
           "models": [
             {
               "id": "qwen3.8-max-preview",
-              "name": "Qwen 3.8 Max Preview"
+              "name": "Qwen 3.8 Max Preview",
+              "contextWindow": 983616
             },
             {
               "id": "qwen3.7-max",
-              "name": "Qwen 3.7 Max"
+              "name": "Qwen 3.7 Max",
+              "contextWindow": 992000
             },
             {
               "id": "qwen3.7-plus",
-              "name": "Qwen 3.7 Plus"
+              "name": "Qwen 3.7 Plus",
+              "contextWindow": 1000000
             },
             {
               "id": "qwen3.6-flash",
-              "name": "Qwen 3.6 Flash"
+              "name": "Qwen 3.6 Flash",
+              "contextWindow": 1000000
             },
             {
               "id": "glm-5.2",
-              "name": "GLM-5.2"
+              "name": "GLM-5.2",
+              "contextWindow": 1000000
             },
             {
               "id": "deepseek-v4-pro",
-              "name": "DeepSeek V4 Pro"
+              "name": "DeepSeek V4 Pro",
+              "contextWindow": 1048576
             }
           ]
         },
@@ -630,27 +636,33 @@
           "models": [
             {
               "id": "qwen3.8-max-preview",
-              "name": "Qwen 3.8 Max Preview"
+              "name": "Qwen 3.8 Max Preview",
+              "contextWindow": 983616
             },
             {
               "id": "qwen3.7-max",
-              "name": "Qwen 3.7 Max"
+              "name": "Qwen 3.7 Max",
+              "contextWindow": 992000
             },
             {
               "id": "qwen3.7-plus",
-              "name": "Qwen 3.7 Plus"
+              "name": "Qwen 3.7 Plus",
+              "contextWindow": 1000000
             },
             {
               "id": "qwen3.6-flash",
-              "name": "Qwen 3.6 Flash"
+              "name": "Qwen 3.6 Flash",
+              "contextWindow": 1000000
             },
             {
               "id": "glm-5.2",
-              "name": "GLM-5.2"
+              "name": "GLM-5.2",
+              "contextWindow": 1000000
             },
             {
               "id": "deepseek-v4-pro",
-              "name": "DeepSeek V4 Pro"
+              "name": "DeepSeek V4 Pro",
+              "contextWindow": 1048576
             }
           ]
         }
