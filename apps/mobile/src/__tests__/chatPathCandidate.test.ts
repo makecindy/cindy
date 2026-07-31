@@ -492,6 +492,23 @@ describe('findBareFilePathMatch(正文纯文本裸路径词法)', () => {
     expect(allValues('放在 src/components/ 下')).toEqual([]);
   });
 
+  it('超长扩展名整条不识别,**不得截断成前 10 个字符**', () => {
+    // 没有右边界时 `\.[A-Za-z0-9]{1,10}` 会贪心吃前 10 个字符然后收工:
+    //   src/file.typescriptreact → 候选 `src/file.typescript` + 正文残留 `react`
+    // 而截断后的前缀形状是「分隔符+扩展名」= 非歧义,断链时会被加下划线、允许点击,
+    // 点开的是一个**不存在的错误路径**(PR #1144 review 实捉)。
+    expect(allValues('打开 src/file.typescriptreact 看看')).toEqual([]);
+    expect(allValues('见 docs/x.markdownfile')).toEqual([]);
+    // 边界两侧各钉一个:恰好 10 个字符仍识别,11 个就整条拒绝。
+    expect(allValues('见 a/b.abcdefghij')).toEqual(['a/b.abcdefghij']);
+    expect(allValues('见 a/b.abcdefghijk')).toEqual([]);
+    // 常见多段扩展名不受影响(SEG 含 `.`,最后一段才是扩展名)。
+    expect(allValues('解包 dist/app.tar.gz')).toEqual(['dist/app.tar.gz']);
+    // 右边界只排除 ASCII 字母数字:紧跟 CJK / 标点 / 行号后缀的照旧识别。
+    expect(allValues('见 src/a.png。')).toEqual(['src/a.png']);
+    expect(allValues('见 src/a.png:12 行')).toEqual(['src/a.png:12']);
+  });
+
   it('没有任何分隔符的句子走短路,直接不命中', () => {
     expect(findBareFilePathMatch('这是一句普通的中文,没有任何路径。', 0)).toBeNull();
   });

@@ -23,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   _clearRemotePathVerdictCache,
   peekRemotePathVerdict,
+  subscribeRemotePathVerdictStale,
   verifyRemotePathCached,
   type RemoteFileOrigin,
 } from '../lib/remoteFileOpen';
@@ -101,6 +102,62 @@ describe('确定态仍是无 TTL 永久缓存(切走再回来不闪烁)', () => 
       expect(chatStat, `${wire} 被当成短 TTL 缓存、过期后重发了 stat`).toHaveBeenCalledTimes(1);
       vi.setSystemTime(new Date('2026-07-31T00:00:00Z'));
     }
+  });
+});
+
+describe('负缓存到期的通知(「自愈」不能只在重挂时发生)', () => {
+  // TTL 到期本身不是事件:没有任何 React 依赖会因它而变。只靠「重挂时重验」的话,
+  // 一条渲染完就一直挂着不动的消息在链路恢复后仍停在纯文本,直到用户切走再回来
+  // (PR #1144 review 实捉)。故模块把到期翻译成一次通知。
+  it('TTL 到期时通知订阅者,且该 key 已可重验', async () => {
+    const chatStat = stubChatStat(() => Promise.reject(new Error('link down')));
+    const seen: number[] = [];
+    subscribeRemotePathVerdictStale(() => seen.push(1));
+    await verify();
+    expect(seen, '还没到期就通知了').toHaveLength(0);
+
+    vi.setSystemTime(new Date('2026-07-31T00:00:31Z'));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(seen, 'TTL 到期没有通知 —— 挂载中的引用永远等不到重验').toHaveLength(1);
+
+    // 通知后该 key 的负缓存已被清掉:下一次 verify 真的重发 stat。
+    await verify();
+    expect(chatStat).toHaveBeenCalledTimes(2);
+  });
+
+  it('多个 key 到期只发一次通知,不是每 key 一次', async () => {
+    stubChatStat(() => Promise.reject(new Error('link down')));
+    let notified = 0;
+    subscribeRemotePathVerdictStale(() => { notified += 1; });
+    await Promise.all([
+      verifyRemotePathCached(ORIGIN, WORKDIR, '/remote/proj/a'),
+      verifyRemotePathCached(ORIGIN, WORKDIR, '/remote/proj/b'),
+      verifyRemotePathCached(ORIGIN, WORKDIR, '/remote/proj/c'),
+    ]);
+    vi.setSystemTime(new Date('2026-07-31T00:00:31Z'));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(notified, '3 个 key 到期发了多次通知(N 个引用会变成 N 次全量重渲染)').toBe(1);
+  });
+
+  it('没有 unknown 待期时零定时器(不轮询)', async () => {
+    stubChatStat(() => Promise.resolve({ verdict: 'file' }));
+    let notified = 0;
+    subscribeRemotePathVerdictStale(() => { notified += 1; });
+    await verify();
+    expect(vi.getTimerCount(), '确定态也排了到期定时器 —— 那就是在轮询').toBe(0);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(notified).toBe(0);
+  });
+
+  it('退订后不再收到通知', async () => {
+    stubChatStat(() => Promise.reject(new Error('link down')));
+    let notified = 0;
+    const off = subscribeRemotePathVerdictStale(() => { notified += 1; });
+    await verify();
+    off();
+    vi.setSystemTime(new Date('2026-07-31T00:00:31Z'));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(notified).toBe(0);
   });
 });
 

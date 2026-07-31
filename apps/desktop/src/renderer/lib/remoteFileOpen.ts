@@ -140,6 +140,45 @@ function capMapSize(map: Map<string, unknown>, cap: number): void {
   if (oldest !== undefined) map.delete(oldest);
 }
 
+// ── 负缓存到期的通知 ────────────────────────────────────────────────────────
+// TTL 到期**本身不是事件**:没有任何 React 依赖会因它而变。所以「TTL 过后自愈重验」
+// 只在组件重挂时才真的发生 —— 一条渲染完就一直挂着不动的消息,链路恢复后仍停在纯
+// 文本,直到用户切走再回来(PR #1144 review 实捉,与移动端同款缺口)。
+//
+// 由本模块把它翻译成一次通知,而不是让消费方各自处理:
+//   - **一个**模块级定时器,对齐「最早的负缓存到期时刻」;不是每个引用挂一个表
+//     (一条消息几十个引用 = 几十个定时器);
+//   - 没有 unknown 待期时**零定时器**,不轮询;
+//   - 到期时清掉过期条目 → 发**一次**通知(不是每 key 一次)→ 消费方重跑验证。
+//     已有确定结论的引用会在 peek 处早退,所以实际重验的只有仍是 unknown 的那批,
+//     节奏就是 TTL 本身(30s),正是负缓存设计时想要的 pace。
+const staleListeners = new Set<() => void>();
+let staleTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 订阅「unknown 负缓存到期,可以重验了」。返回退订函数。 */
+export function subscribeRemotePathVerdictStale(listener: () => void): () => void {
+  staleListeners.add(listener);
+  return () => {
+    staleListeners.delete(listener);
+  };
+}
+
+function scheduleStaleSweep(delayMs: number): void {
+  // 已有定时器就复用:它一定排在同一或更早的时刻,醒来后会把剩下的重新排期。
+  if (staleTimer !== null) return;
+  staleTimer = setTimeout(() => {
+    staleTimer = null;
+    const now = Date.now();
+    let earliest = Number.POSITIVE_INFINITY;
+    for (const [key, until] of unknownUntil) {
+      if (until <= now) unknownUntil.delete(key);
+      else if (until < earliest) earliest = until;
+    }
+    if (earliest !== Number.POSITIVE_INFINITY) scheduleStaleSweep(earliest - now);
+    for (const listener of [...staleListeners]) listener();
+  }, Math.max(1, delayMs));
+}
+
 function verdictKey(origin: RemoteFileOrigin, workdir: string, absPath: string): string {
   const endpoint = origin.kind === 'device' ? `dev:${origin.deviceId}` : `ssh:${origin.remoteHostId}`;
   return `${endpoint}|${workdir}|${absPath}`;
@@ -188,6 +227,8 @@ export function verifyRemotePathCached(
         // 短 TTL 负缓存,**不进 verdictCache**(见本节头注释的不变量 A)。
         capMapSize(unknownUntil, UNKNOWN_CACHE_CAP);
         unknownUntil.set(key, Date.now() + UNKNOWN_TTL_MS);
+        // 到期时通知挂载中的消费方重验(否则「自愈」只在重挂时发生)。
+        scheduleStaleSweep(UNKNOWN_TTL_MS);
       } else {
         capMapSize(verdictCache, VERDICT_CACHE_CAP);
         verdictCache.set(key, verdict);
@@ -199,11 +240,17 @@ export function verifyRemotePathCached(
   return p;
 }
 
-/** Test-only:清空确定态缓存、unknown 负缓存与在途请求(对称于移动端同名出口)。 */
+/** Test-only:清空确定态缓存、unknown 负缓存、在途请求、到期定时器与订阅者
+ *  (对称于移动端同名出口)。 */
 export function _clearRemotePathVerdictCache(): void {
   verdictCache.clear();
   verdictInflight.clear();
   unknownUntil.clear();
+  if (staleTimer !== null) {
+    clearTimeout(staleTimer);
+    staleTimer = null;
+  }
+  staleListeners.clear();
 }
 
 /** 远程会话「复制文件」:取回缓存副本后以副本作为剪贴板文件引用。 */

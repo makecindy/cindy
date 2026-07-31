@@ -432,9 +432,15 @@ const BARE_PATH_SEP = '\\\\/'; // 反斜杠 + 正斜杠,字符类内用
 const BARE_PATH_ANCHOR = `(?:[A-Za-z]:[${BARE_PATH_SEP}]|[.~]{1,2}[${BARE_PATH_SEP}]|[${BARE_PATH_SEP}])`;
 // 路径主体:要么有锚点(中间段可有可无),要么是「段+分隔符」至少一组(保证含分隔符);
 // 末段必须以扩展名收尾。
+//
+// 扩展名后的 `(?![A-Za-z0-9])` 是**右边界**,不能省:没有它,超过 10 个字符的扩展名会被
+// 截成前 10 个字符当成候选(`src/file.typescriptreact` → `src/file.typescript`),而截断后
+// 的前缀形状上是「分隔符+扩展名」= 非歧义,断链时会被加下划线、允许点击,点开的是一个
+// **不存在的错误路径**;正文里还留着孤零零的 `react`。加了边界之后整条路径直接不识别
+// (退回纯文本),这才是想要的语义(PR #1144 review 实捉,桌面 remarkLocalPathLinks 同步)。
 const BARE_PATH_BODY =
   `(?:${BARE_PATH_ANCHOR}(?:${BARE_PATH_SEG}[${BARE_PATH_SEP}])*`
-  + `|(?:${BARE_PATH_SEG}[${BARE_PATH_SEP}])+)${BARE_PATH_SEG}\\.[A-Za-z0-9]{1,10}`;
+  + `|(?:${BARE_PATH_SEG}[${BARE_PATH_SEP}])+)${BARE_PATH_SEG}\\.[A-Za-z0-9]{1,10}(?![A-Za-z0-9])`;
 // 可选 `:line[:column]` 行号后缀。
 const BARE_PATH_LINE_SUFFIX = '(?::[1-9]\\d{0,6}(?::[1-9]\\d{0,6})?)?';
 // 左边界:前一个字符不能是路径字符 / 分隔符(`:` 不算,允许 `文件:src/x.ts`)。

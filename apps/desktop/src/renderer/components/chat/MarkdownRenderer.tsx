@@ -73,6 +73,7 @@ import {
   fetchChatFileWithToasts,
   peekRemotePathVerdict,
   revealRemoteChatFile,
+  subscribeRemotePathVerdictStale,
   verifyRemotePathCached,
 } from '@/lib/remoteFileOpen';
 import { i18n } from '@/i18n';
@@ -1168,6 +1169,17 @@ function useResolvedMarkdownTarget(
   const { origin: fileOrigin } = useChatSessionFile();
   const remoteOrigin = isRemoteFileOrigin(fileOrigin) ? fileOrigin : null;
 
+  // unknown 负缓存到期 → 递增,进下面验证 effect 的依赖驱动重验。TTL 到期本身不是
+  // 事件(没有依赖会变),不接这条订阅的话「自愈」只在组件重挂时发生:一条挂着不动的
+  // 消息在链路恢复后会一直停在纯文本(PR #1144 review 实捉)。已有确定结论的引用会在
+  // peek 处早退,所以通知只会让仍是 unknown 的那批真的重发 stat。
+  const [staleGen, setStaleGen] = useState(0);
+  const needsStaleWatch = remoteOrigin !== null && target.kind === 'local-candidate';
+  useEffect(() => {
+    if (!needsStaleWatch) return;
+    return subscribeRemotePathVerdictStale(() => setStaleGen((n) => n + 1));
+  }, [needsStaleWatch]);
+
   // Synchronous resolution from the renderer cache. A reference that resolved
   // on a previous mount (e.g. before the user switched away and back) repaints
   // its chip on the very first render — no plain-text → chip flash, no repeat
@@ -1200,8 +1212,14 @@ function useResolvedMarkdownTarget(
   // then the result is cached and every later mount hits the sync path.
   const [asyncResolved, setAsyncResolved] = useState<MarkdownTarget | null>(null);
 
+  // 清旧结论只跟着 target / workdir / streaming 走。**staleGen 递增不清** ——
+  // 那只表示「该重验了」,不表示「旧结论失效了」;跟着清会让已乐观点亮的引用每 30s
+  // 闪一下(点亮 → 纯文本 → 点亮)。
   useEffect(() => {
     setAsyncResolved(null);
+  }, [isStreaming, remoteOrigin, target, workingDir]);
+
+  useEffect(() => {
     if (isStreaming || target.kind !== 'local-candidate') return;
     const candidate = target;
     if (remoteOrigin) {
@@ -1240,7 +1258,8 @@ function useResolvedMarkdownTarget(
     return () => {
       cancelled = true;
     };
-  }, [isStreaming, remoteOrigin, target, workingDir]);
+    // staleGen:unknown 负缓存到期时重跑本 effect(见上面订阅处的说明)。
+  }, [isStreaming, remoteOrigin, target, workingDir, staleGen]);
 
   const resolved = syncResolved ?? asyncResolved;
   return isResolvedForTarget(resolved, target) ? resolved : target;

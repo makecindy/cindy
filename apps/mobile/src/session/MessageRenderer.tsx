@@ -188,6 +188,7 @@ import {
 import { ChatFilePathContext, type ChatFilePathTarget } from '@/session/chatFilePathContext';
 import {
   peekRemotePathVerdict,
+  subscribeRemotePathVerdictStale,
   verifyRemotePathCached,
   type RemotePathVerdict,
 } from '@/session/remotePathVerdict';
@@ -3570,17 +3571,31 @@ function ChatPathChipSpan({
   const [verdict, setVerdict] = useState<RemotePathVerdict | undefined>(() =>
     ctx && target ? peekRemotePathVerdict(ctx.deviceId, ctx.workdir, target.absPath) : undefined,
   );
+
+  // unknown 负缓存到期 → 递增,进下面验证 effect 的依赖驱动重验。TTL 到期本身不是事件
+  // (没有依赖会变),不接这条订阅的话「自愈」只在 chip 重挂时发生:短转录不会被 FlatList
+  // 回收,链路恢复后会一直停在纯文本(PR #1144 review 实捉)。已有确定结论的 chip 会在
+  // peek 处早退,所以通知只让仍是 unknown 的那批真的重发 stat。
+  const [staleGen, setStaleGen] = useState(0);
+  const watchStale = !!ctx && !!target;
   useEffect(() => {
-    if (!ctx || !target) {
-      setVerdict(undefined);
-      return;
-    }
+    if (!watchStale) return;
+    return subscribeRemotePathVerdictStale(() => setStaleGen((n) => n + 1));
+  }, [watchStale]);
+
+  // 清旧结论只跟着 ctx / target 走。**staleGen 递增不清** —— 那只表示「该重验了」,
+  // 不表示「旧结论失效了」;跟着清会让已乐观点亮的 chip 每 30s 闪一下。
+  useEffect(() => {
+    setVerdict(undefined);
+  }, [ctx, target]);
+
+  useEffect(() => {
+    if (!ctx || !target) return;
     const cached = peekRemotePathVerdict(ctx.deviceId, ctx.workdir, target.absPath);
     if (cached) {
       setVerdict(cached);
       return;
     }
-    setVerdict(undefined);
     // 流式中不发验证:半截路径会产生大量无意义 stat(与桌面 isStreaming gate 同理)。
     if (streaming) return;
     let cancelled = false;
@@ -3590,7 +3605,8 @@ function ChatPathChipSpan({
     return () => {
       cancelled = true;
     };
-  }, [ctx, streaming, target]);
+    // staleGen:unknown 负缓存到期时重跑本 effect(见上面订阅处的说明)。
+  }, [ctx, streaming, target, staleGen]);
 
   // 点亮门槛分两档(见 ChatPathCandidate.ambiguousShape 的说明):
   //   - 形状明确是路径(绝对路径 / 尾斜杠目录 / 分隔符+扩展名):unknown(链路断 /

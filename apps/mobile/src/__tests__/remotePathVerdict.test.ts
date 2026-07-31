@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   _clearRemotePathVerdictCache,
   peekRemotePathVerdict,
+  subscribeRemotePathVerdictStale,
   verifyRemotePathCached,
 } from '@/session/remotePathVerdict';
 import type { RemotePathStatResult } from '@/device-link/mobileMakerTransport';
@@ -47,6 +48,45 @@ describe('remotePathVerdict', () => {
       vi.advanceTimersByTime(30_000 + 1);
       expect(await verifyRemotePathCached('dev', '/w', '/w/x.ts', statOf('missing'))).toBe('nonfile');
       expect(peekRemotePathVerdict('dev', '/w', '/w/x.ts')).toBe('nonfile');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('TTL 到期通知订阅者:「自愈」不能只在 chip 重挂时发生', async () => {
+    // TTL 到期本身不是事件,没有依赖会变。只靠重挂重验的话,短转录(不会被 FlatList
+    // 回收)在链路恢复后会一直停在纯文本(PR #1144 review 实捉,桌面同款缺口)。
+    vi.useFakeTimers();
+    try {
+      const failing = vi.fn(async (): Promise<RemotePathStatResult> => {
+        throw new Error('link down');
+      });
+      let notified = 0;
+      const off = subscribeRemotePathVerdictStale(() => { notified += 1; });
+      // 三个 key 一起进负缓存:到期只该发**一次**通知,不是每 key 一次。
+      await Promise.all([
+        verifyRemotePathCached('dev', '/w', '/w/a', failing),
+        verifyRemotePathCached('dev', '/w', '/w/b', failing),
+        verifyRemotePathCached('dev', '/w', '/w/c', failing),
+      ]);
+      expect(notified, '还没到期就通知了').toBe(0);
+      await vi.advanceTimersByTimeAsync(30_000 + 1);
+      expect(notified, 'TTL 到期没通知 / 或每 key 通知了一次').toBe(1);
+      // 通知后负缓存已清:重验真的重发 stat。
+      expect(await verifyRemotePathCached('dev', '/w', '/w/a', statOf('file'))).toBe('file');
+      off();
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(notified, '退订后仍收到通知').toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('确定态不排到期定时器(不轮询)', async () => {
+    vi.useFakeTimers();
+    try {
+      await verifyRemotePathCached('dev', '/w', '/w/a.ts', statOf('file'));
+      expect(vi.getTimerCount(), '确定态也排了定时器 —— 那就是在轮询').toBe(0);
     } finally {
       vi.useRealTimers();
     }

@@ -80,6 +80,42 @@ function capMapSize(map: Map<string, unknown>, cap: number): void {
   if (oldest !== undefined) map.delete(oldest);
 }
 
+// ── 负缓存到期的通知 ────────────────────────────────────────────────────────
+// TTL 到期**本身不是事件**:没有任何 React 依赖会因它而变。所以「TTL 过后重挂自愈」
+// 只在真的重挂时才发生 —— 短转录不会被 FlatList 回收,一条挂着不动的消息在链路恢复
+// 后会一直停在纯文本(PR #1144 review 实捉,与桌面同款缺口)。
+//
+// 由本模块把它翻译成一次通知:**一个**模块级定时器对齐「最早的负缓存到期时刻」
+// (不是每个 chip 挂一个表 —— 一屏几十个 chip 就是几十个定时器),没有 unknown 待期时
+// 零定时器、不轮询;到期清掉过期条目后发**一次**通知,已有确定结论的 chip 会在 peek
+// 处早退,于是实际重验的只有仍是 unknown 的那批,节奏就是 TTL 本身(30s)。
+const staleListeners = new Set<() => void>();
+let staleTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 订阅「unknown 负缓存到期,可以重验了」。返回退订函数。 */
+export function subscribeRemotePathVerdictStale(listener: () => void): () => void {
+  staleListeners.add(listener);
+  return () => {
+    staleListeners.delete(listener);
+  };
+}
+
+function scheduleStaleSweep(delayMs: number): void {
+  // 已有定时器就复用:它一定排在同一或更早的时刻,醒来后会把剩下的重新排期。
+  if (staleTimer !== null) return;
+  staleTimer = setTimeout(() => {
+    staleTimer = null;
+    const now = Date.now();
+    let earliest = Number.POSITIVE_INFINITY;
+    for (const [key, until] of unknownUntil) {
+      if (until <= now) unknownUntil.delete(key);
+      else if (until < earliest) earliest = until;
+    }
+    if (earliest !== Number.POSITIVE_INFINITY) scheduleStaleSweep(earliest - now);
+    for (const listener of [...staleListeners]) listener();
+  }, Math.max(1, delayMs));
+}
+
 /** 同步读已验证结论(未验证 / 仅负缓存 unknown → undefined,调用方走异步验证)。 */
 export function peekRemotePathVerdict(
   deviceId: string,
@@ -124,6 +160,8 @@ export function verifyRemotePathCached(
         // 短 TTL 负缓存(见头注释):TTL 内同 key 不再发 stat,乐观点亮语义不变。
         capMapSize(unknownUntil, UNKNOWN_CACHE_CAP);
         unknownUntil.set(key, Date.now() + UNKNOWN_TTL_MS);
+        // 到期时通知挂载中的 chip 重验(否则「自愈」只在重挂时发生)。
+        scheduleStaleSweep(UNKNOWN_TTL_MS);
       } else {
         capMapSize(verdictCache, VERDICT_CACHE_CAP);
         verdictCache.set(key, verdict);
@@ -143,4 +181,9 @@ export function _clearRemotePathVerdictCache(): void {
   unknownUntil.clear();
   statActive = 0;
   statWaiters.length = 0;
+  if (staleTimer !== null) {
+    clearTimeout(staleTimer);
+    staleTimer = null;
+  }
+  staleListeners.clear();
 }

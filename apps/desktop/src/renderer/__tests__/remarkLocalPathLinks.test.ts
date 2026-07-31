@@ -111,6 +111,21 @@ describe('remarkLocalPathLinks', () => {
     expect(linkUrls(runOnText('放在 src/components/ 下'))).toEqual([]);
   });
 
+  it('超长扩展名整条不动,**不得截断成前 10 个字符**', () => {
+    // 没有右边界时 `\.[A-Za-z0-9]{1,10}` 会贪心吃前 10 个字符然后收工:
+    //   src/file.typescriptreact → 链接 `src/file.typescript` + 正文残留 `react`
+    // 而截断后的前缀形状是「分隔符+扩展名」= 非歧义,远程会话断链时会被加下划线、
+    // 允许点击,点开的是一个**不存在的错误路径**(PR #1144 review 实捉,移动端同步)。
+    expect(linkUrls(runOnText('打开 src/file.typescriptreact 看看'))).toEqual([]);
+    // 边界两侧各钉一个:恰好 10 个字符仍识别,11 个就整条拒绝。
+    expect(linkUrls(runOnText('见 a/b.abcdefghij'))).toEqual(['a/b.abcdefghij']);
+    expect(linkUrls(runOnText('见 a/b.abcdefghijk'))).toEqual([]);
+    // 多段扩展名与紧跟的 CJK / 行号后缀不受影响。
+    expect(linkUrls(runOnText('解包 dist/app.tar.gz'))).toEqual(['dist/app.tar.gz']);
+    expect(linkUrls(runOnText('见 src/a.png。'))).toEqual(['src/a.png']);
+    expect(linkUrls(runOnText('见 src/a.png:12 行'))).toEqual(['src/a.png:12']);
+  });
+
   it('已经在 link 里的文本不碰(避免嵌套链接)', () => {
     const inner: Text = { type: 'text', value: 'src/App.tsx' };
     const link: Link = { type: 'link', url: 'src/App.tsx', children: [inner] };
