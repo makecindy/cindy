@@ -611,6 +611,7 @@ import { installNewMakerWindowShortcut } from './app-shortcuts/new-maker-window-
 import { registerLayoutIpc } from './layout/index.js';
 import {
   getGhostManager,
+  getGhostSessionActivityTracker,
   isGhostAvailableForActiveSession,
   refreshGhostLocalization,
   registerGhostIpc,
@@ -618,6 +619,8 @@ import {
   suspendAllGhosts,
   waitForGhostMutations,
 } from './cindy-brain/index.js';
+import { listActiveClaudeBackgroundActivitySessions } from './maker-host/claude-session-background-activity.js';
+import { evaluateRelaunchBusyActivity } from './relaunchBusyActivity.js';
 import { getGhostSetupChangeBus } from './cindy-brain/ghostSetupChangeBus.js';
 import { getGhostSetupInteractionBridge } from './cindy-brain/ghostSetupInteractionBridge.js';
 import { registerPluginMarketIpc } from './plugin-market/registerIpc.js';
@@ -849,6 +852,7 @@ const authBoundaryLog = createLogger('auth-boundary');
 // 主窗 renderer 加载失败可观测性 + dev 启动看门狗(见 renderer-boot-guard.ts 顶部注释)。
 const rendererGuardLog = createLogger('renderer-guard');
 const updatePresentationLog = createLogger('update-presentation');
+const relaunchActivityLog = createLogger('relaunch-activity');
 const voicePowerBroadcastLog = createLogger('voice-input-power');
 let rendererBootGuard: RendererBootGuard | null = null;
 
@@ -3810,6 +3814,25 @@ const registerIpcHandlers = () => {
             anySessionInTurn(getMakerCore()),
           readScheduleBusy: () => readUpdateRelaunchScheduleBusy(getScheduleStorageIfInitialized()),
         });
+      });
+      // 手动更新重启(侧栏 UpdateBanner)的阻断判定。与上面那个**无人值守**探针刻意分开:
+      // 无人值守要连「有远程设备在看会话」都让路,手动重启是用户主动发起的,只该关心
+      // 「这一下会打断哪些正在跑的活」。三个活动来源的聚合与 fail-closed 口径见
+      // relaunchBusyActivity.ts;这里只做装配 —— 它是本进程唯一能同时看到 maker 与
+      // cindy-brain 两侧跟踪器的位置。
+      //
+      // 不进 device-link allowlist:updater 类 channel 按 allowlist 顶部注释属「永不放行」,
+      // 且远程控制端不会代替用户点被控端的更新重启。
+      ipcMain.handle('update-relaunch:blocking-activity', () => {
+        const result = evaluateRelaunchBusyActivity({
+          anySessionInTurn: () => anySessionInTurn(getMakerCore()),
+          listClaudeBackgroundSessions: () => listActiveClaudeBackgroundActivitySessions(),
+          anyGhostSessionBusy: () => getGhostSessionActivityTracker().anySessionBusy(),
+        });
+        if (result.busy) {
+          relaunchActivityLog.info('manual relaunch has live activity', { reasons: result.reasons });
+        }
+        return result.busy;
       });
       // getMakerCore() 首次调用触发 Maker 构造，同时发起自定义 MCP 初始加载。
       // await 确保第一个会话的 mcpProviders 数组已填入已保存的自定义 MCP（P2 冷启动竞态修复）。

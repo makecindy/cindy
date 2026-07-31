@@ -38,11 +38,10 @@ const NOTES = { version: '1.4.2', date: '2026-07-28', contributors: [], sections
 
 const LINK = 'update.banner.viewNotes';
 
-// 入口按钮现在先查 busy 探针再决定「直接重启 vs 进中断警告态」,所以这个文件也需要
+// 入口按钮现在先查阻断探针再决定「直接重启 vs 进中断警告态」,所以这个文件也需要
 // 一个 electronAPI 桩;默认没有任务在跑(本文件只关心文字链,不关心重启)。
-const { anySessionInTurn, listSessionBackgroundActivity, relaunchToUpdate } = vi.hoisted(() => ({
-  anySessionInTurn: vi.fn<() => Promise<boolean>>(),
-  listSessionBackgroundActivity: vi.fn<() => Promise<{ sessionIds: string[] }>>(),
+const { anyActivityBlockingRelaunch, relaunchToUpdate } = vi.hoisted(() => ({
+  anyActivityBlockingRelaunch: vi.fn<() => Promise<boolean>>(),
   relaunchToUpdate: vi.fn(),
 }));
 
@@ -50,17 +49,14 @@ beforeEach(() => {
   updateStatus.current = { status: 'ready', version: '1.4.2' };
   fetchReleaseNotes.mockReset();
   fetchReleaseNotes.mockResolvedValue(NOTES);
-  anySessionInTurn.mockReset();
-  anySessionInTurn.mockResolvedValue(false);
-  listSessionBackgroundActivity.mockReset();
-  listSessionBackgroundActivity.mockResolvedValue({ sessionIds: [] });
+  anyActivityBlockingRelaunch.mockReset();
+  anyActivityBlockingRelaunch.mockResolvedValue(false);
   relaunchToUpdate.mockReset();
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
-      anySessionInTurn,
+      anyActivityBlockingRelaunch,
       relaunchToUpdate,
-      maker: { listSessionBackgroundActivity },
       clientEndpoints: { websiteUrl: 'https://cindy.ai' },
     } as unknown as Window['electronAPI'],
   });
@@ -91,7 +87,7 @@ describe('UpdateBanner release-notes link', () => {
   });
 
   it('hides the link while the busy-turn interruption warning is showing', async () => {
-    anySessionInTurn.mockResolvedValue(true);
+    anyActivityBlockingRelaunch.mockResolvedValue(true);
     render(<UpdateBanner isCollapsed={false} onOpenVersionNotice={vi.fn()} />);
     await screen.findByText(LINK);
 

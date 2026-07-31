@@ -214,24 +214,17 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
   //   - 有任务在跑 → 进 confirming 态,把「会打断进行中的任务」这件事说清楚,由用户拍板;
   //   - 没有        → 直接重启,不再多要一次无信息量的确认。
   //
-  // 「有任务在跑」必须同时看两个来源,漏一个就是一个无保护的中断入口:
-  //   1. anySessionInTurn() —— 逻辑 turn(SessionTurnActivityTracker + live session)。
-  //   2. listSessionBackgroundActivity() —— **turn 已结束但 CC 子进程仍在调模型**的后台
-  //      活动(后台子 agent、run_in_background 的 Bash)。channels.ts 把它维护成与 turn
-  //      完全独立的状态,anySessionInTurn 查不到它。
-  // 改成单击直达之前,这个缺口被那道无条件二次确认盖住了(用户至少能看到一屏并中止);
-  // 现在没有那道兜底,必须自己覆盖到。
-  //
-  // 已知未覆盖(刻意,不假装全覆盖):scheduler 里「run 已启动但 turn 尚未开始」的窄窗口。
-  // 它没有 renderer 侧的查询入口(main 的无人值守探针另有 hasRunningRuns 走 SQLite),
-  // 而 run 真跑起来后会产生 turn,落回第 1 条。
+  // 「有任务在跑」有三个互不相干的来源(逻辑 turn / Claude 后台活动 / Ghost card-action),
+  // 判定收在 main 侧一处(relaunchBusyActivity.ts),这里只问一次结论。**刻意不在 renderer
+  // 逐个枚举来源** —— 那样每加一个新来源就会漏一次(本 PR review 里连续被指出三轮),
+  // 而漏掉的后果是静默打断用户任务。新增来源改 main 侧那一个函数即可,这里不用动。
   // 探针失败 = **无法确认**,不等于「没有任务」。重启会杀掉 in-flight turn,属于不可撤销的
-  // 破坏性动作,所以这里 fail closed:退化成中断警告让用户自己拍板,而不是静默重启。口径对齐
-  // main 侧托盘退出路径(bootstrap-electron.ts 的 hasActiveTurn:「A failed busy probe must
-  // not turn the tray into an unguarded exit path.」)—— 同样是「破坏性入口 + 探针不可确认」。
-  // 代价只有探针真失败时多出来的一次确认;正常路径(handler 已注册,main 侧是纯同步 snapshot)
-  // 不受影响。注意 WindowControls.handleCloseClick 的 catch 走的是 false,那条是既有行为,
-  // 本 PR 不改它,但新入口不跟随更宽松的那一半。
+  // 破坏性动作,所以 fail closed:退化成中断警告让用户自己拍板,而不是静默重启。main 侧对每个
+  // 来源也各自 fail closed(见 relaunchBusyActivity.ts),这里再兜住整条 IPC 失败的情况。
+  // 口径对齐 main 侧托盘退出路径(bootstrap-electron.ts 的 hasActiveTurn:「A failed busy
+  // probe must not turn the tray into an unguarded exit path.」)。注意
+  // WindowControls.handleCloseClick 的 catch 走的是 false,那条是既有行为,本 PR 不改它,
+  // 但新入口不跟随更宽松的那一半。
   //
   // await 之后的两道复核是必需的,不是防御性冗余:探针在飞期间用户可能 dismiss、组件可能
   // 卸载、已就绪补丁可能被 superseding 顶掉。少了它们,「点了稍后却重启」「装回旧补丁」
@@ -240,15 +233,10 @@ export function UpdateBanner({ isCollapsed, onOpenVersionNotice }: UpdateBannerP
     if (relaunchProbeRef.current) return;
     relaunchProbeRef.current = true;
     const epoch = relaunchEpochRef.current;
-    // 初值取 true:探针没给出可信答案的任何路径(任一 reject、桥同步 throw)都落在保守的
-    // 那一侧。两个查询并行 —— 它们互不依赖,没理由把两次 IPC 串起来等。
+    // 初值取 true:探针没给出可信答案的任何路径(reject、桥同步 throw)都落在保守的那一侧。
     let hasInFlight = true;
     try {
-      const [inTurn, background] = await Promise.all([
-        window.electronAPI.anySessionInTurn(),
-        window.electronAPI.maker.listSessionBackgroundActivity(),
-      ]);
-      hasInFlight = inTurn || background.sessionIds.length > 0;
+      hasInFlight = await window.electronAPI.anyActivityBlockingRelaunch();
     } catch {
       hasInFlight = true;
     } finally {

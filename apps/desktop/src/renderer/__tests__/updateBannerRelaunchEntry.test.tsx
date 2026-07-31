@@ -5,8 +5,9 @@
  * (或探针拿不到可信答案)就拦一次并说明「会打断进行中的任务」。探针失败刻意 fail closed
  * —— 重启会不可撤销地杀掉 in-flight turn,「无法确认」不能当成「确认没有」。
  *
- * 「有任务在跑」有**两个独立来源**,各有一条用例:逻辑 turn(anySessionInTurn)与 turn 已
- * 结束但仍在调模型的后台活动(listSessionBackgroundActivity)。漏任一个都是无保护入口。
+ * 「有任务在跑」由哪些活动来源构成(逻辑 turn / Claude 后台活动 / Ghost card-action)是 main
+ * 侧一处判定的职责,覆盖面由 main/__tests__/relaunchBusyActivity.test.ts 负责。本文件只管
+ * renderer 这一侧的契约:**拿到 true 就拦、false 才走、拿不到答案就保守**。
  *
  * 另一半是**不变量:一次点击的探针结论,只有在这次点击仍然有效时才能驱动副作用**。
  * 探针在飞期间 dismiss、组件卸载、status 离开 ready 都必须让它作废 —— 三条对称路径
@@ -17,10 +18,9 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
-  anySessionInTurn, listSessionBackgroundActivity, relaunchToUpdate, updateStatus, dismissState,
+  anyActivityBlockingRelaunch, relaunchToUpdate, updateStatus, dismissState,
 } = vi.hoisted(() => ({
-  anySessionInTurn: vi.fn<() => Promise<boolean>>(),
-  listSessionBackgroundActivity: vi.fn<() => Promise<{ sessionIds: string[] }>>(),
+  anyActivityBlockingRelaunch: vi.fn<() => Promise<boolean>>(),
   relaunchToUpdate: vi.fn(),
   updateStatus: {
     current: { status: 'ready', version: '1.2.3', errorCode: null } as {
@@ -63,26 +63,22 @@ import { UpdateBanner } from '@/components/sidebar/UpdateBanner';
 /** 返回一个手动 settle 的探针,用于把「点击后、resolve 前」这段窗口撑开。 */
 function deferredProbe(): (busy: boolean) => void {
   let settle!: (busy: boolean) => void;
-  anySessionInTurn.mockImplementation(
+  anyActivityBlockingRelaunch.mockImplementation(
     () => new Promise<boolean>((resolve) => { settle = resolve; }),
   );
   return (busy: boolean) => settle(busy);
 }
 
 beforeEach(() => {
-  anySessionInTurn.mockReset();
-  listSessionBackgroundActivity.mockReset();
-  // 默认没有后台活动 —— 每条用例只需声明它关心的那个来源。
-  listSessionBackgroundActivity.mockResolvedValue({ sessionIds: [] });
+  anyActivityBlockingRelaunch.mockReset();
   relaunchToUpdate.mockReset();
   updateStatus.current = { status: 'ready', version: '1.2.3', errorCode: null };
   dismissState.dismissed = false;
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
-      anySessionInTurn,
+      anyActivityBlockingRelaunch,
       relaunchToUpdate,
-      maker: { listSessionBackgroundActivity },
       clientEndpoints: { websiteUrl: 'https://cindy.ai' },
     } as unknown as Window['electronAPI'],
   });
@@ -91,14 +87,14 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('UpdateBanner relaunch entry', () => {
-  it('warns about the interruption instead of relaunching while a turn is running', async () => {
-    anySessionInTurn.mockResolvedValue(true);
+  it('warns about the interruption instead of relaunching when main reports live activity', async () => {
+    anyActivityBlockingRelaunch.mockResolvedValue(true);
     render(<UpdateBanner isCollapsed={false} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
 
     const hint = await screen.findByText('update.banner.confirmBusyHint');
-    expect(anySessionInTurn).toHaveBeenCalledTimes(1);
+    expect(anyActivityBlockingRelaunch).toHaveBeenCalledTimes(1);
     expect(hint.className).toContain('text-[var(--warning-fg)]');
     // 拦住的这一步不能顺手把 app 重启了 —— 是否打断任务由用户拍板。
     expect(relaunchToUpdate).not.toHaveBeenCalled();
@@ -107,50 +103,23 @@ describe('UpdateBanner relaunch entry', () => {
     expect(relaunchToUpdate).toHaveBeenCalledTimes(1);
   });
 
-  it('relaunches on the first click when no turn is running', async () => {
-    anySessionInTurn.mockResolvedValue(false);
+  it('relaunches on the first click when main reports nothing running', async () => {
+    anyActivityBlockingRelaunch.mockResolvedValue(false);
     render(<UpdateBanner isCollapsed={false} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
 
     await waitFor(() => expect(relaunchToUpdate).toHaveBeenCalledTimes(1));
-    expect(anySessionInTurn).toHaveBeenCalledTimes(1);
+    expect(anyActivityBlockingRelaunch).toHaveBeenCalledTimes(1);
     // 没有任务在跑时不该再出现第二步 —— 那句「应用会自动重启」不带任何信息量。
     expect(screen.queryByRole('button', { name: 'update.banner.confirmAria' })).toBeNull();
     expect(screen.queryByText('update.banner.confirmBusyHint')).toBeNull();
   });
 
-  // 第二个来源:turn 已结束但 CC 子进程仍在调模型(后台子 agent / run_in_background 的
-  // Bash)。anySessionInTurn 查不到它 —— 改成单击直达前,这个缺口被无条件二次确认盖着。
-  it('warns when only post-turn background activity is running', async () => {
-    anySessionInTurn.mockResolvedValue(false);
-    listSessionBackgroundActivity.mockResolvedValue({ sessionIds: ['sess-bg-1'] });
-    render(<UpdateBanner isCollapsed={false} />);
-
-    fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
-
-    await screen.findByText('update.banner.confirmBusyHint');
-    expect(relaunchToUpdate).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole('button', { name: 'update.banner.confirmAria' }));
-    expect(relaunchToUpdate).toHaveBeenCalledTimes(1);
-  });
-
-  it('falls back to the warning state when the background-activity query rejects', async () => {
-    anySessionInTurn.mockResolvedValue(false);
-    listSessionBackgroundActivity.mockRejectedValue(new Error('ipc channel closed'));
-    render(<UpdateBanner isCollapsed={false} />);
-
-    fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
-
-    await screen.findByText('update.banner.confirmBusyHint');
-    expect(relaunchToUpdate).not.toHaveBeenCalled();
-  });
-
   // 探针拿不到可信答案时 fail closed:「无法确认」不能当成「确认没有」,重启会不可撤销地
   // 杀掉 in-flight turn。口径同 main 侧托盘退出路径的 hasActiveTurn(catch → true)。
   it('falls back to the warning state when the busy probe throws synchronously', async () => {
-    anySessionInTurn.mockImplementation(() => {
+    anyActivityBlockingRelaunch.mockImplementation(() => {
       throw new Error('electron bridge is not registered');
     });
     render(<UpdateBanner isCollapsed={false} />);
@@ -162,7 +131,7 @@ describe('UpdateBanner relaunch entry', () => {
   });
 
   it('falls back to the warning state when the busy probe rejects', async () => {
-    anySessionInTurn.mockRejectedValue(new Error('ipc channel closed'));
+    anyActivityBlockingRelaunch.mockRejectedValue(new Error('ipc channel closed'));
     render(<UpdateBanner isCollapsed={false} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
@@ -180,7 +149,7 @@ describe('UpdateBanner relaunch entry', () => {
     fireEvent.click(entry);
     fireEvent.click(entry);
 
-    await waitFor(() => expect(anySessionInTurn).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(anyActivityBlockingRelaunch).toHaveBeenCalledTimes(1));
     expect(relaunchToUpdate).not.toHaveBeenCalled();
 
     settle(false);
@@ -188,7 +157,7 @@ describe('UpdateBanner relaunch entry', () => {
   });
 
   it('applies the same judgement to the collapsed / rail entry', async () => {
-    anySessionInTurn.mockResolvedValue(false);
+    anyActivityBlockingRelaunch.mockResolvedValue(false);
     const { unmount } = render(<UpdateBanner isCollapsed />);
 
     fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaCollapsed' }));
@@ -197,7 +166,7 @@ describe('UpdateBanner relaunch entry', () => {
 
     unmount();
     relaunchToUpdate.mockClear();
-    anySessionInTurn.mockResolvedValue(true);
+    anyActivityBlockingRelaunch.mockResolvedValue(true);
     render(<UpdateBanner isCollapsed />);
 
     fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaCollapsed' }));
@@ -215,7 +184,7 @@ describe('UpdateBanner relaunch entry', () => {
     const { rerender } = render(<UpdateBanner isCollapsed={false} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
-    await waitFor(() => expect(anySessionInTurn).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(anyActivityBlockingRelaunch).toHaveBeenCalledTimes(1));
 
     // 用户点「稍后再说」= 明确表达现在不要重启。
     fireEvent.click(screen.getByRole('button', { name: 'update.banner.dismissAria' }));
@@ -233,7 +202,7 @@ describe('UpdateBanner relaunch entry', () => {
     const { rerender } = render(<UpdateBanner isCollapsed={false} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
-    await waitFor(() => expect(anySessionInTurn).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(anyActivityBlockingRelaunch).toHaveBeenCalledTimes(1));
 
     fireEvent.click(screen.getByRole('button', { name: 'update.banner.dismissAria' }));
     rerender(<UpdateBanner isCollapsed={false} />);
@@ -258,7 +227,7 @@ describe('UpdateBanner relaunch entry', () => {
     const { rerender } = render(<UpdateBanner isCollapsed={false} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
-    await waitFor(() => expect(anySessionInTurn).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(anyActivityBlockingRelaunch).toHaveBeenCalledTimes(1));
 
     // 新版本下载完成,已就绪补丁被顶掉:此时重启会装回旧补丁。
     updateStatus.current = { status: 'superseding', version: '1.2.3', errorCode: null };
@@ -277,7 +246,7 @@ describe('UpdateBanner relaunch entry', () => {
     const { unmount } = render(<UpdateBanner isCollapsed={false} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'update.banner.ariaExpanded' }));
-    await waitFor(() => expect(anySessionInTurn).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(anyActivityBlockingRelaunch).toHaveBeenCalledTimes(1));
 
     unmount();
     settle(false);
