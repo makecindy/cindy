@@ -2595,6 +2595,82 @@ export class CodexAgent extends BaseAgent {
     // carried it. A global "last send text" can be poisoned by a turn/start
     // that later fails, and can then unlock an unrelated surviving turn.
     const capabilitySelectionTextByTurnId = new Map<string, string>();
+    type PendingCapabilitySteer = {
+      completion: Promise<void>;
+      resolve: () => void;
+    };
+    const pendingCapabilitySteersByTurnId = new Map<string, Set<PendingCapabilitySteer>>();
+
+    const appendCapabilitySelectionText = (turnId: string, selectionText: string): void => {
+      if (!selectionText) return;
+      capabilitySelectionTextByTurnId.set(
+        turnId,
+        [capabilitySelectionTextByTurnId.get(turnId) ?? '', selectionText]
+          .filter(Boolean)
+          .join('\n'),
+      );
+    };
+
+    const registerPendingCapabilitySteer = (
+      turnId: string,
+      selectionText: string,
+    ): ((accepted: boolean) => void) => {
+      let resolve!: () => void;
+      const entry: PendingCapabilitySteer = {
+        completion: new Promise<void>((done) => {
+          resolve = done;
+        }),
+        resolve: () => resolve(),
+      };
+      const entries = pendingCapabilitySteersByTurnId.get(turnId) ?? new Set();
+      entries.add(entry);
+      pendingCapabilitySteersByTurnId.set(turnId, entries);
+      let settled = false;
+      return (accepted) => {
+        if (settled) return;
+        settled = true;
+        if (
+          accepted &&
+          !closed &&
+          !completedTurnIds.has(turnId) &&
+          !terminalErroredTurnIds.has(turnId)
+        ) {
+          appendCapabilitySelectionText(turnId, selectionText);
+        }
+        entries.delete(entry);
+        if (entries.size === 0) pendingCapabilitySteersByTurnId.delete(turnId);
+        entry.resolve();
+      };
+    };
+
+    const waitForPendingCapabilitySteers = async (turnId: string): Promise<boolean> => {
+      // More than one direct caller can steer the same turn concurrently. A
+      // controlled MCP request cannot be attributed to one steer RPC, so wait
+      // until every steer that was already in flight has an authoritative ACK.
+      while (true) {
+        const entries = pendingCapabilitySteersByTurnId.get(turnId);
+        if (!entries || entries.size === 0) break;
+        await Promise.all([...entries].map((entry) => entry.completion));
+      }
+      return (
+        !closed &&
+        !completedTurnIds.has(turnId) &&
+        !terminalErroredTurnIds.has(turnId)
+      );
+    };
+
+    const abandonPendingCapabilitySteersForTurn = (turnId: string): void => {
+      const entries = pendingCapabilitySteersByTurnId.get(turnId);
+      if (!entries) return;
+      pendingCapabilitySteersByTurnId.delete(turnId);
+      for (const entry of entries) entry.resolve();
+    };
+
+    const abandonPendingCapabilitySteers = (): void => {
+      for (const turnId of pendingCapabilitySteersByTurnId.keys()) {
+        abandonPendingCapabilitySteersForTurn(turnId);
+      }
+    };
     const forceTurnConfirmation = (toolName: string, input: unknown): boolean => {
       const policy = activeTurnPermissionPolicy;
       if (!policy) return false;
@@ -4525,6 +4601,18 @@ export class CodexAgent extends BaseAgent {
           id: params.serverName,
         },
       );
+      if (
+        capabilityRoute &&
+        params.turnId &&
+        !(await waitForPendingCapabilitySteers(params.turnId))
+      ) {
+        log.warn('Codex MCP invocation blocked while its steer turn became inactive', {
+          serverName: params.serverName,
+          turnId: params.turnId,
+          capabilityId: capabilityRoute.capabilityId,
+        });
+        return { action: 'decline', content: null, _meta: null };
+      }
       const activePluginId = capabilityRoute
         ? mcpToolPluginId(params)
         : undefined;
@@ -5667,6 +5755,10 @@ export class CodexAgent extends BaseAgent {
       // 同一个墓碑也负责拦截该 turn 随后迟到的 item / reasoning / started 事件。
       if (completedTurnIds.has(turn.id)) return;
       completedTurnIds.add(turn.id);
+      // A controlled MCP request may already be waiting for a steer ACK. The
+      // completed tombstone is authoritative, so release it immediately to
+      // decline instead of waiting for the local ACK timeout.
+      abandonPendingCapabilitySteersForTurn(turn.id);
       const completedCapabilitySelectionText =
         capabilitySelectionTextByTurnId.get(turn.id) ?? '';
       capabilitySelectionTextByTurnId.delete(turn.id);
@@ -7865,12 +7957,23 @@ export class CodexAgent extends BaseAgent {
         // turn 结束后队列再发一遍"的重复消费;这里同时给在飞 RPC 挂
         // late-resolution 观察,迟到结果留日志现场。
         assertCurrentHost('turn/steer');
-        const steerRpc = host.request(Method.TurnSteer, {
-          threadId,
-          input,
-          expectedTurnId: steeredTurnId,
-        });
+        const settleCapabilitySteer = registerPendingCapabilitySteer(
+          steeredTurnId,
+          userMessageText(message.content),
+        );
+        let steerRpc: Promise<unknown>;
+        try {
+          steerRpc = host.request(Method.TurnSteer, {
+            threadId,
+            input,
+            expectedTurnId: steeredTurnId,
+          });
+        } catch (error) {
+          settleCapabilitySteer(false);
+          throw error;
+        }
         let ackSettled = false;
+        let capabilitySteerAccepted = false;
         try {
           await new Promise<void>((resolve, reject) => {
             const onAbort = () => {
@@ -7911,6 +8014,7 @@ export class CodexAgent extends BaseAgent {
             );
           });
           ackSettled = true;
+          capabilitySteerAccepted = true;
         } catch (error) {
           if (isExpectedTurnIdMismatchError(error)) {
             // app-server 已明确拒绝该 stale expectedTurnId,消息没有注入其它 turn。
@@ -7920,6 +8024,10 @@ export class CodexAgent extends BaseAgent {
           }
           throw error;
         } finally {
+          // Only an authoritative ACK may extend this turn's explicit source
+          // selection. Requests emitted before that ACK wait on this entry;
+          // rejection/timeout/abort releases them against the previous state.
+          settleCapabilitySteer(capabilitySteerAccepted);
           if (!ackSettled) {
             // 超时 / abort 后请求仍在飞:迟到成功说明消息已注入但上层已按失败
             // 处理(队列行被暂停保留),留 warn 现场供排查;迟到失败静默吞掉,
@@ -7935,15 +8043,6 @@ export class CodexAgent extends BaseAgent {
             );
           }
         }
-        capabilitySelectionTextByTurnId.set(
-          steeredTurnId,
-          [
-            capabilitySelectionTextByTurnId.get(steeredTurnId) ?? '',
-            userMessageText(message.content),
-          ]
-            .filter(Boolean)
-            .join('\n'),
-        );
         // ack 成功 = server 已确认接受注入,消息已进入该 turn 的输入(即使本地
         // 已先收到 turn 终态事件,ack 与终态乱序)。这里必须按**已投递**成功返回
         // (review #939 第二轮 P1)——此前按 NO_ACTIVE_TURN 抛出会让 coordinator
@@ -8026,6 +8125,7 @@ export class CodexAgent extends BaseAgent {
         // 统一按拒绝释放, 否则 handler 永远悬挂, dispatchServerRequest
         // 永不返回, server 侧请求卡死。
         abandonBufferedTurns('session closed');
+        abandonPendingCapabilitySteers();
         // 把挂起的 approval 强制 deny + emit interaction_dismissed (UI 关 dialog),
         // 否则 server 那边没回 response 会卡; UI 上的 PermissionPrompt 也会留尸
         try { dismissAllPending('session_closed', 'deny'); } catch (e) { log.warn('dismissAllPending threw', { error: String(e) }); }

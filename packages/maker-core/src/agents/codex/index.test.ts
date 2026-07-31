@@ -952,6 +952,7 @@ describe('CodexAgent capability routing', () => {
   });
 
   it('does not unlock a downstream MCP when an explicit steering message is rejected', async () => {
+    const steerAck = deferred<{ turnId: string }>();
     const agent = new CodexAgent(
       createDeps(
         {},
@@ -968,12 +969,7 @@ describe('CodexAgent capability routing', () => {
           return { turn: { id: 'turn-rejected-capability-steer' } };
         }
         if (method === Method.TurnSteer) {
-          throw Object.assign(
-            new Error(
-              'expected active turn id turn-rejected-capability-steer but found another-turn',
-            ),
-            { code: -32600 },
-          );
+          return steerAck.promise;
         }
         return undefined;
       },
@@ -988,19 +984,32 @@ describe('CodexAgent capability routing', () => {
       type: 'user',
       content: '查一下我和康康的飞书消息',
     });
-    await expect(
-      handle.steer({
-        type: 'user',
-        content: '/feishu-delegate:message-feishu-coworkers 查一下康康',
-      }),
-    ).rejects.toThrow('No active Codex turn to steer');
-
     const handlers = host.getThreadHandlers();
     if (!handlers?.mcpServerElicitation) {
       throw new Error('expected mcpServerElicitation handler');
     }
-    await expect(
-      handlers.mcpServerElicitation({
+    handlers.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-rejected-capability-steer',
+      item: {
+        id: 'rejected-steer-routed-feishu-call',
+        type: 'mcpToolCall',
+        server: 'cindy-routed-feishu-delegate',
+        tool: 'feishu_read_messages',
+        pluginId: 'feishu-delegate@personal',
+      },
+    });
+    const steerPromise = handle.steer({
+      type: 'user',
+      content: '/feishu-delegate:message-feishu-coworkers 查一下康康',
+    });
+    await vi.waitFor(() => {
+      expect(
+        host.request.mock.calls.filter(([method]) => method === Method.TurnSteer),
+      ).toHaveLength(1);
+    });
+    let elicitationSettled = false;
+    const elicitationPromise = handlers.mcpServerElicitation({
         threadId: 'start-thread-id',
         turnId: 'turn-rejected-capability-steer',
         serverName: 'cindy-routed-feishu-delegate',
@@ -1011,8 +1020,114 @@ describe('CodexAgent capability routing', () => {
         },
         message: 'Allow tool call',
         requestedSchema: {},
-      }),
-    ).resolves.toEqual({ action: 'decline', content: null, _meta: null });
+      }).then((result) => {
+        elicitationSettled = true;
+        return result;
+      });
+    await Promise.resolve();
+    expect(elicitationSettled).toBe(false);
+
+    const serverError = Object.assign(
+      new Error(
+        'expected active turn id turn-rejected-capability-steer but found another-turn',
+      ),
+      { code: -32600 },
+    );
+    const steerAssertion = expect(steerPromise).rejects.toThrow(
+      'No active Codex turn to steer',
+    );
+    steerAck.reject(serverError);
+    await steerAssertion;
+    await expect(elicitationPromise).resolves.toEqual({
+      action: 'decline',
+      content: null,
+      _meta: null,
+    });
+
+    await handle.close();
+  });
+
+  it('waits for a steer acknowledgement before applying its explicit capability selection', async () => {
+    const steerAck = deferred<{ turnId: string }>();
+    const agent = new CodexAgent(
+      createDeps(
+        {},
+        {
+          capabilityRouting,
+          getMcpToolApprovalPolicy: () => 'auto-approve',
+        },
+      ),
+    );
+    const host = installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.TurnStart) {
+          return { turn: { id: 'turn-pending-capability-steer' } };
+        }
+        if (method === Method.TurnSteer) return steerAck.promise;
+        return undefined;
+      },
+      { userAgent: 'mock-codex/0.145.0' },
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-pending-capability-steer',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    await handle.send({
+      type: 'user',
+      content: '查一下我和康康的飞书消息',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.mcpServerElicitation) {
+      throw new Error('expected mcpServerElicitation handler');
+    }
+    handlers.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-pending-capability-steer',
+      item: {
+        id: 'pending-steer-routed-feishu-call',
+        type: 'mcpToolCall',
+        server: 'cindy-routed-feishu-delegate',
+        tool: 'feishu_read_messages',
+        pluginId: 'feishu-delegate@personal',
+      },
+    });
+    const steerPromise = handle.steer({
+      type: 'user',
+      content: '/feishu-delegate:message-feishu-coworkers 查一下康康',
+    });
+    await vi.waitFor(() => {
+      expect(
+        host.request.mock.calls.filter(([method]) => method === Method.TurnSteer),
+      ).toHaveLength(1);
+    });
+    let elicitationSettled = false;
+    const elicitationPromise = handlers.mcpServerElicitation({
+      threadId: 'start-thread-id',
+      turnId: 'turn-pending-capability-steer',
+      serverName: 'cindy-routed-feishu-delegate',
+      mode: 'form',
+      _meta: {
+        codex_approval_kind: 'mcp_tool_call',
+        tool_name: 'feishu_read_messages',
+      },
+      message: 'Allow tool call',
+      requestedSchema: {},
+    }).then((result) => {
+      elicitationSettled = true;
+      return result;
+    });
+    await Promise.resolve();
+    expect(elicitationSettled).toBe(false);
+
+    steerAck.resolve({ turnId: 'turn-pending-capability-steer' });
+    await steerPromise;
+    await expect(elicitationPromise).resolves.toEqual({
+      action: 'accept',
+      content: null,
+      _meta: null,
+    });
 
     await handle.close();
   });

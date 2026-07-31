@@ -340,37 +340,93 @@ describe('prepareCodexGlobalPluginsBridge', () => {
     ).resolves.toBe('new source content');
   });
 
-  it('restores the original marketplace link when an explicit-only skill is missing', async () => {
+  it('skips cached plugin versions that predate the routed Skill and MCP', async () => {
     const { homeDir, codexHome, paths } = await setup();
     const marketplace = 'personal';
-    await writePluginCache(paths.sourceCacheDir, marketplace, 'feishu-delegate', '0.1.0');
+    const plugin = 'feishu-delegate';
+    const oldVersion = '0.1.0';
+    const currentVersion = '0.2.0';
+    const skill = 'message-feishu-coworkers';
+    await writePluginCache(paths.sourceCacheDir, marketplace, plugin, oldVersion);
+    await writePluginCache(paths.sourceCacheDir, marketplace, plugin, currentVersion);
+    const currentPluginDir = path.join(
+      paths.sourceCacheDir,
+      marketplace,
+      plugin,
+      currentVersion,
+    );
+    await fs.mkdir(path.join(currentPluginDir, 'skills', skill), { recursive: true });
+    await fs.writeFile(
+      path.join(currentPluginDir, 'skills', skill, 'SKILL.md'),
+      `---\nname: ${skill}\n---\n`,
+      'utf8',
+    );
+    await fs.mkdir(path.join(currentPluginDir, '.codex-plugin'), { recursive: true });
+    await fs.writeFile(
+      path.join(currentPluginDir, '.codex-plugin', 'plugin.json'),
+      JSON.stringify({
+        name: plugin,
+        skills: './skills/',
+        mcpServers: './.mcp.json',
+      }),
+      'utf8',
+    );
+    await fs.writeFile(
+      path.join(currentPluginDir, '.mcp.json'),
+      JSON.stringify({
+        mcpServers: {
+          'feishu-delegate': { command: 'node', args: ['./mcp/server.mjs'] },
+        },
+      }),
+      'utf8',
+    );
     await writePluginEnabledState(
       paths.sourceConfigFile,
-      'feishu-delegate',
+      plugin,
       marketplace,
       true,
     );
-    await prepareCodexGlobalPluginsBridge(codexHome, { homeDir });
 
     const result = await prepareCodexGlobalPluginsBridge(codexHome, {
       homeDir,
-      capabilityRouting: explicitOnlySkillPolicy(),
+      capabilityRouting: isolatedFeishuPolicy(),
     });
 
     expect(result.marketplaces).toEqual([
-      expect.objectContaining({ name: marketplace, status: 'error' }),
+      expect.objectContaining({ name: marketplace, status: 'linked' }),
     ]);
-    expect(result.routingFailures).toEqual([expect.stringContaining('feishu-delegate@personal')]);
-    expect(result.warnings.some((warning) => warning.includes('is missing'))).toBe(true);
-    expect(
-      await sameRealPath(
-        path.join(paths.cacheDir, marketplace),
-        path.join(paths.sourceCacheDir, marketplace),
+    expect(result.routingFailures).toEqual([]);
+    expect(result.warnings).toEqual([]);
+    await expect(
+      fs.readFile(
+        path.join(paths.cacheDir, marketplace, plugin, oldVersion, 'plugin.json'),
+        'utf8',
       ),
-    ).toBe(true);
-    expect(
-      (await fs.readdir(paths.cacheDir)).filter((entry) => entry.includes('.cindy-overlay-')),
-    ).toEqual([]);
+    ).resolves.toContain(plugin);
+    const metadata = yaml.load(
+      await fs.readFile(
+        path.join(
+          paths.cacheDir,
+          marketplace,
+          plugin,
+          currentVersion,
+          'skills',
+          skill,
+          'agents',
+          'openai.yaml',
+        ),
+        'utf8',
+      ),
+    ) as { policy?: { allow_implicit_invocation?: boolean } };
+    expect(metadata.policy?.allow_implicit_invocation).toBe(false);
+    const isolatedMcp = JSON.parse(
+      await fs.readFile(
+        path.join(paths.cacheDir, marketplace, plugin, currentVersion, '.mcp.json'),
+        'utf8',
+      ),
+    ) as { mcpServers: Record<string, unknown> };
+    expect(isolatedMcp.mcpServers).toHaveProperty('cindy-routed-feishu-delegate');
+    expect(isolatedMcp.mcpServers).not.toHaveProperty('feishu-delegate');
   });
 
   it.skipIf(process.platform === 'win32')(

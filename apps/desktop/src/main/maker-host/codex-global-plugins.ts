@@ -343,9 +343,10 @@ async function applyExplicitOnlySkillPolicy(
     for (const overlay of overlays) {
       const skillDir = path.join(pluginDir, version, 'skills', overlay.skillName);
       if (!(await isDirectory(skillDir))) {
-        throw new Error(
-          `cannot make Codex skill explicit-only: ${overlay.pluginKey}/${overlay.skillName} is missing in ${version}`,
-        );
+        // Plugin caches retain old versions. A version that predates this
+        // Skill exposes nothing to constrain, so only mutate versions that
+        // actually contain the routed capability.
+        continue;
       }
       const agentDir = path.join(skillDir, 'agents');
       const metadataFile = path.join(agentDir, 'openai.yaml');
@@ -394,10 +395,9 @@ function renameMcpServerKey(
     );
   }
   if (!(source in servers)) {
-    if (target in servers) return;
-    throw new Error(
-      `cannot isolate Codex MCP server ${overlay.pluginKey}/${source}: it is missing in ${sourceLabel}`,
-    );
+    // As with Skills, cached plugin versions can predate this MCP server. No
+    // source entry means this version does not expose the target capability.
+    return;
   }
   const config = servers[source];
   if (!isRecord(config)) {
@@ -490,6 +490,12 @@ async function applyMcpServerRename(
     typeof declaration === 'string'
       ? resolvePluginOwnedPath(pluginVersionDir, declaration)
       : path.join(pluginVersionDir, '.mcp.json');
+  try {
+    await fsp.access(configFile);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw err;
+  }
   const config = await readJsonObject(configFile);
   const servers = isRecord(config['mcpServers']) ? config['mcpServers'] : config;
   for (const overlay of overlays) renameMcpServerKey(servers, overlay, configFile);
