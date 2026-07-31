@@ -565,6 +565,25 @@ describe('runMemoryChangeWithCodexRestart', () => {
     );
   });
 
+  it('busy 路径 persist 后 stillValid 变 false: 不登记延迟重启(owner boundary 窗口)', async () => {
+    // persist 与登记之间还有一个 await 边界:owner boundary 在该窗口清掉旧登记后,
+    // 旧 owner 的变更不得再 schedule —— 其定时器会重启新 owner 的 Codex runtime
+    // (codex review P1 第 3 轮)。写入已由 persist 内的 scope 校验守卫。
+    const deps = createDeps();
+    deps.prepare.mockRejectedValueOnce(new CodexCredentialModeSwitchBusyError(['s1']));
+    let ownerScopeFlipped = false;
+    const result = await runMemoryChangeWithCodexRestart(deps, {
+      persist: async () => {
+        ownerScopeFlipped = true;
+        return { value: 11 };
+      },
+      reason: 'subagent-spawn-config-change',
+      stillValid: () => !ownerScopeFlipped,
+    });
+    expect(result).toEqual({ value: 11, codexRestartDeferred: false });
+    expect(deps.scheduleDeferredRestart).not.toHaveBeenCalled();
+  });
+
   it('finalize 失败只 warn, 设置提交结果照常返回', async () => {
     const deps = createDeps();
     deps.finalize.mockRejectedValueOnce(new Error('restart failed'));

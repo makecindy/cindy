@@ -250,7 +250,12 @@ export function SubagentModelSection() {
       concurrencyTimer.current = setTimeout(commitConcurrency, 150);
       return;
     }
-    void persistPatch({ codexMaxConcurrentSubagents: draft });
+    void persistPatch({ codexMaxConcurrentSubagents: draft }).then((ok) => {
+      // 保存失败(磁盘错误 / owner 切换 / 重启准备失败)时回滚草稿:滑杆回落到
+      // 已存值,不让未落盘的值冒充生效 —— 交互已结束,没有定时器会再重试
+      // (codex review P2 第 3 轮)。失败原因由 persistPatch 的 error toast 呈现。
+      if (!ok) setConcurrencyDraft(null);
+    });
   }, [persistPatch]);
 
   const onConcurrencyDrag = useCallback(

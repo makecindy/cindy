@@ -836,10 +836,12 @@ async function applyMemoryChangeWithCodexRestart<T extends object>(
  */
 export async function applyCodexSpawnConfigChangeWithRestart<T extends object>(
   persist: () => Promise<T>,
+  stillValid?: () => boolean,
 ): Promise<T & { codexRestartDeferred: boolean }> {
   return applyMemoryChangeWithCodexRestart({
     persist,
     reason: 'subagent-spawn-config-change',
+    stillValid,
   });
 }
 

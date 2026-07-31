@@ -607,6 +607,20 @@ describe('SubagentModelSection guardrails card', () => {
     );
   });
 
+  it('rolls the draft back to the stored value when the commit write fails', async () => {
+    // 保存失败时滑杆不得停留在未落盘的新值:交互已结束,没有定时器会再重试,
+    // 停留会让用户误以为失败的值仍然有效(codex review P2 第 3 轮)。
+    settingsGet.mockResolvedValue(makeState({ codexMaxConcurrentSubagents: 3 }));
+    settingsSet.mockRejectedValueOnce(new Error('disk write failed'));
+    render(<SubagentModelSection />);
+    await waitFor(() => expect(screen.queryByRole('slider')).not.toBeNull());
+    fireEvent.keyDown(screen.getByRole('slider'), { key: 'ArrowRight' }); // 3 → 4(乐观)
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
+    // 草稿回滚:数值 pill 回落到已存的 3。
+    await waitFor(() => expect(screen.getByText('3')).toBeTruthy());
+    expect(screen.queryByText('4')).toBeNull();
+  });
+
   it('never writes detached after unmount (owner-boundary safety)', async () => {
     // 卸载后不允许任何 detached 写入:main 侧按请求时刻解析 owner-scoped 路径,
     // 账号切换触发的卸载若再写会落进错误命名空间(codex review P1)。onValueCommit

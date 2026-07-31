@@ -266,6 +266,15 @@ export interface MemoryChangeParts<T extends object> {
   applyRuntime?: () => Promise<void>;
   /** 延迟重启诊断日志里的触发源标签;缺省 'memory-change'(历史默认)。 */
   reason?: string;
+  /**
+   * 变更跨 await 边界后是否仍有效(如 owner scope 未变)。busy 路径在 persist
+   * 之后、登记延迟重启之前复核:persist 期间发生 owner boundary 时,旧 owner 的
+   * 变更不得在(可能已被 boundary 清理过的)全局 service 上再登记 —— 其定时器
+   * 最终会重启新 owner 的 Codex runtime(codex review P1 第 3 轮)。写入本身由
+   * persist 内部的 scope 校验守卫;这里只跳过登记:owner 切换会 teardown 旧
+   * host,新 owner 的 host 重建时天然现读各 owner 自己的 store,不需要这次重启。
+   */
+  stillValid?: () => boolean;
 }
 
 export interface MemoryChangeWithCodexRestartDeps {
@@ -331,6 +340,12 @@ export async function runMemoryChangeWithCodexRestart<T extends object>(
   }
   if (!prepared) {
     const result = await parts.persist();
+    if (parts.stillValid && !parts.stillValid()) {
+      deps.logger?.info('deferred codex restart not scheduled: change stale after persist', {
+        reason: parts.reason ?? 'memory-change',
+      });
+      return { ...result, codexRestartDeferred: false };
+    }
     deps.scheduleDeferredRestart(parts.reason ?? 'memory-change', parts.applyRuntime);
     return { ...result, codexRestartDeferred: true };
   }

@@ -2698,13 +2698,17 @@ const registerIpcHandlers = () => {
     // 命名空间(appSessionState.activeOwnerScopeKey 的跨 await 写入契约,codex
     // review P1)。过期即拒,不静默落盘。
     const ownerScopeKey = activeOwnerScopeKey();
+    const stillValid = () => activeOwnerScopeKey() === ownerScopeKey;
     return applyCodexSpawnConfigChangeWithRestart(async () => {
-      if (activeOwnerScopeKey() !== ownerScopeKey) {
+      if (!stillValid()) {
         throwIpcError('PRECONDITION_FAILED', 'app session changed during codex restart; write dropped');
       }
       writeSubagentModelSettingsPatch(parsed);
       return subagentModelSettingsWire();
-    });
+    // stillValid 同时传给执行体:busy 路径 persist 与登记之间还有一个 await 边界,
+    // 该窗口内 owner boundary 清掉旧登记后,本请求不得再 schedule(codex review
+    // P1 第 3 轮)。
+    }, stillValid);
   });
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_RESET, async (event) => {
     // 同 SET:restart-capable 操作,先验可信渲染器(codex review P1)。
@@ -2716,15 +2720,17 @@ const registerIpcHandlers = () => {
       resetSubagentModelSettings();
       return { ...subagentModelSettingsWire(), codexRestartDeferred: false };
     }
-    // 同 SET:跨 await 的 owner-scoped 写入必须绑定 scope,过期即拒(codex review P1)。
+    // 同 SET:跨 await 的 owner-scoped 写入必须绑定 scope,过期即拒(codex review P1);
+    // stillValid 传给执行体守住 persist→登记 的窗口(codex review P1 第 3 轮)。
     const ownerScopeKey = activeOwnerScopeKey();
+    const stillValid = () => activeOwnerScopeKey() === ownerScopeKey;
     return applyCodexSpawnConfigChangeWithRestart(async () => {
-      if (activeOwnerScopeKey() !== ownerScopeKey) {
+      if (!stillValid()) {
         throwIpcError('PRECONDITION_FAILED', 'app session changed during codex restart; reset dropped');
       }
       resetSubagentModelSettings();
       return subagentModelSettingsWire();
-    });
+    }, stillValid);
   });
 
   // Claude Code 自动上下文压缩阈值 IPC —— store 跟 Maker 单例无关, 提前注册。
