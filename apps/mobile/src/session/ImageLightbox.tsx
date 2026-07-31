@@ -742,10 +742,28 @@ const LightboxPage = memo(function LightboxPage({
    * 天然失效,不需要额外 effect 复位(漏复位就会让新图那段又回到纯黑)。
    */
   const [loadedUri, setLoadedUri] = useState<string | null>(null);
+  /**
+   * 已确认加载失败的垫底图地址(同样存地址,换图天然失效)。
+   * 缩略图的磁盘文件可能被 150MB LRU 或系统清理掉,而取件队列的内存缓存仍持有那个
+   * 永不过期的 file:// —— 光看 URI 存在会把"没有像素"当成"已经出图",于是 spinner
+   * 被藏掉、垫底层又画不出东西,整段退回纯黑(PR #1125 review)。
+   */
+  const [failedPreviewUri, setFailedPreviewUri] = useState<string | null>(null);
+  /**
+   * 已确证 onError 的原图地址(同样存地址,换图 / 重取换 url 天然失效)。
+   * 桌面取件图有 forceRefresh 自愈 + 重试按钮兜底,失败终态由父层的 resolveMap 接管;
+   * 直连 http 图两者都没有,必须在本页给失败终态,否则会永远转圈谎报"还在加载"。
+   */
+  const [failedFullUri, setFailedFullUri] = useState<string | null>(null);
+  const media = image.payload.media;
+  // 可重取 = 桌面取件图:失败有 forceRefresh 自愈与重试按钮。直连 http / data 图两者皆无。
+  const retryable = !media.previewable && isDesktopLocalMediaUrl(media.url);
   const layers = lightboxImageLayers({
     fullUri: uri,
     previewUri,
     fullLoaded: !!uri && loadedUri === uri,
+    previewFailed: !!previewUri && failedPreviewUri === previewUri,
+    fullFailedTerminally: !retryable && !!uri && failedFullUri === uri,
   });
 
   const setZoomedBoth = useCallback((value: boolean) => {
@@ -875,8 +893,6 @@ const LightboxPage = memo(function LightboxPage({
     ],
   }));
 
-  const media = image.payload.media;
-  const retryable = !media.previewable && isDesktopLocalMediaUrl(media.url);
   // 取件成功但 mime 非图片(unsupported)时 displayUriFor 恒为 null,若只认
   // status==='error' 会永远停在 spinner —— 一并视为失败,给到重试按钮。
   const resolvedUnsupported = resolveState?.status === 'ready' && !resolveState.media.previewable;
@@ -910,6 +926,11 @@ const LightboxPage = memo(function LightboxPage({
             */}
             {layers.showPreview && previewUri ? (
               <Animated.Image
+                // 垫底图画不出来时必须撤掉并让 spinner 回来,不能停在纯黑(见
+                // failedPreviewUri)。乐观先渲染而不是等它 onLoad:本地文件解码只要
+                // 一两帧,为它先挂一帧 spinner 反而每次打开都闪一下,与本次「让用户
+                // 感知不到」的目标相反。
+                onError={() => setFailedPreviewUri(previewUri)}
                 resizeMode="contain"
                 source={{ uri: previewUri }}
                 style={[styles.pagePreviewLayer, imageStyle]}
@@ -917,7 +938,14 @@ const LightboxPage = memo(function LightboxPage({
               />
             ) : null}
             <Animated.Image
-              onError={onImageError && retryable ? () => onImageError(image) : undefined}
+              // 两条失败路径都要接:可重取的图交父层做一次 forceRefresh 自愈(再失败
+              // 落父层 error 态给重试按钮);直连图没有任何重取入口,只能在本页记下
+              // "这个地址确证没有像素",由 lightboxImageLayers 给失败终态——否则会
+              // 一直转圈谎报"还在加载"(此前是一直纯黑)。
+              onError={() => {
+                setFailedFullUri(uri);
+                if (onImageError && retryable) onImageError(image);
+              }}
               onLoad={(event) => {
                 // 撤垫底的唯一依据:原图真的有像素了。早于此撤(例如取件一完成
                 // 就撤)就会把下载窗口裸露成黑屏,正是本次修复的起因。
@@ -935,6 +963,12 @@ const LightboxPage = memo(function LightboxPage({
             {layers.showSpinner ? (
               <View pointerEvents="none" style={styles.pageSpinnerLayer}>
                 <ActivityIndicator color="#ffffff" testID="message.imageLightboxLoading" />
+              </View>
+            ) : null}
+            {/* 直连图加载失败:没有重取入口,给失败终态而不是永远转圈。单击关闭仍由手势层接管。 */}
+            {layers.showFailure ? (
+              <View pointerEvents="none" style={styles.pageSpinnerLayer}>
+                <Text style={styles.stateText}>{t('message.lightbox.loadFailed')}</Text>
               </View>
             ) : null}
             {overlayVisible ? (
@@ -1014,6 +1048,8 @@ const LightboxPage = memo(function LightboxPage({
                 // Pressable 单击关闭接管):首开不黑屏,原图到达切上面手势分支时
                 // 那边继续垫同一张图,两段之间不留空档。
                 <Animated.Image
+                  // 同上:垫底失败要退回 spinner,不能让取件在途这段变成纯黑。
+                  onError={() => setFailedPreviewUri(previewUri)}
                   resizeMode="contain"
                   source={{ uri: previewUri }}
                   style={StyleSheet.absoluteFill}
