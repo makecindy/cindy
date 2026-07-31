@@ -1505,9 +1505,11 @@ function ExpandedView({
   /* ---- mod+1..9 快速切换对话 + 按住修饰键浮现序号徽标(复刻 Codex 桌面版) ----
    * 序号口径 = getVisibleSidebarSessionIds 的渲染顺序(含置顶区),与 shift 范围
    * 多选 / 删除后跳转同一权威实现。副窗不启用:副窗侧栏默认折叠,快捷键切副窗
-   * 自己的列表反直觉。折叠态自然失效:隐藏 wrapper 里的行被可见性过滤剔除,
-   * handler 拿不到目标返回 false 让路。 */
-  const sessionSwitchEnabled = !isSecondaryWindow();
+   * 自己的列表反直觉。搜索 overlay 打开(search.trimmed 非空)时同样让路:
+   * overlay 盖住列表,槽位仍指向被盖住的行会无提示跳到看不见的目标,徽标也
+   * 被遮住。折叠态自然失效:隐藏 wrapper 里的行被可见性过滤剔除,handler
+   * 拿不到目标返回 false 让路。 */
+  const sessionSwitchEnabled = !isSecondaryWindow() && !search.trimmed;
   const handleSwitchSessionSlot = useCallback(
     (slotIndex: number) => {
       const visibleIds = getVisibleSidebarSessionIds(sidebarScrollRef.current);
