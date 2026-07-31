@@ -3812,6 +3812,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   configureProviderModelAutoRefresh({
     listProviders: (opts) => getDesktopProviderService().listProviders(opts),
     getScopeKey: () => getActiveAppSession().generation,
+    refreshCatalog: async () => {
+      await refreshActiveCatalogFromSource();
+      broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
+    },
     refreshProvider: (providerId) =>
       refreshBuiltinProviderModels(providerId, {
         refreshXd: options.refreshXdGatewayModels,
@@ -3822,6 +3826,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ),
         refreshXaiCatalog: async () => {
           await refreshActiveCatalogFromSource();
+          broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
         },
       }),
   });

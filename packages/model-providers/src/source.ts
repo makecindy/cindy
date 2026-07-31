@@ -144,6 +144,30 @@ function log(io: CatalogIO, level: 'info' | 'warn' | 'error', msg: string, meta?
   io.log?.(level, `[model-providers] ${msg}`, meta);
 }
 
+function registryUpdatedAt(catalog: Catalog): number | null {
+  const value = catalog.modelRegistry?.updatedAt;
+  if (!value) return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+/**
+ * 远端完整 Catalog 可以继续前进，但 modelRegistry 不能被 CDN 旧副本或灰度回滚降级。
+ * updatedAt 只排序 registry 段，不拿它否定同一响应里的 provider / preset 变化。
+ */
+function preserveNewerCachedRegistry(remote: Catalog, cached: Catalog): Catalog {
+  const remoteUpdatedAt = registryUpdatedAt(remote);
+  const cachedUpdatedAt = registryUpdatedAt(cached);
+  if (
+    cached.modelRegistry &&
+    cachedUpdatedAt !== null &&
+    (remoteUpdatedAt === null || cachedUpdatedAt > remoteUpdatedAt)
+  ) {
+    return { ...remote, modelRegistry: cached.modelRegistry };
+  }
+  return remote;
+}
+
 /**
  * 加载目录并返回实际命中的来源。返回值永远包含一个合法 Catalog（最差也回退内置
  * bundled），不抛错。来源标记让手动刷新可以把 bundled fallback 视为失败并保留上次
@@ -188,10 +212,35 @@ export async function loadCatalogWithSource(
       if (remainingMs > 0) {
         try {
           const text = await io.fetchText(remoteUrl, remainingMs);
-          const parsed = parseCatalog(text);
+          let parsed = parseCatalog(text);
+          let cacheText = text;
+          const remoteRegistryUpdatedAt = registryUpdatedAt(parsed);
+          if (io.readCache) {
+            try {
+              const cachedText = await io.readCache(remoteUrl);
+              if (cachedText !== null) {
+                const cached = parseCatalog(cachedText);
+                const merged = preserveNewerCachedRegistry(parsed, cached);
+                if (merged !== parsed) {
+                  parsed = merged;
+                  cacheText = JSON.stringify(merged);
+                  log(io, 'warn', 'remote model registry is older than LKG; preserving newer registry', {
+                    url: remoteUrl,
+                    remoteUpdatedAt: remoteRegistryUpdatedAt,
+                    cachedUpdatedAt: registryUpdatedAt(cached),
+                  });
+                }
+              }
+            } catch (err) {
+              log(io, 'warn', 'cached catalog could not be compared with remote snapshot', {
+                url: remoteUrl,
+                err: String(err),
+              });
+            }
+          }
           if (io.writeCache) {
             try {
-              await io.writeCache(remoteUrl, text);
+              await io.writeCache(remoteUrl, cacheText);
             } catch (err) {
               log(io, 'warn', 'valid remote catalog loaded but LKG write failed', {
                 url: remoteUrl,

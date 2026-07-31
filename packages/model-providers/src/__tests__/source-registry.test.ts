@@ -226,6 +226,50 @@ describe('loadCatalog', () => {
     expect(cached).toMatchObject({ source: 'cache', catalog: { version: 'test' } });
   });
 
+  it('keeps a newer cached modelRegistry when a valid remote Catalog is stale', async () => {
+    const url = 'https://catalog.example.test/providers.json';
+    const registry = JSON.parse(JSON.stringify(BUNDLED_CATALOG.modelRegistry));
+    const older: Catalog = {
+      ...MINIMAL,
+      modelRegistry: {
+        ...registry,
+        updatedAt: '2026-07-30T00:00:00.000Z',
+        models: registry.models.map((entry: { id: string }) => (
+          entry.id === 'openai/gpt-5.6-sol' ? { ...entry, name: 'STALE' } : entry
+        )),
+      },
+    };
+    const newer: Catalog = {
+      ...MINIMAL,
+      modelRegistry: {
+        ...registry,
+        updatedAt: '2026-08-01T00:00:00.000Z',
+        models: registry.models.map((entry: { id: string }) => (
+          entry.id === 'openai/gpt-5.6-sol' ? { ...entry, name: 'NEWER-LKG' } : entry
+        )),
+      },
+    };
+    const writeCache = vi.fn(async () => undefined);
+
+    const loaded = await loadCatalogWithSource(
+      { url },
+      {
+        fetchText: vi.fn(async () => JSON.stringify(older)),
+        readCache: vi.fn(async () => JSON.stringify(newer)),
+        writeCache,
+      },
+    );
+
+    expect(loaded.source).toBe('remote');
+    expect(loaded.catalog.providers[0]?.name).toBe(MINIMAL.providers[0]?.name);
+    expect(loaded.catalog.modelRegistry?.updatedAt).toBe('2026-08-01T00:00:00.000Z');
+    expect(
+      loaded.catalog.modelRegistry?.models.find((entry) => entry.id === 'openai/gpt-5.6-sol')?.name,
+    ).toBe('NEWER-LKG');
+    expect(JSON.parse(writeCache.mock.calls[0]![1]).modelRegistry.updatedAt)
+      .toBe('2026-08-01T00:00:00.000Z');
+  });
+
   it('reads LKG even when the startup network budget is zero and rejects bad cache', async () => {
     const url = 'https://catalog.example.test/providers.json';
     const fetchText = vi.fn();

@@ -491,3 +491,19 @@ test("devEnvPrefix passes harness envs through on Windows cmd with quote strippi
 test("devEnvPrefix omits harness envs when unset (whitelist stays opt-in)", () => {
 	assert.equal(devEnvPrefix({}, "darwin"), "");
 });
+
+test("devEnvPrefix passes explicit model catalog test controls to Desktop", () => {
+	const prefix = devEnvPrefix(
+		{
+			XDT_MODELS_URL: "http://127.0.0.1:43181/api/model-catalog/catalog",
+			XDT_MODELS_PATH: "/tmp/model catalog.json",
+			XDT_DISABLE_MODELS_FETCH: "1",
+		},
+		"darwin",
+	);
+	assert.equal(
+		prefix,
+		"XDT_MODELS_URL='http://127.0.0.1:43181/api/model-catalog/catalog' " +
+			"XDT_MODELS_PATH='/tmp/model catalog.json' XDT_DISABLE_MODELS_FETCH='1' ",
+	);
+});

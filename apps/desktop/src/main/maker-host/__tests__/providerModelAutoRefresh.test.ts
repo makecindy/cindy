@@ -34,6 +34,33 @@ function deferred(): {
 }
 
 describe('provider model auto-refresh coordinator', () => {
+  it('refreshes the shared Catalog after cooldown even when xAI is disconnected', async () => {
+    let now = 1_000;
+    const refreshCatalog = vi.fn(async () => undefined);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [
+        view('openai', true),
+        view('xai', false),
+      ],
+      refreshProvider: vi.fn(async () => undefined),
+      refreshCatalog,
+      now: () => now,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+
+    // Splash 已取过公共 Catalog；startup 不重复请求，并给失败恢复留 5 分钟宽限。
+    await coordinator.requestAutoRefresh('startup');
+    expect(refreshCatalog).not.toHaveBeenCalled();
+    await coordinator.requestAutoRefresh('providers-open');
+    expect(refreshCatalog).not.toHaveBeenCalled();
+
+    now += PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS;
+    await coordinator.requestAutoRefresh('model-selector-open');
+    expect(refreshCatalog).toHaveBeenCalledOnce();
+    await coordinator.requestAutoRefresh('foreground');
+    expect(refreshCatalog).toHaveBeenCalledOnce();
+  });
+
   it('refreshes only connected built-ins and applies a per-provider cooldown', async () => {
     let now = 1_000;
     const refreshProvider =

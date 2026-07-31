@@ -214,16 +214,30 @@ const io: CatalogIO = {
  */
 function buildSource(): CatalogSourceConfig {
   const dev = isDev();
+  const explicitUrl = process.env.XDT_MODELS_URL;
   const baseUrl = dev ? undefined : getClientEndpoint('modelAccessApiBaseUrl');
   const usesBuildRealm = !dev && baseUrl === getBuildClientEndpoint('modelAccessApiBaseUrl');
   return {
-    url: process.env.XDT_MODELS_URL,
+    url: explicitUrl,
     localPath: process.env.XDT_MODELS_PATH,
     baseUrl,
     fallbackBaseUrl: dev || !usesBuildRealm ? undefined : getBaseUrl(),
     remoteBudgetMs: DEFAULT_REMOTE_CATALOG_BUDGET_MS,
-    disableFetch: dev || process.env.XDT_DISABLE_MODELS_FETCH === '1',
+    disableFetch: shouldDisableCatalogFetch(
+      dev,
+      explicitUrl,
+      process.env.XDT_DISABLE_MODELS_FETCH === '1',
+    ),
   };
+}
+
+/** dev 缺省禁网；显式 URL 是唯一远端调试入口，强制禁网始终拥有最高优先级。 */
+export function shouldDisableCatalogFetch(
+  dev: boolean,
+  explicitUrl: string | undefined,
+  forcedDisabled: boolean,
+): boolean {
+  return forcedDisabled || (dev && !explicitUrl?.trim());
 }
 
 function catalogSourceKey(source: CatalogSourceConfig): string {

@@ -107,6 +107,7 @@ import { getActiveCatalog } from '../active-catalog.js';
 import {
   ensureActiveCatalogLoaded,
   reloadActiveCatalogForEndpointChange,
+  shouldDisableCatalogFetch,
 } from '../createDesktopProviderService.js';
 
 function catalogNamed(name: string): Catalog {
@@ -123,6 +124,14 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  it('keeps dev offline by default but permits an explicit catalog URL', () => {
+    expect(shouldDisableCatalogFetch(true, undefined, false)).toBe(true);
+    expect(shouldDisableCatalogFetch(true, '   ', false)).toBe(true);
+    expect(shouldDisableCatalogFetch(true, 'http://127.0.0.1/catalog', false)).toBe(false);
+    expect(shouldDisableCatalogFetch(false, undefined, false)).toBe(false);
+    expect(shouldDisableCatalogFetch(false, 'http://127.0.0.1/catalog', true)).toBe(true);
+  });
+
   it('invalidates the old realm immediately and ignores a stale cross-realm response', async () => {
     const initial = ensureActiveCatalogLoaded();
     expect(h.loads[0]?.source).toMatchObject({

@@ -26,6 +26,8 @@ export const PROVIDER_MODEL_FOREGROUND_BACKGROUND_THRESHOLD_MS = 15 * 60_000;
 export interface ProviderModelAutoRefreshDeps {
   listProviders(options: { allowSideEffects: true }): Promise<ProviderView[]>;
   refreshProvider(providerId: BuiltinRefreshableProviderId): Promise<void>;
+  /** Refresh the shared public Catalog independently of any provider connection state. */
+  refreshCatalog?: () => Promise<void>;
   getScopeKey?: () => string | number;
   now(): number;
   log: Pick<Logger, 'debug' | 'warn'>;
@@ -57,6 +59,10 @@ export function createProviderModelRefreshCoordinator(
   const lastAttemptAt = new Map<BuiltinRefreshableProviderId, number>();
   const lastFailureAt = new Map<BuiltinRefreshableProviderId, number>();
   const providerGenerations = new Map<BuiltinRefreshableProviderId, number>();
+  let catalogInflight: { promise: Promise<void>; scopeGeneration: number } | null = null;
+  let catalogLastAttemptAt: number | undefined;
+  let catalogLastFailureAt: number | undefined;
+  let catalogStartupGraceUntil: number | undefined;
   let scopeKey = deps.getScopeKey?.();
   let scopeGeneration = 0;
 
@@ -72,6 +78,10 @@ export function createProviderModelRefreshCoordinator(
     // 强制请求 join 进去等于让它等一件与自己无关的事。
     forcedFollowUp.clear();
     providerGenerations.clear();
+    catalogInflight = null;
+    catalogLastAttemptAt = undefined;
+    catalogLastFailureAt = undefined;
+    catalogStartupGraceUntil = undefined;
     deps.log.debug('provider model auto-refresh scope changed', { scopeGeneration });
   }
 
@@ -89,6 +99,72 @@ export function createProviderModelRefreshCoordinator(
     }
     lastAttemptAt.clear();
     lastFailureAt.clear();
+    catalogLastAttemptAt = undefined;
+    catalogLastFailureAt = undefined;
+    catalogStartupGraceUntil = undefined;
+  }
+
+  async function refreshCatalogAutomatically(
+    trigger: ProviderModelAutoRefreshTrigger,
+  ): Promise<void> {
+    if (!deps.refreshCatalog) return;
+    syncScope();
+    // splash 已经 await ensureActiveCatalogLoaded；startup 不重复请求。加载器对 bundled
+    // 兜底同样返回成功，故这里不能武断地压 30 分钟——只给 5 分钟启动宽限，服务器刚
+    // 恢复时不必等半小时；首次后续成功再进入正常 30 分钟冷却。
+    if (trigger === 'startup') {
+      catalogStartupGraceUntil =
+        deps.now() + PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS;
+      return;
+    }
+    if (catalogInflight?.scopeGeneration === scopeGeneration) {
+      return catalogInflight.promise;
+    }
+    const now = deps.now();
+    if (catalogStartupGraceUntil !== undefined) {
+      if (now < catalogStartupGraceUntil) {
+        deps.log.debug('model catalog auto-refresh skipped by startup grace', {
+          trigger,
+          remainingMs: catalogStartupGraceUntil - now,
+        });
+        return;
+      }
+      catalogStartupGraceUntil = undefined;
+    }
+    const cooldownStartedAt = catalogLastFailureAt ?? catalogLastAttemptAt;
+    const cooldownMs = catalogLastFailureAt === undefined
+      ? PROVIDER_MODEL_AUTO_REFRESH_COOLDOWN_MS
+      : PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS;
+    if (cooldownStartedAt !== undefined && now - cooldownStartedAt < cooldownMs) {
+      deps.log.debug('model catalog auto-refresh skipped by cooldown', {
+        trigger,
+        cooldown: catalogLastFailureAt === undefined ? 'normal' : 'failure-retry',
+        remainingMs: cooldownMs - (now - cooldownStartedAt),
+      });
+      return;
+    }
+
+    const generation = scopeGeneration;
+    catalogLastAttemptAt = now;
+    const flight = Promise.resolve()
+      .then(() => deps.refreshCatalog!())
+      .then(
+        () => {
+          if (scopeGeneration === generation) catalogLastFailureAt = undefined;
+        },
+        (error: unknown) => {
+          if (scopeGeneration === generation) catalogLastFailureAt = deps.now();
+          deps.log.warn('model catalog auto-refresh failed', {
+            trigger,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        },
+      )
+      .finally(() => {
+        if (catalogInflight?.promise === flight) catalogInflight = null;
+      });
+    catalogInflight = { promise: flight, scopeGeneration: generation };
+    await flight;
   }
 
   /**
@@ -183,6 +259,7 @@ export function createProviderModelRefreshCoordinator(
   return {
     async requestAutoRefresh(trigger): Promise<void> {
       syncScope();
+      const catalogRefresh = refreshCatalogAutomatically(trigger);
       let providers: ProviderView[];
       try {
         providers = await deps.listProviders({ allowSideEffects: true });
@@ -191,6 +268,7 @@ export function createProviderModelRefreshCoordinator(
           trigger,
           error: err instanceof Error ? err.message : String(err),
         });
+        await catalogRefresh;
         return;
       }
 
@@ -211,6 +289,7 @@ export function createProviderModelRefreshCoordinator(
       // 启动触发与手动刷新不会各起一次 codex app-server。
       const force = isForcedProviderModelAutoRefreshTrigger(trigger);
       const results = await Promise.allSettled(ids.map((id) => refresh(id, force)));
+      await catalogRefresh;
       results.forEach((result, index) => {
         if (result.status === 'fulfilled') return;
         deps.log.warn('provider model auto-refresh failed', {
