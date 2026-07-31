@@ -173,7 +173,10 @@ export function mergeWithBundled(primary: Catalog): Catalog {
   for (const preset of primaryPresets) {
     if (!bundledPresetIds.has(preset.id)) presets.push(preset);
   }
-  const modelRegistry = primary.modelRegistry ?? BUNDLED_CATALOG.modelRegistry;
+  // modelRegistry 是带 updatedAt 的完整快照，不做逐字段拼接。远端比 bundled 旧时
+  // 保留新版客户端随包快照，避免复现 presets 曾出现的“旧远端遮掉新本地能力”；
+  // 远端较新时整份生效，继续支持 status=retired、route 删除和价格纠错。
+  const modelRegistry = newerModelRegistry(primary, BUNDLED_CATALOG);
   return {
     version: primary.version,
     providers: merged,
@@ -193,21 +196,26 @@ function registryUpdatedAt(catalog: Catalog): number | null {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
+function newerModelRegistry(primary: Catalog, fallback: Catalog): Catalog['modelRegistry'] {
+  const primaryUpdatedAt = registryUpdatedAt(primary);
+  const fallbackUpdatedAt = registryUpdatedAt(fallback);
+  if (
+    fallback.modelRegistry &&
+    fallbackUpdatedAt !== null &&
+    (primaryUpdatedAt === null || fallbackUpdatedAt > primaryUpdatedAt)
+  ) {
+    return fallback.modelRegistry;
+  }
+  return primary.modelRegistry ?? fallback.modelRegistry;
+}
+
 /**
  * 远端完整 Catalog 可以继续前进，但 modelRegistry 不能被 CDN 旧副本或灰度回滚降级。
  * updatedAt 只排序 registry 段，不拿它否定同一响应里的 provider / preset 变化。
  */
 function preserveNewerCachedRegistry(remote: Catalog, cached: Catalog): Catalog {
-  const remoteUpdatedAt = registryUpdatedAt(remote);
-  const cachedUpdatedAt = registryUpdatedAt(cached);
-  if (
-    cached.modelRegistry &&
-    cachedUpdatedAt !== null &&
-    (remoteUpdatedAt === null || cachedUpdatedAt > remoteUpdatedAt)
-  ) {
-    return { ...remote, modelRegistry: cached.modelRegistry };
-  }
-  return remote;
+  const modelRegistry = newerModelRegistry(remote, cached);
+  return modelRegistry !== remote.modelRegistry ? { ...remote, modelRegistry } : remote;
 }
 
 /**
