@@ -5109,6 +5109,60 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
 
     expect(latestProjection(h.projections).continuationTurnClientId).toBe('q-continue');
   });
+  it('clears the continuation vendor-turn owner immediately when the user stops', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    const sid = 'continue-owner-cleared-on-stop';
+
+    h.coordinator.enqueue(
+      sid,
+      makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT),
+      { resumeRestorePausedQueue: true },
+    );
+    await flush();
+
+    expect(latestProjection(h.projections).continuationTurnClientId).toBe('q-continue');
+
+    h.coordinator.stop(sid);
+    await flush();
+
+    expect(latestProjection(h.projections).continuationTurnClientId).toBeNull();
+  });
+
+  it('keeps the continuation dispatch identity current when Stop wins during vendor send', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    const sid = 'continue-owner-stop-during-vendor-send';
+    const sendStarted = deferred<void>();
+    const sendSettled = deferred<void>();
+
+    h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
+      sendStarted.resolve();
+      await sendSettled.promise;
+      await persistQueuedUserMessage(sessionId, sendOpts);
+      return sendSuccess();
+    });
+
+    h.coordinator.enqueue(
+      sid,
+      makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT),
+      { resumeRestorePausedQueue: true },
+    );
+    await sendStarted.promise;
+
+    h.coordinator.stop(sid);
+    expect(latestProjection(h.projections).continuationTurnClientId).toBeNull();
+
+    sendSettled.resolve();
+    await flush();
+
+    expect(latestProjection(h.projections).continuationTurnClientId).toBeNull();
+    expect(h.onDispatchedUserTurn).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'q-continue' }),
+      expect.any(Number),
+    );
+  });
 
   it('does not retain an in-flight continuation marker when the user cancels it in the queue', async () => {
     const h = createHarness();

@@ -60,6 +60,11 @@ import * as messageService from '@/lib/messageService';
 import type { Message } from '@/lib/ccAgent.types';
 import { CONTINUE_AFTER_ERROR_PROMPT } from '../../shared/interruptedTurn.js';
 
+const inputStop = vi.fn(async () => ({ queue: [], paused: false }));
+const inputGetProjection = vi.fn<() => Promise<unknown>>(async () =>
+  Promise.reject(new Error('n/a in test')),
+);
+
 let inputProjectionCb: ((projection: unknown) => void) | null = null;
 
 function makeElectronApiStub() {
@@ -77,7 +82,8 @@ function makeElectronApiStub() {
       onInteractionRequest: fanOut(),
       onInteractionDismissed: fanOut(),
       input: {
-        getProjection: vi.fn(async () => Promise.reject(new Error('n/a in test'))),
+        getProjection: inputGetProjection,
+        stop: inputStop,
       },
     },
     localDb: { messages: { onCreated: fanOut() } },
@@ -101,6 +107,15 @@ function serverMessage(over: Partial<Message>): Message {
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 const SID = 'auto-resume-card-session';
 const PENDING_CARD_ID = '__auto_resume_pending__';
 const PENDING_INFO = {
@@ -365,6 +380,22 @@ describe('续跑边界投影能力与 vendor turn owner', () => {
     expect(makerChatStore.getSnapshot(SID).continuationInFlightProjectionCapability).toBe(
       'supported',
     );
+  });
+
+  it('Stop 立即清除续跑 owner，迟到旧 projection 不能重新点亮转圈', async () => {
+    const staleQuery = deferred<unknown>();
+    inputGetProjection.mockImplementationOnce(() => staleQuery.promise);
+
+    makerChatStore.ensureInitialMessages(SID);
+    inputProjectionCb!(projection({ continuationTurnClientId: 'resume-1' }));
+    expect(makerChatStore.getSnapshot(SID).continuationTurnClientId).toBe('resume-1');
+
+    makerChatStore.stopSession(SID);
+    expect(makerChatStore.getSnapshot(SID).continuationTurnClientId).toBeNull();
+
+    staleQuery.resolve(projection({ continuationTurnClientId: 'resume-stale' }));
+    await flush();
+    expect(makerChatStore.getSnapshot(SID).continuationTurnClientId).toBeNull();
   });
 });
 

@@ -7832,6 +7832,9 @@ function stopSession(
 ): void {
   if (!sessionId) return;
   flushPendingTextDelta(sessionId);
+  // Stop 是本地权威的用户终态：先作废此前发出的投影查询，避免旧 owner
+  // 在 stop 的乐观清理之后迟到并把自愈行重新点亮。
+  supersedeInputProjectionRequests(sessionId);
   makerApiFor(sessionId)
     .input.stop(sessionId, opts)
     .then(applyInputProjection)
@@ -7860,6 +7863,7 @@ function stopSession(
       activeTurnRetryText: null,
       errorRetryText: null,
       pendingPermission: null,
+      continuationTurnClientId: null,
       pendingAskUser: null,
       // F-AUQ-MIN-5: Stop session — pending question is gone, reset viewer.
       askUserViewerState: 'expanded',
