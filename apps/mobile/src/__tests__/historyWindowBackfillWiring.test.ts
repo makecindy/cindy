@@ -99,3 +99,39 @@ describe('history window backfill wiring', () => {
     expect(source).toContain('limit === HISTORY_GAP_PROBE_LIMIT ? [HISTORY_GAP_PROBE_LIMIT] : undefined,');
   });
 });
+
+/**
+ * 断流通知的接线守卫。
+ *
+ * 不变量:**只要该会话的实时行不再送到本端,store 的覆盖区间上界就不能再被之后到达的 push 续算**
+ * (见 remoteSessionStore 的 `sessionWindowCoverage.liveTailTrusted`;行为测试在
+ * `remoteSessionStore.test.ts`)。断流有三个入口,漏掉任何一个都会让窗口凭空背书出一段没收到的
+ * 历史,而这种孤岛在半小时内产生时连自动探测都发现不了(#1210 review)。这里锁住三个入口都通知到。
+ */
+describe('live stream interruption wiring', () => {
+  const source = readFileSync(resolve(process.cwd(), 'src/device-link/DeviceLinkContext.tsx'), 'utf8');
+
+  it('socket 掉线：整体失效（影响所有订阅）', () => {
+    const offlineBranch = source.slice(
+      source.indexOf("if (next !== 'online') {"),
+      source.indexOf('clearRehydrateRetry(true);', source.indexOf("if (next !== 'online') {")),
+    );
+    expect(offlineBranch).toContain('remoteSessionStore.noteLiveStreamInterrupted();');
+  });
+
+  it('退后台释放 session 订阅：按被释放的会话失效', () => {
+    const release = source.slice(
+      source.indexOf('const releaseHeavyTopics = ()'),
+      source.indexOf('return releases;'),
+    );
+    expect(release).toContain('noteSessionLiveStreamsInterrupted(heavy);');
+  });
+
+  it('离开会话取消订阅：按被释放的会话失效', () => {
+    const unsubscribe = source.slice(
+      source.indexOf('const unsubscribe = useCallback'),
+      source.indexOf('const value = useMemo'),
+    );
+    expect(unsubscribe).toContain('noteSessionLiveStreamsInterrupted(toSend);');
+  });
+});

@@ -190,6 +190,22 @@ const RECONNECT_MIN_WIPE_GRACE_MS = 3_000;
  */
 const RECONNECT_MESSAGE_WINDOW_LIMIT = 80;
 
+const SESSION_TOPIC_PREFIX = 'session:';
+
+/**
+ * `session:<id>` 订阅停了 = 该会话的实时行从此不再送到本端(退后台释放重量级订阅、离开会话
+ * 取消订阅)。窗口「已验证连续」区间的上界因此不能再被之后到达的 push 续算 —— 与它之间可能漏了
+ * 任意多行(见 remoteSessionStore 的 sessionWindowCoverage)。socket 掉线走不带 sessionId 的整体
+ * 失效:那影响所有订阅。
+ */
+function noteSessionLiveStreamsInterrupted(topics: readonly string[]): void {
+  for (const topic of topics) {
+    if (!topic.startsWith(SESSION_TOPIC_PREFIX)) continue;
+    const sessionId = topic.slice(SESSION_TOPIC_PREFIX.length);
+    if (sessionId) remoteSessionStore.noteLiveStreamInterrupted(sessionId);
+  }
+}
+
 export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   if (MOBILE_VISUAL_MOCK_ENABLED) {
     return <VisualMockDeviceLinkProvider>{children}</VisualMockDeviceLinkProvider>;
@@ -578,6 +594,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       if (next !== 'online') {
         openLinkInFlightRef.current.clear();
         remoteSubscribedTopicsRef.current.clear();
+        // 掉线:所有会话的实时行都可能从此漏收,窗口连续性结论的上界不再可续算。
+        remoteSessionStore.noteLiveStreamInterrupted();
         // 掉线即取消挂起的补齐重试:重新 online 会触发全量补齐,无需旧计时器
         clearRehydrateRetry(true);
         return;
@@ -738,9 +756,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const releaseHeavyTopics = (): Promise<void>[] => {
       const releases: Promise<void>[] = [];
       for (const plan of registryRef.current.snapshot()) {
-        const heavy = plan.topics.filter((topic) => topic.startsWith('session:'));
+        const heavy = plan.topics.filter((topic) => topic.startsWith(SESSION_TOPIC_PREFIX));
         if (heavy.length === 0) continue;
         markRemoteTopicsUnsubscribed(remoteSubscribedTopicsRef.current, plan.deviceId, heavy);
+        noteSessionLiveStreamsInterrupted(heavy);
         if (client.getStatus() === 'online') {
           releases.push(sendUnsubscribe(client, plan.deviceId, heavy));
         }
@@ -868,6 +887,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       isDeviceLinkTopic(topic) && !releasedSet.has(topic) && !registryRef.current.hasTopic(deviceId, topic));
     const toSend = normalizeDeviceLinkTopics([...new Set([...released, ...staleUnheld])]);
     markRemoteTopicsUnsubscribed(remoteSubscribedTopicsRef.current, deviceId, toSend);
+    noteSessionLiveStreamsInterrupted(toSend);
     if (toSend.length === 0) return;
     await sendUnsubscribe(requireClient(clientRef.current), deviceId, toSend);
   }, []);

@@ -217,26 +217,47 @@ const sessionMakerActivityEpochs = new Map<string, number>();
 let makerActivityEpoch = 0;
 const sessionMessageSyncMarkers = new Map<string, SessionMessageSyncMarker>();
 /**
- * 每会话「已验证连续」的下界(ISO createdAt):从这一刻起到窗口最新端,窗口是**连续**的 —— 中间
- * 没有服务端有、本地没加载的行。缺省(未登记)= 未知,窗口不被信任为连续。
+ * 每会话「已验证连续覆盖区间」:`[since, until]`(闭区间,ISO createdAt)内的**所有**服务端行都在
+ * 窗口里 —— 中间没有服务端有、本地没加载的行。缺省(未登记)= 未知,窗口不被信任为连续。
  *
  * 为什么需要它:`setLatestMessageWindow` 判断"要不要保留早于本页的旧段"时,只有两种旧段
  *  - **来源不明的缓存**(冷开 hydrate 的那页):与本页的关系无从确认,本页上沿之外还有服务端历史
  *    时必须丢弃,否则窗口留下孤岛(#1222);
- *  - **已由连续分页验证过的历史**(用户一路「加载更早」翻出来的):它是沿 before 游标从窗口最旧端
- *    连续拉的,与后面的页确实相接。把它一并丢掉会让用户正在看的历史和滚动锚点凭空消失,而且
- *    自动补齐也不会拉回(裁完窗口里已经没有内部跳变可发现了)——#1210 review 实测到的回归。
- * 下界就是区分这两者的那条线。
+ *  - **已验证连续的历史**(整窗替换的那一页、用户一路「加载更早」翻出来的、以及订阅未断时收到的
+ *    实时 push):与本页确实相接。把它一并丢掉会让用户正在看的历史和滚动锚点凭空消失,而且自动
+ *    补齐也不会拉回(裁完窗口里已经没有内部跳变可发现了)——#1210 review 实测到的回归。
+ * 区间就是区分这两者的那条线:旧行落在 `[since, until]` 内、**且本页最旧行不晚于 `until`**
+ * (两段首尾相接)时才保留。
  *
- * 写入点只有三处(都对应"服务端一次给出的连续段"):整窗替换 `setMessages`、最新窗口
- * `setLatestMessageWindow`、以及「加载更早」的 `mergeEarlierMessages`。冷开 hydrate 刻意不写。
+ * 为什么不能只记下界:下界断言的是"从它到**窗口最新端**连续",而"窗口最新端"会被断流期间漏收的
+ * 行悄悄作废 —— 旧窗 1–80,断线漏收 81–200,重连后先到一条 push 201,再收到最新页 122–201:
+ * 窗口最新端已经跳到 201,下界仍指着 1,旧结论于是给"1–80 + 122–201"这个孤岛背了书。把上界显式
+ * 记下来,这类"接不上"就是一次比较(#1210 review)。
+ *
+ * `liveTailTrusted`:自 `until` 建立以来实时推送链路没断过 —— 只有这时新到的 push 才能把 `until`
+ * 往后推(订阅内的推送是顺序且完整的,且权威页都在 subscribe 之后才拉)。断流(socket 掉线、
+ * 退后台释放 session 订阅、离开会话取消订阅)一律清掉这个信任位:之后收到的 push 与 `until` 之间
+ * 可能漏了任意多行,不能续算。区间本身保留 —— 断流不会让断流前已验证的那段失效。
+ *
+ * 建立 / 扩展点(都对应"服务端一次给出的连续段"或"订阅内的顺序推送"):整窗替换 `setMessages`、
+ * 最新窗口 `setLatestMessageWindow`、「加载更早」`mergeEarlierMessages`、实时 push `appendMessage`。
+ * 冷开 hydrate 与空洞补齐 `mergeMessages` 刻意不登记:前者来源不明;后者补的是窗口内部的洞,补完
+ * 要算准新区间得先确认窗口里没有别的洞——而这正是补齐本身在解决的问题(保守不动的代价是补回来
+ * 的段可能在下一次满页同步时被丢弃,下次打开会重新补,方向上是安全的那一侧)。
  * 清空 / rewind / 会话回收一律删除(重置为未知),下次最新窗口同步会重建。
  *
- * 空洞补齐(`mergeMessages`)刻意**不**下移它:那条路补的是窗口内部的洞,补完虽然也让窗口更连续,
- * 但要准确算出"新的下界"得先确认窗口里没有别的洞——而这正是补齐本身在解决的问题。保守不动的
- * 代价是补回来的段可能在下一次满页同步时被丢弃(下次打开会重新补),方向上是安全的那一侧。
+ * 事实自检:最新页若在 `[since, until]` 内带来窗口没有的行,说明旧结论已被服务端事实推翻(桌面侧
+ * 改写历史、迟到落库等),当次按"未知"处置,见 `joinableWindowCoverage`。
  */
-const sessionContiguousSince = new Map<string, string>();
+type SessionWindowCoverage = {
+  /** 区间下界(含)。 */
+  since: string;
+  /** 区间上界(含)。 */
+  until: string;
+  /** 见上:实时推送链路自 `until` 建立以来未断过,`until` 可被新 push 续推。 */
+  liveTailTrusted: boolean;
+};
+const sessionWindowCoverage = new Map<string, SessionWindowCoverage>();
 
 /** 取一批行里最旧的 createdAt(空列表 → undefined)。 */
 function oldestCreatedAt(list: readonly RemoteMessage[]): string | undefined {
@@ -248,13 +269,119 @@ function oldestCreatedAt(list: readonly RemoteMessage[]): string | undefined {
   return oldest;
 }
 
-/** 把「已验证连续」的下界向更早处推(只前移,不回退)。 */
-function lowerContiguousSince(sessionId: string, createdAt: string | undefined): void {
-  if (!createdAt) return;
-  const current = sessionContiguousSince.get(sessionId);
-  if (current === undefined || createdAt.localeCompare(current) < 0) {
-    sessionContiguousSince.set(sessionId, createdAt);
+/** 取一批行里最新的 createdAt(空列表 → undefined)。 */
+function newestCreatedAt(list: readonly RemoteMessage[]): string | undefined {
+  let newest: string | undefined;
+  for (const item of list) {
+    if (!item.createdAt) continue;
+    if (newest === undefined || item.createdAt.localeCompare(newest) > 0) newest = item.createdAt;
   }
+  return newest;
+}
+
+function forgetWindowCoverage(sessionId: string): void {
+  sessionWindowCoverage.delete(sessionId);
+}
+
+/** 整窗替换:窗口就是这一页,区间即这一页 —— 不与旧结论求并(旧内容已经不在窗口里了)。 */
+function coverReplacedWindow(sessionId: string, list: readonly RemoteMessage[]): void {
+  const since = oldestCreatedAt(list);
+  const until = newestCreatedAt(list);
+  if (!since || !until) {
+    forgetWindowCoverage(sessionId);
+    return;
+  }
+  sessionWindowCoverage.set(sessionId, { since, until, liveTailTrusted: true });
+}
+
+/**
+ * 最新页对账后登记:本页自身是连续段。`joined` 是本次**实际采纳**的旧结论(与本页首尾相接、
+ * 因此其覆盖的旧段被保留),undefined 表示旧段没被采纳、区间收敛到本页。
+ *
+ * 保留判据与这里必须用同一个 `joined`:否则"保留了旧段却不声明覆盖它"(下次同步照丢)或"声明了
+ * 覆盖却已经把它丢掉"(凭空背书出一个孤岛)两个方向都会让区间与窗口对不上。
+ */
+function coverLatestPage(
+  sessionId: string,
+  pageOldest: string,
+  pageNewest: string,
+  joined: SessionWindowCoverage | undefined,
+): void {
+  const since = joined && joined.since.localeCompare(pageOldest) < 0 ? joined.since : pageOldest;
+  const until = joined && joined.until.localeCompare(pageNewest) > 0 ? joined.until : pageNewest;
+  sessionWindowCoverage.set(sessionId, { since, until, liveTailTrusted: true });
+}
+
+/**
+ * 「加载更早」:沿 `before` 从窗口最旧端连续取的一页,把下界前移。
+ *
+ * 还没有任何结论时(冷开 hydrate 的窗口上翻),这一页只能证明"从它到它接上的那一行"连续 ——
+ * `joinsAt` 就是合并前窗口的最旧行;窗口更上面的部分来源仍然不明,上界不能顺手抬到窗口最新端。
+ */
+function coverEarlierPage(sessionId: string, pageOldest: string, joinsAt: string | undefined): void {
+  const current = sessionWindowCoverage.get(sessionId);
+  if (current) {
+    if (pageOldest.localeCompare(current.since) < 0) {
+      sessionWindowCoverage.set(sessionId, { ...current, since: pageOldest });
+    }
+    return;
+  }
+  if (!joinsAt || pageOldest.localeCompare(joinsAt) > 0) return;
+  sessionWindowCoverage.set(sessionId, { since: pageOldest, until: joinsAt, liveTailTrusted: false });
+}
+
+/** 订阅内到达的实时 push:顺序且完整,可把上界往后推。 */
+function coverLiveRow(sessionId: string, message: RemoteMessage): void {
+  const current = sessionWindowCoverage.get(sessionId);
+  if (!current || !current.liveTailTrusted) return;
+  // 本地系统卡(/learn、/context 等)没有服务端对应行:用它推上界等于凭空声明"服务端到这一刻的
+  // 行都在窗口里"。
+  if (messageKey(message).startsWith('mobile-system-')) return;
+  const createdAt = message.createdAt;
+  if (!createdAt || createdAt.localeCompare(current.until) <= 0) return;
+  sessionWindowCoverage.set(sessionId, { ...current, until: createdAt });
+}
+
+/**
+ * 实时推送链路中断:上界不再能被 push 续算(见 `liveTailTrusted`)。区间本身保留。
+ * 省略 sessionId = 全部会话(socket 掉线影响所有订阅)。
+ */
+function noteLiveStreamInterrupted(sessionId?: string): void {
+  if (sessionId !== undefined) {
+    const current = sessionWindowCoverage.get(sessionId);
+    if (current?.liveTailTrusted) {
+      sessionWindowCoverage.set(sessionId, { ...current, liveTailTrusted: false });
+    }
+    return;
+  }
+  for (const [key, current] of sessionWindowCoverage) {
+    if (current.liveTailTrusted) {
+      sessionWindowCoverage.set(key, { ...current, liveTailTrusted: false });
+    }
+  }
+}
+
+/**
+ * 取本次可采纳的旧结论:必须与本页首尾相接(本页最旧行不晚于上界),且没有被本页的事实推翻
+ * (本页在区间内带来了窗口里没有的行)。任一不成立 → undefined,按"未知"处置。
+ */
+function joinableWindowCoverage(
+  sessionId: string,
+  existingIndex: MessageIdentityIndex,
+  latestWindow: readonly RemoteMessage[],
+  pageOldest: string,
+): SessionWindowCoverage | undefined {
+  const coverage = sessionWindowCoverage.get(sessionId);
+  if (!coverage) return undefined;
+  if (pageOldest.localeCompare(coverage.until) > 0) return undefined;
+  for (const item of latestWindow) {
+    const createdAt = item.createdAt;
+    if (!createdAt) continue;
+    if (createdAt.localeCompare(coverage.since) < 0) continue;
+    if (createdAt.localeCompare(coverage.until) > 0) continue;
+    if (!messageIdentityIndexHas(existingIndex, item)) return undefined;
+  }
+  return coverage;
 }
 // Per-session live sub-agent task state, decoded from `agent_task_update` events (live-only,
 // never persisted — see @cindy/maker-shared/agent-task). Keyed taskId/parentToolUseId → update.
@@ -540,23 +667,38 @@ function findMessageMergeKey(byKey: ReadonlyMap<string, RemoteMessage>, target: 
   return null;
 }
 
-function messageWindowsOverlap(a: readonly RemoteMessage[], b: readonly RemoteMessage[]): boolean {
-  // Keep the overlap probe linear even when the cached history contains many pages.
-  // `messageKey` is the common path; the separate identity sets preserve the
-  // clientId/id migration case without falling back to an O(n×m) nested scan.
-  const keys = new Set<string>();
-  const ids = new Set<string>();
-  const clientIds = new Set<string>();
-  for (const message of a) {
-    keys.add(messageKey(message));
-    if (message.id) ids.add(message.id);
-    if (message.clientId) clientIds.add(message.clientId);
+/**
+ * 「这一行在不在那一批里」的线性判据。`messageKey` 是常态路径;单独的 id / clientId 集合保留
+ * clientId→id 迁移那一档,不必退回 O(n×m) 嵌套扫描。
+ *
+ * 交集探测(`messageWindowsOverlap`)与覆盖区间的事实自检(`joinableWindowCoverage`)问的是同一件
+ * 事,共用这一份索引 —— 两处各写一遍迟早会在迁移档上分叉。
+ */
+type MessageIdentityIndex = {
+  keys: Set<string>;
+  ids: Set<string>;
+  clientIds: Set<string>;
+};
+
+function buildMessageIdentityIndex(list: readonly RemoteMessage[]): MessageIdentityIndex {
+  const index: MessageIdentityIndex = { keys: new Set(), ids: new Set(), clientIds: new Set() };
+  for (const message of list) {
+    index.keys.add(messageKey(message));
+    if (message.id) index.ids.add(message.id);
+    if (message.clientId) index.clientIds.add(message.clientId);
   }
-  return b.some((message) => (
-    keys.has(messageKey(message))
-      || (message.id ? ids.has(message.id) : false)
-      || (message.clientId ? clientIds.has(message.clientId) : false)
-  ));
+  return index;
+}
+
+function messageIdentityIndexHas(index: MessageIdentityIndex, message: RemoteMessage): boolean {
+  return index.keys.has(messageKey(message))
+    || (message.id ? index.ids.has(message.id) : false)
+    || (message.clientId ? index.clientIds.has(message.clientId) : false);
+}
+
+function messageWindowsOverlap(a: readonly RemoteMessage[], b: readonly RemoteMessage[]): boolean {
+  const index = buildMessageIdentityIndex(a);
+  return b.some((message) => messageIdentityIndexHas(index, message));
 }
 
 function streamingMeta(meta: Record<string, unknown> | null | undefined): Record<string, unknown> {
@@ -1161,14 +1303,15 @@ export const remoteSessionStore = {
   setMessages(sessionId: string, list: readonly RemoteMessage[]): void {
     const textFlushed = flushPendingTextDelta(sessionId);
     const next = normalizeMessages(list);
+    // 记账在相等早退**之前**:这一页是服务端一次给出的连续段,它带来的连续性结论与"窗口内容有没有
+    // 变"无关。冷开缓存恰好与服务端最新页逐行相同时(常态)若被早退跳过,这次权威响应就白来了 ——
+    // 之后会话涨过一页、再遇一次满页重连刷新,本可保留的历史会被当成来源不明全丢(#1210 review)。
+    coverReplacedWindow(sessionId, next);
     if (remoteMessageListsEqual(messages.get(sessionId) ?? emptyMessages, next)) {
       if (textFlushed) emit();
       return;
     }
     messages.set(sessionId, next);
-    // 整窗替换:这一页是服务端一次给出的连续段,下界即它的最旧行(前移语义,见 lowerContiguousSince)。
-    sessionContiguousSince.delete(sessionId);
-    lowerContiguousSince(sessionId, oldestCreatedAt(next));
     bumpMessageVersion();
     emit();
   },
@@ -1212,6 +1355,8 @@ export const remoteSessionStore = {
       const preserved = existing.filter((item) => messageKey(item).startsWith('mobile-system-'));
       const next = preserved.length > 0 ? preserved : [];
       if (!remoteMessageListsEqual(existing, next)) {
+        // 服务端行被清空(只余本地卡):旧覆盖区间连同它背书的那些行一起没了,不能留着背书。
+        forgetWindowCoverage(sessionId);
         messages.set(sessionId, next);
         bumpMessageVersion();
         emit();
@@ -1224,7 +1369,8 @@ export const remoteSessionStore = {
     const existing = messages.get(sessionId) ?? [];
     const latestOldestCreatedAt = latestWindow[0].createdAt;
     const latestNewestCreatedAt = latestWindow[latestWindow.length - 1].createdAt;
-    const hasOverlap = messageWindowsOverlap(existing, latestWindow);
+    const existingIdentityIndex = buildMessageIdentityIndex(existing);
+    const hasOverlap = latestWindow.some((item) => messageIdentityIndexHas(existingIdentityIndex, item));
     const byKey = new Map<string, RemoteMessage>();
     // 截断保护的比较基准必须覆盖全部 existing 行:下面的循环只把窗口外(更新/更旧)
     // 的行 seed 进 byKey,窗口内重叠的完整行若不在基准里,payload 超限的窗口刷新
@@ -1250,21 +1396,24 @@ export const remoteSessionStore = {
     // 而它们在半小时内快速产生时(一个长 turn 里的连续工具调用就是),两侧间隔根本不大,检测不到
     // (#1222)。从源头保证连续区间才覆盖得住。
     //
-    // 例外(#1210 review):用户一路「加载更早」翻出来的历史是沿 before 游标从窗口最旧端**连续**
-    // 拉的,与后面的页确实相接 —— 它由 `sessionContiguousSince` 的下界标出。把这种段也丢掉会让
-    // 用户正在看的历史与滚动锚点凭空消失,而且补齐不会拉回它(裁完已无内部跳变可发现)。所以
-    // 判据是"在已验证连续区间内 → 保留;否则才按 moreBeyondWindow 处置"。
+    // 例外(#1210 review):已验证连续的历史(整窗替换的那页、用户一路「加载更早」翻出来的、订阅
+    // 未断时收到的实时 push)与本页确实相接 —— 它由 `sessionWindowCoverage` 的覆盖区间标出。把这种
+    // 段也丢掉会让用户正在看的历史与滚动锚点凭空消失,而且补齐不会拉回它(裁完已无内部跳变可
+    // 发现)。所以判据是"在已验证覆盖区间内、且本页与该区间首尾相接 → 保留;否则才按
+    // moreBeyondWindow 处置"。
     const keepUnverifiedOlderPages = hasOverlap && options.moreBeyondWindow !== true;
-    const contiguousSince = sessionContiguousSince.get(sessionId);
+    // 相接与否是一次判断,保留判据与下面的记账共用它:两处分开算迟早会让区间与窗口对不上。
+    const joinedCoverage = joinableWindowCoverage(
+      sessionId,
+      existingIdentityIndex,
+      latestWindow,
+      latestOldestCreatedAt,
+    );
     for (const item of existing) {
       const createdAt = item.createdAt;
       const isNewerThanLatestPage = createdAt.localeCompare(latestNewestCreatedAt) >= 0;
-      // 下界断言的是"从它到**窗口最新端**连续"。本页与既有窗口完全不重叠时,说明窗口的最新端
-      // 已经跟不上服务端(中间断了,或整个窗口早已过时),那个断言对"窗口 + 本页"的并集不再成立;
-      // 所以已验证连续同样以 hasOverlap 为前提,否则陈旧窗口会靠旧结论赖着不走。
-      const isVerifiedContiguous = hasOverlap
-        && contiguousSince !== undefined
-        && createdAt.localeCompare(contiguousSince) >= 0;
+      const isVerifiedContiguous = joinedCoverage !== undefined
+        && createdAt.localeCompare(joinedCoverage.since) >= 0;
       const isOlderLoadedPage = createdAt.localeCompare(latestOldestCreatedAt) < 0
         && (isVerifiedContiguous || keepUnverifiedOlderPages);
       // 本地系统卡(/learn、/context 等)没有服务端对应行:不管时序落在窗口哪里都
@@ -1319,17 +1468,14 @@ export const remoteSessionStore = {
     }
 
     const next = normalizeMessages([...byKey.values()]);
+    // 记账在相等早退**之前**(同 setMessages):这一页是服务端一次给出的连续段,它带来的结论与
+    // "窗口内容有没有变"无关。被早退跳过时这次权威响应就白来了(#1210 review)。
+    coverLatestPage(sessionId, latestOldestCreatedAt, latestNewestCreatedAt, joinedCoverage);
     if (remoteMessageListsEqual(existing, next)) {
       if (textFlushed) emit();
       return;
     }
     messages.set(sessionId, next);
-    // 本页自身是连续段;若更早的段被丢弃,下界就收敛到本页最旧行。用前移语义合并:既有下界更早
-    // 且那些行仍在窗口里(已验证连续)时保持不动。
-    if (!next.some((item) => item.createdAt.localeCompare(latestOldestCreatedAt) < 0)) {
-      sessionContiguousSince.delete(sessionId);
-    }
-    lowerContiguousSince(sessionId, latestOldestCreatedAt);
     bumpMessageVersion();
     emit();
   },
@@ -1393,21 +1539,35 @@ export const remoteSessionStore = {
   /**
    * 「加载更早」拉回的一页:沿 `before` 游标**从窗口最旧端连续**往前取,所以它与既有窗口相接。
    *
-   * 与 `mergeMessages` 的唯一差别是它会把「已验证连续」的下界前移到这一页的最旧行
-   * (见 `sessionContiguousSince`):这样后续满页的最新窗口同步就不会把用户一路翻出来的历史
+   * 与 `mergeMessages` 的唯一差别是它会把「已验证连续」覆盖区间的下界前移到这一页的最旧行
+   * (见 `sessionWindowCoverage`):这样后续满页的最新窗口同步就不会把用户一路翻出来的历史
    * 当成来源不明的缓存丢掉(#1210 review 实测到的回归)。
    *
    * 只有真正沿窗口最旧端连续翻页的调用方可以用它;补内部空洞请继续用 `mergeMessages`。
    */
   mergeEarlierMessages(sessionId: string, list: readonly RemoteMessage[]): void {
+    // 合并前窗口的最旧行 = 这一页接上的那一行,尚无结论时它就是区间上界(见 coverEarlierPage)。
+    const joinsAt = oldestCreatedAt(messages.get(sessionId) ?? emptyMessages);
     this.mergeMessages(sessionId, list);
-    lowerContiguousSince(sessionId, oldestCreatedAt(list));
+    const pageOldest = oldestCreatedAt(list);
+    if (pageOldest) coverEarlierPage(sessionId, pageOldest, joinsAt);
   },
 
   appendMessage(sessionId: string, message: RemoteMessage): void {
     let changed = flushPendingTextDelta(sessionId);
     changed = upsertMessage(sessionId, overlayLivePlanSnapshot(sessionId, message)) || changed;
+    // 订阅内到达的实时行可以把覆盖区间的上界往后推;断流后收到的不行(见 liveTailTrusted)。
+    coverLiveRow(sessionId, message);
     if (changed) emit();
+  },
+
+  /**
+   * 实时推送链路中断:socket 掉线(省略 sessionId = 全部会话)、退后台释放 `session:<id>` 订阅、
+   * 或离开会话取消订阅。此后到达的 push 与覆盖区间上界之间可能漏了任意多行,不能再续算
+   * (见 `sessionWindowCoverage` 的 `liveTailTrusted`)。
+   */
+  noteLiveStreamInterrupted(sessionId?: string): void {
+    noteLiveStreamInterrupted(sessionId);
   },
 
   /**
@@ -1427,8 +1587,8 @@ export const remoteSessionStore = {
     ));
     sessionMessageSyncMarkers.delete(sessionId);
     // 连续性结论随窗口一起失效:rewind 可能删掉中间的行,清空/回收更是整窗重来。
-    // 重置为未知,下一次最新窗口同步会重建(见 sessionContiguousSince)。
-    sessionContiguousSince.delete(sessionId);
+    // 重置为未知,下一次最新窗口同步会重建(见 sessionWindowCoverage)。
+    forgetWindowCoverage(sessionId);
     const messagesChanged = next.length !== existing.length;
     if (messagesChanged) messages.set(sessionId, next);
     const deletedTaskAliases = new Set<string>(deletedClientIds);
@@ -1793,8 +1953,8 @@ export const remoteSessionStore = {
           // sync marker 已失效 → metaChanged=true → 拉最新消息窗口(含 error 行)整窗替换。
           sessionMessageSyncMarkers.delete(sessionId);
           // 连续性结论随窗口一起失效:rewind 可能删掉中间的行,清空/回收更是整窗重来。
-          // 重置为未知,下一次最新窗口同步会重建(见 sessionContiguousSince)。
-          sessionContiguousSince.delete(sessionId);
+          // 重置为未知,下一次最新窗口同步会重建(见 sessionWindowCoverage)。
+          forgetWindowCoverage(sessionId);
           pendingRefreshSessions.add(sessionId);
         } else {
           // 未缓存:清 sync marker + 标记待刷新。
@@ -1805,8 +1965,8 @@ export const remoteSessionStore = {
           messages.delete(sessionId);
           sessionMessageSyncMarkers.delete(sessionId);
           // 连续性结论随窗口一起失效:rewind 可能删掉中间的行,清空/回收更是整窗重来。
-          // 重置为未知,下一次最新窗口同步会重建(见 sessionContiguousSince)。
-          sessionContiguousSince.delete(sessionId);
+          // 重置为未知,下一次最新窗口同步会重建(见 sessionWindowCoverage)。
+          forgetWindowCoverage(sessionId);
           pendingRefreshSessions.add(sessionId);
         }
         bumpMessageVersion();
@@ -2218,8 +2378,8 @@ export const remoteSessionStore = {
         sessionMakerActivityEpochs.delete(sessionId);
         sessionMessageSyncMarkers.delete(sessionId);
         // 连续性结论随窗口一起失效:rewind 可能删掉中间的行,清空/回收更是整窗重来。
-        // 重置为未知,下一次最新窗口同步会重建(见 sessionContiguousSince)。
-        sessionContiguousSince.delete(sessionId);
+        // 重置为未知,下一次最新窗口同步会重建(见 sessionWindowCoverage)。
+        forgetWindowCoverage(sessionId);
         sessionTaskUpdates.delete(sessionId);
         streamingAssistantClientIds.delete(sessionId);
         discardPendingTextDelta(sessionId);
@@ -2256,7 +2416,7 @@ export const remoteSessionStore = {
     sessionMakerActivityEpochs.clear();
     makerActivityEpoch = 0;
     sessionMessageSyncMarkers.clear();
-    sessionContiguousSince.clear();
+    sessionWindowCoverage.clear();
     sessionTaskUpdates.clear();
     streamingAssistantClientIds.clear();
     pendingLiveAssistantClientIds.clear();
