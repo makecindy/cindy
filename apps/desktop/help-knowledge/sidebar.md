@@ -31,8 +31,8 @@ The left sidebar lists your sessions. It's the main way to navigate and organize
 
 **Right-click actions:**
 
-- On a regular session: **Pin / Unpin**, **Rename**, **Move to project** (submenu), **Copy conversation link** (a `cindy://session/<id>` deep link), **Open in new window**, **Archive**, **Delete**.
-- On an archived session: **Rename**, **Unarchive**, **Copy conversation link**, **Delete**.
+- On a regular session: **Pin / Unpin**, **Rename**, **Move to project** (submenu), **Copy session link** (a `cindy://session/<id>` deep link), **Open in new window**, **Archive**, **Delete**.
+- On an archived session: **Rename**, **Unarchive**, **Copy session link**, **Delete**.
 
 **Session statuses:**
 

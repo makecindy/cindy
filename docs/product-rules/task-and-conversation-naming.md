@@ -505,6 +505,21 @@ IM 渠道的 `/new` 看着像「新建」，实际走 `im/shared/sessionRepo.ts:
 | 4 | main 抛错 → `projection.error` → `ErrorBanner` | 按文件类别一刀切，没追这一条的实际渲染 |
 | 5 | `notificationService.buildFeishuText` → 飞书私聊 | 前四轮都在追「报错」，没想到**成功态通知**也是一条 |
 | 6 | `dispatcher.ts` / `session-runner.ts` 的映射守卫 → `turn.end.errorMessage` → 渠道 | 出口清单按**函数名**枚举，看不见「文案当返回值逐层传出」；且反向扫描时只搜了「会话」，没搜「对话」 |
+| 7 | `apps/desktop/help-knowledge/*.md` → Help Assistant | 只按 reviewer 点到的那一行改（先是 `collaboration.md`，再是 `sidebar.md`），没把 24 篇一次扫完 |
+
+**帮助内容（`help-knowledge/*.md` → `helpKnowledge.generated.ts`）要单独扫一遍。** 它是
+Help Assistant 的语料，改术语时最容易忘，而且它大量**引用界面标签原文**——标签改了、帮助
+没改，用户就被指向一个不存在的菜单项。改完必须 `pnpm --filter desktop gen:help-kb` 重新生成，
+再跑 `gen:help-kb:check` 确认同步。
+
+```bash
+# 找出帮助里引用了旧标签的地方(逐条对照当前 en locale 的真实标签)
+grep -rniE 'conversation|dialogue' apps/desktop/help-knowledge/*.md
+```
+
+判据仍是「它引用的是**界面标签**还是**交流内容**」：`Copy conversation link` /
+`by dialogue`（都是筛选项与菜单项的旧名）必须改；`The conversation history stays searchable` /
+`Memory across conversations` / `rewinds the conversation` 指内容，保持不动。
 
 所以改术语时，对每一处候选串问：**它从哪里被渲染出来？** 三种答案对应三种处理——
 renderer 按 code 取 i18n（不改这串，改 i18n key）／原样进 UI（必须改）／只进日志或给

@@ -3231,7 +3231,7 @@
       "dialog": {
         "createTitle": "添加 MCP 服务器",
         "editTitle": "编辑 MCP 服务器",
-        "desc": "仅支持远程 http / sse 型 MCP。保存后新建的任务即可调用，已在进行中的任务不受影响。"
+        "desc": "仅支持远程 http / sse 型 MCP。保存后新建或重启的 Agent 会话即可调用，正在运行的 Agent 会话不受影响。"
       },
       "fields": {
         "name": "显示名称",
@@ -3263,7 +3263,7 @@
       },
       "deleteConfirm": {
         "title": "删除 “{{name}}”？",
-        "message": "删除后新建的任务将不再加载该 MCP。",
+        "message": "删除后新建或重启的 Agent 会话将不再加载该 MCP。",
         "confirm": "删除"
       }
     },
