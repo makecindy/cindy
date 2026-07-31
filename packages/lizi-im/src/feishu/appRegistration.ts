@@ -25,7 +25,10 @@ export type AppRegistrationPollResult =
   | { status: 'denied'; message: string }
   | { status: 'error'; message: string };
 
-type HttpPostForm = (url: string, form: URLSearchParams) => Promise<{ status: number; body: unknown }>;
+type HttpPostForm = (
+  url: string,
+  form: URLSearchParams,
+) => Promise<{ status: number; body: unknown }>;
 
 const log = makeScopedLogger('appRegistration');
 
@@ -47,7 +50,11 @@ function registrationEndpoint(brand: LarkBrand): string {
   return `${accountsBase(brand)}/oauth/v1/app/registration`;
 }
 
-export function buildVerificationUrl(brand: LarkBrand, userCode: string, appVersion?: string): string {
+export function buildVerificationUrl(
+  brand: LarkBrand,
+  userCode: string,
+  appVersion?: string,
+): string {
   const url = new URL('/page/cli', openBase(brand));
   url.searchParams.set('user_code', userCode);
   if (appVersion) {
@@ -74,11 +81,13 @@ export async function requestAppRegistration(
   // 对照实现: lark-cli 同样不在此处订阅, 在 consume preflight 时报错让用户去 console
   // (https://github.com/larksuite/cli/blob/main/internal/auth/app_registration.go).
 
-  const res = await httpPostForm(registrationEndpoint('feishu'), form);
+  const res = await httpPostForm(registrationEndpoint(brand), form);
   const data = asRecord(res.body);
   const apiError = getString(data, 'error');
   if (res.status >= 400 || apiError) {
-    throw new Error(getString(data, 'error_description') || apiError || 'app registration begin failed');
+    throw new Error(
+      getString(data, 'error_description') || apiError || 'app registration begin failed',
+    );
   }
 
   const deviceCode = getString(data, 'device_code');

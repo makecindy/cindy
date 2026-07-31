@@ -85,7 +85,7 @@ export interface ImSessionNamespace {
    * 缺省时 threadScoped 渠道回落 FBot 前缀, 非 threadScoped 渠道不起名
    * (保持 defaultTitle)。接管 session 一律沿用 FBot 前缀, 不走这里。
    */
-  generatedTitlePrefix?: string;
+  generatedTitlePrefix?: string | (() => string);
 }
 
 /**
@@ -133,10 +133,7 @@ export interface ImChannelAdapter {
    * Text-only channels can still resolve agent interactions without rich cards.
    * The callback owns channel-specific correlation and parsing.
    */
-  handleTextInteraction?(
-    userId: string,
-    request: InteractionRequest,
-  ): Promise<InteractionDecision>;
+  handleTextInteraction?(userId: string, request: InteractionRequest): Promise<InteractionDecision>;
   /** Durable channels may promote task-scoped attachments after message persistence succeeds. */
   onUserMessagePersisted?(args: {
     sessionId: string;

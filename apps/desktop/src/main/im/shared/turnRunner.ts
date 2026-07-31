@@ -402,10 +402,7 @@ export function createTurnRunner(
    * agent switch 主动 close 的旧 Session。只有对象身份和 close reason 都匹配才
    * 忽略；同一业务 sessionId 下的用户关闭或新引擎关闭必须照常清缓存。
    */
-  const agentSwitchCloseSuppressed = new Map<
-    string,
-    { expectedSession: MakerSession }
-  >();
+  const agentSwitchCloseSuppressed = new Map<string, { expectedSession: MakerSession }>();
   type MakerInstance = ReturnType<typeof getMaker>;
   let subscribedMaker: MakerInstance | null = null;
   let unsubscribeMakerEvents: (() => void) | null = null;
@@ -417,10 +414,7 @@ export function createTurnRunner(
     unsubscribeMakerEvents = maker.on((event) => {
       if (event.type !== 'session:closed') return;
       const suppression = agentSwitchCloseSuppressed.get(event.sessionId);
-      if (
-        suppression?.expectedSession === event.session &&
-        event.reason === 'agent-switch'
-      ) return;
+      if (suppression?.expectedSession === event.session && event.reason === 'agent-switch') return;
       forgetClosedSession(event.sessionId, 'maker session closed');
     });
   }
@@ -1404,8 +1398,9 @@ export function createTurnRunner(
     headerCardId: string | null,
   ): Promise<void> {
     const threadUiPack = adapter.ui.thread;
-    const prefix = adapter.sessions.generatedTitlePrefix;
-    if (prefix === undefined && !(adapter.threadScoped && threadUiPack)) return;
+    const configuredPrefix = adapter.sessions.generatedTitlePrefix;
+    if (configuredPrefix === undefined && !(adapter.threadScoped && threadUiPack)) return;
+    const prefix = typeof configuredPrefix === 'function' ? configuredPrefix() : configuredPrefix;
     try {
       const title = await generateAndPersistFbotTitle(sessionId, text, prefix);
       if (!title || !headerCardId || !threadUiPack) return;

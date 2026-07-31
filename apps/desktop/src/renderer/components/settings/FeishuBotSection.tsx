@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Eye, EyeOff, Trash2, Check, RefreshCw } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { useFeishuBot, type FeishuBotStatus } from '@/hooks/useFeishuBot';
+import { useFeishuBot, type FeishuBotService, type FeishuBotStatus } from '@/hooks/useFeishuBot';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
@@ -12,7 +12,10 @@ import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelS
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 import { FeishuBotNotificationSection } from './FeishuBotNotificationSection';
 
-const FEISHU_LAUNCHER_URL = 'https://open.feishu.cn/page/launcher?from=backend_oneclick';
+const APP_LAUNCHER_URL: Record<FeishuBotService, string> = {
+  feishu: 'https://open.feishu.cn/page/launcher?from=backend_oneclick',
+  lark: 'https://open.larksuite.com/page/launcher?from=backend_oneclick',
+};
 
 const statusKey: Record<FeishuBotStatus, string> = {
   idle: 'settings.feishuBot.status.needsConfig',
@@ -56,6 +59,8 @@ export function FeishuBotSection({
   onToggle: () => void;
 }) {
   const {
+    service,
+    setService,
     appId,
     setAppId,
     appSecret,
@@ -93,8 +98,8 @@ export function FeishuBotSection({
   }, [confirm, clear, t]);
 
   const openLauncher = useCallback(() => {
-    window.electronAPI.openExternal?.(FEISHU_LAUNCHER_URL);
-  }, []);
+    window.electronAPI.openExternal?.(APP_LAUNCHER_URL[service]);
+  }, [service]);
 
   return (
     <ImChannelSettingsCard
@@ -136,6 +141,7 @@ export function FeishuBotSection({
       {showSavedCredentialsCard ? (
         <SavedCredentialsCard
           appId={appId}
+          service={service}
           ownerOpenId={ownerOpenId}
           status={status}
           isClearing={isClearing}
@@ -145,6 +151,8 @@ export function FeishuBotSection({
         />
       ) : (
         <ManualConfig
+          service={service}
+          setService={setService}
           appId={appId}
           setAppId={setAppId}
           appSecret={appSecret}
@@ -171,6 +179,7 @@ export function FeishuBotSection({
 
 function SavedCredentialsCard(props: {
   appId: string;
+  service: FeishuBotService;
   ownerOpenId: string | null;
   status: FeishuBotStatus;
   isClearing: boolean;
@@ -179,6 +188,7 @@ function SavedCredentialsCard(props: {
   onClear: () => void;
 }) {
   const { t } = useTranslation();
+  const serviceName = t(`settings.feishuBot.services.${props.service}`);
   return (
     <div
       className={cn(
@@ -206,16 +216,23 @@ function SavedCredentialsCard(props: {
                 props.status === 'connected'
                   ? 'settings.feishuBot.connected.heading'
                   : 'settings.feishuBot.saved.heading',
+                { service: serviceName },
               )}
             </div>
-            <Tip text={t('settings.feishuBot.connected.reconnect')} side="top" delay={200}>
+            <Tip
+              text={t('settings.feishuBot.connected.reconnect', { service: serviceName })}
+              side="top"
+              delay={200}
+            >
               {/* Keep the trigger hoverable while the inner button is disabled. */}
               <span className="inline-flex shrink-0">
                 <button
                   type="button"
                   onClick={() => void props.onReconnect()}
                   disabled={props.isReconnecting || props.isClearing}
-                  aria-label={t('settings.feishuBot.connected.reconnect')}
+                  aria-label={t('settings.feishuBot.connected.reconnect', {
+                    service: serviceName,
+                  })}
                   className={cn(
                     'inline-flex h-7 w-7 select-none items-center justify-center rounded-full',
                     'text-[var(--settings-section-desc)] transition-colors',
@@ -240,6 +257,10 @@ function SavedCredentialsCard(props: {
         </div>
       </div>
       <div className="grid gap-2 text-12 text-[var(--settings-section-desc)]">
+        <div className="flex justify-between gap-4">
+          <span>{t('settings.feishuBot.connected.serviceLabel')}</span>
+          <span className="font-medium text-[var(--settings-section-title)]">{serviceName}</span>
+        </div>
         <div className="flex justify-between gap-4">
           <span>{t('settings.feishuBot.connected.appIdLabel')}</span>
           <span className="font-medium text-[var(--settings-section-title)]">
@@ -276,6 +297,8 @@ function SavedCredentialsCard(props: {
 }
 
 function ManualConfig(props: {
+  service: FeishuBotService;
+  setService: (service: FeishuBotService) => void;
   appId: string;
   setAppId: (v: string) => void;
   appSecret: string;
@@ -292,6 +315,42 @@ function ManualConfig(props: {
   const { t } = useTranslation();
   return (
     <div className="flex flex-col gap-3">
+      <fieldset className="flex flex-col gap-2">
+        <legend
+          className="text-12 font-medium text-[var(--settings-section-desc)]"
+          style={{ letterSpacing: '0.12px' }}
+        >
+          {t('settings.feishuBot.serviceLabel')}
+        </legend>
+        <div
+          className="grid grid-cols-2 gap-1 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] p-1"
+          role="radiogroup"
+          aria-label={t('settings.feishuBot.serviceAria')}
+        >
+          {(['feishu', 'lark'] as const).map((service) => {
+            const selected = props.service === service;
+            return (
+              <button
+                key={service}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={() => props.setService(service)}
+                className={cn(
+                  'h-[34px] rounded-full text-12 font-medium transition-colors',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                  selected
+                    ? 'bg-[var(--surface-chip)] text-[var(--settings-section-title)]'
+                    : 'text-[var(--settings-section-desc)] hover:text-[var(--settings-section-title)]',
+                )}
+              >
+                {t(`settings.feishuBot.services.${service}`)}
+              </button>
+            );
+          })}
+        </div>
+      </fieldset>
+
       <label
         className="text-12 font-medium text-[var(--settings-section-desc)]"
         style={{ letterSpacing: '0.12px' }}
@@ -370,7 +429,9 @@ function ManualConfig(props: {
                 onClick={props.onOpenLauncher}
                 className="cursor-pointer bg-transparent p-0 font-medium text-[var(--settings-source-link)] underline decoration-[var(--settings-source-link)] decoration-1 underline-offset-2"
               >
-                {t('settings.feishuBot.createLink')}
+                {t('settings.feishuBot.createLink', {
+                  service: t(`settings.feishuBot.services.${props.service}`),
+                })}
               </button>
               <span>{t('settings.feishuBot.createLinkSuffix')}</span>
             </p>

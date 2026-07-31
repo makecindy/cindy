@@ -464,9 +464,9 @@
       "sessionDoneLabel": "对话完成时弹出系统通知",
       "sessionDoneHint": "仅在窗口失焦时弹出，避免前台打扰。",
       "sessionDoneAria": "切换对话完成的系统通知",
-      "feishuLabel": "对话完成或需要回复时发送飞书消息",
-      "feishuHint": "通过已绑定的飞书机器人，向你私聊发送一条消息；仅在窗口失焦时发送。",
-      "feishuDisabledHint": "需要先在「飞书机器人」中配置 bot 并向它发送一条消息以完成绑定。",
+      "feishuLabel": "对话完成或需要回复时发送飞书 / Lark 消息",
+      "feishuHint": "通过已绑定的飞书或 Lark 机器人，向你私聊发送一条消息；仅在窗口失焦时发送。",
+      "feishuDisabledHint": "需要先在「飞书 / Lark 机器人」中配置 bot 并向它发送一条消息以完成绑定。",
       "feishuAria": "切换对话完成的飞书通知"
     },
     "windowBehavior": {
@@ -1580,9 +1580,15 @@
       "saveFailed": "保存 Git 安全设置失败"
     },
     "feishuBot": {
-      "title": "飞书机器人",
-      "description": "通过飞书机器人随时随地连接 {{appName}} 进行工作。",
-      "statusAria": "飞书机器人状态：{{status}}",
+      "title": "飞书 / Lark 机器人",
+      "description": "通过飞书或 Lark 机器人随时随地连接 {{appName}} 进行工作。",
+      "statusAria": "飞书 / Lark 机器人状态：{{status}}",
+      "serviceLabel": "服务",
+      "serviceAria": "选择 IM 服务",
+      "services": {
+        "feishu": "飞书",
+        "lark": "Lark"
+      },
       "status": {
         "needsConfig": "需要配置",
         "connecting": "连接中…",
@@ -1592,16 +1598,17 @@
         "error": "连接失败"
       },
       "connected": {
-        "heading": "飞书机器人已连接",
+        "heading": "{{service}} 机器人已连接",
         "note": "已绑定当前扫码用户，其他人私聊会被自动忽略。",
+        "serviceLabel": "服务",
         "appIdLabel": "App ID",
         "ownerLabel": "Owner",
         "ownerWaiting": "等待首次私聊绑定",
-        "reconnect": "重新连接飞书机器人",
+        "reconnect": "重新连接 {{service}} 机器人",
         "clear": "解绑"
       },
       "saved": {
-        "heading": "飞书机器人已绑定",
+        "heading": "{{service}} 机器人已绑定",
         "connectingNote": "已保存机器人凭证，正在建立连接。",
         "reconnectingNote": "已保存机器人凭证，正在恢复连接。",
         "conflictNote": "已保存机器人凭证，但该 App ID 当前被其他设备占用。",
@@ -1614,11 +1621,11 @@
       "appSecretPlaceholder": "sec_xxxxxxxxxxxxxxxxxx",
       "showSecret": "显示密钥",
       "hideSecret": "隐藏密钥",
-      "createLink": "点击链接创建 ↗",
+      "createLink": "前往 {{service}} 开放平台创建 ↗",
       "createLinkSuffix": "，创建完成后填入",
-      "clearAria": "解绑飞书机器人",
+      "clearAria": "解绑 IM 机器人",
       "clearConfirm": {
-        "title": "解绑飞书机器人？",
+        "title": "解绑 IM 机器人？",
         "description": "解绑后将断开 WebSocket 连接，并删除本机保存的 App ID / App Secret / 主人 openId。如需重新使用，需要重新创建或重新填写凭证。",
         "confirm": "解绑",
         "cancel": "取消"
@@ -4331,12 +4338,12 @@
   },
   "imBot": {
     "conflictDialog": {
-      "title": "该飞书机器人 App 已被占用",
+      "title": "该 {{service}} 机器人 App 已被占用",
       "bodyPrefix": "当前 App",
       "bodyMain": "已经在另一台设备上启动了长连接，可能是同事在使用同一个 App ID。一个 App 只能绑定一台设备，本机已自动断开以避免互相抢占。",
       "suggestionsHeading": "建议两种处理方式：",
       "suggestion1": "1. 与对方协商错峰使用，让对方先在其设备上清除该凭证后，本机再重新连接；",
-      "suggestion2": "2. 到飞书开放平台为自己另建一个独立 App，与同事各用各的。",
+      "suggestion2": "2. 到 {{service}} 开放平台为自己另建一个独立 App，与同事各用各的。",
       "dismiss": "关闭",
       "createOwnApp": "创建我的 App ↗"
     }
@@ -7578,16 +7585,16 @@
     "toasts": {
       "googleConnected": "Google 已连接",
       "codexConnected": "ChatGPT 账号已连接",
-      "feishuBotConnected": "飞书机器人已连接",
-      "feishuBotReconnected": "飞书机器人已重新连接",
-      "feishuBotReconnectFailed": "重新连接失败，请检查飞书配置后重试",
+      "feishuBotConnected": "IM 机器人已连接",
+      "feishuBotReconnected": "IM 机器人已重新连接",
+      "feishuBotReconnectFailed": "重新连接失败，请检查 IM 机器人配置后重试",
       "feishuBotConflict": "该 App 已被占用，可能是同事在用同一个 App ID",
       "feishuBotConnectFailed": "连接失败，请检查 App ID / Secret",
       "feishuBotSaveFailed": "保存失败：{{message}}",
-      "feishuBotCleared": "已清除飞书机器人凭证",
+      "feishuBotCleared": "已清除 IM 机器人凭证",
       "feishuBotClearFailed": "清除失败：{{message}}",
-      "feishuBotCreatedConnected": "飞书机器人已创建并连接",
-      "feishuBotCreatedCheck": "飞书机器人已创建，请检查连接状态",
+      "feishuBotCreatedConnected": "IM 机器人已创建并连接",
+      "feishuBotCreatedCheck": "IM 机器人已创建，请检查连接状态",
       "discordBotConnected": "Discord 机器人配置已保存",
       "discordBotConnectFailed": "Discord 机器人连接失败，请检查 Token 和权限",
       "discordBotSaveFailed": "保存失败：{{message}}",

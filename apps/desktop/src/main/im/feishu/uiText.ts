@@ -133,7 +133,8 @@ export const ui = {
       resolved: (label: string) => `✅ 权限模式切到 ${label} 了`,
       failed: (reason: string) => `❌ 权限模式没切过去：${reason}`,
       fullAccessConfirmTitle: '⚠️ 确认开启 Full access？',
-      fullAccessConfirmBody: 'Full access 会关闭工作区沙箱并跳过常规审批。Cindy 可以修改工作区外的文件、执行联网命令且不再询问；内置高风险操作仍会要求确认。',
+      fullAccessConfirmBody:
+        'Full access 会关闭工作区沙箱并跳过常规审批。Cindy 可以修改工作区外的文件、执行联网命令且不再询问；内置高风险操作仍会要求确认。',
       btnConfirmFullAccess: '开启 Full access',
       btnCancelFullAccess: '保留当前权限',
       fullAccessCancelled: '已取消，保留当前权限',
@@ -181,7 +182,7 @@ export const ui = {
         (sessionTitle: string) =>
           `⏳ 正在让你接管 **${sessionTitle}**…\n_📦 加载存档元数据_  ·  _🔌 接通 agent 通道_  ·  _🧠 复盘上回合战况_\n_三两秒就好，咖啡别一口闷完_`,
         (sessionTitle: string) =>
-          `🎮 登入 **${sessionTitle}** 中…\n_早期版本里，等不及的玩家会狂点飞书图标，但其实并没有用_`,
+          `🎮 登入 **${sessionTitle}** 中…\n_早期版本里，等不及的玩家会狂点聊天工具图标，但其实并没有用_`,
         (sessionTitle: string) =>
           `⌛ **${sessionTitle}** 加载中…  99%\n_这条进度条是真的——Haiku 正在翻你们上回合聊了啥_`,
         (sessionTitle: string) =>
@@ -191,9 +192,9 @@ export const ui = {
       // 这个是给 agent 的指令(不是给用户看的), 让 agent 用一段简短话回顾现状 +
       // 问用户下一步意图。fanout listener 会把 agent 输出推到飞书卡片。
       sessionAttachedOneshotPrompts: [
-        '我刚通过飞书远程上号了——简单同步下战况：上回合咋样、当前在哪一步，然后问我下一步咋走。',
+        '我刚通过 IM 远程上号了——简单同步下战况：上回合咋样、当前在哪一步，然后问我下一步咋走。',
         '我接力了——一句话过下进度，告诉我现在到哪、刚做了啥，再问我要不要继续推进或者换方向。',
-        'Hi 我从飞书接手了——快速 brief 一下当前形势、最新结果是啥，最后问我下一步指令。',
+        'Hi 我从 IM 接手了——快速 brief 一下当前形势、最新结果是啥，最后问我下一步指令。',
         '切到我了——简单复盘下，告诉我现在是什么阶段，然后问我要不要继续干。',
       ],
       // ── /ctr new: 新建空白 session 接管成功后 ──

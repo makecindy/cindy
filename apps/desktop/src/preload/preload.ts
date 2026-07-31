@@ -1461,16 +1461,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ownerOpenId: string | null;
       error?: string;
       lifecycleAnnouncement: boolean;
+      service: 'feishu' | 'lark';
     }> => ipcRenderer.invoke('feishuBot:get-state'),
-    save: (payload: { appId: string; appSecret: string }): Promise<{
+    save: (payload: {
+      appId: string;
+      appSecret: string;
+      service: 'feishu' | 'lark';
+    }): Promise<{
       verdict: 'connected' | 'conflict' | 'error' | 'pending';
     }> => ipcRenderer.invoke('feishuBot:save', payload),
-    reconnect: (): Promise<{ verdict: 'connected' | 'conflict' | 'error' }> =>
-      ipcRenderer.invoke('feishuBot:reconnect'),
+    reconnect: (): Promise<{ verdict: 'connected' | 'conflict' | 'error' }> => ipcRenderer.invoke('feishuBot:reconnect'),
     clear: (): Promise<{ ok: true }> => ipcRenderer.invoke('feishuBot:clear'),
-    setLifecycleAnnouncement: (enabled: boolean): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('feishuBot:set-lifecycle-announcement', { enabled }),
-    registrationBegin: (): Promise<{
+    setLifecycleAnnouncement: (enabled: boolean): Promise<{ ok: true }> => ipcRenderer.invoke('feishuBot:set-lifecycle-announcement', { enabled }),
+    registrationBegin: (
+      service: 'feishu' | 'lark',
+    ): Promise<{
       ok: boolean;
       deviceCode?: string;
       userCode?: string;
@@ -1478,9 +1483,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       expiresIn?: number;
       interval?: number;
       error?: string;
-    }> => ipcRenderer.invoke('feishuBot:registration-begin'),
-    registrationCancel: (): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('feishuBot:registration-cancel'),
+    }> => ipcRenderer.invoke('feishuBot:registration-begin', { service }),
+    registrationCancel: (): Promise<{ ok: true }> => ipcRenderer.invoke('feishuBot:registration-cancel'),
     onStatusChange: fanOutFeishuBotStatusChange,
     onConflict: fanOutFeishuBotConflict,
     onRegistrationStatus: fanOutFeishuBotRegistrationStatus,
@@ -5195,9 +5199,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       updateDriver: (opts?: { joinOnly?: boolean }): Promise<ComputerDriverInstallResult> =>
         ipcRenderer.invoke('maker:computer:update-driver', opts),
       onUpdateProgress: fanOutComputerDriverUpdateProgress,
+
     },
   },
 
   // ── 剪贴板历史快捷面板 ────────────────────────────────────────────
-
 });

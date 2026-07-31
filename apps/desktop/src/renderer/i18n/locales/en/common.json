@@ -464,9 +464,9 @@
       "sessionDoneLabel": "Show desktop notification when a session finishes",
       "sessionDoneHint": "Only shown while the window is unfocused, to avoid foreground interruption.",
       "sessionDoneAria": "Toggle session-done desktop notifications",
-      "feishuLabel": "Send a FeiShu DM when a session finishes or needs reply",
-      "feishuHint": "Sends a private message via the linked FeiShu bot; only when the window is unfocused.",
-      "feishuDisabledHint": "First set up the bot in \"FeiShu Bot\" and DM it once to complete binding.",
+      "feishuLabel": "Send a Feishu / Lark DM when a session finishes or needs a reply",
+      "feishuHint": "Sends a private message via the linked Feishu or Lark bot; only when the window is unfocused.",
+      "feishuDisabledHint": "First set up the bot in \"Feishu / Lark Bot\" and DM it once to complete binding.",
       "feishuAria": "Toggle session-done FeiShu notifications"
     },
     "windowBehavior": {
@@ -1581,9 +1581,15 @@
       "saveFailed": "Failed to save Git safety setting"
     },
     "feishuBot": {
-      "title": "Feishu Bot",
-      "description": "Connect to {{appName}} via Feishu Bot to work anywhere, anytime.",
-      "statusAria": "FeiShu Bot status: {{status}}",
+      "title": "Feishu / Lark Bot",
+      "description": "Connect to {{appName}} via a Feishu or Lark bot to work anywhere, anytime.",
+      "statusAria": "Feishu / Lark Bot status: {{status}}",
+      "serviceLabel": "Service",
+      "serviceAria": "Select an IM service",
+      "services": {
+        "feishu": "Feishu",
+        "lark": "Lark"
+      },
       "status": {
         "needsConfig": "Needs configuration",
         "connecting": "Connecting…",
@@ -1593,16 +1599,17 @@
         "error": "Connection failed"
       },
       "connected": {
-        "heading": "Feishu Bot connected",
+        "heading": "{{service}} Bot connected",
         "note": "Bound to the current scanning user; private messages from other people are silently ignored.",
+        "serviceLabel": "Service",
         "appIdLabel": "App ID",
         "ownerLabel": "Owner",
         "ownerWaiting": "Waiting for first private-message bind",
-        "reconnect": "Reconnect Feishu Bot",
+        "reconnect": "Reconnect {{service}} Bot",
         "clear": "Unbind"
       },
       "saved": {
-        "heading": "Feishu Bot is bound",
+        "heading": "{{service}} Bot is bound",
         "connectingNote": "Bot credentials are saved. Establishing the connection now.",
         "reconnectingNote": "Bot credentials are saved. Restoring the connection now.",
         "conflictNote": "Bot credentials are saved, but this App ID is currently in use on another device.",
@@ -1615,11 +1622,11 @@
       "appSecretPlaceholder": "sec_xxxxxxxxxxxxxxxxxx",
       "showSecret": "Show secret",
       "hideSecret": "Hide secret",
-      "createLink": "Click here to create ↗",
+      "createLink": "Create on {{service}} Open Platform ↗",
       "createLinkSuffix": ", then fill in the credentials",
-      "clearAria": "Unbind Feishu Bot",
+      "clearAria": "Unbind IM bot",
       "clearConfirm": {
-        "title": "Unbind Feishu Bot?",
+        "title": "Unbind IM bot?",
         "description": "Unbinding will close the WebSocket connection and remove the locally stored App ID / App Secret / owner openId. To re-enable, you'll need to recreate or re-enter the credentials.",
         "confirm": "Unbind",
         "cancel": "Cancel"
@@ -4332,12 +4339,12 @@
   },
   "imBot": {
     "conflictDialog": {
-      "title": "This Feishu Bot App is already in use",
+      "title": "This {{service}} Bot App is already in use",
       "bodyPrefix": "The current App",
       "bodyMain": "is already running a long-lived connection on another device — likely a colleague using the same App ID. An App can only bind to one device at a time, so this client has automatically disconnected to avoid contention.",
       "suggestionsHeading": "Two suggested approaches:",
       "suggestion1": "1. Coordinate with the other user to use it at different times. Have them clear the credential on their device, then reconnect here.",
-      "suggestion2": "2. Create your own dedicated App on the Feishu Open Platform so you and your colleague each have your own.",
+      "suggestion2": "2. Create your own dedicated App on the {{service}} Open Platform so you and your colleague each have your own.",
       "dismiss": "Dismiss",
       "createOwnApp": "Create my App ↗"
     }
@@ -7589,16 +7596,16 @@
     "toasts": {
       "googleConnected": "Google connected",
       "codexConnected": "ChatGPT account connected",
-      "feishuBotConnected": "FeiShu bot connected",
-      "feishuBotReconnected": "Feishu bot reconnected",
-      "feishuBotReconnectFailed": "Reconnect failed. Check the Feishu configuration and try again",
+      "feishuBotConnected": "IM bot connected",
+      "feishuBotReconnected": "IM bot reconnected",
+      "feishuBotReconnectFailed": "Reconnect failed. Check the IM bot configuration and try again",
       "feishuBotConflict": "This App is already in use — a colleague may be using the same App ID",
       "feishuBotConnectFailed": "Connection failed, check App ID / Secret",
       "feishuBotSaveFailed": "Save failed: {{message}}",
-      "feishuBotCleared": "FeiShu bot credentials cleared",
+      "feishuBotCleared": "IM bot credentials cleared",
       "feishuBotClearFailed": "Clear failed: {{message}}",
-      "feishuBotCreatedConnected": "FeiShu bot created and connected",
-      "feishuBotCreatedCheck": "FeiShu bot created, please check connection status",
+      "feishuBotCreatedConnected": "IM bot created and connected",
+      "feishuBotCreatedCheck": "IM bot created. Check the connection status",
       "discordBotConnected": "Discord bot configuration saved",
       "discordBotConnectFailed": "Discord bot connection failed; check the token and permissions",
       "discordBotSaveFailed": "Save failed: {{message}}",
