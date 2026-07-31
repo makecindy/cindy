@@ -57,6 +57,18 @@ export async function resolveAutoReviewDecision(
   const localTier = classifyLocalAutoReviewTier(request);
   if (localTier === 'auto-approve') return { verdict: 'allow' };
   if (localTier === 'prompt-each-time') return { verdict: 'ask' };
+  // A network verdict without even a destination/search target gives the model
+  // no evidence to distinguish a routine fetch from exfiltration. Fail silently
+  // instead of allowing an under-specified action or bouncing the uncertainty to UI.
+  if (
+    request.action.kind === 'network'
+    && !request.action.target?.trim()
+  ) {
+    return {
+      verdict: 'block',
+      reason: 'Network review needs a concrete destination or query.',
+    };
+  }
   if (!delegate) {
     return {
       verdict: 'block',
