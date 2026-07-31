@@ -400,8 +400,25 @@ grep -rnE "(label|text|title|message|placeholder|subtitle|desc|Description):\s*'
   --include='*.ts' --include='*.tsx' apps/ packages/ | grep -vE '__tests__|\.test\.'
 ```
 
-同时留意**影子 catalog**：`applicationMenuLabels.ts` 这类为了不依赖 renderer i18n 而单独
-维护四语文案的文件，天然会和 i18n 漂移，改术语时要专门找一遍。
+同时留意**影子 catalog**：为了不依赖 renderer i18n 而单独维护一份文案的文件，天然会和 i18n
+漂移。本仓已知**两处**，改术语时都要过：
+
+| 影子 catalog | 为什么存在 | 漂移后的后果 |
+|---|---|---|
+| `apps/desktop/src/main/applicationMenuLabels.ts` | macOS 原生菜单在 renderer 起来前就要有文案，四语自带 | File 菜单与 renderer 入口叫法冲突 |
+| `apps/desktop/src/shared/agentIsland.ts` 的 `DEFAULT_AGENT_ISLAND_STRINGS` + `native/agent-island/macos-agent-island-helper.swift` 的 `AgentIslandStrings.fallback` | Agent Island 是独立 helper 进程，冷启动时还没收到 main 的本地化状态 | **冷启动/回退态**露出旧名。落地时这两处一直停在 `New Chat` 和 `New Maker`（后者是更早的品牌名），只有拿到 main 状态后才显示新名 |
+
+穷尽这一类的办法是**在 locale 之外搜英文旧标签**（而不是搜代码里的中文）：
+
+```bash
+grep -rniE "'(New Chat|New Maker|New Conversation|Copy conversation link)'" \
+  apps packages --include='*.ts' --include='*.tsx' --include='*.swift' | grep -v i18n/locales
+```
+
+命中结果里要分清两类：**影子 catalog 的默认值必须改**；而 `'New Maker'` 作为**数据库默认
+标题的哨兵**（`deviceLinkCreateArgs.ts` 写入、`isDefaultDraftSessionTitle` 判定、swift 侧
+`normalized != "new maker"`）**绝对不能改**——`projectDraftSessionTitle` 那一整套机制的存在
+意义就是把这个哨兵挡在用户视线之外，改了它等于让哨兵检测全部失效。
 
 #### 6.0.2 Agent 进程会话不跟改，但要看清楚是哪一类
 
