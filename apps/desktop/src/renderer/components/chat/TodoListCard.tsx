@@ -92,7 +92,6 @@ export function TodoListCard({
                     strokeWidth={1.5}
                     spinning={animated}
                     className="text-[var(--msg-tool-card-text)]"
-                    style={{ animationDuration: '3s' }}
                   />
                 )}
                 {todo.status === 'pending' && (
@@ -138,7 +137,6 @@ export function TodoListCard({
             strokeWidth={2}
             spinning={animated && hasActive}
             className="shrink-0 text-[var(--msg-tool-card-text)]"
-            style={{ animationDuration: '3s' }}
           />
         )}
         <span className="text-13 leading-none tabular-nums text-[var(--msg-tool-card-text)]">
