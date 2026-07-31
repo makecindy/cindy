@@ -7652,6 +7652,7 @@
     "menuAria": "작업 메뉴",
     "tooltipEmpty": "더 많은 작업",
     "tooltipCount": "참조 디렉터리 {{count}}개",
+    "addFiles": "파일, 이미지 또는 동영상 추가…",
     "pluginsTitle": "설치된 플러그인",
     "pluginDisabled": "비활성화됨",
     "pluginNoCommand": "여기에서 사용할 수 없음",

@@ -7652,6 +7652,7 @@
     "menuAria": "操作菜单",
     "tooltipEmpty": "更多操作",
     "tooltipCount": "{{count}} 个附加引用目录",
+    "addFiles": "添加文件、图片或视频…",
     "pluginsTitle": "已安装的插件",
     "pluginDisabled": "未生效",
     "pluginNoCommand": "不可直接使用",

@@ -283,9 +283,9 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(chatInputSource).toContain(
       "className={isCreateAgentVariant && !useNarrowToolbar ? 'ml-[7px]' : undefined}",
     );
-    expect(chatInputSource).toContain(
-      '(extraDirs !== undefined && onExtraDirsChange)',
-    );
+    // 附件入口是 composer 的基础能力,「+」不再依赖引用目录接线才出现。
+    expect(chatInputSource).toContain('onAddFiles={addFiles}');
+    expect(chatInputSource).not.toContain('(extraDirs !== undefined && onExtraDirsChange)');
     expect(chatInputSource).not.toContain(
       "vendorKey === 'cc' && extraDirs !== undefined && onExtraDirsChange",
     );
