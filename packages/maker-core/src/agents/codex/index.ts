@@ -643,6 +643,54 @@ function dynamicToolResponseFromUserInput(response: ToolRequestUserInputResponse
   };
 }
 
+function userInputQuestionsFingerprint(
+  questions: readonly ToolRequestUserInputQuestion[],
+): string {
+  return JSON.stringify(questions.map((question) => ({
+    header: question.header,
+    question: question.question,
+    isOther: question.isOther === true,
+    options: (question.options ?? []).map((option) => ({
+      label: option.label,
+      description: option.description,
+    })),
+  })));
+}
+
+type UserInputAnswersByPosition = string[][];
+
+interface PendingUserInputInteraction {
+  interactionPromise: Promise<UserInputAnswersByPosition>;
+  cancelledPromise: Promise<void>;
+  cancel: () => void;
+}
+
+function userInputAnswersByPosition(
+  questions: readonly ToolRequestUserInputQuestion[],
+  response: ToolRequestUserInputResponse,
+): UserInputAnswersByPosition {
+  return questions.map((question) =>
+    response.answers[question.id]?.answers.slice() ?? [],
+  );
+}
+
+function responseFromUserInputAnswersByPosition(
+  questions: readonly ToolRequestUserInputQuestion[],
+  answersByPosition: readonly (readonly string[])[],
+): ToolRequestUserInputResponse {
+  const answers: ToolRequestUserInputResponse['answers'] = {};
+  questions.forEach((question, index) => {
+    answers[question.id] = { answers: [...(answersByPosition[index] ?? [])] };
+  });
+  return { answers };
+}
+
+function hasSubmittedUserInput(answersByPosition: readonly (readonly string[])[]): boolean {
+  return answersByPosition.some((answers) =>
+    answers.some((value) => value.trim().length > 0),
+  );
+}
+
 function normalizeServiceTier(serviceTier: ServiceTier | null | undefined): ServiceTier | null | undefined {
   return serviceTier === 'priority' ? 'fast' : serviceTier;
 }
@@ -3502,6 +3550,24 @@ export class CodexAgent extends BaseAgent {
     const userInputBroker = new CodexInteractionBroker<ToolRequestUserInputResponse>();
     const dynamicToolBroker = new CodexInteractionBroker<DynamicToolCallResponse>();
     const activeToolContexts = new Map<string, ActiveToolContext>();
+    // A single model turn can surface the same visible question through both
+    // the native requestUserInput request and the dynamic-tool compatibility
+    // path. Join an in-flight interaction, then replay its submitted answers
+    // by question position so protocol-specific ids can still differ.
+    const submittedUserInputByTurn = new Map<
+      string,
+      Map<string, UserInputAnswersByPosition>
+    >();
+    const pendingUserInputByTurn = new Map<
+      string,
+      Map<string, PendingUserInputInteraction>
+    >();
+    const pendingUserInputOwnerByRequestId = new Map<string, {
+      turnId: string;
+      fingerprint: string;
+      pendingForTurn: Map<string, PendingUserInputInteraction>;
+      pendingInteraction: PendingUserInputInteraction;
+    }>();
     registerCodexMcpContext(threadId);
     let mcpElicitationSeq = 0;
 
@@ -3790,6 +3856,7 @@ export class CodexAgent extends BaseAgent {
         const requestId = String(meta.requestId);
         if (dismissed.has(requestId)) continue;
         dismissed.add(requestId);
+        forgetPendingUserInputRequest(requestId);
         eventQueue.push({
           type: 'interaction_dismissed',
           data: { requestId, reason, resolvedAs: 'deny' },
@@ -4429,6 +4496,46 @@ export class CodexAgent extends BaseAgent {
       for (const [itemId, ctx] of activeToolContexts) {
         if (ctx.turnId === turnId) activeToolContexts.delete(itemId);
       }
+      // Lifecycle callers dismiss the broker entries first. Wake joined waiters
+      // before dropping the lookup maps so they can observe that their request
+      // is no longer pending instead of reopening the interaction.
+      const pendingForTurn = pendingUserInputByTurn.get(turnId);
+      if (pendingForTurn) {
+        for (const pendingInteraction of pendingForTurn.values()) {
+          pendingInteraction.cancel();
+        }
+      }
+      for (const [requestId, pending] of pendingUserInputOwnerByRequestId) {
+        if (pending.turnId === turnId) pendingUserInputOwnerByRequestId.delete(requestId);
+      }
+      submittedUserInputByTurn.delete(turnId);
+      pendingUserInputByTurn.delete(turnId);
+    }
+
+    function clearAllPendingUserInputInteractions(): void {
+      // Keep the same broker-dismiss-before-wake ordering as the per-turn path.
+      for (const pendingForTurn of pendingUserInputByTurn.values()) {
+        for (const pendingInteraction of pendingForTurn.values()) {
+          pendingInteraction.cancel();
+        }
+      }
+      pendingUserInputByTurn.clear();
+      pendingUserInputOwnerByRequestId.clear();
+    }
+
+    function forgetPendingUserInputRequest(requestId: string): void {
+      const pending = pendingUserInputOwnerByRequestId.get(requestId);
+      if (!pending) return;
+      pendingUserInputOwnerByRequestId.delete(requestId);
+      pending.pendingInteraction.cancel();
+      if (pending.pendingForTurn.get(pending.fingerprint) !== pending.pendingInteraction) return;
+      pending.pendingForTurn.delete(pending.fingerprint);
+      if (
+        pending.pendingForTurn.size === 0
+        && pendingUserInputByTurn.get(pending.turnId) === pending.pendingForTurn
+      ) {
+        pendingUserInputByTurn.delete(pending.turnId);
+      }
     }
 
     function classifyUserInputRequest(params: ToolRequestUserInputParams): 'ask_user_question' | 'permission' {
@@ -4446,6 +4553,8 @@ export class CodexAgent extends BaseAgent {
     async function askUserViaInteraction(
       requestId: string,
       questions: ToolRequestUserInputQuestion[],
+      turnId?: string | null,
+      isRequestPending: () => boolean = () => true,
     ): Promise<ToolRequestUserInputResponse> {
       if (questions.some((q) => q.isSecret)) {
         log.warn('requestUserInput secret question refused', {
@@ -4454,16 +4563,117 @@ export class CodexAgent extends BaseAgent {
         });
         return emptyUserInputResponse(questions);
       }
-      const decision = await dispatchInteraction({
-        kind: 'ask_user_question',
-        requestId,
-        questions: questionsToAskUserItems(questions),
-      });
-      if (decision.kind !== 'ask_user_question') {
-        log.warn('requestUserInput got mismatched ask decision', { requestId, decKind: decision.kind });
-        return emptyUserInputResponse(questions);
+      const fingerprint = turnId ? userInputQuestionsFingerprint(questions) : null;
+      const submittedForTurn = turnId ? submittedUserInputByTurn.get(turnId) : undefined;
+      const replay = fingerprint ? submittedForTurn?.get(fingerprint) : undefined;
+      if (replay) {
+        log.info('reusing submitted answer for duplicate same-turn user input request', {
+          requestId,
+          turnId,
+          questionCount: questions.length,
+        });
+        return responseFromUserInputAnswersByPosition(questions, replay);
       }
-      return responseFromAskUserAnswers(questions, decision.answers);
+
+      let pendingForTurn = turnId ? pendingUserInputByTurn.get(turnId) : undefined;
+      const pendingReplay = fingerprint ? pendingForTurn?.get(fingerprint) : undefined;
+      if (pendingReplay) {
+        log.info('joining duplicate same-turn user input request', {
+          requestId,
+          turnId,
+          questionCount: questions.length,
+        });
+        const joined = await Promise.race([
+          pendingReplay.interactionPromise.then((answersByPosition) => ({
+            kind: 'answered' as const,
+            answersByPosition,
+          })),
+          pendingReplay.cancelledPromise.then(() => ({ kind: 'cancelled' as const })),
+        ]);
+        if (joined.kind === 'cancelled') {
+          log.debug('joined duplicate same-turn user input request cancelled', {
+            requestId,
+            turnId,
+          });
+          return isRequestPending()
+            ? askUserViaInteraction(requestId, questions, turnId, isRequestPending)
+            : emptyUserInputResponse(questions);
+        }
+        return responseFromUserInputAnswersByPosition(questions, joined.answersByPosition);
+      }
+
+      const interactionPromise = (async (): Promise<UserInputAnswersByPosition> => {
+        const decision = await dispatchInteraction({
+          kind: 'ask_user_question',
+          requestId,
+          questions: questionsToAskUserItems(questions),
+        });
+        if (decision.kind !== 'ask_user_question') {
+          log.warn('requestUserInput got mismatched ask decision', { requestId, decKind: decision.kind });
+          return questions.map(() => []);
+        }
+        return userInputAnswersByPosition(
+          questions,
+          responseFromAskUserAnswers(questions, decision.answers),
+        );
+      })();
+
+      let cancelPendingInteraction!: () => void;
+      const cancelledPromise = new Promise<void>((resolve) => {
+        cancelPendingInteraction = resolve;
+      });
+      const pendingInteraction: PendingUserInputInteraction = {
+        interactionPromise,
+        cancelledPromise,
+        cancel: cancelPendingInteraction,
+      };
+
+      if (turnId && fingerprint) {
+        pendingForTurn ??= new Map<string, PendingUserInputInteraction>();
+        pendingForTurn.set(fingerprint, pendingInteraction);
+        if (!pendingUserInputByTurn.has(turnId)) {
+          pendingUserInputByTurn.set(turnId, pendingForTurn);
+        }
+        pendingUserInputOwnerByRequestId.set(requestId, {
+          turnId,
+          fingerprint,
+          pendingForTurn,
+          pendingInteraction,
+        });
+      }
+
+      try {
+        const answersByPosition = await interactionPromise;
+        if (
+          turnId
+          && fingerprint
+          && pendingUserInputByTurn.get(turnId) === pendingForTurn
+          && pendingForTurn?.get(fingerprint) === pendingInteraction
+          && hasSubmittedUserInput(answersByPosition)
+        ) {
+          const nextSubmittedForTurn = submittedUserInputByTurn.get(turnId)
+            ?? new Map<string, UserInputAnswersByPosition>();
+          nextSubmittedForTurn.set(fingerprint, answersByPosition);
+          if (!submittedUserInputByTurn.has(turnId)) {
+            submittedUserInputByTurn.set(turnId, nextSubmittedForTurn);
+          }
+        }
+        return responseFromUserInputAnswersByPosition(questions, answersByPosition);
+      } finally {
+        const ownedPending = pendingUserInputOwnerByRequestId.get(requestId);
+        if (ownedPending?.pendingInteraction === pendingInteraction) {
+          pendingUserInputOwnerByRequestId.delete(requestId);
+        }
+        if (turnId && fingerprint && pendingForTurn?.get(fingerprint) === pendingInteraction) {
+          pendingForTurn.delete(fingerprint);
+          if (
+            pendingForTurn.size === 0
+            && pendingUserInputByTurn.get(turnId) === pendingForTurn
+          ) {
+            pendingUserInputByTurn.delete(turnId);
+          }
+        }
+      }
     }
 
     async function requestUserInputAsPermission(
@@ -4542,7 +4752,12 @@ export class CodexAgent extends BaseAgent {
         async (settle) => {
           const response = kind === 'permission'
             ? await requestUserInputAsPermission(requestId, params, questions)
-            : await askUserViaInteraction(requestId, questions);
+            : await askUserViaInteraction(
+                requestId,
+                questions,
+                params.turnId,
+                () => userInputBroker.has({ connectionId, requestId: meta.requestId }),
+              );
           settle(response);
         },
       );
@@ -4602,7 +4817,12 @@ export class CodexAgent extends BaseAgent {
           itemId: params.callId,
         },
         async (settle) => {
-          const response = await askUserViaInteraction(requestId, questions);
+          const response = await askUserViaInteraction(
+            requestId,
+            questions,
+            params.turnId,
+            () => dynamicToolBroker.has({ connectionId, requestId: meta.requestId }),
+          );
           settle(dynamicToolResponseFromUserInput(response));
         },
       );
@@ -4610,12 +4830,21 @@ export class CodexAgent extends BaseAgent {
 
     function handleServerRequestResolved(params: ServerRequestResolvedNotification['params']): void {
       const requestId = String(params.requestId);
+      const brokerKey = { connectionId, requestId: params.requestId };
+      const userInputPending = userInputBroker.has(brokerKey);
+      const dynamicPending = dynamicToolBroker.has(brokerKey);
+      if (userInputPending || dynamicPending) {
+        // Wake joined duplicates before settling the owner's outer broker
+        // response. This keeps them on the cancellation/reassignment path even
+        // if a resolver starts mirroring broker settlement in the future.
+        forgetPendingUserInputRequest(requestId);
+      }
       const userInputCancelled = userInputBroker.cancel(
-        { connectionId, requestId: params.requestId },
+        brokerKey,
         { answers: {} },
       );
       const dynamicCancelled = dynamicToolBroker.cancel(
-        { connectionId, requestId: params.requestId },
+        brokerKey,
         {
           contentItems: [{ type: 'inputText', text: 'Request was resolved before user input was submitted.' }],
           success: false,
@@ -6195,6 +6424,8 @@ export class CodexAgent extends BaseAgent {
           subscriptionInvalidatedByTransport = true;
           dismissAllPendingUserInput('transport_error');
           activeToolContexts.clear();
+          submittedUserInputByTurn.clear();
+          clearAllPendingUserInputInteractions();
         }
         const targetsPendingTurn = isTurnStartPending && currentTurnId === null && Boolean(params.turnId);
         // 空 turnId 的容量拒绝: 过载重投的 RPC 还在飞、而它的 turnStarted 尚未到达时,
@@ -7277,6 +7508,7 @@ export class CodexAgent extends BaseAgent {
         // 否则 server 那边没回 response 会卡; UI 上的 PermissionPrompt 也会留尸
         try { dismissAllPending('session_closed', 'deny'); } catch (e) { log.warn('dismissAllPending threw', { error: String(e) }); }
         try { dismissAllPendingUserInput('session_closed'); } catch (e) { log.warn('dismissAllPendingUserInput threw', { error: String(e) }); }
+        try { clearAllPendingUserInputInteractions(); } catch (e) { log.warn('clear pending user input threw', { error: String(e) }); }
         try { stopActiveRolloutPlanFallback(); } catch (e) { log.warn('stop rollout plan fallback threw', { error: String(e) }); }
         // 挂起的过载重投计时器必须清掉：否则会话已关，计时器到点仍会对已释放的
         // thread 发 turn/start（assertCurrentHost 会抛，但那是在无人接收的

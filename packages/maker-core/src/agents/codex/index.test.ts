@@ -9959,18 +9959,21 @@ describe('CodexAgent MCP thread context hooks', () => {
       workingDir: '/repo',
     });
     const handlers = host.getThreadHandlers();
-    if (!handlers?.dynamicToolCall) throw new Error('expected dynamicToolCall handler');
+    if (!handlers?.dynamicToolCall || !handlers.requestUserInput) {
+      throw new Error('expected user input handlers');
+    }
     let requestCount = 0;
+    const pendingDecision = deferred<InteractionDecision>();
     handle.setInteractionResolver(async (req) => {
       requestCount += 1;
       expect(req).toMatchObject({
         kind: 'ask_user_question',
-        requestId: requestCount === 1 ? 'req-dynamic' : 'req-dynamic-legacy',
+        requestId: 'req-dynamic',
       });
-      return { kind: 'ask_user_question', answers: { 'What next?': 'Keep going' } };
+      return pendingDecision.promise;
     });
 
-    const result = await handlers.dynamicToolCall({
+    const resultPromise = handlers.dynamicToolCall({
       threadId: 'start-thread-id',
       turnId: 'turn-1',
       callId: 'dynamic-call-1',
@@ -9978,18 +9981,46 @@ describe('CodexAgent MCP thread context hooks', () => {
       tool: 'ask_user_question',
       arguments: {
         questions: [{
-          id: 'q1',
           header: 'Direction',
           question: 'What next?',
-          options: [{ label: 'Keep going', description: 'Continue current work' }],
         }],
       },
     }, { requestId: 'req-dynamic' });
 
+    const nativeDuplicateResultPromise = handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'native-call-duplicate',
+      questions: [{
+        id: 'native-q1',
+        header: 'Direction',
+        question: 'What next?',
+        isOther: false,
+        isSecret: false,
+        options: [],
+      }],
+    }, { requestId: 'req-native-duplicate' });
+
+    expect(requestCount).toBe(1);
+    pendingDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'What next?': 'Keep going' },
+    });
+
+    const [result, nativeDuplicateResult] = await Promise.all([
+      resultPromise,
+      nativeDuplicateResultPromise,
+    ]);
     expect(result.success).toBe(true);
     expect(result.contentItems).toEqual([
-      { type: 'inputText', text: JSON.stringify({ q1: { answers: ['Keep going'] } }) },
+      {
+        type: 'inputText',
+        text: JSON.stringify({ 'question-1': { answers: ['Keep going'] } }),
+      },
     ]);
+    expect(nativeDuplicateResult).toEqual({
+      answers: { 'native-q1': { answers: ['Keep going'] } },
+    });
 
     const legacyResult = await handlers.dynamicToolCall({
       threadId: 'start-thread-id',
@@ -9999,14 +10030,88 @@ describe('CodexAgent MCP thread context hooks', () => {
       tool: 'ask_user_question',
       arguments: {
         questions: [{
-          id: 'q1',
+          id: 'legacy-q1',
           header: 'Direction',
           question: 'What next?',
-          options: [{ label: 'Keep going', description: 'Continue current work' }],
+          options: null,
         }],
       },
     }, { requestId: 'req-dynamic-legacy' });
-    expect(legacyResult).toEqual(result);
+    expect(legacyResult.contentItems).toEqual([
+      {
+        type: 'inputText',
+        text: JSON.stringify({ 'legacy-q1': { answers: ['Keep going'] } }),
+      },
+    ]);
+    expect(requestCount).toBe(1);
+    await handle.close();
+  });
+
+  it('preserves submitted answers from different concurrent user input prompts', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-concurrent-user-input',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.dynamicToolCall) throw new Error('expected dynamicToolCall handler');
+
+    const firstDecision = deferred<InteractionDecision>();
+    const secondDecision = deferred<InteractionDecision>();
+    let requestCount = 0;
+    handle.setInteractionResolver(async (req) => {
+      if (req.kind !== 'ask_user_question') throw new Error('expected ask_user_question');
+      requestCount += 1;
+      if (req.requestId === 'req-first') return firstDecision.promise;
+      if (req.requestId === 'req-second') return secondDecision.promise;
+      return {
+        kind: 'ask_user_question',
+        answers: { [req.questions[0]?.question ?? '']: 'Unexpected repeat' },
+      };
+    });
+
+    const callQuestion = (
+      requestId: string,
+      callId: string,
+      questionId: string,
+      question: string,
+    ) => handlers.dynamicToolCall?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      callId,
+      namespace: 'cindy',
+      tool: 'ask_user_question',
+      arguments: {
+        questions: [{ id: questionId, header: 'Direction', question }],
+      },
+    }, { requestId });
+
+    const firstResultPromise = callQuestion('req-first', 'call-first', 'first', 'First question?');
+    const secondResultPromise = callQuestion('req-second', 'call-second', 'second', 'Second question?');
+    if (!firstResultPromise || !secondResultPromise) throw new Error('expected dynamic tool results');
+    expect(requestCount).toBe(2);
+
+    secondDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Second question?': 'Second answer' },
+    });
+    await secondResultPromise;
+    firstDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'First question?': 'First answer' },
+    });
+    await firstResultPromise;
+
+    const firstReplay = await callQuestion('req-first-replay', 'call-first-replay', 'first', 'First question?');
+    const secondReplay = await callQuestion('req-second-replay', 'call-second-replay', 'second', 'Second question?');
+    expect(firstReplay?.contentItems).toEqual([
+      { type: 'inputText', text: JSON.stringify({ first: { answers: ['First answer'] } }) },
+    ]);
+    expect(secondReplay?.contentItems).toEqual([
+      { type: 'inputText', text: JSON.stringify({ second: { answers: ['Second answer'] } }) },
+    ]);
     expect(requestCount).toBe(2);
     await handle.close();
   });
@@ -10022,21 +10127,29 @@ describe('CodexAgent MCP thread context hooks', () => {
     const iterator = handle.events()[Symbol.asyncIterator]();
     const handlers = host.getThreadHandlers();
     if (!handlers?.requestUserInput || !handlers.serverRequestResolved) throw new Error('expected handlers');
-    const pendingDecision = deferred<InteractionDecision>();
-    handle.setInteractionResolver(async () => pendingDecision.promise);
+    const cancelledDecision = deferred<InteractionDecision>();
+    const retryDecision = deferred<InteractionDecision>();
+    let requestCount = 0;
+    handle.setInteractionResolver(async (req) => {
+      requestCount += 1;
+      return req.requestId === 'req-resolved'
+        ? cancelledDecision.promise
+        : retryDecision.promise;
+    });
 
+    const question = {
+      id: 'q1',
+      header: 'Question',
+      question: 'Pick one',
+      isOther: false,
+      isSecret: false,
+      options: null,
+    };
     const responsePromise = handlers.requestUserInput({
       threadId: 'start-thread-id',
       turnId: 'turn-1',
       itemId: 'item-1',
-      questions: [{
-        id: 'q1',
-        header: 'Question',
-        question: 'Pick one',
-        isOther: false,
-        isSecret: false,
-        options: null,
-      }],
+      questions: [question],
     }, { requestId: 'req-resolved' });
 
     handlers.serverRequestResolved({ threadId: 'start-thread-id', requestId: 'req-resolved' });
@@ -10050,8 +10163,315 @@ describe('CodexAgent MCP thread context hooks', () => {
         resolvedAs: 'deny',
       },
     });
-    pendingDecision.resolve({ kind: 'ask_user_question', answers: { q1: 'late' } });
+
+    const retryResponsePromise = handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'item-2',
+      questions: [question],
+    }, { requestId: 'req-retry' });
+    expect(requestCount).toBe(2);
+    retryDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': 'fresh' },
+    });
+    await expect(retryResponsePromise).resolves.toEqual({
+      answers: { q1: { answers: ['fresh'] } },
+    });
+
+    cancelledDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': 'late' },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await expect(handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'item-3',
+      questions: [question],
+    }, { requestId: 'req-replay' })).resolves.toEqual({
+      answers: { q1: { answers: ['fresh'] } },
+    });
+    expect(requestCount).toBe(2);
     await handle.close();
+  });
+
+  it('does not cache a late user-input answer after local turn interruption', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
+      if (method === Method.TurnInterrupt) return {};
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-user-input-local-interrupt',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    await handle.send({ type: 'user', content: 'ask me a question' });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.requestUserInput) throw new Error('expected requestUserInput handler');
+    const interruptedDecision = deferred<InteractionDecision>();
+    const replacementDecision = deferred<InteractionDecision>();
+    let requestCount = 0;
+    handle.setInteractionResolver(async () => {
+      requestCount += 1;
+      return requestCount === 1
+        ? interruptedDecision.promise
+        : replacementDecision.promise;
+    });
+
+    const question = {
+      id: 'q1',
+      header: 'Question',
+      question: 'Pick one',
+      isOther: false,
+      isSecret: false,
+      options: null,
+    };
+    const interruptedResponsePromise = handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'item-interrupted',
+      questions: [question],
+    }, { requestId: 'req-interrupted' });
+
+    await handle.abort();
+    await expect(interruptedResponsePromise).resolves.toEqual({ answers: {} });
+
+    interruptedDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': 'late' },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const replacementResponsePromise = handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'item-replacement',
+      questions: [question],
+    }, { requestId: 'req-replacement' });
+    expect(requestCount).toBe(2);
+    replacementDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': 'fresh' },
+    });
+    await expect(replacementResponsePromise).resolves.toEqual({
+      answers: { q1: { answers: ['fresh'] } },
+    });
+
+    handlers.turnCompleted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'interrupted' },
+    });
+    await handle.close();
+  });
+
+  it('reassigns a joined duplicate when the interaction owner is cancelled', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-user-input-owner-cancelled',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.requestUserInput || !handlers.dynamicToolCall || !handlers.serverRequestResolved) {
+      throw new Error('expected handlers');
+    }
+    const ownerDecision = deferred<InteractionDecision>();
+    const joinedDecision = deferred<InteractionDecision>();
+    let requestCount = 0;
+    handle.setInteractionResolver(async (req) => {
+      requestCount += 1;
+      return req.requestId === 'req-owner'
+        ? ownerDecision.promise
+        : joinedDecision.promise;
+    });
+
+    const ownerResponsePromise = handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'item-owner',
+      questions: [{
+        id: 'native-q1',
+        header: 'Question',
+        question: 'Pick one',
+        isOther: false,
+        isSecret: false,
+        options: null,
+      }],
+    }, { requestId: 'req-owner' });
+    const joinedResponsePromise = handlers.dynamicToolCall({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      callId: 'item-joined',
+      namespace: 'cindy',
+      tool: 'ask_user_question',
+      arguments: {
+        questions: [{
+          id: 'dynamic-q1',
+          header: 'Question',
+          question: 'Pick one',
+          isOther: false,
+          options: null,
+        }],
+      },
+    }, { requestId: 'req-joined' });
+    expect(requestCount).toBe(1);
+
+    handlers.serverRequestResolved({ threadId: 'start-thread-id', requestId: 'req-owner' });
+
+    await expect(ownerResponsePromise).resolves.toEqual({ answers: {} });
+    await expect(nextEvent(iterator)).resolves.toMatchObject({
+      type: 'interaction_dismissed',
+      data: {
+        requestId: 'req-owner',
+        reason: 'server_request_resolved',
+        resolvedAs: 'deny',
+      },
+    });
+    await waitForExpectation(() => {
+      expect(requestCount).toBe(2);
+    });
+
+    joinedDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': 'fresh' },
+    });
+    await expect(joinedResponsePromise).resolves.toEqual({
+      success: true,
+      contentItems: [{
+        type: 'inputText',
+        text: JSON.stringify({ 'dynamic-q1': { answers: ['fresh'] } }),
+      }],
+    });
+
+    ownerDecision.resolve({
+      kind: 'ask_user_question',
+      answers: { 'Pick one': 'late' },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await expect(handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'item-replay',
+      questions: [{
+        id: 'replay-q1',
+        header: 'Question',
+        question: 'Pick one',
+        isOther: false,
+        isSecret: false,
+        options: null,
+      }],
+    }, { requestId: 'req-replay' })).resolves.toEqual({
+      answers: { 'replay-q1': { answers: ['fresh'] } },
+    });
+    expect(requestCount).toBe(2);
+    await handle.close();
+  });
+
+  it.each([
+    {
+      lifecycle: 'turn completion',
+      reason: 'turn_completed',
+      trigger: (_handle: AgentSessionHandle, handlers: ThreadEventHandlers) => {
+        handlers.turnCompleted?.({
+          threadId: 'start-thread-id',
+          turn: { id: 'turn-1', status: 'completed' },
+        });
+      },
+    },
+    {
+      lifecycle: 'transport failure',
+      reason: 'transport_error',
+      trigger: (_handle: AgentSessionHandle, handlers: ThreadEventHandlers) => {
+        handlers.error?.({
+          threadId: 'start-thread-id',
+          turnId: '',
+          willRetry: false,
+          scope: 'transport',
+          error: { message: 'transport closed' },
+        });
+      },
+    },
+    {
+      lifecycle: 'session close',
+      reason: 'session_closed',
+      trigger: async (handle: AgentSessionHandle) => {
+        await handle.close();
+      },
+    },
+  ])('wakes joined user-input requests during $lifecycle cleanup', async ({ lifecycle, reason, trigger }) => {
+    const logger = createNoopLogger();
+    const debug = vi.spyOn(logger, 'debug');
+    const agent = new CodexAgent(createDeps({}, { logger }));
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: `session-user-input-cleanup-${lifecycle.replaceAll(' ', '-')}`,
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.requestUserInput || !handlers.dynamicToolCall) {
+      throw new Error('expected user input handlers');
+    }
+    const ownerDecision = deferred<InteractionDecision>();
+    let requestCount = 0;
+    handle.setInteractionResolver(async () => {
+      requestCount += 1;
+      return ownerDecision.promise;
+    });
+
+    const ownerResponsePromise = handlers.requestUserInput({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      itemId: 'item-owner',
+      questions: [{
+        id: 'native-q1',
+        header: 'Question',
+        question: 'Pick one',
+        isOther: false,
+        isSecret: false,
+        options: null,
+      }],
+    }, { requestId: 'req-owner' });
+    const joinedResponsePromise = handlers.dynamicToolCall({
+      threadId: 'start-thread-id',
+      turnId: 'turn-1',
+      callId: 'item-joined',
+      namespace: 'cindy',
+      tool: 'ask_user_question',
+      arguments: {
+        questions: [{
+          id: 'dynamic-q1',
+          header: 'Question',
+          question: 'Pick one',
+          isOther: false,
+          options: null,
+        }],
+      },
+    }, { requestId: 'req-joined' });
+    expect(requestCount).toBe(1);
+
+    await trigger(handle, handlers);
+
+    await expect(ownerResponsePromise).resolves.toEqual({ answers: {} });
+    await expect(joinedResponsePromise).resolves.toEqual({
+      success: false,
+      contentItems: [{ type: 'inputText', text: `Request cancelled: ${reason}` }],
+    });
+    await waitForExpectation(() => {
+      expect(debug).toHaveBeenCalledWith(
+        'joined duplicate same-turn user input request cancelled',
+        { requestId: 'req-joined', turnId: 'turn-1' },
+      );
+    });
+    if (lifecycle !== 'session close') await handle.close();
   });
 
   it('updates the registered vendorOptions object by reference on setVendorOptions', async () => {

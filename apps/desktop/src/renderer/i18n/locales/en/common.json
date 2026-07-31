@@ -2841,6 +2841,8 @@
         "uninstalled": "Uninstalled \"{{name}}\"",
         "installedAsleep": "Installed \"{{name}}\" (disabled — enable it here anytime)",
         "updated": "\"{{name}}\" updated to v{{version}}",
+        "exported": "Exported the .cindy file for \"{{name}}\"",
+        "exportFailed": "Couldn't export \"{{name}}\" — try again",
         "projectDisabled": "Turned off \"{{name}}\" for this project (applies to new sessions)",
         "projectEnabled": "\"{{name}}\" now follows the global setting in this project"
       },
@@ -2997,7 +2999,8 @@
             "image.generate": "Image generation",
             "image.edit": "Image editing",
             "video.generate": "Video generation",
-            "video.edit": "Image-to-video"
+            "video.edit": "Image-to-video",
+            "text.oneshot": "Quick answer (text)"
           },
           "defaultOption": "{{model}} (default)",
           "noModels": "No models available"
@@ -3033,6 +3036,8 @@
         "useDisabled": "Enable this Plugin before using it",
         "moreActions": "More Plugin Actions",
         "updateFromFile": "Update from .cindy File…",
+        "exportPackage": "Export .cindy File…",
+        "exportFileType": "Cindy Plugin",
         "settingsTitle": "{{name}} Settings",
         "settingsUnavailableUntilRestore": "Restore the plugin to use this configuration again.",
         "configurationTitle": "Configuration",

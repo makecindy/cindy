@@ -35,6 +35,7 @@ import {
 } from '../appSessionState.js';
 import { getLayoutStore } from '../layout/index.js';
 import { GhostManager, type InstallRejection, type UninstallRejection } from './GhostManager.js';
+import { exportGhostPackage } from './exportGhostPackage.js';
 import { GhostMutationCoordinator } from './ghostMutationCoordinator.js';
 import {
   clearBuiltinTombstone,
@@ -174,6 +175,8 @@ import { projectProviderCatalogForBuildRegion } from '../maker-host/provider-acc
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { getUtilityModelChainProfiles } from '../utility-model/UtilityModelSelection.js';
+import { utilityModelPinOptions } from '../../shared/utilityModelProfiles.js';
 import {
   CINDY_CAPABILITY_KEYS,
   readGhostCindyOverrides,
@@ -192,7 +195,7 @@ import {
   markGhostRecentlyUsed,
 } from './ghostRecentUsageStore.js';
 import { getCindyProxyMediaService } from '../mcp-integrations/cindyProxyMedia.js';
-import { ImageChannelRegistry } from './imageChannelRegistry.js';
+import { ImageChannelRegistry, decodeImageResponse } from './imageChannelRegistry.js';
 import { createGeminiImageChannel } from './geminiImageClient.js';
 import { createGatewayImageClient } from '../cindy-proxy-media/api/gatewayImageClient.js';
 import * as blobStore from '../cindy-media/blobStore.js';
@@ -1959,20 +1962,6 @@ function resolveImageChannelForModel(model: string, operation: 'generate' | 'edi
   return getImageChannelRegistry().resolve(entry.providerId);
 }
 
-/** XD Gateway 图片响应 → 字节 + mime(gen / edit 同一解码口径)。 */
-function decodeImageResponse(res: {
-  data: Array<{ b64_json?: string }>;
-  output_format?: string;
-}): { buffer: Buffer; mimeType: string } {
-  const first = res.data[0];
-  if (!first?.b64_json) throw new Error('图片通道返回为空');
-  const buffer = Buffer.from(first.b64_json, 'base64');
-  const format = (res.output_format ?? 'png').toLowerCase();
-  const mimeType =
-    format === 'webp' ? 'image/webp' : format === 'jpeg' || format === 'jpg' ? 'image/jpeg' : 'image/png';
-  return { buffer, mimeType };
-}
-
 export function getGhostCindySlot(): GhostCindySlot {
   if (!cindySlotSingleton) {
     cindySlotSingleton = new GhostCindySlot({
@@ -2042,12 +2031,16 @@ export function getGhostCindySlot(): GhostCindySlot {
       // 模块顶层读 electron app 路径,静态引入会把这条链拽进所有 import 本
       // 模块的单测(hook-script-generator 同款做法)。失败面折叠成 slot 层
       // 的三档 reason;attempts 细节只进日志,不给沙箱探测面。
-      oneshotText: async ({ prompt, maxTokens, timeoutMs }) => {
+      oneshotText: async ({ prompt, maxTokens, timeoutMs, pinnedProfileId }) => {
         const [{ requestUtilityText }, { getMaker }] = await Promise.all([
           import('../utility-model/oneShotCandidates.js'),
           import('../maker-host/index.js'),
         ]);
-        const r = await requestUtilityText(getMaker(), prompt, { maxTokens, timeoutMs });
+        const r = await requestUtilityText(getMaker(), prompt, {
+          maxTokens,
+          timeoutMs,
+          pinnedProfileId,
+        });
         if (r.ok) {
           return { ok: true, text: r.text, model: `${r.providerId}/${r.model}` };
         }
@@ -3615,10 +3608,21 @@ export function registerGhostIpc(): void {
           standard === undefined ? null : (cfg.models.find((m) => m.id === standard) ?? null),
       };
     };
+    // 文本类(快问快答)的可选项不来自媒体目录,而是轻量任务模型链的档位表
+    // ——每一项就是一组供应商×模型。defaultModel = 当前"跟随默认"实际会用的
+    // 那一档(链首),让用户看得见跟的是谁。
+    const textChain = getUtilityModelChainProfiles();
+    const textOptions = utilityModelPinOptions();
+    const textDefaultId = textChain[0]?.id ?? null;
     event.returnValue = {
       overrides,
       image: byKind(getCatalogImageConfig()),
       video: byKind(getCatalogVideoConfig()),
+      text: {
+        options: textOptions,
+        defaultModel:
+          textDefaultId === null ? null : (textOptions.find((o) => o.id === textDefaultId) ?? null),
+      },
     };
   });
   // ── 目录级禁用(ghostWorkdirPrefs;插件页的项目范围视图)──
@@ -3828,6 +3832,63 @@ export function registerGhostIpc(): void {
     }
     await uninstallGhostAndCleanup(id);
     return { ok: true };
+  });
+
+  // 详情页「导出 .cindy」:把已装插件的安装目录重新打成 zip 包,经系统
+  // 保存对话框写到用户选定的位置。取消选择返回 { status: 'canceled' },
+  // 不算错误;导出失败抛 IPC 错误(renderer 映射 toast)。
+  // 快照是一致性快照(签名包逐文件 sha256 比对 statement;未签名包
+  // 第二遍重读重哈希比对),导出与更新/卸载并发也不会产出混合版本
+  // 的坏包。
+  ipcMain.handle('ghosts:export', async (event, id: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    // 官方保留前缀在本地装入链路被拒,导出产物装不回——renderer 菜单
+    // 只是隐藏,handler 才是真正的强制边界(评审 P1)。
+    if (typeof id === 'string') rejectReservedGhostId(id);
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const result = await exportGhostPackage(id, {
+      listInstalled: () => manager.list(),
+      showSaveDialog: (opts) =>
+        win ? dialog.showSaveDialog(win, opts) : dialog.showSaveDialog(opts),
+      getDownloadsDir: () => app.getPath('downloads'),
+      fileTypeLabel: t('settings.ghosts.detail.exportFileType'),
+      writeFile: (filePath, data) => fs.promises.writeFile(filePath, data),
+      // 装入校验本尊 + 装入侧不变量:manager.inspect 带真实 trust
+      // registry;指令查重与 tokenBroker 门控只存在于 install/update,
+      // inspect 不覆盖,这里按同一口径补齐(评审 P1)。
+      inspectPackage: async (filePath) => {
+        const probe = await manager.inspect(filePath);
+        if ('rejection' in probe) return false;
+        // tokenBroker 门控(同 rejectUnauthorizedTokenBroker):第三方包
+        // 声明即不可装入,官方前缀豁免。
+        const brokered = (probe.manifest.network?.secrets ?? []).some(
+          (s) => s.oauth?.tokenBroker !== undefined,
+        );
+        if (brokered && !isOfficialGhostId(probe.manifest.id)) return false;
+        // 指令查重(同 install/update):与当前已装撞名即拒,排除自身。
+        const commandFold = probe.manifest.command?.toLowerCase();
+        if (commandFold === undefined) return true;
+        return !manager.list().some(
+          (g) =>
+            g.manifest.id !== probe.manifest.id &&
+            g.manifest.command !== undefined &&
+            g.manifest.command.toLowerCase() === commandFold,
+        );
+      },
+    });
+    switch (result.status) {
+      case 'saved':
+        log.info('ghost exported', { id: String(id) });
+        return { status: 'saved' as const, savedPath: result.savedPath };
+      case 'canceled':
+        return { status: 'canceled' as const };
+      case 'invalid_id':
+        return throwIpcError('INVALID_PARAMS', 'id must be a valid Ghost id');
+      case 'not_installed':
+        return throwIpcError('NOT_FOUND', `意识 ${String(id)} 未安装`);
+      case 'error':
+        return throwIpcError('INTERNAL', `导出插件失败(${result.code})`);
+    }
   });
 
   // 内置意识状态(sendSync:设置页与已装清单同帧渲染,规则 7 无跳变)——

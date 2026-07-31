@@ -1117,6 +1117,8 @@ interface ElectronAPI {
       overrides: Record<string, string>;
       image: { options: Array<{ id: string; label: string }>; defaultModel: { id: string; label: string } | null };
       video: { options: Array<{ id: string; label: string }>; defaultModel: { id: string; label: string } | null };
+      /** 文本类(快问快答):选项是轻量任务模型链的档位(供应商×模型),不是媒体目录模型。 */
+      text: { options: Array<{ id: string; label: string }>; defaultModel: { id: string; label: string } | null };
     };
     /** 写/清一项覆盖(model=null 即恢复跟随默认);返回该意识最新覆盖表。 */
     setCindyPref: (
@@ -1144,6 +1146,10 @@ interface ElectronAPI {
       iconDataUrl?: string;
     }>;
     uninstall: (id: string) => Promise<{ ok: true }>;
+    /** 详情页「导出 .cindy」:打包安装目录 → 保存对话框落盘。 */
+    export: (
+      id: string,
+    ) => Promise<{ status: 'saved'; savedPath: string } | { status: 'canceled' }>;
     /** 启用/停用(停用 = 面板休眠,布局位置保留)。 */
     setEnabled: (id: string, enabled: boolean) => Promise<{ ok: true }>;
     /** 目录级禁用清单(插件页项目范围视图;sendSync 切换同帧渲染)。 */

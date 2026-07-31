@@ -196,6 +196,9 @@ export function toGhostPluginDetail(
     cindyCapabilities: [
       ...(manifest.cindy?.image ?? []).map((action) => `image.${action}`),
       ...(manifest.cindy?.video ?? []).map((action) => `video.${action}`),
+      // 文本类(快问快答)同样可钉后端:漏掉它,声明了 cindy.text 的插件在
+      // 详情页就没有任何选型入口,只能吃全局轻量链的默认档。
+      ...(manifest.cindy?.text ?? []).map((action) => `text.${action}`),
     ],
     hasErrand: manifest.agent?.errand === true,
     panelMinWidth: manifest.panel ? (manifest.panel.minWidth ?? 280) : null,

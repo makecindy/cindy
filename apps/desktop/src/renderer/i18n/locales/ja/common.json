@@ -2840,6 +2840,8 @@
         "uninstalled": "「{{name}}」をアンインストールしました",
         "installedAsleep": "「{{name}}」をインストールしました(無効状態。ここでいつでも有効化できます)",
         "updated": "「{{name}}」を v{{version}} に更新しました",
+        "exported": "「{{name}}」の .cindy ファイルを書き出しました",
+        "exportFailed": "「{{name}}」を書き出せませんでした。もう一度お試しください",
         "projectDisabled": "「{{name}}」をこのプロジェクトで無効にしました(新しいセッションから適用)",
         "projectEnabled": "「{{name}}」はこのプロジェクトでグローバル設定に従います"
       },
@@ -2996,7 +2998,8 @@
             "image.generate": "画像生成",
             "image.edit": "画像編集",
             "video.generate": "動画生成",
-            "video.edit": "画像から動画"
+            "video.edit": "画像から動画",
+            "text.oneshot": "クイック回答(テキスト)"
           },
           "defaultOption": "{{model}}(既定)",
           "noModels": "利用可能なモデルなし"
@@ -3032,6 +3035,8 @@
         "useDisabled": "使用する前に Plugin を有効にしてください",
         "moreActions": "その他の Plugin 操作",
         "updateFromFile": ".cindy ファイルから更新…",
+        "exportPackage": ".cindy ファイルを書き出す…",
+        "exportFileType": "Cindy プラグイン",
         "settingsTitle": "{{name}} の設定",
         "settingsUnavailableUntilRestore": "この設定を再び使用するには、プラグインを復元してください。",
         "configurationTitle": "設定",

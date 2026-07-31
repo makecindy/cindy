@@ -194,7 +194,13 @@ export interface CindySlotDeps {
    * 不注入 = 能力在运行期不可用,资格审通过也回结构化拒绝(未接线的
    * 宿主/测试环境天然 fail closed)。
    */
-  oneshotText?(params: { prompt: string; maxTokens: number; timeoutMs: number }): Promise<
+  oneshotText?(params: {
+    prompt: string;
+    maxTokens: number;
+    timeoutMs: number;
+    /** 用户在插件详情页把 text.oneshot 钉到的轻量档位(供应商×模型);没钉 = 跟随默认链。 */
+    pinnedProfileId?: string;
+  }): Promise<
     | { ok: true; text: string; model?: string }
     | { ok: false; reason: 'no_candidate' | 'timeout' | 'failed'; message: string }
   >;
@@ -922,10 +928,14 @@ export class GhostCindySlot {
       const prompt = expectJson
         ? `${p.prompt}\n\n(只输出 JSON 本体,不要任何解释、前后缀或代码围栏)`
         : p.prompt;
+      // 选型仍不在意识手里,但用户可以在插件详情页把这项能力钉到某个轻量档位
+      // (与 image.*/video.* 的"钉后端"同一张覆盖表、同一条 IPC)。
+      const pinnedProfileId = this.deps.getOverride(ghostId, 'text.oneshot') ?? undefined;
       const outcome = await oneshot({
         prompt,
         maxTokens: (p.maxTokens as number | undefined) ?? GHOST_ONESHOT_TEXT_DEFAULT_MAX_TOKENS,
         timeoutMs: GHOST_ONESHOT_TEXT_TIMEOUT_MS,
+        pinnedProfileId,
       });
       if (!outcome.ok) {
         const errorCode =

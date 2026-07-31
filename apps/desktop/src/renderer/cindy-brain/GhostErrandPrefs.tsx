@@ -89,6 +89,31 @@ export function GhostErrandPrefs({
 
   // agent 显式选定后才有可配的模型清单;模型选定后强度跟着该模型的支持集走。
   const models = (capabilities?.availableModels ?? []).filter((m) => m.defaultEnabled !== false);
+
+  /**
+   * 下拉里每一项的文案。原来只画 displayName,踩了两个坑:
+   *  1. **折扣版与官方版 displayName 同名**(见 ModelDescriptor.group 的注释),
+   *     于是列表里出现好几行一模一样的字,用户根本选不中想要的那个;
+   *  2. 主机自己的模型选择器每行都带思考强度档(如「Opus 5 超高」),这里没有,
+   *     两处看起来不像同一个产品。
+   * `<option>` 里画不了徽章,所以把这些信息拼进文字:名字 · 强度 · 折扣。
+   */
+  const modelOptionLabel = (m: (typeof models)[number]): string => {
+    const parts = [m.displayName];
+    const effort = m.defaultEffort;
+    if (effort) {
+      const effortName =
+        m.effortDisplayNames?.[effort] ??
+        capabilities?.effortLevels.find((e) => e.id === effort)?.displayName ??
+        effort;
+      parts.push(effortName);
+    }
+    // 判别与 ModelSelector 保持一致:目录分组优先,回落 id 前缀。
+    if (m.group === 'gpt-budget' || m.id.startsWith('codex/')) {
+      parts.push(t('newChat.modelSelector.meta.budgetDiscount'));
+    }
+    return parts.join(' · ');
+  };
   const selectedModel = config.model ? models.find((m) => m.id === config.model) : undefined;
   const effortOptions = (
     selectedModel ? selectedModel.efforts : (capabilities?.effortLevels ?? []).map((e) => e.id)
@@ -189,7 +214,7 @@ export function GhostErrandPrefs({
           </option>
           {models.map((m) => (
             <option key={m.id} value={m.id}>
-              {m.displayName}
+              {modelOptionLabel(m)}
             </option>
           ))}
         </select>,

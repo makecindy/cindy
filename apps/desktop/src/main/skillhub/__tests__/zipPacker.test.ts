@@ -9,7 +9,7 @@
  *   - zip 根直接是文件（无顶层目录包裹）
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -250,6 +250,55 @@ describe('skillhub/zipPacker.pack', () => {
     const r2 = await pack(dir2);
     // Same content, different path → only content matters → same sha256
     expect(r1.sha256).toBe(r2.sha256);
+  });
+
+  it('打包时刻不进 zip 字节:跨秒界两次 pack 仍同 sha256(条目时间戳已固定)', async () => {
+    // 回归背景:JSZip 缺省给条目盖打包瞬间墙钟(DOS 2 秒精度),两次 pack 跨过
+    // 秒界即 sha 漂移,上面的 determinism 用例在 CI 上随机红。用假时钟制造
+    // 远大于精度的墙钟差,锁住"时间不参与包字节";带子目录层级,覆盖 walk 递归路径。
+    const dir1 = path.join(tmpDir, 'clock1');
+    const dir2 = path.join(tmpDir, 'clock2');
+    for (const dir of [dir1, dir2]) {
+      writeFile(dir, 'SKILL.md', Buffer.from('clock-free', 'utf8'));
+      writeFile(dir, 'scripts/run.sh', Buffer.from('#!/bin/sh\necho ok\n', 'utf8'));
+    }
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-07-30T20:42:59.900Z'));
+      const r1 = await pack(dir1);
+      vi.setSystemTime(new Date('2026-07-30T20:43:07.100Z'));
+      const r2 = await pack(dir2);
+      expect(r1.sha256).toBe(r2.sha256);
+      expect(r1.manifest.files.map((f) => f.relPath)).toContain('scripts/run.sh');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('时区不进 zip 字节:不同 TZ 下两次 pack 仍同 sha256(本地分量构造的条目时间戳)', async () => {
+    // zip 的 DOS 时间字段无时区,JSZip 用本地 getters 写分量——固定 UTC 瞬间在
+    // 不同时区会写出不同分量。锁住"本地分量构造"后任何时区字节一致。
+    // (POSIX Node 运行中改 process.env.TZ 即生效;不生效的平台上两次 pack
+    // 同时区,断言退化为原确定性语义,仍成立。)
+    const dir1 = path.join(tmpDir, 'tz1');
+    const dir2 = path.join(tmpDir, 'tz2');
+    for (const dir of [dir1, dir2]) {
+      writeFile(dir, 'SKILL.md', Buffer.from('tz-free', 'utf8'));
+      writeFile(dir, 'scripts/run.sh', Buffer.from('#!/bin/sh\necho ok\n', 'utf8'));
+    }
+
+    const prevTz = process.env.TZ;
+    try {
+      process.env.TZ = 'Asia/Shanghai';
+      const r1 = await pack(dir1);
+      process.env.TZ = 'America/New_York';
+      const r2 = await pack(dir2);
+      expect(r1.sha256).toBe(r2.sha256);
+    } finally {
+      if (prevTz === undefined) delete process.env.TZ;
+      else process.env.TZ = prevTz;
+    }
   });
 
   it('aborts before reading files when the signal is already cancelled', async () => {
