@@ -560,7 +560,7 @@ const CAPABILITIES: Capabilities = {
   memory: {
     supported: { supported: true },
     displayName: 'Auto Memory',
-    description: '自动从对话中沉淀长期记忆并在新会话中召回 (后台 auto-dream 一并联动)',
+    description: '自动从对话中沉淀长期记忆并在后续对话中召回 (后台 auto-dream 一并联动)',
     stage: 'stable',
     defaultEnabled: true,
     resettable: true,

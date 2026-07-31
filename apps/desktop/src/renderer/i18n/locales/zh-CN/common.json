@@ -2175,7 +2175,7 @@
         "title": "自动操作浏览器",
         "description": "一个 Agent 专用的独立浏览器，与你日常的 Chrome 互不影响",
         "toggleAria": "切换浏览器自动化",
-        "toggleHint": "这个开关只对之后新建的 Agent 会话生效；已在运行的任务不受影响。",
+        "toggleHint": "这个开关只对之后新建的 Agent 会话生效；已在运行的 Agent 会话不受影响。",
         "noProjectHint": "从项目任务中打开「设置」可针对该项目开关浏览器自动化。",
         "detected": "已检测到 {{browser}}",
         "notDetected": "未检测到本机浏览器。安装 Chrome 后即可使用浏览器自动化。",
@@ -2210,7 +2210,7 @@
         "description": "让 Agent 通过 ADB 检查并操作已连接的 Android 设备",
         "toggleAria": "切换 Android 自动化",
         "refresh": "重新检查",
-        "toggleHint": "这个全局开关只对之后新建的 Agent 会话生效；已在运行的任务不受影响。",
+        "toggleHint": "这个全局开关只对之后新建的 Agent 会话生效；已在运行的 Agent 会话不受影响。",
         "status": {
           "checking": "正在检查 ADB 状态…",
           "preparing": "正在准备 ADB…",
@@ -2347,7 +2347,7 @@
           "windowsHint": "Windows 不需要额外系统授权。使用时请保持目标应用在当前活动桌面中可见，Agent 会接管前台操作。",
           "linuxHint": "Linux 不需要 macOS 的 TCC 授权；请确保当前桌面会话允许窗口读取和输入自动化。"
         },
-        "toggleHint": "这个开关只对之后新建的 Agent 会话生效；已在运行的任务不受影响。",
+        "toggleHint": "这个开关只对之后新建的 Agent 会话生效；已在运行的 Agent 会话不受影响。",
         "noProjectHint": "从项目任务中打开「设置」可针对该项目开关直接电脑控制。",
         "update": {
           "available": "发现新版本 v{{version}}，更新后如系统权限失效需重新授权。",
