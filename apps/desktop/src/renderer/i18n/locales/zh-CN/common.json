@@ -1286,6 +1286,8 @@
           "models": "模型",
           "modelIdPlaceholder": "model-id",
           "modelNamePlaceholder": "显示名称",
+          "modelContextWindowPlaceholder": "上下文(tokens)",
+          "modelContextWindowTitle": "上下文窗口(tokens)。留空按 200K 保守默认；影响窗口显示与压缩阈值。",
           "addModel": "添加模型",
           "headers": "请求头(可选)",
           "headerNamePlaceholder": "Header-Name",
@@ -1311,6 +1313,7 @@
           "nameRequired": "请填写显示名称",
           "runtimeRequired": "请至少配置一个 Runtime（填写它的基础 URL 和模型）",
           "baseUrlInvalid": "基础 URL 必须是合法的 http(s) 地址",
+          "contextWindowInvalid": "上下文窗口必须是合法的正整数（数字组之间可用分隔符）",
           "requestPathInvalid": "精确请求路径需以单个 / 开头，不含片段标识或 .、.. 路径段；空格和不安全字符请使用百分号编码",
           "modelRequired": "请至少添加一个模型",
           "oauthInvalid": "OAuth 配置不完整：所有字段均必填，且两个端点必须是安全的 https 地址"
@@ -3051,12 +3054,10 @@
           "model": "模型",
           "permission": "动手权限",
           "permissionDisabled": "派活时不提供这一档",
-          "resetFollow": "恢复跟随默认",
           "workdir": "工作目录",
           "workdirDefault": "插件专属文件夹(默认)",
           "workdirPick": "选择…",
-          "workdirClear": "恢复默认目录",
-          "followDefault": "跟随默认"
+          "workdirClear": "恢复默认目录"
         },
         "toolsTitle": "Tools",
         "permissionsTitle": "权限",

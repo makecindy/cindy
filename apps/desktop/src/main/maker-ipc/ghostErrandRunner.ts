@@ -12,7 +12,9 @@
  *
  * 安全不变量(与 errandSlot 头注释同一契约):任务文本只进普通 user 消息;
  * 权限档只认 plan/acceptEdits/auto(存储层与本层双重钳制,bypassPermissions
- * 在协议上不存在);errand 会话侧边栏可见,用户可旁观可随时停。
+ * 在协议上不存在);errand 会话侧边栏可见,用户可旁观可随时停;工作目录
+ * 用户配置优先,插件转述的目录只认 pick 亲选台账(isUserPickedDir),
+ * 台账没有即明拒——插件不能凭空指路。
  *
  * 全部依赖注入(规则 14):register.ts 只做接线,本模块可单测。
  */
@@ -76,6 +78,11 @@ export interface GhostErrandRunnerDeps {
    * 比对,否则"带尾斜杠 vs 不带"会让复用判定永远失败、每单都建新会话。
    */
   normalizeWorkingDir(dir: string): string | null;
+  /**
+   * 插件转述的目录是不是这个插件的用户在 pick 槽里亲手选过的
+   * (pickGrantsStore 台账;入参已经过 normalizeWorkingDir)。
+   */
+  isUserPickedDir(ghostId: string, normalizedDir: string): boolean;
   isSessionBusy(sessionId: string): boolean;
   /** 统一投递通路(sendToSessionInternal 的窄化面)。 */
   dispatch(params: { targetSessionId: string; message: string }): Promise<
@@ -122,15 +129,16 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
     row: GhostErrandSessionRow,
     cfg: GhostErrandConfig,
     permissionMode: GhostErrandPermissionMode,
-    configuredDir: string | undefined,
+    effectiveDir: string | undefined,
   ): boolean => {
     if (row.status !== 'active') return false;
     if (cfg.agentKind && row.agentKind !== cfg.agentKind) return false;
     if (row.permissionMode !== permissionMode) return false;
-    // 用户配置了项目目录:目录不同(或旧间还是 dialogue)就换新间;
-    // 用户清掉目录配置:旧的 project 间不再复用,回到专属 dialogue 间。
-    if (configuredDir) {
-      if (row.workspaceKind !== 'project' || row.workingDir !== configuredDir) return false;
+    // 这单要目录(用户配置或已对账的插件转述):目录不同(或旧间还是
+    // dialogue)就换新间;这单不要目录:旧的 project 间不再复用,回到
+    // 专属 dialogue 间。
+    if (effectiveDir) {
+      if (row.workspaceKind !== 'project' || row.workingDir !== effectiveDir) return false;
     } else if (row.workspaceKind !== 'dialogue') {
       return false;
     }
@@ -144,12 +152,27 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
     const configuredDir = cfg.workingDir
       ? (deps.normalizeWorkingDir(cfg.workingDir) ?? undefined)
       : undefined;
+    // 目录取值:用户在「AI 代办」卡里的配置永远优先;没配置时才看插件在
+    // 请求里转述的目录,且只认 pick 台账里用户亲手选过的——插件不能凭空
+    // 指路,否则等于让它借 Agent 的手读任意文件夹。查不到时明拒,不静默
+    // 落回专属对话间:静默降级会建出一间看不到代码的会话,插件还以为成了。
+    let effectiveDir = configuredDir;
+    if (!effectiveDir && request.workingDir) {
+      const requested = deps.normalizeWorkingDir(request.workingDir) ?? undefined;
+      if (!requested || !deps.isUserPickedDir(request.ghostId, requested)) {
+        return failure(
+          'INVALID_REQUEST',
+          '这个目录不在用户亲选记录里,不能把 errand 会话建在那里;请引导用户在插件设置里重新选一次该目录(经系统选目录窗口),或在插件详情页「AI 代办」卡里配置工作目录',
+        );
+      }
+      effectiveDir = requested;
+    }
 
     // ── 确保专属 errand 会话 ─────────────────────────────────────────────
     let sessionId = deps.readSessionId(request.ghostId);
     if (sessionId) {
       const row = await deps.getSessionRow(sessionId);
-      if (!row || !sessionMatchesConfig(row, cfg, permissionMode, configuredDir)) {
+      if (!row || !sessionMatchesConfig(row, cfg, permissionMode, effectiveDir)) {
         // 旧间不可用/配置已变:解除映射换新间(旧会话留在侧边栏,历史可查)。
         deps.writeSessionId(request.ghostId, null);
         sessionId = null;
@@ -175,7 +198,7 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
             ? { providerId: cfg.providerId ?? draft.providerId }
             : {}),
           permissionMode,
-          ...(configuredDir ? { workingDir: configuredDir } : {}),
+          ...(effectiveDir ? { workingDir: effectiveDir } : {}),
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

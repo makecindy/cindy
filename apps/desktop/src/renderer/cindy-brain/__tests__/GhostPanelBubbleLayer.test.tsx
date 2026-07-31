@@ -166,6 +166,32 @@ describe('GhostPanelBubbleLayer', () => {
     expect(screen.queryByTestId('ghost-panel-bubble-a')).toBeNull();
   });
 
+  it('展开期间拖堆叠球:子气泡在拖动过程中实时跟走,松手后保持展开', () => {
+    stubGhostsBridge([ghost('a'), ghost('b')]);
+    minimizeGhostPanel('a');
+    minimizeGhostPanel('b');
+    render(<GhostPanelBubbleLayer />);
+    const stack = screen.getByTestId('ghost-panel-bubble-stack');
+    fireEvent.click(stack);
+    const childA = screen.getByTestId('ghost-panel-bubble-a');
+    const childB = screen.getByTestId('ghost-panel-bubble-b');
+    fireEvent.pointerDown(stack, { button: 0, pointerId: 1, clientX: 500, clientY: 500 });
+    fireEvent.pointerMove(stack, { pointerId: 1, clientX: 420, clientY: 430 });
+    // jsdom 视口 1024x768:默认锚点 (964, 58),拖 (-80, -70) 后 y 被 clamp 回
+    // 顶部下限 58 → 锚点 (884, 58),子气泡向下排在 114 / 170(还没松手)。
+    expect((childA as HTMLElement).style.transform).toBe('translate3d(884px, 114px, 0)');
+    expect((childB as HTMLElement).style.transform).toBe('translate3d(884px, 170px, 0)');
+    fireEvent.pointerUp(stack, { pointerId: 1, clientX: 420, clientY: 430 });
+    fireEvent.click(stack);
+    // 拖后 click 被吞:展开态不翻转,子气泡还在,且落在与拖动终点一致的位置。
+    expect((screen.getByTestId('ghost-panel-bubble-a') as HTMLElement).style.transform).toBe(
+      'translate3d(884px, 114px, 0)',
+    );
+    expect((screen.getByTestId('ghost-panel-bubble-b') as HTMLElement).style.transform).toBe(
+      'translate3d(884px, 170px, 0)',
+    );
+  });
+
   it('拖动堆叠球:落点持久化到独立键、随后的 click 被吞(不展开)', () => {
     stubGhostsBridge([ghost('a'), ghost('b')]);
     minimizeGhostPanel('a');

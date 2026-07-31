@@ -95,6 +95,10 @@ describe('载荷校验', () => {
       { ...RUN, title: 'x'.repeat(101) },
       { ...RUN, mode: 'submit' },
       { ...RUN, callId: '' },
+      { ...RUN, workingDir: '' },
+      { ...RUN, workingDir: '   ' },
+      { ...RUN, workingDir: 42 },
+      { ...RUN, workingDir: 'x'.repeat(1025) },
     ];
     for (const payload of cases) {
       expect(await slot.handleRequest('helper', payload)).toMatchObject({
@@ -122,6 +126,18 @@ describe('载荷校验', () => {
     await slot.handleRequest('helper', { ...RUN, context: { a: 1 } });
     const req = runner.mock.calls[0][0] as { message: string };
     expect(req.message).toBe('总结 README\n\n[结构化上下文 JSON]\n{"a":1}');
+  });
+
+  it('workingDir 原样透传给 runner(是否亲选目录由 runner 对台账把关)', async () => {
+    const { slot, runner } = makeSlot();
+    await slot.handleRequest('helper', { ...RUN, workingDir: '/proj/repo' });
+    expect(runner.mock.calls[0][0]).toMatchObject({ workingDir: '/proj/repo' });
+  });
+
+  it('不带 workingDir 时 runner 请求里没有该字段', async () => {
+    const { slot, runner } = makeSlot();
+    await slot.handleRequest('helper', RUN);
+    expect('workingDir' in (runner.mock.calls[0][0] as object)).toBe(false);
   });
 });
 

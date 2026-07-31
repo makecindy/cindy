@@ -71,6 +71,7 @@ function makeDeps(overrides: Partial<GhostErrandRunnerDeps> = {}): {
     getGhostName: () => '帮手',
     getDraftDefaults: () => ({}),
     normalizeWorkingDir: (dir) => dir.replace(/\/+$/, ''),
+    isUserPickedDir: () => false,
     isSessionBusy: () => false,
     dispatch: vi.fn(async () => ({ ok: true as const, wakeKind: 'resumed' as const })),
     getObservableSession: (id) => ensureEmitter(id).session,
@@ -163,6 +164,73 @@ describe('专属会话建/复用', () => {
     emitters.get('sess-proj')!.emit(doneEvent());
     await p;
     expect(createSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('插件转述目录(request.workingDir)', () => {
+  it('台账里的目录:建会话带上该目录;归一化后的同目录会话可复用', async () => {
+    const createSession = vi.fn(async () => 'sess-repo');
+    const { deps, emitters } = makeDeps({
+      createSession,
+      isUserPickedDir: (ghostId, dir) => ghostId === 'helper' && dir === '/proj/repo',
+    });
+    const runner = createGhostErrandRunner(deps);
+    const p = runner({ ...REQUEST, workingDir: '/proj/repo/' });
+    await vi.waitFor(() => expect(emitters.has('sess-repo')).toBe(true));
+    emitters.get('sess-repo')!.emit(doneEvent());
+    await p;
+    expect(createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ workingDir: '/proj/repo' }),
+    );
+
+    // 第二单同目录:命中已有 project 间,不再新建。
+    const createAgain = vi.fn(async () => 'should-not-happen');
+    const second = makeDeps({
+      createSession: createAgain,
+      isUserPickedDir: () => true,
+      readSessionId: () => 'sess-repo',
+      getSessionRow: async () => ({
+        ...ACTIVE_ROW,
+        workspaceKind: 'project',
+        workingDir: '/proj/repo',
+      }),
+    });
+    const runner2 = createGhostErrandRunner(second.deps);
+    const p2 = runner2({ ...REQUEST, workingDir: '/proj/repo' });
+    await vi.waitFor(() => expect(second.emitters.has('sess-repo')).toBe(true));
+    second.emitters.get('sess-repo')!.emit(doneEvent());
+    await p2;
+    expect(createAgain).not.toHaveBeenCalled();
+  });
+
+  it('台账里没有的目录 → INVALID_REQUEST,不建会话不投递', async () => {
+    const createSession = vi.fn(async () => 'should-not-happen');
+    const dispatch = vi.fn(async () => ({ ok: true as const, wakeKind: 'resumed' as const }));
+    const { deps } = makeDeps({ createSession, dispatch, isUserPickedDir: () => false });
+    const runner = createGhostErrandRunner(deps);
+    const r = await runner({ ...REQUEST, workingDir: '/anywhere/else' });
+    expect(r).toMatchObject({ ok: false, errorCode: 'INVALID_REQUEST' });
+    expect(createSession).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('用户在「AI 代办」卡配置了目录 → 用户配置优先,转述字段忽略(不查台账)', async () => {
+    const createSession = vi.fn(async () => 'sess-cfg');
+    const isUserPickedDir = vi.fn(() => false);
+    const { deps, emitters } = makeDeps({
+      readConfig: () => ({ workingDir: '/user/configured' }),
+      createSession,
+      isUserPickedDir,
+    });
+    const runner = createGhostErrandRunner(deps);
+    const p = runner({ ...REQUEST, workingDir: '/ghost/says' });
+    await vi.waitFor(() => expect(emitters.has('sess-cfg')).toBe(true));
+    emitters.get('sess-cfg')!.emit(doneEvent());
+    await p;
+    expect(createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ workingDir: '/user/configured' }),
+    );
+    expect(isUserPickedDir).not.toHaveBeenCalled();
   });
 });
 

@@ -19,8 +19,9 @@
  *  - 堆叠模式(2026-07-31 Lizi 定案):同时最小化 ≥2 个 → 合并成**一枚**
  *    堆叠气泡(lucide Ghost 脸 + 数量角标),点击向下(空间不够则向上)
  *    纵向展开各插件自己的气泡,点谁恢复谁;点堆叠球或空白处收拢。堆叠球
- *    可拖,落点单独持久化;只剩 1 个时自动回到单气泡形态(用它自己的
- *    存储位/默认位)。
+ *    可拖,落点单独持久化;展开期间拖堆叠球,子气泡跟着实时走(同一条
+ *    零 React 热路径直改子气泡 DOM);只剩 1 个时自动回到单气泡形态
+ *    (用它自己的存储位/默认位)。
  */
 
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
@@ -90,21 +91,37 @@ function defaultPosition(defaultIndex: number): { x: number; y: number } {
   };
 }
 
+/** 堆叠展开的子气泡位:锚点(堆叠球)下方放得下全部就向下排,否则向上;
+ *  React 渲染与拖动热路径共用同一套算式,拖到哪儿子气泡就排到哪儿。 */
+function stackChildPos(
+  anchor: { x: number; y: number },
+  index: number,
+  count: number,
+): { x: number; y: number } {
+  const step = BUBBLE_SIZE + STACK_GAP;
+  // 两头都放不下时 clamp 兜底,极小窗口下允许压边,不做更复杂的绕排。
+  const fitsDown = anchor.y + step * count + BUBBLE_SIZE + EDGE_MARGIN <= window.innerHeight;
+  return clampToViewport(anchor.x, anchor.y + (fitsDown ? 1 : -1) * step * (index + 1));
+}
+
 /**
  * 气泡拖拽(单气泡与堆叠球共用):热路径零 React,translate3d 直改 DOM;
  * 4px 阈值区分点击与拖动;拖后第一次合成 click 由 consumeDraggedClick 吞掉。
  * blocked = true 时不再受理新的 pointerdown(退场动画期)。
+ * onMove 在每步拖动(及取消回滚)时带当前坐标回调,供堆叠球联动子气泡。
  */
 function useBubbleDrag({
   elRef,
   pos,
   blocked,
   onDrop,
+  onMove,
 }: {
   elRef: RefObject<HTMLButtonElement | null>;
   pos: { x: number; y: number };
   blocked: boolean;
   onDrop: (x: number, y: number) => void;
+  onMove?: (x: number, y: number) => void;
 }) {
   const dragRef = useRef<{
     pointerId: number;
@@ -169,6 +186,7 @@ function useBubbleDrag({
     d.lastY = next.y;
     const el = elRef.current;
     if (el) el.style.transform = `translate3d(${next.x}px, ${next.y}px, 0)`;
+    onMove?.(next.x, next.y);
   };
 
   const finishDrag = (persist: boolean) => {
@@ -186,9 +204,10 @@ function useBubbleDrag({
     if (persist) {
       onDrop(d.lastX, d.lastY);
     } else {
-      // 取消:回滚到拖前基准位
+      // 取消:回滚到拖前基准位(子气泡也一并滚回去)
       const el = elRef.current;
       if (el) el.style.transform = `translate3d(${d.baseX}px, ${d.baseY}px, 0)`;
+      onMove?.(d.baseX, d.baseY);
     }
   };
 
@@ -211,9 +230,17 @@ interface BubbleProps {
   pos: { x: number; y: number };
   /** 堆叠展开出来的子气泡不可拖(位置由堆叠球锚定,拖了也没地方记)。 */
   draggable?: boolean;
+  /** 把气泡按钮元素登记给上层(堆叠拖动时直改子气泡 transform 用)。 */
+  registerEl?: (el: HTMLButtonElement | null) => void;
 }
 
-function Bubble({ manifest, iconDataUrl, pos, draggable = true }: BubbleProps): ReactNode {
+function Bubble({
+  manifest,
+  iconDataUrl,
+  pos,
+  draggable = true,
+  registerEl,
+}: BubbleProps): ReactNode {
   const { t } = useTranslation();
   const elRef = useRef<HTMLButtonElement | null>(null);
   const [imgBroken, setImgBroken] = useState(false);
@@ -242,7 +269,10 @@ function Bubble({ manifest, iconDataUrl, pos, draggable = true }: BubbleProps): 
   const name = manifest.panel?.title ?? manifest.name;
   return (
     <button
-      ref={elRef}
+      ref={(el) => {
+        elRef.current = el;
+        registerEl?.(el);
+      }}
       type="button"
       data-testid={`ghost-panel-bubble-${manifest.id}`}
       data-ghost-bubble-layer
@@ -296,16 +326,19 @@ function StackBubble({
   expanded,
   onToggle,
   onDrop,
+  onDragMove,
 }: {
   count: number;
   pos: { x: number; y: number };
   expanded: boolean;
   onToggle: () => void;
   onDrop: (x: number, y: number) => void;
+  /** 拖动每步回调当前锚点(展开中的子气泡跟着实时走)。 */
+  onDragMove?: (x: number, y: number) => void;
 }): ReactNode {
   const { t } = useTranslation();
   const elRef = useRef<HTMLButtonElement | null>(null);
-  const drag = useBubbleDrag({ elRef, pos, blocked: false, onDrop });
+  const drag = useBubbleDrag({ elRef, pos, blocked: false, onDrop, onMove: onDragMove });
   const label = expanded
     ? t('ghostPanelBubble.stackCollapseAria')
     : t('ghostPanelBubble.stackExpandAria', { count });
@@ -356,6 +389,8 @@ export function GhostPanelBubbleLayer(): ReactNode {
   // 堆叠展开态(纯运行时,不落盘;落盘会让"重启后自动摊开一排"变成惊吓)。
   const [expanded, setExpanded] = useState(false);
   const [stackPos, setStackPos] = useState<{ x: number; y: number } | null>(() => loadStackPos());
+  // 展开中的子气泡元素表(拖堆叠球时热路径直改 transform,不走 React)。
+  const childElsRef = useRef(new Map<string, HTMLButtonElement>());
 
   const [, setResizeTick] = useState(0);
   useEffect(() => {
@@ -407,13 +442,15 @@ export function GhostPanelBubbleLayer(): ReactNode {
       stackPos?.x ?? defaultPosition(0).x,
       stackPos?.y ?? defaultPosition(0).y,
     );
-    const step = BUBBLE_SIZE + STACK_GAP;
-    // 展开方向:下方放得下全部子气泡就向下,否则向上(两头都放不下时 clamp
-    // 兜底,极小窗口下允许压边,不做更复杂的绕排)。
-    const fitsDown =
-      anchor.y + step * minimized.length + BUBBLE_SIZE + EDGE_MARGIN <= window.innerHeight;
-    const childPos = (index: number) =>
-      clampToViewport(anchor.x, anchor.y + (fitsDown ? 1 : -1) * step * (index + 1));
+    // 拖堆叠球的每一步把展开中的子气泡一起带走(同一条零 React 热路径)。
+    const onStackDragMove = (x: number, y: number) => {
+      minimized.forEach((g, index) => {
+        const el = childElsRef.current.get(g.manifest.id);
+        if (!el) return;
+        const p = stackChildPos({ x, y }, index, minimized.length);
+        el.style.transform = `translate3d(${p.x}px, ${p.y}px, 0)`;
+      });
+    };
     return createPortal(
       <>
         <StackBubble
@@ -425,6 +462,7 @@ export function GhostPanelBubbleLayer(): ReactNode {
             saveStackPos(x, y);
             setStackPos({ x, y });
           }}
+          onDragMove={onStackDragMove}
         />
         {expanded
           ? minimized.map((g, index) => (
@@ -432,8 +470,12 @@ export function GhostPanelBubbleLayer(): ReactNode {
                 key={g.manifest.id}
                 manifest={g.manifest}
                 iconDataUrl={g.iconDataUrl}
-                pos={childPos(index)}
+                pos={stackChildPos(anchor, index, minimized.length)}
                 draggable={false}
+                registerEl={(el) => {
+                  if (el) childElsRef.current.set(g.manifest.id, el);
+                  else childElsRef.current.delete(g.manifest.id);
+                }}
               />
             ))
           : null}

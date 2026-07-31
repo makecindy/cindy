@@ -1286,6 +1286,8 @@
           "models": "Models",
           "modelIdPlaceholder": "model-id",
           "modelNamePlaceholder": "Display name",
+          "modelContextWindowPlaceholder": "Context (tokens)",
+          "modelContextWindowTitle": "Context window in tokens. Leave empty for the conservative 200K default; affects the window display and compaction threshold.",
           "addModel": "Add model",
           "headers": "Headers (optional)",
           "headerNamePlaceholder": "Header-Name",
@@ -1311,6 +1313,7 @@
           "nameRequired": "Display name is required",
           "runtimeRequired": "Configure at least one runtime (its base URL and models)",
           "baseUrlInvalid": "Base URL must be a valid http(s) address",
+          "contextWindowInvalid": "Context window must be a valid positive integer (separators allowed between digit groups)",
           "requestPathInvalid": "Begin the exact request path with a single /. Do not use fragments or . and .. path segments; percent-encode spaces and unsafe characters.",
           "modelRequired": "Add at least one model",
           "oauthInvalid": "Incomplete OAuth config: all fields are required and both endpoints must be secure https URLs"
@@ -3052,12 +3055,10 @@
           "model": "Model",
           "permission": "Write access",
           "permissionDisabled": "Not available for errand sessions",
-          "resetFollow": "Reset to follow default",
           "workdir": "Working folder",
           "workdirDefault": "Plugin's dedicated folder (default)",
           "workdirPick": "Choose…",
-          "workdirClear": "Reset to default folder",
-          "followDefault": "Follow default"
+          "workdirClear": "Reset to default folder"
         },
         "toolsTitle": "Tools",
         "permissionsTitle": "Permissions",

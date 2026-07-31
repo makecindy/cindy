@@ -110,6 +110,23 @@ const openCodePreset = {
   },
 };
 
+const dualDiscoveryPreset = {
+  id: 'dual-endpoints',
+  name: 'Dual Endpoints',
+  runtimes: {
+    'claude-code': {
+      baseUrl: 'https://dual.example/anthropic',
+      modelsUrl: 'https://dual.example/anthropic/v1/models',
+      models: [],
+    },
+    codex: {
+      baseUrl: 'https://dual.example/openai/v1',
+      modelsUrl: 'https://dual.example/openai/v1/models',
+      models: [],
+    },
+  },
+};
+
 function renderWizard(presetId: string) {
   return render(
     React.createElement(AddProviderWizard, {
@@ -131,6 +148,7 @@ beforeEach(() => {
           liteLlmPreset,
           unsafeNoAuthDiscoveryPreset,
           openCodePreset,
+          dualDiscoveryPreset,
         ],
       })),
       // 列模型失败场景兜底(Greptile P1 回归):官方 API 预设必须靠推荐模型仍可完成。
@@ -372,6 +390,66 @@ describe('AddProviderWizard — preset 直达', () => {
     const config = vi.mocked(createCustomProvider).mock.calls[0][0];
     expect(config.runtimes['claude-code']?.models.map((model) => model.id)).toEqual(['minimax-m3']);
     expect(config.runtimes.codex?.models.map((model) => model.id)).toEqual(['glm-5.2']);
+  });
+
+  it('拉取新增模型带端点上报的 contextWindow 入库(Codex P1 回归)', async () => {
+    // 预设未收录的发现模型没有预设窗口可回填:丢弃端点上报值会让它落 200K
+    // 默认,显示与压缩阈值双错——完成创建必须把发现值写进配置。
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockResolvedValue({
+      ok: true,
+      models: [{ id: 'deepseek-v4', name: 'DeepSeek V4', contextWindow: 262_144 }],
+    });
+    renderWizard('deepseek');
+
+    await waitFor(() =>
+      expect(screen.getByText('settings.providers.wizard.nameLabel')).not.toBeNull(),
+    );
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    // 拉取新增模型默认不勾选,点选后完成。
+    fireEvent.click(await screen.findByText('DeepSeek V4'));
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    const config = vi.mocked(createCustomProvider).mock.calls[0][0];
+    expect(config.runtimes['claude-code']?.models).toEqual([
+      expect.objectContaining({ id: 'deepseek-v4', contextWindow: 262_144 }),
+    ]);
+  });
+
+  it('双 runtime 各自端点发现同一模型不同窗口时按 runtime 分别入库(Codex P1 回归)', async () => {
+    // 同一 model id 在两端窗口可以不同(如 cc=1M / codex=272K):共享一个发现值
+    // 会让其中一端显示与压缩阈值双错,必须按 agent 分槽各取各的端点上报值。
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(
+      async ({ agent }: { agent: 'claude-code' | 'codex' }) => ({
+        ok: true,
+        models: [
+          {
+            id: 'shared-model',
+            name: 'Shared Model',
+            contextWindow: agent === 'claude-code' ? 1_000_000 : 272_000,
+          },
+        ],
+      }),
+    );
+    renderWizard('dual-endpoints');
+
+    await waitFor(() =>
+      expect(screen.getByText('settings.providers.wizard.nameLabel')).not.toBeNull(),
+    );
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    fireEvent.click(await screen.findByText('Shared Model'));
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    const config = vi.mocked(createCustomProvider).mock.calls[0][0];
+    expect(config.runtimes['claude-code']?.models).toEqual([
+      expect.objectContaining({ id: 'shared-model', contextWindow: 1_000_000 }),
+    ]);
+    expect(config.runtimes.codex?.models).toEqual([
+      expect.objectContaining({ id: 'shared-model', contextWindow: 272_000 }),
+    ]);
   });
 
   it('LiteLLM:清空可编辑端点后不回退预设地址，也不能继续', async () => {

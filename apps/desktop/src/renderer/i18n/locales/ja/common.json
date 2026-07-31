@@ -1286,6 +1286,8 @@
           "models": "モデル",
           "modelIdPlaceholder": "model-id",
           "modelNamePlaceholder": "表示名",
+          "modelContextWindowPlaceholder": "コンテキスト(tokens)",
+          "modelContextWindowTitle": "コンテキストウィンドウ(トークン数)。空欄の場合は保守的な既定値 200K。ウィンドウ表示と圧縮しきい値に影響します。",
           "addModel": "モデルを追加",
           "headers": "リクエストヘッダー(任意)",
           "headerNamePlaceholder": "Header-Name",
@@ -1311,6 +1313,7 @@
           "nameRequired": "表示名を入力してください",
           "runtimeRequired": "Runtime を 1 つ以上設定してください（ベース URL とモデル）",
           "baseUrlInvalid": "ベース URL は有効な http(s) アドレスである必要があります",
+          "contextWindowInvalid": "コンテキストウィンドウは有効な正の整数である必要があります（数字グループの間に区切り記号を使用できます）",
           "requestPathInvalid": "正確なリクエストパスは 1 つの / で始め、フラグメントや .、.. のパスセグメントを含めないでください。空白や安全でない文字はパーセントエンコードしてください。",
           "modelRequired": "モデルを 1 つ以上追加してください",
           "oauthInvalid": "OAuth 設定が不完全です。すべての項目が必須で、両方のエンドポイントは安全な https URL である必要があります"
@@ -3051,12 +3054,10 @@
           "model": "モデル",
           "permission": "書き込み権限",
           "permissionDisabled": "代行セッションでは選べません",
-          "resetFollow": "既定に従うに戻す",
           "workdir": "作業フォルダー",
           "workdirDefault": "プラグイン専用フォルダー(既定)",
           "workdirPick": "選択…",
-          "workdirClear": "既定のフォルダーに戻す",
-          "followDefault": "既定に従う"
+          "workdirClear": "既定のフォルダーに戻す"
         },
         "toolsTitle": "Tools",
         "permissionsTitle": "権限",
