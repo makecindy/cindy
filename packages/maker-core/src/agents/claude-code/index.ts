@@ -78,6 +78,10 @@ import type {
 } from '../../types/events.js';
 import { isTerminalAgentErrorEvent } from '../../types/events.js';
 import type { UserMessage } from '../../types/common.js';
+import {
+  findClaudeMcpCapabilityRoute,
+  isCapabilityRouteInvocationAllowed,
+} from '../../types/capability-routing.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { AutoCompactController } from '../shared/auto-compact-controller.js';
 import { scanClaudeAtResources, scanClaudeSlashCommands } from '../shared/palette-scanner.js';
@@ -93,6 +97,11 @@ import {
   REMOTE_ROUTE_OVERRIDE_ENV_KEYS,
 } from './env-builder.js';
 import { buildClaudeFlagSettings } from './flag-settings.js';
+import {
+  buildClaudeLocalToolGuardHooks,
+  buildClaudeRemoteToolGuards,
+  mergeClaudeHookSets,
+} from './capability-routing.js';
 import { classifyBuiltinToolForAutoReview } from './auto-review-policy.js';
 import { resolveAgentCredentialMode } from '../credential-mode.js';
 import { repairForkedClaudeSessionJsonl, type RepairForkedClaudeJsonlResult } from './fork-jsonl-repair.js';
@@ -377,6 +386,13 @@ export async function toClaudeSdkContent(
   const prefix = refs.length > 0 ? `${refs.join(' ')} ` : '';
   const text = `${prefix}${textParts.join('\n')}`.trim();
   return text || prefix.trim();
+}
+
+function userMessageTextForCapabilityRouting(content: UserMessage['content']): string {
+  if (typeof content === 'string') return content;
+  return content
+    .flatMap((block) => (block.type === 'text' ? [block.text] : []))
+    .join('\n');
 }
 
 /**
@@ -1137,6 +1153,28 @@ export class ClaudeCodeAgent extends BaseAgent {
     // Keep the policy across Claude task_notification auto-continue turns,
     // which do not call handle.send again. The next explicit send replaces it.
     let activeTurnPermissionPolicy: TurnPermissionPolicy | null = null;
+    let activeCapabilitySelectionText = '';
+    const localClaudeHooks = mergeClaudeHookSets(
+      buildClaudeLocalToolGuardHooks(
+        this.deps.capabilityRouting,
+        () => activeCapabilitySelectionText,
+        (toolName, route) => {
+          log.warn('downstream MCP source denied by host PreToolUse route', {
+            toolName,
+            capabilityId: route.capabilityId,
+            replacement: route.replacement?.id,
+          });
+        },
+      ),
+      this.deps.claudeHooks,
+    );
+    const deniedCapabilityRoute = (toolName: string) => {
+      const route = findClaudeMcpCapabilityRoute(this.deps.capabilityRouting, toolName);
+      return route &&
+        !isCapabilityRouteInvocationAllowed(route, activeCapabilitySelectionText)
+        ? route
+        : undefined;
+    };
     const forceTurnConfirmation = (toolName: string, input: unknown): boolean => {
       const policy = activeTurnPermissionPolicy;
       if (!policy) return false;
@@ -1399,6 +1437,20 @@ export class ClaudeCodeAgent extends BaseAgent {
       }
 
       // ── 3. 其他工具 → permission kind ──
+      const capabilityRoute = deniedCapabilityRoute(toolName);
+      if (capabilityRoute) {
+        log.warn('downstream MCP source denied by host capability route', {
+          toolName,
+          capabilityId: capabilityRoute.capabilityId,
+          replacement: capabilityRoute.replacement?.id,
+        });
+        return {
+          behavior: 'deny',
+          message: capabilityRoute.replacement
+            ? `This downstream source was not selected. Use Cindy capability ${capabilityRoute.replacement.id}.`
+            : 'This downstream source was not selected.',
+        };
+      }
       // 没接 resolver → fail-closed(安全拦截逻辑不许 fail-open)。
       // 正常流程里 Session 构造时**必定**注入 resolver(见 session.ts:
       // setInteractionResolver, 且 host 没接 listener 时该 resolver 自身返回 deny),
@@ -1521,6 +1573,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // fast(否则二进制按 "Agent SDK 不可用" 拒绝)。是否 Opus/官方/firstParty 由二进制把关,
         // agent 层不重复硬判(规则 9:确定性逻辑就近,但 fast 的最终门槛是二进制 + 配置门控)。
         fastMode: mutableFastMode,
+        capabilityRouting: this.deps.capabilityRouting,
       });
 
     // file checkpointing 与 capability 强绑定 —— 声明 rewind 能力时必须开此开关,
@@ -2005,7 +2058,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         // startParams shape 跟 sdkQuery options 同源 (cwd / model / env / mcpServers /
         // permissionMode / systemPrompt / additionalDirectories), JSON 序列化时
         // canUseTool / pathToClaudeCodeExecutable / stderr / hooks 等 callback/path
-        // 字段自动 strip; SDK 在 daemon 端用默认行为继续跑。
+        // 字段不能序列化。权限回调由反向 RPC 承接；host capability route 则转成
+        // 下方 JSON-safe toolGuards，由 daemon 重建 PreToolUse hook，避免远端
+        // settings allow 规则或 bypassPermissions 绕过来源选择。
         //
         // mcpServers: 远端 cc MVP 只支持 stdio / sse / http 三种 process-transport
         // server (plain JSON 可跨进程)。in-process SDK MCP (type='sdk' + 闭包 instance)
@@ -2036,6 +2091,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 计划模式开启时远端 SDK 同样跑 plan; 读 mutable 值让 rewind 重建也拿到当前档。
         const remotePermissionMode = extra?.permissionMode ?? effectiveSdkPermissionMode();
         sdkInPlanMode = remotePermissionMode === 'plan';
+        const remoteToolGuards = buildClaudeRemoteToolGuards(
+          this.deps.capabilityRouting,
+        );
 
         const startParams: Record<string, unknown> = {
           cwd: opts.workingDir,
@@ -2052,6 +2110,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           // cc-manager 的 QueryStartParams 已原生支持 allowedTools; 传副本避免 RPC
           // 序列化前后任一侧原地改写 session 快照。
           ...(claudeAllowedTools ? { allowedTools: [...claudeAllowedTools] } : {}),
+          ...(remoteToolGuards.length > 0
+            ? { toolGuards: remoteToolGuards }
+            : {}),
           systemPrompt: (() => {
             const appendText = [
               MAKER_SYSTEM_PROMPT_APPEND,
@@ -2179,17 +2240,32 @@ export class ClaudeCodeAgent extends BaseAgent {
               };
             }
             // permission kind
+            const remoteToolName = params.toolName ?? '';
+            const capabilityRoute = deniedCapabilityRoute(remoteToolName);
+            if (capabilityRoute) {
+              log.warn('cc remote: downstream MCP source denied by host capability route', {
+                toolName: remoteToolName,
+                capabilityId: capabilityRoute.capabilityId,
+                replacement: capabilityRoute.replacement?.id,
+              });
+              return {
+                kind: 'permission',
+                behavior: 'deny',
+                reason: capabilityRoute.replacement
+                  ? `This downstream source was not selected. Use Cindy capability ${capabilityRoute.replacement.id}.`
+                  : 'This downstream source was not selected.',
+              };
+            }
             // 没接 resolver → 与本地 canUseTool 同款 fail-closed: 只放行已知只读工具,
             // 其余(含未知工具与所有 MCP 工具)一律 deny。这里过去 return allow, 一个
             // misconfigured / 裸 handle 的远端会话可以在无人在场时跑破坏性工具 ——
             // 本地那侧不允许的事, 远端没有理由更宽。
             if (!interactionResolver) {
-              const remoteTool = params.toolName ?? '';
-              if (isReadOnlyClaudeTool(remoteTool)) {
+              if (isReadOnlyClaudeTool(remoteToolName)) {
                 return { kind: 'permission', behavior: 'allow' };
               }
               log.warn('cc remote: approval without interactionResolver → fail-closed deny', {
-                tool: remoteTool || 'unknown',
+                tool: remoteToolName || 'unknown',
               });
               return {
                 kind: 'permission',
@@ -2197,9 +2273,11 @@ export class ClaudeCodeAgent extends BaseAgent {
                 reason: 'no interaction resolver attached; denying non-read-only tool (fail-closed)',
               };
             }
+            if (mutablePermissionMode === 'bypassPermissions') {
+              return { kind: 'permission', behavior: 'allow' };
+            }
             // 远端会话走同一份 host MCP 策略 —— 否则 SSH 会话里可信 server 又要逐次
             // 弹窗, prompt-each-time 的"禁止持久化授权"保护也整套缺失。
-            const remoteToolName = params.toolName ?? '';
             const remoteTurnPolicyForcePrompt = forceTurnConfirmation(
               remoteToolName || 'unknown',
               params.input ?? {},
@@ -2459,10 +2537,12 @@ export class ClaudeCodeAgent extends BaseAgent {
               }
             : {}),
           ...(mcpServers ? { mcpServers } : {}),
-          // hooks 是 host 注入的 SDK in-process hook 回调表 (PreToolUse / PostToolUse / ...).
-          // maker-core 不持有任何 hook 实现, 这里只透传 deps.claudeHooks; undefined 时
-          // 跳过字段, 让 SDK 走默认 (= 无 hook). 详见 AgentDeps.claudeHooks 文档。
-          ...(this.deps.claudeHooks ? { hooks: this.deps.claudeHooks } : {}),
+          // Host hooks keep their normal behavior, while the harness adapter
+          // prepends its narrow capability-route guard. Both run in-process
+          // before Claude's permission mode (including Full access).
+          ...(Object.keys(localClaudeHooks).length > 0
+            ? { hooks: localClaudeHooks }
+            : {}),
         },
       });
     };
@@ -3717,6 +3797,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             throw new Error('Claude input queue is closed');
           }
           userInputAccepted = true;
+          activeCapabilitySelectionText = userMessageTextForCapabilityRouting(message.content);
           replayableUserInput = sdkInput;
           // upstream-response-idle watchdog 起表 — 放在 inputQueue.push 之后, 避免把
           // client 端的 toClaudeSdkContent (多模态 image-resizer 同步等几秒) 算进上游
@@ -3786,6 +3867,12 @@ export class ClaudeCodeAgent extends BaseAgent {
           // received it.
           throw new Error('No active Claude turn to steer: input queue is closed');
         }
+        activeCapabilitySelectionText = [
+          activeCapabilitySelectionText,
+          userMessageTextForCapabilityRouting(message.content),
+        ]
+          .filter(Boolean)
+          .join('\n');
         armUpstreamResponseIdle();
       },
 

@@ -27,6 +27,7 @@ import {
   type QuerySetPermissionModeParams,
   type QueryStartParams,
   type QueryStartResult,
+  type QueryToolGuard,
   type SessionAttachParams,
   type SessionAttachResult,
   type SessionClosedNotification,
@@ -125,6 +126,7 @@ export function wireSdkHandlers(server: ManagerServer, registry: SessionRegistry
         }
       }
     }
+    const toolGuards = validateToolGuards(p.toolGuards);
     try {
       const session = registry.create({
         sessionId: p.sessionId!,
@@ -138,6 +140,7 @@ export function wireSdkHandlers(server: ManagerServer, registry: SessionRegistry
         ...(p.allowedTools ? { allowedTools: p.allowedTools } : {}),
         ...(p.disallowedTools ? { disallowedTools: p.disallowedTools } : {}),
         ...(p.tools !== undefined ? { tools: p.tools } : {}),
+        ...(toolGuards ? { toolGuards } : {}),
         ...(p.resumeSdkSessionId ? { resumeSdkSessionId: p.resumeSdkSessionId } : {}),
         ...(p.extraOptions ? { extraOptions: p.extraOptions } : {}),
       });
@@ -346,6 +349,54 @@ function requireString(v: unknown, field: string): asserts v is string {
   if (typeof v !== 'string' || v.length === 0) {
     throwInvalid(`${field} must be a non-empty string`);
   }
+}
+
+function validateToolGuards(value: unknown): QueryToolGuard[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throwInvalid('toolGuards must be an array');
+  return value.map((raw, index) => {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+      throwInvalid(`toolGuards[${index}] must be an object`);
+    }
+    const guard = raw as Record<string, unknown>;
+    requireString(guard.toolNamePrefix, `toolGuards[${index}].toolNamePrefix`);
+    if (
+      guard.invocation !== 'auto' &&
+      guard.invocation !== 'explicit-only' &&
+      guard.invocation !== 'disabled'
+    ) {
+      throwInvalid(
+        `toolGuards[${index}].invocation must be auto, explicit-only, or disabled`,
+      );
+    }
+    if (
+      guard.explicitSelectors !== undefined &&
+      (!Array.isArray(guard.explicitSelectors) ||
+        guard.explicitSelectors.some(
+          (selector) =>
+            typeof selector !== 'string' ||
+            (!selector.trim().startsWith('$') && !selector.trim().startsWith('/')),
+        ))
+    ) {
+      throwInvalid(
+        `toolGuards[${index}].explicitSelectors must contain only $ or / command tokens`,
+      );
+    }
+    if (
+      guard.denialMessage !== undefined &&
+      typeof guard.denialMessage !== 'string'
+    ) {
+      throwInvalid(`toolGuards[${index}].denialMessage must be a string`);
+    }
+    return {
+      toolNamePrefix: guard.toolNamePrefix,
+      invocation: guard.invocation,
+      ...(guard.explicitSelectors
+        ? { explicitSelectors: [...guard.explicitSelectors] as string[] }
+        : {}),
+      ...(guard.denialMessage ? { denialMessage: guard.denialMessage } : {}),
+    };
+  });
 }
 
 interface ThrowableInvalid extends Error {

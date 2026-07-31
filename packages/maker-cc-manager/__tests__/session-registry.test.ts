@@ -154,6 +154,152 @@ describe('SessionRegistry', () => {
     expect(controlCalls[2].args).toEqual([{ effortLevel: 'high' }]);
   });
 
+  it('enforces remote tool guards before permission rules while preserving explicit selection', async () => {
+    const { factory: baseFactory } = buildFakeFactory();
+    let captured: SdkQueryFactoryOptions | undefined;
+    const registry = new SessionRegistry({
+      sdkQueryFactory: (opts) => {
+        captured = opts;
+        return baseFactory(opts);
+      },
+    });
+    const events: Array<{ kind: string; payload: unknown }> = [];
+    registry.create({
+      sessionId: 's-guard',
+      cwd: '/x',
+      model: 'm',
+      env: {},
+      toolGuards: [
+        {
+          toolNamePrefix:
+            'mcp__plugin_feishu-delegate_feishu-delegate__',
+          invocation: 'explicit-only',
+          explicitSelectors: [
+            '$feishu-delegate:message-feishu-coworkers',
+            '/feishu-delegate:message-feishu-coworkers',
+          ],
+          denialMessage: 'Use the Cindy Feishu source.',
+        },
+      ],
+      // A serialized caller cannot replace the daemon-owned guard.
+      extraOptions: { hooks: { PreToolUse: [] } },
+    });
+    registry.attach('s-guard', (kind, payload) =>
+      events.push({ kind, payload }),
+    );
+    await waitFor(() => events.length >= 1);
+    const preToolUse = captured?.hooks?.PreToolUse?.[0]?.hooks[0];
+    expect(preToolUse).toBeDefined();
+
+    registry.sendMessage('s-guard', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: '不要使用 Feishu Delegate，查一下消息',
+      },
+      parent_tool_use_id: null,
+    });
+    await expect(
+      preToolUse!({
+        hook_event_name: 'PreToolUse',
+        session_id: 'sdk-session',
+        tool_name:
+          'mcp__plugin_feishu-delegate_feishu-delegate__read_messages',
+        tool_input: {},
+      }),
+    ).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: 'Use the Cindy Feishu source.',
+      },
+    });
+    // A user MCP with the ordinary server name is a different source.
+    await expect(
+      preToolUse!({
+        hook_event_name: 'PreToolUse',
+        session_id: 'sdk-session',
+        tool_name: 'mcp__feishu-delegate__read_messages',
+        tool_input: {},
+      }),
+    ).resolves.toEqual({ continue: true });
+
+    await waitFor(() => events.length >= 3);
+    registry.sendMessage('s-guard', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content:
+          '/feishu-delegate:message-feishu-coworkers 查一下康康',
+      },
+      parent_tool_use_id: null,
+    });
+    await expect(
+      preToolUse!({
+        hook_event_name: 'PreToolUse',
+        session_id: 'sdk-session',
+        tool_name:
+          'mcp__plugin_feishu-delegate_feishu-delegate__read_messages',
+        tool_input: {},
+      }),
+    ).resolves.toEqual({ continue: true });
+  });
+
+  it('keeps explicit selection across accepted same-turn steering inputs', async () => {
+    let captured: SdkQueryFactoryOptions | undefined;
+    const factory: SdkQueryFactory = (opts) => {
+      captured = opts;
+      async function* generate(): AsyncGenerator<unknown> {
+        yield {
+          type: 'system',
+          subtype: 'init',
+          session_id: 'sdk-guard-steer',
+        };
+        for await (const message of opts.inputStream) {
+          void message;
+          yield { type: 'assistant', message: { content: [] } };
+        }
+      }
+      const gen = generate();
+      return {
+        [Symbol.asyncIterator]: () => gen,
+        async interrupt() {},
+        async setModel() {},
+        async setPermissionMode() {},
+        async applyFlagSettings() {},
+      };
+    };
+    const registry = new SessionRegistry({ sdkQueryFactory: factory });
+    registry.create({
+      sessionId: 's-steer',
+      cwd: '/x',
+      model: 'm',
+      env: {},
+      toolGuards: [
+        {
+          toolNamePrefix: 'mcp__plugin_guard__',
+          invocation: 'explicit-only',
+          explicitSelectors: ['$plugin:guard'],
+        },
+      ],
+    });
+    registry.sendMessage('s-steer', {
+      type: 'user',
+      message: { role: 'user', content: '$plugin:guard 开始' },
+    });
+    registry.sendMessage('s-steer', {
+      type: 'user',
+      message: { role: 'user', content: '再补充一点' },
+    });
+
+    const preToolUse = captured?.hooks?.PreToolUse?.[0]?.hooks[0];
+    await expect(
+      preToolUse!({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'mcp__plugin_guard__call',
+      }),
+    ).resolves.toEqual({ continue: true });
+  });
+
   it('attach with second client replaces first, notifies the old one', async () => {
     const { factory } = buildFakeFactory();
     const eventsA: Array<{ kind: string; payload: unknown }> = [];

@@ -72,6 +72,10 @@ import type {
   ConsumeAccountRateLimitResetCreditParams,
   ConsumeAccountRateLimitResetCreditResponse,
 } from '../../types/account-rate-limits.js';
+import {
+  findCapabilityRouteOverride,
+  isCapabilityRouteInvocationAllowed,
+} from '../../types/capability-routing.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { reviewAction, type ReviewableAction } from '../shared/auto-review.js';
 import { UsageTracker } from '../shared/usage-tracker.js';
@@ -83,6 +87,7 @@ import {
   parseOverloadError,
 } from '../shared/overload-error.js';
 import { buildCodexEnv } from './env-builder.js';
+import { buildCodexCapabilityConfigOverrides } from './capability-routing.js';
 import { scanCodexCustomizations } from './customization-scanner.js';
 import { commandExecutionDisplayInput } from './command-display.js';
 import {
@@ -388,6 +393,15 @@ function supportsCodexReadonlyReferenceDirs(userAgent: string | undefined): bool
 }
 
 /**
+ * Per-thread plugin config for capability arbitration was verified against
+ * Codex 0.145.0. If the host policy needs those overrides, an older daemon must
+ * be rejected rather than silently starting with the downstream plugins active.
+ */
+function supportsCodexCapabilityRoutingProtocol(userAgent: string | undefined): boolean {
+  return codexUserAgentAtLeast(userAgent, [0, 145, 0]);
+}
+
+/**
  * `excludeTurns` was introduced in Codex 0.125.0 and later marked experimental.
  * Older remote daemons can outlive desktop upgrades, so omit the unknown field
  * and preserve their legacy full-history resume behavior.
@@ -496,6 +510,13 @@ interface ActiveToolContext {
   type: 'mcpToolCall' | 'dynamicToolCall';
   turnId?: string | null;
   server?: string | null;
+  /**
+   * Codex attaches the owning plugin id to mcpToolCall items. `null` means the
+   * configured server is user-owned (including a user server shadowing a
+   * plugin server); `undefined` means this app-server did not provide
+   * provenance, so routing must fail closed.
+   */
+  pluginId?: string | null;
   namespace?: string | null;
   tool?: string | null;
 }
@@ -1004,6 +1025,14 @@ function formatReferencedPathsForCodex(refs: ReferencedPath[], requestText: stri
   }
 
   return lines.join('\n');
+}
+
+function userMessageText(content: UserMessage['content']): string {
+  if (typeof content === 'string') return content;
+  return content
+    .filter((block): block is Extract<(typeof content)[number], { type: 'text' }> => block.type === 'text')
+    .map((block) => block.text)
+    .join('\n');
 }
 
 /**
@@ -2533,6 +2562,10 @@ export class CodexAgent extends BaseAgent {
     // Kept across the internal plan implementation/revision turns. A later
     // explicit Session.send replaces it before turn/start.
     let activeTurnPermissionPolicy: TurnPermissionPolicy | null = null;
+    // Capability source choice belongs to the server-accepted turn that
+    // carried it. A global "last send text" can be poisoned by a turn/start
+    // that later fails, and can then unlock an unrelated surviving turn.
+    const capabilitySelectionTextByTurnId = new Map<string, string>();
     const forceTurnConfirmation = (toolName: string, input: unknown): boolean => {
       const policy = activeTurnPermissionPolicy;
       if (!policy) return false;
@@ -2706,6 +2739,26 @@ export class CodexAgent extends BaseAgent {
       : credentialMode ?? this.hostEffectiveCredentialModes.get(currentHostKey);
     const approvalsReviewerProtocolSupported =
       supportsCodexApprovalsReviewerProtocol(initResp.userAgent);
+    const capabilityRoutingConfig = buildCodexCapabilityConfigOverrides(
+      this.deps.capabilityRouting,
+      {
+        // Remote Codex uses its own isolated CODEX_HOME. Cindy currently
+        // prepares provenance-preserving plugin overlays only in the local
+        // home, so remote explicit-only harness plugins must fail closed.
+        isolatedPluginOverlays: !opts.remoteHostId,
+      },
+    );
+    const capabilityRoutingProtocolSupported =
+      supportsCodexCapabilityRoutingProtocol(initResp.userAgent);
+    if (
+      Object.keys(capabilityRoutingConfig).length > 0 &&
+      !capabilityRoutingProtocolSupported
+    ) {
+      releaseHostBindingLeaseIfNeeded();
+      throw new Error(
+        `Cindy capability routing requires Codex app-server 0.145.0 or newer (current: ${initResp.userAgent ?? 'unknown'})`,
+      );
+    }
     // OpenAI OAuth can use Codex's hidden reviewer model directly. Local proxy
     // routes may opt in after registering a parent-thread → session → main-model
     // context; until that synchronous registration succeeds they stay on the
@@ -2865,15 +2918,19 @@ export class CodexAgent extends BaseAgent {
       | 'config'
     > {
       const { approvalPolicy, approvalsReviewer, sandbox } = currentApprovalConfig();
+      const config = {
+        ...capabilityRoutingConfig,
+        ...(readonlyReferenceDirsSupported ? readonlyReferencesConfig : {}),
+      };
       const shared = {
         approvalPolicy,
         ...(approvalsReviewer ? { approvalsReviewer } : {}),
         ...(readonlyReferenceDirsSupported
           ? {
               runtimeWorkspaceRoots: runtimeWorkspaceRoots(),
-              config: readonlyReferencesConfig,
             }
           : {}),
+        ...(Object.keys(config).length > 0 ? { config } : {}),
       };
       if (shouldUseReadonlyReferencesProfile()) {
         return {
@@ -4326,6 +4383,25 @@ export class CodexAgent extends BaseAgent {
       return stringFromMeta(recordFromUnknown(context.toolParams), 'name');
     }
 
+    function mcpToolPluginId(
+      params: McpServerElicitationRequestParams,
+    ): string | null | undefined {
+      const toolName = stringFromMeta(mcpElicitationMeta(params), 'tool_name');
+      let matchedPluginId: string | null | undefined;
+      for (const context of activeToolContexts.values()) {
+        if (
+          context.type !== 'mcpToolCall' ||
+          context.turnId !== params.turnId ||
+          context.server !== params.serverName ||
+          (toolName && context.tool !== toolName)
+        ) {
+          continue;
+        }
+        matchedPluginId = context.pluginId;
+      }
+      return matchedPluginId;
+    }
+
     const mcpToolApprovalPolicy = (params: McpServerElicitationRequestParams) => {
       const classifier = this.deps.getMcpToolApprovalPolicy;
       if (!classifier) return 'prompt' as const;
@@ -4362,6 +4438,48 @@ export class CodexAgent extends BaseAgent {
           mode: params.mode,
         });
         return { action: 'decline', content: null, _meta: null };
+      }
+
+      const capabilityRoute = findCapabilityRouteOverride(
+        this.deps.capabilityRouting,
+        {
+          harness: 'codex',
+          surface: 'mcp',
+          id: params.serverName,
+        },
+      );
+      const activePluginId = capabilityRoute
+        ? mcpToolPluginId(params)
+        : undefined;
+      const isRoutedSource =
+        capabilityRoute != null &&
+        (
+          activePluginId === undefined ||
+          activePluginId === capabilityRoute.source.containerId
+        );
+      if (
+        capabilityRoute &&
+        isRoutedSource &&
+        !isCapabilityRouteInvocationAllowed(
+          capabilityRoute,
+          params.turnId
+            ? capabilitySelectionTextByTurnId.get(params.turnId) ?? ''
+            : '',
+        )
+      ) {
+        log.warn('Codex MCP invocation blocked by host capability routing', {
+          serverName: params.serverName,
+          capabilityId: capabilityRoute.capabilityId,
+          invocation: capabilityRoute.invocation,
+        });
+        return { action: 'decline', content: null, _meta: null };
+      }
+      if (capabilityRoute && !isRoutedSource) {
+        log.debug('Codex MCP routing skipped for a non-target source', {
+          serverName: params.serverName,
+          capabilityId: capabilityRoute.capabilityId,
+          activePluginId,
+        });
       }
 
       // Host policy 可在 outer call_tool 的 metadata 中识别渐进式 server 的
@@ -4468,6 +4586,12 @@ export class CodexAgent extends BaseAgent {
             type: 'mcpToolCall',
             turnId,
             server: typeof rec.server === 'string' ? rec.server : null,
+            pluginId:
+              typeof rec.pluginId === 'string'
+                ? rec.pluginId
+                : rec.pluginId === null
+                  ? null
+                  : undefined,
             tool: typeof rec.tool === 'string' ? rec.tool : null,
           },
         };
@@ -5236,6 +5360,7 @@ export class CodexAgent extends BaseAgent {
       // 同一个墓碑也负责拦截该 turn 随后迟到的 item / reasoning / started 事件。
       if (completedTurnIds.has(turn.id)) return;
       completedTurnIds.add(turn.id);
+      capabilitySelectionTextByTurnId.delete(turn.id);
       const suppressTerminalUi = terminalErroredTurnIds.has(turn.id);
       deferredTerminalTurnCompletions.delete(turn.id);
       if (currentTurnId === turn.id || currentTurnId === null) {
@@ -6682,6 +6807,7 @@ export class CodexAgent extends BaseAgent {
         }
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
         activeTurnPermissionPolicy = sendOpts?.turnPermissionPolicy ?? null;
+        const capabilitySelectionText = userMessageText(message.content);
         assertCurrentHost('turn/start');
         resubscribeAfterTransportErrorIfNeeded();
         // 新 turn 总是携带当前 (可能已收紧的) 策略, 上一轮残留的延迟中断标记
@@ -6923,6 +7049,13 @@ export class CodexAgent extends BaseAgent {
             // turnCompleted(interrupted) 先回), 不得重新置活, 否则会话卡 running。
             const alreadyCompleted = turnsCompletedBeforeStartResp.has(resp.turn.id);
             if (!alreadyCompleted && !terminalErroredTurnIds.has(resp.turn.id)) {
+              // The app-server has now acknowledged which turn owns this
+              // input. Bind explicit source selection before buffered tool
+              // requests are released, and never on a pre-accept failure.
+              capabilitySelectionTextByTurnId.set(
+                resp.turn.id,
+                capabilitySelectionText,
+              );
               // 权威归属: 这个 turn 由本次 start 生出, 属于本轮 send。
               turnOriginByTurnId.set(resp.turn.id, { startSeq: ownerSeq, sendGen: mySendGen });
               currentTurnId = resp.turn.id;
@@ -7422,6 +7555,15 @@ export class CodexAgent extends BaseAgent {
             );
           }
         }
+        capabilitySelectionTextByTurnId.set(
+          steeredTurnId,
+          [
+            capabilitySelectionTextByTurnId.get(steeredTurnId) ?? '',
+            userMessageText(message.content),
+          ]
+            .filter(Boolean)
+            .join('\n'),
+        );
         // ack 成功 = server 已确认接受注入,消息已进入该 turn 的输入(即使本地
         // 已先收到 turn 终态事件,ack 与终态乱序)。这里必须按**已投递**成功返回
         // (review #939 第二轮 P1)——此前按 NO_ACTIVE_TURN 抛出会让 coordinator

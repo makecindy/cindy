@@ -16,6 +16,7 @@
 
 import type {
   QueryEventNotification,
+  QueryToolGuard,
   SessionClosedNotification,
   SessionListEntry,
   ClientReplacedNotification,
@@ -73,6 +74,16 @@ export type CanUseToolCallback = (
   message?: string;
 }>;
 
+type SdkHookCallback = (input: unknown) => Promise<unknown>;
+
+export type SdkHooks = Record<
+  string,
+  Array<{
+    matcher?: string;
+    hooks: SdkHookCallback[];
+  }>
+>;
+
 export interface SdkQueryFactoryOptions {
   /** SDK options.prompt — push-based AsyncIterable of user messages. */
   inputStream: AsyncIterable<unknown>;
@@ -98,8 +109,13 @@ export interface SdkQueryFactoryOptions {
   tools?: unknown;
   /** Resume an SDK session by uuid (Phase 5 reattach). */
   resume?: string;
-  /** Any extra SDK options to merge in last. */
+  /** Extra SDK options; daemon-owned hooks are merged after this object. */
   extraOptions?: Record<string, unknown>;
+  /**
+   * Daemon-owned in-process hooks. Unlike callbacks inside extraOptions, these
+   * are created after the RPC boundary and are never serialized.
+   */
+  hooks?: SdkHooks;
   /**
    * canUseTool callback — when SDK needs permission, this is called.
    * If not provided, SDK uses its own permissionMode logic (acceptEdits default).
@@ -135,6 +151,7 @@ export interface CreateSessionOptions {
   allowedTools?: string[];
   disallowedTools?: string[];
   tools?: unknown;
+  toolGuards?: QueryToolGuard[];
   resumeSdkSessionId?: string;
   extraOptions?: Record<string, unknown>;
 }
@@ -167,6 +184,10 @@ interface SessionState {
   sdkSessionId: string | null;
   /** Whether the consume loop is still running. */
   alive: boolean;
+  /** Text from accepted user inputs in the current turn, used by tool guards. */
+  toolGuardSelectionText: string;
+  /** False after an SDK result; the next accepted input starts a fresh turn. */
+  toolGuardTurnActive: boolean;
   /**
    * forceful kill 已开始 (interrupt 发出、inputQueue 已/将 end) 但 consume
    * loop 尚未退出 — 此窗口内 alive 仍为 true, sendMessage 必须显式拒绝
@@ -408,6 +429,19 @@ export class SessionRegistry {
           }
         : undefined;
 
+    const hooks = createToolGuardHooks(
+      opts.toolGuards,
+      () => sessionRef?.toolGuardSelectionText ?? '',
+      (toolName, guard) => {
+        this.logger.warn('tool denied by host routing guard', {
+          sessionId: opts.sessionId,
+          toolName,
+          toolNamePrefix: guard.toolNamePrefix,
+          invocation: guard.invocation,
+        });
+      },
+    );
+
     const sdkOpts: SdkQueryFactoryOptions = {
       inputStream: inputQueue,
       cwd: opts.cwd,
@@ -422,6 +456,7 @@ export class SessionRegistry {
       ...(opts.tools !== undefined ? { tools: opts.tools } : {}),
       ...(opts.resumeSdkSessionId ? { resume: opts.resumeSdkSessionId } : {}),
       ...(opts.extraOptions ? { extraOptions: opts.extraOptions } : {}),
+      ...(hooks ? { hooks } : {}),
       ...(canUseTool ? { canUseTool } : {}),
       ...(getOAuthToken ? { getOAuthToken } : {}),
     };
@@ -438,6 +473,8 @@ export class SessionRegistry {
       lastEventAt: null,
       sdkSessionId: null,
       alive: true,
+      toolGuardSelectionText: '',
+      toolGuardTurnActive: false,
       attachedNotify: null,
       buffer: [],
       bufferCapacity: this.bufferCapacity,
@@ -496,7 +533,18 @@ export class SessionRegistry {
         `session ${sessionId} is being killed (input closed) — retry shortly or start a fresh query`,
       );
     }
-    s.inputQueue.push(message);
+    const accepted = s.inputQueue.push(message);
+    if (!accepted) {
+      throw makeRegistryError(
+        'SESSION_NOT_FOUND',
+        `session ${sessionId} input is closed`,
+      );
+    }
+    const userText = extractUserMessageText(message);
+    s.toolGuardSelectionText = s.toolGuardTurnActive
+      ? [s.toolGuardSelectionText, userText].filter(Boolean).join('\n')
+      : userText;
+    s.toolGuardTurnActive = true;
   }
 
   async setModel(sessionId: string, model: string): Promise<void> {
@@ -790,6 +838,11 @@ export class SessionRegistry {
     if (!session.sdkSessionId && isSdkInitMessage(message)) {
       session.sdkSessionId = message.session_id;
     }
+    if (isSdkTurnResult(message)) {
+      // Keep the text until the next accepted input so any SDK-managed
+      // continuation after the result retains the same explicit selection.
+      session.toolGuardTurnActive = false;
+    }
 
     // Append to ring buffer for replay. Drop oldest when over capacity.
     session.buffer.push({ seq, ts, message });
@@ -878,4 +931,98 @@ function isSdkInitMessage(msg: unknown): msg is { type: 'system'; subtype: 'init
   if (typeof msg !== 'object' || msg === null) return false;
   const m = msg as Record<string, unknown>;
   return m.type === 'system' && m.subtype === 'init' && typeof m.session_id === 'string';
+}
+
+function isSdkTurnResult(msg: unknown): boolean {
+  if (typeof msg !== 'object' || msg === null) return false;
+  return (msg as Record<string, unknown>).type === 'result';
+}
+
+function extractUserMessageText(message: unknown): string {
+  if (typeof message !== 'object' || message === null) return '';
+  const envelope = message as Record<string, unknown>;
+  if (typeof envelope.text === 'string') return envelope.text;
+  if (typeof envelope.message !== 'object' || envelope.message === null) return '';
+  const content = (envelope.message as Record<string, unknown>).content;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .flatMap((block) => {
+      if (
+        typeof block === 'object' &&
+        block !== null &&
+        (block as Record<string, unknown>).type === 'text' &&
+        typeof (block as Record<string, unknown>).text === 'string'
+      ) {
+        return [(block as Record<string, unknown>).text as string];
+      }
+      return [];
+    })
+    .join('\n');
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function matchesExplicitSelector(text: string, selector: string): boolean {
+  const normalizedSelector = selector.trim();
+  if (!normalizedSelector) return false;
+  if (normalizedSelector.startsWith('$')) {
+    return new RegExp(
+      `(^|[^A-Za-z0-9_:-])${escapeRegExp(normalizedSelector)}(?![A-Za-z0-9_:-])`,
+      'iu',
+    ).test(text);
+  }
+  if (normalizedSelector.startsWith('/')) {
+    return new RegExp(
+      `(^|\\s)${escapeRegExp(normalizedSelector)}(?=$|\\s|[.,!?;:，。！？；：])`,
+      'iu',
+    ).test(text);
+  }
+  return false;
+}
+
+function createToolGuardHooks(
+  toolGuards: readonly QueryToolGuard[] | undefined,
+  getSelectionText: () => string,
+  onDeny: (toolName: string, guard: QueryToolGuard) => void,
+): SdkHooks | undefined {
+  if (!toolGuards || toolGuards.length === 0) return undefined;
+
+  const guardTool: SdkHookCallback = async (rawInput) => {
+    if (typeof rawInput !== 'object' || rawInput === null) return { continue: true };
+    const input = rawInput as Record<string, unknown>;
+    if (input.hook_event_name !== 'PreToolUse' || typeof input.tool_name !== 'string') {
+      return { continue: true };
+    }
+    const toolName = input.tool_name;
+    const guard = toolGuards.find((candidate) =>
+      toolName.startsWith(candidate.toolNamePrefix),
+    );
+    if (!guard || guard.invocation === 'auto') return { continue: true };
+    if (
+      guard.invocation === 'explicit-only' &&
+      guard.explicitSelectors?.some((selector) =>
+        matchesExplicitSelector(getSelectionText(), selector),
+      )
+    ) {
+      return { continue: true };
+    }
+
+    onDeny(toolName, guard);
+    return {
+      continue: true,
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason:
+          guard.denialMessage ?? 'This downstream tool source was not selected.',
+      },
+    };
+  };
+
+  return {
+    PreToolUse: [{ hooks: [guardTool] }],
+  };
 }
