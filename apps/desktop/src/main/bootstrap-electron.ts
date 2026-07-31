@@ -2563,7 +2563,11 @@ const registerIpcHandlers = () => {
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_GET, async () => {
     return subagentModelSettingsWire();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_SET, async (_e, patch: unknown) => {
+  ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_SET, async (event, patch: unknown) => {
+    // 本 channel 已升级为可触发进程管理(软关/重启本地 Codex 会话)的操作,
+    // 必须先验证调用方是可信主渲染器,不能让任意取得 channel 的 frame/WebView
+    // 改写 owner-scoped 配置并重启会话(codex review P1)。
+    assertTrustedAppRendererEvent(event);
     // 配对一致性按「patch 合并当前存储」判定:有效模型为 null 时来源强制清空,
     // 同时兜住「清模型漏清来源」与「模型未指定时的 provider-only patch」两类孤儿写入。
     const current = readSubagentModelSettings();
@@ -2585,7 +2589,9 @@ const registerIpcHandlers = () => {
       return subagentModelSettingsWire();
     });
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_RESET, async () => {
+  ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_RESET, async (event) => {
+    // 同 SET:restart-capable 操作,先验可信渲染器(codex review P1)。
+    assertTrustedAppRendererEvent(event);
     const needsCodexRestart =
       codexSpawnConfigChanged(readSubagentModelSettings(), SUBAGENT_MODEL_SETTINGS_DEFAULTS) &&
       getMakerIfReady() !== null;

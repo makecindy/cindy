@@ -544,42 +544,42 @@ describe('SubagentModelSection guardrails card', () => {
     expect(screen.getByText('5')).toBeTruthy();
   });
 
-  it('debounces slider drags into one write carrying the final value', async () => {
+  it('commits the value as soon as the slider interaction ends (onValueCommit)', async () => {
+    settingsGet.mockResolvedValue(makeState({ codexMaxConcurrentSubagents: 3 }));
+    render(<SubagentModelSection />);
+    await waitFor(() => expect(screen.queryByRole('slider')).not.toBeNull());
+    fireEvent.keyDown(screen.getByRole('slider'), { key: 'ArrowRight' }); // 3 → 4
+    // 键盘交互每次落定即 commit,不等 300ms debounce 到点。
+    await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1));
+    expect(settingsSet).toHaveBeenCalledWith({ codexMaxConcurrentSubagents: 4 });
+  });
+
+  it('sequential keyboard presses settle on the final value (mutex re-schedule)', async () => {
     settingsGet.mockResolvedValue(makeState({ codexMaxConcurrentSubagents: 3 }));
     render(<SubagentModelSection />);
     await waitFor(() => expect(screen.queryByRole('slider')).not.toBeNull());
     const thumb = screen.getByRole('slider');
     fireEvent.keyDown(thumb, { key: 'ArrowRight' }); // 3 → 4
     fireEvent.keyDown(thumb, { key: 'ArrowRight' }); // 4 → 5
-    // debounce 窗口内不提交,两次拖动合并成一次终值写入。
-    expect(settingsSet).not.toHaveBeenCalled();
-    await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1), { timeout: 2000 });
-    expect(settingsSet).toHaveBeenCalledWith({ codexMaxConcurrentSubagents: 5 });
-  });
-
-  it('flushes the uncommitted drag value on unmount', async () => {
-    settingsGet.mockResolvedValue(makeState({ codexMaxConcurrentSubagents: 3 }));
-    const { unmount } = render(<SubagentModelSection />);
-    await waitFor(() => expect(screen.queryByRole('slider')).not.toBeNull());
-    fireEvent.keyDown(screen.getByRole('slider'), { key: 'ArrowRight' }); // 3 → 4
-    unmount();
-    await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1));
-    expect(settingsSet).toHaveBeenCalledWith({ codexMaxConcurrentSubagents: 4 });
-  });
-
-  it('retries the unmount flush when the first write is rejected (shared guard busy window)', async () => {
-    // 并发上限属于 spawn 注入键,main 侧经共享 Codex 凭证守卫走重启执行体;守卫被
-    // 并发变更短暂持有时首次提交被拒 —— 卸载 flush 必须重试而不是静默丢弃(review P1)。
-    settingsGet.mockResolvedValue(makeState({ codexMaxConcurrentSubagents: 3 }));
-    settingsSet.mockRejectedValueOnce(
-      new Error('Codex credential mode change is already in progress'),
+    // 第二次 commit 撞上首个在飞写入时由 commitConcurrency 重排,终值不丢。
+    await waitFor(
+      () => expect(settingsSet).toHaveBeenLastCalledWith({ codexMaxConcurrentSubagents: 5 }),
+      { timeout: 2000 },
     );
+  });
+
+  it('never writes detached after unmount (owner-boundary safety)', async () => {
+    // 卸载后不允许任何 detached 写入:main 侧按请求时刻解析 owner-scoped 路径,
+    // 账号切换触发的卸载若再写会落进错误命名空间(codex review P1)。onValueCommit
+    // 已保证交互结束即提交,卸载只取消未到点的 debounce。
+    settingsGet.mockResolvedValue(makeState({ codexMaxConcurrentSubagents: 3 }));
     const { unmount } = render(<SubagentModelSection />);
     await waitFor(() => expect(screen.queryByRole('slider')).not.toBeNull());
-    fireEvent.keyDown(screen.getByRole('slider'), { key: 'ArrowRight' }); // 3 → 4
+    fireEvent.keyDown(screen.getByRole('slider'), { key: 'ArrowRight' }); // 3 → 4,commit 即时发生
+    await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1));
     unmount();
-    await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(2), { timeout: 4000 });
-    expect(settingsSet).toHaveBeenLastCalledWith({ codexMaxConcurrentSubagents: 4 });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(settingsSet).toHaveBeenCalledTimes(1);
   });
 
   it('disables the other guardrail rows while the master switch is off (values preserved)', async () => {

@@ -94,6 +94,16 @@ export class DeferredCodexRestartService {
   }
 
   /**
+   * 只读窥视当前登记的 runtime 回调。schedule() 是 last-write-wins:跨设置域的
+   * 调用方(如子代理 spawn 配置,自身无 runtime 维度)必须先窥视并**接续**已
+   * 登记的回调,不能用 no-op 覆盖别的设置域(Maker Memory)排队中的 native
+   * 同步工作(codex review P1);同域(memory-over-memory)的覆盖仍是设计语义。
+   */
+  peekPendingApplyRuntime(): (() => Promise<void>) | null {
+    return this.pending ? this.pendingApplyRuntime : null;
+  }
+
+  /**
    * turn 结束边界 / 会话关闭回调(register.ts 接线 + 自愈定时器共用)。
    * 任何路径都不允许向外抛错(register 侧 fire-and-forget)。
    */

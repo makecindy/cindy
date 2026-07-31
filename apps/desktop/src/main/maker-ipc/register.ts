@@ -755,17 +755,21 @@ async function applyMemoryChangeWithCodexRestart<T extends object>(
 
 /**
  * 子代理 spawn 配置(`-c agents.*`)变更的统一执行体:复用 Memory 设置的
- * 「能立即软重启就重启,busy 就延迟到全部本地 Codex 会话空闲」链路。与 Memory
- * 的差异只有一点:子代理配置没有 native 热推维度(唯一杠杆是重启后新 spawn 现读
- * store),所以 applyRuntime 传 no-op。调用方(bootstrap-electron 的
- * subagent-model-settings SET/RESET)负责先判定变更是否真的触及 spawn 注入键。
+ * 「能立即软重启就重启,busy 就延迟到全部本地 Codex 会话空闲」链路。子代理配置
+ * 自身没有 native 热推维度(唯一杠杆是重启后新 spawn 现读 store),但绝不能用
+ * no-op 覆盖/丢弃别的设置域(Maker Memory)已登记的延迟 runtime 工作 ——
+ * service.schedule 是 last-write-wins,且立即路径的 clearDeferredRestart 会丢弃
+ * pending 登记(codex review P1)。因此进入执行体前先窥视并接续 pending 的
+ * applyRuntime:busy 路径把它随本次登记带走,立即路径在重启前原地补执行。
+ * 调用方(bootstrap-electron 的 SET/RESET)负责先判定变更是否触及 spawn 注入键。
  */
 export async function applyCodexSpawnConfigChangeWithRestart<T extends object>(
   persist: () => Promise<T>,
 ): Promise<T & { codexRestartDeferred: boolean }> {
+  const inheritedApplyRuntime = deferredCodexRestartHolder?.peekPendingApplyRuntime() ?? null;
   return applyMemoryChangeWithCodexRestart({
     persist,
-    applyRuntime: async () => {},
+    applyRuntime: inheritedApplyRuntime ?? (async () => {}),
     reason: 'subagent-spawn-config-change',
   });
 }

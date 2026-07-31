@@ -88,6 +88,29 @@ describe('DeferredCodexRestartService', () => {
     expect(service.isPending()).toBe(false);
   });
 
+  it('peekPendingApplyRuntime 只在 pending 时返回登记的回调(跨设置域接续用)', async () => {
+    const { service } = createService();
+    expect(service.peekPendingApplyRuntime()).toBeNull();
+
+    const memoryRuntime = async () => {};
+    service.schedule('memory-change', memoryRuntime);
+    expect(service.peekPendingApplyRuntime()).toBe(memoryRuntime);
+
+    // 接续场景:spawn 配置变更(自身无 runtime 维度)把窥视到的回调随自己的
+    // 登记带走 —— schedule 是 last-write-wins,不接续就会丢 memory 的 native
+    // 同步工作(codex review P1)。
+    service.schedule(
+      'subagent-spawn-config-change',
+      service.peekPendingApplyRuntime() ?? undefined,
+    );
+    expect(service.peekPendingApplyRuntime()).toBe(memoryRuntime);
+
+    service.onSessionSettled();
+    await vi.runOnlyPendingTimersAsync();
+    expect(service.isPending()).toBe(false);
+    expect(service.peekPendingApplyRuntime()).toBeNull();
+  });
+
   it('applyRuntime 失败只 warn, 重启照常执行(重启是最终收敛)', async () => {
     const restart = vi.fn(async () => {});
     const { service } = createService({ restart });

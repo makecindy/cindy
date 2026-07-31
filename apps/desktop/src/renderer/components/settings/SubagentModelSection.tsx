@@ -49,36 +49,6 @@ function defaultsPatchFor(keys: readonly (keyof SubagentModelSettingsPatch)[]): 
   return patch;
 }
 
-/**
- * 卸载 flush:组件状态已销毁,不能走 persistPatch,但仍要尊重两道互斥 ——
- * 先等在飞写入退出组件互斥(pendingRef 闭包在卸载后仍有效),提交失败再按
- * 退避重试:并发上限属于 CODEX_SPAWN_AFFECTING_KEYS,main 侧会经共享的 Codex
- * 凭证守卫走重启执行体,守卫被并发的 Memory/鉴权切换短暂持有时首次提交会被
- * 拒(INTERNAL),直接放弃就是静默丢弹(review P1)。窗口会自然解除,重试即可;
- * 最终仍失败只记日志 —— 丢失量至多是最后 300ms 的拖动终值,下次打开回显真值。
- */
-async function flushConcurrencyOnUnmount(
-  value: number,
-  pendingRef: { current: boolean },
-): Promise<void> {
-  for (let i = 0; i < 20 && pendingRef.current; i += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 150));
-  }
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      await window.electronAPI.maker.subagentModelSettingsSet({
-        codexMaxConcurrentSubagents: value,
-      });
-      return;
-    } catch (err) {
-      if (attempt === 2) {
-        log.warn('flush concurrency on unmount failed after retries', err);
-        return;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
-    }
-  }
-}
 
 /** 展示各 Agent 运行时的子代理模型覆盖能力;模型供应商由运行时模型目录决定。 */
 export function SubagentModelSection() {
@@ -286,14 +256,25 @@ export function SubagentModelSection() {
     [commitConcurrency],
   );
 
+  // 交互结束(松开拇指 / 按键落定)立即提交,不等 debounce 到点。提交因此总在
+  // 组件存活期内发生:失败有 toast、互斥由 commitConcurrency 的 pending 重排保证。
+  const onConcurrencyCommit = useCallback(
+    (value: number) => {
+      setConcurrencyDraft(value);
+      concurrencyDraftRef.current = value;
+      if (concurrencyTimer.current) clearTimeout(concurrencyTimer.current);
+      commitConcurrency();
+    },
+    [commitConcurrency],
+  );
+
   useEffect(() => {
     return () => {
+      // 卸载只取消未到点的 debounce,不做 detached 写入:onValueCommit 已保证
+      // 每次交互结束即提交;卸载后再写会越过组件互斥,且 main 侧按请求时刻解析
+      // owner-scoped 路径,账号切换触发的卸载会把 A 的草稿写进 B / 登出命名空间
+      // (codex review P1)。
       if (concurrencyTimer.current) clearTimeout(concurrencyTimer.current);
-      const current = settingsRef.current;
-      const draft = concurrencyDraftRef.current;
-      if (current && draft !== null && draft !== current.codexMaxConcurrentSubagents) {
-        void flushConcurrencyOnUnmount(draft, pendingRef);
-      }
     };
   }, []);
 
@@ -589,6 +570,10 @@ export function SubagentModelSection() {
                   onValueChange={(value: number[]) => {
                     const next = value[0];
                     if (typeof next === 'number') onConcurrencyDrag(next);
+                  }}
+                  onValueCommit={(value: number[]) => {
+                    const next = value[0];
+                    if (typeof next === 'number') onConcurrencyCommit(next);
                   }}
                   aria-label={t('settings.subagentModels.guardrails.concurrencyAria')}
                 />
