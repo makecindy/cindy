@@ -263,17 +263,13 @@ export function writeInvalidatedSystemCodexAuthMarker(
   }
 }
 
-/** durable marker 记录的正是当前残留 local auth 时，该文件属于未完成登出的旧凭证。 */
+/** marker 记录的正是当前残留 local auth 时，该文件属于已断开或已失效的旧凭证。 */
 export function shouldSuppressLocalCodexAuth(
   codexHome: string,
   localAuthPath: string,
 ): boolean {
   const marker = readInvalidatedSystemCodexAuthMarker(codexHome);
-  return Boolean(
-    marker &&
-    isDurableDisconnectMarker(marker) &&
-    localFileMatchesInvalidatedMarker(marker, localAuthPath),
-  );
+  return Boolean(marker && localFileMatchesInvalidatedMarker(marker, localAuthPath));
 }
 
 /** 删标记 (幂等)。 */

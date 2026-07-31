@@ -29,6 +29,7 @@ import {
 } from '../../shared/ghost.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import {
+  activeOwnerScopeKey,
   getActiveAppSession,
   isAppSessionBoundaryPending,
   ownerScopedUserDataPath,
@@ -137,6 +138,7 @@ import { submitAndAwaitVideo } from '../cindy-proxy-media/video/run.js';
 import { deriveCindyMediaConfig, type CindyMediaCatalogConfig } from './cindyMediaCatalog.js';
 import {
   GhostCindySlot,
+  type CindyImageCapabilities,
   type CindyVideoCapabilities,
   type CindyVideoParams,
 } from './cindySlot.js';
@@ -180,9 +182,12 @@ import {
 } from '../secrets/providerSecretStore.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { projectProviderCatalogForBuildRegion } from '../maker-host/provider-access-policy.js';
+import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.js';
+import { invalidateXaiBridgeAuth } from '../maker-host/xai-auth-invalidation-host.js';
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { hasCodexOAuthLoginReadOnly } from '../maker-host/codex-oauth-readiness.js';
 import { getUtilityModelChainProfiles } from '../utility-model/UtilityModelSelection.js';
 import { utilityModelPinOptions } from '../../shared/utilityModelProfiles.js';
 import {
@@ -202,9 +207,12 @@ import {
   loadGhostRecentIds,
   markGhostRecentlyUsed,
 } from './ghostRecentUsageStore.js';
+import { createXaiImageChannel } from './xaiImageClient.js';
 import { getCindyProxyMediaService } from '../mcp-integrations/cindyProxyMedia.js';
 import { ImageChannelRegistry, decodeImageResponse } from './imageChannelRegistry.js';
 import { createGeminiImageChannel } from './geminiImageClient.js';
+import { createCodexImageChannel } from './codexImageClient.js';
+import { getCodexImageAuthBinding } from './codexImageAuthBinding.js';
 import { createGatewayImageClient } from '../cindy-proxy-media/api/gatewayImageClient.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import * as ledger from '../cindy-media/ledger.js';
@@ -1907,6 +1915,15 @@ function getGhostVideoCapabilities(model: string): CindyVideoCapabilities | null
   }
 }
 
+/** 图像 provider 的型号级编辑上限；slot 用它在文件 IO / 凭证读取前早拒。 */
+function getGhostImageCapabilities(model: string): CindyImageCapabilities | null {
+  try {
+    return { maxEditImages: resolveImageChannelForModel(model, 'edit').maxEditImages };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 意识画幅意图 → XD Gateway size。三档尺寸是 gpt-image 系的原生枚举
  * (1024x1024 / 1536x1024 / 1024x1536,比例即枚举名);Gemini 系由网关按
@@ -1947,6 +1964,15 @@ function getImageChannelRegistry(): ImageChannelRegistry {
           ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
         }),
     });
+    registry.register('xai', createXaiImageChannel({
+      hasOAuthLogin: () => hasGrokOAuthLogin(),
+      getAccessToken: () => getGrokAccessToken(),
+      getOwnerScopeKey: () => activeOwnerScopeKey(),
+      isOwnerBoundaryPending: () => isAppSessionBoundaryPending(),
+      fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+      beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
+      onAuthRejected: (failure) => invalidateXaiBridgeAuth(failure),
+    }));
     // Gemini(BYO API key,generateContent wire):ready = key 已配置。停用轴
     // 派发前重查经 beforeDispatch 注入(与 xd 通道的 cindyProxyMedia beforeDispatch
     // 同语义 —— xd 的挂在网关客户端装配处,gemini 的挂在这里)。
@@ -1957,10 +1983,9 @@ function getImageChannelRegistry(): ImageChannelRegistry {
       fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
       beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
     }));
-    // OpenAI 平台 images API(BYO 平台 key;ChatGPT 订阅 OAuth 调不了平台面,实测
-    // 401/403 缺 scope):与 xd 网关同 wire(OpenAI-images 兼容面),整个客户端复用,
-    // 只换 baseUrl/品牌话术/凭证读取。目录 id 带 openai/ 前缀(跨供应商契约),
-    // 上游只认裸 id,适配层剥前缀。
+    // OpenAI public Images API(BYO 平台 key):与 xd 网关同 wire,整个客户端复用,
+    // 只换 baseUrl/品牌话术/凭证读取。ChatGPT/Codex 订阅走下方独立的 hosted-tool
+    // 通道;目录 id 带 openai/ 前缀,public API 适配层剥前缀。
     const openaiImagesClient = createGatewayImageClient({
       getApiKey: () => getProviderSecretStore().get('openai-images'),
       // 境外端点吃系统代理(outboundFetch):main 的裸 fetch 不读系统代理设置,
@@ -1979,22 +2004,38 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     });
     const stripOpenaiPrefix = (id: string) =>
       id.startsWith('openai/') ? id.slice('openai/'.length) : id;
+    const hasOpenaiPlatformKey = () =>
+      (getProviderSecretStore().get('openai-images')?.trim() ?? '') !== '';
+    const codexImagesClient = createCodexImageChannel({
+      hasOAuthLogin: hasCodexOAuthLoginReadOnly,
+      getAuth: () => getCodexImageAuthBinding().getAuth(),
+      onAuthFailure: async (failure) => {
+        await getCodexImageAuthBinding().onAuthFailure(failure);
+      },
+      fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+      beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
+    });
     registry.register('openai', {
-      // trim-nonempty 与 gemini 通道同口径:空白 key 不算就绪。
-      ready: () => (getProviderSecretStore().get('openai-images')?.trim() ?? '') !== '',
-      generateImage: ({ model, prompt, aspectRatio }) =>
-        openaiImagesClient.generateImage({
-          model: stripOpenaiPrefix(model),
-          prompt,
-          ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
-        }),
-      editImage: ({ model, prompt, imagePaths, aspectRatio }) =>
-        openaiImagesClient.editImage({
-          model: stripOpenaiPrefix(model),
-          prompt,
-          imagePaths,
-          ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
-        }),
+      // 用户明确配置 Platform key 时优先走确定性的 public Images API；否则复用
+      // 已连接的 ChatGPT/Codex 订阅 OAuth hosted tool，不要求再付一份 API 费。
+      ready: () => hasOpenaiPlatformKey() || codexImagesClient.ready(),
+      generateImage: (params) =>
+        hasOpenaiPlatformKey()
+          ? openaiImagesClient.generateImage({
+              model: stripOpenaiPrefix(params.model),
+              prompt: params.prompt,
+              ...(params.aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[params.aspectRatio] } : {}),
+            })
+          : codexImagesClient.generateImage(params),
+      editImage: (params) =>
+        hasOpenaiPlatformKey()
+          ? openaiImagesClient.editImage({
+              model: stripOpenaiPrefix(params.model),
+              prompt: params.prompt,
+              imagePaths: params.imagePaths,
+              ...(params.aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[params.aspectRatio] } : {}),
+            })
+          : codexImagesClient.editImage(params),
     });
     imageChannelRegistrySingleton = registry;
   }
@@ -2023,6 +2064,8 @@ export function getGhostCindySlot(): GhostCindySlot {
   if (!cindySlotSingleton) {
     cindySlotSingleton = new GhostCindySlot({
       getGhost: (id) => findAvailableGhost(id),
+      getOwnerScopeKey: () => activeOwnerScopeKey(),
+      isOwnerBoundaryPending: () => isAppSessionBoundaryPending(),
       // model 已在 modelSlot 按白名单校验;归属来源(providerId)按白名单条目
       // 定位,经 imageChannelRegistry 取对应执行通道(2026-07 图像多来源)。
       generateImage: async ({ prompt, model, aspectRatio }) => {
@@ -2081,6 +2124,7 @@ export function getGhostCindySlot(): GhostCindySlot {
         }
       },
       // 画面参数按型号二次校验的数据源(registry capabilities)。
+      imageCapabilities: getGhostImageCapabilities,
       videoCapabilities: getGhostVideoCapabilities,
       getOverride: (ghostId, capability) => {
         return readGhostCindyOverrides(ghostId)[capability as CindyCapabilityKey] ?? null;
@@ -2140,38 +2184,68 @@ export function getGhostCindySlot(): GhostCindySlot {
           return null;
         }
       },
-      resolveOwnedMedia: async (ghostId, hash) => {
+      resolveOwnedMedia: async (ghostId, hash, ownerScopeKey) => {
+        const assertOwnerScopeCurrent = (): void => {
+          if (
+            isAppSessionBoundaryPending() ||
+            activeOwnerScopeKey() !== ownerScopeKey
+          ) {
+            throw new Error('媒体任务期间账号已切换,本次结果已丢弃');
+          }
+        };
         // 归属(账本)→ 落盘元数据(账本)→ 磁盘路径(指纹仓校验),
-        // 任一环查无即 null;modelSlot 对外统一话术不泄露差异。
-        if (!(await ledger.ghostCanRead(hash, ghostId))) return null;
-        const info = await ledger.getBlobInfo(hash);
+        // 任一环查无即 null;modelSlot 对外统一话术不泄露差异。defaultDb
+        // 会随账号动态变化，因此先在稳定 scope 下捕获一次 DB，并让两次查询
+        // 始终复用它；每个 await 后再 fail closed，绝不读取新账号账本。
+        assertOwnerScopeCurrent();
+        const db = getDbClient().drizzle;
+        const canRead = await ledger.ghostCanRead(hash, ghostId, db);
+        assertOwnerScopeCurrent();
+        if (!canRead) return null;
+        const info = await ledger.getBlobInfo(hash, db);
+        assertOwnerScopeCurrent();
         if (!info) return null;
+        let absPath: string;
         try {
-          return blobStore.resolveHashRef(hash, info.ext).absPath;
+          absPath = blobStore.resolveHashRef(hash, info.ext).absPath;
         } catch {
           return null;
         }
+        assertOwnerScopeCurrent();
+        return absPath;
       },
-      saveGhostMedia: async ({ ghostId, buffer, mimeType, label, callId }) => {
-        const written = await blobStore.writeBlob({ buffer, mimeType });
-        await ledger.recordBlob({
-          hash: written.hash,
-          ext: written.ext,
-          mimeType: written.mimeType,
-          bytes: written.bytes,
-          isCache: false,
-        });
-        // 意识产物挂自己画廊 ref(出生=该意识)——面板归属校验与
-        // "不被回收"同时成立;消息级引用由消息落库链路维护,
-        // 配额上限由权限策略负责。
-        await ledger.addRef({
-          hash: written.hash,
-          refKind: 'ghost-gallery',
-          refId: ghostId,
-          originKind: 'ghost',
-          originId: ghostId,
-          ...(label ? { label } : {}),
-        });
+      saveGhostMedia: async ({ ghostId, buffer, mimeType, ownerScopeKey, label, callId }) => {
+        const assertOwnerScopeCurrent = (): void => {
+          if (
+            isAppSessionBoundaryPending() ||
+            activeOwnerScopeKey() !== ownerScopeKey
+          ) {
+            throw new Error('媒体任务期间账号已切换,本次结果已丢弃');
+          }
+        };
+        // defaultDb 会在每次 ledger 调用时现取当前账号 DB。先在稳定 scope 下
+        // 捕获同一个句柄，再把失效断言交给统一入库助手覆盖所有 await 边界，
+        // 防止旧账号产物在切号窗口被登记到新账号画廊。
+        assertOwnerScopeCurrent();
+        const db = getDbClient().drizzle;
+        const written = await ingestMedia(
+          {
+            buffer,
+            mimeType,
+            isCache: false,
+            refs: [
+              {
+                refKind: 'ghost-gallery',
+                refId: ghostId,
+                originKind: 'ghost',
+                originId: ghostId,
+                ...(label ? { label } : {}),
+              },
+            ],
+            assertStillValid: assertOwnerScopeCurrent,
+          },
+          db,
+        );
         recordGhostCallMedia(ghostId, callId, written.url);
         return { url: written.url, hash: written.hash, ext: written.ext };
       },

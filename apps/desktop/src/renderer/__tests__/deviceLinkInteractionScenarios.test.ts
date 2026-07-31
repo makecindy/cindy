@@ -1065,6 +1065,13 @@ describe('远程交互接线不变式', () => {
     expect(body).toContain('if (shouldPatchActiveModel) {');
   });
 
+  it('跨窗口 worktree 写穿只合并目标字段，main 镜像读取共享持久快照', () => {
+    const src = read('App.tsx');
+    expect(src).toContain('const draft = getDraftForPreferenceSync();');
+    expect(src).toContain('setWorktreePreference(worktreeEnabled === true);');
+    expect(src).not.toContain('patchDraft({ worktreeEnabled: worktreeEnabled === true });');
+  });
+
   it('本地切来源恢复 Fast 时必须写入目标 provider 的 session memory', () => {
     const src = read('components/new-chat/ChatInput.tsx');
     const handleStart = src.indexOf('const handleFastModeChange');

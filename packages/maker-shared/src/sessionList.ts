@@ -159,7 +159,7 @@ export interface RemoteSessionListOptions {
    */
   groupAutomations?: boolean;
   /**
-   * 「尚未起名」会话的显示文案(已解析的 i18n 值)。不传则回落 workingDir → 「未命名会话」;
+   * 「尚未起名」任务的显示文案(已解析的 i18n 值)。不传则回落 workingDir → 「未命名任务」;
    * 共享层刻意不兜中文串,见 {@link remoteSessionDisplayTitle}。
    */
   unnamedLabel?: string;
@@ -298,9 +298,9 @@ export function buildRemoteSessionListContext({
   const resultCount = sections.reduce((sum, section) =>
     sum + section.data.reduce((sectionSum, item) => sectionSum + (item.automationGroup?.sessionCount ?? 1), 0), 0);
   const resultCopy = resultCount > 0
-    ? `${resultCount} 个${normalizedQuery ? '匹配' : ''}会话`
+    ? `${resultCount} 个${normalizedQuery ? '匹配' : ''}任务`
     : normalizedQuery
-      ? '没有匹配会话'
+      ? '没有匹配任务'
       : '当前筛选无结果';
   const rowCopy = rowCount > 0 && rowCount !== resultCount ? ` · ${rowCount} 行` : '';
   return {
@@ -318,7 +318,7 @@ export function remoteSessionOverviewCopy(overview: RemoteSessionOverview): stri
     overview.projectCount > 0 ? `${overview.projectCount} 个项目` : null,
     overview.runningAutomation > 0 ? `${overview.runningAutomation} 个自动化执行中` : null,
   ].filter(Boolean);
-  return parts.length > 0 ? parts.join(' · ') : '当前电脑暂无可汇总的会话活动。';
+  return parts.length > 0 ? parts.join(' · ') : '当前电脑暂无可汇总的任务活动。';
 }
 
 export function deviceSessionEmptyState(
@@ -327,7 +327,7 @@ export function deviceSessionEmptyState(
 ): { title: string; copy: string } {
   if (searchQuery.trim()) {
     return {
-      title: '没有匹配的会话',
+      title: '没有匹配的任务',
       copy: '换一个标题、项目路径、模型或消息关键词再试。',
     };
   }
@@ -339,37 +339,37 @@ export function deviceSessionEmptyState(
   }
   if (statusFilter === 'automation') {
     return {
-      title: '没有自动化会话',
-      copy: '自动化任务运行后，对应会话会聚合到这里。',
+      title: '没有自动化生成的任务',
+      copy: '自动化运行后，对应任务会聚合到这里。',
     };
   }
   if (statusFilter === 'archived') {
     return {
-      title: '没有归档会话',
-      copy: '长按会话可以批量归档或删除。',
+      title: '没有归档任务',
+      copy: '长按任务可以批量归档或删除。',
     };
   }
   return {
-    title: '这台电脑暂无活动会话',
-    copy: '先在桌面端创建或继续一个会话，手机端会把它镜像到这里。',
+    title: '这台电脑暂无活动任务',
+    copy: '先在桌面端创建或继续一个任务，手机端会把它镜像到这里。',
   };
 }
 
 function remoteSessionListTitle(statusFilter: RemoteSessionStatusFilter): string {
-  if (statusFilter === 'active') return '活跃会话';
-  if (statusFilter === 'waiting') return '待处理会话';
-  if (statusFilter === 'automation') return '自动化会话';
-  if (statusFilter === 'archived') return '归档会话';
-  return '全部会话';
+  if (statusFilter === 'active') return '活跃任务';
+  if (statusFilter === 'waiting') return '待处理任务';
+  if (statusFilter === 'automation') return '自动化生成的任务';
+  if (statusFilter === 'archived') return '归档任务';
+  return '全部任务';
 }
 
 function remoteSessionListHint(statusFilter: RemoteSessionStatusFilter, searchQuery: string): string {
   if (searchQuery) return '搜索范围包含标题、项目路径、模型、自动化名称和消息预览。';
   if (statusFilter === 'waiting') return '这里集中显示需要在手机端确认的权限、计划和问题。';
-  if (statusFilter === 'automation') return '自动化会话会按计划聚合，展开后可以进入单次运行。';
-  if (statusFilter === 'archived') return '长按归档会话可进入批量选择，然后恢复或删除。';
-  if (statusFilter === 'all') return '活跃、归档和自动化会话会一起显示，适合快速查找。';
-  return '点开会话继续控制，长按会话进入批量选择。';
+  if (statusFilter === 'automation') return '自动化生成的任务会按计划聚合，展开后可以进入单次运行。';
+  if (statusFilter === 'archived') return '长按归档任务可进入批量选择，然后恢复或删除。';
+  if (statusFilter === 'all') return '活跃、归档和自动化生成的任务会一起显示，适合快速查找。';
+  return '点开任务继续控制，长按任务进入批量选择。';
 }
 
 function buildProjectSections(
@@ -426,7 +426,7 @@ function buildDateSections(
  * 远程会话在列表 / 菜单上应显示的标题。
  *
  * 「尚未起名」的哨兵**直接用调用方给的本地化兜底、不回落 workingDir**:回落会把完整
- * 工作目录路径当标题显示,与 desktop 侧的「未命名对话」不一致(PR #1031 review P1)。
+ * 工作目录路径当标题显示,与 desktop 侧的「未命名任务」不一致(PR #1031 review P1)。
  * 哨兵本身是 locale-independent 的英文字面量(见 ./sessionTitle.ts),原样显示会露出
  * "New Maker"。
  *
@@ -434,17 +434,17 @@ function buildDateSections(
  * 导出中文 UI 串),与 desktop 的 `getSessionDisplayTitle(session, unnamedLabel)` 同款
  * 签名。
  *
- * 空标题(非哨兵)保持既有兜底链 workingDir → 「未命名会话」不变。
+ * 空标题(非哨兵)保持既有兜底链 workingDir → 「未命名任务」不变。
  */
 export function remoteSessionDisplayTitle(session: RemoteSession, unnamedLabel?: string): string {
   if (isDefaultDraftSessionTitle(session.title)) {
     // 调用方给了**已解析的 i18n 文案**就用它;没给则按「无标题」走既有兜底链
-    // (workingDir → '未命名会话'),即本 PR 之前的行为 —— 但无论如何都不把英文哨兵
+    // (workingDir → '未命名任务'),即本 PR 之前的行为 —— 但无论如何都不把英文哨兵
     // 原样显示出去。刻意不在共享层兜一个中文串:mobile 支持 en / ja / ko,那会让未接
     // i18n 的调用方悄悄显示中文(PR #1031 review P1)。
-    return unnamedLabel || session.workingDir || '未命名会话';
+    return unnamedLabel || session.workingDir || '未命名任务';
   }
-  return automationDisplayTitle(session) || session.workingDir || '未命名会话';
+  return automationDisplayTitle(session) || session.workingDir || '未命名任务';
 }
 
 export function toRemoteSessionListItem(
@@ -454,7 +454,7 @@ export function toRemoteSessionListItem(
   pendingInteractionCount = 0,
   messagePreview: string | null = null,
   liveActivity: RemoteSessionLiveActivity | null = null,
-  /** 「尚未起名」会话的显示文案,由调用方传已解析的 i18n 值(见 remoteSessionDisplayTitle)。 */
+  /** 「尚未起名」任务的显示文案,由调用方传已解析的 i18n 值(见 remoteSessionDisplayTitle)。 */
   unnamedLabel?: string,
 ): RemoteSessionListItem {
   const lastActivityAt = session.userSendAt ?? session.updatedAt ?? session.createdAt;
@@ -793,7 +793,7 @@ function automationDisplayTitle(session: RemoteSession): string {
 
 function fallbackScheduleInfo(session: RemoteSession): RemoteSessionScheduleInfo | null {
   if (!isAutomationGeneratedSession(session)) return null;
-  const title = automationDisplayTitle(session) || '自动化任务';
+  const title = automationDisplayTitle(session) || '自动化';
   return {
     scheduleId: '',
     scheduleName: title,
@@ -881,14 +881,14 @@ function toAutomationGroupListItem(
     lastActivityAt: latestActivityAt,
     title: scheduleInfo?.scheduleName ?? primary.title,
     subtitle: [
-      '自动化任务',
-      `${group.length} 个会话`,
+      '自动化',
+      `${group.length} 个任务`,
       primary.worktreeLabel,
       agentLabel(primary.session.agentKind),
       primary.session.model,
     ].filter(Boolean).join(' · '),
     detail: [
-      `${group.length} 个会话`,
+      `${group.length} 个任务`,
       relativeTime(latestActivityAt, now),
       scheduleInfo?.running ? '自动化执行中' : null,
       scheduleInfo && scheduleInfo.unreadCount > 0 ? `${scheduleInfo.unreadCount} 个自动化未读` : null,

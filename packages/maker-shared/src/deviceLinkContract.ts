@@ -280,6 +280,14 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   // CHANNEL_NOT_ALLOWED → 手机端吞掉降级,见 sessionModelMirror)。
   'maker:set-session-model-pref',
   'maker:apply-new-maker-draft-pref',
+  // 工作端「新建会话默认启用 worktree」勾选记忆的读 / 写:
+  //  - get-new-maker-defaults(只读):工作端草稿默认值镜像,手机新建页据 worktreeEnabled
+  //    播种 worktree 开关(桌面控制端早已消费同通道)。老被控端 CHANNEL_NOT_ALLOWED →
+  //    播种回落默认不勾选。
+  //  - apply-new-maker-worktree-pref:用户在手机上显式切换开关时写穿工作端 newMakerDraft
+  //    根字段。老被控端 CHANNEL_NOT_ALLOWED → 吞掉降级(勾选仅本次草稿生效)。
+  'maker:get-new-maker-defaults',
+  'maker:apply-new-maker-worktree-pref',
   // 模型选择列表元信息:被控端视角的模型单价表(只读;拉不到 → 隐藏价格)。
   'maker:usage:model-pricing',
   // Codex app-server 官方控制面:只读额度/reset 次数 + 人工确认后的单次 reset。
@@ -347,6 +355,19 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'fs:list-dir',
   'fs:stat-path',
   'fs:mkdir-p',
+  // —— Worktree(新建会话前在工作端预建隔离 worktree;git/fs 全在被控端执行)——
+  //  - detect-cwd:资格探测(git 已装 / 是 git 仓库 / 未在 worktree 内)+ repoRoot/currentBranch;
+  //  - suggest-name:工作端按仓库上下文生成 worktree 名;
+  //  - create:两步建会话第一步——同预生成 sessionId 先建 worktree 拿路径,再以该路径调
+  //    maker:create-session(与桌面控制端 NewMakerDraftRoute 的远程流程同构)；
+  //  - discard-precreated:第二步确定失败且用户放弃时，按 sessionId + 精确 path 补偿回收。
+  // 四者均已在被控端 REMOTE_INVOKE_ALLOWLIST(create / discard 的 60s 超时见
+  // INVOKE_TIMEOUT_OVERRIDES_MS,移动端 invoke 必须带同一映射)。
+  // 老被控端无这些 channel → CHANNEL_NOT_ALLOWED → 手机端按「worktree 不可用」降级。
+  'worktree:detect-cwd',
+  'worktree:suggest-name',
+  'worktree:create',
+  'worktree:discard-precreated',
   'text-file:read-preview',
   // 完整文件浏览(网格/预览/缩略图/大文件导出)走桌面同款聚合通道,
   // op 分发与响应形状见 apps/desktop/src/main/file-browser/device-op.ts。
@@ -407,9 +428,9 @@ export function relayStatusLabel(status: DeviceLinkRelayStatus): string {
 
 export function relayStatusHint(status: DeviceLinkRelayStatus, lastSyncedAt: number | null): string {
   if (status === 'online') {
-    return lastSyncedAt ? `上次同步 ${formatClock(lastSyncedAt)}` : '可以同步远程会话。';
+    return lastSyncedAt ? `上次同步 ${formatClock(lastSyncedAt)}` : '可以同步远程任务。';
   }
-  if (status === 'connecting') return '网络恢复后会自动重新订阅远程会话。';
+  if (status === 'connecting') return '网络恢复后会自动重新订阅远程任务。';
   return '回到前台或重新登录后会恢复连接。';
 }
 

@@ -10,13 +10,18 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { BookUser, Mail, MessageCircle, Users } from 'lucide-react';
+import { BookUser, Mail, MessageCircle, RefreshCw, ShieldCheck, Users } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Switch } from '@/components/ui/switch';
 import { createLogger } from '@/lib/logger';
-import { contactsService, contactsErrorI18nKey, type ContactsStats } from '@/lib/contactsService';
+import {
+  contactsService,
+  contactsErrorI18nKey,
+  type ContactsDeviceSyncStatus,
+  type ContactsStats,
+} from '@/lib/contactsService';
 import { ContactsManagerDialog } from './ContactsManagerDialog';
 import { ContactsImportDialog } from './ContactsImportDialog';
 import { prefillContactsAiSessionDraft } from './startContactsAiSession';
@@ -24,7 +29,7 @@ import { prefillContactsAiSessionDraft } from './startContactsAiSession';
 const log = createLogger('ContactsSection');
 
 export function ContactsSection() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const navigate = useNavigate();
 
   const [enabled, setEnabled] = useState(false);
@@ -32,6 +37,8 @@ export function ContactsSection() {
   const [stats, setStats] = useState<ContactsStats | null>(null);
   const [managerOpen, setManagerOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<ContactsDeviceSyncStatus | null>(null);
+  const [syncPending, setSyncPending] = useState(false);
 
   const reloadStats = useCallback(async () => {
     try {
@@ -47,9 +54,17 @@ export function ContactsSection() {
       .then((s) => setEnabled(s.enabled))
       .catch((err) => log.warn('contacts settingsGet failed', err));
     void reloadStats();
+    void contactsService
+      .syncStatusGet()
+      .then(setSyncStatus)
+      .catch((err) => log.warn('contacts syncStatusGet failed', err));
     // agent 写入时统计行实时刷新(小节常驻, 订阅成本可忽略)
     const off = contactsService.onChanged(() => void reloadStats());
-    return off;
+    const offSync = contactsService.onSyncStatusChanged(setSyncStatus);
+    return () => {
+      off();
+      offSync();
+    };
   }, [reloadStats]);
 
   const handleToggle = useCallback(
@@ -105,6 +120,84 @@ export function ContactsSection() {
         })
       : '';
   const pendingCount = stats?.pending ?? 0;
+  const formatSyncTime = (value: string | null): string => {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return new Intl.DateTimeFormat(i18n.language, {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    }).format(date);
+  };
+  const syncSummary = (() => {
+    if (!syncStatus) return t('settings.contacts.sync.status.loading');
+    if (!syncStatus.available) return t('settings.contacts.sync.status.signInRequired');
+    if (syncStatus.phase === 'error' && syncStatus.errorCode) {
+      return t(`settings.contacts.sync.error.${syncStatus.errorCode}`);
+    }
+    if (syncStatus.phase === 'syncing') return t('settings.contacts.sync.status.syncing');
+    if (syncStatus.phase === 'waiting') return t('settings.contacts.sync.status.waiting');
+    if (syncStatus.phase === 'off') return t('settings.contacts.sync.status.off');
+    const time = formatSyncTime(syncStatus.lastSyncAt);
+    if (time && syncStatus.lastSyncDeviceName) {
+      return t('settings.contacts.sync.status.lastSuccess', {
+        device: syncStatus.lastSyncDeviceName,
+        time,
+        route: t(
+          syncStatus.lastRoute === 'lan'
+            ? 'settings.contacts.sync.route.lan'
+            : 'settings.contacts.sync.route.relay',
+        ),
+      });
+    }
+    return t('settings.contacts.sync.status.ready');
+  })();
+
+  const handleSyncToggle = useCallback(
+    async (next: boolean) => {
+      const previous = syncStatus;
+      setSyncStatus((current) => (current ? { ...current, enabled: next } : current));
+      setSyncPending(true);
+      try {
+        const status = await contactsService.syncEnabledSet(next);
+        setSyncStatus(status);
+        toast.success(
+          t(
+            next ? 'settings.contacts.sync.toast.enabled' : 'settings.contacts.sync.toast.disabled',
+          ),
+        );
+      } catch (err) {
+        log.warn('contacts syncEnabledSet failed', err);
+        let latest = previous;
+        try {
+          latest = await contactsService.syncStatusGet();
+        } catch {
+          // 状态读取也失败时才回退到操作前快照。
+        }
+        setSyncStatus(latest);
+        toast.error(
+          latest?.errorCode
+            ? t(`settings.contacts.sync.error.${latest.errorCode}`)
+            : t(contactsErrorI18nKey(err)),
+        );
+      } finally {
+        setSyncPending(false);
+      }
+    },
+    [syncStatus, t],
+  );
+
+  const handleSyncNow = useCallback(async () => {
+    setSyncPending(true);
+    try {
+      setSyncStatus(await contactsService.syncNow());
+    } catch (err) {
+      log.warn('contacts syncNow failed', err);
+      toast.error(t(contactsErrorI18nKey(err)));
+    } finally {
+      setSyncPending(false);
+    }
+  }, [t]);
 
   return (
     <div className="flex flex-col gap-[14px]">
@@ -166,6 +259,79 @@ export function ContactsSection() {
             disabled={togglePending}
             onCheckedChange={(v) => void handleToggle(v)}
             aria-label={t('settings.contacts.enable.toggleAria')}
+          />
+        </div>
+      </div>
+
+      <div
+        className={cn(
+          'flex items-center justify-between gap-3 rounded-xl px-4 py-[14px]',
+          'bg-[var(--settings-theme-card-bg)] border border-[var(--settings-theme-card-border)]',
+        )}
+      >
+        <div className="flex min-w-0 items-center gap-3">
+          <div
+            className={cn(
+              'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+              'bg-[var(--settings-input-bg)]',
+            )}
+          >
+            <ShieldCheck size={18} className="text-[var(--settings-section-title)]" />
+          </div>
+          <div className="flex min-w-0 flex-col gap-[6px]">
+            <p className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
+              {t('settings.contacts.sync.label')}
+            </p>
+            <p className="text-12 leading-[1.4] text-[var(--settings-section-desc)]">
+              {t('settings.contacts.sync.description')}
+            </p>
+            <p
+              className={cn(
+                'text-12 leading-[1.4]',
+                syncStatus?.phase === 'error'
+                  ? 'text-[var(--settings-error-text)]'
+                  : 'text-[var(--settings-section-desc)]',
+              )}
+            >
+              {syncSummary}
+              {syncStatus?.enabled && syncStatus.onlineDeviceCount > 0
+                ? ` · ${t('settings.contacts.sync.onlineDevices', {
+                    count: syncStatus.onlineDeviceCount,
+                  })}`
+                : ''}
+            </p>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {syncStatus?.enabled && (
+            <button
+              type="button"
+              onClick={() => void handleSyncNow()}
+              disabled={syncPending || syncStatus.onlineDeviceCount === 0}
+              className={cn(
+                'flex h-[30px] items-center gap-1.5 rounded-lg px-3 text-13 transition-colors',
+                'text-[var(--settings-section-title)] bg-[var(--settings-input-bg)]',
+                'hover:bg-[var(--settings-menu-bg-hover)]',
+                'disabled:cursor-not-allowed disabled:opacity-50',
+              )}
+            >
+              <span
+                className={cn(
+                  'inline-flex',
+                  syncPending && 'animate-spinner motion-reduce:animate-none',
+                )}
+                aria-hidden="true"
+              >
+                <RefreshCw size={13} />
+              </span>
+              {t('settings.contacts.sync.syncNow')}
+            </button>
+          )}
+          <Switch
+            checked={syncStatus?.enabled ?? false}
+            disabled={syncPending || syncStatus === null || !syncStatus.available}
+            onCheckedChange={(value) => void handleSyncToggle(value)}
+            aria-label={t('settings.contacts.sync.toggleAria')}
           />
         </div>
       </div>
@@ -232,6 +398,10 @@ export function ContactsSection() {
       <ContactsManagerDialog
         open={managerOpen}
         onOpenChange={setManagerOpen}
+        syncStatus={syncStatus}
+        syncPending={syncPending}
+        syncSummary={syncSummary}
+        onSyncNow={() => void handleSyncNow()}
         {...(enabled ? { onAiOrganize: startAiSession } : {})}
       />
     </div>

@@ -781,7 +781,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
 });
 
 // ── 排队等待:不占执行槽 + 有上限 ────────────────────────────────────────────
-// 2026-07-29 事故:目标会话长时间不空闲(用户在长对话里 / 那个会话自己卡死),队列
+// 2026-07-29 事故:目标会话长时间不空闲(用户在长对话里 / 那个任务自己卡死),队列
 // 永不 drain,`await dispatchGate` 永不 settle —— 4 个心跳 run 各挂 3.5 小时,占满
 // 全部执行槽,其余定时任务全部停摆。
 describe('MakerScheduleRunner queued dispatch: slot accounting and wait cap', () => {

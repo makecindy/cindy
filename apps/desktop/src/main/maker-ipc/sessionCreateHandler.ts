@@ -50,6 +50,11 @@ export interface MakerSessionCreateHandlerDeps<
   allocateDialogueWorkspace?: (sessionId: string, nowMs: number) => string;
   createSessionId?: () => string;
   now?: () => number;
+  /**
+   * 显式 sessionId 的创建事务锁。device-link 的预创建 worktree 补偿回收使用同一把锁，
+   * 防止控制端超时后晚到的 create 与 cleanup 并发，出现「刚落库就被删目录」。
+   */
+  withSessionLock?: <T>(sessionId: string, task: () => Promise<T>) => Promise<T>;
   sendWorkerReadyMessage(session: TSession): void;
   broadcastSessionCreated(sessionId: string): void;
   logCreateSession(fields: Record<string, unknown>): void;
@@ -70,53 +75,60 @@ export function registerMakerSessionCreateHandler<TSession extends MakerSessionC
       deps.warnStderr,
     );
 
-    let bootstrapped: Awaited<ReturnType<typeof deps.bootstrapSession>>;
-    try {
-      bootstrapped = await deps.bootstrapSession(o);
-    } catch (err) {
-      if (isCredentialModeSwitchBusyError(err)) {
-        // 独立 code:新建会话撞上凭证切换忙(别的会话在跑),不是"本会话在跑"。
-        // renderer 据此走 ipcError.CREDENTIAL_SWITCH_BUSY 专属文案。
-        throwIpcError('CREDENTIAL_SWITCH_BUSY', err.message);
+    const run = async () => {
+      let bootstrapped: Awaited<ReturnType<typeof deps.bootstrapSession>>;
+      try {
+        bootstrapped = await deps.bootstrapSession(o);
+      } catch (err) {
+        if (isCredentialModeSwitchBusyError(err)) {
+          // 独立 code:新建会话撞上凭证切换忙(别的会话在跑),不是"本会话在跑"。
+          // renderer 据此走 ipcError.CREDENTIAL_SWITCH_BUSY 专属文案。
+          throwIpcError('CREDENTIAL_SWITCH_BUSY', err.message);
+        }
+        // 远端 Claude 路由 materialization 错误([REMOTE_*] 前缀)映射到独立 code,
+        // renderer 按 code 给可操作文案(连接订阅 / 换来源 / 稍后重试),不吞成通用
+        // 「创建会话失败」。
+        const remoteRouteCode = remoteRouteErrorCode(err);
+        if (remoteRouteCode) {
+          const msg = err instanceof Error ? err.message : String(err);
+          throwIpcError(remoteRouteCode, msg);
+        }
+        throw err;
       }
-      // 远端 Claude 路由 materialization 错误([REMOTE_*] 前缀)映射到独立 code,
-      // renderer 按 code 给可操作文案(连接订阅 / 换来源 / 稍后重试),不吞成通用
-      // 「创建会话失败」。
-      const remoteRouteCode = remoteRouteErrorCode(err);
-      if (remoteRouteCode) {
-        const msg = err instanceof Error ? err.message : String(err);
-        throwIpcError(remoteRouteCode, msg);
+      const { session, didInjectOrcaInstructions, didInjectProjectContext } = bootstrapped;
+
+      deps.logCreateSession({
+        agentKind: o.agentKind,
+        model: o.model,
+        fastMode: o.fastMode ?? 'default',
+        workDir: o.workingDir,
+        providedId: !!o.id,
+        usedOrcaInstructions: didInjectOrcaInstructions,
+        usedProjectContext: didInjectProjectContext,
+        extraDirsCount: o.extraDirs?.length ?? 0,
+      });
+
+      if (o.orcaRole === 'lead') {
+        await deps.markOrcaRoleIfNeeded(session.id, o.orcaRole);
       }
-      throw err;
-    }
-    const { session, didInjectOrcaInstructions, didInjectProjectContext } = bootstrapped;
+      deps.markKnownNonOrcaIfApplicable(session.id, o);
+      if (o.orcaRole === 'worker' && !o.resumeSessionId) {
+        deps.sendWorkerReadyMessage(session);
+      }
+      deps.broadcastSessionCreated(session.id);
 
-    deps.logCreateSession({
-      agentKind: o.agentKind,
-      model: o.model,
-      fastMode: o.fastMode ?? 'default',
-      workDir: o.workingDir,
-      providedId: !!o.id,
-      usedOrcaInstructions: didInjectOrcaInstructions,
-      usedProjectContext: didInjectProjectContext,
-      extraDirsCount: o.extraDirs?.length ?? 0,
-    });
-
-    if (o.orcaRole === 'lead') {
-      await deps.markOrcaRoleIfNeeded(session.id, o.orcaRole);
-    }
-    deps.markKnownNonOrcaIfApplicable(session.id, o);
-    if (o.orcaRole === 'worker' && !o.resumeSessionId) {
-      deps.sendWorkerReadyMessage(session);
-    }
-    deps.broadcastSessionCreated(session.id);
-
-    return {
-      sessionId: session.id,
-      agentKind: session.agentKind,
-      workDir: session.workDir,
-      capabilities: session.capabilities,
-      usedProjectContext: didInjectProjectContext,
+      return {
+        sessionId: session.id,
+        agentKind: session.agentKind,
+        workDir: session.workDir,
+        capabilities: session.capabilities,
+        usedProjectContext: didInjectProjectContext,
+      };
     };
+
+    const explicitSessionId = typeof o.id === 'string' && o.id ? o.id : null;
+    return explicitSessionId && deps.withSessionLock
+      ? deps.withSessionLock(explicitSessionId, run)
+      : run();
   });
 }

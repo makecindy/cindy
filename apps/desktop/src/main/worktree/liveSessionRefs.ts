@@ -90,16 +90,20 @@ export function hasLiveSessionReference(
   meta: WorktreeMeta,
   liveSessionPathKeys: LiveSessionPathKeys,
 ): boolean {
-  const target = pathKey(meta.path);
-  if (!target) return true;
   if (!liveSessionPathKeys) return true;
-  for (const candidate of liveSessionPathKeys) {
-    const relative = path.relative(target, candidate);
-    if (
-      relative === '' ||
-      (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
-    ) {
-      return true;
+  const targets = [meta.path, meta.quarantinePath]
+    .map((value) => pathKey(value))
+    .filter((value): value is string => value !== null);
+  if (targets.length === 0) return true;
+  for (const target of targets) {
+    for (const candidate of liveSessionPathKeys) {
+      const relative = path.relative(target, candidate);
+      if (
+        relative === '' ||
+        (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+      ) {
+        return true;
+      }
     }
   }
   return false;

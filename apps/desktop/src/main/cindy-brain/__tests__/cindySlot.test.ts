@@ -98,6 +98,7 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
         }
       : null,
   );
+  const imageCapabilities = vi.fn(() => null);
   const resolveOwnedMedia = vi.fn(async (_ghostId: string, hash: string) => `/disk/${hash}.png`);
   const getOverride = vi.fn((_ghostId: string, _capability: string) => null as string | null);
   const getImageConfig = vi.fn(() => ({
@@ -136,6 +137,8 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
   const releaseDeposit = vi.fn(async () => true);
   const slot = new GhostCindySlot({
     getGhost: () => fakeGhost(),
+    getOwnerScopeKey: () => 'cloud:test-owner:1',
+    isOwnerBoundaryPending: () => false,
     generateImage,
     editImage,
     generateVideo,
@@ -144,6 +147,7 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
     getOverride,
     getImageConfig,
     getVideoConfig,
+    imageCapabilities,
     videoCapabilities,
     saveGhostMedia,
     sniffDepositMime,
@@ -493,7 +497,7 @@ describe('视频代办(gen_video / edit_video)', () => {
       hashes: [HASH_S],
     });
     expect(r).toMatchObject({ ok: true });
-    expect(resolveOwnedMedia).toHaveBeenCalledWith('art', HASH_S);
+    expect(resolveOwnedMedia).toHaveBeenCalledWith('art', HASH_S, 'cloud:test-owner:1');
     expect(editVideo).toHaveBeenCalledWith({
       prompt: '让它动起来',
       model: 'seedance-fast',
@@ -670,8 +674,54 @@ describe('代办链路', () => {
     });
     expect(generateImage).toHaveBeenCalledWith({ prompt: '一只猫', model: 'gpt-image-2' });
     expect(saveGhostMedia).toHaveBeenCalledWith(
-      expect.objectContaining({ ghostId: 'art', mimeType: 'image/png' }),
+      expect.objectContaining({
+        ghostId: 'art',
+        mimeType: 'image/png',
+        ownerScopeKey: 'cloud:test-owner:1',
+      }),
     );
+  });
+
+  it('生成期间切换账号时不保存旧作用域产物', async () => {
+    let ownerScopeKey = 'cloud:owner-a:1';
+    const saveGhostMedia = vi.fn();
+    const { slot } = makeSlot({
+      getOwnerScopeKey: () => ownerScopeKey,
+      generateImage: vi.fn(async () => {
+        ownerScopeKey = 'cloud:owner-b:2';
+        return { buffer: new Uint8Array([1, 2, 3]), mimeType: 'image/png' };
+      }),
+      saveGhostMedia,
+    });
+
+    const result = await slot.handleModelRequest('art', REQ);
+
+    expect(result).toMatchObject({ ok: false });
+    expect((result as { message: string }).message).toContain('账号已切换');
+    expect(saveGhostMedia).not.toHaveBeenCalled();
+  });
+
+  it('保存期间切换账号时不向新作用域返回旧产物', async () => {
+    let ownerScopeKey = 'cloud:owner-a:1';
+    const saveGhostMedia = vi.fn(async (params: { ownerScopeKey: string }) => {
+      expect(params.ownerScopeKey).toBe('cloud:owner-a:1');
+      ownerScopeKey = 'cloud:owner-b:2';
+      return {
+        url: 'cindy-media://blobs/abc.png',
+        hash: 'a'.repeat(64),
+        ext: '.png',
+      };
+    });
+    const { slot } = makeSlot({
+      getOwnerScopeKey: () => ownerScopeKey,
+      saveGhostMedia: saveGhostMedia as unknown as CindySlotDeps['saveGhostMedia'],
+    });
+
+    const result = await slot.handleModelRequest('art', REQ);
+
+    expect(result).toMatchObject({ ok: false });
+    expect((result as { message: string }).message).toContain('账号已切换');
+    expect(saveGhostMedia).toHaveBeenCalledOnce();
   });
 
   it('图片代办附带像素宽高(字节头可解析时);探测不出则缺省', async () => {
@@ -806,7 +856,7 @@ describe('改图代办(edit_image)', () => {
     const { slot, editImage, resolveOwnedMedia, saveGhostMedia } = makeSlot();
     const r = await slot.handleModelRequest('art', EDIT_REQ);
     expect(r).toMatchObject({ ok: true, hash: 'a'.repeat(64) });
-    expect(resolveOwnedMedia).toHaveBeenCalledWith('art', HASH_S);
+    expect(resolveOwnedMedia).toHaveBeenCalledWith('art', HASH_S, 'cloud:test-owner:1');
     expect(editImage).toHaveBeenCalledWith({
       prompt: '加顶帽子',
       model: 'gpt-image-2',
@@ -828,6 +878,40 @@ describe('改图代办(edit_image)', () => {
     expect(editImage).not.toHaveBeenCalled();
   });
 
+  it('通用契约允许四图；provider 上限更低时按选中型号在读图前明拒', async () => {
+    const generic = makeSlot();
+    const four = await generic.slot.handleModelRequest('art', {
+      ...EDIT_REQ,
+      hashes: Array(4).fill(HASH_S),
+    });
+    expect(four).toMatchObject({ ok: true });
+    expect(generic.editImage).toHaveBeenCalledWith(expect.objectContaining({
+      imagePaths: Array(4).fill(`/disk/${HASH_S}.png`),
+    }));
+
+    const xaiConfig = vi.fn(() => ({
+      models: [{ id: 'xai/grok-imagine-image', label: 'Grok Imagine Image' }],
+      defaults: {
+        standard: 'xai/grok-imagine-image',
+        draft: 'xai/grok-imagine-image',
+        best: 'xai/grok-imagine-image',
+      },
+    }));
+    const xai = makeSlot({
+      getImageConfig: xaiConfig,
+      imageCapabilities: vi.fn(() => ({ maxEditImages: 3 })),
+    });
+    const rejected = await xai.slot.handleModelRequest('art', {
+      ...EDIT_REQ,
+      hashes: Array(4).fill(HASH_S),
+    });
+    expect(rejected).toMatchObject({ ok: false });
+    expect((rejected as { message: string }).message).toContain('Grok Imagine Image');
+    expect((rejected as { message: string }).message).toContain('最多支持 3 张源图');
+    expect(xai.resolveOwnedMedia).not.toHaveBeenCalled();
+    expect(xai.editImage).not.toHaveBeenCalled();
+  });
+
   it('任一源图不在本意识名下 → 整单拒(统一话术)', async () => {
     const { slot, editImage } = makeSlot({
       resolveOwnedMedia: vi.fn(async (_g: string, hash: string) =>
@@ -840,6 +924,30 @@ describe('改图代办(edit_image)', () => {
     });
     expect(r).toMatchObject({ ok: false });
     expect((r as { message: string }).message).toContain('名下');
+    expect(editImage).not.toHaveBeenCalled();
+  });
+
+  it('解析源图期间切换账号时丢弃任务,且解析器收到受理时的稳定作用域', async () => {
+    let ownerScopeKey = 'cloud:owner-a:1';
+    const resolveOwnedMedia = vi.fn(
+      async (_ghostId: string, hash: string, taskOwnerScopeKey: string) => {
+        expect(taskOwnerScopeKey).toBe('cloud:owner-a:1');
+        ownerScopeKey = 'cloud:owner-b:2';
+        return `/disk/${hash}.png`;
+      },
+    );
+    const editImage = vi.fn();
+    const { slot } = makeSlot({
+      getOwnerScopeKey: () => ownerScopeKey,
+      resolveOwnedMedia,
+      editImage,
+    } as Partial<CindySlotDeps>);
+
+    const result = await slot.handleModelRequest('art', EDIT_REQ);
+
+    expect(result).toMatchObject({ ok: false });
+    expect((result as { message: string }).message).toContain('账号已切换');
+    expect(resolveOwnedMedia).toHaveBeenCalledWith('art', HASH_S, 'cloud:owner-a:1');
     expect(editImage).not.toHaveBeenCalled();
   });
 });

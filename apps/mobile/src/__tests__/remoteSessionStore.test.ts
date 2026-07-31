@@ -143,6 +143,75 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.getSessionDeviceId('s1')).toBe('dev-1');
   });
 
+  it('mirrors new-maker worktree preference pushes, including explicit false and same-value revisions', () => {
+    expect(remoteSessionStore.getNewMakerWorktreePreference('dev-1')).toEqual({
+      enabled: false,
+      revision: 0,
+    });
+
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:new-maker-draft:changed', {
+      claudeCode: { worktreeEnabled: true },
+      codex: { worktreeEnabled: true },
+    });
+    expect(remoteSessionStore.getNewMakerWorktreePreference('dev-1')).toEqual({
+      enabled: true,
+      revision: 1,
+    });
+
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:new-maker-draft:changed', {
+      codex: { worktreeEnabled: false },
+    });
+    expect(remoteSessionStore.getNewMakerWorktreePreference('dev-1')).toEqual({
+      enabled: false,
+      revision: 2,
+    });
+
+    // 同值 push 仍可能晚于在途 pull，revision 必须推进让旧响应失去写权。
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:new-maker-draft:changed', {
+      claudeCode: { worktreeEnabled: false },
+    });
+    expect(remoteSessionStore.getNewMakerWorktreePreference('dev-1')).toEqual({
+      enabled: false,
+      revision: 3,
+    });
+
+    remoteSessionStore.applyRemotePush('dev-1', 'maker:new-maker-draft:changed', {
+      claudeCode: { worktreeEnabled: 'yes' },
+    });
+    expect(remoteSessionStore.getNewMakerWorktreePreference('dev-1').revision).toBe(3);
+  });
+
+  it('isolates new-maker worktree preferences by device and removes their revisions with the device', () => {
+    remoteSessionStore.setNewMakerWorktreePreference('dev-1', true);
+    remoteSessionStore.setNewMakerWorktreePreference('dev-2', false);
+    remoteSessionStore.setNewMakerWorktreePreference('dev-2', true);
+
+    expect(remoteSessionStore.getNewMakerWorktreePreference('dev-1')).toEqual({
+      enabled: true,
+      revision: 1,
+    });
+    expect(remoteSessionStore.getNewMakerWorktreePreference('dev-2')).toEqual({
+      enabled: true,
+      revision: 2,
+    });
+
+    remoteSessionStore.removeDevice('dev-1');
+    expect(remoteSessionStore.getNewMakerWorktreePreference('dev-1')).toEqual({
+      enabled: false,
+      revision: 0,
+    });
+    expect(remoteSessionStore.getNewMakerWorktreePreference('dev-2')).toEqual({
+      enabled: true,
+      revision: 2,
+    });
+
+    remoteSessionStore.clear();
+    expect(remoteSessionStore.getNewMakerWorktreePreference('dev-2')).toEqual({
+      enabled: false,
+      revision: 0,
+    });
+  });
+
   it('mirrors structured session money and legacy USD usage pushes', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
 
@@ -2379,7 +2448,7 @@ describe('setDeviceSessions 对在途乐观创建行(pendingLocalCreation)的保
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s-old')]);
     remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s-new', { pendingLocalCreation: true }));
 
-    // 首页 in-flight 的 sessions:list 响应此刻返回(发出时被控端还没建这个会话)。
+    // 首页 in-flight 的 sessions:list 响应此刻返回(发出时被控端还没建这个任务)。
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s-old')]);
     const rows = remoteSessionStore.getSessions();
     expect(rows.map((s) => s.id)).toContain('s-new');

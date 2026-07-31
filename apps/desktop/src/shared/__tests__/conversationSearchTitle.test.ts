@@ -13,11 +13,11 @@ import { conversationSearchTitle } from '../conversationSearch';
 
 describe('conversationSearchTitle', () => {
   it('哨兵标题换成调用方给的本地化文案', () => {
-    expect(conversationSearchTitle(DEFAULT_DRAFT_SESSION_TITLE, '未命名对话')).toBe('未命名对话');
+    expect(conversationSearchTitle(DEFAULT_DRAFT_SESSION_TITLE, '未命名任务')).toBe('未命名任务');
   });
 
   it('普通标题原样返回(不受 label 影响)', () => {
-    expect(conversationSearchTitle('修 Orca 心跳', '未命名对话')).toBe('修 Orca 心跳');
+    expect(conversationSearchTitle('修 Orca 心跳', '未命名任务')).toBe('修 Orca 心跳');
   });
 
   it('没传 label(旧 renderer 构建)时退回原始标题,不静默变成空串', () => {

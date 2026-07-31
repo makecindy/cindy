@@ -110,7 +110,7 @@
     "mediaDeviceLinkHint": "モバイルは device-link 経由でリモートデバイスにメディアのアップロードを要求してから開きます。",
     "controlDelete": "メッセージを削除",
     "controlRewind": "ここまで戻す",
-    "controlFork": "会話を分岐",
+    "controlFork": "セッションを分岐",
     "markdownDocAriaLabel": "メッセージ本文",
     "toolOutputTitle": "{{label}} の出力",
     "mermaidEmpty": "空の Mermaid 図。",
@@ -178,7 +178,7 @@
       "neutral": "再接続",
       "pending": "再接続中…",
       "pendingWithProgress": "再接続中 {{attempt}}/{{total}}…",
-      "details": "今回の再試行 {{attempt}}/{{total}} · この会話での再接続 {{count}} 回"
+      "details": "今回の再試行 {{attempt}}/{{total}} · このセッションでの再接続 {{count}} 回"
     },
     "modelLabel": "モデル",
     "sessionLabel": "セッション",

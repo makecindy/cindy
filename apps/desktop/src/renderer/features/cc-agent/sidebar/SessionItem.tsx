@@ -550,7 +550,7 @@ export const SessionItem = memo(function SessionItem({
     }
   }, [session.deviceLinkDeviceId, session.id, t]);
 
-  // 单项「复制对话链接」:直接复制 cindy://session/<id> 深链(可粘贴到聊天里
+  // 单项「复制任务链接」:直接复制 cindy://session/<id> 深链(可粘贴到聊天里
   // 渲染成会话 chip)。原「复制会话 ID」二级菜单(深度链接 / 仅 ID / Agent)已按
   // 产品决策收敛为这一项;不自带分隔线,分组由各使用点决定,避免菜单被切得过碎。
   const copySessionIdSubmenu = (

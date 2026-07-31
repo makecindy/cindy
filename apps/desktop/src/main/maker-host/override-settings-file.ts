@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 
+import { withCrossProcessLock } from '../device-link/crossProcessLock.js';
+
 interface Logger {
   info(message: string, meta?: Record<string, unknown>): void;
   warn(message: string, meta?: Record<string, unknown>): void;
@@ -16,7 +18,11 @@ export interface OverrideSettingsFile<T> {
   read(): T;
   readState(): OverrideSettingsState<T>;
   writePatch(patch: Partial<T>, options?: { preserveDefaults?: boolean }): void;
+  /** 跨进程锁内强制现读盘上 overrides，再合并 patch 并原子替换文件。 */
+  writePatchAtomic(patch: Partial<T>, options?: { preserveDefaults?: boolean }): Promise<void>;
   reset(): T;
+  /** 跨进程锁内删除 override 文件。 */
+  resetAtomic(): Promise<T>;
   /**
    * 文件被进程外修改(用户/agent 手改配置)时失效缓存,下次 read 现读。
    * mtime 守卫:文件没变时零开销(一次 stat),不重读不重复打 loaded 日志。
@@ -41,6 +47,8 @@ export function createOverrideSettingsFile<T>(options: {
   }) => Record<string, unknown>;
   log: Logger;
   label: string;
+  /** owner/session 跨 await 切换时让原子写 fail closed。 */
+  scopeKey?: () => string;
 }): OverrideSettingsFile<T> {
   let cached: CachedState<T> | null = null;
   let cachedResolvedPath: string | null = null;
@@ -142,6 +150,31 @@ export function createOverrideSettingsFile<T>(options: {
     writeOverrides(nextOverrides);
   }
 
+  async function writePatchAtomic(
+    patch: Partial<T>,
+    writeOptions?: { preserveDefaults?: boolean },
+  ): Promise<void> {
+    const file = options.filePath();
+    const scopeKey = options.scopeKey?.();
+    fs.mkdirSync(pathDirname(file), { recursive: true });
+    await withCrossProcessLock(
+      `${file}.lock`,
+      { label: `${options.label}-settings`, waitMs: 12_000 },
+      async (status) => {
+        if (!status.held) {
+          throw new Error(`${options.label} settings are busy in another process`);
+        }
+        if (options.filePath() !== file || options.scopeKey?.() !== scopeKey) {
+          throw new Error(
+            `${options.label} settings scope changed while waiting for the write lock`,
+          );
+        }
+        invalidate();
+        writePatch(patch, writeOptions);
+      },
+    );
+  }
+
   function writeOverrides(overrides: Record<string, unknown>): void {
     if (Object.keys(overrides).length === 0) {
       reset();
@@ -189,13 +222,43 @@ export function createOverrideSettingsFile<T>(options: {
     return cached.value;
   }
 
+  async function resetAtomic(): Promise<T> {
+    const file = options.filePath();
+    const scopeKey = options.scopeKey?.();
+    fs.mkdirSync(pathDirname(file), { recursive: true });
+    return withCrossProcessLock(
+      `${file}.lock`,
+      { label: `${options.label}-settings`, waitMs: 12_000 },
+      async (status) => {
+        if (!status.held) {
+          throw new Error(`${options.label} settings are busy in another process`);
+        }
+        if (options.filePath() !== file || options.scopeKey?.() !== scopeKey) {
+          throw new Error(
+            `${options.label} settings scope changed while waiting for the write lock`,
+          );
+        }
+        invalidate();
+        return reset();
+      },
+    );
+  }
+
   return {
     read: () => readState().value,
     readState,
     writePatch,
+    writePatchAtomic,
     reset,
+    resetAtomic,
     invalidateIfChanged,
   };
+
+  function invalidate(): void {
+    cached = null;
+    cachedFileMtimeMs = null;
+    cachedResolvedPath = null;
+  }
 
   function invalidateIfPathChanged(): void {
     const currentPath = options.filePath();

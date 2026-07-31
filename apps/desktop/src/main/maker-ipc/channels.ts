@@ -127,6 +127,16 @@ export const MAKER_INVOKE = {
    * 入参 = { agent:'claude-code'|'codex', providerId, modelId, effort?, fast?, active? }。
    */
   APPLY_NEW_MAKER_DRAFT_PREF: 'maker:apply-new-maker-draft-pref',
+  /**
+   * device-link 草稿「新建会话默认启用 worktree」写穿(控制端 → 被控端)。worktree 勾选记忆
+   * 是 vendor 无关的 newMakerDraft 根字段,校验形状与模型 pref 完全不同(无 modelId/providerId),
+   * 硬塞进 APPLY_NEW_MAKER_DRAFT_PREF 会破坏其形状校验语义,故独立窄 channel。
+   * 被控端 handler 校验布尔后转发给**自身 renderer**(WORKTREE_PREF_APPLY),renderer
+   * setWorktreePreference 按字段写真实草稿;变更经既有 SYNC_NEW_MAKER_DRAFT re-mirror +
+   * NEW_MAKER_DRAFT_CHANGED 广播回控制端。入参 = { worktreeEnabled: boolean }。
+   * 旧被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端吞掉降级(勾选仅本次草稿生效)。
+   */
+  APPLY_NEW_MAKER_WORKTREE_PREF: 'maker:apply-new-maker-worktree-pref',
   LIST_AVAILABLE_AGENTS: 'maker:list-available-agents',
   /**
    * Palette `/` 命令三源 (palette refactor):
@@ -347,6 +357,9 @@ export const MAKER_INVOKE = {
    */
   CONTACTS_SETTINGS_GET: 'maker:contacts:settings:get',
   CONTACTS_SETTINGS_SET: 'maker:contacts:settings:set',
+  CONTACTS_SYNC_STATUS_GET: 'maker:contacts:sync:status:get',
+  CONTACTS_SYNC_ENABLED_SET: 'maker:contacts:sync:enabled:set',
+  CONTACTS_SYNC_NOW: 'maker:contacts:sync:now',
   CONTACTS_LIST: 'maker:contacts:list',
   CONTACTS_GET: 'maker:contacts:get',
   CONTACTS_CREATE: 'maker:contacts:create',
@@ -772,6 +785,12 @@ export const MAKER_PUSH = {
    * 控制端进程因从不收到此 channel,带着同名监听也不会误触发。payload = APPLY_NEW_MAKER_DRAFT_PREF 入参。
    */
   DRAFT_PREF_APPLY: 'maker:draft-pref:apply',
+  /**
+   * 被控端本地 main → 自身 renderer:把控制端写穿的「新建会话默认启用 worktree」交给 renderer
+   * 写真实草稿(patchDraft)。仅本地窗口消费(**不**在 PUSH_FORWARD_ALLOWLIST,不转发回控制端)。
+   * payload = { worktreeEnabled: boolean }(APPLY_NEW_MAKER_WORKTREE_PREF 入参)。
+   */
+  WORKTREE_PREF_APPLY: 'maker:worktree-pref:apply',
   /**
    * 被控端本地 main → 自身 renderer:把控制端写穿的会话 pref 交给 renderer,renderer 调它原来的
    * 本地 setter 写真实会话记忆。仅本地窗口消费(不转发)。payload = SET_SESSION_MODEL_PREF 入参。

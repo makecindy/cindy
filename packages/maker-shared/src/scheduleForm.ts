@@ -203,7 +203,7 @@ export function validateMobileScheduleDraft(
   }
   if (!draft.timezone.trim()) return { field: 'timezone', message: '请输入时区' };
   if (draft.targetSessionId.trim() === MOBILE_SCHEDULE_PENDING_SESSION_ID) {
-    return { field: 'targetSessionId', message: '请选择要绑定的会话' };
+    return { field: 'targetSessionId', message: '请选择要绑定的任务' };
   }
   if (draft.runMode === 'recurring') {
     if (!draft.cronExpr.trim()) return { field: 'cronExpr', message: '请输入 cron 表达式' };

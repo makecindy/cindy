@@ -15,7 +15,7 @@
  * 未绑定"的视觉壳。这里的实现：直接复用 SessionItem，让交互一致；外层不再叠加
  * Draft 样式，因为未起名草稿的视觉与设计稿一致（普通 32px 行）。设计稿 italic
  * 的灰字仅用于纯文字提示态——本期所有 unclassified 都是真实 Session（包括未起名
- * 草稿），照普通行渲染即可，标题由 `lib/sessionDisplayTitle` 兜底成「未命名对话」。
+ * 草稿），照普通行渲染即可，标题由 `lib/sessionDisplayTitle` 兜底成「未命名任务」。
  */
 
 import { SessionEntryList } from '../SessionEntryList';

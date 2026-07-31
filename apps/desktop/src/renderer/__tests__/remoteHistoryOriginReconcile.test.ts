@@ -6,7 +6,7 @@
  * 控制端启动时路由可能**先于** remote-projects bootstrap 恢复到某远程会话:此刻
  * getSessionDeviceId 仍是 undefined → ensureInitialMessages 误命中控制端本机空库
  * (被控端 row 不在本地)→ 拿到空历史且 historyLoaded=true 卡死,即使随后 mapping
- * 注入也不再重试。修复:makerChatStore 记录每个会话「按哪个 origin 加载」,
+ * 注入也不再重试。修复:makerChatStore 记录每个任务「按哪个 origin 加载」,
  * remoteProjectsStore 注入 / 变更来源后 reconcileOpenSessionOrigins 检测漂移并经隧道重载。
  *
  * 本测试直接调用导出的 reconcileOpenSessionOrigins(生产由 initGlobalListeners 的

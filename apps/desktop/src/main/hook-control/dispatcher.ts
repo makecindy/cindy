@@ -372,16 +372,16 @@ const MAX_PENDING_REOPENS = 200;
  * 对话选择重新指定原对话才接得回来 —— 两步缺一不可。
  */
 const NOTICE_SESSION_RECREATED =
-  'ℹ️ 原对话已不在可用的工作目录里，这条消息起换用了新对话，原对话的上下文不会带过来。' +
-  '想接回原对话：先到 Cindy 的 设置 → 远程连接 → 工作目录映射 把它所在的目录加进来，' +
-  '再在这里用对话选择重新指定它。';
+  'ℹ️ 原任务已不在可用的工作目录里，这条消息起换用了新任务，原任务的上下文不会带过来。' +
+  '想接回原任务：先到 Cindy 的 设置 → 远程连接 → 工作目录映射 把它所在的目录加进来，' +
+  '再在这里选择任务重新指定它。';
 /**
  * 查不到原对话时的说明。措辞刻意留了余地: inspect 返回 null 是多义的 ——
  * 会话真的没了是 null, meta / DB 读取瞬时失败也被吞成 null(session-runner
  * 两路都 catch)。一口咬定"已被归档或删除"会在读库抖动时误导用户
  * (PR #733 review 指出)。
  */
-const NOTICE_SESSION_GONE = 'ℹ️ 原对话现在读不到（可能已被归档或删除），这条消息起换用了新对话。';
+const NOTICE_SESSION_GONE = 'ℹ️ 原任务现在读不到（可能已被归档或删除），这条消息起换用了新任务。';
 
 /** 标题里消息摘要的最大长度(字符), 超出截断加省略号。 */
 const TITLE_SNIPPET_MAX = 24;
@@ -1139,7 +1139,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         status: 'error',
         finalText: '',
         errorMessage:
-          '这个对话所在的目录已不在工作目录映射里，本条消息没有执行。把它所在的目录加进 设置 → 远程连接 → 工作目录映射 后再发一次。',
+          '这个任务所在的目录已不在工作目录映射里，本条消息没有执行。把它所在的目录加进 设置 → 远程连接 → 工作目录映射 后再发一次。',
         durationMs: 0,
       };
     } else {

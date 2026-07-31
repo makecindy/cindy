@@ -310,7 +310,7 @@ describe('ConversationSearchBox live search', () => {
   });
 
   // 搜索结果行是「列表之外」的第二个标题出口:本 PR 早前只投影了侧边栏 / 会话头 / tab,
-  // 结果行仍渲染原始 title,于是列表写「未命名对话」、搜索结果写 "New Maker"。
+  // 结果行仍渲染原始 title,于是列表写「未命名任务」、搜索结果写 "New Maker"。
   // 匹配串(main 算下标)与渲染串(这里)必须是同一个 conversationSearchTitle 的结果。
   it('未起名会话在结果行里显示兜底文案,并把 unnamedLabel 带进请求', async () => {
     vi.mocked(searchConversations).mockResolvedValue({

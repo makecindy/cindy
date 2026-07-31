@@ -102,7 +102,7 @@ describe('sessionOverview', () => {
     });
 
     expect(overview.attentionLabel).toBe('已归档');
-    expect(overview.actionCopy).toBe('会话已归档，恢复后才能继续发送。');
+    expect(overview.actionCopy).toBe('任务已归档，恢复后才能继续发送。');
     expect(overview.stateChips).toEqual([
       { id: 'status', label: '已归档', strong: true },
     ]);
