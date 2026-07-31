@@ -226,7 +226,6 @@ export function ExtraDirsButton({
               disabled={disabled}
               onClick={() => setOpen((prev) => !prev)}
               aria-expanded={open}
-              aria-haspopup="menu"
               className={cn(
                 'flex shrink-0 items-center rounded-full transition-colors',
                 // 裸态工具条(2026-07-22 用户定稿):默认无框,hover 才浮现胶囊外框。
@@ -268,6 +267,7 @@ export function ExtraDirsButton({
         <>
           <button
             type="button"
+            disabled={disabled}
             onClick={() => {
               fileInputRef.current?.click();
               setOpen(false);
@@ -275,6 +275,7 @@ export function ExtraDirsButton({
             className={cn(
               'flex w-full items-center gap-2 rounded-[8px] px-3 py-2',
               'transition-colors hover:bg-[var(--model-item-hover)]',
+              'disabled:cursor-not-allowed disabled:opacity-50',
             )}
           >
             <Paperclip size={14} className="shrink-0 text-[var(--model-item-text)]" />

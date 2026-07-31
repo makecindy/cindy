@@ -148,6 +148,7 @@ import {
 } from './pastePipeline';
 import { upgradePastedPathsToChips, type PendingPathRange } from './pathPaste';
 import { composerDocIsEmpty } from './composerDocState';
+import { canUseLocalAttachmentPicker } from './localAttachmentPicker';
 import {
   isComposerBlankPointerTarget,
   isInteractiveFocusedElement,
@@ -1069,6 +1070,12 @@ export function ChatInput({
   addFilesRef.current = addFiles;
   const addFolderPathRef = useRef(addFolderPath);
   addFolderPathRef.current = addFolderPath;
+  const localAttachmentPickerEnabled = canUseLocalAttachmentPicker({
+    sessionId,
+    runtimeAgentKind,
+    remoteHostId,
+    deviceLinkDeviceId,
+  });
 
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounterRef = useRef(0);
@@ -5223,12 +5230,13 @@ export function ChatInput({
                   // create-agent 按 Figma 使用 hug-content pills;默认会话页仍保留左侧优先压缩。
                 )}
               >
-                {/* composer 「+」菜单(权限左侧):附件入口恒有;目标、计划模式、Plugin、
-                引用目录按各自能力与接线显示。 */}
+                {/* composer 「+」菜单(权限左侧):本机会话提供附件入口;目标、计划模式、
+                Plugin、引用目录按各自能力与接线显示。远程会话不能把控制端绝对路径
+                交给远端 agent,因此不接本机文件选择器。 */}
                 <ExtraDirsButton
                   extraDirs={extraDirs ?? []}
                   workingDir={workingDir}
-                  onAddFiles={addFiles}
+                  onAddFiles={localAttachmentPickerEnabled ? addFiles : undefined}
                   planMode={planModeEntry}
                   plugins={pluginsForMenu}
                   pluginAvailableIds={pluginAvailableIds}
