@@ -122,6 +122,21 @@ describe('remarkLocalPathLinks', () => {
     expect(linkUrls(runOnText('见 src/old~.ts'))).toEqual(['src/old~.ts']);
   });
 
+  it('含空格路径的中段不动 —— 切出的后缀是错误目标', () => {
+    // 左边界不挡空格,正则会从空格后重新起匹配(review 实捉)。
+    expect(linkUrls(runOnText('日志在 C:\\Program Files\\Cindy\\app.log'))).toEqual([]);
+    expect(linkUrls(runOnText('见 /Users/me/My Folder/a.txt'))).toEqual([]);
+    // 「前片段不以扩展名收尾」不能省:空格相邻的两条真路径必须都保住。
+    expect(linkUrls(runOnText('修改了 src/a.ts src/b.ts'))).toEqual(['src/a.ts', 'src/b.ts']);
+    expect(linkUrls(runOnText('解包 dist/app.tar.gz src/b.ts'))).toEqual(['dist/app.tar.gz', 'src/b.ts']);
+    // 普通散文前缀不受影响。
+    expect(linkUrls(runOnText('对比 src/a.ts 和 src/b.ts'))).toEqual(['src/a.ts', 'src/b.ts']);
+    // 已知误伤(显式钉住):散文里紧挨着「含分隔符、无扩展名」的片段会被连坐。
+    expect(linkUrls(runOnText('见 /etc src/a.ts'))).toEqual([]);
+    // 换行不算被空格截断。
+    expect(linkUrls(runOnText('C:\\Program\n见 src/a.ts'))).toEqual(['src/a.ts']);
+  });
+
   it('右边界覆盖全部段内字符与分隔符,不切出错误前缀', () => {
     // 只排除字母数字不够:SEG 还允许 `_ ~ @ + -` 与 CJK,分隔符也会漏过去(review 实捉)。
     expect(linkUrls(runOnText('见 src/foo.ts/bar'))).toEqual([]);

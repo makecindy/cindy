@@ -472,6 +472,35 @@ const BARE_PATH_LEFT_BOUNDARY = `(?<![A-Za-z0-9._~@+${BARE_PATH_CJK}${BARE_PATH_
 const BARE_PATH_RE_SOURCE =
   `${BARE_PATH_LEFT_BOUNDARY}${BARE_PATH_NO_HOME}(${BARE_PATH_BODY}${BARE_PATH_LINE_SUFFIX})`;
 
+/**
+ * 命中是否落在**含空格路径的中段**。含空格路径本就不支持(词法要求段内无空白),从空格后
+ * 重新起匹配只会切出一个错误后缀:`C:\Program Files\Cindy\app.log` → `Files\Cindy\app.log`,
+ * join 到 workdir 后指向一个不存在的地址;而它形状上是「分隔符+扩展名」= 非歧义,断链时
+ * 还会被乐观点亮、点开错误目标(PR #1144 review 实捉)。
+ *
+ * 判据:左边是空格 / 制表符,且它前面那个连续非空白片段**含分隔符、但不以扩展名收尾**。
+ *
+ * 「不以扩展名收尾」这一条不能省 —— 只判「含分隔符」会把 `src/a.ts src/b.ts` 这种空格
+ * 相邻的两条真路径连坐掉:前一条以 `.ts` 收尾说明它自己就是一条完整路径,而不是被空格
+ * 截断的前半段。已知误伤:`见 /etc src/a.ts` 里的 `src/a.ts` 会被拒(前片段 `/etc` 含
+ * 分隔符、无扩展名)。代价是少点亮一条、文本仍可读,方向与 DESIGN.md §14.5「宁可少点亮
+ * 一个真目录,不可多点亮一片假链接」一致。
+ *
+ * 换行不算:`\n` 之后是新的一行,不是同一条被空格截断的路径。
+ */
+function startsMidSpacedPath(text: string, start: number): boolean {
+  if (start === 0) return false;
+  if (text[start - 1] !== ' ' && text[start - 1] !== '\t') return false;
+  let i = start - 1;
+  while (i >= 0 && (text[i] === ' ' || text[i] === '\t')) i -= 1;
+  if (i < 0) return false;
+  let j = i;
+  while (j >= 0 && !/\s/.test(text[j])) j -= 1;
+  const prev = text.slice(j + 1, i + 1);
+  if (!prev.includes('/') && !prev.includes('\\')) return false;
+  return !/\.[A-Za-z0-9]{1,10}$/.test(prev);
+}
+
 export interface BareFilePathMatch {
   /** 在 input 里的起始下标。 */
   index: number;
@@ -502,6 +531,8 @@ export function findBareFilePathMatch(input: string, from: number): BareFilePath
     const value = m[1];
     if (!looksLikeFilePath(splitChatPathLineSuffix(value).href)) continue;
     const index = m.index + (m[0].length - value.length);
+    // 含空格路径的中段:切出的后缀是错误目标(见 startsMidSpacedPath 的说明)。
+    if (startsMidSpacedPath(input, index)) continue;
     return { index, end: index + value.length, value };
   }
   return null;

@@ -506,6 +506,26 @@ describe('findBareFilePathMatch(正文纯文本裸路径词法)', () => {
     expect(allValues('见 src/old~.ts')).toEqual(['src/old~.ts']);
   });
 
+  it('含空格路径的中段不识别 —— 切出的后缀是错误目标', () => {
+    // 含空格路径本就不支持(段内不许有空白),但左边界不挡空格,正则会从空格后重新起
+    // 匹配,切出一个错误后缀 join 到 workdir 上;它形状是「分隔符+扩展名」= 非歧义,
+    // 断链时还会被乐观点亮、点开错误目标(PR #1144 review 实捉)。
+    expect(allValues('日志在 C:\\Program Files\\Cindy\\app.log')).toEqual([]);
+    expect(allValues('见 /Users/me/My Folder/a.txt')).toEqual([]);
+    // 「前片段不以扩展名收尾」这一条不能省:空格相邻的两条真路径必须都保住 ——
+    // 前一条以 .ts 收尾说明它自己就是完整路径,不是被空格截断的前半段。
+    expect(allValues('修改了 src/a.ts src/b.ts')).toEqual(['src/a.ts', 'src/b.ts']);
+    expect(allValues('解包 dist/app.tar.gz src/b.ts')).toEqual(['dist/app.tar.gz', 'src/b.ts']);
+    // 普通散文前缀不受影响(不含分隔符)。
+    expect(allValues('对比 src/a.ts 和 src/b.ts')).toEqual(['src/a.ts', 'src/b.ts']);
+    expect(allValues('见 src/App.tsx')).toEqual(['src/App.tsx']);
+    // 已知误伤,写成显式用例:散文里紧挨着一个「含分隔符、无扩展名」的片段时会被连坐。
+    // 代价是少点亮一条、文本仍可读(§14.5:宁可少点亮一个真目录,不可多点亮一片假链接)。
+    expect(allValues('见 /etc src/a.ts')).toEqual([]);
+    // 换行不算被空格截断:下一行的路径照常识别。
+    expect(allValues('C:\\Program\n见 src/a.ts')).toEqual(['src/a.ts']);
+  });
+
   it('右边界覆盖全部段内字符与分隔符,不切出错误前缀', () => {
     // 只排除字母数字不够:SEG 还允许 `_ ~ @ + -` 与 CJK,分隔符也会漏过去。切出的前缀
     // 形状上是「分隔符+扩展名」= 非歧义,断链时会被点亮、点开错误地址,后半段还留成
