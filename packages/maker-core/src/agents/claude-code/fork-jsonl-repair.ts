@@ -298,7 +298,11 @@ function backupTimestamp(): string {
   return new Date().toISOString().replace(/[-:.]/g, '').replace('T', '-').replace('Z', '');
 }
 
-async function createJsonlBackup(filePath: string, original: string): Promise<string> {
+/**
+ * 为会话 jsonl 创建 `.bak.<timestamp>` 备份(写不进就换个后缀重试)。
+ * fork 修复与 jsonl-tool-id-normalize 共用同一份备份语义。
+ */
+export async function createClaudeJsonlBackup(filePath: string, original: string): Promise<string> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const suffix = `${backupTimestamp()}${attempt === 0 ? '' : `-${attempt}`}`;
     const backupPath = `${filePath}.bak.${suffix}`;
@@ -326,7 +330,7 @@ export async function repairForkedClaudeSessionJsonl(
   let backupPath: string | undefined;
 
   if (repaired.changed) {
-    backupPath = await createJsonlBackup(filePath, original);
+    backupPath = await createClaudeJsonlBackup(filePath, original);
     await fs.writeFile(filePath, repaired.text, 'utf8');
   }
 

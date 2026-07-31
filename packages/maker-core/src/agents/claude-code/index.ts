@@ -120,6 +120,8 @@ import {
 } from '../credential-mode.js';
 import { repairForkedClaudeSessionJsonl, type RepairForkedClaudeJsonlResult } from './fork-jsonl-repair.js';
 import { ensureClaudeTranscriptInWorkingDir } from './transcript-relocation.js';
+import { findClaudeSessionJsonl } from './claude-projects-fs.js';
+import { normalizeClaudeSessionJsonlToolIds } from './jsonl-tool-id-normalize.js';
 import { isClaudeResumeSessionNotFound } from './invalid-resume.js';
 import { translateSdkMessage, newRuntimeState, type TurnState, type RuntimeState } from './translator.js';
 import type { Effort, PermissionMode } from '../../types/common.js';
@@ -2643,7 +2645,34 @@ export class ClaudeCodeAgent extends BaseAgent {
               resumeSdkSid,
               workingDir: opts.workingDir,
             });
-          } else if (outcome === 'missing') {
+          }
+          // kimi 系 tool_call id 归一化: moonshot 按可见历史铸造 `${name}_${index}`
+          // id, rewind/中断造成的可见数回落会让新铸 id 与历史撞车, CLI 的
+          // ensureToolResultPairing 随即将重复 id 的 tool exchange 整段丢弃并以
+          // "(no content)" 占位 user 消息 —— 模型看到"自己的工具调用被阻止 +
+          // 用户连发空消息"进入空转(2026-07-31 kimi-k3 实测)。转录就位后、spawn
+          // 前做一次幂等归一化(重复 id 去重 + 数字后缀移出铸造空间), 纯 Anthropic
+          // 会话预扫不命中、零解析开销。详见 jsonl-tool-id-normalize.ts 头注。
+          if ((outcome === 'in-place' || outcome === 'restored') && resumeSdkSid) {
+            const transcriptFile = await findClaudeSessionJsonl(
+              resumeSdkSid,
+              opts.workingDir,
+              path.join(claudeConfigDir, 'projects'),
+            );
+            if (transcriptFile) {
+              const normalized = await normalizeClaudeSessionJsonlToolIds(transcriptFile);
+              if (normalized.changed) {
+                log.info('resume transcript tool ids normalized', {
+                  resumeSdkSid,
+                  dedupedBlocks: normalized.dedupedBlockCount,
+                  offsetBlocks: normalized.offsetBlockCount,
+                  duplicateIds: normalized.duplicateIdCount,
+                  backupPath: normalized.backupPath,
+                });
+              }
+            }
+          }
+          if (outcome === 'missing') {
             const cleared = await clearInvalidResumeSession(resumeSdkSid, 'transcript_preflight');
             if (cleared) {
               // 本地 CLI 没有转录就不可能恢复。spawn 前转 fresh，当前用户消息尚未
