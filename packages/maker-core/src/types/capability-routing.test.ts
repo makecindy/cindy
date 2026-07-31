@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  capabilitySelectionAddedByPlanEdit,
   findCapabilityRouteOverride,
   findClaudeMcpCapabilityRoute,
   isCapabilitySourceExplicitlySelected,
@@ -124,5 +125,33 @@ describe('capability route resolution', () => {
     expect(
       findClaudeMcpCapabilityRoute(policy, 'mcp__other__read'),
     ).toBeUndefined();
+  });
+
+  it('accepts only selectors newly introduced by a user plan edit', () => {
+    const policy = { overrides: [route] } satisfies CapabilityRoutingPolicy;
+    expect(
+      capabilitySelectionAddedByPlanEdit(
+        policy,
+        'codex',
+        '1. 查询消息',
+        '1. 用 $feishu-delegate:message-feishu-coworkers 查询消息',
+      ),
+    ).toBe('$feishu-delegate:message-feishu-coworkers');
+    expect(
+      capabilitySelectionAddedByPlanEdit(
+        policy,
+        'codex',
+        '1. 用 $feishu-delegate:message-feishu-coworkers 查询消息',
+        '1. 用 $feishu-delegate:message-feishu-coworkers 查询最近消息',
+      ),
+    ).toBe('');
+    expect(
+      capabilitySelectionAddedByPlanEdit(
+        policy,
+        'codex',
+        '1. 用 $feishu-delegate:message-feishu-coworkers 查询消息',
+        '1. 改用 /feishu-delegate:message-feishu-coworkers 查询消息',
+      ),
+    ).toBe('/feishu-delegate:message-feishu-coworkers');
   });
 });

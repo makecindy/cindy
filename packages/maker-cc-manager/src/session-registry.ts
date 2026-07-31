@@ -335,6 +335,12 @@ export class SessionRegistry {
 
     // sessionRef is captured by the canUseTool closure (called later, after session is assigned).
     let sessionRef: SessionState | null = null;
+    const appendToolGuardSelectionText = (text: string | undefined): void => {
+      if (!sessionRef || !text) return;
+      sessionRef.toolGuardSelectionText = [sessionRef.toolGuardSelectionText, text]
+        .filter(Boolean)
+        .join('\n');
+    };
 
     // Build canUseTool callback that routes approval requests to attached client via RPC.
     const canUseTool: CanUseToolCallback | undefined = this.onApprovalRequest
@@ -372,10 +378,21 @@ export class SessionRegistry {
               };
             }
             if (result.kind === 'plan_review') {
+              const originalPlan = typeof (input as Record<string, unknown>).plan === 'string'
+                ? (input as Record<string, unknown>).plan as string
+                : '';
               if (result.behavior === 'deny') {
+                if (!result.dismissed) appendToolGuardSelectionText(result.reason);
                 return { behavior: 'deny', message: result.reason ?? 'plan rejected by user' };
               }
-              const finalPlan = result.editedPlan ?? (input as Record<string, unknown>).plan;
+              appendToolGuardSelectionText(
+                toolGuardSelectionAddedByPlanEdit(
+                  opts.toolGuards,
+                  originalPlan,
+                  result.editedPlan,
+                ),
+              );
+              const finalPlan = result.editedPlan ?? originalPlan;
               return { behavior: 'allow', updatedInput: { ...input, plan: finalPlan } };
             }
             // permission kind
@@ -1000,6 +1017,28 @@ function matchesExplicitSelector(text: string, selector: string): boolean {
     ).test(text);
   }
   return false;
+}
+
+function toolGuardSelectionAddedByPlanEdit(
+  toolGuards: readonly QueryToolGuard[] | undefined,
+  originalPlan: string,
+  editedPlan: string | undefined,
+): string {
+  if (editedPlan === undefined || editedPlan === originalPlan) return '';
+  const added = new Set<string>();
+  for (const guard of toolGuards ?? []) {
+    if (guard.invocation !== 'explicit-only') continue;
+    const selectors = guard.explicitSelectors ?? [];
+    for (const selector of selectors) {
+      if (
+        !matchesExplicitSelector(originalPlan, selector) &&
+        matchesExplicitSelector(editedPlan, selector)
+      ) {
+        added.add(selector.trim());
+      }
+    }
+  }
+  return [...added].filter(Boolean).join('\n');
 }
 
 const EMPTY_MCP_SERVER_NAMES: ReadonlySet<string> = new Set();

@@ -776,18 +776,44 @@ describe('CodexAgent capability routing', () => {
     await explicitHandle.close();
   });
 
-  it('keeps explicit capability selection across internal plan follow-up turns', async () => {
+  it('merges inherited and newly added capability selectors into plan follow-up turns', async () => {
     const cases = [
       {
-        label: 'implementation',
+        label: 'inherited-implementation',
+        initialPrompt: '用 $feishu-delegate:message-feishu-coworkers 制定查询计划',
+        plan: '1. 查询消息',
         decision: { kind: 'plan_review', behavior: 'allow' } as const,
       },
       {
-        label: 'revision',
+        label: 'inherited-revision',
+        initialPrompt: '用 $feishu-delegate:message-feishu-coworkers 制定查询计划',
+        plan: '1. 查询消息',
         decision: {
           kind: 'plan_review',
           behavior: 'deny',
           reason: '再补充消息范围',
+        } as const,
+      },
+      {
+        label: 'edited-implementation',
+        initialPrompt: '制定一个查询消息的计划',
+        plan: '1. 查询消息',
+        decision: {
+          kind: 'plan_review',
+          behavior: 'allow',
+          editedPlan:
+            '1. 用 $feishu-delegate:message-feishu-coworkers 查询消息',
+        } as const,
+      },
+      {
+        label: 'feedback-revision',
+        initialPrompt: '制定一个查询消息的计划',
+        plan: '1. 查询消息',
+        decision: {
+          kind: 'plan_review',
+          behavior: 'deny',
+          reason:
+            '请改用 $feishu-delegate:message-feishu-coworkers 并补充消息范围',
         } as const,
       },
     ];
@@ -823,7 +849,7 @@ describe('CodexAgent capability routing', () => {
       handle.setInteractionResolver(async () => testCase.decision);
       await handle.send({
         type: 'user',
-        content: '用 $feishu-delegate:message-feishu-coworkers 制定查询计划',
+        content: testCase.initialPrompt,
       });
 
       const handlers = host.getThreadHandlers();
@@ -835,7 +861,7 @@ describe('CodexAgent capability routing', () => {
       handlers.itemCompleted?.({
         threadId: 'start-thread-id',
         turnId: planTurnId,
-        item: { type: 'plan', id: `${planTurnId}-plan`, text: '1. 查询消息' },
+        item: { type: 'plan', id: `${planTurnId}-plan`, text: testCase.plan },
       } as never);
       handlers.turnCompleted?.({
         threadId: 'start-thread-id',

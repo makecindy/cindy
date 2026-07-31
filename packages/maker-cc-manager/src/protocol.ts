@@ -384,6 +384,8 @@ export interface ApprovalRequestResult {
   answers?: Record<string, string>;
   /** For 'plan_review': edited plan text. */
   editedPlan?: string;
+  /** System dismissal rather than user-authored plan feedback. */
+  dismissed?: boolean;
 }
 
 /* ============================== Notification shapes ============================== */

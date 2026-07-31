@@ -158,6 +158,39 @@ export function isCapabilityRouteInvocationAllowed(
   }
 }
 
+/**
+ * Return only selectors that a user newly introduced while editing a
+ * model-authored plan. Copying the full edited plan into selection state would
+ * let a selector already written by the model become an explicit user choice
+ * when the user merely approves or edits an unrelated line.
+ */
+export function capabilitySelectionAddedByPlanEdit(
+  policy: CapabilityRoutingPolicy | undefined,
+  harness: string,
+  originalPlan: string,
+  editedPlan: string | undefined,
+): string {
+  if (editedPlan === undefined || editedPlan === originalPlan) return '';
+  const added = new Set<string>();
+  for (const directive of policy?.overrides ?? []) {
+    if (
+      directive.invocation !== 'explicit-only' ||
+      directive.source.harness !== harness
+    ) {
+      continue;
+    }
+    for (const selector of directive.explicitSelectors ?? []) {
+      if (
+        !matchesExplicitSelector(originalPlan, selector) &&
+        matchesExplicitSelector(editedPlan, selector)
+      ) {
+        added.add(selector.trim());
+      }
+    }
+  }
+  return [...added].filter(Boolean).join('\n');
+}
+
 export function findClaudeMcpCapabilityRoute(
   policy: CapabilityRoutingPolicy | undefined,
   toolName: string,

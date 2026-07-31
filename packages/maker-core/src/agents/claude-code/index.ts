@@ -79,6 +79,7 @@ import type {
 import { isTerminalAgentErrorEvent } from '../../types/events.js';
 import type { UserMessage } from '../../types/common.js';
 import {
+  capabilitySelectionAddedByPlanEdit,
   findClaudeMcpCapabilityRoute,
   isCapabilityRouteInvocationAllowed,
 } from '../../types/capability-routing.js';
@@ -1178,6 +1179,12 @@ export class ClaudeCodeAgent extends BaseAgent {
     // which do not call handle.send again. The next explicit send replaces it.
     let activeTurnPermissionPolicy: TurnPermissionPolicy | null = null;
     let activeCapabilitySelectionText = '';
+    const appendActiveCapabilitySelectionText = (text: string | undefined): void => {
+      if (!text) return;
+      activeCapabilitySelectionText = [activeCapabilitySelectionText, text]
+        .filter(Boolean)
+        .join('\n');
+    };
     const localClaudeHooks = mergeClaudeHookSets(
       buildClaudeLocalToolGuardHooks(
         this.deps.capabilityRouting,
@@ -1440,8 +1447,19 @@ export class ClaudeCodeAgent extends BaseAgent {
           return { behavior: 'deny', message: 'resolver kind mismatch' };
         }
         if (decision.behavior === 'deny') {
+          if (!decision.dismissed) {
+            appendActiveCapabilitySelectionText(decision.reason);
+          }
           return { behavior: 'deny', message: decision.reason ?? 'plan rejected by user' };
         }
+        appendActiveCapabilitySelectionText(
+          capabilitySelectionAddedByPlanEdit(
+            this.deps.capabilityRouting,
+            'claude-code',
+            plan,
+            decision.editedPlan,
+          ),
+        );
         // 计划批准 → 本轮 plan 循环结束: SDK 切回底层权限档。武装态正常已在 send
         // 消耗(plan_mode_changed 已广播), 这里兜底处理"未经 send 直接批准"的路径。
         // 不能在 canUseTool 里 await SDK 控制请求(SDK 正等本回调返回),
@@ -2253,20 +2271,34 @@ export class ClaudeCodeAgent extends BaseAgent {
             }
             if (params.kind === 'plan_review') {
               const planInput = (params.input ?? {}) as { plan?: string; planFilePath?: string };
+              const plan = params.plan ?? planInput.plan ?? '';
               const decision = await dispatchWithTimeout({
                 kind: 'plan_review',
                 requestId: params.requestId,
-                plan: params.plan ?? planInput.plan ?? '',
+                plan,
                 planFilePath: params.planFilePath ?? planInput.planFilePath,
               });
               if (decision.kind !== 'plan_review') {
                 return { kind: 'plan_review', behavior: 'deny', reason: 'resolver kind mismatch' };
+              }
+              if (decision.behavior === 'allow') {
+                appendActiveCapabilitySelectionText(
+                  capabilitySelectionAddedByPlanEdit(
+                    this.deps.capabilityRouting,
+                    'claude-code',
+                    plan,
+                    decision.editedPlan,
+                  ),
+                );
+              } else if (!decision.dismissed) {
+                appendActiveCapabilitySelectionText(decision.reason);
               }
               return {
                 kind: 'plan_review',
                 behavior: decision.behavior,
                 editedPlan: decision.editedPlan,
                 reason: decision.reason,
+                dismissed: decision.dismissed,
               };
             }
             // permission kind
@@ -3898,12 +3930,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           // received it.
           throw new Error('No active Claude turn to steer: input queue is closed');
         }
-        activeCapabilitySelectionText = [
-          activeCapabilitySelectionText,
+        appendActiveCapabilitySelectionText(
           userMessageTextForCapabilityRouting(message.content),
-        ]
-          .filter(Boolean)
-          .join('\n');
+        );
         armUpstreamResponseIdle();
       },
 

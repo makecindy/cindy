@@ -301,6 +301,98 @@ describe('SessionRegistry', () => {
     ).resolves.toEqual({ continue: true });
   });
 
+  it('merges plan-review edits and user feedback into remote guard selection', async () => {
+    const cases = [
+      {
+        label: 'edited-plan',
+        expectedGuardResult: { continue: true },
+        decision: {
+          kind: 'plan_review' as const,
+          behavior: 'allow' as const,
+          editedPlan: '1. use $plugin:guard',
+        },
+      },
+      {
+        label: 'revision-feedback',
+        expectedGuardResult: { continue: true },
+        decision: {
+          kind: 'plan_review' as const,
+          behavior: 'deny' as const,
+          reason: 'please use $plugin:guard instead',
+        },
+      },
+      {
+        label: 'system-dismissal',
+        expectedGuardResult: {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+          },
+        },
+        decision: {
+          kind: 'plan_review' as const,
+          behavior: 'deny' as const,
+          reason: 'system dismissed $plugin:guard',
+          dismissed: true,
+        },
+      },
+    ];
+
+    for (const testCase of cases) {
+      const { factory: baseFactory } = buildFakeFactory();
+      let captured: SdkQueryFactoryOptions | undefined;
+      const registry = new SessionRegistry({
+        sdkQueryFactory: (opts) => {
+          captured = opts;
+          return baseFactory(opts);
+        },
+        onApprovalRequest: async (_sessionId, request) =>
+          request.kind === 'plan_review'
+            ? testCase.decision
+            : { kind: 'permission', behavior: 'allow' },
+      });
+      const events: Array<{ kind: string; payload: unknown }> = [];
+      const sessionId = `s-plan-${testCase.label}`;
+      registry.create({
+        sessionId,
+        cwd: '/x',
+        model: 'm',
+        env: {},
+        toolGuards: [
+          {
+            toolNamePrefix: 'mcp__plugin_guard__',
+            invocation: 'explicit-only',
+            explicitSelectors: ['$plugin:guard'],
+          },
+        ],
+      });
+      registry.attach(sessionId, (kind, payload) =>
+        events.push({ kind, payload }),
+      );
+      await waitFor(() => events.length >= 1);
+      registry.sendMessage(sessionId, {
+        type: 'user',
+        message: { role: 'user', content: 'make a plan' },
+      });
+
+      const canUseTool = captured?.canUseTool;
+      const preToolUse = captured?.hooks?.PreToolUse?.[0]?.hooks[0];
+      expect(canUseTool).toBeDefined();
+      expect(preToolUse).toBeDefined();
+      await canUseTool!(
+        'ExitPlanMode',
+        { plan: '1. call the capability' },
+        { toolUseID: `plan-${testCase.label}` },
+      );
+      await expect(
+        preToolUse!({
+          hook_event_name: 'PreToolUse',
+          tool_name: 'mcp__plugin_guard__call',
+        }),
+      ).resolves.toMatchObject(testCase.expectedGuardResult);
+    }
+  });
+
   it('does not guard a settings MCP that collides with a normalized plugin prefix', async () => {
     let captured: SdkQueryFactoryOptions | undefined;
     const factory: SdkQueryFactory = (opts) => {

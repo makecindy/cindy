@@ -980,7 +980,15 @@ describe('remote sessions share the same permission semantics', () => {
     const options = {
       capabilityRouting,
       permissionMode: 'bypassPermissions' as const,
-      attachResolver: () => ({ kind: 'permission' as const, behavior: 'allow' as const }),
+      attachResolver: (request: InteractionRequest): InteractionDecision =>
+        request.kind === 'plan_review'
+          ? {
+              kind: 'plan_review',
+              behavior: 'allow',
+              editedPlan:
+                '1. /feishu-delegate:message-feishu-coworkers 查询消息',
+            }
+          : { kind: 'permission', behavior: 'allow' },
     };
 
     const natural = await startRemoteSession(() => 'auto-approve', options);
@@ -1011,6 +1019,25 @@ describe('remote sessions share the same permission semantics', () => {
         input: {},
       }),
     ).resolves.toMatchObject({ behavior: 'deny' });
+    await expect(
+      natural.onApprovalRequest({
+        requestId: 'r-plan-feishu',
+        kind: 'plan_review',
+        plan: '1. 查询飞书消息',
+      }),
+    ).resolves.toMatchObject({
+      behavior: 'allow',
+      editedPlan:
+        '1. /feishu-delegate:message-feishu-coworkers 查询消息',
+    });
+    await expect(
+      natural.onApprovalRequest({
+        requestId: 'r-edited-plan-feishu',
+        kind: 'permission',
+        toolName: 'mcp__plugin_feishu-delegate_feishu-delegate__feishu_read_messages',
+        input: {},
+      }),
+    ).resolves.toMatchObject({ behavior: 'allow' });
     // Defense-in-depth: if the SDK does request approval despite bypass mode,
     // unrelated tools still preserve Full access behavior.
     await expect(
@@ -1022,6 +1049,35 @@ describe('remote sessions share the same permission semantics', () => {
       }),
     ).resolves.toMatchObject({ behavior: 'allow' });
     await natural.handle.close();
+
+    const dismissed = await startRemoteSession(() => 'auto-approve', {
+      ...options,
+      attachResolver: (request): InteractionDecision =>
+        request.kind === 'plan_review'
+          ? {
+              kind: 'plan_review',
+              behavior: 'deny',
+              reason:
+                'system dismissed /feishu-delegate:message-feishu-coworkers',
+              dismissed: true,
+            }
+          : { kind: 'permission', behavior: 'allow' },
+    });
+    await dismissed.handle.send({ type: 'user', content: '查一下飞书消息' });
+    await dismissed.onApprovalRequest({
+      requestId: 'r-dismissed-plan-feishu',
+      kind: 'plan_review',
+      plan: '1. 查询飞书消息',
+    });
+    await expect(
+      dismissed.onApprovalRequest({
+        requestId: 'r-after-dismissed-plan-feishu',
+        kind: 'permission',
+        toolName: 'mcp__plugin_feishu-delegate_feishu-delegate__feishu_read_messages',
+        input: {},
+      }),
+    ).resolves.toMatchObject({ behavior: 'deny' });
+    await dismissed.handle.close();
 
     const explicit = await startRemoteSession(() => 'auto-approve', options);
     await explicit.handle.send({

@@ -73,6 +73,7 @@ import type {
   ConsumeAccountRateLimitResetCreditResponse,
 } from '../../types/account-rate-limits.js';
 import {
+  capabilitySelectionAddedByPlanEdit,
   findCapabilityRouteOverride,
   isCapabilityRouteInvocationAllowed,
 } from '../../types/capability-routing.js';
@@ -2844,8 +2845,9 @@ export class CodexAgent extends BaseAgent {
       : credentialMode ?? this.hostEffectiveCredentialModes.get(currentHostKey);
     const approvalsReviewerProtocolSupported =
       supportsCodexApprovalsReviewerProtocol(initResp.userAgent);
+    const capabilityRoutingPolicy = this.deps.capabilityRouting;
     const capabilityRoutingConfig = buildCodexCapabilityConfigOverrides(
-      this.deps.capabilityRouting,
+      capabilityRoutingPolicy,
       {
         // Remote Codex uses its own isolated CODEX_HOME. Cindy currently
         // prepares provenance-preserving plugin overlays only in the local
@@ -3825,11 +3827,18 @@ export class CodexAgent extends BaseAgent {
     ): Promise<void> {
       planReviewSeq += 1;
       const requestId = `codex-plan-review:${turnId}:${planReviewSeq}`;
-      const planFollowUpSendOptions = (): CodexInternalSendOptions => ({
+      const planFollowUpSendOptions = (
+        additionalSelectionText = '',
+      ): CodexInternalSendOptions => ({
         ...(activeTurnPermissionPolicy
           ? { turnPermissionPolicy: activeTurnPermissionPolicy }
           : {}),
-        [CODEX_INHERITED_CAPABILITY_SELECTION]: inheritedCapabilitySelectionText,
+        [CODEX_INHERITED_CAPABILITY_SELECTION]: [
+          inheritedCapabilitySelectionText,
+          additionalSelectionText,
+        ]
+          .filter(Boolean)
+          .join('\n'),
       });
       const emitPlanFollowUpStartFailure = (kind: 'implementation' | 'revision', error: unknown): void => {
         log.warn(`plan ${kind} turn failed to start`, { error: String(error) });
@@ -3866,11 +3875,17 @@ export class CodexAgent extends BaseAgent {
         const message = edited && edited !== plan.trim()
           ? `${PLAN_IMPLEMENTATION_MESSAGE} Follow this revised plan:\n\n${edited}`
           : PLAN_IMPLEMENTATION_MESSAGE;
+        const addedCapabilitySelection = capabilitySelectionAddedByPlanEdit(
+          capabilityRoutingPolicy,
+          'codex',
+          plan,
+          decision.editedPlan,
+        );
         log.debug('plan review ◀ approved — starting implementation turn', { turnId, edited: Boolean(edited && edited !== plan.trim()) });
         try {
           await handle.send(
             { type: 'user', content: message },
-            planFollowUpSendOptions(),
+            planFollowUpSendOptions(addedCapabilitySelection),
           );
         } catch (e) {
           emitPlanFollowUpStartFailure('implementation', e);
@@ -3895,7 +3910,7 @@ export class CodexAgent extends BaseAgent {
       try {
         await handle.send(
           { type: 'user', content: feedback },
-          planFollowUpSendOptions(),
+          planFollowUpSendOptions(feedback),
         );
       } catch (e) {
         planCycleActive = false;
