@@ -7,6 +7,7 @@ import { ContactsSyncWireDecoder, encodeContactsSyncMessage } from '../wire.js';
 
 interface LanTransportInternals {
   endpoints: Map<string, { address: string; port: number; publicKey: string; seenAt: number }>;
+  directRetryAfter: Map<string, number>;
   tcpServer: net.Server | null;
   handleConnection(socket: Socket): void;
 }
@@ -94,7 +95,9 @@ describe('contacts sync LAN transport', () => {
 
     // 攻击者重放 B 的公开 beacon 后可以接住 TCP，但拿不到 B 的 X25519 私钥，
     // 因而无法返回认证 ACK；发送方必须报告 false，让上层继续走 relay。
+    let impostorConnections = 0;
     const impostor = net.createServer((socket) => {
+      impostorConnections += 1;
       socket.once('data', (bytes) => socket.end(bytes));
     });
     servers.push(impostor);
@@ -113,7 +116,21 @@ describe('contacts sync LAN transport', () => {
       seenAt: Date.now(),
     });
     expect(await a.send('device-b', frame!)).toBe(false);
+    expect(impostorConnections).toBe(1);
 
+    // 攻击者即使立即重放同一合法设备的公开 beacon，冷却期内也不能让后续
+    // 分片再次连接伪端点；send() 必须立即返回 false 让上层走 relay。
+    aInternals.endpoints.set('device-b', {
+      address: '127.0.0.1',
+      port: impostorAddress.port,
+      publicKey: bIdentity.publicKey,
+      seenAt: Date.now(),
+    });
+    expect(await a.send('device-b', frame!)).toBe(false);
+    expect(impostorConnections).toBe(1);
+
+    // 冷却结束后合法设备仍可恢复直连。
+    aInternals.directRetryAfter.set('device-b', Date.now() - 1);
     aInternals.endpoints.set('device-b', {
       address: '127.0.0.1',
       port: address.port,

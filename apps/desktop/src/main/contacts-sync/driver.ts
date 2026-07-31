@@ -69,6 +69,7 @@ let initialized = false;
 let unsubscribeLocalChanges: (() => void) | null = null;
 let runtimeGeneration = 0;
 const announcedTo = new Map<string, number>();
+const respondedToKeyAnnouncement = new Map<string, number>();
 const statusListeners = new Set<(status: ContactsDeviceSyncStatus) => void>();
 let liveStatus: ContactsDeviceSyncStatus = emptyContactsDeviceSyncStatus();
 /** undefined 强制首次 init/get 按当前 owner 装载，避免模块求值期提前碰 userData。 */
@@ -117,6 +118,7 @@ export function stopContactsDeviceSyncRuntime(): void {
   lan = null;
   decoder.reset();
   announcedTo.clear();
+  respondedToKeyAnnouncement.clear();
   peerKnownClocks.clear();
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = null;
@@ -254,6 +256,7 @@ export function handleContactsPeerPresenceChanged(peer: {
 }): void {
   if (!peer.online) {
     announcedTo.delete(peer.deviceId);
+    respondedToKeyAnnouncement.delete(peer.deviceId);
     peerKnownClocks.delete(peer.deviceId);
   }
   refreshOnlineCount();
@@ -274,7 +277,7 @@ export function handleIncomingContactsRelayFrame(srcDeviceId: string, raw: unkno
     prepareAndRun(() => {
       const firstSeen = contactsSyncKeyStore.pinPeerPublicKey(srcDeviceId, raw.publicKey);
       if (firstSeen) log.info(`pinned contacts sync peer ${shortId(srcDeviceId)}`);
-      announceKey(srcDeviceId);
+      respondToKey(srcDeviceId);
       startLan();
       runSyncTask(() => outbound.send(srcDeviceId, true));
     });
@@ -328,9 +331,24 @@ function announceKey(deviceId: string): void {
   const now = Date.now();
   const lastAnnouncedAt = announcedTo.get(deviceId);
   if (lastAnnouncedAt !== undefined && now - lastAnnouncedAt < KEY_ANNOUNCEMENT_RETRY_MS) return;
+  sendKeyAnnouncement(deviceId, now);
+}
+
+/** 入站 key 的握手响应独立节流，不能被此前主动公告占掉；否则连续开启两台设备会卡住。 */
+function respondToKey(deviceId: string): void {
+  if (!transport || !transport.isPeerAllowed(deviceId)) return;
+  const now = Date.now();
+  const lastRespondedAt = respondedToKeyAnnouncement.get(deviceId);
+  if (lastRespondedAt !== undefined && now - lastRespondedAt < KEY_ANNOUNCEMENT_RETRY_MS) return;
+  sendKeyAnnouncement(deviceId, now);
+  respondedToKeyAnnouncement.set(deviceId, now);
+}
+
+function sendKeyAnnouncement(deviceId: string, announcedAt: number): void {
+  if (!transport || !transport.isPeerAllowed(deviceId)) return;
   const identity = contactsSyncKeyStore.getIdentity();
   transport.sendRelayFrame(deviceId, createContactsSyncKeyFrame(identity.publicKey));
-  announcedTo.set(deviceId, now);
+  announcedTo.set(deviceId, announcedAt);
 }
 
 function prepareLocalSync(): void {
@@ -503,6 +521,7 @@ function ensureCurrentOwnerStatus(): void {
   lan = null;
   decoder.reset();
   announcedTo.clear();
+  respondedToKeyAnnouncement.clear();
   peerKnownClocks.clear();
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = null;

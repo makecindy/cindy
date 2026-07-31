@@ -26,6 +26,7 @@ const MULTICAST_PORT = 53546;
 const BEACON_INTERVAL_MS = 5_000;
 const ENDPOINT_TTL_MS = 15_000;
 const CONNECT_TIMEOUT_MS = 1_500;
+const DIRECT_RETRY_COOLDOWN_MS = 60_000;
 const MAX_PACKET_BYTES = 512 * 1024;
 const MAX_CONCURRENT_CONNECTIONS = 32;
 const MAGIC = 'cindy-contacts-sync';
@@ -82,6 +83,8 @@ export class LanContactsSyncTransport {
   private beaconTimer: NodeJS.Timeout | null = null;
   private tcpPort: number | null = null;
   private readonly endpoints = new Map<string, PeerEndpoint>();
+  /** 未认证候选端点失败后按设备退避，避免伪信标让每个分片都付一次 TCP 超时。 */
+  private readonly directRetryAfter = new Map<string, number>();
   private readonly activeSockets = new Set<Socket>();
   private generation = 0;
 
@@ -132,6 +135,7 @@ export class LanContactsSyncTransport {
     this.activeSockets.clear();
     this.tcpPort = null;
     this.endpoints.clear();
+    this.directRetryAfter.clear();
   }
 
   /**
@@ -140,11 +144,17 @@ export class LanContactsSyncTransport {
    */
   async send(deviceId: string, frame: ContactsSyncCipherChunkFrame): Promise<boolean> {
     const self = this.options.getSelf();
+    const now = Date.now();
+    const retryAfter = this.directRetryAfter.get(deviceId);
+    if (retryAfter !== undefined) {
+      if (retryAfter > now) return false;
+      this.directRetryAfter.delete(deviceId);
+    }
     const endpoint = this.endpoints.get(deviceId);
     if (
       !self ||
       !endpoint ||
-      Date.now() - endpoint.seenAt > ENDPOINT_TTL_MS ||
+      now - endpoint.seenAt > ENDPOINT_TTL_MS ||
       !this.options.isPeerAllowed(deviceId, endpoint.publicKey)
     ) {
       if (endpoint) this.endpoints.delete(deviceId);
@@ -175,7 +185,12 @@ export class LanContactsSyncTransport {
         settled = true;
         clearTimeout(timer);
         socket.destroy();
-        if (!sent) this.endpoints.delete(deviceId);
+        if (!sent) {
+          this.endpoints.delete(deviceId);
+          this.directRetryAfter.set(deviceId, Date.now() + DIRECT_RETRY_COOLDOWN_MS);
+        } else {
+          this.directRetryAfter.delete(deviceId);
+        }
         resolve(sent);
       };
       const socket = net.createConnection({ host: endpoint.address, port: endpoint.port });
@@ -294,6 +309,11 @@ export class LanContactsSyncTransport {
     const self = this.options.getSelf();
     if (!self || parsed.deviceId === self.deviceId) return;
     if (!this.options.isPeerAllowed(parsed.deviceId, parsed.publicKey)) return;
+    const retryAfter = this.directRetryAfter.get(parsed.deviceId);
+    if (retryAfter !== undefined) {
+      if (retryAfter > Date.now()) return;
+      this.directRetryAfter.delete(parsed.deviceId);
+    }
     this.endpoints.set(parsed.deviceId, {
       address: normalizeRemoteAddress(remote.address),
       port: parsed.port,

@@ -262,6 +262,45 @@ describe("contacts device sync", () => {
     expect(b.getContact(person.id).relations[0]?.note).toBe(note);
   });
 
+  it("同步接受本地未设长度上限的身份、事件与分组文本", () => {
+    const a = createStore();
+    const b = createStore();
+    const label = "标".repeat(1_001);
+    const identityNote = "注".repeat(10_001);
+    const eventSource = "源".repeat(1_001);
+    const groupDescription = "组".repeat(16_385);
+    const person = a.createContact({
+      kind: "person",
+      displayName: "长字段成员",
+      identities: [
+        {
+          platform: "email",
+          value: "long-fields@example.com",
+          label,
+          note: identityNote,
+        },
+      ],
+    });
+    a.appendEvent(person.id, {
+      date: "2026-07-31",
+      text: "长来源事件",
+      source: eventSource,
+    });
+    const group = a.createGroup("长描述组", groupDescription);
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+
+    expect(isValidContactsSyncState(stateOf(a))).toBe(true);
+    exchange(b, a);
+    const synced = b.getContact(person.id);
+    expect(synced.identities[0]).toMatchObject({ label, note: identityNote });
+    expect(synced.events[0]?.source).toBe(eventSource);
+    expect(
+      b.listGroups().find((candidate) => candidate.id === group.id)
+        ?.description,
+    ).toBe(groupDescription);
+  });
+
   it("首次激活会纳入已有数据，之后能补记未经过 facade 的崩溃窗口写入", () => {
     const store = createStore();
     const person = store.createContact({

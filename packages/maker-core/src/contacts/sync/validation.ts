@@ -40,6 +40,14 @@ function isUtf8String(value: unknown, maxBytes: number): value is string {
   );
 }
 
+/**
+ * 这些 SQLite 文本列的本地写入契约没有长度上限；同步层只能校验类型，不能
+ * 自行收紧合法域。传输层仍以整包解压上限约束来自设备的数据总量。
+ */
+function isUnboundedLocalText(value: unknown): value is string {
+  return typeof value === "string";
+}
+
 function isId(value: unknown): value is string {
   return isString(value, MAX_ID_LENGTH, false) && !value.includes("\u0000");
 }
@@ -161,8 +169,8 @@ function isIdentity(value: unknown): value is {
       DEFAULT_CONTACTS_CONFIG.maxIdentityValueLen,
       false,
     ) &&
-    isString(value.label, 1_000) &&
-    isString(value.note, 10_000) &&
+    isUnboundedLocalText(value.label) &&
+    isUnboundedLocalText(value.note) &&
     isString(value.createdAt, 64, false)
   );
 }
@@ -178,7 +186,7 @@ function isEvent(value: unknown): value is {
   return (
     isString(value.date, 32, false) &&
     isString(value.text, DEFAULT_CONTACTS_CONFIG.maxEventTextLen, false) &&
-    isString(value.source, 1_000) &&
+    isUnboundedLocalText(value.source) &&
     isString(value.createdAt, 64, false)
   );
 }
@@ -191,7 +199,7 @@ function isGroup(value: unknown): value is {
   return (
     isRecord(value) &&
     isString(value.name, DEFAULT_CONTACTS_CONFIG.maxGroupNameLen, false) &&
-    isString(value.description, 16_384) &&
+    isUnboundedLocalText(value.description) &&
     isString(value.createdAt, 64, false)
   );
 }
@@ -222,9 +230,7 @@ function isRelation(value: unknown): value is {
     isId(value.fromId) &&
     isId(value.toId) &&
     isString(value.relation, DEFAULT_CONTACTS_CONFIG.maxRelationLen, false) &&
-    // 本地 addRelation 对 note 没有长度上限；设备帧已有整包解压上限，不能在
-    // 同步层另设更窄的 16 KiB 域，否则既有合法关系会让首次激活自我毒化。
-    typeof value.note === "string" &&
+    isUnboundedLocalText(value.note) &&
     isString(value.createdAt, 64, false)
   );
 }

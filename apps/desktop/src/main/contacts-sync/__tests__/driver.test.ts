@@ -17,6 +17,12 @@ const harness = vi.hoisted(() => {
     settings: new Map<string, boolean>(),
     emptyState,
     activateSync: vi.fn(() => emptyState),
+    peerPublicKey: 'peer-public' as string | null,
+    pinPeerPublicKey: vi.fn((_: string, publicKey: string) => {
+      const firstSeen = harness.peerPublicKey === null;
+      harness.peerPublicKey = publicKey;
+      return firstSeen;
+    }),
     lanSend: vi.fn(),
     lanStop: vi.fn(),
     relaySend: vi.fn(),
@@ -72,8 +78,8 @@ vi.mock('../../maker-host/contacts-change-broadcast.js', () => ({
 vi.mock('../keyStore.js', () => ({
   contactsSyncKeyStore: {
     getIdentity: () => ({ publicKey: 'own-public', privateKey: 'own-private' }),
-    getPeerPublicKey: () => 'peer-public',
-    pinPeerPublicKey: () => false,
+    getPeerPublicKey: () => harness.peerPublicKey,
+    pinPeerPublicKey: harness.pinPeerPublicKey,
     resetMemory: harness.keyReset,
   },
 }));
@@ -106,7 +112,8 @@ vi.mock('../wire.js', () => ({
       data: 'data',
     },
   ],
-  isContactsSyncWireFrame: () => false,
+  isContactsSyncWireFrame: (raw: unknown) =>
+    typeof raw === 'object' && raw !== null && 'type' in raw,
   ContactsSyncWireDecoder: class {
     accept(): null {
       return null;
@@ -132,6 +139,8 @@ beforeEach(() => {
   harness.ownerId = 'owner-a';
   harness.settings.clear();
   harness.activateSync.mockClear();
+  harness.peerPublicKey = 'peer-public';
+  harness.pinPeerPublicKey.mockClear();
   harness.lanSend.mockReset();
   harness.lanStop.mockReset();
   harness.relaySend.mockReset();
@@ -220,5 +229,34 @@ describe('contacts sync runtime ownership', () => {
       enabled: false,
       phase: 'off',
     });
+  });
+
+  it('responds to an incoming key even after a recent proactive announcement', async () => {
+    harness.settings.set('owner-a', true);
+    harness.peerPublicKey = null;
+    driver.initContactsDeviceSync({
+      getSelfDeviceId: () => 'self-device',
+      listOnlineDesktopDevices: () => [{ deviceId: 'peer-device', deviceName: 'Peer Desktop' }],
+      isPeerAllowed: (deviceId) => deviceId === 'peer-device',
+      sendRelayFrame: harness.relaySend,
+    });
+    const keyFrameCount = () =>
+      harness.relaySend.mock.calls.filter(([, frame]) => frame.type === 'key').length;
+
+    await vi.waitFor(() => expect(keyFrameCount()).toBe(1));
+    driver.handleIncomingContactsRelayFrame('peer-device', {
+      version: 1,
+      type: 'key',
+      publicKey: 'peer-public',
+    });
+    expect(keyFrameCount()).toBe(2);
+
+    // 对端对响应的回声不能形成 key ping-pong；响应有独立的短节流。
+    driver.handleIncomingContactsRelayFrame('peer-device', {
+      version: 1,
+      type: 'key',
+      publicKey: 'peer-public',
+    });
+    expect(keyFrameCount()).toBe(2);
   });
 });
