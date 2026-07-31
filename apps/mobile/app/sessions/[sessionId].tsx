@@ -371,6 +371,12 @@ import {
   shouldKeepOlderMessagesAffordance,
 } from '@/session/messagePaging';
 import {
+  HISTORY_GAP_PROBE_LIMIT,
+  backfillHistoryWindowGap,
+  findHistoryWindowGap,
+  historyWindowGapKey,
+} from '@/session/historyWindowGap';
+import {
   buildMobileMessageRenderItems,
   insertMobileForkOriginItem,
   type MobileMessageRenderItem,
@@ -3805,6 +3811,74 @@ export default function SessionScreen() {
       setLoadingEarlier(false);
     }
   }, [deviceId, hasOlderMessages, loadingEarlier, maker, messages, sessionId]);
+
+  /**
+   * 历史窗口空洞的自动补齐(见 `historyWindowGap.ts` 的文件头)。
+   *
+   * 缓存旧页 + 最新页拼接、断连期间漏收 push,都会让窗口出现"首段 + 尾段"的孤岛,中间几百行
+   * 从未加载 —— 手机上看起来就是"中间掉了一大段"。这里在窗口就位后检测最靠尾部的一处跳变,
+   * 先花一次 `limit=1` 探测确认服务端两行是否本来就相邻(正常的隔夜会话不该白翻页),确认有洞
+   * 才沿 `before` 游标补齐。
+   *
+   * 后台跑、不阻塞首屏,也不写 `error` / `loadingEarlier`:补齐是静默自愈,失败时渲染层的
+   * `HISTORY_GAP_SPLIT_MS` 守卫兜底(不谎报时长),用户仍可用「加载更早」自己往上翻。
+   */
+  const backfillAttemptedGapsRef = useRef<{ sid: string; keys: Set<string> } | null>(null);
+  const backfillInFlightRef = useRef(false);
+  // 当前屏幕的会话 id 镜像:补齐是后台异步的,不能靠 effect 闭包里的 sessionId 判断"是否已切走"
+  // (那个值恒等于启动时的值)。本 effect 声明在补齐 effect **之前**,切会话时同一 commit 里先
+  // 更新镜像,飞行中的补齐随即在下一次 isCancelled 上收手。
+  const backfillSessionRef = useRef(sessionId);
+  useEffect(() => {
+    backfillSessionRef.current = sessionId;
+  }, [sessionId]);
+  useEffect(() => {
+    // 窗口尚未与被控端对账过(lastSyncedAt===null)时不动手:此刻 messages 可能只是冷开缓存,
+    // 首屏那次 listMessages 马上会把窗口替换掉,基于旧快照找的空洞随即失效。
+    if (!deviceId || !sessionId || lastSyncedAt === null) return;
+    // 与「加载更早」互斥:两者都按 before 游标翻页,同时跑只会让窗口反复 merge、白拉页。
+    if (loading || loadingEarlier || backfillInFlightRef.current) return;
+    const gap = findHistoryWindowGap(messages);
+    if (!gap) return;
+    // 每处空洞只尝试一次(判定为真安静、超预算或失败都算尝试过),否则每次 messages 变化都会
+    // 重新发请求。换会话时连同 sid 一起重置。
+    const attempted = backfillAttemptedGapsRef.current?.sid === sessionId
+      ? backfillAttemptedGapsRef.current
+      : { sid: sessionId, keys: new Set<string>() };
+    backfillAttemptedGapsRef.current = attempted;
+    const gapKey = historyWindowGapKey(gap);
+    if (attempted.keys.has(gapKey)) return;
+    // 每次打开最多起 3 轮补齐。一处补到预算上限而没连上时,窗口里会露出一处**新的**跳变
+    // (锚点换成刚拉到的最旧行),key 不同 → 下次 messages 变化时可以再起一轮;不设总闸就成了
+    // 一路往上翻整场历史。注意这是**上限**不是节奏:补齐自己的 merge 触发的那次重跑会被
+    // in-flight 挡住,所以一次打开通常只补一处,余下的等新消息到达或用户重开会话。
+    if (attempted.keys.size >= 3) return;
+    attempted.keys.add(gapKey);
+    backfillInFlightRef.current = true;
+    const sessionIdAtStart = sessionId;
+    void backfillHistoryWindowGap(gap, {
+      listPage: async (before, limit) => {
+        const page = await listMessagesWithPayloadRetry(
+          (retryLimit) => maker.listMessages(sessionIdAtStart, { limit: retryLimit, before }),
+          // 探测页只要一行,不能沿用默认阶梯(它从 80 起降,第一枪就是满页,探测的成本优势没了);
+          // 翻页页照常走默认阶梯,帧超限时要能降级重试,否则大 tool 输出的会话一枪就 failed。
+          limit === HISTORY_GAP_PROBE_LIMIT ? [HISTORY_GAP_PROBE_LIMIT] : undefined,
+        );
+        return Array.isArray(page.messages) ? page.messages : [];
+      },
+      merge: (rows) => {
+        if (rows.length > 0) remoteSessionStore.mergeMessages(sessionIdAtStart, rows);
+      },
+      // 两个收手条件:
+      //  - 会话已切走 —— 补进来的行属于另一个屏幕的窗口;
+      //  - 空洞较新一侧那行已不在窗口里 —— /clear、rewind 或整窗替换把它拿掉了,继续 merge 会
+      //    把刚被移除的历史(甚至 clearedAt 之前的消息)塞回窗口。锚点没了就等于这处空洞不存在了。
+      isCancelled: () => backfillSessionRef.current !== sessionIdAtStart
+        || !remoteSessionStore.getMessages(sessionIdAtStart).some((row) => row.id === gap.newerId),
+    }).finally(() => {
+      backfillInFlightRef.current = false;
+    });
+  }, [deviceId, lastSyncedAt, loading, loadingEarlier, maker, messages, sessionId]);
 
   const selectSlashCommand = useCallback((command: MobileSlashCommand) => {
     // 点选 agent-skill 时记录名字+会话 id:palette 关闭后 slashCommands 被清,发送侧

@@ -26,6 +26,14 @@ export interface MessageToolResultPairing<
    * （running/done）必须计入，否则这类行会永久显示进行中。
    */
   hasResultFor(message: TMessage, tool: MessageNormalizeToolUse): boolean;
+  /**
+   * 配对 tool_result 的落库时刻(ISO),即这次工具调用的**结束**时刻;未到达时 undefined。
+   *
+   * 与 `hasResultFor` 同口径**不过 `shouldHideToolResult` 滤网**:结束时间与内容是否展示
+   * 无关(桌面 MessageStream 的 resultTsMap 同款)。渲染层用它做历史空洞判定的锚点 —— 只看
+   * 调用发起时刻会把「一次跑了半小时以上的调用」之后的下一个动作误判成空洞。
+   */
+  resultCreatedAtFor(message: TMessage, tool: MessageNormalizeToolUse): string | undefined;
 }
 
 export interface MessageToolResultPairingOptions {
@@ -79,12 +87,17 @@ export function buildMessageToolResultPairing<
 
   // settled 集合独立于内容 map：即使结果被 shouldHideToolResult 隐藏，工具也已完成。
   const settledToolUseIds = new Set<string>();
+  // 结束时刻同样独立于内容 map（隐藏的结果也是结束信号，见 resultCreatedAtFor）。
+  const resultCreatedAtByToolUseId = new Map<string, string>();
 
   for (const message of sortedMessages) {
     if (message.role !== 'tool_result') continue;
     const toolUseId = readToolResultUseId(message);
     if (!toolUseId) continue;
     settledToolUseIds.add(toolUseId);
+    const resultCreatedAt = readNonEmptyString(message.createdAt);
+    // 同一 toolUseId 多条结果时取最晚一条:sortedMessages 已按时间升序,后写覆盖即最晚。
+    if (resultCreatedAt) resultCreatedAtByToolUseId.set(toolUseId, resultCreatedAt);
     const content = contentToPreview(message.content);
     if (shouldHideToolResult(toolNameByUseId.get(toolUseId) ?? '', content)) continue;
     resultByToolUseId.set(toolUseId, content);
@@ -92,6 +105,7 @@ export function buildMessageToolResultPairing<
 
   const adjacencyResultByMessageKey = new Map<string, string>();
   const settledAdjacencyMessageKeys = new Set<string>();
+  const adjacencyResultCreatedAtByMessageKey = new Map<string, string>();
   for (let index = 0; index < sortedMessages.length; index++) {
     const message = sortedMessages[index];
     if (message.role !== 'tool_use') continue;
@@ -108,6 +122,10 @@ export function buildMessageToolResultPairing<
     const adjacent = sortedMessages[index + 1];
     if (adjacent?.role !== 'tool_result') continue;
     settledAdjacencyMessageKeys.add(messageNormalizeKey(message));
+    const adjacentCreatedAt = readNonEmptyString(adjacent.createdAt);
+    if (adjacentCreatedAt) {
+      adjacencyResultCreatedAtByMessageKey.set(messageNormalizeKey(message), adjacentCreatedAt);
+    }
     const content = contentToPreview(adjacent.content);
     if (shouldHideToolResult(tool.toolName, content)) continue;
     adjacencyResultByMessageKey.set(messageNormalizeKey(message), content);
@@ -127,6 +145,13 @@ export function buildMessageToolResultPairing<
     hasResultFor(message, tool) {
       if (tool.toolUseId && settledToolUseIds.has(tool.toolUseId)) return true;
       return settledAdjacencyMessageKeys.has(messageNormalizeKey(message));
+    },
+    resultCreatedAtFor(message, tool) {
+      if (tool.toolUseId) {
+        const byId = resultCreatedAtByToolUseId.get(tool.toolUseId);
+        if (byId !== undefined) return byId;
+      }
+      return adjacencyResultCreatedAtByMessageKey.get(messageNormalizeKey(message));
     },
   };
 }

@@ -3,6 +3,7 @@ import {
   findAgentTaskUpdate,
   isAgentTaskToolName,
 } from './agentTask';
+import { HISTORY_GAP_SPLIT_MS } from './historyGap';
 
 export interface MessageRenderSourceMessageLike {
   id?: string | null;
@@ -47,6 +48,14 @@ export interface MessageRenderNormalizedMessage<
   secondaryBody?: string;
   createdAt: string;
   isStreaming?: boolean;
+  /**
+   * tool 消息专用:配对 tool_result 的落库时刻(ISO)。`createdAt` 是**调用发起**时刻,
+   * 单靠它无法知道一次工具调用什么时候结束 —— 于是一个跑了半小时以上的调用(长 Bash、
+   * 子 agent)后面紧跟的下一个调用会被空洞判定误伤,把一段连续工作切碎。空洞锚点优先取
+   * 本字段,与桌面 `MessageStream` 的 resultTsMap 同口径。缺失(结果未到 / 老数据)时退回
+   * `createdAt`。
+   */
+  settledAt?: string;
   /** Host 在 SDK done 边界写入；每个 true 都是一条不应折入工作过程的正式回复。 */
   turnCompleted?: boolean;
   /** tool 消息专用:配对 tool_result 提取出的产出媒体(驱动 tool_media 独立渲染项)。 */
@@ -219,8 +228,18 @@ function buildLinearItems<
   // agent_task card, so the orphan-update sweep below doesn't render the same task twice.
   const renderedTaskKeys = new Set<string>();
   let pendingTools: TMessage[] = [];
+  // 段内已见过的最晚**结束**时刻(调用发起 / 结果落库取最大值),空洞判定的锚点。
+  // 不能只比紧邻的上一条:并行工具会乱序完成(A 跑 40 分钟还没回,B 紧随其后一分钟就结束,
+  // 这时又发起 C),只比 B 的早结束时间会把 C 误判成空洞、把一段连续工作切碎
+  // (与桌面 MessageStream 的 pendingSegmentEndMs 同口径)。
+  let pendingToolsEndMs: number | null = null;
+  const notePendingToolEnd = (ms: number | null) => {
+    if (ms === null) return;
+    pendingToolsEndMs = pendingToolsEndMs === null ? ms : Math.max(pendingToolsEndMs, ms);
+  };
 
   const flushTools = () => {
+    pendingToolsEndMs = null;
     if (pendingTools.length === 0) return;
     items.push({
       type: 'tool_group',
@@ -280,7 +299,22 @@ function buildLinearItems<
         }
         continue;
       }
+      // 历史窗口空洞可能正好落在两次工具调用之间(缺的是 user 行):那样两段窗口的调用会被
+      // 合进同一个 tool_group,组首尾时间差直接成了跨空洞的假时长,而工作组分组只看组首时间、
+      // 发现不了组内部的跳变。所以段内也按同一阈值切开,让「已工作 Xs」的时长和分组都落在
+      // 真实连续的动作上(对齐桌面 MessageStream 的段内切分)。
+      const callMs = parseTimestampMs(message.createdAt);
+      if (
+        pendingTools.length > 0
+        && pendingToolsEndMs !== null
+        && callMs !== null
+        && callMs - pendingToolsEndMs > HISTORY_GAP_SPLIT_MS
+      ) {
+        flushTools();
+      }
       pendingTools.push(message);
+      notePendingToolEnd(callMs);
+      notePendingToolEnd(parseTimestampMs(message.settledAt));
       continue;
     }
 
@@ -844,13 +878,37 @@ function groupMessageWorkRuns<
     currentTurn = [];
   };
 
+  // 空洞判定的锚点:上一个 item 的**结束**时间(见 itemEndTimestamp)。用开始时间会让一个
+  // 正常的长时段工具组/thinking 把紧随其后的 item 误判成空洞。取已见过的最大值而非无条件
+  // 覆盖:并行的 Agent/Task 可能乱序完成,锚点回退会让后面的最终答复被误切、时长被低报。
+  // 无时间戳的 item 不重置锚点,让间隔判定跨过它继续比对上一个有时间的动作。
+  let prevEndMs: number | null = null;
+  const noteEnd = (item: MessageRenderItem<TMessage>) => {
+    const endMs = itemEndTimestamp(item);
+    if (endMs === null) return;
+    prevEndMs = prevEndMs === null ? endMs : Math.max(prevEndMs, endMs);
+  };
+
   for (const item of items) {
     if (item.type === 'message' && item.message.kind === 'user') {
       flushTurn(false);
       out.push(item);
+      noteEnd(item);
       continue;
     }
+    // 窗口空洞:user 行是唯一的 turn 边界,窗口里缺了它,两段不相干的历史就会被折进同一个
+    // 「已工作 Xs」并谎报时长(手机端实测一条组吞掉整场会话的 6 轮对话)。相邻动作间隔超过
+    // 阈值时同样切断 —— 见 HISTORY_GAP_SPLIT_MS 的完整理由。
+    const startMs = itemTimestamp(item);
+    if (
+      prevEndMs !== null
+      && startMs !== null
+      && startMs - prevEndMs > HISTORY_GAP_SPLIT_MS
+    ) {
+      flushTurn(false);
+    }
     currentTurn.push(item);
+    noteEnd(item);
   }
   flushTurn(true);
   return out;
@@ -1220,6 +1278,64 @@ function itemCreatedAt<
   if (item.type === 'agent_task') return item.createdAt;
   if (item.type === 'work_group') return item.children[0] ? itemCreatedAt(item.children[0]) : '';
   return item.message.createdAt;
+}
+
+/**
+ * item 的**结束**时刻,空洞判定的锚点(口径与桌面 `renderItemEndMs` 一致):
+ *
+ *  - tool_group / tool_media:组内全部调用与结果时刻的最大值(结果时刻见 `settledAt`);
+ *  - agent_task:live update 的 updatedAt → createdAt → 调用发起时刻,再与配对结果时刻取更晚
+ *    (历史会话没有 live update,只有结果时刻才是这张卡真正的结束);
+ *  - thinking:createdAt 是块**开始**的时刻,要加上时长 —— 一个想了半小时以上的 thinking 块
+ *    后面紧跟工具或正文时,只看 createdAt 会把它误判成空洞、切开一个本来连续的 turn;
+ *  - 其余:退回开始时刻。
+ */
+function itemEndTimestamp<
+  TMessage extends MessageRenderNormalizedMessage,
+>(item: MessageRenderItem<TMessage>): number | null {
+  if (item.type === 'tool_group' || item.type === 'tool_media') {
+    let end: number | null = null;
+    for (const tool of item.tools) {
+      end = maxTimestamp(end, parseTimestampMs(tool.createdAt));
+      end = maxTimestamp(end, parseTimestampMs(tool.settledAt));
+    }
+    return end ?? itemTimestamp(item);
+  }
+  if (item.type === 'agent_task') {
+    const liveEnd = parseTimestampMs(
+      item.update?.updatedAt ?? item.update?.createdAt ?? item.toolCall?.createdAt,
+    ) ?? itemTimestamp(item);
+    return maxTimestamp(liveEnd, parseTimestampMs(item.toolCall?.settledAt));
+  }
+  if (item.type === 'work_group') {
+    for (let index = item.children.length - 1; index >= 0; index--) {
+      const childEnd = itemEndTimestamp(item.children[index]);
+      if (childEnd !== null) return childEnd;
+    }
+    return null;
+  }
+  const start = itemTimestamp(item);
+  if (item.type === 'thinking' && start !== null) {
+    // durationMs 可能是负数 / 非有限值(上游同样做了夹断防御)。不夹断会得出 end < start,
+    // 空洞判定与工作组时长都跟着错。
+    const durationMs = item.durationMs;
+    return start + (typeof durationMs === 'number' && Number.isFinite(durationMs)
+      ? Math.max(0, durationMs)
+      : 0);
+  }
+  return start;
+}
+
+function maxTimestamp(a: number | null, b: number | null): number | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return Math.max(a, b);
+}
+
+function parseTimestampMs(createdAt: string | null | undefined): number | null {
+  if (!createdAt) return null;
+  const timestamp = Date.parse(createdAt);
+  return Number.isFinite(timestamp) ? timestamp : null;
 }
 
 function workChildKey<
