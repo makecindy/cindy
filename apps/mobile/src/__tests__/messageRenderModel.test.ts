@@ -39,6 +39,19 @@ function toolUse(id: string, toolName: string, input: unknown, seconds: number):
 }
 
 describe('messageRenderModel', () => {
+  it('appends the live auto-resume projection as an ephemeral system card', () => {
+    const items = buildMobileMessageRenderItems([message({ id: 'a', role: 'assistant', content: 'partial', agentMeta: { isStreaming: true } })], {
+      sessionId: 's1',
+      isSessionStreaming: true,
+      autoResumePending: { error: 'socket hang up', attempt: 2, maxAttempts: 5, sessionTotal: 3 },
+    });
+    expect(expectType(items[0], 'message').message.isTurnFinalAssistant).toBeUndefined();
+    expect(expectType(items[1], 'message').message).toMatchObject({
+      systemCardType: 'auto-resume',
+      systemCardData: { error: 'socket hang up', attempt: 2, maxAttempts: 5, sessionTotal: 3, live: true },
+    });
+  });
+
   it('reuses unchanged history rows and attachment view models during a streaming tail update', () => {
     const user = message({
       id: 'user-1',

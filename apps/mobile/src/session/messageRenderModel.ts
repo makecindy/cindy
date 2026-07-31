@@ -76,12 +76,24 @@ export type MobileMessageRenderItem =
 
 export function buildMobileMessageRenderItems(
   messages: readonly RemoteMessage[],
-  options: MessageRenderOptions = {},
+  options: MessageRenderOptions & { autoResumePending?: Record<string, unknown> | null; sessionId?: string } = {},
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>,
 ): MobileMessageRenderItem[] {
   const normalized = normalizeRemoteMessages(messages);
   scopeUnsettledToolsToActiveTail(normalized);
   markTurnFinalAssistants(normalized, options.isSessionStreaming === true);
+  if (options.autoResumePending) {
+    normalized.push(...normalizeRemoteMessages([{
+      id: 'mobile:auto-resume-pending',
+      clientId: 'mobile:auto-resume-pending',
+      sessionId: options.sessionId ?? messages[0]?.sessionId ?? '',
+      role: 'user',
+      content: '',
+      toolUseId: null,
+      agentMeta: { autoResume: true, autoResumeInfo: { ...options.autoResumePending, live: true } },
+      createdAt: '9999-12-31T23:59:59.999Z',
+    }]));
+  }
   // 无子 agent(Claude `Agent` 嵌套)→ 走原始线性路径,并接上 live agent_task 卡:
   // Task / collab:* 工具调用按 toolUseId→clientId 链接;无对应工具调用的孤儿更新兜底
   // 仅在会话运行中(isSessionStreaming)生效——空闲时孤儿是 stale 残留(工具调用已滑出
