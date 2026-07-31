@@ -549,6 +549,51 @@
       "regionHint": "cn",
       "runtimes": {
         "claude-code": {
+          "baseUrl": "https://coding.dashscope.aliyuncs.com/apps/anthropic",
+          "modelsUrl": "https://coding.dashscope.aliyuncs.com/v1/models",
+          "models": [
+            {
+              "id": "qwen3.7-plus",
+              "name": "Qwen 3.7 Plus"
+            },
+            {
+              "id": "qwen3-coder-next",
+              "name": "Qwen3 Coder Next"
+            },
+            {
+              "id": "qwen3-coder-plus",
+              "name": "Qwen3 Coder Plus"
+            }
+          ]
+        },
+        "codex": {
+          "baseUrl": "https://coding.dashscope.aliyuncs.com/v1",
+          "wireProtocol": "openai-chat",
+          "models": [
+            {
+              "id": "qwen3.7-plus",
+              "name": "Qwen 3.7 Plus"
+            },
+            {
+              "id": "qwen3-coder-next",
+              "name": "Qwen3 Coder Next"
+            },
+            {
+              "id": "qwen3-coder-plus",
+              "name": "Qwen3 Coder Plus"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "aliyun-bailian-token-plan-cn",
+      "name": "阿里云百炼 Token Plan（包月）",
+      "nameEn": "Alibaba Cloud Bailian Token Plan",
+      "docsUrl": "https://help.aliyun.com/zh/model-studio/token-plan-overview",
+      "regionHint": "cn",
+      "runtimes": {
+        "claude-code": {
           "baseUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
           "modelsUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/models",
           "models": [
@@ -558,15 +603,15 @@
             },
             {
               "id": "qwen3.7-max",
-              "name": "Qwen3.7 Max"
+              "name": "Qwen 3.7 Max"
             },
             {
               "id": "qwen3.7-plus",
-              "name": "Qwen3.7 Plus"
+              "name": "Qwen 3.7 Plus"
             },
             {
               "id": "qwen3.6-flash",
-              "name": "Qwen3.6 Flash"
+              "name": "Qwen 3.6 Flash"
             },
             {
               "id": "glm-5.2",
@@ -589,15 +634,15 @@
             },
             {
               "id": "qwen3.7-max",
-              "name": "Qwen3.7 Max"
+              "name": "Qwen 3.7 Max"
             },
             {
               "id": "qwen3.7-plus",
-              "name": "Qwen3.7 Plus"
+              "name": "Qwen 3.7 Plus"
             },
             {
               "id": "qwen3.6-flash",
-              "name": "Qwen3.6 Flash"
+              "name": "Qwen 3.6 Flash"
             },
             {
               "id": "glm-5.2",
