@@ -13,6 +13,11 @@ const sessionViewSource = readFileSync(
   'utf8',
 );
 
+const pendingHandoffSource = readFileSync(
+  resolve(__dirname, '..', 'state', 'pendingFirstMessage.ts'),
+  'utf8',
+);
+
 const remoteCollabHandoffSource = readFileSync(
   resolve(__dirname, '..', 'features', 'cc-agent', 'remoteCollabHandoff.ts'),
   'utf8',
@@ -256,21 +261,23 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       expect(sessionViewSource).not.toContain('rememberRecoverableHandoff(');
     });
 
-    it('首条消息:等协同 → 发送 → 清副本,且锁覆盖整条交接', () => {
+    it('首条消息:等协同 → 经 deliver 发送 → 锁覆盖整条交接', () => {
       const branch = messageBranch();
       const lock = branch.indexOf('if (holdComposer) setRemoteHandoffPreparing(true)');
       const awaitCollab = branch.indexOf('await consumePendingRemoteCollab(pending.remoteCollab');
       const send = branch.indexOf('sendMessage(');
-      const forget = branch.lastIndexOf('forgetRecoverableHandoff(sessionId)');
       const unlock = branch.indexOf('if (holdComposer) setRemoteHandoffPreparing(false)');
 
       expect(lock).toBeGreaterThan(-1);
       expect(awaitCollab).toBeLessThan(send);
-      expect(send).toBeLessThan(forget);
       // 解锁必须排在 sendMessage **之后**:提前解锁的话,命令派发那次 await 里
       // 用户补发的消息会抢在草稿提交的首条之前。
       expect(lock).toBeLessThan(awaitCollab);
       expect(send).toBeLessThan(unlock);
+      // sendMessage 失败时 resolve false 而不抛错 —— 必须 await 且经 deliver 判定,
+      // 裸调 + 立刻丢副本会让正文从界面和磁盘上一起消失(codex P1 第五轮)。
+      expect(branch).toContain('await deliverRecoverableHandoff(sessionId, () =>');
+      expect(branch).toContain('sendMessage(');
     });
 
     it('新建目标:锁从消费一路盖到 setGoal 结束,setGoal 成功后才清副本', () => {
@@ -279,16 +286,26 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       const awaitSubscribe = branch.indexOf('await window.electronAPI.deviceLink.subscribe(');
       const awaitCollab = branch.indexOf('await consumePendingRemoteCollab(pendingGoal.remoteCollab');
       const setGoal = branch.indexOf('await goalApiFor(sessionId).setGoal(');
-      const forget = branch.indexOf('forgetRecoverableHandoff(sessionId)');
+      const forget = branch.indexOf('deliverRecoverableHandoff(sessionId, async () => {');
       const unlock = branch.indexOf('setRemoteHandoffPreparing(false)');
 
       // subscribe 与 setGoal 同样是隧道 invoke、同样可能 30s;锁必须把它们都包住。
       expect(lock).toBeLessThan(awaitSubscribe);
       expect(lock).toBeLessThan(awaitCollab);
       expect(awaitCollab).toBeLessThan(setGoal);
-      // setGoal 失败时刻意保留副本 → forget 只能排在 setGoal 之后。
-      expect(setGoal).toBeLessThan(forget);
+      // setGoal 抛错时副本必须留着 → 它必须包在 deliver 的回调里(抛错就到不了 forget)。
+      expect(forget).toBeLessThan(setGoal);
       expect(setGoal).toBeLessThan(unlock);
+    });
+
+    it('删除副本只有一条路:deliverRecoverableHandoff', () => {
+      // 本 PR 的 review 里,"这算交付了吧"被三个调用点各自判断、各自判错过一次。
+      // 收进 deliver 之后 forgetRecoverableHandoff 不再导出,裸调直接编译不过。
+      expect(sessionViewSource).not.toContain('forgetRecoverableHandoff(');
+      expect(pendingHandoffSource).toContain('function forgetRecoverableHandoff(');
+      expect(pendingHandoffSource).not.toContain('export function forgetRecoverableHandoff(');
+      // 三处交接(命令派发 / 首轮发送 / 起目标)都要走它。
+      expect(sessionViewSource.match(/deliverRecoverableHandoff\(sessionId,/g)).toHaveLength(3);
     });
 
     it('内存里没有 pending 时才走恢复,且只回填输入框、不自动补发', () => {

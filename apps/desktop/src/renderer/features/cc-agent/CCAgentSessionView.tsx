@@ -147,7 +147,7 @@ import { getUserPrompt } from '@/lib/userPromptStore';
 import {
   consumePending,
   consumePendingGoal,
-  forgetRecoverableHandoff,
+  deliverRecoverableHandoff,
   takeRecoverableHandoff,
   type RecoverableHandoffKind,
 } from '@/state/pendingFirstMessage';
@@ -2702,40 +2702,44 @@ export function CCAgentSessionView({
             });
           }
         }
-        if (await maybeDispatchDesktopSlashCommand(pending.text, pending.files)) {
-          // 正文已交给命令派发,副本使命完成(下同)。
-          forgetRecoverableHandoff(sessionId);
-          return;
-        }
-        sendMessage(
-          pending.text,
-          session.model,
-          session.effort as Effort,
-          session.permissionMode as PermissionMode,
-          workingDir,
-          pending.files,
-          pending.mentions,
-          pending.vendorOptions ||
-            pending.quotesEncoded ||
-            pending.agentReferences?.length ||
-            pending.pastedTextRanges?.length ||
-            pending.slashCommandRanges !== undefined
-            ? {
-                ...(pending.vendorOptions ? { vendorOptions: pending.vendorOptions } : {}),
-                ...(pending.quotesEncoded ? { quotesEncoded: true } : {}),
-                ...(pending.agentReferences?.length
-                  ? { agentReferences: pending.agentReferences }
-                  : {}),
-                ...(pending.pastedTextRanges?.length
-                  ? { pastedTextRanges: pending.pastedTextRanges }
-                  : {}),
-                ...(pending.slashCommandRanges !== undefined
-                  ? { slashCommandRanges: pending.slashCommandRanges }
-                  : {}),
-              }
-            : undefined,
+        // 三处交接统一走 deliverRecoverableHandoff:交付成功才丢副本,
+        // resolve false / 抛错都保留(见该函数注释)。
+        const dispatched = await deliverRecoverableHandoff(sessionId, () =>
+          maybeDispatchDesktopSlashCommand(pending.text, pending.files),
         );
-        forgetRecoverableHandoff(sessionId);
+        if (dispatched) return;
+        // 必须 await:sendMessage 在设备离线 / 访问被撤销 / 远端 enqueue 拒绝时不抛错,
+        // 而是 resolve false —— 不等它就丢副本,正文会从界面和磁盘上一起消失(codex P1)。
+        await deliverRecoverableHandoff(sessionId, () =>
+          sendMessage(
+            pending.text,
+            session.model,
+            session.effort as Effort,
+            session.permissionMode as PermissionMode,
+            workingDir,
+            pending.files,
+            pending.mentions,
+            pending.vendorOptions ||
+              pending.quotesEncoded ||
+              pending.agentReferences?.length ||
+              pending.pastedTextRanges?.length ||
+              pending.slashCommandRanges !== undefined
+              ? {
+                  ...(pending.vendorOptions ? { vendorOptions: pending.vendorOptions } : {}),
+                  ...(pending.quotesEncoded ? { quotesEncoded: true } : {}),
+                  ...(pending.agentReferences?.length
+                    ? { agentReferences: pending.agentReferences }
+                    : {}),
+                  ...(pending.pastedTextRanges?.length
+                    ? { pastedTextRanges: pending.pastedTextRanges }
+                    : {}),
+                  ...(pending.slashCommandRanges !== undefined
+                    ? { slashCommandRanges: pending.slashCommandRanges }
+                    : {}),
+                }
+              : undefined,
+          ),
+        );
       } finally {
         if (holdComposer) setRemoteHandoffPreparing(false);
       }
@@ -2799,14 +2803,17 @@ export function CCAgentSessionView({
             });
           }
         }
-        await goalApiFor(sessionId).setGoal({
-          sessionId,
-          objective: pendingGoal.objective,
-          limits: pendingGoal.limits,
-        });
-        // 起成了才丢副本。setGoal 失败时刻意保留:目标正文是用户敲的,
+        // 与首条消息同一条路:交付成功才丢副本。setGoal 失败会抛错,
+        // deliver 里 forget 根本执行不到,副本自然保留 —— 目标正文是用户敲的,
         // 留着下次进本会话回填,比只弹一句"失败"更有用。
-        forgetRecoverableHandoff(sessionId);
+        await deliverRecoverableHandoff(sessionId, async () => {
+          await goalApiFor(sessionId).setGoal({
+            sessionId,
+            objective: pendingGoal.objective,
+            limits: pendingGoal.limits,
+          });
+          return true;
+        });
         toast.success(t('goal.toast.set'));
       } catch (err) {
         log.warn('pending goal setGoal failed:', err);

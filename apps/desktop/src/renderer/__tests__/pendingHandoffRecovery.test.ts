@@ -67,13 +67,14 @@ describe('可恢复副本的基本语义', () => {
     expect(m.takeRecoverableHandoff('s1', 'goal')).toBe('把测试补全');
   });
 
-  it('forget 幂等,且只影响目标会话', async () => {
+  it('交付成功才丢副本,且只影响目标会话', async () => {
     const m = await loadModule();
     m.rememberRecoverableHandoff('s1', 'message', 'a');
     m.rememberRecoverableHandoff('s2', 'message', 'b');
 
-    m.forgetRecoverableHandoff('s1');
-    m.forgetRecoverableHandoff('s1');
+    await expect(m.deliverRecoverableHandoff('s1', () => true)).resolves.toBe(true);
+    // 幂等:再交付一次不会误伤别的会话。
+    await expect(m.deliverRecoverableHandoff('s1', () => true)).resolves.toBe(true);
 
     expect(m.takeRecoverableHandoff('s1', 'message')).toBeNull();
     expect(m.takeRecoverableHandoff('s2', 'message')).toBe('b');
@@ -93,6 +94,43 @@ describe('可恢复副本的基本语义', () => {
     m.takeRecoverableHandoff('s1', 'message');
 
     expect(memStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+});
+
+describe('交付语义:只有确认交付成功才丢副本', () => {
+  it('deliver resolve false(设备离线 / 访问被撤销 / 远端 enqueue 拒绝)→ 保留副本', async () => {
+    // 这是 codex P1 的要害:sendMessage 这类失败**不抛错**,而是 resolve false,
+    // 并且对远程会话还会把乐观气泡从 transcript 里撤掉。不看返回值就丢副本,
+    // 等于正文从界面和磁盘上同时消失。
+    const m = await loadModule();
+    m.rememberRecoverableHandoff('s1', 'message', '没发出去的话');
+
+    await expect(m.deliverRecoverableHandoff('s1', () => false)).resolves.toBe(false);
+
+    expect(m.takeRecoverableHandoff('s1', 'message')).toBe('没发出去的话');
+  });
+
+  it('deliver 抛错 → 保留副本,且错误照常向上冒泡', async () => {
+    const m = await loadModule();
+    m.rememberRecoverableHandoff('s1', 'goal', '没起成的目标');
+
+    await expect(
+      m.deliverRecoverableHandoff('s1', async () => {
+        throw new Error('[DEVICE_LINK_NOT_CONNECTED] link down');
+      }),
+    ).rejects.toThrow('DEVICE_LINK_NOT_CONNECTED');
+
+    // 调用方的 catch 负责提示;副本留着,下次进这个会话回填。
+    expect(m.takeRecoverableHandoff('s1', 'goal')).toBe('没起成的目标');
+  });
+
+  it('deliver resolve true → 丢副本', async () => {
+    const m = await loadModule();
+    m.rememberRecoverableHandoff('s1', 'message', '发出去了');
+
+    await expect(m.deliverRecoverableHandoff('s1', async () => true)).resolves.toBe(true);
+
+    expect(m.takeRecoverableHandoff('s1', 'message')).toBeNull();
   });
 });
 

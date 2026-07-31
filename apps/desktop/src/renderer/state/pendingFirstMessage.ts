@@ -244,13 +244,43 @@ export function rememberRecoverableHandoff(
   writeRecoveryTable(table);
 }
 
-/** 正文已经交给 sendMessage / setGoal(或明确不再需要)后调用。幂等。 */
-export function forgetRecoverableHandoff(sessionId: string): void {
+/**
+ * 丢掉副本。**模块私有** —— 唯一的公开入口是 `deliverRecoverableHandoff`。
+ *
+ * 不导出是刻意的:副本的删除条件("正文已经有了新的归宿")在本 PR 的 review 里被反复
+ * 判错,每次都是某个调用点自己就地判断"这算交付了吧"。只要还能裸调它,下一处就还会
+ * 再判错一次。收进 deliver 之后,"什么时候可以删"只剩一处可改。
+ */
+function forgetRecoverableHandoff(sessionId: string): void {
   if (!sessionId) return;
   const table = readRecoveryTable();
   if (!(sessionId in table)) return;
   delete table[sessionId];
   writeRecoveryTable(table);
+}
+
+/**
+ * 把正文交出去,**只有确认交付成功才丢副本**。
+ *
+ * 这是删除副本的唯一途径。三处交接(命令派发 / 首轮 sendMessage / 起目标 setGoal)
+ * 全部走这里,于是"交付成功"只有一个判据:
+ *
+ *  · `deliver()` resolve `true`  → 确实交出去了 → 丢副本;
+ *  · `deliver()` resolve `false` → **没交出去**,副本必须留着;
+ *  · `deliver()` 抛错             → 同样没交出去 → 保留副本,错误照常向上冒泡。
+ *
+ * 第二条是本轮 codex P1 的要害:`sendMessage` 在设备离线 / 访问被撤销 / 远端
+ * `maker:input:enqueue` 拒绝时**不抛错**,而是 resolve `false`,并且对远程会话还会
+ * 把那条乐观气泡从 transcript 里撤掉 —— 不 await 就删副本,等于正文从界面和磁盘上
+ * 同时消失,而内存 pending 早已消费、新建页草稿也已清空。
+ */
+export async function deliverRecoverableHandoff(
+  sessionId: string,
+  deliver: () => boolean | Promise<boolean>,
+): Promise<boolean> {
+  const delivered = await deliver();
+  if (delivered) forgetRecoverableHandoff(sessionId);
+  return delivered;
 }
 
 /**
