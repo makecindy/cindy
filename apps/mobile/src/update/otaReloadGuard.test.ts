@@ -70,13 +70,10 @@ describe('readOtaReloadGuard', () => {
     });
   });
 
-  it('读存储抛错 → 按无记录(存储故障不该顺带停掉热更)', async () => {
+  it('读存储抛错必须抛出:吞成无记录会把计数重置、闸门永远合不上', async () => {
     storage.set(KEY, JSON.stringify({ targetUpdateId: 'u1', reloadCount: 2 }));
     failGetItem = true;
-    await expect(readOtaReloadGuard()).resolves.toEqual({
-      targetUpdateId: null,
-      reloadCount: 0,
-    });
+    await expect(readOtaReloadGuard()).rejects.toThrow(/storage unavailable/);
   });
 });
 
@@ -171,6 +168,12 @@ describe('clearOtaReloadGuardIfLaunched', () => {
   it('清除失败只吞掉,不抛给启动链', async () => {
     await recordOtaReload('u1');
     failRemoveItem = true;
+    await expect(clearOtaReloadGuardIfLaunched('u1')).resolves.toBeUndefined();
+  });
+
+  it('读取失败也只吞掉(启动链末端没人能处理这个异常)', async () => {
+    await recordOtaReload('u1');
+    failGetItem = true;
     await expect(clearOtaReloadGuardIfLaunched('u1')).resolves.toBeUndefined();
   });
 });

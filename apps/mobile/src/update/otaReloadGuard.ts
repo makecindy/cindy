@@ -56,14 +56,16 @@ function parseState(raw: string | null): OtaReloadGuardState {
 }
 
 /**
- * 读取闸门状态。读失败 / 坏值一律按「无记录」——存储故障不该顺带把正常热更也停掉。
+ * 读取闸门状态。
+ *
+ * **读失败会抛出**,不能吞成「无记录」:那样计数会被重置成 1,间歇性失败白放一次
+ * reload,持续失败则永远到不了上限、闸门彻底失效——正是本模块要防的循环。与写失败
+ * 同一口径:存储不可用时本次启动放弃热更(调用方 fail-open 放行进 App)。
+ *
+ * 坏值(非 JSON / 缺 id)不算故障:那是没有可信记录,按「无记录」处理,下一次写入即覆盖。
  */
 export async function readOtaReloadGuard(): Promise<OtaReloadGuardState> {
-  try {
-    return parseState(await AsyncStorage.getItem(STORAGE_KEY));
-  } catch {
-    return EMPTY_STATE;
-  }
+  return parseState(await AsyncStorage.getItem(STORAGE_KEY));
 }
 
 /** 已经为这个 update 试满次数 → 本次启动不再 reload。 */
@@ -98,15 +100,16 @@ export async function recordOtaReload(targetUpdateId: string): Promise<void> {
  * 不能改成「进了 App 就清」——被闸门放行也算进了 App,那样每次冷启动都会重新放开一次
  * reload,循环变成「每次启动闪一轮」而不是被真正掐断。
  *
- * 清除失败只吞掉:代价是下一次冷启动可能少做一次热更,不影响进入 App。
+ * 读写失败都只吞掉:这里在启动链末端跑,清不掉的代价只是下一次冷启动少做一次热更,
+ * 不影响进入 App;而向启动链抛异常没有任何人能处理。
  */
 export async function clearOtaReloadGuardIfLaunched(
   currentUpdateId: string | null,
 ): Promise<void> {
   if (!currentUpdateId) return;
-  const state = await readOtaReloadGuard();
-  if (state.targetUpdateId !== currentUpdateId) return;
   try {
+    const state = await readOtaReloadGuard();
+    if (state.targetUpdateId !== currentUpdateId) return;
     await AsyncStorage.removeItem(STORAGE_KEY);
   } catch {
     // ignore: 记录残留只会让下次冷启动保守一点

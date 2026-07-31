@@ -21,6 +21,11 @@ function fetchedNewUpdate(id = 'next-update') {
   return vi.fn(async () => ({ isNew: true, manifest: { id } }));
 }
 
+/** check 报告有可用更新(带 manifest,与线上真实返回一致)。 */
+function checkAvailable(id?: string) {
+  return vi.fn(async () => ({ isAvailable: true, ...(id ? { manifest: { id } } : {}) }));
+}
+
 describe('runStartupOtaUpdate', () => {
   it('enabled=false → skipped,且不发起任何调用', async () => {
     const d = deps({ enabled: false });
@@ -130,6 +135,54 @@ describe('runStartupOtaUpdate', () => {
     });
     await expect(runStartupOtaUpdate(d)).resolves.toBe('error');
     expect(d.reloadAsync).not.toHaveBeenCalled();
+  });
+
+  it('已被闸门拦下的 update:在 fetch 之前就返回,不白等一次下载', async () => {
+    const d = deps({
+      checkForUpdateAsync: checkAvailable('bad-update'),
+      isReloadBlocked: vi.fn(async () => true),
+    });
+    await expect(runStartupOtaUpdate(d)).resolves.toBe('reload-blocked');
+    expect(d.isReloadBlocked).toHaveBeenCalledWith('bad-update');
+    expect(d.fetchUpdateAsync).not.toHaveBeenCalled();
+    expect(d.reloadAsync).not.toHaveBeenCalled();
+  });
+
+  it('check 就报出当前正在跑的 update:同样不下载', async () => {
+    const d = deps({
+      checkForUpdateAsync: checkAvailable('running-update'),
+      currentUpdateId: vi.fn(() => 'running-update'),
+    });
+    await expect(runStartupOtaUpdate(d)).resolves.toBe('already-running');
+    expect(d.fetchUpdateAsync).not.toHaveBeenCalled();
+  });
+
+  it('check 与 fetch 之间指针变了 → 按 fetch 到的 id 再判一次闸门', async () => {
+    const d = deps({
+      checkForUpdateAsync: checkAvailable('first-update'),
+      fetchUpdateAsync: fetchedNewUpdate('second-update'),
+      isReloadBlocked: vi.fn(async (id: string) => id === 'second-update'),
+    });
+    await expect(runStartupOtaUpdate(d)).resolves.toBe('reload-blocked');
+    expect(d.fetchUpdateAsync).toHaveBeenCalledOnce();
+    expect(d.reloadAsync).not.toHaveBeenCalled();
+  });
+
+  it('闸门状态读不出来 → error(fail-open),不 reload', async () => {
+    const d = deps({
+      checkForUpdateAsync: checkAvailable('next-update'),
+      isReloadBlocked: vi.fn(async () => { throw new Error('storage unavailable'); }),
+    });
+    await expect(runStartupOtaUpdate(d)).resolves.toBe('error');
+    expect(d.reloadAsync).not.toHaveBeenCalled();
+  });
+
+  it('isEmergencyLaunch 依赖本身抛错也不 reject(承诺永不 reject)', async () => {
+    const d = deps({
+      isEmergencyLaunch: vi.fn(() => { throw new Error('native module missing'); }),
+    });
+    await expect(runStartupOtaUpdate(d)).resolves.toBe('error');
+    expect(d.checkForUpdateAsync).not.toHaveBeenCalled();
   });
 
   it('当前跑包内 bundle(updateId 为 null)时仍允许装上热更', async () => {

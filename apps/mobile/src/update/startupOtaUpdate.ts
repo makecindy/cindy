@@ -31,7 +31,11 @@ export interface StartupOtaDeps {
   enabled: boolean;
   /** 把 endpoint 清单解析出的 /manifest URL 写入 expo-updates;必须先于 check。 */
   configureUpdateUrl: () => void;
-  checkForUpdateAsync: () => Promise<{ isAvailable: boolean }>;
+  checkForUpdateAsync: () => Promise<{
+    isAvailable: boolean;
+    /** isAvailable=true 时 expo-updates 必带;用它在下载前就判定要不要走这一轮。 */
+    manifest?: { id?: string };
+  }>;
   fetchUpdateAsync: () => Promise<{ isNew: boolean; manifest?: { id?: string } }>;
   /** 正常不返回(app 重启);测试里用 spy 断言被调用。 */
   reloadAsync: () => Promise<void>;
@@ -87,23 +91,27 @@ export async function runStartupOtaUpdate(
   { checkTimeoutMs = DEFAULT_CHECK_TIMEOUT_MS, fetchTimeoutMs = DEFAULT_FETCH_TIMEOUT_MS }: StartupOtaOptions = {},
 ): Promise<StartupOtaOutcome> {
   if (!deps.enabled) return 'skipped';
-  // emergency launch 下没有 launchedUpdate:check 必然报「有新版」,下载完 reload 也只会
-  // 回到同一个 emergency launch。不发请求、不重启,直接放行进 App。
-  if (deps.isEmergencyLaunch()) return 'emergency-launch';
   try {
+    // emergency launch 下没有 launchedUpdate:check 必然报「有新版」,下载完 reload 也只会
+    // 回到同一个 emergency launch。不发请求、不重启,直接放行进 App。
+    // 放在 try 内:本函数对调用方承诺永不 reject,依赖自身抛错也必须落到 'error'。
+    if (deps.isEmergencyLaunch()) return 'emergency-launch';
     deps.configureUpdateUrl();
     const check = await withTimeout(deps.checkForUpdateAsync(), checkTimeoutMs);
     if (!check.isAvailable) return 'up-to-date';
+    // check 就带回了目标 manifest,所以「同 id」「已被闸门拦下」都能在**下载之前**判掉。
+    // 否则正是需要被闸门救的那些设备,每次冷启动都要白等一次 fetch(最多 8s)才放行。
+    const decided = await decideByTargetId(deps, check.manifest?.id);
+    if (decided) return decided;
     const fetched = await withTimeout(deps.fetchUpdateAsync(), fetchTimeoutMs);
     if (!fetched.isNew) return 'up-to-date';
+    // 再判一次:check 与 fetch 之间服务端指针可能已经变,拿到手的未必是刚才那个 id。
     // isNew=true 的 fetch 结果按 expo-updates 的类型必定带 manifest;真拿不到 id 时无从
     // 计数,只能保持原行为(重启一次),不为这条理论上不可达的分支编造一个共享计数键。
     const targetUpdateId = fetched.manifest?.id;
-    // isNew 只反映「相对服务端认知是新的」。真正决定要不要重启的是 id:与当前运行的
-    // update 同 id 却仍在重启,就是那台设备上观察到的死循环。
-    if (targetUpdateId && targetUpdateId === deps.currentUpdateId()) return 'already-running';
+    const decidedAfterFetch = await decideByTargetId(deps, targetUpdateId);
+    if (decidedAfterFetch) return decidedAfterFetch;
     if (targetUpdateId) {
-      if (await deps.isReloadBlocked(targetUpdateId)) return 'reload-blocked';
       // 必须先落盘再 reload:反过来的话 reload 会打断写入,闸门永远合不上。
       await deps.recordReload(targetUpdateId);
     }
@@ -112,4 +120,20 @@ export async function runStartupOtaUpdate(
   } catch {
     return 'error'; // fail-open:超时/离线/服务异常 → 放行,后台下载留给下次启动
   }
+}
+
+/**
+ * 按目标 update id 判定本轮是否该直接结束(不下载、不重启)。返回 null 表示可以继续。
+ * 拿不到 id 时不做判定——无从比较也无从计数。
+ */
+async function decideByTargetId(
+  deps: StartupOtaDeps,
+  targetUpdateId: string | undefined,
+): Promise<StartupOtaOutcome | null> {
+  if (!targetUpdateId) return null;
+  // 服务端说「有新版」只代表相对它的认知是新的。真正决定要不要重启的是 id:与当前
+  // 运行的 update 同 id 却仍在重启,就是那台设备上观察到的死循环。
+  if (targetUpdateId === deps.currentUpdateId()) return 'already-running';
+  if (await deps.isReloadBlocked(targetUpdateId)) return 'reload-blocked';
+  return null;
 }
