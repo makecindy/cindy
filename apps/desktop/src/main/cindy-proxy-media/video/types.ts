@@ -27,8 +27,9 @@ export type VideoMaybePromise<T> = CindyProxyMediaMaybePromise<T>;
  *   - 'first_and_last_frame'(缺省):1 张=首帧动画,2 张=首尾帧过渡。
  *     2026-07 之前的唯一行为,不传该字段即走这条,行为完全一致。
  *     注:"载荷逐字节同形"只成立在插件协议面(shared/ghost.ts——不传就连键
- *     都没有);本类型是 desktop 内部的归一化请求,执行链会在这里补上默认值
- *     再下发给 provider,所以内部载荷会带上该字段。
+ *     都没有);本类型是 desktop 内部的归一化请求,执行链会在组装请求时补上
+ *     默认值,但该字段仍是可选的,**provider 必须容忍缺省**(缺省即按
+ *     'first_and_last_frame' 处理),不要假设一定拿得到。
  *   - 'reference_image':多张参考图锁主体/元素/风格,由模型另行构图。
  *     提示词里须用 `[Image 1]`、`[Image 2]` 指代第几张,否则模型不知道
  *     每张图各自的用途——这条是上游要求,主机不代写提示词(passthrough)。
