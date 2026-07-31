@@ -164,6 +164,14 @@ export function normalizeMessages(input: readonly unknown[]): Record<string, unk
  * 逐字段比较越容易短路,冷开时不会出现 cached→fresh 的可见重渲染。
  */
 const HEAVY_BLOB_KEYS = new Set(['base64']);
+/**
+ * SDK 的媒体块形态是 `{ type: 'image', source: { type: 'base64', data: '…' } }` —— 字节在
+ * `source.data` 里,键名不叫 base64。只剥"叫 base64 的键"会把这份字节原样复制进镜像目录,
+ * 同样是 cindy-media 账本与回收器之外的未受管副本(review: codex P1)。
+ * 规则:所在对象自称 `type: 'base64'` 时,连同它的 `data` 一起剥掉(保留 type / media_type
+ * 这类元数据,渲染仍能看出"这里原本是一张图")。
+ */
+const BASE64_SOURCE_DATA_KEYS = new Set(['data']);
 const MAX_CONTENT_DEPTH = 12;
 
 export function stripInlineMedia(value: unknown, depth: number): unknown {
@@ -172,8 +180,10 @@ export function stripInlineMedia(value: unknown, depth: number): unknown {
   if (Array.isArray(value)) return value.map((item) => stripInlineMedia(item, depth + 1));
   if (value && typeof value === 'object') {
     const out: Record<string, unknown> = {};
+    const declaresBase64 = (value as Record<string, unknown>).type === 'base64';
     for (const [key, raw] of Object.entries(value)) {
       if (HEAVY_BLOB_KEYS.has(key)) continue;
+      if (declaresBase64 && BASE64_SOURCE_DATA_KEYS.has(key)) continue;
       out[key] = stripInlineMedia(raw, depth + 1);
     }
     return out;
@@ -728,10 +738,13 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
   }
 
   /**
-   * 进程内互斥 + 跨进程锁。`held=false` 分两种(见 LockStatus):
-   *  - `busy`:别的**进程**正在临界区 → 调用方避让(内容写跳过);
-   *  - `unavailable`:锁建不出来(EMFILE / 只读 userData…)→ 照常做事,否则这些环境里缓存
-   *    会被静默关掉;同进程的正确性已由上面的互斥链保证。
+   * 进程内互斥 + 跨进程锁。**只有真的拿到锁才算 held**:
+   *  - `busy`(别的进程在临界区)与 `unavailable`(锁建不出来:EMFILE / 控制目录被 ACL 挡住 /
+   *    只读 userData)都按"没拿到"处理 —— 内容写跳过,清理照常但只做删除;
+   *  - 早先把 `unavailable` 当 held 是为了"别在 fd 紧张时静默关掉缓存",但那等于在没有跨进程
+   *    互斥的情况下提交:对端可以在本次最后一次计数比对**之后**完成整段清理(两次自增 + 删除),
+   *    而我们随后的原子 rename 把旧正文又搬回去了(review: codex P1)。少写一次缓存只是少一次
+   *    首屏加速,重建被撤销设备的正文是隐私问题 —— 取舍不对称,fail-closed。
    */
   async function withCacheFileLock<T>(
     root: string,
@@ -739,7 +752,7 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
   ): Promise<T> {
     await ensureDir(controlDir(root)).catch(() => undefined);
     return withCrossProcessLock(cacheLockPath(root), { label: 'mirror-cache' }, (status) =>
-      task(status.held || status.reason === 'unavailable'),
+      task(status.held),
     );
   }
 

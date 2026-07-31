@@ -176,6 +176,34 @@ describe('内联媒体字节剥离', () => {
     expect(parsed.images[0]).not.toHaveProperty('base64');
   });
 
+  it("SDK 形态 `source: { type: 'base64', data }` 的字节被剥,元数据保留", () => {
+    // review(codex P1):字节在 source.data 里、键名不叫 base64 —— 只剥"叫 base64 的键"会把
+    // 这份字节原样复制进镜像目录(cindy-media 账本与回收器之外的未受管副本)。
+    const [only] = normalizeMessages([
+      row('m1', '2026-01-01T00:00:00.000Z', {
+        content: [
+          { type: 'text', text: 'hi' },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'QUJD' } },
+        ],
+      }),
+    ]);
+    const blocks = only.content as Array<Record<string, unknown>>;
+    expect(blocks[0]).toEqual({ type: 'text', text: 'hi' });
+    const source = blocks[1].source as Record<string, unknown>;
+    expect(source).not.toHaveProperty('data');
+    expect(source.type).toBe('base64');
+    expect(source.media_type).toBe('image/png');
+  });
+
+  it('JSON 字符串形态的 SDK 媒体块同样被剥', () => {
+    const payload = JSON.stringify([
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'QUJD' } },
+    ]);
+    const [only] = normalizeMessages([row('m1', '2026-01-01T00:00:00.000Z', { content: payload })]);
+    const blocks = JSON.parse(only.content as string) as Array<Record<string, unknown>>;
+    expect(blocks[0].source).not.toHaveProperty('data');
+  });
+
   it('短 JSON 字符串里的 base64 同样被剥(不看长度)', () => {
     // review(codex P1):原先只在超过 16000 字符时才解析,一小段
     // `{"images":[{"base64":"…"}]}` 会原样写进镜像目录 —— 同样是 cindy-media 账本之外的
@@ -1269,6 +1297,35 @@ describe('跨进程互斥(锁 + 清理完成标记)', () => {
   // 注:"提交前计数变了 → 丢弃"这条时序由上面的两实例用例确定性地覆盖(B 在入口读到旧计数,
   // 随后在锁上等 A 整段清理跑完,提交前再读已经变了)。这里不再另写一个靠 sleep 拼时序的版本
   // —— 那种测试本身就是 flaky 的(第一版写过,连跑三次两次失败)。
+
+  it('跨进程锁建不出来(unavailable)→ 内容写跳过,清理仍照常删除', async () => {
+    // review(codex P1):把 unavailable 当"持有"等于在没有跨进程互斥的情况下提交 —— 对端可以
+    // 在本次最后一次计数比对之后跑完整段清理,而我们的原子 rename 又把旧正文搬回去。
+    const c = cache();
+    await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')], 0);
+    const lock = path.join(`${root}.control`, 'lock');
+    const originalOpen = fsp.open;
+    const spy = vi.spyOn(fsp, 'open').mockImplementation((async (
+      target: unknown,
+      ...rest: unknown[]
+    ) => {
+      if (typeof target === 'string' && target === lock) {
+        // 不是 EEXIST:锁**建不出来**(EMFILE / 控制目录被 ACL 挡住)。
+        throw Object.assign(new Error('EMFILE'), { code: 'EMFILE' });
+      }
+      return (originalOpen as (...args: unknown[]) => Promise<unknown>)(target, ...rest);
+    }) as unknown as typeof fsp.open);
+    try {
+      // 内容写跳过(盘上仍是上一版)。
+      await c.writeMessages('dev-1', 'sess-1', [row('m2', '2026-02-01T00:00:00.000Z')], 0);
+      expect((await c.readMessages('dev-1', 'sess-1')).map((m) => m.id)).toEqual(['m1']);
+      // 清理照常做删除(删除是安全方向)。
+      await c.clearDevice('dev-1');
+      expect(await c.readMessages('dev-1', 'sess-1')).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 
   it('作废计数读不出来时保守跳过写(fail-closed)', async () => {
     if ((process.getuid?.() ?? 0) === 0) return;
