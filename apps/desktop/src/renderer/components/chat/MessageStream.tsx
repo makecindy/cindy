@@ -220,6 +220,13 @@ interface MessageStreamProps {
    *  state via useExpandedBlockMemory). The session-level "is streaming"
    *  state lives on each ChatMessage's own `isStreaming` field instead. */
   isSessionStreaming?: boolean;
+  /**
+   * 正占着 coordinator dispatch/turn 边界的那条 `continue` 合成项的 clientId
+   * （投影字段，见 AgentInputProjection）。自愈重连行用它判断「此刻正在跑的就是我」——
+   * 它从**派发一开始**就为真，比 `isSessionStreaming`（要等首个流事件）早，因此
+   * 「续跑已落库、turn 还没吐事件」那一小段不会闪成静态。旧被控端可能缺省 → null。
+   */
+  continuationInFlightClientId?: string | null;
   /** F-SYNC-2: callback to load older messages */
   onLoadMore?: () => void;
   isLoadingMore?: boolean;
@@ -2014,8 +2021,10 @@ function renderWorkGroupChild(
     isSessionStreaming: boolean;
     firstUserMessageClientId: string | null;
     lastUserMessageClientId: string | null;
-    /** 含合成行的最后一条用户侧输入(自愈重连行判断"仍在飞"用)。 */
+    /** 含合成行的最后一条用户侧输入(自愈重连行判断"仍在飞"的兜底判据)。 */
     lastUserInputClientId: string | null;
+    /** 正占着 dispatch/turn 边界的 continue 项 clientId(自愈重连行的首选判据)。 */
+    continuationInFlightClientId: string | null;
     localFileRefs: readonly KnownLocalFileRef[];
     singleResultMap: Map<string, string>;
     assistantsWithFollowingUserBoundary: ReadonlySet<string>;
@@ -2058,6 +2067,7 @@ function renderWorkGroupChild(
       isFirstUserMessage={item.message.clientId === props.firstUserMessageClientId}
       isLastUserMessage={item.message.clientId === props.lastUserMessageClientId}
       isLastUserInput={item.message.clientId === props.lastUserInputClientId}
+      isContinuationInFlight={item.message.clientId === props.continuationInFlightClientId}
       localFileRefs={props.localFileRefs}
     />
   );
@@ -2157,6 +2167,7 @@ export function MessageStream({
   messages,
   taskUpdates,
   isSessionStreaming = false,
+  continuationInFlightClientId = null,
   onLoadMore,
   isLoadingMore,
   hasMoreMessages,
@@ -3536,6 +3547,7 @@ export function MessageStream({
                               firstUserMessageClientId,
                               lastUserMessageClientId,
                               lastUserInputClientId,
+                              continuationInFlightClientId,
                               localFileRefs,
                               singleResultMap,
                               assistantsWithFollowingUserBoundary,
@@ -3656,6 +3668,7 @@ export function MessageStream({
                           isFirstUserMessage={msg.clientId === firstUserMessageClientId}
                           isLastUserMessage={msg.clientId === lastUserMessageClientId}
                           isLastUserInput={msg.clientId === lastUserInputClientId}
+                          isContinuationInFlight={msg.clientId === continuationInFlightClientId}
                           isLastMessage={msg.clientId === lastMessageClientId}
                           localFileRefs={localFileRefs}
                         />
@@ -3728,6 +3741,7 @@ const MessageItem = memo(function MessageItem({
   isFirstUserMessage,
   isLastUserMessage,
   isLastUserInput,
+  isContinuationInFlight,
   isLastMessage,
   localFileRefs,
 }: {
@@ -3766,6 +3780,12 @@ const MessageItem = memo(function MessageItem({
    * 「此刻正在跑的 turn 是不是我发起的」，从而决定要不要显示成"重新连接中"。
    */
   isLastUserInput?: boolean;
+  /**
+   * 这条消息就是**此刻正占着 coordinator dispatch/turn 边界**的那条 continue 合成项
+   * （`AgentInputProjection.continuationInFlightClientId`）。自愈重连行的首选"仍在飞"
+   * 判据：它从派发一开始就为真，覆盖「续跑已落库、turn 还没吐事件」那一小段。
+   */
+  isContinuationInFlight?: boolean;
   /** True iff this message is the last message in the full list —
    *  error-tail-banner: a trailing un-dismissed error row is rendered by the
    *  actionable banner above the composer instead of an inline card. */
@@ -3780,11 +3800,19 @@ const MessageItem = memo(function MessageItem({
         cardType={message.systemCardType}
         data={message.systemCardData}
         sessionId={sessionId}
-        // 「这条自愈记录此刻真的在飞吗」：会话有在跑的 turn，且这条就是最后一条用户侧
-        // 输入（= 那个 turn 的发起者）。两个条件缺一不可 —— 只看"结果未回填"会让重开
-        // 会话后的历史记录一直转圈（那时没有任何 turn 在跑），只看"在跑"会让用户自己
-        // 发消息之后旧的重连行跟着转。
-        autoResumeInFlight={sessionRunning === true && isLastUserInput === true}
+        // 「这条自愈记录此刻真的在飞吗」——首选精确判据 + 兜底判据的或：
+        //
+        //  · `isContinuationInFlight`：这条续跑项正占着 coordinator 的 dispatch/turn
+        //    边界。**从派发一开始就为真**，因此「续跑已落库、turn 还没吐出第一个流事件」
+        //    那一小段也算在飞，不会闪一下静态（`sessionRunning` 要等首个流事件才为真）。
+        //  · `sessionRunning && isLastUserInput`：旧被控端（device-link）可能缺省
+        //    `continuationInFlightClientId` 字段，这一支保证那种环境下不至于永远静止。
+        //
+        // 两支都不成立才是静态：那对应"这条记录的 turn 已经不在了"—— 只可能是 app 在
+        // 结算前退出/崩溃后重开对话看到的历史行，此时任务确实已经断了。
+        autoResumeInFlight={
+          isContinuationInFlight === true || (sessionRunning === true && isLastUserInput === true)
+        }
       />
     );
   }
