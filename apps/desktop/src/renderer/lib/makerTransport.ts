@@ -151,6 +151,23 @@ export function makerApiFor(sessionId: string): RoutableMaker {
   return deviceId ? makerApiForDevice(deviceId) : window.electronAPI.maker;
 }
 
+/**
+ * 粘滞归属版 maker 入口:曾解析到 deviceId 的会话,在 relay 瞬时重连清空注册表的窗口内
+ * 仍走隧道,不会退回本机。
+ *
+ * 用于「误判本机会产生副作用」的 **mutation**(与 isRemoteSessionSticky 同一判据,只是那条
+ * 服务于 gating、这条服务于调用)。协同开关就是典型:enableOrca / disableOrca 在瞬断窗口内
+ * 被误判成本机,会在**控制端本机**建出或销毁一个 team —— 本机恰好存在同 id 会话时还会操作
+ * 错对象,而用户看到的入口(按粘滞 remoteDeviceId 渲染)分明指向被控端(issue #1170 codex P2)。
+ *
+ * 普通高频操作(send / setModel / …)仍用 makerApiFor:它们本就跟随会话来源的实时判定,
+ * 且误判的代价是一次失败重试,不是在错误的机器上留下持久状态。
+ */
+export function makerApiForSticky(sessionId: string): RoutableMaker {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  return deviceId ? makerApiForDevice(deviceId) : window.electronAPI.maker;
+}
+
 /** 是否远程(device-link)会话。 */
 export function isRemoteSession(sessionId: string): boolean {
   return getSessionDeviceId(sessionId) !== undefined;

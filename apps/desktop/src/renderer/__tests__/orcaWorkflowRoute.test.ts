@@ -269,10 +269,12 @@ describe('OrcaWorkflowRoute source invariants', () => {
 
   it('does not block collaboration tab opening on worker SDK bootstrap', () => {
     const requestEnable = sessionViewSource.indexOf('const requestEnableCollab = useCallback');
-    // device-link:enableOrca 现在按 sessionId 来源路由(本机走本地 maker,远程走隧道),
-    // 调用形态从 window.electronAPI.maker.enableOrca 改成 makerApiFor(collabSessionId).enableOrca。
+    // device-link:enableOrca 按 sessionId 来源路由(本机走本地 maker,远程走隧道),
+    // 调用形态从 window.electronAPI.maker.enableOrca 改成 makerApiFor*(collabSessionId).enableOrca。
+    // 归属用**粘滞**版(makerApiForSticky):瞬断窗口内退回本机会在控制端建出 team,
+    // 与按粘滞 remoteDeviceId 渲染的入口自相矛盾(见 orcaRemoteRoutingInvariants 的对称守卫)。
     const enableCall = sessionViewSource.indexOf(
-      'await makerApiFor(collabSessionId).enableOrca',
+      'await makerApiForSticky(collabSessionId).enableOrca',
       requestEnable,
     );
     const openTab = sessionViewSource.indexOf(

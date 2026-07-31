@@ -203,6 +203,44 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  // issue #1170 codex P2:协同 mutation 在 relay 瞬时重连清空注册表的窗口内若退回本机,
+  // 会在**控制端**建出或销毁一个 team —— 与「入口按粘滞归属渲染」直接矛盾。
+  it('makerApiForSticky:注册表被清空后仍走隧道,不退回本机', async () => {
+    const { makerSpies, invoke } = stubElectron();
+    const { makerApiFor, makerApiForSticky } = await import('@/lib/makerTransport');
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    const { getStickySessionDeviceId } = await import(
+      '@/features/device-link/stickySessionOrigin'
+    );
+
+    remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', [sess('lead')]);
+    // 先解析一次,让粘滞归属记住 dev-1(与真实链路一致:视图渲染时已解析过)。
+    expect(getStickySessionDeviceId('lead')).toBe('dev-1');
+
+    // relay 瞬时重连:注册表被清空,非粘滞判定这一刻会解析成「本机」。
+    remoteProjectsStore.setDeviceSessions('dev-1', 'Mac', []);
+    await makerApiFor('lead').enableOrca('lead', { workerAgent: 'codex' });
+    expect(makerSpies.enableOrca).toHaveBeenCalled(); // 非粘滞:确实退回了本机(问题本体)
+
+    invoke.mockClear();
+    makerSpies.enableOrca.mockClear();
+    await makerApiForSticky('lead').enableOrca('lead', { workerAgent: 'codex' });
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:session:enable-orca', [
+      'lead',
+      { workerAgent: 'codex' },
+    ]);
+    expect(makerSpies.enableOrca).not.toHaveBeenCalled();
+  });
+
+  it('makerApiForSticky:从未解析过归属的本机会话仍走本机(零回归)', async () => {
+    const { makerSpies, invoke } = stubElectron();
+    const { makerApiForSticky } = await import('@/lib/makerTransport');
+
+    await makerApiForSticky('local-only').disableOrca('local-only');
+    expect(makerSpies.disableOrca).toHaveBeenCalledWith('local-only');
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   // issue #1170:协同入口的项目级 collab 开关此前一律查控制端本机 —— 拿被控端的路径查
   // 自己的 fs,读到的是控制端自己的用户级开关,与被控端 main 的权威授权可能相反。
   it('pluginEnableStateFor:传了 deviceId 就隧道查被控端;没传才查本机', async () => {

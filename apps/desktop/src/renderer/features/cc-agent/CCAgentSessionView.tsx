@@ -203,8 +203,12 @@ import {
   ackInterruptedTurnFor,
   goalApiFor,
   makerApiFor,
+  makerApiForSticky,
   orcaWorkflowsFor,
 } from '@/lib/makerTransport';
+// 协同 mutation 的归属取粘滞值(见 makerApiForSticky):瞬断窗口内误判本机会在控制端
+// 建出/销毁 team,而入口本身是按粘滞 remoteDeviceId 渲染的。
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 // fork / orca 在被控端建新 session 后,navigate 前先把该设备会话列表重拉进 store(避免 404 破窗)。
 import { refreshRemoteDeviceSessions } from '@/features/device-link/refreshRemoteSessions';
 import {
@@ -1947,7 +1951,10 @@ export function CCAgentSessionView({
         const worker: 'cc' | 'codex' = workerAgent === 'codex' ? 'codex' : 'cc';
         setCollabWorker(worker);
         setCreateWorkerOpen(false);
-        await makerApiFor(collabSessionId).enableOrca(collabSessionId, {
+        // 粘滞归属(codex review P2):入口与协同策略查询都按粘滞 remoteDeviceId 指向被控端,
+        // mutation 必须同口径 —— 非粘滞的 makerApiFor 在 relay 瞬断窗口内会退回本机
+        // enableOrca,在**控制端**建出一个 team(本机恰有同 id 会话时还会操作错对象)。
+        await makerApiForSticky(collabSessionId).enableOrca(collabSessionId, {
           workerAgent,
           role: form.role,
           label: createWorkerLabel(form.role, []),
@@ -1962,7 +1969,9 @@ export function CCAgentSessionView({
         void sessionsStore.forceRefresh('active');
         // 远程会话:enableOrca 在被控端起了 worker session,先把该设备会话列表重拉进 store
         // (注册 worker sessionId),否则 orca split 视图按 ?worker= 加载会 404。
-        const orcaDeviceId = getSessionDeviceId(collabSessionId);
+        // 归属同样取粘滞值:上面这次 enableOrca 已经按粘滞路由发到了被控端,这里若用非粘滞
+        // 判定会在瞬断窗口内解析成 undefined、跳过回流,worker 永远进不了控制端注册表。
+        const orcaDeviceId = getStickySessionDeviceId(collabSessionId);
         if (orcaDeviceId) await refreshRemoteDeviceSessions(orcaDeviceId);
         await revealWorkersTab;
       } catch (err) {
