@@ -32,6 +32,7 @@
 | [plugin-setup-runtime.md](./plugin-setup-runtime.md) | 技术设计 | 参考 | `ghost_list` / `ghost_call` 插件配置前置检查、Ask-shell Setup 卡片、配置变更回调与原调用恢复 | — |
 | [desktop-login-hosted-callback.md](./desktop-login-hosted-callback.md) | 跨仓契约 | 参考 | Desktop 系统浏览器登录的托管回调链路：auth-server 路由契约、结果页模板交付、灰度开关与回滚 | — |
 | [auth-realm-routing.md](./auth-realm-routing.md) | 跨仓契约 | 参考 | 组织 SSO 双区域发现、会话区域持久化与 token 消费端点路由 | — |
+| [claude-code-protocol-bridges.md](./claude-code-protocol-bridges.md) | 技术设计 | 参考 | Claude Code 自定义供应商多协议支持（Anthropic / Chat Completions / Responses 桥接）与 `packages/anthropic-chat-bridge` | — |
 | [legal/README.md](./legal/README.md) | 法律/合规索引 | authoritative | 法律合规资料归档边界与固定路径例外 | — |
 | [legal/wechat-open-sdk-compliance.md](./legal/wechat-open-sdk-compliance.md) | 合规记录 | restricted-review-required | Mobile 微信 Open SDK 版本、隐私披露和发布前签核 | — |
 | [legal/notices/README.md](./legal/notices/README.md) | 第三方许可/SBOM | generated | `pnpm licenses:generate`、Desktop/Mobile 随包声明 | — |
