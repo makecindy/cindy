@@ -708,6 +708,13 @@ function findNextInlineToken(
 // classifyChatPathLinkTarget 形状门(http(s) / 会话深链 / mailto 等 scheme 不收,
 // 那些归原有 matcher);`![alt](url)` 是图片语法,前置 `!` 时跳过——图片 matcher
 // 不收本地路径 URL(MARKDOWN_IMAGE_RE 只认 http/xdt 系),该形态维持字面文本现状。
+//
+// destination 与本地图片同一套口径(LOCAL_MARKDOWN_IMAGE_RE + parseLocalMarkdownDestination):
+// 允许裸空格路径、`<...>` 包裹、以及 CommonMark 的**可选 title**(`[源码](src/a.ts "实现")`)。
+// 原先 destination 卡在 `[^)\s]+`,带 title 的链接整段不匹配 → 退回字面文本;而裸路径
+// matcher 会从括号里命中 `src/a.ts`,把它切成「字面 `[源码](` + 可点路径 + 字面 ` "实现")`」
+// 三段(PR #1144 review 实捉)。补上 title 支持后整段正常成链,裸路径 matcher 因起点
+// index 更靠后而天然让位。
 function matchLocalPathLink(
   input: string,
   from: number,
@@ -715,16 +722,17 @@ function matchLocalPathLink(
   if (!input.includes('](')) return null;
   // 正则每次调用新建:g 标志的 lastIndex 是可变状态,模块级共享在提前 return /
   // 未过重置路径时会漏匹配(bot review 实捉);同文件其它 matcher 也是每调用新建字面量。
-  const re = /\[([^\]]+)\]\(([^)\s]+)\)/g;
+  const re = /\[([^\]]+)\]\((<[^>\n]+>|(?:[^()\n]|\([^()\n]*\))+)\)/g;
   re.lastIndex = from;
   let match: RegExpExecArray | null;
   while ((match = re.exec(input)) !== null) {
     if (match.index > 0 && input[match.index - 1] === '!') continue;
-    if (!classifyChatPathLinkTarget(match[2])) continue;
+    const url = parseLocalMarkdownDestination(match[2]);
+    if (!url || !classifyChatPathLinkTarget(url)) continue;
     return {
       index: match.index,
       end: match.index + match[0].length,
-      inline: { type: 'link', text: match[1], url: match[2] },
+      inline: { type: 'link', text: match[1], url },
     };
   }
   return null;
@@ -978,10 +986,14 @@ const MARKDOWN_IMAGE_RE = /!\[([^\]]*)\]\(((?:https?|xdt-image|xdt-file|cindy-me
 const LOCAL_MARKDOWN_IMAGE_RE = /!\[([^\]]*)\]\((<[^>\n]+>|(?:[^()\n]|\([^()\n]*\))+)\)/g;
 
 /**
- * 本地 Markdown 图片 destination → 路径。保留模型常输出的裸空格路径，
+ * 本地 Markdown destination → 路径。保留模型常输出的裸空格路径，
  * 只剥离由空白分隔、位于末尾的标准可选 title（双引号 / 单引号 / 括号）。
+ *
+ * 图片（`![alt](dest "title")`）与链接（`[label](dest "title")`）共用这一套口径，
+ * 两处的 destination 语法在 CommonMark 里本就相同；分开实现过一次，结果链接侧漏了
+ * title 支持（PR #1144 review 实捉）。
  */
-function parseLocalMarkdownImageDestination(raw: string): string {
+function parseLocalMarkdownDestination(raw: string): string {
   let destination = raw.trim();
   const quotedTitle = destination.match(/^(.*\S)[ \t]+(["'])(?:[^\n]|\\.)*\2$/);
   const parenthesizedTitle = destination.match(/^(.*\S)[ \t]+\([^()\n]*\)$/);
@@ -1038,7 +1050,7 @@ function matchMarkdownImage(
     matcher.re.lastIndex = from;
     let candidate: RegExpExecArray | null;
     while ((candidate = matcher.re.exec(input)) !== null) {
-      const rawUrl = matcher.local ? parseLocalMarkdownImageDestination(candidate[2]) : candidate[2];
+      const rawUrl = matcher.local ? parseLocalMarkdownDestination(candidate[2]) : candidate[2];
       if (matcher.local && !classifyChatPathLinkTarget(rawUrl)) continue;
       // 当前 matcher 的第一个正则命中可能只是注释/转义里的示例;必须继续 exec,
       // 否则同段后面的合法图片会被丢掉(review P2)。

@@ -329,12 +329,13 @@ function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): str
       max-height: 320px;
       vertical-align: middle;
     }
+    /* 图片 chip:阅读器没有 postMessage bridge,这里点不动,所以**不带下划线也不带
+       pointer** —— 下划线在本仓专表「可点」(DESIGN.md §14.5),给点不动的东西加就是
+       制造反例。底色只表达「这是张图的占位」这层排版含义。 */
     .xdt-image-chip {
       background: ${chipColor};
       border-radius: 6px;
-      cursor: pointer;
       padding: 1px 8px;
-      text-decoration: underline;
     }
     .xdt-session-chip {
       background: ${chipColor};
@@ -345,10 +346,8 @@ function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): str
       display: inline-block;
       max-width: 100%;
       padding: 0 6px;
-      /* 下划线常显:会话 chip 可点,而「下划线常显 = 可点」是唯一交互信号
-         (docs/design-rules/DESIGN.md「聊天正文的可点性信号」)。底色 / 边框只作
-         chip 观感,不兼职表达可点 —— 上面的 a 与 .xdt-image-chip 已是同一口径。 */
-      text-decoration: underline;
+      /* 同 .xdt-image-chip:阅读器里会话 chip 点不动(无 bridge、interceptNavigation
+         只放行 http(s)),所以不带下划线。渲染侧也用 <span> 而非 <a>。 */
       vertical-align: bottom;
     }
     table {
@@ -446,23 +445,30 @@ function renderInline(inline: MobileMarkdownInline, ctx: RenderContext = {}): st
     case 'text':
       return escapeHtml(inline.text);
     case 'link': {
-      const session = parseSessionDeepLinkUrl(inline.url);
-      if (session) {
-        // 会话深链 → chip:作者显式 label 优先,否则标题 map,再降级「会话 <短id>」。
-        const explicit =
-          inline.text.trim() && inline.text.trim() !== inline.url ? inline.text.trim() : null;
-        const title =
-          explicit ??
-          ctx.sessionLinkTitles?.[session.sessionId] ??
-          i18n.t('message.renderer.sessionChipFallback', { id: shortSessionId(session.sessionId) });
-        return `<a class="xdt-session-chip" href="${escapeAttribute(inline.url)}">›&nbsp;${escapeHtml(title)}</a>`;
-      }
-      // 本地路径目标(`[README.md](/abs/README.md:17)`,以及正文裸写的路径)渲染成
-      // 纯文本,不出 `<a>`:本模块只服务文件阅读器 WebView,而 MarkdownFileReader 的
-      // interceptNavigation 只放行 http(s)、其余一律拦下,`<a href="src/a.ts">` 是
-      // 「蓝色但点不动」的死链。与原生侧「未点亮 → 纯文本」同语义(阅读器里没有
-      // chip / 远端 stat 基础设施,让文档里的路径也可点属于另一个功能)。
-      if (classifyChatPathLinkTarget(inline.url)) {
+      // 本模块唯一消费方是文件阅读器 WebView(MarkdownFileReader)。那个面**只有
+      // http(s) 真的可点**:interceptNavigation 只把 http(s) 交给 Linking.openURL,
+      // 其余导航一律 return false;而且它没有任何 postMessage bridge,所以 chip 类
+      // 元素的点击也无处可去。
+      //
+      // 于是按 DESIGN.md §14.5 规则①的反面要求:**这个面上只有 http(s) 能带下划线**。
+      // 会话深链 / 本地路径 / mailto 等一律渲染成不可点形态、不出下划线 —— 否则就是
+      // 「有下划线却点不动」的反例,把刚建立的信号本身弄脏(PR #1144 review 实捉)。
+      if (!/^https?:\/\//i.test(inline.url)) {
+        const session = parseSessionDeepLinkUrl(inline.url);
+        if (session) {
+          // 会话引用仍保留 chip 观感(底色 + 边框只表达「这是个会话引用」这层排版
+          // 含义),但用 <span> 而不是 <a> —— 点不动的东西不该是锚点。
+          const explicit =
+            inline.text.trim() && inline.text.trim() !== inline.url ? inline.text.trim() : null;
+          const title =
+            explicit ??
+            ctx.sessionLinkTitles?.[session.sessionId] ??
+            i18n.t('message.renderer.sessionChipFallback', { id: shortSessionId(session.sessionId) });
+          return `<span class="xdt-session-chip">›&nbsp;${escapeHtml(title)}</span>`;
+        }
+        // 本地路径(`[README.md](/abs/README.md:17)` 与正文裸写的路径)、mailto 等:
+        // 纯文本。与原生侧「未点亮 → 纯文本」同语义(阅读器里没有 chip / 远端 stat
+        // 基础设施,让文档里的路径也可点属于另一个功能)。
         return escapeHtml(inline.text);
       }
       return `<a href="${escapeAttribute(inline.url)}">${escapeHtml(inline.text)}</a>`;

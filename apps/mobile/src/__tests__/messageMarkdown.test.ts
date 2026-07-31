@@ -1082,6 +1082,27 @@ describe('local path links(文件 chip 链路的链接形态)', () => {
     ]);
   });
 
+  it('带可选 title 的本地链接完整成链,不被裸路径 matcher 拆成三段', () => {
+    // 回归:destination 原先卡在 `[^)\s]+`,带 title 的整段不匹配 → 退回字面文本,
+    // 而裸路径 matcher 会从括号里命中 `src/App.ts`,渲染成
+    // 「字面 `[源码](` + 可点路径 + 字面 ` "实现")`」(PR #1144 review 实捉)。
+    expect(parseMobileMarkdownInlines('见 [源码](src/App.ts "实现") 的实现')).toEqual([
+      { type: 'text', text: '见 ' },
+      { type: 'link', text: '源码', url: 'src/App.ts' },
+      { type: 'text', text: ' 的实现' },
+    ]);
+    // 单引号 title、括号 title、尖括号包裹含空格路径,同图片侧一套口径。
+    expect(parseMobileMarkdownInlines("[配置](src/a.json '说明')")).toEqual([
+      { type: 'link', text: '配置', url: 'src/a.json' },
+    ]);
+    expect(parseMobileMarkdownInlines('[配置](src/a.json (说明))')).toEqual([
+      { type: 'link', text: '配置', url: 'src/a.json' },
+    ]);
+    expect(parseMobileMarkdownInlines('[图](<docs/a b.png>)')).toEqual([
+      { type: 'link', text: '图', url: 'docs/a b.png' },
+    ]);
+  });
+
   it('非路径形状的 [x](y) 保持字面文本', () => {
     expect(parseMobileMarkdownInlines('数组 [1](2) 形态')).toEqual([
       { type: 'text', text: '数组 [1](2) 形态' },

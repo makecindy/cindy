@@ -696,7 +696,14 @@ default into components.
 |---|---|
 | 桌面 | `MarkdownRenderer.tsx` 的 `MARKDOWN_LINK_CLASS` / `FileTargetChip`;`UserMessage.tsx` + `UserMessageUrlLink.tsx`;候选判定在 `lib/markdownTarget.ts` |
 | 移动 | `MessageRenderer.tsx` 的 `markdownLink` / `markdownPathChip` / `sessionLinkChipText` 与 `ChatPathChipSpan` 的点亮门槛;候选判定在 `session/chatPathCandidate.ts` |
-| 文件阅读器 | `session/selectableMarkdownHtml.ts` 的 `a` / `.xdt-image-chip` / `.xdt-session-chip`;本地路径在该面无 chip 基础设施,渲染为纯文本(不出死链) |
+| 文件阅读器 | `session/selectableMarkdownHtml.ts`。**该面只有 http(s) 真的可点**,故规则在这里的落地是反过来的:只有 `a` 带下划线,`.xdt-image-chip` / `.xdt-session-chip` 一律不带下划线也不带 `cursor: pointer`,非 http(s) 目标(本地路径 / 会话深链 / mailto)不出 `<a>` |
+
+> **文件阅读器为什么反过来**:`MarkdownFileReader.interceptNavigation` 只把 http(s) 交给
+> `Linking.openURL`、其余导航一律 `return false`,且该 WebView **没有任何 postMessage
+> bridge**,所以 chip 类元素的点击也无处可去。给点不动的元素加下划线,等于在刚建立的
+> 「有下划线 = 可点」信号上立刻造反例 —— 反而比不加更糟。要让该面的路径 / 会话引用真
+> 可点,得先给它接上导航与 bridge,那是另一个功能。(2026-07-31 PR #1144 review 实捉:
+> 初版给会话 chip 加了下划线,且图片 chip 本就带着下划线与 pointer。)
 
 契约测试:`apps/mobile/src/__tests__/chatPathCandidate.test.ts`(候选精度 + 分级门槛)、
 `apps/mobile/src/__tests__/selectableMarkdownHtml.test.ts`(阅读器可点元素均带下划线)、

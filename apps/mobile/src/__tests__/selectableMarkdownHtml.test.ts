@@ -146,36 +146,47 @@ describe('buildSelectableMarkdownHtml 本地路径不出死链', () => {
     expect(html).toContain('<a href="https://example.com/a.ts">站点</a>');
   });
 
-  it('会话深链 chip 不受影响', () => {
+  it('会话深链渲染成不可点的 chip:保留 chip 观感,但不是 <a>、也不带 href', () => {
     const html = buildSelectableMarkdownHtml('[某会话](cindy://session/abc123)');
     expect(html).toContain('xdt-session-chip');
-    expect(html).toContain('cindy://session/abc123');
+    expect(html).toContain('某会话');
+    // 阅读器无 bridge、interceptNavigation 只放行 http(s) → 会话 chip 点不动,
+    // 不该是锚点,更不该把 cindy:// 暴露成 href(PR #1144 review 实捉)。
+    expect(html).not.toContain('cindy://session/abc123');
+    expect(html).not.toMatch(/<a[^>]*xdt-session-chip/);
   });
 });
 
-describe('阅读器可点元素一律带常显下划线(DESIGN.md §14.5 规则 1)', () => {
-  // 「下划线常显 = 可点」是聊天正文与阅读器共用的唯一交互信号。这里钉住 CSS:
-  // 三类可点元素(外链 a / 图片 chip / 会话 chip)都必须有 text-decoration: underline,
-  // 谁把它改回 none 就等于让那类元素静止状态下看不出可点。
-  const CLICKABLE_SELECTORS = ['a', '.xdt-image-chip', '.xdt-session-chip'];
+describe('阅读器里「有下划线 = 可点」不得出现反例(DESIGN.md §14.5 规则 1)', () => {
+  // 这个面唯一真的可点的是 http(s):MarkdownFileReader.interceptNavigation 只把
+  // http(s) 交给 Linking.openURL,其余导航一律 return false;而且它没有任何
+  // postMessage bridge,所以 chip 类元素的点击也无处可去。
+  // 于是规则在这里的落地是反过来的:**只有 http(s) 能带下划线**。
+  const css = (): string => buildSelectableMarkdownHtml(DOC);
+  const ruleBody = (selector: string): string => {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const block = new RegExp(`(?:^|\\n)\\s*${escaped}\\s*\\{([^}]*)\\}`).exec(css());
+    expect(block, `未找到 ${selector} 的样式规则`).not.toBeNull();
+    return block![1];
+  };
 
-  it('a / .xdt-image-chip / .xdt-session-chip 的规则块里都有 underline', () => {
-    const html = buildSelectableMarkdownHtml(DOC);
-    for (const selector of CLICKABLE_SELECTORS) {
-      // 取该选择器紧随的规则块(到第一个 `}` 为止)。
-      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const block = new RegExp(`(?:^|\\n)\\s*${escaped}\\s*\\{([^}]*)\\}`).exec(html);
-      expect(block, `未找到 ${selector} 的样式规则`).not.toBeNull();
-      expect(block![1], `${selector} 缺少常显下划线`).toMatch(/text-decoration:\s*underline/);
+  it('外链 a 带常显下划线(它是这个面唯一真能点的东西)', () => {
+    expect(ruleBody('a')).toMatch(/text-decoration:\s*underline/);
+  });
+
+  it('点不动的 chip 一律不带下划线,也不带 pointer', () => {
+    for (const selector of ['.xdt-image-chip', '.xdt-session-chip']) {
+      const body = ruleBody(selector);
+      expect(body, `${selector} 点不动却带了下划线 —— 会成为「有下划线 = 可点」的反例`)
+        .not.toMatch(/text-decoration:\s*underline/);
+      expect(body, `${selector} 点不动却带了 pointer`).not.toMatch(/cursor:\s*pointer/);
     }
   });
 
-  it('没有任何可点选择器把下划线关成 none', () => {
-    const html = buildSelectableMarkdownHtml(DOC);
-    for (const selector of CLICKABLE_SELECTORS) {
-      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const block = new RegExp(`(?:^|\\n)\\s*${escaped}\\s*\\{([^}]*)\\}`).exec(html);
-      expect(block![1], `${selector} 把下划线关掉了`).not.toMatch(/text-decoration:\s*none/);
-    }
+  it('本地路径 / mailto 等非 http(s) 目标不出 <a>(不可点就不该是锚点)', () => {
+    expect(buildSelectableMarkdownHtml('见 [README.md](/abs/README.md) 补充'))
+      .not.toMatch(/<a[^>]*README/);
+    expect(buildSelectableMarkdownHtml('[联系](mailto:a@b.com)'))
+      .not.toContain('<a href="mailto:');
   });
 });
