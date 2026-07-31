@@ -192,6 +192,18 @@ describe('mergeWithBundled', () => {
     ).toBeUndefined();
   });
 
+  it('非 xAI 远端条目缺少媒体字段时不从 bundled 恢复已撤下能力', () => {
+    const bundledOpenai = BUNDLED_CATALOG.providers.find((p) => p.id === 'openai')!;
+    const remoteOpenai = JSON.parse(JSON.stringify(bundledOpenai)) as Provider;
+    delete remoteOpenai.imageModels;
+
+    expect(
+      mergeWithBundled({ version: '2', providers: [remoteOpenai] }).providers.find(
+        (p) => p.id === 'openai',
+      )?.imageModels,
+    ).toBeUndefined();
+  });
+
   it('does not infer bundled billing when a same-id primary changes auth or upstream', () => {
     const apiKeyPrimary: Catalog = {
       ...MINIMAL,

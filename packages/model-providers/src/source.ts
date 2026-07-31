@@ -147,6 +147,7 @@ export function mergeWithBundled(primary: Catalog): Catalog {
     const bundledAccess = bundled ? legacyAccessFor(p, bundled) : undefined;
     if (!bundled) return p;
     const inheritImage =
+      p.id === 'xai' &&
       p.imageModels === undefined &&
       bundled.imageModels !== undefined &&
       bundledAccess !== undefined;
