@@ -81,7 +81,10 @@ export async function requestAppRegistration(
   // 对照实现: lark-cli 同样不在此处订阅, 在 consume preflight 时报错让用户去 console
   // (https://github.com/larksuite/cli/blob/main/internal/auth/app_registration.go).
 
-  const res = await httpPostForm(registrationEndpoint(brand), form);
+  // Device-code registration always bootstraps on Feishu. `brand` only picks
+  // the user-facing verification host; polling discovers the issuing tenant
+  // and switches to Lark when required.
+  const res = await httpPostForm(registrationEndpoint('feishu'), form);
   const data = asRecord(res.body);
   const apiError = getString(data, 'error');
   if (res.status >= 400 || apiError) {

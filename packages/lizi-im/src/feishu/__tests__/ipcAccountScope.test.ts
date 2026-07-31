@@ -141,7 +141,7 @@ afterEach(() => {
 });
 
 describe('Feishu IPC account scope', () => {
-  it('starts app registration against the selected service', async () => {
+  it('starts app registration with the selected verification service', async () => {
     mocks.requestRegistration.mockResolvedValue({
       deviceCode: 'device-code',
       userCode: 'user-code',
@@ -157,6 +157,62 @@ describe('Feishu IPC account scope', () => {
 
     expect(mocks.requestRegistration).toHaveBeenCalledWith(host.httpPostForm, 'lark');
     cancelAppRegistration();
+  });
+
+  it('discovers Lark through Feishu and fetches the complete credentials from Lark', async () => {
+    vi.useFakeTimers();
+    mocks.requestRegistration.mockResolvedValue({
+      deviceCode: 'device-code',
+      userCode: 'user-code',
+      verificationUrl: 'https://open.larksuite.com/page/cli',
+      interval: 1,
+      expiresIn: 600,
+    });
+    mocks.pollRegistration
+      .mockResolvedValueOnce({
+        status: 'success',
+        result: {
+          clientId: 'cli_lark',
+          clientSecret: '',
+          tenantBrand: 'lark',
+          ownerOpenId: 'ou_lark_owner',
+        },
+      })
+      .mockResolvedValueOnce({
+        status: 'success',
+        result: {
+          clientId: 'cli_lark',
+          clientSecret: 'lark-secret',
+          tenantBrand: 'lark',
+          ownerOpenId: 'ou_lark_owner',
+        },
+      });
+
+    const begin = handlers.get('feishuBot:registration-begin');
+    await expect(Promise.resolve(begin?.({ service: 'lark' }))).resolves.toMatchObject({
+      ok: true,
+    });
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(mocks.pollRegistration).toHaveBeenNthCalledWith(
+      1,
+      host.httpPostForm,
+      'feishu',
+      'device-code',
+      1,
+    );
+    expect(mocks.pollRegistration).toHaveBeenNthCalledWith(
+      2,
+      host.httpPostForm,
+      'lark',
+      'device-code',
+      1,
+    );
+    expect(mocks.writeCredentials).toHaveBeenCalledWith({
+      appId: 'cli_lark',
+      appSecret: 'lark-secret',
+      service: 'lark',
+    });
   });
 
   it('does not reconnect when credential save loses its account generation', async () => {

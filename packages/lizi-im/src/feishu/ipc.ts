@@ -272,7 +272,7 @@ async function pollRegistrationInBackground(
 
     let result: AppRegistrationPollResult;
     try {
-      result = await pollAppRegistration(host.httpPostForm, service, deviceCode, currentInterval);
+      result = await pollAppRegistration(host.httpPostForm, 'feishu', deviceCode, currentInterval);
     } catch (err) {
       if (runId !== registrationRunId || !isAccountScopeCurrent(accountScope)) return;
       const error = err instanceof Error ? err.message : String(err);
@@ -300,7 +300,17 @@ async function pollRegistrationInBackground(
     }
 
     if (result.status === 'success') {
-      const success = result.result;
+      let success = result.result;
+      if (success.tenantBrand === 'lark' && !success.clientSecret) {
+        const larkResult = await pollAppRegistration(
+          host.httpPostForm,
+          'lark',
+          deviceCode,
+          currentInterval,
+        );
+        if (runId !== registrationRunId || !isAccountScopeCurrent(accountScope)) return;
+        if (larkResult.status === 'success') success = larkResult.result;
+      }
 
       if (!success.clientId || !success.clientSecret) {
         host.ipc.broadcast('feishuBot:registration-status', {

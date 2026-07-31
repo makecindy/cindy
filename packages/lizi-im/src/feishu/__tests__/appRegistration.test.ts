@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { LARK_ACCOUNTS_BASE_URL, requestAppRegistration } from '../appRegistration.js';
+import { FEISHU_ACCOUNTS_BASE_URL, requestAppRegistration } from '../appRegistration.js';
 
 describe('app registration service routing', () => {
-  it('uses the Lark account endpoint for Lark registration', async () => {
+  it('bootstraps on Feishu while using the selected verification host', async () => {
     const post = vi.fn(async () => ({
       status: 200,
       body: {
@@ -17,7 +17,7 @@ describe('app registration service routing', () => {
     const result = await requestAppRegistration(post, 'lark');
 
     expect(post).toHaveBeenCalledWith(
-      `${LARK_ACCOUNTS_BASE_URL}/oauth/v1/app/registration`,
+      `${FEISHU_ACCOUNTS_BASE_URL}/oauth/v1/app/registration`,
       expect.any(URLSearchParams),
     );
     expect(result.verificationUrl).toContain('open.larksuite.com');
