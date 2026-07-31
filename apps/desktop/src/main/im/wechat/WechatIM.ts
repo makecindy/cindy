@@ -1207,7 +1207,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
       case '/help':
         await this.#commitSimpleReply(
           task,
-          '可用命令：/new 新对话；/stop 停止当前任务；/stop all 停止全部任务；/status 查看状态；/help 查看帮助。',
+          '可用命令：/new 新对话；/stop 中止当前执行；/stop all 中止全部执行；/status 查看状态；/help 查看帮助。',
         );
         return;
       case '/status':

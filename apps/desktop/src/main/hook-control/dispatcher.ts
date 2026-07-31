@@ -1139,7 +1139,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         status: 'error',
         finalText: '',
         errorMessage:
-          '这个对话所在的目录已不在工作目录映射里，本条消息没有执行。把它所在的目录加进 设置 → 远程连接 → 工作目录映射 后再发一次。',
+          '这个任务所在的目录已不在工作目录映射里，本条消息没有执行。把它所在的目录加进 设置 → 远程连接 → 工作目录映射 后再发一次。',
         durationMs: 0,
       };
     } else {

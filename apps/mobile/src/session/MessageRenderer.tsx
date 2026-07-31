@@ -1475,7 +1475,7 @@ function MessageBubble({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const { t } = useTranslation();
+  const { t, i18n: i18nInstance } = useTranslation();
   const [copyState, setCopyState] = useState<CopyMessageStatus | 'idle' | 'copying'>('idle');
   const [actionSheetOpen, setActionSheetOpen] = useState(false);
   // chat-text-quote:只解析持久化 quotesEncoded 明确标记的产品引用消息，避免
@@ -1649,13 +1649,15 @@ function MessageBubble({
   }, [collapseResolved, collapseLatched, displayBubbleBody]);
   const shouldCollapseLongMessage = (collapseMeasureEnabled && collapseLatched) || collapseResolved;
   const longMessageCollapsed = shouldCollapseLongMessage && !longMessageExpanded;
+  // label 走 i18n.t,所以语言必须进依赖:否则用户在任务页挂载期间切语言,菜单会一直
+  // 停在切换前的语言,直到 capability 变化或组件重挂。
   const messageMenu = useMemo(() => buildMobileMessageMenu({
     canAddToChat,
     canCopyLink,
     canDelete,
     canFork,
     canRewind,
-  }), [canAddToChat, canCopyLink, canDelete, canFork, canRewind]);
+  }), [canAddToChat, canCopyLink, canDelete, canFork, canRewind, i18nInstance.language]);
   const actionBar = useMemo(() => buildMessageActionBarPresentation({
     align: isUser ? 'user' : 'agent',
     canCopy,

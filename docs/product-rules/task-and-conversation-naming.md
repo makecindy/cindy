@@ -485,6 +485,7 @@ IM 渠道的 `/new` 看着像「新建」，实际走 `im/shared/sessionRepo.ts:
 | 3 | discord / feishu / wechat（telegram 的同形副本） | 按 reviewer 点到的那个文件改 |
 | 4 | main 抛错 → `projection.error` → `ErrorBanner` | 按文件类别一刀切，没追这一条的实际渲染 |
 | 5 | `notificationService.buildFeishuText` → 飞书私聊 | 前四轮都在追「报错」，没想到**成功态通知**也是一条 |
+| 6 | `dispatcher.ts` / `session-runner.ts` 的映射守卫 → `turn.end.errorMessage` → 渠道 | 出口清单按**函数名**枚举，看不见「文案当返回值逐层传出」；且反向扫描时只搜了「会话」，没搜「对话」 |
 
 所以改术语时，对每一处候选串问：**它从哪里被渲染出来？** 三种答案对应三种处理——
 renderer 按 code 取 i18n（不改这串，改 i18n key）／原样进 UI（必须改）／只进日志或给
@@ -516,9 +517,16 @@ LLM（不改）。拿不准就搜一次调用链，代价比多一轮 review 低
 # 1. 找出 main 侧所有「送给用户」的出口调用点
 grep -rnE 'sendMarkdownText|sendFeishuText|desktopConfirmImNotifier|showDesktopToast|new Notification' \
   apps/desktop/src/main --include='*.ts' | grep -v __tests__
-# 2. 反向:列出 main 侧所有含术语词的字符串字面量,逐条回答"它从哪个出口出去"
-grep -rn '会话' apps/desktop/src/main --include='*.ts' | grep -vE '__tests__|:[0-9]+:\s*(//|\*)'
+# 2. 反向:列出所有含术语词的字符串字面量,逐条回答"它从哪个出口出去"
+#    ⚠️ 两个词都要搜。只搜「会话」会漏掉「这个对话所在的目录…」这类同样指条目的错句。
+grep -rnE '会话|对话' apps/desktop/src/main apps/mobile/src packages/*/src \
+  --include='*.ts' --include='*.tsx' | grep -vE '__tests__|:[0-9]+:\s*(//|\*)'
 ```
+
+**第 1 步（按出口函数名 grep）单独用不够**：有些文案不是被出口函数直接调用，而是**当返回值
+逐层传出去**的。`hook-control/dispatcher.ts` 的映射守卫把文案塞进 `outcome.errorMessage`，
+经 `turn.end.errorMessage` 才到渠道用户；`session-runner.ts` 的 `fail(...)` 同理。grep 出口
+函数名永远看不到它们——只有第 2 步的反向扫描能。**两步是互补的，不能只做一步。**
 
 **顺带修掉一处 `origin/main` 既有乱码**：`sessionReferenceResolver.ts` 有两句
 `来源设备返回了无效的会话历史` 被存成了 UTF-8 字节按 GBK 解过一遍的形态
