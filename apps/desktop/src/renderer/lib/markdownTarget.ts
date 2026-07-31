@@ -12,6 +12,12 @@ const SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 const WINDOWS_ABSOLUTE_PATH_RE = /^[a-z]:[\\/]/i;
 const URL_WITH_DOUBLE_SLASH_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
 const BARE_FILE_REF_RE = /^[^\s:<>()[\]{}"'`]+?\.[a-z0-9]{1,10}$/i;
+/**
+ * 显式绝对路径形态:`file://` scheme / POSIX `/…` / Windows 盘符。**不要求扩展名** ——
+ * `/etc/hosts` 与 `C:\Windows\System32` 是路径引用里最明确的形态,不该因为没有后缀
+ * 就被当成可疑。仅供 isAmbiguousPathShape 使用(移动端同名常量需同步)。
+ */
+const ABSOLUTE_PATH_SHAPE_RE = /^(?:file:\/\/|\/|[A-Za-z]:[\\/])/i;
 const POSITIVE_LINE_NUMBER_RE = /^[1-9]\d{0,6}$/;
 const LINE_RANGE_SUFFIX_RE = /^([1-9]\d{0,6})-([1-9]\d{0,6})$/;
 
@@ -179,11 +185,14 @@ export function isAmbiguousPathShape(href: string, originalHref?: string): boole
   // 误判成歧义、在断链时退化成纯文本 —— 与移动端 candidate.directoryShape 等价
   // (PR #1144 review 实捉)。
   if (looksLikeDirectoryPath(raw)) return false;
-  // `file://` 是显式写出的绝对路径 scheme,不可能与散文 / 属性访问同形 → 永不歧义。
-  // 必须在这里单列:looksLikeFilePath 会被 URL_SCHEME_RE 挡掉而回 false(那条排除是
-  // 为「别把 https:// 当本地路径」服务的),照抄它会把最明确的形态判成最可疑的
-  // (2026-07-31 检查点自查发现,非 reviewer 提出)。
-  if (/^file:\/\//i.test(raw)) return false;
+  // **绝对路径正面识别,不要求扩展名。** 必须自己判,不能靠 looksLikeFilePath 顺带:
+  // 那个谓词的两条排除项是为别的用途写的(URL_SCHEME_RE 为「别把 https:// 当本地路径」、
+  // POSIX 分支要求扩展名是为「别让无扩展名引用触发 TextLightbox」),照抄它就会连带
+  // 继承一串与歧义判定无关的排除,把**最明确的形态判成最可疑的**:
+  //   - `file:///Users/me/a.md` → URL_SCHEME_RE 挡掉 → 曾被判歧义;
+  //   - `/etc/hosts`、`/usr/bin/node` → POSIX 分支要扩展名 → 曾被判歧义。
+  // 前者是检查点自查发现,后者是 PR #1144 review 实捉 —— 同一个根因的两个分支。
+  if (ABSOLUTE_PATH_SHAPE_RE.test(raw)) return false;
   return !looksLikeFilePath(href);
 }
 

@@ -301,11 +301,35 @@ describe('歧义候选的点亮门槛(DESIGN.md §14.5 规则 5)', () => {
     }
   });
 
-  it('file:// 永不歧义 —— 最明确的形态不得被判成最可疑的', () => {
-    // looksLikeFilePath 会被 URL_SCHEME_RE 挡掉而回 false,直接照抄它就会把
-    // file:///abs/a.md 打进歧义档(2026-07-31 检查点自查发现,reviewer 未提)。
-    expect(linkAmbiguity('file:///Users/me/a.md')).toBe('optimistic-ok');
-    expect(linkAmbiguity('file:///Users/me/no-ext-dir')).toBe('optimistic-ok');
+  it('绝对路径永不歧义,**且不要求扩展名** —— 最明确的形态不得被判成最可疑的', () => {
+    // 判据不能靠 looksLikeFilePath 顺带:它的 URL_SCHEME_RE 排除是为「别把 https://
+    // 当本地路径」写的、POSIX 分支要求扩展名是为「别让无扩展名引用触发预览」写的。
+    // 照抄就会继承一串与歧义判定无关的排除 —— 同一根因的两个分支:
+    for (const sample of [
+      'file:///Users/me/a.md',          // ← URL_SCHEME_RE 分支(检查点自查发现)
+      'file:///Users/me/no-ext',
+      '/etc/hosts',                     // ← POSIX 要扩展名分支(review 实捉)
+      '/usr/bin/node',
+      '/Users/dash/Code/Cindy',
+      'C:\\Windows\\System32',          // ← Windows 盘符(本就为真,一并钉住)
+    ]) {
+      expect(linkAmbiguity(sample), sample).toBe('optimistic-ok');
+      expect(ambiguity(sample), `行内 code 入口 ${sample} 不同档`).toBe('optimistic-ok');
+    }
+  });
+
+  it('已知取舍:以 `/` 开头的正则字面量会跟着进乐观点亮档', () => {
+    // `/\d+/g` 这类以 `/` 开头、不以 `/` 结尾的正则字面量,形状上与 POSIX 绝对路径
+    // 无法区分,于是断链时也会被乐观点亮、点了必失败。刻意接受:
+    //   - 链路正常时它 stat 回 nonfile → 纯文本,只影响断链这一个降级态;
+    //   - 代价的另一边是 /etc/hosts、/usr/bin/node、/Users/... 这类**开发对话里最常见
+    //     的绝对路径**在断链时全部不点亮,那个错更醒目也更常见;
+    //   - 若为它收紧,就要在词法层区分正则与路径,那正是「靠形状排除必然连真的一起砍」
+    //     的老问题(§14.5 规则 4 的教训)。
+    // 用例把它写成**显式已知项**而不是留白,避免后人当成新 bug 又反向改一轮。
+    expect(ambiguity('/\\d+/g')).toBe('optimistic-ok');
+    // 以 `/` 结尾的正则字面量走目录分支,本来就非歧义 —— 行为无变化。
+    expect(ambiguity('/^\\d+$/')).toBe('optimistic-ok');
   });
 
   it('正文裸路径入口不受影响:词法强制带扩展名 → 恒非歧义', () => {

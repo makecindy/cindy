@@ -25,6 +25,12 @@ const POSIX_ABS_PATH_RE = /^\/[^/\s][^\s]*\.[a-z0-9]{1,10}(\?[^\s]*)?$/i;
 const REL_PATH_WITH_SEP_AND_EXT_RE = /^[^\s:]*[\\/][^\s:]+\.[a-z0-9]{1,10}(\?[^\s]*)?$/i;
 /** 任意 URL scheme(http://、file://、git+ssh:// …)。 */
 const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+/**
+ * 显式绝对路径形态:`file://` scheme / POSIX `/…` / Windows 盘符。**不要求扩展名** ——
+ * `/etc/hosts` 与 `C:\Windows\System32` 是路径引用里最明确的形态,不该因为没有后缀就被
+ * 当成可疑。仅供 isAmbiguousChatPathShape 使用(桌面 markdownTarget 同名常量需同步)。
+ */
+const ABSOLUTE_PATH_SHAPE_RE = /^(?:file:\/\/|\/|[A-Za-z]:[\\/])/i;
 /** 广义 scheme 前缀(`foo:`),用于剔除 mailto: 等非路径形态。 */
 const SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 /** 尾部路径分隔符 → 目录形态。 */
@@ -183,10 +189,12 @@ export interface ChatPathCandidate {
 export function isAmbiguousChatPathShape(href: string, originalHref?: string): boolean {
   const raw = originalHref ?? href;
   if (looksLikeDirectoryPath(raw)) return false;
-  // `file://` 是显式写出的绝对路径 scheme,不可能与散文 / 属性访问同形 → 永不歧义。
-  // 必须单列:looksLikeFilePath 会被 URL_SCHEME_RE 挡掉而回 false(那条排除是为
-  // 「别把 https:// 当本地路径」服务的),照抄会把最明确的形态判成最可疑的。
-  if (/^file:\/\//i.test(raw)) return false;
+  // **绝对路径正面识别,不要求扩展名。** 不能靠 looksLikeFilePath 顺带:它的
+  // URL_SCHEME_RE 排除是为「别把 https:// 当本地路径」写的、POSIX 分支要求扩展名是为
+  // 「别让无扩展名引用触发预览」写的,照抄就会把最明确的形态判成最可疑的 ——
+  // `file:///Users/me/a.md`(检查点自查)与 `/etc/hosts`、`/usr/bin/node`
+  // (PR #1144 review 实捉)是同一根因的两个分支。
+  if (ABSOLUTE_PATH_SHAPE_RE.test(raw)) return false;
   return !looksLikeFilePath(href);
 }
 

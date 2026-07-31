@@ -250,6 +250,30 @@ describe('isAmbiguousPathShape(远程会话 unknown 的乐观点亮门槛)', () 
     }
   });
 
+  it('绝对路径不歧义,**且不要求扩展名**(不靠 looksLikeFilePath 顺带判)', () => {
+    // looksLikeFilePath 的两条排除项是为别的用途写的:URL_SCHEME_RE 为「别把 https://
+    // 当本地路径」、POSIX 分支要求扩展名为「别让无扩展名引用触发 TextLightbox」。
+    // 照抄它会继承一串与歧义判定无关的排除,把最明确的形态判成最可疑的 —— 同一根因
+    // 的两个分支:file:// (检查点自查发现) 与 /etc/hosts (PR #1144 review 实捉)。
+    for (const p of [
+      'file:///Users/me/a.md', 'file:///Users/me/no-ext',
+      '/etc/hosts', '/usr/bin/node', '/Users/dash/Code/Cindy',
+      'C:\\Windows\\System32',
+    ]) {
+      expect(isAmbiguousPathShape(p), p).toBe(false);
+    }
+    // 带行号后缀时 href 已剥掉后缀,两个参数都要判对。
+    expect(isAmbiguousPathShape('/etc/hosts', '/etc/hosts:12')).toBe(false);
+  });
+
+  it('已知取舍:以 `/` 开头的正则字面量跟着进非歧义档', () => {
+    // 与 POSIX 绝对路径形状无法区分。刻意接受:只影响断链这一个降级态(链路正常时
+    // stat 回 nonfile → 纯文本),而代价的另一边是 /etc/hosts、/usr/bin/node 这类
+    // 开发对话里最常见的绝对路径在断链时全部不点亮 —— 那个错更醒目也更常见。
+    // 写成显式已知项,避免后人当成新 bug 又反向改一轮。
+    expect(isAmbiguousPathShape('/\\d+/g')).toBe(false);
+  });
+
   it('无分隔符裸名 → 歧义(与属性访问同形)', () => {
     for (const p of ['package.json', 'array.map', 'console.log', 'Date.now', '1.2']) {
       expect(isAmbiguousPathShape(p), p).toBe(true);

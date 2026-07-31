@@ -1226,6 +1226,25 @@ describe('bare file paths(正文纯文本形态)', () => {
     ]);
   });
 
+  it('属性值里合法的 `>` 不截断标签区间(守卫的覆盖面要等于它声称的范围)', () => {
+    // 带引号的属性值里出现 `>` 完全合法。按 `[^<>]*` 扫会在属性内的 `>` 提前收尾,
+    // 后面的 src/App.tsx 重新暴露给裸路径 matcher,标签被拆成三段 —— 守卫在它自称
+    // 保护的一部分属性值上失效(PR #1144 review 实捉)。
+    expect(parseMobileMarkdownInlines('<span title="a > src/App.tsx">x</span>')).toEqual([
+      { type: 'text', text: '<span title="a > src/App.tsx">x</span>' },
+    ]);
+    // 单引号同理;同一标签内混用两种引号也要整段吃掉。
+    expect(parseMobileMarkdownInlines("<img src=\"a.png\" alt='b > docs/c.png'>")).toEqual([
+      { type: 'text', text: "<img src=\"a.png\" alt='b > docs/c.png'>" },
+    ]);
+    // 未闭合引号已是坏 HTML:退化为「不成立标签区间」,与本守卫加入前一致,
+    // 不为它另造语义(这条同时钉住修法没有把区间贪心延伸到段尾)。
+    expect(parseMobileMarkdownInlines('<span title="x > src/App.tsx')).toEqual([
+      { type: 'text', text: '<span title="x > ' },
+      { type: 'link', text: 'src/App.tsx', url: 'src/App.tsx', bare: true },
+    ]);
+  });
+
   it('元素内容里的路径照常识别(与既有 strong / code / 裸 URL matcher 同口径)', () => {
     // 刻意**不**挡元素内容:实测既有 matcher 在字面 HTML 的内容里同样会解析
     // (`<div>**加粗**</div>` → strong、`<div>https://x.com</div>` → link),

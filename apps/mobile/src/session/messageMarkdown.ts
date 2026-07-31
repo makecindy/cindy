@@ -1021,7 +1021,15 @@ function parseLocalMarkdownDestination(raw: string): string {
 // strong / inlineCode / 裸 URL matcher 行为一致(它们同样会在字面 HTML 的内容里解析,
 // 实测过),单独把裸路径排除反而会造成本文件内部不一致。
 // 只认真正像标签的形态,`a < b` 这类散文里的 `<` 不构成区间。
-const HTML_TAG_SPAN_RE = /<\/?[A-Za-z][\w.-]*(?::[A-Za-z][\w.-]*)*(?:\s[^<>]*)?\/?>/g;
+//
+// 属性段是**引号感知**的:带引号的属性值里出现 `>` 完全合法(`<span title="a > b">`),
+// 若按 `[^<>]*` 扫,区间会在属性内的 `>` 提前收尾,后面的路径重新暴露给裸路径 matcher,
+// 于是这道守卫在它声称保护的一部分属性值上失效(PR #1144 review 实捉:守卫的覆盖面
+// 小于它声称的范围)。故属性段按「双引号串 | 单引号串 | 非引号非尖括号字符」逐段吃。
+// 未闭合引号(`<span title="a > b`)整体不成立区间 —— 那已是坏 HTML,退化为不识别,
+// 与本条守卫加入前的行为一致,不额外造新语义。
+const HTML_TAG_SPAN_RE =
+  /<\/?[A-Za-z][\w.-]*(?::[A-Za-z][\w.-]*)*(?:\s(?:"[^"]*"|'[^']*'|[^<>"'])*)?\/?>/g;
 
 function isInsideHtmlTagMarkup(input: string, index: number): boolean {
   if (!input.includes('<')) return false;
