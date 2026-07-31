@@ -392,6 +392,44 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     expect(runtime.install).not.toHaveBeenCalled();
   });
 
+  it('rejects install when the account switches during packaging', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    const detail = await h.service.detail(customMarketPluginId('team-lib', 'alpha'));
+
+    // 打包(异步)完成后、装出前,会话已漂移到 user-2:beforeCommit 必须拒绝,
+    // 不得把 user-1 审阅的插件装进 user-2 的运行时。
+    h.api.listAll.mockImplementation(async () => {
+      runtime.session = { mode: 'cloud', dataOwnerId: 'user-2', generation: 2 };
+      return [];
+    });
+    // 打包前的 discover/校验按 user-1 完成;在 install 入口后切换会话。
+    const installPromise = h.service.install(customMarketPluginId('team-lib', 'alpha'), {
+      expectedReleaseId: detail.releaseId,
+      expectedManifest: detail.manifest,
+    });
+    runtime.session = { mode: 'cloud', dataOwnerId: 'user-2', generation: 2 };
+    await expect(installPromise).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(runtime.install).not.toHaveBeenCalled();
+    runtime.session = { mode: 'cloud', dataOwnerId: 'user-1', generation: 1 };
+  });
+
+  it('rejects listSources when the account switches during discovery', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+
+    // listSources 异步发现 A 的目录;返回前会话漂移到 user-2 时必须拒绝,
+    // 不得把 A 的私有 URL/本地路径摘要发给当前 Renderer。
+    const listPromise = h.service.listSources();
+    runtime.session = { mode: 'cloud', dataOwnerId: 'user-2', generation: 2 };
+    await expect(listPromise).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    runtime.session = { mode: 'cloud', dataOwnerId: 'user-1', generation: 1 };
+  });
+
   it('rejects install when another source already owns the ghostId', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);

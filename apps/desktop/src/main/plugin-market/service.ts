@@ -428,7 +428,11 @@ export class PluginMarketService {
 
   async listSources(): Promise<MarketSourceSummary[]> {
     const owner = captureMarketOwner();
-    return this.sourceManagerForOwner(owner).listSources();
+    const sources = await this.sourceManagerForOwner(owner).listSources();
+    // 异步发现期间账号可能已切换:摘要含私有仓库 URL 与本地绝对路径,
+    // 返回前必须确认会话未漂移,避免把上一账号的来源信息发给当前 Renderer。
+    requireSameMarketOwner(owner);
+    return sources;
   }
 
   async addSource(input: {
@@ -542,6 +546,7 @@ export class PluginMarketService {
       const ghost = await installCustomMarketPlugin({
         pluginDir: plugin.dir,
         expected: options.expectedManifest,
+        beforeCommit: () => requireSameMarketOwner(owner),
       });
       // 包目录落位后,溯源写入操作开始时捕获的 owner 账本(与服务端安装同款)。
       await this.withCapturedLedgerMutation(ledger, () => {
@@ -777,8 +782,11 @@ export class PluginMarketService {
     const ownsInstall = Boolean(
       ghost && record?.installed && record.pluginId === plugin.id,
     );
+    // 与自定义侧 customToItem 对齐:已拥有当前安装记录的来源保留所有权
+    // (installed / update-available),duplicate 只标未拥有安装的竞争来源,
+    // 避免先安装者被重复 ghostId 降格、失去更新入口。
     const conflict = Boolean(
-      duplicateGhostIds.has(plugin.ghostId) ||
+      (duplicateGhostIds.has(plugin.ghostId) && !ownsInstall) ||
         (ghost && (!record?.installed || record.pluginId !== plugin.id)),
     );
     const installState: PluginMarketItem['installState'] = conflict

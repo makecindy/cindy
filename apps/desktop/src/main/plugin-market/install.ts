@@ -36,6 +36,12 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 export async function installCustomMarketPlugin(input: {
   pluginDir: string;
   expected: GhostManifest;
+  /**
+   * 打包完成后、实际改动 Ghost 运行时之前调用的校验钩。
+   * 自定义市场按调用方捕获的账户审阅 manifest;打包是异步的,装出前必须
+   * 重新确认会话未漂移,避免把 A 审阅的插件装进当前账户 B 的运行时。
+   */
+  beforeCommit?: () => void;
 }): Promise<InstalledGhost> {
   let raw: unknown;
   try {
@@ -73,6 +79,8 @@ export async function installCustomMarketPlugin(input: {
         packed.message,
       );
     }
+    // 装出前最后防线:打包期间账号可能已切换,确认仍为用户审阅时的账户。
+    input.beforeCommit?.();
     return await installOrUpdateMarketGhostPackage(tempPath, {
       ghostId: validated.manifest.id,
       version: validated.manifest.version,

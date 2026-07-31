@@ -268,14 +268,27 @@ export class MarketSourceManager {
       backupActive = true;
       await fs.promises.rename(staging, cloneDir);
     } catch (error) {
+      let restoreError: unknown = null;
       if (backupActive) {
-        // staging 落位失败：恢复旧缓存。staging 与 backup 都尽力清理。
-        await fs.promises.rename(backup, cloneDir).catch(() => undefined);
+        // staging 落位失败：恢复旧缓存。恢复 rename 也可能失败(文件占用/权限/
+        // 路径冲突),不能吞——否则旧缓存静默遗留在随机备份路径、cloneDir 持续缺失。
+        restoreError = await fs.promises.rename(backup, cloneDir).then(
+          () => null,
+          (err: unknown) => err,
+        );
       }
       await fs.promises.rm(staging, { recursive: true, force: true }).catch(() => undefined);
       if (!backupActive) {
         // 旧目录改名失败但可能已部分移动；尽力清理备份残留。
         await fs.promises.rm(backup, { recursive: true, force: true }).catch(() => undefined);
+      }
+      if (restoreError) {
+        const cause = error instanceof Error ? error.message : String(error);
+        const restore = restoreError instanceof Error ? restoreError.message : String(restoreError);
+        throwIpcError(
+          'INTERNAL',
+          `刷新替换缓存失败(${cause}),且旧缓存恢复失败(${restore});旧缓存保留在备份目录 ${backup},请检查后手动恢复`,
+        );
       }
       throw error;
     }
