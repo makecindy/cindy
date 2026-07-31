@@ -63,6 +63,7 @@ let remoteList: Message[] = [];
 let remoteListResolver: ((args: unknown[]) => Message[] | Promise<Message[]>) | null = null;
 /** 被控端经隧道返回的 around 窗口(local-db:messages:around-client-id):搜索跳转用。 */
 let remoteAround: Message[] = [];
+let remoteProjectionResult: Promise<unknown> | null = null;
 const invoke = vi.fn(async (_deviceId: string, channel: string, _args: unknown[]) => {
   if (channel === 'local-db:messages:list') return remoteListResolver?.(_args) ?? remoteList;
   if (channel === 'local-db:messages:around-client-id') return remoteAround;
@@ -70,6 +71,7 @@ const invoke = vi.fn(async (_deviceId: string, channel: string, _args: unknown[]
     return { agentKind: 'cc', remoteHostId: null, sdkSessionId: null, fastMode: false, contextTokens: 0, contextWindow: 0, totalCostUsd: 0 };
   }
   if (channel === 'maker:input:get-projection') {
+    if (remoteProjectionResult) return remoteProjectionResult;
     return { sessionId: _args[0], pendingQueue: [], steeringQueueClientIds: [], queuePaused: false, queueExpanded: false, queueInteractionLocks: [], queueEditLocks: [], queueAbortPending: false, error: null, recovery: null, errorRetryText: null };
   }
   return null;
@@ -136,6 +138,7 @@ beforeEach(() => {
   remoteList = [];
   remoteListResolver = null;
   remoteAround = [];
+  remoteProjectionResult = null;
   invoke.mockClear();
 });
 
@@ -216,6 +219,54 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     });
 
     expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBe('owner-b');
+  });
+
+  it('同源权威 projection push 到达后丢弃已在途旧查询', async () => {
+    const s = sid();
+    const oldProjection = deferred<unknown>();
+    remoteProjectionResult = oldProjection.promise;
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s }] as never);
+    makerChatStore.ensureInitialMessages(s);
+    await flush();
+    makerChatStore.initGlobalListeners();
+
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:input:projection',
+      payload: {
+        sessionId: s,
+        pendingQueue: [],
+        steeringQueueClientIds: [],
+        queuePaused: false,
+        queueExpanded: false,
+        queueInteractionLocks: [],
+        queueEditLocks: [],
+        queueAbortPending: false,
+        continuationTurnClientId: 'owner-new',
+        error: null,
+        recovery: null,
+        errorRetryText: null,
+      },
+    });
+    expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBe('owner-new');
+
+    oldProjection.resolve({
+      sessionId: s,
+      pendingQueue: [],
+      steeringQueueClientIds: [],
+      queuePaused: false,
+      queueExpanded: false,
+      queueInteractionLocks: [],
+      queueEditLocks: [],
+      queueAbortPending: false,
+      continuationTurnClientId: 'owner-old',
+      error: null,
+      recovery: null,
+      errorRetryText: null,
+    });
+    await flush();
+
+    expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBe('owner-new');
   });
 
   it('remote stall watchdog only counts heavy session pushes, not lightweight activity', async () => {

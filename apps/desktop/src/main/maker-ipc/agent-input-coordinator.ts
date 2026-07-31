@@ -1170,6 +1170,10 @@ export class AgentInputCoordinator {
     const messageUuid = crypto.randomUUID();
     const createdAt = new Date().toISOString();
     const steerGeneration = state.generation;
+    // steer ack 期间原 turn 可能先收到 terminal 事件并清掉 activeTurn。owner 是本次
+    // 注入开始时就已确定的 vendor-turn 身份，必须在 await 前快照，不能等 ack 后再从
+    // 可能已经清空的 activeTurn 读取。
+    const steerContinuationOwnerClientId = state.activeTurn?.continuationOwnerClientId ?? null;
     this.clearErrorUnlessQueueHeadBlocked(state, item.clientId);
     state.queuePaused = false;
     if (!state.steeringQueueClientIds.includes(item.clientId)) {
@@ -1344,8 +1348,6 @@ export class AgentInputCoordinator {
     const priorError = accepted.error;
     const priorStickyError = accepted.stickyError;
     const priorRecovery = accepted.recovery;
-    const priorContinuationOwnerClientId =
-      accepted.activeTurn?.continuationOwnerClientId ?? null;
     accepted.error = null;
     accepted.stickyError = null;
     accepted.recovery = null;
@@ -1364,7 +1366,7 @@ export class AgentInputCoordinator {
       continuationOwnerClientId:
         item.originalSyntheticTrigger === 'continue'
           ? item.clientId
-          : priorContinuationOwnerClientId,
+          : steerContinuationOwnerClientId,
     };
     this.emit(sessionId);
 

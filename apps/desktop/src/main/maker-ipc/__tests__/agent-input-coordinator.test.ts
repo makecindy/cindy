@@ -5082,6 +5082,34 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     expect(projection.continuationTurnClientId).toBeNull();
   });
 
+  it('keeps the continuation owner when a terminal event races ahead of steer ack but host remains running', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    const sid = 'continue-owner-terminal-before-steer-ack';
+    const steerGate = deferred<void>();
+    h.steerToAgent.mockImplementationOnce(() => steerGate.promise);
+
+    h.coordinator.enqueue(
+      sid,
+      makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT),
+      { resumeRestorePausedQueue: true },
+    );
+    await flush();
+
+    const steerPromise = h.coordinator.steer(sid, makeItem('q-steer', 'additional context'));
+    await flush();
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(latestProjection(h.projections).continuationTurnClientId).toBeNull();
+
+    // maker-core 仍把注入接受进同一 vendor turn；host running 视图也仍为 true。
+    steerGate.resolve();
+    await expect(steerPromise).resolves.toBe(true);
+    await flush();
+
+    expect(latestProjection(h.projections).continuationTurnClientId).toBe('q-continue');
+  });
+
   it('does not retain an in-flight continuation marker when the user cancels it in the queue', async () => {
     const h = createHarness();
     const sid = 'continue-cancelled-while-queued';

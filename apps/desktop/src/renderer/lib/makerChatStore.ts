@@ -1572,14 +1572,21 @@ function shallowEqualRecord(
 
 const AUTO_RESUME_PENDING_CLIENT_ID = '__auto_resume_pending__';
 
-function applyInputProjection(projection: AgentInputProjection): void {
+function applyInputProjection(
+  projection: AgentInputProjection,
+  opts: { supersedeQueries?: boolean } = {},
+): void {
   if (!projection.sessionId) return;
+  if (opts.supersedeQueries !== false) {
+    supersedeInputProjectionRequests(projection.sessionId);
+  }
   // wire 上「字段缺省」就是旧被控端的能力信号；新版没有续跑项时也会显式发 null。
   // 必须在 `?? null` 归一化前按 own property 读取，不能让 undefined/null 混淆版本。
   const continuationInFlightProjectionCapability: ContinuationInFlightProjectionCapability =
     Object.prototype.hasOwnProperty.call(projection, 'continuationTurnClientId')
       ? 'supported'
       : 'legacy';
+  const projectedContinuationTurnClientId = projection.continuationTurnClientId ?? null;
   setState(projection.sessionId, (s) => {
     // Only trigger if the retried message is still stuck in the pending queue:
     // projection.error is queue-level (string | null, no clientId), so we correlate
@@ -1681,7 +1688,7 @@ function applyInputProjection(projection: AgentInputProjection): void {
       errorRetryText: projection.errorRetryText,
       credentialSwitchWait: projection.credentialSwitchWait ?? null,
       continuationInFlightClientId: projection.continuationInFlightClientId ?? null,
-      continuationTurnClientId: projection.continuationTurnClientId ?? null,
+      continuationTurnClientId: projectedContinuationTurnClientId,
       continuationInFlightProjectionCapability,
       ...(authRetryProjectionError ? { _authRetryPersistOnProjectionError: undefined } : {}),
     };
@@ -1699,12 +1706,12 @@ function requestInputProjection(sessionId: string): void {
   if (!sessionId) return;
   if (typeof window === 'undefined' || !window.electronAPI?.maker?.input?.getProjection) return;
   const origin = remoteProjectsStore.getSessionDeviceId(sessionId);
-  const epoch = noteInputProjectionOrigin(sessionId, origin);
+  const epoch = beginInputProjectionRequest(sessionId, origin);
   makerApiFor(sessionId)
     .input.getProjection(sessionId)
     .then((projection) => {
       if (!isCurrentInputProjectionRequest(sessionId, origin, epoch)) return;
-      applyInputProjection(projection);
+      applyInputProjection(projection, { supersedeQueries: false });
     })
     .catch((err) => log.warn('get input projection failed:', err));
 }
@@ -2622,6 +2629,7 @@ export function handleStreamEvent(
         errorRetryText: finalized.error ? finalized.errorRetryText : null,
         pendingPermission: null,
         pendingAskUser: null,
+        continuationTurnClientId: null,
         // F-AUQ-MIN-5: viewerState lives with pendingAskUser — when the
         // pending question is gone, reset so the next one starts expanded.
         askUserViewerState: 'expanded',
@@ -2725,6 +2733,7 @@ export function handleStreamEvent(
         errorRetryText: derivedRetryText ?? preservedRetryText,
         isStreaming: false,
         activeTurnRetryText: null,
+        continuationTurnClientId: null,
         queueAbortPending: false,
         streamingText: '', // MEM-4: finalizeStreamingInState intentionally keeps streamingText for
         // the 'done' path to consume — reset it explicitly on error so the
@@ -3160,6 +3169,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     pendingGhostGrantConfirm: null,
     queueAbortPending: false,
     steeringQueueClientIds: [],
+    continuationTurnClientId: null,
     // session 都关了,后台任务事件流已断:running 残留任务标 stopped、唤醒桥接
     // 清零,否则 running 快照(折算了后台任务)会让 spinner 永久转下去。
     taskUpdates: stoppedTasks,
@@ -3257,6 +3267,7 @@ function handleStatusUpdate(
       startedAt,
     },
     activeTurnRetryText: isTurnComplete ? null : state.activeTurnRetryText,
+    continuationTurnClientId: update.isRunning ? state.continuationTurnClientId : null,
     // 新 turn 真正启动(isRunning false→true)时清掉上一轮残留的终态 error:
     // coordinator 路径的 send 经 projection error:null 清横幅,但 direct send
     // (scheduler / send-to-session / goal 等不走 coordinator 的路径)不发
@@ -5327,9 +5338,22 @@ function nextInputProjectionEpoch(): number {
   return _nextInputProjectionEpoch;
 }
 
+function supersedeInputProjectionRequests(sessionId: string): void {
+  const origin = remoteProjectsStore.getSessionDeviceId(sessionId);
+  _inputProjectionOrigin.set(sessionId, origin);
+  _inputProjectionEpoch.set(sessionId, nextInputProjectionEpoch());
+}
+
 function invalidateInputProjectionRequests(sessionId: string): void {
   _inputProjectionOrigin.delete(sessionId);
   _inputProjectionEpoch.delete(sessionId);
+}
+
+function beginInputProjectionRequest(sessionId: string, origin: string | undefined): number {
+  _inputProjectionOrigin.set(sessionId, origin);
+  const epoch = nextInputProjectionEpoch();
+  _inputProjectionEpoch.set(sessionId, epoch);
+  return epoch;
 }
 
 function noteInputProjectionOrigin(sessionId: string, origin: string | undefined): number {

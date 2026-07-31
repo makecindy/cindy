@@ -83,14 +83,32 @@ describe('isAutoResumeRowInFlight', () => {
     projectionCapability: 'supported' as const,
   };
 
-  it('main owner 精确匹配覆盖首个流事件之前的窗口', () => {
+  it('main owner 精确匹配覆盖已进入运行态、正文尚未到达的窗口', () => {
     expect(
       isAutoResumeRowInFlight({
         ...base,
         isContinuationTurnOwner: true,
-        sessionRunning: false,
       }),
     ).toBe(true);
+  });
+
+  it('renderer done 终态同步清除 stale continuation owner', async () => {
+    const { EMPTY_SESSION_STATE, handleStreamEvent } = await import('@/lib/makerChatStore');
+    const next = handleStreamEvent(
+      {
+        ...EMPTY_SESSION_STATE,
+        continuationTurnClientId: 'resume-1',
+        isStreaming: true,
+        agentStatus: {
+          ...EMPTY_SESSION_STATE.agentStatus,
+          isRunning: true,
+        },
+      },
+      { sessionId: 's1', type: 'done', data: {} },
+    );
+
+    expect(next.continuationTurnClientId).toBeNull();
+    expect(next.agentStatus.isRunning).toBe(false);
   });
 
   it('新版 supported 未匹配 owner → 不把无关 Goal turn 误判成重连', () => {
