@@ -305,7 +305,7 @@ describe('InterruptedTurnAutoResumeGuard', () => {
     expect(decision.action).toBe('resume');
     if (decision.action === 'resume') {
       expect(decision.attempt, '本轮计数已归零').toBe(1);
-      // 会话累计不重置 —— 它是"这个会话到底重连过多少次"的展示值。
+      // 会话累计不重置 —— 它是"这个任务到底重连过多少次"的展示值。
       expect(decision.sessionTotal).toBe(INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS + 1);
     }
   });
@@ -421,7 +421,7 @@ describe('InterruptedTurnAutoResumeGuard', () => {
       g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
     }
     expect(g.guard.onInterruptedTurn(SID, runInterruptedTurn(g)).action).toBe('exhausted');
-    // 另一个会话自己的账:第一次照常放行。
+    // 另一个任务自己的账:第一次照常放行。
     const otherDecision = g.guard.onInterruptedTurn(other, g.now());
     expect(otherDecision.action).toBe('resume');
     if (otherDecision.action === 'resume') expect(otherDecision.sessionTotal).toBe(1);

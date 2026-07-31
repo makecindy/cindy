@@ -112,7 +112,7 @@ function mergeSession(prev: Session, patch: Partial<Session>): Session {
  * 为什么必须是叠加层、而不是一次性 patchLocal：新建会话的 `sessions:created` push 会
  * 触发 `forceRefreshAll`，那次重拉从 DB 拿回的行**仍带默认哨兵**（权威标题要等
  * `maker:auto-title` 落库才有），会把只写进缓存的乐观标题冲掉 —— 表现为标题先显示
- * 用户那句话、又退回「未命名对话」，直到 IPC 回来（PR #1031 review P1）。
+ * 用户那句话、又退回「未命名任务」，直到 IPC 回来（PR #1031 review P1）。
  *
  * 语义与 device-link 远程侧的 `remoteProjectsStore.pendingTitlePreview` 对称：只在
  * **权威标题仍是哨兵**时顶替显示，权威标题一到就自动让位并回收条目，不需要显式失效。
@@ -157,7 +157,7 @@ function applyAutoTitlePreviews(list: Session[]): Session[] {
  *
  * 典型时序(新建会话):`sessions:created` push → `forceRefreshAll()` 起飞(快照里是
  * 哨兵)→ main 写完占位 → `sessions:patched` 落进缓存 → 那个更早的请求才回来,把哨兵
- * 写回去,界面退到「未命名对话」直到下一次刷新。乐观预览叠加层此刻已按权威值到达的
+ * 写回去,界面退到「未命名任务」直到下一次刷新。乐观预览叠加层此刻已按权威值到达的
  * 规则回收,没人再替它顶回来(PR #1031 review P1)。
  *
  * 方向与 {@link autoTitlePreviews} 互补:那一层管「请求发起于乐观写入**之后**、DB 里还
@@ -361,7 +361,7 @@ export const sessionsStore = {
     // **包括「权威标题与预览逐字相同」的常见情形**(两端共用 normalizeAutoTitle,占位本来
     // 就该一样)。曾经在这里放过 `preview !== patch.title` 的例外,结果是缓存里那个串到底
     // 是「叠加上去的乐观值」还是「已落库的权威值」再也分不出来 —— 随后的失败撤回会把
-    // **已经落库**的标题打回哨兵、界面退到「未命名对话」并与 DB 不一致(PR #1031 review P1)。
+    // **已经落库**的标题打回哨兵、界面退到「未命名任务」并与 DB 不一致(PR #1031 review P1)。
     // 语义上也该无条件回收:DB 已经有值,叠加层的唯一用途(盖住仍是哨兵的行)已经消失。
     //
     // 乐观预览不走这个门(见 {@link applyOptimisticTitle}),所以这里见到的标题一律是

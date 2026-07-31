@@ -55,6 +55,10 @@
   的术语照用，不自造译法；表里没有或拿不准的，在 `i18n/glossary.json` 加
   `status: "proposed"` 条目再讨论。门禁为 `pnpm check:i18n-glossary`，规则见
   `docs/dev-rules/engineering-conventions.md` §5.1。
+- 文案里出现**任务 / 对话 / 消息**这几个词时，必须先读
+  `docs/product-rules/task-and-conversation-naming.md`：`session` 面向用户叫「任务」，
+  「对话」只用于任务内的交流过程与内容，单条往来叫「消息」；**「任务」与 `task` 同句出现
+  时必须消解歧义**。这三个词的边界拿不准会直接做出用户能看见的不一致。
 - 所有新增或修改的 UI 必须同时**实现** Light 与 Dark 两种模式（颜色一律走语义 token，
   禁止只适配一种模式的硬编码或条件补丁）；只实现一种模式视为未完成。**两种模式的实机
   目检不是硬性门槛**——能目检更好，做不到时如实写明哪种模式未验证，不得把「复用了 themed

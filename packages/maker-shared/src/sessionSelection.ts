@@ -65,13 +65,13 @@ export function summarizeMobileSessionBulkAction<TSession extends RemoteSession>
   const candidates = sessions.filter((session) => isBulkActionCandidate(session, action));
   const skippedCount = sessions.length - candidates.length;
   const actionLabel = bulkActionLabel(action);
-  const skipped = skippedCount > 0 ? `，将跳过 ${skippedCount} 个不适用的会话` : '';
+  const skipped = skippedCount > 0 ? `，将跳过 ${skippedCount} 个不适用的任务` : '';
   return {
     action,
     candidates,
     skippedCount,
-    title: `${actionLabel} ${candidates.length} 个会话`,
-    description: `将对当前选中的 ${candidates.length} 个会话执行${actionLabel}${skipped}。`,
+    title: `${actionLabel} ${candidates.length} 个任务`,
+    description: `将对当前选中的 ${candidates.length} 个任务执行${actionLabel}${skipped}。`,
     confirmText: actionLabel,
   };
 }

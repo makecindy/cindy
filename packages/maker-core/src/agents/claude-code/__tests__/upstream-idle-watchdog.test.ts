@@ -141,7 +141,7 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
-async function startSessionWithStream() {
+async function startSessionWithStream(model = 'claude-opus-4-6') {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
   const workingDir = await makeTempDir();
@@ -163,7 +163,7 @@ async function startSessionWithStream() {
   const agent = new ClaudeCodeAgent(createDeps());
   const handle = await agent.startSession({
     sessionId: 'session-idle-watchdog',
-    model: 'claude-opus-4-6',
+    model,
     workingDir,
     permissionMode: 'acceptEdits',
   });
@@ -190,22 +190,39 @@ function successResult(): Record<string, unknown> {
   };
 }
 
-function assistantToolUse(id: string): Record<string, unknown> {
+function assistantToolUse(id: string, command = 'sleep 999'): Record<string, unknown> {
   return {
     type: 'assistant',
     message: {
       role: 'assistant',
-      content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'sleep 999' } }],
+      content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }],
     },
   };
 }
 
-function userToolResult(id: string): Record<string, unknown> {
+function assistantTaskOutput(id: string): Record<string, unknown> {
+  return {
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_use',
+          id,
+          name: 'TaskOutput',
+          input: { task_id: 'task-1', block: true, timeout: 30_000 },
+        },
+      ],
+    },
+  };
+}
+
+function userToolResult(id: string, content = 'done'): Record<string, unknown> {
   return {
     type: 'user',
     message: {
       role: 'user',
-      content: [{ type: 'tool_result', tool_use_id: id, content: 'done' }],
+      content: [{ type: 'tool_result', tool_use_id: id, content }],
     },
   };
 }
@@ -224,6 +241,14 @@ function idleTimeoutError(events: AgentEvent[]): AgentEvent | undefined {
     (e) =>
       e.type === 'error' &&
       (e.data as Record<string, unknown> | undefined)?.reason === 'upstream_response_idle_timeout',
+  );
+}
+
+function toolLoopError(events: AgentEvent[]): AgentEvent | undefined {
+  return events.find(
+    (e) =>
+      e.type === 'error' &&
+      (e.data as Record<string, unknown> | undefined)?.reason === 'tool_use_loop_detected',
   );
 }
 
@@ -317,6 +342,56 @@ describe('upstream-response-idle watchdog suspend awareness', () => {
 
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(idleTimeoutError(events)).toBeUndefined();
+    expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+});
+
+describe('DeepSeek tool-loop guard runtime integration', () => {
+  it('真实 SDK 事件流中的 150 次不同调用与空结果可以完成同一个 turn', async () => {
+    const { handle, stream, events, fakeQuery } = await startSessionWithStream(
+      'deepseek/deepseek-v4-flash',
+    );
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    await handle.send({ type: 'user', content: 'analyze 150 different projects' });
+
+    for (let i = 0; i < 150; i += 1) {
+      const id = `toolu_project_${i}`;
+      stream.emit(assistantToolUse(id, `read-project-${i}`));
+      stream.emit(userToolResult(id, ''));
+    }
+    stream.emit(successResult());
+
+    await pumpUntil(() => handle.isTurnRunning?.() === false, 'long DeepSeek turn done');
+    expect(toolLoopError(events)).toBeUndefined();
+    expect(fakeQuery.interrupt).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+    stream.end();
+    await handle.close().catch(() => undefined);
+  });
+
+  it('真实 SDK 事件流中的稳定 TaskOutput 轮询不会中断 turn', async () => {
+    const { handle, stream, events, fakeQuery } = await startSessionWithStream(
+      'deepseek/deepseek-v4-flash',
+    );
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    await handle.send({ type: 'user', content: 'wait for the background task' });
+
+    for (let i = 0; i < 30; i += 1) {
+      const id = `toolu_task_output_${i}`;
+      stream.emit(assistantTaskOutput(id));
+      stream.emit(userToolResult(id, 'still running'));
+    }
+    stream.emit(successResult());
+
+    await pumpUntil(() => handle.isTurnRunning?.() === false, 'TaskOutput polling turn done');
+    expect(toolLoopError(events)).toBeUndefined();
     expect(fakeQuery.interrupt).not.toHaveBeenCalled();
 
     vi.useRealTimers();

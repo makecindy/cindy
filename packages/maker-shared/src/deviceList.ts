@@ -192,7 +192,7 @@ function deviceStatusDetail(device: DeviceListDeviceLike, state: DeviceAccessSta
   if (state === 'offline') return formatLastSeen(device.lastSeenAt, now);
   if (state === 'remote_disabled') return '在电脑端设置里打开允许远程控制';
   if (state === 'self') return '当前手机';
-  if (state === 'busy') return '电脑端正在处理会话';
+  if (state === 'busy') return '电脑端正在处理任务';
   return '已允许远程控制';
 }
 

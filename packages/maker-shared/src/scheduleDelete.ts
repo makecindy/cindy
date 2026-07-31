@@ -93,8 +93,8 @@ export function isProjectAutomationSchedule(target: ScheduleDeleteTarget): boole
 
 export function describeScheduleDeletePreview(preview: ScheduleDeletePreview): string {
   const sessionPart = preview.sessionCount === 0
-    ? '没有找到由它生成的会话'
-    : `找到 ${preview.sessionCount} 个由它生成的会话`;
+    ? '没有找到由它生成的任务'
+    : `找到 ${preview.sessionCount} 个由它生成的任务`;
   if (preview.inflightCount > 0) {
     return `${sessionPart}，还有 ${preview.inflightCount} 次执行正在进行`;
   }

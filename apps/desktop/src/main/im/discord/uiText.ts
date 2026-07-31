@@ -21,18 +21,18 @@ export const ui = {
 /new         开个新存档（清掉当前对话上下文）
 /model       换个模型上场
 /permission  调一下权限模式（auto / bypass / ask 等）
-/ctr         远程接管 desktop 上的某个工作区（接管中再发可直接换会话）
+/ctr         远程接管 desktop 上的某个工作区（接管中再发可直接换任务）
 /exctr       结束接管，回到我们俩的 Discord 私聊
 /help        看看我会啥
 
-任务跑着想让它停？直接发 \`!stop\`，我会立刻中止当前任务、把排队的消息也撤掉，会话保留可继续。
+有活儿在跑想让它停？直接发 \`!stop\`，我会立刻中止当前执行、把排队的消息也撤掉，任务保留可继续。
 
 平时直接发消息就行，我在听~`,
     unknownCommand: (cmd: string) =>
       `没认出 \`${cmd}\` 这个命令 🤔\n我能听懂的: /new、/model、/permission、/ctr、/exctr、/help`,
     detachedBySlash: '🚪 接管结束，咱们回到 Discord 私聊。下次想远程操控 desktop 再 /ctr',
     detachedByRevoke: '⚠️ 你在 desktop 那边把接管收回去了，后续消息回到我们俩的 Discord 私聊。',
-    notAttached: '🤷 你现在没在接管任何会话，/exctr 闲着也没事可干。',
+    notAttached: '🤷 你现在没在接管任何任务，/exctr 闲着也没事可干。',
   },
 
   agent: {
@@ -51,10 +51,10 @@ export const ui = {
             : missing === 'provider-disconnected'
               ? '未连接或连接已失效'
               : `需要先登录 ${agentKind} 凭证`;
-      const message = `⚠️ 当前 Discord 会话使用供应商「${provider}」（${model}），${reason}。`;
+      const message = `⚠️ 当前 Discord 对话使用供应商「${provider}」（${model}），${reason}。`;
       return attached
         ? `${message}\n请在 desktop 的 Settings → 模型供应商中修复认证后，直接继续发送消息。`
-        : `${message}\n“新会话配置”只影响新会话；修改后请发送 \`/new\`，再继续聊天。`;
+        : `${message}\n“新对话配置”只影响新对话；修改后请发送 \`/new\`，再继续聊天。`;
     },
     controlInProgress:
       '🎮 你 /ctr 还在选择中呢 — 先把上面那张卡片操作完（或点 🚪 退出），再来发别的~',
@@ -64,14 +64,14 @@ export const ui = {
       position <= 1
         ? '⏳ 上一轮还在跑，这条先排队——跑完自动接上。想直接叫停就发 `!stop`'
         : `⏳ 上一轮还在跑，这条排在第 ${position} 位——会按顺序发给 agent。想直接叫停就发 \`!stop\``,
-    /** `!stop` 生效 — 当前任务已中止, 会话保留可继续。 */
+    /** `!stop` 生效 — 当前执行已中止, 任务保留可继续。 */
     stopDone: (droppedQueued: number) =>
       droppedQueued > 0
-        ? `⏹ 已叫停当前任务，排队中的 ${droppedQueued} 条消息也一并撤了。会话还在——想继续随时发新指令~`
-        : '⏹ 已叫停当前任务。会话还在——想继续随时发新指令~',
+        ? `⏹ 已叫停当前执行，排队中的 ${droppedQueued} 条消息也一并撤了。任务还在——想继续随时发新指令~`
+        : '⏹ 已叫停当前执行。任务还在——想继续随时发新指令~',
     /** `!stop` 时没有任务在跑。 */
     stopIdle: '🤷 现在没有正在跑的任务，`!stop` 落了个空。等有活儿要停的时候再喊我~',
-    scheduledTaskHeader: (name: string | null) => (name ? `🤖 自动任务「${name}」` : '🤖 自动任务'),
+    scheduledTaskHeader: (name: string | null) => (name ? `🤖 自动化「${name}」` : '🤖 自动化'),
     unsupportedOnly: (entries: IMUnsupportedEntry[]) =>
       `🙏 这条消息我吞不下：\n${entries.map((e) => `• ${e.label}`).join('\n')}\n\n` +
       `我能消化的: 文本、图片（jpg/png/gif/webp）、PDF、代码与配置类文本文件。`,
@@ -131,24 +131,24 @@ export const ui = {
     },
     control: {
       title: '🎮 挑个工作区上号',
-      emptyBody: '_暂时还没有可接管的工作区~ 在 desktop 端打开/创建一个会话再来_',
+      emptyBody: '_暂时还没有可接管的工作区~ 在 desktop 端打开/创建一个任务再来_',
       hint: '点工作区往下走；点 🚪 退出 取消这次',
       attachedSwitchHint: (sessionTitle: string) =>
-        `🎮 当前接管中：**${sessionTitle}**\n选个新会话直接换乘；点 🚪 退出则保持现状`,
+        `🎮 当前接管中：**${sessionTitle}**\n选个新任务直接换乘；点 🚪 退出则保持现状`,
       btnExit: '🚪 撤了',
       resolvedExit: '🚪 走了，下次想远程操控再 /ctr',
       sessionPickerTitle: (displayName: string) => `🎮 ${displayName} 里的存档`,
-      sessionPickerHint: '挑个会话继续打 · ➕ 新建 开新存档 · ↩️ 后退 换工作区 · 🚪 退出 取消',
+      sessionPickerHint: '挑个任务继续打 · ➕ 新建 开新存档 · ↩️ 后退 换工作区 · 🚪 退出 取消',
       sessionPickerEmptyBody: (displayName: string) =>
-        `_工作区 **${displayName}** 这边还没有 active 会话~ 不如点 ➕ 新建 开一个？_`,
+        `_工作区 **${displayName}** 这边还没有 active 任务~ 不如点 ➕ 新建 开一个？_`,
       btnNew: '➕ 新建',
       btnBack: '↩️ 后退',
       resolvedSessionPick: (sessionTitle: string, workspaceName: string) =>
-        `🎯 上号了：**${sessionTitle}**（${workspaceName}）\n接下来你发消息我就直接进这个会话；想撤随时 \`/exctr\``,
+        `🎯 上号了：**${sessionTitle}**（${workspaceName}）\n接下来你发消息我就直接进这个任务；想撤随时 \`/exctr\``,
       resolvedNewSession: (workspaceName: string) =>
         `✨ 新存档已建 + 接管完成（在 **${workspaceName}** 里）\n直接发指令开聊；想退就 \`/exctr\``,
       attachFailed: (reason: string) => `❌ 没接上：${reason}`,
-      sessionBusyOldCardPlaceholder: '⏳ 那个会话还在跑——下方给你刷了张新卡片，重选一下吧',
+      sessionBusyOldCardPlaceholder: '⏳ 那个任务还在跑——下方给你刷了张新卡片，重选一下吧',
       sessionBusyPrompts: [
         (sessionTitle: string) =>
           `⏳ **${sessionTitle}** 这会儿正在 BOSS 战~\nagent 还在思考/敲代码，等它这把打完再 \`/ctr\` 上号`,

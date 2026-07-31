@@ -28,6 +28,7 @@ import {
 } from '../types/permissions.js';
 import type { AgentKind, Effort, PermissionMode, ReasoningDisplay, UserMessage, WorkspaceKind } from '../types/common.js';
 import type { Capabilities, EffortDescriptor, ModelDescriptor } from '../types/capabilities.js';
+import type { CapabilityRoutingPolicy } from '../types/capability-routing.js';
 import { NotSupportedError } from '../types/capabilities.js';
 import type { AgentCredentialMode, AuthLoginOptions } from '../interfaces/auth-adapter.js';
 import type { ContactsPromptState } from '../contacts/system-prompt.js';
@@ -188,6 +189,17 @@ export interface AgentDeps {
    * needs to replace built-in behavior.
    */
   capabilityAdditions?: AgentCapabilityAdditions;
+
+  /**
+   * Host-owned arbitration for capabilities that overlap with harness-native
+   * plugins, skills, MCP servers, apps, or tools.
+   *
+   * Each harness adapter translates the neutral directives it understands and
+   * leaves unsupported directives untouched. Keeping this out of AgentKind
+   * conditionals lets a future harness add one adapter without changing the
+   * product policy.
+   */
+  capabilityRouting?: CapabilityRoutingPolicy;
 
   /**
    * 解析某条**具体路由**上该模型已核实的上下文窗口上限（host 注入）；没有则返回 null。
@@ -454,8 +466,9 @@ export interface AgentDeps {
    * in-process JS 回调; ClaudeCodeAgent.startSession 透传给 SDK options.hooks。
    *
    * 设计说明:
-   *  - maker-core 自己**不持有任何 hook 实现** —— 这里只是注入点, 具体业务逻辑
-   *    (例: 图片 read 检测、Bash 命令白名单、敏感路径拦截) 都在 host 层。
+   *  - 这里只是 host hook 注入点；图片 read、Bash 并发等产品逻辑都在 host 层。
+   *    maker-core 的 Claude adapter 会在必要时把窄范围协议闸门（例如能力来源路由）
+   *    放在这些 host hooks 之前。
    *  - 类型直接复用 Claude SDK 的 HookCallbackMatcher (含 matcher / hooks / timeout),
    *    host 直接 import @anthropic-ai/claude-agent-sdk 的类型即可, 与 mcpProviders
    *    用 McpServerConfig 同模式。

@@ -304,7 +304,7 @@ async function runDaemon(socketPath: string): Promise<void> {
   //  inside the cindy-slack ghost's slack_call_tool.)
 
   const sdkQueryFactory = (opts: SdkQueryFactoryOptions): SdkQueryLike => {
-    const { inputStream, cwd, model, env, mcpServers, permissionMode, systemPrompt, additionalDirectories, allowedTools, disallowedTools, tools, resume, extraOptions, canUseTool, getOAuthToken } = opts;
+    const { inputStream, cwd, model, env, mcpServers, permissionMode, systemPrompt, additionalDirectories, allowedTools, disallowedTools, tools, resume, extraOptions, hooks, canUseTool, getOAuthToken } = opts;
     // SDK's `query` accepts `prompt: string | AsyncIterable<SDKUserMessage>`.
     // We pass our inputQueue (push-based AsyncIterable) so the SDK consumes
     // user messages on demand. SDK's options.* fields are typed strictly —
@@ -329,6 +329,9 @@ async function runDaemon(socketPath: string): Promise<void> {
         // control 分支)—— 与 desktop 本地分支同一注入方式,经 spread 绕过类型检查。
         ...(getOAuthToken ? { getOAuthToken: getOAuthToken as any } : {}),
         ...(extraOptions ?? {}),
+        // Daemon-owned hooks must win over JSON extraOptions. They enforce
+        // host routing before Claude's permission mode and setting rules.
+        ...(hooks ? { hooks: hooks as any } : {}),
       } as any,
     });
     /* eslint-enable @typescript-eslint/no-explicit-any */

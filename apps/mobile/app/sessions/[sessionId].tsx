@@ -86,7 +86,10 @@ import { InlineQueueSection } from '@/session/InlineQueueSection';
 import { RewindPreviewPanel } from '@/session/RewindPreviewPanel';
 import { BlurBackdrop } from '@/session/BlurBackdrop';
 import { SheetModal } from '@/session/SheetModal';
-import { SheetGrabber } from '@/session/SheetSurface';
+import { SheetGrabber, SheetSurface } from '@/session/SheetSurface';
+import { MobilePermissionPickerList } from '@/session/MobilePermissionPickerList';
+import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
+import { permissionAccentColor, permissionPresentation } from '@/session/permissionPresentation';
 import {
   SessionMenuSheet,
   type SessionExtraDirBrowserState,
@@ -140,6 +143,7 @@ import { ImageLightbox } from '@/session/ImageLightbox';
 import { pickWriteFields, retryPatchWhileLatest, writeGuardFields } from '@/session/swipeRowRegistry';
 import {
   dismissNewSessionCreation,
+  prepareNewSessionCreationForEdit,
   getNewSessionCreationTask,
   retryNewSessionCreation,
   shouldBlockSessionSync,
@@ -782,6 +786,16 @@ export default function SessionScreen() {
   const [contextSheetView, setContextSheetView] = useState<'main' | 'screenshots' | 'goal'>('main');
   // 模型 + 权限浮窗(ContextSheet 同款 Modal,含二级「模型选项 / 权限」叠层)。
   const [modelSheetOpen, setModelSheetOpen] = useState(false);
+  // 权限模式独立浮窗(composer 左侧图标钮点开,与模型浮窗同属 composer 激活态)。
+  const [permissionSheetOpen, setPermissionSheetOpen] = useState(false);
+  const [permissionSheetSnap, setPermissionSheetSnap] = useState<ContextSheetSnap>('half');
+  const permissionSheetHeights = useMemo(
+    () => computeContextSheetSnapHeights({
+      safeAreaTopInset: insets.top,
+      screenHeight: windowDimensions.height,
+    }),
+    [insets.top, windowDimensions.height],
+  );
   // 已建会话的模型浮窗可先浏览另一 Agent；只改此浏览态不触碰会话，选模型才登记 intent。
   const [modelSheetAgentKind, setModelSheetAgentKind] = useState<MobileSessionAgentKind>('claude-code');
   const [attachments, setAttachments] = useState<RemoteSerializedAttachment[]>([]);
@@ -1908,6 +1922,7 @@ export default function SessionScreen() {
   });
   const composerCardActive = (canUseComposer && composerFocused)
     || modelSheetOpen
+    || permissionSheetOpen
     || voiceIsBusy
     || composerVoiceHoldActive;
   useComposerCardTransition(composerCardActive);
@@ -2033,9 +2048,44 @@ export default function SessionScreen() {
   );
   // 聚焦卡片形态的底部工具排:[+][模型] …… [语音][停止/发送]。
   // + 号打开 Context 面板(附件 / 计划模式 / 目标模式收在面板内);权限模式入口收进会话设置。
+  // 权限模式图标钮(2026-07-29 用户裁决,对齐 Codex,与新建页同位同款):
+  // 只显示档位图标,不带文字;危险档(auto / bypass)只染图标色。
+  const renderSessionPermissionButton = () => {
+    const presentation = permissionPresentation(displayPermissionMode, displayPermissionLabel);
+    const accent = presentation.accent !== 'neutral'
+      ? permissionAccentColor(presentation.accent, colors)
+      : null;
+    return (
+      <RouteActionButton
+        accessibilityLabel={t('models.picker.permissionModeAccessibility', { mode: presentation.label })}
+        active={permissionSheetOpen}
+        disabled={controlBusy || !canUseComposer}
+        hitSlop={COMPOSER_CONTROL_HIT_SLOP}
+        onPress={() => {
+          setModelSheetOpen(false);
+          setPermissionSheetSnap('half');
+          setPermissionSheetOpen(true);
+        }}
+        style={[
+          styles.composerInlineToolButton,
+          permissionSheetOpen && styles.composerToolButtonActive,
+        ]}
+        testID="session.permissionIndicator"
+      >
+        <presentation.Icon
+          color={accent ?? colors.textSecondary}
+          size={iconSize.sm}
+          strokeWidth={iconStroke.regular}
+        />
+      </RouteActionButton>
+    );
+  };
+
+  // 工具条布局(对齐 Codex):左 = [+][权限图标][计划 chip];右 = [模型][语音][动作]。
   const renderComposerToolbar = () => (
     <>
       {renderComposerAttachmentButton()}
+      {renderSessionPermissionButton()}
       {planModeOn ? (
         <PlanModeChip
           disabled={!canUseComposer || controlBusy || sessionSettingsLocked}
@@ -2043,6 +2093,7 @@ export default function SessionScreen() {
           testID="session.planModeChip"
         />
       ) : null}
+      <ComposerToolbarSpacer />
       {composerRuntimeSummary ? (
         <ComposerRuntimePill
           fastOn={composerPillFastOn}
@@ -2071,10 +2122,9 @@ export default function SessionScreen() {
           testID="session.composerModelButton"
         />
       ) : null}
-      <ComposerToolbarSpacer />
-      {/* 工具排右段顺序:[停止任务][语音占位][发送槽]。停止任务在语音左边
-         (对齐桌面),语音占位宽度随录音胶囊(红点+计时)展开,把停止任务
-          推开——语音右缘与发送槽的邻接关系全程不变。 */}
+      {/* 工具排右段顺序:[模型][停止任务][语音占位][发送槽](spacer 已在模型左侧,
+          模型右对齐对齐 Codex)。停止任务在语音左边(对齐桌面),语音占位宽度随录音
+          胶囊(红点+计时)展开,把停止任务推开——语音右缘与发送槽的邻接关系全程不变。 */}
       {renderComposerInlineStop()}
       {composerVoicePlacement?.inline || composerVoicePlacement?.floating
         ? <ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />
@@ -2337,6 +2387,7 @@ export default function SessionScreen() {
   useEffect(() => {
     if (canUseComposer) return;
     setModelSheetOpen(false);
+    setPermissionSheetOpen(false);
   }, [canUseComposer]);
 
   useEffect(() => {
@@ -3063,39 +3114,62 @@ export default function SessionScreen() {
           style: 'cancel',
           onPress: () => {
             if (!creationTask) return;
-            // 创建期间发出的后续消息必须一起带回新建页(review P1):它们此刻在 outbox 里,
-            // 而下一行 dismiss 会连同合成会话行一起删掉——会话页 unmount 时 cleanup 会把它们
-            // 写进那个已经不存在的会话的草稿,用户在新建页看不到、也再也找不回来。
-            // 新建页只有一个首条消息输入框,所以按序拼成文本、附件按 id 去重合并后一起 stash。
-            // 上传任务保不住:本页(连同 upload controller)马上就要销毁,只能取消
-            // 并回收,再把「没能带回多少」告知用户(review P1:静默丢等于偷走内容)。
-            const { items: followUps, cancelledUploadCount } = takeOutboxForSession(sessionId, 'cancel');
-            if (followUps.length > 0) {
-              const { merged, dropped } = mergeAttachmentsWithinLimit(
-                creationTask.attachments,
-                followUps.flatMap(outboxItemAttachments),
-              );
-              // 装不下的中转对象在这里回收:草稿带不走它们,留着就是没人认领的垃圾。
-              discardRecoveredAttachments(dropped);
-              const unrecoveredCount = dropped.length + cancelledUploadCount;
-              stashNewSessionDraftForEdit(creationTask, {
-                draft: {
-                  ...creationTask.draft,
-                  firstMessage: [
-                    creationTask.draft.firstMessage,
-                    ...followUps.map(outboxItemDraftText),
-                  ].filter(Boolean).join('\n\n'),
-                },
-                attachments: merged,
-                notice: unrecoveredCount > 0
-                  ? t('session.screen.attachmentsNotCarriedBack', { count: unrecoveredCount })
-                  : null,
+            void prepareNewSessionCreationForEdit(sessionId)
+              .then((prepared) => {
+                if (!prepared) return;
+                // 创建期间发出的后续消息必须一起带回新建页(review P1):它们此刻在 outbox 里,
+                // 而下一行 dismiss 会连同合成会话行一起删掉——会话页 unmount 时 cleanup 会把它们
+                // 写进那个已经不存在的会话的草稿,用户在新建页看不到、也再也找不回来。
+                // 新建页只有一个首条消息输入框,所以按序拼成文本、附件按 id 去重合并后一起 stash。
+                // 上传任务保不住:本页(连同 upload controller)马上要销毁,只能取消
+                // 并回收,再把「没能带回多少」告知用户(review P1:静默丢等于偷走内容)。
+                const { items: followUps, cancelledUploadCount } = takeOutboxForSession(sessionId, 'cancel');
+                if (followUps.length > 0) {
+                  const { merged, dropped } = mergeAttachmentsWithinLimit(
+                    prepared.attachments,
+                    followUps.flatMap(outboxItemAttachments),
+                  );
+                  // 装不下的中转对象在这里回收:草稿带不走它们,留着就是没人认领的垃圾。
+                  discardRecoveredAttachments(dropped);
+                  const unrecoveredCount = dropped.length + cancelledUploadCount;
+                  stashNewSessionDraftForEdit(prepared, {
+                    draft: {
+                      ...prepared.draft,
+                      firstMessage: [
+                        prepared.draft.firstMessage,
+                        ...followUps.map(outboxItemDraftText),
+                      ].filter(Boolean).join('\n\n'),
+                    },
+                    attachments: merged,
+                    notice: unrecoveredCount > 0
+                      ? t('session.screen.attachmentsNotCarriedBack', { count: unrecoveredCount })
+                      : null,
+                  });
+                } else {
+                  stashNewSessionDraftForEdit(prepared);
+                }
+                dismissNewSessionCreation(sessionId, { removeSyntheticRow: true });
+                router.replace({ pathname: '/sessions/new', params: { deviceId, deviceName } });
+              })
+              .catch((err: unknown) => {
+                // 补偿回收失败时保留 task + 合成行，绝不先跳回表单再创建第二个孤儿
+                // worktree。用户可取消等待连接恢复，或直接复用同 sessionId 重试创建。
+                const cleanupError = formatRemoteError(err);
+                setError(t('session.screen.createFailedNotice', { message: cleanupError }));
+                Alert.alert(t('session.screen.createFailedTitle'), cleanupError, [
+                  {
+                    text: t('session.common.cancel'),
+                    style: 'cancel',
+                  },
+                  {
+                    text: t('session.screen.retry'),
+                    onPress: () => {
+                      setError(null);
+                      retryNewSessionCreation(sessionId);
+                    },
+                  },
+                ]);
               });
-            } else {
-              stashNewSessionDraftForEdit(creationTask);
-            }
-            dismissNewSessionCreation(sessionId, { removeSyntheticRow: true });
-            router.replace({ pathname: '/sessions/new', params: { deviceId, deviceName } });
           },
         },
         {
@@ -6329,6 +6403,21 @@ export default function SessionScreen() {
       ? prePlanPermissionModeRef.current
       : runtimeOptions?.permissionOptions.find((option) => option.id !== 'plan')?.id ?? 'ask')
     : currentSession?.permissionMode ?? 'ask';
+  // 权限模式独立浮窗(2026-07-29 用户裁决,对齐 Codex 与新建页):composer 左侧图标钮
+  // 点开;选择走既有 confirmFullAccessChange + maker:set-permission-mode 链路。
+  const displayPermissionLabel =
+    runtimeOptions?.permissionOptions.find((option) => option.id === displayPermissionMode)?.label
+      ?? displayPermissionMode;
+  const selectSessionPermissionMode = useCallback((mode: string) => {
+    void (async () => {
+      if (!currentSession) return;
+      if (!await confirmFullAccessChange(currentSession.permissionMode, mode)) return;
+      await runControlAction(
+        () => maker.setPermissionMode(sessionId, mode),
+        { permissionMode: mode },
+      );
+    })();
+  }, [currentSession, maker, runControlAction, sessionId]);
 
   // 「已提交、仍在上传」的相册资产:pendingUploads 携带 sourceId(相册来源才有)。
   // 重开面板时这些格子标 busy(spinner + 禁点),onUploaded 落定后自然转为勾选态,
@@ -7154,15 +7243,20 @@ export default function SessionScreen() {
 
   const forkAtMessage = useCallback((clientId: string, draft?: MobileMessageDraft) => {
     if (!deviceId || messageActionBusy) return;
+    // 文案走 i18n(与本页其它 Alert 同规):mobile 支持 en / ja / ko,硬编码中文会让
+    // 非中文环境看到中文弹窗。四语措辞与 desktop 的 chat.messageActionBar.fork* 对齐。
     Alert.alert(
-      '从这里开启一个新对话？',
-      '系统会根据这里的对话上下文创建一个独立的新对话。原对话不会改变，之后两边的消息互不影响。',
+      t('session.screen.forkConfirmTitle'),
+      t('session.screen.forkConfirmDescription'),
       [
-        { text: '取消', style: 'cancel' },
-        { text: '开启新对话', onPress: () => void performForkAtMessage(clientId, draft) },
+        { text: t('session.screen.forkCancel'), style: 'cancel' },
+        {
+          text: t('session.screen.forkConfirm'),
+          onPress: () => void performForkAtMessage(clientId, draft),
+        },
       ],
     );
-  }, [deviceId, messageActionBusy, performForkAtMessage]);
+  }, [deviceId, messageActionBusy, performForkAtMessage, t]);
 
   const openForkOrigin = useCallback(() => {
     const parentSessionId = currentSession?.parentSessionId;
@@ -7671,15 +7765,8 @@ export default function SessionScreen() {
             onChangeSelectedFastMode={changeComposerSelectedFastMode}
             onClose={() => setModelSheetOpen(false)}
             onSelectFlatModel={selectComposerFlatModel}
-            onSelectPermissionMode={(mode) => {
-              void (async () => {
-                if (!await confirmFullAccessChange(currentSession.permissionMode, mode)) return;
-                await runControlAction(
-                  () => maker.setPermissionMode(sessionId, mode),
-                  { permissionMode: mode },
-                );
-              })();
-            }}
+            hidePermissionTrigger
+            onSelectPermissionMode={selectSessionPermissionMode}
             onSelectProviderRow={selectComposerModelRow}
             permissionDisabled={controlBusy || !canUseComposer}
             permissionOptions={runtimeOptions.permissionOptions}
@@ -7691,6 +7778,37 @@ export default function SessionScreen() {
             testID="session.modelSheet"
             visible={modelSheetOpen && canUseComposer}
           />
+        ) : null}
+        {/* 权限模式独立浮窗(composer 权限图标钮点开;列表复用 MobilePermissionPickerList,
+            选择走 confirmFullAccessChange + maker:set-permission-mode 后关浮窗)。 */}
+        {currentSession && runtimeOptions ? (
+          <SheetModal
+            backdropTestID="session.permissionSheet.backdrop"
+            onBackdropPress={() => setPermissionSheetOpen(false)}
+            onRequestClose={() => setPermissionSheetOpen(false)}
+            visible={permissionSheetOpen && canUseComposer}
+          >
+            <SheetSurface
+              bottomInset={insets.bottom}
+              heights={permissionSheetHeights}
+              onClose={() => setPermissionSheetOpen(false)}
+              onSnapChange={setPermissionSheetSnap}
+              snap={permissionSheetSnap}
+              testID="session.permissionSheet"
+              title={t('models.picker.permissionTitle')}
+            >
+              <MobilePermissionPickerList
+                activeMode={displayPermissionMode}
+                disabled={controlBusy || !canUseComposer}
+                onSelect={(mode) => {
+                  selectSessionPermissionMode(mode);
+                  setPermissionSheetOpen(false);
+                }}
+                options={runtimeOptions.permissionOptions}
+                testID="session.permissionSheet.option"
+              />
+            </SheetSurface>
+          </SheetModal>
         ) : null}
         {composerPreviewUrl && composerGalleryImages.length > 0 ? (
           // composer 托盘图片的全屏查看(沿用聊天消息同款 ImageLightbox;本地图无需远端取件)。

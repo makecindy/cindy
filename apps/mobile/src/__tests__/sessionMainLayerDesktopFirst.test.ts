@@ -11,7 +11,7 @@ describe('mobile session main layer desktop-first noise budget', () => {
 
     expect(emptySource).toContain('message.renderer.emptyMessages');
     expect(emptySource).not.toContain('这台电脑暂无活动消息');
-    expect(emptySource).not.toContain('先在桌面端创建或继续一个会话');
+    expect(emptySource).not.toContain('先在桌面端创建或继续一个任务');
     expect(emptySource).not.toContain('emptyText');
   });
 

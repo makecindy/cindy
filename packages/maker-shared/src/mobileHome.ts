@@ -568,7 +568,7 @@ function fallbackScheduleInfo(session: RemoteSessionListSessionLike): RemoteSess
     latestRunAt: 0,
     running: false,
     scheduleId: '',
-    scheduleName: title || '自动化任务',
+    scheduleName: title || '自动化',
     allSchedulesStopped: false,
     unreadCount: 0,
     unreadRunIds: [],
@@ -654,7 +654,7 @@ function mobileHomeEmptyState({
       kind: 'search',
       noDevice: null,
       title: '没有匹配结果',
-      copy: '换一个项目名、对话标题、电脑名或消息关键词再试。',
+      copy: '换一个项目名、任务标题、电脑名或消息关键词再试。',
     };
   }
   if (deviceCount === 0) {
@@ -675,23 +675,23 @@ function mobileHomeEmptyState({
     return {
       kind: 'automation',
       noDevice: null,
-      title: '没有自动化会话',
-      copy: '自动化任务运行后，对应会话会按项目聚合到这里。',
+      title: '没有自动化生成的任务',
+      copy: '自动化运行后，对应任务会按项目聚合到这里。',
     };
   }
   if (statusFilter === 'archived') {
     return {
       kind: 'archived',
       noDevice: null,
-      title: '没有归档会话',
-      copy: '切到全部或活跃筛选，继续查看当前项目和对话。',
+      title: '没有归档任务',
+      copy: '切到全部或活跃筛选，继续查看当前项目和任务。',
     };
   }
   return {
     kind: 'noSession',
     noDevice: null,
-    title: '还没有会话',
-    copy: '先在桌面端创建或继续一个会话，手机端会直接显示对应项目和对话。',
+    title: '还没有任务',
+    copy: '先在桌面端创建或继续一个任务，手机端会直接显示对应项目和任务。',
   };
 }
 

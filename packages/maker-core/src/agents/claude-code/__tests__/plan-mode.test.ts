@@ -17,6 +17,7 @@ import type { AgentDeps } from '../../base-agent.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { AgentEvent, InteractionDecision, InteractionRequest } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
+import type { CapabilityRoutingPolicy } from '../../../types/capability-routing.js';
 
 const sdkMock = vi.hoisted(() => ({
   forkSession: vi.fn(),
@@ -467,6 +468,85 @@ describe('ClaudeCodeAgent plan mode', () => {
     const ev = await nextEvent(iterator);
     expect(ev).toMatchObject({ type: 'plan_mode_changed', data: { enabled: false } });
     await handle.close();
+  });
+
+  it('merges user plan edits and feedback into capability routing', async () => {
+    const capabilityRouting = {
+      overrides: [
+        {
+          capabilityId: 'feishu',
+          source: {
+            kind: 'harness-plugin',
+            harness: 'claude-code',
+            surface: 'mcp',
+            id: 'plugin:feishu-delegate:feishu-delegate',
+          },
+          invocation: 'explicit-only',
+          explicitSelectors: ['$feishu-delegate:message-feishu-coworkers'],
+          replacement: { kind: 'cindy-plugin', id: 'xd-feishu' },
+        },
+      ],
+    } as const satisfies CapabilityRoutingPolicy;
+    const cases: Array<{
+      decision: InteractionDecision;
+      expectedBehavior: 'allow' | 'deny';
+    }> = [
+      {
+        decision: {
+          kind: 'plan_review',
+          behavior: 'allow',
+          editedPlan:
+            '1. 用 $feishu-delegate:message-feishu-coworkers 查询消息',
+        },
+        expectedBehavior: 'allow',
+      },
+      {
+        decision: {
+          kind: 'plan_review',
+          behavior: 'deny',
+          reason:
+            '请改用 $feishu-delegate:message-feishu-coworkers 并补充范围',
+        },
+        expectedBehavior: 'allow',
+      },
+      {
+        decision: {
+          kind: 'plan_review',
+          behavior: 'deny',
+          reason: 'system dismissed $feishu-delegate:message-feishu-coworkers',
+          dismissed: true,
+        },
+        expectedBehavior: 'deny',
+      },
+    ];
+
+    for (const [index, testCase] of cases.entries()) {
+      const { handle, queryOptions } = await startPlanSession(true, {
+        capabilityRouting,
+        getMcpToolApprovalPolicy: () => 'auto-approve',
+      });
+      handle.setInteractionResolver(async (req): Promise<InteractionDecision> =>
+        req.kind === 'plan_review'
+          ? testCase.decision
+          : { kind: 'permission', behavior: 'allow' },
+      );
+      await handle.send({ type: 'user', content: '制定一个查询消息的计划' });
+      const canUseTool = queryOptions.canUseTool;
+      if (!canUseTool) throw new Error('expected canUseTool');
+      await canUseTool(
+        'ExitPlanMode',
+        { plan: '1. 查询消息' },
+        { toolUseID: `plan-${index}` },
+      );
+      await expect(
+        canUseTool(
+          'mcp__plugin_feishu-delegate_feishu-delegate__read_messages',
+          {},
+          { toolUseID: `mcp-${index}` },
+        ),
+      ).resolves.toMatchObject({ behavior: testCase.expectedBehavior });
+      await handle.close();
+    }
   });
 
   it('defers the SDK switch when armed mid-turn, and pushes plan at the next send boundary', async () => {

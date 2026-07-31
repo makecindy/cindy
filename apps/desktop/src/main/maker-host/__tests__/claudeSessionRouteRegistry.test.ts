@@ -7,10 +7,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  noteClaudeSessionRequest,
   onClaudeSessionRouteChange,
+  readLatestClaudeSessionRequestId,
   readClaudeSessionRoute,
+  recordClaudeRequestRoute,
   recordClaudeSessionRoute,
   resetClaudeSessionRouteRegistryForTest,
+  takeClaudeRequestRoute,
 } from '../claude-session-route-registry';
 
 describe('claude-session-route-registry', () => {
@@ -59,5 +63,39 @@ describe('claude-session-route-registry', () => {
     off();
     recordClaudeSessionRoute('s1', 'gateway');
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('keeps exact request routes separate from the mutable session-latest route', () => {
+    recordClaudeRequestRoute(11, 's1', 'gateway');
+    recordClaudeRequestRoute(12, 's1', 'subscription');
+
+    expect(readLatestClaudeSessionRequestId('s1')).toBe(12);
+    expect(takeClaudeRequestRoute(11)).toEqual({ sessionId: 's1', route: 'gateway' });
+    expect(takeClaudeRequestRoute(12)).toEqual({ sessionId: 's1', route: 'subscription' });
+    expect(takeClaudeRequestRoute(11)).toBeNull();
+  });
+
+  it('marks a later unknown-route request as latest so older evidence becomes stale', () => {
+    recordClaudeRequestRoute(21, 's1', 'gateway');
+    noteClaudeSessionRequest('s1', 22);
+
+    expect(readLatestClaudeSessionRequestId('s1')).toBe(22);
+    expect(takeClaudeRequestRoute(21)).toEqual({ sessionId: 's1', route: 'gateway' });
+  });
+
+  it('does not let a late async route decision move the latest request backwards', () => {
+    noteClaudeSessionRequest('s1', 32);
+    noteClaudeSessionRequest('s1', 31);
+
+    expect(readLatestClaudeSessionRequestId('s1')).toBe(32);
+  });
+
+  it('bounds request-route storage when responses never arrive', () => {
+    for (let reqId = 1; reqId <= 257; reqId += 1) {
+      recordClaudeRequestRoute(reqId, `s${reqId}`, 'gateway');
+    }
+
+    expect(takeClaudeRequestRoute(1)).toBeNull();
+    expect(takeClaudeRequestRoute(257)).toEqual({ sessionId: 's257', route: 'gateway' });
   });
 });

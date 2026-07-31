@@ -63,6 +63,8 @@ describe('newMakerDraft store', () => {
     expect(d.lastByVendor.cc.model).toBe(coldStartModelIdForVendor('cc'));
     expect(d.fastModeByModel).toEqual({});
     expect(d.effortByModel).toEqual({});
+    expect(d.worktreeEnabled).toBe(false);
+    expect(d.worktreePreferenceCustomized).toBe(false);
   });
 
   it('Effort 按模型记忆:get/set + 同值短路 + 持久化', async () => {
@@ -409,7 +411,10 @@ describe('newMakerDraft store', () => {
     expect(d.fastModeByModel).toEqual({});
   });
 
-  it('schema:worktree root 字段不再持久化,读取时直接忽略', async () => {
+  it('schema:legacy wt* root 字段仍被忽略,不迁移进 worktreeEnabled', async () => {
+    // 2026-07-28「勾选状态保存在工作端」上线后 worktree 记忆走新字段 worktreeEnabled;
+    // 历史残留的 wtEnabled/wtName/wtSourceBranch/wtBaseRepo(更早的持久化实验)继续
+    // 丢弃,且不从旧值猜测用户意图做迁移(configuration-and-overrides 规则)。
     memStorage.setItem(
       'xdt:newMakerDraft:v1',
       JSON.stringify({
@@ -427,6 +432,221 @@ describe('newMakerDraft store', () => {
     expect(d).not.toHaveProperty('wtName');
     expect(d).not.toHaveProperty('wtSourceBranch');
     expect(d).not.toHaveProperty('wtBaseRepo');
+    expect(d.worktreeEnabled).toBe(false);
+  });
+
+  it('schema:worktree 偏好以显式 override 持久化,脏值/缺字段跟随系统默认', async () => {
+    // 勾选记忆是「工作端一份」的显式 override:专用 setter 写入 → 重载后恢复。
+    vi.resetModules();
+    {
+      const { getDraft, setWorktreePreference } = await loadModule();
+      expect(getDraft().worktreeEnabled).toBe(false); // 出厂默认不勾选(防误操作)
+      expect(getDraft().worktreePreferenceCustomized).toBe(false);
+      setWorktreePreference(true);
+      expect(getDraft().worktreeEnabled).toBe(true);
+      expect(getDraft().worktreePreferenceCustomized).toBe(true);
+    }
+    vi.resetModules();
+    {
+      const { getDraft } = await loadModule();
+      expect(getDraft().worktreeEnabled).toBe(true);
+      expect(getDraft().worktreePreferenceCustomized).toBe(true);
+    }
+    // 脏值(非布尔 true)一律归一 false
+    memStorage.setItem(
+      'xdt:newMakerDraft:v1',
+      JSON.stringify({ vendor: 'cc', worktreeEnabled: 'yes' }),
+    );
+    vi.resetModules();
+    {
+      const { getDraft } = await loadModule();
+      expect(getDraft().worktreeEnabled).toBe(false);
+      expect(getDraft().worktreePreferenceCustomized).toBe(false);
+    }
+  });
+
+  it('旧 false 快照不固化默认,旧 true 迁移为显式 override', async () => {
+    memStorage.setItem(
+      'xdt:newMakerDraft:v1',
+      JSON.stringify({ vendor: 'cc', worktreeEnabled: false }),
+    );
+    vi.resetModules();
+    {
+      const { getDraft, patchDraft } = await loadModule();
+      expect(getDraft().worktreeEnabled).toBe(false);
+      expect(getDraft().worktreePreferenceCustomized).toBe(false);
+      patchDraft({ workingDir: '/projects/default-following' });
+      expect(
+        JSON.parse(memStorage.getItem('xdt:newMakerDraft:v1') ?? '{}'),
+      ).toMatchObject({
+        worktreeEnabled: false,
+        worktreePreferenceCustomized: false,
+      });
+    }
+
+    memStorage.setItem(
+      'xdt:newMakerDraft:v1',
+      JSON.stringify({ vendor: 'cc', worktreeEnabled: true }),
+    );
+    vi.resetModules();
+    {
+      const { getDraft } = await loadModule();
+      expect(getDraft().worktreeEnabled).toBe(true);
+      expect(getDraft().worktreePreferenceCustomized).toBe(true);
+    }
+  });
+
+  it('customized=false 时忽略旧快照布尔并重新采用系统默认', async () => {
+    memStorage.setItem(
+      'xdt:newMakerDraft:v1',
+      JSON.stringify({
+        vendor: 'cc',
+        worktreeEnabled: true,
+        worktreePreferenceCustomized: false,
+      }),
+    );
+    vi.resetModules();
+    const { getDraft } = await loadModule();
+    expect(getDraft().worktreeEnabled).toBe(false);
+    expect(getDraft().worktreePreferenceCustomized).toBe(false);
+  });
+
+  it('附属窗口的过期草稿写入不会覆盖另一个窗口刚保存的 worktree 偏好', async () => {
+    // 两次 import 模拟两个 Electron renderer:模块内存独立,localStorage 共享。
+    const staleWindow = await loadModule();
+    vi.resetModules();
+    const activeWindow = await loadModule();
+
+    activeWindow.setWorktreePreference(true);
+    expect(staleWindow.getDraft().worktreeEnabled).toBe(false);
+
+    // storage event 尚未送达时,旧窗口修改任意其它字段；写入前必须从共享持久值
+    // rebase worktreeEnabled,不能把旧 false 随完整草稿快照覆盖回去。
+    staleWindow.patchVendorPrefs('cc', { effort: 'high' });
+
+    expect(staleWindow.getDraft().worktreeEnabled).toBe(true);
+    expect(
+      JSON.parse(memStorage.getItem(staleWindow.__STORAGE_KEY) ?? '{}'),
+    ).toMatchObject({
+      worktreeEnabled: true,
+      worktreePreferenceCustomized: true,
+    });
+  });
+
+  it('远程 worktree 广播不会让旧窗口回滚持久草稿或 main 偏好镜像', async () => {
+    // 先让附属窗口持有旧的模型/目录，再由活跃窗口保存新值；两个模块实例模拟两个 renderer。
+    const staleWindow = await loadModule();
+    staleWindow.patchDraft({ workingDir: '/projects/stale' });
+    staleWindow.patchVendorPrefs('cc', { model: 'claude-stale' });
+
+    vi.resetModules();
+    const activeWindow = await loadModule();
+    activeWindow.patchDraft({ workingDir: '/projects/current' });
+    activeWindow.patchVendorPrefs('cc', { model: 'claude-current' });
+
+    expect(staleWindow.getDraft().workingDir).toBe('/projects/stale');
+    expect(staleWindow.getDraft().lastByVendor.cc.model).toBe('claude-stale');
+
+    // main 广播会让所有窗口依次执行 setter。每个窗口都只能基于共享持久对象合并布尔字段，
+    // 不能把各自完整 currentDraft 写回。
+    activeWindow.setWorktreePreference(true);
+    staleWindow.setWorktreePreference(true);
+
+    const persisted = JSON.parse(
+      memStorage.getItem(staleWindow.__STORAGE_KEY) ?? '{}',
+    ) as {
+      workingDir?: string;
+      worktreeEnabled?: boolean;
+      worktreePreferenceCustomized?: boolean;
+      lastByVendor?: { cc?: { model?: string } };
+    };
+    expect(persisted.workingDir).toBe('/projects/current');
+    expect(persisted.lastByVendor?.cc?.model).toBe('claude-current');
+    expect(persisted.worktreeEnabled).toBe(true);
+    expect(persisted.worktreePreferenceCustomized).toBe(true);
+
+    // 旧窗口的临时内存仍可保持不同，但 App 向 main 同步时必须读取同一份持久真相。
+    expect(staleWindow.getDraft().workingDir).toBe('/projects/stale');
+    expect(staleWindow.getDraftForPreferenceSync().workingDir).toBe('/projects/current');
+    expect(staleWindow.getDraftForPreferenceSync().lastByVendor.cc.model).toBe(
+      'claude-current',
+    );
+    expect(activeWindow.getDraftForPreferenceSync()).toEqual(
+      staleWindow.getDraftForPreferenceSync(),
+    );
+  });
+
+  it('worktree 单字段落盘失败时 main 只回退该布尔，不回退旧窗口整份草稿', async () => {
+    const staleWindow = await loadModule();
+    staleWindow.patchDraft({ workingDir: '/projects/stale' });
+    staleWindow.patchVendorPrefs('cc', { model: 'claude-stale' });
+
+    vi.resetModules();
+    const activeWindow = await loadModule();
+    activeWindow.patchDraft({ workingDir: '/projects/current' });
+    activeWindow.patchVendorPrefs('cc', { model: 'claude-current' });
+
+    vi.spyOn(memStorage, 'setItem').mockImplementationOnce(() => {
+      throw new Error('quota exceeded');
+    });
+    staleWindow.setWorktreePreference(true);
+
+    const syncDraft = staleWindow.getDraftForPreferenceSync();
+    expect(syncDraft.worktreeEnabled).toBe(true);
+    expect(syncDraft.worktreePreferenceCustomized).toBe(true);
+    expect(syncDraft.workingDir).toBe('/projects/current');
+    expect(syncDraft.lastByVendor.cc.model).toBe('claude-current');
+    expect(staleWindow.getDraft().workingDir).toBe('/projects/stale');
+  });
+
+  it('storage event 会把其它窗口保存的 worktree 偏好同步进当前 store 并通知订阅者', async () => {
+    let onStorage: ((event: StorageEvent) => void) | undefined;
+    const removeEventListener = vi.fn();
+    vi.stubGlobal('window', {
+      localStorage: memStorage,
+      addEventListener: (
+        type: string,
+        listener: EventListenerOrEventListenerObject,
+      ) => {
+        if (type === 'storage' && typeof listener === 'function') {
+          onStorage = listener as (event: StorageEvent) => void;
+        }
+      },
+      removeEventListener,
+    });
+    vi.resetModules();
+
+    const draftStore = await loadModule();
+    const subscriber = vi.fn();
+    draftStore.subscribeDraft(subscriber);
+    const serialized = JSON.stringify({
+      ...draftStore.getDraft(),
+      worktreeEnabled: true,
+      worktreePreferenceCustomized: true,
+    });
+    memStorage.setItem(draftStore.__STORAGE_KEY, serialized);
+
+    onStorage?.({
+      key: draftStore.__STORAGE_KEY,
+      newValue: serialized,
+    } as StorageEvent);
+
+    expect(draftStore.getDraft().worktreeEnabled).toBe(true);
+    expect(draftStore.getDraft().worktreePreferenceCustomized).toBe(true);
+    expect(subscriber).toHaveBeenCalledTimes(1);
+
+    // 旧 false 事件若迟到,当前 localStorage 的 true 仍是权威值,不得回滚内存或 main 镜像。
+    subscriber.mockClear();
+    onStorage?.({
+      key: draftStore.__STORAGE_KEY,
+      newValue: JSON.stringify({
+        ...draftStore.getDraft(),
+        worktreeEnabled: false,
+        worktreePreferenceCustomized: true,
+      }),
+    } as StorageEvent);
+    expect(draftStore.getDraft().worktreeEnabled).toBe(true);
+    expect(subscriber).not.toHaveBeenCalled();
   });
 
   it('vendor 字段非合法值(非 cc/codex)→ 回退 cc', async () => {

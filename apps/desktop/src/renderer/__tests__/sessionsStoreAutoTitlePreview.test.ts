@@ -107,7 +107,7 @@ describe('sessionsStore — 预览必须活过全量刷新', () => {
   it('新建会话触发的 forceRefreshAll 不会把预览冲回哨兵', async () => {
     // 真实时序:createSession → 预览 → sessions:created push → forceRefreshAll,
     // 而那次重拉从 DB 拿回的行**仍带哨兵**(权威标题要等 auto-title 落库)。
-    // 只写缓存会被冲掉 —— 标题先显示用户那句话、又退回「未命名对话」(review P1)。
+    // 只写缓存会被冲掉 —— 标题先显示用户那句话、又退回「未命名任务」(review P1)。
     await seed(session());
     emitAutoTitlePreview(SESSION_ID, '帮我排查登录失败');
     expect(currentTitle()).toBe('帮我排查登录失败');
@@ -208,7 +208,7 @@ describe('sessionsStore — 预览必须活过全量刷新', () => {
   it('权威标题晚于在飞的 list 请求写入 → 旧快照不许把它冲回哨兵', async () => {
     // 真实时序:sessions:created push → forceRefreshAll 起飞(DB 快照里还是哨兵)
     // → main 写完占位、sessions:patched 落进缓存 → 那个更早的请求才回来。
-    // 没有版本化 override 的话,整桶覆盖会把权威标题冲掉,界面退到「未命名对话」
+    // 没有版本化 override 的话,整桶覆盖会把权威标题冲掉,界面退到「未命名任务」
     // 直到下一次刷新;乐观预览此刻已按「权威值到达即回收」的规则让位(review P1)。
     await seed(session());
 

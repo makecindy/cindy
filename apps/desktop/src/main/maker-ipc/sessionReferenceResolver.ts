@@ -210,7 +210,7 @@ function fitSerializedPayloadBudget(
       else {
         throw new SessionReferenceError(
           'SESSION_REFERENCE_INVALID',
-          '会话引用元数据超过整次请求预算',
+          '任务引用元数据超过整次请求预算',
         );
       }
     }
@@ -365,7 +365,7 @@ async function resolveLocal(
     .from(sessions)
     .where(eq(sessions.id, ref.sessionId))
     .limit(1);
-  if (!session) throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `找不到本机会话 ${ref.sessionId}`);
+  if (!session) throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `找不到本机任务 ${ref.sessionId}`);
   const loaded = await readLocalRows(ref, messageLimit, session.clearedAt ?? null);
   // A recent local snapshot may legitimately end at a partial assistant
   // message when the turn failed.  Preserve only a safe status marker; never
@@ -385,7 +385,7 @@ async function resolveLocal(
     .filter((entry): entry is { message: AgentInputSessionReferenceMessage; isAnchor: boolean } => entry.message !== null);
   const mapped = mappedWithAnchor.map((entry) => entry.message);
   if (mapped.length === 0) {
-    throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `会话 ${ref.sessionId} 没有可引用的可见消息`);
+    throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `任务 ${ref.sessionId} 没有可引用的可见消息`);
   }
   const anchorIndex = ref.messageClientId
     ? mappedWithAnchor.findIndex((entry) => entry.isAnchor)
@@ -417,7 +417,7 @@ function remoteFailure(ref: AgentInputSessionRef, response: Awaited<ReturnType<t
     throw new SessionReferenceError('SESSION_REFERENCE_ACCESS_DENIED', `来源设备拒绝访问：${message}`);
   }
   if (code === 'CHANNEL_NOT_ALLOWED') {
-    throw new SessionReferenceError('SESSION_REFERENCE_UNSUPPORTED', `来源设备版本不支持会话引用：${message}`);
+    throw new SessionReferenceError('SESSION_REFERENCE_UNSUPPORTED', `来源设备版本不支持任务引用：${message}`);
   }
   if (
     code === 'DEVICE_OFFLINE' ||
@@ -431,10 +431,10 @@ function remoteFailure(ref: AgentInputSessionRef, response: Awaited<ReturnType<t
   if (code === 'PAYLOAD_TOO_LARGE') {
     throw new SessionReferenceError(
       'SESSION_REFERENCE_UNSUPPORTED',
-      `会话 ${ref.sessionId} 的远程历史响应过大，无法安全引用：${message}`,
+      `任务 ${ref.sessionId} 的远程历史响应过大，无法安全引用：${message}`,
     );
   }
-  throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `无法读取会话 ${ref.sessionId}：${message}`);
+  throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `无法读取任务 ${ref.sessionId}：${message}`);
 }
 
 interface RemoteHistoryCursor {
@@ -465,11 +465,11 @@ function parseRemoteTerminal(value: unknown): AgentInputSessionReferenceTerminal
 
 function parseRemoteHistoryPage(ref: AgentInputSessionRef, value: unknown): RemoteHistoryPage {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `来源设备返回了无效的会话历史`);
+    throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `来源设备返回了无效的对话记录`);
   }
   const page = value as Record<string, unknown>;
   if (!Array.isArray(page.items) || typeof page.hasMore !== 'boolean') {
-    throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `来源设备返回了无效的会话历史`);
+    throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `来源设备返回了无效的对话记录`);
   }
   return {
     items: page.items.filter((row): row is Record<string, unknown> =>
@@ -485,7 +485,7 @@ function parseRemoteHistoryPage(ref: AgentInputSessionRef, value: unknown): Remo
         ) {
           throw new SessionReferenceError(
             'SESSION_REFERENCE_NOT_FOUND',
-            `鏉ユ簮璁惧杩斿洖浜嗘棤鏁堢殑浼氳瘇鍘嗗彶`,
+            `来源设备返回了无效的对话记录`,
           );
         }
         const cursor = page.nextCursor as Record<string, unknown>;
@@ -498,7 +498,7 @@ function parseRemoteHistoryPage(ref: AgentInputSessionRef, value: unknown): Remo
         ) {
           throw new SessionReferenceError(
             'SESSION_REFERENCE_NOT_FOUND',
-            `鏉ユ簮璁惧杩斿洖浜嗘棤鏁堢殑浼氳瘇鍘嗗彶`,
+            `来源设备返回了无效的对话记录`,
           );
         }
         return {
@@ -598,7 +598,7 @@ async function resolveRemote(
   tokenBudget: number,
 ): Promise<{ context: AgentInputSessionReferenceContext; usedTokens: number }> {
   if (!ref.deviceId) {
-    throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `会话 ${ref.sessionId} 没有在线来源设备`);
+    throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `任务 ${ref.sessionId} 没有在线来源设备`);
   }
   let sessionResponse: Awaited<ReturnType<typeof invokeRemote>>;
   try {
@@ -611,7 +611,7 @@ async function resolveRemote(
   }
   if (sessionResponse.ok !== true) remoteFailure(ref, sessionResponse);
   if (!sessionResponse.result || typeof sessionResponse.result !== 'object') {
-    throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `来源设备上不存在会话 ${ref.sessionId}`);
+    throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `来源设备上不存在任务 ${ref.sessionId}`);
   }
   const remoteSession = sessionResponse.result as Record<string, unknown>;
   const remoteClearedAt = timestampToMs(remoteSession.clearedAt);
@@ -695,7 +695,7 @@ async function resolveRemote(
     );
   }
   if (mapped.length === 0) {
-    throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `会话 ${ref.sessionId} 没有可引用的可见消息`);
+    throw new SessionReferenceError('SESSION_REFERENCE_NOT_FOUND', `任务 ${ref.sessionId} 没有可引用的可见消息`);
   }
   const fitted = fitMessagesToTokenBudget(mapped, tokenBudget, anchorIndex);
   return {
@@ -725,7 +725,7 @@ export async function resolveSessionReferences(
   if (refs.length > MAX_SESSION_REFERENCES) {
     throw new SessionReferenceError(
       'SESSION_REFERENCE_INVALID',
-      `单条消息最多引用 ${MAX_SESSION_REFERENCES} 个会话，当前为 ${refs.length} 个`,
+      `单条消息最多引用 ${MAX_SESSION_REFERENCES} 个任务，当前为 ${refs.length} 个`,
     );
   }
   const contexts: AgentInputSessionReferenceContext[] = [];
@@ -734,14 +734,14 @@ export async function resolveSessionReferences(
   for (let index = 0; index < refs.length; index++) {
     const ref = refs[index];
     if (!ref?.sessionId.trim()) {
-      throw new SessionReferenceError('SESSION_REFERENCE_INVALID', '会话引用缺少 sessionId');
+      throw new SessionReferenceError('SESSION_REFERENCE_INVALID', '任务引用缺少 sessionId');
     }
     if (
       ref.sessionId.length > MAX_REFERENCE_ID_LENGTH ||
       (ref.deviceId?.length ?? 0) > MAX_REFERENCE_ID_LENGTH ||
       (ref.messageClientId?.length ?? 0) > MAX_REFERENCE_ID_LENGTH
     ) {
-      throw new SessionReferenceError('SESSION_REFERENCE_INVALID', '会话引用标识过长');
+      throw new SessionReferenceError('SESSION_REFERENCE_INVALID', '任务引用标识过长');
     }
     const refsLeft = refs.length - index;
     const messageLimit = Math.max(1, Math.floor(remainingMessages / refsLeft));

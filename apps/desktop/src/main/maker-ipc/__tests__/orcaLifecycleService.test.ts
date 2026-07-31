@@ -297,7 +297,7 @@ describe('OrcaLifecycleService', () => {
       entrypoint: 'create_worker',
       context: 'create_worker/worker-session-1/worker-ready-placeholder',
     });
-    expect(ORCA_WORKER_READY_MESSAGE).toBe('[系统] Orca Worker 会话已就绪，等待 Lead 分配任务。');
+    expect(ORCA_WORKER_READY_MESSAGE).toBe('[系统] Orca Worker 已就绪，等待 Lead 分配任务。');
     expect(calls).toEqual([
       'createWorkerInTeam:team-existing:reviewer',
       'sendWorkerReadyPlaceholder:create_worker:create_worker/worker-session-1/worker-ready-placeholder',

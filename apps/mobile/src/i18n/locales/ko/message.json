@@ -110,7 +110,7 @@
     "mediaDeviceLinkHint": "모바일은 device-link를 통해 원격 기기에 미디어 업로드를 요청한 후 엽니다.",
     "controlDelete": "메시지 삭제",
     "controlRewind": "여기로 되돌리기",
-    "controlFork": "대화 분기",
+    "controlFork": "세션 분기",
     "markdownDocAriaLabel": "메시지 본문",
     "toolOutputTitle": "{{label}} 출력",
     "mermaidEmpty": "빈 Mermaid 다이어그램.",
@@ -178,7 +178,7 @@
       "neutral": "다시 연결",
       "pending": "다시 연결하는 중…",
       "pendingWithProgress": "다시 연결하는 중 {{attempt}}/{{total}}…",
-      "details": "이번 재시도 {{attempt}}/{{total}} · 이 대화에서 재연결 {{count}}회"
+      "details": "이번 재시도 {{attempt}}/{{total}} · 이 세션에서 재연결 {{count}}회"
     },
     "modelLabel": "모델",
     "sessionLabel": "세션",

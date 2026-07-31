@@ -35,7 +35,7 @@ describe('PermissionPrompt i18n', () => {
 
     expect(screen.getByText('允许 PowerShell？')).toBeTruthy();
     expect(screen.getByText('拒绝')).toBeTruthy();
-    expect(screen.getByText('本对话总是允许')).toBeTruthy();
+    expect(screen.getByText('本任务总是允许')).toBeTruthy();
     expect(screen.getByText('允许一次')).toBeTruthy();
     expect(screen.queryByText('Allow Codex to run this command?')).toBeNull();
     expect(screen.getByText('Provider-supplied reason stays verbatim.')).toBeTruthy();

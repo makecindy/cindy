@@ -52,8 +52,8 @@
   },
   "agentIsland": {
     "native": {
-      "newConversationTitle": "New Chat",
-      "newConversationHint": "Start a new conversation",
+      "newConversationTitle": "New Session",
+      "newConversationHint": "Start a new session",
       "muteSound": "Mute Agent Island",
       "enableSound": "Enable Agent Island sound",
       "settings": "Agent Island settings",
@@ -659,7 +659,7 @@
       },
       "qnaTitle": "Ask directly",
       "qnaDescription": "If the overview does not cover your question, ask what you want to do and I will point you to the right path.",
-      "qnaPlaceholder": "For example: how do I import a Codex conversation?",
+      "qnaPlaceholder": "For example: how do I import a Codex session?",
       "qnaSend": "Send",
       "qnaPending": "Preparing an answer…",
       "qnaNoAnswer": "I do not have a reliable answer yet. Try asking again with a different wording.",
@@ -678,7 +678,7 @@
       "openAssistant": "Ask Help Assistant",
       "panelTitle": "Help Assistant",
       "panelAriaLabel": "Help Assistant panel",
-      "newSession": "New chat",
+      "newSession": "New session",
       "threadEmptyTitle": "Ask me anything",
       "threadEmptyHint": "Quick answers to common questions — you can follow up to correct me"
     },
@@ -1081,8 +1081,8 @@
         "totalHint": "Selectable for import",
         "projects": "Project sessions",
         "projectsHint": "Sessions that will appear under project groups",
-        "dialogue": "Dialogues",
-        "dialogueHint": "Codex projectless conversations",
+        "dialogue": "Chat",
+        "dialogueHint": "Codex projectless sessions",
         "filtered": "Skipped",
         "filteredHint": "Internal or already in app"
       },
@@ -1093,7 +1093,7 @@
         "codex": "Codex",
         "claude": "Claude",
         "project": "Existing projects",
-        "dialogue": "Dialogues"
+        "dialogue": "Chat"
       },
       "toast": {
         "scanFailed": "Scan failed",
@@ -1195,7 +1195,7 @@
     },
     "providers": {
       "title": "Providers",
-      "subtitle": "The source used when picking a model. Each source offers its own models and billing, switchable per conversation.",
+      "subtitle": "The source used when picking a model. Each source offers its own models and billing, switchable per session.",
       "pill": {
         "connected": "Connected",
         "suspended": "Disabled"
@@ -1654,7 +1654,7 @@
       },
       "intro": "After connecting, private messages sent to this WeChat connection enter Cindy on this computer. Tencent provides the authorization page, which may display OpenClaw.",
       "errorNote": "The connection was not completed. Check your network and scan again. Cindy never stores plaintext credentials after a failed connection.",
-      "disabledNote": "Personal WeChat is paused in this version by the compatibility policy. Saved conversations and settings are not removed.",
+      "disabledNote": "Personal WeChat is paused in this version by the compatibility policy. Saved sessions and settings are not removed.",
       "permission": {
         "label": "Permission mode",
         "hint": "Applies to new context after /new. Risky actions still require confirmation in Cindy Desktop.",
@@ -1690,7 +1690,7 @@
           "connected": "WeChat private messages go directly to Cindy on this computer and are not relayed through Cindy servers.",
           "reconnecting": "This computer is restoring the WeChat connection. No new scan is needed.",
           "needs_reauth": "The WeChat authorization expired or was replaced by another connection. Scan again.",
-          "disabled_by_policy": "The connection is paused by this version's compatibility policy; credentials and conversations remain saved.",
+          "disabled_by_policy": "The connection is paused by this version's compatibility policy; credentials and sessions remain saved.",
           "error": "The connection is temporarily unavailable. Scan again or unbind and retry later."
         }
       },
@@ -1708,7 +1708,7 @@
       },
       "unbind": {
         "title": "Unbind personal WeChat?",
-        "description": "Unbinding stops messaging, removes local WeChat credentials, and clears unfinished tasks. Existing Cindy conversations, history, and saved attachments remain.",
+        "description": "Unbinding stops messaging, removes local WeChat credentials, and clears unfinished tasks. Existing Cindy sessions, history, and saved attachments remain.",
         "confirm": "Unbind",
         "cancel": "Cancel"
       },
@@ -1852,7 +1852,7 @@
       },
       "commandMenu": {
         "start": "Welcome and usage",
-        "new": "Start a new session",
+        "new": "Start a new chat",
         "help": "Show command help",
         "stop": "Stop the current task",
         "session": "Recent sessions, pick one to continue",
@@ -1968,7 +1968,7 @@
     },
     "memory": {
       "title": "Memory",
-      "description": "Powers workspace-scoped memory. After changing settings you usually need to start a new Session for it to take effect. If memory misbehaves, click Reset or turn it off.",
+      "description": "Powers workspace-scoped memory. After changing settings you usually need to start a new agent session for it to take effect. If memory misbehaves, click Reset or turn it off.",
       "maker": {
         "label": "Cindy",
         "description": "Memory is managed by the agent entry, not by each model. Claude Code and Codex sessions can share memory within the same working directory.",
@@ -2006,7 +2006,7 @@
         "toast": {
           "enabled": "{{label}} memory enabled",
           "disabled": "{{label}} memory disabled",
-          "takesEffectSuffix": " — takes effect in new chats",
+          "takesEffectSuffix": " — takes effect on the next agent session",
           "toggleFailed": "Failed to update memory setting",
           "resetSuccess_one": "{{label}} memories reset — removed {{count}} entry",
           "resetSuccess_other": "{{label}} memories reset — removed {{count}} entries",
@@ -2176,7 +2176,7 @@
         "title": "Browser automation",
         "description": "A dedicated browser for agents — separate from your everyday Chrome",
         "toggleAria": "Toggle browser automation",
-        "toggleHint": "This toggle only applies to agent sessions started afterward; it does not affect a conversation that is already running.",
+        "toggleHint": "This toggle only applies to agent sessions started afterward; it does not affect a session that is already running.",
         "noProjectHint": "Open Settings from a project session to toggle browser automation for that project.",
         "detected": "Detected {{browser}}",
         "notDetected": "No local browser detected. Install Chrome to use browser automation.",
@@ -2211,7 +2211,7 @@
         "description": "Let agents inspect and operate a connected Android device over ADB",
         "toggleAria": "Toggle Android automation",
         "refresh": "Recheck",
-        "toggleHint": "This machine-wide toggle only applies to agent sessions started afterward; it does not affect a conversation that is already running.",
+        "toggleHint": "This machine-wide toggle only applies to agent sessions started afterward; it does not affect a session that is already running.",
         "status": {
           "checking": "Checking ADB status…",
           "preparing": "Preparing ADB…",
@@ -2348,7 +2348,7 @@
           "windowsHint": "Windows does not require extra system permissions. Keep the target app visible on the active desktop while the agent works.",
           "linuxHint": "Linux does not use macOS TCC permissions; make sure the current desktop session allows window inspection and input automation."
         },
-        "toggleHint": "This toggle only applies to agent sessions started afterward; it does not affect a conversation that is already running.",
+        "toggleHint": "This toggle only applies to agent sessions started afterward; it does not affect a session that is already running.",
         "noProjectHint": "Open Settings from a project session to toggle direct computer control for that project.",
         "update": {
           "available": "New version v{{version}} available. You may need to re-grant system permissions after updating.",
@@ -2377,21 +2377,21 @@
     },
     "builtinTools": {
       "title": "Built-in Tools",
-      "description": "Set defaults for new conversations or override them for a project. Project settings take priority.",
+      "description": "Set defaults for new sessions or override them for a project. Project settings take priority.",
       "empty": "No tools available.",
       "toggleAria": "Toggle {{name}} tool",
       "toggleHint": "Changes apply only to new or restarted agent sessions. Running sessions are not affected.",
       "loadFailed": "Failed to load tool list",
       "scopePicker": {
         "ariaLabel": "Switch the scope of built-in tool settings",
-        "userDefault": "New conversation defaults",
+        "userDefault": "New session defaults",
         "userDefaultDescription": "Used by new sessions without a project override"
       },
       "source": {
         "project": "project",
         "projectTooltip": "Overridden by project settings ({{dir}})",
         "user": "user default",
-        "userTooltip": "Inherited from new conversation defaults",
+        "userTooltip": "Inherited from new session defaults",
         "product": "product default",
         "productTooltip": "Inherited from Cindy product defaults"
       },
@@ -2759,8 +2759,8 @@
           "description": "Open the settings page"
         },
         "new-maker": {
-          "label": "New chat",
-          "description": "Start a new chat"
+          "label": "New session",
+          "description": "Start a new session"
         },
         "close-tab-or-window": {
           "label": "Close tab or window",
@@ -2953,7 +2953,7 @@
       "projectSwitchLockedTip": "This plugin is disabled globally; enable it in the Global view first",
       "projectBanner": {
         "title": "Configuring project \"{{name}}\"",
-        "desc": "Switches here only affect this project — turned-off plugins won't appear in its new sessions",
+        "desc": "Switches here only affect this project — turned-off plugins are unavailable in it",
         "backToGlobal": "Back to global"
       },
       "scopePicker": {
@@ -2991,7 +2991,7 @@
         "updated": "\"{{name}}\" updated to v{{version}}",
         "exported": "Exported the .cindy file for \"{{name}}\"",
         "exportFailed": "Couldn't export \"{{name}}\" — try again",
-        "projectDisabled": "Turned off \"{{name}}\" for this project (applies to new sessions)",
+        "projectDisabled": "Turned off \"{{name}}\" for this project",
         "projectEnabled": "\"{{name}}\" now follows the global setting in this project"
       },
       "panelError": {
@@ -3279,11 +3279,41 @@
     },
     "contacts": {
       "title": "Smart Contacts",
-      "description": "A people and organization directory built for agents: cross-platform identity resolution (email / Feishu / Slack / GitHub id → who is this), relationship context, and dated event records. Agents collect entries as they work; low-confidence ones land in a pending queue for your review. Data is stored on this device only; lookups and organizing are processed through your own model.",
+      "description": "A people and organization directory built for agents: cross-platform identity resolution (email / Feishu / Slack / GitHub id → who is this), relationship context, and dated event records. Agents collect entries as they work; low-confidence ones land in a pending queue for your review. Data stays on this device by default, with optional device sync; lookups and organizing are processed through your own model.",
       "enable": {
         "label": "Enable Smart Contacts",
         "description": "When on, agents can look up and automatically collect contact information (uncertain entries go to pending review). Turning it off does not affect browsing or managing existing data here.",
         "toggleAria": "Toggle Smart Contacts"
+      },
+      "sync": {
+        "label": "Sync across my devices",
+        "description": "Enable once on each desktop you want to include. Online devices sync automatically, connecting directly on the same local network when possible or using end-to-end encrypted relay data. Comparison is programmatic, with no model or token usage.",
+        "toggleAria": "Toggle contact device sync",
+        "syncNow": "Sync now",
+        "onlineDevices_one": "{{count}} other device online",
+        "onlineDevices_other": "{{count}} other devices online",
+        "route": {
+          "lan": "Local network",
+          "relay": "Encrypted relay"
+        },
+        "status": {
+          "loading": "Reading sync status…",
+          "signInRequired": "Sign in to your Cindy account to sync between devices",
+          "off": "Sync is off",
+          "waiting": "Waiting for another sync-enabled desktop to come online",
+          "syncing": "Syncing securely…",
+          "ready": "Ready — devices will sync when they come online",
+          "lastSuccess": "{{device}} · {{time}} · {{route}}"
+        },
+        "error": {
+          "secure-storage-unavailable": "System secure storage is unavailable, so the device key cannot be protected",
+          "peer-identity-changed": "A device identity changed; sync is paused to protect your data",
+          "sync-failed": "Sync failed and will retry when a device is next online"
+        },
+        "toast": {
+          "enabled": "Device sync enabled",
+          "disabled": "Device sync disabled"
+        }
       },
       "stats": "{{people}} people / {{orgs}} orgs / {{groups}} groups",
       "kind": {
@@ -3864,8 +3894,8 @@
       "addAria": "Add tab",
       "addFailed": "Failed to add tab",
       "tabCloseAria": "Close tab",
-      "pinAria": "Pin — keep in all conversations",
-      "unpinAria": "Unpin — keep only in this conversation",
+      "pinAria": "Pin — keep in all sessions",
+      "unpinAria": "Unpin — keep only in this session",
       "menu": {
         "addLabel": "Add tab",
         "comingSoon": "Coming soon",
@@ -4532,7 +4562,7 @@
         "search": "Search",
         "local": "Local",
         "projects": "Projects",
-        "conversations": "Conversations"
+        "conversations": "Sessions"
       }
     },
     "addRemoteProject": {
@@ -4707,7 +4737,9 @@
       "detecting": "Detecting environment…",
       "gitMissing": "git not detected, please install it first",
       "notGitRepo": "Current directory is not a git repository",
-      "alreadyInWorktree": "Already inside a worktree, nesting is not allowed"
+      "alreadyInWorktree": "Already inside a worktree, nesting is not allowed",
+      "toggleAria": "Use worktree isolation",
+      "chipTooltip": "Start this chat in an isolated worktree without touching the current branch"
     },
     "branchChip": {
       "label": "Branch",
@@ -4715,7 +4747,8 @@
       "loadFailed": "Failed to load branches — tap to retry",
       "currentTooltip": "Current branch",
       "sourceTooltip": "Worktree source branch",
-      "worktreeHint": "Picking another branch starts in an isolated worktree"
+      "worktreeHint": "Picking another branch starts this chat in an isolated worktree",
+      "exitWorktreeHint": "Picking the current branch leaves worktree and starts directly on it"
     },
     "folderPicker": {
       "selectFolder": "Select folder",
@@ -4725,8 +4758,8 @@
       "recent": "Recent",
       "browseFolder": "Choose a different folder",
       "browseProjectFolder": "Choose another project folder",
-      "dialogue": "Dialogue",
-      "dialogueOrSelectProject": "Dialogue or select project",
+      "dialogue": "Chat",
+      "dialogueOrSelectProject": "Chat or select project",
       "removeFromList": "Remove from list",
       "missingDir": "Folder not found"
     },
@@ -4780,7 +4813,7 @@
       "disabledHint": "Collaboration is disabled for this project. Enable it in project settings.",
       "unavailableHint": "Unable to verify this project's collaboration setting. Try again shortly.",
       "unsupportedRemoteHint": "The controlled device is too old to support collaboration.",
-      "remoteContinueNotice": " This message is still being sent as a single conversation.",
+      "remoteContinueNotice": " This message is still being sent as a single session.",
       "handoffRecoveredMessage": "Collaboration startup was interrupted last time. Your unsent message has been restored to the composer.",
       "handoffRecoveredGoal": "Collaboration startup was interrupted last time. The goal was not started; its text has been restored to the composer.",
       "loadingHint": "Still checking this project's collaboration setting. Try again shortly.",
@@ -5053,7 +5086,7 @@
       "outputFile": "Output: {{path}}"
     },
     "forkOrigin": {
-      "label": "Created from another conversation"
+      "label": "Created from another session"
     },
     "imageMissing": {
       "title": "Image missing"
@@ -5067,17 +5100,17 @@
       "copy": "Copy message",
       "linkCopied": "Link copied",
       "moreActions": "More message actions",
-      "copyLink": "Copy current conversation link",
+      "copyLink": "Copy current message link",
       "copyLinkFailed": "Couldn't copy the link",
       "rewind": "Back to here",
-      "fork": "Continue in a new conversation",
-      "forkConfirmTitle": "Start a new conversation from here?",
-      "forkConfirmDescription": "A separate conversation will be created using the context at this point. The original conversation stays unchanged, and future messages in either conversation won't affect the other.",
-      "forkConfirm": "Start new conversation",
+      "fork": "Start a new session",
+      "forkConfirmTitle": "Start a new session from here?",
+      "forkConfirmDescription": "A separate session will be created using the context at this point. The original session stays unchanged, and future messages in either session won't affect the other.",
+      "forkConfirm": "Start new session",
       "forkCancel": "Cancel",
       "delete": "Delete this message",
       "deleteConfirmTitle": "Delete this message?",
-      "deleteConfirmDescription": "A user message is removed on its own. For an AI message, the entire AI output after the preceding user input is removed. Later conversation stays in place. On the next send, the AI context is rebuilt from the remaining history.",
+      "deleteConfirmDescription": "A user message is removed on its own. For an AI message, the entire AI output after the preceding user input is removed. Later messages stay in place. On the next send, the AI context is rebuilt from the remaining history.",
       "deleteConfirm": "Delete message",
       "deleteCancel": "Cancel",
       "deleteBusy": "Wait for the current response to finish before deleting a message.",
@@ -5097,6 +5130,11 @@
       "continueAfterResetTitle": "Create a one-time Automation to continue this task after usage resets",
       "credentialSwitchBusy": "Another Codex task is still running, so the provider for this session can't be applied yet (the shared Codex process needs a restart). Retry after those tasks finish.",
       "codexThreadStale": "Codex auth mode changed — this session can't continue. Start a new session to apply it.",
+      "claudeGatewayOpusPlanMismatch": "This Opus request went through XD Gateway, not your Claude.ai subscription. That gateway route rejected the model. Switch to your Claude.ai subscription and retry, or choose another model.",
+      "switchClaudeSubscription": "Switch to Claude.ai & Retry",
+      "switchClaudeSubscriptionTitle": "Switch this session to the Claude.ai subscription and retry",
+      "switchingClaudeSubscription": "Switching to Claude.ai…",
+      "claudeSubscriptionSwitchFailed": "Couldn’t switch to Claude.ai or retry this session: {{msg}}",
       "budgetModelHint": "If this keeps failing, try switching to the standard GPT model.",
       "codexAuthMissing": "Remote Codex hasn't been signed in yet (401 Unauthorized). Click \"Sync auth\" to push your local Codex credentials to the remote Cindy Codex home, then retry.",
       "codexAuthMissingLocal": "Codex credentials missing or expired (401 Unauthorized). Re-login in {{appName}} Settings → Codex (the app-server will auto-restart on login), or run `codex login` in your terminal and toggle the auth mode in Settings once to restart the app-server. Then start a new session.",
@@ -5435,7 +5473,7 @@
         "savedTokens": "saved {{tokens}} tokens",
         "manual": "Manual compact",
         "auto": "Auto compact",
-        "aria": "Conversation compacted"
+        "aria": "Chat compacted"
       },
       "autoResume": {
         "label": "Reconnected",
@@ -5444,7 +5482,7 @@
         "detail": {
           "reason": "Interruption reason",
           "attempt": "Attempt {{attempt}}/{{total}}",
-          "sessionTotal": "{{count}} reconnects in this conversation"
+          "sessionTotal": "{{count}} reconnects in this session"
         }
       },
       "autoResumeSeparator": {
@@ -5525,7 +5563,7 @@
         "messageCount_other": "{{count}} messages",
         "truncated": "truncated"
       },
-      "forkBusy": "Wait for the current response to finish before starting a new conversation from here",
+      "forkBusy": "Wait for the current response to finish before starting a new session from here",
       "editStopTimeout": "Timed out waiting for the task to stop — please try again",
       "editQueueNotEmpty": "This session has queued messages — send or remove them before editing",
       "editNotLast": "A newer message exists in this session — this one is no longer the latest and cannot be edited",
@@ -5534,11 +5572,11 @@
       "editSend": "Send",
       "editRollbackHint": "Sending will undo changes to {{count}} file(s) from the last turn",
       "forkErrors": {
-        "unsupportedHistory": "The historical agent session for this point is unavailable, so a new conversation can't be started from here",
-        "noPriorAssistant": "Start a new conversation from a message that follows an AI reply",
-        "sourceNeverRan": "The original conversation hasn't run yet, so a new conversation can't be started",
-        "codexStateUnavailable": "The Codex conversation state is unavailable, so a new conversation can't be started. {{detail}}",
-        "generic": "Couldn't start a new conversation. Try again."
+        "unsupportedHistory": "The historical agent session for this point is unavailable, so a new session can't be started from here",
+        "noPriorAssistant": "Start a new session from a message that follows an AI reply",
+        "sourceNeverRan": "The original session hasn't run yet, so a new session can't be started",
+        "codexStateUnavailable": "The Codex session state is unavailable, so a new session can't be started. {{detail}}",
+        "generic": "Couldn't start a new session. Try again."
       }
     },
     "threadContext": {
@@ -5546,7 +5584,7 @@
       "viewThread": "View thread context ({{count}})"
     },
     "rewind": {
-      "noFilesToRollback": "No files to roll back, only conversation history will be truncated",
+      "noFilesToRollback": "No files to roll back, only chat history will be truncated",
       "errors": {
         "noPriorAssistantPreview": "Please rewind from a question that follows an AI reply (this one has no prior assistant reply)",
         "sessionRunning": "The task did not stop in time — retry the rewind",
@@ -5561,10 +5599,10 @@
         "errorDescription": "File checkpointing is not enabled for this Session — files modified by tools cannot be rolled back.",
         "calculating": "Calculating rewind impact…",
         "noChanges": "No file changes to roll back",
-        "continueWillTruncate": "Continuing will still truncate later conversation",
+        "continueWillTruncate": "Continuing will still truncate subsequent messages",
         "noPerFileDiff": "This SDK version does not support per-file diff preview",
         "summaryDefault": "Subsequent messages after this will be discarded, and {{count}} files in the working directory will be rolled back to that moment.",
-        "summaryRunning": "The current task will stop. Later conversation and corresponding file changes will be rewound.",
+        "summaryRunning": "The current task will stop. Subsequent messages and the corresponding file changes will be rewound.",
         "summaryEmpty": "Subsequent messages will be discarded. No files were changed; only history is truncated.",
         "summaryEmptyWithNote": "Subsequent messages will be discarded.",
         "runningNotice": "The task is still running. Confirming will stop it before recalculating and applying the rewind.",
@@ -5770,11 +5808,11 @@
         "compactHint": "Click to compact context",
         "codexAutoHint": "Codex compacts automatically on the server side; manual compaction is not supported",
         "confirmTitle": "Compact context?",
-        "confirmDescription": "Current usage: {{used}} / {{total}} ({{pct}}%). This silently compacts context — the agent summarizes conversation history to free up context space.",
+        "confirmDescription": "Current usage: {{used}} / {{total}} ({{pct}}%). This silently compacts context — the agent summarizes chat history to free up context space.",
         "confirmAction": "Compact",
         "confirmCancel": "Cancel"
       },
-      "dialogueLabel": "Dialogue",
+      "dialogueLabel": "Chat",
       "backToAutomations": "Back to Automations",
       "waitForReply": "Waiting for your reply in the document area…",
       "modelSwitchedFastModeOff": "Model switched, Fast Mode disabled"
@@ -5806,15 +5844,14 @@
     },
     "draft": {
       "createSessionFailed": "Failed to create session, please retry",
+      "remoteWorktreeCleanupPending": "The previous remote worktree is still awaiting cleanup. Reconnect the device and try again.",
       "remoteProviderUpdating": "Provider credentials are being updated — retry in a moment",
       "remoteProviderUnsupported": "This provider is not supported in SSH remote sessions — pick another source",
       "remoteNativeOauthUnavailable": "Claude.ai subscription is not connected — connect it first or pick a gateway model",
       "deviceStillLoading": "Remote device is still loading, please wait",
-      "worktreeMissingRepo": "Cannot create worktree: missing repository root for the current directory",
-      "worktreeRepoHint": "Try re-selecting the working directory and wait for the folder badge to refresh, then retry",
       "sessionInactive": "Session is no longer active",
       "remoteProjectBanner": "New session in {{project}} on {{device}}",
-      "remoteDialogueBanner": "New dialogue on {{device}} (no project)"
+      "remoteDialogueBanner": "New chat on {{device}} (no project)"
     },
     "jumpSession": {
       "emptyId": "Enter a sessionId to jump to",
@@ -5847,14 +5884,14 @@
         "awaitingPluginSetup": "Awaiting plugin setup"
       },
       "showAllSessions": "Show all {{count}}",
-      "dialogues": "Dialogues",
-      "newDialogue": "New dialogue",
-      "dialoguesToggleExpand": "Expand dialogues",
-      "dialoguesToggleCollapse": "Collapse dialogues",
+      "dialogues": "Chat",
+      "newDialogue": "New session",
+      "dialoguesToggleExpand": "Expand Chat",
+      "dialoguesToggleCollapse": "Collapse Chat",
       "loadingDialogues": "Loading…",
-      "noDialogues": "No dialogues",
-      "dialogueSettings": "Organize dialogues",
-      "dialogueSettingsAria": "Organize dialogues (Sort by: {{sortBy}})",
+      "noDialogues": "No sessions",
+      "dialogueSettings": "Organize Chat",
+      "dialogueSettingsAria": "Organize Chat (Sort by: {{sortBy}})",
       "dialogueSortHeading": "Sort by",
       "dialogueSort": {
         "recency": "Recent first",
@@ -6041,18 +6078,18 @@
         "moveToProject": "Move to project",
         "moveToProjectHeading": "Select project",
         "browseProjectFolder": "Choose project folder",
-        "moveToDialogue": "Move to Dialogues",
+        "moveToDialogue": "Move to Chat",
         "noProjects": "No recent projects",
         "moveToProjectDone": "Moved to project",
         "moveToProjectFailed": "Failed to move to project",
-        "moveToDialogueDone": "Moved to Dialogues",
-        "moveToDialogueFailed": "Failed to move to Dialogues",
+        "moveToDialogueDone": "Moved to Chat",
+        "moveToDialogueFailed": "Failed to move to Chat",
         "moveToProjectRunningBlocked": "This session is running. Move it after it finishes.",
         "moveToProjectAttachedBlocked": "This session is being controlled remotely. Move it after control ends.",
         "moveToProjectRemoteUnsupported": "Moving remote sessions is not supported yet",
         "openInNewWindow": "Open in new window",
         "exportShare": "Export session…",
-        "copySessionLink": "Copy chat link"
+        "copySessionLink": "Copy session link"
       },
       "projectAction": {
         "rename": "Rename project",
@@ -6287,11 +6324,11 @@
       "open": "Search",
       "placeholder": "Search titles or content…",
       "clear": "Clear search",
-      "empty": "Type to search chat titles and content",
+      "empty": "Type to search session titles and content",
       "searching": "Searching…",
       "failed": "Search failed",
-      "noResults": "No matching chats",
-      "jumpFailed": "Opened the chat, but could not jump to the matching message",
+      "noResults": "No matching sessions",
+      "jumpFailed": "Opened the session, but could not jump to the matching message",
       "moreHits": "{{count}} more related",
       "kind": {
         "title": "Title",
@@ -6742,28 +6779,28 @@
     "deleteDialog": {
       "title": "Delete automation \"{{name}}\"?",
       "titleFallback": "Delete automation?",
-      "description": "Future triggers will stop. Choose what to do with conversations already generated by this automation.",
-      "sessionCountPending": "Counting generated conversations…",
-      "sessionCount": "{{count}} generated conversation(s)",
+      "description": "Future triggers will stop. Choose what to do with sessions already generated by this automation.",
+      "sessionCountPending": "Counting generated sessions…",
+      "sessionCount": "{{count}} generated session(s)",
       "inflightCount": "{{count}} execution(s) are currently running and will be stopped",
-      "optionAria": "Choose how to handle generated conversations",
+      "optionAria": "Choose how to handle generated sessions",
       "option": {
         "keep": {
-          "title": "Keep conversations",
-          "description": "Delete only the automation task. Conversations stay in the sidebar."
+          "title": "Keep sessions",
+          "description": "Delete only the automation task. Sessions stay in the sidebar."
         },
         "archive": {
-          "title": "Archive conversations",
-          "description": "Delete the automation task and move generated conversations to Archive."
+          "title": "Archive sessions",
+          "description": "Delete the automation task and move generated sessions to Archive."
         },
         "delete": {
-          "title": "Delete conversations",
-          "description": "Delete the automation task and its generated conversations. This cannot be undone."
+          "title": "Delete sessions",
+          "description": "Delete the automation task and its generated sessions. This cannot be undone."
         }
       },
       "confirm": "Delete automation",
-      "confirmDeleteSessions": "Delete automation and conversations",
-      "sessionUpdatePartial": "Automation deleted, but {{fail}} conversation(s) could not be updated"
+      "confirmDeleteSessions": "Delete automation and sessions",
+      "sessionUpdatePartial": "Automation deleted, but {{fail}} session(s) could not be updated"
     },
     "confirm": {
       "delete": {
@@ -6863,7 +6900,7 @@
       "refresh": "Refresh",
       "emptyTitle": "No issues submitted yet",
       "emptyTitleUnverified": "Couldn't find your issues right now",
-      "startIssueChat": "Start a new chat with /issue",
+      "startIssueChat": "Start a new session with /issue",
       "statusUnknown": "Status unknown",
       "sourceCindy": "Submitted from Cindy",
       "sourceGithub": "GitHub account",
@@ -7713,7 +7750,7 @@
       "migrationPartial": "Migration done: {{success}} succeeded / {{skipped}} skipped / {{failed}} failed (total {{total}})",
       "migrationFailed": "Migration failed, please retry later",
       "fetchUpdateNoticeFailed": "Failed to fetch update notice",
-      "corruptionRestored": "Database restored from snapshot at {{time}}; recent chats may be lost",
+      "corruptionRestored": "Database restored from snapshot at {{time}}; recent chat history may be lost",
       "schemaDriftWarning": "A local database version record is inconsistent. Update to the latest version; if this warning keeps appearing, contact support. The app will not delete local data automatically.",
       "telegramBotConnected": "Telegram bot configuration saved",
       "telegramBotConnectFailed": "Telegram bot connection failed; check the token and your network",
@@ -7932,7 +7969,7 @@
     },
     "toast": {
       "usage": "Usage: /goal <condition>",
-      "noSession": "Open or start a conversation first to set a goal",
+      "noSession": "Open or start a session first to set a goal",
       "failed": "Failed to set goal",
       "set": "Goal set — working toward it",
       "cleared": "Goal cleared"
@@ -7955,7 +7992,7 @@
       "failed": "Learning failed",
       "cancel": "Cancel",
       "review": "Review proposal",
-      "fromConversation": "Distilled from the current conversation",
+      "fromConversation": "Distilled from the current session",
       "openSession": "Open learning session",
       "continueHint": "Keep chatting in this session to revise the proposal; apply it via \"Review proposal\" when satisfied"
     },
@@ -8014,7 +8051,7 @@
       "confirmExcludeMedia": "Export without media",
       "oversizeHint": "Content exceeds the size limit; media files account for about {{mediaMb}} MB. You can export again without media (text and context are kept).",
       "tooLarge": "The session exceeds the {{limitMb}} MB export limit even without media, so it cannot be exported.",
-      "doneFull": "Exported. The recipient can continue the conversation seamlessly.",
+      "doneFull": "Exported. The recipient can continue the chat seamlessly.",
       "donePartial": "Exported. Some transcript history is missing (still resumable).",
       "doneDbOnly": "Exported with chat history only (the recipient cannot seamlessly continue).",
       "failed": "Export failed"
@@ -8039,7 +8076,7 @@
       "passwordPlaceholder": "Password",
       "unlock": "Unlock",
       "previewMeta": "{{agent}} · {{count}} messages · exported {{exportedAt}}",
-      "riskWarning": "This file was shared from outside — make sure you trust its source. The imported history may influence the AI's future behavior, and if you continue the conversation, the AI can still read and write local files and run commands.",
+      "riskWarning": "This file was shared from outside — make sure you trust its source. The imported history may influence the AI's future behavior, and if you continue the chat, the AI can still read and write local files and run commands.",
       "workdirHint": "The original working directory was {{originalDir}}. Choose the matching directory on this machine.",
       "workdirEmpty": "No directory selected",
       "pickWorkdir": "Choose directory",
@@ -8062,8 +8099,8 @@
       "db-only": "Chat history only: readable, but cannot seamlessly continue"
     },
     "fidelityResult": {
-      "full": "Context is complete. You can continue the conversation right away.",
-      "partial": "You can continue the conversation; rewinding to earlier fork points may fail.",
+      "full": "Context is complete. You can continue the chat right away.",
+      "partial": "You can continue the chat; rewinding to earlier fork points may fail.",
       "db-only": "Only chat history was imported: Claude sessions need fresh context; Codex sessions restore as plain-text history (reasoning and tool details are lost)."
     },
     "note": {

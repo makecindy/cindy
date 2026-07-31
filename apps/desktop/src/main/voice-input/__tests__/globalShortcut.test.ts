@@ -8,7 +8,7 @@ import type { GlobalVoiceInputIpcDeps } from '../global.js';
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
   const registeredShortcuts = new Map<string, () => void>();
-  // 录制/挂起那两条 IPC 的合法发起方,同时也是 keys 转发的收件人 —— 建模成一个会话副窗口
+  // 录制/挂起那两条 IPC 的合法发起方,同时也是 keys 转发的收件人 —— 建模成一个任务副窗口
   // （设置页在副窗口里照样打得开）。所以它要有顶层 frame 与 once,好过得了那道授权闸。
   const focusedWindowMainFrame = { url: 'http://localhost:5173/index.html' };
   const focusedWindow = {
@@ -473,7 +473,7 @@ describe('voice input global shortcut registration', () => {
 
     // 存盘就等于宣布「当前快捷键是这个新的」,那旧的必须同时失效。旧 accelerator 的注销
     // 只写在成功路径上,缺权限时在那之前就返回了 —— 于是设置页显示「右 Option 待授权」,
-    // 而按 F16 整个会话里仍会触发语音输入。
+    // 而按 F16 整个任务里仍会触发语音输入。
     it('deactivates the previously registered accelerator when persisting a pending shortcut', async () => {
       setPlatform('darwin');
       const { registerGlobalVoiceInputIpc } = await import('../global.js');
@@ -1577,7 +1577,7 @@ describe('voice input global shortcut registration', () => {
       });
 
       // 按住说话的会话可能在录制框打开**之前**就已经 start 了; 挂起/替换 listener 会调
-      // endActiveTriggerIfNeeded() 补发一次 end。把这个 end 也丢掉, 那个会话就永远停不下来 ——
+      // endActiveTriggerIfNeeded() 补发一次 end。把这个 end 也丢掉, 那个任务就永远停不下来 ——
       // listener 已经停了, 它还在录。所以只挡新激活。
       it('still delivers end while recording but drops new activations', async () => {
         setPlatform('darwin');
@@ -1615,7 +1615,7 @@ describe('voice input global shortcut registration', () => {
         );
 
         // 而先前那次按住的 end 必须送到 —— 挂起会调 endActiveTriggerIfNeeded() 补发它, 丢掉
-        // 那个会话就永远停不下来。
+        // 那个任务就永远停不下来。
         mocks.listenerOptions.onTrigger?.('end');
         expect(mocks.focusedWindow.webContents.send).toHaveBeenCalledWith(
           'voice-input:global-shortcut-trigger',

@@ -23,6 +23,7 @@ import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 
 import { normalizeIssuePublicName } from '../../shared/issuePublicName.js';
 import { MAKER_PUSH } from '../maker-ipc/channels';
+import { HOST_CONFIRM_TIMEOUT_MS } from '../maker-ipc/hostConfirmTiming.js';
 
 export interface IssueDraft {
   title: string;
@@ -64,9 +65,19 @@ export type IssueConfirmDecision =
       reason: 'cancelled' | 'timeout' | 'session_closed' | 'session_aborted';
     };
 
+/** Renderer 可重放的提交确认请求；主进程持有它直到确认流程 settle。 */
+export interface IssueConfirmInteractionSnapshot {
+  kind: 'issue_confirm';
+  requestId: string;
+  draft: IssueDraft;
+  env: IssueEnvInfo;
+  submissionIdentity: IssueSubmissionIdentity;
+  suggestedPublicName?: string;
+}
+
 export interface IssueConfirmBridgeDeps {
   broadcast: (channel: string, payload: unknown) => void;
-  /** 确认超时,默认 10 分钟(对齐 permission prompt 的超时语义)。测试注小值。 */
+  /** 确认超时,默认 9 分钟,须早于外层 MCP 的 10 分钟 deadline。测试注小值。 */
   timeoutMs?: number;
   logger?: { warn: (...args: unknown[]) => void };
   /**
@@ -77,10 +88,9 @@ export interface IssueConfirmBridgeDeps {
   onDesktopOnlyConfirmPending?: (sessionId: string) => void;
 }
 
-const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
-
 interface PendingConfirmEntry {
   sessionId: string;
+  request: IssueConfirmInteractionSnapshot;
   requiresPublicName: boolean;
   resolve: (decision: IssueConfirmDecision) => void;
   timeoutId: ReturnType<typeof setTimeout>;
@@ -100,27 +110,29 @@ export class IssueConfirmBridge {
     suggestedPublicName?: string,
   ): Promise<IssueConfirmDecision> {
     const requestId = randomUUID();
+    const request: IssueConfirmInteractionSnapshot = {
+      kind: 'issue_confirm',
+      requestId,
+      draft,
+      env,
+      submissionIdentity,
+      suggestedPublicName,
+    };
     return new Promise<IssueConfirmDecision>((resolve) => {
-      const timeoutMs = this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      const timeoutMs = this.deps.timeoutMs ?? HOST_CONFIRM_TIMEOUT_MS;
       const timeoutId = setTimeout(() => {
         this.settle(requestId, { confirmed: false, reason: 'timeout' }, 'timeout');
       }, timeoutMs);
       this.pending.set(requestId, {
         sessionId,
+        request,
         requiresPublicName: submissionIdentity.kind === 'platform',
         resolve,
         timeoutId,
       });
       this.deps.broadcast(MAKER_PUSH.INTERACTION_REQUEST, {
         sessionId,
-        request: {
-          kind: 'issue_confirm',
-          requestId,
-          draft,
-          env,
-          submissionIdentity,
-          suggestedPublicName,
-        },
+        request,
       });
       try {
         this.deps.onDesktopOnlyConfirmPending?.(sessionId);
@@ -133,6 +145,16 @@ export class IssueConfirmBridge {
         });
       }
     });
+  }
+
+  /** 打开、重连或刷新会话时供 renderer 补回错过的确认卡。 */
+  pendingSnapshots(sessionId?: string): Array<{
+    sessionId: string;
+    request: IssueConfirmInteractionSnapshot;
+  }> {
+    return Array.from(this.pending.values())
+      .filter((entry) => sessionId === undefined || entry.sessionId === sessionId)
+      .map((entry) => ({ sessionId: entry.sessionId, request: entry.request }));
   }
 
   /**
@@ -164,10 +186,7 @@ export class IssueConfirmBridge {
   }
 
   /** 会话关闭/中止时清掉该会话所有 pending,并让 renderer 收卡。 */
-  cleanupForSession(
-    sessionId: string,
-    reason: 'session_closed' | 'session_aborted',
-  ): void {
+  cleanupForSession(sessionId: string, reason: 'session_closed' | 'session_aborted'): void {
     for (const [requestId, entry] of Array.from(this.pending.entries())) {
       if (entry.sessionId !== sessionId) continue;
       this.settle(requestId, { confirmed: false, reason }, reason);

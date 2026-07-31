@@ -78,7 +78,7 @@ export function emitAutoTitlePreview(sessionId: string, title: string): void {
  *
  * 为什么必须有这条:预览是叠加层,它的失效条件是「权威标题落地」。起名彻底失败时那个
  * 条件永远不成立,叠加层会在每次全量刷新后继续顶着 DB 里的哨兵,会话就永久显示一个
- * **库里并不存在**的标题(重启后又变回「未命名对话」)。宁可退回可解释的兜底文案:
+ * **库里并不存在**的标题(重启后又变回「未命名任务」)。宁可退回可解释的兜底文案:
  * 下一条带文字的消息会重试起名(`autoNameSettled` 未登记)。
  */
 export function emitAutoTitlePreviewCleared(sessionId: string): void {

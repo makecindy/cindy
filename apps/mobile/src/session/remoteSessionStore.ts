@@ -30,6 +30,18 @@ interface DeviceShard {
   sessions: RemoteSession[];
 }
 
+export interface RemoteNewMakerWorktreePreference {
+  enabled: boolean;
+  /**
+   * 每次 pull / push / 本机显式点击都递增。新建页用它给在途 one-shot pull 做 fence，
+   * 防止较早发出的响应覆盖后来到达的工作端 push 或用户选择。
+   */
+  revision: number;
+}
+
+const EMPTY_NEW_MAKER_WORKTREE_PREFERENCE: RemoteNewMakerWorktreePreference =
+  Object.freeze({ enabled: false, revision: 0 });
+
 /**
  * 会话元数据在途写登记(app 级单例):首页乐观写(置顶/归档/删除/重命名)begin 时
  * track、settle 时 release;`sessions:patched` push 应用前经 filterPatch 遮蔽在途
@@ -101,6 +113,8 @@ const EMPTY_SESSION_RUN_STATUS: RemoteSessionRunStatus = Object.freeze({
 });
 
 const shards = new Map<string, DeviceShard>();
+// 工作端拥有的 New Maker worktree 偏好按设备隔离；push 属 sessions topic，无 sessionId。
+const newMakerWorktreePreferences = new Map<string, RemoteNewMakerWorktreePreference>();
 const messages = new Map<string, RemoteMessage[]>();
 // The maker event is broadcast before its async DB create/update completes. Keep the latest
 // plan snapshot briefly in the session mirror so a late initial `messages:created` row cannot
@@ -1934,6 +1948,11 @@ export const remoteSessionStore = {
       this.applySessionActivity(deviceId, payload);
       return;
     }
+    if (channel === 'maker:new-maker-draft:changed') {
+      const enabled = readPushedNewMakerWorktreeEnabled(payload);
+      if (enabled !== null) this.setNewMakerWorktreePreference(deviceId, enabled);
+      return;
+    }
     if (channel === 'local-db:sessions:created') {
       reseedHandlers.get(deviceId)?.forEach((handler) => handler());
       return;
@@ -2403,6 +2422,7 @@ export const remoteSessionStore = {
 
   removeDevice(deviceId: string): void {
     const hadShard = shards.delete(deviceId);
+    const hadWorktreePreference = newMakerWorktreePreferences.delete(deviceId);
     // Sweep per-session maps for this device regardless of whether the shard still exists, and
     // drop the index entries too — otherwise sessionDeviceIndex (and any maps it points at)
     // leak orphans when the shard was already pruned.
@@ -2439,13 +2459,14 @@ export const remoteSessionStore = {
         removedSession = true;
       }
     }
-    if (!hadShard && !removedSession) return;
+    if (!hadShard && !removedSession && !hadWorktreePreference) return;
     bumpMessageVersion();
     recomputeSessions();
   },
 
   clear(): void {
     shards.clear();
+    newMakerWorktreePreferences.clear();
     messages.clear();
     livePlanSnapshots.clear();
     pendingInteractions.clear();
@@ -2516,6 +2537,25 @@ export const remoteSessionStore = {
 
   getStoreVersion(): number {
     return storeVersion;
+  },
+
+  setNewMakerWorktreePreference(deviceId: string, enabled: boolean): void {
+    if (!deviceId) return;
+    const current = newMakerWorktreePreferences.get(deviceId);
+    newMakerWorktreePreferences.set(deviceId, {
+      enabled,
+      revision: (current?.revision ?? 0) + 1,
+    });
+    // 同值 push 仍需推进 revision：它可能比在途 pull 更新，必须让旧响应失去写权。
+    emit();
+  },
+
+  getNewMakerWorktreePreference(
+    deviceId: string | null | undefined,
+  ): RemoteNewMakerWorktreePreference {
+    if (!deviceId) return EMPTY_NEW_MAKER_WORKTREE_PREFERENCE;
+    return newMakerWorktreePreferences.get(deviceId)
+      ?? EMPTY_NEW_MAKER_WORKTREE_PREFERENCE;
   },
 
   getPendingInteractions(sessionId: string): PendingInteraction[] {
@@ -2794,6 +2834,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+function readPushedNewMakerWorktreeEnabled(payload: unknown): boolean | null {
+  if (!isRecord(payload)) return null;
+  for (const slot of ['claudeCode', 'codex'] as const) {
+    const defaults = payload[slot];
+    if (!isRecord(defaults)) continue;
+    const enabled = defaults.worktreeEnabled;
+    if (typeof enabled === 'boolean') return enabled;
+  }
+  return null;
+}
+
 function hasDeviceLinkTruncationMarker(value: Record<string, unknown> | null): boolean {
   return value?.[DEVICE_LINK_TRUNCATED_FLAG] === true;
 }
@@ -2905,6 +2956,15 @@ export function useRemoteMessageVersion(): number {
 
 export function useRemoteSessionStoreVersion(): number {
   return useSyncExternalStore(remoteSessionStore.subscribe, remoteSessionStore.getStoreVersion);
+}
+
+export function useRemoteNewMakerWorktreePreference(
+  deviceId: string | null | undefined,
+): RemoteNewMakerWorktreePreference {
+  return useSyncExternalStore(
+    remoteSessionStore.subscribe,
+    () => remoteSessionStore.getNewMakerWorktreePreference(deviceId),
+  );
 }
 
 export function useSessionPendingInteractions(sessionId: string): PendingInteraction[] {

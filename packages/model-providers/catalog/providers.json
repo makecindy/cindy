@@ -16,6 +16,16 @@
         "kind": "subscription",
         "product": "SuperGrok"
       },
+      "imageModels": [
+        {
+          "id": "xai/grok-imagine-image",
+          "name": "Grok Imagine Image"
+        },
+        {
+          "id": "xai/grok-imagine-image-quality",
+          "name": "Grok Imagine Image (Quality)"
+        }
+      ],
       "routing": {
         "claude-code": {
           "upstream": "https://api.x.ai/v1",

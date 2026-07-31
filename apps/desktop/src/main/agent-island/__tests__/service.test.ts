@@ -1282,7 +1282,7 @@ describe('AgentIslandService native publishing', () => {
       setMainLocale('zh-CN');
       service.refreshLocalization();
       await vi.waitFor(() => expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
-        title: '未命名对话',
+        title: '未命名任务',
       }));
       setMainLocale('en');
       service.refreshLocalization();

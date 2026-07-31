@@ -26,6 +26,10 @@ import type { CSSProperties, ReactNode } from 'react';
 import { useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
+import {
+  connectedProvidersForAgent,
+  providerOffersModel,
+} from '@cindy/model-providers';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import {
   Activity,
@@ -1249,6 +1253,27 @@ export function CCAgentSessionView({
   const { providers: localProviders } = useProviders();
   const { providers: deviceProviders } = useDeviceProviders(remoteDeviceId);
   const providers = remoteDeviceId ? deviceProviders : localProviders;
+  const canSwitchToClaudeSubscription = useMemo(() => {
+    if (
+      remoteDeviceId ||
+      session?.remoteHostId ||
+      session?.agentKind !== 'cc' ||
+      !session.model
+    ) {
+      return false;
+    }
+    return connectedProvidersForAgent(localProviders, 'claude-code').some(
+      (provider) =>
+        provider.id === 'anthropic' &&
+        providerOffersModel(provider, session.model, 'claude-code'),
+    );
+  }, [
+    localProviders,
+    remoteDeviceId,
+    session?.agentKind,
+    session?.model,
+    session?.remoteHostId,
+  ]);
   // 该会话 agent 的能力(agent 级 hasFastMode + 旧被控端拍平回退用 availableModels);按 remoteDeviceId 作用域。
   const { capabilities: sessionCaps } = useAgentCapabilities(displayAgentKind, remoteDeviceId);
   // 这里曾有 useErrorReadAck:ErrorBanner 在视图内聚焦驻留 1.5s 即 explicit 清红点。
@@ -2553,15 +2578,49 @@ export function CCAgentSessionView({
   // interrupted-turn-resume:main 判定失败 turn 已有 assistant 产出时,会用隐藏的
   // 规范化续跑指令(CONTINUE_AFTER_ERROR_PROMPT)替代重发原文;零产出仍重发原文。
   // 判定与文案都在 main(规则 9),renderer 只发意图。
-  // Retry / silent-stop 继续都**不在这里 ack 红点**(PR #879 review P1):这两个 store
-  // 方法内部吞掉异步失败,点击时就清点会在恢复失败(retry 被拒 / 续跑入队失败)时留下
+  // Retry / silent-stop 继续都**不在这里 ack 红点**(PR #879 review P1):点击时就清点
+  // 会在恢复失败(retry 被拒 / 续跑入队失败)时留下
   // 「横幅还在、红点没了」,而 live-only 的错误没有任何重算能把它恢复。
   // 成功路径已经有更可靠的收敛点:turn 真正跑起来 → store 清掉终止错误 →
   // useSessionRunningStatus 在 running 上升沿把 orphan 的 error 角标 explicit 清掉。
   // 失败路径则天然保留红点,与仍在展示的横幅一致。
   const handleRetry = useCallback(() => {
-    retryLastError();
+    void retryLastError().catch((error) => {
+      log.warn('retryLastError failed', error);
+    });
   }, [retryLastError]);
+
+  const handleSwitchToClaudeSubscription = useCallback(async (): Promise<void> => {
+    if (!sessionId || !session || !canSwitchToClaudeSubscription) return;
+    const model = session.model;
+    const previousProviderId = session.providerId ?? null;
+
+    await window.electronAPI.maker.setModel(sessionId, model, 'anthropic');
+    try {
+      await sessionService.update(sessionId, {
+        model,
+        providerId: 'anthropic',
+      });
+    } catch (error) {
+      // runtime route 已先切换；若持久化失败就回滚，避免当前进程与 DB 对同一会话
+      // 产生两个 provider 真源。
+      await window.electronAPI.maker
+        .setModel(sessionId, model, previousProviderId)
+        .catch((rollbackError) => {
+          log.warn('Claude subscription recovery rollback failed', rollbackError);
+        });
+      throw error;
+    }
+
+    await refreshServerSession();
+    await retryLastError();
+  }, [
+    canSwitchToClaudeSubscription,
+    refreshServerSession,
+    retryLastError,
+    session,
+    sessionId,
+  ]);
 
   const handleSilentStopContinue = useCallback(() => {
     continueAfterSilentStop();
@@ -3256,6 +3315,11 @@ export function CCAgentSessionView({
                   deviceLinkDeviceId={remoteDeviceId}
                   modelId={session?.model}
                   providerId={session?.providerId}
+                  onSwitchToClaudeSubscription={
+                    canSwitchToClaudeSubscription
+                      ? handleSwitchToClaudeSubscription
+                      : undefined
+                  }
                   silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
                   onForkStripEncrypted={ownsWindowRoute ? handleForkStripEncrypted : undefined}
                   forkStripEncryptedRunning={forkStripEncryptedRunning}
@@ -3301,6 +3365,9 @@ export function CCAgentSessionView({
                 deviceLinkDeviceId={remoteDeviceId}
                 modelId={session?.model}
                 providerId={session?.providerId}
+                onSwitchToClaudeSubscription={
+                  canSwitchToClaudeSubscription ? handleSwitchToClaudeSubscription : undefined
+                }
                 silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
                 onForkStripEncrypted={ownsWindowRoute ? handleForkStripEncrypted : undefined}
                 forkStripEncryptedRunning={forkStripEncryptedRunning}

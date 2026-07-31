@@ -48,7 +48,7 @@ describe('mobile schedule delete model', () => {
       sessionCount: 2,
       inflightCount: 1,
     });
-    expect(describeScheduleDeletePreview(preview)).toBe('找到 2 个由它生成的会话，还有 1 次执行正在进行');
+    expect(describeScheduleDeletePreview(preview)).toBe('找到 2 个由它生成的任务，还有 1 次执行正在进行');
   });
 
   it('buildScheduleDeletePreview excludes the hand-bound targetSessionId from the mobile preview', () => {
@@ -121,7 +121,7 @@ describe('hand-bound targetSessionId exclusion', () => {
 
     expect(preview.sessionIds).not.toContain(boundId);
     expect(preview.sessionCount).toBe(2);
-    expect(describeScheduleDeletePreview(preview)).toBe('找到 2 个由它生成的会话');
+    expect(describeScheduleDeletePreview(preview)).toBe('找到 2 个由它生成的任务');
   });
 
   it('keeps all generated sessions when no bound id is given (backward compat)', () => {

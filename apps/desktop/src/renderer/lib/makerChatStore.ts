@@ -6981,7 +6981,7 @@ const autoNameSettled = new Set<string>();
  *
  * 用户在首次 `maker:auto-title` 返回前连着发两条文字时,两次都会通过 `autoNameSettled`
  * 检查、各起一次尝试。若**较早**那次失败,它的撤回不能动预览 —— 更晚的尝试仍在飞,
- * 预览还有主人,撤回会让标题白闪一次「未命名对话」(PR #1031 review P1)。
+ * 预览还有主人,撤回会让标题白闪一次「未命名任务」(PR #1031 review P1)。
  * 与 SessionMenuSheet 的 `renameSeqRef`、搜索框的 `requestSeqRef` 同款守卫。
  */
 const autoNameAttempts = new Map<string, number>();
@@ -7085,7 +7085,7 @@ function scheduleAutoName(
  *
  * 预览是「马上会有权威标题回流」的赌注,它的失效条件是权威标题落地。起名没写成时
  * 那个条件永远不成立:叠加层会在每次全量刷新后继续顶着 DB 里的哨兵,会话永久显示一个
- * **库里并不存在**的标题(重启后又变回「未命名对话」,同一会话两种标题)。宁可退回可
+ * **库里并不存在**的标题(重启后又变回「未命名任务」,同一会话两种标题)。宁可退回可
  * 解释的兜底文案 —— 而且没登记 `autoNameSettled`,下一条带文字的消息会重试起名。
  *
  * 万一 IPC 是「写库成功、响应丢了」,撤回也不会造成错误状态:main 已经广播过
@@ -7778,15 +7778,16 @@ function clearError(sessionId: string): void {
   });
 }
 
-function retryLastError(sessionId: string): void {
-  if (!sessionId) return;
+function retryLastError(sessionId: string): Promise<void> {
+  if (!sessionId) return Promise.resolve();
   // 续跑语义在 main:coordinator 判定失败 turn 已有 assistant 产出时,用共享英文
   // 常量 CONTINUE_AFTER_ERROR_PROMPT 替代重发原文(shared/interruptedTurn.ts),
   // renderer 不传文案、不做判定。
-  makerApiFor(sessionId)
+  return makerApiFor(sessionId)
     .input.retryLastError(sessionId)
-    .then(applyInputProjection)
-    .catch((err) => log.warn('retryLastError failed:', err));
+    .then((projection) => {
+      applyInputProjection(projection);
+    });
 }
 
 /**

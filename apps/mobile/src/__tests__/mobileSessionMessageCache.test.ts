@@ -100,7 +100,7 @@ describe('mobileSessionMessageCache', () => {
     const fresh = [
       {
         ...makeMessage({ id: 'u1', clientId: 'c-u1', role: 'user', createdAt: isoAt(1) }),
-        content: JSON.stringify({ text: '看下这个会话', images: [], files: [] }),
+        content: JSON.stringify({ text: '看下这个任务', images: [], files: [] }),
         updatedAt: isoAt(1),
         userId: 'user-1',
       },
