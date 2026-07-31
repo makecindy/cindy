@@ -469,6 +469,49 @@ describe('路径 chip 的可点信号(源码级守卫)', () => {
     expect(body, '缺少不套等宽的分支').toMatch(/\[baseStyle, styles\.markdownPathChip\]/);
   });
 
+  // ── 收敛检查点(PR #1144 两轮 review 各捉到一个「有下划线却点不动」) ──
+  // 不变量:**下划线 ⇔ 可点**,双向成立。根因是「加不加下划线」与「有没有 onPress」
+  // 在各分支独立决定 → 必然漂移。判据已收成 clickableInlineStyle 一处,这里钉住它
+  // 不被重新拆散。能区分错误修法:只修某一处 case 分支的写法过不了第一条。
+  it('markdownLink 只能经 clickableInlineStyle 取用,不得在 case 分支里直接写', () => {
+    const src = readRenderer();
+    const helperStart = src.indexOf('function clickableInlineStyle');
+    expect(helperStart, '未找到 clickableInlineStyle —— 判据被拆散了?').toBeGreaterThan(-1);
+    const helperEnd = src.indexOf('\n}', helperStart);
+    const helperBody = src.slice(helperStart, helperEnd);
+    // helper 自己必须按 onPress 决定下划线。
+    expect(helperBody, 'helper 未按 onPress 分流').toMatch(/onPress \? styles\.markdownLink : undefined/);
+    // 除 helper 自身外,全文件不应再出现 styles.markdownLink 的**用法**。
+    // 注释行(含 helper 的 JSDoc,它会引用这个名字来说明规则)不算用法。
+    const lines = src.split('\n');
+    const others = lines
+      .map((line, i) => ({ line, no: i + 1 }))
+      .filter(({ line }) => line.includes('styles.markdownLink'))
+      .filter(({ line }) => {
+        const t = line.trim();
+        return !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('/*');
+      })
+      .filter(({ no }) => {
+        const at = lines.slice(0, no - 1).join('\n').length;
+        return at < helperStart || at > helperEnd;
+      });
+    expect(
+      others.map((o) => `${o.no}: ${o.line.trim()}`),
+      '有 case 分支绕过 clickableInlineStyle 直接用 markdownLink —— 会造出「有下划线却点不动」',
+    ).toEqual([]);
+  });
+
+  it('可点 inline 的 onPress 与样式取同一个值(不出现一边条件、一边无条件)', () => {
+    const src = readRenderer();
+    // 每个 clickableInlineStyle(styles, X, ...) 的 X 都必须同时是某处的 onPress={X}。
+    const handlers = [...src.matchAll(/clickableInlineStyle\(styles,\s*([A-Za-z_$][\w$]*)\s*[,)]/g)]
+      .map((m) => m[1]);
+    expect(handlers.length, '未找到 clickableInlineStyle 的调用').toBeGreaterThan(0);
+    for (const h of handlers) {
+      expect(src, `${h} 用作下划线判据却没有作为 onPress 传下去`).toContain(`onPress={${h}}`);
+    }
+  });
+
   it('行内 code 形态仍叠在 markdownInlineCode 之后(顺序错了下划线会被覆盖)', () => {
     const src = readRenderer();
     const sites = src.match(/chipStyle=\{\[[^\]]*\]\}/g) ?? [];

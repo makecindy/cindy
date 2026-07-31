@@ -705,6 +705,33 @@ default into components.
 > 可点,得先给它接上导航与 bridge,那是另一个功能。(2026-07-31 PR #1144 review 实捉:
 > 初版给会话 chip 加了下划线,且图片 chip 本就带着下划线与 pointer。)
 
+#### 不变量清单与对称路径(收敛检查点,2026-07-31)
+
+PR #1144 的两轮 review 各捉到一个**同族**缺陷:「有下划线却点不动」。根因不是某一处写错,
+而是**「加不加下划线」与「有没有点击行为」在各分支独立决定** —— 判据分散必然漂移。故把
+不变量写死，并要求判据单点化:
+
+> **下划线 ⇔ 可点,双向成立。** 可点的一定有下划线;有下划线的一定可点。
+
+对称路径必须逐条成立(任何新增可点 inline 都要回到这张表核一遍):
+
+| 面 | 元素 | 可点? | 下划线 |
+|---|---|---|---|
+| 桌面聊天正文 | 外链 / anchor / 本地图片 URL | ✅ | ✅ `MARKDOWN_LINK_CLASS` |
+| 桌面聊天正文 | 已解析本地文件(chip / 散文 label) | ✅ | ✅ |
+| 桌面聊天正文 | 未解析路径、行内 code | ❌ | ❌ |
+| 桌面用户气泡 | URL / 图片路径 | ✅ | ✅（改前只有 hover 下划线） |
+| 手机聊天正文 | 外链 / 图片 chip / 会话 chip | 取决于 handler 是否注入 | **与 handler 同源** |
+| 手机聊天正文 | 路径 chip | 取决于远端 verdict | 由 `ChatPathChipSpan.lit` 单点裁决 |
+| 手机文件阅读器 | http(s) | ✅ | ✅ |
+| 手机文件阅读器 | 会话 chip / 图片 chip / 本地路径 / mailto | ❌（无 bridge、只放行 http(s)） | ❌ |
+
+**判据单点化**:移动端所有可点 inline 一律经 `clickableInlineStyle(styles, onPress, …)`
+取样式 —— 它按 `onPress` 是否存在决定给不给 `markdownLink`,于是结构上无法造出
+「有下划线却点不动」。**不要在 case 分支里直接写 `styles.markdownLink`**;路径 chip 不走
+这里,它的可点性由 `ChatPathChipSpan` 的 `lit` 单点裁决(同样是一个判据)。源码级守卫见
+`chatPathCandidate.test.ts` →「markdownLink 只能经 clickableInlineStyle 取用」。
+
 契约测试:`apps/mobile/src/__tests__/chatPathCandidate.test.ts`(候选精度 + 分级门槛)、
 `apps/mobile/src/__tests__/selectableMarkdownHtml.test.ts`(阅读器可点元素均带下划线)、
 `apps/desktop/src/renderer/__tests__/markdownTarget.test.ts`(行内 code 不收宽松兜底)。

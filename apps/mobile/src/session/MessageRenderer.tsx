@@ -3629,6 +3629,29 @@ function ChatPathChipSpan({
   );
 }
 
+/**
+ * 「下划线 ⇔ 可点」的**唯一判据**(DESIGN.md §14.5 规则①要求双向成立:可点的一定有
+ * 下划线,有下划线的一定可点)。onPress 缺席时不给 `markdownLink`,所以在结构上
+ * 无法造出「有下划线却点不动」的元素。
+ *
+ * 为什么要收成一处:PR #1144 的两轮 review 各捉到一个反例(文件阅读器的会话 chip、
+ * 以及同一面上本就带下划线 + pointer 的图片 chip),根因都是「加不加下划线」与
+ * 「有没有 onPress」在各自的分支里独立决定 —— 判据分散必然漂移。本文件的会话 chip /
+ * 图片 chip 的 onPress 也是条件式的(handler 由上层可选注入),同款隐患成立。
+ *
+ * 所有可点 inline 一律经此取样式,**不要在 case 分支里直接写 `styles.markdownLink`**
+ * (chatPathCandidate.test.ts 有源码级守卫钉住这条)。路径 chip 不走这里:它的可点性
+ * 由 ChatPathChipSpan 的 `lit` 单点裁决,同样是「一个判据」。
+ */
+function clickableInlineStyle(
+  styles: ReturnType<typeof makeStyles>,
+  onPress: undefined | (() => void),
+  base: StyleProp<TextStyle>,
+  extra?: StyleProp<TextStyle>,
+): StyleProp<TextStyle> {
+  return [base, onPress ? styles.markdownLink : undefined, extra];
+}
+
 /** 本地路径链接形态的路径 chip 包装:candidate 按 url memo,保证引用稳定——
  *  renderInline 是普通函数,若在其内直接 classify 会每次 render 产新对象,
  *  击穿 ChatPathChipSpan 的 memo/effect 依赖,unknown verdict(不落缓存)的
@@ -3795,13 +3818,15 @@ function renderInline(
           />
         );
       }
+      // onPress 与下划线取同一个值,不可能一边有一边没有。
+      const openExternalUrl = () => {
+        void Linking.openURL(inline.url).catch(() => undefined);
+      };
       return (
         <SpanText
           key={spanKey(`link:${index}:${inline.url}`)}
-          onPress={() => {
-            void Linking.openURL(inline.url).catch(() => undefined);
-          }}
-          style={[ctx.baseStyle, styles.markdownLink]}
+          onPress={openExternalUrl}
+          style={clickableInlineStyle(styles, openExternalUrl, ctx.baseStyle)}
         >
           {inline.text}
         </SpanText>
@@ -3834,14 +3859,17 @@ function renderInline(
         </SpanText>
       );
     case 'image': {
+      // openImage 由上层可选注入 → 缺席时 chip 不可点,下划线也必须跟着不加
+      // (clickableInlineStyle 保证两者同源)。
+      const openImageChip = openImage ? () => openImage(inline.url, inline.alt) : undefined;
       // xdt 系非直连图:RN Image 无法直接加载内部 scheme,渲染可点 chip,
       // 点开后由 ImageLightbox 经 remote-media resolver 取图。
       if (!isMobileMarkdownImageDirectUrl(inline.url)) {
         return (
           <SpanText
             key={spanKey(`image:${index}:${inline.url}`)}
-            onPress={openImage ? () => openImage(inline.url, inline.alt) : undefined}
-            style={[ctx.baseStyle, styles.markdownLink]}
+            onPress={openImageChip}
+            style={clickableInlineStyle(styles, openImageChip, ctx.baseStyle)}
             testID="message.markdownInlineImageChip"
           >
             {inline.alt || i18n.t('message.renderer.imageFallbackTitle')}
@@ -3908,10 +3936,13 @@ function MarkdownSessionLinkSpan({
   const detail = sessionReferenceDetails?.[
     mobileSessionReferenceMetadataKey(session.sessionId, session.messageClientId)
   ];
+  // handler 由上层可选注入 → 缺席时 chip 不可点,下划线也必须跟着不加
+  // (clickableInlineStyle 保证两者同源)。
+  const openSessionLink = onOpenSessionLink ? () => onOpenSessionLink(inline.url) : undefined;
   return (
     <SpanText
-      onPress={onOpenSessionLink ? () => onOpenSessionLink(inline.url) : undefined}
-      style={[baseStyle, styles.markdownLink, styles.sessionLinkChipText]}
+      onPress={openSessionLink}
+      style={clickableInlineStyle(styles, openSessionLink, baseStyle, styles.sessionLinkChipText)}
     >
       {`${session.messageClientId ? '❝' : '↳'} ${title}${detail ? ` · ${detail}` : ''}`}
     </SpanText>
