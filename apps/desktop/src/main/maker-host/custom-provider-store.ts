@@ -111,9 +111,9 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     }
   }
   if (r.wireProtocol !== undefined) {
-    const allowed = agent === 'claude-code'
-      ? ['anthropic-messages']
-      : ['openai-responses', 'openai-chat', 'anthropic-messages'];
+    // 两种 agent 都接受三种 wire 协议:Claude Code 的 openai-chat / openai-responses
+    // 分别进对应的本地 chat / responses bridge(见 anthropic-compat-proxy-host)。
+    const allowed = ['openai-responses', 'openai-chat', 'anthropic-messages'];
     if (typeof r.wireProtocol !== 'string' || !allowed.includes(r.wireProtocol)) {
       return invalid(`runtime '${agent}' wireProtocol invalid`);
     }

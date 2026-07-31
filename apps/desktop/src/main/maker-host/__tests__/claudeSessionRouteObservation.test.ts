@@ -33,7 +33,9 @@ vi.mock('../claude-fast-mode-log', () => ({
   createClaudeFastModeResponseObserver: () => () => undefined,
 }));
 vi.mock('../provider-route', () => ({
-  // 默认路由会话: 显式供应商解析恒 null; 网关默认决策 = 有 key 才换。
+  // 默认路由会话: 显式供应商解析恒 null(无本地桥接候选、无 per-session 路由);
+  // 网关默认决策 = 有 key 才换。
+  getSessionRoutingDescriptor: vi.fn(() => null),
   resolveSessionRouteDecision: vi.fn(() => null),
   gatewayDefaultRouteDecision: vi.fn((_agent: string, gatewayKey: string | null) =>
     gatewayKey ? { headerOverride: { 'x-api-key': gatewayKey } } : null),

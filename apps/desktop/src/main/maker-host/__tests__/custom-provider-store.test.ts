@@ -356,7 +356,9 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     },
   );
 
-  it('rejects unsupported protocol/runtime combinations', () => {
+  it('accepts bridged protocols for both Claude Code and Codex runtimes', () => {
+    // Claude Code 自定义供应商支持三种 wire 协议(Anthropic 直连 / Responses / Chat 桥接),
+    // 与 Codex 一致 —— 见 anthropic-compat-proxy-host 的本地桥接路由。
     expect(validateCustomProviderConfig({
       ...valid,
       runtimes: {
@@ -365,8 +367,12 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
           wireProtocol: 'openai-chat',
           models: [{ id: 'm', name: 'M' }],
         },
+        codex: {
+          ...valid.runtimes.codex!,
+          wireProtocol: 'openai-responses',
+        },
       },
-    }).ok).toBe(false);
+    }).ok).toBe(true);
   });
 
   it('update returns null when row absent', async () => {

@@ -37,6 +37,9 @@ import { buildChatgptBridgeHeaders } from './chatgpt-bridge-headers.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
 import { xaiServerSideTools } from './xai-server-side-tools.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
+import { getActiveCatalog } from './active-catalog.js';
+import { buildLocalHandlerHeaders, type ResolvedSessionRoute } from './provider-route.js';
+import { reportProviderUpstreamError } from './provider-upstream-error-observer.js';
 
 const log = createMakerLogger('cc-bridge');
 
@@ -323,4 +326,65 @@ export function getResponsesBridgeHandler(): ResponsesBridgeHandler | null {
     log.error('responses bridge handler 装配失败', { err: err instanceof Error ? err.message : String(err) });
   }
   return _handler;
+}
+
+/**
+ * 为一条已解析的 Claude Code 会话路由装配 Responses 桥接 handler —— 自定义供应商
+ * (`wireProtocol: 'openai-responses'`)的本地协议翻译。`route.routing.wireProtocol !==
+ * 'openai-responses'` 时返回 null(调用方回落原逻辑)。
+ *
+ * 与 createClaudeChatBridgeDecision 同构:每请求装配(轻量闭包,无缓存失效问题)。
+ * 会话态(effort / Fast)由 routingTransform 在决策点解析后经 `prefs` 闭包传入。
+ */
+export function createClaudeResponsesBridgeHandler(
+  route: NonNullable<ResolvedSessionRoute>,
+): ResponsesBridgeHandler | null {
+  if (route.routing.wireProtocol !== 'openai-responses') return null;
+
+  // host 构造的 outbound headers(含自定义供应商 API key 注入;与透明转发分支同源)。
+  const { headers } = buildLocalHandlerHeaders(route, 'claude-code');
+
+  const providerId = route.providerId;
+  const providerName =
+    getActiveCatalog().providers.find((p) => p.id === providerId)?.name ?? providerId;
+
+  // localHandler 绕过 proxy 的 responseObserver:非 2xx 上游错误喂回同一广播通道,
+  // 与透明自定义供应商一样弹结构化 providerError.* 提示。
+  const onUpstreamError = route.providerSource === 'user'
+    ? ({ status, body }: { status: number; body: string }): void => {
+        reportProviderUpstreamError({
+          agent: 'claude-code',
+          providerId,
+          providerName,
+          status,
+          bodyText: body,
+        });
+      }
+    : undefined;
+
+  try {
+    return createResponsesHandler({
+      providers: [
+        {
+          // 自定义供应商的模型 id 无统一前缀:空前缀 = 匹配该 route 的所有请求
+          // (进入 localHandler 的请求已经过路由 scope 门,即该供应商的模型)。
+          prefix: '',
+          wireProtocol: 'openai-responses',
+          upstreamBase: route.routing.upstream,
+          // 标准 Responses 端点(ChatGPT 订阅后端是唯一不支持 max_output_tokens 的特例)。
+          maxOutputTokensSupported: true,
+          buildHeaders: async () => headers,
+          ...(onUpstreamError ? { onUpstreamError } : {}),
+        },
+      ],
+      logger: log,
+      fetchImpl: outboundFetch,
+    });
+  } catch (err) {
+    log.error('claude responses bridge handler 装配失败', {
+      providerId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
 }

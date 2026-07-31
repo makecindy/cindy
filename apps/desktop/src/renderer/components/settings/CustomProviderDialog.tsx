@@ -48,9 +48,9 @@ import {
   type CustomProviderAuthMode,
 } from '@/lib/providerModelFetch';
 import {
-  CUSTOM_PROVIDER_CODEX_WIRE_PROTOCOLS,
-  customProviderCodexWireProtocolOption,
-  type CustomProviderCodexWireProtocol,
+  CUSTOM_PROVIDER_WIRE_PROTOCOLS,
+  customProviderWireProtocolOption,
+  type CustomProviderWireProtocol,
 } from '@/lib/customProviderWireProtocols';
 
 import { isProviderRequestPath, sortPresetsForLocale } from '@cindy/model-providers';
@@ -491,13 +491,13 @@ export function CustomProviderDialog({
   );
 
   /** 切换协议时保留用户已填写的 endpoint，仅使旧测试结果失效。 */
-  const changeCodexWireProtocol = useCallback(
-    (wireProtocol: CustomProviderCodexWireProtocol) => {
+  const changeWireProtocol = useCallback(
+    (agent: AgentKind, wireProtocol: CustomProviderWireProtocol) => {
       setRtSynced((prev) => ({
         ...prev,
-        codex: { ...prev.codex, wireProtocol },
+        [agent]: { ...prev[agent], wireProtocol },
       }));
-      setTest((prev) => ({ ...prev, codex: IDLE_TEST }));
+      setTest((prev) => ({ ...prev, [agent]: IDLE_TEST }));
     },
     [setRtSynced],
   );
@@ -1161,36 +1161,37 @@ export function CustomProviderDialog({
               border: '1px solid var(--settings-theme-card-border)',
             }}
           >
-            {activeTab === 'codex' && (
-              <div className="flex flex-col gap-[7px]">
-                <FieldLabel>{t('settings.providers.custom.fields.wireProtocol')}</FieldLabel>
-                <div className="flex flex-wrap gap-1.5">
-                  {CUSTOM_PROVIDER_CODEX_WIRE_PROTOCOLS.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      onClick={() => changeCodexWireProtocol(option.value)}
-                      className={cn(
-                        'rounded-full border px-3 py-1.5 text-12 font-medium transition-colors',
-                        f.wireProtocol === option.value
-                          ? 'border-[var(--settings-input-border-focus)] text-[var(--settings-section-title)]'
-                          : 'border-[var(--settings-input-border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]',
-                      )}
-                      style={
-                        f.wireProtocol === option.value
-                          ? { backgroundColor: 'var(--surface-elevated)' }
-                          : undefined
-                      }
-                    >
-                      {t(option.labelKey)}
-                    </button>
-                  ))}
-                </div>
-                <span className="text-12 leading-snug text-[var(--text-tertiary)]">
-                  {t(customProviderCodexWireProtocolOption(f.wireProtocol).helpKey)}
-                </span>
+            {/* 上游协议：Claude Code 与 Codex 都支持三种协议 —— Anthropic Messages 原生 /
+                OpenAI Responses / Chat Completions 由 Cindy 桥接（responses-chat / chat 系
+                转换器按协议自动接管）。切换协议保留用户已填写的 endpoint。 */}
+            <div className="flex flex-col gap-[7px]">
+              <FieldLabel>{t('settings.providers.custom.fields.wireProtocol')}</FieldLabel>
+              <div className="flex flex-wrap gap-1.5">
+                {CUSTOM_PROVIDER_WIRE_PROTOCOLS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => changeWireProtocol(activeTab, option.value)}
+                    className={cn(
+                      'rounded-full border px-3 py-1.5 text-12 font-medium transition-colors',
+                      f.wireProtocol === option.value
+                        ? 'border-[var(--settings-input-border-focus)] text-[var(--settings-section-title)]'
+                        : 'border-[var(--settings-input-border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]',
+                    )}
+                    style={
+                      f.wireProtocol === option.value
+                        ? { backgroundColor: 'var(--surface-elevated)' }
+                        : undefined
+                    }
+                  >
+                    {t(option.labelKey)}
+                  </button>
+                ))}
               </div>
-            )}
+              <span className="text-12 leading-snug text-[var(--text-tertiary)]">
+                {t(customProviderWireProtocolOption(f.wireProtocol).helpKey)}
+              </span>
+            </div>
 
             {/* 基础 URL */}
             <div className="flex flex-col gap-[7px]">
@@ -1208,11 +1209,7 @@ export function CustomProviderDialog({
               <TextInput
                 value={f.requestPath}
                 onChange={(v) => patch(activeTab, (x) => ({ ...x, requestPath: v }))}
-                placeholder={
-                  activeTab === 'claude-code'
-                    ? '/v1/messages'
-                    : customProviderCodexWireProtocolOption(f.wireProtocol).defaultRequestPath
-                }
+                placeholder={customProviderWireProtocolOption(f.wireProtocol).defaultRequestPath}
               />
               <span className="text-12 leading-snug text-[var(--text-tertiary)]">
                 {t('settings.providers.custom.fields.requestPathHelp')}

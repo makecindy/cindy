@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  CUSTOM_PROVIDER_CODEX_WIRE_PROTOCOLS,
-  customProviderCodexWireProtocolOption,
+  CUSTOM_PROVIDER_WIRE_PROTOCOLS,
+  customProviderWireProtocolOption,
 } from '../customProviderWireProtocols';
 
-describe('custom provider Codex wire protocols', () => {
-  it('offers every supported Codex route including the Anthropic Messages bridge', () => {
-    expect(CUSTOM_PROVIDER_CODEX_WIRE_PROTOCOLS.map((option) => option.value)).toEqual([
+describe('custom provider wire protocols', () => {
+  it('offers every supported wire protocol route including the Anthropic Messages bridge', () => {
+    expect(CUSTOM_PROVIDER_WIRE_PROTOCOLS.map((option) => option.value)).toEqual([
       'openai-responses',
       'openai-chat',
       'anthropic-messages',
@@ -15,9 +15,15 @@ describe('custom provider Codex wire protocols', () => {
   });
 
   it('uses the Anthropic Messages endpoint as its default request path', () => {
-    expect(customProviderCodexWireProtocolOption('anthropic-messages')).toMatchObject({
+    expect(customProviderWireProtocolOption('anthropic-messages')).toMatchObject({
       helpKey: 'settings.providers.custom.wireProtocol.anthropicHelp',
       defaultRequestPath: '/v1/messages',
+    });
+  });
+
+  it('uses the Chat Completions endpoint as its default request path', () => {
+    expect(customProviderWireProtocolOption('openai-chat')).toMatchObject({
+      defaultRequestPath: '/chat/completions',
     });
   });
 });

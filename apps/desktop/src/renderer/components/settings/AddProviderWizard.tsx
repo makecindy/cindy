@@ -1287,12 +1287,12 @@ export function AddProviderWizard({
               ) : (
                 <InfoLine text={t('settings.providers.wizard.noAuthNote')} />
               )}
-              {/* 官方端点默认只读；本机 / 自托管代理预设可编辑。codex + openai-chat
-                  上游标注「Cindy 桥接」，让用户明确该通道是协议转换而非原生。 */}
+              {/* 官方端点默认只读；本机 / 自托管代理预设可编辑。openai-chat 上游标注
+                  「Cindy 桥接」，让用户明确该通道是协议转换而非原生（任一 agent 适用）。 */}
               <div className="flex flex-col gap-2">
                 {presetAgents.map((agent) => {
                   const rt = sel.preset.runtimes[agent];
-                  const bridged = agent === 'codex' && rt?.wireProtocol === 'openai-chat';
+                  const bridged = rt?.wireProtocol === 'openai-chat';
                   if (rt?.baseUrlEditable) {
                     const value = presetBaseUrls[agent] ?? rt.baseUrl;
                     const valid = isValidEditablePresetBaseUrl(value.trim());
