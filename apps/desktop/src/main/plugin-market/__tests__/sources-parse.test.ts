@@ -91,6 +91,10 @@ describe('parseMarketSource', () => {
 
   it('rejects empty and unrecognizable sources', () => {
     expect(parse({ source: '   ' })).toEqual({ ok: false, code: 'EMPTY_SOURCE' });
+    expect(parse({ source: 'git://example.com/org/repo.git' })).toEqual({
+      ok: false,
+      code: 'INVALID_SOURCE_FORMAT',
+    });
     expect(parse({ source: 'just-a-word' })).toEqual({
       ok: false,
       code: 'INVALID_SOURCE_FORMAT',

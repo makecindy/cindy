@@ -26,7 +26,9 @@ export type MarketSourceParseResult =
 const REF_PATTERN = /^(?!-)[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
 /** GitHub shorthand：owner/repo，各段为常见 GitHub 命名字符。 */
 const GITHUB_SHORTHAND_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
-const GIT_URL_PATTERN = /^(https:\/\/|ssh:\/\/|git:\/\/|git@)[^\s]+$/i;
+// 仅允许经认证的传输:https(服务端证书)、ssh/git@(SSH agent)。
+// 明文 git:// 无服务端认证与传输加密,链路可被中间人篡改插件代码,拒绝。
+const GIT_URL_PATTERN = /^(https:\/\/|ssh:\/\/|git@)[^\s]+$/i;
 
 function looksLikeLocalPath(input: string): boolean {
   if (input.startsWith('~')) return true;

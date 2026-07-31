@@ -383,7 +383,7 @@ describe('MarketSourceManager git sources', () => {
     expect(fs.existsSync(path.join(slot, 'versions', after, '.agents', 'plugins', 'marketplace.json'))).toBe(true);
   });
 
-  it('does not delete the previous version while it is being read', async () => {
+  it('prunes stale versions after the pointer switches, keeping only current', async () => {
     const root = makeRoot();
     let failFetch = false;
     const executor: GitExecutor = async (args) => {
@@ -412,14 +412,16 @@ describe('MarketSourceManager git sources', () => {
       }),
     );
     const before = fs.readFileSync(path.join(slot, 'current'), 'utf8').trim();
-    // 模拟旧版本正被并发读取:放一个 .reading 标记。
-    fs.writeFileSync(path.join(slot, 'versions', before, '.reading-test'), '');
 
+    // 连续两次刷新:第一次切到 v2(保留 v1 供在读者),第二次切到 v3 时清掉 v1。
     failFetch = true;
     await manager.refreshSource('hub');
-    // 旧版本有活跃读者,本次跳过删除;指针已切到新版本。
-    const after = fs.readFileSync(path.join(slot, 'current'), 'utf8').trim();
-    expect(after).not.toBe(before);
-    expect(fs.existsSync(path.join(slot, 'versions', before))).toBe(true);
+    const second = fs.readFileSync(path.join(slot, 'current'), 'utf8').trim();
+    expect(second).not.toBe(before);
+    await manager.refreshSource('hub');
+    const third = fs.readFileSync(path.join(slot, 'current'), 'utf8').trim();
+    // 历史版本(v1)已被延迟清理,current(v3)完整可读。
+    expect(fs.existsSync(path.join(slot, 'versions', before))).toBe(false);
+    expect(fs.existsSync(path.join(slot, 'versions', third, '.agents', 'plugins', 'marketplace.json'))).toBe(true);
   });
 });

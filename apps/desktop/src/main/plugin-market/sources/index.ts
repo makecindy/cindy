@@ -165,64 +165,49 @@ export class MarketSourceManager {
   }
 
   /**
-   * 刷新后让新版本生效:原子写 current 指针指向新版本目录,成功后删旧版本。
-   * 指针切换是唯一的"提交点";切换前任何失败都保留旧版本,切换后删旧版
-   * 失败仅影响清理,不影响下次读取(指针已指向新版)。
+   * 刷新后让新版本生效:只做一件事——原子写 current 指针指向新版本目录。
+   * 不删旧版本:读取方(listSources/snapshot/安装)可能正解析或使用旧版本,
+   * 主动删除会在"解析→使用"窗口把在读者抽走。旧版本统一由下次刷新的
+   * 延迟清理处理,读取路径因此零并发保护——指针原子切换即可保证:
+   * 切换前解析到旧版→旧版还在;切换后解析到新版→新版完整。
    */
   private async activateVersion(slot: string, newVersion: string): Promise<void> {
-    const pointer = this.currentPointer(slot);
-    const previous = fs.existsSync(pointer)
-      ? (await fs.promises.readFile(pointer, 'utf8')).trim()
-      : null;
-    atomicWriteFileSync(pointer, newVersion);
-    if (previous && previous !== newVersion) {
-      await this.removeVersionIfUnreferenced(slot, previous);
-    }
+    atomicWriteFileSync(this.currentPointer(slot), newVersion);
   }
 
   /**
-   * 删除 versions/ 内的旧版本目录。读取方在解析期间会在版本目录里放一个
-   * `.reading-<uuid>` 标记(读完即删);有标记说明该版本正被并发读取,
-   * 本次跳过删除,留待其读完或下次刷新再清理,避免指针切换后误删在读者。
+   * 延迟清理历史版本:删除 versions/ 里非 current 的目录。只在刷新成功
+   * 切换指针后调用,此刻被清理的是上上一轮的旧版本,任何当时的读取/
+   * 安装/打包早已结束,不会抽到在读者。清理失败仅影响磁盘,不影响正确性。
    */
-  private async removeVersionIfUnreferenced(slot: string, version: string): Promise<void> {
-    if (version.includes('/') || version.includes('\\') || version === '..' || version === '.') {
+  private async pruneStaleVersions(slot: string): Promise<void> {
+    const pointer = this.currentPointer(slot);
+    if (!fs.existsSync(pointer)) return;
+    let current: string;
+    try {
+      current = (await fs.promises.readFile(pointer, 'utf8')).trim();
+    } catch {
       return;
     }
-    const dir = path.join(this.versionsDir(slot), version);
+    let entries: string[];
     try {
-      const readers = (await fs.promises.readdir(dir)).filter((entry) =>
-        entry.startsWith('.reading-'),
-      );
-      if (readers.length > 0) {
-        this.log.warn('skip removing in-use marketplace cache version', { version });
-        return;
-      }
+      entries = await fs.promises.readdir(this.versionsDir(slot));
     } catch {
-      return; // 目录已不存在。
+      return;
     }
-    await fs.promises.rm(dir, { recursive: true, force: true }).catch((error: unknown) => {
-      this.log.warn('failed to remove previous marketplace cache version', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-  }
-
-  /**
-   * 在版本目录解析期间持有一个 `.reading-<uuid>` 标记,防止刷新方在指针切换后
-   * 误删正在被发现的版本(TOCTOU)。返回释放函数,读完务必调用。
-   */
-  private async holdVersionForRead(dir: string): Promise<() => Promise<void>> {
-    const marker = path.join(dir, `.reading-${crypto.randomUUID()}`);
-    try {
-      await fs.promises.writeFile(marker, '', { flag: 'wx' });
-    } catch {
-      // 标记失败不阻断读取:退回无保护读取(与旧行为一致),刷新方删除是尽力而为。
-      return async () => {};
+    for (const entry of entries) {
+      if (entry === current) continue;
+      // 仅删除 versions/ 内的直接子目录,防穿越。
+      if (entry.includes('/') || entry.includes('\\') || entry === '..' || entry === '.') continue;
+      await fs.promises
+        .rm(path.join(this.versionsDir(slot), entry), { recursive: true, force: true })
+        .catch((error: unknown) => {
+          this.log.warn('failed to prune stale marketplace cache version', {
+            version: entry,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
     }
-    return async () => {
-      await fs.promises.rm(marker, { force: true }).catch(() => undefined);
-    };
   }
 
   async addSource(input: {
@@ -410,6 +395,8 @@ export class MarketSourceManager {
       throw error;
     }
     await this.activateVersion(slot, newVersion);
+    // 指针已切到新版本,延迟清理上上一轮的旧版本(此刻无任何在读者)。
+    await this.pruneStaleVersions(slot);
     const syncedAt = this.now();
     this.deps.store.update(name, { lastSyncedAt: syncedAt, lastRevision: revision });
     return this.toSummary(
@@ -435,20 +422,13 @@ export class MarketSourceManager {
         result: { ok: false, code: 'MARKET_SOURCE_INVALID', detail: 'market root missing' },
       };
     }
-    // Git 源:发现期间持有读取标记,防刷新方切换指针后误删在读的旧版本。
-    const release =
-      config!.source.type === 'git' ? await this.holdVersionForRead(root) : async () => {};
-    try {
-      const discovered = await discoverMarketplace(root);
-      return {
-        config: config!,
-        result: discovered.ok
-          ? { ok: true, marketplace: discovered.marketplace }
-          : { ok: false, code: discovered.code, ...(discovered.detail ? { detail: discovered.detail } : {}) },
-      };
-    } finally {
-      await release();
-    }
+    const discovered = await discoverMarketplace(root);
+    return {
+      config: config!,
+      result: discovered.ok
+        ? { ok: true, marketplace: discovered.marketplace }
+        : { ok: false, code: discovered.code, ...(discovered.detail ? { detail: discovered.detail } : {}) },
+    };
   }
 
   /** 管理视图用：全部来源 + 实时发现状态。单个源失败不影响其它源。 */
@@ -479,19 +459,13 @@ export class MarketSourceManager {
         });
         continue;
       }
-      const release =
-        config.source.type === 'git' ? await this.holdVersionForRead(root) : async () => {};
-      try {
-        const discovered = await discoverMarketplace(root);
-        results.push({
-          config,
-          result: discovered.ok
-            ? { ok: true, marketplace: discovered.marketplace }
-            : { ok: false, code: discovered.code, ...(discovered.detail ? { detail: discovered.detail } : {}) },
-        });
-      } finally {
-        await release();
-      }
+      const discovered = await discoverMarketplace(root);
+      results.push({
+        config,
+        result: discovered.ok
+          ? { ok: true, marketplace: discovered.marketplace }
+          : { ok: false, code: discovered.code, ...(discovered.detail ? { detail: discovered.detail } : {}) },
+      });
     }
     return results;
   }
