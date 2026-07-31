@@ -246,33 +246,35 @@ function mergedQuote(
   baseReference?: ComparablePrice | null,
 ): ModelPriceQuote | undefined {
   if (!values) return reference;
+  const savedBaseQuote = baseReference
+    ? {
+        providerId: target.providerId,
+        modelId: target.modelId,
+        source: reference?.source ?? ('provider-reference' as const),
+        approximate: reference?.approximate ?? true,
+        currency: baseReference.currency,
+        inputPerMtok: baseReference.inputPerMtok,
+        outputPerMtok: baseReference.outputPerMtok,
+        ...(baseReference.cacheReadPerMtok !== null
+          ? { cacheReadPerMtok: baseReference.cacheReadPerMtok }
+          : {}),
+        ...(baseReference.cacheCreatePerMtok !== null
+          ? { cacheCreatePerMtok: baseReference.cacheCreatePerMtok }
+          : {}),
+        ...(baseReference.inputTokenPriceBands
+          ? { inputTokenPriceBands: baseReference.inputTokenPriceBands }
+          : {}),
+      }
+    : undefined;
   // A sparse numeric patch was entered in the saved base currency. If the remote
-  // route later changes currency, merging it into the new quote would silently
-  // relabel the user's number (for example 4 USD as 4 CNY). Keep using the saved
-  // reference as the merge base until the user accepts/reset the conflict.
+  // route later changes currency or loses its reference price, merging it into the
+  // new/empty quote would silently relabel or discard the user's number. Keep using
+  // the saved reference as the merge base until the user accepts/reset the conflict.
   const mergeReference =
-    values.currency === undefined &&
-    reference &&
-    baseReference &&
-    baseReference.currency !== reference.currency
-      ? {
-          providerId: reference.providerId,
-          modelId: reference.modelId,
-          source: reference.source,
-          approximate: reference.approximate,
-          currency: baseReference.currency,
-          inputPerMtok: baseReference.inputPerMtok,
-          outputPerMtok: baseReference.outputPerMtok,
-          ...(baseReference.cacheReadPerMtok !== null
-            ? { cacheReadPerMtok: baseReference.cacheReadPerMtok }
-            : {}),
-          ...(baseReference.cacheCreatePerMtok !== null
-            ? { cacheCreatePerMtok: baseReference.cacheCreatePerMtok }
-            : {}),
-          ...(baseReference.inputTokenPriceBands
-            ? { inputTokenPriceBands: baseReference.inputTokenPriceBands }
-            : {}),
-        }
+    savedBaseQuote &&
+    (!reference ||
+      (values.currency === undefined && savedBaseQuote.currency !== reference.currency))
+      ? savedBaseQuote
       : reference;
   const currency = values.currency ?? mergeReference?.currency;
   const inputPerMtok = values.inputPerMtok ?? mergeReference?.inputPerMtok;

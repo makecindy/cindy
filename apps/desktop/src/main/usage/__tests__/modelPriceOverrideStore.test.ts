@@ -222,6 +222,44 @@ describe('model price override sparse persistence', () => {
     });
   });
 
+  it('keeps sparse overrides when the remote reference price disappears', () => {
+    const savedBase = {
+      currency: 'USD' as const,
+      inputPerMtok: 2,
+      outputPerMtok: 6,
+      cacheReadPerMtok: 0.2,
+      cacheCreatePerMtok: null,
+      inputTokenPriceBands: [
+        {
+          minInputTokens: 200_001,
+          inputPerMtok: 4,
+          outputPerMtok: 12,
+        },
+      ],
+    };
+    expect(
+      __testing.mergedQuote(
+        { providerId: 'custom', agent: 'codex', modelId: 'model' },
+        undefined,
+        { inputPerMtok: 4 },
+        savedBase,
+      ),
+    ).toMatchObject({
+      source: 'user-override',
+      currency: 'USD',
+      inputPerMtok: 4,
+      outputPerMtok: 6,
+      cacheReadPerMtok: 0.2,
+      inputTokenPriceBands: [
+        {
+          minInputTokens: 200_001,
+          inputPerMtok: 4,
+          outputPerMtok: 12,
+        },
+      ],
+    });
+  });
+
   it('only accepts currencies that can project into the active ledger', () => {
     expect(__testing.currencyCanProjectToLedger('USD', 'USD')).toBe(true);
     expect(__testing.currencyCanProjectToLedger('USD', 'CNY')).toBe(true);
