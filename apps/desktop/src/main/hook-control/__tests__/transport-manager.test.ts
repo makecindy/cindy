@@ -13,6 +13,7 @@ import { WebSocketServer, type WebSocket as ServerSocket } from 'ws';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT,
   HOOK_FEATURE_MULTI_TEAM,
   HOOK_FEATURE_PROVIDER_BIND,
   HOOK_FEATURE_PROVIDER_PREFS,
@@ -62,6 +63,7 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
     urlOverride: initial.url,
     workspaces: initial.workspaces ?? {},
     bindingsCache: initial.bindingsCache ?? [],
+    lifecycleAnnouncementOverride: initial.lifecycleAnnouncementOverride ?? null,
     telegramBindingCache: initial.telegramBindingCache ?? null,
   };
   return {
@@ -89,6 +91,10 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
     },
     setBindingsCache(entries) {
       state = { ...state, bindingsCache: entries.map((e) => ({ ...e })) };
+      return state;
+    },
+    setLifecycleAnnouncementOverride(enabled) {
+      state = { ...state, lifecycleAnnouncementOverride: enabled };
       return state;
     },
     setTelegramBindingCache(entry) {
@@ -532,6 +538,7 @@ describe('hook-control transport + manager(真实 ws server)', () => {
     const hello = await server.waitFor('hello');
     if (hello.type !== 'hello') throw new Error('unreachable');
     expect(hello.payload.deviceId).toBe('dev-1');
+    expect(hello.payload.lifecycleAnnouncement).toBe(false);
     // 内置「对话」伪目录 chat 恒在清单第一位, 真实别名跟在后面
     expect(hello.payload.workspaces[0]).toBe('chat');
     expect([...hello.payload.workspaces].sort()).toEqual(['blog', 'chat', 'xdmaker']);
@@ -570,6 +577,119 @@ describe('hook-control transport + manager(真实 ws server)', () => {
       result: 'rejected',
       reason: 'disabled',
     });
+  });
+
+  it('上下线通知偏好随 hello 上报，并在能力协商后实时更新', async () => {
+    const { wss, url } = await startServer();
+    const store = memoryStore({ url });
+    const manager = makeManager(store);
+    cleanups.push(() => manager.dispose());
+
+    const connPromise = once(wss, 'connection') as Promise<[ServerSocket]>;
+    manager.sync();
+    const [sock] = await connPromise;
+    const server = collectFrames(sock);
+
+    const hello = await server.waitFor('hello');
+    if (hello.type !== 'hello') throw new Error('unreachable');
+    expect(hello.payload.lifecycleAnnouncement).toBe(false);
+
+    // 模拟 hello 已发送、welcome 尚未返回时切换。welcome 能力协商完成后
+    // 必须补发最新值，不能让 server 永久停留在 hello 的旧快照。
+    manager.setLifecycleAnnouncement(true);
+    sock.send(
+      serializeHookMessage(
+        makeWelcome({
+          serverName: 'mock',
+          features: [HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT],
+        }),
+      ),
+    );
+    const preference = await server.waitFor('lifecycle.preference');
+    if (preference.type !== 'lifecycle.preference') throw new Error('unreachable');
+    expect(preference.payload.enabled).toBe(true);
+    await expect.poll(() => manager.snapshot().status, { timeout: 3000 }).toBe('connected');
+    expect(store.get().lifecycleAnnouncementOverride).toBe(true);
+    expect(manager.snapshot().lifecycleAnnouncement).toBe(true);
+  });
+
+  it('上下线通知实时更新发送失败时重建连接，并由下一次 hello 同步持久化值', () => {
+    const store = memoryStore({ url: 'wss://fake.example' });
+    const transportOpts: HookTransportOpts[] = [];
+    const disposes: Array<ReturnType<typeof vi.fn>> = [];
+    let sendOk = true;
+    const manager = makeManager(store, {
+      createTransport: (opts) => {
+        transportOpts.push(opts);
+        const dispose = vi.fn();
+        disposes.push(dispose);
+        return {
+          send: () => sendOk,
+          dispose,
+        };
+      },
+    });
+    cleanups.push(() => manager.dispose());
+
+    manager.sync();
+    const first = transportOpts[0];
+    const welcome = makeWelcome({
+      serverName: 'mock',
+      features: [HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT],
+    });
+    first.onWelcome?.(welcome.payload);
+    first.onStatus('connected', null);
+
+    sendOk = false;
+    manager.setLifecycleAnnouncement(true);
+
+    expect(store.get().lifecycleAnnouncementOverride).toBe(true);
+    expect(disposes[0]).toHaveBeenCalledOnce();
+    expect(transportOpts).toHaveLength(2);
+    expect(transportOpts[1].buildHello().lifecycleAnnouncement).toBe(true);
+    expect(manager.snapshot().status).toBe('connecting');
+  });
+
+  it('Slack 重连在新 welcome 前不复用旧 capability 发送偏好', () => {
+    const store = memoryStore({ url: 'wss://fake.example' });
+    const transportOpts: HookTransportOpts[] = [];
+    const sends: Array<ReturnType<typeof vi.fn>> = [];
+    const manager = makeManager(store, {
+      createTransport: (opts) => {
+        transportOpts.push(opts);
+        const send = vi.fn(() => true);
+        sends.push(send);
+        return {
+          send,
+          dispose: vi.fn(),
+        };
+      },
+    });
+    cleanups.push(() => manager.dispose());
+
+    manager.sync();
+    transportOpts[0].onWelcome?.(
+      makeWelcome({
+        serverName: 'new-server',
+        features: [HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT],
+      }).payload,
+    );
+    transportOpts[0].onStatus('connected', null);
+
+    manager.sync();
+    expect(transportOpts).toHaveLength(2);
+    transportOpts[1].onStatus('connected', null);
+    manager.setLifecycleAnnouncement(true);
+    expect(sends[1]).not.toHaveBeenCalled();
+
+    transportOpts[1].onWelcome?.(
+      makeWelcome({
+        serverName: 'old-server',
+        features: [],
+      }).payload,
+    );
+    expect(sends[1]).not.toHaveBeenCalled();
+    expect(store.get().lifecycleAnnouncementOverride).toBe(true);
   });
 
   it('未登录(token=null): 不发起连接, 状态 error + not logged in', async () => {

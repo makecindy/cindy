@@ -186,6 +186,34 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     expect(document.querySelectorAll('[data-live-work-activity="thinking"]')).toHaveLength(1);
   });
 
+  it('continues updating an expanded live reasoning row as deltas arrive', () => {
+    const { rerender } = render(
+      createElement(WorkGroupBlock, {
+        blockId: 'work:t1',
+        isStreaming: true,
+        childItems: [thinking(mkThinking('th1', 'initial\nreasoning'))],
+      }),
+    );
+
+    const thinkingButton = screen.getByText('initial reasoning').closest('button');
+    if (!thinkingButton) throw new Error('Missing live thinking row');
+    fireEvent.click(thinkingButton);
+    expect(thinkingButton.getAttribute('aria-expanded')).toBe('true');
+
+    rerender(
+      createElement(WorkGroupBlock, {
+        blockId: 'work:t1',
+        isStreaming: true,
+        childItems: [thinking(mkThinking('th1', 'initial reasoning\nwith more detail'))],
+      }),
+    );
+
+    const updatedThinkingButton = screen
+      .getByText('initial reasoning with more detail')
+      .closest('button');
+    expect(updatedThinkingButton?.getAttribute('aria-expanded')).toBe('true');
+  });
+
   it('shows complete commandActions as separate rows and summarizes pure exploration', () => {
     const command = mkTool('exec-1', 'cat src/a.ts && rg TODO src');
     command.toolInput = {
@@ -224,7 +252,7 @@ describe('WorkGroupBlock — running latest-five preview', () => {
   it('offers no toggle while running when the preview already shows everything', () => {
     const childItems = [
       tools('seg-1', [mkTool('t1', 'git status')]),
-      thinking(mkThinking('th1', 'checking the current state')),
+      thinking(mkThinking('th1', 'checking the\ncurrent state')),
     ];
     const { rerender } = render(
       createElement(WorkGroupBlock, {
@@ -237,6 +265,19 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     expect(screen.getByText('chat.workGroup.working')).toBeTruthy();
     expect(document.querySelector('[data-live-work-preview="true"]')).toBeTruthy();
     expect(screen.getByTestId('direct-tool').getAttribute('data-show-raw')).toBe('true');
+
+    // 即使运行中的工作组没有更多内容可供外层展开，思考预览行本身也应可点击查看全文。
+    const thinkingPreview = screen.getByText('checking the current state').closest('button');
+    if (!thinkingPreview) throw new Error('Missing expandable live thinking row');
+    thinkingPreview.focus();
+    expect(document.activeElement).toBe(thinkingPreview);
+    expect(thinkingPreview.className).toContain(
+      'focus-visible:ring-[var(--focus-ring)]',
+    );
+    expect(thinkingPreview.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(thinkingPreview);
+    expect(thinkingPreview.getAttribute('aria-expanded')).toBe('true');
+    expect(thinkingPreview.textContent).toContain('checking the\ncurrent state');
 
     // ≤5 条活动且没有 preview 之外的子项:展开不会露出更多内容,组头不再
     // 提供折叠交互 — 无箭头、禁用、点击后预览保持原样。
@@ -264,6 +305,68 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     clickGroup('chat.workGroup.worked:12s');
     expect(screen.getByTestId('direct-tool').textContent).toBe('git status');
     expect(screen.getByText('checking the current state')).toBeTruthy();
+  });
+
+  it('shares thinking expansion state between the live preview and full work-group view', () => {
+    render(
+      createElement(WorkGroupBlock, {
+        blockId: 'work:t1',
+        isStreaming: true,
+        childItems: [
+          thinking(mkThinking('th1', 'first line\nsecond line')),
+          rendered('progress', 'continuing the analysis'),
+        ],
+      }),
+    );
+
+    const livePreview = document.querySelector('[data-live-work-preview="true"]');
+    const liveThinkingButton = livePreview?.querySelector<HTMLButtonElement>(
+      '[data-live-work-activity="thinking"]',
+    );
+    if (!liveThinkingButton) throw new Error('Missing live thinking row');
+    fireEvent.click(liveThinkingButton);
+    expect(liveThinkingButton.getAttribute('aria-expanded')).toBe('true');
+
+    clickGroup('chat.workGroup.working');
+    const fullThinkingButton = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        '[data-live-work-activity="thinking"]',
+      ),
+    ).find((button) => !button.closest('[data-live-work-preview="true"]'));
+    expect(fullThinkingButton?.getAttribute('aria-expanded')).toBe('true');
+
+    if (!fullThinkingButton) throw new Error('Missing full thinking row');
+    fireEvent.click(fullThinkingButton);
+    expect(fullThinkingButton.getAttribute('aria-expanded')).toBe('false');
+
+    clickGroup('chat.workGroup.working');
+    const restoredPreviewButton = document
+      .querySelector('[data-live-work-preview="true"]')
+      ?.querySelector<HTMLButtonElement>('[data-live-work-activity="thinking"]');
+    expect(restoredPreviewButton?.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('keeps an inherited expanded state toggleable for single-line long thinking', () => {
+    expandMemory.setExpanded('work:t1', true);
+    expandMemory.setExpanded('thinking:th1', true);
+    render(
+      createElement(WorkGroupBlock, {
+        blockId: 'work:t1',
+        durationMs: 2_000,
+        childItems: [
+          thinking(mkThinking('th1', 'a single-line reasoning block that is long enough to overflow')),
+          rendered('progress', 'continuing the analysis'),
+        ],
+      }),
+    );
+
+    const fullThinkingButton = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        '[data-live-work-activity="thinking"]',
+      ),
+    ).find((button) => !button.closest('[data-live-work-preview="true"]'));
+    expect(fullThinkingButton?.getAttribute('aria-expanded')).toBe('true');
+    expect(fullThinkingButton?.hasAttribute('disabled')).toBe(false);
   });
 
   it('keeps the toggle while running when expansion can reveal more than the preview', () => {

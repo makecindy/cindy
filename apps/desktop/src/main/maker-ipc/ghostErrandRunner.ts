@@ -4,7 +4,8 @@
  * errandSlot(cindy-brain)只负责资格审/频控/任务表;真正的干活链在这里:
  *
  *   解析用户配置(errandPrefsStore,缺省跟随 New Maker 草稿偏好)
- *     → 确保专属 errand 会话(映射存 prefs;失效/配置关键项变更则重建)
+ *     → 确保专属 errand 会话(映射存 prefs;失效/配置关键项变更则重建;
+ *        请求带 sessionKey 时按 ghostId+key 分间——同钥匙同间、异钥匙各间)
  *     → 忙检(errand 会话正被占用即 BUSY,不排队——排队会让结果对不上单)
  *     → sendToSessionInternal 统一通路投递(消息落库/进程拉起与用户亲发一致)
  *     → observeHookTurn 收口(与飞书 bot / scheduler 同一套 turn 观察语义)
@@ -49,8 +50,9 @@ export interface GhostErrandSessionRow {
 
 export interface GhostErrandRunnerDeps {
   readConfig(ghostId: string): GhostErrandConfig;
-  readSessionId(ghostId: string): string | null;
-  writeSessionId(ghostId: string, sessionId: string | null): void;
+  /** sessionKey 缺省 = 插件共用间;带钥匙 = 该钥匙专属间(映射按 ghostId+key)。 */
+  readSessionId(ghostId: string, sessionKey?: string): string | null;
+  writeSessionId(ghostId: string, sessionId: string | null, sessionKey?: string): void;
   getSessionRow(sessionId: string): Promise<GhostErrandSessionRow | null>;
   /** 建 errand 会话 DB 行(不拉 agent);config 已由本层解析合并完毕。 */
   createSession(params: {
@@ -168,13 +170,14 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
       effectiveDir = requested;
     }
 
-    // ── 确保专属 errand 会话 ─────────────────────────────────────────────
-    let sessionId = deps.readSessionId(request.ghostId);
+    // ── 确保专属 errand 会话(sessionKey 缺省共用间,带钥匙各开各间) ────
+    const sessionKey = request.sessionKey;
+    let sessionId = deps.readSessionId(request.ghostId, sessionKey);
     if (sessionId) {
       const row = await deps.getSessionRow(sessionId);
       if (!row || !sessionMatchesConfig(row, cfg, permissionMode, effectiveDir)) {
         // 旧间不可用/配置已变:解除映射换新间(旧会话留在侧边栏,历史可查)。
-        deps.writeSessionId(request.ghostId, null);
+        deps.writeSessionId(request.ghostId, null, sessionKey);
         sessionId = null;
       }
     }
@@ -205,7 +208,7 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
         deps.log.warn('ghost errand session create failed', { ghostId: request.ghostId, error: message });
         return failure('SESSION_UNAVAILABLE', `errand 会话创建失败:${message}`);
       }
-      deps.writeSessionId(request.ghostId, sessionId);
+      deps.writeSessionId(request.ghostId, sessionId, sessionKey);
     }
     hooks?.onSession?.(sessionId);
 
@@ -225,7 +228,7 @@ export function createGhostErrandRunner(deps: GhostErrandRunnerDeps): GhostErran
         dispatched.errorCode === 'DELETED'
       ) {
         // 会话在忙检与投递之间被删/归档:解除映射,让下一单重建。
-        deps.writeSessionId(request.ghostId, null);
+        deps.writeSessionId(request.ghostId, null, sessionKey);
         return failure('SESSION_UNAVAILABLE', dispatched.message);
       }
       return failure('INTERNAL', dispatched.message);

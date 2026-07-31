@@ -104,23 +104,29 @@ export interface InteractionResolveTransport {
   getPendingInteractions(sessionId: string): Promise<readonly PendingInteractionLike[]>;
 }
 
-/** NOT_CONNECTED(请求未出本机)的自动重试次数与退避基数。 */
-const RESOLVE_NOT_CONNECTED_RETRIES = 3;
-const RESOLVE_NOT_CONNECTED_BACKOFF_MS = 300;
+/** resolve 瞬时传输失败的自动重试次数与退避基数。 */
+const RESOLVE_TRANSIENT_SEND_RETRIES = 3;
+const RESOLVE_TRANSIENT_SEND_BACKOFF_MS = 300;
 
-function isNotConnectedResolveError(err: unknown): boolean {
+function isRetryableResolveTransportError(err: unknown): boolean {
   const code = (err as { code?: unknown } | null)?.code;
   const message = err instanceof Error ? err.message : String(err);
-  return code === 'NOT_CONNECTED' || message.includes('NOT_CONNECTED');
+  return (
+    code === 'NOT_CONNECTED' ||
+    code === 'BACKPRESSURE' ||
+    message.includes('NOT_CONNECTED') ||
+    message.includes('BACKPRESSURE')
+  );
 }
 
 /**
  * 弱网韧性版 resolveInteraction:
- * - NOT_CONNECTED 自动带退避重试。注意 NOT_CONNECTED 不保证未送达(断连时
+ * - NOT_CONNECTED / BACKPRESSURE 自动带退避重试。注意 NOT_CONNECTED 不保证未送达(断连时
  *   in-flight invoke 会被批量 reject 成 NOT_CONNECTED),但 resolve 重发是安全的:
  *   交互请求在被控端是一次性的,已解决的 requestId 再收到 resolve 只会被拒,
  *   不会重复执行决定,被拒后走下方权威查证按成功收敛——与 enqueue(追加语义,
- *   盲重会双入队)有本质区别。
+ *   盲重会双入队)有本质区别。BACKPRESSURE 要么在本地发送前拒绝,要么由被控端
+ *   admission 明确拒绝执行,同样可安全重试。
  * - 其余失败(超时 / ack 丢失 / 对已解决请求的重复提交被拒)以被控端 pending
  *   列表为权威分辨:该 requestId 已不在列表 → 决定已生效,按成功收敛(面板正常
  *   关闭,而不是留给用户一个会诱发二次提交的错误态);仍在列表或查询失败 →
@@ -135,14 +141,14 @@ export async function resolveInteractionResilient(
 ): Promise<void> {
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   let lastErr: unknown;
-  for (let attempt = 0; attempt <= RESOLVE_NOT_CONNECTED_RETRIES; attempt++) {
+  for (let attempt = 0; attempt <= RESOLVE_TRANSIENT_SEND_RETRIES; attempt++) {
     try {
       await transport.resolveInteraction(requestId, decision);
       return;
     } catch (err) {
       lastErr = err;
-      if (attempt < RESOLVE_NOT_CONNECTED_RETRIES && isNotConnectedResolveError(err)) {
-        await sleep(RESOLVE_NOT_CONNECTED_BACKOFF_MS * 2 ** attempt);
+      if (attempt < RESOLVE_TRANSIENT_SEND_RETRIES && isRetryableResolveTransportError(err)) {
+        await sleep(RESOLVE_TRANSIENT_SEND_BACKOFF_MS * 2 ** attempt);
         continue;
       }
       break;

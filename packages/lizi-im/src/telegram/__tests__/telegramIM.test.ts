@@ -226,6 +226,24 @@ describe('TelegramIM', () => {
     });
   });
 
+  it('群里 owner 裸斜杠命令视为召唤(不带 @ 也进 slash); 成员裸命令仍静默', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([
+      groupMessage({ text: '/project', fromId: 111, messageId: 55 }),
+      groupMessage({ text: '/new', fromId: 222, messageId: 56 }),
+      // 显式发给其它 bot 的命令: 本 bot 不抢答(多 bot 群, review P1)
+      groupMessage({ text: '/new@another_bot', fromId: 111, messageId: 58 }),
+      groupMessage({ text: '/nonsense extra args', fromId: 111, messageId: 57 }),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    // owner 裸命令(55/57)按原文进事件流(slash 层消费);
+    // 成员裸命令(56)与发给其它 bot 的命令(58)静默丢弃
+    expect(events[0]).toMatchObject({ senderId: 'g/-100200', text: '/project' });
+    expect(events[1]).toMatchObject({ senderId: 'g/-100200', text: '/nonsense extra args' });
+  });
+
   it('名字召唤: 手打 "@显示名" 与句首裸名字都触发(非 username), 句中提到不触发', async () => {
     const events: IMMessageEvent[] = [];
     im.onMessage((e) => events.push(e));
@@ -781,8 +799,8 @@ describe('TelegramIM', () => {
     expect(events[0].senderId).toBe('g/-100200');
     // ambient 触发的表情回应被抑制
     expect(await im.reactToMessage('-100200|50', '👀')).toBeNull();
-    // ambient 路径不消费命令(即使 owner)
-    api.pushUpdates([groupMessage({ text: '/new', fromId: 111, messageId: 51 })]);
+    // ambient 路径不消费成员命令(owner 裸命令走显式召唤通道, 另有用例)
+    api.pushUpdates([groupMessage({ text: '/new', fromId: 222, messageId: 51 })]);
     await new Promise((r) => setTimeout(r, 100));
     expect(events).toHaveLength(1);
     // NO_REPLY 哨兵: 惰性占位下从头到尾零消息(不发送、无需删除 — 真零痕迹)

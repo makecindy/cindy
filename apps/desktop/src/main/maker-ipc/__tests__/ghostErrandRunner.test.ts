@@ -234,6 +234,60 @@ describe('插件转述目录(request.workingDir)', () => {
   });
 });
 
+describe('分会话钥匙(sessionKey)', () => {
+  it('带钥匙:按 ghostId+key 读映射,新建后按同一把钥匙写映射', async () => {
+    const readSessionId = vi.fn(() => null);
+    const keyedWrites: Array<[string, string | null, string | undefined]> = [];
+    const { deps, emitters } = makeDeps({
+      readSessionId,
+      writeSessionId: (ghostId, sessionId, sessionKey) => {
+        keyedWrites.push([ghostId, sessionId, sessionKey]);
+      },
+    });
+    const runner = createGhostErrandRunner(deps);
+    const p = runner({ ...REQUEST, sessionKey: 'pr-123' });
+    await vi.waitFor(() => expect(emitters.has('sess-new')).toBe(true));
+    const e = emitters.get('sess-new')!;
+    e.emit(textEvent('ok'));
+    e.emit(doneEvent());
+    await p;
+    expect(readSessionId).toHaveBeenCalledWith('helper', 'pr-123');
+    expect(keyedWrites).toContainEqual(['helper', 'sess-new', 'pr-123']);
+  });
+
+  it('钥匙间投递失败解除映射时同样带钥匙(不误伤共用间映射)', async () => {
+    const keyedWrites: Array<[string, string | null, string | undefined]> = [];
+    const { deps } = makeDeps({
+      readSessionId: () => 'sess-1',
+      writeSessionId: (ghostId, sessionId, sessionKey) => {
+        keyedWrites.push([ghostId, sessionId, sessionKey]);
+      },
+      dispatch: async () => ({ ok: false as const, errorCode: 'ARCHIVED', message: '归档了' }),
+    });
+    const r = await createGhostErrandRunner(deps)({ ...REQUEST, sessionKey: 'pr-9' });
+    expect(r).toMatchObject({ ok: false, errorCode: 'SESSION_UNAVAILABLE' });
+    expect(keyedWrites).toContainEqual(['helper', null, 'pr-9']);
+  });
+
+  it('不带钥匙:读写映射的 sessionKey 一律是 undefined(旧行为不变)', async () => {
+    const readSessionId = vi.fn(() => null);
+    const keyedWrites: Array<[string, string | null, string | undefined]> = [];
+    const { deps, emitters } = makeDeps({
+      readSessionId,
+      writeSessionId: (ghostId, sessionId, sessionKey) => {
+        keyedWrites.push([ghostId, sessionId, sessionKey]);
+      },
+    });
+    const runner = createGhostErrandRunner(deps);
+    const p = runner(REQUEST);
+    await vi.waitFor(() => expect(emitters.has('sess-new')).toBe(true));
+    emitters.get('sess-new')!.emit(doneEvent());
+    await p;
+    expect(readSessionId).toHaveBeenCalledWith('helper', undefined);
+    expect(keyedWrites).toContainEqual(['helper', 'sess-new', undefined]);
+  });
+});
+
 describe('忙检与投递', () => {
   it('会话正忙 → BUSY,不投递', async () => {
     const dispatch = vi.fn();

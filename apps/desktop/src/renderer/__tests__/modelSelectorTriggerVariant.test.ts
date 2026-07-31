@@ -788,7 +788,7 @@ describe('ModelSelector trigger variants', () => {
     expect(pricingRef.renderCalls).toBe(1);
   });
 
-  it('shows Gateway discount and free promotions in the selected-model trigger', () => {
+  it('does not show Gateway promotions in the selected-model trigger', () => {
     providersRef.providers = [
       {
         id: 'xd',
@@ -846,11 +846,11 @@ describe('ModelSelector trigger variants', () => {
           onProviderChange: vi.fn(),
         }),
       );
-      const discountTrigger = screen.getByRole('button', { name: /Current: Opus 4\.8/ });
-      const discountBadge = within(discountTrigger).getByText('立省 50%');
-      expect(discountBadge.hasAttribute('data-model-promotion-badge')).toBe(true);
-      expect(discountBadge.className).toContain('bg-[var(--accent-cta-bg)]');
-      expect(discountBadge.className).toContain('text-[var(--accent-pure-cta-fg)]');
+      const promotionTrigger = screen.getByRole('button', { name: /Current: Opus 4\.8/ });
+      // 折扣和免费标签已从输入框 trigger 移除，仅在下拉菜单/详情里展示。
+      expect(within(promotionTrigger).queryByText('立省 50%')).toBeNull();
+      expect(within(promotionTrigger).queryByText('限时免费')).toBeNull();
+      expect(promotionTrigger.querySelector('[data-model-promotion-badge]')).toBeNull();
       discounted.unmount();
 
       pricingRef.pricing = {};
@@ -866,8 +866,8 @@ describe('ModelSelector trigger variants', () => {
         }),
       );
       expect(
-        within(screen.getByRole('button', { name: /Current: Sonnet 4\.6/ })).getByText('限时免费'),
-      ).toBeTruthy();
+        within(screen.getByRole('button', { name: /Current: Sonnet 4\.6/ })).queryByText('限时免费'),
+      ).toBeNull();
     } finally {
       providersRef.providers = providersRef.DEFAULT_PROVIDERS;
       pricingRef.pricing = pricingRef.DEFAULT_PRICING;

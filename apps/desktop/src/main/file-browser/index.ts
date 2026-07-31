@@ -44,6 +44,7 @@ import { remoteInvoke } from '../device-link/index.js';
 import { downloadToFile, removeRemote } from '../device-link/mediaTransfer.js';
 import { fetchRemoteFileToCache, findStaleCached, isInsideCacheDir, putCachedContent, sweepCacheOnStartup } from './remote-file-cache.js';
 import { fetchChatFile, statChatFile, type ChatFileDeps, type ChatFileFetchArgs } from './chat-file.js';
+import { isTransientDeviceExportStatusError } from './device-export-status-error.js';
 import { makeSshChunkExecutor } from './ssh-media.js';
 import { getRemoteFileBrowser } from './remote-deps.js';
 import { getRemoteWatchRegistry } from './remote-watch.js';
@@ -214,8 +215,7 @@ async function fetchRemoteBigFile(
             transientFails = 0;
           } catch (err) {
             const msg = String(err);
-            const transient = /connection lost|NOT_CONNECTED|LINK_NOT_OPEN|INVOKE_TIMEOUT|DEVICE_OFFLINE/i.test(msg);
-            if (transient && ++transientFails <= 20) {
+            if (isTransientDeviceExportStatusError(err) && ++transientFails <= 20) {
               log.debug('exportFileStatus transient failure, retrying', { fails: transientFails, msg });
               continue;
             }

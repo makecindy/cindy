@@ -419,7 +419,13 @@ function remoteFailure(ref: AgentInputSessionRef, response: Awaited<ReturnType<t
   if (code === 'CHANNEL_NOT_ALLOWED') {
     throw new SessionReferenceError('SESSION_REFERENCE_UNSUPPORTED', `来源设备版本不支持会话引用：${message}`);
   }
-  if (code === 'DEVICE_OFFLINE' || code === 'LINK_NOT_OPEN' || code === 'INVOKE_TIMEOUT') {
+  if (
+    code === 'DEVICE_OFFLINE' ||
+    code === 'LINK_NOT_OPEN' ||
+    code === 'INVOKE_TIMEOUT' ||
+    code === 'NOT_CONNECTED' ||
+    code === 'BACKPRESSURE'
+  ) {
     throw new SessionReferenceError('SESSION_REFERENCE_OFFLINE', `来源设备 ${ref.deviceId} 当前不可用：${message}`);
   }
   if (code === 'PAYLOAD_TOO_LARGE') {

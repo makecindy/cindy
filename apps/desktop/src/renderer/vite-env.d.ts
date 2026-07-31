@@ -1295,6 +1295,23 @@ interface ElectronAPI {
         tone: 'info' | 'success' | 'warning' | 'error';
       }) => void,
     ) => () => void;
+    /** confirm 槽:插件请求弹主机同款确认框(main 已资格审+净化+限速+单飞)。
+     *  main 只投单个窗口,所以收到即本窗口负责弹;答案用 resolveConfirm 回包。
+     *  confirmText/cancelText 为 null 时用 renderer 自己的缺省文案(跟语言走)。 */
+    onConfirmRequest: (
+      callback: (payload: {
+        requestId: string;
+        ghostId: string;
+        ghostName: string;
+        iconDataUrl?: string;
+        body: string;
+        confirmText: string | null;
+        cancelText: string | null;
+        danger: boolean;
+      }) => void,
+    ) => () => void;
+    /** confirm 槽回包:把用户的点击送回 main 结算挂起的管子请求。 */
+    resolveConfirm: (requestId: string, confirmed: boolean) => Promise<{ handled: boolean }>;
     /** preview 槽:插件请求在右侧栏内置浏览器开预览标签(main 已白名单守门+限速)。 */
     onPreviewOpen: (
       callback: (payload: {
@@ -3109,6 +3126,9 @@ interface ElectronAPI {
   hookControl: {
     get: () => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     setEnabled: (
+      enabled: boolean,
+    ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
+    setLifecycleAnnouncement: (
       enabled: boolean,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     setProviderEnabled: (

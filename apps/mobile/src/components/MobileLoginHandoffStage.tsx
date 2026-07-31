@@ -3,6 +3,7 @@ import {
   Animated,
   Easing,
   Image,
+  Platform,
   StyleSheet,
   useWindowDimensions,
   View,
@@ -271,8 +272,13 @@ function MobileLoginHandoffStageInner({
       style={[styles.root, { backgroundColor: colors.login.bgBase }]}
       testID={testID}
     >
-      {/* 白底体系:状态栏随主题模式(旧红底 splash 的恒 light 样式随之退役) */}
-      <StatusBar style={mode === 'dark' ? 'light' : 'dark'} />
+      {/* 白底体系:状态栏随主题模式。Android 继续走组件式 StatusBar(覆盖 Stack
+          未挂载的闸门屏);iOS 27 起 RN StatusBar 全局 API 失效,iOS 侧由 _layout /
+          login 的 statusBarStyle screen option 按舞台有效主题控制,导航器外
+          (端点闸门错误屏)由系统外观自动适配。 */}
+      {Platform.OS === 'android' ? (
+        <StatusBar style={mode === 'dark' ? 'light' : 'dark'} />
+      ) : null}
       {showBrand ? (
         // 键盘位移层(demo kb-shift 同构):品牌随面板整体上顶,根 View 纯平底不动
         <View

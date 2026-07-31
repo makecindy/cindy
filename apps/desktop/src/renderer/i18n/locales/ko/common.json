@@ -2426,6 +2426,11 @@
         "slackDescription": "Slack 워크스페이스를 연결하고 Slack에서 Cindy에게 작업을 맡기세요.",
         "slackDisabledHint": "스위치를 켜면 Slack 인증이 시작됩니다. 연결이 완료되면 Slack에서 작업을 맡길 수 있습니다.",
         "slackBoundHint": "연결이 완료되었습니다. 스위치를 끄면 연결이 해제되며 다시 켜려면 재인증이 필요합니다.",
+        "lifecycleAnnouncement": {
+          "label": "온라인/오프라인 알림",
+          "cellLabel": "메시지 알림",
+          "hint": "이 기기가 온라인 또는 오프라인 상태가 되면 Slack Bot이 알림 메시지를 보냅니다"
+        },
         "toggleAria": "Slack 연결 활성 상태 전환",
         "installApp": "Slack 앱 설치",
         "status": {
@@ -2941,6 +2946,8 @@
         "cardExternalLinkDetail": "카드의 링크를 클릭하면 확인 대화 상자가 표시되며, 승인 후에만 시스템 브라우저에서 열립니다. http/https 주소만 허용됩니다.",
         "notify": "시스템 알림 표시 가능(화면 상단의 가벼운 알림)",
         "notifyDetail": "알림 내용은 이 플러그인이 제공하며 알림에는 이름이 표시됩니다. 자동으로 사라지며 작업을 방해하지 않습니다.",
+        "confirm": "확인 대화상자로 동의를 요청할 수 있음",
+        "confirmDetail": "작업 전에 Cindy 자체와 동일한 확인 대화상자를 열어 물어볼 수 있습니다. 질문 내용은 플러그인이 제공하며 대화상자에는 그 이름이 표시됩니다. 확인이든 취소든 직접 클릭해야 하고 플러그인은 스스로 누를 수 없습니다. 동시에 하나만 열 수 있으며 너무 자주 요청하면 차단됩니다.",
         "fsWrite": "파일을 쓸 수 있음(생성/수정)",
         "fsWriteDetail": "전용 데이터 폴더에는 언제든지 쓸 수 있습니다. 현재 세션의 작업 디렉터리 쓰기는 세션의 권한 모드를 따릅니다(자동 승인 모드에서는 바로 쓰고, 개별 확인 모드에서는 먼저 승인을 요청합니다). 그 외 폴더에 쓰려면 매번 확인이 필요합니다. 파일은 항상 호스트가 대신 기록하며 플러그인 자체는 파일 시스템에 직접 접근할 수 없습니다.",
         "networkHost": "네트워크 도메인 {{host}}에 접근",
@@ -3086,6 +3093,9 @@
       "pick": {
         "dialogTitle": "폴더 선택",
         "dialogMessage": "플러그인 \"{{name}}\"이(가) 폴더 선택을 요청합니다"
+      },
+      "confirm": {
+        "dialogTitle": "플러그인 \"{{name}}\"이(가) 확인을 요청합니다"
       },
       "workspace": {
         "dialogTitle": "프로젝트 폴더 선택",
@@ -4954,6 +4964,8 @@
       "retryTitle": "마지막 메시지 다시 보내기",
       "cancelTitle": "오류 알림 닫기",
       "retry": "다시 시도",
+      "continueAfterReset": "재설정 후 계속",
+      "continueAfterResetTitle": "사용량 제한 재설정 후 현재 작업을 계속할 일회성 자동화 만들기",
       "credentialSwitchBusy": "다른 Codex 작업이 실행 중이어서 이 대화에서 선택한 제공자로 아직 전환할 수 없습니다(공유 Codex 프로세스 재시작 필요). 다른 작업이 끝난 후 ‘재시도’를 눌러 주세요.",
       "codexThreadStale": "Codex 인증 모드가 변경되었습니다. 이 대화는 계속할 수 없습니다. 새 대화를 시작하세요.",
       "budgetModelHint": "계속 실패하면 일반 GPT 모델로 전환해 보세요.",
@@ -6190,6 +6202,10 @@
       "promptHeading": "자동화가 아직 없습니다",
       "promptDescription": "cron 자동화를 만들어 Claude Code 또는 Codex로 프롬프트를 일정에 따라 실행하세요."
     },
+    "usageLimitRecovery": {
+      "name": "사용량 제한 재설정 후 작업 계속",
+      "prompt": "중단된 지점부터 현재 작업을 계속하세요."
+    },
     "template": {
       "useTemplate": "초보자 도움말",
       "blank": "빈 항목",
@@ -6500,6 +6516,7 @@
     },
     "chips": {
       "selectProject": "프로젝트 선택",
+      "chooseTime": "시간 선택",
       "recent": "최근",
       "browseFolder": "다른 폴더 선택",
       "advanced": "고급",

@@ -8,7 +8,7 @@ import {
 } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, type ReactElement } from 'react';
-import { Alert, Pressable, StyleSheet, View } from 'react-native';
+import { Alert, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
 import {
   fontWeight,
@@ -20,7 +20,9 @@ import {
 } from '@/theme';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider, useAuth } from '@/auth/AuthContext';
+import { useLoginFirstLaunchLight } from '@/auth/loginFirstLaunchGate';
 import { loginText } from '@/auth/loginMessages';
+import { resolveStartupSplashHandoff } from '@/auth/startupSplashContinuity';
 import {
   MobileLoginHandoffProvider,
   useLoginHandoff,
@@ -54,6 +56,17 @@ function NavigationGate() {
   const segments = useSegments();
   const { mode, colors } = useTheme();
   const { releaseSplash, splashActive } = useStartupSplash();
+  // iOS 状态栏样式走 react-native-screens 的 VC-based 通道(Info.plist 已翻
+  // UIViewControllerBasedStatusBarAppearance=YES):iOS 27 起 UIKit 不再接受
+  // RN StatusBar 依赖的废弃全局 API(setStatusBarStyle),expo-status-bar 组件
+  // 在 iOS 上已失效且会触发 RCTLogError,iOS 侧不得再挂载。Android 老链路正常,
+  // 继续用组件式 StatusBar(含 Stack 未挂载的启动闸门期),不走 RNS 双轨。
+  // splash 覆盖层是登录品牌舞台(首启亮色门可能强制 light):覆盖期间随舞台
+  // 有效主题,释放后随系统主题;首启门 pending 时舞台不渲染品牌,跟系统即可。
+  const firstLaunchGate = useLoginFirstLaunchLight();
+  const stageTheme =
+    resolveStartupSplashHandoff(firstLaunchGate, mode).targetTheme ?? mode;
+  const statusBarTheme = splashActive ? stageTheme : mode;
   const navigationTheme = useMemo(
     () =>
       createNavigationTheme(
@@ -96,12 +109,19 @@ function NavigationGate() {
 
   return (
     <NavigationThemeProvider value={navigationTheme}>
-      {/* splash 覆盖层仍在时状态栏保持浅色;淡出开始后切回主题样式 */}
-      <StatusBar style={splashActive || mode === 'dark' ? 'light' : 'dark'} />
+      {/* Android 专用:splash 覆盖层仍在时状态栏保持浅色;淡出开始后切回主题样式 */}
+      {Platform.OS === 'android' ? (
+        <StatusBar
+          style={splashActive || mode === 'dark' ? 'light' : 'dark'}
+        />
+      ) : null}
       <Stack
         screenOptions={{
           headerShown: false,
           contentStyle: { backgroundColor: colors.surface },
+          ...(Platform.OS === 'ios'
+            ? { statusBarStyle: statusBarTheme === 'dark' ? 'light' : 'dark' }
+            : null),
           // iOS 26 起 react-native-screens 的返回手势默认全屏识别(fullScreenSwipe 默认 true),
           // 判定范围过大:会与消息内表格/代码块的横向 ScrollView 抢手势,拖动内容时还会误触返回。
           // 限定手势起始点在屏幕前缘 44pt 内(end = 距前缘最大 x),恢复经典边缘返回的判定范围;

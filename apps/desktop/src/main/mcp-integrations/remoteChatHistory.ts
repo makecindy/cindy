@@ -89,6 +89,7 @@ export function classifyRemoteHistoryError(
     case 'LINK_NOT_OPEN':
       return { errorCode: 'REMOTE_LINK_REQUIRED', message };
     case 'NOT_CONNECTED':
+    case 'BACKPRESSURE':
     case 'DEVICE_LINK_NOT_CONNECTED':
     case 'DEVICE_LINK_STANDBY':
       return { errorCode: 'DEVICE_LINK_NOT_READY', message };

@@ -533,4 +533,32 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(mocks.triggerLogin).not.toHaveBeenCalled();
     expect(mocks.cancelLogin).not.toHaveBeenCalled();
   });
+
+  it('exposes the explicit Continue After Reset action only when provided', () => {
+    const onContinueAfterUsageReset = vi.fn();
+    const { rerender } = render(
+      <ErrorBanner
+        error="Usage limit reached"
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+        onContinueAfterUsageReset={onContinueAfterUsageReset}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'chat.errorBanner.continueAfterReset' }),
+    );
+    expect(onContinueAfterUsageReset).toHaveBeenCalledOnce();
+
+    rerender(
+      <ErrorBanner
+        error="A normal failure"
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+      />,
+    );
+    expect(
+      screen.queryByRole('button', { name: 'chat.errorBanner.continueAfterReset' }),
+    ).toBeNull();
+  });
 });

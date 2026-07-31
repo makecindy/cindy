@@ -60,6 +60,7 @@ export type DeviceLinkErrorCode = RelayErrorCode
   | 'INVOKE_TIMEOUT' // 控制端等待 invoke-result 超时
   | 'LINK_NOT_OPEN' // 控制链路未建立
   | 'NOT_CONNECTED' // 本端尚未连上 relay
+  | 'BACKPRESSURE' // 本端可靠传输缓冲已满，拒绝继续制造积压
   | 'MEDIA_FETCH_FAILED' // 入方向媒体取件失败(被控端解析本机媒体 / 上传 OSS 中转出错)
   | 'VOICE_TRANSCRIBE_FAILED' // 出方向手机语音转写失败(被控端下载音频 / ASR 出错)
   | 'VOICE_CREDENTIAL_SYNC_FAILED' // 手机语音云端 ASR/refine 临时 credential 同步失败(历史,新桌面已不再返回)
@@ -104,6 +105,10 @@ export interface LinkOpenPayload {
    * 被控端只有在能力明确声明时才发送对应的新 wire 字段。
    */
   capabilities?: string[];
+  /** reliable-transport-v1 下，本端发往对端的 stream generation。 */
+  transportStreamId?: string;
+  /** 本端当前仍可能发送的最小 seq；对端重启丢失 ACK 内存时从这里恢复。 */
+  transportBaseSeq?: number;
 }
 
 /** 控制端能安全消费完整 ProviderLogoKind（含 #527 新增品牌）的 maker:provider:list 投影。 */
@@ -113,6 +118,15 @@ export interface LinkAcceptPayload {
   appVersion: string;
   /** 被控端 allowlist 的指纹,便于控制端探测版本差异 */
   allowlistHash: string;
+  /**
+   * 被控端支持的端到端可选能力。旧被控端缺省为空集，控制端只有在
+   * 看到能力后才启用可靠传输与大消息分片。
+   */
+  capabilities?: string[];
+  /** reliable-transport-v1 下，本端发往控制端的 stream generation。 */
+  transportStreamId?: string;
+  /** 本端当前仍可能发送的最小 seq；对端重启丢失 ACK 内存时从这里恢复。 */
+  transportBaseSeq?: number;
 }
 
 export type LinkCloseReason = 'user' | 'toggle-off' | 'shutdown' | 'revoked';
