@@ -239,4 +239,65 @@ describe('turnState.turnStartModel snapshot timing (no rewind)', () => {
 
     await handle.close();
   });
+
+  it('refreshes turnStartModel on a mid-turn setModel, picking up a hot-switch before the next tool-continuation API call', async () => {
+    // 一个 turn 内 apiCalls 可以大于 1(工具调用后 SDK 自己发起下一次 API call,
+    // 不经过我们显式的 dispatch 代码路径,没有等效 beginNewTurn 的快照时机)。
+    // turn 进行期间热切模型必须同步刷新 turnStartModel,否则该 turn 内后续一次
+    // 以无 envelope 的 api_retry 终止的 API call 会被错误归因到 turn 起点的旧
+    // 模型(PR review P2)。
+    const firstQuery = createFakeQuery();
+    sdkMock.query.mockReturnValue(firstQuery);
+
+    const agent = new ClaudeCodeAgent({
+      ...createDeps(),
+      capabilityAdditions: { availableModels: TEST_MODELS },
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-mid-turn-model-switch',
+      model: 'claude-opus-4-6',
+      workingDir: '/tmp',
+      permissionMode: 'acceptEdits',
+    });
+
+    const events: AgentEvent[] = [];
+    void (async () => {
+      try {
+        for await (const ev of handle.events()) events.push(ev);
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    await handle.send({ type: 'user', content: 'hello' });
+    // turn 仍在跑(未收到 result/done)时热切模型 —— 模拟一次工具调用后、下一次
+    // API call 发出前的窗口。
+    await handle.setModel?.('claude-sonnet-5');
+
+    // 无 assistant envelope 的连接失败:先 api_retry 耗尽重试,再 is_error 终态。
+    firstQuery.stream.emit({
+      type: 'system',
+      subtype: 'api_retry',
+      attempt: 3,
+      max_retries: 3,
+      retry_delay_ms: 1_000,
+      error_status: null,
+      error: 'unknown',
+    });
+    firstQuery.stream.emit({
+      type: 'result',
+      is_error: true,
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      usage: { input_tokens: 10, output_tokens: 0 },
+    });
+
+    await vi.waitFor(() => {
+      expect(events.some((e) => e.type === 'error')).toBe(true);
+    });
+    const error = events.find((e) => e.type === 'error');
+    expect(error?.agentMeta).toMatchObject({ model: 'claude-sonnet-5' });
+
+    await handle.close();
+  });
 });

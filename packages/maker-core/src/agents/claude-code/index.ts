@@ -4413,6 +4413,14 @@ export class ClaudeCodeAgent extends BaseAgent {
           authState.authSource,
         );
         mutableModel = newModel;
+        // 一个 turn 内 apiCalls 可以大于 1(工具调用后 SDK 自己发起下一次 API
+        // call,不经过我们显式的 dispatch 代码路径,没有等效 beginNewTurn 的快照
+        // 时机)。turn 进行期间热切模型时同步刷新 turnStartModel,让它反映"这次
+        // setModel 之后、turn 内任何后续 API call 实际会用的模型"——这是除了
+        // turn 起点之外唯一能可靠拿到的 dispatch 边界:调用后到下一次实际请求
+        // 之间不会再有旁的 setModel 插进来改写它(PR review P2)。turn 未在跑时
+        // 不用改:下一次 beginNewTurn 本就会用最新 mutableModel 重新打快照。
+        if (turnInFlight) turnState.turnStartModel = newModel;
         autoReviewDecisionCache.clear();
         if (
           !isControlBlocked
