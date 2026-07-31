@@ -83,7 +83,7 @@ const CONTEXT_TOO_LONG_RE =
 /** 余额 / 配额：OpenAI "insufficient_quota"、通用 balance / credit 措辞、
  *  LiteLLM "ExceededBudget: … Budget has been exceeded"(XD 网关余额不足的实际形状)。 */
 const QUOTA_RE =
-  /insufficient_quota|insufficient.{0,12}(balance|credit|funds)|quota.{0,20}exceed|budget.{0,20}exceeded|ExceededBudget|余额不足|欠费/i;
+  /insufficient_quota|insufficient.{0,12}(balance|credit|funds)|\bcredit(?:s| balance)?\s+(?:depleted|exhausted|too low)\b|quota.{0,20}exceed|budget.{0,20}exceeded|ExceededBudget|余额不足|欠费/i;
 /** 速率型配额措辞(每分钟/每秒请求或 token 上限,如 Google "Quota exceeded for quota
  *  metric 'requests per minute'"、紧凑斜杠写法 "100 requests/minute"、
  *  "1M tokens/day"、缩写斜杠写法 "100 requests/min"、"500 tokens/sec"、单字母斜杠

@@ -34,6 +34,15 @@ describe('classifyProviderError — quota patterns', () => {
     expect(result.retryable).toBe(false);
   });
 
+  it.each(['credits depleted', 'credits exhausted', 'credit balance too low'])(
+    'classifies 429 + existing billing-depletion wording as QUOTA_EXCEEDED: %s',
+    (bodyText) => {
+      const result = classifyProviderError({ status: 429, bodyText });
+      expect(result.code).toBe('QUOTA_EXCEEDED');
+      expect(result.retryable).toBe(false);
+    },
+  );
+
   it('keeps per-minute metric quotas as retryable RATE_LIMITED (not billing)', () => {
     // Google 风格速率配额也带 quota exceeded 字样,但等待重试即可恢复,
     // 不是余额耗尽——不得判成不可重试并触发购买引导(review P1)。
@@ -95,6 +104,9 @@ describe('isQuotaExceededMessage — message-level matcher (ErrorBanner 消费)'
     'Error code: 429 - insufficient_quota: You exceeded your current quota',
     'API Error: 余额不足，请充值后再试',
     'insufficient balance for this request',
+    'credits depleted',
+    'credits exhausted',
+    'credit balance too low',
   ])('matches quota wording: %s', (text) => {
     expect(isQuotaExceededMessage(text)).toBe(true);
   });
