@@ -8,15 +8,31 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { brandExecutableName } from '@cindy/maker-shared/brand-identity';
 import { describe, expect, it } from 'vitest';
 
 import {
+  CLI_COMMAND_NAME,
   CLI_LINK_PATH,
   __testing,
   buildInstallShellCommand,
   buildUninstallShellCommand,
   resolveBundledCliPath,
 } from '../installCliCommand';
+
+describe('CLI_COMMAND_NAME 跟随 edition 品牌', () => {
+  it('测试环境(未注入区域 → 默认 global)命令名为 cindy', () => {
+    expect(CLI_COMMAND_NAME).toBe('cindy');
+    expect(CLI_LINK_PATH).toBe('/usr/local/bin/cindy');
+  });
+
+  it('由区域可执行名小写化:global / cn → cindy,内部 dev → cindydev', () => {
+    // global 与 cn 展示名统一为 Cindy(2026-07-26 决策),故命令名同为 cindy。
+    expect(brandExecutableName('global').toLowerCase()).toBe('cindy');
+    expect(brandExecutableName('cn').toLowerCase()).toBe('cindy');
+    expect(brandExecutableName('dev').toLowerCase()).toBe('cindydev');
+  });
+});
 
 describe('resolveBundledCliPath', () => {
   it('由 resourcesPath 推出包内 cli/cindy', () => {

@@ -38,18 +38,29 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
+import { brandExecutableName } from '@cindy/maker-shared/brand-identity';
+
 import { createLogger } from './logger';
 import {
   APPLICATION_MENU_LABELS,
   type ApplicationMenuLabels,
   type ApplicationMenuLocale,
 } from './applicationMenuLabels.js';
+import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 
 const execFileAsync = promisify(execFile);
 const log = createLogger('installCliCommand');
 
-/** PATH 里的 symlink 位置。与 VS Code 的 `code` 同目录,绝大多数 shell 的 PATH 默认含它。 */
-export const CLI_LINK_PATH = '/usr/local/bin/cindy';
+/**
+ * 装进 PATH 的命令名,**跟随本构建 edition 品牌**:由区域可执行名小写化而来
+ * (global/cn 展示名统一为 Cindy → `cindy`;内部 dev 构建 → `cindydev`)。
+ * *nix 命令惯例用小写,与 forge 给 linux 包名用 `CINDY_EXE.toLowerCase()` 同一处理;
+ * 未注入区域默认 global(见 brandRegion / region-and-editions.md §2.2)。
+ */
+export const CLI_COMMAND_NAME = brandExecutableName(CURRENT_CINDY_REGION).toLowerCase();
+
+/** PATH 里的 symlink 位置(命令名随 edition 品牌)。与 VS Code 的 `code` 同目录。 */
+export const CLI_LINK_PATH = `/usr/local/bin/${CLI_COMMAND_NAME}`;
 
 /** osascript 超时。管理员授权弹窗需要用户输入,给足时间。 */
 const INSTALL_TIMEOUT_MS = 60_000;
@@ -138,6 +149,11 @@ function labelsFor(locale: ApplicationMenuLocale): ApplicationMenuLabels {
   return APPLICATION_MENU_LABELS[locale];
 }
 
+/** 展开标签占位符:`{{path}}` → symlink 路径,`{{cmd}}` → 品牌命令名(全部出现处)。 */
+function fmt(template: string, linkPath: string): string {
+  return template.split('{{path}}').join(linkPath).split('{{cmd}}').join(CLI_COMMAND_NAME);
+}
+
 async function showMessage(
   window: BrowserWindow | null,
   options: Electron.MessageBoxOptions,
@@ -185,7 +201,7 @@ export async function installCindyCliCommand(
     await showMessage(window, {
       type: 'error',
       message: labels.installCliErrorTitle,
-      detail: `${labels.installCliErrorDetail}\n\n${target}`,
+      detail: `${fmt(labels.installCliErrorDetail, source)}\n\n${target}`,
     });
     return;
   }
@@ -195,8 +211,8 @@ export async function installCindyCliCommand(
     log.info('cindy CLI command already installed', { source, target });
     await showMessage(window, {
       type: 'info',
-      message: labels.installCliSuccessTitle,
-      detail: labels.installCliSuccessDetail.replace('{{path}}', source),
+      message: fmt(labels.installCliSuccessTitle, source),
+      detail: fmt(labels.installCliSuccessDetail, source),
     });
     return;
   }
@@ -206,8 +222,8 @@ export async function installCindyCliCommand(
     buttons: [labels.installCliConfirmOk, labels.installCliCancel],
     defaultId: 0,
     cancelId: 1,
-    message: labels.installCliConfirmTitle,
-    detail: labels.installCliConfirmDetail.replace('{{path}}', source),
+    message: fmt(labels.installCliConfirmTitle, source),
+    detail: fmt(labels.installCliConfirmDetail, source),
   });
   if (confirm.response !== 0) return;
 
@@ -216,8 +232,8 @@ export async function installCindyCliCommand(
     log.info('cindy CLI command installed', { source, target });
     await showMessage(window, {
       type: 'info',
-      message: labels.installCliSuccessTitle,
-      detail: labels.installCliSuccessDetail.replace('{{path}}', source),
+      message: fmt(labels.installCliSuccessTitle, source),
+      detail: fmt(labels.installCliSuccessDetail, source),
     });
   } catch (err) {
     if (isUserCancelledAdmin(err)) {
@@ -228,7 +244,7 @@ export async function installCindyCliCommand(
     await showMessage(window, {
       type: 'error',
       message: labels.installCliErrorTitle,
-      detail: `${labels.installCliErrorDetail}\n\n${(err as Error)?.message ?? String(err)}`,
+      detail: `${fmt(labels.installCliErrorDetail, source)}\n\n${(err as Error)?.message ?? String(err)}`,
     });
   }
 }

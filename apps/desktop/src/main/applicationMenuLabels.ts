@@ -10,6 +10,11 @@
  * vitest 直接 import 运行时对象,复用 scripts/shared/glossary-rules.mjs 的判定。
  * 之所以要抽出来,是因为原先它嵌在 bootstrap-electron.ts 里,测试一 import 就会拉起
  * 整个 Electron 主进程模块。
+ *
+ * `installCli*` 一组里的 `{{cmd}}` 是**命令名占位符**,由调用侧按本构建 edition 品牌
+ * 替换(global/cn → `cindy`,dev → `cindydev`,见 installCliCommand.ts 的
+ * CLI_COMMAND_NAME);`{{path}}` 替换为 symlink 安装路径。文案里的 “Cindy” 指产品/应用
+ * 本身,不随命令名变化,故保留。
  */
 import type { SupportedLocale } from '../shared/locale.js';
 
@@ -62,16 +67,16 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     releaseNotes: '最新更新介绍',
     issues: 'Issue',
     installCli: '安装到命令行',
-    installCliConfirmTitle: '把 cindy 命令安装到命令行？',
+    installCliConfirmTitle: '把 {{cmd}} 命令安装到命令行？',
     installCliConfirmDetail:
-      '将在 {{path}} 创建指向 Cindy 的符号链接。之后在终端运行 cindy . 即可把当前目录作为工作目录在 Cindy 中打开。系统会请求你的管理员密码以写入该目录。',
+      '将在 {{path}} 创建指向 Cindy 的符号链接。之后在终端运行 {{cmd}} . 即可把当前目录作为工作目录在 Cindy 中打开。系统会请求你的管理员密码以写入该目录。',
     installCliConfirmOk: '安装',
     installCliCancel: '取消',
-    installCliSuccessTitle: 'cindy 命令已安装',
+    installCliSuccessTitle: '{{cmd}} 命令已安装',
     installCliSuccessDetail:
-      '已安装到 {{path}}。重开一个终端窗口后运行 cindy . 即可。若提示找不到命令，请确认该目录在你的 PATH 中。',
+      '已安装到 {{path}}。重开一个终端窗口后运行 {{cmd}} . 即可。若提示找不到命令，请确认该目录在你的 PATH 中。',
     installCliErrorTitle: '安装失败',
-    installCliErrorDetail: '未能安装 cindy 命令。',
+    installCliErrorDetail: '未能安装 {{cmd}} 命令。',
     installCliDevOnlyTitle: '仅正式版可用',
     installCliDevOnlyDetail:
       '开发模式下无法安装命令行工具：此时的可执行文件指向 Electron 解释器，而非 Cindy 应用。请在正式安装的 Cindy 中使用此功能。',
@@ -93,22 +98,22 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     help: 'Help',
     releaseNotes: "What's New",
     issues: 'Issues',
-    installCli: "Install 'cindy' Command in PATH",
-    installCliConfirmTitle: "Install the 'cindy' command in your PATH?",
+    installCli: "Install '{{cmd}}' Command in PATH",
+    installCliConfirmTitle: "Install the '{{cmd}}' command in your PATH?",
     installCliConfirmDetail:
-      'A symlink to Cindy will be created at {{path}}. You can then run `cindy .` in a terminal to open the current directory as a working directory in Cindy. You will be asked for your administrator password to write to that location.',
+      'A symlink to Cindy will be created at {{path}}. You can then run `{{cmd}} .` in a terminal to open the current directory as a working directory in Cindy. You will be asked for your administrator password to write to that location.',
     installCliConfirmOk: 'Install',
     installCliCancel: 'Cancel',
-    installCliSuccessTitle: "'cindy' command installed",
+    installCliSuccessTitle: "'{{cmd}}' command installed",
     installCliSuccessDetail:
-      'Installed at {{path}}. Open a new terminal window and run `cindy .`. If the command is not found, make sure that directory is on your PATH.',
+      'Installed at {{path}}. Open a new terminal window and run `{{cmd}} .`. If the command is not found, make sure that directory is on your PATH.',
     installCliErrorTitle: 'Installation failed',
-    installCliErrorDetail: "Could not install the 'cindy' command.",
+    installCliErrorDetail: "Could not install the '{{cmd}}' command.",
     installCliDevOnlyTitle: 'Packaged build only',
     installCliDevOnlyDetail:
       'The command-line tool cannot be installed in development mode: the executable points at the Electron runtime rather than the Cindy app. Use this from an installed Cindy build.',
     installCliUnsupportedTitle: 'Not supported on this system',
-    installCliUnsupportedDetail: "Installing the 'cindy' command is currently supported on macOS only.",
+    installCliUnsupportedDetail: "Installing the '{{cmd}}' command is currently supported on macOS only.",
   },
   ja: {
     about: '{{appName}} について',
@@ -125,17 +130,17 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     help: 'ヘルプ',
     releaseNotes: '最新情報',
     issues: 'Issue',
-    installCli: 'コマンドラインに cindy をインストール',
-    installCliConfirmTitle: 'cindy コマンドをコマンドラインにインストールしますか?',
+    installCli: 'コマンドラインに {{cmd}} をインストール',
+    installCliConfirmTitle: '{{cmd}} コマンドをコマンドラインにインストールしますか?',
     installCliConfirmDetail:
-      'Cindy へのシンボリックリンクを {{path}} に作成します。その後ターミナルで cindy . を実行すると、現在のディレクトリを作業ディレクトリとして Cindy で開けます。この場所への書き込みには管理者パスワードの入力を求められます。',
+      'Cindy へのシンボリックリンクを {{path}} に作成します。その後ターミナルで {{cmd}} . を実行すると、現在のディレクトリを作業ディレクトリとして Cindy で開けます。この場所への書き込みには管理者パスワードの入力を求められます。',
     installCliConfirmOk: 'インストール',
     installCliCancel: 'キャンセル',
-    installCliSuccessTitle: 'cindy コマンドをインストールしました',
+    installCliSuccessTitle: '{{cmd}} コマンドをインストールしました',
     installCliSuccessDetail:
-      '{{path}} にインストールしました。新しいターミナルウインドウを開いて cindy . を実行してください。コマンドが見つからない場合は、そのディレクトリが PATH に含まれているか確認してください。',
+      '{{path}} にインストールしました。新しいターミナルウインドウを開いて {{cmd}} . を実行してください。コマンドが見つからない場合は、そのディレクトリが PATH に含まれているか確認してください。',
     installCliErrorTitle: 'インストールに失敗しました',
-    installCliErrorDetail: 'cindy コマンドをインストールできませんでした。',
+    installCliErrorDetail: '{{cmd}} コマンドをインストールできませんでした。',
     installCliDevOnlyTitle: '正式ビルドのみ対応',
     installCliDevOnlyDetail:
       '開発モードではコマンドラインツールをインストールできません。実行ファイルが Cindy アプリではなく Electron ランタイムを指しているためです。インストール済みの Cindy から実行してください。',
@@ -157,17 +162,17 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     help: '도움말',
     releaseNotes: '최신 업데이트',
     issues: '이슈',
-    installCli: '명령줄에 cindy 명령 설치',
-    installCliConfirmTitle: 'cindy 명령을 명령줄에 설치할까요?',
+    installCli: '명령줄에 {{cmd}} 명령 설치',
+    installCliConfirmTitle: '{{cmd}} 명령을 명령줄에 설치할까요?',
     installCliConfirmDetail:
-      'Cindy를 가리키는 심볼릭 링크를 {{path}}에 만듭니다. 이후 터미널에서 cindy . 를 실행하면 현재 디렉터리를 작업 디렉터리로 Cindy에서 열 수 있습니다. 이 위치에 쓰려면 관리자 암호를 입력해야 합니다.',
+      'Cindy를 가리키는 심볼릭 링크를 {{path}}에 만듭니다. 이후 터미널에서 {{cmd}} . 를 실행하면 현재 디렉터리를 작업 디렉터리로 Cindy에서 열 수 있습니다. 이 위치에 쓰려면 관리자 암호를 입력해야 합니다.',
     installCliConfirmOk: '설치',
     installCliCancel: '취소',
-    installCliSuccessTitle: 'cindy 명령을 설치했습니다',
+    installCliSuccessTitle: '{{cmd}} 명령을 설치했습니다',
     installCliSuccessDetail:
-      '{{path}}에 설치했습니다. 새 터미널 창을 열고 cindy . 를 실행하세요. 명령을 찾을 수 없으면 해당 디렉터리가 PATH에 있는지 확인하세요.',
+      '{{path}}에 설치했습니다. 새 터미널 창을 열고 {{cmd}} . 를 실행하세요. 명령을 찾을 수 없으면 해당 디렉터리가 PATH에 있는지 확인하세요.',
     installCliErrorTitle: '설치 실패',
-    installCliErrorDetail: 'cindy 명령을 설치하지 못했습니다.',
+    installCliErrorDetail: '{{cmd}} 명령을 설치하지 못했습니다.',
     installCliDevOnlyTitle: '정식 빌드에서만 사용 가능',
     installCliDevOnlyDetail:
       '개발 모드에서는 명령줄 도구를 설치할 수 없습니다. 실행 파일이 Cindy 앱이 아닌 Electron 런타임을 가리키기 때문입니다. 설치된 Cindy에서 사용하세요.',
