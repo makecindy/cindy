@@ -1103,19 +1103,22 @@ export function TodaySpendChip({
     // Pi 的 provider 在创建会话时已经显式固化，不需要再从 CC proxy route 猜。
     || (vendorKey === 'pi' && !remoteHostId && providerId === 'anthropic')
   );
-  // cc 走「订阅直连 bridge」= model 带 chatgpt/ / xai/ 前缀(经本地 responses-bridge 打用户个人
+  // cc / Pi 走「订阅直连 bridge」= model 带 chatgpt/ / xai/ 前缀(经本地 responses-bridge 打用户个人
   // 订阅额度,真实计费恒 0,gateway quota 与之无关):
   //   - chatgpt/ → 与 codex 同一 ChatGPT 账户,复用 codex 订阅 chip 形态(限额窗口 + 价值估算);
   //   - xai/    → SuperGrok 无订阅窗口端点,尽力显示 bridge 抓到的限流头,否则仅价值估算。
-  // 优先级高于 Claude 订阅形态(model 前缀决定实际消耗的额度)。
+  // 优先级高于 Claude 订阅形态(model 前缀决定实际消耗的额度)。anthropic-compat-proxy-host.ts
+  // 的 bridge provider 配置只按 model id 前缀匹配,不看 providerId——xd 网关来源的会话
+  // 若模型是 chatgpt/ / xai/ 前缀,实际请求仍会被路由到订阅 bridge,不是网关计费;
+  // providerId==='xd' 必须与 null/openai/xai 一样算作可能命中 bridge(review P2)。
   const isChatgptBridge =
     (vendorKey === 'cc' || vendorKey === 'pi')
-    && (providerId == null || providerId === 'openai')
+    && (providerId == null || providerId === 'openai' || providerId === 'xd')
     && typeof modelId === 'string'
     && modelId.startsWith(CHATGPT_MODEL_PREFIX);
   const isXaiBridge =
     (vendorKey === 'cc' || vendorKey === 'pi')
-    && (providerId == null || providerId === 'xai')
+    && (providerId == null || providerId === 'xai' || providerId === 'xd')
     && typeof modelId === 'string'
     && modelId.startsWith(XAI_MODEL_PREFIX);
   const isSubscriptionBridge = isChatgptBridge || isXaiBridge;

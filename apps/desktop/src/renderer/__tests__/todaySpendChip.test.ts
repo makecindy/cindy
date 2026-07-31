@@ -59,9 +59,12 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain("providerId === 'openai'");
     expect(source).toContain("providerId === 'xai'");
     expect(source).toContain('const isSubscriptionBridge = isChatgptBridge || isXaiBridge;');
-    // bridge 只在匹配其内建来源时成立；显式自定义供应商优先于模型前缀。
-    expect(source).toContain("(providerId == null || providerId === 'openai')");
-    expect(source).toContain("(providerId == null || providerId === 'xai')");
+    // bridge 只在匹配其内建来源时成立；显式自定义供应商优先于模型前缀。xd 网关
+    // 来源也算命中——anthropic-compat-proxy-host.ts 的 bridge provider 配置只按
+    // model id 前缀匹配、不看 providerId,xd 来源的会话若模型带 chatgpt/ / xai/
+    // 前缀,实际请求仍会被路由到订阅 bridge(review P2)。
+    expect(source).toContain("(providerId == null || providerId === 'openai' || providerId === 'xd')");
+    expect(source).toContain("(providerId == null || providerId === 'xai' || providerId === 'xd')");
     expect(source).toContain('useClaudeAccountUsage(usesGatewayQuota)');
     // gateway quota 对订阅 bridge 会话关闭;device-link 远程同样不读本机网关配额
     expect(source).toContain('&& !isDeviceLinkRemote');
