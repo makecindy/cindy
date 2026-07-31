@@ -16,6 +16,8 @@ const harness = vi.hoisted(() => {
     ownerId: 'owner-a' as string | null,
     settings: new Map<string, boolean>(),
     contactsChangeToken: 'initial-token' as string | null,
+    syncRequestToken: 'initial-request' as string | null,
+    runtimeStatus: null as null | Record<string, unknown>,
     emptyState,
     activateSync: vi.fn(() => emptyState),
     peerPublicKey: 'peer-public' as string | null,
@@ -28,6 +30,12 @@ const harness = vi.hoisted(() => {
     lanStop: vi.fn(),
     relaySend: vi.fn(),
     keyReset: vi.fn(),
+    writeRuntimeStatus: vi.fn((status: Record<string, unknown>) => {
+      harness.runtimeStatus = status;
+    }),
+    writeSyncRequest: vi.fn(() => {
+      harness.syncRequestToken = `request-${Date.now()}`;
+    }),
     writeDeviceSync: vi.fn(async (enabled: boolean) => {
       if (harness.ownerId) harness.settings.set(harness.ownerId, enabled);
     }),
@@ -127,13 +135,17 @@ vi.mock('../wire.js', () => ({
 }));
 
 vi.mock('../statusStore.js', () => ({
+  readContactsSyncRequestToken: () => harness.syncRequestToken,
   readPersistedContactsSyncStatus: () => ({
     lastSyncAt: null,
     lastSyncDeviceId: null,
     lastSyncDeviceName: null,
     lastRoute: null,
   }),
+  readPersistedContactsSyncRuntimeStatus: () => harness.runtimeStatus,
+  writeContactsSyncRequestToken: harness.writeSyncRequest,
   writePersistedContactsSyncStatus: vi.fn(),
+  writePersistedContactsSyncRuntimeStatus: harness.writeRuntimeStatus,
 }));
 
 const driver = await import('../driver.js');
@@ -143,6 +155,8 @@ beforeEach(() => {
   harness.ownerId = 'owner-a';
   harness.settings.clear();
   harness.contactsChangeToken = 'initial-token';
+  harness.syncRequestToken = 'initial-request';
+  harness.runtimeStatus = null;
   harness.activateSync.mockClear();
   harness.peerPublicKey = 'peer-public';
   harness.pinPeerPublicKey.mockClear();
@@ -150,6 +164,8 @@ beforeEach(() => {
   harness.lanStop.mockReset();
   harness.relaySend.mockReset();
   harness.keyReset.mockReset();
+  harness.writeRuntimeStatus.mockClear();
+  harness.writeSyncRequest.mockClear();
   harness.writeDeviceSync.mockReset();
   harness.writeDeviceSync.mockImplementation(async (enabled: boolean) => {
     if (harness.ownerId) harness.settings.set(harness.ownerId, enabled);
@@ -199,6 +215,7 @@ describe('contacts sync runtime ownership', () => {
       isPeerAllowed: (deviceId) => deviceId === 'peer-device',
       sendRelayFrame: harness.relaySend,
     });
+    driver.setContactsDeviceLinkOwnerActive(true);
 
     const enabling = driver.setContactsDeviceSyncEnabled(true);
     await vi.waitFor(() => expect(harness.lanSend).toHaveBeenCalledTimes(1));
@@ -222,6 +239,7 @@ describe('contacts sync runtime ownership', () => {
       isPeerAllowed: () => false,
       sendRelayFrame: harness.relaySend,
     });
+    driver.setContactsDeviceLinkOwnerActive(true);
 
     harness.settings.set('owner-a', true);
     driver.pollContactsDeviceSyncSettingChange();
@@ -240,6 +258,216 @@ describe('contacts sync runtime ownership', () => {
     });
   });
 
+  it('reads the Device Link holder status in a passive shared-userData instance', () => {
+    harness.settings.set('owner-a', true);
+    harness.runtimeStatus = {
+      available: true,
+      enabled: true,
+      phase: 'up-to-date',
+      onlineDeviceCount: 2,
+      errorCode: null,
+      lastSyncAt: '2026-08-01T00:00:00.000Z',
+      lastSyncDeviceId: 'peer-device',
+      lastSyncDeviceName: 'Office Desktop',
+      lastRoute: 'relay',
+      updatedAt: Date.now(),
+    };
+    driver.initContactsDeviceSync({
+      getSelfDeviceId: () => 'self-device',
+      listOnlineDesktopDevices: () => [{ deviceId: 'peer-device', deviceName: 'Peer Desktop' }],
+      isPeerAllowed: () => true,
+      sendRelayFrame: harness.relaySend,
+    });
+
+    expect(driver.getContactsDeviceSyncStatus()).toMatchObject({
+      enabled: true,
+      phase: 'up-to-date',
+      onlineDeviceCount: 2,
+      lastSyncDeviceName: 'Office Desktop',
+    });
+    expect(harness.writeRuntimeStatus).not.toHaveBeenCalled();
+    expect(harness.relaySend).not.toHaveBeenCalled();
+  });
+
+  it('ignores a stale holder status in a passive instance', () => {
+    harness.settings.set('owner-a', true);
+    driver.__testing.reset();
+    harness.runtimeStatus = {
+      available: true,
+      enabled: true,
+      phase: 'up-to-date',
+      onlineDeviceCount: 2,
+      errorCode: null,
+      lastSyncAt: null,
+      lastSyncDeviceId: null,
+      lastSyncDeviceName: null,
+      lastRoute: null,
+      updatedAt: Date.now() - 60_000,
+    };
+
+    expect(driver.getContactsDeviceSyncStatus()).toMatchObject({
+      enabled: true,
+      phase: 'waiting',
+      onlineDeviceCount: 0,
+    });
+  });
+
+  it('pushes holder status changes to passive-instance listeners', () => {
+    harness.settings.set('owner-a', true);
+    harness.runtimeStatus = {
+      available: true,
+      enabled: true,
+      phase: 'syncing',
+      onlineDeviceCount: 1,
+      errorCode: null,
+      lastSyncAt: null,
+      lastSyncDeviceId: null,
+      lastSyncDeviceName: null,
+      lastRoute: null,
+      updatedAt: Date.now(),
+    };
+    const listener = vi.fn();
+    const unsubscribe = driver.onContactsDeviceSyncStatusChanged(listener);
+
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: 'syncing', onlineDeviceCount: 1 }),
+    );
+    unsubscribe();
+  });
+
+  it('delegates sync-now from a passive instance to the Device Link holder', async () => {
+    harness.settings.set('owner-a', true);
+    driver.initContactsDeviceSync({
+      getSelfDeviceId: () => 'self-device',
+      listOnlineDesktopDevices: () => [{ deviceId: 'peer-device', deviceName: 'Peer Desktop' }],
+      isPeerAllowed: () => true,
+      sendRelayFrame: harness.relaySend,
+    });
+
+    await driver.broadcastContactsNow(true);
+
+    expect(harness.writeSyncRequest).toHaveBeenCalledTimes(1);
+    expect(harness.relaySend).not.toHaveBeenCalled();
+    expect(harness.writeRuntimeStatus).not.toHaveBeenCalled();
+    expect(driver.getContactsDeviceSyncStatus()).toMatchObject({
+      enabled: true,
+      phase: 'syncing',
+    });
+  });
+
+  it('stops publishing and sending after an initialized holder is demoted', async () => {
+    harness.settings.set('owner-a', true);
+    harness.lanSend.mockResolvedValue(false);
+    driver.initContactsDeviceSync({
+      getSelfDeviceId: () => 'self-device',
+      listOnlineDesktopDevices: () => [{ deviceId: 'peer-device', deviceName: 'Peer Desktop' }],
+      isPeerAllowed: () => true,
+      sendRelayFrame: harness.relaySend,
+    });
+    driver.setContactsDeviceLinkOwnerActive(true);
+    await vi.waitFor(() =>
+      expect(harness.relaySend.mock.calls.some(([, frame]) => frame.type === 'cipher-chunk')).toBe(
+        true,
+      ),
+    );
+
+    driver.setContactsDeviceLinkOwnerActive(false);
+    harness.relaySend.mockClear();
+    harness.writeRuntimeStatus.mockClear();
+    harness.writeSyncRequest.mockClear();
+    harness.runtimeStatus = {
+      available: true,
+      enabled: true,
+      phase: 'up-to-date',
+      onlineDeviceCount: 1,
+      errorCode: null,
+      lastSyncAt: '2026-08-01T00:00:00.000Z',
+      lastSyncDeviceId: 'peer-device',
+      lastSyncDeviceName: 'Peer Desktop',
+      lastRoute: 'relay',
+      updatedAt: Date.now(),
+    };
+
+    expect(driver.getContactsDeviceSyncStatus()).toMatchObject({
+      phase: 'up-to-date',
+      onlineDeviceCount: 1,
+    });
+    await driver.broadcastContactsNow(true);
+    expect(harness.writeSyncRequest).toHaveBeenCalledTimes(1);
+    expect(harness.relaySend).not.toHaveBeenCalled();
+    expect(harness.writeRuntimeStatus).not.toHaveBeenCalled();
+  });
+
+  it('times out a delegated sync-now request when no holder consumes it', async () => {
+    harness.settings.set('owner-a', true);
+    driver.__testing.reset();
+    vi.useFakeTimers();
+    try {
+      await driver.broadcastContactsNow(true);
+      expect(driver.getContactsDeviceSyncStatus().phase).toBe('syncing');
+
+      await vi.advanceTimersByTimeAsync(10_001);
+      expect(driver.getContactsDeviceSyncStatus().phase).toBe('waiting');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not let the delegated timeout overwrite a fresh holder syncing status', async () => {
+    harness.settings.set('owner-a', true);
+    driver.__testing.reset();
+    vi.useFakeTimers();
+    try {
+      await driver.broadcastContactsNow(true);
+      await vi.advanceTimersByTimeAsync(9_000);
+      harness.runtimeStatus = {
+        available: true,
+        enabled: true,
+        phase: 'syncing',
+        onlineDeviceCount: 1,
+        errorCode: null,
+        lastSyncAt: null,
+        lastSyncDeviceId: null,
+        lastSyncDeviceName: null,
+        lastRoute: null,
+        updatedAt: Date.now(),
+      };
+      expect(driver.getContactsDeviceSyncStatus().phase).toBe('syncing');
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(driver.getContactsDeviceSyncStatus().phase).toBe('syncing');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('consumes a passive-instance sync-now token in the Device Link holder', async () => {
+    harness.settings.set('owner-a', true);
+    harness.lanSend.mockResolvedValue(false);
+    driver.initContactsDeviceSync({
+      getSelfDeviceId: () => 'self-device',
+      listOnlineDesktopDevices: () => [{ deviceId: 'peer-device', deviceName: 'Peer Desktop' }],
+      isPeerAllowed: (deviceId) => deviceId === 'peer-device',
+      sendRelayFrame: harness.relaySend,
+    });
+    driver.setContactsDeviceLinkOwnerActive(true);
+    await vi.waitFor(() =>
+      expect(harness.relaySend.mock.calls.some(([, frame]) => frame.type === 'cipher-chunk')).toBe(
+        true,
+      ),
+    );
+    harness.relaySend.mockClear();
+
+    harness.syncRequestToken = 'request-from-passive';
+    driver.pollContactsDeviceSyncCrossProcessState();
+
+    await vi.waitFor(() =>
+      expect(harness.relaySend.mock.calls.some(([, frame]) => frame.type === 'cipher-chunk')).toBe(
+        true,
+      ),
+    );
+  });
+
   it('stops immediately and stays off when persisting disable is blocked then fails', async () => {
     harness.settings.set('owner-a', true);
     let rejectWrite: ((error: Error) => void) | null = null;
@@ -255,6 +483,7 @@ describe('contacts sync runtime ownership', () => {
       isPeerAllowed: () => false,
       sendRelayFrame: harness.relaySend,
     });
+    driver.setContactsDeviceLinkOwnerActive(true);
 
     const disabling = driver.setContactsDeviceSyncEnabled(false);
     expect(harness.lanStop).toHaveBeenCalledTimes(1);
@@ -294,6 +523,7 @@ describe('contacts sync runtime ownership', () => {
       isPeerAllowed: () => false,
       sendRelayFrame: harness.relaySend,
     });
+    driver.setContactsDeviceLinkOwnerActive(true);
 
     const disabling = driver.setContactsDeviceSyncEnabled(false);
     harness.ownerId = 'owner-b';
@@ -322,6 +552,7 @@ describe('contacts sync runtime ownership', () => {
       isPeerAllowed: (deviceId) => deviceId === 'peer-device',
       sendRelayFrame: harness.relaySend,
     });
+    driver.setContactsDeviceLinkOwnerActive(true);
     const keyFrameCount = () =>
       harness.relaySend.mock.calls.filter(([, frame]) => frame.type === 'key').length;
 
@@ -351,6 +582,7 @@ describe('contacts sync runtime ownership', () => {
       isPeerAllowed: (deviceId) => deviceId === 'peer-device',
       sendRelayFrame: harness.relaySend,
     });
+    driver.setContactsDeviceLinkOwnerActive(true);
     await vi.waitFor(() =>
       expect(harness.relaySend.mock.calls.some(([, frame]) => frame.type === 'cipher-chunk')).toBe(
         true,

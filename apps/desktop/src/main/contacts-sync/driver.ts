@@ -31,8 +31,12 @@ import {
 } from './wire.js';
 import { ContactsSyncOutbound } from './sender.js';
 import {
+  readContactsSyncRequestToken,
   readPersistedContactsSyncStatus,
+  readPersistedContactsSyncRuntimeStatus,
+  writeContactsSyncRequestToken,
   writePersistedContactsSyncStatus,
+  writePersistedContactsSyncRuntimeStatus,
   type PersistedContactsSyncStatus,
 } from './statusStore.js';
 import {
@@ -47,6 +51,9 @@ const BROADCAST_DEBOUNCE_MS = 2_000;
 const BROADCAST_INTERVAL_MS = 30 * 60 * 1000;
 const KEY_ANNOUNCEMENT_RETRY_MS = 10_000;
 const SYNC_ATTEMPT_TIMEOUT_MS = 10_000;
+const CROSS_PROCESS_STATUS_POLL_MS = 2_000;
+const RUNTIME_STATUS_HEARTBEAT_MS = 5_000;
+const RUNTIME_STATUS_STALE_MS = 15_000;
 
 export interface ContactsSyncPeer {
   deviceId: string;
@@ -62,12 +69,15 @@ export interface ContactsDeviceSyncTransport {
 }
 
 let transport: ContactsDeviceSyncTransport | null = null;
+/** transport 每个实例都会注入；只有仲裁 acquire 后才允许持有 Device Link 能力。 */
+let deviceLinkOwnerActive = false;
 let lan: LanContactsSyncTransport | null = null;
 const decoder = new ContactsSyncWireDecoder();
 const peerKnownClocks = new Map<string, ContactsSyncClock[]>();
 let debounceTimer: NodeJS.Timeout | null = null;
 let intervalTimer: NodeJS.Timeout | null = null;
 let syncAttemptTimer: NodeJS.Timeout | null = null;
+let crossProcessStatusTimer: NodeJS.Timeout | null = null;
 let initialized = false;
 let unsubscribeLocalChanges: (() => void) | null = null;
 let runtimeGeneration = 0;
@@ -80,6 +90,9 @@ let liveStatus: ContactsDeviceSyncStatus = emptyContactsDeviceSyncStatus();
 /** undefined 强制首次 init/get 按当前 owner 装载，避免模块求值期提前碰 userData。 */
 let statusOwnerId: string | null | undefined;
 let observedContactsChangeToken: string | null | undefined;
+let observedSyncRequestToken: string | null | undefined;
+let usingSharedRuntimeStatus = false;
+let lastRuntimeStatusWriteAt = 0;
 const outbound = new ContactsSyncOutbound({
   getGeneration: () => runtimeGeneration,
   getOwnerId: () => getActiveAppSession().dataOwnerId,
@@ -96,21 +109,39 @@ const outbound = new ContactsSyncOutbound({
 
 export function initContactsDeviceSync(next: ContactsDeviceSyncTransport): void {
   transport = next;
+  deviceLinkOwnerActive = false;
   initialized = true;
   ensureCurrentOwnerStatus();
   unsubscribeLocalChanges?.();
   unsubscribeLocalChanges = onLocalContactsChanged(notifyLocalContactsChanged);
   if (intervalTimer) clearInterval(intervalTimer);
   intervalTimer = setInterval(() => {
-    if (isEnabled()) runSyncTask(() => broadcastContactsNow(true));
+    if (deviceLinkOwnerActive && isEnabled()) runSyncTask(() => broadcastContactsNow(true));
   }, BROADCAST_INTERVAL_MS);
   intervalTimer.unref?.();
-  refreshOnlineCount();
+  pollContactsDeviceSyncCrossProcessState();
+}
+
+/** Device Link 多实例仲裁的权威持有态；transport 是否存在不能用于判定 ownership。 */
+export function setContactsDeviceLinkOwnerActive(active: boolean): void {
+  ensureCurrentOwnerStatus();
+  if (deviceLinkOwnerActive === active) return;
+  deviceLinkOwnerActive = active;
+  if (!active) {
+    stopContactsDeviceSyncRuntime();
+    pollContactsDeviceSyncCrossProcessState();
+    return;
+  }
+
+  usingSharedRuntimeStatus = false;
+  liveStatus = buildInitialStatus();
+  refreshOnlineCount(false);
+  emitStatus();
   if (isEnabled()) {
     try {
       prepareLocalSync();
       startLan();
-      setPhase(next.listOnlineDesktopDevices().length > 0 ? 'syncing' : 'waiting');
+      setPhase(onlinePeers().length > 0 ? 'syncing' : 'waiting');
       runSyncTask(() => broadcastContactsNow(true));
     } catch (error) {
       recordError(error);
@@ -135,6 +166,7 @@ export function stopContactsDeviceSyncRuntime(): void {
 }
 
 export function disposeContactsDeviceSync(): void {
+  deviceLinkOwnerActive = false;
   stopContactsDeviceSyncRuntime();
   if (intervalTimer) clearInterval(intervalTimer);
   intervalTimer = null;
@@ -148,12 +180,20 @@ export function onContactsDeviceSyncStatusChanged(
   listener: (status: ContactsDeviceSyncStatus) => void,
 ): () => void {
   statusListeners.add(listener);
-  return () => statusListeners.delete(listener);
+  startCrossProcessStatusPolling();
+  return () => {
+    statusListeners.delete(listener);
+    if (statusListeners.size === 0 && crossProcessStatusTimer) {
+      clearInterval(crossProcessStatusTimer);
+      crossProcessStatusTimer = null;
+    }
+  };
 }
 
 export function getContactsDeviceSyncStatus(): ContactsDeviceSyncStatus {
   ensureCurrentOwnerStatus();
-  refreshOnlineCount(false);
+  pollContactsDeviceSyncCrossProcessState();
+  if (deviceLinkOwnerActive) refreshOnlineCount(false);
   return { ...liveStatus };
 }
 
@@ -245,7 +285,14 @@ export function pollContactsDeviceSyncSettingChange(): void {
 
 export async function broadcastContactsNow(requestReply = true): Promise<void> {
   ensureCurrentOwnerStatus();
-  if (!isEnabled() || !transport) return;
+  if (!isEnabled()) return;
+  if (!deviceLinkOwnerActive || !transport) {
+    // 被动实例没有 Device Link；用无内容 token 委托同 userData 的持有者执行。
+    writeContactsSyncRequestToken();
+    setPhase('syncing');
+    scheduleSyncAttemptTimeout();
+    return;
+  }
   prepareLocalSync();
   startLan();
   const peers = onlinePeers();
@@ -266,6 +313,7 @@ export async function broadcastContactsNow(requestReply = true): Promise<void> {
 }
 
 export function handleContactsDeviceLinkStatusChanged(online: boolean): void {
+  if (!deviceLinkOwnerActive) return;
   if (!online) {
     stopContactsDeviceSyncRuntime();
     refreshOnlineCount();
@@ -308,10 +356,66 @@ export function pollContactsDeviceSyncDataChange(): void {
   runSyncTask(() => broadcastContactsNow(false));
 }
 
+/**
+ * 同机多实例桥：持有者发布无内容运行态并消费“立即同步” token；被动实例读取
+ * 持有者状态供本进程窗口展示。由常驻状态订阅定期调用，也可由 Device Link tick 调用。
+ */
+export function pollContactsDeviceSyncCrossProcessState(): void {
+  ensureCurrentOwnerStatus();
+  if (deviceLinkOwnerActive && transport) {
+    const requestToken = readContactsSyncRequestToken();
+    if (observedSyncRequestToken === undefined) {
+      observedSyncRequestToken = requestToken;
+    } else if (requestToken !== observedSyncRequestToken) {
+      observedSyncRequestToken = requestToken;
+      if (requestToken && isEnabled() && initialized) {
+        runSyncTask(() => broadcastContactsNow(true));
+      }
+    }
+    publishRuntimeStatus(false);
+    return;
+  }
+
+  const shared = readPersistedContactsSyncRuntimeStatus();
+  const sharedAge = shared ? Date.now() - shared.updatedAt : Number.POSITIVE_INFINITY;
+  const fresh =
+    shared && sharedAge >= -RUNTIME_STATUS_STALE_MS && sharedAge <= RUNTIME_STATUS_STALE_MS;
+  if (fresh && shared.enabled === isEnabled() && shared.available === isCloudSession()) {
+    // 持有者已经接管状态机后，本地 delegated-request 超时不得再覆盖真实 syncing。
+    if (syncAttemptTimer) clearTimeout(syncAttemptTimer);
+    syncAttemptTimer = null;
+    const nextStatus: ContactsDeviceSyncStatus = {
+      available: shared.available,
+      enabled: shared.enabled,
+      phase: shared.phase,
+      onlineDeviceCount: shared.onlineDeviceCount,
+      errorCode: shared.errorCode,
+      lastSyncAt: shared.lastSyncAt,
+      lastSyncDeviceId: shared.lastSyncDeviceId,
+      lastSyncDeviceName: shared.lastSyncDeviceName,
+      lastRoute: shared.lastRoute,
+    };
+    if (!sameStatus(liveStatus, nextStatus)) {
+      liveStatus = nextStatus;
+      usingSharedRuntimeStatus = true;
+      emitStatus();
+    } else {
+      usingSharedRuntimeStatus = true;
+    }
+    return;
+  }
+  if (usingSharedRuntimeStatus || liveStatus.enabled !== isEnabled()) {
+    usingSharedRuntimeStatus = false;
+    liveStatus = buildInitialStatus();
+    emitStatus();
+  }
+}
+
 export function handleContactsPeerPresenceChanged(peer: {
   deviceId: string;
   online: boolean;
 }): void {
+  if (!deviceLinkOwnerActive) return;
   if (!peer.online) {
     announcedTo.delete(peer.deviceId);
     respondedToKeyAnnouncement.delete(peer.deviceId);
@@ -328,7 +432,12 @@ export function handleContactsPeerPresenceChanged(peer: {
 
 /** relay 入站。key 帧只允许走这条同账号认证通道；LAN 只收已经加密的 cipher 帧。 */
 export function handleIncomingContactsRelayFrame(srcDeviceId: string, raw: unknown): void {
-  if (!isEnabled() || !transport?.isPeerAllowed(srcDeviceId) || !isContactsSyncWireFrame(raw)) {
+  if (
+    !deviceLinkOwnerActive ||
+    !isEnabled() ||
+    !transport?.isPeerAllowed(srcDeviceId) ||
+    !isContactsSyncWireFrame(raw)
+  ) {
     return;
   }
   if (raw.type === 'key') {
@@ -349,7 +458,7 @@ function handleIncomingCipherFrame(
   frame: ContactsSyncCipherChunkFrame,
   route: 'lan' | 'relay',
 ): void {
-  if (!isEnabled() || !transport?.isPeerAllowed(srcDeviceId)) return;
+  if (!deviceLinkOwnerActive || !isEnabled() || !transport?.isPeerAllowed(srcDeviceId)) return;
   prepareAndRun(() => {
     const selfDeviceId = requireSelfDeviceId();
     const identity = contactsSyncKeyStore.getIdentity();
@@ -423,7 +532,7 @@ function readLocalState(): ContactsSyncState {
 }
 
 function startLan(): void {
-  if (!transport || lan || !isEnabled()) return;
+  if (!deviceLinkOwnerActive || !transport || lan || !isEnabled()) return;
   const selfDeviceId = transport.getSelfDeviceId();
   if (!selfDeviceId) return;
   const identity = contactsSyncKeyStore.getIdentity();
@@ -465,6 +574,7 @@ function runSyncTask(task: () => Promise<void>): void {
 }
 
 function onlinePeers(): ContactsSyncPeer[] {
+  if (!deviceLinkOwnerActive) return [];
   return (
     transport
       ?.listOnlineDesktopDevices()
@@ -571,6 +681,7 @@ function refreshOnlineCount(emit = true): void {
 }
 
 function emitStatus(): void {
+  publishRuntimeStatus(true);
   const snapshot = { ...liveStatus };
   for (const listener of statusListeners) {
     try {
@@ -581,6 +692,44 @@ function emitStatus(): void {
       });
     }
   }
+}
+
+function publishRuntimeStatus(force: boolean): void {
+  if (!deviceLinkOwnerActive || !transport || !isCloudSession()) return;
+  const now = Date.now();
+  if (!force && now - lastRuntimeStatusWriteAt < RUNTIME_STATUS_HEARTBEAT_MS) return;
+  try {
+    writePersistedContactsSyncRuntimeStatus({ ...liveStatus, updatedAt: now });
+    lastRuntimeStatusWriteAt = now;
+  } catch (error) {
+    log.warn('contacts sync runtime status persistence failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function startCrossProcessStatusPolling(): void {
+  if (crossProcessStatusTimer) return;
+  pollContactsDeviceSyncCrossProcessState();
+  crossProcessStatusTimer = setInterval(
+    pollContactsDeviceSyncCrossProcessState,
+    CROSS_PROCESS_STATUS_POLL_MS,
+  );
+  crossProcessStatusTimer.unref?.();
+}
+
+function sameStatus(a: ContactsDeviceSyncStatus, b: ContactsDeviceSyncStatus): boolean {
+  return (
+    a.available === b.available &&
+    a.enabled === b.enabled &&
+    a.phase === b.phase &&
+    a.onlineDeviceCount === b.onlineDeviceCount &&
+    a.errorCode === b.errorCode &&
+    a.lastSyncAt === b.lastSyncAt &&
+    a.lastSyncDeviceId === b.lastSyncDeviceId &&
+    a.lastSyncDeviceName === b.lastSyncDeviceName &&
+    a.lastRoute === b.lastRoute
+  );
 }
 
 function ensureCurrentOwnerStatus(): void {
@@ -600,6 +749,9 @@ function ensureCurrentOwnerStatus(): void {
   contactsSyncKeyStore.resetMemory();
   statusOwnerId = ownerId;
   observedContactsChangeToken = readContactsChangeToken();
+  observedSyncRequestToken = readContactsSyncRequestToken();
+  usingSharedRuntimeStatus = false;
+  lastRuntimeStatusWriteAt = 0;
   liveStatus = buildInitialStatus();
   emitStatus();
 }
@@ -611,9 +763,15 @@ function shortId(deviceId: string): string {
 export const __testing = {
   reset(): void {
     disposeContactsDeviceSync();
+    if (crossProcessStatusTimer) clearInterval(crossProcessStatusTimer);
+    crossProcessStatusTimer = null;
+    deviceLinkOwnerActive = false;
     locallyDisabledOwners.clear();
     statusOwnerId = getActiveAppSession().dataOwnerId;
     observedContactsChangeToken = readContactsChangeToken();
+    observedSyncRequestToken = readContactsSyncRequestToken();
+    usingSharedRuntimeStatus = false;
+    lastRuntimeStatusWriteAt = 0;
     liveStatus = buildInitialStatus();
     statusListeners.clear();
   },
