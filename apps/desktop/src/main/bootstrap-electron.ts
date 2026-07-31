@@ -432,6 +432,10 @@ import {
 } from './maker-host/grok-oauth-login.js';
 import { setXaiAuthInvalidatedHandler } from './maker-host/xai-auth-invalidation-host.js';
 import {
+  getChatgptBridgeAuth,
+  invalidateChatgptBridgeAuth,
+} from './maker-host/anthropic-responses-bridge-host.js';
+import {
   readSilentEncryptedRetrySettingsState,
   resetSilentEncryptedRetrySettings,
   writeSilentEncryptedRetryEnabled,
@@ -620,6 +624,7 @@ import {
   suspendAllGhosts,
   waitForGhostMutations,
 } from './cindy-brain/index.js';
+import { setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
 import { listActiveClaudeBackgroundActivitySessions } from './maker-host/claude-session-background-activity.js';
 import { registerRelaunchBusyActivityIpc } from './relaunchBusyActivityIpc.js';
 import { getGhostSetupChangeBus } from './cindy-brain/ghostSetupChangeBus.js';
@@ -1222,6 +1227,12 @@ registerLayoutIpc();
 // ── 意识仓库 IPC──────────────────────────────────────────────────────
 // renderer 首帧 sendSync 拉已装意识清单(意识面板与内置面板同帧注册,规则 7
 // 无跳变)、install/uninstall 写路径、changed 广播。见 main/cindy-brain/。
+// 图片通道的 ChatGPT 鉴权必须由 Main 静态装配；禁止在请求时 import maker-host
+// 生成延迟 chunk（Main bundle 反向 require 会重复执行启动副作用）。
+setCodexImageAuthBinding({
+  getAuth: getChatgptBridgeAuth,
+  onAuthFailure: invalidateChatgptBridgeAuth,
+});
 registerGhostIpc();
 registerPluginMarketIpc();
 

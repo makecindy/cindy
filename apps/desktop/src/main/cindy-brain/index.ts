@@ -207,6 +207,7 @@ import { getCindyProxyMediaService } from '../mcp-integrations/cindyProxyMedia.j
 import { ImageChannelRegistry, decodeImageResponse } from './imageChannelRegistry.js';
 import { createGeminiImageChannel } from './geminiImageClient.js';
 import { createCodexImageChannel } from './codexImageClient.js';
+import { getCodexImageAuthBinding } from './codexImageAuthBinding.js';
 import { createGatewayImageClient } from '../cindy-proxy-media/api/gatewayImageClient.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import * as ledger from '../cindy-media/ledger.js';
@@ -1980,19 +1981,13 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     });
     const stripOpenaiPrefix = (id: string) =>
       id.startsWith('openai/') ? id.slice('openai/'.length) : id;
+    const hasOpenaiPlatformKey = () =>
+      (getProviderSecretStore().get('openai-images')?.trim() ?? '') !== '';
     const codexImagesClient = createCodexImageChannel({
       hasOAuthLogin: hasCodexOAuthLoginReadOnly,
-      getAuth: async () => {
-        const { getChatgptBridgeAuth } = await import(
-          '../maker-host/anthropic-responses-bridge-host.js'
-        );
-        return getChatgptBridgeAuth();
-      },
+      getAuth: () => getCodexImageAuthBinding().getAuth(),
       onAuthFailure: async (failure) => {
-        const { invalidateChatgptBridgeAuth } = await import(
-          '../maker-host/anthropic-responses-bridge-host.js'
-        );
-        await invalidateChatgptBridgeAuth(failure);
+        await getCodexImageAuthBinding().onAuthFailure(failure);
       },
       fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
       beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
@@ -2000,11 +1995,9 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     registry.register('openai', {
       // 用户明确配置 Platform key 时优先走确定性的 public Images API；否则复用
       // 已连接的 ChatGPT/Codex 订阅 OAuth hosted tool，不要求再付一份 API 费。
-      ready: () =>
-        (getProviderSecretStore().get('openai-images')?.trim() ?? '') !== '' ||
-        codexImagesClient.ready(),
+      ready: () => hasOpenaiPlatformKey() || codexImagesClient.ready(),
       generateImage: (params) =>
-        (getProviderSecretStore().get('openai-images')?.trim() ?? '') !== ''
+        hasOpenaiPlatformKey()
           ? openaiImagesClient.generateImage({
               model: stripOpenaiPrefix(params.model),
               prompt: params.prompt,
@@ -2012,7 +2005,7 @@ function getImageChannelRegistry(): ImageChannelRegistry {
             })
           : codexImagesClient.generateImage(params),
       editImage: (params) =>
-        (getProviderSecretStore().get('openai-images')?.trim() ?? '') !== ''
+        hasOpenaiPlatformKey()
           ? openaiImagesClient.editImage({
               model: stripOpenaiPrefix(params.model),
               prompt: params.prompt,
