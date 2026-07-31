@@ -64,6 +64,7 @@ let remoteListResolver: ((args: unknown[]) => Message[] | Promise<Message[]>) | 
 /** 被控端经隧道返回的 around 窗口(local-db:messages:around-client-id):搜索跳转用。 */
 let remoteAround: Message[] = [];
 let remoteProjectionResult: Promise<unknown> | null = null;
+let remoteExpandedResult: Promise<unknown> | null = null;
 const invoke = vi.fn(async (_deviceId: string, channel: string, _args: unknown[]) => {
   if (channel === 'local-db:messages:list') return remoteListResolver?.(_args) ?? remoteList;
   if (channel === 'local-db:messages:around-client-id') return remoteAround;
@@ -73,6 +74,10 @@ const invoke = vi.fn(async (_deviceId: string, channel: string, _args: unknown[]
   if (channel === 'maker:input:get-projection') {
     if (remoteProjectionResult) return remoteProjectionResult;
     return { sessionId: _args[0], pendingQueue: [], steeringQueueClientIds: [], queuePaused: false, queueExpanded: false, queueInteractionLocks: [], queueEditLocks: [], queueAbortPending: false, error: null, recovery: null, errorRetryText: null };
+  }
+  if (channel === 'maker:input:set-expanded') {
+    if (remoteExpandedResult) return remoteExpandedResult;
+    return { sessionId: _args[0], pendingQueue: [], steeringQueueClientIds: [], queuePaused: false, queueExpanded: Boolean(_args[1]), queueInteractionLocks: [], queueEditLocks: [], queueAbortPending: false, continuationTurnClientId: null, error: null, recovery: null, errorRetryText: null };
   }
   return null;
 });
@@ -139,6 +144,7 @@ beforeEach(() => {
   remoteListResolver = null;
   remoteAround = [];
   remoteProjectionResult = null;
+  remoteExpandedResult = null;
   invoke.mockClear();
 });
 
@@ -219,6 +225,82 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     });
 
     expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBe('owner-b');
+  });
+
+  it('丢弃 origin 漂移前旧设备返回的直接操作 projection', async () => {
+    const s = sid();
+    const oldOperation = deferred<unknown>();
+    remoteExpandedResult = oldOperation.promise;
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s }] as never);
+    makerChatStore.initGlobalListeners();
+
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:input:projection',
+      payload: {
+        sessionId: s,
+        pendingQueue: [],
+        steeringQueueClientIds: [],
+        queuePaused: false,
+        queueExpanded: false,
+        queueInteractionLocks: [],
+        queueEditLocks: [],
+        queueAbortPending: false,
+        continuationTurnClientId: 'owner-a',
+        error: null,
+        recovery: null,
+        errorRetryText: null,
+      },
+    });
+
+    makerChatStore.setQueueExpanded(s, true);
+    await flush();
+    expect(invoke).toHaveBeenCalledWith(
+      DEVICE_ID,
+      'maker:input:set-expanded',
+      [s, true],
+    );
+
+    remoteProjectsStore.setDeviceSessions(DEVICE_B_ID, 'Mac B', [{ id: s }] as never);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', []);
+    remotePush?.({
+      deviceId: DEVICE_B_ID,
+      channel: 'maker:input:projection',
+      payload: {
+        sessionId: s,
+        pendingQueue: [],
+        steeringQueueClientIds: [],
+        queuePaused: false,
+        queueExpanded: false,
+        queueInteractionLocks: [],
+        queueEditLocks: [],
+        queueAbortPending: false,
+        continuationTurnClientId: 'owner-b',
+        error: null,
+        recovery: null,
+        errorRetryText: null,
+      },
+    });
+
+    oldOperation.resolve({
+      sessionId: s,
+      pendingQueue: [],
+      steeringQueueClientIds: [],
+      queuePaused: false,
+      queueExpanded: true,
+      queueInteractionLocks: [],
+      queueEditLocks: [],
+      queueAbortPending: false,
+      continuationTurnClientId: 'owner-a-stale',
+      error: null,
+      recovery: null,
+      errorRetryText: null,
+    });
+    await flush();
+
+    const snapshot = makerChatStore.getSnapshot(s);
+    expect(snapshot.continuationTurnClientId).toBe('owner-b');
+    expect(snapshot.queueExpanded).toBe(false);
   });
 
   it('同源权威 projection push 到达后丢弃已在途旧查询', async () => {

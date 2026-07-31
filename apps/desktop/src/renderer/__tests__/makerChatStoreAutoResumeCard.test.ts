@@ -386,8 +386,10 @@ describe('续跑边界投影能力与 vendor turn owner', () => {
     const staleQuery = deferred<unknown>();
     inputGetProjection.mockImplementationOnce(() => staleQuery.promise);
 
-    makerChatStore.ensureInitialMessages(SID);
+    // 先用普通 projection 建立 owner，再发起悬挂查询；这样测试不会依靠查询之后的
+    // push 顺带推进 epoch，必须由 Stop 自己同步作废该查询。
     inputProjectionCb!(projection({ continuationTurnClientId: 'resume-1' }));
+    makerChatStore.ensureInitialMessages(SID);
     expect(makerChatStore.getSnapshot(SID).continuationTurnClientId).toBe('resume-1');
 
     makerChatStore.stopSession(SID);

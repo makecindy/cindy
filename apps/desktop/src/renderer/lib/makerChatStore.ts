@@ -75,6 +75,7 @@ import {
   aroundMessagesByClientIdFor,
   dismissErrorMessageFor,
   isRemoteSession,
+  type RoutableMaker,
 } from '@/lib/makerTransport';
 import {
   remoteProjectsStore,
@@ -1707,8 +1708,9 @@ function requestInputProjection(sessionId: string): void {
   if (typeof window === 'undefined' || !window.electronAPI?.maker?.input?.getProjection) return;
   const origin = remoteProjectsStore.getSessionDeviceId(sessionId);
   const epoch = beginInputProjectionRequest(sessionId, origin);
-  makerApiFor(sessionId)
-    .input.getProjection(sessionId)
+  const api = makerApiFor(sessionId);
+  api.input
+    .getProjection(sessionId)
     .then((projection) => {
       if (!isCurrentInputProjectionRequest(sessionId, origin, epoch)) return;
       applyInputProjection(projection, { supersedeQueries: false });
@@ -5326,8 +5328,8 @@ const _historyLoadOrigin = new Map<string, string | undefined>();
  * continuationTurnClientId 从非空写回 null),让仍在运行的续跑行停止转圈。
  *
  * origin 变化时 epoch 单调递增,因此即使来源经历 A→undefined→A 的 ABA 也不会重新放行
- * 更早请求。请求回写同时检查捕获的 origin 与 epoch;推送事件和当前操作的直接响应仍走
- * applyInputProjection,它们不属于这条可跨来源的查询竞态。
+ * 更早请求。查询按 origin + epoch 丢弃旧响应；直接操作按发起时 origin 丢弃来源漂移后的
+ * 响应，并在有效落地时 supersede 早先查询。实时 push 另在接收点按 source device 校验。
  */
 const _inputProjectionOrigin = new Map<string, string | undefined>();
 const _inputProjectionEpoch = new Map<string, number>();
@@ -5367,15 +5369,64 @@ function noteInputProjectionOrigin(sessionId: string, origin: string | undefined
   return _inputProjectionEpoch.get(sessionId)!;
 }
 
+function isCurrentInputProjectionOrigin(
+  sessionId: string,
+  origin: string | undefined,
+): boolean {
+  return remoteProjectsStore.getSessionDeviceId(sessionId) === origin;
+}
+
 function isCurrentInputProjectionRequest(
   sessionId: string,
   origin: string | undefined,
   epoch: number,
 ): boolean {
   return (
-    remoteProjectsStore.getSessionDeviceId(sessionId) === origin &&
+    isCurrentInputProjectionOrigin(sessionId, origin) &&
     (_inputProjectionEpoch.get(sessionId) ?? 0) === epoch
   );
+}
+
+interface InputProjectionOperation {
+  api: RoutableMaker;
+  origin: string | undefined;
+}
+
+/**
+ * 捕获一次会返回 projection 的操作路由。`api` 与 origin 必须在同一时刻定格：
+ * origin 漂移后重新调用 makerApiFor 会把同一业务意图错发到另一台设备。
+ * 操作之间保留既有「响应到达顺序即权威顺序」语义；只丢来源已漂移的响应。
+ */
+function beginInputProjectionOperation(sessionId: string): InputProjectionOperation {
+  const origin = remoteProjectsStore.getSessionDeviceId(sessionId);
+  return {
+    api: makerApiFor(sessionId),
+    origin,
+  };
+}
+
+function applyInputProjectionOperationResponse(
+  sessionId: string,
+  operation: InputProjectionOperation,
+  projection: AgentInputProjection,
+): boolean {
+  if (!isCurrentInputProjectionOrigin(sessionId, operation.origin)) {
+    return false;
+  }
+  // 直接操作响应会 supersede 早先的查询；apply 的默认路径负责推进查询 epoch。
+  applyInputProjection(projection);
+  return true;
+}
+
+function runInputProjectionOperation(
+  sessionId: string,
+  invoke: (input: RoutableMaker['input']) => Promise<AgentInputProjection>,
+): Promise<{ applied: boolean; projection: AgentInputProjection }> {
+  const operation = beginInputProjectionOperation(sessionId);
+  return invoke(operation.api.input).then((projection) => ({
+    applied: applyInputProjectionOperationResponse(sessionId, operation, projection),
+    projection,
+  }));
 }
 
 /**
@@ -7073,42 +7124,36 @@ function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: b
  */
 function setQueueExpanded(sessionId: string, expanded: boolean): void {
   if (!sessionId) return;
-  makerApiFor(sessionId)
-    .input.setExpanded(sessionId, expanded)
-    .then(applyInputProjection)
-    .catch((err) => log.warn('setQueueExpanded failed:', err));
+  runInputProjectionOperation(sessionId, (input) =>
+    input.setExpanded(sessionId, expanded),
+  ).catch((err) => log.warn('setQueueExpanded failed:', err));
 }
 
 function resumeQueue(sessionId: string): void {
   if (!sessionId) return;
-  makerApiFor(sessionId)
-    .input.resume(sessionId)
-    .then(applyInputProjection)
+  runInputProjectionOperation(sessionId, (input) => input.resume(sessionId))
     .catch((err) => log.warn('resumeQueue failed:', err));
 }
 
 function setQueueInteractionLock(sessionId: string, lockId: string, locked: boolean): void {
   if (!sessionId || !lockId) return;
-  makerApiFor(sessionId)
-    .input.setInteractionLock(sessionId, lockId, locked)
-    .then(applyInputProjection)
-    .catch((err) => log.warn('setQueueInteractionLock failed:', err));
+  runInputProjectionOperation(sessionId, (input) =>
+    input.setInteractionLock(sessionId, lockId, locked),
+  ).catch((err) => log.warn('setQueueInteractionLock failed:', err));
 }
 
 function setQueueEditLock(sessionId: string, clientId: string, locked: boolean): void {
   if (!sessionId || !clientId) return;
-  makerApiFor(sessionId)
-    .input.setEditLock(sessionId, clientId, locked)
-    .then(applyInputProjection)
-    .catch((err) => log.warn('setQueueEditLock failed:', err));
+  runInputProjectionOperation(sessionId, (input) =>
+    input.setEditLock(sessionId, clientId, locked),
+  ).catch((err) => log.warn('setQueueEditLock failed:', err));
 }
 
 function moveQueueItem(sessionId: string, clientId: string, targetIndex: number): void {
   if (!sessionId || !clientId) return;
-  makerApiFor(sessionId)
-    .input.move(sessionId, clientId, targetIndex)
-    .then(applyInputProjection)
-    .catch((err) => log.warn('moveQueueItem failed:', err));
+  runInputProjectionOperation(sessionId, (input) =>
+    input.move(sessionId, clientId, targetIndex),
+  ).catch((err) => log.warn('moveQueueItem failed:', err));
 }
 
 /**
@@ -7120,9 +7165,7 @@ function moveQueueItem(sessionId: string, clientId: string, targetIndex: number)
  */
 function removeFromQueue(sessionId: string, clientId: string): void {
   if (!sessionId || !clientId) return;
-  makerApiFor(sessionId)
-    .input.remove(sessionId, clientId)
-    .then(applyInputProjection)
+  runInputProjectionOperation(sessionId, (input) => input.remove(sessionId, clientId))
     .catch((err) => log.warn('removeFromQueue failed:', err));
 }
 
@@ -7138,15 +7181,14 @@ function updateQueueItem(sessionId: string, clientId: string, newText: string): 
   const trimmed = newText.trim();
   if (!trimmed) return;
   const queued = getOrCreateState(sessionId).pendingQueue.find((q) => q.clientId === clientId);
-  makerApiFor(sessionId)
-    .input.updateText(
+  runInputProjectionOperation(sessionId, (input) =>
+    input.updateText(
       sessionId,
       clientId,
       newText,
       extractSessionRefs(newText, queued?.sessionRefs),
-    )
-    .then(applyInputProjection)
-    .catch((err) => log.warn('updateQueueItem failed:', err));
+    ),
+  ).catch((err) => log.warn('updateQueueItem failed:', err));
 }
 
 /**
@@ -7468,8 +7510,9 @@ async function sendMessageCore(
     );
   }
 
-  return makerApiFor(sessionId)
-    .input.enqueue(sessionId, queued, { sendAtMs: Date.now() })
+  const operation = beginInputProjectionOperation(sessionId);
+  return operation.api.input
+    .enqueue(sessionId, queued, { sendAtMs: Date.now() })
     .then((projection) => {
       if (opts?.authRetryPersistOnProjectionError) {
         setState(sessionId, (s) => ({
@@ -7480,8 +7523,10 @@ async function sendMessageCore(
           },
         }));
       }
-      applyInputProjection(projection);
-      markSessionHasUserMessage(sessionId);
+      const applied = applyInputProjectionOperationResponse(sessionId, operation, projection);
+      if (applied) markSessionHasUserMessage(sessionId);
+      // RPC 已在发起时的设备上成功受理；origin 期间漂移只意味着旧 projection
+      // 不能写进当前镜像，不应向 composer 谎报发送失败并诱导用户重复发送。
       return true;
     })
     .catch((err) => {
@@ -7528,12 +7573,11 @@ function compactSession(
   // /compact 是控制 turn(上下文压缩), 与 sendUiTrigger 同口径: 显式普通执行,
   // 不进计划模式、不消耗用户的一次性勾选(false 语义见 SendOptions.planMode)。
   createOpts.planMode = false;
-  return makerApiFor(sessionId)
-    .input.compact(sessionId, createOpts, { userName: currentUserName })
-    .then((projection) => {
-      applyInputProjection(projection);
-      return projection.error === null;
-    })
+  return runInputProjectionOperation(sessionId, (input) =>
+    input.compact(sessionId, createOpts, { userName: currentUserName }),
+  )
+    // RPC 已执行成功时保留既有返回语义；origin 漂移只丢控制端镜像回写。
+    .then(({ projection }) => projection.error === null)
     .catch((err) => {
       const message = decodeRemoteErrorMessage(err instanceof Error ? err.message : String(err));
       setState(sessionId, (s) => ({
@@ -7661,8 +7705,11 @@ function steerMessageCore(
       // 由队列行接管显示,这里必须返回 true 让 composer 清空草稿,否则用户面前
       // 同时存在暂停行 + 草稿,再次发送会双份消费(review #939 第五轮)。
       try {
-        const latest = await makerApiFor(sessionId).input.getProjection(sessionId);
-        applyInputProjection(latest);
+        const operation = beginInputProjectionOperation(sessionId);
+        const latest = await operation.api.input.getProjection(sessionId);
+        if (!applyInputProjectionOperationResponse(sessionId, operation, latest)) {
+          return false;
+        }
         if (latest.pendingQueue.some((q) => q.clientId === queued.clientId)) {
           // 物化进队列 = 这条输入已被主端接管、日后会派发,与受理同等 —— 起名也要
           // 跟上,否则纯附件/fork 之后的第一句话恰好在这条不确定路径上不改名
@@ -7832,12 +7879,15 @@ function stopSession(
 ): void {
   if (!sessionId) return;
   flushPendingTextDelta(sessionId);
-  // Stop 是本地权威的用户终态：先作废此前发出的投影查询，避免旧 owner
-  // 在 stop 的乐观清理之后迟到并把自愈行重新点亮。
+  const operation = beginInputProjectionOperation(sessionId);
+  // Stop 的乐观终态必须立即作废此前同源查询；不能等 stop 响应回来再 supersede，
+  // 否则旧查询会在 abort 往返期间把刚清掉的 owner 重新写回。
   supersedeInputProjectionRequests(sessionId);
-  makerApiFor(sessionId)
-    .input.stop(sessionId, opts)
-    .then(applyInputProjection)
+  operation.api.input
+    .stop(sessionId, opts)
+    .then((projection) => {
+      applyInputProjectionOperationResponse(sessionId, operation, projection);
+    })
     .catch((err) => log.warn('maker.input.stop failed:', err));
   setState(sessionId, (s) => {
     const id = s.streamingClientId;
@@ -7940,9 +7990,7 @@ function popQueueTail(sessionId: string): boolean {
  */
 function clearError(sessionId: string): void {
   if (!sessionId) return;
-  makerApiFor(sessionId)
-    .input.clearError(sessionId)
-    .then(applyInputProjection)
+  runInputProjectionOperation(sessionId, (input) => input.clearError(sessionId))
     .catch((err) => log.warn('clearError failed:', err));
   setState(sessionId, (s) => {
     if (
@@ -7969,11 +8017,8 @@ function retryLastError(sessionId: string): Promise<void> {
   // 续跑语义在 main:coordinator 判定失败 turn 已有 assistant 产出时,用共享英文
   // 常量 CONTINUE_AFTER_ERROR_PROMPT 替代重发原文(shared/interruptedTurn.ts),
   // renderer 不传文案、不做判定。
-  return makerApiFor(sessionId)
-    .input.retryLastError(sessionId)
-    .then((projection) => {
-      applyInputProjection(projection);
-    });
+  return runInputProjectionOperation(sessionId, (input) => input.retryLastError(sessionId))
+    .then(() => undefined);
 }
 
 /**
@@ -8069,10 +8114,10 @@ async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Pro
     | { kind: 'projection'; projection: AgentInputProjection }
     | { kind: 'error'; err: unknown }
     | { kind: 'timeout' };
+  const clearOperation = beginInputProjectionOperation(sessionId);
   try {
     guardResult = await Promise.race([
-      makerApiFor(sessionId)
-        .input.clearSession(sessionId, clearedAt)
+      clearOperation.api.input.clearSession(sessionId, clearedAt)
         .then(
           (projection) => ({ kind: 'projection' as const, projection }),
           (err) => ({ kind: 'error' as const, err }),
@@ -8090,7 +8135,7 @@ async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Pro
     if (guardTimeoutId) clearTimeout(guardTimeoutId);
   }
   if (guardResult.kind === 'projection') {
-    applyInputProjection(guardResult.projection);
+    applyInputProjectionOperationResponse(sessionId, clearOperation, guardResult.projection);
   } else if (guardResult.kind === 'error') {
     const err = guardResult.err;
     log.warn('maker.input.clearSession failed:', err);
@@ -9111,10 +9156,11 @@ function sendUiTrigger(sessionId: string, prompt: string): Promise<void> {
         // 远端 SSH 会话:重启后 lazy-create 缺它会把远端 workingDir 当本地路径。
         ...(session.remoteHostId ? { remoteHostId: session.remoteHostId } : {}),
       };
-      return makerApiFor(sessionId)
-        .input.enqueue(sessionId, queued, { sendAtMs: Date.now() })
+      const operation = beginInputProjectionOperation(sessionId);
+      return operation.api.input
+        .enqueue(sessionId, queued, { sendAtMs: Date.now() })
         .then((projection) => {
-          applyInputProjection(projection);
+          applyInputProjectionOperationResponse(sessionId, operation, projection);
         });
     })
     .catch((err) => {
