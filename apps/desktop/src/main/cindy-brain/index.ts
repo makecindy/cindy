@@ -23,6 +23,7 @@ import {
   type GhostManifest,
   type GhostSetupAllowedAction,
   type GhostSetupAssessment,
+  type GhostVideoRefMode,
   type GhostVideoResultParams,
   type InstalledGhost,
 } from '../../shared/ghost.js';
@@ -1811,6 +1812,8 @@ async function runGhostVideo(
     alias: string;
     prompt: string;
     imageDataUris?: string[];
+    /** 参考图用法(仅图生视频有);不传 = 执行器缺省的首尾帧。 */
+    refMode?: GhostVideoRefMode;
   } & CindyVideoParams,
 ): Promise<{ buffer: Buffer; mimeType: string; videoParams: GhostVideoResultParams }> {
   const registry = getCindyProxyMediaService().backend.videoRegistry;
@@ -1847,6 +1850,7 @@ function getGhostVideoCapabilities(model: string): CindyVideoCapabilities | null
       resolutions: caps.supportedResolutions,
       ratios: caps.supportedRatios,
       fps: caps.supportedFps,
+      maxImagesByRefMode: caps.maxImagesByRefMode,
     };
   } catch {
     return null;
@@ -2010,11 +2014,13 @@ export function getGhostCindySlot(): GhostCindySlot {
           humanizeImageChannelError(err);
         }
       },
-      editVideo: async ({ prompt, model, imagePaths, ...videoParams }) => {
+      editVideo: async ({ prompt, model, imagePaths, refMode, ...videoParams }) => {
         try {
           assertMediaModelStillEnabled('video', model);
+          // 顺序即语义(首/尾帧,或提示词里 [Image 1]… 的序号):Promise.all
+          // 保序,不要换成 for-await 之外的乱序聚合。
           const imageDataUris = await Promise.all(imagePaths.map(readImageFileAsDataUri));
-          return await runGhostVideo({ alias: model, prompt, imageDataUris, ...videoParams });
+          return await runGhostVideo({ alias: model, prompt, imageDataUris, refMode, ...videoParams });
         } catch (err) {
           humanizeImageChannelError(err);
         }

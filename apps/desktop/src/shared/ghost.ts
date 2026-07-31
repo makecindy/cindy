@@ -4817,6 +4817,38 @@ export const GHOST_VIDEO_RESOLUTIONS = ['480p', '720p', '1080p'] as const;
 export type GhostVideoResolution = (typeof GHOST_VIDEO_RESOLUTIONS)[number];
 
 /**
+ * edit_video 的参考图用法(2026-07 加法)。同样是「N 张图」,两种模式出片
+ * 完全不同,所以由调用方显式声明,不靠张数隐式推断:
+ *   - `'first_and_last_frame'`(**缺省**):1 张=首帧动画,2 张=首尾帧过渡。
+ *     这是本字段出现之前的唯一行为,不传即走这条,与老协议逐字节同形——
+ *     存量插件不改一行代码、不重新授权,行为不变。
+ *   - `'reference_image'`:多张参考图锁主体/元素/风格,由模型另行构图。
+ *     提示词里须用 `[Image 1]`、`[Image 2]` 指代第几张(上游要求;主机遵守
+ *     提示词 passthrough,不代写),张数上限随型号,由主机按选型二次校验。
+ *
+ * 值域是**所有已注册 provider 的并集**,单个型号支不支持某种用法由主机在
+ * 解析出选型后二次校验(不支持即明拒,不降级成另一种用法——降级会出一条
+ * 用户没要的片子还照样计费)。
+ */
+export const GHOST_VIDEO_REF_MODES = ['first_and_last_frame', 'reference_image'] as const;
+export type GhostVideoRefMode = (typeof GHOST_VIDEO_REF_MODES)[number];
+
+/** 不传 refMode 时的落点。改这个值 = 改存量插件的行为,不要动。 */
+export const GHOST_VIDEO_REF_MODE_DEFAULT: GhostVideoRefMode = 'first_and_last_frame';
+
+/**
+ * 各 refMode 的参考图张数上界(协议层粗筛,与型号无关):
+ *   - 首尾帧:首 + 尾,语义上界就是 2,任何型号都不会更多。
+ *   - 参考图:9,当前所有 provider 的最大值。
+ * 型号实际上限更低(如 happyhorse 首尾帧模式只有首帧,上限 1)由主机在
+ * 解析出选型后二次校验。
+ */
+export const GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE: Readonly<Record<GhostVideoRefMode, number>> = {
+  first_and_last_frame: 2,
+  reference_image: 9,
+};
+
+/**
  * 视频时长/帧率的形状上限(秒 / fps)。这两项各型号差异大(如 seedance
  * 支持 4/6/8/10 秒,happyhorse 只有 5 秒),协议层不枚举值域,只做"正整数
  * 且不离谱"的粗筛,真正的可用集由主机按解析出的型号校验并在拒绝话术里
@@ -4978,10 +5010,19 @@ export type GhostPipeCindyRequest =
       kind: 'edit_video';
       prompt: string;
       /**
-       * 参考图指纹(sha256,1–2 张:1 张=首帧动画,2 张=首尾帧过渡)。
-       * 归属规则同 edit_image:只能引用本意识名下的媒体。
+       * 参考图指纹(sha256)。张数上限随 `refMode` 变化:
+       *   - `first_and_last_frame`(缺省):1–2 张(1 张=首帧动画,2 张=首尾帧过渡)。
+       *   - `reference_image`:1–N 张,N 随型号(主机按选型二次校验后明拒)。
+       * 归属规则同 edit_image:只能引用本意识名下的媒体。**顺序有意义**——
+       * 首尾帧模式下是首/尾,参考图模式下是提示词里 `[Image 1]`…的序号。
        */
       hashes: string[];
+      /**
+       * 参考图用法(见 GHOST_VIDEO_REF_MODES)。不传 = `first_and_last_frame`,
+       * 与本字段出现之前逐字节同形。注意别和下面的 `mode`(异步受理)搞混:
+       * 那个管的是同步还是后台跑,两者正交,可同时传。
+       */
+      refMode?: GhostVideoRefMode;
       tier?: GhostModelTier;
       model?: string;
       /** 画面参数(同 gen_video 分支;参考图不改变这几项的语义)。 */
