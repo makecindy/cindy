@@ -4645,6 +4645,8 @@
       "unavailableHint": "暂时无法确认当前项目的协同设置，请稍后重试",
       "unsupportedRemoteHint": "被控设备的版本过旧，暂不支持协同",
       "remoteContinueNotice": "本条消息仍会以单对话继续发送。",
+      "handoffRecoveredMessage": "上次开启协同时被中断，未发出的消息已恢复到输入框",
+      "handoffRecoveredGoal": "上次开启协同时被中断，目标未启动，内容已恢复到输入框",
       "loadingHint": "正在确认当前项目的协同设置，请稍后重试",
       "stopHint": "停止协同",
       "stopAria": "停止协同",

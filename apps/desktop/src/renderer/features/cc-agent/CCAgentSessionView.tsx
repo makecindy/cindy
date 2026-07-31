@@ -144,7 +144,19 @@ import { extractIpcError } from '@/utils/ipcError';
 import { listActiveRunsForSession } from '@/features/learn/useLearnRun';
 import { subscribeLearnEvents } from '@/features/learn/learnTransport';
 import { getUserPrompt } from '@/lib/userPromptStore';
-import { consumePending, consumePendingGoal } from '@/state/pendingFirstMessage';
+import {
+  consumePending,
+  consumePendingGoal,
+  forgetRecoverableHandoff,
+  rememberRecoverableHandoff,
+  takeRecoverableHandoff,
+  type RecoverableHandoffKind,
+} from '@/state/pendingFirstMessage';
+import {
+  saveDraft as saveComposerDraft,
+  getDraftPresence as getComposerDraftPresence,
+  plainTextToTiptapDoc,
+} from '@/lib/composerDraftStore';
 import { setLastWorkingDir } from '@/state/lastWorkingDir';
 import { consumeComposerMentionDrop } from '@/lib/composerDrop';
 import {
@@ -2610,6 +2622,34 @@ export function CCAgentSessionView({
       .catch((err) => log.warn('vendor fallback patch failed:', err));
   }, [isCodex, providers, refreshServerSession, sessionAgentKind, sessionId, sessionModel]);
 
+  // 远程协同交接被 app 关闭打断时的兜底:把上次没能发出去的正文回填到输入框。
+  // 只回填、不自动补发(理由见 pendingFirstMessage 的「可恢复副本」注释)。
+  // 内存里还有 pending 时不该走这里 —— 那是正常交接,由下面的消费逻辑负责。
+  const handoffRestoredRef = useRef<string | null>(null);
+  const restoreRecoverableHandoff = useCallback(
+    (kind: RecoverableHandoffKind) => {
+      if (!sessionId) return;
+      const restoreKey = `${sessionId}:${kind}`;
+      if (handoffRestoredRef.current === restoreKey) return;
+      // 输入框已经有内容时不动它:用户自己敲的东西优先级永远高于恢复。
+      // 此时**不取走**副本,留给下一次输入框为空时再回填 —— 宁可晚一点恢复,
+      // 也不能为了恢复把用户正在写的东西覆盖掉。
+      if (getComposerDraftPresence(sessionId)) return;
+      const text = takeRecoverableHandoff(sessionId, kind);
+      if (text === null) return;
+      handoffRestoredRef.current = restoreKey;
+      // 非 silent:挂载中的 ChatInput 要靠这次 notify 把正文 setContent 进编辑器
+      // (与 rewind / fork 预填同一条既有通道)。
+      saveComposerDraft(sessionId, { text: plainTextToTiptapDoc(text), attachments: [] });
+      toast.info(
+        kind === 'goal'
+          ? t('newChat.collaboration.handoffRecoveredGoal')
+          : t('newChat.collaboration.handoffRecoveredMessage'),
+      );
+    },
+    [sessionId, t],
+  );
+
   // delayed-create:从 NewMakerDraftRoute 经 navigate 进来的首条消息,在 session
   // 完全 hydrate(historyLoaded + workingDir 就位)后自动 sendMessage。
   // 一次性消费 + ref guard,防 StrictMode 双 mount / 重渲染时重复发送。
@@ -2620,7 +2660,11 @@ export function CCAgentSessionView({
     if (!workingDir) return;
     if (pendingConsumedRef.current) return;
     const pending = consumePending(sessionId);
-    if (!pending) return;
+    if (!pending) {
+      // 内存里没有 pending:可能本来就没有,也可能上次协同等待期间 app 被关掉了。
+      restoreRecoverableHandoff('message');
+      return;
+    }
     pendingConsumedRef.current = true;
     void (async () => {
       // device-link 草稿开了协同:先把协同开起来,再发首轮 —— 否则 Lead 的第一个 turn
@@ -2628,6 +2672,9 @@ export function CCAgentSessionView({
       // 建好、用户输入还只在内存里」的窗口跟着一次可能 30s 的隧道往返一起变长(见
       // remoteCollabHandoff 文件头)。开不起来时如实提示并照单会话继续。
       if (pending.remoteCollab) {
+        // 进等待前先落一份可恢复副本:consumePending 已经把内存那份删了,而下面这段
+        // await 慢设备上可能几十秒,期间 app 被关掉正文就没有第二份了(greptile P1)。
+        rememberRecoverableHandoff(sessionId, 'message', pending.text);
         // 交接期间锁住 composer(见 remoteCollabPreparing 的声明处):这段 await 可能
         // 数十秒,不锁住的话用户补发的消息会插到首条之前。finally 保证任何终态都解锁。
         setRemoteCollabPreparing(true);
@@ -2654,6 +2701,8 @@ export function CCAgentSessionView({
         }
       }
       if (await maybeDispatchDesktopSlashCommand(pending.text, pending.files)) {
+        // 正文已交给命令派发,副本使命完成(下同)。
+        forgetRecoverableHandoff(sessionId);
         return;
       }
       sendMessage(
@@ -2684,8 +2733,16 @@ export function CCAgentSessionView({
             }
           : undefined,
       );
+      forgetRecoverableHandoff(sessionId);
     })();
-  }, [historyLoaded, maybeDispatchDesktopSlashCommand, sendMessage, session, sessionId]);
+  }, [
+    historyLoaded,
+    maybeDispatchDesktopSlashCommand,
+    restoreRecoverableHandoff,
+    sendMessage,
+    session,
+    sessionId,
+  ]);
 
   // 远程草稿「新建目标」交接:draft route 只建会话 + 登记 pendingGoal,goal 首轮
   // 在这里起(机制说明见 pendingFirstMessage.ts)。视图引擎的 subscribeHeavy 是
@@ -2700,7 +2757,11 @@ export function CCAgentSessionView({
     if (!sessionId || !historyLoaded) return;
     if (pendingGoalConsumedRef.current) return;
     const pendingGoal = consumePendingGoal(sessionId);
-    if (!pendingGoal) return;
+    if (!pendingGoal) {
+      // 与首条消息同款兜底:上次目标没起成(app 被关 / setGoal 失败)时把目标正文捞回来。
+      restoreRecoverableHandoff('goal');
+      return;
+    }
     pendingGoalConsumedRef.current = true;
     void (async () => {
       try {
@@ -2710,6 +2771,8 @@ export function CCAgentSessionView({
         }
         // 与首条消息同款:目标首轮同样要排在协同之后(见上方 pending 消费的注释)。
         if (pendingGoal.remoteCollab) {
+          // 同样先落可恢复副本再进等待 —— 目标正文也是用户敲进去的,丢了同样要重打。
+          rememberRecoverableHandoff(sessionId, 'goal', pendingGoal.objective);
           setRemoteCollabPreparing(true);
           try {
             const ok = await consumePendingRemoteCollab(pendingGoal.remoteCollab, {
@@ -2738,13 +2801,16 @@ export function CCAgentSessionView({
           objective: pendingGoal.objective,
           limits: pendingGoal.limits,
         });
+        // 起成了才丢副本。setGoal 失败时刻意保留:目标正文是用户敲的,
+        // 留着下次进本会话回填,比只弹一句"失败"更有用。
+        forgetRecoverableHandoff(sessionId);
         toast.success(t('goal.toast.set'));
       } catch (err) {
         log.warn('pending goal setGoal failed:', err);
         toast.error(t('goal.toast.failed'));
       }
     })();
-  }, [historyLoaded, sessionId, t]);
+  }, [historyLoaded, restoreRecoverableHandoff, sessionId, t]);
 
   // learn 状态卡恢复:卡片是 ephemeral(不落库),app 重启后从 learn:list-runs
   // 把仍活跃(进行中 / 待审查)且与本会话相关的 run 重新插卡。注意 makerChatStore

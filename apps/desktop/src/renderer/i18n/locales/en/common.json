@@ -4646,6 +4646,8 @@
       "unavailableHint": "Unable to verify this project's collaboration setting. Try again shortly.",
       "unsupportedRemoteHint": "The controlled device is too old to support collaboration.",
       "remoteContinueNotice": " This message is still being sent as a single conversation.",
+      "handoffRecoveredMessage": "Collaboration startup was interrupted last time. Your unsent message has been restored to the composer.",
+      "handoffRecoveredGoal": "Collaboration startup was interrupted last time. The goal was not started; its text has been restored to the composer.",
       "loadingHint": "Still checking this project's collaboration setting. Try again shortly.",
       "stopHint": "Stop collaboration",
       "stopAria": "Stop collaboration",

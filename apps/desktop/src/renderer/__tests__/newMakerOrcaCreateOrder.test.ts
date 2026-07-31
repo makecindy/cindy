@@ -210,4 +210,71 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     expect(source).toContain('void collabPolicy.refresh().then((policy) => {');
     expect(source).toContain('if (policy.enabled && !policy.unavailable) {');
   });
+
+  // 远程协同等待期间用户输入必须有第二份副本(greptile P1)。
+  // consumePending 已经把内存那份删了,而随后的 await 慢设备上可到 30s 超时 + 6×3s 回查;
+  // 这段时间 app 被关掉,正文就只剩 localStorage 那一份。顺序是全部要害:
+  // remember 必须在 await **之前**,forget 必须在交出去**之后**。
+  describe('远程协同等待期间的可恢复副本', () => {
+    const messageBranch = () => {
+      const start = sessionViewSource.indexOf('const pending = consumePending(sessionId);');
+      const end = sessionViewSource.indexOf('const pendingGoalConsumedRef', start);
+      expect(start).toBeGreaterThan(-1);
+      expect(end).toBeGreaterThan(start);
+      return sessionViewSource.slice(start, end);
+    };
+    const goalBranch = () => {
+      const start = sessionViewSource.indexOf('const pendingGoal = consumePendingGoal(sessionId);');
+      expect(start).toBeGreaterThan(-1);
+      return sessionViewSource.slice(start, start + 4000);
+    };
+
+    it('首条消息:落副本 → 等协同 → 发送 → 清副本', () => {
+      const branch = messageBranch();
+      const remember = branch.indexOf("rememberRecoverableHandoff(sessionId, 'message', pending.text)");
+      const awaitCollab = branch.indexOf('await consumePendingRemoteCollab(pending.remoteCollab');
+      const send = branch.indexOf('sendMessage(');
+      const forget = branch.lastIndexOf('forgetRecoverableHandoff(sessionId)');
+
+      expect(remember).toBeGreaterThan(-1);
+      // 副本必须先于等待落下 —— 反过来就等于没有副本。
+      expect(remember).toBeLessThan(awaitCollab);
+      expect(awaitCollab).toBeLessThan(send);
+      expect(send).toBeLessThan(forget);
+    });
+
+    it('新建目标:同款顺序,且 setGoal 成功后才清副本', () => {
+      const branch = goalBranch();
+      const remember = branch.indexOf(
+        "rememberRecoverableHandoff(sessionId, 'goal', pendingGoal.objective)",
+      );
+      const awaitCollab = branch.indexOf('await consumePendingRemoteCollab(pendingGoal.remoteCollab');
+      const setGoal = branch.indexOf('await goalApiFor(sessionId).setGoal(');
+      const forget = branch.indexOf('forgetRecoverableHandoff(sessionId)');
+
+      expect(remember).toBeGreaterThan(-1);
+      expect(remember).toBeLessThan(awaitCollab);
+      expect(awaitCollab).toBeLessThan(setGoal);
+      // setGoal 失败时刻意保留副本 → forget 只能排在 setGoal 之后。挪进上面那个
+      // 协同 finally(或 setGoal 之前的任何位置)都会让这条断言失败。
+      expect(setGoal).toBeLessThan(forget);
+    });
+
+    it('内存里没有 pending 时才走恢复,且只回填输入框、不自动补发', () => {
+      expect(sessionViewSource).toContain("restoreRecoverableHandoff('message')");
+      expect(sessionViewSource).toContain("restoreRecoverableHandoff('goal')");
+      // 恢复走 composer 草稿的既有外部写入通道,而不是偷偷再 sendMessage 一次。
+      const restore = sessionViewSource.slice(
+        sessionViewSource.indexOf('const restoreRecoverableHandoff = useCallback('),
+      );
+      const body = restore.slice(0, restore.indexOf('[sessionId, t]'));
+      expect(body).toContain('saveComposerDraft(sessionId,');
+      expect(body).not.toContain('sendMessage(');
+      // 输入框已有内容时先让路,且必须在 take 之前判断 —— 否则副本已被取走,
+      // 让路就变成了直接丢弃。
+      expect(body.indexOf('getComposerDraftPresence(sessionId)')).toBeLessThan(
+        body.indexOf('takeRecoverableHandoff(sessionId, kind)'),
+      );
+    });
+  });
 });
