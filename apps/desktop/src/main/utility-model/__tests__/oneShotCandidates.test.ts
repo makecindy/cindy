@@ -429,6 +429,71 @@ describe('utility one-shot candidates', () => {
     });
   });
 
+  it.each([
+    {
+      wireProtocol: 'openai-chat' as const,
+      endpoint: 'https://custom.example/v1/chat/completions',
+      reasoningField: 'reasoning_effort',
+      successBody: JSON.stringify({ choices: [{ message: { content: 'chat result' } }] }),
+    },
+    {
+      wireProtocol: 'openai-responses' as const,
+      endpoint: 'https://custom.example/v1/responses',
+      reasoningField: 'reasoning',
+      successBody: 'data: {"type":"response.output_text.delta","delta":"response result"}\ndata: [DONE]\n',
+    },
+  ])(
+    'retries a custom $wireProtocol route without reasoning after an invalid-parameter response',
+    async ({ wireProtocol, endpoint, reasoningField, successBody }) => {
+      activeCatalog.mockReturnValue({
+        providers: [{
+          id: 'custom-reasoning-unknown',
+          name: 'Custom Reasoning Unknown',
+          source: 'user',
+          agents: ['codex'],
+          auth: { method: 'apiKey' },
+          routing: {
+            codex: {
+              upstream: 'https://custom.example/v1',
+              wireProtocol,
+              authStrategy: 'api-key-header',
+            },
+          },
+          models: {
+            codex: [{ id: 'custom-model', name: 'Custom Model', contextWindow: 100_000 }],
+          },
+        }],
+      } as never);
+      readCustomKey.mockReturnValue('custom-secret');
+      fetchMock
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 400,
+          body: { cancel: vi.fn(async () => undefined) },
+        } as never)
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => successBody,
+        } as never);
+
+      const result = await requestUtilityText(makerMock(false), 'generate', {
+        providerId: 'custom-reasoning-unknown',
+        agentKind: 'codex',
+        model: 'custom-model',
+        reasoningEffort: 'low',
+      });
+
+      expect(result).toMatchObject({ ok: true, providerId: 'custom-reasoning-unknown' });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenNthCalledWith(1, endpoint, expect.anything());
+      expect(fetchMock).toHaveBeenNthCalledWith(2, endpoint, expect.anything());
+      const firstBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
+      const retryBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)) as Record<string, unknown>;
+      expect(firstBody).toHaveProperty(reasoningField);
+      expect(retryBody).not.toHaveProperty(reasoningField);
+    },
+  );
+
   it('uses an explicitly configured custom-provider request path', async () => {
     activeCatalog.mockReturnValue({
       providers: [{

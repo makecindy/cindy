@@ -898,6 +898,8 @@ async function requestProviderHttpText(input: {
   reasoningEffort?: 'low' | 'medium' | 'high';
   /** Some coding-specialized models reject their wire's reasoning field. */
   supportsReasoning?: boolean;
+  /** Unknown custom routes may reject an otherwise OpenAI-compatible reasoning field. */
+  retryWithoutReasoningOnInvalidRequest?: boolean;
   /** Some private Responses-compatible endpoints reject max_output_tokens. */
   supportsMaxOutputTokens?: boolean;
 }): Promise<string> {
@@ -905,7 +907,12 @@ async function requestProviderHttpText(input: {
   const timeoutMs = input.timeoutMs ?? 90_000;
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const body = input.wire === 'responses'
+    const supportsRequestedReasoning = Boolean(
+      input.wire !== 'anthropic-messages'
+      && input.reasoningEffort
+      && input.supportsReasoning !== false,
+    );
+    const buildBody = (includeReasoning: boolean) => input.wire === 'responses'
       ? {
         model: input.model,
         input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: input.prompt }] }],
@@ -915,7 +922,7 @@ async function requestProviderHttpText(input: {
         ...(input.maxTokens !== undefined && input.supportsMaxOutputTokens !== false
           ? { max_output_tokens: input.maxTokens }
           : {}),
-        ...(input.reasoningEffort && input.supportsReasoning !== false
+        ...(includeReasoning && supportsRequestedReasoning
           ? { reasoning: { effort: input.reasoningEffort } }
           : {}),
         store: false,
@@ -930,20 +937,30 @@ async function requestProviderHttpText(input: {
         : {
           model: input.model,
           ...(input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
-          ...(input.reasoningEffort && input.supportsReasoning !== false
+          ...(includeReasoning && supportsRequestedReasoning
             ? { reasoning_effort: input.reasoningEffort }
             : {}),
           messages: [{ role: 'user', content: input.prompt }],
         };
-    const response = await undiciFetch(input.endpoint, {
+    const send = (includeReasoning: boolean) => undiciFetch(input.endpoint, {
       method: 'POST',
       signal: controller.signal,
       headers: {
         ...(input.headers ?? {}),
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(buildBody(includeReasoning)),
     });
+    let response = await send(true);
+    if (
+      !response.ok
+      && (response.status === 400 || response.status === 422)
+      && supportsRequestedReasoning
+      && input.retryWithoutReasoningOnInvalidRequest
+    ) {
+      await response.body?.cancel().catch(() => undefined);
+      response = await send(false);
+    }
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
       throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status });
@@ -1039,6 +1056,7 @@ async function requestCustomProviderText(input: {
     maxTokens: input.maxTokens,
     timeoutMs: input.timeoutMs,
     reasoningEffort: input.reasoningEffort,
+    retryWithoutReasoningOnInvalidRequest: true,
   });
 }
 
