@@ -4,9 +4,18 @@
  * 实例按 owner 构造（store 与 cloneRoot 已由调用方绑定到操作开始时的
  * dataOwner），与 PluginMarketService 的 ledger 同一套 owner 捕获语义。
  *
+ * Git 缓存布局（版本目录 + 当前指针）：
+ * - 每次刷新克隆/快进到 sources/<slug>/versions/<new>/ 并完成完整发现验证,
+ *   验证通过后用可回滚原子写把 sources/<slug>/current 指针文件改成新版本名,
+ *   再删旧版本目录。读取方永远经 current 指针解析到完整版本目录。
+ * - 没有任何"固定路径被 rename"的瞬态:要么指针指向旧版(刷新中途失败,
+ *   旧版完好),要么指向新版(全成功)。原子性由指针文件原子写保证,不需要
+ *   备份交换/哨兵/自愈——并发读取与失败恢复从结构上就是安全的。
+ * - 旧布局(单个 sources/<slug>/ 直接是缓存)在首次读取时自动迁移进版本目录。
+ *
  * 不变量：
  * - Git 克隆目录是客户端管理的缓存，路径只由 (name, source) 派生，用户不应
- *   手动编辑；刷新失败时整目录重克隆 + 原子替换，不留半拉子状态。
+ *   手动编辑。
  * - 市场名来自 marketplace.json，全局唯一；同名不同源拒绝添加。
  * - 移除来源只删配置与克隆缓存，已安装插件的包目录与 ledger 记录保留。
  */
@@ -22,6 +31,7 @@ import type {
 } from '../../../shared/pluginMarket.js';
 import { createLogger } from '../../logger.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
+import { atomicWriteFileSync } from '../../utils/atomicWriteFile.js';
 import { discoverMarketplace, type DiscoveredMarketplace, type DiscoverError } from './discover.js';
 import {
   MarketGitError,
@@ -32,9 +42,6 @@ import {
 import { checkGitPreflight as checkGitPreflightImpl } from './preflight.js';
 import { parseMarketSource } from './parse.js';
 import { MarketSourceStore } from './store.js';
-
-/** 交换哨兵过期阈值:超过即视为进程崩溃残留,允许自愈拉回备份。 */
-const SWAP_SENTINEL_TTL_MS = 10 * 60 * 1000;
 
 export interface MarketSourceManagerDeps {
   store: MarketSourceStore;
@@ -77,49 +84,145 @@ export class MarketSourceManager {
     return this.deps.now?.() ?? new Date().toISOString();
   }
 
-  private cloneDir(config: Pick<MarketSourceConfig, 'name' | 'source'>): string {
+  /** 来源的缓存槽根目录（内含 versions/ 与 current 指针）。 */
+  private cacheSlot(config: Pick<MarketSourceConfig, 'name' | 'source'>): string {
     return path.join(this.deps.cloneRoot, marketCloneSlug(config.name, config.source));
   }
 
-  /** 来源的市场根目录：Git 源指向克隆缓存，本地源指向用户目录。 */
-  private marketRoot(config: MarketSourceConfig): string {
-    return config.source.type === 'local' ? config.source.path : this.cloneDir(config);
+  private versionsDir(slot: string): string {
+    return path.join(slot, 'versions');
+  }
+
+  private currentPointer(slot: string): string {
+    return path.join(slot, 'current');
   }
 
   /**
-   * Git 缓存自愈：cloneDir 缺失但固定备份名存在时(上次交换落位失败且
-   * 即时恢复也失败),把备份拉回固定路径再继续,避免有效缓存脱离 cloneDir
-   * 导致来源持续不可用。本地源不走克隆缓存,无需处理。
+   * 解析 Git 源当前生效的缓存版本目录。读取 current 指针得到版本名,
+   * 校验其在 versions/ 内(防指针被改成穿越路径);旧布局(槽目录直接是
+   * 缓存,含 marketplace.json)首次读取时迁移进 versions/ 并写指针。
+   * 无法解析(指针缺失/失效且非旧布局)返回 null。
    */
-  private async recoverCloneCache(
+  private async resolveCurrentVersion(
     config: Pick<MarketSourceConfig, 'name' | 'source'>,
-  ): Promise<void> {
-    if (config.source.type !== 'git') return;
-    const cloneDir = this.cloneDir(config);
-    const backup = `${cloneDir}.backup`;
-    if (fs.existsSync(cloneDir) || !fs.existsSync(backup)) return;
-    // 进行中的刷新交换(cloneDir 已改名 .backup、staging 未落位)与"遗留故障"
-    // 瞬态同形。交换段会写 .swapping 哨兵;见新哨兵说明有刷新正持有备份,
-    // 不得抢占拉回(否则会顶掉 staging 落位目标并使回滚失效)。仅当无哨兵、
-    // 或哨兵过期(进程崩溃残留)时才判定为遗留故障并自愈。
-    const swapping = `${cloneDir}.swapping`;
-    try {
-      const stat = fs.statSync(swapping);
-      if (Date.now() - stat.mtimeMs < SWAP_SENTINEL_TTL_MS) return;
-      this.log.warn('removing stale marketplace swap sentinel', { name: config.name });
-    } catch {
-      // 无哨兵:确属遗留故障,继续自愈。
+  ): Promise<string | null> {
+    const slot = this.cacheSlot(config);
+    const pointer = this.currentPointer(slot);
+    // 已有指针:按指针解析。
+    if (fs.existsSync(pointer)) {
+      try {
+        const version = (await fs.promises.readFile(pointer, 'utf8')).trim();
+        // 版本名必须是 versions/ 下的直接子目录名,拒绝绝对路径与穿越。
+        if (version && !version.includes('/') && !version.includes('\\') && version !== '..' && version !== '.') {
+          const dir = path.join(this.versionsDir(slot), version);
+          if (fs.existsSync(dir)) return dir;
+        }
+        this.log.warn('marketplace cache pointer invalid', { name: config.name, version });
+        return null;
+      } catch (error) {
+        this.log.error('failed to read marketplace cache pointer', {
+          name: config.name,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      }
     }
+    // 旧布局迁移:槽目录直接是缓存(含 .agents 或 marketplace.json)。
+    if (this.looksLikeLegacyCache(slot)) {
+      const version = `legacy-${crypto.randomUUID()}`;
+      const dir = path.join(this.versionsDir(slot), version);
+      try {
+        // 目标版本目录必须先存在,逐项搬入才不会因父目录缺失报 ENOENT。
+        await fs.promises.mkdir(dir, { recursive: true });
+        // 把槽目录里除 versions/current 外的内容整体搬进版本目录。
+        const keep = new Set(['versions', 'current']);
+        for (const entry of await fs.promises.readdir(slot)) {
+          if (keep.has(entry)) continue;
+          await fs.promises.rename(path.join(slot, entry), path.join(dir, entry));
+        }
+        atomicWriteFileSync(pointer, version);
+        this.log.warn('migrated legacy marketplace cache layout', { name: config.name });
+        return dir;
+      } catch (error) {
+        this.log.error('failed to migrate legacy marketplace cache', {
+          name: config.name,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      }
+    }
+    return null;
+  }
+
+  /** 旧布局判定:槽目录本身含市场内容(.agents 目录)。 */
+  private looksLikeLegacyCache(slot: string): boolean {
+    if (!fs.existsSync(slot)) return false;
     try {
-      await fs.promises.rename(backup, cloneDir);
-      await fs.promises.rm(swapping, { force: true }).catch(() => undefined);
-      this.log.warn('recovered marketplace cache from backup', { name: config.name });
-    } catch (error) {
-      this.log.error('failed to recover marketplace cache from backup', {
-        name: config.name,
+      return fs.statSync(slot).isDirectory() && fs.existsSync(path.join(slot, '.agents'));
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 刷新后让新版本生效:原子写 current 指针指向新版本目录,成功后删旧版本。
+   * 指针切换是唯一的"提交点";切换前任何失败都保留旧版本,切换后删旧版
+   * 失败仅影响清理,不影响下次读取(指针已指向新版)。
+   */
+  private async activateVersion(slot: string, newVersion: string): Promise<void> {
+    const pointer = this.currentPointer(slot);
+    const previous = fs.existsSync(pointer)
+      ? (await fs.promises.readFile(pointer, 'utf8')).trim()
+      : null;
+    atomicWriteFileSync(pointer, newVersion);
+    if (previous && previous !== newVersion) {
+      await this.removeVersionIfUnreferenced(slot, previous);
+    }
+  }
+
+  /**
+   * 删除 versions/ 内的旧版本目录。读取方在解析期间会在版本目录里放一个
+   * `.reading-<uuid>` 标记(读完即删);有标记说明该版本正被并发读取,
+   * 本次跳过删除,留待其读完或下次刷新再清理,避免指针切换后误删在读者。
+   */
+  private async removeVersionIfUnreferenced(slot: string, version: string): Promise<void> {
+    if (version.includes('/') || version.includes('\\') || version === '..' || version === '.') {
+      return;
+    }
+    const dir = path.join(this.versionsDir(slot), version);
+    try {
+      const readers = (await fs.promises.readdir(dir)).filter((entry) =>
+        entry.startsWith('.reading-'),
+      );
+      if (readers.length > 0) {
+        this.log.warn('skip removing in-use marketplace cache version', { version });
+        return;
+      }
+    } catch {
+      return; // 目录已不存在。
+    }
+    await fs.promises.rm(dir, { recursive: true, force: true }).catch((error: unknown) => {
+      this.log.warn('failed to remove previous marketplace cache version', {
         error: error instanceof Error ? error.message : String(error),
       });
+    });
+  }
+
+  /**
+   * 在版本目录解析期间持有一个 `.reading-<uuid>` 标记,防止刷新方在指针切换后
+   * 误删正在被发现的版本(TOCTOU)。返回释放函数,读完务必调用。
+   */
+  private async holdVersionForRead(dir: string): Promise<() => Promise<void>> {
+    const marker = path.join(dir, `.reading-${crypto.randomUUID()}`);
+    try {
+      await fs.promises.writeFile(marker, '', { flag: 'wx' });
+    } catch {
+      // 标记失败不阻断读取:退回无保护读取(与旧行为一致),刷新方删除是尽力而为。
+      return async () => {};
     }
+    return async () => {
+      await fs.promises.rm(marker, { force: true }).catch(() => undefined);
+    };
   }
 
   async addSource(input: {
@@ -150,7 +253,7 @@ export class MarketSourceManager {
       return this.commitDiscoveredSource(source, source.path, null);
     }
 
-    // Git 源：前置检测 → 克隆到临时目录 → 发现 → 更名进正式缓存目录。
+    // Git 源：前置检测 → 克隆到独立目录 → 发现验证 → 激活为新版本。
     const preflight = await checkGitPreflightImpl(this.deps.gitExecutor);
     if (!preflight.ok) {
       throwIpcError('MARKET_GIT_UNAVAILABLE', preflight.version ?? 'git not found');
@@ -181,8 +284,8 @@ export class MarketSourceManager {
   }
 
   /**
-   * 发现 + 校验 + 落盘。Git 源的 discoveredRoot 先落在临时目录，持久化成功后
-   * 才更名为正式克隆目录（按 slug 派生）；名称冲突等失败由调用方清理临时目录。
+   * 发现 + 校验 + 落盘。Git 源的 discoveredRoot 先落在独立目录,持久化成功后
+   * 整体搬入版本目录并激活(写 current 指针);名称冲突等失败由调用方清理。
    */
   private async commitDiscoveredSource(
     source: MarketSource,
@@ -205,9 +308,13 @@ export class MarketSourceManager {
       source,
     };
     if (source.type === 'git') {
-      const finalDir = this.cloneDir(config);
-      await fs.promises.rm(finalDir, { recursive: true, force: true }).catch(() => undefined);
-      await fs.promises.rename(discoveredRoot, finalDir);
+      const slot = this.cacheSlot(config);
+      const version = crypto.randomUUID();
+      const dir = path.join(this.versionsDir(slot), version);
+      await fs.promises.rm(slot, { recursive: true, force: true }).catch(() => undefined);
+      await fs.promises.mkdir(this.versionsDir(slot), { recursive: true });
+      await fs.promises.rename(discoveredRoot, dir);
+      atomicWriteFileSync(this.currentPointer(slot), version);
     }
     this.deps.store.add(config);
     return this.toSummary(config, discovered.marketplace);
@@ -220,7 +327,7 @@ export class MarketSourceManager {
     }
     if (removed.source.type === 'git') {
       await fs.promises
-        .rm(this.cloneDir(removed), { recursive: true, force: true })
+        .rm(this.cacheSlot(removed), { recursive: true, force: true })
         .catch(() => undefined);
     }
     return { ok: true };
@@ -245,35 +352,38 @@ export class MarketSourceManager {
       return this.toSummary({ ...config, lastSyncedAt: syncedAt }, discovered.marketplace);
     }
 
-    await this.recoverCloneCache(config);
     const preflight = await checkGitPreflightImpl(this.deps.gitExecutor);
     if (!preflight.ok) {
       throwIpcError('MARKET_GIT_UNAVAILABLE', preflight.version ?? 'git not found');
     }
-    const cloneDir = this.cloneDir(config);
+    const slot = this.cacheSlot(config);
     const gitSource = config.source;
-    let revision: string;
-    type DiscoverOk = Extract<
+    const current = await this.resolveCurrentVersion(config);
+    // 新版本目录:快进或重克隆都在这里完成,验证通过才激活,不碰当前版本。
+    const newVersion = crypto.randomUUID();
+    const newDir = path.join(this.versionsDir(slot), newVersion);
+    await fs.promises.mkdir(this.versionsDir(slot), { recursive: true });
+    // 两条路径(快进成功 / 重克隆)都会赋值或抛出,此处仅满足 TS 的确定性赋值分析。
+    let revision = '';
+    let discovered: Extract<
       Awaited<ReturnType<typeof discoverMarketplace>>,
       { ok: true }
     >;
-    let discovered: DiscoverOk | null = null;
-    // 刷新统一在 staging 完成（快进或重克隆）并先做完整发现验证，
-    // 成功后才原子替换旧缓存；任何一步失败都删除 staging、保留上一次可用内容。
-    const staging = `${cloneDir}.restage-${crypto.randomUUID()}`;
     try {
-      try {
-        // 快进路径：复制现有缓存到 staging，在 staging 内快进，不触碰旧缓存。
-        await fs.promises.cp(cloneDir, staging, { recursive: true });
-        revision = await fetchMarketplace(
-          cloneDir,
-          gitSource.ref,
-          this.deps.gitExecutor,
-          staging,
-        );
-      } catch {
-        // 快进失败（历史改写 / 缓存损坏）：丢弃 staging 副本，整目录重克隆。
-        await fs.promises.rm(staging, { recursive: true, force: true }).catch(() => undefined);
+      let fastForwarded = false;
+      if (current) {
+        // 快进路径:复制当前版本到新目录,在新目录内快进。
+        try {
+          await fs.promises.cp(current, newDir, { recursive: true });
+          revision = await fetchMarketplace(current, gitSource.ref, this.deps.gitExecutor, newDir);
+          fastForwarded = true;
+        } catch {
+          fastForwarded = false;
+          await fs.promises.rm(newDir, { recursive: true, force: true }).catch(() => undefined);
+        }
+      }
+      if (!fastForwarded) {
+        // 无当前版本或快进失败(历史改写/缓存损坏):整目录重克隆到新目录。
         try {
           revision = await cloneMarketplace(
             {
@@ -281,7 +391,7 @@ export class MarketSourceManager {
               ...(gitSource.ref ? { ref: gitSource.ref } : {}),
               sparsePaths: gitSource.sparsePaths,
             },
-            staging,
+            newDir,
             this.deps.gitExecutor,
           );
         } catch (error) {
@@ -289,63 +399,17 @@ export class MarketSourceManager {
           throw error;
         }
       }
-      const staged = await discoverMarketplace(staging);
+      // 在新版本目录完成完整发现验证,通过后才激活;失败删新目录,当前版本不动。
+      const staged = await discoverMarketplace(newDir);
       if (!staged.ok) {
         throwIpcError(staged.code, staged.detail ?? staged.code);
       }
       discovered = staged;
     } catch (error) {
-      await fs.promises.rm(staging, { recursive: true, force: true }).catch(() => undefined);
+      await fs.promises.rm(newDir, { recursive: true, force: true }).catch(() => undefined);
       throw error;
     }
-    // 交换旧缓存与已验证 staging：先把旧目录原子改名为固定备份名，再把 staging
-    // 落位；任一步失败都从备份恢复 cloneDir。备份用固定名(不带随机后缀),
-    // 以便连续失败(落位失败且恢复也失败)后,后续市场操作仍能自愈找回缓存。
-    const backup = `${cloneDir}.backup`;
-    const swapping = `${cloneDir}.swapping`;
-    let backupActive = false;
-    try {
-      // 交换开始的瞬态(cloneDir 已改名、staging 未落位)与遗留故障同形,
-      // 写哨兵让并发的 recoverCloneCache 识别为"进行中"而不抢占拉回。
-      await fs.promises.writeFile(swapping, String(Date.now()), { flag: 'wx' }).catch(() => undefined);
-      await fs.promises.rm(backup, { recursive: true, force: true }).catch(() => undefined);
-      await fs.promises.rename(cloneDir, backup);
-      backupActive = true;
-      await fs.promises.rename(staging, cloneDir);
-    } catch (error) {
-      let restoreError: unknown = null;
-      if (backupActive) {
-        // staging 落位失败：恢复旧缓存。恢复 rename 也可能失败(文件占用/权限/
-        // 路径冲突),此时固定备份名仍在,交给入口自愈在下一次操作时拉回。
-        restoreError = await fs.promises.rename(backup, cloneDir).then(
-          () => null,
-          (err: unknown) => err,
-        );
-      }
-      await fs.promises.rm(staging, { recursive: true, force: true }).catch(() => undefined);
-      if (!backupActive) {
-        // 旧目录改名失败但可能已部分移动；尽力清理备份残留。
-        await fs.promises.rm(backup, { recursive: true, force: true }).catch(() => undefined);
-      }
-      if (restoreError) {
-        // 诊断(含 backup 绝对路径与原始 FS 错误)只进 main 日志,不回 Renderer;
-        // IPC 抛不含内部路径的通用错误,交由入口自愈在后续操作中恢复。
-        this.log.error('marketplace cache swap and restore both failed', {
-          backup,
-          swapError: error instanceof Error ? error.message : String(error),
-          restoreError:
-            restoreError instanceof Error ? restoreError.message : String(restoreError),
-        });
-        throwIpcError('INTERNAL', 'Plugin marketplace cache swap failed');
-      }
-      await fs.promises.rm(swapping, { force: true }).catch(() => undefined);
-      throw error;
-    }
-    await fs.promises.rm(backup, { recursive: true, force: true }).catch(() => undefined);
-    await fs.promises.rm(swapping, { force: true }).catch(() => undefined);
-    if (!discovered) {
-      throwIpcError('INTERNAL', 'marketplace discovery did not produce a result');
-    }
+    await this.activateVersion(slot, newVersion);
     const syncedAt = this.now();
     this.deps.store.update(name, { lastSyncedAt: syncedAt, lastRevision: revision });
     return this.toSummary(
@@ -364,21 +428,27 @@ export class MarketSourceManager {
     if (!config) {
       throwIpcError('NOT_FOUND', 'The marketplace source is not added');
     }
-    await this.recoverCloneCache(config!);
-    const root = this.marketRoot(config!);
-    if (!fs.existsSync(root)) {
+    const root = await this.marketRoot(config!);
+    if (!root || !fs.existsSync(root)) {
       return {
         config: config!,
         result: { ok: false, code: 'MARKET_SOURCE_INVALID', detail: 'market root missing' },
       };
     }
-    const discovered = await discoverMarketplace(root);
-    return {
-      config: config!,
-      result: discovered.ok
-        ? { ok: true, marketplace: discovered.marketplace }
-        : { ok: false, code: discovered.code, ...(discovered.detail ? { detail: discovered.detail } : {}) },
-    };
+    // Git 源:发现期间持有读取标记,防刷新方切换指针后误删在读的旧版本。
+    const release =
+      config!.source.type === 'git' ? await this.holdVersionForRead(root) : async () => {};
+    try {
+      const discovered = await discoverMarketplace(root);
+      return {
+        config: config!,
+        result: discovered.ok
+          ? { ok: true, marketplace: discovered.marketplace }
+          : { ok: false, code: discovered.code, ...(discovered.detail ? { detail: discovered.detail } : {}) },
+      };
+    } finally {
+      await release();
+    }
   }
 
   /** 管理视图用：全部来源 + 实时发现状态。单个源失败不影响其它源。 */
@@ -401,24 +471,35 @@ export class MarketSourceManager {
     const configs = this.deps.store.list();
     const results: DiscoveredSource[] = [];
     for (const config of configs) {
-      await this.recoverCloneCache(config);
-      const root = this.marketRoot(config);
-      if (!fs.existsSync(root)) {
+      const root = await this.marketRoot(config);
+      if (!root || !fs.existsSync(root)) {
         results.push({
           config,
           result: { ok: false, code: 'MARKET_SOURCE_INVALID', detail: 'market root missing' },
         });
         continue;
       }
-      const discovered = await discoverMarketplace(root);
-      results.push({
-        config,
-        result: discovered.ok
-          ? { ok: true, marketplace: discovered.marketplace }
-          : { ok: false, code: discovered.code, ...(discovered.detail ? { detail: discovered.detail } : {}) },
-      });
+      const release =
+        config.source.type === 'git' ? await this.holdVersionForRead(root) : async () => {};
+      try {
+        const discovered = await discoverMarketplace(root);
+        results.push({
+          config,
+          result: discovered.ok
+            ? { ok: true, marketplace: discovered.marketplace }
+            : { ok: false, code: discovered.code, ...(discovered.detail ? { detail: discovered.detail } : {}) },
+        });
+      } finally {
+        await release();
+      }
     }
     return results;
+  }
+
+  /** 来源的市场根目录：Git 源指向当前缓存版本目录，本地源指向用户目录。 */
+  private async marketRoot(config: MarketSourceConfig): Promise<string | null> {
+    if (config.source.type === 'local') return config.source.path;
+    return this.resolveCurrentVersion(config);
   }
 
   private toSummary(

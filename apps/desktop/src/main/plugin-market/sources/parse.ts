@@ -47,6 +47,9 @@ function hasEmbeddedCredentials(input: string): boolean {
     try {
       const parsed = new URL(input);
       if (parsed.username.length > 0 || parsed.password.length > 0) return true;
+      // 查询参数同样可携带签名/令牌(?access_token=SECRET),市场仓库 URL
+      // 不需要 query,一律拒绝,引导走 credential helper / SSH,而非白名单剥离。
+      if (parsed.search.length > 0) return true;
     } catch {
       return false;
     }

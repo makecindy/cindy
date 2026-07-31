@@ -161,7 +161,7 @@ describe('MarketSourceManager git sources', () => {
     const added = await manager.addSource({ source: 'openai/plugins' });
     expect(added).toMatchObject({ name: 'hub', pluginCount: 1, lastRevision: 'abc123' });
 
-    const cloneDir = path.join(
+    const slot = path.join(
       root,
       'sources',
       marketCloneSlug('hub', {
@@ -170,7 +170,8 @@ describe('MarketSourceManager git sources', () => {
         sparsePaths: [],
       }),
     );
-    expect(fs.existsSync(path.join(cloneDir, '.agents', 'plugins', 'marketplace.json'))).toBe(true);
+    const pointer = fs.readFileSync(path.join(slot, 'current'), 'utf8').trim();
+    expect(fs.existsSync(path.join(slot, 'versions', pointer, '.agents', 'plugins', 'marketplace.json'))).toBe(true);
     // 临时 incoming 目录不残留
     expect(
       fs.readdirSync(path.join(root, 'sources')).filter((name) => name.startsWith('.incoming')),
@@ -311,56 +312,114 @@ describe('MarketSourceManager git sources', () => {
     expect(listed[0]?.pluginCount).toBe(1);
   });
 
-  it('does not recover while a swap is in progress (fresh sentinel)', async () => {
+  it('migrates a legacy single-dir cache into the versioned layout on read', async () => {
     const root = makeRoot();
-    const { executor } = fakeGit('hub', [{ rel: 'p', id: 'alpha' }]);
-    const manager = makeManager(root, executor);
-    await manager.addSource({ source: 'openai/plugins' });
+    const slug = marketCloneSlug('hub', {
+      type: 'git',
+      url: 'https://github.com/openai/plugins.git',
+      sparsePaths: [],
+    });
+    // 旧布局:槽目录直接是缓存(含 .agents)。
+    const slot = path.join(root, 'sources', slug);
+    writeMarketplace(slot, 'hub', [{ rel: 'p', id: 'alpha' }]);
+    const store = new MarketSourceStore(path.join(root, 'sources.v1.json'));
+    store.add({
+      name: 'hub',
+      addedAt: '2026-07-30T00:00:00.000Z',
+      lastSyncedAt: '2026-07-30T01:00:00.000Z',
+      lastRevision: 'abc123',
+      source: { type: 'git', url: 'https://github.com/openai/plugins.git', sparsePaths: [] },
+    });
+    const manager = new MarketSourceManager({
+      store,
+      cloneRoot: path.join(root, 'sources'),
+      homeDir: root,
+    });
 
-    const cloneDir = path.join(
-      root,
-      'sources',
-      marketCloneSlug('hub', {
-        type: 'git',
-        url: 'https://github.com/openai/plugins.git',
-        sparsePaths: [],
-      }),
-    );
-    // 模拟交换进行中:cloneDir 已改名 .backup,且刷新写了新哨兵。
-    fs.renameSync(cloneDir, `${cloneDir}.backup`);
-    fs.writeFileSync(`${cloneDir}.swapping`, String(Date.now()));
-
-    // 发现不得抢占拉回(否则顶掉刷新 staging 落位目标并使回滚失效)。
-    const listed = await manager.listSources();
-    expect(fs.existsSync(cloneDir)).toBe(false);
-    expect(fs.existsSync(`${cloneDir}.backup`)).toBe(true);
-    expect(listed[0]?.status).toBe('error');
-  });
-
-  it('recovers the cache from a leftover fixed backup before discovery', async () => {
-    const root = makeRoot();
-    const { executor } = fakeGit('hub', [{ rel: 'p', id: 'alpha' }]);
-    const manager = makeManager(root, executor);
-    await manager.addSource({ source: 'openai/plugins' });
-
-    const cloneDir = path.join(
-      root,
-      'sources',
-      marketCloneSlug('hub', {
-        type: 'git',
-        url: 'https://github.com/openai/plugins.git',
-        sparsePaths: [],
-      }),
-    );
-    // 模拟上次交换连续失败:cloneDir 缺失,有效缓存滞留在固定备份名。
-    fs.renameSync(cloneDir, `${cloneDir}.backup`);
-    expect(fs.existsSync(cloneDir)).toBe(false);
-
-    // discoverAll 入口自愈:拉回固定路径后再发现,来源恢复可用。
     const listed = await manager.listSources();
     expect(listed[0]?.status).toBe('ok');
     expect(listed[0]?.pluginCount).toBe(1);
-    expect(fs.existsSync(cloneDir)).toBe(true);
-    expect(fs.existsSync(`${cloneDir}.backup`)).toBe(false);
+    const pointer = fs.readFileSync(path.join(slot, 'current'), 'utf8').trim();
+    expect(fs.existsSync(path.join(slot, 'versions', pointer, '.agents', 'plugins', 'marketplace.json'))).toBe(true);
+  });
+
+  it('keeps serving the current version while a refresh validates a new one', async () => {
+    const root = makeRoot();
+    let failFetch = false;
+    const executor: GitExecutor = async (args) => {
+      if (args[0] === '--version') return { stdout: 'git version 2.43.0\n', stderr: '' };
+      if (args[0] === 'clone') {
+        writeMarketplace(String(args[args.length - 1]), 'hub', [{ rel: 'p', id: 'alpha' }]);
+        return { stdout: '', stderr: '' };
+      }
+      if (args[0] === 'pull' || args[0] === 'fetch') {
+        if (failFetch) throw Object.assign(new Error('rejected'), { stderr: 'non-fast-forward' });
+        return { stdout: '', stderr: '' };
+      }
+      if (args[0] === 'rev-parse') return { stdout: 'def456\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    };
+    const manager = makeManager(root, executor);
+    await manager.addSource({ source: 'openai/plugins' });
+
+    const slot = path.join(
+      root,
+      'sources',
+      marketCloneSlug('hub', {
+        type: 'git',
+        url: 'https://github.com/openai/plugins.git',
+        sparsePaths: [],
+      }),
+    );
+    const before = fs.readFileSync(path.join(slot, 'current'), 'utf8').trim();
+
+    // 刷新成功后指针切到新版本,旧版本目录被清理,来源持续可读。
+    failFetch = true;
+    const refreshed = await manager.refreshSource('hub');
+    expect(refreshed.pluginCount).toBe(1);
+    const after = fs.readFileSync(path.join(slot, 'current'), 'utf8').trim();
+    expect(after).not.toBe(before);
+    expect(fs.existsSync(path.join(slot, 'versions', before))).toBe(false);
+    expect(fs.existsSync(path.join(slot, 'versions', after, '.agents', 'plugins', 'marketplace.json'))).toBe(true);
+  });
+
+  it('does not delete the previous version while it is being read', async () => {
+    const root = makeRoot();
+    let failFetch = false;
+    const executor: GitExecutor = async (args) => {
+      if (args[0] === '--version') return { stdout: 'git version 2.43.0\n', stderr: '' };
+      if (args[0] === 'clone') {
+        writeMarketplace(String(args[args.length - 1]), 'hub', [{ rel: 'p', id: 'alpha' }]);
+        return { stdout: '', stderr: '' };
+      }
+      if (args[0] === 'pull' || args[0] === 'fetch') {
+        if (failFetch) throw Object.assign(new Error('rejected'), { stderr: 'non-fast-forward' });
+        return { stdout: '', stderr: '' };
+      }
+      if (args[0] === 'rev-parse') return { stdout: 'def456\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    };
+    const manager = makeManager(root, executor);
+    await manager.addSource({ source: 'openai/plugins' });
+
+    const slot = path.join(
+      root,
+      'sources',
+      marketCloneSlug('hub', {
+        type: 'git',
+        url: 'https://github.com/openai/plugins.git',
+        sparsePaths: [],
+      }),
+    );
+    const before = fs.readFileSync(path.join(slot, 'current'), 'utf8').trim();
+    // 模拟旧版本正被并发读取:放一个 .reading 标记。
+    fs.writeFileSync(path.join(slot, 'versions', before, '.reading-test'), '');
+
+    failFetch = true;
+    await manager.refreshSource('hub');
+    // 旧版本有活跃读者,本次跳过删除;指针已切到新版本。
+    const after = fs.readFileSync(path.join(slot, 'current'), 'utf8').trim();
+    expect(after).not.toBe(before);
+    expect(fs.existsSync(path.join(slot, 'versions', before))).toBe(true);
   });
 });

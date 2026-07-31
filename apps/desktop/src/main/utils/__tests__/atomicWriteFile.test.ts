@@ -37,6 +37,17 @@ describe('atomicWriteFileSync', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe('created');
   });
 
+  it('restores a missing main file from .bak before writing', () => {
+    const file = makeFile();
+    // 模拟上次 temp 落位与恢复都失败:主文件缺失,.bak 是唯一快照。
+    fs.renameSync(file, `${file}.bak`);
+    expect(fs.existsSync(file)).toBe(false);
+    atomicWriteFileSync(file, 'next');
+    // 先把 .bak 恢复回主文件再写入新内容,唯一快照不被覆盖丢失。
+    expect(fs.readFileSync(file, 'utf8')).toBe('next');
+    expect(fs.existsSync(`${file}.bak`)).toBe(false);
+  });
+
   it('clears a stale .bak from a previous failed write before writing', () => {
     const file = makeFile();
     fs.writeFileSync(`${file}.bak`, 'stale-backup');

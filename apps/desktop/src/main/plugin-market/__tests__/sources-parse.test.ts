@@ -55,6 +55,8 @@ describe('parseMarketSource', () => {
     'https://oauth2@example.com/org/repo.git',
     'ssh://user:token@example.com/org/repo.git',
     'https://user@example.com:443/org/repo.git',
+    'https://example.com/org/repo.git?access_token=SECRET',
+    'https://example.com/org/repo.git?sig=abc&token=def',
   ])('rejects git URL with embedded credentials %s', (source) => {
     expect(parse({ source })).toEqual({ ok: false, code: 'CREDENTIALS_NOT_ALLOWED' });
   });

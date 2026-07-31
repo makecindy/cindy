@@ -15,8 +15,18 @@ export function atomicWriteFileSync(filePath: string, contents: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tempPath = `${filePath}.${crypto.randomUUID()}.tmp`;
   const backupPath = `${filePath}.bak`;
-  // 清理上次失败的备份残留，避免陈旧 .bak 干扰恢复判断。
-  fs.rmSync(backupPath, { force: true });
+  // 上次 temp 落位与恢复都失败时,主文件缺失、.bak 是唯一有效快照:
+  // 先把它恢复回主文件,再写入,避免把缺失主文件读成空后覆盖唯一快照。
+  // 主文件存在时,.bak 才是陈旧残留,直接清理。
+  if (!fs.existsSync(filePath) && fs.existsSync(backupPath)) {
+    try {
+      fs.renameSync(backupPath, filePath);
+    } catch {
+      // 恢复失败则仍保留 .bak,写入流程继续以当前磁盘状态为准。
+    }
+  } else {
+    fs.rmSync(backupPath, { force: true });
+  }
   try {
     fs.writeFileSync(tempPath, contents, { mode: 0o600, flag: 'wx' });
     try {
