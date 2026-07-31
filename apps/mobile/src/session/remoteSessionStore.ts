@@ -216,6 +216,46 @@ const sessionRunStatus = new Map<string, RemoteSessionRunStatus>();
 const sessionMakerActivityEpochs = new Map<string, number>();
 let makerActivityEpoch = 0;
 const sessionMessageSyncMarkers = new Map<string, SessionMessageSyncMarker>();
+/**
+ * 每会话「已验证连续」的下界(ISO createdAt):从这一刻起到窗口最新端,窗口是**连续**的 —— 中间
+ * 没有服务端有、本地没加载的行。缺省(未登记)= 未知,窗口不被信任为连续。
+ *
+ * 为什么需要它:`setLatestMessageWindow` 判断"要不要保留早于本页的旧段"时,只有两种旧段
+ *  - **来源不明的缓存**(冷开 hydrate 的那页):与本页的关系无从确认,本页上沿之外还有服务端历史
+ *    时必须丢弃,否则窗口留下孤岛(#1222);
+ *  - **已由连续分页验证过的历史**(用户一路「加载更早」翻出来的):它是沿 before 游标从窗口最旧端
+ *    连续拉的,与后面的页确实相接。把它一并丢掉会让用户正在看的历史和滚动锚点凭空消失,而且
+ *    自动补齐也不会拉回(裁完窗口里已经没有内部跳变可发现了)——#1210 review 实测到的回归。
+ * 下界就是区分这两者的那条线。
+ *
+ * 写入点只有三处(都对应"服务端一次给出的连续段"):整窗替换 `setMessages`、最新窗口
+ * `setLatestMessageWindow`、以及「加载更早」的 `mergeEarlierMessages`。冷开 hydrate 刻意不写。
+ * 清空 / rewind / 会话回收一律删除(重置为未知),下次最新窗口同步会重建。
+ *
+ * 空洞补齐(`mergeMessages`)刻意**不**下移它:那条路补的是窗口内部的洞,补完虽然也让窗口更连续,
+ * 但要准确算出"新的下界"得先确认窗口里没有别的洞——而这正是补齐本身在解决的问题。保守不动的
+ * 代价是补回来的段可能在下一次满页同步时被丢弃(下次打开会重新补),方向上是安全的那一侧。
+ */
+const sessionContiguousSince = new Map<string, string>();
+
+/** 取一批行里最旧的 createdAt(空列表 → undefined)。 */
+function oldestCreatedAt(list: readonly RemoteMessage[]): string | undefined {
+  let oldest: string | undefined;
+  for (const item of list) {
+    if (!item.createdAt) continue;
+    if (oldest === undefined || item.createdAt.localeCompare(oldest) < 0) oldest = item.createdAt;
+  }
+  return oldest;
+}
+
+/** 把「已验证连续」的下界向更早处推(只前移,不回退)。 */
+function lowerContiguousSince(sessionId: string, createdAt: string | undefined): void {
+  if (!createdAt) return;
+  const current = sessionContiguousSince.get(sessionId);
+  if (current === undefined || createdAt.localeCompare(current) < 0) {
+    sessionContiguousSince.set(sessionId, createdAt);
+  }
+}
 // Per-session live sub-agent task state, decoded from `agent_task_update` events (live-only,
 // never persisted — see @cindy/maker-shared/agent-task). Keyed taskId/parentToolUseId → update.
 const sessionTaskUpdates = new Map<string, ReadonlyMap<string, AgentTaskUpdate>>();
@@ -1126,6 +1166,9 @@ export const remoteSessionStore = {
       return;
     }
     messages.set(sessionId, next);
+    // 整窗替换:这一页是服务端一次给出的连续段,下界即它的最旧行(前移语义,见 lowerContiguousSince)。
+    sessionContiguousSince.delete(sessionId);
+    lowerContiguousSince(sessionId, oldestCreatedAt(next));
     bumpMessageVersion();
     emit();
   },
@@ -1206,12 +1249,24 @@ export const remoteSessionStore = {
     // 为什么不靠时间阈值判断空洞:那只能发现"两侧间隔很久"的孤岛。断连期间漏收几十上百条、
     // 而它们在半小时内快速产生时(一个长 turn 里的连续工具调用就是),两侧间隔根本不大,检测不到
     // (#1222)。从源头保证连续区间才覆盖得住。
-    const keepOlderCachedPages = hasOverlap && options.moreBeyondWindow !== true;
+    //
+    // 例外(#1210 review):用户一路「加载更早」翻出来的历史是沿 before 游标从窗口最旧端**连续**
+    // 拉的,与后面的页确实相接 —— 它由 `sessionContiguousSince` 的下界标出。把这种段也丢掉会让
+    // 用户正在看的历史与滚动锚点凭空消失,而且补齐不会拉回它(裁完已无内部跳变可发现)。所以
+    // 判据是"在已验证连续区间内 → 保留;否则才按 moreBeyondWindow 处置"。
+    const keepUnverifiedOlderPages = hasOverlap && options.moreBeyondWindow !== true;
+    const contiguousSince = sessionContiguousSince.get(sessionId);
     for (const item of existing) {
       const createdAt = item.createdAt;
       const isNewerThanLatestPage = createdAt.localeCompare(latestNewestCreatedAt) >= 0;
-      const isOlderLoadedPage = keepOlderCachedPages
-        && createdAt.localeCompare(latestOldestCreatedAt) < 0;
+      // 下界断言的是"从它到**窗口最新端**连续"。本页与既有窗口完全不重叠时,说明窗口的最新端
+      // 已经跟不上服务端(中间断了,或整个窗口早已过时),那个断言对"窗口 + 本页"的并集不再成立;
+      // 所以已验证连续同样以 hasOverlap 为前提,否则陈旧窗口会靠旧结论赖着不走。
+      const isVerifiedContiguous = hasOverlap
+        && contiguousSince !== undefined
+        && createdAt.localeCompare(contiguousSince) >= 0;
+      const isOlderLoadedPage = createdAt.localeCompare(latestOldestCreatedAt) < 0
+        && (isVerifiedContiguous || keepUnverifiedOlderPages);
       // 本地系统卡(/learn、/context 等)没有服务端对应行:不管时序落在窗口哪里都
       // 不会出现在 latestKeys 里,若不单独保留会被 window 刷新时静默丢弃。
       const isLocalSystemCard = messageKey(item).startsWith('mobile-system-');
@@ -1269,6 +1324,12 @@ export const remoteSessionStore = {
       return;
     }
     messages.set(sessionId, next);
+    // 本页自身是连续段;若更早的段被丢弃,下界就收敛到本页最旧行。用前移语义合并:既有下界更早
+    // 且那些行仍在窗口里(已验证连续)时保持不动。
+    if (!next.some((item) => item.createdAt.localeCompare(latestOldestCreatedAt) < 0)) {
+      sessionContiguousSince.delete(sessionId);
+    }
+    lowerContiguousSince(sessionId, latestOldestCreatedAt);
     bumpMessageVersion();
     emit();
   },
@@ -1329,6 +1390,20 @@ export const remoteSessionStore = {
     emit();
   },
 
+  /**
+   * 「加载更早」拉回的一页:沿 `before` 游标**从窗口最旧端连续**往前取,所以它与既有窗口相接。
+   *
+   * 与 `mergeMessages` 的唯一差别是它会把「已验证连续」的下界前移到这一页的最旧行
+   * (见 `sessionContiguousSince`):这样后续满页的最新窗口同步就不会把用户一路翻出来的历史
+   * 当成来源不明的缓存丢掉(#1210 review 实测到的回归)。
+   *
+   * 只有真正沿窗口最旧端连续翻页的调用方可以用它;补内部空洞请继续用 `mergeMessages`。
+   */
+  mergeEarlierMessages(sessionId: string, list: readonly RemoteMessage[]): void {
+    this.mergeMessages(sessionId, list);
+    lowerContiguousSince(sessionId, oldestCreatedAt(list));
+  },
+
   appendMessage(sessionId: string, message: RemoteMessage): void {
     let changed = flushPendingTextDelta(sessionId);
     changed = upsertMessage(sessionId, overlayLivePlanSnapshot(sessionId, message)) || changed;
@@ -1351,6 +1426,9 @@ export const remoteSessionStore = {
       !deletedClientIds.has(message.clientId) && !deletedClientIds.has(message.id)
     ));
     sessionMessageSyncMarkers.delete(sessionId);
+    // 连续性结论随窗口一起失效:rewind 可能删掉中间的行,清空/回收更是整窗重来。
+    // 重置为未知,下一次最新窗口同步会重建(见 sessionContiguousSince)。
+    sessionContiguousSince.delete(sessionId);
     const messagesChanged = next.length !== existing.length;
     if (messagesChanged) messages.set(sessionId, next);
     const deletedTaskAliases = new Set<string>(deletedClientIds);
@@ -1714,6 +1792,9 @@ export const remoteSessionStore = {
           // session 页面监听到 pendingRefreshSessions 变化后调 load(),走 reopen 路径:
           // sync marker 已失效 → metaChanged=true → 拉最新消息窗口(含 error 行)整窗替换。
           sessionMessageSyncMarkers.delete(sessionId);
+          // 连续性结论随窗口一起失效:rewind 可能删掉中间的行,清空/回收更是整窗重来。
+          // 重置为未知,下一次最新窗口同步会重建(见 sessionContiguousSince)。
+          sessionContiguousSince.delete(sessionId);
           pendingRefreshSessions.add(sessionId);
         } else {
           // 未缓存:清 sync marker + 标记待刷新。
@@ -1723,6 +1804,9 @@ export const remoteSessionStore = {
           // 触发同步失效 → metaChanged=true → 整窗替换，error 卡正常浮现。
           messages.delete(sessionId);
           sessionMessageSyncMarkers.delete(sessionId);
+          // 连续性结论随窗口一起失效:rewind 可能删掉中间的行,清空/回收更是整窗重来。
+          // 重置为未知,下一次最新窗口同步会重建(见 sessionContiguousSince)。
+          sessionContiguousSince.delete(sessionId);
           pendingRefreshSessions.add(sessionId);
         }
         bumpMessageVersion();
@@ -2133,6 +2217,9 @@ export const remoteSessionStore = {
         sessionRunStatus.delete(sessionId);
         sessionMakerActivityEpochs.delete(sessionId);
         sessionMessageSyncMarkers.delete(sessionId);
+        // 连续性结论随窗口一起失效:rewind 可能删掉中间的行,清空/回收更是整窗重来。
+        // 重置为未知,下一次最新窗口同步会重建(见 sessionContiguousSince)。
+        sessionContiguousSince.delete(sessionId);
         sessionTaskUpdates.delete(sessionId);
         streamingAssistantClientIds.delete(sessionId);
         discardPendingTextDelta(sessionId);
@@ -2169,6 +2256,7 @@ export const remoteSessionStore = {
     sessionMakerActivityEpochs.clear();
     makerActivityEpoch = 0;
     sessionMessageSyncMarkers.clear();
+    sessionContiguousSince.clear();
     sessionTaskUpdates.clear();
     streamingAssistantClientIds.clear();
     pendingLiveAssistantClientIds.clear();

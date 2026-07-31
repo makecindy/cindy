@@ -1187,7 +1187,8 @@ describe('remoteSessionStore', () => {
     // 服务端仍有、本地从未加载的行。断连期间漏收几十上百条 push 时就是这样,而漏收的量不大时
     // 两侧时间差很小 —— 时间阈值的空洞检测发现不了,窗口会静默留下孤岛。
     // moreBeyondWindow(本页满页 / 被裁行)为真时,更早的缓存段一律丢弃,窗口保持连续区间。
-    remoteSessionStore.setMessages('s1', [
+    // 用冷开缓存入口种入:它刻意不登记「已验证连续」,正是"来源不明"的那类段。
+    remoteSessionStore.hydrateMessagesIfEmpty('s1', [
       messageAt('cached-old', 's1', '2026-01-01T00:00:01.000Z'),
       messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'),
     ]);
@@ -1203,9 +1204,57 @@ describe('remoteSessionStore', () => {
     ]);
   });
 
+  it('用户「加载更早」翻出来的历史在满页重连时保留（已验证连续）', () => {
+    // 回归(#1210 review):只凭"最新页满页"就清空更早的行,会把用户一路翻出来的历史与滚动锚点
+    // 一起丢掉,而且补齐也不会拉回(裁完窗口里已没有内部跳变可发现)。「加载更早」是沿 before 从
+    // 窗口最旧端连续取的,登记进已验证连续区间后必须保住。
+    remoteSessionStore.setMessages('s1', [
+      messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'),
+    ]);
+    remoteSessionStore.mergeEarlierMessages('s1', [
+      messageAt('earlier-1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('earlier-2', 's1', '2026-01-01T09:30:01.000Z'),
+    ]);
+
+    // 断连重连:最新快照恰好满页 → moreBeyondWindow=true,但这些行在已验证区间内。
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'),
+      messageAt('latest-2', 's1', '2026-01-01T10:00:02.000Z'),
+    ], { moreBeyondWindow: true });
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'earlier-1',
+      'earlier-2',
+      'latest-1',
+      'latest-2',
+    ]);
+  });
+
+  it('rewind / clear 之后连续性结论失效，来源不明的旧段照旧丢弃', () => {
+    // 连续性是对"窗口"的结论:rewind 可能删掉中间的行,不能让旧结论继续背书。
+    remoteSessionStore.setMessages('s1', [
+      messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'),
+    ]);
+    remoteSessionStore.mergeEarlierMessages('s1', [
+      messageAt('earlier-1', 's1', '2026-01-01T09:00:01.000Z'),
+    ]);
+    // 被控端删除某行 → 窗口连续性结论重置。
+    remoteSessionStore.removeMessages('s1', ['latest-1']);
+
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('latest-2', 's1', '2026-01-01T10:00:02.000Z'),
+      messageAt('latest-3', 's1', '2026-01-01T10:00:03.000Z'),
+    ], { moreBeyondWindow: true });
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'latest-2',
+      'latest-3',
+    ]);
+  });
+
   it('丢弃更早缓存段时仍保留比本页更新的实时 push 行与本地系统卡', () => {
     // 收紧的只是"更早那一段"这一条判据:尾部的 live push 与没有服务端对应行的本地卡不受影响。
-    remoteSessionStore.setMessages('s1', [
+    remoteSessionStore.hydrateMessagesIfEmpty('s1', [
       messageAt('cached-old', 's1', '2026-01-01T00:00:01.000Z'),
       messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'),
       messageAt('live-tail', 's1', '2026-01-01T10:00:09.000Z'),
