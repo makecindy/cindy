@@ -662,6 +662,68 @@ export function CCAgentSessionView({
     const normalizedQuery = query.replace(/\s+/g, ' ').trim().toLocaleLowerCase();
     const currentMessages = makerChatStore.getSnapshot(sessionId).messages;
     const hiddenGhostMessageClientIds = new Set<string>();
+
+    function searchVisibleMessageText(message: {
+      role: string;
+      content: string;
+      askUserQuestions?: Array<{ question: string }>;
+      askUserAnswers?: Record<string, string>;
+      askUserReply?: string | null;
+      planReviewPlan?: string;
+      planReviewFeedback?: string;
+      quotesEncoded?: boolean;
+      hookSource?: { userText?: string };
+    }): string {
+      if (message.role === 'ask_user') {
+        const questions = message.askUserQuestions ?? [];
+        const parts = questions.flatMap((question) => [
+          question.question,
+          ...(message.askUserAnswers?.[question.question]
+            ? [message.askUserAnswers[question.question]]
+            : []),
+        ]);
+        if (parts.length > 0) return parts.join('\n');
+        return [message.content, message.askUserReply ?? ''].filter(Boolean).join('\n');
+      }
+      if (message.role === 'plan_review') {
+        return [message.planReviewPlan, message.planReviewFeedback]
+          .filter((value): value is string => Boolean(value))
+          .join('\n');
+      }
+
+      let visibleContent = message.content;
+      if (message.role === 'assistant') {
+        visibleContent = stripGoalVerdictBlock(visibleContent);
+      } else if (message.role === 'user') {
+        try {
+          const parsed = JSON.parse(visibleContent) as unknown;
+          if (
+            parsed &&
+            typeof parsed === 'object' &&
+            !Array.isArray(parsed) &&
+            ((parsed as { orcaSource?: unknown }).orcaSource === 'lead' ||
+              (parsed as { orcaSource?: unknown }).orcaSource === 'worker') &&
+            typeof (parsed as { content?: unknown }).content === 'string'
+          ) {
+            visibleContent = (parsed as { content: string }).content;
+          }
+        } catch {
+          // 普通用户消息不是 Orca JSON,保留原文。
+        }
+        if (message.hookSource) {
+          visibleContent = message.hookSource.userText ?? visibleContent;
+        }
+        const ghostSplit = splitGhostDirective(visibleContent);
+        if (ghostSplit) visibleContent = ghostSplit.body;
+        if (message.quotesEncoded) {
+          visibleContent = joinChatQuoteTextSegments(
+            parseChatQuoteSegments(visibleContent),
+          );
+        }
+      }
+      return visibleContent;
+    }
+
     const localHits = currentMessages
       .filter(
         (message) =>
@@ -680,37 +742,7 @@ export function CCAgentSessionView({
         return true;
       })
       .flatMap((message) => {
-        const rawContent = message.content;
-        let visibleContent = rawContent;
-        if (message.role === 'assistant') {
-          visibleContent = stripGoalVerdictBlock(visibleContent);
-        } else if (message.role === 'user') {
-          try {
-            const parsed = JSON.parse(visibleContent) as unknown;
-            if (
-              parsed &&
-              typeof parsed === 'object' &&
-              !Array.isArray(parsed) &&
-              ((parsed as { orcaSource?: unknown }).orcaSource === 'lead' ||
-                (parsed as { orcaSource?: unknown }).orcaSource === 'worker') &&
-              typeof (parsed as { content?: unknown }).content === 'string'
-            ) {
-              visibleContent = (parsed as { content: string }).content;
-            }
-          } catch {
-            // 普通用户消息不是 Orca JSON,保留原文。
-          }
-          if (message.hookSource) {
-            visibleContent = message.hookSource.userText ?? visibleContent;
-          }
-          const ghostSplit = splitGhostDirective(visibleContent);
-          if (ghostSplit) visibleContent = ghostSplit.body;
-          if (message.quotesEncoded) {
-            visibleContent = joinChatQuoteTextSegments(
-              parseChatQuoteSegments(visibleContent),
-            );
-          }
-        }
+        const visibleContent = searchVisibleMessageText(message);
         if (isSyntheticTriggerText(visibleContent)) return [];
         const content = visibleMarkdownTextForSearch(visibleContent)
           .replace(/\s+/g, ' ')
