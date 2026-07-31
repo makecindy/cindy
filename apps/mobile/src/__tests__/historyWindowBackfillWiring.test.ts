@@ -101,15 +101,26 @@ describe('history window backfill wiring', () => {
 });
 
 /**
- * 断流通知的接线守卫。
+ * 实时流「生效 / 中断」通知的接线守卫。
  *
- * 不变量:**只要该会话的实时行不再送到本端,store 的覆盖区间上界就不能再被之后到达的 push 续算**
- * (见 remoteSessionStore 的 `sessionWindowCoverage.liveTailTrusted`;行为测试在
- * `remoteSessionStore.test.ts`)。断流有三个入口,漏掉任何一个都会让窗口凭空背书出一段没收到的
- * 历史,而这种孤岛在半小时内产生时连自动探测都发现不了(#1210 review)。这里锁住三个入口都通知到。
+ * 不变量:**store 只在该会话的实时行确实会送到本端时,才允许 push 续推覆盖区间的上界**(见
+ * remoteSessionStore 的 `sessionWindowCoverage.liveTailTrusted`;行为测试在
+ * `remoteSessionStore.test.ts`)。于是两侧都要接线:订阅被远端 ACK(生效)一处、断流三处。漏掉任何
+ * 一处都会让窗口凭空背书出一段没收到的历史,而这种孤岛在半小时内产生时连自动探测都发现不了
+ * (#1210 review)。
  */
 describe('live stream interruption wiring', () => {
   const source = readFileSync(resolve(process.cwd(), 'src/device-link/DeviceLinkContext.tsx'), 'utf8');
+
+  it('订阅被远端 ACK：按真正记进 ACK 表的 topic 生效', () => {
+    const sendSubscribe = source.slice(
+      source.indexOf('const sendTrackedSubscribe = useCallback'),
+      source.indexOf('const probeUnresponsiveDevice'),
+    );
+    // 传的是 markHeldRemoteTopicsSubscribed 的返回值(仍被持有的那些),不是原始 toSend ——
+    // 中途被释放的 topic 不算订阅生效。
+    expect(sendSubscribe).toContain('noteSessionLiveStreamsAcked(\n      markHeldRemoteTopicsSubscribed(');
+  });
 
   it('socket 掉线：整体失效（影响所有订阅）', () => {
     const offlineBranch = source.slice(

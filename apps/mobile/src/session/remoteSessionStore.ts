@@ -235,9 +235,16 @@ const sessionMessageSyncMarkers = new Map<string, SessionMessageSyncMarker>();
  * 记下来,这类"接不上"就是一次比较(#1210 review)。
  *
  * `liveTailTrusted`:自 `until` 建立以来实时推送链路没断过 —— 只有这时新到的 push 才能把 `until`
- * 往后推(订阅内的推送是顺序且完整的,且权威页都在 subscribe 之后才拉)。断流(socket 掉线、
- * 退后台释放 session 订阅、离开会话取消订阅)一律清掉这个信任位:之后收到的 push 与 `until` 之间
- * 可能漏了任意多行,不能续算。区间本身保留 —— 断流不会让断流前已验证的那段失效。
+ * 往后推(订阅内的推送是顺序且完整的)。它由**权威页落库那一刻订阅是否已 ACK**决定:屏幕侧的
+ * `openAndSubscribe` 与 `startFocusedTopicSubscription` 都是 `void subscribe(...)`,刻意不等 ACK
+ * (订阅只管之后的推送,不该挡数据读),所以页比订阅先到是常态 —— 这个空窗里被控端写下的行既不会
+ * 进这一页、也不会被推过来,之后一条 push 就会把 `until` 抬过它们,而等尾部涨过一页后最新页已不含
+ * 那几行,事实自检也发现不了(#1210 review)。反过来重连补齐路径(`rehydrate`)是 `await subscribe`
+ * 之后才拉页的,所以那条路径拿到的是可信尾部。
+ * 断流(socket 掉线、退后台释放 session 订阅、离开会话取消订阅)一律清掉信任位与 ACK 记录:之后
+ * 收到的 push 与 `until` 之间可能漏了任意多行,不能续算。区间本身保留 —— 断流不会让断流前已验证
+ * 的那段失效。信任位只能由「ACK 之后落库的权威页」重新点亮(ACK 本身不行:ACK 之前的空窗里可能
+ * 已经漏了行,只有新的权威页能重新确定尾部)。
  *
  * 建立 / 扩展点(都对应"服务端一次给出的连续段"或"订阅内的顺序推送"):整窗替换 `setMessages`、
  * 最新窗口 `setLatestMessageWindow`、「加载更早」`mergeEarlierMessages`、实时 push `appendMessage`。
@@ -258,6 +265,11 @@ type SessionWindowCoverage = {
   liveTailTrusted: boolean;
 };
 const sessionWindowCoverage = new Map<string, SessionWindowCoverage>();
+/**
+ * 远端已 ACK「该会话实时流」订阅(topic `session:<id>`)的会话集合。只用来决定新落库的权威页能否
+ * 把尾部标成可信(见 `liveTailTrusted`);由 device-link 的订阅 ACK / 释放两侧记账。
+ */
+const sessionLiveStreamAcked = new Set<string>();
 
 /** 取一批行里最旧的 createdAt(空列表 → undefined)。 */
 function oldestCreatedAt(list: readonly RemoteMessage[]): string | undefined {
@@ -283,6 +295,14 @@ function forgetWindowCoverage(sessionId: string): void {
   sessionWindowCoverage.delete(sessionId);
 }
 
+/**
+ * 这一页落库时尾部是否可信:订阅已 ACK → 之后的行会被推过来,`until` 可由 push 续推;订阅还没
+ * ACK(页比订阅先到,屏幕侧的常态)→ 空窗里被控端写下的行既不在这一页、也不会被推来,尾部不可信。
+ */
+function liveTailTrustedForPage(sessionId: string): boolean {
+  return sessionLiveStreamAcked.has(sessionId);
+}
+
 /** 整窗替换:窗口就是这一页,区间即这一页 —— 不与旧结论求并(旧内容已经不在窗口里了)。 */
 function coverReplacedWindow(sessionId: string, list: readonly RemoteMessage[]): void {
   const since = oldestCreatedAt(list);
@@ -291,7 +311,11 @@ function coverReplacedWindow(sessionId: string, list: readonly RemoteMessage[]):
     forgetWindowCoverage(sessionId);
     return;
   }
-  sessionWindowCoverage.set(sessionId, { since, until, liveTailTrusted: true });
+  sessionWindowCoverage.set(sessionId, {
+    since,
+    until,
+    liveTailTrusted: liveTailTrustedForPage(sessionId),
+  });
 }
 
 /**
@@ -309,7 +333,14 @@ function coverLatestPage(
 ): void {
   const since = joined && joined.since.localeCompare(pageOldest) < 0 ? joined.since : pageOldest;
   const until = joined && joined.until.localeCompare(pageNewest) > 0 ? joined.until : pageNewest;
-  sessionWindowCoverage.set(sessionId, { since, until, liveTailTrusted: true });
+  // 采纳的旧结论若已经是可信尾部(它的 until 就是本次上界),沿用它;否则由本页落库时的 ACK 状态决定。
+  const inheritsTrustedTail = joined?.liveTailTrusted === true
+    && joined.until.localeCompare(pageNewest) >= 0;
+  sessionWindowCoverage.set(sessionId, {
+    since,
+    until,
+    liveTailTrusted: inheritsTrustedTail || liveTailTrustedForPage(sessionId),
+  });
 }
 
 /**
@@ -343,17 +374,19 @@ function coverLiveRow(sessionId: string, message: RemoteMessage): void {
 }
 
 /**
- * 实时推送链路中断:上界不再能被 push 续算(见 `liveTailTrusted`)。区间本身保留。
+ * 实时推送链路中断:ACK 记录作废,上界也不再能被 push 续算(见 `liveTailTrusted`)。区间本身保留。
  * 省略 sessionId = 全部会话(socket 掉线影响所有订阅)。
  */
 function noteLiveStreamInterrupted(sessionId?: string): void {
   if (sessionId !== undefined) {
+    sessionLiveStreamAcked.delete(sessionId);
     const current = sessionWindowCoverage.get(sessionId);
     if (current?.liveTailTrusted) {
       sessionWindowCoverage.set(sessionId, { ...current, liveTailTrusted: false });
     }
     return;
   }
+  sessionLiveStreamAcked.clear();
   for (const [key, current] of sessionWindowCoverage) {
     if (current.liveTailTrusted) {
       sessionWindowCoverage.set(key, { ...current, liveTailTrusted: false });
@@ -1562,6 +1595,14 @@ export const remoteSessionStore = {
   },
 
   /**
+   * 该会话的实时流订阅已被远端 ACK。只影响**此后**落库的权威页能否把尾部标成可信 —— ACK 之前的
+   * 空窗里可能已经漏了行,所以 ACK 本身不点亮既有区间的信任位(见 `sessionWindowCoverage`)。
+   */
+  noteLiveStreamAcked(sessionId: string): void {
+    if (sessionId) sessionLiveStreamAcked.add(sessionId);
+  },
+
+  /**
    * 实时推送链路中断:socket 掉线(省略 sessionId = 全部会话)、退后台释放 `session:<id>` 订阅、
    * 或离开会话取消订阅。此后到达的 push 与覆盖区间上界之间可能漏了任意多行,不能再续算
    * (见 `sessionWindowCoverage` 的 `liveTailTrusted`)。
@@ -2380,6 +2421,8 @@ export const remoteSessionStore = {
         // 连续性结论随窗口一起失效:rewind 可能删掉中间的行,清空/回收更是整窗重来。
         // 重置为未知,下一次最新窗口同步会重建(见 sessionWindowCoverage)。
         forgetWindowCoverage(sessionId);
+        // 会话镜像整体回收:它的 `session:<id>` 订阅也随之消失,ACK 记录不能留着给后面的页背书。
+        sessionLiveStreamAcked.delete(sessionId);
         sessionTaskUpdates.delete(sessionId);
         streamingAssistantClientIds.delete(sessionId);
         discardPendingTextDelta(sessionId);
@@ -2417,6 +2460,7 @@ export const remoteSessionStore = {
     makerActivityEpoch = 0;
     sessionMessageSyncMarkers.clear();
     sessionWindowCoverage.clear();
+    sessionLiveStreamAcked.clear();
     sessionTaskUpdates.clear();
     streamingAssistantClientIds.clear();
     pendingLiveAssistantClientIds.clear();

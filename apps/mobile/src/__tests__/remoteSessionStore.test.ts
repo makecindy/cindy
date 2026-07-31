@@ -1254,8 +1254,10 @@ describe('remoteSessionStore', () => {
   });
 
   it('订阅未断时实时 push 推进上界，涨过一页后满页刷新仍保留更早的已验证历史', () => {
-    // 上一条的反面:没断流时推送是顺序且完整的,窗口从下界一直连续到最新那条 push。这时最新页
-    // 只回尾段(会话已涨过一页)不代表更早的行来源不明——收紧过头会在活跃会话里反复清空历史。
+    // 上一条的反面:订阅已 ACK、又没断流时,推送是顺序且完整的,窗口从下界一直连续到最新那条
+    // push。这时最新页只回尾段(会话已涨过一页)不代表更早的行来源不明——收紧过头会在活跃会话里
+    // 反复清空历史。
+    remoteSessionStore.noteLiveStreamAcked('s1');
     remoteSessionStore.setMessages('s1', [
       messageAt('a1', 's1', '2026-01-01T09:00:01.000Z'),
       messageAt('a2', 's1', '2026-01-01T09:00:02.000Z'),
@@ -1277,6 +1279,8 @@ describe('remoteSessionStore', () => {
   });
 
   it('断流只作用于被中断的会话（退后台释放的是各自的 session 订阅）', () => {
+    remoteSessionStore.noteLiveStreamAcked('s1');
+    remoteSessionStore.noteLiveStreamAcked('s2');
     remoteSessionStore.setMessages('s1', [messageAt('a1', 's1', '2026-01-01T09:00:01.000Z')]);
     // 另一个会话的订阅被释放,不能顺带作废 s1 的上界。
     remoteSessionStore.noteLiveStreamInterrupted('s2');
@@ -1293,6 +1297,7 @@ describe('remoteSessionStore', () => {
     // 冷开缓存恰好等于服务端最新页是常态。相等早退发生在记账之前时,这次权威响应白来:之后
     // 会话靠 push 涨过一页、再遇一次满页重连刷新,这些**已被权威页确认过**的行会被当成来源不明
     // 全部丢弃,用户当前历史与滚动位置随之消失。
+    remoteSessionStore.noteLiveStreamAcked('s1');
     remoteSessionStore.hydrateMessagesIfEmpty('s1', [
       messageAt('c1', 's1', '2026-01-01T09:00:01.000Z'),
       messageAt('c2', 's1', '2026-01-01T09:00:02.000Z'),
@@ -1312,6 +1317,7 @@ describe('remoteSessionStore', () => {
 
   it('整窗替换与缓存逐行相同时也登记连续性', () => {
     // setMessages 的相等早退同理:两条路径的记账必须一致,否则走哪条入口决定历史保不保得住。
+    remoteSessionStore.noteLiveStreamAcked('s1');
     remoteSessionStore.hydrateMessagesIfEmpty('s1', [
       messageAt('c1', 's1', '2026-01-01T09:00:01.000Z'),
       messageAt('c2', 's1', '2026-01-01T09:00:02.000Z'),
@@ -1327,6 +1333,54 @@ describe('remoteSessionStore', () => {
     ], { moreBeyondWindow: true });
 
     expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual(['c1', 'c2', 'live-1']);
+  });
+
+  it('订阅 ACK 之前落库的权威页，尾部不算可信（#1210 review）', () => {
+    // 屏幕侧的 openAndSubscribe / startFocusedTopicSubscription 都是 `void subscribe(...)`,不等
+    // ACK 就拉页(订阅只管之后的推送,不该挡数据读),所以"页比订阅先到"是常态。这个空窗里被控端
+    // 写下的行既不在这一页、也不会被推过来;若这时仍把尾部标成可信,之后一条 push 就会把上界抬过
+    // 那几行,而等尾部涨过一页后最新页已不含它们,事实自检也发现不了 —— 孤岛就此固化下来。
+    remoteSessionStore.setMessages('s1', [
+      messageAt('a1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('a2', 's1', '2026-01-01T09:00:02.000Z'),
+    ]);
+    // 空窗里服务端写了 m81/m82(本端全没收到);订阅生效后才收到更新的这一条。
+    remoteSessionStore.noteLiveStreamAcked('s1');
+    remoteSessionStore.appendMessage('s1', messageAt('live-1', 's1', '2026-01-01T09:30:00.000Z'));
+
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('live-1', 's1', '2026-01-01T09:30:00.000Z'),
+    ], { moreBeyondWindow: true });
+
+    // 上界仍是 09:00:02,接不上 09:30 的页 → a1/a2 丢弃,窗口保持连续。
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual(['live-1']);
+  });
+
+  it.each([
+    ['socket 掉线（不带 sessionId）', undefined],
+    ['退后台释放 / 离开会话（按 sessionId）', 's1'],
+  ])('断流时 ACK 记录一并作废：%s', (_label, interruptedSessionId) => {
+    // 断流清掉信任位只管**既有**区间;若 ACK 记录还留着,断线后才落库的在途页(请求在断线前发出、
+    // 响应迟到)会重新把尾部标成可信,重连后先到的 push 又把上界抬过漏收的行 —— 绕一圈回到同一个
+    // 孤岛。生效与失效必须成对。
+    remoteSessionStore.noteLiveStreamAcked('s1');
+    remoteSessionStore.setMessages('s1', [
+      messageAt('a1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('a2', 's1', '2026-01-01T09:00:02.000Z'),
+    ]);
+    remoteSessionStore.noteLiveStreamInterrupted(interruptedSessionId);
+    // 断线后才落库的在途页(内容与窗口相同,走相等早退,但记账照做)。
+    remoteSessionStore.setMessages('s1', [
+      messageAt('a1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('a2', 's1', '2026-01-01T09:00:02.000Z'),
+    ]);
+    remoteSessionStore.appendMessage('s1', messageAt('live-1', 's1', '2026-01-01T09:30:00.000Z'));
+
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('live-1', 's1', '2026-01-01T09:30:00.000Z'),
+    ], { moreBeyondWindow: true });
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual(['live-1']);
   });
 
   it('最新页在已验证区间内带来窗口没有的行时，旧结论作废', () => {

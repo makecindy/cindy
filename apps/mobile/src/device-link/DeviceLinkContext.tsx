@@ -206,6 +206,20 @@ function noteSessionLiveStreamsInterrupted(topics: readonly string[]): void {
   }
 }
 
+/**
+ * `session:<id>` 订阅被远端 ACK = 从此刻起该会话的行会被推过来。屏幕侧刻意不等 ACK 就拉页
+ * (`void subscribe(...)`),所以「页落库时订阅是否已 ACK」正是 store 判断尾部可不可信的依据
+ * (见 remoteSessionStore 的 `liveTailTrusted`)。ACK 本身不点亮既有区间:ACK 之前的空窗里可能
+ * 已经漏了行。
+ */
+function noteSessionLiveStreamsAcked(topics: readonly string[]): void {
+  for (const topic of topics) {
+    if (!topic.startsWith(SESSION_TOPIC_PREFIX)) continue;
+    const sessionId = topic.slice(SESSION_TOPIC_PREFIX.length);
+    if (sessionId) remoteSessionStore.noteLiveStreamAcked(sessionId);
+  }
+}
+
 export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   if (MOBILE_VISUAL_MOCK_ENABLED) {
     return <VisualMockDeviceLinkProvider>{children}</VisualMockDeviceLinkProvider>;
@@ -281,7 +295,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       || backgroundReleaseInFlightRef.current
       || backgroundReleaseGenerationRef.current !== releaseGeneration
     ) return;
-    markHeldRemoteTopicsSubscribed(remoteSubscribedTopicsRef.current, registryRef.current, deviceId, toSend);
+    // 只有仍被持有、真正记进 ACK 表的 topic 才算订阅生效(中途被释放的那些不算)。
+    noteSessionLiveStreamsAcked(
+      markHeldRemoteTopicsSubscribed(remoteSubscribedTopicsRef.current, registryRef.current, deviceId, toSend),
+    );
   }, []);
 
   // 熔断 open 设备的显式代表性探测:openLink 建链(成功按不定论,不关熔断),
