@@ -9923,7 +9923,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       providerId: 'xd',
       model: 'qwen/qwen3-coder',
       userIntent: 'Check this project for type errors',
-      action: { kind: 'exec', command: 'npx tsc --noEmit' },
+      action: { kind: 'exec', command: 'npx tsc --noEmit', cwd: '/repo' },
       workspaceRoots: ['/repo'],
       platform: process.platform,
     }));
@@ -10304,6 +10304,12 @@ describe('CodexAgent MCP thread context hooks', () => {
       decisionSource: 'agent',
       review: { status: 'timedOut', riskLevel: null, userAuthorization: null, rationale: 'review timed out' },
       action: { type: 'networkAccess', target: 'https://example.com', host: 'example.com', protocol: 'https', port: 443 },
+    });
+    await vi.waitFor(() => {
+      expect(host.request).toHaveBeenCalledWith(Method.ThreadSettingsUpdate, {
+        threadId: 'start-thread-id',
+        approvalsReviewer: 'user',
+      });
     });
     await handle.send({ type: 'user', content: 'Run the type checker' });
     const turnParams = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as {

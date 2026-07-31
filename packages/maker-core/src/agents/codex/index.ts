@@ -3316,7 +3316,7 @@ export class CodexAgent extends BaseAgent {
     let codexProductPromptDelivery: AgentSessionHandle['codexProductPromptDelivery'];
 
     /**
-     * 会话中途把单个设置 (serviceTier / model / effort) 立即推给 app-server,
+     * 会话中途把单个设置 (serviceTier / model / effort / approvalsReviewer) 立即推给 app-server,
      * 写入后续 turn 的 sticky context — 不必等下一个 turn/start 携带 (与官方
      * Codex Desktop 的 thread/settings/update 通道对齐; experimentalApi 已恒开,
      * 0.142.0 实测支持)。
@@ -4454,7 +4454,13 @@ export class CodexAgent extends BaseAgent {
         description: params.reason ?? undefined,
         suggestions: commandSupportsAcceptForSession(params) ? codexSessionApprovalSuggestions() : undefined,
         metadata: params.reason ? { reason: params.reason } : undefined,
-      }, { autoReviewAction: { kind: 'exec', command: params.command ?? '' } });
+      }, {
+        autoReviewAction: {
+          kind: 'exec',
+          command: params.command ?? '',
+          cwd: params.cwd || opts.workingDir,
+        },
+      });
       return { decision };
     };
 
@@ -6571,6 +6577,11 @@ export class CodexAgent extends BaseAgent {
         nativeAutoReviewUnavailable = true;
         nativeApprovalsReviewerRouteSupported = false;
         approvalsReviewerRouteSupported = false;
+        // approvalsReviewer 是 thread sticky setting；只改本地布尔值只会影响下一次
+        // turn/start，当前 turn 后续审批仍会继续撞已经失效的 Guardian。立即把当前
+        // thread 的后续审批切到 user protocol，使同一 turn 从下一次审批起进入 Cindy
+        // 当前模型 fallback。RPC 失败仍由下一 turn 的显式字段兜底。
+        void pushThreadSettings({ approvalsReviewer: 'user' });
         log.warn('Codex native Auto reviewer unavailable; keeping Auto with Cindy fallback', {
           reviewId: params.reviewId,
           turnId: params.turnId,

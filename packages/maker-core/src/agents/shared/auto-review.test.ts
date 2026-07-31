@@ -56,6 +56,14 @@ describe('reviewAction — file-write 工作区边界', () => {
   });
 });
 
+describe('reviewAction — exec 实际 cwd 边界', () => {
+  it('区内 cwd 保留原分类，区外 cwd 不静默放行', () => {
+    expect(reviewAction({ kind: 'exec', command: 'pwd', cwd: '/repo/src' }, roots)).toBe('auto-approve');
+    expect(reviewAction({ kind: 'exec', command: 'pwd', cwd: '/Users/me' }, roots)).toBe('prompt');
+    expect(reviewAction({ kind: 'exec', command: 'rm -rf build', cwd: '/Users/me' }, roots)).toBe('prompt');
+  });
+});
+
 describe('classifyShellCommand — 只读放行', () => {
   it('常见只读命令 / git 只读 / curl GET', () => {
     for (const c of ['ls -la', 'cat f', 'grep -rn x .', 'rg TODO', 'git status', 'git log', 'curl -sS https://x.com', 'env FOO=1 ls', 'timeout 5 grep x f']) {
@@ -160,9 +168,11 @@ describe('classifyShellCommand — 凭证读取(绝对路径,不再只锚 ~/)', 
 });
 
 describe('classifyShellCommand — env dump 不再静默放行(凭证外泄面)', () => {
-  it('裸 env / printenv → prompt(会 dump 含 API key 的环境)', () => {
-    expect(classifyShellCommand('env', roots)).toBe('prompt');
-    expect(classifyShellCommand('printenv', roots)).toBe('prompt');
+  it('裸 env / printenv → prompt-each-time(会 dump 含 API key 的环境)', () => {
+    expect(classifyShellCommand('env', roots)).toBe('prompt-each-time');
+    expect(classifyShellCommand('printenv', roots)).toBe('prompt-each-time');
+    expect(classifyShellCommand('command env', roots)).toBe('prompt-each-time');
+    expect(classifyShellCommand('env FOO=bar', roots)).toBe('prompt-each-time');
     expect(classifyShellCommand('printenv PATH', roots)).toBe('prompt');
   });
   it('env 作为包裹器仍按内层命令判定(env FOO=bar ls → 放行)', () => {

@@ -52,7 +52,7 @@ export type ReviewableAction =
   | { kind: 'read'; path?: string; scope?: 'file' | 'tree' }
   | { kind: 'session-state' }
   | { kind: 'file-write'; path: string | undefined }
-  | { kind: 'exec'; command: string }
+  | { kind: 'exec'; command: string; cwd?: string }
   | { kind: 'network'; target?: string; operation?: string }
   | { kind: 'other' };
 
@@ -94,6 +94,13 @@ export function reviewAction(
         : 'prompt';
     }
     case 'exec':
+      // Harness 提供了实际执行目录时，区外 cwd 不能沿用工作区内的静默放行假设。
+      // 例如同一条 `pwd` / `rm -rf build` 在 /repo 与用户主目录的影响完全不同；
+      // 升级到轻量 reviewer，并把 cwd 保留在 action 中供其判断相对路径语义。
+      if (action.cwd
+        && !isInsideWorkspace(normalizeTarget(action.cwd, workspaceRoots), workspaceRoots, aliasFirmlinks)) {
+        return 'prompt';
+      }
       return classifyShellCommand(action.command, workspaceRoots);
     case 'network':
       return 'prompt';
@@ -590,7 +597,15 @@ function classifyGit(tokens: string[], segment: string): ReviewVerdict {
 }
 
 function classifyShellSegment(segment: string): ReviewVerdict {
-  const tokens = unwrapWrappers(tokenize(segment));
+  const rawTokens = tokenize(segment);
+  const tokens = unwrapWrappers(rawTokens);
+  // 裸 env / printenv 会输出整个进程环境(含 provider API key)，不能交给 reviewer
+  // 自行静默 allow。`env FOO=bar cmd` 仍按内层命令分类；`printenv PATH` 只读单个
+  // 具名变量，继续留在灰区。
+  const dumpsFullEnvironment =
+    (tokens.length === 0 && rawTokens.some((token) => baseName(token) === 'env'))
+    || (tokens.length === 1 && baseName(tokens[0]) === 'printenv');
+  if (dumpsFullEnvironment) return 'prompt-each-time';
   // 剥壳后为空段:裸 `env`/`printenv`(dump 环境变量,含凭证)、或纯包裹器无内层命令 —— fail-closed 升级。
   if (tokens.length === 0) return 'prompt';
   const bin = baseName(tokens[0]);
