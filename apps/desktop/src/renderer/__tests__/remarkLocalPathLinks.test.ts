@@ -137,6 +137,11 @@ describe('remarkLocalPathLinks', () => {
   it('复合标点后的行号后缀截断同样拒绝', () => {
     expect(linkUrls(runOnText('见 src/a.ts:12.5'))).toEqual([]);
     expect(linkUrls(runOnText('见 src/a.ts:12:foo'))).toEqual([]);
+    // 连续 / 混合标点不得绕过(只看紧邻一个字符时会放行)。
+    expect(linkUrls(runOnText('见 src/a.ts:12..5'))).toEqual([]);
+    expect(linkUrls(runOnText('见 src/a.ts:12::foo'))).toEqual([]);
+    expect(linkUrls(runOnText('见 src/a.ts:12:.:foo'))).toEqual([]);
+    expect(linkUrls(runOnText('见 src/a.ts...'))).toEqual(['src/a.ts']);
     expect(linkUrls(runOnText('见 src/a.ts.'))).toEqual(['src/a.ts']);
     expect(linkUrls(runOnText('见 src/a.ts:'))).toEqual(['src/a.ts']);
   });

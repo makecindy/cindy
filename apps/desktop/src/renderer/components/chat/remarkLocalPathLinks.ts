@@ -196,8 +196,16 @@ function endsMidPathToken(text: string, end: number): boolean {
   if (TOKEN_CHAR_RE.test(next)) return true;
   // `.` / `:` 本身要放过(句末句点 / 句末冒号),但它们后面还跟 token 字符时说明我们把
   // 一段复合后缀截断了:`src/a.ts:12.5`、`src/a.ts:12:foo`。
+  //
+  // **跳过整串标点再判,不能只看紧邻一个字符**:只看一个时 `src/a.ts:12..5`、
+  // `src/a.ts:12::foo`、`src/a.ts:12:.:foo` 会因为第二个标点不是 token 字符而绕过去
+  // (这一处被连续挖了三轮:`:12345678` → `:12.5` → `:12..5`,每轮多一层嵌套;跳整串是
+  // 为了把「再多一个标点」这条路一次封掉)。句末连写的省略号 `src/a.ts...` 仍保住 ——
+  // 跳完之后没有 token 字符。
   if (next === '.' || next === ':') {
-    const after = text[end + 1];
+    let i = end;
+    while (text[i] === '.' || text[i] === ':') i += 1;
+    const after = text[i];
     return after !== undefined && TOKEN_CHAR_RE.test(after);
   }
   return false;

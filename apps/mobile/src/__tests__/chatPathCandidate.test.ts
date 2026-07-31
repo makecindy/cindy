@@ -526,6 +526,13 @@ describe('findBareFilePathMatch(正文纯文本裸路径词法)', () => {
     // 一段复合后缀,留下错误行号 + 正文残渣,而且链路正常时也会点亮(review 实捉)。
     expect(allValues('见 src/a.ts:12.5')).toEqual([]);
     expect(allValues('见 src/a.ts:12:foo')).toEqual([]);
+    // 连续标点不得绕过:只看紧邻一个字符时,第二个标点(非 token 字符)会放行错误前缀。
+    // 这一处被连续挖了三轮,故改成跳过整串标点再判(混合的 `:.:` 也是同一条路)。
+    expect(allValues('见 src/a.ts:12..5')).toEqual([]);
+    expect(allValues('见 src/a.ts:12::foo')).toEqual([]);
+    expect(allValues('见 src/a.ts:12:.:foo')).toEqual([]);
+    // 句末连写的省略号仍保住(跳完标点后没有 token 字符)。
+    expect(allValues('见 src/a.ts...')).toEqual(['src/a.ts']);
     // 句末标点仍保住。
     expect(allValues('见 src/a.ts.')).toEqual(['src/a.ts']);
     expect(allValues('见 src/a.ts:')).toEqual(['src/a.ts']);
