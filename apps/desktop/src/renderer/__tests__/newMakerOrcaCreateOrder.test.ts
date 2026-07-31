@@ -243,17 +243,23 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       expect(send).toBeLessThan(forget);
     });
 
-    it('新建目标:同款顺序,且 setGoal 成功后才清副本', () => {
+    it('新建目标:副本要早于**任何**远程等待,且 setGoal 成功后才清副本', () => {
       const branch = goalBranch();
       const remember = branch.indexOf(
         "rememberRecoverableHandoff(sessionId, 'goal', pendingGoal.objective)",
       );
+      const awaitSubscribe = branch.indexOf('await window.electronAPI.deviceLink.subscribe(');
       const awaitCollab = branch.indexOf('await consumePendingRemoteCollab(pendingGoal.remoteCollab');
       const setGoal = branch.indexOf('await goalApiFor(sessionId).setGoal(');
       const forget = branch.indexOf('forgetRecoverableHandoff(sessionId)');
 
       expect(remember).toBeGreaterThan(-1);
+      // subscribe 同样是隧道 invoke、同样可能走到 30s 超时,而内存那份已经删了。
+      // 所以副本必须排在它前面,不能只挡在开协同那一段之前。
+      expect(remember).toBeLessThan(awaitSubscribe);
       expect(remember).toBeLessThan(awaitCollab);
+      // 判据是「这是不是远程交接」,不是「开没开协同」。
+      expect(branch).toContain('if (deviceId || pendingGoal.remoteCollab) {');
       expect(awaitCollab).toBeLessThan(setGoal);
       // setGoal 失败时刻意保留副本 → forget 只能排在 setGoal 之后。挪进上面那个
       // 协同 finally(或 setGoal 之前的任何位置)都会让这条断言失败。

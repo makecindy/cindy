@@ -115,11 +115,14 @@ export function consumePendingGoal(sessionId: string): PendingGoalPayload | null
 //
 // 为什么只有 remoteCollab 这条路径要落盘(greptile P1):
 // 其余创建路径的 setPending → navigate → mount → consume → sendMessage 是一串毫秒级
-// 步骤,内存 Map 与渲染进程同生共死不构成实际风险。而 device-link 开协同这条不同 ——
-// consume 之后要 await 被控端起 Worker:正常一两秒,慢设备会一路走到 30s 隧道超时
-// 再加 6×3s 回查。这段时间用户输入只存在于渲染进程内存里,app 被关掉就永久消失,
-// 被控端还留着一个没有首轮的空会话。窗口是本 PR 把等待挪到导航之后才拉长的,
-// 所以由本 PR 补上可恢复副本,而不是留给"以后做持久化交接"。
+// 步骤,内存 Map 与渲染进程同生共死不构成实际风险。而 **device-link 远程交接**这条不同 ——
+// consume 之后还要 await 隧道往返:开协同要等被控端起 Worker(正常一两秒,慢设备会一路走到
+// 30s 隧道超时再加 6×3s 回查),起目标之前还要先 await 一次 `deviceLink.subscribe`
+// (同样是 invoke,同样可能走到 30s)。这段时间用户输入只存在于渲染进程内存里,
+// app 被关掉就永久消失,被控端还留着一个没有首轮的空会话。
+//
+// 所以判据是「**这是不是一次远程交接**」,不是「开没开协同」:只挡在开协同那一段前面,
+// 非协同的 device-link 起目标照样会在 subscribe 那次 await 里丢掉目标正文。
 //
 // 取舍:
 //  · 只存**正文**,不存附件 —— 与本仓既有取舍一致(newMakerDraft 头部:「附件 → 丢失
@@ -154,28 +157,65 @@ export function setPendingHandoffOwner(ownerId: string | null): void {
   activeDataOwnerId = ownerId;
 }
 
-/** 读全表并顺手剔除过期项。localStorage 不可用 / schema 损坏时静默回退空表。 */
-function readRecoveryTable(): Record<string, RecoverableHandoff> {
+/**
+ * 读全表并剔除过期 / 损坏项。localStorage 不可用或 schema 损坏时静默回退空表。
+ *
+ * **剔除必须落盘**:只从返回值里过滤掉,原始条目会一直留在磁盘上 —— 之后如果这个账号
+ * 再没写过新的交接项,就永远没人重写那份 JSON,用户的正文实际上被无限期保存,
+ * 与声明的 TTL 和「持久数据要有明确生命周期」不符(codex P2 第三轮)。
+ * 所以这里回传是否发生过剔除,由 `loadRecoveryTable` 立刻写回清理后的表。
+ */
+function parseRecoveryTable(raw: string): {
+  table: Record<string, RecoverableHandoff>;
+  pruned: boolean;
+} {
   let parsed: unknown;
   try {
-    const raw = window.localStorage.getItem(recoveryStorageKey());
-    if (!raw) return {};
     parsed = JSON.parse(raw);
+  } catch {
+    // 整份 JSON 都读不懂:当空表处理,并按"有剔除"落盘覆盖掉这份垃圾。
+    return { table: {}, pruned: true };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { table: {}, pruned: true };
+  }
+  const now = Date.now();
+  const table: Record<string, RecoverableHandoff> = {};
+  let pruned = false;
+  for (const [sessionId, value] of Object.entries(parsed as Record<string, unknown>)) {
+    const entry = (value ?? {}) as Partial<RecoverableHandoff>;
+    const usable =
+      !!value &&
+      typeof value === 'object' &&
+      typeof entry.text === 'string' &&
+      entry.text !== '' &&
+      (entry.kind === 'message' || entry.kind === 'goal') &&
+      typeof entry.createdAt === 'number' &&
+      now - entry.createdAt <= RECOVERY_TTL_MS;
+    if (!usable) {
+      pruned = true;
+      continue;
+    }
+    table[sessionId] = {
+      kind: entry.kind as RecoverableHandoffKind,
+      text: entry.text as string,
+      createdAt: entry.createdAt as number,
+    };
+  }
+  return { table, pruned };
+}
+
+/** 读全表;发生过剔除就立刻把清理后的表写回,不让过期正文赖在磁盘上。 */
+function readRecoveryTable(): Record<string, RecoverableHandoff> {
+  let raw: string | null;
+  try {
+    raw = window.localStorage.getItem(recoveryStorageKey());
   } catch {
     return {};
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-  const now = Date.now();
-  const table: Record<string, RecoverableHandoff> = {};
-  for (const [sessionId, value] of Object.entries(parsed as Record<string, unknown>)) {
-    if (!value || typeof value !== 'object') continue;
-    const entry = value as Partial<RecoverableHandoff>;
-    if (typeof entry.text !== 'string' || entry.text === '') continue;
-    if (entry.kind !== 'message' && entry.kind !== 'goal') continue;
-    if (typeof entry.createdAt !== 'number') continue;
-    if (now - entry.createdAt > RECOVERY_TTL_MS) continue;
-    table[sessionId] = { kind: entry.kind, text: entry.text, createdAt: entry.createdAt };
-  }
+  if (!raw) return {};
+  const { table, pruned } = parseRecoveryTable(raw);
+  if (pruned) writeRecoveryTable(table);
   return table;
 }
 

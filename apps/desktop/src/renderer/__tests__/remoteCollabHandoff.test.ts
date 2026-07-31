@@ -11,7 +11,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const refreshRemoteDeviceSessions = vi.fn().mockResolvedValue('ok');
-vi.mock('@/features/device-link/refreshRemoteSessions', () => ({
+vi.mock('@/features/device-link/refreshRemoteSessions', async (importOriginal) => ({
+  // 只桩掉会真的发 IPC 的回流函数;瞬态判据用**真实实现** —— 回查的重试口径
+  // 复用的就是 device-link 那份判据,桩一个等价物等于测了个假的。
+  ...(await importOriginal<typeof import('@/features/device-link/refreshRemoteSessions')>()),
   refreshRemoteDeviceSessions: (...args: unknown[]) => refreshRemoteDeviceSessions(...args),
 }));
 vi.mock('@/lib/logger', () => ({
@@ -87,9 +90,49 @@ describe('enableRemoteCollabForSession', () => {
     expect(listWorkersByLead).toHaveBeenCalledTimes(6);
   });
 
-  it('回查本身失败(链路又抖 / 老被控端):不再猜,按超时降级', async () => {
+  it('回查撞上瞬态错误:用完剩余重试预算,不因链路抖一下就判定没建成', async () => {
+    // 触发回查的前提就是链路刚抖过(enableOrca 超时),第一次回查撞上同一段抖动是常态。
+    // 头两次瞬态失败,第三次读到 worker —— 必须能恢复成功,不能在第一次就放弃。
+    enableOrca.mockRejectedValue(timeoutError());
+    listWorkersByLead
+      .mockRejectedValueOnce(new Error('[DEVICE_LINK_NOT_CONNECTED] link down'))
+      .mockRejectedValueOnce(new Error('[DEVICE_LINK_TIMEOUT] probe timed out'))
+      .mockResolvedValue([{ sessionId: 'worker-late', id: 'w1' }]);
+
+    vi.useFakeTimers();
+    const pending = enableRemoteCollabForSession(params);
+    const assertion = expect(pending).resolves.toEqual({ focusWorkerSessionId: 'worker-late' });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await assertion;
+    expect(listWorkersByLead).toHaveBeenCalledTimes(3);
+  });
+
+  it('回查全程瞬态失败:预算用尽后仍 fail-closed 抛原始超时', async () => {
     enableOrca.mockRejectedValue(timeoutError());
     listWorkersByLead.mockRejectedValue(new Error('[DEVICE_LINK_NOT_CONNECTED] link down'));
+
+    vi.useFakeTimers();
+    const pending = enableRemoteCollabForSession(params);
+    const assertion = expect(pending).rejects.toThrow('DEVICE_LINK_TIMEOUT');
+    await vi.advanceTimersByTimeAsync(30_000);
+    await assertion;
+    expect(listWorkersByLead).toHaveBeenCalledTimes(6);
+  });
+
+  it('回查撞上永久错误(老被控端没有该 channel):立即降级,不空转剩余轮次', async () => {
+    enableOrca.mockRejectedValue(timeoutError());
+    listWorkersByLead.mockRejectedValue(
+      new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] channel not allowed'),
+    );
+
+    await expect(enableRemoteCollabForSession(params)).rejects.toThrow('DEVICE_LINK_TIMEOUT');
+    // 重试多少次都是同一个结果,再等 18 秒毫无意义。
+    expect(listWorkersByLead).toHaveBeenCalledTimes(1);
+  });
+
+  it('回查撞上未知错误:按不可重试处理,不空转', async () => {
+    enableOrca.mockRejectedValue(timeoutError());
+    listWorkersByLead.mockRejectedValue(new Error('something entirely unexpected'));
 
     await expect(enableRemoteCollabForSession(params)).rejects.toThrow('DEVICE_LINK_TIMEOUT');
     expect(listWorkersByLead).toHaveBeenCalledTimes(1);

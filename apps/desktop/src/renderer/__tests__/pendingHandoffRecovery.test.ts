@@ -130,6 +130,45 @@ describe('跨重启与命名空间', () => {
     expect(m.takeRecoverableHandoff('s1', 'message')).toBeNull();
   });
 
+  it('过期项必须真的从磁盘上消失,而不只是读的时候过滤掉', async () => {
+    // 只过滤不写回的话,这个账号只要不再写新交接项,正文就永远赖在 localStorage 里,
+    // 与声明的 TTL 和「持久数据要有明确生命周期」不符。
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    const m = await loadModule();
+    m.rememberRecoverableHandoff('s1', 'message', '敏感的半句话');
+    expect(memStorage.getItem(STORAGE_KEY)).toContain('敏感的半句话');
+
+    vi.setSystemTime(new Date('2026-01-09T00:00:00Z'));
+    // 只是读一次(哪怕读的是别的会话),过期正文就该被清出磁盘。
+    m.takeRecoverableHandoff('other-session', 'message');
+
+    expect(memStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it('过期项被清掉时不牵连同表里仍在有效期内的条目', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    const m = await loadModule();
+    m.rememberRecoverableHandoff('old', 'message', '旧的');
+
+    vi.setSystemTime(new Date('2026-01-09T00:00:00Z'));
+    m.rememberRecoverableHandoff('fresh', 'message', '新的');
+
+    const raw = memStorage.getItem(STORAGE_KEY) ?? '';
+    expect(raw).not.toContain('旧的');
+    expect(raw).toContain('新的');
+    expect(m.takeRecoverableHandoff('fresh', 'message')).toBe('新的');
+  });
+
+  it('损坏的整份 JSON 会被覆盖掉,不留在磁盘上', async () => {
+    const m = await loadModule();
+    memStorage.setItem(STORAGE_KEY, '{ not json');
+
+    expect(m.takeRecoverableHandoff('s1', 'message')).toBeNull();
+    expect(memStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
   it('TTL 之内的正常恢复', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));

@@ -2766,13 +2766,18 @@ export function CCAgentSessionView({
     void (async () => {
       try {
         const deviceId = getSessionDeviceId(sessionId);
+        // 副本要落在**任何一次远程等待之前**,不能只挡在开协同那一段前面:下面的
+        // subscribe 同样是一次隧道 invoke,同样可能走到 30s 超时,而 consumePendingGoal
+        // 早就把内存那份删了。所以判据是「这是不是一次远程交接」,不是「开没开协同」
+        // (greptile P1 第二轮)。目标正文也是用户敲进去的,丢了同样要重打。
+        if (deviceId || pendingGoal.remoteCollab) {
+          rememberRecoverableHandoff(sessionId, 'goal', pendingGoal.objective);
+        }
         if (deviceId) {
           await window.electronAPI.deviceLink.subscribe(deviceId, [`session:${sessionId}`]);
         }
         // 与首条消息同款:目标首轮同样要排在协同之后(见上方 pending 消费的注释)。
         if (pendingGoal.remoteCollab) {
-          // 同样先落可恢复副本再进等待 —— 目标正文也是用户敲进去的,丢了同样要重打。
-          rememberRecoverableHandoff(sessionId, 'goal', pendingGoal.objective);
           setRemoteCollabPreparing(true);
           try {
             const ok = await consumePendingRemoteCollab(pendingGoal.remoteCollab, {

@@ -27,7 +27,10 @@
  * 测试信号**。顺带满足 newMakerProjectPicker 那条守卫:组件不再自己 import 回流函数,
  * 回流只经共享 helper 使用。
  */
-import { refreshRemoteDeviceSessions } from '@/features/device-link/refreshRemoteSessions';
+import {
+  isTransientRemoteError,
+  refreshRemoteDeviceSessions,
+} from '@/features/device-link/refreshRemoteSessions';
 import { createLogger } from '@/lib/logger';
 import { makerApiForDevice, orcaWorkflowsForDevice } from '@/lib/makerTransport';
 import { extractIpcError } from '@/utils/ipcError';
@@ -82,9 +85,24 @@ async function recoverTimedOutTeam(
         return { focusWorkerSessionId: workerSessionId };
       }
     } catch (probeErr) {
-      // 回查本身失败(链路又抖了 / 老被控端)→ 不再猜,按超时降级。
-      log.warn(`[${p.logTag}] probing remote team after timeout failed`, probeErr);
-      return null;
+      // 回查本身失败要**分性质**,不能一律放弃剩余预算(codex P2 第三轮):
+      // 触发回查的前提就是链路刚抖过(enableOrca 超时),第一次回查撞上同一段抖动
+      // 是常态。此时直接 return null,等于「因为链路抖所以判定协同没建成」——
+      // 而被控端那次 enableOrca 很可能正在跑完。
+      //
+      // 判据复用 device-link 既有的 isTransientRemoteError(同一条传输、同一类判断,
+      // 永久错误优先、未知错误不重试)。为它另写一份等价判据,正是本 PR 一路在消灭的形状。
+      const transient = isTransientRemoteError(
+        probeErr instanceof Error ? probeErr.message : String(probeErr),
+      );
+      log.warn(`[${p.logTag}] probing remote team after timeout failed`, {
+        attempt,
+        transient,
+        error: probeErr,
+      });
+      // 永久错误(被控端版本过旧 / 远程已禁用)重试多少次都是同一个结果 → 立即降级。
+      if (!transient) return null;
+      // 瞬态错误:继续用完剩余轮次;全部用尽后走循环外的 fail-closed。
     }
   }
   return null;
