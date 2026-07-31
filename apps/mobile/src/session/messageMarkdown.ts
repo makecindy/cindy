@@ -9,7 +9,12 @@ import { i18n } from '@/i18n';
 
 export type MobileMarkdownInline =
   | { type: 'text'; text: string }
-  | { type: 'link'; text: string; url: string }
+  // bare:这条 link 是从正文纯文本里切出来的裸路径(matchBareFilePathLink),不是作者
+  // 手写的 `[label](url)`。渲染层据此决定点亮后是否套等宽 chip —— 裸路径的未点亮态是
+  // 普通正文,套等宽会让同一句里点亮/未点亮的路径在字体、底色、下划线三处齐变;作者
+  // 手写且 label 像文件名的仍保留 chip(那是作者的排版意图)。见 DESIGN.md §14.5。
+  // 与桌面 remarkLocalPathLinks 打的 data-bare-path 标记是同一件事的两端实现。
+  | { type: 'link'; text: string; url: string; bare?: true }
   | { type: 'strong'; text: string }
   | { type: 'emphasis'; text: string }
   | { type: 'code'; text: string }
@@ -763,8 +768,8 @@ function matchBareFilePathLink(
       index: match.index,
       end: match.end,
       // 裸形态没有独立 label,显示文本就是路径原文(桌面切出的 link 节点同样以
-      // 路径原文作 children)。
-      inline: { type: 'link', text: match.value, url: match.value },
+      // 路径原文作 children)。bare 标记供渲染层区分来源(见 MobileMarkdownInline)。
+      inline: { type: 'link', text: match.value, url: match.value, bare: true },
     };
   }
 }

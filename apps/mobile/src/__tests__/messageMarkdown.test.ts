@@ -360,7 +360,7 @@ describe('messageMarkdown', () => {
               // 扩展名」的相对路径形态,按裸路径识别成 link 候选(渲染层再经被控端
               // stat 决定点亮 chip 还是保持纯文本)。本用例断言的是紧凑表格的分块,
               // 路径形态的口径见 describe('bare file paths(正文纯文本形态)')。
-              [{ type: 'link', text: 'Downloads\\RJ406835.zip', url: 'Downloads\\RJ406835.zip' }],
+              [{ type: 'link', text: 'Downloads\\RJ406835.zip', url: 'Downloads\\RJ406835.zip', bare: true }],
               [{ type: 'text', text: '8.42GB' }],
               [{ type: 'text', text: '删除前再确认' }],
             ],
@@ -1104,7 +1104,7 @@ describe('bare file paths(正文纯文本形态)', () => {
   it('句中裸路径切成 link,前后纯文本保留', () => {
     expect(parseMobileMarkdownInlines('见 src/App.tsx 第 20 行')).toEqual([
       { type: 'text', text: '见 ' },
-      { type: 'link', text: 'src/App.tsx', url: 'src/App.tsx' },
+      { type: 'link', text: 'src/App.tsx', url: 'src/App.tsx', bare: true },
       { type: 'text', text: ' 第 20 行' },
     ]);
   });
@@ -1112,18 +1112,18 @@ describe('bare file paths(正文纯文本形态)', () => {
   it('绝对路径 / 行号后缀 / 一段多条', () => {
     expect(parseMobileMarkdownInlines('图在 /Users/me/out/hero.png')).toEqual([
       { type: 'text', text: '图在 ' },
-      { type: 'link', text: '/Users/me/out/hero.png', url: '/Users/me/out/hero.png' },
+      { type: 'link', text: '/Users/me/out/hero.png', url: '/Users/me/out/hero.png', bare: true },
     ]);
     expect(parseMobileMarkdownInlines('见 src/App.tsx:42 那行')).toEqual([
       { type: 'text', text: '见 ' },
-      { type: 'link', text: 'src/App.tsx:42', url: 'src/App.tsx:42' },
+      { type: 'link', text: 'src/App.tsx:42', url: 'src/App.tsx:42', bare: true },
       { type: 'text', text: ' 那行' },
     ]);
     expect(parseMobileMarkdownInlines('对比 a/b.ts 和 c/d.ts')).toEqual([
       { type: 'text', text: '对比 ' },
-      { type: 'link', text: 'a/b.ts', url: 'a/b.ts' },
+      { type: 'link', text: 'a/b.ts', url: 'a/b.ts', bare: true },
       { type: 'text', text: ' 和 ' },
-      { type: 'link', text: 'c/d.ts', url: 'c/d.ts' },
+      { type: 'link', text: 'c/d.ts', url: 'c/d.ts', bare: true },
     ]);
   });
 
@@ -1169,7 +1169,7 @@ describe('bare file paths(正文纯文本形态)', () => {
     // 流式中途的常见中间态;闭合后下一轮重解析自然回到 code 形态。
     expect(parseMobileMarkdownInlines('见 `src/App.tsx 还没闭合')).toEqual([
       { type: 'text', text: '见 `' },
-      { type: 'link', text: 'src/App.tsx', url: 'src/App.tsx' },
+      { type: 'link', text: 'src/App.tsx', url: 'src/App.tsx', bare: true },
       { type: 'text', text: ' 还没闭合' },
     ]);
   });
@@ -1181,7 +1181,7 @@ describe('bare file paths(正文纯文本形态)', () => {
     // 注释外的照常识别,注释内的压制。
     expect(parseMobileMarkdownInlines('<!-- a/b.ts --> 但 c/d.ts 要改')).toEqual([
       { type: 'text', text: '<!-- a/b.ts --> 但 ' },
-      { type: 'link', text: 'c/d.ts', url: 'c/d.ts' },
+      { type: 'link', text: 'c/d.ts', url: 'c/d.ts', bare: true },
       { type: 'text', text: ' 要改' },
     ]);
   });
@@ -1189,7 +1189,7 @@ describe('bare file paths(正文纯文本形态)', () => {
   it('跨块注释状态同样压制(段起点仍在上一块开启的注释里)', () => {
     expect(parseMobileMarkdownInlines('见 src/App.tsx --> 之后 c/d.ts', true)).toEqual([
       { type: 'text', text: '见 src/App.tsx --> 之后 ' },
-      { type: 'link', text: 'c/d.ts', url: 'c/d.ts' },
+      { type: 'link', text: 'c/d.ts', url: 'c/d.ts', bare: true },
     ]);
   });
 
@@ -1206,21 +1206,21 @@ describe('bare file paths(正文纯文本形态)', () => {
       type: 'heading',
       inlines: [
         { type: 'text', text: '见 ' },
-        { type: 'link', text: 'src/a.ts', url: 'src/a.ts' },
+        { type: 'link', text: 'src/a.ts', url: 'src/a.ts', bare: true },
       ],
     });
     expect(parseMobileMarkdown('- 改 src/a.ts')[0]).toMatchObject({
       type: 'list_item',
       inlines: [
         { type: 'text', text: '改 ' },
-        { type: 'link', text: 'src/a.ts', url: 'src/a.ts' },
+        { type: 'link', text: 'src/a.ts', url: 'src/a.ts', bare: true },
       ],
     });
     expect(parseMobileMarkdown('> 见 src/a.ts')[0]).toMatchObject({
       type: 'blockquote',
       inlines: [
         { type: 'text', text: '见 ' },
-        { type: 'link', text: 'src/a.ts', url: 'src/a.ts' },
+        { type: 'link', text: 'src/a.ts', url: 'src/a.ts', bare: true },
       ],
     });
   });

@@ -657,12 +657,23 @@ default into components.
    - **正文裸写的路径点亮后保持正文字体,只加下划线 —— 两端同口径**(2026-07-31 实机
      走查后拍板)。它的未点亮态是普通正文,若点亮就套等宽,同一句里点亮的 `src/a.ts`
      与未点亮的 `src/b.ts` 会在**字体、底色、下划线三处齐变**,跳变无法向用户解释。
-     - 移动端:`LinkPathChipSpan` 的 chipStyle 不得含 `markdownInlineCode`。
+     两端都必须**按来源 + label 形态分三档**(判定口径同源:桌面
+     `shouldRenderCodeReferenceLabel`、移动 `chatPathLabelReadsAsFileReference`):
+
+     | 来源 | label | 点亮后 |
+     |---|---|---|
+     | 正文裸写的路径 | (无独立 label) | 正文字体 + 下划线,**不套等宽** |
+     | 作者手写 `[README.md](path)` | 读起来是文件引用 | 等宽 chip + 下划线 |
+     | 作者手写 `[看这份规则](path)` | 散文 | 正文字体 + 下划线 |
+
      - 桌面端:`remarkLocalPathLinks` 给切出的 link 节点打 `data-bare-path` 标记
        (走 mdast `data.hProperties`),`MarkdownTargetLink` 见到它就跳过
-       `shouldRenderCodeReferenceLabel`、直接走下划线链接形态。
-     - **作者手写的 `[README.md](path)` 不受此限**:label 像文件名时仍渲染成等宽
-       chip —— 那是作者的排版意图,且它的未点亮态本来就是同一段 label,不存在跳变。
+       `shouldRenderCodeReferenceLabel`、直接走 `ResolvedLocalLink`。
+     - 移动端:`matchBareFilePathLink` 在 link inline 上带 `bare: true`,
+       `LinkPathChipSpan` 据此决定 chipStyle 是否含 `markdownInlineCode`;非 bare 时
+       再过一遍 label 形态判定。**不得无条件去掉 `markdownInlineCode`** —— 那会把
+       作者手写的文件名链接一起降级(2026-07-31 PR #1144 review 实捉)。
+     - 作者手写的文件名链接保留 chip 是刻意的:那是作者的排版意图,与桌面一致。
 2. **外链与本地文件不做外观区分**,只表达「可点」;去哪由文本自身可读性承担(斜杠路径
    vs `https://` 前缀)。
 3. **聊天正文不使用 `--msg-link`。** 该 token 是主题契约(10 个内置主题各自定义,

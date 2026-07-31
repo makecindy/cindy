@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   canOpenChatPathChip,
+  chatPathLabelReadsAsFileReference,
   classifyChatPathLinkTarget,
   classifyInlineCodePathCandidate,
   dropDotSegments,
@@ -276,6 +277,38 @@ describe('歧义候选的点亮门槛(DESIGN.md §14.5 规则 5)', () => {
   });
 });
 
+describe('chatPathLabelReadsAsFileReference(决定手写链接是否保留等宽 chip)', () => {
+  // 桌面 shouldRenderCodeReferenceLabel 的移植,两端口径需同步。
+  const c = (url: string) => {
+    const cand = classifyChatPathLinkTarget(url);
+    expect(cand, `期望 ${url} 是路径候选`).not.toBeNull();
+    return cand!;
+  };
+
+  it('label 是 href 原文 / 末段文件名 / 文件名带行号 → 是文件引用', () => {
+    const url = '/Users/me/proj/README.md:17';
+    const cand = c(url);
+    expect(chatPathLabelReadsAsFileReference('/Users/me/proj/README.md', cand, url)).toBe(true);
+    expect(chatPathLabelReadsAsFileReference(url, cand, url)).toBe(true);
+    expect(chatPathLabelReadsAsFileReference('README.md', cand, url)).toBe(true);
+    expect(chatPathLabelReadsAsFileReference('README.md:17', cand, url)).toBe(true);
+  });
+
+  it('label 自身长得像路径 / 文件名 → 形状兜底也算', () => {
+    const url = 'docs/design-rules/DESIGN.md';
+    expect(chatPathLabelReadsAsFileReference('src/App.tsx', c(url), url)).toBe(true);
+    expect(chatPathLabelReadsAsFileReference('package.json', c(url), url)).toBe(true);
+  });
+
+  it('散文 label → 不是文件引用(走正文字体 + 下划线)', () => {
+    const url = 'docs/design-rules/DESIGN.md';
+    expect(chatPathLabelReadsAsFileReference('看这份规则', c(url), url)).toBe(false);
+    expect(chatPathLabelReadsAsFileReference('设计规范', c(url), url)).toBe(false);
+    expect(chatPathLabelReadsAsFileReference('', c(url), url)).toBe(false);
+    expect(chatPathLabelReadsAsFileReference('第一行\n第二行', c(url), url)).toBe(false);
+  });
+});
+
 describe('findBareFilePathMatch(正文纯文本裸路径词法)', () => {
   // 用例逐条对照桌面 apps/desktop/src/renderer/__tests__/remarkLocalPathLinks.test.ts,
   // 两端口径必须一致;桌面那份改了这份要跟。
@@ -421,18 +454,19 @@ describe('路径 chip 的可点信号(源码级守卫)', () => {
     expect(body, '外链不得加粗(GitHub 的 a 也只有 text-decoration)').not.toMatch(/fontWeight:/);
   });
 
-  it('链接 / 裸路径形态点亮时不套 markdownInlineCode(否则会从正文跳成等宽压暗)', () => {
+  it('LinkPathChipSpan 的等宽 chip 是按来源 + label 条件套的,不是无条件开或关', () => {
     const src = readRenderer();
-    // LinkPathChipSpan 的 plainStyle 是普通正文,chipStyle 若混入 markdownInlineCode,
-    // 同一段里点亮与未点亮的路径就会一个等宽压暗、一个正文,视觉跳变且无法解释。
     const start = src.indexOf('function LinkPathChipSpan');
     expect(start, '未找到 LinkPathChipSpan').toBeGreaterThan(-1);
-    // 从函数起点往后取第一个 chipStyle(该组件只有一个)。
-    const chipStyle = /chipStyle=\{\[([^\]]*)\]\}/.exec(src.slice(start));
-    expect(chipStyle, '未找到 LinkPathChipSpan 的 chipStyle').not.toBeNull();
-    expect(chipStyle![1], 'LinkPathChipSpan 不应套 markdownInlineCode')
-      .not.toContain('markdownInlineCode');
-    expect(chipStyle![1]).toContain('markdownPathChip');
+    const body = src.slice(start, start + 2400);
+    // 必须先按来源分流(bare = 正文裸写),再过 label 形态判定 —— 无条件去掉
+    // markdownInlineCode 会把作者手写的 `[README.md](path)` 一起降级成正文
+    // (PR #1144 review 实捉);无条件套上又会让裸路径点亮时形态跳变。
+    expect(body, '未按 bare 来源分流').toMatch(/!bare/);
+    expect(body, '未复用 label 形态判定').toContain('chatPathLabelReadsAsFileReference');
+    // 两个分支都在:套 chip 的与不套的。
+    expect(body, '缺少套等宽 chip 的分支').toMatch(/markdownInlineCode[\s\S]*markdownPathChip/);
+    expect(body, '缺少不套等宽的分支').toMatch(/\[baseStyle, styles\.markdownPathChip\]/);
   });
 
   it('行内 code 形态仍叠在 markdownInlineCode 之后(顺序错了下划线会被覆盖)', () => {

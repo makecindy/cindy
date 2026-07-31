@@ -178,6 +178,7 @@ import {
 } from '@/session/sessionReferences';
 import {
   canOpenChatPathChip,
+  chatPathLabelReadsAsFileReference,
   classifyChatPathLinkTarget,
   classifyInlineCodePathCandidate,
   resolveChatAbsPath,
@@ -3635,6 +3636,7 @@ function ChatPathChipSpan({
 function LinkPathChipSpan({
   url,
   display,
+  bare,
   baseStyle,
   SpanText,
   styles,
@@ -3642,21 +3644,35 @@ function LinkPathChipSpan({
 }: {
   url: string;
   display: string;
+  /** 正文裸写的路径(非作者手写的 `[label](url)`),决定点亮后是否套等宽 chip。 */
+  bare?: boolean;
   baseStyle?: StyleProp<TextStyle>;
   SpanText: typeof Text;
   styles: ReturnType<typeof makeStyles>;
   streaming?: boolean;
 }) {
   const candidate = useMemo(() => classifyChatPathLinkTarget(url), [url]);
+  // 点亮后是否套等宽 chip,按 DESIGN.md §14.5 的落地推论分三档(与桌面
+  // shouldRenderCodeReferenceLabel 的分流一一对应):
+  //   - 正文裸写的路径 → **不套**。它的未点亮态是普通正文,套上会让同一句里点亮的
+  //     `src/a.ts` 与未点亮的 `src/b.ts` 在字体、底色、下划线三处齐变。
+  //   - 作者手写、label 读起来是文件引用(`[README.md](path)`)→ **套**。那是作者的
+  //     排版意图,对齐桌面 FileTargetChip。
+  //   - 作者手写、散文 label(`[看这份规则](path)`)→ 不套,对齐桌面 ResolvedLocalLink。
+  const codeStyled = useMemo(
+    () => !bare && candidate !== null && chatPathLabelReadsAsFileReference(display, candidate, url),
+    [bare, candidate, display, url],
+  );
   return (
     <ChatPathChipSpan
       candidate={candidate}
-      // 链接 / 正文裸路径形态:点亮**只加下划线**,不套 markdownInlineCode。
-      // 否则 plainStyle 是普通正文、chipStyle 却是压暗等宽,同一段话里
-      // `src/a.ts` 点亮、`src/b.ts` 没点亮就会一个是等宽压暗、一个是正文,
-      // 视觉跳变大且无法向用户解释(DESIGN.md §14.5:差异只应是那条横线)。
-      chipStyle={[baseStyle, styles.markdownPathChip]}
+      chipStyle={
+        codeStyled
+          ? [baseStyle, styles.markdownInlineCode, styles.markdownPathChip]
+          : [baseStyle, styles.markdownPathChip]
+      }
       display={display}
+      // 未点亮一律回落正文样式(与桌面一致:未解析的 local-candidate 渲染成纯 span)。
       plainStyle={baseStyle}
       SpanText={SpanText}
       streaming={streaming}
@@ -3769,6 +3785,7 @@ function renderInline(
         return (
           <LinkPathChipSpan
             key={spanKey(`path-link:${index}:${inline.url}`)}
+            bare={inline.bare}
             baseStyle={ctx.baseStyle}
             display={inline.text}
             SpanText={SpanText}

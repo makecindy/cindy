@@ -328,6 +328,39 @@ export function canOpenChatPathChip(kind: 'file' | 'directory', relPath: string 
   return kind === 'file' || relPath !== null;
 }
 
+/**
+ * 链接 label 是否「读起来就是个文件引用」(桌面 shouldRenderCodeReferenceLabel 的
+ * 移植,两端口径需同步)。用途:决定**作者手写**的本地路径链接点亮后是否套等宽
+ * chip —— `[README.md](path)` 是作者的排版意图,保留 chip;`[看这份规则](path)`
+ * 是散文 label,按正文字体 + 下划线渲染。
+ *
+ * 正文裸写的路径不走这条判定(它没有独立 label),一律保持正文字体;见
+ * DESIGN.md §14.5 的落地推论。
+ */
+export function chatPathLabelReadsAsFileReference(
+  label: string,
+  candidate: ChatPathCandidate,
+  originalUrl: string,
+): boolean {
+  const trimmed = label.trim();
+  if (!trimmed || trimmed.includes('\n')) return false;
+  // label 就是 href 原文(含未剥行号后缀的形态)。
+  if (trimmed === candidate.href || trimmed === originalUrl.trim()) return true;
+  // label 是末段文件名,可带 :line[:column]。
+  const baseName = pathDisplayName(candidate.href);
+  if (trimmed === baseName) return true;
+  if (candidate.line !== undefined) {
+    if (trimmed === `${baseName}:${candidate.line}`) return true;
+    if (candidate.column !== undefined && trimmed === `${baseName}:${candidate.line}:${candidate.column}`) {
+      return true;
+    }
+  }
+  // 形状兜底:label 自身长得像路径 / 文件名。先剥行号后缀,再复用与分类器同一组
+  // 谓词,「什么算文件」全仓一致。
+  const labelPath = splitChatPathLineSuffix(trimmed).href;
+  return looksLikeFilePath(labelPath) || looksLikeBareFileReference(labelPath);
+}
+
 // ── 正文纯文本裸路径的词法定位(桌面 remarkLocalPathLinks 的移植) ──────────
 //
 // 桌面端把「回复正文纯文本里长得像本地路径的 token」切成 mdast link 节点
