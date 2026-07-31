@@ -16,6 +16,8 @@ function channel(fetchImplementation: typeof fetch, overrides: Record<string, un
   return createXaiImageChannel({
     hasOAuthLogin: () => true,
     getAccessToken: async () => 'grok-oauth-token',
+    getOwnerScopeKey: () => 'cloud:owner-a:1',
+    isOwnerBoundaryPending: () => false,
     fetchImplementation,
     ...overrides,
   });
@@ -117,6 +119,19 @@ describe('xaiImageClient', () => {
       channel(untrusted).generateImage({ model: 'xai/grok-imagine-image', prompt: 'p' }),
     ).rejects.toThrow('不可信');
 
+    const malformed = vi.fn<typeof fetch>(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [{ url: 'not a URL' }],
+          }),
+          { status: 200 },
+        ),
+    );
+    await expect(
+      channel(malformed).generateImage({ model: 'xai/grok-imagine-image', prompt: 'p' }),
+    ).rejects.toThrow('不可信');
+
     const redirected = vi.fn<typeof fetch>(async (input) =>
       String(input).includes('/images/generations')
         ? new Response(JSON.stringify({ data: [{ url: 'https://imgen.x.ai/output.png' }] }), {
@@ -131,6 +146,36 @@ describe('xaiImageClient', () => {
       channel(redirected).generateImage({ model: 'xai/grok-imagine-image', prompt: 'p' }),
     ).rejects.toThrow('HTTP 302');
     expect(redirected.mock.calls[1]?.[1]).toMatchObject({ redirect: 'manual' });
+  });
+
+  it('账号作用域在准备请求或等待响应期间改变时 fail closed', async () => {
+    let ownerScope = 'cloud:owner-a:1';
+    const beforeFetch = vi.fn<typeof fetch>();
+    const switchesDuringTokenRead = channel(beforeFetch, {
+      getOwnerScopeKey: () => ownerScope,
+      getAccessToken: async () => {
+        ownerScope = 'cloud:owner-b:2';
+        return 'owner-a-token';
+      },
+    });
+
+    await expect(
+      switchesDuringTokenRead.generateImage({ model: 'xai/grok-imagine-image', prompt: 'p' }),
+    ).rejects.toThrow('账号已切换');
+    expect(beforeFetch).not.toHaveBeenCalled();
+
+    ownerScope = 'cloud:owner-a:3';
+    const responseFetch = vi.fn<typeof fetch>(async () => {
+      ownerScope = 'cloud:owner-b:4';
+      return new Response(JSON.stringify({ data: [{ b64_json: 'aW1hZ2U=' }] }), { status: 200 });
+    });
+    await expect(
+      channel(responseFetch, { getOwnerScopeKey: () => ownerScope }).generateImage({
+        model: 'xai/grok-imagine-image',
+        prompt: 'p',
+      }),
+    ).rejects.toThrow('账号已切换');
+    expect(responseFetch).toHaveBeenCalledTimes(1);
   });
 
   it('登录态决定 ready;派发拦截、源图上限与 OAuth 拒绝均在出网边界处理', async () => {
@@ -149,6 +194,15 @@ describe('xaiImageClient', () => {
       blocked.generateImage({ model: 'xai/grok-imagine-image', prompt: 'p' }),
     ).rejects.toThrow('模型已停用');
     expect(doFetch).not.toHaveBeenCalled();
+    expect(getAccessToken).not.toHaveBeenCalled();
+
+    const boundaryBlocked = channel(doFetch, {
+      getAccessToken,
+      isOwnerBoundaryPending: () => true,
+    });
+    await expect(
+      boundaryBlocked.generateImage({ model: 'xai/grok-imagine-image', prompt: 'p' }),
+    ).rejects.toThrow('账号正在切换');
     expect(getAccessToken).not.toHaveBeenCalled();
 
     await expect(

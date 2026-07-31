@@ -27,6 +27,8 @@ interface XaiImageResponse {
 export interface CreateXaiImageChannelOptions {
   hasOAuthLogin(): boolean;
   getAccessToken(): Promise<string>;
+  getOwnerScopeKey(): string;
+  isOwnerBoundaryPending(): boolean;
   fetchImplementation?: typeof fetch;
   beforeDispatch?(model: string): void;
   onAuthRejected?(failure: {
@@ -58,11 +60,29 @@ function parseResponse(text: string): XaiImageResponse {
 }
 
 function assertXaiImageUrl(raw: string): string {
-  const url = new URL(raw);
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error('xAI 图像通道返回了不可信的图片地址');
+  }
   if (url.protocol !== 'https:' || !(url.hostname === 'x.ai' || url.hostname.endsWith('.x.ai'))) {
     throw new Error('xAI 图像通道返回了不可信的图片地址');
   }
   return url.toString();
+}
+
+function captureOwnerScope(opts: CreateXaiImageChannelOptions): string {
+  if (opts.isOwnerBoundaryPending()) {
+    throw new Error('xAI 图片请求期间账号正在切换,请稍后重试');
+  }
+  return opts.getOwnerScopeKey();
+}
+
+function assertOwnerScopeCurrent(opts: CreateXaiImageChannelOptions, expected: string): void {
+  if (opts.isOwnerBoundaryPending() || opts.getOwnerScopeKey() !== expected) {
+    throw new Error('xAI 图片请求期间账号已切换,请重试');
+  }
 }
 
 export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): ImageChannel {
@@ -81,6 +101,9 @@ export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): Image
     // 先在任何凭证刷新或本地文件读取之前拦截已停用模型；后面的二次检查
     // 继续覆盖准备请求期间发生的配置变化。
     opts.beforeDispatch?.(params.model);
+    // OAuth token 与源图都属于当前数据 owner。任务跨 await 后必须仍在同一稳定
+    // owner scope，不能把 A 的 token 或图片派发进 B 的运行时。
+    const ownerScopeKey = captureOwnerScope(opts);
     const [token, images] = await Promise.all([
       opts.getAccessToken(),
       Promise.all(paths.map(sourceImage)),
@@ -99,6 +122,7 @@ export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): Image
     }
 
     opts.beforeDispatch?.(params.model);
+    assertOwnerScopeCurrent(opts, ownerScopeKey);
     const response = await doFetch(`${XAI_API_BASE}/images/${isEdit ? 'edits' : 'generations'}`, {
       method: 'POST',
       headers: {
@@ -109,6 +133,7 @@ export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): Image
       body: JSON.stringify(body),
     });
     const responseText = await response.text();
+    assertOwnerScopeCurrent(opts, ownerScopeKey);
     if (!response.ok) {
       if ((response.status === 401 || response.status === 403) && opts.onAuthRejected) {
         await opts
@@ -146,6 +171,7 @@ export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): Image
         throw new Error(`xAI 图片下载失败(HTTP ${imageResponse.status})`);
       }
       const bytes = Buffer.from(await imageResponse.arrayBuffer());
+      assertOwnerScopeCurrent(opts, ownerScopeKey);
       const mime = sniffMediaMime(bytes);
       if (!mime?.startsWith('image/')) throw new Error('xAI 图片下载结果不是有效图片');
       return { data: [{ b64_json: bytes.toString('base64') }], output_format: mime.split('/')[1] };

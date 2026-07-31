@@ -29,6 +29,7 @@ import {
 } from '../../shared/ghost.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import {
+  activeOwnerScopeKey,
   getActiveAppSession,
   isAppSessionBoundaryPending,
   ownerScopedUserDataPath,
@@ -1953,6 +1954,8 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     registry.register('xai', createXaiImageChannel({
       hasOAuthLogin: () => hasGrokOAuthLogin(),
       getAccessToken: () => getGrokAccessToken(),
+      getOwnerScopeKey: () => activeOwnerScopeKey(),
+      isOwnerBoundaryPending: () => isAppSessionBoundaryPending(),
       fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
       beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
       onAuthRejected: (failure) => invalidateXaiBridgeAuth(failure),
