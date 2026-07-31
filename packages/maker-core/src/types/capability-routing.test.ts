@@ -7,6 +7,7 @@ import {
   isCapabilitySourceExplicitlySelected,
   type CapabilityRouteOverride,
   type CapabilityRoutingPolicy,
+  type CapabilitySourceSelector,
 } from './capability-routing.js';
 
 const route: CapabilityRouteOverride = {
@@ -25,6 +26,25 @@ const route: CapabilityRouteOverride = {
 };
 
 describe('capability route resolution', () => {
+  it('requires harness provenance only for harness-owned sources', () => {
+    // @ts-expect-error Harness-owned selectors must identify their adapter.
+    const missingHarness: CapabilitySourceSelector = {
+      kind: 'harness-plugin',
+      surface: 'mcp',
+      id: 'feishu-delegate',
+    };
+    // @ts-expect-error User-owned selectors cannot masquerade as harness sources.
+    const userSourceWithHarness: CapabilitySourceSelector = {
+      kind: 'user-skill',
+      harness: 'codex',
+      surface: 'skill',
+      id: 'user-skill',
+    };
+
+    expect(missingHarness.kind).toBe('harness-plugin');
+    expect(userSourceWithHarness.kind).toBe('user-skill');
+  });
+
   it('recognizes exact namespaced skill selectors without unlocking on a display name', () => {
     expect(
       isCapabilitySourceExplicitlySelected(
@@ -77,8 +97,9 @@ describe('capability route resolution', () => {
     const userOwnedLookalike = {
       ...route,
       source: {
-        ...route.source,
         kind: 'project-skill' as const,
+        surface: route.source.surface,
+        id: route.source.id,
       },
     };
     const policy = {
@@ -88,8 +109,9 @@ describe('capability route resolution', () => {
         {
           ...route,
           source: {
-            ...route.source,
+            kind: 'harness-plugin',
             harness: 'claude-code',
+            surface: 'mcp',
             id: 'plugin:feishu-delegate:feishu-delegate',
           },
         },

@@ -19,15 +19,7 @@ export type CapabilitySourceKind =
 
 export type CapabilitySurface = 'skill' | 'plugin' | 'mcp' | 'app' | 'tool';
 
-export interface CapabilitySourceSelector {
-  kind: CapabilitySourceKind;
-  /**
-   * Adapter id such as `codex` or `claude-code`.
-   *
-   * This remains a string instead of AgentKind so adding a third harness does
-   * not require widening the shared routing contract first.
-   */
-  harness?: string;
+interface CapabilitySourceSelectorBase {
   surface: CapabilitySurface;
   /**
    * Harness-native stable id.
@@ -54,6 +46,35 @@ export interface CapabilitySourceSelector {
    */
   containerId?: string;
 }
+
+interface HarnessOwnedCapabilitySourceSelector
+  extends CapabilitySourceSelectorBase {
+  kind: Extract<
+    CapabilitySourceKind,
+    'harness-builtin' | 'harness-plugin'
+  >;
+  /**
+   * Adapter id such as `codex` or `claude-code`.
+   *
+   * This remains a string instead of AgentKind so adding a third harness does
+   * not require widening the shared routing contract first.
+   */
+  harness: string;
+}
+
+interface NonHarnessCapabilitySourceSelector
+  extends CapabilitySourceSelectorBase {
+  kind: Exclude<
+    CapabilitySourceKind,
+    HarnessOwnedCapabilitySourceSelector['kind']
+  >;
+  /** Prevent host/user/project selectors from carrying harness provenance. */
+  harness?: never;
+}
+
+export type CapabilitySourceSelector =
+  | HarnessOwnedCapabilitySourceSelector
+  | NonHarnessCapabilitySourceSelector;
 
 export interface CapabilityReplacement {
   kind: 'cindy-host' | 'cindy-plugin';
@@ -91,7 +112,7 @@ export interface CapabilityRouteTarget {
 
 export function isHarnessOwnedCapabilitySource(
   source: CapabilitySourceSelector,
-): boolean {
+): source is HarnessOwnedCapabilitySourceSelector {
   return (
     source.kind === 'harness-builtin' ||
     source.kind === 'harness-plugin'

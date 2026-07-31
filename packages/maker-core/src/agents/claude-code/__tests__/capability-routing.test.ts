@@ -28,7 +28,6 @@ describe('buildClaudeSkillOverrides', () => {
           capabilityId: 'legacy',
           source: {
             kind: 'user-skill',
-            harness: 'claude-code',
             surface: 'skill',
             id: 'legacy-skill',
           },
@@ -38,7 +37,6 @@ describe('buildClaudeSkillOverrides', () => {
           capabilityId: 'normal',
           source: {
             kind: 'project-skill',
-            harness: 'claude-code',
             surface: 'skill',
             id: 'normal-skill',
           },
