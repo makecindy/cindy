@@ -308,6 +308,48 @@ describe('applyInputProjection 自愈进行中提示', () => {
   });
 });
 
+// 「见过占边界」标记是"仍在飞"第二支判据的必要条件:steer 顶替 activeTurn 后
+// continuationInFlightClientId 变 null,靠它接住;而 goal-host 续轮走 session.send 直发、
+// 不落 user 行,靠它挡住"app 退出后遗留的历史重连行被无关 Goal turn 误判成正在重连"。
+describe('seenContinuationInFlightClientId(只增不减)', () => {
+  beforeEach(() => {
+    (globalThis as { window?: unknown }).window = { electronAPI: makeElectronApiStub() };
+    makerChatStore.initGlobalListeners();
+  });
+
+  afterEach(() => {
+    makerChatStore.purgeSession(SID);
+  });
+
+  it('初始为 null;观察到非空即记下', () => {
+    inputProjectionCb!(projection());
+    expect(makerChatStore.getSnapshot(SID).seenContinuationInFlightClientId).toBeNull();
+
+    inputProjectionCb!(projection({ continuationInFlightClientId: 'resume-1' }));
+    expect(makerChatStore.getSnapshot(SID).seenContinuationInFlightClientId).toBe('resume-1');
+  });
+
+  it('字段变回 null(steer 顶替 activeTurn)时保留上次观察值', () => {
+    inputProjectionCb!(projection({ continuationInFlightClientId: 'resume-1' }));
+    inputProjectionCb!(projection({ continuationInFlightClientId: null }));
+    const snap = makerChatStore.getSnapshot(SID);
+    expect(snap.continuationInFlightClientId, '当前占位已让给 steer').toBeNull();
+    expect(snap.seenContinuationInFlightClientId, '"见过"不该被抹掉').toBe('resume-1');
+  });
+
+  it('换成新的续跑项时跟着前进', () => {
+    inputProjectionCb!(projection({ continuationInFlightClientId: 'resume-1' }));
+    inputProjectionCb!(projection({ continuationInFlightClientId: 'resume-2' }));
+    expect(makerChatStore.getSnapshot(SID).seenContinuationInFlightClientId).toBe('resume-2');
+  });
+
+  it('缺省该投影字段(旧被控端)→ 始终为 null,第二支判据不成立', () => {
+    inputProjectionCb!(projection());
+    inputProjectionCb!(projection());
+    expect(makerChatStore.getSnapshot(SID).seenContinuationInFlightClientId).toBeNull();
+  });
+});
+
 describe('同一次中断事件的多次重连折叠成一行', () => {
   beforeEach(() => {
     (globalThis as { window?: unknown }).window = { electronAPI: makeElectronApiStub() };

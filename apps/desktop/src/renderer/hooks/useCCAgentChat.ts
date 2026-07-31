@@ -184,6 +184,8 @@ interface UseCCAgentChatReturn {
   credentialSwitchWait: { clientId?: string; blockedBySessionIds: string[] } | null;
   /** 已离队、正在 coordinator dispatch/turn 边界内的 Continue clientId。 */
   continuationInFlightClientId: string | null;
+  /** 本次运行期内见过占边界的续跑项 clientId(自愈重连行判"仍在飞"的第二支判据)。 */
+  seenContinuationInFlightClientId: string | null;
   /** F-SYNC-2: Load older messages (prepend to top) */
   loadOlderMessages: () => void;
   isLoadingMore: boolean;
@@ -833,6 +835,7 @@ export function useCCAgentChat(
     errorRetryText: lightState.errorRetryText,
     credentialSwitchWait: lightState.credentialSwitchWait,
     continuationInFlightClientId: lightState.continuationInFlightClientId,
+    seenContinuationInFlightClientId: lightState.seenContinuationInFlightClientId,
     loadOlderMessages,
     isLoadingMore: lightState.isLoadingMore,
     hasMoreMessages: lightState.hasMoreMessages,

@@ -820,6 +820,18 @@ export interface SessionChatState {
    * 保持熄灭，同时不影响用户取消仍在队列中的 Continue 后恢复横幅。
    */
   continuationInFlightClientId: string | null;
+  /**
+   * 本次 app 运行期内**观察到过**占据 dispatch/turn 边界的那条续跑项 clientId（只增不减）。
+   *
+   * 为什么需要它：`steer` 被接受时 coordinator 会替换 activeTurn，`continuationInFlightClientId`
+   * 随之变 null —— 可那个 vendor turn 还是原来那个续跑 turn。自愈重连行靠这个"见过"标记 +
+   * 「它仍是最后一条用户侧输入」把那段接住。
+   *
+   * 为什么**不能**只靠「最后一条用户侧输入 + 会话在跑」：goal-host 的续轮走 `session.send` 直发、
+   * 不落 user 行（controller.fireTurn），于是 app 退出后遗留的历史重连行会在一个无关 Goal turn
+   * 里被误判成"正在重连"（codex P2）。历史行在本次运行期从未占过边界，这个标记正好把它挡住。
+   */
+  seenContinuationInFlightClientId: string | null;
   isLoadingMore: boolean;
   hasMoreMessages: boolean;
   /**
@@ -1015,6 +1027,7 @@ export type SessionChatLightState = Pick<
   | 'errorRetryText'
   | 'credentialSwitchWait'
   | 'continuationInFlightClientId'
+  | 'seenContinuationInFlightClientId'
   | 'isLoadingMore'
   | 'hasMoreMessages'
   | 'isFirstMessage'
@@ -1066,6 +1079,7 @@ function createInitialState(): SessionChatState {
     errorRetryText: null,
     credentialSwitchWait: null,
     continuationInFlightClientId: null,
+    seenContinuationInFlightClientId: null,
     isLoadingMore: false,
     hasMoreMessages: true,
     historyWindowHasIsland: false,
@@ -1130,6 +1144,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   errorRetryText: null,
   credentialSwitchWait: null,
   continuationInFlightClientId: null,
+  seenContinuationInFlightClientId: null,
   isLoadingMore: false,
   hasMoreMessages: false,
   historyWindowHasIsland: false,
@@ -1654,6 +1669,9 @@ function applyInputProjection(projection: AgentInputProjection): void {
       errorRetryText: projection.errorRetryText,
       credentialSwitchWait: projection.credentialSwitchWait ?? null,
       continuationInFlightClientId: projection.continuationInFlightClientId ?? null,
+      // 只增不减:字段变回 null(如 steer 顶替了 activeTurn)时保留上次观察到的值。
+      seenContinuationInFlightClientId:
+        projection.continuationInFlightClientId ?? s.seenContinuationInFlightClientId,
       ...(authRetryProjectionError ? { _authRetryPersistOnProjectionError: undefined } : {}),
     };
   });
@@ -4753,6 +4771,7 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     errorRetryText: state.errorRetryText,
     credentialSwitchWait: state.credentialSwitchWait,
     continuationInFlightClientId: state.continuationInFlightClientId,
+    seenContinuationInFlightClientId: state.seenContinuationInFlightClientId,
     isLoadingMore: state.isLoadingMore,
     hasMoreMessages: state.hasMoreMessages,
     isFirstMessage: state.isFirstMessage,
@@ -4791,6 +4810,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.errorRetryText === b.errorRetryText &&
     a.credentialSwitchWait === b.credentialSwitchWait &&
     a.continuationInFlightClientId === b.continuationInFlightClientId &&
+    a.seenContinuationInFlightClientId === b.seenContinuationInFlightClientId &&
     a.isLoadingMore === b.isLoadingMore &&
     a.hasMoreMessages === b.hasMoreMessages &&
     a.isFirstMessage === b.isFirstMessage &&
