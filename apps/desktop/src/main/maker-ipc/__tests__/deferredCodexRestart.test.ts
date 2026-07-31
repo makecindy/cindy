@@ -88,27 +88,35 @@ describe('DeferredCodexRestartService', () => {
     expect(service.isPending()).toBe(false);
   });
 
-  it('peekPendingApplyRuntime 只在 pending 时返回登记的回调(跨设置域接续用)', async () => {
+  it('schedule 缺省 applyRuntime 时保留已登记回调(跨设置域原子接续)', async () => {
+    // spawn 配置变更(自身无 runtime 维度)登记时不传回调 —— service 侧 preserve,
+    // 不丢 memory 域排队中的 native 同步工作;调用方侧 peek-then-schedule 会被
+    // prepare 的 await 窗口打断(codex/greptile review 第 2 轮)。
+    const order: string[] = [];
+    const restart = vi.fn(async () => {
+      order.push('restart');
+    });
+    const { service } = createService({ restart });
+    service.schedule('memory-change', async () => {
+      order.push('memory-runtime');
+    });
+    service.schedule('subagent-spawn-config-change');
+    service.onSessionSettled();
+    await vi.runOnlyPendingTimersAsync();
+    expect(order).toEqual(['memory-runtime', 'restart']);
+    expect(service.isPending()).toBe(false);
+  });
+
+  it('takePendingApplyRuntime 原子取走回调,pending 标志不动', () => {
     const { service } = createService();
-    expect(service.peekPendingApplyRuntime()).toBeNull();
+    expect(service.takePendingApplyRuntime()).toBeNull();
 
     const memoryRuntime = async () => {};
     service.schedule('memory-change', memoryRuntime);
-    expect(service.peekPendingApplyRuntime()).toBe(memoryRuntime);
-
-    // 接续场景:spawn 配置变更(自身无 runtime 维度)把窥视到的回调随自己的
-    // 登记带走 —— schedule 是 last-write-wins,不接续就会丢 memory 的 native
-    // 同步工作(codex review P1)。
-    service.schedule(
-      'subagent-spawn-config-change',
-      service.peekPendingApplyRuntime() ?? undefined,
-    );
-    expect(service.peekPendingApplyRuntime()).toBe(memoryRuntime);
-
-    service.onSessionSettled();
-    await vi.runOnlyPendingTimersAsync();
-    expect(service.isPending()).toBe(false);
-    expect(service.peekPendingApplyRuntime()).toBeNull();
+    expect(service.takePendingApplyRuntime()).toBe(memoryRuntime);
+    // 取走后回调清空,但登记本身仍在(重启仍会兑现)。
+    expect(service.takePendingApplyRuntime()).toBeNull();
+    expect(service.isPending()).toBe(true);
   });
 
   it('applyRuntime 失败只 warn, 重启照常执行(重启是最终收敛)', async () => {
@@ -511,6 +519,50 @@ describe('runMemoryChangeWithCodexRestart', () => {
     ).rejects.toThrow('rpc failed');
     expect(deps.cancel).toHaveBeenCalledTimes(1);
     expect(deps.finalize).not.toHaveBeenCalled();
+  });
+
+  it('applyRuntime 缺省的立即路径: 原子取走并补执行排队回调,再 clear + finalize', async () => {
+    // 子代理 spawn 配置的立即路径:自身无 runtime 工作,但 clear 前必须把 Memory 域
+    // 排队中的回调补执行,否则静默丢工作(review 第 2 轮)。
+    const deps = createDeps();
+    const order: string[] = [];
+    const takePendingApplyRuntime = vi.fn(() => async () => {
+      order.push('inherited-runtime');
+    });
+    const result = await runMemoryChangeWithCodexRestart(
+      {
+        ...deps,
+        takePendingApplyRuntime,
+        clearDeferredRestart: vi.fn(() => order.push('clear')),
+        finalize: vi.fn(async () => {
+          order.push('finalize');
+        }),
+      },
+      {
+        persist: async () => {
+          order.push('persist');
+          return { value: 7 };
+        },
+        reason: 'subagent-spawn-config-change',
+      },
+    );
+    expect(result).toEqual({ value: 7, codexRestartDeferred: false });
+    expect(order).toEqual(['persist', 'inherited-runtime', 'clear', 'finalize']);
+    expect(takePendingApplyRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it('applyRuntime 缺省的 busy 路径: 登记时不带回调(service 侧 preserve 语义)', async () => {
+    const deps = createDeps();
+    deps.prepare.mockRejectedValueOnce(new CodexCredentialModeSwitchBusyError(['s1']));
+    const result = await runMemoryChangeWithCodexRestart(deps, {
+      persist: async () => ({ value: 9 }),
+      reason: 'subagent-spawn-config-change',
+    });
+    expect(result).toEqual({ value: 9, codexRestartDeferred: true });
+    expect(deps.scheduleDeferredRestart).toHaveBeenCalledWith(
+      'subagent-spawn-config-change',
+      undefined,
+    );
   });
 
   it('finalize 失败只 warn, 设置提交结果照常返回', async () => {

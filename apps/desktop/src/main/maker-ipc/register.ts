@@ -817,6 +817,7 @@ async function applyMemoryChangeWithCodexRestart<T extends object>(
           agentInputCoordinatorHolder?.wakeSession(sessionId, 'deferred-codex-restart-superseded');
         }
       },
+      takePendingApplyRuntime: () => deferredCodexRestartHolder?.takePendingApplyRuntime() ?? null,
       logger: log,
     },
     parts,
@@ -826,20 +827,18 @@ async function applyMemoryChangeWithCodexRestart<T extends object>(
 /**
  * 子代理 spawn 配置(`-c agents.*`)变更的统一执行体:复用 Memory 设置的
  * 「能立即软重启就重启,busy 就延迟到全部本地 Codex 会话空闲」链路。子代理配置
- * 自身没有 native 热推维度(唯一杠杆是重启后新 spawn 现读 store),但绝不能用
- * no-op 覆盖/丢弃别的设置域(Maker Memory)已登记的延迟 runtime 工作 ——
- * service.schedule 是 last-write-wins,且立即路径的 clearDeferredRestart 会丢弃
- * pending 登记(codex review P1)。因此进入执行体前先窥视并接续 pending 的
- * applyRuntime:busy 路径把它随本次登记带走,立即路径在重启前原地补执行。
+ * 自身没有 native 热推维度(唯一杠杆是重启后新 spawn 现读 store),applyRuntime
+ * 有意缺省 —— 跨设置域接续由基础设施原子完成,不在这里快照(peek-then-schedule
+ * 会被 prepare 的 await 窗口打断,盖掉窗口内 Memory 新登记的回调,review 第 2 轮):
+ * busy 路径 service.schedule 对缺省回调做 preserve;立即路径执行体经
+ * takePendingApplyRuntime 把排队工作原地补执行后再重启。
  * 调用方(bootstrap-electron 的 SET/RESET)负责先判定变更是否触及 spawn 注入键。
  */
 export async function applyCodexSpawnConfigChangeWithRestart<T extends object>(
   persist: () => Promise<T>,
 ): Promise<T & { codexRestartDeferred: boolean }> {
-  const inheritedApplyRuntime = deferredCodexRestartHolder?.peekPendingApplyRuntime() ?? null;
   return applyMemoryChangeWithCodexRestart({
     persist,
-    applyRuntime: inheritedApplyRuntime ?? (async () => {}),
     reason: 'subagent-spawn-config-change',
   });
 }

@@ -86,7 +86,14 @@ export class DeferredCodexRestartService {
   schedule(reason: string, applyRuntime?: () => Promise<void>): void {
     const alreadyPending = this.pending;
     this.pending = true;
-    this.pendingApplyRuntime = applyRuntime ?? null;
+    // applyRuntime === undefined 表示「本域没有 runtime 工作」:**保留**已登记的
+    // 回调而非清空 —— 跨设置域的调用方(子代理 spawn 配置)据此原子接续 Memory 域
+    // 排队中的 native 同步/bridge 收敛工作;调用方侧 peek-then-schedule 会被自身
+    // prepare 的 await 窗口打断,快照可能盖掉窗口内新登记的回调(codex/greptile
+    // review 第 2 轮)。同域覆盖(memory-over-memory 传入新回调)仍是 last-write-wins。
+    if (applyRuntime !== undefined) {
+      this.pendingApplyRuntime = applyRuntime;
+    }
     if (!alreadyPending) {
       this.scheduleRetry();
     }
@@ -94,13 +101,16 @@ export class DeferredCodexRestartService {
   }
 
   /**
-   * 只读窥视当前登记的 runtime 回调。schedule() 是 last-write-wins:跨设置域的
-   * 调用方(如子代理 spawn 配置,自身无 runtime 维度)必须先窥视并**接续**已
-   * 登记的回调,不能用 no-op 覆盖别的设置域(Maker Memory)排队中的 native
-   * 同步工作(codex review P1);同域(memory-over-memory)的覆盖仍是设计语义。
+   * 原子取走当前登记的 runtime 回调(读 + 清,单次同步调用内完成;pending 标志
+   * 不动)。供立即路径在「即将 finalize 重启并 clear 登记」前把别的设置域排队中
+   * 的 runtime 工作原地补执行 —— 该窗口内凭证守卫已被持有,其它设置变更过不了
+   * prepare,不存在再登记的竞争。
    */
-  peekPendingApplyRuntime(): (() => Promise<void>) | null {
-    return this.pending ? this.pendingApplyRuntime : null;
+  takePendingApplyRuntime(): (() => Promise<void>) | null {
+    if (!this.pending) return null;
+    const callback = this.pendingApplyRuntime;
+    this.pendingApplyRuntime = null;
+    return callback;
   }
 
   /**
@@ -248,8 +258,12 @@ export interface MemoryChangeParts<T extends object> {
    * 会打到 live Codex host 的 runtime 变更(native setMemory RPC 热推)。
    * 立即路径在 persist 后原地执行;延迟路径挪到所有会话空闲、重启前执行 ——
    * 不能 mid-turn 热更正在跑的任务(review P1 2026-07-23)。
+   *
+   * 缺省(undefined)= 本域没有 runtime 工作(如子代理 spawn 配置):延迟路径
+   * 登记时**保留**别的设置域排队中的回调(service.schedule 的 preserve 语义),
+   * 立即路径经 deps.takePendingApplyRuntime 把排队回调原地补执行后再重启。
    */
-  applyRuntime: () => Promise<void>;
+  applyRuntime?: () => Promise<void>;
   /** 延迟重启诊断日志里的触发源标签;缺省 'memory-change'(历史默认)。 */
   reason?: string;
 }
@@ -266,13 +280,19 @@ export interface MemoryChangeWithCodexRestartDeps {
   /** maker-host cancelCodexAuthModeChange:change 失败时释放 guard。 */
   cancel: () => void;
   /** prepare 抛明确 busy 时登记延迟重启(applyRuntime 在兑现时执行)。 */
-  scheduleDeferredRestart: (reason: string, applyRuntime: () => Promise<void>) => void;
+  scheduleDeferredRestart: (reason: string, applyRuntime?: () => Promise<void>) => void;
   /**
    * 立即路径成功后丢弃仍然挂着的旧延迟登记:本次变更已带最新设置完成重启,
    * 旧登记完全被覆盖 —— 不清的话兜底重试会拿旧 MemorySettings 的 applyRuntime
    * 把 memoryOverride 打回旧值(review P1 2026-07-23)。
    */
   clearDeferredRestart: () => void;
+  /**
+   * 原子取走延迟登记里排队中的 runtime 回调(service.takePendingApplyRuntime)。
+   * 立即路径在 parts.applyRuntime 缺省时用它把别的设置域的排队工作原地补执行,
+   * 避免随后的 clearDeferredRestart 把该工作静默丢弃(review 第 2 轮)。
+   */
+  takePendingApplyRuntime?: () => (() => Promise<void>) | null;
   logger?: {
     info: (message: string, meta?: Record<string, unknown>) => void;
     warn: (message: string, meta?: Record<string, unknown>) => void;
@@ -317,7 +337,11 @@ export async function runMemoryChangeWithCodexRestart<T extends object>(
   let changed = false;
   try {
     const result = await parts.persist();
-    await parts.applyRuntime();
+    // 本域无 runtime 工作时,把别的设置域排队中的回调原子取走并原地补执行 ——
+    // 下方 clearDeferredRestart 会丢弃登记,不补执行就是静默丢工作(review 第 2 轮)。
+    // 此刻凭证守卫已被持有,其它设置变更过不了 prepare,无再登记竞争。
+    const runtime = parts.applyRuntime ?? deps.takePendingApplyRuntime?.() ?? null;
+    if (runtime) await runtime();
     changed = true;
     // 本次立即变更已带最新设置走完 persist + runtime,任何仍挂着的旧延迟登记
     // 都被覆盖 —— 即使下方 finalize 失败也要清(设置已提交,旧 applyRuntime

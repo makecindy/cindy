@@ -137,6 +137,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     onEffortChange?: (effort: string) => void;
     configurationEnabled?: boolean;
     disabled?: boolean;
+    excludeChatBridgedCodex?: boolean;
     unknownModelLabel?: (modelId: string) => string;
     fallbackOption?: { active: boolean; label: string; onSelect: () => void };
   }) => {
@@ -158,6 +159,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
         data-sources-enabled={String(props.onProviderChange !== undefined)}
         data-configuration-enabled={String(props.configurationEnabled !== false)}
         data-disabled={String(props.disabled === true)}
+        data-exclude-bridged={String(props.excludeChatBridgedCodex === true)}
         data-unknown-label={props.unknownModelLabel?.('ghost-model-1') ?? ''}
       >
         <button
@@ -445,6 +447,11 @@ describe('SubagentModelSection Codex row', () => {
     expect(selector.dataset.effort).toBe('high');
     expect(selector.dataset.currentProvider).toBe('openai');
     expect(selector.dataset.model).toBe('gpt-5.6-terra');
+    // Chat 桥接的 Codex 供应商模型必须隐藏:原生 spawn 按 Codex 自身目录解析,
+    // 桥接模型必被拒(greptile review P1)。Claude 行不受此约束。
+    expect(selector.dataset.excludeBridged).toBe('true');
+    const claudeSelector = screen.getByTestId('model-selector-cc');
+    expect(claudeSelector.dataset.excludeBridged).toBe('false');
   });
 
   it('persists the (model, providerId, effort) triple atomically in one patch', async () => {

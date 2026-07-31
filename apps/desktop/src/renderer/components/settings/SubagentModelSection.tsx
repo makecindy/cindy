@@ -474,6 +474,11 @@ export function SubagentModelSection() {
                 void setCodexEffort(effort);
               }}
               vendorKey="codex"
+              // 隐藏 Chat 桥接的 Codex 供应商模型(DeepSeek/Kimi/GLM 等 openai-chat
+              // wire):原生 spawn 按 Codex 自身目录解析子代理默认模型,桥接模型必被
+              // 拒(greptile review P1)。统一面板基准下的功能特殊化,理由=上游硬约束;
+              // codexV2ModelHint 仍保留说明(手改设置文件仍可写入任意值)。
+              excludeChatBridgedCodex
               currentProviderId={settings.codexProviderId}
               sourceDisconnected={codexSourceDisconnected}
               onNavigateToProviders={

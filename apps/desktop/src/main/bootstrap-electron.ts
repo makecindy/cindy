@@ -580,6 +580,7 @@ import { effectiveXdGatewayBaseUrl } from './model-access/effectiveEndpoint.js';
 import { isLocalDbOwnerCurrent } from './appSessionPolicy.js';
 import { getAppCapabilities, requireAppCapability } from './appCapabilities.js';
 import {
+  activeOwnerScopeKey,
   beginAppSessionBoundary,
   getActiveAppSession,
   isAppSessionBoundaryPending,
@@ -2692,7 +2693,15 @@ const registerIpcHandlers = () => {
       writeSubagentModelSettingsPatch(parsed);
       return { ...subagentModelSettingsWire(), codexRestartDeferred: false };
     }
+    // 执行体的 prepare(软关会话)跨多个 await,期间可能发生登出/切号;persist 按
+    // 「请求时刻的当前 owner」解析路径,不绑定 scope 会把 A 的修改写进 B / 登出
+    // 命名空间(appSessionState.activeOwnerScopeKey 的跨 await 写入契约,codex
+    // review P1)。过期即拒,不静默落盘。
+    const ownerScopeKey = activeOwnerScopeKey();
     return applyCodexSpawnConfigChangeWithRestart(async () => {
+      if (activeOwnerScopeKey() !== ownerScopeKey) {
+        throwIpcError('PRECONDITION_FAILED', 'app session changed during codex restart; write dropped');
+      }
       writeSubagentModelSettingsPatch(parsed);
       return subagentModelSettingsWire();
     });
@@ -2707,7 +2716,12 @@ const registerIpcHandlers = () => {
       resetSubagentModelSettings();
       return { ...subagentModelSettingsWire(), codexRestartDeferred: false };
     }
+    // 同 SET:跨 await 的 owner-scoped 写入必须绑定 scope,过期即拒(codex review P1)。
+    const ownerScopeKey = activeOwnerScopeKey();
     return applyCodexSpawnConfigChangeWithRestart(async () => {
+      if (activeOwnerScopeKey() !== ownerScopeKey) {
+        throwIpcError('PRECONDITION_FAILED', 'app session changed during codex restart; reset dropped');
+      }
       resetSubagentModelSettings();
       return subagentModelSettingsWire();
     });
