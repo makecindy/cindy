@@ -67,7 +67,8 @@ export function PluginDetailTopBar({ label, onBack, scrolled }: PluginDetailTopB
       className={cn(
         'sticky top-0 z-20 w-full',
         'after:pointer-events-none after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-[var(--border-default)]',
-        'transition-[background-color] duration-150 after:transition-opacity after:duration-150',
+        'transition-[background-color] duration-[var(--motion-fast,150ms)]',
+        'after:transition-opacity after:duration-[var(--motion-fast,150ms)]',
         'motion-reduce:transition-none motion-reduce:after:transition-none',
         scrolled ? 'bg-[var(--surface)] after:opacity-100' : 'bg-transparent after:opacity-0',
       )}
@@ -77,7 +78,7 @@ export function PluginDetailTopBar({ label, onBack, scrolled }: PluginDetailTopB
         <button
           type="button"
           onClick={onBack}
-          className="-ml-3 inline-flex h-9 w-fit select-none items-center gap-2 rounded-full px-3 text-13 text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+          className="-ml-3 inline-flex h-9 w-fit select-none items-center gap-2 rounded-full px-3 text-13 text-[var(--text-secondary)] transition-colors duration-[var(--motion-fast,150ms)] hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
           style={WINDOW_NO_DRAG_STYLE}
         >
           <ArrowLeft size={16} aria-hidden="true" />
