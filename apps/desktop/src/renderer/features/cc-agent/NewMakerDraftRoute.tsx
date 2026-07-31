@@ -117,7 +117,6 @@ import { useCrossAgentMigrationDialog } from '@/hooks/useCrossAgentConvertPrompt
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
 import { resolveCollabEntryPolicy } from './collabEntryPolicy';
 import { useCollabProjectPolicy } from './hooks/useCollabProjectPolicy';
-import { enableRemoteCollabForSession } from './remoteCollabHandoff';
 import { CrossAgentConvertDialog } from '@/components/ui/cross-agent-convert-dialog';
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import {
@@ -279,9 +278,34 @@ function draftEnableOrcaOptions(
   providers: ProviderView[],
   providersReady: boolean,
 ) {
-  const workerAgent: 'claude-code' | 'codex' = collab.worker === 'codex' ? 'codex' : 'claude-code';
+  const preferredAgent: 'claude-code' | 'codex' =
+    collab.worker === 'codex' ? 'codex' : 'claude-code';
+  // Worker 类型也是**设备作用域**的(codex review P2):在只连了 Codex 的设备 A 选了 Codex
+  // Worker,切到只连 Claude 的设备 B 时,workerConfig 虽然被清了,collab.worker 仍是 codex,
+  // 透传过去必撞被控端的 NO_PROVIDER_FOR_AGENT 预检,协同又静默降级成单会话。
+  // 与 providerId 同一条思路:按**目标设备**的 live 目录收窄 —— 首选 agent 在那台机器上
+  // 没有已连接供应商、而另一个有,就改用另一个;两个都没有则原样透传,由 main 的精确
+  // preflight 报可操作错误(不在这里编一个同样跑不起来的值)。
+  // 仅在目录就绪时收窄,理由同下方 providerId:未就绪的空快照会误判成"都没有"。
+  const workerAgent: 'claude-code' | 'codex' = (() => {
+    if (!providersReady) return preferredAgent;
+    if (connectedProvidersForAgent(providers, preferredAgent).length > 0) return preferredAgent;
+    const fallback: 'claude-code' | 'codex' =
+      preferredAgent === 'codex' ? 'claude-code' : 'codex';
+    return connectedProvidersForAgent(providers, fallback).length > 0 ? fallback : preferredAgent;
+  })();
   const cfg = collab.workerConfig;
   if (!cfg) return { workerAgent };
+  // 首选 agent 被目标设备目录换掉时,配置里的 model / providerId 属于旧 agent,一并丢弃 ——
+  // 留着只会撞 INVALID_PARAMS。让被控端按新 agent 的默认值起 Worker。
+  if (workerAgent !== preferredAgent) {
+    return {
+      workerAgent,
+      role: cfg.role,
+      label: createWorkerLabel(cfg.role, []),
+      delegateTask: cfg.initialTask || undefined,
+    };
+  }
   // 草稿里持久化的来源在发送时按 live 目录重新收窄(已连接 + 提供该模型 + 未被可见性
   // 隐藏,与 CreateWorkerPopover.narrowProviderSource 同规则):草稿可跨重启存活,来源
   // 可能已断开/掉模型 —— 直接透传会撞 main 的 PROVIDER_ROUTE_UNAVAILABLE 精确 preflight,
@@ -2162,11 +2186,34 @@ export function NewMakerDraftRoute() {
               nowIso: new Date().toISOString(),
               logTag: 'draft send',
             });
+            // F-COLLAB / device-link:草稿开了协同 → **不在这里 await**,把「开协同」连同
+            // 首条消息一起交接给 SessionView(见 pendingFirstMessage.PendingRemoteCollab)。
+            //
+            // 两条约束只能这样同时满足(greptile P1 + codex P1/P2 三轮收敛的结论):
+            //  · 首轮必须排在协同之后 —— 否则用户开了协同,首轮 Lead 却没有 cindy_orca 工具;
+            //  · 提交点之后不得插入远程等待 —— 被控端起 Worker 是一次隧道往返,可能一路走到
+            //    invoke 默认 30s 超时。挡在 navigate 前面,既让新建页凭空卡住半分钟,又把
+            //    「对端会话已建好、用户输入还只在内存 pending Map 里」的窗口拉到同样长度,
+            //    窗口内应用被关掉就永久丢消息、对端留下空会话。
+            // 交接出去之后,等待发生在**已经导航到的**会话视图里:UI 不卡,输入已在视图手里,
+            // 而首轮仍然由同一个 await 串在协同之后。
             const rehydratedFiles = await rehomeDraftAttachments(files, remoteSessionId);
             setPending(remoteSessionId, {
               text: message,
               files: rehydratedFiles,
               mentions,
+              ...(shouldEnableCollab
+                ? {
+                    remoteCollab: {
+                      deviceId,
+                      options: draftEnableOrcaOptions(
+                        effectiveCollab,
+                        deviceProviders,
+                        !deviceProvidersLoading,
+                      ),
+                    },
+                  }
+                : {}),
               ...(opts?.quotesEncoded ? { quotesEncoded: true } : {}),
               ...(opts?.agentReferences?.length ? { agentReferences: opts.agentReferences } : {}),
               ...(opts?.pastedTextRanges?.length
@@ -2180,42 +2227,8 @@ export function NewMakerDraftRoute() {
             clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
             attachmentState.clearFiles();
             resetDraftWorkspaceAfterSend();
-            // F-COLLAB / device-link:草稿开了协同 → 隧道到被控端 enableOrca 拉起 Worker
-            // (Lead / Worker / team 的真身都在被控端,控制端只是镜像)。
-            //
-            // 位置必须在 **setPending 之后、navigate 之前**(codex review P1):
-            //  · 之后 —— create-session 返回 sessionId 那一刻就是提交点,此后每多一步 await
-            //    就把「对端会话已建好、用户的首条消息还没被登记」的窗口拉长一分。这一步是隧道
-            //    往返,被控端起 Worker 本就慢,还可能一路走到 invoke 默认 30s 超时;放在交接前
-            //    等于把那个窗口从一次本地 rehome 撑到半分钟(remoteSessionHandoff 第 33 轮 P1
-            //    正是同一条不变量)。
-            //  · 之前 —— 首条消息由 CCAgentSessionView mount 后 consumePending 发出,而它要等
-            //    navigate;所以只要 navigate 还在后面,Lead 的第一个 turn 就仍然带得上协同 MCP。
-            //    setPending 只是往内存 Map 里放一份 payload,不会提前触发发送。
-            let dlOrcaReveal: { focusWorkerSessionId: string } | null = null;
-            if (shouldEnableCollab) {
-              try {
-                dlOrcaReveal = await enableRemoteCollabForSession({
-                  deviceId,
-                  leadSessionId: remoteSessionId,
-                  options: draftEnableOrcaOptions(
-                    effectiveCollab,
-                    deviceProviders,
-                    !deviceProvidersLoading,
-                  ),
-                  logTag: 'draft send',
-                });
-              } catch (err) {
-                log.error('[draft send] remote enableOrca failed (continuing as single session)', err);
-                toast.error(getCollaborationStartErrorMessage(err, t, { remoteDevice: true }));
-              }
-            }
-            // reveal 走 navigate state,由 CCAgentSessionView mount 后消费(当前路由还在
-            // /cc-agent/new,直接 dispatch 会被分离侧栏控制器判成 stale-context)。
-            navigate(`/cc-agent/${remoteSessionId}`, {
-              replace: true,
-              state: dlOrcaReveal ? { orcaWorkersReveal: dlOrcaReveal } : undefined,
-            });
+            // 立刻导航:开协同的等待与协同 tab 的展开都由 SessionView 在消费 pending 时处理。
+            navigate(`/cc-agent/${remoteSessionId}`, { replace: true });
             return;
           }
 
@@ -2751,7 +2764,24 @@ export function NewMakerDraftRoute() {
           // mount 才建立,在 /cc-agent/new 就起 goal 首轮会让 maker:event/status 推送
           // 掉在订阅建立前的窗口里(Codex review #548)。与首条消息同款交接 ——
           // setPendingGoal → navigate → SessionView 消费时订阅已就绪再 setGoal。
-          setPendingGoal(remoteSessionId, { objective, limits });
+          // 协同同样随交接一起交出去(与发送分支同口径,理由见那段注释):在这里 await
+          // 开协同会把目标文案压在内存里等一次可能 30s 的隧道往返。
+          setPendingGoal(remoteSessionId, {
+            objective,
+            limits,
+            ...(shouldEnableCollab
+              ? {
+                  remoteCollab: {
+                    deviceId,
+                    options: draftEnableOrcaOptions(
+                      effectiveCollab,
+                      deviceProviders,
+                      !deviceProvidersLoading,
+                    ),
+                  },
+                }
+              : {}),
+          });
           // 自动起名:goal 首轮走 GoalController 的 session.send、不经 maker:input:enqueue,
           // 被控端 deviceLinkAutoTitle 不会触发(Codex review #548)—— 与本地分支的
           // autoNameSession 对位:先立即用目标文案截断占位(Codex 式,侧边栏不停留在
@@ -2828,33 +2858,8 @@ export function NewMakerDraftRoute() {
           })();
           clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
           resetDraftWorkspaceAfterSend();
-          // F-COLLAB / device-link:与发送路径同口径 —— 草稿开了协同就隧道到被控端
-          // enableOrca 拉起 Worker,否则用户开了协同却走「新建目标」会得到一个没有 Worker
-          // 的 Lead(本机分支的 codex P2 在远程侧同样成立)。失败降级单会话,不阻断目标创建。
-          // 位置同样卡在 setPendingGoal 之后、navigate 之前,理由见发送分支那段注释;这条
-          // 路径丢的还不止首条消息,还有只存在于弹窗内存里的目标文案,窗口更不能拉长。
-          let remoteGoalOrcaReveal: { focusWorkerSessionId: string } | null = null;
-          if (shouldEnableCollab) {
-            try {
-              remoteGoalOrcaReveal = await enableRemoteCollabForSession({
-                deviceId,
-                leadSessionId: remoteSessionId,
-                options: draftEnableOrcaOptions(
-                  effectiveCollab,
-                  deviceProviders,
-                  !deviceProvidersLoading,
-                ),
-                logTag: 'draft goal',
-              });
-            } catch (err) {
-              log.error('[draft goal] remote enableOrca failed (continuing as single session)', err);
-              toast.error(getCollaborationStartErrorMessage(err, t, { remoteDevice: true }));
-            }
-          }
-          navigate(`/cc-agent/${remoteSessionId}`, {
-            replace: true,
-            state: remoteGoalOrcaReveal ? { orcaWorkersReveal: remoteGoalOrcaReveal } : undefined,
-          });
+          // 立刻导航:开协同的等待与协同 tab 的展开都由 SessionView 在消费 pendingGoal 时处理。
+          navigate(`/cc-agent/${remoteSessionId}`, { replace: true });
           return;
         }
         const selectedWorkingDir = effectiveWorkingDir?.trim() || undefined;

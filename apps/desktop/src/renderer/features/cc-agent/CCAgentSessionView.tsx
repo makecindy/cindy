@@ -160,6 +160,7 @@ import {
 import { getCollaborationStartErrorMessage } from './collaborationErrors';
 import { useCollabProjectPolicy } from './hooks/useCollabProjectPolicy';
 import { resolveCollabEntryPolicy } from './collabEntryPolicy';
+import { consumePendingRemoteCollab } from './remoteCollabHandoff';
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
 import { localizeAgentStatus } from './lib/localizeAgentStatus';
 import { createSessionRefreshSequence } from './lib/sessionRefreshSequence';
@@ -650,23 +651,28 @@ export function CCAgentSessionView({
   // 解析当前会话所属远程设备 id。store 有 origin 时取 store 值(随 store 变化更新,useMemo 让同设备
   // 返回同一字符串,避免下游 effect 无谓重跑)。
   const wasRemoteSessionRef = useRef(false);
-  const lastRemoteDeviceIdRef = useRef<string | undefined>(undefined);
   const lastRemoteSessionIdRef = useRef<string | undefined>(undefined);
   const storeRemoteDeviceId = useMemo(
     () => (sessionId ? getSessionDeviceId(sessionId) : undefined),
     [sessionId, remoteProjectSessions],
   );
-  // 切会话:在 render 阶段同步重置粘滞值(不靠 effect,避免新会话首帧误用上个会话的归属)。
+  // 切会话:在 render 阶段同步重置"曾是远程会话"标记(不靠 effect,避免新会话首帧误判)。
   if (lastRemoteSessionIdRef.current !== sessionId) {
     lastRemoteSessionIdRef.current = sessionId;
-    lastRemoteDeviceIdRef.current = undefined;
     wasRemoteSessionRef.current = false;
   }
-  if (storeRemoteDeviceId !== undefined) lastRemoteDeviceIdRef.current = storeRemoteDeviceId;
   // 粘滞:本机 relay 瞬时重连会 clear() 掉镜像(含当前会话 origin)。此时回退到最后已知 deviceId,
   // 让当前远程会话在重连窗口内不被判成"已结束"——视图保留、RemoteSessionBanner 显示「重连中」、
   // 同步引擎仍绑定该设备(relay 回 online 自动重订阅 + 对账),子组件继续按远程处理。
-  const remoteDeviceId = storeRemoteDeviceId ?? lastRemoteDeviceIdRef.current;
+  //
+  // 走共享的 stickySessionOrigin,而不是本视图自己记一份 ref(greptile P1):那份模块级缓存
+  // 正是 makerApiForSticky 等消费方读的同一份,而它只在被查询时预热。视图各记各的,会出现
+  // 「视图这份热了、模块那份还是冷的」—— 用户在**首次开启协同之前**撞上 relay 瞬断,
+  // makerApiForSticky 就会退回本机,在控制端建出 team。一份缓存,不会有两份各自预热的问题。
+  const remoteDeviceId = useMemo(
+    () => (sessionId ? getStickySessionDeviceId(sessionId) : undefined),
+    [sessionId, remoteProjectSessions],
+  );
   // device-link 远程会话:重 topic 订阅(含 WS 重连 / 被控端回在线时重建)+ 消息对账触发
   // (重连 / presence / turn 结束 / 窗口聚焦 / 手动)。修「控制端丢消息」—— 以被控端为准重新同步。
   // 本机会话(remoteDeviceId 为 undefined)整体 no-op。resync 供连接 banner 的「重新同步」按钮用。
@@ -762,7 +768,7 @@ export function CCAgentSessionView({
       wasRemoteSessionRef.current = true;
       return;
     }
-    const dev0 = lastRemoteDeviceIdRef.current;
+    const dev0 = getStickySessionDeviceId(sessionId);
     const decision = decideRemoteSessionExit({
       hasOrigin: false,
       wasRemote: wasRemoteSessionRef.current,
@@ -2606,6 +2612,29 @@ export function CCAgentSessionView({
     if (!pending) return;
     pendingConsumedRef.current = true;
     void (async () => {
+      // device-link 草稿开了协同:先把协同开起来,再发首轮 —— 否则 Lead 的第一个 turn
+      // 拿不到 cindy_orca 工具。等待放在这里而不是 draft route,是为了不让「对端会话已
+      // 建好、用户输入还只在内存里」的窗口跟着一次可能 30s 的隧道往返一起变长(见
+      // remoteCollabHandoff 文件头)。开不起来时如实提示并照单会话继续。
+      if (pending.remoteCollab) {
+        const ok = await consumePendingRemoteCollab(pending.remoteCollab, {
+          leadSessionId: sessionId,
+          logTag: 'pending first message',
+          onFailed: (err) =>
+            toast.error(
+              getCollaborationStartErrorMessage(err, t, {
+                remoteDevice: true,
+                continueAsSingleSession: true,
+              }),
+            ),
+        });
+        if (ok) {
+          void sessionsStore.forceRefresh('active');
+          void revealOrcaWorkersTab(sessionId).catch((revealErr) => {
+            log.warn('revealOrcaWorkersTab after pending collab failed', revealErr);
+          });
+        }
+      }
       if (await maybeDispatchDesktopSlashCommand(pending.text, pending.files)) {
         return;
       }
@@ -2660,6 +2689,26 @@ export function CCAgentSessionView({
         const deviceId = getSessionDeviceId(sessionId);
         if (deviceId) {
           await window.electronAPI.deviceLink.subscribe(deviceId, [`session:${sessionId}`]);
+        }
+        // 与首条消息同款:目标首轮同样要排在协同之后(见上方 pending 消费的注释)。
+        if (pendingGoal.remoteCollab) {
+          const ok = await consumePendingRemoteCollab(pendingGoal.remoteCollab, {
+            leadSessionId: sessionId,
+            logTag: 'pending goal',
+            onFailed: (err) =>
+              toast.error(
+                getCollaborationStartErrorMessage(err, t, {
+                  remoteDevice: true,
+                  continueAsSingleSession: true,
+                }),
+              ),
+          });
+          if (ok) {
+            void sessionsStore.forceRefresh('active');
+            void revealOrcaWorkersTab(sessionId).catch((revealErr) => {
+              log.warn('revealOrcaWorkersTab after pending goal collab failed', revealErr);
+            });
+          }
         }
         await goalApiFor(sessionId).setGoal({
           sessionId,

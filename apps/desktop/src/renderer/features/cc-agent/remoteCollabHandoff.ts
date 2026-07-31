@@ -1,30 +1,32 @@
 /**
- * remoteCollabHandoff —— device-link 远程会话**开启协同**的收尾(issue #1170)。
+ * remoteCollabHandoff —— device-link 远程会话**开启协同**的执行与终态判定(issue #1170)。
  * ---------------------------------------------------------------------------
- * device-link 项目的 Lead / Worker / team 真身都在被控端,控制端只是镜像。所以
- * 「草稿开了协同」这件事落地需要两步,而两步的时序约束方向相反:
+ * device-link 项目的 Lead / Worker / team 真身都在被控端,控制端只是镜像。围绕
+ * 「草稿开了协同」这件事,三轮 review 收敛出两条方向相反的时序约束:
  *
- *   ① `enableOrca` **必须** await,且必须排在 `navigate` 之前 —— Lead 的第一个 turn
- *      就要带上协同 MCP,否则用户开了协同却发现首轮 Lead 根本没有 cindy_orca 工具。
- *      首条消息由 `CCAgentSessionView` mount 后 `consumePending` 发出,而它要等
- *      navigate,所以「navigate 在后」就足够保证这一点。
- *   ② 镜像回流**绝不能** await —— `refreshRemoteDeviceSessions` 对瞬态错误有最长约
- *      6.75 秒的退避重试。协同 tab 解析不到 worker 时会 fallback `listWorkersByLead`,
- *      worker 变更另有 ORCA_WORKER_CHANGED 推送兜底,镜像慢一拍能自愈 —— 本来就不值得等。
+ *   ① **首轮必须排在协同之后** —— 否则用户开了协同,首轮 Lead 却没有 cindy_orca 工具。
+ *   ② **提交点之后不得插入远程等待** —— 被控端 `maker:create-session` 返回 sessionId
+ *      那一刻就是提交点;此后每多一步 await,「对端会话已建好、用户输入还只在内存里」的
+ *      窗口就长一分。而本函数是一次隧道往返,可能一路走到 invoke 默认 30s 超时。
  *
- * **调用点的位置约束(codex review P1)**:本函数会阻塞一次隧道往返,被控端起 Worker
- * 本就慢,还可能一路走到 invoke 默认 30s 超时。而被控端 `maker:create-session` 返回
- * sessionId 那一刻就是**提交点**,此后每多一步 await,「对端会话已建好、用户的首条消息
- * 或目标文案还没被登记」的窗口就长一分 —— 窗口内应用被关掉,用户重开重试就会在对端建出
- * 第二个会话,第一个空着滞留(`remoteSessionHandoff` 第 33 轮 P1 是同一条不变量)。
- * 所以调用点必须卡在 `setPending` / `setPendingGoal` **之后**、`navigate` **之前**。
+ * 两者只能靠**把等待挪到导航之后**同时满足:草稿路由登记完 `setPending` /
+ * `setPendingGoal`(载荷带上 `remoteCollab`)就立刻 navigate;`CCAgentSessionView`
+ * 消费 pending 时先 await 本函数、再发首轮 / 起目标。于是新建页不卡、用户输入已经交到
+ * 会话视图手里,而首轮仍由同一个 await 串在协同之后。
+ *
+ * 另外两条不变量:
+ *   · **隧道超时不是权威失败** —— 超时只删掉控制端的等待项,被控端那次 enableOrca 仍在跑
+ *     (device-link ipc.ts 对 INVOKE_TIMEOUT 的既有判定就是「远端仍存活」)。所以超时后要
+ *     回查被控端 DB 的权威终态再定性,查不到才 fail-closed 降级。
+ *   · **镜像回流绝不能 await** —— `refreshRemoteDeviceSessions` 对瞬态错误有最长约 6.75 秒
+ *     的退避重试。协同 tab 解析不到 worker 时会 fallback `listWorkersByLead`,worker 变更
+ *     另有 ORCA_WORKER_CHANGED 推送兜底,镜像慢一拍能自愈 —— 本来就不值得等。
  *
  * 抽成一处的原因与 `remoteSessionHandoff` 相同:草稿的「发送」与「新建目标」两条路径
  * 逐字重复这段收尾,而 #807 的 review 反复证明**两处逐字重复漏改一处不会有任何编译或
  * 测试信号**。顺带满足 newMakerProjectPicker 那条守卫:组件不再自己 import 回流函数,
  * 回流只经共享 helper 使用。
  */
-
 import { refreshRemoteDeviceSessions } from '@/features/device-link/refreshRemoteSessions';
 import { createLogger } from '@/lib/logger';
 import { makerApiForDevice, orcaWorkflowsForDevice } from '@/lib/makerTransport';
@@ -33,11 +35,14 @@ import { extractIpcError } from '@/utils/ipcError';
 const log = createLogger('remoteCollabHandoff');
 
 /**
- * 超时后回查被控端权威终态的次数与间隔。刻意保守:这是 best-effort 的补救,不是等待机制。
- * 查不到就按失败降级(fail-closed),不会把「没建成」误报成「建成了」。
+ * 超时后回查被控端权威终态的次数与间隔。
+ *
+ * 等待已经挪到导航之后(见文件头),不再占着新建页、也不再压着用户的输入,所以这里可以
+ * 比「挡在导航前」时期给得从容一些。但仍然**有界** —— 被控端可能永远不返回,无界等待只会
+ * 把首轮永久挂起;查不到就 fail-closed 按失败降级,绝不把「没建成」猜成「建成了」。
  */
-const TIMEOUT_RECOVERY_ATTEMPTS = 3;
-const TIMEOUT_RECOVERY_DELAY_MS = 2000;
+const TIMEOUT_RECOVERY_ATTEMPTS = 6;
+const TIMEOUT_RECOVERY_DELAY_MS = 3000;
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -136,5 +141,38 @@ export async function enableRemoteCollabForSession(
     void refreshRemoteDeviceSessions(p.deviceId).catch((err) => {
       log.warn(`[${p.logTag}] refresh remote sessions after enableOrca failed`, err);
     });
+  }
+}
+
+/**
+ * SessionView 侧的消费入口:发首轮 / 起目标之前先把协同开起来。
+ *
+ * 两处 pending 消费(首条消息、新建目标)共用这一份 —— 逐字重复两遍正是本 PR 反复踩过的
+ * 形状。**永不抛出**:协同开不起来时会话本身仍然可用,首轮照单会话继续,只是要如实告诉
+ * 用户「这条仍会发出去」(否则用户会以为没发,再提交一次)。
+ *
+ * 返回 true 表示协同已就绪(调用方据此展开协同 tab)。
+ */
+export async function consumePendingRemoteCollab(
+  pending: { deviceId: string; options: Record<string, unknown> },
+  ctx: {
+    leadSessionId: string;
+    logTag: string;
+    /** 失败时的用户可见提示;调用方注入以复用视图的 i18n / toast。 */
+    onFailed: (err: unknown) => void;
+  },
+): Promise<boolean> {
+  try {
+    await enableRemoteCollabForSession({
+      deviceId: pending.deviceId,
+      leadSessionId: ctx.leadSessionId,
+      options: pending.options as Parameters<typeof window.electronAPI.maker.enableOrca>[1],
+      logTag: ctx.logTag,
+    });
+    return true;
+  } catch (err) {
+    log.error(`[${ctx.logTag}] remote enableOrca failed (continuing as single session)`, err);
+    ctx.onFailed(err);
+    return false;
   }
 }

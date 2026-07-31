@@ -4645,6 +4645,7 @@
       "disabledHint": "Collaboration is disabled for this project. Enable it in project settings.",
       "unavailableHint": "Unable to verify this project's collaboration setting. Try again shortly.",
       "unsupportedRemoteHint": "The controlled device is too old to support collaboration.",
+      "remoteContinueNotice": " This message is still being sent as a single conversation.",
       "loadingHint": "Still checking this project's collaboration setting. Try again shortly.",
       "stopHint": "Stop collaboration",
       "stopAria": "Stop collaboration",

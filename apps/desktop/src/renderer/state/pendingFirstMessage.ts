@@ -17,6 +17,22 @@ import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 
+/**
+ * device-link 草稿开了协同时,把「开协同」这件事一起交接给 SessionView(issue #1170)。
+ *
+ * 为什么不在 draft route 就 await 掉:被控端起 Worker 是一次隧道往返,可能一路走到
+ * invoke 默认 30s 超时。把它挡在 navigate 前面,既让新建页凭空卡住半分钟,又把
+ * 「对端会话已建好、用户输入还只在内存里」的窗口拉到同样长度(greptile P1)。
+ * 而首轮必须排在协同之后又是硬要求 —— 两者只能靠「导航后再协调」同时满足:
+ * draft route 登记完就立刻 navigate,SessionView 消费时先 await 开协同、再发首轮。
+ */
+export interface PendingRemoteCollab {
+  /** 被控设备 deviceId —— Worker 在这台机器上 spawn。 */
+  deviceId: string;
+  /** enableOrca 入参,已按被控端的模型 / 供应商目录收窄。 */
+  options: Record<string, unknown>;
+}
+
 export interface PendingPayload {
   text: string;
   files?: AttachedFile[];
@@ -26,6 +42,8 @@ export interface PendingPayload {
   agentReferences?: AgentInputReference[];
   pastedTextRanges?: PastedTextRange[];
   slashCommandRanges?: SlashCommandRange[];
+  /** 非空 = 发首轮之前先在被控端开协同(见 PendingRemoteCollab)。 */
+  remoteCollab?: PendingRemoteCollab;
   /** 调试用——createPending 时刻,过期清理时可参考(目前未做 GC,实际场景 navigate 立即消费)。 */
   createdAt: number;
 }
@@ -66,6 +84,8 @@ export function hasPending(sessionId: string): boolean {
 export interface PendingGoalPayload {
   objective: string;
   limits: { maxTurns: number | null; budgetTokens: number | null; noProgressLimit: number | null };
+  /** 与首条消息同款:非空 = 起目标首轮之前先在被控端开协同。 */
+  remoteCollab?: PendingRemoteCollab;
   createdAt: number;
 }
 

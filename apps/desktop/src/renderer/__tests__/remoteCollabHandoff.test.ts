@@ -83,8 +83,8 @@ describe('enableRemoteCollabForSession', () => {
     const assertion = expect(pending).rejects.toThrow('DEVICE_LINK_TIMEOUT');
     await vi.advanceTimersByTimeAsync(30_000);
     await assertion;
-    // 有限次回查后放弃,不无限等待。
-    expect(listWorkersByLead).toHaveBeenCalledTimes(3);
+    // 有限次回查后放弃,不无限等待(被控端可能永远不返回,无界等待会把首轮永久挂起)。
+    expect(listWorkersByLead).toHaveBeenCalledTimes(6);
   });
 
   it('回查本身失败(链路又抖 / 老被控端):不再猜,按超时降级', async () => {

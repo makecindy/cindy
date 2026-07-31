@@ -8,6 +8,11 @@ const source = readFileSync(
   'utf8',
 );
 
+const sessionViewSource = readFileSync(
+  resolve(__dirname, '..', 'features', 'cc-agent', 'CCAgentSessionView.tsx'),
+  'utf8',
+);
+
 const remoteCollabHandoffSource = readFileSync(
   resolve(__dirname, '..', 'features', 'cc-agent', 'remoteCollabHandoff.ts'),
   'utf8',
@@ -32,65 +37,63 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     expect(source).not.toContain('markOrcaRole(worker.sessionId');
   });
 
-  it('uses the shared collaboration error i18n mapper for all six draft enable paths', () => {
+  it('uses the shared collaboration error i18n mapper for every draft enable path', () => {
     // 本机 / SSH 侧四条草稿起 Worker 路径都走同一个错误映射器:Send 普通、Send worktree、
     // 新建目标(2026-07-23 新增 New Goal 路径也 honor 协同,codex P2)、以及 SSH 添加远程
     // 项目(2026-07-28 remote 协同接通, codex-connector P2)。
     const mappedFallbacks = source.match(/getCollaborationStartErrorMessage\(err, t, \{ continueAsSingleSession: true \}\)/g) ?? [];
     expect(mappedFallbacks).toHaveLength(4);
 
-    // device-link 的 Send / 新建目标两条(issue #1170)用 remoteDevice 口径:错误来自
-    // **被控设备**,文案必须指向那台机器(`*_REMOTE`),不能说成「已改为单对话继续」那种
-    // 本机语气 —— 用户要去被控端改配置才修得好。
-    const mappedRemote = source.match(/getCollaborationStartErrorMessage\(err, t, \{ remoteDevice: true \}\)/g) ?? [];
-    expect(mappedRemote).toHaveLength(2);
-
+    // device-link 两条(issue #1170)的失败提示已随「等待挪到导航之后」一起搬进
+    // CCAgentSessionView 的 pending 消费,draft route 不再自己 toast。
+    expect(source).not.toContain('remoteDevice: true');
     expect(source).not.toContain("toast.error(t('newChat.collaboration.startFailed'");
   });
 
-  it('enables collaboration on the controlled device for both device-link draft paths', () => {
-    // #1170:device-link 草稿此前完全没有 enableOrca —— 建完会话直接 navigate,于是
-    // 「草稿开了协同」这件事被静默丢弃,进会话页才发现没有 Worker。两条路径都必须
-    // 隧道到被控端起 Worker,并带 reveal 跳转。
-    //
-    // 时序被夹在中间(codex review P1):
-    //  · **在交接之后** —— 被控端 create-session 返回 sessionId 就是提交点,而这一步是
-    //    隧道往返、可能一路走到 invoke 默认 30s 超时。放在交接前就把「对端会话已建好、
-    //    用户的首条消息/目标文案还没被登记」的窗口从一次本地 rehome 撑到半分钟,窗口内
-    //    应用被关掉就会丢输入并在对端留下空会话(remoteSessionHandoff 第 33 轮同款不变量)。
-    //  · **在 navigate 之前** —— 首条消息由 CCAgentSessionView mount 后 consumePending
-    //    发出,它要等 navigate;只要 navigate 还在后面,Lead 的第一个 turn 就带得上协同 MCP。
+  it('hands the collab intent to the session view instead of awaiting it before navigation', () => {
+    // #1170 三轮 review 的收敛结果:两条约束方向相反 ——
+    //  · 首轮必须排在协同之后(否则 Lead 首个 turn 没有 cindy_orca 工具);
+    //  · 提交点之后不得插入远程等待(隧道往返可能走到 invoke 默认 30s 超时,挡在 navigate
+    //    前面既让新建页卡住半分钟,又把「对端会话已建好、用户输入还只在内存里」的窗口拉到
+    //    同样长度,窗口内应用被关掉就永久丢消息)。
+    // 只能靠「登记完立刻导航、等待挪到会话视图」同时满足。所以 draft route 里:
+    //  ① 不得再 await 开协同;② 协同意图随 pending 载荷交出去;③ 导航紧跟登记。
+    expect(source).not.toContain('enableRemoteCollabForSession');
+
     const sendBranch = source.slice(
       source.indexOf('if (isDeviceLinkDraft && effectiveDeviceLinkDeviceId) {'),
     );
-    const setPending = sendBranch.indexOf('setPending(remoteSessionId, {');
-    const enableOrca = sendBranch.indexOf('await enableRemoteCollabForSession({', setPending);
-    const navigateAt = sendBranch.indexOf('navigate(`/cc-agent/${remoteSessionId}`', enableOrca);
-    expect(setPending).toBeGreaterThan(-1);
-    expect(enableOrca).toBeGreaterThan(setPending);
-    expect(navigateAt).toBeGreaterThan(enableOrca);
-    expect(sendBranch).toContain('state: dlOrcaReveal ? { orcaWorkersReveal: dlOrcaReveal } : undefined');
+    const sendPending = sendBranch.indexOf('setPending(remoteSessionId, {');
+    const sendCollab = sendBranch.indexOf('remoteCollab: {', sendPending);
+    const sendNavigate = sendBranch.indexOf('navigate(`/cc-agent/${remoteSessionId}`', sendPending);
+    expect(sendPending).toBeGreaterThan(-1);
+    // 协同意图必须在 pending 载荷内(而不是 navigate state):它要被 consumePending 一起取走。
+    expect(sendCollab).toBeGreaterThan(sendPending);
+    expect(sendNavigate).toBeGreaterThan(sendCollab);
 
     const goalHandler = source.slice(source.indexOf('const handleCreateGoal = useCallback('));
-    const goalSetPending = goalHandler.indexOf('setPendingGoal(remoteSessionId');
-    const goalEnable = goalHandler.indexOf('await enableRemoteCollabForSession({', goalSetPending);
-    const goalNavigate = goalHandler.indexOf('navigate(`/cc-agent/${remoteSessionId}`', goalEnable);
-    expect(goalSetPending).toBeGreaterThan(-1);
-    expect(goalEnable).toBeGreaterThan(goalSetPending);
-    expect(goalNavigate).toBeGreaterThan(goalEnable);
-    expect(goalHandler).toContain(
-      'state: remoteGoalOrcaReveal ? { orcaWorkersReveal: remoteGoalOrcaReveal } : undefined',
-    );
+    const goalPending = goalHandler.indexOf('setPendingGoal(remoteSessionId, {');
+    const goalCollab = goalHandler.indexOf('remoteCollab: {', goalPending);
+    expect(goalPending).toBeGreaterThan(-1);
+    expect(goalCollab).toBeGreaterThan(goalPending);
   });
 
   it('keeps both device-link enable paths on the shared remote collab helper', () => {
     // 两条路径逐字重复这段收尾正是 #807 反复踩的坑(漏改一处没有任何编译/测试信号)。
-    // 收敛后组件里只剩调用,时序不变量(等 enableOrca、**不等**镜像回流 —— 后者对瞬态
-    // 错误有最长约 6.75 秒退避重试)住在 remoteCollabHandoff 里,只有一处可改。
-    expect(source.match(/await enableRemoteCollabForSession\(\{/g)).toHaveLength(2);
+    // 收敛后:draft route 只登记意图,SessionView 的两处 pending 消费共用同一个入口,
+    // 时序不变量(等 enableOrca、**不等**镜像回流)住在 remoteCollabHandoff 里一处可改。
+    expect(sessionViewSource.match(/consumePendingRemoteCollab\(/g)).toHaveLength(2);
     expect(source).not.toContain('refreshRemoteDeviceSessions');
     expect(remoteCollabHandoffSource).toContain('void refreshRemoteDeviceSessions(p.deviceId)');
     expect(remoteCollabHandoffSource).not.toContain('await refreshRemoteDeviceSessions(');
+  });
+
+  it('tells the user the turn still goes out when remote collab fails', () => {
+    // `_REMOTE` 文案只讲「去那台机器修好再重试」,没说这一条仍然会发出去 —— 用户据此
+    // 可能以为没发、再提交一次(codex review P2)。两处消费都必须带 continueAsSingleSession。
+    expect(
+      sessionViewSource.match(/remoteDevice: true,\s*\n\s*continueAsSingleSession: true,/g),
+    ).toHaveLength(2);
   });
 
   it('refreshes the remote mirror even when the remote enableOrca reports failure', () => {
@@ -124,6 +127,24 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     ).toHaveLength(4);
   });
 
+  it('re-validates the worker agent against the target device catalog', () => {
+    // Worker 类型也是设备作用域的(codex review P2):在只连 Codex 的设备 A 选了 Codex
+    // Worker,切到只连 Claude 的设备 B 时 workerConfig 虽被清空,collab.worker 仍是 codex,
+    // 透传过去必撞被控端 NO_PROVIDER_FOR_AGENT,协同又静默降级成单会话。
+    const fn = source.slice(
+      source.indexOf('function draftEnableOrcaOptions('),
+      source.indexOf('const createAgentQuickStarts'),
+    );
+    expect(fn).toContain('const preferredAgent');
+    // 按目标设备目录判断:首选 agent 无已连接供应商、另一个有 → 换过去。
+    expect(fn).toContain('connectedProvidersForAgent(providers, preferredAgent).length > 0');
+    expect(fn).toContain('connectedProvidersForAgent(providers, fallback).length > 0');
+    // 目录未就绪时不收窄(空快照会误判成"都没有"),与 providerId 同一条口径。
+    expect(fn).toContain('if (!providersReady) return preferredAgent;');
+    // 换了 agent 就必须丢掉属于旧 agent 的 model / providerId,否则改撞 INVALID_PARAMS。
+    expect(fn).toContain('if (workerAgent !== preferredAgent)');
+  });
+
   it('blocks new-goal creation until a selected collaboration policy is available', () => {
     const goalHandler = source.slice(source.indexOf('const handleCreateGoal = useCallback('));
     expect(goalHandler).toContain("let policyEnabled = collabPolicy.enabled");
@@ -139,8 +160,10 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
 
   it('carries a successful policy refresh into all collaboration creation branches', () => {
     expect(source.match(/const shouldEnableCollab =/g)).toHaveLength(2);
-    // 5 = Send 普通 + Send worktree + 本机/SSH 新建目标 + device-link Send + device-link 新建目标。
-    expect(source.match(/if \(shouldEnableCollab\)/g)).toHaveLength(5);
+    // 3 = Send 普通 + Send worktree + 本机/SSH 新建目标;device-link 两条改为在 pending
+    // 载荷里按 shouldEnableCollab 决定是否带 remoteCollab,不再有独立分支。
+    expect(source.match(/if \(shouldEnableCollab\)/g)).toHaveLength(3);
+    expect(source.match(/\.\.\.\(shouldEnableCollab/g)).toHaveLength(2);
     expect(source).not.toContain('effectiveCollabEnabled');
   });
 
