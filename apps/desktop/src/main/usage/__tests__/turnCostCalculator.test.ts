@@ -495,6 +495,7 @@ describe('resolveClaudeTurnCostSinks', () => {
       XD_GATEWAY,
     );
     expect(result.turnMoney?.amount).toBe(7);
+    expect(result.estimatedTurnMoney).toBeNull();
     expect(result.perModel.map((item) => item.money?.amount)).toEqual([5, 2]);
     expect(result.perModel.map((item) => item.source)).toEqual(['gateway', 'gateway']);
   });
@@ -528,10 +529,49 @@ describe('resolveClaudeTurnCostSinks', () => {
       SUBSCRIPTION,
     );
     expect(result.turnMoney).toBeNull();
+    expect(result.estimatedTurnMoney).toBeNull();
     expect(result.perModel[0]).toMatchObject({
       source: 'subscription',
       money: null,
     });
+  });
+
+  it('keeps provider reference estimates out of actual spend', () => {
+    const reference = quote('claude-opus-4-8', 5, 25, {
+      providerId: 'anthropic',
+      source: 'provider-reference',
+      approximate: true,
+    });
+    const result = resolveClaudeTurnCostSinks(
+      [delta('claude-opus-4-8', { inputTokensDelta: 1_000_000 })],
+      catalog(reference),
+      PROVIDER_API,
+    );
+    expect(result.turnMoney).toBeNull();
+    expect(result.estimatedTurnMoney).toMatchObject({
+      amount: 5,
+      kind: 'value-estimate',
+    });
+  });
+
+  it('does not mix a reference estimate into an actual SDK cost total', () => {
+    const pricing = catalog(
+      quote('claude-opus-4-8', 5, 25, {
+        providerId: 'anthropic',
+        source: 'provider-reference',
+        approximate: true,
+      }),
+    );
+    const result = resolveClaudeTurnCostSinks(
+      [
+        delta('claude-opus-4-8', { inputTokensDelta: 1_000_000 }),
+        delta('other-model', { costUsdDelta: 2 }),
+      ],
+      pricing,
+      PROVIDER_API,
+    );
+    expect(result.turnMoney).toMatchObject({ amount: 2, kind: 'actual-cost' });
+    expect(result.estimatedTurnMoney).toMatchObject({ amount: 5, kind: 'value-estimate' });
   });
 });
 

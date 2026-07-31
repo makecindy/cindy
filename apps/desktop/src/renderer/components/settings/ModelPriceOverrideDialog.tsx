@@ -245,8 +245,11 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
                   }
                   className={fieldClass}
                 >
-                  <option value="USD">USD</option>
-                  <option value="CNY">CNY</option>
+                  {(view?.allowedCurrencies ?? ['USD']).map((currency) => (
+                    <option key={currency} value={currency}>
+                      {currency}
+                    </option>
+                  ))}
                 </select>
               </label>
               {(

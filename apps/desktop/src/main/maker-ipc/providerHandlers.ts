@@ -31,6 +31,7 @@ import type {
   ModelPriceOverrideTarget,
   ModelPriceOverrideView,
 } from '../../shared/modelPriceOverride.js';
+import type { MoneyCurrency } from '../../shared/regionalMoney.js';
 import {
   BUILTIN_REFRESHABLE_PROVIDER_IDS,
   isBuiltinRefreshableProviderId,
@@ -284,6 +285,8 @@ export interface ProviderHandlerDeps {
    * 可选:未注入(单测最小桩)= 不做归属校验。
    */
   currentOwnerId?(): string | null;
+  /** Active account ledger currency; used to reject unsupported reverse-FX overrides. */
+  getLedgerCurrency(): MoneyCurrency;
   readModelPriceOverride(target: ModelPriceOverrideTarget): ModelPriceOverrideView;
   writeModelPriceOverride(
     target: ModelPriceOverrideTarget,
@@ -888,7 +891,8 @@ export function registerProviderHandlers(
     return result;
   };
 
-  registry.handle(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_GET, async (_event, input: unknown) => {
+  registry.handle(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_GET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
     const target = parsePriceTarget(input);
     await requirePriceTargetModel(target);
     return deps.readModelPriceOverride(target);
@@ -900,6 +904,9 @@ export function registerProviderHandlers(
     const desired = parseDesiredPrice(quoteInput);
     if (target.providerId === 'xd') {
       throwIpcError('INVALID_PARAMS', 'Cindy AI Gateway pricing is server-controlled');
+    }
+    if (desired.currency === 'CNY' && deps.getLedgerCurrency() === 'USD') {
+      throwIpcError('INVALID_PARAMS', 'CNY price overrides cannot project into a USD ledger');
     }
     const ownerAtIngress = deps.currentOwnerId?.() ?? null;
     return withProviderConfigMutation(target.providerId, () =>

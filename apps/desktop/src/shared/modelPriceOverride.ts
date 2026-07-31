@@ -33,4 +33,6 @@ export interface ModelPriceOverrideView {
   override: ModelPriceOverrideValues | null;
   conflict: boolean;
   registryUpdatedAt: string | null;
+  /** Currencies that can be projected into the active account ledger without guessing FX. */
+  allowedCurrencies: MoneyCurrency[];
 }

@@ -213,7 +213,10 @@ export interface ResolvedModelCost {
 }
 
 export interface ClaudeTurnCostResolution {
+  /** Actual provider/Gateway spend only. Never includes reference-price estimates. */
   turnMoney: RegionalMoney | null;
+  /** Reference-price value only. Kept out of actual spend/session ledgers. */
+  estimatedTurnMoney: RegionalMoney | null;
   perModel: ResolvedModelCost[];
 }
 
@@ -223,7 +226,8 @@ export function resolveClaudeTurnCostSinks(
   context: TurnPricingContext,
 ): ClaudeTurnCostResolution {
   const perModel: ResolvedModelCost[] = [];
-  const money: RegionalMoney[] = [];
+  const actualMoney: RegionalMoney[] = [];
+  const estimatedMoney: RegionalMoney[] = [];
   for (const delta of modelDeltas) {
     const tokens: TurnTokenDeltas = {
       inputTokens: delta.inputTokensDelta,
@@ -244,11 +248,14 @@ export function resolveClaudeTurnCostSinks(
       source: resolved.source,
       deltas: tokens,
     });
-    if (resolved.money && resolved.money.amount > 0) money.push(resolved.money);
+    if (resolved.money && resolved.money.amount > 0) {
+      (resolved.money.kind === 'actual-cost' ? actualMoney : estimatedMoney).push(resolved.money);
+    }
   }
-  if (money.length === 0) return { turnMoney: null, perModel };
   return {
-    turnMoney: addRegionalMoney(money),
+    turnMoney: actualMoney.length > 0 ? addRegionalMoney(actualMoney) : null,
+    estimatedTurnMoney:
+      estimatedMoney.length > 0 ? addRegionalMoney(estimatedMoney) : null,
     perModel,
   };
 }

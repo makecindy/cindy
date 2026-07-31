@@ -111,8 +111,21 @@ describe('model price override sparse persistence', () => {
     ).toMatchObject({
       source: 'user-override',
       outputPerMtok: 8,
-      inputTokenPriceBands,
+      inputTokenPriceBands: [
+        {
+          minInputTokens: 200_001,
+          inputPerMtok: 4,
+          outputPerMtok: 8,
+        },
+      ],
     });
+  });
+
+  it('only accepts currencies that can project into the active ledger', () => {
+    expect(__testing.currencyCanProjectToLedger('USD', 'USD')).toBe(true);
+    expect(__testing.currencyCanProjectToLedger('USD', 'CNY')).toBe(true);
+    expect(__testing.currencyCanProjectToLedger('CNY', 'CNY')).toBe(true);
+    expect(__testing.currencyCanProjectToLedger('CNY', 'USD')).toBe(false);
   });
 
   it('drops malformed records instead of accepting poisoned local state', () => {

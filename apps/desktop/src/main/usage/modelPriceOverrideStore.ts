@@ -23,6 +23,7 @@ import type {
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 import { createOverrideSettingsFile } from '../maker-host/override-settings-file.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
+import { currentLedgerCurrency } from './ledgerCurrency.js';
 
 const log = desktopMakerLogger.child('model-price-overrides');
 const STORE_VERSION = 1;
@@ -245,6 +246,20 @@ function mergedQuote(
     values.cacheCreatePerMtok === null
       ? undefined
       : (values.cacheCreatePerMtok ?? reference?.cacheCreatePerMtok);
+  const inputTokenPriceBands = reference?.inputTokenPriceBands?.map((band) => {
+    const merged = { ...band };
+    if (values.inputPerMtok !== undefined) merged.inputPerMtok = values.inputPerMtok;
+    if (values.outputPerMtok !== undefined) merged.outputPerMtok = values.outputPerMtok;
+    if (values.cacheReadPerMtok === null) delete merged.cacheReadPerMtok;
+    else if (values.cacheReadPerMtok !== undefined) {
+      merged.cacheReadPerMtok = values.cacheReadPerMtok;
+    }
+    if (values.cacheCreatePerMtok === null) delete merged.cacheCreatePerMtok;
+    else if (values.cacheCreatePerMtok !== undefined) {
+      merged.cacheCreatePerMtok = values.cacheCreatePerMtok;
+    }
+    return merged;
+  });
   return {
     providerId: target.providerId,
     modelId: target.modelId,
@@ -253,12 +268,21 @@ function mergedQuote(
     approximate: true,
     inputPerMtok,
     outputPerMtok,
-    ...(reference?.inputTokenPriceBands
-      ? { inputTokenPriceBands: reference.inputTokenPriceBands }
-      : {}),
+    ...(inputTokenPriceBands ? { inputTokenPriceBands } : {}),
     ...(cacheReadPerMtok !== undefined ? { cacheReadPerMtok } : {}),
     ...(cacheCreatePerMtok !== undefined ? { cacheCreatePerMtok } : {}),
   };
+}
+
+function currencyCanProjectToLedger(
+  currency: MoneyCurrency,
+  ledgerCurrency: MoneyCurrency,
+): boolean {
+  return currency === ledgerCurrency || (currency === 'USD' && ledgerCurrency === 'CNY');
+}
+
+function allowedCurrenciesForLedger(ledgerCurrency: MoneyCurrency): MoneyCurrency[] {
+  return ledgerCurrency === 'USD' ? ['USD'] : ['USD', 'CNY'];
 }
 
 function readEntries(): Record<string, StoredModelPriceOverride> {
@@ -269,19 +293,29 @@ function readEntries(): Record<string, StoredModelPriceOverride> {
 export function readModelPriceOverrideView(
   target: ModelPriceOverrideTarget,
   registry: ModelRegistry | null | undefined,
+  ledgerCurrency: MoneyCurrency = currentLedgerCurrency(),
 ): ModelPriceOverrideView {
-  const reference = providerReferencePriceQuote(target.providerId, target.modelId, registry, {
+  const remoteReference = providerReferencePriceQuote(target.providerId, target.modelId, registry, {
     agent: target.agent,
   });
+  const reference =
+    remoteReference && currencyCanProjectToLedger(remoteReference.currency, ledgerCurrency)
+      ? remoteReference
+      : undefined;
   const record = readEntries()[overrideKey(target)];
+  const merged = mergedQuote(target, reference, record?.values);
   return {
     target,
     editable: target.providerId !== 'xd',
     reference: reference ?? null,
-    effective: mergedQuote(target, reference, record?.values) ?? null,
+    effective:
+      merged && currencyCanProjectToLedger(merged.currency, ledgerCurrency)
+        ? merged
+        : (reference ?? null),
     override: record?.values ?? null,
-    conflict: Boolean(record && !sameComparable(record.baseReference, comparable(reference))),
+    conflict: Boolean(record && !sameComparable(record.baseReference, comparable(remoteReference))),
     registryUpdatedAt: registry?.updatedAt ?? null,
+    allowedCurrencies: allowedCurrenciesForLedger(ledgerCurrency),
   };
 }
 
@@ -356,9 +390,19 @@ export function stageProviderModelPriceOverridesClear(providerId: string): () =>
 export function applyModelPriceOverrides(
   pricing: ModelPricingCatalog,
   registry: ModelRegistry | null | undefined,
+  ledgerCurrency: MoneyCurrency = currentLedgerCurrency(),
 ): ModelPricingCatalog {
   const next: ModelPricingCatalog = Object.fromEntries(
-    Object.entries(pricing).map(([providerId, quotes]) => [providerId, { ...quotes }]),
+    Object.entries(pricing).map(([providerId, quotes]) => [
+      providerId,
+      Object.fromEntries(
+        Object.entries(quotes).filter(
+          ([, quote]) =>
+            quote.source === 'gateway' ||
+            currencyCanProjectToLedger(quote.currency, ledgerCurrency),
+        ),
+      ),
+    ]),
   );
   for (const record of Object.values(readEntries())) {
     if (record.providerId === 'xd') continue;
@@ -366,7 +410,7 @@ export function applyModelPriceOverrides(
       agent: record.agent,
     });
     const quote = mergedQuote(record, reference, record.values);
-    if (!quote) continue;
+    if (!quote || !currencyCanProjectToLedger(quote.currency, ledgerCurrency)) continue;
     (next[record.providerId] ??= {})[modelPricingKey(record.modelId, record.agent)] = quote;
   }
   return next;
@@ -378,4 +422,5 @@ export const __testing = {
   sparseValues,
   sameComparable,
   mergedQuote,
+  currencyCanProjectToLedger,
 };

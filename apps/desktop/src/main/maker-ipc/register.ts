@@ -3139,7 +3139,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                   normalizeModelIdForPricing(deltas[0]?.model),
                 )
               : await getModelPricing();
-          const { turnMoney, perModel } = resolveClaudeTurnCostSinks(
+          const { turnMoney, estimatedTurnMoney, perModel } = resolveClaudeTurnCostSinks(
             deltas,
             pricing,
             {
@@ -3170,10 +3170,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               cacheCreateTokensDelta: m.deltas.cacheCreateTokens,
             }));
           }
-          // 纯订阅轮 (turnTotalUsd=0) 不走 recordTurnSpend, 没有任何 usage push ——
-          // 等模型行落库后重广播今日 spend 快照, 通知已打开的首页仪表盘刷新
-          // (对齐 codex 订阅轮的 rebroadcastCodexTodayUsage)。
-          if (hasSubscriptionValueRow && !turnMoney) {
+          // 无真实费用、但产生订阅价值或 provider 参考估值的轮次不走
+          // recordTurnSpend。等模型行落库后重广播今日 spend 快照,通知已打开的首页
+          // 仪表盘刷新(对齐 codex 订阅轮的 rebroadcastCodexTodayUsage)。
+          if ((hasSubscriptionValueRow || estimatedTurnMoney) && !turnMoney) {
             void Promise.allSettled(modelUsageWrites).then(() => rebroadcastTodaySpend());
           }
           if (turnMoney && turnMoney.amount > 0) {
@@ -3193,16 +3193,19 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             });
             if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
           } else if (turnAssistantPersistId) {
-            // 纯订阅轮(无真实计费)的「本轮价值」估算,挂到消息(isEstimate:true,chip 的
+            // 无真实计费轮的「本轮价值」估算,挂到消息(isEstimate:true,chip 的
             // "本会话价值"由 useSessionEstimatedValue 汇总),不进 daily_spend /
-            // sessions.total_cost_usd(那些是真实账单)。两类订阅同轮可叠加(如 Claude 订阅
-            // 主会话 + bridge 订阅子 agent):
+            // sessions.total_cost_usd(那些是真实账单)。provider 参考价与两类订阅估值
+            // 可叠加(如 Claude 订阅主会话 + bridge 订阅子 agent):
+            //   - provider-api 参考价:远程目录中的公开参考价,不是供应商真实账单;
             //   - bridge 订阅模型(chatgpt/ / xai/,source==='subscription'):静态参考价折算;
             //   - Claude 订阅会话(显式选 Anthropic,SDK 自报 cost=0):Anthropic 牌价折算
             //     (纯 Anthropic 轮 pricing 为 null → 家族牌价兜底表,不为估值发起网络请求)。
             // 混合轮(真实计费 > 0)走上面的真实分支,订阅部分不另挂估算 —— 一条消息只有一个
             // cost 字段,真实计费优先;订阅 token 明细仍在 turnUsageDetails.perModelCost 里。
-            const estimatedValues: RegionalMoney[] = [];
+            const estimatedValues: RegionalMoney[] = estimatedTurnMoney
+              ? [estimatedTurnMoney]
+              : [];
             for (const m of perModel) {
               if (m.source !== 'subscription') continue;
               const quote = getSubscriptionDirectValuePrice(m.model, 'claude-code');
@@ -3915,6 +3918,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 停用写入的归属校验:入口捕获 / 持久化前复核,异步窗口内切账号即拒,防 A 的
     // 点击写进 B 的 owner-scoped 偏好文件(PR #744 review 第七轮)。
     currentOwnerId: () => getCurrentDataOwnerId(),
+    getLedgerCurrency: currentLedgerCurrency,
     readModelPriceOverride: (target) =>
       readModelPriceOverrideView(target, getActiveCatalog().modelRegistry),
     writeModelPriceOverride: (target, desired) =>
