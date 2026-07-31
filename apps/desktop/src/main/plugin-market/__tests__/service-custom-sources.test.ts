@@ -58,6 +58,7 @@ vi.mock('../download.js', () => ({
 
 import type { VisiblePluginSummary } from '@cindy/plugin-protocol';
 
+import type { MarketSourceConfig } from '../../../shared/pluginMarket';
 import { customMarketPluginId, customMarketReleaseId } from '../../../shared/pluginMarket';
 import { PluginMarketLedger } from '../ledger';
 import { PluginMarketService } from '../service';
@@ -589,6 +590,74 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     // 详情传空重复集合会把 conflict 项恢复成可安装,给出绕过冲突闸的入口。
     const detail = await h.service.detail(serverSummary().id);
     expect(detail.installState).toBe('conflict');
+  });
+
+  it('skips defaultInstall when a custom source declares the same ghostId', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/x', id: 'server-plugin' }]);
+    const h = harness([serverSummary({ defaultInstall: true })], [{ name: 'team-lib', dir }]);
+    h.api.detail.mockResolvedValue(serverDetail());
+
+    // 默认安装会真的下载并启用插件。若只按服务端目录判重,与自定义来源同 ghostId
+    // 的默认项会被静默抢占所有权,而列表随后又把它标成 conflict —— 既定事实已经
+    // 发生。冲突集合必须先于默认安装算出来。
+    const snapshot = await h.service.snapshot();
+    expect(h.api.download).not.toHaveBeenCalled();
+    expect(runtime.install).not.toHaveBeenCalled();
+    expect(
+      snapshot.items.find((entry) => entry.sourceType === 'server')?.installState,
+    ).toBe('conflict');
+  });
+
+  it('rechecks cross-source ownership right before committing the install', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const rivalDir = writeLocalMarket(root, 'rival-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    runtime.install.mockResolvedValue({
+      manifest: ghostManifest('alpha'),
+      dir: '/ghosts/alpha',
+      enabled: true,
+    });
+    const pluginId = customMarketPluginId('team-lib', 'alpha');
+    const reviewed = await h.service.detail(pluginId);
+
+    // 竞争来源必须在**入口检查之后**才出现,否则被入口那次判定拦住,根本触不到
+    // 提交点复核。打包是异步的、可以持续很久,期间另一窗口经独立的 market-sources
+    // 互斥键添加了声明同一 ghostId 的来源 —— 用"第一次读取来源表之后才加进去"
+    // 精确模拟这个时序。
+    const rival: MarketSourceConfig = {
+      name: 'rival-lib',
+      addedAt: '2026-08-01T00:00:00.000Z',
+      lastSyncedAt: '2026-08-01T00:00:00.000Z',
+      lastRevision: null,
+      source: { type: 'local', path: rivalDir },
+    };
+    const realList = MarketSourceStore.prototype.list;
+    let reads = 0;
+    const listSpy = vi
+      .spyOn(MarketSourceStore.prototype, 'list')
+      .mockImplementation(function (this: MarketSourceStore) {
+        const configs = realList.call(this);
+        reads += 1;
+        return reads <= 1 ? configs : [...configs, rival];
+      });
+
+    try {
+      await expect(
+        h.service.install(pluginId, {
+          expectedReleaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
+          expectedManifest: reviewed.manifest,
+        }),
+      ).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
+      // 关键:不能只是报错,而是必须在**改动 Ghost 运行时之前**就拒绝。
+      expect(runtime.install).not.toHaveBeenCalled();
+      expect(reads).toBeGreaterThan(1);
+    } finally {
+      listSpy.mockRestore();
+    }
   });
 
   it('uninstalls a custom market plugin through the shared uninstall path', async () => {

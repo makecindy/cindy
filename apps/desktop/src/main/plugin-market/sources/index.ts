@@ -200,6 +200,25 @@ export class MarketSourceManager {
     return dir;
   }
 
+  /**
+   * 该缓存槽当前是否仍被某个已配置来源占用(整槽删除在执行前的再核对)。
+   *
+   * 整槽删除可能因租约被推迟。推迟期间用户完全可以移除后**立刻重新添加同名同源**
+   * 的来源——槽路径只由 (name, source) 派生,于是同一个槽被复用、写入并激活了新
+   * 版本。此时若不核对就执行那笔延迟删除,会把刚添加成功的缓存连 current 指针一起
+   * 递归删掉,配置有效但市场内容不见了(报 MARKET_SOURCE_INVALID / market root
+   * missing)。按"槽是否仍被配置占用"判定,同时覆盖两种情形:重新添加同源(同槽,
+   * 放弃删除)与重新添加异源(异槽,旧槽照常回收)。
+   */
+  private slotIsConfigured(slot: string): boolean {
+    try {
+      return this.deps.store.list().some((config) => this.cacheSlot(config) === slot);
+    } catch {
+      // 读不到配置时按"仍被占用"处理:宁可漏回收磁盘,也不误删有效缓存。
+      return true;
+    }
+  }
+
   /** 目录是否为其所属槽当前生效的版本(推迟清理执行前的再核对)。 */
   private isCurrentVersionDir(dir: string): boolean {
     // 版本目录布局固定为 <slot>/versions/<version>。
@@ -403,9 +422,10 @@ export class MarketSourceManager {
       const slot = this.cacheSlot(config);
       const version = crypto.randomUUID();
       const dir = path.join(this.versionsDir(slot), version);
-      // 清掉同 slug 的历史残骸。有租约时守卫会推迟——不影响本次正确性:新版本
-      // 落在全新的 uuid 目录、指针随后被覆盖,残留的旧版本由后续清理带走。
-      await this.removeCacheDir(slot);
+      // 清掉同 slug 的历史残骸。有租约时守卫会推迟,而本次添加随后就会往这个槽里
+      // 写新版本 —— 所以必须带上"槽已被配置占用则放弃删除"的再核对(本方法末尾
+      // store.add 之后该槽即为已配置),否则那笔延迟删除会把刚添加的缓存删掉。
+      await this.removeCacheDir(slot, { skipIf: () => this.slotIsConfigured(slot) });
       await fs.promises.mkdir(this.versionsDir(slot), { recursive: true });
       await fs.promises.rename(discoveredRoot, dir);
       atomicWriteFileSync(this.currentPointer(slot), version);
@@ -424,7 +444,11 @@ export class MarketSourceManager {
       // 某个版本目录,直接删会让它们读到一半 ENOENT(安装失败或来源误报无效)。
       // 守卫按重叠判定(租约在目标之下也算),把删除推迟到最后一个租约释放;
       // 配置已从 store 移除,来源对用户即刻消失,残留缓存只是延后回收。
-      await this.removeCacheDir(this.cacheSlot(removed));
+      //
+      // 推迟期间用户可能移除后立刻重新添加同名同源 —— 那会复用同一个槽,所以执行
+      // 前必须再核对一次"槽是否仍被配置占用",否则会把刚重新添加的缓存删掉。
+      const slot = this.cacheSlot(removed);
+      await this.removeCacheDir(slot, { skipIf: () => this.slotIsConfigured(slot) });
     }
     return { ok: true };
   }

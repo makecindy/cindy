@@ -566,6 +566,53 @@ describe('MarketSourceManager git sources', () => {
     expect(fs.existsSync(slot)).toBe(false);
   });
 
+  it('keeps a re-added source when a deferred slot removal finally runs', async () => {
+    const root = makeRoot();
+    const { executor } = fakeGit('hub', [{ rel: 'p', id: 'alpha' }]);
+    const store = new MarketSourceStore(path.join(root, 'sources.v1.json'));
+    const deps = {
+      store,
+      cloneRoot: path.join(root, 'sources'),
+      homeDir: root,
+      gitExecutor: executor,
+    };
+    const manager = new MarketSourceManager(deps);
+    await manager.addSource({ source: 'openai/plugins' });
+    const config = manager.getConfig('hub')!;
+
+    const slot = path.join(
+      root,
+      'sources',
+      marketCloneSlug('hub', {
+        type: 'git',
+        url: 'https://github.com/openai/plugins.git',
+        sparsePaths: [],
+      }),
+    );
+
+    // 读取方持有租约时移除来源 → 整槽删除被推迟;用户随即重新添加同名同源,
+    // 复用同一个槽。旧租约释放后那笔延迟删除若不再核对"槽是否仍被配置占用",
+    // 就会把刚添加成功的缓存连 current 指针一起删掉(配置有效但市场内容不见了)。
+    //
+    // 这里刻意直接写回配置而不是走 addSource:addSource 自己也会排一笔带守卫的
+    // 整槽删除,而推迟队列按路径为键、后写覆盖,那会掩盖 removeSource 这一侧
+    // 是否带了守卫。
+    const remover = new MarketSourceManager(deps);
+    await manager.withDiscoveredSource('hub', async () => {
+      await remover.removeSource('hub');
+      store.add(config);
+    });
+
+    // 给延迟删除留出执行窗口,然后断言它放弃了删除。
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const current = fs.readFileSync(path.join(slot, 'current'), 'utf8').trim();
+    expect(
+      fs.existsSync(path.join(slot, 'versions', current, '.agents', 'plugins', 'marketplace.json')),
+    ).toBe(true);
+    const rediscovered = await remover.discoverSource('hub');
+    expect(rediscovered.result.ok).toBe(true);
+  });
+
   it('prunes dead incoming staging directories left by a killed refresh', async () => {
     const root = makeRoot();
     const { executor } = fakeGit('hub', [{ rel: 'p', id: 'alpha' }]);

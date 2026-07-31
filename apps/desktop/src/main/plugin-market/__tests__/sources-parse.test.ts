@@ -57,6 +57,13 @@ describe('parseMarketSource', () => {
     'https://user@example.com:443/org/repo.git',
     'https://example.com/org/repo.git?access_token=SECRET',
     'https://example.com/org/repo.git?sig=abc&token=def',
+    // fragment 与 query 一样能塞令牌/签名,并随 source 持久化、在 UI 摘要里露出。
+    'https://example.com/org/repo.git#token=SECRET',
+    'ssh://example.com/org/repo.git?token=SECRET',
+    'ssh://example.com/org/repo.git#sig=abc',
+    // scp 形态不是合法 URL,new URL 解析不了,得单独拦。
+    'git@example.com:org/repo.git?token=SECRET',
+    'git@example.com:org/repo.git#sig=abc',
   ])('rejects git URL with embedded credentials %s', (source) => {
     expect(parse({ source })).toEqual({ ok: false, code: 'CREDENTIALS_NOT_ALLOWED' });
   });

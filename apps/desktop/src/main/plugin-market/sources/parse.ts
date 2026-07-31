@@ -51,18 +51,26 @@ function hasEmbeddedCredentials(input: string): boolean {
       if (parsed.username.length > 0 || parsed.password.length > 0) return true;
       // 查询参数同样可携带签名/令牌(?access_token=SECRET),市场仓库 URL
       // 不需要 query,一律拒绝,引导走 credential helper / SSH,而非白名单剥离。
-      if (parsed.search.length > 0) return true;
+      if (parsed.search.length > 0 || parsed.hash.length > 0) return true;
     } catch {
       return false;
     }
   }
-  // ssh:// 只在出现密码位时拒绝（ssh://user:pass@host 的 password 同样是明文凭证）。
+  // ssh:// 的 username 是认证主体,但 password 位是明文凭证;query / fragment
+  // 同样能塞令牌或签名并随 source 持久化、在 UI 摘要里露出,一并拒绝。
   if (/^ssh:\/\//i.test(input)) {
     try {
-      return new URL(input).password.length > 0;
+      const parsed = new URL(input);
+      return parsed.password.length > 0 || parsed.search.length > 0 || parsed.hash.length > 0;
     } catch {
       return false;
     }
+  }
+  // scp 形态(git@host:owner/repo.git)不是合法 URL,new URL 解析不了。它同样不该
+  // 带 query / fragment —— `git@host:repo.git?token=...` 会被 GIT_URL_PATTERN 接受,
+  // 然后把令牌一路持久化下去。
+  if (/^[^\s/@]+@[^\s:/]+:/.test(input)) {
+    return input.includes('?') || input.includes('#');
   }
   return false;
 }

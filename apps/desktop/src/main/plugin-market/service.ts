@@ -255,12 +255,15 @@ export class PluginMarketService {
 
     requireSameMarketOwner(owner);
     const ledger = this.ledgerForOwner(owner);
+    // ghostId 冲突判定跨服务端与自定义市场合并计算（全局唯一、先装先得）。
+    // 必须**先于** applyDefaultInstalls 算出来:默认安装会真的下载并启用插件,
+    // 若只按服务端目录判重,与自定义来源同 ghostId 的默认项会被静默抢占所有权,
+    // 而列表随后又把它标成 conflict —— 既定事实已经发生。
+    const duplicateGhostIds = combinedDuplicateGhostIds(plugins, customEntries);
     await this.adoptLegacyInstallations(plugins, ledger, owner);
     await this.reconcileRemovedInstallations(ledger, owner);
-    await this.applyDefaultInstalls(plugins, owner, ledger);
+    await this.applyDefaultInstalls(plugins, owner, ledger, duplicateGhostIds);
     requireSameMarketOwner(owner);
-    // ghostId 冲突判定跨服务端与自定义市场合并计算（全局唯一、先装先得）。
-    const duplicateGhostIds = combinedDuplicateGhostIds(plugins, customEntries);
     const local = this.localInstallSnapshot(ledger);
     const serverItems = plugins.map((plugin) =>
       this.toItem(plugin, duplicateGhostIds, local),
@@ -361,18 +364,26 @@ export class PluginMarketService {
       // 来源"合并计数,这里必须用同一口径重算,否则被标为 conflict 并禁用的服务端
       // 项仍能经普通 UI 流程或直接 IPC 装进来并抢占 ghostId。
       const record = ledger.installationForGhost(plugin.ghostId);
-      await this.assertSourceOwnsGhostId({
-        owner,
-        ghostId: plugin.ghostId,
-        ownsInstall: Boolean(existing && record?.installed && record.pluginId === plugin.id),
-        knownServerPlugins: catalog,
-      });
+      const ownsInstall = Boolean(
+        existing && record?.installed && record.pluginId === plugin.id,
+      );
+      const assertOwnership = () =>
+        this.assertSourceOwnsGhostId({
+          owner,
+          ghostId: plugin.ghostId,
+          ownsInstall,
+          // 复用已拉到的目录,复核不再多打一次网络请求。
+          knownServerPlugins: catalog,
+        });
+      await assertOwnership();
       return {
         ghost: await this.installDetail(
           plugin,
           {
             expectedInstalled: existing,
             allowPermissionExpansion: options.allowPermissionExpansion === true,
+            // 下载可能持续数分钟,提交副作用前按当前事实再算一次。
+            recheckOwnership: assertOwnership,
           },
           owner,
           ledger,
@@ -615,11 +626,10 @@ export class PluginMarketService {
         if (existing && (!currentRecord?.installed || currentRecord.pluginId !== pluginId)) {
           throwIpcError('ALREADY_EXISTS', 'A local Plugin already uses this Plugin ID');
         }
-        await this.assertSourceOwnsGhostId({
-          owner,
-          ghostId: plugin.ghostId,
-          ownsInstall: Boolean(existing && currentRecord?.installed && currentRecord.pluginId === pluginId),
-        });
+        const ownsInstall = Boolean(
+          existing && currentRecord?.installed && currentRecord.pluginId === pluginId,
+        );
+        await this.assertSourceOwnsGhostId({ owner, ghostId: plugin.ghostId, ownsInstall });
         if (
           existing &&
           // 与服务端安装同口径:对比已装 manifest 与候选包,只有新增权限才要求
@@ -633,7 +643,13 @@ export class PluginMarketService {
         const ghost = await installCustomMarketPlugin({
           pluginDir: plugin.dir,
           expected: options.expectedManifest,
-          beforeCommit: () => requireSameMarketOwner(owner),
+          // 打包耗时,期间另一窗口可以经独立的 market-sources 互斥键添加声明同一
+          // ghostId 的来源(来源变更与插件安装不共享互斥边界)。所以在真正改动
+          // Ghost 运行时之前把所有权再算一遍,而不是只依赖打包前那一次。
+          beforeCommit: async () => {
+            requireSameMarketOwner(owner);
+            await this.assertSourceOwnsGhostId({ owner, ghostId: plugin.ghostId, ownsInstall });
+          },
         });
         // 包目录落位后,溯源写入操作开始时捕获的 owner 账本(与服务端安装同款)。
         await this.withCapturedLedgerMutation(ledger, () => {
@@ -792,6 +808,11 @@ export class PluginMarketService {
       allowPermissionExpansion?: boolean;
       /** 确认操作时的安装意图;下载窗口期目标被另一窗口卸载时拒绝滑入首装。 */
       expectedInstalled: boolean;
+      /**
+       * 提交副作用前的所有权复核。下载可能持续数分钟,期间另一窗口可经独立的
+       * market-sources 互斥键添加声明同一 ghostId 的来源,入口处那次判定已过期。
+       */
+      recheckOwnership?: () => Promise<void>;
     } = { expectedInstalled: false },
     owner = captureMarketOwner(),
     ledger = this.ledgerForOwner(owner),
@@ -852,6 +873,9 @@ export class PluginMarketService {
           );
         }
       }
+      // 改动 Ghost 运行时之前的最后一道:跨来源 ghostId 所有权按当前事实重算。
+      await options.recheckOwnership?.();
+      requireSameMarketOwner(owner);
       // 市场首装一律装完即开(2026-07-26 定案,见 installOrUpdateMarketGhostPackage);
       // 已装过则走原位更新,唤醒/沉睡状态延续当前值。
       const ghost = await installOrUpdateMarketGhostPackage(tempPath, {
@@ -971,6 +995,8 @@ export class PluginMarketService {
     plugins: readonly VisiblePluginSummary[],
     owner: ActiveAppSession,
     ledger: PluginMarketLedger,
+    /** 服务端 + 全部自定义来源合并算出的重复 ghostId;命中的默认项一律跳过。 */
+    duplicateGhostIds: ReadonlySet<string>,
   ): Promise<void> {
     const installSubject = defaultInstallSubject(owner);
     const counts = ghostIdCounts(plugins);
@@ -983,9 +1009,12 @@ export class PluginMarketService {
     const local = this.localInstallSnapshot(ledger, ledgerData.installations);
     for (const summary of plugins) {
       if (!summary.defaultInstall || !uniqueGhostIds.has(summary.ghostId)) continue;
+      // 跨来源重名:自动安装会替用户做出"服务端胜出"的抢占决定,必须交回用户手动
+      // 处置(列表把两边都标成 conflict)。
+      if (duplicateGhostIds.has(summary.ghostId)) continue;
       if (ledgerData.defaultInstallOptOuts[installSubject]?.includes(summary.id)) continue;
       if (isBuiltinGhostRemovedByUser(summary.ghostId)) continue;
-      const state = this.toItem(summary, NO_DUPLICATE_GHOST_IDS, local).installState;
+      const state = this.toItem(summary, duplicateGhostIds, local).installState;
       if (state !== 'not-installed') continue;
       try {
         await this.withMutation(summary.id, async () => {
@@ -994,7 +1023,18 @@ export class PluginMarketService {
           // 装完即开语义已收敛进市场安装入口本身,这里无需再显式声明。
           await this.installDetail(
             detail,
-            { expectedInstalled: false },
+            {
+              expectedInstalled: false,
+              // 默认安装同样有下载窗口:提交前按当前事实重算跨来源所有权,
+              // 复用已有的服务端目录,不额外打网络请求。
+              recheckOwnership: () =>
+                this.assertSourceOwnsGhostId({
+                  owner,
+                  ghostId: summary.ghostId,
+                  ownsInstall: false,
+                  knownServerPlugins: plugins,
+                }),
+            },
             owner,
             ledger,
           );

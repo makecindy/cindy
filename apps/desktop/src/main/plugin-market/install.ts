@@ -37,11 +37,13 @@ export async function installCustomMarketPlugin(input: {
   pluginDir: string;
   expected: GhostManifest;
   /**
-   * 打包完成后、实际改动 Ghost 运行时之前调用的校验钩。
+   * 打包完成后、实际改动 Ghost 运行时之前调用的校验钩(可异步)。
    * 自定义市场按调用方捕获的账户审阅 manifest;打包是异步的,装出前必须
    * 重新确认会话未漂移,避免把 A 审阅的插件装进当前账户 B 的运行时。
+   * 跨来源 ghostId 所有权也在这里复核——打包耗时,期间另一窗口可能添加了
+   * 声明同一 ghostId 的来源。
    */
-  beforeCommit?: () => void;
+  beforeCommit?: () => void | Promise<void>;
 }): Promise<InstalledGhost> {
   let raw: unknown;
   try {
@@ -83,8 +85,8 @@ export async function installCustomMarketPlugin(input: {
         'Plugin changed after permission review',
       );
     }
-    // 装出前最后防线:打包期间账号可能已切换,确认仍为用户审阅时的账户。
-    input.beforeCommit?.();
+    // 装出前最后防线:打包期间账号可能已切换、也可能有别的来源声明了同一 ghostId。
+    await input.beforeCommit?.();
     return await installOrUpdateMarketGhostPackage(tempPath, {
       ghostId: validated.manifest.id,
       version: validated.manifest.version,

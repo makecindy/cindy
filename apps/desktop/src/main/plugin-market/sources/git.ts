@@ -91,15 +91,24 @@ function errorText(error: unknown): string {
  * 经 IPC 到达 Renderer。诊断用的完整原文仍在 main 日志里。
  */
 function redactAbsolutePaths(text: string): string {
+  // 先把 URL 摘出来占位:仓库地址是用户自己输入的、要留着给他定位问题,不能被
+  // 下面的路径规则把 `https://host/org/repo.git` 的路径段一起抹掉。
+  const urls: string[] = [];
+  const masked = text.replace(/\b(?:https?|ssh|git):\/\/[^\s"'<>|]+/gi, (match) => {
+    urls.push(match);
+    return `\u0000URL${urls.length - 1}\u0000`;
+  });
   return (
-    text
+    masked
       // Windows：C:\Users\name\... / \\server\share\...
       .replace(/[A-Za-z]:\\[^\s"'<>|]*/g, '<path>')
       .replace(/\\\\[^\s"'<>|]+/g, '<path>')
-      // POSIX：/Users/name/... 只在至少两段时替换，避免把 /dev/null 之类噪音也吃掉
-      .replace(/\/(?:[^\s"'<>|/]+\/){2,}[^\s"'<>|/]*/g, '<path>')
+      // POSIX：`/home/alice`、`/tmp/foo` 这类两段路径同样带用户名与目录结构,
+      // 必须一起覆盖(此前要求两个带斜杠的段,实际只盖到三段及以上)。
+      .replace(/\/(?:[^\s"'<>|/]+\/)+[^\s"'<>|/]*/g, '<path>')
       // ~ 开头的家目录相对路径
       .replace(/~\/[^\s"'<>|]*/g, '<path>')
+      .replace(/\u0000URL(\d+)\u0000/g, (_, index: string) => urls[Number(index)] ?? '<path>')
   );
 }
 

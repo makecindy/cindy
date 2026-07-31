@@ -204,6 +204,9 @@ describe('classifyGitFailure', () => {
       'error: cannot run C:\\Users\\alice\\AppData\\git-credential.exe',
       'hint: see ~/.gitconfig for details',
       'fatal: could not read Username for https://bob:s3cr3t@github.com',
+      // 两段的短路径同样带用户名与目录结构,不能因为"段数不够"漏掉。
+      'error: chdir /home/alice failed',
+      'warning: cannot write /tmp/agent-sock',
     ].join('\n');
     const detail = classifyGitFailure(Object.assign(new Error('boom'), { stderr })).message;
 
@@ -212,9 +215,19 @@ describe('classifyGitFailure', () => {
     expect(detail).not.toContain('C:\\Users');
     expect(detail).not.toContain('~/.gitconfig');
     expect(detail).not.toContain('s3cr3t');
+    expect(detail).not.toContain('/home/');
+    expect(detail).not.toContain('/tmp/');
     // 仍要保留可引导的原因文本。
     expect(detail).toContain('Identity file');
     expect(detail).toContain('could not read Username');
+  });
+
+  it('keeps the repository URL readable while redacting host paths', () => {
+    const stderr = 'fatal: repository https://github.com/org/repo.git not found (/home/bob/.gitconfig)';
+    const detail = classifyGitFailure(Object.assign(new Error('boom'), { stderr })).message;
+    // 仓库地址是用户自己输入的,要留着给他定位问题;宿主路径必须抹掉。
+    expect(detail).toContain('https://github.com/org/repo.git');
+    expect(detail).not.toContain('/home/bob');
   });
 
   it('keeps the marketplace placeholder for known internal cache paths', () => {

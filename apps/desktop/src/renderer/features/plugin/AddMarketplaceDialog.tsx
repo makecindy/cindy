@@ -110,13 +110,20 @@ export function AddMarketplaceDialog({
     setAdding(true);
     setOperationError(null);
     try {
-      const sparsePaths = sparseInput
-        .split('\n')
-        .map((entry) => entry.trim())
-        .filter((entry) => entry.length > 0);
+      // 本地来源不接受 Git 专属字段。用户可能先按 Git 源填了 ref / 稀疏路径再把
+      // 来源改成本地目录——那两个输入框此时是禁用的,他没法自己清空,若照旧提交
+      // 会被 Main 以 REF_NOT_ALLOWED_FOR_LOCAL / SPARSE_NOT_ALLOWED_FOR_LOCAL
+      // 拒绝,变成解不开的死结。组装 payload 时直接忽略。
+      const sparsePaths = sourceIsLocal
+        ? []
+        : sparseInput
+            .split('\n')
+            .map((entry) => entry.trim())
+            .filter((entry) => entry.length > 0);
+      const ref = sourceIsLocal ? '' : refInput.trim();
       await window.electronAPI.pluginMarket.addSource({
         source: sourceInput.trim(),
-        ...(refInput.trim() ? { ref: refInput.trim() } : {}),
+        ...(ref ? { ref } : {}),
         ...(sparsePaths.length > 0 ? { sparsePaths } : {}),
       });
       setSourceInput('');
@@ -129,7 +136,16 @@ export function AddMarketplaceDialog({
     } finally {
       setAdding(false);
     }
-  }, [addDisabled, loadSources, onSourcesChanged, refInput, sourceInput, sparseInput, t]);
+  }, [
+    addDisabled,
+    loadSources,
+    onSourcesChanged,
+    refInput,
+    sourceInput,
+    sourceIsLocal,
+    sparseInput,
+    t,
+  ]);
 
   return (
     <Dialog.Root open={open} onOpenChange={(next) => !adding && onOpenChange(next)}>
