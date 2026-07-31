@@ -192,6 +192,32 @@ describe('mergeWithBundled', () => {
     ).toBeUndefined();
   });
 
+  it('旧 xAI 条目仅在 access 缺省或仍为同一订阅时继承 bundled 图像能力', () => {
+    const bundledXai = BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')!;
+    const oldRemoteXai = JSON.parse(JSON.stringify(bundledXai)) as Provider;
+    delete oldRemoteXai.imageModels;
+
+    for (const access of [
+      { kind: 'api' as const },
+      { kind: 'managed' as const },
+      { kind: 'subscription' as const, product: 'Another subscription' },
+    ]) {
+      expect(
+        mergeWithBundled({
+          version: '2',
+          providers: [{ ...oldRemoteXai, access }],
+        }).providers.find((p) => p.id === 'xai')?.imageModels,
+      ).toBeUndefined();
+    }
+
+    expect(
+      mergeWithBundled({
+        version: '2',
+        providers: [{ ...oldRemoteXai, access: bundledXai.access }],
+      }).providers.find((p) => p.id === 'xai')?.imageModels,
+    ).toEqual(bundledXai.imageModels);
+  });
+
   it('非 xAI 远端条目缺少媒体字段时不从 bundled 恢复已撤下能力', () => {
     const bundledOpenai = BUNDLED_CATALOG.providers.find((p) => p.id === 'openai')!;
     const remoteOpenai = JSON.parse(JSON.stringify(bundledOpenai)) as Provider;

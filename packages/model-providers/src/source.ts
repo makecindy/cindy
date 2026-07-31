@@ -97,6 +97,19 @@ function legacyAccessFor(primary: Provider, bundled: Provider): Provider['access
   return sameRoutes ? bundled.access : undefined;
 }
 
+/** 图片能力只可沿用到未声明 access，或仍明确属于同一 bundled 订阅的旧条目。 */
+function allowsBundledImageInheritance(
+  primaryAccess: Provider['access'],
+  bundledAccess: Provider['access'],
+): boolean {
+  if (primaryAccess === undefined) return true;
+  if (bundledAccess === undefined || primaryAccess.kind !== bundledAccess.kind) return false;
+  return (
+    primaryAccess.kind !== 'subscription' ||
+    (bundledAccess.kind === 'subscription' && primaryAccess.product === bundledAccess.product)
+  );
+}
+
 /**
  * 同 id preset 仍以远端为主；bundled 只给远端仍保留的同 runtime / 同 model
  * 回填缺失的 contextWindow。这样旧远端不会把已核实的长上下文元数据降级，同时远端
@@ -150,7 +163,8 @@ export function mergeWithBundled(primary: Catalog): Catalog {
       p.id === 'xai' &&
       p.imageModels === undefined &&
       bundled.imageModels !== undefined &&
-      bundledAccess !== undefined;
+      bundledAccess !== undefined &&
+      allowsBundledImageInheritance(p.access, bundledAccess);
     if (!(p.access === undefined && bundledAccess !== undefined) && !inheritImage) {
       return p;
     }
