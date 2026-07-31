@@ -308,6 +308,7 @@ export function ErrorBanner({
       const ipcErr = extractIpcError(e);
       const msg = ipcErr?.message ?? (e instanceof Error ? e.message : String(e));
       toast.error(t('chat.errorBanner.claudeSubscriptionSwitchFailed', { msg }));
+    } finally {
       setSwitchingClaudeSubscription(false);
     }
   };

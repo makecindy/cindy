@@ -2578,14 +2578,16 @@ export function CCAgentSessionView({
   // interrupted-turn-resume:main 判定失败 turn 已有 assistant 产出时,会用隐藏的
   // 规范化续跑指令(CONTINUE_AFTER_ERROR_PROMPT)替代重发原文;零产出仍重发原文。
   // 判定与文案都在 main(规则 9),renderer 只发意图。
-  // Retry / silent-stop 继续都**不在这里 ack 红点**(PR #879 review P1):这两个 store
-  // 方法内部吞掉异步失败,点击时就清点会在恢复失败(retry 被拒 / 续跑入队失败)时留下
+  // Retry / silent-stop 继续都**不在这里 ack 红点**(PR #879 review P1):点击时就清点
+  // 会在恢复失败(retry 被拒 / 续跑入队失败)时留下
   // 「横幅还在、红点没了」,而 live-only 的错误没有任何重算能把它恢复。
   // 成功路径已经有更可靠的收敛点:turn 真正跑起来 → store 清掉终止错误 →
   // useSessionRunningStatus 在 running 上升沿把 orphan 的 error 角标 explicit 清掉。
   // 失败路径则天然保留红点,与仍在展示的横幅一致。
   const handleRetry = useCallback(() => {
-    retryLastError();
+    void retryLastError().catch((error) => {
+      log.warn('retryLastError failed', error);
+    });
   }, [retryLastError]);
 
   const handleSwitchToClaudeSubscription = useCallback(async (): Promise<void> => {
@@ -2611,7 +2613,7 @@ export function CCAgentSessionView({
     }
 
     await refreshServerSession();
-    retryLastError();
+    await retryLastError();
   }, [
     canSwitchToClaudeSubscription,
     refreshServerSession,

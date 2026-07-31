@@ -11,8 +11,9 @@ function deferred() {
 }
 
 describe('refreshProviderModelsAfterAccountReady', () => {
-  it('does not release account readiness before the forced model refresh settles', async () => {
-    const refresh = deferred();
+  it('waits for Anthropic discovery but not unrelated provider refreshes', async () => {
+    const anthropicRefresh = deferred();
+    const backgroundRefresh = deferred();
     const events: string[] = [];
     const operation = refreshProviderModelsAfterAccountReady({
       restartCodex: async () => {
@@ -21,9 +22,11 @@ describe('refreshProviderModelsAfterAccountReady', () => {
       shutdownCodexEnvironment: async () => {
         events.push('shutdown');
       },
-      refreshProviderModels: async (trigger) => {
-        events.push(`refresh:${trigger}`);
-        await refresh.promise;
+      refreshProviderModels: async (trigger, providerIds) => {
+        events.push(`refresh:${trigger}:${providerIds?.join(',')}`);
+        await (providerIds?.includes('anthropic')
+          ? anthropicRefresh.promise
+          : backgroundRefresh.promise);
       },
       log: { warn: vi.fn() },
     });
@@ -32,10 +35,15 @@ describe('refreshProviderModelsAfterAccountReady', () => {
     void operation.then(() => {
       settled = true;
     });
-    await vi.waitFor(() => expect(events).toEqual(['restart', 'shutdown', 'refresh:startup']));
+    await vi.waitFor(() => expect(events).toEqual([
+      'restart',
+      'shutdown',
+      'refresh:startup:xd,openai,xai',
+      'refresh:startup:anthropic',
+    ]));
     expect(settled).toBe(false);
 
-    refresh.resolve();
+    anthropicRefresh.resolve();
     await operation;
     expect(settled).toBe(true);
   });
@@ -55,7 +63,8 @@ describe('refreshProviderModelsAfterAccountReady', () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(refreshProviderModels).toHaveBeenCalledWith('startup');
+    expect(refreshProviderModels).toHaveBeenCalledWith('startup', ['xd', 'openai', 'xai']);
+    expect(refreshProviderModels).toHaveBeenCalledWith('startup', ['anthropic']);
     expect(warn).toHaveBeenCalledWith('restartCodexAfterAuthModeChange on account switch failed', {
       error: 'restart unavailable',
     });
@@ -74,7 +83,7 @@ describe('refreshProviderModelsAfterAccountReady', () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(warn).toHaveBeenCalledWith('provider model startup refresh failed', {
+    expect(warn).toHaveBeenCalledWith('Anthropic model startup refresh failed', {
       error: 'discovery unavailable',
     });
   });

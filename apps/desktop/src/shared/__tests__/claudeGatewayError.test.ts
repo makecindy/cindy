@@ -11,35 +11,23 @@ const planError =
 
 function classify(overrides: Partial<ClaudeGatewayErrorContext> = {}) {
   return classifyClaudeGatewayError({
-    agentKind: 'claude-code',
     modelId: 'claude-opus-5',
-    providerId: null,
-    observedDefaultRoute: 'gateway',
+    requestRoute: 'gateway',
+    status: 400,
     error: planError,
-    terminal: true,
-    remote: false,
     ...overrides,
   });
 }
 
 describe('classifyClaudeGatewayError', () => {
-  it('attributes the misleading Pro-plan error when a default-route Opus request used XD Gateway', () => {
+  it('attributes the misleading Pro-plan error from the exact gateway Opus response', () => {
     expect(classify()).toBe(CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON);
   });
 
-  it('also attributes an explicitly selected XD source', () => {
-    expect(classify({ providerId: 'xd', observedDefaultRoute: null })).toBe(
-      CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON,
-    );
-  });
-
   it.each([
-    { label: 'Claude.ai subscription route', observedDefaultRoute: 'subscription' as const },
-    { label: 'unknown default route', observedDefaultRoute: null },
-    { label: 'Anthropic source', providerId: 'anthropic' },
+    { label: 'Claude.ai subscription route', requestRoute: 'subscription' as const },
+    { label: 'non-400 response', status: 429 },
     { label: 'non-Opus model', modelId: 'claude-sonnet-5' },
-    { label: 'non-terminal retry', terminal: false },
-    { label: 'remote session', remote: true },
     { label: 'unrelated error', error: 'model unavailable' },
   ])('does not guess for $label', ({ label: _label, ...overrides }) => {
     expect(classify(overrides)).toBeNull();

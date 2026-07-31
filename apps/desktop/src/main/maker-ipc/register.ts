@@ -47,7 +47,6 @@ import {
 import { getManagedWorktreeBasePath } from '../../shared/managedWorktreePaths.js';
 import { normalizeWorkingDirForProjectSettings } from '../../shared/workingDir.js';
 import { buildTurnUsageDetails } from '../../shared/turnUsageDetails.js';
-import { classifyClaudeGatewayError } from '../../shared/claudeGatewayError.js';
 import type { DesktopCommandContext } from '../commands/index.js';
 import { getDesktopCommandRegistry } from '../commands/index.js';
 import { initGithubIssueSubmit, IssueConfirmBridge } from '../github-issue/index.js';
@@ -494,6 +493,7 @@ import {
   setClaudeBackgroundActivityBroadcaster,
 } from '../maker-host/claude-session-background-activity.js';
 import { readClaudeSessionRoute } from '../maker-host/claude-session-route-registry.js';
+import { consumeClaudeGatewayOpusPlanMismatch } from '../maker-host/claude-gateway-error-observer.js';
 import { setLiveCcSessionBridge } from '../maker-host/claude-transcript-relocation.js';
 import {
   CredentialModeSwitchBusyError,
@@ -2624,19 +2624,9 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   registration.disposers.push(session.onEvent((event: AgentEvent) => {
     let attributedEvent = event;
     if (event.type === 'error' && isTerminalTurnErrorEvent(event)) {
-      const data = event.data as { message?: unknown } | null;
-      const providerId = getSessionProvider(session.id);
-      const observedDefaultRoute =
-        providerId == null ? readClaudeSessionRoute(session.id) : null;
-      const reason = classifyClaudeGatewayError({
-        agentKind: session.agentKind,
-        modelId: session.model,
-        providerId,
-        observedDefaultRoute,
-        error: typeof data?.message === 'string' ? data.message : '',
-        terminal: true,
-        remote: Boolean(session.remoteHostId),
-      });
+      const reason = !session.remoteHostId && session.agentKind === 'claude-code'
+        ? consumeClaudeGatewayOpusPlanMismatch(session.id)
+        : null;
       if (reason) {
         attributedEvent = {
           ...event,
@@ -2645,8 +2635,6 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         log.warn('Claude Opus plan error attributed to XD Gateway route', {
           sessionId: session.id,
           model: session.model,
-          providerId,
-          observedDefaultRoute,
           reason,
         });
       }

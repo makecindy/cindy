@@ -609,6 +609,13 @@ describe('ErrorBanner OpenAI connection recovery', () => {
       switching.resolve();
       await switching.promise;
     });
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'chat.errorBanner.switchClaudeSubscription',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
   });
 
   it('restores the Claude.ai recovery action when switching fails', async () => {

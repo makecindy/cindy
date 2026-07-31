@@ -9,34 +9,26 @@ export const CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON = 'claude-gateway-opus-pla
 const CLAUDE_PRO_OPUS_ERROR = /Claude Opus is not available with the Claude Pro plan/i;
 
 export interface ClaudeGatewayErrorContext {
-  agentKind: 'claude-code' | 'codex';
   modelId: string;
-  providerId: string | null;
-  observedDefaultRoute: 'gateway' | 'subscription' | null;
+  requestRoute: 'gateway' | 'subscription';
+  status: number;
   error: string;
-  terminal: boolean;
-  remote: boolean;
 }
 
 /**
- * 只在能证明请求实际走了 XD Gateway 时归因；providerId=null 本身不是证据，必须
- * 同时有 proxy 路由观察值。显式 providerId='xd' 则已经足以确定路由。
+ * 只按同一个 proxy 请求的精确路由与上游响应归因。会话 provider、最近路由或
+ * terminal event 到达时的活性状态都不是请求级证据，不能参与这个判定。
  */
 export function classifyClaudeGatewayError(
   context: ClaudeGatewayErrorContext,
 ): typeof CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON | null {
   if (
-    context.agentKind !== 'claude-code' ||
-    context.remote ||
-    !context.terminal ||
+    context.requestRoute !== 'gateway' ||
+    context.status !== 400 ||
     !context.modelId.startsWith('claude-opus-') ||
     !CLAUDE_PRO_OPUS_ERROR.test(context.error)
   ) {
     return null;
   }
-
-  const routedThroughGateway =
-    context.providerId === 'xd' ||
-    (context.providerId === null && context.observedDefaultRoute === 'gateway');
-  return routedThroughGateway ? CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON : null;
+  return CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON;
 }
