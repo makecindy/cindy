@@ -590,13 +590,17 @@ grep -rn '会话' apps/desktop/src/main --include='*.ts' | grep -vE '__tests__|:
 - **IM 渠道的「存档 / 上号」人格用词未统一**：discord / feishu / wechat 仍把 session 叫
   「存档」（见 §6.0.4）。本次只清了 forbidden 词「会话」，因此这三个渠道会同时出现「任务」
   与「存档」。要不要把「存档」也收敛成「任务」是语气取舍而非错译，留给产品单独裁决
-- **共享层与 mobile 的部分中文仍是硬编码**：`packages/maker-shared/src/sessionList.ts` 的
-  `remoteSessionListTitle` / `deviceSessionEmptyState`、`apps/mobile/src/session/messageActionMenu.ts`
-  都在业务代码里返回中文串，mobile 直接渲染，因此非 zh-CN locale 下会露出中文。这是
-  `origin/main` 既有状态（`messageActionMenu.ts` 的注释写明「那边走 i18n，这里暂为硬编码」），
-  正是 §6.0.1 那份来源清单第 5 条要专门代码搜索的原因。**把这一层下沉到 i18n（或改成返回结构化
-  数据交 UI 层翻译）是独立重构**，不在本次改名范围；本 PR 只保证这些中文串与桌面端同款 key
-  用词一致
+- **共享层的部分中文仍是硬编码**：`packages/maker-shared/src/sessionList.ts` 的
+  `remoteSessionListTitle` / `deviceSessionEmptyState` 在业务代码里返回中文串，mobile 直接渲染，
+  因此非 zh-CN locale 下会露出中文。这是 `origin/main` 既有状态，也正是 §6.0.1 那份来源清单第
+  5 条要专门代码搜索的原因。**把共享层下沉到 i18n（或改成返回结构化数据交 UI 层翻译）是独立
+  重构**，不在本次改名范围；本 PR 只保证这些中文串与桌面端同款 key 用词一致。
+  （`apps/mobile/src/session/messageActionMenu.ts` 原本也在此列，本次已改为走
+  `i18n.t('session.messageMenu.*')`——同目录 `sessionMenu.ts` 早就是这个写法，它是唯一的例外）
+- **mobile 的 locale 没有 key 对齐门禁**：`pnpm check:i18n` 只校验
+  `apps/desktop/src/renderer/i18n/locales/<locale>/common.json`（见脚本头部注释），
+  `apps/mobile/src/i18n/locales/**` 的 15 个 json 不在其中。本次新增 mobile key 时是手工核对
+  四语一致的（各 235 个 key）。把门禁扩到 mobile 是独立改动，可能会暴露一批既有不齐
 - **代码标识符与内部注释仍以 Session 为主**：刻意不动。仅当中文注释被测试当作源码锚点、
   且新旧术语冲突时才跟进（本次有 1 处：`apps/mobile/app/sessions/new.tsx` 的
   「新建任务默认运行配置」）

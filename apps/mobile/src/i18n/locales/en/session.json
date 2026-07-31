@@ -219,6 +219,13 @@
     "cancelRename": "Cancel rename",
     "backToMenu": "Back to session menu"
   },
+  "messageMenu": {
+    "fork": "Start a new session",
+    "addToChat": "Add to chat",
+    "copyLink": "Copy current message link",
+    "rewind": "Back to here",
+    "deleteOne": "Delete this message"
+  },
   "tail": {
     "interrupted": "The app exited mid-task, so it was interrupted.",
     "continueTask": "Continue Task",

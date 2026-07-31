@@ -5056,7 +5056,7 @@
       "copy": "메시지 복사",
       "linkCopied": "링크가 복사되었습니다",
       "moreActions": "메시지 추가 작업",
-      "copyLink": "현재 대화 링크 복사",
+      "copyLink": "현재 메시지 링크 복사",
       "copyLinkFailed": "링크를 복사하지 못했습니다",
       "rewind": "여기로 돌아가기",
       "fork": "새 세션에서 계속하기",

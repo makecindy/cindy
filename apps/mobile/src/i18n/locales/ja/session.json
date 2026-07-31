@@ -219,6 +219,13 @@
     "cancelRename": "名前の変更をキャンセル",
     "backToMenu": "セッションメニューに戻る"
   },
+  "messageMenu": {
+    "fork": "新しいセッションで続ける",
+    "addToChat": "会話に追加",
+    "copyLink": "現在のメッセージリンクをコピー",
+    "rewind": "ここまで戻る",
+    "deleteOne": "このメッセージを削除"
+  },
   "tail": {
     "interrupted": "タスクの実行中にアプリが終了したため、中断されました。",
     "continueTask": "タスクを続ける",

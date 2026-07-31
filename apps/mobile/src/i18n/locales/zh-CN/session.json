@@ -219,6 +219,13 @@
     "cancelRename": "取消重命名",
     "backToMenu": "返回任务菜单"
   },
+  "messageMenu": {
+    "fork": "开启一个新任务",
+    "addToChat": "添加到对话",
+    "copyLink": "复制当前消息链接",
+    "rewind": "回到此处",
+    "deleteOne": "删除本条消息"
+  },
   "tail": {
     "interrupted": "任务执行到一半时应用退出，已被中断。",
     "continueTask": "继续任务",
