@@ -49,8 +49,15 @@ import { normalizeWorkingDirForProjectSettings } from '../../shared/workingDir.j
 import { buildTurnUsageDetails } from '../../shared/turnUsageDetails.js';
 import type { DesktopCommandContext } from '../commands/index.js';
 import { getDesktopCommandRegistry } from '../commands/index.js';
-import { initGithubIssueSubmit, IssueConfirmBridge } from '../github-issue/index.js';
-import { initGhostGrantConfirmBridge } from '../cindy-brain/ghostGrantConfirmBridge.js';
+import {
+  initGithubIssueSubmit,
+  IssueConfirmBridge,
+  type IssueConfirmInteractionSnapshot,
+} from '../github-issue/index.js';
+import {
+  initGhostGrantConfirmBridge,
+  type GhostGrantConfirmInteractionSnapshot,
+} from '../cindy-brain/ghostGrantConfirmBridge.js';
 import { createFeishuDesktopConfirmNotifier } from '../im/desktopConfirmNoticeWiring.js';
 import {
   initGhostSetupInteractionBridge,
@@ -78,6 +85,7 @@ import {
 import {
   initRenameSessionsConfirm,
   RenameSessionsConfirmBridge,
+  type RenameSessionsConfirmInteractionSnapshot,
 } from '../session-title-rename/index.js';
 import {
   getBrowserAvailability,
@@ -1464,23 +1472,39 @@ function clearPendingInteraction(requestId: string): PendingInteractionEntry | n
   return entry;
 }
 
+type RecoverableInteractionSnapshot =
+  | InteractionRequest
+  | GhostSetupInteractionSnapshot
+  | IssueConfirmInteractionSnapshot
+  | RenameSessionsConfirmInteractionSnapshot
+  | GhostGrantConfirmInteractionSnapshot;
+
+type PendingInteractionSnapshotEntry = {
+  request: RecoverableInteractionSnapshot;
+  persistId?: string;
+};
+
 /**
- * 快照:某会话当前所有挂起的 agent interaction(permission / ask_user / plan_review)。
+ * 快照:某会话当前所有挂起的 agent interaction 与 Host-owned 确认卡。
  * 供 renderer 在「打开 / 重连 / 刷新」会话时重建可操作面板 —— pending 状态原本只由实时
  * INTERACTION_REQUEST push 设置,后加入的窗口会错过那条 push,靠这个查询补回。
  * 纯内存读;O(N) 其中 N = 全局挂起交互数(极小)。
  */
 function getPendingInteractionsForSession(
   sessionId: string,
-): Array<{ request: InteractionRequest | GhostSetupInteractionSnapshot; persistId?: string }> {
-  const out: Array<{
-    request: InteractionRequest | GhostSetupInteractionSnapshot;
-    persistId?: string;
-  }> = [];
+): PendingInteractionSnapshotEntry[] {
+  const out: PendingInteractionSnapshotEntry[] = [];
   for (const entry of pendingInteractionResolvers.values()) {
     if (entry.sessionId === sessionId) out.push({ request: entry.request, persistId: entry.persistId });
   }
   out.push(
+    ...issueConfirmBridge.pendingSnapshots(sessionId).map(({ request }) => ({ request })),
+    ...renameSessionsConfirmBridge
+      .pendingSnapshots(sessionId)
+      .map(({ request }) => ({ request })),
+    ...ghostGrantConfirmBridge
+      .pendingSnapshots(sessionId)
+      .map(({ request }) => ({ request })),
     ...ghostSetupInteractionBridge
       .pendingSnapshots(sessionId)
       .map(({ request }) => ({ request })),
@@ -1491,6 +1515,9 @@ function getPendingInteractionsForSession(
 function hasPendingInteractionForSession(sessionId: string): boolean {
   return (
     Array.from(pendingInteractionResolvers.values()).some((entry) => entry.sessionId === sessionId) ||
+    issueConfirmBridge.pendingSnapshots(sessionId).length > 0 ||
+    renameSessionsConfirmBridge.pendingSnapshots(sessionId).length > 0 ||
+    ghostGrantConfirmBridge.pendingSnapshots(sessionId).length > 0 ||
     ghostSetupInteractionBridge.pendingSnapshots(sessionId).length > 0
   );
 }

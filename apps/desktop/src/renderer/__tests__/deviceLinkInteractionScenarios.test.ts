@@ -50,10 +50,7 @@ vi.mock('@/lib/composerDraftStore', () => ({
 import { makerChatStore } from '@/lib/makerChatStore';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import * as messageService from '@/lib/messageService';
-import {
-  getIssueConfirmDraft,
-  saveIssueConfirmDraft,
-} from '@/lib/issueConfirmDraftStore';
+import { getIssueConfirmDraft, saveIssueConfirmDraft } from '@/lib/issueConfirmDraftStore';
 
 type RemotePush = { deviceId: string; channel: string; payload: unknown };
 type ResolveCall = { requestId: string; decision: Record<string, unknown> };
@@ -620,6 +617,44 @@ describe('device-link 远程交互 — dismissed / 顺序 / 本机零回归', ()
 });
 
 describe('device-link 交互快照重建 — 窗口在交互挂起之后才打开(无 live push)', () => {
+  it('issue_confirm:无 push → 快照重建确认卡，重复重放保留用户草稿', async () => {
+    const s = openRemoteSession();
+    host.seedPending(s, {
+      kind: 'issue_confirm',
+      requestId: 'issue-mid',
+      draft: { title: '原始标题', body: '原始正文', type: 'bug' },
+      env: {
+        appVersion: '0.1.23',
+        platform: 'darwin',
+        arch: 'arm64',
+        osVersion: '25.0',
+        region: 'cn',
+      },
+      submissionIdentity: { kind: 'platform', login: 'cindy-issue' },
+      suggestedPublicName: '当前昵称',
+    });
+
+    makerChatStore.ensureInitialMessages(s);
+    await flush();
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.requestId).toBe('issue-mid');
+
+    saveIssueConfirmDraft(s, 'issue-mid', {
+      title: '用户编辑后的标题',
+      body: '用户编辑后的正文',
+      type: 'feature',
+      publicName: '匿名',
+    });
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(getIssueConfirmDraft(s, 'issue-mid')).toMatchObject({
+      title: '用户编辑后的标题',
+      body: '用户编辑后的正文',
+      type: 'feature',
+      publicName: '匿名',
+    });
+    makerChatStore.purgeSession(s);
+  });
+
   it('permission:被控端已挂起 + 不发 push → ensureInitialMessages 后重建 pendingPermission', async () => {
     const s = openRemoteSession();
     host.seedPending(s, {
