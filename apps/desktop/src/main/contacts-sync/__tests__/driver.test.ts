@@ -11,6 +11,20 @@ const harness = vi.hoisted(() => {
     memberships: [],
     relations: [],
   };
+  const wireFrames = [
+    {
+      version: 1,
+      type: 'cipher-chunk',
+      senderPublicKey: 'own-public',
+      transferId: 'transfer',
+      index: 0,
+      total: 1,
+      iv: 'iv',
+      tag: 'tag',
+      compression: 'gzip',
+      data: 'data',
+    },
+  ];
   return {
     mode: 'cloud' as 'cloud' | 'local' | 'signed-out',
     ownerId: 'owner-a' as string | null,
@@ -21,7 +35,14 @@ const harness = vi.hoisted(() => {
     nextSyncSettingIntent: 0,
     runtimeStatus: null as null | Record<string, unknown>,
     emptyState,
+    syncMaterialized: false,
     activateSync: vi.fn(() => emptyState),
+    broadcastContactsChanged: vi.fn(),
+    wireFrames,
+    encodeContactsSyncMessage: vi.fn(async (options?: { signal?: AbortSignal }) => {
+      void options;
+      return wireFrames;
+    }),
     peerPublicKey: 'peer-public' as string | null,
     prepareKeyStore: vi.fn(async (): Promise<void> => undefined),
     pinPeerPublicKey: vi.fn(async (_: string, publicKey: string) => {
@@ -79,6 +100,14 @@ vi.mock('../../maker-host/maker-contacts-host.js', () => ({
     getStore: () => ({
       activateDeviceSync: harness.activateSync,
       readDeviceSyncState: () => harness.emptyState,
+      activateDeviceSyncWithResult: () => ({
+        state: harness.activateSync(),
+        materialized: harness.syncMaterialized,
+      }),
+      readDeviceSyncStateWithResult: () => ({
+        state: harness.emptyState,
+        materialized: harness.syncMaterialized,
+      }),
       mergeDeviceSyncState: () => false,
     }),
   }),
@@ -104,7 +133,7 @@ vi.mock('../../maker-host/contacts-change-events.js', () => ({
 }));
 
 vi.mock('../../maker-host/contacts-change-broadcast.js', () => ({
-  broadcastContactsChanged: vi.fn(),
+  broadcastContactsChanged: harness.broadcastContactsChanged,
 }));
 
 vi.mock('../keyStore.js', () => ({
@@ -133,24 +162,11 @@ vi.mock('../lanTransport.js', () => ({
 
 vi.mock('../wire.js', () => ({
   createContactsSyncKeyFrame: () => ({ version: 1, type: 'key', publicKey: 'own-public' }),
-  encodeContactsSyncMessage: () => [
-    {
-      version: 1,
-      type: 'cipher-chunk',
-      senderPublicKey: 'own-public',
-      transferId: 'transfer',
-      index: 0,
-      total: 1,
-      iv: 'iv',
-      tag: 'tag',
-      compression: 'gzip',
-      data: 'data',
-    },
-  ],
+  encodeContactsSyncMessage: harness.encodeContactsSyncMessage,
   isContactsSyncWireFrame: (raw: unknown) =>
     typeof raw === 'object' && raw !== null && 'type' in raw,
   ContactsSyncWireDecoder: class {
-    accept(): null {
+    async accept(): Promise<null> {
       return null;
     }
     reset(): void {}
@@ -182,7 +198,11 @@ beforeEach(() => {
   harness.syncSettingIntent = null;
   harness.nextSyncSettingIntent = 0;
   harness.runtimeStatus = null;
+  harness.syncMaterialized = false;
   harness.activateSync.mockClear();
+  harness.broadcastContactsChanged.mockClear();
+  harness.encodeContactsSyncMessage.mockReset();
+  harness.encodeContactsSyncMessage.mockImplementation(async () => harness.wireFrames);
   harness.peerPublicKey = 'peer-public';
   harness.pinPeerPublicKey.mockClear();
   harness.prepareKeyStore.mockClear();
@@ -270,6 +290,37 @@ describe('contacts sync runtime ownership', () => {
     expect(driver.getContactsDeviceSyncStatus().phase).toBe('off');
   });
 
+  it('aborts an old owner codec task when the active account changes', async () => {
+    let oldOwnerSignal: AbortSignal | undefined;
+    harness.encodeContactsSyncMessage.mockImplementation(
+      (options?: { signal?: AbortSignal }) =>
+        new Promise<typeof harness.wireFrames>((_, reject) => {
+          oldOwnerSignal = options?.signal;
+          options?.signal?.addEventListener(
+            'abort',
+            () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+            { once: true },
+          );
+        }),
+    );
+    driver.initContactsDeviceSync({
+      getSelfDeviceId: () => 'self-device',
+      listOnlineDesktopDevices: () => [{ deviceId: 'peer-device', deviceName: 'Peer Desktop' }],
+      isPeerAllowed: (deviceId) => deviceId === 'peer-device',
+      sendRelayFrame: harness.relaySend,
+    });
+    driver.setContactsDeviceLinkOwnerActive(true);
+
+    const enabling = driver.setContactsDeviceSyncEnabled(true);
+    await vi.waitFor(() => expect(oldOwnerSignal).toBeDefined());
+    harness.ownerId = 'owner-b';
+    driver.getContactsDeviceSyncStatus();
+
+    expect(oldOwnerSignal?.aborted).toBe(true);
+    await enabling;
+    expect(harness.relaySend).not.toHaveBeenCalled();
+  });
+
   it('applies a sync toggle written by another shared-userData instance', async () => {
     driver.initContactsDeviceSync({
       getSelfDeviceId: () => 'self-device',
@@ -296,6 +347,21 @@ describe('contacts sync runtime ownership', () => {
       enabled: false,
       phase: 'off',
     });
+  });
+
+  it('notifies renderers when local reconciliation rematerializes a hidden record', async () => {
+    harness.syncMaterialized = true;
+    driver.initContactsDeviceSync({
+      getSelfDeviceId: () => 'self-device',
+      listOnlineDesktopDevices: () => [],
+      isPeerAllowed: () => false,
+      sendRelayFrame: harness.relaySend,
+    });
+    driver.setContactsDeviceLinkOwnerActive(true);
+
+    await driver.setContactsDeviceSyncEnabled(true);
+
+    expect(harness.broadcastContactsChanged).toHaveBeenCalledWith({ origin: 'remote' });
   });
 
   it('reads the Device Link holder status in a passive shared-userData instance', () => {

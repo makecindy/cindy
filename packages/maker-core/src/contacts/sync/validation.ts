@@ -9,6 +9,7 @@ import {
 import {
   CONTACTS_SYNC_VERSION,
   membershipSyncId,
+  type ContactsDataSnapshot,
   type ContactsStampedValue,
   type ContactsSyncEntity,
   type ContactsSyncStamp,
@@ -233,6 +234,132 @@ function isRelation(value: unknown): value is {
     isUnboundedLocalText(value.note) &&
     isString(value.createdAt, 64, false)
   );
+}
+
+function isSnapshotContact(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isId(value.id) &&
+    isContactKind(value.kind) &&
+    isString(
+      value.displayName,
+      DEFAULT_CONTACTS_CONFIG.maxDisplayNameLen,
+      false,
+    ) &&
+    isStringArray(value.aliases) &&
+    isString(value.summary, DEFAULT_CONTACTS_CONFIG.maxSummaryLen) &&
+    isUtf8String(value.narrative, DEFAULT_CONTACTS_CONFIG.maxNarrativeBytes) &&
+    isString(value.agentNotes, DEFAULT_CONTACTS_CONFIG.maxAgentNotesLen) &&
+    isContactStatus(value.status) &&
+    isContactSource(value.source) &&
+    isString(value.createdAt, 64, false) &&
+    isString(value.updatedAt, 64, false)
+  );
+}
+
+function isSnapshotArray(
+  value: unknown,
+  validate: (candidate: unknown) => boolean,
+  validateId: (candidate: unknown) => candidate is string = isId,
+): value is Array<Record<string, unknown> & { id: string }> {
+  if (!Array.isArray(value) || value.length > CONTACTS_SYNC_MAX_ROWS_PER_TABLE)
+    return false;
+  const ids = new Set<string>();
+  for (const candidate of value) {
+    if (
+      !isRecord(candidate) ||
+      !validateId(candidate.id) ||
+      ids.has(candidate.id) ||
+      !validate(candidate)
+    ) {
+      return false;
+    }
+    ids.add(candidate.id);
+  }
+  return true;
+}
+
+/**
+ * projection_json 会作为下一次本地差异捕获的可信基线；必须完整 fail-closed。
+ * 只校验 id 会把损坏行误判成“本机删除”，进而向 CRDT 写入永久 tombstone。
+ */
+export function isValidContactsDataSnapshot(
+  value: unknown,
+): value is ContactsDataSnapshot {
+  if (!isRecord(value)) return false;
+  if (
+    !isSnapshotArray(value.contacts, isSnapshotContact) ||
+    !isSnapshotArray(
+      value.identities,
+      (candidate) => isRecord(candidate) && isIdentity(candidate),
+    ) ||
+    !isSnapshotArray(
+      value.events,
+      (candidate) => isRecord(candidate) && isEvent(candidate),
+    ) ||
+    !isSnapshotArray(
+      value.groups,
+      (candidate) => isRecord(candidate) && isGroup(candidate),
+    ) ||
+    !isSnapshotArray(
+      value.memberships,
+      (candidate) =>
+        isRecord(candidate) &&
+        isMembership(candidate) &&
+        (candidate as unknown as { id: string }).id ===
+          membershipSyncId(candidate.groupId, candidate.contactId),
+      isMembershipId,
+    ) ||
+    !isSnapshotArray(
+      value.relations,
+      (candidate) => isRecord(candidate) && isRelation(candidate),
+    )
+  ) {
+    return false;
+  }
+
+  const snapshot = value as unknown as ContactsDataSnapshot;
+  const contactIds = new Set(snapshot.contacts.map((contact) => contact.id));
+  const groupIds = new Set(snapshot.groups.map((group) => group.id));
+  const uniqueGroups = new Set<string>();
+  for (const group of snapshot.groups) {
+    if (uniqueGroups.has(group.name)) return false;
+    uniqueGroups.add(group.name);
+  }
+
+  const uniqueIdentities = new Set<string>();
+  for (const identity of snapshot.identities) {
+    if (!contactIds.has(identity.contactId)) return false;
+    const key = `${identity.platform}\u0000${identity.normalizedValue}`;
+    if (uniqueIdentities.has(key)) return false;
+    uniqueIdentities.add(key);
+  }
+  if (snapshot.events.some((event) => !contactIds.has(event.contactId)))
+    return false;
+  if (
+    snapshot.memberships.some(
+      (membership) =>
+        !contactIds.has(membership.contactId) ||
+        !groupIds.has(membership.groupId),
+    )
+  ) {
+    return false;
+  }
+
+  const uniqueRelations = new Set<string>();
+  for (const relation of snapshot.relations) {
+    if (
+      relation.fromId === relation.toId ||
+      !contactIds.has(relation.fromId) ||
+      !contactIds.has(relation.toId)
+    ) {
+      return false;
+    }
+    const key = `${relation.fromId}\u0000${relation.toId}\u0000${relation.relation}`;
+    if (uniqueRelations.has(key)) return false;
+    uniqueRelations.add(key);
+  }
+  return true;
 }
 
 export function isValidContactsSyncState(

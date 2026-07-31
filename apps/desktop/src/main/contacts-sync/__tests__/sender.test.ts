@@ -18,7 +18,7 @@ const harness = vi.hoisted(() => ({
 }));
 
 vi.mock('../wire.js', () => ({
-  encodeContactsSyncMessage: () => harness.frames,
+  encodeContactsSyncMessage: async () => harness.frames,
 }));
 
 const { ContactsSyncOutbound } = await import('../sender.js');
@@ -39,11 +39,13 @@ describe('contacts sync outbound', () => {
         }
       },
     };
+    const codecAbortController = new AbortController();
     const outbound = new ContactsSyncOutbound({
       getGeneration: () => 1,
       getOwnerId: () => 'owner-a',
       getTransport: () => transport,
       getDirectTransport: () => null,
+      getCodecAbortSignal: () => codecAbortController.signal,
       isEnabled: () => true,
       getIdentity: () => ({ privateKey: 'own-private', publicKey: 'own-public' }),
       getPeerPublicKey: () => 'peer-public',

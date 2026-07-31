@@ -1,6 +1,7 @@
 import net, { type Socket } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { inProcessContactsSyncCodec } from '../contactsSyncCodec.js';
 import { generateContactsSyncIdentity } from '../crypto.js';
 import { LanContactsSyncTransport } from '../lanTransport.js';
 import { ContactsSyncWireDecoder, encodeContactsSyncMessage } from '../wire.js';
@@ -26,12 +27,12 @@ describe('contacts sync LAN transport', () => {
   it('同网端点需证明持有设备私钥，伪造信标端点会回退 relay', async () => {
     const aIdentity = generateContactsSyncIdentity();
     const bIdentity = generateContactsSyncIdentity();
-    let resolveFrame: ((value: ReturnType<ContactsSyncWireDecoder['accept']>) => void) | null =
-      null;
-    const received = new Promise<ReturnType<ContactsSyncWireDecoder['accept']>>((resolve) => {
+    type DecodedFrame = Awaited<ReturnType<ContactsSyncWireDecoder['accept']>>;
+    let resolveFrame: ((value: DecodedFrame) => void) | null = null;
+    const received = new Promise<DecodedFrame>((resolve) => {
       resolveFrame = resolve;
     });
-    const decoder = new ContactsSyncWireDecoder();
+    const decoder = new ContactsSyncWireDecoder(inProcessContactsSyncCodec);
     const b = new LanContactsSyncTransport({
       getSelf: () => ({
         deviceId: 'device-b',
@@ -41,15 +42,15 @@ describe('contacts sync LAN transport', () => {
       isPeerAllowed: (deviceId, publicKey) =>
         deviceId === 'device-a' && publicKey === aIdentity.publicKey,
       onFrame: (srcDeviceId, frame) => {
-        resolveFrame?.(
-          decoder.accept({
+        void decoder
+          .accept({
             srcDeviceId,
             dstDeviceId: 'device-b',
             frame,
             ownPrivateKey: bIdentity.privateKey,
             expectedPeerPublicKey: aIdentity.publicKey,
-          }),
-        );
+          })
+          .then((message) => resolveFrame?.(message));
       },
       logger: { debug: () => {}, warn: () => {} },
     });
@@ -77,18 +78,21 @@ describe('contacts sync LAN transport', () => {
       logger: { debug: () => {}, warn: () => {} },
     });
     const aInternals = a as unknown as LanTransportInternals;
-    const [frame] = encodeContactsSyncMessage({
-      message: {
-        version: 1,
-        type: 'state',
-        state: { privateContact: 'Alice' },
+    const [frame] = await encodeContactsSyncMessage(
+      {
+        message: {
+          version: 1,
+          type: 'state',
+          state: { privateContact: 'Alice' },
+        },
+        ownPrivateKey: aIdentity.privateKey,
+        ownPublicKey: aIdentity.publicKey,
+        peerPublicKey: bIdentity.publicKey,
+        srcDeviceId: 'device-a',
+        dstDeviceId: 'device-b',
       },
-      ownPrivateKey: aIdentity.privateKey,
-      ownPublicKey: aIdentity.publicKey,
-      peerPublicKey: bIdentity.publicKey,
-      srcDeviceId: 'device-a',
-      dstDeviceId: 'device-b',
-    });
+      inProcessContactsSyncCodec,
+    );
     expect(frame).toBeDefined();
     expect(JSON.stringify(frame)).not.toContain('Alice');
     expect(await a.send('device-b', frame!)).toBe(false);

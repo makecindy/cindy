@@ -151,4 +151,29 @@ describe('contacts sync key store', () => {
     expect(() => store.getIdentity()).toThrow(/not prepared/);
     expect(store.getPeerPublicKey('device-b')).toBeNull();
   });
+
+  it('peer pin 达到上限后拒绝新设备且不写出不可读文件', async () => {
+    const { store, file } = createStore();
+    await store.prepare();
+    const identity = store.getIdentity();
+    const peerKey = generateContactsSyncIdentity().publicKey;
+    const peers = Object.fromEntries(
+      Array.from({ length: 1_000 }, (_, index) => [`device-${index}`, peerKey]),
+    );
+    const plaintext = JSON.stringify({ version: 1, ...identity, peers });
+    fs.writeFileSync(file, Buffer.from(`encrypted:${plaintext}`, 'utf8').toString('base64'));
+    store.resetMemory();
+    await store.prepare();
+    const before = fs.readFileSync(file, 'utf8');
+
+    await expect(
+      store.pinPeerPublicKey('device-over-limit', generateContactsSyncIdentity().publicKey),
+    ).rejects.toThrow(/peer limit exceeded/);
+    expect(fs.readFileSync(file, 'utf8')).toBe(before);
+
+    store.resetMemory();
+    await store.prepare();
+    expect(store.getIdentity()).toEqual(identity);
+    expect(store.getPeerPublicKey('device-999')).toBe(peerKey);
+  });
 });

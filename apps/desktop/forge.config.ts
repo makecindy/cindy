@@ -1337,6 +1337,12 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/main/contacts-sync/contactsSyncCodecWorker.ts',
+          config: 'vite.contacts-sync-codec-worker.config.ts',
+          // 大通讯录 JSON/gzip/crypto 隔离在线程中，避免阻塞 Electron main。
+          target: 'preload',
+        },
+        {
           entry: 'src/main/watcher-host/watcherHostProcess.ts',
           config: 'vite.watcher-host.config.ts',
           // 同 dbWorker:借 preload target 出 CJS 单文件；运行时是 Electron

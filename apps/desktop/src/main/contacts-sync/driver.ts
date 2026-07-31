@@ -83,6 +83,7 @@ let crossProcessStatusTimer: NodeJS.Timeout | null = null;
 let initialized = false;
 let unsubscribeLocalChanges: (() => void) | null = null;
 let runtimeGeneration = 0;
+let codecAbortController = new AbortController();
 const announcedTo = new Map<string, number>();
 const respondedToKeyAnnouncement = new Map<string, number>();
 const statusListeners = new Set<(status: ContactsDeviceSyncStatus) => void>();
@@ -104,6 +105,7 @@ const outbound = new ContactsSyncOutbound({
   getOwnerId: () => getActiveAppSession().dataOwnerId,
   getTransport: () => transport,
   getDirectTransport: () => lan,
+  getCodecAbortSignal: () => codecAbortController.signal,
   isEnabled,
   getIdentity: () => contactsSyncKeyStore.getIdentity(),
   getPeerPublicKey: (deviceId) => contactsSyncKeyStore.getPeerPublicKey(deviceId),
@@ -154,6 +156,8 @@ export function setContactsDeviceLinkOwnerActive(active: boolean): void {
 
 export function stopContactsDeviceSyncRuntime(): void {
   runtimeGeneration += 1;
+  codecAbortController.abort();
+  codecAbortController = new AbortController();
   lan?.stop();
   lan = null;
   decoder.reset();
@@ -544,7 +548,7 @@ function handleIncomingCipherFrame(
   route: 'lan' | 'relay',
 ): void {
   if (!deviceLinkOwnerActive || !isEnabled() || !transport?.isPeerAllowed(srcDeviceId)) return;
-  prepareAndRun(() => {
+  prepareAndRun(async (isCurrent) => {
     const selfDeviceId = requireSelfDeviceId();
     const identity = contactsSyncKeyStore.getIdentity();
     const peerKey = contactsSyncKeyStore.getPeerPublicKey(srcDeviceId);
@@ -552,14 +556,14 @@ function handleIncomingCipherFrame(
       announceKey(srcDeviceId);
       return;
     }
-    const message = decoder.accept({
+    const message = await decoder.accept({
       srcDeviceId,
       dstDeviceId: selfDeviceId,
       frame,
       ownPrivateKey: identity.privateKey,
       expectedPeerPublicKey: peerKey,
     });
-    if (!message) return;
+    if (!message || !isCurrent()) return;
 
     const changed = getDesktopContactsManager().getStore().mergeDeviceSyncState(message.state);
     const remoteState = message.state as ContactsSyncState;
@@ -607,13 +611,16 @@ async function prepareLocalSync(): Promise<void> {
   if (!isCloudSession()) {
     throw new Error('contacts device sync requires a signed-in cloud account');
   }
-  getDesktopContactsManager().getStore().activateDeviceSync();
+  const result = getDesktopContactsManager().getStore().activateDeviceSyncWithResult();
+  if (result.materialized) broadcastContactsChanged({ origin: 'remote' });
   await contactsSyncKeyStore.prepare();
 }
 
 function readLocalState(): ContactsSyncState {
   const store = getDesktopContactsManager().getStore();
-  return store.readDeviceSyncState() ?? store.activateDeviceSync();
+  const result = store.readDeviceSyncStateWithResult() ?? store.activateDeviceSyncWithResult();
+  if (result.materialized) broadcastContactsChanged({ origin: 'remote' });
+  return result.state;
 }
 
 function startLan(): void {
@@ -836,6 +843,8 @@ function ensureCurrentOwnerStatus(): void {
   if (ownerId === statusOwnerId) return;
   settingsIntentGeneration += 1;
   runtimeGeneration += 1;
+  codecAbortController.abort();
+  codecAbortController = new AbortController();
   lan?.stop();
   lan = null;
   decoder.reset();

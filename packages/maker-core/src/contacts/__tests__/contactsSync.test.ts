@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import DatabaseCtor from "better-sqlite3";
 import type Database from "better-sqlite3";
 
@@ -310,7 +310,7 @@ describe("contacts device sync", () => {
     ).toEqual(["A", "a"]);
   });
 
-  it("状态相同但唯一约束赢家改名后会重新物化此前隐藏的分组", () => {
+  it("本地赢家改名后无需对端回包也会重新物化此前隐藏的分组", () => {
     const a = createStore();
     const b = createStore();
     a.activateDeviceSync();
@@ -325,20 +325,38 @@ describe("contacts device sync", () => {
 
     const visibleWinner = a.listGroups()[0]!;
     a.updateGroup(visibleWinner.id, { name: "赢家已改名" });
-    const aState = stateOf(a);
-    expect(b.mergeDeviceSyncState(aState)).toBe(true);
-    expect(b.listGroups()).toHaveLength(2);
-
-    // B 回传的状态与 A 已保存的 CRDT 完全相同，但 A 的 SQLite 投影仍缺一组。
-    const bState = stateOf(b);
-    expect(bState).toEqual(aState);
-    expect(a.mergeDeviceSyncState(bState)).toBe(true);
+    const ftsRebuild = vi.spyOn(
+      (a as unknown as { fts: { rebuild: (docs: readonly unknown[]) => void } })
+        .fts,
+      "rebuild",
+    );
+    stateOf(a);
+    expect(ftsRebuild).toHaveBeenCalledTimes(1);
     expect(
       a
         .listGroups()
         .map((group) => group.name)
         .sort(),
     ).toEqual(["并发同名", "赢家已改名"]);
+  });
+
+  it("本地赢家删除后无需对端回包也会重新物化此前隐藏的分组", () => {
+    const a = createStore();
+    const b = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    a.createGroup("并发同名");
+    b.createGroup("并发同名");
+    exchange(a, b);
+    exchange(b, a);
+
+    const visibleWinner = a.listGroups()[0]!;
+    a.deleteGroup(visibleWinner.id);
+    stateOf(a);
+
+    expect(a.listGroups()).toHaveLength(1);
+    expect(a.listGroups()[0]).toMatchObject({ name: "并发同名" });
+    expect(a.listGroups()[0]!.id).not.toBe(visibleWinner.id);
   });
 
   it("同步接受并保留本地合法的长关系备注", () => {
@@ -393,6 +411,31 @@ describe("contacts device sync", () => {
       b.listGroups().find((candidate) => candidate.id === group.id)
         ?.description,
     ).toBe(groupDescription);
+  });
+
+  it("联系人合并产生超过默认上限的合法身份后仍可激活并重读同步状态", () => {
+    const store = createStore();
+    const identities = (prefix: string) =>
+      Array.from({ length: 30 }, (_, index) => ({
+        platform: "email",
+        value: `${prefix}-${index}@example.com`,
+      }));
+    const target = store.createContact({
+      kind: "person",
+      displayName: "目标联系人",
+      identities: identities("target"),
+    });
+    const source = store.createContact({
+      kind: "person",
+      displayName: "来源联系人",
+      identities: identities("source"),
+    });
+    store.merge(target.id, source.id);
+    expect(store.getContact(target.id).identities).toHaveLength(60);
+
+    store.activateDeviceSync();
+    expect(stateOf(store).identities).toHaveLength(60);
+    expect(store.getContact(target.id).identities).toHaveLength(60);
   });
 
   it("首次激活会纳入已有数据，之后能补记未经过 facade 的崩溃窗口写入", () => {
@@ -567,5 +610,102 @@ describe("contacts device sync", () => {
     expect(() => store.readDeviceSyncState()).toThrow(
       /stored contacts sync projection is invalid/,
     );
+  });
+
+  it("磁盘 projection 拒绝数组中的畸形行", () => {
+    const store = createStore();
+    store.activateDeviceSync();
+    const db = databases.at(-1)!;
+    const projection = {
+      contacts: [42],
+      identities: [],
+      events: [],
+      groups: [],
+      memberships: [],
+      relations: [],
+    };
+    db.prepare(
+      `UPDATE contacts_sync_state SET projection_json = ? WHERE singleton = 1`,
+    ).run(JSON.stringify(projection));
+
+    expect(() => store.readDeviceSyncState()).toThrow(
+      /stored contacts sync projection is invalid/,
+    );
+  });
+
+  it("磁盘 projection 拒绝缺字段或重复 id 且不写入删除墓碑", () => {
+    const store = createStore();
+    const person = store.createContact({
+      kind: "person",
+      displayName: "不能被误删",
+    });
+    store.activateDeviceSync();
+    const db = databases.at(-1)!;
+    const before = db
+      .prepare(`SELECT state_json FROM contacts_sync_state WHERE singleton = 1`)
+      .get() as { state_json: string };
+
+    const incompleteProjection = {
+      contacts: [{ id: person.id }],
+      identities: [],
+      events: [],
+      groups: [],
+      memberships: [],
+      relations: [],
+    };
+    db.prepare(
+      `UPDATE contacts_sync_state SET projection_json = ? WHERE singleton = 1`,
+    ).run(JSON.stringify(incompleteProjection));
+    expect(() => store.readDeviceSyncState()).toThrow(
+      /stored contacts sync projection is invalid/,
+    );
+    expect(
+      (
+        db
+          .prepare(
+            `SELECT state_json FROM contacts_sync_state WHERE singleton = 1`,
+          )
+          .get() as { state_json: string }
+      ).state_json,
+    ).toBe(before.state_json);
+
+    const validProjection = {
+      contacts: [
+        {
+          id: person.id,
+          kind: "person",
+          displayName: "不能被误删",
+          aliases: [],
+          summary: "",
+          narrative: "",
+          agentNotes: "",
+          status: "confirmed",
+          source: "manual",
+          createdAt: "2026-08-01T00:00:00.000Z",
+          updatedAt: "2026-08-01T00:00:00.000Z",
+        },
+      ],
+      identities: [],
+      events: [],
+      groups: [],
+      memberships: [],
+      relations: [],
+    };
+    validProjection.contacts.push({ ...validProjection.contacts[0]! });
+    db.prepare(
+      `UPDATE contacts_sync_state SET projection_json = ? WHERE singleton = 1`,
+    ).run(JSON.stringify(validProjection));
+    expect(() => store.readDeviceSyncState()).toThrow(
+      /stored contacts sync projection is invalid/,
+    );
+    expect(
+      (
+        db
+          .prepare(
+            `SELECT state_json FROM contacts_sync_state WHERE singleton = 1`,
+          )
+          .get() as { state_json: string }
+      ).state_json,
+    ).toBe(before.state_json);
   });
 });

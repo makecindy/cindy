@@ -22,7 +22,7 @@ import {
   type ContactsSyncState,
 } from "./types.js";
 import {
-  CONTACTS_SYNC_MAX_ROWS_PER_TABLE,
+  isValidContactsDataSnapshot,
   isValidContactsSyncState,
 } from "./validation.js";
 
@@ -30,22 +30,6 @@ interface PersistedSyncRow {
   node_id: string;
   state_json: string;
   projection_json: string;
-}
-
-function isSnapshotShape(value: unknown): value is ContactsDataSnapshot {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const candidate = value as Partial<ContactsDataSnapshot>;
-  const isBoundedArray = (entries: unknown): entries is unknown[] =>
-    Array.isArray(entries) &&
-    entries.length <= CONTACTS_SYNC_MAX_ROWS_PER_TABLE;
-  return (
-    isBoundedArray(candidate.contacts) &&
-    isBoundedArray(candidate.identities) &&
-    isBoundedArray(candidate.events) &&
-    isBoundedArray(candidate.groups) &&
-    isBoundedArray(candidate.memberships) &&
-    isBoundedArray(candidate.relations)
-  );
 }
 
 export class ContactsSyncRepository {
@@ -58,10 +42,16 @@ export class ContactsSyncRepository {
     return Boolean(this.readRow());
   }
 
-  activate(): ContactsSyncState {
+  activate(): { state: ContactsSyncState; materialized: boolean } {
     const tx = this.db.transaction(() => {
       const existing = this.readRow();
-      if (existing) return this.reconcile(existing).state;
+      if (existing) {
+        const reconciled = this.reconcile(existing);
+        return {
+          state: reconciled.state,
+          materialized: reconciled.materialized,
+        };
+      }
       const nodeId = randomUUID();
       const current = readContactsSnapshot(this.db);
       const captured = captureContactsSnapshot(
@@ -71,15 +61,20 @@ export class ContactsSyncRepository {
         nodeId,
       );
       this.insertRow(nodeId, captured.state, current);
-      return captured.state;
+      return { state: captured.state, materialized: false };
     });
     return tx();
   }
 
-  readState(): ContactsSyncState | null {
+  readState(): { state: ContactsSyncState; materialized: boolean } | null {
     const tx = this.db.transaction(() => {
       const row = this.readRow();
-      return row ? this.reconcile(row).state : null;
+      if (!row) return null;
+      const reconciled = this.reconcile(row);
+      return {
+        state: reconciled.state,
+        materialized: reconciled.materialized,
+      };
     });
     return tx();
   }
@@ -119,7 +114,7 @@ export class ContactsSyncRepository {
         JSON.stringify(projection) === JSON.stringify(local.projection);
       // CRDT 状态相同不代表 SQLite 投影一定最新：唯一约束隐藏的并发输家在
       // 赢家后续改名后可能重新可见。只有状态和当前投影都一致才可以幂等返回。
-      if (stateUnchanged && projectionUnchanged) return false;
+      if (stateUnchanged && projectionUnchanged) return local.materialized;
 
       writeContactsSnapshot(this.db, projection);
       this.updateRow(row.node_id, merged, projection);
@@ -132,6 +127,7 @@ export class ContactsSyncRepository {
     state: ContactsSyncState;
     projection: ContactsDataSnapshot;
     changed: boolean;
+    materialized: boolean;
   } {
     const state = this.parseState(row.state_json);
     const previous = this.parseProjection(row.projection_json);
@@ -142,15 +138,24 @@ export class ContactsSyncRepository {
       current,
       row.node_id,
     );
+    // 唯一约束隐藏的并发输家不在 previous/current 中，但仍保留在 CRDT state。
+    // 当本地赢家改名或删除解除冲突时，必须立即从新状态重新物化；不能等对端回包。
+    const projection = materializeContactsSyncState(captured.state);
+    const materializationRequired =
+      JSON.stringify(projection) !== JSON.stringify(current);
     const projectionChanged =
-      JSON.stringify(previous) !== JSON.stringify(current);
-    if (captured.changed || projectionChanged) {
-      this.updateRow(row.node_id, captured.state, current);
+      JSON.stringify(previous) !== JSON.stringify(projection);
+    if (materializationRequired) {
+      writeContactsSnapshot(this.db, projection);
+    }
+    if (captured.changed || projectionChanged || materializationRequired) {
+      this.updateRow(row.node_id, captured.state, projection);
     }
     return {
       state: captured.state,
-      projection: current,
+      projection,
       changed: captured.changed,
+      materialized: materializationRequired,
     };
   }
 
@@ -170,7 +175,7 @@ export class ContactsSyncRepository {
   private parseProjection(json: string): ContactsDataSnapshot {
     try {
       const value: unknown = JSON.parse(json);
-      if (isSnapshotShape(value)) return value;
+      if (isValidContactsDataSnapshot(value)) return value;
     } catch {
       // 统一落到下面的 fail-closed 错误。
     }

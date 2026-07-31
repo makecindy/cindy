@@ -7,7 +7,6 @@
  */
 
 import { compareContactsSyncStamp, compareContactsSyncText } from "./merge.js";
-import { DEFAULT_CONTACTS_CONFIG } from "../types.js";
 import {
   type ContactsDataSnapshot,
   type ContactsSnapshotContact,
@@ -99,7 +98,6 @@ export function materializeContactsSyncState(
     .sort(byId);
   const groupIds = new Set(groups.map((group) => group.id));
 
-  const identityCounts = new Map<string, number>();
   const identityCandidates = liveEntities(state.identities).filter((record) =>
     contactIds.has(record.value.value.contactId),
   );
@@ -121,14 +119,6 @@ export function materializeContactsSyncState(
     identityCandidates,
     (value) => `${value.platform}\u0000${value.normalizedValue}`,
   )
-    .filter((record) => {
-      const contactId = record.value.value.contactId;
-      const count = identityCounts.get(contactId) ?? 0;
-      if (count >= DEFAULT_CONTACTS_CONFIG.maxIdentitiesPerContact)
-        return false;
-      identityCounts.set(contactId, count + 1);
-      return true;
-    })
     .map<ContactsSnapshotIdentity>((record) => ({
       id: record.id,
       ...record.value.value,

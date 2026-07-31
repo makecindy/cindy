@@ -777,13 +777,31 @@ export class MakerContactsStore {
   // ── 设备间同步状态 ──────────────────────────────────────────────────────
 
   activateDeviceSync(): ContactsSyncState {
+    return this.activateDeviceSyncWithResult().state;
+  }
+
+  activateDeviceSyncWithResult(): {
+    state: ContactsSyncState;
+    materialized: boolean;
+  } {
     this.init();
-    return this.syncRepo.activate();
+    const result = this.syncRepo.activate();
+    if (result.materialized || this.ftsDirty) this.rebuildFtsSafe();
+    return result;
   }
 
   readDeviceSyncState(): ContactsSyncState | null {
+    return this.readDeviceSyncStateWithResult()?.state ?? null;
+  }
+
+  readDeviceSyncStateWithResult(): {
+    state: ContactsSyncState;
+    materialized: boolean;
+  } | null {
     this.init();
-    return this.syncRepo.readState();
+    const result = this.syncRepo.readState();
+    if (result && (result.materialized || this.ftsDirty)) this.rebuildFtsSafe();
+    return result;
   }
 
   mergeDeviceSyncState(state: unknown): boolean {

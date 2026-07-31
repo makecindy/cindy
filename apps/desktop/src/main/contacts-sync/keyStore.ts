@@ -25,6 +25,7 @@ const STORE_VERSION = 1;
 const FILE_NAME = 'contacts-device-sync-key.v1.enc';
 const DEVICE_ID_PATTERN = /^[A-Za-z0-9._:-]{1,160}$/;
 const LOCK_WAIT_MS = 12_000;
+const MAX_PEER_PINS = 1_000;
 
 interface StoredContactsSyncKeys extends ContactsSyncExportedIdentity {
   version: typeof STORE_VERSION;
@@ -97,6 +98,9 @@ export class ContactsSyncKeyStore {
       const current = data.peers[deviceId];
       if (current === publicKey) return false;
       if (current) throw new Error('contacts sync peer identity changed');
+      if (Object.keys(data.peers).length >= MAX_PEER_PINS) {
+        throw new Error('contacts sync peer limit exceeded');
+      }
       const next: StoredContactsSyncKeys = {
         ...data,
         peers: { ...data.peers, [deviceId]: publicKey },
@@ -228,7 +232,7 @@ function isStoredKeys(value: unknown): value is StoredContactsSyncKeys {
   }
   const peers = Object.entries(value.peers);
   return (
-    peers.length <= 1_000 &&
+    peers.length <= MAX_PEER_PINS &&
     peers.every(
       ([deviceId, publicKey]) =>
         DEVICE_ID_PATTERN.test(deviceId) && isValidContactsSyncPublicKey(publicKey),

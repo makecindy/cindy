@@ -22,6 +22,7 @@ export interface ContactsSyncOutboundContext {
   selfDeviceId: string;
   transport: OutboundTransport;
   directTransport: LanContactsSyncTransport | null;
+  codecAbortSignal: AbortSignal;
 }
 
 interface ContactsSyncOutboundDependencies {
@@ -29,6 +30,7 @@ interface ContactsSyncOutboundDependencies {
   getOwnerId(): string | null;
   getTransport(): OutboundTransport | null;
   getDirectTransport(): LanContactsSyncTransport | null;
+  getCodecAbortSignal(): AbortSignal;
   isEnabled(): boolean;
   getIdentity(): { privateKey: string; publicKey: string };
   getPeerPublicKey(deviceId: string): string | null;
@@ -56,6 +58,7 @@ export class ContactsSyncOutbound {
       selfDeviceId,
       transport,
       directTransport: this.deps.getDirectTransport(),
+      codecAbortSignal: this.deps.getCodecAbortSignal(),
     };
   }
 
@@ -65,6 +68,8 @@ export class ContactsSyncOutbound {
       context.transport === this.deps.getTransport() &&
       context.ownerId === this.deps.getOwnerId() &&
       context.selfDeviceId === context.transport.getSelfDeviceId() &&
+      context.codecAbortSignal === this.deps.getCodecAbortSignal() &&
+      !context.codecAbortSignal.aborted &&
       this.deps.isEnabled()
     );
   }
@@ -103,7 +108,7 @@ export class ContactsSyncOutbound {
     const fullState = this.deps.readLocalState();
     const knownClocks = this.deps.getKnownClocks(deviceId);
     const state = knownClocks ? createContactsSyncDelta(fullState, knownClocks) : fullState;
-    const frames = encodeContactsSyncMessage({
+    const frames = await encodeContactsSyncMessage({
       message: {
         version: 1,
         type: 'state',
@@ -115,7 +120,9 @@ export class ContactsSyncOutbound {
       peerPublicKey: peerKey,
       srcDeviceId: context.selfDeviceId,
       dstDeviceId: deviceId,
+      signal: context.codecAbortSignal,
     });
+    if (!this.canSend(context, deviceId)) return;
 
     for (const frame of frames) {
       if (!this.canSend(context, deviceId)) return;
