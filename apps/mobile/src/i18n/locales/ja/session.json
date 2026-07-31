@@ -99,7 +99,11 @@
     "syncing": "同期中",
     "pendingCount": "保留中 {{num}} 件",
     "archived": "アーカイブ済み",
-    "queuePausedNotice": "キュー一時停止中"
+    "queuePausedNotice": "キュー一時停止中",
+    "forkConfirmTitle": "ここから新しいセッションを始めますか？",
+    "forkConfirmDescription": "この時点の会話コンテキストを使って、独立した新しいセッションを作成します。元のセッションは変更されず、以後のメッセージは互いに影響しません。",
+    "forkConfirm": "新しいセッションを始める",
+    "forkCancel": "キャンセル"
   },
   "new": {
     "selectDevice": "デバイスを選択",

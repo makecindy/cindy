@@ -343,8 +343,11 @@ export function registerBuiltinDesktopCommands(
 
   registry.register({
     name: 'clear',
+    // 实现是 renderer 收到 DESKTOP_COMMAND_TRIGGERED 后调 clearSession() →
+    // clearSessionAfterGuard:**原地**清空当前任务的对话上下文,不新建、也不切走
+    // (help-knowledge/{commands,sessions-and-chat}.md 写的才是对的)。
     description:
-      'Same as the sidebar\'s new-session entry — opens a fresh empty draft and switches to it. Discards the current chat context.',
+      'Clears the current session context in place — wipes its messages and state without creating or switching to a new session. The session stays in the sidebar.',
     execute: (ctx) => broadcastDesktopCommand(buildPayload('clear', ctx)),
   });
 

@@ -7154,15 +7154,20 @@ export default function SessionScreen() {
 
   const forkAtMessage = useCallback((clientId: string, draft?: MobileMessageDraft) => {
     if (!deviceId || messageActionBusy) return;
+    // 文案走 i18n(与本页其它 Alert 同规):mobile 支持 en / ja / ko,硬编码中文会让
+    // 非中文环境看到中文弹窗。四语措辞与 desktop 的 chat.messageActionBar.fork* 对齐。
     Alert.alert(
-      '从这里开启一个新任务？',
-      '系统会根据这里的对话上下文创建一个独立的新任务。原任务不会改变，之后两边的消息互不影响。',
+      t('session.screen.forkConfirmTitle'),
+      t('session.screen.forkConfirmDescription'),
       [
-        { text: '取消', style: 'cancel' },
-        { text: '开启新任务', onPress: () => void performForkAtMessage(clientId, draft) },
+        { text: t('session.screen.forkCancel'), style: 'cancel' },
+        {
+          text: t('session.screen.forkConfirm'),
+          onPress: () => void performForkAtMessage(clientId, draft),
+        },
       ],
     );
-  }, [deviceId, messageActionBusy, performForkAtMessage]);
+  }, [deviceId, messageActionBusy, performForkAtMessage, t]);
 
   const openForkOrigin = useCallback(() => {
     const parentSessionId = currentSession?.parentSessionId;

@@ -99,7 +99,11 @@
     "syncing": "Syncing",
     "pendingCount": "{{num}} pending",
     "archived": "Archived",
-    "queuePausedNotice": "Queue paused"
+    "queuePausedNotice": "Queue paused",
+    "forkConfirmTitle": "Start a new session from here?",
+    "forkConfirmDescription": "A separate session will be created using the context at this point. The original session stays unchanged, and future messages in either session won't affect the other.",
+    "forkConfirm": "Start new session",
+    "forkCancel": "Cancel"
   },
   "new": {
     "selectDevice": "Select a device",

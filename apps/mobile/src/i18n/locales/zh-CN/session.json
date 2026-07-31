@@ -99,7 +99,11 @@
     "syncing": "正在同步",
     "pendingCount": "待处理 {{num}}",
     "archived": "已归档",
-    "queuePausedNotice": "队列已暂停"
+    "queuePausedNotice": "队列已暂停",
+    "forkConfirmTitle": "从这里开启一个新任务？",
+    "forkConfirmDescription": "系统会根据这里的对话上下文创建一个独立的新任务。原任务不会改变，之后两边的消息互不影响。",
+    "forkConfirm": "开启新任务",
+    "forkCancel": "取消"
   },
   "new": {
     "selectDevice": "选择设备",
