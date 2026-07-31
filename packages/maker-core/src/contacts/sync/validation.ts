@@ -1,0 +1,272 @@
+/** 深度校验来自设备链路或磁盘的同步状态，拒绝畸形/超量数据进入 SQLite。 */
+
+import {
+  DEFAULT_CONTACTS_CONFIG,
+  isContactKind,
+  isContactSource,
+  isContactStatus,
+} from "../types.js";
+import {
+  CONTACTS_SYNC_VERSION,
+  membershipSyncId,
+  type ContactsStampedValue,
+  type ContactsSyncEntity,
+  type ContactsSyncStamp,
+  type ContactsSyncState,
+} from "./types.js";
+
+const MAX_ROWS_PER_TABLE = 100_000;
+const MAX_ID_LENGTH = 160;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isString(
+  value: unknown,
+  max: number,
+  allowEmpty = true,
+): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= max &&
+    (allowEmpty || value.length > 0)
+  );
+}
+
+function isUtf8String(value: unknown, maxBytes: number): value is string {
+  return (
+    typeof value === "string" && Buffer.byteLength(value, "utf8") <= maxBytes
+  );
+}
+
+function isId(value: unknown): value is string {
+  return isString(value, MAX_ID_LENGTH, false) && !value.includes("\u0000");
+}
+
+function isStamp(value: unknown): value is ContactsSyncStamp {
+  if (!isRecord(value)) return false;
+  return (
+    Number.isSafeInteger(value.counter) &&
+    (value.counter as number) > 0 &&
+    isString(value.nodeId, 128, false) &&
+    /^[A-Za-z0-9._:-]+$/.test(value.nodeId as string)
+  );
+}
+
+function isStamped<T>(
+  value: unknown,
+  validate: (candidate: unknown) => candidate is T,
+): value is ContactsStampedValue<T> {
+  return isRecord(value) && isStamp(value.stamp) && validate(value.value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= DEFAULT_CONTACTS_CONFIG.maxAliases &&
+    value.every((entry) =>
+      isString(entry, DEFAULT_CONTACTS_CONFIG.maxDisplayNameLen, false),
+    )
+  );
+}
+
+function isEntityArray<T>(
+  value: unknown,
+  validate: (candidate: unknown) => candidate is T,
+  validateId: (candidate: unknown) => candidate is string = isId,
+): value is Array<ContactsSyncEntity<T>> {
+  if (!Array.isArray(value) || value.length > MAX_ROWS_PER_TABLE) return false;
+  const ids = new Set<string>();
+  for (const candidate of value) {
+    if (
+      !isRecord(candidate) ||
+      !validateId(candidate.id) ||
+      ids.has(candidate.id)
+    )
+      return false;
+    if (!isStamped(candidate.value, validate)) return false;
+    if (candidate.deleted !== undefined && !isStamp(candidate.deleted))
+      return false;
+    ids.add(candidate.id);
+  }
+  return true;
+}
+
+function isContact(value: unknown): boolean {
+  if (!isRecord(value) || !isId(value.id)) return false;
+  if (!isStamped(value.kind, (v): v is "person" | "org" => isContactKind(v)))
+    return false;
+  if (
+    !isStamped(value.displayName, (v): v is string =>
+      isString(v, DEFAULT_CONTACTS_CONFIG.maxDisplayNameLen, false),
+    )
+  )
+    return false;
+  if (!isStamped(value.aliases, isStringArray)) return false;
+  if (
+    !isStamped(value.summary, (v): v is string =>
+      isString(v, DEFAULT_CONTACTS_CONFIG.maxSummaryLen),
+    )
+  )
+    return false;
+  if (
+    !isStamped(value.narrative, (v): v is string =>
+      isUtf8String(v, DEFAULT_CONTACTS_CONFIG.maxNarrativeBytes),
+    )
+  )
+    return false;
+  if (
+    !isStamped(value.agentNotes, (v): v is string =>
+      isString(v, DEFAULT_CONTACTS_CONFIG.maxAgentNotesLen),
+    )
+  )
+    return false;
+  if (
+    !isStamped(value.status, (v): v is "confirmed" | "pending" =>
+      isContactStatus(v),
+    )
+  )
+    return false;
+  if (
+    !isStamped(value.source, (v): v is "manual" | "agent" | "import" =>
+      isContactSource(v),
+    )
+  )
+    return false;
+  if (!isStamped(value.createdAt, (v): v is string => isString(v, 64, false)))
+    return false;
+  if (!isStamped(value.updatedAt, (v): v is string => isString(v, 64, false)))
+    return false;
+  return value.deleted === undefined || isStamp(value.deleted);
+}
+
+function isIdentity(value: unknown): value is {
+  contactId: string;
+  platform: string;
+  value: string;
+  normalizedValue: string;
+  label: string;
+  note: string;
+  createdAt: string;
+} {
+  if (!isRecord(value) || !isId(value.contactId)) return false;
+  return (
+    isString(value.platform, 32, false) &&
+    /^[a-z0-9_-]+$/.test(value.platform) &&
+    isString(value.value, DEFAULT_CONTACTS_CONFIG.maxIdentityValueLen, false) &&
+    isString(
+      value.normalizedValue,
+      DEFAULT_CONTACTS_CONFIG.maxIdentityValueLen,
+      false,
+    ) &&
+    isString(value.label, 1_000) &&
+    isString(value.note, 10_000) &&
+    isString(value.createdAt, 64, false)
+  );
+}
+
+function isEvent(value: unknown): value is {
+  contactId: string;
+  date: string;
+  text: string;
+  source: string;
+  createdAt: string;
+} {
+  if (!isRecord(value) || !isId(value.contactId)) return false;
+  return (
+    isString(value.date, 32, false) &&
+    isString(value.text, DEFAULT_CONTACTS_CONFIG.maxEventTextLen, false) &&
+    isString(value.source, 1_000) &&
+    isString(value.createdAt, 64, false)
+  );
+}
+
+function isGroup(value: unknown): value is {
+  name: string;
+  description: string;
+  createdAt: string;
+} {
+  return (
+    isRecord(value) &&
+    isString(value.name, DEFAULT_CONTACTS_CONFIG.maxGroupNameLen, false) &&
+    isString(value.description, 16_384) &&
+    isString(value.createdAt, 64, false)
+  );
+}
+
+function isMembership(
+  value: unknown,
+): value is { groupId: string; contactId: string } {
+  return isRecord(value) && isId(value.groupId) && isId(value.contactId);
+}
+
+function isMembershipId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 2 &&
+    value.length <= MAX_ID_LENGTH * 2 + 1
+  );
+}
+
+function isRelation(value: unknown): value is {
+  fromId: string;
+  toId: string;
+  relation: string;
+  note: string;
+  createdAt: string;
+} {
+  return (
+    isRecord(value) &&
+    isId(value.fromId) &&
+    isId(value.toId) &&
+    isString(value.relation, DEFAULT_CONTACTS_CONFIG.maxRelationLen, false) &&
+    isString(value.note, 16_384) &&
+    isString(value.createdAt, 64, false)
+  );
+}
+
+export function isValidContactsSyncState(
+  value: unknown,
+): value is ContactsSyncState {
+  if (!isRecord(value) || value.version !== CONTACTS_SYNC_VERSION) return false;
+  if (!Array.isArray(value.clocks) || value.clocks.length > 256) return false;
+  const clockNodes = new Set<string>();
+  for (const clock of value.clocks) {
+    if (
+      !isRecord(clock) ||
+      !isStamp({ counter: clock.counter, nodeId: clock.nodeId })
+    )
+      return false;
+    if (clockNodes.has(clock.nodeId as string)) return false;
+    clockNodes.add(clock.nodeId as string);
+  }
+  if (
+    !Array.isArray(value.contacts) ||
+    value.contacts.length > MAX_ROWS_PER_TABLE
+  )
+    return false;
+  const contactIds = new Set<string>();
+  for (const contact of value.contacts) {
+    if (!isContact(contact) || contactIds.has((contact as { id: string }).id))
+      return false;
+    contactIds.add((contact as { id: string }).id);
+  }
+  if (!isEntityArray(value.identities, isIdentity)) return false;
+  if (!isEntityArray(value.events, isEvent)) return false;
+  if (!isEntityArray(value.groups, isGroup)) return false;
+  if (!isEntityArray(value.memberships, isMembership, isMembershipId))
+    return false;
+  for (const membership of value.memberships) {
+    const entry = membership as ContactsSyncEntity<{
+      groupId: string;
+      contactId: string;
+    }>;
+    if (
+      entry.id !==
+      membershipSyncId(entry.value.value.groupId, entry.value.value.contactId)
+    )
+      return false;
+  }
+  return isEntityArray(value.relations, isRelation);
+}

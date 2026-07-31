@@ -74,6 +74,13 @@ import {
   type MobileSessionEventKind,
 } from './mobileNotify';
 import { getClientEndpoint } from '../clientEndpointsService';
+import {
+  handleContactsDeviceLinkStatusChanged,
+  handleContactsPeerPresenceChanged,
+  handleIncomingContactsRelayFrame,
+  initContactsDeviceSync,
+} from '../contacts-sync/driver';
+import { DL_CONTACTS_SYNC_CHANNEL } from '../contacts-sync/wire';
 
 // register.ts 从 device-link/index 导入 setBusyProbe;改用 busyReporter 后在此 re-export 保持其导入不变。
 export { setBusyProbe };
@@ -121,6 +128,7 @@ const presenceAvailableByDevice = new Map<string, boolean>();
  */
 const presenceOnlineByDevice = new Map<string, boolean>();
 const presencePlatformByDevice = new Map<string, string>();
+const presenceNameByDevice = new Map<string, string>();
 let unsubscribeDictionaryChanged: (() => void) | null = null;
 
 /**
@@ -273,6 +281,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 改动谁也不会主动推。清空在线视图,让重连后的 presence 重新走一遍握手。
     if (status !== 'online') presenceOnlineByDevice.clear();
     broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status });
+    handleContactsDeviceLinkStatusChanged(status === 'online');
     if (status === 'online') replayActiveSubscriptions('ws-online');
   });
   // 连接问题(鉴权失效/被顶号/超限/版本不符)→ 推给 renderer,让设置页与
@@ -294,10 +303,12 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     presenceAvailableByDevice.set(snap.deviceId, available);
     presenceOnlineByDevice.set(snap.deviceId, snap.online);
     presencePlatformByDevice.set(snap.deviceId, snap.platform);
+    presenceNameByDevice.set(snap.deviceId, snap.selfName || snap.deviceName);
     void rememberLastKnownDeviceName(snap.deviceId, snap.deviceName); // best-effort 名称缓存,不阻塞 presence 处理
     broadcast(DEVICE_LINK_PUSH.PRESENCE_CHANGED, snap);
     // 被控端兜底:对等控制端下线 → 清掉它在本机的订阅 registry(防僵尸订阅持续 sendPush)。
     if (!snap.online) handleControllerOffline(snap.deviceId);
+    handleContactsPeerPresenceChanged({ deviceId: snap.deviceId, online: snap.online });
     if (available && wasAvailable === false) {
       replayActiveSubscriptions(`presence-online:${snap.deviceId.slice(0, 8)}`, snap.deviceId);
     }
@@ -369,6 +380,18 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       }
       return;
     }
+    if (p?.channel === DL_CONTACTS_SYNC_CHANNEL) {
+      if (
+        shouldExchangeDictionaryWith({
+          online: true,
+          platform: presencePlatformByDevice.get(env.src),
+          revoked: isDeviceRevoked(env.src),
+        })
+      ) {
+        handleIncomingContactsRelayFrame(env.src, p.payload);
+      }
+      return;
+    }
     broadcast(DEVICE_LINK_PUSH.REMOTE_PUSH, {
       deviceId: env.src,
       channel: p.channel,
@@ -389,6 +412,34 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
           revoked: isDeviceRevoked(deviceId),
         }))
         .map(([deviceId]) => deviceId),
+  });
+  initContactsDeviceSync({
+    getSelfDeviceId: () => client?.getSelfDeviceId() ?? null,
+    listOnlineDesktopDevices: () =>
+      [...presenceOnlineByDevice.entries()]
+        .filter(
+          ([deviceId, online]) =>
+            deviceId !== client?.getSelfDeviceId() &&
+            shouldExchangeDictionaryWith({
+              online,
+              platform: presencePlatformByDevice.get(deviceId),
+              revoked: isDeviceRevoked(deviceId),
+            }),
+        )
+        .map(([deviceId]) => ({
+          deviceId,
+          deviceName: presenceNameByDevice.get(deviceId) ?? deviceId.slice(0, 8),
+        })),
+    isPeerAllowed: (deviceId) =>
+      deviceId !== client?.getSelfDeviceId() &&
+      shouldExchangeDictionaryWith({
+        online: presenceOnlineByDevice.get(deviceId) === true,
+        platform: presencePlatformByDevice.get(deviceId),
+        revoked: isDeviceRevoked(deviceId),
+      }),
+    sendRelayFrame: (deviceId, frame) => {
+      client?.sendPush(deviceId, DL_CONTACTS_SYNC_CHANNEL, frame);
+    },
   });
   if (unsubscribeDictionaryChanged) unsubscribeDictionaryChanged();
   unsubscribeDictionaryChanged = onVoiceInputDictionaryChanged((options) => {
@@ -586,6 +637,7 @@ function teardownActiveLink(): void {
   // client 为 null 时 sendPush 也是 no-op。
   presenceOnlineByDevice.clear();
   presencePlatformByDevice.clear();
+  presenceNameByDevice.clear();
   resetSubscriptionRefs();
   resetBusyDedupe(); // 重置 busy dedupe,避免重连后首个真实 busy 状态被旧值压掉
   client.stop();

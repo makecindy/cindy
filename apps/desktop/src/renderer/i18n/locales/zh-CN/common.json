@@ -3143,11 +3143,39 @@
     },
     "contacts": {
       "title": "智能通讯录",
-      "description": "为 Agent 建立的人物与组织档案库：跨平台身份反查(邮箱 / 飞书 / Slack / GitHub id → 这是谁)、关系背景与带日期的事件记录。Agent 在工作中自动沉淀，低置信条目进入待确认队列由你裁决。数据只保存在本机，查询与整理会经由你自己的模型处理。",
+      "description": "为 Agent 建立的人物与组织档案库：跨平台身份反查(邮箱 / 飞书 / Slack / GitHub id → 这是谁)、关系背景与带日期的事件记录。Agent 在工作中自动沉淀，低置信条目进入待确认队列由你裁决。数据默认只保存在本机，也可由你开启设备间同步；查询与整理会经由你自己的模型处理。",
       "enable": {
         "label": "启用智能通讯录",
         "description": "开启后 Agent 可以查询并自动采集人物信息(不确定的条目会进入待确认)。关闭不影响在此浏览和管理已有数据。",
         "toggleAria": "切换智能通讯录"
+      },
+      "sync": {
+        "label": "在我的设备之间同步",
+        "description": "在需要参与的每台桌面设备上开启一次。设备在线时自动同步；同一局域网优先直连，否则发送端到端加密的中转数据。纯程序比对，不调用模型，也不产生 token 消耗。",
+        "toggleAria": "切换通讯录设备同步",
+        "syncNow": "立即同步",
+        "onlineDevices": "{{count}} 台其他设备在线",
+        "route": {
+          "lan": "局域网直连",
+          "relay": "加密中转"
+        },
+        "status": {
+          "loading": "正在读取同步状态…",
+          "off": "同步已关闭",
+          "waiting": "等待其他已开启同步的桌面设备上线",
+          "syncing": "正在安全同步…",
+          "ready": "已准备好，设备上线后会自动同步",
+          "lastSuccess": "{{device}} · {{time}} · {{route}}"
+        },
+        "error": {
+          "secure-storage-unavailable": "系统安全存储不可用，无法保护设备私钥",
+          "peer-identity-changed": "设备身份发生变化，已暂停同步以保护数据",
+          "sync-failed": "同步失败，将在设备下次在线时重试"
+        },
+        "toast": {
+          "enabled": "设备同步已开启",
+          "disabled": "设备同步已关闭"
+        }
       },
       "stats": "{{people}} 人 / {{orgs}} 组织 / {{groups}} 分组",
       "kind": {

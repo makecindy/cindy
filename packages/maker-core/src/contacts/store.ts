@@ -33,6 +33,8 @@ import {
   type IdentityRow,
 } from './rows.js';
 import { initContactsSchema } from './schema.js';
+import { ContactsSyncRepository } from './sync/repository.js';
+import type { ContactsSyncState } from './sync/types.js';
 import {
   ContactsError,
   DEFAULT_CONTACTS_CONFIG,
@@ -77,6 +79,7 @@ export class MakerContactsStore {
   private readonly db: Database.Database;
   private readonly fts: ContactsFts;
   private readonly groupsRepo: ContactsGroupsRepo;
+  private readonly syncRepo: ContactsSyncRepository;
   private readonly logger: Logger;
   private readonly config: ContactsConfig;
   private initialized = false;
@@ -87,6 +90,7 @@ export class MakerContactsStore {
     this.logger = deps.logger;
     this.config = { ...DEFAULT_CONTACTS_CONFIG, ...(deps.config ?? {}) };
     this.groupsRepo = new ContactsGroupsRepo(deps.db, this.config);
+    this.syncRepo = new ContactsSyncRepository(deps.db, this.logger.child('sync'));
   }
 
   /** schema 迁移 + FTS sanity check. 幂等 */
@@ -95,6 +99,7 @@ export class MakerContactsStore {
     initContactsSchema(this.db);
     this.sanityCheck();
     this.renormalizePhoneKeys();
+    this.captureSyncSafe();
     this.initialized = true;
   }
 
@@ -766,6 +771,25 @@ export class MakerContactsStore {
     this.groupsRepo.removeFromGroup(groupId, contactIds);
   }
 
+  // ── 设备间同步状态 ──────────────────────────────────────────────────────
+
+  activateDeviceSync(): ContactsSyncState {
+    this.init();
+    return this.syncRepo.activate();
+  }
+
+  readDeviceSyncState(): ContactsSyncState | null {
+    this.init();
+    return this.syncRepo.readState();
+  }
+
+  mergeDeviceSyncState(state: unknown): boolean {
+    this.init();
+    const changed = this.syncRepo.mergeRemoteState(state);
+    if (changed) this.rebuildFtsSafe();
+    return changed;
+  }
+
   // ── 统计 / 重置 ──────────────────────────────────────────────────────────
 
   stats(): ContactsStats {
@@ -862,6 +886,28 @@ export class MakerContactsStore {
 
   private touch(contactId: string): void {
     this.db.prepare(`UPDATE contacts SET updated_at = ? WHERE id = ?`).run(new Date().toISOString(), contactId);
+  }
+
+  private captureSyncSafe(): void {
+    try {
+      this.syncRepo.captureLocalChanges();
+    } catch (e) {
+      this.logger.warn('contacts sync capture failed (will retry)', { error: String(e) });
+    }
+  }
+
+  private rebuildFtsSafe(): void {
+    try {
+      const ids = this.db.prepare(`SELECT id FROM contacts`).all() as Array<{ id: string }>;
+      const docs = ids
+        .map((row) => buildFtsDoc(this.db, row.id))
+        .filter((doc): doc is NonNullable<typeof doc> => doc !== null);
+      this.fts.rebuild(docs);
+    } catch (e) {
+      this.logger.warn('contacts fts rebuild after sync failed (init sanity will heal)', {
+        error: String(e),
+      });
+    }
   }
 
   /** 拍平一个 contact 的全部可检索文本, 重建其 FTS 行. 失败只 warn(rebuild 自愈) */

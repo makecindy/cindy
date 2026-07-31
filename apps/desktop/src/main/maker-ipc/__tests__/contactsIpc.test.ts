@@ -82,6 +82,43 @@ describe('contacts-ipc handlers', () => {
     await expect(handlers[MAKER_INVOKE.CONTACTS_SETTINGS_SET]!(true)).rejects.toThrow(/\[INTERNAL\]/);
   });
 
+  it('设备同步状态、开关和立即同步走独立程序通道', async () => {
+    let syncEnabled = false;
+    const setDeviceSyncEnabled = vi.fn(async (value: boolean) => {
+      syncEnabled = value;
+    });
+    const syncNow = vi.fn(async () => {});
+    const status = () => ({
+      enabled: syncEnabled,
+      phase: syncEnabled ? 'waiting' : 'off',
+      onlineDeviceCount: 0,
+    });
+    handlers = createContactsIpcHandlers({
+      getManager: () => manager,
+      readSettingsState: () => ({ value: { enabled }, isCustomized: enabled }),
+      writeEnabled: (value) => {
+        enabled = value;
+      },
+      broadcastChanged: () => {},
+      readDeviceSyncStatus: status,
+      setDeviceSyncEnabled,
+      syncNow,
+    });
+
+    expect(await handlers[MAKER_INVOKE.CONTACTS_SYNC_STATUS_GET]!()).toMatchObject({
+      enabled: false,
+      phase: 'off',
+    });
+    expect(await handlers[MAKER_INVOKE.CONTACTS_SYNC_ENABLED_SET]!(true)).toMatchObject({
+      enabled: true,
+      phase: 'waiting',
+    });
+    await handlers[MAKER_INVOKE.CONTACTS_SYNC_NOW]!();
+    expect(setDeviceSyncEnabled).toHaveBeenCalledWith(true);
+    expect(syncNow).toHaveBeenCalledTimes(1);
+    await expect(handlers[MAKER_INVOKE.CONTACTS_SYNC_ENABLED_SET]!('yes')).rejects.toThrow(/INVALID_PARAMS/);
+  });
+
   it('开关值变化时失效 Codex MCP, 同值重写不失效, 失效失败不影响落盘', async () => {
     // 回归: Codex spawn 配置冻在 codexEnvironment cached 里, 开关变化必须触发失效,
     // 否则后续 codex 会话直到重启 app 都拿不到(或残留) cindy_contacts。

@@ -4613,6 +4613,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       // codexMcpRefreshed:false = 开关已落盘但 Codex 失效失败(会话正忙), 对 Codex 延迟生效
       settingsSet: (enabled: boolean): Promise<{ enabled: boolean; codexMcpRefreshed?: boolean }> =>
         ipcRenderer.invoke('maker:contacts:settings:set', enabled),
+      syncStatusGet: (): Promise<unknown> =>
+        ipcRenderer.invoke('maker:contacts:sync:status:get'),
+      syncEnabledSet: (enabled: boolean): Promise<unknown> =>
+        ipcRenderer.invoke('maker:contacts:sync:enabled:set', enabled),
+      syncNow: (): Promise<unknown> =>
+        ipcRenderer.invoke('maker:contacts:sync:now'),
       list: (opts?: unknown): Promise<unknown[]> => ipcRenderer.invoke('maker:contacts:list', opts),
       get: (id: string): Promise<unknown> => ipcRenderer.invoke('maker:contacts:get', id),
       create: (input: unknown): Promise<unknown> => ipcRenderer.invoke('maker:contacts:create', input),
@@ -4657,6 +4663,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       import: (records: unknown[], opts?: { groupId?: string }): Promise<unknown> =>
         ipcRenderer.invoke('maker:contacts:import', records, opts),
       onChanged: createIpcFanOut('maker:contacts:changed'),
+      onSyncStatusChanged: createIpcFanOut('maker:contacts:sync:status-changed'),
     },
 
     // Codex app-server 当前进程启动冻结的鉴权注入方式(oauth-bearer = 走订阅 / env-key = 走网关 / provider-oauth = proxy 注入供应商 OAuth)。

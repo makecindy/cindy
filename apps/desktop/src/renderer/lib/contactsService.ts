@@ -58,9 +58,28 @@ export type {
   UpdateContactInput,
 };
 
+export interface ContactsDeviceSyncStatus {
+  enabled: boolean;
+  phase: 'off' | 'waiting' | 'syncing' | 'up-to-date' | 'error';
+  onlineDeviceCount: number;
+  lastSyncAt: string | null;
+  lastSyncDeviceId: string | null;
+  lastSyncDeviceName: string | null;
+  lastRoute: 'lan' | 'relay' | null;
+  errorCode:
+    | 'secure-storage-unavailable'
+    | 'peer-identity-changed'
+    | 'sync-failed'
+    | null;
+}
+
 export const contactsService = {
   settingsGet: () => api().settingsGet(),
   settingsSet: (enabled: boolean) => api().settingsSet(enabled),
+  syncStatusGet: () => api().syncStatusGet() as Promise<ContactsDeviceSyncStatus>,
+  syncEnabledSet: (enabled: boolean) =>
+    api().syncEnabledSet(enabled) as Promise<ContactsDeviceSyncStatus>,
+  syncNow: () => api().syncNow() as Promise<ContactsDeviceSyncStatus>,
 
   list: (opts?: ListContactsOptions) => api().list(opts) as Promise<ContactSummary[]>,
   get: (id: string) => api().get(id) as Promise<ContactProfile>,
@@ -99,6 +118,8 @@ export const contactsService = {
   import: (records: ImportContactRecord[], opts?: Pick<ImportContactsOptions, 'groupId'>) =>
     api().import(records, opts) as Promise<ImportSummary>,
   onChanged: (cb: () => void) => api().onChanged(cb),
+  onSyncStatusChanged: (cb: (status: ContactsDeviceSyncStatus) => void) =>
+    api().onSyncStatusChanged((status) => cb(status as ContactsDeviceSyncStatus)),
 };
 
 /** contacts UI 有专属文案的 IPC 错误码(settings.contacts.ipcError.* 四语言齐备) */

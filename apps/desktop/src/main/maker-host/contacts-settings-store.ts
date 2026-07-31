@@ -2,7 +2,7 @@
  * contacts-settings-store —— 智能通讯录开关的 main 端持久化 source of truth。
  *
  * 落盘文件: <userData>/contacts-settings.json
- *   { "enabled": false }
+ *   { "enabled": false, "deviceSyncEnabled": false }
  *
  * 默认 false —— 通讯录是个人数据采集类功能, 必须用户主动开启(开 = 允许 agent
  * 自动采集人物信息, 单开关语义, 无独立"自动采集"子开关)。开关只 gate agent 侧
@@ -26,10 +26,13 @@ const log = desktopMakerLogger.child('contacts-settings-store');
 
 export interface ContactsSettings {
   enabled: boolean;
+  /** 在本账号的 Desktop 设备之间自动同步；与 agent 是否可访问通讯录相互独立。 */
+  deviceSyncEnabled: boolean;
 }
 
 const DEFAULTS: ContactsSettings = {
   enabled: false,
+  deviceSyncEnabled: false,
 };
 
 function settingsFilePath(rootPath?: string): string {
@@ -41,6 +44,10 @@ function normalize(raw: unknown): ContactsSettings {
   const r = raw as Record<string, unknown>;
   return {
     enabled: typeof r.enabled === 'boolean' ? r.enabled : DEFAULTS.enabled,
+    deviceSyncEnabled:
+      typeof r.deviceSyncEnabled === 'boolean'
+        ? r.deviceSyncEnabled
+        : DEFAULTS.deviceSyncEnabled,
   };
 }
 
@@ -65,17 +72,30 @@ function currentStore() {
 
 /** 同步读 —— 第一次从磁盘, 后续走内存 cache。 */
 export function readContactsSettings(): ContactsSettings {
-  return currentStore().read();
+  const store = currentStore();
+  store.invalidateIfChanged();
+  return store.read();
 }
 
 export function readContactsSettingsState(): OverrideSettingsState<ContactsSettings> {
-  return currentStore().readState();
+  const store = currentStore();
+  store.invalidateIfChanged();
+  return store.readState();
 }
 
 /** 同步写 enabled + 更新 cache; 失败抛错让 IPC handler 反馈给 UI。 */
 export function writeContactsEnabled(enabled: boolean): void {
-  currentStore().writePatch({ enabled });
+  const store = currentStore();
+  store.invalidateIfChanged();
+  store.writePatch({ enabled });
   log.info('contacts setting written', { enabled });
+}
+
+export function writeContactsDeviceSyncEnabled(deviceSyncEnabled: boolean): void {
+  const store = currentStore();
+  store.invalidateIfChanged();
+  store.writePatch({ deviceSyncEnabled });
+  log.info('contacts device sync setting written', { deviceSyncEnabled });
 }
 
 export function resetContactsSettings(): ContactsSettings {

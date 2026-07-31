@@ -3144,11 +3144,40 @@
     },
     "contacts": {
       "title": "Smart Contacts",
-      "description": "A people and organization directory built for agents: cross-platform identity resolution (email / Feishu / Slack / GitHub id → who is this), relationship context, and dated event records. Agents collect entries as they work; low-confidence ones land in a pending queue for your review. Data is stored on this device only; lookups and organizing are processed through your own model.",
+      "description": "A people and organization directory built for agents: cross-platform identity resolution (email / Feishu / Slack / GitHub id → who is this), relationship context, and dated event records. Agents collect entries as they work; low-confidence ones land in a pending queue for your review. Data stays on this device by default, with optional device sync; lookups and organizing are processed through your own model.",
       "enable": {
         "label": "Enable Smart Contacts",
         "description": "When on, agents can look up and automatically collect contact information (uncertain entries go to pending review). Turning it off does not affect browsing or managing existing data here.",
         "toggleAria": "Toggle Smart Contacts"
+      },
+      "sync": {
+        "label": "Sync across my devices",
+        "description": "Enable once on each desktop you want to include. Online devices sync automatically, connecting directly on the same local network when possible or using end-to-end encrypted relay data. Comparison is programmatic, with no model or token usage.",
+        "toggleAria": "Toggle contact device sync",
+        "syncNow": "Sync now",
+        "onlineDevices_one": "{{count}} other device online",
+        "onlineDevices_other": "{{count}} other devices online",
+        "route": {
+          "lan": "Local network",
+          "relay": "Encrypted relay"
+        },
+        "status": {
+          "loading": "Reading sync status…",
+          "off": "Sync is off",
+          "waiting": "Waiting for another sync-enabled desktop to come online",
+          "syncing": "Syncing securely…",
+          "ready": "Ready — devices will sync when they come online",
+          "lastSuccess": "{{device}} · {{time}} · {{route}}"
+        },
+        "error": {
+          "secure-storage-unavailable": "System secure storage is unavailable, so the device key cannot be protected",
+          "peer-identity-changed": "A device identity changed; sync is paused to protect your data",
+          "sync-failed": "Sync failed and will retry when a device is next online"
+        },
+        "toast": {
+          "enabled": "Device sync enabled",
+          "disabled": "Device sync disabled"
+        }
       },
       "stats": "{{people}} people / {{orgs}} orgs / {{groups}} groups",
       "kind": {

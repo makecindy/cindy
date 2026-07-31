@@ -338,6 +338,9 @@ export const MAKER_INVOKE = {
    */
   CONTACTS_SETTINGS_GET: 'maker:contacts:settings:get',
   CONTACTS_SETTINGS_SET: 'maker:contacts:settings:set',
+  CONTACTS_SYNC_STATUS_GET: 'maker:contacts:sync:status:get',
+  CONTACTS_SYNC_ENABLED_SET: 'maker:contacts:sync:enabled:set',
+  CONTACTS_SYNC_NOW: 'maker:contacts:sync:now',
   CONTACTS_LIST: 'maker:contacts:list',
   CONTACTS_GET: 'maker:contacts:get',
   CONTACTS_CREATE: 'maker:contacts:create',

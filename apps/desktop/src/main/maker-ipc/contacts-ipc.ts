@@ -35,9 +35,12 @@ import {
   readContactsSettingsState,
   writeContactsEnabled,
 } from '../maker-host/contacts-settings-store.js';
+import { emitLocalContactsChanged } from '../maker-host/contacts-change-events.js';
 import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 
 export const CONTACTS_CHANGED_CHANNEL = 'maker:contacts:changed';
+export const CONTACTS_SYNC_STATUS_CHANGED_CHANNEL = 'maker:contacts:sync:status-changed';
 
 const log = createLogger('contactsIpc');
 
@@ -59,6 +62,9 @@ export interface ContactsIpcDeps {
    * 返回给 renderer 提示"对 Codex 延迟生效", 静默成功会掩盖开关与 Codex 实际状态失同步。
    */
   invalidateCodexMcp?: () => Promise<void>;
+  readDeviceSyncStatus?: () => unknown | Promise<unknown>;
+  setDeviceSyncEnabled?: (enabled: boolean) => Promise<void>;
+  syncNow?: () => Promise<void>;
 }
 
 /**
@@ -133,6 +139,31 @@ export function createContactsIpcHandlers(deps: ContactsIpcDeps): Record<string,
         }
       }
       return { enabled, codexMcpRefreshed };
+    },
+    [MAKER_INVOKE.CONTACTS_SYNC_STATUS_GET]: async () => {
+      if (!deps.readDeviceSyncStatus) throwIpcError('INTERNAL', 'contacts sync is unavailable');
+      return await deps.readDeviceSyncStatus();
+    },
+    [MAKER_INVOKE.CONTACTS_SYNC_ENABLED_SET]: async (enabled) => {
+      if (typeof enabled !== 'boolean') {
+        throwIpcError('INVALID_PARAMS', 'device sync enabled required (boolean)');
+      }
+      if (!deps.setDeviceSyncEnabled) throwIpcError('INTERNAL', 'contacts sync is unavailable');
+      try {
+        await deps.setDeviceSyncEnabled(enabled);
+        return await deps.readDeviceSyncStatus?.();
+      } catch (err) {
+        rethrowAsIpcError(err);
+      }
+    },
+    [MAKER_INVOKE.CONTACTS_SYNC_NOW]: async () => {
+      if (!deps.syncNow) throwIpcError('INTERNAL', 'contacts sync is unavailable');
+      try {
+        await deps.syncNow();
+        return await deps.readDeviceSyncStatus?.();
+      } catch (err) {
+        rethrowAsIpcError(err);
+      }
     },
 
     [MAKER_INVOKE.CONTACTS_LIST]: async (opts) =>
@@ -264,9 +295,20 @@ export function createContactsIpcHandlers(deps: ContactsIpcDeps): Record<string,
 }
 
 /** 向所有窗口广播通讯录变更(IPC mutate 与 MCP 写类工具共用 — agent 直写 store 不经 IPC 层) */
-export function broadcastContactsChanged(): void {
+export function broadcastContactsChanged(
+  options: { origin?: 'local' | 'remote' } = {},
+): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send(CONTACTS_CHANGED_CHANNEL);
+  }
+  if ((options.origin ?? 'local') === 'local') emitLocalContactsChanged();
+}
+
+function broadcastContactsSyncStatus(status: unknown): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send(CONTACTS_SYNC_STATUS_CHANGED_CHANNEL, status);
+    }
   }
 }
 
@@ -277,6 +319,19 @@ export function registerContactsIpc(): void {
     readSettingsState: readContactsSettingsState,
     writeEnabled: writeContactsEnabled,
     broadcastChanged: broadcastContactsChanged,
+    readDeviceSyncStatus: async () => {
+      // handler 注册期不静态引 driver：driver 依赖本模块的 changed broadcaster。
+      const driver = await loadSyncDriver();
+      return driver.getContactsDeviceSyncStatus();
+    },
+    setDeviceSyncEnabled: async (enabled) => {
+      const driver = await loadSyncDriver();
+      await driver.setContactsDeviceSyncEnabled(enabled);
+    },
+    syncNow: async () => {
+      const driver = await loadSyncDriver();
+      await driver.broadcastContactsNow(true);
+    },
     // 与 register.ts 自定义 MCP CRUD 的 invalidateCodex 同款语义与顺序: 先 dispose
     // app-server(含 busy 检查), 成功后再关 bridge/清 cache —— 若先关 bridge 而 dispose
     // 失败(busy), running 会话的 mcp_servers URL 会指向已停的 bridge。
@@ -307,6 +362,26 @@ export function registerContactsIpc(): void {
     },
   });
   for (const [channel, handler] of Object.entries(handlers)) {
-    ipcMain.handle(channel, (_e, ...args) => handler(...args));
+    ipcMain.handle(channel, (event, ...args) => {
+      assertTrustedAppRendererEvent(event);
+      return handler(...args);
+    });
   }
+  void loadSyncDriver()
+    .then((driver) => {
+      driver.onContactsDeviceSyncStatusChanged(broadcastContactsSyncStatus);
+    })
+    .catch((error) => {
+      log.warn('contacts sync driver initialization failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+}
+
+type ContactsSyncDriverModule = typeof import('../contacts-sync/driver.js');
+let cachedSyncDriver: ContactsSyncDriverModule | null = null;
+
+async function loadSyncDriver(): Promise<ContactsSyncDriverModule> {
+  cachedSyncDriver ??= await import('../contacts-sync/driver.js');
+  return cachedSyncDriver;
 }

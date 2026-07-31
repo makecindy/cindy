@@ -1190,6 +1190,8 @@ const config: ForgeConfig = {
         'Cindy uses Apple Events to read Contacts you import and to add or update Contacts you explicitly export.',
       NSContactsUsageDescription:
         'Cindy accesses Contacts only when you import them or explicitly export additions or updates.',
+      NSLocalNetworkUsageDescription:
+        'Cindy uses your local network to sync end-to-end encrypted Smart Contacts directly between your online desktop devices.',
       CFBundleDocumentTypes: [
         {
           CFBundleTypeName: 'Folder',
