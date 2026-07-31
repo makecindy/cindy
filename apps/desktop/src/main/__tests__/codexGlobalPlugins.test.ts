@@ -751,6 +751,83 @@ describe('prepareCodexGlobalPluginsBridge', () => {
     },
   );
 
+  it('fails closed when enablement is unknown and a protected plugin is uncontrolled', async () => {
+    const { homeDir, codexHome, paths } = await setup();
+    await writePluginCache(
+      paths.sourceCacheDir,
+      'personal',
+      'feishu-delegate',
+    );
+    await fs.mkdir(
+      path.join(paths.cacheDir, 'personal', 'feishu-delegate', '1.0.0'),
+      { recursive: true },
+    );
+    await fs.mkdir(codexHome, { recursive: true });
+    await fs.writeFile(paths.configFile, '[plugins."broken\n', 'utf8');
+
+    const result = await prepareCodexGlobalPluginsBridge(codexHome, {
+      homeDir,
+      capabilityRouting: explicitOnlySkillPolicy(),
+    });
+
+    expect(result.marketplaces).toEqual([
+      expect.objectContaining({ name: 'personal', status: 'conflict' }),
+    ]);
+    expect(result.routingFailures).toEqual([
+      expect.stringContaining('feishu-delegate@personal'),
+    ]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining('cannot confirm enabled plugins'),
+    ]);
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'gates unreadable cache inventories by the isolated plugin enablement',
+    async () => {
+      const prepare = async (
+        unreadable: 'source' | 'isolated',
+        enabled: boolean,
+      ) => {
+        const { homeDir, codexHome, paths } = await setup();
+        const cacheRoot =
+          unreadable === 'source' ? paths.sourceCacheDir : paths.cacheDir;
+        await writePluginCache(
+          cacheRoot,
+          'personal',
+          'feishu-delegate',
+        );
+        await writePluginEnabledState(
+          paths.configFile,
+          'feishu-delegate',
+          'personal',
+          enabled,
+        );
+        await fs.chmod(cacheRoot, 0o000);
+        try {
+          return await prepareCodexGlobalPluginsBridge(codexHome, {
+            homeDir,
+            capabilityRouting: explicitOnlySkillPolicy(),
+          });
+        } finally {
+          await fs.chmod(cacheRoot, 0o700);
+        }
+      };
+
+      for (const unreadable of ['source', 'isolated'] as const) {
+        const disabled = await prepare(unreadable, false);
+        expect(disabled.routingFailures).toEqual([]);
+        expect(disabled.warnings).toEqual([
+          expect.stringContaining(`cannot inspect ${unreadable === 'source' ? 'user' : 'isolated'} Codex plugin cache`),
+        ]);
+
+        const enabled = await prepare(unreadable, true);
+        expect(enabled.routingFailures).toEqual([
+          expect.stringContaining('feishu-delegate@personal'),
+        ]);
+      }
+    },
+  );
+
   it('links marketplace cache dirs and appends missing [plugins] entries', async () => {
     const { homeDir, codexHome, paths } = await setup();
     await writePluginCache(paths.sourceCacheDir, 'superpowers-dev', 'superpowers');

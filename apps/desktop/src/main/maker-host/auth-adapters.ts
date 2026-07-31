@@ -922,6 +922,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       }
     }
     if (!pluginsOutcome.ok) {
+      // Expected cache/config I/O failures are normalized by the bridge and
+      // gated against the isolated plugin enablement. A rejection here is an
+      // unexpected invariant failure, so it must remain fail-closed.
       throw new Error(
         `Cannot start Codex safely because Cindy could not inspect downstream plugin capabilities: ${pluginsOutcome.err.message}`,
       );

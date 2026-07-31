@@ -62,7 +62,7 @@ export interface CodexGlobalPluginsPrepareResult {
   /** 本轮新追加进隔离 config.toml 的插件 key(`name@marketplace`)。 */
   addedPluginEntries: string[];
   /**
-   * 已启用、但 Cindy 无法在隔离 home 中可靠收紧的下游能力。
+   * 已启用或启用状态无法可靠确认、且 Cindy 无法在隔离 home 中可靠收紧的下游能力。
    *
    * 调用方必须把非空结果当成 session 启动失败，不能静默退回用户原始
    * marketplace 链接，否则 explicit-only Skill 会重新变成隐式可调用。
@@ -75,6 +75,10 @@ interface PrepareOptions {
   homeDir?: string;
   capabilityRouting?: CapabilityRoutingPolicy;
 }
+
+type PluginEnablementSnapshot =
+  | { status: 'known'; enabledPluginKeys: ReadonlySet<string> }
+  | { status: 'unknown' };
 
 interface CodexPluginOverlayBase {
   pluginKey: string;
@@ -748,7 +752,8 @@ async function collectCapabilityRoutingFailures(
   sourceCacheDir: string,
   overlaysByMarketplace: ReadonlyMap<string, readonly CodexPluginOverlay[]>,
   marketplaces: readonly CodexGlobalPluginsMarketplaceResult[],
-  enabledPluginKeys: ReadonlySet<string>,
+  enablement: PluginEnablementSnapshot,
+  inventory: { sourceReadable: boolean; isolatedReadable: boolean },
 ): Promise<string[]> {
   const statusByMarketplace = new Map(
     marketplaces.map(({ name, status }) => [name, status] as const),
@@ -761,17 +766,28 @@ async function collectCapabilityRoutingFailures(
       overlays.map((overlay) => [overlay.pluginKey, overlay.pluginName] as const),
     );
     for (const [pluginKey, pluginName] of protectedPlugins) {
-      // A cache directory alone does not make a plugin active. The isolated
-      // config is authoritative because syncPluginEntries deliberately keeps
-      // an existing `enabled = false` choice and does not invent entries for
-      // cache-only plugins. Once enabled, either the source or isolated cache
-      // can supply the plugin, so an unenforced overlay must be fatal.
-      if (!enabledPluginKeys.has(pluginKey)) continue;
+      // A cache directory alone does not make a plugin active. A readable
+      // isolated config is authoritative because syncPluginEntries preserves
+      // `enabled = false`. If config or inventory cannot be read, absence is
+      // no longer proof of safety: an unenforced overlay must fail closed.
+      if (
+        enablement.status === 'known' &&
+        !enablement.enabledPluginKeys.has(pluginKey)
+      ) {
+        continue;
+      }
       const [isolatedPluginExists, sourcePluginExists] = await Promise.all([
         isDirectory(path.join(cacheDir, marketplace, pluginName)),
         isDirectory(path.join(sourceCacheDir, marketplace, pluginName)),
       ]);
-      if (!isolatedPluginExists && !sourcePluginExists) continue;
+      if (
+        !isolatedPluginExists &&
+        !sourcePluginExists &&
+        inventory.sourceReadable &&
+        inventory.isolatedReadable
+      ) {
+        continue;
+      }
       failures.push(
         `cannot enforce Cindy capability routing for installed Codex plugin ${pluginName}@${marketplace} (marketplace status: ${status ?? 'unmanaged'})`,
       );
@@ -816,7 +832,7 @@ async function readPluginsTable(file: string): Promise<{
 async function readEnabledPluginKeys(
   configFile: string,
   warnings: string[],
-): Promise<Set<string>> {
+): Promise<PluginEnablementSnapshot> {
   let config: Awaited<ReturnType<typeof readPluginsTable>>;
   try {
     config = await readPluginsTable(configFile);
@@ -824,13 +840,16 @@ async function readEnabledPluginKeys(
     warnings.push(
       `cannot confirm enabled plugins in isolated codex config ${configFile}: ${(err as Error).message}`,
     );
-    return new Set();
+    return { status: 'unknown' };
   }
-  return new Set(
-    Object.entries(config.plugins).flatMap(([key, value]) =>
-      isRecord(value) && value['enabled'] !== false ? [key] : [],
+  return {
+    status: 'known',
+    enabledPluginKeys: new Set(
+      Object.entries(config.plugins).flatMap(([key, value]) =>
+        isRecord(value) && value['enabled'] !== false ? [key] : [],
+      ),
     ),
-  );
+  };
 }
 
 /**
@@ -944,7 +963,15 @@ async function syncPluginEntries(
     const missingKeys = Object.keys(missing);
     if (missingKeys.length === 0) return [];
 
-    const fragment = stringifyToml({ plugins: missing });
+    let fragment: string;
+    try {
+      fragment = stringifyToml({ plugins: missing });
+    } catch (err) {
+      warnings.push(
+        `cannot serialize plugin entries for ${paths.configFile}: ${(err as Error).message}`,
+      );
+      return [];
+    }
     const base = dest.text !== '' && !dest.text.endsWith('\n') ? `${dest.text}\n` : dest.text;
     const sep = dest.text === '' ? '' : '\n';
     try {
@@ -965,94 +992,179 @@ async function syncPluginEntries(
   return [];
 }
 
+async function inspectPluginInventories(
+  paths: ReturnType<typeof codexGlobalPluginsPaths>,
+  warnings: string[],
+): Promise<{
+  sourceNames: string[];
+  sourceReadable: boolean;
+  isolatedReadable: boolean;
+  changed: boolean;
+}> {
+  let sourceNames: string[] = [];
+  try {
+    sourceNames = await listSourceMarketplaces(paths.sourceCacheDir);
+  } catch (err) {
+    warnings.push(
+      `cannot inspect user Codex plugin cache ${paths.sourceCacheDir}: ${(err as Error).message}`,
+    );
+    return {
+      sourceNames,
+      sourceReadable: false,
+      isolatedReadable: true,
+      changed: false,
+    };
+  }
+
+  try {
+    return {
+      sourceNames,
+      sourceReadable: true,
+      isolatedReadable: true,
+      changed: await cleanupStaleLinks(paths.cacheDir, new Set(sourceNames)),
+    };
+  } catch (err) {
+    warnings.push(
+      `cannot inspect isolated Codex plugin cache ${paths.cacheDir}: ${(err as Error).message}`,
+    );
+    return {
+      sourceNames,
+      sourceReadable: true,
+      isolatedReadable: false,
+      changed: false,
+    };
+  }
+}
+
+async function prepareSourceMarketplace(
+  paths: ReturnType<typeof codexGlobalPluginsPaths>,
+  name: string,
+  overlays: readonly CodexPluginOverlay[] | undefined,
+  cacheReady: boolean,
+  warnings: string[],
+): Promise<{ result: CodexGlobalPluginsMarketplaceResult; changed: boolean }> {
+  const source = path.join(paths.sourceCacheDir, name);
+  const link = path.join(paths.cacheDir, name);
+  let status: ManagedLinkStatus;
+  let reason: string | undefined;
+  let changed = false;
+
+  if (!cacheReady) {
+    status = 'error';
+    reason = 'isolated plugin cache is unavailable';
+  } else {
+    try {
+      if (overlays && overlays.length > 0) {
+        status = await ensureOverlayMarketplace(source, link, overlays, warnings);
+        changed = status === 'linked';
+      } else {
+        changed = await removeManagedOverlayDirectory(link, source, warnings);
+        const linked = await ensureDirectoryLink(link, source);
+        status = linked.status;
+        reason = linked.reason;
+        changed = changed || linked.changed;
+      }
+    } catch (err) {
+      status = 'error';
+      reason = (err as Error).message;
+      warnings.push(`cannot prepare Codex plugin marketplace ${name}: ${reason}`);
+    }
+  }
+
+  if (status === 'error' && (!overlays || overlays.length === 0)) {
+    warnings.push(
+      `cannot link codex plugin marketplace cache ${name} from ${source}: ${reason ?? 'unknown error'}`,
+    );
+  }
+  return { result: { name, source, link, status, reason }, changed };
+}
+
+async function prepareSourceMarketplaces(
+  paths: ReturnType<typeof codexGlobalPluginsPaths>,
+  sourceNames: readonly string[],
+  overlaysByMarketplace: ReadonlyMap<string, readonly CodexPluginOverlay[]>,
+  warnings: string[],
+): Promise<{
+  marketplaces: CodexGlobalPluginsMarketplaceResult[];
+  added: string[];
+  changed: boolean;
+  isolatedReadable: boolean;
+}> {
+  if (sourceNames.length === 0) {
+    return { marketplaces: [], added: [], changed: false, isolatedReadable: true };
+  }
+
+  let cacheReady = true;
+  try {
+    await fsp.mkdir(paths.cacheDir, { recursive: true });
+  } catch (err) {
+    cacheReady = false;
+    warnings.push(
+      `cannot prepare isolated Codex plugin cache ${paths.cacheDir}: ${(err as Error).message}`,
+    );
+  }
+
+  const marketplaces: CodexGlobalPluginsMarketplaceResult[] = [];
+  let changed = false;
+  for (const name of sourceNames) {
+    const prepared = await prepareSourceMarketplace(
+      paths,
+      name,
+      overlaysByMarketplace.get(name),
+      cacheReady,
+      warnings,
+    );
+    marketplaces.push(prepared.result);
+    changed = changed || prepared.changed;
+  }
+  const added = await syncPluginEntries(paths, new Set(sourceNames), warnings);
+  return {
+    marketplaces,
+    added,
+    changed: changed || added.length > 0,
+    isolatedReadable: cacheReady,
+  };
+}
+
 export async function prepareCodexGlobalPluginsBridge(
   codexHome: string,
   opts: PrepareOptions = {},
 ): Promise<CodexGlobalPluginsPrepareResult> {
   const paths = codexGlobalPluginsPaths(codexHome, opts.homeDir);
   const warnings: string[] = [];
-  const marketplaces: CodexGlobalPluginsMarketplaceResult[] = [];
-  let changed = false;
-
-  const sourceNames = await listSourceMarketplaces(paths.sourceCacheDir);
-  const liveNames = new Set(sourceNames);
   const overlaysByMarketplace = groupOverlaysByMarketplace(
     codexCapabilityOverlays(opts.capabilityRouting),
   );
+  const inventory = await inspectPluginInventories(paths, warnings);
+  const prepared = await prepareSourceMarketplaces(
+    paths,
+    inventory.sourceNames,
+    overlaysByMarketplace,
+    warnings,
+  );
 
-  changed = (await cleanupStaleLinks(paths.cacheDir, liveNames)) || changed;
-
-  if (sourceNames.length > 0) {
-    await fsp.mkdir(paths.cacheDir, { recursive: true });
-    for (const name of sourceNames) {
-      const source = path.join(paths.sourceCacheDir, name);
-      const link = path.join(paths.cacheDir, name);
-      const overlays = overlaysByMarketplace.get(name);
-      let status: ManagedLinkStatus;
-      let reason: string | undefined;
-      let entryChanged = false;
-      if (overlays && overlays.length > 0) {
-        status = await ensureOverlayMarketplace(source, link, overlays, warnings);
-        entryChanged = status === 'linked';
-      } else {
-        entryChanged = await removeManagedOverlayDirectory(link, source, warnings);
-        const result = await ensureDirectoryLink(link, source);
-        status = result.status;
-        reason = result.reason;
-        entryChanged = entryChanged || result.changed;
-      }
-      changed = changed || entryChanged;
-      marketplaces.push({ name, source, link, status, reason });
-      // conflict 是稳态(codex remote-install 会在隔离 home 自建同名真实目录),
-      // 不进 warnings 以免每次 session start 刷告警;只有真实错误才告警。
-      if (status === 'error' && (!overlays || overlays.length === 0)) {
-        warnings.push(
-          `cannot link codex plugin marketplace cache ${name} from ${source}: ${reason ?? 'unknown error'}`,
-        );
-      }
-    }
-
-    const added = await syncPluginEntries(paths, liveNames, warnings);
-    changed = changed || added.length > 0;
-    const enabledPluginKeys =
-      overlaysByMarketplace.size > 0
-        ? await readEnabledPluginKeys(paths.configFile, warnings)
-        : new Set<string>();
-    const routingFailures = await collectCapabilityRoutingFailures(
-      paths.cacheDir,
-      paths.sourceCacheDir,
-      overlaysByMarketplace,
-      marketplaces,
-      enabledPluginKeys,
-    );
-    return {
-      codexHome,
-      cacheDir: paths.cacheDir,
-      changed,
-      marketplaces,
-      addedPluginEntries: added,
-      routingFailures,
-      warnings,
-    };
-  }
-
-  const enabledPluginKeys =
+  const enablement: PluginEnablementSnapshot =
     overlaysByMarketplace.size > 0
       ? await readEnabledPluginKeys(paths.configFile, warnings)
-      : new Set<string>();
+      : { status: 'known', enabledPluginKeys: new Set<string>() };
   const routingFailures = await collectCapabilityRoutingFailures(
     paths.cacheDir,
     paths.sourceCacheDir,
     overlaysByMarketplace,
-    marketplaces,
-    enabledPluginKeys,
+    prepared.marketplaces,
+    enablement,
+    {
+      sourceReadable: inventory.sourceReadable,
+      isolatedReadable:
+        inventory.isolatedReadable && prepared.isolatedReadable,
+    },
   );
   return {
     codexHome,
     cacheDir: paths.cacheDir,
-    changed,
-    marketplaces,
-    addedPluginEntries: [],
+    changed: inventory.changed || prepared.changed,
+    marketplaces: prepared.marketplaces,
+    addedPluginEntries: prepared.added,
     routingFailures,
     warnings,
   };
