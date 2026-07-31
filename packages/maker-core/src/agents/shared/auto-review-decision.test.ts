@@ -71,6 +71,21 @@ describe('resolveAutoReviewDecision', () => {
     expect(called).toBe(false);
   });
 
+  it('silently blocks oversized gray actions instead of reviewing a truncated sample', async () => {
+    let called = false;
+    await expect(resolveAutoReviewDecision(
+      request({ kind: 'exec', command: `npm run build -- ${'x'.repeat(4_100)}` }),
+      async () => {
+        called = true;
+        return { verdict: 'allow' };
+      },
+    )).resolves.toMatchObject({
+      verdict: 'block',
+      reason: expect.stringContaining('at most 4096 characters'),
+    });
+    expect(called).toBe(false);
+  });
+
   it('silently blocks when the reviewer is absent, throws, or returns invalid output', async () => {
     const gray = request({ kind: 'exec', command: 'npx tsc --noEmit' });
     await expect(resolveAutoReviewDecision(gray, undefined)).resolves.toMatchObject({ verdict: 'block' });

@@ -53,10 +53,9 @@ describe('buildAutoPermissionReviewPrompt', () => {
     expect(prompt.match(/<\/review_input>/g)).toHaveLength(1);
   });
 
-  it('bounds oversized intent, action, and workspace roots before sending them to the model', () => {
+  it('bounds oversized intent and workspace roots before sending them to the model', () => {
     const prompt = buildAutoPermissionReviewPrompt(request({
       userIntent: `intent-head-${'i'.repeat(4_000)}-intent-tail`,
-      action: { kind: 'exec', command: `command-head-${'x'.repeat(8_000)}-command-tail` },
       workspaceRoots: Array.from(
         { length: 12 },
         (_, index) => `/root-${index}-${'r'.repeat(2_000)}`,
@@ -65,12 +64,16 @@ describe('buildAutoPermissionReviewPrompt', () => {
 
     expect(prompt).toContain('intent-head-');
     expect(prompt).toContain('-intent-tail');
-    expect(prompt).toContain('command-head-');
-    expect(prompt).toContain('-command-tail');
     expect(prompt).toContain('…[truncated]…');
     expect(prompt).toContain('/root-7-');
     expect(prompt).not.toContain('/root-8-');
     expect(prompt.length).toBeLessThan(12_000);
+  });
+
+  it('rejects oversized actions instead of hiding their middle from the reviewer', () => {
+    expect(() => buildAutoPermissionReviewPrompt(request({
+      action: { kind: 'exec', command: 'x'.repeat(4_097) },
+    }))).toThrow('Auto-review action exceeds 4096 characters');
   });
 });
 
@@ -146,6 +149,25 @@ describe('createAutoPermissionReviewer', () => {
     expect(logger.warn).toHaveBeenCalledWith(
       'auto permission reviewer failed',
       expect.objectContaining({ error: 'offline' }),
+    );
+  });
+
+  it('silently rejects oversized actions without invoking the model', async () => {
+    const requestText = vi.fn(async () => '{"verdict":"allow"}');
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const reviewer = createAutoPermissionReviewer({ requestText, logger });
+
+    await expect(reviewer(request({
+      action: { kind: 'exec', command: 'x'.repeat(4_097) },
+    }))).resolves.toBeNull();
+    expect(requestText).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'auto permission reviewer rejected oversized action',
+      expect.objectContaining({
+        actionKind: 'exec',
+        actionTextChars: 4_097,
+        maxActionTextChars: 4_096,
+      }),
     );
   });
 
