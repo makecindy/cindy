@@ -1,6 +1,8 @@
-import type {
-  AutoReviewDecision,
-  AutoReviewRequest,
+import {
+  getAutoReviewActionTextLength,
+  MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
+  type AutoReviewDecision,
+  type AutoReviewRequest,
 } from '@cindy/maker-core';
 
 interface AutoPermissionReviewerLogger {
@@ -16,7 +18,6 @@ export interface AutoPermissionReviewerDeps {
 const MAX_REASON_CHARS = 240;
 const MAX_REVIEW_OUTPUT_CHARS = 1_024;
 const MAX_USER_INTENT_CHARS = 2_000;
-const MAX_ACTION_TEXT_CHARS = 4_096;
 const MAX_WORKSPACE_ROOTS = 8;
 const MAX_WORKSPACE_ROOT_CHARS = 512;
 const REVIEW_TIMEOUT_MS = 8_000;
@@ -31,27 +32,11 @@ function compactText(value: string, maxChars: number): string {
   return `${value.slice(0, headChars)}${marker}${tailChars > 0 ? value.slice(-tailChars) : ''}`;
 }
 
-function compactAction(action: AutoReviewRequest['action']): AutoReviewRequest['action'] {
-  switch (action.kind) {
-    case 'exec':
-      return { ...action, command: compactText(action.command, MAX_ACTION_TEXT_CHARS) };
-    case 'read':
-    case 'file-write':
-      return action.path
-        ? { ...action, path: compactText(action.path, MAX_ACTION_TEXT_CHARS) }
-        : action;
-    case 'network':
-      return {
-        ...action,
-        ...(action.target
-          ? { target: compactText(action.target, MAX_ACTION_TEXT_CHARS) }
-          : {}),
-        ...(action.operation
-          ? { operation: compactText(action.operation, 256) }
-          : {}),
-      };
-    default:
-      return action;
+function assertReviewableActionSize(action: AutoReviewRequest['action']): void {
+  if (getAutoReviewActionTextLength(action) > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS) {
+    throw new RangeError(
+      `Auto-review action exceeds ${MAX_AUTO_REVIEW_ACTION_TEXT_CHARS} characters`,
+    );
   }
 }
 
@@ -67,9 +52,10 @@ function serializeUntrustedPayload(value: unknown): string {
  * transcript, repository contents, tool results, Memory, Skills, or callable tools.
  */
 export function buildAutoPermissionReviewPrompt(request: AutoReviewRequest): string {
+  assertReviewableActionSize(request.action);
   const payload = {
     userIntent: compactText(request.userIntent, MAX_USER_INTENT_CHARS),
-    action: compactAction(request.action),
+    action: request.action,
     workspaceRoots: request.workspaceRoots
       .slice(0, MAX_WORKSPACE_ROOTS)
       .map((root) => compactText(root, MAX_WORKSPACE_ROOT_CHARS)),
@@ -129,6 +115,18 @@ export function createAutoPermissionReviewer(
   deps: AutoPermissionReviewerDeps,
 ): (request: AutoReviewRequest) => Promise<AutoReviewDecision | null> {
   return async (request) => {
+    const actionTextChars = getAutoReviewActionTextLength(request.action);
+    if (actionTextChars > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS) {
+      deps.logger.warn('auto permission reviewer rejected oversized action', {
+        agentKind: request.agentKind,
+        providerId: request.providerId ?? null,
+        model: request.model,
+        actionKind: request.action.kind,
+        actionTextChars,
+        maxActionTextChars: MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
+      });
+      return null;
+    }
     const startedAt = Date.now();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {

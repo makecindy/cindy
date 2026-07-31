@@ -28,6 +28,22 @@ export type AutoReviewDelegate = (
   request: AutoReviewRequest,
 ) => Promise<AutoReviewDecision | null>;
 
+export const MAX_AUTO_REVIEW_ACTION_TEXT_CHARS = 4_096;
+
+export function getAutoReviewActionTextLength(action: ReviewableAction): number {
+  switch (action.kind) {
+    case 'exec':
+      return action.command.length;
+    case 'read':
+    case 'file-write':
+      return action.path?.length ?? 0;
+    case 'network':
+      return (action.target?.length ?? 0) + (action.operation?.length ?? 0);
+    default:
+      return 0;
+  }
+}
+
 /**
  * `prompt` 是旧 core 给 UI adapter 用的名字；在新的 Auto reviewer 流程里它只代表
  * “确定性规则无法独立裁决”，不是“现在弹用户”。显式映射成独立 tier，避免两层语义混用。
@@ -66,6 +82,12 @@ function missingReviewEvidence(action: ReviewableAction): string | null {
   }
 }
 
+function oversizedReviewEvidence(action: ReviewableAction): string | null {
+  return getAutoReviewActionTextLength(action) > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS
+    ? `Automatic review requires action text at most ${MAX_AUTO_REVIEW_ACTION_TEXT_CHARS} characters.`
+    : null;
+}
+
 /**
  * 原生 reviewer 不可用时的统一裁决入口：明显安全和明显红线仍由本地规则确定，
  * 只有中间灰区才调用当前会话模型。delegate 缺失、超时、抛错或返回非法结果时
@@ -85,6 +107,15 @@ export async function resolveAutoReviewDecision(
     return {
       verdict: 'block',
       reason: missingEvidenceReason,
+    };
+  }
+  // The model must see the complete material action. Character sampling can hide
+  // a dangerous middle segment, so oversized gray actions must be retried in smaller form.
+  const oversizedEvidenceReason = oversizedReviewEvidence(request.action);
+  if (oversizedEvidenceReason) {
+    return {
+      verdict: 'block',
+      reason: oversizedEvidenceReason,
     };
   }
   if (!delegate) {
