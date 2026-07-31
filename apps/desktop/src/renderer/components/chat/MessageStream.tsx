@@ -551,6 +551,23 @@ export function findLastUserMessageClientId(messages: readonly ChatMessage[]): s
   return null;
 }
 
+/**
+ * 最后一条「用户侧输入」的 clientId —— **含**合成行（自动续跑指令本身）。
+ *
+ * 与上面的 `findLastUserMessageClientId` 的区别就在这里：那份服务于「编辑最后一条消息」
+ * 这个**可见** affordance，刻意跳过渲染成 null 的合成行；本份要回答的是「此刻正在跑的
+ * 这个 turn 是不是自动续跑发起的」——合成行恰恰是那个 turn 的发起者，跳过就答不了。
+ *
+ * 用途：自愈重连行判断自己是不是"仍在飞"。用户在续跑之后又自己发了消息时，最后一条用户
+ * 侧输入就换成他那条，旧的重连行随之停转（正在跑的已经是另一个 turn 了）。
+ */
+export function findLastUserInputClientId(messages: readonly ChatMessage[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') return messages[i].clientId;
+  }
+  return null;
+}
+
 export function shouldBlockAssistantFork(
   isSessionStreaming: boolean,
   message: ChatMessage,
@@ -1997,6 +2014,8 @@ function renderWorkGroupChild(
     isSessionStreaming: boolean;
     firstUserMessageClientId: string | null;
     lastUserMessageClientId: string | null;
+    /** 含合成行的最后一条用户侧输入(自愈重连行判断"仍在飞"用)。 */
+    lastUserInputClientId: string | null;
     localFileRefs: readonly KnownLocalFileRef[];
     singleResultMap: Map<string, string>;
     assistantsWithFollowingUserBoundary: ReadonlySet<string>;
@@ -2038,6 +2057,7 @@ function renderWorkGroupChild(
       assistantIsTurnFinal={props.turnFinalAssistantClientIds.has(item.message.clientId)}
       isFirstUserMessage={item.message.clientId === props.firstUserMessageClientId}
       isLastUserMessage={item.message.clientId === props.lastUserMessageClientId}
+      isLastUserInput={item.message.clientId === props.lastUserInputClientId}
       localFileRefs={props.localFileRefs}
     />
   );
@@ -3358,6 +3378,8 @@ export function MessageStream({
   // + 重发,更早的消息会连带丢弃后续轮次,v1 不开放)。与 first 同理用全量
   // messages 判定,不受窗口分页影响。
   const lastUserMessageClientId = useMemo(() => findLastUserMessageClientId(messages), [messages]);
+  // 含合成行的"最后一条用户侧输入":自愈重连行据此判断自己是不是仍在飞(见 helper 注释)。
+  const lastUserInputClientId = useMemo(() => findLastUserInputClientId(messages), [messages]);
 
   // error-tail-banner:尾部未忽略的 error 行由输入框上方红条独家承载,流内需要
   // 知道"是不是最后一条"来跳过重复渲染。
@@ -3513,6 +3535,7 @@ export function MessageStream({
                               isSessionStreaming,
                               firstUserMessageClientId,
                               lastUserMessageClientId,
+                              lastUserInputClientId,
                               localFileRefs,
                               singleResultMap,
                               assistantsWithFollowingUserBoundary,
@@ -3632,6 +3655,7 @@ export function MessageStream({
                           assistantIsTurnFinal={turnFinalAssistantClientIds.has(msg.clientId)}
                           isFirstUserMessage={msg.clientId === firstUserMessageClientId}
                           isLastUserMessage={msg.clientId === lastUserMessageClientId}
+                          isLastUserInput={msg.clientId === lastUserInputClientId}
                           isLastMessage={msg.clientId === lastMessageClientId}
                           localFileRefs={localFileRefs}
                         />
@@ -3703,6 +3727,7 @@ const MessageItem = memo(function MessageItem({
   assistantIsTurnFinal,
   isFirstUserMessage,
   isLastUserMessage,
+  isLastUserInput,
   isLastMessage,
   localFileRefs,
 }: {
@@ -3735,6 +3760,12 @@ const MessageItem = memo(function MessageItem({
   /** True iff this message is the last user message in the full list —
    *  edit-last-message: gates the Edit (pencil) entry in UserMessage. */
   isLastUserMessage?: boolean;
+  /**
+   * True iff this message is the last **user-side input** in the full list, synthetic rows
+   * included（见 `findLastUserInputClientId`）。自愈重连行用它 + `sessionRunning` 判断
+   * 「此刻正在跑的 turn 是不是我发起的」，从而决定要不要显示成"重新连接中"。
+   */
+  isLastUserInput?: boolean;
   /** True iff this message is the last message in the full list —
    *  error-tail-banner: a trailing un-dismissed error row is rendered by the
    *  actionable banner above the composer instead of an inline card. */
@@ -3749,6 +3780,11 @@ const MessageItem = memo(function MessageItem({
         cardType={message.systemCardType}
         data={message.systemCardData}
         sessionId={sessionId}
+        // 「这条自愈记录此刻真的在飞吗」：会话有在跑的 turn，且这条就是最后一条用户侧
+        // 输入（= 那个 turn 的发起者）。两个条件缺一不可 —— 只看"结果未回填"会让重开
+        // 会话后的历史记录一直转圈（那时没有任何 turn 在跑），只看"在跑"会让用户自己
+        // 发消息之后旧的重连行跟着转。
+        autoResumeInFlight={sessionRunning === true && isLastUserInput === true}
       />
     );
   }
