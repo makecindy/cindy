@@ -2445,7 +2445,11 @@ export class CodexAgent extends BaseAgent {
      * 每个 per-request 的事实都住在自己的条目里, 请求 settle 时整条删掉, 天然不串味;
      * "有没有 start 在飞"一律由 `inFlightStarts.size` 派生, 不再有第二份真相。
      */
-    const inFlightStarts = new Map<number, { quarantined: boolean; terminalSettled: boolean }>();
+    const inFlightStarts = new Map<number, {
+      quarantined: boolean;
+      terminalSettled: boolean;
+      capabilitySelectionText: string;
+    }>();
     /** 每次 turn/start RPC 的自增序号, 作为登记表的键。 */
     let turnStartSeq = 0;
     /**
@@ -2459,9 +2463,13 @@ export class CodexAgent extends BaseAgent {
     let sendGeneration = 0;
 
     /** 登记一次即将发出的 turn/start, 返回它的序号。 */
-    const beginTurnStart = (): number => {
+    const beginTurnStart = (capabilitySelectionText: string): number => {
       const seq = ++turnStartSeq;
-      inFlightStarts.set(seq, { quarantined: false, terminalSettled: false });
+      inFlightStarts.set(seq, {
+        quarantined: false,
+        terminalSettled: false,
+        capabilitySelectionText,
+      });
       isTurnStartPending = true;
       return seq;
     };
@@ -6322,11 +6330,30 @@ export class CodexAgent extends BaseAgent {
         const wasSameTurn = currentTurnId === params.turn.id;
         // started 先于响应到达时归属方只能推断: 只有一个 start 在飞 → 就是它; 多个 → 认不出,
         // 不登记(读取方按"归属不明"从严处理)。
-        const startedOwnerSeqs = [...inFlightStarts.keys()];
+        const startedOwnerEntries = [...inFlightStarts.entries()];
+        const startedOwner = startedOwnerEntries.length === 1
+          ? startedOwnerEntries[0]
+          : undefined;
         turnOriginByTurnId.set(params.turn.id, {
-          startSeq: startedOwnerSeqs.length === 1 ? (startedOwnerSeqs[0] as number) : null,
+          startSeq: startedOwner?.[0] ?? null,
           sendGen: sendGeneration,
         });
+        // Notifications may arrive before the turn/start RPC response. Bind the
+        // selector at the same unique-owner boundary as turnOrigin so an early
+        // MCP elicitation sees the accepted send's capability choice. Multiple
+        // starts, quarantined starts, and already-settled cancellations remain
+        // unbound and therefore fail closed.
+        if (
+          !wasSameTurn &&
+          startedOwner &&
+          !startedOwner[1].quarantined &&
+          !startedOwner[1].terminalSettled
+        ) {
+          capabilitySelectionTextByTurnId.set(
+            params.turn.id,
+            startedOwner[1].capabilitySelectionText,
+          );
+        }
         currentTurnId = params.turn.id;
         isTurnInFlight = true;
         turnStartGeneration += 1; // 见声明处:延迟善后靠它判断"期间起过新 turn"
@@ -7157,7 +7184,7 @@ export class CodexAgent extends BaseAgent {
             // RPC 在途也算忙（见 isTurnRunning 注释）：计时器已清、turn 未激活的
             // 这段窗口若报 idle，并发 send 会把原消息挤掉。
             state.inFlight = true;
-            const retryStartSeq = beginTurnStart();
+            const retryStartSeq = beginTurnStart(capabilitySelectionText);
             // RPC 是否走完了成功路径。补排延后的容量失败**只能**在成功路径上做:
             // finally 先于外层 state.retry().catch 执行, 若 RPC 已经 reject 却在这里
             // 排上新计时器, 紧随其后的 catch 会推终态 error + Done 收口 UI, 而那个
@@ -7256,7 +7283,7 @@ export class CodexAgent extends BaseAgent {
         let finalErr: unknown = null;
         // 初始 RPC 在飞期间到达的空 id 容量拒绝只会被"延后"(不排计时器), 由下面的
         // finally 在响应处理完之后补排 —— 保证任一时刻只有一个 turn/start 在飞。
-        const initialStartSeq = beginTurnStart();
+        const initialStartSeq = beginTurnStart(capabilitySelectionText);
         let initialStartSettledOk = false;
         /** 本次请求是否已被 Stop / 撤单收口过(条目会在 finally 里删掉, 所以先取出来)。 */
         let initialStartSettledByCancel = false;
