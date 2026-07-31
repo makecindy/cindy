@@ -2140,7 +2140,6 @@ export class ClaudeCodeAgent extends BaseAgent {
         sdkInPlanMode = remotePermissionMode === 'plan';
         const remoteToolGuards = buildClaudeRemoteToolGuards(
           this.deps.capabilityRouting,
-          new Set(Object.keys(remoteMcpServers ?? {})),
         );
 
         const startParams: Record<string, unknown> = {

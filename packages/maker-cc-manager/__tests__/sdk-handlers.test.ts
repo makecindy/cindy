@@ -13,7 +13,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { RpcClient, RpcClientError } from '../src/client.js';
 import { ManagerServer } from '../src/server.js';
-import { SessionRegistry, type SdkQueryFactory, type SdkQueryLike } from '../src/session-registry.js';
+import {
+  SessionRegistry,
+  type SdkQueryFactory,
+  type SdkQueryFactoryOptions,
+  type SdkQueryLike,
+} from '../src/session-registry.js';
 import { wireSdkHandlers } from '../src/sdk-handlers.js';
 import { NOTIFICATIONS } from '../src/protocol.js';
 
@@ -26,6 +31,7 @@ interface Ctx {
 }
 
 let ctx: Ctx | null = null;
+let latestFactoryOptions: SdkQueryFactoryOptions | null = null;
 
 function makeIpcPath(): string {
   const uniq = `cc-mgr-test-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -37,6 +43,7 @@ function makeIpcPath(): string {
 
 function buildFakeFactory(): SdkQueryFactory {
   return (opts): SdkQueryLike => {
+    latestFactoryOptions = opts;
     async function* gen(): AsyncGenerator<unknown> {
       yield {
         type: 'system',
@@ -44,6 +51,10 @@ function buildFakeFactory(): SdkQueryFactory {
         session_id: 'fake-sdk-uuid',
         cwd: opts.cwd,
         model: opts.model,
+        mcp_servers: Object.keys(opts.mcpServers ?? {}).map((name) => ({
+          name,
+          status: 'connected',
+        })),
       };
       for await (const userMsg of opts.inputStream) {
         yield {
@@ -82,6 +93,7 @@ function buildFakeFactory(): SdkQueryFactory {
 }
 
 beforeEach(async () => {
+  latestFactoryOptions = null;
   const socketPath = makeIpcPath();
   const registry = new SessionRegistry({ sdkQueryFactory: buildFakeFactory(), bufferCapacity: 2 });
   const server = new ManagerServer({
@@ -324,25 +336,58 @@ describe('sdk-handlers end-to-end', () => {
     }
   });
 
-  it('query/start rejects whitespace-only routing guard prefixes', async () => {
-    try {
-      await ctx!.client.request('query/start', {
-        sessionId: 's1',
-        cwd: '/a',
-        model: 'm',
-        env: {},
-        toolGuards: [
-          {
-            toolNamePrefix: '   ',
-            invocation: 'disabled',
-          },
-        ],
-      });
-      throw new Error('expected rejection');
-    } catch (err) {
-      expect(err).toBeInstanceOf(RpcClientError);
-      expect((err as RpcClientError).rpcError.code).toBe('INVALID_PARAMS');
+  it('query/start rejects invalid routing guard prefixes', async () => {
+    for (const [index, toolNamePrefix] of ['   ', 'not-an-mcp-prefix'].entries()) {
+      try {
+        await ctx!.client.request('query/start', {
+          sessionId: `s-invalid-prefix-${index}`,
+          cwd: '/a',
+          model: 'm',
+          env: {},
+          toolGuards: [
+            {
+              toolNamePrefix,
+              invocation: 'disabled',
+            },
+          ],
+        });
+        throw new Error('expected rejection');
+      } catch (err) {
+        expect(err).toBeInstanceOf(RpcClientError);
+        expect((err as RpcClientError).rpcError.code).toBe('INVALID_PARAMS');
+      }
     }
+  });
+
+  it('query/start normalizes routing guard identities before matching', async () => {
+    await ctx!.client.request('query/start', {
+      sessionId: 's1',
+      cwd: '/a',
+      model: 'm',
+      env: {},
+      mcpServers: {
+        'plugin:guard': { type: 'stdio', command: 'true' },
+      },
+      toolGuards: [
+        {
+          toolNamePrefix: '  mcp__plugin_guard__  ',
+          sourceServerId: '  plugin:guard  ',
+          invocation: 'explicit-only',
+        },
+      ],
+    });
+    await waitFor(() => ctx!.notifications.length >= 1);
+
+    const preToolUse = latestFactoryOptions?.hooks?.PreToolUse?.[0]?.hooks[0];
+    expect(preToolUse).toBeDefined();
+    await expect(
+      preToolUse!({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'mcp__plugin_guard__call',
+      }),
+    ).resolves.toMatchObject({
+      hookSpecificOutput: { permissionDecision: 'deny' },
+    });
   });
 
   it('query/close ends consume loop → session.alive=false + closed notification', async () => {

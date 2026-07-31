@@ -13,7 +13,6 @@ import type {
 import {
   claudeMcpToolPrefix,
   findClaudeMcpCapabilityRoute,
-  hasClaudeMcpPrefixCollision,
   isHarnessOwnedCapabilitySource,
   isCapabilityRouteInvocationAllowed,
 } from '../../types/capability-routing.js';
@@ -70,11 +69,12 @@ export interface ClaudeRemoteToolGuard {
  * Build the JSON-safe routing guards enforced by the remote cc-manager as
  * daemon-side PreToolUse hooks. Local callback hooks cannot cross the RPC
  * boundary, so leaving this to canUseTool would let remote settings allow
- * rules or bypassPermissions short-circuit the host route.
+ * rules or bypassPermissions short-circuit the host route. Pre-init MCP
+ * configuration cannot suppress a guard: the daemon resolves normalized-name
+ * collisions from the SDK's authoritative connected registry after init.
  */
 export function buildClaudeRemoteToolGuards(
   policy: CapabilityRoutingPolicy | undefined,
-  nonHarnessServerIds: ReadonlySet<string> = new Set(),
 ): ClaudeRemoteToolGuard[] {
   if (!policy) return [];
   return policy.overrides.flatMap((directive) => {
@@ -82,11 +82,7 @@ export function buildClaudeRemoteToolGuards(
       !isHarnessOwnedCapabilitySource(directive.source) ||
       directive.source.harness !== CLAUDE_CODE_HARNESS_ID ||
       directive.source.surface !== 'mcp' ||
-      directive.invocation === 'auto' ||
-      hasClaudeMcpPrefixCollision(
-        directive.source.id,
-        nonHarnessServerIds,
-      )
+      directive.invocation === 'auto'
     ) {
       return [];
     }

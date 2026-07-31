@@ -1095,7 +1095,7 @@ describe('remote sessions share the same permission semantics', () => {
     await explicit.handle.close();
   });
 
-  it('does not serialize or enforce a remote guard that aliases a user MCP id', async () => {
+  it('serializes the remote guard while preserving a connected user MCP alias', async () => {
     const capabilityRouting = {
       overrides: [
         {
@@ -1119,7 +1119,7 @@ describe('remote sessions share the same permission semantics', () => {
       mcpServerNames: [userServerId],
     });
 
-    expect(remote.remoteStartParams?.toolGuards).toBeUndefined();
+    expect(remote.remoteStartParams?.toolGuards).toHaveLength(1);
     await expect(
       remote.onApprovalRequest({
         requestId: 'r-user-mcp-collision',
@@ -1153,7 +1153,7 @@ describe('remote sessions share the same permission semantics', () => {
     const remote = await startRemoteSession(() => 'prompt', {
       attachResolver: () => ({ kind: 'permission', behavior: 'allow' }),
       capabilityRouting,
-      mcpServerNames: [],
+      mcpServerNames: [userServerId],
       initMcpServerNames: [
         'plugin:feishu-delegate:feishu-delegate',
         userServerId,
@@ -1175,11 +1175,12 @@ describe('remote sessions share the same permission semantics', () => {
     const failed = await startRemoteSession(() => 'prompt', {
       attachResolver: () => ({ kind: 'permission', behavior: 'allow' }),
       capabilityRouting,
-      mcpServerNames: [],
+      mcpServerNames: [userServerId],
       initMcpServerNames: ['plugin:feishu-delegate:feishu-delegate'],
       failedInitMcpServerNames: [userServerId],
     });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(failed.remoteStartParams?.toolGuards).toHaveLength(1);
     await expect(
       failed.onApprovalRequest({
         requestId: 'r-failed-settings-mcp-collision',

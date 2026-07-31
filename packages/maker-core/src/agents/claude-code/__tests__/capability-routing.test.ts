@@ -138,18 +138,6 @@ describe('buildClaudeRemoteToolGuards', () => {
           'This downstream source was not explicitly selected. Use Cindy capability xd-feishu.',
       },
     ]);
-    expect(
-      buildClaudeRemoteToolGuards(
-        policy,
-        new Set(['plugin_feishu-delegate_feishu-delegate']),
-      ),
-    ).toEqual([]);
-    expect(
-      buildClaudeRemoteToolGuards(
-        policy,
-        new Set(['plugin:feishu-delegate:feishu-delegate']),
-      ),
-    ).toHaveLength(1);
   });
 });
 

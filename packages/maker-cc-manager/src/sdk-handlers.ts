@@ -397,9 +397,16 @@ function validateToolGuards(value: unknown): QueryToolGuard[] | undefined {
     ) {
       throwInvalid(`toolGuards[${index}].denialMessage must be a string`);
     }
+    const toolNamePrefix = guard.toolNamePrefix.trim();
+    const sourceServerId = guard.sourceServerId?.trim();
+    if (!/^mcp__[A-Za-z0-9_-]+__$/.test(toolNamePrefix)) {
+      throwInvalid(
+        `toolGuards[${index}].toolNamePrefix must be a normalized Claude MCP tool prefix`,
+      );
+    }
     return {
-      toolNamePrefix: guard.toolNamePrefix,
-      ...(guard.sourceServerId ? { sourceServerId: guard.sourceServerId } : {}),
+      toolNamePrefix,
+      ...(sourceServerId ? { sourceServerId } : {}),
       invocation: guard.invocation,
       ...(guard.explicitSelectors
         ? { explicitSelectors: [...guard.explicitSelectors] as string[] }
