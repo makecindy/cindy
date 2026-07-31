@@ -155,33 +155,42 @@ describe('projectProviderCatalogForBuildRegion — 用户自有媒体来源', ()
     expect(xd?.videoModels?.map((m) => m.id)).toEqual(['seedance-fast', 'seedance-pro']);
   });
 
-  it('非 xd 供应商 models dict 中的媒体型号在 cn 区域保持不变', () => {
-    const thirdParty: Provider = {
-      id: 'third',
-      name: 'Third Party',
-      source: 'builtin',
-      agents: ['claude-code'],
-      auth: { method: 'oauth' },
-      routing: {},
-      models: {
-        'claude-code': [
-          { ...model('seedance-fast'), group: 'video' },
-          model('chat-model'),
-        ],
-      },
-    };
-    const base = catalog();
-    const projected = projectProviderCatalogForBuildRegion(
-      { ...base, providers: [...base.providers, thirdParty] },
-      'cn',
-    );
-    const third = projected.providers.find((p) => p.id === 'third');
-    expect(third).toBe(thirdParty);
-    expect(third?.models['claude-code']?.map((m) => m.id)).toEqual([
-      'seedance-fast',
-      'chat-model',
-    ]);
-  });
+  it.each(['cn', 'dev'] as const)(
+    '非 xd 供应商在 %s 保留图像与聊天能力,暂不暴露视频能力',
+    (region) => {
+      const thirdParty: Provider = {
+        id: 'third',
+        name: 'Third Party',
+        source: 'builtin',
+        agents: ['claude-code'],
+        auth: { method: 'oauth' },
+        routing: {},
+        models: {
+          'claude-code': [
+            { ...model('seedance-fast'), group: 'video' },
+            { ...model('third/image'), group: 'image' },
+            model('chat-model'),
+          ],
+        },
+        imageModels: [{ id: 'third/image', name: 'Third Image' }],
+        imageDefaults: { standard: 'third/image' },
+        videoModels: [{ id: 'seedance-fast', name: 'Seedance Fast' }],
+        videoDefaults: { standard: 'seedance-fast' },
+      };
+      const base = catalog();
+      const projected = projectProviderCatalogForBuildRegion(
+        { ...base, providers: [...base.providers, thirdParty] },
+        region,
+      );
+      const third = projected.providers.find((p) => p.id === 'third');
+      expect(third).not.toBe(thirdParty);
+      expect(third?.models['claude-code']?.map((m) => m.id)).toEqual(['third/image', 'chat-model']);
+      expect(third?.imageModels).toBe(thirdParty.imageModels);
+      expect(third?.imageDefaults).toBe(thirdParty.imageDefaults);
+      expect(third?.videoModels).toEqual([]);
+      expect(third?.videoDefaults).toBeUndefined();
+    },
+  );
 
   it('mode: image_generation 的用户模型在 cn 区域保持可用', () => {
     const modeOnly: Provider = {
