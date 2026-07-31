@@ -9,8 +9,8 @@
  * (cindy_contacts MCP server 注册 + 工具级拦截); 设置页管理 UI 不受 gate —
  * 关着也能浏览/清理已有数据。
  *
- * 形态与 chat-embedding-settings-store 完全一致(createOverrideSettingsFile:
- * 同步 R/W + .tmp 原子写 + 内存 cache + 坏文件回退默认值)。
+ * 形态基于 createOverrideSettingsFile：同步读 + 跨进程锁内原子 patch + 内存 cache
+ * + 坏文件回退默认值。共享 userData 的多个实例修改不同开关时不会互相覆盖。
  */
 
 import path from 'node:path';
@@ -20,7 +20,11 @@ import {
   createOverrideSettingsFile,
   type OverrideSettingsState,
 } from './override-settings-file.js';
-import { getActiveAppSession, ownerScopedUserDataPath } from '../appSessionState.js';
+import {
+  activeOwnerScopeKey,
+  getActiveAppSession,
+  ownerScopedUserDataPath,
+} from '../appSessionState.js';
 
 const log = desktopMakerLogger.child('contacts-settings-store');
 
@@ -64,6 +68,7 @@ function currentStore() {
       normalize,
       log,
       label: 'contacts',
+      scopeKey: activeOwnerScopeKey,
     });
     stores.set(key, store);
   }
@@ -84,20 +89,18 @@ export function readContactsSettingsState(): OverrideSettingsState<ContactsSetti
 }
 
 /** 同步写 enabled + 更新 cache; 失败抛错让 IPC handler 反馈给 UI。 */
-export function writeContactsEnabled(enabled: boolean): void {
+export async function writeContactsEnabled(enabled: boolean): Promise<void> {
   const store = currentStore();
-  store.invalidateIfChanged();
-  store.writePatch({ enabled });
+  await store.writePatchAtomic({ enabled });
   log.info('contacts setting written', { enabled });
 }
 
-export function writeContactsDeviceSyncEnabled(deviceSyncEnabled: boolean): void {
+export async function writeContactsDeviceSyncEnabled(deviceSyncEnabled: boolean): Promise<void> {
   const store = currentStore();
-  store.invalidateIfChanged();
-  store.writePatch({ deviceSyncEnabled });
+  await store.writePatchAtomic({ deviceSyncEnabled });
   log.info('contacts device sync setting written', { deviceSyncEnabled });
 }
 
-export function resetContactsSettings(): ContactsSettings {
-  return currentStore().reset();
+export function resetContactsSettings(): Promise<ContactsSettings> {
+  return currentStore().resetAtomic();
 }

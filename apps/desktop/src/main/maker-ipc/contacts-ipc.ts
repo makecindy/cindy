@@ -56,7 +56,7 @@ const log = createLogger('contactsIpc');
 export interface ContactsIpcDeps {
   getManager: () => MakerContactsManager;
   readSettingsState: () => { value: { enabled: boolean }; isCustomized: boolean };
-  writeEnabled: (enabled: boolean) => void;
+  writeEnabled: (enabled: boolean) => void | Promise<void>;
   broadcastChanged: () => void;
   /**
    * 开关值变化后失效 Codex 本地 app-server(可选, 生产注入; 测试可省略)。
@@ -134,7 +134,7 @@ export function createContactsIpcHandlers(deps: ContactsIpcDeps): Record<string,
       // 不回滚开关(Claude 侧已即时生效), 但必须把 deferred 状态浮给 renderer —
       // 静默报成功会让用户以为 Codex 也已生效, 实际旧注册要等重启才消失。
       try {
-        deps.writeEnabled(enabled);
+        await deps.writeEnabled(enabled);
       } catch (err) {
         // 落盘失败(userData 只读/磁盘满)按规则 13 走 [CODE] 协议 — 裸 Error 会让
         // renderer 的 extractIpcError 解不出码, 只能给 generic 文案

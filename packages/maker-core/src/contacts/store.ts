@@ -83,6 +83,7 @@ export class MakerContactsStore {
   private readonly logger: Logger;
   private readonly config: ContactsConfig;
   private initialized = false;
+  private ftsDirty = false;
 
   constructor(deps: MakerContactsStoreDeps) {
     this.db = deps.db;
@@ -256,6 +257,7 @@ export class MakerContactsStore {
     try {
       this.fts.delete(id);
     } catch (e) {
+      this.ftsDirty = true;
       this.logger.warn('contacts fts delete failed (row removed, rebuild will heal)', { id, error: String(e) });
     }
     for (const otherId of affected) this.reindexSafe(otherId);
@@ -724,6 +726,7 @@ export class MakerContactsStore {
     try {
       this.fts.delete(sourceId);
     } catch (e) {
+      this.ftsDirty = true;
       this.logger.warn('merge: fts delete of source failed', { sourceId, error: String(e) });
     }
     this.reindexSafe(targetId);
@@ -785,7 +788,7 @@ export class MakerContactsStore {
   mergeDeviceSyncState(state: unknown): boolean {
     this.init();
     const changed = this.syncRepo.mergeRemoteState(state);
-    if (changed) this.rebuildFtsSafe();
+    if (changed || this.ftsDirty) this.rebuildFtsSafe();
     return changed;
   }
 
@@ -812,7 +815,9 @@ export class MakerContactsStore {
     tx();
     try {
       this.fts.rebuild([]);
+      this.ftsDirty = false;
     } catch {
+      this.ftsDirty = true;
       /* rebuild on next sanity */
     }
     return { removedCount: c };
@@ -894,7 +899,9 @@ export class MakerContactsStore {
         .map((row) => buildFtsDoc(this.db, row.id))
         .filter((doc): doc is NonNullable<typeof doc> => doc !== null);
       this.fts.rebuild(docs);
+      this.ftsDirty = false;
     } catch (e) {
+      this.ftsDirty = true;
       this.logger.warn('contacts fts rebuild after sync failed (init sanity will heal)', {
         error: String(e),
       });
@@ -907,6 +914,7 @@ export class MakerContactsStore {
       const doc = buildFtsDoc(this.db, contactId);
       if (doc) this.fts.reindex(doc);
     } catch (e) {
+      this.ftsDirty = true;
       this.logger.warn('contacts fts reindex failed (will heal on next rebuild)', {
         contactId,
         error: String(e),
@@ -914,17 +922,18 @@ export class MakerContactsStore {
     }
   }
 
-  /** 主表与 FTS count 不一致 → 全量 rebuild */
+  /** 主表投影与 FTS 内容不一致 → 全量 rebuild */
   private sanityCheck(): void {
     const total = (this.db.prepare(`SELECT COUNT(*) AS c FROM contacts`).get() as { c: number }).c;
     const ftsCount = this.fts.count();
-    if (ftsCount === -1 || ftsCount !== total) {
+    const ids = this.db.prepare(`SELECT id FROM contacts`).all() as Array<{ id: string }>;
+    const docs = ids
+      .map((r) => buildFtsDoc(this.db, r.id))
+      .filter((d): d is NonNullable<typeof d> => d !== null);
+    if (!this.fts.isConsistent(docs)) {
       this.logger.info('contacts fts inconsistent, rebuilding', { total, ftsCount });
-      const ids = this.db.prepare(`SELECT id FROM contacts`).all() as Array<{ id: string }>;
-      const docs = ids
-        .map((r) => buildFtsDoc(this.db, r.id))
-        .filter((d): d is NonNullable<typeof d> => d !== null);
       this.fts.rebuild(docs);
     }
+    this.ftsDirty = false;
   }
 }

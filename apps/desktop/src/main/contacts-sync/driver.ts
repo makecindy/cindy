@@ -9,7 +9,7 @@
 import { type ContactsSyncClock, type ContactsSyncState } from '@cindy/maker-core';
 
 import { createLogger } from '../logger.js';
-import { getActiveAppSession } from '../appSessionState.js';
+import { activeOwnerScopeKey, getActiveAppSession } from '../appSessionState.js';
 import { getDesktopContactsManager } from '../maker-host/maker-contacts-host.js';
 import {
   readContactsSettings,
@@ -74,6 +74,8 @@ let runtimeGeneration = 0;
 const announcedTo = new Map<string, number>();
 const respondedToKeyAnnouncement = new Map<string, number>();
 const statusListeners = new Set<(status: ContactsDeviceSyncStatus) => void>();
+/** 关闭落盘失败时仍保持本进程 fail-closed，直到明确重试成功。 */
+const locallyDisabledOwners = new Set<string>();
 let liveStatus: ContactsDeviceSyncStatus = emptyContactsDeviceSyncStatus();
 /** undefined 强制首次 init/get 按当前 owner 装载，避免模块求值期提前碰 userData。 */
 let statusOwnerId: string | null | undefined;
@@ -157,10 +159,12 @@ export function getContactsDeviceSyncStatus(): ContactsDeviceSyncStatus {
 
 export async function setContactsDeviceSyncEnabled(enabled: boolean): Promise<void> {
   ensureCurrentOwnerStatus();
+  const ownerId = getActiveAppSession().dataOwnerId;
+  const ownerScopeKey = activeOwnerScopeKey();
   if (enabled && !isCloudSession()) {
     throw new Error('contacts device sync requires a signed-in cloud account');
   }
-  if (enabled === isEnabled()) {
+  if (enabled === isEnabled() && enabled === isConfiguredEnabled()) {
     if (enabled) await broadcastContactsNow(true);
     return;
   }
@@ -172,24 +176,59 @@ export async function setContactsDeviceSyncEnabled(enabled: boolean): Promise<vo
       recordError(error);
       throw error;
     }
-    writeContactsDeviceSyncEnabled(true);
+    await writeContactsDeviceSyncEnabled(true);
+    if (ownerId) locallyDisabledOwners.delete(ownerId);
+    if (activeOwnerScopeKey() !== ownerScopeKey) {
+      ensureCurrentOwnerStatus();
+      return;
+    }
     liveStatus = { ...liveStatus, enabled: true, errorCode: null };
     startLan();
     setPhase(onlinePeers().length > 0 ? 'syncing' : 'waiting');
     await broadcastContactsNow(true);
     return;
   }
-  writeContactsDeviceSyncEnabled(false);
+  // “关闭”是隐私意图：先让当前进程立即停传，再等待跨进程设置锁。落盘失败时
+  // 也保留本进程的关闭抑制，不能由轮询读到旧的 true 后偷偷重启。
+  if (ownerId) locallyDisabledOwners.add(ownerId);
   liveStatus = { ...liveStatus, enabled: false, errorCode: null };
   stopContactsDeviceSyncRuntime();
   setPhase('off');
+  try {
+    await writeContactsDeviceSyncEnabled(false);
+    if (ownerId) locallyDisabledOwners.delete(ownerId);
+    if (activeOwnerScopeKey() !== ownerScopeKey) ensureCurrentOwnerStatus();
+  } catch (error) {
+    if (activeOwnerScopeKey() === ownerScopeKey) {
+      recordError(error);
+    } else {
+      log.warn('contacts device sync setting write failed after owner changed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    throw error;
+  }
 }
 
 /** Device Link 持有者定期调用，应用其它共享 userData 实例写入的同步开关。 */
 export function pollContactsDeviceSyncSettingChange(): void {
   ensureCurrentOwnerStatus();
+  const ownerId = getActiveAppSession().dataOwnerId;
+  const configuredEnabled = isConfiguredEnabled();
+  if (!configuredEnabled && ownerId) locallyDisabledOwners.delete(ownerId);
   const enabled = isEnabled();
-  if (enabled === liveStatus.enabled) return;
+  if (enabled === liveStatus.enabled) {
+    if (
+      !enabled &&
+      !configuredEnabled &&
+      (liveStatus.phase !== 'off' || liveStatus.errorCode !== null)
+    ) {
+      liveStatus = { ...liveStatus, enabled: false, errorCode: null };
+      stopContactsDeviceSyncRuntime();
+      setPhase('off');
+    }
+    return;
+  }
   if (!enabled) {
     liveStatus = { ...liveStatus, enabled: false, errorCode: null };
     stopContactsDeviceSyncRuntime();
@@ -487,10 +526,11 @@ function scheduleSyncAttemptTimeout(): void {
 
 function buildInitialStatus(): ContactsDeviceSyncStatus {
   if (!isCloudSession()) return emptyContactsDeviceSyncStatus();
+  const enabled = isEnabled();
   return {
     available: true,
-    enabled: readContactsSettings().deviceSyncEnabled,
-    phase: readContactsSettings().deviceSyncEnabled ? 'waiting' : 'off',
+    enabled,
+    phase: enabled ? 'waiting' : 'off',
     onlineDeviceCount: 0,
     errorCode: null,
     ...readPersistedContactsSyncStatus(),
@@ -498,6 +538,17 @@ function buildInitialStatus(): ContactsDeviceSyncStatus {
 }
 
 function isEnabled(): boolean {
+  const session = getActiveAppSession();
+  const ownerId = session.dataOwnerId;
+  return (
+    session.mode === 'cloud' &&
+    ownerId !== null &&
+    !locallyDisabledOwners.has(ownerId) &&
+    readContactsSettings().deviceSyncEnabled
+  );
+}
+
+function isConfiguredEnabled(): boolean {
   return isCloudSession() ? readContactsSettings().deviceSyncEnabled : false;
 }
 
@@ -560,6 +611,7 @@ function shortId(deviceId: string): string {
 export const __testing = {
   reset(): void {
     disposeContactsDeviceSync();
+    locallyDisabledOwners.clear();
     statusOwnerId = getActiveAppSession().dataOwnerId;
     observedContactsChangeToken = readContactsChangeToken();
     liveStatus = buildInitialStatus();

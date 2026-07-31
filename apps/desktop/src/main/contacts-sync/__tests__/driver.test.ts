@@ -28,6 +28,9 @@ const harness = vi.hoisted(() => {
     lanStop: vi.fn(),
     relaySend: vi.fn(),
     keyReset: vi.fn(),
+    writeDeviceSync: vi.fn(async (enabled: boolean) => {
+      if (harness.ownerId) harness.settings.set(harness.ownerId, enabled);
+    }),
   };
 });
 
@@ -46,6 +49,7 @@ vi.mock('../../logger.js', () => ({
 
 vi.mock('../../appSessionState.js', () => ({
   getActiveAppSession: () => ({ mode: harness.mode, dataOwnerId: harness.ownerId }),
+  activeOwnerScopeKey: () => `${harness.mode}:${harness.ownerId ?? 'none'}`,
 }));
 
 vi.mock('../../maker-host/maker-contacts-host.js', () => ({
@@ -63,9 +67,7 @@ vi.mock('../../maker-host/contacts-settings-store.js', () => ({
     enabled: false,
     deviceSyncEnabled: harness.ownerId ? (harness.settings.get(harness.ownerId) ?? false) : false,
   }),
-  writeContactsDeviceSyncEnabled: (enabled: boolean) => {
-    if (harness.ownerId) harness.settings.set(harness.ownerId, enabled);
-  },
+  writeContactsDeviceSyncEnabled: (enabled: boolean) => harness.writeDeviceSync(enabled),
 }));
 
 vi.mock('../../maker-host/contacts-change-events.js', () => ({
@@ -148,6 +150,10 @@ beforeEach(() => {
   harness.lanStop.mockReset();
   harness.relaySend.mockReset();
   harness.keyReset.mockReset();
+  harness.writeDeviceSync.mockReset();
+  harness.writeDeviceSync.mockImplementation(async (enabled: boolean) => {
+    if (harness.ownerId) harness.settings.set(harness.ownerId, enabled);
+  });
   driver.__testing.reset();
 });
 
@@ -231,6 +237,79 @@ describe('contacts sync runtime ownership', () => {
     expect(driver.getContactsDeviceSyncStatus()).toMatchObject({
       enabled: false,
       phase: 'off',
+    });
+  });
+
+  it('stops immediately and stays off when persisting disable is blocked then fails', async () => {
+    harness.settings.set('owner-a', true);
+    let rejectWrite: ((error: Error) => void) | null = null;
+    harness.writeDeviceSync.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectWrite = reject;
+        }),
+    );
+    driver.initContactsDeviceSync({
+      getSelfDeviceId: () => 'self-device',
+      listOnlineDesktopDevices: () => [],
+      isPeerAllowed: () => false,
+      sendRelayFrame: harness.relaySend,
+    });
+
+    const disabling = driver.setContactsDeviceSyncEnabled(false);
+    expect(harness.lanStop).toHaveBeenCalledTimes(1);
+    expect(driver.getContactsDeviceSyncStatus()).toMatchObject({ enabled: false, phase: 'off' });
+    driver.pollContactsDeviceSyncSettingChange();
+    expect(driver.getContactsDeviceSyncStatus().enabled).toBe(false);
+
+    const failed = expect(disabling).rejects.toThrow('disk unavailable');
+    expect(rejectWrite).not.toBeNull();
+    rejectWrite!(new Error('disk unavailable'));
+    await failed;
+    driver.pollContactsDeviceSyncSettingChange();
+    expect(driver.getContactsDeviceSyncStatus()).toMatchObject({ enabled: false, phase: 'error' });
+
+    // 另一实例稍后成功写入 durable false，本机错误态应自动收敛。
+    harness.settings.set('owner-a', false);
+    driver.pollContactsDeviceSyncSettingChange();
+    expect(driver.getContactsDeviceSyncStatus()).toMatchObject({
+      enabled: false,
+      phase: 'off',
+      errorCode: null,
+    });
+  });
+
+  it('does not apply an old owner disable failure to the new owner status', async () => {
+    harness.settings.set('owner-a', true);
+    let rejectWrite: ((error: Error) => void) | null = null;
+    harness.writeDeviceSync.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectWrite = reject;
+        }),
+    );
+    driver.initContactsDeviceSync({
+      getSelfDeviceId: () => 'self-device',
+      listOnlineDesktopDevices: () => [],
+      isPeerAllowed: () => false,
+      sendRelayFrame: harness.relaySend,
+    });
+
+    const disabling = driver.setContactsDeviceSyncEnabled(false);
+    harness.ownerId = 'owner-b';
+    expect(driver.getContactsDeviceSyncStatus()).toMatchObject({
+      enabled: false,
+      phase: 'off',
+      errorCode: null,
+    });
+
+    const failed = expect(disabling).rejects.toThrow('old owner write failed');
+    rejectWrite!(new Error('old owner write failed'));
+    await failed;
+    expect(driver.getContactsDeviceSyncStatus()).toMatchObject({
+      enabled: false,
+      phase: 'off',
+      errorCode: null,
     });
   });
 

@@ -57,6 +57,21 @@ describe("contacts device sync", () => {
     target.mergeDeviceSyncState(stateOf(source));
   }
 
+  function failFtsRebuild(store: MakerContactsStore): () => void {
+    const fts = (
+      store as unknown as {
+        fts: { rebuild: (docs: readonly unknown[]) => void };
+      }
+    ).fts;
+    const original = fts.rebuild;
+    fts.rebuild = () => {
+      throw new Error("transient fts failure");
+    };
+    return () => {
+      fts.rebuild = original;
+    };
+  }
+
   it("三台设备沿任意在线路径传播后最终一致", () => {
     const a = createStore();
     const b = createStore();
@@ -198,6 +213,54 @@ describe("contacts device sync", () => {
     expect(aHit[0]!.profile.id).toBe(bHit[0]!.profile.id);
     expect(a.listContacts({ status: "pending" })).toHaveLength(2);
     expect(b.listContacts({ status: "pending" })).toHaveLength(2);
+  });
+
+  it("FTS 重建失败后重复接收相同状态仍会重试", () => {
+    const a = createStore();
+    const b = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    const person = a.createContact({ kind: "person", displayName: "旧名称" });
+    exchange(b, a);
+    a.updateContact(person.id, { displayName: "同步后的新名称" });
+    const remote = stateOf(a);
+
+    const restore = failFtsRebuild(b);
+    expect(b.mergeDeviceSyncState(remote)).toBe(true);
+    restore();
+    expect(b.getContact(person.id).displayName).toBe("同步后的新名称");
+    expect(b.search("同步后的新名称")).toHaveLength(0);
+
+    expect(b.mergeDeviceSyncState(remote)).toBe(false);
+    expect(b.search("同步后的新名称")[0]?.contactId).toBe(person.id);
+  });
+
+  it("启动检查能识别行数相同但内容陈旧的 FTS", () => {
+    const a = createStore();
+    const b = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    const person = a.createContact({
+      kind: "person",
+      displayName: "启动前旧名称",
+    });
+    exchange(b, a);
+    a.updateContact(person.id, { displayName: "启动后应恢复名称" });
+
+    const restore = failFtsRebuild(b);
+    expect(b.mergeDeviceSyncState(stateOf(a))).toBe(true);
+    restore();
+    const db = databases.at(-1)!;
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM contacts`).get()).toEqual({
+      count: 1,
+    });
+    expect(
+      db.prepare(`SELECT COUNT(*) AS count FROM contacts_fts`).get(),
+    ).toEqual({ count: 1 });
+
+    const restarted = new MakerContactsStore({ db, logger: noopLogger() });
+    restarted.init();
+    expect(restarted.search("启动后应恢复名称")[0]?.contactId).toBe(person.id);
   });
 
   it("分组成员移出后可以重新加入，并把后续再次移出同步给其他设备", () => {
