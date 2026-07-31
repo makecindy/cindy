@@ -935,6 +935,14 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
       let trigger = detectGroupTrigger(m, this.botId, this.botUsername, this.botDisplayName);
       let ambient = false;
+      const isOwner = String(m.from.id) === this.ownerUserId;
+      if (!trigger && isOwner) {
+        // owner 的裸斜杠命令视为显式召唤: 群里命令语义只属于本 bot, 主人手打
+        // /project 不该因为没带 @username 而石沉大海(2026-07-31 实测反馈)。
+        // 成员的裸命令不在此列 — 仍走"命令 owner 专属"的静默丢弃。
+        const plain = (m.text ?? '').trim();
+        if (/^\/[a-zA-Z]/.test(plain)) trigger = { text: plain };
+      }
       if (!trigger) {
         // 全响应·自主判断(per-chat 配置): 未被召唤的消息也进 turn, 打 ambient
         // 标记 — 业务层注入安静上下文, 模型可用 NO_REPLY 沉默。
@@ -945,7 +953,6 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         trigger = { text: plain };
         ambient = true;
       }
-      const isOwner = String(m.from.id) === this.ownerUserId;
       {
         const probe = trigger.text.trimStart();
         const isCommand = probe.startsWith('/') || probe.startsWith('!');
