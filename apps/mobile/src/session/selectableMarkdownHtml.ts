@@ -4,7 +4,6 @@ import {
   type MobileMarkdownBlock,
   type MobileMarkdownInline,
 } from '@/session/messageMarkdown';
-import { classifyChatPathLinkTarget } from '@/session/chatPathCandidate';
 import { tokenizeCode } from '@/session/codeHighlight';
 import { parseSessionDeepLinkUrl, shortSessionId } from '@/session/sessionLinks';
 import { buildKatexLoaderJs } from '@/session/mathWebViewHtml';

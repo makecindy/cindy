@@ -196,6 +196,41 @@ export function isAmbiguousPathShape(href: string, originalHref?: string): boole
   return !looksLikeFilePath(href);
 }
 
+/** 远端 verdict → 该不该点亮。`lit: false` 表示纯文本(含「还没结论」)。 */
+export type RemoteLitDecision = { lit: false } | { lit: true; kind: 'file' | 'directory' };
+
+/**
+ * 远端 stat 结论 + 路径形状 → 点亮决定。**每个输入都有返回值,没有「什么都不做」这个
+ * 分支** —— 调用方拿它的结果**无条件覆盖**旧结论,于是「远端明确回 nonfile 却忘了撤销
+ * 之前按 unknown 做的乐观点亮」在结构上不可表达。
+ *
+ * 这个形状是被 review 逼出来的:原来两条远程分支各自写 `if (…) return;` 早返回,加了
+ * TTL 到期重验(见 remoteFileOpen 的不变量 A)之后凭空多出一条状态迁移 ——「先乐观点亮 →
+ * 链路恢复后确认不存在」—— 而早返回分支没有处理它,不存在的路径会一直带着下划线可点
+ * (PR #1144 review 实捉)。移动端 ChatPathChipSpan 天生没这个问题:它存的是 verdict 本身,
+ * 新结论直接覆盖;桌面存的是**派生出的 resolved target**,派生值必须显式撤销。同一条
+ * 不变量在两种模型下需要的代码量不同,不能因为「移动端是对的」就以为桌面也对。
+ *
+ * `undefined` = 还没验过(sync 分支 peek 未命中),同样归入不点亮。
+ */
+export function decideRemoteLit(
+  verdict: 'file' | 'directory' | 'nonfile' | 'unknown' | undefined,
+  href: string,
+  originalHref?: string,
+): RemoteLitDecision {
+  if (verdict === 'file') return { lit: true, kind: 'file' };
+  if (verdict === 'directory') return { lit: true, kind: 'directory' };
+  // unknown(链路断 / stat 异常)只对**形状明确是路径**的引用乐观点亮;歧义形状
+  // (裸名 `array.map`、分隔符无扩展 `and/or`)必须等远端明确回 file / directory,否则
+  // 链路一抖,普通行内 code 就会被展示成带下划线的可点文件、点了必失败
+  // (DESIGN.md §14.5 规则 5;移动端同款门槛在 ChatPathChipSpan)。
+  if (verdict === 'unknown' && !isAmbiguousPathShape(href, originalHref)) {
+    return { lit: true, kind: 'file' };
+  }
+  // nonfile(远端明确不存在)/ 歧义形状未确认 / 尚未验证 → 纯文本。
+  return { lit: false };
+}
+
 export function classifyMarkdownLinkTarget(
   href: string | undefined,
   files?: readonly KnownLocalFileRef[],

@@ -77,26 +77,27 @@ describe('聊天正文的可点性信号(DESIGN.md §14.5)', () => {
       .toMatch(/delete safeProps\[BARE_PATH_ATTR\]/);
   });
 
-  it('规则⑤:远程会话的 unknown 只对非歧义形状乐观点亮,且门槛只有一处判据', () => {
+  it('规则⑤:远程会话的点亮判据只有一处,且不在本文件里自己判', () => {
     const src = stripComments(read(CHAT_BODY_FILES[0]));
     // 远程会话 fs:stat 回 unknown 时,歧义形状(裸名 `array.map`、分隔符无扩展
     // `and/or`)不得乐观升级成 resolved-local —— 否则加了常显下划线后,普通行内 code
     // 会被展示成可点文件、点了必失败(PR #1144 review 实捉桌面侧漏了这道门槛)。
-    expect(src, 'unknown 的歧义门槛不见了').toMatch(/isAmbiguousPathShape\(/);
-    // unknown 不得无条件出现在乐观点亮的条件里。
-    expect(src, "unknown 仍被无条件当成可点亮")
-      .not.toMatch(/verdict === 'file' \|\| verdict === 'unknown' \|\| verdict === 'directory'/);
+    // 判据已收敛进 lib/markdownTarget.decideRemoteLit(行为用例在 markdownTarget.test.ts),
+    // 这里只守「本文件不再自己判 verdict」。
+    expect(src, '点亮判据不再经 decideRemoteLit').toMatch(/decideRemoteLit\(/);
+    expect(src, '本文件又开始自己拿 verdict 做点亮判断了 —— 判据必须单点')
+      .not.toMatch(/verdict === '(file|directory|nonfile|unknown)'/);
 
-    // ⚠️ 这条断言方向刻意与直觉相反:门槛必须**恰好一处**。
-    // 本用例首版要求「sync + async 两条分支各有一处」(≥2),那是在 unknown 会被
-    // peek 返回的年代写的。2026-07-31 检查点把 unknown 收进短 TTL 负缓存、令
-    // peekRemotePathVerdict 只返回确定态之后,sync 分支的 unknown 分档已不可达,
-    // 判据只应留在 async 一处;继续要求 ≥2 等于强制把同一语义复制两份 ——
-    // 而「同一判据散落多处、改一处漏一处」正是本 PR 前四轮反复被 review 捉到的
-    // 根因。守卫要钉不变量,不能钉调用点个数。
-    const gates = [...src.matchAll(/isAmbiguousPathShape\(/g)];
-    expect(gates.length, '歧义判据出现了多处 —— 应只在 async 验证回调里判一次')
-      .toBe(1);
+    // ⚠️ 这条断言的方向刻意与直觉相反,历史上被改错过两次:
+    //   ① 首版要求「sync + async 各有一处」(≥2)—— 那是 unknown 还会被 peek 返回的
+    //      年代。unknown 收进短 TTL 负缓存后 sync 那档不可达,继续要求 ≥2 等于强制把
+    //      同一语义复制两份;
+    //   ② 第 8 轮加 TTL 重验后又多出「先乐观点亮 → 确认 nonfile」这条迁移,早返回写法
+    //      漏掉它,于是判据整体被抽成 decideRemoteLit 纯函数。
+    // 「同一判据散落多处、改一处漏一处」是本 PR 反复被捉的根因。守卫要钉不变量,
+    // 不能钉调用点个数 —— 所以这里断言的是「本文件不自己判」,而不是「判据出现 N 次」。
+    expect(src, '重验结论未无条件覆盖 —— nonfile 时会留着旧的乐观点亮')
+      .toMatch(/setAsyncResolved\(\s*decision\.lit/);
   });
 
   it('规则⑤前置:sync 分支不得把 unknown 当结论(peek 只返回确定态)', () => {

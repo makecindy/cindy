@@ -51,7 +51,7 @@ import {
 import {
   classifyInlineCodeTarget,
   classifyMarkdownLinkTarget,
-  isAmbiguousPathShape,
+  decideRemoteLit,
   looksLikeBareFileReference,
   splitLocalLineSuffix,
   type MarkdownLocalKind,
@@ -1191,17 +1191,16 @@ function useResolvedMarkdownTarget(
       const absPath = resolveLocalPath(candidate.href, workingDir);
       if (!absPath) return null;
       const verdict = peekRemotePathVerdict(remoteOrigin, workingDir, absPath);
-      // peek **只返回确定态**:unknown 走短 TTL 负缓存、不进 peek(见 remoteFileOpen
-      // 的不变量 A)。所以这里不需要歧义形状门槛 —— 歧义分档只在 unknown 那一档才有
-      // 意义,而 unknown 在这条路径上不可达,统一由下面的异步分支处理。
-      if (verdict === 'file' || verdict === 'directory') {
-        return resolvedLocalFromResult(candidate, {
-          status: 'unique',
-          absPath,
-          kind: verdict === 'directory' ? 'directory' : 'file',
-        });
-      }
-      return null; // nonfile → 纯文本;未确定(含 unknown)→ 异步 effect 验证后再决定
+      // 点亮与否只由 decideRemoteLit 一处裁决(sync / async 两条分支共用),它对每个
+      // verdict 都有返回值。peek 只返回确定态(unknown 走短 TTL 负缓存、不进 peek,
+      // 见 remoteFileOpen 的不变量 A),所以这里实际只会命中 file / directory / undefined。
+      const decision = decideRemoteLit(verdict, candidate.href, candidate.originalHref);
+      if (!decision.lit) return null; // 未确定 → 交给下面的异步 effect
+      return resolvedLocalFromResult(candidate, {
+        status: 'unique',
+        absPath,
+        kind: decision.kind,
+      });
     }
     const cached = peekResolveLocalPathSmart(candidate.href, workingDir);
     return cached ? resolvedLocalFromResult(candidate, cached) : null;
@@ -1229,18 +1228,19 @@ function useResolvedMarkdownTarget(
       if (!absPath || peekRemotePathVerdict(remoteOrigin, workingDir, absPath)) return;
       let cancelled = false;
       void verifyRemotePathCached(remoteOrigin, workingDir, absPath).then((verdict) => {
-        if (cancelled || verdict === 'nonfile') return;
-        // unknown(链路断 / stat 异常)只对**形状明确是路径**的引用乐观点亮。歧义形状
-        // (裸名 `array.map`、分隔符无扩展 `and/or`)必须等远端明确回 file / directory,
-        // 否则链路一抖,普通行内 code 会被展示成带下划线的可点文件、点了必失败
-        // (DESIGN.md §14.5 规则 5;移动端同款门槛在 ChatPathChipSpan)。
-        if (verdict === 'unknown' && isAmbiguousPathShape(candidate.href, candidate.originalHref)) return;
+        if (cancelled) return;
+        // **无条件覆盖**,不按 verdict 早返回:TTL 到期重验会走到这里第二次,
+        // 「先按 unknown 乐观点亮 → 链路恢复后确认 nonfile」必须能退回纯文本。
+        // 早返回写法会把不存在的路径一直留在点亮态(PR #1144 review 实捉)。
+        const decision = decideRemoteLit(verdict, candidate.href, candidate.originalHref);
         setAsyncResolved(
-          resolvedLocalFromResult(candidate, {
-            status: 'unique',
-            absPath,
-            kind: verdict === 'directory' ? 'directory' : 'file',
-          }),
+          decision.lit
+            ? resolvedLocalFromResult(candidate, {
+                status: 'unique',
+                absPath,
+                kind: decision.kind,
+              })
+            : null,
         );
       });
       return () => {

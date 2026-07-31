@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   classifyInlineCodeTarget,
+  decideRemoteLit,
   isAmbiguousPathShape,
   classifyMarkdownLinkTarget,
   looksLikeBareFileReference,
@@ -239,6 +240,53 @@ describe('classifyInlineCodeTarget', () => {
     expect(classifyInlineCodeTarget('useState')).toBeNull();
     expect(classifyInlineCodeTarget('npm run build')).toBeNull();
     expect(classifyInlineCodeTarget('https://example.com/a.ts')).toBeNull();
+  });
+});
+
+describe('decideRemoteLit(远程会话点亮的唯一判据)', () => {
+  const lit = (v: Parameters<typeof decideRemoteLit>[0], href = 'src/App.tsx', orig?: string) =>
+    decideRemoteLit(v, href, orig);
+
+  it('每个 verdict 都有返回值 —— 没有「什么都不做」这个分支', () => {
+    // 这是本函数存在的全部理由:调用方拿返回值**无条件覆盖**旧结论,于是「忘了撤销」
+    // 在结构上不可表达。若哪天有人给某个 verdict 加回早返回,这条就会挂。
+    for (const v of ['file', 'directory', 'nonfile', 'unknown', undefined] as const) {
+      expect(lit(v), String(v)).toHaveProperty('lit');
+    }
+  });
+
+  it('file / directory → 点亮并带对应 kind', () => {
+    expect(lit('file')).toEqual({ lit: true, kind: 'file' });
+    expect(lit('directory')).toEqual({ lit: true, kind: 'directory' });
+  });
+
+  it('nonfile / 尚未验证 → 纯文本', () => {
+    expect(lit('nonfile')).toEqual({ lit: false });
+    expect(lit(undefined)).toEqual({ lit: false });
+  });
+
+  it('unknown 按形状分档(§14.5 规则 5)', () => {
+    expect(lit('unknown', 'src/App.tsx')).toEqual({ lit: true, kind: 'file' });
+    expect(lit('unknown', '/etc/hosts')).toEqual({ lit: true, kind: 'file' });
+    expect(lit('unknown', 'src/components')).toEqual({ lit: false });
+    expect(lit('unknown', 'array.map')).toEqual({ lit: false });
+    // 尾斜杠目录:回看 originalHref。
+    expect(lit('unknown', 'src/components', 'src/components/')).toEqual({ lit: true, kind: 'file' });
+  });
+
+  it('交错序列:先按 unknown 乐观点亮,重验确认 nonfile 后必须退回纯文本', () => {
+    // TTL 到期重验(不变量 A)让这条迁移第一次成为可能。原实现是
+    // `if (verdict === 'nonfile') return;` 早返回 —— 不存在的路径会一直带着下划线
+    // 可点,直到组件重挂(PR #1144 review 实捉)。
+    const first = lit('unknown', 'src/App.tsx');
+    expect(first).toEqual({ lit: true, kind: 'file' });
+    const second = lit('nonfile', 'src/App.tsx');
+    expect(second, '确认不存在后仍然点亮 —— 有下划线却点不开').toEqual({ lit: false });
+  });
+
+  it('反向交错:unknown 时未点亮的歧义路径,拿到 file 后要点亮', () => {
+    expect(lit('unknown', 'src/components')).toEqual({ lit: false });
+    expect(lit('file', 'src/components')).toEqual({ lit: true, kind: 'file' });
   });
 });
 
