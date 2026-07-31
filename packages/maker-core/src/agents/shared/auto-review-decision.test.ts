@@ -58,6 +58,18 @@ describe('resolveAutoReviewDecision', () => {
     },
   );
 
+  it('normalizes delegate reasons to a small, string-only shape', async () => {
+    const gray = request({ kind: 'exec', command: 'npx tsc --noEmit' });
+    await expect(resolveAutoReviewDecision(
+      gray,
+      async () => ({ verdict: 'block', reason: `  ${'x'.repeat(300)}  ` }),
+    )).resolves.toEqual({ verdict: 'block', reason: 'x'.repeat(240) });
+    await expect(resolveAutoReviewDecision(
+      gray,
+      async () => ({ verdict: 'allow', reason: 42 } as never),
+    )).resolves.toEqual({ verdict: 'allow' });
+  });
+
   it.each([
     { kind: 'file-write', path: undefined } as const,
     { kind: 'exec', command: '   ' } as const,
@@ -79,6 +91,21 @@ describe('resolveAutoReviewDecision', () => {
     let called = false;
     await expect(resolveAutoReviewDecision(
       request({ kind: 'exec', command: `npm run build -- ${'x'.repeat(4_100)}` }),
+      async () => {
+        called = true;
+        return { verdict: 'allow' };
+      },
+    )).resolves.toMatchObject({
+      verdict: 'block',
+      reason: expect.stringContaining('at most 4096 characters'),
+    });
+    expect(called).toBe(false);
+  });
+
+  it('counts exec cwd in the complete evidence size limit', async () => {
+    let called = false;
+    await expect(resolveAutoReviewDecision(
+      request({ kind: 'exec', command: 'pwd', cwd: `/${'x'.repeat(4_100)}` }),
       async () => {
         called = true;
         return { verdict: 'allow' };

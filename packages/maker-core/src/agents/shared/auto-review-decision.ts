@@ -29,13 +29,14 @@ export type AutoReviewDelegate = (
 ) => Promise<AutoReviewDecision | null>;
 
 export const MAX_AUTO_REVIEW_ACTION_TEXT_CHARS = 4_096;
+const MAX_AUTO_REVIEW_REASON_CHARS = 240;
 const AUTO_REVIEW_DELEGATE_TIMEOUT_MS = 8_000;
 const AUTO_REVIEW_TIMEOUT = Symbol('auto-review-timeout');
 
 export function getAutoReviewActionTextLength(action: ReviewableAction): number {
   switch (action.kind) {
     case 'exec':
-      return action.command.length;
+      return action.command.length + (action.cwd?.length ?? 0);
     case 'read':
     case 'file-write':
       return action.path?.length ?? 0;
@@ -145,7 +146,15 @@ export async function resolveAutoReviewDecision(
         || decision?.verdict === 'ask'
       )
     ) {
-      return decision;
+      // Delegate 是运行期边界：即便当前 host 实现已做解析，未来实现也不能把
+      // 非字符串或无上限 reason 原样塞进日志、UI 或下一轮模型上下文。
+      const reason = typeof decision.reason === 'string'
+        ? decision.reason.trim().slice(0, MAX_AUTO_REVIEW_REASON_CHARS)
+        : '';
+      return {
+        verdict: decision.verdict,
+        ...(reason ? { reason } : {}),
+      };
     }
   } catch {
     // Reviewer outages must not turn Auto into Ask or hold the tool callback open.
