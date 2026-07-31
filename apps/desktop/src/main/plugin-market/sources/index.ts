@@ -258,8 +258,28 @@ export class MarketSourceManager {
       await fs.promises.rm(staging, { recursive: true, force: true }).catch(() => undefined);
       throw error;
     }
-    await fs.promises.rm(cloneDir, { recursive: true, force: true }).catch(() => undefined);
-    await fs.promises.rename(staging, cloneDir);
+    // 交换旧缓存与已验证 staging：先把旧目录原子改名为备份，再把 staging
+    // 落位；任一步失败都从备份恢复 cloneDir，避免 rename 失败（Windows 文件锁/
+    // 权限/瞬时 I/O）导致旧缓存既被删除又无替换、整个来源被隐藏。
+    const backup = `${cloneDir}.backup-${crypto.randomUUID()}`;
+    let backupActive = false;
+    try {
+      await fs.promises.rename(cloneDir, backup);
+      backupActive = true;
+      await fs.promises.rename(staging, cloneDir);
+    } catch (error) {
+      if (backupActive) {
+        // staging 落位失败：恢复旧缓存。staging 与 backup 都尽力清理。
+        await fs.promises.rename(backup, cloneDir).catch(() => undefined);
+      }
+      await fs.promises.rm(staging, { recursive: true, force: true }).catch(() => undefined);
+      if (!backupActive) {
+        // 旧目录改名失败但可能已部分移动；尽力清理备份残留。
+        await fs.promises.rm(backup, { recursive: true, force: true }).catch(() => undefined);
+      }
+      throw error;
+    }
+    await fs.promises.rm(backup, { recursive: true, force: true }).catch(() => undefined);
     if (!discovered) {
       throwIpcError('INTERNAL', 'marketplace discovery did not produce a result');
     }

@@ -76,6 +76,8 @@ function validSparsePaths(paths: readonly string[]): boolean {
     if (!trimmed || trimmed.length > 256) return false;
     if (trimmed.startsWith('/') || trimmed.startsWith('\\')) return false;
     if (/^[A-Za-z]:/.test(trimmed)) return false;
+    // 拒绝 Git 选项注入(--stdin 会让 sparse-checkout 读 stdin 直至超时)。
+    if (trimmed.startsWith('-')) return false;
     // 拒绝路径穿越；sparse-checkout 只允许仓库内相对目录。
     return !trimmed.split(/[/\\]/).includes('..');
   });

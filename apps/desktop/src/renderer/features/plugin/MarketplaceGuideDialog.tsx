@@ -5,6 +5,7 @@
  * marketplace.json 格式、来源与稀疏路径用法、私有仓库认证（系统 Git 配置）、
  * 安装规则。文案全部走 i18n；代码块内容（结构树 / JSON 示例）不翻译。
  */
+import type { CSSProperties, ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Copy, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -41,7 +42,7 @@ function GuideSection({
   children,
 }: {
   title: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <section className="mt-5 first:mt-0">
@@ -109,7 +110,7 @@ export function MarketplaceGuideDialog({ open, onOpenChange }: MarketplaceGuideD
             'data-[state=open]:animate-confirm-overlay-in',
             'data-[state=closed]:animate-confirm-overlay-out',
           )}
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
         />
         <Dialog.Content
           className={cn(
@@ -123,7 +124,7 @@ export function MarketplaceGuideDialog({ open, onOpenChange }: MarketplaceGuideD
             {
               WebkitAppRegion: 'no-drag',
               maxWidth: 'min(560px, 100vw - 32px)',
-            } as React.CSSProperties
+            } as CSSProperties
           }
         >
           <div className="flex shrink-0 items-start justify-between gap-3">

@@ -5,7 +5,7 @@
  * 刷新、移除操作。刷新与移除失败时在列表上方内联展示本地化引导 +
  * （git 类错误的）消毒后原始输出。
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useState, type CSSProperties } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { RefreshCw, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -116,7 +116,7 @@ export function MarketplaceSourcesDialog({
             'data-[state=open]:animate-confirm-overlay-in',
             'data-[state=closed]:animate-confirm-overlay-out',
           )}
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          style={{ WebkitAppRegion: 'no-drag' } as CSSProperties}
         />
         <Dialog.Content
           className={cn(
@@ -130,7 +130,7 @@ export function MarketplaceSourcesDialog({
             {
               WebkitAppRegion: 'no-drag',
               maxWidth: 'min(460px, 100vw - 32px)',
-            } as React.CSSProperties
+            } as CSSProperties
           }
         >
           <div className="flex shrink-0 items-start justify-between gap-3">

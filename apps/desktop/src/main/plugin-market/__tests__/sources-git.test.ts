@@ -79,7 +79,7 @@ describe('cloneMarketplace', () => {
     );
     expect(calls[0]?.args).toContain('--filter=blob:none');
     expect(calls[0]?.args).toContain('--no-checkout');
-    expect(calls[1]?.args).toEqual(['sparse-checkout', 'set', 'plugins/a', 'plugins/b']);
+    expect(calls[1]?.args).toEqual(['sparse-checkout', 'set', '--', 'plugins/a', 'plugins/b']);
     expect(calls[2]?.args).toEqual(['checkout', 'main']);
   });
 

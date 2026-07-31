@@ -205,24 +205,34 @@ export class PluginMarketService {
   async snapshot(): Promise<PluginMarketSnapshot> {
     // 自定义市场项完全来自本地数据，不依赖服务端与登录态；服务端不可用时
     // 仍然返回，unavailableReason 只表达服务端部分的不可用。
-    const customEntries = await this.discoverCustomEntriesSafe();
-    const customSourceNames = this.customSourceNamesSafe();
-    if (!getClientEndpoint('pluginApiBaseUrl')) {
-      return {
-        items: this.projectCustomItems(customEntries),
-        unavailableReason: customEntries.length > 0 ? null : 'not-configured',
-        customSourceNames,
-      };
-    }
+    //
+    // 自定义发现与服务端目录/账本必须在同一 owner 作用域内：先捕获 owner,
+    // store/cloneRoot 绑定到它,跨 await 后用 generation 校验会话未切换,
+    // 避免账号 A 的插件数据在切换窗口期被返回给账号 B 的 Renderer。
     let owner: ActiveAppSession;
     try {
       owner = captureMarketOwner();
     } catch {
+      // 无稳定会话(未登录/切换中):无法可靠确定自定义数据该按哪个账号
+      // 现查,返回空自定义项并标记原因,避免在切换窗口期把上一账号的
+      // 插件数据返回给当前 Renderer。
       return {
-        items: this.projectCustomItems(customEntries),
+        items: [],
         unavailableReason: isAppSessionBoundaryPending()
           ? 'session-switching'
-          : 'authentication-required',
+          : getClientEndpoint('pluginApiBaseUrl')
+            ? 'authentication-required'
+            : 'not-configured',
+        customSourceNames: [],
+      };
+    }
+    const customEntries = await this.discoverCustomEntriesSafe(owner);
+    const customSourceNames = this.customSourceNamesSafe(owner);
+    requireSameMarketOwner(owner);
+    if (!getClientEndpoint('pluginApiBaseUrl')) {
+      return {
+        items: this.projectCustomItems(customEntries),
+        unavailableReason: customEntries.length > 0 ? null : 'not-configured',
         customSourceNames,
       };
     }
@@ -554,21 +564,29 @@ export class PluginMarketService {
   }
 
   /** 已配置来源名（按添加顺序）；存储读取失败时降级为空数组。 */
-  private customSourceNamesSafe(): string[] {
+  private customSourceNamesSafe(owner?: ActiveAppSession): string[] {
     try {
-      return this.sourceStore.list().map((source) => source.name);
+      const store = owner
+        ? this.sourceStore.bind(ownerScopedUserDataPath('plugin-market', 'sources.v1.json'))
+        : this.sourceStore;
+      return store.list().map((source) => source.name);
     } catch {
       return [];
     }
   }
 
   /** 快照聚合用：发现全部自定义市场条目。任何失败都降级为空，不拖垮快照。 */
-  private async discoverCustomEntriesSafe(): Promise<CustomMarketEntry[]> {
+  private async discoverCustomEntriesSafe(
+    owner?: ActiveAppSession,
+  ): Promise<CustomMarketEntry[]> {
     try {
-      const discovered = await new MarketSourceManager({
-        store: this.sourceStore,
-        cloneRoot: ownerScopedUserDataPath('plugin-market', 'sources'),
-      }).discoverAll();
+      const manager = owner
+        ? this.sourceManagerForOwner(owner)
+        : new MarketSourceManager({
+            store: this.sourceStore,
+            cloneRoot: ownerScopedUserDataPath('plugin-market', 'sources'),
+          });
+      const discovered = await manager.discoverAll();
       const entries: CustomMarketEntry[] = [];
       for (const { config, result } of discovered) {
         if (!result.ok) {

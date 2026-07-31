@@ -160,7 +160,8 @@ export async function cloneMarketplace(
         ['clone', '--filter=blob:none', '--no-checkout', input.url, stagingPath],
         { timeoutMs },
       );
-      await executor(['sparse-checkout', 'set', ...input.sparsePaths], {
+      // -- 终止选项解析：即使上游漏放了以 - 开头的值,也只被当作路径。
+      await executor(['sparse-checkout', 'set', '--', ...input.sparsePaths], {
         cwd: stagingPath,
         timeoutMs,
       });

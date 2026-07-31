@@ -106,6 +106,15 @@ describe('parseMarketSource', () => {
     });
   });
 
+  it('rejects sparse paths that look like git options', () => {
+    for (const opt of ['--stdin', '--no-cone', '--cone', '-x']) {
+      expect(parse({ source: 'openai/plugins', sparsePaths: [opt] })).toEqual({
+        ok: false,
+        code: 'INVALID_SPARSE_PATH',
+      });
+    }
+  });
+
   it('rejects sparse paths escaping the repository', () => {
     expect(parse({ source: 'openai/plugins', sparsePaths: ['../outside'] })).toEqual({
       ok: false,

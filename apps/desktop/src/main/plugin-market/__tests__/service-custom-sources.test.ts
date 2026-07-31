@@ -268,6 +268,42 @@ describe('PluginMarketService 自定义市场聚合', () => {
   });
 });
 
+describe('PluginMarketService 自定义市场 snapshot 账户作用域', () => {
+  it('rejects the snapshot when the account switches during custom discovery', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+
+    // 以 user-1 捕获 owner、按 user-1 完成自定义发现;在随后的服务端目录
+    // await 间隙把会话漂移到 user-2,此后 requireSameMarketOwner 必须检测到并拒绝,
+    // 而不是把 user-1 的自定义插件聚合进 user-2 的快照。
+    h.api.listAll.mockImplementation(async () => {
+      runtime.session = { mode: 'cloud', dataOwnerId: 'user-2', generation: 2 };
+      return [];
+    });
+    await expect(h.service.snapshot()).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+    });
+    runtime.session = { mode: 'cloud', dataOwnerId: 'user-1', generation: 1 };
+  });
+
+  it('returns empty custom items instead of reading the previous account store when session is switching', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+
+    // 切换中:不得按调用时 owner 现查 store/目录,直接降级为空并标记原因。
+    runtime.boundaryPending = true;
+    const snap = await h.service.snapshot();
+    expect(snap.items).toEqual([]);
+    expect(snap.customSourceNames).toEqual([]);
+    expect(snap.unavailableReason).toBe('session-switching');
+    runtime.boundaryPending = false;
+  });
+});
+
 describe('PluginMarketService 自定义市场 detail/install', () => {
   it('returns the validated manifest for custom plugin detail', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
