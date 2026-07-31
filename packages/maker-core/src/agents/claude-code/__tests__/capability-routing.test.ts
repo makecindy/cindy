@@ -137,6 +137,12 @@ describe('buildClaudeRemoteToolGuards', () => {
           'This downstream source was not explicitly selected. Use Cindy capability xd-feishu.',
       },
     ]);
+    expect(
+      buildClaudeRemoteToolGuards(
+        policy,
+        new Set(['plugin_feishu-delegate_feishu-delegate']),
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -223,6 +229,32 @@ describe('buildClaudeLocalToolGuardHooks', () => {
           tool_use_id: 'tool-user-mcp',
         },
         'tool-user-mcp',
+        { signal: new AbortController().signal },
+      ),
+    ).resolves.toEqual({ continue: true });
+  });
+
+  it('does not intercept a user MCP whose id aliases the normalized plugin prefix', async () => {
+    const preToolUse = buildClaudeLocalToolGuardHooks(
+      policy,
+      () => '',
+      undefined,
+      () => new Set(['plugin_feishu-delegate_feishu-delegate']),
+    ).PreToolUse?.[0]?.hooks[0];
+    if (!preToolUse) throw new Error('expected local routing hook');
+    await expect(
+      preToolUse(
+        {
+          hook_event_name: 'PreToolUse',
+          session_id: 'session-user-mcp-normalized-collision',
+          transcript_path: '/tmp/transcript',
+          cwd: '/repo',
+          tool_name:
+            'mcp__plugin_feishu-delegate_feishu-delegate__read_messages',
+          tool_input: {},
+          tool_use_id: 'tool-user-mcp-normalized-collision',
+        },
+        'tool-user-mcp-normalized-collision',
         { signal: new AbortController().signal },
       ),
     ).resolves.toEqual({ continue: true });

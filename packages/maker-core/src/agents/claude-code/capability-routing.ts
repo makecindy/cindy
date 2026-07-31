@@ -13,6 +13,7 @@ import type {
 import {
   claudeMcpToolPrefix,
   findClaudeMcpCapabilityRoute,
+  hasClaudeMcpPrefixCollision,
   isHarnessOwnedCapabilitySource,
   isCapabilityRouteInvocationAllowed,
 } from '../../types/capability-routing.js';
@@ -72,6 +73,7 @@ export interface ClaudeRemoteToolGuard {
  */
 export function buildClaudeRemoteToolGuards(
   policy: CapabilityRoutingPolicy | undefined,
+  nonHarnessServerIds: ReadonlySet<string> = new Set(),
 ): ClaudeRemoteToolGuard[] {
   if (!policy) return [];
   return policy.overrides.flatMap((directive) => {
@@ -79,7 +81,11 @@ export function buildClaudeRemoteToolGuards(
       !isHarnessOwnedCapabilitySource(directive.source) ||
       directive.source.harness !== CLAUDE_CODE_HARNESS_ID ||
       directive.source.surface !== 'mcp' ||
-      directive.invocation === 'auto'
+      directive.invocation === 'auto' ||
+      hasClaudeMcpPrefixCollision(
+        directive.source.id,
+        nonHarnessServerIds,
+      )
     ) {
       return [];
     }
@@ -107,6 +113,7 @@ export function buildClaudeLocalToolGuardHooks(
   policy: CapabilityRoutingPolicy | undefined,
   getSelectionText: () => string,
   onDeny?: (toolName: string, route: CapabilityRouteOverride) => void,
+  getNonHarnessServerIds: () => ReadonlySet<string> = () => new Set(),
 ): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
   if (
     !policy?.overrides.some(
@@ -123,7 +130,11 @@ export function buildClaudeLocalToolGuardHooks(
   const guardTool: HookCallback = async (input) => {
     if (input.hook_event_name !== 'PreToolUse') return { continue: true };
     const pre = input as PreToolUseHookInput;
-    const route = findClaudeMcpCapabilityRoute(policy, pre.tool_name);
+    const route = findClaudeMcpCapabilityRoute(
+      policy,
+      pre.tool_name,
+      getNonHarnessServerIds(),
+    );
     if (
       !route ||
       isCapabilityRouteInvocationAllowed(route, getSelectionText())

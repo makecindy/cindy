@@ -161,16 +161,42 @@ export function isCapabilityRouteInvocationAllowed(
 export function findClaudeMcpCapabilityRoute(
   policy: CapabilityRoutingPolicy | undefined,
   toolName: string,
+  nonHarnessServerIds: ReadonlySet<string> = new Set(),
 ): CapabilityRouteOverride | undefined {
   return policy?.overrides.find(
     (directive) =>
       isHarnessOwnedCapabilitySource(directive.source) &&
       directive.source.harness === 'claude-code' &&
       directive.source.surface === 'mcp' &&
+      !hasClaudeMcpPrefixCollision(
+        directive.source.id,
+        nonHarnessServerIds,
+      ) &&
       toolName.startsWith(claudeMcpToolPrefix(directive.source.id)),
   );
 }
 
 export function claudeMcpToolPrefix(serverId: string): string {
   return `mcp__${serverId.replace(/[^a-zA-Z0-9_-]/g, '_')}__`;
+}
+
+/**
+ * Claude flattens punctuation in MCP server ids before exposing tool names.
+ * A harness plugin id such as `plugin:foo:bar` therefore aliases a perfectly
+ * valid user MCP id such as `plugin_foo_bar`. Once flattened, PreToolUse only
+ * receives the tool name and cannot recover which server produced it.
+ *
+ * Prefer the known non-harness registration in that ambiguous case. This may
+ * narrow a harness guard for the session, but it never silently disables a
+ * user/host MCP merely because its valid id collides after normalization.
+ */
+export function hasClaudeMcpPrefixCollision(
+  harnessServerId: string,
+  nonHarnessServerIds: ReadonlySet<string>,
+): boolean {
+  const harnessPrefix = claudeMcpToolPrefix(harnessServerId);
+  for (const serverId of nonHarnessServerIds) {
+    if (claudeMcpToolPrefix(serverId) === harnessPrefix) return true;
+  }
+  return false;
 }

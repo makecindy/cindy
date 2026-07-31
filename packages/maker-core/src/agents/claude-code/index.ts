@@ -1165,11 +1165,16 @@ export class ClaudeCodeAgent extends BaseAgent {
             replacement: route.replacement?.id,
           });
         },
+        () => registeredMcpServerNames,
       ),
       this.deps.claudeHooks,
     );
     const deniedCapabilityRoute = (toolName: string) => {
-      const route = findClaudeMcpCapabilityRoute(this.deps.capabilityRouting, toolName);
+      const route = findClaudeMcpCapabilityRoute(
+        this.deps.capabilityRouting,
+        toolName,
+        registeredMcpServerNames,
+      );
       return route &&
         !isCapabilityRouteInvocationAllowed(route, activeCapabilitySelectionText)
         ? route
@@ -2093,6 +2098,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         sdkInPlanMode = remotePermissionMode === 'plan';
         const remoteToolGuards = buildClaudeRemoteToolGuards(
           this.deps.capabilityRouting,
+          new Set(Object.keys(remoteMcpServers ?? {})),
         );
 
         const startParams: Record<string, unknown> = {
