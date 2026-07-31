@@ -53,6 +53,7 @@ describe('conversationSearch.pure', () => {
           createdAt: contentSession.updatedAt,
           snippet: null,
           preview: 'billing search details',
+          occurrenceCount: 1,
           score: 99,
           ftsRank: null,
           vectorRank: 1,
@@ -77,6 +78,7 @@ describe('conversationSearch.pure', () => {
           createdAt: newerContentSession.updatedAt,
           snippet: null,
           preview: 'billing search details',
+          occurrenceCount: 1,
           score: 99,
           ftsRank: null,
           vectorRank: 1,
@@ -102,6 +104,7 @@ describe('conversationSearch.pure', () => {
           createdAt: contentSession.updatedAt,
           snippet: null,
           preview: 'billing search details',
+          occurrenceCount: 1,
           score: 99,
           ftsRank: null,
           vectorRank: 1,
@@ -126,6 +129,7 @@ describe('conversationSearch.pure', () => {
           createdAt: target.updatedAt,
           snippet: 'search settings',
           preview: 'search settings preview',
+          occurrenceCount: 1,
           score: 1,
           ftsRank: 1,
           vectorRank: null,
@@ -153,6 +157,7 @@ describe('conversationSearch.pure', () => {
             createdAt: '2026-01-01T00:00:00.000Z',
             snippet: 'older search settings',
             preview: 'older search settings preview',
+            occurrenceCount: 1,
             score: 1,
             ftsRank: 2,
             vectorRank: null,
@@ -167,6 +172,7 @@ describe('conversationSearch.pure', () => {
             createdAt: '2026-01-02T00:00:00.000Z',
             snippet: 'newer search settings',
             preview: 'newer search settings preview',
+            occurrenceCount: 1,
             score: 9,
             ftsRank: 1,
             vectorRank: null,
@@ -263,6 +269,18 @@ describe('conversationSearch.pure', () => {
       snippet: null,
       keywordMatchedVisibleText: false,
     });
+  });
+
+  it('excludes Markdown link destinations from visible search text', () => {
+    const preview = normalizeConversationContentPreview(
+      'assistant',
+      '[visible label](https://example.com/hidden-token)',
+      'hidden-token',
+    );
+
+    expect(preview.keywordMatchedVisibleText).toBe(false);
+    expect(preview.occurrenceCount).toBe(0);
+    expect(preview.preview).toBe('visible label');
   });
 
   it('extracts visible AskUser and plan review text for conversation search', () => {

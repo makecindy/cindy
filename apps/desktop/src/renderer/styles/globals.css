@@ -1104,6 +1104,16 @@ body.resizing-pane [data-ghost-webview] {
   }
 }
 
+::highlight(cindy-session-search-match) {
+  background-color: hsl(var(--search-match-bg));
+  color: hsl(var(--search-match-fg));
+}
+
+::highlight(cindy-session-search-active) {
+  background-color: hsl(var(--search-match-active-bg));
+  color: hsl(var(--search-match-active-fg));
+}
+
 /* F-MSG-2: Code highlight theme imports — moved to top of file (CSS @import must precede all other statements) */
 
 :root {

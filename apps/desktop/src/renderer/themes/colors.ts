@@ -432,6 +432,14 @@ registerColor('search-match-fg', {
   light: '0 0% 15%',
   dark: '0 0% 90%',
 }, 'Near-black #262626 — text inherit');
+registerColor('search-match-active-bg', {
+  light: '45 100% 67%',
+  dark: '45 100% 38%',
+}, 'Stronger current-match highlight');
+registerColor('search-match-active-fg', {
+  light: '0 0% 10%',
+  dark: '0 0% 96%',
+}, 'Current-match text contrast');
 
 // UpdateBanner — Relaunch button (White Pill variant)
 registerColor('update-btn-border', {

@@ -1,3 +1,4 @@
+import { visibleMarkdownTextForSearch } from '../../shared/conversationSearch.js';
 import type {
   ConversationSearchContentHit,
   ConversationSearchResultItem,
@@ -234,6 +235,7 @@ export interface NormalizedConversationContentPreview {
   preview: string;
   snippet: string | null;
   keywordMatchedVisibleText: boolean;
+  occurrenceCount: number;
 }
 
 export function normalizeConversationContentPreview(
@@ -249,6 +251,7 @@ export function normalizeConversationContentPreview(
     preview: textPreview(visibleText, max),
     snippet,
     keywordMatchedVisibleText: ranges.length > 0,
+    occurrenceCount: ranges.length,
   };
 }
 
@@ -276,7 +279,7 @@ function userVisibleText(content: unknown): string {
 }
 
 function userVisibleTextRaw(content: unknown): string {
-  if (typeof content === 'string') return content;
+  if (typeof content === 'string') return visibleMarkdownTextForSearch(content);
   const blocksText = textBlocksText(content);
   if (blocksText) return blocksText;
   if (content && typeof content === 'object') {
@@ -288,7 +291,7 @@ function userVisibleTextRaw(content: unknown): string {
 }
 
 function assistantVisibleText(content: unknown): string {
-  if (typeof content === 'string') return content;
+  if (typeof content === 'string') return visibleMarkdownTextForSearch(content);
   const blocksText = textBlocksText(content);
   if (blocksText) return blocksText;
   if (
