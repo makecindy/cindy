@@ -80,6 +80,14 @@ export function computeGatewayTurnCost(
           totalInputTokens < candidate.maxInputTokens),
     )
     .sort((a, b) => b.minInputTokens - a.minInputTokens)[0];
+  // Provider reference bands describe the complete set of ranges for which the
+  // provider published a price. Falling back to the baseline outside every band
+  // would silently extend a bounded quote (for example <200k) to the model's
+  // whole context window. Gateway bands remain overlays because its legacy
+  // threshold fields intentionally omit the baseline range.
+  if (price.inputTokenPriceBands?.length && !band && price.source !== 'gateway') {
+    return null;
+  }
   const inputPrice = band?.inputPerMtok ?? price.inputPerMtok;
   const outputPrice = band?.outputPerMtok ?? price.outputPerMtok;
   const cacheReadPrice =

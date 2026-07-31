@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { ModelRegistry } from '@cindy/model-providers';
 
 import type { ModelAccessGatewayModel } from '../modelAccess.js';
-import { gatewayPricingCatalog, registryPricingCatalog } from '../modelPriceQuote.js';
+import {
+  gatewayPricingCatalog,
+  providerReferencePriceQuote,
+  registryPricingCatalog,
+} from '../modelPriceQuote.js';
 
 function model(
   id: string,
@@ -70,6 +74,52 @@ describe('gatewayPricingCatalog', () => {
 });
 
 describe('registryPricingCatalog', () => {
+  it('preserves the bounds of a single reference-price interval', () => {
+    const registry: ModelRegistry = {
+      schemaVersion: 1,
+      updatedAt: '2026-07-31T00:00:00.000Z',
+      models: [
+        {
+          id: 'xai/grok-code-fast',
+          name: 'Grok Code Fast',
+          routes: [
+            {
+              providerId: 'xai',
+              modelId: 'grok-code-fast',
+              agents: ['codex'],
+              referencePrices: [
+                {
+                  currency: 'USD',
+                  variant: 'standard',
+                  maxInputTokens: 200_000,
+                  inputPerMtok: 0.2,
+                  outputPerMtok: 1.5,
+                  effectiveFrom: '2026-01-01',
+                  source: {
+                    kind: 'provider-official',
+                    url: 'https://example.test/pricing',
+                    verifiedAt: '2026-07-31',
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(providerReferencePriceQuote('xai', 'grok-code-fast', registry)).toMatchObject({
+      inputTokenPriceBands: [
+        {
+          minInputTokens: 0,
+          maxInputTokens: 200_000,
+          inputPerMtok: 0.2,
+          outputPerMtok: 1.5,
+        },
+      ],
+    });
+  });
+
   it('never treats a public XD reference as the Cindy Gateway sale price', () => {
     const registry: ModelRegistry = {
       schemaVersion: 1,

@@ -235,7 +235,7 @@ export function providerReferencePriceQuote(
     ...(resolved.price.cacheWritePerMtok !== undefined
       ? { cacheCreatePerMtok: resolved.price.cacheWritePerMtok }
       : {}),
-    ...(inputTokenPriceBands && inputTokenPriceBands.length > 1
+    ...(inputTokenPriceBands && inputTokenPriceBands.length > 0
       ? { inputTokenPriceBands }
       : {}),
   });

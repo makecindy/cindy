@@ -181,6 +181,45 @@ describe('computeGatewayTurnCost', () => {
       ),
     ).toBeCloseTo(1.018);
   });
+
+  it('does not extend a bounded provider reference beyond its published interval', () => {
+    const boundedReference = quote('grok-code-fast', 0.2, 1.5, {
+      providerId: 'xai',
+      source: 'provider-reference',
+      approximate: true,
+      inputTokenPriceBands: [
+        {
+          minInputTokens: 0,
+          maxInputTokens: 200_000,
+          inputPerMtok: 0.2,
+          outputPerMtok: 1.5,
+        },
+      ],
+    });
+
+    expect(
+      computeGatewayTurnCost(
+        {
+          inputTokens: 199_999,
+          outputTokens: 1,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+        },
+        boundedReference,
+      ),
+    ).not.toBeNull();
+    expect(
+      computeGatewayTurnCost(
+        {
+          inputTokens: 200_000,
+          outputTokens: 1,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+        },
+        boundedReference,
+      ),
+    ).toBeNull();
+  });
 });
 
 describe('resolveTurnCost', () => {
