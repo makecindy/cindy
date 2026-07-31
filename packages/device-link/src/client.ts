@@ -547,6 +547,9 @@ export class DeviceLinkClient {
     if (peer) {
       peer.linkReady = false;
       peer.explicitlyClosed = true;
+      // 显式关闭只撤掉 streaming 可靠层。listing / topic 控制帧仍不依赖
+      // link-open，后续应回退到 legacy，而不是被统一挡成 LINK_NOT_OPEN。
+      peer.reliable = false;
       peer.remoteStreamId = null;
       peer.remoteBaseSeq = 1;
       peer.receive.clear();
@@ -1646,7 +1649,7 @@ export class DeviceLinkClient {
       return false;
     }
     const peer = this.getPeerTransport(env.dst);
-    if (peer.explicitlyClosed && !peer.linkReady) {
+    if (peer.explicitlyClosed && !peer.linkReady && !isUnlinkedLegacyEnvelope(env)) {
       throw new DeviceLinkError('LINK_NOT_OPEN', 'control link is closed');
     }
     if (!peer.reliable) {
@@ -2132,6 +2135,41 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isReliableKind(kind: Envelope['kind']): kind is 'invoke' | 'invoke-result' | 'push' {
   return kind === 'invoke' || kind === 'invoke-result' || kind === 'push';
+}
+
+/**
+ * 这些调用属于 listing/control tier，不需要 streaming link-open。
+ * 显式 closeLink() 只应撤掉可靠 streaming 层；列表刷新、能力探针、词典
+ * 快照和 topic 订阅仍要沿用旧 envelope 路径，兼容 link-open 之前的既有语义。
+ */
+const UNLINKED_LEGACY_INVOKE_CHANNELS = new Set([
+  'device-link:subscribe',
+  'device-link:unsubscribe',
+  'device-link:voice:dictionary:get',
+  'maker:provider:list',
+  'maker:get-capabilities',
+  'maker:get-new-maker-defaults',
+  'maker:list-active',
+  'maker:list-available-agents',
+  'maker:list-agent-commands',
+  'maker:list-agent-skills',
+  'local-db:sessions:list',
+  'local-db:sessions:get',
+  'local-db:history:messages',
+  'local-db:messages:list',
+  'local-db:messages:around',
+  'local-db:messages:around-client-id',
+  'local-db:messages:estimatedSessionValue',
+  'local-db:recent-workdirs:list',
+  'local-db:sessions:interrupted-pending',
+  'maker:git-safety:get',
+]);
+
+function isUnlinkedLegacyEnvelope(env: Envelope): boolean {
+  if (env.kind !== 'invoke') return false;
+  const payload = env.payload as Partial<InvokePayload> | undefined;
+  return typeof payload?.channel === 'string'
+    && UNLINKED_LEGACY_INVOKE_CHANNELS.has(payload.channel);
 }
 
 function isLegacyBusinessFrame(kind: Envelope['kind']): boolean {

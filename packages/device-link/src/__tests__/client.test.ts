@@ -707,6 +707,53 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('显式 close 后 listing invoke 回退 legacy，不要求重新打开 streaming link', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 1_000 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const open = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const sentOpen = h.current().sent.find((env) => env.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: sentOpen.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'remote-stream',
+      },
+    });
+    await open;
+    h.client.closeLink('dev-b', 'user');
+
+    const listing = h.client.invoke('dev-b', { channel: 'local-db:sessions:list', args: [] });
+    const sentListing = h.current().sent.at(-1)!;
+    expect(sentListing).toMatchObject({
+      kind: 'invoke',
+      dst: 'dev-b',
+      payload: { channel: 'local-db:sessions:list', args: [] },
+    });
+    expect(parseTransportPayload(sentListing.payload)).toBeNull();
+
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke-result',
+      id: sentListing.id,
+      src: 'dev-b',
+      payload: { ok: true, result: ['session-1'] },
+    });
+    await expect(listing).resolves.toMatchObject({ ok: true, result: ['session-1'] });
+    h.client.stop();
+  });
+
   it('对端进程重启后按握手给出的 transportBaseSeq 接续，不等待已确认旧 seq', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 1_000 } });
     h.client.start();
