@@ -52,8 +52,8 @@
   },
   "agentIsland": {
     "native": {
-      "newConversationTitle": "新しい会話",
-      "newConversationHint": "新しい会話を開始",
+      "newConversationTitle": "新しいセッション",
+      "newConversationHint": "新しいセッションを開始",
       "muteSound": "Agent Island の音をミュート",
       "enableSound": "Agent Island の音を有効化",
       "settings": "Agent Island 設定",
@@ -659,7 +659,7 @@
       },
       "qnaTitle": "そのまま質問する",
       "qnaDescription": "overview に載っていない内容でも、やりたいことを聞けば次に開く場所や進め方を案内します。",
-      "qnaPlaceholder": "例：Codex の会話をインポートするには？",
+      "qnaPlaceholder": "例：Codex のセッションをインポートするには？",
       "qnaSend": "送信",
       "qnaPending": "回答を準備しています…",
       "qnaNoAnswer": "まだ確実な回答がありません。表現を変えてもう一度聞いてみてください。",
@@ -678,7 +678,7 @@
       "openAssistant": "そのまま質問する",
       "panelTitle": "ヘルプアシスタント",
       "panelAriaLabel": "ヘルプアシスタントパネル",
-      "newSession": "新しい会話",
+      "newSession": "新しいセッション",
       "threadEmptyTitle": "気軽に質問してください",
       "threadEmptyHint": "よくある質問にすぐ回答します。追加で質問して修正もできます"
     },
@@ -1195,7 +1195,7 @@
     },
     "providers": {
       "title": "モデルプロバイダー",
-      "subtitle": "モデルを選ぶときのソースです。各ソースは対応するモデルと課金方式を提供し、会話ごとに切り替えられます。",
+      "subtitle": "モデルを選ぶときのソースです。各ソースは対応するモデルと課金方式を提供し、セッションごとに切り替えられます。",
       "pill": {
         "connected": "接続済み",
         "suspended": "無効"
@@ -1653,7 +1653,7 @@
       },
       "intro": "接続後、この WeChat 接続へのプライベートメッセージは、このコンピューターの Cindy に届きます。認証ページは Tencent が提供し、OpenClaw と表示される場合があります。",
       "errorNote": "接続を完了できませんでした。ネットワークを確認してもう一度スキャンしてください。失敗時に Cindy が認証情報を平文で保存することはありません。",
-      "disabledNote": "互換性ポリシーにより、このバージョンでは個人 WeChat 接続が一時停止されています。保存済みの会話と設定は削除されません。",
+      "disabledNote": "互換性ポリシーにより、このバージョンでは個人 WeChat 接続が一時停止されています。保存済みのセッションと設定は削除されません。",
       "permission": {
         "label": "権限モード",
         "hint": "/new 後の新しいコンテキストに適用されます。高リスク操作は引き続き Cindy Desktop での確認が必要です。",
@@ -1689,7 +1689,7 @@
           "connected": "WeChat のプライベートメッセージはこのコンピューターの Cindy に直接届き、Cindy サーバーを経由しません。",
           "reconnecting": "WeChat 接続を復旧しています。再スキャンは不要です。",
           "needs_reauth": "WeChat 認証が期限切れか、別の接続に置き換えられました。もう一度スキャンしてください。",
-          "disabled_by_policy": "互換性ポリシーにより接続は一時停止中です。認証情報と会話は保持されています。",
+          "disabled_by_policy": "互換性ポリシーにより接続は一時停止中です。認証情報とセッションは保持されています。",
           "error": "接続を一時的に利用できません。再スキャンするか、連携解除後にもう一度お試しください。"
         }
       },
@@ -1699,15 +1699,15 @@
         "unbind": "連携解除"
       },
       "workingDir": {
-        "title": "新しい会話の作業ディレクトリ",
-        "hint": "WeChat の初回会話と /new の後に使用します。変更しても現在のコンテキストは移動しません。",
+        "title": "新しいセッションの作業ディレクトリ",
+        "hint": "WeChat の初回セッションと /new の後に使用します。変更しても現在のコンテキストは移動しません。",
         "managed": "Cindy 管理の専用ディレクトリを使用",
         "reset": "デフォルトに戻す",
-        "unavailable": "選択したディレクトリにアクセスできません。新しい会話では一時的に Cindy 管理のディレクトリを使用します。"
+        "unavailable": "選択したディレクトリにアクセスできません。新しいセッションでは一時的に Cindy 管理のディレクトリを使用します。"
       },
       "unbind": {
         "title": "個人 WeChat の連携を解除しますか？",
-        "description": "連携を解除するとメッセージ送受信を停止し、ローカルの WeChat 認証情報と未完了タスクを削除します。既存の Cindy 会話、履歴、保存済み添付ファイルは残ります。",
+        "description": "連携を解除するとメッセージ送受信を停止し、ローカルの WeChat 認証情報と未完了タスクを削除します。既存の Cindy セッション、履歴、保存済み添付ファイルは残ります。",
         "confirm": "連携解除",
         "cancel": "キャンセル"
       },
@@ -1716,8 +1716,8 @@
         "cancelFailed": "WeChat 認証をキャンセルできませんでした",
         "unbound": "個人 WeChat の連携を解除しました",
         "unbindFailed": "連携解除に失敗しました。しばらくしてからもう一度お試しください。",
-        "workingDirSaved": "WeChat の新しい会話の作業ディレクトリを更新しました",
-        "workingDirReset": "WeChat の新しい会話はデフォルトディレクトリを使用します",
+        "workingDirSaved": "WeChat の新しいセッションの作業ディレクトリを更新しました",
+        "workingDirReset": "WeChat の新しいセッションはデフォルトディレクトリを使用します",
         "workingDirFailed": "作業ディレクトリを更新できませんでした。もう一度選択してください。"
       }
     },
@@ -1967,7 +1967,7 @@
     },
     "memory": {
       "title": "メモリ",
-      "description": "ワークスペース単位のメモリを実現します。設定を変更したら、新しい Session を開始してから反映されます。メモリに問題があれば Reset するか OFF にしてください。",
+      "description": "ワークスペース単位のメモリを実現します。設定を変更したら、新しい Agent セッションを開始してから反映されます。メモリに問題があれば Reset するか OFF にしてください。",
       "maker": {
         "label": "Cindy",
         "description": "メモリはモデルごとではなく Agent の入口ごとに管理されます。同じ作業ディレクトリでは、Claude Code と Codex の入口から開始した Session がメモリを共有します",
@@ -2005,7 +2005,7 @@
         "toast": {
           "enabled": "{{label}} メモリを有効化しました",
           "disabled": "{{label}} メモリを無効化しました",
-          "takesEffectSuffix": " — 新しいチャットで反映されます",
+          "takesEffectSuffix": " — 次回 Agent セッションから反映されます",
           "toggleFailed": "メモリ設定の更新に失敗しました",
           "resetSuccess_one": "{{label}} メモリをリセットしました — {{count}} 件削除",
           "resetSuccess_other": "{{label}} メモリをリセットしました — {{count}} 件削除",
@@ -2175,7 +2175,7 @@
         "title": "自動操作ブラウザ",
         "description": "エージェント専用の独立したブラウザ。普段の Chrome とは分離されています",
         "toggleAria": "ブラウザ自動操作を切り替える",
-        "toggleHint": "この切り替えは、以降に開始した Agent セッションにのみ反映されます。実行中の会話には影響しません。",
+        "toggleHint": "この切り替えは、以降に開始した Agent セッションにのみ反映されます。実行中のセッションには影響しません。",
         "noProjectHint": "プロジェクトのセッションから「設定」を開くと、そのプロジェクトのブラウザ自動操作を切り替えられます。",
         "detected": "{{browser}} を検出しました",
         "notDetected": "ローカルブラウザが見つかりません。Chrome をインストールするとブラウザ自動操作を利用できます。",
@@ -2210,7 +2210,7 @@
         "description": "エージェントが ADB 経由で接続済み Android デバイスを確認し、操作できます",
         "toggleAria": "Android 自動操作を切り替える",
         "refresh": "再確認",
-        "toggleHint": "このマシン全体の切り替えは、以降に開始した Agent セッションにのみ反映されます。実行中の会話には影響しません。",
+        "toggleHint": "このマシン全体の切り替えは、以降に開始した Agent セッションにのみ反映されます。実行中のセッションには影響しません。",
         "status": {
           "checking": "ADB の状態を確認しています…",
           "preparing": "ADB を準備しています…",
@@ -2347,7 +2347,7 @@
           "windowsHint": "Windows では追加のシステム権限は不要です。Agent が作業している間は、対象アプリを現在のアクティブなデスクトップ上で表示したままにしてください。",
           "linuxHint": "Linux では macOS の TCC 権限は使いません。現在のデスクトップセッションでウィンドウ取得と入力自動化が許可されていることを確認してください。"
         },
-        "toggleHint": "この切り替えは、以降に開始した Agent セッションにのみ反映されます。実行中の会話には影響しません。",
+        "toggleHint": "この切り替えは、以降に開始した Agent セッションにのみ反映されます。実行中のセッションには影響しません。",
         "noProjectHint": "プロジェクトのセッションから「設定」を開くと、そのプロジェクトのコンピュータ直接操作を切り替えられます。",
         "update": {
           "available": "新しいバージョン v{{version}} が利用可能です。更新後、システム権限の再許可が必要になる場合があります。",
@@ -2376,21 +2376,21 @@
     },
     "builtinTools": {
       "title": "組み込みツール",
-      "description": "新しい会話のデフォルトを設定するか、プロジェクトごとに上書きします。プロジェクト設定が優先されます。",
+      "description": "新しいセッションのデフォルトを設定するか、プロジェクトごとに上書きします。プロジェクト設定が優先されます。",
       "empty": "利用可能なツールはありません。",
       "toggleAria": "{{name}} ツールを切り替え",
       "toggleHint": "変更は新規または再起動した Agent セッションにのみ反映され、実行中のセッションには影響しません。",
       "loadFailed": "ツール一覧の読み込みに失敗しました",
       "scopePicker": {
         "ariaLabel": "組み込みツール設定の適用範囲を切り替え",
-        "userDefault": "新しい会話のデフォルト",
+        "userDefault": "新しいセッションのデフォルト",
         "userDefaultDescription": "プロジェクト上書きのない新規セッションに適用"
       },
       "source": {
         "project": "プロジェクト",
         "projectTooltip": "プロジェクト設定で上書きされています ({{dir}})",
         "user": "ユーザーデフォルト",
-        "userTooltip": "新しい会話のデフォルトを継承",
+        "userTooltip": "新しいセッションのデフォルトを継承",
         "product": "製品デフォルト",
         "productTooltip": "Cindy の製品デフォルトを継承"
       },
@@ -2758,8 +2758,8 @@
           "description": "設定ページを開きます"
         },
         "new-maker": {
-          "label": "新しいチャット",
-          "description": "新しいチャットを開始します"
+          "label": "新しいセッション",
+          "description": "新しいセッションを開始します"
         },
         "close-tab-or-window": {
           "label": "タブまたはウィンドウを閉じる",
@@ -4521,7 +4521,7 @@
         "search": "検索",
         "local": "ローカル",
         "projects": "プロジェクト",
-        "conversations": "会話"
+        "conversations": "セッション"
       }
     },
     "addRemoteProject": {
@@ -5042,7 +5042,7 @@
       "outputFile": "出力: {{path}}"
     },
     "forkOrigin": {
-      "label": "元の会話から作成"
+      "label": "元のセッションから作成"
     },
     "imageMissing": {
       "title": "画像が失われました"
@@ -5059,10 +5059,10 @@
       "copyLink": "現在の会話リンクをコピー",
       "copyLinkFailed": "リンクをコピーできませんでした",
       "rewind": "ここまで戻る",
-      "fork": "新しい会話で続ける",
-      "forkConfirmTitle": "ここから新しい会話を始めますか？",
-      "forkConfirmDescription": "この時点の会話コンテキストを使って、独立した新しい会話を作成します。元の会話は変更されず、以後のメッセージは互いに影響しません。",
-      "forkConfirm": "新しい会話を始める",
+      "fork": "新しいセッションで続ける",
+      "forkConfirmTitle": "ここから新しいセッションを始めますか？",
+      "forkConfirmDescription": "この時点の会話コンテキストを使って、独立した新しいセッションを作成します。元のセッションは変更されず、以後のメッセージは互いに影響しません。",
+      "forkConfirm": "新しいセッションを始める",
       "forkCancel": "キャンセル",
       "delete": "このメッセージを削除",
       "deleteConfirmTitle": "このメッセージを削除しますか？",
@@ -5084,8 +5084,9 @@
       "retry": "再試行",
       "continueAfterReset": "リセット後に続行",
       "continueAfterResetTitle": "利用上限のリセット後にこのタスクを続行する一回限りの自動化を作成",
-      "credentialSwitchBusy": "他の Codex タスクが実行中のため、この会話で選択したプロバイダーへまだ切り替えられません（共有 Codex プロセスの再起動が必要です）。他のタスクの終了後に「再試行」を押してください。",
-      "codexThreadStale": "Codex の認証モードが切り替わりました。この会話は続行できません。新しい会話を開始してください。",
+      "credentialSwitchBusy": "他の Codex タスクが実行中のため、このセッションで選択したプロバイダーへまだ切り替えられません（共有 Codex プロセスの再起動が必要です）。他のタスクの終了後に「再試行」を押してください。",
+      "codexThreadStale": "Codex の認証モードが切り替わりました。このセッションは続行できません。新しいセッションを開始してください。",
+>>>>>>> 6e0858e9 (feat(i18n): session 面向用户改称「任务」,并厘清任务/对话/消息的边界)
       "claudeGatewayOpusPlanMismatch": "この Opus リクエストは Claude.ai サブスクリプションではなく、XD Gateway 経由で送信され、このモデルが拒否されました。Claude.ai サブスクリプションに切り替えて再試行するか、別のモデルを選択してください。",
       "switchClaudeSubscription": "Claude.ai に切り替えて再試行",
       "switchClaudeSubscriptionTitle": "この会話を Claude.ai サブスクリプションに切り替えて再試行",
@@ -5093,7 +5094,7 @@
       "claudeSubscriptionSwitchFailed": "Claude.ai への切り替えまたはこの会話の再試行に失敗しました：{{msg}}",
       "budgetModelHint": "繰り返し失敗する場合は、通常版 GPT モデルに切り替えてお試しください。",
       "codexAuthMissing": "リモートの Codex がまだサインインしていません（401 Unauthorized）。「認証情報を同期」をクリックしてローカルの Codex 認証情報をリモートの Cindy Codex home にプッシュし、再試行してください。",
-      "codexAuthMissingLocal": "Codex 認証情報がないか期限切れです（401 Unauthorized）。{{appName}} Settings → Codex から再ログインする（ログイン時に app-server が自動再起動）か、ターミナルで `codex login` 実行後 Settings で認証モードを一度切り替えて app-server を再起動してから、新しい会話を開始してください。",
+      "codexAuthMissingLocal": "Codex 認証情報がないか期限切れです（401 Unauthorized）。{{appName}} Settings → Codex から再ログインする（ログイン時に app-server が自動再起動）か、ターミナルで `codex login` 実行後 Settings で認証モードを一度切り替えて app-server を再起動してから、新しいセッションを開始してください。",
       "codexSessionExpired": "OpenAI 接続の更新が必要です。ChatGPT に再接続すると続行できます。{{appName}} がシステムの Codex CLI からサインアウトしたり、他のモデルソースへの再接続を求めたりすることはありません。",
       "codexSessionExpiredDialog": {
         "title": "OpenAI 接続の更新が必要です",
@@ -5438,7 +5439,7 @@
         "detail": {
           "reason": "中断の理由",
           "attempt": "今回の再試行 {{attempt}}/{{total}}",
-          "sessionTotal": "この会話での再接続 {{count}} 回"
+          "sessionTotal": "このセッションでの再接続 {{count}} 回"
         }
       },
       "autoResumeSeparator": {
@@ -5519,7 +5520,7 @@
         "messageCount_other": "{{count}} 件のメッセージ",
         "truncated": "一部省略"
       },
-      "forkBusy": "現在の応答が終了してから、ここから新しい会話を始めてください",
+      "forkBusy": "現在の応答が終了してから、ここから新しいセッションを始めてください",
       "editStopTimeout": "タスクの停止待ちがタイムアウトしました。もう一度お試しください",
       "editQueueNotEmpty": "このセッションには送信待ちのメッセージがあります。先に送信または削除してから編集してください",
       "editNotLast": "セッションに新しいメッセージがあるため、これは最新ではなくなり編集して再送信できません",
@@ -5528,11 +5529,11 @@
       "editSend": "送信",
       "editRollbackHint": "送信すると前のターンで変更された {{count}} 個のファイルが元に戻ります",
       "forkErrors": {
-        "unsupportedHistory": "この位置に対応する過去のエージェントセッションを利用できないため、ここから新しい会話を始められません",
-        "noPriorAssistant": "AI の返信より後のメッセージから新しい会話を始めてください",
-        "sourceNeverRan": "元の会話がまだ実行されていないため、新しい会話を始められません",
-        "codexStateUnavailable": "Codex 会話の状態を利用できないため、新しい会話を始められません。{{detail}}",
-        "generic": "新しい会話を始められませんでした。再試行してください"
+        "unsupportedHistory": "この位置に対応する過去のエージェントセッションを利用できないため、ここから新しいセッションを始められません",
+        "noPriorAssistant": "AI の返信より後のメッセージから新しいセッションを始めてください",
+        "sourceNeverRan": "元のセッションがまだ実行されていないため、新しいセッションを始められません",
+        "codexStateUnavailable": "Codex セッションの状態を利用できないため、新しいセッションを始められません。{{detail}}",
+        "generic": "新しいセッションを始められませんでした。再試行してください"
       }
     },
     "threadContext": {
@@ -5833,11 +5834,11 @@
       },
       "showAllSessions": "すべて表示 {{count}} 件",
       "dialogues": "会話",
-      "newDialogue": "新規会話",
+      "newDialogue": "新規セッション",
       "dialoguesToggleExpand": "会話を展開",
       "dialoguesToggleCollapse": "会話を折りたたむ",
       "loadingDialogues": "読み込み中…",
-      "noDialogues": "会話はありません",
+      "noDialogues": "セッションはありません",
       "dialogueSettings": "会話を整理",
       "dialogueSettingsAria": "会話を整理（並び替え：{{sortBy}}）",
       "dialogueSortHeading": "並び替え",
@@ -5851,8 +5852,8 @@
       "createProjectFailed": "プロジェクトの作成に失敗しました",
       "projectsSectionToggleExpand": "プロジェクトを展開",
       "projectsSectionToggleCollapse": "プロジェクトを折りたたむ",
-      "projectsToggleExpand": "すべてのプロジェクト会話を展開",
-      "projectsToggleCollapse": "すべてのプロジェクト会話を折りたたむ",
+      "projectsToggleExpand": "すべてのプロジェクトセッションを展開",
+      "projectsToggleCollapse": "すべてのプロジェクトセッションを折りたたむ",
       "filterAria": "サイドバー整理（ステータス：{{status}}、Agent：{{vendor}}、最終アクティビティ：{{lastActivity}}、グループ：{{groupBy}}、並び替え：{{sortBy}}、プロジェクト：{{projects}}）",
       "organizeSidebar": "サイドバー整理",
       "filterAllText": "すべて",
@@ -6037,7 +6038,7 @@
         "moveToProjectRemoteUnsupported": "リモートセッションの移動はまだサポートされていません",
         "openInNewWindow": "新しいウィンドウで開く",
         "exportShare": "セッションをエクスポート…",
-        "copySessionLink": "チャットリンクをコピー"
+        "copySessionLink": "セッションリンクをコピー"
       },
       "projectAction": {
         "rename": "プロジェクト名を変更",
@@ -6067,7 +6068,7 @@
         "projects": "プロジェクト",
         "dialogues": "チャット"
       },
-      "railNavCount": "{{count}} 件の会話"
+      "railNavCount": "{{count}} 件のセッション"
     },
     "rename": {
       "aiRename": "AIで名前を再生成",
@@ -6272,11 +6273,11 @@
       "open": "検索",
       "placeholder": "タイトルまたは内容を検索…",
       "clear": "検索をクリア",
-      "empty": "キーワードを入力して会話のタイトルと内容を検索",
+      "empty": "キーワードを入力してセッションのタイトルと内容を検索",
       "searching": "検索中…",
       "failed": "検索に失敗しました",
-      "noResults": "一致する会話がありません",
-      "jumpFailed": "会話を開きましたが、一致したメッセージへ移動できませんでした",
+      "noResults": "一致するセッションがありません",
+      "jumpFailed": "セッションを開きましたが、一致したメッセージへ移動できませんでした",
       "moreHits": "ほか {{count}} 件の関連",
       "kind": {
         "title": "タイトル",
@@ -6722,28 +6723,28 @@
     "deleteDialog": {
       "title": "自動化「{{name}}」を削除しますか？",
       "titleFallback": "自動化を削除しますか？",
-      "description": "今後のトリガーは停止されます。この自動化がすでに生成した会話の扱いを選択してください。",
-      "sessionCountPending": "生成済みの会話を確認しています…",
-      "sessionCount": "生成済みの会話 {{count}} 件",
+      "description": "今後のトリガーは停止されます。この自動化がすでに生成したセッションの扱いを選択してください。",
+      "sessionCountPending": "生成済みのセッションを確認しています…",
+      "sessionCount": "生成済みのセッション {{count}} 件",
       "inflightCount": "現在 {{count}} 件の実行中タスクがあり、削除すると停止されます",
-      "optionAria": "生成済み会話の扱いを選択",
+      "optionAria": "生成済みセッションの扱いを選択",
       "option": {
         "keep": {
-          "title": "会話を保持",
-          "description": "自動化タスクのみ削除し、会話はサイドバーに残します。"
+          "title": "セッションを保持",
+          "description": "自動化タスクのみ削除し、セッションはサイドバーに残します。"
         },
         "archive": {
-          "title": "会話をアーカイブ",
-          "description": "自動化タスクを削除し、生成された会話をアーカイブへ移動します。"
+          "title": "セッションをアーカイブ",
+          "description": "自動化タスクを削除し、生成されたセッションをアーカイブへ移動します。"
         },
         "delete": {
-          "title": "会話を削除",
-          "description": "自動化タスクと生成された会話を削除します。この操作は元に戻せません。"
+          "title": "セッションを削除",
+          "description": "自動化タスクと生成されたセッションを削除します。この操作は元に戻せません。"
         }
       },
       "confirm": "自動化を削除",
-      "confirmDeleteSessions": "自動化と会話を削除",
-      "sessionUpdatePartial": "自動化は削除されましたが、{{fail}} 件の会話を処理できませんでした"
+      "confirmDeleteSessions": "自動化とセッションを削除",
+      "sessionUpdatePartial": "自動化は削除されましたが、{{fail}} 件のセッションを処理できませんでした"
     },
     "confirm": {
       "delete": {
@@ -6843,7 +6844,7 @@
       "refresh": "更新",
       "emptyTitle": "送信した Issue はまだありません",
       "emptyTitleUnverified": "現在 Issue を取得できません",
-      "startIssueChat": "/issue で新しいチャットを開始",
+      "startIssueChat": "/issue で新しいセッションを開始",
       "statusUnknown": "ステータス不明",
       "sourceCindy": "Cindy から送信",
       "sourceGithub": "GitHub アカウント",
@@ -7079,9 +7080,9 @@
   },
   "renameSessions": {
     "confirm": {
-      "title": "会話タイトルの一括変更を確認",
-      "description": "実際に書き込まれるタイトルを確認してください。承認すると {{count}} 件の会話タイトルを更新します。",
-      "count": "{{count}} 件の会話",
+      "title": "セッションタイトルの一括変更を確認",
+      "description": "実際に書き込まれるタイトルを確認してください。承認すると {{count}} 件のセッションタイトルを更新します。",
+      "count": "{{count}} 件のセッション",
       "from": "変更前:",
       "to": "変更後:",
       "untitled": "無題",
@@ -7692,7 +7693,7 @@
       "migrationPartial": "移行完了：成功 {{success}} / スキップ {{skipped}} / 失敗 {{failed}}（合計 {{total}}）",
       "migrationFailed": "移行に失敗しました。後でもう一度お試しください",
       "fetchUpdateNoticeFailed": "更新通知の取得に失敗しました",
-      "corruptionRestored": "{{time}} のスナップショットからデータベースを復元しました。期間中のチャットが失われた可能性があります",
+      "corruptionRestored": "{{time}} のスナップショットからデータベースを復元しました。期間中の対話履歴が失われた可能性があります",
       "schemaDriftWarning": "ローカルデータベースのバージョン記録に不整合があります。最新版に更新し、更新後もこの警告が繰り返し表示される場合はサポートに連絡してください。アプリがローカルデータを自動的に削除することはありません。",
       "telegramBotConnected": "Telegram ボット設定を保存しました",
       "telegramBotConnectFailed": "Telegram ボットの接続に失敗しました。Token とネットワークを確認してください",
@@ -7910,7 +7911,7 @@
     },
     "toast": {
       "usage": "使い方:/goal <目標の条件>",
-      "noSession": "目標を設定するには、先に会話を開くか開始してください",
+      "noSession": "目標を設定するには、先にセッションを開くか開始してください",
       "failed": "目標の設定に失敗しました",
       "set": "目標を設定しました。自動で進めます",
       "cleared": "目標をクリアしました"
@@ -7933,7 +7934,7 @@
       "failed": "学習に失敗しました",
       "cancel": "キャンセル",
       "review": "提案を確認",
-      "fromConversation": "現在の会話から蒸留",
+      "fromConversation": "現在のセッションから蒸留",
       "openSession": "学習セッションを開く",
       "continueHint": "このセッションで会話を続ければ提案を修正できます。満足したら「提案を確認」から適用してください"
     },

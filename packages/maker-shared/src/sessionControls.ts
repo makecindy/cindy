@@ -27,7 +27,7 @@ export function summarizeSessionSpend(session: Pick<
   available: boolean;
 } {
   if (!session) {
-    return { title: 'Session spend', detail: '暂无会话用量', available: false };
+    return { title: 'Session spend', detail: '暂无任务用量', available: false };
   }
 
   const totalCostUsd = readNumber(session.totalCostUsd);
@@ -37,7 +37,7 @@ export function summarizeSessionSpend(session: Pick<
   const parts: string[] = [];
 
   if (totalCostUsd !== null && totalCostUsd > 0) {
-    parts.push(`本会话 ${formatUsd(totalCostUsd)}`);
+    parts.push(`本任务 ${formatUsd(totalCostUsd)}`);
   }
   if (totalTokenUsage !== null && totalTokenUsage > 0) {
     parts.push(`${formatCompactNumber(totalTokenUsage)} tokens`);
@@ -52,7 +52,7 @@ export function summarizeSessionSpend(session: Pick<
   }
 
   if (parts.length === 0) {
-    return { title: 'Session spend', detail: '暂无会话用量', available: false };
+    return { title: 'Session spend', detail: '暂无任务用量', available: false };
   }
   return { title: 'Session spend', detail: parts.join(' · '), available: true };
 }

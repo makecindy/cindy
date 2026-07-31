@@ -165,13 +165,13 @@ describe('sessionControls', () => {
       contextWindow: 200000,
     }))).toEqual({
       title: 'Session spend',
-      detail: '本会话 $0.03 · 12.5k tokens · 上下文 6k / 200k · 3%',
+      detail: '本任务 $0.03 · 12.5k tokens · 上下文 6k / 200k · 3%',
       available: true,
     });
 
     expect(summarizeSessionSpend(session())).toEqual({
       title: 'Session spend',
-      detail: '暂无会话用量',
+      detail: '暂无任务用量',
       available: false,
     });
   });

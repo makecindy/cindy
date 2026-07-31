@@ -2379,7 +2379,7 @@ describe('setDeviceSessions 对在途乐观创建行(pendingLocalCreation)的保
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s-old')]);
     remoteSessionStore.upsertDeviceSession('dev-1', 'Mac', session('s-new', { pendingLocalCreation: true }));
 
-    // 首页 in-flight 的 sessions:list 响应此刻返回(发出时被控端还没建这个会话)。
+    // 首页 in-flight 的 sessions:list 响应此刻返回(发出时被控端还没建这个任务)。
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s-old')]);
     const rows = remoteSessionStore.getSessions();
     expect(rows.map((s) => s.id)).toContain('s-new');

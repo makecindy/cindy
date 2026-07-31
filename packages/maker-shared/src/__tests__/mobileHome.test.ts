@@ -430,7 +430,7 @@ describe('mobileHome', () => {
         deviceLinkDeviceId: 'mac-a',
         workspaceKind: 'dialogue',
         workingDir: null,
-        title: '另一个会话',
+        title: '另一个任务',
         preview: '部署文档已更新',
       }),
     ];

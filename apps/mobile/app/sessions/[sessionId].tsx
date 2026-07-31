@@ -7155,11 +7155,11 @@ export default function SessionScreen() {
   const forkAtMessage = useCallback((clientId: string, draft?: MobileMessageDraft) => {
     if (!deviceId || messageActionBusy) return;
     Alert.alert(
-      '从这里开启一个新对话？',
-      '系统会根据这里的对话上下文创建一个独立的新对话。原对话不会改变，之后两边的消息互不影响。',
+      '从这里开启一个新任务？',
+      '系统会根据这里的对话上下文创建一个独立的新任务。原任务不会改变，之后两边的消息互不影响。',
       [
         { text: '取消', style: 'cancel' },
-        { text: '开启新对话', onPress: () => void performForkAtMessage(clientId, draft) },
+        { text: '开启新任务', onPress: () => void performForkAtMessage(clientId, draft) },
       ],
     );
   }, [deviceId, messageActionBusy, performForkAtMessage]);

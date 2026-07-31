@@ -138,7 +138,7 @@ describe('commitChatImageUrls(发送时挂引用)', () => {
     expect(again).toEqual({ committed: 0, skipped: 1, failed: 0 });
     expect(db.select().from(schema.mediaRefs).all()).toHaveLength(1);
 
-    // 同图发到另一个会话 → 各挂各的引用
+    // 同图发到另一个任务 → 各挂各的引用
     const other = await chatAttachments.commitChatImageUrls(
       { sessionId: 'sess-2', urls: [PNG_URL] },
       db,

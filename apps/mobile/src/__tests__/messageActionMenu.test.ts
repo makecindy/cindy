@@ -12,11 +12,11 @@ describe('mobile message action menu', () => {
       canFork: true,
       canRewind: true,
     })).toEqual([
-      { id: 'fork', label: '在新对话中继续' },
+      { id: 'fork', label: '开启一个新任务' },
       { id: 'add-to-chat', label: '添加到对话' },
-      { id: 'copy-link', label: '复制当前对话链接' },
+      { id: 'copy-link', label: '复制当前消息链接' },
       { id: 'rewind', label: '回到此处' },
-      { id: 'delete', label: '删除本条对话', destructive: true, separatorBefore: true },
+      { id: 'delete', label: '删除本条消息', destructive: true, separatorBefore: true },
     ]);
   });
 

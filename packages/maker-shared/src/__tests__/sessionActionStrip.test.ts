@@ -97,7 +97,7 @@ describe('shared session action strip model', () => {
     expect(overview.runtimeSubtitle).toBe('协作 Worker · Worktree app-worker · Codex · claude-sonnet-4-6 · plan · Fast');
     expect(overview.actions.find((action) => action.id === 'files')).toMatchObject({
       disabled: true,
-      disabledReason: 'Dialogue 会话没有远程工作目录，不能浏览文件。',
+      disabledReason: '不绑项目的任务没有远程工作目录，不能浏览文件。',
     });
     expect(overview.actions.find((action) => action.id === 'search')).toMatchObject({
       disabled: true,

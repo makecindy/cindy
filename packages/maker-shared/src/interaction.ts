@@ -182,7 +182,7 @@ export function buildPermissionDecisionSummary(input: {
   }
   if (input.canAlwaysAllow) {
     return {
-      title: '可以只允许一次，也可以本会话总是允许',
+      title: '可以只允许一次，也可以本任务总是允许',
       detail: `工具: ${input.toolName}`,
     };
   }
@@ -368,7 +368,7 @@ export function interactionDisplayTitle(kind: string): string {
 export function interactionDisplayHint(kind: string, readOnly = false): string {
   if (readOnly) return '协作只读模式，仅展示电脑端请求。';
   if (kind === 'plan_review') return '先看计划，必要时反馈修改，确认后电脑端才继续执行。';
-  if (kind === 'permission') return '只把本次决定回传给当前电脑端会话。';
+  if (kind === 'permission') return '只把本次决定回传给当前电脑端任务。';
   if (kind === 'ask_user_question') return '回答会保存草稿,提交后电脑端继续。';
   if (kind === 'issue_confirm') return '确认标题和正文后再提交。';
   if (kind === 'plugin_setup') return '配置要在电脑端完成，这里可以取消这次请求。';
@@ -804,7 +804,7 @@ export function permissionRiskSummary(request: InteractionRequestLike): string |
   const command = typeof input.command === 'string' ? input.command.trim() : '';
   if (!command) return null;
   if (!isHighRiskShellCommand(command)) return null;
-  return '这个命令可能修改系统、仓库或外部服务状态。允许前请确认你信任当前会话和命令内容。';
+  return '这个命令可能修改系统、仓库或外部服务状态。允许前请确认你信任当前任务和命令内容。';
 }
 
 export function sessionScopedPermissionSuggestions(suggestions: unknown): unknown[] {

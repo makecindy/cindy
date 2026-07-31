@@ -9,38 +9,38 @@
   },
   "list": {
     "thisComputer": "这台设备",
-    "allConversations": "所有对话",
+    "allConversations": "所有任务",
     "syncFailed": "同步失败",
     "requestFailed": "请求失败",
     "loading": "正在读取可控制设备",
-    "untitled": "未命名对话",
+    "untitled": "未命名任务",
     "connection": {
       "connecting": "连接中",
       "disconnected": "连接断开"
     },
     "error": {
-      "sessionDeviceNotFound": "找不到这个对话所属设备，请重新同步后再试。",
+      "sessionDeviceNotFound": "找不到这个任务所属设备，请重新同步后再试。",
       "taskDeviceNotFound": "找不到这个任务所属设备，请重新同步后再试。",
       "noDevice": "没有可用设备。请先打开桌面端远程控制，然后重新同步。"
     },
     "alert": {
       "actionFailed": "操作失败",
       "renameFailed": "重命名失败",
-      "deleteTitle": "删除对话？",
+      "deleteTitle": "删除任务？",
       "deleteMessage": "将删除「{{title}}」，删除后不可恢复。"
     },
     "a11y": {
-      "selectScope": "选择对话范围",
+      "selectScope": "选择任务范围",
       "openSettings": "打开设置",
       "syncing": "正在重新同步",
       "sync": "重新同步",
-      "pinnedConversations": "置顶 {{count}} 条对话",
-      "newRemoteConversation": "新建远程对话",
+      "pinnedConversations": "置顶 {{count}} 条任务",
+      "newRemoteConversation": "新建远程任务",
       "renameDevice": "重命名 {{label}}",
       "project": "项目 {{title}}",
-      "openAutomationLatest": "打开自动化任务 {{title}} 的最新对话",
-      "automationTask": "自动化任务 {{title}}",
-      "openConversation": "打开对话 {{title}}",
+      "openAutomationLatest": "打开自动化 {{title}} 的最新任务",
+      "automationTask": "自动化 {{title}}",
+      "openConversation": "打开任务 {{title}}",
       "collapse": "收起 {{title}}",
       "expand": "展开 {{title}}",
       "taskError": "任务出错",
@@ -60,17 +60,17 @@
       "saveA11y": "保存设备名"
     },
     "renameSession": {
-      "title": "重命名对话",
-      "placeholder": "对话标题",
-      "savingA11y": "正在保存对话标题",
-      "saveA11y": "保存对话标题"
+      "title": "重命名任务",
+      "placeholder": "任务标题",
+      "savingA11y": "正在保存任务标题",
+      "saveA11y": "保存任务标题"
     },
     "revoked": {
       "title": "已撤销访问权限",
       "body": "「{{deviceName}}」撤销了本机的远程访问权限。请在该电脑的 {{appName}} 设置里重新授权本设备，然后点「重试访问」。",
       "retry": "重试访问"
     },
-    "viewAllConversations": "查看全部 {{count}} 条对话",
+    "viewAllConversations": "查看全部 {{count}} 条任务",
     "viewAllRuns": "查看全部 {{count}} 次运行",
     "preview": {
       "needAttention": "{{count}} 个需关注",
@@ -86,7 +86,7 @@
       "automation": "自动化",
       "archived": "归档",
       "all": "全部",
-      "a11y": "筛选{{label}}对话"
+      "a11y": "筛选{{label}}任务"
     },
     "group": {
       "project": "项目",
@@ -98,15 +98,15 @@
       "active": "活跃",
       "waiting": "待处理",
       "automation": "自动化",
-      "activeA11y": "筛选活跃对话",
-      "waitingA11y": "筛选待处理对话",
-      "automationA11y": "筛选自动化对话"
+      "activeA11y": "筛选活跃任务",
+      "waitingA11y": "筛选待处理任务",
+      "automationA11y": "筛选自动化生成的任务"
     },
     "plan": "计划",
     "automationsButtonA11y": "打开远程自动化",
     "search": {
-      "openA11y": "搜索远程对话",
-      "closeA11y": "关闭搜索远程对话",
+      "openA11y": "搜索远程任务",
+      "closeA11y": "关闭搜索远程任务",
       "label": "搜索",
       "placeholder": "搜索标题、项目、模型、消息",
       "clearA11y": "清除搜索",
@@ -115,15 +115,15 @@
       "close": "关闭"
     },
     "filters": {
-      "collapseA11y": "收起对话筛选",
-      "expandA11y": "展开对话筛选",
+      "collapseA11y": "收起任务筛选",
+      "expandA11y": "展开任务筛选",
       "label": "筛选"
     },
     "selection": {
-      "count": "已选择 {{count}} 个对话",
+      "count": "已选择 {{count}} 个任务",
       "canAct": "可执行操作",
       "cannotAct": "没有可执行操作",
-      "clearA11y": "取消选择对话"
+      "clearA11y": "取消选择任务"
     },
     "bulk": {
       "pinning": "置顶中",
@@ -131,38 +131,38 @@
       "archiving": "归档中",
       "restoring": "恢复中",
       "deleting": "删除中",
-      "pinA11y": "批量置顶选中对话",
-      "unpinA11y": "批量取消置顶选中对话",
-      "archiveA11y": "批量归档选中对话",
-      "restoreA11y": "批量恢复选中对话",
-      "deleteA11y": "批量删除选中对话",
+      "pinA11y": "批量置顶选中任务",
+      "unpinA11y": "批量取消置顶选中任务",
+      "archiveA11y": "批量归档选中任务",
+      "restoreA11y": "批量恢复选中任务",
+      "deleteA11y": "批量删除选中任务",
       "cancelA11y": "取消批量操作",
       "partialFailure": "已处理 {{done}} 个，{{failed}} 个失败（已还原，可重试）。",
-      "noArchivable": "当前选择里没有可归档的活跃对话。",
-      "noPinnable": "当前选择里没有可置顶的活跃对话。",
-      "noRestorable": "当前选择里没有可恢复的归档对话。",
-      "noUnpinnable": "当前选择里没有已置顶的对话。",
-      "noDeletable": "当前选择里没有可删除的对话。",
-      "noneModifiable": "当前选择的对话都不能修改。"
+      "noArchivable": "当前选择里没有可归档的活跃任务。",
+      "noPinnable": "当前选择里没有可置顶的活跃任务。",
+      "noRestorable": "当前选择里没有可恢复的归档任务。",
+      "noUnpinnable": "当前选择里没有已置顶的任务。",
+      "noDeletable": "当前选择里没有可删除的任务。",
+      "noneModifiable": "当前选择的任务都不能修改。"
     },
     "automationScope": {
-      "eyebrow": "自动化任务",
-      "title": "自动化任务",
-      "emptyCopy": "任务运行后，每次运行的对话都会出现在这里。",
-      "emptyTitle": "这个任务还没有运行记录"
+      "eyebrow": "自动化",
+      "title": "自动化",
+      "emptyCopy": "自动化运行后，每次运行的任务都会出现在这里。",
+      "emptyTitle": "这个自动化还没有运行记录"
     },
     "projectScope": {
       "eyebrow": "项目",
-      "emptyCopy": "在这个项目里开始一个新对话。",
-      "emptyTitle": "这个项目还没有对话"
+      "emptyCopy": "在这个项目里开始一个新任务。",
+      "emptyTitle": "这个项目还没有任务"
     },
     "subtitle": {
-      "deviceActive": "{{deviceName}} · {{count}} 个活跃对话",
-      "activeAndProjects": "{{count}} 个活跃对话 · {{projects}} 个项目"
+      "deviceActive": "{{deviceName}} · {{count}} 个活跃任务",
+      "activeAndProjects": "{{count}} 个活跃任务 · {{projects}} 个项目"
     },
     "row": {
-      "a11yAutomationGroup": "自动化对话组 {{title}}",
-      "a11ySession": "对话 {{title}}",
+      "a11yAutomationGroup": "自动化组 {{title}}",
+      "a11ySession": "任务 {{title}}",
       "a11yCollapse": "收起 {{title}}",
       "a11yExpand": "展开 {{title}}",
       "collapse": "收起",
@@ -171,33 +171,33 @@
     "badge": {
       "waiting": "待处理 {{count}}",
       "automationPrefix": "自动化",
-      "sessionCount": "{{count}} 个对话",
+      "sessionCount": "{{count}} 个任务",
       "aggregate": "聚合",
       "running": "运行中",
       "unread": "未读 {{count}}"
     },
     "child": {
-      "openA11y": "打开自动化对话 {{title}}"
+      "openA11y": "打开自动化生成的任务 {{title}}"
     },
     "viewAllRuns": "查看全部 {{count}} 次运行"
   },
   "automations": {
     "error": {
       "projectMissingConfig": "项目自动化缺少 projectConfigId，请在桌面端删除",
-      "deletePartial": "自动化已删除，但 {{count}} 个生成对话未能更新状态。请在桌面端检查这些对话。"
+      "deletePartial": "自动化已删除，但 {{count}} 个生成任务未能更新状态。请在桌面端检查这些任务。"
     },
-    "subtitle": "{{active}} 个运行中 · {{total}} 个任务",
+    "subtitle": "{{active}} 个运行中 · {{total}} 个自动化",
     "metric": {
       "running": "运行中",
       "unreadResults": "未读结果",
       "executing": "执行中"
     },
     "summary": {
-      "paused": "{{count}} 个任务已暂停。选择任务后可以运行、暂停、编辑或打开最近对话。",
-      "default": "选择任务后可以运行、暂停、编辑或打开最近对话。"
+      "paused": "{{count}} 个自动化已暂停。选择后可以运行、暂停、编辑或打开最近任务。",
+      "default": "选择自动化后可以运行、暂停、编辑或打开最近任务。"
     },
     "empty": {
-      "copy": "可以直接从手机创建第一条自动化任务，或在桌面端创建后同步到这里。",
+      "copy": "可以直接从手机创建第一条自动化，或在桌面端创建后同步到这里。",
       "title": "这台设备暂无自动化"
     },
     "createAutomation": "新建自动化",
@@ -212,16 +212,16 @@
         "edit": "编辑自动化"
       },
       "sessionMode": {
-        "bound": "绑定已有对话后，目录、worktree、Agent 和 Fast 模式跟随该对话。",
-        "persistent": "首次触发会创建持续对话，后续触发继续接在同一对话里。",
-        "fresh": "每次触发都会创建新的对话。"
+        "bound": "绑定已有任务后，目录、worktree、Agent 和 Fast 模式跟随该任务。",
+        "persistent": "首次触发会创建持续任务，后续触发继续接在同一任务里。",
+        "fresh": "每次触发都会创建新的任务。"
       },
       "field": {
         "name": "名称",
         "prompt": "提示词",
         "trigger": "触发方式",
-        "runSession": "运行对话",
-        "boundSession": "绑定对话",
+        "runSession": "运行任务",
+        "boundSession": "绑定任务",
         "intervalMinutes": "间隔分钟",
         "workspace": "工作区",
         "projectDir": "项目目录",
@@ -230,25 +230,25 @@
         "timezone": "时区"
       },
       "namePlaceholder": "例如：每日项目巡检",
-      "scriptHint": "这是一个仅运行脚本任务，脚本配置只能在桌面端编辑；此处可以改动名称、触发方式、通知等其它字段。",
+      "scriptHint": "这是一个仅运行脚本的自动化，脚本配置只能在桌面端编辑；此处可以改动名称、触发方式、通知等其它字段。",
       "promptPlaceholder": "写清楚每次自动执行要让 {{appName}} 做什么",
       "trigger": {
         "recurring": "周期",
         "manual": "手动"
       },
       "session": {
-        "fresh": "新对话",
+        "fresh": "新任务",
         "persistent": "持续",
         "bound": "绑定"
       },
-      "boundSessionA11y": "绑定对话 {{name}}",
+      "boundSessionA11y": "绑定任务 {{name}}",
       "intervalPlaceholder": "留空则使用 cron",
       "workspace": {
         "project": "项目",
         "dialogue": "对话"
       },
       "useWorktree": "使用 worktree",
-      "modelPlaceholderBound": "跟随对话",
+      "modelPlaceholderBound": "跟随任务",
       "fastMode": "Fast 模式",
       "notifyDesktop": "桌面通知",
       "notifyFeishu": "飞书通知",
@@ -257,19 +257,19 @@
       "cancelA11y": "取消编辑自动化"
     },
     "delete": {
-      "counting": "正在统计由这条自动化生成的对话…",
-      "confirmDeleteBoth": "删除任务和对话",
-      "confirmArchive": "删除任务并归档对话",
-      "confirmTaskOnly": "只删除任务",
+      "counting": "正在统计由这条自动化生成的任务…",
+      "confirmDeleteBoth": "删除自动化和任务",
+      "confirmArchive": "删除自动化并归档任务",
+      "confirmTaskOnly": "只删除自动化",
       "title": "删除 {{name}}",
-      "copy": "删除自动化任务不会中断已经开始的执行。生成过的对话按下面的选项处理，和桌面端保持一致。",
-      "optionsA11y": "选择生成对话处理方式",
-      "keepDesc": "只删除这条自动化任务，历史对话继续保留在原列表里。",
-      "keepLabel": "保留生成对话",
-      "archiveDesc": "删除任务后，把由它生成的对话移到归档，后续仍可搜索。",
-      "archiveLabel": "归档生成对话",
-      "deleteDesc": "删除任务后，把由它生成的对话也标记为删除。这个操作不可从手机端撤销。",
-      "deleteLabel": "删除生成对话",
+      "copy": "删除自动化不会中断已经开始的执行。生成过的任务按下面的选项处理，和桌面端保持一致。",
+      "optionsA11y": "选择生成任务处理方式",
+      "keepDesc": "只删除这条自动化，历史任务继续保留在原列表里。",
+      "keepLabel": "保留生成任务",
+      "archiveDesc": "删除自动化后，把由它生成的任务移到归档，后续仍可搜索。",
+      "archiveLabel": "归档生成任务",
+      "deleteDesc": "删除自动化后，把由它生成的任务也标记为删除。这个操作不可从手机端撤销。",
+      "deleteLabel": "删除生成任务",
       "cancelA11y": "取消删除自动化",
       "confirmA11y": "确认删除自动化"
     },
@@ -284,7 +284,7 @@
     },
     "runDelete": {
       "title": "删除这条执行记录",
-      "copy": "只会删除这条自动化执行记录，不会删除它打开过的对话，也不会影响后续自动触发。",
+      "copy": "只会删除这条自动化执行记录，不会删除它打开过的任务，也不会影响后续自动触发。",
       "confirmA11y": "确认删除执行记录",
       "confirm": "删除记录",
       "cancelA11y": "取消删除执行记录"
@@ -298,10 +298,10 @@
       "cardA11y": "自动化模板 {{name}}",
       "manualConfig": "手动配置"
     },
-    "scheduleRowA11y": "自动化任务 {{title}}",
+    "scheduleRowA11y": "自动化 {{title}}",
     "detail": {
-      "promptScriptFallback": "仅运行脚本任务，配置只能在桌面端编辑",
-      "promptEmpty": "没有保存任务提示词",
+      "promptScriptFallback": "仅运行脚本的自动化，配置只能在桌面端编辑",
+      "promptEmpty": "没有保存自动化提示词",
       "deleteA11y": "删除自动化",
       "runNowA11y": "立即执行自动化",
       "running": "运行中",
@@ -313,9 +313,9 @@
       "edit": "编辑"
     },
     "run": {
-      "openSessionA11y": "打开自动化对话",
+      "openSessionA11y": "打开自动化生成的任务",
       "opening": "打开中",
-      "session": "对话",
+      "session": "任务",
       "restartA11y": "重新执行自动化",
       "restarting": "重跑中",
       "restart": "重跑",

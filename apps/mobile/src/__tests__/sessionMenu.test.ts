@@ -59,13 +59,13 @@ describe('sessionMenu header', () => {
 
   it('falls back to workspace name when the session has no title', () => {
     expect(buildSessionMenuHeader(session({ title: '' }), {}).title).toBe('xdt-maker');
-    expect(buildSessionMenuHeader(session({ title: '', workingDir: null }), {}).title).toBe('远程对话');
+    expect(buildSessionMenuHeader(session({ title: '', workingDir: null }), {}).title).toBe('远程任务');
   });
 
   it('未起名会话显示本地化兜底,不回落工作目录名', () => {
     // 哨兵若按「无标题」处理会回落 workspaceName 显示目录名,与 desktop 的
-    // 「未命名对话」不一致(PR #1031 review P1)。
-    expect(buildSessionMenuHeader(session({ title: 'New Maker' }), {}).title).toBe('未命名对话');
+    // 「未命名任务」不一致(PR #1031 review P1)。
+    expect(buildSessionMenuHeader(session({ title: 'New Maker' }), {}).title).toBe('未命名任务');
   });
 
   it('prefers the worktree name in the meta line', () => {
@@ -100,7 +100,7 @@ describe('sessionMenu actions', () => {
       writeDisabled: false,
     });
     expect(actions.map((action) => action.id)).toEqual(['rename', 'copyLink', 'pin', 'archive', 'delete']);
-    expect(actions.find((action) => action.id === 'copyLink')?.label).toBe('复制对话链接');
+    expect(actions.find((action) => action.id === 'copyLink')?.label).toBe('复制任务链接');
     expect(actions.find((action) => action.id === 'pin')?.label).toBe('置顶');
     expect(actions.find((action) => action.id === 'archive')?.testID).toBe('session.archiveButton');
     expect(actions.find((action) => action.id === 'delete')?.tone).toBe('danger');

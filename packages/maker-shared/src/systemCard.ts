@@ -44,10 +44,10 @@ export interface SystemCardPresentation {
 
 export const DEFAULT_LOCAL_SYSTEM_COMMANDS: SystemCardSlashCommandLike[] = [
   { kind: 'agent-builtin', name: 'help', description: '显示手机端和远程 agent 命令' },
-  { kind: 'agent-builtin', name: 'context', description: '查看当前会话上下文用量' },
-  { kind: 'agent-builtin', name: 'cost', description: '查看当前会话消耗' },
+  { kind: 'agent-builtin', name: 'context', description: '查看当前任务上下文用量' },
+  { kind: 'agent-builtin', name: 'cost', description: '查看当前任务消耗' },
   { kind: 'agent-builtin', name: 'pwd', description: '显示当前远程工作目录' },
-  { kind: 'agent-builtin', name: 'status', description: '显示当前会话状态' },
+  { kind: 'agent-builtin', name: 'status', description: '显示当前任务状态' },
 ];
 
 export function parseLocalSystemCommand(
@@ -155,7 +155,7 @@ export function formatSystemCard(
     return {
       title: 'Session spend',
       rows: [],
-      body: readString(record.detail) ?? '暂无会话用量',
+      body: readString(record.detail) ?? '暂无任务用量',
     };
   }
   if (type === 'pwd') {
@@ -171,7 +171,7 @@ export function formatSystemCard(
       body: readString(record.detail)
         ?? readString(record.summary)
         ?? readString(record.message)
-        ?? '会话压缩已完成。',
+        ?? '对话压缩已完成。',
     };
   }
   if (type === 'cmd') {
@@ -189,7 +189,7 @@ export function formatSystemCard(
   return {
     title: 'Session Status',
     rows: [
-      { label: 'title', value: readString(record.title) || '未命名会话' },
+      { label: 'title', value: readString(record.title) || '未命名任务' },
       { label: 'status', value: readString(record.sessionStatus) || 'unknown' },
       { label: 'agent', value: readString(record.agent) || 'unknown' },
       { label: 'model', value: readString(record.model) || 'unknown' },

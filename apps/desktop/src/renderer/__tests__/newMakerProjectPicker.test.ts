@@ -734,7 +734,7 @@ describe('Shared create project picker', () => {
    *
    * refreshRemoteDeviceSessions 对瞬态错误退避重试,窗口最长约 6.75 秒。原来 handoff `await` 它才
    * 返回,于是这段时间里应用被关掉 → 对端**已经**有了新会话,而用户的首条消息(或目标弹窗里刚写的
-   * 内容)还没被 setPending / setPendingGoal 记录下来 → 重开再试就在对端建出第二个会话,第一个空着
+   * 内容)还没被 setPending / setPendingGoal 记录下来 → 重开再试就在对端建出第二个任务,第一个空着
    * 滞留;建目标那条还会连同只存在于弹窗内存里的编辑一起丢。
    *
    * 交接本来就不需要等权威快照 —— 临时行(带对端真正分配的 workDir)已经足够让 SessionView 的

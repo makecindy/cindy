@@ -407,9 +407,9 @@ export function relayStatusLabel(status: DeviceLinkRelayStatus): string {
 
 export function relayStatusHint(status: DeviceLinkRelayStatus, lastSyncedAt: number | null): string {
   if (status === 'online') {
-    return lastSyncedAt ? `上次同步 ${formatClock(lastSyncedAt)}` : '可以同步远程会话。';
+    return lastSyncedAt ? `上次同步 ${formatClock(lastSyncedAt)}` : '可以同步远程任务。';
   }
-  if (status === 'connecting') return '网络恢复后会自动重新订阅远程会话。';
+  if (status === 'connecting') return '网络恢复后会自动重新订阅远程任务。';
   return '回到前台或重新登录后会恢复连接。';
 }
 

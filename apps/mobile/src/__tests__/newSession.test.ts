@@ -333,7 +333,7 @@ describe('pickNewSessionDefaultDevice', () => {
 describe('new session default device follows the home device filter', () => {
   it('sends the deviceExplicit flag only when the home list is filtered to one device', () => {
     const homeSource = readTextLf(resolve(process.cwd(), 'app/devices/index.tsx'), 'utf8');
-    // 筛选某台电脑时带显式标记;"所有对话"(selectedDeviceId=null)不带,保留记忆回落。
+    // 筛选某台电脑时带显式标记;"所有任务"(selectedDeviceId=null)不带,保留记忆回落。
     expect(homeSource).toContain("...(selectedDeviceId ? { deviceExplicit: '1' } : {})");
   });
 
@@ -546,7 +546,7 @@ describe('new session model', () => {
       model: 'claude-sonnet-4-6',
     }, 'Carol Mac')).toMatchObject({
       title: '准备创建并发送',
-      subtitle: '确认后会在被控设备创建对话，并把首条消息加入队列。',
+      subtitle: '确认后会在被控设备创建任务，并把首条消息加入队列。',
       details: [
         '设备：Carol Mac',
         '位置：对话工作区',
@@ -773,7 +773,7 @@ describe('new session composer surface', () => {
     const voiceButtonEnd = newSource.indexOf('// 切 agent:', voiceButtonStart);
     const voiceButtonSource = newSource.slice(voiceButtonStart, voiceButtonEnd);
     const storedAgentStart = newSource.indexOf('const storedAgentKind = newSessionPreferences?.agentKind;');
-    const storedAgentEnd = newSource.indexOf('// 新建对话默认运行配置', storedAgentStart);
+    const storedAgentEnd = newSource.indexOf('// 新建任务默认运行配置', storedAgentStart);
     const storedAgentSource = newSource.slice(storedAgentStart, storedAgentEnd);
     const selectDeviceStart = newSource.indexOf('const selectDevice = useCallback((option: NewSessionDeviceOption) => {');
     const selectDeviceEnd = newSource.indexOf('// 切 agent:', selectDeviceStart);
