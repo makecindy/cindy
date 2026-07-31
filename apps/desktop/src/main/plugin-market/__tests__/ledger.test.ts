@@ -113,4 +113,22 @@ describe('PluginMarketLedger', () => {
     expect(fs.existsSync(path.join(root, 'owner-a', 'ledger.v1.json'))).toBe(true);
     expect(fs.existsSync(path.join(root, 'owner-b', 'ledger.v1.json'))).toBe(false);
   });
+
+  it('recovers installations from .bak instead of reading a missing file as empty', () => {
+    const h = harness();
+    h.ledger.upsertInstallation(record({ ghostId: 'cindy-kept' }));
+    // 模拟 Windows 备份交换与回滚都失败:主文件缺失,.bak 是唯一有效快照。
+    fs.renameSync(h.filePath, `${h.filePath}.bak`);
+
+    // 读取入口必须恢复 .bak;否则这里读成空账本,下面的写入会把唯一快照覆盖掉,
+    // 已安装插件的溯源记录永久丢失。
+    expect(h.ledger.read().installations['cindy-kept']).toMatchObject({
+      ghostId: 'cindy-kept',
+      installed: true,
+    });
+
+    h.ledger.upsertInstallation(record({ ghostId: 'cindy-added' }));
+    const after = h.ledger.read().installations;
+    expect(Object.keys(after).sort()).toEqual(['cindy-added', 'cindy-kept']);
+  });
 });

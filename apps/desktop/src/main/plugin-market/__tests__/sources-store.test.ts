@@ -104,6 +104,22 @@ describe('MarketSourceStore', () => {
     expect(store.hasEquivalent({ type: 'local', path: 'https://x.test/r.git' })).toBe(false);
   });
 
+  it('recovers sources from .bak instead of reading a missing file as empty', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-store-'));
+    roots.push(root);
+    const filePath = path.join(root, 'sources.v1.json');
+    const store = new MarketSourceStore(filePath);
+    store.add(config());
+    // 模拟 Windows 备份交换与回滚都失败:主文件缺失,.bak 是唯一有效快照。
+    fs.renameSync(filePath, `${filePath}.bak`);
+
+    // 读取入口必须恢复 .bak;否则读成空来源表,后续写入会覆盖唯一快照,
+    // 用户添加过的自定义市场来源全部丢失。
+    expect(store.list().map((item) => item.name)).toEqual(['openai/plugins']);
+    store.add(config({ name: 'other/hub' }));
+    expect(store.list().map((item) => item.name).sort()).toEqual(['openai/plugins', 'other/hub']);
+  });
+
   it('sourcesEqual treats undefined and empty ref as identical', () => {
     expect(
       sourcesEqual(

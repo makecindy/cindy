@@ -1,7 +1,5 @@
-import fs from 'node:fs';
-
 import type { PluginScope } from '@cindy/plugin-protocol';
-import { atomicWriteFileSync } from '../utils/atomicWriteFile.js';
+import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
 
 const LEDGER_SCHEMA_VERSION = 1;
 
@@ -80,7 +78,11 @@ export class PluginMarketLedger {
   read(): PluginMarketLedgerData {
     let raw: unknown;
     try {
-      raw = JSON.parse(fs.readFileSync(this.filePath(), 'utf8'));
+      // 读取入口恢复 .bak:主文件缺失时若直接读成空账本,调用方随后的写入会
+      // 用这份空数据永久覆盖唯一有效快照(安装溯源全丢)。
+      const text = readAtomicFileSync(this.filePath());
+      if (text === null) return emptyLedger();
+      raw = JSON.parse(text);
     } catch {
       return emptyLedger();
     }

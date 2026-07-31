@@ -4,14 +4,27 @@
  * 实例按 owner 构造（store 与 cloneRoot 已由调用方绑定到操作开始时的
  * dataOwner），与 PluginMarketService 的 ledger 同一套 owner 捕获语义。
  *
- * Git 缓存布局（版本目录 + 当前指针）：
- * - 每次刷新克隆/快进到 sources/<slug>/versions/<new>/ 并完成完整发现验证,
- *   验证通过后用可回滚原子写把 sources/<slug>/current 指针文件改成新版本名,
- *   再删旧版本目录。读取方永远经 current 指针解析到完整版本目录。
+ * Git 缓存布局（版本目录 + 当前指针 + 读取引用计数）：
+ * - 每次刷新克隆/快进到 sources/<slug>/incoming/<uuid>/ 并完成完整发现验证,
+ *   通过后才 rename 进 sources/<slug>/versions/<new>/,再用可回滚原子写把
+ *   sources/<slug>/current 指针文件改成新版本名。读取方永远经 current 指针
+ *   解析到完整版本目录。
+ * - 在途工作一律在 versions/ 之外:git clone 会在目标同级建 `<dest>.staging-*`,
+ *   目标若在 versions/ 内,并发刷新切完指针后的清理会把别人正在写的 staging
+ *   目录当历史版本删掉。versions/ 只承载完整版本目录,清理碰不到在途工作。
  * - 没有任何"固定路径被 rename"的瞬态:要么指针指向旧版(刷新中途失败,
  *   旧版完好),要么指向新版(全成功)。原子性由指针文件原子写保证,不需要
- *   备份交换/哨兵/自愈——并发读取与失败恢复从结构上就是安全的。
+ *   备份交换/哨兵/自愈。
+ * - 旧版本目录的清理受**进程内引用计数**保护:清理只删引用数为 0 的版本,
+ *   仍被引用的进 pendingDeletes,等最后一个引用释放时才删。缺了这层,刷新在
+ *   切完指针后立即删非 current 版本,会把"已解析到旧版目录、正在异步发现或
+ *   逐文件打包安装"的读取方从中途抽走(安装随机失败/输入残缺)。
+ * - 引用登记的关键是**与指针解析同步完成**:resolveCurrentVersionSync 全同步,
+ *   acquireCurrentVersion 在同一个同步块里解析并登记,中间不 await,因此不存在
+ *   "解析到登记"的窗口——任何 fs 回调都插不进来。文件系统标记(.reading 之类)
+ *   做不到这点(解析与落标记之间必有 await,且标记会被 fs.cp 复制进新版本)。
  * - 旧布局(单个 sources/<slug>/ 直接是缓存)在首次读取时自动迁移进版本目录。
+ * - 前提:同一 userData 只有一个 main 进程管理这些缓存槽(Electron 单实例)。
  *
  * 不变量：
  * - Git 克隆目录是客户端管理的缓存，路径只由 (name, source) 派生，用户不应
@@ -98,20 +111,32 @@ export class MarketSourceManager {
   }
 
   /**
+   * 一次刷新的暂存目录,刻意放在 versions/ 之外:git clone 会在目标同级建
+   * `<dest>.staging-<uuid>`,若目标位于 versions/ 内,并发刷新的清理会把这些
+   * 在途目录当历史版本删掉。versions/ 只承载完整版本目录。
+   */
+  private incomingDir(slot: string): string {
+    return path.join(slot, 'incoming', crypto.randomUUID());
+  }
+
+  /**
    * 解析 Git 源当前生效的缓存版本目录。读取 current 指针得到版本名,
    * 校验其在 versions/ 内(防指针被改成穿越路径);旧布局(槽目录直接是
    * 缓存,含 marketplace.json)首次读取时迁移进 versions/ 并写指针。
    * 无法解析(指针缺失/失效且非旧布局)返回 null。
+   *
+   * **必须保持全同步**:调用方要在同一个同步块里解析 + 登记引用(见
+   * acquireCurrentVersion),中间出现 await 就会重新引入"解析到登记"的窗口。
    */
-  private async resolveCurrentVersion(
+  private resolveCurrentVersionSync(
     config: Pick<MarketSourceConfig, 'name' | 'source'>,
-  ): Promise<string | null> {
+  ): string | null {
     const slot = this.cacheSlot(config);
     const pointer = this.currentPointer(slot);
     // 已有指针:按指针解析。
     if (fs.existsSync(pointer)) {
       try {
-        const version = (await fs.promises.readFile(pointer, 'utf8')).trim();
+        const version = fs.readFileSync(pointer, 'utf8').trim();
         // 版本名必须是 versions/ 下的直接子目录名,拒绝绝对路径与穿越。
         if (version && !version.includes('/') && !version.includes('\\') && version !== '..' && version !== '.') {
           const dir = path.join(this.versionsDir(slot), version);
@@ -133,12 +158,12 @@ export class MarketSourceManager {
       const dir = path.join(this.versionsDir(slot), version);
       try {
         // 目标版本目录必须先存在,逐项搬入才不会因父目录缺失报 ENOENT。
-        await fs.promises.mkdir(dir, { recursive: true });
-        // 把槽目录里除 versions/current 外的内容整体搬进版本目录。
-        const keep = new Set(['versions', 'current']);
-        for (const entry of await fs.promises.readdir(slot)) {
+        fs.mkdirSync(dir, { recursive: true });
+        // 把槽目录里除 versions/current/incoming 外的内容整体搬进版本目录。
+        const keep = new Set(['versions', 'current', 'incoming']);
+        for (const entry of fs.readdirSync(slot)) {
           if (keep.has(entry)) continue;
-          await fs.promises.rename(path.join(slot, entry), path.join(dir, entry));
+          fs.renameSync(path.join(slot, entry), path.join(dir, entry));
         }
         atomicWriteFileSync(pointer, version);
         this.log.warn('migrated legacy marketplace cache layout', { name: config.name });
@@ -154,6 +179,99 @@ export class MarketSourceManager {
     return null;
   }
 
+  /**
+   * 正在被读取的版本目录 → 引用数。清理只删引用数为 0 的版本目录。
+   * 进程内计数就是全部事实:所有发现/安装/刷新都发生在 main 进程的同一实例族,
+   * 且引用登记与指针解析同步完成,不需要任何跨进程/文件系统标记。
+   */
+  private readonly versionRefs = new Map<string, number>();
+
+  /** 清理时仍被引用、推迟到最后一个引用释放后再删的版本目录。 */
+  private readonly pendingDeletes = new Set<string>();
+
+  /**
+   * 正在进行的刷新的暂存目录。清理按**前缀**放过它们:git clone 还会在同级建
+   * `<incoming>.staging-<uuid>`,只比对完整路径会把那个在途目录删掉。
+   */
+  private readonly activeIncoming = new Set<string>();
+
+  /**
+   * 解析当前版本目录并登记一个读取引用。**解析与登记之间没有 await**:
+   * JS 单线程 run-to-completion 保证这段同步块执行期间不会有任何 fs 回调
+   * (包括并发刷新的清理)插入,因此不存在"解析到旧目录、登记前被删"的窗口。
+   */
+  private acquireCurrentVersion(
+    config: Pick<MarketSourceConfig, 'name' | 'source'>,
+  ): string | null {
+    const dir = this.resolveCurrentVersionSync(config);
+    if (!dir) return null;
+    this.retainVersion(dir);
+    return dir;
+  }
+
+  /**
+   * 登记一个已知版本目录的引用。除了读取,刷新把暂存目录 rename 进 versions/ 到
+   * 切指针之间也要登记:那段时间新版本还不是 current,并发刷新的清理会把它当
+   * 历史版本删掉。
+   */
+  private retainVersion(dir: string): void {
+    this.versionRefs.set(dir, (this.versionRefs.get(dir) ?? 0) + 1);
+  }
+
+  /** 释放引用;最后一个引用释放时执行被推迟的清理。 */
+  private releaseVersion(dir: string): void {
+    const remaining = (this.versionRefs.get(dir) ?? 0) - 1;
+    if (remaining > 0) {
+      this.versionRefs.set(dir, remaining);
+      return;
+    }
+    this.versionRefs.delete(dir);
+    if (!this.pendingDeletes.delete(dir)) return;
+    // 推迟期间该版本可能已经成为 current(并发刷新:A 的清理把 B 正在暂存的
+    // 目录记为待删,随后 B 把指针切到它)。执行前重新核对,不删当前生效版本。
+    if (this.isCurrentVersionDir(dir)) return;
+    void this.removeVersionDir(dir);
+  }
+
+  /** 目录是否为其所属槽当前生效的版本(推迟清理执行前的再核对)。 */
+  private isCurrentVersionDir(dir: string): boolean {
+    // 版本目录布局固定为 <slot>/versions/<version>。
+    const slot = path.dirname(path.dirname(dir));
+    try {
+      return fs.readFileSync(this.currentPointer(slot), 'utf8').trim() === path.basename(dir);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 在持有版本目录读取引用的作用域内执行 fn。租约必须覆盖到目录的**最后一次
+   * 使用**为止(例如自定义源安装要一直持到 .cindy 打包完成),否则并发刷新的
+   * 清理仍能在使用途中把目录抽走。
+   */
+  private async withCurrentVersion<T>(
+    config: Pick<MarketSourceConfig, 'name' | 'source'>,
+    fn: (dir: string | null) => Promise<T>,
+  ): Promise<T> {
+    const dir = this.acquireCurrentVersion(config);
+    if (!dir) return fn(null);
+    try {
+      return await fn(dir);
+    } finally {
+      this.releaseVersion(dir);
+    }
+  }
+
+  /** 删除一个版本目录;失败仅影响磁盘占用,不影响正确性。 */
+  private async removeVersionDir(dir: string): Promise<void> {
+    await fs.promises.rm(dir, { recursive: true, force: true }).catch((error: unknown) => {
+      this.log.warn('failed to prune stale marketplace cache version', {
+        version: path.basename(dir),
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
   /** 旧布局判定:槽目录本身含市场内容(.agents 目录)。 */
   private looksLikeLegacyCache(slot: string): boolean {
     if (!fs.existsSync(slot)) return false;
@@ -166,19 +284,18 @@ export class MarketSourceManager {
 
   /**
    * 刷新后让新版本生效:只做一件事——原子写 current 指针指向新版本目录。
-   * 不删旧版本:读取方(listSources/snapshot/安装)可能正解析或使用旧版本,
-   * 主动删除会在"解析→使用"窗口把在读者抽走。旧版本统一由下次刷新的
-   * 延迟清理处理,读取路径因此零并发保护——指针原子切换即可保证:
-   * 切换前解析到旧版→旧版还在;切换后解析到新版→新版完整。
+   * 指针切换是唯一的生效动作:切换前解析到旧版→旧版还在(清理受引用保护),
+   * 切换后解析到新版→新版已完成完整发现验证。
    */
   private async activateVersion(slot: string, newVersion: string): Promise<void> {
     atomicWriteFileSync(this.currentPointer(slot), newVersion);
   }
 
   /**
-   * 延迟清理历史版本:删除 versions/ 里非 current 的目录。只在刷新成功
-   * 切换指针后调用,此刻被清理的是上上一轮的旧版本,任何当时的读取/
-   * 安装/打包早已结束,不会抽到在读者。清理失败仅影响磁盘,不影响正确性。
+   * 清理历史版本:删除 versions/ 里非 current 且**当前无人读取**的目录。
+   * 仍被引用的目录进 pendingDeletes,由最后一个引用释放时删除 —— 刚被切下来
+   * 的那一代往往正被并发的发现/详情/安装打包使用,直接删会把它们从中途抽走。
+   * 清理失败仅影响磁盘占用,不影响正确性。
    */
   private async pruneStaleVersions(slot: string): Promise<void> {
     const pointer = this.currentPointer(slot);
@@ -199,14 +316,43 @@ export class MarketSourceManager {
       if (entry === current) continue;
       // 仅删除 versions/ 内的直接子目录,防穿越。
       if (entry.includes('/') || entry.includes('\\') || entry === '..' || entry === '.') continue;
-      await fs.promises
-        .rm(path.join(this.versionsDir(slot), entry), { recursive: true, force: true })
-        .catch((error: unknown) => {
-          this.log.warn('failed to prune stale marketplace cache version', {
-            version: entry,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        });
+      const dir = path.join(this.versionsDir(slot), entry);
+      // 有读者:推迟到最后一个引用释放。释放路径同样会消费 pendingDeletes,
+      // 因此目录不会被永久留下(引用在 finally 里释放)。
+      if ((this.versionRefs.get(dir) ?? 0) > 0) {
+        this.pendingDeletes.add(dir);
+        continue;
+      }
+      await this.removeVersionDir(dir);
+    }
+    await this.pruneStaleIncoming(slot);
+  }
+
+  /**
+   * 清理 incoming/ 里已死的暂存目录(进程在刷新途中被杀会留下残骸)。
+   * 在途的按前缀放过:git clone 的 `<incoming>.staging-<uuid>` 也属于在途。
+   * incoming/ 不会被任何读取方读取,不需要引用计数,只需避开在途集合。
+   */
+  private async pruneStaleIncoming(slot: string): Promise<void> {
+    const root = path.join(slot, 'incoming');
+    let entries: string[];
+    try {
+      entries = await fs.promises.readdir(root);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.includes('/') || entry.includes('\\') || entry === '..' || entry === '.') continue;
+      const dir = path.join(root, entry);
+      let inFlight = false;
+      for (const active of this.activeIncoming) {
+        if (dir === active || dir.startsWith(active)) {
+          inFlight = true;
+          break;
+        }
+      }
+      if (inFlight) continue;
+      await this.removeVersionDir(dir);
     }
   }
 
@@ -343,92 +489,145 @@ export class MarketSourceManager {
     }
     const slot = this.cacheSlot(config);
     const gitSource = config.source;
-    const current = await this.resolveCurrentVersion(config);
-    // 新版本目录:快进或重克隆都在这里完成,验证通过才激活,不碰当前版本。
     const newVersion = crypto.randomUUID();
     const newDir = path.join(this.versionsDir(slot), newVersion);
-    await fs.promises.mkdir(this.versionsDir(slot), { recursive: true });
-    // 两条路径(快进成功 / 重克隆)都会赋值或抛出,此处仅满足 TS 的确定性赋值分析。
-    let revision = '';
-    let discovered: Extract<
-      Awaited<ReturnType<typeof discoverMarketplace>>,
-      { ok: true }
-    >;
+    // 暂存目录必须落在 versions/ **之外**:cloneMarketplace 会在目标同级建
+    // `<dest>.staging-<uuid>`,目标若在 versions/ 内,并发刷新切完指针后的清理
+    // 会把别人正在写入的 staging 目录当历史版本删掉。versions/ 只放完整版本,
+    // 清理就永远碰不到在途工作。
+    const incoming = this.incomingDir(slot);
+    // 在途登记:并发刷新的 incoming/ 清理据此按前缀放过本次的暂存与 staging 目录。
+    this.activeIncoming.add(incoming);
     try {
-      let fastForwarded = false;
-      if (current) {
-        // 快进路径:复制当前版本到新目录,在新目录内快进。
-        try {
-          await fs.promises.cp(current, newDir, { recursive: true });
-          revision = await fetchMarketplace(current, gitSource.ref, this.deps.gitExecutor, newDir);
-          fastForwarded = true;
-        } catch {
-          fastForwarded = false;
-          await fs.promises.rm(newDir, { recursive: true, force: true }).catch(() => undefined);
+      await fs.promises.mkdir(path.dirname(incoming), { recursive: true });
+      await fs.promises.mkdir(this.versionsDir(slot), { recursive: true });
+      // 快进要整目录复制当前版本并在其上 fetch:登记读取引用,否则并发刷新的
+      // 清理能在复制途中删掉源目录。引用在快进段结束后立刻释放(见 finally)。
+      const current = this.acquireCurrentVersion(config);
+      // 两条路径(快进成功 / 重克隆)都会赋值或抛出,此处仅满足 TS 的确定性赋值分析。
+      let revision = '';
+      let discovered: Extract<
+        Awaited<ReturnType<typeof discoverMarketplace>>,
+        { ok: true }
+      >;
+      try {
+        let fastForwarded = false;
+        if (current) {
+          // 快进路径:复制当前版本到暂存目录,在暂存目录内快进。
+          try {
+            await fs.promises.cp(current, incoming, { recursive: true });
+            revision = await fetchMarketplace(current, gitSource.ref, this.deps.gitExecutor, incoming);
+            fastForwarded = true;
+          } catch {
+            fastForwarded = false;
+            await fs.promises.rm(incoming, { recursive: true, force: true }).catch(() => undefined);
+          }
         }
-      }
-      if (!fastForwarded) {
-        // 无当前版本或快进失败(历史改写/缓存损坏):整目录重克隆到新目录。
-        try {
-          revision = await cloneMarketplace(
-            {
-              url: gitSource.url,
-              ...(gitSource.ref ? { ref: gitSource.ref } : {}),
-              sparsePaths: gitSource.sparsePaths,
-            },
-            newDir,
-            this.deps.gitExecutor,
-          );
-        } catch (error) {
-          if (error instanceof MarketGitError) throwIpcError(error.code, error.message);
-          throw error;
+        if (!fastForwarded) {
+          // 无当前版本或快进失败(历史改写/缓存损坏):整目录重克隆到暂存目录。
+          try {
+            revision = await cloneMarketplace(
+              {
+                url: gitSource.url,
+                ...(gitSource.ref ? { ref: gitSource.ref } : {}),
+                sparsePaths: gitSource.sparsePaths,
+              },
+              incoming,
+              this.deps.gitExecutor,
+            );
+          } catch (error) {
+            if (error instanceof MarketGitError) throwIpcError(error.code, error.message);
+            throw error;
+          }
         }
+        // 在暂存目录完成完整发现验证,通过后才落位并激活;失败只删暂存目录,
+        // 当前版本不动。
+        const staged = await discoverMarketplace(incoming);
+        if (!staged.ok) {
+          throwIpcError(staged.code, staged.detail ?? staged.code);
+        }
+        discovered = staged;
+      } catch (error) {
+        await fs.promises.rm(incoming, { recursive: true, force: true }).catch(() => undefined);
+        throw error;
+      } finally {
+        // 快进段已结束(成功或回落重克隆),本次刷新不再使用旧版本目录。
+        if (current) this.releaseVersion(current);
       }
-      // 在新版本目录完成完整发现验证,通过后才激活;失败删新目录,当前版本不动。
-      const staged = await discoverMarketplace(newDir);
-      if (!staged.ok) {
-        throwIpcError(staged.code, staged.detail ?? staged.code);
+      // 落位前先登记引用:rename 进 versions/ 到切指针之间,新版本还不是 current,
+      // 并发刷新的清理会把它当历史版本删掉。
+      this.retainVersion(newDir);
+      try {
+        await fs.promises.rename(incoming, newDir);
+        await this.activateVersion(slot, newVersion);
+        // 指针已切到新版本:清理非 current 版本,仍被读取的推迟到引用释放后再删。
+        await this.pruneStaleVersions(slot);
+        const syncedAt = this.now();
+        this.deps.store.update(name, { lastSyncedAt: syncedAt, lastRevision: revision });
+        return this.toSummary(
+          { ...config, lastSyncedAt: syncedAt, lastRevision: revision },
+          discovered.marketplace,
+        );
+      } catch (error) {
+        // 落位/激活失败:暂存与半落位的目录都清掉,当前版本与指针不受影响。
+        await fs.promises.rm(incoming, { recursive: true, force: true }).catch(() => undefined);
+        await fs.promises.rm(newDir, { recursive: true, force: true }).catch(() => undefined);
+        throw error;
+      } finally {
+        this.releaseVersion(newDir);
       }
-      discovered = staged;
-    } catch (error) {
-      await fs.promises.rm(newDir, { recursive: true, force: true }).catch(() => undefined);
-      throw error;
+    } finally {
+      this.activeIncoming.delete(incoming);
     }
-    await this.activateVersion(slot, newVersion);
-    // 指针已切到新版本,延迟清理上上一轮的旧版本(此刻无任何在读者)。
-    await this.pruneStaleVersions(slot);
-    const syncedAt = this.now();
-    this.deps.store.update(name, { lastSyncedAt: syncedAt, lastRevision: revision });
-    return this.toSummary(
-      { ...config, lastSyncedAt: syncedAt, lastRevision: revision },
-      discovered.marketplace,
-    );
   }
 
   getConfig(name: string): MarketSourceConfig | null {
     return this.deps.store.get(name);
   }
 
-  /** 发现单个来源（详情 / 安装入口现查事实用）。 */
-  async discoverSource(name: string): Promise<DiscoveredSource> {
+  /**
+   * 发现单个来源（详情 / 安装入口现查事实用）。
+   *
+   * 发现结果里的 `plugin.dir` 指向缓存版本目录:调用方**在 fn 返回后就不得再
+   * 使用这些路径**。要跨到后续读盘(例如安装打包)的调用方必须把那段工作放进
+   * fn 内,租约才覆盖到最后一次使用;否则并发刷新的清理可以在中途删掉目录。
+   */
+  async withDiscoveredSource<T>(
+    name: string,
+    fn: (discovered: DiscoveredSource) => Promise<T>,
+  ): Promise<T> {
     const config = this.deps.store.get(name);
     if (!config) {
       throwIpcError('NOT_FOUND', 'The marketplace source is not added');
     }
-    const root = await this.marketRoot(config!);
-    if (!root || !fs.existsSync(root)) {
-      return {
+    return this.withMarketRoot(config!, async (root) => {
+      if (!root || !fs.existsSync(root)) {
+        return fn({
+          config: config!,
+          result: { ok: false, code: 'MARKET_SOURCE_INVALID', detail: 'market root missing' },
+        });
+      }
+      const discovered = await discoverMarketplace(root);
+      return fn({
         config: config!,
-        result: { ok: false, code: 'MARKET_SOURCE_INVALID', detail: 'market root missing' },
-      };
-    }
-    const discovered = await discoverMarketplace(root);
-    return {
-      config: config!,
-      result: discovered.ok
-        ? { ok: true, marketplace: discovered.marketplace }
-        : { ok: false, code: discovered.code, ...(discovered.detail ? { detail: discovered.detail } : {}) },
-    };
+        result: discovered.ok
+          ? { ok: true, marketplace: discovered.marketplace }
+          : {
+              ok: false,
+              code: discovered.code,
+              ...(discovered.detail ? { detail: discovered.detail } : {}),
+            },
+      });
+    });
+  }
+
+  /**
+   * 发现单个来源并返回结果。只读取发现出的元数据时用这个;结果里的
+   * `plugin.dir` 在返回后已不受租约保护,需要继续读盘请改用
+   * `withDiscoveredSource`。
+   */
+  async discoverSource(name: string): Promise<DiscoveredSource> {
+    return this.withDiscoveredSource(name, async (discovered) => discovered);
   }
 
   /** 管理视图用：全部来源 + 实时发现状态。单个源失败不影响其它源。 */
@@ -451,29 +650,41 @@ export class MarketSourceManager {
     const configs = this.deps.store.list();
     const results: DiscoveredSource[] = [];
     for (const config of configs) {
-      const root = await this.marketRoot(config);
-      if (!root || !fs.existsSync(root)) {
+      await this.withMarketRoot(config, async (root) => {
+        if (!root || !fs.existsSync(root)) {
+          results.push({
+            config,
+            result: { ok: false, code: 'MARKET_SOURCE_INVALID', detail: 'market root missing' },
+          });
+          return;
+        }
+        const discovered = await discoverMarketplace(root);
         results.push({
           config,
-          result: { ok: false, code: 'MARKET_SOURCE_INVALID', detail: 'market root missing' },
+          result: discovered.ok
+            ? { ok: true, marketplace: discovered.marketplace }
+            : {
+                ok: false,
+                code: discovered.code,
+                ...(discovered.detail ? { detail: discovered.detail } : {}),
+              },
         });
-        continue;
-      }
-      const discovered = await discoverMarketplace(root);
-      results.push({
-        config,
-        result: discovered.ok
-          ? { ok: true, marketplace: discovered.marketplace }
-          : { ok: false, code: discovered.code, ...(discovered.detail ? { detail: discovered.detail } : {}) },
       });
     }
     return results;
   }
 
-  /** 来源的市场根目录：Git 源指向当前缓存版本目录，本地源指向用户目录。 */
-  private async marketRoot(config: MarketSourceConfig): Promise<string | null> {
-    if (config.source.type === 'local') return config.source.path;
-    return this.resolveCurrentVersion(config);
+  /**
+   * 在持有读取引用的作用域内提供来源的市场根目录:Git 源是当前缓存版本目录
+   * (受引用保护,fn 执行期间不会被清理删掉),本地源是用户目录(用户自管,
+   * 客户端不清理,无需引用)。
+   */
+  private async withMarketRoot<T>(
+    config: MarketSourceConfig,
+    fn: (root: string | null) => Promise<T>,
+  ): Promise<T> {
+    if (config.source.type === 'local') return fn(config.source.path);
+    return this.withCurrentVersion(config, fn);
   }
 
   private toSummary(

@@ -5,10 +5,8 @@
  * （临时文件 + rename，Windows 下先删目标重试）、0o600。只存来源配置，
  * 不复制发现到的插件数据——快照时重新发现，磁盘上的克隆目录才是事实。
  */
-import fs from 'node:fs';
-
 import type { MarketSource, MarketSourceConfig } from '../../../shared/pluginMarket.js';
-import { atomicWriteFileSync } from '../../utils/atomicWriteFile.js';
+import { atomicWriteFileSync, readAtomicFileSync } from '../../utils/atomicWriteFile.js';
 
 const SOURCES_SCHEMA_VERSION = 1;
 
@@ -111,7 +109,11 @@ export class MarketSourceStore {
   private read(): MarketSourcesData {
     let raw: unknown;
     try {
-      raw = JSON.parse(fs.readFileSync(this.filePath(), 'utf8'));
+      // 读取入口恢复 .bak:主文件缺失时若直接读成空来源表,调用方随后的写入会
+      // 用这份空数据永久覆盖唯一有效快照(全部自定义来源配置丢失)。
+      const text = readAtomicFileSync(this.filePath());
+      if (text === null) return emptySources();
+      raw = JSON.parse(text);
     } catch {
       return emptySources();
     }

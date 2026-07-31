@@ -14,6 +14,14 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
+/** 等待推迟清理这类"引用释放后异步执行"的副作用落地。 */
+async function waitFor(predicate: () => boolean, attempts = 100): Promise<void> {
+  for (let i = 0; i < attempts; i += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 function makeRoot(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-manager-'));
   roots.push(root);
@@ -413,7 +421,7 @@ describe('MarketSourceManager git sources', () => {
     );
     const before = fs.readFileSync(path.join(slot, 'current'), 'utf8').trim();
 
-    // 连续两次刷新:第一次切到 v2(保留 v1 供在读者),第二次切到 v3 时清掉 v1。
+    // 连续两次刷新:无人读取时每次切完指针就清掉非 current 版本。
     failFetch = true;
     await manager.refreshSource('hub');
     const second = fs.readFileSync(path.join(slot, 'current'), 'utf8').trim();
@@ -423,5 +431,134 @@ describe('MarketSourceManager git sources', () => {
     // 历史版本(v1)已被延迟清理,current(v3)完整可读。
     expect(fs.existsSync(path.join(slot, 'versions', before))).toBe(false);
     expect(fs.existsSync(path.join(slot, 'versions', third, '.agents', 'plugins', 'marketplace.json'))).toBe(true);
+  });
+
+  it('keeps a version alive while a reader holds it, then prunes it on release', async () => {
+    const root = makeRoot();
+    let failFetch = false;
+    const executor: GitExecutor = async (args) => {
+      if (args[0] === '--version') return { stdout: 'git version 2.43.0\n', stderr: '' };
+      if (args[0] === 'clone') {
+        writeMarketplace(String(args[args.length - 1]), 'hub', [{ rel: 'p', id: 'alpha' }]);
+        return { stdout: '', stderr: '' };
+      }
+      if (args[0] === 'pull' || args[0] === 'fetch') {
+        if (failFetch) throw Object.assign(new Error('rejected'), { stderr: 'non-fast-forward' });
+        return { stdout: '', stderr: '' };
+      }
+      if (args[0] === 'rev-parse') return { stdout: 'def456\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    };
+    const manager = makeManager(root, executor);
+    await manager.addSource({ source: 'openai/plugins' });
+
+    const slot = path.join(
+      root,
+      'sources',
+      marketCloneSlug('hub', {
+        type: 'git',
+        url: 'https://github.com/openai/plugins.git',
+        sparsePaths: [],
+      }),
+    );
+    const held = fs.readFileSync(path.join(slot, 'current'), 'utf8').trim();
+    const heldDir = path.join(slot, 'versions', held);
+
+    // 读取方持有租约期间发生刷新:指针切走,但被持有的版本目录不得被清理,
+    // 逐文件读取(安装打包的实质动作)必须全程可用。
+    failFetch = true;
+    await manager.withDiscoveredSource('hub', async (discovered) => {
+      expect(discovered.result.ok).toBe(true);
+      const pluginDir = discovered.result.ok
+        ? discovered.result.marketplace.plugins[0]!.dir
+        : '';
+      // discover 返回 realpath(macOS 下 /var → /private/var),按 realpath 比对。
+      expect(pluginDir.startsWith(fs.realpathSync(heldDir))).toBe(true);
+
+      await manager.refreshSource('hub');
+      const switched = fs.readFileSync(path.join(slot, 'current'), 'utf8').trim();
+      expect(switched).not.toBe(held);
+      // 指针已切走,旧版本仍在,且包内容仍可逐文件读取。
+      expect(fs.existsSync(heldDir)).toBe(true);
+      expect(fs.readFileSync(path.join(pluginDir, 'main.js'), 'utf8')).toContain('entry');
+    });
+
+    // 最后一个引用释放后,被推迟的清理执行完毕。
+    await waitFor(() => !fs.existsSync(heldDir));
+    expect(fs.existsSync(heldDir)).toBe(false);
+  });
+
+  it('prunes dead incoming staging directories left by a killed refresh', async () => {
+    const root = makeRoot();
+    const { executor } = fakeGit('hub', [{ rel: 'p', id: 'alpha' }]);
+    const manager = makeManager(root, executor);
+    await manager.addSource({ source: 'openai/plugins' });
+
+    const slot = path.join(
+      root,
+      'sources',
+      marketCloneSlug('hub', {
+        type: 'git',
+        url: 'https://github.com/openai/plugins.git',
+        sparsePaths: [],
+      }),
+    );
+    // 进程在刷新途中被杀会留下 incoming/ 残骸;下次刷新必须清掉,不能无界增长。
+    const dead = path.join(slot, 'incoming', 'dead-uuid');
+    fs.mkdirSync(dead, { recursive: true });
+    fs.writeFileSync(path.join(dead, 'partial'), 'x');
+
+    await manager.refreshSource('hub');
+    await waitFor(() => !fs.existsSync(dead));
+    expect(fs.existsSync(dead)).toBe(false);
+  });
+
+  it('does not let concurrent refreshes prune each other staging directories', async () => {
+    const root = makeRoot();
+    // 两次刷新交错:第一次进入 clone 后挂住,让第二次完整跑完(切指针 + 清理),
+    // 再放行第一次。第二次的清理不得删掉第一次正在写入的暂存目录。
+    let gateClone: (() => void) | null = null;
+    let holdNextClone = false;
+    let stagingMarker = '';
+    const executor: GitExecutor = async (args) => {
+      if (args[0] === '--version') return { stdout: 'git version 2.43.0\n', stderr: '' };
+      if (args[0] === 'clone') {
+        const dest = String(args[args.length - 1]);
+        if (holdNextClone) {
+          holdNextClone = false;
+          // 真实 clone 会边下边写:先让暂存目录带着内容落盘,再挂住。
+          fs.mkdirSync(dest, { recursive: true });
+          stagingMarker = path.join(dest, 'partial-clone.txt');
+          fs.writeFileSync(stagingMarker, 'in-flight');
+          await new Promise<void>((resolve) => {
+            gateClone = resolve;
+          });
+        }
+        writeMarketplace(dest, 'hub', [{ rel: 'p', id: 'alpha' }]);
+        return { stdout: '', stderr: '' };
+      }
+      // fetch 一律失败,迫使两次刷新都走重克隆路径。
+      if (args[0] === 'pull' || args[0] === 'fetch') {
+        throw Object.assign(new Error('rejected'), { stderr: 'non-fast-forward' });
+      }
+      if (args[0] === 'rev-parse') return { stdout: 'def456\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    };
+    const manager = makeManager(root, executor);
+    await manager.addSource({ source: 'openai/plugins' });
+
+    holdNextClone = true;
+    const slowRefresh = manager.refreshSource('hub');
+    await waitFor(() => gateClone !== null);
+    // 第二次刷新完整跑完:切指针并清理非 current 版本。
+    await manager.refreshSource('hub');
+    // 关键断言:清理不得碰到第一次正在写入的暂存目录(它还不是 current)。
+    expect(fs.existsSync(stagingMarker)).toBe(true);
+
+    gateClone!();
+    // 被挂住的那次仍能完成。
+    const summary = await slowRefresh;
+    expect(summary.pluginCount).toBe(1);
+    expect(summary.status).toBe('ok');
   });
 });

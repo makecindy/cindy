@@ -505,6 +505,47 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     expect(runtime.install).not.toHaveBeenCalled();
   });
 
+  it('rejects install when another custom source declares the same ghostId', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const rival = writeLocalMarket(root, 'rival-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [
+      { name: 'team-lib', dir },
+      { name: 'rival-lib', dir: rival },
+    ]);
+
+    // 两个来源声明同一 ghostId、本地尚无安装:列表把双方都标成 conflict 并禁用,
+    // 安装入口必须用同一口径重算并拒绝,不能因为"本地还没装"就放行。
+    const snapshot = await h.service.snapshot();
+    expect(snapshot.items.map((item) => item.installState)).toEqual(['conflict', 'conflict']);
+
+    const reviewed = await h.service.detail(customMarketPluginId('team-lib', 'alpha'));
+    await expect(
+      h.service.install(customMarketPluginId('team-lib', 'alpha'), {
+        expectedReleaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
+        expectedManifest: reviewed.manifest,
+      }),
+    ).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it('rejects install when the server catalog declares the same ghostId', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/x', id: 'server-plugin' }]);
+    const h = harness([serverSummary()], [{ name: 'team-lib', dir }]);
+
+    const reviewed = await h.service.detail(customMarketPluginId('team-lib', 'server-plugin'));
+    await expect(
+      h.service.install(customMarketPluginId('team-lib', 'server-plugin'), {
+        expectedReleaseId: customMarketReleaseId('team-lib', 'server-plugin', '1.0.0'),
+        expectedManifest: reviewed.manifest,
+      }),
+    ).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
   it('uninstalls a custom market plugin through the shared uninstall path', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);

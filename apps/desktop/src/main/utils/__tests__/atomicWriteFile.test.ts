@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { atomicWriteFileSync } from '../atomicWriteFile';
+import { atomicWriteFileSync, readAtomicFileSync } from '../atomicWriteFile';
 
 const roots: string[] = [];
 
@@ -53,6 +53,29 @@ describe('atomicWriteFileSync', () => {
     fs.writeFileSync(`${file}.bak`, 'stale-backup');
     atomicWriteFileSync(file, 'fresh');
     expect(fs.readFileSync(file, 'utf8')).toBe('fresh');
+    expect(fs.existsSync(`${file}.bak`)).toBe(false);
+  });
+});
+
+describe('readAtomicFileSync', () => {
+  it('returns the main file contents when present', () => {
+    const file = makeFile('kept');
+    expect(readAtomicFileSync(file)).toBe('kept');
+  });
+
+  it('returns null when neither the main file nor .bak exists', () => {
+    const file = makeFile();
+    fs.rmSync(file);
+    expect(readAtomicFileSync(file)).toBeNull();
+  });
+
+  it('restores and reads .bak when the main file is missing', () => {
+    const file = makeFile('only-snapshot');
+    // 主文件缺失、.bak 是唯一快照:读取入口必须先恢复再读。只在写入侧恢复时,
+    // 调用方会先把这里读成空数据,再拿空数据发起写入把唯一快照覆盖掉。
+    fs.renameSync(file, `${file}.bak`);
+    expect(readAtomicFileSync(file)).toBe('only-snapshot');
+    expect(fs.readFileSync(file, 'utf8')).toBe('only-snapshot');
     expect(fs.existsSync(`${file}.bak`)).toBe(false);
   });
 });
