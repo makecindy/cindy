@@ -2199,7 +2199,6 @@ export function MessageStream({
   messages,
   taskUpdates,
   isSessionStreaming = false,
-  continuationInFlightClientId = null,
   continuationTurnClientId = null,
   continuationInFlightProjectionCapability = 'unknown',
   onLoadMore,

@@ -1291,6 +1291,7 @@ function _purgeSession(sessionId: string): void {
   // 代际递增(bump 而非 delete,原因见 _messagesEpoch 注释):作废 in-flight 翻页,
   // 避免其提交把旧窗口 merge 进 purge 后重建的空 slice。
   bumpMessagesEpoch(sessionId);
+  invalidateInputProjectionRequests(sessionId);
   sessions.delete(sessionId);
   // 状态快照同步失效:该会话若有 running / pending / 待投递 transition 条目,
   // 不能在缓存里残留(purge 不走 setState,需单独置位)。
@@ -3912,9 +3913,15 @@ function initGlobalListeners(): void {
   };
   bindIpc(window.electronAPI.maker.onStatusChanged, handleMakerStatusRaw, 'maker-status-changed');
 
-  const handleInputProjectionRaw = (raw: unknown) => {
+  const handleInputProjectionRaw = (raw: unknown, sourceDeviceId?: string) => {
     const projection = raw as AgentInputProjection | null;
     if (!projection?.sessionId) return;
+    if (
+      sourceDeviceId !== undefined &&
+      remoteProjectsStore.getSessionDeviceId(projection.sessionId) !== sourceDeviceId
+    ) {
+      return;
+    }
     applyInputProjection(projection);
   };
   bindIpc(
@@ -4330,7 +4337,8 @@ function initGlobalListeners(): void {
           handleMakerStatusRaw(push.payload);
           break;
         case 'maker:input:projection':
-          handleInputProjectionRaw(push.payload);
+          if (!push.deviceId) break;
+          handleInputProjectionRaw(push.payload, push.deviceId);
           break;
         case 'maker:interaction-request':
           handleInteractionRequestRaw(push.payload);
@@ -5312,20 +5320,27 @@ const _historyLoadOrigin = new Map<string, string | undefined>();
  */
 const _inputProjectionOrigin = new Map<string, string | undefined>();
 const _inputProjectionEpoch = new Map<string, number>();
+let _nextInputProjectionEpoch = 0;
+
+function nextInputProjectionEpoch(): number {
+  _nextInputProjectionEpoch += 1;
+  return _nextInputProjectionEpoch;
+}
+
+function invalidateInputProjectionRequests(sessionId: string): void {
+  _inputProjectionOrigin.delete(sessionId);
+  _inputProjectionEpoch.delete(sessionId);
+}
 
 function noteInputProjectionOrigin(sessionId: string, origin: string | undefined): number {
   const previous = _inputProjectionOrigin.get(sessionId);
-  if (!_inputProjectionOrigin.has(sessionId)) {
+  if (!_inputProjectionOrigin.has(sessionId) || previous !== origin) {
     _inputProjectionOrigin.set(sessionId, origin);
-    return _inputProjectionEpoch.get(sessionId) ?? 0;
-  }
-  if (previous !== origin) {
-    _inputProjectionOrigin.set(sessionId, origin);
-    const nextEpoch = (_inputProjectionEpoch.get(sessionId) ?? 0) + 1;
+    const nextEpoch = nextInputProjectionEpoch();
     _inputProjectionEpoch.set(sessionId, nextEpoch);
     return nextEpoch;
   }
-  return _inputProjectionEpoch.get(sessionId) ?? 0;
+  return _inputProjectionEpoch.get(sessionId)!;
 }
 
 function isCurrentInputProjectionRequest(

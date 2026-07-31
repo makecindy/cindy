@@ -28,6 +28,7 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 
 const DEVICE_ID = 'dev-A';
+const DEVICE_B_ID = 'dev-B';
 let n = 0;
 const sid = () => `reconcile-${n++}`;
 type RemotePush = { deviceId: string; channel: string; payload: unknown };
@@ -146,6 +147,77 @@ afterEach(() => {
 });
 
 describe('makerChatStore.reconcileRemoteMessages', () => {
+  it('丢弃来源漂移前设备发来的旧 input projection push', async () => {
+    const s = sid();
+    makerChatStore.initGlobalListeners();
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s }] as never);
+
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:input:projection',
+      payload: {
+        sessionId: s,
+        pendingQueue: [],
+        steeringQueueClientIds: [],
+        queuePaused: false,
+        queueExpanded: false,
+        queueInteractionLocks: [],
+        queueEditLocks: [],
+        queueAbortPending: false,
+        continuationTurnClientId: 'owner-a',
+        error: null,
+        recovery: null,
+        errorRetryText: null,
+      },
+    });
+    expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBe('owner-a');
+
+    remoteProjectsStore.setDeviceSessions(DEVICE_B_ID, 'Mac B', [{ id: s }] as never);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', []);
+    expect(remoteProjectsStore.getSessionDeviceId(s)).toBe(DEVICE_B_ID);
+
+    remotePush?.({
+      deviceId: DEVICE_B_ID,
+      channel: 'maker:input:projection',
+      payload: {
+        sessionId: s,
+        pendingQueue: [],
+        steeringQueueClientIds: [],
+        queuePaused: false,
+        queueExpanded: false,
+        queueInteractionLocks: [],
+        queueEditLocks: [],
+        queueAbortPending: false,
+        continuationTurnClientId: 'owner-b',
+        error: null,
+        recovery: null,
+        errorRetryText: null,
+      },
+    });
+    expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBe('owner-b');
+
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:input:projection',
+      payload: {
+        sessionId: s,
+        pendingQueue: [],
+        steeringQueueClientIds: [],
+        queuePaused: false,
+        queueExpanded: false,
+        queueInteractionLocks: [],
+        queueEditLocks: [],
+        queueAbortPending: false,
+        continuationTurnClientId: null,
+        error: null,
+        recovery: null,
+        errorRetryText: null,
+      },
+    });
+
+    expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBe('owner-b');
+  });
+
   it('remote stall watchdog only counts heavy session pushes, not lightweight activity', async () => {
     const s = sid();
     makerChatStore.initGlobalListeners();

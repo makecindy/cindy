@@ -177,6 +177,44 @@ describe('makerChatStore.reconcileOpenSessionOrigins (device-link 历史竞速)'
     expect(makerChatStore.getSnapshot(s).messages).toHaveLength(1);
   });
 
+  it('purge 后丢弃此前发起的旧投影查询', async () => {
+    const s = sid();
+    let resolveLocalProjection!: (projection: unknown) => void;
+    const localProjection = new Promise((resolve) => {
+      resolveLocalProjection = resolve;
+    });
+    vi.stubGlobal('window', {
+      electronAPI: {
+        maker: {
+          input: {
+            getProjection: vi.fn().mockReturnValueOnce(localProjection),
+          },
+        },
+        deviceLink: { invoke },
+      },
+    });
+
+    makerChatStore.ensureInitialMessages(s);
+    makerChatStore.purgeSession(s);
+    resolveLocalProjection({
+      sessionId: s,
+      pendingQueue: [],
+      steeringQueueClientIds: [],
+      queuePaused: false,
+      queueExpanded: false,
+      queueInteractionLocks: [],
+      queueEditLocks: [],
+      queueAbortPending: false,
+      continuationTurnClientId: 'stale-owner',
+      error: null,
+      recovery: null,
+      errorRetryText: null,
+    });
+    await flush();
+
+    expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBeNull();
+  });
+
   it('来源漂移时丢弃旧投影查询，避免旧本机 null 覆盖远程续跑 owner', async () => {
     const s = sid();
     let resolveLocalProjection!: (projection: unknown) => void;
