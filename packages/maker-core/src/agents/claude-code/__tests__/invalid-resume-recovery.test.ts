@@ -642,6 +642,74 @@ describe('Claude invalid-resume recovery', () => {
     await h.collected;
   });
 
+  it('re-snapshots turnStartModel right before the replay push, picking up a hot-switch made during the rebuild', async () => {
+    // beginNewTurn() 在 buildQuery() 之前打第一次快照,但 buildQuery /
+    // replayRuntimeDrift 可以异步等一段时间;这段空窗内 runtimeSetModel 仍可能把
+    // mutableModel 热切走。若重放请求随后以无 envelope 的 api_retry 终止,归因必须
+    // 用真正入队前重打的快照,而不是 beginNewTurn 时刻的旧模型(PR review P2)。
+    const clear = vi.fn(async () => true);
+    const h = await startHarness({
+      resumeSessionId: 'sdk-old',
+      transcriptExists: true,
+      onInvalidResumeSession: clear,
+    });
+
+    await h.handle.send({ type: 'user', content: 'hello once' });
+
+    // 让重建用的第二个 query 挂起,制造 beginNewTurn() 与真正 push 之间的异步空窗。
+    let resolveQuery2!: () => void;
+    const query2Gate = new Promise<void>((resolve) => { resolveQuery2 = resolve; });
+    const baseImpl = sdkMock.query.getMockImplementation()!;
+    sdkMock.query.mockImplementationOnce((options: unknown) => {
+      const q = baseImpl(options);
+      return query2Gate.then(() => q);
+    });
+
+    h.streams[0].emit({
+      type: 'result',
+      is_error: true,
+      subtype: 'error_during_execution',
+      total_cost_usd: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+    });
+    h.streams[0].fail(
+      new Error('Claude Code returned an error result: No conversation found with session ID: sdk-old'),
+    );
+    await vi.waitFor(() => expect(sdkMock.query).toHaveBeenCalledTimes(2));
+
+    // 空窗期内热切模型 —— 重放请求最终应该用新模型发出。
+    await h.handle.setModel?.('claude-sonnet-5');
+    resolveQuery2();
+
+    await vi.waitFor(() => expect(h.consumedInputs[1]?.length).toBeGreaterThan(0));
+
+    // 无 assistant envelope 的连接失败:先 api_retry 耗尽重试,再 is_error 终态。
+    h.streams[1].emit({
+      type: 'system',
+      subtype: 'api_retry',
+      attempt: 3,
+      max_retries: 3,
+      retry_delay_ms: 1_000,
+      error_status: null,
+      error: 'unknown',
+    });
+    h.streams[1].emit({
+      type: 'result',
+      is_error: true,
+      total_cost_usd: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+    });
+
+    await vi.waitFor(() => expect(h.events.some((e) => e.type === 'error')).toBe(true));
+    const error = h.events.find((e) => e.type === 'error');
+    // 归因必须是热切之后的新模型,而不是 beginNewTurn() 时刻的旧模型。
+    expect(error?.agentMeta).toMatchObject({ model: 'claude-sonnet-5' });
+
+    await h.handle.close();
+    h.streams[1].end();
+    await h.collected;
+  });
+
   it('recovers a fresh session whose own assigned id the CLI reports as not found', async () => {
     // 把 Codex 会话切成全新 Claude 会话(无 resume):SDK 回填 sdk_session_id 并落库后,
     // 首个 turn 在转录落盘前就崩,CLI 把这个刚落库的 fresh id 报成 "No conversation found"。

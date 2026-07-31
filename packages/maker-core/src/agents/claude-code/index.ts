@@ -3555,6 +3555,12 @@ export class ClaudeCodeAgent extends BaseAgent {
         await replayRuntimeDrift(runtimeSnapshot, 'invalid resume rebuild');
         releaseGate();
         if (replayInput) {
+          // beginNewTurn() 在 buildQuery 之前打过一次快照,但 await buildQuery /
+          // replayRuntimeDrift 期间 runtime setter 仍可能把 mutableModel 热切走
+          // (replayRuntimeDrift 会把新选择应用到重建的 query 上);重放请求真正
+          // 入队前(漂移已回放完成、query 已确定)重新打一次快照,覆盖掉可能过期
+          // 的旧值,与普通 send() 路径同一约定(PR review P2)。
+          turnState.turnStartModel = mutableModel;
           if (!inputQueue.push(replayInput)) throw new Error('fresh retry input queue rejected replay');
           armUpstreamResponseIdle();
         }
