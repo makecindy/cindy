@@ -8,8 +8,17 @@ function deps(overrides: Partial<Parameters<typeof runStartupOtaUpdate>[0]> = {}
     checkForUpdateAsync: vi.fn(async () => ({ isAvailable: false })),
     fetchUpdateAsync: vi.fn(async () => ({ isNew: false })),
     reloadAsync: vi.fn(async () => undefined),
+    isEmergencyLaunch: vi.fn(() => false),
+    currentUpdateId: vi.fn(() => 'running-update'),
+    isReloadBlocked: vi.fn(async () => false),
+    recordReload: vi.fn(async () => undefined),
     ...overrides,
   };
+}
+
+/** fetch 到一个与当前运行版本不同的新 update。 */
+function fetchedNewUpdate(id = 'next-update') {
+  return vi.fn(async () => ({ isNew: true, manifest: { id } }));
 }
 
 describe('runStartupOtaUpdate', () => {
@@ -59,7 +68,75 @@ describe('runStartupOtaUpdate', () => {
   it('fetch 到新 bundle → reload,返回 reloading', async () => {
     const d = deps({
       checkForUpdateAsync: vi.fn(async () => ({ isAvailable: true })),
-      fetchUpdateAsync: vi.fn(async () => ({ isNew: true })),
+      fetchUpdateAsync: fetchedNewUpdate(),
+    });
+    await expect(runStartupOtaUpdate(d)).resolves.toBe('reloading');
+    expect(d.reloadAsync).toHaveBeenCalledOnce();
+  });
+
+  it('emergency launch → 不联网、不 reload,直接放行进 App', async () => {
+    const d = deps({
+      isEmergencyLaunch: vi.fn(() => true),
+      checkForUpdateAsync: vi.fn(async () => ({ isAvailable: true })),
+      fetchUpdateAsync: fetchedNewUpdate(),
+    });
+    await expect(runStartupOtaUpdate(d)).resolves.toBe('emergency-launch');
+    expect(d.configureUpdateUrl).not.toHaveBeenCalled();
+    expect(d.checkForUpdateAsync).not.toHaveBeenCalled();
+    expect(d.reloadAsync).not.toHaveBeenCalled();
+  });
+
+  it('fetch 回来的就是当前运行的 update → 不 reload(死循环的直接成因)', async () => {
+    const d = deps({
+      checkForUpdateAsync: vi.fn(async () => ({ isAvailable: true })),
+      fetchUpdateAsync: fetchedNewUpdate('running-update'),
+      currentUpdateId: vi.fn(() => 'running-update'),
+    });
+    await expect(runStartupOtaUpdate(d)).resolves.toBe('already-running');
+    expect(d.reloadAsync).not.toHaveBeenCalled();
+    expect(d.recordReload).not.toHaveBeenCalled();
+  });
+
+  it('同一个 update 已试满次数 → 被闸门拦下,不再 reload', async () => {
+    const d = deps({
+      checkForUpdateAsync: vi.fn(async () => ({ isAvailable: true })),
+      fetchUpdateAsync: fetchedNewUpdate('next-update'),
+      isReloadBlocked: vi.fn(async () => true),
+    });
+    await expect(runStartupOtaUpdate(d)).resolves.toBe('reload-blocked');
+    expect(d.isReloadBlocked).toHaveBeenCalledWith('next-update');
+    expect(d.recordReload).not.toHaveBeenCalled();
+    expect(d.reloadAsync).not.toHaveBeenCalled();
+  });
+
+  it('reload 前必须先把尝试记下来(顺序不能颠倒,否则重启会打断落盘)', async () => {
+    const calls: string[] = [];
+    const d = deps({
+      checkForUpdateAsync: vi.fn(async () => ({ isAvailable: true })),
+      fetchUpdateAsync: fetchedNewUpdate('next-update'),
+      recordReload: vi.fn(async () => { calls.push('record'); }),
+      reloadAsync: vi.fn(async () => { calls.push('reload'); }),
+    });
+    await expect(runStartupOtaUpdate(d)).resolves.toBe('reloading');
+    expect(calls).toEqual(['record', 'reload']);
+    expect(d.recordReload).toHaveBeenCalledWith('next-update');
+  });
+
+  it('闸门记录写不进去 → error(fail-open),绝不 reload', async () => {
+    const d = deps({
+      checkForUpdateAsync: vi.fn(async () => ({ isAvailable: true })),
+      fetchUpdateAsync: fetchedNewUpdate('next-update'),
+      recordReload: vi.fn(async () => { throw new Error('storage full'); }),
+    });
+    await expect(runStartupOtaUpdate(d)).resolves.toBe('error');
+    expect(d.reloadAsync).not.toHaveBeenCalled();
+  });
+
+  it('当前跑包内 bundle(updateId 为 null)时仍允许装上热更', async () => {
+    const d = deps({
+      checkForUpdateAsync: vi.fn(async () => ({ isAvailable: true })),
+      fetchUpdateAsync: fetchedNewUpdate('next-update'),
+      currentUpdateId: vi.fn(() => null),
     });
     await expect(runStartupOtaUpdate(d)).resolves.toBe('reloading');
     expect(d.reloadAsync).toHaveBeenCalledOnce();
