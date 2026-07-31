@@ -34,7 +34,7 @@ export function FeishuConflictDialog({
   onCreateOwnApp,
 }: FeishuConflictDialogProps) {
   const { t } = useTranslation();
-  const serviceName = service === 'lark' ? 'Lark' : 'Feishu';
+  const serviceName = t(`settings.feishuBot.services.${service}`);
   return (
     <AlertDialog.Root open={open} onOpenChange={(next) => !next && onDismiss()}>
       <AlertDialog.Portal>
