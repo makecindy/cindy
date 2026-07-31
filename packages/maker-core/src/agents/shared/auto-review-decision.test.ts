@@ -91,6 +91,11 @@ describe('extractAutoReviewUserIntent', () => {
       { type: 'image', path: '/tmp/screenshot.png', mimeType: 'image/png' },
       { type: 'text', text: 'Then run tests' },
     ])).toBe('Fix the type error\nThen run tests');
-    expect(extractAutoReviewUserIntent('x'.repeat(2_100))).toHaveLength(2_000);
+    const longIntent = `initial context-${'x'.repeat(2_100)}-FINAL: do not push`;
+    const compacted = extractAutoReviewUserIntent(longIntent);
+    expect(compacted).toHaveLength(2_000);
+    expect(compacted).toMatch(/^initial context-/);
+    expect(compacted).toContain('…[middle omitted]…');
+    expect(compacted).toMatch(/-FINAL: do not push$/);
   });
 });

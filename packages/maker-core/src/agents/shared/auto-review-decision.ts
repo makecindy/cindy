@@ -111,7 +111,19 @@ export async function resolveAutoReviewDecision(
   };
 }
 
-/** 只取当前用户消息文本并设硬上限，避免复制主 Agent 的完整上下文。 */
+const MAX_USER_INTENT_CHARS = 2_000;
+const USER_INTENT_TRUNCATION_MARKER = '\n…[middle omitted]…\n';
+
+function compactCurrentUserIntent(text: string): string {
+  const normalized = text.trim();
+  if (normalized.length <= MAX_USER_INTENT_CHARS) return normalized;
+  const remaining = MAX_USER_INTENT_CHARS - USER_INTENT_TRUNCATION_MARKER.length;
+  const headChars = Math.ceil(remaining * 0.75);
+  const tailChars = remaining - headChars;
+  return `${normalized.slice(0, headChars)}${USER_INTENT_TRUNCATION_MARKER}${normalized.slice(-tailChars)}`;
+}
+
+/** 只取当前用户消息文本并设硬上限，保留末尾的最终要求或更正。 */
 export function extractAutoReviewUserIntent(content: UserMessage['content']): string {
   const text = typeof content === 'string'
     ? content
@@ -119,5 +131,5 @@ export function extractAutoReviewUserIntent(content: UserMessage['content']): st
       .filter((block): block is Extract<typeof block, { type: 'text' }> => block.type === 'text')
       .map((block) => block.text)
       .join('\n');
-  return text.trim().slice(0, 2_000);
+  return compactCurrentUserIntent(text);
 }
