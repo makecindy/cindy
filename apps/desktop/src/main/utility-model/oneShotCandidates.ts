@@ -898,8 +898,8 @@ async function requestProviderHttpText(input: {
   reasoningEffort?: 'low' | 'medium' | 'high';
   /** Some coding-specialized models reject their wire's reasoning field. */
   supportsReasoning?: boolean;
-  /** Unknown custom routes may reject an otherwise OpenAI-compatible reasoning field. */
-  retryWithoutReasoningOnInvalidRequest?: boolean;
+  /** Unknown custom routes may reject optional fields from an otherwise compatible wire. */
+  retryWithMinimalBodyOnInvalidRequest?: boolean;
   /** Some private Responses-compatible endpoints reject max_output_tokens. */
   supportsMaxOutputTokens?: boolean;
 }): Promise<string> {
@@ -912,21 +912,26 @@ async function requestProviderHttpText(input: {
       && input.reasoningEffort
       && input.supportsReasoning !== false,
     );
-    const buildBody = (includeReasoning: boolean) => input.wire === 'responses'
+    const hasOptionalRequestFields = input.wire === 'responses'
+      || input.maxTokens !== undefined
+      || supportsRequestedReasoning;
+    const buildBody = (minimal: boolean) => input.wire === 'responses'
       ? {
         model: input.model,
         input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: input.prompt }] }],
-        tools: [],
-        tool_choice: 'auto',
-        parallel_tool_calls: false,
-        ...(input.maxTokens !== undefined && input.supportsMaxOutputTokens !== false
+        ...(!minimal ? {
+          tools: [],
+          tool_choice: 'auto',
+          parallel_tool_calls: false,
+          store: false,
+          stream: true,
+        } : {}),
+        ...(!minimal && input.maxTokens !== undefined && input.supportsMaxOutputTokens !== false
           ? { max_output_tokens: input.maxTokens }
           : {}),
-        ...(includeReasoning && supportsRequestedReasoning
+        ...(!minimal && supportsRequestedReasoning
           ? { reasoning: { effort: input.reasoningEffort } }
           : {}),
-        store: false,
-        stream: true,
       }
       : input.wire === 'anthropic-messages'
         ? {
@@ -936,30 +941,31 @@ async function requestProviderHttpText(input: {
         }
         : {
           model: input.model,
-          ...(input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
-          ...(includeReasoning && supportsRequestedReasoning
+          ...(!minimal && input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
+          ...(!minimal && supportsRequestedReasoning
             ? { reasoning_effort: input.reasoningEffort }
             : {}),
           messages: [{ role: 'user', content: input.prompt }],
         };
-    const send = (includeReasoning: boolean) => undiciFetch(input.endpoint, {
+    const send = (minimal: boolean) => undiciFetch(input.endpoint, {
       method: 'POST',
       signal: controller.signal,
       headers: {
         ...(input.headers ?? {}),
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(buildBody(includeReasoning)),
+      body: JSON.stringify(buildBody(minimal)),
     });
-    let response = await send(true);
+    let response = await send(false);
     if (
       !response.ok
       && (response.status === 400 || response.status === 422)
-      && supportsRequestedReasoning
-      && input.retryWithoutReasoningOnInvalidRequest
+      && input.wire !== 'anthropic-messages'
+      && hasOptionalRequestFields
+      && input.retryWithMinimalBodyOnInvalidRequest
     ) {
       await response.body?.cancel().catch(() => undefined);
-      response = await send(false);
+      response = await send(true);
     }
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
@@ -1056,7 +1062,7 @@ async function requestCustomProviderText(input: {
     maxTokens: input.maxTokens,
     timeoutMs: input.timeoutMs,
     reasoningEffort: input.reasoningEffort,
-    retryWithoutReasoningOnInvalidRequest: true,
+    retryWithMinimalBodyOnInvalidRequest: true,
   });
 }
 

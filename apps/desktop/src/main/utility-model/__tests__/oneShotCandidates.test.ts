@@ -434,17 +434,19 @@ describe('utility one-shot candidates', () => {
       wireProtocol: 'openai-chat' as const,
       endpoint: 'https://custom.example/v1/chat/completions',
       reasoningField: 'reasoning_effort',
+      maxTokensField: 'max_tokens',
       successBody: JSON.stringify({ choices: [{ message: { content: 'chat result' } }] }),
     },
     {
       wireProtocol: 'openai-responses' as const,
       endpoint: 'https://custom.example/v1/responses',
       reasoningField: 'reasoning',
+      maxTokensField: 'max_output_tokens',
       successBody: 'data: {"type":"response.output_text.delta","delta":"response result"}\ndata: [DONE]\n',
     },
   ])(
-    'retries a custom $wireProtocol route without reasoning after an invalid-parameter response',
-    async ({ wireProtocol, endpoint, reasoningField, successBody }) => {
+    'retries a custom $wireProtocol route with a minimal body after an invalid-parameter response',
+    async ({ wireProtocol, endpoint, reasoningField, maxTokensField, successBody }) => {
       activeCatalog.mockReturnValue({
         providers: [{
           id: 'custom-reasoning-unknown',
@@ -480,6 +482,7 @@ describe('utility one-shot candidates', () => {
         providerId: 'custom-reasoning-unknown',
         agentKind: 'codex',
         model: 'custom-model',
+        maxTokens: 384,
         reasoningEffort: 'low',
       });
 
@@ -490,7 +493,20 @@ describe('utility one-shot candidates', () => {
       const firstBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
       const retryBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)) as Record<string, unknown>;
       expect(firstBody).toHaveProperty(reasoningField);
+      expect(firstBody).toHaveProperty(maxTokensField, 384);
       expect(retryBody).not.toHaveProperty(reasoningField);
+      expect(retryBody).not.toHaveProperty(maxTokensField);
+      if (wireProtocol === 'openai-responses') {
+        expect(retryBody).toEqual({
+          model: 'custom-model',
+          input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'generate' }] }],
+        });
+      } else {
+        expect(retryBody).toEqual({
+          model: 'custom-model',
+          messages: [{ role: 'user', content: 'generate' }],
+        });
+      }
     },
   );
 
