@@ -11,7 +11,7 @@
  *   into Markdown image nodes before HTML filtering.
  */
 
-import { createElement, memo, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
+import { createElement, memo, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -72,8 +72,10 @@ import { isRemoteFileOrigin, type SessionFileOrigin } from '@/lib/sessionFileOri
 import {
   fetchChatFileWithToasts,
   peekRemotePathVerdict,
+  peekRemotePathVerdictForRender,
+  remotePathVerdictKey,
   revealRemoteChatFile,
-  subscribeRemotePathVerdictStale,
+  subscribeRemotePathVerdictChange,
   verifyRemotePathCached,
 } from '@/lib/remoteFileOpen';
 import { i18n } from '@/i18n';
@@ -1169,99 +1171,83 @@ function useResolvedMarkdownTarget(
   const { origin: fileOrigin } = useChatSessionFile();
   const remoteOrigin = isRemoteFileOrigin(fileOrigin) ? fileOrigin : null;
 
-  // unknown 负缓存到期 → 递增,进下面验证 effect 的依赖驱动重验。TTL 到期本身不是
-  // 事件(没有依赖会变),不接这条订阅的话「自愈」只在组件重挂时发生:一条挂着不动的
-  // 消息在链路恢复后会一直停在纯文本(PR #1144 review 实捉)。已有确定结论的引用会在
-  // peek 处早退,所以通知只会让仍是 unknown 的那批真的重发 stat。
-  const [staleGen, setStaleGen] = useState(0);
-  const needsStaleWatch = remoteOrigin !== null && target.kind === 'local-candidate';
-  useEffect(() => {
-    if (!needsStaleWatch) return;
-    return subscribeRemotePathVerdictStale(() => setStaleGen((n) => n + 1));
-  }, [needsStaleWatch]);
+  // 远程点亮态**只有一个真值来源:模块缓存**;本组件不自己存任何结论,只存「缓存的
+  // 哪一版」。原来是 syncResolved(useMemo)?? asyncResolved(useState)两处并存 —— memo
+  // 不吃缓存变化、state 靠早返回跳过重算,于是每出现一条新的状态迁移就漏一条边:
+  //   第 8 轮 = TTL 到期没有通道通知;
+  //   第 9 轮 = 派生值没跟着新结论被覆盖(nonfile 降级);
+  //   第 10 轮 = 另一个挂载点写入的确定态传不过来。
+  // 三条都是「组件自己存了一份、而真值在可变缓存里」的同一个病。合并成纯派生后,
+  // 任何一条边都只有 resolveFromCache 一个地方需要改对(PR #1144 第 10 轮止损重构)。
+  const remoteAbsPath = useMemo(() => {
+    if (isStreaming || target.kind !== 'local-candidate' || !remoteOrigin) return '';
+    return resolveLocalPath(target.href, workingDir) || '';
+  }, [isStreaming, target, workingDir, remoteOrigin]);
 
-  // Synchronous resolution from the renderer cache. A reference that resolved
-  // on a previous mount (e.g. before the user switched away and back) repaints
-  // its chip on the very first render — no plain-text → chip flash, no repeat
-  // IPC. Recomputed on dep change so an in-place href/line change is covered.
-  const syncResolved = useMemo<MarkdownTarget | null>(() => {
+  // 缓存里**本 key** 的状态变了(确定态落库 / unknown 负缓存到期)→ 递增 → 重新派生。
+  // 按 key 过滤:一屏几十个引用,全量通知会让首屏 N 次 stat 引发 N×N 次重渲染。
+  const [cacheGen, setCacheGen] = useState(0);
+  useEffect(() => {
+    if (!remoteAbsPath || !remoteOrigin) return;
+    const mine = remotePathVerdictKey(remoteOrigin, workingDir, remoteAbsPath);
+    return subscribeRemotePathVerdictChange((key) => {
+      if (key === mine) setCacheGen((n) => n + 1);
+    });
+  }, [remoteAbsPath, remoteOrigin, workingDir]);
+
+  /** 当前缓存状态 → 该渲染成什么。纯函数式派生,所有触发点都走它。 */
+  const resolveFromCache = useCallback((): MarkdownTarget | null => {
     if (isStreaming || target.kind !== 'local-candidate') return null;
     const candidate = target;
     if (remoteOrigin) {
-      const absPath = resolveLocalPath(candidate.href, workingDir);
-      if (!absPath) return null;
-      const verdict = peekRemotePathVerdict(remoteOrigin, workingDir, absPath);
-      // 点亮与否只由 decideRemoteLit 一处裁决(sync / async 两条分支共用),它对每个
-      // verdict 都有返回值。peek 只返回确定态(unknown 走短 TTL 负缓存、不进 peek,
-      // 见 remoteFileOpen 的不变量 A),所以这里实际只会命中 file / directory / undefined。
+      if (!remoteAbsPath) return null;
+      // ForRender 版会把 TTL 未过期的负缓存回成 'unknown',于是「断链期间的乐观点亮」
+      // 也是缓存的派生,不需要组件自己记住(见 remoteFileOpen 里两个 peek 的分工)。
+      const verdict = peekRemotePathVerdictForRender(remoteOrigin, workingDir, remoteAbsPath);
       const decision = decideRemoteLit(verdict, candidate.href, candidate.originalHref);
-      if (!decision.lit) return null; // 未确定 → 交给下面的异步 effect
+      if (!decision.lit) return null;
       return resolvedLocalFromResult(candidate, {
         status: 'unique',
-        absPath,
+        absPath: remoteAbsPath,
         kind: decision.kind,
       });
     }
     const cached = peekResolveLocalPathSmart(candidate.href, workingDir);
     return cached ? resolvedLocalFromResult(candidate, cached) : null;
-  }, [isStreaming, target, workingDir, remoteOrigin]);
+  }, [isStreaming, target, workingDir, remoteOrigin, remoteAbsPath]);
 
-  // Async resolution for cache misses only. The synchronous path above shadows
-  // this whenever it has an answer, so a first-view (cold) ref flashes once,
-  // then the result is cached and every later mount hits the sync path.
-  const [asyncResolved, setAsyncResolved] = useState<MarkdownTarget | null>(null);
-
-  // 清旧结论只跟着 target / workdir / streaming 走。**staleGen 递增不清** ——
-  // 那只表示「该重验了」,不表示「旧结论失效了」;跟着清会让已乐观点亮的引用每 30s
-  // 闪一下(点亮 → 纯文本 → 点亮)。
-  useEffect(() => {
-    setAsyncResolved(null);
-  }, [isStreaming, remoteOrigin, target, workingDir]);
+  // 惰性初值:上次已解析过的引用第一帧就画成 chip,不闪纯文本(这是原 syncResolved
+  // memo 的唯一职责,合并进初值即可)。
+  const [resolved, setResolved] = useState<MarkdownTarget | null>(resolveFromCache);
 
   useEffect(() => {
+    // **无条件**按当前缓存重新派生。缓存说什么就是什么,不存在「保留旧结论」的分支 ——
+    // 那正是前三轮漏边的形状。
+    setResolved(resolveFromCache());
     if (isStreaming || target.kind !== 'local-candidate') return;
     const candidate = target;
+    let cancelled = false;
     if (remoteOrigin) {
-      const absPath = resolveLocalPath(candidate.href, workingDir);
-      // 「有确定结论才跳过重验」:peek 不返回 unknown,所以一次断链不会把该路径钉死
-      // 在纯文本上——TTL 过后重挂会自愈重验(见 remoteFileOpen 的不变量 A)。
-      if (!absPath || peekRemotePathVerdict(remoteOrigin, workingDir, absPath)) return;
-      let cancelled = false;
-      void verifyRemotePathCached(remoteOrigin, workingDir, absPath).then((verdict) => {
-        if (cancelled) return;
-        // **无条件覆盖**,不按 verdict 早返回:TTL 到期重验会走到这里第二次,
-        // 「先按 unknown 乐观点亮 → 链路恢复后确认 nonfile」必须能退回纯文本。
-        // 早返回写法会把不存在的路径一直留在点亮态(PR #1144 review 实捉)。
-        const decision = decideRemoteLit(verdict, candidate.href, candidate.originalHref);
-        setAsyncResolved(
-          decision.lit
-            ? resolvedLocalFromResult(candidate, {
-                status: 'unique',
-                absPath,
-                kind: decision.kind,
-              })
-            : null,
-        );
+      // 有确定结论就不必重验;unknown 的限流由 verifyRemotePathCached 内部的负缓存承担。
+      if (!remoteAbsPath || peekRemotePathVerdict(remoteOrigin, workingDir, remoteAbsPath)) return;
+      void verifyRemotePathCached(remoteOrigin, workingDir, remoteAbsPath).then(() => {
+        // 不看返回值:结论已落缓存,统一重新派生(降级 / 升级都走同一条路)。
+        if (!cancelled) setResolved(resolveFromCache());
       });
       return () => {
         cancelled = true;
       };
     }
     if (peekResolveLocalPathSmart(candidate.href, workingDir)) return;
-
-    let cancelled = false;
-    void resolveLocalPathSmartCached(candidate.href, workingDir).then((result) => {
-      if (cancelled) return;
-      setAsyncResolved(resolvedLocalFromResult(candidate, result));
+    void resolveLocalPathSmartCached(candidate.href, workingDir).then(() => {
+      if (!cancelled) setResolved(resolveFromCache());
     });
-
     return () => {
       cancelled = true;
     };
-    // staleGen:unknown 负缓存到期时重跑本 effect(见上面订阅处的说明)。
-  }, [isStreaming, remoteOrigin, target, workingDir, staleGen]);
+    // cacheGen:本 key 的缓存状态变化(TTL 到期 / 别处写入确定态)→ 重新派生。
+  }, [isStreaming, remoteOrigin, target, workingDir, remoteAbsPath, resolveFromCache, cacheGen]);
 
-  const resolved = syncResolved ?? asyncResolved;
   return isResolvedForTarget(resolved, target) ? resolved : target;
 }
 

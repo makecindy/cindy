@@ -225,7 +225,13 @@ export function decideRemoteLit(
   // 链路一抖,普通行内 code 就会被展示成带下划线的可点文件、点了必失败
   // (DESIGN.md §14.5 规则 5;移动端同款门槛在 ChatPathChipSpan)。
   if (verdict === 'unknown' && !isAmbiguousPathShape(href, originalHref)) {
-    return { lit: true, kind: 'file' };
+    // 尾斜杠是作者显式给出的**目录**信号,断链时也要保住这个类型:回 'file' 的话
+    // resolvedLocalFromResult 会把 `src/components/` 当文件,点击进文本预览 / 取件链路,
+    // 而不是 activateResolvedLocalTarget 的目录导航分支(PR #1144 review 实捉 ——
+    // 上一轮修好了「尾斜杠被误判成歧义」,却在这里把同一个尾斜杠携带的类型丢了)。
+    // 移动端 ChatPathChipSpan 早有同款判断(verdict === 'unknown' && directoryShape)。
+    const dirShape = looksLikeDirectoryPath(originalHref ?? href);
+    return { lit: true, kind: dirShape ? 'directory' : 'file' };
   }
   // nonfile(远端明确不存在)/ 歧义形状未确认 / 尚未验证 → 纯文本。
   return { lit: false };

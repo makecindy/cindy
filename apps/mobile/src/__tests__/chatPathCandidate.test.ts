@@ -452,10 +452,9 @@ describe('findBareFilePathMatch(正文纯文本裸路径词法)', () => {
     expect(allValues('在 docs/设计稿/index.md 里')).toEqual(['docs/设计稿/index.md']);
   });
 
-  it('./ ../ ~/ 锚点的相对路径(单层也认)', () => {
+  it('./ ../ 锚点的相对路径(单层也认;`~/` 见下条,刻意不认)', () => {
     expect(allValues('打开 ./foo.md 看')).toEqual(['./foo.md']);
     expect(allValues('在 ../sib/foo.json 里')).toEqual(['../sib/foo.json']);
-    expect(allValues('日志 ~/logs/app.log 末尾')).toEqual(['~/logs/app.log']);
   });
 
   it('图片扩展名同样识别(桌面「点开看图」的手机对等入口)', () => {
@@ -490,6 +489,21 @@ describe('findBareFilePathMatch(正文纯文本裸路径词法)', () => {
 
   it('目录(尾部分隔符)不识别', () => {
     expect(allValues('放在 src/components/ 下')).toEqual([]);
+  });
+
+  it('`~/` 不识别 —— 本仓任何一层都不展开 `~`,识别了必然指向错误路径', () => {
+    // renderer 的 resolveChatAbsPath / resolveLocalPath 只做 join,被控端的
+    // fs:stat-path / fs:resolve-path 也不展开 → `~/logs/app.log` 会被 stat 成
+    // `<workdir>/~/logs/app.log`:链路正常时判 nonfile 白发一次 stat,链路断时还会按
+    // 「绝对形状」乐观点亮、点开错误地址(PR #1144 review 实捉)。
+    expect(allValues('日志在 ~/logs/app.log')).toEqual([]);
+    expect(allValues('见 ~\\logs\\app.log')).toEqual([]);
+    // 只删锚点里的 `~` 是不够的:SEG 含 `~`,`(?:SEG SEP)+` 一样能吃下 `~/`。
+    // 这两条钉住负向前瞻真的生效,而不是"看起来改了"。
+    expect(allValues('见 ~/a/b.ts 与 ~/c.md')).toEqual([]);
+    // 但 `~` 的**中段**用途不受影响(备份文件名、短名目录)。
+    expect(allValues('见 docs/a~1/b.ts')).toEqual(['docs/a~1/b.ts']);
+    expect(allValues('见 src/old~.ts')).toEqual(['src/old~.ts']);
   });
 
   it('超长扩展名整条不识别,**不得截断成前 10 个字符**', () => {

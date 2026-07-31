@@ -63,8 +63,21 @@ const CJK = '\\u4e00-\\u9fff\\u3400-\\u4dbf\\u3040-\\u30ff\\uac00-\\ud7af';
 // 路径段允许的字符(不含分隔符、不含 `:`)。`:` 留给盘符锚点与 `:line` 后缀。
 const SEG = `[A-Za-z0-9._~@+\\-${CJK}]+`;
 const SEP = '\\\\/'; // 反斜杠 + 正斜杠,字符类内用
-// 锚点:盘符 `C:\` / `./` `../` `~/` / 单独的分隔符开头。
-const ANCHOR = `(?:[A-Za-z]:[${SEP}]|[.~]{1,2}[${SEP}]|[${SEP}])`;
+// 锚点:盘符 `C:\` / `./` `../` / 单独的分隔符开头。
+//
+// **刻意不含 `~/`**:`~` 在本仓任何一层都没有展开 —— renderer 的 resolveLocalPath /
+// resolveChatAbsPath 只做 join,被控端的 fs:stat-path / fs:resolve-path 也不展开,于是
+// `~/logs/app.log` 会被 stat 成 `<workdir>/~/logs/app.log`:链路正常时判 nonfile、永远不
+// 点亮(白发一次 stat),链路断时还会按「绝对形状」乐观点亮、点开错误地址。
+// 在拿到可靠展开能力(被控端返回真实 home)之前,正文裸路径不认这个锚点
+// (PR #1144 review 实捉;行内 code / 显式链接入口的同一问题是既有行为,属另一处 —— 修它
+// 要改被控端协议,不是 renderer 能兜的,已在 PR 里记为 follow-up)。
+const ANCHOR = `(?:[A-Za-z]:[${SEP}]|\\.{1,2}[${SEP}]|[${SEP}])`;
+// `SEG` 含 `~`(备份文件 `file~` 等中段用途),所以只改锚点挡不住 `~/x`:
+// `(?:SEG SEP)+` 一样能把 `~/` 当成「段+分隔符」吃下去。故在整条匹配前加负向前瞻,
+// 明确拒绝以 `~/` `~\` 开头的 token(实测过:只删锚点里的 `~` 时 `~/logs/app.log`
+// 仍然命中)。
+const NO_HOME = '(?!~[\\\\/])';
 // 路径主体:要么有锚点(中间段可有可无),要么是"段+分隔符"至少一组(保证含分隔符);
 // 末段必须以扩展名收尾。
 //
@@ -80,7 +93,7 @@ const LINE_SUFFIX = '(?::[1-9]\\d{0,6}(?::[1-9]\\d{0,6})?)?';
 // 左边界:前一个字符不能是路径字符 / 分隔符(`:` 不算,允许 `文件:src/x.ts`)。
 const LEFT_BOUNDARY = `(?<![A-Za-z0-9._~@+${CJK}${SEP}])`;
 
-const PATH_RE = new RegExp(`${LEFT_BOUNDARY}(${BODY}${LINE_SUFFIX})`, 'g');
+const PATH_RE = new RegExp(`${LEFT_BOUNDARY}${NO_HOME}(${BODY}${LINE_SUFFIX})`, 'g');
 
 /**
  * 标记属性名:正文裸路径切出的 link 节点带上它,渲染层据此走「只加下划线、不变

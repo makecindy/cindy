@@ -89,15 +89,49 @@ function capMapSize(map: Map<string, unknown>, cap: number): void {
 // (不是每个 chip 挂一个表 —— 一屏几十个 chip 就是几十个定时器),没有 unknown 待期时
 // 零定时器、不轮询;到期清掉过期条目后发**一次**通知,已有确定结论的 chip 会在 peek
 // 处早退,于是实际重验的只有仍是 unknown 的那批,节奏就是 TTL 本身(30s)。
-const staleListeners = new Set<() => void>();
+const changeListeners = new Set<(key: string) => void>();
 let staleTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** 订阅「unknown 负缓存到期,可以重验了」。返回退订函数。 */
-export function subscribeRemotePathVerdictStale(listener: () => void): () => void {
-  staleListeners.add(listener);
+/**
+ * 订阅「某个 key 的缓存状态变了」——**确定态落库、或 unknown 负缓存到期**都会通知。
+ * listener 收到变化的 key(用 remotePathVerdictKey 构造自己的 key 比对),按 key 过滤是
+ * 刻意的:一屏几十个 chip 各自订阅,全量广播会让首屏 N 次 stat 引发 N×N 次重渲染。
+ *
+ * 「确定态落库也通知」是必需的:同一路径可能出现在多个 chip 上,A 先按 unknown 乐观
+ * 点亮,B 随后拿到确定的 nonfile 写进缓存 —— 没有这条通道 A 永远不知道,已确认不存在的
+ * 路径会一直带着下划线可点(PR #1144 review 实捉,桌面同款)。
+ */
+export function subscribeRemotePathVerdictChange(listener: (key: string) => void): () => void {
+  changeListeners.add(listener);
   return () => {
-    staleListeners.delete(listener);
+    changeListeners.delete(listener);
   };
+}
+
+function notifyVerdictChange(key: string): void {
+  for (const listener of [...changeListeners]) listener(key);
+}
+
+/** 缓存 key(供订阅方按 key 过滤变化通知)。 */
+export function remotePathVerdictKey(deviceId: string, workdir: string, absPath: string): string {
+  return verdictKey(deviceId, workdir, absPath);
+}
+
+/**
+ * 同步读**渲染用状态**:确定态优先,否则 TTL 未过期的负缓存回 `'unknown'`,都没有回
+ * `undefined`。让「点亮态」成为缓存的纯派生 —— 断链期间的乐观点亮不再需要 chip 自己
+ * 存一份(自存的那份收不到缓存变化,就会变陈旧)。
+ */
+export function peekRemotePathVerdictForRender(
+  deviceId: string,
+  workdir: string,
+  absPath: string,
+): RemotePathVerdict | undefined {
+  const key = verdictKey(deviceId, workdir, absPath);
+  const definitive = verdictCache.get(key);
+  if (definitive) return definitive;
+  const until = unknownUntil.get(key);
+  return until !== undefined && until > Date.now() ? 'unknown' : undefined;
 }
 
 function scheduleStaleSweep(delayMs: number): void {
@@ -107,12 +141,14 @@ function scheduleStaleSweep(delayMs: number): void {
     staleTimer = null;
     const now = Date.now();
     let earliest = Number.POSITIVE_INFINITY;
+    const expired: string[] = [];
     for (const [key, until] of unknownUntil) {
-      if (until <= now) unknownUntil.delete(key);
+      if (until <= now) expired.push(key);
       else if (until < earliest) earliest = until;
     }
+    for (const key of expired) unknownUntil.delete(key);
     if (earliest !== Number.POSITIVE_INFINITY) scheduleStaleSweep(earliest - now);
-    for (const listener of [...staleListeners]) listener();
+    for (const key of expired) notifyVerdictChange(key);
   }, Math.max(1, delayMs));
 }
 
@@ -166,6 +202,9 @@ export function verifyRemotePathCached(
         capMapSize(verdictCache, VERDICT_CACHE_CAP);
         verdictCache.set(key, verdict);
       }
+      // 两条分支都通知:确定态落库要让其它 chip 收敛(含把乐观点亮降级成纯文本),
+      // unknown 落负缓存要让本次发起者之外的 chip 也能画出乐观点亮态。
+      notifyVerdictChange(key);
       return verdict;
     })
     .finally(() => verdictInflight.delete(key));
@@ -185,5 +224,5 @@ export function _clearRemotePathVerdictCache(): void {
     clearTimeout(staleTimer);
     staleTimer = null;
   }
-  staleListeners.clear();
+  changeListeners.clear();
 }

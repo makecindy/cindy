@@ -23,7 +23,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   _clearRemotePathVerdictCache,
   peekRemotePathVerdict,
-  subscribeRemotePathVerdictStale,
+  remotePathVerdictKey,
+  subscribeRemotePathVerdictChange,
   verifyRemotePathCached,
   type RemoteFileOrigin,
 } from '../lib/remoteFileOpen';
@@ -105,59 +106,76 @@ describe('确定态仍是无 TTL 永久缓存(切走再回来不闪烁)', () => 
   });
 });
 
-describe('负缓存到期的通知(「自愈」不能只在重挂时发生)', () => {
-  // TTL 到期本身不是事件:没有任何 React 依赖会因它而变。只靠「重挂时重验」的话,
-  // 一条渲染完就一直挂着不动的消息在链路恢复后仍停在纯文本,直到用户切走再回来
-  // (PR #1144 review 实捉)。故模块把到期翻译成一次通知。
-  it('TTL 到期时通知订阅者,且该 key 已可重验', async () => {
-    const chatStat = stubChatStat(() => Promise.reject(new Error('link down')));
-    const seen: number[] = [];
-    subscribeRemotePathVerdictStale(() => seen.push(1));
+describe('缓存变化的通知(渲染态是缓存的纯派生,变化必须有通道)', () => {
+  // 渲染层不自己存结论,只在收到「本 key 变了」时重新派生。所以缓存的**两种**变化都要
+  // 通知:确定态落库(可能把别处的乐观点亮降级成纯文本)、unknown 负缓存到期(该重验了)。
+  // 三轮 review 各捉到这个状态机的一条边,合并成本节的不变量。
+  const mine = () => remotePathVerdictKey(ORIGIN, WORKDIR, ABS);
+
+  it('确定态落库时通知本 key —— 另一挂载点的乐观点亮才能降级', () => {
+    stubChatStat(() => Promise.resolve({ verdict: 'nonfile' }));
+    const keys: string[] = [];
+    subscribeRemotePathVerdictChange((k) => keys.push(k));
+    return verify().then(() => {
+      expect(keys, '确定态落库没有通知 —— 别处已点亮的引用永远不会退回纯文本')
+        .toEqual([mine()]);
+    });
+  });
+
+  it('unknown 落负缓存时也通知(其它挂载点才能画出乐观点亮态)', async () => {
+    stubChatStat(() => Promise.reject(new Error('link down')));
+    const keys: string[] = [];
+    subscribeRemotePathVerdictChange((k) => keys.push(k));
     await verify();
-    expect(seen, '还没到期就通知了').toHaveLength(0);
+    expect(keys).toEqual([mine()]);
+  });
+
+  it('TTL 到期时按 key 通知,且该 key 已可重验', async () => {
+    const chatStat = stubChatStat(() => Promise.reject(new Error('link down')));
+    const keys: string[] = [];
+    subscribeRemotePathVerdictChange((k) => keys.push(k));
+    await verify();
+    expect(keys).toHaveLength(1); // 落负缓存那一次
 
     vi.setSystemTime(new Date('2026-07-31T00:00:31Z'));
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(seen, 'TTL 到期没有通知 —— 挂载中的引用永远等不到重验').toHaveLength(1);
+    expect(keys, 'TTL 到期没通知 —— 挂载中的引用永远等不到重验').toEqual([mine(), mine()]);
 
-    // 通知后该 key 的负缓存已被清掉:下一次 verify 真的重发 stat。
     await verify();
     expect(chatStat).toHaveBeenCalledTimes(2);
   });
 
-  it('多个 key 到期只发一次通知,不是每 key 一次', async () => {
+  it('通知**按 key**,订阅方自己过滤 —— 不是全量广播', async () => {
+    // ⚠️ 这条断言方向刻意与「合并成一次通知」相反。按 key 通知是必须的:一屏几十个
+    // 引用各自订阅,全量广播会让首屏 N 次 stat 引发 N×N 次重渲染。
     stubChatStat(() => Promise.reject(new Error('link down')));
-    let notified = 0;
-    subscribeRemotePathVerdictStale(() => { notified += 1; });
+    const keys: string[] = [];
+    subscribeRemotePathVerdictChange((k) => keys.push(k));
     await Promise.all([
       verifyRemotePathCached(ORIGIN, WORKDIR, '/remote/proj/a'),
       verifyRemotePathCached(ORIGIN, WORKDIR, '/remote/proj/b'),
-      verifyRemotePathCached(ORIGIN, WORKDIR, '/remote/proj/c'),
     ]);
-    vi.setSystemTime(new Date('2026-07-31T00:00:31Z'));
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(notified, '3 个 key 到期发了多次通知(N 个引用会变成 N 次全量重渲染)').toBe(1);
+    expect(new Set(keys).size, '两个不同 key 的通知没有区分开').toBe(2);
+    expect(keys).toContain(remotePathVerdictKey(ORIGIN, WORKDIR, '/remote/proj/a'));
+    expect(keys).toContain(remotePathVerdictKey(ORIGIN, WORKDIR, '/remote/proj/b'));
   });
 
   it('没有 unknown 待期时零定时器(不轮询)', async () => {
     stubChatStat(() => Promise.resolve({ verdict: 'file' }));
-    let notified = 0;
-    subscribeRemotePathVerdictStale(() => { notified += 1; });
     await verify();
     expect(vi.getTimerCount(), '确定态也排了到期定时器 —— 那就是在轮询').toBe(0);
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(notified).toBe(0);
   });
 
   it('退订后不再收到通知', async () => {
     stubChatStat(() => Promise.reject(new Error('link down')));
     let notified = 0;
-    const off = subscribeRemotePathVerdictStale(() => { notified += 1; });
+    const off = subscribeRemotePathVerdictChange(() => { notified += 1; });
     await verify();
+    expect(notified).toBe(1);
     off();
     vi.setSystemTime(new Date('2026-07-31T00:00:31Z'));
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(notified).toBe(0);
+    expect(notified).toBe(1);
   });
 });
 

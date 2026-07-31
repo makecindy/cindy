@@ -81,10 +81,9 @@ describe('remarkLocalPathLinks', () => {
     expect(linkUrls(out)).toEqual(['docs/设计稿/index.md']);
   });
 
-  it('./ ../ ~/ 锚点的相对路径(单层也认)', () => {
+  it('./ ../ 锚点的相对路径(单层也认;`~/` 见下条,刻意不认)', () => {
     expect(linkUrls(runOnText('打开 ./foo.md 看'))).toEqual(['./foo.md']);
     expect(linkUrls(runOnText('在 ../sib/foo.json 里'))).toEqual(['../sib/foo.json']);
-    expect(linkUrls(runOnText('日志 ~/logs/app.log 末尾'))).toEqual(['~/logs/app.log']);
   });
 
   it('前面是 ASCII 冒号也认(文件:src/x.ts)', () => {
@@ -109,6 +108,18 @@ describe('remarkLocalPathLinks', () => {
 
   it('目录(尾部分隔符)不动', () => {
     expect(linkUrls(runOnText('放在 src/components/ 下'))).toEqual([]);
+  });
+
+  it('`~/` 不动 —— 本仓任何一层都不展开 `~`', () => {
+    // resolveLocalPath 只做 join,main 侧 file-browser 也没有 homedir 展开 →
+    // `~/logs/app.log` 会解析成 `<cwd>/~/logs/app.log`。本机会话因存在性检查退回纯
+    // 文本,远程会话断链时会按「绝对形状」乐观点亮、点开错误地址(review 实捉)。
+    expect(linkUrls(runOnText('日志在 ~/logs/app.log'))).toEqual([]);
+    // 只删锚点里的 `~` 不够:SEG 含 `~`,`(?:SEG SEP)+` 一样能吃下 `~/`。
+    expect(linkUrls(runOnText('见 ~/a/b.ts 与 ~/c.md'))).toEqual([]);
+    // `~` 的中段用途不受影响。
+    expect(linkUrls(runOnText('见 docs/a~1/b.ts'))).toEqual(['docs/a~1/b.ts']);
+    expect(linkUrls(runOnText('见 src/old~.ts'))).toEqual(['src/old~.ts']);
   });
 
   it('超长扩展名整条不动,**不得截断成前 10 个字符**', () => {

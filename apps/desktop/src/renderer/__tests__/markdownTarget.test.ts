@@ -270,8 +270,11 @@ describe('decideRemoteLit(远程会话点亮的唯一判据)', () => {
     expect(lit('unknown', '/etc/hosts')).toEqual({ lit: true, kind: 'file' });
     expect(lit('unknown', 'src/components')).toEqual({ lit: false });
     expect(lit('unknown', 'array.map')).toEqual({ lit: false });
-    // 尾斜杠目录:回看 originalHref。
-    expect(lit('unknown', 'src/components', 'src/components/')).toEqual({ lit: true, kind: 'file' });
+    // 尾斜杠目录:回看 originalHref,**且要保住 directory 类型** —— 回 'file' 的话
+    // 点击会进文本预览 / 取件链路,而不是目录导航分支(review 实捉)。
+    expect(lit('unknown', 'src/components', 'src/components/')).toEqual({ lit: true, kind: 'directory' });
+    // 确定态本来就带类型,不受尾斜杠影响。
+    expect(lit('directory', 'src/components', 'src/components/')).toEqual({ lit: true, kind: 'directory' });
   });
 
   it('交错序列:先按 unknown 乐观点亮,重验确认 nonfile 后必须退回纯文本', () => {

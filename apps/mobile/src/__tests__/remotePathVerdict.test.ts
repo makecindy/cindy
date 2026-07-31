@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   _clearRemotePathVerdictCache,
   peekRemotePathVerdict,
-  subscribeRemotePathVerdictStale,
+  remotePathVerdictKey,
+  subscribeRemotePathVerdictChange,
   verifyRemotePathCached,
 } from '@/session/remotePathVerdict';
 import type { RemotePathStatResult } from '@/device-link/mobileMakerTransport';
@@ -53,33 +54,50 @@ describe('remotePathVerdict', () => {
     }
   });
 
-  it('TTL 到期通知订阅者:「自愈」不能只在 chip 重挂时发生', async () => {
-    // TTL 到期本身不是事件,没有依赖会变。只靠重挂重验的话,短转录(不会被 FlatList
-    // 回收)在链路恢复后会一直停在纯文本(PR #1144 review 实捉,桌面同款缺口)。
+  it('缓存变化按 key 通知:确定态落库与 TTL 到期都要有通道', async () => {
+    // 渲染层不自己存结论,只在收到「本 key 变了」时重新派生。两种变化都得通知:
+    // 确定态落库(把别处的乐观点亮降级成纯文本)、TTL 到期(该重验了)。
+    // 按 key 而非全量广播:一屏几十个 chip,广播会让首屏 N 次 stat 引发 N×N 次重渲染。
     vi.useFakeTimers();
     try {
       const failing = vi.fn(async (): Promise<RemotePathStatResult> => {
         throw new Error('link down');
       });
-      let notified = 0;
-      const off = subscribeRemotePathVerdictStale(() => { notified += 1; });
-      // 三个 key 一起进负缓存:到期只该发**一次**通知,不是每 key 一次。
-      await Promise.all([
-        verifyRemotePathCached('dev', '/w', '/w/a', failing),
-        verifyRemotePathCached('dev', '/w', '/w/b', failing),
-        verifyRemotePathCached('dev', '/w', '/w/c', failing),
-      ]);
-      expect(notified, '还没到期就通知了').toBe(0);
+      const keys: string[] = [];
+      const off = subscribeRemotePathVerdictChange((k) => keys.push(k));
+      const mine = remotePathVerdictKey('dev', '/w', '/w/a');
+
+      await verifyRemotePathCached('dev', '/w', '/w/a', failing);
+      expect(keys, 'unknown 落负缓存没通知').toEqual([mine]);
+
       await vi.advanceTimersByTimeAsync(30_000 + 1);
-      expect(notified, 'TTL 到期没通知 / 或每 key 通知了一次').toBe(1);
-      // 通知后负缓存已清:重验真的重发 stat。
+      expect(keys, 'TTL 到期没通知 —— 挂载中的 chip 永远等不到重验').toEqual([mine, mine]);
+
+      // 到期后负缓存已清,重验真的重发 stat,并且确定态落库再通知一次。
       expect(await verifyRemotePathCached('dev', '/w', '/w/a', statOf('file'))).toBe('file');
+      expect(keys).toEqual([mine, mine, mine]);
+
       off();
       await vi.advanceTimersByTimeAsync(120_000);
-      expect(notified, '退订后仍收到通知').toBe(1);
+      expect(keys, '退订后仍收到通知').toHaveLength(3);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('不同 key 的通知互相区分(订阅方自己过滤)', async () => {
+    const failing = vi.fn(async (): Promise<RemotePathStatResult> => {
+      throw new Error('link down');
+    });
+    const keys: string[] = [];
+    subscribeRemotePathVerdictChange((k) => keys.push(k));
+    await Promise.all([
+      verifyRemotePathCached('dev', '/w', '/w/a', failing),
+      verifyRemotePathCached('dev', '/w', '/w/b', failing),
+    ]);
+    expect(new Set(keys).size).toBe(2);
+    expect(keys).toContain(remotePathVerdictKey('dev', '/w', '/w/a'));
+    expect(keys).toContain(remotePathVerdictKey('dev', '/w', '/w/b'));
   });
 
   it('确定态不排到期定时器(不轮询)', async () => {

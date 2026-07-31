@@ -87,31 +87,24 @@ describe('聊天正文的可点性信号(DESIGN.md §14.5)', () => {
     expect(src, '点亮判据不再经 decideRemoteLit').toMatch(/decideRemoteLit\(/);
     expect(src, '本文件又开始自己拿 verdict 做点亮判断了 —— 判据必须单点')
       .not.toMatch(/verdict === '(file|directory|nonfile|unknown)'/);
-
-    // ⚠️ 这条断言的方向刻意与直觉相反,历史上被改错过两次:
-    //   ① 首版要求「sync + async 各有一处」(≥2)—— 那是 unknown 还会被 peek 返回的
-    //      年代。unknown 收进短 TTL 负缓存后 sync 那档不可达,继续要求 ≥2 等于强制把
-    //      同一语义复制两份;
-    //   ② 第 8 轮加 TTL 重验后又多出「先乐观点亮 → 确认 nonfile」这条迁移,早返回写法
-    //      漏掉它,于是判据整体被抽成 decideRemoteLit 纯函数。
-    // 「同一判据散落多处、改一处漏一处」是本 PR 反复被捉的根因。守卫要钉不变量,
-    // 不能钉调用点个数 —— 所以这里断言的是「本文件不自己判」,而不是「判据出现 N 次」。
-    expect(src, '重验结论未无条件覆盖 —— nonfile 时会留着旧的乐观点亮')
-      .toMatch(/setAsyncResolved\(\s*decision\.lit/);
   });
 
-  it('规则⑤前置:sync 分支不得把 unknown 当结论(peek 只返回确定态)', () => {
-    // 不变量 A(详见 remoteFileOpen 头注释与 remotePathVerdictCache.test.ts):
-    // unknown 走短 TTL 负缓存、不进 peek。所以 sync 分支里不该再出现对 unknown 的
-    // 判断 —— 出现了就说明有人把 unknown 写回了确定态缓存,那会让一次断链把路径
-    // 永久钉死在纯文本上(PR #1144 review 实捉)。
+  it('规则⑤前置:远程点亮态是缓存的**纯派生**,组件不自己存结论', () => {
+    // 三轮 review 各捉到同一个状态机的一条边(TTL 到期无通道 / 派生值没被新结论覆盖 /
+    // 另一挂载点写入的确定态传不过来),根因都是「组件自己存了一份结论,而真值在可变
+    // 缓存里」。第 10 轮止损重构把双源(syncResolved useMemo ?? asyncResolved useState)
+    // 合并成单一 state + 一个纯派生函数,任何新的状态迁移都只有一处需要改对。
     const src = stripComments(read(CHAT_BODY_FILES[0]));
-    const syncBlock = src.slice(
-      src.indexOf('const syncResolved'),
-      src.indexOf('const [asyncResolved'),
-    );
-    expect(syncBlock.length, '未定位到 syncResolved 块').toBeGreaterThan(0);
-    expect(syncBlock, 'sync 分支又开始消费 unknown 了').not.toContain("'unknown'");
+    expect(src, '双真值来源回来了 —— memo 那一份不吃缓存变化,必然再漏一条边')
+      .not.toMatch(/syncResolved|asyncResolved/);
+    expect(src, '缺少统一的派生函数 resolveFromCache').toMatch(/resolveFromCache/);
+    // 渲染用的读法必须是 ForRender 版:普通 peek 不返回 unknown,断链期间的乐观点亮
+    // 就只能存在组件里 —— 那正是双源的来源。
+    expect(src, '渲染态没走 peekRemotePathVerdictForRender —— 乐观点亮态会退回组件自存')
+      .toMatch(/peekRemotePathVerdictForRender\(/);
+    // 缓存变化必须有通道进来(按 key 过滤)。
+    expect(src, '没有订阅缓存变化 —— 别处写入的确定态传不到本实例')
+      .toMatch(/subscribeRemotePathVerdictChange\(/);
   });
 
   it('规则①:可点的引用 chip 带下划线,不可点的静态 chip 不带(判据单点)', () => {

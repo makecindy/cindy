@@ -188,7 +188,9 @@ import {
 import { ChatFilePathContext, type ChatFilePathTarget } from '@/session/chatFilePathContext';
 import {
   peekRemotePathVerdict,
-  subscribeRemotePathVerdictStale,
+  peekRemotePathVerdictForRender,
+  remotePathVerdictKey,
+  subscribeRemotePathVerdictChange,
   verifyRemotePathCached,
   type RemotePathVerdict,
 } from '@/session/remotePathVerdict';
@@ -3568,45 +3570,46 @@ function ChatPathChipSpan({
     const absPath = resolveChatAbsPath(candidate.href, ctx.workdir);
     return { absPath, relPath: toWorkdirRel(ctx.workdir, absPath) };
   }, [candidate, ctx]);
-  const [verdict, setVerdict] = useState<RemotePathVerdict | undefined>(() =>
-    ctx && target ? peekRemotePathVerdict(ctx.deviceId, ctx.workdir, target.absPath) : undefined,
+  // verdict 是**缓存的纯派生**,chip 不自己存结论:ForRender 版会把 TTL 未过期的负缓存
+  // 回成 'unknown',于是断链期间的乐观点亮也来自缓存。自存一份的话收不到缓存变化 ——
+  // 同一路径出现在多个 chip 上时,A 按 unknown 点亮、B 拿到确定的 nonfile,A 会一直
+  // 带着下划线可点(PR #1144 review 实捉,桌面同款)。
+  const readVerdict = useCallback(
+    () =>
+      ctx && target
+        ? peekRemotePathVerdictForRender(ctx.deviceId, ctx.workdir, target.absPath)
+        : undefined,
+    [ctx, target],
   );
+  const [verdict, setVerdict] = useState<RemotePathVerdict | undefined>(readVerdict);
 
-  // unknown 负缓存到期 → 递增,进下面验证 effect 的依赖驱动重验。TTL 到期本身不是事件
-  // (没有依赖会变),不接这条订阅的话「自愈」只在 chip 重挂时发生:短转录不会被 FlatList
-  // 回收,链路恢复后会一直停在纯文本(PR #1144 review 实捉)。已有确定结论的 chip 会在
-  // peek 处早退,所以通知只让仍是 unknown 的那批真的重发 stat。
-  const [staleGen, setStaleGen] = useState(0);
-  const watchStale = !!ctx && !!target;
-  useEffect(() => {
-    if (!watchStale) return;
-    return subscribeRemotePathVerdictStale(() => setStaleGen((n) => n + 1));
-  }, [watchStale]);
-
-  // 清旧结论只跟着 ctx / target 走。**staleGen 递增不清** —— 那只表示「该重验了」,
-  // 不表示「旧结论失效了」;跟着清会让已乐观点亮的 chip 每 30s 闪一下。
-  useEffect(() => {
-    setVerdict(undefined);
-  }, [ctx, target]);
-
+  // 本 key 的缓存变化(确定态落库 / 负缓存到期)→ 重新派生。按 key 过滤:一屏几十个
+  // chip 各自订阅,全量广播会让首屏 N 次 stat 引发 N×N 次重渲染。
   useEffect(() => {
     if (!ctx || !target) return;
-    const cached = peekRemotePathVerdict(ctx.deviceId, ctx.workdir, target.absPath);
-    if (cached) {
-      setVerdict(cached);
-      return;
-    }
+    const mine = remotePathVerdictKey(ctx.deviceId, ctx.workdir, target.absPath);
+    return subscribeRemotePathVerdictChange((key) => {
+      if (key === mine) setVerdict(readVerdict());
+    });
+  }, [ctx, target, readVerdict]);
+
+  useEffect(() => {
+    // 无条件按当前缓存重新派生(升级 / 降级同一条路)。
+    setVerdict(readVerdict());
+    if (!ctx || !target) return;
+    // 有确定结论就不必重验;unknown 的限流由 verifyRemotePathCached 的负缓存承担。
+    if (peekRemotePathVerdict(ctx.deviceId, ctx.workdir, target.absPath)) return;
     // 流式中不发验证:半截路径会产生大量无意义 stat(与桌面 isStreaming gate 同理)。
     if (streaming) return;
     let cancelled = false;
-    void verifyRemotePathCached(ctx.deviceId, ctx.workdir, target.absPath, ctx.statPath).then((v) => {
-      if (!cancelled) setVerdict(v);
+    void verifyRemotePathCached(ctx.deviceId, ctx.workdir, target.absPath, ctx.statPath).then(() => {
+      // 不看返回值:结论已落缓存,统一重新派生。
+      if (!cancelled) setVerdict(readVerdict());
     });
     return () => {
       cancelled = true;
     };
-    // staleGen:unknown 负缓存到期时重跑本 effect(见上面订阅处的说明)。
-  }, [ctx, streaming, target, staleGen]);
+  }, [ctx, streaming, target, readVerdict]);
 
   // 点亮门槛分两档(见 ChatPathCandidate.ambiguousShape 的说明):
   //   - 形状明确是路径(绝对路径 / 尾斜杠目录 / 分隔符+扩展名):unknown(链路断 /
