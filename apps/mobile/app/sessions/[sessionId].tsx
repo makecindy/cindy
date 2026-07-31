@@ -2896,13 +2896,17 @@ export default function SessionScreen() {
           activeSessionSnapshot.activityEpochAtFetchStart,
         );
         const historyPage: RemoteMessage[] = Array.isArray(history.messages) ? history.messages : [];
+        // moreBeyondWindow:本页上沿之外服务端还有历史(满页 / 被裁行)。为真时 store 不保留早于
+        // 本页的缓存段 —— 它与本页之间可能隔着从未加载的行,保留就是孤岛(#1222)。判据与
+        // 「加载更早」入口同源,两者本就该一致。
+        const moreBeyondWindow = shouldKeepOlderMessagesAffordance(history);
         if (options.replaceMessages) {
           remoteSessionStore.setMessages(sessionId, historyPage);
         } else {
-          remoteSessionStore.setLatestMessageWindow(sessionId, historyPage);
+          remoteSessionStore.setLatestMessageWindow(sessionId, historyPage, { moreBeyondWindow });
         }
         remoteSessionStore.markSessionMessagesSynced(sessionId, sessionMeta);
-        setHasOlderMessages(shouldKeepOlderMessagesAffordance(history));
+        setHasOlderMessages(moreBeyondWindow);
         remoteSessionStore.setPendingInteractions(sessionId, Array.isArray(pendingInteractions) ? pendingInteractions : []);
         remoteSessionStore.setInputProjection(sessionId, projection);
       } else {
@@ -2944,9 +2948,11 @@ export default function SessionScreen() {
           );
           if (syncRun.isStale()) return;
           const historyPage: RemoteMessage[] = Array.isArray(history.messages) ? history.messages : [];
-          remoteSessionStore.setLatestMessageWindow(sessionId, historyPage);
+          // 同首开路径:上沿之外还有历史时不保留更早的缓存段(#1222)。
+          const moreBeyondWindow = shouldKeepOlderMessagesAffordance(history);
+          remoteSessionStore.setLatestMessageWindow(sessionId, historyPage, { moreBeyondWindow });
           remoteSessionStore.markSessionMessagesSynced(sessionId, sessionMeta);
-          setHasOlderMessages(shouldKeepOlderMessagesAffordance(history));
+          setHasOlderMessages(moreBeyondWindow);
         } else {
           // 回归修复:没新内容也要补设 hasOlderMessages —— 屏幕重开把该 state 重置为 false,跳过整窗
           // 重拉时若不补设,「加载更早」入口会消失、往上拖刷不出老消息。用服务端总数 vs in-store 已加载

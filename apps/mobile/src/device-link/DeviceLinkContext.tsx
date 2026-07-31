@@ -96,6 +96,7 @@ import {
   schedulePresenceWipeTimer,
   updatePresenceAvailability,
 } from '@/device-link/presenceRecovery';
+import { hasMoreOlderMessages } from '@/session/messagePaging';
 import type { InputProjection, PendingInteraction, RemoteMessage } from '@/session/types';
 import { createVisualMockDeviceLinkContext, seedVisualMockStore } from '@/debug/visualMock';
 
@@ -182,6 +183,12 @@ const PRESENCE_OFFLINE_WIPE_GRACE_MS = 5_000;
  * 一次普通 invoke 往返,但只在旧 timer 剩余时间更短时向后延,不随抖动无限重置。
  */
 const RECONNECT_MIN_WIPE_GRACE_MS = 3_000;
+/**
+ * 断连补齐时拉的最新窗口大小。与 `hasMoreOlderMessages` 的判定共用同一个数:满页即说明这一页
+ * 上沿之外服务端还有历史,store 据此丢弃无法确认相接的更早缓存段(见 setLatestMessageWindow
+ * 与 #1222)。
+ */
+const RECONNECT_MESSAGE_WINDOW_LIMIT = 80;
 
 export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   if (MOBILE_VISUAL_MOCK_ENABLED) {
@@ -966,7 +973,7 @@ async function rebuildSessionSnapshot(
   const [history, pending, projection, goal] = await Promise.allSettled([
     sendInvokeWithAccessHandling<RemoteMessage[]>(client, deviceId, 'local-db:messages:list', [
       sessionId,
-      { limit: 80 },
+      { limit: RECONNECT_MESSAGE_WINDOW_LIMIT },
     ], sendOpts),
     sendInvokeWithAccessHandling<PendingInteraction[]>(
       client,
@@ -991,7 +998,12 @@ async function rebuildSessionSnapshot(
     ),
   ]);
   if (history.status === 'fulfilled' && Array.isArray(history.value)) {
-    remoteSessionStore.setLatestMessageWindow(sessionId, history.value);
+    // moreBeyondWindow:这一页上沿之外服务端还有历史(满 80 条,或被 device-link 裁过行)。为真时
+    // store 不保留早于本页的缓存段 —— 断连期间漏收的 push 可能正落在两段之间,保留就在窗口里
+    // 留下孤岛,而漏收的量不大时两侧时间差很小、时间阈值的空洞检测发现不了(#1222)。
+    remoteSessionStore.setLatestMessageWindow(sessionId, history.value, {
+      moreBeyondWindow: hasMoreOlderMessages(history.value, RECONNECT_MESSAGE_WINDOW_LIMIT),
+    });
   }
   if (pending.status === 'fulfilled' && Array.isArray(pending.value)) {
     remoteSessionStore.setPendingInteractions(sessionId, pending.value, { finalizeStreaming: true });

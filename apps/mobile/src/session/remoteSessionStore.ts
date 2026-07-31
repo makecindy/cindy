@@ -72,6 +72,19 @@ interface SessionMessageSyncMarker {
   updatedAt: string;
 }
 
+export interface SetLatestMessageWindowOptions {
+  /**
+   * 本页**上沿之外服务端还有历史**(满页,或被 device-link 裁过行)。
+   *
+   * 真为真时,早于本页最旧行的缓存段一律不保留 —— 它与本页之间可能隔着从未加载的行,保留就会
+   * 在窗口里留下孤岛(详见 `setLatestMessageWindow` 里的说明与 #1222)。调用方用既有的
+   * `hasMoreOlderMessages` / `shouldKeepOlderMessagesAffordance` 判定即可,不需要自己数。
+   *
+   * 省略时按 false 处理(保持旧行为):调用方拿不到分页元信息时不该因此丢历史。
+   */
+  moreBeyondWindow?: boolean;
+}
+
 interface LivePlanSnapshot {
   content: Record<string, unknown>;
   persistId?: string;
@@ -1135,7 +1148,11 @@ export const remoteSessionStore = {
     emit();
   },
 
-  setLatestMessageWindow(sessionId: string, list: readonly RemoteMessage[]): void {
+  setLatestMessageWindow(
+    sessionId: string,
+    list: readonly RemoteMessage[],
+    options: SetLatestMessageWindowOptions = {},
+  ): void {
     const textFlushed = flushPendingTextDelta(sessionId);
     const latestWindow = normalizeMessages(list);
     if (latestWindow.length === 0) {
@@ -1174,10 +1191,27 @@ export const remoteSessionStore = {
     // A latest-page sync is authoritative for the tail of the conversation.
     // Only keep older cached pages when they overlap that page; otherwise stale
     // old windows can be rendered as if they were adjacent to fresh pushes.
+    //
+    // 「有交集」这个判据不足以保证**连续**:交集只说明两段有共同的行,不排除更早那一段与本页
+    // 之间还隔着服务端仍有、本地从未加载的行。于是窗口会留下"首段 + 尾段"的孤岛,中间几百行
+    // 缺失(手机端实测:整场会话的 6 轮对话在界面上凭空消失)。
+    //
+    // `moreBeyondWindow` 是调用方给的结构信号:本页是满页、或被 device-link 裁过行 —— 两者都
+    // 意味着**本页上沿之外服务端还有历史**。这时任何早于本页最旧行的缓存段都无法确认与本页
+    // 相接,一律丢弃,窗口于是始终是"某点 → 最新"的连续区间。代价是用户可见的历史变少(丢掉的
+    // 是不可信的那一段),「加载更早」入口仍在、可以按连续分页重新取回。
+    //
+    // 反之本页不满页时,服务端从会话起点到最新已经全给了,不存在中间缺口,旧段照原判据保留。
+    //
+    // 为什么不靠时间阈值判断空洞:那只能发现"两侧间隔很久"的孤岛。断连期间漏收几十上百条、
+    // 而它们在半小时内快速产生时(一个长 turn 里的连续工具调用就是),两侧间隔根本不大,检测不到
+    // (#1222)。从源头保证连续区间才覆盖得住。
+    const keepOlderCachedPages = hasOverlap && options.moreBeyondWindow !== true;
     for (const item of existing) {
       const createdAt = item.createdAt;
       const isNewerThanLatestPage = createdAt.localeCompare(latestNewestCreatedAt) >= 0;
-      const isOlderLoadedPage = hasOverlap && createdAt.localeCompare(latestOldestCreatedAt) < 0;
+      const isOlderLoadedPage = keepOlderCachedPages
+        && createdAt.localeCompare(latestOldestCreatedAt) < 0;
       // 本地系统卡(/learn、/context 等)没有服务端对应行:不管时序落在窗口哪里都
       // 不会出现在 latestKeys 里,若不单独保留会被 window 刷新时静默丢弃。
       const isLocalSystemCard = messageKey(item).startsWith('mobile-system-');

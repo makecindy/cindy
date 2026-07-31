@@ -1182,7 +1182,51 @@ describe('remoteSessionStore', () => {
     ]);
   });
 
+  it('丢弃无法确认相接的更早缓存段：本页上沿之外服务端还有历史时（#1222）', () => {
+    // 「有交集」不等于「连续」:交集只说明两段有共同的行,不排除更早那一段与本页之间还隔着
+    // 服务端仍有、本地从未加载的行。断连期间漏收几十上百条 push 时就是这样,而漏收的量不大时
+    // 两侧时间差很小 —— 时间阈值的空洞检测发现不了,窗口会静默留下孤岛。
+    // moreBeyondWindow(本页满页 / 被裁行)为真时,更早的缓存段一律丢弃,窗口保持连续区间。
+    remoteSessionStore.setMessages('s1', [
+      messageAt('cached-old', 's1', '2026-01-01T00:00:01.000Z'),
+      messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'),
+    ]);
+
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'),
+      messageAt('latest-2', 's1', '2026-01-01T10:00:02.000Z'),
+    ], { moreBeyondWindow: true });
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'latest-1',
+      'latest-2',
+    ]);
+  });
+
+  it('丢弃更早缓存段时仍保留比本页更新的实时 push 行与本地系统卡', () => {
+    // 收紧的只是"更早那一段"这一条判据:尾部的 live push 与没有服务端对应行的本地卡不受影响。
+    remoteSessionStore.setMessages('s1', [
+      messageAt('cached-old', 's1', '2026-01-01T00:00:01.000Z'),
+      messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'),
+      messageAt('live-tail', 's1', '2026-01-01T10:00:09.000Z'),
+      messageAt('mobile-system-pwd-1', 's1', '2026-01-01T00:00:05.000Z'),
+    ]);
+
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'),
+      messageAt('latest-2', 's1', '2026-01-01T10:00:02.000Z'),
+    ], { moreBeyondWindow: true });
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'mobile-system-pwd-1',
+      'latest-1',
+      'latest-2',
+      'live-tail',
+    ]);
+  });
+
   it('preserves loaded older pages when the refreshed latest page overlaps the current window', () => {
+    // 未给 moreBeyondWindow(或为 false)= 本页已到会话起点,不存在中间缺口,旧段可信照旧保留。
     remoteSessionStore.setMessages('s1', [
       messageAt('older-1', 's1', '2026-01-01T00:00:01.000Z'),
       messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'),
