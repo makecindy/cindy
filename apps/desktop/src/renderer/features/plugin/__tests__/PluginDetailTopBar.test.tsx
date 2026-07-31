@@ -88,13 +88,15 @@ describe('PluginDetailTopBar', () => {
     expect(bar.className).toContain('bg-[var(--surface)]');
   });
 
-  it('matches the catalog header geometry so the bar does not jump on entry', () => {
+  it('matches the catalog header height at regular pane widths', () => {
     stubPlatform('darwin');
 
     render(<Harness />);
 
     // 列表与详情是同一条顶栏的两个状态,几何取自 PluginManagementLayout.tsx
-    // 的 PluginManagementHeader(h-16 + flex h-full items-center)。
+    // 的 PluginManagementHeader(h-16 + flex h-full items-center)。列表页在
+    // 720px 以内排两行撑到 7rem,那条 container query 的作用域是列表页根节点,
+    // 本行各宽度下恒为 h-16。
     const frame = screen.getByTestId('plugin-detail-top-bar').firstElementChild;
     expect(frame?.className).toContain('h-16');
     expect(frame?.className).toContain('items-center');

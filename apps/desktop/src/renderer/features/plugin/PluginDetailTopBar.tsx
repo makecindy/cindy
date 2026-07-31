@@ -49,10 +49,11 @@ export function usePluginDetailScrolled(): {
  * sticky 让拖拽区在任意滚动位置都在场。滚动态为实底:正文滚到本行下方会落进
  * Electron 的 drag 矩形,实底背景同时把这些元素遮住,视觉与命中区一致。
  *
- * 高度 h-16 + 内容垂直居中,与列表页 PluginManagementHeader 同规格
- * (PluginManagementLayout.tsx:212),列表与详情间切换时顶栏高度恒定。窄宽度
- * 下列表页顶栏撑到 7rem 排两行(plugin-motion.css 的 container query),本行
- * 恒为 h-16。
+ * 高度 h-16 + 内容垂直居中,常规宽度下与列表页 PluginManagementHeader 同规格
+ * (PluginManagementLayout.tsx:212),列表与详情切换时顶栏高度恒定。主面板窄到
+ * 720px 以内时列表页顶栏排成工具行 + 页签行、撑到 7rem(plugin-motion.css 的
+ * container query,作用域是列表页的 plugin-management-layout-root);本行只承载
+ * 返回入口一个控件,各宽度下恒为 h-16。
  *
  * hairline 走 after 伪元素,脱离布局流,透明态与实底态之间高度恒定;article 的
  * pt-5 之下,hero 起点为 64 + 20 = 84px。
