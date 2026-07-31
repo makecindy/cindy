@@ -2388,15 +2388,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
       | { success: false; errorCode: string; message: string }
     > => ipcRenderer.invoke('skillhub:uninstall', { absolutePath }),
 
-    /** 只读检查本地 zip / SKILL.md，返回 frontmatter 元数据（不落盘）。 */
-    inspectLocal: (params: { filePath: string }): Promise<
-      | { success: true; name: string; description: string; version: string }
+    /** 在 main 内选择并检查本地包，成功时签发绑定当前 renderer 的短期导入授权。 */
+    pickLocal: (): Promise<
+      | { success: true; canceled: true }
+      | {
+          success: true;
+          canceled: false;
+          grantToken: string;
+          name: string;
+          description: string;
+          version: string;
+        }
       | { success: false; errorCode: string; message: string }
-    > => ipcRenderer.invoke('skillhub:inspect-local', params),
+    > => ipcRenderer.invoke('skillhub:pick-local'),
 
-    /** 从本地 zip / SKILL.md 导入到全局或指定 installPath；registry origin=imported。 */
+    /** 使用 main 签发的文件授权导入到全局或指定 installPath；registry origin=imported。 */
     importLocal: (params: {
-      filePath: string;
+      grantToken: string;
       installPath?: string;
       force?: boolean;
     }): Promise<

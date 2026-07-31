@@ -1,9 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import type { Maker } from '@cindy/maker-core';
-import { BrowserWindow, ipcMain } from 'electron';
+import { BrowserWindow, dialog, ipcMain } from 'electron';
 import { getCurrentDataOwnerId } from '../authManager';
 import { isAppSessionBoundaryPending } from '../appSessionState';
 import { ensureReady as ensureLocalDbReady, getRawDb } from '../localDb';
 import { createLogger } from '../logger';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { computeFolderHashDetailed } from './folderHash';
 import { type MdKind, parseAndValidateFrontmatter } from './frontmatterValidation';
 import * as importLocalSkill from './importLocalSkill';
@@ -22,6 +24,14 @@ import {
 } from './usageIndexer';
 
 const log = createLogger('skillhub');
+const LOCAL_IMPORT_GRANT_TTL_MS = 10 * 60 * 1_000;
+const MAX_LOCAL_IMPORT_GRANTS = 32;
+
+interface LocalImportGrant {
+  filePath: string;
+  senderId: number;
+  expiresAt: number;
+}
 
 export interface RegisterSkillhubIpcOptions {
   getMaker: () => Maker;
@@ -37,6 +47,21 @@ export interface RegisterSkillhubIpcOptions {
  */
 export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
   const marketService = options.marketService ?? new SkillhubMarketService();
+  const localImportGrants = new Map<string, LocalImportGrant>();
+
+  const sweepLocalImportGrants = () => {
+    const now = Date.now();
+    for (const [token, grant] of localImportGrants) {
+      if (grant.expiresAt <= now) localImportGrants.delete(token);
+    }
+  };
+  const makeRoomForLocalImportGrant = () => {
+    while (localImportGrants.size >= MAX_LOCAL_IMPORT_GRANTS) {
+      const oldestToken = localImportGrants.keys().next().value as string | undefined;
+      if (!oldestToken) break;
+      localImportGrants.delete(oldestToken);
+    }
+  };
 
   const refreshCodexProjectSkillCache = async (workingDir?: string): Promise<void> => {
     if (!workingDir) return;
@@ -518,32 +543,76 @@ export function registerSkillhubIpc(options: RegisterSkillhubIpcOptions): void {
 
   // ── Local import (zip / SKILL.md) ────────────────────────────────────────
   ipcMain.handle(
-    'skillhub:inspect-local',
-    async (_event, params: { filePath?: unknown }) => {
-      if (typeof params?.filePath !== 'string' || !params.filePath.trim()) {
-        return { success: false, errorCode: 'INVALID_FILE', message: '缺少 filePath' };
+    'skillhub:pick-local',
+    async (event) => {
+      assertTrustedAppRendererEvent(event);
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      if (!owner || owner.isDestroyed()) {
+        return { success: false, errorCode: 'INTERNAL', message: '无法打开文件选择器' };
       }
-      return importLocalSkill.inspectLocalSkill({ filePath: params.filePath.trim() });
+      const picked = await dialog.showOpenDialog(owner, {
+        properties: ['openFile'],
+        filters: [{ name: 'Skill package', extensions: ['zip', 'md'] }],
+      });
+      const filePath = picked.filePaths[0];
+      if (picked.canceled || !filePath) {
+        return { success: true, canceled: true };
+      }
+
+      const inspected = await importLocalSkill.inspectLocalSkill({ filePath });
+      if (!inspected.success) return inspected;
+
+      sweepLocalImportGrants();
+      makeRoomForLocalImportGrant();
+      const grantToken = randomUUID();
+      localImportGrants.set(grantToken, {
+        filePath,
+        senderId: event.sender.id,
+        expiresAt: Date.now() + LOCAL_IMPORT_GRANT_TTL_MS,
+      });
+      return {
+        success: true,
+        canceled: false,
+        grantToken,
+        name: inspected.name,
+        description: inspected.description,
+        version: inspected.version,
+      };
     },
   );
 
   ipcMain.handle(
     'skillhub:import-local',
     async (
-      _event,
-      params: { filePath?: unknown; installPath?: unknown; force?: unknown },
+      event,
+      params: { grantToken?: unknown; installPath?: unknown; force?: unknown },
     ) => {
-      if (typeof params?.filePath !== 'string' || !params.filePath.trim()) {
-        return { success: false, errorCode: 'INVALID_FILE', message: '缺少 filePath' };
+      assertTrustedAppRendererEvent(event);
+      sweepLocalImportGrants();
+      if (
+        typeof params?.grantToken !== 'string' ||
+        !params.grantToken ||
+        params.grantToken.length > 128
+      ) {
+        return { success: false, errorCode: 'PERMISSION_DENIED', message: '本地导入授权无效' };
+      }
+      const grant = localImportGrants.get(params.grantToken);
+      if (!grant || grant.senderId !== event.sender.id) {
+        return {
+          success: false,
+          errorCode: 'PERMISSION_DENIED',
+          message: '本地导入授权不存在、已过期或不属于当前窗口',
+        };
       }
       const result = await importLocalSkill.importLocalSkill({
-        filePath: params.filePath.trim(),
+        filePath: grant.filePath,
         ...(typeof params.installPath === 'string' && params.installPath
           ? { installPath: params.installPath }
           : {}),
         ...(params.force === true ? { force: true } : {}),
       });
       if (!result.success) return result;
+      localImportGrants.delete(params.grantToken);
       await refreshCodexProjectSkillCache(result.projectWorkingDir);
       return {
         success: true,

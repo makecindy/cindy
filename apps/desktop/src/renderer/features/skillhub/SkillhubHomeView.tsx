@@ -143,8 +143,8 @@ export function SkillhubHomeView() {
   const [pickerSkill, setPickerSkill] = useState<MarketSkill | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  // 本地导入：选文件 → inspect → 安装位置选择器 → importLocal
-  const [importFilePath, setImportFilePath] = useState<string | null>(null);
+  // 本地导入：main 选择并检查文件 → 安装位置选择器 → 凭授权导入
+  const [importGrantToken, setImportGrantToken] = useState<string | null>(null);
   const [importTarget, setImportTarget] = useState<InstallTargetSkill | null>(null);
   const [importPickerOpen, setImportPickerOpen] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
@@ -173,24 +173,18 @@ export function SkillhubHomeView() {
     if (importBusy) return;
     setImportBusy(true);
     try {
-      const picked = await window.electronAPI.dialog.showOpenFile({
-        filters: [
-          { name: 'Skill package', extensions: ['zip', 'md'] },
-        ],
-      });
-      if (!picked.success || !picked.path) return;
-
-      const inspected = await window.electronAPI.skillhub.inspectLocal({ filePath: picked.path });
-      if (!inspected.success) {
-        toast.error(inspected.message || t('skillhub.home.importFailed'));
+      const picked = await window.electronAPI.skillhub.pickLocal();
+      if (!picked.success) {
+        toast.error(picked.message || t('skillhub.home.importFailed'));
         return;
       }
+      if (picked.canceled) return;
 
-      setImportFilePath(picked.path);
+      setImportGrantToken(picked.grantToken);
       setImportTarget({
-        name: inspected.name,
-        versionLabel: inspected.version,
-        description: inspected.description,
+        name: picked.name,
+        versionLabel: picked.version,
+        description: picked.description,
       });
       setImportPickerOpen(true);
     } catch (err) {
@@ -202,7 +196,7 @@ export function SkillhubHomeView() {
 
   const closeImportPicker = useCallback(() => {
     setImportPickerOpen(false);
-    setImportFilePath(null);
+    setImportGrantToken(null);
     setImportTarget(null);
   }, []);
 
@@ -428,11 +422,11 @@ export function SkillhubHomeView() {
           successToastKey="skillhub.home.importSuccess"
           failedToastKey="skillhub.home.importFailed"
           runAction={async ({ installPath, force }) => {
-            if (!importFilePath) {
+            if (!importGrantToken) {
               return { success: false, errorCode: 'INVALID_FILE', message: t('skillhub.home.importFailed') };
             }
             return window.electronAPI.skillhub.importLocal({
-              filePath: importFilePath,
+              grantToken: importGrantToken,
               installPath,
               force,
             });
