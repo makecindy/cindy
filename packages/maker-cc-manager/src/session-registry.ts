@@ -848,7 +848,7 @@ export class SessionRegistry {
         : [];
       session.toolGuardMcpServerNames = new Set(
         mcpServers
-          .map((server) => server?.name)
+          .map((server) => server?.status === 'connected' ? server.name : undefined)
           .filter((name): name is string => typeof name === 'string' && name.length > 0),
       );
     }
@@ -945,7 +945,7 @@ function isSdkInitMessage(msg: unknown): msg is {
   type: 'system';
   subtype: 'init';
   session_id: string;
-  mcp_servers?: Array<{ name?: unknown }>;
+  mcp_servers?: Array<{ name?: unknown; status?: unknown }>;
 } {
   if (typeof msg !== 'object' || msg === null) return false;
   const m = msg as Record<string, unknown>;

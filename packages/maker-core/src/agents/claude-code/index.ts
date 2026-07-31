@@ -1092,7 +1092,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       const finalNames = record.mcp_servers
         .map((server) => {
           if (!server || typeof server !== 'object') return undefined;
-          const name = (server as Record<string, unknown>).name;
+          const serverRecord = server as Record<string, unknown>;
+          if (serverRecord.status !== 'connected') return undefined;
+          const name = serverRecord.name;
           return typeof name === 'string' && name.length > 0 ? name : undefined;
         })
         .filter((name): name is string => name !== undefined);

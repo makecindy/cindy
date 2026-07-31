@@ -105,13 +105,19 @@ function createDeps(
 }
 
 /** 最小可用的 SDK Query 假实现: 消息流永远挂起, 控制方法全部记录调用。 */
-function createFakeQuery(initMcpServerNames: readonly string[] = []) {
+function createFakeQuery(
+  initMcpServerNames: readonly string[] = [],
+  failedInitMcpServerNames: readonly string[] = [],
+) {
   let initEmitted = false;
   return {
     [Symbol.asyncIterator]() {
       return {
         next: () => {
-          if (!initEmitted && initMcpServerNames.length > 0) {
+          if (
+            !initEmitted &&
+            (initMcpServerNames.length > 0 || failedInitMcpServerNames.length > 0)
+          ) {
             initEmitted = true;
             return Promise.resolve({
               done: false as const,
@@ -122,7 +128,10 @@ function createFakeQuery(initMcpServerNames: readonly string[] = []) {
                 mcp_servers: initMcpServerNames.map((name) => ({
                   name,
                   status: 'connected',
-                })),
+                })).concat(failedInitMcpServerNames.map((name) => ({
+                  name,
+                  status: 'failed',
+                }))),
               },
             });
           }
@@ -169,13 +178,17 @@ async function startSession(
     permissionMode?: PermissionMode;
     capabilityRouting?: CapabilityRoutingPolicy;
     initMcpServerNames?: readonly string[];
+    failedInitMcpServerNames?: readonly string[];
   },
 ) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
   const workingDir = await makeTempDir();
 
-  const fakeQuery = createFakeQuery(options?.initMcpServerNames);
+  const fakeQuery = createFakeQuery(
+    options?.initMcpServerNames,
+    options?.failedInitMcpServerNames,
+  );
   sdkMock.query.mockReturnValue(fakeQuery);
 
   const deps = createDeps(policy, options?.mcpServerNames);
@@ -375,6 +388,27 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
     ).resolves.toMatchObject({ behavior: 'allow' });
     expect(permissionRequests(seen)).toHaveLength(1);
     await handle.close();
+
+    const failed = await startSession(() => 'prompt', {
+      capabilityRouting,
+      mcpServerNames: [],
+      initMcpServerNames: ['plugin:feishu-delegate:feishu-delegate'],
+      failedInitMcpServerNames: [userServerId],
+    });
+    const failedPreToolUse = failed.hooks?.PreToolUse?.[0]?.hooks[0];
+    if (!failedPreToolUse) throw new Error('expected capability routing hook');
+    await failed.handle.send({ type: 'user', content: '查一下康康的飞书消息' });
+    await vi.waitFor(async () => {
+      await expect(
+        failedPreToolUse({
+          hook_event_name: 'PreToolUse',
+          tool_name: toolName,
+        }),
+      ).resolves.toMatchObject({
+        hookSpecificOutput: { permissionDecision: 'deny' },
+      });
+    });
+    await failed.handle.close();
   });
 
   it('runs the per-turn policy before MCP auto-approval and drops session grants', async () => {
@@ -760,6 +794,7 @@ describe('remote sessions share the same permission semantics', () => {
       mcpServerNames?: readonly string[];
       permissionMode?: PermissionMode;
       initMcpServerNames?: readonly string[];
+      failedInitMcpServerNames?: readonly string[];
     },
   ) {
     const configDir = await makeTempDir();
@@ -783,7 +818,10 @@ describe('remote sessions share the same permission semantics', () => {
     }) => {
       onApprovalRequest = args.onApprovalRequest;
       remoteStartParams = args.startParams;
-      return createFakeQuery(options?.initMcpServerNames) as never;
+      return createFakeQuery(
+        options?.initMcpServerNames,
+        options?.failedInitMcpServerNames,
+      ) as never;
     }) as NonNullable<AgentDeps['remoteCcQueryFactory']>;
 
     const agent = new ClaudeCodeAgent(deps);
@@ -1077,5 +1115,24 @@ describe('remote sessions share the same permission semantics', () => {
     ).resolves.toMatchObject({ behavior: 'allow' });
     expect(permissionRequests(remote.seen)).toHaveLength(1);
     await remote.handle.close();
+
+    const failed = await startRemoteSession(() => 'prompt', {
+      attachResolver: () => ({ kind: 'permission', behavior: 'allow' }),
+      capabilityRouting,
+      mcpServerNames: [],
+      initMcpServerNames: ['plugin:feishu-delegate:feishu-delegate'],
+      failedInitMcpServerNames: [userServerId],
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await expect(
+      failed.onApprovalRequest({
+        requestId: 'r-failed-settings-mcp-collision',
+        kind: 'permission',
+        toolName: `mcp__${userServerId}__read_messages`,
+        input: {},
+      }),
+    ).resolves.toMatchObject({ behavior: 'deny' });
+    expect(permissionRequests(failed.seen)).toHaveLength(0);
+    await failed.handle.close();
   });
 });
