@@ -464,9 +464,9 @@
       "sessionDoneLabel": "세션 완료 시 데스크톱 알림 표시",
       "sessionDoneHint": "창이 비활성 상태일 때만 표시되어 포그라운드 방해를 방지합니다.",
       "sessionDoneAria": "세션 완료 데스크톱 알림 전환",
-      "feishuLabel": "세션 완료 또는 응답 필요 시 Feishu 메시지 전송",
-      "feishuHint": "연동된 Feishu 봇을 통해 개인 메시지를 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
-      "feishuDisabledHint": "먼저 \"Feishu 봇\"에서 봇을 설정하고 한 번 메시지를 보내 바인딩을 완료하세요.",
+      "feishuLabel": "세션 완료 또는 응답 필요 시 Feishu / Lark 메시지 전송",
+      "feishuHint": "연동된 Feishu 또는 Lark 봇을 통해 개인 메시지를 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
+      "feishuDisabledHint": "먼저 \"Feishu / Lark 봇\"에서 봇을 설정하고 한 번 메시지를 보내 바인딩을 완료하세요.",
       "feishuAria": "세션 완료 Feishu 알림 전환"
     },
     "windowBehavior": {
@@ -1602,9 +1602,15 @@
       "saveFailed": "Git 안전 설정 저장에 실패했습니다"
     },
     "feishuBot": {
-      "title": "Feishu 봇",
-      "description": "Feishu 봇을 통해 언제 어디서나 {{appName}}에 연결하여 작업하세요.",
-      "statusAria": "Feishu 봇 상태: {{status}}",
+      "title": "Feishu / Lark 봇",
+      "description": "Feishu 또는 Lark 봇을 통해 언제 어디서나 {{appName}}에 연결하여 작업하세요.",
+      "statusAria": "Feishu / Lark 봇 상태: {{status}}",
+      "serviceLabel": "서비스",
+      "serviceAria": "IM 서비스 선택",
+      "services": {
+        "feishu": "Feishu",
+        "lark": "Lark"
+      },
       "status": {
         "needsConfig": "구성 필요",
         "connecting": "연결 중…",
@@ -1614,16 +1620,17 @@
         "error": "연결 실패"
       },
       "connected": {
-        "heading": "Feishu 봇이 연결됨",
+        "heading": "{{service}} 봇이 연결됨",
         "note": "현재 QR 스캔 사용자에 바인딩되어 있으며, 다른 사람의 개인 메시지는 자동으로 무시됩니다.",
+        "serviceLabel": "서비스",
         "appIdLabel": "App ID",
         "ownerLabel": "Owner",
         "ownerWaiting": "첫 개인 메시지 바인딩 대기 중",
-        "reconnect": "Feishu 봇 다시 연결",
+        "reconnect": "{{service}} 봇 다시 연결",
         "clear": "연동 해제"
       },
       "saved": {
-        "heading": "Feishu 봇이 연동됨",
+        "heading": "{{service}} 봇이 연동됨",
         "connectingNote": "봇 자격 증명이 저장되어 있습니다. 연결하는 중입니다.",
         "reconnectingNote": "봇 자격 증명이 저장되어 있습니다. 연결을 복구하는 중입니다.",
         "conflictNote": "봇 자격 증명이 저장되어 있지만 이 App ID는 다른 기기에서 사용 중입니다.",
@@ -1636,11 +1643,11 @@
       "appSecretPlaceholder": "sec_xxxxxxxxxxxxxxxxxx",
       "showSecret": "시크릿 표시",
       "hideSecret": "시크릿 숨기기",
-      "createLink": "여기를 클릭해 생성 ↗",
+      "createLink": "{{service}} 오픈 플랫폼에서 생성 ↗",
       "createLinkSuffix": ", 생성 후 자격 증명을 입력하세요",
-      "clearAria": "Feishu 봇 연동 해제",
+      "clearAria": "IM 봇 연동 해제",
       "clearConfirm": {
-        "title": "Feishu 봇 연동을 해제하시겠습니까?",
+        "title": "IM 봇 연동을 해제하시겠습니까?",
         "description": "연동을 해제하면 WebSocket 연결이 끊기고, 로컬에 저장된 App ID / App Secret / 소유자 openId가 삭제됩니다. 다시 사용하려면 재생성하거나 자격 증명을 다시 입력해야 합니다.",
         "confirm": "연동 해제",
         "cancel": "취소"
@@ -1931,6 +1938,49 @@
           "mention": "@만",
           "always": "활성"
         }
+      }
+    },
+    "dingtalkBot": {
+      "title": "DingTalk 봇",
+      "description": "직접 만든 DingTalk 봇을 연결하고 Stream 모드로 DM과 그룹에서 {{appName}}를 사용합니다.",
+      "status": {
+        "needsConfig": "설정 필요",
+        "connecting": "연결 중…",
+        "connected": "연결됨",
+        "error": "연결 실패"
+      },
+      "connected": {
+        "heading": "DingTalk 봇 연결됨",
+        "ownerBound": "소유자가 연결되었습니다. DM을 보내거나 그룹에서 멘션해 시작하세요.",
+        "waitingOwner": "먼저 봇에게 DM을 보내세요. 첫 번째 발신자가 소유자로 안전하게 연결됩니다.",
+        "ownerLabel": "소유자 사용자 ID",
+        "notBound": "첫 DM 대기 중"
+      },
+      "appKeyLabel": "Client ID",
+      "appKeyPlaceholder": "봇 애플리케이션의 Client ID 붙여넣기",
+      "appSecretLabel": "Client Secret",
+      "appSecretPlaceholder": "봇 애플리케이션의 Client Secret 붙여넣기",
+      "appSecretSavedPlaceholder": "안전하게 저장됨. 비워 두고 다시 연결할 수 있습니다",
+      "showSecret": "Client Secret 표시",
+      "hideSecret": "Client Secret 숨기기",
+      "formHint": "자격 증명은 로컬에 암호화됩니다. 연결 후 첫 DM으로 소유자를 연결합니다.",
+      "errorHint": "연결 실패. 자격 증명, Stream 모드, 네트워크를 확인한 후 다시 시도하세요.",
+      "connect": "연결",
+      "reconnect": "다시 연결",
+      "disconnect": "연동 해제",
+      "disconnectConfirm": {
+        "title": "DingTalk 봇 연동을 해제하시겠습니까?",
+        "description": "연결을 끊고 저장된 Client ID, Client Secret, 소유자 연결을 삭제합니다.",
+        "confirm": "연동 해제",
+        "cancel": "취소"
+      },
+      "guide": {
+        "title": "설정 가이드",
+        "step1": "DingTalk 개발자 포털에서 내부 앱을 만들고 봇 기능을 추가합니다.",
+        "step2": "봇의 Stream 모드를 활성화하고 앱 버전을 게시합니다.",
+        "step3": "앱 자격 증명에서 Client ID와 Client Secret을 복사해 입력합니다.",
+        "step4": "연결 후 봇에게 먼저 DM을 보내 소유자를 연결합니다. 그룹에서는 멘션하세요.",
+        "openPortal": "DingTalk 개발자 포털 열기 ↗"
       }
     },
     "logout": {
@@ -2528,7 +2578,7 @@
           "disabledHint": "스위치를 켠 뒤 Telegram의 안내에 따라 계정 연결을 완료하세요.",
           "toggleAria": "Telegram 연결 전환",
           "connect": "Telegram 연결",
-          "openTelegram": "Telegram 열기",
+          "openApp": "Telegram 열기",
           "cancel": "연결 취소",
           "retry": "연결 다시 시도",
           "openBot": "봇 열기",
@@ -2550,6 +2600,33 @@
             "revoked": "연결 해제됨",
             "superseded": "다른 기기에 연결됨"
           }
+        },
+        "x": {
+          "description": "X (Twitter) 계정을 연결하고 X에서 Cindy bot을 멘션해 작업을 요청하세요.",
+          "disabledHint": "스위치를 켠 뒤 안내에 따라 X 계정 인증을 완료하세요.",
+          "toggleAria": "X 연결 전환",
+          "connect": "X 연결",
+          "openApp": "X 열어 인증하기",
+          "cancel": "연결 취소",
+          "retry": "다시 연결",
+          "openBot": "X에서 bot 보기",
+          "unlink": "X 연결 해제",
+          "unlinkConfirmTitle": "X 연결을 해제할까요?",
+          "unlinkConfirmDescription": "해제하면 X에서 이 기기로 작업을 보낼 수 없습니다. 로컬 프로젝트와 다른 채널 연결에는 영향이 없습니다.",
+          "status": {
+            "checking": "서버 지원 확인 중…",
+            "unavailable": "이 서버에서는 아직 사용할 수 없습니다",
+            "disabled": "비활성화됨",
+            "none": "연결되지 않음",
+            "pending": "X를 열어 계정 인증을 완료하세요",
+            "awaiting_confirmation": "X에서 인증을 확인하세요",
+            "confirmed": "{{user}} 님이 {{bot}} 과 연결됨",
+            "denied": "인증이 거부되었습니다",
+            "expired": "인증 링크가 만료되었습니다",
+            "failed": "연결에 실패했습니다",
+            "revoked": "연결이 해제되었습니다",
+            "superseded": "다른 기기에서 연결됨"
+          }
         }
       },
       "summary": {
@@ -2568,7 +2645,7 @@
     "tina": {
       "chat": {
         "title": "대화",
-        "description": "저장소에 연결되지 않은 대화입니다. Slack 또는 Telegram에서 \"chat\"을 선택하면 대화 lane마다 세션을 사용할 수 있습니다."
+        "description": "저장소에 연결되지 않은 대화입니다. Slack, Telegram 또는 X에서 \"chat\"을 선택하면 대화 lane마다 세션을 사용할 수 있습니다."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -2577,6 +2654,7 @@
         "permissionLabel": "권한 모드",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
+        "providerX": "X",
         "requireConnected": "{{provider}} 연결 후 편집할 수 있습니다(위의 스위치를 켜고 연결을 기다려 주세요).",
         "requireBinding": "먼저 {{provider}} 계정 연결을 완료해 주세요.",
         "serverUnsupported": "서버 버전이 오래되었거나 응답이 없어 설정을 불러올 수 없습니다.",
@@ -2655,7 +2733,7 @@
       "tips": {
         "cindy": "Cindy는 공식 제공 공유 봇입니다. 자격 증명을 신청할 필요 없이 Slack을 연결하고 @Cindy를 멘션하면 바로 작업을 맡길 수 있습니다.",
         "personal": "개인 연결에는 WeChat 스캔 인증과 직접 발급한 Feishu / Discord / Telegram 인증 정보 연결이 포함됩니다. 새 대화 설정은 채널별로 저장됩니다.",
-        "personalFeishuOnly": "개인 연결에는 WeChat 스캔 인증과 직접 발급한 Feishu 인증 정보 연결이 포함됩니다. 새 대화 설정은 채널별로 저장됩니다."
+        "personalFeishuOnly": "개인 연결에는 WeChat 스캔 인증과 직접 발급한 Feishu 및 DingTalk 자격 증명 연결이 포함됩니다. 새 대화 설정은 채널별로 저장됩니다."
       },
       "defaults": {
         "title": "새 대화 설정",
@@ -2664,7 +2742,8 @@
           "slack": "새 Slack 스레드는 이 Agent와 모델을 사용합니다.",
           "discord": "새 Discord 대화는 이 Agent와 모델을 사용합니다. 기존 DM에는 /new를 보내 적용하세요.",
           "wechat": "새 WeChat 대화는 이 Agent, 모델, 권한 모드를 사용합니다. 기존 채팅에는 /new를 보내 적용하세요.",
-          "telegram": "새 Telegram 대화는 이 Agent와 모델을 사용합니다. 기존 대화에는 /new를 보내 적용하세요."
+          "telegram": "새 Telegram 대화는 이 Agent와 모델을 사용합니다. 기존 대화에는 /new를 보내 적용하세요.",
+          "dingtalk": "새 DingTalk 대화는 이 Agent와 모델을 사용합니다. 기존 대화에는 /new를 보내 적용하세요."
         },
         "agentLabel": "Agent",
         "modelLabel": "모델 설정",
@@ -2763,6 +2842,42 @@
         "open-terminal": {
           "label": "터미널 열기",
           "description": "오른쪽 사이드바에서 터미널을 엽니다(이미 열려 있으면 포커스)"
+        },
+        "switch-session-1": {
+          "label": "1번째 세션으로 이동",
+          "description": "사이드바에 표시된 1번째 세션으로 이동합니다"
+        },
+        "switch-session-2": {
+          "label": "2번째 세션으로 이동",
+          "description": "사이드바에 표시된 2번째 세션으로 이동합니다"
+        },
+        "switch-session-3": {
+          "label": "3번째 세션으로 이동",
+          "description": "사이드바에 표시된 3번째 세션으로 이동합니다"
+        },
+        "switch-session-4": {
+          "label": "4번째 세션으로 이동",
+          "description": "사이드바에 표시된 4번째 세션으로 이동합니다"
+        },
+        "switch-session-5": {
+          "label": "5번째 세션으로 이동",
+          "description": "사이드바에 표시된 5번째 세션으로 이동합니다"
+        },
+        "switch-session-6": {
+          "label": "6번째 세션으로 이동",
+          "description": "사이드바에 표시된 6번째 세션으로 이동합니다"
+        },
+        "switch-session-7": {
+          "label": "7번째 세션으로 이동",
+          "description": "사이드바에 표시된 7번째 세션으로 이동합니다"
+        },
+        "switch-session-8": {
+          "label": "8번째 세션으로 이동",
+          "description": "사이드바에 표시된 8번째 세션으로 이동합니다"
+        },
+        "switch-session-9": {
+          "label": "9번째 세션으로 이동",
+          "description": "사이드바에 표시된 9번째 세션으로 이동합니다"
         }
       },
       "none": "설정 안 됨",
@@ -4190,14 +4305,13 @@
       "preparingButton": "준비 중",
       "preparingTooltip": "새 버전 준비 중…",
       "preparingAria": "새 버전 준비 중입니다. 잠시만 기다려 주세요",
-      "confirmTitle": "재시작하여 업데이트?",
-      "confirmHint": "앱이 자동으로 재시작됩니다",
-      "confirmBusyHint": "아직 실행 중인 작업이 있습니다. 재시작하면 작업이 중단됩니다",
-      "confirmButton": "재시작",
+      "confirmTitle": "아직 실행 중인 작업이 있습니다",
+      "confirmBusyHint": "재시작하면 작업이 중단됩니다",
+      "confirmButton": "그래도 앱 재시작",
       "cancel": "취소",
-      "confirmTooltip": "재시작하여 업데이트 적용",
+      "confirmTooltip": "아직 실행 중인 작업이 있습니다 — 재시작하면 중단됩니다",
       "cancelTooltip": "취소",
-      "confirmAria": "재시작하여 업데이트 적용",
+      "confirmAria": "그래도 재시작하여 업데이트를 적용하고 실행 중인 작업을 중단",
       "cancelAria": "업데이트 취소",
       "dismiss": "나중에",
       "dismissAria": "업데이트 알림 일시 숨김"
@@ -4309,12 +4423,12 @@
   },
   "imBot": {
     "conflictDialog": {
-      "title": "이 Feishu Bot App은 이미 사용 중입니다",
+      "title": "이 {{service}} Bot App은 이미 사용 중입니다",
       "bodyPrefix": "현재 App",
       "bodyMain": "은 다른 기기에서 이미 장시간 연결을 시작했습니다. 동료가 동일한 App ID를 사용 중일 수 있습니다. 하나의 App은 한 기기에만 바인딩될 수 있으므로 충돌을 피하기 위해 본 기기에서 자동으로 연결이 해제되었습니다.",
       "suggestionsHeading": "두 가지 처리 방법:",
       "suggestion1": "1. 상대방과 협의해 시간대를 분리해 사용하고, 상대방이 자신의 기기에서 인증 정보를 먼저 지운 뒤 본 기기에서 재연결합니다.",
-      "suggestion2": "2. Feishu 오픈 플랫폼에서 자신만의 별도 App을 만들어 동료와 각자 사용합니다.",
+      "suggestion2": "2. {{service}} 오픈 플랫폼에서 자신만의 별도 App을 만들어 동료와 각자 사용합니다.",
       "dismiss": "무시",
       "createOwnApp": "내 App 만들기 ↗"
     }
@@ -4676,6 +4790,10 @@
       "openHint": "Worker 를 불러 함께 작업",
       "disabledHint": "이 프로젝트에서는 협업 모드가 비활성화되어 있습니다. 프로젝트 설정에서 활성화하세요.",
       "unavailableHint": "이 프로젝트의 협업 설정을 확인할 수 없습니다. 잠시 후 다시 시도하세요.",
+      "unsupportedRemoteHint": "제어 대상 기기의 버전이 오래되어 협업을 사용할 수 없습니다.",
+      "remoteContinueNotice": " 이 메시지는 단일 대화로 계속 전송됩니다.",
+      "handoffRecoveredMessage": "지난번 협업 시작이 중단되었습니다. 전송되지 않은 메시지를 입력창에 복원했습니다.",
+      "handoffRecoveredGoal": "지난번 협업 시작이 중단되었습니다. 목표가 시작되지 않아 내용을 입력창에 복원했습니다.",
       "loadingHint": "이 프로젝트의 협업 설정을 확인하는 중입니다. 잠시 후 다시 시도하세요.",
       "stopHint": "협업 중지",
       "stopAria": "협업 중지",
@@ -4990,6 +5108,11 @@
       "continueAfterResetTitle": "사용량 제한 재설정 후 현재 작업을 계속할 일회성 자동화 만들기",
       "credentialSwitchBusy": "다른 Codex 작업이 실행 중이어서 이 대화에서 선택한 제공자로 아직 전환할 수 없습니다(공유 Codex 프로세스 재시작 필요). 다른 작업이 끝난 후 ‘재시도’를 눌러 주세요.",
       "codexThreadStale": "Codex 인증 모드가 변경되었습니다. 이 대화는 계속할 수 없습니다. 새 대화를 시작하세요.",
+      "claudeGatewayOpusPlanMismatch": "이 Opus 요청은 Claude.ai 구독이 아니라 XD Gateway를 통해 전송되었고, 해당 게이트웨이 경로에서 모델을 거부했습니다. Claude.ai 구독으로 전환해 다시 시도하거나 다른 모델을 선택하세요.",
+      "switchClaudeSubscription": "Claude.ai로 전환 후 재시도",
+      "switchClaudeSubscriptionTitle": "이 대화를 Claude.ai 구독으로 전환하고 다시 시도",
+      "switchingClaudeSubscription": "Claude.ai로 전환하는 중…",
+      "claudeSubscriptionSwitchFailed": "Claude.ai로 전환하거나 이 대화를 다시 시도할 수 없습니다: {{msg}}",
       "budgetModelHint": "계속 실패하면 일반 GPT 모델로 전환해 보세요.",
       "codexAuthMissing": "원격 Codex가 아직 로그인되지 않았습니다(401 Unauthorized). 「인증 동기화」를 클릭하여 로컬 Codex 자격 증명을 원격 Cindy Codex home으로 푸시한 후 다시 시도하세요.",
       "codexAuthMissingLocal": "Codex 자격 증명이 없거나 만료되었습니다(401 Unauthorized). {{appName}} Settings → Codex에서 다시 로그인하거나(로그인 시 app-server가 자동 재시작) 터미널에서 `codex login` 실행 후 Settings에서 인증 모드를 한 번 전환하여 app-server를 재시작한 다음 새 대화를 시작하세요.",
@@ -6741,6 +6864,7 @@
     "mine": {
       "refresh": "새로 고침",
       "emptyTitle": "아직 제출한 이슈가 없습니다",
+      "emptyTitleUnverified": "현재 이슈를 가져올 수 없습니다",
       "startIssueChat": "/issue 로 새 채팅 시작",
       "statusUnknown": "상태 알 수 없음",
       "sourceCindy": "Cindy에서 제출",
@@ -6753,6 +6877,8 @@
       "notSignedInHint": "Cindy 계정에 로그인하면 제출한 모든 이슈와 최신 상태를 볼 수 있습니다.",
       "fetchFailedHint": "최신 상태를 가져오지 못했습니다. 이 기기에 기록된 제출 항목만 표시하므로 목록이 완전하지 않을 수 있습니다.",
       "fetchFailedPartialHint": "최신 상태를 가져오지 못했습니다. 일부 이슈의 상태가 완전하지 않을 수 있습니다.",
+      "enhancementFailedHint": "GitHub 계정으로 등록한 이슈를 읽지 못했습니다. Cindy GitHub 플러그인의 액세스 토큰 권한이 부족할 수 있습니다. 플러그인 페이지에서 확인해 주세요.",
+      "enhancementFailedGenericHint": "GitHub 계정으로 등록한 이슈를 읽지 못했습니다. 네트워크 문제이거나 GitHub 요청 제한일 수 있습니다. 잠시 후 다시 시도해 주세요.",
       "truncatedHint": "이슈가 많아 일부만 표시했습니다. 전체 목록은 GitHub에서 확인하세요."
     },
     "redirect": {
@@ -7019,7 +7145,13 @@
       "installed": "설치됨",
       "globalScope": "전역",
       "sourceSkillhub": "SkillHub",
-      "sourceLocal": "로컬"
+      "sourceLocal": "로컬",
+      "import": "스킬 가져오기",
+      "importAria": "로컬 zip 또는 SKILL.md에서 스킬 가져오기",
+      "importPickerTitle": "가져오기 위치 선택",
+      "importPickerSubtitle": "{{name}} · {{description}}",
+      "importSuccess": "{{name}} 가져오기 완료{{suffix}}",
+      "importFailed": "스킬 가져오기 실패"
     },
     "common": {
       "openFolderFailed": "폴더 열기 실패",
@@ -7556,16 +7688,16 @@
     "toasts": {
       "googleConnected": "Google에 연결됨",
       "codexConnected": "ChatGPT 계정 연결됨",
-      "feishuBotConnected": "Feishu 봇에 연결됨",
-      "feishuBotReconnected": "Feishu 봇이 다시 연결됨",
-      "feishuBotReconnectFailed": "다시 연결하지 못했습니다. Feishu 구성을 확인한 후 다시 시도하세요",
+      "feishuBotConnected": "IM 봇에 연결됨",
+      "feishuBotReconnected": "IM 봇이 다시 연결됨",
+      "feishuBotReconnectFailed": "다시 연결하지 못했습니다. IM 봇 구성을 확인한 후 다시 시도하세요",
       "feishuBotConflict": "이 App은 이미 사용 중입니다. 동료가 같은 App ID를 사용하고 있을 수 있습니다",
       "feishuBotConnectFailed": "연결 실패. App ID / Secret을 확인하세요",
       "feishuBotSaveFailed": "저장 실패: {{message}}",
-      "feishuBotCleared": "Feishu 봇 자격 증명이 삭제됨",
+      "feishuBotCleared": "IM 봇 자격 증명이 삭제됨",
       "feishuBotClearFailed": "삭제 실패: {{message}}",
-      "feishuBotCreatedConnected": "Feishu 봇이 생성되어 연결됨",
-      "feishuBotCreatedCheck": "Feishu 봇이 생성됨. 연결 상태를 확인하세요",
+      "feishuBotCreatedConnected": "IM 봇이 생성되어 연결됨",
+      "feishuBotCreatedCheck": "IM 봇이 생성됨. 연결 상태를 확인하세요",
       "discordBotConnected": "Discord 봇 구성이 저장됨",
       "discordBotConnectFailed": "Discord 봇 연결 실패. Token과 권한을 확인하세요",
       "discordBotSaveFailed": "저장 실패: {{message}}",
@@ -7588,7 +7720,14 @@
       "telegramBotConnectFailed": "Telegram 봇 연결 실패. Token과 네트워크를 확인하세요",
       "telegramBotSaveFailed": "저장 실패: {{message}}",
       "telegramBotDisconnected": "Telegram 봇 연동이 해제됨",
-      "telegramBotDisconnectFailed": "연동 해제 실패: {{message}}"
+      "telegramBotDisconnectFailed": "연동 해제 실패: {{message}}",
+      "dingtalkBotConnected": "DingTalk 봇이 연결됨",
+      "dingtalkBotConnectFailed": "DingTalk 봇 연결 실패. 자격 증명, Stream 모드, 네트워크를 확인하세요",
+      "dingtalkBotAuthFailed": "DingTalk에서 자격 증명을 거부했습니다. Client ID와 Client Secret이 동일한 앱의 것인지 확인하세요",
+      "dingtalkBotNetworkFailed": "DingTalk 오픈 플랫폼에 연결할 수 없습니다. 네트워크 또는 프록시를 확인한 후 다시 시도하세요",
+      "dingtalkBotStreamFailed": "자격 증명은 유효하지만 Stream 연결이 설정되지 않았습니다. 봇을 활성화하고 Stream 모드를 선택한 뒤 앱 버전을 게시하세요",
+      "dingtalkBotDisconnected": "DingTalk 봇 연동이 해제됨",
+      "dingtalkBotDisconnectFailed": "DingTalk 봇 연동 해제 실패"
     },
     "errors": {
       "openFileFailed": "시스템에서 파일을 열 수 없습니다",
@@ -7613,7 +7752,8 @@
       "discordOwnerUserIdFormat": "Discord 사용자 ID는 17-20자리 숫자여야 합니다",
       "telegramFieldsRequired": "Bot Token과 Telegram 사용자 ID 둘 다 입력해야 합니다",
       "telegramTokenFormat": "Token 형식이 잘못되었습니다. BotFather가 생성한 \"숫자:시크릿\" 형태여야 합니다",
-      "telegramOwnerUserIdFormat": "Telegram 사용자 ID는 숫자여야 합니다"
+      "telegramOwnerUserIdFormat": "Telegram 사용자 ID는 숫자여야 합니다",
+      "dingtalkFieldsRequired": "Client ID와 Client Secret을 모두 입력해야 합니다"
     },
     "confirm": {
       "logoutTitle": "로그아웃",

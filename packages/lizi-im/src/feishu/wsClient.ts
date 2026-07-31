@@ -40,10 +40,7 @@ import { downloadAttachments } from './attachmentDownloader.js';
 import { parseCardAction } from './cardActionParser.js';
 import { getLog } from './moduleScope.js';
 import { messages as transportMessages } from './messages.js';
-import type {
-  BotCredentials,
-  FeishuConnectionStatus,
-} from './internal-types.js';
+import type { BotCredentials, FeishuConnectionStatus } from './internal-types.js';
 
 // ── module state ──────────────────────────────────────────────────────────────
 
@@ -106,21 +103,11 @@ function isConflictSignal(message: string): boolean {
 }
 
 function isActiveConnection(generation: number, appId: string): boolean {
-  return (
-    acceptingInbound &&
-    lifecycleGeneration === generation &&
-    currentBotAppId === appId
-  );
+  return acceptingInbound && lifecycleGeneration === generation && currentBotAppId === appId;
 }
 
-async function transitionToConflict(
-  generation: number,
-  appId: string,
-): Promise<void> {
-  if (
-    conflictTransitionGeneration === generation ||
-    !isActiveConnection(generation, appId)
-  ) {
+async function transitionToConflict(generation: number, appId: string): Promise<void> {
+  if (conflictTransitionGeneration === generation || !isActiveConnection(generation, appId)) {
     return;
   }
 
@@ -141,10 +128,7 @@ function handleReadySignal(
 ): void {
   if (!isActiveConnection(generation, appId)) return;
   activeDetector.markReady();
-  if (
-    activeDetector.getVerdict()?.kind === 'connected' &&
-    currentStatus !== 'connected'
-  ) {
+  if (activeDetector.getVerdict()?.kind === 'connected' && currentStatus !== 'connected') {
     setStatus('connected');
   }
 }
@@ -156,10 +140,7 @@ function handleReconnectingSignal(
 ): void {
   if (!isActiveConnection(generation, appId)) return;
   activeDetector.markReconnecting();
-  if (
-    activeDetector.getVerdict()?.kind !== 'conflict' &&
-    currentStatus === 'connected'
-  ) {
+  if (activeDetector.getVerdict()?.kind !== 'conflict' && currentStatus === 'connected') {
     setStatus('reconnecting');
   }
 }
@@ -171,10 +152,7 @@ function handleReconnectedSignal(
 ): void {
   if (!isActiveConnection(generation, appId)) return;
   activeDetector.markReconnected();
-  if (
-    activeDetector.getVerdict()?.kind === 'connected' &&
-    currentStatus !== 'connected'
-  ) {
+  if (activeDetector.getVerdict()?.kind === 'connected' && currentStatus !== 'connected') {
     setStatus('connected');
   }
 }
@@ -187,10 +165,7 @@ function handleErrorSignal(
 ): void {
   if (!isActiveConnection(generation, appId)) return;
   if (isConflictSignal(error.message)) {
-    if (
-      !activeDetector.markConflict() &&
-      activeDetector.getVerdict()?.kind !== 'conflict'
-    ) {
+    if (!activeDetector.markConflict() && activeDetector.getVerdict()?.kind !== 'conflict') {
       void transitionToConflict(generation, appId);
     }
     return;
@@ -218,9 +193,7 @@ function makeCapturingLogger(
     trace: () => {},
     debug: () => {},
     info: (...args: unknown[]) => {
-      const msg = args
-        .map((a) => (typeof a === 'string' ? a : JSON.stringify(a)))
-        .join(' ');
+      const msg = args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
       log.debug('[feishu/sdk-info]', msg);
       if (!isActiveConnection(generation, appId)) return;
       if (msg.includes('ws client ready')) {
@@ -231,28 +204,19 @@ function makeCapturingLogger(
         handleReconnectingSignal(activeDetector, generation, appId);
       } else if (msg.includes('unable to connect to the server')) {
         activeDetector.markError(new Error('unable to connect after retries'));
-        setStatus('error', '连接失败：飞书服务无法访问，请检查网络');
+        setStatus('error', '连接失败：IM 服务无法访问，请检查网络');
       }
     },
     warn: (...args: unknown[]) => {
-      const msg = args
-        .map((a) => (typeof a === 'string' ? a : JSON.stringify(a)))
-        .join(' ');
+      const msg = args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
       log.warn('[feishu/sdk-warn]', msg);
     },
     error: (...args: unknown[]) => {
-      const msg = args
-        .map((a) => (typeof a === 'string' ? a : JSON.stringify(a)))
-        .join(' ');
+      const msg = args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
       log.error('[feishu/sdk-error]', msg);
       if (!isActiveConnection(generation, appId)) return;
       if (isConflictSignal(msg)) {
-        handleErrorSignal(
-          new Error(FEISHU_CONFLICT_ERROR),
-          activeDetector,
-          generation,
-          appId,
-        );
+        handleErrorSignal(new Error(FEISHU_CONFLICT_ERROR), activeDetector, generation, appId);
         return;
       }
       if (msg.includes('code: 514')) {
@@ -285,12 +249,16 @@ export async function start(
   currentBotAppId = creds.appId;
   setStatus('testing');
 
-  const startDetector = new ConflictDetector({ readyTimeoutMs: 8000, reconnectThreshold: 2 });
+  const startDetector = new ConflictDetector({
+    readyTimeoutMs: 8000,
+    reconnectThreshold: 2,
+  });
   detector = startDetector;
 
   client = new Lark.WSClient({
     appId: creds.appId,
     appSecret: creds.appSecret,
+    domain: creds.service === 'lark' ? Lark.Domain.Lark : Lark.Domain.Feishu,
     loggerLevel: Lark.LoggerLevel.info,
     autoReconnect: true,
     logger: makeCapturingLogger(startDetector, startedGeneration, creds.appId),
@@ -463,9 +431,7 @@ async function announceLifecycle(phase: 'online' | 'offline'): Promise<void> {
   }
 
   const text =
-    phase === 'online'
-      ? transportMessages.lifecycle.online
-      : transportMessages.lifecycle.offline;
+    phase === 'online' ? transportMessages.lifecycle.online : transportMessages.lifecycle.offline;
   try {
     log.info(`[feishu/wsClient] announceLifecycle ${phase}: sending to ...${owner.slice(-8)}`);
     const res = await outbound.sendText(owner, text);
@@ -496,10 +462,7 @@ interface RawMessageEvent {
   };
 }
 
-async function handleIncomingMessage(
-  botAppId: string,
-  data: RawMessageEvent,
-): Promise<void> {
+async function handleIncomingMessage(botAppId: string, data: RawMessageEvent): Promise<void> {
   const log = getLog();
   if (!acceptingInbound) {
     log.info('[feishu/wsClient] drop inbound message while connection is stopping');
@@ -514,9 +477,7 @@ async function handleIncomingMessage(
 
   // p2p only
   if (data.message.chat_type !== 'p2p') {
-    log.info(
-      `[feishu/wsClient] drop non-p2p chat_type=${data.message.chat_type}`,
-    );
+    log.info(`[feishu/wsClient] drop non-p2p chat_type=${data.message.chat_type}`);
     return;
   }
 
@@ -635,7 +596,5 @@ async function handleCardAction(data: unknown): Promise<unknown> {
   // gives the user instant "click registered" feedback even before the
   // orchestrator finishes patching the card. Generic wording — orchestrator's
   // updateInteractiveCard authoritatively replaces the card body.
-  return parsedOk
-    ? { toast: { type: 'success', content: '已收到您的选择' } }
-    : {};
+  return parsedOk ? { toast: { type: 'success', content: '已收到您的选择' } } : {};
 }

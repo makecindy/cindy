@@ -32,6 +32,7 @@ import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import { setNewMakerDraftOwner } from '@/state/newMakerDraft';
 import { setComposerDraftOwner } from '@/lib/composerDraftStore';
+import { setPendingHandoffOwner } from '@/state/pendingFirstMessage';
 
 /**
  * 登录态上下文：user / isAuthenticated / isCanary / deviceId 全部来自 main 的
@@ -119,6 +120,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       activeDataOwnerIdRef.current = state.dataOwnerId;
       setNewMakerDraftOwner(state.dataOwnerId);
       setComposerDraftOwner(state.dataOwnerId);
+      setPendingHandoffOwner(state.dataOwnerId);
       setUserPromptOwner(state.dataOwnerId);
       if (ownerChanged) {
         setMemorySettingsOwner(state.dataOwnerId);
@@ -277,6 +279,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const enterLocalMode = useCallback(async () => {
     const state = await authServiceRef.current!.enterLocalMode();
     setComposerDraftOwner(state.dataOwnerId);
+    setPendingHandoffOwner(state.dataOwnerId);
     setMode(state.mode);
     setDataOwnerId(state.dataOwnerId);
     setCanEnterApp(state.canEnterApp);
@@ -287,6 +290,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const exitLocalMode = useCallback(async () => {
     const state = await authServiceRef.current!.exitLocalMode();
     setComposerDraftOwner(state.dataOwnerId);
+    setPendingHandoffOwner(state.dataOwnerId);
     setMode(state.mode);
     setDataOwnerId(state.dataOwnerId);
     setCanEnterApp(state.canEnterApp);

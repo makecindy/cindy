@@ -72,6 +72,11 @@ export interface NormalizedRemoteMessage {
   diff?: NormalizedToolDiff;
   align: 'user' | 'agent';
   createdAt: string;
+  /**
+   * tool 消息专用:配对 tool_result 的落库时刻(ISO),即这次调用的结束时刻。渲染层用它做
+   * 历史空洞判定的锚点(见共享 `MessageRenderNormalizedMessage.settledAt`)。
+   */
+  settledAt?: string;
   isStreaming?: boolean;
   /** Host 在 SDK done 边界写入；后台自动续跑时每个 sealed assistant 都是正式回复。 */
   turnCompleted?: boolean;
@@ -108,7 +113,7 @@ export interface NormalizedAutomationOrigin {
 }
 
 export interface NormalizedHookSource {
-  im: 'slack' | 'telegram';
+  im: 'slack' | 'telegram' | 'x';
   channelName?: string;
   userText: string;
   threadContext?: Array<{ author: string; text: string; isBot?: boolean }>;
@@ -196,6 +201,8 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
         diff: tool.diff,
         align: 'agent',
         createdAt: message.createdAt,
+        // 结束时刻(配对 tool_result 落库时间)驱动渲染层的历史空洞判定,详见共享类型上的说明。
+        settledAt: toolResultPairing.resultCreatedAtFor(message, tool),
         toolSettled: toolResultPairing.hasResultFor(message, tool),
       });
       continue;
@@ -748,7 +755,9 @@ function readAutomationOrigin(message: RemoteMessage): Pick<NormalizedRemoteMess
 /** Fail closed on unknown providers and bound all server-controlled display fields. */
 function readHookSource(message: RemoteMessage, fallbackBody: string): NormalizedHookSource | undefined {
   const source = readRecord(message.agentMeta?.hookSource);
-  if (!source || (source.im !== 'slack' && source.im !== 'telegram')) return undefined;
+  if (!source || (source.im !== 'slack' && source.im !== 'telegram' && source.im !== 'x')) {
+    return undefined;
+  }
   const userText = (
     typeof source.userText === 'string' ? source.userText : fallbackBody
   ).slice(0, 20_000);

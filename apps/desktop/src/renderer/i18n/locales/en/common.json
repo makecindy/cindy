@@ -464,9 +464,9 @@
       "sessionDoneLabel": "Show desktop notification when a session finishes",
       "sessionDoneHint": "Only shown while the window is unfocused, to avoid foreground interruption.",
       "sessionDoneAria": "Toggle session-done desktop notifications",
-      "feishuLabel": "Send a FeiShu DM when a session finishes or needs reply",
-      "feishuHint": "Sends a private message via the linked FeiShu bot; only when the window is unfocused.",
-      "feishuDisabledHint": "First set up the bot in \"FeiShu Bot\" and DM it once to complete binding.",
+      "feishuLabel": "Send a Feishu / Lark DM when a session finishes or needs a reply",
+      "feishuHint": "Sends a private message via the linked Feishu or Lark bot; only when the window is unfocused.",
+      "feishuDisabledHint": "First set up the bot in \"Feishu / Lark Bot\" and DM it once to complete binding.",
       "feishuAria": "Toggle session-done FeiShu notifications"
     },
     "windowBehavior": {
@@ -1603,9 +1603,15 @@
       "saveFailed": "Failed to save Git safety setting"
     },
     "feishuBot": {
-      "title": "Feishu Bot",
-      "description": "Connect to {{appName}} via Feishu Bot to work anywhere, anytime.",
-      "statusAria": "FeiShu Bot status: {{status}}",
+      "title": "Feishu / Lark Bot",
+      "description": "Connect to {{appName}} via a Feishu or Lark bot to work anywhere, anytime.",
+      "statusAria": "Feishu / Lark Bot status: {{status}}",
+      "serviceLabel": "Service",
+      "serviceAria": "Select an IM service",
+      "services": {
+        "feishu": "Feishu",
+        "lark": "Lark"
+      },
       "status": {
         "needsConfig": "Needs configuration",
         "connecting": "Connecting…",
@@ -1615,16 +1621,17 @@
         "error": "Connection failed"
       },
       "connected": {
-        "heading": "Feishu Bot connected",
+        "heading": "{{service}} Bot connected",
         "note": "Bound to the current scanning user; private messages from other people are silently ignored.",
+        "serviceLabel": "Service",
         "appIdLabel": "App ID",
         "ownerLabel": "Owner",
         "ownerWaiting": "Waiting for first private-message bind",
-        "reconnect": "Reconnect Feishu Bot",
+        "reconnect": "Reconnect {{service}} Bot",
         "clear": "Unbind"
       },
       "saved": {
-        "heading": "Feishu Bot is bound",
+        "heading": "{{service}} Bot is bound",
         "connectingNote": "Bot credentials are saved. Establishing the connection now.",
         "reconnectingNote": "Bot credentials are saved. Restoring the connection now.",
         "conflictNote": "Bot credentials are saved, but this App ID is currently in use on another device.",
@@ -1637,11 +1644,11 @@
       "appSecretPlaceholder": "sec_xxxxxxxxxxxxxxxxxx",
       "showSecret": "Show secret",
       "hideSecret": "Hide secret",
-      "createLink": "Click here to create ↗",
+      "createLink": "Create on {{service}} Open Platform ↗",
       "createLinkSuffix": ", then fill in the credentials",
-      "clearAria": "Unbind Feishu Bot",
+      "clearAria": "Unbind IM bot",
       "clearConfirm": {
-        "title": "Unbind Feishu Bot?",
+        "title": "Unbind IM bot?",
         "description": "Unbinding will close the WebSocket connection and remove the locally stored App ID / App Secret / owner openId. To re-enable, you'll need to recreate or re-enter the credentials.",
         "confirm": "Unbind",
         "cancel": "Cancel"
@@ -1932,6 +1939,49 @@
           "mention": "@ only",
           "always": "Active"
         }
+      }
+    },
+    "dingtalkBot": {
+      "title": "DingTalk Bot",
+      "description": "Connect your own DingTalk bot and use {{appName}} in DMs and group chats through Stream mode.",
+      "status": {
+        "needsConfig": "Needs setup",
+        "connecting": "Connecting…",
+        "connected": "Connected",
+        "error": "Connection failed"
+      },
+      "connected": {
+        "heading": "DingTalk bot connected",
+        "ownerBound": "The owner is linked. DM the bot or @mention it in a group to begin.",
+        "waitingOwner": "DM the bot first. The first direct sender is securely linked as the owner.",
+        "ownerLabel": "Owner user ID",
+        "notBound": "Waiting for first DM"
+      },
+      "appKeyLabel": "Client ID",
+      "appKeyPlaceholder": "Paste the bot application's Client ID",
+      "appSecretLabel": "Client Secret",
+      "appSecretPlaceholder": "Paste the bot application's Client Secret",
+      "appSecretSavedPlaceholder": "Saved securely; leave blank to reconnect",
+      "showSecret": "Show Client Secret",
+      "hideSecret": "Hide Client Secret",
+      "formHint": "Credentials are encrypted locally. The first DM links the owner after connection.",
+      "errorHint": "Connection failed. Check the credentials, Stream mode, and your network, then retry.",
+      "connect": "Connect",
+      "reconnect": "Reconnect",
+      "disconnect": "Unbind",
+      "disconnectConfirm": {
+        "title": "Unbind DingTalk bot?",
+        "description": "This disconnects the bot and removes the locally saved Client ID, Client Secret, and owner link.",
+        "confirm": "Unbind",
+        "cancel": "Cancel"
+      },
+      "guide": {
+        "title": "Setup guide",
+        "step1": "Create an internal app in the DingTalk developer portal and add bot capability.",
+        "step2": "Enable Stream mode for the bot and publish an app version.",
+        "step3": "Copy the Client ID and Client Secret from App Credentials and enter them above.",
+        "step4": "After connecting, DM the bot once to link the owner. @mention it in group chats.",
+        "openPortal": "Open DingTalk developer portal ↗"
       }
     },
     "logout": {
@@ -2529,7 +2579,7 @@
           "disabledHint": "Turn on the switch, then follow the prompts in Telegram to link your account.",
           "toggleAria": "Toggle the Telegram connection",
           "connect": "Link Telegram",
-          "openTelegram": "Open Telegram",
+          "openApp": "Open Telegram",
           "cancel": "Cancel Linking",
           "retry": "Retry Linking",
           "openBot": "Open Bot",
@@ -2551,6 +2601,33 @@
             "revoked": "Link removed",
             "superseded": "Linked to another device"
           }
+        },
+        "x": {
+          "description": "Link your X (Twitter) account and dispatch tasks by mentioning the Cindy bot on X.",
+          "disabledHint": "Turn on the switch, then follow the prompts to authorize your X account.",
+          "toggleAria": "Toggle X connection",
+          "connect": "Link X",
+          "openApp": "Open X to authorize",
+          "cancel": "Cancel linking",
+          "retry": "Retry linking",
+          "openBot": "View bot on X",
+          "unlink": "Unlink X",
+          "unlinkConfirmTitle": "Unlink X?",
+          "unlinkConfirmDescription": "After unlinking, X can no longer dispatch tasks to this device; local projects and other channels are unaffected.",
+          "status": {
+            "checking": "Checking server support…",
+            "unavailable": "Not yet available on this server",
+            "disabled": "Disabled",
+            "none": "Not linked",
+            "pending": "Open X to authorize your account",
+            "awaiting_confirmation": "Confirm the authorization on X",
+            "confirmed": "{{user}} linked to {{bot}}",
+            "denied": "Authorization denied",
+            "expired": "Authorization link expired",
+            "failed": "Linking failed",
+            "revoked": "Unlinked",
+            "superseded": "Linked on another device"
+          }
         }
       },
       "summary": {
@@ -2569,7 +2646,7 @@
     "tina": {
       "chat": {
         "title": "Chat",
-        "description": "Plain conversations without any repository; select \"chat\" from Slack or Telegram, one session per conversation lane."
+        "description": "Plain conversations without any repository; select \"chat\" from Slack, Telegram, or X, one session per conversation lane."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -2578,6 +2655,7 @@
         "permissionLabel": "Permission mode",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
+        "providerX": "X",
         "requireConnected": "Editable once {{provider}} is connected (enable its switch above and wait for the connection).",
         "requireBinding": "Complete {{provider}} account linking first.",
         "serverUnsupported": "Server is too old or not responding; preferences cannot be loaded.",
@@ -2656,7 +2734,7 @@
       "tips": {
         "cindy": "Cindy is the official shared bot — no credentials needed. Connect Slack and just @Cindy to hand off tasks.",
         "personal": "Personal connections include WeChat scan authorization and your own Feishu / Discord / Telegram credentials. Each channel keeps independent new-conversation settings.",
-        "personalFeishuOnly": "Personal connections include WeChat scan authorization and your own Feishu credentials. Each channel keeps independent new-conversation settings."
+        "personalFeishuOnly": "Personal connections include WeChat scan authorization plus your own Feishu and DingTalk credentials. Each channel keeps independent new-conversation settings."
       },
       "defaults": {
         "title": "New Conversation Configuration",
@@ -2665,7 +2743,8 @@
           "slack": "New Slack threads use this Agent and model.",
           "discord": "New Discord conversations use this Agent and model. Send /new in an existing DM to apply it.",
           "wechat": "New WeChat conversations use this Agent, model, and permission mode. Send /new in an existing chat to apply them.",
-          "telegram": "New Telegram conversations use this Agent and model. Send /new in an existing conversation to apply it."
+          "telegram": "New Telegram conversations use this Agent and model. Send /new in an existing conversation to apply it.",
+          "dingtalk": "New DingTalk conversations use this Agent and model. Send /new in an existing conversation to apply it."
         },
         "agentLabel": "Agent",
         "modelLabel": "Model Configuration",
@@ -2764,6 +2843,42 @@
         "open-terminal": {
           "label": "Open terminal",
           "description": "Open a terminal in the right sidebar (focuses the existing one)"
+        },
+        "switch-session-1": {
+          "label": "Go to session 1",
+          "description": "Jump to the 1st visible session in the sidebar"
+        },
+        "switch-session-2": {
+          "label": "Go to session 2",
+          "description": "Jump to the 2nd visible session in the sidebar"
+        },
+        "switch-session-3": {
+          "label": "Go to session 3",
+          "description": "Jump to the 3rd visible session in the sidebar"
+        },
+        "switch-session-4": {
+          "label": "Go to session 4",
+          "description": "Jump to the 4th visible session in the sidebar"
+        },
+        "switch-session-5": {
+          "label": "Go to session 5",
+          "description": "Jump to the 5th visible session in the sidebar"
+        },
+        "switch-session-6": {
+          "label": "Go to session 6",
+          "description": "Jump to the 6th visible session in the sidebar"
+        },
+        "switch-session-7": {
+          "label": "Go to session 7",
+          "description": "Jump to the 7th visible session in the sidebar"
+        },
+        "switch-session-8": {
+          "label": "Go to session 8",
+          "description": "Jump to the 8th visible session in the sidebar"
+        },
+        "switch-session-9": {
+          "label": "Go to session 9",
+          "description": "Jump to the 9th visible session in the sidebar"
         }
       },
       "none": "Not set",
@@ -4191,14 +4306,13 @@
       "preparingButton": "Preparing",
       "preparingTooltip": "Preparing newer version…",
       "preparingAria": "Preparing newer version, please wait",
-      "confirmTitle": "Restart to update?",
-      "confirmHint": "The app will restart automatically",
-      "confirmBusyHint": "A task is still running. Restarting will interrupt it",
-      "confirmButton": "Restart now",
+      "confirmTitle": "A task is still running",
+      "confirmBusyHint": "Restarting will interrupt it",
+      "confirmButton": "Restart App Anyway",
       "cancel": "Cancel",
-      "confirmTooltip": "Confirm restart to apply the update",
+      "confirmTooltip": "A task is still running — restarting will interrupt it",
       "cancelTooltip": "Cancel",
-      "confirmAria": "Confirm restart to apply the update",
+      "confirmAria": "Restart anyway and apply the update, interrupting the running task",
       "cancelAria": "Cancel update",
       "dismiss": "Later",
       "dismissAria": "Dismiss update banner for now"
@@ -4310,12 +4424,12 @@
   },
   "imBot": {
     "conflictDialog": {
-      "title": "This Feishu Bot App is already in use",
+      "title": "This {{service}} Bot App is already in use",
       "bodyPrefix": "The current App",
       "bodyMain": "is already running a long-lived connection on another device — likely a colleague using the same App ID. An App can only bind to one device at a time, so this client has automatically disconnected to avoid contention.",
       "suggestionsHeading": "Two suggested approaches:",
       "suggestion1": "1. Coordinate with the other user to use it at different times. Have them clear the credential on their device, then reconnect here.",
-      "suggestion2": "2. Create your own dedicated App on the Feishu Open Platform so you and your colleague each have your own.",
+      "suggestion2": "2. Create your own dedicated App on the {{service}} Open Platform so you and your colleague each have your own.",
       "dismiss": "Dismiss",
       "createOwnApp": "Create my App ↗"
     }
@@ -4677,6 +4791,10 @@
       "openHint": "Bring in a Worker to help",
       "disabledHint": "Collaboration is disabled for this project. Enable it in project settings.",
       "unavailableHint": "Unable to verify this project's collaboration setting. Try again shortly.",
+      "unsupportedRemoteHint": "The controlled device is too old to support collaboration.",
+      "remoteContinueNotice": " This message is still being sent as a single conversation.",
+      "handoffRecoveredMessage": "Collaboration startup was interrupted last time. Your unsent message has been restored to the composer.",
+      "handoffRecoveredGoal": "Collaboration startup was interrupted last time. The goal was not started; its text has been restored to the composer.",
       "loadingHint": "Still checking this project's collaboration setting. Try again shortly.",
       "stopHint": "Stop collaboration",
       "stopAria": "Stop collaboration",
@@ -4991,6 +5109,11 @@
       "continueAfterResetTitle": "Create a one-time Automation to continue this task after usage resets",
       "credentialSwitchBusy": "Another Codex task is still running, so the provider for this session can't be applied yet (the shared Codex process needs a restart). Retry after those tasks finish.",
       "codexThreadStale": "Codex auth mode changed — this session can't continue. Start a new session to apply it.",
+      "claudeGatewayOpusPlanMismatch": "This Opus request went through XD Gateway, not your Claude.ai subscription. That gateway route rejected the model. Switch to your Claude.ai subscription and retry, or choose another model.",
+      "switchClaudeSubscription": "Switch to Claude.ai & Retry",
+      "switchClaudeSubscriptionTitle": "Switch this conversation to the Claude.ai subscription and retry",
+      "switchingClaudeSubscription": "Switching to Claude.ai…",
+      "claudeSubscriptionSwitchFailed": "Couldn’t switch to Claude.ai or retry this conversation: {{msg}}",
       "budgetModelHint": "If this keeps failing, try switching to the standard GPT model.",
       "codexAuthMissing": "Remote Codex hasn't been signed in yet (401 Unauthorized). Click \"Sync auth\" to push your local Codex credentials to the remote Cindy Codex home, then retry.",
       "codexAuthMissingLocal": "Codex credentials missing or expired (401 Unauthorized). Re-login in {{appName}} Settings → Codex (the app-server will auto-restart on login), or run `codex login` in your terminal and toggle the auth mode in Settings once to restart the app-server. Then start a new session.",
@@ -6751,6 +6874,7 @@
     "mine": {
       "refresh": "Refresh",
       "emptyTitle": "No issues submitted yet",
+      "emptyTitleUnverified": "Couldn't find your issues right now",
       "startIssueChat": "Start a new chat with /issue",
       "statusUnknown": "Status unknown",
       "sourceCindy": "Submitted from Cindy",
@@ -6764,6 +6888,8 @@
       "notSignedInHint": "Sign in to your Cindy account to see every issue you've filed, along with its current status.",
       "fetchFailedHint": "Couldn't load the latest status. Showing only submissions recorded on this device, so this list may be incomplete.",
       "fetchFailedPartialHint": "Couldn't load the latest status, so some issues may show incomplete status.",
+      "enhancementFailedHint": "Couldn't read the issues filed from your GitHub account. The Cindy GitHub plugin's access token may not have enough permissions — check it on the plugin page.",
+      "enhancementFailedGenericHint": "Couldn't read the issues filed from your GitHub account — likely a network hiccup or GitHub rate limit. Try refreshing in a moment.",
       "truncatedHint": "There are more issues than shown here — open GitHub for the full list."
     },
     "redirect": {
@@ -7030,7 +7156,13 @@
       "installed": "Installed",
       "globalScope": "Global",
       "sourceSkillhub": "SkillHub",
-      "sourceLocal": "Local"
+      "sourceLocal": "Local",
+      "import": "Import skill",
+      "importAria": "Import a skill from a local zip or SKILL.md",
+      "importPickerTitle": "Choose import location",
+      "importPickerSubtitle": "{{name}} · {{description}}",
+      "importSuccess": "{{name}} imported{{suffix}}",
+      "importFailed": "Failed to import skill"
     },
     "common": {
       "openFolderFailed": "Failed to open folder",
@@ -7567,16 +7699,16 @@
     "toasts": {
       "googleConnected": "Google connected",
       "codexConnected": "ChatGPT account connected",
-      "feishuBotConnected": "FeiShu bot connected",
-      "feishuBotReconnected": "Feishu bot reconnected",
-      "feishuBotReconnectFailed": "Reconnect failed. Check the Feishu configuration and try again",
+      "feishuBotConnected": "IM bot connected",
+      "feishuBotReconnected": "IM bot reconnected",
+      "feishuBotReconnectFailed": "Reconnect failed. Check the IM bot configuration and try again",
       "feishuBotConflict": "This App is already in use — a colleague may be using the same App ID",
       "feishuBotConnectFailed": "Connection failed, check App ID / Secret",
       "feishuBotSaveFailed": "Save failed: {{message}}",
-      "feishuBotCleared": "FeiShu bot credentials cleared",
+      "feishuBotCleared": "IM bot credentials cleared",
       "feishuBotClearFailed": "Clear failed: {{message}}",
-      "feishuBotCreatedConnected": "FeiShu bot created and connected",
-      "feishuBotCreatedCheck": "FeiShu bot created, please check connection status",
+      "feishuBotCreatedConnected": "IM bot created and connected",
+      "feishuBotCreatedCheck": "IM bot created. Check the connection status",
       "discordBotConnected": "Discord bot configuration saved",
       "discordBotConnectFailed": "Discord bot connection failed; check the token and permissions",
       "discordBotSaveFailed": "Save failed: {{message}}",
@@ -7599,7 +7731,14 @@
       "telegramBotConnectFailed": "Telegram bot connection failed; check the token and your network",
       "telegramBotSaveFailed": "Save failed: {{message}}",
       "telegramBotDisconnected": "Telegram bot unbound",
-      "telegramBotDisconnectFailed": "Unbind failed: {{message}}"
+      "telegramBotDisconnectFailed": "Unbind failed: {{message}}",
+      "dingtalkBotConnected": "DingTalk bot connected",
+      "dingtalkBotConnectFailed": "DingTalk bot connection failed; check credentials, Stream mode, and your network",
+      "dingtalkBotAuthFailed": "DingTalk rejected the credentials. Confirm that the Client ID and Client Secret belong to the same app",
+      "dingtalkBotNetworkFailed": "Cannot reach DingTalk Open Platform. Check your network or proxy and try again",
+      "dingtalkBotStreamFailed": "Credentials are valid, but the Stream connection was not established. Enable the bot, select Stream mode, and publish the app version",
+      "dingtalkBotDisconnected": "DingTalk bot unbound",
+      "dingtalkBotDisconnectFailed": "Failed to unbind DingTalk bot"
     },
     "errors": {
       "openFileFailed": "Cannot open file in system",
@@ -7624,7 +7763,8 @@
       "discordOwnerUserIdFormat": "Discord user ID must be 17-20 digits",
       "telegramFieldsRequired": "Bot Token and Telegram user ID are both required",
       "telegramTokenFormat": "Invalid token format: expected the \"digits:secret\" shape generated by BotFather",
-      "telegramOwnerUserIdFormat": "Telegram user ID must be numeric"
+      "telegramOwnerUserIdFormat": "Telegram user ID must be numeric",
+      "dingtalkFieldsRequired": "Client ID and Client Secret are both required"
     },
     "confirm": {
       "logoutTitle": "Log out",

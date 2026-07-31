@@ -464,9 +464,9 @@
       "sessionDoneLabel": "对话完成时弹出系统通知",
       "sessionDoneHint": "仅在窗口失焦时弹出，避免前台打扰。",
       "sessionDoneAria": "切换对话完成的系统通知",
-      "feishuLabel": "对话完成或需要回复时发送飞书消息",
-      "feishuHint": "通过已绑定的飞书机器人，向你私聊发送一条消息；仅在窗口失焦时发送。",
-      "feishuDisabledHint": "需要先在「飞书机器人」中配置 bot 并向它发送一条消息以完成绑定。",
+      "feishuLabel": "对话完成或需要回复时发送飞书 / Lark 消息",
+      "feishuHint": "通过已绑定的飞书或 Lark 机器人，向你私聊发送一条消息；仅在窗口失焦时发送。",
+      "feishuDisabledHint": "需要先在「飞书 / Lark 机器人」中配置 bot 并向它发送一条消息以完成绑定。",
       "feishuAria": "切换对话完成的飞书通知"
     },
     "windowBehavior": {
@@ -1602,9 +1602,15 @@
       "saveFailed": "保存 Git 安全设置失败"
     },
     "feishuBot": {
-      "title": "飞书机器人",
-      "description": "通过飞书机器人随时随地连接 {{appName}} 进行工作。",
-      "statusAria": "飞书机器人状态：{{status}}",
+      "title": "飞书 / Lark 机器人",
+      "description": "通过飞书或 Lark 机器人随时随地连接 {{appName}} 进行工作。",
+      "statusAria": "飞书 / Lark 机器人状态：{{status}}",
+      "serviceLabel": "服务",
+      "serviceAria": "选择 IM 服务",
+      "services": {
+        "feishu": "飞书",
+        "lark": "Lark"
+      },
       "status": {
         "needsConfig": "需要配置",
         "connecting": "连接中…",
@@ -1614,16 +1620,17 @@
         "error": "连接失败"
       },
       "connected": {
-        "heading": "飞书机器人已连接",
+        "heading": "{{service}} 机器人已连接",
         "note": "已绑定当前扫码用户，其他人私聊会被自动忽略。",
+        "serviceLabel": "服务",
         "appIdLabel": "App ID",
         "ownerLabel": "Owner",
         "ownerWaiting": "等待首次私聊绑定",
-        "reconnect": "重新连接飞书机器人",
+        "reconnect": "重新连接 {{service}} 机器人",
         "clear": "解绑"
       },
       "saved": {
-        "heading": "飞书机器人已绑定",
+        "heading": "{{service}} 机器人已绑定",
         "connectingNote": "已保存机器人凭证，正在建立连接。",
         "reconnectingNote": "已保存机器人凭证，正在恢复连接。",
         "conflictNote": "已保存机器人凭证，但该 App ID 当前被其他设备占用。",
@@ -1636,11 +1643,11 @@
       "appSecretPlaceholder": "sec_xxxxxxxxxxxxxxxxxx",
       "showSecret": "显示密钥",
       "hideSecret": "隐藏密钥",
-      "createLink": "点击链接创建 ↗",
+      "createLink": "前往 {{service}} 开放平台创建 ↗",
       "createLinkSuffix": "，创建完成后填入",
-      "clearAria": "解绑飞书机器人",
+      "clearAria": "解绑 IM 机器人",
       "clearConfirm": {
-        "title": "解绑飞书机器人？",
+        "title": "解绑 IM 机器人？",
         "description": "解绑后将断开 WebSocket 连接，并删除本机保存的 App ID / App Secret / 主人 openId。如需重新使用，需要重新创建或重新填写凭证。",
         "confirm": "解绑",
         "cancel": "取消"
@@ -1931,6 +1938,49 @@
           "mention": "仅 @",
           "always": "全响应"
         }
+      }
+    },
+    "dingtalkBot": {
+      "title": "钉钉机器人",
+      "description": "连接你自建的钉钉机器人，通过 Stream 模式在私聊和群聊中使用 {{appName}}。",
+      "status": {
+        "needsConfig": "需要配置",
+        "connecting": "连接中…",
+        "connected": "已连接",
+        "error": "连接失败"
+      },
+      "connected": {
+        "heading": "钉钉机器人已连接",
+        "ownerBound": "主人已绑定；私聊或在群里 @ 机器人即可开始。",
+        "waitingOwner": "请先私聊机器人，第一位私聊者会安全绑定为主人。",
+        "ownerLabel": "主人用户 ID",
+        "notBound": "等待首次私聊"
+      },
+      "appKeyLabel": "Client ID",
+      "appKeyPlaceholder": "粘贴机器人应用的 Client ID",
+      "appSecretLabel": "Client Secret",
+      "appSecretPlaceholder": "粘贴机器人应用的 Client Secret",
+      "appSecretSavedPlaceholder": "已安全保存；留空可直接重新连接",
+      "showSecret": "显示 Client Secret",
+      "hideSecret": "隐藏 Client Secret",
+      "formHint": "凭证仅加密保存在本机；连接后首次私聊会绑定主人。",
+      "errorHint": "连接失败，请检查凭证、Stream 模式和网络后重试。",
+      "connect": "连接",
+      "reconnect": "重新连接",
+      "disconnect": "解绑",
+      "disconnectConfirm": {
+        "title": "解绑钉钉机器人？",
+        "description": "解绑后会断开连接，并清除本机保存的 Client ID、Client Secret 和主人绑定。",
+        "confirm": "解绑",
+        "cancel": "取消"
+      },
+      "guide": {
+        "title": "配置引导",
+        "step1": "在钉钉开放平台创建企业内部应用，并添加机器人能力。",
+        "step2": "为机器人启用 Stream 模式，并发布应用版本。",
+        "step3": "从应用凭证页复制 Client ID 和 Client Secret，填入上方。",
+        "step4": "连接成功后先私聊机器人完成主人绑定；群聊中需要 @ 机器人。",
+        "openPortal": "打开钉钉开放平台 ↗"
       }
     },
     "logout": {
@@ -2528,7 +2578,7 @@
           "disabledHint": "打开开关后，按提示在 Telegram 里完成账号关联。",
           "toggleAria": "切换 Telegram 连接",
           "connect": "关联 Telegram",
-          "openTelegram": "打开 Telegram",
+          "openApp": "打开 Telegram",
           "cancel": "取消关联",
           "retry": "重新关联",
           "openBot": "打开 Cindy bot",
@@ -2546,6 +2596,33 @@
             "confirmed": "{{user}} 已关联 @{{bot}}",
             "denied": "已拒绝关联",
             "expired": "关联链接已过期",
+            "failed": "关联失败",
+            "revoked": "已解除关联",
+            "superseded": "已关联到另一台设备"
+          }
+        },
+        "x": {
+          "description": "关联 X (Twitter) 账号，在 X 上 @提及 Cindy bot 即可派发任务。",
+          "disabledHint": "打开开关后，按提示完成 X 账号授权。",
+          "toggleAria": "切换 X 连接",
+          "connect": "关联 X",
+          "openApp": "打开 X 完成授权",
+          "cancel": "取消关联",
+          "retry": "重新关联",
+          "openBot": "在 X 上查看 bot",
+          "unlink": "解绑 X",
+          "unlinkConfirmTitle": "解绑 X？",
+          "unlinkConfirmDescription": "解绑后 X 将不能再向这台设备派发任务；本地项目和其它渠道连接不受影响。",
+          "status": {
+            "checking": "正在检查服务器支持…",
+            "unavailable": "当前服务器尚未开放",
+            "disabled": "已停用",
+            "none": "未绑定",
+            "pending": "打开 X 完成账号授权",
+            "awaiting_confirmation": "请完成 X 授权确认",
+            "confirmed": "{{user}} 已关联 {{bot}}",
+            "denied": "已拒绝授权",
+            "expired": "授权链接已过期",
             "failed": "关联失败",
             "revoked": "已解除关联",
             "superseded": "已关联到另一台设备"
@@ -2568,7 +2645,7 @@
     "tina": {
       "chat": {
         "title": "对话",
-        "description": "不落任何仓库的纯对话；在 Slack 或 Telegram 里选择 chat 即可使用，每条对话 lane 独立复用 session。"
+        "description": "不落任何仓库的纯对话；在 Slack、Telegram 或 X 里选择 chat 即可使用，每条对话 lane 独立复用 session。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -2577,6 +2654,7 @@
         "permissionLabel": "权限模式",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
+        "providerX": "X",
         "requireConnected": "连接 {{provider}} 后可编辑（先在上方开启对应开关并等待连接成功）。",
         "requireBinding": "先完成 {{provider}} 账号关联后可编辑。",
         "serverUnsupported": "服务器版本过旧或暂时无应答，无法读取偏好。",
@@ -2655,7 +2733,7 @@
       "tips": {
         "cindy": "Cindy 是官方提供的共享机器人：无需申请任何凭证，连接 Slack 后 @Cindy 即可直接派活。",
         "personal": "个人连接包括微信扫码，以及使用自有凭证接入飞书 / Discord / Telegram；各渠道独立保存新对话配置。",
-        "personalFeishuOnly": "个人连接包括微信扫码，以及使用自有凭证接入飞书；各渠道独立保存新对话配置。"
+        "personalFeishuOnly": "个人连接包括微信扫码，以及使用自有凭证接入飞书和钉钉；各渠道独立保存新对话配置。"
       },
       "defaults": {
         "title": "新对话配置",
@@ -2664,7 +2742,8 @@
           "slack": "Slack 新 thread 会使用这组 Agent 和模型。",
           "discord": "Discord 新对话会使用这组 Agent 和模型；已有私聊发送 /new 后应用。",
           "wechat": "微信新对话会使用这组 Agent、模型和权限模式；已有私聊发送 /new 后应用。",
-          "telegram": "Telegram 新对话会使用这组 Agent 和模型；已有对话发送 /new 后应用。"
+          "telegram": "Telegram 新对话会使用这组 Agent 和模型；已有对话发送 /new 后应用。",
+          "dingtalk": "钉钉新对话会使用这组 Agent 和模型；已有对话发送 /new 后应用。"
         },
         "agentLabel": "Agent",
         "modelLabel": "模型配置",
@@ -2763,6 +2842,42 @@
         "open-terminal": {
           "label": "打开命令行",
           "description": "在右侧栏打开终端（已打开则聚焦）"
+        },
+        "switch-session-1": {
+          "label": "切换到第 1 个对话",
+          "description": "跳转到侧边栏第 1 个可见对话"
+        },
+        "switch-session-2": {
+          "label": "切换到第 2 个对话",
+          "description": "跳转到侧边栏第 2 个可见对话"
+        },
+        "switch-session-3": {
+          "label": "切换到第 3 个对话",
+          "description": "跳转到侧边栏第 3 个可见对话"
+        },
+        "switch-session-4": {
+          "label": "切换到第 4 个对话",
+          "description": "跳转到侧边栏第 4 个可见对话"
+        },
+        "switch-session-5": {
+          "label": "切换到第 5 个对话",
+          "description": "跳转到侧边栏第 5 个可见对话"
+        },
+        "switch-session-6": {
+          "label": "切换到第 6 个对话",
+          "description": "跳转到侧边栏第 6 个可见对话"
+        },
+        "switch-session-7": {
+          "label": "切换到第 7 个对话",
+          "description": "跳转到侧边栏第 7 个可见对话"
+        },
+        "switch-session-8": {
+          "label": "切换到第 8 个对话",
+          "description": "跳转到侧边栏第 8 个可见对话"
+        },
+        "switch-session-9": {
+          "label": "切换到第 9 个对话",
+          "description": "跳转到侧边栏第 9 个可见对话"
         }
       },
       "none": "未设置",
@@ -3699,7 +3814,7 @@
     "close": "关闭",
     "menuItems": {
       "help": "帮助",
-      "issues": "Issue",
+      "issues": "问题反馈",
       "checkForUpdates": "检查更新"
     },
     "updateCheckToast": {
@@ -4190,14 +4305,13 @@
       "preparingButton": "准备中",
       "preparingTooltip": "正在准备新版本…",
       "preparingAria": "正在准备新版本，请稍候",
-      "confirmTitle": "确认重启更新？",
-      "confirmHint": "应用会自动重启",
-      "confirmBusyHint": "当前仍有任务在执行，重启会直接中断",
-      "confirmButton": "确认重启",
+      "confirmTitle": "仍有任务在运行中",
+      "confirmBusyHint": "重启会中断运行中的任务",
+      "confirmButton": "仍要重启应用",
       "cancel": "取消",
-      "confirmTooltip": "确认重启并应用更新",
+      "confirmTooltip": "仍有任务在运行中，重启会中断它",
       "cancelTooltip": "取消",
-      "confirmAria": "确认重启并应用更新",
+      "confirmAria": "仍要重启并应用更新，会中断运行中的任务",
       "cancelAria": "取消更新",
       "dismiss": "稍后再说",
       "dismissAria": "关闭更新提示，稍后再决定"
@@ -4309,12 +4423,12 @@
   },
   "imBot": {
     "conflictDialog": {
-      "title": "该飞书机器人 App 已被占用",
+      "title": "该 {{service}} 机器人 App 已被占用",
       "bodyPrefix": "当前 App",
       "bodyMain": "已经在另一台设备上启动了长连接，可能是同事在使用同一个 App ID。一个 App 只能绑定一台设备，本机已自动断开以避免互相抢占。",
       "suggestionsHeading": "建议两种处理方式：",
       "suggestion1": "1. 与对方协商错峰使用，让对方先在其设备上清除该凭证后，本机再重新连接；",
-      "suggestion2": "2. 到飞书开放平台为自己另建一个独立 App，与同事各用各的。",
+      "suggestion2": "2. 到 {{service}} 开放平台为自己另建一个独立 App，与同事各用各的。",
       "dismiss": "关闭",
       "createOwnApp": "创建我的 App ↗"
     }
@@ -4676,6 +4790,10 @@
       "openHint": "召集 Worker 协作",
       "disabledHint": "当前项目已关闭协同模式，请在项目设置中重新启用",
       "unavailableHint": "暂时无法确认当前项目的协同设置，请稍后重试",
+      "unsupportedRemoteHint": "被控设备的版本过旧，暂不支持协同",
+      "remoteContinueNotice": "本条消息仍会以单对话继续发送。",
+      "handoffRecoveredMessage": "上次开启协同时被中断，未发出的消息已恢复到输入框",
+      "handoffRecoveredGoal": "上次开启协同时被中断，目标未启动，内容已恢复到输入框",
       "loadingHint": "正在确认当前项目的协同设置，请稍后重试",
       "stopHint": "停止协同",
       "stopAria": "停止协同",
@@ -4990,6 +5108,11 @@
       "continueAfterResetTitle": "创建一次性自动化，在用量恢复后继续当前任务",
       "credentialSwitchBusy": "其他 Codex 任务正在运行，暂时无法按本对话选择的模型来源切换（需要重启共享的 Codex 后台进程）。等其他任务结束后点「重试」即可。",
       "codexThreadStale": "Codex 鉴权模式已切换，当前对话无法继续 —— 请新建对话后生效。",
+      "claudeGatewayOpusPlanMismatch": "这次 Opus 请求实际走的是 XD Gateway，不是你的 Claude.ai 订阅；该网关路由拒绝了此模型。可切换到 Claude.ai 订阅后重试，或换一个模型。",
+      "switchClaudeSubscription": "切换到 Claude.ai 并重试",
+      "switchClaudeSubscriptionTitle": "把当前对话切换到 Claude.ai 订阅并重试",
+      "switchingClaudeSubscription": "正在切换到 Claude.ai…",
+      "claudeSubscriptionSwitchFailed": "无法切换到 Claude.ai 或重试当前对话：{{msg}}",
       "budgetModelHint": "如果反复失败，可以切换到普通版 GPT 再试试。",
       "codexAuthMissing": "远端 Codex 还没同步登录态（401 Unauthorized）。点击右侧「同步登录态」把本机 Codex 凭证推到远端 Cindy Codex home，然后重试发送。",
       "codexAuthMissingLocal": "Codex 凭证缺失或失效（401 Unauthorized）。请在 {{appName}} Settings → Codex 重新登录（登录后会自动重启 Codex app-server），或在终端跑 `codex login` + 在 Settings 切换一次鉴权模式来重启 app-server，然后新建对话再发。",
@@ -6741,6 +6864,7 @@
     "mine": {
       "refresh": "刷新",
       "emptyTitle": "还没有提交过 Issue",
+      "emptyTitleUnverified": "暂时查不到你的 Issue",
       "startIssueChat": "用 /issue 开始新对话",
       "statusUnknown": "状态未知",
       "sourceCindy": "由 Cindy 提交",
@@ -6753,6 +6877,8 @@
       "notSignedInHint": "登录 Cindy 账号后，可以看到你提交过的全部 Issue 和它们的最新状态。",
       "fetchFailedHint": "暂时取不到最新状态，当前只显示本机记录的提交，列表可能不完整。",
       "fetchFailedPartialHint": "暂时取不到最新状态，部分 Issue 的状态可能显示不全。",
+      "enhancementFailedHint": "暂时没能读取你 GitHub 账号名下的 Issue。可能是 Cindy GitHub 插件的访问令牌权限不足，可到插件页检查。",
+      "enhancementFailedGenericHint": "暂时没能读取你 GitHub 账号名下的 Issue，可能是网络问题或 GitHub 接口限流，稍后可以点右上角重试。",
       "truncatedHint": "Issue 较多，这里只列出了一部分，完整列表请在 GitHub 上查看。"
     },
     "redirect": {
@@ -7019,7 +7145,13 @@
       "installed": "已安装",
       "globalScope": "全局",
       "sourceSkillhub": "SkillHub",
-      "sourceLocal": "本地"
+      "sourceLocal": "本地",
+      "import": "导入技能",
+      "importAria": "从本地压缩包或 SKILL.md 导入技能",
+      "importPickerTitle": "选择导入位置",
+      "importPickerSubtitle": "{{name}} · {{description}}",
+      "importSuccess": "{{name}} 已导入{{suffix}}",
+      "importFailed": "导入技能失败"
     },
     "common": {
       "openFolderFailed": "打开文件夹失败",
@@ -7556,16 +7688,16 @@
     "toasts": {
       "googleConnected": "Google 已连接",
       "codexConnected": "ChatGPT 账号已连接",
-      "feishuBotConnected": "飞书机器人已连接",
-      "feishuBotReconnected": "飞书机器人已重新连接",
-      "feishuBotReconnectFailed": "重新连接失败，请检查飞书配置后重试",
+      "feishuBotConnected": "IM 机器人已连接",
+      "feishuBotReconnected": "IM 机器人已重新连接",
+      "feishuBotReconnectFailed": "重新连接失败，请检查 IM 机器人配置后重试",
       "feishuBotConflict": "该 App 已被占用，可能是同事在用同一个 App ID",
       "feishuBotConnectFailed": "连接失败，请检查 App ID / Secret",
       "feishuBotSaveFailed": "保存失败：{{message}}",
-      "feishuBotCleared": "已清除飞书机器人凭证",
+      "feishuBotCleared": "已清除 IM 机器人凭证",
       "feishuBotClearFailed": "清除失败：{{message}}",
-      "feishuBotCreatedConnected": "飞书机器人已创建并连接",
-      "feishuBotCreatedCheck": "飞书机器人已创建，请检查连接状态",
+      "feishuBotCreatedConnected": "IM 机器人已创建并连接",
+      "feishuBotCreatedCheck": "IM 机器人已创建，请检查连接状态",
       "discordBotConnected": "Discord 机器人配置已保存",
       "discordBotConnectFailed": "Discord 机器人连接失败，请检查 Token 和权限",
       "discordBotSaveFailed": "保存失败：{{message}}",
@@ -7588,7 +7720,14 @@
       "telegramBotConnectFailed": "Telegram 机器人连接失败，请检查 Token 和网络",
       "telegramBotSaveFailed": "保存失败：{{message}}",
       "telegramBotDisconnected": "已解绑 Telegram 机器人",
-      "telegramBotDisconnectFailed": "解绑失败：{{message}}"
+      "telegramBotDisconnectFailed": "解绑失败：{{message}}",
+      "dingtalkBotConnected": "钉钉机器人已连接",
+      "dingtalkBotConnectFailed": "钉钉机器人连接失败，请检查凭证、Stream 模式和网络",
+      "dingtalkBotAuthFailed": "钉钉未通过凭证校验，请确认 Client ID 和 Client Secret 来自同一个应用",
+      "dingtalkBotNetworkFailed": "无法访问钉钉开放平台，请检查网络或 Proxy 后重试",
+      "dingtalkBotStreamFailed": "凭证有效，但 Stream 连接未建立；请确认已启用机器人、选择 Stream 模式并发布应用版本",
+      "dingtalkBotDisconnected": "已解绑钉钉机器人",
+      "dingtalkBotDisconnectFailed": "钉钉机器人解绑失败"
     },
     "errors": {
       "openFileFailed": "无法在系统中打开文件",
@@ -7613,7 +7752,8 @@
       "discordOwnerUserIdFormat": "Discord 用户 ID 必须是 17-20 位纯数字",
       "telegramFieldsRequired": "Bot Token 和 Telegram 用户 ID 都需要填写",
       "telegramTokenFormat": "Token 格式不对：应为 BotFather 生成的「1234567:xxxx」形态",
-      "telegramOwnerUserIdFormat": "Telegram 用户 ID 必须是纯数字"
+      "telegramOwnerUserIdFormat": "Telegram 用户 ID 必须是纯数字",
+      "dingtalkFieldsRequired": "Client ID 和 Client Secret 都需要填写"
     },
     "confirm": {
       "logoutTitle": "退出登录",

@@ -23,6 +23,7 @@ import {
   type GhostManifest,
   type GhostSetupAllowedAction,
   type GhostSetupAssessment,
+  type GhostVideoRefMode,
   type GhostVideoResultParams,
   type InstalledGhost,
 } from '../../shared/ghost.js';
@@ -52,6 +53,7 @@ import { getAccessToken, getAuthState, onAuthStateChange } from '../authManager.
 import { serverApiFetch } from '../serverApiClient.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { createGhostOauthBrokerClient } from './ghostOauthBroker.js';
+import { readRefImagesWithinBudget } from './refImageBudget.js';
 import { resolveGhostRepoRoot } from './repoRoot.js';
 import { takePendingCindyInstall } from './openFileInstall.js';
 import { GhostRuntime } from './runtime/GhostRuntime.js';
@@ -1860,6 +1862,8 @@ async function runGhostVideo(
     alias: string;
     prompt: string;
     imageDataUris?: string[];
+    /** 参考图用法(仅图生视频有);不传 = 执行器缺省的首尾帧。 */
+    refMode?: GhostVideoRefMode;
   } & CindyVideoParams,
 ): Promise<{ buffer: Buffer; mimeType: string; videoParams: GhostVideoResultParams }> {
   const registry = getCindyProxyMediaService().backend.videoRegistry;
@@ -1896,6 +1900,7 @@ function getGhostVideoCapabilities(model: string): CindyVideoCapabilities | null
       resolutions: caps.supportedResolutions,
       ratios: caps.supportedRatios,
       fps: caps.supportedFps,
+      maxImagesByRefMode: caps.maxImagesByRefMode,
     };
   } catch {
     return null;
@@ -2059,11 +2064,18 @@ export function getGhostCindySlot(): GhostCindySlot {
           humanizeImageChannelError(err);
         }
       },
-      editVideo: async ({ prompt, model, imagePaths, ...videoParams }) => {
+      editVideo: async ({ prompt, model, imagePaths, refMode, ...videoParams }) => {
         try {
           assertMediaModelStillEnabled('video', model);
-          const imageDataUris = await Promise.all(imagePaths.map(readImageFileAsDataUri));
-          return await runGhostVideo({ alias: model, prompt, imageDataUris, ...videoParams });
+          // 先算总量再读(闸按 refMode 分档:存量首尾帧不设闸,原样)。闸与
+          // 读取绑在一个入口里,顺序是那边的结构保证、不是这里的约定;结果
+          // 保序——顺序即语义:首/尾帧,或提示词里 [Image 1]… 的序号。
+          const imageDataUris = await readRefImagesWithinBudget(
+            imagePaths,
+            readImageFileAsDataUri,
+            refMode,
+          );
+          return await runGhostVideo({ alias: model, prompt, imageDataUris, refMode, ...videoParams });
         } catch (err) {
           humanizeImageChannelError(err);
         }

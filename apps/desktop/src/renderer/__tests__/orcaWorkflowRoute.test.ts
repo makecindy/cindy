@@ -210,11 +210,14 @@ describe('OrcaWorkflowRoute source invariants', () => {
   });
 
   it('does not subscribe to project policy updates from the legacy Orca route', () => {
+    // eligible 的判据本体收敛进了 resolveCollabEntryPolicy(issue #1170:草稿与会话视图
+    // 曾各写一份,同一个 device-link 项目两边给出相反答案)。这里守的仍是原来那件事 ——
+    // legacy /orca 路由(orcaMode)必须先被 `!orcaMode &&` 短路掉,否则它也会去跑项目
+    // 策略查询并订阅刷新。
     expect(sessionViewSource).toContain(
-      'const collabPolicyEligible =\n' +
-        '    !orcaMode &&\n' +
-        "    session?.orcaRole !== 'worker'",
+      'const collabPolicyEligible = !orcaMode && collabEntry.eligible;',
     );
+    expect(sessionViewSource).toContain('resolveCollabEntryPolicy({');
   });
 
   it('keeps /orca as a legacy compatibility redirect to the plain lead route', () => {
@@ -266,10 +269,12 @@ describe('OrcaWorkflowRoute source invariants', () => {
 
   it('does not block collaboration tab opening on worker SDK bootstrap', () => {
     const requestEnable = sessionViewSource.indexOf('const requestEnableCollab = useCallback');
-    // device-link:enableOrca 现在按 sessionId 来源路由(本机走本地 maker,远程走隧道),
-    // 调用形态从 window.electronAPI.maker.enableOrca 改成 makerApiFor(collabSessionId).enableOrca。
+    // device-link:enableOrca 按 sessionId 来源路由(本机走本地 maker,远程走隧道),
+    // 调用形态从 window.electronAPI.maker.enableOrca 改成 makerApiFor*(collabSessionId).enableOrca。
+    // 归属用**粘滞**版(makerApiForSticky):瞬断窗口内退回本机会在控制端建出 team,
+    // 与按粘滞 remoteDeviceId 渲染的入口自相矛盾(见 orcaRemoteRoutingInvariants 的对称守卫)。
     const enableCall = sessionViewSource.indexOf(
-      'await makerApiFor(collabSessionId).enableOrca',
+      'await makerApiForSticky(collabSessionId).enableOrca',
       requestEnable,
     );
     const openTab = sessionViewSource.indexOf(

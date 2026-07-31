@@ -34,7 +34,10 @@ export interface ProviderModelAutoRefreshDeps {
 }
 
 export interface ProviderModelRefreshCoordinator {
-  requestAutoRefresh(trigger: ProviderModelAutoRefreshTrigger): Promise<void>;
+  requestAutoRefresh(
+    trigger: ProviderModelAutoRefreshTrigger,
+    providerIds?: readonly BuiltinRefreshableProviderId[],
+  ): Promise<void>;
   refreshManually(providerId: BuiltinRefreshableProviderId): Promise<void>;
   resetCooldowns(providerId?: BuiltinRefreshableProviderId): void;
 }
@@ -257,7 +260,7 @@ export function createProviderModelRefreshCoordinator(
   }
 
   return {
-    async requestAutoRefresh(trigger): Promise<void> {
+    async requestAutoRefresh(trigger, providerIds): Promise<void> {
       syncScope();
       const catalogRefresh = refreshCatalogAutomatically(trigger);
       let providers: ProviderView[];
@@ -288,7 +291,8 @@ export function createProviderModelRefreshCoordinator(
         }
       }
 
-      const ids = BUILTIN_REFRESHABLE_PROVIDER_IDS.filter((id) => connectedIds.has(id));
+      const requestedIds = providerIds ?? BUILTIN_REFRESHABLE_PROVIDER_IDS;
+      const ids = requestedIds.filter((id) => connectedIds.has(id));
       // 启动期无视冷却（见 `'startup'` trigger 注释）；in-flight 合并仍生效，所以并发的
       // 启动触发与手动刷新不会各起一次 codex app-server。
       const force = isForcedProviderModelAutoRefreshTrigger(trigger);
@@ -339,8 +343,9 @@ export function resetProviderModelAutoRefreshCooldowns(
  */
 export async function requestProviderModelAutoRefresh(
   trigger: ProviderModelAutoRefreshTrigger,
+  providerIds?: readonly BuiltinRefreshableProviderId[],
 ): Promise<void> {
-  await configuredCoordinator?.requestAutoRefresh(trigger);
+  await configuredCoordinator?.requestAutoRefresh(trigger, providerIds);
 }
 
 export async function refreshProviderModelsManually(

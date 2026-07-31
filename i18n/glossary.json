@@ -77,6 +77,17 @@
       "note": "个人微信连接的产品名称，沿用微信官方品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。"
     },
     {
+      "id": "lark",
+      "status": "proposed",
+      "en": "Lark",
+      "translations": {
+        "zh-CN": "Lark",
+        "ja": "Lark",
+        "ko": "Lark"
+      },
+      "note": "Lark 国际版 IM 服务的官方品牌名，四语统一保留原品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。"
+    },
+    {
       "id": "personal-wechat",
       "status": "proposed",
       "en": "Personal WeChat",
@@ -86,6 +97,17 @@
         "ko": "개인 WeChat"
       },
       "note": "个人微信连接在设置页中的产品名称；先登记为 proposed，待产品术语评审后再决定是否固化。"
+    },
+    {
+      "id": "dingtalk",
+      "status": "proposed",
+      "en": "DingTalk",
+      "translations": {
+        "zh-CN": "钉钉",
+        "ja": "DingTalk",
+        "ko": "DingTalk"
+      },
+      "note": "钉钉机器人连接的产品名称，沿用官方品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。"
     },
     {
       "id": "openclaw",
@@ -537,7 +559,7 @@
           }
         ]
       },
-      "note": "保留英文（2026-07 裁决）。现状「工单」32 /「议题」4 是既有 bug 的来源：列表按钮写「新建议题」、点进去页面标题写「新建工单」。「问题」不入 forbidden——它在「修复问题和失败」这类泛指语境下是正常中文，不是 Issue 的误译。checkCase 关闭：issue 同时是常用英语单词，prompt 模板里的 \"fix the issue\" 是正常用法，做大小写约束会制造 9 处假阳性。（2026-07 修正：ko 原声明 Issue 仅 3 处，实测 이슈 45 处才是主流，改随本语言主流；ja 的 Issue 43:2 保持不变。）ja 的「課題」同样是多义词（问题 / 课题），按 whenEn=Issue 条件禁用——插件创建 prompt 里的 \"define the problem\" 用「課題」是正确的。豁免两个 Jira capability:那里指的是 Jira 自己的记录类型,日文 UI 的既定叫法是「課題」,保留英文反而与用户实际看到的 Jira 界面对不上。产品自身的 Issue 不受影响。",
+      "note": "保留英文（2026-07 裁决）。现状「工单」32 /「议题」4 是既有 bug 的来源：列表按钮写「新建议题」、点进去页面标题写「新建工单」。「问题」不入 forbidden——它在「修复问题和失败」这类泛指语境下是正常中文，不是 Issue 的误译。checkCase 关闭：issue 同时是常用英语单词，prompt 模板里的 \"fix the issue\" 是正常用法，做大小写约束会制造 9 处假阳性。（2026-07 修正：ko 原声明 Issue 仅 3 处，实测 이슈 45 处才是主流，改随本语言主流；ja 的 Issue 43:2 保持不变。）ja 的「課題」同样是多义词（问题 / 课题），按 whenEn=Issue 条件禁用——插件创建 prompt 里的 \"define the problem\" 用「課題」是正确的。豁免两个 Jira capability:那里指的是 Jira 自己的记录类型,日文 UI 的既定叫法是「課題」,保留英文反而与用户实际看到的 Jira 界面对不上。产品自身的 Issue 不受影响。 菜单入口(titleBar.menuItems.issues 与系统菜单 labels.issues)刻意不用术语:那里回答的是「点这里能干什么」,邻居全是动作短语(帮助 / 检查更新 / 最新更新介绍),夹一个英文名词既断风格,也让不熟悉 GitHub 的用户不知道该不该点 —— zh-CN 用「问题反馈」、ja 用「フィードバック」(ja 同级项同样全是日文,原先的 Issue 一样孤立)。这不是把 Issue 译成那些词:指代该类对象的位置(页面标题、正文、提示)仍写 Issue,因为点进去就跳 GitHub,名字必须对得上 —— 判据与 ja 的 Jira 豁免同源(跟用户实际看到的外部界面一致)。en 保持 Issues、ko 保持 이슈(各自在本语言里本就是自然的入口词)。",
       "minorityByDesign": {
         "ja": "ja 侧 Issue 43/63 本就是主流，此处无偏离；保留字段以说明与 ko 的 이슈 有意分道——各语言跟随本语言主流，不强求跨语言一致。"
       },
@@ -1016,6 +1038,17 @@
       "exempt": [
         "desktop:sessionShare.import.useWorktreeHint"
       ]
+    },
+    {
+      "id": "token-plan",
+      "status": "proposed",
+      "en": "Token Plan",
+      "translations": {
+        "zh-CN": "Token Plan",
+        "ja": "Token Plan",
+        "ko": "Token Plan"
+      },
+      "note": "阿里云百炼与小米 MiMo 的外部订阅产品名称，四语统一保留官方英文写法；与 Coding Plan 是不同套餐和凭证类型，先登记为 proposed，避免供应商预设中混用产品名。"
     },
     {
       "id": "model-category-tts",

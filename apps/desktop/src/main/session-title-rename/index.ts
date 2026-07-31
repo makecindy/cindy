@@ -8,7 +8,10 @@ import type {
 } from './renameSessionsConfirmBridge';
 
 export { RenameSessionsConfirmBridge } from './renameSessionsConfirmBridge';
-export type { RenameSessionsConfirmDecision } from './renameSessionsConfirmBridge';
+export type {
+  RenameSessionsConfirmDecision,
+  RenameSessionsConfirmInteractionSnapshot,
+} from './renameSessionsConfirmBridge';
 
 let bridgeHolder: RenameSessionsConfirmBridge | null = null;
 

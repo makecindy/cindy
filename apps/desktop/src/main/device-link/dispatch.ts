@@ -66,7 +66,7 @@ import { setBroadcastTapListener } from './broadcast-tap';
 import * as subscriptions from './subscriptions';
 import { LEGACY_TOPIC, type ActiveController } from './subscriptions';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
-import { sanitizeGhostSetupRequestForRemote } from '../cindy-brain/ghostSetupInteractionBridge.js';
+import { projectInteractionRequestForRemote } from '../cindy-brain/ghostSetupInteractionBridge.js';
 import {
   remoteWorkingDirRejectionToIpcError,
   type RemoteWorkingDirCheckResult,
@@ -493,18 +493,19 @@ function forwardPush(channel: string, payload: unknown): void {
   if (!activeClient) return;
   const topic = topicForPush(channel, payload);
   if (!topic) return;
-  const remotePayload =
+  let remotePayload = payload;
+  if (
     channel === MAKER_PUSH.INTERACTION_REQUEST &&
     payload &&
     typeof payload === 'object' &&
     'request' in payload
-      ? {
-          ...payload,
-          request: sanitizeGhostSetupRequestForRemote(
-            (payload as { request: unknown }).request,
-          ),
-        }
-      : payload;
+  ) {
+    const request = projectInteractionRequestForRemote(
+      (payload as { request: unknown }).request,
+    );
+    if (request === null) return;
+    remotePayload = { ...payload, request };
+  }
   const dsts = subscriptions.getControllersForTopic(topic);
   for (const dst of dsts) {
     // 转发是尽力而为的旁路:单个控制端的帧超限(PAYLOAD_TOO_LARGE,如大 tool 输出)/ 连接异常

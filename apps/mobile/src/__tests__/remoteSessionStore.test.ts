@@ -1182,7 +1182,290 @@ describe('remoteSessionStore', () => {
     ]);
   });
 
+  it('丢弃无法确认相接的更早缓存段：本页上沿之外服务端还有历史时（#1222）', () => {
+    // 「有交集」不等于「连续」:交集只说明两段有共同的行,不排除更早那一段与本页之间还隔着
+    // 服务端仍有、本地从未加载的行。断连期间漏收几十上百条 push 时就是这样,而漏收的量不大时
+    // 两侧时间差很小 —— 时间阈值的空洞检测发现不了,窗口会静默留下孤岛。
+    // moreBeyondWindow(本页满页 / 被裁行)为真时,更早的缓存段一律丢弃,窗口保持连续区间。
+    // 用冷开缓存入口种入:它刻意不登记「已验证连续」,正是"来源不明"的那类段。
+    remoteSessionStore.hydrateMessagesIfEmpty('s1', [
+      messageAt('cached-old', 's1', '2026-01-01T00:00:01.000Z'),
+      messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'),
+    ]);
+
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'),
+      messageAt('latest-2', 's1', '2026-01-01T10:00:02.000Z'),
+    ], { moreBeyondWindow: true });
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'latest-1',
+      'latest-2',
+    ]);
+  });
+
+  it('用户「加载更早」翻出来的历史在满页重连时保留（已验证连续）', () => {
+    // 回归(#1210 review):只凭"最新页满页"就清空更早的行,会把用户一路翻出来的历史与滚动锚点
+    // 一起丢掉,而且补齐也不会拉回(裁完窗口里已没有内部跳变可发现)。「加载更早」是沿 before 从
+    // 窗口最旧端连续取的,登记进已验证连续区间后必须保住。
+    remoteSessionStore.setMessages('s1', [
+      messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'),
+    ]);
+    remoteSessionStore.mergeEarlierMessages('s1', [
+      messageAt('earlier-1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('earlier-2', 's1', '2026-01-01T09:30:01.000Z'),
+    ]);
+
+    // 断连重连:最新快照恰好满页 → moreBeyondWindow=true,但这些行在已验证区间内。
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'),
+      messageAt('latest-2', 's1', '2026-01-01T10:00:02.000Z'),
+    ], { moreBeyondWindow: true });
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'earlier-1',
+      'earlier-2',
+      'latest-1',
+      'latest-2',
+    ]);
+  });
+
+  it('断流后先到的一条 push 不能让旧段继续被连续性结论背书（#1210 review）', () => {
+    // 只记「下界」时,它断言的是"从下界到**窗口最新端**连续"——而窗口最新端会被断流期间漏收的行
+    // 悄悄作废:旧窗 09:00 那两行,掉线期间服务端产出一大段(本端全漏),重连后先到一条尾部 push,
+    // 于是"有交集"仅靠这条 push 成立,旧下界却还在背书,窗口重新变成孤岛(而这些行若在半小时内
+    // 产生,自动探测也发现不了)。上界显式记下来后,"接不上"就是一次比较。
+    remoteSessionStore.setMessages('s1', [
+      messageAt('old-1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('old-2', 's1', '2026-01-01T09:00:02.000Z'),
+    ]);
+    remoteSessionStore.noteLiveStreamInterrupted();
+    remoteSessionStore.appendMessage('s1', messageAt('resumed-tail', 's1', '2026-01-01T10:00:09.000Z'));
+
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('gap-tail', 's1', '2026-01-01T10:00:08.000Z'),
+      messageAt('resumed-tail', 's1', '2026-01-01T10:00:09.000Z'),
+    ], { moreBeyondWindow: true });
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'gap-tail',
+      'resumed-tail',
+    ]);
+  });
+
+  it('订阅未断时实时 push 推进上界，涨过一页后满页刷新仍保留更早的已验证历史', () => {
+    // 上一条的反面:订阅已 ACK、又没断流时,推送是顺序且完整的,窗口从下界一直连续到最新那条
+    // push。这时最新页只回尾段(会话已涨过一页)不代表更早的行来源不明——收紧过头会在活跃会话里
+    // 反复清空历史。
+    remoteSessionStore.noteLiveStreamAcked('s1');
+    remoteSessionStore.setMessages('s1', [
+      messageAt('a1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('a2', 's1', '2026-01-01T09:00:02.000Z'),
+    ]);
+    remoteSessionStore.appendMessage('s1', messageAt('live-1', 's1', '2026-01-01T09:30:00.000Z'));
+    remoteSessionStore.appendMessage('s1', messageAt('live-2', 's1', '2026-01-01T09:30:01.000Z'));
+
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('live-1', 's1', '2026-01-01T09:30:00.000Z'),
+      messageAt('live-2', 's1', '2026-01-01T09:30:01.000Z'),
+    ], { moreBeyondWindow: true });
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'a1',
+      'a2',
+      'live-1',
+      'live-2',
+    ]);
+  });
+
+  it('断流只作用于被中断的会话（退后台释放的是各自的 session 订阅）', () => {
+    remoteSessionStore.noteLiveStreamAcked('s1');
+    remoteSessionStore.noteLiveStreamAcked('s2');
+    remoteSessionStore.setMessages('s1', [messageAt('a1', 's1', '2026-01-01T09:00:01.000Z')]);
+    // 另一个会话的订阅被释放,不能顺带作废 s1 的上界。
+    remoteSessionStore.noteLiveStreamInterrupted('s2');
+    remoteSessionStore.appendMessage('s1', messageAt('live-1', 's1', '2026-01-01T09:30:00.000Z'));
+
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('live-1', 's1', '2026-01-01T09:30:00.000Z'),
+    ], { moreBeyondWindow: true });
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual(['a1', 'live-1']);
+  });
+
+  it('最新页与缓存逐行相同时也登记连续性（#1210 review）', () => {
+    // 冷开缓存恰好等于服务端最新页是常态。相等早退发生在记账之前时,这次权威响应白来:之后
+    // 会话靠 push 涨过一页、再遇一次满页重连刷新,这些**已被权威页确认过**的行会被当成来源不明
+    // 全部丢弃,用户当前历史与滚动位置随之消失。
+    remoteSessionStore.noteLiveStreamAcked('s1');
+    remoteSessionStore.hydrateMessagesIfEmpty('s1', [
+      messageAt('c1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('c2', 's1', '2026-01-01T09:00:02.000Z'),
+    ]);
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('c1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('c2', 's1', '2026-01-01T09:00:02.000Z'),
+    ]);
+    remoteSessionStore.appendMessage('s1', messageAt('live-1', 's1', '2026-01-01T09:30:00.000Z'));
+
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('live-1', 's1', '2026-01-01T09:30:00.000Z'),
+    ], { moreBeyondWindow: true });
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual(['c1', 'c2', 'live-1']);
+  });
+
+  it('整窗替换与缓存逐行相同时也登记连续性', () => {
+    // setMessages 的相等早退同理:两条路径的记账必须一致,否则走哪条入口决定历史保不保得住。
+    remoteSessionStore.noteLiveStreamAcked('s1');
+    remoteSessionStore.hydrateMessagesIfEmpty('s1', [
+      messageAt('c1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('c2', 's1', '2026-01-01T09:00:02.000Z'),
+    ]);
+    remoteSessionStore.setMessages('s1', [
+      messageAt('c1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('c2', 's1', '2026-01-01T09:00:02.000Z'),
+    ]);
+    remoteSessionStore.appendMessage('s1', messageAt('live-1', 's1', '2026-01-01T09:30:00.000Z'));
+
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('live-1', 's1', '2026-01-01T09:30:00.000Z'),
+    ], { moreBeyondWindow: true });
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual(['c1', 'c2', 'live-1']);
+  });
+
+  it('订阅 ACK 之前落库的权威页，尾部不算可信（#1210 review）', () => {
+    // 屏幕侧的 openAndSubscribe / startFocusedTopicSubscription 都是 `void subscribe(...)`,不等
+    // ACK 就拉页(订阅只管之后的推送,不该挡数据读),所以"页比订阅先到"是常态。这个空窗里被控端
+    // 写下的行既不在这一页、也不会被推过来;若这时仍把尾部标成可信,之后一条 push 就会把上界抬过
+    // 那几行,而等尾部涨过一页后最新页已不含它们,事实自检也发现不了 —— 孤岛就此固化下来。
+    remoteSessionStore.setMessages('s1', [
+      messageAt('a1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('a2', 's1', '2026-01-01T09:00:02.000Z'),
+    ]);
+    // 空窗里服务端写了 m81/m82(本端全没收到);订阅生效后才收到更新的这一条。
+    remoteSessionStore.noteLiveStreamAcked('s1');
+    remoteSessionStore.appendMessage('s1', messageAt('live-1', 's1', '2026-01-01T09:30:00.000Z'));
+
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('live-1', 's1', '2026-01-01T09:30:00.000Z'),
+    ], { moreBeyondWindow: true });
+
+    // 上界仍是 09:00:02,接不上 09:30 的页 → a1/a2 丢弃,窗口保持连续。
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual(['live-1']);
+  });
+
+  it.each([
+    ['socket 掉线（不带 sessionId）', undefined],
+    ['退后台释放 / 离开会话（按 sessionId）', 's1'],
+  ])('断流时 ACK 记录一并作废：%s', (_label, interruptedSessionId) => {
+    // 断流清掉信任位只管**既有**区间;若 ACK 记录还留着,断线后才落库的在途页(请求在断线前发出、
+    // 响应迟到)会重新把尾部标成可信,重连后先到的 push 又把上界抬过漏收的行 —— 绕一圈回到同一个
+    // 孤岛。生效与失效必须成对。
+    remoteSessionStore.noteLiveStreamAcked('s1');
+    remoteSessionStore.setMessages('s1', [
+      messageAt('a1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('a2', 's1', '2026-01-01T09:00:02.000Z'),
+    ]);
+    remoteSessionStore.noteLiveStreamInterrupted(interruptedSessionId);
+    // 断线后才落库的在途页(内容与窗口相同,走相等早退,但记账照做)。
+    remoteSessionStore.setMessages('s1', [
+      messageAt('a1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('a2', 's1', '2026-01-01T09:00:02.000Z'),
+    ]);
+    remoteSessionStore.appendMessage('s1', messageAt('live-1', 's1', '2026-01-01T09:30:00.000Z'));
+
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('live-1', 's1', '2026-01-01T09:30:00.000Z'),
+    ], { moreBeyondWindow: true });
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual(['live-1']);
+  });
+
+  it('最新页在已验证区间内带来窗口没有的行时，旧结论作废', () => {
+    // 覆盖区间是对服务端事实的断言,可以被更新的权威页推翻(桌面侧改写历史、迟到落库)。
+    // 区间内出现窗口没有的行 → 断言本来就是假的,当次按"未知"处置,不能继续背书更早的段。
+    remoteSessionStore.setMessages('s1', [
+      messageAt('a1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('a3', 's1', '2026-01-01T09:00:03.000Z'),
+    ]);
+
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('a2', 's1', '2026-01-01T09:00:02.000Z'),
+      messageAt('a3', 's1', '2026-01-01T09:00:03.000Z'),
+      messageAt('a4', 's1', '2026-01-01T09:00:04.000Z'),
+    ], { moreBeyondWindow: true });
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual(['a2', 'a3', 'a4']);
+  });
+
+  it('断流后到达的 push 不推进上界（本页被裁到只剩那条 push 时，信任位是唯一守卫）', () => {
+    // 上界只有在"实时推送链路自它建立以来没断过"时才能被 push 续推:断流期间漏收的行与新到的
+    // push 之间可能隔着任意多行,续推等于凭空声明覆盖了它们。
+    // 这里刻意把最新页裁到只剩那条 push(device-link payload 超限时的常态,moreBeyondWindow 仍为
+    // 真):本页没带来任何"区间内缺失"的行,事实自检无从发现 —— 信任位是这一档唯一的守卫。
+    remoteSessionStore.setMessages('s1', [
+      messageAt('a1', 's1', '2026-01-01T09:00:01.000Z'),
+      messageAt('a2', 's1', '2026-01-01T09:00:02.000Z'),
+    ]);
+    remoteSessionStore.noteLiveStreamInterrupted('s1');
+    // 断线期间服务端还产出了 09:10 / 09:20 等行,本端全漏;重连后先到的是更新的这一条。
+    remoteSessionStore.appendMessage('s1', messageAt('resumed', 's1', '2026-01-01T09:30:00.000Z'));
+
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('resumed', 's1', '2026-01-01T09:30:00.000Z'),
+    ], { moreBeyondWindow: true });
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual(['resumed']);
+  });
+
+  it('rewind / clear 之后连续性结论失效，来源不明的旧段照旧丢弃', () => {
+    // 连续性是对"窗口"的结论:rewind 可能删掉中间的行,不能让旧结论继续背书。
+    remoteSessionStore.setMessages('s1', [
+      messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'),
+    ]);
+    remoteSessionStore.mergeEarlierMessages('s1', [
+      messageAt('earlier-1', 's1', '2026-01-01T09:00:01.000Z'),
+    ]);
+    // 被控端删除某行 → 窗口连续性结论重置。
+    remoteSessionStore.removeMessages('s1', ['latest-1']);
+
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('latest-2', 's1', '2026-01-01T10:00:02.000Z'),
+      messageAt('latest-3', 's1', '2026-01-01T10:00:03.000Z'),
+    ], { moreBeyondWindow: true });
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'latest-2',
+      'latest-3',
+    ]);
+  });
+
+  it('丢弃更早缓存段时仍保留比本页更新的实时 push 行与本地系统卡', () => {
+    // 收紧的只是"更早那一段"这一条判据:尾部的 live push 与没有服务端对应行的本地卡不受影响。
+    remoteSessionStore.hydrateMessagesIfEmpty('s1', [
+      messageAt('cached-old', 's1', '2026-01-01T00:00:01.000Z'),
+      messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'),
+      messageAt('live-tail', 's1', '2026-01-01T10:00:09.000Z'),
+      messageAt('mobile-system-pwd-1', 's1', '2026-01-01T00:00:05.000Z'),
+    ]);
+
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'),
+      messageAt('latest-2', 's1', '2026-01-01T10:00:02.000Z'),
+    ], { moreBeyondWindow: true });
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'mobile-system-pwd-1',
+      'latest-1',
+      'latest-2',
+      'live-tail',
+    ]);
+  });
+
   it('preserves loaded older pages when the refreshed latest page overlaps the current window', () => {
+    // 未给 moreBeyondWindow(或为 false)= 本页已到会话起点,不存在中间缺口,旧段可信照旧保留。
     remoteSessionStore.setMessages('s1', [
       messageAt('older-1', 's1', '2026-01-01T00:00:01.000Z'),
       messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'),

@@ -16,11 +16,11 @@ const DEFAULT_WINDOW_SIZE = 12;
 /** 第 2 层:窗口填满后, distinct 指纹数 ≤ 此值即判循环(2 = 一直在 ≤2 种调用里转)。 */
 const DEFAULT_WINDOW_DISTINCT_LIMIT = 2;
 /**
- * 第 3 层(兜底):单个 user turn 内 tool result 总数硬上限。
- * 不做任何指纹判断, 对一切循环形态有效, 纯粹防止烧爆 context / token。
- * 设得高, 正常复杂任务一个 turn 调几十个工具很常见, 这里只兜"绝不可能是正常行为"。
+ * TaskOutput 是 SDK 明确定义的等待/轮询工具。状态文本不变只代表任务仍在等待,
+ * 不能作为模型死循环证据。它本身不进入指纹,但也不重置普通工具的轨迹,
+ * 避免模型通过在重复调用间插入轮询来绕过检测。
  */
-const DEFAULT_TURN_HARD_CAP = 100;
+const LOOP_GUARD_EXEMPT_TOOL_NAMES = new Set(['TaskOutput']);
 
 interface PendingToolUse {
   name: string;
@@ -34,24 +34,24 @@ export interface ToolLoopGuardOptions {
   windowSize?: number;
   /** 第 2 层:窗口内 distinct 指纹 ≤ 此值判循环。 */
   windowDistinctLimit?: number;
-  /** 第 3 层:单 turn tool result 总数硬上限。 */
-  turnHardCap?: number;
 }
 
-/** 命中哪一层判据。consecutive=机械重复 / pingpong=交替或输出易变的重复 / turn-cap=硬上限兜底。 */
-export type ToolLoopReason = 'consecutive' | 'pingpong' | 'turn-cap';
+/** 命中哪一层判据。consecutive=机械重复 / pingpong=短循环。 */
+export type ToolLoopReason = 'consecutive' | 'pingpong';
 
 export type ToolLoopGuardVerdict =
   | { kind: 'ok' }
   | { kind: 'hard'; reason: ToolLoopReason; count: number; toolName: string };
 
 /**
- * Result-aware tool loop detector(三层防御)。
+ * Result-aware tool loop detector(两层防御)。
  *
- * 只在工具结果返回后计数。三层任一命中即返回 hard, 由调用方决定如何中断:
+ * 只在非轮询工具结果返回后判断。任一层命中即返回 hard, 由调用方决定如何中断:
  *   1. 连续完全相同(name+input+output)—— 快路径, 零误判;
  *   2. name+input 滑动窗口多样性坍缩 —— 抓 ABAB 交替 / output 易变的重复;
- *   3. 单 turn tool result 硬上限 —— 兜一切形态。
+ *
+ * 不按调用总数或任意长度的重复序列硬中断:仅凭工具 trace 无法区分合法批处理、
+ * 稳定状态轮询与死循环,有限窗口也只能移动误判/漏判边界。
  *
  * 类本身不依赖 Electron / SDK / provider, 也不做 IO;调用方决定何时启用和如何中断。
  */
@@ -59,7 +59,6 @@ export class ToolLoopGuard {
   readonly consecutiveLimit: number;
   readonly windowSize: number;
   readonly windowDistinctLimit: number;
-  readonly turnHardCap: number;
 
   private pendingToolUses = new Map<string, PendingToolUse>();
 
@@ -70,14 +69,10 @@ export class ToolLoopGuard {
   // 第 2 层状态: 最近 windowSize 个 name+input 指纹
   private callWindow: string[] = [];
 
-  // 第 3 层状态: 本 turn 已配对的 tool result 数
-  private turnToolResultCount = 0;
-
   constructor(options: ToolLoopGuardOptions = {}) {
     this.consecutiveLimit = options.consecutiveLimit ?? DEFAULT_CONSECUTIVE_LIMIT;
     this.windowSize = options.windowSize ?? DEFAULT_WINDOW_SIZE;
     this.windowDistinctLimit = options.windowDistinctLimit ?? DEFAULT_WINDOW_DISTINCT_LIMIT;
-    this.turnHardCap = options.turnHardCap ?? DEFAULT_TURN_HARD_CAP;
   }
 
   /**
@@ -91,19 +86,14 @@ export class ToolLoopGuard {
   }
 
   /**
-   * 工具结果到达后配对并按三层判据计数。没有配到完整 tool_use 时直接放行,
+   * 工具结果到达后配对并按两层判据判断。没有配到完整 tool_use 时直接放行,
    * 避免用不完整信息误判。
    */
   onToolResult(toolUseId: string, output: string): ToolLoopGuardVerdict {
     const toolUse = this.pendingToolUses.get(toolUseId);
     this.pendingToolUses.delete(toolUseId);
     if (!toolUse) return { kind: 'ok' };
-
-    // 第 3 层: turn 硬上限(先数, 任何形态兜底)
-    this.turnToolResultCount += 1;
-    if (this.turnToolResultCount > this.turnHardCap) {
-      return { kind: 'hard', reason: 'turn-cap', count: this.turnToolResultCount, toolName: toolUse.name };
-    }
+    if (LOOP_GUARD_EXEMPT_TOOL_NAMES.has(toolUse.name)) return { kind: 'ok' };
 
     // 第 1 层: 连续 name+input+output 完全相同
     const fullFingerprint = fingerprintToolCall(toolUse.name, toolUse.input, output);
@@ -144,10 +134,13 @@ export class ToolLoopGuard {
   /** 每个 user turn 开始时重置, 避免跨 turn 的合法重复被累计。 */
   resetTurn(): void {
     this.pendingToolUses.clear();
+    this.resetPatternState();
+  }
+
+  private resetPatternState(): void {
     this.lastFullFingerprint = null;
     this.consecutiveStreak = 0;
     this.callWindow = [];
-    this.turnToolResultCount = 0;
   }
 }
 

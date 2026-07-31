@@ -16,6 +16,7 @@ import { app, ipcMain, BrowserWindow, net, shell } from 'electron';
 import {
   createIM,
   createDiscordIM,
+  createDingTalkIM,
   createFeishuIM,
   createTelegramIM,
   type IMHost,
@@ -52,6 +53,7 @@ import {
   WECHAT_COMPATIBILITY_POLICY_PRODUCTION_CONFIG,
   WechatCompatibilityPolicyService,
 } from './wechat/compatibilityPolicy';
+import { fetchPublicImageBytes } from './publicImageFetch';
 
 const log = createLogger('im/host');
 
@@ -110,6 +112,7 @@ const host: IMHost = {
         return null;
       }
     },
+    fetchRemoteImage: (url, maxBytes) => fetchPublicImageBytes(url, maxBytes),
   },
   secrets: ownerScopedImSecrets,
   ipc: {
@@ -163,6 +166,9 @@ export const telegramIm = createTelegramIM(host, {
       description: t(`settings.telegramBot.commandMenu.${command}`),
     }),
   ),
+});
+export const dingtalkIm = createDingTalkIM(host, {
+  fetcher: (input, init) => net.fetch(input instanceof URL ? input.toString() : input, init),
 });
 /**
  * Telegram 个人 bot 的行为/人格/群参与配置 IPC(设置卡数据通道)。
@@ -266,4 +272,4 @@ wechatCompatibilityPolicy.subscribe((decision) => {
     log.warn('failed to apply personal WeChat compatibility policy');
   });
 });
-export const im = createIM([feishuIm, discordIm, wechatIm, telegramIm]);
+export const im = createIM([feishuIm, discordIm, wechatIm, telegramIm, dingtalkIm]);

@@ -49,11 +49,13 @@ describe('默认态与持久化', () => {
     expect(store.get()).toEqual({
       enabled: false,
       telegramEnabled: false,
+      xEnabled: false,
       urlOverride: null,
       workspaces: {},
       bindingsCache: [],
       lifecycleAnnouncementOverride: null,
       telegramBindingCache: null,
+      xBindingCache: null,
     });
     expect(store.effectiveUrl()).toBe(TEST_DEFAULT_URL);
   });
@@ -168,11 +170,13 @@ describe('旧多连接文件迁移', () => {
     expect(makeStore().get()).toEqual({
       enabled: false,
       telegramEnabled: false,
+      xEnabled: false,
       urlOverride: null,
       workspaces: {},
       bindingsCache: [],
       lifecycleAnnouncementOverride: null,
       telegramBindingCache: null,
+      xBindingCache: null,
     });
   });
 });
@@ -249,7 +253,7 @@ describe('provider 与 Cindy 账号隔离', () => {
 
     store.setEnabled(true);
     store.setProviderEnabled('telegram', true);
-    store.setTelegramBindingCache(telegramBinding);
+    store.setProviderBindingCache('telegram', telegramBinding);
     store.setWorkspaces({ cindy: abs });
 
     expect(store.anyProviderEnabled()).toBe(true);

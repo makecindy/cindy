@@ -30,7 +30,7 @@ import {
 import { useVoiceInputModelSelection } from '@/hooks/useVoiceInputModelSelection';
 import { useVoiceInputUsageStats } from '@/hooks/useVoiceInputUsageStats';
 import { useVoiceInputHistory } from '@/hooks/useVoiceInputHistory';
-import { getAppShortcutCombos } from '@/lib/appShortcutStore';
+import { getAppShortcutCombos, getAppShortcutOverrides } from '@/lib/appShortcutStore';
 import { toast } from '@/lib/toast';
 import {
   APP_SHORTCUT_DEFINITIONS,
@@ -1392,14 +1392,19 @@ export function VoiceInputSection() {
     [schedulePermissionRefresh, setShortcut, t],
   );
 
-  const getAppShortcutEntries = useCallback(
-    (): AppShortcutComboEntry[] =>
-      APP_SHORTCUT_DEFINITIONS.map((def) => ({
-        id: def.id,
-        combos: getAppShortcutCombos(def.id),
-      })),
-    [],
-  );
+  const getAppShortcutEntries = useCallback((): AppShortcutComboEntry[] => {
+    // 未被 override 的让位槽位(switch-session-*,yieldsToUserBindings)不算
+    // 占用:语音录制提交后 appShortcutStore 会经 yieldToCombos 压掉该槽位
+    // 默认,用户显式录制获胜 —— 与 findAppShortcutConflict 对 app 快捷键
+    // 改绑的放行同一规则,否则存量语音绑定能赢、新录制却被卡死。
+    const overrides = getAppShortcutOverrides();
+    return APP_SHORTCUT_DEFINITIONS.filter(
+      (def) => !(def.yieldsToUserBindings && overrides[def.id] === undefined),
+    ).map((def) => ({
+      id: def.id,
+      combos: getAppShortcutCombos(def.id),
+    }));
+  }, []);
 
   const handleShortcutKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLButtonElement>) => {

@@ -93,9 +93,37 @@ export interface MyIssuesResult {
    * UI 不得因此提示「你需要 GitHub 账号」。
    */
   githubEnhancement: { login: string; source: GithubEnhancementSource } | null;
+  /**
+   * 可选增强这一路**配置了却没能用上**(搜索被拒 / 超时,且兜底通道也没救回来)。
+   *
+   * 与「没配」必须分开:没配是正常状态,配了用不上要让用户知道 —— 否则列表静静少掉
+   * 一部分内容,列表为空时还会被说成「还没有提交过 Issue」。实测过的典型成因:插件 PAT
+   * 是 fine-grained token,能读身份但搜不了本仓(GitHub 对未显式授权的仓库返回 422,
+   * 即使仓库是公开的)。
+   *
+   * 回退成功时为 false —— 用户已经拿到数据,没有可见损失就不打扰他。
+   */
+  githubEnhancementFailed: boolean;
   degraded: MyIssuesDegradedReason | null;
   /** true = 结果超出单页上限被截断,UI 必须明说而不是静默丢。 */
   truncated: boolean;
+}
+
+/**
+ * 首屏占位快照 —— 上一次查询成功时落盘的列表镜像,进页面立刻渲染它,fresh 一到即整体
+ * 接管(语义同 device-link/mirrorCacheStore:**可重建的镜像,不是真相**)。
+ *
+ * **刻意不含** degraded / githubEnhancementFailed / truncated:那三个描述的是「这一次
+ * 查得怎么样」,缓存它们会让用户进页面就看到一条过期的错误提示。
+ *
+ * 也刻意**不能**被当成「查证过的空」—— 快照里的空列表只说明上次没查到,不能推出
+ * 「你从未提交」。空态标题只认这一轮的 fresh 结果(见 useMyIssues 的 hasFreshData)。
+ */
+export interface MyIssuesSnapshot {
+  items: MyIssueItem[];
+  githubEnhancement: { login: string; source: GithubEnhancementSource } | null;
+  /** ISO 写入时间。只用于诊断,**不做过期判断** —— 旧数据也比空白好,进页面一定会刷新。 */
+  cachedAt: string;
 }
 
 /**

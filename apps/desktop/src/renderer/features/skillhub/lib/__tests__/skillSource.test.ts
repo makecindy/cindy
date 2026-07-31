@@ -18,6 +18,11 @@ describe('deriveSkillSource', () => {
     expect(deriveSkillSource('learned', true, false)).toBe('local');
   });
 
+  it('treats explicit imported origin as local', () => {
+    expect(deriveSkillSource('imported', true, false)).toBe('local');
+    expect(deriveSkillSource('imported', true, true)).toBe('local');
+  });
+
   it('treats pre-origin foreign registry records as skillhub', () => {
     // 历史遗留:有 registry 记录、origin 缺失,server 明确判定不是我的 → 他人历史安装
     expect(deriveSkillSource(undefined, true, false)).toBe('skillhub');

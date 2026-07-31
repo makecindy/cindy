@@ -2864,12 +2864,9 @@ export class ClaudeCodeAgent extends BaseAgent {
                 if (turnInFlight) {
                   const verdict = toolLoopGuard?.onToolResult(id, output);
                   if (verdict?.kind === 'hard') {
-                    const loopHint =
-                      verdict.reason === 'consecutive'
-                        ? `连续 ${verdict.count} 次发起完全相同的 ${verdict.toolName} 调用`
-                        : verdict.reason === 'pingpong'
-                          ? `最近 ${verdict.count} 次工具调用一直在极少数几种(含 ${verdict.toolName})之间反复打转`
-                          : `单轮已累计 ${verdict.count} 次工具调用仍未收敛`;
+                    const loopHint = verdict.reason === 'consecutive'
+                      ? `连续 ${verdict.count} 次发起完全相同的 ${verdict.toolName} 调用`
+                      : `最近 ${verdict.count} 次工具调用一直在极少数几种(含 ${verdict.toolName})之间反复打转`;
                     // 与 upstream-idle watchdog 同款兜底: tool-loop 中断 = "整个 turn 序列已死",
                     // bridge counter 归零避免 filter 吞掉本条 error / counter 永久停在 >0。
                     // 实践上 bridge /compact turn 不用 tool, 该分支难以触发, 归零是防御性一致。

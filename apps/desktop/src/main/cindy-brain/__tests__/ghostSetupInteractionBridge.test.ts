@@ -91,10 +91,9 @@ describe('GhostSetupInteractionBridge', () => {
       }),
     ).toBe(false);
     expect(onCommand).not.toHaveBeenCalled();
-    expect(logger.warn).toHaveBeenCalledWith(
-      'plugin setup interaction received invalid command',
-      { requestId: 'request-1' },
-    );
+    expect(logger.warn).toHaveBeenCalledWith('plugin setup interaction received invalid command', {
+      requestId: 'request-1',
+    });
   });
 
   it('restores pending snapshots and dismisses only when Main closes it', () => {
@@ -337,7 +336,31 @@ describe('sanitizeGhostSetupSnapshotForRemote', () => {
       },
     };
     const permission = { request: { kind: 'permission', requestId: 'permission-1' } };
-    const pending = [localSetup, permission];
+    const future = { request: { kind: 'future_kind', requestId: 'future-1' } };
+    const issue = {
+      request: {
+        kind: 'issue_confirm',
+        requestId: 'issue-1',
+        draft: { title: 'private draft' },
+      },
+    };
+    const rename = {
+      request: {
+        kind: 'rename_sessions_confirm',
+        requestId: 'rename-1',
+        changes: [{ sessionId: 'private-session', title: 'private title' }],
+      },
+    };
+    const grant = {
+      request: {
+        kind: 'ghost_grant_confirm',
+        requestId: 'grant-1',
+        items: [
+          { absPath: '/Users/me/private.png', previewDataUrl: 'data:image/png;base64,private' },
+        ],
+      },
+    };
+    const pending = [localSetup, permission, future, issue, rename, grant];
 
     const local = projectPendingInteractionsForRemote(pending, false);
     expect(local).toBe(pending);
@@ -345,11 +368,16 @@ describe('sanitizeGhostSetupSnapshotForRemote', () => {
 
     const remote = projectPendingInteractionsForRemote(pending, true);
     expect(remote).not.toBe(pending);
+    expect(remote).toHaveLength(3);
     expect(JSON.stringify(remote[0])).not.toContain('desktop-only.example');
     expect(remote[1].request).toBe(permission.request);
+    expect(remote[2].request).toBe(future.request);
+    expect(JSON.stringify(remote)).not.toContain('private');
+    expect(JSON.stringify(remote)).not.toContain('/Users/me/private.png');
     expect(localSetup.request.steps[0].action.form.fields[0].externalLink).toEqual({
       url: 'https://desktop-only.example/keys',
     });
+    expect(local).toEqual(pending);
   });
 });
 

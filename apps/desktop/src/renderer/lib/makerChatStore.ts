@@ -7778,15 +7778,16 @@ function clearError(sessionId: string): void {
   });
 }
 
-function retryLastError(sessionId: string): void {
-  if (!sessionId) return;
+function retryLastError(sessionId: string): Promise<void> {
+  if (!sessionId) return Promise.resolve();
   // 续跑语义在 main:coordinator 判定失败 turn 已有 assistant 产出时,用共享英文
   // 常量 CONTINUE_AFTER_ERROR_PROMPT 替代重发原文(shared/interruptedTurn.ts),
   // renderer 不传文案、不做判定。
-  makerApiFor(sessionId)
+  return makerApiFor(sessionId)
     .input.retryLastError(sessionId)
-    .then(applyInputProjection)
-    .catch((err) => log.warn('retryLastError failed:', err));
+    .then((projection) => {
+      applyInputProjection(projection);
+    });
 }
 
 /**

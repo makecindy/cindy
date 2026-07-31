@@ -464,12 +464,14 @@ describe('DeviceLinkClient', () => {
         data: JSON.stringify({ channel: 'maker:event', payload: { text: 'slow' } }),
       },
     });
-    await tick();
-    expect(release).toBeTypeOf('function');
-
+    // Windows 的零延时 timer 可能晚于两个 8ms 心跳周期才被调度；先启动 pong，
+    // 确保本用例验证的是慢业务 handler 与控制帧解耦，而不是测试端尚未开始响应。
     const ponger = setInterval(() => {
       ws.push({ v: PROTOCOL_VERSION, kind: 'pong' });
     }, 4);
+    await tick();
+    expect(release).toBeTypeOf('function');
+
     await tick(40);
     clearInterval(ponger);
 

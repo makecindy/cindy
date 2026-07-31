@@ -464,9 +464,9 @@
       "sessionDoneLabel": "セッション完了時にデスクトップ通知を表示",
       "sessionDoneHint": "ウィンドウが非アクティブの場合のみ表示し、フォアグラウンドでの中断を防ぎます。",
       "sessionDoneAria": "セッション完了時のデスクトップ通知を切り替え",
-      "feishuLabel": "セッション完了または返信が必要な時に Feishu メッセージを送信",
-      "feishuHint": "連携済みの Feishu ボットからプライベートメッセージを送信します。ウィンドウが非アクティブの場合のみ送信。",
-      "feishuDisabledHint": "先に「Feishu ボット」で設定し、ボットに 1 度メッセージを送ってバインドを完了してください。",
+      "feishuLabel": "セッション完了または返信が必要な時に Feishu / Lark メッセージを送信",
+      "feishuHint": "連携済みの Feishu または Lark ボットからプライベートメッセージを送信します。ウィンドウが非アクティブの場合のみ送信。",
+      "feishuDisabledHint": "先に「Feishu / Lark ボット」で設定し、ボットに 1 度メッセージを送ってバインドを完了してください。",
       "feishuAria": "セッション完了時の Feishu 通知を切り替え"
     },
     "windowBehavior": {
@@ -1602,9 +1602,15 @@
       "saveFailed": "Git セーフティ設定の保存に失敗しました"
     },
     "feishuBot": {
-      "title": "Feishu ボット",
-      "description": "Feishu ボット経由で {{appName}} に接続し、いつでもどこでも作業できます。",
-      "statusAria": "Feishu ボットの状態: {{status}}",
+      "title": "Feishu / Lark ボット",
+      "description": "Feishu または Lark ボット経由で {{appName}} に接続し、いつでもどこでも作業できます。",
+      "statusAria": "Feishu / Lark ボットの状態: {{status}}",
+      "serviceLabel": "サービス",
+      "serviceAria": "IM サービスを選択",
+      "services": {
+        "feishu": "Feishu",
+        "lark": "Lark"
+      },
       "status": {
         "needsConfig": "設定が必要",
         "connecting": "接続中…",
@@ -1614,16 +1620,17 @@
         "error": "接続失敗"
       },
       "connected": {
-        "heading": "Feishu ボットは接続済み",
+        "heading": "{{service}} ボットは接続済み",
         "note": "現在の QR コードスキャンユーザーにバインドされています。他の人からのプライベートメッセージは自動的に無視されます。",
+        "serviceLabel": "サービス",
         "appIdLabel": "App ID",
         "ownerLabel": "Owner",
         "ownerWaiting": "初回プライベートメッセージのバインドを待機中",
-        "reconnect": "Feishu ボットを再接続",
+        "reconnect": "{{service}} ボットを再接続",
         "clear": "連携解除"
       },
       "saved": {
-        "heading": "Feishu ボットは連携済み",
+        "heading": "{{service}} ボットは連携済み",
         "connectingNote": "ボットの認証情報は保存されています。接続しています。",
         "reconnectingNote": "ボットの認証情報は保存されています。接続を復旧しています。",
         "conflictNote": "ボットの認証情報は保存されていますが、この App ID は別のデバイスで使用中です。",
@@ -1636,11 +1643,11 @@
       "appSecretPlaceholder": "sec_xxxxxxxxxxxxxxxxxx",
       "showSecret": "シークレットを表示",
       "hideSecret": "シークレットを非表示",
-      "createLink": "クリックして作成 ↗",
+      "createLink": "{{service}} オープンプラットフォームで作成 ↗",
       "createLinkSuffix": "、作成後にここに入力します",
-      "clearAria": "Feishu ボットの連携を解除",
+      "clearAria": "IM ボットの連携を解除",
       "clearConfirm": {
-        "title": "Feishu ボットの連携を解除しますか？",
+        "title": "IM ボットの連携を解除しますか？",
         "description": "連携を解除すると WebSocket 接続が切れ、ローカルに保存された App ID / App Secret / オーナー openId が削除されます。再度使うには、再作成または再入力が必要です。",
         "confirm": "連携解除",
         "cancel": "キャンセル"
@@ -1931,6 +1938,49 @@
           "mention": "@ のみ",
           "always": "アクティブ"
         }
+      }
+    },
+    "dingtalkBot": {
+      "title": "DingTalk ボット",
+      "description": "自作の DingTalk ボットを接続し、Stream モードで DM やグループから {{appName}} を利用します。",
+      "status": {
+        "needsConfig": "設定が必要",
+        "connecting": "接続中…",
+        "connected": "接続済み",
+        "error": "接続失敗"
+      },
+      "connected": {
+        "heading": "DingTalk ボットに接続済み",
+        "ownerBound": "オーナーを連携済みです。DM またはグループでメンションして開始できます。",
+        "waitingOwner": "まずボットに DM してください。最初の送信者がオーナーとして安全に連携されます。",
+        "ownerLabel": "オーナーのユーザー ID",
+        "notBound": "最初の DM を待機中"
+      },
+      "appKeyLabel": "Client ID",
+      "appKeyPlaceholder": "ボットアプリの Client ID を貼り付け",
+      "appSecretLabel": "Client Secret",
+      "appSecretPlaceholder": "ボットアプリの Client Secret を貼り付け",
+      "appSecretSavedPlaceholder": "安全に保存済み。空欄のまま再接続できます",
+      "showSecret": "Client Secret を表示",
+      "hideSecret": "Client Secret を隠す",
+      "formHint": "認証情報はローカルで暗号化されます。接続後、最初の DM でオーナーを連携します。",
+      "errorHint": "接続できません。認証情報、Stream モード、ネットワークを確認して再試行してください。",
+      "connect": "接続",
+      "reconnect": "再接続",
+      "disconnect": "連携解除",
+      "disconnectConfirm": {
+        "title": "DingTalk ボットの連携を解除しますか？",
+        "description": "接続を切断し、保存済みの Client ID、Client Secret、オーナー連携を削除します。",
+        "confirm": "連携解除",
+        "cancel": "キャンセル"
+      },
+      "guide": {
+        "title": "設定ガイド",
+        "step1": "DingTalk 開発者ポータルで社内アプリを作成し、ボット機能を追加します。",
+        "step2": "ボットの Stream モードを有効にし、アプリのバージョンを公開します。",
+        "step3": "アプリ認証情報から Client ID と Client Secret をコピーして入力します。",
+        "step4": "接続後、最初にボットへ DM してオーナーを連携します。グループではメンションしてください。",
+        "openPortal": "DingTalk 開発者ポータルを開く ↗"
       }
     },
     "logout": {
@@ -2528,7 +2578,7 @@
           "disabledHint": "スイッチをオンにして、Telegram 内の案内に従ってアカウント連携を完了してください。",
           "toggleAria": "Telegram 接続を切り替える",
           "connect": "Telegram と連携",
-          "openTelegram": "Telegram を開く",
+          "openApp": "Telegram を開く",
           "cancel": "連携をキャンセル",
           "retry": "連携を再試行",
           "openBot": "Bot を開く",
@@ -2550,6 +2600,33 @@
             "revoked": "連携を解除しました",
             "superseded": "別のデバイスに連携されています"
           }
+        },
+        "x": {
+          "description": "X (Twitter) アカウントを連携し、X で Cindy bot にメンションしてタスクを依頼できます。",
+          "disabledHint": "スイッチをオンにして、案内に従って X アカウントを認証してください。",
+          "toggleAria": "X 接続を切り替え",
+          "connect": "X を連携",
+          "openApp": "X を開いて認証",
+          "cancel": "連携をキャンセル",
+          "retry": "再連携",
+          "openBot": "X で bot を表示",
+          "unlink": "X の連携を解除",
+          "unlinkConfirmTitle": "X の連携を解除しますか?",
+          "unlinkConfirmDescription": "解除すると X からこのデバイスへタスクを送れなくなります。ローカルプロジェクトと他のチャンネルには影響しません。",
+          "status": {
+            "checking": "サーバーの対応状況を確認中…",
+            "unavailable": "このサーバーではまだ利用できません",
+            "disabled": "無効",
+            "none": "未連携",
+            "pending": "X を開いてアカウントを認証してください",
+            "awaiting_confirmation": "X で認証を確認してください",
+            "confirmed": "{{user}} が {{bot}} と連携済み",
+            "denied": "認証が拒否されました",
+            "expired": "認証リンクの有効期限切れ",
+            "failed": "連携に失敗しました",
+            "revoked": "連携が解除されました",
+            "superseded": "別のデバイスで連携済み"
+          }
         }
       },
       "summary": {
@@ -2568,7 +2645,7 @@
     "tina": {
       "chat": {
         "title": "会話",
-        "description": "リポジトリに紐づかない会話です。Slack または Telegram で「chat」を選ぶと、会話 lane ごとにセッションを利用できます。"
+        "description": "リポジトリに紐づかない会話です。Slack・Telegram・X で「chat」を選ぶと、会話 lane ごとにセッションを利用できます。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -2577,6 +2654,7 @@
         "permissionLabel": "権限モード",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
+        "providerX": "X",
         "requireConnected": "{{provider}} 接続後に編集できます（上のスイッチをオンにして接続をお待ちください）。",
         "requireBinding": "先に {{provider}} アカウントの連携を完了してください。",
         "serverUnsupported": "サーバーのバージョンが古いか応答がないため、設定を読み込めません。",
@@ -2655,7 +2733,7 @@
       "tips": {
         "cindy": "Cindy は公式提供の共有ボットです。認証情報の申請は不要で、Slack を連携して @Cindy にメンションするだけでタスクを任せられます。",
         "personal": "個人接続には WeChat のスキャン認証と、自分の Feishu / Discord / Telegram 認証情報を使用する接続があります。新規会話設定はチャネルごとに保存されます。",
-        "personalFeishuOnly": "個人接続には WeChat のスキャン認証と、自分の Feishu 認証情報を使用する接続があります。新規会話設定はチャネルごとに保存されます。"
+        "personalFeishuOnly": "個人接続には WeChat のスキャン認証と、自分の Feishu / DingTalk 認証情報を使用する接続があります。新規会話設定はチャネルごとに保存されます。"
       },
       "defaults": {
         "title": "新規会話設定",
@@ -2664,7 +2742,8 @@
           "slack": "Slack の新しいスレッドでは、この Agent とモデルを使用します。",
           "discord": "Discord の新規会話では、この Agent とモデルを使用します。既存の DM には /new で適用します。",
           "wechat": "WeChat の新規会話では、この Agent・モデル・権限モードを使用します。既存のチャットには /new で適用します。",
-          "telegram": "Telegram の新規会話では、この Agent とモデルを使用します。既存の会話には /new で適用します。"
+          "telegram": "Telegram の新規会話では、この Agent とモデルを使用します。既存の会話には /new で適用します。",
+          "dingtalk": "DingTalk の新規会話では、この Agent とモデルを使用します。既存の会話には /new で適用します。"
         },
         "agentLabel": "Agent",
         "modelLabel": "モデル設定",
@@ -2763,6 +2842,42 @@
         "open-terminal": {
           "label": "ターミナルを開く",
           "description": "右サイドバーでターミナルを開きます（既に開いている場合はフォーカス）"
+        },
+        "switch-session-1": {
+          "label": "1番目のセッションに移動",
+          "description": "サイドバーに表示されている1番目のセッションに移動します"
+        },
+        "switch-session-2": {
+          "label": "2番目のセッションに移動",
+          "description": "サイドバーに表示されている2番目のセッションに移動します"
+        },
+        "switch-session-3": {
+          "label": "3番目のセッションに移動",
+          "description": "サイドバーに表示されている3番目のセッションに移動します"
+        },
+        "switch-session-4": {
+          "label": "4番目のセッションに移動",
+          "description": "サイドバーに表示されている4番目のセッションに移動します"
+        },
+        "switch-session-5": {
+          "label": "5番目のセッションに移動",
+          "description": "サイドバーに表示されている5番目のセッションに移動します"
+        },
+        "switch-session-6": {
+          "label": "6番目のセッションに移動",
+          "description": "サイドバーに表示されている6番目のセッションに移動します"
+        },
+        "switch-session-7": {
+          "label": "7番目のセッションに移動",
+          "description": "サイドバーに表示されている7番目のセッションに移動します"
+        },
+        "switch-session-8": {
+          "label": "8番目のセッションに移動",
+          "description": "サイドバーに表示されている8番目のセッションに移動します"
+        },
+        "switch-session-9": {
+          "label": "9番目のセッションに移動",
+          "description": "サイドバーに表示されている9番目のセッションに移動します"
         }
       },
       "none": "未設定",
@@ -3699,7 +3814,7 @@
     "close": "閉じる",
     "menuItems": {
       "help": "ヘルプ",
-      "issues": "問題",
+      "issues": "フィードバック",
       "checkForUpdates": "更新を確認"
     },
     "updateCheckToast": {
@@ -4190,14 +4305,13 @@
       "preparingButton": "準備中",
       "preparingTooltip": "新しいバージョンを準備中…",
       "preparingAria": "新しいバージョンを準備中、お待ちください",
-      "confirmTitle": "再起動して更新?",
-      "confirmHint": "アプリが自動的に再起動します",
-      "confirmBusyHint": "実行中のタスクがあります。再起動すると中断されます",
-      "confirmButton": "再起動",
+      "confirmTitle": "実行中のタスクがあります",
+      "confirmBusyHint": "再起動すると中断されます",
+      "confirmButton": "それでもアプリを再起動",
       "cancel": "キャンセル",
-      "confirmTooltip": "再起動して更新を適用",
+      "confirmTooltip": "実行中のタスクがあります — 再起動すると中断されます",
       "cancelTooltip": "キャンセル",
-      "confirmAria": "再起動して更新を適用",
+      "confirmAria": "それでも再起動して更新を適用（実行中のタスクは中断されます）",
       "cancelAria": "更新をキャンセル",
       "dismiss": "後で",
       "dismissAria": "更新通知を一時的に閉じる"
@@ -4309,12 +4423,12 @@
   },
   "imBot": {
     "conflictDialog": {
-      "title": "この Feishu Bot App は既に使用中です",
+      "title": "この {{service}} Bot App は既に使用中です",
       "bodyPrefix": "現在の App",
       "bodyMain": "は別の端末で既にロングコネクションを開始しています。同僚が同じ App ID を使用している可能性があります。一つの App は一台にしか接続できないため、競合を避けるために本機では自動的に切断しました。",
       "suggestionsHeading": "対処方法は 2 つあります：",
       "suggestion1": "1. 相手と相談して時間をずらして使用し、相手側で先に資格情報をクリアしてから本機で再接続する。",
-      "suggestion2": "2. Feishu オープンプラットフォームで自分専用の App を別途作成し、同僚と分けて使用する。",
+      "suggestion2": "2. {{service}} オープンプラットフォームで自分専用の App を別途作成し、同僚と分けて使用する。",
       "dismiss": "閉じる",
       "createOwnApp": "自分の App を作成 ↗"
     }
@@ -4676,6 +4790,10 @@
       "openHint": "Worker を呼んで協同する",
       "disabledHint": "このプロジェクトでは協同モードが無効です。プロジェクト設定で有効にしてください。",
       "unavailableHint": "このプロジェクトの協同設定を確認できません。しばらくしてから再試行してください。",
+      "unsupportedRemoteHint": "被操作デバイスのバージョンが古いため、協同を利用できません。",
+      "remoteContinueNotice": "このメッセージは単一の対話として送信されます。",
+      "handoffRecoveredMessage": "前回は協同の開始が中断されました。送信されなかったメッセージを入力欄に復元しました。",
+      "handoffRecoveredGoal": "前回は協同の開始が中断されました。ゴールは開始されておらず、その内容を入力欄に復元しました。",
       "loadingHint": "このプロジェクトの協同設定を確認中です。しばらくしてから再試行してください。",
       "stopHint": "協同を停止",
       "stopAria": "協同を停止",
@@ -4990,6 +5108,11 @@
       "continueAfterResetTitle": "利用上限のリセット後にこのタスクを続行する一回限りの自動化を作成",
       "credentialSwitchBusy": "他の Codex タスクが実行中のため、この会話で選択したプロバイダーへまだ切り替えられません（共有 Codex プロセスの再起動が必要です）。他のタスクの終了後に「再試行」を押してください。",
       "codexThreadStale": "Codex の認証モードが切り替わりました。この会話は続行できません。新しい会話を開始してください。",
+      "claudeGatewayOpusPlanMismatch": "この Opus リクエストは Claude.ai サブスクリプションではなく、XD Gateway 経由で送信され、このモデルが拒否されました。Claude.ai サブスクリプションに切り替えて再試行するか、別のモデルを選択してください。",
+      "switchClaudeSubscription": "Claude.ai に切り替えて再試行",
+      "switchClaudeSubscriptionTitle": "この会話を Claude.ai サブスクリプションに切り替えて再試行",
+      "switchingClaudeSubscription": "Claude.ai に切り替え中…",
+      "claudeSubscriptionSwitchFailed": "Claude.ai への切り替えまたはこの会話の再試行に失敗しました：{{msg}}",
       "budgetModelHint": "繰り返し失敗する場合は、通常版 GPT モデルに切り替えてお試しください。",
       "codexAuthMissing": "リモートの Codex がまだサインインしていません（401 Unauthorized）。「認証情報を同期」をクリックしてローカルの Codex 認証情報をリモートの Cindy Codex home にプッシュし、再試行してください。",
       "codexAuthMissingLocal": "Codex 認証情報がないか期限切れです（401 Unauthorized）。{{appName}} Settings → Codex から再ログインする（ログイン時に app-server が自動再起動）か、ターミナルで `codex login` 実行後 Settings で認証モードを一度切り替えて app-server を再起動してから、新しい会話を開始してください。",
@@ -6741,6 +6864,7 @@
     "mine": {
       "refresh": "更新",
       "emptyTitle": "送信した Issue はまだありません",
+      "emptyTitleUnverified": "現在 Issue を取得できません",
       "startIssueChat": "/issue で新しいチャットを開始",
       "statusUnknown": "ステータス不明",
       "sourceCindy": "Cindy から送信",
@@ -6753,6 +6877,8 @@
       "notSignedInHint": "Cindy アカウントにサインインすると、送信したすべての Issue と最新のステータスを表示できます。",
       "fetchFailedHint": "最新ステータスを取得できませんでした。この端末に記録された送信分のみを表示しているため、一覧が不完全な場合があります。",
       "fetchFailedPartialHint": "最新ステータスを取得できませんでした。一部の Issue はステータスが不完全な場合があります。",
+      "enhancementFailedHint": "あなたの GitHub アカウントで作成した Issue を読み取れませんでした。Cindy GitHub プラグインのアクセストークンの権限が不足している可能性があります。プラグインページで確認してください。",
+      "enhancementFailedGenericHint": "あなたの GitHub アカウントで作成した Issue を読み取れませんでした。ネットワークまたは GitHub のレート制限が原因の可能性があります。しばらくしてから再読み込みしてください。",
       "truncatedHint": "Issue が多いため一部のみ表示しています。全件は GitHub で確認してください。"
     },
     "redirect": {
@@ -7019,7 +7145,13 @@
       "installed": "インストール済み",
       "globalScope": "グローバル",
       "sourceSkillhub": "SkillHub",
-      "sourceLocal": "ローカル"
+      "sourceLocal": "ローカル",
+      "import": "スキルをインポート",
+      "importAria": "ローカルの zip または SKILL.md からスキルをインポート",
+      "importPickerTitle": "インポート先を選択",
+      "importPickerSubtitle": "{{name}} · {{description}}",
+      "importSuccess": "{{name}} をインポートしました{{suffix}}",
+      "importFailed": "スキルのインポートに失敗しました"
     },
     "common": {
       "openFolderFailed": "フォルダを開けませんでした",
@@ -7556,16 +7688,16 @@
     "toasts": {
       "googleConnected": "Google に接続しました",
       "codexConnected": "ChatGPT アカウントに接続しました",
-      "feishuBotConnected": "Feishu ボットに接続しました",
-      "feishuBotReconnected": "Feishu ボットを再接続しました",
-      "feishuBotReconnectFailed": "再接続に失敗しました。Feishu の設定を確認して再試行してください",
+      "feishuBotConnected": "IM ボットに接続しました",
+      "feishuBotReconnected": "IM ボットを再接続しました",
+      "feishuBotReconnectFailed": "再接続に失敗しました。IM ボットの設定を確認して再試行してください",
       "feishuBotConflict": "この App は既に使用されています。同僚が同じ App ID を使用している可能性があります",
       "feishuBotConnectFailed": "接続に失敗しました。App ID / Secret を確認してください",
       "feishuBotSaveFailed": "保存に失敗しました：{{message}}",
-      "feishuBotCleared": "Feishu ボットの認証情報を削除しました",
+      "feishuBotCleared": "IM ボットの認証情報を削除しました",
       "feishuBotClearFailed": "削除に失敗しました：{{message}}",
-      "feishuBotCreatedConnected": "Feishu ボットを作成し接続しました",
-      "feishuBotCreatedCheck": "Feishu ボットを作成しました。接続状態をご確認ください",
+      "feishuBotCreatedConnected": "IM ボットを作成し接続しました",
+      "feishuBotCreatedCheck": "IM ボットを作成しました。接続状態をご確認ください",
       "discordBotConnected": "Discord ボット設定を保存しました",
       "discordBotConnectFailed": "Discord ボットの接続に失敗しました。Token と権限を確認してください",
       "discordBotSaveFailed": "保存に失敗しました：{{message}}",
@@ -7588,7 +7720,14 @@
       "telegramBotConnectFailed": "Telegram ボットの接続に失敗しました。Token とネットワークを確認してください",
       "telegramBotSaveFailed": "保存に失敗しました：{{message}}",
       "telegramBotDisconnected": "Telegram ボットの連携を解除しました",
-      "telegramBotDisconnectFailed": "連携解除に失敗しました：{{message}}"
+      "telegramBotDisconnectFailed": "連携解除に失敗しました：{{message}}",
+      "dingtalkBotConnected": "DingTalk ボットに接続しました",
+      "dingtalkBotConnectFailed": "DingTalk ボットに接続できません。認証情報、Stream モード、ネットワークを確認してください",
+      "dingtalkBotAuthFailed": "DingTalk が認証情報を拒否しました。Client ID と Client Secret が同じアプリのものか確認してください",
+      "dingtalkBotNetworkFailed": "DingTalk オープンプラットフォームに接続できません。ネットワークまたはプロキシを確認して再試行してください",
+      "dingtalkBotStreamFailed": "認証情報は有効ですが、Stream 接続を確立できません。ボットを有効化し、Stream モードを選択してアプリのバージョンを公開してください",
+      "dingtalkBotDisconnected": "DingTalk ボットの連携を解除しました",
+      "dingtalkBotDisconnectFailed": "DingTalk ボットの連携解除に失敗しました"
     },
     "errors": {
       "openFileFailed": "システムでファイルを開けません",
@@ -7613,7 +7752,8 @@
       "discordOwnerUserIdFormat": "Discord ユーザー ID は 17-20 桁の数字である必要があります",
       "telegramFieldsRequired": "Bot Token と Telegram ユーザー ID の両方を入力してください",
       "telegramTokenFormat": "Token の形式が不正です。BotFather が生成する「数字:シークレット」の形にしてください",
-      "telegramOwnerUserIdFormat": "Telegram ユーザー ID は数字である必要があります"
+      "telegramOwnerUserIdFormat": "Telegram ユーザー ID は数字である必要があります",
+      "dingtalkFieldsRequired": "Client ID と Client Secret の両方を入力してください"
     },
     "confirm": {
       "logoutTitle": "ログアウト",

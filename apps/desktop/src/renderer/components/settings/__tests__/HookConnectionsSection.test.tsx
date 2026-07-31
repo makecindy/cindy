@@ -15,7 +15,7 @@ const ipc = vi.hoisted(() => ({
   providerBindRevoke: vi.fn(),
   cancelPendingBind: vi.fn(),
   revokeTeam: vi.fn(),
-  openTelegramAction: vi.fn(),
+  openProviderAction: vi.fn(),
   openExternal: vi.fn(),
 }));
 const dialog = vi.hoisted(() => ({ confirm: vi.fn() }));
@@ -87,6 +87,7 @@ async function expandChannelCard(titleKey: RegExp) {
 }
 const SLACK_CARD = /settings\.tina\.prefs\.providerSlack/;
 const TELEGRAM_CARD = /settings\.tina\.prefs\.providerTelegram/;
+const X_CARD = /settings\.tina\.prefs\.providerX/;
 
 const BASE_HOOK: SlackHookView = {
   enabled: false,
@@ -108,6 +109,15 @@ const BASE_HOOK: SlackHookView = {
     capabilityPending: false,
     binding: null,
   },
+  x: {
+    enabled: false,
+    url: '',
+    status: 'disabled',
+    lastError: null,
+    available: false,
+    capabilityPending: false,
+    binding: null,
+  },
 };
 
 describe('HookConnectionsSection Telegram binding actions', () => {
@@ -118,7 +128,7 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     ipc.setLifecycleAnnouncement.mockResolvedValue({ hook: BASE_HOOK });
     ipc.providerBindRevoke.mockResolvedValue({ hook: BASE_HOOK });
     ipc.revokeTeam.mockResolvedValue({ hook: BASE_HOOK });
-    ipc.openTelegramAction.mockResolvedValue(undefined);
+    ipc.openProviderAction.mockResolvedValue(undefined);
     dialog.confirm.mockResolvedValue(true);
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       hookControl: {
@@ -131,7 +141,7 @@ describe('HookConnectionsSection Telegram binding actions', () => {
         providerBindRevoke: ipc.providerBindRevoke,
         cancelPendingBind: ipc.cancelPendingBind,
         revokeTeam: ipc.revokeTeam,
-        openTelegramAction: ipc.openTelegramAction,
+        openProviderAction: ipc.openProviderAction,
       },
       openExternal: ipc.openExternal,
     };
@@ -302,7 +312,7 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     await expandChannelCard(TELEGRAM_CARD);
 
     const openButton = await screen.findByRole('button', {
-      name: 'settings.remoteControl.hook.telegram.openTelegram',
+      name: 'settings.remoteControl.hook.telegram.openApp',
     });
     expect(
       screen.getByRole('button', { name: 'settings.remoteControl.hook.binding.copyLink' }),
@@ -312,7 +322,111 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     ).toBeTruthy();
 
     fireEvent.click(openButton);
-    await waitFor(() => expect(ipc.openTelegramAction).toHaveBeenCalledWith('connect'));
+    await waitFor(() => expect(ipc.openProviderAction).toHaveBeenCalledWith('telegram', 'connect'));
+  });
+
+  it('hides the X card entirely while the endpoint manifest leaves xHookWsUrl empty', async () => {
+    // BASE_HOOK 的 x.url 为空且未启用/不可用 —— 端点清单缺失即灰度关闭,
+    // 设置页不得出现 X 入口(providerCardState.visible 语义)。
+    ipc.get.mockResolvedValue({ hook: BASE_HOOK });
+
+    render(<HookConnectionsSection />);
+    await screen.findByRole('button', { name: TELEGRAM_CARD });
+
+    expect(screen.queryByRole('button', { name: X_CARD })).toBeNull();
+  });
+
+  it('keeps the OAuth deep-link actions visible while X binding is pending', async () => {
+    const hook: SlackHookView = {
+      ...BASE_HOOK,
+      x: {
+        enabled: true,
+        url: 'wss://x-hook.example.test',
+        status: 'connected',
+        lastError: null,
+        available: true,
+        capabilityPending: false,
+        binding: {
+          provider: 'x',
+          state: 'pending',
+          attemptId: 'attempt-x1',
+          bindingId: null,
+          principalId: null,
+          principalName: null,
+          scopeId: 'bot-x',
+          scopeName: 'CindyBot',
+          connectUrl:
+            'https://x.com/i/oauth2/authorize?response_type=code&client_id=c1&redirect_uri=r&scope=s&state=st&code_challenge=cc&code_challenge_method=S256',
+          expiresAt: Date.now() + 60_000,
+          reason: null,
+          remediationUrl: null,
+          actions: ['open_connect_url', 'copy_connect_url', 'cancel'],
+        },
+      },
+    };
+    ipc.get.mockResolvedValue({ hook });
+
+    render(<HookConnectionsSection />);
+    await expandChannelCard(X_CARD);
+
+    const openButton = await screen.findByRole('button', {
+      name: 'settings.remoteControl.hook.x.openApp',
+    });
+    expect(
+      screen.getByRole('button', { name: 'settings.remoteControl.hook.binding.copyLink' }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'settings.remoteControl.hook.x.cancel' }),
+    ).toBeTruthy();
+
+    fireEvent.click(openButton);
+    await waitFor(() => expect(ipc.openProviderAction).toHaveBeenCalledWith('x', 'connect'));
+  });
+
+  it('renders confirmed X actions from the wire action list and never a group action', async () => {
+    const hook: SlackHookView = {
+      ...BASE_HOOK,
+      x: {
+        enabled: true,
+        url: 'wss://x-hook.example.test',
+        status: 'connected',
+        lastError: null,
+        available: true,
+        capabilityPending: false,
+        binding: {
+          provider: 'x',
+          state: 'confirmed',
+          attemptId: null,
+          bindingId: 'x-binding-1',
+          principalId: 'x-user-1',
+          principalName: '@dash',
+          scopeId: 'bot-x',
+          scopeName: 'CindyBot',
+          connectUrl: null,
+          expiresAt: null,
+          reason: null,
+          remediationUrl: 'https://x.com/CindyBot',
+          actions: ['open_provider', 'revoke'],
+        },
+      },
+    };
+    ipc.get.mockResolvedValue({ hook });
+
+    render(<HookConnectionsSection />);
+    await expandChannelCard(X_CARD);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'settings.remoteControl.hook.x.openBot' }),
+    );
+    await waitFor(() => expect(ipc.openProviderAction).toHaveBeenCalledWith('x', 'provider'));
+
+    // X 无群概念: server 不会下发 add_to_group, 按钮为数据驱动, 不得凭空渲染。
+    expect(
+      screen.queryByRole('button', { name: 'settings.remoteControl.hook.x.addToGroup' }),
+    ).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'settings.remoteControl.hook.x.unlink' }),
+    ).toBeTruthy();
   });
 
   it('uses the latest Slack install URL after an async confirmation', async () => {

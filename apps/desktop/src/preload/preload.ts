@@ -386,6 +386,8 @@ const fanOutFeishuBotRegistrationStatus = createIpcFanOut('feishuBot:registratio
 const fanOutDiscordBotStatusChange = createIpcFanOut('discordBot:status-change');
 // 个人 Telegram Bot：本机凭证模式(BotFather token 直连);同上只暴露 transport 状态。
 const fanOutTelegramBotStatusChange = createIpcFanOut('telegramBot:status-change');
+const fanOutDingTalkBotStatusChange = createIpcFanOut('dingtalkBot:status-change');
+const fanOutDingTalkBotOwnerChange = createIpcFanOut('dingtalkBot:owner-change');
 // Personal WeChat: main owns auth/polling and broadcasts a credential-free state snapshot.
 const fanOutWechatBotStateChange = createIpcFanOut('wechatBot:state-changed');
 const fanOutVoiceInputEvent = createIpcFanOut('voice-input:event');
@@ -1459,16 +1461,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ownerOpenId: string | null;
       error?: string;
       lifecycleAnnouncement: boolean;
+      service: 'feishu' | 'lark';
     }> => ipcRenderer.invoke('feishuBot:get-state'),
-    save: (payload: { appId: string; appSecret: string }): Promise<{
+    save: (payload: {
+      appId: string;
+      appSecret: string;
+      service: 'feishu' | 'lark';
+    }): Promise<{
       verdict: 'connected' | 'conflict' | 'error' | 'pending';
     }> => ipcRenderer.invoke('feishuBot:save', payload),
-    reconnect: (): Promise<{ verdict: 'connected' | 'conflict' | 'error' }> =>
-      ipcRenderer.invoke('feishuBot:reconnect'),
+    reconnect: (): Promise<{ verdict: 'connected' | 'conflict' | 'error' }> => ipcRenderer.invoke('feishuBot:reconnect'),
     clear: (): Promise<{ ok: true }> => ipcRenderer.invoke('feishuBot:clear'),
-    setLifecycleAnnouncement: (enabled: boolean): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('feishuBot:set-lifecycle-announcement', { enabled }),
-    registrationBegin: (): Promise<{
+    setLifecycleAnnouncement: (enabled: boolean): Promise<{ ok: true }> => ipcRenderer.invoke('feishuBot:set-lifecycle-announcement', { enabled }),
+    registrationBegin: (
+      service: 'feishu' | 'lark',
+    ): Promise<{
       ok: boolean;
       deviceCode?: string;
       userCode?: string;
@@ -1476,9 +1483,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       expiresIn?: number;
       interval?: number;
       error?: string;
-    }> => ipcRenderer.invoke('feishuBot:registration-begin'),
-    registrationCancel: (): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('feishuBot:registration-cancel'),
+    }> => ipcRenderer.invoke('feishuBot:registration-begin', { service }),
+    registrationCancel: (): Promise<{ ok: true }> => ipcRenderer.invoke('feishuBot:registration-cancel'),
     onStatusChange: fanOutFeishuBotStatusChange,
     onConflict: fanOutFeishuBotConflict,
     onRegistrationStatus: fanOutFeishuBotRegistrationStatus,
@@ -1597,6 +1603,50 @@ contextBridge.exposeInMainWorld('electronAPI', {
       mode: 'mention' | 'always';
     }): Promise<unknown> => ipcRenderer.invoke('telegramBot:set-group-activation', payload),
     onStatusChange: fanOutTelegramBotStatusChange,
+  },
+
+  // ── Personal DingTalk Bot (Settings → IM Bot → Personal) ──
+  // Client Secret is only forwarded into main-process encrypted storage and is never returned.
+  dingtalkBot: {
+    getState: (): Promise<{
+      status:
+        | { kind: 'idle' }
+        | { kind: 'connecting' }
+        | { kind: 'connected'; appId: string }
+        | { kind: 'conflict'; appId: string }
+        | { kind: 'error'; reason: string };
+      appKey: string | null;
+      hasSecret: boolean;
+      ownerUserId: string | null;
+    }> => ipcRenderer.invoke('dingtalkBot:get-state'),
+    save: (payload: {
+      appKey: string;
+      appSecret: string;
+    }): Promise<{
+      status:
+        | { kind: 'idle' }
+        | { kind: 'connecting' }
+        | { kind: 'connected'; appId: string }
+        | { kind: 'conflict'; appId: string }
+        | { kind: 'error'; reason: string };
+      appKey: string | null;
+      hasSecret: boolean;
+      ownerUserId: string | null;
+    }> => ipcRenderer.invoke('dingtalkBot:save', payload),
+    reconnect: (): Promise<{
+      status:
+        | { kind: 'idle' }
+        | { kind: 'connecting' }
+        | { kind: 'connected'; appId: string }
+        | { kind: 'conflict'; appId: string }
+        | { kind: 'error'; reason: string };
+      appKey: string | null;
+      hasSecret: boolean;
+      ownerUserId: string | null;
+    }> => ipcRenderer.invoke('dingtalkBot:reconnect'),
+    clear: (): Promise<{ ok: true }> => ipcRenderer.invoke('dingtalkBot:clear'),
+    onStatusChange: fanOutDingTalkBotStatusChange,
+    onOwnerChange: fanOutDingTalkBotOwnerChange,
   },
 
   // ── Personal WeChat (Settings → IM Bot → Personal) ──
@@ -2396,6 +2446,36 @@ contextBridge.exposeInMainWorld('electronAPI', {
       | { success: false; errorCode: string; message: string }
     > => ipcRenderer.invoke('skillhub:uninstall', { absolutePath }),
 
+    /** 在 main 内选择并检查本地包，成功时签发绑定当前 renderer 的短期导入授权。 */
+    pickLocal: (): Promise<
+      | { success: true; canceled: true }
+      | {
+          success: true;
+          canceled: false;
+          grantToken: string;
+          name: string;
+          description: string;
+          version: string;
+        }
+      | { success: false; errorCode: string; message: string }
+    > => ipcRenderer.invoke('skillhub:pick-local'),
+
+    /** 使用 main 签发的文件授权导入到全局或指定 installPath；registry origin=imported。 */
+    importLocal: (params: {
+      grantToken: string;
+      installPath?: string;
+      force?: boolean;
+    }): Promise<
+      | {
+          success: true;
+          name: string;
+          description: string;
+          version: string;
+          absolutePath: string;
+        }
+      | { success: false; errorCode: string; message: string }
+    > => ipcRenderer.invoke('skillhub:import-local', params),
+
     // 订阅 install 进度事件
     onInstallProgress: (
       cb: (event: {
@@ -2943,6 +3023,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   }> => ipcRenderer.invoke('update-check-now'),
 
   /**
+   * 现在重启会不会打断正在跑的活。聚合三个互不相干的活动来源(逻辑 turn / Claude 后台活动 /
+   * Ghost card-action 后台活动),判定与 fail-closed 口径都在 main 侧一处
+   * (relaunchBusyActivity.ts)—— renderer 逐个枚举来源会漏,漏了就是静默打断用户任务。
+   * 供 UpdateBanner 决定「直接重启」还是「先弹中断警告」。
+   */
+  anyActivityBlockingRelaunch: (): Promise<boolean> =>
+    ipcRenderer.invoke('update-relaunch:blocking-activity'),
+
+  /**
    * Tell the main process to apply the downloaded update and relaunch.
    */
   relaunchToUpdate: (theme: 'light' | 'dark'): void => {
@@ -3402,7 +3491,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:hook-control:set-enabled', { enabled }),
     setLifecycleAnnouncement: (enabled: boolean): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:set-lifecycle-announcement', { enabled }),
-    setProviderEnabled: (provider: 'telegram', enabled: boolean): Promise<{ hook: unknown }> =>
+    setProviderEnabled: (
+      provider: 'telegram' | 'x',
+      enabled: boolean,
+    ): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:set-provider-enabled', { provider, enabled }),
     setWorkspaces: (workspaces: Record<string, string>): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:set-workspaces', { workspaces }),
@@ -3421,14 +3513,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:hook-control:revoke-team', { teamId }),
     cancelPendingBind: (): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:cancel-pending-bind'),
-    providerBindStart: (): Promise<{ hook: unknown }> =>
-      ipcRenderer.invoke('maker:hook-control:provider-bind-start'),
-    providerBindCancel: (): Promise<{ hook: unknown }> =>
-      ipcRenderer.invoke('maker:hook-control:provider-bind-cancel'),
-    providerBindRevoke: (): Promise<{ hook: unknown }> =>
-      ipcRenderer.invoke('maker:hook-control:provider-bind-revoke'),
-    openTelegramAction: (action: 'connect' | 'provider' | 'add-to-group'): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('maker:hook-control:telegram-open-action', { action }),
+    providerBindStart: (provider: 'telegram' | 'x'): Promise<{ hook: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:provider-bind-start', { provider }),
+    providerBindCancel: (provider: 'telegram' | 'x'): Promise<{ hook: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:provider-bind-cancel', { provider }),
+    providerBindRevoke: (provider: 'telegram' | 'x'): Promise<{ hook: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:provider-bind-revoke', { provider }),
+    openProviderAction: (
+      provider: 'telegram' | 'x',
+      action: 'connect' | 'provider' | 'add-to-group',
+    ): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('maker:hook-control:provider-open-action', { provider, action }),
     // 目录偏好远程读写(数据正本在 slack-hook-server, 与 Slack /model 卡同一份;
     // teamId 为 multi-team 下的归属 team, 单绑定缺省)
     getWorkspacePrefs: (): Promise<{ prefs: unknown }> =>
@@ -3443,18 +3538,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
         patch,
         ...(teamId !== undefined ? { teamId } : {}),
       }),
-    getProviderWorkspacePrefs: (): Promise<{ prefs: unknown }> =>
-      ipcRenderer.invoke('maker:hook-control:provider-prefs-get'),
+    getProviderWorkspacePrefs: (provider: 'telegram' | 'x'): Promise<{ prefs: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:provider-prefs-get', { provider }),
     setProviderWorkspacePrefs: (
+      provider: 'telegram' | 'x',
       workspace: string,
       patch: Record<string, string | null>,
     ): Promise<{ prefs: unknown }> =>
-      ipcRenderer.invoke('maker:hook-control:provider-prefs-set', { workspace, patch }),
+      ipcRenderer.invoke('maker:hook-control:provider-prefs-set', { provider, workspace, patch }),
     // 工作目录模型来源偏好(纯本地, 不经 WS; providerId=null 清除条目)
     getWorkspaceProviderSources: (): Promise<{ entries: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:workspace-provider-source-get'),
     setWorkspaceProviderSource: (payload: {
-      channel: 'slack' | 'telegram';
+      channel: 'slack' | 'telegram' | 'x';
       teamId: string | null;
       workspace: string;
       providerId: string | null;
@@ -4829,6 +4925,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       input: import('../shared/helpTypes').HelpFeedbackDraftInput,
     ): Promise<import('../shared/helpTypes').HelpFeedbackDraft> =>
       ipcRenderer.invoke('maker:help:feedback:create', input),
+    // /issues 首屏快照(上次结果的落盘镜像);没有 / 坏掉返回 null。非权威,fresh 一到即接管。
+    getMyIssuesSnapshot: (): Promise<import('../shared/myIssues').MyIssuesSnapshot | null> =>
+      ipcRenderer.invoke('maker:issues:snapshot-mine'),
     // /issues 页面的「我的 Issue」列表;force=true 绕过 main 侧 60s TTL(手动刷新)。
     listMyIssues: (
       options?: { force?: boolean },
@@ -5162,9 +5261,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       updateDriver: (opts?: { joinOnly?: boolean }): Promise<ComputerDriverInstallResult> =>
         ipcRenderer.invoke('maker:computer:update-driver', opts),
       onUpdateProgress: fanOutComputerDriverUpdateProgress,
+
     },
   },
 
   // ── 剪贴板历史快捷面板 ────────────────────────────────────────────
-
 });

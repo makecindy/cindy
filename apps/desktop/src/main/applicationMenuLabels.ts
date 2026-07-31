@@ -47,7 +47,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     helpMenu: '帮助',
     help: '帮助',
     releaseNotes: '最新更新介绍',
-    issues: 'Issue',
+    issues: '问题反馈',
   },
   en: {
     about: 'About {{appName}}',
@@ -79,7 +79,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     helpMenu: 'ヘルプ',
     help: 'ヘルプ',
     releaseNotes: '最新情報',
-    issues: 'Issue',
+    issues: 'フィードバック',
   },
   ko: {
     about: '{{appName}} 정보',

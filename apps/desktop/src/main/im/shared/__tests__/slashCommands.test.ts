@@ -44,7 +44,7 @@ vi.mock('../controlState', () => ({
   enterControl: vi.fn(),
 }));
 
-import type { ChannelIM } from '@cindy/im';
+import type { ChannelIM, TextChannelIM } from '@cindy/im';
 
 import { ui } from '../../feishu/uiText';
 import { createSlashHandlers } from '../slashCommands';
@@ -275,6 +275,46 @@ describe('IM slash commands', () => {
       'ou_user',
       ui.slash.unknownCommand('/start'),
     );
+  });
+
+  it('text-only channels explain and skip slash commands that require cards', async () => {
+    const unsupported = (cmd: string) => `unsupported:${cmd}`;
+    const outputIm = {
+      sendMarkdownText: mocks.sendMarkdownText,
+    } as unknown as TextChannelIM;
+    const { handlers, cards, turnRunner } = makeHarness({
+      adapterOverrides: {
+        output: {
+          kind: 'chunked-text',
+          im: outputIm,
+          commitFinal: vi.fn(),
+        },
+        ui: {
+          ...ui,
+          slash: { ...ui.slash, interactiveCommandUnsupported: unsupported },
+        },
+      },
+    });
+
+    for (const cmd of ['/model', '/permission', '/ctr', '/session', '/project']) {
+      await handlers.handleSlashCommand(cmd, {
+        botContextId: 'bot',
+        userId: 'ou_user',
+      });
+    }
+
+    expect(mocks.sendMarkdownText.mock.calls).toEqual(
+      ['/model', '/permission', '/ctr', '/session', '/project'].map((cmd) => [
+        'ou_user',
+        unsupported(cmd),
+      ]),
+    );
+    expect(mocks.sendInteractiveCard).not.toHaveBeenCalled();
+    expect(cards.buildModelPickerCard).not.toHaveBeenCalled();
+    expect(cards.buildPermissionModePickerCard).not.toHaveBeenCalled();
+    expect(cards.buildControlPickerCard).not.toHaveBeenCalled();
+    expect(cards.buildProjectPickerCard).not.toHaveBeenCalled();
+    expect(turnRunner.resolveRouteTarget).not.toHaveBeenCalled();
   });
 
   describe('/project (projectSwitching channels)', () => {

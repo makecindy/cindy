@@ -11,6 +11,10 @@
 
 import { describe, expect, it } from 'vitest';
 
+import {
+  GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE,
+  GHOST_VIDEO_REF_MODES,
+} from '../../../../shared/ghost.js';
 import { GATEWAY_VIDEO_MODELS } from '../../types.js';
 import { VideoProviderRegistry } from '../registry.js';
 import { createSeedanceProvider } from '../providers/seedance.js';
@@ -43,6 +47,46 @@ describe('GATEWAY_VIDEO_MODELS ↔ provider alias 同源', () => {
     const constantIds = new Set<string>(GATEWAY_VIDEO_MODELS.map((m) => m.id));
     for (const a of registry.collectAllAliases()) {
       expect(constantIds.has(a.alias), a.alias).toBe(true);
+    }
+  });
+});
+
+/**
+ * 同源守卫之二:协议层的参考图张数粗筛上界(shared/ghost.ts,插件协议面)
+ * 与 provider 实际声明的上限。
+ *
+ * 两处必然是双源——`shared/` 不能依赖 `main/` 的 provider registry(依赖
+ * 方向),而协议层常量还要供插件手册与类型引用,只能手写。既然消不掉双源,
+ * 就在这里守:**协议层上界不得低于任何 provider 的实际上限**,低了就会把
+ * 型号明明支持的张数在粗筛阶段误拒(而且拒绝话术还报的是协议层的数)。
+ *
+ * 反方向(协议层比 provider 宽)刻意放行:`first_and_last_frame` 的 2 是
+ * 「首+尾」的语义上界,与当前注册了几个 provider 无关;宽出来的部分由按
+ * 型号二次校验兜住,话术仍报该型号的真实上限。
+ */
+describe('参考图张数上界 ↔ provider capabilities 同源', () => {
+  it('协议层上界 ≥ 各 provider 的实际上限(调高 provider 忘改协议层就在这炸)', () => {
+    const registry = buildRealRegistry();
+    const union = registry.collectUnionParams().maxImagesUpperBoundByRefMode;
+    for (const [mode, providerMax] of Object.entries(union)) {
+      const protocolMax =
+        GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE[
+          mode as keyof typeof GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE
+        ];
+      expect(protocolMax, `refMode '${mode}' 缺协议层上界`).toBeDefined();
+      expect(
+        protocolMax,
+        `refMode '${mode}':provider 支持 ${providerMax} 张,协议层粗筛却只放 ${protocolMax} 张`,
+      ).toBeGreaterThanOrEqual(providerMax as number);
+    }
+  });
+
+  it('provider 不得声明协议层不认识的 refMode(否则插件永远传不进来)', () => {
+    const registry = buildRealRegistry();
+    const known = new Set<string>(GHOST_VIDEO_REF_MODES);
+    const union = registry.collectUnionParams().maxImagesUpperBoundByRefMode;
+    for (const mode of Object.keys(union)) {
+      expect(known.has(mode), `provider 声明了协议层没有的 refMode '${mode}'`).toBe(true);
     }
   });
 });

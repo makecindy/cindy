@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { MyIssueItem, MyIssuesResult } from '@/../shared/myIssues';
 
-import { selectMyIssuesNotices } from '../lib/myIssuesNotices';
+import { canTrustEmptyList, selectMyIssuesNotices } from '../lib/myIssuesNotices';
 
 function item(over: Partial<MyIssueItem> = {}): MyIssueItem {
   return {
@@ -27,11 +27,15 @@ function result(over: Partial<MyIssuesResult> = {}): MyIssuesResult {
   return {
     items: [],
     githubEnhancement: null,
+    githubEnhancementFailed: false,
     degraded: null,
     truncated: false,
     ...over,
   };
 }
+
+/** 配好且身份可用的插件通道增强 —— 多组用例共用。 */
+const enhanced = { login: 'octocat', source: 'ghost' as const };
 
 describe('selectMyIssuesNotices', () => {
   it('一切正常时不打扰用户', () => {
@@ -117,6 +121,94 @@ describe('selectMyIssuesNotices', () => {
       items: [item({ sources: ['cindy-tool', 'github-account'], state: 'unknown' })],
     });
     expect(selectMyIssuesNotices(ledgerGithubUser)).toEqual(['issueTracker.mine.fetchFailedHint']);
+  });
+
+  it('增强配了却没用上:单独一条提示,排在主来源之后', () => {
+    // 显式给出 ghost 来源:提示分了版本,插件专属那条只在确知是插件通道时才给
+    // (来源见「增强失败提示按来源分版」那组用例),所以这里不能靠 fixture 默认值。
+    const ghostFailed = { githubEnhancementFailed: true, githubEnhancement: enhanced } as const;
+    expect(selectMyIssuesNotices(result(ghostFailed))).toEqual([
+      'issueTracker.mine.enhancementFailedHint',
+    ]);
+    // 两路各自出问题时两条都要说,顺序稳定(平台是主来源,排前面)。
+    expect(
+      selectMyIssuesNotices(result({ degraded: 'platform-unavailable', ...ghostFailed })),
+    ).toEqual([
+      'issueTracker.mine.platformUnavailableHint',
+      'issueTracker.mine.enhancementFailedHint',
+    ]);
+  });
+
+  it('回退救回来时不提示 —— 没有可见损失就不打扰用户', () => {
+    // service 在兜底通道拿到数据后会把 githubEnhancementFailed 置回 false。
+    expect(
+      selectMyIssuesNotices(
+        result({ githubEnhancementFailed: false, items: [item({ state: 'open' })] }),
+      ),
+    ).toEqual([]);
+  });
+
+  describe('canTrustEmptyList', () => {
+    it('三路都真查过且成功才可确证「真的没有」', () => {
+      expect(canTrustEmptyList(result({ githubEnhancement: enhanced }))).toBe(true);
+    });
+
+    it('没配增强 ⇒ 不可确证 —— GitHub 账号那一路根本没查过', () => {
+      // githubEnhancementFailed 此时是 false(没配不是失败),只看它就会把「从未查过」
+      // 当成「查过且为空」。平台侧不知道用户绕过 Cindy 直接在 GitHub 提的那些 issue,
+      // 只有增强查得到 —— 对那种用户会重演本次要修的错误断言。
+      expect(canTrustEmptyList(result({ githubEnhancement: null }))).toBe(false);
+    });
+
+    it('任一路降级或失败就不可确证', () => {
+      for (const over of [
+        { degraded: 'platform-unavailable' as const },
+        { degraded: 'not-signed-in' as const },
+        { degraded: 'fetch-failed' as const },
+        { githubEnhancementFailed: true },
+      ]) {
+        expect(canTrustEmptyList(result({ githubEnhancement: enhanced, ...over }))).toBe(false);
+      }
+    });
+  });
+
+  describe('增强失败提示按来源分版', () => {
+    it('ghost 来源:给插件令牌那版指引', () => {
+      expect(
+        selectMyIssuesNotices(
+          result({
+            githubEnhancementFailed: true,
+            githubEnhancement: { login: 'octocat', source: 'ghost' },
+          }),
+        ),
+      ).toEqual(['issueTracker.mine.enhancementFailedHint']);
+    });
+
+    it('gh-cli 来源:用不提插件的通用版 —— 那种用户根本没在用插件', () => {
+      // searchViaFallback 对非 ghost 主通道直接判失败(它自己就是兜底),所以
+      // githubEnhancementFailed 在 gh-cli 下同样为 true。给他「去插件页检查」
+      // 等于指向不存在的页面,而 gh 用的是完整 OAuth token、失败多为网络或额度。
+      expect(
+        selectMyIssuesNotices(
+          result({
+            githubEnhancementFailed: true,
+            githubEnhancement: { login: 'octocat', source: 'gh-cli' },
+          }),
+        ),
+      ).toEqual(['issueTracker.mine.enhancementFailedGenericHint']);
+    });
+
+    it('连来源都不知道(配了却问不出身份)→ 也用通用版,不指向插件页', () => {
+      // 新可达的组合:runtime 不再把 gh 身份查询的异常咽成 null,所以
+      // githubEnhancement=null 且 failed=true 会真的出现(token 过期 / 撤销 / 限流)。
+      // 判据写成「是不是 ghost」而不是「是不是 gh-cli」,未知情况才会落在保守那版 ——
+      // 反过来写会把这里误判成插件故障。
+      expect(
+        selectMyIssuesNotices(
+          result({ githubEnhancementFailed: true, githubEnhancement: null }),
+        ),
+      ).toEqual(['issueTracker.mine.enhancementFailedGenericHint']);
+    });
   });
 
   it('截断与降级可以同时提示', () => {

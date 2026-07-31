@@ -33,9 +33,12 @@ describe('workspaceProviderSourceStore', () => {
   it('写读一条来源偏好;不同渠道/目录互不串', () => {
     setWorkspaceProviderSource('telegram', null, 'chat', 'anthropic');
     setWorkspaceProviderSource('slack', null, 'chat', 'openai');
+    setWorkspaceProviderSource('x', null, 'chat', 'google');
     expect(getWorkspaceProviderSource('telegram', null, 'chat')).toBe('anthropic');
     expect(getWorkspaceProviderSource('slack', null, 'chat')).toBe('openai');
+    expect(getWorkspaceProviderSource('x', null, 'chat')).toBe('google');
     expect(getWorkspaceProviderSource('telegram', null, 'repo')).toBeNull();
+    expect(getWorkspaceProviderSource('x', null, 'repo')).toBeNull();
   });
 
   it('teamId 精确匹配优先, null 行兜底(multi-team 宽松语义)', () => {

@@ -80,6 +80,7 @@ import { createMakerHookSessionRunner } from './session-runner.js';
 import { resolveHookInteraction } from './interactions.js';
 import { listRecentHookSessions } from './recentSessions.js';
 import { validateTelegramExternalUrl } from './telegramDeepLink.js';
+import { validateXExternalUrl } from './xDeepLink.js';
 import { isAppContentWindow } from '../windowFocusClassifier.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getAgentIslandService } from '../agent-island/service.js';
@@ -124,6 +125,15 @@ function disabledHookView(): SlackHookView {
     telegram: {
       enabled: false,
       url: getClientEndpoint('telegramHookWsUrl'),
+      status: 'disabled',
+      lastError: null,
+      available: false,
+      capabilityPending: false,
+      binding: null,
+    },
+    x: {
+      enabled: false,
+      url: getClientEndpoint('xHookWsUrl'),
       status: 'disabled',
       lastError: null,
       available: false,
@@ -260,15 +270,39 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       // 两个 provider 复用 dispatcher，但连接身份和服务地址彼此隔离。
       getConnection: (connectionId) => {
         const config = store!.get();
-        const provider = connectionId.endsWith(':telegram') ? 'telegram' : 'slack';
+        // connectionId 形如 `slack:<账号指纹>:<provider>`(manager 的 dispatchId
+        // 拼装, 指纹是 base64url 不含冒号)或裸 id(Slack legacy 线, 末段即
+        // 'slack')—— 按末段解析 provider。未登记的 provider 返回 null,
+        // dispatcher 按连接不存在拒绝(fail closed): 回落到 Slack 会让它读到
+        // 错误的开关与端点。
+        const provider = connectionId.split(':').pop() ?? '';
+        const metaByProvider: Record<
+          string,
+          { name: string; url: string; enabled: boolean } | undefined
+        > = {
+          telegram: {
+            name: `${BRAND_NAME} Telegram`,
+            url: getClientEndpoint('telegramHookWsUrl'),
+            enabled: config.telegramEnabled,
+          },
+          x: {
+            name: `${BRAND_NAME} X`,
+            url: getClientEndpoint('xHookWsUrl'),
+            enabled: config.xEnabled,
+          },
+          slack: {
+            name: `${BRAND_NAME} Slack`,
+            url: store!.effectiveUrl(),
+            enabled: config.enabled,
+          },
+        };
+        const meta = metaByProvider[provider];
+        if (!meta) return null;
         return {
           id: connectionId,
-          name: `${BRAND_NAME} ${provider === 'telegram' ? 'Telegram' : 'Slack'}`,
-          url:
-            provider === 'telegram'
-              ? getClientEndpoint('telegramHookWsUrl')
-              : store!.effectiveUrl(),
-          enabled: provider === 'telegram' ? config.telegramEnabled : config.enabled,
+          name: meta.name,
+          url: meta.url,
+          enabled: meta.enabled,
           workspaces: config.workspaces,
           createdAt: 0,
         };
@@ -351,6 +385,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       isAvailable: hookControlAvailable,
       createTransport: createHookTransport,
       getTelegramUrl: () => getClientEndpoint('telegramHookWsUrl'),
+      getXUrl: () => getClientEndpoint('xHookWsUrl'),
       // 与 device-link 同款 token 源: 现值优先, 缺失 refresh 一次
       getAuthToken: async () => {
         if (!hookControlAvailable()) return null;
@@ -414,6 +449,10 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       },
       openTelegramUrl: (url) => {
         const safeUrl = validateTelegramExternalUrl(url);
+        return shell.openExternal(safeUrl);
+      },
+      openXUrl: (url) => {
+        const safeUrl = validateXExternalUrl(url);
         return shell.openExternal(safeUrl);
       },
       log,
@@ -517,57 +556,75 @@ export function registerHookControlIpc(): void {
     requireHookControl();
     const { manager: m } = ensureInstances();
     const p = requireObject(payload);
-    if (p.provider !== 'telegram') {
-      throwIpcError('INVALID_PARAMS', 'provider must be telegram');
+    if (p.provider !== 'telegram' && p.provider !== 'x') {
+      throwIpcError('INVALID_PARAMS', 'provider must be telegram or x');
     }
     if (typeof p.enabled !== 'boolean') throwIpcError('INVALID_PARAMS', 'enabled must be boolean');
-    m.setProviderEnabled('telegram', p.enabled);
+    m.setProviderEnabled(p.provider, p.enabled);
     return { hook: m.snapshot() };
   });
 
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_BIND_START, () => {
+  /** provider-neutral 绑定动作的 provider 形参校验(telegram / x)。 */
+  const requireNeutralProvider = (payload: unknown): 'telegram' | 'x' => {
+    const p = requireObject(payload);
+    if (p.provider !== 'telegram' && p.provider !== 'x') {
+      throwIpcError('INVALID_PARAMS', 'provider must be telegram or x');
+    }
+    return p.provider;
+  };
+  const providerDisplayName = (provider: 'telegram' | 'x'): string =>
+    provider === 'telegram' ? 'Telegram' : 'X';
+
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_BIND_START, (_e, payload) => {
     requireHookControl();
     const { manager: m } = ensureInstances();
-    if (!m.providerBindStart('telegram')) {
-      throwIpcError('HOOK_NOT_CONNECTED', 'Telegram provider is not connected');
+    const provider = requireNeutralProvider(payload);
+    if (!m.providerBindStart(provider)) {
+      throwIpcError('HOOK_NOT_CONNECTED', `${providerDisplayName(provider)} provider is not connected`);
     }
     return { hook: m.snapshot() };
   });
 
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_BIND_CANCEL, () => {
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_BIND_CANCEL, (_e, payload) => {
     requireHookControl();
     const { manager: m } = ensureInstances();
-    if (!m.providerBindCancel('telegram')) {
-      throwIpcError('HOOK_NOT_CONNECTED', 'Telegram binding attempt is not active');
+    const provider = requireNeutralProvider(payload);
+    if (!m.providerBindCancel(provider)) {
+      throwIpcError('HOOK_NOT_CONNECTED', `${providerDisplayName(provider)} binding attempt is not active`);
     }
     return { hook: m.snapshot() };
   });
 
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_BIND_REVOKE, () => {
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_BIND_REVOKE, (_e, payload) => {
     requireHookControl();
     const { manager: m } = ensureInstances();
-    if (!m.providerBindRevoke('telegram')) {
-      throwIpcError('HOOK_NOT_CONNECTED', 'Telegram binding is not connected');
+    const provider = requireNeutralProvider(payload);
+    if (!m.providerBindRevoke(provider)) {
+      throwIpcError('HOOK_NOT_CONNECTED', `${providerDisplayName(provider)} binding is not connected`);
     }
     return { hook: m.snapshot() };
   });
 
   registerTrustedHookControlHandler(
-    HOOK_CONTROL_INVOKE.TELEGRAM_OPEN_ACTION,
+    HOOK_CONTROL_INVOKE.PROVIDER_OPEN_ACTION,
     async (_e, payload) => {
       requireHookControl();
       const { manager: m } = ensureInstances();
+      const provider = requireNeutralProvider(payload);
       const p = requireObject(payload);
       const action = requireString(p.action, 'action');
       if (action !== 'connect' && action !== 'provider' && action !== 'add-to-group') {
-        throwIpcError('INVALID_PARAMS', 'invalid Telegram open action');
+        throwIpcError('INVALID_PARAMS', `invalid ${providerDisplayName(provider)} open action`);
       }
       try {
-        if (!(await m.openTelegramAction(action))) {
-          throwIpcError('INVALID_PARAMS', 'Telegram action is not available');
+        if (!(await m.openProviderAction(provider, action))) {
+          throwIpcError('INVALID_PARAMS', `${providerDisplayName(provider)} action is not available`);
         }
       } catch (err) {
-        if (err instanceof Error && err.name === 'TelegramDeepLinkValidationError') {
+        if (
+          err instanceof Error &&
+          (err.name === 'TelegramDeepLinkValidationError' || err.name === 'XLinkValidationError')
+        ) {
           throwIpcError('INVALID_PARAMS', err.message);
         }
         throw err;
@@ -699,11 +756,12 @@ export function registerHookControlIpc(): void {
     }
   });
 
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_PREFS_GET, async () => {
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_PREFS_GET, async (_e, payload) => {
     requireHookControl();
     const { manager: m } = ensureInstances();
+    const provider = requireNeutralProvider(payload);
     try {
-      return { prefs: await m.getProviderWorkspacePrefs('telegram') };
+      return { prefs: await m.getProviderWorkspacePrefs(provider) };
     } catch (err) {
       throwHookPrefsError(err);
     }
@@ -712,6 +770,7 @@ export function registerHookControlIpc(): void {
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_PREFS_SET, async (_e, payload) => {
     requireHookControl();
     const { manager: m } = ensureInstances();
+    const provider = requireNeutralProvider(payload);
     const p = requireObject(payload);
     const workspace = requireString(p.workspace, 'workspace');
     const rawPatch = requireObject(p.patch);
@@ -725,7 +784,7 @@ export function registerHookControlIpc(): void {
       patch[field] = value as string | null;
     }
     try {
-      return { prefs: await m.setProviderWorkspacePrefs('telegram', workspace, patch) };
+      return { prefs: await m.setProviderWorkspacePrefs(provider, workspace, patch) };
     } catch (err) {
       throwHookPrefsError(err);
     }
@@ -742,8 +801,8 @@ export function registerHookControlIpc(): void {
     async (_e, payload) => {
       const p = requireObject(payload);
       const channel = requireString(p.channel, 'channel');
-      if (channel !== 'slack' && channel !== 'telegram') {
-        throwIpcError('INVALID_PARAMS', 'channel must be slack or telegram');
+      if (channel !== 'slack' && channel !== 'telegram' && channel !== 'x') {
+        throwIpcError('INVALID_PARAMS', 'channel must be slack, telegram or x');
       }
       // 输入设界(codex review): 即使 renderer 被攻破, 也不允许任意长度/格式的键
       // 无限追加条目撑爆本地文件 —— workspace 按别名正则(与 prefs 同规), 其余限长。
