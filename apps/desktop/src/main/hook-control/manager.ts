@@ -447,7 +447,7 @@ type ProviderBindRequest =
  */
 export type NeutralHookProvider = Exclude<ClientHookProvider, 'slack'>;
 
-/** renderer 请求打开 provider 相关链接的动作(openTelegramAction 的值域)。 */
+/** renderer 请求打开 provider 相关链接的动作(openProviderAction 的值域)。 */
 type ProviderOpenAction = 'connect' | 'provider' | 'add-to-group';
 
 /**

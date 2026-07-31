@@ -270,15 +270,16 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       // 两个 provider 复用 dispatcher，但连接身份和服务地址彼此隔离。
       getConnection: (connectionId) => {
         const config = store!.get();
-        // connectionId 形如 `<id>:<provider>`(provider-neutral 线)或裸 id(Slack
-        // legacy 线)—— 按后缀解析, 不做二分兜底: 未登记的 provider 落到 Slack
-        // 会让它读到错误的开关与端点。
-        const provider = connectionId.endsWith(':telegram')
-          ? 'telegram'
-          : connectionId.endsWith(':x')
-            ? 'x'
-            : 'slack';
-        const meta = {
+        // connectionId 形如 `slack:<账号指纹>:<provider>`(manager 的 dispatchId
+        // 拼装, 指纹是 base64url 不含冒号)或裸 id(Slack legacy 线, 末段即
+        // 'slack')—— 按末段解析 provider。未登记的 provider 返回 null,
+        // dispatcher 按连接不存在拒绝(fail closed): 回落到 Slack 会让它读到
+        // 错误的开关与端点。
+        const provider = connectionId.split(':').pop() ?? '';
+        const metaByProvider: Record<
+          string,
+          { name: string; url: string; enabled: boolean } | undefined
+        > = {
           telegram: {
             name: `${BRAND_NAME} Telegram`,
             url: getClientEndpoint('telegramHookWsUrl'),
@@ -294,7 +295,9 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
             url: store!.effectiveUrl(),
             enabled: config.enabled,
           },
-        }[provider];
+        };
+        const meta = metaByProvider[provider];
+        if (!meta) return null;
         return {
           id: connectionId,
           name: meta.name,
