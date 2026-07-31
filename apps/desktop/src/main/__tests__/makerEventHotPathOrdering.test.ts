@@ -320,7 +320,9 @@ describe('maker:event hot path ordering', () => {
     expect(codexDoneSource).toContain('? await getModelPricing()');
     expect(codexDoneSource).toContain("? await getModelPricingForModel('xd', pricingModel)");
     expect(codexDoneSource).toContain('price ?? undefined');
-    expect(codexDoneSource).toContain('if (!isSubscriptionValue && money)');
+    expect(codexDoneSource).toContain(
+      "if (!isSubscriptionValue && money && price?.source === 'gateway')",
+    );
     expect(codexDoneSource).toContain('void recordTurnSpend(money);');
     expect(codexDoneSource).toContain('void recordSessionTurnSpend(session.id, money);');
     expect(codexDoneSource).toMatch(
@@ -330,7 +332,9 @@ describe('maker:event hot path ordering', () => {
       /await recordModelTurnUsage\(\{\s*agentKind: 'codex',\s*model: modelUsageKey,\s*money,\s*inputTokensDelta: 0,\s*outputTokensDelta: 0,\s*cacheReadTokensDelta: 0,\s*cacheCreateTokensDelta: 0,\s*\}\);/,
     );
     const costRecordIndex = codexDoneSource.indexOf('void recordTurnSpend(money);');
-    const modelCostRecordIndex = codexDoneSource.indexOf('if (!isSubscriptionValue && money)');
+    const modelCostRecordIndex = codexDoneSource.indexOf(
+      "if (!isSubscriptionValue && money && price?.source === 'gateway')",
+    );
     const schedulerCostRecordIndex = codexDoneSource.indexOf('await recordSchedulerTurnCost({');
     expect(costRecordIndex).toBeGreaterThanOrEqual(0);
     expect(modelCostRecordIndex).toBeGreaterThanOrEqual(0);
@@ -362,7 +366,9 @@ describe('maker:event hot path ordering', () => {
     expect(claudeDoneSource).toContain("'xd',");
     expect(claudeDoneSource).toContain('normalizeModelIdForPricing(deltas[0]?.model)');
     expect(claudeDoneSource).toContain(': await getModelPricing();');
-    expect(claudeDoneSource).toContain('const { turnMoney, perModel } = resolveClaudeTurnCostSinks(');
+    expect(claudeDoneSource).toContain(
+      'const { turnMoney, estimatedTurnMoney, perModel } = resolveClaudeTurnCostSinks(',
+    );
     expect(claudeDoneSource).toContain('providerId: sessionProviderForBilling');
     expect(claudeDoneSource).toContain('billingRoute,');
     expect(claudeDoneSource).toContain('recordTurnSpend(turnMoney);');

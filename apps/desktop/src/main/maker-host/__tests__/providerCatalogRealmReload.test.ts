@@ -105,6 +105,7 @@ vi.mock('../model-discovery/anthropic.js', () => ({
 import { BUNDLED_CATALOG, type Catalog } from '@cindy/model-providers';
 import { getActiveCatalog } from '../active-catalog.js';
 import {
+  __testing,
   ensureActiveCatalogLoaded,
   reloadActiveCatalogForEndpointChange,
   shouldDisableCatalogFetch,
@@ -124,6 +125,61 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  it('replaces an existing LKG through a Windows-safe backup path', async () => {
+    const files = new Set(['/catalog.json', '/catalog.tmp']);
+    const calls: Array<[string, string]> = [];
+    let firstReplace = true;
+    const fileIo = {
+      async rename(from: string, to: string) {
+        calls.push([from, to]);
+        if (firstReplace && from === '/catalog.tmp' && to === '/catalog.json') {
+          firstReplace = false;
+          throw Object.assign(new Error('destination exists'), { code: 'EEXIST' });
+        }
+        if (!files.has(from)) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+        files.delete(from);
+        files.add(to);
+      },
+      async rm(target: string) {
+        files.delete(target);
+      },
+    };
+
+    await __testing.replaceCatalogLkgFile('/catalog.tmp', '/catalog.json', fileIo);
+
+    expect(calls).toEqual([
+      ['/catalog.tmp', '/catalog.json'],
+      ['/catalog.json', '/catalog.json.bak'],
+      ['/catalog.tmp', '/catalog.json'],
+    ]);
+    expect(files).toEqual(new Set(['/catalog.json']));
+  });
+
+  it('restores the previous LKG if the replacement still fails', async () => {
+    const files = new Set(['/catalog.json', '/catalog.tmp']);
+    let temporaryAttempts = 0;
+    const fileIo = {
+      async rename(from: string, to: string) {
+        if (from === '/catalog.tmp') {
+          temporaryAttempts += 1;
+          throw Object.assign(new Error('locked'), { code: temporaryAttempts === 1 ? 'EPERM' : 'EBUSY' });
+        }
+        if (!files.has(from)) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+        files.delete(from);
+        files.add(to);
+      },
+      async rm(target: string) {
+        files.delete(target);
+      },
+    };
+
+    await expect(
+      __testing.replaceCatalogLkgFile('/catalog.tmp', '/catalog.json', fileIo),
+    ).rejects.toMatchObject({ code: 'EBUSY' });
+    expect(files.has('/catalog.json')).toBe(true);
+    expect(files.has('/catalog.json.bak')).toBe(false);
+  });
+
   it('keeps dev offline by default but permits an explicit catalog URL', () => {
     expect(shouldDisableCatalogFetch(true, undefined, false)).toBe(true);
     expect(shouldDisableCatalogFetch(true, '   ', false)).toBe(true);

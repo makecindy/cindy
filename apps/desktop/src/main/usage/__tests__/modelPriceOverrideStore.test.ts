@@ -121,6 +121,68 @@ describe('model price override sparse persistence', () => {
     });
   });
 
+  it('rewrites every inherited price when the user changes quote currency', () => {
+    const reference = {
+      currency: 'USD' as const,
+      inputPerMtok: 2,
+      outputPerMtok: 6,
+      cacheReadPerMtok: 0.2,
+      cacheCreatePerMtok: null,
+      inputTokenPriceBands: [
+        {
+          minInputTokens: 200_001,
+          inputPerMtok: 4,
+          outputPerMtok: 12,
+          cacheReadPerMtok: 0.4,
+        },
+      ],
+    };
+    const values = __testing.sparseValues(
+      {
+        currency: 'CNY',
+        inputPerMtok: 2,
+        outputPerMtok: 6,
+        cacheReadPerMtok: 0.2,
+        cacheCreatePerMtok: null,
+      },
+      reference,
+    );
+    expect(values).toEqual({
+      currency: 'CNY',
+      inputPerMtok: 2,
+      outputPerMtok: 6,
+      cacheReadPerMtok: 0.2,
+      cacheCreatePerMtok: null,
+    });
+    expect(
+      __testing.mergedQuote(
+        { providerId: 'custom', agent: 'codex', modelId: 'model' },
+        {
+          providerId: 'custom',
+          modelId: 'model',
+          source: 'provider-reference',
+          approximate: true,
+          currency: reference.currency,
+          inputPerMtok: reference.inputPerMtok,
+          outputPerMtok: reference.outputPerMtok,
+          cacheReadPerMtok: reference.cacheReadPerMtok,
+          inputTokenPriceBands: reference.inputTokenPriceBands,
+        },
+        values,
+      ),
+    ).toMatchObject({
+      currency: 'CNY',
+      inputTokenPriceBands: [
+        {
+          minInputTokens: 200_001,
+          inputPerMtok: 2,
+          outputPerMtok: 6,
+          cacheReadPerMtok: 0.2,
+        },
+      ],
+    });
+  });
+
   it('only accepts currencies that can project into the active ledger', () => {
     expect(__testing.currencyCanProjectToLedger('USD', 'USD')).toBe(true);
     expect(__testing.currencyCanProjectToLedger('USD', 'CNY')).toBe(true);

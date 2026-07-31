@@ -155,24 +155,74 @@ interface CatalogLkgEnvelope {
   catalog: string;
 }
 
+interface CatalogLkgFileIo {
+  rename(from: string, to: string): Promise<void>;
+  rm(target: string, options: { force: boolean }): Promise<void>;
+}
+
 function catalogLkgPath(scope: string): string {
   const digest = createHash('sha256').update(scope).digest('hex').slice(0, 24);
   return path.join(app.getPath('userData'), 'cache', 'model-catalog', `${digest}.json`);
 }
 
 async function readCatalogLkg(scope: string): Promise<string | null> {
+  const file = catalogLkgPath(scope);
+  for (const candidate of [file, `${file}.bak`]) {
+    try {
+      const envelope = JSON.parse(
+        await fsp.readFile(candidate, 'utf8'),
+      ) as Partial<CatalogLkgEnvelope>;
+      return envelope.version === CATALOG_LKG_VERSION &&
+        envelope.scope === scope &&
+        typeof envelope.catalog === 'string'
+        ? envelope.catalog
+        : null;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw err;
+    }
+  }
+  return null;
+}
+
+/**
+ * Replace an existing LKG without depending on POSIX rename-overwrite semantics. Windows may
+ * reject that operation while the destination exists, so preserve the prior snapshot until the
+ * new file is in place and restore it if the second rename fails.
+ */
+async function replaceCatalogLkgFile(
+  temporary: string,
+  file: string,
+  fileIo: CatalogLkgFileIo = fsp,
+): Promise<void> {
   try {
-    const envelope = JSON.parse(
-      await fsp.readFile(catalogLkgPath(scope), 'utf8'),
-    ) as Partial<CatalogLkgEnvelope>;
-    return envelope.version === CATALOG_LKG_VERSION &&
-      envelope.scope === scope &&
-      typeof envelope.catalog === 'string'
-      ? envelope.catalog
-      : null;
+    await fileIo.rename(temporary, file);
+    await fileIo.rm(`${file}.bak`, { force: true }).catch(() => undefined);
+    return;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY' && code !== 'EEXIST') throw err;
+  }
+
+  const backup = `${file}.bak`;
+  await fileIo.rm(backup, { force: true }).catch(() => undefined);
+  let preservedExisting = false;
+  try {
+    await fileIo.rename(file, backup);
+    preservedExisting = true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  }
+  try {
+    await fileIo.rename(temporary, file);
+  } catch (err) {
+    if (preservedExisting) {
+      await fileIo.rename(backup, file).catch(() => undefined);
+    }
     throw err;
+  }
+  if (preservedExisting) {
+    await fileIo.rm(backup, { force: true }).catch(() => undefined);
   }
 }
 
@@ -186,7 +236,11 @@ async function writeCatalogLkg(scope: string, catalog: string): Promise<void> {
     catalog,
   };
   await fsp.writeFile(temporary, JSON.stringify(envelope), 'utf8');
-  await fsp.rename(temporary, file);
+  try {
+    await replaceCatalogLkgFile(temporary, file);
+  } finally {
+    await fsp.rm(temporary, { force: true }).catch(() => undefined);
+  }
 }
 
 /** 桌面端 CatalogIO —— net + fs + 按端点隔离的 last-known-good 快照。 */
@@ -611,3 +665,5 @@ export function getDesktopProviderService(): ProviderService {
   });
   return singleton;
 }
+
+export const __testing = { replaceCatalogLkgFile };

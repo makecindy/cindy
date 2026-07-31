@@ -3415,7 +3415,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               price ?? undefined,
               currentLedgerCurrency(),
             );
-            if (!isSubscriptionValue && money) {
+            // Only Gateway sale prices are actual API spend. Third-party/user reference quotes
+            // are value estimates and daily_model_usage cannot preserve RegionalMoney.kind, so
+            // writing them into #billing=api would later reconstruct an estimate as actual cost.
+            if (!isSubscriptionValue && money && price?.source === 'gateway') {
               await recordModelTurnUsage({
                 agentKind: 'codex',
                 model: modelUsageKey,

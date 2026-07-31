@@ -604,6 +604,35 @@ describe('subscription value and usage details', () => {
     });
   });
 
+  it('keeps estimates for Claude family aliases and dated wire ids', () => {
+    const pricing = catalog(
+      quote('claude-opus-4-8', 5, 25, {
+        providerId: 'anthropic',
+        source: 'provider-reference',
+        approximate: true,
+      }),
+      quote('claude-sonnet-4-6', 3, 15, {
+        providerId: 'anthropic',
+        source: 'provider-reference',
+        approximate: true,
+      }),
+    );
+    expect(
+      estimateClaudeSubscriptionTurnValue(
+        [resolvedModel('opus', { inputTokens: 1_000_000 })],
+        'USD',
+        pricing,
+      ),
+    ).toMatchObject({ amount: 5, kind: 'value-estimate' });
+    expect(
+      estimateClaudeSubscriptionTurnValue(
+        [resolvedModel('claude-sonnet-4-6-20260701', { inputTokens: 1_000_000 })],
+        'USD',
+        pricing,
+      ),
+    ).toMatchObject({ amount: 3, kind: 'value-estimate' });
+  });
+
   it('does not estimate non-Anthropic, already-costed, unknown, or zero-token entries', () => {
     expect(
       estimateClaudeSubscriptionTurnValue(

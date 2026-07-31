@@ -269,16 +269,36 @@ export function getModelPriceQuote(
   if (!normalizedProvider || !normalizedModel) return undefined;
   const providerPricing = pricing?.[normalizedProvider];
   if (!providerPricing) return undefined;
-  if (agent && providerPricing[modelPricingKey(normalizedModel, agent)]) {
-    return providerPricing[modelPricingKey(normalizedModel, agent)];
-  }
-  if (providerPricing[normalizedModel]) return providerPricing[normalizedModel];
+  const exactQuote = (candidate: string): ModelPriceQuote | undefined =>
+    (agent ? providerPricing[modelPricingKey(candidate, agent)] : undefined) ??
+    providerPricing[candidate];
+  const exact = exactQuote(normalizedModel);
+  if (exact) return exact;
   if (normalizedProvider === 'openai' && normalizedModel.startsWith(CHATGPT_MODEL_PREFIX)) {
     const bareModel = normalizedModel.slice(CHATGPT_MODEL_PREFIX.length);
-    if (agent && providerPricing[modelPricingKey(bareModel, agent)]) {
-      return providerPricing[modelPricingKey(bareModel, agent)];
+    return exactQuote(bareModel);
+  }
+  if (normalizedProvider === 'anthropic') {
+    // Claude Code may report a dated wire id although the registry route uses the stable id.
+    const undatedModel = normalizedModel.replace(/-\d{8}$/, '');
+    if (undatedModel !== normalizedModel) {
+      const undated = exactQuote(undatedModel);
+      if (undated) return undated;
     }
-    return providerPricing[bareModel];
+    // Historical Claude sessions can report a bare family alias. The pricing catalog preserves
+    // server registry order, so the first matching route is the server-curated current family.
+    if (normalizedModel === 'opus' || normalizedModel === 'sonnet' || normalizedModel === 'haiku') {
+      const familyPrefix = `claude-${normalizedModel}-`;
+      for (const [key, quote] of Object.entries(providerPricing)) {
+        const routeModel = key.split('\u0000', 1)[0];
+        if (
+          routeModel.startsWith(familyPrefix) &&
+          (!agent || key === modelPricingKey(routeModel, agent) || key === routeModel)
+        ) {
+          return quote;
+        }
+      }
+    }
   }
   return undefined;
 }

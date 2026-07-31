@@ -212,7 +212,18 @@ function sparseValues(
 ): ModelPriceOverrideValues {
   if (!reference) return { ...desired };
   const values: ModelPriceOverrideValues = {};
-  if (desired.currency !== reference.currency) values.currency = desired.currency;
+  const currencyChanged = desired.currency !== reference.currency;
+  if (currencyChanged) values.currency = desired.currency;
+  // Currency changes cannot reuse any numeric value from the reference quote: doing so would
+  // relabel (for example) USD long-context bands as CNY without an exchange conversion. Persist
+  // the complete user-entered quote so mergedQuote rewrites every inherited band in the new unit.
+  if (currencyChanged) {
+    values.inputPerMtok = desired.inputPerMtok;
+    values.outputPerMtok = desired.outputPerMtok;
+    values.cacheReadPerMtok = desired.cacheReadPerMtok ?? null;
+    values.cacheCreatePerMtok = desired.cacheCreatePerMtok ?? null;
+    return values;
+  }
   if (desired.inputPerMtok !== reference.inputPerMtok) {
     values.inputPerMtok = desired.inputPerMtok;
   }
