@@ -105,4 +105,44 @@ describe('registryPricingCatalog', () => {
 
     expect(registryPricingCatalog(registry)).toEqual({});
   });
+
+  it('preserves the currency declared by a provider reference price', () => {
+    const registry: ModelRegistry = {
+      schemaVersion: 1,
+      updatedAt: '2026-07-31T00:00:00.000Z',
+      models: [
+        {
+          id: 'test/cny-model',
+          name: 'CNY Model',
+          routes: [
+            {
+              providerId: 'custom-cn',
+              modelId: 'cny-model',
+              agents: ['codex'],
+              referencePrices: [
+                {
+                  currency: 'CNY',
+                  variant: 'standard',
+                  inputPerMtok: 7,
+                  outputPerMtok: 21,
+                  effectiveFrom: '2026-01-01',
+                  source: {
+                    kind: 'provider-official',
+                    url: 'https://example.test/pricing',
+                    verifiedAt: '2026-07-31',
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(registryPricingCatalog(registry)['custom-cn']?.['cny-model']).toMatchObject({
+      currency: 'CNY',
+      inputPerMtok: 7,
+      outputPerMtok: 21,
+    });
+  });
 });

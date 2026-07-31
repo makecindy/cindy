@@ -489,7 +489,13 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
         return getActiveCatalog();
       }
       setProviderModelsFromCatalog('xai', catalog);
-      setModelRegistryFromCatalog(catalog);
+      const currentRegistry = getActiveCatalog().modelRegistry;
+      if (
+        catalog.modelRegistry &&
+        (!currentRegistry || catalog.modelRegistry.updatedAt >= currentRegistry.updatedAt)
+      ) {
+        setModelRegistryFromCatalog(catalog);
+      }
       broadcastEffectiveModelPricing();
       return getActiveCatalog();
     })

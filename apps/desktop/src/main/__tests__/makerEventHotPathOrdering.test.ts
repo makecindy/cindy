@@ -309,7 +309,7 @@ describe('maker:event hot path ordering', () => {
     expect(codexDoneSource).toContain(': codexApiUsageModelKey(pricingModel)');
     expect(codexDoneSource).toContain('const price = isCodexXaiProviderRoute');
     expect(codexDoneSource).toContain(
-      "? getSubscriptionDirectValuePrice(pricingModel, 'codex')",
+      "? getSubscriptionDirectValuePrice(pricingModel, 'codex', pricing)",
     );
     expect(codexDoneSource).toContain('? getCodexSubscriptionValuePrice(pricingModel, pricing)');
     expect(codexDoneSource).toContain("? getModelPriceQuote(pricing, 'xd', pricingModel)");

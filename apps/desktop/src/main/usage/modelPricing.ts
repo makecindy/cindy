@@ -455,8 +455,22 @@ export function getCodexSubscriptionValuePrice(
 export function getSubscriptionDirectValuePrice(
   modelId: string,
   agent?: 'claude-code' | 'codex',
+  pricing?: ModelPricingCatalog | null,
 ): ModelPriceQuote | undefined {
-  return subscriptionDirectPriceQuote(modelId, getActiveCatalog().modelRegistry, agent);
+  const fallback = subscriptionDirectPriceQuote(
+    modelId,
+    getActiveCatalog().modelRegistry,
+    agent,
+  );
+  if (!fallback) return undefined;
+  const effective = getModelPriceQuote(pricing, fallback.providerId, modelId, agent);
+  const quote = effective ?? fallback;
+  return {
+    ...quote,
+    modelId,
+    source:
+      quote.source === 'provider-reference' ? 'subscription-reference' : quote.source,
+  };
 }
 
 /** 启动只读磁盘快照；真正的新价格仍由 /models 同步整体替换。 */

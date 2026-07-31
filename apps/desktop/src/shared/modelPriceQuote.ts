@@ -162,6 +162,7 @@ function referenceQuote(
   providerId: string,
   modelId: string,
   price: {
+    currency: MoneyCurrency;
     inputPerMtok: number;
     outputPerMtok: number;
     cacheReadPerMtok?: number;
@@ -172,11 +173,18 @@ function referenceQuote(
   return {
     providerId,
     modelId,
-    currency: 'USD',
     source: 'provider-reference',
     approximate: true,
     ...price,
   };
+}
+
+function referencePriceCalendarDate(value: string | Date | undefined): string {
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) {
+    return value.slice(0, 10);
+  }
+  return new Date().toISOString().slice(0, 10);
 }
 
 export function providerReferencePriceQuote(
@@ -192,17 +200,13 @@ export function providerReferencePriceQuote(
 ): ModelPriceQuote | undefined {
   const resolved = resolveModelReferencePrice(registry, providerId, modelId, options);
   if (!resolved) return undefined;
-  const day =
-    options.at instanceof Date
-      ? options.at.toISOString().slice(0, 10)
-      : typeof options.at === 'string'
-        ? options.at.slice(0, 10)
-        : new Date().toISOString().slice(0, 10);
+  const day = referencePriceCalendarDate(options.at);
   const variant = options.variant ?? 'standard';
   const inputTokenPriceBands = resolved.route.referencePrices
     ?.filter(
       (price) =>
         price.variant === variant &&
+        price.currency === resolved.price.currency &&
         day >= price.effectiveFrom &&
         (price.effectiveUntil === undefined || day < price.effectiveUntil),
     )
@@ -222,6 +226,7 @@ export function providerReferencePriceQuote(
     }))
     .sort((a, b) => a.minInputTokens - b.minInputTokens);
   return referenceQuote(providerId, modelId, {
+    currency: resolved.price.currency,
     inputPerMtok: resolved.price.inputPerMtok,
     outputPerMtok: resolved.price.outputPerMtok,
     ...(resolved.price.cacheReadPerMtok !== undefined
@@ -321,11 +326,18 @@ export function subscriptionDirectPriceQuote(
   registry: ModelRegistry | null | undefined,
   agent?: AgentKind,
 ): ModelPriceQuote | undefined {
+  let quote: ModelPriceQuote | undefined;
   if (modelId.startsWith(CHATGPT_MODEL_PREFIX)) {
-    return providerReferencePriceQuote('openai', modelId, registry, { agent });
+    quote = providerReferencePriceQuote('openai', modelId, registry, { agent });
+  } else if (modelId.startsWith(XAI_MODEL_PREFIX)) {
+    quote = providerReferencePriceQuote('xai', modelId, registry, { agent });
   }
-  if (modelId.startsWith(XAI_MODEL_PREFIX)) {
-    return providerReferencePriceQuote('xai', modelId, registry, { agent });
-  }
-  return undefined;
+  return quote
+    ? {
+        ...quote,
+        modelId,
+        source:
+          quote.source === 'provider-reference' ? 'subscription-reference' : quote.source,
+      }
+    : undefined;
 }

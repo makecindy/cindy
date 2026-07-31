@@ -268,4 +268,17 @@ describe('provider catalog realm reload', () => {
     expect(activeMarker()).toBe('catalog-global-current');
     expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-07-31T12:30:00.000Z');
   });
+
+  it('does not downgrade the active registry when refresh falls back to an older cache', async () => {
+    const refresh = refreshActiveCatalogFromSource();
+    await Promise.resolve();
+    const load = h.refreshLoads.at(-1)!;
+    load.resolve({
+      catalog: catalogNamed('catalog-global-cached', '2026-07-31T11:00:00.000Z'),
+      source: 'cache',
+    });
+    await refresh;
+
+    expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-07-31T12:30:00.000Z');
+  });
 });

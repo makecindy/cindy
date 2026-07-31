@@ -509,7 +509,27 @@ describe('reference pricing helpers', () => {
     expect(getSubscriptionDirectValuePrice('chatgpt/gpt-5.5')).toMatchObject({
       providerId: 'openai',
       modelId: 'chatgpt/gpt-5.5',
-      source: 'provider-reference',
+      source: 'subscription-reference',
+    });
+    expect(
+      getSubscriptionDirectValuePrice('chatgpt/gpt-5.5', 'claude-code', {
+        openai: {
+          'gpt-5.5': {
+            providerId: 'openai',
+            modelId: 'gpt-5.5',
+            currency: 'USD',
+            source: 'user-override',
+            approximate: true,
+            inputPerMtok: 9,
+            outputPerMtok: 27,
+          },
+        },
+      }),
+    ).toMatchObject({
+      modelId: 'chatgpt/gpt-5.5',
+      source: 'user-override',
+      inputPerMtok: 9,
+      outputPerMtok: 27,
     });
     expect(getSubscriptionDirectValuePrice('unknown')).toBeUndefined();
   });

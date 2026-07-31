@@ -356,7 +356,7 @@ function getSubscriptionValuePriceFor(
 ): ModelPriceQuote | undefined {
   if (agentKind === 'codex') {
     return (
-      getSubscriptionDirectValuePrice(model, 'codex') ??
+      getSubscriptionDirectValuePrice(model, 'codex', pricing) ??
       getCodexSubscriptionValuePrice(model, pricing)
     );
   }

@@ -3210,7 +3210,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               : [];
             for (const m of perModel) {
               if (m.source !== 'subscription') continue;
-              const quote = getSubscriptionDirectValuePrice(m.model, 'claude-code');
+              const quote = getSubscriptionDirectValuePrice(m.model, 'claude-code', pricing);
               const value = computePriceQuoteTurnMoney(
                 m.deltas,
                 quote ?? undefined,
@@ -3404,7 +3404,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                   ? await getModelPricing()
                   : null;
             const price = isCodexXaiProviderRoute
-              ? getSubscriptionDirectValuePrice(pricingModel, 'codex')
+              ? getSubscriptionDirectValuePrice(pricingModel, 'codex', pricing)
               : isSubscriptionValue
                 ? getCodexSubscriptionValuePrice(pricingModel, pricing)
                 : hasEffectiveGatewayRoute
