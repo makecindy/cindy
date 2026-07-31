@@ -107,6 +107,10 @@ export interface CindyVideoCapabilities {
 
 export interface CindySlotDeps {
   getGhost(id: string): InstalledGhost | null;
+  /** 当前账号作用域；跨 await 的媒体任务必须捕获并持续复核。 */
+  getOwnerScopeKey(): string;
+  /** true 表示账号运行时正在 teardown / replacement，所有新旧任务均 fail closed。 */
+  isOwnerBoundaryPending(): boolean;
   /** 主机统一图片通道(art 底层客户端);返回图片字节与 mime。
    *  aspectRatio 是意识的画幅意图,注入实现负责翻译成后端具体尺寸。 */
   generateImage(params: {
@@ -181,6 +185,8 @@ export interface CindySlotDeps {
     ghostId: string;
     buffer: Uint8Array;
     mimeType: string;
+    /** 任务受理时捕获的账号作用域；宿主须在每个持久化 await 边界复核。 */
+    ownerScopeKey: string;
     /** 人类可读备注(记进账本 label,画廊 caption 用)。 */
     label?: string;
     /** tool-call callId(记入 ghostMediaLedger 供 ghost_call 收口带回)。 */
@@ -707,6 +713,18 @@ export class GhostCindySlot {
     // 异步受理成功后名额转交后台任务,由它的收尾释放;其余路径 finally 释放。
     let backgrounded = false;
     try {
+      if (this.deps.isOwnerBoundaryPending()) {
+        throw new Error('媒体任务期间账号正在切换,请稍后重试');
+      }
+      const ownerScopeKey = this.deps.getOwnerScopeKey();
+      const assertOwnerScopeCurrent = (): void => {
+        if (
+          this.deps.isOwnerBoundaryPending() ||
+          this.deps.getOwnerScopeKey() !== ownerScopeKey
+        ) {
+          throw new Error('媒体任务期间账号已切换,本次结果已丢弃');
+        }
+      };
       // 日志口径:发生的事件是"一单 cindy 代办"(kind = 代办类型),槽只是
       // 资格概念不进文案;归因三件套 ghostId / kind / callId 三处日志一致。
       this.deps.log?.info(`ghost cindy-request ${kind} start`, {
@@ -721,6 +739,7 @@ export class GhostCindySlot {
       const imagePaths: string[] = [];
       for (const hash of hashes) {
         const abs = await this.deps.resolveOwnedMedia(ghostId, hash);
+        assertOwnerScopeCurrent();
         if (!abs) {
           return { ok: false, message: '源图不在本意识名下(仅能改自己生成或画廊里的媒体)' };
         }
@@ -739,6 +758,7 @@ export class GhostCindySlot {
         height?: number;
         videoParams?: GhostVideoResultParams;
       }> => {
+        assertOwnerScopeCurrent();
         // 可选参数一律条件展开:不传时载荷里连键都没有,与老协议逐字节同形
         // (videoParams 本身就是按此规则组装的,直接摊开即可)。
         let generated: { buffer: Uint8Array; mimeType: string; videoParams?: GhostVideoResultParams };
@@ -760,16 +780,19 @@ export class GhostCindySlot {
         } else {
           generated = await this.deps.generateVideo({ prompt, model, ...videoParams });
         }
+        assertOwnerScopeCurrent();
 
         const saved = await this.deps.saveGhostMedia({
           ghostId,
           buffer: generated.buffer,
           mimeType: generated.mimeType,
+          ownerScopeKey,
           label: prompt.slice(0, 200),
           // 模型代办产物记账(ghostMediaLedger),随 ghost_call 收口带回;
           // 未署名('unattributed')不记,与 networkSlot 同契约防并发串账
           ...(callId !== 'unattributed' ? { callId } : {}),
         });
+        assertOwnerScopeCurrent();
         this.deps.log?.info(`ghost cindy-request ${kind} done`, {
           ghostId,
           model,

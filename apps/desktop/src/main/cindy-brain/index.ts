@@ -2036,6 +2036,8 @@ export function getGhostCindySlot(): GhostCindySlot {
   if (!cindySlotSingleton) {
     cindySlotSingleton = new GhostCindySlot({
       getGhost: (id) => findAvailableGhost(id),
+      getOwnerScopeKey: () => activeOwnerScopeKey(),
+      isOwnerBoundaryPending: () => isAppSessionBoundaryPending(),
       // model 已在 modelSlot 按白名单校验;归属来源(providerId)按白名单条目
       // 定位,经 imageChannelRegistry 取对应执行通道(2026-07 图像多来源)。
       generateImage: async ({ prompt, model, aspectRatio }) => {
@@ -2165,26 +2167,38 @@ export function getGhostCindySlot(): GhostCindySlot {
           return null;
         }
       },
-      saveGhostMedia: async ({ ghostId, buffer, mimeType, label, callId }) => {
-        const written = await blobStore.writeBlob({ buffer, mimeType });
-        await ledger.recordBlob({
-          hash: written.hash,
-          ext: written.ext,
-          mimeType: written.mimeType,
-          bytes: written.bytes,
-          isCache: false,
-        });
-        // 意识产物挂自己画廊 ref(出生=该意识)——面板归属校验与
-        // "不被回收"同时成立;消息级引用由消息落库链路维护,
-        // 配额上限由权限策略负责。
-        await ledger.addRef({
-          hash: written.hash,
-          refKind: 'ghost-gallery',
-          refId: ghostId,
-          originKind: 'ghost',
-          originId: ghostId,
-          ...(label ? { label } : {}),
-        });
+      saveGhostMedia: async ({ ghostId, buffer, mimeType, ownerScopeKey, label, callId }) => {
+        const assertOwnerScopeCurrent = (): void => {
+          if (
+            isAppSessionBoundaryPending() ||
+            activeOwnerScopeKey() !== ownerScopeKey
+          ) {
+            throw new Error('媒体任务期间账号已切换,本次结果已丢弃');
+          }
+        };
+        // defaultDb 会在每次 ledger 调用时现取当前账号 DB。先在稳定 scope 下
+        // 捕获同一个句柄，再把失效断言交给统一入库助手覆盖所有 await 边界，
+        // 防止旧账号产物在切号窗口被登记到新账号画廊。
+        assertOwnerScopeCurrent();
+        const db = getDbClient().drizzle;
+        const written = await ingestMedia(
+          {
+            buffer,
+            mimeType,
+            isCache: false,
+            refs: [
+              {
+                refKind: 'ghost-gallery',
+                refId: ghostId,
+                originKind: 'ghost',
+                originId: ghostId,
+                ...(label ? { label } : {}),
+              },
+            ],
+            assertStillValid: assertOwnerScopeCurrent,
+          },
+          db,
+        );
         recordGhostCallMedia(ghostId, callId, written.url);
         return { url: written.url, hash: written.hash, ext: written.ext };
       },

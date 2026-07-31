@@ -136,6 +136,8 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
   const releaseDeposit = vi.fn(async () => true);
   const slot = new GhostCindySlot({
     getGhost: () => fakeGhost(),
+    getOwnerScopeKey: () => 'cloud:test-owner:1',
+    isOwnerBoundaryPending: () => false,
     generateImage,
     editImage,
     generateVideo,
@@ -670,8 +672,54 @@ describe('代办链路', () => {
     });
     expect(generateImage).toHaveBeenCalledWith({ prompt: '一只猫', model: 'gpt-image-2' });
     expect(saveGhostMedia).toHaveBeenCalledWith(
-      expect.objectContaining({ ghostId: 'art', mimeType: 'image/png' }),
+      expect.objectContaining({
+        ghostId: 'art',
+        mimeType: 'image/png',
+        ownerScopeKey: 'cloud:test-owner:1',
+      }),
     );
+  });
+
+  it('生成期间切换账号时不保存旧作用域产物', async () => {
+    let ownerScopeKey = 'cloud:owner-a:1';
+    const saveGhostMedia = vi.fn();
+    const { slot } = makeSlot({
+      getOwnerScopeKey: () => ownerScopeKey,
+      generateImage: vi.fn(async () => {
+        ownerScopeKey = 'cloud:owner-b:2';
+        return { buffer: new Uint8Array([1, 2, 3]), mimeType: 'image/png' };
+      }),
+      saveGhostMedia,
+    });
+
+    const result = await slot.handleModelRequest('art', REQ);
+
+    expect(result).toMatchObject({ ok: false });
+    expect((result as { message: string }).message).toContain('账号已切换');
+    expect(saveGhostMedia).not.toHaveBeenCalled();
+  });
+
+  it('保存期间切换账号时不向新作用域返回旧产物', async () => {
+    let ownerScopeKey = 'cloud:owner-a:1';
+    const saveGhostMedia = vi.fn(async (params: { ownerScopeKey: string }) => {
+      expect(params.ownerScopeKey).toBe('cloud:owner-a:1');
+      ownerScopeKey = 'cloud:owner-b:2';
+      return {
+        url: 'cindy-media://blobs/abc.png',
+        hash: 'a'.repeat(64),
+        ext: '.png',
+      };
+    });
+    const { slot } = makeSlot({
+      getOwnerScopeKey: () => ownerScopeKey,
+      saveGhostMedia: saveGhostMedia as unknown as CindySlotDeps['saveGhostMedia'],
+    });
+
+    const result = await slot.handleModelRequest('art', REQ);
+
+    expect(result).toMatchObject({ ok: false });
+    expect((result as { message: string }).message).toContain('账号已切换');
+    expect(saveGhostMedia).toHaveBeenCalledOnce();
   });
 
   it('图片代办附带像素宽高(字节头可解析时);探测不出则缺省', async () => {
