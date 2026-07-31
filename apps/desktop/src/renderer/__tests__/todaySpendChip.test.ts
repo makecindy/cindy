@@ -108,6 +108,12 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain(
       "const codexBillingFormPending =\n    vendorKey === 'codex' && !isRemoteCodexSession && !isDeviceLinkRemote\n    && !isCodexXaiProvider && !codexRouteResolved;",
     );
+    // isCodexGateway(驱动 usesGatewayQuota / 网关配额读取)同样要等 route 解析
+    // 完成:占位 authInjection('env-key')在真值回来前不能提交分类,否则会先读到
+    // Cindy Gateway 余额再闪切成 ChatGPT 限额(review P2)。
+    expect(source).toMatch(
+      /const isCodexGateway =\n\s*vendorKey === 'codex'\n\s*&& !isAnyRemoteSession\n\s*&& !isCodexSubscription\n(\s*\/\/.*\n)*\s*&& !codexBillingFormPending/,
+    );
   });
 
   it('renders device-link remote sessions data-driven without local-account classification', () => {

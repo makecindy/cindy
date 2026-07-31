@@ -1190,6 +1190,10 @@ export function TodaySpendChip({
     vendorKey === 'codex'
     && !isAnyRemoteSession
     && !isCodexSubscription
+    // 占位 authInjection('env-key')在 route 真值回来前不能提交分类:route 观察
+    // 落地前把它当真会读网关配额、瞬间显示 Cindy Gateway 余额再闪切成 ChatGPT
+    // 限额(review P2)。
+    && !codexBillingFormPending
     && (
       providerId === 'xd'
       || (
