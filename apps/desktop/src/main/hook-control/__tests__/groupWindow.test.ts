@@ -23,10 +23,16 @@ import {
   buildGroupContextPrefix,
   groupLaneOf,
   listTelegramKnownGroups,
-  recordGroupMessage,
+  recordGroupMessage as recordScopedGroupMessage,
   resetGroupContextCursors,
   sweepGroupWindowExpired,
 } from '../groupWindow.js';
+
+const PRINCIPAL_ID = '9';
+
+function recordGroupMessage(payload: GroupMessagePayload): Promise<boolean> {
+  return recordScopedGroupMessage(payload, PRINCIPAL_ID);
+}
 
 function migrationSql(): string {
   const dir = path.resolve(__dirname, '../../../../drizzle');
@@ -64,10 +70,15 @@ afterEach(() => {
 
 describe('groupLaneOf', () => {
   it('解析 group / topic lane, DM 与其它 provider 返回 null', () => {
-    expect(groupLaneOf('telegram:group:1:-900:42:9:g1')).toEqual({ chatId: '-900', threadId: '' });
+    expect(groupLaneOf('telegram:group:1:-900:42:9:g1')).toEqual({
+      chatId: '-900',
+      threadId: '',
+      principalId: '9',
+    });
     expect(groupLaneOf('telegram:topic:1:-900:77:9:g2')).toEqual({
       chatId: '-900',
       threadId: '77',
+      principalId: '9',
     });
     expect(groupLaneOf('telegram:dm:1:9:g1')).toBeNull();
     expect(groupLaneOf('slack:C123:171234.5678')).toBeNull();
@@ -85,18 +96,18 @@ describe('recordGroupMessage', () => {
     expect(rows.n).toBe(1);
   });
 
-  it('群历史永久保留，500 只是单次上下文读取预算', async () => {
+  it('群历史不按时间过期，但每个 principal + 群/topic 只保留最近 500 条', async () => {
     for (let i = 0; i < 502; i += 1) {
       await recordGroupMessage(frame({ messageId: `m${i}`, text: `msg ${i}` }));
     }
     const rows = sqlite
       .prepare('SELECT COUNT(*) AS n FROM hook_group_messages WHERE chat_id = ?')
       .get('-900') as { n: number };
-    expect(rows.n).toBe(502);
+    expect(rows.n).toBe(500);
     const oldest = sqlite
       .prepare('SELECT message_id FROM hook_group_messages ORDER BY id ASC LIMIT 1')
       .get() as { message_id: string };
-    expect(oldest.message_id).toBe('m0');
+    expect(oldest.message_id).toBe('m2');
   });
 });
 
@@ -135,9 +146,16 @@ describe('listTelegramKnownGroups', () => {
          VALUES ('telegram-personal:1', '-999', '', '3', 'Personal', '@x', 0, 'x', NULL, 3, 3)`,
       )
       .run();
-    await expect(listTelegramKnownGroups()).resolves.toEqual([
+    await recordGroupMessage(
+      frame({ chatId: '-901', chatName: 'Renamed', messageId: '4', sentAt: 4 }),
+    );
+    await recordScopedGroupMessage(
+      frame({ chatId: '-903', chatName: 'Other account', messageId: '5', sentAt: 5 }),
+      '10',
+    );
+    await expect(listTelegramKnownGroups(PRINCIPAL_ID)).resolves.toEqual([
+      { chatId: '-901', chatName: 'Renamed' },
       { chatId: '-902', chatName: 'Newer' },
-      { chatId: '-901', chatName: 'Older' },
     ]);
   });
 });
@@ -257,5 +275,23 @@ describe('buildGroupContextPrefix', () => {
     ).prefix;
     expect(topicPrefix).toContain('topic 讨论');
     expect(topicPrefix).not.toContain('主群闲聊');
+  });
+
+  it('换绑 Telegram 主账号后不读取前一账号的群历史', async () => {
+    await recordScopedGroupMessage(
+      frame({ messageId: '30', text: '前一账号的私密上下文' }),
+      'old-owner',
+    );
+    await recordScopedGroupMessage(frame({ messageId: '31', text: '当前账号的上下文' }), '9');
+
+    const assembly = await buildGroupContextPrefix({
+      requestId: 'r7',
+      externalKey: 'telegram:group:1:-900:42:9:g1',
+      workspace: 'chat',
+      sessionId: null,
+      prompt: 'q',
+    });
+    expect(assembly.prefix).toContain('当前账号的上下文');
+    expect(assembly.prefix).not.toContain('前一账号的私密上下文');
   });
 });

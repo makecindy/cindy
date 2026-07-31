@@ -1873,7 +1873,7 @@
         "emojiHint": {
           "off": "No emoji reactions at all.",
           "minimal": "👀 on receipt, 👍 on success, 👎 on failure.",
-          "expressive": "Finishes pick randomly from the full reaction set (positive/negative pools kept separate)."
+          "expressive": "Completed tasks pick randomly from the full reaction set (positive and negative pools stay separate)."
         },
         "groupQuoteLabel": "Quote the question in groups",
         "quoteOption": {
@@ -1890,6 +1890,11 @@
         "dmQuoteHint": {
           "off": "DM answers are sent without quoting (default, cleaner).",
           "first": "The first reply quotes the message you sent."
+        },
+        "error": {
+          "load": "Telegram behavior could not be loaded. Check the connection and retry.",
+          "save": "Telegram behavior was not saved. The last confirmed settings were restored.",
+          "retry": "Retry loading"
         }
       },
       "persona": {
@@ -1913,6 +1918,11 @@
         "contactsOn": "People who speak in groups are auto-added to Smart Contacts (master switch is on).",
         "contactsOff": "Smart Contacts is off — people who speak in groups won't be remembered automatically.",
         "contactsEnable": "Turn on",
+        "error": {
+          "load": "Telegram groups could not be loaded. Check the connection and retry.",
+          "save": "The group mode was not saved. The last confirmed mode was restored.",
+          "retry": "Retry loading"
+        },
         "mode": {
           "mention": "@ only",
           "always": "Active"
@@ -2586,7 +2596,7 @@
             "emojiHint": {
               "off": "No emoji reactions at all.",
               "minimal": "👀 on receipt, 👍 on success, 👎 on failure.",
-              "expressive": "Finishes pick randomly from separate positive and negative reaction pools."
+              "expressive": "Completed tasks pick randomly from separate positive and negative reaction pools."
             },
             "groupQuoteLabel": "Quote the question in groups",
             "quoteOption": { "off": "Never", "first": "First reply", "all": "Every reply" },
@@ -2599,6 +2609,11 @@
             "dmQuoteHint": {
               "off": "DM answers are sent without quoting (default).",
               "first": "The first reply quotes your message."
+            },
+            "error": {
+              "load": "Telegram behavior could not be loaded. Check the connection and retry.",
+              "save": "Telegram behavior was not saved. The last confirmed settings were restored.",
+              "retry": "Retry loading"
             }
           },
           "groups": {
@@ -2608,6 +2623,11 @@
             "contactsOn": "Other people who speak in groups are auto-added to Smart Contacts.",
             "contactsOff": "Smart Contacts is off, so other group members will not be remembered automatically.",
             "contactsEnable": "Turn on",
+            "error": {
+              "load": "Telegram groups could not be loaded. Check the connection and retry.",
+              "save": "The group mode was not saved. The last confirmed mode was restored.",
+              "retry": "Retry loading"
+            },
             "mode": { "mention": "@ only", "always": "Active" }
           }
         },
@@ -5870,6 +5890,8 @@
       "remoteProviderUnsupported": "This provider is not supported in SSH remote sessions — pick another source",
       "remoteNativeOauthUnavailable": "Claude.ai subscription is not connected — connect it first or pick a gateway model",
       "deviceStillLoading": "Remote device is still loading, please wait",
+      "worktreeMissingRepo": "Could not open a worktree because the selected folder has no repository root",
+      "worktreeRepoHint": "Select the working directory again and wait for the folder indicator to refresh, then retry",
       "sessionInactive": "Session is no longer active",
       "remoteProjectBanner": "New session in {{project}} on {{device}}",
       "remoteDialogueBanner": "New chat on {{device}} (no project)"

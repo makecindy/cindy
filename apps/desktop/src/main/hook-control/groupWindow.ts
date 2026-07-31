@@ -14,7 +14,7 @@
  * 剔除(旧 server 不发时降级为不剔重, 仅多一条重复)。
  */
 
-import { and, desc, eq, gt, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, lt, sql } from 'drizzle-orm';
 
 import type { GroupMessagePayload, TaskDispatchPayload } from '@cindy/slack-hook-protocol';
 
@@ -24,7 +24,9 @@ import { createLogger } from '../logger.js';
 
 const log = createLogger('hook-group-window');
 
-/** 单次上下文拼装最多读取的增量行数(读取预算，不是存储上限)。 */
+/** 每个 principal + 群/topic 窗口永久保留的最近行数。 */
+const WINDOW_KEEP_PER_KEY = 500;
+/** 单次上下文拼装最多读取的增量行数。 */
 const CONTEXT_READ_LIMIT = 500;
 /** 拼进 prompt 的上下文字符预算(保新丢旧, 与 Slack 通道同策略)。 */
 const CONTEXT_MAX_CHARS = 4_000;
@@ -38,34 +40,45 @@ const ENTRY_TEXT_MAX_CHARS = 500;
  *   telegram:topic:<botId>:<chatId>:<threadId>:<principal>:g<n>
  * DM lane 与其它 provider 返回 null(无群窗口)。
  */
-export function groupLaneOf(externalKey: string): { chatId: string; threadId: string } | null {
+export function groupLaneOf(
+  externalKey: string,
+): { chatId: string; threadId: string; principalId: string } | null {
   const parts = externalKey.split(':');
   if (parts[0] !== 'telegram') return null;
-  if (parts[1] === 'group' && parts.length >= 7 && parts[3]) {
-    return { chatId: parts[3], threadId: '' };
+  if (parts[1] === 'group' && parts.length >= 7 && parts[3] && parts[5]) {
+    return { chatId: parts[3], threadId: '', principalId: parts[5] };
   }
-  if (parts[1] === 'topic' && parts.length >= 7 && parts[3] && parts[4]) {
-    return { chatId: parts[3], threadId: parts[4] };
+  if (parts[1] === 'topic' && parts.length >= 7 && parts[3] && parts[4] && parts[5]) {
+    return { chatId: parts[3], threadId: parts[4], principalId: parts[5] };
   }
   return null;
+}
+
+/** 同一设备先后绑定不同 Telegram 主账号时，群历史绝不共用命名空间。 */
+function providerOf(principalId: string): string {
+  if (!principalId) throw new Error('Telegram principal is required for group history');
+  return `telegram:${principalId}`;
 }
 
 /**
  * group.message 帧入窗。返回 true 表示本次确实插入，供调用方在幂等入窗后
  * 执行一次自动通讯录登记；重放/重连的同一条消息返回 false。
  *
- * 存储永久保留：官方 bot 与个人 bot 一样，本机群窗口是唯一可供 Cindy
- * 回忆的群聊来源。只限制单条正文、单次读取与 prompt 字符预算，不自动 TTL
- * 或删历史；数据仍只在当前账号的本地数据库里。
+ * 消息先落当前主账号的本地数据库，不做 TTL；每个群/topic 只保留最近 500
+ * 条，避免未受信任群成员无限占用磁盘。引用与 prompt 仍只从本机窗口读取。
  */
-export async function recordGroupMessage(payload: GroupMessagePayload): Promise<boolean> {
+export async function recordGroupMessage(
+  payload: GroupMessagePayload,
+  principalId: string,
+): Promise<boolean> {
   const db = getDbClient().drizzle;
   const now = Date.now();
   const threadId = payload.threadId ?? '';
+  const storageProvider = providerOf(principalId);
   const inserted = await db
     .insert(hookGroupMessages)
     .values({
-      provider: payload.provider,
+      provider: storageProvider,
       chatId: payload.chatId,
       threadId,
       messageId: payload.messageId,
@@ -82,7 +95,25 @@ export async function recordGroupMessage(payload: GroupMessagePayload): Promise<
     })
     .onConflictDoNothing()
     .returning({ id: hookGroupMessages.id });
-  return inserted.length > 0;
+  if (inserted.length === 0) return false;
+
+  const keyFilter = and(
+    eq(hookGroupMessages.provider, storageProvider),
+    eq(hookGroupMessages.chatId, payload.chatId),
+    eq(hookGroupMessages.threadId, threadId),
+  );
+  const oldestKept = await db
+    .select({ id: hookGroupMessages.id })
+    .from(hookGroupMessages)
+    .where(keyFilter)
+    .orderBy(desc(hookGroupMessages.id))
+    .limit(1)
+    .offset(WINDOW_KEEP_PER_KEY - 1);
+  const threshold = oldestKept[0]?.id;
+  if (threshold !== undefined) {
+    await db.delete(hookGroupMessages).where(and(keyFilter, lt(hookGroupMessages.id, threshold)));
+  }
+  return true;
 }
 
 /**
@@ -145,7 +176,7 @@ export async function buildGroupContextPrefix(
     .from(hookGroupMessages)
     .where(
       and(
-        eq(hookGroupMessages.provider, 'telegram'),
+        eq(hookGroupMessages.provider, providerOf(lane.principalId)),
         eq(hookGroupMessages.chatId, lane.chatId),
         eq(hookGroupMessages.threadId, lane.threadId),
         gt(hookGroupMessages.id, cursor),
@@ -215,19 +246,34 @@ export function resetGroupContextCursors(): void {
 }
 
 /** 设置卡数据源：官方群窗口里出现过的群，按最近活跃排序。 */
-export async function listTelegramKnownGroups(): Promise<
-  Array<{ chatId: string; chatName: string | null }>
-> {
+export async function listTelegramKnownGroups(
+  principalId: string,
+): Promise<Array<{ chatId: string; chatName: string | null }>> {
   const db = getDbClient().drizzle;
+  const storageProvider = providerOf(principalId);
+  const latestByChat = db
+    .select({
+      chatId: hookGroupMessages.chatId,
+      latestId: sql<number>`max(${hookGroupMessages.id})`.as('latest_id'),
+    })
+    .from(hookGroupMessages)
+    .where(eq(hookGroupMessages.provider, storageProvider))
+    .groupBy(hookGroupMessages.chatId)
+    .as('latest_by_chat');
   const rows = await db
     .select({
       chatId: hookGroupMessages.chatId,
-      chatName: sql<string | null>`max(${hookGroupMessages.chatName})`,
+      chatName: hookGroupMessages.chatName,
     })
     .from(hookGroupMessages)
-    .where(eq(hookGroupMessages.provider, 'telegram'))
-    .groupBy(hookGroupMessages.chatId)
-    .orderBy(sql`max(${hookGroupMessages.sentAt}) desc`)
+    .innerJoin(
+      latestByChat,
+      and(
+        eq(hookGroupMessages.chatId, latestByChat.chatId),
+        eq(hookGroupMessages.id, latestByChat.latestId),
+      ),
+    )
+    .orderBy(desc(hookGroupMessages.sentAt))
     .limit(50);
   return rows.map((row) => ({ chatId: row.chatId, chatName: row.chatName }));
 }

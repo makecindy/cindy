@@ -1889,6 +1889,11 @@
         "dmQuoteHint": {
           "off": "私聊回答不引用你的消息（默认，更清爽）。",
           "first": "第一条回答引用你发的那条消息。"
+        },
+        "error": {
+          "load": "未能读取 Telegram 行为设置，请检查连接后重试。",
+          "save": "Telegram 行为设置未保存，已恢复上次确认的设置。",
+          "retry": "重新读取"
         }
       },
       "persona": {
@@ -1912,6 +1917,11 @@
         "contactsOn": "群里说话的人会自动记入智能通讯录（总开关已开启）。",
         "contactsOff": "智能通讯录未开启，群里说话的人不会被自动记住。",
         "contactsEnable": "开启",
+        "error": {
+          "load": "未能读取 Telegram 群列表，请检查连接后重试。",
+          "save": "群参与模式未保存，已恢复上次确认的模式。",
+          "retry": "重新读取"
+        },
         "mode": {
           "mention": "仅 @",
           "always": "全响应"
@@ -2598,6 +2608,11 @@
             "dmQuoteHint": {
               "off": "私聊回答不引用你的消息（默认）。",
               "first": "第一条回答引用你发的那条消息。"
+            },
+            "error": {
+              "load": "未能读取 Telegram 行为设置，请检查连接后重试。",
+              "save": "Telegram 行为设置未保存，已恢复上次确认的设置。",
+              "retry": "重新读取"
             }
           },
           "groups": {
@@ -2607,6 +2622,11 @@
             "contactsOn": "群里其他发言人会自动记入智能通讯录。",
             "contactsOff": "智能通讯录未开启，群里其他成员不会被自动记住。",
             "contactsEnable": "开启",
+            "error": {
+              "load": "未能读取 Telegram 群列表，请检查连接后重试。",
+              "save": "群参与模式未保存，已恢复上次确认的模式。",
+              "retry": "重新读取"
+            },
             "mode": { "mention": "仅 @", "always": "全响应" }
           }
         },

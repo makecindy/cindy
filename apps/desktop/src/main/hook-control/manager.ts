@@ -2338,7 +2338,11 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           : null;
       trackAccountOp(
         (async () => {
-          const inserted = await recordGroupMessage(msg.payload);
+          if (ownerId === null) {
+            log.warn('group.message ignored: Telegram binding principal is unavailable');
+            return;
+          }
+          const inserted = await recordGroupMessage(msg.payload, ownerId);
           if (
             inserted &&
             expectedProvider === 'telegram' &&

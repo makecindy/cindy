@@ -867,10 +867,17 @@ export function registerHookControlIpc(): void {
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.TELEGRAM_GROUPS_LIST, async () => {
     requireHookControl();
     try {
-      const [knownGroups, behavior] = await Promise.all([
-        listTelegramKnownGroups(),
-        ensureInstances().manager.getTelegramBehavior(),
-      ]);
+      const { manager: m } = ensureInstances();
+      const behavior = await m.getTelegramBehavior();
+      const binding = m.snapshot().telegram.binding;
+      if (
+        binding?.state !== 'confirmed' ||
+        binding.bindingId !== behavior.bindingId ||
+        !binding.principalId
+      ) {
+        throw new HookNotConnectedError('telegram');
+      }
+      const knownGroups = await listTelegramKnownGroups(binding.principalId);
       return {
         groups: knownGroups.map((group) => ({
           ...group,

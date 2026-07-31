@@ -71,44 +71,128 @@ function SegmentedRow<T extends string>(props: {
   );
 }
 
+function SettingsRequestError(props: { message: string; retryLabel: string; onRetry: () => void }) {
+  return (
+    <div className="flex items-center justify-between gap-3 text-11 text-[var(--settings-section-desc)]">
+      <span>{props.message}</span>
+      <button
+        type="button"
+        onClick={props.onRetry}
+        className="h-[26px] shrink-0 rounded-full border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)] px-3 font-medium text-[var(--settings-btn-secondary-text)] transition-colors"
+      >
+        {props.retryLabel}
+      </button>
+    </div>
+  );
+}
+
 export function TelegramBehaviorSettings({ source = 'personal' }: { source?: SettingsSource }) {
   const { t } = useTranslation();
   const [behavior, setBehavior] = useState<Behavior | null>(null);
+  const [error, setError] = useState<'load' | 'save' | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
+  const behaviorRef = useRef<Behavior | null>(null);
+  const confirmedRef = useRef<Behavior | null>(null);
+  const pendingWrites = useRef(0);
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const latestRevision = useRef(0);
+  const mounted = useRef(true);
   const root = i18nRoot(source);
 
   useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
+    setError(null);
     const load =
       source === 'official'
         ? window.electronAPI.hookControl.getTelegramBehavior().then((value) => value.behavior)
         : window.electronAPI.telegramBot.getBehavior();
-    void load.then((value) => {
-      if (!cancelled) setBehavior(value);
-    });
+    void load
+      .then((value) => {
+        if (cancelled) return;
+        behaviorRef.current = value;
+        confirmedRef.current = value;
+        setBehavior(value);
+      })
+      .catch(() => {
+        if (!cancelled) setError('load');
+      });
     const unsubscribe =
       source === 'official'
         ? window.electronAPI.hookControl.onTelegramBehaviorChanged((value) => {
-            if (!cancelled) setBehavior(value);
+            if (cancelled || pendingWrites.current > 0) return;
+            behaviorRef.current = value;
+            confirmedRef.current = value;
+            setBehavior(value);
+            setError(null);
           })
         : undefined;
     return () => {
       cancelled = true;
       unsubscribe?.();
     };
-  }, [source]);
+  }, [reloadToken, source]);
 
-  if (!behavior) return null;
+  if (!behavior) {
+    return error === 'load' ? (
+      <SettingsRequestError
+        message={t(`${root}.behavior.error.load`)}
+        retryLabel={t(`${root}.behavior.error.retry`)}
+        onRetry={() => setReloadToken((value) => value + 1)}
+      />
+    ) : null;
+  }
 
   const patch = (partial: Partial<Behavior>) => {
-    // 乐观更新; main 侧 store 白名单校验后回真值。
-    setBehavior({ ...behavior, ...partial });
-    const save =
-      source === 'official'
-        ? window.electronAPI.hookControl
-            .setTelegramBehavior(partial)
-            .then((value) => value.behavior)
-        : window.electronAPI.telegramBot.setBehavior(partial);
-    void save.then(setBehavior);
+    const optimistic = { ...(behaviorRef.current ?? behavior), ...partial };
+    behaviorRef.current = optimistic;
+    setBehavior(optimistic);
+    setError(null);
+    const revision = ++latestRevision.current;
+    pendingWrites.current += 1;
+    saveQueue.current = saveQueue.current.then(async () => {
+      try {
+        const saved =
+          source === 'official'
+            ? await window.electronAPI.hookControl
+                .setTelegramBehavior(partial)
+                .then((value) => value.behavior)
+            : await window.electronAPI.telegramBot.setBehavior(partial);
+        confirmedRef.current = saved;
+        if (mounted.current && revision === latestRevision.current) {
+          behaviorRef.current = saved;
+          setBehavior(saved);
+          setError(null);
+        }
+      } catch {
+        if (revision !== latestRevision.current) return;
+        let authoritative = confirmedRef.current;
+        try {
+          authoritative =
+            source === 'official'
+              ? await window.electronAPI.hookControl
+                  .getTelegramBehavior()
+                  .then((value) => value.behavior)
+              : await window.electronAPI.telegramBot.getBehavior();
+          confirmedRef.current = authoritative;
+        } catch {
+          // Keep the last confirmed snapshot; the inline retry remains available.
+        }
+        if (mounted.current && authoritative !== null) {
+          behaviorRef.current = authoritative;
+          setBehavior(authoritative);
+          setError('save');
+        }
+      } finally {
+        pendingWrites.current -= 1;
+      }
+    });
   };
 
   return (
@@ -116,6 +200,13 @@ export function TelegramBehaviorSettings({ source = 'personal' }: { source?: Set
       <div className="text-13 font-medium text-[var(--settings-section-title)]">
         {t(`${root}.behavior.title`)}
       </div>
+      {error === 'save' && (
+        <SettingsRequestError
+          message={t(`${root}.behavior.error.save`)}
+          retryLabel={t(`${root}.behavior.error.retry`)}
+          onRetry={() => setReloadToken((value) => value + 1)}
+        />
+      )}
       <SegmentedRow
         label={t(`${root}.behavior.emojiLabel`)}
         hint={t(`${root}.behavior.emojiHint.${behavior.emojiReactions}`)}
@@ -335,46 +426,131 @@ export function TelegramGroupActivationSettings({
 }) {
   const { t } = useTranslation();
   const [groups, setGroups] = useState<TelegramHookKnownGroup[] | null>(null);
+  const [error, setError] = useState<'load' | 'save' | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
+  const groupsRef = useRef<TelegramHookKnownGroup[] | null>(null);
+  const confirmedRef = useRef<TelegramHookKnownGroup[] | null>(null);
+  const pendingWrites = useRef(0);
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const latestRevision = useRef(0);
+  const mounted = useRef(true);
   const root = i18nRoot(source);
 
   useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
+    setError(null);
     const load =
       source === 'official'
         ? window.electronAPI.hookControl.listTelegramGroups()
         : window.electronAPI.telegramBot.listGroups();
-    void load.then((result) => {
-      if (!cancelled) setGroups(result.groups);
-    });
+    void load
+      .then((result) => {
+        if (cancelled) return;
+        groupsRef.current = result.groups;
+        confirmedRef.current = result.groups;
+        setGroups(result.groups);
+      })
+      .catch(() => {
+        if (!cancelled) setError('load');
+      });
     const unsubscribe =
       source === 'official'
         ? window.electronAPI.hookControl.onTelegramBehaviorChanged((behavior) => {
-            if (cancelled) return;
-            setGroups(
-              (current) =>
-                current?.map((group) => ({
-                  ...group,
-                  activation:
-                    behavior.groupActivation[group.chatId] === 'always' ? 'always' : 'mention',
-                })) ?? null,
-            );
+            if (cancelled || pendingWrites.current > 0) return;
+            const next =
+              groupsRef.current?.map((group) => ({
+                ...group,
+                activation:
+                  behavior.groupActivation[group.chatId] === 'always'
+                    ? ('always' as const)
+                    : ('mention' as const),
+              })) ?? null;
+            groupsRef.current = next;
+            confirmedRef.current = next;
+            setGroups(next);
+            setError(null);
           })
         : undefined;
     return () => {
       cancelled = true;
       unsubscribe?.();
     };
-  }, [source]);
+  }, [reloadToken, source]);
 
-  if (!groups) return null;
+  if (!groups) {
+    return error === 'load' ? (
+      <SettingsRequestError
+        message={t(`${root}.groups.error.load`)}
+        retryLabel={t(`${root}.groups.error.retry`)}
+        onRetry={() => setReloadToken((value) => value + 1)}
+      />
+    ) : null;
+  }
 
   const setMode = (chatId: string, mode: TelegramHookGroupActivationMode) => {
-    setGroups(groups.map((g) => (g.chatId === chatId ? { ...g, activation: mode } : g)));
-    if (source === 'official') {
-      void window.electronAPI.hookControl.setTelegramGroupActivation(chatId, mode);
-    } else {
-      void window.electronAPI.telegramBot.setGroupActivation({ chatId, mode });
-    }
+    const optimistic = (groupsRef.current ?? groups).map((group) =>
+      group.chatId === chatId ? { ...group, activation: mode } : group,
+    );
+    groupsRef.current = optimistic;
+    setGroups(optimistic);
+    setError(null);
+    const revision = ++latestRevision.current;
+    pendingWrites.current += 1;
+    saveQueue.current = saveQueue.current.then(async () => {
+      try {
+        if (source === 'official') {
+          const result = await window.electronAPI.hookControl.setTelegramGroupActivation(
+            chatId,
+            mode,
+          );
+          const authoritative = (groupsRef.current ?? optimistic).map((group) => ({
+            ...group,
+            activation:
+              result.behavior.groupActivation[group.chatId] === 'always'
+                ? ('always' as const)
+                : ('mention' as const),
+          }));
+          confirmedRef.current = authoritative;
+          if (mounted.current && revision === latestRevision.current) {
+            groupsRef.current = authoritative;
+            setGroups(authoritative);
+          }
+        } else {
+          await window.electronAPI.telegramBot.setGroupActivation({ chatId, mode });
+          confirmedRef.current = (confirmedRef.current ?? groups).map((group) =>
+            group.chatId === chatId ? { ...group, activation: mode } : group,
+          );
+        }
+        if (mounted.current && revision === latestRevision.current) setError(null);
+      } catch {
+        if (revision !== latestRevision.current) return;
+        let authoritative = confirmedRef.current;
+        try {
+          authoritative = (
+            source === 'official'
+              ? await window.electronAPI.hookControl.listTelegramGroups()
+              : await window.electronAPI.telegramBot.listGroups()
+          ).groups;
+          confirmedRef.current = authoritative;
+        } catch {
+          // Keep the last confirmed snapshot; the inline retry remains available.
+        }
+        if (mounted.current && authoritative !== null) {
+          groupsRef.current = authoritative;
+          setGroups(authoritative);
+          setError('save');
+        }
+      } finally {
+        pendingWrites.current -= 1;
+      }
+    });
   };
 
   return (
@@ -385,6 +561,13 @@ export function TelegramGroupActivationSettings({
       <div className="text-11 leading-[1.5] text-[var(--settings-section-desc)] opacity-80">
         {t(`${root}.groups.hint`)}
       </div>
+      {error === 'save' && (
+        <SettingsRequestError
+          message={t(`${root}.groups.error.save`)}
+          retryLabel={t(`${root}.groups.error.retry`)}
+          onRetry={() => setReloadToken((value) => value + 1)}
+        />
+      )}
       <ContactsAutoRegisterHint root={root} />
       {groups.length === 0 ? (
         <div className="text-12 text-[var(--settings-section-desc)]">
