@@ -584,6 +584,29 @@ describe('runMemoryChangeWithCodexRestart', () => {
     expect(deps.scheduleDeferredRestart).not.toHaveBeenCalled();
   });
 
+  it('立即路径 inherited-runtime 期间 owner 失效: 不 clear 不 finalize, 只释放 guard', async () => {
+    // teardown 在 inherited-runtime 的 await 期间完成时,holder/maker facade 已是
+    // 新 owner 的 —— 继续 clear/finalize 会清掉新 owner 的登记并关闭其 runtime
+    // (review 第 5 轮)。过期路径只走 cancel 释放原 guard。
+    const deps = createDeps();
+    let ownerScopeFlipped = false;
+    const takePendingApplyRuntime = vi.fn(() => async () => {
+      ownerScopeFlipped = true;
+    });
+    const result = await runMemoryChangeWithCodexRestart(
+      { ...deps, takePendingApplyRuntime },
+      {
+        persist: async () => ({ value: 13 }),
+        reason: 'subagent-spawn-config-change',
+        stillValid: () => !ownerScopeFlipped,
+      },
+    );
+    expect(result).toEqual({ value: 13, codexRestartDeferred: false });
+    expect(deps.clearDeferredRestart).not.toHaveBeenCalled();
+    expect(deps.finalize).not.toHaveBeenCalled();
+    expect(deps.cancel).toHaveBeenCalledTimes(1);
+  });
+
   it('finalize 失败只 warn, 设置提交结果照常返回', async () => {
     const deps = createDeps();
     deps.finalize.mockRejectedValueOnce(new Error('restart failed'));

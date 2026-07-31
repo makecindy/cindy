@@ -352,11 +352,29 @@ export async function runMemoryChangeWithCodexRestart<T extends object>(
   let changed = false;
   try {
     const result = await parts.persist();
+    // 立即路径的 owner/boundary 复核:persist 与 inherited-runtime 的 await 期间
+    // teardown 可能已完成 —— holder 与 maker facade 都是全局动态解析,继续
+    // clear/finalize 会清掉**新 owner** 的登记并关闭其 Codex runtime(review 第
+    // 5 轮)。过期路径只走 finally 的 cancel 释放原 guard,不做任何全局副作用;
+    // 旧登记由 owner boundary 自己的清理收口。
+    const stale = () => (parts.stillValid ? !parts.stillValid() : false);
+    if (stale()) {
+      deps.logger?.info('immediate codex restart skipped: change stale before runtime apply', {
+        reason: parts.reason ?? 'memory-change',
+      });
+      return { ...result, codexRestartDeferred: false };
+    }
     // 本域无 runtime 工作时,把别的设置域排队中的回调原子取走并原地补执行 ——
     // 下方 clearDeferredRestart 会丢弃登记,不补执行就是静默丢工作(review 第 2 轮)。
     // 此刻凭证守卫已被持有,其它设置变更过不了 prepare,无再登记竞争。
     const runtime = parts.applyRuntime ?? deps.takePendingApplyRuntime?.() ?? null;
     if (runtime) await runtime();
+    if (stale()) {
+      deps.logger?.info('immediate codex restart skipped: change stale after runtime apply', {
+        reason: parts.reason ?? 'memory-change',
+      });
+      return { ...result, codexRestartDeferred: false };
+    }
     changed = true;
     // 本次立即变更已带最新设置走完 persist + runtime,任何仍挂着的旧延迟登记
     // 都被覆盖 —— 即使下方 finalize 失败也要清(设置已提交,旧 applyRuntime
