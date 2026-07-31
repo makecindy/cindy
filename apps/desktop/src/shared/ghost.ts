@@ -4842,23 +4842,14 @@ export const GHOST_VIDEO_REF_MODE_DEFAULT: GhostVideoRefMode = 'first_and_last_f
  *   - 参考图:9,当前所有 provider 的最大值。
  * 型号实际上限更低(如 happyhorse 首尾帧模式只有首帧,上限 1)由主机在
  * 解析出选型后二次校验。
+ *
+ * 张数之外还有一道**总字节闸**(GHOST_VIDEO_REF_IMAGE_MAX_TOTAL_BYTES,定义
+ * 在寄存上限旁边,值由它派生):9 张小图与 2 张巨图是不同的失败面。
  */
 export const GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE: Readonly<Record<GhostVideoRefMode, number>> = {
   first_and_last_frame: 2,
   reference_image: 9,
 };
-
-/**
- * 单次图生视频的**参考图总字节**上限(48MB)。张数上限之外还要有字节闸:
- * 寄存单张可达 GHOST_CINDY_DEPOSIT_MAX_BYTES(50MB),9 张全顶格就是 450MB
- * 原始字节;主机把它们读成 base64 data URI 时按 4/3 膨胀,JSON 请求体再复制
- * 一份 —— 峰值约聚合量的 3.7 倍,足以让 main 进程 OOM 或长时间卡死。
- *
- * 主机在**读取字节之前**先 stat 出总量再决定读不读:超限的请求一个字节都
- * 不会被物化。48MB 对 9 张 1080p 级参考图绰绰有余(单张均摊 5MB+),同时把
- * 峰值压在 ~180MB 量级。
- */
-export const GHOST_VIDEO_REF_IMAGE_MAX_TOTAL_BYTES = 48 * 1024 * 1024;
 
 /**
  * 视频时长/帧率的形状上限(秒 / fps)。这两项各型号差异大(如 seedance
@@ -4908,6 +4899,27 @@ export const GHOST_CINDY_MAX_ASYNC_JOBS = 2;
  * 正确解法是插件侧压缩或分片,不是继续抬上限。
  */
 export const GHOST_CINDY_DEPOSIT_MAX_BYTES = 50 * 1024 * 1024;
+
+/**
+ * 单次图生视频的**参考图总字节**上限。张数闸(见
+ * GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE)管"几张",这道闸管"多大" —— 主机要把
+ * 每张读成 base64 data URI 交给上游,链上会同时存在原始 Buffer(1×)+ base64
+ * 字符串(4/3×)+ JSON 请求体(再 4/3×),峰值约聚合量的 3.7 倍。
+ *
+ * 取值不是拍脑袋,是被两头钉死的唯一解 —— 派生自寄存单张上限:
+ *   - **存量路径不许收紧**:多参考图之前,`first_and_last_frame` 本就能拖进
+ *     2 张顶格寄存图(2 × 50MB = 100MB)。预算低于这个数,一张 48MB 的合法
+ *     寄存图就会被这道新闸拒掉 —— 而它在多参考图之前是能跑的。
+ *   - **新路径不许放宽**:`reference_image` 把张数放到 9,若不设闸,最坏
+ *     9 × 50MB = 450MB,足以让 main 进程 OOM 或长时间卡死。预算不得越过
+ *     上面那条既有天花板。
+ * 两个约束都在 100MB 处取等号,所以两种 refMode 共用一个数,不需要分表。
+ *
+ * 推论(存量兼容性的实质保证):在 `first_and_last_frame` 上这道闸恒不触发
+ * —— 张数封在 2,而源图取自寄存(单张 ≤ 50MB),乘积恰好等于预算。它只对新
+ * 放开的多参考图路径真正生效。
+ */
+export const GHOST_VIDEO_REF_IMAGE_MAX_TOTAL_BYTES = 2 * GHOST_CINDY_DEPOSIT_MAX_BYTES;
 
 /**
  * 每意识寄存累计配额(字节)。只统计**寄存**引用(refKind 'ghost-deposit'),

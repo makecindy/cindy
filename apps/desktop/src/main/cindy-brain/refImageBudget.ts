@@ -11,6 +11,13 @@
  * 被物化。张数闸(GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE + 按型号二次校验)管
  * "几张",这道闸管"多大",两者都要过——9 张小图和 2 张巨图是不同的失败面。
  *
+ * 预算取 2 × 寄存单张上限 = 100MB,理由(为何这不会收紧存量路径)见
+ * GHOST_VIDEO_REF_IMAGE_MAX_TOTAL_BYTES 的注释:该值在首尾帧模式下恒不触发。
+ *
+ * 顺序即防线,所以读取也收在本模块里(readRefImagesWithinBudget):把"先 stat
+ * 后读"做成模块内的结构保证,而不是调用点的约定——约定没人守得住,顺序被换
+ * 掉时也没有测试会红。
+ *
  * 与 cindySlot 的分工:那边是协议/资格审层(拿指纹、不碰文件系统),这道闸
  * 需要真实文件大小,只能落在已经握有磁盘路径的主机侧(cindy-brain/index.ts
  * 的 editVideo 注入实现)。
@@ -51,4 +58,20 @@ export async function assertRefImagesWithinBudget(
         `(本次 ${absPaths.length} 张),请换更小的图或减少张数`,
     );
   }
+}
+
+/**
+ * 过闸 → 读取。调用方只该用这个入口:闸与读取绑在一起,顺序就不再是调用点
+ * 的自觉,超限时 readOne 一次都不会被调到(单测直接锁这一点)。
+ *
+ * 结果保序(Promise.all 语义):参考图的顺序有语义——首尾帧模式下是首/尾,
+ * 多参考图模式下是提示词里 `[Image 1]`… 的序号,不能乱。
+ */
+export async function readRefImagesWithinBudget<T>(
+  absPaths: readonly string[],
+  readOne: (absPath: string) => Promise<T>,
+  opts: { statSize?: StatSizeFn; maxTotalBytes?: number } = {},
+): Promise<T[]> {
+  await assertRefImagesWithinBudget(absPaths, opts);
+  return Promise.all(absPaths.map((p) => readOne(p)));
 }

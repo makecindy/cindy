@@ -53,7 +53,7 @@ import { getAccessToken, getAuthState, onAuthStateChange } from '../authManager.
 import { serverApiFetch } from '../serverApiClient.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { createGhostOauthBrokerClient } from './ghostOauthBroker.js';
-import { assertRefImagesWithinBudget } from './refImageBudget.js';
+import { readRefImagesWithinBudget } from './refImageBudget.js';
 import { resolveGhostRepoRoot } from './repoRoot.js';
 import { takePendingCindyInstall } from './openFileInstall.js';
 import { GhostRuntime } from './runtime/GhostRuntime.js';
@@ -2018,11 +2018,10 @@ export function getGhostCindySlot(): GhostCindySlot {
       editVideo: async ({ prompt, model, imagePaths, refMode, ...videoParams }) => {
         try {
           assertMediaModelStillEnabled('video', model);
-          // 先算总量再读:9 张顶格寄存图能有 450MB,读进来就晚了(见函数头注)。
-          await assertRefImagesWithinBudget(imagePaths);
-          // 顺序即语义(首/尾帧,或提示词里 [Image 1]… 的序号):Promise.all
-          // 保序,不要换成 for-await 之外的乱序聚合。
-          const imageDataUris = await Promise.all(imagePaths.map(readImageFileAsDataUri));
+          // 先算总量再读:9 张顶格寄存图能有 450MB,读进来就晚了。闸与读取
+          // 绑在一个入口里(顺序是那边的结构保证,不是这里的约定),结果保序
+          // ——顺序即语义:首/尾帧,或提示词里 [Image 1]… 的序号。
+          const imageDataUris = await readRefImagesWithinBudget(imagePaths, readImageFileAsDataUri);
           return await runGhostVideo({ alias: model, prompt, imageDataUris, refMode, ...videoParams });
         } catch (err) {
           humanizeImageChannelError(err);
