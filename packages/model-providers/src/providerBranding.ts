@@ -76,6 +76,7 @@ const PROVIDER_LOGO_KIND_BY_ID: Readonly<Record<string, ProviderLogoKind>> = {
   'minimax-global': 'minimax',
   'aliyun-bailian-coding': 'alibaba',
   'aliyun-bailian-token-plan-cn': 'alibaba',
+  'aliyun-bailian-token-plan-team-cn': 'alibaba',
   'google-gemini-api': 'google',
   litellm: 'litellm',
   'litellm-proxy': 'litellm',

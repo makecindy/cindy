@@ -426,21 +426,39 @@ describe('官方渠道预设契约', () => {
     }));
   });
 
-  it('阿里云百炼 Coding Plan 与 Token Plan 使用各自的专属端点并保留模型上下文窗口', () => {
+  it('阿里云百炼 Coding Plan 与 Token Plan 使用专属端点，个人/团队版分开锁定模型窗口', () => {
     const codingPlan = preset('aliyun-bailian-coding');
-    const tokenPlan = preset('aliyun-bailian-token-plan-cn');
+    const personalTokenPlan = preset('aliyun-bailian-token-plan-cn');
+    const teamTokenPlan = preset('aliyun-bailian-token-plan-team-cn');
     const codingPlanModels = [
       { id: 'qwen3.7-plus', name: 'Qwen 3.7 Plus' },
       { id: 'qwen3-coder-next', name: 'Qwen3 Coder Next' },
       { id: 'qwen3-coder-plus', name: 'Qwen3 Coder Plus' },
     ];
-    const tokenPlanModels = [
+    const personalTokenPlanModels = [
       { id: 'qwen3.8-max-preview', name: 'Qwen 3.8 Max Preview', contextWindow: 983_616 },
       { id: 'qwen3.7-max', name: 'Qwen 3.7 Max', contextWindow: 992_000 },
       { id: 'qwen3.7-plus', name: 'Qwen 3.7 Plus', contextWindow: 1_000_000 },
       { id: 'qwen3.6-flash', name: 'Qwen 3.6 Flash', contextWindow: 1_000_000 },
       { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 1_000_000 },
       { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1_048_576 },
+    ];
+    const teamTokenPlanModels = [
+      { id: 'qwen3.8-max-preview', name: 'Qwen 3.8 Max Preview', contextWindow: 983_616 },
+      { id: 'qwen3.7-max', name: 'Qwen 3.7 Max', contextWindow: 992_000 },
+      { id: 'qwen3.7-plus', name: 'Qwen 3.7 Plus', contextWindow: 1_000_000 },
+      { id: 'qwen3.6-plus', name: 'Qwen 3.6 Plus', contextWindow: 1_000_000 },
+      { id: 'qwen3.6-flash', name: 'Qwen 3.6 Flash', contextWindow: 1_000_000 },
+      { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1_048_576 },
+      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 1_048_576 },
+      { id: 'deepseek-v3.2', name: 'DeepSeek V3.2', contextWindow: 131_072 },
+      { id: 'kimi-k2.7-code', name: 'Kimi K2.7 Code', contextWindow: 262_144 },
+      { id: 'kimi-k2.6', name: 'Kimi K2.6', contextWindow: 262_144 },
+      { id: 'kimi-k2.5', name: 'Kimi K2.5', contextWindow: 262_144 },
+      { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 1_000_000 },
+      { id: 'glm-5.1', name: 'GLM-5.1', contextWindow: 202_752 },
+      { id: 'glm-5', name: 'GLM-5', contextWindow: 202_752 },
+      { id: 'MiniMax-M2.5', name: 'MiniMax M2.5', contextWindow: 196_608 },
     ];
     const tokenPlanModelsUrl =
       'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/models';
@@ -451,10 +469,16 @@ describe('官方渠道预设契约', () => {
       docsUrl: 'https://help.aliyun.com/zh/model-studio/coding-plan',
       regionHint: 'cn',
     }));
-    expect(tokenPlan).toEqual(expect.objectContaining({
-      name: '阿里云百炼 Token Plan（包月）',
-      nameEn: 'Alibaba Cloud Bailian Token Plan',
-      docsUrl: 'https://help.aliyun.com/zh/model-studio/token-plan-overview',
+    expect(personalTokenPlan).toEqual(expect.objectContaining({
+      name: '阿里云百炼 Token Plan（个人版）',
+      nameEn: 'Alibaba Cloud Bailian Token Plan (Personal)',
+      docsUrl: 'https://help.aliyun.com/zh/model-studio/token-plan-personal-overview',
+      regionHint: 'cn',
+    }));
+    expect(teamTokenPlan).toEqual(expect.objectContaining({
+      name: '阿里云百炼 Token Plan（团队版）',
+      nameEn: 'Alibaba Cloud Bailian Token Plan (Team)',
+      docsUrl: 'https://help.aliyun.com/zh/model-studio/token-plan-team-overview',
       regionHint: 'cn',
     }));
     expect(codingPlan?.runtimes['claude-code']).toEqual({
@@ -467,17 +491,22 @@ describe('官方渠道预设契约', () => {
       wireProtocol: 'openai-chat',
       models: codingPlanModels,
     });
-    expect(tokenPlan?.runtimes['claude-code']).toEqual({
-      baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic',
-      modelsUrl: tokenPlanModelsUrl,
-      models: tokenPlanModels,
-    });
-    expect(tokenPlan?.runtimes.codex).toEqual({
-      baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
-      wireProtocol: 'openai-chat',
-      modelsUrl: tokenPlanModelsUrl,
-      models: tokenPlanModels,
-    });
+    for (const [tokenPlan, models] of [
+      [personalTokenPlan, personalTokenPlanModels],
+      [teamTokenPlan, teamTokenPlanModels],
+    ] as const) {
+      expect(tokenPlan?.runtimes['claude-code']).toEqual({
+        baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic',
+        modelsUrl: tokenPlanModelsUrl,
+        models,
+      });
+      expect(tokenPlan?.runtimes.codex).toEqual({
+        baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
+        wireProtocol: 'openai-chat',
+        modelsUrl: tokenPlanModelsUrl,
+        models,
+      });
+    }
   });
 
   it('小米按量与 Token Plan 凭证不会混用端点', () => {
