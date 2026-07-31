@@ -261,4 +261,25 @@ describe('isAmbiguousPathShape(远程会话 unknown 的乐观点亮门槛)', () 
       expect(isAmbiguousPathShape(p), p).toBe(true);
     }
   });
+
+  it('尾斜杠目录 → 不歧义,且必须回看 originalHref(classify* 已剥掉尾杠)', () => {
+    // classifyInlineCodeTarget / classifyMarkdownLinkTarget 产出 candidate 前就把
+    // 尾斜杠剥了,只看 href 会把显式目录引用误判成歧义、断链时退化成纯文本
+    // (PR #1144 review 实捉)。
+    expect(isAmbiguousPathShape('src/components'), '只看 href 时仍是歧义').toBe(true);
+    expect(isAmbiguousPathShape('src/components', 'src/components/'), '回看 originalHref 后不歧义').toBe(false);
+    expect(isAmbiguousPathShape('docs', 'docs/')).toBe(false);
+    expect(isAmbiguousPathShape('C:\\proj', 'C:\\proj\\')).toBe(false);
+    // originalHref 无尾杠时不受影响。
+    expect(isAmbiguousPathShape('array.map', 'array.map')).toBe(true);
+  });
+
+  it('尾斜杠目录候选的 originalHref 真的保留了尾杠(与上一条形成端到端)', () => {
+    const t = classifyInlineCodeTarget('src/components/');
+    expect(t?.kind).toBe('local-candidate');
+    const c = t as Extract<typeof t, { kind: 'local-candidate' }>;
+    expect(c.href, 'href 已剥尾杠').toBe('src/components');
+    expect(c.originalHref, 'originalHref 保留尾杠').toBe('src/components/');
+    expect(isAmbiguousPathShape(c.href, c.originalHref)).toBe(false);
+  });
 });

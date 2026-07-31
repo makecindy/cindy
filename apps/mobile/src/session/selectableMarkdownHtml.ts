@@ -314,9 +314,16 @@ function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): str
       font-size: inherit;
     }
     /* 可点的 http(s) 链接:**只有下划线**,颜色继承上下文(DESIGN.md §14.5 —— 可点态
-       相对不可点态只多一条横线)。刻意不写 color:表头等非正文色上下文里写死 textColor
-       会让链接除下划线之外还变色(PR #1144 review 实捉)。 */
+       相对不可点态只多一条横线)。不写死 textColor:表头等非正文色上下文里会让链接除
+       下划线之外还变色。
+       但这里必须**显式**写 color: inherit 而不是留空 —— 本文件是手写 CSS 模板,没有
+       Tailwind preflight 那种 a { color: inherit } 复位,留空会命中 UA 样式表的
+       a:link { color: -webkit-link },外链掉回浏览器默认蓝(既违反本规则,又不随
+       light/dark 适配、深色底对比度差)。桌面靠 preflight、RN Text 靠天然继承,唯独
+       WebView 需要这一行(PR #1144 review 实捉)。
+       ⚠️ 本段在 JS 模板字符串内,注释里不能用反引号。 */
     a {
+      color: inherit;
       text-decoration: underline;
     }
     img {

@@ -174,6 +174,18 @@ describe('阅读器里「有下划线 = 可点」不得出现反例(DESIGN.md §
     expect(ruleBody('a')).toMatch(/text-decoration:\s*underline/);
   });
 
+  it('外链 a 必须显式 color: inherit —— 留空会掉回 UA 蓝', () => {
+    // 本文件是手写 CSS 模板,没有 Tailwind preflight 的 `a { color: inherit }` 复位。
+    // 留空时 UA 样式表 `a:link { color: -webkit-link }` 会盖过从 body 继承的颜色,
+    // 外链渲染成浏览器默认蓝 —— 既违反「可点态只多一条下划线」,又不随 light/dark
+    // 适配(PR #1144 review 实捉)。桌面靠 preflight、RN Text 靠天然继承,唯独这里
+    // 需要显式声明。
+    const body = ruleBody('a');
+    expect(body, 'a 缺少显式 color: inherit').toMatch(/color:\s*inherit/);
+    // 也不能写死某个具体色值(那是「除下划线之外还变色」的另一种形式)。
+    expect(body, 'a 不得写死具体颜色').not.toMatch(/color:\s*(#|rgb|hsl)/i);
+  });
+
   it('点不动的 chip 一律不带下划线,也不带 pointer', () => {
     for (const selector of ['.xdt-image-chip', '.xdt-session-chip']) {
       const body = ruleBody(selector);

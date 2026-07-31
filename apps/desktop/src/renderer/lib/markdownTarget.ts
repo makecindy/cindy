@@ -170,7 +170,14 @@ function classifyLocalCandidate(
  * 本机会话不需要这道门槛:那边走 resolveLocalPathSmart 的真实存在性检查,
  * 解析不到一律纯文本,没有「无法判定」这个中间态。
  */
-export function isAmbiguousPathShape(href: string): boolean {
+export function isAmbiguousPathShape(href: string, originalHref?: string): boolean {
+  // 尾斜杠是作者显式给出的目录信号,形状明确 → **不歧义**(DESIGN.md §14.5 的表里
+  // 「尾斜杠目录」与绝对路径同列)。但 classifyInlineCodeTarget /
+  // classifyMarkdownLinkTarget 在产出 candidate 前就把尾斜杠剥掉了(href 全链路
+  // 统一无尾杠形态),所以这里必须回看 originalHref,否则 `src/components/` 会被
+  // 误判成歧义、在断链时退化成纯文本 —— 与移动端 candidate.directoryShape 等价
+  // (PR #1144 review 实捉)。
+  if (looksLikeDirectoryPath(originalHref ?? href)) return false;
   return !looksLikeFilePath(href);
 }
 

@@ -772,6 +772,12 @@ function matchBareFilePathLink(
         continue;
       }
     }
+    // 标签标记内部(属性值等)跳过:命中会拆坏标签结构。元素内容不挡 —— 与既有
+    // strong / inlineCode / 裸 URL matcher 同口径(见 isInsideHtmlTagMarkup 的说明)。
+    if (isInsideHtmlTagMarkup(input, match.index)) {
+      cursor = match.end;
+      continue;
+    }
     return {
       index: match.index,
       end: match.end,
@@ -1007,6 +1013,27 @@ function parseLocalMarkdownDestination(raw: string): string {
 // HTML 注释里的 Markdown 图片是被注释掉的内容,不渲染(桌面端 skipHtml 同样留字面/丢弃);
 // 只压制落在注释 span 内的匹配,注释之外的合法图片不受影响(与 matchHtmlImage 的整段拒转不同,
 // 因为 remark 语义下注释不会"包裹"住整段的独立 Markdown 图片)。未闭合注释视为延伸到段尾。
+// 标签标记(`<span title="…">`、`</div>`)的字符区间。用于把裸路径 matcher 挡在标签
+// **标记内部**之外:命中属性值会把整段拆成 `<span title="` + 链接 + `">x</span>`,那是在
+// 破坏标签结构,而不是给正文加链接(PR #1144 review 实捉)。
+//
+// 只挡标记内部,**不挡元素内容**:`<div>src/App.tsx</div>` 里的路径与既有的
+// strong / inlineCode / 裸 URL matcher 行为一致(它们同样会在字面 HTML 的内容里解析,
+// 实测过),单独把裸路径排除反而会造成本文件内部不一致。
+// 只认真正像标签的形态,`a < b` 这类散文里的 `<` 不构成区间。
+const HTML_TAG_SPAN_RE = /<\/?[A-Za-z][\w.-]*(?::[A-Za-z][\w.-]*)*(?:\s[^<>]*)?\/?>/g;
+
+function isInsideHtmlTagMarkup(input: string, index: number): boolean {
+  if (!input.includes('<')) return false;
+  HTML_TAG_SPAN_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = HTML_TAG_SPAN_RE.exec(input)) !== null) {
+    if (index >= m.index && index < m.index + m[0].length) return true;
+    if (m.index > index) return false;
+  }
+  return false;
+}
+
 function isInsideHtmlComment(input: string, index: number, startsInsideHtmlComment = false): boolean {
   let cursor = 0;
   if (startsInsideHtmlComment) {

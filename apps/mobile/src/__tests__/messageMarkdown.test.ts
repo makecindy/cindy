@@ -1214,6 +1214,42 @@ describe('bare file paths(正文纯文本形态)', () => {
     ]);
   });
 
+  it('标签标记内部的路径不识别(属性值命中会拆坏标签结构)', () => {
+    // `<span title="src/App.tsx">x</span>` 若命中会被拆成
+    // `<span title="` + 链接 + `">x</span>` —— 那是在破坏标签,不是给正文加链接
+    // (PR #1144 review 实捉)。
+    expect(parseMobileMarkdownInlines('<span title="src/App.tsx">x</span>')).toEqual([
+      { type: 'text', text: '<span title="src/App.tsx">x</span>' },
+    ]);
+    expect(parseMobileMarkdownInlines('<img src="docs/a.png" alt="x">')).toEqual([
+      { type: 'text', text: '<img src="docs/a.png" alt="x">' },
+    ]);
+  });
+
+  it('元素内容里的路径照常识别(与既有 strong / code / 裸 URL matcher 同口径)', () => {
+    // 刻意**不**挡元素内容:实测既有 matcher 在字面 HTML 的内容里同样会解析
+    // (`<div>**加粗**</div>` → strong、`<div>https://x.com</div>` → link),
+    // 单独把裸路径排除反而造成本文件内部不一致。
+    expect(parseMobileMarkdownInlines('<div>src/App.tsx</div>')).toEqual([
+      { type: 'text', text: '<div>' },
+      { type: 'link', text: 'src/App.tsx', url: 'src/App.tsx', bare: true },
+      { type: 'text', text: '</div>' },
+    ]);
+    // 同段的既有行为作对照,证明口径一致而非特例。
+    expect(parseMobileMarkdownInlines('<div>**加粗**</div>')).toEqual([
+      { type: 'text', text: '<div>' },
+      { type: 'strong', text: '加粗' },
+      { type: 'text', text: '</div>' },
+    ]);
+  });
+
+  it('散文里的 `<` 不构成标签区间,不影响路径识别', () => {
+    expect(parseMobileMarkdownInlines('若 a < b 则看 src/App.tsx')).toEqual([
+      { type: 'text', text: '若 a < b 则看 ' },
+      { type: 'link', text: 'src/App.tsx', url: 'src/App.tsx', bare: true },
+    ]);
+  });
+
   it('已知取舍:被强调包裹的路径不成 chip(手机 inline 模型扁平,不支持嵌套)', () => {
     // 桌面 remark 能在 strong 的子 text 里继续 linkify;手机端 inline 无嵌套,
     // 强调整段吃掉。属既有架构限制,本次不扩,先把现状钉住。

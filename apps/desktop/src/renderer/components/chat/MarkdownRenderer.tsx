@@ -1183,7 +1183,8 @@ function useResolvedMarkdownTarget(
       // (裸名 `array.map`、分隔符无扩展 `and/or`)必须等远端明确回 file / directory,
       // 否则链路一抖,普通行内 code 会被展示成带下划线的可点文件、点了必失败
       // (DESIGN.md §14.5 规则 5;移动端同款门槛在 ChatPathChipSpan)。
-      const optimisticOk = verdict === 'unknown' && !isAmbiguousPathShape(candidate.href);
+      const optimisticOk = verdict === 'unknown'
+        && !isAmbiguousPathShape(candidate.href, candidate.originalHref);
       if (verdict === 'file' || verdict === 'directory' || optimisticOk) {
         return resolvedLocalFromResult(candidate, {
           status: 'unique',
@@ -1213,7 +1214,7 @@ function useResolvedMarkdownTarget(
       void verifyRemotePathCached(remoteOrigin, workingDir, absPath).then((verdict) => {
         if (cancelled || verdict === 'nonfile') return;
         // 与 sync 分支同一道门槛(见那边的说明):歧义形状不吃 unknown 的乐观点亮。
-        if (verdict === 'unknown' && isAmbiguousPathShape(candidate.href)) return;
+        if (verdict === 'unknown' && isAmbiguousPathShape(candidate.href, candidate.originalHref)) return;
         setAsyncResolved(
           resolvedLocalFromResult(candidate, {
             status: 'unique',
