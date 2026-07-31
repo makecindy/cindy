@@ -38,7 +38,13 @@ describe('findHistoryWindowGap', () => {
 
   it('找到跳变两侧的行', () => {
     const gap = findHistoryWindowGap([row('head', 0), row('head-2', 2), row('tail', 140)]);
-    expect(gap).toEqual({ newerId: 'tail', olderId: 'head-2', gapMs: 138 * 60_000 });
+    expect(gap).toEqual({
+      newerId: 'tail',
+      olderId: 'head-2',
+      newerMs: BASE_MS + 140 * 60_000,
+      olderMs: BASE_MS + 2 * 60_000,
+      gapMs: 138 * 60_000,
+    });
   });
 
   it('多处跳变时取最靠尾部的一处', () => {
@@ -78,7 +84,13 @@ describe('findHistoryWindowGap', () => {
     expect(tailGap.newerId).toBe('c');
 
     const earlierGap = findHistoryWindowGap(window, new Set([historyWindowGapKey(tailGap)]));
-    expect(earlierGap).toEqual({ newerId: 'b', olderId: 'a', gapMs: 100 * 60_000 });
+    expect(earlierGap).toEqual({
+      newerId: 'b',
+      olderId: 'a',
+      newerMs: BASE_MS + 100 * 60_000,
+      olderMs: BASE_MS,
+      gapMs: 100 * 60_000,
+    });
 
     const bothConsidered = new Set([
       historyWindowGapKey(tailGap),
@@ -89,7 +101,13 @@ describe('findHistoryWindowGap', () => {
 });
 
 describe('backfillHistoryWindowGap', () => {
-  const gap: HistoryWindowGap = { newerId: 'tail', olderId: 'head', gapMs: 138 * 60_000 };
+  const gap: HistoryWindowGap = {
+    newerId: 'tail',
+    olderId: 'head',
+    newerMs: BASE_MS + 140 * 60_000,
+    olderMs: BASE_MS + 2 * 60_000,
+    gapMs: 138 * 60_000,
+  };
 
   it('探测发现两行本来就相邻 → 真安静的会话，不翻页也不 merge', async () => {
     const merge = vi.fn();
@@ -146,6 +164,46 @@ describe('backfillHistoryWindowGap', () => {
 
     expect(outcome).toBe('covered');
     expect(listPage.mock.calls.map((call) => call[0])).toEqual(['tail', 'zzz']);
+  });
+
+  it('锚点不是同毫秒组最旧那行时，探测沿组内继续往更旧处走，仍判为真安静', async () => {
+    // 回归:同毫秒落库的多行在手机端只剩相同 createdAt,服务端的次级键 rowid 不在每一行上都有
+    // (push 追加的行就没有),所以检测阶段挑出的 newerId 可能不是该组最旧的一行。此时 limit=1
+    // 探测会取回同组另一行 —— 按 id 精确匹配就会误判成有洞,一路翻页并把这处正常停顿记成
+    // backfilled,三处这样的停顿即可耗尽翻页额度、让更早的真实空洞继续缺失（#1210 review）。
+    const merge = vi.fn();
+    const pages: Record<string, RemoteMessage[]> = {
+      'tail-b': [row('tail-a', 140)], // 同一毫秒的另一行
+      'tail-a': [row('head', 2)], // 组内走到底,前一刻就是较旧侧
+    };
+    const listPage = vi.fn(async (before: string) => pages[before] ?? []);
+    const outcome = await backfillHistoryWindowGap({ ...gap, newerId: 'tail-b' }, {
+      listPage,
+      merge,
+      isCancelled: () => false,
+    });
+
+    expect(outcome).toBe('contiguous');
+    expect(listPage.mock.calls.map((call) => call[0])).toEqual(['tail-b', 'tail-a']);
+    // 只在同毫秒组内推进,每步都是 limit=1;没有退化成整页翻页。
+    expect(listPage).toHaveBeenCalledWith('tail-b', 1);
+    expect(listPage).toHaveBeenCalledWith('tail-a', 1);
+  });
+
+  it('较旧侧是同毫秒组的另一行时，翻页仍判为已连上', async () => {
+    // 连上判定同样不能按 olderId 精确匹配:取回同组的另一行就等价于两段之间再无缺口,
+    // 按 id 比会漏判成"还没连上",于是白翻到预算耗尽、把已经补好的空洞记成 budget。
+    const listPage = vi.fn()
+      .mockResolvedValueOnce([row('mid-1', 100)])
+      .mockResolvedValueOnce([row('head-a', 2)]); // 与 olderId('head') 同毫秒、不同 id
+    const outcome = await backfillHistoryWindowGap(gap, {
+      listPage,
+      merge: () => undefined,
+      isCancelled: () => false,
+    });
+
+    expect(outcome).toBe('covered');
+    expect(listPage).toHaveBeenCalledTimes(2);
   });
 
   it('判定只看本页取回的行，不看合并后的窗口', async () => {

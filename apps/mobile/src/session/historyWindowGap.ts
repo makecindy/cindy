@@ -88,11 +88,33 @@ export const HISTORY_BACKFILL_MAX_REQUESTS = 12;
 /** 探测两行在服务端是否真的相邻时的页大小(只要一行就够,payload 最小)。 */
 export const HISTORY_GAP_PROBE_LIMIT = 1;
 
+/**
+ * 探测最多往同一毫秒组内推进几步。
+ *
+ * 同一毫秒落库的多行,在手机端只剩相同的 `createdAt`;服务端的次级排序键是 `rowid`,而它不在
+ * 手机端窗口里的每一行上都有(push 追加的行就没有),所以**检测阶段无法知道同毫秒组内谁更旧**。
+ * 于是跳变较新一侧挑出的锚点可能不是该组最旧的一行,`limit=1` 探测会取回同组的另一行 —— 若把
+ * 这当成"取回了别的行"就会误判成有洞,一路翻页并把这处正常停顿记成 `backfilled`,三处这样的
+ * 停顿就能耗尽翻页额度、让更早的真实空洞继续缺失(#1210 review)。
+ *
+ * 处置办法不是去猜组内次序,而是让探测**沿组内继续往更旧处走**:取回的行仍落在同一毫秒时,把
+ * 它当新游标再探一次。同毫秒组通常只有几行(一次 turn 的并发落库),8 步足够;病态数据(几百行
+ * 挤在同一毫秒)超出后按"有洞"处理,翻页循环自己会正常前进,不会卡住。
+ */
+export const HISTORY_GAP_PROBE_MAX_STEPS = 8;
+
 export interface HistoryWindowGap {
-  /** 空洞较新一侧那一行的 id —— 向上翻页的 `before` 游标。 */
+  /** 空洞较新一侧那一行的 id —— 探测与向上翻页的起始 `before` 游标。 */
   newerId: string;
   /** 空洞较旧一侧那一行的 id —— 取回它即视为窗口已连上。 */
   olderId: string;
+  /**
+   * 两侧的落库时刻。判定"是否相邻"用的是**时刻**而不是 id 精确匹配:两侧都可能是同毫秒组里的
+   * 任意一行(见 `HISTORY_GAP_PROBE_MAX_STEPS`),按时刻比就把这种模糊性一并吃掉 —— 探测取回的行
+   * 只要落在 `olderMs` 或更早,就说明 `newerId` 之前没有别的时刻,这段安静是真的。
+   */
+  newerMs: number;
+  olderMs: number;
   /** 两行的时间差,仅用于日志与测试断言。 */
   gapMs: number;
 }
@@ -156,7 +178,16 @@ export function findHistoryWindowGap(
     const older = rows[index - 1];
     const gapMs = newer.ms - older.ms;
     if (gapMs <= HISTORY_GAP_SPLIT_MS) continue;
-    const gap: HistoryWindowGap = { newerId: newer.id, olderId: older.id, gapMs };
+    // 同毫秒组内的次序在手机端不可知(见 HISTORY_GAP_PROBE_MAX_STEPS),所以这里挑出的两侧锚点
+    // 只保证"落在正确的那一毫秒",不保证是组内最旧/最新那一行;探测阶段按时刻判定,把这种
+    // 模糊性吃掉,不需要在这里猜 rowid 次序。
+    const gap: HistoryWindowGap = {
+      newerId: newer.id,
+      olderId: older.id,
+      newerMs: newer.ms,
+      olderMs: older.ms,
+      gapMs,
+    };
     if (consideredGapKeys.has(historyWindowGapKey(gap))) continue;
     return gap;
   }
@@ -176,19 +207,43 @@ export async function backfillHistoryWindowGap(
 ): Promise<HistoryBackfillOutcome> {
   if (deps.isCancelled()) return 'cancelled';
   try {
-    const probe = await deps.listPage(gap.newerId, HISTORY_GAP_PROBE_LIMIT);
-    if (deps.isCancelled()) return 'cancelled';
-    if (probe.length === 0) return 'exhausted';
-    if (probe.some((row) => row.id === gap.olderId)) {
-      // 服务端相邻:窗口本来就连续,这段安静是真的。探测到的行已在窗口里,merge 是幂等的,
-      // 但也没有必要——直接收工,不留副作用。
-      return 'contiguous';
+    // ── 探测:先确认这段安静到底是不是空洞 ────────────────────────────────────────────
+    // 判定按**时刻**而不是 id 精确匹配,并允许沿同毫秒组往更旧处推进(见
+    // HISTORY_GAP_PROBE_MAX_STEPS):取回的行落在 olderMs 或更早 → 服务端本来相邻;仍落在
+    // newerMs → 是同组另一行,换成它继续探;落在两者之间 → 确实有洞,它就是洞里的第一行。
+    let probeCursor = gap.newerId;
+    let probeRows = 0;
+    let probeRequests = 0;
+    for (let step = 0; step < HISTORY_GAP_PROBE_MAX_STEPS; step++) {
+      const probe = await deps.listPage(probeCursor, HISTORY_GAP_PROBE_LIMIT);
+      if (deps.isCancelled()) return 'cancelled';
+      probeRequests += 1;
+      if (probe.length === 0) return 'exhausted';
+      const probedId = nextPageCursor(probe);
+      const probedMs = probedRowMs(probe);
+      // 整页都是没有 id / 时间不可解析的行:无法继续判定,按"有洞"交给翻页循环。
+      if (!probedId || probedMs === null) {
+        deps.merge(probe);
+        probeRows += probe.length;
+        probeCursor = probedId ?? probeCursor;
+        break;
+      }
+      if (probedMs <= gap.olderMs) {
+        // 服务端相邻:窗口本来就连续。探测到的行已在窗口里,不留副作用直接收工。
+        return 'contiguous';
+      }
+      deps.merge(probe);
+      probeRows += probe.length;
+      probeCursor = probedId;
+      // 只有**恰好落在 newerMs 那一毫秒**才继续沿组内往更旧处探;其它情况(落在两侧之间 →
+      // 确实有洞、这一行就是洞里的第一行;或被控端违反 before 语义返回了更新的行 → 保守处理)
+      // 一律交给翻页循环。
+      if (probedMs !== gap.newerMs) break;
     }
-    deps.merge(probe);
 
-    let before = nextPageCursor(probe) ?? gap.newerId;
-    let rows = probe.length;
-    let requests = 1;
+    let before = probeCursor;
+    let rows = probeRows;
+    let requests = probeRequests;
     while (rows < HISTORY_BACKFILL_MAX_ROWS && requests < HISTORY_BACKFILL_MAX_REQUESTS) {
       const page = await deps.listPage(before, MESSAGE_PAGE_SIZE);
       if (deps.isCancelled()) return 'cancelled';
@@ -196,7 +251,11 @@ export async function backfillHistoryWindowGap(
       if (page.length === 0) return 'exhausted';
       deps.merge(page);
       rows += page.length;
-      if (page.some((row) => row.id === gap.olderId)) return 'covered';
+      // 连上判定同样按**时刻**而不是 `olderId` 精确匹配:较旧一侧也可能是同毫秒组里的任意一行
+      // (见 HISTORY_GAP_PROBE_MAX_STEPS),按 id 比会漏判成"还没连上",于是白翻到预算耗尽、把
+      // 已经补好的空洞记成 budget。翻页是沿 before 连续往前的,所以"本页取到了 olderMs 或更早的
+      // 行"就等价于"两段之间再无缺口"。
+      if (page.some((row) => rowMsAtOrBefore(row, gap.olderMs))) return 'covered';
       const nextBefore = nextPageCursor(page);
       // 游标没有前进(整页都是没有 id 的行,或被控端反复返回同一段)→ 停手,避免死循环。
       if (!nextBefore || nextBefore === before) return 'exhausted';
@@ -224,10 +283,28 @@ export async function backfillHistoryWindowGap(
  * 跳过本地合成的系统卡(`mobile-system-*`):它们没有服务端对应行,当游标什么都匹配不上。
  */
 function nextPageCursor(page: readonly RemoteMessage[]): string | null {
+  return pageTailRow(page)?.id ?? null;
+}
+
+/** 页尾那一行的落库时刻(同 `nextPageCursor` 的取行口径);不可解析时 null。 */
+function probedRowMs(page: readonly RemoteMessage[]): number | null {
+  const row = pageTailRow(page);
+  if (!row) return null;
+  const ms = Date.parse(row.createdAt);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/** 这一行是否落在 `ms` 或更早(时间不可解析的行一律不算,免得把噪声当成"已连上")。 */
+function rowMsAtOrBefore(row: RemoteMessage, ms: number): boolean {
+  const rowMs = Date.parse(row.createdAt);
+  return Number.isFinite(rowMs) && rowMs <= ms;
+}
+
+function pageTailRow(page: readonly RemoteMessage[]): RemoteMessage | null {
   for (let index = page.length - 1; index >= 0; index--) {
     const message = page[index];
     if (!message.id || message.id.startsWith('mobile-system-')) continue;
-    return message.id;
+    return message;
   }
   return null;
 }
