@@ -403,6 +403,10 @@ describe('TodaySpendChip dashboard routing', () => {
     // device-link)与非网关计费来源(自定义供应商等)不进(PR review P1 ×2)。
     expect(source).toContain('canAccessBillingSettings({');
     expect(source).toMatch(/opensBillingSettings =\n\s*!isAnyRemoteSession &&\n\s*isGatewayBilledSource &&/);
+    // 显式 xd 来源的 cc 会话仍可能实际路由到订阅 bridge(chatgpt/ / xai/ 模型前缀
+    // 优先于会话来源判定);此时花费属于对方订阅,不是网关计费,不能只凭
+    // providerId === 'xd' 就判定(PR review P2)。
+    expect(source).toMatch(/\(providerId === 'xd' && !isSubscriptionBridge\)/);
     // codex 隐式来源等 runtime route 真值(占位 env-key 不算);外链看板对一切
     // 远程会话(SSH + device-link)关闭(PR review P1 ×2)。
     expect(source).toContain('codexRouteResolved &&');

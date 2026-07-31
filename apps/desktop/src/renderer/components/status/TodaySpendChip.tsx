@@ -1261,7 +1261,9 @@ export function TodaySpendChip({
   // codex/ 骨折前缀只在 XD / 隐式来源下代表网关计费:显式自定义供应商也可能
   // 发现 codex/ 开头的模型 id,其花费属于对方平台(PR review P1)。
   const isGatewayBilledSource =
-    providerId === 'xd' ||
+    // 显式 xd 来源的 cc 会话仍可能实际路由到订阅 bridge(chatgpt/ / xai/ 模型前缀
+    // 优先于会话来源判定),此时花费属于对方订阅,不是网关计费(review P2)。
+    (providerId === 'xd' && !isSubscriptionBridge) ||
     ((providerId == null || providerId === 'xd') && isCodexBudgetModel) ||
     // codex 隐式来源必须等 runtime route 真值:占位 env-key 会把 OAuth 订阅会话
     // 首帧误判成网关计费,chip 先指计费页再闪切外部看板(PR review P1)。
