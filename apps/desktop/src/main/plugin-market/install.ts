@@ -51,15 +51,10 @@ export async function installCustomMarketPlugin(input: {
   } catch {
     throwIpcError('GHOST_FILE_INVALID', 'The Plugin manifest is missing or unreadable');
   }
+  // 前置快速失败:清单非法或官方保留 id 直接拒,避免无谓打包。
   const validated = validateGhostManifest(raw);
   if (!validated.ok) {
     throwIpcError('GHOST_FILE_INVALID', validated.reason);
-  }
-  if (JSON.stringify(validated.manifest) !== JSON.stringify(input.expected)) {
-    throwIpcError(
-      'PRECONDITION_FAILED',
-      'Plugin changed after permission review',
-    );
   }
   rejectReservedGhostIdForCustomMarket(validated.manifest.id);
 
@@ -77,6 +72,15 @@ export async function installCustomMarketPlugin(input: {
             ? 'NOT_FOUND'
             : 'INTERNAL',
         packed.message,
+      );
+    }
+    // 唯一防篡改防线:比对实际打进包的 manifest,而非打包前磁盘上的 ghost.json。
+    // 堵住"前置比对通过后、打包读取文件前"目录被改(保持 id/version 却新增
+    // 权限声明)的窗口——装的就是 packed.manifest,必须以它为准。
+    if (JSON.stringify(packed.manifest) !== JSON.stringify(input.expected)) {
+      throwIpcError(
+        'PRECONDITION_FAILED',
+        'Plugin changed after permission review',
       );
     }
     // 装出前最后防线:打包期间账号可能已切换,确认仍为用户审阅时的账户。

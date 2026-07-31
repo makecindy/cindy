@@ -83,6 +83,29 @@ export class MarketSourceManager {
     return config.source.type === 'local' ? config.source.path : this.cloneDir(config);
   }
 
+  /**
+   * Git 缓存自愈：cloneDir 缺失但固定备份名存在时(上次交换落位失败且
+   * 即时恢复也失败),把备份拉回固定路径再继续,避免有效缓存脱离 cloneDir
+   * 导致来源持续不可用。本地源不走克隆缓存,无需处理。
+   */
+  private async recoverCloneCache(
+    config: Pick<MarketSourceConfig, 'name' | 'source'>,
+  ): Promise<void> {
+    if (config.source.type !== 'git') return;
+    const cloneDir = this.cloneDir(config);
+    const backup = `${cloneDir}.backup`;
+    if (fs.existsSync(cloneDir) || !fs.existsSync(backup)) return;
+    try {
+      await fs.promises.rename(backup, cloneDir);
+      this.log.warn('recovered marketplace cache from backup', { name: config.name });
+    } catch (error) {
+      this.log.error('failed to recover marketplace cache from backup', {
+        name: config.name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   async addSource(input: {
     source: string;
     ref?: string;
@@ -206,6 +229,7 @@ export class MarketSourceManager {
       return this.toSummary({ ...config, lastSyncedAt: syncedAt }, discovered.marketplace);
     }
 
+    await this.recoverCloneCache(config);
     const preflight = await checkGitPreflightImpl(this.deps.gitExecutor);
     if (!preflight.ok) {
       throwIpcError('MARKET_GIT_UNAVAILABLE', preflight.version ?? 'git not found');
@@ -258,12 +282,13 @@ export class MarketSourceManager {
       await fs.promises.rm(staging, { recursive: true, force: true }).catch(() => undefined);
       throw error;
     }
-    // 交换旧缓存与已验证 staging：先把旧目录原子改名为备份，再把 staging
-    // 落位；任一步失败都从备份恢复 cloneDir，避免 rename 失败（Windows 文件锁/
-    // 权限/瞬时 I/O）导致旧缓存既被删除又无替换、整个来源被隐藏。
-    const backup = `${cloneDir}.backup-${crypto.randomUUID()}`;
+    // 交换旧缓存与已验证 staging：先把旧目录原子改名为固定备份名，再把 staging
+    // 落位；任一步失败都从备份恢复 cloneDir。备份用固定名(不带随机后缀),
+    // 以便连续失败(落位失败且恢复也失败)后,后续市场操作仍能自愈找回缓存。
+    const backup = `${cloneDir}.backup`;
     let backupActive = false;
     try {
+      await fs.promises.rm(backup, { recursive: true, force: true }).catch(() => undefined);
       await fs.promises.rename(cloneDir, backup);
       backupActive = true;
       await fs.promises.rename(staging, cloneDir);
@@ -271,7 +296,7 @@ export class MarketSourceManager {
       let restoreError: unknown = null;
       if (backupActive) {
         // staging 落位失败：恢复旧缓存。恢复 rename 也可能失败(文件占用/权限/
-        // 路径冲突),不能吞——否则旧缓存静默遗留在随机备份路径、cloneDir 持续缺失。
+        // 路径冲突),此时固定备份名仍在,交给入口自愈在下一次操作时拉回。
         restoreError = await fs.promises.rename(backup, cloneDir).then(
           () => null,
           (err: unknown) => err,
@@ -283,12 +308,15 @@ export class MarketSourceManager {
         await fs.promises.rm(backup, { recursive: true, force: true }).catch(() => undefined);
       }
       if (restoreError) {
-        const cause = error instanceof Error ? error.message : String(error);
-        const restore = restoreError instanceof Error ? restoreError.message : String(restoreError);
-        throwIpcError(
-          'INTERNAL',
-          `刷新替换缓存失败(${cause}),且旧缓存恢复失败(${restore});旧缓存保留在备份目录 ${backup},请检查后手动恢复`,
-        );
+        // 诊断(含 backup 绝对路径与原始 FS 错误)只进 main 日志,不回 Renderer;
+        // IPC 抛不含内部路径的通用错误,交由入口自愈在后续操作中恢复。
+        this.log.error('marketplace cache swap and restore both failed', {
+          backup,
+          swapError: error instanceof Error ? error.message : String(error),
+          restoreError:
+            restoreError instanceof Error ? restoreError.message : String(restoreError),
+        });
+        throwIpcError('INTERNAL', 'Plugin marketplace cache swap failed');
       }
       throw error;
     }
@@ -314,6 +342,7 @@ export class MarketSourceManager {
     if (!config) {
       throwIpcError('NOT_FOUND', 'The marketplace source is not added');
     }
+    await this.recoverCloneCache(config!);
     const root = this.marketRoot(config!);
     if (!fs.existsSync(root)) {
       return {
@@ -350,6 +379,7 @@ export class MarketSourceManager {
     const configs = this.deps.store.list();
     const results: DiscoveredSource[] = [];
     for (const config of configs) {
+      await this.recoverCloneCache(config);
       const root = this.marketRoot(config);
       if (!fs.existsSync(root)) {
         results.push({

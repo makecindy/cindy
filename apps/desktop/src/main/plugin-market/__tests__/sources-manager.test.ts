@@ -310,4 +310,31 @@ describe('MarketSourceManager git sources', () => {
     const listed = await manager.listSources();
     expect(listed[0]?.pluginCount).toBe(1);
   });
+
+  it('recovers the cache from a leftover fixed backup before discovery', async () => {
+    const root = makeRoot();
+    const { executor } = fakeGit('hub', [{ rel: 'p', id: 'alpha' }]);
+    const manager = makeManager(root, executor);
+    await manager.addSource({ source: 'openai/plugins' });
+
+    const cloneDir = path.join(
+      root,
+      'sources',
+      marketCloneSlug('hub', {
+        type: 'git',
+        url: 'https://github.com/openai/plugins.git',
+        sparsePaths: [],
+      }),
+    );
+    // 模拟上次交换连续失败:cloneDir 缺失,有效缓存滞留在固定备份名。
+    fs.renameSync(cloneDir, `${cloneDir}.backup`);
+    expect(fs.existsSync(cloneDir)).toBe(false);
+
+    // discoverAll 入口自愈:拉回固定路径后再发现,来源恢复可用。
+    const listed = await manager.listSources();
+    expect(listed[0]?.status).toBe('ok');
+    expect(listed[0]?.pluginCount).toBe(1);
+    expect(fs.existsSync(cloneDir)).toBe(true);
+    expect(fs.existsSync(`${cloneDir}.backup`)).toBe(false);
+  });
 });

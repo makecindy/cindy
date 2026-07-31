@@ -430,6 +430,34 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     runtime.session = { mode: 'cloud', dataOwnerId: 'user-1', generation: 1 };
   });
 
+  it('rejects refreshSource when the account switches during refresh', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+
+    // 本地源刷新完成、返回 summary 前会话漂移:runForOwner 必须拒绝,
+    // 不把含本地绝对路径的摘要发给当前 Renderer。
+    const refreshPromise = h.service.refreshSource('team-lib');
+    runtime.session = { mode: 'cloud', dataOwnerId: 'user-2', generation: 2 };
+    await expect(refreshPromise).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    runtime.session = { mode: 'cloud', dataOwnerId: 'user-1', generation: 1 };
+  });
+
+  it('rejects custom detail when the account switches during discovery', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+
+    // discoverSource 之后、返回 manifest 前会话漂移:必须拒绝,不把 A 的
+    // 名称/作者/权限声明发给当前 Renderer。
+    const detailPromise = h.service.detail(customMarketPluginId('team-lib', 'alpha'));
+    runtime.session = { mode: 'cloud', dataOwnerId: 'user-2', generation: 2 };
+    await expect(detailPromise).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    runtime.session = { mode: 'cloud', dataOwnerId: 'user-1', generation: 1 };
+  });
+
   it('rejects install when another source already owns the ghostId', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);

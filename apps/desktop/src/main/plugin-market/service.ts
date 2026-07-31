@@ -262,8 +262,12 @@ export class PluginMarketService {
     const serverItems = plugins.map((plugin) =>
       this.toItem(plugin, duplicateGhostIds, local),
     );
+    const items = [...serverItems, ...this.projectCustomItems(customEntries, duplicateGhostIds, local)];
+    // 聚合完成、返回 Renderer 前最后校验:账号在任一 await 间隙漂移则拒绝,
+    // 不把按旧账号解析的自定义项/账本状态发给当前会话。
+    requireSameMarketOwner(owner);
     return {
-      items: [...serverItems, ...this.projectCustomItems(customEntries, duplicateGhostIds, local)],
+      items,
       unavailableReason: null,
       customSourceNames,
     };
@@ -277,24 +281,25 @@ export class PluginMarketService {
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin ID');
     }
     this.requireConfigured();
-    const owner = captureMarketOwner();
-    const plugin = await this.api.detail(pluginId);
-    requireSameMarketOwner(owner);
-    if (owner.mode === 'local' && plugin.scope !== 'public') {
-      throwIpcError('PERMISSION_DENIED', 'Local mode can only access public Plugins');
-    }
-    const compatible = validateGhostManifest(plugin.currentRelease.manifest);
-    if (!compatible.ok) {
-      throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
-    }
-    return {
-      ...this.toItem(
-        plugin,
-        NO_DUPLICATE_GHOST_IDS,
-        this.localInstallSnapshot(this.ledgerForOwner(owner)),
-      ),
-      manifest: compatible.manifest,
-    };
+    return this.runForOwner(async (owner) => {
+      const plugin = await this.api.detail(pluginId);
+      requireSameMarketOwner(owner);
+      if (owner.mode === 'local' && plugin.scope !== 'public') {
+        throwIpcError('PERMISSION_DENIED', 'Local mode can only access public Plugins');
+      }
+      const compatible = validateGhostManifest(plugin.currentRelease.manifest);
+      if (!compatible.ok) {
+        throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
+      }
+      return {
+        ...this.toItem(
+          plugin,
+          NO_DUPLICATE_GHOST_IDS,
+          this.localInstallSnapshot(this.ledgerForOwner(owner)),
+        ),
+        manifest: compatible.manifest,
+      };
+    });
   }
 
   async install(
@@ -427,12 +432,7 @@ export class PluginMarketService {
   /* ---------------------------------------------------------------------- */
 
   async listSources(): Promise<MarketSourceSummary[]> {
-    const owner = captureMarketOwner();
-    const sources = await this.sourceManagerForOwner(owner).listSources();
-    // 异步发现期间账号可能已切换:摘要含私有仓库 URL 与本地绝对路径,
-    // 返回前必须确认会话未漂移,避免把上一账号的来源信息发给当前 Renderer。
-    requireSameMarketOwner(owner);
-    return sources;
+    return this.runForOwner((owner) => this.sourceManagerForOwner(owner).listSources());
   }
 
   async addSource(input: {
@@ -440,28 +440,31 @@ export class PluginMarketService {
     ref?: string;
     sparsePaths?: string[];
   }): Promise<MarketSourceSummary> {
-    const owner = captureMarketOwner();
     // 源管理操作全局串行：添加期间发现的市场名必须唯一，并行添加会互相覆盖。
-    return this.withMutation('market-sources', async () => {
-      requireSameMarketOwner(owner);
-      return this.sourceManagerForOwner(owner).addSource(input);
-    });
+    return this.runForOwner((owner) =>
+      this.withMutation('market-sources', async () => {
+        requireSameMarketOwner(owner);
+        return this.sourceManagerForOwner(owner).addSource(input);
+      }),
+    );
   }
 
   async removeSource(name: string): Promise<{ ok: true }> {
-    const owner = captureMarketOwner();
-    return this.withMutation('market-sources', async () => {
-      requireSameMarketOwner(owner);
-      return this.sourceManagerForOwner(owner).removeSource(name);
-    });
+    return this.runForOwner((owner) =>
+      this.withMutation('market-sources', async () => {
+        requireSameMarketOwner(owner);
+        return this.sourceManagerForOwner(owner).removeSource(name);
+      }),
+    );
   }
 
   async refreshSource(name: string): Promise<MarketSourceSummary> {
-    const owner = captureMarketOwner();
-    return this.withMutation('market-sources', async () => {
-      requireSameMarketOwner(owner);
-      return this.sourceManagerForOwner(owner).refreshSource(name);
-    });
+    return this.runForOwner((owner) =>
+      this.withMutation('market-sources', async () => {
+        requireSameMarketOwner(owner);
+        return this.sourceManagerForOwner(owner).refreshSource(name);
+      }),
+    );
   }
 
   async gitPreflight(): Promise<GitPreflightResult> {
@@ -473,26 +476,27 @@ export class PluginMarketService {
     marketName: string;
     ghostId: string;
   }): Promise<PluginMarketDetail> {
-    const owner = captureMarketOwner();
-    const manager = this.sourceManagerForOwner(owner);
-    const discovered = await manager.discoverSource(ref.marketName);
-    if (!discovered.result.ok) {
-      throwIpcError(discovered.result.code, discovered.result.detail ?? discovered.result.code);
-    }
-    const plugin = discovered.result.marketplace.plugins.find(
-      (candidate) => candidate.ghostId === ref.ghostId,
-    );
-    if (!plugin) {
-      throwIpcError('NOT_FOUND', 'The Plugin is no longer listed by this marketplace');
-    }
-    return {
-      ...this.customToItem(
-        { config: discovered.config, plugin },
-        NO_DUPLICATE_GHOST_IDS,
-        this.localInstallSnapshot(this.ledgerForOwner(owner)),
-      ),
-      manifest: plugin.manifest,
-    };
+    return this.runForOwner(async (owner) => {
+      const manager = this.sourceManagerForOwner(owner);
+      const discovered = await manager.discoverSource(ref.marketName);
+      if (!discovered.result.ok) {
+        throwIpcError(discovered.result.code, discovered.result.detail ?? discovered.result.code);
+      }
+      const plugin = discovered.result.marketplace.plugins.find(
+        (candidate) => candidate.ghostId === ref.ghostId,
+      );
+      if (!plugin) {
+        throwIpcError('NOT_FOUND', 'The Plugin is no longer listed by this marketplace');
+      }
+      return {
+        ...this.customToItem(
+          { config: discovered.config, plugin },
+          NO_DUPLICATE_GHOST_IDS,
+          this.localInstallSnapshot(this.ledgerForOwner(owner)),
+        ),
+        manifest: plugin.manifest,
+      };
+    });
   }
 
   /**
@@ -670,6 +674,22 @@ export class PluginMarketService {
       sourceType: config.source.type === 'git' ? 'git-market' : 'local-market',
       sourceMarketName: config.name,
     };
+  }
+
+  /**
+   * owner 绑定执行 + 返回前漂移校验。所有把市场数据返回 Renderer 或改动
+   * 运行时的 owner-bound 导出方法统一走此闸:账号在 await 间隙切换则拒绝,
+   * 不把上一账号的 URL/路径/manifest/summary 发给当前 Renderer,也不让
+   * 写操作落在错误账户。新增 owner-bound 方法只允许经此入口,从结构上
+   * 杜绝逐路径漏加 generation 校验。
+   */
+  private async runForOwner<T>(
+    operation: (owner: ActiveAppSession) => Promise<T>,
+  ): Promise<T> {
+    const owner = captureMarketOwner();
+    const result = await operation(owner);
+    requireSameMarketOwner(owner);
+    return result;
   }
 
   private sourceManagerForOwner(owner: ActiveAppSession): MarketSourceManager {
