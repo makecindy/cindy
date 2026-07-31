@@ -183,6 +183,7 @@ import { projectProviderCatalogForBuildRegion } from '../maker-host/provider-acc
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { desktopCodexAuthAdapter } from '../maker-host/auth-adapters.js';
 import { getUtilityModelChainProfiles } from '../utility-model/UtilityModelSelection.js';
 import { utilityModelPinOptions } from '../../shared/utilityModelProfiles.js';
 import {
@@ -205,6 +206,7 @@ import {
 import { getCindyProxyMediaService } from '../mcp-integrations/cindyProxyMedia.js';
 import { ImageChannelRegistry, decodeImageResponse } from './imageChannelRegistry.js';
 import { createGeminiImageChannel } from './geminiImageClient.js';
+import { createCodexImageChannel } from './codexImageClient.js';
 import { createGatewayImageClient } from '../cindy-proxy-media/api/gatewayImageClient.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import * as ledger from '../cindy-media/ledger.js';
@@ -1957,10 +1959,9 @@ function getImageChannelRegistry(): ImageChannelRegistry {
       fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
       beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
     }));
-    // OpenAI 平台 images API(BYO 平台 key;ChatGPT 订阅 OAuth 调不了平台面,实测
-    // 401/403 缺 scope):与 xd 网关同 wire(OpenAI-images 兼容面),整个客户端复用,
-    // 只换 baseUrl/品牌话术/凭证读取。目录 id 带 openai/ 前缀(跨供应商契约),
-    // 上游只认裸 id,适配层剥前缀。
+    // OpenAI public Images API(BYO 平台 key):与 xd 网关同 wire,整个客户端复用,
+    // 只换 baseUrl/品牌话术/凭证读取。ChatGPT/Codex 订阅走下方独立的 hosted-tool
+    // 通道;目录 id 带 openai/ 前缀,public API 适配层剥前缀。
     const openaiImagesClient = createGatewayImageClient({
       getApiKey: () => getProviderSecretStore().get('openai-images'),
       // 境外端点吃系统代理(outboundFetch):main 的裸 fetch 不读系统代理设置,
@@ -1979,22 +1980,36 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     });
     const stripOpenaiPrefix = (id: string) =>
       id.startsWith('openai/') ? id.slice('openai/'.length) : id;
+    const codexImagesClient = createCodexImageChannel({
+      hasOAuthLogin: () => desktopCodexAuthAdapter.hasCodexOAuthLoginReadOnly(),
+      getAccessToken: () => desktopCodexAuthAdapter.getAccessToken(),
+      getAccountId: () => desktopCodexAuthAdapter.getAccountId(),
+      fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+      beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
+    });
     registry.register('openai', {
-      // trim-nonempty 与 gemini 通道同口径:空白 key 不算就绪。
-      ready: () => (getProviderSecretStore().get('openai-images')?.trim() ?? '') !== '',
-      generateImage: ({ model, prompt, aspectRatio }) =>
-        openaiImagesClient.generateImage({
-          model: stripOpenaiPrefix(model),
-          prompt,
-          ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
-        }),
-      editImage: ({ model, prompt, imagePaths, aspectRatio }) =>
-        openaiImagesClient.editImage({
-          model: stripOpenaiPrefix(model),
-          prompt,
-          imagePaths,
-          ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
-        }),
+      // 用户明确配置 Platform key 时优先走确定性的 public Images API；否则复用
+      // 已连接的 ChatGPT/Codex 订阅 OAuth hosted tool，不要求再付一份 API 费。
+      ready: () =>
+        (getProviderSecretStore().get('openai-images')?.trim() ?? '') !== '' ||
+        codexImagesClient.ready(),
+      generateImage: (params) =>
+        (getProviderSecretStore().get('openai-images')?.trim() ?? '') !== ''
+          ? openaiImagesClient.generateImage({
+              model: stripOpenaiPrefix(params.model),
+              prompt: params.prompt,
+              ...(params.aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[params.aspectRatio] } : {}),
+            })
+          : codexImagesClient.generateImage(params),
+      editImage: (params) =>
+        (getProviderSecretStore().get('openai-images')?.trim() ?? '') !== ''
+          ? openaiImagesClient.editImage({
+              model: stripOpenaiPrefix(params.model),
+              prompt: params.prompt,
+              imagePaths: params.imagePaths,
+              ...(params.aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[params.aspectRatio] } : {}),
+            })
+          : codexImagesClient.editImage(params),
     });
     imageChannelRegistrySingleton = registry;
   }
