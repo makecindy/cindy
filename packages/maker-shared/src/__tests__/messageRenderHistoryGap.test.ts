@@ -158,6 +158,22 @@ describe('工作组分组 — 历史窗口空洞', () => {
     expect(typesOf(items)).toEqual(['work_group', 'message']);
   });
 
+  it('空洞前那一段的时长按动作结束时刻结算，不低报', () => {
+    // 空洞前的段永远没有 nextItem 可作结算边界,退回段内锚点时若取组内第一条调用的**开始**
+    // 时间,一个 20 分钟后才回结果的单工具段会显示约 1 秒 —— 空洞不再产生超大时长,却换成了
+    // 同样离谱的低报（#1210 review）。
+    const items = buildMessageRenderItems<GapFixtureMessage>([
+      toolItem('slow-tool', 0, 20),
+      // ↓ 空洞:与上一段的结束(06:20)相隔 2 小时
+      toolItem('tail-tool', 140, 140),
+      assistantItem('answer', 141, '最终回复'),
+    ]);
+
+    expect(typesOf(items)).toEqual(['work_group', 'work_group', 'message']);
+    const [headDuration] = groupDurations(items);
+    expect(headDuration).toBe(20 * 60_000);
+  });
+
   it('窗口连续时分组不变（user 行照常是唯一边界）', () => {
     const items = buildMessageRenderItems<GapFixtureMessage>([
       userItem('user-1', 0, '第一问'),

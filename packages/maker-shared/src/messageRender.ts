@@ -1241,15 +1241,20 @@ function createCompletedWorkGroup<TMessage extends MessageRenderNormalizedMessag
   };
 }
 
+/**
+ * 没有下一项可作结算边界时(turn 尾部、或被空洞切开的那一段)的组结束时刻:取组内最后一个
+ * 有时间的 item 的**结束**时刻。
+ *
+ * 必须用 itemEndTimestamp 而不是开始时刻:一段只含工具活动、且 20 分钟后才回结果的组,
+ * 拿组内第一条调用的开始时间当结束会把时长报成约 1 秒。空洞切分让这条回退路径变常见
+ * (空洞前那一段永远没有 nextItem),低报会取代原来的超大时长成为新的谎报(#1210 review)。
+ */
 function workRunFallbackEnd<TMessage extends MessageRenderNormalizedMessage>(
   run: readonly MessageRenderWorkChildItem<TMessage>[],
 ): number | null {
   for (let index = run.length - 1; index >= 0; index--) {
-    const item = run[index];
-    const start = itemTimestamp(item);
-    if (start === null) continue;
-    if (item.type === 'thinking') return start + (item.durationMs ?? 0);
-    return start;
+    const end = itemEndTimestamp(run[index]);
+    if (end !== null) return end;
   }
   return null;
 }

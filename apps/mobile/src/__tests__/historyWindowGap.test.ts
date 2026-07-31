@@ -68,6 +68,24 @@ describe('findHistoryWindowGap', () => {
     const gap = findHistoryWindowGap([row('older', 0), row('newer', 140)]) as HistoryWindowGap;
     expect(historyWindowGapKey(gap)).toBe('older→newer');
   });
+
+  it('跳过已考察的跳变，继续往更早处找', () => {
+    // 关键回归:contiguous（隔夜等合法间隔）既不 merge、跳变也一直留在窗口里。若检测恒定返回
+    // 最靠尾部那一处，更早处的真实缺行永远进不了探测 —— 补齐只盯着这处 contiguous 收工，
+    // 而「加载更早」只从最旧行往外翻、够不到窗口内部的空洞。
+    const window = [row('a', 0), row('b', 100), row('c', 300)];
+    const tailGap = findHistoryWindowGap(window) as HistoryWindowGap;
+    expect(tailGap.newerId).toBe('c');
+
+    const earlierGap = findHistoryWindowGap(window, new Set([historyWindowGapKey(tailGap)]));
+    expect(earlierGap).toEqual({ newerId: 'b', olderId: 'a', gapMs: 100 * 60_000 });
+
+    const bothConsidered = new Set([
+      historyWindowGapKey(tailGap),
+      historyWindowGapKey(earlierGap as HistoryWindowGap),
+    ]);
+    expect(findHistoryWindowGap(window, bothConsidered)).toBeNull();
+  });
 });
 
 describe('backfillHistoryWindowGap', () => {

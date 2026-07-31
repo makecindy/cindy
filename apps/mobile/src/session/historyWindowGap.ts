@@ -36,12 +36,16 @@ import { MESSAGE_PAGE_SIZE } from '@/session/messagePaging';
 import type { RemoteMessage } from '@/session/types';
 
 /**
- * 一次补齐最多拉回的行数。
+ * 一次补齐的行数预算。
  *
- * 对照的是**本次补齐新增的行**,不是窗口总行数:手机内存与列表挂载树都比桌面紧,桌面的
- * `JUMP_BACKFILL_MAX_ITEMS`(600)在这里偏激进。400 行 ≈ 5 个满页,足以覆盖"看了个开头就切走、
- * 两小时后回来"这类真实空洞(实测那场 445 行的会话,空洞两侧相隔约 420 行);超出仍未连上时
- * 交给渲染层的空洞守卫兜底,并保留「加载更早」入口让用户自己往上翻。
+ * 对照的是**本次补齐已取回的行数**(每页 `page.length` 累加),不是窗口总行数。它是循环的
+ * 准入条件而非硬上限:判定在取页**之前**,所以最后一页整页拉回时总数会略微超出预算
+ * (例如已取 390 行仍会再拉一整页)。这是有意的 —— 为省下几十行去要半页会多一次往返。
+ *
+ * 手机内存与列表挂载树都比桌面紧,桌面的 `JUMP_BACKFILL_MAX_ITEMS`(600)在这里偏激进。
+ * 400 行 ≈ 5 个满页,足以覆盖"看了个开头就切走、两小时后回来"这类真实空洞(实测那场 445 行
+ * 的会话,空洞两侧相隔约 420 行);超出仍未连上时交给渲染层的空洞守卫兜底,并保留
+ * 「加载更早」入口让用户自己往上翻。
  */
 export const HISTORY_BACKFILL_MAX_ROWS = 400;
 
@@ -93,15 +97,26 @@ export interface HistoryBackfillDeps {
 }
 
 /**
- * 找窗口里**最靠尾部**的一处空洞;没有则返回 null。
+ * 找窗口里**最靠尾部的、尚未考察过**的一处空洞;没有则返回 null。
  *
  * 为什么从尾部找而不是从头:补齐是沿 `before` 从新往旧翻页,先补最靠尾部的洞时游标离窗口尾
- * 最近、翻页量最小。这一处补完(或判定为真安静)之后,下一轮检测自然会露出更早的那一处。
+ * 最近、翻页量最小。
+ *
+ * 为什么必须能跳过已考察的:补齐成功(`covered`)会把中间行 merge 进来、那处跳变自然消失,但
+ * 其它结局不会 —— 尤其 `contiguous`(隔夜等合法间隔,探测确认服务端本来就相邻)既不 merge、
+ * 跳变也一直留在窗口里。若检测恒定返回最靠尾部那一处,窗口有 ≥3 段时(多次在不同位置打开
+ * 同一会话拼出的缓存),只要最尾部那处是合法间隔,更早处真实缺行就永远进不了探测:补齐只盯
+ * 着这处 contiguous 收工,而「加载更早」只从最旧行往外翻、够不到窗口内部的空洞,内容于是静默
+ * 丢失(#1210 review)。所以调用方把**已考察过的** gapKey 传进来,检测跳过它们继续往前找。
  *
  * 只看真实 host 行:本地合成的系统卡(`mobile-system-*`,/pwd、/context 等)没有服务端对应行,
  * 拿它当 `before` 游标什么都匹配不上,只会白拉一页最新消息。
  */
-export function findHistoryWindowGap(messages: readonly RemoteMessage[]): HistoryWindowGap | null {
+export function findHistoryWindowGap(
+  messages: readonly RemoteMessage[],
+  /** 已考察过的空洞(见 `historyWindowGapKey`);命中的跳变会被跳过,继续往更早处找。 */
+  consideredGapKeys: ReadonlySet<string> = new Set(),
+): HistoryWindowGap | null {
   const rows = messages
     .filter((message) => !!message.id && !message.id.startsWith('mobile-system-'))
     .map((message) => ({ id: message.id, ms: Date.parse(message.createdAt) }))
@@ -111,9 +126,10 @@ export function findHistoryWindowGap(messages: readonly RemoteMessage[]): Histor
     const newer = rows[index];
     const older = rows[index - 1];
     const gapMs = newer.ms - older.ms;
-    if (gapMs > HISTORY_GAP_SPLIT_MS) {
-      return { newerId: newer.id, olderId: older.id, gapMs };
-    }
+    if (gapMs <= HISTORY_GAP_SPLIT_MS) continue;
+    const gap: HistoryWindowGap = { newerId: newer.id, olderId: older.id, gapMs };
+    if (consideredGapKeys.has(historyWindowGapKey(gap))) continue;
+    return gap;
   }
   return null;
 }

@@ -3824,7 +3824,16 @@ export default function SessionScreen() {
    * `HISTORY_GAP_SPLIT_MS` 守卫兜底(不谎报时长),用户仍可用「加载更早」自己往上翻。
    */
   const backfillAttemptedGapsRef = useRef<{ sid: string; keys: Set<string> } | null>(null);
-  const backfillInFlightRef = useRef(false);
+  /**
+   * 飞行中的补齐属于哪个会话。两个刻意的选择:
+   *
+   *  - **带会话 id**,不是裸 boolean:屏实例会被原地复用,会话 A 的补齐还在飞时切到 B,裸标记
+   *    会把 B 的补齐一并挡掉(A 那次自己会在下一次 isCancelled 上收手,不该连坐 B)。
+   *  - **可观察 state**,不是 ref:ref 在 `finally` 里改写不会触发重渲染,于是 B 的空洞在本次
+   *    访问期间再也不会被检测,要等新消息到达或重开会话(#1210 review 的 P1)。用 state 后
+   *    清除标记本身就是一次重跑,同一次访问里可以接着补下一处。
+   */
+  const [backfillInFlightSessionId, setBackfillInFlightSessionId] = useState<string | null>(null);
   // 当前屏幕的会话 id 镜像:补齐是后台异步的,不能靠 effect 闭包里的 sessionId 判断"是否已切走"
   // (那个值恒等于启动时的值)。本 effect 声明在补齐 effect **之前**,切会话时同一 commit 里先
   // 更新镜像,飞行中的补齐随即在下一次 isCancelled 上收手。
@@ -3833,28 +3842,30 @@ export default function SessionScreen() {
     backfillSessionRef.current = sessionId;
   }, [sessionId]);
   useEffect(() => {
-    // 窗口尚未与被控端对账过(lastSyncedAt===null)时不动手:此刻 messages 可能只是冷开缓存,
-    // 首屏那次 listMessages 马上会把窗口替换掉,基于旧快照找的空洞随即失效。
-    if (!deviceId || !sessionId || lastSyncedAt === null) return;
+    if (!deviceId || !sessionId) return;
+    // 同步门槛必须按 **session + 连接代** 判定,不能用 lastSyncedAt:屏实例复用、原地从会话 A
+    // 切到有缓存消息的 B 时,lastSyncedAt 仍是 A 留下的非空值,补齐会在 B 的 listMessages 对账
+    // 完成前就基于旧缓存快照动手 —— 而空洞 key 在请求前已记为已考察,那一处从此不再重试
+    // (#1210 review)。readAckSyncedKey 正是「本会话在当前连接代完成过整窗同步」这个判据的
+    // 既有单一来源(见它的声明处),这里直接复用。
+    if (readAckSyncedKey !== `${sessionId}:${connectionEpoch}`) return;
     // 与「加载更早」互斥:两者都按 before 游标翻页,同时跑只会让窗口反复 merge、白拉页。
-    if (loading || loadingEarlier || backfillInFlightRef.current) return;
-    const gap = findHistoryWindowGap(messages);
-    if (!gap) return;
-    // 每处空洞只尝试一次(判定为真安静、超预算或失败都算尝试过),否则每次 messages 变化都会
-    // 重新发请求。换会话时连同 sid 一起重置。
+    // 飞行判定只挡**同一会话**,别的会话残留的那次不连坐(见 backfillInFlightSessionId)。
+    if (loading || loadingEarlier || backfillInFlightSessionId === sessionId) return;
+    // 每处空洞每次访问只考察一次(判定为真安静、超预算或失败都算考察过)。已考察的集合同时
+    // 作为检测的跳过表:否则 contiguous 那种"不 merge、跳变留在窗口里"的结局会让检测永远返回
+    // 同一处,更早处的真实缺行进不了探测(#1210 review)。换会话时连同 sid 一起重置。
     const attempted = backfillAttemptedGapsRef.current?.sid === sessionId
       ? backfillAttemptedGapsRef.current
       : { sid: sessionId, keys: new Set<string>() };
     backfillAttemptedGapsRef.current = attempted;
-    const gapKey = historyWindowGapKey(gap);
-    if (attempted.keys.has(gapKey)) return;
-    // 每次打开最多起 3 轮补齐。一处补到预算上限而没连上时,窗口里会露出一处**新的**跳变
-    // (锚点换成刚拉到的最旧行),key 不同 → 下次 messages 变化时可以再起一轮;不设总闸就成了
-    // 一路往上翻整场历史。注意这是**上限**不是节奏:补齐自己的 merge 触发的那次重跑会被
-    // in-flight 挡住,所以一次打开通常只补一处,余下的等新消息到达或用户重开会话。
+    // 每次访问最多起 3 轮补齐:多段拼接的窗口确实可能有几处洞,但不设总闸就成了一路往上翻
+    // 整场历史。超出后交给渲染层守卫 + 用户手动「加载更早」。
     if (attempted.keys.size >= 3) return;
-    attempted.keys.add(gapKey);
-    backfillInFlightRef.current = true;
+    const gap = findHistoryWindowGap(messages, attempted.keys);
+    if (!gap) return;
+    attempted.keys.add(historyWindowGapKey(gap));
+    setBackfillInFlightSessionId(sessionId);
     const sessionIdAtStart = sessionId;
     void backfillHistoryWindowGap(gap, {
       listPage: async (before, limit) => {
@@ -3876,9 +3887,20 @@ export default function SessionScreen() {
       isCancelled: () => backfillSessionRef.current !== sessionIdAtStart
         || !remoteSessionStore.getMessages(sessionIdAtStart).some((row) => row.id === gap.newerId),
     }).finally(() => {
-      backfillInFlightRef.current = false;
+      // 函数式更新:切会话后新会话可能已经起了自己的那一轮,不能被这次收尾误清。
+      setBackfillInFlightSessionId((current) => (current === sessionIdAtStart ? null : current));
     });
-  }, [deviceId, lastSyncedAt, loading, loadingEarlier, maker, messages, sessionId]);
+  }, [
+    backfillInFlightSessionId,
+    connectionEpoch,
+    deviceId,
+    loading,
+    loadingEarlier,
+    maker,
+    messages,
+    readAckSyncedKey,
+    sessionId,
+  ]);
 
   const selectSlashCommand = useCallback((command: MobileSlashCommand) => {
     // 点选 agent-skill 时记录名字+会话 id:palette 关闭后 slashCommands 被清,发送侧
