@@ -52,22 +52,32 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     // #1170:device-link 草稿此前完全没有 enableOrca —— 建完会话直接 navigate,于是
     // 「草稿开了协同」这件事被静默丢弃,进会话页才发现没有 Worker。两条路径都必须
     // 隧道到被控端起 Worker,并带 reveal 跳转。
+    //
+    // 时序被夹在中间(codex review P1):
+    //  · **在交接之后** —— 被控端 create-session 返回 sessionId 就是提交点,而这一步是
+    //    隧道往返、可能一路走到 invoke 默认 30s 超时。放在交接前就把「对端会话已建好、
+    //    用户的首条消息/目标文案还没被登记」的窗口从一次本地 rehome 撑到半分钟,窗口内
+    //    应用被关掉就会丢输入并在对端留下空会话(remoteSessionHandoff 第 33 轮同款不变量)。
+    //  · **在 navigate 之前** —— 首条消息由 CCAgentSessionView mount 后 consumePending
+    //    发出,它要等 navigate;只要 navigate 还在后面,Lead 的第一个 turn 就带得上协同 MCP。
     const sendBranch = source.slice(
       source.indexOf('if (isDeviceLinkDraft && effectiveDeviceLinkDeviceId) {'),
     );
-    const enableOrca = sendBranch.indexOf('await enableRemoteCollabForSession({');
-    const setPending = sendBranch.indexOf('setPending(remoteSessionId, {', enableOrca);
-    expect(enableOrca).toBeGreaterThan(-1);
-    // enableOrca 必须排在首条消息交接**之前**:Lead 的第一个 turn 就要带上协同 MCP,
-    // 否则用户开了协同却发现首轮 Lead 根本没有 cindy_orca 工具(与本机分支同口径)。
-    expect(setPending).toBeGreaterThan(enableOrca);
+    const setPending = sendBranch.indexOf('setPending(remoteSessionId, {');
+    const enableOrca = sendBranch.indexOf('await enableRemoteCollabForSession({', setPending);
+    const navigateAt = sendBranch.indexOf('navigate(`/cc-agent/${remoteSessionId}`', enableOrca);
+    expect(setPending).toBeGreaterThan(-1);
+    expect(enableOrca).toBeGreaterThan(setPending);
+    expect(navigateAt).toBeGreaterThan(enableOrca);
     expect(sendBranch).toContain('state: dlOrcaReveal ? { orcaWorkersReveal: dlOrcaReveal } : undefined');
 
     const goalHandler = source.slice(source.indexOf('const handleCreateGoal = useCallback('));
-    const goalEnable = goalHandler.indexOf('await enableRemoteCollabForSession({');
-    const goalSetPending = goalHandler.indexOf('setPendingGoal(remoteSessionId', goalEnable);
-    expect(goalEnable).toBeGreaterThan(-1);
-    expect(goalSetPending).toBeGreaterThan(goalEnable);
+    const goalSetPending = goalHandler.indexOf('setPendingGoal(remoteSessionId');
+    const goalEnable = goalHandler.indexOf('await enableRemoteCollabForSession({', goalSetPending);
+    const goalNavigate = goalHandler.indexOf('navigate(`/cc-agent/${remoteSessionId}`', goalEnable);
+    expect(goalSetPending).toBeGreaterThan(-1);
+    expect(goalEnable).toBeGreaterThan(goalSetPending);
+    expect(goalNavigate).toBeGreaterThan(goalEnable);
     expect(goalHandler).toContain(
       'state: remoteGoalOrcaReveal ? { orcaWorkersReveal: remoteGoalOrcaReveal } : undefined',
     );
@@ -76,12 +86,25 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
   it('keeps both device-link enable paths on the shared remote collab helper', () => {
     // 两条路径逐字重复这段收尾正是 #807 反复踩的坑(漏改一处没有任何编译/测试信号)。
     // 收敛后组件里只剩调用,时序不变量(等 enableOrca、**不等**镜像回流 —— 后者对瞬态
-    // 错误有最长约 6.75 秒退避重试,挡在交接前面就会丢掉用户的首条消息/目标文案)住在
-    // remoteCollabHandoff 里,只有一处可改。
+    // 错误有最长约 6.75 秒退避重试)住在 remoteCollabHandoff 里,只有一处可改。
     expect(source.match(/await enableRemoteCollabForSession\(\{/g)).toHaveLength(2);
     expect(source).not.toContain('refreshRemoteDeviceSessions');
     expect(remoteCollabHandoffSource).toContain('void refreshRemoteDeviceSessions(p.deviceId)');
     expect(remoteCollabHandoffSource).not.toContain('await refreshRemoteDeviceSessions(');
+  });
+
+  it('refreshes the remote mirror even when the remote enableOrca reports failure', () => {
+    // 控制端的 invoke 超时**不会取消**被控端正在跑的 enableOrca,所以「控制端报失败、
+    // 对端稍后仍建成 team」是真实终态(codex review P1)。回流放在 finally 里,让
+    // orcaRole 尽快回流、由 external-enable 边沿检测把协同 tab 补开,UI 最终与被控端收敛。
+    const body = remoteCollabHandoffSource.slice(
+      remoteCollabHandoffSource.indexOf('export async function enableRemoteCollabForSession('),
+    );
+    const returnAt = body.indexOf('return { focusWorkerSessionId:');
+    const finallyAt = body.indexOf('} finally {');
+    expect(returnAt).toBeGreaterThan(-1);
+    expect(finallyAt).toBeGreaterThan(returnAt);
+    expect(body.indexOf('void refreshRemoteDeviceSessions(')).toBeGreaterThan(finallyAt);
   });
 
   it('narrows the device-link worker source against the controlled device catalog', () => {
