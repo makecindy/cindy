@@ -67,7 +67,12 @@
   `docs/dev-rules/maker-core-and-agent-behavior.md`。
 - 修改插件（`.cindy`）运行时、沙箱、权限、能力 slot、面板供片、网络／凭证／文件交接，
   或身份卡、管子协议、打包与编写手册前，必须先读
-  `docs/dev-rules/plugin-security-and-authoring.md`。
+  `docs/dev-rules/plugin-security-and-authoring.md`。其中**存量插件兼容是红线**：任何
+  插件系统改动（含批准状态 schema、指纹格式、manifest 校验、安装布局、包格式）都必须
+  向下兼容——用户升级后什么都不做，已装、已批准、已启用的插件必须照旧可用，**绝不允许
+  要求用户重新安装、重新确认权限或重新配置**。做不到就必须自带从旧版数据的自动迁移；
+  自动迁移也做不到时，必须有明确提示 + 一次性批量恢复入口，且不丢用户已存的凭证与偏好。
+  漏迁移 = P0，规则正文见该文件第 5 节。
 - 修改客户端自动更新链路（`cindy-updater` 或 Electron 侧更新服务）前，必须先读
   `docs/dev-rules/cindy-updater.md`。
 - 新增或修改 Desktop 日志、IPC 错误处理、main 侧业务逻辑与测试、跨平台（macOS／

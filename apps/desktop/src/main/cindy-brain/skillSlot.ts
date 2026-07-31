@@ -9,31 +9,20 @@
  * - **单一幂等 reconciler**:`reconcileGhostSkillLinks` 以"期望态 vs 实际态"
  *   对账,不做增量命令式挂链——install/update/启停/卸载全走同一条广播管线
  *   触发对账,崩溃残留(悬空链接)下一轮自动自愈。
- * - **链接指向 Host 批准快照,不指向可变安装目录**:共享技能根
- *   `~/.agents/skills/<id>--<name>` 是指向**批准状态根**里
- *   `skill-snapshots/<id>/<revision>/<dir>` 的 junction(win32)/dir symlink。
- *   skill 槽是唯一越出沙箱的能力,确认框看到的 SKILL.md 必须就是 Agent 之后
- *   读到的那份,所以装入/更新确认时把技能目录逐字节拷成快照(只收普通文件),
- *   链接指快照而不是随后可被改写的 `brainRoot/<id>/<dir>`。代价是目标路径按
- *   revision 变化:每次更新都换一个新目标,靠对账重指(旧 revision 快照在
- *   receipt 提交后回收)。卸载即断链,由对账回收。
- * - **两个受管根**:因此本文件同时管理安装根(brainRoot)与批准状态根
- *   (approvalStateRoot);两者都必须由调用方给出,漏给会让活链接被判成外来
- *   链接而永不撤链 —— 停用/卸载后技能仍对主 Agent 生效,故 approvalStateRoot
- *   是必填项。
- * - **绝不误伤**:只删"确认为 symlink/junction 且目标落在上述两个受管根之一"
+ * - **链接不复制字节**:共享技能根 `~/.agents/skills/<id>--<name>` 是指向插件
+ *   安装目录(brainRoot/<id>/<dir>)的 junction(win32)/dir symlink。更新插件
+ *   时安装目录路径稳定,链接跨版本存活;卸载即断链,由对账回收。
+ * - **绝不误伤**:只删"确认为 symlink/junction 且目标落在 cindy-brain 安装根"
  *   的条目。真实目录(SkillHub 实体技能、用户手放的技能)与外来链接一律不碰,
  *   占位冲突只 warn 不覆盖(同 shared-global-skills 的冲突哲学)。
  * - **`.claude` 扇出与回收都不归这里管**:对账后调 prepareSharedGlobalSkillLinks,
  *   它负责把 `.agents` 新条目 link 进 `.claude`;我们撤链后留下的 `.claude`
  *   悬空兼容链接目标指向 `.agents` 受管根,同样由它的 cleanupBrokenManagedLinks
- *   回收——职责分界干净:目标在本文件受管根内的链接归本文件,目标在 `.agents`
- *   受管根内的归它。
- * - 多账号:两个受管根都是 owner-scoped,`~/.agents/skills` 是全局的。本函数只
- *   管理 realpath 落在**当前 owner 的受管根**内的活链接;他 owner 的活链接不碰
- *   (与 SkillHub 实体技能同一跨账号可见性现状)。悬空链接按结构判据回收
- *   (断链对所有消费方都是死重,跨 owner 清理防积尘),判据见
- *   `targetLooksGhostManaged`。
+ *   回收——职责分界干净:目标在 brainRoot 的链接归本文件,受管根内的归它。
+ * - 多账号:brainRoot 是 owner-scoped,`~/.agents/skills` 是全局的。本函数只
+ *   管理 realpath 落在**当前 brainRoot** 内的活链接;他 owner 的活链接不碰
+ *   (与 SkillHub 实体技能同一跨账号可见性现状)。悬空链接只要目标带
+ *   `cindy-brain` 路径段就回收(断链对所有消费方都是死重,跨 owner 清理防积尘)。
  */
 
 import { promises as fsp } from 'node:fs';
@@ -96,16 +85,6 @@ interface ReconcileOptions {
   ghosts: InstalledGhost[];
   /** 当前 owner 的插件安装根(userData/.../cindy-brain)。 */
   brainRoot: string;
-  /**
-   * Host-owned root containing approval-revision-bound skill snapshots.
-   * 必填:漏给会让指向快照的活链接被判成外来链接而永不撤链(见头注释)。
-   */
-  approvalStateRoot: string;
-  /**
-   * 在把批准快照投影成共享链接前重算其完整内容摘要。必填:只检查 SKILL.md
-   * frontmatter 拦不住正文/辅助文件被改写,而已有链接目标不变时也不能直接 kept。
-   */
-  validateApprovedSkillSnapshot: (ghost: InstalledGhost) => Promise<boolean>;
   /** 覆盖 home 目录(仅测试)。 */
   homeDir?: string;
 }
@@ -128,33 +107,19 @@ async function realPathOrNull(value: string): Promise<string | null> {
   }
 }
 
-/**
- * 断链回收判据:链接名符合 `<id>--<name>` ghost 命名,且目标路径命中我们自己
- * 铺出来的结构 —— 安装根的 `cindy-brain` 段,或批准状态根的
- * `<状态根名>/skill-snapshots` **相邻两段**。两条同时满足才动手。
- *
- * 状态根名要求相邻匹配而不是单看 `skill-snapshots`:后者是个通用名字,单独匹配
- * 会误删用户自己在别处的 `skill-snapshots/` 下建的外来悬空链接。owner 段在路径
- * 中间,所以这条判据仍跨 owner 通用。
- */
-function targetLooksGhostManaged(
-  target: string,
-  linkName: string,
-  approvalStateDirName: string,
-): boolean {
+/** 断链回收判据:链接名符合 `<id>--<name>` ghost 命名且目标路径带 `cindy-brain`
+ *  段才视为 ghost 托管(跨 owner 通用)。两条同时满足才动手,避免误伤用户创建
+ *  的恰巧含该路径段的外来链接。 */
+function targetLooksGhostManaged(target: string, linkName: string): boolean {
   if (!linkName.includes('--')) return false;
-  const segments = target.split(/[\\/]/).map((segment) => segment.toLowerCase());
-  const stateDirName = approvalStateDirName.toLowerCase();
-  return segments.some(
-    (segment, index) =>
-      segment === 'cindy-brain' ||
-      (segment === stateDirName && segments[index + 1] === 'skill-snapshots'),
-  );
+  return target
+    .split(/[\\/]/)
+    .some((segment) => segment.toLowerCase() === 'cindy-brain');
 }
 
 /**
- * 共享技能根对账:期望态(启用、已批准且带 skill 槽的插件)vs 实际态(根下目标
- * 落在受管根内的链接)。幂等、best-effort、不 throw;warnings 交调用方记日志。
+ * 共享技能根对账:期望态(启用且带 skill 槽的插件)vs 实际态(根下目标落在
+ * brainRoot 的链接)。幂等、best-effort、不 throw;warnings 交调用方记日志。
  */
 export async function reconcileGhostSkillLinks(
   opts: ReconcileOptions,
@@ -166,12 +131,7 @@ export async function reconcileGhostSkillLinks(
   const { sharedSkillsDir } = sharedGlobalSkillsPaths(opts.homeDir);
   // realpath 兼容 brainRoot 或其祖先是 symlink 的场景(relocated home dir)——
   // 活链接 realpath 后必须与归一化的物理根比较才可靠。resolve 失败退化到词法。
-  const managedRootCompares = [
-    (await realPathOrNull(opts.brainRoot)) ?? normalizeForCompare(opts.brainRoot),
-    (await realPathOrNull(opts.approvalStateRoot)) ??
-      normalizeForCompare(opts.approvalStateRoot),
-  ];
-  const approvalStateDirName = path.basename(path.resolve(opts.approvalStateRoot));
+  const brainRootCompare = (await realPathOrNull(opts.brainRoot)) ?? normalizeForCompare(opts.brainRoot);
 
   try {
     await fsp.mkdir(sharedSkillsDir, { recursive: true });
@@ -184,30 +144,9 @@ export async function reconcileGhostSkillLinks(
   //    first-wins + warn 兜底(name 正则已保证结构上不可能,防御纵深)。
   const desired = new Map<string, { target: string; item: GhostSkillItem }>();
   const eligible = opts.ghosts
-    .filter(
-      (g) =>
-        g.enabled &&
-        g.approval.state === 'approved' &&
-        Boolean(g.approvedSkillRoot) &&
-        g.manifest.slots.includes('skill') &&
-        g.manifest.skill,
-    )
+    .filter((g) => g.enabled && g.manifest.slots.includes('skill') && g.manifest.skill)
     .sort((a, b) => a.manifest.id.localeCompare(b.manifest.id));
   for (const ghost of eligible) {
-    let snapshotValid = false;
-    try {
-      snapshotValid = await opts.validateApprovedSkillSnapshot(ghost);
-    } catch (err) {
-      warnings.push(
-        `批准技能快照校验失败 ${ghost.manifest.id}:${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    }
-    if (!snapshotValid) {
-      warnings.push(`批准技能快照字节不可信,撤链并等待修复:${ghost.manifest.id}`);
-      continue;
-    }
     const sortedItems = [...(ghost.manifest.skill?.items ?? [])].sort((a, b) =>
       a.name.localeCompare(b.name),
     );
@@ -218,7 +157,7 @@ export async function reconcileGhostSkillLinks(
         continue;
       }
       desired.set(linkName, {
-        target: path.join(ghost.approvedSkillRoot!, ...item.dir.split('/')),
+        target: path.join(opts.brainRoot, ghost.manifest.id, ...item.dir.split('/')),
         item,
       });
     }
@@ -240,8 +179,8 @@ export async function reconcileGhostSkillLinks(
     const linkPath = path.join(sharedSkillsDir, entName);
     const real = await realPathOrNull(linkPath);
     if (real !== null) {
-      // 活链接:目标在当前 owner 的受管根内才归我们管;他 owner / 外来链接不碰。
-      if (!managedRootCompares.some((root) => isSameOrInside(real, root))) continue;
+      // 活链接:目标在当前 brainRoot 内才归我们管;他 owner / 外来链接不碰。
+      if (!isSameOrInside(real, brainRootCompare)) continue;
       const want = desired.get(entName);
       const wantCompare = want
         ? ((await realPathOrNull(want.target)) ?? normalizeForCompare(want.target))
@@ -253,7 +192,7 @@ export async function reconcileGhostSkillLinks(
       }
       continue;
     }
-    // 断链:目标命中受管结构即回收(含他 owner 与登出态临时根的残留)。
+    // 断链:目标带 cindy-brain 段即回收(含他 owner 与登出态临时根的残留)。
     let rawTarget: string;
     try {
       rawTarget = await fsp.readlink(linkPath);
@@ -263,9 +202,7 @@ export async function reconcileGhostSkillLinks(
     const absTarget = path.isAbsolute(rawTarget)
       ? rawTarget
       : path.resolve(sharedSkillsDir, rawTarget);
-    if (targetLooksGhostManaged(absTarget, entName, approvalStateDirName)) {
-      toRemove.push(entName);
-    }
+    if (targetLooksGhostManaged(absTarget, entName)) toRemove.push(entName);
   }
 
   // —— 删除步:先撤旧再建新,防"改目标"落进冲突分支。

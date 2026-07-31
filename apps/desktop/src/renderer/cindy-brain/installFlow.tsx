@@ -5,8 +5,7 @@ import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import {
-  diffInstalledGhostPermissionItems,
-  ghostInstallApprovalToken,
+  diffGhostPermissionItems,
   ghostPermissionItems,
   type GhostManifest,
   type GhostTrustInfo,
@@ -92,7 +91,7 @@ async function confirmAndRunUpdate(
 ): Promise<void> {
   const { t, confirm } = deps;
   // 权限 diff:只把新增/移除的权限亮给用户,不变项折叠计数。
-  const diff = diffInstalledGhostPermissionItems(installed, manifest);
+  const diff = diffGhostPermissionItems(installed.manifest, manifest);
   const ok = await confirm({
     title: t('settings.ghosts.updateConfirm.title', { name: manifest.name }),
     description: t('settings.ghosts.updateConfirm.body', {
@@ -108,7 +107,6 @@ async function confirmAndRunUpdate(
   try {
     const { ghost } = await window.electronAPI.ghosts.update(lizFilePath, {
       expectedPackageSha256: packageSha256,
-      expectedInstalledApproval: ghostInstallApprovalToken(installed.approval),
     });
     toast.success(
       t('settings.ghosts.toast.updated', {

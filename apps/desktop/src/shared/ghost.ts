@@ -1283,50 +1283,16 @@ export interface GhostManifestLocaleResource {
 /** 单个插件 locale JSON 的字节上限。Forge 与装入侧共用，避免两端契约漂移。 */
 export const GHOST_LOCALE_MAX_BYTES = 64 * 1024;
 
-/**
- * Host 对插件安装状态的批准结论。
- *
- * `approved` 的 revision 由 Main 在一次完整安装/更新确认事务中生成；另外两态
- * 都不构成运行授权，更新 UI 必须把目标包的全部权限按新增项重新展示。
- */
-export type GhostInstallApproval =
-  | { state: 'approved'; revision: string }
-  | { state: 'legacy-unapproved' }
-  | { state: 'invalid' };
-
-/** 把批准态投影成跨进程更新事务使用的稳定 token。 */
-export function ghostInstallApprovalToken(approval: GhostInstallApproval | undefined): string {
-  if (approval?.state === 'approved') return `approved:${approval.revision}`;
-  return approval?.state ?? 'legacy-unapproved';
-}
-
-/** 更新 IPC 只接受 Host 列表曾下发过的批准态 token。 */
-export function isGhostInstallApprovalToken(value: unknown): value is string {
-  return (
-    value === 'legacy-unapproved' ||
-    value === 'invalid' ||
-    (typeof value === 'string' &&
-      /^approved:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
-        value,
-      ))
-  );
-}
-
-/** 已装入主机的插件(批准清单 + 安装位置 + 启用态)。 */
+/** 已装入主机的意识(清单 + 安装位置 + 启用态)。 */
 export interface InstalledGhost {
   manifest: GhostManifest;
   /** 安装目录绝对路径(userData/brain/<id>)。 */
   dir: string;
   /**
-   * 是否启用。停用 = 面板与能力休眠(不注册、不渲染),但插件仍装着、
-   * 布局位置保留;重新启用即恢复。批准安装的真身在 Host receipt 中；
-   * 安装目录里的 `.disabled` 只保留为旧版本兼容镜像。
+   * 是否启用。停用 = 面板与能力休眠(不注册、不渲染),但意识仍装着、
+   * 布局位置保留;重新启用即恢复。真身是安装目录里的 `.disabled` 标记文件。
    */
   enabled: boolean;
-  /** Host 是否持有一次明确安装/更新确认形成的批准快照。 */
-  approval: GhostInstallApproval;
-  /** Host-owned approval-revision snapshot root for approved skill directories. */
-  approvedSkillRoot?: string;
   /** 安装时由主机验出的来源/签名等级；作者清单不能自报。 */
   trust?: GhostTrustInfo;
   /**
@@ -1844,25 +1810,6 @@ export function diffGhostPermissionItems(
     }
   }
   return { added, removed, unchanged };
-}
-
-/**
- * Compare an installed Plugin with a candidate package without trusting a
- * mutable live manifest. Legacy or invalid installs have no approved baseline,
- * so every permission in the candidate must be reviewed as newly requested.
- */
-export function diffInstalledGhostPermissionItems(
-  installed: InstalledGhost,
-  next: GhostManifest,
-): GhostPermissionDiff {
-  if (installed.approval.state === 'approved') {
-    return diffGhostPermissionItems(installed.manifest, next);
-  }
-  return {
-    added: ghostPermissionItems(next),
-    removed: [],
-    unchanged: [],
-  };
 }
 
 /**

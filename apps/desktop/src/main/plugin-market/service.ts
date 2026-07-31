@@ -10,8 +10,7 @@ import {
 import { app, type WebContents } from 'electron';
 
 import {
-  diffInstalledGhostPermissionItems,
-  ghostInstallApprovalToken,
+  diffGhostPermissionItems,
   isOfficialGhostId,
   validateGhostManifest,
   type GhostManifest,
@@ -314,7 +313,6 @@ export class PluginMarketService {
       expectedReleaseId: string;
       /** 自定义市场插件：Renderer 确认框实际审阅过的完整 manifest。 */
       expectedManifest?: GhostManifest;
-      expectedInstalledApproval?: string;
       allowPermissionExpansion?: boolean;
     },
   ): Promise<{ ghost: InstalledGhost }> {
@@ -354,13 +352,12 @@ export class PluginMarketService {
       }
       const existing = getGhostManager()
         .list()
-        .find((ghost) => ghost.manifest.id === plugin.ghostId);
+        .some((ghost) => ghost.manifest.id === plugin.ghostId);
       return {
         ghost: await this.installDetail(
           plugin,
           {
-            expectedInstalled: Boolean(existing),
-            expectedInstalledApproval: options.expectedInstalledApproval,
+            expectedInstalled: existing,
             allowPermissionExpansion: options.allowPermissionExpansion === true,
           },
           owner,
@@ -592,9 +589,9 @@ export class PluginMarketService {
         });
         if (
           existing &&
-          // 与服务端安装同口径:未获批准的历史安装没有可信基线,候选包的每项权限
-          // 都当作新申请重新审阅,不拿可变的 live manifest 当既有授权。
-          diffInstalledGhostPermissionItems(existing, plugin.manifest).added.length > 0 &&
+          // 与服务端安装同口径:对比已装 manifest 与候选包,只有新增权限才要求
+          // 显式确认(upstream 已回退批准 receipt 基线,这里跟随主干口径)。
+          diffGhostPermissionItems(existing.manifest, plugin.manifest).added.length > 0 &&
           options.allowPermissionExpansion !== true
         ) {
           throwIpcError('PRECONDITION_FAILED', 'Plugin permissions changed and require review');
@@ -760,7 +757,6 @@ export class PluginMarketService {
     plugin: VisiblePluginDetail,
     options: {
       allowPermissionExpansion?: boolean;
-      expectedInstalledApproval?: string;
       /** 确认操作时的安装意图;下载窗口期目标被另一窗口卸载时拒绝滑入首装。 */
       expectedInstalled: boolean;
     } = { expectedInstalled: false },
@@ -778,16 +774,6 @@ export class PluginMarketService {
     if (existing && (!currentRecord?.installed || currentRecord.pluginId !== plugin.id)) {
       throwIpcError('ALREADY_EXISTS', 'A local Plugin already uses this Plugin ID');
     }
-    if (
-      existing &&
-      ghostInstallApprovalToken(existing.approval) !==
-        options.expectedInstalledApproval
-    ) {
-      throwIpcError(
-        'PRECONDITION_FAILED',
-        'Plugin approval state changed after permission review',
-      );
-    }
 
     const compatible = validateGhostManifest(plugin.currentRelease.manifest);
     if (!compatible.ok) {
@@ -795,7 +781,7 @@ export class PluginMarketService {
     }
     if (
       existing &&
-      diffInstalledGhostPermissionItems(existing, compatible.manifest).added.length > 0 &&
+      diffGhostPermissionItems(existing.manifest, compatible.manifest).added.length > 0 &&
       options.allowPermissionExpansion !== true
     ) {
       throwIpcError('PRECONDITION_FAILED', 'Plugin permissions changed and require review');
@@ -823,7 +809,7 @@ export class PluginMarketService {
       if (options.expectedInstalled) {
         const stillInstalled = getGhostManager()
           .list()
-          .find((ghost) => ghost.manifest.id === plugin.ghostId);
+          .some((ghost) => ghost.manifest.id === plugin.ghostId);
         if (!stillInstalled) {
           // 用户确认的是更新；下载期间若另一窗口已卸载目标,不能把操作
           // 降级成首装并自动启用。按状态变化拒绝,由 renderer 刷新重试。
@@ -832,36 +818,12 @@ export class PluginMarketService {
             'Plugin was uninstalled while the update was downloading',
           );
         }
-        if (
-          ghostInstallApprovalToken(stillInstalled.approval) !==
-          options.expectedInstalledApproval
-        ) {
-          throwIpcError(
-            'PRECONDITION_FAILED',
-            'Plugin approval state changed while the update was downloading',
-          );
-        }
-      } else if (
-        getGhostManager()
-          .list()
-          .some((ghost) => ghost.manifest.id === plugin.ghostId)
-      ) {
-        // 用户确认的是首装；下载期间出现同 id 安装时，不能静默把它升级为
-        // “更新现有插件”。即使 Renderer 恰好带了一个可匹配 token，也必须
-        // 刷新详情并按更新流程重新审阅。
-        throwIpcError(
-          'PRECONDITION_FAILED',
-          'Plugin was installed while the package was downloading',
-        );
       }
       // 市场首装一律装完即开(2026-07-26 定案,见 installOrUpdateMarketGhostPackage);
       // 已装过则走原位更新,唤醒/沉睡状态延续当前值。
       const ghost = await installOrUpdateMarketGhostPackage(tempPath, {
         ghostId: plugin.ghostId,
         version: plugin.currentRelease.version,
-        ...(options.expectedInstalledApproval
-          ? { expectedInstalledApproval: options.expectedInstalledApproval }
-          : {}),
       });
       // Once the package directory is committed, finish provenance against the
       // owner captured at operation start even if the active session changes.

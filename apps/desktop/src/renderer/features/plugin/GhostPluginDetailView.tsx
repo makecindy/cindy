@@ -71,8 +71,6 @@ interface GhostPluginDetailViewProps {
   onToggle: (enabled: boolean) => void;
   onUse: () => void;
   onUpdate: () => void;
-  /** 缺少批准状态时的恢复入口(重新走一次完整权限确认)。 */
-  onReapprove: () => void;
   updateLabel?: string;
   /** 市场存在新版本时的目标版本号;设置后头部展示显著的更新按钮。 */
   updateVersion?: string;
@@ -137,7 +135,6 @@ export function GhostPluginDetailView({
   onToggle,
   onUse,
   onUpdate,
-  onReapprove,
   updateLabel,
   updateVersion,
   updateBusy = false,
@@ -151,9 +148,7 @@ export function GhostPluginDetailView({
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [descriptionOverflows, setDescriptionOverflows] = useState(false);
   const descriptionRef = useRef<HTMLParagraphElement>(null);
-  // 未批准的安装不可运行:说明现状 + 给恢复入口,不让它看起来只是"被关掉了"。
-  const needsReapproval = detail.approvalState !== 'approved';
-  const enabled = (enabledOverride ?? detail.enabled) && !needsReapproval;
+  const enabled = enabledOverride ?? detail.enabled;
   const canUse = enabled && detail.canUse;
   const cindyCapabilities = detail.cindyCapabilities;
   const hasConfiguration =
@@ -233,21 +228,7 @@ export function GhostPluginDetailView({
               className="plugin-detail-actions flex shrink-0 flex-nowrap items-center gap-1.5"
               style={WINDOW_NO_DRAG_STYLE}
             >
-              {needsReapproval ? (
-                <button
-                  type="button"
-                  onClick={onReapprove}
-                  disabled={updateBusy}
-                  className={cn(
-                    'inline-flex h-10 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-5 text-13 font-medium text-[var(--text-primary)]',
-                    'transition-[background-color,border-color,transform,opacity] duration-150 hover:border-[var(--text-tertiary)] hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
-                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                    'disabled:cursor-wait disabled:opacity-40 disabled:active:scale-100',
-                  )}
-                >
-                  {t('settings.ghosts.reapproval.action')}
-                </button>
-              ) : updateVersion ? (
+              {updateVersion ? (
                 <button
                   type="button"
                   onClick={onUpdate}
@@ -282,7 +263,7 @@ export function GhostPluginDetailView({
               <Switch
                 checked={enabled}
                 onCheckedChange={onToggle}
-                disabled={toggleDisabled || needsReapproval}
+                disabled={toggleDisabled}
                 aria-label={t('settings.ghosts.enableAria', { name: detail.name })}
               />
               <DropdownMenu>
@@ -354,27 +335,6 @@ export function GhostPluginDetailView({
               </button>
             ) : null}
           </div>
-
-          {needsReapproval ? (
-            <div
-              className={cn(
-                'mt-5 rounded-xl px-4 py-3.5',
-                DETAIL_SURFACE_CLASS,
-              )}
-              role="status"
-            >
-              <p className="text-13 font-medium text-[var(--text-primary)]">
-                {t('settings.ghosts.reapproval.noticeTitle')}
-              </p>
-              <p className="mt-1 text-13 leading-5 text-[var(--text-secondary)]">
-                {t(
-                  detail.approvalState === 'invalid'
-                    ? 'settings.ghosts.reapproval.bodyInvalid'
-                    : 'settings.ghosts.reapproval.bodyLegacy',
-                )}
-              </p>
-            </div>
-          ) : null}
         </header>
 
         {hasConfiguration ? (

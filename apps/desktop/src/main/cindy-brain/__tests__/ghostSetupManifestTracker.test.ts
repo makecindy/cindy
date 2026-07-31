@@ -11,7 +11,6 @@ function ghost(
   return {
     dir: `/plugins/${id}`,
     enabled: options.enabled ?? true,
-    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
     manifest: {
       schemaVersion: 2,
       id,

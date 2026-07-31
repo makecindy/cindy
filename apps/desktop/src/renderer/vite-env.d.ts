@@ -1107,10 +1107,7 @@ interface ElectronAPI {
     /** 原位更新(同 id 换版):唤醒状态与面板位置延续,沙箱熄灯待重拉。 */
     update: (
       lizFilePath: string,
-      opts: {
-        expectedPackageSha256: string;
-        expectedInstalledApproval: string;
-      },
+      opts: { expectedPackageSha256: string },
     ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
     /**
      * cindy 槽后端覆盖:首帧同步读(规则 7);overrides 键为 "image.generate"
@@ -1351,7 +1348,6 @@ interface ElectronAPI {
       options: {
         expectedReleaseId: string;
         expectedManifest?: import('../shared/ghost').GhostManifest;
-        expectedInstalledApproval?: string;
         allowPermissionExpansion?: boolean;
       },
     ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;

@@ -8,12 +8,6 @@ import {
   validateGhostManifest,
   type GhostManifest,
 } from '../../shared/ghost.js';
-import {
-  classifyGhostDirEntry,
-  collectGhostContentFiles,
-  hashGhostContentFiles,
-  resolveGhostContentPathSync,
-} from './ghostContentTree.js';
 import { validateGhostLocaleResourcesInDirectory } from './ghostLocaleFiles.js';
 
 /**
@@ -112,8 +106,6 @@ export interface ProvisionDeps {
 }
 
 export interface ProvisionOutcome {
-  /** First-party seed manifests whose installed bytes reconciled successfully. */
-  approved: GhostManifest[];
   /** 本次首装的意识(装完默认唤醒;调用方负责停靠面板 + 广播 + 常驻点火)。 */
   installed: GhostManifest[];
   /** 本次覆盖更新的意识(`.disabled` 已保留;调用方负责广播)。 */
@@ -311,13 +303,7 @@ function readProvisioningConfig(
 export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<ProvisionOutcome> {
   const { seedRootDirs, repoRootDir, log } = deps;
   const identity = deps.identity ?? null;
-  const outcome: ProvisionOutcome = {
-    approved: [],
-    installed: [],
-    updated: [],
-    removed: [],
-    skipped: [],
-  };
+  const outcome: ProvisionOutcome = { installed: [], updated: [], removed: [], skipped: [] };
 
   // 每根独立列种子 + 读配置。空根不读配置(未初始化 submodule 的目录里连
   // provisioning.json 都没有,读了必 warn,徒增噪音)。
@@ -396,22 +382,10 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
         }
 
         // 4) 指纹比对(忽略点开头文件:`.disabled` 是用户状态不是内容)。
-        // 种子是随应用发布的第一方输入,出现链接/FIFO/设备节点属于打包事故:
-        // 必须整颗 fail closed,不能在复制时静默丢掉条目后批准一个残缺安装。
-        const seedFingerprint = await fingerprintDirContent(seedDir);
-        if (seedFingerprint.hasNonRegularEntry) {
-          throw new Error('builtin seed contains a link or non-regular entry');
-        }
         if (installedExists) {
-          const installedFingerprint = await fingerprintDirContent(installedDir);
-          // 安装侧含非普通条目 = 一律判不一致,走重新播种把目录换回随包字节。
-          // 否则它既修不回来(判成相同就跳过播种),随后 hashApprovedDirectory 又会因
-          // 非普通条目抛错、批准被撤销,插件每次启动都卡在不可用。
-          if (
-            !installedFingerprint.hasNonRegularEntry &&
-            seedFingerprint.hash === installedFingerprint.hash
-          ) {
-            outcome.approved.push(manifest);
+          const seedHash = await hashDirContent(seedDir);
+          const installedHash = await hashDirContent(installedDir);
+          if (seedHash === installedHash) {
             outcome.skipped.push(id);
             continue;
           }
@@ -419,14 +393,12 @@ export async function provisionBuiltinGhosts(deps: ProvisionDeps): Promise<Provi
           markApplyStart();
           await swapInSeed(seedDir, installedDir, repoRootDir, id, { disabled: wasDisabled });
           seeded.add(id);
-          outcome.approved.push(manifest);
           outcome.updated.push(manifest);
           log?.info('builtin ghost updated to bundled content', { id, version: manifest.version });
         } else {
           markApplyStart();
           await swapInSeed(seedDir, installedDir, repoRootDir, id, { disabled: false });
           seeded.add(id);
-          outcome.approved.push(manifest);
           outcome.installed.push(manifest);
           log?.info('builtin ghost installed', { id, version: manifest.version });
         }
@@ -560,22 +532,13 @@ export function listEnterpriseSeedIds(seedRootDirs: string[], log?: BuiltinProvi
   return [...ids].sort();
 }
 
-/**
- * 种子目录里的 icon → data URL(缺失/超限/读失败降级 null,不拖垮列表)。
- *
- * 路径解析走 `ghostContentTree` 的逐段判定:`stat` 会静默穿透链接,把种子目录之外
- * 的字节读成 icon 塞进设置页(与"清单声明的相对路径必须落在插件目录内"同一条判据,
- * 不因为它只是张图就换一套写法)。
- */
+/** 种子目录里的 icon → data URL(缺失/超限/读失败降级 null,不拖垮列表)。 */
 function readSeedIconDataUrl(seedDir: string, manifest: GhostManifest): string | null {
   if (manifest.icon === undefined) return null;
   try {
-    const iconPath = resolveGhostContentPathSync(seedDir, manifest.icon, {
-      expect: 'file',
-      label: 'builtin seed icon',
-    });
-    const stat = fs.lstatSync(iconPath);
-    if (stat.size > MAX_RESTORABLE_ICON_BYTES) return null;
+    const iconPath = path.join(seedDir, ...manifest.icon.split('/'));
+    const stat = fs.statSync(iconPath);
+    if (!stat.isFile() || stat.size > MAX_RESTORABLE_ICON_BYTES) return null;
     const mime = ghostIconMimeType(manifest.icon);
     if (!mime) return null;
     return `data:${mime};base64,${fs.readFileSync(iconPath).toString('base64')}`;
@@ -623,35 +586,36 @@ function readSeedManifest(seedDir: string, id: string, log?: BuiltinProvisionerL
 }
 
 /**
- * 目录内容指纹 + 一个**不进哈希**的类型状态。意识包极小(zip 通道上限才 8MB),
- * 启动算一遍开销可忽略。
- *
- * 遍历与类型判定取自 `ghostContentTree`(与技能指纹、快照拷贝、安装目录漂移指纹
- * 同一份实现);这里的显式策略是"点开头条目不算内容(`.disabled` 是用户状态)、
- * 非普通条目只记状态位不抛错"—— 因为本判据的收敛动作是**重新播种**,不是拒绝。
- *
- * 非普通条目(软链 / Windows junction 等)不读内容,也**不能拿 sentinel 喂进哈希** ——
- * 任何这样的 sentinel 都能被"同路径下内容恰好等于该 sentinel 的普通文件"撞上(已实测:
- * 内容为 `non-regular` 的普通文件与同名 junction 的摘要完全相等),于是被塞进链接的
- * 安装目录仍会被判成"与种子逐字节相同"。所以它作为独立字段参与比较,不掺进字节流。
+ * 目录内容指纹:相对路径排序后逐个 hash(路径 + 字节),点开头条目跳过。
+ * 意识包极小(zip 通道上限才 8MB),启动算一遍开销可忽略。
  */
-export interface DirContentFingerprint {
-  /** 普通文件的 v2 内容指纹；链接等非普通条目不掺进字节流。 */
-  hash: string;
-  /** 是否含既非目录也非普通文件的条目(含点开头的那些)。 */
-  hasNonRegularEntry: boolean;
+export async function hashDirContent(dir: string): Promise<string> {
+  const files = collectFiles(dir, '');
+  files.sort();
+  const hash = crypto.createHash('sha256');
+  for (const rel of files) {
+    hash.update(rel);
+    hash.update('\0');
+    hash.update(await fs.promises.readFile(path.join(dir, rel)));
+    hash.update('\0');
+  }
+  return hash.digest('hex');
 }
 
-export async function fingerprintDirContent(dir: string): Promise<DirContentFingerprint> {
-  const tree = await collectGhostContentFiles(dir, {
-    dotEntries: 'skip',
-    nonRegular: 'flag',
-    label: 'builtin seed content',
-  });
-  return {
-    hash: await hashGhostContentFiles(dir, tree.files),
-    hasNonRegularEntry: tree.hasNonRegularEntry,
-  };
+/** 递归收集相对文件路径(正斜杠归一化保证双平台指纹一致;点开头跳过)。 */
+function collectFiles(rootDir: string, relBase: string): string[] {
+  const abs = path.join(rootDir, relBase);
+  const result: string[] = [];
+  for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
+    if (entry.name.startsWith('.')) continue;
+    const rel = relBase.length === 0 ? entry.name : `${relBase}/${entry.name}`;
+    if (entry.isDirectory()) {
+      result.push(...collectFiles(rootDir, rel));
+    } else if (entry.isFile()) {
+      result.push(rel);
+    }
+  }
+  return result;
 }
 
 /**
@@ -696,31 +660,16 @@ async function swapInSeed(
   }
 }
 
-/**
- * 递归复制目录,点开头条目跳过(种子里的 .DS_Store 等垃圾不落仓库)。
- *
- * 类型判定同样走 `ghostContentTree`:非普通条目直接抛错。种子里出现链接属于打包
- * 事故；既不能跟随复制把外部字节铺进安装目录，也不能静默丢掉后批准残缺安装。
- * 主流程在交换目录前已有同形自检，这里逐条复制前再判一次类型，缩小检查与使用之间
- * 的窗口，并挡住预检后、该条目被读取前已经发生的类型替换。
- */
+/** 递归复制目录,点开头条目跳过(种子里的 .DS_Store 等垃圾不落仓库)。 */
 async function copyDirSkippingDotEntries(from: string, to: string): Promise<void> {
   await fs.promises.mkdir(to, { recursive: true });
   for (const entry of await fs.promises.readdir(from, { withFileTypes: true })) {
+    if (entry.name.startsWith('.')) continue;
     const src = path.join(from, entry.name);
     const dest = path.join(to, entry.name);
-    const kind = await classifyGhostDirEntry(src);
-    // 与 collectGhostContentFiles 同序:先判类型，再按名称决定是否忽略内容。
-    // 否则复制期间出现的 `.x` 链接会被静默跳过，第二道 fail-closed 防线名不副实。
-    if (kind !== 'directory' && kind !== 'file') {
-      throw new Error(
-        `builtin seed rejects ${kind === 'link' ? 'link' : 'non-regular'} entry: ${src}`,
-      );
-    }
-    if (entry.name.startsWith('.')) continue;
-    if (kind === 'directory') {
+    if (entry.isDirectory()) {
       await copyDirSkippingDotEntries(src, dest);
-    } else {
+    } else if (entry.isFile()) {
       await fs.promises.copyFile(src, dest);
     }
   }
