@@ -2952,7 +2952,7 @@
       "projectSwitchLockedTip": "该插件已在全局停用；请先切回「全局」视图开启",
       "projectBanner": {
         "title": "正在配置项目「{{name}}」",
-        "desc": "开关只影响此项目：关闭的插件不会出现在该项目的新任务里",
+        "desc": "开关只影响此项目：关闭的插件在该项目中不可用",
         "backToGlobal": "返回全局"
       },
       "scopePicker": {
@@ -2983,7 +2983,7 @@
         "updated": "「{{name}}」已更新到 v{{version}}",
         "exported": "已导出「{{name}}」的 .cindy 文件",
         "exportFailed": "导出「{{name}}」失败，请重试",
-        "projectDisabled": "已在此项目停用「{{name}}」(新任务生效)",
+        "projectDisabled": "已在此项目停用「{{name}}」",
         "projectEnabled": "「{{name}}」在此项目恢复跟随全局"
       },
       "panelError": {

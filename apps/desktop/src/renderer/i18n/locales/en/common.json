@@ -2953,7 +2953,7 @@
       "projectSwitchLockedTip": "This plugin is disabled globally; enable it in the Global view first",
       "projectBanner": {
         "title": "Configuring project \"{{name}}\"",
-        "desc": "Switches here only affect this project — turned-off plugins won't appear in its new sessions",
+        "desc": "Switches here only affect this project — turned-off plugins are unavailable in it",
         "backToGlobal": "Back to global"
       },
       "scopePicker": {
@@ -2984,7 +2984,7 @@
         "updated": "\"{{name}}\" updated to v{{version}}",
         "exported": "Exported the .cindy file for \"{{name}}\"",
         "exportFailed": "Couldn't export \"{{name}}\" — try again",
-        "projectDisabled": "Turned off \"{{name}}\" for this project (applies to new sessions)",
+        "projectDisabled": "Turned off \"{{name}}\" for this project",
         "projectEnabled": "\"{{name}}\" now follows the global setting in this project"
       },
       "panelError": {

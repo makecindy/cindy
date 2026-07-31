@@ -2952,7 +2952,7 @@
       "projectSwitchLockedTip": "このプラグインはグローバルで無効です。先に「グローバル」ビューで有効にしてください",
       "projectBanner": {
         "title": "プロジェクト「{{name}}」を設定中",
-        "desc": "ここのスイッチはこのプロジェクトのみに適用されます。オフにしたプラグインは新しいセッションに現れません",
+        "desc": "ここのスイッチはこのプロジェクトのみに適用されます。オフにしたプラグインはこのプロジェクトでは使用できません",
         "backToGlobal": "グローバルに戻る"
       },
       "scopePicker": {
@@ -2983,7 +2983,7 @@
         "updated": "「{{name}}」を v{{version}} に更新しました",
         "exported": "「{{name}}」の .cindy ファイルを書き出しました",
         "exportFailed": "「{{name}}」を書き出せませんでした。もう一度お試しください",
-        "projectDisabled": "「{{name}}」をこのプロジェクトで無効にしました(新しいセッションから適用)",
+        "projectDisabled": "「{{name}}」をこのプロジェクトで無効にしました",
         "projectEnabled": "「{{name}}」はこのプロジェクトでグローバル設定に従います"
       },
       "panelError": {
