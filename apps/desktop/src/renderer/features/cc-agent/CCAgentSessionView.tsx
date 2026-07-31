@@ -21,6 +21,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
@@ -35,6 +36,7 @@ import {
   connectedProvidersForAgent,
   providerOffersModel,
 } from '@cindy/model-providers';
+import { getGhostCardSnapshot, subscribeGhostCards } from '@/cindy-brain/ghostCardStore';
 import { visibleMarkdownTextForSearch } from '../../../shared/conversationSearch';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import {
@@ -633,6 +635,12 @@ export function CCAgentSessionView({
     [requestFocusMessage, sessionId],
   );
 
+  const ghostCardSnapshot = useSyncExternalStore(
+    subscribeGhostCards,
+    getGhostCardSnapshot,
+    getGhostCardSnapshot,
+  );
+
   useEffect(() => {
     if (!ownsRoute || !sessionSearchOpen || !sessionId) return;
     const query = sessionSearchQuery.trim();
@@ -654,6 +662,11 @@ export function CCAgentSessionView({
           message.role === 'ask_user' ||
           message.role === 'plan_review',
       )
+      .filter((message) => {
+        if (message.role !== 'assistant') return true;
+        const entry = ghostCardSnapshot.byCallId.get(message.clientId);
+        return !(entry?.status === 'ready');
+      })
       .flatMap((message) => {
         const content = visibleMarkdownTextForSearch(message.content).toLocaleLowerCase();
         const hits: Array<{
@@ -715,6 +728,7 @@ export function CCAgentSessionView({
     return () => window.clearTimeout(timer);
   }, [
     focusSessionSearchHit,
+    ghostCardSnapshot.version,
     ownsRoute,
     sessionId,
     sessionSearchOpen,
