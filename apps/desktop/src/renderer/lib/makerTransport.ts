@@ -617,6 +617,15 @@ export function orcaWorkflowsFor(contextSessionId: string): RoutableOrcaWorkflow
 }
 
 /**
+ * 已知稳定 deviceId 时直接返回远程 orca 适配器,不重新读取易失的 session origin
+ * (与 makerApiForDevice 同款)。用于「调用方手里已经握着权威 deviceId」的场景 ——
+ * 例如刚在该被控端建出会话、要回查它的权威团队终态。
+ */
+export function orcaWorkflowsForDevice(deviceId: string): RoutableOrcaWorkflows {
+  return remoteOrcaWorkflows(deviceId);
+}
+
+/**
  * 订阅某 lead 的 orca worker 变更并在变更时回调:
  *   - 本机 lead → 本机 `onOrcaWorkerChanged` IPC(按 leadSessionId 过滤)。
  *   - 远程 lead → device-link 远程推送(被控端 `maker:orca:worker-changed` 经隧道转发;
