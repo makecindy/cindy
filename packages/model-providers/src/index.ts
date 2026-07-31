@@ -34,6 +34,18 @@ export { BUNDLED_CATALOG, BUILTIN_PROVIDERS, parseCatalog, presetDisplayName, sa
 
 export { buildUserProvider, DEFAULT_CUSTOM_CONTEXT_WINDOW } from './user-provider.js';
 export {
+  isValidHttpHeaderName,
+  isValidHttpHeaderValue,
+  isProtectedCustomProviderHeaderName,
+  validateCustomHeaderRows,
+  PROTECTED_CUSTOM_PROVIDER_HEADER_NAMES,
+} from './header-validation.js';
+export type {
+  CustomHeaderRow,
+  CustomHeaderInvalidReason,
+  CustomHeaderValidation,
+} from './header-validation.js';
+export {
   appendProviderRequestPath,
   isLoopbackProviderUrl,
   isProviderRequestPath,

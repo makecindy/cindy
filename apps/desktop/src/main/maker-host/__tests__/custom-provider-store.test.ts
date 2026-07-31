@@ -149,6 +149,19 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
       }).ok,
     ).toBe(false);
   });
+
+  it('rejects protocol / malformed headers at the store boundary (not just renderer)', () => {
+    const withHeaders = (headers: Record<string, string>) =>
+      validateCustomProviderConfig({
+        ...valid,
+        runtimes: { codex: { baseUrl: 'https://x/v1', models: [{ id: 'm', name: 'M' }], headers } },
+      }).ok;
+    expect(withHeaders({ 'X-Org': 'acme' })).toBe(true);
+    expect(withHeaders({ 'Content-Length': '0' })).toBe(false); // 协议完整性头
+    expect(withHeaders({ 'Transfer-Encoding': 'chunked' })).toBe(false);
+    expect(withHeaders({ 'Bad Name': 'v' })).toBe(false); // 非法 field-name
+    expect(withHeaders({ 'X-Label': '中文' })).toBe(false); // 码点 > 0xFF，发不出去
+  });
 });
 
 describe('custom-provider-store CRUD (per-runtime)', () => {

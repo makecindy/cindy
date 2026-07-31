@@ -1311,7 +1311,10 @@
           "baseUrlInvalid": "ベース URL は有効な http(s) アドレスである必要があります",
           "requestPathInvalid": "正確なリクエストパスは 1 つの / で始め、フラグメントや .、.. のパスセグメントを含めないでください。空白や安全でない文字はパーセントエンコードしてください。",
           "modelRequired": "モデルを 1 つ以上追加してください",
-          "oauthInvalid": "OAuth 設定が不完全です。すべての項目が必須で、両方のエンドポイントは安全な https URL である必要があります"
+          "oauthInvalid": "OAuth 設定が不完全です。すべての項目が必須で、両方のエンドポイントは安全な https URL である必要があります",
+          "headerNameInvalid": "リクエストヘッダー名が不正です：{{name}}",
+          "headerValueInvalid": "ヘッダー「{{name}}」の値に使用できない文字が含まれています",
+          "headerProtected": "ヘッダー「{{name}}」はシステムが管理するため、カスタマイズできません"
         },
         "toast": {
           "created": "プロバイダーを追加しました",

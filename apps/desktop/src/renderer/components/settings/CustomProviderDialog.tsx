@@ -48,9 +48,10 @@ import {
   type CustomProviderAuthMode,
 } from '@/lib/providerModelFetch';
 
-import { isProviderRequestPath, sortPresetsForLocale } from '@cindy/model-providers';
+import { isProviderRequestPath, sortPresetsForLocale, validateCustomHeaderRows } from '@cindy/model-providers';
 import type {
   AgentKind,
+  CustomHeaderInvalidReason,
   CustomProviderConfig,
   ProviderPreset,
   ProviderRuntimeModelConfig,
@@ -107,6 +108,13 @@ interface TestState {
   latencyMs?: number;
 }
 const IDLE_TEST: TestState = { status: 'idle' };
+
+/** 请求头校验失败原因 → i18n 文案键（配 `{ name }` 插值）。 */
+const HEADER_ERROR_KEY: Record<CustomHeaderInvalidReason, string> = {
+  'invalid-name': 'settings.providers.custom.errors.headerNameInvalid',
+  'invalid-value': 'settings.providers.custom.errors.headerValueInvalid',
+  protected: 'settings.providers.custom.errors.headerProtected',
+};
 
 function emptyRuntime(agent: AgentKind): RuntimeFields {
   return {
@@ -490,11 +498,12 @@ export function CustomProviderDialog({
       toast.error(t('settings.providers.custom.errors.baseUrlInvalid'));
       return;
     }
-    const headers: Record<string, string> = {};
-    for (const h of rf.headers) {
-      const n = h.name.trim();
-      if (n) headers[n] = h.value.trim();
+    const headerCheck = validateCustomHeaderRows(rf.headers);
+    if (!headerCheck.ok) {
+      toast.error(t(HEADER_ERROR_KEY[headerCheck.reason], { name: headerCheck.name }));
+      return;
     }
+    const headers = headerCheck.headers;
     const requestHeaders = authMode === 'none' ? stripCredentialHeaders(headers) : headers;
     const requestSig = providerConnectionTestRequestSignature(rf, authMode);
     setTest((prev) => ({ ...prev, [agent]: { status: 'testing' } }));
@@ -553,11 +562,12 @@ export function CustomProviderDialog({
       toast.error(t('settings.providers.custom.errors.baseUrlInvalid'));
       return;
     }
-    const headers: Record<string, string> = {};
-    for (const h of rf.headers) {
-      const n = h.name.trim();
-      if (n) headers[n] = h.value.trim();
+    const headerCheck = validateCustomHeaderRows(rf.headers);
+    if (!headerCheck.ok) {
+      toast.error(t(HEADER_ERROR_KEY[headerCheck.reason], { name: headerCheck.name }));
+      return;
     }
+    const headers = headerCheck.headers;
     const requestHeaders = authMode === 'none' ? stripCredentialHeaders(headers) : headers;
     // 请求参数签名：响应回来时若该 runtime 的端点/凭证/请求头已被改动，响应按过期丢弃——
     // 不能把旧端点的模型清单当成新端点的填进表单（成功和失败 toast 都不展示）。
@@ -716,11 +726,13 @@ export function CustomProviderDialog({
         toast.error(t('settings.providers.custom.errors.modelRequired'));
         return;
       }
-      const headers: Record<string, string> = {};
-      for (const h of rf.headers) {
-        const n = h.name.trim();
-        if (n) headers[n] = h.value.trim();
+      const headerCheck = validateCustomHeaderRows(rf.headers);
+      if (!headerCheck.ok) {
+        setActiveTab(a);
+        toast.error(t(HEADER_ERROR_KEY[headerCheck.reason], { name: headerCheck.name }));
+        return;
       }
+      const headers = headerCheck.headers;
       const savedHeaders = authMode === 'none' ? stripCredentialHeaders(headers) : headers;
       const defaultProtocol = a === 'claude-code' ? 'anthropic-messages' : 'openai-responses';
       runtimes[a] = {

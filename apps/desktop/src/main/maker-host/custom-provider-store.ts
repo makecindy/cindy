@@ -24,6 +24,9 @@ import {
   findReservedOAuthExtraParam,
   isLoopbackProviderUrl,
   isProviderRequestPath,
+  isProtectedCustomProviderHeaderName,
+  isValidHttpHeaderName,
+  isValidHttpHeaderValue,
 } from '@cindy/model-providers';
 
 import { getDbClient } from '../localDb/client/current.js';
@@ -125,6 +128,18 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     for (const [k, v] of Object.entries(r.headers as Record<string, unknown>)) {
       if (typeof k !== 'string' || typeof v !== 'string') {
         return invalid(`runtime '${agent}' headers must be string→string`);
+      }
+      // main 侧不能只信 renderer 的表单校验：任何调用 maker IPC 桥的一方（含被攻陷的
+      // renderer）都可能直接落盘非法 / 协议头。此处按 @cindy/model-providers 同口径复校
+      // 名/值合法性与协议完整性黑名单，与 validateCustomHeaderRows 一致。
+      if (!isValidHttpHeaderName(k)) {
+        return invalid(`runtime '${agent}' header name invalid: '${k}'`);
+      }
+      if (isProtectedCustomProviderHeaderName(k)) {
+        return invalid(`runtime '${agent}' header is protected: '${k}'`);
+      }
+      if (!isValidHttpHeaderValue(v)) {
+        return invalid(`runtime '${agent}' header value invalid for '${k}'`);
       }
     }
   }
