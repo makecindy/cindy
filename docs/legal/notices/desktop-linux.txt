@@ -1025,11 +1025,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ==============================================================================
-SECTION 2: npm packages (782 packages)
+SECTION 2: npm packages (781 packages)
 ==============================================================================
 
 - @antfu/install-pkg@1.1.0 — MIT — https://github.com/antfu/install-pkg
-- @anthropic-ai/sdk@0.81.0 — MIT — https://github.com/anthropics/anthropic-sdk-typescript
 - @anthropic-ai/sdk@0.91.1 — MIT — https://github.com/anthropics/anthropic-sdk-typescript
 - @babel/runtime@7.29.7 — MIT — https://github.com/babel/babel
 - @braintree/sanitize-url@7.1.2 — MIT — https://github.com/braintree/sanitize-url
@@ -1844,7 +1843,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-[2] Applies to: npm:@anthropic-ai/sdk@0.81.0, npm:@anthropic-ai/sdk@0.91.1
+[2] Applies to: npm:@anthropic-ai/sdk@0.91.1
 ------------------------------------------------------------------------------
 Copyright 2023 Anthropic, PBC.
 

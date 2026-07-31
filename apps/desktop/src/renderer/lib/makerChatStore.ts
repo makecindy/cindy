@@ -78,6 +78,10 @@ import {
 } from '@/features/device-link/remoteProjectsStore';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import {
+  clearCachedMessages,
+  readCachedMessages,
+} from '@/features/device-link/mirrorCacheClient';
+import {
   noteRemoteSessionSyncCompleted,
   noteRemoteSessionSyncStarted,
   setRemoteTerminalErrorProbe,
@@ -437,6 +441,12 @@ export interface ChatMessage {
   remoteContentTruncated?: boolean;
   /** 历史页由 device-link 裁掉过部分行;分页状态需保持可继续加载。 */
   remoteRowsTrimmed?: boolean;
+  /**
+   * 这一行来自远程会话的本地冷缓存(见 features/device-link/mirrorCacheClient.ts),
+   * **不是**被控端本次确认过的权威行。首拉落地前必须整批剔除:mergeMessages 只增不删,
+   * 留着的话被控端 /clear、rewind 或删掉的消息会在控制端永久残留。纯内存标记,不落 DB。
+   */
+  cacheHydrated?: boolean;
 }
 
 export type AgentTaskStatus = 'running' | 'completed' | 'failed' | 'stopped';
@@ -1258,6 +1268,9 @@ function _purgeSession(sessionId: string): void {
   titleUpdateCallbacks.delete(sessionId);
   _historyFetchInFlight.delete(sessionId);
   _historyLoadOrigin.delete(sessionId);
+  // 冷缓存 hydrate 的两个守卫随会话一起收掉(会话都没了,守卫留着只是无用条目)。
+  _cacheHydrateStarted.delete(sessionId);
+  _cacheHydrateSuppressed.delete(sessionId);
   _lastViewedAt.delete(sessionId);
   _lastInboundEventAt.delete(sessionId);
   rendererClearBoundaryBySession.delete(sessionId);
@@ -5217,6 +5230,107 @@ function dbAgentKindToMakerKind(
   return fallback;
 }
 
+/**
+ * 已发起过冷缓存 hydrate 的会话(每次"从空切片开始加载"只 hydrate 一次)。
+ * fresh 首拉落地时清条目 —— 之后若切片被整体重置(rewind / origin 漂移重载)且缓存
+ * 仍然有效,下一轮 ensureInitialMessages 可以再借它一次。
+ */
+const _cacheHydrateStarted = new Set<string>();
+
+/**
+ * 「这个会话的盘上缓存已经过期,在权威数据回来之前一律不许 hydrate」。
+ *
+ * 与 `_cacheHydrateStarted` 的区别是**粘滞**:rewind 之类的作废式重载之后,如果紧随的
+ * 权威首拉失败(被控端离线),`_cacheHydrateStarted` 会被放开以便下次重试,而缓存本身仍是
+ * rewind 之前的旧窗口 —— 那时重挂会话就会把已经被软删的消息重新画上去(review: codex P1)。
+ * 只有权威响应真正落地(它同时会刷新盘上缓存)才解除。
+ */
+const _cacheHydrateSuppressed = new Set<string>();
+
+/**
+ * 远程会话:从本地冷缓存乐观 hydrate 最近一页(并行于 fresh 首拉)。
+ *
+ * 只在**切片仍为空且 fresh 还没落地**时种入,种入的行打 `cacheHydrated` 标记,
+ * 由首拉落地时整批换掉。刻意不动 `historyLoaded` / `oldestMessageId`,并把
+ * `hasMoreMessages` 留在 false:缓存窗口通常只活几百毫秒(fresh 到达前),
+ * 拿缓存的游标去翻页会和随后落地的权威窗口打架(见首拉里孤岛游标那段);
+ * 被控端离线时也不该发出注定失败的隧道翻页请求。
+ *
+ * 本机会话不参与:它的历史就在本机 SQLite,读它本来就是即时的。
+ */
+function hydrateRemoteMessagesFromCache(sessionId: string): void {
+  const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
+  if (!deviceId) return;
+  // 作废式重载(rewind)之后盘上那份是过期窗口:权威数据没落地之前一律不借。
+  if (_cacheHydrateSuppressed.has(sessionId)) return;
+  if (_cacheHydrateStarted.has(sessionId)) return;
+  _cacheHydrateStarted.add(sessionId);
+  void readCachedMessages(deviceId, sessionId).then((rows) => {
+    if (rows.length === 0) return;
+    // 缓存页整页都是"渲染后不留可见锚点"的行(orphan tool_result / 隐藏 thinking /
+    // 合成指令行)时**不种入**:mapServerMessages 会产出非空数组,但 MessageStream 渲染 0 项,
+    // 而 CCAgentSessionView 又会因 messages 非空而收起 loading 覆盖层 —— 被控端离线时
+    // 就是一片永久空白(review: codex P1)。这种页对首屏没有价值,让 loading 照常显示、
+    // 交给 fresh 首拉的 no-anchor-backfill 往前翻页处理。
+    if (rows.every(isNonAnchorHistoryRow)) return;
+    const mapped = mapServerMessages(rows).map((message) => ({
+      ...message,
+      cacheHydrated: true as const,
+    }));
+    if (mapped.length === 0) return;
+    // 读缓存这一跳期间归属可能已经变了:设备被移除(mapping 消失)或会话换到了另一台设备。
+    // 只看 chat state 挡不住这种情况 —— 于是 A 设备的历史会被种进一个已经不属于 A 的会话,
+    // 而新的权威首拉若离线失败,屏上留着的就是**另一台机器**的消息(review: codex P1)。
+    // 与写缓存那侧同一条纪律:落地前重核归属。
+    if (remoteProjectsStore.getSessionDeviceId(sessionId) !== deviceId) return;
+    // 抑制标记也要在**落地前**再看一眼:这次读是在 rewind 之前发起的,而 rewind 期间
+    // 切片被清空并置了抑制 —— 只在入口检查挡不住这笔在途的读,它会把 rewind 之前的行
+    // 插进刚清空的切片,权威首拉再失败就一直留在屏上(review: codex P1)。
+    if (_cacheHydrateSuppressed.has(sessionId)) return;
+    setState(sessionId, (s) => {
+      // fresh 已经落地 / 期间已有实时消息进来 → 缓存没有价值了,原样返回不动切片。
+      if (s.historyLoaded || s.messages.length > 0) return s;
+      // hasMoreMessages 显式压成 false:缓存窗口期间不许向上翻页。翻回来的权威老行
+      // 不带 cacheHydrated,首拉落地剔除缓存行后会在窗口中间留出一段洞,得靠后续翻页
+      // 才收敛。首拉通常几百毫秒就到并写回真实的 hasMore,压掉这段的代价近乎为零。
+      return { ...s, messages: mapped, hasMoreMessages: false };
+    });
+  });
+}
+
+/**
+ * fresh 首拉**落地**:放开 hydrate 守卫(切片此后由权威数据主导),粘滞抑制也一并解除 ——
+ * 权威响应到达时缓存已被同一条链刷新过(见 makerTransport 的写点),不再是过期窗口。
+ */
+/**
+ * 权威侧作废了这个远程会话的历史(/clear、删消息、rewind 与 edit-last 截断):
+ *  1. 置粘滞抑制 —— 在途的 `readCachedMessages` 回调会在落地前再查一次它,不会把刚被删掉
+ *     的行插回空切片。这些路径都**不会**触发最新页重拉,没有"权威接管"来纠正
+ *     (review: codex P1);
+ *  2. 清盘 —— 进程内标记跨重启就没了,盘上那份必须一起消失。
+ * 本机会话没有缓存,直接 no-op。
+ */
+function invalidateRemoteMessageCache(sessionId: string): void {
+  const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
+  if (!deviceId) return;
+  _cacheHydrateStarted.add(sessionId);
+  _cacheHydrateSuppressed.add(sessionId);
+  clearCachedMessages(deviceId, sessionId);
+}
+
+function settleCacheHydration(sessionId: string): void {
+  _cacheHydrateStarted.delete(sessionId);
+  _cacheHydrateSuppressed.delete(sessionId);
+}
+
+/**
+ * fresh 首拉**失败**(典型:被控端离线):只放开「本轮已发起」的守卫以便下次重试,
+ * **不解除**粘滞抑制 —— 缓存过期这件事不会因为一次失败的请求而改变。
+ */
+function releaseCacheHydrationAfterFailure(sessionId: string): void {
+  _cacheHydrateStarted.delete(sessionId);
+}
+
 function ensureInitialMessages(sessionId: string): void {
   const state = getOrCreateState(sessionId);
   requestInputProjection(sessionId);
@@ -5231,6 +5345,11 @@ function ensureInitialMessages(sessionId: string): void {
   // 记录本次加载所依据的 origin(可能 undefined)。remote-projects 注入该会话来源后,
   // reconcileOpenSessionOrigins 比对此值发现漂移 → 重载(见上方说明)。
   _historyLoadOrigin.set(sessionId, remoteProjectsStore.getSessionDeviceId(sessionId));
+
+  // 远程会话:与 fresh 首拉**并行**从冷缓存乐观 hydrate,让冷启动 / 被控端离线时
+  // 立刻看到上次看到的最近一页(而不是空白 + spinner)。不设 historyLoaded ——
+  // fresh 仍在路上,它落地时会把这些 cacheHydrated 行整批剔掉再 merge(见下方两个提交分支)。
+  hydrateRemoteMessagesFromCache(sessionId);
 
   // Seed sdkSessionId from the server so resume works on app restart.
   // device-link 远程 session 经隧道读被控端 row(本地 DB 没有,直接 get 会 404)。
@@ -5290,8 +5409,15 @@ function ensureInitialMessages(sessionId: string): void {
   listMessagesFor(sessionId)
     .then(async (existing) => {
       if (existing.length === 0) {
+        // 权威侧确认这个会话没有可见消息(被控端 /clear、rewind 到头、消息被删干净)。
+        // 冷缓存 hydrate 出来的行必须在这里一并抹掉,否则控制端会一直显示被清掉的正文。
+        // 盘上那份不用在这里单独删:listMessagesFor 的写点收到空页时就把缓存清了。
+        settleCacheHydration(sessionId);
         setState(sessionId, (s) => ({
           ...s,
+          messages: s.messages.some((m) => m.cacheHydrated === true)
+            ? s.messages.filter((m) => m.cacheHydrated !== true)
+            : s.messages,
           historyLoaded: true,
           hasMoreMessages: false,
         }));
@@ -5355,13 +5481,25 @@ function ensureInitialMessages(sessionId: string): void {
       const ingestStartMs = import.meta.env.DEV ? performance.now() : 0;
       const mapped = mapServerMessages(merged);
       const oldestId = oldestRow.id;
+      settleCacheHydration(sessionId);
       setState(sessionId, (s) => ({
         ...s,
         historyLoaded: true,
         // Merge: keep any messages already appended by streaming events
         // (unlikely here since we gate history load on first mount, but
         // preserves slice invariants).
-        messages: mergeMessages(mapped, s.messages, {}, 'newest-first'),
+        //
+        // 冷缓存 hydrate 的行先**整批剔除**再 merge:mergeMessages 只增不删,权威页里
+        // 已经不存在的缓存行(被控端 /clear、rewind、删消息)否则会永久留在窗口里。
+        // 仍在权威页里的那些会由 mapped 原样带回来,不会闪。
+        messages: mergeMessages(
+          mapped,
+          s.messages.some((m) => m.cacheHydrated === true)
+            ? s.messages.filter((m) => m.cacheHydrated !== true)
+            : s.messages,
+          {},
+          'newest-first',
+        ),
         isFirstMessage: false,
         // 窗口里掺着跳转孤岛时,**本页的下沿**接管游标,不再取"两者中更老的那个"。
         //
@@ -5399,6 +5537,10 @@ function ensureInitialMessages(sessionId: string): void {
     .catch(() => {
       // Allow retry on next mount
       _historyFetchInFlight.delete(sessionId);
+      // 首拉失败(典型:被控端离线)→ 放开「本轮已发起」的守卫以便下次重试,但**不解除**
+      // rewind 之类的粘滞抑制(见 releaseCacheHydrationAfterFailure)。屏上已 hydrate 的
+      // 缓存行**保持不动**:离线时它是用户唯一能看到的历史,清掉纯属倒退。
+      releaseCacheHydrationAfterFailure(sessionId);
       setState(sessionId, (s) => ({ ...s, historyLoaded: false }));
     });
 }
@@ -5410,12 +5552,32 @@ function ensureInitialMessages(sessionId: string): void {
  * view automatically. Resets pagination cursors and isStreaming flags so the
  * slice looks like a clean session (re-)open.
  */
-function reloadMessages(sessionId: string): void {
+function reloadMessages(sessionId: string, opts?: { allowCacheHydrate?: boolean }): void {
   discardPendingTextDelta(sessionId);
   // 代际递增:作废 in-flight 的 loadOlderMessages 追页窗口(见 _messagesEpoch 注释)。
   bumpMessagesEpoch(sessionId);
   // Drop the in-flight guard so ensureInitialMessages can run again.
   _historyFetchInFlight.delete(sessionId);
+  // 默认**不借**冷缓存:rewind 截断这类重载的起因恰恰意味着盘上那份缓存已经过期,
+  // hydrate 它只会先闪一下刚被截掉的消息。重载后的首拉照常刷新缓存。
+  //
+  // 例外是启动竞速里的 origin 解析重载(undefined → deviceId):那次重载并没有让缓存
+  // 过期,反而是这个会话**第一次**知道自己是远程会话。压着不 hydrate 的话,被控端离线时
+  // 首拉必然失败,屏上就只剩空白 + spinner —— 而离线可见正是这份缓存的存在理由
+  // (review: codex P1)。调用方据此显式放开(见 reconcileOpenSessionOrigins)。
+  if (opts?.allowCacheHydrate) {
+    _cacheHydrateStarted.delete(sessionId);
+    _cacheHydrateSuppressed.delete(sessionId);
+  } else {
+    _cacheHydrateStarted.add(sessionId);
+    // 粘滞:即使紧随的权威首拉失败(被控端离线),重挂会话也不许再借那份过期缓存。
+    _cacheHydrateSuppressed.add(sessionId);
+    // 但粘滞标记只活在**本进程**里:rewind 之后权威首拉失败、用户直接退出 app,重启后
+    // 标记没了而盘上那份还是 rewind 之前的窗口 —— 下次离线冷启动照样 hydrate 出已被软删
+    // 的消息(review: codex P1)。所以同时把盘上那份清掉:缓存是纯优化,重载后的首拉
+    // 成功时会重新写上。
+    invalidateRemoteMessageCache(sessionId);
+  }
   setState(sessionId, (s) => ({
     ...s,
     messages: [],
@@ -5443,6 +5605,11 @@ function removeMessagesByClientIds(
 ): void {
   const deletedClientIds = new Set(clientIds.filter(Boolean));
   if (deletedClientIds.size === 0) return;
+  // 远程会话:删消息(菜单删除镜像 / 被控端 messages:deleted 推送)**不会**触发"最新页"
+  // 重拉 —— 那是唯一的写缓存路径。盘上那份还带着刚被删掉的行,此刻退出 app,下次离线冷
+  // 启动就把它 hydrate 回来(review: codex P1)。缓存是纯优化,清掉即可(下一次成功的
+  // 最新页拉取会重新写上)。
+  invalidateRemoteMessageCache(sessionId);
   discardPendingTextDelta(sessionId);
   // 作废删除提交前发起的历史分页，避免旧页响应把已经清除的行重新 merge 回来。
   if (options.invalidateHistory !== false) bumpMessagesEpoch(sessionId);
@@ -5507,6 +5674,9 @@ function removeMessageByClientId(sessionId: string, clientId: string): void {
  * selectRewindMessageIds(createdAt >= target)对齐。clientId 不在列表时 no-op。
  */
 function dropMessagesFromClientId(sessionId: string, clientId: string): void {
+  // edit-last 已经在权威侧提交了 rewind,而"重发"可能失败(受支持的失败路径)—— 那时不会有
+  // 任何最新页拉取来刷新缓存,盘上仍是 rewind 之前的尾巴(review: codex P1)。
+  invalidateRemoteMessageCache(sessionId);
   discardPendingTextDelta(sessionId);
   // 代际递增:这是与 reloadMessages / _purgeSession 并列的第三条"切片被本地截断"
   // 路径,同样必须作废 in-flight 的分页 / 跳转补齐。漏 bump 的后果是它们把 rewind
@@ -5553,8 +5723,12 @@ function reconcileOpenSessionOrigins(): void {
   for (const sessionId of sessions.keys()) {
     const current = remoteProjectsStore.getSessionDeviceId(sessionId);
     if (current === undefined) continue;
-    if (current === _historyLoadOrigin.get(sessionId)) continue;
-    reloadMessages(sessionId);
+    const loaded = _historyLoadOrigin.get(sessionId);
+    if (current === loaded) continue;
+    // undefined → deviceId 是启动竞速的**首次解析**(上一次首拉命中的是本机空库),
+    // 缓存并未因此过期 → 放开 hydrate,让被控端离线时也能看到上次的最近一页。
+    // 设备之间真的换了 origin(string → 另一个 string)时不放开:那是另一台机器的历史。
+    reloadMessages(sessionId, { allowCacheHydrate: loaded === undefined });
   }
 }
 
@@ -7643,6 +7817,10 @@ function clearSession(sessionId: string): void {
 
 async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Promise<void> {
   noteRendererClearBoundary(sessionId, clearedAt);
+  // 远程会话:/clear 之后**不会**再有一次"最新页"拉取(唯一写缓存的那条路径),盘上那份
+  // 仍是清空前的正文 —— 此刻退出 app,下次离线冷启动就把已经被清掉的对话 hydrate 回来
+  // (review: codex P1)。放在守卫之前:无论守卫成功、失败还是超时,缓存都必须消失。
+  invalidateRemoteMessageCache(sessionId);
   // Arm main-side clear guards before closing the CLI and clearing renderer state.
   let guardTimeoutId: ReturnType<typeof setTimeout> | undefined;
   let guardResult:

@@ -1521,6 +1521,30 @@ describe('provider:models-fetch handler', () => {
     });
   });
 
+  it('preserves the Codex Anthropic Messages wire protocol for API-key discovery', async () => {
+    const harness = new IpcHarness();
+    const fetchModels = vi.fn(async () => ({ ok: true as const, models: [] }));
+    registerProviderHandlers(harness, makeDeps({ fetchModels }));
+
+    await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+      agent: 'codex',
+      wireProtocol: 'anthropic-messages',
+      baseUrl: 'https://api.anthropic.com',
+      authMethod: 'apiKey',
+      apiKey: 'sk-test',
+    });
+
+    expect(fetchModels).toHaveBeenCalledWith({
+      agent: 'codex',
+      wireProtocol: 'anthropic-messages',
+      baseUrl: 'https://api.anthropic.com',
+      authMethod: 'apiKey',
+      modelsUrl: null,
+      apiKey: 'sk-test',
+      headers: undefined,
+    });
+  });
+
   it('rejects remote no-auth model discovery URLs before invoking fetch', async () => {
     const harness = new IpcHarness();
     const deps = makeDeps();

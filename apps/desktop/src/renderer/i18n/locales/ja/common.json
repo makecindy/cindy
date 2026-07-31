@@ -123,7 +123,7 @@
       "personalization": "パーソナライズ",
       "chipMetrics": "使用量インジケーター",
       "memory": "メモリ",
-      "subagentModels": "サブエージェントモデル",
+      "subagentModels": "サブエージェント",
       "compaction": "コンテキスト圧縮",
       "terminalShell": "デフォルトターミナルシェル",
       "linkOpen": "リンクの開き方",
@@ -1286,6 +1286,8 @@
           "models": "モデル",
           "modelIdPlaceholder": "model-id",
           "modelNamePlaceholder": "表示名",
+          "modelContextWindowPlaceholder": "コンテキスト(tokens)",
+          "modelContextWindowTitle": "コンテキストウィンドウ(トークン数)。空欄の場合は保守的な既定値 200K。ウィンドウ表示と圧縮しきい値に影響します。",
           "addModel": "モデルを追加",
           "headers": "リクエストヘッダー(任意)",
           "headerNamePlaceholder": "Header-Name",
@@ -1296,19 +1298,22 @@
         "wireProtocol": {
           "responses": "OpenAI Responses（ネイティブ）",
           "chat": "Chat Completions（Cindy ブリッジ）",
+          "anthropic": "Anthropic Messages（Cindy ブリッジ）",
           "responsesHelp": "プロバイダーが Responses API をネイティブ対応しているため、Cindy はイベントストリームをそのまま転送します。",
-          "chatHelp": "Chat Completions のみを提供するプロバイダー向けです。Cindy がストリーミングテキストと関数ツール呼び出しを変換します。一部の高度な Responses 機能は利用できません。"
+          "chatHelp": "Chat Completions のみを提供するプロバイダー向けです。Cindy がストリーミングテキストと関数ツール呼び出しを変換します。一部の高度な Responses 機能は利用できません。",
+          "anthropicHelp": "Anthropic Messages API を提供するプロバイダー向けです。Cindy が Responses のメッセージ、画像、ツール、推論内容、ストリーミングイベントを変換します。"
         },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code は Anthropic プロトコルに従います（x-api-key で認証）。この提供元の Claude Code 用 baseURL・キー・モデルを入力します。空欄にするとこの提供元は Claude Code を提供しません。",
           "codex": "Codex",
-          "codexDesc": "Codex は OpenAI Responses プロトコルを使用します。Responses ネイティブの上流、または Chat Completions のみを提供するプロバイダーを Cindy でブリッジする方式を選べます。このプロバイダーの Codex 用ベース URL・キー・モデルを入力します。空欄にすると Codex では利用しません。"
+          "codexDesc": "Codex は OpenAI Responses プロトコルを使用します。Responses ネイティブ、または Chat Completions / Anthropic Messages を Cindy でブリッジする方式を選べます。このプロバイダーの Codex 用ベース URL・キー・モデルを入力します。空欄にすると Codex では利用しません。"
         },
         "errors": {
           "nameRequired": "表示名を入力してください",
           "runtimeRequired": "Runtime を 1 つ以上設定してください（ベース URL とモデル）",
           "baseUrlInvalid": "ベース URL は有効な http(s) アドレスである必要があります",
+          "contextWindowInvalid": "コンテキストウィンドウは有効な正の整数である必要があります（数字グループの間に区切り記号を使用できます）",
           "requestPathInvalid": "正確なリクエストパスは 1 つの / で始め、フラグメントや .、.. のパスセグメントを含めないでください。空白や安全でない文字はパーセントエンコードしてください。",
           "modelRequired": "モデルを 1 つ以上追加してください",
           "oauthInvalid": "OAuth 設定が不完全です。すべての項目が必須で、両方のエンドポイントは安全な https URL である必要があります"
@@ -1966,12 +1971,30 @@
       }
     },
     "subagentModels": {
-      "title": "サブエージェントモデル",
-      "description": "Claude Code と Codex がサブタスクを実行するときに使用する既定のモデルを設定します。設定は入口ごとに適用され、モデルごとには保存されません。",
+      "title": "サブエージェント",
+      "description": "Claude Code と Codex がサブタスクを実行するときに使用する既定のモデルを設定し、Codex サブエージェントのガードレールを構成します。設定は入口ごとに適用され、モデルごとには保存されません。",
       "unspecified": "指定しない（既定の動作を使用）",
-      "codexUnavailable": "現在の Codex バージョンでは安全な上書きに未対応です",
-      "hint": "選択できるモデルは接続済みのモデルソースによって異なります。未指定の場合は Agent 本来の既定値を使用します。Claude Code の変更は新規セッションから有効になり、現在の Codex バージョンではサブエージェントのモデル上書きに対応していません。",
-      "saveFailed": "サブエージェントモデルの保存に失敗しました"
+      "hint": "選択できるモデルは接続済みのモデルソースによって異なります。未指定の場合は Agent 本来の既定値を使用します。Claude Code の変更は新規セッションから有効になります。Codex の変更はアイドル時に即時再起動で反映され、タスク実行中はローカルの Codex セッションがすべてアイドルになった後に自動適用されます。",
+      "codexV2ModelHint": "サブエージェントの既定モデルは Codex 自身のモデルカタログ内のモデルである必要があり、カタログ外のモデル（互換ブリッジ経由のサードパーティモデルなど）は Codex に拒否されます。Sol / Terra（マルチエージェント V2）はさらに V2 カタログモデル（現在は gpt-5.6-sol と gpt-5.6-terra）のみを受け付けます。旧版マルチエージェント（V1）に V2 の制限はありません。",
+      "saveFailed": "サブエージェント設定の保存に失敗しました",
+      "guardrails": {
+        "title": "Codex サブエージェントガードレール",
+        "enableHint": "Codex がタスク実行中に使い捨てのサブエージェントを作成することを許可します。オフにすると旧版マルチエージェント（V1）と Sol / Terra（V2）の両方に適用されます。",
+        "enableAria": "Codex のサブエージェントを許可",
+        "concurrencyLabel": "サブエージェントの同時実行上限",
+        "concurrencyHint": "同時に実行できるサブエージェント数の上限です。サブエージェントはそれぞれモデルのクォータを消費します。Ultra 段階で同時実行が 8 に達すると Codex が警告します。",
+        "concurrencyFollowDefault": "Codex の既定に従う（旧版 V1 は 6、Sol / Terra は 3）",
+        "concurrencyAria": "Codex サブエージェントの同時実行上限を調整",
+        "concurrencyCustomAria": "Codex サブエージェントの同時実行上限をカスタマイズ",
+        "nestedLabel": "サブエージェントによるサブエージェント作成を許可",
+        "nestedHint": "旧版マルチエージェント（V1）のみ有効で、Sol / Terra（V2）はこの設定を無視します。",
+        "nestedAria": "サブエージェントによるサブエージェント作成を許可",
+        "localOnlyHint": "これらのガードレールはこのマシンで実行される Codex にのみ適用され、SSH リモートの Codex には影響しません。"
+      },
+      "toast": {
+        "saved": "サブエージェント設定を保存しました",
+        "deferredSuffix": " — 実行中の Codex セッションには現在のタスク終了後に適用されます"
+      }
     },
     "compaction": {
       "title": "コンテキスト圧縮",
@@ -2730,7 +2753,7 @@
         "addPlugin": "プラグインを追加",
         "addPluginAria": "プラグイン追加オプション",
         "createWithCindy": "Cindy で作成",
-        "createPrompt": "Cindy プラグインを作成したいです。まず ghost_forge_guide を呼び出してハンドブックの目次を取得し、section パラメータで関連する章（少なくともサンドボックスの禁止事項とパッケージ化の章）を読み込んでから着手してください。すぐに実装を始めないでください。質問から始め、毎回一つの重要な判断に集中しながら、解決する課題、対象ユーザー、操作フロー、必要なツールと接続、権限の境界、受け入れ条件を段階的に確認してください。設計を確認した後、仕様に沿って実装と検証を行い、最後に ghost_forge_pack を呼び出してプラグインをパッケージ化し、インストールしてください。",
+        "createPrompt": "Cindy プラグインを作成したいです。まず ghost_forge_guide を呼び出してハンドブックの目次を取得し、最初に第 0 章「設計のすり合わせ」を読み、その後 section パラメータで関連する章（少なくともサンドボックスの禁止事項とパッケージ化の章）を読み込んでから着手してください。すぐに実装を始めないでください。質問から始めてください：選択肢付きの質問カードを優先し、1 枚のカードでは 1 つの重要な判断に絞り、あなたのおすすめを明示した上で、私が気づきにくい設計オプション（UI 形態：ドッキングパネル / 右サイドバーのタブ / チャットカード / UI なし、$ 呼び出しコマンド、起動モード、ネットワーク接続の要否、設定ページの要否など）を積極的に提示して選ばせてください。解決する課題、対象ユーザー、操作フロー、必要なツールと接続、権限の境界、受け入れ条件を段階的に確認してください。設計を確認した後、仕様に沿って実装と検証を行い、最後に ghost_forge_pack を呼び出してプラグインをパッケージ化し、インストールしてください。",
         "installedTitle": "インストール済みプラグイン",
         "installedExpand": "インストール済みプラグインをさらに {{count}} 件表示",
         "installedCollapse": "追加のインストール済みプラグインを隠す",
@@ -2838,6 +2861,8 @@
         "uninstalled": "「{{name}}」をアンインストールしました",
         "installedAsleep": "「{{name}}」をインストールしました(無効状態。ここでいつでも有効化できます)",
         "updated": "「{{name}}」を v{{version}} に更新しました",
+        "exported": "「{{name}}」の .cindy ファイルを書き出しました",
+        "exportFailed": "「{{name}}」を書き出せませんでした。もう一度お試しください",
         "projectDisabled": "「{{name}}」をこのプロジェクトで無効にしました(新しいセッションから適用)",
         "projectEnabled": "「{{name}}」はこのプロジェクトでグローバル設定に従います"
       },
@@ -2883,10 +2908,14 @@
         "cindyVideoEdit": "画像から動画(Cindy に代行依頼、参照画像は自身名義のもののみ)",
         "cindyMediaDeposit": "保有している画像・動画・音声をあなたのメディアライブラリに保存できます",
         "cindyMediaDepositDetail": "プラグイン内で貼り付け・ドロップした素材も AI で加工できるようにするための権限です。保存内容はこのプラグイン名義で記録され、最大 {{quota}} まで使用し、アンインストール時に併せて削除されます。",
+        "cindyTextOneshot": "Cindy のクイックチャンネルに質問してテキスト回答を受け取れます",
+        "cindyTextOneshotDetail": "システムの軽量タスクモデルチェーン(自動タイトルと同じ経路)を使用します。Agent は使わず、ファイルにもアクセスしません。モデル料金が発生する場合があります。",
         "agentUserAction": "プラグインカードをクリックした後、Agent の新しいターンを開始できます",
         "agentUserActionDetail": "1 回のクリックにつき 1 回だけ開始でき、そのカードが属するセッションでのみ使用できます。",
         "agentBackground": "バックグラウンドで Agent の新しいターンを自動的に開始できます",
         "agentBackgroundDetail": "毎回のクリックは不要ですが、以前このプラグインに関連付けたセッションでのみ使用できます。モデル料金が発生する場合があります。",
+        "agentErrand": "Cindy Agent にタスクを任せて結果を受け取れます",
+        "agentErrandDetail": "タスクはこのプラグイン専用のセッションで実行され、サイドバーから常に確認・停止できます。既定では読み取り専用で、権限の引き上げはプラグイン設定であなた自身が行う必要があります。モデル料金が発生する場合があります。",
         "nodeRuntime": "同梱された Node プログラムをこのコンピューターで実行できます",
         "nodeMcp": "同梱された stdio MCP をこのコンピューターで実行できます",
         "nodeRuntimeDetail": "高リスク:あなたのユーザーアカウントと同じ権限で、ローカルファイルの読み書き、ネットワークアクセス、他のプログラムの起動ができます。Cindy のブラウザーサンドボックスでは隔離できません。",
@@ -2990,10 +3019,23 @@
             "image.generate": "画像生成",
             "image.edit": "画像編集",
             "video.generate": "動画生成",
-            "video.edit": "画像から動画"
+            "video.edit": "画像から動画",
+            "text.oneshot": "クイック回答(テキスト)"
           },
           "defaultOption": "{{model}}(既定)",
           "noModels": "利用可能なモデルなし"
+        },
+        "errandPrefs": {
+          "title": "AI 代行",
+          "desc": "このプラグインが Cindy Agent にタスクを任せるときの実行設定です。未設定の項目は新規ドラフトの選択に従います。既定では読み取り専用で、専用フォルダー内で作業します。",
+          "agent": "Agent",
+          "model": "モデル",
+          "permission": "書き込み権限",
+          "permissionDisabled": "代行セッションでは選べません",
+          "workdir": "作業フォルダー",
+          "workdirDefault": "プラグイン専用フォルダー(既定)",
+          "workdirPick": "選択…",
+          "workdirClear": "既定のフォルダーに戻す"
         },
         "toolsTitle": "Tools",
         "permissionsTitle": "権限",
@@ -3005,6 +3047,8 @@
         "useDisabled": "使用する前に Plugin を有効にしてください",
         "moreActions": "その他の Plugin 操作",
         "updateFromFile": ".cindy ファイルから更新…",
+        "exportPackage": ".cindy ファイルを書き出す…",
+        "exportFileType": "Cindy プラグイン",
         "settingsTitle": "{{name}} の設定",
         "settingsUnavailableUntilRestore": "この設定を再び使用するには、プラグインを復元してください。",
         "configurationTitle": "設定",
@@ -3517,6 +3561,7 @@
     },
     "dailyLimitLabel": "本日 {{spend}}/{{limit}}",
     "monthlyLimitLabel": "周期 {{spend}}/{{limit}}",
+    "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "セッション {{cost}}",
     "codex": {
       "waiting": "Codex --",
@@ -3561,6 +3606,7 @@
     "tooltip": {
       "todayUsedSoftLimit": "本日使用 ${{today}} / ソフト上限 ${{limit}} ({{pct}}%)",
       "sessionUsed": "このセッションで {{cost}} 使用",
+      "creditUsed": "アカウント 使用 {{used}} · 合計 {{total}}",
       "monthlyUnavailable": "⚠️ 月次クォータを一時的に取得できません",
       "dailyUnavailable": "⚠️ 本日の使用量明細を一時的に取得できません",
       "softLimitFormula": "ソフト上限の式: 月次クォータ ÷ 30 × {{factor}}",
@@ -3651,14 +3697,24 @@
     "maximizeAria": "パネルを最大化",
     "restoreAria": "パネルのサイズを元に戻す",
     "detachAria": "新しいウィンドウで開く",
-    "minimizeAria": "フローティングバブルに最小化"
+    "minimizeAria": "フローティングバブルに最小化",
+    "closeAria": "パネルを閉じてプラグインを無効化"
+  },
+  "ghostPanel": {
+    "disableConfirm": {
+      "title": "「{{name}}」を無効にしますか？",
+      "body": "このパネルを閉じるとプラグイン全体が無効になり、パネルと機能が停止します。サイドバーの「プラグイン」からいつでも再度有効にできます。",
+      "confirm": "無効にする"
+    }
   },
   "ghostPanelWindow": {
     "mergeBack": "メインウィンドウに戻す",
     "unavailable": "このプラグインパネルは現在利用できません"
   },
   "ghostPanelBubble": {
-    "restoreAria": "{{name}} パネルを元に戻す"
+    "restoreAria": "{{name}} パネルを元に戻す",
+    "stackExpandAria": "{{count}} 個のプラグインパネルを最小化中。クリックで展開",
+    "stackCollapseAria": "プラグインパネルの一覧を畳む"
   },
   "rightSidebar": {
     "ariaLabel": "右サイドバー",
@@ -3673,6 +3729,8 @@
       "addAria": "タブを追加",
       "addFailed": "タブを追加できませんでした",
       "tabCloseAria": "タブを閉じる",
+      "pinAria": "ピン留め — すべてのセッションで保持",
+      "unpinAria": "ピン留め解除 — このセッションのみ保持",
       "menu": {
         "addLabel": "タブを追加",
         "comingSoon": "近日対応",
@@ -3698,7 +3756,9 @@
       "contextMenu": {
         "close": "閉じる",
         "closeOthers": "他のタブを閉じる",
-        "closeAll": "すべて閉じる"
+        "closeAll": "すべて閉じる",
+        "pin": "ピン留め",
+        "unpin": "ピン留め解除"
       },
       "empty": {
         "eyebrow": "右サイドバー",
@@ -4436,6 +4496,7 @@
       },
       "meta": {
         "context": "コンテキスト {{value}}",
+        "codexCompatibilityMode": "Codex 互換モード",
         "price": "{{input}}/{{output}} / 100万",
         "fastBadge": "高速",
         "budgetDiscount": "特別割引"
@@ -7620,6 +7681,7 @@
     "menuAria": "操作メニュー",
     "tooltipEmpty": "その他の操作",
     "tooltipCount": "参照ディレクトリ {{count}} 件",
+    "addFiles": "ファイル、画像、動画を追加…",
     "pluginsTitle": "インストール済みプラグイン",
     "pluginDisabled": "無効",
     "pluginNoCommand": "ここでは使用できません",

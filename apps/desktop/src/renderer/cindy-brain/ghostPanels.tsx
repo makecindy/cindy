@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 
+import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { ghostPanelKind, type GhostManifest, type InstalledGhost } from '../../shared/ghost';
 import { minimizeGhostPanel, reconcileGhostPanelBubbles } from '../lib/ghostPanelBubbleState';
+import { toast } from '../lib/toast';
 import { usePanelMaximize } from '../layout/panelMaximize';
 import { usePanelWidth } from '../layout/paneWidths';
 import { PanelChrome } from '../panels/PanelChrome';
 import { registerPanelKind, unregisterPanelKind, type PanelComponentProps } from '../panels/registry';
+import { extractIpcError } from '../utils/ipcError';
 import { GhostChipPanelBody, GhostPanelError } from './ghostPanelBody';
 import { syncGhostTabRegistrations } from './ghostTabPlugins';
+import { ghostInstallErrorKey } from './installErrorKey';
 import { pruneGhostSettingsSnapshots } from './ghostSettingsSnapshot';
 import { useGhostRuntimeState } from './runtimeStates';
 
@@ -84,6 +89,25 @@ function GhostPanel({
     setClosing(true);
     closeTimerRef.current = window.setTimeout(() => minimizeGhostPanel(manifest.id), PANEL_EXIT_MS);
   };
+  // 标准头「关闭」= 二次确认后停用整个插件(setEnabled false):面板、工具、
+  // 沙箱一并休眠,与插件页全局开关同一条链路(ghosts:changed 广播回来时
+  // 本面板经 syncGhostPanelRegistrations 注销,无需自己收尾)。恒在,不受
+  // 身份卡 systemButtons 控制——它是宿主给用户的退路,不是作者可关的能力。
+  const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  const beginClose = async (): Promise<void> => {
+    const approved = await confirm({
+      title: t('ghostPanel.disableConfirm.title', { name: manifest.name }),
+      description: t('ghostPanel.disableConfirm.body'),
+      confirmText: t('ghostPanel.disableConfirm.confirm'),
+    });
+    if (!approved) return;
+    try {
+      await window.electronAPI?.ghosts?.setEnabled(manifest.id, false);
+    } catch (error) {
+      toast.error(t(ghostInstallErrorKey(extractIpcError(error)?.code)));
+    }
+  };
   return (
     // 外层壳管布局占宽(出现/收起的宽度动画只动这层),内层 section 恒为
     // 实宽被裁切——展开像"拉开抽屉"露出成形的面板,webview 不逐帧改宽。
@@ -116,6 +140,7 @@ function GhostPanel({
               ? () => void window.electronAPI?.ghostPanelWindow?.setDetached(manifest.id, true)
               : undefined
           }
+          onClose={() => void beginClose()}
         />
         {broken ? (
           <GhostPanelError manifest={manifest} state={runtimeState} />

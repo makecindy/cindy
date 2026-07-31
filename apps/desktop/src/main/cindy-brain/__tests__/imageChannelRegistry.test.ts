@@ -6,7 +6,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { ImageChannelRegistry, type ImageChannel } from '../imageChannelRegistry';
+import { ImageChannelRegistry, decodeImageResponse, type ImageChannel } from '../imageChannelRegistry';
 
 function channel(ready: boolean, supportsEdit?: boolean): ImageChannel {
   return {
@@ -58,5 +58,37 @@ describe('ImageChannelRegistry', () => {
     registry.register('xai', generateOnly);
     expect(registry.isProviderReady('xai')).toBe(true);
     expect(registry.resolve('xai').supportsEdit).toBe(false);
+  });
+});
+
+describe('decodeImageResponse', () => {
+  const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+
+  it('mime 由字节魔数决定,不信任上游声明的 output_format', () => {
+    // 上游谎报 webp,字节实为 JPEG → 按魔数落 image/jpeg。
+    const decoded = decodeImageResponse({
+      data: [{ b64_json: JPEG_MAGIC.toString('base64') }],
+      output_format: 'webp',
+    });
+    expect(decoded.mimeType).toBe('image/jpeg');
+    expect(decoded.buffer.equals(JPEG_MAGIC)).toBe(true);
+    expect(
+      decodeImageResponse({ data: [{ b64_json: PNG_MAGIC.toString('base64') }] }).mimeType,
+    ).toBe('image/png');
+  });
+
+  it('非图片字节拒绝(上游/代理返回错误页等),不产出可落盘的结果', () => {
+    expect(() =>
+      decodeImageResponse({
+        data: [{ b64_json: Buffer.from('<html>proxy error</html>').toString('base64') }],
+        output_format: 'png',
+      }),
+    ).toThrow(/不是有效图片/);
+  });
+
+  it('空响应拒绝', () => {
+    expect(() => decodeImageResponse({ data: [] })).toThrow(/返回为空/);
+    expect(() => decodeImageResponse({ data: [{}] })).toThrow(/返回为空/);
   });
 });

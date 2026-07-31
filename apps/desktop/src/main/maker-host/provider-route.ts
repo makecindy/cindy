@@ -19,10 +19,19 @@
  * token 覆盖 authorization,避免把子进程里其它供应商的 OAuth bearer 泄漏过去(如 Codex → xAI)。
  */
 
-import type { AgentKind, RoutingDescriptor } from '@cindy/model-providers';
+import {
+  effectiveSourceIdForModel,
+  type AgentKind,
+  type Provider,
+  type ProviderView,
+  type RoutingDescriptor,
+} from '@cindy/model-providers';
 import type { RoutingDecision } from '@cindy/anthropic-compat-proxy';
 
-import { getActiveCatalog } from './active-catalog.js';
+import {
+  getActiveCatalog,
+  isXdCodexAnthropicBridgeModel,
+} from './active-catalog.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { getSessionProvider } from './session-provider-store.js';
 
@@ -92,12 +101,41 @@ export function hasCustomProviderKey(providerId: string, agent: AgentKind): bool
   return Boolean(customProviderKeyReader(providerId, agent));
 }
 
-type ProviderOAuthTokenReader = (providerId: string, agent: AgentKind) => string | null | Promise<string | null>;
+export interface ProviderOAuthTokenReadOptions {
+  forceRefresh?: boolean;
+  staleToken?: string;
+}
+
+type ProviderOAuthTokenReader = (
+  providerId: string,
+  agent: AgentKind,
+  options?: ProviderOAuthTokenReadOptions,
+) => string | null | Promise<string | null>;
 let providerOAuthTokenReader: ProviderOAuthTokenReader = () => null;
 
 /** host 启动期接通内置 OAuth 供应商 token 读取（如 xAI/SuperGrok）。 */
 export function setProviderOAuthTokenReader(reader: ProviderOAuthTokenReader): void {
   providerOAuthTokenReader = reader;
+}
+
+type ProviderViewsReader = () => Promise<ProviderView[]>;
+let providerViewsReader: ProviderViewsReader = async () => [];
+
+/**
+ * 注入 Main 侧实时 ProviderView 读取器。隐式来源必须与模型选择器共用连接态，
+ * 不能只看 active catalog：目录表示“可提供”，凭证状态才表示“当前可路由”。
+ */
+export function setProviderViewsReader(reader: ProviderViewsReader): void {
+  providerViewsReader = reader;
+}
+
+/** Read a provider OAuth token for a local bridge retry without exposing the reader itself. */
+export function readProviderOAuthToken(
+  providerId: string,
+  agent: AgentKind,
+  options?: ProviderOAuthTokenReadOptions,
+): Promise<string | null> {
+  return Promise.resolve(providerOAuthTokenReader(providerId, agent, options)).catch(() => null);
 }
 
 const MISSING_PROVIDER_OAUTH_TOKEN = 'xdt-missing-provider-oauth-token';
@@ -364,6 +402,34 @@ function routingServesWireModel(routing: RoutingDescriptor, wireModel: string | 
 }
 
 /**
+ * 解析 provider × agent × model 的最终 wire。
+ *
+ * 绝大多数路由直接使用 provider 级描述符；XD 是一个 provider 内同时存在两种 Codex wire
+ * 的特例：服务端原生声明 codex 的模型走 Responses，只声明 claude-code 的模型由客户端
+ * 投影给 Codex，并复用同一 provider 的 Claude Messages 路由进入本地 bridge。
+ */
+function providerRoutingForModel(
+  provider: Provider,
+  agent: AgentKind,
+  wireModel: string | undefined,
+): RoutingDescriptor | null {
+  if (
+    provider.id === 'xd'
+    && agent === 'codex'
+    && wireModel
+    && isXdCodexAnthropicBridgeModel(wireModel)
+  ) {
+    const claudeRouting = provider.routing['claude-code'];
+    if (!claudeRouting) return null;
+    return {
+      ...claudeRouting,
+      wireProtocol: 'anthropic-messages',
+    };
+  }
+  return provider.routing[agent] ?? null;
+}
+
+/**
  * 某 provider 对某 agent 的路由是否服务该 wire model(modelPrefixes 语义;未声明 = true,
  * provider 无该 agent 路由 = false)。
  *
@@ -377,7 +443,8 @@ export function providerRoutingServesWireModel(
   wireModel: string | undefined,
 ): boolean {
   if (providerId === 'xd' && !getAppCapabilities().canUseCindyGateway) return false;
-  const routing = getActiveCatalog().providers.find((p) => p.id === providerId)?.routing[agent];
+  const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
+  const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
   if (!routing) return false;
   return routingServesWireModel(routing, wireModel);
 }
@@ -406,7 +473,8 @@ export function getSessionRoutingDescriptor(
   const providerId = getSessionProvider(sessionId);
   if (!providerId) return null;
   if (isProviderRouteMutationInProgress(providerId)) return null;
-  const routing = getActiveCatalog().providers.find((provider) => provider.id === providerId)?.routing[agent];
+  const provider = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
+  const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
   if (!routing || !routingServesWireModel(routing, wireModel)) return null;
   return routing;
 }
@@ -417,6 +485,25 @@ export interface ResolvedSessionRoute {
   routing: RoutingDescriptor;
   apiKey: string | null;
   oauthToken: string | null;
+}
+
+async function resolveProviderRouteById(
+  providerId: string,
+  agent: AgentKind,
+  wireModel?: string,
+): Promise<ResolvedSessionRoute | null> {
+  if (isProviderRouteMutationInProgress(providerId)) return null;
+  const provider = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
+  const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
+  if (!provider || !routing || !routingServesWireModel(routing, wireModel)) return null;
+  const { apiKey, oauthToken } = await readProviderRouteCredentials(provider, routing, agent);
+  return {
+    providerId,
+    providerSource: provider.source,
+    routing,
+    apiKey,
+    oauthToken,
+  };
 }
 
 /**
@@ -430,18 +517,7 @@ export async function resolveSessionRoute(
 ): Promise<ResolvedSessionRoute | null> {
   const providerId = getSessionProvider(sessionId);
   if (!providerId) return null;
-  if (isProviderRouteMutationInProgress(providerId)) return null;
-  const provider = getActiveCatalog().providers.find((candidate) => candidate.id === providerId);
-  const routing = provider?.routing[agent];
-  if (!provider || !routing || !routingServesWireModel(routing, wireModel)) return null;
-  const { apiKey, oauthToken } = await readProviderRouteCredentials(provider, routing, agent);
-  return {
-    providerId,
-    providerSource: provider.source,
-    routing,
-    apiKey,
-    oauthToken,
-  };
+  return resolveProviderRouteById(providerId, agent, wireModel);
 }
 
 /** Build outbound headers for an already resolved local protocol handler. */
@@ -562,7 +638,7 @@ export function resolveSessionRouteDecision(
   }
   if (providerId === 'xd' && !getAppCapabilities().canUseCindyGateway) return null;
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
-  const routing = provider?.routing[agent];
+  const routing = provider ? providerRoutingForModel(provider, agent, wireModel) : null;
   if (!routing) return null;
   if (routing.disabled) return disabledProviderRouteDecision(providerId);
   if (!routingServesWireModel(routing, wireModel)) return null;
@@ -597,6 +673,22 @@ function providersForModel(modelId: string, agent: AgentKind) {
   );
 }
 
+async function connectedDefaultProviderForModel(modelId: string, agent: AgentKind) {
+  const providers = await providerViewsReader();
+  const defaultId = effectiveSourceIdForModel(providers, null, modelId, agent);
+  return providers.find((provider) => provider.id === defaultId) ?? null;
+}
+
+function hasImplicitLocalBridgeCandidate(modelId: string, agent: AgentKind): boolean {
+  return providersForModel(modelId, agent).some((provider) => {
+    const routing = providerRoutingForModel(provider, agent, modelId);
+    return (
+      routing?.wireProtocol === 'openai-chat'
+      || routing?.wireProtocol === 'anthropic-messages'
+    );
+  });
+}
+
 function uniqueProviderForModel(modelId: string, agent: AgentKind) {
   const providers = providersForModel(modelId, agent);
   return providers.length === 1 ? providers[0] : null;
@@ -608,6 +700,37 @@ function uniqueProviderForModel(modelId: string, agent: AgentKind) {
  */
 export function inferProviderIdForModel(modelId: string, agent: AgentKind): string | null {
   return uniqueProviderForModel(modelId, agent)?.id ?? null;
+}
+
+/**
+ * 隐式本地 bridge 来源：会话未显式选 Provider 时，按模型选择器相同的原生默认来源
+ * 解析 Provider；只有最终来源明确声明 Chat / Anthropic Messages wire 才接管。
+ *
+ * 这里不能使用 uniqueProviderForModel：Claude 模型通常同时由 Anthropic 与 XD 提供，
+ * 但 Codex 的默认来源仍应稳定选择 XD；XD 不可用时才落到候选首项（如 Anthropic）。
+ */
+export function resolveImplicitLocalBridgeRoute(
+  modelId: string,
+  agent: AgentKind,
+): Promise<ResolvedSessionRoute | null> {
+  const catalogModelId = modelId.replace(/\[1m\]$/, '');
+  // Most Codex requests are native OpenAI Responses and do not need provider
+  // connection resolution. Keep credential-store reads off that hot path; only
+  // bridge-capable catalog models need the live connected-provider snapshot.
+  if (!hasImplicitLocalBridgeCandidate(catalogModelId, agent)) {
+    return Promise.resolve(null);
+  }
+  return connectedDefaultProviderForModel(catalogModelId, agent).then((provider) => {
+    if (!provider) return null;
+    const routing = providerRoutingForModel(provider, agent, modelId);
+    if (
+      routing?.wireProtocol !== 'openai-chat'
+      && routing?.wireProtocol !== 'anthropic-messages'
+    ) {
+      return null;
+    }
+    return resolveProviderRouteById(provider.id, agent, modelId);
+  });
 }
 
 /**
@@ -649,6 +772,11 @@ export function resolveProviderOAuthControlRouteDecision(
       !isProviderRouteMutationInProgress(provider.id)
       && provider.agents.includes(agent)
       && routing?.authStrategy === 'provider-oauth-header'
+      // Session-less Codex control requests use the OpenAI control-plane
+      // protocol. Local inference bridges (Chat / Anthropic Messages) obtain
+      // their model lists through Cindy's provider discovery and must not
+      // compete for transparent GET /models routing.
+      && (routing.wireProtocol === undefined || routing.wireProtocol === 'openai-responses')
     );
   });
   if (providers.length !== 1) return null;

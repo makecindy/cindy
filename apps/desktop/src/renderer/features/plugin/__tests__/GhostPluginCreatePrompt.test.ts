@@ -26,4 +26,16 @@ describe('Ghost Plugin creation prompt', () => {
     expect(prompt.indexOf('ghost_forge_guide')).toBeLessThan(prompt.indexOf('ghost_forge_pack'));
     expect(prompt).toContain('打包并安装插件');
   });
+
+  it('asks with option cards and surfaces hidden design choices (guide §0)', () => {
+    const prompt = zhCommon.settings.ghosts.page.createPrompt;
+
+    // 与 FORGE_GUIDE §0「设计对齐」呼应:先读该章,再用带选项的提问卡片把
+    // 用户想不到的设计选项(面板形态等)摆出来选,而不是开放式追问。
+    expect(prompt).toContain('设计对齐');
+    expect(prompt).toContain('提问卡片');
+    expect(prompt).toContain('推荐项');
+    expect(prompt).toContain('停靠面板');
+    expect(prompt).toContain('右侧栏页签');
+  });
 });

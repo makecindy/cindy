@@ -123,7 +123,7 @@
       "personalization": "Personalization",
       "chipMetrics": "Usage indicator",
       "memory": "Memory",
-      "subagentModels": "Subagent models",
+      "subagentModels": "Subagents",
       "compaction": "Context compaction",
       "terminalShell": "Default terminal shell",
       "linkOpen": "Link open behavior",
@@ -1286,6 +1286,8 @@
           "models": "Models",
           "modelIdPlaceholder": "model-id",
           "modelNamePlaceholder": "Display name",
+          "modelContextWindowPlaceholder": "Context (tokens)",
+          "modelContextWindowTitle": "Context window in tokens. Leave empty for the conservative 200K default; affects the window display and compaction threshold.",
           "addModel": "Add model",
           "headers": "Headers (optional)",
           "headerNamePlaceholder": "Header-Name",
@@ -1296,19 +1298,22 @@
         "wireProtocol": {
           "responses": "OpenAI Responses (native)",
           "chat": "Chat Completions (Cindy bridge)",
+          "anthropic": "Anthropic Messages (Cindy bridge)",
           "responsesHelp": "The provider supports the Responses API natively, so Cindy forwards its event stream unchanged.",
-          "chatHelp": "For providers that only expose Chat Completions. Cindy converts streaming text and function tool calls; some advanced Responses features are unavailable."
+          "chatHelp": "For providers that only expose Chat Completions. Cindy converts streaming text and function tool calls; some advanced Responses features are unavailable.",
+          "anthropicHelp": "For providers that expose the Anthropic Messages API. Cindy converts Responses messages, images, tools, reasoning, and streaming events."
         },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code follows the Anthropic protocol (auth via x-api-key). Enter this source's baseURL, key, and models for Claude Code; leave blank to skip Claude Code for this source.",
           "codex": "Codex",
-          "codexDesc": "Codex speaks the OpenAI Responses protocol. Choose a native Responses upstream or let Cindy bridge a provider that only supports Chat Completions. Enter this source's base URL, key, and models for Codex; leave blank to skip Codex for this source."
+          "codexDesc": "Codex speaks the OpenAI Responses protocol. Choose native Responses, or let Cindy bridge Chat Completions or Anthropic Messages. Enter this source's base URL, key, and models for Codex; leave blank to skip Codex for this source."
         },
         "errors": {
           "nameRequired": "Display name is required",
           "runtimeRequired": "Configure at least one runtime (its base URL and models)",
           "baseUrlInvalid": "Base URL must be a valid http(s) address",
+          "contextWindowInvalid": "Context window must be a valid positive integer (separators allowed between digit groups)",
           "requestPathInvalid": "Begin the exact request path with a single /. Do not use fragments or . and .. path segments; percent-encode spaces and unsafe characters.",
           "modelRequired": "Add at least one model",
           "oauthInvalid": "Incomplete OAuth config: all fields are required and both endpoints must be secure https URLs"
@@ -1967,12 +1972,30 @@
       }
     },
     "subagentModels": {
-      "title": "Subagent models",
-      "description": "Choose the default model used for sub tasks in Claude Code and Codex. The setting applies per entry, not per model.",
+      "title": "Subagents",
+      "description": "Choose the default model used for sub tasks in Claude Code and Codex, and set guardrails for Codex subagents. The setting applies per entry, not per model.",
       "unspecified": "Not specified (use default behavior)",
-      "codexUnavailable": "Safe overrides are unavailable in this Codex version",
-      "hint": "Available models depend on your connected model sources. Leave it unspecified to use the agent's normal default. Claude Code changes apply to new sessions; the current Codex version does not support subagent model overrides.",
-      "saveFailed": "Failed to save subagent model"
+      "hint": "Available models depend on your connected model sources. Leave it unspecified to use the agent's normal default. Claude Code changes apply to new sessions; Codex changes restart the local Codex runtime right away when idle, or after running sessions finish their current task.",
+      "codexV2ModelHint": "The subagent default must be a model from Codex's own catalog; models outside it (such as third-party models connected through the compatibility bridge) are rejected by Codex. Sol / Terra (multi-agent V2) further only accept V2 catalog models (currently gpt-5.6-sol and gpt-5.6-terra); legacy multi-agent (V1) has no V2 restriction.",
+      "saveFailed": "Failed to save subagent settings",
+      "guardrails": {
+        "title": "Codex subagent guardrails",
+        "enableHint": "Allow Codex to spawn one-off subagents while working. Turning this off applies to both legacy multi-agent (V1) and Sol / Terra (V2).",
+        "enableAria": "Allow Codex subagents",
+        "concurrencyLabel": "Concurrent subagent limit",
+        "concurrencyHint": "Maximum number of subagents running at the same time. Each subagent consumes model quota; Codex warns when concurrency reaches 8 at Ultra reasoning.",
+        "concurrencyFollowDefault": "Follow Codex default (6 for legacy V1, 3 for Sol / Terra)",
+        "concurrencyAria": "Adjust the Codex concurrent subagent limit",
+        "concurrencyCustomAria": "Customize the Codex concurrent subagent limit",
+        "nestedLabel": "Allow subagents to spawn subagents",
+        "nestedHint": "Only applies to legacy multi-agent (V1); Sol / Terra (V2) ignore this setting.",
+        "nestedAria": "Allow subagents to spawn subagents",
+        "localOnlyHint": "These guardrails only apply to Codex running on this machine; Codex over SSH remotes is not affected."
+      },
+      "toast": {
+        "saved": "Subagent settings saved",
+        "deferredSuffix": " — running Codex sessions will apply this after their current task finishes"
+      }
     },
     "compaction": {
       "title": "Context compaction",
@@ -2731,7 +2754,7 @@
         "addPlugin": "Add plugin",
         "addPluginAria": "Plugin add options",
         "createWithCindy": "Create with Cindy",
-        "createPrompt": "I want to create a Cindy plugin. First call ghost_forge_guide to get the handbook's table of contents, then read the relevant chapters via the section parameter (at minimum the sandbox red-lines and packaging chapters) before writing any code; do not start implementing yet. Begin by asking questions, focusing on one key decision at a time, and work with me to define the problem, target users, interaction flow, required tools and connections, permission boundaries, and acceptance criteria. After I confirm the design, implement and validate it according to the specification, then call ghost_forge_pack to package and install the plugin.",
+        "createPrompt": "I want to create a Cindy plugin. First call ghost_forge_guide to get the handbook's table of contents, read chapter 0 (design alignment) first, then read the relevant chapters via the section parameter (at minimum the sandbox red-lines and packaging chapters) before writing any code; do not start implementing yet. Begin by asking questions: prefer option-based question cards, one key decision per card with your recommended choice marked, and proactively surface design options I may not know about — such as the UI form (docked panel, right-sidebar tab, chat card, or no UI), a $ command word, launch mode, network access, and whether a settings page is needed. Step by step, confirm the problem to solve, target users, interaction flow, required tools and connections, permission boundaries, and acceptance criteria. After I confirm the design, implement and validate it according to the specification, then call ghost_forge_pack to package and install the plugin.",
         "installedTitle": "Installed Plugins",
         "installedExpand": "Show {{count}} more installed plugins",
         "installedCollapse": "Hide additional installed plugins",
@@ -2839,6 +2862,8 @@
         "uninstalled": "Uninstalled \"{{name}}\"",
         "installedAsleep": "Installed \"{{name}}\" (disabled — enable it here anytime)",
         "updated": "\"{{name}}\" updated to v{{version}}",
+        "exported": "Exported the .cindy file for \"{{name}}\"",
+        "exportFailed": "Couldn't export \"{{name}}\" — try again",
         "projectDisabled": "Turned off \"{{name}}\" for this project (applies to new sessions)",
         "projectEnabled": "\"{{name}}\" now follows the global setting in this project"
       },
@@ -2884,10 +2909,14 @@
         "cindyVideoEdit": "Image-to-video (delegated to Cindy, reference images from its own media only)",
         "cindyMediaDeposit": "Can save images, video or audio it holds into your media library",
         "cindyMediaDepositDetail": "This lets AI work on material you paste or drop into the plugin. Saved items are recorded under this plugin, use at most {{quota}}, and are cleaned up when you uninstall it.",
+        "cindyTextOneshot": "Can ask Cindy's fast lane a question and receive a text answer",
+        "cindyTextOneshotDetail": "Uses the system's lightweight utility model chain (the same lane as auto titles). No Agent involved and no file access. Model charges may apply.",
         "agentUserAction": "Can start a new Agent turn after you click a plugin card",
         "agentUserActionDetail": "Each click permits one turn only, and only in the session that owns the card.",
         "agentBackground": "Can automatically start new Agent turns in the background",
         "agentBackgroundDetail": "Does not require a click each time, but can only use sessions you previously connected to this plugin. Model charges may apply.",
+        "agentErrand": "Can hand tasks to the Cindy Agent and collect the result",
+        "agentErrandDetail": "Tasks run in this plugin's dedicated session, always visible in the sidebar and stoppable at any time. Read-only by default; raising the level requires your change in the plugin settings. Model charges may apply.",
         "nodeRuntime": "Can run a bundled Node program on this computer",
         "nodeMcp": "Can run a bundled stdio MCP on this computer",
         "nodeRuntimeDetail": "High risk: it has the same local access as your user account, including files, network, and starting other programs. Cindy cannot contain it in the browser sandbox.",
@@ -2991,10 +3020,23 @@
             "image.generate": "Image generation",
             "image.edit": "Image editing",
             "video.generate": "Video generation",
-            "video.edit": "Image-to-video"
+            "video.edit": "Image-to-video",
+            "text.oneshot": "Quick answer (text)"
           },
           "defaultOption": "{{model}} (default)",
           "noModels": "No models available"
+        },
+        "errandPrefs": {
+          "title": "AI errands",
+          "desc": "How this plugin's tasks run when it hands work to the Cindy Agent. Unset fields follow your new-draft preferences; the helper is read-only by default and works in a dedicated folder.",
+          "agent": "Agent",
+          "model": "Model",
+          "permission": "Write access",
+          "permissionDisabled": "Not available for errand sessions",
+          "workdir": "Working folder",
+          "workdirDefault": "Plugin's dedicated folder (default)",
+          "workdirPick": "Choose…",
+          "workdirClear": "Reset to default folder"
         },
         "toolsTitle": "Tools",
         "permissionsTitle": "Permissions",
@@ -3006,6 +3048,8 @@
         "useDisabled": "Enable this Plugin before using it",
         "moreActions": "More Plugin Actions",
         "updateFromFile": "Update from .cindy File…",
+        "exportPackage": "Export .cindy File…",
+        "exportFileType": "Cindy Plugin",
         "settingsTitle": "{{name}} Settings",
         "settingsUnavailableUntilRestore": "Restore the plugin to use this configuration again.",
         "configurationTitle": "Configuration",
@@ -3518,6 +3562,7 @@
     },
     "dailyLimitLabel": "Today {{spend}}/{{limit}}",
     "monthlyLimitLabel": "Cycle {{spend}}/{{limit}}",
+    "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "Session {{cost}}",
     "codex": {
       "waiting": "Codex --",
@@ -3562,6 +3607,7 @@
     "tooltip": {
       "todayUsedSoftLimit": "Today used ${{today}} / soft limit ${{limit}} ({{pct}}%)",
       "sessionUsed": "This session used {{cost}}",
+      "creditUsed": "Account used {{used}} · total {{total}}",
       "monthlyUnavailable": "⚠️ Monthly quota is temporarily unavailable",
       "dailyUnavailable": "⚠️ Today's usage details are temporarily unavailable",
       "softLimitFormula": "Soft limit formula: monthly quota ÷ 30 × {{factor}}",
@@ -3652,14 +3698,24 @@
     "maximizeAria": "Maximize panel",
     "restoreAria": "Restore panel size",
     "detachAria": "Open in a new window",
-    "minimizeAria": "Minimize to floating bubble"
+    "minimizeAria": "Minimize to floating bubble",
+    "closeAria": "Close panel and disable plugin"
+  },
+  "ghostPanel": {
+    "disableConfirm": {
+      "title": "Disable \"{{name}}\"?",
+      "body": "Closing this panel disables the whole plugin — its panel and capabilities will pause. You can re-enable it anytime from Plugins in the sidebar.",
+      "confirm": "Disable"
+    }
   },
   "ghostPanelWindow": {
     "mergeBack": "Merge back into main window",
     "unavailable": "This plugin panel is currently unavailable"
   },
   "ghostPanelBubble": {
-    "restoreAria": "Restore {{name}} panel"
+    "restoreAria": "Restore {{name}} panel",
+    "stackExpandAria": "{{count}} plugin panels minimized. Click to expand",
+    "stackCollapseAria": "Collapse the plugin panel list"
   },
   "rightSidebar": {
     "ariaLabel": "Right sidebar",
@@ -3674,6 +3730,8 @@
       "addAria": "Add tab",
       "addFailed": "Failed to add tab",
       "tabCloseAria": "Close tab",
+      "pinAria": "Pin — keep in all conversations",
+      "unpinAria": "Unpin — keep only in this conversation",
       "menu": {
         "addLabel": "Add tab",
         "comingSoon": "Coming soon",
@@ -3699,7 +3757,9 @@
       "contextMenu": {
         "close": "Close",
         "closeOthers": "Close others",
-        "closeAll": "Close all"
+        "closeAll": "Close all",
+        "pin": "Pin",
+        "unpin": "Unpin"
       },
       "empty": {
         "eyebrow": "Right Sidebar",
@@ -4437,6 +4497,7 @@
       },
       "meta": {
         "context": "{{value}} context",
+        "codexCompatibilityMode": "Codex compatibility mode",
         "price": "{{input}}/{{output}} per 1M",
         "fastBadge": "Fast",
         "budgetDiscount": "Special discount"
@@ -7632,6 +7693,7 @@
     "menuAria": "Composer actions",
     "tooltipEmpty": "More actions",
     "tooltipCount": "{{count}} reference directories",
+    "addFiles": "Add files, images, or videos…",
     "pluginsTitle": "Installed Plugins",
     "pluginDisabled": "Disabled",
     "pluginNoCommand": "Not available here",

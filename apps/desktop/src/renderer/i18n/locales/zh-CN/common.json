@@ -123,7 +123,7 @@
       "personalization": "个性化",
       "chipMetrics": "用量指示器",
       "memory": "记忆",
-      "subagentModels": "Subagent 模型",
+      "subagentModels": "Subagent",
       "compaction": "上下文压缩",
       "terminalShell": "默认终端 shell",
       "linkOpen": "链接打开方式",
@@ -1286,6 +1286,8 @@
           "models": "模型",
           "modelIdPlaceholder": "model-id",
           "modelNamePlaceholder": "显示名称",
+          "modelContextWindowPlaceholder": "上下文(tokens)",
+          "modelContextWindowTitle": "上下文窗口(tokens)。留空按 200K 保守默认；影响窗口显示与压缩阈值。",
           "addModel": "添加模型",
           "headers": "请求头(可选)",
           "headerNamePlaceholder": "Header-Name",
@@ -1296,19 +1298,22 @@
         "wireProtocol": {
           "responses": "OpenAI Responses（原生）",
           "chat": "Chat Completions（Cindy 桥接）",
+          "anthropic": "Anthropic Messages（Cindy 桥接）",
           "responsesHelp": "供应商原生支持 Responses API，Cindy 透明转发完整事件。",
-          "chatHelp": "适用于仅提供 Chat Completions 的供应商。Cindy 转换流式文本和函数工具调用；部分高级 Responses 能力不可用。"
+          "chatHelp": "适用于仅提供 Chat Completions 的供应商。Cindy 转换流式文本和函数工具调用；部分高级 Responses 能力不可用。",
+          "anthropicHelp": "适用于提供 Anthropic Messages API 的供应商。Cindy 转换 Responses 消息、图片、工具、推理内容与流式事件。"
         },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code 遵循 Anthropic 协议(用 x-api-key 鉴权)。填该来源用于 Claude Code 的 baseURL、密钥与模型，留空则此来源不提供 Claude Code。",
           "codex": "Codex",
-          "codexDesc": "Codex 使用 OpenAI Responses 协议。上游可选择原生 Responses，或由 Cindy 桥接仅支持 Chat Completions 的供应商。填该来源用于 Codex 的 baseURL、密钥与模型，留空则此来源不提供 Codex。"
+          "codexDesc": "Codex 使用 OpenAI Responses 协议。上游可选择原生 Responses，或由 Cindy 桥接 Chat Completions、Anthropic Messages。填该来源用于 Codex 的 baseURL、密钥与模型，留空则此来源不提供 Codex。"
         },
         "errors": {
           "nameRequired": "请填写显示名称",
           "runtimeRequired": "请至少配置一个 Runtime（填写它的基础 URL 和模型）",
           "baseUrlInvalid": "基础 URL 必须是合法的 http(s) 地址",
+          "contextWindowInvalid": "上下文窗口必须是合法的正整数（数字组之间可用分隔符）",
           "requestPathInvalid": "精确请求路径需以单个 / 开头，不含片段标识或 .、.. 路径段；空格和不安全字符请使用百分号编码",
           "modelRequired": "请至少添加一个模型",
           "oauthInvalid": "OAuth 配置不完整：所有字段均必填，且两个端点必须是安全的 https 地址"
@@ -1966,12 +1971,30 @@
       }
     },
     "subagentModels": {
-      "title": "Subagent 模型",
-      "description": "分别设置 Claude Code 和 Codex 执行子任务时使用的默认模型。设置按入口生效，不会为每个模型单独保存。",
+      "title": "Subagent",
+      "description": "分别设置 Claude Code 和 Codex 执行子任务时使用的默认模型，并为 Codex Subagent 配置运行护栏。设置按入口生效，不会为每个模型单独保存。",
       "unspecified": "不指定（跟随原逻辑）",
-      "codexUnavailable": "当前 Codex 版本暂不支持安全覆盖",
-      "hint": "可选模型取决于已连接的模型来源；留空表示使用 Agent 原本的默认设置。Claude Code 的修改从新建的 Agent 会话开始生效，Codex 当前版本暂不支持覆盖 Subagent 模型。",
-      "saveFailed": "保存 Subagent 模型失败"
+      "hint": "可选模型取决于已连接的模型来源；留空表示使用 Agent 原本的默认设置。Claude Code 的修改从新建的 Agent 会话开始生效；Codex 的修改在空闲时立即重启生效，有任务运行时会在本地 Codex 会话全部空闲后自动应用。",
+      "codexV2ModelHint": "Subagent 默认模型必须是 Codex 自身模型目录内的模型，目录外的模型（如经兼容桥接入的第三方模型）会被 Codex 拒绝；Sol / Terra（Multi-Agent V2）进一步只接受 V2 目录模型（当前为 gpt-5.6-sol 与 gpt-5.6-terra），旧版（V1）无 V2 限制。",
+      "saveFailed": "保存 Subagent 设置失败",
+      "guardrails": {
+        "title": "Codex Subagent 护栏",
+        "enableHint": "允许 Codex 在执行任务时创建一次性 Subagent。关闭后对旧版（V1）和 Sol / Terra（V2）都生效。",
+        "enableAria": "允许 Codex 使用 Subagent",
+        "concurrencyLabel": "Subagent 并发上限",
+        "concurrencyHint": "同时运行的 Subagent 数量上限。每个 Subagent 都会消耗模型配额，调低更省；Ultra 档位下并发达到 8 时 Codex 会发出用量警告。",
+        "concurrencyFollowDefault": "跟随 Codex 默认（旧版 V1 为 6，Sol / Terra 为 3）",
+        "concurrencyAria": "调整 Codex Subagent 并发上限",
+        "concurrencyCustomAria": "自定义 Codex Subagent 并发上限",
+        "nestedLabel": "允许 Subagent 再创建 Subagent",
+        "nestedHint": "仅旧版 Codex Multi-Agent（V1）生效，Sol / Terra（V2）会忽略此设置。",
+        "nestedAria": "允许 Subagent 再创建 Subagent",
+        "localOnlyHint": "以上护栏仅对本机运行的 Codex 生效，SSH 远程连接的 Codex 不受影响。"
+      },
+      "toast": {
+        "saved": "Subagent 设置已保存",
+        "deferredSuffix": " — 运行中的 Codex 对话将在当前任务结束后应用"
+      }
     },
     "compaction": {
       "title": "上下文压缩",
@@ -2730,7 +2753,7 @@
         "addPlugin": "添加插件",
         "addPluginAria": "插件添加选项",
         "createWithCindy": "使用 Cindy 创建",
-        "createPrompt": "我要创建一个 Cindy 插件。请先调用 ghost_forge_guide 获取手册目录，再用 section 参数读透相关章节（动手前至少读完沙箱红线与打包流程两章），不要直接开始实现。先从提问开始，每次聚焦一个关键决策，与我逐步确认插件要解决的问题、目标用户、交互流程、所需工具与连接、权限边界和验收标准。设计确认后，再按规范实现并自检；最后调用 ghost_forge_pack 打包并安装插件。",
+        "createPrompt": "我要创建一个 Cindy 插件。请先调用 ghost_forge_guide 获取手册目录，先读第 0 章「设计对齐」，再用 section 参数读透相关章节（动手前至少读完沙箱红线与打包流程两章），不要直接开始实现。先从提问开始：优先用带选项的提问卡片，每张卡片聚焦一个关键决策并标注你的推荐项，把我可能不知道的设计选项主动摆出来让我选——比如界面形态（停靠面板、右侧栏页签、对话卡片还是无界面）、$ 点名词、启动模式、是否联网、是否需要设置页；并逐步确认插件要解决的问题、目标用户、交互流程、所需工具与连接、权限边界和验收标准。设计确认后，再按规范实现并自检；最后调用 ghost_forge_pack 打包并安装插件。",
         "installedTitle": "已安装的插件",
         "installedExpand": "展开另外 {{count}} 个已安装插件",
         "installedCollapse": "收起其他已安装插件",
@@ -2838,6 +2861,8 @@
         "uninstalled": "已卸载「{{name}}」",
         "installedAsleep": "已安装「{{name}}」(未生效，可在此开启)",
         "updated": "「{{name}}」已更新到 v{{version}}",
+        "exported": "已导出「{{name}}」的 .cindy 文件",
+        "exportFailed": "导出「{{name}}」失败，请重试",
         "projectDisabled": "已在此项目停用「{{name}}」(新对话生效)",
         "projectEnabled": "「{{name}}」在此项目恢复跟随全局"
       },
@@ -2883,10 +2908,14 @@
         "cindyVideoEdit": "图生视频(请 Cindy 代办，参考图仅限它名下的图)",
         "cindyMediaDeposit": "可将它手中的图片、视频或音频存入你的媒体库",
         "cindyMediaDepositDetail": "用于让你在插件里粘贴或拖入的素材也能被 AI 加工。存入的内容记在这个插件名下，最多占用 {{quota}}，卸载插件时一并清理。",
+        "cindyTextOneshot": "可向 Cindy 的快速通道提问并获得文字回答",
+        "cindyTextOneshotDetail": "走系统的轻量任务模型链(与自动起标题同一条通道)，不动用 Agent、碰不到你的文件，可能产生模型费用。",
         "agentUserAction": "用户点击插件卡片后，可让 Agent 开始新一轮工作",
         "agentUserActionDetail": "每次点击只允许启动一次，并且只能使用这张卡所属的对话。",
         "agentBackground": "可在后台自动让 Agent 开始新一轮工作",
         "agentBackgroundDetail": "不需要当次点击，但只能使用你曾为这个插件建立过关联的对话，可能产生模型费用。",
+        "agentErrand": "可把任务交给 Cindy Agent 代办并取回结果",
+        "agentErrandDetail": "任务在这个插件的专属对话里进行，你随时可以在侧边栏看到并叫停；默认只能读不能改，要放开需你在插件配置里亲手调整，可能产生模型费用。",
         "nodeRuntime": "可在本机运行随插件附带的 Node 程序",
         "nodeMcp": "可在本机运行随插件附带的 stdio MCP",
         "nodeRuntimeDetail": "高风险：它和你本人一样，可以读取或修改你账号能访问的本机文件、访问网络并启动其它程序。Cindy 不能用浏览器沙箱限制它。",
@@ -2990,10 +3019,23 @@
             "image.generate": "出图",
             "image.edit": "改图",
             "video.generate": "生成视频",
-            "video.edit": "图生视频"
+            "video.edit": "图生视频",
+            "text.oneshot": "快问快答(文字)"
           },
           "defaultOption": "{{model}}(默认)",
           "noModels": "暂无可用模型"
+        },
+        "errandPrefs": {
+          "title": "AI 代办",
+          "desc": "这个插件把任务交给 Cindy Agent 时用哪套配置干活。不配就跟随你新建草稿时的选择；帮工默认只能看不能改，工作目录默认是插件专属文件夹。",
+          "agent": "Agent",
+          "model": "模型",
+          "permission": "动手权限",
+          "permissionDisabled": "派活时不提供这一档",
+          "workdir": "工作目录",
+          "workdirDefault": "插件专属文件夹(默认)",
+          "workdirPick": "选择…",
+          "workdirClear": "恢复默认目录"
         },
         "toolsTitle": "Tools",
         "permissionsTitle": "权限",
@@ -3005,6 +3047,8 @@
         "useDisabled": "请先开启插件",
         "moreActions": "更多插件操作",
         "updateFromFile": "从 .cindy 文件更新…",
+        "exportPackage": "导出 .cindy 文件…",
+        "exportFileType": "Cindy 插件",
         "settingsTitle": "{{name}} 设置",
         "settingsUnavailableUntilRestore": "恢复插件后可继续使用这项配置。",
         "configurationTitle": "配置",
@@ -3517,6 +3561,7 @@
     },
     "dailyLimitLabel": "今日 {{spend}}/{{limit}}",
     "monthlyLimitLabel": "本周期 {{spend}}/{{limit}}",
+    "creditLabel": "{{used}}/{{total}}",
     "sessionCostLabel": "本对话 {{cost}}",
     "codex": {
       "waiting": "Codex --",
@@ -3561,6 +3606,7 @@
     "tooltip": {
       "todayUsedSoftLimit": "今日已用 ${{today}} / 软限额 ${{limit}} ({{pct}}%)",
       "sessionUsed": "本对话已用 {{cost}}",
+      "creditUsed": "账号已用 {{used}} · 总额 {{total}}",
       "monthlyUnavailable": "⚠️ 月度配额暂时不可用",
       "dailyUnavailable": "⚠️ 今日用量明细暂时不可用",
       "softLimitFormula": "软限额口径：月度配额 ÷ 30 × {{factor}}",
@@ -3651,14 +3697,24 @@
     "maximizeAria": "撑满内容区",
     "restoreAria": "还原面板大小",
     "detachAria": "在独立窗口中打开",
-    "minimizeAria": "最小化为浮动气泡"
+    "minimizeAria": "最小化为浮动气泡",
+    "closeAria": "关闭面板并停用插件"
+  },
+  "ghostPanel": {
+    "disableConfirm": {
+      "title": "停用「{{name}}」？",
+      "body": "关闭这个面板会停用整个插件，它的面板和能力都会暂停。之后可以随时在侧边栏「插件」里重新开启。",
+      "confirm": "停用"
+    }
   },
   "ghostPanelWindow": {
     "mergeBack": "合并回主窗口",
     "unavailable": "该插件面板当前不可用"
   },
   "ghostPanelBubble": {
-    "restoreAria": "恢复 {{name}} 面板"
+    "restoreAria": "恢复 {{name}} 面板",
+    "stackExpandAria": "已收起 {{count}} 个插件面板，点击展开",
+    "stackCollapseAria": "收拢插件面板列表"
   },
   "rightSidebar": {
     "ariaLabel": "右侧边栏",
@@ -3673,6 +3729,8 @@
       "addAria": "添加标签",
       "addFailed": "添加标签失败",
       "tabCloseAria": "关闭标签",
+      "pinAria": "钉住，在所有对话中保留",
+      "unpinAria": "取消钉住，仅保留在当前对话",
       "menu": {
         "addLabel": "添加标签",
         "comingSoon": "即将支持",
@@ -3698,7 +3756,9 @@
       "contextMenu": {
         "close": "关闭",
         "closeOthers": "关闭其他",
-        "closeAll": "关闭所有"
+        "closeAll": "关闭所有",
+        "pin": "钉住",
+        "unpin": "取消钉住"
       },
       "empty": {
         "eyebrow": "右侧栏",
@@ -4436,6 +4496,7 @@
       },
       "meta": {
         "context": "{{value}} 上下文",
+        "codexCompatibilityMode": "Codex 兼容模式",
         "price": "{{input}}/{{output}} / 百万",
         "fastBadge": "快速",
         "budgetDiscount": "特别折扣"
@@ -7620,6 +7681,7 @@
     "menuAria": "操作菜单",
     "tooltipEmpty": "更多操作",
     "tooltipCount": "{{count}} 个附加引用目录",
+    "addFiles": "添加文件、图片或视频…",
     "pluginsTitle": "已安装的插件",
     "pluginDisabled": "未生效",
     "pluginNoCommand": "不可直接使用",

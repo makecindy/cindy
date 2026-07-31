@@ -425,6 +425,8 @@ import type {
   MobileSessionAgentSwitchIntent,
 } from '@cindy/maker-shared/device-link-contract';
 import {
+  REMOTE_MEDIA_NEVER_EXPIRES,
+  localCopyResolvedMedia,
   resolveMobileRemoteMedia,
   type MobileRemoteMediaPresignResult,
   type MobileResolvedRemoteMedia,
@@ -433,6 +435,7 @@ import {
   createRemoteMediaResolveQueue,
   type RemoteMediaRequest,
   type RemoteMediaRequestOptions,
+  type RemoteMediaResolveHooks,
 } from '@/session/remoteMediaResolveQueue';
 import { ChatFilePathContext, type ChatFilePathContextValue, type ChatFilePathTarget } from '@/session/chatFilePathContext';
 import { pathDisplayName } from '@/session/chatPathCandidate';
@@ -1187,7 +1190,11 @@ export default function SessionScreen() {
   // 队列工厂:本屏切 sessionId 不重挂载,换会话时旧队列 releaseAll 后必须换全新
   // 实例(released 标志一次性,释放过的队列不再回填缓存)。
   const createRemoteMediaQueue = useCallback(() => createRemoteMediaResolveQueue({
-      resolve: async (media: RemoteMediaRequest, opts?: { skipCache?: boolean }) => {
+      resolve: async (
+        media: RemoteMediaRequest,
+        opts?: { skipCache?: boolean },
+        hooks?: RemoteMediaResolveHooks,
+      ) => {
         const deps = remoteMediaDepsRef.current;
         const diskCache = remoteMediaDiskCacheRef.current;
         // 命名空间键与 deps 同一时刻捕获(首个 await 之前):切设备/账号时在飞的
@@ -1209,7 +1216,7 @@ export default function SessionScreen() {
               mimeType: hit.mimeType,
               size: hit.size,
               // 本地文件不过期;若被 LRU/OS 清掉,Image onError → forceRefresh 重取自愈。
-              expiresAt: '9999-12-31T00:00:00.000Z',
+              expiresAt: REMOTE_MEDIA_NEVER_EXPIRES,
               previewable: hit.mimeType.startsWith('image/'),
             };
           }
@@ -1244,13 +1251,32 @@ export default function SessionScreen() {
           // 走到这里的都是完整原图字节(inline 缩略图已在上面 return):即便请求方
           // 要的是缩略图(被控端缩不了回落原图),也落**裸键**——lightbox 后续按裸键
           // 取原图直接磁盘命中,不再对同一张原图二次下载、双份落盘。
-          const store = diskCache.store(bareDiskSource, resolved.url, resolved.mimeType, resolved.size).catch(() => undefined);
+          const store = diskCache.store(bareDiskSource, resolved.url, resolved.mimeType, resolved.size)
+            .catch(() => false);
           if (resolved.ossKey) {
             const key = resolved.ossKey;
             pendingDiskStoresRef.current.set(key, store.finally(() => {
               pendingDiskStoresRef.current.delete(key);
             }));
           }
+          // 落盘成功后把队列缓存条目升级成本地 file://:presign 地址会被队列当 fresh
+          // 结果缓存,在有效期内同键请求一律直接命中它、再也不会重进磁盘 lookup,
+          // 于是「已经打开过的原图,关掉再打开又从 OSS 重下一整张」,盘上那份副本
+          // 永远轮不到用(用户实测 + PR #1125 review)。
+          // 这里刻意**不同步等待**落盘:调用方立即拿到可渲染的 presign 地址。取件队列
+          // maxConcurrent=2 且看不到 front,同步等待会让 lightbox 的相邻页预取同样
+          // 占住槽位,把用户正在看的那张排到已翻过去的图的后台下载之后。
+          // store 的返回值是「本次是否真的写入了新字节」:超预算跳过 / 下载失败(现存
+          // 同名旧文件被刻意保留)/ 落成 0 字节都为 false,此时绝不能改用本地文件——
+          // 否则会把**已被 onError 证伪的旧文件**当本次结果并标成永不过期。
+          void store
+            .then(async (stored) => {
+              if (!stored) return;
+              const hit = await diskCache.lookup(bareDiskSource).catch(() => null);
+              const local = localCopyResolvedMedia(resolved, hit);
+              if (local) hooks?.onLocalCopy(local);
+            })
+            .catch(() => undefined);
         }
         return resolved;
       },
@@ -3521,7 +3547,7 @@ export default function SessionScreen() {
         // remoteSessionRunning(activity 推送 / 活跃快照会先置 true,重连场景渲染先于清理)。
         buildMobileMessageRenderItems(
           messages,
-          { isSessionStreaming, renderOrphanTaskUpdates: makerTurnRunning },
+          { autoResumePending: inputProjection.autoResumePending, isSessionStreaming, renderOrphanTaskUpdates: makerTurnRunning, sessionId },
           taskUpdates,
         ),
         forkOrigin,
@@ -3537,7 +3563,7 @@ export default function SessionScreen() {
       const reconciled = reconcileMobileMessageRenderItems(previous, items);
       return reconciled;
     },
-    [errorTailClientId, forkOrigin, isSessionStreaming, makerTurnRunning, messages, sessionId, taskUpdates],
+    [errorTailClientId, forkOrigin, inputProjection.autoResumePending, isSessionStreaming, makerTurnRunning, messages, sessionId, taskUpdates],
   );
   // 只在本次 render 真正 commit 后更新 reconcile 基准。写入 useMemo/ref 会让
   // Concurrent Mode 下被丢弃的 render 泄漏成下一轮的 previous,破坏尾行 memo 的稳定性。
@@ -9128,8 +9154,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flexDirection: 'row',
     minHeight: COMPOSER_INPUT_LINE_HEIGHT,
   },
+  // 语音态占位文案渲染的就是普通态 TextInput 的 placeholder,颜色必须同源
+  // (placeholderTextColor 也是 textTertiary),否则一进语音态这行字会变色。
   voiceDraftListeningText: {
-    color: colors.statusReady,
+    color: colors.textTertiary,
     ...MOBILE_COMPOSER_DRAFT_TEXT_STYLE,
   },
   palettePanel: {

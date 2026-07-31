@@ -171,7 +171,15 @@
     "goalComplete": "目標を達成 · {{turns}} 回 · 所要 {{duration}}",
     "goalResumed": "使用量が回復、目標を継続",
     "goalCapacityRetry": "モデルサービスが混雑していました。目標を再試行します",
-    "autoResume": "接続が切断、自動的に継続しました",
+    "autoResume": {
+      "separator": "接続が中断されたため、自動的に再開しました",
+      "succeeded": "再接続しました",
+      "failed": "再接続できませんでした",
+      "neutral": "再接続",
+      "pending": "再接続中…",
+      "pendingWithProgress": "再接続中 {{attempt}}/{{total}}…",
+      "details": "今回の再試行 {{attempt}}/{{total}} · この会話での再接続 {{count}} 回"
+    },
     "modelLabel": "モデル",
     "sessionLabel": "セッション",
     "sessionResumed": "再開済み",

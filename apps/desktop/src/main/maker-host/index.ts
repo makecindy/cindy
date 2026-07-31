@@ -117,6 +117,7 @@ import {
   setCodexProxyGatewayKeyReader,
   registerComposed as registerCodexProxyComposed,
   registerReviewerRouteContext as registerCodexReviewerRouteContext,
+  registerChildThread as registerCodexProxyChildThread,
   unregister as unregisterCodexProxyPrompt,
 } from './codex-proxy-host.js';
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
@@ -160,6 +161,8 @@ import {
 } from './remote-codex-mcp-recovery.js';
 import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../mcp-integrations/codexBuiltinToolPolicy.js';
 import { buildCodexProxySpawnArgs, CODEX_OPENAI_COMPACT_PROVIDER_ID } from './codex-gateway-config.js';
+import { buildCodexSubagentSpawnArgs } from './codex-subagent-config.js';
+import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import { getOutboundPathSnapshotFor } from './outbound-proxy-resolver.js';
 import {
   createDesktopMakerMemoryManager,
@@ -1069,7 +1072,14 @@ export function getMaker(): Maker {
           ? getCodexControlPlaneProxyEndpoint(authInjection)
           : getCodexProxyEndpoint();
         return {
-          extraArgs: [...mcpExtraArgs, ...buildCodexProxySpawnArgs(endpoint, authInjection)],
+          // 子代理护栏/默认模型每次 createHost 现读 store:DeferredCodexRestart 兑现
+          // (dispose host)后的新 spawn 自动带新值。agents.* 对 control-plane 的
+          // model/list 无影响,不加 hostPurpose 分支。
+          extraArgs: [
+            ...mcpExtraArgs,
+            ...buildCodexSubagentSpawnArgs(readSubagentModelSettings()),
+            ...buildCodexProxySpawnArgs(endpoint, authInjection),
+          ],
           extraEnv: mcpExtraEnv,
           codexProxyActive: ready,
           // oauth spawn 才定义 OpenAI 身份 provider(spawn args 同源);maker-core 只对
@@ -1102,6 +1112,9 @@ export function getMaker(): Maker {
         registerCodexProxyComposed(sessionId, threadId, text),
       registerCodexReviewerRouteContext: ({ sessionId, threadId, model }) =>
         registerCodexReviewerRouteContext(sessionId, threadId, model),
+      registerCodexChildThreadForParent: ({ parentThreadId, childThreadId }) => {
+        registerCodexProxyChildThread(parentThreadId, childThreadId);
+      },
       // host 自家、用户已通过 OAuth/账号授权过且完成权限 review 的 MCP server,
       // 按精确 server name 自动通过 Codex MCP elicitation，避免每次可信写操作都弹
       // PermissionPrompt。`cindy_` 只是 namespace，不构成信任边界；新 provider

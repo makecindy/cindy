@@ -110,4 +110,36 @@ describe('PanelChrome · 撑满系统按钮', () => {
       'panelChrome.maximizeAria',
     ]);
   });
+
+  it('传 onClose → 长出关闭按钮并触发回调;四按钮齐时关闭恒排最右', () => {
+    const onClose = vi.fn();
+    render(
+      <PanelMaximizeContext.Provider value={{ maximizedKind: null, toggle: () => undefined }}>
+        <PanelChrome
+          title="测试面板"
+          panelKind="ghost:demo"
+          onDetach={() => undefined}
+          onMinimize={() => undefined}
+          onClose={onClose}
+        />
+      </PanelMaximizeContext.Provider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'panelChrome.closeAria' }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    const labels = screen
+      .getAllByRole('button')
+      .map((b) => b.getAttribute('aria-label'));
+    expect(labels).toEqual([
+      'panelChrome.minimizeAria',
+      'panelChrome.detachAria',
+      'panelChrome.maximizeAria',
+      'panelChrome.closeAria',
+    ]);
+  });
+
+  it('只传 onClose(无其它系统按钮)→ 只有关闭按钮', () => {
+    render(<PanelChrome title="测试面板" onClose={() => undefined} />);
+    expect(screen.getAllByRole('button')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'panelChrome.closeAria' })).toBeTruthy();
+  });
 });
