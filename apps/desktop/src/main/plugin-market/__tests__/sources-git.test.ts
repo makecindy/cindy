@@ -83,6 +83,35 @@ describe('cloneMarketplace', () => {
     expect(calls[2]?.args).toEqual(['checkout', 'main']);
   });
 
+  it('checks out the default branch for sparse clones without an explicit ref', async () => {
+    const { executor, calls } = fakeExecutor((args) =>
+      args[0] === 'symbolic-ref' ? { stdout: 'origin/trunk\n' } : { stdout: 'abc123\n' },
+    );
+    await cloneMarketplace(
+      { url: 'https://x.test/r.git', sparsePaths: ['plugins/a'] },
+      destPath(),
+      executor,
+    );
+    // 必须 checkout 真实分支:`checkout HEAD` 会留下 detached HEAD,后续刷新的
+    // `git pull --ff-only` 稳定失败,每次刷新都退化成整仓重克隆。
+    expect(calls.map((call) => call.args[0])).toContain('symbolic-ref');
+    expect(calls.some((call) => call.args[0] === 'checkout' && call.args[1] === 'trunk')).toBe(true);
+    expect(calls.some((call) => call.args[0] === 'checkout' && call.args[1] === 'HEAD')).toBe(false);
+  });
+
+  it('falls back to HEAD when the default branch cannot be resolved', async () => {
+    const { executor, calls } = fakeExecutor((args) => {
+      if (args[0] === 'symbolic-ref') throw new Error('no origin/HEAD');
+      return { stdout: 'abc123\n' };
+    });
+    await cloneMarketplace(
+      { url: 'https://x.test/r.git', sparsePaths: ['plugins/a'] },
+      destPath(),
+      executor,
+    );
+    expect(calls.some((call) => call.args[0] === 'checkout' && call.args[1] === 'HEAD')).toBe(true);
+  });
+
   it('cleans the staging directory and classifies auth failures', async () => {
     const { executor } = fakeExecutor(() => {
       throw Object.assign(new Error('fatal: Authentication failed'), {

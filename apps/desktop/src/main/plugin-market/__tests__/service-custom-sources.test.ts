@@ -115,6 +115,18 @@ function serverSummary(overrides: Partial<VisiblePluginSummary> = {}): VisiblePl
   };
 }
 
+/** 服务端详情夹具：summary + 该 release 的完整 manifest。 */
+function serverDetail() {
+  const summary = serverSummary();
+  return {
+    ...summary,
+    currentRelease: {
+      ...summary.currentRelease,
+      manifest: ghostManifest(summary.ghostId),
+    },
+  };
+}
+
 /** 在临时目录造一个本地市场夹具（marketplace.json + 插件目录）。 */
 function writeLocalMarket(
   root: string,
@@ -544,6 +556,39 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
       }),
     ).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
     expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it('rejects installing a server plugin that a custom source also declares', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/x', id: 'server-plugin' }]);
+    const h = harness([serverSummary()], [{ name: 'team-lib', dir }]);
+    const item = serverSummary();
+    h.api.detail.mockResolvedValue(serverDetail());
+
+    // 列表把两边都标成 conflict 并禁用;服务端安装入口只查服务端目录内部重名,
+    // 必须用同一口径重算,否则普通 UI 流程或直接 IPC 都能装进来并抢占 ghostId。
+    const snapshot = await h.service.snapshot();
+    expect(
+      snapshot.items.find((entry) => entry.sourceType === 'server')?.installState,
+    ).toBe('conflict');
+
+    await expect(
+      h.service.install(item.id, { expectedReleaseId: item.currentRelease.id }),
+    ).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
+    expect(h.api.download).not.toHaveBeenCalled();
+  });
+
+  it('keeps the conflict state on the server detail view', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/x', id: 'server-plugin' }]);
+    const h = harness([serverSummary()], [{ name: 'team-lib', dir }]);
+    h.api.detail.mockResolvedValue(serverDetail());
+
+    // 详情传空重复集合会把 conflict 项恢复成可安装,给出绕过冲突闸的入口。
+    const detail = await h.service.detail(serverSummary().id);
+    expect(detail.installState).toBe('conflict');
   });
 
   it('uninstalls a custom market plugin through the shared uninstall path', async () => {

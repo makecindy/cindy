@@ -294,10 +294,14 @@ export class PluginMarketService {
       if (!compatible.ok) {
         throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
       }
+      // 详情必须与列表同口径:传空重复集合会把列表标为 conflict 并禁用的项
+      // 在详情页恢复成可安装,给出一条绕过冲突闸的入口。
+      const { duplicates } = await this.crossSourceDuplicateGhostIds(owner);
+      requireSameMarketOwner(owner);
       return {
         ...this.toItem(
           plugin,
-          NO_DUPLICATE_GHOST_IDS,
+          duplicates,
           this.localInstallSnapshot(this.ledgerForOwner(owner)),
         ),
         manifest: compatible.manifest,
@@ -353,6 +357,16 @@ export class PluginMarketService {
       const existing = getGhostManager()
         .list()
         .some((ghost) => ghost.manifest.id === plugin.ghostId);
+      // 上面只查了服务端目录内部重名。列表的 conflict 判定是"服务端 + 全部自定义
+      // 来源"合并计数,这里必须用同一口径重算,否则被标为 conflict 并禁用的服务端
+      // 项仍能经普通 UI 流程或直接 IPC 装进来并抢占 ghostId。
+      const record = ledger.installationForGhost(plugin.ghostId);
+      await this.assertSourceOwnsGhostId({
+        owner,
+        ghostId: plugin.ghostId,
+        ownsInstall: Boolean(existing && record?.installed && record.pluginId === plugin.id),
+        knownServerPlugins: catalog,
+      });
       return {
         ghost: await this.installDetail(
           plugin,
@@ -491,10 +505,13 @@ export class PluginMarketService {
       if (!plugin) {
         throwIpcError('NOT_FOUND', 'The Plugin is no longer listed by this marketplace');
       }
+      // 与服务端详情同理:详情必须沿用列表的 conflict 口径,不能传空重复集合。
+      const { duplicates } = await this.crossSourceDuplicateGhostIds(owner);
+      requireSameMarketOwner(owner);
       return {
         ...this.customToItem(
           { config: discovered.config, plugin },
-          NO_DUPLICATE_GHOST_IDS,
+          duplicates,
           this.localInstallSnapshot(this.ledgerForOwner(owner)),
         ),
         manifest: plugin.manifest,
@@ -503,36 +520,53 @@ export class PluginMarketService {
   }
 
   /**
-   * 安装入口重算 ghostId 所有权:列表把跨来源重名标成 `conflict` 并禁用,但那份
-   * 判定是快照期算的。安装 IPC 可以被不可信 Renderer 直接调用,也可能在详情打开
-   * 后由另一个窗口添加了声明同一 ghostId 的来源 —— 所以真正产生副作用之前必须
-   * 用 snapshot 的同一口径(服务端目录 + 全部自定义来源合并计数)重新确认。
+   * 按 snapshot 的同一口径重算跨来源重复 ghostId(服务端目录 + 全部自定义来源)。
+   * 详情与安装都用它,保证"列表标成 conflict 并禁用"的判定不会在别处被放宽。
    *
-   * 服务端目录不可用时降级为仅自定义来源(自定义安装本就不要求服务端可用):
-   * 未安装的服务端插件不构成本地运行期抢占,已安装的那种情况由调用方的
-   * `existing` 检查拦住。
+   * 服务端目录可选:未配置或拉取失败时降级为仅自定义来源,并把 `serverKnown`
+   * 置为 false 供调用方判断。自定义安装本就不要求服务端可用;未安装的服务端插件
+   * 不构成本地运行期抢占,已安装的那种情况由安装侧的 `existing` 检查拦住。
    */
-  private async assertCustomSourceOwnsGhostId(input: {
-    owner: ActiveAppSession;
-    pluginId: string;
-    ghostId: string;
-    ownsInstall: boolean;
-  }): Promise<void> {
-    // 已经拥有当前安装记录的来源保留所有权（先装先得，与列表判定一致）。
-    if (input.ownsInstall) return;
-    const customEntries = await this.discoverCustomEntriesSafe(input.owner);
-    let serverPlugins: readonly VisiblePluginSummary[] = [];
-    if (getClientEndpoint('pluginApiBaseUrl')) {
+  private async crossSourceDuplicateGhostIds(
+    owner: ActiveAppSession,
+    knownServerPlugins?: readonly VisiblePluginSummary[],
+  ): Promise<{ duplicates: ReadonlySet<string>; serverKnown: boolean }> {
+    const customEntries = await this.discoverCustomEntriesSafe(owner);
+    let serverPlugins: readonly VisiblePluginSummary[] = knownServerPlugins ?? [];
+    let serverKnown = knownServerPlugins !== undefined;
+    if (!serverKnown && getClientEndpoint('pluginApiBaseUrl')) {
       try {
-        serverPlugins = visiblePluginsForOwner(input.owner, await this.api.listAll());
+        serverPlugins = visiblePluginsForOwner(owner, await this.api.listAll());
+        serverKnown = true;
       } catch (error) {
-        log.warn('market catalog unavailable while verifying custom install ownership', {
+        log.warn('market catalog unavailable while recomputing cross-source duplicates', {
           error: error instanceof Error ? error.message : String(error),
         });
       }
     }
-    requireSameMarketOwner(input.owner);
-    if (combinedDuplicateGhostIds(serverPlugins, customEntries).has(input.ghostId)) {
+    requireSameMarketOwner(owner);
+    return { duplicates: combinedDuplicateGhostIds(serverPlugins, customEntries), serverKnown };
+  }
+
+  /**
+   * 安装入口重算 ghostId 所有权:列表把跨来源重名标成 `conflict` 并禁用,但那份
+   * 判定是快照期算的。安装 IPC 可以被不可信 Renderer 直接调用,也可能在详情打开
+   * 后由另一个窗口添加了声明同一 ghostId 的来源 —— 所以真正产生副作用之前必须
+   * 用同一口径重新确认。服务端与自定义两条安装路径共用这道闸。
+   */
+  private async assertSourceOwnsGhostId(input: {
+    owner: ActiveAppSession;
+    ghostId: string;
+    ownsInstall: boolean;
+    knownServerPlugins?: readonly VisiblePluginSummary[];
+  }): Promise<void> {
+    // 已经拥有当前安装记录的来源保留所有权（先装先得，与列表判定一致）。
+    if (input.ownsInstall) return;
+    const { duplicates } = await this.crossSourceDuplicateGhostIds(
+      input.owner,
+      input.knownServerPlugins,
+    );
+    if (duplicates.has(input.ghostId)) {
       throwIpcError('ALREADY_EXISTS', 'Another marketplace already provides this Plugin ID');
     }
   }
@@ -581,9 +615,8 @@ export class PluginMarketService {
         if (existing && (!currentRecord?.installed || currentRecord.pluginId !== pluginId)) {
           throwIpcError('ALREADY_EXISTS', 'A local Plugin already uses this Plugin ID');
         }
-        await this.assertCustomSourceOwnsGhostId({
+        await this.assertSourceOwnsGhostId({
           owner,
-          pluginId,
           ghostId: plugin.ghostId,
           ownsInstall: Boolean(existing && currentRecord?.installed && currentRecord.pluginId === pluginId),
         });

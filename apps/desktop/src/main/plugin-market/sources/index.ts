@@ -19,6 +19,8 @@
  *   仍被引用的进 pendingDeletes,等最后一个引用释放时才删。缺了这层,刷新在
  *   切完指针后立即删非 current 版本,会把"已解析到旧版目录、正在异步发现或
  *   逐文件打包安装"的读取方从中途抽走(安装随机失败/输入残缺)。
+ * - 计数注册表是**模块级、按绝对路径为键**的(见下方 versionRefs):调用方每次
+ *   操作都新建一个 manager,放实例字段会让安装持有的租约对刷新不可见。
  * - 引用登记的关键是**与指针解析同步完成**:resolveCurrentVersionSync 全同步,
  *   acquireCurrentVersion 在同一个同步块里解析并登记,中间不 await,因此不存在
  *   "解析到登记"的窗口——任何 fs 回调都插不进来。文件系统标记(.reading 之类)
@@ -87,6 +89,30 @@ export function marketCloneSlug(name: string, source: MarketSource): string {
       .slice(0, 40) || 'market';
   return `${base}-${hash}`;
 }
+
+/*
+ * 缓存版本目录的读取引用注册表。**必须是模块级、按绝对路径为键**:
+ * `PluginMarketService` 每次操作都新建一个 `MarketSourceManager`(store/cloneRoot
+ * 按操作开始时的 owner 现绑),若把计数放实例字段,安装 manager 持有的租约对刷新
+ * manager 完全不可见,刷新照样会删掉正在被打包读取的旧版本 —— 计数等于没做。
+ *
+ * 受保护的对象本来就是"文件系统路径",按路径为键才是正确的作用域;owner 隔离由
+ * 路径自带(`ownerScopedUserDataPath` 已把 owner 编进 cloneRoot),不同 owner 的
+ * 键天然不相交。仅 main 进程内有效(同一 userData 只有一个 main 进程,Electron
+ * 单实例)。
+ */
+
+/** 正在被读取的版本目录 → 引用数。清理只删引用数为 0 的版本目录。 */
+const versionRefs = new Map<string, number>();
+
+/** 清理时仍被引用、推迟到最后一个引用释放后再删的版本目录。 */
+const pendingDeletes = new Set<string>();
+
+/**
+ * 正在进行的刷新的暂存目录。清理按**前缀**放过它们:git clone 还会在同级建
+ * `<incoming>.staging-<uuid>`,只比对完整路径会把那个在途目录删掉。
+ */
+const activeIncoming = new Set<string>();
 
 export class MarketSourceManager {
   private readonly log = createLogger('plugin-market-sources');
@@ -180,22 +206,6 @@ export class MarketSourceManager {
   }
 
   /**
-   * 正在被读取的版本目录 → 引用数。清理只删引用数为 0 的版本目录。
-   * 进程内计数就是全部事实:所有发现/安装/刷新都发生在 main 进程的同一实例族,
-   * 且引用登记与指针解析同步完成,不需要任何跨进程/文件系统标记。
-   */
-  private readonly versionRefs = new Map<string, number>();
-
-  /** 清理时仍被引用、推迟到最后一个引用释放后再删的版本目录。 */
-  private readonly pendingDeletes = new Set<string>();
-
-  /**
-   * 正在进行的刷新的暂存目录。清理按**前缀**放过它们:git clone 还会在同级建
-   * `<incoming>.staging-<uuid>`,只比对完整路径会把那个在途目录删掉。
-   */
-  private readonly activeIncoming = new Set<string>();
-
-  /**
    * 解析当前版本目录并登记一个读取引用。**解析与登记之间没有 await**:
    * JS 单线程 run-to-completion 保证这段同步块执行期间不会有任何 fs 回调
    * (包括并发刷新的清理)插入,因此不存在"解析到旧目录、登记前被删"的窗口。
@@ -215,18 +225,18 @@ export class MarketSourceManager {
    * 历史版本删掉。
    */
   private retainVersion(dir: string): void {
-    this.versionRefs.set(dir, (this.versionRefs.get(dir) ?? 0) + 1);
+    versionRefs.set(dir, (versionRefs.get(dir) ?? 0) + 1);
   }
 
   /** 释放引用;最后一个引用释放时执行被推迟的清理。 */
   private releaseVersion(dir: string): void {
-    const remaining = (this.versionRefs.get(dir) ?? 0) - 1;
+    const remaining = (versionRefs.get(dir) ?? 0) - 1;
     if (remaining > 0) {
-      this.versionRefs.set(dir, remaining);
+      versionRefs.set(dir, remaining);
       return;
     }
-    this.versionRefs.delete(dir);
-    if (!this.pendingDeletes.delete(dir)) return;
+    versionRefs.delete(dir);
+    if (!pendingDeletes.delete(dir)) return;
     // 推迟期间该版本可能已经成为 current(并发刷新:A 的清理把 B 正在暂存的
     // 目录记为待删,随后 B 把指针切到它)。执行前重新核对,不删当前生效版本。
     if (this.isCurrentVersionDir(dir)) return;
@@ -319,8 +329,8 @@ export class MarketSourceManager {
       const dir = path.join(this.versionsDir(slot), entry);
       // 有读者:推迟到最后一个引用释放。释放路径同样会消费 pendingDeletes,
       // 因此目录不会被永久留下(引用在 finally 里释放)。
-      if ((this.versionRefs.get(dir) ?? 0) > 0) {
-        this.pendingDeletes.add(dir);
+      if ((versionRefs.get(dir) ?? 0) > 0) {
+        pendingDeletes.add(dir);
         continue;
       }
       await this.removeVersionDir(dir);
@@ -345,7 +355,7 @@ export class MarketSourceManager {
       if (entry.includes('/') || entry.includes('\\') || entry === '..' || entry === '.') continue;
       const dir = path.join(root, entry);
       let inFlight = false;
-      for (const active of this.activeIncoming) {
+      for (const active of activeIncoming) {
         if (dir === active || dir.startsWith(active)) {
           inFlight = true;
           break;
@@ -497,7 +507,7 @@ export class MarketSourceManager {
     // 清理就永远碰不到在途工作。
     const incoming = this.incomingDir(slot);
     // 在途登记:并发刷新的 incoming/ 清理据此按前缀放过本次的暂存与 staging 目录。
-    this.activeIncoming.add(incoming);
+    activeIncoming.add(incoming);
     try {
       await fs.promises.mkdir(path.dirname(incoming), { recursive: true });
       await fs.promises.mkdir(this.versionsDir(slot), { recursive: true });
@@ -558,26 +568,44 @@ export class MarketSourceManager {
       // 并发刷新的清理会把它当历史版本删掉。
       this.retainVersion(newDir);
       try {
-        await fs.promises.rename(incoming, newDir);
-        await this.activateVersion(slot, newVersion);
+        // 落位与激活是唯一可回滚的一段:失败时指针可能仍指向旧版本,
+        // 此时清掉暂存与半落位目录是安全的。
+        try {
+          await fs.promises.rename(incoming, newDir);
+          await this.activateVersion(slot, newVersion);
+        } catch (error) {
+          await fs.promises.rm(incoming, { recursive: true, force: true }).catch(() => undefined);
+          // 只有指针确实没有指向 newDir 时才删它。指针一旦生效,newDir 就是唯一
+          // 有效缓存,删掉会留下"指针指向不存在目录"的槽,整个来源从列表消失。
+          if (!this.isCurrentVersionDir(newDir)) {
+            await fs.promises.rm(newDir, { recursive: true, force: true }).catch(() => undefined);
+          }
+          throw error;
+        }
+        // —— 到这里指针已生效:newDir 是当前唯一有效缓存,后续任何失败都不得删它 ——
         // 指针已切到新版本:清理非 current 版本,仍被读取的推迟到引用释放后再删。
         await this.pruneStaleVersions(slot);
         const syncedAt = this.now();
-        this.deps.store.update(name, { lastSyncedAt: syncedAt, lastRevision: revision });
+        try {
+          this.deps.store.update(name, { lastSyncedAt: syncedAt, lastRevision: revision });
+        } catch (error) {
+          // 元数据写入失败(磁盘满/只读/文件锁)不影响缓存有效性:如实上报失败,
+          // 但绝不回收已生效的版本目录——下次刷新会重写元数据。
+          this.log.error('failed to persist marketplace sync metadata', {
+            name,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          throw error;
+        }
         return this.toSummary(
           { ...config, lastSyncedAt: syncedAt, lastRevision: revision },
           discovered.marketplace,
         );
-      } catch (error) {
-        // 落位/激活失败:暂存与半落位的目录都清掉,当前版本与指针不受影响。
-        await fs.promises.rm(incoming, { recursive: true, force: true }).catch(() => undefined);
-        await fs.promises.rm(newDir, { recursive: true, force: true }).catch(() => undefined);
-        throw error;
       } finally {
         this.releaseVersion(newDir);
       }
     } finally {
-      this.activeIncoming.delete(incoming);
+      activeIncoming.delete(incoming);
     }
   }
 

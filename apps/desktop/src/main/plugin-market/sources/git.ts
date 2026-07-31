@@ -138,6 +138,30 @@ export function isGitVersionSupported(version: { major: number; minor: number })
 }
 
 /**
+ * 远端默认分支名(`origin/HEAD` → `main`/`master`/…)。`--no-checkout` 克隆后
+ * 拿它来 checkout 一个**真实分支**,保留上游跟踪关系,后续 `pull --ff-only`
+ * 才能快进。解析失败返回 null,由调用方决定退路。
+ */
+async function defaultBranchName(
+  cwd: string,
+  executor: GitExecutor,
+): Promise<string | null> {
+  try {
+    const { stdout } = await executor(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], {
+      cwd,
+      timeoutMs: 10_000,
+    });
+    // 形如 `origin/main`,取 remote 前缀之后的分支名。
+    const value = stdout.trim();
+    const slash = value.indexOf('/');
+    const branch = slash >= 0 ? value.slice(slash + 1) : value;
+    return branch.length > 0 ? branch : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 克隆市场仓库到 destPath（staging + rename 原子替换；Windows 不允许 rename
  * 覆盖非空目录，因此调用方需保证 destPath 不存在或先移除）。
  */
@@ -165,7 +189,11 @@ export async function cloneMarketplace(
         cwd: stagingPath,
         timeoutMs,
       });
-      await executor(['checkout', input.ref ?? 'HEAD'], { cwd: stagingPath, timeoutMs });
+      // 无显式 ref 时必须 checkout 默认**分支**而不是 `HEAD`:后者留下 detached
+      // HEAD,刷新走的 `git pull --ff-only` 会稳定失败并回落到整仓重克隆,
+      // 等于每次刷新都重新 clone。取不到默认分支名时才退回 HEAD。
+      const target = input.ref ?? (await defaultBranchName(stagingPath, executor)) ?? 'HEAD';
+      await executor(['checkout', target], { cwd: stagingPath, timeoutMs });
     }
     await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
     await fs.promises.rename(stagingPath, destPath);

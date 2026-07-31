@@ -466,6 +466,10 @@ describe('MarketSourceManager git sources', () => {
 
     // 读取方持有租约期间发生刷新:指针切走,但被持有的版本目录不得被清理,
     // 逐文件读取(安装打包的实质动作)必须全程可用。
+    //
+    // 刷新刻意走**另一个 manager 实例**:生产里 PluginMarketService 每次操作都
+    // 新建一个 manager,租约注册表若是实例字段,安装持有的租约对刷新不可见。
+    const refresher = makeManager(root, executor);
     failFetch = true;
     await manager.withDiscoveredSource('hub', async (discovered) => {
       expect(discovered.result.ok).toBe(true);
@@ -475,7 +479,7 @@ describe('MarketSourceManager git sources', () => {
       // discover 返回 realpath(macOS 下 /var → /private/var),按 realpath 比对。
       expect(pluginDir.startsWith(fs.realpathSync(heldDir))).toBe(true);
 
-      await manager.refreshSource('hub');
+      await refresher.refreshSource('hub');
       const switched = fs.readFileSync(path.join(slot, 'current'), 'utf8').trim();
       expect(switched).not.toBe(held);
       // 指针已切走,旧版本仍在,且包内容仍可逐文件读取。
@@ -486,6 +490,43 @@ describe('MarketSourceManager git sources', () => {
     // 最后一个引用释放后,被推迟的清理执行完毕。
     await waitFor(() => !fs.existsSync(heldDir));
     expect(fs.existsSync(heldDir)).toBe(false);
+  });
+
+  it('keeps the activated version when persisting sync metadata fails', async () => {
+    const root = makeRoot();
+    const { executor } = fakeGit('hub', [{ rel: 'p', id: 'alpha' }]);
+    const store = new MarketSourceStore(path.join(root, 'sources.v1.json'));
+    const manager = new MarketSourceManager({
+      store,
+      cloneRoot: path.join(root, 'sources'),
+      homeDir: root,
+      gitExecutor: executor,
+    });
+    await manager.addSource({ source: 'openai/plugins' });
+
+    const slot = path.join(
+      root,
+      'sources',
+      marketCloneSlug('hub', {
+        type: 'git',
+        url: 'https://github.com/openai/plugins.git',
+        sparsePaths: [],
+      }),
+    );
+    // 指针已切到新版本后元数据写入失败(磁盘满/只读/文件锁):必须如实报错,
+    // 但绝不能删掉已生效的版本目录——否则指针指向不存在的目录,来源整体消失。
+    store.update = () => {
+      throw new Error('disk full');
+    };
+    await expect(manager.refreshSource('hub')).rejects.toThrow('disk full');
+
+    const current = fs.readFileSync(path.join(slot, 'current'), 'utf8').trim();
+    expect(
+      fs.existsSync(path.join(slot, 'versions', current, '.agents', 'plugins', 'marketplace.json')),
+    ).toBe(true);
+    // 来源仍然可发现(不会因为缓存被回收而变成 market root missing)。
+    const discovered = await manager.discoverSource('hub');
+    expect(discovered.result.ok).toBe(true);
   });
 
   it('prunes dead incoming staging directories left by a killed refresh', async () => {
@@ -550,8 +591,9 @@ describe('MarketSourceManager git sources', () => {
     holdNextClone = true;
     const slowRefresh = manager.refreshSource('hub');
     await waitFor(() => gateClone !== null);
-    // 第二次刷新完整跑完:切指针并清理非 current 版本。
-    await manager.refreshSource('hub');
+    // 第二次刷新走另一个 manager 实例(与生产一致:每次操作新建 manager),
+    // 完整跑完:切指针并清理非 current 版本。
+    await makeManager(root, executor).refreshSource('hub');
     // 关键断言:清理不得碰到第一次正在写入的暂存目录(它还不是 current)。
     expect(fs.existsSync(stagingMarker)).toBe(true);
 
