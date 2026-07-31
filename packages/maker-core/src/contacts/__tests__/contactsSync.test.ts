@@ -270,6 +270,26 @@ describe("contacts device sync", () => {
     expect(stateOf(store)).toEqual(before);
   });
 
+  it("合法状态合并后超出 clock 上限时在持久化前拒绝", () => {
+    const store = createStore();
+    store.activateDeviceSync();
+    store.createContact({ kind: "person", displayName: "本地联系人" });
+    const before = stateOf(store);
+    const remote = {
+      ...createEmptyContactsSyncState(),
+      clocks: Array.from({ length: 256 }, (_, index) => ({
+        nodeId: `remote-${index}`,
+        counter: 1,
+      })),
+    };
+    expect(isValidContactsSyncState(remote)).toBe(true);
+
+    expect(() => store.mergeDeviceSyncState(remote)).toThrow(
+      /merged contacts sync state exceeds limits/,
+    );
+    expect(stateOf(store)).toEqual(before);
+  });
+
   it("同 stamp 的异常值按规范化 JSON 裁决，不受对象 key 顺序影响", () => {
     const stamp = { counter: 1, nodeId: "node-a" };
     const left = {

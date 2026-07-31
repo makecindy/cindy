@@ -14,6 +14,7 @@
  */
 
 import { createLogger } from '../../logger.js';
+import { emitLocalContactsChanged } from '../../maker-host/contacts-change-events.js';
 import { getDesktopContactsManager } from '../../maker-host/maker-contacts-host.js';
 import { readContactsSettingsState } from '../../maker-host/contacts-settings-store.js';
 
@@ -57,6 +58,7 @@ export function autoRegisterTelegramSpeaker(
         ...(speaker.username ? [{ platform: 'telegram', value: `@${speaker.username}` }] : []),
       ],
     });
+    emitLocalContactsChanged();
     // 去重标记只在成功路径落下: resolve/create 瞬时失败(DB busy/管理器未
     // 就绪)不标记, 该发言人下次发言可重试 — 尽力而为但可恢复。
     seenTelegramIds.add(speaker.id);

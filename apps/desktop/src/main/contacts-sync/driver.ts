@@ -16,7 +16,7 @@ import {
   writeContactsDeviceSyncEnabled,
 } from '../maker-host/contacts-settings-store.js';
 import { onLocalContactsChanged } from '../maker-host/contacts-change-events.js';
-import { broadcastContactsChanged } from '../maker-ipc/contacts-ipc.js';
+import { broadcastContactsChanged } from '../maker-host/contacts-change-broadcast.js';
 import { contactsSyncKeyStore } from './keyStore.js';
 import { LanContactsSyncTransport } from './lanTransport.js';
 import {

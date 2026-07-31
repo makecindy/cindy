@@ -64,7 +64,7 @@ vi.mock('../../maker-host/contacts-change-events.js', () => ({
   onLocalContactsChanged: () => vi.fn(),
 }));
 
-vi.mock('../../maker-ipc/contacts-ipc.js', () => ({
+vi.mock('../../maker-host/contacts-change-broadcast.js', () => ({
   broadcastContactsChanged: vi.fn(),
 }));
 

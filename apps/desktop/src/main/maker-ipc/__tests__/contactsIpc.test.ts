@@ -18,6 +18,13 @@ vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] },
 }));
 
+vi.mock('../../contacts-sync/driver.js', () => ({
+  broadcastContactsNow: vi.fn(),
+  getContactsDeviceSyncStatus: vi.fn(),
+  onContactsDeviceSyncStatusChanged: vi.fn(),
+  setContactsDeviceSyncEnabled: vi.fn(),
+}));
+
 import { createContactsIpcHandlers } from '../contacts-ipc.js';
 import { MAKER_INVOKE } from '../channels.js';
 

@@ -106,6 +106,12 @@ export class ContactsSyncRepository {
         throw new ContactsError("io-error", "contacts sync activation failed");
       const local = this.reconcile(row);
       const merged = mergeContactsSyncStates(local.state, raw);
+      if (!isValidContactsSyncState(merged)) {
+        throw new ContactsError(
+          "invalid-params",
+          "merged contacts sync state exceeds limits",
+        );
+      }
       if (JSON.stringify(merged) === JSON.stringify(local.state)) return false;
 
       const projection = materializeContactsSyncState(merged);

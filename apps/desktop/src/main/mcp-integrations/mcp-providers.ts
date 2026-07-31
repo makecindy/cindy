@@ -37,7 +37,7 @@ import {
 import { isIpcError } from '../../shared/ipc-errors.js';
 import type { PluginRegistry } from '../maker-host/plugins/plugin-registry.js';
 import { getDesktopContactsManager } from '../maker-host/maker-contacts-host.js';
-import { broadcastContactsChanged } from '../maker-ipc/contacts-ipc.js';
+import { broadcastContactsChanged } from '../maker-host/contacts-change-broadcast.js';
 import { readContactsSettings } from '../maker-host/contacts-settings-store.js';
 import { readSystemContacts, writeSystemContacts } from '../maker-host/system-contacts.js';
 import { BUILTIN_LIZI_MCP_IDS, pluginIdForProviderName } from '../maker-host/plugins/builtin-plugins.js';
