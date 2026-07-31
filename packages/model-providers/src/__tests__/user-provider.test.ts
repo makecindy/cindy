@@ -63,6 +63,20 @@ describe('buildUserProvider (per-runtime)', () => {
     });
   });
 
+  it('preserves an explicit Anthropic Messages protocol for Codex routing', () => {
+    const p = buildUserProvider({
+      ...codexOnly,
+      runtimes: {
+        codex: { ...codexOnly.runtimes.codex!, wireProtocol: 'anthropic-messages' },
+      },
+    });
+    expect(p.routing.codex).toMatchObject({
+      upstream: 'https://openrouter.ai/api/v1',
+      authStrategy: 'api-key-header',
+      wireProtocol: 'anthropic-messages',
+    });
+  });
+
   it('preserves a non-standard inference request path in routing', () => {
     const p = buildUserProvider({
       ...codexOnly,

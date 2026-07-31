@@ -895,6 +895,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }> =>
       ipcRenderer.invoke('ghosts:inspect', lizFilePath),
     uninstall: (id: string): Promise<{ ok: true }> => ipcRenderer.invoke('ghosts:uninstall', id),
+    /** 详情页「导出 .cindy」:main 打包安装目录 → 系统保存对话框落盘。 */
+    export: (id: string): Promise<{ status: 'saved'; savedPath: string } | { status: 'canceled' }> =>
+      ipcRenderer.invoke('ghosts:export', id),
     setEnabled: (
       id: string,
       enabled: boolean,
@@ -3971,6 +3974,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       agent: 'claude-code' | 'codex';
       baseUrl: string;
       authMethod: 'apiKey' | 'oauth' | 'none';
+      wireProtocol?: import('@cindy/model-providers').ProviderWireProtocol;
       modelsUrl?: string | null;
       apiKey?: string | null;
       headers?: Record<string, string>;

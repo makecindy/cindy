@@ -1617,6 +1617,7 @@ export function ProvidersSection() {
             agent,
             baseUrl: rt.baseUrl,
             authMethod,
+            ...(rt.wireProtocol ? { wireProtocol: rt.wireProtocol } : {}),
             modelsUrl: rt.modelsUrl ?? null,
             apiKey,
             ...(rt.headers ? { headers: rt.headers } : {}),

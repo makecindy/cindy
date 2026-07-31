@@ -47,6 +47,11 @@ import {
   stripCredentialHeaders,
   type CustomProviderAuthMode,
 } from '@/lib/providerModelFetch';
+import {
+  CUSTOM_PROVIDER_CODEX_WIRE_PROTOCOLS,
+  customProviderCodexWireProtocolOption,
+  type CustomProviderCodexWireProtocol,
+} from '@/lib/customProviderWireProtocols';
 
 import { isProviderRequestPath, sortPresetsForLocale } from '@cindy/model-providers';
 import type {
@@ -464,7 +469,7 @@ export function CustomProviderDialog({
 
   /** 切换协议时保留用户已填写的 endpoint，仅使旧测试结果失效。 */
   const changeCodexWireProtocol = useCallback(
-    (wireProtocol: 'openai-responses' | 'openai-chat') => {
+    (wireProtocol: CustomProviderCodexWireProtocol) => {
       setRtSynced((prev) => ({
         ...prev,
         codex: { ...prev.codex, wireProtocol },
@@ -568,6 +573,7 @@ export function CustomProviderDialog({
         agent,
         baseUrl,
         authMethod: authMode,
+        ...(rf.wireProtocol ? { wireProtocol: rf.wireProtocol } : {}),
         modelsUrl: rf.modelsUrl.trim() || null,
         apiKey: authMode === 'apiKey' ? rf.apiKey.trim() || null : null,
         ...(Object.keys(requestHeaders).length > 0 ? { headers: requestHeaders } : {}),
@@ -1064,34 +1070,30 @@ export function CustomProviderDialog({
             {activeTab === 'codex' && (
               <div className="flex flex-col gap-[7px]">
                 <FieldLabel>{t('settings.providers.custom.fields.wireProtocol')}</FieldLabel>
-                <div className="flex gap-1.5">
-                  {(['openai-responses', 'openai-chat'] as const).map((protocol) => (
+                <div className="flex flex-wrap gap-1.5">
+                  {CUSTOM_PROVIDER_CODEX_WIRE_PROTOCOLS.map((option) => (
                     <button
-                      key={protocol}
+                      key={option.value}
                       type="button"
-                      onClick={() => changeCodexWireProtocol(protocol)}
+                      onClick={() => changeCodexWireProtocol(option.value)}
                       className={cn(
                         'rounded-full border px-3 py-1.5 text-12 font-medium transition-colors',
-                        f.wireProtocol === protocol
+                        f.wireProtocol === option.value
                           ? 'border-[var(--settings-input-border-focus)] text-[var(--settings-section-title)]'
                           : 'border-[var(--settings-input-border)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]',
                       )}
                       style={
-                        f.wireProtocol === protocol
+                        f.wireProtocol === option.value
                           ? { backgroundColor: 'var(--surface-elevated)' }
                           : undefined
                       }
                     >
-                      {t(
-                        `settings.providers.custom.wireProtocol.${protocol === 'openai-responses' ? 'responses' : 'chat'}`,
-                      )}
+                      {t(option.labelKey)}
                     </button>
                   ))}
                 </div>
                 <span className="text-12 leading-snug text-[var(--text-tertiary)]">
-                  {t(
-                    `settings.providers.custom.wireProtocol.${f.wireProtocol === 'openai-chat' ? 'chatHelp' : 'responsesHelp'}`,
-                  )}
+                  {t(customProviderCodexWireProtocolOption(f.wireProtocol).helpKey)}
                 </span>
               </div>
             )}
@@ -1115,9 +1117,7 @@ export function CustomProviderDialog({
                 placeholder={
                   activeTab === 'claude-code'
                     ? '/v1/messages'
-                    : f.wireProtocol === 'openai-chat'
-                      ? '/chat/completions'
-                      : '/responses'
+                    : customProviderCodexWireProtocolOption(f.wireProtocol).defaultRequestPath
                 }
               />
               <span className="text-12 leading-snug text-[var(--text-tertiary)]">

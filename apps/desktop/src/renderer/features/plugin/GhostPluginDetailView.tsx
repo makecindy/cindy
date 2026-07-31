@@ -15,6 +15,7 @@ import {
   ChevronDown,
   Copy,
   Cpu,
+  Download,
   FileCode2,
   FilePen,
   FolderOpen,
@@ -76,6 +77,8 @@ interface GhostPluginDetailViewProps {
   updateVersion?: string;
   updateBusy?: boolean;
   onUninstall: () => void;
+  /** 导出 .cindy;当前详情非已装插件(纯市场视图)时缺省,菜单项不渲染。 */
+  onExport?: () => void;
   toggleDisabled: boolean;
   onIconLoadError?: () => void;
 }
@@ -136,6 +139,7 @@ export function GhostPluginDetailView({
   updateVersion,
   updateBusy = false,
   onUninstall,
+  onExport,
   toggleDisabled,
   onIconLoadError,
 }: GhostPluginDetailViewProps) {
@@ -294,6 +298,15 @@ export function GhostPluginDetailView({
                   >
                     {updateLabel ?? t('settings.ghosts.detail.updateFromFile')}
                   </DropdownMenuItem>
+                  {onExport ? (
+                    <DropdownMenuItem
+                      onSelect={onExport}
+                      className="h-10 gap-2.5 rounded-lg px-3 text-13 focus:bg-[var(--surface-hover-soft)]"
+                    >
+                      <Download size={15} aria-hidden="true" />
+                      {t('settings.ghosts.detail.exportPackage')}
+                    </DropdownMenuItem>
+                  ) : null}
                   <DropdownMenuSeparator className="mx-2 my-1 h-px bg-[var(--border-default)]" />
                   <DropdownMenuItem
                     onSelect={onUninstall}

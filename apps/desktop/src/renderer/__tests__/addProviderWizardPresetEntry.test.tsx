@@ -178,7 +178,7 @@ describe('AddProviderWizard — preset 直达', () => {
       expect(screen.getByText('settings.providers.wizard.nameLabel')).not.toBeNull(),
     );
     expect(screen.getByDisplayValue('Anthropic API')).not.toBeNull();
-    expect(screen.getByText(/api\.anthropic\.com/)).not.toBeNull();
+    expect(screen.getAllByText(/api\.anthropic\.com/)).toHaveLength(2);
   });
 
   it('官方 API 预设:列模型失败 → 第三步仍有推荐模型预勾,可完成(Greptile P1 回归)', async () => {
@@ -244,6 +244,18 @@ describe('AddProviderWizard — preset 直达', () => {
         expect.objectContaining({ id: 'claude-haiku-4-5', contextWindow: 200_000 }),
       ]),
     );
+    const codex = config.runtimes.codex;
+    expect(codex?.wireProtocol).toBe('anthropic-messages');
+    expect(codex?.baseUrl).toBe('https://api.anthropic.com');
+    expect(codex?.models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'claude-opus-5', contextWindow: 1_000_000 }),
+        expect.objectContaining({ id: 'claude-sonnet-5', contextWindow: 1_000_000 }),
+        expect.objectContaining({ id: 'claude-haiku-4-5', contextWindow: 200_000 }),
+      ]),
+    );
+    const keys = vi.mocked(createCustomProvider).mock.calls[0][1];
+    expect(keys).toMatchObject({ 'claude-code': 'sk-test', codex: 'sk-test' });
   });
 
   it('editable preset saves the edited base URL and exact request path', async () => {

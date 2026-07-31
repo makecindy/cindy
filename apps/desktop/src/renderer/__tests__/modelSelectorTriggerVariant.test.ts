@@ -28,6 +28,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
       const translations: Record<string, string> = {
         'effortLevels.xhigh': '超高',
         'settings.providers.anthropic.title': 'Anthropic',
+        'settings.providers.xd.title': 'Cindy AI',
         'newChat.modelSelector.trigger.placeholder': '选择模型',
         'newChat.modelSelector.trigger.agent.claudeCode': 'Claude Code',
         'newChat.modelSelector.trigger.agent.codex': 'Codex',
@@ -39,6 +40,9 @@ vi.mock('react-i18next', async (importOriginal) => ({
       }
       if (key === 'newChat.modelSelector.meta.context') {
         return `${options?.value} context`;
+      }
+      if (key === 'newChat.modelSelector.meta.codexCompatibilityMode') {
+        return 'Codex compatibility mode';
       }
       if (key === 'newChat.modelSelector.source.viaSource') {
         return `Source: ${options?.source}`;
@@ -282,6 +286,7 @@ interface VisibleModelFixture {
   defaultEffort: string | null;
   effortDisplayNames?: Record<string, string>;
   supportsFastMode?: boolean;
+  codexCompatibilityWireProtocol?: 'openai-chat' | 'anthropic-messages';
 }
 
 const visibleModelsRef = vi.hoisted(() => ({
@@ -1178,6 +1183,116 @@ describe('ModelSelector trigger variants', () => {
     expect(within(information).getByText('Most capable for ambitious work')).toBeTruthy();
     expect(within(information).queryByRole('option')).toBeNull();
   });
+
+  it.each([
+    {
+      label: 'OpenAI Chat → Responses',
+      providerProtocol: 'openai-chat',
+      modelProtocol: undefined,
+      visible: true,
+    },
+    {
+      label: 'Anthropic Messages → Responses',
+      providerProtocol: 'anthropic-messages',
+      modelProtocol: undefined,
+      visible: true,
+    },
+    {
+      label: 'Cindy AI 模型级 Anthropic bridge',
+      providerProtocol: 'openai-responses',
+      modelProtocol: 'anthropic-messages',
+      visible: true,
+    },
+    {
+      label: '原生 Responses',
+      providerProtocol: 'openai-responses',
+      modelProtocol: undefined,
+      visible: false,
+    },
+  ] as const)(
+    '$label 的模型详情兼容模式标记 visible=$visible',
+    ({ providerProtocol, modelProtocol, visible }) => {
+      const currentModel: VisibleModelFixture = {
+        id: 'bridge-fixture-model',
+        displayName: 'Bridge Fixture',
+        contextWindow: 1_000_000,
+        efforts: ['high'],
+        defaultEffort: 'high',
+        ...(modelProtocol ? { codexCompatibilityWireProtocol: modelProtocol } : {}),
+      };
+      const originalCapabilities = agentCapabilitiesRef.capabilities;
+      visibleModelsRef.models = [currentModel];
+      agentCapabilitiesRef.capabilities = {
+        availableModels: [currentModel],
+        effortLevels: [{ id: 'high', displayName: 'High' }],
+        hasFastMode: false,
+      };
+      providersRef.providers = [
+        {
+          id: modelProtocol ? 'xd' : 'fixture',
+          name: modelProtocol ? 'Cindy AI' : 'Fixture',
+          source: modelProtocol ? 'builtin' : 'user',
+          connected: true,
+          agents: ['codex'],
+          auth: { method: 'none' },
+          routing: {
+            codex: {
+              upstream: 'https://example.test',
+              authStrategy: 'none',
+              wireProtocol: providerProtocol,
+            },
+          },
+          models: {
+            codex: [
+              {
+                ...currentModel,
+                name: currentModel.displayName,
+              },
+            ],
+          },
+        },
+      ];
+
+      try {
+        render(
+          React.createElement(ModelSelectorContent, {
+            modelId: currentModel.id,
+            effort: 'high',
+            onModelChange: vi.fn(),
+            onEffortChange: vi.fn(),
+            vendorKey: 'codex',
+            currentProviderId: modelProtocol ? 'xd' : 'fixture',
+            onProviderChange: vi.fn(),
+          }),
+        );
+
+        fireEvent.pointerEnter(screen.getByRole('option', { name: /Bridge Fixture/ }));
+        const details = screen.getByRole('group', { name: /Bridge Fixture/ });
+        const compatibilityLabel = within(details).queryByText('Codex compatibility mode');
+        if (visible) {
+          expect(compatibilityLabel).toBeTruthy();
+          const detailText = details.textContent ?? '';
+          const sourceText = modelProtocol ? 'Source: Cindy AI' : 'Source: Fixture';
+          expect(detailText.indexOf(sourceText)).toBeLessThan(detailText.indexOf('1M context'));
+          expect(detailText.indexOf('1M context')).toBeLessThan(
+            detailText.indexOf('Codex compatibility mode'),
+          );
+          expect(compatibilityLabel).not.toBe(
+            within(details).getByText(sourceText).parentElement,
+          );
+          expect(compatibilityLabel).not.toBe(
+            within(details).getByText('1M context').parentElement,
+          );
+        } else {
+          expect(compatibilityLabel).toBeNull();
+        }
+      } finally {
+        visibleModelsRef.models = null;
+        agentCapabilitiesRef.capabilities = originalCapabilities;
+        providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+      }
+    },
+  );
 
   it('filters provider-ignored models from flat model-only selectors', () => {
     modelVisibilityRef.isEnabled = (_agent, _providerId, model) => model.id !== 'claude-sonnet-4-6';

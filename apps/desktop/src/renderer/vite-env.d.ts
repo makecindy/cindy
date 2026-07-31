@@ -1156,6 +1156,10 @@ interface ElectronAPI {
       iconDataUrl?: string;
     }>;
     uninstall: (id: string) => Promise<{ ok: true }>;
+    /** 详情页「导出 .cindy」:打包安装目录 → 保存对话框落盘。 */
+    export: (
+      id: string,
+    ) => Promise<{ status: 'saved'; savedPath: string } | { status: 'canceled' }>;
     /** 启用/停用(停用 = 面板休眠,布局位置保留)。 */
     /**
      * 全局启用/停用。启用成功且配置未就绪时返回 setup 载荷(与
@@ -3772,6 +3776,7 @@ interface ElectronAPI {
       agent: 'claude-code' | 'codex';
       baseUrl: string;
       authMethod: 'apiKey' | 'oauth' | 'none';
+      wireProtocol?: import('@cindy/model-providers').ProviderWireProtocol;
       modelsUrl?: string | null;
       apiKey?: string | null;
       headers?: Record<string, string>;

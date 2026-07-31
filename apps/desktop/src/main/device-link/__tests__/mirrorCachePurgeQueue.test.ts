@@ -841,10 +841,27 @@ describe('落盘失败', () => {
   // review(codex P1):唯一的持久重试记录写不下去却报成功 = 静默丢失。
   it('队列文件写不下去时 enqueuePurge 抛错,但条目留在内存里仍会被 drain 重试', async () => {
     const root = await makeOwnerCache('owner-1');
-    // 把队列文件位置占成目录:writeFile 必然 EISDIR。
-    await fsp.mkdir(queueFile(), { recursive: true });
-
-    await expect(enqueuePurge(root)).rejects.toThrow();
+    // 不用 chmod 或把目标占成目录来模拟不可写:Windows 会忽略前者,而原子落位退路会把
+    // 后者改名成 .bak 后继续成功。精确让本次队列临时文件写入失败,跨平台语义一致。
+    const originalWriteFile = fsp.writeFile;
+    const spy = vi.spyOn(fsp, 'writeFile').mockImplementation((async (
+      target: unknown,
+      ...rest: unknown[]
+    ) => {
+      if (
+        typeof target === 'string' &&
+        target.startsWith(`${queueFile()}.`) &&
+        target.endsWith('.tmp')
+      ) {
+        throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      }
+      return (originalWriteFile as (...args: unknown[]) => Promise<void>)(target, ...rest);
+    }) as unknown as typeof fsp.writeFile);
+    try {
+      await expect(enqueuePurge(root)).rejects.toThrow();
+    } finally {
+      spy.mockRestore();
+    }
     expect(__testing.memoryQueueSize()).toBe(1);
 
     const result = await drainPurgeQueue();

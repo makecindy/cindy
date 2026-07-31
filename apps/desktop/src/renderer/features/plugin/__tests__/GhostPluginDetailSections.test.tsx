@@ -274,6 +274,49 @@ describe('Ghost plugin detail sections', () => {
     expect(onUpdate).not.toHaveBeenCalled();
   });
 
+  it('renders an export menu item only when onExport is provided', async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const baseProps = {
+      ghost: null,
+      detail,
+      panelStatus: 'Docked',
+      onBack: vi.fn(),
+      onToggle: vi.fn(),
+      onUse: vi.fn(),
+      onUpdate: vi.fn(),
+      onUninstall: vi.fn(),
+      toggleDisabled: false,
+    };
+
+    // 未提供 onExport(纯市场视图):菜单里不出现导出项。
+    const { unmount } = render(<GhostPluginDetailView {...baseProps} />);
+    fireEvent.pointerDown(
+      screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
+      { button: 0, ctrlKey: false },
+    );
+    expect(screen.queryByRole('menuitem', { name: 'settings.ghosts.detail.exportPackage' })).toBeNull();
+    unmount();
+
+    // 提供 onExport(已装插件):点击触发导出回调。
+    const onExport = vi.fn();
+    render(<GhostPluginDetailView {...baseProps} onExport={onExport} />);
+    fireEvent.pointerDown(
+      screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
+      { button: 0, ctrlKey: false },
+    );
+    fireEvent.click(
+      screen.getByRole('menuitem', { name: 'settings.ghosts.detail.exportPackage' }),
+    );
+    expect(onExport).toHaveBeenCalledTimes(1);
+  });
+
   it('uses one metadata color and orders author, then version', () => {
     const { container } = render(<GhostPluginMetadata author="Cindy" version="1.1.4" />);
 

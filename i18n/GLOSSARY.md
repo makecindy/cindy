@@ -124,6 +124,10 @@
 
 **注意别指望 `--update-baseline` 帮你收尾。** `proposed` 存在的理由正是「已知有存量不一致」，改成 `decided` 的那一刻这些告警会变成阻断违规；而 `--update-baseline` 只删不加，遇到 baseline 里没有的指纹会直接拒绝。所以裁决时只有两条路：要么把命中逐条读语境改掉，要么先人工把已 review 过的指纹写进 `i18n/glossary-baseline.json` 冻结存量，之后再用 `--update-baseline` 做修剪。
 
+### Anthropic Messages
+
+Anthropic Messages API / wire protocol 的用户可见名称。四语统一保留官方英文名称，避免与普通的“消息”概念混译；先登记为 proposed，待产品术语评审后固化。
+
 ### Global region
 
 企业认证与业务服务所在区域的用户可见名称，用于组织登录检测到 Global 服务区域时的确认文案；它描述连接的服务区域，不是对当前安装版本的标签，也不同于项目配置里的 generic global scope。先按现有四语文案登记为 proposed。
