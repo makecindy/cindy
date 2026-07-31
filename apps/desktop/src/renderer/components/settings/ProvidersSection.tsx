@@ -257,7 +257,9 @@ function DetailHeader({
 
   return (
     <div className={cn('flex flex-col px-5 py-4', detail && 'gap-3')}>
-      <div className="flex items-center gap-3">
+      {/* 可折行:最小窗口(右栏 ~275px)放不下「状态 + 操作」时整组换行,
+          不被卡片 overflow-hidden 裁掉(PR #1102 review 第三轮)。 */}
+      <div className="flex flex-wrap items-center gap-3 gap-y-2">
         <div
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
           style={{
