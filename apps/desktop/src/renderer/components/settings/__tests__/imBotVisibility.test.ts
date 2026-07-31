@@ -1,7 +1,7 @@
 // imBotVisibility —— 「IM 机器人」分栏/渠道可见性规则:
-//  - 国区构建(cn/dev)+ 个人账号 cloud 登录:无 Cindy 分栏、无 Discord
+//  - 国区构建(cn/dev)+ 个人账号 cloud 登录:无 Cindy 分栏、无 Discord/Lark
 //  - 企业账号 / global 构建:全量
-//  - 本地模式:无 Cindy 分栏(既有规则),Discord 保留
+//  - 国区本地模式 / 未登录:Lark 隐藏;global 仍显示
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -47,16 +47,29 @@ describe('imBotVisibility', () => {
     expect(showLarkBot(globalPersonal)).toBe(true);
   });
 
-  it('keeps the existing local-mode rule: no Cindy group, Discord stays', () => {
+  it('hides Lark for cn local mode while keeping the existing Discord rule', () => {
     const cnLocal = identity({ mode: 'local', membershipKind: null });
     expect(isCnPersonalIdentity(cnLocal)).toBe(false);
     expect(showCindyGroup(cnLocal)).toBe(false);
     expect(showDiscordBot(cnLocal)).toBe(true);
-    expect(showLarkBot(cnLocal)).toBe(true);
+    expect(showLarkBot(cnLocal)).toBe(false);
+
+    const devLocal = identity({ region: 'dev', mode: 'local', membershipKind: null });
+    expect(showLarkBot(devLocal)).toBe(false);
 
     const globalLocal = identity({ region: 'global', mode: 'local', membershipKind: null });
     expect(showCindyGroup(globalLocal)).toBe(false);
     expect(showDiscordBot(globalLocal)).toBe(true);
     expect(showLarkBot(globalLocal)).toBe(true);
+  });
+
+  it('hides Lark when signed out in cn/dev and keeps it visible in global', () => {
+    expect(showLarkBot(identity({ mode: 'signed-out', membershipKind: null }))).toBe(false);
+    expect(showLarkBot(identity({ region: 'dev', mode: 'signed-out', membershipKind: null }))).toBe(
+      false,
+    );
+    expect(
+      showLarkBot(identity({ region: 'global', mode: 'signed-out', membershipKind: null })),
+    ).toBe(true);
   });
 });
