@@ -806,8 +806,13 @@ export function UnifiedModelList({
                 {!collapsed &&
                   disabledRows.map((row) => {
                     const rep = row.byAgent[row.avail[0]]!;
+                    // 可折行:最小窗口(右栏 ~275px)下「启用此模型」(日文更长)放
+                    // 不下时换行,恢复入口始终可达(PR #1102 review 第四轮)。
                     return (
-                      <div key={row.id} className="flex items-center gap-3 px-2 py-[7px]">
+                      <div
+                        key={row.id}
+                        className="flex flex-wrap items-center gap-x-3 gap-y-1 px-2 py-[7px]"
+                      >
                         <span
                           className="min-w-0 truncate text-14 font-medium"
                           style={{ color: 'var(--text-disabled)' }}
@@ -830,7 +835,7 @@ export function UnifiedModelList({
                         <button
                           type="button"
                           onClick={() => setRowDisabled(row, false)}
-                          className="flex h-6 shrink-0 items-center rounded-full border px-2.5 text-12 font-medium transition-colors hover:bg-[var(--surface-hover)]"
+                          className="ml-auto flex h-6 shrink-0 items-center rounded-full border px-2.5 text-12 font-medium transition-colors hover:bg-[var(--surface-hover)]"
                           style={{
                             borderColor: 'var(--settings-btn-secondary-border)',
                             color: 'var(--settings-btn-secondary-text)',
