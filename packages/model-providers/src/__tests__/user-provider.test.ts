@@ -142,6 +142,31 @@ describe('buildUserProvider (per-runtime)', () => {
       ['long-context', true],
       ['default-context', undefined],
     ]);
+    // 显式配置打标、缺省物化不打标:编辑表单靠它区分「显式 200K」与「默认 200K」,
+    // 不能靠与默认等值推断(显式覆盖必须在默认升级后原样保留)。
+    expect(p.models.codex?.map((m) => [m.id, m.contextWindowExplicit ?? null])).toEqual([
+      ['long-context', true],
+      ['default-context', null],
+    ]);
+  });
+
+  it('marks an explicit contextWindow equal to the current default as explicit', () => {
+    const p = buildUserProvider({
+      ...codexOnly,
+      runtimes: {
+        codex: {
+          ...codexOnly.runtimes.codex!,
+          models: [
+            { id: 'pinned-default', name: 'Pinned', contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW },
+          ],
+        },
+      },
+    });
+    expect(p.models.codex?.[0]).toMatchObject({
+      contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
+      contextWindowVerified: true,
+      contextWindowExplicit: true,
+    });
   });
 
   it('attaches per-runtime custom headers (still no api key)', () => {

@@ -4270,6 +4270,13 @@ export type GhostPipeAgentErrandRequest =
       /** errand 会话标题提示(仅首次创建该插件的 errand 会话时采用;1–100 字符)。 */
       title?: string;
       /**
+       * 可选:请求把 errand 会话建在这个目录(绝对路径,≤1024 字符)。
+       * 只是**转述**,不是授权——主机只认用户此前在 pick 槽系统窗口里
+       * 亲手选过的目录(pickGrantsStore 台账);台账里没有 → INVALID_REQUEST。
+       * 用户在「AI 代办」卡里配置了工作目录时以用户配置优先,本字段忽略。
+       */
+      workingDir?: string;
+      /**
        * 'wait' = 同步吊着等完成(管子自动续命,30 分钟天花板);缺省异步:
        * 受理后立即返回 jobId,用 kind:'query' 轮询取件。agent 干活是分钟级
        * 的,推荐缺省异步 + 插件自己掌握轮询节奏。

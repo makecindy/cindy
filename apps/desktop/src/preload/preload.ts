@@ -3970,7 +3970,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       headers?: Record<string, string>;
     }): Promise<{
       ok: boolean;
-      models?: { id: string; name: string }[];
+      models?: { id: string; name: string; contextWindow?: number }[];
       code?: import('../shared/providerErrors').ProviderErrorCode;
       status?: number;
       detail?: string;

@@ -2,17 +2,19 @@
  * Host-rendered errand (派活取件) preferences for a Plugin that declares
  * `agent.errand`. Settings 详情与 Plugin 详情共用(同 CindyCapabilityPrefs)。
  *
- * 选择器复用草稿页同一套组件(2026-07-31 Lizi 要求,不另搭下拉):
+ * 选择器复用草稿页同一套组件(2026-07-31 Lizi 要求,不另搭下拉),展示与
+ * 交互与新建对话一致,不暴露「跟随默认 / 钉住」这层概念:
  * - Agent = VendorSegmentedSwitcher(cc/codex 分段);
- * - 模型/推理强度/Fast/供应商 = ModelSelector 的 field 形态(与 IM 默认
- *   配置、Hook 工作区偏好同款嵌法);
+ * - 模型/推理强度/Fast/供应商 = ModelSelector 的 field 形态,占满整行(标题在上、
+ *   控件 w-full 在下,与 IM 默认配置同款);面板宽度绑定 trigger(DESIGN.md §4);
  * - 动手权限 = PermissionSelector(权限下拉全仓只此一份,不得私搭),
  *   errand 不允许的档位经 disabledModes 灰置并带原因。
  *
- * 「跟随默认」语义(与 main 侧 errandPrefsStore 同一契约):配置里没写的
- * 字段跟随「新建草稿」偏好。卡片默认展示草稿当下的选择(实时跟随),用户
- * 一旦点选即钉住;「恢复跟随默认」一键清空回到跟随态。权限档与工作目录
- * 是 errand 自己的事,不参与跟随:权限缺省 plan(只读,协议层不存在
+ * 底层仍是「未写的字段跟随草稿」语义(与 main 侧 errandPrefsStore 同一契约):
+ * 没单独选过时实时展示并跟随「新建草稿」当前选择(草稿默认变,这里跟着变);
+ * 用户一旦点选即把该组值钉进本插件配置。UI 不再显示跟随/恢复的文案 —— 呈现的
+ * 永远是一个具体的当前模型+强度(2026-07-31 Lizi 要求)。权限档与工作目录是
+ * errand 自己的事,不参与跟随:权限缺省 plan(只读,协议层不存在
  * bypassPermissions),目录缺省插件专属文件夹,选真实项目必须经系统窗口
  * 亲选(与 pick 槽同一哲学)。
  */
@@ -29,7 +31,6 @@ import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSw
 import {
   getEffortForModel,
   getFastModeForModel,
-  getPersistedVendorModel,
   useNewMakerDraft,
 } from '@/state/newMakerDraft';
 import type { Effort } from '@/lib/userPreferences.types';
@@ -85,20 +86,18 @@ export function GhostErrandPrefs({
 
   // 展示口径:钉住的值优先,没钉的跟随草稿(vendor → 该 vendor 的草稿模型
   // → 该模型的 per-model effort/fast 记忆)。
+  // 跟随模型取 lastByVendor[vendor].model —— 与新建对话展示的当前模型同一份(sanitize
+  // 保证非空,种子默认兜底)。不能用 getPersistedVendorModel:那是调度专用的严格口径,
+  // 仅当用户在新建对话里显式选过该 vendor 模型才返回,否则返回 '',会让 trigger 落到
+  // 「选择模型」占位(2026-07-31 Lizi 反馈:应像草稿一样直接显示当前模型)。
   const followVendor = draft.vendor === 'codex' ? ('codex' as const) : ('cc' as const);
   const vendor = config.agentKind ?? followVendor;
-  const shownModel = config.model ?? getPersistedVendorModel(vendor);
+  const shownModel = config.model ?? draft.lastByVendor[vendor].model;
   const shownEffort = (config.effort ??
     getEffortForModel(shownModel) ??
     draft.lastByVendor[vendor]?.effort ??
     'high') as Effort;
   const shownFast = config.fastMode ?? getFastModeForModel(shownModel);
-  const pinned =
-    config.agentKind !== undefined ||
-    config.model !== undefined ||
-    config.effort !== undefined ||
-    config.fastMode !== undefined ||
-    config.providerId !== undefined;
 
   const pickWorkingDir = async (): Promise<void> => {
     const result = await window.electronAPI.showOpenDirectoryDialog();
@@ -137,28 +136,6 @@ export function GhostErrandPrefs({
         >
           {t('settings.ghosts.detail.errandPrefs.title')}
         </p>
-        {pinned ? (
-          <button
-            type="button"
-            onClick={() =>
-              void save({
-                ...config,
-                agentKind: undefined,
-                model: undefined,
-                effort: undefined,
-                fastMode: undefined,
-                providerId: undefined,
-              })
-            }
-            className="ml-auto text-12 text-[var(--text-tertiary)] underline-offset-2 hover:text-[var(--text-secondary)] hover:underline"
-          >
-            {t('settings.ghosts.detail.errandPrefs.resetFollow')}
-          </button>
-        ) : (
-          <span className="ml-auto text-12 text-[var(--text-tertiary)]">
-            {t('settings.ghosts.detail.errandPrefs.followDefault')}
-          </span>
-        )}
       </div>
       <p
         className={cn(
@@ -178,8 +155,8 @@ export function GhostErrandPrefs({
           ariaLabel={t('settings.ghosts.detail.errandPrefs.agent')}
           onChange={(next) => {
             if (next === vendor && config.agentKind !== undefined) return;
-            // 换/钉 agent 连带清掉模型组(跨 agent 的模型 id 互不通用);
-            // 点击即钉住——分段控件没有"半跟随"态,想回跟随用右上角一键。
+            // 换 agent 连带清掉模型组(跨 agent 的模型 id 互不通用);点选即把该组
+            // 值钉进本插件配置(未选过时才实时跟随草稿)。
             void save({
               ...config,
               agentKind: next === 'codex' ? 'codex' : 'cc',
@@ -192,40 +169,41 @@ export function GhostErrandPrefs({
         />,
       )}
 
-      {row(
-        'model',
-        <div className="min-w-0 max-w-[60%]">
-          <ModelSelector
-            modelId={shownModel}
-            effort={shownEffort}
-            fastMode={shownFast}
-            vendorKey={vendor}
-            currentProviderId={config.providerId ?? null}
-            triggerVariant="field"
-            popoverSide="bottom"
-            ariaContext={t('settings.ghosts.detail.errandPrefs.model')}
-            onModelChange={(modelId) =>
-              // 选模型即整组钉住(agent 一起钉,防草稿随后换 vendor 让模型悬空)。
-              void save({ ...config, agentKind: vendor, model: modelId, effort: undefined })
-            }
-            onEffortChange={(effort) => {
-              if (!ERRAND_EFFORTS.has(effort)) return;
-              void save({ ...config, agentKind: vendor, model: shownModel, effort });
-            }}
-            onFastModeChange={(enabled) =>
-              void save({ ...config, agentKind: vendor, model: shownModel, fastMode: enabled })
-            }
-            onProviderChange={(providerId, modelId) =>
-              void save({
-                ...config,
-                agentKind: vendor,
-                model: modelId ?? shownModel,
-                providerId: providerId ?? undefined,
-              })
-            }
-          />
-        </div>,
-      )}
+      {/* 模型选择器占满整行(标题在上、控件 w-full 在下,与 IM 默认配置同款):
+          field 形态的面板宽度绑定 trigger 宽度(DESIGN.md §4),压到 60% 会让下拉
+          窄到把模型名截断,所以这里给它整行宽度。 */}
+      <div className="flex min-w-0 flex-col gap-2">
+        <span className={labelCls}>{t('settings.ghosts.detail.errandPrefs.model')}</span>
+        <ModelSelector
+          modelId={shownModel}
+          effort={shownEffort}
+          fastMode={shownFast}
+          vendorKey={vendor}
+          currentProviderId={config.providerId ?? null}
+          triggerVariant="field"
+          popoverSide="bottom"
+          ariaContext={t('settings.ghosts.detail.errandPrefs.model')}
+          onModelChange={(modelId) =>
+            // 选模型即整组钉住(agent 一起钉,防草稿随后换 vendor 让模型悬空)。
+            void save({ ...config, agentKind: vendor, model: modelId, effort: undefined })
+          }
+          onEffortChange={(effort) => {
+            if (!ERRAND_EFFORTS.has(effort)) return;
+            void save({ ...config, agentKind: vendor, model: shownModel, effort });
+          }}
+          onFastModeChange={(enabled) =>
+            void save({ ...config, agentKind: vendor, model: shownModel, fastMode: enabled })
+          }
+          onProviderChange={(providerId, modelId) =>
+            void save({
+              ...config,
+              agentKind: vendor,
+              model: modelId ?? shownModel,
+              providerId: providerId ?? undefined,
+            })
+          }
+        />
+      </div>
 
       {row(
         'permission',

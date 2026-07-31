@@ -387,7 +387,7 @@ function normalizeConfig(config: CustomProviderConfig): CustomProviderConfig {
 export function mergeDiscoveredModelsIntoConfig(
   config: CustomProviderConfig,
   agent: AgentKind,
-  discovered: { id: string; name: string }[],
+  discovered: { id: string; name: string; contextWindow?: number }[],
 ): CustomProviderConfig | null {
   const rt = config.runtimes[agent];
   if (!rt) return null;
@@ -398,7 +398,20 @@ export function mergeDiscoveredModelsIntoConfig(
     ...config,
     runtimes: {
       ...config.runtimes,
-      [agent]: { ...rt, models: [...rt.models, ...fresh.map((m) => ({ id: m.id, name: m.name }))] },
+      [agent]: {
+        ...rt,
+        models: [
+          ...rt.models,
+          // 端点声明了上下文长度就随发现落盘,缺省则回落保守默认(#386)。
+          ...fresh.map((m) => ({
+            id: m.id,
+            name: m.name,
+            ...(typeof m.contextWindow === 'number' && Number.isFinite(m.contextWindow) && m.contextWindow > 0
+              ? { contextWindow: Math.floor(m.contextWindow) }
+              : {}),
+          })),
+        ],
+      },
     },
   };
 }

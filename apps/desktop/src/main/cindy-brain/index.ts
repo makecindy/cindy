@@ -143,6 +143,7 @@ import { GhostErrandSlot, type GhostErrandRunner } from './errandSlot.js';
 import { readGhostErrandConfig, writeGhostErrandConfig } from './errandPrefsStore.js';
 import { GhostNodeRuntimeBroker } from './nodeRuntimeBroker.js';
 import { GhostPickSlot } from './pickSlot.js';
+import { recordGhostPickedDir } from './pickGrantsStore.js';
 import { GhostPreviewSlot } from './previewSlot.js';
 import { GhostWorkspaceSlot, type WorkspaceSessionService } from './workspaceSlot.js';
 import type { GhostTrustRegistry } from './ghostSignature.js';
@@ -1581,6 +1582,8 @@ export function getGhostPickSlot(): GhostPickSlot {
       // (与确认卡点允许同强度;dirDeposit 注释的授权语义包含本通道)。
       depositDir: (ghostId, dirAbs) =>
         getDirDepositVault().deposit({ ghostId, dirAbs, workdirAbs: null, userGranted: true }),
+      // 亲选事实进台账:errand 的 workingDir 转述据此对账(pickGrantsStore)。
+      recordPickedDir: recordGhostPickedDir,
       log,
     });
   }

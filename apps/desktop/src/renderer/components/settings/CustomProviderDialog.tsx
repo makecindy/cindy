@@ -160,15 +160,26 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** 上下文窗口文本是否可提交:空 = 清除窗口;非空须整体合法(分组分隔符 + BigInt 上界)。 */
+function isCommittableWindowText(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed === '') return true;
+  if (!/^[0-9]+(?:[,_ ][0-9]+)*$/.test(trimmed)) return false;
+  const parsed = BigInt(trimmed.replace(/[,_ ]/g, ''));
+  return parsed > 0n && parsed <= BigInt(Number.MAX_SAFE_INTEGER);
+}
+
 function TextInput({
   value,
   onChange,
+  onBlur,
   placeholder,
   type = 'text',
   trailing,
 }: {
   value: string;
   onChange: (v: string) => void;
+  onBlur?: () => void;
   placeholder?: string;
   type?: string;
   trailing?: React.ReactNode;
@@ -179,9 +190,11 @@ function TextInput({
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onBlur={onBlur}
         placeholder={placeholder}
         className={cn(
-          'h-[40px] w-full rounded-[10px] pl-[12px] text-14 outline-none transition-colors',
+          // 单行输入按设计规范走药丸圆角(DESIGN.md §4-5:9999px,明令禁止 10px)。
+          'h-[40px] w-full rounded-full pl-[12px] text-14 outline-none transition-colors',
           trailing ? 'pr-9' : 'pr-[12px]',
           'text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
           'border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] focus:border-[var(--settings-input-border-focus)]',
@@ -335,6 +348,11 @@ export function CustomProviderDialog({
   });
   // OAuth 模式下模型 / 请求头收进默认折叠的「高级配置」——模型授权后自动发现,普通用户无需碰。
   const [showAdvanced, setShowAdvanced] = useState(false);
+  // 上下文窗口输入的行级草稿:受控输入若只回显已提交值,逐字符键入 `1,` 这类
+  // 合法中间态会被整体校验拒绝后回滚,声明支持的分组格式只能粘贴、无法键入
+  // (review P1)。草稿承载显示文本;合法完整值仍即时提交,失焦只清可提交
+  // 草稿。key = `agent:行号`;删行时只重映射该 runtime 的行号,别行草稿保留。
+  const [windowDrafts, setWindowDrafts] = useState<Record<string, string>>({});
   // 预设模板（仅新建态展示；目录 presets 段，随 OSS 热更）。
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
   const [appliedPreset, setAppliedPreset] = useState<string | null>(null);
@@ -422,6 +440,11 @@ export function CustomProviderDialog({
         return next;
       });
       setTest({ 'claude-code': IDLE_TEST, codex: IDLE_TEST });
+      // 预设整体替换所有 runtime 的 models 数组(含清空未声明的 runtime),旧行号
+      // 全部失效——不清空的话陈旧草稿(如 -5)会挂在无关的新行、或挂在被预设清空
+      // 的 runtime 上,handleSave 的守卫拦不住"用户已经看不到"的这条草稿,表单
+      // 卡死报错却找不到对应输入框(review P1)。
+      setWindowDrafts({});
       const first = AGENTS.find((a) => p.runtimes[a]);
       if (first) setActiveTab(first);
     },
@@ -601,10 +624,14 @@ export function CustomProviderDialog({
             .map((m) => ({ ...m, name: m.name || m.id })),
           ...result.models.map((m) => {
             const cur = currentById.get(m.id);
+            // contextWindow:表单已有的行以用户当前值为准——包括「显式清空」
+            // (cur 存在但无值时不得被发现值回填,review P1);只有表单没见过的
+            // 新模型才带上端点声明的发现值(否则保存后回落 200K,review P1)。
+            const contextWindow = cur ? cur.contextWindow : m.contextWindow;
             return {
               id: m.id,
               name: cur?.name || m.name,
-              ...(cur?.contextWindow !== undefined ? { contextWindow: cur.contextWindow } : {}),
+              ...(contextWindow !== undefined ? { contextWindow } : {}),
               ...(cur?.defaultEnabled === false ? { defaultEnabled: false } : {}),
             };
           }),
@@ -640,35 +667,78 @@ export function CustomProviderDialog({
     const chosen = picker.models.filter((m) => picker.selected.has(m.id));
     if (chosen.length === 0) return;
     const pickerIds = new Set(picker.models.map((m) => m.id));
-    patch(picker.agent, (x) => {
-      const latestById = new Map<string, ModelRow>();
-      for (const m of x.models) {
-        const id = m.id.trim();
-        if (id && !latestById.has(id)) latestById.set(id, m);
+    // 重映射靠 id 而不是行号:picker 确认会任意增删/重排该 runtime 的行,旧行号
+    // 不能直接套到新数组。合并结果必须同步算出一份普通数组,同时喂给状态更新和
+    // 草稿重映射——不能指望 patch() 调用后立即读 rtRef 拿到刚提交的值:rtRef 只
+    // 在 setRtSynced 传给 setRt 的函数式 updater**内部**才写,而 React 不保证这个
+    // updater 会在 setRt() 调用后的下一行同步跑完;picker 移除/重排行、且 setRt
+    // 已有排队工作时,这次读到的可能仍是 previousModels,导致草稿按旧下标错配到
+    // 一个已经不存在的行上(review P1)。
+    const previousModels = rtRef.current[picker.agent].models;
+    const latestById = new Map<string, ModelRow>();
+    for (const pm of previousModels) {
+      const id = pm.id.trim();
+      if (id && !latestById.has(id)) latestById.set(id, pm);
+    }
+    const merged: ModelRow[] = chosen.map((m) => {
+      const latest = latestById.get(m.id);
+      const contextWindow = latest?.contextWindow ?? m.contextWindow;
+      const defaultEnabled = latest?.defaultEnabled ?? m.defaultEnabled;
+      return {
+        id: m.id,
+        name: latest?.name.trim() ? latest.name.trim() : m.name,
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+        ...(defaultEnabled === false ? { defaultEnabled: false } : {}),
+      };
+    });
+    for (const m of previousModels) {
+      const id = m.id.trim();
+      if (id && !pickerIds.has(id) && !merged.some((r) => r.id === id)) {
+        merged.push({
+          id,
+          name: m.name.trim() || id,
+          ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
+          ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
+        });
       }
-      const merged: ModelRow[] = chosen.map((m) => {
-        const latest = latestById.get(m.id);
-        const contextWindow = latest?.contextWindow ?? m.contextWindow;
-        const defaultEnabled = latest?.defaultEnabled ?? m.defaultEnabled;
-        return {
-          id: m.id,
-          name: latest?.name.trim() ? latest.name.trim() : m.name,
-          ...(contextWindow !== undefined ? { contextWindow } : {}),
-          ...(defaultEnabled === false ? { defaultEnabled: false } : {}),
-        };
-      });
-      for (const m of x.models) {
-        const id = m.id.trim();
-        if (id && !pickerIds.has(id) && !merged.some((r) => r.id === id)) {
-          merged.push({
-            id,
-            name: m.name.trim() || id,
-            ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
-            ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-          });
+    }
+    patch(picker.agent, (x) => ({ ...x, models: merged }));
+    const oldIndexToId = new Map(previousModels.map((m, i) => [i, m.id.trim()]));
+    const newIndexById = new Map<string, number>();
+    merged.forEach((m, i) => {
+      if (!newIndexById.has(m.id)) newIndexById.set(m.id, i);
+    });
+    // 合并逻辑(上面的 latestById / 第二个 for 循环)对重复 id 都是「先遇到的旧行
+    // 赢」——按 previousModels 的原始顺序扫到的第一条。存活进 merged 的就是那
+    // 一条,不是随便哪条同 id 旧行。草稿重映射必须认准同一条,否则会把已被丢弃的
+    // 重复行的草稿错配到存活行上(review P1 ×2)。
+    const survivingOldIndexById = new Map<string, number>();
+    previousModels.forEach((m, i) => {
+      const id = m.id.trim();
+      if (id && !survivingOldIndexById.has(id)) survivingOldIndexById.set(id, i);
+    });
+    setWindowDrafts((drafts) => {
+      const next: Record<string, string> = {};
+      for (const [key, text] of Object.entries(drafts)) {
+        const sep = key.lastIndexOf(':');
+        const agent = key.slice(0, sep);
+        if (agent !== picker.agent) {
+          next[key] = text;
+          continue;
         }
+        // 仍保留的行(id 未变)把草稿迁到新行号;被 picker 移出的行(取消勾选)
+        // 丢弃草稿——不合法草稿只应因它对应的行真的消失才清除。
+        const oldIdx = Number(key.slice(sep + 1));
+        const id = oldIndexToId.get(oldIdx);
+        // 空 id(未填完的手填行)没有稳定身份可追踪,直接丢弃;非空 id 只有
+        // 「合并时实际存活的那条旧行」的草稿才允许迁移——同 id 的其它旧行本就
+        // 在合并时被丢弃,它们的草稿也该丢弃,不能顶替到存活行上。
+        if (!id || survivingOldIndexById.get(id) !== oldIdx) continue;
+        const newIdx = newIndexById.get(id);
+        if (newIdx === undefined) continue;
+        next[`${agent}:${newIdx}`] = text;
       }
-      return { ...x, models: merged };
+      return next;
     });
     setPicker(null);
   }, [picker, patch]);
@@ -678,6 +748,28 @@ export function CustomProviderDialog({
     const trimmedName = name.trim();
     if (!trimmedName) {
       toast.error(t('settings.providers.custom.errors.nameRequired'));
+      return;
+    }
+    // 上下文窗口草稿必须已可提交:输入框还挂着 `1,` / `-5` 这类未完成/非法文本时
+    // 点保存,已提交值(或隐式 200K 默认)与用户可见文本不一致——静默存旧值等于
+    // 改掉用户显式输入(review P1 ×2)。定位到首个问题 tab 并报错拦下。
+    for (const [draftKey, draftText] of Object.entries(windowDrafts)) {
+      if (isCommittableWindowText(draftText)) continue;
+      const sep = draftKey.lastIndexOf(':');
+      const draftAgent = draftKey.slice(0, sep) as AgentKind;
+      if (!VISIBLE_AGENTS.includes(draftAgent)) continue;
+      // 该 runtime 未配置 baseUrl、或该行 id/name 为空:两者都会在下面序列化时
+      // 被丢弃,不会写进最终配置,草稿再非法也不该挡住一个原本有效的保存
+      // (review P1)。
+      const rf = rt[draftAgent];
+      if (!rf.baseUrl.trim()) continue;
+      const row = rf.models[Number(draftKey.slice(sep + 1))];
+      if (!row || !row.id.trim() || !row.name.trim()) continue;
+      setActiveTab(draftAgent);
+      // OAuth 鉴权模式下模型列表(含窗口输入)折在「高级」里;不展开的话用户看不到
+      // 需要修的这个输入框,报错后无从下手,只能瞎猜着点开(review P1)。
+      if (authMode === 'oauth' && !showAdvanced) setShowAdvanced(true);
+      toast.error(t('settings.providers.custom.errors.contextWindowInvalid'));
       return;
     }
     const runtimes: CustomProviderConfig['runtimes'] = {};
@@ -852,6 +944,8 @@ export function CustomProviderDialog({
     initial,
     existingIds,
     onSaved,
+    windowDrafts,
+    showAdvanced,
     t,
   ]);
 
@@ -1222,14 +1316,87 @@ export function CustomProviderDialog({
                           placeholder={t('settings.providers.custom.fields.modelNamePlaceholder')}
                         />
                       </div>
+                      <div
+                        className="w-28 shrink-0"
+                        title={t('settings.providers.custom.fields.modelContextWindowTitle')}
+                      >
+                        {/* 上下文窗口(tokens):留空 = 保守默认 200K(#386)。整体校验:
+                            只接受正整数(允许逗号/下划线/空格做分隔),其它字符直接
+                            拒绝本次变更(保持原值)——绝不剥字符再拼数字,-5 / 1e6 /
+                            262144.9 这类输入不得被静默纠正成另一个合法值(review P1)。 */}
+                        <TextInput
+                          value={
+                            windowDrafts[`${activeTab}:${i}`]
+                            ?? (m.contextWindow != null ? String(m.contextWindow) : '')
+                          }
+                          onBlur={() =>
+                            setWindowDrafts((drafts) => {
+                              const draftText = drafts[`${activeTab}:${i}`];
+                              // 只清可提交草稿(显示回落到已提交规范值);不可提交
+                              // 草稿必须保留——输入框失焦先于保存按钮 click,清掉
+                              // 会让保存守卫看不到非法文本、静默存旧值(review P1)。
+                              if (draftText === undefined || !isCommittableWindowText(draftText)) {
+                                return drafts;
+                              }
+                              const { [`${activeTab}:${i}`]: _drop, ...rest } = drafts;
+                              return rest;
+                            })
+                          }
+                          onChange={(v) => {
+                            setWindowDrafts((drafts) => ({ ...drafts, [`${activeTab}:${i}`]: v }));
+                            patch(activeTab, (x) => ({
+                              ...x,
+                              models: x.models.map((y, j) => {
+                                if (j !== i) return y;
+                                const trimmed = v.trim();
+                                if (trimmed === '') {
+                                  const { contextWindow: _drop, ...rest } = y;
+                                  return rest;
+                                }
+                                // 整体校验(分隔符只允许单个、夹在数字组之间;BigInt 精确
+                                // 校验上界防 parseInt 先舍入):不合法的中间态/非法值只
+                                // 留在草稿,不提交、不剥字符拼数字(review P1 ×2)。
+                                if (!isCommittableWindowText(trimmed)) return y;
+                                return {
+                                  ...y,
+                                  contextWindow: Number(BigInt(trimmed.replace(/[,_ ]/g, ''))),
+                                };
+                              }),
+                            }));
+                          }}
+                          placeholder={t(
+                            'settings.providers.custom.fields.modelContextWindowPlaceholder',
+                          )}
+                        />
+                      </div>
                       <button
                         type="button"
-                        onClick={() =>
+                        onClick={() => {
+                          // 只重映射受影响 runtime 的草稿键(删行后同 tab 后续行号
+                          // 前移),其它行/另一 runtime 的未提交草稿必须原样保留——
+                          // 全量清空会让保存守卫看不到别行的非法文本而静默存旧值
+                          // (review P1)。
+                          setWindowDrafts((drafts) => {
+                            const next: Record<string, string> = {};
+                            for (const [key, text] of Object.entries(drafts)) {
+                              const sep = key.lastIndexOf(':');
+                              const agent = key.slice(0, sep);
+                              const idx = Number(key.slice(sep + 1));
+                              if (agent !== activeTab) {
+                                next[key] = text;
+                              } else if (idx < i) {
+                                next[key] = text;
+                              } else if (idx > i) {
+                                next[`${agent}:${idx - 1}`] = text;
+                              }
+                            }
+                            return next;
+                          });
                           patch(activeTab, (x) => ({
                             ...x,
                             models: x.models.filter((_, j) => j !== i),
-                          }))
-                        }
+                          }));
+                        }}
                         className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)]"
                         aria-label={t('settings.providers.custom.fields.removeRow')}
                       >
@@ -1240,6 +1407,7 @@ export function CustomProviderDialog({
                   <button
                     type="button"
                     onClick={() =>
+                      // 追加在末尾不移动既有行号,别行草稿无需动(review P1)。
                       patch(activeTab, (x) => ({
                         ...x,
                         models: [...x.models, { id: '', name: '' }],
