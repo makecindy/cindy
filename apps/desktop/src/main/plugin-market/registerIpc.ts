@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron';
 
 import { isIpcError } from '../../shared/ipc-errors.js';
+import type { GhostManifest } from '../../shared/ghost.js';
 import { setGhostUninstallLedgerPreparer } from '../cindy-brain/index.js';
 import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
@@ -58,14 +59,20 @@ export function registerPluginMarketIpc(): void {
         typeof options === 'object' && options !== null
           ? (options as {
               expectedReleaseId?: unknown;
+              expectedManifest?: unknown;
               allowPermissionExpansion?: unknown;
             })
           : null;
       const expectedReleaseId = requireString(obj?.expectedReleaseId, 'expectedReleaseId');
+      const expectedManifest =
+        obj?.expectedManifest === undefined || obj?.expectedManifest === null
+          ? undefined
+          : requireObject(obj.expectedManifest);
       const allowPermissionExpansion = obj?.allowPermissionExpansion === true;
       return invokePluginMarket(() =>
         service().install(requireString(pluginId, 'pluginId'), {
           expectedReleaseId,
+          ...(expectedManifest ? { expectedManifest: expectedManifest as unknown as GhostManifest } : {}),
           allowPermissionExpansion,
         }),
       );

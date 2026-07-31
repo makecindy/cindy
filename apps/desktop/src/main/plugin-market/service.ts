@@ -13,6 +13,7 @@ import {
   diffGhostPermissionItems,
   isOfficialGhostId,
   validateGhostManifest,
+  type GhostManifest,
   type InstalledGhost,
 } from '../../shared/ghost.js';
 import type {
@@ -292,11 +293,18 @@ export class PluginMarketService {
       /** Renderer 确认框实际展示过的 release。Main 重拉详情后必须仍一致,
        *  否则用户审阅 A、实际安装/启用 B(review P1)。 */
       expectedReleaseId: string;
+      /** 自定义市场插件：Renderer 确认框实际审阅过的完整 manifest。 */
+      expectedManifest?: GhostManifest;
       allowPermissionExpansion?: boolean;
     },
   ): Promise<{ ghost: InstalledGhost }> {
     const customRef = parseCustomMarketPluginId(pluginId);
-    if (customRef) return this.customInstall(customRef, options);
+    if (customRef) {
+      if (!options.expectedManifest) {
+        throwIpcError('INVALID_PARAMS', 'The reviewed Plugin manifest is required');
+      }
+      return this.customInstall(customRef, options as typeof options & { expectedManifest: GhostManifest });
+    }
     if (!isValidPluginResourceId(pluginId)) {
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin ID');
     }
@@ -480,7 +488,7 @@ export class PluginMarketService {
    */
   private async customInstall(
     ref: { marketName: string; ghostId: string },
-    options: { expectedReleaseId: string; allowPermissionExpansion?: boolean },
+    options: { expectedReleaseId: string; expectedManifest: GhostManifest; allowPermissionExpansion?: boolean },
   ): Promise<{ ghost: InstalledGhost }> {
     const owner = captureMarketOwner();
     const ledger = this.ledgerForOwner(owner);
@@ -522,7 +530,7 @@ export class PluginMarketService {
       requireSameMarketOwner(owner);
       const ghost = await installCustomMarketPlugin({
         pluginDir: plugin.dir,
-        expected: { ghostId: plugin.ghostId, version: plugin.version },
+        expected: options.expectedManifest,
       });
       // 包目录落位后,溯源写入操作开始时捕获的 owner 账本(与服务端安装同款)。
       await this.withCapturedLedgerMutation(ledger, () => {

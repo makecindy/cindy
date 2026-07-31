@@ -150,10 +150,11 @@ export async function cloneMarketplace(
   const timeoutMs = GIT_OPERATION_TIMEOUT_MS;
   try {
     if (input.sparsePaths.length === 0) {
-      const args = ['clone'];
-      if (input.ref) args.push('--branch', input.ref);
-      args.push(input.url, stagingPath);
-      await executor(args, { timeoutMs });
+      await executor(['clone', input.url, stagingPath], { timeoutMs });
+      if (input.ref) {
+        // --branch 只支持 branch/tag；显式 checkout 同时覆盖可达的 commit SHA。
+        await executor(['checkout', input.ref], { cwd: stagingPath, timeoutMs });
+      }
     } else {
       await executor(
         ['clone', '--filter=blob:none', '--no-checkout', input.url, stagingPath],

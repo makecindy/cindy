@@ -247,4 +247,38 @@ describe('MarketSourceManager git sources', () => {
     expect(refreshed.lastRevision).toBe('def456');
     expect(refreshed.pluginCount).toBe(1);
   });
+
+  it('keeps the previous cache when the re-cloned marketplace is invalid', async () => {
+    const root = makeRoot();
+    let failFetch = false;
+    const executor: GitExecutor = async (args) => {
+      if (args[0] === '--version') return { stdout: 'git version 2.43.0\n', stderr: '' };
+      if (args[0] === 'clone') {
+        const dest = String(args[args.length - 1]);
+        if (failFetch) {
+          // 重克隆拿到的远端已损坏：没有 marketplace.json。
+          fs.mkdirSync(dest, { recursive: true });
+        } else {
+          writeMarketplace(dest, 'hub', [{ rel: 'p', id: 'alpha' }]);
+        }
+        return { stdout: '', stderr: '' };
+      }
+      if (args[0] === 'pull' || args[0] === 'fetch') {
+        if (failFetch) throw Object.assign(new Error('rejected'), { stderr: 'non-fast-forward' });
+        return { stdout: '', stderr: '' };
+      }
+      if (args[0] === 'rev-parse') return { stdout: 'def456\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    };
+    const manager = makeManager(root, executor);
+    await manager.addSource({ source: 'openai/plugins' });
+
+    failFetch = true;
+    await expect(manager.refreshSource('hub')).rejects.toMatchObject({
+      code: 'MARKET_MANIFEST_MISSING',
+    });
+    // 旧缓存仍然可用：列表照常返回插件计数。
+    const listed = await manager.listSources();
+    expect(listed[0]?.pluginCount).toBe(1);
+  });
 });

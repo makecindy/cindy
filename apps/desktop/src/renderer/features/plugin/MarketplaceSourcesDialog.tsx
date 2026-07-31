@@ -12,7 +12,6 @@ import { useTranslation } from 'react-i18next';
 
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Spinner } from '@/components/ui/spinner';
-import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
 import type { MarketSourceSummary } from '../../../shared/pluginMarket';
@@ -86,12 +85,12 @@ export function MarketplaceSourcesDialog({
         await window.electronAPI.pluginMarket.removeSource(source.name);
         onChanged();
       } catch (error) {
-        toast.error(t(marketplaceSourceErrorKey(error)));
+        setOperationError(toOperationError(error));
       } finally {
         setBusySource(null);
       }
     },
-    [onChanged, t],
+    [onChanged],
   );
 
   const handleRemove = useCallback((source: MarketSourceSummary) => {

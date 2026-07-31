@@ -16,6 +16,7 @@ import { app } from 'electron';
 
 import {
   validateGhostManifest,
+  type GhostManifest,
   type InstalledGhost,
 } from '../../shared/ghost.js';
 import {
@@ -28,13 +29,13 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 /**
  * 把插件目录装成运行中的 Ghost。
  *
- * expected 是 Renderer 确认框实际审阅过的 id + version；这里重读 ghost.json
+ * expected 是 Renderer 确认框实际审阅过的完整 manifest；这里重读 ghost.json
  * 逐字比对，确认到打包之间目录被改动时拒绝滑入（与服务端市场的
- * expectedReleaseId 同一防线）。
+ * expectedReleaseId 同一防线，但自定义市场必须核对权限与能力声明本身）。
  */
 export async function installCustomMarketPlugin(input: {
   pluginDir: string;
-  expected: { ghostId: string; version: string };
+  expected: GhostManifest;
 }): Promise<InstalledGhost> {
   let raw: unknown;
   try {
@@ -48,10 +49,7 @@ export async function installCustomMarketPlugin(input: {
   if (!validated.ok) {
     throwIpcError('GHOST_FILE_INVALID', validated.reason);
   }
-  if (
-    validated.manifest.id !== input.expected.ghostId ||
-    validated.manifest.version !== input.expected.version
-  ) {
+  if (JSON.stringify(validated.manifest) !== JSON.stringify(input.expected)) {
     throwIpcError(
       'PRECONDITION_FAILED',
       'Plugin changed after permission review',

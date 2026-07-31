@@ -26,6 +26,10 @@ export function pluginMarketErrorKey(error: unknown): string {
 export function marketplaceSourceErrorKey(error: unknown): string {
   switch (extractIpcError(error)?.code) {
     case 'MARKET_SOURCE_INVALID':
+      // addSource 把 parse 的子码放进 detail 透传；内嵌凭证有独立引导文案。
+      if (extractIpcError(error)?.message === 'CREDENTIALS_NOT_ALLOWED') {
+        return 'settings.ghosts.market.sources.errors.credentialsNotAllowed';
+      }
       return 'settings.ghosts.market.sources.errors.invalidSource';
     case 'MARKET_GIT_UNAVAILABLE':
       return 'settings.ghosts.market.sources.errors.gitUnavailable';

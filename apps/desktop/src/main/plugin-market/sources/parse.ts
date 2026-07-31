@@ -15,7 +15,8 @@ export type MarketSourceParseError =
   | 'SPARSE_NOT_ALLOWED_FOR_LOCAL'
   | 'INVALID_SOURCE_FORMAT'
   | 'INVALID_REF'
-  | 'INVALID_SPARSE_PATH';
+  | 'INVALID_SPARSE_PATH'
+  | 'CREDENTIALS_NOT_ALLOWED';
 
 export type MarketSourceParseResult =
   | { ok: true; source: MarketSource }
@@ -35,6 +36,28 @@ function looksLikeLocalPath(input: string): boolean {
   // 显式相对路径（./plugins、../shared）按本地路径对待。
   if (input.startsWith('./') || input.startsWith('../') || input.startsWith('.\\') || input.startsWith('..\\')) {
     return true;
+  }
+  return false;
+}
+
+function hasEmbeddedCredentials(input: string): boolean {
+  // https:// 明文 URL 的凭证会随 source 持久化并回传 Renderer，必须拒绝。
+  // ssh:// 的 username 是认证主体（git@ 是标准形式），由 SSH agent 持有私钥，不算内嵌凭证。
+  if (/^https?:\/\//i.test(input)) {
+    try {
+      const parsed = new URL(input);
+      if (parsed.username.length > 0 || parsed.password.length > 0) return true;
+    } catch {
+      return false;
+    }
+  }
+  // ssh:// 只在出现密码位时拒绝（ssh://user:pass@host 的 password 同样是明文凭证）。
+  if (/^ssh:\/\//i.test(input)) {
+    try {
+      return new URL(input).password.length > 0;
+    } catch {
+      return false;
+    }
   }
   return false;
 }
@@ -83,6 +106,9 @@ export function parseMarketSource(
   }
 
   if (GIT_URL_PATTERN.test(trimmed)) {
+    if (hasEmbeddedCredentials(trimmed)) {
+      return { ok: false, code: 'CREDENTIALS_NOT_ALLOWED' };
+    }
     return { ok: true, source: { type: 'git', url: trimmed, ...(ref ? { ref } : {}), sparsePaths } };
   }
 

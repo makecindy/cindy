@@ -33,6 +33,7 @@ function looksLikeLocalPath(input: string): boolean {
   return (
     trimmed.startsWith('~') ||
     trimmed.startsWith('/') ||
+    trimmed.startsWith('\\') ||
     /^[A-Za-z]:[\\/]/.test(trimmed) ||
     trimmed.startsWith('./') ||
     trimmed.startsWith('../') ||

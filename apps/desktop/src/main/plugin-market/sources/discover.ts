@@ -63,18 +63,34 @@ function pluginEntryRelativePath(source: unknown): string | null {
 }
 
 /** 解析并校验单个插件目录；非法时返回 null（调用方计数跳过）。 */
-function resolvePluginDir(
+async function resolvePluginDir(
   marketRoot: string,
   relPath: string,
-): DiscoveredMarketPlugin | null {
+): Promise<DiscoveredMarketPlugin | null> {
   const trimmed = relPath.trim();
   if (!trimmed || path.isAbsolute(trimmed) || /^[A-Za-z]:/.test(trimmed)) return null;
   const dir = path.resolve(marketRoot, trimmed);
   const rootWithSep = marketRoot.endsWith(path.sep) ? marketRoot : `${marketRoot}${path.sep}`;
   if (dir !== marketRoot && !dir.startsWith(rootWithSep)) return null;
+
+  let realRoot: string;
+  let realDir: string;
+  try {
+    // 字符串前缀只能挡住 "../" 形式的路径穿越；市场内 symlink 仍会指向外部。
+    // 边界判定必须以真实路径为准，市场克隆缓存也不应允许 symlink 越出根目录。
+    [realRoot, realDir] = await Promise.all([
+      fs.promises.realpath(marketRoot),
+      fs.promises.realpath(dir),
+    ]);
+  } catch {
+    return null;
+  }
+  const realRootWithSep = realRoot.endsWith(path.sep) ? realRoot : `${realRoot}${path.sep}`;
+  if (realDir !== realRoot && !realDir.startsWith(realRootWithSep)) return null;
+
   let raw: unknown;
   try {
-    raw = JSON.parse(fs.readFileSync(path.join(dir, 'ghost.json'), 'utf8'));
+    raw = JSON.parse(await fs.promises.readFile(path.join(realDir, 'ghost.json'), 'utf8'));
   } catch {
     return null;
   }
@@ -83,7 +99,7 @@ function resolvePluginDir(
   return {
     ghostId: validated.manifest.id,
     version: validated.manifest.version,
-    dir,
+    dir: realDir,
     manifest: validated.manifest,
   };
 }
@@ -140,7 +156,7 @@ export async function discoverMarketplace(marketRoot: string): Promise<DiscoverR
       skippedCount += 1;
       continue;
     }
-    const plugin = resolvePluginDir(marketRoot, relPath);
+    const plugin = await resolvePluginDir(marketRoot, relPath);
     if (!plugin || seenGhostIds.has(plugin.ghostId)) {
       skippedCount += 1;
       continue;

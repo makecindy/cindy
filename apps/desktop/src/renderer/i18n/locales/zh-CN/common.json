@@ -2815,6 +2815,7 @@
             "invalidSource": "来源格式无效。支持 GitHub owner/repo、Git URL 或本地文件夹路径。",
             "gitUnavailable": "未检测到 Git 或版本低于 2.25，无法添加 Git 来源。",
             "cloneAuthFailed": "无法访问该仓库。私有仓库需要先在系统中配置 Git 认证（credential helper 或 SSH key）。",
+ "credentialsNotAllowed": "来源 URL 不能内嵌用户名或密码。请改用系统 Git 认证（credential helper 或 SSH key）。",
             "cloneFailed": "克隆仓库失败，请检查网络连接后重试。",
             "refNotFound": "找不到指定的 Git 引用，请检查分支或标签名是否正确。",
             "manifestMissing": "该来源中找不到受支持的 marketplace.json 清单。",

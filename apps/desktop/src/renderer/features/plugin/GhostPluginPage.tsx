@@ -522,6 +522,7 @@ export function GhostPluginPage() {
         if (!approved || !isMarketBusyLeaseActive(marketBusyLease)) return;
         const result = await window.electronAPI.pluginMarket.install(marketItem.pluginId, {
           expectedReleaseId: next.releaseId,
+          ...(next.sourceType !== 'server' ? { expectedManifest: next.manifest } : {}),
           allowPermissionExpansion: diff.added.length > 0,
         });
         if (!isMarketBusyLeaseActive(marketBusyLease)) return;
@@ -836,6 +837,9 @@ export function GhostPluginPage() {
       if (!confirmed || !isMarketBusyLeaseActive(marketBusyLease)) return;
       const result = await window.electronAPI.pluginMarket.install(marketDetail.pluginId, {
         expectedReleaseId: marketDetail.releaseId,
+        ...(marketDetail.sourceType !== 'server'
+          ? { expectedManifest: marketDetail.manifest }
+          : {}),
         ...(isUpdate && diff!.added.length > 0
           ? { allowPermissionExpansion: true }
           : {}),

@@ -132,6 +132,26 @@ describe('discoverMarketplace', () => {
     expect(result.marketplace.skippedCount).toBe(6);
   });
 
+  it('skips plugins whose directory symlinks escape the market root', async () => {
+    const root = makeRoot();
+    const outside = makeRoot();
+    writePlugin(outside, 'escaped', 'escaped');
+    writePlugin(root, 'plugins/good', 'good-one');
+    fs.symlinkSync(outside, path.join(root, 'plugins', 'linked-out'), 'dir');
+    writeManifest(root, {
+      name: 'linked',
+      plugins: [
+        { name: 'good', source: 'plugins/good' },
+        { name: 'escaped', source: 'plugins/linked-out/escaped' },
+      ],
+    });
+    const result = await discoverMarketplace(root);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.marketplace.plugins.map((plugin) => plugin.ghostId)).toEqual(['good-one']);
+    expect(result.marketplace.skippedCount).toBe(1);
+  });
+
   it('skips duplicate ghostIds keeping the first occurrence', async () => {
     const root = makeRoot();
     writePlugin(root, 'a', 'dup-id', '1.0.0');

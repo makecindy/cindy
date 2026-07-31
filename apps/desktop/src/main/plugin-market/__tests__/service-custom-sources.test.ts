@@ -298,8 +298,11 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     });
 
     const pluginId = customMarketPluginId('team-lib', 'alpha');
+    // 以 detail 下发的归一化 manifest 作为“用户审阅内容”，与安装侧重读结果逐字比对。
+    const reviewed = await h.service.detail(pluginId);
     const result = await h.service.install(pluginId, {
       expectedReleaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
+      expectedManifest: reviewed.manifest,
     });
     expect(result.ghost.manifest.id).toBe('alpha');
     expect(runtime.install).toHaveBeenCalledTimes(1);
@@ -321,10 +324,33 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     roots.push(root);
     const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
     const h = harness([], [{ name: 'team-lib', dir }]);
+    const reviewed = await h.service.detail(customMarketPluginId('team-lib', 'alpha'));
 
     await expect(
       h.service.install(customMarketPluginId('team-lib', 'alpha'), {
         expectedReleaseId: 'custom:stale',
+        expectedManifest: reviewed.manifest,
+      }),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it('rejects install when the manifest changed after permission review', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+
+    const detail = await h.service.detail(customMarketPluginId('team-lib', 'alpha'));
+    // 用户审阅之后，本地 ghost.json 保持 id/version 不变但新增权限声明。
+    const ghostFile = path.join(dir, 'plugins', 'alpha', 'ghost.json');
+    const tampered = { ...ghostManifest('alpha'), description: 'tampered after review' };
+    fs.writeFileSync(ghostFile, JSON.stringify(tampered));
+
+    await expect(
+      h.service.install(customMarketPluginId('team-lib', 'alpha'), {
+        expectedReleaseId: detail.releaseId,
+        expectedManifest: detail.manifest,
       }),
     ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
     expect(runtime.install).not.toHaveBeenCalled();
@@ -352,9 +378,11 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
       updatedAt: '2026-07-30T02:00:00.000Z',
     });
 
+    const reviewed = await h.service.detail(customMarketPluginId('team-lib', 'alpha'));
     await expect(
       h.service.install(customMarketPluginId('team-lib', 'alpha'), {
         expectedReleaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
+        expectedManifest: reviewed.manifest,
       }),
     ).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
     expect(runtime.install).not.toHaveBeenCalled();

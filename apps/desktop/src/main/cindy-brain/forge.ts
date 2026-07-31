@@ -730,7 +730,15 @@ export async function packGhostDirToFile(
 ): Promise<ForgePackResult> {
   const built = await buildGhostPackage(dir);
   if (!built.ok) return built;
-  await fs.promises.writeFile(destPath, built.buf, { flag: 'wx' });
+  try {
+    await fs.promises.writeFile(destPath, built.buf, { flag: 'wx' });
+  } catch (err) {
+    return {
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: `写入打包产物失败:${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
   return { ok: true, cindyPath: destPath, manifest: built.manifest };
 }
 

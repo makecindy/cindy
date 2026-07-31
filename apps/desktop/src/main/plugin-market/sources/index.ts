@@ -212,9 +212,16 @@ export class MarketSourceManager {
     const cloneDir = this.cloneDir(config);
     const gitSource = config.source;
     let revision: string;
+    type DiscoverOk = Extract<
+      Awaited<ReturnType<typeof discoverMarketplace>>,
+      { ok: true }
+    >;
+    let discovered: DiscoverOk | null = null;
+    let refreshedFromStaging = false;
     try {
       revision = await fetchMarketplace(cloneDir, gitSource.ref, this.deps.gitExecutor);
     } catch {
+      refreshedFromStaging = true;
       // 快进失败（历史改写 / 缓存损坏）：整目录重克隆 + 原子替换。
       const staging = `${cloneDir}.restage-${crypto.randomUUID()}`;
       try {
@@ -231,12 +238,26 @@ export class MarketSourceManager {
         if (error instanceof MarketGitError) throwIpcError(error.code, error.message);
         throw error;
       }
+      // 先在 staging 完成完整发现验证，再替换旧缓存；失败时删除 staging，
+      // 保留上一次可用的市场内容。
+      const staged = await discoverMarketplace(staging);
+      if (!staged.ok) {
+        await fs.promises.rm(staging, { recursive: true, force: true }).catch(() => undefined);
+        throwIpcError(staged.code, staged.detail ?? staged.code);
+      }
+      discovered = staged;
       await fs.promises.rm(cloneDir, { recursive: true, force: true }).catch(() => undefined);
       await fs.promises.rename(staging, cloneDir);
     }
-    const discovered = await discoverMarketplace(cloneDir);
-    if (!discovered.ok) {
-      throwIpcError(discovered.code, discovered.detail ?? discovered.code);
+    if (!refreshedFromStaging) {
+      const current = await discoverMarketplace(cloneDir);
+      if (!current.ok) {
+        throwIpcError(current.code, current.detail ?? current.code);
+      }
+      discovered = current;
+    }
+    if (!discovered) {
+      throwIpcError('INTERNAL', 'marketplace discovery did not produce a result');
     }
     const syncedAt = this.now();
     this.deps.store.update(name, { lastSyncedAt: syncedAt, lastRevision: revision });

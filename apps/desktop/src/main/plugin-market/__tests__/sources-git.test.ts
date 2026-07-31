@@ -58,16 +58,16 @@ describe('cloneMarketplace', () => {
     expect(fs.existsSync(dest)).toBe(true);
   });
 
-  it('passes --branch for ref checkouts on the plain path', async () => {
+  it('checks out the requested ref after a plain clone', async () => {
     const { executor, calls } = fakeExecutor(() => ({ stdout: 'abc123\n' }));
     await cloneMarketplace(
       { url: 'https://x.test/r.git', ref: 'v1.2', sparsePaths: [] },
       destPath(),
       executor,
     );
-    expect(calls[0]?.args).toEqual(
-      expect.arrayContaining(['clone', '--branch', 'v1.2']),
-    );
+    expect(calls[0]?.args).toEqual(expect.arrayContaining(['clone']));
+    expect(calls[0]?.args).not.toContain('--branch');
+    expect(calls[1]?.args).toEqual(['checkout', 'v1.2']);
   });
 
   it('uses blobless clone + sparse-checkout when sparse paths are given', async () => {
