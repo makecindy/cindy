@@ -145,15 +145,55 @@ describe('selectMyIssuesNotices', () => {
   });
 
   describe('canTrustEmptyList', () => {
-    it('三路都查询成功才可确证「真的没有」', () => {
-      expect(canTrustEmptyList(result())).toBe(true);
+    const enhanced = { login: 'octocat', source: 'ghost' as const };
+
+    it('三路都真查过且成功才可确证「真的没有」', () => {
+      expect(canTrustEmptyList(result({ githubEnhancement: enhanced }))).toBe(true);
+    });
+
+    it('没配增强 ⇒ 不可确证 —— GitHub 账号那一路根本没查过', () => {
+      // githubEnhancementFailed 此时是 false(没配不是失败),只看它就会把「从未查过」
+      // 当成「查过且为空」。平台侧不知道用户绕过 Cindy 直接在 GitHub 提的那些 issue,
+      // 只有增强查得到 —— 对那种用户会重演本次要修的错误断言。
+      expect(canTrustEmptyList(result({ githubEnhancement: null }))).toBe(false);
     });
 
     it('任一路降级或失败就不可确证', () => {
-      expect(canTrustEmptyList(result({ degraded: 'platform-unavailable' }))).toBe(false);
-      expect(canTrustEmptyList(result({ degraded: 'not-signed-in' }))).toBe(false);
-      expect(canTrustEmptyList(result({ degraded: 'fetch-failed' }))).toBe(false);
-      expect(canTrustEmptyList(result({ githubEnhancementFailed: true }))).toBe(false);
+      for (const over of [
+        { degraded: 'platform-unavailable' as const },
+        { degraded: 'not-signed-in' as const },
+        { degraded: 'fetch-failed' as const },
+        { githubEnhancementFailed: true },
+      ]) {
+        expect(canTrustEmptyList(result({ githubEnhancement: enhanced, ...over }))).toBe(false);
+      }
+    });
+  });
+
+  describe('增强失败提示按来源分版', () => {
+    it('ghost 来源:给插件令牌那版指引', () => {
+      expect(
+        selectMyIssuesNotices(
+          result({
+            githubEnhancementFailed: true,
+            githubEnhancement: { login: 'octocat', source: 'ghost' },
+          }),
+        ),
+      ).toEqual(['issueTracker.mine.enhancementFailedHint']);
+    });
+
+    it('gh-cli 来源:用不提插件的通用版 —— 那种用户根本没在用插件', () => {
+      // searchViaFallback 对非 ghost 主通道直接判失败(它自己就是兜底),所以
+      // githubEnhancementFailed 在 gh-cli 下同样为 true。给他「去插件页检查」
+      // 等于指向不存在的页面,而 gh 用的是完整 OAuth token、失败多为网络或额度。
+      expect(
+        selectMyIssuesNotices(
+          result({
+            githubEnhancementFailed: true,
+            githubEnhancement: { login: 'octocat', source: 'gh-cli' },
+          }),
+        ),
+      ).toEqual(['issueTracker.mine.enhancementFailedGenericHint']);
     });
   });
 

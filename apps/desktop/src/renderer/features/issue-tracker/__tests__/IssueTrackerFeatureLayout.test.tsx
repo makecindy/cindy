@@ -173,10 +173,23 @@ describe('IssueTrackerFeatureLayout 内容区分支', () => {
     expect(screen.queryByText('issueTracker.mine.platformUnavailableHint')).toBeNull();
   });
 
-  it('空列表:三路都查询成功才敢说「还没有提交过」', () => {
-    useMyIssuesMock.mockReturnValue(state({ data: result([]) }));
+  it('空列表:三路都真查过且成功才敢说「还没有提交过」', () => {
+    // githubEnhancement 必须非 null —— 没配增强时 GitHub 账号那一路根本没查过,
+    // 不能确证(判据见 canTrustEmptyList)。
+    useMyIssuesMock.mockReturnValue(
+      state({
+        data: result([], { githubEnhancement: { login: 'octocat', source: 'ghost' } }),
+      }),
+    );
     render(<IssueTrackerFeatureLayout />);
     expect(screen.getByText('issueTracker.mine.emptyTitle')).toBeTruthy();
+  });
+
+  it('空列表但没配增强:改说「暂时查不到」', () => {
+    useMyIssuesMock.mockReturnValue(state({ data: result([], { githubEnhancement: null }) }));
+    render(<IssueTrackerFeatureLayout />);
+    expect(screen.getByText('issueTracker.mine.emptyTitleUnverified')).toBeTruthy();
+    expect(screen.queryByText('issueTracker.mine.emptyTitle')).toBeNull();
   });
 
   it('空列表 + 任一路没查成:改说「暂时查不到」,不断言用户从未提交', () => {
@@ -196,7 +209,11 @@ describe('IssueTrackerFeatureLayout 内容区分支', () => {
   });
 
   it('一条都没有:显示空态引导,不显示常驻说明条(避免与引导里的说明重复)', () => {
-    useMyIssuesMock.mockReturnValue(state({ data: result([]) }));
+    useMyIssuesMock.mockReturnValue(
+      state({
+        data: result([], { githubEnhancement: { login: 'octocat', source: 'ghost' } }),
+      }),
+    );
     render(<IssueTrackerFeatureLayout />);
 
     expect(screen.getByText('issueTracker.mine.emptyTitle')).toBeTruthy();

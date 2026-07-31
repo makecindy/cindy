@@ -41,14 +41,23 @@ function platformNoticeKey(data: MyIssuesResult, reason: 'unavailable' | 'fetchF
 }
 
 /**
- * 列表是否**可被确证是完整的** —— 三路查询都成功才算。
+ * 列表是否**可被确证是完整的** —— 只有三路**都真查过且都成功**才算。
  *
- * 空态标题靠它决定能不能说「还没有提交过 Issue」:任一路降级或失败时,空列表只说明
- * 「这次没查到」,不能推出「你从未提交」。同一条判据也让接口未上线期间的空列表
- * 不再对用户撒谎(平台 404 恒成立 ⇒ 恒不可确证)。
+ * 空态标题靠它决定能不能说「还没有提交过 Issue」。三个条件各有必要:
+ *  - `degraded === null` —— 平台通道成功;
+ *  - `githubEnhancement !== null` —— GitHub 账号那一路**真的查过**。没配增强时它是 null,
+ *    而 `githubEnhancementFailed` 也会是 false(没配不是失败)—— 只看后者就会把「从未
+ *    查过」当成「查过且为空」,对直接在 GitHub 上提过 issue 的用户重演本次要修的错误
+ *    断言。平台侧不知道用户绕过 Cindy 直接提的那些,只有增强查得到;
+ *  - `!githubEnhancementFailed` —— 那一路没有中途失败。
+ *
+ * 代价是「还没有提交过 Issue」只在配了增强的用户身上出现,没配的用户看到的是
+ * 「暂时查不到」。这是刻意的保守 —— 本页反复确立的原则:错误信息比保守措辞更糟。
  */
 export function canTrustEmptyList(data: MyIssuesResult): boolean {
-  return data.degraded === null && !data.githubEnhancementFailed;
+  return (
+    data.degraded === null && data.githubEnhancement !== null && !data.githubEnhancementFailed
+  );
 }
 
 export function selectMyIssuesNotices(data: MyIssuesResult): string[] {
@@ -67,8 +76,17 @@ export function selectMyIssuesNotices(data: MyIssuesResult): string[] {
   }
   // 可选增强配了却没用上:主来源的提示在前,这条补充说明「你 GitHub 那部分也没进来」。
   // 只在**兜底通道也没救回来**时出现 —— 回退成功就没有可见损失,不打扰用户。
+  //
+  // 按来源分两版:githubEnhancementFailed 在 source === 'gh-cli' 时同样为 true
+  // (searchViaFallback 对非 ghost 主通道直接判失败,因为它自己就是兜底)。那种用户
+  // 根本没在用插件,给他「插件令牌权限不足、去插件页检查」等于指向不存在的页面,
+  // 排障方向也错 —— gh 用的是完整 OAuth token,失败多为网络或额度。
   if (data.githubEnhancementFailed) {
-    notices.push('issueTracker.mine.enhancementFailedHint');
+    notices.push(
+      data.githubEnhancement?.source === 'gh-cli'
+        ? 'issueTracker.mine.enhancementFailedGenericHint'
+        : 'issueTracker.mine.enhancementFailedHint',
+    );
   }
   if (data.truncated) {
     notices.push('issueTracker.mine.truncatedHint');

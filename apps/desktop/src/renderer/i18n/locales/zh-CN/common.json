@@ -6728,6 +6728,7 @@
       "fetchFailedHint": "暂时取不到最新状态，当前只显示本机记录的提交，列表可能不完整。",
       "fetchFailedPartialHint": "暂时取不到最新状态，部分 Issue 的状态可能显示不全。",
       "enhancementFailedHint": "暂时没能读取你 GitHub 账号名下的 Issue。可能是 Cindy GitHub 插件的访问令牌权限不足，可到插件页检查。",
+      "enhancementFailedGenericHint": "暂时没能读取你 GitHub 账号名下的 Issue，可能是网络问题或 GitHub 接口限流，稍后可以点右上角重试。",
       "truncatedHint": "Issue 较多，这里只列出了一部分，完整列表请在 GitHub 上查看。"
     },
     "redirect": {

@@ -512,6 +512,57 @@ describe('MyIssuesService.list', () => {
       expect(result.githubEnhancementFailed).toBe(true);
     });
 
+    it('剩余预算不足时不启动兜底 —— 那次请求注定被丢弃又取消不掉', async () => {
+      // withDeadline 只停止等待,GithubClient 不支持 AbortSignal;主通道耗掉大半预算
+      // 才失败时启动兜底 = 白耗一次 GitHub 额度。宁可直接判失败,让 UI 如实说。
+      const searchAuthoredIssuesFallback = vi.fn(async () => ({
+        issues: [remoteIssue({ number: 34 })],
+        totalCount: 1,
+      }));
+      let clock = 0;
+      const service = new MyIssuesService(
+        makeDeps({
+          now: () => clock,
+          enhancementTimeoutMs: 2_000,
+          resolveGithubEnhancement: async () => GHOST_VIEWER,
+          searchAuthoredIssues: async () => {
+            clock = 1_900; // 只剩 100ms,低于 MIN_FALLBACK_BUDGET_MS
+            throw new Error('HTTP 422');
+          },
+          searchAuthoredIssuesFallback,
+        }),
+      );
+
+      const result = await service.list();
+      expect(searchAuthoredIssuesFallback).not.toHaveBeenCalled();
+      expect(result.githubEnhancementFailed).toBe(true);
+    });
+
+    it('剩余预算充足时照常启动兜底', async () => {
+      const searchAuthoredIssuesFallback = vi.fn(async () => ({
+        issues: [remoteIssue({ number: 34 })],
+        totalCount: 1,
+      }));
+      let clock = 0;
+      const service = new MyIssuesService(
+        makeDeps({
+          now: () => clock,
+          enhancementTimeoutMs: 8_000,
+          resolveGithubEnhancement: async () => GHOST_VIEWER,
+          searchAuthoredIssues: async () => {
+            clock = 500; // 还剩 7.5s
+            throw new Error('HTTP 422');
+          },
+          searchAuthoredIssuesFallback,
+        }),
+      );
+
+      const result = await service.list();
+      expect(searchAuthoredIssuesFallback).toHaveBeenCalledTimes(1);
+      expect(result.items.map((i) => i.number)).toEqual([34]);
+      expect(result.githubEnhancementFailed).toBe(false);
+    });
+
     it('主通道成功时不碰兜底通道', async () => {
       const searchAuthoredIssuesFallback = vi.fn(async () => null);
       const service = new MyIssuesService(

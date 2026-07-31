@@ -6739,6 +6739,7 @@
       "fetchFailedHint": "Couldn't load the latest status. Showing only submissions recorded on this device, so this list may be incomplete.",
       "fetchFailedPartialHint": "Couldn't load the latest status, so some issues may show incomplete status.",
       "enhancementFailedHint": "Couldn't read the issues filed from your GitHub account. The Cindy GitHub plugin's access token may not have enough permissions — check it on the plugin page.",
+      "enhancementFailedGenericHint": "Couldn't read the issues filed from your GitHub account — likely a network hiccup or GitHub rate limit. Try refreshing in a moment.",
       "truncatedHint": "There are more issues than shown here — open GitHub for the full list."
     },
     "redirect": {

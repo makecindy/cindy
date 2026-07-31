@@ -40,6 +40,12 @@ const DEFAULT_CACHE_TTL_MS = 60_000;
 const DEFAULT_ENHANCEMENT_TIMEOUT_MS = 8_000;
 
 /**
+ * 启动兜底搜索所需的最低剩余预算。低于它就不去试 —— 那次请求注定等不到、又不能取消
+ * (见 canTryFallback),白耗一次 GitHub 额度。gh CLI 搜索实测远快于此。
+ */
+const MIN_FALLBACK_BUDGET_MS = 1_500;
+
+/**
  * 平台通道的整体超时。比 runtime 侧给 serverApiFetch 的单次 fetch 上限更长,
  * 因为它要覆盖**整条调用链**:401 → authManager.refresh() → 重试。那次 refresh
  * 自己是 `timeoutMs: 0`(无上限),所以只约束单次 fetch 挡不住整条链挂死。
@@ -345,6 +351,8 @@ export class MyIssuesService {
     // 总超时触发时也要能回传已经解析成功的身份:header 照常显示并入了谁名下的 issue,
     // 只是这一次没并进内容。所以把它记在闭包外。
     let resolved: GithubEnhancementViewer | null = null;
+    const budgetMs = this.deps.enhancementTimeoutMs ?? DEFAULT_ENHANCEMENT_TIMEOUT_MS;
+    const startedAt = this.now();
     try {
       return await this.withDeadline(async () => {
         resolved = await this.deps.resolveGithubEnhancement();
@@ -357,13 +365,19 @@ export class MyIssuesService {
         } catch (err) {
           // 提到 warn:身份能报出来却搜不到是异常,而这条路的失败对用户是静默的 ——
           // 记 debug 等于线上不可诊断(排查这个 bug 时日志里就只有平台通道的 404)。
-          log.warn('github enhancement search failed; trying the fallback channel', {
-            source: viewer.source,
-            error: errorText(err),
-          });
+          // 文案按「会不会真的换通道」分两种,否则排障时会被误导:gh-cli 主通道
+          // (或没注入 fallback)时 searchViaFallback 直接判失败,并不会真去试。
+          const willRetry = this.canTryFallback(viewer, budgetMs, startedAt);
+          log.warn(
+            willRetry
+              ? 'github enhancement search failed; trying the fallback channel'
+              : 'github enhancement search failed; no fallback channel to try',
+            { source: viewer.source, error: errorText(err) },
+          );
+          if (!willRetry) return { viewer, issues: [], truncated: false, failed: true };
           return await this.searchViaFallback(viewer);
         }
-      }, this.deps.enhancementTimeoutMs ?? DEFAULT_ENHANCEMENT_TIMEOUT_MS, 'enhancement');
+      }, budgetMs, 'enhancement');
     } catch (err) {
       // 没有 GitHub 身份是正常状态;解析失败与总超时同样只是「这次没有增强」。
       log.debug('github enhancement unavailable', { error: errorText(err) });
@@ -374,10 +388,31 @@ export class MyIssuesService {
   }
 
   /**
-   * 主通道搜不到时换本机 gh CLI 再试一次。
+   * 现在还值不值得去试兜底通道。
    *
-   * 只对 `ghost` 主通道有意义 —— `gh-cli` 自己就是兜底,失败了没有下一条通道可换。
-   * 兜底不可用(没装 / 没登录 gh)或它也失败 ⇒ `failed: true`,让 UI 说明这一路
+   * 两个条件:
+   *  1. 有兜底可换 —— `ghost` 主通道 + 注入了 fallback。`gh-cli` 自己就是兜底。
+   *  2. **剩余预算够** —— `withDeadline` 只停止等待,不能取消底层请求(GithubClient
+   *     不支持 AbortSignal,给它加会动到 git-context 等其它调用方)。主通道耗掉大半
+   *     预算才失败时启动兜底,等于发一次注定被丢弃、却照样消耗 GitHub 额度的请求。
+   *     宁可直接判失败,让 UI 如实说这一路没用上。
+   */
+  private canTryFallback(
+    viewer: GithubEnhancementViewer,
+    budgetMs: number,
+    startedAt: number,
+  ): boolean {
+    if (!this.deps.searchAuthoredIssuesFallback || viewer.source !== 'ghost') return false;
+    // budgetMs <= 0 表示关掉了 deadline(仅测试用),此时不做预算判断。
+    if (budgetMs <= 0) return true;
+    return budgetMs - (this.now() - startedAt) >= MIN_FALLBACK_BUDGET_MS;
+  }
+
+  /**
+   * 换本机 gh CLI 再搜一次。**只在 canTryFallback() 为真时调用** —— 「有没有兜底可换」
+   * 的判据只留在那一处,不在这里重复一份(两处判据迟早分歧,本页已栽过几次)。
+   *
+   * 兜底通道自己说没有(没装 / 没登录 gh)或它也失败 ⇒ `failed: true`,让 UI 说明这一路
    * 配了却没用上;回退成功 ⇒ `failed: false`,用户已经拿到数据,没有可见损失就不提示。
    */
   private async searchViaFallback(viewer: GithubEnhancementViewer): Promise<{
@@ -387,7 +422,7 @@ export class MyIssuesService {
     failed: boolean;
   }> {
     const fallback = this.deps.searchAuthoredIssuesFallback;
-    if (!fallback || viewer.source !== 'ghost') {
+    if (!fallback) {
       return { viewer, issues: [], truncated: false, failed: true };
     }
     try {
