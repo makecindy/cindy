@@ -1318,11 +1318,15 @@ function itemEndTimestamp<
     return maxTimestamp(liveEnd, parseTimestampMs(item.toolCall?.settledAt));
   }
   if (item.type === 'work_group') {
-    for (let index = item.children.length - 1; index >= 0; index--) {
-      const childEnd = itemEndTimestamp(item.children[index]);
-      if (childEnd !== null) return childEnd;
+    // 全量取 max,不是"最后一个 child":children 按**发起**时刻排列,并行动作乱序完成时真正的
+    // 结束时刻可能落在更靠前的 child 上(先发起、更晚 settle)。取最后一个会低估组的结束时间,
+    // 于是空洞判定的锚点变小、把本来连续的 turn 误判成空洞切开(#1210 review)。与
+    // `workRunFallbackEnd` / `groupMessageWorkRuns` 的锚点同一口径。
+    let latest: number | null = null;
+    for (const child of item.children) {
+      latest = maxTimestamp(latest, itemEndTimestamp(child));
     }
-    return null;
+    return latest;
   }
   const start = itemTimestamp(item);
   if (item.type === 'thinking' && start !== null) {

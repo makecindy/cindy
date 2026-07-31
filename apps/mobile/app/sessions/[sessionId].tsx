@@ -3797,6 +3797,30 @@ export default function SessionScreen() {
     remoteMediaQueueRef.current = createRemoteMediaQueue();
   }, [sessionId, createRemoteMediaQueue, deleteRemoteMediaObject]);
 
+  /** 单调递增的补齐轮次计数器;`latest` 是本屏最新那一轮的序号(旧轮据此自我作废)。 */
+  const backfillRunSeqRef = useRef(0);
+  const backfillLatestRunSeqRef = useRef(0);
+  /**
+   * 作废在飞的那一轮补齐:占掉一个序号但不启动任何轮,于是它在下一次 isCancelled 上收手。
+   *
+   * 走单调序号而不是在 isCancelled 里比"当前会话 id / loadingEarlier 是否变了":那类判据会随
+   * 状态摆回而把取消撤销掉(#1210 review 的 P1);序号只增不减,作废是终态。
+   */
+  const abandonInFlightBackfill = useCallback(() => {
+    backfillRunSeqRef.current += 1;
+    backfillLatestRunSeqRef.current = backfillRunSeqRef.current;
+  }, []);
+  // 会话切走、或连接代变化(重连)时作废:用户已经离开的会话不值得继续花翻页请求;换连接后在飞的
+  // 请求走的是旧连接,让它早点收手比等它超时干净。
+  //
+  // 手动「加载更早」的作废**不在这里**:effect 是被动的,而 loadEarlierMessages 在
+  // setLoadingEarlier(true) 之后同步就发请求 —— 若自动补齐在这个 effect 跑之前返回,它仍会通过
+  // isCancelled、merge 并继续下一页,两条分页流程短暂并发(#1210 review)。所以那条路在手动入口的
+  // **同步路径**里直接调 abandonInFlightBackfill。
+  useEffect(() => {
+    abandonInFlightBackfill();
+  }, [abandonInFlightBackfill, sessionId, connectionEpoch]);
+
   const loadEarlierMessages = useCallback(async () => {
     if (!deviceId || !sessionId || loadingEarlier || !hasOlderMessages) return;
     const before = oldestMessageCursor(messages);
@@ -3804,6 +3828,10 @@ export default function SessionScreen() {
       setHasOlderMessages(false);
       return;
     }
+    // 同步作废在飞的自动补齐:两者都按 before 游标翻页,并发只会重复拉取、反复 merge。必须在
+    // 发请求**之前**同步做掉,不能只靠依赖 loadingEarlier 的 effect —— 那是被动的,自动补齐可能
+    // 在它执行前就返回并继续下一页(#1210 review)。
+    abandonInFlightBackfill();
     setLoadingEarlier(true);
     setError(null);
     try {
@@ -3821,7 +3849,7 @@ export default function SessionScreen() {
     } finally {
       setLoadingEarlier(false);
     }
-  }, [deviceId, hasOlderMessages, loadingEarlier, maker, messages, sessionId]);
+  }, [abandonInFlightBackfill, deviceId, hasOlderMessages, loadingEarlier, maker, messages, sessionId]);
 
   /**
    * 历史窗口空洞的自动补齐(见 `historyWindowGap.ts` 的文件头)。
@@ -3870,20 +3898,6 @@ export default function SessionScreen() {
    * 当前会话(它自己会在下一次 isCancelled 上收手)。
    */
   const [backfillInFlightRun, setBackfillInFlightRun] = useState<{ sid: string; seq: number } | null>(null);
-  /** 单调递增的补齐轮次计数器;`latest` 是本屏最新那一轮的序号(旧轮据此自我作废)。 */
-  const backfillRunSeqRef = useRef(0);
-  const backfillLatestRunSeqRef = useRef(0);
-  // 两种情况要作废在飞的那一轮:占掉一个序号但不启动任何轮,于是它在下一次 isCancelled 上收手。
-  //  - **切会话**:用户已经离开的会话不值得继续花翻页请求;
-  //  - **用户手动开始「加载更早」**:两者都按 before 游标翻页,并发只会重复拉取、反复 merge。
-  //    启动前那道 `loadingEarlier` 守卫只挡住"手动先开始"的顺序,挡不住"自动先开始、用户随后
-  //    点击"——那一轮已经在飞,必须由这里作废(#1210 review)。
-  // 作废走同一个单调序号,而不是在 isCancelled 里比"当前会话 id / loadingEarlier 是否变了":
-  // 那类判据会随状态摆回而把取消撤销掉(#1210 review 的 P1);序号只增不减,作废是终态。
-  useEffect(() => {
-    backfillRunSeqRef.current += 1;
-    backfillLatestRunSeqRef.current = backfillRunSeqRef.current;
-  }, [sessionId, loadingEarlier]);
   useEffect(() => {
     if (!deviceId || !sessionId) return;
     // 同步门槛必须按 **session + 连接代** 判定,不能用 lastSyncedAt:屏实例复用、原地从会话 A
