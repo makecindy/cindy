@@ -21,6 +21,7 @@ import { findSimilarContacts, loadNameSnapshot, scanDuplicatePairs, type NameSna
 import { ContactsFts } from './fts.js';
 import { ContactsGroupsRepo } from './groups.js';
 import {
+  buildAllFtsDocs,
   buildFtsDoc,
   listEvents,
   listGroupsOf,
@@ -894,10 +895,7 @@ export class MakerContactsStore {
 
   private rebuildFtsSafe(): void {
     try {
-      const ids = this.db.prepare(`SELECT id FROM contacts`).all() as Array<{ id: string }>;
-      const docs = ids
-        .map((row) => buildFtsDoc(this.db, row.id))
-        .filter((doc): doc is NonNullable<typeof doc> => doc !== null);
+      const docs = buildAllFtsDocs(this.db);
       this.fts.rebuild(docs);
       this.ftsDirty = false;
     } catch (e) {
@@ -926,10 +924,7 @@ export class MakerContactsStore {
   private sanityCheck(): void {
     const total = (this.db.prepare(`SELECT COUNT(*) AS c FROM contacts`).get() as { c: number }).c;
     const ftsCount = this.fts.count();
-    const ids = this.db.prepare(`SELECT id FROM contacts`).all() as Array<{ id: string }>;
-    const docs = ids
-      .map((r) => buildFtsDoc(this.db, r.id))
-      .filter((d): d is NonNullable<typeof d> => d !== null);
+    const docs = buildAllFtsDocs(this.db);
     if (!this.fts.isConsistent(docs)) {
       this.logger.info('contacts fts inconsistent, rebuilding', { total, ftsCount });
       this.fts.rebuild(docs);
