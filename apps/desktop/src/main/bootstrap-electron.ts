@@ -415,6 +415,7 @@ import {
   requestProviderModelAutoRefresh,
   resetProviderModelAutoRefreshCooldowns,
 } from './maker-host/provider-model-auto-refresh.js';
+import { refreshProviderModelsAfterAccountReady } from './maker-host/account-provider-model-refresh.js';
 import {
   readImDefaultSettingsState,
   resetImDefaultSettings,
@@ -5800,37 +5801,20 @@ app.on('ready', async () => {
       // 自定义供应商配置在按 userId 切片的 localDb 里：DB ready / 换账号后重新加载并
       // 注入 active-catalog（让路由 / 来源栏 / 模型选择器跟随当前账号）。best-effort，不阻塞。
       void refreshCustomProvidersIntoCatalog();
-      // 自定义 MCP：provider 数组已在上方刷新完成，fire-and-forget 失效 Codex cached
-      // spawn 配置，使下一会话按新数组重建。
-      // 顺序约束：先 dispose app-server（含 busy 检查），成功后再关 bridge（与 mcpHandlers
-      // invalidateCodex 同款模式）。best-effort，不阻塞 DB-ready 其余初始化。
-      void (async () => {
-        let codexRestarted = false;
-        try {
-          await restartCodexAfterAuthModeChange();
-          codexRestarted = true;
-        } catch (err) {
-          accountSwitchLog.warn('restartCodexAfterAuthModeChange on account switch failed', {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-        if (codexRestarted) {
-          try {
-            await shutdownCodexEnvironment();
-          } catch (err) {
-            accountSwitchLog.warn('shutdownCodexEnvironment on account switch failed', {
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }
-        // 账号数据就绪 = 启动链路上最早能确定「owner 绑定已认领、网关凭证已下发」的时机，
-        // 也是模型清单该被刷新到最新的时机。在这里强制跑一遍（无视冷却），别再等用户去打开
-        // 设置页或模型选择器把清单逼出来 —— 那是全新机器首启只看到少数模型的直接原因。
-        //
-        // 必须排在上面 codex 重启序列**之后**：那条序列末尾会按 auth 边界重读
-        // models_cache（cache miss 即清空防串号），并发跑会让刚发现的清单被空快照覆盖。
-        void requestProviderModelAutoRefresh('startup');
-      })();
+      // 自定义 MCP：provider 数组已在上方刷新完成，失效 Codex cached spawn 配置，
+      // 使下一会话按新数组重建。
+      // 顺序约束与模型发现都保持 best-effort，但这里必须 await 到 settle：LocalDbGate
+      // 只有随后才放行主界面。否则用户能在 Anthropic 清单尚未回来时发送 Opus，
+      // 草稿会按 XD 默认路由建成 provider_id=NULL（issue #1196）。
+      //
+      // 模型发现必须排在 Codex 重启序列之后：后者末尾会按 auth 边界重读
+      // models_cache（cache miss 即清空防串号），并发跑会让刚发现的清单被空快照覆盖。
+      await refreshProviderModelsAfterAccountReady({
+        restartCodex: restartCodexAfterAuthModeChange,
+        shutdownCodexEnvironment,
+        refreshProviderModels: requestProviderModelAutoRefresh,
+        log: accountSwitchLog,
+      });
       void sweepStartupDraftImages({
         dbClient: getDbClient(),
         processStartedAtMs: PROCESS_STARTED_AT_MS,

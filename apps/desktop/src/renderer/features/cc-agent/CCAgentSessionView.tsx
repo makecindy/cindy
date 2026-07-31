@@ -26,6 +26,10 @@ import type { CSSProperties, ReactNode } from 'react';
 import { useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
+import {
+  connectedProvidersForAgent,
+  providerOffersModel,
+} from '@cindy/model-providers';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import {
   Activity,
@@ -1249,6 +1253,27 @@ export function CCAgentSessionView({
   const { providers: localProviders } = useProviders();
   const { providers: deviceProviders } = useDeviceProviders(remoteDeviceId);
   const providers = remoteDeviceId ? deviceProviders : localProviders;
+  const canSwitchToClaudeSubscription = useMemo(() => {
+    if (
+      remoteDeviceId ||
+      session?.remoteHostId ||
+      session?.agentKind !== 'cc' ||
+      !session.model
+    ) {
+      return false;
+    }
+    return connectedProvidersForAgent(localProviders, 'claude-code').some(
+      (provider) =>
+        provider.id === 'anthropic' &&
+        providerOffersModel(provider, session.model, 'claude-code'),
+    );
+  }, [
+    localProviders,
+    remoteDeviceId,
+    session?.agentKind,
+    session?.model,
+    session?.remoteHostId,
+  ]);
   // 该会话 agent 的能力(agent 级 hasFastMode + 旧被控端拍平回退用 availableModels);按 remoteDeviceId 作用域。
   const { capabilities: sessionCaps } = useAgentCapabilities(displayAgentKind, remoteDeviceId);
   // 这里曾有 useErrorReadAck:ErrorBanner 在视图内聚焦驻留 1.5s 即 explicit 清红点。
@@ -2563,6 +2588,38 @@ export function CCAgentSessionView({
     retryLastError();
   }, [retryLastError]);
 
+  const handleSwitchToClaudeSubscription = useCallback(async (): Promise<void> => {
+    if (!sessionId || !session || !canSwitchToClaudeSubscription) return;
+    const model = session.model;
+    const previousProviderId = session.providerId ?? null;
+
+    await window.electronAPI.maker.setModel(sessionId, model, 'anthropic');
+    try {
+      await sessionService.update(sessionId, {
+        model,
+        providerId: 'anthropic',
+      });
+    } catch (error) {
+      // runtime route 已先切换；若持久化失败就回滚，避免当前进程与 DB 对同一会话
+      // 产生两个 provider 真源。
+      await window.electronAPI.maker
+        .setModel(sessionId, model, previousProviderId)
+        .catch((rollbackError) => {
+          log.warn('Claude subscription recovery rollback failed', rollbackError);
+        });
+      throw error;
+    }
+
+    await refreshServerSession();
+    retryLastError();
+  }, [
+    canSwitchToClaudeSubscription,
+    refreshServerSession,
+    retryLastError,
+    session,
+    sessionId,
+  ]);
+
   const handleSilentStopContinue = useCallback(() => {
     continueAfterSilentStop();
   }, [continueAfterSilentStop]);
@@ -3256,6 +3313,11 @@ export function CCAgentSessionView({
                   deviceLinkDeviceId={remoteDeviceId}
                   modelId={session?.model}
                   providerId={session?.providerId}
+                  onSwitchToClaudeSubscription={
+                    canSwitchToClaudeSubscription
+                      ? handleSwitchToClaudeSubscription
+                      : undefined
+                  }
                   silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
                   onForkStripEncrypted={ownsWindowRoute ? handleForkStripEncrypted : undefined}
                   forkStripEncryptedRunning={forkStripEncryptedRunning}
@@ -3301,6 +3363,9 @@ export function CCAgentSessionView({
                 deviceLinkDeviceId={remoteDeviceId}
                 modelId={session?.model}
                 providerId={session?.providerId}
+                onSwitchToClaudeSubscription={
+                  canSwitchToClaudeSubscription ? handleSwitchToClaudeSubscription : undefined
+                }
                 silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
                 onForkStripEncrypted={ownsWindowRoute ? handleForkStripEncrypted : undefined}
                 forkStripEncryptedRunning={forkStripEncryptedRunning}
