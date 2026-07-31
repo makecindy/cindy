@@ -331,6 +331,32 @@ describe('文件级条目(clearDevice 删不掉时用)', () => {
     expect(fs.existsSync(mark)).toBe(true);
   });
 
+  // review(codex P1):折叠后条目里的 key 清单有上限(不可信 JSON 必须有界),会话数一多就装
+  // 不下 —— 漏掉一个就等于漏掉一条屏障。整根条目改成"把该 root 下所有计数都自增一遍"。
+  it('整根条目自增该 root 下**所有**计数,并退役所有墓碑(不依赖条目里的清单)', async () => {
+    const root = await makeOwnerCache('owner-1');
+    const cleared = path.join(`${root}.control`, 'cleared');
+    const pending = path.join(`${root}.control`, 'pending');
+    await fsp.mkdir(cleared, { recursive: true });
+    await fsp.mkdir(pending, { recursive: true });
+    // 20 个会话计数 + 20 个墓碑,远超单条目的 key 上限(16)。
+    for (let i = 0; i < 20; i += 1) {
+      await fsp.writeFile(path.join(cleared, `sess-${i}`), '1', 'utf8');
+      await fsp.writeFile(path.join(pending, `sess-${i}`), '1', 'utf8');
+    }
+
+    await enqueuePurge(root); // 整根条目(clearAll 失败那一路)
+    expect(await drainPurgeQueue()).toEqual({ purged: 1, pending: 0 });
+
+    for (let i = 0; i < 20; i += 1) {
+      // 前后各自增一次 → 1 变 3;一个都不能漏。
+      expect(Number.parseInt(await fsp.readFile(path.join(cleared, `sess-${i}`), 'utf8'), 10)).toBe(
+        3,
+      );
+    }
+    expect(await fsp.readdir(pending)).toEqual([]);
+  });
+
   it('屏障修不好(计数读不出数字)→ 条目留着重试,不当成清干净了', async () => {
     const root = await makeOwnerCache('owner-1');
     const target = path.join(root, 'messages', 'a.json');

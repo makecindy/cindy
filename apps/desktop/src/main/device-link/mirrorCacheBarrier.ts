@@ -131,6 +131,36 @@ export async function readClearCounter(root: string, key: string): Promise<Clear
 }
 
 /**
+ * 列出该 root 下**所有**作废计数 key。整根清理时用它把每个计数都自增一遍 —— 队列条目里的
+ * key 清单有上限(不可信 JSON 必须有界),而"这一整棵都不可信"本来就该作废全部,不该依赖
+ * 那份清单是否装得下(review: codex P1)。**读不出来就抛**:整根清理不能在"数不出计数"时
+ * 报成功。
+ */
+export async function listClearCounterKeys(root: string): Promise<string[]> {
+  const dir = path.join(controlDir(root), CLEARED_DIR);
+  try {
+    const names = await fsp.readdir(dir);
+    return names.filter((name) => !name.endsWith('.tmp'));
+  } catch (err) {
+    const code = errnoCode(err);
+    if (code === 'ENOENT' || code === 'ENOTDIR') return [];
+    throw err;
+  }
+}
+
+/** 列出该 root 下所有还挂着的墓碑 scope(整根清理完成后一次全退役)。同样读不出来就抛。 */
+export async function listPendingClearScopes(root: string): Promise<string[]> {
+  try {
+    const names = await fsp.readdir(pendingClearDir(root));
+    return names.filter((name) => !name.endsWith('.tmp'));
+  } catch (err) {
+    const code = errnoCode(err);
+    if (code === 'ENOENT' || code === 'ENOTDIR') return [];
+    throw err;
+  }
+}
+
+/**
  * 自增作废计数。**失败会抛** —— 这是跨进程唯一的持久屏障:另一个实例可能已经读到旧计数
  * 并在锁上等着,自增落不下去却报"清干净了"的话,它会在清理之后把被撤销设备 / 上一个账号的
  * 正文重建出来。落不下去就让调用方把这次清理当成"没清完",登记重试。

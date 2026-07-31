@@ -34,6 +34,8 @@ import {
   bumpClearedCounter,
   cacheLockPath,
   clearPendingMark,
+  listClearCounterKeys,
+  listPendingClearScopes,
   CLEARED_ACCOUNT,
 } from './mirrorCacheBarrier';
 
@@ -609,8 +611,23 @@ async function drainPurgeQueueLocked(
       // 而"内容取自自增之前"的写入一律失配。修不好就整条留着重试(读路径同时保持被挡)。
       // 优先自增**当初失败的那些 key**(会话级 / 设备级);没有登记时(整根条目、老版本条目)
       // 退回账号级 —— 它是 clearAll 失败那条路径的正解。
+      // 整根条目 = "这一整棵都不可信":把该 root 下**所有**计数都自增一遍,而不是只信条目里
+      // 那份有上限的 key 清单 —— 折叠(>32 条)时清单可能装不下全部会话 key,漏掉一个就等于
+      // 漏掉一条屏障(review: codex P1)。文件级条目仍按登记的 key 精确处理。
+      // 整根删除的两种来源:paths 里列了 root 本身,或者压根没有 paths(clearAll 失败那一路)。
+      const purgeWholeRoot = classified.wholeRoot || !(entry.paths && entry.paths.length > 0);
       const barrierKeys = safeBarrierKeys(entry.barriers);
-      const keysToBump = barrierKeys.length > 0 ? barrierKeys : [CLEARED_ACCOUNT];
+      const keysToBump = purgeWholeRoot
+        ? [
+            ...new Set([
+              ...(await listClearCounterKeys(entry.root)),
+              CLEARED_ACCOUNT,
+              ...barrierKeys,
+            ]),
+          ]
+        : barrierKeys.length > 0
+          ? barrierKeys
+          : [CLEARED_ACCOUNT];
       // 整段补删拿着**镜像缓存自己那把跨进程锁**跑(队列锁只互斥队列簿记,管不到缓存写入)。
       // 否则另一个实例的最新页写入可以在"自增之后、删除之前"发起:它读到的是新计数,提交时也
       // 一致,于是在 rm 之后把被撤销的正文重建出来,而这里照样把队列条目扔掉(review: codex P1)。
@@ -623,7 +640,7 @@ async function drainPurgeQueueLocked(
           log.warn(`purging ${entry.root} without the mirror-cache lock; relying on barriers`);
         }
         for (const key of keysToBump) await bumpClearedCounter(entry.root, key);
-        if (!classified.wholeRoot && entry.paths && entry.paths.length > 0) {
+        if (!purgeWholeRoot) {
           // 逐个删成功才算清掉;剩下的继续留在队列里。
           //
           // `recursive: true` 是必需的:清理路径可能登记的是**目录** —— `clearDevice` 在
@@ -650,9 +667,11 @@ async function drainPurgeQueueLocked(
         // 删干净了 → 退役"清理没确认完成"墓碑。不撤的话,一次瞬时删除失败会让该 owner 的
         // 缓存读永久不命中(hasPendingClears 对整个 root 生效)(review: codex P1)。
         // 撤墓碑排在最后:前面任何一步抛错都会让条目留在队列里,墓碑也就继续挡着读。
-        for (const scope of safeBarrierKeys(entry.tombstones)) {
-          await clearPendingMark(entry.root, scope);
-        }
+        // 整根删完 = 这个 owner 没有任何"清理未完成"了 → 所有墓碑一次退役(同理不依赖清单)。
+        const scopes = purgeWholeRoot
+          ? await listPendingClearScopes(entry.root)
+          : safeBarrierKeys(entry.tombstones);
+        for (const scope of scopes) await clearPendingMark(entry.root, scope);
       });
       purged += 1;
       purgedKeys.add(key);

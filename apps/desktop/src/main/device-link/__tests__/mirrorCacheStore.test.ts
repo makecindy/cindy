@@ -1345,6 +1345,77 @@ describe('跨进程互斥(锁 + 清理完成标记)', () => {
       ).toEqual(['m2']);
     });
 
+    it('空写(会话级清理)同样落墓碑:删除失败时墓碑留着、读被挡', async () => {
+      // review(codex P1):这条路径原先既不落墓碑也不登记 purge 记录 —— 进程在自增之后、rm
+      // 完成之前退出,残留的旧消息文件在重启后计数稳定,读路径照样把权威侧已删的内容返回。
+      const c = cache();
+      await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+      const sessionKey = messageFileName('dev-1', 'sess-1').replace(/\.json$/, '');
+      const file = path.join(messagesDir(), messageFileName('dev-1', 'sess-1'));
+
+      const originalRm = fsp.rm;
+      const spy = vi.spyOn(fsp, 'rm').mockImplementation((async (
+        t: unknown,
+        ...rest: unknown[]
+      ) => {
+        if (typeof t === 'string' && t === file) {
+          throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+        }
+        return (originalRm as (...args: unknown[]) => Promise<unknown>)(t, ...rest);
+      }) as unknown as typeof fsp.rm);
+      let err: unknown;
+      try {
+        err = await c.writeMessages('dev-1', 'sess-1', []).then(
+          () => null,
+          (e: unknown) => e,
+        );
+      } finally {
+        spy.mockRestore();
+      }
+      expect(err).toBeInstanceOf(MirrorCachePurgeError);
+      expect((err as MirrorCachePurgeError).tombstones).toEqual([sessionKey]);
+      expect(fs.existsSync(path.join(`${root}.control`, 'pending', sessionKey))).toBe(true);
+      // 墓碑挂着 → 读不命中(残留文件不会被 hydrate 出来)。
+      expect((await c.readMessagesWithInvalidation('dev-1', 'sess-1')).messages).toEqual([]);
+    });
+
+    it('空写删干净了 → 墓碑撤掉,后续读恢复', async () => {
+      const c = cache();
+      await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+      await c.writeMessages('dev-1', 'sess-1', []);
+      const pendingDir = path.join(`${root}.control`, 'pending');
+      expect(fs.existsSync(pendingDir) ? await fsp.readdir(pendingDir) : []).toEqual([]);
+      await c.writeMessages('dev-1', 'sess-2', [row('m2', '2026-02-01T00:00:00.000Z')]);
+      expect(
+        (await c.readMessagesWithInvalidation('dev-1', 'sess-2')).messages.map((m) => m.id),
+      ).toEqual(['m2']);
+    });
+
+    it('读到一半才出现的墓碑同样挡住这次读(墓碑夹住读)', async () => {
+      // review(codex P1):只在读之前查一次 → 另一个实例在我们查过之后才落墓碑、随后在自增
+      // 之前退出,那时计数前后一致,残留就被返回出去了。
+      const c = cache();
+      await c.writeMessages('dev-1', 'sess-1', [row('m1', '2026-01-01T00:00:00.000Z')]);
+      const mark = path.join(`${root}.control`, 'pending', 'sneaky');
+      const file = path.join(messagesDir(), messageFileName('dev-1', 'sess-1'));
+      const original = fsp.readFile;
+      const spy = vi.spyOn(fsp, 'readFile').mockImplementation((async (
+        target: unknown,
+        ...rest: unknown[]
+      ) => {
+        if (typeof target === 'string' && target === file) {
+          fs.mkdirSync(path.dirname(mark), { recursive: true });
+          fs.writeFileSync(mark, '1', 'utf8');
+        }
+        return (original as (...args: unknown[]) => Promise<unknown>)(target, ...rest);
+      }) as unknown as typeof fsp.readFile);
+      try {
+        expect((await c.readMessagesWithInvalidation('dev-1', 'sess-1')).messages).toEqual([]);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
     it('墓碑落不下去 → 在第一次删除之前中止,盘上什么都没动', async () => {
       // review(codex P1):照常往下扫而进程在扫描途中退出时,盘上既没有墓碑、重试也还没登记
       // (登记发生在异常被 IPC 接住之后),没删掉的文件重启后会因为"计数稳定"被当成有效缓存。

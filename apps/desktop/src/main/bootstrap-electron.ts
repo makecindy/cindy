@@ -865,9 +865,14 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   } catch (err) {
     authBoundaryLog.error(`clear device-link mirror cache on ${reason} failed:`, err);
     if (err instanceof MirrorCachePurgeError) {
-      await enqueuePurge(err.root).catch((enqueueErr: unknown) => {
-        authBoundaryLog.error('failed to enqueue mirror cache purge retry:', enqueueErr);
-      });
+      // remaining / barriers / tombstones 三样都要带上(同 IPC 侧的 queuePurgeRetry):
+      // 只传 root 的话,补删成功后队列既不知道该补自增哪个作废计数,也不会退役 `_account`
+      // 墓碑 —— 墓碑一直挂着就等于这个 owner 的缓存读被永久压住(review: codex P1)。
+      await enqueuePurge(err.root, err.remaining, err.barriers, err.tombstones).catch(
+        (enqueueErr: unknown) => {
+          authBoundaryLog.error('failed to enqueue mirror cache purge retry:', enqueueErr);
+        },
+      );
     }
   }
   // Cindy relay owns long-lived transports plus account-scoped task/binding

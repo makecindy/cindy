@@ -925,11 +925,15 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       // 这一路会把已撤销设备的正文照样返回(review: codex P1)。
       // "清理开始了但没确认清完"(崩在删除途中)→ 一律不命中:计数前后一致挡不住这一种
       // (review: codex P1)。
+      // 墓碑要**夹住**这次读(前后各查一次):共享同一个 userData 的另一个实例可能在我们查过
+      // 之后才落墓碑,然后在自增之前退出 —— 那时计数前后一致,只查一次就会把清理失败后的
+      // 残留返回出去(review: codex P1)。
       if (await hasPendingClears(root)) return { messages: [], invalidation: -1 };
       const keys = [key, deviceClearKey(deviceId), CLEARED_ACCOUNT];
       const before = await readCounters(root, keys);
       const messages = await this.readMessages(deviceId, sessionId);
       const after = await readCounters(root, keys);
+      if (await hasPendingClears(root)) return { messages: [], invalidation: -1 };
       if (!countersHeld(before, after)) {
         return { messages: [], invalidation: numericCounter(after[0]) };
       }
@@ -975,12 +979,20 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
             // 屏障也已经在盘上 —— 另一个实例(哪怕它的页取自作废之前)提交时会被挡掉
             // (review: codex P1)。自增失败就不删:宁可缓存暂留,也不要"删了却没有屏障" ——
             // 但"这页必须消失"的意图要能被重试,所以包成 MirrorCachePurgeError 交给 purge 队列。
+            // 会话级墓碑:与 clearDevice / clearAll 同款。进程在自增之后、rm 完成之前退出时,
+            // 残留的旧消息文件在重启后计数稳定 —— 读路径照样命中,把权威侧已经删掉的内容
+            // 又显示出来(review: codex P1)。落不下墓碑就**不动任何数据**。
+            try {
+              await markClearPending(rootAtStart, sessionKey);
+            } catch (err) {
+              throw new MirrorCachePurgeError(rootAtStart, [file], err, [sessionKey], [sessionKey]);
+            }
             try {
               await bumpClearedCounter(rootAtStart, sessionKey);
             } catch (err) {
-              // 连"该补自增哪个 key"一起交给队列(见 MirrorCachePurgeError.barriers):
+              // 连"该补自增哪个 key"与"该退役哪个墓碑"一起交给队列(见 MirrorCachePurgeError):
               // 只登记文件的话,一笔取自清理之前、put 迟到的写入会在消化之后通过比对。
-              throw new MirrorCachePurgeError(rootAtStart, [file], err, [sessionKey]);
+              throw new MirrorCachePurgeError(rootAtStart, [file], err, [sessionKey], [sessionKey]);
             }
             const invalidation = numericCounter(await readClearCounter(rootAtStart, sessionKey));
             await serializeWrite(file, async () => {
@@ -992,15 +1004,34 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
                 // recursive:目标位置若因异常变成目录,非递归 rm 会永远失败。
                 await fsp.rm(file, { recursive: true, force: true });
                 if (tmpStuck.length > 0) {
-                  throw new MirrorCachePurgeError(rootAtStart, tmpStuck, null);
+                  throw new MirrorCachePurgeError(
+                    rootAtStart,
+                    tmpStuck,
+                    null,
+                    [sessionKey],
+                    [sessionKey],
+                  );
                 }
               } catch (err) {
                 if (err instanceof MirrorCachePurgeError) throw err;
                 // 这条路径服务的是被控端 /clear、rewind、会话删除 —— 权威侧已经确认"这个会话没有
                 // 可见消息了",本机却还留着旧正文,下次离线冷启动照样 hydrate 出来。删不掉要能被
-                // 重试,不能咽下去(review: codex P1)。
-                throw new MirrorCachePurgeError(rootAtStart, [file, ...tmpStuck], err);
+                // 重试,不能咽下去(review: codex P1)。墓碑保留、scope 一起交给队列退役。
+                throw new MirrorCachePurgeError(
+                  rootAtStart,
+                  [file, ...tmpStuck],
+                  err,
+                  [sessionKey],
+                  [sessionKey],
+                );
               }
+              // 确认删干净了才撤墓碑(撤不掉不致命:只是这个 owner 的读继续被挡)。
+              await clearPendingMark(rootAtStart, sessionKey).catch((markErr: unknown) => {
+                log.warn(
+                  'mirror cache: failed to drop pending clear mark after empty write',
+                  markErr,
+                );
+              });
             });
             return { invalidation };
           }
@@ -1113,6 +1144,8 @@ export function createMirrorCache(resolveRoot: () => string): MirrorCache {
       const before = await readCounters(root, keys);
       const parsed = await readJson(sessionListPath());
       const after = await readCounters(root, keys);
+      // 同 readMessagesWithInvalidation:墓碑夹住这次读(只查前面挡不住"读到一半才落墓碑")。
+      if (await hasPendingClears(root)) return [];
       if (!countersHeld(before, after)) return [];
       const devices = isRecord(parsed) && Array.isArray(parsed.devices) ? parsed.devices : [];
       return normalizeDeviceSessions(devices);
