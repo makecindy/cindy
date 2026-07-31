@@ -17,7 +17,8 @@ const DEFAULT_WINDOW_SIZE = 12;
 const DEFAULT_WINDOW_DISTINCT_LIMIT = 2;
 /**
  * TaskOutput 是 SDK 明确定义的等待/轮询工具。状态文本不变只代表任务仍在等待,
- * 不能作为模型死循环证据;它也会切断前后的普通调用序列,避免跨等待阶段累计。
+ * 不能作为模型死循环证据。它本身不进入指纹,但也不重置普通工具的轨迹,
+ * 避免模型通过在重复调用间插入轮询来绕过检测。
  */
 const LOOP_GUARD_EXEMPT_TOOL_NAMES = new Set(['TaskOutput']);
 
@@ -92,10 +93,7 @@ export class ToolLoopGuard {
     const toolUse = this.pendingToolUses.get(toolUseId);
     this.pendingToolUses.delete(toolUseId);
     if (!toolUse) return { kind: 'ok' };
-    if (LOOP_GUARD_EXEMPT_TOOL_NAMES.has(toolUse.name)) {
-      this.resetPatternState();
-      return { kind: 'ok' };
-    }
+    if (LOOP_GUARD_EXEMPT_TOOL_NAMES.has(toolUse.name)) return { kind: 'ok' };
 
     // 第 1 层: 连续 name+input+output 完全相同
     const fullFingerprint = fingerprintToolCall(toolUse.name, toolUse.input, output);

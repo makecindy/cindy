@@ -78,22 +78,47 @@ describe('ToolLoopGuard', () => {
     }
   });
 
-  it('TaskOutput 会切断普通工具在等待前后的重复累计', () => {
+  it('TaskOutput 不会隐藏穿插在轮询之间的连续普通工具循环', () => {
     const g = new ToolLoopGuard();
-    for (let i = 0; i < 3; i += 1) {
-      expect(feed(g, `before-${i}`, 'Bash', { cmd: 'ls' }, 'same').kind).toBe('ok');
+    for (let i = 0; i < 4; i += 1) {
+      const ordinary = feed(g, `bash-${i}`, 'Bash', { cmd: 'ls' }, 'same');
+      if (i < 3) expect(ordinary.kind).toBe('ok');
+      else expect(ordinary).toMatchObject({ kind: 'hard', reason: 'consecutive' });
+
+      expect(
+        feed(
+          g,
+          `poll-${i}`,
+          'TaskOutput',
+          { task_id: 'task-1', block: true, timeout: 30_000 },
+          'still running',
+        ).kind,
+      ).toBe('ok');
     }
-    expect(
-      feed(
+  });
+
+  it('TaskOutput 不会隐藏穿插在轮询之间的 ABAB 普通工具循环', () => {
+    const g = new ToolLoopGuard();
+    for (let i = 0; i < 12; i += 1) {
+      const ordinary = feed(
         g,
-        'poll',
-        'TaskOutput',
-        { task_id: 'task-1', block: true, timeout: 30_000 },
-        'still running',
-      ).kind,
-    ).toBe('ok');
-    for (let i = 0; i < 3; i += 1) {
-      expect(feed(g, `after-${i}`, 'Bash', { cmd: 'ls' }, 'same').kind).toBe('ok');
+        `ordinary-${i}`,
+        'Bash',
+        i % 2 === 0 ? { cmd: 'python run.py' } : { cmd: 'p4 sync' },
+        `output-${i}`,
+      );
+      if (i < 11) expect(ordinary.kind).toBe('ok');
+      else expect(ordinary).toMatchObject({ kind: 'hard', reason: 'pingpong' });
+
+      expect(
+        feed(
+          g,
+          `poll-${i}`,
+          'TaskOutput',
+          { task_id: 'task-1', block: true, timeout: 30_000 },
+          'still running',
+        ).kind,
+      ).toBe('ok');
     }
   });
 
