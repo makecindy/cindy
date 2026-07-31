@@ -356,7 +356,11 @@ describe('messageMarkdown', () => {
           {
             key: 'tr:5:2',
             cells: [
-              [{ type: 'text', text: 'Downloads\\RJ406835.zip' }],
+              // 表格单元格同样过 inline 分词:`Downloads\RJ406835.zip` 是「带分隔符 +
+              // 扩展名」的相对路径形态,按裸路径识别成 link 候选(渲染层再经被控端
+              // stat 决定点亮 chip 还是保持纯文本)。本用例断言的是紧凑表格的分块,
+              // 路径形态的口径见 describe('bare file paths(正文纯文本形态)')。
+              [{ type: 'link', text: 'Downloads\\RJ406835.zip', url: 'Downloads\\RJ406835.zip' }],
               [{ type: 'text', text: '8.42GB' }],
               [{ type: 'text', text: '删除前再确认' }],
             ],
@@ -1087,6 +1091,143 @@ describe('local path links(文件 chip 链路的链接形态)', () => {
   it('![alt](/abs.png) 图片语法由本地图片能力接管,不被链接规则吞掉', () => {
     expect(parseMobileMarkdownInlines('![图](/Users/me/a.png)')).toEqual([
       { type: 'image', alt: '图', url: '/Users/me/a.png' },
+    ]);
+  });
+});
+
+describe('bare file paths(正文纯文本形态)', () => {
+  // 与桌面 remarkLocalPathLinks 补齐的同一个入口:正文里裸写的路径切成 link inline,
+  // 与 `[label](path)` 形态共用 LinkPathChipSpan → 远端 stat → 点亮 chip / 纯文本。
+  // 词法口径(哪些形状算路径、CJK 已知限制)由 chatPathCandidate.test.ts 固化,
+  // 这里只钉「分词结果」与「不抢走既有包裹语法」。
+
+  it('句中裸路径切成 link,前后纯文本保留', () => {
+    expect(parseMobileMarkdownInlines('见 src/App.tsx 第 20 行')).toEqual([
+      { type: 'text', text: '见 ' },
+      { type: 'link', text: 'src/App.tsx', url: 'src/App.tsx' },
+      { type: 'text', text: ' 第 20 行' },
+    ]);
+  });
+
+  it('绝对路径 / 行号后缀 / 一段多条', () => {
+    expect(parseMobileMarkdownInlines('图在 /Users/me/out/hero.png')).toEqual([
+      { type: 'text', text: '图在 ' },
+      { type: 'link', text: '/Users/me/out/hero.png', url: '/Users/me/out/hero.png' },
+    ]);
+    expect(parseMobileMarkdownInlines('见 src/App.tsx:42 那行')).toEqual([
+      { type: 'text', text: '见 ' },
+      { type: 'link', text: 'src/App.tsx:42', url: 'src/App.tsx:42' },
+      { type: 'text', text: ' 那行' },
+    ]);
+    expect(parseMobileMarkdownInlines('对比 a/b.ts 和 c/d.ts')).toEqual([
+      { type: 'text', text: '对比 ' },
+      { type: 'link', text: 'a/b.ts', url: 'a/b.ts' },
+      { type: 'text', text: ' 和 ' },
+      { type: 'link', text: 'c/d.ts', url: 'c/d.ts' },
+    ]);
+  });
+
+  it('裸文件名不识别(严于 inline code:反引号是作者的显式格式信号)', () => {
+    expect(parseMobileMarkdownInlines('改一下 package.json 配置')).toEqual([
+      { type: 'text', text: '改一下 package.json 配置' },
+    ]);
+    expect(parseMobileMarkdownInlines('改一下 `package.json` 配置')).toEqual([
+      { type: 'text', text: '改一下 ' },
+      { type: 'code', text: 'package.json' },
+      { type: 'text', text: ' 配置' },
+    ]);
+  });
+
+  // ── 不抢走既有包裹语法(index 升序排序天然保证,这里把它钉住) ──
+
+  it('inline code 里的路径仍归 code,不被裸路径抢走', () => {
+    expect(parseMobileMarkdownInlines('见 `src/App.tsx` 那个')).toEqual([
+      { type: 'text', text: '见 ' },
+      { type: 'code', text: 'src/App.tsx' },
+      { type: 'text', text: ' 那个' },
+    ]);
+  });
+
+  it('markdown 链接 / 图片形态不被裸路径抢走(标签里含路径也不拆)', () => {
+    expect(parseMobileMarkdownInlines('[src/App.tsx](/abs/src/App.tsx)')).toEqual([
+      { type: 'link', text: 'src/App.tsx', url: '/abs/src/App.tsx' },
+    ]);
+    expect(parseMobileMarkdownInlines('![图](/Users/me/a.png)')).toEqual([
+      { type: 'image', alt: '图', url: '/Users/me/a.png' },
+    ]);
+  });
+
+  it('裸 URL 不被切出内部路径段', () => {
+    expect(parseMobileMarkdownInlines('图在 https://x.com/a/b.png 这里')).toEqual([
+      { type: 'text', text: '图在 ' },
+      { type: 'link', text: 'https://x.com/a/b.png', url: 'https://x.com/a/b.png' },
+      { type: 'text', text: ' 这里' },
+    ]);
+  });
+
+  it('未闭合反引号不构成 code span,裸路径照常识别(与桌面 remark 同口径)', () => {
+    // 流式中途的常见中间态;闭合后下一轮重解析自然回到 code 形态。
+    expect(parseMobileMarkdownInlines('见 `src/App.tsx 还没闭合')).toEqual([
+      { type: 'text', text: '见 `' },
+      { type: 'link', text: 'src/App.tsx', url: 'src/App.tsx' },
+      { type: 'text', text: ' 还没闭合' },
+    ]);
+  });
+
+  it('HTML 注释里的裸路径不识别(桌面侧注释是 html 节点、插件看不到)', () => {
+    expect(parseMobileMarkdownInlines('<!-- 见 src/App.tsx -->')).toEqual([
+      { type: 'text', text: '<!-- 见 src/App.tsx -->' },
+    ]);
+    // 注释外的照常识别,注释内的压制。
+    expect(parseMobileMarkdownInlines('<!-- a/b.ts --> 但 c/d.ts 要改')).toEqual([
+      { type: 'text', text: '<!-- a/b.ts --> 但 ' },
+      { type: 'link', text: 'c/d.ts', url: 'c/d.ts' },
+      { type: 'text', text: ' 要改' },
+    ]);
+  });
+
+  it('跨块注释状态同样压制(段起点仍在上一块开启的注释里)', () => {
+    expect(parseMobileMarkdownInlines('见 src/App.tsx --> 之后 c/d.ts', true)).toEqual([
+      { type: 'text', text: '见 src/App.tsx --> 之后 ' },
+      { type: 'link', text: 'c/d.ts', url: 'c/d.ts' },
+    ]);
+  });
+
+  it('已知取舍:被强调包裹的路径不成 chip(手机 inline 模型扁平,不支持嵌套)', () => {
+    // 桌面 remark 能在 strong 的子 text 里继续 linkify;手机端 inline 无嵌套,
+    // 强调整段吃掉。属既有架构限制,本次不扩,先把现状钉住。
+    expect(parseMobileMarkdownInlines('**src/App.tsx**')).toEqual([
+      { type: 'strong', text: 'src/App.tsx' },
+    ]);
+  });
+
+  it('标题 / 列表项 / 引用 / 表格单元格都走同一条分词', () => {
+    expect(parseMobileMarkdown('## 见 src/a.ts')[0]).toMatchObject({
+      type: 'heading',
+      inlines: [
+        { type: 'text', text: '见 ' },
+        { type: 'link', text: 'src/a.ts', url: 'src/a.ts' },
+      ],
+    });
+    expect(parseMobileMarkdown('- 改 src/a.ts')[0]).toMatchObject({
+      type: 'list_item',
+      inlines: [
+        { type: 'text', text: '改 ' },
+        { type: 'link', text: 'src/a.ts', url: 'src/a.ts' },
+      ],
+    });
+    expect(parseMobileMarkdown('> 见 src/a.ts')[0]).toMatchObject({
+      type: 'blockquote',
+      inlines: [
+        { type: 'text', text: '见 ' },
+        { type: 'link', text: 'src/a.ts', url: 'src/a.ts' },
+      ],
+    });
+  });
+
+  it('代码围栏内是字面代码,不进 inline 分词', () => {
+    expect(parseMobileMarkdown(['```', '见 src/App.tsx', '```'].join('\n'))).toEqual([
+      { type: 'code', key: 'code:0:0', language: undefined, text: '见 src/App.tsx' },
     ]);
   });
 });

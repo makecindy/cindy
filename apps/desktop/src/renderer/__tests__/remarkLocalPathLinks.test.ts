@@ -146,6 +146,16 @@ describe('remarkLocalPathLinks', () => {
     expect(linkUrls(runOnText('记作 a/b.c 即可'))).toEqual(['a/b.c']);
   });
 
+  it('切出的 link 带 data-bare-path 标记(渲染层据此走「只加下划线」分支)', () => {
+    // DESIGN.md §14.5:正文裸写的路径点亮后保持正文字体,不套等宽 chip —— 它的
+    // 未点亮态是普通正文,套等宽会让同一句里点亮/未点亮的路径三处齐变。作者手写的
+    // `[label](path)` 不带这个标记,继续按 label 形态决定 chip。
+    const out = runOnText('见 src/App.tsx 第 20 行');
+    const link = out.find((c): c is Link => c.type === 'link');
+    expect(link, '未切出 link 节点').toBeDefined();
+    expect(link!.data?.hProperties).toMatchObject({ 'data-bare-path': '' });
+  });
+
   it('完全没有路径的句子原样不动', () => {
     const out = runOnText('这是一句普通的中文,没有任何路径。');
     expect(out).toHaveLength(1);

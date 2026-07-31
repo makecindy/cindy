@@ -44,6 +44,11 @@
  * 只处理 `text` 节点,天然不碰代码:mdast 里 `code` / `inlineCode` 是带 `value`
  * 的叶子节点,没有 `text` 子节点,扫不到;唯一要跳过的是已经在 `link` 里的 text
  * (避免嵌套链接)。纯 AST 变换,无 IO、无副作用。
+ *
+ * 手机端对等物:`apps/mobile/src/session/chatPathCandidate.ts` 的
+ * `findBareFilePathMatch`(下面 PATH_RE 那一族常量与 findPathMatches 的移植,接进
+ * messageMarkdown 的 inline 分词器)。**本文件的正则改了要同步过去**,否则两端会
+ * 就"哪些正文路径可点"给出不同结果。
  */
 
 import type { Plugin } from 'unified';
@@ -69,6 +74,13 @@ const LINE_SUFFIX = '(?::[1-9]\\d{0,6}(?::[1-9]\\d{0,6})?)?';
 const LEFT_BOUNDARY = `(?<![A-Za-z0-9._~@+${CJK}${SEP}])`;
 
 const PATH_RE = new RegExp(`${LEFT_BOUNDARY}(${BODY}${LINE_SUFFIX})`, 'g');
+
+/**
+ * 标记属性名:正文裸路径切出的 link 节点带上它,渲染层据此走「只加下划线、不变
+ * 等宽」的分支(见 splitTextNode 里的说明)。与 MarkdownRenderer 共享同一常量,
+ * 避免字面量在两处漂移。
+ */
+export const BARE_PATH_ATTR = 'data-bare-path';
 
 interface PathMatch {
   start: number; // 在 text 节点 value 里的起始下标
@@ -105,6 +117,14 @@ function splitTextNode(node: Text, matches: PathMatch[]): PhrasingContent[] {
       type: 'link',
       url: match.value,
       children: [{ type: 'text', value: match.value }],
+      // 标记「这条 link 是从正文纯文本切出来的」,供渲染层区分作者手写的
+      // `[label](path)`。两者点亮后的形态不同(DESIGN.md §14.5):
+      //   - 作者写的 markdown 链接:label 像文件名 → 等宽 chip(那是作者的排版意图);
+      //   - 正文裸写的路径:保持正文字体,只加下划线 —— 否则同一句里点亮的路径变成
+      //     等宽块、没点亮的仍是正文,字体/底色/下划线三处齐变,跳变无法解释。
+      // hProperties 是 mdast-util-to-hast 的既有通道,会原样落到 <a> 的属性上,
+      // 再由 MarkdownRenderer 的 a 组件读取并从 DOM props 里剥掉。
+      data: { hProperties: { [BARE_PATH_ATTR]: '' } },
     };
     out.push(link);
     cursor = match.end;

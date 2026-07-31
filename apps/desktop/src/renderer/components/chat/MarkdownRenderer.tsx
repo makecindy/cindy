@@ -22,7 +22,7 @@ import 'katex/dist/katex.min.css';
 import remarkTruncateCjkUrls from './remarkTruncateCjkUrls';
 import remarkStrictInlineMath from './remarkStrictInlineMath';
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
-import remarkLocalPathLinks from './remarkLocalPathLinks';
+import remarkLocalPathLinks, { BARE_PATH_ATTR } from './remarkLocalPathLinks';
 import remarkHtmlImages from './remarkHtmlImages';
 import remarkPreserveLocalImagePaths, {
   RAW_LOCAL_IMAGE_SRC_PROP,
@@ -212,7 +212,27 @@ const REHYPE_PLUGINS: PluggableList = [
   rehypeHighlight,
   rehypeFencedCodeMarker,
 ];
-const MARKDOWN_LINK_CLASS = 'text-[var(--msg-link)] underline underline-offset-2 cursor-pointer [overflow-wrap:anywhere]';
+/**
+ * 聊天正文里一切「可点」的行内元素共用这一套外观:**正文色 + 常显下划线**。
+ *
+ * 两条拍板规则(2026-07-30,权威正文见 docs/design-rules/DESIGN.md「聊天正文的
+ * 可点性信号」):
+ *   ① **下划线常显 = 可点**,且是唯一的交互信号。markdown 里粗体占了字重、斜体占了
+ *      倾斜、行内 code 占了等宽+底色,下划线是唯一没被排版语义占用的通道 —— 所以把
+ *      它专门留给交互语义。反过来:**没有下划线的一律不可点**,行内 code 的等宽+底色
+ *      从此只表示「这是代码/路径」这一层排版含义,不再兼职表达可点。
+ *      (改前:可点的 FileTargetChip 用实色底 1.26:1,不可点的行内 code 用半透明底
+ *      dark 1.26~1.28:1 —— 静止状态下数值几乎相同,只能靠 hover 与指针形状区分,
+ *      等于「必须拿鼠标扫一遍才知道哪个能点」。)
+ *   ② **外链与本地文件不做外观区分**,只表达「可点」;去哪由文本自身可读性承担
+ *      (斜杠路径 vs `https://` 前缀)。
+ *
+ * 因此这里**刻意不用** `--msg-link`:它是主题契约(10 个内置主题各自定义,solarized
+ * 绿 / monokai 黄 / eclipse 青,用户导入 VS Code 主题时 linkColor 也映射到它),而手机端
+ * 根本没有链接色概念。要「两端统一 + 外链本地同形」,聊天正文就得退出这个 token。
+ * token 本身保留(其它界面仍在用),只是不再进 markdown 正文。
+ */
+const MARKDOWN_LINK_CLASS = 'underline underline-offset-2 cursor-pointer [overflow-wrap:anywhere]';
 /**
  * markdown 行内 code —— 几何与底色对齐 GitHub(6px 圆角 + 左右内距 + 半透明淡底,
  * 见 --msg-md-inline-code-bg 的说明)。
@@ -947,8 +967,19 @@ function FileTargetChip({
         className={cn(
           'inline rounded-[6px] border-0 px-1 py-0.5',
           'font-mono text-14 align-baseline',
-          'bg-[var(--msg-code-inline-bg)]',
-          'text-[var(--msg-assistant-text)]',
+          // 底色改用 markdown 行内 code 的同一个 token:按新规则底色只表示「这是
+          // 代码/路径」这层排版含义,可点性由下划线单独承担 —— 可点的路径与不可点的
+          // 行内 code 本来就是同一种排版物,底色理应相同。顺带解掉旧的撞色问题:
+          // 原先实色 --msg-code-inline-bg(1.26:1)与行内 code 半透明底(dark
+          // 1.26~1.28:1)数值几乎一样,却被指望承担「可点」信号。
+          'bg-[var(--msg-md-inline-code-bg)]',
+          // 刻意**不**钉 text-,与 INLINE_CODE_CLASS 一样让文字色继承上下文
+          // (对齐 GitHub:`.markdown-body code` 不定义 color)。这样可点 chip 与
+          // 不可点行内 code 在任何上下文里都同色,差别只剩那条下划线;原先钉
+          // --msg-assistant-text 在助手气泡里与继承值相同,但在引用块等压暗/变色
+          // 上下文里会分叉。
+          // 常显下划线 = 唯一的可点信号(不是 hover 才出现)。
+          'underline underline-offset-2',
           'text-left break-all',
           'transition-colors',
           'cursor-pointer hover:bg-[var(--cmd-palette-item-hover)]',
@@ -1292,6 +1323,7 @@ function MarkdownTargetLink({
   setModelLightboxPath,
   anchorProps,
   allowPrivilegedLinks,
+  fromBarePath,
   remoteMediaOrigin,
   sessionId,
 }: {
@@ -1305,6 +1337,12 @@ function MarkdownTargetLink({
   setModelLightboxPath: (absPath: string | null) => void;
   anchorProps: Record<string, unknown>;
   allowPrivilegedLinks: boolean;
+  /**
+   * 这条 link 由 remarkLocalPathLinks 从正文纯文本切出(不是作者手写的
+   * `[label](path)`)。为 true 时点亮**只加下划线、不套等宽 chip**——见下方
+   * shouldRenderCodeReferenceLabel 的调用点与 DESIGN.md §14.5。
+   */
+  fromBarePath?: boolean;
   /** 远程会话媒体来源:把 xdt-audio:// 等链接改写到 cindy-remote-media://;本地 undefined。 */
   remoteMediaOrigin?: RemoteMediaOrigin;
   /** 当前会话 id;就位时外链 / html 文件左键弹"打开方式"菜单。 */
@@ -1348,7 +1386,11 @@ function MarkdownTargetLink({
         setTextLightboxFile,
         setModelLightboxPath,
       );
-    if (!shouldRenderCodeReferenceLabel(target, children)) {
+    // 正文裸写的路径:一律走下划线链接形态,不进等宽 chip 分支。它的未点亮态是普通
+    // 正文,套上等宽会让同一句里点亮/未点亮的两条路径在字体、底色、下划线三处齐变
+    // (DESIGN.md §14.5「可点态只多一条下划线」)。作者手写的 `[README.md](path)`
+    // 不受影响 —— 那是作者的排版意图,继续按 label 形态决定 chip。
+    if (fromBarePath || !shouldRenderCodeReferenceLabel(target, children)) {
       return (
         <ResolvedLocalLink
           resolvedAbsPath={target.absPath}
@@ -1635,7 +1677,12 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
         // currently inject className on <a>, but relying on that is fragile.
         // Explicit drop guarantees our link styling is never overridden by an
         // upstream change. `node` is the mdast node — not a valid DOM prop.
-        const safeProps = omitMarkdownInternalProps(props as Record<string, unknown>);
+        const rawProps = props as Record<string, unknown>;
+        // remarkLocalPathLinks 打的标记:这条 link 来自正文裸写的路径,不是作者手写的
+        // `[label](path)`。读完即从 DOM props 里剥掉(它只是内部信道,不该落到 <a> 上)。
+        const fromBarePath = BARE_PATH_ATTR in rawProps;
+        const safeProps = omitMarkdownInternalProps(rawProps);
+        delete safeProps[BARE_PATH_ATTR];
         if (allowPrivilegedLinks && href != null && hasDeepLinkPathPrefix(href, 'session-card/')) {
           const parsed = parseSessionCardHref(href);
           if (parsed) {
@@ -1681,6 +1728,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
             setModelLightboxPath={setModelLightboxPath}
             anchorProps={safeProps}
             allowPrivilegedLinks={allowPrivilegedLinks}
+            fromBarePath={fromBarePath}
             remoteMediaOrigin={remoteMediaOrigin}
             sessionId={currentSessionId}
           >

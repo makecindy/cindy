@@ -617,6 +617,80 @@ default into components.
   - **Scope boundary**: this seal only. The closing-ring language must not leak into other spinners or progress indicators. Implementation: `apps/desktop/src/renderer/components/chat/GhostSummonCard.tsx` + `.summon-seal-*` in `globals.css`.
 - **Retired: mobile-download QR brand edge** — a rotating app-icon edge on the `MobileDownloadDialog` QR card was briefly registered here as a fourth (persistent) motion class on 2026-07-25 and **removed the same day** at the user's request: read as a strange ring turning behind the code. There is **no sanctioned persistent decorative motion** — the red lines above hold without exception. The card is now a bare QR (no edge, no border, no shadow, no tilt); its only motion is the linked ↔ onboarding size tween. Do not re-add. Contract test: `mobileDownloadDialog.test.tsx` → `keeps the QR card flat with no brand edge`.
 
+### 14.5 聊天正文的可点性信号(Clickability in message bodies)
+
+> 拍板 2026-07-30。起因:用户问「哪些是链接可以点、哪些不是，现在是不是看得不够清楚？」
+> 排查结论是**两个独立缺陷叠在一起**,且方向相反——加强可点信号会放大误判,所以两者必须
+> 一起修。本节是聊天正文(消息气泡 + 文件阅读器)可点性的权威口径。
+
+**缺陷一:装饰被两种正交语义共用。** 「等宽 + 底色」既表示「这是代码/路径」(排版语义),
+又被指望表示「这个能点」(交互语义),读者无法从外观反推可点性。实测数值:改前桌面可点的
+`FileTargetChip` 用实色底(1.26:1),不可点的 markdown 行内 code 用半透明底(light
+1.11~1.13:1 / **dark 1.26~1.28:1**)——深色模式下两者几乎相同,只能靠 hover 与指针形状
+区分,等于「必须拿鼠标扫一遍才知道哪个能点」;移动端无 hover 无指针,该信号直接不存在。
+
+**缺陷二:普通行内 code 会被误判成可点。** 行内 code 的候选判定曾挂一条宽松兜底
+(桌面 `classifyMarkdownHref` / 移动 `looksLikeLocalHref`:含分隔符**或**有个点后缀即算
+本地路径)。那是**显式 markdown 链接**的口径——作者写了 `[x](y)` 就是主动声明;反引号只
+表示「这是代码」,不表示「这是路径」。实测 29 个真实行内 code 样本有 **21 个**成为路径候选
+(`and/or`、`text/plain`、`A/B`、`n/a`、`1.2`、`array.map`、`console.log` …)。
+
+#### 规则
+
+1. **下划线常显 = 可点,且是唯一的交互信号。** markdown 里粗体占了字重、斜体占了倾斜、
+   行内 code 占了等宽+底色,**下划线是唯一没被排版语义占用的通道**,故专留给交互语义。
+   反过来:**没有下划线的一律不可点**。底色/等宽从此只表示排版含义,不再兼职表达可点
+   (所以可点的路径 chip 与不可点的行内 code **共用同一个底色 token** —— 它们本来就是
+   同一种排版物,差别只在那条下划线)。hover 变色与 `cursor:pointer` 降为**辅助**反馈,
+   不再是主信号:静止状态下就必须能判断。
+
+   **「唯一」是字面意思:可点态相对不可点态,只能多一条下划线,不得另外改文字颜色、
+   字重或字体。** 差异越单一,「有横线 = 能点」越可信;叠三个信号反而让读者无法归纳出
+   规则。参照 GitHub(2026-07-31 核对其 `github-markdown.css`):`.markdown-body code`
+   **刻意不定义 `color`**、纯靠继承,`.markdown-body a` 也只有 `text-decoration`、
+   没有 `font-weight`;可点与不可点的行内 code 差别就是那条横线。
+   落地推论两条:
+   - 移动端 `markdownPathChip` **只写 `textDecorationLine: 'underline'`**。它总是叠在
+     `markdownInlineCode` 之后,于是自然继承行内 code 的压暗档 —— 压暗是「这是代码」的
+     排版语义,继承它才对。(2026-07-30 首版曾在此钉 `textPrimary + medium`,那是下划线
+     还不是主信号时的补偿,信号收敛后即为冗余,已移除。)
+   - **正文裸写的路径点亮后保持正文字体,只加下划线 —— 两端同口径**(2026-07-31 实机
+     走查后拍板)。它的未点亮态是普通正文,若点亮就套等宽,同一句里点亮的 `src/a.ts`
+     与未点亮的 `src/b.ts` 会在**字体、底色、下划线三处齐变**,跳变无法向用户解释。
+     - 移动端:`LinkPathChipSpan` 的 chipStyle 不得含 `markdownInlineCode`。
+     - 桌面端:`remarkLocalPathLinks` 给切出的 link 节点打 `data-bare-path` 标记
+       (走 mdast `data.hProperties`),`MarkdownTargetLink` 见到它就跳过
+       `shouldRenderCodeReferenceLabel`、直接走下划线链接形态。
+     - **作者手写的 `[README.md](path)` 不受此限**:label 像文件名时仍渲染成等宽
+       chip —— 那是作者的排版意图,且它的未点亮态本来就是同一段 label,不存在跳变。
+2. **外链与本地文件不做外观区分**,只表达「可点」;去哪由文本自身可读性承担(斜杠路径
+   vs `https://` 前缀)。
+3. **聊天正文不使用 `--msg-link`。** 该 token 是主题契约(10 个内置主题各自定义,
+   solarized 绿 / monokai 黄 / eclipse 青,用户导入 VS Code 主题时 `linkColor` 也映射到
+   它),而移动端根本没有链接色概念。要满足规则 1+2 的「两端统一」,聊天正文必须退出这个
+   token,统一为**正文色 + 常显下划线**。token 本身保留(其它界面仍在用),只是不进
+   markdown 正文与用户消息气泡。
+4. **候选判定:反引号不等于路径。** 行内 code 只接受真正的路径形状——带分隔符 / 绝对路径,
+   或裸文件名;**不得**用「含斜杠或有个点后缀」兜底。显式 markdown 链接与正文裸路径不受此
+   限(前者作者已声明,后者词法本就要求带分隔符)。
+5. **无法判定时的点亮门槛按形态分级**(移动端远端 stat 语义;桌面解析不到一律纯文本):
+   带分隔符 / 绝对路径形状明确是路径,`unknown`(链路断)仍乐观点亮,不因断链把整条消息的
+   chip 全灭;**无分隔符的裸文件名**与属性访问(`array.map`、`Date.now`)词法同形,必须
+   等远端明确回 `file` / `directory` 才点亮。否则链路一抖,满屏普通行内 code 变成可点的
+   假链接——**「可点」的视觉信号一旦不可信,加强它只会让误判更醒目**。
+
+#### 落点
+
+| 端 | 位置 |
+|---|---|
+| 桌面 | `MarkdownRenderer.tsx` 的 `MARKDOWN_LINK_CLASS` / `FileTargetChip`;`UserMessage.tsx` + `UserMessageUrlLink.tsx`;候选判定在 `lib/markdownTarget.ts` |
+| 移动 | `MessageRenderer.tsx` 的 `markdownLink` / `markdownPathChip` / `sessionLinkChipText` 与 `ChatPathChipSpan` 的点亮门槛;候选判定在 `session/chatPathCandidate.ts` |
+| 文件阅读器 | `session/selectableMarkdownHtml.ts` 的 `a` / `.xdt-image-chip` / `.xdt-session-chip`;本地路径在该面无 chip 基础设施,渲染为纯文本(不出死链) |
+
+契约测试:`apps/mobile/src/__tests__/chatPathCandidate.test.ts`(候选精度 + 分级门槛)、
+`apps/mobile/src/__tests__/selectableMarkdownHtml.test.ts`(阅读器可点元素均带下划线)、
+`apps/desktop/src/renderer/__tests__/markdownTarget.test.ts`(行内 code 不收宽松兜底)。
+
 ## 15. CINDY Skin Family(品牌化可选 family)
 
 > This section records the CINDY skin family; it does **not** rewrite the §1–7 default-skin rules. Values were finalized from design-stage working files (`skin-docs/10-specs/` desktop, `skin-docs/30-mobile/` mobile errata — **not in this repo**, same status as the §16 login working files) plus the user's final sign-off of 2026-07-18. Zero discretion at implementation time: within the repo, the authoritative encodings are the theme files (`cindy-light.ts` / `cindy-dark.ts`), `cindyDecisionData.ts`, and the frozen tests — this section is their prose summary.

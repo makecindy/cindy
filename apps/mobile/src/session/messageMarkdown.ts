@@ -1,5 +1,9 @@
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
-import { classifyChatPathLinkTarget, resolveChatAbsPath } from '@/session/chatPathCandidate';
+import {
+  classifyChatPathLinkTarget,
+  findBareFilePathMatch,
+  resolveChatAbsPath,
+} from '@/session/chatPathCandidate';
 import { DEEP_LINK_SCHEME_GROUP } from '@/session/sessionLinks';
 import { i18n } from '@/i18n';
 
@@ -628,6 +632,11 @@ function findNextInlineToken(
     // URL 经 classifyChatPathLinkTarget 判形状(http/session 之外的路径形态才收),
     // 渲染层再经被控端 stat 决定点亮 chip 还是保持纯文本标签。
     matchLocalPathLink(input, from),
+    // 正文纯文本里裸写的本地路径(`见 src/App.tsx 第 20 行`、`改的是 C:\proj\a.ts`):
+    // 模型高频形态,桌面端由 remarkLocalPathLinks 切成 link 节点,这里补齐同一入口。
+    // 产出 link inline 后与 `[label](path)` 形态共用 LinkPathChipSpan → 远端 stat →
+    // 点亮 chip / 保持纯文本。
+    matchBareFilePathLink(input, from, startsInsideHtmlComment),
     matchRegex(input, from, /`([^`]+)`/g, (match) => ({ type: 'code' as const, text: match[1] })),
     // inline math:$$x$$(双 dollar 行内形态)与 $x$。候选按起点排序,公式起点
     // 的 $ 早于公式体内的 * / _,强调规则不会拆走公式内容。单 dollar 采用
@@ -714,6 +723,50 @@ function matchLocalPathLink(
     };
   }
   return null;
+}
+
+// 正文纯文本裸路径 matcher(桌面 remarkLocalPathLinks 的分词层对等物)。词法判定在
+// chatPathCandidate.findBareFilePathMatch 里(含「必须带分隔符」的严判与廉价短路),
+// 这里只负责两件事:注释内压制、包装成 link inline。
+//
+// **不需要为「别抢走包裹语法」做特判**:`[图](/a.png)` / `![图](/a.png)` /
+// `` `src/a.ts` `` / `https://x.com/a/b.png` 这些形态里,包裹语法候选的起点 index 都
+// 严格小于其内部路径的 index,findNextInlineToken 既有的 index 升序排序天然让它们胜出。
+// 反过来,未闭合的反引号(`` `src/a.ts `` 流式中途)不构成 code span,此时裸路径照常
+// 命中——与桌面 remark 同口径(remark 也不会把它当 inlineCode)。
+function matchBareFilePathLink(
+  input: string,
+  from: number,
+  startsInsideHtmlComment = false,
+): { index: number; end: number; inline: MobileMarkdownInline } | null {
+  // 廉价短路:绝大多数消息段既不含 `<!--`、也不在跨块注释里,不为它们付
+  // blankCodeSpans + blankEscapedAngles 两趟整串拷贝的开销(本函数在渲染热路径上
+  // 逐 token 调用;同 HTML_IMG_HINT_RE / MARKDOWN_IMAGE_HINT_RE 的套路)。
+  const needsCommentCheck = startsInsideHtmlComment || input.includes('<!--');
+  let cursor = from;
+  // 注释 span 定位与 matchHtmlImage / matchMarkdownImage 同口径:在 code-span 与转义
+  // `<` 空白填充(偏移保持)的副本上判定,行内代码里的字面 `<!--` 不把后文毒化成
+  // 「注释内」。命中在注释里的跳过(桌面侧注释是 html 节点、插件根本看不到,压制
+  // 才是同口径),注释外的照常识别。
+  let commentProbe: string | null = null;
+  for (;;) {
+    const match = findBareFilePathMatch(input, cursor);
+    if (!match) return null;
+    if (needsCommentCheck) {
+      if (commentProbe === null) commentProbe = blankEscapedAngles(blankCodeSpans(input));
+      if (isInsideHtmlComment(commentProbe, match.index, startsInsideHtmlComment)) {
+        cursor = match.end;
+        continue;
+      }
+    }
+    return {
+      index: match.index,
+      end: match.end,
+      // 裸形态没有独立 label,显示文本就是路径原文(桌面切出的 link 节点同样以
+      // 路径原文作 children)。
+      inline: { type: 'link', text: match.value, url: match.value },
+    };
+  }
 }
 
 function matchRegex(

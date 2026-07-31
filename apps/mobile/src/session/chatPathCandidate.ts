@@ -149,12 +149,34 @@ export interface ChatPathCandidate {
   column?: number;
   /** 尾斜杠目录形态:verdict 为 unknown(乐观点亮)时按目录处理。 */
   directoryShape: boolean;
+  /**
+   * 「形状上无法与普通代码/散文区分」的歧义候选。词法层真的分不开:
+   *   - 无分隔符裸名:`package.json` 与 `array.map` / `Date.now` 结构完全同形
+   *     (`.map` / `.log` / `.now` 既是真实扩展名也是方法名);
+   *   - 有分隔符但无扩展名:`src/components` 与 `and/or` / `n/a` / `read/write`
+   *     结构完全同形。
+   *
+   * 用途是**把乐观点亮降级**(见 MessageRenderer.ChatPathChipSpan),而**不是**把它们
+   * 排除出候选——排除会连 `` `src/components` `` 这类真实目录引用一起砍掉,那是能力
+   * 倒退。歧义候选照旧发 stat,只是必须等远端明确回 file / directory 才点亮:
+   * 真实存在的照常可点,`and/or` 这种永远不存在的自然保持纯文本,链路断时也不会
+   * 变成可点的假链接。
+   *
+   * 反过来,形状明确是路径的(绝对路径 / 尾斜杠目录 / 分隔符+扩展名)不算歧义,
+   * 链路断时仍乐观点亮——不因断链把整条消息的 chip 全灭掉。
+   */
+  ambiguousShape: boolean;
 }
 
 /**
  * inline code 文本 → 路径候选(与桌面 classifyInlineCodeTarget 同语义)。
  * 首尾空白 / 多行 / scheme 前缀(`mailto:`、`git+ssh://`)一律不候选;
  * 候选 ≠ 点亮,存在性由 remotePathVerdict 远端 stat 决定。
+ *
+ * 候选口径刻意保持宽松(与桌面 classifyInlineCodeTarget 同步):`src/components`
+ * 这类「有分隔符、无扩展名」的真实目录引用必须收进来,而它与 `and/or` / `n/a`
+ * 词法完全同形,想靠形状把后者排除就一定会连前者一起砍掉。精度不在这一层解决,
+ * 由 ambiguousShape 把点亮门槛提高(见该字段说明)。
  */
 export function classifyInlineCodePathCandidate(text: string): ChatPathCandidate | null {
   const raw = text.trim();
@@ -166,7 +188,8 @@ export function classifyInlineCodePathCandidate(text: string): ChatPathCandidate
   if (looksLikeDirectoryPath(href)) {
     const stripped = href.replace(/[\\/]+$/, '');
     if (!stripped) return null;
-    return { href: stripped, directoryShape: true };
+    // 尾斜杠是作者显式给出的目录信号,形状明确 → 不算歧义。
+    return { href: stripped, directoryShape: true, ambiguousShape: false };
   }
   if (!looksLikeFilePath(href) && !looksLikeBareFileReference(href) && !looksLikeLocalHref(href)) {
     return null;
@@ -174,6 +197,9 @@ export function classifyInlineCodePathCandidate(text: string): ChatPathCandidate
   return {
     href,
     directoryShape: false,
+    // 明确的路径形状 = 绝对路径 ∨ (分隔符 ∧ 扩展名),两者都由 looksLikeFilePath 覆盖;
+    // 其余(裸名、分隔符无扩展)进歧义档,需远端明确确认才点亮。
+    ambiguousShape: !looksLikeFilePath(href),
     ...(lineInfo.line !== undefined ? { line: lineInfo.line } : {}),
     ...(lineInfo.column !== undefined ? { column: lineInfo.column } : {}),
   };
@@ -183,7 +209,12 @@ export function classifyInlineCodePathCandidate(text: string): ChatPathCandidate
  * markdown 链接目标 → 路径候选(与桌面 classifyMarkdownLinkTarget 的 local 分支
  * 同语义):`[README.md](/abs/path/README.md:17)` 这类模型高频输出的本地路径链接。
  * http(s) / 锚点 / 非 file 的 scheme 一律不候选(那些走原有 link 渲染分支);
- * 与 inline code 版的差异:不要求原文无首尾空白(URL 在括号里,天然精确)。
+ * 与 inline code 版的两处差异:
+ *   ① 不要求原文无首尾空白(URL 在括号里,天然精确);
+ *   ② 这里**保留** looksLikeLocalHref 的宽松兜底,且 ambiguousShape 恒 false——
+ *      `[配置](package.json)` 是作者(或模型)显式写出的链接目标,不存在「其实是
+ *      属性访问」的歧义,所以不需要 inline code 那道降级门。裸路径入口
+ *      (findBareFilePathMatch)同理:它的词法本就要求带分隔符。
  */
 export function classifyChatPathLinkTarget(url: string): ChatPathCandidate | null {
   const raw = url.trim();
@@ -197,12 +228,13 @@ export function classifyChatPathLinkTarget(url: string): ChatPathCandidate | nul
   if (looksLikeDirectoryPath(href)) {
     const stripped = href.replace(/[\\/]+$/, '');
     if (!stripped) return null;
-    return { href: stripped, directoryShape: true };
+    return { href: stripped, directoryShape: true, ambiguousShape: false };
   }
   if (!looksLikeLocalHref(href)) return null;
   return {
     href,
     directoryShape: false,
+    ambiguousShape: false,
     ...(lineInfo.line !== undefined ? { line: lineInfo.line } : {}),
     ...(lineInfo.column !== undefined ? { column: lineInfo.column } : {}),
   };
@@ -294,4 +326,86 @@ export function pathDisplayName(p: string): string {
  */
 export function canOpenChatPathChip(kind: 'file' | 'directory', relPath: string | null): boolean {
   return kind === 'file' || relPath !== null;
+}
+
+// ── 正文纯文本裸路径的词法定位(桌面 remarkLocalPathLinks 的移植) ──────────
+//
+// 桌面端把「回复正文纯文本里长得像本地路径的 token」切成 mdast link 节点
+// (apps/desktop/src/renderer/components/chat/remarkLocalPathLinks.ts),从而复用
+// 既有链接渲染链路;手机端 messageMarkdown 的 inline 分词器没有对应入口,裸路径
+// 一直只是纯文本。下面是该插件正则与 findPathMatches 的等价移植;正则任一侧改动
+// 都要同步另一侧(同本文件头注释的两端同步约定)。
+//
+// 匹配策略沿用桌面口径(桌面侧有同款说明):
+//   - 用「正向路径正则」定位 token,而不是按空白切再剥边——后者在中文里
+//     (`src/App.tsx,然后呢` 这种路径直接黏着中文)会把尾巴一起吞掉判废。正向
+//     正则在**扩展名**处收尾,尾随的中文/标点天然落在 match 之外。
+//   - 只认**带路径分隔符**的形态(相对含 `/` 或 `\` + 扩展名、`./` `../` `~/`
+//     开头、POSIX 绝对、Windows 盘符)。裸文件名(`app.tsx`)在正文里太歧义,
+//     不碰——这点比 inline code 更严(inline code 是作者主动用反引号标注的格式
+//     信号,走 looksLikeBareFileReference)。
+//   - 左边界用负向 lookbehind 卡死:路径前一个字符必须是边界,不能是另一个路径
+//     字符,避免从中文 prose 中间起切。
+//
+// 已知限制(CJK 既可能是 prose 也可能是真实目录名 `我的看板`,词法层无法区分,故
+// 一律当作路径段字符;代价在「无空白边界紧贴中文」时显现,均与现状一致、本就点不动,
+// 不是回退):
+//   - 前导紧贴:`见src/x.ts` → `见` 被并入 token,解析不到 → 纯文本。
+//   - 中文黏连两条真路径:`a/b.ts和c/d.ts` → 中间的 `和` 被当成路径段,整串吞成
+//     **一个** token,两条真路径都点不亮。
+//   要救这些只能把 CJK 当分隔符,但那会反过来切断 `docs/设计稿/index.md` 里的中文
+//   目录名,得不偿失,故不做。
+
+// CJK / 假名 / 谚文:可作为路径段的一部分(如 `docs/设计稿/index.md`)。
+const BARE_PATH_CJK = '\\u4e00-\\u9fff\\u3400-\\u4dbf\\u3040-\\u30ff\\uac00-\\ud7af';
+// 路径段允许的字符(不含分隔符、不含 `:`)。`:` 留给盘符锚点与 `:line` 后缀。
+const BARE_PATH_SEG = `[A-Za-z0-9._~@+\\-${BARE_PATH_CJK}]+`;
+const BARE_PATH_SEP = '\\\\/'; // 反斜杠 + 正斜杠,字符类内用
+// 锚点:盘符 `C:\` / `./` `../` `~/` / 单独的分隔符开头。
+const BARE_PATH_ANCHOR = `(?:[A-Za-z]:[${BARE_PATH_SEP}]|[.~]{1,2}[${BARE_PATH_SEP}]|[${BARE_PATH_SEP}])`;
+// 路径主体:要么有锚点(中间段可有可无),要么是「段+分隔符」至少一组(保证含分隔符);
+// 末段必须以扩展名收尾。
+const BARE_PATH_BODY =
+  `(?:${BARE_PATH_ANCHOR}(?:${BARE_PATH_SEG}[${BARE_PATH_SEP}])*`
+  + `|(?:${BARE_PATH_SEG}[${BARE_PATH_SEP}])+)${BARE_PATH_SEG}\\.[A-Za-z0-9]{1,10}`;
+// 可选 `:line[:column]` 行号后缀。
+const BARE_PATH_LINE_SUFFIX = '(?::[1-9]\\d{0,6}(?::[1-9]\\d{0,6})?)?';
+// 左边界:前一个字符不能是路径字符 / 分隔符(`:` 不算,允许 `文件:src/x.ts`)。
+const BARE_PATH_LEFT_BOUNDARY = `(?<![A-Za-z0-9._~@+${BARE_PATH_CJK}${BARE_PATH_SEP}])`;
+const BARE_PATH_RE_SOURCE =
+  `${BARE_PATH_LEFT_BOUNDARY}(${BARE_PATH_BODY}${BARE_PATH_LINE_SUFFIX})`;
+
+export interface BareFilePathMatch {
+  /** 在 input 里的起始下标。 */
+  index: number;
+  /** 结束下标(不含)。 */
+  end: number;
+  /** 命中的路径文本(含可能的 `:line` 后缀,交给渲染层再拆)。 */
+  value: string;
+}
+
+/**
+ * 在一段纯文本里定位从 `from` 起**第一条**「带分隔符、可解析形状」的裸路径。
+ * 与桌面 findPathMatches 同一套复核口径:剥行号后缀 → looksLikeFilePath,与
+ * inline code / 链接共用同一组谓词,「什么算文件路径」全仓一致。
+ *
+ * 候选 ≠ 点亮:`16/9.0`、`a/b.c` 这类形状达标的误命中同样返回,存在性由远端
+ * stat(remotePathVerdict)兜底,解析不到就保持纯文本。
+ */
+export function findBareFilePathMatch(input: string, from: number): BareFilePathMatch | null {
+  // 不含任何路径分隔符的文本一定不是带分隔符路径。这条短路在渲染热路径上逐 token
+  // 生效(见 messageMarkdown.findNextInlineToken),不能省。
+  if (!input.includes('/') && !input.includes('\\')) return null;
+  // 每次调用新建:`g` 标志的 lastIndex 是可变状态,模块级共享在提前 return /
+  // 未过重置路径时会漏匹配(同 messageMarkdown 里各 matcher 的既有约定)。
+  const re = new RegExp(BARE_PATH_RE_SOURCE, 'g');
+  re.lastIndex = Math.max(0, from);
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(input)) !== null) {
+    const value = m[1];
+    if (!looksLikeFilePath(splitChatPathLineSuffix(value).href)) continue;
+    const index = m.index + (m[0].length - value.length);
+    return { index, end: index + value.length, value };
+  }
+  return null;
 }

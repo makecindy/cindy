@@ -121,3 +121,61 @@ describe('buildSelectableMarkdownHtml 代码块内不套行内 code 装饰', () 
     expect(html).toContain('<code>');
   });
 });
+
+describe('buildSelectableMarkdownHtml 本地路径不出死链', () => {
+  // 本模块只服务文件阅读器 WebView,而 MarkdownFileReader 的 interceptNavigation
+  // 只放行 http(s)、其余一律拦下 —— 本地路径若渲染成 <a> 就是「蓝色但点不动」的死链。
+  // 阅读器里没有 chip / 远端 stat 基础设施,所以按纯文本呈现(与原生侧「未点亮 →
+  // 纯文本」同语义)。
+
+  it('markdown 形态的本地路径链接渲染成纯文本,不出 <a>', () => {
+    const html = buildSelectableMarkdownHtml('见 [README.md](/Users/me/proj/README.md:17) 补充');
+    expect(html).toContain('README.md');
+    expect(html).not.toContain('<a href="/Users/me/proj/README.md:17"');
+    expect(html).not.toContain('/Users/me/proj/README.md');
+  });
+
+  it('正文裸写的本地路径同样是纯文本', () => {
+    const html = buildSelectableMarkdownHtml('见 src/App.tsx 第 20 行');
+    expect(html).toContain('src/App.tsx');
+    expect(html).not.toContain('<a href="src/App.tsx"');
+  });
+
+  it('http(s) 链接仍是可点 <a>(阅读器会交给系统浏览器)', () => {
+    const html = buildSelectableMarkdownHtml('见 [站点](https://example.com/a.ts)');
+    expect(html).toContain('<a href="https://example.com/a.ts">站点</a>');
+  });
+
+  it('会话深链 chip 不受影响', () => {
+    const html = buildSelectableMarkdownHtml('[某会话](cindy://session/abc123)');
+    expect(html).toContain('xdt-session-chip');
+    expect(html).toContain('cindy://session/abc123');
+  });
+});
+
+describe('阅读器可点元素一律带常显下划线(DESIGN.md §14.5 规则 1)', () => {
+  // 「下划线常显 = 可点」是聊天正文与阅读器共用的唯一交互信号。这里钉住 CSS:
+  // 三类可点元素(外链 a / 图片 chip / 会话 chip)都必须有 text-decoration: underline,
+  // 谁把它改回 none 就等于让那类元素静止状态下看不出可点。
+  const CLICKABLE_SELECTORS = ['a', '.xdt-image-chip', '.xdt-session-chip'];
+
+  it('a / .xdt-image-chip / .xdt-session-chip 的规则块里都有 underline', () => {
+    const html = buildSelectableMarkdownHtml(DOC);
+    for (const selector of CLICKABLE_SELECTORS) {
+      // 取该选择器紧随的规则块(到第一个 `}` 为止)。
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const block = new RegExp(`(?:^|\\n)\\s*${escaped}\\s*\\{([^}]*)\\}`).exec(html);
+      expect(block, `未找到 ${selector} 的样式规则`).not.toBeNull();
+      expect(block![1], `${selector} 缺少常显下划线`).toMatch(/text-decoration:\s*underline/);
+    }
+  });
+
+  it('没有任何可点选择器把下划线关成 none', () => {
+    const html = buildSelectableMarkdownHtml(DOC);
+    for (const selector of CLICKABLE_SELECTORS) {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const block = new RegExp(`(?:^|\\n)\\s*${escaped}\\s*\\{([^}]*)\\}`).exec(html);
+      expect(block![1], `${selector} 把下划线关掉了`).not.toMatch(/text-decoration:\s*none/);
+    }
+  });
+});

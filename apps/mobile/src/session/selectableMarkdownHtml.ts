@@ -4,6 +4,7 @@ import {
   type MobileMarkdownBlock,
   type MobileMarkdownInline,
 } from '@/session/messageMarkdown';
+import { classifyChatPathLinkTarget } from '@/session/chatPathCandidate';
 import { tokenizeCode } from '@/session/codeHighlight';
 import { parseSessionDeepLinkUrl, shortSessionId } from '@/session/sessionLinks';
 import { buildKatexLoaderJs } from '@/session/mathWebViewHtml';
@@ -344,7 +345,10 @@ function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): str
       display: inline-block;
       max-width: 100%;
       padding: 0 6px;
-      text-decoration: none;
+      /* 下划线常显:会话 chip 可点,而「下划线常显 = 可点」是唯一交互信号
+         (docs/design-rules/DESIGN.md「聊天正文的可点性信号」)。底色 / 边框只作
+         chip 观感,不兼职表达可点 —— 上面的 a 与 .xdt-image-chip 已是同一口径。 */
+      text-decoration: underline;
       vertical-align: bottom;
     }
     table {
@@ -452,6 +456,14 @@ function renderInline(inline: MobileMarkdownInline, ctx: RenderContext = {}): st
           ctx.sessionLinkTitles?.[session.sessionId] ??
           i18n.t('message.renderer.sessionChipFallback', { id: shortSessionId(session.sessionId) });
         return `<a class="xdt-session-chip" href="${escapeAttribute(inline.url)}">›&nbsp;${escapeHtml(title)}</a>`;
+      }
+      // 本地路径目标(`[README.md](/abs/README.md:17)`,以及正文裸写的路径)渲染成
+      // 纯文本,不出 `<a>`:本模块只服务文件阅读器 WebView,而 MarkdownFileReader 的
+      // interceptNavigation 只放行 http(s)、其余一律拦下,`<a href="src/a.ts">` 是
+      // 「蓝色但点不动」的死链。与原生侧「未点亮 → 纯文本」同语义(阅读器里没有
+      // chip / 远端 stat 基础设施,让文档里的路径也可点属于另一个功能)。
+      if (classifyChatPathLinkTarget(inline.url)) {
+        return escapeHtml(inline.text);
       }
       return `<a href="${escapeAttribute(inline.url)}">${escapeHtml(inline.text)}</a>`;
     }

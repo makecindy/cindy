@@ -3591,7 +3591,17 @@ function ChatPathChipSpan({
     };
   }, [ctx, streaming, target]);
 
-  const lit = !!ctx && !!candidate && !!target && verdict !== undefined && verdict !== 'nonfile';
+  // 点亮门槛分两档(见 ChatPathCandidate.ambiguousShape 的说明):
+  //   - 形状明确是路径(绝对路径 / 尾斜杠目录 / 分隔符+扩展名):unknown(链路断 /
+  //     stat 异常)照旧乐观点亮,绝不因断链把整条消息的 chip 全灭掉;
+  //   - 歧义形状(裸名 `array.map`、分隔符无扩展 `and/or`——与 `package.json`、
+  //     `src/components` 词法同形,分不开):必须等远端明确回 file / directory 才点亮。
+  //     否则链路一抖,满屏普通行内 code 都变成可点的假链接——「可点」的视觉信号一旦
+  //     不可信,加强它只会让误判更醒目(DESIGN.md §14.5 规则 5)。
+  const verdictAllowsLit = candidate?.ambiguousShape
+    ? verdict === 'file' || verdict === 'directory'
+    : verdict !== undefined && verdict !== 'nonfile';
+  const lit = !!ctx && !!candidate && !!target && verdictAllowsLit;
   if (!lit) {
     return <SpanText style={plainStyle}>{display}</SpanText>;
   }
@@ -3641,7 +3651,11 @@ function LinkPathChipSpan({
   return (
     <ChatPathChipSpan
       candidate={candidate}
-      chipStyle={[baseStyle, styles.markdownInlineCode, styles.markdownPathChip]}
+      // 链接 / 正文裸路径形态:点亮**只加下划线**,不套 markdownInlineCode。
+      // 否则 plainStyle 是普通正文、chipStyle 却是压暗等宽,同一段话里
+      // `src/a.ts` 点亮、`src/b.ts` 没点亮就会一个是等宽压暗、一个是正文,
+      // 视觉跳变大且无法向用户解释(DESIGN.md §14.5:差异只应是那条横线)。
+      chipStyle={[baseStyle, styles.markdownPathChip]}
       display={display}
       plainStyle={baseStyle}
       SpanText={SpanText}
@@ -5920,17 +5934,22 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     lineHeight: lineHeight.caption,
   },
   markdownBody: { gap: 10 },
+  // 外链 / 会话深链等一切可点行内元素:正文色 + 常显下划线,**不加粗、不换色**
+  // (DESIGN.md §14.5;GitHub 的 `.markdown-body a` 同样只是 text-decoration,
+  // 没有 font-weight)。color 显式写出是为了不被外层压暗样式带走,值就是正文色本身。
   markdownLink: {
     color: colors.textPrimary,
-    fontWeight: fontWeight.medium,
     textDecorationLine: 'underline',
   },
   // 会话深链 chip(非 selectable 原生 Text 路径):嵌套 Text 只支持背景色不支持
   // 圆角,用 surfaceChip 底色近似 chip 观感;WebView 路径的 .xdt-session-chip
   // 才是完整圆角版本。
+  //
+  // 下划线**不再**关掉:会话 chip 是可点的,而「下划线常显 = 可点」是聊天正文的唯一
+  // 交互信号(见 docs/design-rules/DESIGN.md「聊天正文的可点性信号」)。原先靠底色
+  // 单独表达可点,但底色同时被行内 code 等排版语义占用,读者无法据此判断可点性。
   sessionLinkChipText: {
     backgroundColor: colors.surfaceChip,
-    textDecorationLine: 'none',
   },
   // 对齐桌面聊天 markdown:<strong> 走浏览器默认 700,与 400 正文拉开明显对比。
   markdownStrong: { fontWeight: fontWeight.bold },
@@ -5950,12 +5969,17 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontSize: typeScale.code,
     lineHeight: lineHeight.code,
   },
-  // 已验证存在的文件/目录路径 chip:靠「正文色 + medium + 下划线」区别于普通行内
-  // code(后者压暗)。color 必须显式钉回 textPrimary —— 本样式总是叠在
-  // markdownInlineCode 之后,不写就会继承那份压暗色,可点的反而比不可点的更淡。
+  // 已验证存在的文件/目录路径 chip:**只加一条下划线,其它什么都不动**
+  // (权威规则见 docs/design-rules/DESIGN.md §14.5,对齐 GitHub 的口径 ——
+  // `.markdown-body code` 刻意不定义 color、纯靠继承,可点与不可点的行内 code
+  // 差别只在那条横线)。
+  //
+  // 刻意**不**再写 color 与 fontWeight:本样式总是叠在 markdownInlineCode 之后,
+  // 于是可点的行内 code 与不可点的行内 code 同色同字重,只差下划线 —— 差异越单一,
+  // 「有横线 = 能点」这条规则越可信。早先这里钉 textPrimary + medium 是因为当时
+  // 下划线还不是主信号,怕可点的比不可点的更淡;现在信号收敛到下划线,压暗是行内
+  // code 的排版语义,继承它才是对的。
   markdownPathChip: {
-    color: colors.textPrimary,
-    fontWeight: fontWeight.medium,
     textDecorationLine: 'underline',
   },
   markdownInlineImage: {
