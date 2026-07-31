@@ -776,6 +776,7 @@ function resolveLiteLlmCandidate(profile: UtilityModelProfile): UtilityTextCandi
         prompt,
         maxTokens: opts?.maxTokens,
         timeoutMs: opts?.timeoutMs,
+        reasoningEffort: opts?.reasoningEffort,
       }),
     },
   };
@@ -788,6 +789,7 @@ async function requestLiteLlmText(input: {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
+  reasoningEffort?: 'low' | 'medium' | 'high';
 }): Promise<string> {
   const controller = new AbortController();
   const timeoutMs = input.timeoutMs ?? 20_000;
@@ -803,6 +805,7 @@ async function requestLiteLlmText(input: {
       body: JSON.stringify({
         model: input.model,
         ...(input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
+        ...(input.reasoningEffort ? { reasoning_effort: input.reasoningEffort } : {}),
         messages: [{ role: 'user', content: input.prompt }],
       }),
     });
@@ -893,7 +896,7 @@ async function requestProviderHttpText(input: {
   maxTokens?: number;
   timeoutMs?: number;
   reasoningEffort?: 'low' | 'medium' | 'high';
-  /** Some coding-specialized xAI models reject the Responses reasoning field. */
+  /** Some coding-specialized models reject their wire's reasoning field. */
   supportsReasoning?: boolean;
   /** Some private Responses-compatible endpoints reject max_output_tokens. */
   supportsMaxOutputTokens?: boolean;
@@ -927,6 +930,9 @@ async function requestProviderHttpText(input: {
         : {
           model: input.model,
           ...(input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
+          ...(input.reasoningEffort && input.supportsReasoning !== false
+            ? { reasoning_effort: input.reasoningEffort }
+            : {}),
           messages: [{ role: 'user', content: input.prompt }],
         };
     const response = await undiciFetch(input.endpoint, {

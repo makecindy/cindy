@@ -160,7 +160,10 @@ describe('utility one-shot candidates', () => {
       json: async () => ({ choices: [{ message: { content: 'lite text' } }] }),
     } as never);
 
-    const result = await requestUtilityText(maker, 'hello', { maxTokens: 10 });
+    const result = await requestUtilityText(maker, 'hello', {
+      maxTokens: 10,
+      reasoningEffort: 'low',
+    });
 
     expect(result).toMatchObject({
       ok: true,
@@ -168,6 +171,10 @@ describe('utility one-shot candidates', () => {
       providerId: 'litellm-gpt-5.4-mini',
       model: 'gpt-5.4-mini',
       transport: 'litellm-chat-completions',
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      max_tokens: 10,
+      reasoning_effort: 'low',
     });
   });
 
@@ -403,6 +410,7 @@ describe('utility one-shot candidates', () => {
       providerId: 'chat-only',
       agentKind: 'codex',
       model: 'chat-model',
+      reasoningEffort: 'low',
     });
 
     expect(result).toMatchObject({
@@ -416,6 +424,7 @@ describe('utility one-shot candidates', () => {
     );
     expect(JSON.parse(String(vi.mocked(fetchMock).mock.calls[0]?.[1]?.body))).toMatchObject({
       model: 'chat-model',
+      reasoning_effort: 'low',
       messages: [{ role: 'user', content: 'generate' }],
     });
   });
@@ -1120,12 +1129,16 @@ describe('utility one-shot candidates', () => {
       providerId: 'xd',
       agentKind: 'claude-code',
       model: 'gpt-5.5',
+      reasoningEffort: 'low',
     });
 
     expect(result).toMatchObject({ ok: true, providerId: 'xd', model: 'gpt-5.5' });
     expect(getProfiles).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledWith('https://gateway.test.invalid/v1/chat/completions', expect.anything());
-    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({ model: 'gpt-5.5' });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      model: 'gpt-5.5',
+      reasoning_effort: 'low',
+    });
   });
 
   it('uses Anthropic OAuth and the selected Anthropic routing for an explicit builtin provider', async () => {

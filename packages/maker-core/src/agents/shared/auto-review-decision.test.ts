@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   classifyLocalAutoReviewTier,
@@ -8,6 +8,10 @@ import {
 } from './auto-review-decision.js';
 
 const roots = ['/repo', '/extra'];
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function request(action: AutoReviewRequest['action']): AutoReviewRequest {
   return {
@@ -96,6 +100,21 @@ describe('resolveAutoReviewDecision', () => {
       gray,
       async () => ({ verdict: 'unknown' } as never),
     )).resolves.toMatchObject({ verdict: 'block' });
+  });
+
+  it('silently blocks when the reviewer never settles', async () => {
+    vi.useFakeTimers();
+    const pending = resolveAutoReviewDecision(
+      request({ kind: 'exec', command: 'npx tsc --noEmit' }),
+      async () => new Promise<never>(() => {}),
+    );
+
+    await vi.advanceTimersByTimeAsync(8_000);
+
+    await expect(pending).resolves.toMatchObject({
+      verdict: 'block',
+      reason: expect.stringContaining('could not complete'),
+    });
   });
 });
 
