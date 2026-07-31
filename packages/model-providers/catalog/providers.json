@@ -549,38 +549,63 @@
       "regionHint": "cn",
       "runtimes": {
         "claude-code": {
-          "baseUrl": "https://coding.dashscope.aliyuncs.com/apps/anthropic",
-          "modelsUrl": "https://coding.dashscope.aliyuncs.com/v1/models",
+          "baseUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+          "modelsUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/models",
           "models": [
+            {
+              "id": "qwen3.8-max-preview",
+              "name": "Qwen 3.8 Max Preview"
+            },
+            {
+              "id": "qwen3.7-max",
+              "name": "Qwen3.7 Max"
+            },
             {
               "id": "qwen3.7-plus",
               "name": "Qwen3.7 Plus"
             },
             {
-              "id": "qwen3-coder-next",
-              "name": "Qwen3 Coder Next"
+              "id": "qwen3.6-flash",
+              "name": "Qwen3.6 Flash"
             },
             {
-              "id": "qwen3-coder-plus",
-              "name": "Qwen3 Coder Plus"
+              "id": "glm-5.2",
+              "name": "GLM-5.2"
+            },
+            {
+              "id": "deepseek-v4-pro",
+              "name": "DeepSeek V4 Pro"
             }
           ]
         },
         "codex": {
-          "baseUrl": "https://coding.dashscope.aliyuncs.com/v1",
+          "baseUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
           "wireProtocol": "openai-chat",
+          "modelsUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/models",
           "models": [
+            {
+              "id": "qwen3.8-max-preview",
+              "name": "Qwen 3.8 Max Preview"
+            },
+            {
+              "id": "qwen3.7-max",
+              "name": "Qwen3.7 Max"
+            },
             {
               "id": "qwen3.7-plus",
               "name": "Qwen3.7 Plus"
             },
             {
-              "id": "qwen3-coder-next",
-              "name": "Qwen3 Coder Next"
+              "id": "qwen3.6-flash",
+              "name": "Qwen3.6 Flash"
             },
             {
-              "id": "qwen3-coder-plus",
-              "name": "Qwen3 Coder Plus"
+              "id": "glm-5.2",
+              "name": "GLM-5.2"
+            },
+            {
+              "id": "deepseek-v4-pro",
+              "name": "DeepSeek V4 Pro"
             }
           ]
         }

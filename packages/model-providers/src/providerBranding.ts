@@ -103,6 +103,7 @@ const PROVIDER_LOGO_KIND_BY_HOST: readonly (readonly [string, ProviderLogoKind])
   ['minimaxi.com', 'minimax'],
   ['minimax.io', 'minimax'],
   ['dashscope.aliyuncs.com', 'alibaba'],
+  ['maas.aliyuncs.com', 'alibaba'],
   ['generativelanguage.googleapis.com', 'google'],
   ['longcat.chat', 'longcat'],
   ['xiaomimimo.com', 'xiaomimimo'],
