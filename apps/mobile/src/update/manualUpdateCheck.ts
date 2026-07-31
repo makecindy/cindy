@@ -17,6 +17,8 @@ export type ManualUpdateCheckOutcome =
   | { kind: 'up-to-date' }
   | { kind: 'ota-unavailable' }
   | { kind: 'reloading' }
+  /** 新 bundle 已下载但重启失败:它会在下次冷启动生效,只能引导用户手动重开。 */
+  | { kind: 'restart-required' }
   | { kind: 'busy' }
   | { kind: 'error'; reason: 'bundle-check' | 'ota-check'; detail?: string };
 
@@ -26,7 +28,8 @@ export interface ManualUpdateCheckDeps {
   checkBundleUpdate?: () => Promise<BundleUpdateCheckOutcome>;
   otaEnabled: boolean;
   checkOtaUpdate: () => Promise<{ isAvailable: boolean }>;
-  fetchOtaUpdate: () => Promise<unknown>;
+  /** isNew 表示确实落盘了一个新 bundle(reload 失败时用它区分"已下载待重启"与"什么都没拿到")。 */
+  fetchOtaUpdate: () => Promise<{ isNew: boolean }>;
   reload: () => Promise<void>;
   onPhase: (phase: ManualUpdateCheckPhase) => void;
 }
@@ -59,14 +62,20 @@ export async function runManualUpdateCheck({
 
   if (!otaEnabled) return { kind: 'ota-unavailable' };
 
+  let fetchedNewBundle = false;
   try {
     const ota = await checkOtaUpdate();
     if (!ota.isAvailable) return { kind: 'up-to-date' };
     onPhase('downloading');
-    await fetchOtaUpdate();
+    const fetched = await fetchOtaUpdate();
+    fetchedNewBundle = fetched.isNew;
     await reload();
     return { kind: 'reloading' };
   } catch (error) {
+    // reload 失败但 bundle 已落盘时不能报"检查更新失败":更新其实拿到了,只是这个进程
+    // 重启不了(如 expo-updates 处于 emergency launch、没有 launchedUpdate 可重启),
+    // 下次冷启动就会生效 —— 告诉用户重开 App,而不是把它当成一次失败的检查。
+    if (fetchedNewBundle) return { kind: 'restart-required' };
     const detail = error instanceof Error ? error.message.trim() : String(error).trim();
     return {
       kind: 'error',
@@ -97,6 +106,8 @@ export function manualUpdateCheckMessage(
         : 'settings.version.bundleUpToDateNoOta');
     case 'reloading':
       return t('settings.version.downloadedRestarting');
+    case 'restart-required':
+      return t('settings.version.downloadedRestartRequired');
     case 'error':
       if (outcome.reason === 'bundle-check') return t('settings.version.bundleCheckFailed');
       return outcome.detail

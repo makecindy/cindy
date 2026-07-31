@@ -288,6 +288,9 @@ export default function SettingsScreen() {
         setUpdatePhase('uptodate');
       } else if (outcome.kind === 'reloading') {
         setUpdatePhase('downloading');
+      } else if (outcome.kind === 'restart-required') {
+        // 更新已经拿到了,只是本进程重启不了 —— 不是失败态,提示文案负责说明要手动重开。
+        setUpdatePhase('uptodate');
       } else if (outcome.kind === 'busy') {
         setUpdatePhase('idle');
       } else {
