@@ -62,25 +62,11 @@ describe('ToolLoopGuard', () => {
     }
   });
 
-  it('每次调用都不同(合法长任务)不误判', () => {
+  it('超过 100 次且每次调用都不同的合法长任务不误判', () => {
     const g = new ToolLoopGuard();
-    for (let i = 0; i < 30; i += 1) {
+    for (let i = 0; i < 250; i += 1) {
       expect(feed(g, `id${i}`, 'Read', { file: `f${i}.ts` }, 'content').kind).toBe('ok');
     }
-  });
-
-  // ── 第 3 层: 单 turn tool result 硬上限 ───────────────────────────────────
-  it('在 turn 内调用总数超硬上限时判 turn-cap(任何形态兜底)', () => {
-    // 放宽前两层, 只验证兜底: 每次 input 都不同, 不会触发 consecutive / pingpong
-    const g = new ToolLoopGuard({ turnHardCap: 5, windowSize: 1000, consecutiveLimit: 1000 });
-    for (let i = 0; i < 5; i += 1) {
-      expect(feed(g, `id${i}`, 'Read', { file: `f${i}` }, `o${i}`).kind).toBe('ok');
-    }
-    expect(feed(g, 'id5', 'Read', { file: 'f5' }, 'o5')).toMatchObject({
-      kind: 'hard',
-      reason: 'turn-cap',
-      count: 6,
-    });
   });
 
   // ── 配对 / 放行 ───────────────────────────────────────────────────────────
