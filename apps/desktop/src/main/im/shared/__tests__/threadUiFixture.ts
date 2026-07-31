@@ -15,7 +15,7 @@ export const ui = {
   // ── slash command replies ──────────────────────────────────────────────────
   slash: {
     new: '🌱 新存档已开 — 之前的对话清掉了，从头聊~',
-    help: `🤖 这里是 thread 玩法：**在顶层发一条消息 = 开一个新会话**，我会在那条消息的 thread 里回复；进 thread 继续聊就是同一个任务。多个 thread 可以同时开打、互不干扰。
+    help: `🤖 这里是 thread 玩法：**在顶层发一条消息 = 开一个新会话**，我会在那条消息的 thread 里回复；进 thread 继续聊就是同一个会话。多个 thread 可以同时开打、互不干扰。
 
 命令统一用 \`/xdmaker 子命令\`：
 
@@ -123,7 +123,7 @@ export const ui = {
     },
     control: {
       title: '🎮 挑个工作区上号',
-      emptyBody: '_暂时还没有可接管的工作区~ 在 desktop 端打开/创建一个任务再来_',
+      emptyBody: '_暂时还没有可接管的工作区~ 在 desktop 端打开/创建一个会话再来_',
       hint: '点工作区往下走；点 🚪 退出 取消这次',
       /** 接管态下重发 /xdmaker ctr — picker 顶部提示当前接管中的会话, 选新的直接换乘。 */
       attachedSwitchHint: (sessionTitle: string) =>
@@ -132,18 +132,18 @@ export const ui = {
       resolvedExit: '🚪 已退出，这次就不上号了',
       sessionPickerTitle: (displayName: string) => `🎮 ${displayName} 里的存档`,
       sessionPickerHint:
-        '挑个任务继续打 · ➕ 新建 开新存档 · ↩️ 后退 换工作区 · 🚪 退出 取消',
+        '挑个会话继续打 · ➕ 新建 开新存档 · ↩️ 后退 换工作区 · 🚪 退出 取消',
       sessionPickerEmptyBody: (displayName: string) =>
         `_工作区 **${displayName}** 这边还没有 active 会话~ 不如点 ➕ 新建 开一个？_`,
       btnNew: '➕ 新建',
       btnBack: '↩️ 后退',
       resolvedSessionPick: (sessionTitle: string, workspaceName: string) =>
-        `🎯 上号了：**${sessionTitle}**（${workspaceName}）\n接下来你在这个 thread 发消息就直接进这个任务；想撤就点顶部卡片的 🚪`,
+        `🎯 上号了：**${sessionTitle}**（${workspaceName}）\n接下来你在这个 thread 发消息就直接进这个会话；想撤就点顶部卡片的 🚪`,
       resolvedNewSession: (workspaceName: string) =>
         `✨ 新存档已建 + 远程连接就绪（在 **${workspaceName}** 里）\n直接发指令开聊；想退就点顶部卡片的 🚪`,
       attachFailed: (reason: string) => `❌ 没接上：${reason}`,
       sessionBusyOldCardPlaceholder:
-        '⏳ 那个任务还在跑——下方给你刷了张新卡片，重选一下吧',
+        '⏳ 那个会话还在跑——下方给你刷了张新卡片，重选一下吧',
       sessionBusyPrompts: [
         (sessionTitle: string) =>
           `⏳ **${sessionTitle}** 这会儿正在 BOSS 战~\nagent 还在思考/敲代码，等它这把打完再 \`/xdmaker ctr\` 上号`,

@@ -256,7 +256,7 @@ const DRAFT_IMAGE_URL_PREFIX = `xdt-image://${NEW_MAKER_DRAFT_KEY}/`;
  * **只对能证明一致的纯文本消息放行**。带 @mention / 附件 / 会话引用时,权威占位由
  * `deriveAutoTitleSeed` 另行推导(剔除 mention 的 wire token、拿文件名合成描述),这里
  * 算不出同一个串 —— 预览会先显示 A 再跳成 B,比短暂显示占位更糟。这类消息交给显示层的
- * 「未命名对话」兜底,等权威标题回流。
+ * 「未命名任务」兜底,等权威标题回流。
  *
  * 纯文本时两侧一致是可证明的:无 reference / 未编码引用标记时 `projectLiteralUserText`
  * 退化为 `text.trim()`,无 mention 时 `stripMentionTokens` 同样只做 trim,而

@@ -55,14 +55,14 @@ describe('isDefaultDraftSessionTitle', () => {
 
 describe('projectDraftSessionTitle', () => {
   it('哨兵 + 已解析文案 → 换成那个文案', () => {
-    expect(projectDraftSessionTitle(DEFAULT_DRAFT_SESSION_TITLE, '未命名对话')).toBe('未命名对话');
+    expect(projectDraftSessionTitle(DEFAULT_DRAFT_SESSION_TITLE, '未命名任务')).toBe('未命名任务');
     expect(projectDraftSessionTitle(DEFAULT_DRAFT_SESSION_TITLE, 'Untitled session')).toBe('Untitled session');
   });
 
   it('非哨兵标题原样返回,不被 label 顶掉', () => {
-    expect(projectDraftSessionTitle('修 Orca 心跳', '未命名对话')).toBe('修 Orca 心跳');
+    expect(projectDraftSessionTitle('修 Orca 心跳', '未命名任务')).toBe('修 Orca 心跳');
     // 用户手动改成近似串仍是合法自定义标题(判据不做归一,见上)。
-    expect(projectDraftSessionTitle('new maker', '未命名对话')).toBe('new maker');
+    expect(projectDraftSessionTitle('new maker', '未命名任务')).toBe('new maker');
   });
 
   it('没给 label 时退回原串,由调用方自己接兜底链', () => {
@@ -72,14 +72,14 @@ describe('projectDraftSessionTitle', () => {
   });
 
   it('空标题归一成空串,方便调用方直接接 `||` 兜底', () => {
-    expect(projectDraftSessionTitle(null, '未命名对话')).toBe('');
-    expect(projectDraftSessionTitle(undefined, '未命名对话')).toBe('');
-    expect(projectDraftSessionTitle('', '未命名对话')).toBe('');
+    expect(projectDraftSessionTitle(null, '未命名任务')).toBe('');
+    expect(projectDraftSessionTitle(undefined, '未命名任务')).toBe('');
+    expect(projectDraftSessionTitle('', '未命名任务')).toBe('');
   });
 
   it('幂等:对投影结果再投影一次不变', () => {
     // 渲染与搜索 haystack 各自调一次,两次都必须收敛到同一个串。
-    const once = projectDraftSessionTitle(DEFAULT_DRAFT_SESSION_TITLE, '未命名对话');
-    expect(projectDraftSessionTitle(once, '未命名对话')).toBe(once);
+    const once = projectDraftSessionTitle(DEFAULT_DRAFT_SESSION_TITLE, '未命名任务');
+    expect(projectDraftSessionTitle(once, '未命名任务')).toBe(once);
   });
 });

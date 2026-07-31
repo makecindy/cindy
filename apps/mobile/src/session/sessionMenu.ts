@@ -59,7 +59,7 @@ export function buildSessionMenuHeader(
 
   return {
     // 哨兵(尚未起名)直接给本地化兜底,**不回落 workspaceName** —— 回落会把目录名当标题,
-    // 与 desktop 的「未命名对话」不一致(PR #1031 review P1)。文案走 i18n:本模块四语言
+    // 与 desktop 的「未命名任务」不一致(PR #1031 review P1)。文案走 i18n:本模块四语言
     // 都在用 i18n.t,不能塞硬编码中文(mobile 支持 en / ja / ko)。
     title: isDefaultDraftSessionTitle(session.title)
       ? i18n.t('session.menu.unnamedTitle')

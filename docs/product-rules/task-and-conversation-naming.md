@@ -436,6 +436,23 @@ IM 渠道的 `/new` 看着像「新建」，实际走 `im/shared/sessionRepo.ts:
 任务没有…」，但实际判据只是 `!!session.workingDir`：旧数据或异常行同样会缺 workingDir，被
 这句话解释成「因为任务类型」。文案只陈述状态（「这个任务没有远程工作目录」），不断言原因。
 
+#### 6.0.5 注释与测试常量里「陈述现有文案」的地方必须跟改
+
+§8 声明内部注释与代码标识符刻意不动，但有一类例外，判据是**这句注释有没有断言「用户看到的
+是 X」**：改名让 X 变了，这类注释就变成了错的，比不改更坏——后来人照注释去「修正」代码，
+方向正好相反。落地时被 review 连点两轮（每轮列出不同实例），做检查点后一次扫清 41 处：
+
+| 类型 | 例子 | 处理 |
+|---|---|---|
+| 注释断言兜底文案 | `sessionList.ts`「与 desktop 侧的『未命名对话』不一致」 | **改**：实际值已是「未命名任务」（`ccAgent.common.unnamedSession` / `sessionHeader.untitled` / mobile `devices.list.untitled` 实测） |
+| 注释断言按钮文案 | `interactions.test.ts`「注：按钮文案用『对话』」，而按钮已是「本任务总是允许」 | **改** |
+| 测试常量当兜底文案的替身 | `const UNNAMED = '未命名对话'` | **改**：值是注入的、改了不影响行为，但留着会变成下一个人「修正」代码的依据 |
+| 泛指 session 的普通注释 | 「idle 会话直接显示」「worktree 会话按 base repo 归组」 | **不改**（§8） |
+
+**退役渠道的 fixture 整体不动。** `im/shared/__tests__/threadUiFixture.ts` 保存的是 2026-07-17
+退役的 SlackIM 文案包原件（文件头写明「不进产品包」），它的价值正是「忠实副本」。落地时误改了
+其中 4 句，把「开一个新会话」和「同一个任务」并列进同一句；已整体回退到 `origin/main`。
+
 ### 6.1 门禁怎么表达「同一个词分场合」
 
 **不能简单把「对话」加进 `Session` 的 `forbidden`**——那会把「对话区」「对话正文」这些
@@ -479,9 +496,13 @@ IM 渠道的 `/new` 看着像「新建」，实际走 `im/shared/sessionRepo.ts:
 - **IM 渠道的「存档 / 上号」人格用词未统一**：discord / feishu / wechat 仍把 session 叫
   「存档」（见 §6.0.4）。本次只清了 forbidden 词「会话」，因此这三个渠道会同时出现「任务」
   与「存档」。要不要把「存档」也收敛成「任务」是语气取舍而非错译，留给产品单独裁决
-- **`apps/mobile/src/session/messageActionMenu.ts` 仍是硬编码中文**：`origin/main` 就如此
-  （文件注释写明「那边走 i18n，这里暂为硬编码」），en/ja/ko locale 下也显示中文。迁到 i18n
-  是独立重构，本 PR 只保证它的中文与桌面端同款 key 一致
+- **共享层与 mobile 的部分中文仍是硬编码**：`packages/maker-shared/src/sessionList.ts` 的
+  `remoteSessionListTitle` / `deviceSessionEmptyState`、`apps/mobile/src/session/messageActionMenu.ts`
+  都在业务代码里返回中文串，mobile 直接渲染，因此非 zh-CN locale 下会露出中文。这是
+  `origin/main` 既有状态（`messageActionMenu.ts` 的注释写明「那边走 i18n，这里暂为硬编码」），
+  正是 §6.0.1 那份来源清单第 5 条要专门代码搜索的原因。**把这一层下沉到 i18n（或改成返回结构化
+  数据交 UI 层翻译）是独立重构**，不在本次改名范围；本 PR 只保证这些中文串与桌面端同款 key
+  用词一致
 - **代码标识符与内部注释仍以 Session 为主**：刻意不动。仅当中文注释被测试当作源码锚点、
   且新旧术语冲突时才跟进（本次有 1 处：`apps/mobile/app/sessions/new.tsx` 的
   「新建任务默认运行配置」）

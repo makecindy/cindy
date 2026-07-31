@@ -110,7 +110,7 @@ describe('sessionList', () => {
 
   it('未起名会话用调用方给的本地化文案,不回落工作目录路径', () => {
     // 哨兵若按「无标题」处理,会回落 workingDir 把完整路径当标题显示,与 desktop 的
-    // 「未命名对话」不一致(PR #1031 review P1)。文案由调用方按当前 locale 传入 ——
+    // 「未命名任务」不一致(PR #1031 review P1)。文案由调用方按当前 locale 传入 ——
     // 共享层不能兜中文串,mobile 还支持 en / ja / ko。
     const now = new Date('2026-01-01T00:10:00.000Z').getTime();
     const sentinel = session('s-sentinel', {
@@ -119,8 +119,8 @@ describe('sessionList', () => {
     });
 
     expect(
-      toRemoteSessionListItem(sentinel, now, undefined, 0, null, null, '未命名对话').title,
-    ).toBe('未命名对话');
+      toRemoteSessionListItem(sentinel, now, undefined, 0, null, null, '未命名任务').title,
+    ).toBe('未命名任务');
     // 同一条会话换 locale → 换文案(锁住「不在共享层写死中文」)。
     expect(
       toRemoteSessionListItem(sentinel, now, undefined, 0, null, null, 'Untitled session').title,
@@ -136,7 +136,7 @@ describe('sessionList', () => {
       0,
       null,
       null,
-      '未命名对话',
+      '未命名任务',
     );
     expect(emptyTitle.title).toBe('/Users/dash/Code/Cindy/cindy');
   });

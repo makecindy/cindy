@@ -104,7 +104,7 @@ describe('composeInteractionCard', () => {
     ]);
     expect(composed.decisions.get('perm:allow')).toEqual({ kind: 'permission', behavior: 'allow' });
     // 「本任务总是允许」带会话级 addRules(claude 直接消费, codex 非空即会话放行)
-    // 注:按钮文案用「对话」(产品术语,与应用内 permissions.alwaysAllowForSession 一致),
+    // 注:按钮文案用「任务」(产品术语,与应用内 permissions.alwaysAllowForSession 一致),
     // 但 addRules 的作用域仍是技术意义上的 agent session,两者刻意不同名。
     expect(composed.decisions.get('perm:always')).toEqual({
       kind: 'permission',

@@ -159,7 +159,7 @@ export interface RemoteSessionListOptions {
    */
   groupAutomations?: boolean;
   /**
-   * 「尚未起名」会话的显示文案(已解析的 i18n 值)。不传则回落 workingDir → 「未命名任务」;
+   * 「尚未起名」任务的显示文案(已解析的 i18n 值)。不传则回落 workingDir → 「未命名任务」;
    * 共享层刻意不兜中文串,见 {@link remoteSessionDisplayTitle}。
    */
   unnamedLabel?: string;
@@ -426,7 +426,7 @@ function buildDateSections(
  * 远程会话在列表 / 菜单上应显示的标题。
  *
  * 「尚未起名」的哨兵**直接用调用方给的本地化兜底、不回落 workingDir**:回落会把完整
- * 工作目录路径当标题显示,与 desktop 侧的「未命名对话」不一致(PR #1031 review P1)。
+ * 工作目录路径当标题显示,与 desktop 侧的「未命名任务」不一致(PR #1031 review P1)。
  * 哨兵本身是 locale-independent 的英文字面量(见 ./sessionTitle.ts),原样显示会露出
  * "New Maker"。
  *
@@ -454,7 +454,7 @@ export function toRemoteSessionListItem(
   pendingInteractionCount = 0,
   messagePreview: string | null = null,
   liveActivity: RemoteSessionLiveActivity | null = null,
-  /** 「尚未起名」会话的显示文案,由调用方传已解析的 i18n 值(见 remoteSessionDisplayTitle)。 */
+  /** 「尚未起名」任务的显示文案,由调用方传已解析的 i18n 值(见 remoteSessionDisplayTitle)。 */
   unnamedLabel?: string,
 ): RemoteSessionListItem {
   const lastActivityAt = session.userSendAt ?? session.updatedAt ?? session.createdAt;
