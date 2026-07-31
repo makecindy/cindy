@@ -96,6 +96,30 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     ).toHaveLength(2);
   });
 
+  it('locks the composer while the pending remote collab handoff runs', () => {
+    // 交接期间(可能数十秒)会话看起来是空的,用户很容易以为没发出去而再打一条 —— 那条会
+    // 先进 Lead,草稿提交的首条反而排到它后面,顺序倒置,首轮还可能在协同未就绪时跑掉
+    // (codex review P2)。按 worktree 创建同款处理:交接期间锁住发送。
+    expect(sessionViewSource).toContain('const [remoteCollabPreparing, setRemoteCollabPreparing]');
+    // 两处 pending 消费都要置位,且都用 finally 解锁(任何终态都不能把 composer 锁死)。
+    expect(sessionViewSource.match(/setRemoteCollabPreparing\(true\)/g)).toHaveLength(2);
+    expect(sessionViewSource.match(/setRemoteCollabPreparing\(false\)/g)).toHaveLength(2);
+    const finallyUnlocks = sessionViewSource.match(
+      /\} finally \{\s*\n\s*setRemoteCollabPreparing\(false\);/g,
+    );
+    expect(finallyUnlocks).toHaveLength(2);
+
+    // 「会话正在准备」只允许有一个下游判据:handleSend 拦截读合并值,ChatInput 也禁用。
+    expect(sessionViewSource).toContain(
+      'const sessionHandoffPreparing = worktreePreparing || remoteCollabPreparing;',
+    );
+    expect(sessionViewSource).toContain('if (sessionHandoffPreparing) return false;');
+    expect(sessionViewSource).not.toContain('if (worktreePreparing) return false;');
+    expect(sessionViewSource).toContain(
+      'disabled={remoteSessionUnavailable || remoteCollabPreparing}',
+    );
+  });
+
   it('refreshes the remote mirror even when the remote enableOrca reports failure', () => {
     // 控制端的 invoke 超时**不会取消**被控端正在跑的 enableOrca,所以「控制端报失败、
     // 对端稍后仍建成 team」是真实终态(codex review P1)。回流放在 finally 里,让

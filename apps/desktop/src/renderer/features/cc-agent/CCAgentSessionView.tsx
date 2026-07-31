@@ -1550,6 +1550,15 @@ export function CCAgentSessionView({
   // overlay 渲染) 全部统一从这一个值读, 保证语义一致 (overlay 在 = 输入禁用)。
   const worktreePreparing = smoothedWorktreeCreating;
 
+  // device-link 草稿开了协同时,首轮要等被控端 enableOrca 定性(见下方 pending 消费)。
+  // 那段 await 可能持续数十秒,期间会话看起来是空的 —— 用户很容易以为没发出去而再打一条。
+  // 那条会先进 Lead,草稿提交的首条反而排到它后面,消息顺序倒置,首轮还可能在协同尚未
+  // 就绪时跑掉(codex review P2)。所以按 worktree 创建同款处理:交接期间锁住发送。
+  // 与 worktreePreparing 合成一个 sessionHandoffPreparing,下游只读这一个值,避免两个
+  // "会话正在准备"的判据各自接一半闸门。
+  const [remoteCollabPreparing, setRemoteCollabPreparing] = useState(false);
+  const sessionHandoffPreparing = worktreePreparing || remoteCollabPreparing;
+
   // ---------------------------------------------------------------------------
   // F-AUQ-MIN-1 / F-AUQ-MIN-5 验收第 4 条：会话切换后 askUserViewerState 重置为 'expanded'。
   // makerChatStore 按 sessionId 分片存储，A(minimized)→B→A 回到 A 时如果不重置，
@@ -2345,7 +2354,9 @@ export function CCAgentSessionView({
 
       // Popover open → prevent re-entry
       if (folderPickerOpen) return false;
-      if (worktreePreparing) return false;
+      // 会话交接尚未完成(建 worktree / 远程开协同)时不放行:否则新输入会插到
+      // 草稿提交的首条之前,顺序倒置。
+      if (sessionHandoffPreparing) return false;
 
       // ② Working directory check
       if (!session?.workingDir) {
@@ -2422,7 +2433,7 @@ export function CCAgentSessionView({
       vendorAuthGate,
       remoteDeviceId,
       remoteSessionUnavailable,
-      worktreePreparing,
+      sessionHandoffPreparing,
     ],
   );
 
@@ -2617,22 +2628,29 @@ export function CCAgentSessionView({
       // 建好、用户输入还只在内存里」的窗口跟着一次可能 30s 的隧道往返一起变长(见
       // remoteCollabHandoff 文件头)。开不起来时如实提示并照单会话继续。
       if (pending.remoteCollab) {
-        const ok = await consumePendingRemoteCollab(pending.remoteCollab, {
-          leadSessionId: sessionId,
-          logTag: 'pending first message',
-          onFailed: (err) =>
-            toast.error(
-              getCollaborationStartErrorMessage(err, t, {
-                remoteDevice: true,
-                continueAsSingleSession: true,
-              }),
-            ),
-        });
-        if (ok) {
-          void sessionsStore.forceRefresh('active');
-          void revealOrcaWorkersTab(sessionId).catch((revealErr) => {
-            log.warn('revealOrcaWorkersTab after pending collab failed', revealErr);
+        // 交接期间锁住 composer(见 remoteCollabPreparing 的声明处):这段 await 可能
+        // 数十秒,不锁住的话用户补发的消息会插到首条之前。finally 保证任何终态都解锁。
+        setRemoteCollabPreparing(true);
+        try {
+          const ok = await consumePendingRemoteCollab(pending.remoteCollab, {
+            leadSessionId: sessionId,
+            logTag: 'pending first message',
+            onFailed: (err) =>
+              toast.error(
+                getCollaborationStartErrorMessage(err, t, {
+                  remoteDevice: true,
+                  continueAsSingleSession: true,
+                }),
+              ),
           });
+          if (ok) {
+            void sessionsStore.forceRefresh('active');
+            void revealOrcaWorkersTab(sessionId).catch((revealErr) => {
+              log.warn('revealOrcaWorkersTab after pending collab failed', revealErr);
+            });
+          }
+        } finally {
+          setRemoteCollabPreparing(false);
         }
       }
       if (await maybeDispatchDesktopSlashCommand(pending.text, pending.files)) {
@@ -2692,22 +2710,27 @@ export function CCAgentSessionView({
         }
         // 与首条消息同款:目标首轮同样要排在协同之后(见上方 pending 消费的注释)。
         if (pendingGoal.remoteCollab) {
-          const ok = await consumePendingRemoteCollab(pendingGoal.remoteCollab, {
-            leadSessionId: sessionId,
-            logTag: 'pending goal',
-            onFailed: (err) =>
-              toast.error(
-                getCollaborationStartErrorMessage(err, t, {
-                  remoteDevice: true,
-                  continueAsSingleSession: true,
-                }),
-              ),
-          });
-          if (ok) {
-            void sessionsStore.forceRefresh('active');
-            void revealOrcaWorkersTab(sessionId).catch((revealErr) => {
-              log.warn('revealOrcaWorkersTab after pending goal collab failed', revealErr);
+          setRemoteCollabPreparing(true);
+          try {
+            const ok = await consumePendingRemoteCollab(pendingGoal.remoteCollab, {
+              leadSessionId: sessionId,
+              logTag: 'pending goal',
+              onFailed: (err) =>
+                toast.error(
+                  getCollaborationStartErrorMessage(err, t, {
+                    remoteDevice: true,
+                    continueAsSingleSession: true,
+                  }),
+                ),
             });
+            if (ok) {
+              void sessionsStore.forceRefresh('active');
+              void revealOrcaWorkersTab(sessionId).catch((revealErr) => {
+                log.warn('revealOrcaWorkersTab after pending goal collab failed', revealErr);
+              });
+            }
+          } finally {
+            setRemoteCollabPreparing(false);
           }
         }
         await goalApiFor(sessionId).setGoal({
@@ -3367,7 +3390,7 @@ export function CCAgentSessionView({
                   isAgentBusy={isAgentBusy}
                   onStop={handleStopSession}
                   pendingQueue={pendingQueue}
-                  disabled={remoteSessionUnavailable}
+                  disabled={remoteSessionUnavailable || remoteCollabPreparing}
                   queuePaused={queuePaused}
                   queueExpanded={queueExpanded}
                   onQueueExpandedChange={setQueueExpanded}
