@@ -529,6 +529,43 @@ describe('MarketSourceManager git sources', () => {
     expect(discovered.result.ok).toBe(true);
   });
 
+  it('defers removeSource cleanup while a reader still holds a cached version', async () => {
+    const root = makeRoot();
+    const { executor } = fakeGit('hub', [{ rel: 'p', id: 'alpha' }]);
+    const manager = makeManager(root, executor);
+    await manager.addSource({ source: 'openai/plugins' });
+
+    const slot = path.join(
+      root,
+      'sources',
+      marketCloneSlug('hub', {
+        type: 'git',
+        url: 'https://github.com/openai/plugins.git',
+        sparsePaths: [],
+      }),
+    );
+
+    // 移除来源会整槽递归删除。并发的详情发现/安装打包可能正持有槽内某个版本
+    // 目录,直接删会让它们读到一半 ENOENT —— 租约守卫必须按"重叠"判定挡住整槽删。
+    // 移除刻意走另一个 manager 实例(与生产一致:每次操作新建 manager)。
+    const remover = makeManager(root, executor);
+    await manager.withDiscoveredSource('hub', async (discovered) => {
+      expect(discovered.result.ok).toBe(true);
+      const pluginDir = discovered.result.ok
+        ? discovered.result.marketplace.plugins[0]!.dir
+        : '';
+
+      await remover.removeSource('hub');
+      // 配置已移除(来源对用户即刻消失),但被持有的缓存内容仍可逐文件读取。
+      expect(remover.getConfig('hub')).toBeNull();
+      expect(fs.readFileSync(path.join(pluginDir, 'main.js'), 'utf8')).toContain('entry');
+    });
+
+    // 租约释放后,被推迟的整槽删除执行完毕。
+    await waitFor(() => !fs.existsSync(slot));
+    expect(fs.existsSync(slot)).toBe(false);
+  });
+
   it('prunes dead incoming staging directories left by a killed refresh', async () => {
     const root = makeRoot();
     const { executor } = fakeGit('hub', [{ rel: 'p', id: 'alpha' }]);
