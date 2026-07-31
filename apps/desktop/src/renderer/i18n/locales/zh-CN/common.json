@@ -5532,7 +5532,7 @@
         "unsupportedHistory": "目标位置对应的历史引擎会话已不可用，无法从这里开启新任务",
         "noPriorAssistant": "请在 AI 回复之后的消息上开启新任务",
         "sourceNeverRan": "原任务尚未运行，无法开启新任务",
-        "codexStateUnavailable": "Codex 任务状态不可用，无法开启新任务。{{detail}}",
+        "codexStateUnavailable": "Codex Agent 会话状态不可用，无法开启新任务。{{detail}}",
         "generic": "无法开启新任务，请重试"
       }
     },
@@ -5545,7 +5545,7 @@
       "errors": {
         "noPriorAssistantPreview": "请在 AI 回复之后的提问上 rewind（这条之前没有 assistant 回复）",
         "sessionRunning": "等待任务停止超时，请重新回退",
-        "noLiveQuery": "任务未激活——请先发送任意一条消息（哪怕一句\"ok\"）让 SDK 起来再 rewind",
+        "noLiveQuery": "Agent 会话未激活——请先发送任意一条消息（哪怕一句\"ok\"）让 SDK 起来再 rewind",
         "noPriorAssistantCommit": "请在 AI 回复之后的提问上 rewind",
         "commitGeneric": "rewind 失败，请重试",
         "remoteNotSupported": "远端 Claude Code 会话暂不支持 rewind"

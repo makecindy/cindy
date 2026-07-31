@@ -649,11 +649,23 @@ grep -rnE '会话|对话' apps/desktop/src/main apps/mobile/src packages/*/src \
 - **IM 渠道的「存档 / 上号」人格用词未统一**：discord / feishu / wechat 仍把 session 叫
   「存档」（见 §6.0.4）。本次只清了 forbidden 词「会话」，因此这三个渠道会同时出现「任务」
   与「存档」。要不要把「存档」也收敛成「任务」是语气取舍而非错译，留给产品单独裁决
-- **共享层的部分中文仍是硬编码**：`packages/maker-shared/src/sessionList.ts` 的
-  `remoteSessionListTitle` / `deviceSessionEmptyState` 在业务代码里返回中文串，mobile 直接渲染，
-  因此非 zh-CN locale 下会露出中文。这是 `origin/main` 既有状态，也正是 §6.0.1 那份来源清单第
-  5 条要专门代码搜索的原因。**把共享层下沉到 i18n（或改成返回结构化数据交 UI 层翻译）是独立
-  重构**，不在本次改名范围；本 PR 只保证这些中文串与桌面端同款 key 用词一致。
+- **共享层的部分中文仍是硬编码**（reviewer 在本次 review 里点了 4 轮，这里把清单记全）：
+
+  | 位置 | 谁直接渲染它 |
+  |---|---|
+  | `maker-shared/src/sessionList.ts` 的 `remoteSessionListTitle` / `deviceSessionEmptyState` | mobile 设备详情页 `app/devices/[deviceId].tsx` |
+  | `maker-shared/src/sessionSelection.ts` 的 `summarizeMobileSessionBulkAction`（title / description / confirmText） | 同上，批量操作确认卡 |
+  | `maker-shared/src/scheduleModel.ts` 的 `summarizeRun`（按钮与状态 label） | mobile `app/automations/[deviceId].tsx` |
+
+  这些函数在业务代码里直接返回中文串，而调用它们的页面其它字段都走 i18n，于是 en / ja / ko
+  环境下会出现「一半翻译一半中文」。**这是 `origin/main` 既有状态**，也正是 §6.0.1 那份来源
+  清单第 5 条要专门代码搜索的原因。
+
+  **修法不是改用词，而是把共享层改成不产出文案**（调用方传 `t` / strings，或函数只返回计数与
+  结构化数据）。那要动 3 个模块 + 各自调用点 + 测试，属独立重构，不在本次改名范围；本 PR 只
+  保证这些中文串与桌面端同款 key 用词一致。同目录的
+  `apps/mobile/src/session/messageActionMenu.ts` 与 `app/sessions/[sessionId].tsx` 的 fork 弹窗
+  已在本 PR 内迁到 i18n——它们是**页面自己的文案**、改法就是照抄隔壁，与共享层这一类不同。
   （`apps/mobile/src/session/messageActionMenu.ts` 原本也在此列，本次已改为走
   `i18n.t('session.messageMenu.*')`——同目录 `sessionMenu.ts` 早就是这个写法，它是唯一的例外）
 - **mobile 的 locale 没有 key 对齐门禁**：`pnpm check:i18n` 只校验
