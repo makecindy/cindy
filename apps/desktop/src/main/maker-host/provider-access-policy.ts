@@ -32,14 +32,15 @@ function projectVideoDefaults(
 }
 
 /**
- * Build-region projection for the media catalog. Global keeps the catalog
- * source verbatim; Mainland China and dev share the Mainland product semantics
- * and expose only the media capabilities supported there.
+ * Build-region projection for Cindy-managed media capabilities. Global keeps
+ * the catalog source verbatim; Mainland China and dev expose only the media
+ * capabilities that the regional Cindy service supports.
  *
- * 2026-07 图像多来源:投影不再只针对 xd —— 大陆版「无图像能力」是产品语义,
- * **所有**供应商的 imageModels/imageDefaults 一律清空(新来源不得绕过地区闸);
- * 视频白名单(seedance 两型号)维持 xd 专属逻辑,其它供应商目前不声明视频清单,
- * 声明了也一并清空(大陆视频能力只经 xd 网关合规通道)。
+ * Region is a build-time choice for Cindy-owned services, not a restriction on
+ * providers the user connected locally. Therefore this projection only changes
+ * `xd`; OpenAI/Codex OAuth, xAI OAuth, Gemini API keys and custom providers keep
+ * their own catalog in every build. Applying the gate to all providers makes a
+ * Mainland build silently discard user-owned capabilities that work directly.
  */
 export function projectProviderCatalogForBuildRegion(
   catalog: Catalog,
@@ -49,16 +50,8 @@ export function projectProviderCatalogForBuildRegion(
 
   let changed = false;
   const providers = catalog.providers.map((provider) => {
-    const hasMedia =
-      (provider.imageModels?.length ?? 0) > 0 ||
-      provider.imageDefaults !== undefined ||
-      (provider.videoModels?.length ?? 0) > 0 ||
-      provider.videoDefaults !== undefined ||
-      Object.values(provider.models).some((list) =>
-        list?.some((m) => { const g = classifyModel(m); return g === 'image' || g === 'video'; }),
-      );
     const isCindyAi = provider.id === CINDY_AI_PROVIDER_ID;
-    if (!hasMedia && !isCindyAi) return provider;
+    if (!isCindyAi) return provider;
     changed = true;
 
     const videoModels = isCindyAi
