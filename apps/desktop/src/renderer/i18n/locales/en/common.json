@@ -4215,14 +4215,9 @@
     "cacheLabel": "Cache",
     "modelLabel": "Model",
     "staleData": "Data updated {{minutes}} minutes ago",
-    "paceOnTrack": "Pace: on track",
-    "paceReserve": "Pace: {{percent}}% in reserve",
-    "paceDeficit": "Pace: {{percent}}% over",
-    "paceLastsToReset": "Lasts until reset",
-    "paceRunsOutIn": "Runs out in {{duration}}",
-    "durationMinutes": "{{n}} min",
-    "durationHours": "{{n}} h",
-    "durationDays": "{{n}} d",
+    "paceTrendFast": "Trending fast at the current average pace (rough estimate)",
+    "paceTrendNormal": "Trending normally at the current average pace (rough estimate)",
+    "paceTrendSlow": "Trending slowly at the current average pace (rough estimate)",
     "waiting": "Claude subscription usage will update after the next request completes."
   },
   "usageDetails": {

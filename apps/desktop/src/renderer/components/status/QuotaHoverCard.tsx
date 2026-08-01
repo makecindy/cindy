@@ -62,6 +62,8 @@ interface DisplayWindow {
 
 const STALE_AFTER_MS = 5 * 60_000;
 const WEEKLY_WINDOW_MINUTES = 10_080;
+/** 产品定档：±5 个百分点内视为正常节奏。 */
+const PACE_TREND_DELTA_PERCENT = 5;
 
 function clampPercent(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -155,37 +157,16 @@ function CardDivider() {
   return <div aria-hidden="true" className="mx-4 my-1.5 h-px bg-[var(--border-default)]" />;
 }
 
-/** 将耗尽 ETA 收敛成适合额度卡片的一档时间文案。 */
-function formatPaceDuration(etaSeconds: number, t: TFunction): string {
-  const minutes = etaSeconds / 60;
-  if (minutes < 60) {
-    return t('quotaCard.durationMinutes', { n: Math.round(minutes) });
-  }
-
-  const hours = minutes / 60;
-  if (hours < 48) {
-    return t('quotaCard.durationHours', { n: Math.round(hours) });
-  }
-
-  return t('quotaCard.durationDays', { n: Math.round(hours / 24) });
-}
-
-/** 将 pace 结果映射成状态与耗尽预测两段文案。 */
-function formatPaceLine(pace: QuotaPace, t: TFunction): string | null {
+/** 将 pace 偏差映射成不承诺精确耗尽时间的粗略趋势。 */
+function formatPaceLine(pace: QuotaPace, t: TFunction): string {
   const { deltaPercent } = pace;
-  const state = Math.abs(deltaPercent) < 5
-    ? t('quotaCard.paceOnTrack')
-    : deltaPercent <= -5
-      ? t('quotaCard.paceReserve', { percent: Math.round(-deltaPercent) })
-      : t('quotaCard.paceDeficit', { percent: Math.round(deltaPercent) });
-
-  if (pace.willLastToReset) {
-    return `${state} · ${t('quotaCard.paceLastsToReset')}`;
+  if (deltaPercent > PACE_TREND_DELTA_PERCENT) {
+    return t('quotaCard.paceTrendFast');
   }
-  if (pace.etaSeconds === null) return null;
-
-  const duration = formatPaceDuration(pace.etaSeconds, t);
-  return `${state} · ${t('quotaCard.paceRunsOutIn', { duration })}`;
+  if (deltaPercent < -PACE_TREND_DELTA_PERCENT) {
+    return t('quotaCard.paceTrendSlow');
+  }
+  return t('quotaCard.paceTrendNormal');
 }
 
 function WindowBlock({
@@ -193,6 +174,7 @@ function WindowBlock({
   window,
   paceWindowMinutes,
   nowMs,
+  paceNowMs,
   locale,
   t,
 }: {
@@ -200,6 +182,7 @@ function WindowBlock({
   window: ClaudeUsageWindow;
   paceWindowMinutes?: number;
   nowMs: number;
+  paceNowMs: number;
   locale: string | undefined;
   t: TFunction;
 }) {
@@ -219,12 +202,9 @@ function WindowBlock({
         utilization: window.utilization,
         resetsAt: window.resetsAt,
         windowMinutes: paceWindowMinutes,
-        nowMs,
+        nowMs: paceNowMs,
       });
   const paceLine = pace === null ? null : formatPaceLine(pace, t);
-  const paceIsCritical = pace !== null
-    && pace.deltaPercent >= 5
-    && !pace.willLastToReset;
 
   return (
     <section data-testid="quota-window" className="px-4 pb-1 pt-2">
@@ -256,13 +236,7 @@ function WindowBlock({
       {paceLine !== null ? (
         <div
           data-testid="quota-pace"
-          data-severity={paceIsCritical ? 'crit' : undefined}
-          className={cn(
-            'mt-[3px] text-xs tabular-nums',
-            paceIsCritical
-              ? 'font-medium text-[var(--quota-bar-crit,#E5484D)]'
-              : 'text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]',
-          )}
+          className="mt-[3px] text-xs tabular-nums text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]"
         >
           {paceLine}
         </div>
@@ -433,6 +407,12 @@ export function QuotaHoverCard({
   // 测试可只注入 t；运行时再优先跟随应用当前语言格式化日期。
   const locale = i18n?.resolvedLanguage ?? i18n?.language;
   const planLabel = formatPlanType(snapshot?.subscriptionType);
+  // utilization 是 updatedAt 时刻的观测值，用观测时刻算节奏，避免旧快照随渲染时间自漂移。
+  const paceNowMs = snapshot
+    && typeof snapshot.updatedAt === 'number'
+    && Number.isFinite(snapshot.updatedAt)
+    ? snapshot.updatedAt
+    : nowMs;
 
   const windows: DisplayWindow[] = [];
   if (isDisplayableWindow(snapshot?.fiveHour)) {
@@ -517,6 +497,7 @@ export function QuotaHoverCard({
                     window={displayWindow.window}
                     paceWindowMinutes={displayWindow.paceWindowMinutes}
                     nowMs={nowMs}
+                    paceNowMs={paceNowMs}
                     locale={locale}
                     t={t}
                   />

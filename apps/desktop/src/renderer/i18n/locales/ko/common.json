@@ -4213,14 +4213,9 @@
     "cacheLabel": "캐시",
     "modelLabel": "모델",
     "staleData": "데이터가 {{minutes}}분 전에 업데이트되었습니다",
-    "paceOnTrack": "사용 속도: 정상",
-    "paceReserve": "사용 속도: {{percent}}% 여유",
-    "paceDeficit": "사용 속도: {{percent}}% 초과",
-    "paceLastsToReset": "재설정까지 유지",
-    "paceRunsOutIn": "{{duration}} 후 소진 예상",
-    "durationMinutes": "{{n}}분",
-    "durationHours": "{{n}}시간",
-    "durationDays": "{{n}}일",
+    "paceTrendFast": "현재 평균 사용 속도는 빠른 편입니다(대략적인 추세)",
+    "paceTrendNormal": "현재 평균 사용 속도는 보통입니다(대략적인 추세)",
+    "paceTrendSlow": "현재 평균 사용 속도는 느린 편입니다(대략적인 추세)",
     "waiting": "Claude 구독 사용량은 다음 요청이 완료된 후 업데이트됩니다."
   },
   "usageDetails": {
