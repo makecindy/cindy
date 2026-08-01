@@ -12,6 +12,7 @@ import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 import {
   calibrateDraftModel,
   pickConnectedModelForAgent,
+  resolveDraftSessionProviderId,
   type DraftModelCalibrationInput,
 } from '../lib/draftModelCalibration';
 
@@ -465,5 +466,111 @@ describe('校准结果要带上供应商', () => {
       providersLoading: false,
     });
     expect(result).toEqual({ model: 'claude-opus-5', providerId: 'anthropic' });
+  });
+});
+
+describe('resolveDraftSessionProviderId', () => {
+  it('XD 已连接但不提供当前模型时,不能省略校准选中的 Anthropic 来源(issue #1196)', () => {
+    const gateway = provider('xd', true, {
+      'claude-code': [model('claude-sonnet-5')],
+    });
+    const anthropic = provider(
+      'anthropic',
+      true,
+      { 'claude-code': [model('claude-opus-5')] },
+      'subscription',
+    );
+
+    expect(
+      resolveDraftSessionProviderId({
+        providers: [gateway, anthropic],
+        agent: 'claude-code',
+        model: 'claude-opus-5',
+        explicitProviderId: null,
+        effectiveProviderId: 'anthropic',
+      }),
+    ).toBe('anthropic');
+  });
+
+  it('只有 Anthropic 已连接时仍可省略来源,保留默认路由语义', () => {
+    const anthropic = provider(
+      'anthropic',
+      true,
+      { 'claude-code': [model('claude-opus-5')] },
+      'subscription',
+    );
+
+    expect(
+      resolveDraftSessionProviderId({
+        providers: [anthropic],
+        agent: 'claude-code',
+        model: 'claude-opus-5',
+        explicitProviderId: null,
+        effectiveProviderId: 'anthropic',
+      }),
+    ).toBeNull();
+  });
+
+  it('XD 被停用时仍按 main 的 spawn 默认语义保留 Anthropic 来源', () => {
+    const suspendedGateway = {
+      ...provider('xd', true, {
+        'claude-code': [model('claude-opus-5')],
+      }),
+      suspended: true,
+    } as ProviderView;
+    const anthropic = provider(
+      'anthropic',
+      true,
+      { 'claude-code': [model('claude-opus-5')] },
+      'subscription',
+    );
+
+    expect(
+      resolveDraftSessionProviderId({
+        providers: [suspendedGateway, anthropic],
+        agent: 'claude-code',
+        model: 'claude-opus-5',
+        explicitProviderId: null,
+        effectiveProviderId: 'anthropic',
+      }),
+    ).toBe('anthropic');
+  });
+
+  it('Codex 折扣模型只由 XD 提供时显式保留 XD,锁定既有实际落点', () => {
+    const openai = provider(
+      'openai',
+      true,
+      { codex: [model('gpt-5.6-sol')] },
+      'subscription',
+    );
+    const gateway = provider('xd', true, {
+      codex: [model('codex/gpt-5.6-sol')],
+    });
+
+    expect(
+      resolveDraftSessionProviderId({
+        providers: [openai, gateway],
+        agent: 'codex',
+        model: 'codex/gpt-5.6-sol',
+        explicitProviderId: null,
+        effectiveProviderId: 'xd',
+      }),
+    ).toBe('xd');
+  });
+
+  it('用户显式选择且仍有效时始终保留该来源', () => {
+    const gateway = provider('xd', true, {
+      'claude-code': [model('claude-opus-5')],
+    });
+
+    expect(
+      resolveDraftSessionProviderId({
+        providers: [gateway],
+        agent: 'claude-code',
+        model: 'claude-opus-5',
+        explicitProviderId: 'xd',
+        effectiveProviderId: 'xd',
+      }),
+    ).toBe('xd');
   });
 });
