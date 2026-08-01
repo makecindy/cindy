@@ -123,7 +123,16 @@ describe('maker:event hot path ordering', () => {
   });
 
   it('projects pending Schedule recovery into scheduler session busy state', () => {
-    expect(source).toContain('isSchedulerInterruptedTurnRecoverySessionReserved(sessionId) ||');
+    expect(source.match(/isSchedulerInterruptedTurnRecoverySessionReserved\(sessionId\)/g)).toHaveLength(2);
+    expect(source).toMatch(
+      /isTurnRunning: \(sessionId\) => \{[\s\S]*?isSchedulerInterruptedTurnRecoverySessionReserved\(sessionId\)[\s\S]*?isSessionTurnDispatchBoundaryBusy/,
+    );
+  });
+
+  it('keeps scheduler origin main-owned at the explicit user enqueue boundary', () => {
+    expect(source).toContain('const requireExplicitUserQueuedMessage = (value: unknown)');
+    expect(source).toContain('delete normalized.origin;');
+    expect(source).toContain('requireExplicitUserQueuedMessage(item),');
   });
 
   it('stashes only the redacted projection of suppressed turn errors', () => {

@@ -7943,7 +7943,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     isTurnRunning: (sessionId) => {
       const sess = getStableSessionForTurnBoundary(sessionId);
-      return isSessionTurnDispatchBoundaryBusy(sessionTurnActivityTracker, sessionId, sess);
+      return (
+        isSchedulerInterruptedTurnRecoverySessionReserved(sessionId)
+        || isSessionTurnDispatchBoundaryBusy(sessionTurnActivityTracker, sessionId, sess)
+      );
     },
     getTurnGeneration: (sessionId) =>
       getStableSessionForTurnBoundary(sessionId)?.getTurnGeneration() ?? null,
@@ -8420,6 +8423,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return normalized;
   };
 
+  /**
+   * INPUT_ENQUEUE 是显式用户输入边界。origin 只允许 main 侧 Orca / scheduler
+   * 直调 coordinator 时写入；renderer 或 device-link 传来的同名字段不能把人发的
+   * 消息伪装成自动任务，从而绕过用户介入应触发的恢复撤销与记账。
+   */
+  const requireExplicitUserQueuedMessage = (value: unknown): AgentInputQueuedMessage => {
+    const normalized = requireQueuedMessage(value);
+    delete normalized.origin;
+    return normalized;
+  };
+
   ipcMain.handle(DL_SESSION_REFERENCE_CAPABILITY_CHANNEL, () => ({
     supported: true,
     version: 1,
@@ -8488,7 +8502,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await inputCoordinator.ensureQueueRestored(sid).catch(() => undefined);
     const queuedWithAttachments = (await materializeQueuedOssAttachments(
       sid,
-      requireQueuedMessage(item),
+      requireExplicitUserQueuedMessage(item),
     )) as AgentInputQueuedMessage;
     const queued = await hydrateQueuedAgentReferences(queuedWithAttachments);
     const commitAutoTitle = await prepareDeviceLinkAutoTitle(sid, queued);

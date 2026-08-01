@@ -6624,6 +6624,28 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(projection.recovery?.kind).toBe('active-turn');
   });
 
+  it('退避窗口内 scheduler 入队保持恢复 owner 与接管态,不冒充用户介入', async () => {
+    const h = createHarness();
+    const sid = 'takeover-preserved-by-scheduler-enqueue';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    await failAfterDispatch(h, sid);
+    h.onUserEnqueue.mockClear();
+
+    h.coordinator.enqueue(
+      sid,
+      makeItem('q-scheduler', 'next scheduled run', {
+        origin: { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: '任务 1' },
+      }),
+    );
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(h.onUserEnqueue).not.toHaveBeenCalled();
+    expect(projection.autoResumePending).toEqual(TAKEOVER_INFO);
+    expect(projection.recovery?.kind).toBe('active-turn');
+    expect(projection.pendingQueue.map((item) => item.clientId)).toContain('q-scheduler');
+  });
+
   it('host 不接管时照常呈现错误(默认行为不变)', async () => {
     const h = createHarness();
     const sid = 'no-takeover-keeps-banner';

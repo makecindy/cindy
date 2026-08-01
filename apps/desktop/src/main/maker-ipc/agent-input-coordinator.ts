@@ -560,6 +560,22 @@ function isSchedulerOriginItem(item: AgentInputQueuedMessage | null | undefined)
   return item?.origin?.kind === 'scheduler';
 }
 
+type EnqueuedInputIntent = 'scheduler-automation' | 'ui-continuation' | 'user-intervention';
+
+/**
+ * 入队来源决定谁有权终止当前恢复生命周期。
+ *
+ * scheduler origin 是 main 侧 runner 写入的可信元数据（IPC 用户入口会剥掉
+ * renderer 传来的 origin），优先级高于正文推导出的 Continue 标记：自动任务即使
+ * 正文碰巧等于续跑提示，也仍只是等待上一轮恢复收口的 FIFO 工作，不能冒充用户
+ * 介入去撤销 owner、清接管态或顶替尚未结算的终态。
+ */
+function classifyEnqueuedInputIntent(item: AgentInputQueuedMessage): EnqueuedInputIntent {
+  if (isSchedulerOriginItem(item)) return 'scheduler-automation';
+  if (item.originalSyntheticTrigger === 'continue') return 'ui-continuation';
+  return 'user-intervention';
+}
+
 function isActiveTurnBeforeVendorDispatch(active: ActiveTurn): boolean {
   return (
     !isActiveTurnDispatched(active) &&
@@ -912,6 +928,7 @@ export class AgentInputCoordinator {
       return this.getProjection(sessionId);
     }
     this.rememberEnqueuedClientId(state, item.clientId);
+    const intent = classifyEnqueuedInputIntent(item);
     // 真的有一条**新**消息进队了 = 这个会话被别的内容推进(见 deps.onUserEnqueue)。
     // 必须放在幂等去重**之后**: 被去重丢弃的重传(弱网 / 移动端补发)压根没推进任何
     // 东西, 若在它上面作废记账, 一条延迟到达的旧重传就会把之后才装上的、更新的那笔
@@ -922,19 +939,21 @@ export class AgentInputCoordinator {
     // 渠道回流的记账), 而**就是**一次续跑意图 —— 所以在这里发续跑信号并带上 clientId,
     // 让消费方按 clientId 做权威归属(见 deps.onUiRetry 的说明)。
     // (错误横幅那条走 retryLastError, 压根不经本入口。)
-    if (item.originalSyntheticTrigger === 'continue') {
+    if (intent === 'ui-continuation') {
       this.deps.onUiRetry?.(sessionId, item.clientId);
-    } else {
+    } else if (intent === 'user-intervention') {
       this.deps.onUserEnqueue?.(sessionId);
     }
-    // 有新消息入队(用户自己接手,或自愈的续跑指令本身)→ 撤掉「重新连接中」提示:
-    // 它的语义是"退避窗口内什么都没发生",队列一动就不再成立。
-    state.autoResumePending = null;
-    // 还有一种接管**尚未做出决策**的中断(error 早于用户气泡落库完成,见
-    // isAutoResumeDeferred):它的接管发生在本次 enqueue **之后**,清接管态清不到它。
-    // 不就地作废的话,用户已经自己接手了,延后结算却还会再接管一次、再补发一条旧 turn
-    // 的续跑指令插到他前面(greptile P1)。
-    markPendingTerminalSupersededByUser(state.activeTurn);
+    if (intent !== 'scheduler-automation') {
+      // 有用户动作入队(用户自己接手,或自愈的续跑指令本身)→ 撤掉「重新连接中」提示:
+      // 它的语义是"退避窗口内用户没有接手",自动任务排队不改变这一事实。
+      state.autoResumePending = null;
+      // 还有一种接管**尚未做出决策**的中断(error 早于用户气泡落库完成,见
+      // isAutoResumeDeferred):它的接管发生在本次 enqueue **之后**,清接管态清不到它。
+      // 不就地作废的话,用户已经自己接手了,延后结算却还会再接管一次、再补发一条旧 turn
+      // 的续跑指令插到他前面(greptile P1)。scheduler 自动任务不属于用户接手。
+      markPendingTerminalSupersededByUser(state.activeTurn);
+    }
     // 崩溃恢复暂停队列的死锁解除(2026-07-14):恢复暂停只防"重启后自动替用户
     // 发送",用户显式输入(composer 发送 / 中断横幅「继续任务」,均经 INPUT_ENQUEUE
     // 携带本 flag)即视为放行——否则「继续任务」只是往暂停队列再塞一条,永远
@@ -948,8 +967,10 @@ export class AgentInputCoordinator {
         clientId: item.clientId,
       });
     }
-    this.abandonActiveTurnRecoveryForUserAction(state);
-    this.clearErrorUnlessQueueHeadBlocked(state);
+    if (intent !== 'scheduler-automation') {
+      this.abandonActiveTurnRecoveryForUserAction(state);
+      this.clearErrorUnlessQueueHeadBlocked(state);
+    }
     // 用户点「继续任务」表达的是恢复刚才中断/失败的 turn，必须先于此前
     // 已排队的新任务执行；普通 composer / Orca / scheduler 输入仍保持 FIFO。
     // 复用 prepend helper 同时把本项加入 pending compact 的等待集合，避免
