@@ -287,6 +287,8 @@ interface TurnCompletionWaiter {
 interface TurnCompletionWaiterOptions {
   onProgress?: () => void;
   origin: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId: string };
+  /** Coordinator queue path has authoritative per-turn origins; direct fallback keeps legacy compatibility. */
+  requireTurnOrigin?: boolean;
 }
 
 export class MakerScheduleRunner implements ScheduleRunner {
@@ -1586,6 +1588,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           waiterSlot.current = this.createTurnCompletionWaiter(live, {
             onProgress: ctx.onProgress,
             origin,
+            requireTurnOrigin: true,
           });
         }
         // 与直发路径 onAccepted 的簿记对齐(落库/基线钩子除外,见方法头注释)。
@@ -2118,17 +2121,19 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // 一个绑定会话可能在自动续跑退避期间被用户接管。waiter 只消费本 run
         // 的 scheduler turn（初始派发与 autoResume 都保留同一 origin）；其它 run、
         // 手动消息与 /compact 的事件既不能刷新本 run 的存活时间，也不能改写结果。
-        // 生产 Session 会补全 origin；无 origin 只保留给旧 synthetic/fake 事件兼容，
-        // 用户接管路径会在它们产生前同步 fail 并摘掉本 waiter。
+        // 生产 Session 会给本 turn 的事件补全 origin，并在终态后清空。终态之后只有
+        // 已明确进入 background-task 等待态的 standalone 事件仍属于本 run；其它
+        // 无 origin 事件可能是旧 turn 的迟到 done、用户 turn 或 auto-compact，不能
+        // 刷新存活时间、写入结果或提前收口。
         const eventOrigin = ev.turnOrigin;
-        if (eventOrigin) {
-          if (
-            eventOrigin.kind !== 'scheduler' ||
-            eventOrigin.scheduleId !== options.origin.scheduleId ||
-            eventOrigin.runId !== options.origin.runId
-          ) {
-            return;
-          }
+        if (!eventOrigin) {
+          if (options.requireTurnOrigin && !waitingForBgTasks) return;
+        } else if (
+          eventOrigin.kind !== 'scheduler' ||
+          eventOrigin.scheduleId !== options.origin.scheduleId ||
+          eventOrigin.runId !== options.origin.runId
+        ) {
+          return;
         }
         // 任何事件都是"这一轮还在推进"的证据 —— 上报给引擎的卡死守卫(它判的是
         // "多久没有新反馈",不是"总共跑了多久")。放在最前面:后面每个分支都可能

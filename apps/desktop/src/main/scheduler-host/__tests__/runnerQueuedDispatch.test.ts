@@ -412,6 +412,20 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
         runId: 'other-run',
       },
     });
+    // Session 在上一 turn 终态后会清 origin；此时 standalone 用户/compact 事件
+    // 不能被仍在等待的 schedule waiter 误收。
+    harness.emit({
+      type: 'text',
+      data: { text: 'originless standalone output', isFinal: true },
+      source: 'claude-code',
+      turnOrigin: undefined,
+    });
+    harness.emit({
+      type: 'done',
+      data: {},
+      source: 'claude-code',
+      turnOrigin: undefined,
+    });
     await Promise.resolve();
     expect(harness.listenerCount()).toBe(1);
 
@@ -479,6 +493,15 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
 
       // 生产路径在恢复 turn 的 pre-vendor 边界清除旧 claim。
       autoResumePending = false;
+      // terminal error 后 Session 已清 origin；旧 attempt 的配对 done 即使迟到到
+      // pre-vendor 窗口，也不能被当成新续跑的完成事件。
+      harness.emit({
+        type: 'done',
+        data: {},
+        source: 'claude-code',
+        turnOrigin: undefined,
+      });
+      expect(harness.listenerCount()).toBe(1);
       harness.emit({
         type: 'text',
         data: { text: 'delayed continuation result', isFinal: true },
