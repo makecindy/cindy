@@ -127,6 +127,11 @@ export function SettingsTextInput({
           mono && 'font-mono',
           'text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
           'border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] focus:border-[var(--settings-input-border-focus)]',
+          // Focus Blue 环(DESIGN.md §4 Inputs 的 focus 槽 + §「Focus Blue」的 --focus-ring):
+          // 迁移进来的密钥输入原本就带 focus:ring-2,不能在收敛时丢掉——同一个表单里紧邻的
+          // 名称框仍是蓝环,只留 border 变色会让上下两个框焦点表现不一致。用 opaque
+          // --focus-ring 而非 --focus-ring-soft:与这些框的原值、以及相邻未迁移输入一致。
+          'focus:ring-2 focus:ring-[var(--focus-ring)]',
         )}
         style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
       />
