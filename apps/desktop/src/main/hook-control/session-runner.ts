@@ -209,19 +209,25 @@ function broadcastSessionCreated(sessionId: string): void {
   }
 }
 
-// ── turn 时长策略: **不设上限**(2026-08-01 定) ──────────────────────────────
+// ── turn 时长策略: **不设总时长上限, 只设静默兜底**(2026-08-01 定) ──────────
 //
 // 与桌面端自己跑 turn 的规则一致: 普通会话没有任何"一轮跑太久就砍"的机制 ——
 // turn 跑到 done 为止, 卡住了由用户自己停; scheduler 也只有
 // BG_TASK_IDLE_FALLBACK_MS 那条"done 之后还有在途后台 subagent"的兜底。hook 没有
 // 理由比它们更严: 同一个 agent、同一套 SDK, 换个入口就被砍掉正在出的结果, 才是
-// 需要解释的那一侧。
+// 需要解释的那一侧。所以整轮硬超时(TURN_HARD_TIMEOUT_MS = 60min)撤了 —— 一个跑了
+// 一小时且仍在出结果的任务被拦腰截断, 恰恰截的是最值得等的那类。
 //
-// 这里曾经有过一条整轮硬超时(TURN_HARD_TIMEOUT_MS = 60min), 理由写的是「hook v1
-// 无 task.cancel, SDK 卡死时队列会永久饿死」。那条理由**已经过时**: task.cancel
-// 早已实现(manager 收帧 -> dispatcher.abortSession), 走的正是用户手动 Stop 的同
-// 一条 session.abort() 路径。兜底因此收敛到 server 侧的静默 lease 一处 —— 它到期
-// 会发 cancel 把这边停下来, 单点判定、单点收口, 不再两头各砍一刀还要互相错开数值。
+// 但"没有上限"不等于"没有出口"。撤掉它时写的理由是「task.cancel 已实现, 兜底收敛
+// 到 server 的静默 lease 一处」, 那句话漏了一个前提: **cancel 得送得到**。控制连接
+// 断开时它送不到(dispatcher.onDisconnected 只撤 activeContinuations, 不动
+// runningByRequest), abortSession 失败时也只记一行日志。这两种情况下 server 早已
+// 放弃, 而 execute() 还停在 `await observer.finished` 上, running 槽位永不释放 ——
+// 该 session 的后续渠道消息永久排队, 重连也救不回来(PR #1272 review 指出)。
+//
+// 出口因此放在 observer 里: TURN_IDLE_TIMEOUT_MS —— **任何**事件都重置, 只对真静默
+// 生效, 且取值高于 server 的 30 分钟静默 lease, 连接还在时永远是 server 的 cancel
+// 先手。见 turnObserver.ts 该常量的注释。
 
 /**
  * 从 tool_result 全文抽出可外发的 xdt-image URL —— 与 IM turnRunner 的
@@ -325,20 +331,26 @@ function finalTextForChannel(observer: HookTurnObserver, im: string | undefined)
  *
  * 文本引用 / 旁路图都不存在时不读盘 —— base64 编码只在真需要时发生; 收集失败不
  * 拖垮收口, 附件是回帖增强, 文本永远要发出去。
+ *
+ * `publicText` 是要发出去的正文, `turnText` 是**整轮**正文。X 那种只发最后一条的
+ * 渠道两者不相等 —— 引用扫描必须按整轮来, 否则 agent 贴在中间那条消息里的图和
+ * 文件会随着"只取末段"一起被丢掉(PR #1272 review 指出)。
  */
 async function collectOutboundForFinalText(
-  assistantText: string,
+  publicText: string,
+  turnText: string,
   extraImageAbsPaths: string[],
   allowedFileRoots: string[],
   log: { warn(msg: string): void },
 ): Promise<{ finalText: string; attachments?: HookRunOutcome['attachments'] }> {
-  if (!hasOutboundRefs(assistantText) && extraImageAbsPaths.length === 0) {
-    return { finalText: assistantText };
+  if (!hasOutboundRefs(turnText) && extraImageAbsPaths.length === 0) {
+    return { finalText: publicText };
   }
   try {
-    const collected = await collectOutboundAttachments(assistantText, extraImageAbsPaths, {
+    const collected = await collectOutboundAttachments(publicText, extraImageAbsPaths, {
       resolveImageUrl: resolveRenderableImageUrl,
       allowedFileRoots,
+      ...(turnText !== publicText ? { refScanText: turnText } : {}),
       log,
     });
     if (collected.skipped > 0) {
@@ -352,7 +364,7 @@ async function collectOutboundForFinalText(
     log.warn(
       `hook outbound attachment collection failed: ${err instanceof Error ? err.message : String(err)}`,
     );
-    return { finalText: assistantText };
+    return { finalText: publicText };
   }
 }
 
@@ -924,6 +936,7 @@ export function createMakerHookSessionRunner(deps: {
       // 发生); 收集失败不拖垮收口 —— 附件是回帖增强, 文本永远要发出去
       const collected = await collectOutboundForFinalText(
         finalTextForChannel(observer, req.source?.im),
+        observer.text(),
         extraImageAbsPaths,
         [workingDir],
         log,
@@ -982,81 +995,83 @@ function beginContinuationWatch(
     req.onAbandon();
     return () => undefined;
   }
-    const startedAt = Date.now();
-    const extraImageAbsPaths: string[] = [];
-    let claimed = false;
-    let settled = false;
-    const observer = observeHookTurn(session, {
-      // 与 run() 同一判据: Telegram DM 只流正文, 群/topic 走完整过程卡。
-      answerOnlyProgress: req.source?.im === 'telegram' && req.laneKind !== 'group',
-      onProgress: (text) => {
-        // 认领之前不发进度: 那时 server 还没把这条消息挂到新 requestId 上。
-        if (claimed) req.onProgress(text);
-      },
-      onToolResult: (fullText) => collectOutboundImages(fullText, extraImageAbsPaths, log),
-      onSilentStopSettled,
-      log,
-    });
+  const startedAt = Date.now();
+  const extraImageAbsPaths: string[] = [];
+  let claimed = false;
+  let settled = false;
+  const observer = observeHookTurn(session, {
+    // 与 run() 同一判据: Telegram DM 只流正文, 群/topic 走完整过程卡。
+    answerOnlyProgress: req.source?.im === 'telegram' && req.laneKind !== 'group',
+    onProgress: (text) => {
+      // 认领之前不发进度: 那时 server 还没把这条消息挂到新 requestId 上。
+      if (claimed) req.onProgress(text);
+    },
+    onToolResult: (fullText) => collectOutboundImages(fullText, extraImageAbsPaths, log),
+    onSilentStopSettled,
+    log,
+  });
 
-    // **立刻认领**: 归属已由 clientId 确认, 且 dispatch 即将不可逆 —— 不需要再等首个
-    // 事件来判断"这一轮到底是不是目标轮"。早先那套(等首个事件)恰恰是误认的来源:
-    // 会话级观察器分不清事件属于哪条用户消息, 绕过 coordinator 的 turn 会顶替进来。
-    claimed = true;
-    req.onClaim();
+  // **立刻认领**: 归属已由 clientId 确认, 且 dispatch 即将不可逆 —— 不需要再等首个
+  // 事件来判断"这一轮到底是不是目标轮"。早先那套(等首个事件)恰恰是误认的来源:
+  // 会话级观察器分不清事件属于哪条用户消息, 绕过 coordinator 的 turn 会顶替进来。
+  claimed = true;
+  req.onClaim();
 
-    /** 收口一次(幂等)。errorMessage 非空 = 这一轮失败。 */
-    const settle = (errorMessage: string | null): void => {
-      if (settled) return;
-      settled = true;
-      observer.stop();
-      // 已停止观察 —— 成功那一路还要 await 收集出站附件, 所以先同步告知一声, 让
-      // dispatcher 把这一轮从"在观察"的账上摘掉(见 onSettling 的说明)。
-      req.onSettling?.();
-      if (!claimed) {
-        // 从没认领过 -> server 侧对这条消息一无所知, 静默退场。
-        req.onAbandon();
-        return;
-      }
-      if (errorMessage !== null) {
-        // 与 run() 的失败收口同形(finalText 空, 错误交给渠道渲染)。
-        req.onEnd({
-          status: 'error',
-          finalText: '',
-          errorMessage,
-          durationMs: Date.now() - startedAt,
-        });
-        return;
-      }
-      void (async () => {
-        // workDir 以 live session 为权威(会话可能被移动过), 与 run() 里
-        // isDirAuthorized 用 session.workDir 复核同理。
-        const collected = await collectOutboundForFinalText(
-          finalTextForChannel(observer, req.source?.im),
-          extraImageAbsPaths,
-          [session.workDir],
-          log,
-        );
-        req.onEnd({
-          status: 'ok',
-          finalText: collected.finalText,
-          errorMessage: null,
-          durationMs: Date.now() - startedAt,
-          ...(collected.attachments !== undefined ? { attachments: collected.attachments } : {}),
-        });
-      })();
-    };
+  /** 收口一次(幂等)。errorMessage 非空 = 这一轮失败。 */
+  const settle = (errorMessage: string | null): void => {
+    if (settled) return;
+    settled = true;
+    observer.stop();
+    // 已停止观察 —— 成功那一路还要 await 收集出站附件, 所以先同步告知一声, 让
+    // dispatcher 把这一轮从"在观察"的账上摘掉(见 onSettling 的说明)。
+    req.onSettling?.();
+    if (!claimed) {
+      // 从没认领过 -> server 侧对这条消息一无所知, 静默退场。
+      req.onAbandon();
+      return;
+    }
+    if (errorMessage !== null) {
+      // 与 run() 的失败收口同形(finalText 空, 错误交给渠道渲染)。
+      req.onEnd({
+        status: 'error',
+        finalText: '',
+        errorMessage,
+        durationMs: Date.now() - startedAt,
+      });
+      return;
+    }
+    void (async () => {
+      // workDir 以 live session 为权威(会话可能被移动过), 与 run() 里
+      // isDirAuthorized 用 session.workDir 复核同理。
+      const collected = await collectOutboundForFinalText(
+        finalTextForChannel(observer, req.source?.im),
+        observer.text(),
+        extraImageAbsPaths,
+        [session.workDir],
+        log,
+      );
+      req.onEnd({
+        status: 'ok',
+        finalText: collected.finalText,
+        errorMessage: null,
+        durationMs: Date.now() - startedAt,
+        ...(collected.attachments !== undefined ? { attachments: collected.attachments } : {}),
+      });
+    })();
+  };
 
-    // 不设时长上限, 与 run() 及桌面端普通会话一致(见本文件「turn 时长策略」)。
-    // 这条路径此前与 run() 一样有整轮硬超时, 只是刻意不再叠加更短的"空转"超时,
-    // 理由是「长 turn 完全可能几分钟不出事件, 或只出被本观察器忽略的账号级事件」
-    // —— 那条担心依然成立, 而现在连整轮那道也撤了, 收口只认 observer。
-    observer.finished.then(
-      () => settle(null),
-      (err: unknown) => settle(err instanceof Error ? err.message : String(err)),
-    );
+  // 不设**总时长**上限, 与 run() 及桌面端普通会话一致(见本文件「turn 时长策略」)。
+  // 这条路径此前与 run() 一样有整轮硬超时, 只是刻意不再叠加更短的"空转"超时,
+  // 理由是「长 turn 完全可能几分钟不出事件, 或只出被本观察器忽略的账号级事件」
+  // —— 那条担心依然成立, 所以 observer 的静默兜底按**任何**事件重置, 门限也放到
+  // 分钟级之上(TURN_IDLE_TIMEOUT_MS), 长 turn 不受影响。
+  observer.finished.then(
+    () => settle(null),
+    (err: unknown) => settle(err instanceof Error ? err.message : String(err)),
+  );
 
-    return () => {
-      // 撤销: 已认领的必须收口(否则渠道消息停在假的"进行中"), 未认领的静默退场。
-      settle(claimed ? 'hook continuation cancelled' : null);
-    };
+  return () => {
+    // 撤销: 已认领的必须收口(否则渠道消息停在假的"进行中"), 未认领的静默退场。
+    settle(claimed ? 'hook continuation cancelled' : null);
+  };
 }

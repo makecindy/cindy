@@ -37,6 +37,27 @@ import { overloadFailureNotice, overloadRetryNotice } from '../im/shared/turnRet
 const BG_TASK_IDLE_FALLBACK_MS = 10 * 60_000;
 
 /**
+ * 整轮**静默**兜底: 距上一次任何事件超过这个时长就放弃观察并按失败收口。
+ *
+ * 这不是时长上限 —— 任何事件都会重置它, 一个持续输出的 turn 可以跑到天荒地老
+ * (这正是取消旧的 60 分钟总时长硬超时的原因)。它堵的是另一件事: **observer 永远
+ * 不收口时, 调用方的队列槽位永远不释放**。dispatcher 的 running / runningByRequest
+ * 只在 execute() 收口那一行删除, 而 execute() 就停在 `await observer.finished`
+ * 上 —— 之后这个 session 的所有渠道消息永久排队, 重连也救不回来。
+ *
+ * 为什么不能只靠 server 的 lease 发 task.cancel(PR #1272 review 指出):
+ *   - 控制连接断了: cancel 帧根本送不到, 而 onDisconnected 只撤 activeContinuations,
+ *     不动 runningByRequest;
+ *   - cancel 送到了但 abortSession 失败: 现在只记一行日志。
+ * 两种都是「server 侧已经放弃、这边还挂着」, 必须有一条不依赖连接的本地出口。
+ *
+ * 取值刻意**高于**服务端的静默 lease(三个 hook server 均为 30 分钟): 连接还在时
+ * 永远是 server 的 cancel 先到, 走正常取消路径; 这条只在连 cancel 都送不到时兜底,
+ * 不与 server 抢着判定。
+ */
+const TURN_IDLE_TIMEOUT_MS = 45 * 60_000;
+
+/**
  * 进度快照节流(trailing-edge): 事件密集时最多每 1.5s 发一帧, 与 IM 流式卡的
  * chat.update 节流(1300ms)同量级 —— server 侧每帧一次 chat.update(Tier 3
  * ~50/min/频道), 这个间隔留有安全余量。
@@ -208,6 +229,7 @@ export function observeHookTurn(
     const runningBgTasks = new Set<string>();
     let waitingForBgTasks = false;
     let bgFallbackTimer: NodeJS.Timeout | undefined;
+    let idleTimer: NodeJS.Timeout | undefined;
     let pendingSettleUnsub: (() => void) | undefined;
     const clearBgTimer = (): void => {
       if (bgFallbackTimer) {
@@ -215,14 +237,39 @@ export function observeHookTurn(
         bgFallbackTimer = undefined;
       }
     };
-    const finish = (): void => {
+    /**
+     * 摘监听 + 停所有定时器。收口的三条出口(resolve / reject / 调用方 stop)必须
+     * 走同一份拆装 —— 之前是三处各抄一遍, 新加一个定时器就得记着补三处。
+     */
+    const teardown = (): void => {
       clearBgTimer();
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = undefined;
+      }
       pendingSettleUnsub?.();
       pendingSettleUnsub = undefined;
       progress?.stop();
       off();
       stopListening = undefined;
+    };
+    const finish = (): void => {
+      teardown();
       resolve();
+    };
+    const failTurn = (err: Error): void => {
+      teardown();
+      reject(err);
+    };
+    /** 静默兜底(见 TURN_IDLE_TIMEOUT_MS): 每个事件都重置, 所以只对真静默生效。 */
+    const armIdleTimer = (): void => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        const minutes = Math.round(TURN_IDLE_TIMEOUT_MS / 60_000);
+        log.warn(`[hook-runner] turn idle for ${minutes}min without any event: ${session.id}`);
+        failTurn(new Error(`hook turn produced no agent event for ${minutes} minutes`));
+      }, TURN_IDLE_TIMEOUT_MS);
+      idleTimer.unref?.();
     };
     const armBgTimer = (): void => {
       clearBgTimer();
@@ -233,6 +280,10 @@ export function observeHookTurn(
       bgFallbackTimer.unref?.();
     };
     const off = session.onEvent((ev: AgentEvent) => {
+      // 任何事件都算"还活着" —— 包括本观察器不处理的那些(账号级事件等)。
+      // 判据必须是"有没有事件", 不是"有没有正文": 一个只在跑工具、几十分钟
+      // 不出一个字的 turn 完全正常, 按正文判会把它误杀。
+      armIdleTimer();
       if (waitingForBgTasks) armBgTimer();
       if (ev.type === 'agent_task_update') {
         const data = ev.data as { taskId?: string; status?: string } | null;
@@ -336,11 +387,7 @@ export function observeHookTurn(
             pendingSettleUnsub?.();
             pendingSettleUnsub = undefined;
             if (reason === 'exhausted') {
-              clearBgTimer();
-              progress?.stop();
-              off();
-              stopListening = undefined;
-              reject(new Error('silent-stop auto-resume exhausted'));
+              failTurn(new Error('silent-stop auto-resume exhausted'));
             } else {
               finish();
             }
@@ -354,10 +401,6 @@ export function observeHookTurn(
         }
         finish();
       } else if (isTerminalAgentErrorEvent(ev)) {
-        clearBgTimer();
-        progress?.stop();
-        off();
-        stopListening = undefined;
         const data = ev.data as
           | { message?: string; errorStatus?: number; codexErrorInfo?: string }
           | null;
@@ -370,16 +413,13 @@ export function observeHookTurn(
         if (friendly !== null) {
           log.warn(`hook turn failed (upstream overload): ${raw}`);
         }
-        reject(new Error(friendly ?? raw));
+        failTurn(new Error(friendly ?? raw));
       }
     });
-    stopListening = (): void => {
-      clearBgTimer();
-      pendingSettleUnsub?.();
-      pendingSettleUnsub = undefined;
-      progress?.stop();
-      off();
-    };
+    stopListening = teardown;
+    // 观察一开始就上表: turn 从头到尾一个事件都没有(SDK 起不来 / 进程没了)
+    // 同样要有出口, 不能只在收到过事件的路径上才受保护。
+    armIdleTimer();
   });
   // 调用方可能先 stop() 再决定不消费结果; 没有消费方的 rejection 不该炸进程。
   void finished.catch(() => undefined);

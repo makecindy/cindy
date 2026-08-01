@@ -154,6 +154,32 @@ describe('collectOutboundAttachments', () => {
     expect(r.text).toContain('Attachment delivery incomplete: 2 items');
   });
 
+  it('refScanText: 引用范围可宽于正文, 正文变换仍只作用于正文', async () => {
+    // X 只发最后一条助手消息, 而图常贴在中间那条。两者绑在一起的话那些图会
+    // 静默丢失(PR #1272 review 指出) —— 所以扫描范围与正文范围分开。
+    const turnText = '先看图 ![图](xdt-image://chart.png)\n\n结论: 趋势向上。';
+    const publicText = '结论: 趋势向上。';
+    const r = await collectOutboundAttachments(publicText, [], {
+      ...deps({ '/cache/chart.png': Buffer.from('png') }),
+      refScanText: turnText,
+    });
+    expect(r.attachments.map((a) => a.name)).toEqual(['chart.png']);
+    // 正文不该被扩回整轮 —— 扩大的只是"哪些引用要收"。
+    expect(r.text).toBe(publicText);
+    expect(r.text).not.toContain('先看图');
+    expect(r.skipped).toBe(0);
+  });
+
+  it('refScanText 省略时按 finalText 扫描(既有行为不变)', async () => {
+    const r = await collectOutboundAttachments(
+      '成果 ![图](xdt-image://chart.png)',
+      [],
+      deps({ '/cache/chart.png': Buffer.from('png') }),
+    );
+    expect(r.attachments.map((a) => a.name)).toEqual(['chart.png']);
+    expect(r.text).toContain('🖼️ _图(已作为附件发送)_');
+  });
+
   it('同一路径重复引用只收一份', async () => {
     const text = '![x](xdt-image://same.png) 再看一遍 ![x](xdt-image://same.png)';
     const r = await collectOutboundAttachments(

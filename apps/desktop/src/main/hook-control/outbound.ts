@@ -156,6 +156,17 @@ export interface OutboundDeps {
   resolveImageUrl: (url: string) => { absPath: string };
   /** xdt-file:// 允许读取的根目录; 未提供时 fail-closed, 不读取任何本地文件。 */
   allowedFileRoots?: string[];
+  /**
+   * 扫描出站引用的文本范围; 省略 = 就用 finalText。
+   *
+   * 给"正文只取整轮一部分"的渠道用(目前是 X: 一次 mention 只有一条公开回帖的
+   * 名额, 正文只取最后一条助手消息)。**正文范围与引用范围必须分开**: agent 常
+   * 在中间那条消息里贴图/贴文件, 最后一条只写结论, 两者绑在一起的话那些附件
+   * 会静默丢失(PR #1272 review 指出)。
+   *
+   * 正文变换仍然只作用于 finalText —— 这里扩大的只是"哪些引用要被收集成附件"。
+   */
+  refScanText?: string;
   /** realpath 校验(生产: fs.promises.realpath; 测试注入)。 */
   realpath?: (absPath: string) => Promise<string>;
   /** 读文件字节(生产: fs.promises.readFile)。 */
@@ -263,10 +274,14 @@ export async function collectOutboundAttachments(
     return true;
   };
 
+  // 引用扫描范围可以宽于正文(见 deps.refScanText)。下面两轮扫描一律用它,
+  // 第 3 步的正文变换一律用 finalText —— 两者只在 X 这类渠道上不相等。
+  const refScanText = deps.refScanText ?? finalText;
+
   // 1. 图片: 文本引用 + tool_result 旁路, 按 absPath 去重(模型常重复引用)
   const imageAbsPaths: string[] = [];
   const seenImage = new Set<string>();
-  for (const m of finalText.matchAll(XDT_IMAGE_REGEX)) {
+  for (const m of refScanText.matchAll(XDT_IMAGE_REGEX)) {
     try {
       const { absPath } = deps.resolveImageUrl(m[2]);
       imageAbsPathByUrl.set(m[2], absPath);
@@ -293,7 +308,7 @@ export async function collectOutboundAttachments(
 
   // 2. 文件引用(去重同上)
   const seenFile = new Set<string>();
-  for (const m of finalText.matchAll(XDT_FILE_REGEX)) {
+  for (const m of refScanText.matchAll(XDT_FILE_REGEX)) {
     const url = m[2];
     if (fileAbsPathByUrl.has(url)) continue;
     let absPath: string;

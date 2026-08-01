@@ -234,6 +234,7 @@ vi.mock('../../maker-host/index.js', () => ({
 
 import { createMakerHookSessionRunner, extractToolResultImageUrls } from '../session-runner.js';
 import { buildHookPromptNote, SLACK_HOOK_PROMPT_NOTE } from '../outbound.js';
+import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.js';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 
 const log = { info: vi.fn(), warn: vi.fn() };
@@ -866,6 +867,40 @@ describe('进度快照(turn.progress 链路)', () => {
       expect(outcome.finalText).toBe('答案是 42。');
       expect(outcome.finalText).not.toContain('先查一下');
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('X: 正文只取末段, 但附件引用仍按整轮扫描(贴在中间那条的图不能丢)', async () => {
+    // agent 的常态是"中间那条贴图 -> 最后一条只写结论"。正文范围和引用扫描范围
+    // 绑在一起的话, 只取末段会把那些图静默丢掉(PR #1272 review 指出)。
+    // 这里让 resolveSafe 抛错 -> 收集失败计数 -> 正文追加"附件未送达"警告:
+    // 这条警告本身就是"引用确实被扫到了"的证据。修复前它压根不会出现。
+    vi.useFakeTimers();
+    try {
+      vi.mocked(resolveXdtImage).mockImplementation(() => {
+        throw new Error('cache miss');
+      });
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(baseReq({ source: { im: 'x' } }));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      cb({ type: 'text', data: { text: '图在这里 ![图](xdt-image://chart.png)', isFinal: true } });
+      cb({ type: 'text', data: { text: '结论: 趋势向上。', isFinal: true } });
+      cb({ type: 'done', data: null });
+
+      const outcome = await p;
+      expect(outcome.status).toBe('ok');
+      // 公开正文仍然只有最后一条 + 收集失败的警告, 不带上一条的过程叙述。
+      expect(outcome.finalText).toContain('结论: 趋势向上。');
+      expect(outcome.finalText).not.toContain('图在这里');
+      expect(outcome.finalText).toContain('Attachment delivery incomplete');
+    } finally {
+      vi.mocked(resolveXdtImage).mockReset();
       vi.useRealTimers();
     }
   });
@@ -1863,8 +1898,9 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
   it('长 turn 不被误杀: 几分钟不出事件也不该收口', async () => {
     // 曾经有过一条 2 分钟"空转"超时, 但它从不在有事件时清除 —— 任何跑过 2 分钟的
     // 正常续跑都会被强制判成 error 并把那条错误写进渠道。现在兜底与 run() 一致:
-    // 静默超时(分钟级门限), 且**任何**事件都会重置它, 长 turn 几分钟不出事件
-    // (或只出被本观察器忽略的账号级事件)仍然安全。
+    // 只有**整轮静默**超过 TURN_IDLE_TIMEOUT_MS(45min, 远高于分钟级)才收口, 且
+    // 任何事件都会重置它 —— 长 turn 几分钟不出事件(或只出被本观察器忽略的账号级
+    // 事件)仍然安全。
     vi.useFakeTimers();
     try {
       fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
@@ -1914,10 +1950,38 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     }
   });
 
-  it('彻底静默也不自行收口: 兜底交给 server lease 的 task.cancel(与桌面端会话一致)', async () => {
-    // 桌面端普通会话没有"一轮跑太久就砍"这回事, hook 没理由更严(2026-08-01 定)。
-    // server 侧 lease 到期会发 task.cancel, 走的是用户手动 Stop 的同一条 abort
-    // 路径 —— 兜底单点在那里, 这边只管跑, 不再两头各砍一刀。
+  it('彻底静默到门限: 本地自行收口, 不把槽位永久挂在 server 的 cancel 上', async () => {
+    // 桌面端普通会话没有"一轮跑太久就砍"这回事, hook 没理由更严(2026-08-01 定),
+    // 所以总时长上限撤了。但"没有上限"不等于"没有出口": server 的 task.cancel 要
+    // 送得到才管用 —— 控制连接一断就送不到, 而 dispatcher 的 running 槽位只在
+    // execute() 收口那行释放。少了这条本地出口, 该 session 的后续渠道消息永久排队,
+    // 重连也救不回来(PR #1272 review 指出)。
+    vi.useFakeTimers();
+    try {
+      fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+      const runner = createMakerHookSessionRunner({ log });
+      const { req, events, ends } = watchReq();
+      runner.watchContinuation!(req as never);
+
+      // 门限之前: 一动不动地等, 不误杀。
+      await vi.advanceTimersByTimeAsync(44 * 60_000);
+      expect(events).toEqual(['claim']);
+      expect(h.eventCbs.has('sess-live')).toBe(true);
+
+      // 越过门限: 以 error 收口, 监听摘掉, 调用方得以释放槽位。
+      await vi.advanceTimersByTimeAsync(2 * 60_000);
+      expect(events.at(-1)).toBe('end:error');
+      expect(ends[0]?.errorMessage).toContain('no agent event');
+      expect(h.eventCbs.has('sess-live')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('静默门限按**任何**事件重置: 40 分钟一个事件也能一直跑下去', async () => {
+    // 反向锚点: 门限若按"总时长"算(或只被正文事件重置), 这个用例会在第二轮
+    // 之前就被砍掉。判据必须是"距上一个事件多久", 且账号级/工具类事件同样算数
+    // —— 一个只在跑工具、几十分钟不出一个字的 turn 完全正常。
     vi.useFakeTimers();
     try {
       fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
@@ -1925,9 +1989,17 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
       const { req, events } = watchReq();
       runner.watchContinuation!(req as never);
 
-      await vi.advanceTimersByTimeAsync(3 * 60 * 60_000);
-      expect(events).toEqual(['claim']);
-      expect(h.eventCbs.has('sess-live')).toBe(true);
+      for (let i = 0; i < 5; i++) {
+        await vi.advanceTimersByTimeAsync(40 * 60_000);
+        // 观察器并不处理这个事件类型 —— 它照样算"还活着"。
+        h.eventCbs.get('sess-live')!({ type: 'agent_task_update', data: { taskId: `t${i}` } });
+      }
+      // 累计 200 分钟, 远超门限, 但从未静默满 45 分钟。
+      expect(events.filter((e) => e.startsWith('end'))).toEqual([]);
+
+      h.eventCbs.get('sess-live')!({ type: 'done', data: null });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(events.at(-1)).toBe('end:ok');
     } finally {
       vi.useRealTimers();
     }
