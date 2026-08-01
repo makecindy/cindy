@@ -1279,6 +1279,44 @@ describe('进度快照(turn.progress 链路)', () => {
     expect(releaseLease).toHaveBeenCalledOnce();
   });
 
+  it('Telegram 群复用安全权限档会话也在后台续跑完成前持有 turn lease', async () => {
+    fakeMaker.getSessionMeta.mockResolvedValueOnce({
+      workDir: 'D:/repo',
+      model: 'meta-model',
+      sdkSessionId: 'sdk-1',
+      agentKind: 'claude-code',
+      permissionMode: 'ask',
+    });
+    const session = makeManualSession('sess-old');
+    fakeMaker.createSession.mockResolvedValueOnce(session);
+    const runner = createMakerHookSessionRunner({ log });
+    const pending = runner.run(
+      baseReq({
+        sessionId: 'sess-old',
+        isNew: false,
+        source: { im: 'telegram', userText: 'hi' },
+        laneKind: 'group',
+      }),
+    );
+    await flush();
+
+    const cb = h.eventCbs.get('sess-old')!;
+    cb({ type: 'agent_task_update', data: { taskId: 'bg-safe', status: 'running' } });
+    cb({ type: 'done', data: null });
+    await flush();
+
+    const releaseLease = session.acquireTurnLease.mock.results[0]?.value;
+    expect(session.acquireTurnLease).toHaveBeenCalledOnce();
+    expect(session.setPermissionMode).not.toHaveBeenCalled();
+    expect(releaseLease).not.toHaveBeenCalled();
+
+    cb({ type: 'agent_task_update', data: { taskId: 'bg-safe', status: 'completed' } });
+    cb({ type: 'done', data: null });
+    await expect(pending).resolves.toMatchObject({ status: 'ok' });
+    expect(session.setPermissionMode).not.toHaveBeenCalled();
+    expect(releaseLease).toHaveBeenCalledOnce();
+  });
+
   it('Telegram 群轮次结束时不覆盖用户并发选择的更严格权限档', async () => {
     const session = makeFakeSession('sess-old');
     session.send.mockImplementationOnce(

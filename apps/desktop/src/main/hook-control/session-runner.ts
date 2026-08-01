@@ -586,7 +586,7 @@ export function createMakerHookSessionRunner(deps: {
       let reusedPermissionModeApplied = false;
       let reusedPermissionModeLease: PermissionModeState | null = null;
       let reusedPermissionRestore: Promise<void> | null = null;
-      let releaseReusedTurnLease: (() => void) | null = null;
+      let releaseTelegramGroupTurnLease: (() => void) | null = null;
       const restoreReusedPermissionMode = (): Promise<void> => {
         if (reusedPermissionRestore !== null) return reusedPermissionRestore;
         if (
@@ -637,8 +637,8 @@ export function createMakerHookSessionRunner(deps: {
         try {
           await restoreReusedPermissionMode();
         } finally {
-          releaseReusedTurnLease?.();
-          releaseReusedTurnLease = null;
+          releaseTelegramGroupTurnLease?.();
+          releaseTelegramGroupTurnLease = null;
         }
       };
 
@@ -985,12 +985,19 @@ export function createMakerHookSessionRunner(deps: {
                 }
               : {}),
             afterTurnReserved: async () => {
+              if (isTelegramGroupTurn) {
+                // The vendor may briefly report idle between foreground done
+                // and a background-task continuation. Keep every official
+                // Telegram group turn exclusive across that gap, even when the
+                // reused session already has a safe permission mode and needs
+                // no temporary mode switch.
+                releaseTelegramGroupTurnLease ??= session.acquireTurnLease();
+              }
               if (reusedPermissionModeToRestore !== null) {
                 // Claude can report the foreground turn done while background
                 // tasks still own automatic continuations. Keep the Session
                 // exclusive until the observer settles those tasks and the
                 // temporary safe permission mode has been restored.
-                releaseReusedTurnLease ??= session.acquireTurnLease();
                 // Mark first: setPermissionMode can partially mutate before a
                 // transport error, in which case the outer finally must still
                 // make a best-effort restore.
