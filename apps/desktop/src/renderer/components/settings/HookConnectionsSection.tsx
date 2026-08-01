@@ -1053,7 +1053,7 @@ export function HookConnectionsSection() {
             : null}
           {provider === 'telegram' && cs.confirmed && view.behaviorAvailable === true ? (
             <div className="mt-2 flex flex-col gap-5 border-t border-[var(--border-default)] pt-4">
-              <ImDefaultSettingsSection channel="telegram" embedded />
+              <ImDefaultSettingsSection descriptionChannel="telegram" embedded />
               <TelegramBehaviorSettings source="official" />
               <TelegramGroupActivationSettings source="official" />
             </div>

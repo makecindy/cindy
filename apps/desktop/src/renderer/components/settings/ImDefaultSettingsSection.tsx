@@ -55,10 +55,14 @@ export interface ImDefaultSettingsSummary {
 
 export function ImDefaultSettingsSection({
   channel,
+  descriptionChannel = channel,
   embedded = false,
   onSummaryChange,
 }: {
-  channel: ImDefaultSettingsChannel;
+  /** Omit to edit the global defaults used by official hook channels. */
+  channel?: ImDefaultSettingsChannel;
+  /** Channel-specific copy to show when the persisted scope is global. */
+  descriptionChannel?: ImDefaultSettingsChannel;
   embedded?: boolean;
   onSummaryChange?: (summary: ImDefaultSettingsSummary | null) => void;
 }) {
@@ -252,7 +256,7 @@ export function ImDefaultSettingsSection({
               {t('settings.imBot.defaults.title')}
             </h3>
             <p className="mt-2 text-[12px] leading-[1.45] text-[var(--settings-section-desc)]">
-              {t(`settings.imBot.defaults.channelDescriptions.${channel}`)}
+              {t(`settings.imBot.defaults.channelDescriptions.${descriptionChannel}`)}
             </p>
           </div>
         </div>

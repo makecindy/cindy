@@ -81,8 +81,8 @@ vi.mock('../HookWorkspacePrefsEditor', () => ({
 }));
 
 vi.mock('../ImDefaultSettingsSection', () => ({
-  ImDefaultSettingsSection: ({ channel }: { channel: string }) => (
-    <div data-testid={`im-defaults-${channel}`} />
+  ImDefaultSettingsSection: ({ channel }: { channel?: string }) => (
+    <div data-testid={`im-defaults-${channel ?? 'global'}`} />
   ),
 }));
 
@@ -810,7 +810,7 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     expect(ipc.providerBindRevoke).not.toHaveBeenCalled();
   });
 
-  it('shows Telegram defaults, behavior, and group settings only after linking', async () => {
+  it('shows global official Telegram defaults, behavior, and group settings only after linking', async () => {
     ipc.get.mockResolvedValue({
       hook: {
         ...BASE_HOOK,
@@ -838,7 +838,7 @@ describe('HookConnectionsSection Telegram binding actions', () => {
 
     render(<HookConnectionsSection />);
     await expandChannelCard(TELEGRAM_CARD);
-    expect(await screen.findByTestId('im-defaults-telegram')).toBeTruthy();
+    expect(await screen.findByTestId('im-defaults-global')).toBeTruthy();
     expect(screen.getByTestId('telegram-behavior')).toBeTruthy();
     expect(screen.getByTestId('telegram-groups')).toBeTruthy();
   });
