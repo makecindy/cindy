@@ -46,7 +46,7 @@ function isEntry(raw: unknown): raw is WorkspaceProviderSourceEntry {
   if (!raw || typeof raw !== 'object') return false;
   const r = raw as Record<string, unknown>;
   return (
-    (r.channel === 'slack' || r.channel === 'telegram') &&
+    (r.channel === 'slack' || r.channel === 'telegram' || r.channel === 'x') &&
     (r.teamId === null || (typeof r.teamId === 'string' && r.teamId.length > 0 && r.teamId.length <= 64)) &&
     typeof r.workspace === 'string' &&
     HOOK_WORKSPACE_ALIAS_RE.test(r.workspace) &&

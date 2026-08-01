@@ -11,6 +11,8 @@
  *   (1280, 800) → ≈0.3813;(800, 600) → ≈0.2860;宽度拉伸不改 scale。
  */
 
+import { LOGIN_GROUP } from './loginDesignTokens';
+
 /** 设计画布尺寸(figma §5.1 桌面通用画板 1819×2098)。 */
 export const LOGIN_STAGE_WIDTH = 1819;
 export const LOGIN_STAGE_HEIGHT = 2098;
@@ -52,8 +54,8 @@ export interface PanelPlacement {
 
 /**
  * 面板定位(用户拍板 2026-07-23,design.md §11):
- *   - 尺寸恒定 0.5(登录整体组 680×560 设计px → 340×280 逻辑px);
- *   - 垂直锚点跟随品牌层 desktopScale 画布(组中心 y=groupY+280 映射到屏幕),
+ *   - 尺寸恒定 0.5(登录整体组 680×620 设计px → 340×310 逻辑px);
+ *   - 垂直锚点跟随品牌层 desktopScale 画布(组中心 y=groupY+310 映射到屏幕),
  *     再依次 clamp:① 品牌避让——面板顶 ≥ 立绘底(设计 y=1209,figma §4.11)+24;
  *     ② 功能优先——面板底 ≤ 视口底-24(压过品牌避让,小窗允许叠上立绘渐隐区,
  *     面板层 z-[9990] 本就盖品牌层 z-[9980]);额外底部内容通过 bottomReserve
@@ -67,8 +69,10 @@ export function panelPlacement(
   bottomReserve = 0,
 ): PanelPlacement {
   const { scale: brandScale } = desktopScale(w, h);
-  const panelHeight = 560 * PANEL_FIXED_SCALE; // 登录整体组高 560(figma §5.1)
-  const anchorCenterY = h / 2 + (groupY + 280 - LOGIN_STAGE_HEIGHT / 2) * brandScale;
+  // 登录整体组高(figma §5.1;面板 500 + gap 40 + 圆钮 80 = 620,面板增高后同步跟随)
+  const panelHeight = LOGIN_GROUP.height * PANEL_FIXED_SCALE;
+  const anchorCenterY =
+    h / 2 + (groupY + LOGIN_GROUP.height / 2 - LOGIN_STAGE_HEIGHT / 2) * brandScale;
   const brandBottomY = h / 2 + (1209 - LOGIN_STAGE_HEIGHT / 2) * brandScale;
   let topY = anchorCenterY - panelHeight / 2;
   topY = Math.max(topY, brandBottomY + 24);

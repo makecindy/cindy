@@ -11,6 +11,7 @@ import {
   DEFINITIVE_REFRESH_FAILURE_CODES,
   getRefreshTokenReplacementCandidate,
   isDefinitiveRefreshFailure,
+  pickRefreshTokenReplacementCandidate,
   resolveRefreshFailureAction,
   resolveSessionExpiredReason,
   runRefreshWithReplacementRetry,
@@ -119,6 +120,72 @@ describe('refresh token replacement detection', () => {
     expect(getRefreshTokenReplacementCandidate('rt-old', 'rt-old')).toBeNull();
   });
 
+  it('多来源候选:按顺序取第一枚「非空且不是本次请求那一枚」', () => {
+    // legacy → v1 迁移窗口里两个实例可能各写一个文件,只认单一来源的一方追不上对方。
+    expect(pickRefreshTokenReplacementCandidate('rt-old', ['rt-v1', 'rt-legacy'])).toBe('rt-v1');
+    // v1 还没被别人更新(仍是自己那枚)→ 回退到 legacy 里旧版实例刚轮换出的新 token。
+    expect(pickRefreshTokenReplacementCandidate('rt-old', ['rt-old', 'rt-legacy'])).toBe(
+      'rt-legacy',
+    );
+    // 空洞不阻断后续候选。
+    expect(pickRefreshTokenReplacementCandidate('rt-old', [null, undefined, '', 'rt-legacy'])).toBe(
+      'rt-legacy',
+    );
+  });
+
+  it('多来源候选:全部缺失或都等于请求 token → 没有替换候选(真确定性失效)', () => {
+    expect(pickRefreshTokenReplacementCandidate('rt-old', [])).toBeNull();
+    expect(pickRefreshTokenReplacementCandidate('rt-old', [null, undefined, ''])).toBeNull();
+    expect(pickRefreshTokenReplacementCandidate('rt-old', ['rt-old', 'rt-old'])).toBeNull();
+  });
+
+  it('调用方交出全部来源,由 runner 跨来源挑候选', async () => {
+    const okResult: RefreshFetchResult<unknown> = {
+      ok: true,
+      status: 200,
+      data: { accessToken: 'a', refreshToken: 'rt-newer' },
+    };
+    const doRefresh = vi.fn(async (refreshToken: string) =>
+      refreshToken === 'rt-legacy' ? okResult : invalidToken,
+    );
+
+    const result = await runRefreshWithReplacementRetry('rt-old', {
+      doRefresh,
+      // 模拟 authManager 的读侧:v1 仍是自己那枚,legacy 才有旧版实例轮换出的新 token。
+      readLatestStoredTokens: () => ['rt-old', 'rt-legacy'],
+    });
+
+    expect(result).toMatchObject({ result: okResult, requestedToken: 'rt-legacy' });
+  });
+
+  it('首选来源存着已拒的 token 时,不得挤掉次选来源里有效的那枚', async () => {
+    // codex #878 P1:v1 存着已拒的 A、legacy 被并发的旧实例轮换成有效的 C。若调用方先按
+    // 优先级折叠成单个候选,交出的永远是 A;A 已被拒 → 整轮以确定性失效收场,C 从未被
+    // 试过,还会连同 C 一起被删。筛选必须在折叠之前发生。
+    const okResult: RefreshFetchResult<unknown> = {
+      ok: true,
+      status: 200,
+      data: { accessToken: 'a', refreshToken: 'rt-d' },
+    };
+    const doRefresh = vi.fn(async (refreshToken: string) =>
+      refreshToken === 'rt-c' ? okResult : invalidToken,
+    );
+
+    const result = await runRefreshWithReplacementRetry('rt-a', {
+      doRefresh,
+      // v1 始终是已被拒的 rt-a;legacy 在本进程重试期间被另一个实例换成了 rt-c。
+      readLatestStoredTokens: () => ['rt-a', 'rt-c'],
+    });
+
+    expect(result).toMatchObject({
+      result: okResult,
+      requestedToken: 'rt-c',
+      replacementRetries: 1,
+    });
+    expect(doRefresh).toHaveBeenNthCalledWith(1, 'rt-a');
+    expect(doRefresh).toHaveBeenNthCalledWith(2, 'rt-c');
+  });
+
   it('确定性失败且磁盘已有新 token → 用新 token 重试,不清登录态', () => {
     expect(resolveRefreshFailureAction(invalidToken, 'rt-old', 'rt-new')).toEqual({
       kind: 'replacement-retry',
@@ -163,7 +230,7 @@ describe('refresh token replacement detection', () => {
 
     const result = await runRefreshWithReplacementRetry('rt-old', {
       doRefresh,
-      readLatestStoredToken: () => 'rt-new',
+      readLatestStoredTokens: () => ['rt-new'],
       onReplacementRetry: ({ replacementRetry, status, code }) =>
         replacements.push({ replacementRetry, status, code }),
     });
@@ -198,7 +265,7 @@ describe('refresh token replacement detection', () => {
 
     const result = await runRefreshWithReplacementRetry('rt-old', {
       doRefresh,
-      readLatestStoredToken: () => latestTokens.shift() ?? 'rt-new',
+      readLatestStoredTokens: () => [latestTokens.shift() ?? 'rt-new'],
       replacementRecheck: {
         delaysMs: [10],
         sleep: (ms) => (sleepCalls.push(ms), Promise.resolve()),
@@ -225,7 +292,7 @@ describe('refresh token replacement detection', () => {
 
     const result = await runRefreshWithReplacementRetry('rt-old', {
       doRefresh,
-      readLatestStoredToken: () => 'rt-new',
+      readLatestStoredTokens: () => ['rt-new'],
       replacementRecheck: {
         delaysMs: [10],
         sleep,
@@ -250,7 +317,7 @@ describe('refresh token replacement detection', () => {
 
     const result = await runRefreshWithReplacementRetry('rt-old', {
       doRefresh,
-      readLatestStoredToken: () => latestTokens.shift() ?? 'rt-new-2',
+      readLatestStoredTokens: () => [latestTokens.shift() ?? 'rt-new-2'],
       maxReplacementRetries: 1,
     });
 
@@ -264,6 +331,54 @@ describe('refresh token replacement detection', () => {
     });
     expect(doRefresh).toHaveBeenNthCalledWith(1, 'rt-old');
     expect(doRefresh).toHaveBeenNthCalledWith(2, 'rt-new-1');
+  });
+
+  it('两个凭证来源互指时不来回重试:已拒过的 token 不再算候选,落到确定性失效', async () => {
+    // v1 与 legacy 分叉:各自都是「对方眼里的替换 token」。只排除紧邻的上一枚会让两枚
+    // 来回被选中、耗尽重试后以 replacement-retry 收尾——runtime 于是每 60s 重试一枚
+    // 已知无效的凭证而永不过期,冷启动则保留不可用凭证并以未登录启动。
+    const doRefresh = vi.fn(async () => invalidToken);
+    const disk = { v1: 'rt-v1', legacy: 'rt-legacy' };
+
+    const result = await runRefreshWithReplacementRetry('rt-v1', {
+      doRefresh,
+      readLatestStoredTokens: () => [disk.v1, disk.legacy],
+      maxReplacementRetries: 5,
+    });
+
+    // 两枚都试过一次就收手,不吃满 maxReplacementRetries。
+    expect(result).toMatchObject({
+      failureAction: { kind: 'definitive-failure' },
+      replacementRetries: 1,
+      replacementRetryExhausted: false,
+    });
+    expect(doRefresh).toHaveBeenCalledTimes(2);
+    expect(doRefresh).toHaveBeenNthCalledWith(1, 'rt-v1');
+    expect(doRefresh).toHaveBeenNthCalledWith(2, 'rt-legacy');
+  });
+
+  it('replacement recheck 期间读回一枚早前已拒过的 token → 同样落到确定性失效', async () => {
+    const doRefresh = vi.fn(async () => invalidToken);
+    // 磁盘读取序列:①第一轮读到 rt-2 → 追上去重试;②第二轮读不到替换 → 进 recheck;
+    // ③recheck 期间又读回最初那枚 rt-1(例如镜像把它写进了另一个来源)。
+    const diskReads: (string | null)[] = ['rt-2', null, 'rt-1', null];
+    const sleepCalls: number[] = [];
+
+    const result = await runRefreshWithReplacementRetry('rt-1', {
+      doRefresh,
+      readLatestStoredTokens: () => [diskReads.length ? (diskReads.shift() ?? null) : null],
+      maxReplacementRetries: 5,
+      replacementRecheck: {
+        delaysMs: [10, 20],
+        sleep: (ms) => (sleepCalls.push(ms), Promise.resolve()),
+      },
+    });
+
+    // recheck 读回的 rt-1 在第一轮就被拒过,不得据此再发第三次请求。
+    expect(result.failureAction).toEqual({ kind: 'definitive-failure' });
+    expect(doRefresh).toHaveBeenCalledTimes(2);
+    expect(doRefresh).toHaveBeenNthCalledWith(1, 'rt-1');
+    expect(doRefresh).toHaveBeenNthCalledWith(2, 'rt-2');
   });
 });
 

@@ -99,6 +99,19 @@ export interface AgentSwitchSessionRow {
 }
 
 export interface MakerSessionAgentSwitchHandlerDeps {
+  /**
+   * 停用轴的边界裁决(生产 = register.ts 的 assertModelRouteUsable,内核纯逻辑在
+   * model-route-guard.ts)。跨引擎切换是新的路由选择,目标 (agent, model, 来源) 被
+   * 停用必须抛错拒绝 —— 本 channel 在 device-link allowlist 内,且切回停泊引擎会以
+   * resumeSessionId bootstrap,create 侧的 resume 豁免拦不住它(PR #744 review)。
+   * 返回非空 = 隐式来源的默认落点被停用,应改路由到该启用来源。缺省 = 不裁决
+   * (测试最小 harness)。
+   */
+  assertModelRouteUsable?(
+    agent: 'claude-code' | 'codex',
+    model: string,
+    providerId: string | null,
+  ): Promise<string | undefined>;
   getSessionRow(sessionId: string): Promise<AgentSwitchSessionRow | null>;
   getLiveSession(sessionId: string): { isTurnRunning(): boolean } | null | undefined;
   closeSession(sessionId: string): Promise<void>;
@@ -320,8 +333,20 @@ export async function performSessionAgentSwitch(
   if (providerId !== undefined && providerId !== null && typeof providerId !== 'string') {
     throwIpcError('INVALID_PARAMS', 'providerId must be string | null');
   }
-  const normalizedProviderId =
+  let normalizedProviderId =
     typeof providerId === 'string' ? providerId.trim() || null : providerId;
+
+  // 停用轴准入(PR #744 review):意图登记与 applyNow 提交都要过裁决(applyNow 重入
+  // 本函数时按最新目录再判一次)。目标路由被停用 → 抛错;隐式默认落点被停用而有
+  // 启用替代拷贝 → 直接以显式来源落地(后续意图/提交/内存路由全部用改后的值)。
+  if (deps.assertModelRouteUsable) {
+    const reroute = await deps.assertModelRouteUsable(
+      targetAgentKind,
+      model,
+      typeof normalizedProviderId === 'string' ? normalizedProviderId : null,
+    );
+    if (reroute && typeof normalizedProviderId !== 'string') normalizedProviderId = reroute;
+  }
 
   const row = await deps.getSessionRow(sessionId);
   throwIfAgentSwitchAborted(signal);
@@ -415,6 +440,20 @@ export async function performSessionAgentSwitch(
     throwIfAgentSwitchAborted(signal);
     if (live) {
       await deps.closeSession(sessionId);
+    }
+
+    // 停用轴:提交点重裁决(PR #744 review 第十五轮)—— parked 数据加载、handoff
+    // 构建、closeSession 都是长 await,入口裁决可能已过期。此刻拒绝仍安全:DB 未写,
+    // 旧会话即使已关也只是下一次发送按旧路由懒重建,不产生新的停用路由请求。
+    if (deps.assertModelRouteUsable) {
+      const rerouteAtCommit = await deps.assertModelRouteUsable(
+        targetAgentKind,
+        model,
+        typeof normalizedProviderId === 'string' ? normalizedProviderId : null,
+      );
+      if (rerouteAtCommit && typeof normalizedProviderId !== 'string') {
+        normalizedProviderId = rerouteAtCommit;
+      }
     }
 
     // ---- commit point:此后切换生效 ----

@@ -273,7 +273,179 @@ export interface RsbBrowserPopupPayload {
   /** Chromium disposition:foreground-tab / background-tab / new-window / other 等。
    *  v1 不做差异化处理(都开新 RSB tab),但保留给后续 background-tab 等区分行为用。 */
   disposition: string;
+  /** 发起 popup 的 RSB tab id(TabRegistry 按 guest webContentsId 反查)。
+   *  guest 尚未 report(dom-ready 前)或非 RSB 管辖 webview 时缺省。 */
+  openerTabId?: string;
+  /** 发起 popup 的 tab 所属 session。renderer 端据此把 popup tab 落进 opener 的
+   *  bucket——没有它时只能落在"用户正在看的 session",agent 后台 session 触发的
+   *  popup 会串进无关会话。 */
+  openerSessionId?: string;
 }
+
+/**
+ * popup opener 反查钩子。webview-security 不直接依赖 rsb-browser-bridge 单例
+ * (保持本模块只做安全加固的单向依赖);bootstrap 在注册 RSB bridge IPC 时注入。
+ * 未注入(启动早期 / 单测)时 popup 照常路由,只是缺 opener 归属字段。
+ */
+export type RsbPopupOpenerResolver = (
+  webContentsId: number,
+) => { tabId: string; sessionId: string } | null;
+
+let popupOpenerResolver: RsbPopupOpenerResolver | null = null;
+
+export function setRsbPopupOpenerResolver(resolver: RsbPopupOpenerResolver | null): void {
+  popupOpenerResolver = resolver;
+}
+
+interface ResolvedPopupOpener {
+  openerTabId: string;
+  openerSessionId: string;
+}
+
+function resolvePopupOpener(webContentsId: number): ResolvedPopupOpener | null {
+  if (!popupOpenerResolver) return null;
+  try {
+    const record = popupOpenerResolver(webContentsId);
+    if (!record) return null;
+    return { openerTabId: record.tabId, openerSessionId: record.sessionId };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 反查落空时的有界等待:renderer 的 report 与 guest 的 window.open 是两条不同
+ * sender 的 IPC,到达 main 的顺序没有硬保证。renderer 已在 `did-attach`(导航
+ * 提交前)就上报,但那条 report 可能还在途,而 guest 页面 head 里的同步脚本已经
+ * 调了 `window.open()` —— 此刻同步反查必然落空,payload 缺 openerSessionId,
+ * popup 就会落进"用户正在看的 session"。
+ *
+ * 所以 main 侧不能"尽力反查一次就发":反查落空时把 popup 的路由推迟到 registry
+ * 收到该 guest 的记录(或超时)之后。等待只发生在落空分支,命中时零延迟。
+ *
+ * 等待模型分两档:
+ *  - **事件驱动**(bootstrap 注入了 report 订阅钩子,生产路径):report 落地的
+ *    瞬间完成反查,不赌固定窗口;超时只兜"report 永不来"(opener 在上报前就被
+ *    销毁等),可以放得很宽 —— 5s 后仍无归属才降级为无归属路由(落当前 session,
+ *    与本修复之前的行为一致)。
+ *  - **轮询兜底**(订阅钩子未注入:启动早期 / 单测):保持原有 25ms × 1s 短轮询。
+ */
+export const POPUP_OPENER_WAIT_TIMEOUT_MS = 1_000;
+export const POPUP_OPENER_EVENT_WAIT_TIMEOUT_MS = 5_000;
+const POPUP_OPENER_WAIT_INTERVAL_MS = 25;
+
+/**
+ * report 到达事件的订阅钩子(与 popupOpenerResolver 同模式注入,保持本模块对
+ * rsb-browser-bridge 的单向解耦)。回调参数是该条 report 的 webContentsId。
+ */
+export type RsbPopupOpenerReportSubscriber = (
+  listener: (webContentsId: number) => void,
+) => () => void;
+
+let popupOpenerReportSubscriber: RsbPopupOpenerReportSubscriber | null = null;
+
+export function setRsbPopupOpenerReportSubscriber(
+  subscriber: RsbPopupOpenerReportSubscriber | null,
+): void {
+  popupOpenerReportSubscriber = subscriber;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+}
+
+async function waitForPopupOpener(webContentsId: number): Promise<ResolvedPopupOpener | null> {
+  const subscribe = popupOpenerReportSubscriber;
+  if (!subscribe) {
+    // 轮询兜底档(无事件源可订阅)。
+    const deadline = Date.now() + POPUP_OPENER_WAIT_TIMEOUT_MS;
+    for (;;) {
+      const opener = resolvePopupOpener(webContentsId);
+      if (opener) return opener;
+      if (Date.now() >= deadline) return null;
+      await delay(POPUP_OPENER_WAIT_INTERVAL_MS);
+    }
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    let unsub: (() => void) | null = null;
+    const timer = setTimeout(() => {
+      finish(resolvePopupOpener(webContentsId));
+    }, POPUP_OPENER_EVENT_WAIT_TIMEOUT_MS);
+    timer.unref?.();
+    const finish = (value: ResolvedPopupOpener | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      unsub?.();
+      resolve(value);
+    };
+    // subscribe 是外部注入的钩子:它抛错会让 Promise executor 抛 → promise
+    // reject → 调用方的 `void promise.then(...)` 变 unhandled rejection,popup
+    // 路由静默中断。防御性兜住:订阅失败就退化为"纯超时兜底"档,路由不中断。
+    try {
+      unsub = subscribe((reportedId) => {
+        if (reportedId !== webContentsId) return;
+        finish(resolvePopupOpener(webContentsId));
+      });
+    } catch {
+      unsub = null;
+    }
+    // 订阅建立后再同步查一次,堵"report 在建立订阅之前恰好落地"的竞态窗。
+    const now = resolvePopupOpener(webContentsId);
+    if (now) finish(now);
+  });
+}
+
+/**
+ * 把一个 popup 路由给 host renderer,尽最大努力带上 opener 归属。
+ *
+ * `openerWebContentsId` 缺省或反查钩子未注入(启动早期 / 单测)时同步直发 ——
+ * 没有可等的东西,等待只会白白延迟 popup。命中同步反查也直发。只有"钩子在、
+ * 但这个 guest 还没进 registry"这一种情况才走有界等待(见上方注释)。
+ */
+function routeBrowserPopup(
+  hostContents: WebContents,
+  openerWebContentsId: number | undefined,
+  payload: RsbBrowserPopupPayload,
+): void {
+  if (openerWebContentsId === undefined || !popupOpenerResolver) {
+    sendBrowserPopup(hostContents, payload);
+    return;
+  }
+  const opener = resolvePopupOpener(openerWebContentsId);
+  if (opener) {
+    sendBrowserPopup(hostContents, { ...payload, ...opener });
+    return;
+  }
+  void waitForPopupOpener(openerWebContentsId).then((late) => {
+    sendBrowserPopup(hostContents, { ...payload, ...(late ?? {}) });
+  });
+}
+
+/**
+ * about:blank deferred popup 的隐藏中转 BrowserWindow 的 webPreferences。
+ * 完整安全集,对齐 docs/dev-rules/electron-security-and-process-boundaries.md
+ * 第 3 节的 BrowserWindow 契约 —— 这是一个真实的(隐藏)BrowserWindow,即使
+ * 只活到"偷到第一个真实 URL"也不许比主窗宽松。导出供单测钉住字段完整性。
+ */
+export const BLANK_POPUP_WINDOW_WEB_PREFERENCES = Object.freeze({
+  sandbox: true,
+  nodeIntegration: false,
+  nodeIntegrationInSubFrames: false,
+  nodeIntegrationInWorker: false,
+  contextIsolation: true,
+  webSecurity: true,
+  allowRunningInsecureContent: false,
+  experimentalFeatures: false,
+  plugins: false,
+  navigateOnDragDrop: false,
+  partition: BROWSER_PARTITION,
+  webviewTag: false,
+} as const);
 
 function isInitialBlankPopupUrl(url: string): boolean {
   return url === 'about:blank' || url === 'about:blank#blocked';
@@ -288,20 +460,59 @@ function isRoutablePopupUrl(url: string): boolean {
   }
 }
 
+/**
+ * popup 路由目标 host 的动态解析钩子(bootstrap 注入 rsbWindowController 的
+ * getHostWebContents,与 tab-op bridge 同一来源)。popup 路由可能经过异步等待
+ * (归属反查 / deferred URL 捕获),期间用户 detach 侧边栏或切换视图会让捕获时的
+ * hostContents 过时 —— 旧 renderer 的 Shell 已退订,fanOut 不缓冲,消息发过去
+ * 就是丢弃。发送时刻动态解析当前 host 才能落到活着的订阅者。
+ */
+let popupHostResolver: (() => WebContents | null) | null = null;
+
+export function setRsbPopupHostResolver(resolver: (() => WebContents | null) | null): void {
+  popupHostResolver = resolver;
+}
+
 function sendBrowserPopup(
   hostContents: WebContents,
   payload: RsbBrowserPopupPayload,
 ): void {
-  if (hostContents.isDestroyed()) return;
-  hostContents.send(RSB_BROWSER_POPUP_CHANNEL, payload);
+  // 优先发给"当前"host(detach / 视图切换后是新 renderer);解析失败或未注入
+  // (启动早期 / 单测)回落到调用方捕获的 hostContents。
+  let current: WebContents | null = null;
+  if (popupHostResolver) {
+    try {
+      current = popupHostResolver();
+    } catch {
+      current = null;
+    }
+  }
+  const target = current && !current.isDestroyed() ? current : hostContents;
+  if (target.isDestroyed()) return;
+  target.send(RSB_BROWSER_POPUP_CHANNEL, payload);
 }
 
+/**
+ * @param openerWebContentsId 发起 popup 的 guest webContentsId。归属反查在
+ *   popup 创建时立即发起,不推迟到真实 URL 出现时——这样即使 opener tab 在
+ *   about:blank → 真实 URL 期间被关闭, release 发生前的归属信息已被捕获,
+ *   不会回退到当前活跃会话。缺省则照常路由、只是没有 opener 归属字段。
+ */
 export function installDeferredPopupRouter(
   hostContents: WebContents,
   popupWindow: BrowserWindow,
   disposition: string,
+  openerWebContentsId?: number,
 ): void {
   let routed = false;
+
+  // 在 popup 创建时就发起 opener 反查。resolver 未就绪（启动早期/单测）或
+  // openerWebContentsId 缺省时不启动轮询，沿用同步直发路径。
+  const openerAttrPromise: Promise<ResolvedPopupOpener | null> | null =
+    openerWebContentsId !== undefined && popupOpenerResolver !== null
+      ? waitForPopupOpener(openerWebContentsId)
+      : null;
+
   const closeTimer = setTimeout(() => {
     if (routed || popupWindow.isDestroyed()) return;
     popupWindow.close();
@@ -315,9 +526,15 @@ export function installDeferredPopupRouter(
     if (routed || !isRoutablePopupUrl(url)) return;
     routed = true;
     cleanup();
-    sendBrowserPopup(hostContents, { url, disposition });
     if (!popupWindow.isDestroyed()) {
       popupWindow.close();
+    }
+    if (openerAttrPromise !== null) {
+      void openerAttrPromise.then((opener) => {
+        sendBrowserPopup(hostContents, { url, disposition, ...(opener ?? {}) });
+      });
+    } else {
+      sendBrowserPopup(hostContents, { url, disposition });
     }
   };
 
@@ -410,7 +627,7 @@ export function installWebviewHardener(): void {
       }
       guestContents.setWindowOpenHandler((details) => {
         if (isRoutablePopupUrl(details.url)) {
-          sendBrowserPopup(contents, {
+          routeBrowserPopup(contents, guestContents.id, {
             url: details.url,
             disposition: details.disposition,
           });
@@ -423,14 +640,7 @@ export function installWebviewHardener(): void {
             overrideBrowserWindowOptions: {
               show: false,
               autoHideMenuBar: true,
-              webPreferences: {
-                sandbox: true,
-                nodeIntegration: false,
-                contextIsolation: true,
-                webSecurity: true,
-                partition: BROWSER_PARTITION,
-                webviewTag: false,
-              },
+              webPreferences: { ...BLANK_POPUP_WINDOW_WEB_PREFERENCES },
             },
           };
         }
@@ -438,7 +648,7 @@ export function installWebviewHardener(): void {
         return { action: 'deny' };
       });
       guestContents.on('did-create-window', (popupWindow, details) => {
-        installDeferredPopupRouter(contents, popupWindow, details.disposition);
+        installDeferredPopupRouter(contents, popupWindow, details.disposition, guestContents.id);
       });
       // 拦截 webview guest 内的"浏览器级"快捷键 —— Electron webview 是独立
       // webContents,guest 触发的 keydown 不冒泡到 host 的 window,host renderer

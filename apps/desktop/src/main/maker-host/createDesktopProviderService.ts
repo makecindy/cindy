@@ -20,9 +20,11 @@ import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
 import {
+  BUNDLED_CATALOG,
   buildUserProvider,
   DEFAULT_REMOTE_CATALOG_BUDGET_MS,
   loadCatalog,
+  loadCatalogWithSource,
   type Catalog,
   type CatalogIO,
   type CatalogSourceConfig,
@@ -30,8 +32,14 @@ import {
 
 import { createLogger } from '../logger.js';
 import { getBaseUrl, isDev } from '../manifestService.js';
-import { getClientEndpoint } from '../clientEndpointsService.js';
-import { getActiveCatalog, setActiveCatalog, setCustomProviders, setDiscoveredCodexModels } from './active-catalog.js';
+import { getBuildClientEndpoint, getClientEndpoint } from '../clientEndpointsService.js';
+import {
+  getActiveCatalog,
+  setActiveCatalog,
+  setCustomProviders,
+  setDiscoveredCodexModels,
+  setProviderModelsFromCatalog,
+} from './active-catalog.js';
 import {
   readCodexDiscoveredModels,
   readCodexDiscoveredModelsForAuthRefresh,
@@ -42,8 +50,14 @@ import {
   refreshAnthropicModelsFromHttp,
 } from './model-discovery/anthropic.js';
 import { createProviderService, type ProviderService } from './provider-service.js';
+import { readModelDisableOverrides } from './model-disable-store.js';
 import { listCustomProviders } from './custom-provider-store.js';
-import { setCustomProviderKeyReader, setOAuthTokenReader, setProviderOAuthTokenReader } from './provider-route.js';
+import {
+  setCustomProviderKeyReader,
+  setOAuthTokenReader,
+  setProviderOAuthTokenReader,
+  setProviderViewsReader,
+} from './provider-route.js';
 import { setDiagnosticsKeyReader, setDiagnosticsOAuthTokenReader } from './provider-diagnostics.js';
 import {
   configureGenericOAuth,
@@ -51,10 +65,11 @@ import {
   readCachedGenericOAuthAccessToken,
   resetGenericOAuthMemoryCache,
 } from './generic-oauth.js';
-import { genericOAuthSecretIo, setProviderSecretsClearedListener } from '../secrets/providerSecretStore.js';
+import { genericOAuthSecretIo, addProviderSecretsClearedListener } from '../secrets/providerSecretStore.js';
 import { readClaudeApiKey, desktopCodexAuthAdapter } from './auth-adapters.js';
-import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
+import { getProviderSecretStore, readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import { hasClaudeAiOAuth, hasClaudeAiOAuthUnbound } from './claude-credentials-store.js';
+import { getValidClaudeAiOAuth } from './claude-oauth-refresh.js';
 import {
   getGrokAccessToken,
   hasGrokOAuthLogin,
@@ -63,8 +78,12 @@ import {
 } from './grok-oauth-login.js';
 import { getAuthState } from '../authManager.js';
 import { getActiveAppSession } from '../appSessionState.js';
-import { filterProviderCatalogForAccount } from './provider-access-policy.js';
+import {
+  filterProviderCatalogForAccount,
+  projectProviderCatalogForBuildRegion,
+} from './provider-access-policy.js';
 import { getAppCapabilities } from '../appCapabilities.js';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
   claimDetectedNativeProviderAuth,
   migrateLegacyNativeProviderAuthBindings,
@@ -141,19 +160,32 @@ const io: CatalogIO = {
 /**
  * 构建目录源配置。release 使用区域化 Model Access 公共接口，旧 OSS 保留为迁移期回退；dev 不联网。
  *
- * 注：区域 endpoint 或 OSS base 在会话中途切换（办公室↔家）只影响下次进程加载；本进程仍持有
- * 已校验目录。远端不可用时依次退化到旧 OSS 与 bundled，不影响基础 Provider 可用性。
+ * 会话切到另一 auth realm 时，Model Access 公共接口随 active endpoint 改变并触发整份目录
+ * 重载。旧 OSS 只属于安装包区域，因此仅同区加载允许使用；跨区主源失败时直接退化 bundled，
+ * 绝不把安装区域的 provider/routing 目录冒充成组织区域目录。
  */
 function buildSource(): CatalogSourceConfig {
   const dev = isDev();
+  const baseUrl = dev ? undefined : getClientEndpoint('modelAccessApiBaseUrl');
+  const usesBuildRealm = !dev && baseUrl === getBuildClientEndpoint('modelAccessApiBaseUrl');
   return {
     url: process.env.XDT_MODELS_URL,
     localPath: process.env.XDT_MODELS_PATH,
-    baseUrl: dev ? undefined : getClientEndpoint('modelAccessApiBaseUrl'),
-    fallbackBaseUrl: dev ? undefined : getBaseUrl(),
+    baseUrl,
+    fallbackBaseUrl: dev || !usesBuildRealm ? undefined : getBaseUrl(),
     remoteBudgetMs: DEFAULT_REMOTE_CATALOG_BUDGET_MS,
     disableFetch: dev || process.env.XDT_DISABLE_MODELS_FETCH === '1',
   };
+}
+
+function catalogSourceKey(source: CatalogSourceConfig): string {
+  return JSON.stringify({
+    url: source.url ?? null,
+    localPath: source.localPath ?? null,
+    baseUrl: source.baseUrl ?? null,
+    fallbackBaseUrl: source.fallbackBaseUrl ?? null,
+    disableFetch: source.disableFetch ?? false,
+  });
 }
 
 /**
@@ -174,6 +206,13 @@ async function cleanupLegacyCatalogCache(): Promise<void> {
 
 let activeLoaded = false;
 let activeInflight: Promise<Catalog> | null = null;
+let catalogRefreshInflight: Promise<Catalog> | null = null;
+let activeCatalogSourceKey: string | null = null;
+let endpointReloadGeneration = 0;
+let endpointReloadInflight: {
+  sourceKey: string;
+  promise: Promise<Catalog>;
+} | null = null;
 
 /**
  * 启动期（splash）await 一次：加载远端目录写入 active-catalog。幂等 + 并发去重。
@@ -184,7 +223,16 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   // 接通自定义供应商密钥读取器（idempotent）：provider-route 用 setter 注入避免触电，
   // 这里在路由发生前（splash 早于任何 turn）把真实 safeStorage 读取接进去。
   setCustomProviderKeyReader(readCustomProviderKey);
-  setProviderOAuthTokenReader((providerId) => (providerId === 'xai' ? getGrokAccessToken() : null));
+  setProviderOAuthTokenReader((providerId, agent, options) => {
+    if (providerId === 'xai') return getGrokAccessToken();
+    // Codex's child process carries a ChatGPT/OpenAI bearer.  The Anthropic
+    // bridge must instead read the Claude.ai subscription credential owned by
+    // the host (and allow the existing refresher to rotate it when needed).
+    if (providerId === 'anthropic' && agent === 'codex') {
+      return getValidClaudeAiOAuth(options).then((oauth) => oauth?.accessToken ?? null);
+    }
+    return null;
+  });
   // 测试连接探测与路由同源读 key（同 setter 模式，见 provider-diagnostics.ts）。
   setDiagnosticsKeyReader(readCustomProviderKey);
   // 通用 OAuth Runner 接线（idempotent）：safeStorage blob IO + 系统浏览器拉起;
@@ -198,7 +246,7 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   });
   // 账号切换清空本机密钥后,同步失效 generic-oauth 的内存缓存——
   // 不失效的话磁盘 blob 已删但缓存还热,B 账号会继续用 A 的 token 路由(串号)。
-  setProviderSecretsClearedListener(() => {
+  addProviderSecretsClearedListener(() => {
     resetGenericOAuthMemoryCache();
     resetGrokOAuthMemoryCache();
   });
@@ -208,12 +256,22 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   };
   setOAuthTokenReader(readOAuthToken);
   setDiagnosticsOAuthTokenReader(readOAuthToken);
+  // 在启动期固定 service 实例，避免请求路由热路径重复进入 getter 里的 legacy
+  // owner 绑定迁移；每次 listProviders 仍会实时读取凭证连接态。
+  const providerService = getDesktopProviderService();
+  setProviderViewsReader(() => providerService.listProviders({
+    allowSideEffects: false,
+    catalog: getActiveCatalog(),
+  }));
   if (activeLoaded) return Promise.resolve(getActiveCatalog());
   if (!activeInflight) {
+    const source = buildSource();
+    const sourceKey = catalogSourceKey(source);
     // 首次加载时顺手清掉旧版磁盘缓存孤儿（fire-and-forget，每进程一次）。
     void cleanupLegacyCatalogCache();
-    activeInflight = loadCatalog(buildSource(), io)
+    activeInflight = loadCatalog(source, io)
       .then(async (catalog) => {
+        activeCatalogSourceKey = sourceKey;
         setActiveCatalog(catalog);
         // 读 codex models_cache.json 得到规范化快照,由 active-catalog 同时投影到 Codex 与
         // Claude bridge。null 表示没读到有效 cache,保留现值 / 静态兜底;[] 表示合法空快照。
@@ -236,6 +294,74 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
       });
   }
   return activeInflight;
+}
+
+/**
+ * Auth realm 激活后的整目录重载。若目标端点变化，先同步失效旧区域目录并回到
+ * bundled，再异步加载目标区域；generation 保证快速 CN↔Global 切换时迟到响应
+ * 不能覆盖最新区域。
+ */
+export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
+  if (!activeLoaded) {
+    return ensureActiveCatalogLoaded().then(() => reloadActiveCatalogForEndpointChange());
+  }
+
+  const source = buildSource();
+  const sourceKey = catalogSourceKey(source);
+  if (endpointReloadInflight?.sourceKey === sourceKey) {
+    return endpointReloadInflight.promise;
+  }
+  if (activeCatalogSourceKey === sourceKey && endpointReloadInflight === null) {
+    return Promise.resolve(getActiveCatalog());
+  }
+
+  const generation = ++endpointReloadGeneration;
+  activeCatalogSourceKey = null;
+  // 必须在网络 await 前失效：登录提交后 renderer/agent 可能立即读取目录。
+  setActiveCatalog(BUNDLED_CATALOG);
+
+  const flight = loadCatalog(source, io)
+    .then((catalog) => {
+      if (
+        endpointReloadGeneration !== generation ||
+        catalogSourceKey(buildSource()) !== sourceKey
+      ) {
+        return getActiveCatalog();
+      }
+      activeCatalogSourceKey = sourceKey;
+      setActiveCatalog(catalog);
+      return getActiveCatalog();
+    })
+    .finally(() => {
+      if (endpointReloadInflight?.promise === flight) {
+        endpointReloadInflight = null;
+      }
+    });
+  endpointReloadInflight = { sourceKey, promise: flight };
+  return flight;
+}
+
+/**
+ * 手动重载 xAI 模型目录。先确保启动期动态发现已完成，再复用同一 `loadCatalog`
+ * 源选择与 bundled fallback；只投影 xAI 的静态模型列表，当前 routing/auth 以及其它
+ * provider 全部保持不变，避免活跃 turn 中途被整份远端目录切换路由。
+ */
+export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
+  await ensureActiveCatalogLoaded();
+  if (catalogRefreshInflight) return catalogRefreshInflight;
+  const flight = loadCatalogWithSource(buildSource(), io)
+    .then(({ catalog, source }) => {
+      if (source === 'bundled') {
+        throw new Error('catalog refresh exhausted configured sources; keeping current snapshot');
+      }
+      setProviderModelsFromCatalog('xai', catalog);
+      return getActiveCatalog();
+    })
+    .finally(() => {
+      if (catalogRefreshInflight === flight) catalogRefreshInflight = null;
+    });
+  catalogRefreshInflight = flight;
+  return flight;
 }
 
 /**
@@ -332,7 +458,11 @@ let singleton: ProviderService | null = null;
  * Cindy account session keeps the full active catalog.
  */
 export function getDesktopSelectableCatalog(): Catalog {
-  return filterProviderCatalogForAccount(getActiveCatalog(), {
+  const regionCatalog = projectProviderCatalogForBuildRegion(
+    getActiveCatalog(),
+    CURRENT_CINDY_REGION,
+  );
+  return filterProviderCatalogForAccount(regionCatalog, {
     canUseCindyGateway: getAppCapabilities().canUseCindyGateway,
   });
 }
@@ -398,6 +528,9 @@ export function getDesktopProviderService(): ProviderService {
     },
     // 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）：连接态 = 本机凭证 blob 是否存在。
     genericOAuthConnected: (providerId) => hasGenericOAuthLogin(providerId),
+    // 内置 API-key 供应商(如 gemini 图像来源):连接态 = key 已存(providerSecretStore)。
+    builtinApiKeyConnected: (providerId) =>
+      providerId === 'gemini' ? Boolean(getProviderSecretStore().get('gemini')?.trim()) : false,
     // 动态清单发现的失败归因：目前只有 anthropic 是「清单唯一来源是动态发现」的供应商，
     // 拉不到就是零模型 —— UI 要据此讲明失败理由，而不是一直说「正在发现」。
     //
@@ -405,6 +538,9 @@ export function getDesktopProviderService(): ProviderService {
     // 同步的 `security` 子进程，同一次 listProviders 不该为此阻塞主线程两回（PR #548 review）。
     modelDiscoveryFailure: (providerId, connected) =>
       providerId === 'anthropic' ? getAnthropicModelDiscoveryFailure(connected) : null,
+    // 「模型 / 供应商停用」override:main 侧持久化真源,烘焙进 ProviderView 后
+    // renderer / IM / Orca / device-link 全部消费同一份准入事实。
+    getModelAccess: readModelDisableOverrides,
   });
   return singleton;
 }

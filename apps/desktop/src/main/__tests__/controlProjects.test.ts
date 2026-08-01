@@ -56,7 +56,9 @@ describe('/ctr control project/session picker', () => {
   it('filters Orca worker sessions from attachable /ctr session lists', () => {
     expect(source).toContain("ne(sessions.orcaRole, 'worker')");
     expect(source).toContain('isNull(sessions.orcaRole)');
-    expect(source.match(/attachableSessionPredicate\(\)/g)).toHaveLength(3);
+    // 4 = 定义 + 3 个 attachable 查询(listProjectsForControl /
+    // listRecentSessionsForPicker / listSessionsForWorkspace)都必须带该谓词。
+    expect(source.match(/attachableSessionPredicate\(\)/g)).toHaveLength(4);
   });
 
   it('groups worktree sessions with the base project for Feishu control', async () => {

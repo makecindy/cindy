@@ -52,7 +52,17 @@ describe('ChatInput list continuation wiring contract', () => {
     expect(block).toContain('!event.altKey');
     expect(block).toContain('!event.shiftKey');
     expect(block).toContain('!event.isComposing');
-    expect(block).toContain('(handleStructuredListBackspace(view) || applyListBackspace(view))');
+    // 三段 fallback 依次尝试:结构化列表 → 旧纯文本列表 → 意识指令胶囊整体删。
+    // 顺序即优先级:意识指令排最后,只在自身命中时接管,不抢列表的退格语义。
+    expect(block).toContain('handleStructuredListBackspace(view) ||');
+    expect(block).toContain('applyListBackspace(view) ||');
+    expect(block).toContain('applyGhostCommandBackspace(view)');
+    expect(block.indexOf('handleStructuredListBackspace(view)')).toBeLessThan(
+      block.indexOf('applyListBackspace(view)'),
+    );
+    expect(block.indexOf('applyListBackspace(view)')).toBeLessThan(
+      block.indexOf('applyGhostCommandBackspace(view)'),
+    );
   });
 
   it('never intercepts plain Enter — send semantics stay untouched', () => {

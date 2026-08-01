@@ -242,6 +242,31 @@ export function markAssistantTurnCompleted(
 }
 
 /**
+ * 给一条自动续跑（中断自愈）的 user 消息补上**结果**。
+ *
+ * 为什么必须有这一步:那条消息在「续跑指令发出去」的瞬间就落库了,而那时还完全不知道
+ * 有没有真的连上。只按落库渲染就会出现「明明重连失败了,历史里却写着已重新连接」——
+ * 连续 5 次全失败会留下 5 句假话。所以结果由后续事件回填:
+ *  - `succeeded`:模型产出了实质内容(text / tool_use),这才是"连上了"的证据。
+ *  - `failed`:又被打断、或最终落到 error。
+ * 未回填(两者都没发生)= 还在等结果,renderer 继续显示"重新连接中"。
+ */
+export function markAutoResumeOutcome(
+  sessionId: string,
+  clientId: string | undefined,
+  outcome: 'succeeded' | 'failed',
+): Promise<boolean> {
+  if (!sessionId || !clientId) return Promise.resolve(false);
+  return enqueueDurableWrite(`auto-resume-outcome:${sessionId}:${clientId}`, async () => {
+    const patched = await patchMessageAgentMetaWithResult(sessionId, clientId, {
+      autoResumeOutcome: outcome,
+    });
+    if (!patched) return false;
+    return broadcastMessageAgentMetaUpdate(sessionId, clientId);
+  });
+}
+
+/**
  * 串行异步写队列。把同步 sqlite 写挪出 onEvent 同步栈(microtask 才 drain),且天然
  * 序列化(sqlite 本就单写者)。每个 link 单独 catch,失败只 warn、不打断后续写。
  */
@@ -346,7 +371,7 @@ const toolUseCreatedAtBySession = new Map<string, Map<string, number>>();
  * 需要按 tool_use 的 input.args 去 mediaToolResultFallback 池里认领结果。
  */
 const toolUseInfoBySession = new Map<string, Map<string, { toolName: string; input: unknown }>>();
-const planToolUsePersistIdBySession = new Map<string, Map<string, string>>();
+const updatableToolUsePersistIdBySession = new Map<string, Map<string, string>>();
 
 function rememberToolUseId(sessionId: string, toolUseId: string, createdAt: number): void {
   let set = knownToolUseIdsBySession.get(sessionId);
@@ -384,11 +409,15 @@ function clampAfterLatestToolUse(sessionId: string, toolUseIds: string[], create
   return latestToolUseCreatedAt + 1;
 }
 
-function rememberPlanToolUsePersistId(sessionId: string, toolUseId: string, persistId: string): void {
-  let idMap = planToolUsePersistIdBySession.get(sessionId);
+function isUpdatableToolUse(toolName: string): boolean {
+  return toolName === 'update_plan' || toolName === 'web_search';
+}
+
+function rememberUpdatableToolUsePersistId(sessionId: string, toolUseId: string, persistId: string): void {
+  let idMap = updatableToolUsePersistIdBySession.get(sessionId);
   if (!idMap) {
     idMap = new Map();
-    planToolUsePersistIdBySession.set(sessionId, idMap);
+    updatableToolUsePersistIdBySession.set(sessionId, idMap);
   }
   idMap.set(toolUseId, persistId);
 }
@@ -414,16 +443,16 @@ export function onToolUseEvent(
       input: data.input,
     });
   }
-  const existingPlanPersistId = toolName === 'update_plan' && toolUseId
-    ? planToolUsePersistIdBySession.get(sessionId)?.get(toolUseId)
+  const existingPersistId = isUpdatableToolUse(toolName) && toolUseId
+    ? updatableToolUsePersistIdBySession.get(sessionId)?.get(toolUseId)
     : undefined;
-  if (existingPlanPersistId) {
+  if (existingPersistId) {
     const content = { toolUseId, toolName, input: data.input };
-    enqueueWrite(`tool_use_update:${sessionId}:${existingPlanPersistId}`, () =>
-      updateDbMessageContent(sessionId, existingPlanPersistId, content),
+    enqueueWrite(`tool_use_update:${sessionId}:${existingPersistId}`, () =>
+      updateDbMessageContent(sessionId, existingPersistId, content),
     );
-    notePersistedMessage(sessionId, 'tool_use', existingPlanPersistId);
-    return existingPlanPersistId;
+    notePersistedMessage(sessionId, 'tool_use', existingPersistId);
+    return existingPersistId;
   }
   const persistId = createId();
   const meta = agentMeta ?? lastAgentMetaBySession.get(sessionId) ?? null;
@@ -436,8 +465,8 @@ export function onToolUseEvent(
     agentMeta: meta,
     createdAt,
   });
-  if (toolName === 'update_plan' && toolUseId) {
-    rememberPlanToolUsePersistId(sessionId, toolUseId, persistId);
+  if (isUpdatableToolUse(toolName) && toolUseId) {
+    rememberUpdatableToolUsePersistId(sessionId, toolUseId, persistId);
   }
   notePersistedMessage(sessionId, 'tool_use', persistId);
   return persistId;
@@ -875,7 +904,7 @@ export function resetTurnPersistState(sessionId: string): void {
   knownToolUseIdsBySession.delete(sessionId);
   toolUseCreatedAtBySession.delete(sessionId);
   toolUseInfoBySession.delete(sessionId);
-  planToolUsePersistIdBySession.delete(sessionId);
+  updatableToolUsePersistIdBySession.delete(sessionId);
   lastAgentMetaBySession.delete(sessionId);
   _turnStartedAtBySession.delete(sessionId);
   _turnDedupIdBySession.delete(sessionId);
@@ -1148,7 +1177,7 @@ export function clearSessionPersistState(sessionId: string): void {
   knownToolUseIdsBySession.delete(sessionId);
   toolUseCreatedAtBySession.delete(sessionId);
   toolUseInfoBySession.delete(sessionId);
-  planToolUsePersistIdBySession.delete(sessionId);
+  updatableToolUsePersistIdBySession.delete(sessionId);
   toolResultIdByToolUseId.delete(sessionId);
   pendingFullTextByToolUseId.delete(sessionId);
   toolResultContentByClientId.delete(sessionId);

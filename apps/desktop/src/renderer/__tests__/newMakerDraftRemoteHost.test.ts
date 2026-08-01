@@ -58,23 +58,25 @@ describe('newMakerDraft remote host identity', () => {
     expect(getDraft().remoteHostId).toBeNull();
   });
 
-  it('forces collab off for remote project drafts (no local worker on remote path)', async () => {
+  it('keeps collab available for remote project drafts (worker inherits remoteHostId)', async () => {
     const { getDraft, patchDraft, patchCollab } = await loadModule();
     // 本地项目可以开协同
     patchDraft({ workingDir: '/local/app', collab: { enabled: true, worker: 'codex' } });
     expect(getDraft().collab.enabled).toBe(true);
 
-    // 切到 remote 项目 → 协同被强制关闭
+    // 切到 remote 项目 → 协同保持可用 (worker 创建继承 remoteHostId, 在同一台
+    // 远端主机 spawn; 两端 MCP 注入已接通, 不再按 remote/vendor 强制关闭)。
     patchDraft({ workingDir: '/srv/app', remoteHostId: 'remote-host-a' });
     expect(getDraft().remoteHostId).toBe('remote-host-a');
-    expect(getDraft().collab.enabled).toBe(false);
+    expect(getDraft().collab.enabled).toBe(true);
 
-    // remote draft 下尝试开启协同也无效(store 兜底)
+    // remote draft 下开启协同同样有效。
+    patchDraft({ collab: { enabled: false, worker: 'codex' } });
     patchCollab({ enabled: true });
-    expect(getDraft().collab.enabled).toBe(false);
+    expect(getDraft().collab.enabled).toBe(true);
   });
 
-  it('drops collab on reload when a persisted draft is remote', async () => {
+  it('keeps collab on reload when a persisted draft is remote', async () => {
     memStorage.setItem(
       'xdt:newMakerDraft:v1',
       JSON.stringify({
@@ -87,7 +89,36 @@ describe('newMakerDraft remote host identity', () => {
     vi.resetModules();
     const { getDraft } = await loadModule();
     expect(getDraft().remoteHostId).toBe('remote-host-a');
-    expect(getDraft().collab.enabled).toBe(false);
+    expect(getDraft().collab.enabled).toBe(true);
+  });
+
+  it('keeps collab on for remote project drafts regardless of vendor', async () => {
+    const { getDraft, patchDraft, patchCollab } = await loadModule();
+    // remote + codex draft:协同允许。
+    patchDraft({ vendor: 'codex', workingDir: '/srv/app', remoteHostId: 'remote-host-a' });
+    patchCollab({ enabled: true });
+    expect(getDraft().remoteHostId).toBe('remote-host-a');
+    expect(getDraft().collab.enabled).toBe(true);
+
+    // 切到 cc vendor → 协同保持 (cc 远端 MCP 注入已落地, 不再按 vendor 区分)。
+    patchDraft({ vendor: 'cc' });
+    expect(getDraft().collab.enabled).toBe(true);
+  });
+
+  it('keeps collab on reload for a persisted remote codex draft', async () => {
+    memStorage.setItem(
+      'xdt:newMakerDraft:v1',
+      JSON.stringify({
+        vendor: 'codex',
+        workingDir: '/srv/app',
+        remoteHostId: 'remote-host-a',
+        collab: { enabled: true, worker: 'codex' },
+      }),
+    );
+    vi.resetModules();
+    const { getDraft } = await loadModule();
+    expect(getDraft().remoteHostId).toBe('remote-host-a');
+    expect(getDraft().collab.enabled).toBe(true);
   });
 
   it('keeps legacy draft storage without remoteHostId as local', async () => {

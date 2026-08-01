@@ -50,10 +50,7 @@ vi.mock('@/lib/composerDraftStore', () => ({
 import { makerChatStore } from '@/lib/makerChatStore';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import * as messageService from '@/lib/messageService';
-import {
-  getIssueConfirmDraft,
-  saveIssueConfirmDraft,
-} from '@/lib/issueConfirmDraftStore';
+import { getIssueConfirmDraft, saveIssueConfirmDraft } from '@/lib/issueConfirmDraftStore';
 
 type RemotePush = { deviceId: string; channel: string; payload: unknown };
 type ResolveCall = { requestId: string; decision: Record<string, unknown> };
@@ -140,7 +137,11 @@ function stubElectronApi(host: FakeHost) {
   const localSetPermissionMode = vi.fn(async () => {});
   const localSetFastMode = vi.fn(async () => {});
   const localGetPendingInteractions = vi.fn(
-    async () => [] as Array<{ request: { kind: string; requestId: string }; persistId?: string }>,
+    async () =>
+      [] as Array<{
+        request: { kind: string; requestId: string; [key: string]: unknown };
+        persistId?: string;
+      }>,
   );
   (globalThis as { window?: unknown }).window = {
     electronAPI: {
@@ -315,7 +316,8 @@ describe('device-link 远程交互往返 — issue_confirm draft', () => {
       arch: 'arm64',
       osVersion: '15.0',
     },
-    submissionIdentity: { kind: 'github-user', login: 'tester' },
+    submissionIdentity: { kind: 'platform', login: 'cindy-issue' },
+    suggestedPublicName: '当前昵称',
   };
 
   it('逐键保存不通知 makerChatStore 全局订阅,响应后清除草稿', async () => {
@@ -323,6 +325,10 @@ describe('device-link 远程交互往返 — issue_confirm draft', () => {
     host.hostInteraction(s, issueRequest);
     await flush();
     expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.requestId).toBe('issue-draft-1');
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm).toMatchObject({
+      submissionIdentity: { kind: 'platform', login: 'cindy-issue' },
+      suggestedPublicName: '当前昵称',
+    });
 
     const globalListener = vi.fn();
     const unsubscribe = makerChatStore.subscribeAll(globalListener);
@@ -330,12 +336,14 @@ describe('device-link 远程交互往返 — issue_confirm draft', () => {
       title: '编辑后的标题',
       body: '编辑后的正文',
       type: 'feature',
+      publicName: '匿名',
     });
 
     expect(getIssueConfirmDraft(s, 'issue-draft-1')).toMatchObject({
       title: '编辑后的标题',
       body: '编辑后的正文',
       type: 'feature',
+      publicName: '匿名',
     });
     expect(globalListener).not.toHaveBeenCalled();
 
@@ -613,6 +621,50 @@ describe('device-link 远程交互 — dismissed / 顺序 / 本机零回归', ()
 });
 
 describe('device-link 交互快照重建 — 窗口在交互挂起之后才打开(无 live push)', () => {
+  it('本机 issue_confirm:无 push → 快照重建确认卡，重复重放保留用户草稿', async () => {
+    const s = sid();
+    local.localGetPendingInteractions.mockResolvedValue([
+      {
+        request: {
+          kind: 'issue_confirm',
+          requestId: 'issue-mid',
+          draft: { title: '原始标题', body: '原始正文', type: 'bug' },
+          env: {
+            appVersion: '0.1.23',
+            platform: 'darwin',
+            arch: 'arm64',
+            osVersion: '25.0',
+            region: 'cn',
+          },
+          submissionIdentity: { kind: 'platform', login: 'cindy-issue' },
+          suggestedPublicName: '当前昵称',
+        },
+      },
+    ]);
+
+    makerChatStore.ensureInitialMessages(s);
+    await flush();
+    await flush();
+    expect(makerChatStore.getSnapshot(s).pendingIssueConfirm?.requestId).toBe('issue-mid');
+    expect(local.localGetPendingInteractions).toHaveBeenCalledWith(s);
+    expect(host.invoke).not.toHaveBeenCalledWith(DEVICE_ID, 'maker:get-pending-interactions', [s]);
+
+    saveIssueConfirmDraft(s, 'issue-mid', {
+      title: '用户编辑后的标题',
+      body: '用户编辑后的正文',
+      type: 'feature',
+      publicName: '匿名',
+    });
+    await makerChatStore.reconcilePendingInteractions(s);
+    expect(getIssueConfirmDraft(s, 'issue-mid')).toMatchObject({
+      title: '用户编辑后的标题',
+      body: '用户编辑后的正文',
+      type: 'feature',
+      publicName: '匿名',
+    });
+    makerChatStore.purgeSession(s);
+  });
+
   it('permission:被控端已挂起 + 不发 push → ensureInitialMessages 后重建 pendingPermission', async () => {
     const s = openRemoteSession();
     host.seedPending(s, {
@@ -721,22 +773,24 @@ describe('远程交互接线不变式', () => {
     expect(src).not.toContain('electronAPI.maker.resolveInteraction');
   });
 
-  it('makerChatStore 不向 device-link 远程 session 透传本地 Maker Memory 开关', () => {
+  it('makerChatStore 不向 device-link 远程 session 透传本地 Maker Memory 开关;SSH 跟随全局设置', () => {
     const src = read('lib/makerChatStore.ts');
     expect(src).toContain('const deviceLinkRemote = isRemoteSession(sessionId);');
-    expect(src).toContain('const sshRemote = Boolean(current.remoteHostId);');
-    // 该三元可能被 prettier 折成多行:先把空白折叠成单空格,只锁 token 序列。
+    // 该表达式可能被 prettier 折成多行:先把空白折叠成单空格,只锁 token 序列。
+    // SSH remote 与本地同语义 (memory 按 hostId+远端路径 scope 存本机),
+    // 不再出现 ssh 强制 false 的三元;device-link 仍整体省略该字段。
     expect(src.replace(/\s+/g, ' ')).toContain(
-      '...(deviceLinkRemote ? {} : { makerMemoryEnabled: sshRemote ? false : getMakerMemoryEnabled() })',
+      '...(deviceLinkRemote ? {} : { makerMemoryEnabled: getMakerMemoryEnabled() })',
     );
+    expect(src).not.toContain('sshRemote ? false');
   });
 
-  it('context usage 对 SSH 显式关闭本地 Maker Memory，对 device-link 仍省略', () => {
+  it('context usage 对 SSH 跟随全局 Maker Memory 设置,对 device-link 仍省略', () => {
     const src = read('features/cc-agent/CCAgentSessionView.tsx');
-    expect(src).toContain('...(remoteDeviceId');
-    expect(src).toContain('makerMemoryEnabled: session.remoteHostId');
-    expect(src).toContain('? false');
-    expect(src).toContain(': getMakerMemoryEnabled()');
+    expect(src.replace(/\s+/g, ' ')).toContain(
+      '...(remoteDeviceId ? {} : { makerMemoryEnabled: getMakerMemoryEnabled() })',
+    );
+    expect(src).not.toContain('makerMemoryEnabled: session.remoteHostId ? false');
   });
 
   it('ChatInput 的 setPermissionMode 远程经隧道(makerApiFor),本机才走本机 IPC', () => {
@@ -1009,6 +1063,13 @@ describe('远程交互接线不变式', () => {
       'const shouldPatchActiveModel = markModelChoice !== false || effort !== undefined;',
     );
     expect(body).toContain('if (shouldPatchActiveModel) {');
+  });
+
+  it('跨窗口 worktree 写穿只合并目标字段，main 镜像读取共享持久快照', () => {
+    const src = read('App.tsx');
+    expect(src).toContain('const draft = getDraftForPreferenceSync();');
+    expect(src).toContain('setWorktreePreference(worktreeEnabled === true);');
+    expect(src).not.toContain('patchDraft({ worktreeEnabled: worktreeEnabled === true });');
   });
 
   it('本地切来源恢复 Fast 时必须写入目标 provider 的 session memory', () => {

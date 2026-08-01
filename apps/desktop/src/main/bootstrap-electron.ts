@@ -159,14 +159,19 @@ import { RendererBootGuard } from './renderer-boot-guard';
 import yaml from 'js-yaml';
 import matter from 'gray-matter';
 import type { Maker } from '@cindy/maker-core';
-import { im, feishuIm, startImOrchestrators, startImConnection, stopImConnection } from './im';
+import { im, feishuIm, registerTelegramBotConfigIpc, startImOrchestrators, startImConnection, stopImConnection } from './im';
 import * as authManager from './authManager';
 import { hasPersistedSessionHint } from './authSessionHint';
 import { createAccountDeletionIpcHandlers } from './accountDeletionIpc';
 import * as profileEdit from './profileEdit';
 import { uploadPublicAsset } from './ossPublicUpload';
 import { removeRefs as removeMediaRefs } from './cindy-media/ledger';
-import { installWebviewHardener } from './webview-security';
+import {
+  installWebviewHardener,
+  setRsbPopupHostResolver,
+  setRsbPopupOpenerReportSubscriber,
+  setRsbPopupOpenerResolver,
+} from './webview-security';
 import {
   installSelectionContextMenu,
   setSelectionContextMenuLocale,
@@ -213,7 +218,11 @@ import {
 } from './device-link/remoteMediaProtocol';
 import { localFileSchemePrivilege, registerLocalFileProtocolHandler } from './localFileProtocol';
 import { audioFileSchemePrivilege, registerAudioFileProtocolHandler } from './audioFileProtocol';
-import { buildSystemPathBlocklist, isPathAllowedAgainst } from './filePathPolicy';
+import {
+  buildSystemPathBlocklist,
+  getSensitiveMediaBlocklist,
+  isPathAllowedAgainst,
+} from './filePathPolicy';
 import { readFileThumbnail } from './fileThumbnail';
 import { resolveShellOpenPathTarget } from './shellOpenPath';
 import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandboxAdapter';
@@ -256,6 +265,7 @@ import {
   installVoiceInputPowerRelease,
 } from './voice-input/powerReleaseNotifier';
 import { reapClaudeOrphansSync } from './claude-orphan-reaper';
+import { startAgentProcessPriorityWatcher } from './agent-process-priority';
 import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService';
 import { initNotificationService } from './notificationService';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
@@ -265,6 +275,7 @@ import {
   markAppContentWindow,
 } from './windowFocusClassifier.js';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
+import { readFileBytesForPreview } from './fileReadBytes.js';
 import { initHeartbeatService } from './heartbeatService';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { WindowManualDragController } from './windowManualDrag';
@@ -279,7 +290,10 @@ import {
   registerDeviceLinkIpc,
   defaultDeps as deviceLinkIpcDeps,
   handleInvoke as deviceLinkHandleInvoke,
+  setMirrorCacheReadGate,
 } from './device-link/ipc';
+import { getMirrorCache, MirrorCachePurgeError } from './device-link/mirrorCacheStore';
+import { drainPurgeQueue, enqueuePurge } from './device-link/mirrorCachePurgeQueue';
 import { assertCaptureHealthy } from './device-link/invoke-registry';
 // worktree-parallel-sessions: IPC 注册 + close-session 内的 fire-and-forget 删除钩子
 import {
@@ -291,6 +305,7 @@ import {
 import { registerGitContextIpc, disposeGitContext } from './git-context';
 import { registerGitReviewIpc } from './git-review';
 import { registerSidebarSettingsIpc } from './sidebarSettingsStore';
+import { registerRemotePrecreatedWorktreeLedgerIpc } from './remotePrecreatedWorktreeLedger';
 import { registerTerminalHandlers } from './maker-ipc/terminal-handlers';
 import { registerLocalThemesIpc } from './local-themes/register';
 import {
@@ -379,6 +394,7 @@ import {
 } from './right-sidebar-window/settings-store.js';
 import {
   anySessionInTurn,
+  applyCodexSpawnConfigChangeWithRestart,
   clearDeferredCodexRestartForOwnerBoundary,
   collectAgentInputQueueScanTexts,
   createAutomationUserTurnGitBaselineHooks,
@@ -396,6 +412,12 @@ import {
   readMemorySettingsState,
 } from './maker-host/memory-settings-store.js';
 import {
+  createAppFocusAutoRefreshTracker,
+  requestProviderModelAutoRefresh,
+  resetProviderModelAutoRefreshCooldowns,
+} from './maker-host/provider-model-auto-refresh.js';
+import { refreshProviderModelsAfterAccountReady } from './maker-host/account-provider-model-refresh.js';
+import {
   readImDefaultSettingsState,
   resetImDefaultSettings,
   resetImDefaultSettingsChannel,
@@ -412,12 +434,28 @@ import {
 } from './maker-host/grok-oauth-login.js';
 import { setXaiAuthInvalidatedHandler } from './maker-host/xai-auth-invalidation-host.js';
 import {
+  getChatgptBridgeAuth,
+  invalidateChatgptBridgeAuth,
+} from './maker-host/anthropic-responses-bridge-host.js';
+import {
   readSilentEncryptedRetrySettingsState,
   resetSilentEncryptedRetrySettings,
   writeSilentEncryptedRetryEnabled,
 } from './maker-host/silent-encrypted-retry-store.js';
-import { resolveOwnerScopedSecretStorageKey } from './secrets/providerSecretStore.js';
-import { isRendererAccessibleSafeStorageKey } from '../shared/providerSecrets.js';
+import {
+  resolveOwnerScopedSecretStorageKey,
+  getProviderSecretStore,
+} from './secrets/providerSecretStore.js';
+import {
+  builtinApiKeyHas,
+  builtinApiKeyRemove,
+  builtinApiKeyStore,
+  type BuiltinApiKeyBridgeDeps,
+} from './secrets/builtinApiKeyBridge.js';
+import {
+  isRendererAccessibleSafeStorageKey,
+  type ProviderSecretId,
+} from '../shared/providerSecrets.js';
 import {
   readCompactionPct,
   readCompactionState,
@@ -452,6 +490,7 @@ import { registerContactsIpc } from './maker-ipc/contacts-ipc.js';
 import { disposeDesktopContactsManager } from './maker-host/maker-contacts-host.js';
 import { registerMakerHelpIpc } from './maker-ipc/help.js';
 import { registerHelpFeedbackIpc } from './maker-ipc/help-feedback.js';
+import { registerMyIssuesIpc } from './maker-ipc/my-issues.js';
 import { registerMakerPlanWriteIpc } from './maker-ipc/plan-write.js';
 import { registerMakerRewindIpc } from './maker-ipc/rewind.js';
 import { registerMakerForkIpc } from './maker-ipc/fork.js';
@@ -470,7 +509,7 @@ import { registerFileBrowserDeviceOp } from './file-browser/device-op.js';
 import { registerSearchIpc } from './file-browser/search/index.js';
 import { registerVoiceInputIpc } from './voice-input/index.js';
 import { installWindowHiddenBroadcast } from './windowHiddenBroadcast.js';
-import { openSessionInNewWindow } from './secondary-windows.js';
+import { isSecondaryAppWindow, openSessionInNewWindow } from './secondary-windows.js';
 import {
   isGlobalVoiceInputOverlayVisible,
   registerGlobalVoiceInputIpc,
@@ -497,6 +536,7 @@ import {
 } from './window-behavior-settings-store.js';
 import {
   hideWindowToWindowsTray,
+  popUpWindowsTrayMenu,
   requestWindowsCloseBehavior,
   requestWindowsTrayQuit,
 } from './windowsTrayLifecycle.js';
@@ -512,22 +552,24 @@ import {
 } from '../shared/windowBehavior.js';
 import { getDesktopCommandRegistry, registerBuiltinDesktopCommands } from './commands/index.js';
 import { registerRemoteCmdIpc } from './commands/remoteCmdIpc.js';
-import {
-  resolvePreferredSystemLocale,
-  resolveSystemLocale,
-  type SupportedLocale,
-} from '../shared/locale.js';
+import { resolvePreferredSystemLocale, resolveSystemLocale } from '../shared/locale.js';
 import {
   IM_DEFAULT_SETTINGS,
   isImDefaultAgentKind,
   isImDefaultEffort,
+  isImDefaultPermissionMode,
   isImDefaultSettingsChannel,
+  isWechatUnsupportedPermissionMode,
   type ImDefaultAgentKind,
   type ImDefaultAgentSettings,
   type ImDefaultSettingsChannel,
   type ImDefaultSettingsPatch,
 } from '../shared/imDefaultSettings.js';
 import {
+  SUBAGENT_MODEL_SETTINGS_DEFAULTS,
+  codexSpawnConfigChanged,
+  isCodexSubagentEffort,
+  isValidCodexSubagentConcurrencyInput,
   isValidSubagentModelIdInput,
   normalizeSubagentModelId,
   reconcileSubagentModelSettingsPatch,
@@ -544,11 +586,13 @@ import {
   initModelAccess,
   noteManualXdKeySaved,
   noteManualXdKeyRemoved,
+  refreshXdGatewayModels,
 } from './model-access/index.js';
 import { effectiveXdGatewayBaseUrl } from './model-access/effectiveEndpoint.js';
 import { isLocalDbOwnerCurrent } from './appSessionPolicy.js';
 import { getAppCapabilities, requireAppCapability } from './appCapabilities.js';
 import {
+  activeOwnerScopeKey,
   beginAppSessionBoundary,
   getActiveAppSession,
   isAppSessionBoundaryPending,
@@ -572,7 +616,9 @@ import {
 import { installNewMakerWindowShortcut } from './app-shortcuts/new-maker-window-shortcut.js';
 import { registerLayoutIpc } from './layout/index.js';
 import {
+  getGhostCindySlot,
   getGhostManager,
+  getGhostSessionActivityTracker,
   isGhostAvailableForActiveSession,
   refreshGhostLocalization,
   registerGhostIpc,
@@ -580,6 +626,9 @@ import {
   suspendAllGhosts,
   waitForGhostMutations,
 } from './cindy-brain/index.js';
+import { setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
+import { listActiveClaudeBackgroundActivitySessions } from './maker-host/claude-session-background-activity.js';
+import { registerRelaunchBusyActivityIpc } from './relaunchBusyActivityIpc.js';
 import { getGhostSetupChangeBus } from './cindy-brain/ghostSetupChangeBus.js';
 import { getGhostSetupInteractionBridge } from './cindy-brain/ghostSetupInteractionBridge.js';
 import { registerPluginMarketIpc } from './plugin-market/registerIpc.js';
@@ -836,6 +885,33 @@ async function ensureLifecycleDbClient(userId: string) {
 
 async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   skillhubAutoSyncService.cancelInFlight();
+  // 远程会话的镜像冷缓存里是别的设备的聊天内容。owner 命名空间已经保证下一个账号读不到
+  // 它,但登出后不该在盘上留着 —— 这里 owner 还指向**旧账号**(commitActiveAppSession 在
+  // teardown 之后才切),正是唯一能清准的时机。
+  //
+  // 删不掉时(Windows 文件锁 / 权限 / 并发写)**不阻断登出** —— 卡住登出比缓存残留更糟 ——
+  // 但也不能只记一行日志了事:把待清目录持久化进重试队列,下次启动与下次账号边界各消化
+  // 一次,直到真正删掉(review: codex P1)。顺手先消化一次历史遗留。
+  try {
+    await drainPurgeQueue();
+  } catch (err) {
+    authBoundaryLog.warn(`drain mirror cache purge queue on ${reason} failed:`, err);
+  }
+  try {
+    await getMirrorCache().clearAll();
+  } catch (err) {
+    authBoundaryLog.error(`clear device-link mirror cache on ${reason} failed:`, err);
+    if (err instanceof MirrorCachePurgeError) {
+      // remaining / barriers / tombstones 三样都要带上(同 IPC 侧的 queuePurgeRetry):
+      // 只传 root 的话,补删成功后队列既不知道该补自增哪个作废计数,也不会退役 `_account`
+      // 墓碑 —— 墓碑一直挂着就等于这个 owner 的缓存读被永久压住(review: codex P1)。
+      await enqueuePurge(err.root, err.remaining, err.barriers, err.tombstones).catch(
+        (enqueueErr: unknown) => {
+          authBoundaryLog.error('failed to enqueue mirror cache purge retry:', enqueueErr);
+        },
+      );
+    }
+  }
   // Cindy relay owns long-lived transports plus account-scoped task/binding
   // state. Drain ingress before discarding the owner-scoped store; otherwise a
   // late Telegram/Slack callback could write through the next account boundary.
@@ -960,6 +1036,15 @@ try {
   createLogger('claude-orphan-reaper').warn('initial reap threw', { error: String(err) });
 }
 
+// ── agent 进程优先级降档 watcher(agent 资源占用治理)─────────────────────
+// 设置(processPriority)为 normal 且无欠恢复进程时,每 tick 零成本(不扫进程表);
+// interval 已 unref,进程退出不被它拖住。所有失败 best-effort,不影响启动。
+try {
+  startAgentProcessPriorityWatcher();
+} catch (err) {
+  createLogger('agent-process-priority').warn('watcher start threw', { error: String(err) });
+}
+
 // ── 启动诊断 (issue #758) ────────────────────────────────────────────────
 // 上次异常退出尸检 (run marker) + Crashpad 本地 minidump + crash dump 扫描。
 // 必须在 app ready 前 (crashReporter.start 约束)、userData 定型后 (index.ts 的
@@ -976,9 +1061,14 @@ initStartupDiagnostics();
 //
 // packaged 下绝不开 — 任何带 9222 端口的 Chromium 进程都能被本机其他程序
 // 注入 JS, 是远程代码执行口子。dev 机器自然不在 attack surface 内。
+//
+// 端口可用 XDT_CDP_PORT 覆写(仅数字生效):并行多开沙箱时 9222 只有先起的
+// 实例能绑上, 后起实例要保住 CDP 调试面就换个端口。
 
 if (!app.isPackaged) {
-  app.commandLine.appendSwitch('remote-debugging-port', '9222');
+  const cdpPortOverride = process.env.XDT_CDP_PORT;
+  const cdpPort = cdpPortOverride && /^\d{2,5}$/.test(cdpPortOverride) ? cdpPortOverride : '9222';
+  app.commandLine.appendSwitch('remote-debugging-port', cdpPort);
 }
 
 // ── Webview hardener (RSB Phase 4) ──────────────────────────────────────
@@ -1081,6 +1171,21 @@ registerRsbBrowserBridgeIpc({
   getHostWebContents: () => rsbWindowController.getHostWebContents(),
   logger: createLogger('rsb-browser-bridge-bootstrap'),
 });
+// popup opener 反查:webview-security 的 popup 路由据此把 window.open 的目标
+// tab 归属到发起方 tab 的 session(而不是用户正在看的 session)。
+setRsbPopupOpenerResolver((webContentsId) => {
+  const record = getRsbBrowserBridge().findByWebContentsId(webContentsId);
+  return record ? { tabId: record.tabId, sessionId: record.sessionId } : null;
+});
+// report 到达事件订阅:归属等待从固定轮询窗口升级为事件驱动 —— report 落地的
+// 瞬间完成反查,超时只兜"report 永不来"的极端场景。
+setRsbPopupOpenerReportSubscriber((listener) =>
+  getRsbBrowserBridge().onReport((record) => listener(record.webContentsId)),
+);
+// popup 路由目标 host 动态解析:异步等待(归属反查 / deferred URL 捕获)期间用户
+// detach 侧边栏或切视图后,捕获时的 hostContents 已过时 —— 发送时刻按当前宿主
+// 形态解析(与 tab-op bridge 同一来源),消息才能落到活着的订阅者。
+setRsbPopupHostResolver(() => rsbWindowController.getHostWebContents());
 // Tab-op result handler for the main → renderer request/response bridge —
 // RsbWebviewBackend (Phase 3) uses this to drive `open` / `focus` / `close`
 // against the renderer's RSB store.
@@ -1124,6 +1229,12 @@ registerLayoutIpc();
 // ── 意识仓库 IPC──────────────────────────────────────────────────────
 // renderer 首帧 sendSync 拉已装意识清单(意识面板与内置面板同帧注册,规则 7
 // 无跳变)、install/uninstall 写路径、changed 广播。见 main/cindy-brain/。
+// 图片通道的 ChatGPT 鉴权必须由 Main 静态装配；禁止在请求时 import maker-host
+// 生成延迟 chunk（Main bundle 反向 require 会重复执行启动副作用）。
+setCodexImageAuthBinding({
+  getAuth: getChatgptBridgeAuth,
+  onAuthFailure: invalidateChatgptBridgeAuth,
+});
 registerGhostIpc();
 registerPluginMarketIpc();
 
@@ -1160,10 +1271,7 @@ protocol.registerSchemesAsPrivileged([
 
 import started from 'electron-squirrel-startup';
 
-import {
-  APPLICATION_MENU_LABELS,
-  type ApplicationMenuLocale,
-} from './applicationMenuLabels.js';
+import { APPLICATION_MENU_LABELS, type ApplicationMenuLocale } from './applicationMenuLabels.js';
 
 if (started) {
   app.quit();
@@ -1464,7 +1572,7 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   if (mainWindow) {
     installApplicationMenu(mainWindow, currentApplicationMenuLocale);
   }
-  updateWindowsTrayMenu();
+  invalidateWindowsTrayMenu();
   getAgentIslandService()?.refreshLocalization();
   return { ok: true };
 });
@@ -1502,6 +1610,12 @@ let mainWindowRef: BrowserWindow | null = null;
 // 而白屏,且窗口会带着烘焙端点绕过"拉不到清单不放行"的语义。
 let startupWindowCreationAllowed = false;
 let appFocusSyncTimer: ReturnType<typeof setTimeout> | null = null;
+const providerModelFocusRefreshTracker = createAppFocusAutoRefreshTracker({
+  now: Date.now,
+  onMeaningfulForeground: () => {
+    void requestProviderModelAutoRefresh('foreground');
+  },
+});
 let mainWindowBackgroundThrottlingAllowed = true;
 const isUpdateRelaunchCandidate =
   process.platform === 'darwin' && isMacOSUpdateRelaunch(process.argv);
@@ -1557,23 +1671,55 @@ const updatePresentationRecovery = isUpdateRelaunchCandidate
 // 让窗口 close handler 放行真正的销毁。
 let isQuitting = false;
 let windowsTray: Tray | null = null;
+// 当前的托盘菜单。我们自己 popUp(见 popUpWindowsTrayMenu 的注释),菜单对象必须由
+// JS 侧持有,不能只作为实参交出去。语言切换时置 null,下一次右键按新语言重建。
+let windowsTrayMenu: Menu | null = null;
+const windowsTrayLog = createLogger('windows-tray');
 const WINDOWS_CLOSE_PROMPT_FALLBACK_DELAY_MS = 2_000;
 
-function updateWindowsTrayMenu(): void {
-  if (!windowsTray || windowsTray.isDestroyed()) return;
-  windowsTray.setContextMenu(
-    Menu.buildFromTemplate([
-      {
-        label: t('settings.windowBehavior.trayMenu.show'),
-        click: () => focusMainWindow(),
-      },
-      { type: 'separator' },
-      {
-        label: t('settings.windowBehavior.trayMenu.quit'),
-        click: () => quitFromWindowsTray(),
-      },
-    ]),
-  );
+function buildWindowsTrayMenu(): Menu {
+  return Menu.buildFromTemplate([
+    {
+      label: t('settings.windowBehavior.trayMenu.show'),
+      click: () => focusMainWindow(),
+    },
+    { type: 'separator' },
+    {
+      label: t('settings.windowBehavior.trayMenu.quit'),
+      click: () => quitFromWindowsTray(),
+    },
+  ]);
+}
+
+/** 语言切换后丢弃缓存的菜单,下一次右键按新语言重建。 */
+function invalidateWindowsTrayMenu(): void {
+  windowsTrayMenu = null;
+}
+
+function openWindowsTrayMenu(): void {
+  // 这条日志是长期诊断留的,不是临时排查: 上游那条弹不出的 bug 是静默失败(不抛错),
+  // 所以日志里有没有这一行,是区分 "右键事件没到" 与 "事件到了但菜单没弹" 的唯一依据。
+  // 再有用户报 "右键没反应" 时,先让他看这行。
+  // 用 info 而不是 debug: packaged 的默认级别就是 info (logger.ts 的 level 解析),
+  // debug 会被 shouldLog 过滤掉 —— 那样它恰好在唯一需要它的场景(用户手上的正式包)
+  // 里不会出现。频率上也不担心刷屏: 只有用户真的右键托盘图标才会走到这里。
+  windowsTrayLog.info('tray right-click received, opening tray menu');
+  popUpWindowsTrayMenu<Menu>({
+    tray: windowsTray,
+    menu: windowsTrayMenu,
+    buildMenu: buildWindowsTrayMenu,
+    retainMenu: (menu) => {
+      windowsTrayMenu = menu;
+    },
+    onUnavailable: (reason) => {
+      windowsTrayLog.warn('tray menu requested without a live tray icon', { reason });
+    },
+    onError: (error) => {
+      windowsTrayLog.error('failed to open Windows tray menu', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  });
 }
 
 function quitFromWindowsTray(): void {
@@ -1604,30 +1750,39 @@ function quitFromWindowsTray(): void {
 function destroyWindowsTray(): void {
   windowsTray?.destroy();
   windowsTray = null;
+  windowsTrayMenu = null;
 }
 
 function ensureWindowsTray(): boolean {
-  if (windowsTray && !windowsTray.isDestroyed()) {
-    updateWindowsTrayMenu();
-    return true;
-  }
+  if (windowsTray && !windowsTray.isDestroyed()) return true;
 
+  let tray: Tray | null = null;
   try {
     const iconPath = app.isPackaged
       ? path.join(process.resourcesPath, 'icon.png')
       : path.join(__dirname, '../../resources/icon.png');
     const icon = nativeImage.createFromPath(iconPath);
     if (icon.isEmpty()) throw new Error(`tray icon is empty: ${iconPath}`);
-    windowsTray = new Tray(icon.resize({ width: 16, height: 16 }));
-    windowsTray.setToolTip(BRAND_NAME);
-    windowsTray.on('click', () => focusMainWindow());
-    updateWindowsTrayMenu();
+    tray = new Tray(icon.resize({ width: 16, height: 16 }));
+    tray.setToolTip(BRAND_NAME);
+    tray.on('click', () => focusMainWindow());
+    tray.on('right-click', () => openWindowsTrayMenu());
+    windowsTray = tray;
+    windowsTrayMenu = null;
     return true;
   } catch (err) {
-    createLogger('windows-tray').error('failed to create Windows tray icon', {
+    // 图标可能已经进了通知区域: 只置 null 会留下一个仍响应左键、却再也引用不到的
+    // 僵尸图标(destroyWindowsTray 摸不到它,右键也没有菜单可弹)。
+    try {
+      tray?.destroy();
+    } catch {
+      /* 已经没了,忽略 */
+    }
+    windowsTrayLog.error('failed to create Windows tray icon', {
       error: err instanceof Error ? err.message : String(err),
     });
     windowsTray = null;
+    windowsTrayMenu = null;
     return false;
   }
 }
@@ -1719,6 +1874,14 @@ function handleUpdatePresentationUnlock(): void {
   updatePresentationRecovery?.onScreenUnlock();
 }
 
+function handleProviderModelSystemResume(): void {
+  void requestProviderModelAutoRefresh('system-resume');
+}
+
+function handleProviderModelScreenUnlock(): void {
+  void requestProviderModelAutoRefresh('screen-unlock');
+}
+
 function initializeUpdatePresentationRecovery(): void {
   if (!updatePresentationRecovery || updatePresentationRecoveryInitialized) return;
   updatePresentationRecoveryInitialized = true;
@@ -1742,6 +1905,7 @@ function hasFocusedAppWindow(): boolean {
 
 function syncAppFocusState(clearAttentionWhenFocused = false): void {
   const appFocused = hasFocusedAppWindow();
+  providerModelFocusRefreshTracker.sync(appFocused);
   if (appFocused && clearAttentionWhenFocused) clearAllSessionAttention();
   getAgentIslandService()?.setAppFocused(appFocused);
 }
@@ -1864,7 +2028,7 @@ app.on('open-url', (event, url) => {
   handleIncomingDeepLink(url, 'open-url');
 });
 
-// macOS Finder "打开方式 → XDMaker" 入口:声明 CFBundleDocumentTypes 接受
+// macOS Finder "打开方式 → Cindy" 入口:声明 CFBundleDocumentTypes 接受
 // public.folder 后,Finder 把目录路径通过 open-file 事件推过来 (冷启动 / 已运行
 // 都走此路径)。事件也可能被文件触发:.cindy 意识走双击装入,其余文件
 // 静默忽略。
@@ -1982,7 +2146,7 @@ if (
   }
 }
 
-// 冷启动 argv 扫描 — Windows 上首次点链接 / 右键 "通过 XDMaker 打开" 启动 app
+// 冷启动 argv 扫描 — Windows 上首次点链接 / 右键 "通过 Cindy 打开" 启动 app
 // 时, URL 或 --open-folder 在 process.argv 末尾。macOS deep link 走 open-url
 // (已在上面 attach), 这里扫到也不会重复 dispatch; --open-folder 是 Windows-only
 // 入口 (mac 走 LSItemContentTypes / open-file 事件), 也不会在 mac argv 出现。
@@ -2230,14 +2394,14 @@ const createWindow = () => {
   // 那之后 Renderer 的 visibilityState 就不再反映真实可见性,细节见模块头注释。
   installWindowHiddenBroadcast(mainWindow);
 
-  // App badge: 用户把任意 XDMaker 窗口点回前台(Dock 点击 / taskbar / alt-tab / 点窗口)即视为
+  // App badge: 用户把任意 Cindy 窗口点回前台(Dock 点击 / taskbar / alt-tab / 点窗口)即视为
   // 「已查看」,直接清空整个 dock 红点。badge 是 app 级状态,不该依赖当前停在哪个
   // 路由 / 开没开会话 —— 之前清除逻辑寄生在 cc-agent sidebar 且只清 activeSessionId,
   // 离开会话页(设置 / skillhub)或红点属于后台会话时就清不掉。clearAllSessionAttention
   // 只清 app 级 badge,不向 Agent Island 转发逐 session 已读;in-app 的会话小圆点仍由
   // renderer 自行管理(点进会话才消),随后通过 clearSessionAttention 显式同步。
   // Agent Island smart suppression 同样按 app 级焦点判断:主窗 blur 到「在新窗口打开」
-  // 的会话副窗时,用户仍在 XDMaker 内,不能把 appFocused 置 false。
+  // 的会话副窗时,用户仍在 Cindy 内,不能把 appFocused 置 false。
 
   // Find-in-page: forward Chromium's match results back to the renderer overlay.
   // The renderer drives findInPage / stopFindInPage via IPC (see registerIpcHandlers).
@@ -2511,7 +2675,11 @@ const registerIpcHandlers = () => {
     MAKER_IPC_INVOKE.IM_DEFAULT_SETTINGS_SET,
     async (_e, patch: unknown, rawChannel: unknown) => {
       const channel = parseImDefaultSettingsChannel(rawChannel);
-      writeImDefaultSettingsPatch(parseImDefaultSettingsPatch(patch), channel);
+      const parsedPatch = parseImDefaultSettingsPatch(patch);
+      if (channel === 'wechat' && isWechatUnsupportedPermissionMode(parsedPatch.permissionMode)) {
+        throwIpcError('INVALID_PARAMS', 'personal WeChat does not support this permission mode');
+      }
+      writeImDefaultSettingsPatch(parsedPatch, channel);
       return imDefaultSettingsWire(channel);
     },
   );
@@ -2527,20 +2695,73 @@ const registerIpcHandlers = () => {
   ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_GET, async () => {
     return subagentModelSettingsWire();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_SET, async (_e, patch: unknown) => {
+  ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_SET, async (event, patch: unknown) => {
+    // 本 channel 已升级为可触发进程管理(软关/重启本地 Codex 会话)的操作,
+    // 必须先验证调用方是可信主渲染器,不能让任意取得 channel 的 frame/WebView
+    // 改写 owner-scoped 配置并重启会话(codex review P1)。
+    assertTrustedAppRendererEvent(event);
     // 配对一致性按「patch 合并当前存储」判定:有效模型为 null 时来源强制清空,
     // 同时兜住「清模型漏清来源」与「模型未指定时的 provider-only patch」两类孤儿写入。
-    writeSubagentModelSettingsPatch(
-      reconcileSubagentModelSettingsPatch(
-        parseSubagentModelSettingsPatch(patch),
-        readSubagentModelSettings(),
-      ),
+    const current = readSubagentModelSettings();
+    const parsed = reconcileSubagentModelSettingsPatch(
+      parseSubagentModelSettingsPatch(patch),
+      current,
     );
-    return subagentModelSettingsWire();
+    // codex 的 -c 注入在共享 app-server 的 spawn 时刻,变更触及注入键且有存活
+    // maker 时走 DeferredCodexRestart 执行体(空闲即软重启,busy 落盘后延迟兑现);
+    // 无 maker(启动早期/已关)时新 spawn 天然现读新值,直接落盘。
+    const needsCodexRestart =
+      codexSpawnConfigChanged(current, { ...current, ...parsed }) && getMakerIfReady() !== null;
+    if (!needsCodexRestart) {
+      writeSubagentModelSettingsPatch(parsed);
+      return { ...subagentModelSettingsWire(), codexRestartDeferred: false };
+    }
+    // 执行体的 prepare(软关会话)跨多个 await,期间可能发生登出/切号;persist 按
+    // 「请求时刻的当前 owner」解析路径,不绑定 scope 会把 A 的修改写进 B / 登出
+    // 命名空间(appSessionState.activeOwnerScopeKey 的跨 await 写入契约,codex
+    // review P1)。过期即拒,不静默落盘。
+    const ownerScopeKey = activeOwnerScopeKey();
+    // 有效性 = scope 未变 **且** 没有 owner boundary 在途:beginAppSessionBoundary
+    // 只加 boundaryDepth,scope key 的 generation 要等 boundary 后的稳定会话 commit
+    // 才变 —— teardown 已经 clearDeferredCodexRestartForOwnerBoundary 而 scope-only
+    // 检查仍为 true 的窗口里,过期请求会重新落盘/登记(codex review P1 第 4 轮)。
+    // boundary 在途一律 fail-closed。
+    const stillValid = () =>
+      !isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerScopeKey;
+    return applyCodexSpawnConfigChangeWithRestart(async () => {
+      if (!stillValid()) {
+        throwIpcError('PRECONDITION_FAILED', 'app session changed during codex restart; write dropped');
+      }
+      writeSubagentModelSettingsPatch(parsed);
+      return subagentModelSettingsWire();
+    // stillValid 同时传给执行体:busy 路径 persist 与登记之间还有一个 await 边界,
+    // 该窗口内 owner boundary 清掉旧登记后,本请求不得再 schedule(codex review
+    // P1 第 3 轮)。
+    }, stillValid);
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_RESET, async () => {
-    resetSubagentModelSettings();
-    return subagentModelSettingsWire();
+  ipcMain.handle(MAKER_IPC_INVOKE.SUBAGENT_MODEL_SETTINGS_RESET, async (event) => {
+    // 同 SET:restart-capable 操作,先验可信渲染器(codex review P1)。
+    assertTrustedAppRendererEvent(event);
+    const needsCodexRestart =
+      codexSpawnConfigChanged(readSubagentModelSettings(), SUBAGENT_MODEL_SETTINGS_DEFAULTS) &&
+      getMakerIfReady() !== null;
+    if (!needsCodexRestart) {
+      resetSubagentModelSettings();
+      return { ...subagentModelSettingsWire(), codexRestartDeferred: false };
+    }
+    // 同 SET:跨 await 的 owner-scoped 写入必须绑定 scope,过期即拒(codex review P1);
+    // stillValid 传给执行体守住 persist→登记 的窗口,并把 boundary 在途并入判定
+    // (scope key 在 boundary commit 前不变,codex review P1 第 3/4 轮)。
+    const ownerScopeKey = activeOwnerScopeKey();
+    const stillValid = () =>
+      !isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerScopeKey;
+    return applyCodexSpawnConfigChangeWithRestart(async () => {
+      if (!stillValid()) {
+        throwIpcError('PRECONDITION_FAILED', 'app session changed during codex restart; reset dropped');
+      }
+      resetSubagentModelSettings();
+      return subagentModelSettingsWire();
+    }, stillValid);
   });
 
   // Claude Code 自动上下文压缩阈值 IPC —— store 跟 Maker 单例无关, 提前注册。
@@ -2744,6 +2965,7 @@ const registerIpcHandlers = () => {
     // 数据,不抛 throwIpcError(符合规则 13 查询型例外:renderer 需要 reason 做不同 UI)。
     const result = await runClaudeOAuthLogin();
     if (result.ok) {
+      resetProviderModelAutoRefreshCooldowns('anthropic');
       // 登录可直接覆盖旧账号凭证,不一定先走登出。先跨授权世代清掉旧清单 / 缓存并
       // 等待旧 SDK 持久化收尾;即使后续 proxy 初始化失败也绝不保留 A 账号清单。
       await clearAnthropicDiscoveredModels();
@@ -2766,6 +2988,7 @@ const registerIpcHandlers = () => {
     // 如实抛 IPC 错误让 renderer 提示失败(规则 13)。
     try {
       disconnectClaudeAiOAuth();
+      resetProviderModelAutoRefreshCooldowns('anthropic');
     } catch (err) {
       throwIpcError(
         'INTERNAL',
@@ -2787,6 +3010,7 @@ const registerIpcHandlers = () => {
   // 上游作废 xAI 凭证、收口自动登出后,走和手动登出完全一致的 UI 收尾(广播 + 清账号级
   // 限流快照),否则用户会停在「显示已连接、请求连环 403」的假状态。
   setXaiAuthInvalidatedHandler(() => {
+    resetProviderModelAutoRefreshCooldowns('xai');
     clearXaiRateLimitSnapshot();
     broadcastXaiAuthStateChanged();
   });
@@ -2798,6 +3022,7 @@ const registerIpcHandlers = () => {
     // 登录成功即生效:订阅直连 handler 每请求经 buildHeaders 现取凭证,无需任何"就绪"步骤。
     const result = await runGrokOAuthLogin();
     if (result.ok) {
+      resetProviderModelAutoRefreshCooldowns('xai');
       // 登录成功后广播 provider 变更 —— 其它已打开的窗口(聊天/模型选择器等)跟随刷新
       // xAI 连接态,不再等 remount/手动刷新(对齐 CLAUDE_OAUTH_LOGIN 的 broadcastClaudeAuthStateChanged)。
       // 限流快照是账号级的:重登可能换账号,旧快照一并清掉(等新账号首个 xai/ 轮自然补上)。
@@ -2810,6 +3035,7 @@ const registerIpcHandlers = () => {
   ipcMain.handle(MAKER_IPC_INVOKE.XAI_OAUTH_LOGOUT, async () => {
     try {
       logoutGrok();
+      resetProviderModelAutoRefreshCooldowns('xai');
     } catch (err) {
       throwIpcError(
         'INTERNAL',
@@ -3205,6 +3431,12 @@ const registerIpcHandlers = () => {
       source: 'host_config',
       ref: `provider:${providerId}`,
     });
+    // 向所有窗口广播 PROVIDER_CHANGED:useProviders 依赖此消息刷新连接态快照(多窗口同步)。
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) {
+        try { win.webContents.send(MAKER_PUSH.PROVIDER_CHANGED, {}); } catch { /* no-op */ }
+      }
+    }
   };
 
   ipcMain.handle(
@@ -3336,6 +3568,40 @@ const registerIpcHandlers = () => {
           error: 'remove_failed',
         };
       }
+    },
+  );
+
+  // 内置 API-key 供应商专用 IPC(查/写/删,has 只回存在性,永不回读明文)。
+  // 业务体(白名单/类型/长度校验 + 统一错误协议)在 secrets/builtinApiKeyBridge.ts,
+  // 边界行为有单测;这里只做 sender 守卫 + 依赖装配。
+  const builtinApiKeyLog = createLogger('secrets:builtin-api-key');
+  const builtinApiKeyDeps: BuiltinApiKeyBridgeDeps = {
+    store: getProviderSecretStore(),
+    onKeyChanged: (id) => notifyProviderKeyChanged(id),
+    logError: (message, err) => builtinApiKeyLog.error(message, err),
+  };
+
+  ipcMain.handle(
+    'builtin-api-key-has',
+    async (event: Electron.IpcMainInvokeEvent, providerId: unknown): Promise<boolean> => {
+      assertTrustedAppRendererEvent(event);
+      return builtinApiKeyHas(builtinApiKeyDeps, providerId);
+    },
+  );
+
+  ipcMain.handle(
+    'builtin-api-key-store',
+    async (event: Electron.IpcMainInvokeEvent, providerId: unknown, value: unknown): Promise<void> => {
+      assertTrustedAppRendererEvent(event);
+      builtinApiKeyStore(builtinApiKeyDeps, providerId, value);
+    },
+  );
+
+  ipcMain.handle(
+    'builtin-api-key-remove',
+    async (event: Electron.IpcMainInvokeEvent, providerId: unknown): Promise<void> => {
+      assertTrustedAppRendererEvent(event);
+      builtinApiKeyRemove(builtinApiKeyDeps, providerId);
     },
   );
 
@@ -3562,6 +3828,30 @@ const registerIpcHandlers = () => {
           readScheduleBusy: () => readUpdateRelaunchScheduleBusy(getScheduleStorageIfInitialized()),
         });
       });
+      // 手动更新重启(侧栏 UpdateBanner)的阻断判定。与上面那个**无人值守**探针刻意分开:
+      // 无人值守要连「有远程设备在看会话」都让路,手动重启是用户主动发起的,只该关心
+      // 「这一下会打断哪些正在跑的活」。四个活动来源的聚合与 fail-closed 口径见
+      // relaunchBusyActivity.ts,handler 与 sender 断言见 relaunchBusyActivityIpc.ts;
+      // 这里只提供来源 —— 本进程唯一能同时看到 maker、cindy-brain 与 scheduler 三侧的位置。
+      //
+      // 不进 device-link allowlist:updater 类 channel 按 allowlist 顶部注释属「永不放行」,
+      // 且远程控制端不会代替用户点被控端的更新重启。
+      registerRelaunchBusyActivityIpc(() => ({
+        anySessionInTurn: () => anySessionInTurn(getMakerCore()),
+        listClaudeBackgroundSessions: () => listActiveClaudeBackgroundActivitySessions(),
+        anyGhostSessionBusy: () => getGhostSessionActivityTracker().anySessionBusy(),
+        // run_in_background 的 Bash 不调模型、也不折算 running,前两个来源都看不到它。
+        anyBackgroundBashRunning: () =>
+          getMakerCore()
+            .listActiveSessions()
+            .some((session) => session.listBackgroundTasks().length > 0),
+        // Cindy slot 的全部在途工作:异步(mode:'submit' 的图 / 视频)与同步代办各自独立记账,
+        // 都可能不伴随任何 turn 或 card-action,只查一半就漏一半。
+        anyCindySlotJobRunning: () => getGhostCindySlot().anyInflightWork(),
+        // script 模式 / pre-run hook 阶段的 run 不创建 session,内存来源看不到它们。
+        anySchedulerRunRunning: () =>
+          readUpdateRelaunchScheduleBusy(getScheduleStorageIfInitialized()),
+      }));
       // getMakerCore() 首次调用触发 Maker 构造，同时发起自定义 MCP 初始加载。
       // await 确保第一个会话的 mcpProviders 数组已填入已保存的自定义 MCP（P2 冷启动竞态修复）。
       getMakerCore();
@@ -3582,6 +3872,7 @@ const registerIpcHandlers = () => {
           setMainWindowBackgroundThrottlingForActiveTurn(isRunning);
           notifyUpdateAutoRelaunchBusyStateChanged();
         },
+        refreshXdGatewayModels,
       });
       registerMakerTitleIpc();
       registerMakerHelpIpc(ipcMaker);
@@ -4267,6 +4558,59 @@ const registerIpcHandlers = () => {
       } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err), size: 0 };
       }
+    },
+  );
+
+  // Read a local file's raw bytes for in-app rendering (currently PDF preview).
+  // Returns a Uint8Array over structured clone instead of base64: pdf.js
+  // getDocument({ data }) wants bytes, and skipping base64 avoids a large
+  // transient string plus a main-thread atob/charCodeAt decode loop in the
+  // renderer. Same 30MB cap as read-file-for-attachment.
+  //
+  // Path policy is the SENSITIVE-MEDIA blocklist, not the system one used by the
+  // attachment IPCs: this channel replaces the xdt-file:// protocol as the byte
+  // source for PDF preview, and that protocol denies credential / browser-profile
+  // dirs (localFileProtocol.ts). Previewing files out of an agent-writable
+  // workdir means the click authorizes "show this PDF", not "read wherever this
+  // symlink points", so the stricter list is the right one — a workdir
+  // `leak.pdf -> ~/.ssh/id_rsa` must not reach the renderer here when the
+  // protocol it replaced would have refused it. Sibling ImagePreview still goes
+  // through xdt-file://, so this keeps one policy across the file browser.
+  ipcMain.handle(
+    'read-file-bytes',
+    async (
+      event: Electron.IpcMainInvokeEvent,
+      params: { filePath: string; maxSize?: number },
+    ): Promise<{ bytes: Uint8Array; size: number }> => {
+      // Reject any caller that is not the trusted main app renderer — an
+      // auxiliary window / child frame / webview bearing the shared preload
+      // must not be able to pull raw file bytes. Mirrors the shell:open-path
+      // policy (assertTrusted + isPathAllowed) for a path-taking privileged IPC.
+      assertTrustedAppRendererEvent(event);
+      // Validation + policy + regular-file + size-cap + exact-copy live in the
+      // injectable core (fileReadBytes.ts) so they are unit-tested without
+      // Electron; failures throw a sanitized IpcError that rejects the invoke().
+      // O_NOFOLLOW on the final component: the core opens the realpath'd target,
+      // whose last segment is a real file — so a legit open succeeds, but if the
+      // final component was swapped to a symlink in the realpath→open race it
+      // fails (ELOOP) instead of following into a denied file. Falls back to 0
+      // where the platform lacks the flag (Windows), matching saveChatAttachment.
+      const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
+      return readFileBytesForPreview(params, {
+        isPathAllowed: (p) => isPathAllowedAgainst(p, getSensitiveMediaBlocklist()),
+        realpath: (p) => fs.promises.realpath(p),
+        // bigint stats: dev/ino identity must not be rounded (see FileIdentityStat).
+        stat: (p) => fs.promises.stat(p, { bigint: true }),
+        open: async (p) => {
+          const handle = await fs.promises.open(p, fs.constants.O_RDONLY | noFollow);
+          return {
+            stat: () => handle.stat({ bigint: true }),
+            read: (buffer, offset, length, position) =>
+              handle.read(buffer, offset, length, position),
+            close: () => handle.close(),
+          };
+        },
+      });
     },
   );
 
@@ -5335,6 +5679,11 @@ app.on('ready', async () => {
   // 本机 FS 目录浏览(项目选择器「添加远程项目」逐级浏览;device-link 经隧道在被控端执行)。
   // 无 DB / 无登录依赖,随其它顶层 handler 一起注册即可。
   registerFsBrowseIpc();
+  // 「我的 Issue」列表查询。刻意注册在这里而不是 registerMakerIpcsAfterSplash:
+  // 它不依赖 Maker 与 agent 二进制,而 /issues 在 splash check-environment 完成前
+  // (或二进制 provision 失败时)就可能被打开 —— 挂在 splash 之后会让页面拿到
+  // "No handler registered" 且不会自动恢复。
+  registerMyIssuesIpc();
   // chat-data-localization F2/F5：注册 localDb IPC + 干净退出快照钩子。
   // 不立即开 db；ensureReady 由 AuthContext 在登录成功后通过 IPC 触发。
   // onReady 回调 → scheduler-host 启动重试入口 (Phase 3)：splash 跑早于 user login
@@ -5421,11 +5770,7 @@ app.on('ready', async () => {
       // and unable to claim the owner from its first p2p message.
       startAccountIntegrationsAfterOwnerDbReady(userId, {
         isOwnerCurrent: (ownerId) =>
-          isLocalDbOwnerCurrent(
-            authManager.getAuthState(),
-            ownerId,
-            isAppSessionBoundaryPending(),
-          ),
+          isLocalDbOwnerCurrent(authManager.getAuthState(), ownerId, isAppSessionBoundaryPending()),
         startHookControlAccount,
         startImConnection,
         log: dbClientLog,
@@ -5468,30 +5813,20 @@ app.on('ready', async () => {
       // 自定义供应商配置在按 userId 切片的 localDb 里：DB ready / 换账号后重新加载并
       // 注入 active-catalog（让路由 / 来源栏 / 模型选择器跟随当前账号）。best-effort，不阻塞。
       void refreshCustomProvidersIntoCatalog();
-      // 自定义 MCP：provider 数组已在上方刷新完成，fire-and-forget 失效 Codex cached
-      // spawn 配置，使下一会话按新数组重建。
-      // 顺序约束：先 dispose app-server（含 busy 检查），成功后再关 bridge（与 mcpHandlers
-      // invalidateCodex 同款模式）。best-effort，不阻塞 DB-ready 其余初始化。
-      void (async () => {
-        let codexRestarted = false;
-        try {
-          await restartCodexAfterAuthModeChange();
-          codexRestarted = true;
-        } catch (err) {
-          accountSwitchLog.warn('restartCodexAfterAuthModeChange on account switch failed', {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-        if (codexRestarted) {
-          try {
-            await shutdownCodexEnvironment();
-          } catch (err) {
-            accountSwitchLog.warn('shutdownCodexEnvironment on account switch failed', {
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }
-      })();
+      // 自定义 MCP：provider 数组已在上方刷新完成，失效 Codex cached spawn 配置，
+      // 使下一会话按新数组重建。
+      // 顺序约束与模型发现都保持 best-effort，但这里必须 await 到 settle：LocalDbGate
+      // 只有随后才放行主界面。否则用户能在 Anthropic 清单尚未回来时发送 Opus，
+      // 草稿会按 XD 默认路由建成 provider_id=NULL（issue #1196）。
+      //
+      // 模型发现必须排在 Codex 重启序列之后：后者末尾会按 auth 边界重读
+      // models_cache（cache miss 即清空防串号），并发跑会让刚发现的清单被空快照覆盖。
+      await refreshProviderModelsAfterAccountReady({
+        restartCodex: restartCodexAfterAuthModeChange,
+        shutdownCodexEnvironment,
+        refreshProviderModels: requestProviderModelAutoRefresh,
+        log: accountSwitchLog,
+      });
       void sweepStartupDraftImages({
         dbClient: getDbClient(),
         processStartedAtMs: PROCESS_STARTED_AT_MS,
@@ -5529,6 +5864,7 @@ app.on('ready', async () => {
     },
   });
   registerSidebarSettingsIpc();
+  registerRemotePrecreatedWorktreeLedgerIpc();
   // RSB terminal tab: PTY backend + 8 个 terminal:* IPC channels(create/write/resize/dispose/restart
   // + listAvailableShells / get|setDefaultShellPref)。owner WebContents destroyed 时:
   //   - RSB 独立子窗口销毁(收起 / 合并回主窗)→ PTY 转移给主窗保活,输出 sink 改推主窗,
@@ -5541,7 +5877,11 @@ app.on('ready', async () => {
   });
   registerLocalThemesIpc();
   registerVoiceInputIpc();
-  registerGlobalVoiceInputIpc();
+  registerGlobalVoiceInputIpc({
+    getMainWindow: () => mainWindowRef,
+    // 会话副窗口跑同一套路由,设置页在里面照样打得开,所以弹系统授权窗那两条 IPC 要认它。
+    isSecondaryAppWindow,
+  });
   // 老 'usage:get-today-spend' 已退役 —— renderer 走 maker:usage:today('claude-code') 拉。
   // readTodaySpend 仍在 main/usageBroadcaster.ts 内部被 readAgentTodayUsage 用。
   // 主机飞书 token 链已退役(2026-07-17):飞书授权改由 xd-feishu 意识经
@@ -5567,6 +5907,9 @@ app.on('ready', async () => {
   // IPC handlers 必须无条件注册:用户在 Settings 页保存凭证时, renderer 走这些
   // channel 跟 main 通信, 跟用户登录态无关。
   im.registerIpc();
+  // Telegram 个人 bot 行为/人格/群参与配置的 IPC(设置卡数据面),与 im.registerIpc
+  // 同期无条件注册;不能放 host.ts 模块顶层(mock electron 的单测收集期会炸)。
+  registerTelegramBotConfigIpc();
   // 挂业务 orchestrator: 订阅 feishuIm.onMessage / .onCardAction。orchestrator
   // 必须在 createWindow 前挂好,避免 renderer 起来后第一波 IPC / event 找不到
   // handler。FeishuBot 的 WS 长连接必须等当前用户 localDb ready 后再启动。
@@ -5601,15 +5944,29 @@ app.on('ready', async () => {
   let updateRelaunchRemoteBusy = false;
   initDeviceLinkService({
     onUpdateRelaunchBusyChanged: (busy) => {
-      const transition = decideUpdateRelaunchBusyTransition(
-        updateRelaunchRemoteBusy,
-        busy,
-      );
+      const transition = decideUpdateRelaunchBusyTransition(updateRelaunchRemoteBusy, busy);
       updateRelaunchRemoteBusy = transition.nextBusy;
       if (transition.shouldNotify) notifyUpdateAutoRelaunchBusyStateChanged();
     },
   });
+  // 上次登出时没删干净的远程会话镜像缓存(文件锁 / 权限占用),开机再清一次。
+  // 不阻塞启动关键路径,失败留在队列里等下一次(见 mirrorCachePurgeQueue)。
+  // 但**缓存读**要等它落定:否则 renderer 的 hydrate 可能读到正在被删的那份明文,
+  // 而 drain 完成也收不回已经画到屏上的行(review: codex P1)。
+  // 顺序有讲究:drain 与 gate 必须排在 registerDeviceLinkIpc() **之前** —— handler 一注册
+  // renderer 就可能发起缓存读,而 gate 默认是"已放行"(review: copilot)。
+  const startupPurgeDrain = drainPurgeQueue();
+  setMirrorCacheReadGate(startupPurgeDrain);
   registerDeviceLinkIpc();
+  void startupPurgeDrain
+    .then(({ purged, pending }) => {
+      if (purged > 0 || pending > 0) {
+        createLogger('device-link:mirror-cache-purge').info(
+          `startup purge drain: purged=${purged} pending=${pending}`,
+        );
+      }
+    })
+    .catch(() => undefined);
   // 注:invoke-capture 自检(assertCaptureHealthy)不在这里——maker:create-session / maker:send
   // 由 splash 后的 registerMakerIpcsAfterSplash 延迟注册,此刻尚未注册。自检已挪到该函数末尾
   // (见上方),那里所有 sentinel 都已就位,结果才准确。
@@ -5635,7 +5992,9 @@ app.on('ready', async () => {
   // ── System resume: refresh tokens after sleep/hibernate ──
   powerMonitor.on('resume', () => {
     authManager.handleResume();
+    handleProviderModelSystemResume();
   });
+  powerMonitor.on('unlock-screen', handleProviderModelScreenUnlock);
 
   // Memory diagnostics — dev only, log per-process memory every 30s
   if (!app.isPackaged) {
@@ -5833,6 +6192,34 @@ function parseSubagentModelSettingsPatch(raw: unknown): SubagentModelSettingsPat
     }
     patch[key] = normalizeSubagentModelId(value);
   }
+  // 护栏/effort 字段类型各异(enum / boolean / number|null),逐字段分支校验。
+  if ('codexEffort' in input) {
+    if (input.codexEffort !== null && !isCodexSubagentEffort(input.codexEffort)) {
+      throwIpcError('INVALID_PARAMS', 'subagent codexEffort must be a known effort or null');
+    }
+    patch.codexEffort = input.codexEffort as SubagentModelSettingsPatch['codexEffort'];
+  }
+  if ('codexSubagentsEnabled' in input) {
+    if (typeof input.codexSubagentsEnabled !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'subagent codexSubagentsEnabled must be boolean');
+    }
+    patch.codexSubagentsEnabled = input.codexSubagentsEnabled;
+  }
+  if ('codexMaxConcurrentSubagents' in input) {
+    if (!isValidCodexSubagentConcurrencyInput(input.codexMaxConcurrentSubagents)) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        'subagent codexMaxConcurrentSubagents must be an integer in range or null',
+      );
+    }
+    patch.codexMaxConcurrentSubagents = input.codexMaxConcurrentSubagents;
+  }
+  if ('codexAllowNestedSubagents' in input) {
+    if (typeof input.codexAllowNestedSubagents !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'subagent codexAllowNestedSubagents must be boolean');
+    }
+    patch.codexAllowNestedSubagents = input.codexAllowNestedSubagents;
+  }
   return patch;
 }
 
@@ -5847,6 +6234,12 @@ function parseImDefaultSettingsPatch(raw: unknown): ImDefaultSettingsPatch {
       throwIpcError('INVALID_PARAMS', 'im default agentKind invalid');
     }
     patch.agentKind = input.agentKind;
+  }
+  if ('permissionMode' in input) {
+    if (!isImDefaultPermissionMode(input.permissionMode)) {
+      throwIpcError('INVALID_PARAMS', 'im default permissionMode invalid');
+    }
+    patch.permissionMode = input.permissionMode;
   }
   if ('agents' in input) {
     if (!input.agents || typeof input.agents !== 'object' || Array.isArray(input.agents)) {

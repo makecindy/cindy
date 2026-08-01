@@ -37,7 +37,8 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(source).not.toContain('createAgentSidebarProjects');
     // 2026-07-19 用户裁决:488cb33 对齐 Figma 时误删 branch/worktree 高级入口
     // (功能回归,wt* 状态与 send 管线一直健在)。恢复为 advancedOnly 变体挂在
-    // mode pill 右侧——只出齿轮,不回退到旧 folder chip 布局。
+    // mode pill 右侧;2026-07-28 用户裁决把 worktree 开关从齿轮 popover 提为
+    // 一级勾选 chip(齿轮删除),仍不回退到旧 folder chip 布局。
     expect(source).toContain('variant="advancedOnly"');
     expect(source).toMatch(/<WorktreeChipsRow[\s\S]*?variant="advancedOnly"/);
     expect(source).not.toContain('h-2.5 w-2.5 rounded-full');
@@ -49,6 +50,12 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
 
   it('centers the CREATE AGENT content group without reintroducing route chrome', () => {
     expect(source).toContain('items-center justify-start');
+    const shellBlock = source.slice(
+      source.indexOf('data-testid="create-agent-shell"'),
+      source.indexOf('data-testid="create-agent-main"'),
+    );
+    expect(shellBlock).toContain('overflow-x-hidden overflow-y-auto');
+    expect(shellBlock).not.toContain('overflow-hidden');
     // 用户改稿 2026-07-21:摘掉 268px 封顶(Figma 定稿画框高度的遗留),大窗口下顶距随 28vh
     // 等比增长,内容组不再"偏高";96px 下限保留,小窗口行为不变。比例为可调参数。
     // 用户改稿 2026-07-21 二连:①摘 268px 封顶(顶距随 28vh 等比);②叠加 --content-header-h
@@ -99,10 +106,16 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
       'onPermissionModeDidChange={handlePermissionModeDidChange}',
       'onProviderDidChange={handleProviderDidChange}',
       'vendorKey={draft.vendor ===',
-      'attachmentState={attachmentState}',
+      // #807 第二十二轮:仍然由调用方显式持有(ChatInput 不 fallback 内部一份),但远程草稿下
+      // 包了一层闸门 —— 拒绝路径型附件,因为那是控制端绝对路径,发到对端读不到或读到无关文件。
+      'attachmentState={guardedAttachmentState}',
       'draftKey={NEW_MAKER_DRAFT_KEY}',
       'extraDirs={effectiveExtraDirs}',
-      'onExtraDirsChange={handleExtraDirsChange}',
+      // #807 第二十二轮**刻意收窄**原来「+ 始终能加引用目录」这条:远程草稿不下传 onChange,
+      // ExtraDirsButton 据此不渲染引用目录段。原因是它开的是控制端原生目录对话框,选出的本机
+      // 路径发到对端会被 validateExtraDirs 静默丢掉、或撞上对端同名的无关目录 —— chip 显示的
+      // 并非真实授予的上下文。本机草稿行为不变;把 picker 路由到对端后恢复,见 issue #1012。
+      'onExtraDirsChange={isDeviceLinkDraft ? undefined : handleExtraDirsChange}',
       'onNewGoal={(text) =>',
       'rememberedEffortByModel={isDeviceLinkDraft ? undefined : draft.effortByModel}',
       'onRememberedEffortChange={',
@@ -271,9 +284,12 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     expect(chatInputSource).toContain(
       "className={isCreateAgentVariant && !useNarrowToolbar ? 'ml-[7px]' : undefined}",
     );
+    // 本机会话可选附件,但远程或身份尚未回流的已建会话不能摄入控制端绝对路径。
+    expect(chatInputSource).toContain('const localAttachmentPickerEnabled =');
     expect(chatInputSource).toContain(
-      '(extraDirs !== undefined && onExtraDirsChange)',
+      'onAddFiles={localAttachmentPickerEnabled ? addFiles : undefined}',
     );
+    expect(chatInputSource).not.toContain('(extraDirs !== undefined && onExtraDirsChange)');
     expect(chatInputSource).not.toContain(
       "vendorKey === 'cc' && extraDirs !== undefined && onExtraDirsChange",
     );
@@ -295,6 +311,20 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
     );
     expect(worktreeChipsRowSource).not.toContain(
       'border-primary bg-primary text-primary-foreground',
+    );
+  });
+
+  it('keeps the worktree control visible for a detached HEAD checkout', () => {
+    // currentBranch=null 是合法的 detached HEAD，不等于“不是 git 仓库”。
+    // 未勾选时仍展示 HEAD，用户才能从这里开启 worktree / 选择源分支。
+    expect(worktreeChipsRowSource).toContain(
+      ": (currentBranch ?? 'HEAD');",
+    );
+    expect(worktreeChipsRowSource).toContain(
+      'const showBranchChip = !advancedHidden && !!detect.data?.isGitRepo;',
+    );
+    expect(worktreeChipsRowSource).not.toContain(
+      'const showBranchChip = !advancedHidden && !!branchLabel',
     );
   });
 

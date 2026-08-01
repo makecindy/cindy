@@ -1,0 +1,3044 @@
+{
+  "generatedFrom": {
+    "src": "apps/mobile/src/auth/loginSkinLayout.ts",
+    "mainRef": "origin/main"
+  },
+  "current": {
+    "label": "本 PR 修复后",
+    "short": {
+      "designHeight": 1334,
+      "cindy": {
+        "x": 75,
+        "y": 60,
+        "w": 599,
+        "h": 720
+      },
+      "slogan": {
+        "x": 462.55,
+        "y": 408.37,
+        "w": 254.01,
+        "h": 72.8
+      },
+      "word": {
+        "x": 208,
+        "y": 487,
+        "w": 335,
+        "h": 115
+      },
+      "loginY": 622,
+      "wordBottom": 602,
+      "gap": 20
+    },
+    "long": {
+      "designHeight": 1624,
+      "cindy": {
+        "x": 0,
+        "y": 106,
+        "w": 750,
+        "h": 902
+      },
+      "slogan": {
+        "x": 444.9,
+        "y": 568,
+        "w": 269.66,
+        "h": 77.29
+      },
+      "word": {
+        "x": 182,
+        "y": 669.17,
+        "w": 387,
+        "h": 132.18
+      },
+      "loginY": 827,
+      "wordBottom": 801.3499999999999,
+      "gap": 25.65
+    }
+  },
+  "main": {
+    "label": "origin/main 现状（已含 #697）",
+    "short": {
+      "designHeight": 1334,
+      "cindy": {
+        "x": 75,
+        "y": 60,
+        "w": 599,
+        "h": 720
+      },
+      "slogan": {
+        "x": 462.55,
+        "y": 408.37,
+        "w": 254.01,
+        "h": 72.8
+      },
+      "word": {
+        "x": 208,
+        "y": 487,
+        "w": 335,
+        "h": 115
+      },
+      "loginY": 694,
+      "wordBottom": 602,
+      "gap": 92
+    },
+    "long": {
+      "designHeight": 1624,
+      "cindy": {
+        "x": 0,
+        "y": 106,
+        "w": 750,
+        "h": 902
+      },
+      "slogan": {
+        "x": 444.9,
+        "y": 568,
+        "w": 269.66,
+        "h": 77.29
+      },
+      "word": {
+        "x": 182,
+        "y": 669.17,
+        "w": 387,
+        "h": 132.18
+      },
+      "loginY": 933,
+      "wordBottom": 801.3499999999999,
+      "gap": 131.65
+    }
+  },
+  "figmaLoginY": {
+    "short": 622,
+    "long": 827
+  },
+  "figmaGap": {
+    "short": 20,
+    "long": 25.65
+  },
+  "panel": {
+    "group": {
+      "x": 35,
+      "width": 680,
+      "height": 560
+    },
+    "title": {
+      "y": 31,
+      "height": 38,
+      "font": 32
+    },
+    "subtitle": {
+      "x": 70,
+      "y": 75,
+      "width": 540,
+      "height": 23,
+      "font": 20,
+      "maxLines": 2
+    },
+    "control": {
+      "x": 70,
+      "inputY": 158,
+      "buttonY": 300,
+      "width": 540,
+      "height": 80,
+      "radius": 40,
+      "font": 24,
+      "textPadLeft": 31
+    },
+    "social": {
+      "y": 480,
+      "size": 80,
+      "gap": 70,
+      "icon": 48
+    },
+    "consent": {
+      "y": 582,
+      "width": 680,
+      "height": 40,
+      "gap": 6.5,
+      "font": 20,
+      "lineHeight": 23,
+      "bottomOverflow": 62,
+      "radio": {
+        "hitSize": 24,
+        "ringSize": 20,
+        "ringRadius": 9,
+        "ringStroke": 2,
+        "checkStroke": 3,
+        "pressSize": 88
+      }
+    },
+    "errorText": {
+      "y": 380,
+      "width": 680,
+      "height": 60,
+      "font": 20
+    }
+  },
+  "planA": {
+    "label": "方案A 品牌簇整体下移",
+    "short": {
+      "designHeight": 1334,
+      "cindy": {
+        "x": 75,
+        "y": 120,
+        "w": 599,
+        "h": 720
+      },
+      "slogan": {
+        "x": 462.55,
+        "y": 468.37,
+        "w": 254.01,
+        "h": 72.8
+      },
+      "word": {
+        "x": 208,
+        "y": 547,
+        "w": 335,
+        "h": 115
+      },
+      "loginY": 682,
+      "wordBottom": 662,
+      "gap": 20,
+      "shift": 60
+    },
+    "long": {
+      "designHeight": 1624,
+      "cindy": {
+        "x": 0,
+        "y": 166,
+        "w": 750,
+        "h": 902
+      },
+      "slogan": {
+        "x": 444.9,
+        "y": 628,
+        "w": 269.66,
+        "h": 77.29
+      },
+      "word": {
+        "x": 182,
+        "y": 729.17,
+        "w": 387,
+        "h": 132.18
+      },
+      "loginY": 887,
+      "wordBottom": 861.35,
+      "gap": 25.65,
+      "shift": 60
+    }
+  },
+  "surfaces": [
+    {
+      "name": "iPhone SE",
+      "w": 375,
+      "h": 667,
+      "mode": "phone",
+      "current": {
+        "mode": "phone",
+        "loginY": 622,
+        "wordBottom": 602,
+        "gap": 20
+      },
+      "main": {
+        "mode": "phone",
+        "loginY": 694,
+        "wordBottom": 602,
+        "gap": 92
+      },
+      "changed": true
+    },
+    {
+      "name": "iPhone 15",
+      "w": 393,
+      "h": 852,
+      "mode": "phone",
+      "current": {
+        "mode": "phone",
+        "loginY": 827,
+        "wordBottom": 801.35,
+        "gap": 25.65
+      },
+      "main": {
+        "mode": "phone",
+        "loginY": 933,
+        "wordBottom": 801.35,
+        "gap": 131.65
+      },
+      "changed": true
+    },
+    {
+      "name": "iPhone Pro Max",
+      "w": 430,
+      "h": 932,
+      "mode": "phone",
+      "current": {
+        "mode": "phone",
+        "loginY": 827,
+        "wordBottom": 801.35,
+        "gap": 25.65
+      },
+      "main": {
+        "mode": "phone",
+        "loginY": 933,
+        "wordBottom": 801.35,
+        "gap": 131.65
+      },
+      "changed": true
+    },
+    {
+      "name": "Split 窄窗",
+      "w": 320,
+      "h": 680,
+      "mode": "phone",
+      "current": {
+        "mode": "phone",
+        "loginY": 805.62,
+        "wordBottom": 780.56,
+        "gap": 25.06
+      },
+      "main": {
+        "mode": "phone",
+        "loginY": 908.07,
+        "wordBottom": 780.56,
+        "gap": 127.51
+      },
+      "changed": true
+    },
+    {
+      "name": "iPad 分屏窄",
+      "w": 507,
+      "h": 1133,
+      "mode": "phone",
+      "current": {
+        "mode": "phone",
+        "loginY": 827,
+        "wordBottom": 801.35,
+        "gap": 25.65
+      },
+      "main": {
+        "mode": "phone",
+        "loginY": 933,
+        "wordBottom": 801.35,
+        "gap": 131.65
+      },
+      "changed": true
+    },
+    {
+      "name": "折叠内屏",
+      "w": 673,
+      "h": 841,
+      "mode": "phone",
+      "current": {
+        "mode": "phone",
+        "loginY": 297.22,
+        "wordBottom": 276.58,
+        "gap": 20.64
+      },
+      "main": {
+        "mode": "phone",
+        "loginY": 297.22,
+        "wordBottom": 276.58,
+        "gap": 20.64
+      },
+      "changed": false
+    },
+    {
+      "name": "Android 分屏",
+      "w": 393,
+      "h": 450,
+      "mode": "phone",
+      "current": {
+        "mode": "phone",
+        "loginY": 218.78,
+        "wordBottom": 212.24,
+        "gap": 6.54
+      },
+      "main": {
+        "mode": "phone",
+        "loginY": 218.78,
+        "wordBottom": 212.24,
+        "gap": 6.54
+      },
+      "changed": false
+    },
+    {
+      "name": "iPad mini 竖",
+      "w": 744,
+      "h": 1133,
+      "mode": "pad-portrait",
+      "current": {
+        "mode": "pad-portrait",
+        "loginY": 621,
+        "wordBottom": 606.16,
+        "gap": 14.84
+      },
+      "main": {
+        "mode": "pad-portrait",
+        "loginY": 621,
+        "wordBottom": 606.16,
+        "gap": 14.84
+      },
+      "changed": false
+    },
+    {
+      "name": "iPad Pro 竖",
+      "w": 1024,
+      "h": 1366,
+      "mode": "pad-portrait",
+      "current": {
+        "mode": "pad-portrait",
+        "loginY": 621,
+        "wordBottom": 606.16,
+        "gap": 14.84
+      },
+      "main": {
+        "mode": "pad-portrait",
+        "loginY": 621,
+        "wordBottom": 606.16,
+        "gap": 14.84
+      },
+      "changed": false
+    },
+    {
+      "name": "iPad 横",
+      "w": 1180,
+      "h": 820,
+      "mode": "pad-landscape",
+      "current": {
+        "mode": "pad-landscape",
+        "loginY": 328,
+        "wordBottom": 294.12,
+        "gap": 33.88
+      },
+      "main": {
+        "mode": "pad-landscape",
+        "loginY": 328,
+        "wordBottom": 294.12,
+        "gap": 33.88
+      },
+      "changed": false
+    },
+    {
+      "name": "iPad Pro 横",
+      "w": 1366,
+      "h": 1024,
+      "mode": "pad-landscape",
+      "current": {
+        "mode": "pad-landscape",
+        "loginY": 328,
+        "wordBottom": 294.12,
+        "gap": 33.88
+      },
+      "main": {
+        "mode": "pad-landscape",
+        "loginY": 328,
+        "wordBottom": 294.12,
+        "gap": 33.88
+      },
+      "changed": false
+    },
+    {
+      "name": "iPhone 手机横屏",
+      "w": 852,
+      "h": 393,
+      "mode": "phone",
+      "current": {
+        "mode": "phone",
+        "loginY": 0,
+        "wordBottom": 150.5,
+        "gap": -150.5
+      },
+      "main": {
+        "mode": "phone",
+        "loginY": 0,
+        "wordBottom": 150.5,
+        "gap": -150.5
+      },
+      "changed": false
+    }
+  ],
+  "narrowBranch": {
+    "samples": [
+      {
+        "dh": 600,
+        "wordBottom": 150.5,
+        "main640": 0,
+        "rejected712": 0,
+        "adopted": 0
+      },
+      {
+        "dh": 602,
+        "wordBottom": 150.5,
+        "main640": 0,
+        "rejected712": 0,
+        "adopted": 0
+      },
+      {
+        "dh": 604,
+        "wordBottom": 150.5,
+        "main640": 0,
+        "rejected712": 0,
+        "adopted": 0
+      },
+      {
+        "dh": 606,
+        "wordBottom": 150.5,
+        "main640": 0,
+        "rejected712": 0,
+        "adopted": 0
+      },
+      {
+        "dh": 608,
+        "wordBottom": 150.5,
+        "main640": 0,
+        "rejected712": 0,
+        "adopted": 0
+      },
+      {
+        "dh": 610,
+        "wordBottom": 150.5,
+        "main640": 0,
+        "rejected712": 0,
+        "adopted": 0
+      },
+      {
+        "dh": 612,
+        "wordBottom": 150.5,
+        "main640": 0,
+        "rejected712": 0,
+        "adopted": 0
+      },
+      {
+        "dh": 614,
+        "wordBottom": 150.5,
+        "main640": 0,
+        "rejected712": 0,
+        "adopted": 0
+      },
+      {
+        "dh": 616,
+        "wordBottom": 150.5,
+        "main640": 0,
+        "rejected712": 0,
+        "adopted": 0
+      },
+      {
+        "dh": 618,
+        "wordBottom": 150.5,
+        "main640": 0,
+        "rejected712": 0,
+        "adopted": 0
+      },
+      {
+        "dh": 620,
+        "wordBottom": 150.5,
+        "main640": 0,
+        "rejected712": 0,
+        "adopted": 0
+      },
+      {
+        "dh": 622,
+        "wordBottom": 150.5,
+        "main640": 0,
+        "rejected712": 0,
+        "adopted": 0
+      },
+      {
+        "dh": 624,
+        "wordBottom": 150.5,
+        "main640": 0,
+        "rejected712": 0,
+        "adopted": 0
+      },
+      {
+        "dh": 626,
+        "wordBottom": 150.5,
+        "main640": 0,
+        "rejected712": 0,
+        "adopted": 0
+      },
+      {
+        "dh": 628,
+        "wordBottom": 150.5,
+        "main640": 0,
+        "rejected712": 0,
+        "adopted": 0
+      },
+      {
+        "dh": 630,
+        "wordBottom": 150.5,
+        "main640": 0,
+        "rejected712": 0,
+        "adopted": 0
+      },
+      {
+        "dh": 632,
+        "wordBottom": 150.5,
+        "main640": 0,
+        "rejected712": 0,
+        "adopted": 0
+      },
+      {
+        "dh": 634,
+        "wordBottom": 150.5,
+        "main640": 0,
+        "rejected712": 0,
+        "adopted": 0
+      },
+      {
+        "dh": 636,
+        "wordBottom": 150.5,
+        "main640": 0,
+        "rejected712": 0,
+        "adopted": 0
+      },
+      {
+        "dh": 638,
+        "wordBottom": 150.5,
+        "main640": 0,
+        "rejected712": 0,
+        "adopted": 0
+      },
+      {
+        "dh": 640,
+        "wordBottom": 150.5,
+        "main640": 0,
+        "rejected712": 0,
+        "adopted": 0
+      },
+      {
+        "dh": 642,
+        "wordBottom": 150.5,
+        "main640": 2,
+        "rejected712": 0,
+        "adopted": 2
+      },
+      {
+        "dh": 644,
+        "wordBottom": 150.5,
+        "main640": 4,
+        "rejected712": 0,
+        "adopted": 4
+      },
+      {
+        "dh": 646,
+        "wordBottom": 150.5,
+        "main640": 6,
+        "rejected712": 0,
+        "adopted": 6
+      },
+      {
+        "dh": 648,
+        "wordBottom": 150.5,
+        "main640": 8,
+        "rejected712": 0,
+        "adopted": 8
+      },
+      {
+        "dh": 650,
+        "wordBottom": 150.5,
+        "main640": 10,
+        "rejected712": 0,
+        "adopted": 10
+      },
+      {
+        "dh": 652,
+        "wordBottom": 150.5,
+        "main640": 12,
+        "rejected712": 0,
+        "adopted": 12
+      },
+      {
+        "dh": 654,
+        "wordBottom": 150.5,
+        "main640": 14,
+        "rejected712": 0,
+        "adopted": 14
+      },
+      {
+        "dh": 656,
+        "wordBottom": 150.5,
+        "main640": 16,
+        "rejected712": 0,
+        "adopted": 16
+      },
+      {
+        "dh": 658,
+        "wordBottom": 150.5,
+        "main640": 18,
+        "rejected712": 0,
+        "adopted": 18
+      },
+      {
+        "dh": 660,
+        "wordBottom": 150.5,
+        "main640": 20,
+        "rejected712": 0,
+        "adopted": 20
+      },
+      {
+        "dh": 662,
+        "wordBottom": 150.5,
+        "main640": 22,
+        "rejected712": 0,
+        "adopted": 22
+      },
+      {
+        "dh": 664,
+        "wordBottom": 150.5,
+        "main640": 24,
+        "rejected712": 0,
+        "adopted": 24
+      },
+      {
+        "dh": 666,
+        "wordBottom": 150.5,
+        "main640": 26,
+        "rejected712": 0,
+        "adopted": 26
+      },
+      {
+        "dh": 668,
+        "wordBottom": 150.5,
+        "main640": 28,
+        "rejected712": 0,
+        "adopted": 28
+      },
+      {
+        "dh": 670,
+        "wordBottom": 150.5,
+        "main640": 30,
+        "rejected712": 0,
+        "adopted": 30
+      },
+      {
+        "dh": 672,
+        "wordBottom": 150.5,
+        "main640": 32,
+        "rejected712": 0,
+        "adopted": 32
+      },
+      {
+        "dh": 674,
+        "wordBottom": 150.5,
+        "main640": 34,
+        "rejected712": 0,
+        "adopted": 34
+      },
+      {
+        "dh": 676,
+        "wordBottom": 150.5,
+        "main640": 36,
+        "rejected712": 0,
+        "adopted": 36
+      },
+      {
+        "dh": 678,
+        "wordBottom": 150.5,
+        "main640": 38,
+        "rejected712": 0,
+        "adopted": 38
+      },
+      {
+        "dh": 680,
+        "wordBottom": 150.5,
+        "main640": 40,
+        "rejected712": 0,
+        "adopted": 40
+      },
+      {
+        "dh": 682,
+        "wordBottom": 150.5,
+        "main640": 42,
+        "rejected712": 0,
+        "adopted": 42
+      },
+      {
+        "dh": 684,
+        "wordBottom": 150.5,
+        "main640": 44,
+        "rejected712": 0,
+        "adopted": 44
+      },
+      {
+        "dh": 686,
+        "wordBottom": 150.5,
+        "main640": 46,
+        "rejected712": 0,
+        "adopted": 46
+      },
+      {
+        "dh": 688,
+        "wordBottom": 150.5,
+        "main640": 48,
+        "rejected712": 0,
+        "adopted": 48
+      },
+      {
+        "dh": 690,
+        "wordBottom": 150.5,
+        "main640": 50,
+        "rejected712": 0,
+        "adopted": 50
+      },
+      {
+        "dh": 692,
+        "wordBottom": 150.5,
+        "main640": 52,
+        "rejected712": 0,
+        "adopted": 52
+      },
+      {
+        "dh": 694,
+        "wordBottom": 150.5,
+        "main640": 54,
+        "rejected712": 0,
+        "adopted": 54
+      },
+      {
+        "dh": 696,
+        "wordBottom": 150.5,
+        "main640": 56,
+        "rejected712": 0,
+        "adopted": 56
+      },
+      {
+        "dh": 698,
+        "wordBottom": 150.5,
+        "main640": 58,
+        "rejected712": 0,
+        "adopted": 58
+      },
+      {
+        "dh": 700,
+        "wordBottom": 150.5,
+        "main640": 60,
+        "rejected712": 0,
+        "adopted": 60
+      },
+      {
+        "dh": 702,
+        "wordBottom": 150.5,
+        "main640": 62,
+        "rejected712": 0,
+        "adopted": 62
+      },
+      {
+        "dh": 704,
+        "wordBottom": 150.5,
+        "main640": 64,
+        "rejected712": 0,
+        "adopted": 64
+      },
+      {
+        "dh": 706,
+        "wordBottom": 150.5,
+        "main640": 66,
+        "rejected712": 0,
+        "adopted": 66
+      },
+      {
+        "dh": 708,
+        "wordBottom": 150.5,
+        "main640": 68,
+        "rejected712": 0,
+        "adopted": 68
+      },
+      {
+        "dh": 710,
+        "wordBottom": 150.5,
+        "main640": 70,
+        "rejected712": 0,
+        "adopted": 70
+      },
+      {
+        "dh": 712,
+        "wordBottom": 150.5,
+        "main640": 72,
+        "rejected712": 0,
+        "adopted": 72
+      },
+      {
+        "dh": 714,
+        "wordBottom": 150.5,
+        "main640": 74,
+        "rejected712": 2,
+        "adopted": 74
+      },
+      {
+        "dh": 716,
+        "wordBottom": 150.5,
+        "main640": 76,
+        "rejected712": 4,
+        "adopted": 76
+      },
+      {
+        "dh": 718,
+        "wordBottom": 150.5,
+        "main640": 78,
+        "rejected712": 6,
+        "adopted": 78
+      },
+      {
+        "dh": 720,
+        "wordBottom": 150.5,
+        "main640": 80,
+        "rejected712": 8,
+        "adopted": 80
+      },
+      {
+        "dh": 722,
+        "wordBottom": 150.5,
+        "main640": 82,
+        "rejected712": 10,
+        "adopted": 82
+      },
+      {
+        "dh": 724,
+        "wordBottom": 150.5,
+        "main640": 84,
+        "rejected712": 12,
+        "adopted": 84
+      },
+      {
+        "dh": 726,
+        "wordBottom": 150.5,
+        "main640": 86,
+        "rejected712": 14,
+        "adopted": 86
+      },
+      {
+        "dh": 728,
+        "wordBottom": 150.5,
+        "main640": 88,
+        "rejected712": 16,
+        "adopted": 88
+      },
+      {
+        "dh": 730,
+        "wordBottom": 150.5,
+        "main640": 90,
+        "rejected712": 18,
+        "adopted": 90
+      },
+      {
+        "dh": 732,
+        "wordBottom": 150.5,
+        "main640": 92,
+        "rejected712": 20,
+        "adopted": 92
+      },
+      {
+        "dh": 734,
+        "wordBottom": 150.5,
+        "main640": 94,
+        "rejected712": 22,
+        "adopted": 94
+      },
+      {
+        "dh": 736,
+        "wordBottom": 150.5,
+        "main640": 96,
+        "rejected712": 24,
+        "adopted": 96
+      },
+      {
+        "dh": 738,
+        "wordBottom": 150.5,
+        "main640": 98,
+        "rejected712": 26,
+        "adopted": 98
+      },
+      {
+        "dh": 740,
+        "wordBottom": 150.5,
+        "main640": 100,
+        "rejected712": 28,
+        "adopted": 100
+      },
+      {
+        "dh": 742,
+        "wordBottom": 150.5,
+        "main640": 102,
+        "rejected712": 30,
+        "adopted": 102
+      },
+      {
+        "dh": 744,
+        "wordBottom": 150.5,
+        "main640": 104,
+        "rejected712": 32,
+        "adopted": 104
+      },
+      {
+        "dh": 746,
+        "wordBottom": 150.5,
+        "main640": 106,
+        "rejected712": 34,
+        "adopted": 106
+      },
+      {
+        "dh": 748,
+        "wordBottom": 150.5,
+        "main640": 108,
+        "rejected712": 36,
+        "adopted": 108
+      },
+      {
+        "dh": 750,
+        "wordBottom": 150.5,
+        "main640": 110,
+        "rejected712": 38,
+        "adopted": 110
+      },
+      {
+        "dh": 752,
+        "wordBottom": 150.5,
+        "main640": 112,
+        "rejected712": 40,
+        "adopted": 112
+      },
+      {
+        "dh": 754,
+        "wordBottom": 150.5,
+        "main640": 114,
+        "rejected712": 42,
+        "adopted": 114
+      },
+      {
+        "dh": 756,
+        "wordBottom": 150.5,
+        "main640": 116,
+        "rejected712": 44,
+        "adopted": 116
+      },
+      {
+        "dh": 758,
+        "wordBottom": 150.5,
+        "main640": 118,
+        "rejected712": 46,
+        "adopted": 118
+      },
+      {
+        "dh": 760,
+        "wordBottom": 150.5,
+        "main640": 120,
+        "rejected712": 48,
+        "adopted": 120
+      },
+      {
+        "dh": 762,
+        "wordBottom": 150.5,
+        "main640": 122,
+        "rejected712": 50,
+        "adopted": 122
+      },
+      {
+        "dh": 764,
+        "wordBottom": 150.5,
+        "main640": 124,
+        "rejected712": 52,
+        "adopted": 124
+      },
+      {
+        "dh": 766,
+        "wordBottom": 150.5,
+        "main640": 126,
+        "rejected712": 54,
+        "adopted": 126
+      },
+      {
+        "dh": 768,
+        "wordBottom": 150.5,
+        "main640": 128,
+        "rejected712": 56,
+        "adopted": 128
+      },
+      {
+        "dh": 770,
+        "wordBottom": 150.5,
+        "main640": 130,
+        "rejected712": 58,
+        "adopted": 130
+      },
+      {
+        "dh": 772,
+        "wordBottom": 150.5,
+        "main640": 132,
+        "rejected712": 60,
+        "adopted": 132
+      },
+      {
+        "dh": 774,
+        "wordBottom": 150.5,
+        "main640": 134,
+        "rejected712": 62,
+        "adopted": 134
+      },
+      {
+        "dh": 776,
+        "wordBottom": 150.5,
+        "main640": 136,
+        "rejected712": 64,
+        "adopted": 136
+      },
+      {
+        "dh": 778,
+        "wordBottom": 150.5,
+        "main640": 138,
+        "rejected712": 66,
+        "adopted": 138
+      },
+      {
+        "dh": 780,
+        "wordBottom": 150.5,
+        "main640": 140,
+        "rejected712": 68,
+        "adopted": 140
+      },
+      {
+        "dh": 782,
+        "wordBottom": 150.5,
+        "main640": 142,
+        "rejected712": 70,
+        "adopted": 142
+      },
+      {
+        "dh": 784,
+        "wordBottom": 150.91,
+        "main640": 144,
+        "rejected712": 72,
+        "adopted": 144
+      },
+      {
+        "dh": 786,
+        "wordBottom": 152.55,
+        "main640": 146,
+        "rejected712": 74,
+        "adopted": 146
+      },
+      {
+        "dh": 788,
+        "wordBottom": 154.19,
+        "main640": 148,
+        "rejected712": 76,
+        "adopted": 148
+      },
+      {
+        "dh": 790,
+        "wordBottom": 155.83,
+        "main640": 150,
+        "rejected712": 78,
+        "adopted": 150
+      },
+      {
+        "dh": 792,
+        "wordBottom": 157.47,
+        "main640": 152,
+        "rejected712": 80,
+        "adopted": 152
+      },
+      {
+        "dh": 794,
+        "wordBottom": 159.11,
+        "main640": 154,
+        "rejected712": 82,
+        "adopted": 154
+      },
+      {
+        "dh": 796,
+        "wordBottom": 160.75,
+        "main640": 156,
+        "rejected712": 84,
+        "adopted": 156
+      },
+      {
+        "dh": 798,
+        "wordBottom": 162.39,
+        "main640": 158,
+        "rejected712": 86,
+        "adopted": 158
+      },
+      {
+        "dh": 800,
+        "wordBottom": 164.03,
+        "main640": 160,
+        "rejected712": 88,
+        "adopted": 160
+      },
+      {
+        "dh": 802,
+        "wordBottom": 165.67,
+        "main640": 162,
+        "rejected712": 90,
+        "adopted": 162
+      },
+      {
+        "dh": 804,
+        "wordBottom": 167.31,
+        "main640": 164,
+        "rejected712": 92,
+        "adopted": 164
+      },
+      {
+        "dh": 806,
+        "wordBottom": 168.95,
+        "main640": 166,
+        "rejected712": 94,
+        "adopted": 166
+      },
+      {
+        "dh": 808,
+        "wordBottom": 170.59,
+        "main640": 168,
+        "rejected712": 96,
+        "adopted": 168
+      },
+      {
+        "dh": 810,
+        "wordBottom": 172.23,
+        "main640": 170,
+        "rejected712": 98,
+        "adopted": 170
+      },
+      {
+        "dh": 812,
+        "wordBottom": 173.87,
+        "main640": 172,
+        "rejected712": 100,
+        "adopted": 172
+      },
+      {
+        "dh": 814,
+        "wordBottom": 175.51,
+        "main640": 174,
+        "rejected712": 102,
+        "adopted": 174
+      },
+      {
+        "dh": 816,
+        "wordBottom": 177.16,
+        "main640": 176,
+        "rejected712": 104,
+        "adopted": 176
+      },
+      {
+        "dh": 818,
+        "wordBottom": 178.8,
+        "main640": 178,
+        "rejected712": 106,
+        "adopted": 178
+      },
+      {
+        "dh": 820,
+        "wordBottom": 180.44,
+        "main640": 180,
+        "rejected712": 108,
+        "adopted": 180
+      },
+      {
+        "dh": 822,
+        "wordBottom": 182.08,
+        "main640": 182,
+        "rejected712": 110,
+        "adopted": 182
+      },
+      {
+        "dh": 824,
+        "wordBottom": 183.72,
+        "main640": 184,
+        "rejected712": 112,
+        "adopted": 184
+      },
+      {
+        "dh": 826,
+        "wordBottom": 185.36,
+        "main640": 186,
+        "rejected712": 114,
+        "adopted": 186
+      },
+      {
+        "dh": 828,
+        "wordBottom": 187,
+        "main640": 188,
+        "rejected712": 116,
+        "adopted": 188
+      },
+      {
+        "dh": 830,
+        "wordBottom": 188.64,
+        "main640": 190,
+        "rejected712": 118,
+        "adopted": 190
+      },
+      {
+        "dh": 832,
+        "wordBottom": 190.28,
+        "main640": 192,
+        "rejected712": 120,
+        "adopted": 192
+      },
+      {
+        "dh": 834,
+        "wordBottom": 191.92,
+        "main640": 194,
+        "rejected712": 122,
+        "adopted": 194
+      },
+      {
+        "dh": 836,
+        "wordBottom": 193.56,
+        "main640": 196,
+        "rejected712": 124,
+        "adopted": 196
+      },
+      {
+        "dh": 838,
+        "wordBottom": 195.2,
+        "main640": 198,
+        "rejected712": 126,
+        "adopted": 198
+      },
+      {
+        "dh": 840,
+        "wordBottom": 196.84,
+        "main640": 200,
+        "rejected712": 128,
+        "adopted": 200
+      },
+      {
+        "dh": 842,
+        "wordBottom": 198.48,
+        "main640": 202,
+        "rejected712": 130,
+        "adopted": 202
+      },
+      {
+        "dh": 844,
+        "wordBottom": 200.12,
+        "main640": 204,
+        "rejected712": 132,
+        "adopted": 204
+      },
+      {
+        "dh": 846,
+        "wordBottom": 201.76,
+        "main640": 206,
+        "rejected712": 134,
+        "adopted": 206
+      },
+      {
+        "dh": 848,
+        "wordBottom": 203.4,
+        "main640": 208,
+        "rejected712": 136,
+        "adopted": 208
+      },
+      {
+        "dh": 850,
+        "wordBottom": 205.04,
+        "main640": 210,
+        "rejected712": 138,
+        "adopted": 210
+      },
+      {
+        "dh": 852,
+        "wordBottom": 206.68,
+        "main640": 212,
+        "rejected712": 140,
+        "adopted": 212
+      },
+      {
+        "dh": 854,
+        "wordBottom": 208.32,
+        "main640": 214,
+        "rejected712": 142,
+        "adopted": 214
+      },
+      {
+        "dh": 856,
+        "wordBottom": 209.96,
+        "main640": 216,
+        "rejected712": 144,
+        "adopted": 216
+      },
+      {
+        "dh": 858,
+        "wordBottom": 211.6,
+        "main640": 218,
+        "rejected712": 146,
+        "adopted": 218
+      },
+      {
+        "dh": 860,
+        "wordBottom": 213.24,
+        "main640": 220,
+        "rejected712": 148,
+        "adopted": 220
+      },
+      {
+        "dh": 862,
+        "wordBottom": 214.88,
+        "main640": 222,
+        "rejected712": 150,
+        "adopted": 222
+      },
+      {
+        "dh": 864,
+        "wordBottom": 216.52,
+        "main640": 224,
+        "rejected712": 152,
+        "adopted": 224
+      },
+      {
+        "dh": 866,
+        "wordBottom": 218.16,
+        "main640": 226,
+        "rejected712": 154,
+        "adopted": 226
+      },
+      {
+        "dh": 868,
+        "wordBottom": 219.8,
+        "main640": 228,
+        "rejected712": 156,
+        "adopted": 228
+      },
+      {
+        "dh": 870,
+        "wordBottom": 221.44,
+        "main640": 230,
+        "rejected712": 158,
+        "adopted": 230
+      },
+      {
+        "dh": 872,
+        "wordBottom": 223.08,
+        "main640": 232,
+        "rejected712": 160,
+        "adopted": 232
+      },
+      {
+        "dh": 874,
+        "wordBottom": 224.72,
+        "main640": 234,
+        "rejected712": 162,
+        "adopted": 234
+      },
+      {
+        "dh": 876,
+        "wordBottom": 226.37,
+        "main640": 236,
+        "rejected712": 164,
+        "adopted": 236
+      },
+      {
+        "dh": 878,
+        "wordBottom": 228.01,
+        "main640": 238,
+        "rejected712": 166,
+        "adopted": 238
+      },
+      {
+        "dh": 880,
+        "wordBottom": 229.65,
+        "main640": 240,
+        "rejected712": 168,
+        "adopted": 240
+      },
+      {
+        "dh": 882,
+        "wordBottom": 231.29,
+        "main640": 242,
+        "rejected712": 170,
+        "adopted": 242
+      },
+      {
+        "dh": 884,
+        "wordBottom": 232.93,
+        "main640": 244,
+        "rejected712": 172,
+        "adopted": 244
+      },
+      {
+        "dh": 886,
+        "wordBottom": 234.57,
+        "main640": 246,
+        "rejected712": 174,
+        "adopted": 246
+      },
+      {
+        "dh": 888,
+        "wordBottom": 236.21,
+        "main640": 248,
+        "rejected712": 176,
+        "adopted": 248
+      },
+      {
+        "dh": 890,
+        "wordBottom": 237.85,
+        "main640": 250,
+        "rejected712": 178,
+        "adopted": 250
+      },
+      {
+        "dh": 892,
+        "wordBottom": 239.49,
+        "main640": 252,
+        "rejected712": 180,
+        "adopted": 252
+      },
+      {
+        "dh": 894,
+        "wordBottom": 241.13,
+        "main640": 254,
+        "rejected712": 182,
+        "adopted": 254
+      },
+      {
+        "dh": 896,
+        "wordBottom": 242.77,
+        "main640": 256,
+        "rejected712": 184,
+        "adopted": 256
+      },
+      {
+        "dh": 898,
+        "wordBottom": 244.41,
+        "main640": 258,
+        "rejected712": 186,
+        "adopted": 258
+      },
+      {
+        "dh": 900,
+        "wordBottom": 246.05,
+        "main640": 260,
+        "rejected712": 188,
+        "adopted": 260
+      },
+      {
+        "dh": 902,
+        "wordBottom": 247.69,
+        "main640": 262,
+        "rejected712": 190,
+        "adopted": 262
+      },
+      {
+        "dh": 904,
+        "wordBottom": 249.33,
+        "main640": 264,
+        "rejected712": 192,
+        "adopted": 264
+      },
+      {
+        "dh": 906,
+        "wordBottom": 250.97,
+        "main640": 266,
+        "rejected712": 194,
+        "adopted": 266
+      },
+      {
+        "dh": 908,
+        "wordBottom": 252.61,
+        "main640": 268,
+        "rejected712": 196,
+        "adopted": 268
+      },
+      {
+        "dh": 910,
+        "wordBottom": 254.25,
+        "main640": 270,
+        "rejected712": 198,
+        "adopted": 270
+      },
+      {
+        "dh": 912,
+        "wordBottom": 255.89,
+        "main640": 272,
+        "rejected712": 200,
+        "adopted": 272
+      },
+      {
+        "dh": 914,
+        "wordBottom": 257.53,
+        "main640": 274,
+        "rejected712": 202,
+        "adopted": 274
+      },
+      {
+        "dh": 916,
+        "wordBottom": 259.17,
+        "main640": 276,
+        "rejected712": 204,
+        "adopted": 276
+      },
+      {
+        "dh": 918,
+        "wordBottom": 260.81,
+        "main640": 278,
+        "rejected712": 206,
+        "adopted": 278
+      },
+      {
+        "dh": 920,
+        "wordBottom": 262.45,
+        "main640": 280,
+        "rejected712": 208,
+        "adopted": 280
+      },
+      {
+        "dh": 922,
+        "wordBottom": 264.09,
+        "main640": 282,
+        "rejected712": 210,
+        "adopted": 282
+      },
+      {
+        "dh": 924,
+        "wordBottom": 265.73,
+        "main640": 284,
+        "rejected712": 212,
+        "adopted": 284
+      },
+      {
+        "dh": 926,
+        "wordBottom": 267.37,
+        "main640": 286,
+        "rejected712": 214,
+        "adopted": 286
+      },
+      {
+        "dh": 928,
+        "wordBottom": 269.01,
+        "main640": 288,
+        "rejected712": 216,
+        "adopted": 288
+      },
+      {
+        "dh": 930,
+        "wordBottom": 270.65,
+        "main640": 290,
+        "rejected712": 218,
+        "adopted": 290
+      },
+      {
+        "dh": 932,
+        "wordBottom": 272.29,
+        "main640": 292,
+        "rejected712": 220,
+        "adopted": 292
+      },
+      {
+        "dh": 934,
+        "wordBottom": 273.93,
+        "main640": 294,
+        "rejected712": 222,
+        "adopted": 294
+      },
+      {
+        "dh": 936,
+        "wordBottom": 275.57,
+        "main640": 296,
+        "rejected712": 224,
+        "adopted": 296
+      },
+      {
+        "dh": 938,
+        "wordBottom": 277.22,
+        "main640": 298,
+        "rejected712": 226,
+        "adopted": 298
+      },
+      {
+        "dh": 940,
+        "wordBottom": 278.86,
+        "main640": 300,
+        "rejected712": 228,
+        "adopted": 300
+      },
+      {
+        "dh": 942,
+        "wordBottom": 280.5,
+        "main640": 302,
+        "rejected712": 230,
+        "adopted": 302
+      },
+      {
+        "dh": 944,
+        "wordBottom": 282.14,
+        "main640": 304,
+        "rejected712": 232,
+        "adopted": 304
+      },
+      {
+        "dh": 946,
+        "wordBottom": 283.78,
+        "main640": 306,
+        "rejected712": 234,
+        "adopted": 306
+      },
+      {
+        "dh": 948,
+        "wordBottom": 285.42,
+        "main640": 308,
+        "rejected712": 236,
+        "adopted": 308
+      },
+      {
+        "dh": 950,
+        "wordBottom": 287.06,
+        "main640": 310,
+        "rejected712": 238,
+        "adopted": 310
+      },
+      {
+        "dh": 952,
+        "wordBottom": 288.7,
+        "main640": 312,
+        "rejected712": 240,
+        "adopted": 312
+      },
+      {
+        "dh": 954,
+        "wordBottom": 290.34,
+        "main640": 314,
+        "rejected712": 242,
+        "adopted": 314
+      },
+      {
+        "dh": 956,
+        "wordBottom": 291.98,
+        "main640": 316,
+        "rejected712": 244,
+        "adopted": 316
+      },
+      {
+        "dh": 958,
+        "wordBottom": 293.62,
+        "main640": 318,
+        "rejected712": 246,
+        "adopted": 318
+      },
+      {
+        "dh": 960,
+        "wordBottom": 295.26,
+        "main640": 320,
+        "rejected712": 248,
+        "adopted": 320
+      },
+      {
+        "dh": 962,
+        "wordBottom": 296.9,
+        "main640": 322,
+        "rejected712": 250,
+        "adopted": 322
+      },
+      {
+        "dh": 964,
+        "wordBottom": 298.54,
+        "main640": 324,
+        "rejected712": 252,
+        "adopted": 324
+      },
+      {
+        "dh": 966,
+        "wordBottom": 300.18,
+        "main640": 326,
+        "rejected712": 254,
+        "adopted": 326
+      },
+      {
+        "dh": 968,
+        "wordBottom": 301.82,
+        "main640": 328,
+        "rejected712": 256,
+        "adopted": 328
+      },
+      {
+        "dh": 970,
+        "wordBottom": 303.46,
+        "main640": 330,
+        "rejected712": 258,
+        "adopted": 330
+      },
+      {
+        "dh": 972,
+        "wordBottom": 305.1,
+        "main640": 332,
+        "rejected712": 260,
+        "adopted": 332
+      },
+      {
+        "dh": 974,
+        "wordBottom": 306.74,
+        "main640": 334,
+        "rejected712": 262,
+        "adopted": 334
+      },
+      {
+        "dh": 976,
+        "wordBottom": 308.38,
+        "main640": 336,
+        "rejected712": 264,
+        "adopted": 336
+      },
+      {
+        "dh": 978,
+        "wordBottom": 310.02,
+        "main640": 338,
+        "rejected712": 266,
+        "adopted": 338
+      },
+      {
+        "dh": 980,
+        "wordBottom": 311.66,
+        "main640": 340,
+        "rejected712": 268,
+        "adopted": 340
+      },
+      {
+        "dh": 982,
+        "wordBottom": 313.3,
+        "main640": 342,
+        "rejected712": 270,
+        "adopted": 342
+      },
+      {
+        "dh": 984,
+        "wordBottom": 314.94,
+        "main640": 344,
+        "rejected712": 272,
+        "adopted": 344
+      },
+      {
+        "dh": 986,
+        "wordBottom": 316.58,
+        "main640": 346,
+        "rejected712": 274,
+        "adopted": 346
+      },
+      {
+        "dh": 988,
+        "wordBottom": 318.22,
+        "main640": 348,
+        "rejected712": 276,
+        "adopted": 348
+      },
+      {
+        "dh": 990,
+        "wordBottom": 319.86,
+        "main640": 350,
+        "rejected712": 278,
+        "adopted": 350
+      },
+      {
+        "dh": 992,
+        "wordBottom": 321.5,
+        "main640": 352,
+        "rejected712": 280,
+        "adopted": 352
+      },
+      {
+        "dh": 994,
+        "wordBottom": 323.14,
+        "main640": 354,
+        "rejected712": 282,
+        "adopted": 354
+      },
+      {
+        "dh": 996,
+        "wordBottom": 324.78,
+        "main640": 356,
+        "rejected712": 284,
+        "adopted": 356
+      },
+      {
+        "dh": 998,
+        "wordBottom": 326.43,
+        "main640": 358,
+        "rejected712": 286,
+        "adopted": 358
+      },
+      {
+        "dh": 1000,
+        "wordBottom": 328.07,
+        "main640": 360,
+        "rejected712": 288,
+        "adopted": 360
+      },
+      {
+        "dh": 1002,
+        "wordBottom": 329.71,
+        "main640": 362,
+        "rejected712": 290,
+        "adopted": 362
+      },
+      {
+        "dh": 1004,
+        "wordBottom": 331.35,
+        "main640": 364,
+        "rejected712": 292,
+        "adopted": 364
+      },
+      {
+        "dh": 1006,
+        "wordBottom": 332.99,
+        "main640": 366,
+        "rejected712": 294,
+        "adopted": 366
+      },
+      {
+        "dh": 1008,
+        "wordBottom": 334.63,
+        "main640": 368,
+        "rejected712": 296,
+        "adopted": 368
+      },
+      {
+        "dh": 1010,
+        "wordBottom": 336.27,
+        "main640": 370,
+        "rejected712": 298,
+        "adopted": 370
+      },
+      {
+        "dh": 1012,
+        "wordBottom": 337.91,
+        "main640": 372,
+        "rejected712": 300,
+        "adopted": 372
+      },
+      {
+        "dh": 1014,
+        "wordBottom": 339.55,
+        "main640": 374,
+        "rejected712": 302,
+        "adopted": 374
+      },
+      {
+        "dh": 1016,
+        "wordBottom": 341.19,
+        "main640": 376,
+        "rejected712": 304,
+        "adopted": 376
+      },
+      {
+        "dh": 1018,
+        "wordBottom": 342.83,
+        "main640": 378,
+        "rejected712": 306,
+        "adopted": 378
+      },
+      {
+        "dh": 1020,
+        "wordBottom": 344.47,
+        "main640": 380,
+        "rejected712": 308,
+        "adopted": 380
+      },
+      {
+        "dh": 1022,
+        "wordBottom": 346.11,
+        "main640": 382,
+        "rejected712": 310,
+        "adopted": 382
+      },
+      {
+        "dh": 1024,
+        "wordBottom": 347.75,
+        "main640": 384,
+        "rejected712": 312,
+        "adopted": 384
+      },
+      {
+        "dh": 1026,
+        "wordBottom": 349.39,
+        "main640": 386,
+        "rejected712": 314,
+        "adopted": 386
+      },
+      {
+        "dh": 1028,
+        "wordBottom": 351.03,
+        "main640": 388,
+        "rejected712": 316,
+        "adopted": 388
+      },
+      {
+        "dh": 1030,
+        "wordBottom": 352.67,
+        "main640": 390,
+        "rejected712": 318,
+        "adopted": 390
+      },
+      {
+        "dh": 1032,
+        "wordBottom": 354.31,
+        "main640": 392,
+        "rejected712": 320,
+        "adopted": 392
+      },
+      {
+        "dh": 1034,
+        "wordBottom": 355.95,
+        "main640": 394,
+        "rejected712": 322,
+        "adopted": 394
+      },
+      {
+        "dh": 1036,
+        "wordBottom": 357.59,
+        "main640": 396,
+        "rejected712": 324,
+        "adopted": 396
+      },
+      {
+        "dh": 1038,
+        "wordBottom": 359.23,
+        "main640": 398,
+        "rejected712": 326,
+        "adopted": 398
+      },
+      {
+        "dh": 1040,
+        "wordBottom": 360.87,
+        "main640": 400,
+        "rejected712": 328,
+        "adopted": 400
+      },
+      {
+        "dh": 1042,
+        "wordBottom": 362.51,
+        "main640": 402,
+        "rejected712": 330,
+        "adopted": 402
+      },
+      {
+        "dh": 1044,
+        "wordBottom": 364.15,
+        "main640": 404,
+        "rejected712": 332,
+        "adopted": 404
+      },
+      {
+        "dh": 1046,
+        "wordBottom": 365.79,
+        "main640": 406,
+        "rejected712": 334,
+        "adopted": 406
+      },
+      {
+        "dh": 1048,
+        "wordBottom": 367.43,
+        "main640": 408,
+        "rejected712": 336,
+        "adopted": 408
+      },
+      {
+        "dh": 1050,
+        "wordBottom": 369.07,
+        "main640": 410,
+        "rejected712": 338,
+        "adopted": 410
+      },
+      {
+        "dh": 1052,
+        "wordBottom": 370.71,
+        "main640": 412,
+        "rejected712": 340,
+        "adopted": 412
+      },
+      {
+        "dh": 1054,
+        "wordBottom": 372.35,
+        "main640": 414,
+        "rejected712": 342,
+        "adopted": 414
+      },
+      {
+        "dh": 1056,
+        "wordBottom": 373.99,
+        "main640": 416,
+        "rejected712": 344,
+        "adopted": 416
+      },
+      {
+        "dh": 1058,
+        "wordBottom": 375.63,
+        "main640": 418,
+        "rejected712": 346,
+        "adopted": 418
+      },
+      {
+        "dh": 1060,
+        "wordBottom": 377.28,
+        "main640": 420,
+        "rejected712": 348,
+        "adopted": 420
+      },
+      {
+        "dh": 1062,
+        "wordBottom": 378.92,
+        "main640": 422,
+        "rejected712": 350,
+        "adopted": 422
+      },
+      {
+        "dh": 1064,
+        "wordBottom": 380.56,
+        "main640": 424,
+        "rejected712": 352,
+        "adopted": 424
+      },
+      {
+        "dh": 1066,
+        "wordBottom": 382.2,
+        "main640": 426,
+        "rejected712": 354,
+        "adopted": 426
+      },
+      {
+        "dh": 1068,
+        "wordBottom": 383.84,
+        "main640": 428,
+        "rejected712": 356,
+        "adopted": 428
+      },
+      {
+        "dh": 1070,
+        "wordBottom": 385.48,
+        "main640": 430,
+        "rejected712": 358,
+        "adopted": 430
+      },
+      {
+        "dh": 1072,
+        "wordBottom": 387.12,
+        "main640": 432,
+        "rejected712": 360,
+        "adopted": 432
+      },
+      {
+        "dh": 1074,
+        "wordBottom": 388.76,
+        "main640": 434,
+        "rejected712": 362,
+        "adopted": 434
+      },
+      {
+        "dh": 1076,
+        "wordBottom": 390.4,
+        "main640": 436,
+        "rejected712": 364,
+        "adopted": 436
+      },
+      {
+        "dh": 1078,
+        "wordBottom": 392.04,
+        "main640": 438,
+        "rejected712": 366,
+        "adopted": 438
+      },
+      {
+        "dh": 1080,
+        "wordBottom": 393.68,
+        "main640": 440,
+        "rejected712": 368,
+        "adopted": 440
+      },
+      {
+        "dh": 1082,
+        "wordBottom": 395.32,
+        "main640": 442,
+        "rejected712": 370,
+        "adopted": 442
+      },
+      {
+        "dh": 1084,
+        "wordBottom": 396.96,
+        "main640": 444,
+        "rejected712": 372,
+        "adopted": 444
+      },
+      {
+        "dh": 1086,
+        "wordBottom": 398.6,
+        "main640": 446,
+        "rejected712": 374,
+        "adopted": 446
+      },
+      {
+        "dh": 1088,
+        "wordBottom": 400.24,
+        "main640": 448,
+        "rejected712": 376,
+        "adopted": 448
+      },
+      {
+        "dh": 1090,
+        "wordBottom": 401.88,
+        "main640": 450,
+        "rejected712": 378,
+        "adopted": 450
+      },
+      {
+        "dh": 1092,
+        "wordBottom": 403.52,
+        "main640": 452,
+        "rejected712": 380,
+        "adopted": 452
+      },
+      {
+        "dh": 1094,
+        "wordBottom": 405.16,
+        "main640": 454,
+        "rejected712": 382,
+        "adopted": 454
+      },
+      {
+        "dh": 1096,
+        "wordBottom": 406.8,
+        "main640": 456,
+        "rejected712": 384,
+        "adopted": 456
+      },
+      {
+        "dh": 1098,
+        "wordBottom": 408.44,
+        "main640": 458,
+        "rejected712": 386,
+        "adopted": 458
+      },
+      {
+        "dh": 1100,
+        "wordBottom": 410.08,
+        "main640": 460,
+        "rejected712": 388,
+        "adopted": 460
+      },
+      {
+        "dh": 1102,
+        "wordBottom": 411.72,
+        "main640": 462,
+        "rejected712": 390,
+        "adopted": 462
+      },
+      {
+        "dh": 1104,
+        "wordBottom": 413.36,
+        "main640": 464,
+        "rejected712": 392,
+        "adopted": 464
+      },
+      {
+        "dh": 1106,
+        "wordBottom": 415,
+        "main640": 466,
+        "rejected712": 394,
+        "adopted": 466
+      },
+      {
+        "dh": 1108,
+        "wordBottom": 416.64,
+        "main640": 468,
+        "rejected712": 396,
+        "adopted": 468
+      },
+      {
+        "dh": 1110,
+        "wordBottom": 418.28,
+        "main640": 470,
+        "rejected712": 398,
+        "adopted": 470
+      },
+      {
+        "dh": 1112,
+        "wordBottom": 419.92,
+        "main640": 472,
+        "rejected712": 400,
+        "adopted": 472
+      },
+      {
+        "dh": 1114,
+        "wordBottom": 421.56,
+        "main640": 474,
+        "rejected712": 402,
+        "adopted": 474
+      },
+      {
+        "dh": 1116,
+        "wordBottom": 423.2,
+        "main640": 476,
+        "rejected712": 404,
+        "adopted": 476
+      },
+      {
+        "dh": 1118,
+        "wordBottom": 424.84,
+        "main640": 478,
+        "rejected712": 406,
+        "adopted": 478
+      },
+      {
+        "dh": 1120,
+        "wordBottom": 426.49,
+        "main640": 480,
+        "rejected712": 408,
+        "adopted": 480
+      },
+      {
+        "dh": 1122,
+        "wordBottom": 428.13,
+        "main640": 482,
+        "rejected712": 410,
+        "adopted": 482
+      },
+      {
+        "dh": 1124,
+        "wordBottom": 429.77,
+        "main640": 484,
+        "rejected712": 412,
+        "adopted": 484
+      },
+      {
+        "dh": 1126,
+        "wordBottom": 431.41,
+        "main640": 486,
+        "rejected712": 414,
+        "adopted": 486
+      },
+      {
+        "dh": 1128,
+        "wordBottom": 433.05,
+        "main640": 488,
+        "rejected712": 416,
+        "adopted": 488
+      },
+      {
+        "dh": 1130,
+        "wordBottom": 434.69,
+        "main640": 490,
+        "rejected712": 418,
+        "adopted": 490
+      },
+      {
+        "dh": 1132,
+        "wordBottom": 436.33,
+        "main640": 492,
+        "rejected712": 420,
+        "adopted": 492
+      },
+      {
+        "dh": 1134,
+        "wordBottom": 437.97,
+        "main640": 494,
+        "rejected712": 422,
+        "adopted": 494
+      },
+      {
+        "dh": 1136,
+        "wordBottom": 439.61,
+        "main640": 496,
+        "rejected712": 424,
+        "adopted": 496
+      },
+      {
+        "dh": 1138,
+        "wordBottom": 441.25,
+        "main640": 498,
+        "rejected712": 426,
+        "adopted": 498
+      },
+      {
+        "dh": 1140,
+        "wordBottom": 442.89,
+        "main640": 500,
+        "rejected712": 428,
+        "adopted": 500
+      },
+      {
+        "dh": 1142,
+        "wordBottom": 444.53,
+        "main640": 502,
+        "rejected712": 430,
+        "adopted": 502
+      },
+      {
+        "dh": 1144,
+        "wordBottom": 446.17,
+        "main640": 504,
+        "rejected712": 432,
+        "adopted": 504
+      },
+      {
+        "dh": 1146,
+        "wordBottom": 447.81,
+        "main640": 506,
+        "rejected712": 434,
+        "adopted": 506
+      },
+      {
+        "dh": 1148,
+        "wordBottom": 449.45,
+        "main640": 508,
+        "rejected712": 436,
+        "adopted": 508
+      },
+      {
+        "dh": 1150,
+        "wordBottom": 451.09,
+        "main640": 510,
+        "rejected712": 438,
+        "adopted": 510
+      },
+      {
+        "dh": 1152,
+        "wordBottom": 452.73,
+        "main640": 512,
+        "rejected712": 440,
+        "adopted": 512
+      },
+      {
+        "dh": 1154,
+        "wordBottom": 454.37,
+        "main640": 514,
+        "rejected712": 442,
+        "adopted": 514
+      },
+      {
+        "dh": 1156,
+        "wordBottom": 456.01,
+        "main640": 516,
+        "rejected712": 444,
+        "adopted": 516
+      },
+      {
+        "dh": 1158,
+        "wordBottom": 457.65,
+        "main640": 518,
+        "rejected712": 446,
+        "adopted": 518
+      },
+      {
+        "dh": 1160,
+        "wordBottom": 459.29,
+        "main640": 520,
+        "rejected712": 448,
+        "adopted": 520
+      },
+      {
+        "dh": 1162,
+        "wordBottom": 460.93,
+        "main640": 522,
+        "rejected712": 450,
+        "adopted": 522
+      },
+      {
+        "dh": 1164,
+        "wordBottom": 462.57,
+        "main640": 524,
+        "rejected712": 452,
+        "adopted": 524
+      },
+      {
+        "dh": 1166,
+        "wordBottom": 464.21,
+        "main640": 526,
+        "rejected712": 454,
+        "adopted": 526
+      },
+      {
+        "dh": 1168,
+        "wordBottom": 465.85,
+        "main640": 528,
+        "rejected712": 456,
+        "adopted": 528
+      },
+      {
+        "dh": 1170,
+        "wordBottom": 467.49,
+        "main640": 530,
+        "rejected712": 458,
+        "adopted": 530
+      },
+      {
+        "dh": 1172,
+        "wordBottom": 469.13,
+        "main640": 532,
+        "rejected712": 460,
+        "adopted": 532
+      },
+      {
+        "dh": 1174,
+        "wordBottom": 470.77,
+        "main640": 534,
+        "rejected712": 462,
+        "adopted": 534
+      },
+      {
+        "dh": 1176,
+        "wordBottom": 472.41,
+        "main640": 536,
+        "rejected712": 464,
+        "adopted": 536
+      },
+      {
+        "dh": 1178,
+        "wordBottom": 474.05,
+        "main640": 538,
+        "rejected712": 466,
+        "adopted": 538
+      },
+      {
+        "dh": 1180,
+        "wordBottom": 475.69,
+        "main640": 540,
+        "rejected712": 468,
+        "adopted": 540
+      },
+      {
+        "dh": 1182,
+        "wordBottom": 477.34,
+        "main640": 542,
+        "rejected712": 470,
+        "adopted": 542
+      },
+      {
+        "dh": 1184,
+        "wordBottom": 478.98,
+        "main640": 544,
+        "rejected712": 472,
+        "adopted": 544
+      },
+      {
+        "dh": 1186,
+        "wordBottom": 480.62,
+        "main640": 546,
+        "rejected712": 474,
+        "adopted": 546
+      },
+      {
+        "dh": 1188,
+        "wordBottom": 482.26,
+        "main640": 548,
+        "rejected712": 476,
+        "adopted": 548
+      },
+      {
+        "dh": 1190,
+        "wordBottom": 483.9,
+        "main640": 550,
+        "rejected712": 478,
+        "adopted": 550
+      },
+      {
+        "dh": 1192,
+        "wordBottom": 485.54,
+        "main640": 552,
+        "rejected712": 480,
+        "adopted": 552
+      },
+      {
+        "dh": 1194,
+        "wordBottom": 487.18,
+        "main640": 554,
+        "rejected712": 482,
+        "adopted": 554
+      },
+      {
+        "dh": 1196,
+        "wordBottom": 488.82,
+        "main640": 556,
+        "rejected712": 484,
+        "adopted": 556
+      },
+      {
+        "dh": 1198,
+        "wordBottom": 490.46,
+        "main640": 558,
+        "rejected712": 486,
+        "adopted": 558
+      },
+      {
+        "dh": 1200,
+        "wordBottom": 492.1,
+        "main640": 560,
+        "rejected712": 488,
+        "adopted": 560
+      },
+      {
+        "dh": 1202,
+        "wordBottom": 493.74,
+        "main640": 562,
+        "rejected712": 490,
+        "adopted": 562
+      },
+      {
+        "dh": 1204,
+        "wordBottom": 495.38,
+        "main640": 564,
+        "rejected712": 492,
+        "adopted": 564
+      },
+      {
+        "dh": 1206,
+        "wordBottom": 497.02,
+        "main640": 566,
+        "rejected712": 494,
+        "adopted": 566
+      },
+      {
+        "dh": 1208,
+        "wordBottom": 498.66,
+        "main640": 568,
+        "rejected712": 496,
+        "adopted": 568
+      },
+      {
+        "dh": 1210,
+        "wordBottom": 500.3,
+        "main640": 570,
+        "rejected712": 498,
+        "adopted": 570
+      },
+      {
+        "dh": 1212,
+        "wordBottom": 501.94,
+        "main640": 572,
+        "rejected712": 500,
+        "adopted": 572
+      },
+      {
+        "dh": 1214,
+        "wordBottom": 503.58,
+        "main640": 574,
+        "rejected712": 502,
+        "adopted": 574
+      },
+      {
+        "dh": 1216,
+        "wordBottom": 505.22,
+        "main640": 576,
+        "rejected712": 504,
+        "adopted": 576
+      },
+      {
+        "dh": 1218,
+        "wordBottom": 506.86,
+        "main640": 578,
+        "rejected712": 506,
+        "adopted": 578
+      },
+      {
+        "dh": 1220,
+        "wordBottom": 508.5,
+        "main640": 580,
+        "rejected712": 508,
+        "adopted": 580
+      },
+      {
+        "dh": 1222,
+        "wordBottom": 510.14,
+        "main640": 582,
+        "rejected712": 510,
+        "adopted": 582
+      },
+      {
+        "dh": 1224,
+        "wordBottom": 511.78,
+        "main640": 584,
+        "rejected712": 512,
+        "adopted": 584
+      },
+      {
+        "dh": 1226,
+        "wordBottom": 513.42,
+        "main640": 586,
+        "rejected712": 514,
+        "adopted": 586
+      },
+      {
+        "dh": 1228,
+        "wordBottom": 515.06,
+        "main640": 588,
+        "rejected712": 516,
+        "adopted": 588
+      },
+      {
+        "dh": 1230,
+        "wordBottom": 516.7,
+        "main640": 590,
+        "rejected712": 518,
+        "adopted": 590
+      },
+      {
+        "dh": 1232,
+        "wordBottom": 518.34,
+        "main640": 592,
+        "rejected712": 520,
+        "adopted": 592
+      },
+      {
+        "dh": 1234,
+        "wordBottom": 519.98,
+        "main640": 594,
+        "rejected712": 522,
+        "adopted": 594
+      },
+      {
+        "dh": 1236,
+        "wordBottom": 521.62,
+        "main640": 596,
+        "rejected712": 524,
+        "adopted": 596
+      },
+      {
+        "dh": 1238,
+        "wordBottom": 523.26,
+        "main640": 598,
+        "rejected712": 526,
+        "adopted": 598
+      },
+      {
+        "dh": 1240,
+        "wordBottom": 524.9,
+        "main640": 600,
+        "rejected712": 528,
+        "adopted": 600
+      },
+      {
+        "dh": 1242,
+        "wordBottom": 526.54,
+        "main640": 602,
+        "rejected712": 530,
+        "adopted": 602
+      },
+      {
+        "dh": 1244,
+        "wordBottom": 528.19,
+        "main640": 604,
+        "rejected712": 532,
+        "adopted": 604
+      },
+      {
+        "dh": 1246,
+        "wordBottom": 529.83,
+        "main640": 606,
+        "rejected712": 534,
+        "adopted": 606
+      },
+      {
+        "dh": 1248,
+        "wordBottom": 531.47,
+        "main640": 608,
+        "rejected712": 536,
+        "adopted": 608
+      },
+      {
+        "dh": 1250,
+        "wordBottom": 533.11,
+        "main640": 610,
+        "rejected712": 538,
+        "adopted": 610
+      },
+      {
+        "dh": 1252,
+        "wordBottom": 534.75,
+        "main640": 612,
+        "rejected712": 540,
+        "adopted": 612
+      },
+      {
+        "dh": 1254,
+        "wordBottom": 536.39,
+        "main640": 614,
+        "rejected712": 542,
+        "adopted": 614
+      },
+      {
+        "dh": 1256,
+        "wordBottom": 538.03,
+        "main640": 616,
+        "rejected712": 544,
+        "adopted": 616
+      },
+      {
+        "dh": 1258,
+        "wordBottom": 539.67,
+        "main640": 618,
+        "rejected712": 546,
+        "adopted": 618
+      },
+      {
+        "dh": 1260,
+        "wordBottom": 541.31,
+        "main640": 620,
+        "rejected712": 548,
+        "adopted": 620
+      },
+      {
+        "dh": 1262,
+        "wordBottom": 542.95,
+        "main640": 622,
+        "rejected712": 550,
+        "adopted": 622
+      },
+      {
+        "dh": 1264,
+        "wordBottom": 544.59,
+        "main640": 624,
+        "rejected712": 552,
+        "adopted": 622
+      },
+      {
+        "dh": 1266,
+        "wordBottom": 546.23,
+        "main640": 626,
+        "rejected712": 554,
+        "adopted": 622
+      },
+      {
+        "dh": 1268,
+        "wordBottom": 547.87,
+        "main640": 628,
+        "rejected712": 556,
+        "adopted": 622
+      },
+      {
+        "dh": 1270,
+        "wordBottom": 549.51,
+        "main640": 630,
+        "rejected712": 558,
+        "adopted": 622
+      },
+      {
+        "dh": 1272,
+        "wordBottom": 551.15,
+        "main640": 632,
+        "rejected712": 560,
+        "adopted": 622
+      },
+      {
+        "dh": 1274,
+        "wordBottom": 552.79,
+        "main640": 634,
+        "rejected712": 562,
+        "adopted": 622
+      },
+      {
+        "dh": 1276,
+        "wordBottom": 554.43,
+        "main640": 636,
+        "rejected712": 564,
+        "adopted": 622
+      },
+      {
+        "dh": 1278,
+        "wordBottom": 556.07,
+        "main640": 638,
+        "rejected712": 566,
+        "adopted": 622
+      },
+      {
+        "dh": 1280,
+        "wordBottom": 557.71,
+        "main640": 640,
+        "rejected712": 568,
+        "adopted": 622
+      },
+      {
+        "dh": 1282,
+        "wordBottom": 559.35,
+        "main640": 642,
+        "rejected712": 570,
+        "adopted": 622
+      },
+      {
+        "dh": 1284,
+        "wordBottom": 560.99,
+        "main640": 644,
+        "rejected712": 572,
+        "adopted": 622
+      },
+      {
+        "dh": 1286,
+        "wordBottom": 562.63,
+        "main640": 646,
+        "rejected712": 574,
+        "adopted": 622
+      },
+      {
+        "dh": 1288,
+        "wordBottom": 564.27,
+        "main640": 648,
+        "rejected712": 576,
+        "adopted": 622
+      },
+      {
+        "dh": 1290,
+        "wordBottom": 565.91,
+        "main640": 650,
+        "rejected712": 578,
+        "adopted": 622
+      },
+      {
+        "dh": 1292,
+        "wordBottom": 567.55,
+        "main640": 652,
+        "rejected712": 580,
+        "adopted": 622
+      },
+      {
+        "dh": 1294,
+        "wordBottom": 569.19,
+        "main640": 654,
+        "rejected712": 582,
+        "adopted": 622
+      },
+      {
+        "dh": 1296,
+        "wordBottom": 570.83,
+        "main640": 656,
+        "rejected712": 584,
+        "adopted": 622
+      },
+      {
+        "dh": 1298,
+        "wordBottom": 572.47,
+        "main640": 658,
+        "rejected712": 586,
+        "adopted": 622
+      },
+      {
+        "dh": 1300,
+        "wordBottom": 574.11,
+        "main640": 660,
+        "rejected712": 588,
+        "adopted": 622
+      },
+      {
+        "dh": 1302,
+        "wordBottom": 575.75,
+        "main640": 662,
+        "rejected712": 590,
+        "adopted": 622
+      },
+      {
+        "dh": 1304,
+        "wordBottom": 577.4,
+        "main640": 664,
+        "rejected712": 592,
+        "adopted": 622
+      },
+      {
+        "dh": 1306,
+        "wordBottom": 579.04,
+        "main640": 666,
+        "rejected712": 594,
+        "adopted": 622
+      },
+      {
+        "dh": 1308,
+        "wordBottom": 580.68,
+        "main640": 668,
+        "rejected712": 596,
+        "adopted": 622
+      },
+      {
+        "dh": 1310,
+        "wordBottom": 582.32,
+        "main640": 670,
+        "rejected712": 598,
+        "adopted": 622
+      },
+      {
+        "dh": 1312,
+        "wordBottom": 583.96,
+        "main640": 672,
+        "rejected712": 600,
+        "adopted": 622
+      },
+      {
+        "dh": 1314,
+        "wordBottom": 585.6,
+        "main640": 674,
+        "rejected712": 602,
+        "adopted": 622
+      },
+      {
+        "dh": 1316,
+        "wordBottom": 587.24,
+        "main640": 676,
+        "rejected712": 604,
+        "adopted": 622
+      },
+      {
+        "dh": 1318,
+        "wordBottom": 588.88,
+        "main640": 678,
+        "rejected712": 606,
+        "adopted": 622
+      },
+      {
+        "dh": 1320,
+        "wordBottom": 590.52,
+        "main640": 680,
+        "rejected712": 608,
+        "adopted": 622
+      },
+      {
+        "dh": 1322,
+        "wordBottom": 592.16,
+        "main640": 682,
+        "rejected712": 610,
+        "adopted": 622
+      },
+      {
+        "dh": 1324,
+        "wordBottom": 593.8,
+        "main640": 684,
+        "rejected712": 612,
+        "adopted": 622
+      },
+      {
+        "dh": 1326,
+        "wordBottom": 595.44,
+        "main640": 686,
+        "rejected712": 614,
+        "adopted": 622
+      },
+      {
+        "dh": 1328,
+        "wordBottom": 597.08,
+        "main640": 688,
+        "rejected712": 616,
+        "adopted": 622
+      },
+      {
+        "dh": 1330,
+        "wordBottom": 598.72,
+        "main640": 690,
+        "rejected712": 618,
+        "adopted": 622
+      },
+      {
+        "dh": 1332,
+        "wordBottom": 600.36,
+        "main640": 692,
+        "rejected712": 620,
+        "adopted": 622
+      },
+      {
+        "dh": 1334,
+        "wordBottom": 602,
+        "main640": 694,
+        "rejected712": 622,
+        "adopted": 622
+      }
+    ],
+    "clampTo": 622
+  },
+  "contentBelowLoginY": 622,
+  "figBottomGap": {
+    "short": 30,
+    "long": 115
+  }
+}

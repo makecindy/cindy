@@ -12,7 +12,7 @@
   "cloudTeaserTitle": "クラウド版 {{appName}} を準備中",
   "cloudTeaserCopy": "公開後はパソコンがなくても、モバイルアプリだけで利用できます。",
   "sectionFirstRun": "はじめに",
-  "sectionOffline": "接続したパソコン",
+  "sectionOffline": "接続したデバイス",
   "sectionRemoteDisabled": "パソコンで操作",
   "sectionAccessRevoked": "再度の許可が必要",
   "retryAccess": "アクセスを再試行",

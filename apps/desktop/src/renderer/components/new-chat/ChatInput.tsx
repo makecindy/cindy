@@ -17,6 +17,7 @@ import { useTranslation } from 'react-i18next';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
+import { ImageHoverPreview } from '@/components/chat/ImageHoverPreview';
 import { formatBytes, TextLightbox } from '@/components/chat/TextLightbox';
 import { AttachmentTypeThumb } from './AttachmentTypeThumb';
 import { useEditor, EditorContent } from '@tiptap/react';
@@ -41,13 +42,18 @@ import {
   promoteTrailingPlainListParagraph,
 } from './ComposerListNodes';
 import { WindowsSelectionReplacement } from './WindowsSelectionReplacement';
+import { EmptyDocSelectionGuard } from './EmptyDocSelectionGuard';
 import {
   setVoiceInputDraftDecoration,
   VoiceInputDraftDecoration,
   type VoiceInputCaretState,
 } from './VoiceInputDraftDecoration';
 import { MentionDragCaretDecoration, setMentionDragCaret } from './MentionDragCaretDecoration';
-import { GhostCommandDecoration, setGhostCommandRoster } from './GhostCommandDecoration';
+import {
+  applyGhostCommandBackspace,
+  GhostCommandDecoration,
+  setGhostCommandRoster,
+} from './GhostCommandDecoration';
 import {
   replaceSlashCommandRunWithText,
   setSlashCommandRoster,
@@ -81,7 +87,11 @@ import {
   tiptapDocHasContent,
 } from '@/lib/composerDraftStore';
 import { subscribeSessionLinkInsert } from '@/lib/composerActionsBus';
-import { ModelSelector, type ModelMemoryAccessors } from './ModelSelector';
+import {
+  ModelSelector,
+  resolveModelSelectorAgentIdentity,
+  type ModelMemoryAccessors,
+} from './ModelSelector';
 import {
   createEffortChangeCoordinator,
   enqueueEffortChange,
@@ -139,6 +149,7 @@ import {
 } from './pastePipeline';
 import { upgradePastedPathsToChips, type PendingPathRange } from './pathPaste';
 import { composerDocIsEmpty } from './composerDocState';
+import { canUseLocalAttachmentPicker } from './localAttachmentPicker';
 import {
   isComposerBlankPointerTarget,
   isInteractiveFocusedElement,
@@ -150,6 +161,7 @@ import {
   replacePastedTextChipWithPlainText,
   type PastedTextChipAttrs,
 } from './PastedTextChipNode';
+import { QuickStartPillMark } from './QuickStartPillMark';
 import { ToolPayloadLightbox } from '@/components/chat/ToolPayloadLightbox';
 import { Fragment, Slice, type Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { Selection, TextSelection } from '@tiptap/pm/state';
@@ -173,7 +185,7 @@ import { useAgentCapabilities, type AgentKind } from '@/hooks/useAgentCapabiliti
 import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
-import { effectiveSourceIdForModel, sourcesForModel } from '@cindy/model-providers';
+import { chatEligibleSourcesForModel, effectiveSourceIdForModel } from '@cindy/model-providers';
 import { deriveModelsFromProviders, filterChatBridgedCodexProviders, resolveFastSupported } from '@/lib/providerModels';
 import {
   getProviderModelEffort,
@@ -289,6 +301,11 @@ interface ChatInputProps {
   ) => boolean | void | Promise<boolean | void>;
   /** Session ID for binding workingDir. When absent, folder picker is hidden. */
   sessionId?: string;
+  /**
+   * 已由 session/runtime 元数据确认的当前 Agent。null/undefined 表示身份尚未加载；
+   * 不能用 vendorKey 的 Claude Code 默认回退冒充真实身份。
+   */
+  runtimeAgentKind?: AgentKind | null;
   /** Initial workingDir from session data. */
   initialWorkingDir?: string | null;
   /**
@@ -788,6 +805,7 @@ function detectTrigger(editor: Editor): TriggerState {
 export function ChatInput({
   onSend,
   sessionId,
+  runtimeAgentKind,
   initialWorkingDir,
   remoteHostId,
   deviceLinkDeviceId,
@@ -984,7 +1002,7 @@ export function ChatInput({
   const userHistoryRef = useRef(userHistory);
   userHistoryRef.current = userHistory;
   const historyIndexRef = useRef(-1); // -1 = current draft (not browsing)
-  const draftRef = useRef<JSONContent | null>(null); // saves draft when user starts browsing
+  const draftRef = useRef<JSONContent | null>(null); // saves draft doc JSON when user starts browsing (preserves marks)
   const hydratedHistoryDocumentRef = useRef<ProseMirrorNode | null>(null);
 
   // ── composer-draft-per-session ─────────────────────────────────────
@@ -1053,6 +1071,12 @@ export function ChatInput({
   addFilesRef.current = addFiles;
   const addFolderPathRef = useRef(addFolderPath);
   addFolderPathRef.current = addFolderPath;
+  const localAttachmentPickerEnabled = canUseLocalAttachmentPicker({
+    sessionId,
+    runtimeAgentKind,
+    remoteHostId,
+    deviceLinkDeviceId,
+  });
 
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounterRef = useRef(0);
@@ -1244,8 +1268,17 @@ export function ChatInput({
     currentModelAgentKind,
     activeModel,
   );
+  // chatEligibleSourcesForModel(不是裸 sourcesForModel):非聊天模型即便"存在于某个
+  // 已连接来源"也不算有可发送来源(issue #882 第 3 点,2026-07 review)——否则 Send
+  // 会对着一个 image/embedding 端点放行,而不是显示这里的"去连接"空态。已建会话
+  // (sessionId 在)按实际路由口径判(includeDisabled):运行中的会话不因停用打断,
+  // 请求仍走原路由,把停用当「无来源」会误禁 Send(PR #744 review 第十轮)。草稿是
+  // 新路由选择,保持准入口径(停用拷贝不算可发送来源)。
   const hasConnectedSendSource = currentModelAgentKind
-    ? sourcesForModel(sendProviders, activeModel, currentModelAgentKind, { onlyConnected: true }).length > 0
+    ? chatEligibleSourcesForModel(sendProviders, activeModel, currentModelAgentKind, {
+        onlyConnected: true,
+        includeDisabled: !!sessionId,
+      }).length > 0
     : false;
   const noConnectedSource = !!currentModelAgentKind && !providersLoading && !hasConnectedSendSource;
 
@@ -1368,12 +1401,16 @@ export function ChatInput({
       WindowsSelectionReplacement.configure({
         enabled: window.electronAPI.platform === 'win32',
       }),
+      // 空输入框全选 / 全选后删空都会在行首留一块幽灵高亮(空 paragraph 被整体框进
+      // AllSelection,删空后 Chromium 的 DOM selection 也不跟着折叠)。见模块头注释。
+      EmptyDocSelectionGuard,
       CjkPunctDecoration,
       ComposerListIndentDecoration,
       VoiceInputDraftDecoration,
       MentionDragCaretDecoration,
       GhostCommandDecoration,
       SlashCommandDecoration,
+      QuickStartPillMark,
     ],
     editorProps: {
       clipboardTextSerializer: (slice) => serializeEditorSlice(editorRef.current, slice),
@@ -1749,7 +1786,7 @@ export function ChatInput({
             // Only enter history browsing when the editor is empty or already browsing
             if (idx === -1 && !isEmpty) return false;
             if (idx === -1) {
-              // Save current draft before browsing
+              // Save current draft before browsing (full doc JSON preserves marks)
               draftRef.current = view.state.doc.toJSON();
             }
             const next = Math.min(idx + 1, history.length - 1);
@@ -1765,7 +1802,7 @@ export function ChatInput({
             historyIndexRef.current = next;
             const tr = view.state.tr;
             if (next === -1) {
-              // Restore draft
+              // Restore draft from saved doc JSON (preserves marks like quickStartPill)
               const draft = draftRef.current;
               if (draft) {
                 const draftDocument = view.state.schema.nodeFromJSON(draft);
@@ -1787,6 +1824,8 @@ export function ChatInput({
         // Backspace — structured list items exit through the schema command;
         // legacy plain Markdown rows keep the prefix-deletion fallback so
         // pasted and restored text remains editable without a migration pass.
+        // 意识指令胶囊排最后:只在胶囊亮起且光标停在胶囊外(尾随空格之后)才
+        // 接管,胶囊内一律原样落回原生逐字删。
         if (
           event.key === 'Backspace' &&
           !event.metaKey &&
@@ -1794,7 +1833,9 @@ export function ChatInput({
           !event.altKey &&
           !event.shiftKey &&
           !event.isComposing &&
-          (handleStructuredListBackspace(view) || applyListBackspace(view))
+          (handleStructuredListBackspace(view) ||
+            applyListBackspace(view) ||
+            applyGhostCommandBackspace(view))
         ) {
           event.preventDefault();
           return true;
@@ -2579,10 +2620,17 @@ export function ChatInput({
       // alone.
       if (storageKey !== undefined) {
         const draft = getComposerDraft(storageKey);
-        if (draft?.text && composerDocIsEmpty(editor.state.doc)) {
+        // 判空同外部草稿订阅:草稿正文可能是「空文档 JSON」而不是 undefined。此时
+        // 编辑器本来就是空的,setContent 只会原地重建 doc(replace(0, size)),把按
+        // 位置存活的状态(语音插入点、草稿装饰锚点)推到 block 边界上。本 effect 依赖
+        // voiceInput.isBusy,录音开始与结束各会重跑一次——新建对话页的草稿键固定、
+        // 常留着一份空正文,于是上屏文字前凭空多出一个空行。
+        const draftDocument =
+          draft?.text && tiptapDocHasContent(draft.text) ? draft.text : null;
+        if (draftDocument && composerDocIsEmpty(editor.state.doc)) {
           isRestoringRef.current = true;
           try {
-            editor.commands.setContent(normalizeComposerDocumentJSON(draft.text));
+            editor.commands.setContent(normalizeComposerDocumentJSON(draftDocument));
           } finally {
             isRestoringRef.current = false;
           }
@@ -2922,11 +2970,11 @@ export function ChatInput({
     (opts?: { forceReload?: boolean }) => {
       const seq = ++slashCommandLoadSeqRef.current;
       // device-link 远程会话:agent-builtin / agent-skill 从被控端读(deviceLinkDeviceId);
-      // workingDir 是被控端路径(SSH remoteHostId 才置 null 关扫描)。desktop 命令始终本地。
+      // workingDir 是被控端路径；SSH remote 显式关扫描。desktop 命令始终本地。
       loadAllCommands(
         paletteAgentKind,
-        isRemoteSession ? null : (workingDir ?? null),
-        opts,
+        workingDir,
+        { ...opts, skipAgentSkills: isRemoteSession },
         deviceLinkDeviceId,
       )
         .then((cmds) => {
@@ -3336,13 +3384,19 @@ export function ChatInput({
       // 预检(通用、provider-aware): 当前模型在当前 agent 下「一个已连接来源都没有」
       // 时,不把请求扔给 SDK 等 401,改弹确认框引导用户去「设置 → 模型供应商」连接。
       // 取代过去仅 cc + 仅 api_key 的写法 —— 现在 OAuth / XD 网关 / 未来自定义供应商
-      // 都按 ProviderView.connected 统一计入(sourcesForModel onlyConnected),未来加新
-      // 供应商无需改这里。判定数据来自本地 IPC(useProviders),无网络往返、~ms 级。
-      // 只有「确实零已连接来源」才拦截;≥1 个直接放行(无弹窗)。currentModelAgentKind
-      // 解析不出(罕见:capabilities 未就绪)时不拦,交给下游处理,不误伤。
+      // 都按 ProviderView.connected 统一计入(chatEligibleSourcesForModel onlyConnected),
+      // 未来加新供应商无需改这里。判定数据来自本地 IPC(useProviders),无网络往返、
+      // ~ms 级。只有「确实零已连接来源」才拦截;≥1 个直接放行(无弹窗)。
+      // currentModelAgentKind 解析不出(罕见:capabilities 未就绪)时不拦,交给下游
+      // 处理,不误伤。用 chatEligibleSourcesForModel 而非裸 sourcesForModel:
+      // 非聊天来源不该被当成"可以发"放行(issue #882 第 3 点,2026-07 review)。
       if (currentModelAgentKind) {
-        const connectedSources = sourcesForModel(providers, activeModel, currentModelAgentKind, {
+        // 已建会话按实际路由口径判(includeDisabled,与上方 hasConnectedSendSource
+        // 同则):运行中会话不因停用打断,最终 preflight 若按准入 rail 判会在全停时
+        // 弹「去连接来源」把继续发送挡死(PR #744 review 第十八轮)。草稿保持准入口径。
+        const connectedSources = chatEligibleSourcesForModel(providers, activeModel, currentModelAgentKind, {
           onlyConnected: true,
+          includeDisabled: !!sessionId,
         });
         if (connectedSources.length === 0) {
           const goConnect = await confirmDialog({
@@ -5177,43 +5231,38 @@ export function ChatInput({
                   // create-agent 按 Figma 使用 hug-content pills;默认会话页仍保留左侧优先压缩。
                 )}
               >
-                {/* composer 「+」菜单(权限左侧):新建目标 + 计划模式 + 引用目录(两端通用、同级)。
-                显示条件:有新建目标入口(会话内 → 内部 NewGoalDialog;首页 → onNewGoal 回调)、
-                计划模式入口(capability + 接线齐备),或有引用目录接线。 */}
-                {(inSessionGoalEnabled ||
-                  onNewGoal ||
-                  planModeEntry ||
-                  pluginsForMenu.length > 0 ||
-                  (extraDirs !== undefined && onExtraDirsChange)) && (
-                  <ExtraDirsButton
-                    extraDirs={extraDirs ?? []}
-                    workingDir={workingDir}
-                    planMode={planModeEntry}
-                    plugins={pluginsForMenu}
-                    pluginAvailableIds={pluginAvailableIds}
-                    onPluginSelect={handlePluginSelect}
-                    onChange={onExtraDirsChange}
-                    onNewGoal={
-                      inSessionGoalEnabled || onNewGoal
-                        ? () => {
-                            // 把输入框当前文字(去空白)作为目标默认内容。
-                            const ed = editorRef.current;
-                            const draftText =
-                              ed && !ed.isDestroyed ? serializeEditorContent(ed).text.trim() : '';
-                            if (inSessionGoalEnabled) {
-                              setNewGoalInitial(draftText);
-                              setNewGoalOpen(true);
-                            } else {
-                              onNewGoal?.(draftText);
-                            }
+                {/* composer 「+」菜单(权限左侧):本机会话提供附件入口;目标、计划模式、
+                Plugin、引用目录按各自能力与接线显示。远程会话不能把控制端绝对路径
+                交给远端 agent,因此不接本机文件选择器。 */}
+                <ExtraDirsButton
+                  extraDirs={extraDirs ?? []}
+                  workingDir={workingDir}
+                  onAddFiles={localAttachmentPickerEnabled ? addFiles : undefined}
+                  planMode={planModeEntry}
+                  plugins={pluginsForMenu}
+                  pluginAvailableIds={pluginAvailableIds}
+                  onPluginSelect={handlePluginSelect}
+                  onChange={onExtraDirsChange}
+                  onNewGoal={
+                    inSessionGoalEnabled || onNewGoal
+                      ? () => {
+                          // 把输入框当前文字(去空白)作为目标默认内容。
+                          const ed = editorRef.current;
+                          const draftText =
+                            ed && !ed.isDestroyed ? serializeEditorContent(ed).text.trim() : '';
+                          if (inSessionGoalEnabled) {
+                            setNewGoalInitial(draftText);
+                            setNewGoalOpen(true);
+                          } else {
+                            onNewGoal?.(draftText);
                           }
-                        : undefined
-                    }
-                    disabled={disabled}
-                    dense={effectiveDenseToolbar}
-                    visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
-                  />
-                )}
+                        }
+                      : undefined
+                  }
+                  disabled={disabled}
+                  dense={effectiveDenseToolbar}
+                  visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
+                />
                 <PermissionSelector
                   permissionMode={activePermissionMode}
                   onPermissionModeChange={handlePermissionModeChange}
@@ -5275,6 +5324,17 @@ export function ChatInput({
                     onFastModeChange={handleFastModeChange}
                     modelMemory={modelMemory}
                     vendorKey={vendorKey}
+                    // 稳态只接受父层已加载的 session/runtime 身份；intent 存在时则明确标成
+                    // “下条消息”的目标。这样冷启动不猜 Claude Code，切换失败保留 intent
+                    // 供重试时也不会长期隐藏身份或把目标冒充为当前 Agent。
+                    agentIdentity={
+                      sessionId
+                        ? resolveModelSelectorAgentIdentity(
+                            runtimeAgentKind,
+                            agentSwitchIntent?.target,
+                          )
+                        : undefined
+                    }
                     // session-agent-switch:本机已建会话提供显式两步引擎切换(列表顶部
                     // Claude/Codex 分段,先选 Agent 再选模型)。草稿(无 sessionId)与
                     // device-link / SSH 远程会话不传(v1 不支持切换)。
@@ -5298,6 +5358,9 @@ export function ChatInput({
                     // 意图期显示用户在浏览态选中的来源(null = flat 退化行,跟随默认路由)。
                     currentProviderId={activeProviderId}
                     sourceDisconnected={selectedSourceDisconnected}
+                    // 已建会话按实际路由口径解析当前来源(含停用拷贝,跟真实扣费路由);
+                    // 草稿是新路由选择,保持准入口径(PR #744 review 第十轮)。
+                    actualRoute={!!sessionId}
                     onProviderChange={handleProviderChange}
                     onNavigateToProviders={handleNavigateToProviders}
                     switching={remoteSwitchInFlight}
@@ -5889,18 +5952,18 @@ function ThumbnailItem({
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const [textLightboxOpen, setTextLightboxOpen] = useState(false);
 
-  // Recalculate portal position when hover state changes
+  // 非图片附件仍使用路径 tooltip；图片定位由共享 ImageHoverPreview 自己负责。
   useLayoutEffect(() => {
-    if (isHovered && thumbRef.current) {
+    if (isHovered && file.category !== 'image' && thumbRef.current) {
       const rect = thumbRef.current.getBoundingClientRect();
       setPopoverPos({
-        top: rect.top, // top edge of the thumbnail
-        left: rect.left + rect.width / 2, // horizontal center
+        top: rect.top,
+        left: rect.left + rect.width / 2,
       });
     } else {
       setPopoverPos(null);
     }
-  }, [isHovered]);
+  }, [file.category, isHovered]);
 
   const handleOpenPreview = useCallback(async () => {
     // attachment-thumb-click polish (2026-04-19): clicking opens the lightbox
@@ -6025,30 +6088,14 @@ function ThumbnailItem({
       </button>
 
       {/* Hover preview / tooltip (F-FI-4) — rendered via portal to escape overflow clipping */}
-      {isHovered &&
-        popoverPos &&
-        file.category === 'image' &&
-        (file.url || file.base64) &&
-        createPortal(
-          <div
-            className="pointer-events-none fixed z-50 overflow-hidden rounded-lg shadow-lg"
-            style={{
-              top: popoverPos.top - 12, // 12px gap above thumbnail
-              left: popoverPos.left,
-              transform: 'translate(-50%, -100%)',
-              maxWidth: 224,
-              maxHeight: 168,
-            }}
-          >
-            <img
-              src={file.url ?? `data:${file.mimeType};base64,${file.base64}`}
-              alt={file.name}
-              className="max-h-[168px] max-w-[224px] object-contain"
-              draggable={false}
-            />
-          </div>,
-          document.body,
-        )}
+      {file.category === 'image' && (file.url || file.base64) ? (
+        <ImageHoverPreview
+          open={isHovered}
+          anchorRef={thumbRef}
+          src={file.url ?? `data:${file.mimeType};base64,${file.base64}`}
+          alt={file.name}
+        />
+      ) : null}
       {isHovered &&
         popoverPos &&
         file.category !== 'image' &&

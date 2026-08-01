@@ -27,12 +27,24 @@ import { resetSessionToDefaults } from './sessionRepo';
 import type { ImSessionRepo } from './sessionRepo';
 import type { ImCardBuilders } from './cardBuilders';
 import type { ImTurnRunner } from './turnRunner';
-import { listProjectsForControl, readSessionTitle } from './controlProjects';
+import {
+  listProjectsForControl,
+  listRecentSessionsForPicker,
+  readSessionTitle,
+} from './controlProjects';
 import { startThreadControlFlow } from './controlFlow';
 import { enterControl } from './controlState';
 import { bindingStore, executeDetach } from '../binding';
 import type { IdentityKey } from '@cindy/im';
 import type { ImChannelAdapter } from './types';
+
+const INTERACTIVE_SLASH_COMMANDS = new Set([
+  '/model',
+  '/permission',
+  '/ctr',
+  '/session',
+  '/project',
+]);
 
 /** Quick text-only check; treat anything starting with '/' (no spaces before) as a command. */
 export function looksLikeSlashCommand(text: string): boolean {
@@ -83,10 +95,48 @@ export function createSlashHandlers(
     const [cmd] = text.trim().split(/\s+/);
     log.info(`slash cmd=${cmd} userId=...${ctx.userId.slice(-8)}`);
 
+    if (adapter.output.kind === 'chunked-text' && INTERACTIVE_SLASH_COMMANDS.has(cmd)) {
+      await safeSendText(
+        ctx.userId,
+        ui.slash.interactiveCommandUnsupported?.(cmd) ?? ui.slash.unknownCommand(cmd),
+      );
+      return true;
+    }
+
     switch (cmd) {
       case '/help':
         await safeSendText(ctx.userId, ui.slash.help);
         return true;
+
+      case '/start': {
+        // Telegram 私聊首次交互必发 /start(START 按钮) — 有欢迎语的渠道回
+        // 欢迎语, 其它渠道走未知命令提示。
+        if (ui.slash.start) {
+          await safeSendText(ctx.userId, ui.slash.start);
+          return true;
+        }
+        await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+        return true;
+      }
+
+      case '/stop': {
+        // 官方 Telegram bot 的 /stop 习惯 — 语义与 `!stop` 完全一致
+        // (中止当前 turn + 丢弃排队消息, 会话保留)。
+        let reply: string;
+        try {
+          const result = await turnRunner.stopActiveTurn({
+            botContextId: ctx.botContextId,
+            userId: ctx.userId,
+          });
+          reply = result.stopped ? ui.agent.stopDone(result.droppedQueued) : ui.agent.stopIdle;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.error(`/stop stopActiveTurn threw: ${msg}`);
+          reply = ui.agent.sendInternalError(msg);
+        }
+        await safeSendText(ctx.userId, reply);
+        return true;
+      }
 
       case '/new': {
         // thread = session 模型: 发新顶层消息即新会话, /new 无意义 → 废弃提示。
@@ -269,6 +319,69 @@ export function createSlashHandlers(
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           log.error(`/ctr card send failed: ${msg}`);
+        }
+        return true;
+      }
+
+      case '/session': {
+        // 跨工作区最近会话直达(官方 bot /session 习惯) — 提供文案组的渠道
+        // 才放行; 选中走 control:session-pick 接管路径。
+        const recentUi = ui.cards.control.recentSessions;
+        if (!recentUi) {
+          await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+          return true;
+        }
+        const recent = await listRecentSessionsForPicker();
+        const spec = cards.buildRecentSessionPickerCard({
+          botAppId: ctx.botContextId,
+          sessions: recent,
+        });
+        try {
+          await im.sendInteractiveCard(ctx.userId, spec);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.error(`/session card send failed: ${msg}`);
+        }
+        return true;
+      }
+
+      case '/project': {
+        // 项目切换 — projectSwitching 渠道专属(个人 Telegram);其它渠道当
+        // 未知命令处理, 不暴露半成品入口。
+        const projectUi = ui.cards.project;
+        if (!adapter.projectSwitching || !projectUi) {
+          await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+          return true;
+        }
+        // /ctr 接管期间语义冲突(消息在被接管的 desktop 会话里跑): 先 /exctr。
+        const identity: IdentityKey = {
+          channel,
+          botContextId: ctx.botContextId,
+          userId: ctx.userId,
+        };
+        if (bindingStore.get(identity)) {
+          await safeSendText(ctx.userId, projectUi.attachedUnsupported);
+          return true;
+        }
+        const [projects, current] = await Promise.all([
+          listProjectsForControl(),
+          repo.findActiveSession(ctx.botContextId, ctx.userId),
+        ]);
+        const dialogueDir = adapter.sessions.ensureWorkingDir(ctx.botContextId);
+        const currentName =
+          !current || current.workingDir === dialogueDir
+            ? projectUi.dialogueName
+            : (current.workingDir.split(/[\\/]/).filter(Boolean).pop() ?? current.workingDir);
+        const spec = cards.buildProjectPickerCard({
+          botAppId: ctx.botContextId,
+          projects,
+          currentName,
+        });
+        try {
+          await im.sendInteractiveCard(ctx.userId, spec);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.error(`/project card send failed: ${msg}`);
         }
         return true;
       }

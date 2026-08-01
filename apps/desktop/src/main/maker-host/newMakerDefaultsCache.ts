@@ -29,6 +29,12 @@ export interface NewMakerDraftSnapshot {
   lastByVendor: Partial<Record<VendorKey, VendorPrefsSnapshot>>;
   fastModeByModel: Record<string, boolean>;
   effortByModel: Record<string, string>;
+  /**
+   * 「新建会话默认启用 worktree」勾选记忆(vendor 无关的草稿根字段)。
+   * 手机 / 桌面控制端远程新建时用它播种 worktree 开关。老版本 renderer 不推 → undefined,
+   * 消费方按 false 兜底。
+   */
+  worktreeEnabled?: boolean;
 }
 
 let cache: NewMakerDraftSnapshot | null = null;
@@ -112,6 +118,11 @@ export interface RemoteNewMakerDefaults {
     string,
     { effortByModel: Record<string, string>; fastByModel: Record<string, boolean> }
   >;
+  /**
+   * 「新建会话默认启用 worktree」勾选记忆(vendor 无关)。控制端 / 手机远程新建草稿据此
+   * 播种 worktree 开关默认态。旧版被控端不回 → undefined → 控制端按未勾选兜底。
+   */
+  worktreeEnabled?: boolean;
 }
 
 export function getRemoteNewMakerDefaults(
@@ -120,11 +131,17 @@ export function getRemoteNewMakerDefaults(
   // providerModelMemory(草稿列表行真实读源)与「该 vendor 是否选过模型」无关:即便 cache 未就绪 /
   // 该 vendor 无选中模型(lastByVendor 空),只要被控端有模型级预设就要全量回给控制端,
   // 否则 req1「完整镜像被控端草稿模型列表」在这条边界上回落 capabilities 默认。故在所有早返回里都带上它。
+  // worktreeEnabled(vendor 无关根字段)同理:该 vendor 尚无草稿 model 的早返回也必须携带,
+  // 否则空草稿的工作端上,手机/控制端永远读不到勾选态。
   const providerModelMemory = providerMemoryCache ?? undefined;
-  if (!cache) return providerModelMemory ? { providerModelMemory } : {};
+  const base: RemoteNewMakerDefaults = {
+    ...(providerModelMemory ? { providerModelMemory } : {}),
+    ...(cache ? { worktreeEnabled: cache.worktreeEnabled === true } : {}),
+  };
+  if (!cache) return base;
   const vendor: VendorKey = agentKind === 'claude-code' ? 'cc' : 'codex';
   const prefs = cache.lastByVendor[vendor];
-  if (!prefs?.model) return providerModelMemory ? { providerModelMemory } : {};
+  if (!prefs?.model) return base;
   const model = prefs.model;
   return {
     model,
@@ -134,6 +151,6 @@ export function getRemoteNewMakerDefaults(
     providerId: prefs.providerId ?? null,
     effortByModel: cache.effortByModel,
     fastModeByModel: cache.fastModeByModel,
-    providerModelMemory,
+    ...base,
   };
 }

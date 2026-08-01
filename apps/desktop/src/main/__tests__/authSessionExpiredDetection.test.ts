@@ -36,12 +36,12 @@ describe('desktop auth session-expiry detection', () => {
     expect(body).toContain("refreshWasSuperseded('missing-persisted-token')");
     // 防误踢:文件还在但读/解密失败(或加密暂不可用)是瞬时故障,按 transient 处理,
     // 不得 expireRuntimeAuth——否则密钥链一次抖动就会把有效用户强制登出。
-    expect(body).toContain('isPersistedSecretAbsent(REFRESH_TOKEN_KEY)');
+    expect(body).toContain('isPersistedSecretAbsent(AUTH_SESSION_KEY)');
     expect(body).toContain('treating as transient');
     // 瞬时分支必须重排 refresh 重试:正常 timer 已触发过,不重排则密钥链/IO 抖动
     // 后有效会话在 access token 到期前没有任何后续 refresh(半死)。
     expect(body).toContain('scheduleRefreshRetryAfterTransientFailure();');
-    expect(body.indexOf('isPersistedSecretAbsent(REFRESH_TOKEN_KEY)')).toBeLessThan(
+    expect(body.indexOf('isPersistedSecretAbsent(AUTH_SESSION_KEY)')).toBeLessThan(
       body.indexOf("await expireRuntimeAuth(previousUserId, 'credential-lost', {"),
     );
     // 无活会话(冷启动 / 已登出)保持静默跳过。
@@ -60,7 +60,10 @@ describe('desktop auth session-expiry detection', () => {
     // 三个 refresh token 相关文件的删除必须整体收在 preserve 守卫之内。
     expect(body).toContain('if (!opts.preservePersistedRefreshToken) {');
     const guardIdx = body.indexOf('if (!opts.preservePersistedRefreshToken) {');
-    expect(body.indexOf('removeSafe(REFRESH_TOKEN_KEY);')).toBeGreaterThan(guardIdx);
+    expect(body.indexOf('removeSafe(AUTH_SESSION_KEY);')).toBeGreaterThan(guardIdx);
+    expect(body.indexOf('removeSafe(LEGACY_RESOURCE_REFRESH_TOKEN_KEY);')).toBeGreaterThan(
+      guardIdx,
+    );
     expect(body.indexOf('removeSafe(LEGACY_ACCOUNT_REFRESH_TOKEN_KEY);')).toBeGreaterThan(guardIdx);
     expect(body.indexOf('removeSafe(LEGACY_REFRESH_TOKEN_KEY);')).toBeGreaterThan(guardIdx);
 

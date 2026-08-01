@@ -59,7 +59,6 @@ import {
 } from '@/settings/mobileSettings';
 import {
   isPushSupported,
-  markPendingUnregister,
   readPushEnabled,
   syncPushRegistration,
   writePushEnabled,
@@ -278,6 +277,7 @@ export default function SettingsScreen() {
         checkOtaUpdate: () => Updates.checkForUpdateAsync(),
         fetchOtaUpdate: () => Updates.fetchUpdateAsync(),
         reload: () => Updates.reloadAsync(),
+        isEmergencyLaunch: () => currentlyRunning.isEmergencyLaunch,
         onPhase: (phase) => setUpdatePhase(phase),
       });
       setUpdateOutcome(outcome);
@@ -289,6 +289,9 @@ export default function SettingsScreen() {
         setUpdatePhase('uptodate');
       } else if (outcome.kind === 'reloading') {
         setUpdatePhase('downloading');
+      } else if (outcome.kind === 'restart-required') {
+        // 更新已经拿到了,只是本进程重启不了 —— 不是失败态,提示文案负责说明要手动重开。
+        setUpdatePhase('uptodate');
       } else if (outcome.kind === 'busy') {
         setUpdatePhase('idle');
       } else {
@@ -297,7 +300,14 @@ export default function SettingsScreen() {
     } finally {
       updateCheckInFlightRef.current = false;
     }
-  }, [bundleCheckEnabled, checkBundleUpdate, t, updateCheckEnabled, updatesEnabled]);
+  }, [
+    bundleCheckEnabled,
+    checkBundleUpdate,
+    currentlyRunning.isEmergencyLaunch,
+    t,
+    updateCheckEnabled,
+    updatesEnabled,
+  ]);
 
   const updateSelfDeviceNameDraft = useCallback((value: string) => {
     selfDeviceNameDraftRef.current = value;
@@ -528,7 +538,6 @@ export default function SettingsScreen() {
         try {
           await syncPushRegistration({ enabled: false, apiFetch: auth.apiFetch });
         } catch {
-          await markPendingUnregister().catch(() => undefined);
           setPushMessage(t('settings.notifications.unregisterQueued'));
         }
         return;
@@ -743,9 +752,9 @@ export default function SettingsScreen() {
                 <Text style={styles.rowLabel}>{t('settings.version.currentLabel')}</Text>
                 <Text style={styles.versionValue} numberOfLines={1}>{t('settings.version.bundleVersion', { version: appVersion })}</Text>
                 <Text style={styles.rowDetail} numberOfLines={1} testID="settings.otaVersion">{t('settings.version.otaVersion', { version: otaVersion })}</Text>
-                {/* 二级版本号:自建线打包所配对的桌面产品线版本(0.0.x);仅自建线且已注入时显示 */}
+                {/* 二级版本号:自建线打包所配对的桌面产品线版本(0.0.x),不是在线电脑的实时版本;仅自建线且已注入时显示 */}
                 {IS_OTA_SELFHOST && DESKTOP_PACKAGE_VERSION ? (
-                  <Text style={styles.rowDetail} numberOfLines={1} testID="settings.desktopVersion">{t('settings.version.desktopVersion', { version: DESKTOP_PACKAGE_VERSION })}</Text>
+                  <Text style={styles.rowDetail} numberOfLines={1} testID="settings.desktopVersion">{t('settings.version.pairedDesktopVersion', { version: DESKTOP_PACKAGE_VERSION })}</Text>
                 ) : null}
                 {IS_TESTFLIGHT_BUILD ? (
                   <Text style={styles.rowDetail} numberOfLines={2} testID="settings.testFlightUpdateHint">

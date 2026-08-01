@@ -11,7 +11,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 
-import { mobileClientBuildEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
+import { mobileClientBundleEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
 
 /**
  * 临时向所有 EAS build profile 注入 region + 清单自举基址，并返回幂等恢复函数。
@@ -34,9 +34,9 @@ export function injectMobileEndpointsIntoEasFile(
       options.endpointEnv
         ? null
         : {
-            cn: mobileClientBuildEnv({ authRegion: 'cn' }),
-            global: mobileClientBuildEnv({ authRegion: 'global' }),
-            dev: mobileClientBuildEnv({ authRegion: 'dev' }),
+            cn: mobileClientBundleEnv({ authRegion: 'cn' }),
+            global: mobileClientBundleEnv({ authRegion: 'global' }),
+            dev: mobileClientBundleEnv({ authRegion: 'dev' }),
           }
     );
     const fallbackEndpointEnv = options.endpointEnv ?? endpointEnvByRegion?.cn;

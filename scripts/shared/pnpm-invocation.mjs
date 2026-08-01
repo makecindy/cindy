@@ -16,13 +16,14 @@ const WINDOWS_DIRECT_EXEC_EXTENSIONS = new Set([".exe", ".com"]);
 
 /**
  * @param {string[]} args 传给 pnpm 的参数
- * @param {Record<string, string | undefined>} env 允许注入 npmExecPath／execPath／platform 覆写，便于测试
+ * @param {{ npmExecPath?: string, npm_execpath?: string, execPath?: string, platform?: NodeJS.Platform | string, comSpec?: string }} options
+ * 允许注入 npmExecPath／execPath／platform 覆写，便于测试；生产路径默认从 Node runtime 取 platform。
  * @returns {{ command: string, args: string[], shell: boolean }}
  */
-export function resolvePnpmInvocation(args, env = process.env) {
-  const npmExecPath = env.npmExecPath ?? env.npm_execpath;
-  const execPath = env.execPath ?? process.execPath;
-  const platform = env.platform ?? process.platform;
+export function resolvePnpmInvocation(args, options = {}) {
+  const npmExecPath = options.npmExecPath ?? options.npm_execpath ?? process.env.npm_execpath;
+  const execPath = options.execPath ?? process.execPath;
+  const platform = options.platform ?? process.platform;
   const isWindows = platform === "win32";
   if (npmExecPath) {
     const extension = path.extname(npmExecPath).toLowerCase();
@@ -31,7 +32,23 @@ export function resolvePnpmInvocation(args, env = process.env) {
     if (!isWindows || WINDOWS_DIRECT_EXEC_EXTENSIONS.has(extension))
       return { command: npmExecPath, args, shell: false };
   }
+  if (isWindows) return resolveWindowsPnpmThroughCmd(args, options.comSpec);
   return { command: "pnpm", args, shell: isWindows };
+}
+
+function resolveWindowsPnpmThroughCmd(args, comSpec = process.env.ComSpec) {
+  return {
+    command: comSpec || "cmd.exe",
+    args: ["/d", "/s", "/c", ["pnpm", ...args].map(quoteWindowsCmdArg).join(" ")],
+    shell: false,
+  };
+}
+
+function quoteWindowsCmdArg(arg) {
+  const value = String(arg);
+  if (value.length === 0) return '""';
+  const escaped = value.replace(/"/g, '\\"').replace(/%/g, "%%");
+  return /[\s"&|<>()^%]/.test(value) ? `"${escaped}"` : escaped;
 }
 
 /**

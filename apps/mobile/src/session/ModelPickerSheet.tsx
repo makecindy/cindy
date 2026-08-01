@@ -87,6 +87,8 @@ export interface ModelPickerSheetProps {
   };
   capabilities: MobileAgentCapabilities | null;
   activeModelId: string;
+  /** 已建会话的选择器传 true:当前来源按实际路由口径解析(见 buildMobileModelSections)。 */
+  existingSessionRoute?: boolean;
   /** 显式选中的来源 id(null = 跟随被控端默认路由;内部据此算高亮来源)。 */
   selectedProviderId: string | null;
   selectedEffort: string;
@@ -110,6 +112,11 @@ export interface ModelPickerSheetProps {
   /** 选权限(调用方落草稿/写穿);浮窗内部自动回一级,不关浮窗。 */
   onSelectPermissionMode(mode: string): void;
   permissionDisabled?: boolean;
+  /**
+   * 隐藏 header 右侧权限入口(新建页已把权限提为 composer 独立选择器,浮窗只留模型;
+   * 默认 false —— 会话页行为不变)。
+   */
+  hidePermissionTrigger?: boolean;
   keyboardAvoidingBehavior: 'height' | 'padding' | undefined;
   testID?: string;
 }
@@ -125,6 +132,7 @@ export function ModelPickerSheet({
   capabilities,
   activeModelId,
   selectedProviderId,
+  existingSessionRoute,
   selectedEffort,
   selectedFastMode,
   loading = false,
@@ -142,6 +150,7 @@ export function ModelPickerSheet({
   activePermissionMode,
   onSelectPermissionMode,
   permissionDisabled = false,
+  hidePermissionTrigger = false,
   keyboardAvoidingBehavior,
   testID = 'modelSheet',
 }: ModelPickerSheetProps) {
@@ -196,8 +205,9 @@ export function ModelPickerSheet({
         selectedProviderId,
         query,
         visibilityOverrides: modelVisibilityOverrides,
+        existingSessionRoute,
       }),
-    [providers, modelVisibilityOverrides, agentKind, activeModelId, selectedProviderId, query],
+    [providers, modelVisibilityOverrides, agentKind, activeModelId, selectedProviderId, query, existingSessionRoute],
   );
   const providerRows = useMemo(() => flattenProviderSections(sections.sections), [sections]);
   // 二级 options 目标行按**未过滤**行集现查(搜索 query 不应让已打开的二级视图失效)。
@@ -209,8 +219,9 @@ export function ModelPickerSheet({
         selectedModelId: activeModelId,
         selectedProviderId,
         visibilityOverrides: modelVisibilityOverrides,
+        existingSessionRoute,
       }),
-    [providers, modelVisibilityOverrides, agentKind, activeModelId, selectedProviderId],
+    [providers, modelVisibilityOverrides, agentKind, activeModelId, selectedProviderId, existingSessionRoute],
   );
   const allRows = useMemo(() => flattenProviderSections(allSections.sections), [allSections]);
   const filteredFlatOptions = useMemo(
@@ -406,7 +417,7 @@ export function ModelPickerSheet({
     >
       <SheetSurface
         bottomInset={insets.bottom}
-        headerTrailing={permissionTrigger}
+        headerTrailing={hidePermissionTrigger ? undefined : permissionTrigger}
         heights={heights}
         onClose={onClose}
         onSnapChange={handlePrimarySnapChange}

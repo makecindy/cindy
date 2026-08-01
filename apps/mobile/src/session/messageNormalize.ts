@@ -33,6 +33,10 @@ import {
   readAgentInputReferences,
   type AgentInputReference,
 } from '@cindy/maker-shared/agent-input-projection';
+import {
+  normalizeRemoteMoney,
+  type RemoteMoney,
+} from '@/session/remoteMoney';
 
 export type NormalizedRemoteMessageKind =
   | 'user'
@@ -68,9 +72,16 @@ export interface NormalizedRemoteMessage {
   diff?: NormalizedToolDiff;
   align: 'user' | 'agent';
   createdAt: string;
+  /**
+   * tool 消息专用:配对 tool_result 的落库时刻(ISO),即这次调用的结束时刻。渲染层用它做
+   * 历史空洞判定的锚点(见共享 `MessageRenderNormalizedMessage.settledAt`)。
+   */
+  settledAt?: string;
   isStreaming?: boolean;
   /** Host 在 SDK done 边界写入；后台自动续跑时每个 sealed assistant 都是正式回复。 */
   turnCompleted?: boolean;
+  turnMoney?: RemoteMoney;
+  /** 旧 Desktop 消息兼容字段。 */
   turnCostUsd?: number;
   turnCostIsEstimate?: boolean;
   /** assistant 专用:本轮模型降级标记(agentMeta.modelMismatch,桌面 main 在 turn 结束检测命中时落库)。 */
@@ -102,7 +113,7 @@ export interface NormalizedAutomationOrigin {
 }
 
 export interface NormalizedHookSource {
-  im: 'slack' | 'telegram';
+  im: 'slack' | 'telegram' | 'x';
   channelName?: string;
   userText: string;
   threadContext?: Array<{ author: string; text: string; isBot?: boolean }>;
@@ -190,6 +201,8 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
         diff: tool.diff,
         align: 'agent',
         createdAt: message.createdAt,
+        // 结束时刻(配对 tool_result 落库时间)驱动渲染层的历史空洞判定,详见共享类型上的说明。
+        settledAt: toolResultPairing.resultCreatedAtFor(message, tool),
         toolSettled: toolResultPairing.hasResultFor(message, tool),
       });
       continue;
@@ -303,6 +316,8 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
     // user 以保留 turn 边界(上一段被截断 turn 的工具行按历史收敛),align 'agent'
     // 让卡片走系统卡的左侧版式而不是右侧用户气泡。
     if (message.role === 'user' && message.agentMeta?.autoResume === true) {
+      const autoResumeInfo = readRecord(message.agentMeta.autoResumeInfo) ?? {};
+      const autoResumeOutcome = message.agentMeta.autoResumeOutcome;
       result.push({
         key: messageNormalizeKey(message),
         source: message,
@@ -311,7 +326,13 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
         label: 'user',
         body: '',
         systemCardType: 'auto-resume',
-        systemCardData: {},
+        isSyntheticTrigger: true,
+        systemCardData: {
+          ...autoResumeInfo,
+          ...(autoResumeOutcome === 'succeeded' || autoResumeOutcome === 'failed'
+            ? { outcome: autoResumeOutcome }
+            : {}),
+        },
         align: 'agent',
         createdAt: message.createdAt,
       });
@@ -336,6 +357,7 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
     const rawBody = userContent ? userContent.text : contentToPreview(message.content);
     const hookSource = message.role === 'user' ? readHookSource(message, rawBody) : undefined;
     const body = hookSource?.userText ?? rawBody;
+    const turnCost = readTurnCost(message);
     result.push({
       key: messageNormalizeKey(message),
       source: message,
@@ -360,11 +382,11 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
       isStreaming: readMessageStreaming(message) || undefined,
       ...(message.role === 'assistant' && (
         message.agentMeta?.turnCompleted === true ||
-        (readNumber(message.agentMeta?.turnCostUsd) ?? 0) > 0
+        (turnCost.turnMoney?.amount ?? 0) > 0
       )
         ? { turnCompleted: true }
         : {}),
-      ...readTurnCost(message),
+      ...turnCost,
       ...readModelMismatch(message),
       ...(message.role === 'user' ? readAutomationOrigin(message) : {}),
       ...(hookSource ? { hookSource } : {}),
@@ -675,13 +697,30 @@ function readTimestamp(value: unknown): number | null {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
-function readTurnCost(message: RemoteMessage): Pick<NormalizedRemoteMessage, 'turnCostUsd' | 'turnCostIsEstimate'> {
+function readTurnCost(
+  message: RemoteMessage,
+): Pick<NormalizedRemoteMessage, 'turnMoney' | 'turnCostUsd' | 'turnCostIsEstimate'> {
   if (message.role !== 'assistant') return {};
+  const money = normalizeRemoteMoney(message.agentMeta?.turnCost);
+  if (money && money.amount > 0) {
+    return {
+      turnMoney: money,
+      ...(money.currency === 'USD' ? { turnCostUsd: money.amount } : {}),
+      turnCostIsEstimate: money.kind === 'value-estimate',
+    };
+  }
   const cost = readNumber(message.agentMeta?.turnCostUsd);
   if (cost === null || cost <= 0) return {};
+  const isEstimate = message.agentMeta?.turnCostIsEstimate === true;
   return {
+    turnMoney: {
+      amount: cost,
+      currency: 'USD',
+      approximate: isEstimate,
+      kind: isEstimate ? 'value-estimate' : 'actual-cost',
+    },
     turnCostUsd: cost,
-    turnCostIsEstimate: message.agentMeta?.turnCostIsEstimate === true,
+    turnCostIsEstimate: isEstimate,
   };
 }
 
@@ -716,7 +755,9 @@ function readAutomationOrigin(message: RemoteMessage): Pick<NormalizedRemoteMess
 /** Fail closed on unknown providers and bound all server-controlled display fields. */
 function readHookSource(message: RemoteMessage, fallbackBody: string): NormalizedHookSource | undefined {
   const source = readRecord(message.agentMeta?.hookSource);
-  if (!source || (source.im !== 'slack' && source.im !== 'telegram')) return undefined;
+  if (!source || (source.im !== 'slack' && source.im !== 'telegram' && source.im !== 'x')) {
+    return undefined;
+  }
   const userText = (
     typeof source.userText === 'string' ? source.userText : fallbackBody
   ).slice(0, 20_000);

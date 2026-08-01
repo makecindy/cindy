@@ -16,6 +16,7 @@ test('提交的 EAS build profiles 不包含生产端点 env（含 extends）', 
     assert.equal(env.EXPO_PUBLIC_XDT_DEVICE_LINK_API_BASE_URL, undefined, profileName);
     assert.equal(env.EXPO_PUBLIC_XDT_MOBILE_VOICE_LITELLM_BASE_URL, undefined, profileName);
     assert.equal(env.EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL, undefined, profileName);
+    assert.equal(env.EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL, undefined, profileName);
   }
   assert.equal(resolveEasBuildProfileEnv(eas.build, 'testflight').EXPO_PUBLIC_CINDY_AUTH_REGION, 'cn');
 });

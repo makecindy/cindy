@@ -11,7 +11,7 @@
  * 用户显式断开产生的 durable marker 是例外，系统 CLI 后续任何变化都不能自动接回。
  *
  * 背景 (2026-07-03 线上实踩):
- *   token 失效 → 用户在 XDMaker 里重新授权成功 → 旧实现无条件清掉标记和 suppress →
+ *   token 失效 → 用户在 Cindy 里重新授权成功 → 旧实现无条件清掉标记和 suppress →
  *   下一次 getState/getAuthEnv 的 reconcile 把 ~/.codex 里未变的坏 token 硬链回来,
  *   覆盖刚拿到的新 token → 服务端再次 invalidate → 授权界面「成功 → 几秒后失败」死循环。
  */
@@ -20,7 +20,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 
 /**
- * 用户主动断开 XDMaker 内的 Codex OAuth；这是 durable sentinel：系统 CLI 后续刷新 / 重登
+ * 用户主动断开 Cindy 内的 Codex OAuth；这是 durable sentinel：系统 CLI 后续刷新 / 重登
  * 也不能自动接回，只抑制凭证回灌，不作为鉴权错误展示。
  */
 export const CODEX_USER_DISCONNECT_REASON = 'user_disconnected';
@@ -28,7 +28,7 @@ export const CODEX_USER_DISCONNECT_REASON = 'user_disconnected';
 /** 失效标记文件内容: 失效原因 + 当时 ~/.codex/auth.json 的文件指纹。 */
 export type InvalidatedSystemCodexAuthMarker = {
   reason: string;
-  /** 用户曾在 XDMaker 显式断开；后续 transient token invalidation 不得解除这道永久抑制。 */
+  /** 用户曾在 Cindy 显式断开；后续 transient token invalidation 不得解除这道永久抑制。 */
   durableDisconnect?: boolean;
   dev: number;
   ino: number;
@@ -263,17 +263,13 @@ export function writeInvalidatedSystemCodexAuthMarker(
   }
 }
 
-/** durable marker 记录的正是当前残留 local auth 时，该文件属于未完成登出的旧凭证。 */
+/** marker 记录的正是当前残留 local auth 时，该文件属于已断开或已失效的旧凭证。 */
 export function shouldSuppressLocalCodexAuth(
   codexHome: string,
   localAuthPath: string,
 ): boolean {
   const marker = readInvalidatedSystemCodexAuthMarker(codexHome);
-  return Boolean(
-    marker &&
-    isDurableDisconnectMarker(marker) &&
-    localFileMatchesInvalidatedMarker(marker, localAuthPath),
-  );
+  return Boolean(marker && localFileMatchesInvalidatedMarker(marker, localAuthPath));
 }
 
 /** 删标记 (幂等)。 */
@@ -294,7 +290,7 @@ export function clearInvalidatedSystemCodexAuthMarker(codexHome: string): void {
  *     等系统文件指纹变化后, reconcile 主流程的指纹比对会自动解除 suppress。
  *   - 无标记 / 指纹已不一致 (系统文件已变或已删) → 清标记, 返回 keepSuppressed=false,
  *     调用方可正常做登录后 reconcile。
- *   - durable disconnect marker → 永远 keepSuppressed=true；显式 XDMaker 登录使用隔离 local auth。
+ *   - durable disconnect marker → 永远 keepSuppressed=true；显式 Cindy 登录使用隔离 local auth。
  */
 export function settleInvalidationMarkerAfterLogin(
   codexHome: string,

@@ -33,11 +33,27 @@ export interface AnalyticsSettings {
   privacyConsentAccepted: boolean;
   /** 同意后的统计开关(opt-out)。默认开启。 */
   analyticsEnabled: boolean;
+  /**
+   * 存量同意迁移的窗口是否已在本机**永久关闭**(持久标记,非用户偏好)。
+   *
+   * 存在的理由(2026-07-28 review P1):迁移的语义是「改版**之前**就已登录的账号视为
+   * 已同意」,而它唯一的判据是「本机还没有 analytics-settings.json」。问题在于改版
+   * **之后**新建的会话也可能一份记录都不写——「跳过登录」(本地模式)与企业 SSO 都被
+   * 协议门刻意豁免。于是「跳过登录 → 从本地模式走登录入口 → 完成 SSO」这条链路走完,
+   * 下一次冷启动会恢复出一个真实账号 + 零记录,和真正的存量账号长得一模一样,被静默
+   * 写入 privacyConsentAccepted —— 未经同意打开采集(隐私红线)。纯 SSO 新装用户同理。
+   *
+   * 所以「本次冷启动确定没有存量登录态」这个结论必须**落盘**:一旦某次冷启动看到的是
+   * 未登录 / 本地模式,本机就再也不是「存量账号」,窗口永久关闭。只有结论明确时才写
+   * (冷启动结果异常 / 未决时不写,免得把真存量用户的窗口误关)。
+   */
+  legacyConsentMigrationClosed: boolean;
 }
 
 const DEFAULTS: AnalyticsSettings = {
   privacyConsentAccepted: false,
   analyticsEnabled: true,
+  legacyConsentMigrationClosed: false,
 };
 
 function settingsFilePath(): string {
@@ -54,6 +70,10 @@ function normalize(raw: unknown): AnalyticsSettings {
         : DEFAULTS.privacyConsentAccepted,
     analyticsEnabled:
       typeof r.analyticsEnabled === 'boolean' ? r.analyticsEnabled : DEFAULTS.analyticsEnabled,
+    legacyConsentMigrationClosed:
+      typeof r.legacyConsentMigrationClosed === 'boolean'
+        ? r.legacyConsentMigrationClosed
+        : DEFAULTS.legacyConsentMigrationClosed,
   };
 }
 
@@ -169,9 +189,10 @@ export function isAnalyticsAllowed(): boolean {
 /**
  * 记录用户明示同意《隐私政策》。幂等。
  *
- * 调用点是登录页协议门放行的那一刻(手机号/邮箱/验证码/社交/游客),
- * 即用户已勾选或在弹窗里点了「同意」并继续使用。企业 SSO 入口被协议门豁免,
- * 因此走 SSO 的用户不会到达这里,也就不会被采集——这是刻意的。
+ * 调用点是登录页协议门放行的那一刻(手机号/邮箱/验证码/社交等个人**账号**登录),
+ * 即用户已勾选或在弹窗里点了「同意」并继续使用。企业 SSO 入口与「跳过登录」
+ * (本地模式,2026-07-27 拍板免协议门)都被协议门豁免,因此这两类用户不会到达这里,
+ * 也就不会被采集——这是刻意的。
  */
 export function acceptPrivacyConsent(): AnalyticsSettings {
   probeRecordOnce();
@@ -209,8 +230,30 @@ export function migrateExistingLoginAsConsented(isSignedIn: boolean): boolean {
   if (probeRecordOnce() !== 'none') return false;
   const state = store.readState();
   if (state.isCustomized) return false;
+  // 本机曾经历过「无存量登录态」的冷启动 = 之后出现的账号都是改版后新建的,不可迁移
+  // (见 legacyConsentMigrationClosed 注释;标记本身会让上面两道闸也命中,这里显式
+  // 再判一次,免得将来有人改动探针/override 语义时静默失守)。
+  if (state.value.legacyConsentMigrationClosed) return false;
   store.writePatch({ privacyConsentAccepted: true });
   log.info('existing signed-in user migrated as consented');
+  return true;
+}
+
+/**
+ * 永久关闭本机的存量同意迁移窗口(幂等)。
+ *
+ * 由 `analyticsSettingsService` 在冷启动**明确**判定「没有存量登录态」(未登录 /
+ * 本地模式)时调用。写的是一个内部持久标记,不是用户偏好:它不出现在
+ * `analyticsSettingsPayload`、不影响 `analyticsEnabled` 的 customized 判定,
+ * 也不会让 `isAnalyticsAllowed` 变 true —— 唯一作用是让后续冷启动不再迁移。
+ */
+export function closeLegacyConsentMigration(): boolean {
+  probeRecordOnce();
+  const current = store.read();
+  if (current.legacyConsentMigrationClosed) return false;
+  // true ≠ 默认值 false,override 会被保留(无需 preserveDefaults)。
+  store.writePatch({ legacyConsentMigrationClosed: true });
+  log.info('legacy consent migration window closed for this machine');
   return true;
 }
 

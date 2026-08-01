@@ -28,6 +28,7 @@ export function buildDiscordAdapter(
   return {
     channel: 'discord',
     im: discordIm,
+    output: { kind: 'rich-card', im: discordIm },
     config,
     ui,
     sessions: {

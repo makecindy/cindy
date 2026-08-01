@@ -18,7 +18,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { sessionsStore } from '@/lib/sessionsStore';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
-import { makerApiFor } from '@/lib/makerTransport';
+import { makerApiForSticky } from '@/lib/makerTransport';
 
 const log = createLogger('useStopOrcaCollab');
 
@@ -59,7 +59,9 @@ export function useStopOrcaCollab(opts: UseStopOrcaCollabOptions): StopOrcaColla
     if (!ok) return false;
     setBusy(true);
     try {
-      await makerApiFor(leadSessionId).disableOrca(leadSessionId);
+      // 粘滞归属(与 requestEnableCollab 对称):relay 瞬断窗口内误判成本机会在**控制端**
+      // 销毁一个不存在的 team、或撞上同 id 的本机会话,而远端的协同其实还开着。
+      await makerApiForSticky(leadSessionId).disableOrca(leadSessionId);
       void sessionsStore.forceRefresh('active');
       if (navigateOnSuccess) {
         navigate(`/cc-agent/${leadSessionId}`, { replace: true });

@@ -40,26 +40,39 @@ Firefox 早已按规范放行，只有 Safari 没跟，而 Safari 是 macOS 默�
 ```
 ① 客户端生成 codeVerifier(PKCE) 与 pollSecret(256 bit 随机，仅存在于进程内存)，
    client_state = base64url(sha256(pollSecret)) —— 只有哈希值会经过浏览器
+   每次登录尝试都重新生成，不跨重试复用（见 §3.1）
 ② 打开系统浏览器 → GET <auth>/api/auth/social/<provider>/authorize
      ?redirect_uri=<托管回调地址>&code_challenge=...&client_state=...&ui_locale=...
+   auth-server 建登录事务时为该 client_state 占位，重复的 client_state 在此被 400 拒绝
 ③ 用户在 provider 处授权，provider 回调到 auth-server 既有的 provider 回调路由
-④ auth-server 照常签发一次性授权码，302 到 redirect_uri —— 也就是托管回调路由
-⑤ 托管回调按 client_state 把授权码寄存进 Redis，302 到结果展示页（URL 不含 code）
+④ auth-server 照常签发一次性授权码，但发现 redirect_uri 是托管地址时**不把码放进 URL**，
+   而是在签发处直接按 client_state 寄存进 Redis
+⑤ 302 到结果展示页（URL 既不含 code 也不含 state）
 ⑥ 客户端自②起持续轮询 poll 接口，取到 code 后照常 POST /api/auth/token 完成 PKCE 兑换
 ⑦ 用户在展示页点「回到 Cindy」→ cindy://focus/desktop-login
 ```
 
 关键点：`redirect_uri` 是「auth-server 完事后往哪跳」，**不是 provider 的回调地址**。
-provider 回调路由（`googleCallbackUrl()` 等）与 `callbackShared.ts` 的收尾逻辑一行未改，
-托管回调只是多了一个接住自己回跳的新路由。`redirect_uri` 与 `client_state` 参数客户端
-本来就在传（`buildAuthorizeUrl`），authorize 接口也不需要改。
+provider 回调路由（`googleCallbackUrl()` 等）与开放平台注册的地址一字未改，托管回调不占用
+其中任何一个。
+
+改动落在两处：
+
+- `callbackShared.ts` 的收尾逻辑——识别出 `redirect_uri` 是托管地址时，改为在签发处直接寄存，
+  不再把码放进任何 URL（见 §3.2）；
+- authorize——`client_state` 由可选变为必填，并在建事务时一次性占位（见 §3.1）。
+
+`redirect_uri` 与 `client_state` 两个参数客户端本来就在传（`buildAuthorizeUrl`），
+所以**客户端侧的请求形态没变**，变的是服务端对它们的处理。
 
 ## 3. 服务端实现
 
 对应实现在 `auth-server/src/services/desktopCallback.ts` 与
 `auth-server/src/routes/desktopCallback.ts`。
 
-### 3.1 redirect_uri 放行
+### 3.1 authorize 阶段：redirect_uri 放行与 client_state 占位
+
+#### redirect_uri 放行
 
 **不需要新增环境变量、不需要运维配 `REDIRECT_URI_ALLOWLIST`。**
 `isAllowedRedirectUri`（`src/services/sso/transaction.ts`）比照既有的
@@ -71,15 +84,49 @@ provider 回调路由（`googleCallbackUrl()` 等）与 `callbackShared.ts` 的�
 任何以它为前缀的地址都会先命中 RFC 8252 的 loopback 例外，所以哪怕把同源放行整条删掉，
 集成测试也照样全绿（已用变异验证确认）。生产是 https 域名，只有这条规则能放行它。
 
-### 3.2 `GET /api/auth/desktop/callback`
+#### client_state 必填且一次性占位
 
-接住 auth-server 自己 302 过来的回跳（`?code=…&state=<clientState>` 或 `?error=…`）：
+走托管回调时，`client_state` 由可选变为**必填**：缺失直接 400。若放它过去，流程会一路走到
+签发授权码，然后不带 state 地寄存不了——码已经消耗掉，客户端却永远取不回来。与其在末端
+报错，不如在入口拒绝。
 
-- 按 `clientState` 把结果寄存进 Redis（key `deskcb:<clientState>`，TTL 5 分钟）；
-- 302 到 `/desktop/login-callback?status=ok|error[&detail=<错误码>]`，**URL 不带 code**；
-- 既无 `code` 也无 `error` 时寄存 `INVALID_AUTH_CODE`——什么都不寄存的话，客户端只能
-  一路轮询到 5 分钟预算耗尽；
-- `state` 缺失或超长直接 400，不写任何寄存。
+建登录事务时还会用 Redis `SET NX` 为该 `client_state` **占位**（TTL 10 分钟，与登录事务
+对齐），已被占用则 400（`INVALID_PARAMS`）。没有这一步，「寄存挪到签发处」仍堵不严：
+`client_state` 会出现在浏览器的 authorize URL 里，看得到它的人可以**用同一个 client_state
+再发起一次 authorize**，立刻让那次事务走到 error 回调，其写入就会覆盖掉合法结果。占位之后，
+第二次 authorize 在建事务时就被拒，压根到不了回调。
+
+对客户端的约束：**每次登录尝试都必须新生成 `pollSecret`（因而 `client_state` 也是新的），
+不得跨重试复用。** 客户端现有实现本就每次 `randomBytes(32)`，天然满足；这里写明是为了让它
+成为契约而不是巧合。
+
+占位期间轮询返回 `pending`（占位记录与真实结果都在同一个 key `deskcb:<client_state>` 上，
+真实结果会覆盖占位）。建事务的后续步骤失败时占位会被归还——用的是比较删除（占位值带一次性
+nonce），只删自己写下的那一份，不会误伤已经落定的结果。
+
+**loopback `redirect_uri` 不受占位影响**，存量路径行为不变。
+
+### 3.2 寄存发生在签发处，**没有公开的写入端点**
+
+`callbackShared.ts` 的 `finishWithAuthCode` / `failWithRedirect` 在识别出 redirect_uri 是
+托管地址时，直接把结果寄存进 Redis（key `deskcb:<client_state>`，TTL 5 分钟），然后 302 到
+`/desktop/login-callback?status=ok|error[&detail=<错误码>]`。
+
+**曾经存在一个公开的 `GET /api/auth/desktop/callback` 用来接住自己的 302 并写寄存，已删除。**
+那条路径无法鉴权：任何能看到浏览器地址栏里 `client_state` 的扩展或同机进程，都可以拿同一个
+state 伪造一个 `error` 打进去，让正在轮询的客户端提前收到假的终态、中断登录。哈希 `pollSecret`
+只保护了读取，保护不了写入。
+
+从签发处直接写还顺带解决两件事：授权码彻底不进浏览器地址栏与导航历史；`codeExpiresAt` 是在
+签发的那一刻算的，不会因为浏览器延迟跟随 302 而虚长出一截。
+
+`DESKTOP_CALLBACK_PATH`（`/api/auth/desktop/callback`）现在只作为「这次登录走托管模式」的
+**标识**出现在 redirect_uri 里，不再有对应的可访问路由（访问它得到 404）。
+
+**浏览器永远不会被跳到这个地址。** 它只在两个地方被用到：authorize 时用来判定「这次走托管
+模式」并过同源放行，以及签发处用来判定「结果该寄存而不是进 URL」。浏览器实际收到的 302
+目标始终是结果展示页 `/desktop/login-callback`。所以尽管它形式上是 `redirect_uri`，从来没有
+任何一次重定向真的落在它上面。
 
 ### 3.3 `POST /api/auth/desktop/callback/poll`
 
@@ -177,6 +224,9 @@ CodeQL 的 `js/bad-tag-filter` 判为不完整的标签过滤。
   导航历史里只有哈希值，读得到历史也无法抢先消费掉一次性结果。loopback 链路的 `state`
   生成方式未改（仍是 `randomUUID()`），存量路径行为不变。服务端侧请勿把 `pollSecret`
   写进可被检索的日志。
+- **`client_state` 一次性占位挡住抢占式写入**：删掉公开写入端点还不够——`client_state` 本身
+  就在浏览器的 authorize URL 里。authorize 建事务时对它 `SET NX` 占位，第二个人拿同一个值
+  再发起授权会被 400 拒绝，无法借自己的一次授权流程去覆盖别人的结果（见 §3.1）。
 - **不会交出注定失败的授权码**：授权码自身 TTL 60s，且从跳转到托管回调**之前**就开始
   计时。寄存记录活得更久（5 分钟）是为了在码过期后返回终态 `expired`，让用户立刻看到
   「授权已过期，请重新登录」，而不是拿一个在 `/api/auth/token` 必然撞 `INVALID_AUTH_CODE`
@@ -203,7 +253,7 @@ CodeQL 的 `js/bad-tag-filter` 判为不完整的标签过滤。
 - [x] **两端 wire 对齐**：用客户端真实的 `CindyAuthClient` 打本地 auth-server，覆盖
       pending / ok / 一次性 / error / AbortSignal 取消
 - [x] 结果页 URL 不含授权码（curl 与集成测试双重确认）
-- [x] 未知 `clientState` 返回 `pending`
+- [x] 未知 `client_state` 返回 `pending`
 - [x] 展示页 light / dark 双模式目检（`docs/design-rules/DESIGN.md` 双模式交付门槛）
 - [x] 内联布局脚本在真实浏览器中执行、卡片正确居中缩放（CSP hash 生效）
 - [x] `detail` HTML 转义，不能注入标签

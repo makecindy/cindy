@@ -58,18 +58,43 @@ export type {
   UpdateContactInput,
 };
 
+export interface ContactsDeviceSyncStatus {
+  available: boolean;
+  enabled: boolean;
+  phase: 'off' | 'waiting' | 'syncing' | 'up-to-date' | 'error';
+  onlineDeviceCount: number;
+  lastSyncAt: string | null;
+  lastSyncDeviceId: string | null;
+  lastSyncDeviceName: string | null;
+  lastRoute: 'lan' | 'relay' | null;
+  errorCode: 'secure-storage-unavailable' | 'peer-identity-changed' | 'sync-failed' | null;
+}
+
 export const contactsService = {
   settingsGet: () => api().settingsGet(),
   settingsSet: (enabled: boolean) => api().settingsSet(enabled),
+  syncStatusGet: () => api().syncStatusGet() as Promise<ContactsDeviceSyncStatus>,
+  syncEnabledSet: (enabled: boolean) =>
+    api().syncEnabledSet(enabled) as Promise<ContactsDeviceSyncStatus>,
+  syncNow: () => api().syncNow() as Promise<ContactsDeviceSyncStatus>,
 
   list: (opts?: ListContactsOptions) => api().list(opts) as Promise<ContactSummary[]>,
   get: (id: string) => api().get(id) as Promise<ContactProfile>,
   create: (input: CreateContactInput) => api().create(input) as Promise<ContactProfile>,
-  update: (id: string, patch: UpdateContactInput) => api().update(id, patch) as Promise<ContactProfile>,
+  update: (id: string, patch: UpdateContactInput) =>
+    api().update(id, patch) as Promise<ContactProfile>,
   delete: (id: string) => api().delete(id),
-  merge: (targetId: string, sourceId: string) => api().merge(targetId, sourceId) as Promise<MergeResult>,
-  search: (query: string, opts?: { kind?: 'person' | 'org'; status?: 'confirmed' | 'pending'; groupId?: string; limit?: number }) =>
-    api().search(query, opts) as Promise<ContactsSearchHit[]>,
+  merge: (targetId: string, sourceId: string) =>
+    api().merge(targetId, sourceId) as Promise<MergeResult>,
+  search: (
+    query: string,
+    opts?: {
+      kind?: 'person' | 'org';
+      status?: 'confirmed' | 'pending';
+      groupId?: string;
+      limit?: number;
+    },
+  ) => api().search(query, opts) as Promise<ContactsSearchHit[]>,
   resolve: (value: string, opts?: { platform?: string; limit?: number }) =>
     api().resolve(value, opts) as Promise<ResolveHit[]>,
   stats: () => api().stats() as Promise<ContactsStats>,
@@ -86,7 +111,8 @@ export const contactsService = {
   removeRelation: (relationId: string) => api().removeRelation(relationId),
 
   groupsList: () => api().groupsList() as Promise<ContactGroupWithCount[]>,
-  groupsCreate: (name: string, description?: string) => api().groupsCreate(name, description) as Promise<ContactGroup>,
+  groupsCreate: (name: string, description?: string) =>
+    api().groupsCreate(name, description) as Promise<ContactGroup>,
   groupsUpdate: (groupId: string, patch: { name?: string; description?: string }) =>
     api().groupsUpdate(groupId, patch) as Promise<ContactGroup>,
   groupsDelete: (groupId: string) => api().groupsDelete(groupId),
@@ -99,6 +125,8 @@ export const contactsService = {
   import: (records: ImportContactRecord[], opts?: Pick<ImportContactsOptions, 'groupId'>) =>
     api().import(records, opts) as Promise<ImportSummary>,
   onChanged: (cb: () => void) => api().onChanged(cb),
+  onSyncStatusChanged: (cb: (status: ContactsDeviceSyncStatus) => void) =>
+    api().onSyncStatusChanged((status) => cb(status as ContactsDeviceSyncStatus)),
 };
 
 /** contacts UI 有专属文案的 IPC 错误码(settings.contacts.ipcError.* 四语言齐备) */

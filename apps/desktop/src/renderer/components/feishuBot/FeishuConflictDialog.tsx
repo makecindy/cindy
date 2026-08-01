@@ -8,7 +8,7 @@
  * 注入这个组件。
  *
  * 视觉对标 UpdateNoticeDialog（Radix AlertDialog）。两个 action：
- *  - "创建我的 App"：跳到飞书开放平台新建独立 App
+ *  - "创建我的 App"：跳到当前 IM 服务的开放平台新建独立 App
  *  - "忽略"：仅关闭，bot 状态保持 conflict
  */
 
@@ -21,6 +21,7 @@ import { cn } from '@/lib/utils';
 interface FeishuConflictDialogProps {
   open: boolean;
   appId: string | null;
+  service: 'feishu' | 'lark';
   onDismiss: () => void;
   onCreateOwnApp: () => void;
 }
@@ -28,10 +29,12 @@ interface FeishuConflictDialogProps {
 export function FeishuConflictDialog({
   open,
   appId,
+  service,
   onDismiss,
   onCreateOwnApp,
 }: FeishuConflictDialogProps) {
   const { t } = useTranslation();
+  const serviceName = t(`settings.feishuBot.services.${service}`);
   return (
     <AlertDialog.Root open={open} onOpenChange={(next) => !next && onDismiss()}>
       <AlertDialog.Portal>
@@ -66,7 +69,7 @@ export function FeishuConflictDialog({
               <AlertTriangle size={20} style={{ color: 'var(--status-bar-accent)' }} />
             </div>
             <AlertDialog.Title className="text-16 font-medium text-[var(--settings-section-title)]">
-              {t('imBot.conflictDialog.title')}
+              {t('imBot.conflictDialog.title', { service: serviceName })}
             </AlertDialog.Title>
           </div>
 
@@ -90,7 +93,7 @@ export function FeishuConflictDialog({
             <br />
             {t('imBot.conflictDialog.suggestion1')}
             <br />
-            {t('imBot.conflictDialog.suggestion2')}
+            {t('imBot.conflictDialog.suggestion2', { service: serviceName })}
           </AlertDialog.Description>
 
           {/* Actions */}

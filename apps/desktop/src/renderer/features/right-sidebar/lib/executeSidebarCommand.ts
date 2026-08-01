@@ -12,6 +12,7 @@ import {
   openExternalFileInSidebarFileBrowser,
   openFileInSidebarFileBrowser,
 } from './openInSidebarFileBrowser';
+import { openBackgroundTasksTab } from './openBackgroundTasksTab';
 import { openUrlInSidebarBrowser } from './openInSidebarBrowser';
 
 /** 在 main 已选定的当前 renderer host 中执行命令，不自行选择宿主。 */
@@ -40,6 +41,14 @@ export async function executeSidebarCommand(command: RsbWindowCommand): Promise<
   }
   if (command.type === 'close-orca-workers-tab') {
     await closeOrcaWorkersTabAfterTeamEnd(command.sessionId);
+    return;
+  }
+  if (command.type === 'open-background-tasks-tab') {
+    // 被路由端再调 openBackgroundTasksTab:其内部 routeSidebarCommand 在子窗口
+    // 直接裁决 'attached',落本地 store(与 open-file-browser 的复用同构)。
+    await openBackgroundTasksTab(command.sessionId, {
+      ...(command.focusTaskId ? { focusTaskId: command.focusTaskId } : {}),
+    });
     return;
   }
   if (command.type === 'open-ghost-tab') {

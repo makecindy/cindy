@@ -34,7 +34,7 @@ test('runs a native pnpm binary directly instead of feeding it to node', () => {
   // SyntaxError: Invalid or unexpected token，自动修复依赖那一步直接失败。
   const nativePath = '/Users/dev/Library/pnpm/pnpm';
   assert.deepEqual(
-    resolvePnpmInstallInvocation(['install'], { npm_execpath: nativePath, platform: 'darwin' }, () => true),
+    resolvePnpmInstallInvocation(['install'], { npm_execpath: nativePath }, () => true, { platform: 'darwin' }),
     { command: nativePath, args: ['install'], shell: false, displayCommand: 'pnpm install' },
   );
 });
@@ -44,8 +44,9 @@ test('keeps running a JS pnpm entry through the current node', () => {
   assert.deepEqual(
     resolvePnpmInstallInvocation(
       ['install'],
-      { npm_execpath: jsEntry, execPath: '/usr/local/bin/node', platform: 'darwin' },
+      { npm_execpath: jsEntry },
       () => true,
+      { execPath: '/usr/local/bin/node', platform: 'darwin' },
     ),
     {
       command: '/usr/local/bin/node',
@@ -58,16 +59,31 @@ test('keeps running a JS pnpm entry through the current node', () => {
 
 test('falls back to PATH when npm_execpath is missing or stale', () => {
   assert.deepEqual(
-    resolvePnpmInstallInvocation(['install'], { platform: 'darwin' }, () => true),
+    resolvePnpmInstallInvocation(['install'], {}, () => true, { platform: 'darwin' }),
     { command: 'pnpm', args: ['install'], shell: false, displayCommand: 'pnpm install' },
   );
   // Windows 的 restart 管线新开 cmd.exe：残留路径不可用时必须让 cmd 走 PATH/PATHEXT。
   assert.deepEqual(
     resolvePnpmInstallInvocation(
       ['install'],
-      { npm_execpath: 'C:/stale/pnpm.cmd', platform: 'win32' },
+      { npm_execpath: 'C:/stale/pnpm.cmd' },
       () => false,
+      { platform: 'win32', comSpec: 'C:/Windows/System32/cmd.exe' },
     ),
-    { command: 'pnpm', args: ['install'], shell: true, displayCommand: 'pnpm install' },
+    {
+      command: 'C:/Windows/System32/cmd.exe',
+      args: ['/d', '/s', '/c', 'pnpm install'],
+      shell: false,
+      displayCommand: 'pnpm install',
+    },
+  );
+});
+
+test('does not derive platform from environment variables', () => {
+  assert.deepEqual(
+    resolvePnpmInstallInvocation(['install'], { platform: 'win32', Platform: 'x64' }, () => true, {
+      platform: 'darwin',
+    }),
+    { command: 'pnpm', args: ['install'], shell: false, displayCommand: 'pnpm install' },
   );
 });

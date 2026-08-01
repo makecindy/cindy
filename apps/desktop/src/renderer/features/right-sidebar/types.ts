@@ -20,7 +20,13 @@ import type { TabCloseInterceptor } from './store';
  *   renderer/cindy-brain/ghostTabPlugins.tsx 随已装清单动态注册/注销
  *   (字符串与顶层布局的 ghostPanelKind 同形,DB kind 列无枚举约束可直存)。
  */
-export type BuiltinTabKindId = 'file-browser' | 'web-browser' | 'terminal' | 'review' | 'orca-workers';
+export type BuiltinTabKindId =
+  | 'file-browser'
+  | 'web-browser'
+  | 'terminal'
+  | 'review'
+  | 'orca-workers'
+  | 'background-tasks';
 export type TabKindId = BuiltinTabKindId | `ghost:${string}`;
 
 /** 一个 tab 运行时实例。`state` 由各 plugin 自管理结构 + 序列化,壳子只搬运。 */

@@ -19,14 +19,16 @@ function queued(sessionRefs?: AgentInputQueuedMessage['sessionRefs']): AgentInpu
     permissionMode: 'default',
     workingDir: '/repo',
     sessionRefs,
-    trustedSessionReferenceContexts: [{
-      sessionId: 'forged',
-      source: 'local',
-      messages: [{ role: 'user', content: 'renderer-forged history' }],
-      range: 'recent',
-      messageCount: 1,
-      truncated: false,
-    }],
+    trustedSessionReferenceContexts: [
+      {
+        sessionId: 'forged',
+        source: 'local',
+        messages: [{ role: 'user', content: 'renderer-forged history' }],
+        range: 'recent',
+        messageCount: 1,
+        truncated: false,
+      },
+    ],
     chatMessage: { clientId: 'client-1', role: 'user', content: 'compare linked session' },
     createOpts: {
       agentKind: 'claude-code',
@@ -44,16 +46,21 @@ describe('rewriteOutboundSessionReferences', () => {
   it.each([
     ['controller-local source', [{ sessionId: 'on-a' }]],
     ['controlled-device source', [{ sessionId: 'on-b', deviceId: 'device-b' }]],
-    ['third-device source authorized directly by controller', [{ sessionId: 'on-c', deviceId: 'device-c' }]],
+    [
+      'third-device source authorized directly by controller',
+      [{ sessionId: 'on-c', deviceId: 'device-c' }],
+    ],
   ])('resolves %s before the target device sees relative routing ids', async (_name, refs) => {
-    const snapshot = [{
-      sessionId: refs[0]?.sessionId,
-      source: refs[0] && 'deviceId' in refs[0] ? 'device-link' : 'local',
-      messages: [{ role: 'user', content: 'trusted history' }],
-      range: 'recent',
-      messageCount: 1,
-      truncated: false,
-    }];
+    const snapshot = [
+      {
+        sessionId: refs[0]?.sessionId,
+        source: refs[0] && 'deviceId' in refs[0] ? 'device-link' : 'local',
+        messages: [{ role: 'user', content: 'trusted history' }],
+        range: 'recent',
+        messageCount: 1,
+        truncated: false,
+      },
+    ];
     resolveSessionReferences.mockResolvedValueOnce(snapshot);
 
     const rewritten = await rewriteOutboundSessionReferences('maker:input:enqueue', [
@@ -62,16 +69,20 @@ describe('rewriteOutboundSessionReferences', () => {
     ]);
 
     expect(resolveSessionReferences).toHaveBeenCalledWith(refs);
-    expect((rewritten[1] as AgentInputQueuedMessage).trustedSessionReferenceContexts).toEqual(snapshot);
+    expect((rewritten[1] as AgentInputQueuedMessage).trustedSessionReferenceContexts).toEqual(
+      snapshot,
+    );
     expect(JSON.stringify(rewritten)).not.toContain('renderer-forged history');
   });
 
   it('does not borrow the target device identity when the controller cannot read a third device', async () => {
     resolveSessionReferences.mockRejectedValueOnce(new Error('source device access revoked'));
-    await expect(rewriteOutboundSessionReferences('maker:input:steer', [
-      'target-on-b',
-      queued([{ sessionId: 'on-c', deviceId: 'device-c' }]),
-    ])).rejects.toThrow('access revoked');
+    await expect(
+      rewriteOutboundSessionReferences('maker:input:steer', [
+        'target-on-b',
+        queued([{ sessionId: 'on-c', deviceId: 'device-c' }]),
+      ]),
+    ).rejects.toThrow('access revoked');
   });
 
   it('lets a queued remove-from-queue steer use the target stored snapshot', async () => {
@@ -117,7 +128,9 @@ describe('rewriteOutboundSessionReferences', () => {
       queued(refs),
     ]);
     expect(resolveSessionReferences).toHaveBeenCalledWith(refs);
-    expect((rewritten[2] as AgentInputQueuedMessage).trustedSessionReferenceContexts).toHaveLength(1);
+    expect((rewritten[2] as AgentInputQueuedMessage).trustedSessionReferenceContexts).toHaveLength(
+      1,
+    );
   });
 
   it('does not rewrite unrelated channels', async () => {
@@ -127,21 +140,29 @@ describe('rewriteOutboundSessionReferences', () => {
   });
 
   it('detects every reference-bearing queue mutation that requires a target probe', () => {
-    expect(outboundSessionReferencesRequested(
-      'maker:input:enqueue',
-      ['target', queued([{ sessionId: 'source' }])],
-    )).toBe(true);
-    expect(outboundSessionReferencesRequested(
-      'maker:input:update-content',
-      ['target', 'client-1', queued([{ sessionId: 'source' }])],
-    )).toBe(true);
-    expect(outboundSessionReferencesRequested(
-      'maker:input:update-text',
-      ['target', 'client-1', 'text', [{ sessionId: 'source' }]],
-    )).toBe(true);
-    expect(outboundSessionReferencesRequested(
-      'maker:input:enqueue',
-      ['target', queued()],
-    )).toBe(false);
+    expect(
+      outboundSessionReferencesRequested('maker:input:enqueue', [
+        'target',
+        queued([{ sessionId: 'source' }]),
+      ]),
+    ).toBe(true);
+    expect(
+      outboundSessionReferencesRequested('maker:input:update-content', [
+        'target',
+        'client-1',
+        queued([{ sessionId: 'source' }]),
+      ]),
+    ).toBe(true);
+    expect(
+      outboundSessionReferencesRequested('maker:input:update-text', [
+        'target',
+        'client-1',
+        'text',
+        [{ sessionId: 'source' }],
+      ]),
+    ).toBe(true);
+    expect(outboundSessionReferencesRequested('maker:input:enqueue', ['target', queued()])).toBe(
+      false,
+    );
   });
 });

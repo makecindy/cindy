@@ -127,6 +127,16 @@ export const MAKER_INVOKE = {
    * 入参 = { agent:'claude-code'|'codex', providerId, modelId, effort?, fast?, active? }。
    */
   APPLY_NEW_MAKER_DRAFT_PREF: 'maker:apply-new-maker-draft-pref',
+  /**
+   * device-link 草稿「新建会话默认启用 worktree」写穿(控制端 → 被控端)。worktree 勾选记忆
+   * 是 vendor 无关的 newMakerDraft 根字段,校验形状与模型 pref 完全不同(无 modelId/providerId),
+   * 硬塞进 APPLY_NEW_MAKER_DRAFT_PREF 会破坏其形状校验语义,故独立窄 channel。
+   * 被控端 handler 校验布尔后转发给**自身 renderer**(WORKTREE_PREF_APPLY),renderer
+   * setWorktreePreference 按字段写真实草稿;变更经既有 SYNC_NEW_MAKER_DRAFT re-mirror +
+   * NEW_MAKER_DRAFT_CHANGED 广播回控制端。入参 = { worktreeEnabled: boolean }。
+   * 旧被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端吞掉降级(勾选仅本次草稿生效)。
+   */
+  APPLY_NEW_MAKER_WORKTREE_PREF: 'maker:apply-new-maker-worktree-pref',
   LIST_AVAILABLE_AGENTS: 'maker:list-available-agents',
   /**
    * Palette `/` 命令三源 (palette refactor):
@@ -188,6 +198,15 @@ export const MAKER_INVOKE = {
    * 派生模型列表时复用同一套可见性过滤(两端列表口径一致)。fire-and-forget,不落盘。
    */
   MODEL_VISIBILITY_SYNC: 'maker:model-visibility:sync',
+  /**
+   * 「模型 / 供应商停用」override 写入(model-disable-store,main 侧持久化真源)。
+   * 入参 = { kind:'model', providerId, modelIds: string[], disabled: boolean }
+   *      | { kind:'provider', providerId, disabled: boolean }。
+   * 成功后广播 PROVIDER_CHANGED,renderer / device-link 经 PROVIDER_LIST 拿到烘焙了
+   * suspended / model.disabled 标志的新视图。设置类写操作:仅本机主页面可调,
+   * **不进 device-link allowlist**(远程改被控端全局设置越权,见 allowlist.ts 准入判据)。
+   */
+  MODEL_DISABLE_SET: 'maker:model-disable:set',
   // 附加只读引用目录 — 走 closure 推送; DB 持久化由 renderer 同步调
   // local-db:sessions:update (跟 SET_MODEL / sessionService.update 双 IPC 协调先例一致)
   SET_EXTRA_DIRS: 'maker:set-extra-dirs',
@@ -207,6 +226,21 @@ export const MAKER_INVOKE = {
    * Phase 2 会加一个 submit-to-GitHub 动作(同 PAT 配置 + 去重相同 open issue)。
    */
   HELP_FEEDBACK_CREATE: 'maker:help:feedback:create',
+  /**
+   * /issues 页面的「我的 Issue」列表。三路合并去重,主次不要记反:
+   * 平台通道(按 Cindy 登录态取「我提交过的 issue」,唯一给实时状态且跨设备的来源)
+   * + 本机提交账本(平台未就绪时的兜底)
+   * + 用户自己的 GitHub 身份(**可选增强**,没有时列表照常工作)。
+   *
+   * 查询型 handler,失败时 renderer 仍要靠账本渲染,故返回 { success }
+   * 风格而不是 throwIpcError(见 engineering-conventions §2 的例外)。
+   */
+  MY_ISSUES_LIST: 'maker:issues:list-mine',
+  /**
+   * /issues 的**首屏快照**(上次查询成功时落盘的列表镜像)。进页面先渲染它,
+   * 避免空等远端;fresh 一到即整体接管。非权威、可重建,详见 myIssuesSnapshotStore。
+   */
+  MY_ISSUES_SNAPSHOT: 'maker:issues:snapshot-mine',
   WRITE_PLAN_FILE: 'maker:write-plan-file',
   // Rewind / Fork (Stage 2 C2) — 取代老 cc-agent:rewind:* + local-db:sessions:fork
   REWIND_PREVIEW: 'maker:rewind:preview',
@@ -319,6 +353,9 @@ export const MAKER_INVOKE = {
    */
   CONTACTS_SETTINGS_GET: 'maker:contacts:settings:get',
   CONTACTS_SETTINGS_SET: 'maker:contacts:settings:set',
+  CONTACTS_SYNC_STATUS_GET: 'maker:contacts:sync:status:get',
+  CONTACTS_SYNC_ENABLED_SET: 'maker:contacts:sync:enabled:set',
+  CONTACTS_SYNC_NOW: 'maker:contacts:sync:now',
   CONTACTS_LIST: 'maker:contacts:list',
   CONTACTS_GET: 'maker:contacts:get',
   CONTACTS_CREATE: 'maker:contacts:create',
@@ -377,8 +414,19 @@ export const MAKER_INVOKE = {
    * 实时连接状态（XD=gateway key / Anthropic=Claude.ai OAuth / OpenAI=Codex OAuth）。
    * 供应商的「连接 / 断开」复用各 agent 已有的鉴权通道（CLAUDE_OAUTH_* / AUTH_* / 登录托管），
    * 不另立重复通道。
-   */
+  */
   PROVIDER_LIST: 'maker:provider:list',
+  /**
+   * 内置四家模型清单手动刷新。入参仅允许 xd / anthropic / openai / xai；
+   * Main 按各家既有真源分派，不接收 URL、凭证或任意执行参数。
+   * 属被控端全局账号/目录操作，不进 device-link allowlist。
+   */
+  PROVIDER_MODELS_REFRESH: 'maker:provider:models-refresh',
+  /**
+   * Renderer 上报自动刷新时机；只接受 providers-open / model-selector-open，
+   * Main 统一处理连接状态、冷却与 in-flight 去重。前台恢复不经 Renderer IPC。
+   */
+  PROVIDER_MODELS_AUTO_REFRESH: 'maker:provider:models-auto-refresh',
   /**
    * 自定义模型供应商 CRUD（配置入 localDb；update 的 runtime 密钥与配置原子排队）。
    * create/update 入参 = config + runtimeKeys；delete 入参 = providerId。
@@ -502,6 +550,9 @@ export const MAKER_INVOKE = {
   COLLABORATION_SETTINGS_GET: 'maker:collaboration-settings:get',
   COLLABORATION_SETTINGS_SET: 'maker:collaboration-settings:set',
   COLLABORATION_SETTINGS_RESET: 'maker:collaboration-settings:reset',
+  AGENT_RESOURCE_SETTINGS_GET: 'maker:agent-resource-settings:get',
+  AGENT_RESOURCE_SETTINGS_SET: 'maker:agent-resource-settings:set',
+  AGENT_RESOURCE_SETTINGS_RESET: 'maker:agent-resource-settings:reset',
   // Plugin system (Phase 1)
   PLUGINS_LIST: 'maker:plugins:list',
   // Read one plugin's enable state by id — works for plugins hidden from
@@ -730,6 +781,12 @@ export const MAKER_PUSH = {
    * 控制端进程因从不收到此 channel,带着同名监听也不会误触发。payload = APPLY_NEW_MAKER_DRAFT_PREF 入参。
    */
   DRAFT_PREF_APPLY: 'maker:draft-pref:apply',
+  /**
+   * 被控端本地 main → 自身 renderer:把控制端写穿的「新建会话默认启用 worktree」交给 renderer
+   * 写真实草稿(patchDraft)。仅本地窗口消费(**不**在 PUSH_FORWARD_ALLOWLIST,不转发回控制端)。
+   * payload = { worktreeEnabled: boolean }(APPLY_NEW_MAKER_WORKTREE_PREF 入参)。
+   */
+  WORKTREE_PREF_APPLY: 'maker:worktree-pref:apply',
   /**
    * 被控端本地 main → 自身 renderer:把控制端写穿的会话 pref 交给 renderer,renderer 调它原来的
    * 本地 setter 写真实会话记忆。仅本地窗口消费(不转发)。payload = SET_SESSION_MODEL_PREF 入参。

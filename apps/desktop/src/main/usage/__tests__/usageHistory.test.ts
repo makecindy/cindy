@@ -84,6 +84,12 @@ import { getAllSpendDays } from '../../localDb/dailySpend';
 import { getModelUsageSince } from '../../localDb/dailyModelUsage';
 import { getModelPricing, isModelPricingRefreshInFlight } from '../modelPricing';
 import {
+  __resetActiveLedgerCurrencyForTesting,
+  setActiveLedgerCurrency,
+} from '../ledgerCurrency';
+import {
+  DEFAULT_USAGE_CURRENCY,
+  USD_TO_CNY_FIXED_RATE,
   zeroUsageMoney,
   type ModelPriceQuote,
   type RegionalMoney,
@@ -94,11 +100,17 @@ const TODAY = '2026-06-11';
 function actual(amount: number, approximate = false): RegionalMoney {
   return {
     amount,
-    currency: 'USD',
+    currency: DEFAULT_USAGE_CURRENCY,
     approximate,
     kind: 'actual-cost',
     ...(approximate ? { estimateReasons: ['legacy-usd'] } : {}),
   };
+}
+
+function regionalUsdAmount(amount: number): number {
+  return DEFAULT_USAGE_CURRENCY === 'CNY'
+    ? amount * USD_TO_CNY_FIXED_RATE
+    : amount;
 }
 
 function subscriptionQuote(
@@ -159,6 +171,9 @@ beforeEach(async () => {
   );
   currentDbClient.userId = 'user-a';
   __resetUsageHistoryCacheForTesting();
+  // 账本币种是跨用例的模块级状态,逐例重置回未知,让默认路径的用例始终从
+  // 构建默认币种起算,不受前一例显式设定的账号币种影响。
+  __resetActiveLedgerCurrencyForTesting();
   vi.mocked(getAllSpendDays).mockResolvedValue([]);
   vi.mocked(getModelUsageSince).mockResolvedValue([]);
   vi.mocked(getModelPricing).mockResolvedValue(null);
@@ -235,7 +250,7 @@ describe('billing model keys', () => {
 
 describe('readUsageHistoryWith', () => {
   it('aggregates actual money and subscription value without double counting', async () => {
-    const estimateAmount = 2;
+    const estimateAmount = regionalUsdAmount(2);
     const result = await readUsageHistoryWith(makeDeps({
       getAllSpendDays: async () => [
         { day: '2026-06-10', money: actual(3) },
@@ -303,8 +318,121 @@ describe('readUsageHistoryWith', () => {
     expect(api?.subscriptionEstimateMoney.amount).toBe(0);
   });
 
+  it('keeps current-region subscription estimates when history uses another currency', async () => {
+    const historicalCurrency = DEFAULT_USAGE_CURRENCY === 'CNY' ? 'USD' : 'CNY';
+    const estimateAmount = regionalUsdAmount(2);
+    const result = await readUsageHistoryWith(
+      makeDeps({
+        getAllSpendDays: async () => [
+          {
+            day: TODAY,
+            money: {
+              amount: 5,
+              currency: historicalCurrency,
+              approximate: false,
+              kind: 'actual-cost',
+            },
+          },
+        ],
+        getModelUsageSince: async () => [
+          modelRow(TODAY, 'codex', codexSubscriptionUsageModelKey('gpt-5.5'), actual(0), {
+            inputTokens: 1_000_000,
+          }),
+          modelRow(
+            TODAY,
+            'claude-code',
+            'legacy-mixed-currency',
+            {
+              amount: 10,
+              currency: historicalCurrency,
+              approximate: false,
+              kind: 'actual-cost',
+            },
+            { outputTokens: 20 },
+          ),
+        ],
+        getModelPricing: async () => ({
+          openai: {
+            'gpt-5.5': subscriptionQuote('openai', 'gpt-5.5', 2, 8),
+          },
+        }),
+      }),
+    );
+
+    expect(result.totals.today).toEqual(actual(0));
+    expect(result.totals.last30Days).toEqual(actual(0));
+    expect(result.totals.last30DaysEstimatedValue).toMatchObject({
+      amount: estimateAmount,
+      currency: DEFAULT_USAGE_CURRENCY,
+    });
+    expect(result.totals.last30DaysWithEstimatedValue.amount).toBeCloseTo(estimateAmount);
+    expect(result.days[0]).toMatchObject({
+      money: actual(0),
+      tokens: 1_000_020,
+    });
+    expect(
+      result.models.find((row) => row.model === 'legacy-mixed-currency'),
+    ).toMatchObject({
+      money: actual(0),
+      estimatedMoney: null,
+      outputTokens: 20,
+    });
+    expect(
+      result.modelDaily.find((row) => row.model === 'legacy-mixed-currency'),
+    ).toMatchObject({
+      money: {
+        amount: 0,
+        currency: DEFAULT_USAGE_CURRENCY,
+      },
+      apiMoney: actual(0),
+      tokens: 20,
+    });
+  });
+
+  it('keeps a USD-settled account history intact regardless of build region', async () => {
+    // 结算币种由服务端按账号所属租户下发,不是构建区域。账本币种若按区域取,
+    // 以 USD 结算的账号在 CN 构建上每一行都会被判成异币种归零 —— 等于这些用户不计费。
+    //
+    // 账号币种必须在这里显式落一次:本文件把 modelPricing 整体 mock 掉了,而生产里
+    // 正是它(replaceGatewayModelPricing / 磁盘快照恢复)把报价币种写进账本币种。
+    // 不落这一笔,断言就退化成"构建默认币种恰好是 USD",在 CN 构建上必然红,
+    // 反而验不到本例声称的"与构建区域无关"。
+    setActiveLedgerCurrency('USD');
+    const usdRow = (amount: number): RegionalMoney => ({
+      amount,
+      currency: 'USD',
+      approximate: false,
+      kind: 'actual-cost',
+    });
+    const result = await readUsageHistoryWith(
+      makeDeps({
+        getAllSpendDays: async () => [
+          { day: '2026-06-10', money: usdRow(3) },
+          { day: TODAY, money: usdRow(5) },
+        ],
+        getModelUsageSince: async () => [],
+        getModelPricing: async () => ({
+          xd: {
+            'gpt-5.5': {
+              providerId: 'xd',
+              modelId: 'gpt-5.5',
+              currency: 'USD',
+              source: 'gateway',
+              approximate: false,
+              inputPerMtok: 3,
+              outputPerMtok: 15,
+            },
+          },
+        }),
+      }),
+    );
+
+    expect(result.totals.today).toMatchObject({ amount: 5, currency: 'USD' });
+    expect(result.totals.last30Days).toMatchObject({ amount: 8, currency: 'USD' });
+  });
+
   it('uses provider-scoped Anthropic reference pricing for Claude subscription rows', async () => {
-    const expected = 5;
+    const expected = regionalUsdAmount(5);
     const result = await readUsageHistoryWith(makeDeps({
       getModelUsageSince: async () => [
         modelRow(
@@ -396,7 +524,7 @@ describe('production cache and empty payload', () => {
         ),
       );
       expect(raw).toMatchObject({
-        version: 3,
+        version: 4,
         optsKey: 'user=user-a|days=30',
         payload: {
           totals: {

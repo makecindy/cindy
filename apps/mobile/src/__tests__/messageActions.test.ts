@@ -6,14 +6,29 @@ import {
   copyMessageText,
   formatMessageAbsoluteTime,
   formatMessageRelativeTime,
-  formatMessageTurnCostUsd,
+  formatMessageTurnCost,
+  mobileMessageShowsActionBar,
 } from '@/session/messageActions';
 import type { NormalizedRemoteMessage } from '@/session/messageNormalize';
+import type { RemoteMoney, RemoteMoneyCurrency } from '@/session/remoteMoney';
 
 // 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
 beforeAll(async () => {
   await i18n.changeLanguage('zh-CN');
 });
+
+function money(
+  amount: number,
+  currency: RemoteMoneyCurrency = 'USD',
+  estimate = false,
+): RemoteMoney {
+  return {
+    amount,
+    currency,
+    approximate: estimate,
+    kind: estimate ? 'value-estimate' : 'actual-cost',
+  };
+}
 
 describe('messageActions', () => {
   it('builds completed-message controls in stable desktop-compatible order', () => {
@@ -30,6 +45,42 @@ describe('messageActions', () => {
       canRewind: true,
       isStreaming: true,
     })).toEqual([]);
+  });
+
+  it('hangs the completed action bar only on real turn-final utterances', () => {
+    const base = {
+      hasSystemCard: false,
+      isStreamingAssistant: false,
+      isTurnFinalAssistant: false,
+    };
+
+    // user 消息与本轮收尾正文照常挂。
+    expect(mobileMessageShowsActionBar({ ...base, kind: 'user' })).toBe(true);
+    expect(mobileMessageShowsActionBar({
+      ...base,
+      kind: 'assistant',
+      isTurnFinalAssistant: true,
+    })).toBe(true);
+
+    // turn 中间句不挂;流式 assistant 只显示「生成中」也不挂。
+    expect(mobileMessageShowsActionBar({ ...base, kind: 'assistant' })).toBe(false);
+    expect(mobileMessageShowsActionBar({
+      ...base,
+      kind: 'assistant',
+      isStreamingAssistant: true,
+      isTurnFinalAssistant: true,
+    })).toBe(false);
+
+    // 系统边界卡整行不挂:跨 Agent 切换分隔线(kind='system')、goal 卡(role
+    // assistant 派生),以及「user 行渲染系统卡」被渲染层降级前后的 auto-resume 行。
+    expect(mobileMessageShowsActionBar({ ...base, hasSystemCard: true, kind: 'system' })).toBe(false);
+    expect(mobileMessageShowsActionBar({
+      ...base,
+      hasSystemCard: true,
+      kind: 'assistant',
+      isTurnFinalAssistant: true,
+    })).toBe(false);
+    expect(mobileMessageShowsActionBar({ ...base, hasSystemCard: true, kind: 'user' })).toBe(false);
   });
 
   it('builds desktop-compatible copy text with attachment names', () => {
@@ -98,12 +149,13 @@ describe('messageActions', () => {
   });
 
   it('formats per-turn cost like the desktop action bar', () => {
-    expect(formatMessageTurnCostUsd(12.34)).toBe('$12');
-    expect(formatMessageTurnCostUsd(0.034)).toBe('$0.03');
-    expect(formatMessageTurnCostUsd(0.0034)).toBe('$0.003');
-    expect(formatMessageTurnCostUsd(0.0004)).toBe('<$0.001');
-    expect(formatMessageTurnCostUsd(0.034, true)).toBe('价值 $0.03');
-    expect(formatMessageTurnCostUsd(0)).toBe('');
+    expect(formatMessageTurnCost(money(12.34))).toBe('$12');
+    expect(formatMessageTurnCost(money(0.034))).toBe('$0.03');
+    expect(formatMessageTurnCost(money(0.0034))).toBe('$0.003');
+    expect(formatMessageTurnCost(money(0.0004))).toBe('<$0.001');
+    expect(formatMessageTurnCost(money(0.034, 'USD', true))).toBe('价值 $0.03');
+    expect(formatMessageTurnCost(money(0.034, 'CNY'))).toBe('¥0.03');
+    expect(formatMessageTurnCost(money(0))).toBe('');
   });
 });
 

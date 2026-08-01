@@ -2,19 +2,23 @@
 
 /**
  * ProvidersSection(双栏重构)关键不变量:
- *   1. Cindy AI(xd)固定置顶且默认选中;实时模型清单为空时详情给空态提示。
+ *   1. Cindy AI(xd)固定置顶且默认选中;实时模型清单为空时仍保留手动刷新入口。
  *   2. 未连接的内置渠道不再常驻占行(入口在向导目录 + 检测建议)。
  *   3. 本机 CLI 检测命中且渠道未连接时,左栏出现建议行,点击直达向导授权步。
  */
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
 
-const { wizardSpy } = vi.hoisted(() => ({ wizardSpy: vi.fn() }));
+const { refreshBuiltinModelsSpy, requestAutoRefreshSpy, wizardSpy } = vi.hoisted(() => ({
+  refreshBuiltinModelsSpy: vi.fn(async () => ({ ok: true, providerId: 'xd' as const })),
+  requestAutoRefreshSpy: vi.fn(async () => ({ ok: true as const })),
+  wizardSpy: vi.fn(),
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'zh-CN' } }),
@@ -132,6 +136,8 @@ beforeEach(() => {
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
       scanLocalCli: vi.fn(async () => scanResult),
+      refreshBuiltinProviderModels: refreshBuiltinModelsSpy,
+      requestProviderModelsAutoRefresh: requestAutoRefreshSpy,
     },
   };
 });
@@ -142,9 +148,10 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 双栏管理', () => {
-  it('Cindy AI 置顶默认选中;未连接内置渠道不占行;零模型详情给空态提示', async () => {
+  it('Cindy AI 置顶默认选中;未连接内置渠道不占行;零模型仍可手动刷新', async () => {
     // ProvidersSection 内部消费 useSearchParams(深链定位),测试需要 Router 上下文。
     render(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
+    expect(requestAutoRefreshSpy).toHaveBeenCalledWith('providers-open');
 
     // 详情头 + 左栏行都显示 xd 标题(默认选中第一行 = xd)。
     expect(
@@ -152,9 +159,44 @@ describe('ProvidersSection — 双栏管理', () => {
     ).toBeGreaterThanOrEqual(2);
     // 未连接的 Anthropic 不出现在左栏(无检测建议时整页不出现)。
     expect(screen.queryByText('Anthropic')).toBeNull();
-    // xd 实时模型为空 → 详情空态提示(不渲染模型开关面板)。
+    // xd 实时模型为空 → 详情仍渲染模型工具行与刷新入口，避免用户无从恢复。
     expect(screen.getByText('settings.providers.detail.emptyModels')).not.toBeNull();
-    expect(screen.queryByText('settings.providers.models.available')).toBeNull();
+    expect(screen.getByText('settings.providers.models.available')).not.toBeNull();
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'settings.providers.models.refreshBuiltinAria' }),
+      );
+    });
+    expect(refreshBuiltinModelsSpy).toHaveBeenCalledWith('xd');
+  });
+
+  it('同一事件循环内连续点击刷新只启动一个请求', async () => {
+    let resolveRefresh!: (value: { ok: true; providerId: 'xd' }) => void;
+    const pendingRefresh = new Promise<{ ok: true; providerId: 'xd' }>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    refreshBuiltinModelsSpy.mockReturnValueOnce(pendingRefresh);
+    render(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
+
+    const button = await screen.findByRole('button', {
+      name: 'settings.providers.models.refreshBuiltinAria',
+    });
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(refreshBuiltinModelsSpy).toHaveBeenCalledTimes(1);
+    const refreshingButton = screen.getByRole('button', {
+      name: 'settings.providers.models.refreshingAria',
+    });
+    expect(refreshingButton.getAttribute('title'))
+      .toBe('settings.providers.models.refreshingAria');
+
+    await act(async () => {
+      resolveRefresh({ ok: true, providerId: 'xd' });
+      await pendingRefresh;
+    });
   });
 
   it('检测到本机 CLI 且渠道未连接 → 建议行出现,点击直达向导授权步', async () => {

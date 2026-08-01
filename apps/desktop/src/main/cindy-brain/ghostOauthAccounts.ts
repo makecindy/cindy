@@ -442,6 +442,12 @@ export class GhostOauthAccountManager {
        * clientIdAlternatives 明确列出的值;用于意识按宿主 region 选 App。
        */
       clientId?: string;
+      /**
+       * 该插件 manifest 的 network.hosts 白名单(接线处传入)。跨源 code 投递
+       * 的 CORS 允许面 = 端点 origin + 本白名单命中的 https origin,见
+       * GhostOauthClientConfig.corsDeliveryHosts。
+       */
+      deliveryHosts?: readonly string[];
     },
   ): Promise<GhostOauthConnectResult> {
     if (opts?.clientId !== undefined) {
@@ -456,6 +462,7 @@ export class GhostOauthAccountManager {
     }
     const config = this.readClientConfig(ghostId, secretKey, decl, opts?.clientId);
     if (!config) return { ok: false, error: 'NO_CLIENT_CONFIG' };
+    if (opts?.deliveryHosts?.length) config.corsDeliveryHosts = opts.deliveryHosts;
     if (decl.brokerBounce && !config.publicRedirectUri) {
       return {
         ok: false,

@@ -31,7 +31,11 @@ import { createPortal } from 'react-dom';
 import { GitFork } from 'lucide-react';
 import { SelectionQuoteButton } from './SelectionQuoteButton';
 import { useTranslation } from 'react-i18next';
-import { findMessageTodoInsertions, isAgentPlanToolName } from '@cindy/maker-shared/message-render';
+import {
+  findMessageTodoInsertions,
+  isAgentPlanToolName,
+  isDeliveryProseText,
+} from '@cindy/maker-shared/message-render';
 
 import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
 import { Spinner } from '@/components/ui/spinner';
@@ -830,6 +834,13 @@ export function buildRenderItems(
   messages: ChatMessage[],
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>,
   ghostCards?: GhostCardSnapshot,
+  opts?: {
+    /**
+     * 还有更老的历史页没加载(= `messages` 只是窗口、不是全量)。为真时,凡靠
+     * 「父调用在不在 messages 里」做的归属判定都不可信,必须放宽而不是丢弃。
+     */
+    historyWindowIncomplete?: boolean;
+  },
 ): {
   items: RenderItem[];
   singleResultMap: Map<string, string>;
@@ -1285,8 +1296,38 @@ export function buildRenderItems(
   flushSegment();
 
   if (taskUpdates) {
+    // 父会话自己的 Bash 调用集合:local_bash 任务卡(#247 的「后台命令」卡,含
+    // 停止按钮)的**唯一**渲染来源就是本孤儿循环(Bash toolCall 走 tool_segment,
+    // 不进 agent_task 配对分支),必须按 parentToolUseId 命中保留;命不中的才是
+    // workflow / 子 agent 内部启动的后台命令 —— 只进后台任务面板,不进聊天流刷屏
+    // (对齐官方:聊天流只呈现父会话自己的调用)。
+    //
+    // 归属只能靠「父 Bash 调用在不在 messages 里」判定(AgentTaskUpdate 没有
+    // 结构化的「谁 spawn 的」字段),而 messages 是分页窗口(首屏 50 行)。窗口
+    // 不完整时父调用可能只是还没翻到,此时**不丢**:宁可临时多显示 workflow 内部
+    // 的后台命令卡(本 PR 之前就是这个形态),也不能把用户自己还在跑的后台命令
+    // 及其停止按钮从聊天流里抹掉。翻到旧页 / 加载完历史后过滤自动恢复。
+    const historyWindowIncomplete = opts?.historyWindowIncomplete === true;
+    const parentBashToolUseIds = new Set<string>();
+    for (const m of messages) {
+      if (
+        m.role === 'tool_use' &&
+        m.toolName === 'Bash' &&
+        typeof m.toolUseId === 'string' &&
+        m.toolUseId.length > 0
+      ) {
+        parentBashToolUseIds.add(m.toolUseId);
+      }
+    }
     const seenTaskIds = new Set<string>();
     for (const update of taskUpdates.values()) {
+      if (
+        update.taskType === 'local_bash' &&
+        !historyWindowIncomplete &&
+        !(update.parentToolUseId && parentBashToolUseIds.has(update.parentToolUseId))
+      ) {
+        continue;
+      }
       const primaryKey = update.parentToolUseId ?? update.taskId;
       if (
         seenTaskIds.has(update.taskId) ||
@@ -1346,14 +1387,47 @@ function isRunningAgentTask(it: RenderItem): boolean {
   return status === 'running';
 }
 
+/** workflow 卡永远平铺,完成后也不折进工作组:它是后台任务面板的常驻入口,
+ *  折叠掉等于把入口藏起来(产品拍板 2026-07-27:完成后保留痕迹、可点击进
+ *  面板详情;对齐官方——原版完成的 workflow 行留在对话里)。 */
+function isWorkflowTaskItem(it: RenderItem): boolean {
+  return (
+    it.type === 'agent_task' &&
+    (it.update?.taskType === 'local_workflow' || it.toolCall?.toolName === 'Workflow')
+  );
+}
+
 /** preview 中计为一条真实活动的 render item。assistant 进度文字
  *  始终留在主消息流,不占最近 5 条活动窗口。 */
 function isWorkActivityItem(it: RenderItem): it is WorkChildItem {
   return (
     !isRunningAgentTask(it) &&
+    // workflow 卡三条分组路径(answered/legacy/active)统一平铺,见 isWorkflowTaskItem。
+    !isWorkflowTaskItem(it) &&
     (it.type === 'tool_segment' ||
       it.type === 'agent_task' ||
       (it.type === 'message' && it.message.role === 'thinking'))
+  );
+}
+
+/**
+ * 交付正文 item —— 无论落在 turn 的哪个位置都不折进「已工作 Xs」。
+ *
+ * 为什么只靠 seal 位置不够:「最终答复」只认最后一次动作之后的正文,而 agent
+ * 常见「先输出正文 → 再执行一个收尾副作用(发通知 / 落库 / 提交) → 再说一句
+ * 已完成」。这时真正的交付内容排在收尾动作之前,会被整段折起来,只剩收尾那句
+ * 元数据留在消息流里(实例:2026-07-31 定时巡检的产品决策简报 3250 字被折,
+ * 外面只剩 110 字的「已触发通知」)。
+ *
+ * 判据(长度 / 块级 markdown 结构)由 maker-shared 的 isDeliveryProseText 单一
+ * 提供,两端不各写一份。
+ */
+function isDeliveryProseItem(it: RenderItem): boolean {
+  return (
+    it.type === 'message' &&
+    it.message.role === 'assistant' &&
+    !it.message.systemCardType &&
+    isDeliveryProseText(it.message.content)
   );
 }
 
@@ -1395,6 +1469,22 @@ function workChildClientId(it: WorkChildItem): string {
 function workGroupClientId(run: WorkChildItem[]): string {
   const firstActivity = run.find((it) => it.type !== 'message' || it.message.role === 'thinking');
   return workChildClientId(firstActivity ?? run[0]);
+}
+
+/** 工作组内全部可定位 clientId(嵌套组递归),供组容器的回退锚点使用。 */
+function collectWorkGroupClientIds(children: readonly RenderItem[]): string[] {
+  const ids: string[] = [];
+  for (const child of children) {
+    if (child.type === 'message') ids.push(child.message.clientId);
+    else if (child.type === 'tool_segment') {
+      for (const toolCall of child.toolCalls) ids.push(toolCall.clientId);
+    } else if (child.type === 'agent_task' && child.toolCall) {
+      ids.push(child.toolCall.clientId);
+    } else if (child.type === 'work_group') {
+      ids.push(...collectWorkGroupClientIds(child.children));
+    }
+  }
+  return ids;
 }
 
 function renderItemContainsClientId(item: RenderItem, clientId: string): boolean {
@@ -1489,11 +1579,18 @@ function renderItemEndMs(item: RenderItem): number | null {
     return startMs === null ? item.resultTsMs : Math.max(startMs, item.resultTsMs);
   }
   if (item.type === 'work_group') {
-    for (let i = item.children.length - 1; i >= 0; i--) {
-      const childMs = renderItemEndMs(item.children[i]);
-      if (childMs !== null) return childMs;
+    // 全量取 max,不是"最后一个 child":children 按**发起**时刻排列,并行的 Agent/Task 乱序完成时
+    // 真正的结束时刻可能落在更靠前的 child 上(先发起、更晚 settle)。取最后一个会低估组的结束
+    // 时间,于是空洞判定的锚点变小、把本来连续的 turn 误判成空洞切开 —— 与本函数 tool_segment
+    // 分支、以及 groupWorkRuns 里 prevEndMs 的 Math.max 是同一条理由(#676 review codex P1)。
+    // 手机端同款函数(maker-shared 的 itemEndTimestamp)已按此收敛,#1210 review 指出这里镜像存在。
+    let latest: number | null = null;
+    for (const child of item.children) {
+      const childMs = renderItemEndMs(child);
+      if (childMs === null) continue;
+      latest = latest === null ? childMs : Math.max(latest, childMs);
     }
-    return null;
+    return latest;
   }
   // thinking 的 createdAt 是块**开始**的时刻,真正结束要加 thinkingDurationMs
   // (与 workRunEndTs 同口径)。一个想了半小时以上的 thinking 块后面紧跟工具或正文时,
@@ -1745,6 +1842,9 @@ function groupActiveWorkRuns(items: RenderItem[], turnStartTs: number | null = n
  * 连续输出的 assistant 文字视为最终答复阶段,留在组外;若整轮没有真实动作,
  * 只保留最后一条 assistant 正文,此前文字仍视作工作过程。
  *
+ * 位置判定之外还有一条位置无关的兜底:交付正文(见 isDeliveryProseItem)即使排在
+ * 收尾动作之前也不折叠,免得「先出简报 → 再发通知 → 再说一句已完成」把产出藏进组里。
+ *
  * 没有最终正文(被中断 / 停在工具)或最终正文后仍有已完成动作时返回
  * handled:false,交回 groupLegacyWorkRuns 按连续动作折叠。tool_media /
  * agent_plan /运行中子 Agent 等非可归档项保持可见,并作为顺序锚点切开工作组。
@@ -1837,7 +1937,13 @@ function groupAnsweredTurnItems(
 
   for (let i = 0; i < turnItems.length; i++) {
     const it = turnItems[i];
-    if (!sealedAnswers.has(i) && !isRunningAgentTask(it) && isWorkChild(it)) {
+    if (
+      !sealedAnswers.has(i) &&
+      !isRunningAgentTask(it) &&
+      !isWorkflowTaskItem(it) &&
+      !isDeliveryProseItem(it) &&
+      isWorkChild(it)
+    ) {
       run.push(it);
     } else {
       flushRun(it);
@@ -2191,8 +2297,11 @@ export function MessageStream({
   // 用户看到的。流式中每 token messages 引用变 → 这里跑一次 O(n) 单线性扫描,
   // 实测 N=1000 < 2ms (Windows),如果未来发现瓶颈再走增量化(out of scope)。
   const { items: ungroupedRenderItems, singleResultMap } = useMemo(
-    () => buildRenderItems(messages, taskUpdates, ghostCardSnapshot),
-    [messages, taskUpdates, ghostCardSnapshot],
+    () =>
+      buildRenderItems(messages, taskUpdates, ghostCardSnapshot, {
+        historyWindowIncomplete: Boolean(hasMoreMessages),
+      }),
+    [messages, taskUpdates, ghostCardSnapshot, hasMoreMessages],
   );
   const assistantsWithFollowingUserBoundary = useMemo(
     () => collectAssistantsWithFollowingUserBoundary(messages),
@@ -2330,9 +2439,15 @@ export function MessageStream({
     }
     const root = scrollRef.current;
     if (!root) return;
-    const el = root.querySelector(
+    // 精确锚点(message wrapper / 带 toolCall 的任务卡)优先;查不到时退回
+    // 聚合动作块的容器锚点(data-message-client-ids 空格分隔多 clientId)——
+    // 后台 Bash 等工具行渲染在折叠块内,没有独立的行级 DOM 锚点。
+    const el = (root.querySelector(
       `[data-message-client-id="${CSS.escape(focusMessageClientId)}"]`,
-    ) as HTMLElement | null;
+    ) ??
+      root.querySelector(
+        `[data-message-client-ids~="${CSS.escape(focusMessageClientId)}"]`,
+      )) as HTMLElement | null;
     if (!el) return;
     restoringRef.current = false;
     isNearBottomRef.current = false;
@@ -3450,16 +3565,26 @@ export function MessageStream({
                       };
                       const childItems = item.children.map(toWorkGroupChild);
                       return (
-                        <WorkGroupBlock
+                        // data-message-client-ids:组折叠时子卡片/聚合块整体 unmount,
+                        // 精确锚点消失 —— 后台任务面板「点行跳聊天」经 ~= 回退查询
+                        // 落到组容器(与 AgentActionsBlock 的容器锚点同一约定)。
+                        <div
                           key={item.key}
-                          // 单层前缀约定 `work:<clientId>` — item.key 形如 `work-<cid>`,
-                          // 去掉 `work-` 后拼 `<role>:<id>`,与 agent: / thinking: 同构。
-                          blockId={`work:${item.key.slice('work-'.length)}`}
-                          durationMs={item.durationMs}
-                          isStreaming={item.isStreaming}
-                          startedAtMs={item.startedAtMs}
-                          childItems={childItems}
-                        />
+                          className="scroll-mt-20"
+                          data-message-client-ids={collectWorkGroupClientIds(item.children).join(
+                            ' ',
+                          )}
+                        >
+                          <WorkGroupBlock
+                            // 单层前缀约定 `work:<clientId>` — item.key 形如 `work-<cid>`,
+                            // 去掉 `work-` 后拼 `<role>:<id>`,与 agent: / thinking: 同构。
+                            blockId={`work:${item.key.slice('work-'.length)}`}
+                            durationMs={item.durationMs}
+                            isStreaming={item.isStreaming}
+                            startedAtMs={item.startedAtMs}
+                            childItems={childItems}
+                          />
+                        </div>
                       );
                     }
 
@@ -3754,7 +3879,18 @@ const MessageItem = memo(function MessageItem({
     case 'ask_user':
       return <AskUserQuestionBubble message={message} />;
     case 'plan_review':
-      return <PlanReviewBubble message={message} />;
+      // 计划正文是会话消息内容,解析上下文与 AssistantMessage 保持一致
+      // (currentSessionId 缺失会让远程会话里计划内的媒体链接绕过
+      // cindy-remote-media:// 改写而坏图)。
+      return (
+        <PlanReviewBubble
+          message={message}
+          workingDir={workingDir}
+          currentSessionId={sessionId}
+          currentSessionTitle={sessionTitle}
+          localFileRefs={localFileRefs}
+        />
+      );
     case 'error':
       // interrupted-turn-resume:app 退出中断标记行不进消息流(2026-07-05 产品
       // 决策)——它作为「会话尾部是否停在中断态」的判定源保留在 messages 数组里,

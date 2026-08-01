@@ -58,7 +58,19 @@ function toolResultToString(content: unknown): string {
           if (rec.type === 'text' && typeof rec.text === 'string') return rec.text;
           // 工具结果里嵌图片等非文本内容:Responses 的 function_call_output 只吃字符串,
           // 退化成占位描述,不丢整条(模型仍知道该工具产出过内容)。
-          if (rec.type === 'image') return '[image]';
+          // 占位文案必须说明「有图但送不到、不要猜」:字符串限制是协议层的,与模型
+          // 是否具备视觉能力无关;不带说明的 '[image]' 会被模型当作空结果,诱发反复
+          // 重读或臆测图像内容。图像走 user 消息路径仍可正常送达(input_image)。
+          if (rec.type === 'image') {
+            return (
+              '[image omitted: this tool returned an image, but tool results on this '
+              + 'provider route are delivered as plain text only, so the image data could '
+              + 'not be included. Do NOT guess or fabricate what the image contains. '
+              + 'Tell the user the image could not be delivered on the current route, and '
+              + 'ask them to paste the relevant content as text or attach the image '
+              + 'directly to a chat message instead.]'
+            );
+          }
           return JSON.stringify(rec);
         }
         return String(b);

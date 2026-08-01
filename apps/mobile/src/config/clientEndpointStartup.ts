@@ -23,7 +23,11 @@ import {
   type ClientEndpointMap,
 } from '@cindy/maker-shared/client-endpoints';
 
-import { ENDPOINT_MANIFEST_BASE_URL, applyResolvedClientEndpoints } from './env';
+import {
+  BUILD_AUTH_REGION,
+  ENDPOINT_MANIFEST_BASE_URL,
+  applyResolvedClientEndpoints,
+} from './env';
 
 const MANIFEST_RELATIVE_PATH = '/endpoint.json';
 /** 单次请求的网络超时——超时即阻断启动,不是无限等待。 */
@@ -98,6 +102,7 @@ export interface StartupEndpointResolveDeps {
   apply?: (resolved: ClientEndpointMap & {
     reviewVersion: string | null;
     isTestFlight: boolean;
+    region: 'cn' | 'global' | null;
   }) => void;
   timeoutMs?: number;
   /** 自动重试节奏,默认 AUTO_RETRY_DELAYS_MS;传 `[]` 关闭(单次尝试)。 */
@@ -171,6 +176,13 @@ export async function runStartupEndpointResolve(
     // 拿到正文:解析/校验不过 = 线上清单配置错,重试同一份内容没有意义,直接阻断。
     const result = resolveClientEndpointsStrict(fetched.text);
     if (!result.ok) return { ok: false, reason: result.reason };
+    // 老清单缺 region 时保持兼容；一旦自报 region，就必须与安装包构建区域一致。
+    if (result.region !== null && result.region !== BUILD_AUTH_REGION) {
+      return {
+        ok: false,
+        reason: `region-mismatch:${BUILD_AUTH_REGION}:${result.region}`,
+      };
+    }
 
     // 分发环境识别失败不能把 endpoint 闸门变成启动故障；降级为非 TestFlight，
     // 保留既有 review 行为。真实 iOS 路径由 useStartupEndpointGate 注入 StoreKit 实现。
@@ -181,7 +193,12 @@ export async function runStartupEndpointResolve(
       isTestFlight = false;
     }
 
-    apply({ ...result.endpoints, reviewVersion: result.reviewVersion, isTestFlight });
+    apply({
+      ...result.endpoints,
+      reviewVersion: result.reviewVersion,
+      isTestFlight,
+      region: result.region,
+    });
     return { ok: true, source: 'cdn' };
   } catch {
     return { ok: false, reason: 'internal-error' };

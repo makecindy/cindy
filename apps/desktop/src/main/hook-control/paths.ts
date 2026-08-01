@@ -11,12 +11,6 @@
 
 import path from 'node:path';
 
-/** 路径比较前的规范化。Windows 大小写不敏感(规则 15)。 */
-function normalizePathForCompare(p: string): string {
-  const resolved = path.resolve(p);
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-}
-
 /**
  * target 是否落在 base 目录内(含相等)。Windows 大小写不敏感(规则 15)。
  *
@@ -25,9 +19,21 @@ function normalizePathForCompare(p: string): string {
  * 输入(SessionMeta.workDir 在 DB workingDir 为 null 时落成空串, 见
  * maker-host/session-storage.ts)。安全判定在这里 fail closed
  * (PR #733 review 指出)。
+ *
+ * platform 参数是跨平台测试缝：Node 的默认 path 实现在进程启动时就按宿主系统固定，
+ * 只 mock process.platform 并不能切换 path.relative 的大小写语义。
  */
-export function isPathWithin(base: string, target: string): boolean {
+export function isPathWithin(
+  base: string,
+  target: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
   if (base.trim() === '' || target.trim() === '') return false;
-  const rel = path.relative(normalizePathForCompare(base), normalizePathForCompare(target));
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
+  const normalize = (value: string): string => {
+    const resolved = pathApi.resolve(value);
+    return platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  const rel = pathApi.relative(normalize(base), normalize(target));
+  return rel === '' || (!rel.startsWith('..') && !pathApi.isAbsolute(rel));
 }

@@ -443,4 +443,146 @@ describe('sessionActiveTurn', () => {
     await insert('this-turn-tool', 'tool_use');
     expect(await hasAssistantProgressAfterMessage('s-same-ms', 'c-user2')).toBe(true);
   });
+
+  it('listErrorTailPendingSessionIds matches undismissed error tails only', async () => {
+    const { listErrorTailPendingSessionIds } = await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    const base = Date.now();
+    const insert = (
+      sessionId: string,
+      id: string,
+      role: string,
+      content: string,
+      createdAt: number,
+      rewindAt: number | null = null,
+    ) =>
+      client.exec(
+        'INSERT INTO messages (id, client_id, session_id, role, content, created_at, rewind_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [id, id, sessionId, role, content, createdAt, rewindAt],
+      );
+
+    // 命中:尾行是未 dismissed 的 error。
+    await seedSession(client, 's-err');
+    await insert('s-err', 'e1-user', 'user', '{}', base);
+    await insert('s-err', 'e1-err', 'error', '{"message":"boom"}', base + 100);
+
+    // 命中:content 是非法 JSON —— json_extract 会抛 malformed JSON,必须被
+    // json_valid 守卫挡住并按「未 dismissed」放行(fail-safe)。
+    await seedSession(client, 's-err-bad-json');
+    await insert('s-err-bad-json', 'e2-err', 'error', 'not json at all', base + 100);
+
+    // 命中:数组形态 content(合法 JSON 但取不到顶层键)同样按未 dismissed 处理。
+    await seedSession(client, 's-err-array');
+    await insert('s-err-array', 'e6-err', 'error', '["boom"]', base + 100);
+
+    // 不命中:用户点过「忽略」(mergeDismissedIntoErrorContent 写入顶层 dismissed)。
+    await seedSession(client, 's-dismissed');
+    await insert('s-dismissed', 'e3-err', 'error', '{"message":"boom","dismissed":true}', base + 100);
+
+    // 不命中:error 行之后又跑了新 turn,它已不是尾行(turn 重启即自然收敛)。
+    await seedSession(client, 's-resumed');
+    await insert('s-resumed', 'e4-err', 'error', '{"message":"boom"}', base + 100);
+    await insert('s-resumed', 'e4-user', 'user', '{}', base + 200);
+
+    // 不命中:error 行被 rewind 软删,不算尾行。
+    await seedSession(client, 's-rewound');
+    await insert('s-rewound', 'e5-err', 'error', '{"message":"boom"}', base + 100, base + 150);
+
+    // 命中:error 行与后续 rewind 行同毫秒 —— rewind 的不参与尾行比较,
+    // error 仍是尾行(双键比较两侧都过滤 rewind_at IS NULL)。
+    await seedSession(client, 's-same-ms-rewound');
+    await insert('s-same-ms-rewound', 'e7-err', 'error', '{"message":"boom"}', base + 100);
+    await insert('s-same-ms-rewound', 'e7-rewound', 'assistant', '{}', base + 100, base + 150);
+
+    // 不命中:同毫秒但 rowid 更大的活跃行在 error 之后 → error 不是尾行。
+    await seedSession(client, 's-same-ms-after');
+    await insert('s-same-ms-after', 'e8-err', 'error', '{"message":"boom"}', base + 100);
+    await insert('s-same-ms-after', 'e8-user', 'user', '{}', base + 100);
+
+    // 不命中:非 active 会话。
+    await seedSession(client, 's-deleted-err', { status: 'deleted' });
+    await insert('s-deleted-err', 'e9-err', 'error', '{"message":"boom"}', base + 100);
+
+    // 不命中:不在桌面可见来源白名单里,红点无处展示。
+    await seedSession(client, 's-hidden-err', { source: 'legacy-hidden' });
+    await insert('s-hidden-err', 'e10-err', 'error', '{"message":"boom"}', base + 100);
+
+    // 不命中:/clear 越过了该 error 行 —— 消息读取路径靠 cleared_at 把它挡在视图外,
+    // 横幅根本不显示,红点若还挂着就永远无法处置(PR #879 review P1)。
+    await seedSession(client, 's-cleared-err', { clearedAt: base + 500 });
+    await insert('s-cleared-err', 'e11-err', 'error', '{"message":"boom"}', base + 100);
+
+    // 命中:error 行在 /clear 之后产生(clear 后又跑了一轮并失败)。
+    await seedSession(client, 's-cleared-then-err', { clearedAt: base + 100 });
+    await insert('s-cleared-then-err', 'e12-err', 'error', '{"message":"boom"}', base + 500);
+
+    expect((await listErrorTailPendingSessionIds()).sort()).toEqual([
+      's-cleared-then-err',
+      's-err',
+      's-err-array',
+      's-err-bad-json',
+      's-same-ms-rewound',
+    ]);
+  });
+
+  // 回归(PR #879 review P1):批量处置先取快照再逐个 ack,快照之后该会话可能已启动
+  // 新 turn。盲写 ended 会把刚启动的活跃 turn 记成已收尾,它真被中断时下次启动就
+  // 检测不到 —— 所以带上捕获的 startedAt 做 CAS。
+  it('ackSessionTurnEndedIfUnchanged skips the write when a new turn already started', async () => {
+    const { ackSessionTurnEndedIfUnchanged } = await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    const captured = Date.now() - 5000;
+    await seedSession(client, 's-cas', { startedAt: captured });
+
+    // startedAt 未变 → 写入并回报成功。
+    expect(await ackSessionTurnEndedIfUnchanged('s-cas', captured)).toBe(true);
+    const after = await readMarks(client, 's-cas');
+    expect(after?.last_turn_ended_at).toBeTypeOf('number');
+    expect(after!.last_turn_ended_at!).toBeGreaterThanOrEqual(captured);
+
+    // 模拟「快照之后又启动了新 turn」:startedAt 前进,CAS 不再命中。
+    await seedSession(client, 's-cas-restarted', { startedAt: captured });
+    const restarted = Date.now();
+    await client.exec('UPDATE sessions SET active_turn_started_at = ? WHERE id = ?', [
+      restarted,
+      's-cas-restarted',
+    ]);
+    expect(await ackSessionTurnEndedIfUnchanged('s-cas-restarted', captured)).toBe(false);
+    const untouched = await readMarks(client, 's-cas-restarted');
+    // 活跃 turn 没被伪装成已收尾:ended 仍为空,中断判定对它照常成立。
+    expect(untouched?.last_turn_ended_at).toBeNull();
+    expect(untouched?.active_turn_started_at).toBe(restarted);
+  });
+
+  // 回归(PR #879 review P1,两个 reviewer 独立指出):「中断」必须是**开始于本进程
+  // 启动之前**的未收尾 turn。只看 startedAt > endedAt 会把正在跑的 turn 也算进去 ——
+  // 红点侧给运行中的会话亮红点,批量处置侧更糟:对活跃 turn 写 lastTurnEndedAt,
+  // 把它伪装成已收尾,该 turn 真被中断时下次启动就检测不到了。
+  it('interrupted leg only matches turns started before this process booted', async () => {
+    const { listInterruptedPendingSessionIds, listErrorTailPendingSessionIds, _setBootAtMsForTests } =
+      await import('../sessionActiveTurn.js');
+    const client = createTestDbClient();
+    const bootAt = Date.now();
+    _setBootAtMsForTests(bootAt);
+
+    // 命中:turn 开始于本进程启动之前且未收尾 —— 只能是上一个进程留下的。
+    await seedSession(client, 's-prev-process', { startedAt: bootAt - 5000 });
+    // 不命中:turn 开始于本进程启动之后 = 正在跑,不是中断。
+    await seedSession(client, 's-live-turn', { startedAt: bootAt + 1000 });
+
+    expect(await listInterruptedPendingSessionIds()).toEqual(['s-prev-process']);
+
+    // 错误尾行腿与 turn 是否在跑无关(turn 一跑起来就插入 user 行,error 不再是尾行),
+    // 所以它可以周期性重跑:这里飞行中的会话尾行是 user 行 → 不命中。
+    await client.exec(
+      'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ['live-1', 'live-1', 's-live-turn', 'user', '{}', bootAt + 1000],
+    );
+    await seedSession(client, 's-error-tail', { startedAt: bootAt - 5000, endedAt: bootAt - 1000 });
+    await client.exec(
+      'INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ['tail-1', 'tail-1', 's-error-tail', 'error', '{"message":"boom"}', bootAt],
+    );
+    expect(await listErrorTailPendingSessionIds()).toEqual(['s-error-tail']);
+  });
 });

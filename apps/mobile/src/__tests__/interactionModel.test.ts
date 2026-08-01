@@ -97,7 +97,7 @@ describe('interactionModel', () => {
       riskSummary: null,
       canAlwaysAllow: true,
     })).toEqual({
-      title: '可以只允许一次，也可以本会话总是允许',
+      title: '可以只允许一次，也可以本任务总是允许',
       detail: '工具: Bash',
     });
     expect(buildPermissionDecisionSummary({
@@ -197,6 +197,19 @@ describe('interactionModel', () => {
       title: 'Continue the mobile fixture?',
       totalCount: 2,
     });
+  });
+
+  it('marks the selected ask option with an inverse-filled check for single and multi select', () => {
+    const interactionPanelSource = readFileSync(resolve(process.cwd(), 'src/session/InteractionPanel.tsx'), 'utf8');
+
+    // 选中态不能只靠 surfaceChip 底色:dark 下它与卡底几乎同色,单选选完看不出
+    // 选了哪个(线上截图复现)。指示器必须单选/多选都渲染,只在形状上分家。
+    expect(interactionPanelSource).toContain('isMulti ? styles.optionIndicatorSquare : styles.optionIndicatorRound');
+    // 选中 = 反色实底 + ctaText 勾,对齐桌面 ask-checkbox(accent-cta-bg 实底)与
+    // 登录 radio 的「选中反色 + 对勾」体系;不得退回描边勾叠 Square 的弱指示。
+    expect(interactionPanelSource).toContain('optionIndicatorSelected: {');
+    expect(interactionPanelSource).toContain('backgroundColor: colors.cta,');
+    expect(interactionPanelSource).not.toContain('optionCheckboxMark');
   });
 
   it('keeps issue confirmation unsupported in the mobile adapter and panel', () => {
@@ -670,6 +683,22 @@ describe('resolveInteractionResilient', () => {
     }, 's1', 'req-1', { behavior: 'allow' }, { sleep: noSleep });
     expect(resolveCalls).toBe(3);
     expect(pendingCalls).toBe(0);
+  });
+
+  it('BACKPRESSURE 自动退避重试，被控端未执行时不误报失败', async () => {
+    let resolveCalls = 0;
+    await mobileInteractionModel.resolveInteractionResilient({
+      resolveInteraction: async () => {
+        resolveCalls++;
+        if (resolveCalls === 1) {
+          throw Object.assign(new Error('buffer full'), { code: 'BACKPRESSURE' });
+        }
+      },
+      getPendingInteractions: async () => {
+        throw new Error('权威查询不应触发');
+      },
+    }, 's1', 'req-1', { behavior: 'allow' }, { sleep: noSleep });
+    expect(resolveCalls).toBe(2);
   });
 
   it('歧义失败(超时)后 requestId 已不在 pending → 视为已生效,按成功收敛', async () => {

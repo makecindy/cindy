@@ -1,4 +1,8 @@
-import type { AgentEvent, InteractionRequest } from '@cindy/maker-core';
+import {
+  parseReconnectAttemptMessage,
+  type AgentEvent,
+  type InteractionRequest,
+} from '@cindy/maker-core';
 import { DEFAULT_TOOL_ROW_WORDING, type ToolRowWording } from '@cindy/maker-shared/message-presentation';
 
 import { stripTrailingPathSeparators } from '../../shared/pathText';
@@ -33,7 +37,10 @@ export type AgentIslandInteractionRequest =
 export const AGENT_ISLAND_COMPLETION_DWELL_MS = 5_000;
 export const AGENT_ISLAND_ERROR_DWELL_MS = 12_000;
 export const AGENT_ISLAND_REVEAL_DWELL_MS = 5_000;
-export const AGENT_ISLAND_COMPLETION_REVEAL_DWELL_MS = 12_000;
+// 12s → 8s:完成卡片的 dwell 现在能真正走完(临时会话调度 run 收尾时的 closeSession
+// 不再抹掉条目,见 closeAgentIslandSessionPreservingUnread),不需要再用更长的上限去弥补
+// 「随时可能被整条删掉」。
+export const AGENT_ISLAND_COMPLETION_REVEAL_DWELL_MS = 8_000;
 export const AGENT_ISLAND_ERROR_REVEAL_DWELL_MS = 12_000;
 export const AGENT_ISLAND_EXPANDED_MIN_DWELL_MS = 1_000;
 export const AGENT_ISLAND_HOVER_EXPAND_DELAY_MS = 500;
@@ -100,6 +107,8 @@ interface AgentIslandSessionState {
   projectName: string | null;
   detail: string;
   detailSource: 'tool' | 'status' | 'interaction' | null;
+  /** Localized transient reconnect progress; kept separate from tool/interaction detail. */
+  reconnectStatus: string | null;
   currentToolUseId: string | null;
   toolDetailUntil: number | null;
   phase: AgentIslandSessionPhase;
@@ -432,6 +441,7 @@ export function applyAgentIslandUserPrompt(
   session.interactionKind = undefined;
   session.detail = '';
   session.detailSource = null;
+  session.reconnectStatus = null;
   session.currentToolUseId = null;
   session.toolDetailUntil = null;
   clearAssistantStream(session);
@@ -481,6 +491,9 @@ export function applyAgentIslandEvent(
 
   const session = getOrCreateSession(state, meta, now);
   applyMeta(session, meta);
+  if (event.type !== 'error') {
+    session.reconnectStatus = null;
+  }
   session.lastActivityAt = now;
 
   if (event.type === 'text') {
@@ -590,14 +603,26 @@ export function applyAgentIslandEvent(
   }
 
   if (event.type === 'error') {
-    clearAssistantStream(session);
     const data = asRecord(event.data);
     const isTerminal = typeof data?.isTerminal === 'boolean'
       ? data.isTerminal
       : typeof data?.willRetry === 'boolean'
         ? !data.willRetry
         : true;
-    if (!isTerminal) return true;
+    if (!isTerminal) {
+      const message = typeof data?.message === 'string' ? data.message : '';
+      const reconnectAttempt = parseReconnectAttemptMessage(message);
+      session.reconnectStatus = reconnectAttempt
+        ? formatReconnectStatus(
+            state.strings.networkReconnecting,
+            reconnectAttempt.attempt,
+            reconnectAttempt.maxAttempts,
+          )
+        : null;
+      return true;
+    }
+    session.reconnectStatus = null;
+    clearAssistantStream(session);
     session.running = false;
     session.phase = 'error';
     session.interactionKind = undefined;
@@ -634,6 +659,7 @@ export function applyAgentIslandInteractionRequest(
 ): void {
   const session = getOrCreateSession(state, meta, now);
   applyMeta(session, meta);
+  session.reconnectStatus = null;
   session.pendingInteractionIds.add(request.requestId);
   session.pendingInteractionKinds.set(request.requestId, request.kind);
   session.pendingInteractionDetails.set(request.requestId, detailForInteraction(request, state.toolWording));
@@ -851,6 +877,46 @@ export function removeAgentIslandSession(state: AgentIslandState, sessionId: str
     state.pendingFocusSessionId = null;
     state.pendingFocusUntil = null;
   }
+}
+
+/**
+ * 会话**进程**关闭:落下运行态,但保留仍需展示的通知条目。
+ *
+ * 为什么不能直接删:临时会话调度(非 heartbeat、非 persistentSession)在 run 终态之后
+ * 立刻 closeSession(`scheduler-host/runner.ts` 的 fire finally),而完成卡片本该在岛上
+ * 停留数秒。直接删条目会让刚弹出的卡片当场消失 —— 而且不是被别的内容顶掉,是整条记录
+ * 没了,用户看到的就是「弹了一下就收起」。通知是**已发生事件的记录**,生命周期不该绑在
+ * agent session 句柄上。
+ *
+ * 判据复用 `isSessionVisible`:仍需展示(未读终态未过 TTL / dwell 未走完 / 有 pending
+ * 交互)就留着,由既有 lifecycle 到期或用户 ack 收掉;否则照常删除。
+ *
+ * 会话被归档 / 删除、或 Orca worker 被策略清除时**不走这里** —— 那些语义是「这条记录
+ * 不该再存在」,继续用 `removeAgentIslandSession` 硬删。
+ */
+export function closeAgentIslandSessionPreservingUnread(
+  state: AgentIslandState,
+  sessionId: string,
+  now: number,
+): void {
+  const session = state.sessions.get(sessionId);
+  if (!session) {
+    removeAgentIslandSession(state, sessionId);
+    return;
+  }
+  // 进程已经没了,运行态必须落下来,否则 pill 会一直转着 working 动画。
+  session.running = false;
+  session.currentToolUseId = null;
+  session.toolDetailUntil = null;
+  // pending 交互随进程一起失效(service 侧同时会 deletePermissionRequestsForSession)。
+  // 留着会让用户对着一张永远不会被响应的审批卡片点按钮,所以这类条目整条删掉 —— 要保的
+  // 只是「已经发生完、还没被看到」的终态通知。
+  if (session.pendingInteractionIds.size > 0) {
+    removeAgentIslandSession(state, sessionId);
+    return;
+  }
+  if (isSessionVisible(session, now)) return;
+  removeAgentIslandSession(state, sessionId);
 }
 
 export function requestAgentIslandSessionFocus(
@@ -1841,6 +1907,9 @@ function pillTitle(session: AgentIslandSessionState, mode: 'micro' | 'compact'):
 }
 
 function compactDetailForSession(session: AgentIslandSessionState): string {
+  if (session.phase === 'running' && session.reconnectStatus) {
+    return truncateInlineText(session.reconnectStatus, AGENT_ISLAND_COMPACT_DETAIL_MAX_LENGTH);
+  }
   const messagePreview = messagePreviewTextForSession(session);
   if (messagePreview) return truncateInlineText(messagePreview, AGENT_ISLAND_COMPACT_DETAIL_MAX_LENGTH);
 
@@ -1918,6 +1987,7 @@ function getOrCreateSession(
     projectName: projectNameFromWorkingDir(meta.workingDir, meta.workspaceKind),
     detail: '',
     detailSource: null,
+    reconnectStatus: null,
     currentToolUseId: null,
     toolDetailUntil: null,
     phase: 'running',
@@ -2017,11 +2087,12 @@ function applyMeta(session: AgentIslandSessionState, meta: AgentIslandSessionMet
 }
 
 function toSnapshot(session: AgentIslandSessionState): AgentIslandSessionSnapshot {
+  const reconnectStatus = session.phase === 'running' ? session.reconnectStatus : null;
   return {
     sessionId: session.sessionId,
     title: session.title || session.projectName || session.sessionId.slice(0, 8),
     projectName: session.projectName,
-    detail: session.detail,
+    detail: reconnectStatus ?? session.detail,
     compactDetail: compactDetailForSession(session),
     messagePreview: session.messagePreview?.line ?? null,
     phase: session.phase,
@@ -2296,6 +2367,12 @@ function normalizeInlineText(text: string): string {
   return text
     .trim()
     .replace(/\s+/g, ' ');
+}
+
+function formatReconnectStatus(template: string, attempt: number, maxAttempts: number): string {
+  return template
+    .replaceAll('{{attempt}}', String(attempt))
+    .replaceAll('{{maxAttempts}}', String(maxAttempts));
 }
 
 function truncateInlineText(text: string, maxLength: number): string {

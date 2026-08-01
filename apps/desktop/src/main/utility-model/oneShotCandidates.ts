@@ -13,10 +13,13 @@ import { readCachedGenericOAuthAccessToken } from '../maker-host/generic-oauth.j
 import { outboundUndiciFetch as undiciFetch } from '../maker-host/outbound-fetch.js';
 import { claudeUpstreamEndpoint } from '../maker-host/runtime-configs.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
+import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { isProviderRouteMutationInProgress } from '../maker-host/provider-route.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import { getUtilityModelChainProfiles } from './UtilityModelSelection.js';
+import { getUtilityModelProfile, isUtilityModelProviderKind } from '../../shared/utilityModelProfiles.js';
 import type { UtilityModelProfile, UtilityModelTransport } from '../../shared/utilityModelProfiles.js';
 import type {
   UtilityTextAttempt,
@@ -42,10 +45,19 @@ export type UtilityTextCandidate = {
 export type UtilityTextRequestOptions = {
   maxTokens?: number;
   timeoutMs?: number;
+  /** Optional lightweight reasoning hint for short internal classifiers. */
+  reasoningEffort?: 'low' | 'medium' | 'high';
   /** 显式任务来源；存在时禁止跨来源 fallback。 */
   providerId?: string;
   agentKind?: AgentKind;
   model?: string;
+  /**
+   * 钉住某一个轻量档位(UTILITY_MODEL_PROFILES 的 key,如 codex-gpt-5.4-nano)。
+   * 用于插件把 cindy.text.oneshot 的选型钉到一组供应商×模型上——与图像/视频
+   * 的"钉后端"同一口径:**钉了就只用它**,不再沿链回落,否则"我钉了 A 却悄悄
+   * 用了 B"比直接失败更伤信任。不认的值忽略(回到跟随默认)。
+   */
+  pinnedProfileId?: string;
 };
 
 /** Internal resolution result keeps skipped candidates visible to diagnostics. */
@@ -82,14 +94,104 @@ export async function getUtilityTextCandidates(
 }
 
 /** Resolve candidates and retain safe reasons for every skipped profile. */
+/**
+ * utility profile 的真实路由供应商 id(停用 override 的记账主体):
+ * codex-responses 经 OpenAI 订阅下单,litellm-chat-completions 经 XD 网关。
+ * 未知 transport 回退 profile.id(宁可过滤不命中,不误伤)。
+ */
+function utilityProfileRouteProviderId(profile: UtilityModelProfile): string {
+  return utilityRouteProviderIdFor(profile.transport, profile.id);
+}
+
+function utilityRouteProviderIdFor(transport: string | undefined, fallbackId: string): string {
+  switch (transport) {
+    case 'codex-responses':
+      return 'openai';
+    case 'litellm-chat-completions':
+      return 'xd';
+    default:
+      return fallbackId;
+  }
+}
+
+/**
+ * 共享 utility 档位形态的直连消费方(voice-input BYOK 精修链等)复用的停用判定:
+ * 按真实路由供应商(codex-responses→openai,litellm→xd)查 override,供应商级或
+ * 该 (来源, 模型) 条目命中即视为停用(PR #744 review 第十五轮)。
+ */
+export function isUtilityRouteDisabled(profile: {
+  id: string;
+  transport?: string;
+  model: string;
+}): boolean {
+  const overrides = readModelDisableOverrides();
+  const routeProviderId = utilityRouteProviderIdFor(profile.transport, profile.id);
+  return (
+    isProviderDisabled(overrides, routeProviderId) ||
+    isModelDisabled(overrides, routeProviderId, profile.model)
+  );
+}
+
+/**
+ * 供应商级停用的直查入口(voice ASR / embedding 等非目录模型消费方用):这些链路
+ * 的模型不在 chat/media 目录里,逐模型停用无从谈起,但「供应商整体停用」必须生效
+ * —— 它们同样是经该供应商凭证的新付费调用(PR #744 review 第十六轮)。
+ */
+export function isProviderRouteSuspended(providerId: string): boolean {
+  return isProviderDisabled(readModelDisableOverrides(), providerId);
+}
+
+/**
+ * (供应商, 模型) 组合判定:供应商级停用或该模型条目被点名停用任一命中即真。
+ * embedding 等「模型 id 可被逐条停用但不在 chat 目录」的消费方用
+ * (PR #744 review 第十九轮)。
+ */
+export function isProviderModelRouteDisabled(providerId: string, modelId: string): boolean {
+  const overrides = readModelDisableOverrides();
+  return (
+    isProviderDisabled(overrides, providerId) ||
+    isModelDisabled(overrides, providerId, modelId)
+  );
+}
+
 async function resolveUtilityTextCandidates(
   maker: Maker,
   capability: UtilityTextCapability,
+  pinnedProfileId?: string,
 ): Promise<{ candidates: UtilityTextCandidate[]; attempts: UtilityTextAttempt[] }> {
-  const profiles = getUtilityModelChainProfiles();
+  // 钉住某一档时只拿那一个候选:钉了还沿链回落,等于用户的选择被悄悄换掉。
+  // 注意不能从链里筛——默认链只有 4 档,而可钉的档位有 9 个,链外的钉不上。
+  const pinned =
+    pinnedProfileId && isUtilityModelProviderKind(pinnedProfileId)
+      ? getUtilityModelProfile(pinnedProfileId)
+      : null;
+  if (pinnedProfileId && !pinned) {
+    log.warn('utility text pinned profile unknown, falling back to chain', { pinnedProfileId });
+  }
+  const profiles = pinned ? [pinned] : getUtilityModelChainProfiles();
   const candidates: UtilityTextCandidate[] = [];
   const attempts: UtilityTextAttempt[] = [];
+  // 停用轴同样约束 utility one-shot(帮助/摘要/hook 生成):停用的供应商或模型
+  // 不再作为候选付费下单,链路自然落到下一个候选(PR #744 review)。
+  // 注意:profile.id 是逻辑档位键(codex-gpt-5.4-mini / litellm-gpt-5.4-mini),
+  // 而停用 override 按**目录供应商 id** 记账 —— 必须先映射到真实路由供应商
+  // (codex-responses 走 OpenAI 订阅,litellm 走 XD 网关),否则过滤恒不命中
+  // (PR #744 review 第四轮)。
+  const disableOverrides = readModelDisableOverrides();
   for (const profile of profiles) {
+    const routeProviderId = utilityProfileRouteProviderId(profile);
+    if (
+      isProviderDisabled(disableOverrides, routeProviderId) ||
+      isModelDisabled(disableOverrides, routeProviderId, profile.model)
+    ) {
+      log.debug('utility text candidate skipped: disabled in settings', {
+        providerId: routeProviderId,
+        profileId: profile.id,
+        model: profile.model,
+      });
+      attempts.push(skippedAttempt(profile, 'model_unavailable'));
+      continue;
+    }
     if (!capability.transports.includes(profile.transport)) {
       log.debug('utility text candidate skipped: unsupported transport', {
         providerId: profile.id,
@@ -125,6 +227,20 @@ export async function requestUtilityText(
   const explicitProviderId = opts?.providerId?.trim()
     || inferUniqueProviderId(opts?.agentKind, opts?.model);
   if (explicitProviderId) {
+    // 停用轴:显式点名的 (来源, 模型) 被停用 → fail closed,不派发也不落到
+    // 无关的 XD utility fallback chain(与会话路由边界同语义,PR #744 review)。
+    const disableOverrides = readModelDisableOverrides();
+    const explicitModel = opts?.model?.trim();
+    if (
+      isProviderDisabled(disableOverrides, explicitProviderId) ||
+      (explicitModel && isModelDisabled(disableOverrides, explicitProviderId, explicitModel))
+    ) {
+      log.warn('utility text route disabled in settings', {
+        providerId: explicitProviderId,
+        model: explicitModel ?? null,
+      });
+      return { ok: false, reason: 'no_candidate', attempts: [] };
+    }
     return requestExplicitProviderText(prompt, {
       ...opts,
       providerId: explicitProviderId,
@@ -150,8 +266,13 @@ export async function requestUtilityText(
 function inferUniqueProviderId(agentKind: AgentKind | undefined, model: string | undefined): string | undefined {
   const normalizedModel = model?.trim();
   if (!agentKind || !normalizedModel) return undefined;
+  // 停用的 (来源, 模型) 不参与推断:被推断出来也会在派发前被 fail closed,
+  // 提前剔除让「另一家启用的来源」仍能保住所选路由。
+  const disableOverrides = readModelDisableOverrides();
   const matches = getActiveCatalog().providers.filter((provider) =>
     provider.agents.includes(agentKind)
+    && !isProviderDisabled(disableOverrides, provider.id)
+    && !isModelDisabled(disableOverrides, provider.id, normalizedModel)
     && (provider.models[agentKind] ?? []).some((candidate) => candidate.id === normalizedModel),
   );
   const nonXd = matches.filter((provider) => provider.id !== 'xd');
@@ -167,12 +288,20 @@ async function requestDefaultUtilityText(
   const { candidates, attempts } = await resolveUtilityTextCandidates(
     maker,
     opts?.capability ?? { transports: ['codex-responses', 'litellm-chat-completions'] },
+    opts?.pinnedProfileId,
   );
   if (candidates.length === 0) {
     return { ok: false, reason: 'no_candidate', attempts };
   }
 
   for (const candidate of candidates) {
+      // 逐候选执行前按**当前** override 重查(PR #744 review 第二十一轮):前一个
+      // 候选失败/超时可能耗时数十秒,期间本候选可能已被停用 —— 不再对其付费下单,
+      // 记 model_unavailable 落到下一候选。
+      if (isUtilityRouteDisabled(candidate.profile)) {
+        attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
+        continue;
+      }
     try {
       const text = (await candidate.execute(prompt, opts)).trim();
       if (!text) throw new UtilityTextExecutionError({ reason: 'empty_response' });
@@ -284,6 +413,7 @@ async function requestExplicitProviderText(
       transport,
       maxTokens: opts.maxTokens,
       timeoutMs: opts.timeoutMs,
+      reasoningEffort: opts.reasoningEffort,
     });
   }
 
@@ -376,6 +506,7 @@ async function requestExplicitProviderText(
       prompt: text,
       maxTokens: requestOpts?.maxTokens,
       timeoutMs: requestOpts?.timeoutMs,
+      reasoningEffort: requestOpts?.reasoningEffort,
     }),
   };
   return executeCandidates([candidate], prompt, [], opts);
@@ -388,6 +519,12 @@ function inferProviderAgent(provider: ReturnType<typeof getActiveCatalog>['provi
   return undefined;
 }
 
+/** Matches the xAI bridge capability gate: coding/build variants reject `reasoning`. */
+function supportsXaiReasoning(model: string): boolean {
+  const normalized = model.replace(/^xai\//, '');
+  return !(normalized.startsWith('grok-code') || normalized.startsWith('grok-build'));
+}
+
 async function requestBuiltinProviderText(
   prompt: string,
   input: {
@@ -397,6 +534,7 @@ async function requestBuiltinProviderText(
     transport: UtilityModelTransport;
     maxTokens?: number;
     timeoutMs?: number;
+    reasoningEffort?: 'low' | 'medium' | 'high';
   },
 ): Promise<UtilityTextResult> {
   const profile: UtilityModelProfile = {
@@ -430,6 +568,7 @@ async function requestBuiltinProviderText(
         prompt: text,
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
+        reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
       }),
     }], prompt, [], input);
   }
@@ -456,6 +595,7 @@ async function requestBuiltinProviderText(
         prompt: text,
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
+        reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
       }),
     }], prompt, [], input);
   }
@@ -491,6 +631,11 @@ async function requestBuiltinProviderText(
         prompt: text,
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
+        reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
+        // ChatGPT's private Codex Responses endpoint rejects this public API
+        // parameter with HTTP 400. The Auto reviewer enforces its own compact
+        // output ceiling after the response instead.
+        supportsMaxOutputTokens: false,
       }),
     }], prompt, [], input);
   }
@@ -515,6 +660,8 @@ async function requestBuiltinProviderText(
         prompt: text,
         maxTokens: requestOpts?.maxTokens ?? input.maxTokens,
         timeoutMs: requestOpts?.timeoutMs ?? input.timeoutMs,
+        reasoningEffort: requestOpts?.reasoningEffort ?? input.reasoningEffort,
+        supportsReasoning: supportsXaiReasoning(input.model),
       }),
     }], prompt, [], input);
   }
@@ -529,6 +676,17 @@ async function executeCandidates(
   opts?: UtilityTextRequestOptions,
 ): Promise<UtilityTextResult> {
   for (const candidate of candidates) {
+      // 逐候选执行前按**当前** override 重查(PR #744 review 第二十一轮):前一个
+      // 候选失败/超时可能耗时数十秒,期间本候选可能已被停用 —— 不再对其付费下单,
+      // 记 model_unavailable 落到下一候选。
+      // 本函数只服务显式来源路径(custom / builtin),candidate.providerId 就是目录
+      // 供应商 id —— 直接按 (来源, 模型) 查 override,不做 transport 推断:显式
+      // anthropic/custom 走 litellm wire、xai 走 responses wire,按 transport 推断
+      // 会查到 xd/openai 的 override 上(PR #744 review 第二十二轮)。
+      if (isProviderModelRouteDisabled(candidate.providerId, candidate.model)) {
+        attempts.push(skippedAttempt(candidate.profile, 'model_unavailable'));
+        continue;
+      }
     try {
       const text = (await candidate.execute(prompt, opts)).trim();
       if (!text) throw new UtilityTextExecutionError({ reason: 'empty_response' });
@@ -618,6 +776,7 @@ function resolveLiteLlmCandidate(profile: UtilityModelProfile): UtilityTextCandi
         prompt,
         maxTokens: opts?.maxTokens,
         timeoutMs: opts?.timeoutMs,
+        reasoningEffort: opts?.reasoningEffort,
       }),
     },
   };
@@ -630,6 +789,7 @@ async function requestLiteLlmText(input: {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
+  reasoningEffort?: 'low' | 'medium' | 'high';
 }): Promise<string> {
   const controller = new AbortController();
   const timeoutMs = input.timeoutMs ?? 20_000;
@@ -645,6 +805,7 @@ async function requestLiteLlmText(input: {
       body: JSON.stringify({
         model: input.model,
         ...(input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
+        ...(input.reasoningEffort ? { reasoning_effort: input.reasoningEffort } : {}),
         messages: [{ role: 'user', content: input.prompt }],
       }),
     });
@@ -734,20 +895,43 @@ async function requestProviderHttpText(input: {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
+  reasoningEffort?: 'low' | 'medium' | 'high';
+  /** Some coding-specialized models reject their wire's reasoning field. */
+  supportsReasoning?: boolean;
+  /** Unknown custom routes may reject optional fields from an otherwise compatible wire. */
+  retryWithMinimalBodyOnInvalidRequest?: boolean;
+  /** Some private Responses-compatible endpoints reject max_output_tokens. */
+  supportsMaxOutputTokens?: boolean;
 }): Promise<string> {
   const controller = new AbortController();
   const timeoutMs = input.timeoutMs ?? 90_000;
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const body = input.wire === 'responses'
+    const supportsRequestedReasoning = Boolean(
+      input.wire !== 'anthropic-messages'
+      && input.reasoningEffort
+      && input.supportsReasoning !== false,
+    );
+    const hasOptionalRequestFields = input.wire === 'responses'
+      || input.maxTokens !== undefined
+      || supportsRequestedReasoning;
+    const buildBody = (minimal: boolean) => input.wire === 'responses'
       ? {
         model: input.model,
         input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: input.prompt }] }],
-        tools: [],
-        tool_choice: 'auto',
-        parallel_tool_calls: false,
-        store: false,
-        stream: true,
+        ...(!minimal ? {
+          tools: [],
+          tool_choice: 'auto',
+          parallel_tool_calls: false,
+          store: false,
+          stream: true,
+        } : {}),
+        ...(!minimal && input.maxTokens !== undefined && input.supportsMaxOutputTokens !== false
+          ? { max_output_tokens: input.maxTokens }
+          : {}),
+        ...(!minimal && supportsRequestedReasoning
+          ? { reasoning: { effort: input.reasoningEffort } }
+          : {}),
       }
       : input.wire === 'anthropic-messages'
         ? {
@@ -757,18 +941,32 @@ async function requestProviderHttpText(input: {
         }
         : {
           model: input.model,
-          ...(input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
+          ...(!minimal && input.maxTokens !== undefined ? { max_tokens: input.maxTokens } : {}),
+          ...(!minimal && supportsRequestedReasoning
+            ? { reasoning_effort: input.reasoningEffort }
+            : {}),
           messages: [{ role: 'user', content: input.prompt }],
         };
-    const response = await undiciFetch(input.endpoint, {
+    const send = (minimal: boolean) => undiciFetch(input.endpoint, {
       method: 'POST',
       signal: controller.signal,
       headers: {
         ...(input.headers ?? {}),
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(buildBody(minimal)),
     });
+    let response = await send(false);
+    if (
+      !response.ok
+      && (response.status === 400 || response.status === 422)
+      && input.wire !== 'anthropic-messages'
+      && hasOptionalRequestFields
+      && input.retryWithMinimalBodyOnInvalidRequest
+    ) {
+      await response.body?.cancel().catch(() => undefined);
+      response = await send(true);
+    }
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
       throw new UtilityTextExecutionError({ reason: 'http_error', httpStatus: response.status });
@@ -818,6 +1016,7 @@ async function requestCustomProviderText(input: {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
+  reasoningEffort?: 'low' | 'medium' | 'high';
 }): Promise<string> {
   const headers: Record<string, string> = {
     ...(input.headers ?? {}),
@@ -862,6 +1061,8 @@ async function requestCustomProviderText(input: {
     prompt: input.prompt,
     maxTokens: input.maxTokens,
     timeoutMs: input.timeoutMs,
+    reasoningEffort: input.reasoningEffort,
+    retryWithMinimalBodyOnInvalidRequest: true,
   });
 }
 
@@ -929,6 +1130,7 @@ function skippedAttempt(
   reason: Extract<UtilityTextAttemptReason,
     | 'unsupported_transport'
     | 'agent_unavailable'
+    | 'model_unavailable'
     | 'not_authenticated'
     | 'auth_probe_failed'
     | 'api_key_missing'

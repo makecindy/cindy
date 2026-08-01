@@ -38,7 +38,13 @@ export async function withContacts(
   try {
     if (deps.isEnabled && !deps.isEnabled()) {
       return buildJsonResult(
-        { ok: false, code: 'CONTACTS_NOT_READY', message: 'smart contacts disabled in settings' },
+        {
+          ok: false,
+          code: 'CONTACTS_NOT_READY',
+          message:
+            'Smart Contacts is disabled — the user can turn it on in ' +
+            'Settings → Personalization → Smart Contacts (设置 → 个性化 → 智能通讯录)',
+        },
         true,
       );
     }

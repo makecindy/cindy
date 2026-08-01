@@ -33,13 +33,14 @@ import {
   uninstallRemoteAgent,
   checkRemoteCodexAuth,
   pushRemoteCodexAuth,
+  FileHostKeyStore,
+  RemoteHost,
   type AddHostInput,
   type CodexAuthState,
   type HostConfig,
   type HostSnapshot,
   type InstallProgressEvent,
   type RemoteAgentKind,
-  type RemoteHost,
 } from '@cindy/maker-remote-ssh';
 
 import { createLogger } from '../logger.js';
@@ -54,12 +55,31 @@ import {
   readPubkey,
 } from './ssh-keys.js';
 import {
+  getSshHostAgentProxy,
   getSshHostAutoConnect,
   hasAnyAutoConnectHost,
+  isAllowedAgentProxyRemotePort,
+  LEGACY_AGENT_PROXY_REMOTE_PORT,
+  normalizeAgentProxyUrl,
   readSshHostPrefs,
   removeSshHostPref,
+  setSshHostAgentProxy,
   setSshHostAutoConnect,
+  type SshHostAgentProxyPref,
 } from './ssh-host-prefs-store.js';
+import {
+  applyAgentProxyForHost,
+  clearAgentProxyTunnelState,
+  disposeAllTunnels,
+  getAgentProxyTunnelState,
+  getRemoteAgentProxyEnvUppercase,
+  handleAgentProxyMainHostDown,
+  initAgentProxy,
+  killRemoteCodexDaemon,
+  reconcileCodexAgentProxyEnv,
+  teardownAgentProxyOnUserDisconnect,
+  type AgentProxyTunnelState,
+} from './agent-proxy.js';
 import {
   clearCcManagerInstallCache,
   runCcMgrUpgrade,
@@ -67,6 +87,7 @@ import {
   dismissPendingCcMgrUpgrade,
   ensureCcManagerInstalledOrInstall,
 } from './cc-manager-install.js';
+import { removeRemoteMcpForwardPref } from './codex-remote-mcp.js';
 import { ensureDaemonRunning } from '../maker-host/cc-manager-client.js';
 import { softCloseCcSessionsForHost } from '../maker-host/index.js';
 
@@ -175,19 +196,32 @@ const VALID_AGENT_KINDS: ReadonlyArray<RemoteAgentKind> = ['claude-code', 'codex
 let pool: ConnectionPool | null = null;
 let initPromise: Promise<void> | null = null;
 let registered = false;
+/** 与 pool 共享的 host-key store — agent-proxy 隧道专用连接也用它做 TOFU 校验。 */
+let sharedHostKeyStore: FileHostKeyStore | null = null;
+
+function getSharedHostKeyStore(): FileHostKeyStore {
+  if (!sharedHostKeyStore) {
+    // Maker-owned host-key TOFU store. Kept out of the user's real
+    // ~/.ssh/known_hosts so we never mutate their OpenSSH state.
+    sharedHostKeyStore = new FileHostKeyStore(
+      path.join(app.getPath('userData'), 'remote-ssh', 'known-hosts.json'),
+    );
+  }
+  return sharedHostKeyStore;
+}
+
+const poolLogger = {
+  debug: (msg: string, ctx?: Record<string, unknown>) => log.debug(msg, ctx),
+  info: (msg: string, ctx?: Record<string, unknown>) => log.info(msg, ctx),
+  warn: (msg: string, ctx?: Record<string, unknown>) => log.warn(msg, ctx),
+  error: (msg: string, ctx?: Record<string, unknown>) => log.error(msg, ctx),
+};
 
 function getPool(): ConnectionPool {
   if (!pool) {
     pool = new ConnectionPool({
-      logger: {
-        debug: (msg, ctx) => log.debug(msg, ctx),
-        info: (msg, ctx) => log.info(msg, ctx),
-        warn: (msg, ctx) => log.warn(msg, ctx),
-        error: (msg, ctx) => log.error(msg, ctx),
-      },
-      // Maker-owned host-key TOFU store. Kept out of the user's real
-      // ~/.ssh/known_hosts so we never mutate their OpenSSH state.
-      knownHostsPath: path.join(app.getPath('userData'), 'remote-ssh', 'known-hosts.json'),
+      logger: poolLogger,
+      hostKeys: getSharedHostKeyStore(),
     });
   }
   return pool;
@@ -455,13 +489,26 @@ async function ensureHydrated(): Promise<void> {
 /**
  * Snapshot wrapper used in IPC payloads. `HostSnapshot` lives in the
  * transport-only package (@cindy/maker-remote-ssh) and stays free of
- * desktop-side prefs; we wrap it here so renderer gets autoConnect in a
- * single round-trip instead of having to call a second IPC per row.
+ * desktop-side prefs; we wrap it here so renderer gets autoConnect +
+ * agentProxy (+ tunnel 实时状态) in a single round-trip instead of having
+ * to call a second IPC per row.
  */
-export type HostSnapshotWithPrefs = HostSnapshot & { autoConnect: boolean };
+export type HostSnapshotWithPrefs = HostSnapshot & {
+  autoConnect: boolean;
+  /** 未开启 / 未配置 → null。 */
+  agentProxy: SshHostAgentProxyPref | null;
+  /** 隧道实时状态 (仅内存); pref 关闭或无记录 → null。 */
+  agentProxyTunnel: AgentProxyTunnelState | null;
+};
 
 function withPrefs(snapshot: HostSnapshot): HostSnapshotWithPrefs {
-  return { ...snapshot, autoConnect: getSshHostAutoConnect(snapshot.config.id) };
+  const id = snapshot.config.id;
+  return {
+    ...snapshot,
+    autoConnect: getSshHostAutoConnect(id),
+    agentProxy: getSshHostAgentProxy(id),
+    agentProxyTunnel: getAgentProxyTunnelState(id),
+  };
 }
 
 function broadcastStatus(snapshot: HostSnapshot): void {
@@ -472,7 +519,46 @@ function broadcastStatus(snapshot: HostSnapshot): void {
   }
 }
 
-function normalizeAddInput(raw: unknown): AddHostInput {
+function normalizeAgentProxyInput(raw: unknown): SshHostAgentProxyPref | null | undefined {
+  if (raw === undefined) return undefined; // 调用方没提这个字段 — 不动现有 pref
+  if (raw === null) return null; // 显式关闭
+  const obj = requireObject(raw, 'agentProxy');
+  const enabled = obj.enabled === true;
+  if (!enabled) return null;
+  const mode = obj.mode === 'env' ? 'env' : 'tunnel'; // 缺省 tunnel (旧 renderer 兼容)
+  if (mode === 'env') {
+    const proxyUrl = normalizeAgentProxyUrl(obj.proxyUrl);
+    if (!proxyUrl) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        'agentProxy.proxyUrl must be a remote-reachable http(s)/socks5 URL without whitespace/quotes, e.g. http://127.0.0.1:7890',
+      );
+    }
+    return { enabled: true, mode: 'env', proxyUrl };
+  }
+  const localHost = requireString(obj.localHost, 'agentProxy.localHost').trim();
+  // localHost 是本机隧道转发目标 (net.connect 的目的地; 远端 env 永远指向
+  // 127.0.0.1:<隧道口>, 不含这个值)。空白/引号在这里虽无注入面, 但必然是
+  // 用户填错 — 直接拒, 免得隧道建起来却转到一个荒诞地址 (review: PR #715
+  // copilot R3 注释修正)。
+  if (!localHost || /\s/.test(localHost) || localHost.includes("'") || localHost.includes('"')) {
+    throwIpcError('INVALID_PARAMS', 'agentProxy.localHost must be a plain host (no whitespace/quotes), e.g. 127.0.0.1');
+  }
+  const localPort = typeof obj.localPort === 'number' && Number.isInteger(obj.localPort) && obj.localPort > 0 && obj.localPort < 65536
+    ? obj.localPort
+    : NaN;
+  if (!Number.isInteger(localPort)) {
+    throwIpcError('INVALID_PARAMS', 'agentProxy.localPort must be an integer in 1..65535');
+  }
+  // 固定远端端口 — env 静态化的关键; 旧 renderer 不传时沿用迁移缺省。
+  const remotePortRaw = obj.remotePort === undefined ? LEGACY_AGENT_PROXY_REMOTE_PORT : obj.remotePort;
+  if (!isAllowedAgentProxyRemotePort(remotePortRaw)) {
+    throwIpcError('INVALID_PARAMS', 'agentProxy.remotePort must be an integer in 1024..65535 (privileged/service ports are rejected)');
+  }
+  return { enabled: true, mode: 'tunnel', localHost, localPort, remotePort: remotePortRaw };
+}
+
+function normalizeAddInput(raw: unknown): AddHostInput & { agentProxy?: SshHostAgentProxyPref | null } {
   const obj = requireObject(raw, 'host');
   const id = requireString(obj.id, 'id').trim();
   // Alias must be safe to drop into ~/.ssh/config Host directive.
@@ -495,7 +581,8 @@ function normalizeAddInput(raw: unknown): AddHostInput {
   if (authMethod === 'key' && !identityFile) {
     throwIpcError('INVALID_PARAMS', 'identityFile required when authMethod is "key"');
   }
-  return { id, hostname, port, user, authMethod, identityFile };
+  const agentProxy = normalizeAgentProxyInput(obj.agentProxy);
+  return { id, hostname, port, user, authMethod, identityFile, ...(agentProxy !== undefined ? { agentProxy } : {}) };
 }
 
 export function registerRemoteSshIpc(): void {
@@ -503,7 +590,35 @@ export function registerRemoteSshIpc(): void {
   registered = true;
 
   // Wire pool status → renderer broadcast (once, at registration time).
-  getPool().onAnyStatus(broadcastStatus);
+  // ready 转换时顺带应用 agent-proxy 愿望 (建隧道 + codex env 对账): 这是
+  // 所有路径 (手动 connect / autoConnect / 断线重连) 的统一点, 失败只落
+  // tunnel state 不阻断连接, session 路径会显式重试。
+  getPool().onAnyStatus((snap) => {
+    if (snap.status === 'ready') {
+      broadcastStatus(snap);
+      const host = getPool().get(snap.config.id);
+      if (host) void applyAgentProxyForHost(host);
+    } else {
+      // 主连接断连 / 重连中: 隧道保活挂起 (存活的独立隧道连接不拆 — 它
+      // 可能还在正常服务 LLM 流量); 主连接恢复 ready 时上面的 apply 恢复
+      // 保活。状态帧由 keeper 经 onState 汇报, 不在这里手工翻转。
+      handleAgentProxyMainHostDown(snap.config.id);
+      const host = getPool().get(snap.config.id);
+      broadcastStatus(host ? host.snapshot() : snap);
+    }
+  });
+  // agent-proxy 内部状态 (隧道成败 / 端口) 变化 → 推一版最新 snapshot,
+  // 让 detail 面板的隧道状态行即时刷新。隧道走独立 SSH 连接 (与控制面
+  // 隔离, 大流量不拖累 MCP/transport), 共享同一个 host-key store。
+  initAgentProxy({
+    broadcast: (hostId) => {
+      const host = getPool().get(hostId);
+      if (host) broadcastStatus(host.snapshot());
+    },
+    createTunnelHost: (cfg) =>
+      new RemoteHost(cfg, { logger: poolLogger, hostKeys: getSharedHostKeyStore() }),
+    getMainHost: (hostId) => getPool().get(hostId) ?? null,
+  });
 
   ipcMain.handle(REMOTE_SSH_INVOKE.LIST, async () => {
     await ensureHydrated();
@@ -544,6 +659,9 @@ export function registerRemoteSshIpc(): void {
     }
 
     const host = getPool().add(cfg);
+    if (input.agentProxy !== undefined) {
+      setSshHostAgentProxy(cfg.id, input.agentProxy);
+    }
     return { host: withPrefs(host.snapshot()) };
   });
 
@@ -571,9 +689,16 @@ export function registerRemoteSshIpc(): void {
       source: existing.config.source,
     };
 
-    // Disconnect first if active — changing hostname / user / auth method
-    // invalidates the open channel. User will reconnect when ready.
-    if (existing.getStatus() !== 'disconnected') {
+    // 仅当连接字段真的变了才断开 — 只改 agentProxy 偏好不该打断正在用的
+    // SSH 连接 (隧道/会话都在上面)。
+    const prev = existing.config;
+    const connectionFieldsChanged =
+      prev.hostname !== cfg.hostname ||
+      prev.user !== cfg.user ||
+      prev.port !== cfg.port ||
+      prev.authMethod !== cfg.authMethod ||
+      prev.identityFile !== cfg.identityFile;
+    if (connectionFieldsChanged && existing.getStatus() !== 'disconnected') {
       await existing.disconnect();
     }
 
@@ -583,6 +708,15 @@ export function registerRemoteSshIpc(): void {
       throwIpcError('SSH_CONFIG_IO_FAILED', `update ~/.ssh/config failed: ${String(err)}`);
     }
     existing.updateConfig(cfg);
+
+    // agentProxy 偏好: 写盘 + host 活着就立即应用 (建/拆隧道 + codex daemon
+    // env 对账)。host 未连时只落 pref, 下次 ready 时由 ready hook 应用。
+    if (input.agentProxy !== undefined) {
+      setSshHostAgentProxy(cfg.id, input.agentProxy);
+      if (existing.getStatus() === 'ready') {
+        await applyAgentProxyForHost(existing);
+      }
+    }
     return { host: withPrefs(existing.snapshot()) };
   });
 
@@ -608,8 +742,11 @@ export function registerRemoteSshIpc(): void {
 
     await getPool().remove(id);
     // 同步清掉 prefs 里的孤儿 autoConnect 标志, 避免后续重新 add 同名 host 时
-    // 拿到旧偏好造成"莫名其妙又自动连了"。同步清 agent install cache。
+    // 拿到旧偏好造成"莫名其妙又自动连了"。同步清 agent install cache、agent
+    // proxy 隧道状态与 per-host MCP 转发端口记录。
     removeSshHostPref(id);
+    clearAgentProxyTunnelState(id);
+    removeRemoteMcpForwardPref(id);
     remoteAgentInstalledCache.delete(id);
     clearCcManagerInstallCache(id);
     return { ok: true as const };
@@ -644,6 +781,14 @@ export function registerRemoteSshIpc(): void {
   ipcMain.handle(REMOTE_SSH_INVOKE.DISCONNECT, async (_event, args: unknown) => {
     const obj = requireObject(args);
     const id = requireString(obj.id, 'id');
+    // 显式断开 = 切断这台机器的全部 SSH 连通 — 独立隧道连接一并拆
+    // (与断线/重连的 pause 语义区分, review: PR #992 codex-connector P1)。
+    await teardownAgentProxyOnUserDisconnect(id).catch((err) => {
+      log.warn('agent-proxy tunnel teardown on user disconnect failed', {
+        hostId: id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
     await getPool().disconnect(id);
     return { host: getPool().get(id)?.snapshot() ?? null };
   });
@@ -736,6 +881,10 @@ export function registerRemoteSshIpc(): void {
     // Claude: inject local API key + upstream endpoint via STDIN (not cmd
     // args) — see claude-env.ts header for security model. Codex relies on
     // ~/.codex/auth.json on the remote (synced via "Sync auth").
+    //
+    // agentProxy pref 开启时把代理 env 一并注入 (quick test 因此同时验证
+    // 代理链路是否可用): claude 走 envBlock (gatekeeper 只收大写), codex
+    // 的 wrapper 统一 source agent-proxy.env marker, 与 daemon 行为一致。
     let envBlock: string | null = null;
     if (agentKind === 'claude-code') {
       const env = getRemoteClaudeEnv();
@@ -745,7 +894,32 @@ export function registerRemoteSshIpc(): void {
           'Cindy AI is not connected in Cindy; connect it in Settings → Model Providers first',
         );
       }
-      envBlock = serializeEnvBlock(env);
+      // tunnel 模式内部会等隧道 armed (超时抛错, fail-closed 不静默直连);
+      // env 模式直接注入用户给的 URL。
+      const proxyEnv = await getRemoteAgentProxyEnvUppercase(host);
+      const envWithProxy = proxyEnv ? { ...env, ...proxyEnv } : env;
+      envBlock = serializeEnvBlock(envWithProxy);
+    } else {
+      // codex one-shot: wrapper 读的是 marker 文件而非直接 env — 先跑
+      // reconcile (marker 对账), 保证 quick test 与真实 daemon 链路一致。
+      // markerChanged && !daemonRestarted = 旧 daemon 活着跑旧 env, marker 已
+      // 回滚 — one-shot 若继续会 source 不到新 proxy marker 而直连, 与
+      // daemon-probe 路径的 fail-closed 不一致 (codex R12 P1): 显式失败。
+      // deferredForLiveTurn = 有远端任务在跑, 对账推迟 — quick test 会以
+      // 旧 env 运行, 提示用户稍后再试而不是 mid-turn 杀 daemon。
+      const reconciled = await reconcileCodexAgentProxyEnv(host);
+      if (reconciled.deferredForLiveTurn) {
+        throwIpcError(
+          'INTERNAL',
+          'agent-proxy settings changed while a remote turn is running; quick test deferred — retry after the current task finishes',
+        );
+      }
+      if (reconciled.markerChanged && !reconciled.daemonRestarted) {
+        throwIpcError(
+          'INTERNAL',
+          'codex daemon survived pkill after agent-proxy env change; quick test would run with the wrong network route (retry or restart the host)',
+        );
+      }
     }
 
     const cmd = oneShotCommand(agentKind, probe.binaryPath, envBlock != null);
@@ -831,74 +1005,20 @@ export function registerRemoteSshIpc(): void {
     // Retry 还是撞同一个 401。pkill 杀掉后, desktop 端下次 send 走 ensureStarted →
     // `daemon version` 探活失败 → bootstrap 新 daemon → 读到新 auth.json → 成功。
     //
-    // pattern 设计:
-    // - 匹配 `codex app-server` 两词 literal —— 覆盖 daemon 主进程 + sock proxy
-    //   子进程 + 任何 `codex app-server <subcommand>` 长跑进程。**注意**: daemon
-    //   主进程的 cmdline 是 `codex app-server --remote-control --listen unix://`,
-    //   **不包含 "daemon" 字**; 只有 worker 子进程 cmdline 含 `daemon pid-update-loop`。
-    //   早期 pattern 写 `codex app-server daemon` 只杀 worker 不杀主进程, 导致
-    //   sync 后 daemon 还在跑用旧 auth, 复现 401。
-    // - 第一个字母套字符类 `[c]odex` —— 经典 ps/grep 自排除 trick: regex `[c]odex`
-    //   等价于 `codex`, 匹配真 daemon 的 cmdline; 但 pkill 命令自身的 cmdline 里
-    //   出现的是字面 `[c]odex` (有方括号), regex 找不到 5 连续字符 `codex`, 所以
-    //   pkill 不会把自己 kill 掉。
-    // - 用 `id -un` 而非 `$USER` 取当前用户名 + `-u "$USER_NAME"` 限制只杀当前
-    //   SSH user 的进程, 防误伤别人。某些非交互 ssh shell ($USER 未设) 会让
-    //   `pkill -u ""` 默默匹配 0 进程, 用 `id -un` 兜底; 取到空再 exit 2。
-    // - 误杀风险评估: 短暂的 `codex app-server daemon version` 探活命令也会被命中,
-    //   但它本身只跑几毫秒, 命中窗口极小; desktop 端探活失败会自动重试 bootstrap,
-    //   即使命中也无害。一次性的 `codex --print` / `codex exec` 不命中此 pattern。
-    // - exit code: pkill rc=0 杀到, rc=1 没匹配 (全新机器从没启过 daemon, 也算成功),
-    //   rc>1 真错误 (pattern 不合法 / 权限 / pkill 缺失) → script 透传 rc, 上层
-    //   log.warn 但不抛 IPC error, 因为 auth.json 已经推到远端是已经完成的事,
-    //   失败时用户至少能从日志看到 daemon 重启失败。
+    // pkill 实现抽成了共享 helper (agent-proxy.ts:killRemoteCodexDaemon) —
+    // agent-proxy 的 env marker 漂移时也要走同一条 daemon 重启路径。pattern 的
+    // 设计考量 ([c]odex 自排除 / .xdt-server 路径限定 / id -un 取用户) 见 helper 注释。
+    //
     // pkill 失败时不再 silently swallow — propagate 给 renderer 显示软提示 "auth
     // 已推上去, 但 daemon 没重启成功, 要 reconnect / 手动重启 daemon 后才能用新
     // auth"。auth.json 已成功落盘所以 ok=true; daemonRestart 字段告诉 renderer
     // 是否需要降级显示。
-    let daemonRestart: { ok: true } | { ok: false; reason: 'pkill_failed'; detail?: string } = {
-      ok: true as const,
-    };
-    // pkill pattern: 加 .xdt-server 路径限定 — 远端 transport 把 xdt 自家 daemon
-    // 装在 $HOME/.xdt-server/v1/codex-home + 通过 $HOME/.xdt-server/v1/<bin> 启动,
-    // 进程 cmdline 必然含 ".xdt-server" 子串。旧 pattern `'[c]odex app-server'`
-    // 在共享 SSH 账号场景误杀用户**自己装在别处的** codex app-server。
-    // - `[c]odex` 自排除 trick 保留: pkill 自己的 cmdline 字面包含 `[c]odex`, 不
-    //   匹配 5 连续字符 `codex`, 所以不杀 pkill 自己。
-    // - `.*` 跨段匹配 — 用户进程 cmdline 形如 `node .../xdt-server/.../codex
-    //   app-server --remote-control ...`, 我们要求整条 cmdline 同时含 .xdt-server
-    //   AND `codex app-server`。
-    try {
-      const killScript = `
-USER_NAME=$(id -un 2>/dev/null)
-if [ -z "$USER_NAME" ]; then echo "id -un returned empty" >&2; exit 2; fi
-pkill -u "$USER_NAME" -f '\\.xdt-server.*[c]odex app-server'
-rc=$?
-case "$rc" in
-  0|1) exit 0 ;;
-  *) echo "pkill rc=$rc" >&2; exit "$rc" ;;
-esac
-`;
-      const result = await host.exec(`bash -c ${shellQuoteSh(killScript)}`, {
-        timeoutMs: 5_000,
-        label: 'kill-codex-daemon-post-sync',
-      });
-      if (result.exitCode !== 0) {
-        const detail = result.stderr.trim().slice(0, 200);
-        log.warn('failed to kill remote codex daemon after auth sync (auth.json pushed ok, but daemon may still use old auth)', {
-          hostId: id,
-          exitCode: result.exitCode,
-          stderr: detail,
-        });
-        daemonRestart = { ok: false, reason: 'pkill_failed', detail };
-      }
-    } catch (err) {
-      const detail = String((err as Error).message ?? err);
-      log.warn('failed to kill remote codex daemon after auth sync (will reload on next reconnect)', {
+    const daemonRestart = await killRemoteCodexDaemon(host);
+    if (!daemonRestart.ok) {
+      log.warn('failed to kill remote codex daemon after auth sync (auth.json pushed ok, but daemon may still use old auth)', {
         hostId: id,
-        error: detail,
+        detail: daemonRestart.detail,
       });
-      daemonRestart = { ok: false, reason: 'pkill_failed', detail };
     }
 
     return { ok: true as const, daemonRestart };
@@ -1448,7 +1568,14 @@ function oneShotCommand(
   let envSetup: string;
   if (agentKind === 'codex') {
     const codexHome = binaryPath.replace(/\/packages\/standalone\/current\/codex$/, '');
-    envSetup = `export CODEX_HOME=${shellQuoteSh(codexHome)}`;
+    const installRoot = codexHome.replace(/\/codex-home$/, '');
+    const markerPath = `${installRoot}/agent-proxy.env`;
+    // source agent-proxy marker (agentProxy pref 开启时由 reconcile 写入) —
+    // 与 daemon wrapper 同源, quick test 走的就是真实会话的代理链路。
+    envSetup = [
+      `export CODEX_HOME=${shellQuoteSh(codexHome)}`,
+      `if [ -f ${shellQuoteSh(markerPath)} ]; then . ${shellQuoteSh(markerPath)}; fi`,
+    ].join('\n');
   } else {
     const installDir = binaryPath.replace(/\/node_modules\/\.bin\/[^/]+$/, '');
     const nodeBinDir = `${installDir}/node/bin`;
@@ -1490,8 +1617,9 @@ function shellQuoteSh(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
-/** Tear down all live connections. Hook into onQuit. */
+/** Tear down all live connections (含 agent-proxy 隧道专用连接). Hook into onQuit. */
 export async function disposeRemoteSshPool(): Promise<void> {
+  await disposeAllTunnels().catch(() => undefined);
   if (!pool) return;
   await pool.dispose();
   pool = null;

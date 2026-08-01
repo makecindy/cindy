@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isImagePath } from '../features/cc-agent/workdir-browse/lib/imageExt';
+import { isImagePath, isLightboxImagePath } from '../features/cc-agent/workdir-browse/lib/imageExt';
 
 describe('workdir-browse image extensions', () => {
   it('recognizes ordinary bitmap image paths case-insensitively', () => {
@@ -16,5 +16,11 @@ describe('workdir-browse image extensions', () => {
     expect(isImagePath('assets/logo.svg')).toBe(false);
     expect(isImagePath('assets/archive.zip')).toBe(false);
     expect(isImagePath('README')).toBe(false);
+  });
+
+  it('includes svg in the full-screen lightbox path', () => {
+    expect(isLightboxImagePath('assets/logo.SVG')).toBe(true);
+    expect(isLightboxImagePath('assets/photo.png')).toBe(true);
+    expect(isLightboxImagePath('assets/archive.zip')).toBe(false);
   });
 });

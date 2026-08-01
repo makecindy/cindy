@@ -19,6 +19,7 @@
       },
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
+        "UIViewControllerBasedStatusBarAppearance": true,
         "UISupportedInterfaceOrientations": [
           "UIInterfaceOrientationPortrait",
           "UIInterfaceOrientationPortraitUpsideDown",
@@ -125,7 +126,7 @@
         {
           "photosPermission": "Cindy needs photo library access to attach images to remote sessions.",
           "cameraPermission": "Cindy needs camera access to attach photos to remote sessions.",
-          "microphonePermission": "Cindy needs microphone access for voice input in remote sessions."
+          "microphonePermission": false
         }
       ],
       [

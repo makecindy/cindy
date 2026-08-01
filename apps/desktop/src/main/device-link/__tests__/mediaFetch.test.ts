@@ -102,8 +102,9 @@ describe('fetchLocalMediaToOss — scheme 路由', () => {
   });
 
   it('SSH xdt-file → 远程磁盘缓存→上传，不触发本机 realpath', async () => {
-    const url = 'xdt-file://open?path=%2Fhome%2Fu%2Fproj%2Fartifacts%2Fplot.png'
-      + '&sessionId=session-ssh&remoteHostId=host-1&workdir=%2Fhome%2Fu%2Fproj&v=message-1';
+    const url =
+      'xdt-file://open?path=%2Fhome%2Fu%2Fproj%2Fartifacts%2Fplot.png' +
+      '&sessionId=session-ssh&remoteHostId=host-1&workdir=%2Fhome%2Fu%2Fproj&v=message-1';
     const result = await fetchLocalMediaToOss({ url });
 
     expect(getSessionFsSnapshot).toHaveBeenCalledWith('session-ssh');
@@ -112,7 +113,9 @@ describe('fetchLocalMediaToOss — scheme 路由', () => {
       url,
     );
     expect(realpathMock).not.toHaveBeenCalled();
-    expect(uploadLocalFile).toHaveBeenCalledWith('/cache/ssh/plot.png', { contentType: 'image/png' });
+    expect(uploadLocalFile).toHaveBeenCalledWith('/cache/ssh/plot.png', {
+      contentType: 'image/png',
+    });
     expect(result).toEqual({
       ossKey: 'cindy/device-link/u/uuid.ext',
       mimeType: 'image/png',
@@ -125,8 +128,9 @@ describe('fetchLocalMediaToOss — scheme 路由', () => {
       expect(p).toBe('/cache/ssh/plot.png');
       return Buffer.from([7, 8]);
     });
-    const url = 'xdt-file://open?path=%2Fhome%2Fu%2Fproj%2Fartifacts%2Fplot.png'
-      + '&sessionId=session-ssh&remoteHostId=host-1&workdir=%2Fhome%2Fu%2Fproj';
+    const url =
+      'xdt-file://open?path=%2Fhome%2Fu%2Fproj%2Fartifacts%2Fplot.png' +
+      '&sessionId=session-ssh&remoteHostId=host-1&workdir=%2Fhome%2Fu%2Fproj';
     const result = await fetchLocalMediaToOss({ url, thumbnail: true });
 
     expect(result.inlineBase64).toBe(Buffer.from([7, 8]).toString('base64'));
@@ -141,14 +145,20 @@ describe('fetchLocalMediaToOss — 校验', () => {
   });
   it('不支持的 scheme → 抛错', async () => {
     expect(await codeOf(() => fetchLocalMediaToOss({ url: 'https://x/y.png' }))).toMatch(/不支持/);
-    expect(await codeOf(() => fetchLocalMediaToOss({ url: 'xdt-model://s/m.glb' }))).toMatch(/不支持/);
+    expect(await codeOf(() => fetchLocalMediaToOss({ url: 'xdt-model://s/m.glb' }))).toMatch(
+      /不支持/,
+    );
   });
   it('file path 非绝对 → 抛错,不上传', async () => {
-    expect(await codeOf(() => fetchLocalMediaToOss({ url: 'xdt-file://local/?path=rel.png' }))).toMatch(/绝对路径/);
+    expect(
+      await codeOf(() => fetchLocalMediaToOss({ url: 'xdt-file://local/?path=rel.png' })),
+    ).toMatch(/绝对路径/);
     expect(uploadLocalFile).not.toHaveBeenCalled();
   });
   it('file 缺 path → 抛错', async () => {
-    expect(await codeOf(() => fetchLocalMediaToOss({ url: 'xdt-file://local/' }))).toMatch(/缺少 path/);
+    expect(await codeOf(() => fetchLocalMediaToOss({ url: 'xdt-file://local/' }))).toMatch(
+      /缺少 path/,
+    );
   });
   it.each([
     'xdt-file://open?path=%2Fhome%2Fu%2Fproj%2Fa.png&remoteHostId=host-1',
@@ -163,8 +173,9 @@ describe('fetchLocalMediaToOss — 校验', () => {
   });
   it('SSH session 不存在 → 拒绝且不触碰远端文件服务', async () => {
     getSessionFsSnapshot.mockResolvedValueOnce(null);
-    const url = 'xdt-file://open?path=%2Fhome%2Fu%2Fproj%2Fa.png'
-      + '&sessionId=missing&remoteHostId=host-1&workdir=%2Fhome%2Fu%2Fproj';
+    const url =
+      'xdt-file://open?path=%2Fhome%2Fu%2Fproj%2Fa.png' +
+      '&sessionId=missing&remoteHostId=host-1&workdir=%2Fhome%2Fu%2Fproj';
     expect(await codeOf(() => fetchLocalMediaToOss({ url }))).toMatch(/会话不存在/);
     expect(materializeSshRemoteMedia).not.toHaveBeenCalled();
   });
@@ -175,8 +186,9 @@ describe('fetchLocalMediaToOss — 校验', () => {
       planModeEnabled: false,
       remoteHostId: null,
     });
-    const url = 'xdt-file://open?path=%2Frepo%2Fa.png'
-      + '&sessionId=session-local&remoteHostId=host-1&workdir=%2Frepo';
+    const url =
+      'xdt-file://open?path=%2Frepo%2Fa.png' +
+      '&sessionId=session-local&remoteHostId=host-1&workdir=%2Frepo';
     expect(await codeOf(() => fetchLocalMediaToOss({ url }))).toMatch(/不是有效的 SSH 会话/);
     expect(materializeSshRemoteMedia).not.toHaveBeenCalled();
   });
@@ -184,9 +196,10 @@ describe('fetchLocalMediaToOss — 校验', () => {
     ['other-host', '/home/u/proj'],
     ['host-1', '/'],
   ])('SSH URL host/workdir 与会话记录不一致 → 拒绝（%s, %s）', async (remoteHostId, workdir) => {
-    const url = 'xdt-file://open?path=%2Fhome%2Fu%2Fproj%2Fa.png'
-      + `&sessionId=session-ssh&remoteHostId=${encodeURIComponent(remoteHostId)}`
-      + `&workdir=${encodeURIComponent(workdir)}`;
+    const url =
+      'xdt-file://open?path=%2Fhome%2Fu%2Fproj%2Fa.png' +
+      `&sessionId=session-ssh&remoteHostId=${encodeURIComponent(remoteHostId)}` +
+      `&workdir=${encodeURIComponent(workdir)}`;
     expect(await codeOf(() => fetchLocalMediaToOss({ url }))).toMatch(/上下文与会话记录不一致/);
     expect(materializeSshRemoteMedia).not.toHaveBeenCalled();
   });
@@ -196,8 +209,9 @@ describe('fetchLocalMediaToOss — 校验', () => {
       status: 403,
       message: '媒体路径不在 SSH 会话工作目录内',
     });
-    const url = 'xdt-file://open?path=%2Ftmp%2Fa.png'
-      + '&sessionId=session-ssh&remoteHostId=host-1&workdir=%2Fhome%2Fu%2Fproj';
+    const url =
+      'xdt-file://open?path=%2Ftmp%2Fa.png' +
+      '&sessionId=session-ssh&remoteHostId=host-1&workdir=%2Fhome%2Fu%2Fproj';
     expect(await codeOf(() => fetchLocalMediaToOss({ url }))).toMatch(/SSH 媒体取回失败（403）/);
     expect(realpathMock).not.toHaveBeenCalled();
     expect(uploadLocalFile).not.toHaveBeenCalled();
@@ -331,14 +345,20 @@ describe('fetchLocalMediaToOss — 图片上传去重', () => {
     }
     expect(__testing.uploadCache.size).toBe(__testing.UPLOAD_CACHE_MAX);
     expect(__testing.uploadCache.has('xdt-image://sess/0.png')).toBe(false);
-    expect(__testing.uploadCache.has(`xdt-image://sess/${__testing.UPLOAD_CACHE_MAX}.png`)).toBe(true);
+    expect(__testing.uploadCache.has(`xdt-image://sess/${__testing.UPLOAD_CACHE_MAX}.png`)).toBe(
+      true,
+    );
   });
 });
 
 describe('__testing.parsePathQuery', () => {
   it('POSIX / Windows 绝对路径放行', () => {
-    expect(__testing.parsePathQuery('xdt-file://local/?path=%2Fabs%2Fx.pdf')).toBe(path.resolve('/abs/x.pdf'));
-    expect(__testing.parsePathQuery('xdt-file://local/?path=C%3A%5Cusers%5Cx.pdf')).toMatch(/x\.pdf$/);
+    expect(__testing.parsePathQuery('xdt-file://local/?path=%2Fabs%2Fx.pdf')).toBe(
+      path.resolve('/abs/x.pdf'),
+    );
+    expect(__testing.parsePathQuery('xdt-file://local/?path=C%3A%5Cusers%5Cx.pdf')).toMatch(
+      /x\.pdf$/,
+    );
   });
 });
 
@@ -363,17 +383,27 @@ describe('thumbnail inline 回包', () => {
   it('渲染失败 / 放弃(null)/ 产物超限 → 回落原图上传路径', async () => {
     imageResolve.mockReturnValue({ absPath: '/cache/a.png', mimeType: 'image/png' });
 
-    __testing.setThumbnailRenderer(async () => { throw new Error('sharp boom'); });
+    __testing.setThumbnailRenderer(async () => {
+      throw new Error('sharp boom');
+    });
     let out = await fetchLocalMediaToOss({ url: 'xdt-image://sess/a.png', thumbnail: true });
     expect(out.inlineBase64).toBeUndefined();
     expect(out.ossKey).not.toBe('');
 
     __testing.setThumbnailRenderer(async () => null);
-    out = await fetchLocalMediaToOss({ url: 'xdt-image://sess/a.png', thumbnail: true, skipCache: true });
+    out = await fetchLocalMediaToOss({
+      url: 'xdt-image://sess/a.png',
+      thumbnail: true,
+      skipCache: true,
+    });
     expect(out.inlineBase64).toBeUndefined();
 
     __testing.setThumbnailRenderer(async () => Buffer.alloc(__testing.THUMB_INLINE_MAX_BYTES + 1));
-    out = await fetchLocalMediaToOss({ url: 'xdt-image://sess/a.png', thumbnail: true, skipCache: true });
+    out = await fetchLocalMediaToOss({
+      url: 'xdt-image://sess/a.png',
+      thumbnail: true,
+      skipCache: true,
+    });
     expect(out.inlineBase64).toBeUndefined();
     expect(uploadLocalFile).toHaveBeenCalledTimes(3);
   });
@@ -418,8 +448,17 @@ describe('thumbnail 护栏(输入体量 + 渲染超时)', () => {
     vi.useFakeTimers();
     imageResolve.mockReturnValue({ absPath: '/cache/slow.png', mimeType: 'image/png' });
     statMock.mockResolvedValue({ size: 1000, mtimeMs: 1 });
-    __testing.setThumbnailRenderer(() => new Promise(() => { /* 永不 resolve,模拟 sharp 卡死 */ }));
-    const pending = fetchLocalMediaToOss({ url: 'xdt-image://sess/slow.png', thumbnail: true, skipCache: true });
+    __testing.setThumbnailRenderer(
+      () =>
+        new Promise(() => {
+          /* 永不 resolve,模拟 sharp 卡死 */
+        }),
+    );
+    const pending = fetchLocalMediaToOss({
+      url: 'xdt-image://sess/slow.png',
+      thumbnail: true,
+      skipCache: true,
+    });
     await vi.advanceTimersByTimeAsync(__testing.THUMB_RENDER_TIMEOUT_MS + 1);
     const out = await pending;
     expect(out.inlineBase64).toBeUndefined();

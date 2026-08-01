@@ -11,11 +11,11 @@
  *
  * 实现注意：草稿样式与普通 SessionItem 差异较大（italic + 灰色 + 不同 padding），
  * 不复用 SessionItem 而是另起一份小行内组件。重命名/删除功能本期保持现有
- * SessionItem 在 New Maker 行的能力——草稿同样可走 SessionItem，只是套上"看起来像
+ * SessionItem 在未起名草稿行上的能力——草稿同样可走 SessionItem，只是套上"看起来像
  * 未绑定"的视觉壳。这里的实现：直接复用 SessionItem，让交互一致；外层不再叠加
- * Draft 样式，因为 New Maker 的视觉与设计稿一致（普通 32px 行）。设计稿 italic
- * 的灰字仅用于纯文字提示态——本期所有 unclassified 都是真实 Session（包括 New
- * CCS 草稿），照普通行渲染即可，文字本身已是 "New Maker"。
+ * Draft 样式，因为未起名草稿的视觉与设计稿一致（普通 32px 行）。设计稿 italic
+ * 的灰字仅用于纯文字提示态——本期所有 unclassified 都是真实 Session（包括未起名
+ * 草稿），照普通行渲染即可，标题由 `lib/sessionDisplayTitle` 兜底成「未命名任务」。
  */
 
 import { SessionEntryList } from '../SessionEntryList';

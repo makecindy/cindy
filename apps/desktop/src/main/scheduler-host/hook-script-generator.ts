@@ -5,7 +5,7 @@
  *
  * 设计要点(规则 9:确定性逻辑全在代码里,LLM 只产脚本正文):
  *   - 统一生成 **Node ESM (.mjs)** 脚本:跨平台唯一可行的公共载体
- *     (bash Windows 没有、cmd/PowerShell macOS 没有;XDMaker 用户机器上
+ *     (bash Windows 没有、cmd/PowerShell macOS 没有;Cindy 用户机器上
  *     node 由开发环境保证,生成的命令显式写 `node`,与 hook 执行器的
  *     Windows shebang 限制天然兼容)。
  *   - 代码负责:prompt 组装、代码块提取、文件名/路径解析、落盘、命令拼装;

@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ModelAccessGatewayModel } from '../modelAccess.js';
-import {
-  gatewayPricingCatalog,
-  resolveGatewayCatalogCurrency,
-} from '../modelPriceQuote.js';
+import { gatewayPricingCatalog } from '../modelPriceQuote.js';
 
 function model(
   id: string,
@@ -18,130 +15,55 @@ function model(
   };
 }
 
-describe('resolveGatewayCatalogCurrency', () => {
-  it('defaults to gateway-native USD when nothing is declared', () => {
-    expect(resolveGatewayCatalogCurrency([model('a'), model('b')])).toBe('USD');
-    expect(resolveGatewayCatalogCurrency([])).toBe('USD');
-  });
-
-  it('switches only when every entry explicitly declares the same non-USD currency', () => {
+describe('gatewayPricingCatalog', () => {
+  it('rejects the whole catalog when the Gateway declares mixed currencies', () => {
+    // 混币目录已被 resolveGatewayAccountCurrency 判定不可信(账本随之回退构建币种)。
+    // 若这里继续产出混币 catalog，非账本币种的那部分模型金额会被账本写入守卫选择性
+    // 丢弃，形成"按模型漏记账"——比整份没有报价更难发现。
     expect(
-      resolveGatewayCatalogCurrency([
-        model('a', { currency: 'CNY' }),
-        model('b', { currency: 'CNY' }),
-      ]),
-    ).toBe('CNY');
+      gatewayPricingCatalog(
+        [model('a', { currency: 'CNY' }), model('b', { currency: 'USD' }), model('c')],
+        'cn',
+      ),
+    ).toEqual({});
   });
 
-  it('keeps undeclared entries USD — a partial CNY declaration never flips the catalog', () => {
-    expect(
-      resolveGatewayCatalogCurrency([
-        model('a', { currency: 'CNY' }),
-        model('b'),
-      ]),
-    ).toBe('USD');
-  });
-
-  it('treats mixed declarations as USD — local ledgers are single-currency', () => {
-    expect(
-      resolveGatewayCatalogCurrency([
-        model('a', { currency: 'CNY' }),
-        model('b', { currency: 'USD' }),
-      ]),
-    ).toBe('USD');
-  });
-
-  it('ignores invalid declaration values', () => {
-    expect(
-      resolveGatewayCatalogCurrency([
-        model('a', { currency: 'EUR' as unknown as 'USD' }),
-      ]),
-    ).toBe('USD');
-  });
-
-  it('excludes price-less entries from the vote — a metadata-only sibling cannot pin CNY catalogs to USD', () => {
-    expect(
-      resolveGatewayCatalogCurrency([
-        model('a', { currency: 'CNY' }),
-        model('doc', {
-          inputCostPerToken: undefined,
-          outputCostPerToken: undefined,
-        }),
-      ]),
-    ).toBe('CNY');
-  });
-
-  it('excludes zero-priced (free) entries from the vote', () => {
-    expect(
-      resolveGatewayCatalogCurrency([
-        model('a', { currency: 'CNY' }),
-        model('free', { inputCostPerToken: 0, outputCostPerToken: 0 }),
-      ]),
-    ).toBe('CNY');
-  });
-
-  it('still keeps the catalog USD when a priced entry lacks the declaration', () => {
-    expect(
-      resolveGatewayCatalogCurrency([
-        model('a', { currency: 'CNY' }),
-        model('b'),
-        model('doc', {
-          inputCostPerToken: undefined,
-          outputCostPerToken: undefined,
-        }),
-      ]),
-    ).toBe('USD');
-  });
-});
-
-describe('gatewayPricingCatalog currency', () => {
-  it('drops conflicting declared entries instead of relabeling their prices', () => {
-    const catalog = gatewayPricingCatalog([
-      model('a', { currency: 'CNY' }),
-      model('b', { currency: 'USD' }),
-      model('c'),
-    ]);
-    expect(Object.keys(catalog.xd)).toEqual(['b', 'c']);
-    expect(Object.values(catalog.xd).map((quote) => quote.currency)).toEqual([
+  it('lets a single declared currency cover the models that omit it', () => {
+    // 同一账号的目录币种是统一的:省略 currency 的条目跟随同目录已声明的币种，
+    // 而不是各自回落构建区域(那会产出跨币种目录)。
+    const catalog = gatewayPricingCatalog(
+      [model('a', { currency: 'USD' }), model('b')],
+      'cn',
+    );
+    expect(Object.keys(catalog.xd ?? {})).toEqual(['a', 'b']);
+    expect(Object.values(catalog.xd ?? {}).map((quote) => quote.currency)).toEqual([
       'USD',
       'USD',
     ]);
   });
 
-  it('labels every quote with the catalog currency when all entries declare it', () => {
-    const catalog = gatewayPricingCatalog([
-      model('a', { currency: 'CNY' }),
-      model('b', { currency: 'CNY' }),
-    ]);
-    expect(Object.values(catalog.xd).map((quote) => quote.currency)).toEqual([
+  it('falls back to the build region only when no model declares a currency', () => {
+    const catalog = gatewayPricingCatalog([model('a'), model('b')], 'cn');
+    expect(Object.values(catalog.xd ?? {}).map((quote) => quote.currency)).toEqual([
       'CNY',
       'CNY',
     ]);
   });
 
-  it('never relabels undeclared entries when a sibling declares CNY', () => {
-    const catalog = gatewayPricingCatalog([
-      model('a', { currency: 'CNY' }),
-      model('b'),
-    ]);
-    expect(Object.keys(catalog.xd)).toEqual(['b']);
-    expect(catalog.xd.b.currency).toBe('USD');
-  });
-
-  it('keeps every CNY quote when the only undeclared sibling is price-less (#587 regression)', () => {
-    const catalog = gatewayPricingCatalog([
-      model('a', { currency: 'CNY' }),
-      model('b', { currency: 'CNY' }),
-      model('doc', {
-        inputCostPerToken: undefined,
-        outputCostPerToken: undefined,
-      }),
-      model('free', { inputCostPerToken: 0, outputCostPerToken: 0 }),
-    ]);
-    expect(Object.keys(catalog.xd)).toEqual(['a', 'b']);
-    expect(Object.values(catalog.xd).map((quote) => quote.currency)).toEqual([
-      'CNY',
-      'CNY',
-    ]);
+  it('carries Gateway costDiscount uniformly for ordinary and codex models', () => {
+    const catalog = gatewayPricingCatalog(
+      [model('a', { costDiscount: 0.4 }), model('codex/gpt-5.5', { costDiscount: 0.4 })],
+      'cn',
+    );
+    expect(catalog.xd.a).toMatchObject({
+      inputPerMtok: 2,
+      outputPerMtok: 8,
+      costDiscount: 0.4,
+    });
+    expect(catalog.xd['codex/gpt-5.5']).toMatchObject({
+      inputPerMtok: 2,
+      outputPerMtok: 8,
+      costDiscount: 0.4,
+    });
   });
 });

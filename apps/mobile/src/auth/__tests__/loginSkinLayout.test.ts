@@ -13,6 +13,8 @@ import {
   createResendDeadline,
   formatResendCountdown,
   LOGIN_DELETION_BUBBLE,
+  LOGIN_PAD_LANDSCAPE_STAGE,
+  LOGIN_PAD_PORTRAIT_STAGE,
   LOGIN_STAGE_LONG,
   LOGIN_STAGE_SHORT,
   PAD_LANDSCAPE_MIN_SCALE,
@@ -45,30 +47,41 @@ describe('loginSkin 750 stage 布局引擎', () => {
     expect(resolveLoginStage(750, 2000).designHeight).toBe(1800);
   });
 
-  it('短屏档 1334:cindy/slogan/word/loginY 逐字段等于 wave3.5 旧表(2026-07-24 拍板整体上移 40 设计px,hero 不动)', () => {
+  it('短屏档 1334:品牌簇 + 功能区落位逐字段等于登录改版新稿 figma 705:915 实测值(loginY 622)', () => {
     const layout = resolveLoginStage(375, 667); // scale 0.5 → dh 1334
     expect(layout.designHeight).toBe(1334);
-    expectBox(layout.cindy, { x: 75, y: 107, w: 599, h: 720 });
-    expectBox(layout.slogan, { x: 462.55, y: 440.33, w: 254.01, h: 72.8 });
-    expectBox(layout.word, { x: 199, y: 554.48, w: 352.93, h: 120.54 });
-    expect(layout.loginY).toBe(694);
+    // 立绘 599×720 @(75,60)(新稿 hero y=87,2026-07-27 用户拍板方案 B 再上移 27 避脸)
+    expectBox(layout.cindy, { x: 75, y: 60, w: 599, h: 720 });
+    // slogan 可见图形框 = 容器 @(385,387) + vector(77.55,21.37);尺寸稿内未变
+    expectBox(layout.slogan, { x: 462.55, y: 408.37, w: 254.01, h: 72.8 });
+    // 字标图像框 = 主容器 @(35,422) + WORD_MARK 内字标 @(173,65) = (208,487),335×115
+    expectBox(layout.word, { x: 208, y: 487, w: 335, h: 115 });
+    // 功能区落位取新稿标注值(Log_in 组 @(35,622));2026-07-29 审图拍板方案 B——
+    // 品牌簇既已整档换新稿基准,loginY 必须同源,否则字标↔面板会空出 92 设计px
+    expect(layout.loginY).toBe(622);
   });
 
-  it('长屏档 1624:双区统一 y=116 的 long 表逐字段命中(2026-07-24 拍板整体上移 40 设计px,hero 不动)', () => {
+  it('长屏档 1624:新稿 figma 705:799 品牌簇 + 功能区落位逐字段命中(hero y=106,loginY 827)', () => {
     const layout = resolveLoginStage(375, 812); // scale 0.5 → dh 1624
     expect(layout.designHeight).toBe(1624);
-    expectBox(layout.cindy, { x: 0, y: 116, w: 750, h: 902 });
-    expectBox(layout.slogan, { x: 387, y: 646, w: 321, h: 92 });
-    expectBox(layout.word, { x: 175, y: 774, w: 401, h: 137 });
-    expect(layout.loginY).toBe(933);
+    expectBox(layout.cindy, { x: 0, y: 106, w: 750, h: 902 });
+    // slogan 可见图形框 = 容器 @(362.57,545.32) + vector(82.33,22.68),269.66×77.29
+    // (2026-07-27 用户审 demo 拍板:slogan 下移避脸,inner y 536.68 → 568,距字标 24px)
+    expectBox(layout.slogan, { x: 444.9, y: 568, w: 269.66, h: 77.29 });
+    // 字标 = 主容器 @(35,627) + 字标 @(147,42.17) = (182,669.17),387×132.18
+    expectBox(layout.word, { x: 182, y: 669.17, w: 387, h: 132.18 });
+    expect(layout.loginY).toBe(827);
   });
 
   it('两档间 lerp:designHeight=1479 中点全字段线性插值(含 loginY)', () => {
     const layout = resolveLoginStage(750, 1479); // scale 1 → dh 1479,t=0.5
-    expectBox(layout.cindy, { x: 37.5, y: 111.5, w: 674.5, h: 811 });
-    expectBox(layout.slogan, { x: 424.775, y: 543.165, w: 287.505, h: 82.4 });
-    expectBox(layout.word, { x: 187, y: 664.24, w: 376.965, h: 128.77 });
-    expect(layout.loginY).toBeCloseTo(813.5, 6);
+    // 立绘 y 中点 = (60 + 106)/2(短屏档上移 27 后)
+    expectBox(layout.cindy, { x: 37.5, y: 83, w: 674.5, h: 811 });
+    // slogan y 中点 = (408.37 + 568)/2(2026-07-27 LONG 档下移避脸后)
+    expectBox(layout.slogan, { x: 453.725, y: 488.185, w: 261.835, h: 75.045 });
+    expectBox(layout.word, { x: 195, y: 578.085, w: 361, h: 123.59 });
+    // loginY 中点 = (622 + 827)/2(2026-07-29 两档同换新稿标注值后)
+    expect(layout.loginY).toBeCloseTo(724.5, 6);
   });
 
   it('两档外超长:designHeight clamp 1800 → t=1 长屏几何原样', () => {
@@ -80,22 +93,109 @@ describe('loginSkin 750 stage 布局引擎', () => {
     expect(layout.loginY).toBe(LOGIN_STAGE_LONG.loginY);
   });
 
-  it('两档外短屏:功能区优先 v 压缩视觉区,loginY=max(0,dh-640)(2026-07-24 拍板上移 40:dh-600→dh-640,dh=1334 边界与 SHORT.loginY=694 连续)', () => {
+  it('两档外短屏:功能区优先 v 压缩视觉区,loginY=min(SHORT.loginY, max(0,dh-640))——紧凑底距锚底 + 钳到短屏档落位', () => {
     // dh=1000:v=(1000-600)/734≈0.5449591;视觉区以 (375,0) 为锚缩放(v 公式不动)
+    // loginY = min(622, 1000-640) = 360(未触顶,仍是 main 逐值行为)
     const layout = resolveLoginStage(750, 1000);
     expect(layout.loginY).toBe(360);
     expectBox(layout.cindy, {
       x: 211.51226158038146,
-      y: 58.31062670299727,
+      y: 32.697547683923706,
       w: 326.43051771117164,
       h: 392.3705722070845,
     });
     // v 下限 0.25:dh=600 时 v=max(0.25, 0)=0.25,loginY=0
     const floor = resolveLoginStage(750, 600);
     expect(floor.loginY).toBe(0);
-    expectBox(floor.cindy, { x: 300, y: 26.75, w: 149.75, h: 180 });
+    expectBox(floor.cindy, { x: 300, y: 15, w: 149.75, h: 180 });
     // 短屏表仍是压缩基准(锚定回归:防有人把基准换成 long 表)
-    expect(LOGIN_STAGE_SHORT.cindy).toEqual({ x: 75, y: 107, w: 599, h: 720 });
+    expect(LOGIN_STAGE_SHORT.cindy).toEqual({ x: 75, y: 60, w: 599, h: 720 });
+  });
+
+  it('品牌簇不重叠不变式:字标框底不压面板顶、slogan 不压字标(两档)', () => {
+    // 字标可见框底 < 面板顶:两档都留正间距(面板不透明,压上去会盖住字标)
+    expect(LOGIN_STAGE_SHORT.word.y + LOGIN_STAGE_SHORT.word.h).toBeLessThan(
+      LOGIN_STAGE_SHORT.loginY,
+    );
+    expect(LOGIN_STAGE_LONG.word.y + LOGIN_STAGE_LONG.word.h).toBeLessThan(
+      LOGIN_STAGE_LONG.loginY,
+    );
+    // slogan 可见框与字标框不重叠(inner vector 口径下两档均无交叠)
+    expect(LOGIN_STAGE_SHORT.slogan.y + LOGIN_STAGE_SHORT.slogan.h).toBeLessThan(
+      LOGIN_STAGE_SHORT.word.y,
+    );
+    expect(LOGIN_STAGE_LONG.slogan.y + LOGIN_STAGE_LONG.slogan.h).toBeLessThan(
+      LOGIN_STAGE_LONG.word.y,
+    );
+    // 2026-07-27 用户审 demo 拍板:LONG 档 slogan 下移避脸后,底↔字标顶 ≈24 设计px
+    // (钉住下限,防后续再往下挪撞字标)
+    expect(
+      LOGIN_STAGE_LONG.word.y - (LOGIN_STAGE_LONG.slogan.y + LOGIN_STAGE_LONG.slogan.h),
+    ).toBeCloseTo(23.88, 2);
+  });
+
+  /**
+   * 字标↔面板间距必须**恰好**是新稿标注值 —— 上界不变式(2026-07-29 事故直接产物)。
+   *
+   * 为什么必须钉死而不是只判「不重叠」:上一版把品牌簇整档换成新稿基准、却把 loginY
+   * 留在配旧品牌簇的 694 / 933,间距从稿内的 20 / 25.65 变成 92 / 131.65(短屏多空
+   * 73、长屏多空 109.65 设计px,实机上肉眼可见一条空白)。当时的不重叠断言
+   * (word 底 < loginY)对这种「空太多」完全无感——只有下界没有上界,拼接错误静默通过。
+   * 品牌簇与功能区是同一份稿的两半,任何一半单独改动都会先在这里红。
+   */
+  it('间距上界不变式:字标底↔面板顶 = 新稿标注间距(短屏 20 / 长屏 25.65),防只改一半', () => {
+    expect(LOGIN_STAGE_SHORT.loginY - (LOGIN_STAGE_SHORT.word.y + LOGIN_STAGE_SHORT.word.h)).toBe(
+      20,
+    );
+    expect(
+      LOGIN_STAGE_LONG.loginY - (LOGIN_STAGE_LONG.word.y + LOGIN_STAGE_LONG.word.h),
+    ).toBeCloseTo(25.65, 2);
+  });
+
+  /**
+   * 短屏以下落位公式必须与 SHORT.loginY 在 dh=1334 处连续 —— 两侧不同源会让 1334
+   * 上下一像素之差产生整组纵向跳变(用户旋转/分屏时可见)。这里不写死常量,让两侧
+   * 自己对上,以后再改 SHORT.loginY 只需改一处。
+   */
+  it('锚常量连续性不变式:dh=1334 上下不跳变(短屏以下公式 ↔ SHORT.loginY 同源)', () => {
+    const at1334 = resolveLoginStage(750, 1334).loginY;
+    const justBelow = resolveLoginStage(750, 1333.9).loginY;
+    expect(at1334).toBe(LOGIN_STAGE_SHORT.loginY);
+    expect(justBelow).toBeCloseTo(LOGIN_STAGE_SHORT.loginY, 0);
+  });
+
+  /**
+   * 短屏**以下**分支(dh<1334)同样不许让不透明面板盖住字标 —— 2026-07-29 review
+   * 实证的盲区:上一版把锚常量直接改成 `dh-712`(想让窄屏也保留短屏档那 90 的底距),
+   * 结果 dh∈[712,1222) 全段面板上移压住被 v 压缩后的字标(dh=1000 压 40 设计px),
+   * 而当时的两条不变式只检查 SHORT / LONG 两个静态点,对这条独立公式分支完全无感。
+   *
+   * 下界取 850:dh<822 时 stage 高度已不足以同时放下压缩后的品牌簇与不缩放的功能区,
+   * 字标与面板必然交叠(dh=800 压 4、dh=700 压 90.5)——那是 main 既有行为(同一公式、
+   * 同一取值),属「功能区优先」的既定代价,不在本不变式范围。
+   */
+  it('间距不变式(短屏以下分支):dh∈[850,1334) 采样点上面板顶不得压到字标底', () => {
+    const wordBottomUncompressed = LOGIN_STAGE_SHORT.word.y + LOGIN_STAGE_SHORT.word.h;
+    for (const dh of [850, 900, 1000, 1100, 1200, 1262, 1300, 1333.9]) {
+      const layout = resolveLoginStage(750, dh);
+      const v = Math.max(0.25, (dh - 600) / 734);
+      // 视觉区按 v 以 (375,0) 为锚压缩 → 字标底 = 未压缩底 × v
+      expect(layout.word.y + layout.word.h).toBeCloseTo(wordBottomUncompressed * v, 6);
+      expect(layout.loginY).toBeGreaterThanOrEqual(layout.word.y + layout.word.h);
+    }
+  });
+
+  it('避脸不变式(2026-07-27 方案 B):短屏立绘上移 27 且可见发顶仍在 Status Bar 下沿之下', () => {
+    // 上移量固定:稿值 87 → 60。像素级实测依据 = 上移后 dh ≤1450 全段 slogan ink ∩ 脸 = 0
+    expect(LOGIN_STAGE_SHORT.cindy.y).toBe(60);
+    // hero 资产(750×902)不透明内容起于 y=86(上方是透明留白),contain 缩放 720/902
+    const heroScale = LOGIN_STAGE_SHORT.cindy.h / 902;
+    const visibleHairTop = LOGIN_STAGE_SHORT.cindy.y + 86 * heroScale;
+    expect(visibleHairTop).toBeCloseTo(128.65, 2);
+    // Status Bar 高 115.67(见 LOGIN_DELETION_BUBBLE 注释的同一权威值):发顶不侵入状态栏
+    expect(visibleHairTop).toBeGreaterThan(115.67);
+    // 长屏档立绘不跟着动(新稿实测值)
+    expect(LOGIN_STAGE_LONG.cindy.y).toBe(106);
   });
 });
 
@@ -170,7 +270,11 @@ describe('loginSkin §3.6 平板/横竖屏 surface 构图(PR4b Step 5b.3;adaptat
     expect(s.offsetX).toBeCloseTo(0, 6);
     expect(s.offsetY).toBeCloseTo(0, 6);
     expect(s.loginGroupScale).toBeCloseTo(0.794117, 6);
+    // pad 帧未参与本轮视觉改版(新稿没有 pad frame):品牌簇与登录组几何、splash 偏移
+    // 全部保持 main 原值。
     expect(s.splashOffset).toBe(158);
+    // 组底(含协议行溢出 62)落 1114.94,在 stage 1133 内 → 消费端安全区抬升不被触发
+    expect(s.loginY + 622 * s.loginGroupScale).toBeCloseTo(1114.94, 2);
     expect(s.phone).toBeNull();
     // 更矮视口按高度等比缩(w 定 744,h=1000<1133 → scale=min(1,0.8826)=0.8826)
     const tall = resolveLoginSurface(744, 1000);
@@ -185,6 +289,8 @@ describe('loginSkin §3.6 平板/横竖屏 surface 构图(PR4b Step 5b.3;adaptat
     expect(base.scale).toBeCloseTo(1, 10);
     expect(base.loginGroupScale).toBeCloseTo(0.655357, 6);
     expect(base.splashOffset).toBe(0);
+    // 横屏组底(含协议行溢出)仍在 stage 820 内 → 几何原值不动
+    expect(base.loginY + 622 * base.loginGroupScale).toBeLessThan(820);
     expect(base.phone).toBeNull();
     // raw<0.85 → 钳到 0.85 下限(§3.6 条3 仅下限;w≥1000∧h≥690∧landscape 命中 pad-landscape 但 raw<0.85)
     const floor = resolveLoginSurface(1100, 690); // min(1100/1180,690/820)=min(0.9322,0.8415)=0.8415
@@ -196,6 +302,33 @@ describe('loginSkin §3.6 平板/横竖屏 surface 构图(PR4b Step 5b.3;adaptat
     expect(over.scale).toBeCloseTo(1.3, 10); // 旧上限 1.30 恰好,不钳
     const far = resolveLoginSurface(1770, 1230); // min(1.5,1.5)=1.5 — 远超旧上限,原样不钳
     expect(far.scale).toBeCloseTo(1.5, 10);
+  });
+
+  /**
+   * pad 两档的「字标底↔面板顶」间距钉值 —— 2026-07-29 事故的同源性防护延伸到 pad。
+   *
+   * phone 侧那次事故的机理是:品牌簇换了新稿基准、`loginY` 留在配旧品牌簇的值,两半
+   * 不同源 → 间距漂成稿内不存在的 92 / 131.65。pad 现在**没有** figma 新稿帧,品牌簇
+   * 与 `loginY` 都还是同一套 wave3 推导值,所以内部自洽(竖 14.84 / 横 33.88)。
+   *
+   * 但这份自洽此前没有任何断言守着:将来给 pad 换新稿基准时,只改品牌簇不改 `loginY`
+   * (或反之)会原样重演 phone 那次的漂移,且静默通过。这里把两档间距钉住 —— 换稿时
+   * 本用例必然红,迫使改动者同批处理 `loginY`(并在此更新钉值 + 记录依据)。
+   */
+  it('pad 同源性不变式:两档「字标底↔面板顶」间距钉值(竖 14.84 / 横 33.88),换稿只改一半即红', () => {
+    const portrait = LOGIN_PAD_PORTRAIT_STAGE;
+    expect(
+      portrait.loginY - (portrait.word.y + portrait.word.h),
+    ).toBeCloseTo(14.84, 2);
+
+    const landscape = LOGIN_PAD_LANDSCAPE_STAGE;
+    expect(
+      landscape.loginY - (landscape.word.y + landscape.word.h),
+    ).toBeCloseTo(33.88, 2);
+
+    // 不重叠是底线(面板不透明,压上去会盖住字标);两档都必须为正间距
+    expect(portrait.loginY).toBeGreaterThan(portrait.word.y + portrait.word.h);
+    expect(landscape.loginY).toBeGreaterThan(landscape.word.y + landscape.word.h);
   });
 
   it('横屏居中偏移:offsetX/Y = (viewport - stage*scale)/2(画布居中锚)', () => {
@@ -321,3 +454,4 @@ describe('loginSkin 注销提示气泡浮层布局(figma 678:1075;**stage 设计
     expect(frame.top).toBeCloseTo(57.7, 6);
   });
 });
+

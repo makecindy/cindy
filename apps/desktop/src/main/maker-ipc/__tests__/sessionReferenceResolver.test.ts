@@ -333,6 +333,16 @@ describe('sessionReferenceResolver', () => {
     });
   });
 
+  it.each(['NOT_CONNECTED', 'BACKPRESSURE'] as const)(
+    'maps transient remote %s responses to offline instead of not-found',
+    async (code) => {
+      remoteInvoke.mockResolvedValueOnce({ ok: false, error: { code, message: 'retry later' } });
+      await expect(resolveSessionReferences([{ sessionId: 's-1', deviceId: 'dev-1' }])).rejects.toMatchObject({
+        code: 'SESSION_REFERENCE_OFFLINE',
+      });
+    },
+  );
+
   it('rejects a missing anchor instead of silently injecting an empty quote', async () => {
     remoteInvoke
       .mockResolvedValueOnce({ ok: true, result: { id: 's-1' } })
@@ -396,5 +406,96 @@ describe('sessionReferenceResolver', () => {
       deviceId: 'dev-1',
     })))).rejects.toMatchObject({ code: 'SESSION_REFERENCE_INVALID' });
     expect(remoteInvoke).not.toHaveBeenCalled();
+  });
+
+  it('attaches the validated first-page terminal without leaking the error body', async () => {
+    remoteInvoke
+      .mockResolvedValueOnce({ ok: true, result: { id: 's-1', title: 'Session' } })
+      .mockResolvedValueOnce({
+        ok: true,
+        result: {
+          items: [
+            { id: 'm-2', sessionId: 's-1', role: 'assistant', content: '我已经看到，但', createdAt: 102 },
+            { id: 'm-1', sessionId: 's-1', role: 'user', content: '请继续', createdAt: 101 },
+          ],
+          hasMore: false,
+          nextCursor: null,
+          terminal: {
+            status: 'error',
+            createdAt: 103,
+            message: 'provider secret must not cross the quote boundary',
+            injected: 'junk',
+          },
+        },
+      });
+
+    const [context] = await resolveSessionReferences([{ sessionId: 's-1', deviceId: 'dev-1' }]);
+
+    expect(context.terminal).toEqual({ status: 'error', createdAt: 103 });
+    expect(JSON.stringify(context)).not.toContain('provider secret');
+    expect(JSON.stringify(context)).not.toContain('junk');
+    // 终态与历史页同一次响应到达,没有额外的探测往返。
+    expect(remoteInvoke).toHaveBeenCalledTimes(2);
+  });
+
+  it('degrades to no terminal when the source page predates the terminal field', async () => {
+    remoteInvoke
+      .mockResolvedValueOnce({ ok: true, result: { id: 's-1' } })
+      .mockResolvedValueOnce(historyPage([
+        { id: 'm-1', sessionId: 's-1', role: 'assistant', content: 'partial', createdAt: 1 },
+      ]));
+
+    const [context] = await resolveSessionReferences([{ sessionId: 's-1', deviceId: 'dev-1' }]);
+
+    expect(context.messages).toHaveLength(1);
+    expect(context.terminal).toBeUndefined();
+  });
+
+  it('ignores malformed terminal payloads from the source device', async () => {
+    remoteInvoke
+      .mockResolvedValueOnce({ ok: true, result: { id: 's-1' } })
+      .mockResolvedValueOnce({
+        ok: true,
+        result: {
+          items: [{ id: 'm-1', sessionId: 's-1', role: 'assistant', content: 'partial', createdAt: 1 }],
+          hasMore: false,
+          nextCursor: null,
+          terminal: { status: 'fatal', body: 'crafted' },
+        },
+      });
+
+    const [context] = await resolveSessionReferences([{ sessionId: 's-1', deviceId: 'dev-1' }]);
+
+    expect(context.terminal).toBeUndefined();
+  });
+
+  it('ignores the page terminal for anchor quotes', async () => {
+    remoteInvoke
+      .mockResolvedValueOnce({ ok: true, result: { id: 's-1', title: 'Session' } })
+      .mockResolvedValueOnce({
+        ok: true,
+        result: [{ sessionId: 's-1', clientId: 'c-1', id: 'm-2', rowid: 2, role: 'assistant', content: 'anchor', createdAt: 2 }],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        result: {
+          items: [{ id: 'm-1', sessionId: 's-1', role: 'user', content: 'before', createdAt: 1 }],
+          hasMore: false,
+          nextCursor: null,
+          terminal: { status: 'error', createdAt: 9 },
+        },
+      })
+      .mockResolvedValueOnce(historyPage([
+        { id: 'm-3', sessionId: 's-1', role: 'assistant', content: 'after', createdAt: 3 },
+      ]));
+
+    const [context] = await resolveSessionReferences([{
+      sessionId: 's-1',
+      deviceId: 'dev-1',
+      messageClientId: 'c-1',
+    }]);
+
+    expect(context.range).toBe('around-anchor');
+    expect(context.terminal).toBeUndefined();
   });
 });

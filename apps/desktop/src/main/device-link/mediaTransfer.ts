@@ -120,7 +120,7 @@ async function presignPut(
   return serverApiFetch<PresignPutResponse>(PRESIGN_PUT_PATH, {
     method: 'POST',
     body: { size, ext, contentType },
-    baseUrl: deviceLinkApiBase(),
+    baseUrl: deviceLinkApiBase,
   });
 }
 
@@ -130,7 +130,7 @@ async function presignGet(key: string): Promise<PresignGetResponse> {
   return serverApiFetch<PresignGetResponse>(PRESIGN_GET_PATH, {
     method: 'POST',
     body: { key },
-    baseUrl: deviceLinkApiBase(),
+    baseUrl: deviceLinkApiBase,
   });
 }
 
@@ -626,7 +626,7 @@ export async function removeRemote(key: string): Promise<void> {
     await serverApiFetch<{ deleted: boolean }>(DELETE_PATH, {
       method: 'DELETE',
       body: { key },
-      baseUrl: deviceLinkApiBase(),
+      baseUrl: deviceLinkApiBase,
     });
     log.debug(`removed key=${key}`);
   } catch (err) {

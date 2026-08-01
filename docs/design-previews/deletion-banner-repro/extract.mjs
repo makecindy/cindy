@@ -28,7 +28,7 @@
 // 横幅 tailwind 类 → px 的解析在提取器内完成(spacing 1 单位 = 4px 为框架事实),
 // locator 记录源 class 串,可复核。
 
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -59,13 +59,52 @@ function leaf(value, srcRelRepo, locator) {
     },
   };
 }
-/** 从 pinned commit 读源码文本(git show;不读工作区)。 */
+/**
+ * 启动前置断言:pinned commit 必须在本地 git 对象库里。
+ *
+ * 本 demo 的每一条真值都来自 `git show ${PINNED_SHA}:<path>`,**完全不读工作区**。
+ * 因此唯一的真实失败模式不是"产品侧删了某个资产",而是"本地拿不到这个历史 commit"
+ * (shallow clone / 未 fetch)。这里一次性给出可操作错误,而不是让后面每个文件各自
+ * 抛 git 的裸错(2026-07-28 review 加固:把失败原因说清,消除误诊空间)。
+ */
+function assertPinnedCommitAvailable() {
+  const probe = spawnSync('git', ['cat-file', '-e', `${PINNED_SHA}^{commit}`], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+  if (probe.error || probe.status !== 0) {
+    throw new Error(
+      `pinned commit ${PINNED_SHA} 不在本地 git 对象库里。本 demo 的真值全部来自该历史 ` +
+        `commit(git show ${PINNED_SHA}:<path>),不读工作区;shallow clone 请先跑 ` +
+        `\`git fetch --unshallow\`(或 \`git fetch origin ${PINNED_SHA}\`)后重跑。` +
+        (probe.error ? ` 底层错误:${probe.error.message}` : ''),
+    );
+  }
+}
+
+/**
+ * 从 pinned commit 读源码文本(git show;不读工作区)。
+ *
+ * 失败时给出显式诊断(2026-07-28 review 加固):`git show <sha>:<path>` 的裸错很容易被
+ * 误读成"产品仓里这个文件被删了所以提取器会挂"。事实相反 —— 只要该路径在 pinned commit
+ * 里存在,提取器就恒定成功;**工作区 / HEAD 里这个文件还在不在,与本 demo 无关**
+ * (例如 login 改版删掉了 guest 图标资产,pinned 基线里那两个 svg 仍然读得到)。
+ */
 function readSrc(p) {
-  return execFileSync('git', ['show', `${PINNED_SHA}:${p}`], {
+  const shown = spawnSync('git', ['show', `${PINNED_SHA}:${p}`], {
     cwd: repoRoot,
     encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024,
   });
+  if (shown.error || shown.status !== 0 || typeof shown.stdout !== 'string') {
+    throw new Error(
+      `读不到 pinned 源文件 ${PINNED_SHA}:${p}。该路径必须在 pinned commit 里存在;` +
+        `工作区 / HEAD 是否仍有此文件与本 demo 无关(本提取器只读 git 历史)。` +
+        `若确因基线迁移导致路径变更,请同步 PINNED_SHA 与路径常量并重新复核 truth。` +
+        `底层输出:${(shown.stderr || shown.error?.message || `exit ${shown.status}`).toString().trim()}`,
+    );
+  }
+  return shown.stdout;
 }
 /** 把本轮读到的全部 pinned 源文件落盘到 _pinned/(先清空再写,保证目录与提取严格一致)。
  *  本地缓存副作用说明(lead 裁决 A,2026-07-26):内容由 PINNED_SHA 经 git show 确定性再生,
@@ -122,6 +161,9 @@ function extractThemeColorPair(src, key) {
   if (hits.length < 2) throw new Error(`tokens.ts 字段 ${key} 未凑齐 light/dark 两值`);
   return { light: hits[0], dark: hits[1] };
 }
+
+// 任何提取之前先确认 pinned commit 可达(见 assertPinnedCommitAvailable 注)。
+assertPinnedCommitAvailable();
 
 /* ══ desk ══ */
 const P = {

@@ -284,7 +284,7 @@ describe('ComposerListIndentDecoration in a real editor', () => {
       '1. 第一项\n2. ',
     );
 
-    const indentedRows = editor.view.dom.querySelectorAll('.composer-list-line-indent');
+    const indentedRows = editor.view.dom.querySelectorAll('.composer-list-fallback-prefix');
     expect(indentedRows).toHaveLength(2);
     expect(indentedRows[1]?.textContent).toBe('2. ');
 
@@ -292,7 +292,7 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     expect(editor.state.doc.textBetween(0, editor.state.doc.content.size, '\n', '\n')).toBe(
       '1. 第一项\n2. 中文',
     );
-    expect(editor.view.dom.querySelectorAll('.composer-list-line-indent')).toHaveLength(2);
+    expect(editor.view.dom.querySelectorAll('.composer-list-fallback-prefix')).toHaveLength(2);
   });
 
   it('does not rewrite decoration-owned styles while laying out multiline CJK lists', () => {
@@ -461,6 +461,58 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     }
   });
 
+  it('keeps ASCII punctuation in a CJK sentence stable during IME preview', () => {
+    vi.useFakeTimers();
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [Document, Paragraph, Text, CjkPunctDecoration],
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              {
+                type: 'text',
+                text: '现代都市开放世界共创游戏。 () 在上面这个句语基础上,',
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const punctuationSelector = 'span[style*="font-family"]';
+    const currentEditor = editor;
+    if (!currentEditor) throw new Error('editor failed to initialize');
+    const decoratedPunctuation = () =>
+      Array.from(currentEditor.view.dom.querySelectorAll(punctuationSelector), (node) => node.textContent);
+    expect(decoratedPunctuation()).toEqual(['。', '(', ')', ',']);
+
+    editor.view.dom.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    editor.view.dispatch(
+      editor.state.tr
+        .insertText('w', editor.state.doc.content.size - 1)
+        .setMeta('composition', 1),
+    );
+    expect(editor.getText()).toBe('现代都市开放世界共创游戏。 () 在上面这个句语基础上,w');
+    expect(decoratedPunctuation()).toEqual(['。', '(', ')', ',']);
+
+    editor.view.dom.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+    vi.runOnlyPendingTimers();
+    expect(decoratedPunctuation()).toEqual(['。', '(', ')', ',']);
+  });
+
+  it('does not apply the CJK punctuation font to an isolated Latin punctuation run', () => {
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [Document, Paragraph, Text, CjkPunctDecoration],
+      content: 'hello (), world',
+    });
+
+    expect(editor.view.dom.querySelectorAll('span[style*="font-family"]')).toHaveLength(0);
+  });
+
   it('renders the indent span into the DOM for list lines', () => {
     const ed = makeEditor(['1. hello']);
     expect(ed.view.dom.querySelector('p.composer-list-block-indent')?.textContent).toBe('1. hello');
@@ -587,6 +639,90 @@ describe('ComposerListIndentDecoration in a real editor', () => {
         'p.composer-list-fallback-container span[style*="font-family"]',
       ).length,
     ).toBeGreaterThan(0);
+  });
+
+  it('keeps ASCII punctuation in a list prefix inside the fixed CJK font slot', () => {
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [
+        Document,
+        Paragraph,
+        Text,
+        HardBreak,
+        CjkPunctDecoration,
+        ComposerListIndentDecoration,
+      ],
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: 'intro' },
+              { type: 'hardBreak' },
+              { type: 'text', text: '1. 中文正文' },
+            ],
+          },
+        ],
+      },
+    });
+    const prefix = editor.view.dom.querySelector(
+      '.composer-list-fallback-prefix.composer-list-cjk-font',
+    );
+    expect(prefix?.textContent).toBe('1. ');
+    expect(prefix?.querySelectorAll('span[style*="font-family"]')).toHaveLength(0);
+    expect(editor.view.dom.querySelectorAll('span[style*="font-family"]')).toHaveLength(0);
+  });
+
+  it('keeps fallback-owned ASCII punctuation stable while list wrappers are suspended for IME', () => {
+    vi.useFakeTimers();
+    editor = new Editor({
+      element: document.createElement('div'),
+      extensions: [
+        Document,
+        Paragraph,
+        Text,
+        HardBreak,
+        CjkPunctDecoration,
+        ComposerListIndentDecoration,
+      ],
+      content: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: '1. 中文正文' },
+              { type: 'hardBreak' },
+              { type: 'text', text: '中文,内容' },
+            ],
+          },
+        ],
+      },
+    });
+
+    const punctuation = () =>
+      Array.from(editor?.view.dom.querySelectorAll('span[style*="font-family"]') ?? [], (node) =>
+        node.textContent,
+      );
+    expect(punctuation()).toEqual([]);
+    expect(editor.view.dom.querySelector('.composer-list-fallback-container')).not.toBeNull();
+
+    editor.view.dom.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    expect(editor.view.composing).toBe(true);
+    expect(editor.view.dom.querySelector('.composer-list-fallback-container')).toBeNull();
+    expect(punctuation()).toEqual(['.', ',']);
+
+    editor.view.dispatch(
+      editor.state.tr.insertText('中', editor.state.doc.content.size - 1).setMeta('composition', 1),
+    );
+    expect(punctuation()).toEqual(['.', ',']);
+
+    editor.view.dom.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+    vi.runOnlyPendingTimers();
+    expect(editor.view.composing).toBe(false);
+    expect(punctuation()).toEqual([]);
+    expect(editor.view.dom.querySelector('.composer-list-fallback-container')).not.toBeNull();
   });
 
   it('keeps slash-command pills inline inside the paragraph fallback flow', () => {
@@ -797,7 +933,7 @@ describe('ComposerListIndentDecoration in a real editor', () => {
           {
             type: 'paragraph',
             content: [
-              { type: 'text', text: '1. 有新增游戏数的用户数、占全部用户比例。' },
+              { type: 'text', text: '1. 有新增游戏数的用户数,占全部用户比例。' },
               { type: 'hardBreak' },
               { type: 'text', text: '2. 有新增游戏数的近30天、近1年活跃用户数及占比。' },
               { type: 'hardBreak' },
@@ -817,7 +953,7 @@ describe('ComposerListIndentDecoration in a real editor', () => {
     const unindentedRows = container?.querySelectorAll('.composer-list-fallback-unindented');
     expect(container).not.toBeNull();
     expect(unindentedRows).toHaveLength(1);
-    expect(unindentedRows?.[0]?.textContent).toBe('有新增游戏数的用户数、占全部用户比例。');
+    expect(unindentedRows?.[0]?.textContent).toBe('有新增游戏数的用户数,占全部用户比例。');
     expect(unindentedRows?.[0]?.classList.contains('composer-list-cjk-font')).toBe(false);
     expect(
       unindentedRows?.[0]?.classList.contains('composer-list-cjk-punctuation-font'),
@@ -988,7 +1124,8 @@ describe('wiring contract', () => {
     expect(css).toContain('.ProseMirror .composer-list-cjk-punctuation-font');
     expect(css).toContain("font-family: 'Cindy CJK Punctuation Local'");
     expect(css).toContain("font-family: 'Cindy CJK Punctuation Bundled'");
-    expect(css).toContain('unicode-range: U+3000-303F, U+FF00-FFEF;');
+    expect(css).toContain('U+3000-303F, U+FF00-FFEF;');
+    expect(css.match(/U\+0021-0022, U\+0027-0029/g)).toHaveLength(2);
     const punctuationFontCss = css.slice(
       css.indexOf("font-family: 'Cindy CJK Punctuation Local'"),
       css.indexOf('.ProseMirror .composer-list-cjk-punctuation-font'),

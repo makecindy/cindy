@@ -36,6 +36,43 @@ export function pathToFileUrl(absPath: string): string {
   return `file://${encoded}`;
 }
 
+/** 本地 HTML 预览自动刷新只认这些扩展名(与 browserOpenableExts / 文件树菜单对齐)。 */
+const LOCAL_HTML_EXT_RE = /\.(html?|xhtml)$/i;
+
+/**
+ * file:// URL → 本机绝对路径。与 pathToFileUrl 互逆:
+ *   file:///Users/a%20b/x.html  → /Users/a b/x.html
+ *   file:///E:/out/index.html   → E:\out\index.html (win32 风格分隔)
+ *
+ * 只取 pathname(忽略 hash / query);非 file: 或解析失败 → null。
+ */
+export function fileUrlToAbsPath(url: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'file:') return null;
+  let pathname: string;
+  try {
+    pathname = decodeURIComponent(parsed.pathname);
+  } catch {
+    return null;
+  }
+  // Windows: URL pathname 形如 `/E:/out/x.html`,剥掉前导 `/` 并还原 `\`。
+  if (/^\/[A-Za-z]:[\\/]/.test(pathname)) {
+    pathname = pathname.slice(1).replace(/\//g, '\\');
+  }
+  return pathname || null;
+}
+
+/** 当前页是否为本地 HTML 文件预览(file:// + html/htm/xhtml)。 */
+export function isLocalHtmlFileUrl(url: string): boolean {
+  const abs = fileUrlToAbsPath(url);
+  return abs !== null && LOCAL_HTML_EXT_RE.test(abs);
+}
+
 export interface OpenUrlInSidebarBrowserOptions {
   /**
    * false = 不是用户当次手势(插件 preview 槽开页):标签照常开、内容照常加载,

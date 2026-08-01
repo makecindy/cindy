@@ -48,12 +48,25 @@ export function MarkdownFileReader({
   const html = useMemo(() => buildSelectableMarkdownHtml(markdown, {
     borderColor: colors.border,
     chipColor: colors.surfaceChip,
+    inlineCodeColor: colors.chatInlineCodeText,
     fontSize: typeScale.body,
-    lineHeight: lineHeight.body,
+    // body(16/22)行高比 1.375,低于 DESIGN.md §3 正文区间 1.43–1.56 下限;
+    // 文档阅读是长文连续阅读场景,换 bodyRelaxed(16/24)= 1.50 落到规范值。
+    // 字号不动:16 = DESIGN.md 的 Body 档。
+    lineHeight: lineHeight.bodyRelaxed,
     mutedColor: colors.textSecondary,
+    // 代码块语法着色随主题走(WebView 里没有 theme context,只能显式注入)。
+    syntaxColors: {
+      comment: colors.syntaxComment,
+      function: colors.syntaxFunction,
+      keyword: colors.syntaxKeyword,
+      number: colors.syntaxNumber,
+      property: colors.syntaxProperty,
+      string: colors.syntaxString,
+    },
     textColor: colors.textPrimary,
     ...(targetLine ? { targetLine } : {}),
-  }), [colors.border, colors.surfaceChip, colors.textPrimary, colors.textSecondary, markdown, targetLine]);
+  }), [colors, markdown, targetLine]);
 
   // 回调走 ref:onQuoteSelection 引用变化(页面重渲)不应重建 handler,
   // 更不应让 WebView 重载。

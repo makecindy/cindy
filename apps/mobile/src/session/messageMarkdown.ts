@@ -1,11 +1,20 @@
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
-import { classifyChatPathLinkTarget, resolveChatAbsPath } from '@/session/chatPathCandidate';
+import {
+  classifyChatPathLinkTarget,
+  findBareFilePathMatch,
+  resolveChatAbsPath,
+} from '@/session/chatPathCandidate';
 import { DEEP_LINK_SCHEME_GROUP } from '@/session/sessionLinks';
 import { i18n } from '@/i18n';
 
 export type MobileMarkdownInline =
   | { type: 'text'; text: string }
-  | { type: 'link'; text: string; url: string }
+  // bare:这条 link 是从正文纯文本里切出来的裸路径(matchBareFilePathLink),不是作者
+  // 手写的 `[label](url)`。渲染层据此决定点亮后是否套等宽 chip —— 裸路径的未点亮态是
+  // 普通正文,套等宽会让同一句里点亮/未点亮的路径在字体、底色、下划线三处齐变;作者
+  // 手写且 label 像文件名的仍保留 chip(那是作者的排版意图)。见 DESIGN.md §14.5。
+  // 与桌面 remarkLocalPathLinks 打的 data-bare-path 标记是同一件事的两端实现。
+  | { type: 'link'; text: string; url: string; bare?: true }
   | { type: 'strong'; text: string }
   | { type: 'emphasis'; text: string }
   | { type: 'code'; text: string }
@@ -628,6 +637,11 @@ function findNextInlineToken(
     // URL 经 classifyChatPathLinkTarget 判形状(http/session 之外的路径形态才收),
     // 渲染层再经被控端 stat 决定点亮 chip 还是保持纯文本标签。
     matchLocalPathLink(input, from),
+    // 正文纯文本里裸写的本地路径(`见 src/App.tsx 第 20 行`、`改的是 C:\proj\a.ts`):
+    // 模型高频形态,桌面端由 remarkLocalPathLinks 切成 link 节点,这里补齐同一入口。
+    // 产出 link inline 后与 `[label](path)` 形态共用 LinkPathChipSpan → 远端 stat →
+    // 点亮 chip / 保持纯文本。
+    matchBareFilePathLink(input, from, startsInsideHtmlComment),
     matchRegex(input, from, /`([^`]+)`/g, (match) => ({ type: 'code' as const, text: match[1] })),
     // inline math:$$x$$(双 dollar 行内形态)与 $x$。候选按起点排序,公式起点
     // 的 $ 早于公式体内的 * / _,强调规则不会拆走公式内容。单 dollar 采用
@@ -694,6 +708,13 @@ function findNextInlineToken(
 // classifyChatPathLinkTarget 形状门(http(s) / 会话深链 / mailto 等 scheme 不收,
 // 那些归原有 matcher);`![alt](url)` 是图片语法,前置 `!` 时跳过——图片 matcher
 // 不收本地路径 URL(MARKDOWN_IMAGE_RE 只认 http/xdt 系),该形态维持字面文本现状。
+//
+// destination 与本地图片同一套口径(LOCAL_MARKDOWN_IMAGE_RE + parseLocalMarkdownDestination):
+// 允许裸空格路径、`<...>` 包裹、以及 CommonMark 的**可选 title**(`[源码](src/a.ts "实现")`)。
+// 原先 destination 卡在 `[^)\s]+`,带 title 的链接整段不匹配 → 退回字面文本;而裸路径
+// matcher 会从括号里命中 `src/a.ts`,把它切成「字面 `[源码](` + 可点路径 + 字面 ` "实现")`」
+// 三段(PR #1144 review 实捉)。补上 title 支持后整段正常成链,裸路径 matcher 因起点
+// index 更靠后而天然让位。
 function matchLocalPathLink(
   input: string,
   from: number,
@@ -701,19 +722,70 @@ function matchLocalPathLink(
   if (!input.includes('](')) return null;
   // 正则每次调用新建:g 标志的 lastIndex 是可变状态,模块级共享在提前 return /
   // 未过重置路径时会漏匹配(bot review 实捉);同文件其它 matcher 也是每调用新建字面量。
-  const re = /\[([^\]]+)\]\(([^)\s]+)\)/g;
+  const re = /\[([^\]]+)\]\((<[^>\n]+>|(?:[^()\n]|\([^()\n]*\))+)\)/g;
   re.lastIndex = from;
   let match: RegExpExecArray | null;
   while ((match = re.exec(input)) !== null) {
     if (match.index > 0 && input[match.index - 1] === '!') continue;
-    if (!classifyChatPathLinkTarget(match[2])) continue;
+    const url = parseLocalMarkdownDestination(match[2]);
+    if (!url || !classifyChatPathLinkTarget(url)) continue;
     return {
       index: match.index,
       end: match.index + match[0].length,
-      inline: { type: 'link', text: match[1], url: match[2] },
+      inline: { type: 'link', text: match[1], url },
     };
   }
   return null;
+}
+
+// 正文纯文本裸路径 matcher(桌面 remarkLocalPathLinks 的分词层对等物)。词法判定在
+// chatPathCandidate.findBareFilePathMatch 里(含「必须带分隔符」的严判与廉价短路),
+// 这里只负责两件事:注释内压制、包装成 link inline。
+//
+// **不需要为「别抢走包裹语法」做特判**:`[图](/a.png)` / `![图](/a.png)` /
+// `` `src/a.ts` `` / `https://x.com/a/b.png` 这些形态里,包裹语法候选的起点 index 都
+// 严格小于其内部路径的 index,findNextInlineToken 既有的 index 升序排序天然让它们胜出。
+// 反过来,未闭合的反引号(`` `src/a.ts `` 流式中途)不构成 code span,此时裸路径照常
+// 命中——与桌面 remark 同口径(remark 也不会把它当 inlineCode)。
+function matchBareFilePathLink(
+  input: string,
+  from: number,
+  startsInsideHtmlComment = false,
+): { index: number; end: number; inline: MobileMarkdownInline } | null {
+  // 廉价短路:绝大多数消息段既不含 `<!--`、也不在跨块注释里,不为它们付
+  // blankCodeSpans + blankEscapedAngles 两趟整串拷贝的开销(本函数在渲染热路径上
+  // 逐 token 调用;同 HTML_IMG_HINT_RE / MARKDOWN_IMAGE_HINT_RE 的套路)。
+  const needsCommentCheck = startsInsideHtmlComment || input.includes('<!--');
+  let cursor = from;
+  // 注释 span 定位与 matchHtmlImage / matchMarkdownImage 同口径:在 code-span 与转义
+  // `<` 空白填充(偏移保持)的副本上判定,行内代码里的字面 `<!--` 不把后文毒化成
+  // 「注释内」。命中在注释里的跳过(桌面侧注释是 html 节点、插件根本看不到,压制
+  // 才是同口径),注释外的照常识别。
+  let commentProbe: string | null = null;
+  for (;;) {
+    const match = findBareFilePathMatch(input, cursor);
+    if (!match) return null;
+    if (needsCommentCheck) {
+      if (commentProbe === null) commentProbe = blankEscapedAngles(blankCodeSpans(input));
+      if (isInsideHtmlComment(commentProbe, match.index, startsInsideHtmlComment)) {
+        cursor = match.end;
+        continue;
+      }
+    }
+    // 标签标记内部(属性值等)跳过:命中会拆坏标签结构。元素内容不挡 —— 与既有
+    // strong / inlineCode / 裸 URL matcher 同口径(见 isInsideHtmlTagMarkup 的说明)。
+    if (isInsideHtmlTagMarkup(input, match.index)) {
+      cursor = match.end;
+      continue;
+    }
+    return {
+      index: match.index,
+      end: match.end,
+      // 裸形态没有独立 label,显示文本就是路径原文(桌面切出的 link 节点同样以
+      // 路径原文作 children)。bare 标记供渲染层区分来源(见 MobileMarkdownInline)。
+      inline: { type: 'link', text: match.value, url: match.value, bare: true },
+    };
+  }
 }
 
 function matchRegex(
@@ -920,12 +992,25 @@ const MARKDOWN_IMAGE_RE = /!\[([^\]]*)\]\(((?:https?|xdt-image|xdt-file|cindy-me
 const LOCAL_MARKDOWN_IMAGE_RE = /!\[([^\]]*)\]\((<[^>\n]+>|(?:[^()\n]|\([^()\n]*\))+)\)/g;
 
 /**
- * 本地 Markdown 图片 destination → 路径。保留模型常输出的裸空格路径，
+ * 本地 Markdown destination → 路径。保留模型常输出的裸空格路径，
  * 只剥离由空白分隔、位于末尾的标准可选 title（双引号 / 单引号 / 括号）。
+ *
+ * 图片（`![alt](dest "title")`）与链接（`[label](dest "title")`）共用这一套口径，
+ * 两处的 destination 语法在 CommonMark 里本就相同；分开实现过一次，结果链接侧漏了
+ * title 支持（PR #1144 review 实捉）。
  */
-function parseLocalMarkdownImageDestination(raw: string): string {
+function parseLocalMarkdownDestination(raw: string): string {
   let destination = raw.trim();
-  const quotedTitle = destination.match(/^(.*\S)[ \t]+(["'])(?:[^\n]|\\.)*\2$/);
+  // ⚠️ 引号内的字符类**必须排除反斜杠**(`[^\n\\]` 而不是 `[^\n]`)。写成 `[^\n]` 时它与
+  // `\\.` 两个分支在反斜杠上重叠 —— 一个 `\` 既能被 `[^\n]` 当 1 个字符吃、也能作为
+  // `\\.` 的开头吃 2 个,于是一串反斜杠有 Fib(n) 种切法;引号未闭合时末尾的 `\2$` 必然
+  // 失配,回溯会把所有切法枚举一遍,时间指数增长(实测:26 个反斜杠 8ms、34 个 75ms、
+  // 38 个 518ms、42 个 3575ms,每 +4 慢约 7 倍)。触发面就是聊天正文里一条
+  // `[x](a "\\\\…`,而本函数在渲染热路径上(图片与链接共用),手机端会冻住整个 JS 线程。
+  // 两个分支互斥后即为线性(实测同样输入恒 0ms)。回归用例见 messageMarkdown.test.ts
+  // 「title 剥离不得灾难性回溯」。(PR #1144 review 实捉;本 PR 把链接 destination 也接进
+  // 本函数,阅读器 buildSelectableMarkdownHtml 同样走这条,所以接触面比原来的图片更广。)
+  const quotedTitle = destination.match(/^(.*\S)[ \t]+(["'])(?:[^\n\\]|\\.)*\2$/);
   const parenthesizedTitle = destination.match(/^(.*\S)[ \t]+\([^()\n]*\)$/);
   destination = (quotedTitle?.[1] ?? parenthesizedTitle?.[1] ?? destination).trim();
   if (destination.startsWith('<') && destination.endsWith('>')) {
@@ -937,6 +1022,35 @@ function parseLocalMarkdownImageDestination(raw: string): string {
 // HTML 注释里的 Markdown 图片是被注释掉的内容,不渲染(桌面端 skipHtml 同样留字面/丢弃);
 // 只压制落在注释 span 内的匹配,注释之外的合法图片不受影响(与 matchHtmlImage 的整段拒转不同,
 // 因为 remark 语义下注释不会"包裹"住整段的独立 Markdown 图片)。未闭合注释视为延伸到段尾。
+// 标签标记(`<span title="…">`、`</div>`)的字符区间。用于把裸路径 matcher 挡在标签
+// **标记内部**之外:命中属性值会把整段拆成 `<span title="` + 链接 + `">x</span>`,那是在
+// 破坏标签结构,而不是给正文加链接(PR #1144 review 实捉)。
+//
+// 只挡标记内部,**不挡元素内容**:`<div>src/App.tsx</div>` 里的路径与既有的
+// strong / inlineCode / 裸 URL matcher 行为一致(它们同样会在字面 HTML 的内容里解析,
+// 实测过),单独把裸路径排除反而会造成本文件内部不一致。
+// 只认真正像标签的形态,`a < b` 这类散文里的 `<` 不构成区间。
+//
+// 属性段是**引号感知**的:带引号的属性值里出现 `>` 完全合法(`<span title="a > b">`),
+// 若按 `[^<>]*` 扫,区间会在属性内的 `>` 提前收尾,后面的路径重新暴露给裸路径 matcher,
+// 于是这道守卫在它声称保护的一部分属性值上失效(PR #1144 review 实捉:守卫的覆盖面
+// 小于它声称的范围)。故属性段按「双引号串 | 单引号串 | 非引号非尖括号字符」逐段吃。
+// 未闭合引号(`<span title="a > b`)整体不成立区间 —— 那已是坏 HTML,退化为不识别,
+// 与本条守卫加入前的行为一致,不额外造新语义。
+const HTML_TAG_SPAN_RE =
+  /<\/?[A-Za-z][\w.-]*(?::[A-Za-z][\w.-]*)*(?:\s(?:"[^"]*"|'[^']*'|[^<>"'])*)?\/?>/g;
+
+function isInsideHtmlTagMarkup(input: string, index: number): boolean {
+  if (!input.includes('<')) return false;
+  HTML_TAG_SPAN_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = HTML_TAG_SPAN_RE.exec(input)) !== null) {
+    if (index >= m.index && index < m.index + m[0].length) return true;
+    if (m.index > index) return false;
+  }
+  return false;
+}
+
 function isInsideHtmlComment(input: string, index: number, startsInsideHtmlComment = false): boolean {
   let cursor = 0;
   if (startsInsideHtmlComment) {
@@ -980,7 +1094,7 @@ function matchMarkdownImage(
     matcher.re.lastIndex = from;
     let candidate: RegExpExecArray | null;
     while ((candidate = matcher.re.exec(input)) !== null) {
-      const rawUrl = matcher.local ? parseLocalMarkdownImageDestination(candidate[2]) : candidate[2];
+      const rawUrl = matcher.local ? parseLocalMarkdownDestination(candidate[2]) : candidate[2];
       if (matcher.local && !classifyChatPathLinkTarget(rawUrl)) continue;
       // 当前 matcher 的第一个正则命中可能只是注释/转义里的示例;必须继续 exec,
       // 否则同段后面的合法图片会被丢掉(review P2)。

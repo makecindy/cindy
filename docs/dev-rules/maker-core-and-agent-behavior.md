@@ -58,7 +58,8 @@ translator、event loop、model 映射、usage 计量这些路径上的改动，
 ### 3.1 缓存率（Anthropic prompt cache）
 
 命中依赖**请求前缀逐字节稳定**。system prompt 由多段按固定顺序拼接（SDK preset →
-`MAKER_SYSTEM_PROMPT_APPEND` → makerMemoryRules → host `runtimeConfig.systemPrompt` →
+`MAKER_SYSTEM_PROMPT_APPEND` → makerMemoryRules → contactsRules（智能通讯录两态段，
+与同一次 build 的 MCP 注册同点求值、单次 build 内恒定；remote 会话缺省）→ host `runtimeConfig.systemPrompt` →
 per-workdir MEMORY.md index 快照 → per-call userPrompt，见 `claude-code/index.ts`）。禁止：
 
 - 往稳定前缀里塞每轮都变的内容（时间戳、随机文案、易变计数器）；随机／易变内容只能

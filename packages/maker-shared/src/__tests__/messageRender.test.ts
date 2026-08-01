@@ -250,6 +250,82 @@ describe('message render shared model', () => {
     expect(items.map((item) => item.type)).toEqual(['work_group', 'message', 'message']);
   });
 
+  // 交付正文与位置无关地留在折叠组外。原始形状(2026-07-31 定时巡检):agent 先输出
+  // 长篇简报,再调 notify 发通知,最后说一句「已触发通知」——SDK seal 只盖最后那句,
+  // 「最终答复」回溯又遇工具即停,简报会被整段折进「工作过程」。
+  it('keeps delivery prose outside the work fold even before a trailing side-effect tool', () => {
+    const brief = `本轮 7 条有活动。${'逐条核对了改动落在哪些产品面。'.repeat(50)}`;
+    expect(brief.length).toBeGreaterThanOrEqual(600);
+
+    const items = buildMessageRenderItems([
+      message({ kind: 'user', source: source('user', 'brief me', 1), body: 'brief me', label: 'user' }),
+      message({
+        kind: 'tool',
+        source: source('diff', { toolName: 'Bash', input: { command: 'gh pr diff' } }, 2),
+        body: 'Bash(gh pr diff)',
+        label: 'Bash',
+      }),
+      message({ kind: 'assistant', source: source('brief', brief, 3), body: brief, label: 'assistant' }),
+      message({
+        kind: 'tool',
+        source: source('notify', { toolName: 'schedule_notify_current_run', input: {} }, 4),
+        body: 'schedule_notify_current_run()',
+        label: 'schedule_notify_current_run',
+      }),
+      message({
+        kind: 'assistant',
+        source: source('wrap', 'notified', 5),
+        body: '本轮有 3 条需要你决策,已触发通知。',
+        label: 'assistant',
+        turnCompleted: true,
+      }),
+    ]);
+
+    expect(items.map((item) => item.type)).toEqual([
+      'message',
+      'work_group',
+      'message',
+      'work_group',
+      'message',
+    ]);
+    expect(expectType(items[2], 'message').message.key).toBe('brief');
+    expect(expectType(items[4], 'message').message.key).toBe('wrap');
+  });
+
+  it('still folds short progress narration that precedes a trailing side-effect tool', () => {
+    const items = buildMessageRenderItems([
+      message({ kind: 'user', source: source('user', 'brief me', 1), body: 'brief me', label: 'user' }),
+      message({
+        kind: 'tool',
+        source: source('diff', { toolName: 'Bash', input: { command: 'gh pr diff' } }, 2),
+        body: 'Bash(gh pr diff)',
+        label: 'Bash',
+      }),
+      message({
+        kind: 'assistant',
+        source: source('narration', 'reading', 3),
+        body: '读完了,现在写简报。',
+        label: 'assistant',
+      }),
+      message({
+        kind: 'tool',
+        source: source('notify', { toolName: 'schedule_notify_current_run', input: {} }, 4),
+        body: 'schedule_notify_current_run()',
+        label: 'schedule_notify_current_run',
+      }),
+      message({
+        kind: 'assistant',
+        source: source('wrap', 'notified', 5),
+        body: '本轮有 3 条需要你决策,已触发通知。',
+        label: 'assistant',
+        turnCompleted: true,
+      }),
+    ]);
+
+    expect(items.map((item) => item.type)).toEqual(['message', 'work_group', 'message']);
+    expect(expectType(items[2], 'message').message.key).toBe('wrap');
+  });
+
   it('surfaces tool result media as a standalone tool_media item that stays outside the work fold', () => {
     const items = buildMessageRenderItems([
       message({ kind: 'user', source: source('user', 'draw it', 1), body: 'draw it', label: 'user' }),

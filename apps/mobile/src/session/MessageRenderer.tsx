@@ -57,6 +57,7 @@ import {
 } from 'react-native';
 import { UITextView } from 'react-native-uitextview';
 import { LegendList, type LegendListRef } from '@legendapp/list/react-native';
+import { tokenizeCode, type CodeTokenKind } from '@/session/codeHighlight';
 import { buildComposerTouchLayout } from '@/session/composerTouchLayout';
 import { useFoldableExpandedState } from '@/session/expandedBlockMemory';
 import {
@@ -138,8 +139,9 @@ import {
   copyMessageText,
   formatMessageAbsoluteTime,
   formatMessageRelativeTime,
-  formatMessageTurnCostUsd,
+  formatMessageTurnCost,
   formatModelShortLabel,
+  mobileMessageShowsActionBar,
   writeClipboardText,
   type MobileMessageControlActionId,
   type CopyMessageStatus,
@@ -177,6 +179,7 @@ import {
 } from '@/session/sessionReferences';
 import {
   canOpenChatPathChip,
+  chatPathLabelReadsAsFileReference,
   classifyChatPathLinkTarget,
   classifyInlineCodePathCandidate,
   resolveChatAbsPath,
@@ -186,6 +189,9 @@ import {
 import { ChatFilePathContext, type ChatFilePathTarget } from '@/session/chatFilePathContext';
 import {
   peekRemotePathVerdict,
+  peekRemotePathVerdictForRender,
+  remotePathVerdictKey,
+  subscribeRemotePathVerdictChange,
   verifyRemotePathCached,
   type RemotePathVerdict,
 } from '@/session/remotePathVerdict';
@@ -223,6 +229,10 @@ import {
   type MobileWorkChildItem,
   type MobileWorkGroupItem,
 } from '@/session/messageRenderModel';
+import {
+  PendingSendBubble,
+  type PendingSendBubbleActions,
+} from '@/session/PendingSendBubble';
 import { dedupeToolMediaByUrl } from '@cindy/maker-shared/message-render';
 import { tokenizeThinkingText } from '@cindy/maker-shared/thinking-text';
 import {
@@ -432,6 +442,8 @@ interface MessageActions {
   /** 正文里会话深链 chip(xdt-maker://session/…)点击回调,app 内跳转。 */
   onOpenSessionLink?: (url: string) => void;
   onPreviewRewind?: (clientId: string, draft: MobileMessageDraft) => void;
+  /** 待发送气泡(pending_send 项)的展开态与队列操作回调。 */
+  pendingSend?: PendingSendBubbleActions;
   onReadTextFilePreview?: (filePath: string) => Promise<RemoteTextFilePreviewResult>;
   onReleaseRemoteMedia?: (sourceUrl: string, media: MobileResolvedRemoteMedia) => void;
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
@@ -457,6 +469,7 @@ export function MessageRenderer({
   onOpenSessionLink,
   onPreviewRewind,
   onQuoteSelection,
+  pendingSend,
   onReadTextFilePreview,
   onReleaseRemoteMedia,
   onResolveRemoteMedia,
@@ -696,6 +709,9 @@ export function MessageRenderer({
     onPreviewRewind,
     onOpenPayload: setPayload,
     onResolveRemoteMedia,
+    // 待发送气泡(pending_send 项)的展开态与队列操作:漏了这一项 actions.pendingSend 就是
+    // undefined,渲染分支直接 null —— 气泡整个不画,乐观显示消失。
+    pendingSend,
     busyClientId,
     firstUserMessageClientId,
     isSessionStreaming,
@@ -712,6 +728,7 @@ export function MessageRenderer({
     onOpenSessionLink,
     onPreviewRewind,
     onResolveRemoteMedia,
+    pendingSend,
     viewportLayout.contentWidth,
   ]);
   // chat-text-quote:选区采集 context。仅「会话页传了采集回调 + iOS」时启用
@@ -1298,6 +1315,20 @@ const RenderItemView = memo(function RenderItemView({
     case 'fork_origin':
       node = <ForkOriginMarker onOpenForkOrigin={actions.onOpenForkOrigin} />;
       break;
+    case 'pending_send':
+      // 待发送气泡。actions.pendingSend 由会话页恒传;真缺失时**跳过这一项**(不渲染),
+      // 而不是渲染一个点不动的气泡 —— 没有回调的气泡无法取消 / 编辑 / 重试,画出来只会
+      // 让用户对着死气泡操作。渲染路径无 ErrorBoundary,这里也不抛,免得整列崩掉。
+      node = actions.pendingSend
+        ? (
+          <PendingSendBubble
+            actions={actions.pendingSend}
+            item={item}
+            resolveRemoteMedia={actions.onResolveRemoteMedia}
+          />
+        )
+        : null;
+      break;
     default:
       // 穷尽性保证:给 render-item union 加新变体却漏处理 → typecheck 报错(入参 never)。运行时降级为
       // log+skip(node 保持空)而非 throw —— render 路径无 ErrorBoundary,不能让单个未知 item 崩整列。
@@ -1444,7 +1475,7 @@ function MessageBubble({
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const { t } = useTranslation();
+  const { t, i18n: i18nInstance } = useTranslation();
   const [copyState, setCopyState] = useState<CopyMessageStatus | 'idle' | 'copying'>('idle');
   const [actionSheetOpen, setActionSheetOpen] = useState(false);
   // chat-text-quote:只解析持久化 quotesEncoded 明确标记的产品引用消息，避免
@@ -1532,19 +1563,22 @@ function MessageBubble({
   const isFirstUserMessage = item.message.kind === 'user' && clientId === actions.firstUserMessageClientId;
   const copyText = buildMobileMessageCopyText(item.message);
   const canUseCompletedActions = !isStreamingAssistant;
-  // 操作行只挂在每轮收尾正文(对齐桌面 #456):任务执行过程中的中间句不再逐条
-  // 带一行复制/分叉/时间,消息流更紧凑。user 消息、流式「生成中」状态与正文
-  // 的文本选择(canSelectVisibleText)不受影响。
-  const suppressAssistantActions = item.message.kind === 'assistant'
-    && !isStreamingAssistant
-    && item.message.isTurnFinalAssistant !== true;
-  const showCompletedActionBar = canUseCompletedActions && !suppressAssistantActions;
+  // 操作行只挂在每轮收尾正文、且该行确实是一条发言(判据见
+  // mobileMessageShowsActionBar):中间句不再逐条带复制/分叉/时间,系统边界卡整行
+  // 不挂。user 消息、流式「生成中」状态与正文的文本选择(canSelectVisibleText)
+  // 不受影响。
+  const showCompletedActionBar = mobileMessageShowsActionBar({
+    hasSystemCard: !!item.message.systemCardType,
+    isStreamingAssistant,
+    isTurnFinalAssistant: item.message.isTurnFinalAssistant === true,
+    kind: item.message.kind,
+  });
   const canCopy = showCompletedActionBar && copyText.trim().length > 0;
   const canSelectVisibleText = canUseCompletedActions && copyText.trim().length > 0;
   const relativeTime = showCompletedActionBar ? formatMessageRelativeTime(item.message.createdAt) : '';
   const absoluteTime = formatMessageAbsoluteTime(item.message.createdAt);
   const turnCost = showCompletedActionBar && item.message.kind === 'assistant'
-    ? formatMessageTurnCostUsd(item.message.turnCostUsd ?? 0, item.message.turnCostIsEstimate)
+    ? formatMessageTurnCost(item.message.turnMoney)
     : '';
   const canFork = !!(
     showCompletedActionBar
@@ -1615,13 +1649,15 @@ function MessageBubble({
   }, [collapseResolved, collapseLatched, displayBubbleBody]);
   const shouldCollapseLongMessage = (collapseMeasureEnabled && collapseLatched) || collapseResolved;
   const longMessageCollapsed = shouldCollapseLongMessage && !longMessageExpanded;
+  // label 走 i18n.t,所以语言必须进依赖:否则用户在任务页挂载期间切语言,菜单会一直
+  // 停在切换前的语言,直到 capability 变化或组件重挂。
   const messageMenu = useMemo(() => buildMobileMessageMenu({
     canAddToChat,
     canCopyLink,
     canDelete,
     canFork,
     canRewind,
-  }), [canAddToChat, canCopyLink, canDelete, canFork, canRewind]);
+  }), [canAddToChat, canCopyLink, canDelete, canFork, canRewind, i18nInstance.language]);
   const actionBar = useMemo(() => buildMessageActionBarPresentation({
     align: isUser ? 'user' : 'agent',
     canCopy,
@@ -1756,7 +1792,7 @@ function MessageBubble({
         <View style={styles.hookSourceHeader} testID="message.hookSource">
           <Send color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
           <Text numberOfLines={1} style={styles.hookSourceTitle}>
-            {`Cindy · ${hookSource.im === 'telegram' ? 'Telegram' : 'Slack'}`}
+            {`Cindy · ${hookSource.im === 'telegram' ? 'Telegram' : hookSource.im === 'x' ? 'X' : 'Slack'}`}
           </Text>
           {hookSource.channelName ? (
             <Text numberOfLines={1} style={styles.hookSourceChannel}>
@@ -3290,7 +3326,7 @@ function MarkdownBody({
             );
           }
           const baseStyle: StyleProp<TextStyle> = block.type === 'heading'
-            ? [styles.markdownHeading, block.level <= 2 ? styles.markdownHeadingLarge : styles.markdownHeadingSmall]
+            ? [styles.markdownHeading, headingSizeStyle(styles, block.level)]
             : styles.messageText;
           if (block.type === 'list_item') {
             const task = typeof block.checked === 'boolean';
@@ -3363,14 +3399,15 @@ function MarkdownBody({
                   },
                 ]}
               >
-                <MarkdownSelectableText
+                <HighlightedCodeText
+                  SpanComponent={spanFor(selectable === true) ?? Text}
                   allowIosUITextView={allowIosUITextView}
+                  language={block.language}
                   selectable={selectable === true}
                   selectionColor={colors.surfaceChip}
-                  style={styles.markdownCodeText}
-                >
-                  {block.text}
-                </MarkdownSelectableText>
+                  styles={styles}
+                  text={block.text}
+                />
               </ScrollView>
             </View>
           );
@@ -3378,7 +3415,7 @@ function MarkdownBody({
         if (block.type === 'heading') {
           const headingStyle = [
             styles.markdownHeading,
-            block.level <= 2 ? styles.markdownHeadingLarge : styles.markdownHeadingSmall,
+            headingSizeStyle(styles, block.level),
           ];
           const headingSelectable = inlinesSelectable(block.inlines);
           return (
@@ -3539,32 +3576,67 @@ function ChatPathChipSpan({
     const absPath = resolveChatAbsPath(candidate.href, ctx.workdir);
     return { absPath, relPath: toWorkdirRel(ctx.workdir, absPath) };
   }, [candidate, ctx]);
-  const [verdict, setVerdict] = useState<RemotePathVerdict | undefined>(() =>
-    ctx && target ? peekRemotePathVerdict(ctx.deviceId, ctx.workdir, target.absPath) : undefined,
+  // verdict 是**缓存的纯派生**,chip 不自己存结论:ForRender 版会把 TTL 未过期的负缓存
+  // 回成 'unknown',于是断链期间的乐观点亮也来自缓存。自存一份的话收不到缓存变化 ——
+  // 同一路径出现在多个 chip 上时,A 按 unknown 点亮、B 拿到确定的 nonfile,A 会一直
+  // 带着下划线可点(PR #1144 review 实捉,桌面同款)。
+  const readVerdict = useCallback(
+    () =>
+      ctx && target
+        ? peekRemotePathVerdictForRender(ctx.deviceId, ctx.workdir, target.absPath)
+        : undefined,
+    [ctx, target],
   );
+  const [verdict, setVerdict] = useState<RemotePathVerdict | undefined>(readVerdict);
+
+  // 本 key 的缓存变化(确定态落库 / 负缓存到期)→ 递增,**驱动下面的验证副作用重跑**。
+  // 按 key 过滤:一屏几十个 chip 各自订阅,全量广播会让首屏 N 次 stat 引发 N×N 次重渲染。
+  //
+  // ⚠️ 这里必须递增一个计数、不能只 setVerdict(readVerdict()):`readVerdict` 是
+  // `[ctx, target]` 的稳定 useCallback,通知**不改变验证副作用的任何依赖**,那个副作用
+  // 就不会重跑 → 再也不发 verifyRemotePathCached。TTL 到期时负缓存已被删、又没有确定态,
+  // ForRender 回 undefined,于是 chip 只完成「降级成纯文本」、没完成「重验」,挂载期间
+  // 永不自愈 —— 比重构前(一直乐观点亮)更糟。桌面同一处把 cacheGen 放进了验证副作用的
+  // 依赖,手机漏了这一环(PR #1144 review 实捉:第 10 轮重构只做对了桌面那一半)。
+  const [cacheGen, setCacheGen] = useState(0);
   useEffect(() => {
-    if (!ctx || !target) {
-      setVerdict(undefined);
-      return;
-    }
-    const cached = peekRemotePathVerdict(ctx.deviceId, ctx.workdir, target.absPath);
-    if (cached) {
-      setVerdict(cached);
-      return;
-    }
-    setVerdict(undefined);
+    if (!ctx || !target) return;
+    const mine = remotePathVerdictKey(ctx.deviceId, ctx.workdir, target.absPath);
+    return subscribeRemotePathVerdictChange((key) => {
+      if (key === mine) setCacheGen((n) => n + 1);
+    });
+  }, [ctx, target]);
+
+  useEffect(() => {
+    // 无条件按当前缓存重新派生(升级 / 降级同一条路)。
+    setVerdict(readVerdict());
+    if (!ctx || !target) return;
+    // 有确定结论就不必重验;unknown 的限流由 verifyRemotePathCached 的负缓存承担。
+    if (peekRemotePathVerdict(ctx.deviceId, ctx.workdir, target.absPath)) return;
     // 流式中不发验证:半截路径会产生大量无意义 stat(与桌面 isStreaming gate 同理)。
     if (streaming) return;
     let cancelled = false;
-    void verifyRemotePathCached(ctx.deviceId, ctx.workdir, target.absPath, ctx.statPath).then((v) => {
-      if (!cancelled) setVerdict(v);
+    void verifyRemotePathCached(ctx.deviceId, ctx.workdir, target.absPath, ctx.statPath).then(() => {
+      // 不看返回值:结论已落缓存,统一重新派生。
+      if (!cancelled) setVerdict(readVerdict());
     });
     return () => {
       cancelled = true;
     };
-  }, [ctx, streaming, target]);
+    // cacheGen:本 key 的缓存状态变化(TTL 到期 / 别处写入确定态)→ 重新派生 + 必要时重验。
+  }, [ctx, streaming, target, readVerdict, cacheGen]);
 
-  const lit = !!ctx && !!candidate && !!target && verdict !== undefined && verdict !== 'nonfile';
+  // 点亮门槛分两档(见 ChatPathCandidate.ambiguousShape 的说明):
+  //   - 形状明确是路径(绝对路径 / 尾斜杠目录 / 分隔符+扩展名):unknown(链路断 /
+  //     stat 异常)照旧乐观点亮,绝不因断链把整条消息的 chip 全灭掉;
+  //   - 歧义形状(裸名 `array.map`、分隔符无扩展 `and/or`——与 `package.json`、
+  //     `src/components` 词法同形,分不开):必须等远端明确回 file / directory 才点亮。
+  //     否则链路一抖,满屏普通行内 code 都变成可点的假链接——「可点」的视觉信号一旦
+  //     不可信,加强它只会让误判更醒目(DESIGN.md §14.5 规则 5)。
+  const verdictAllowsLit = candidate?.ambiguousShape
+    ? verdict === 'file' || verdict === 'directory'
+    : verdict !== undefined && verdict !== 'nonfile';
+  const lit = !!ctx && !!candidate && !!target && verdictAllowsLit;
   if (!lit) {
     return <SpanText style={plainStyle}>{display}</SpanText>;
   }
@@ -3591,6 +3663,29 @@ function ChatPathChipSpan({
   );
 }
 
+/**
+ * 「下划线 ⇔ 可点」的**唯一判据**(DESIGN.md §14.5 规则①要求双向成立:可点的一定有
+ * 下划线,有下划线的一定可点)。onPress 缺席时不给 `markdownLink`,所以在结构上
+ * 无法造出「有下划线却点不动」的元素。
+ *
+ * 为什么要收成一处:PR #1144 的两轮 review 各捉到一个反例(文件阅读器的会话 chip、
+ * 以及同一面上本就带下划线 + pointer 的图片 chip),根因都是「加不加下划线」与
+ * 「有没有 onPress」在各自的分支里独立决定 —— 判据分散必然漂移。本文件的会话 chip /
+ * 图片 chip 的 onPress 也是条件式的(handler 由上层可选注入),同款隐患成立。
+ *
+ * 所有可点 inline 一律经此取样式,**不要在 case 分支里直接写 `styles.markdownLink`**
+ * (chatPathCandidate.test.ts 有源码级守卫钉住这条)。路径 chip 不走这里:它的可点性
+ * 由 ChatPathChipSpan 的 `lit` 单点裁决,同样是「一个判据」。
+ */
+function clickableInlineStyle(
+  styles: ReturnType<typeof makeStyles>,
+  onPress: undefined | (() => void),
+  base: StyleProp<TextStyle>,
+  extra?: StyleProp<TextStyle>,
+): StyleProp<TextStyle> {
+  return [base, onPress ? styles.markdownLink : undefined, extra];
+}
+
 /** 本地路径链接形态的路径 chip 包装:candidate 按 url memo,保证引用稳定——
  *  renderInline 是普通函数,若在其内直接 classify 会每次 render 产新对象,
  *  击穿 ChatPathChipSpan 的 memo/effect 依赖,unknown verdict(不落缓存)的
@@ -3598,6 +3693,7 @@ function ChatPathChipSpan({
 function LinkPathChipSpan({
   url,
   display,
+  bare,
   baseStyle,
   SpanText,
   styles,
@@ -3605,17 +3701,35 @@ function LinkPathChipSpan({
 }: {
   url: string;
   display: string;
+  /** 正文裸写的路径(非作者手写的 `[label](url)`),决定点亮后是否套等宽 chip。 */
+  bare?: boolean;
   baseStyle?: StyleProp<TextStyle>;
   SpanText: typeof Text;
   styles: ReturnType<typeof makeStyles>;
   streaming?: boolean;
 }) {
   const candidate = useMemo(() => classifyChatPathLinkTarget(url), [url]);
+  // 点亮后是否套等宽 chip,按 DESIGN.md §14.5 的落地推论分三档(与桌面
+  // shouldRenderCodeReferenceLabel 的分流一一对应):
+  //   - 正文裸写的路径 → **不套**。它的未点亮态是普通正文,套上会让同一句里点亮的
+  //     `src/a.ts` 与未点亮的 `src/b.ts` 在字体、底色、下划线三处齐变。
+  //   - 作者手写、label 读起来是文件引用(`[README.md](path)`)→ **套**。那是作者的
+  //     排版意图,对齐桌面 FileTargetChip。
+  //   - 作者手写、散文 label(`[看这份规则](path)`)→ 不套,对齐桌面 ResolvedLocalLink。
+  const codeStyled = useMemo(
+    () => !bare && candidate !== null && chatPathLabelReadsAsFileReference(display, candidate, url),
+    [bare, candidate, display, url],
+  );
   return (
     <ChatPathChipSpan
       candidate={candidate}
-      chipStyle={[baseStyle, styles.markdownInlineCode, styles.markdownPathChip]}
+      chipStyle={
+        codeStyled
+          ? [baseStyle, styles.markdownInlineCode, styles.markdownPathChip]
+          : [baseStyle, styles.markdownPathChip]
+      }
       display={display}
+      // 未点亮一律回落正文样式(与桌面一致:未解析的 local-candidate 渲染成纯 span)。
       plainStyle={baseStyle}
       SpanText={SpanText}
       streaming={streaming}
@@ -3728,6 +3842,7 @@ function renderInline(
         return (
           <LinkPathChipSpan
             key={spanKey(`path-link:${index}:${inline.url}`)}
+            bare={inline.bare}
             baseStyle={ctx.baseStyle}
             display={inline.text}
             SpanText={SpanText}
@@ -3737,13 +3852,15 @@ function renderInline(
           />
         );
       }
+      // onPress 与下划线取同一个值,不可能一边有一边没有。
+      const openExternalUrl = () => {
+        void Linking.openURL(inline.url).catch(() => undefined);
+      };
       return (
         <SpanText
           key={spanKey(`link:${index}:${inline.url}`)}
-          onPress={() => {
-            void Linking.openURL(inline.url).catch(() => undefined);
-          }}
-          style={[ctx.baseStyle, styles.markdownLink]}
+          onPress={openExternalUrl}
+          style={clickableInlineStyle(styles, openExternalUrl, ctx.baseStyle)}
         >
           {inline.text}
         </SpanText>
@@ -3776,14 +3893,17 @@ function renderInline(
         </SpanText>
       );
     case 'image': {
+      // openImage 由上层可选注入 → 缺席时 chip 不可点,下划线也必须跟着不加
+      // (clickableInlineStyle 保证两者同源)。
+      const openImageChip = openImage ? () => openImage(inline.url, inline.alt) : undefined;
       // xdt 系非直连图:RN Image 无法直接加载内部 scheme,渲染可点 chip,
       // 点开后由 ImageLightbox 经 remote-media resolver 取图。
       if (!isMobileMarkdownImageDirectUrl(inline.url)) {
         return (
           <SpanText
             key={spanKey(`image:${index}:${inline.url}`)}
-            onPress={openImage ? () => openImage(inline.url, inline.alt) : undefined}
-            style={[ctx.baseStyle, styles.markdownLink]}
+            onPress={openImageChip}
+            style={clickableInlineStyle(styles, openImageChip, ctx.baseStyle)}
             testID="message.markdownInlineImageChip"
           >
             {inline.alt || i18n.t('message.renderer.imageFallbackTitle')}
@@ -3850,10 +3970,13 @@ function MarkdownSessionLinkSpan({
   const detail = sessionReferenceDetails?.[
     mobileSessionReferenceMetadataKey(session.sessionId, session.messageClientId)
   ];
+  // handler 由上层可选注入 → 缺席时 chip 不可点,下划线也必须跟着不加
+  // (clickableInlineStyle 保证两者同源)。
+  const openSessionLink = onOpenSessionLink ? () => onOpenSessionLink(inline.url) : undefined;
   return (
     <SpanText
-      onPress={onOpenSessionLink ? () => onOpenSessionLink(inline.url) : undefined}
-      style={[baseStyle, styles.markdownLink, styles.sessionLinkChipText]}
+      onPress={openSessionLink}
+      style={clickableInlineStyle(styles, openSessionLink, baseStyle, styles.sessionLinkChipText)}
     >
       {`${session.messageClientId ? '❝' : '↳'} ${title}${detail ? ` · ${detail}` : ''}`}
     </SpanText>
@@ -5551,6 +5674,84 @@ function messageClientId(item: MobileMessageItem): string {
   return item.message.source.clientId || item.message.source.id || item.message.key;
 }
 
+/** 语法 kind → 样式。plain 不走这里(直接当字符串塞进父 Text,少一层节点)。 */
+function syntaxStyleFor(
+  styles: ReturnType<typeof makeStyles>,
+  kind: Exclude<CodeTokenKind, 'plain'>,
+): StyleProp<TextStyle> {
+  switch (kind) {
+    case 'keyword': return styles.syntaxKeyword;
+    case 'string': return styles.syntaxString;
+    case 'comment': return styles.syntaxComment;
+    case 'number': return styles.syntaxNumber;
+    case 'function': return styles.syntaxFunction;
+    case 'property': return styles.syntaxProperty;
+  }
+}
+
+/**
+ * 代码块正文 —— 按 language 做词法着色(配色对齐桌面的 GitHub hljs 主题)。
+ *
+ * 抽成组件只为拿 useMemo:renderBlock 每次重渲都会走到,大代码块重复分词不划算。
+ * 嵌套 span 只带 color,其余样式继承外层 markdownCodeText。
+ *
+ * ⚠️ `SpanComponent` 必须由调用方经 `spanFor()` 给出,不能图省事直接用 RN 的
+ * `Text`:块可选中且在 iOS 时外层是 UITextView,而它只接受 UITextView 家族的子
+ * 节点 —— 传普通 Text 的话那些 span 会被整个丢掉(表现为代码里的属性名、关键字
+ * 直接从画面上消失,不报错)。
+ */
+function HighlightedCodeText({
+  SpanComponent,
+  allowIosUITextView,
+  language,
+  selectable,
+  selectionColor,
+  styles,
+  text,
+}: {
+  SpanComponent: typeof Text;
+  allowIosUITextView: boolean;
+  language: string | undefined;
+  selectable: boolean;
+  selectionColor: string;
+  styles: ReturnType<typeof makeStyles>;
+  text: string;
+}) {
+  const tokens = useMemo(() => tokenizeCode(text, language), [language, text]);
+  return (
+    <MarkdownSelectableText
+      allowIosUITextView={allowIosUITextView}
+      selectable={selectable}
+      selectionColor={selectionColor}
+      style={styles.markdownCodeText}
+    >
+      {tokens.map((token, index) => (
+        token.kind === 'plain'
+          ? token.text
+          : (
+            <SpanComponent key={index} style={syntaxStyleFor(styles, token.kind)}>
+              {token.text}
+            </SpanComponent>
+          )
+      ))}
+    </MarkdownSelectableText>
+  );
+}
+
+/**
+ * markdown 标题的字号档:h1 / h2 / h3+ 三档(见 markdownHeading* 的比例说明)。
+ * 两处渲染路径(text_run 合并树与独立 heading 块)共用,避免再次分叉成
+ * 「level <= 2 一刀切」那种只有两档、且第二档比正文还小的形态。
+ */
+function headingSizeStyle(
+  styles: ReturnType<typeof makeStyles>,
+  level: number,
+): StyleProp<TextStyle> {
+  if (level <= 1) return styles.markdownHeadingLarge;
+  if (level === 2) return styles.markdownHeadingMedium;
+  return styles.markdownHeadingSmall;
+}
+
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   messageFrame: { flex: 1, minHeight: 0 },
   messageList: { flex: 1 },
@@ -5815,17 +6016,24 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     lineHeight: lineHeight.caption,
   },
   markdownBody: { gap: 10 },
+  // 外链 / 会话深链等一切可点行内元素:**只有下划线**,不加粗、不换色、不换字体
+  // (DESIGN.md §14.5;GitHub 的 `.markdown-body a` 同样只有 text-decoration)。
+  //
+  // 刻意**不写 color**:必须继承所在上下文的颜色。表头(markdownTableHeaderCell 用
+  // textSecondary)、引用块等非正文色上下文里,写死 textPrimary 会让链接相对周围的
+  // 不可点文本**除下划线之外还变色**,违反「可点态只多一条横线」(PR #1144 review 实捉)。
   markdownLink: {
-    color: colors.textPrimary,
-    fontWeight: fontWeight.medium,
     textDecorationLine: 'underline',
   },
   // 会话深链 chip(非 selectable 原生 Text 路径):嵌套 Text 只支持背景色不支持
   // 圆角,用 surfaceChip 底色近似 chip 观感;WebView 路径的 .xdt-session-chip
   // 才是完整圆角版本。
+  //
+  // 下划线**不再**关掉:会话 chip 是可点的,而「下划线常显 = 可点」是聊天正文的唯一
+  // 交互信号(见 docs/design-rules/DESIGN.md「聊天正文的可点性信号」)。原先靠底色
+  // 单独表达可点,但底色同时被行内 code 等排版语义占用,读者无法据此判断可点性。
   sessionLinkChipText: {
     backgroundColor: colors.surfaceChip,
-    textDecorationLine: 'none',
   },
   // 对齐桌面聊天 markdown:<strong> 走浏览器默认 700,与 400 正文拉开明显对比。
   markdownStrong: { fontWeight: fontWeight.bold },
@@ -5834,18 +6042,28 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   // 与普通强调的区别只在语义,视觉上沿用 italic 已足够。
   markdownMathInline: { fontStyle: 'italic' },
   markdownStrike: { textDecorationLine: 'line-through' },
+  // 行内 code:零底色 + 等宽字体 + 文字压暗(参照 Codex 客户端)。
+  // 不给底色是平台约束:RN 嵌套在 Text 内的 inline 片段只认 backgroundColor,不认
+  // borderRadius(同 sessionLinkChipText 的注释),底色在这里只能是直角方块,成段
+  // 中文里一排方块比没有底色更糟。桌面走的是 GitHub 淡底 + 6px 圆角(CSS 能实现),
+  // 两端形态刻意不同 —— 取值与理由见 chatInlineCodeText。
   markdownInlineCode: {
-    backgroundColor: colors.chatCodeSurface,
-    borderRadius: radius.container,
+    color: colors.chatInlineCodeText,
     fontFamily: monoFont,
     fontSize: typeScale.code,
     lineHeight: lineHeight.code,
-    paddingHorizontal: 4,
   },
-  // 已验证存在的文件/目录路径 chip:在 inline code 底色上加下划线示意可点
-  // (嵌套 Text 只支持有限样式,与 sessionLinkChipText 同一约束)。
+  // 已验证存在的文件/目录路径 chip:**只加一条下划线,其它什么都不动**
+  // (权威规则见 docs/design-rules/DESIGN.md §14.5,对齐 GitHub 的口径 ——
+  // `.markdown-body code` 刻意不定义 color、纯靠继承,可点与不可点的行内 code
+  // 差别只在那条横线)。
+  //
+  // 刻意**不**再写 color 与 fontWeight:本样式总是叠在 markdownInlineCode 之后,
+  // 于是可点的行内 code 与不可点的行内 code 同色同字重,只差下划线 —— 差异越单一,
+  // 「有横线 = 能点」这条规则越可信。早先这里钉 textPrimary + medium 是因为当时
+  // 下划线还不是主信号,怕可点的比不可点的更淡;现在信号收敛到下划线,压暗是行内
+  // code 的排版语义,继承它才是对的。
   markdownPathChip: {
-    fontWeight: fontWeight.medium,
     textDecorationLine: 'underline',
   },
   markdownInlineImage: {
@@ -5856,29 +6074,49 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     color: colors.textPrimary,
     fontWeight: fontWeight.medium,
   },
+  // 三档标题,行高刻意选到能与 desktop 的相对比例对齐(desktop 正文 15:h1 20/1.4、
+  // h2 18/1.556、h3 16/1.5≈正文;mobile 正文 17):
+  //   h1  20/28 = 1.400  ← 与 desktop h1 的 1.4 相同
+  //   h2  18/28 = 1.556  ← 与 desktop h2 的 1.556 相同
+  //   h3+ 17/26          ← 与正文同字号,靠 medium 区分(同 desktop 让 h3 贴近正文)
+  // 20/28 与 18/28 都是 lineHeight 阶梯里既有的 listTitle 配对,未扩档。
+  // 改前 h1/h2 都是 bodyLarge(17)=正文字号、h3-h6 是 caption(12)——标题比正文还小。
   markdownHeadingLarge: {
+    fontSize: typeScale.title,
+    lineHeight: lineHeight.listTitle,
+  },
+  markdownHeadingMedium: {
+    fontSize: typeScale.subtitle,
+    lineHeight: lineHeight.listTitle,
+  },
+  markdownHeadingSmall: {
     fontSize: typeScale.bodyLarge,
     lineHeight: lineHeight.bodyLarge,
   },
-  markdownHeadingSmall: {
-    fontSize: typeScale.caption,
-    lineHeight: lineHeight.caption,
-  },
+  // 竖线对齐本文件 styles.rail(chatCodeBorder + 2px)——界面里「块引导竖线」是
+  // 一套统一的视觉语言,淡是设计意图;引用块不另搞一套(desktop 侧同样跟随
+  // --agent-actions-rail)。
   markdownQuote: {
-    borderLeftColor: colors.borderStrong,
+    borderLeftColor: colors.chatCodeBorder,
     borderLeftWidth: 2,
     paddingLeft: spacing.sm,
   },
+  // 引用正文与正文同色:textSecondary 对 surface 仅 3.1:1(light)/ 3.4:1(dark),
+  // 低于 WCAG AA 4.5:1,而 `>` 常承载本轮最该看的内容 —— 这是引用块唯一要修的
+  // 问题。「这是引用」由 rail + 内缩表达,不靠压低正文对比度。
   markdownQuoteText: {
-    color: colors.textSecondary,
+    color: colors.textPrimary,
   },
   markdownListRow: { flexDirection: 'row', gap: spacing.sm },
-  // text_run 合并树里的列表 marker 前缀(不占固定列宽,颜色弱化与原 marker 一致)。
+  // text_run 合并树里的列表 marker 前缀(不占固定列宽,颜色与原 marker 一致)。
   markdownListMarkerInline: {
-    color: colors.textSecondary,
+    color: colors.textPrimary,
   },
+  // 编号/项目符号与列表项正文同色(对齐 desktop 的 list-decimal / list-disc:
+  // 那边 marker 本就继承正文色)。编号在实际使用中承担段落引导,弱化到
+  // 3.1:1 会让扫读整段丢失。
   markdownListMarker: {
-    color: colors.textSecondary,
+    color: colors.textPrimary,
     fontSize: typeScale.bodyLarge,
     lineHeight: lineHeight.bodyLarge,
     textAlign: 'right',
@@ -5918,6 +6156,14 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontSize: typeScale.code,
     lineHeight: lineHeight.code,
   },
+  // 语法着色:只上 color,其余(字体/字号/行高)继承 markdownCodeText —— 嵌套 Text
+  // 只支持有限样式,且改字号会让同一行的 token 高低不齐。
+  syntaxKeyword: { color: colors.syntaxKeyword },
+  syntaxString: { color: colors.syntaxString },
+  syntaxComment: { color: colors.syntaxComment },
+  syntaxNumber: { color: colors.syntaxNumber },
+  syntaxFunction: { color: colors.syntaxFunction },
+  syntaxProperty: { color: colors.syntaxProperty },
   markdownTableScroll: {
     maxWidth: '100%',
   },

@@ -1,5 +1,5 @@
 /**
- * csp.ts — Content-Security-Policy for the XDMaker desktop app window(s).
+ * csp.ts — Content-Security-Policy for the Cindy desktop app window(s).
  * ---------------------------------------------------------------------------
  * WHY: the main window renders untrusted content (agent output, markdown,
  * file previews, web-search results) while `preload` exposes highly privileged
@@ -119,7 +119,8 @@ export function buildContentSecurityPolicy(ctx: CspContext): string {
 
   // connect-src: most backend traffic goes through main over IPC, but the
   // renderer DOES make a few direct exits — TapDB analytics XHR to
-  // https://e.tapdb.com, model-viewer decoder fetches to https://www.gstatic.com,
+  // https://e.tapdb.com (cn) / https://e.tapdb.ap-sg.tapapis.com (global),
+  // model-viewer decoder fetches to https://www.gstatic.com,
   // and <model-viewer> fetch()-ing models over the xdt-model: / cindy-media:
   // schemes (mivo 老缓存与媒体总仓 GLB 各走各的协议). https: covers the first
   // two; the privileged schemes are listed explicitly (a privileged scheme

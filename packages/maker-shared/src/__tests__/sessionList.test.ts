@@ -108,6 +108,87 @@ describe('sessionList', () => {
     expect(sections[0].data[0].worktreeLabel).toBe('Worktree serene-lovelace');
   });
 
+  it('未起名会话用调用方给的本地化文案,不回落工作目录路径', () => {
+    // 哨兵若按「无标题」处理,会回落 workingDir 把完整路径当标题显示,与 desktop 的
+    // 「未命名任务」不一致(PR #1031 review P1)。文案由调用方按当前 locale 传入 ——
+    // 共享层不能兜中文串,mobile 还支持 en / ja / ko。
+    const now = new Date('2026-01-01T00:10:00.000Z').getTime();
+    const sentinel = session('s-sentinel', {
+      title: 'New Maker',
+      workingDir: '/Users/dash/Code/Cindy/cindy',
+    });
+
+    expect(
+      toRemoteSessionListItem(sentinel, now, undefined, 0, null, null, '未命名任务').title,
+    ).toBe('未命名任务');
+    // 同一条会话换 locale → 换文案(锁住「不在共享层写死中文」)。
+    expect(
+      toRemoteSessionListItem(sentinel, now, undefined, 0, null, null, 'Untitled session').title,
+    ).toBe('Untitled session');
+    // 调用方没给文案时回落既有链(workingDir),而不是悄悄显示中文。
+    expect(toRemoteSessionListItem(sentinel, now).title).toBe('/Users/dash/Code/Cindy/cindy');
+
+    // 空标题(非哨兵)不受影响,仍走既有兜底链。
+    const emptyTitle = toRemoteSessionListItem(
+      session('s-empty', { title: '', workingDir: '/Users/dash/Code/Cindy/cindy' }),
+      now,
+      undefined,
+      0,
+      null,
+      null,
+      '未命名任务',
+    );
+    expect(emptyTitle.title).toBe('/Users/dash/Code/Cindy/cindy');
+  });
+
+  it('buildRemoteSessionSections 把 unnamedLabel 透传到列表行', () => {
+    // 设备详情页与首页都经 options 传 locale 文案;漏传就会在 en/ja/ko 下露出中文或路径。
+    const [section] = buildRemoteSessionSections(
+      [session('s-sentinel', { title: 'New Maker', workingDir: '/repo' })],
+      new Date('2026-01-01T00:10:00.000Z').getTime(),
+      { unnamedLabel: 'Untitled session' },
+    );
+    expect(section.data[0].title).toBe('Untitled session');
+  });
+
+  // 搜索 haystack 与行上显示的串必须同源(PR #1031 review P1)。两条断言方向相反,
+  // 缺哪一条都会留下一半的错位:只补 label 会让内部哨兵继续可搜,只删哨兵会让
+  // 界面上看得见的文案搜不到。
+  it('未起名会话能按行上显示的兜底文案搜到', () => {
+    const sections = buildRemoteSessionSections(
+      [
+        session('s-sentinel', { title: 'New Maker', workingDir: '/repo' }),
+        session('s-named', { title: '修 Orca 心跳', workingDir: '/other' }),
+      ],
+      new Date('2026-01-01T00:10:00.000Z').getTime(),
+      { searchQuery: 'Untitled', unnamedLabel: 'Untitled session' },
+    );
+    expect(sections.flatMap((s) => s.data).map((item) => item.session.id)).toEqual(['s-sentinel']);
+  });
+
+  it('内部哨兵不进 haystack:搜 "New Maker" 只命中标题里真有这个词的会话', () => {
+    const sections = buildRemoteSessionSections(
+      [
+        session('s-sentinel', { title: 'New Maker', workingDir: '/repo' }),
+        session('s-named', { title: 'Fix New Maker draft route', workingDir: '/other' }),
+      ],
+      new Date('2026-01-01T00:10:00.000Z').getTime(),
+      { searchQuery: 'new maker', unnamedLabel: 'Untitled session' },
+    );
+    expect(sections.flatMap((s) => s.data).map((item) => item.session.id)).toEqual(['s-named']);
+  });
+
+  it('automation 会话按剥掉前缀后的可见标题可搜', () => {
+    // 投影替掉的是原始 title 那一项;`[Schedule] ` 前缀本来就不显示,剥掉后的串
+    // 由 haystack 里的 automationDisplayTitle 继续覆盖。
+    const sections = buildRemoteSessionSections(
+      [session('s-auto', { title: '[Schedule] 每日巡检', workingDir: '/repo' })],
+      new Date('2026-01-01T00:10:00.000Z').getTime(),
+      { searchQuery: '每日巡检', unnamedLabel: 'Untitled session' },
+    );
+    expect(sections.flatMap((s) => s.data).map((item) => item.session.id)).toEqual(['s-auto']);
+  });
+
   it('builds compact display metadata for a session row', () => {
     const item = toRemoteSessionListItem(session('s1', {
       title: '',
@@ -120,7 +201,7 @@ describe('sessionList', () => {
     }), new Date('2026-01-01T00:10:00.000Z').getTime());
 
     expect(item).toMatchObject({
-      title: '未命名会话',
+      title: '未命名任务',
       subtitle: 'Codex · gpt-5.4 · dialogue',
       detail: '活跃 · 5 分钟前 · 12 条消息',
       messagePreview: null,
@@ -342,8 +423,8 @@ describe('sessionList', () => {
     const group = rows.find((item) => item.automationGroup);
     expect(group).toMatchObject({
       title: '移动端巡检',
-      subtitle: '自动化任务 · 2 个会话 · Claude Code · claude-sonnet-4-6',
-      detail: '2 个会话 · 4 分钟前 · 自动化执行中 · 1 个自动化未读',
+      subtitle: '自动化 · 2 个任务 · Claude Code · claude-sonnet-4-6',
+      detail: '2 个任务 · 4 分钟前 · 自动化执行中 · 1 个自动化未读',
       automationGroup: {
         key: 'schedule:sched-1',
         sessionIds: ['running', 'old'],
@@ -578,7 +659,7 @@ describe('sessionList', () => {
       statusFilter: 'active',
     })).toMatchObject({
       title: '搜索结果',
-      detail: '1 个匹配会话 · 活跃 2 · 项目分组',
+      detail: '1 个匹配任务 · 活跃 2 · 项目分组',
       hint: '搜索范围包含标题、项目路径、模型、自动化名称和消息预览。',
       resultCount: 1,
       rowCount: 1,
@@ -609,9 +690,9 @@ describe('sessionList', () => {
       sections: automationSections,
       statusFilter: 'automation',
     })).toMatchObject({
-      title: '自动化会话',
-      detail: '2 个会话 · 1 行 · 自动化 2 · 项目分组',
-      hint: '自动化会话会按计划聚合，展开后可以进入单次运行。',
+      title: '自动化生成的任务',
+      detail: '2 个任务 · 1 行 · 自动化 2 · 项目分组',
+      hint: '自动化生成的任务会按计划聚合，展开后可以进入单次运行。',
       resultCount: 2,
       rowCount: 1,
     });
@@ -619,19 +700,19 @@ describe('sessionList', () => {
 
   it('keeps mobile device-detail empty states specific to search and filters', () => {
     expect(deviceSessionEmptyState('active', 'billing')).toMatchObject({
-      title: '没有匹配的会话',
+      title: '没有匹配的任务',
     });
     expect(deviceSessionEmptyState('waiting', '')).toMatchObject({
       title: '没有待处理请求',
     });
     expect(deviceSessionEmptyState('automation', '')).toMatchObject({
-      title: '没有自动化会话',
+      title: '没有自动化生成的任务',
     });
     expect(deviceSessionEmptyState('archived', '')).toMatchObject({
-      title: '没有归档会话',
+      title: '没有归档任务',
     });
     expect(deviceSessionEmptyState('active', '')).toMatchObject({
-      title: '这台电脑暂无活动会话',
+      title: '这台电脑暂无活动任务',
     });
   });
 

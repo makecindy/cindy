@@ -91,6 +91,23 @@ describe('TaskListCell 并发等待提示', () => {
     expect(screen.getByText('scheduler.cell.subtitleWaitingForResources')).toBeTruthy();
     expect(screen.queryByText(/Next less than 1 min/)).toBeNull();
   });
+
+  it('排队等对话空闲优先于「等执行资源」:这一轮已经触发过了', () => {
+    render(
+      createElement(TaskListCell, {
+        schedule: { ...schedule, nextFireAt: Date.now() - 60_000 },
+        selected: false,
+        onSelect: vi.fn(),
+        // 引擎会把排队 run 从闸门里摘出去,理论上两者不同时出现;这里同时给，
+        // 断言优先级不会退化成显示"还没抢到槽"。
+        waitingForResources: { inFlight: 1, maxConcurrentRuns: 8 },
+        queuedForSession: true,
+      }),
+    );
+
+    expect(screen.getByText('scheduler.cell.subtitleQueuedForSession')).toBeTruthy();
+    expect(screen.queryByText('scheduler.cell.subtitleWaitingForResources')).toBeNull();
+  });
 });
 
 describe('TaskListCell 费用展示', () => {

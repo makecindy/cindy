@@ -19,7 +19,11 @@ import { useSyncExternalStore } from 'react';
 let devices: DeviceLinkDeviceView[] | null = null;
 const subs = new Set<() => void>();
 let started = false;
-/** 当前账号 / relay 生命周期内，至少一次最新的 listDevices 请求已经 resolve 或 reject。 */
+/**
+ * 设备目录是否已进入终态 —— 上层(shouldWaitForRemoteSessionBootstrap)据此决定还要不要等。
+ * 两种终态:最新一次 listDevices 已 resolve / reject(见 setDevices / markInitialRequestSettled),
+ * 或 relay 已停(登出 / 本地模式,见 clearDevices)。false 必须意味着「还有结果会来」。
+ */
 let initialRequestSettled = false;
 /**
  * 加载代次:**每次 refresh 发起**与**每次清空(登出 / relay stop)**都自增,作废所有更早的在途
@@ -84,13 +88,23 @@ function setDevices(next: DeviceLinkDeviceView[]): void {
   subs.forEach((fn) => fn());
 }
 
-/** 清空缓存设备,回到「未加载」态(null → 切换栏隐藏)。登出 / relay 停止时调用。 */
+/**
+ * 清空缓存设备(null → 切换栏隐藏)。登出 / relay 停止时调用。
+ *
+ * `initialRequestSettled` **置 true**:link 已停 = 此刻确定没有可用的远端设备目录,而且在途
+ * 请求刚被 loadGeneration 作废、不会再有结果落地 —— 这与 refresh 失败兜底同一个终态
+ * (devices=null + settled=true)。若像早先那样置回 false,登出后进入本地模式 / 保持未登录
+ * 就再也收不到 relay 'online' 来重新结算,shouldWaitForRemoteSessionBootstrap 恒为 true,
+ * 侧栏「对话」分区卡在「加载中…」直到冷重启(#797)。
+ * 重新登录不受影响:relay 'online' → refresh() 会因 `devices === null && initialRequestSettled`
+ * 主动退回 loading,远程设备首快照的等待行为保持原样。
+ */
 function clearDevices(): void {
   loadGeneration += 1; // 作废所有在途 listDevices 响应(见 loadGeneration 注释)。
-  const changed = devices !== null || initialRequestSettled;
+  const changed = devices !== null || !initialRequestSettled;
   if (!changed) return;
   devices = null;
-  initialRequestSettled = false;
+  initialRequestSettled = true;
   subs.forEach((fn) => fn());
 }
 

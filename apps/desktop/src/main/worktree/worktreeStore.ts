@@ -78,7 +78,9 @@ export function get(sessionId: string): WorktreeMeta | null {
  * 读取所有已记录的 worktree 路径(供 isManagedWorktreePath 三条校验用)。
  */
 export function getAllPaths(): string[] {
-  return getAll().map((m) => m.path);
+  return getAll().flatMap((m) => (
+    m.quarantinePath ? [m.path, m.quarantinePath] : [m.path]
+  ));
 }
 
 /**

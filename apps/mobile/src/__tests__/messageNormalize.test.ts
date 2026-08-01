@@ -61,6 +61,19 @@ describe('normalizeRemoteMessages', () => {
         content: 'question',
         agentMeta: { turnCostUsd: 0.07 },
       }),
+      message({
+        id: 'with-cny-cost',
+        role: 'assistant',
+        content: '人民币费用',
+        agentMeta: {
+          turnCost: {
+            amount: 0.29,
+            currency: 'CNY',
+            approximate: false,
+            kind: 'actual-cost',
+          },
+        },
+      }),
     ]);
 
     expect(items[0]).toMatchObject({
@@ -70,6 +83,15 @@ describe('normalizeRemoteMessages', () => {
     });
     expect(items[1].turnCostUsd).toBeUndefined();
     expect(items[2].turnCostUsd).toBeUndefined();
+    expect(items[3]).toMatchObject({
+      turnMoney: {
+        amount: 0.29,
+        currency: 'CNY',
+        kind: 'actual-cost',
+      },
+      turnCostIsEstimate: false,
+    });
+    expect(items[3].turnCostUsd).toBeUndefined();
   });
 
   it('preserves assistant streaming state from desktop message metadata and content', () => {
@@ -919,13 +941,15 @@ describe('normalizeRemoteMessages', () => {
     expect(items[1].turnCompleted).toBeUndefined();
   });
 
-  it('renders silent-stop auto-resume rows as system cards instead of user bubbles', () => {
+  it('renders auto-resume rows as system cards with interruption outcome metadata', () => {
     const items = normalizeRemoteMessages([
       message({
         id: 'auto-resume',
         role: 'user',
         content: '继续',
-        agentMeta: { delivery: 'turn', autoResume: true },
+        agentMeta: { delivery: 'turn', autoResume: true, autoResumeInfo: {
+          error: 'socket hang up', attempt: 2, maxAttempts: 5, sessionTotal: 3,
+        }, autoResumeOutcome: 'failed' },
       }),
     ]);
 
@@ -935,6 +959,7 @@ describe('normalizeRemoteMessages', () => {
       label: 'user',
       body: '',
       systemCardType: 'auto-resume',
+      systemCardData: { error: 'socket hang up', attempt: 2, maxAttempts: 5, sessionTotal: 3, outcome: 'failed' },
       align: 'agent',
     });
   });

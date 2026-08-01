@@ -114,16 +114,21 @@ function buildAudioRowHtml(durationLabel: string): string {
 /** srcdoc 脚手架:meta CSP 锁子资源 + 主题变量块 + 最小 reset;正文为主机
  *  净化产物。文字保持可选中(海报里的说明文案用户要能复制);图片禁拖拽保住
  *  海报手感。
- *  themeVars:主机主题的 `:root{--token:value}` 白名单变量块(见
+ *  themeVars:主机主题的 `:root{color-scheme:…;--token:value}` 白名单变量块(见
  *  useGhostCardThemeVars),纯加法下发——意识引用 var(--xxx) 就跟主题,写死
- *  配色的意识不引用即无感知。style-src 'unsafe-inline' 已放行本段内联样式。 */
+ *  配色的意识不引用即无感知。其中 color-scheme 是**透明画布契约的前提**:
+ *  它不跨文档继承,不声明时 Chromium 按 light 给 iframe 一张不透明白 canvas,
+ *  于是不铺底色的全出血卡在暗色主题下整张变白(且切主题不变——白来自 UA)。
+ *  取值与守卫见 ghostPanelTheme.readHostColorScheme。
+ *  style-src 'unsafe-inline' 已放行本段内联样式。 */
 function buildCardSrcDoc(sanitizedHtml: string, themeVars: string): string {
   return [
     '<!doctype html><html><head>',
     '<meta charset="utf-8">',
     '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src cindy-media:; style-src \'unsafe-inline\'">',
     // 主题变量块放在基线 reset 之前:意识正文的净化后内联样式仍可覆盖,
-    // var(--xxx) 供其按需取用;themeVars 为空(极端:token 全空)时不注空标签。
+    // var(--xxx) 供其按需取用;themeVars 为空(极端:store 未就绪)时不注空标签
+    // ——正常路径下它恒含 color-scheme 声明,不会为空。
     themeVars ? `<style>${themeVars}</style>` : '',
     // reduced-motion 门控是宿主强制(规则 7),不靠意识作者自觉:系统开了
     // 减弱动效时,动画版卡片的意识自绘动画一律停播(srcdoc 内 media query

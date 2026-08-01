@@ -24,6 +24,11 @@
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { applyCodexPlanSnapshotOnDone } from '@cindy/maker-shared/message-render';
+import {
+  normalizeWorkflowProgressEntries,
+  type WorkflowProgressEntry,
+} from '@cindy/maker-shared/agent-task';
+import { normalizeAutoTitle } from '@cindy/maker-shared/session-title';
 import type { MessageRole, Message, MessageAutomationOrigin } from '@/lib/ccAgent.types';
 import type { AttachedFile, MentionedResource, SerializedAttachedFile } from '@/lib/fileTypes';
 import type {
@@ -33,6 +38,7 @@ import type {
   AgentInputSessionRef,
   AgentInputReference,
 } from '../../shared/agentInputQueue';
+import { hasUserVisibleText } from '../../shared/visibleText';
 import {
   deriveAutoTitleSeed,
   getAgentFacingText,
@@ -72,6 +78,10 @@ import {
 } from '@/features/device-link/remoteProjectsStore';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import {
+  clearCachedMessages,
+  readCachedMessages,
+} from '@/features/device-link/mirrorCacheClient';
+import {
   noteRemoteSessionSyncCompleted,
   noteRemoteSessionSyncStarted,
   setRemoteTerminalErrorProbe,
@@ -83,13 +93,18 @@ import {
 import { setMirrorEffort, setMirrorFast } from '@/state/deviceLinkModelMirror';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import type { Effort } from '@/lib/userPreferences.types';
-import { emitPatch } from '@/lib/sessionsBus';
+import {
+  emitAutoTitlePreview,
+  emitAutoTitlePreviewCleared,
+  emitPatch,
+} from '@/lib/sessionsBus';
 import { createLogger } from '@/lib/logger';
 import { getUserPrompt } from '@/lib/userPromptStore';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
 import { buildUserMessageAttachmentPayload } from '@/lib/messageAttachmentPayload';
 import {
   parseIssueEnvRegion,
+  parseIssueSuggestedPublicName,
   parseIssueSubmissionIdentity,
   type IssueSubmissionIdentity,
 } from '@/lib/issueConfirmPayload';
@@ -106,6 +121,10 @@ import { i18n } from '@/i18n';
 import { toast } from '@/lib/toast';
 import { openUrlInSidebarBrowser } from '@/features/right-sidebar/lib/openInSidebarBrowser';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
+import {
+  extractUsageLimitRecoveryHint,
+  type UsageLimitRecoveryHint,
+} from '@/lib/usageLimitRecovery';
 
 import {
   materializeAnnotatedAttachmentsForSend,
@@ -328,6 +347,12 @@ export interface ChatMessage {
     | 'goal-resumed'
     | 'learn'
     | 'auto-resume'
+    /**
+     * 中断自愈**进行中**(退避窗口内,由 projection.autoResumePending 驱动的 ephemeral
+     * 卡)。与 'auto-resume' 的分工:那条是自愈**已完成**、由落库的 autoResume user 行
+     * 派生、重开会话仍在;这条只活在退避那几秒,补发一发出就撤掉。
+     */
+    | 'auto-resume-pending'
     | 'agent-switch';
   systemCardData?: Record<string, unknown>;
   /** FP-3: plan_review message fields */
@@ -420,6 +445,12 @@ export interface ChatMessage {
   remoteContentTruncated?: boolean;
   /** 历史页由 device-link 裁掉过部分行;分页状态需保持可继续加载。 */
   remoteRowsTrimmed?: boolean;
+  /**
+   * 这一行来自远程会话的本地冷缓存(见 features/device-link/mirrorCacheClient.ts),
+   * **不是**被控端本次确认过的权威行。首拉落地前必须整批剔除:mergeMessages 只增不删,
+   * 留着的话被控端 /clear、rewind 或删掉的消息会在控制端永久残留。纯内存标记,不落 DB。
+   */
+  cacheHydrated?: boolean;
 }
 
 export type AgentTaskStatus = 'running' | 'completed' | 'failed' | 'stopped';
@@ -444,6 +475,12 @@ export interface AgentTaskUpdate {
   model?: string;
   reasoningEffort?: string;
   receiverThreadIds?: string[];
+  /**
+   * workflow 逐 agent 进度树(taskType=local_workflow 时由 task_progress 事件携带)。
+   * CLI 对纯心跳帧节流省略本字段,merge 必须沿用上一帧,绝不能清空。
+   * 与 `@cindy/maker-shared/agent-task` 的 AgentTaskUpdate 保持 lockstep。
+   */
+  workflowProgress?: WorkflowProgressEntry[];
   createdAt?: string;
   updatedAt?: string;
 }
@@ -593,6 +630,8 @@ export interface PendingIssueConfirm {
   };
   /** main 已经选定、确认后不会自动切换的实际 GitHub 作者身份。 */
   submissionIdentity: IssueSubmissionIdentity;
+  /** 平台代发的建议公开署名；缺失时卡片使用本地化“匿名”。 */
+  suggestedPublicName?: string;
 }
 
 /**
@@ -735,6 +774,8 @@ export interface SessionChatState {
   isStreaming: boolean;
   agentStatus: AgentStatus;
   error: string | null;
+  /** 当前 terminal error 是否为可恢复的账号用量限制，以及可识别的重置时刻。 */
+  usageLimitRecovery?: UsageLimitRecoveryHint | null;
   /**
    * 当前 terminal error 的稳定 reason key(maker-core/main 下发,如
    * 'silent-stop-exhausted')。ErrorBanner 据此渲染专用 action(「继续」按钮);
@@ -964,6 +1005,7 @@ export type SessionChatLightState = Pick<
   | 'agentStatus'
   | 'isStreaming'
   | 'error'
+  | 'usageLimitRecovery'
   | 'errorReason'
   | 'recoverableError'
   | 'errorRetryText'
@@ -1013,6 +1055,7 @@ function createInitialState(): SessionChatState {
       startedAt: null,
     },
     error: null,
+    usageLimitRecovery: null,
     errorReason: null,
     recoverableError: null,
     activeTurnRetryText: null,
@@ -1076,6 +1119,7 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
     startedAt: null,
   },
   error: null,
+  usageLimitRecovery: null,
   errorReason: null,
   recoverableError: null,
   activeTurnRetryText: null,
@@ -1233,6 +1277,9 @@ function _purgeSession(sessionId: string): void {
   titleUpdateCallbacks.delete(sessionId);
   _historyFetchInFlight.delete(sessionId);
   _historyLoadOrigin.delete(sessionId);
+  // 冷缓存 hydrate 的两个守卫随会话一起收掉(会话都没了,守卫留着只是无用条目)。
+  _cacheHydrateStarted.delete(sessionId);
+  _cacheHydrateSuppressed.delete(sessionId);
   _lastViewedAt.delete(sessionId);
   _lastInboundEventAt.delete(sessionId);
   rendererClearBoundaryBySession.delete(sessionId);
@@ -1381,7 +1428,9 @@ function leaveView(sessionId: string): void {
     setState(sessionId, (s) => ({
       ...s,
       ...(s.historyLoaded ? { historyLoaded: false } : {}),
-      ...(s.error ? { error: null, errorRetryText: null } : {}),
+      ...(s.error
+        ? { error: null, usageLimitRecovery: null, errorRetryText: null }
+        : {}),
     }));
   }
   _trimMessagesIfNeeded(sessionId);
@@ -1471,6 +1520,24 @@ function notify(sessionId: string): void {
   });
 }
 
+/**
+ * 「正在自动继续」ephemeral 卡的固定 clientId。每个会话一份 state，所以固定串足够；
+ * 用固定值而不是随机 id，是为了让插入幂等（同一接管窗口内 projection 会 emit 多次）。
+ */
+/** 浅比较两份 systemCardData（只有原始值字段），用来避免无变化时替换消息引用。 */
+function shallowEqualRecord(
+  a: Record<string, unknown> | undefined,
+  b: Record<string, unknown>,
+): boolean {
+  if (!a) return false;
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((key) => a[key] === b[key]);
+}
+
+const AUTO_RESUME_PENDING_CLIENT_ID = '__auto_resume_pending__';
+
 function applyInputProjection(projection: AgentInputProjection): void {
   if (!projection.sessionId) return;
   setState(projection.sessionId, (s) => {
@@ -1500,10 +1567,57 @@ function applyInputProjection(projection: AgentInputProjection): void {
     // 气泡, 回落到队列态。真正被立即派发的那条 clientId 不在 pendingQueue 里, 气泡
     // 保留, 之后 localDb.messages.onCreated 广播按 clientId dedupe 不会重复。
     const queuedIds = new Set(projection.pendingQueue.map((q) => q.clientId));
-    const messages =
+    const dedupedMessages =
       queuedIds.size > 0 && s.messages.some((m) => m.isPendingPersist && queuedIds.has(m.clientId))
         ? s.messages.filter((m) => !(m.isPendingPersist && queuedIds.has(m.clientId)))
         : s.messages;
+    // 中断自愈接管中 → 在流末尾挂一条 ephemeral 的「正在自动继续」分隔条(不落库);
+    // 接管结束(补发已发出 / 放弃 / 用户自己接手)由同一处撤掉。红横幅只留给最终失败,
+    // 所以这几秒里 projection.error 是 null,用户看到的就只有这条低调提示。
+    const autoResumePending = !!projection.autoResumePending;
+    const hasPendingCard = dedupedMessages.some(
+      (m) => m.clientId === AUTO_RESUME_PENDING_CLIENT_ID,
+    );
+    const pendingCardData = projection.autoResumePending
+      ? ({ ...projection.autoResumePending } as Record<string, unknown>)
+      : null;
+    const withPendingCard = autoResumePending
+      ? hasPendingCard
+        // 卡已在:必须把最新展示信息写回去 —— 同一次中断的进度会连续更新
+        // (1/5 → 2/5 …),原样保留旧卡的话进度永远停在第一次(copilot review)。
+        // 只在内容真的变了时才换引用,避免每次 projection 都触发无谓重渲染。
+        ? dedupedMessages.map((m) =>
+            m.clientId === AUTO_RESUME_PENDING_CLIENT_ID &&
+            pendingCardData &&
+            !shallowEqualRecord(m.systemCardData, pendingCardData)
+              ? { ...m, systemCardData: pendingCardData }
+              : m,
+          )
+        : [
+            ...dedupedMessages,
+            {
+              clientId: AUTO_RESUME_PENDING_CLIENT_ID,
+              role: 'assistant' as const,
+              content: '',
+              isStreaming: false,
+              systemCardType: 'auto-resume-pending' as const,
+              ...(pendingCardData ? { systemCardData: pendingCardData } : {}),
+              createdAt: new Date().toISOString(),
+            },
+          ]
+      : hasPendingCard
+        ? dedupedMessages.filter((m) => m.clientId !== AUTO_RESUME_PENDING_CLIENT_ID)
+        : dedupedMessages;
+    // 折叠:同一次中断事件里,ephemeral 进行中行与它前面那些已落库的重连行只显示最新
+    // 一条(否则第 2 次重连时会看到「未成功」+「重新连接中 2/5」两行并存)。
+    const messages = collapseConsecutiveAutoResumeRows(withPendingCard);
+    // main 可能重复投影同一条 error。相对时间（如 "Try again in 1h"）只能在错误首次出现
+    // 时锚定；每次都按新的 Date.now() 重算会让恢复时间持续后移，也会制造无意义的新对象。
+    const usageLimitRecovery = !projection.error
+      ? null
+      : projection.error === s.error
+        ? s.usageLimitRecovery
+        : extractUsageLimitRecoveryHint({ message: projection.error });
     return {
       ...s,
       messages,
@@ -1515,6 +1629,7 @@ function applyInputProjection(projection: AgentInputProjection): void {
       queueEditLocks: projection.queueEditLocks,
       queueAbortPending: projection.queueAbortPending,
       error: projection.error,
+      usageLimitRecovery,
       // projection 覆盖 error(dispatch 失败等,无 reason 语义)→ reason 一并清,
       // 避免 silent-stop 的「继续」按钮挂在一条不相干的错误上。
       errorReason: null,
@@ -1823,6 +1938,7 @@ function normalizeAgentTaskUpdate(
         ...(typeof usageRaw.durationMs === 'number' ? { durationMs: usageRaw.durationMs } : {}),
       }
     : undefined;
+  const workflowProgress = normalizeWorkflowProgressEntries(raw.workflowProgress);
   return {
     provider,
     taskId: taskId ?? parentToolUseId!,
@@ -1853,6 +1969,7 @@ function normalizeAgentTaskUpdate(
           ),
         }
       : {}),
+    ...(workflowProgress ? { workflowProgress } : {}),
     ...(typeof raw.createdAt === 'string' && raw.createdAt ? { createdAt: raw.createdAt } : {}),
     ...(typeof raw.updatedAt === 'string' && raw.updatedAt ? { updatedAt: raw.updatedAt } : {}),
   };
@@ -1872,6 +1989,8 @@ function mergeAgentTaskUpdate(
     summary: next.summary ?? prev.summary,
     outputFile: next.outputFile ?? prev.outputFile,
     lastToolName: next.lastToolName ?? prev.lastToolName,
+    // CLI 节流帧不带 workflowProgress(undefined = 沿用旧树),必须保留上一帧。
+    workflowProgress: next.workflowProgress ?? prev.workflowProgress,
     createdAt: prev.createdAt ?? next.createdAt,
     updatedAt: next.updatedAt ?? prev.updatedAt,
   };
@@ -2305,17 +2424,17 @@ export function handleStreamEvent(
       const finalized = finalizeStreamingInState(state);
       const clientId = event.persistId ?? crypto.randomUUID();
 
-      const existingUpdatePlanIdx =
-        toolName === 'update_plan'
+      const existingUpdatableToolIdx =
+        toolName === 'update_plan' || toolName === 'web_search'
           ? finalized.messages.findIndex(
               (m) =>
-                m.role === 'tool_use' && m.toolName === 'update_plan' && m.toolUseId === toolUseId,
+                m.role === 'tool_use' && m.toolName === toolName && m.toolUseId === toolUseId,
             )
           : -1;
-      if (existingUpdatePlanIdx >= 0) {
+      if (existingUpdatableToolIdx >= 0) {
         const messages = finalized.messages.slice();
-        messages[existingUpdatePlanIdx] = {
-          ...messages[existingUpdatePlanIdx],
+        messages[existingUpdatableToolIdx] = {
+          ...messages[existingUpdatableToolIdx],
           content: formatToolUseSummary(toolName, input),
           toolInput: input,
         };
@@ -2513,7 +2632,12 @@ export function handleStreamEvent(
         return {
           ...state,
           error: null,
-          errorReason: null,
+          usageLimitRecovery: null,
+          // 非终止 error 此前恒清 reason(那时没有任何非终止 error 带 reason)。过载
+          // 重投是第一个需要它的: renderer 靠 reason 判定"是否过载"来渲染本地化的
+          // 重试进度, 而重投恰恰只在**非终止**态发生 —— 清掉就等于 UI 侧只能回退
+          // 文案匹配。其它非终止 error 仍不带 reason, 行为不变。
+          errorReason: reason ?? null,
           recoverableError: errMsg,
           errorRetryText: null,
           isStreaming: true,
@@ -2545,6 +2669,9 @@ export function handleStreamEvent(
       return {
         ...finalized,
         error: isPlannedUpgradeClose ? null : errMsg,
+        usageLimitRecovery: isPlannedUpgradeClose
+          ? null
+          : extractUsageLimitRecoveryHint(event.data),
         errorReason: isPlannedUpgradeClose ? null : (reason ?? null),
         recoverableError: null,
         errorRetryText: derivedRetryText ?? preservedRetryText,
@@ -3090,6 +3217,7 @@ function handleStatusUpdate(
     // 的后台 turn 误报成「执行失败」通知(bot review P2)。skipTurnReset 的
     // side-channel running 信号已在上方早退,不会误清。
     error: isTurnStart ? null : state.error,
+    usageLimitRecovery: isTurnStart ? null : state.usageLimitRecovery,
     errorReason: isTurnStart ? null : state.errorReason,
     errorRetryText: isTurnStart || (isTurnComplete && !state.error) ? null : state.errorRetryText,
     recoverableError: isTurnComplete ? null : state.recoverableError,
@@ -3873,6 +4001,10 @@ function initGlobalListeners(): void {
         | undefined;
       const submissionIdentity = parseIssueSubmissionIdentity(request.submissionIdentity);
       if (!draft || !rawEnv || !submissionIdentity) return;
+      const suggestedPublicName =
+        submissionIdentity.kind === 'platform'
+          ? parseIssueSuggestedPublicName(request.suggestedPublicName)
+          : undefined;
       // region 过一遍白名单:非法值宁可不展示区域,也不能把 CN 版说成默认版。
       const env = { ...rawEnv, region: parseIssueEnvRegion(rawEnv.region) };
       setState(sessionId, (s) => ({
@@ -3882,6 +4014,7 @@ function initGlobalListeners(): void {
           draft,
           env,
           submissionIdentity,
+          suggestedPublicName,
         },
       }));
       return;
@@ -4232,7 +4365,9 @@ function initGlobalListeners(): void {
                 setState(ep.sessionId, (s) => ({
                   ...s,
                   ...(s.historyLoaded ? { historyLoaded: false } : {}),
-                  ...(s.error ? { error: null, errorRetryText: null } : {}),
+                  ...(s.error
+                    ? { error: null, usageLimitRecovery: null, errorRetryText: null }
+                    : {}),
                 }));
               }
             }
@@ -4323,7 +4458,9 @@ function initGlobalListeners(): void {
       setState(p.sessionId, (s) => ({
         ...s,
         ...(s.historyLoaded ? { historyLoaded: false } : {}),
-        ...(s.error ? { error: null, errorRetryText: null } : {}),
+        ...(s.error
+          ? { error: null, usageLimitRecovery: null, errorRetryText: null }
+          : {}),
       }));
     },
     'local-db-session-error-persisted',
@@ -4574,6 +4711,7 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     agentStatus: state.agentStatus,
     isStreaming: state.isStreaming,
     error: state.error,
+    usageLimitRecovery: state.usageLimitRecovery,
     errorReason: state.errorReason,
     recoverableError: state.recoverableError,
     errorRetryText: state.errorRetryText,
@@ -4611,6 +4749,7 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.agentStatus === b.agentStatus &&
     a.isStreaming === b.isStreaming &&
     a.error === b.error &&
+    a.usageLimitRecovery === b.usageLimitRecovery &&
     a.errorReason === b.errorReason &&
     a.recoverableError === b.recoverableError &&
     a.errorRetryText === b.errorRetryText &&
@@ -4941,6 +5080,7 @@ function syncActiveTurnsFromMain(): void {
             ...(agentKindPatch ? { agentKind: agentKindPatch } : {}),
             isStreaming: true,
             error: null,
+            usageLimitRecovery: null,
             errorReason: null,
             recoverableError: null,
             activeTurnRetryText: null,
@@ -5121,6 +5261,107 @@ function dbAgentKindToMakerKind(
   return fallback;
 }
 
+/**
+ * 已发起过冷缓存 hydrate 的会话(每次"从空切片开始加载"只 hydrate 一次)。
+ * fresh 首拉落地时清条目 —— 之后若切片被整体重置(rewind / origin 漂移重载)且缓存
+ * 仍然有效,下一轮 ensureInitialMessages 可以再借它一次。
+ */
+const _cacheHydrateStarted = new Set<string>();
+
+/**
+ * 「这个会话的盘上缓存已经过期,在权威数据回来之前一律不许 hydrate」。
+ *
+ * 与 `_cacheHydrateStarted` 的区别是**粘滞**:rewind 之类的作废式重载之后,如果紧随的
+ * 权威首拉失败(被控端离线),`_cacheHydrateStarted` 会被放开以便下次重试,而缓存本身仍是
+ * rewind 之前的旧窗口 —— 那时重挂会话就会把已经被软删的消息重新画上去(review: codex P1)。
+ * 只有权威响应真正落地(它同时会刷新盘上缓存)才解除。
+ */
+const _cacheHydrateSuppressed = new Set<string>();
+
+/**
+ * 远程会话:从本地冷缓存乐观 hydrate 最近一页(并行于 fresh 首拉)。
+ *
+ * 只在**切片仍为空且 fresh 还没落地**时种入,种入的行打 `cacheHydrated` 标记,
+ * 由首拉落地时整批换掉。刻意不动 `historyLoaded` / `oldestMessageId`,并把
+ * `hasMoreMessages` 留在 false:缓存窗口通常只活几百毫秒(fresh 到达前),
+ * 拿缓存的游标去翻页会和随后落地的权威窗口打架(见首拉里孤岛游标那段);
+ * 被控端离线时也不该发出注定失败的隧道翻页请求。
+ *
+ * 本机会话不参与:它的历史就在本机 SQLite,读它本来就是即时的。
+ */
+function hydrateRemoteMessagesFromCache(sessionId: string): void {
+  const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
+  if (!deviceId) return;
+  // 作废式重载(rewind)之后盘上那份是过期窗口:权威数据没落地之前一律不借。
+  if (_cacheHydrateSuppressed.has(sessionId)) return;
+  if (_cacheHydrateStarted.has(sessionId)) return;
+  _cacheHydrateStarted.add(sessionId);
+  void readCachedMessages(deviceId, sessionId).then((rows) => {
+    if (rows.length === 0) return;
+    // 缓存页整页都是"渲染后不留可见锚点"的行(orphan tool_result / 隐藏 thinking /
+    // 合成指令行)时**不种入**:mapServerMessages 会产出非空数组,但 MessageStream 渲染 0 项,
+    // 而 CCAgentSessionView 又会因 messages 非空而收起 loading 覆盖层 —— 被控端离线时
+    // 就是一片永久空白(review: codex P1)。这种页对首屏没有价值,让 loading 照常显示、
+    // 交给 fresh 首拉的 no-anchor-backfill 往前翻页处理。
+    if (rows.every(isNonAnchorHistoryRow)) return;
+    const mapped = mapServerMessages(rows).map((message) => ({
+      ...message,
+      cacheHydrated: true as const,
+    }));
+    if (mapped.length === 0) return;
+    // 读缓存这一跳期间归属可能已经变了:设备被移除(mapping 消失)或会话换到了另一台设备。
+    // 只看 chat state 挡不住这种情况 —— 于是 A 设备的历史会被种进一个已经不属于 A 的会话,
+    // 而新的权威首拉若离线失败,屏上留着的就是**另一台机器**的消息(review: codex P1)。
+    // 与写缓存那侧同一条纪律:落地前重核归属。
+    if (remoteProjectsStore.getSessionDeviceId(sessionId) !== deviceId) return;
+    // 抑制标记也要在**落地前**再看一眼:这次读是在 rewind 之前发起的,而 rewind 期间
+    // 切片被清空并置了抑制 —— 只在入口检查挡不住这笔在途的读,它会把 rewind 之前的行
+    // 插进刚清空的切片,权威首拉再失败就一直留在屏上(review: codex P1)。
+    if (_cacheHydrateSuppressed.has(sessionId)) return;
+    setState(sessionId, (s) => {
+      // fresh 已经落地 / 期间已有实时消息进来 → 缓存没有价值了,原样返回不动切片。
+      if (s.historyLoaded || s.messages.length > 0) return s;
+      // hasMoreMessages 显式压成 false:缓存窗口期间不许向上翻页。翻回来的权威老行
+      // 不带 cacheHydrated,首拉落地剔除缓存行后会在窗口中间留出一段洞,得靠后续翻页
+      // 才收敛。首拉通常几百毫秒就到并写回真实的 hasMore,压掉这段的代价近乎为零。
+      return { ...s, messages: mapped, hasMoreMessages: false };
+    });
+  });
+}
+
+/**
+ * fresh 首拉**落地**:放开 hydrate 守卫(切片此后由权威数据主导),粘滞抑制也一并解除 ——
+ * 权威响应到达时缓存已被同一条链刷新过(见 makerTransport 的写点),不再是过期窗口。
+ */
+/**
+ * 权威侧作废了这个远程会话的历史(/clear、删消息、rewind 与 edit-last 截断):
+ *  1. 置粘滞抑制 —— 在途的 `readCachedMessages` 回调会在落地前再查一次它,不会把刚被删掉
+ *     的行插回空切片。这些路径都**不会**触发最新页重拉,没有"权威接管"来纠正
+ *     (review: codex P1);
+ *  2. 清盘 —— 进程内标记跨重启就没了,盘上那份必须一起消失。
+ * 本机会话没有缓存,直接 no-op。
+ */
+function invalidateRemoteMessageCache(sessionId: string): void {
+  const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
+  if (!deviceId) return;
+  _cacheHydrateStarted.add(sessionId);
+  _cacheHydrateSuppressed.add(sessionId);
+  clearCachedMessages(deviceId, sessionId);
+}
+
+function settleCacheHydration(sessionId: string): void {
+  _cacheHydrateStarted.delete(sessionId);
+  _cacheHydrateSuppressed.delete(sessionId);
+}
+
+/**
+ * fresh 首拉**失败**(典型:被控端离线):只放开「本轮已发起」的守卫以便下次重试,
+ * **不解除**粘滞抑制 —— 缓存过期这件事不会因为一次失败的请求而改变。
+ */
+function releaseCacheHydrationAfterFailure(sessionId: string): void {
+  _cacheHydrateStarted.delete(sessionId);
+}
+
 function ensureInitialMessages(sessionId: string): void {
   const state = getOrCreateState(sessionId);
   requestInputProjection(sessionId);
@@ -5135,6 +5376,11 @@ function ensureInitialMessages(sessionId: string): void {
   // 记录本次加载所依据的 origin(可能 undefined)。remote-projects 注入该会话来源后,
   // reconcileOpenSessionOrigins 比对此值发现漂移 → 重载(见上方说明)。
   _historyLoadOrigin.set(sessionId, remoteProjectsStore.getSessionDeviceId(sessionId));
+
+  // 远程会话:与 fresh 首拉**并行**从冷缓存乐观 hydrate,让冷启动 / 被控端离线时
+  // 立刻看到上次看到的最近一页(而不是空白 + spinner)。不设 historyLoaded ——
+  // fresh 仍在路上,它落地时会把这些 cacheHydrated 行整批剔掉再 merge(见下方两个提交分支)。
+  hydrateRemoteMessagesFromCache(sessionId);
 
   // Seed sdkSessionId from the server so resume works on app restart.
   // device-link 远程 session 经隧道读被控端 row(本地 DB 没有,直接 get 会 404)。
@@ -5194,8 +5440,15 @@ function ensureInitialMessages(sessionId: string): void {
   listMessagesFor(sessionId)
     .then(async (existing) => {
       if (existing.length === 0) {
+        // 权威侧确认这个会话没有可见消息(被控端 /clear、rewind 到头、消息被删干净)。
+        // 冷缓存 hydrate 出来的行必须在这里一并抹掉,否则控制端会一直显示被清掉的正文。
+        // 盘上那份不用在这里单独删:listMessagesFor 的写点收到空页时就把缓存清了。
+        settleCacheHydration(sessionId);
         setState(sessionId, (s) => ({
           ...s,
+          messages: s.messages.some((m) => m.cacheHydrated === true)
+            ? s.messages.filter((m) => m.cacheHydrated !== true)
+            : s.messages,
           historyLoaded: true,
           hasMoreMessages: false,
         }));
@@ -5259,13 +5512,25 @@ function ensureInitialMessages(sessionId: string): void {
       const ingestStartMs = import.meta.env.DEV ? performance.now() : 0;
       const mapped = mapServerMessages(merged);
       const oldestId = oldestRow.id;
+      settleCacheHydration(sessionId);
       setState(sessionId, (s) => ({
         ...s,
         historyLoaded: true,
         // Merge: keep any messages already appended by streaming events
         // (unlikely here since we gate history load on first mount, but
         // preserves slice invariants).
-        messages: mergeMessages(mapped, s.messages, {}, 'newest-first'),
+        //
+        // 冷缓存 hydrate 的行先**整批剔除**再 merge:mergeMessages 只增不删,权威页里
+        // 已经不存在的缓存行(被控端 /clear、rewind、删消息)否则会永久留在窗口里。
+        // 仍在权威页里的那些会由 mapped 原样带回来,不会闪。
+        messages: mergeMessages(
+          mapped,
+          s.messages.some((m) => m.cacheHydrated === true)
+            ? s.messages.filter((m) => m.cacheHydrated !== true)
+            : s.messages,
+          {},
+          'newest-first',
+        ),
         isFirstMessage: false,
         // 窗口里掺着跳转孤岛时,**本页的下沿**接管游标,不再取"两者中更老的那个"。
         //
@@ -5303,6 +5568,10 @@ function ensureInitialMessages(sessionId: string): void {
     .catch(() => {
       // Allow retry on next mount
       _historyFetchInFlight.delete(sessionId);
+      // 首拉失败(典型:被控端离线)→ 放开「本轮已发起」的守卫以便下次重试,但**不解除**
+      // rewind 之类的粘滞抑制(见 releaseCacheHydrationAfterFailure)。屏上已 hydrate 的
+      // 缓存行**保持不动**:离线时它是用户唯一能看到的历史,清掉纯属倒退。
+      releaseCacheHydrationAfterFailure(sessionId);
       setState(sessionId, (s) => ({ ...s, historyLoaded: false }));
     });
 }
@@ -5314,12 +5583,32 @@ function ensureInitialMessages(sessionId: string): void {
  * view automatically. Resets pagination cursors and isStreaming flags so the
  * slice looks like a clean session (re-)open.
  */
-function reloadMessages(sessionId: string): void {
+function reloadMessages(sessionId: string, opts?: { allowCacheHydrate?: boolean }): void {
   discardPendingTextDelta(sessionId);
   // 代际递增:作废 in-flight 的 loadOlderMessages 追页窗口(见 _messagesEpoch 注释)。
   bumpMessagesEpoch(sessionId);
   // Drop the in-flight guard so ensureInitialMessages can run again.
   _historyFetchInFlight.delete(sessionId);
+  // 默认**不借**冷缓存:rewind 截断这类重载的起因恰恰意味着盘上那份缓存已经过期,
+  // hydrate 它只会先闪一下刚被截掉的消息。重载后的首拉照常刷新缓存。
+  //
+  // 例外是启动竞速里的 origin 解析重载(undefined → deviceId):那次重载并没有让缓存
+  // 过期,反而是这个会话**第一次**知道自己是远程会话。压着不 hydrate 的话,被控端离线时
+  // 首拉必然失败,屏上就只剩空白 + spinner —— 而离线可见正是这份缓存的存在理由
+  // (review: codex P1)。调用方据此显式放开(见 reconcileOpenSessionOrigins)。
+  if (opts?.allowCacheHydrate) {
+    _cacheHydrateStarted.delete(sessionId);
+    _cacheHydrateSuppressed.delete(sessionId);
+  } else {
+    _cacheHydrateStarted.add(sessionId);
+    // 粘滞:即使紧随的权威首拉失败(被控端离线),重挂会话也不许再借那份过期缓存。
+    _cacheHydrateSuppressed.add(sessionId);
+    // 但粘滞标记只活在**本进程**里:rewind 之后权威首拉失败、用户直接退出 app,重启后
+    // 标记没了而盘上那份还是 rewind 之前的窗口 —— 下次离线冷启动照样 hydrate 出已被软删
+    // 的消息(review: codex P1)。所以同时把盘上那份清掉:缓存是纯优化,重载后的首拉
+    // 成功时会重新写上。
+    invalidateRemoteMessageCache(sessionId);
+  }
   setState(sessionId, (s) => ({
     ...s,
     messages: [],
@@ -5347,6 +5636,11 @@ function removeMessagesByClientIds(
 ): void {
   const deletedClientIds = new Set(clientIds.filter(Boolean));
   if (deletedClientIds.size === 0) return;
+  // 远程会话:删消息(菜单删除镜像 / 被控端 messages:deleted 推送)**不会**触发"最新页"
+  // 重拉 —— 那是唯一的写缓存路径。盘上那份还带着刚被删掉的行,此刻退出 app,下次离线冷
+  // 启动就把它 hydrate 回来(review: codex P1)。缓存是纯优化,清掉即可(下一次成功的
+  // 最新页拉取会重新写上)。
+  invalidateRemoteMessageCache(sessionId);
   discardPendingTextDelta(sessionId);
   // 作废删除提交前发起的历史分页，避免旧页响应把已经清除的行重新 merge 回来。
   if (options.invalidateHistory !== false) bumpMessagesEpoch(sessionId);
@@ -5411,6 +5705,9 @@ function removeMessageByClientId(sessionId: string, clientId: string): void {
  * selectRewindMessageIds(createdAt >= target)对齐。clientId 不在列表时 no-op。
  */
 function dropMessagesFromClientId(sessionId: string, clientId: string): void {
+  // edit-last 已经在权威侧提交了 rewind,而"重发"可能失败(受支持的失败路径)—— 那时不会有
+  // 任何最新页拉取来刷新缓存,盘上仍是 rewind 之前的尾巴(review: codex P1)。
+  invalidateRemoteMessageCache(sessionId);
   discardPendingTextDelta(sessionId);
   // 代际递增:这是与 reloadMessages / _purgeSession 并列的第三条"切片被本地截断"
   // 路径,同样必须作废 in-flight 的分页 / 跳转补齐。漏 bump 的后果是它们把 rewind
@@ -5457,8 +5754,12 @@ function reconcileOpenSessionOrigins(): void {
   for (const sessionId of sessions.keys()) {
     const current = remoteProjectsStore.getSessionDeviceId(sessionId);
     if (current === undefined) continue;
-    if (current === _historyLoadOrigin.get(sessionId)) continue;
-    reloadMessages(sessionId);
+    const loaded = _historyLoadOrigin.get(sessionId);
+    if (current === loaded) continue;
+    // undefined → deviceId 是启动竞速的**首次解析**(上一次首拉命中的是本机空库),
+    // 缓存并未因此过期 → 放开 hydrate,让被控端离线时也能看到上次的最近一页。
+    // 设备之间真的换了 origin(string → 另一个 string)时不放开:那是另一台机器的历史。
+    reloadMessages(sessionId, { allowCacheHydrate: loaded === undefined });
   }
 }
 
@@ -6548,7 +6849,6 @@ function buildCreateOptsForCurrentSession(
 ): AgentInputCreateOpts {
   const current = getOrCreateState(sessionId);
   const deviceLinkRemote = isRemoteSession(sessionId);
-  const sshRemote = Boolean(current.remoteHostId);
   return {
     agentKind: current.agentKind,
     workingDir,
@@ -6559,12 +6859,12 @@ function buildCreateOptsForCurrentSession(
     planMode: current.planModeEnabled,
     displayReasoning: 'summarized',
     userPrompt: getUserPrompt(),
-    // device-link routes to the target desktop, so omit the controller setting;
-    // SSH still starts the agent through this process and must not inherit the
-    // controller's default-enabled Maker Memory for a remote working directory.
-    ...(deviceLinkRemote
-      ? {}
-      : { makerMemoryEnabled: sshRemote ? false : getMakerMemoryEnabled() }),
+    // device-link routes to the target desktop, so omit the controller setting.
+    // SSH remote follows the controller's global setting like local sessions:
+    // memory lives on this machine, scoped per hostId+remote path
+    // (maker-core buildMemoryScopeKey), and reaches the remote agent via the
+    // host HTTP MCP bridge.
+    ...(deviceLinkRemote ? {} : { makerMemoryEnabled: getMakerMemoryEnabled() }),
     ...(current.remoteHostId ? { remoteHostId: current.remoteHostId } : {}),
     ...(opts?.vendorOptions ? { vendorOptions: opts.vendorOptions } : {}),
     ...(current.sdkSessionId ? { resumeSessionId: current.sdkSessionId } : {}),
@@ -6676,6 +6976,16 @@ function updateQueueItem(sessionId: string, clientId: string, newText: string): 
  */
 const autoNameSettled = new Set<string>();
 
+/**
+ * 每个会话最近一次起名尝试的轮次号(sessionId → attempt)。
+ *
+ * 用户在首次 `maker:auto-title` 返回前连着发两条文字时,两次都会通过 `autoNameSettled`
+ * 检查、各起一次尝试。若**较早**那次失败,它的撤回不能动预览 —— 更晚的尝试仍在飞,
+ * 预览还有主人,撤回会让标题白闪一次「未命名任务」(PR #1031 review P1)。
+ * 与 SessionMenuSheet 的 `renameSeqRef`、搜索框的 `requestSeqRef` 同款守卫。
+ */
+const autoNameAttempts = new Map<string, number>();
+
 /** 纯附件消息合成占位标题时的类别兜底词(拿不到任何文件名时才用)。 */
 function autoTitleFallbackLabels(): AutoTitleFallbackLabels {
   return {
@@ -6704,8 +7014,8 @@ function scheduleAutoName(
   agentKind: 'claude-code' | 'codex',
   isUserText = true,
 ): void {
-  // 与 main 的 normalizeAutoTitle 同一套规则,两端算出的占位串一致,回流时不跳变。
-  const fallbackTitle = text.replace(/\s+/g, ' ').trim().slice(0, 40).trimEnd();
+  // 与 main 共用 normalizeAutoTitle,两端算出的占位串逐字一致,回流时不跳变。
+  const fallbackTitle = normalizeAutoTitle(text);
   // 连描述都合成不出来(既无文字也无可命名附件):保留默认标题,留给下一条消息。
   if (!fallbackTitle) return;
   if (isRemoteSession(sessionId)) {
@@ -6715,20 +7025,79 @@ function scheduleAutoName(
     return;
   }
   if (autoNameSettled.has(sessionId)) return;
+  // 本机会话的即时标题预览 —— 与上面远程分支的 setPendingTitlePreview 对称。
+  //
+  // 没有这一步,标题要等「IPC 往返 → main 读库 → 写占位 → 广播 sessions:patched」
+  // 整条链路走完才更新:用户明明已经按下回车,侧边栏 / 会话头却还显示着建会话时的
+  // 默认占位。main 随后写入的就是这里的 fallbackTitle(同一套 deriveAutoTitleSeed
+  // 素材 + 同一个 normalizeAutoTitle),所以回流时不跳变。
+  //
+  // 「标题是否仍是哨兵」的判定在 sessionsStore 的订阅处(它持有列表缓存);本函数
+  // 也被「补起名」路径调用(每条带文字的消息都来一次),无条件写会把用户手动改过的
+  // 名在 UI 上顶掉。走 bus 而不是直接 import sessionsStore:后者会把它的模块级
+  // 订阅副作用拉进所有 import 本模块的加载链。
+  //
+  // 单独 try:预览纯属锦上添花,它失败既不能打断下面的起名 IPC,更不能把异常抛回
+  // sendMessageCore 打断消息入队(与本函数其余副作用同一条契约)。
+  try {
+    emitAutoTitlePreview(sessionId, fallbackTitle);
+  } catch (err) {
+    log.warn('Failed to emit auto-title preview:', err);
+  }
+  // 一次起名尝试的**唯一**收尾:三种结束方式(正常 resolve / IPC reject / 同步抛错)
+  // 都走这里,判据只有一条 —— **main 没确认写入(`applied` 不为 true)就撤回预览**。
+  //
+  // reject 与同步抛错建模成「没有结果」,与 `{ applied: false }` 落在同一分支:
+  // `runSessionAutoTitle` 在「资格读失败 / 占位与智能标题两段都没写进去」时是
+  // **正常 resolve** 出 `applied: false` 的,只挂 `.catch` 会漏掉这一整类
+  // (PR #1031 review P1)。把收尾收敛成一个函数,是为了不再出现第四条漏掉的路径。
+  //
+  // `applied: false, done: true`(用户已手动改过名)同样撤回:DB 里是用户的标题,
+  // 叠加层不该继续盖着;store 那边的守卫会发现缓存里已不是这次预览而自动让位。
+  const attempt = (autoNameAttempts.get(sessionId) ?? 0) + 1;
+  autoNameAttempts.set(sessionId, attempt);
+  const settleAutoName = (result?: { applied?: boolean; done?: boolean }): void => {
+    if (result?.done) autoNameSettled.add(sessionId);
+    if (result?.applied) return;
+    // 更晚的尝试已经起飞 → 预览归它,本次失败不撤回(否则标题白闪一次兜底文案)。
+    if (autoNameAttempts.get(sessionId) !== attempt) return;
+    clearAutoTitlePreviewSafely(sessionId);
+  };
   // 整条链路对发送主流程必须是无副作用的:起名失败(桥接缺失 / IPC 抛错)只记日志,
   // 绝不能把异常抛回 sendMessageCore 打断消息入队。
   try {
     void window.electronAPI.maker
       .autoTitle({ sessionId, text, agentKind, isUserText })
-      .then((result) => {
-        if (result?.done) autoNameSettled.add(sessionId);
-      })
+      .then(settleAutoName)
       .catch((err) => {
         // 不登记 settled —— 下一条带文字的消息会重试。
         log.warn('Failed to auto-name session:', err);
+        settleAutoName();
       });
   } catch (err) {
     log.warn('Failed to invoke auto-title IPC:', err);
+    settleAutoName();
+  }
+}
+
+/**
+ * main 没确认写入 → 撤回上面那次乐观预览。
+ *
+ * 预览是「马上会有权威标题回流」的赌注,它的失效条件是权威标题落地。起名没写成时
+ * 那个条件永远不成立:叠加层会在每次全量刷新后继续顶着 DB 里的哨兵,会话永久显示一个
+ * **库里并不存在**的标题(重启后又变回「未命名任务」,同一会话两种标题)。宁可退回可
+ * 解释的兜底文案 —— 而且没登记 `autoNameSettled`,下一条带文字的消息会重试起名。
+ *
+ * 万一 IPC 是「写库成功、响应丢了」,撤回也不会造成错误状态:main 已经广播过
+ * `sessions:patched`,store 那边的迟到撤回守卫(比对缓存里是否仍是这次预览)会让位。
+ *
+ * 同上契约:撤回自身失败只记日志,绝不外抛打断发送主流程。
+ */
+function clearAutoTitlePreviewSafely(sessionId: string): void {
+  try {
+    emitAutoTitlePreviewCleared(sessionId);
+  } catch (err) {
+    log.warn('Failed to clear auto-title preview:', err);
   }
 }
 
@@ -6946,6 +7315,7 @@ async function sendMessageCore(
           ? s.messages.filter((m) => !(m.clientId === queued.clientId && m.isPendingPersist))
           : s.messages,
         error: message,
+        usageLimitRecovery: null,
         errorReason: null,
         recoverableError: null,
         errorRetryText: null,
@@ -6987,6 +7357,7 @@ function compactSession(
       setState(sessionId, (s) => ({
         ...s,
         error: message,
+        usageLimitRecovery: null,
         recoverableError: null,
         errorRetryText: null,
       }));
@@ -7129,6 +7500,7 @@ function steerMessageCore(
       setState(sessionId, (s) => ({
         ...s,
         error: message,
+        usageLimitRecovery: null,
         recoverableError: null,
         errorRetryText: null,
       }));
@@ -7253,6 +7625,7 @@ function steerQueuedMessage(sessionId: string, clientId: string): Promise<boolea
       setState(sessionId, (s) => ({
         ...s,
         error: message,
+        usageLimitRecovery: null,
         recoverableError: null,
         errorRetryText: null,
       }));
@@ -7386,20 +7759,35 @@ function clearError(sessionId: string): void {
     .then(applyInputProjection)
     .catch((err) => log.warn('clearError failed:', err));
   setState(sessionId, (s) => {
-    if (s.error == null && s.recoverableError == null && s.errorRetryText == null) return s;
-    return { ...s, error: null, errorReason: null, recoverableError: null, errorRetryText: null };
+    if (
+      s.error == null &&
+      s.usageLimitRecovery == null &&
+      s.recoverableError == null &&
+      s.errorRetryText == null
+    ) {
+      return s;
+    }
+    return {
+      ...s,
+      error: null,
+      usageLimitRecovery: null,
+      errorReason: null,
+      recoverableError: null,
+      errorRetryText: null,
+    };
   });
 }
 
-function retryLastError(sessionId: string): void {
-  if (!sessionId) return;
+function retryLastError(sessionId: string): Promise<void> {
+  if (!sessionId) return Promise.resolve();
   // 续跑语义在 main:coordinator 判定失败 turn 已有 assistant 产出时,用共享英文
   // 常量 CONTINUE_AFTER_ERROR_PROMPT 替代重发原文(shared/interruptedTurn.ts),
   // renderer 不传文案、不做判定。
-  makerApiFor(sessionId)
+  return makerApiFor(sessionId)
     .input.retryLastError(sessionId)
-    .then(applyInputProjection)
-    .catch((err) => log.warn('retryLastError failed:', err));
+    .then((projection) => {
+      applyInputProjection(projection);
+    });
 }
 
 /**
@@ -7414,7 +7802,13 @@ function continueAfterSilentStop(sessionId: string): void {
   if (!sessionId) return;
   void sendUiTrigger(sessionId, CONTINUE_AFTER_ERROR_PROMPT).then(
     () => {
-      setState(sessionId, (s) => ({ ...s, error: null, errorReason: null, errorRetryText: null }));
+      setState(sessionId, (s) => ({
+        ...s,
+        error: null,
+        usageLimitRecovery: null,
+        errorReason: null,
+        errorRetryText: null,
+      }));
     },
     (err) => {
       log.warn('continueAfterSilentStop failed:', err);
@@ -7429,17 +7823,36 @@ function continueAfterSilentStop(sessionId: string): void {
  * dismissErrorMessageFor 按会话来源路由:远程会话经隧道写到被控端 DB(allowlist
  * 窄口径写),重连/历史重拉后不复活;老被控端不识别该 channel 时 catch 吞错,
  * 退化为本视图内存隐藏。
+ *
+ * 返回值 = **是否落库成功**(不会 reject):红点是告警查询的派生投影,调用方必须
+ * 等落库完成再重算,否则重算会与这次异步写竞态 —— 读到旧状态就仍判定告警存在,
+ * 横幅已消失而红点卡住。远程会话的调用方还要靠这个布尔决定是否发 explicit ack:
+ * 隧道写失败时不能清红点,否则横幅已回滚重现而红点没了(PR #879 review P1)。
+ *
+ * 落库失败时**回滚乐观更新**(errorDismissed 置回 false):否则横幅已被乐观隐藏、
+ * 而库里的告警仍在,重算会把红点恢复,用户看到「红点在但没有横幅可处置」,只能重载
+ * 才恢复。回滚后横幅重新出现,与红点重新一致,用户可以再试。
  */
-function dismissErrorTailMessage(sessionId: string, clientId: string): void {
-  if (!sessionId || !clientId) return;
-  setState(sessionId, (s) => ({
-    ...s,
-    messages: s.messages.map((m) =>
-      m.clientId === clientId && m.role === 'error' ? { ...m, errorDismissed: true } : m,
-    ),
-  }));
-  dismissErrorMessageFor(sessionId, clientId).catch((err) =>
-    log.warn('persist error dismiss failed:', err),
+function dismissErrorTailMessage(sessionId: string, clientId: string): Promise<boolean> {
+  if (!sessionId || !clientId) return Promise.resolve(false);
+  const setDismissed = (dismissed: boolean): void => {
+    setState(sessionId, (s) => ({
+      ...s,
+      messages: s.messages.map((m) =>
+        m.clientId === clientId && m.role === 'error' ? { ...m, errorDismissed: dismissed } : m,
+      ),
+    }));
+  };
+  setDismissed(true);
+  // 收敛成 Promise<boolean>:dismissErrorMessageFor 返回 Promise<unknown>(IPC 结果),
+  // 调用方只关心「写成功了没有」。
+  return dismissErrorMessageFor(sessionId, clientId).then(
+    () => true,
+    (err: unknown) => {
+      log.warn('persist error dismiss failed, rolling back optimistic dismiss:', err);
+      setDismissed(false);
+      return false;
+    },
   );
 }
 
@@ -7460,6 +7873,10 @@ function clearSession(sessionId: string): void {
 
 async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Promise<void> {
   noteRendererClearBoundary(sessionId, clearedAt);
+  // 远程会话:/clear 之后**不会**再有一次"最新页"拉取(唯一写缓存的那条路径),盘上那份
+  // 仍是清空前的正文 —— 此刻退出 app,下次离线冷启动就把已经被清掉的对话 hydrate 回来
+  // (review: codex P1)。放在守卫之前:无论守卫成功、失败还是超时,缓存都必须消失。
+  invalidateRemoteMessageCache(sessionId);
   // Arm main-side clear guards before closing the CLI and clearing renderer state.
   let guardTimeoutId: ReturnType<typeof setTimeout> | undefined;
   let guardResult:
@@ -7531,6 +7948,7 @@ async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Pro
       // 卡住(#676 review)。
       isLoadingMore: false,
       error: null,
+      usageLimitRecovery: null,
       errorReason: null,
       recoverableError: null,
       activeTurnRetryText: null,
@@ -7855,13 +8273,20 @@ function respondToPermission(sessionId: string, result: CCAgentPermissionResult)
 
 /**
  * issue_confirm: 把确认卡片结果回给 main(IssueConfirmBridge)并清 pendingIssueConfirm。
- * confirmed=true 时携带卡片当前的 title/body/type(用户编辑版,main 以此为准)
- * 和 renderer 界面语言(uiLanguage,main 附进 issue body 的环境块)。
+ * confirmed=true 时携带卡片当前的 title/body/type(用户编辑版,main 以此为准)、
+ * 平台代发公开署名(publicName)和 renderer 界面语言(uiLanguage)。
  */
 function respondToIssueConfirm(
   sessionId: string,
   result:
-    | { confirmed: true; title: string; body: string; type: 'bug' | 'feature'; uiLanguage: string }
+    | {
+        confirmed: true;
+        title: string;
+        body: string;
+        type: 'bug' | 'feature';
+        publicName?: string;
+        uiLanguage: string;
+      }
     | { confirmed: false },
 ): void {
   if (!sessionId) return;
@@ -8494,10 +8919,9 @@ function sendUiTrigger(sessionId: string, prompt: string): Promise<void> {
         ...((session.sdkSessionId ?? state.sdkSessionId)
           ? { resumeSessionId: (session.sdkSessionId ?? state.sdkSessionId) as string }
           : {}),
-        // buildQueuedMessage may have used a pre-hydration store snapshot.
-        // The DB row is authoritative here: SSH lazy-create must not inherit
-        // controller-local Cindy Memory. Device-link keeps target ownership.
-        ...(session.remoteHostId && !deviceLinkRemote ? { makerMemoryEnabled: false } : {}),
+        // SSH remote 与本地同语义: Maker Memory 跟随控制端全局开关 (scope 由
+        // maker-core 按 remoteHostId+workingDir 隔离), 这里不再强制关闭;
+        // device-link 仍由目标端自己的设置决定 (buildQueuedMessage 已省略)。
         // 远端 SSH 会话:重启后 lazy-create 缺它会把远端 workingDir 当本地路径。
         ...(session.remoteHostId ? { remoteHostId: session.remoteHostId } : {}),
       };
@@ -8822,6 +9246,7 @@ export const makerChatStore = {
   /** Exposed for tests only: 清空「已确认无需起名」缓存,隔离用例间状态。 */
   __resetAutoNameStateForTest: (): void => {
     autoNameSettled.clear();
+    autoNameAttempts.clear();
   },
   /** Exposed for tests only: 把 stream event 打进真实 store(驱动 getRunningSnapshot 等)。 */
   __applyStreamEventForTest: (sessionId: string, event: CCAgentStreamEvent): void =>
@@ -8879,6 +9304,72 @@ export const makerChatStore = {
 
 type RemoteRowsOrder = 'newest-first' | 'oldest-first';
 
+/** 自愈活动行的两种卡型（ephemeral 进行中 + 落库记录）。 */
+const AUTO_RESUME_CARD_TYPES = new Set(['auto-resume', 'auto-resume-pending']);
+
+/**
+ * 这一行对用户是不是"实质内容"（用来切分自愈事件的边界）。
+ *
+ * **必须与 main 的产出判据同语义**（`interruptedTurnAutoResume.isSubstantiveProgressEvent`：
+ * 用户看得见的文本、或工具调用）。不一致的后果是两边对"还在不在同一次中断里"的判断分叉：
+ * 开了 reasoning 的重连只吐 thinking 就再次失败时，main 仍把它算在同一段（attempt 2/5），
+ * 而这里若把 thinking 行当成边界，卡片就不再折叠——一次中断在流里堆出多行，正是「连续重连
+ * 原地更新同一行」要避免的（codex P1）。
+ *
+ * 「看得见」不自己判：与 main 共用 `shared/visibleText.ts` 的 `hasUserVisibleText`（纯空白与
+ * 零宽字符都算看不见）。各写一份必然漂移 —— `trim()` 挡不住 U+200B 这类零宽字符就是实例
+ * （greptile P2）。
+ */
+function isSubstantiveChatRow(message: ChatMessage): boolean {
+  // 其它系统卡（compact / goal 分隔条等）算边界:它们之后的重连属于新一段。
+  if (message.systemCardType && !AUTO_RESUME_CARD_TYPES.has(message.systemCardType)) return true;
+  // 隐藏的合成指令行（含我们自己补发的续跑指令）不算内容。
+  if (message.isSyntheticTrigger === true) return false;
+  // thinking 不算产出（与 main 一致）：用户没看到任何回答，那次重连也就没成功。
+  if (message.role === 'thinking') return false;
+  return typeof message.content === 'string'
+    ? hasUserVisibleText(message.content)
+    : message.content != null;
+}
+
+/**
+ * 把**同一次中断事件**的多条自愈行折叠成一行。
+ *
+ * 一次中断可能连续重连多次（1/5 → 2/5 → …），每次都会真的补发一条续跑消息、因此每次
+ * 都在 DB 里留一行。但那是同一个事件的推进过程，不是 5 件事——流里堆 5 条「重新连接」
+ * 既吵又读不出"还在同一次重连里"。所以只保留**最后一条**（它带最新计数与最终结果），
+ * 前面的退回隐藏占位（去掉 systemCardType 后就是普通合成指令行，渲染 null）。
+ *
+ * 边界是"实质内容"：模型一旦产出过东西，后面的中断就是新一段，不再折叠进来——这与
+ * main 侧「有产出就重置连续计数」的判据是同一条线。
+ */
+function collapseConsecutiveAutoResumeRows(messages: ChatMessage[]): ChatMessage[] {
+  let sawCardSinceContent = false;
+  let changed = false;
+  let out: ChatMessage[] | null = null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (!message) continue;
+    const cardType = message.systemCardType;
+    if (cardType && AUTO_RESUME_CARD_TYPES.has(cardType)) {
+      if (sawCardSinceContent) {
+        if (!out) out = messages.slice();
+        // 去掉卡型后就是普通合成指令行(渲染 null),仍留在流里参与时序判定。
+        const stripped: ChatMessage = { ...message };
+        delete stripped.systemCardType;
+        delete stripped.systemCardData;
+        out[i] = stripped;
+        changed = true;
+      } else {
+        sawCardSinceContent = true;
+      }
+      continue;
+    }
+    if (isSubstantiveChatRow(message)) sawCardSinceContent = false;
+  }
+  return changed && out ? out : messages;
+}
+
 function mergeMessages(
   serverMsgs: ChatMessage[],
   existing: ChatMessage[],
@@ -8899,7 +9390,11 @@ function mergeMessages(
   rowsOrder: RemoteRowsOrder = 'oldest-first',
 ): ChatMessage[] {
   const serverOrder = new Map(serverMsgs.map((message, index) => [message.clientId, index]));
-  if (existing.length === 0) return sortMessagesChronologically(serverMsgs, serverOrder, rowsOrder);
+  if (existing.length === 0) {
+    return collapseConsecutiveAutoResumeRows(
+      sortMessagesChronologically(serverMsgs, serverOrder, rowsOrder),
+    );
+  }
   const serverByClientId = new Map(serverMsgs.map((message) => [message.clientId, message]));
   const seen = new Set<string>();
   let changed = false;
@@ -8924,7 +9419,7 @@ function mergeMessages(
   const sameOrder =
     sorted.length === existing.length &&
     sorted.every((message, index) => message === existing[index]);
-  return !changed && sameOrder ? existing : sorted;
+  return !changed && sameOrder ? existing : collapseConsecutiveAutoResumeRows(sorted);
 }
 
 /** 对账找不到重叠时,用远端权威窗口替换旧缓存窗口,只保留对账期间新到的消息。 */
@@ -9399,6 +9894,21 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           content: '',
           isStreaming: false,
           isSyntheticTrigger: true,
+          // 中断自动续跑补发的续跑指令带 [UI_ACTION_TRIGGER] 前缀(复用人工「继续」
+          // 那条常量),会先命中本分支 —— 但它同样是**自动**动作,必须渲染「已自动
+          // 继续」分隔线(MessageStream 对 systemCardType 的处理刻意优先于 synthetic
+          // early-return)。少这一句,用户看到的是任务自己接着跑了、没有任何交代。
+          ...(m.agentMeta?.autoResume === true
+            ? {
+                systemCardType: 'auto-resume' as const,
+                systemCardData: {
+                  ...(m.agentMeta.autoResumeInfo ?? {}),
+                  ...(m.agentMeta.autoResumeOutcome
+                    ? { outcome: m.agentMeta.autoResumeOutcome }
+                    : {}),
+                },
+              }
+            : {}),
         };
       }
       // silent-stop 自动续跑注入的「继续」(agentMeta.autoResume,main 守卫落库):
@@ -9412,6 +9922,15 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           isStreaming: false,
           isSyntheticTrigger: true,
           systemCardType: 'auto-resume' as const,
+          // 展示信息只有「中断自愈」那条路径带(silent-stop 本身没有 error / 次数)。
+          // SystemCard 据此二选一:带信息 → 三态重连行;不带 → silent-stop 原来的
+          // 「已自动继续」分隔条(见 hasInterruptionContext)。
+          systemCardData: {
+            ...(m.agentMeta.autoResumeInfo ?? {}),
+            ...(m.agentMeta.autoResumeOutcome
+              ? { outcome: m.agentMeta.autoResumeOutcome }
+              : {}),
+          },
         };
       }
       const parsed = parseUserContent(m.content);

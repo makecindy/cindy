@@ -1,15 +1,15 @@
+import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
+
 import { getClaudeSubscriptionValueFallbackPrice } from './claudeSubscriptionValue.js';
 import { CODEX_SUBSCRIPTION_VALUE_PRICING } from './codexSubscriptionValue.js';
 import type { ModelAccessGatewayModel } from './modelAccess.js';
 import {
-  GATEWAY_NATIVE_CURRENCY,
+  gatewayCurrencyForRegion,
   type ModelPriceQuote,
   type ModelPricingCatalog,
   type MoneyCurrency,
 } from './regionalMoney.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX } from './subscriptionModels.js';
-
-const CODEX_BUDGET_PRICE_MULTIPLIER = 0.15;
 
 const XAI_SUBSCRIPTION_VALUE_PRICING: Record<
   string,
@@ -34,60 +34,27 @@ function perMtok(value: unknown): number | undefined {
   return isNonNegativeFinite(value) ? value * 1_000_000 : undefined;
 }
 
-function applyCodexBudgetDiscount(quote: ModelPriceQuote): ModelPriceQuote {
-  if (!quote.modelId.startsWith('codex/')) return quote;
-  return {
-    ...quote,
-    inputPerMtok: quote.inputPerMtok * CODEX_BUDGET_PRICE_MULTIPLIER,
-    outputPerMtok: quote.outputPerMtok * CODEX_BUDGET_PRICE_MULTIPLIER,
-    ...(quote.cacheReadPerMtok !== undefined
-      ? { cacheReadPerMtok: quote.cacheReadPerMtok * CODEX_BUDGET_PRICE_MULTIPLIER }
-      : {}),
-    ...(quote.cacheCreatePerMtok !== undefined
-      ? { cacheCreatePerMtok: quote.cacheCreatePerMtok * CODEX_BUDGET_PRICE_MULTIPLIER }
-      : {}),
-  };
-}
-
-function declaredCurrency(
-  model: ModelAccessGatewayModel,
-): MoneyCurrency | undefined {
-  return model.currency === 'USD' || model.currency === 'CNY'
-    ? model.currency
+function normalizedCostDiscount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 1
+    ? value
     : undefined;
 }
 
-/**
- * 目录级币种:本地记账账本(daily / session / schedule)都是单币种,逐条目
- * 混用币种会造成同端多币种金额被聚合层丢弃。规则:
- *   - 只有**会产生报价**的条目参与裁决:免费/无价条目本就不出报价,它们缺失
- *     currency 声明不能把整个目录钉回 USD、连带丢弃全部已声明的报价
- *     (对外 CNY 目录曾因此全军覆没,#587);
- *   - 未声明的计价条目恒为 Gateway 原生 USD(契约缺省),绝不被其它条目的声明改标;
- *   - 只有当每个计价条目都显式声明同一非 USD 币种时,目录才整体切换;
- *   - 与目录币种冲突的声明条目由 gatewayPricingCatalog 丢弃报价(退回 SDK
- *     实报 USD 兜底),而不是改标币种——错标单位正是本模块要杜绝的事。
- */
+/** Gateway 原生币种优先；旧服务端未声明时才按构建 region 回退。 */
 /** 该条目是否会产生报价(与币种无关;目录币种裁决与覆盖率统计共用此判定)。 */
 export function isPricedGatewayModel(model: ModelAccessGatewayModel): boolean {
-  return gatewayModelPriceQuote(model) !== undefined;
+  // 币种不影响“是否有价格”的判断，这里显式传值，避免计费 API 隐式回落 Global。
+  return gatewayModelPriceQuote(model, 'global') !== undefined;
 }
 
-export function resolveGatewayCatalogCurrency(
-  models: readonly ModelAccessGatewayModel[],
-): MoneyCurrency {
-  const priced = models.filter(isPricedGatewayModel);
-  if (priced.length === 0) return GATEWAY_NATIVE_CURRENCY;
-  const first = declaredCurrency(priced[0]);
-  if (!first || first === GATEWAY_NATIVE_CURRENCY) return GATEWAY_NATIVE_CURRENCY;
-  return priced.every((model) => declaredCurrency(model) === first)
-    ? first
-    : GATEWAY_NATIVE_CURRENCY;
-}
-
+/**
+ * @param fallbackCurrency 该模型未声明 currency 时的回落币种。调用方(gatewayPricingCatalog)
+ *   会传同一目录里已声明的币种，让整份目录保持单一币种；缺省才按区域回落。
+ */
 export function gatewayModelPriceQuote(
   model: ModelAccessGatewayModel,
-  currency: MoneyCurrency = GATEWAY_NATIVE_CURRENCY,
+  region: CindyRegion,
+  fallbackCurrency?: MoneyCurrency,
 ): ModelPriceQuote | undefined {
   const modelId = model.id.trim();
   const inputPerMtok = perMtok(model.inputCostPerToken);
@@ -105,33 +72,46 @@ export function gatewayModelPriceQuote(
   ) {
     return undefined;
   }
-  // quote 是用量估算用的标准价;costDiscount 只在 effectiveGatewayModelCost 侧应用到
-  // cost,UI 展示价一致时取 cost(见 modelPriceFormat),不再并排展示标准价。
-  // 币种由 resolveGatewayCatalogCurrency 目录级统一解析后传入;不按构建区域改标。
-  return applyCodexBudgetDiscount({
+  // quote 保留标准价供模型选择器展示原价；所有 Gateway 模型统一把
+  // costDiscount 带入计费计算，CatalogModel.cost 继续承载折后展示价。
+  const costDiscount = normalizedCostDiscount(model.costDiscount);
+  return {
     providerId: 'xd',
     modelId,
-    currency,
+    currency: model.currency ?? fallbackCurrency ?? gatewayCurrencyForRegion(region),
     source: 'gateway',
     approximate: false,
     inputPerMtok,
     outputPerMtok,
     ...(cacheReadPerMtok !== undefined ? { cacheReadPerMtok } : {}),
     ...(cacheCreatePerMtok !== undefined ? { cacheCreatePerMtok } : {}),
-  });
+    ...(costDiscount !== undefined ? { costDiscount } : {}),
+  };
 }
 
 export function gatewayPricingCatalog(
   models: readonly ModelAccessGatewayModel[],
+  region: CindyRegion,
 ): ModelPricingCatalog {
-  const currency = resolveGatewayCatalogCurrency(models);
+  // 整份目录必须是单一币种。
+  //
+  // 同一账号的目录币种本就统一，所以个别模型省略 currency 时跟随同目录已声明的币种，
+  // 而不是各自回落构建区域 —— 否则新旧字段混合的响应(一条声明 USD、一条省略)会产出
+  // 跨币种目录，那些回落成区域币种的模型金额会被账本写入守卫当异币种丢弃。
+  //
+  // 出现两种以上显式声明则整份拒绝:此时 resolveGatewayAccountCurrency 已判定该目录不可信
+  // 并让账本回退构建币种，若这里继续产出混币 catalog，非账本币种的那部分模型会被守卫
+  // 选择性丢弃 —— 形成"按模型漏记账"，比整份没有报价更难发现。
+  const declared = new Set(
+    models
+      .map((model) => model.currency)
+      .filter((currency): currency is MoneyCurrency => currency === 'CNY' || currency === 'USD'),
+  );
+  if (declared.size > 1) return {};
+  const fallbackCurrency = declared.values().next().value ?? gatewayCurrencyForRegion(region);
   const xd: Record<string, ModelPriceQuote> = {};
   for (const model of models) {
-    // 声明与目录币种冲突的条目不出报价:宁可让该模型的单轮费用退回 SDK
-    // 实报 USD 兜底,也不给它标一个和价格数值不匹配的单位。
-    const declared = declaredCurrency(model);
-    if (declared && declared !== currency) continue;
-    const quote = gatewayModelPriceQuote(model, currency);
+    const quote = gatewayModelPriceQuote(model, region, fallbackCurrency);
     if (quote) xd[quote.modelId] = quote;
   }
   return Object.keys(xd).length > 0 ? { xd } : {};
@@ -216,9 +196,26 @@ export function getModelPriceQuote(
   );
 }
 
-export function subscriptionDirectPriceQuote(
-  modelId: string,
-): ModelPriceQuote | undefined {
+/**
+ * 从报价目录推断当前账号的 Gateway 结算币种。
+ *
+ * 结算币种由服务端按账号所属租户下发,不保证等于客户端发行区域：多数账号跟随区域
+ * (cn=CNY / global=USD),但也存在以 USD 结算的账号运行在 CN 构建上的正常情形。
+ * 所以凡是需要判断"这个账号按什么币种记账"的地方都应问本函数,既不看 region,
+ * 也不需要判断账号属于哪类租户。
+ *
+ * 同一账号的目录币种是统一的,所以任取一条即可;目录为空或出现混合币种(目录本身不可信)
+ * 时返回 null,由调用方回落到构建默认值。与 main 侧 modelPricing.getGatewayAccountCurrency
+ * 的判定口径一致。
+ */
+export function gatewayLedgerCurrency(
+  pricing: ModelPricingCatalog | null | undefined,
+): MoneyCurrency | null {
+  const currencies = new Set(Object.values(pricing?.xd ?? {}).map((quote) => quote.currency));
+  return currencies.size === 1 ? (currencies.values().next().value ?? null) : null;
+}
+
+export function subscriptionDirectPriceQuote(modelId: string): ModelPriceQuote | undefined {
   if (modelId.startsWith(CHATGPT_MODEL_PREFIX)) {
     return providerReferencePriceQuote('openai', modelId);
   }
@@ -227,4 +224,3 @@ export function subscriptionDirectPriceQuote(
   }
   return undefined;
 }
-

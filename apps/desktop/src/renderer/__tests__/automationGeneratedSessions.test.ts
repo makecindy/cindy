@@ -101,14 +101,17 @@ describe('automation-generated sessions', () => {
   });
 
   it('keeps scheduler sessions in the desktop-visible source contract', () => {
-    // feishu / slack / telegram / discord 四个 IM 渠道均进 desktop sidebar
+    // 所有会生成本地会话的 IM 渠道均进入 desktop sidebar。
     // (feishu 2026-07-16 起以「对话」分组回归, 见 sessionSource.ts 注释)。
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toEqual([
       'desktop',
       'feishu',
       'slack',
       'telegram',
+      'x',
       'discord',
+      'wechat',
+      'dingtalk',
       'scheduler',
       'learn',
       'shared',
@@ -117,6 +120,7 @@ describe('automation-generated sessions', () => {
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('feishu');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('telegram');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('discord');
+    expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('dingtalk');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('plugin');
 
     expect(normalizeSessionSource('desktop')).toBe('desktop');
@@ -125,6 +129,7 @@ describe('automation-generated sessions', () => {
     expect(normalizeSessionSource('feishu')).toBe('feishu');
     expect(normalizeSessionSource('telegram')).toBe('telegram');
     expect(normalizeSessionSource('discord')).toBe('discord');
+    expect(normalizeSessionSource('dingtalk')).toBe('dingtalk');
     expect(normalizeSessionSource('plugin')).toBe('plugin');
     expect(normalizeSessionSource(null)).toBe('desktop');
     expect(normalizeSessionSource('unknown')).toBe('desktop');
@@ -864,7 +869,10 @@ describe('automation-generated sessions', () => {
     );
     const preloadSource = readTextLf(new URL('../../preload/preload.ts', import.meta.url), 'utf8');
 
-    expect(scheduleIndexHookSource).toContain('loadScheduleSidebarIndexRuns()');
+    // 这个 hook 取 snapshot 变体:除了 run 列表还要引擎的 in-flight 集合,用于通知抑制
+    // 标记的对账(见 scheduleSidebarIndexRuns 与 scheduler.listInflightRunIds)。两者是
+    // 同一条 sidebar index IPC,本用例要锁的「不走 per-schedule history limit」不变。
+    expect(scheduleIndexHookSource).toContain('loadScheduleSidebarIndexSnapshot()');
     expect(scheduleIndexHookSource).not.toContain('RUNS_PER_SCHEDULE_LIMIT');
     expect(scheduleIndexHookSource).not.toContain('listRuns(');
     expect(unreadCountsHookSource).toContain('loadScheduleSidebarIndexRuns()');
@@ -964,11 +972,13 @@ describe('automation-generated sessions', () => {
     expect(runHistoryCardSource).toContain("run.costAttribution === 'legacy'");
     expect(zh.scheduler.cell.totalCost).toBe('开销 {{cost}}');
     expect(zh.scheduler.cell.totalValue).toBe('价值 {{value}}');
-    expect(zh.scheduler.runs.sessionCost).toBe('对话开销 {{cost}}');
-    expect(zh.scheduler.runs.sessionValue).toBe('对话价值 {{value}}');
+    expect(zh.scheduler.runs.sessionCost).toBe('任务开销 {{cost}}');
+    expect(zh.scheduler.runs.sessionValue).toBe('任务价值 {{value}}');
     expect(zh.scheduler.runs.runCost).toBe('本次开销 {{cost}}');
     expect(zh.scheduler.runs.legacyCostUnavailable).toBe('历史费用无法拆分');
-    expect(zh.scheduler.runs.persistentSessionGroup).toBe('持续对话 {{session}} · {{count}} 次运行');
+    expect(zh.scheduler.runs.persistentSessionGroup).toBe(
+      '持续任务 {{session}} · {{count}} 次运行',
+    );
     expect(zh.scheduler.runs.expandRemainingRuns).toBe('展开另外 {{count}} 次');
   });
 

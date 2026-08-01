@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Check, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { Check, MoreHorizontal, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useProviders } from '@/hooks/useProviders';
@@ -39,10 +39,18 @@ import {
   updateCustomProvider,
 } from '@/lib/customProviders';
 import { providerMonogram } from '@/lib/providerModels';
+import { PROVIDER_SECRET_IDS, type ProviderSecretId } from '../../../shared/providerSecrets';
+
 import {
   customProviderSubtitleForDisplay,
   providerSubtitleForDisplay,
 } from '@/lib/providerSubtitle';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { CustomProviderDialog } from './CustomProviderDialog';
 import { AddProviderWizard, type WizardEntry } from './AddProviderWizard';
 import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
@@ -53,6 +61,7 @@ import { XDIncMark } from '@/components/icons/XDIncMark';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 
 import type { LocalCliDetection } from '../../../shared/localCliDetect';
+import { isBuiltinRefreshableProviderId } from '../../../shared/providerModelRefresh';
 import type { CustomProviderConfig, ProviderView } from '@cindy/model-providers';
 
 // ---------------------------------------------------------------------------
@@ -60,7 +69,25 @@ import type { CustomProviderConfig, ProviderView } from '@cindy/model-providers'
 // ---------------------------------------------------------------------------
 
 function providerHasModels(provider: ProviderView): boolean {
-  return provider.agents.some((a) => (provider.models[a]?.length ?? 0) > 0);
+  // 专属媒体清单(imageModels/videoModels)也算「有模型」:XD 动态对话目录不可用时
+  // 内置的图像/视频模型仍可用且可被停用管理,UnifiedModelList 的 buildUnionRows
+  // 会为它们合成能力行 —— 只看 models[agent] 会让整个列表不渲染
+  // (PR #744 review 第十五轮)。
+  return (
+    provider.agents.some((a) => (provider.models[a]?.length ?? 0) > 0) ||
+    (provider.imageModels?.length ?? 0) > 0 ||
+    (provider.videoModels?.length ?? 0) > 0
+  );
+}
+
+/**
+ * 写供应商级停用 override(model-disable-store)。成功后由 main 广播
+ * PROVIDER_CHANGED 驱动快照刷新,这里不 refetch;失败走统一错误提示。
+ */
+function writeProviderDisabled(providerId: string, disabled: boolean, errorText: string): void {
+  void window.electronAPI.maker
+    .setModelDisable({ kind: 'provider', providerId, disabled })
+    .catch(() => toast.error(errorText));
 }
 
 /** 供应商行图标(内置品牌 mark / 首字母 monogram)。 */
@@ -258,6 +285,9 @@ function DetailHeader({
                 })}
               />
             )}
+            {provider?.suspended && (
+              <CustomTag label={t('settings.providers.pill.suspended')} />
+            )}
             {badge}
           </div>
           <span
@@ -270,6 +300,39 @@ function DetailHeader({
         </div>
 
         {trailing}
+        {/* 供应商级低频动作(停用/启用):所有供应商详情头统一入口。停用 = 保留凭证、
+            整体不可路由(model-disable-store);恢复入口在菜单与下方的已停用条带都有。 */}
+        {provider && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label={t('settings.providers.detail.moreActionsAria')}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-hover)]"
+                style={{ color: 'var(--text-tertiary)' }}
+              >
+                <MoreHorizontal size={15} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                onClick={() =>
+                  writeProviderDisabled(
+                    provider.id,
+                    !provider.suspended,
+                    t('settings.providers.models.accessWriteFailed'),
+                  )
+                }
+              >
+                {t(
+                  provider.suspended
+                    ? 'settings.providers.menu.enableProvider'
+                    : 'settings.providers.menu.disableProvider',
+                )}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
 
       {detail}
@@ -381,6 +444,12 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const { state, triggerLogin, cancelLogin, logout } = useCodexAuth();
+  // 图像 API key 行(2026-07 图像多来源):ChatGPT 订阅 OAuth 调不了平台 images API
+  // (实测缺 scope),图像通道用独立的平台 key。仅当目录给 openai 声明了 imageModels
+  // 才渲染(远端目录可能撤掉该能力)。
+  const imagesKeyRow = (provider?.imageModels?.length ?? 0) > 0 && (
+    <ImageApiKeyRow secretId="openai-images" provider={provider} />
+  );
   const reconnectRequired = state.kind === 'reconnect-required';
   const loggingIn = state.kind === 'login-pending';
   const connected = isChatGptConnectionConnected(state, provider?.connected ?? false);
@@ -449,7 +518,113 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
       subtitle={t('settings.providers.openai.subtitle')}
       trailing={trailing}
       provider={provider}
+      detail={imagesKeyRow || undefined}
     />
+  );
+}
+
+/**
+ * 「图像生成 API key」行(2026-07 图像多来源):订阅 OAuth 供应商(OpenAI/xAI)的
+ * 图像通道走独立的平台 key,与登录态解耦。已配置显示掩码尾巴 + 清除;未配置显示
+ * 输入 + 保存。key 是 MAIN_ONLY 键,走内置 API-key 专用 IPC(builtinApiKey*),
+ * renderer 只能查存在性/写/删,通用 safeStorage 桥读不到明文。
+ */
+function ImageApiKeyRow({
+  secretId,
+  provider,
+}: {
+  secretId: ProviderSecretId;
+  /**
+   * 供应商快照(useProviders)。别的窗口保存/清除 key 会广播 PROVIDER_CHANGED →
+   * 快照刷新 → 对象换新 → 本 effect 重查存在性,多窗口状态不滞留。
+   */
+  provider?: ProviderView;
+}) {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  const [draftKey, setDraftKey] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.electronAPI.builtinApiKeyHas(secretId).then((has) => {
+      if (!cancelled) setConfigured(has);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [secretId, provider]);
+
+  const handleSave = useCallback(async () => {
+    const key = draftKey.trim();
+    if (!key) return;
+    setBusy(true);
+    try {
+      // 失败经统一 IPC 错误协议抛出(throwIpcError),这里 catch 即失败。
+      await window.electronAPI.builtinApiKeyStore(secretId, key);
+      toast.success(t('settings.providers.imagesKey.toast.saved'));
+      setDraftKey('');
+      setConfigured(true);
+    } catch {
+      toast.error(t('settings.providers.imagesKey.toast.saveFailed'));
+    } finally {
+      setBusy(false);
+    }
+  }, [draftKey, secretId, t]);
+
+  const handleClear = useCallback(async () => {
+    setBusy(true);
+    try {
+      await window.electronAPI.builtinApiKeyRemove(secretId);
+      toast.success(t('settings.providers.imagesKey.toast.cleared'));
+      setConfigured(false);
+    } catch {
+      toast.error(t('settings.providers.imagesKey.toast.clearFailed'));
+    } finally {
+      setBusy(false);
+    }
+  }, [secretId, t]);
+
+  if (configured === null) return null;
+  return (
+    <div className="flex items-center gap-2 pt-2">
+      <span className="shrink-0 text-12 font-medium" style={{ color: 'var(--text-secondary)' }}>
+        {t('settings.providers.imagesKey.label')}
+      </span>
+      {configured ? (
+        <>
+          <span className="font-mono text-12" style={{ color: 'var(--text-tertiary)' }}>
+            ••••••••
+          </span>
+          <PillButton
+            label={t('settings.providers.imagesKey.clear')}
+            onClick={() => void handleClear()}
+            disabled={busy}
+          />
+        </>
+      ) : (
+        <>
+          <input
+            type="password"
+            value={draftKey}
+            onChange={(e) => setDraftKey(e.target.value)}
+            autoComplete="off"
+            placeholder={t('settings.providers.imagesKey.placeholder')}
+            className="h-8 min-w-0 flex-1 rounded-full border px-3 font-mono text-12 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
+            style={{
+              borderColor: 'var(--border-default)',
+              backgroundColor: 'var(--surface-elevated)',
+              color: 'var(--settings-section-title)',
+            }}
+          />
+          <PillButton
+            label={t('settings.providers.imagesKey.save')}
+            onClick={() => void handleSave()}
+            disabled={busy || draftKey.trim().length === 0}
+          />
+        </>
+      )}
+    </div>
   );
 }
 
@@ -650,6 +825,129 @@ function GenericOAuthHeader({
       icon={providerIcon(provider, 18)}
       title={provider.name}
       subtitle={t('settings.providers.genericOAuth.subtitle')}
+      trailing={trailing}
+      provider={provider}
+      detail={detail}
+    />
+  );
+}
+
+/**
+ * 内置 API-key 供应商详情头(如 Gemini 图像来源,2026-07 图像多来源)。
+ * 连接态 = key 已存(provider-service builtinApiKeyConnected);「更换」重写 key,
+ * 「断开」删除 key(safeStorage),断开后左栏行按既有契约消失、重连入口回向导。
+ * key 全程掩码,不回显明文。
+ */
+function BuiltinApiKeyHeader({
+  provider,
+  onChanged,
+}: {
+  provider: ProviderView;
+  onChanged: () => void;
+}) {
+  const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draftKey, setDraftKey] = useState('');
+
+  const handleSave = useCallback(async () => {
+    const key = draftKey.trim();
+    if (!key) return;
+    setBusy(true);
+    try {
+      // 失败经统一 IPC 错误协议抛出(throwIpcError),这里 catch 即失败。
+      await window.electronAPI.builtinApiKeyStore(provider.id, key);
+      toast.success(t('settings.providers.builtinApiKey.toast.saved', { name: provider.name }));
+      setEditing(false);
+      setDraftKey('');
+      onChanged();
+    } catch {
+      toast.error(t('settings.providers.builtinApiKey.toast.saveFailed', { name: provider.name }));
+    } finally {
+      setBusy(false);
+    }
+  }, [draftKey, onChanged, provider.id, provider.name, t]);
+
+  const handleDisconnect = useCallback(async () => {
+    const confirmed = await confirm({
+      title: t('settings.providers.builtinApiKey.disconnectConfirm.title', { name: provider.name }),
+      description: t('settings.providers.builtinApiKey.disconnectConfirm.description', {
+        name: provider.name,
+      }),
+      confirmText: t('settings.providers.builtinApiKey.disconnectConfirm.confirm'),
+      cancelText: t('settings.providers.builtinApiKey.disconnectConfirm.cancel'),
+    });
+    if (!confirmed) return;
+    setBusy(true);
+    try {
+      await window.electronAPI.builtinApiKeyRemove(provider.id);
+      toast.success(
+        t('settings.providers.builtinApiKey.toast.disconnected', { name: provider.name }),
+      );
+      onChanged();
+    } catch {
+      toast.error(
+        t('settings.providers.builtinApiKey.toast.disconnectFailed', { name: provider.name }),
+      );
+    } finally {
+      setBusy(false);
+    }
+  }, [confirm, onChanged, provider.id, provider.name, t]);
+
+  const trailing = (
+    <div className="flex shrink-0 items-center gap-2.5">
+      {provider.connected && <ConnectedPill />}
+      <PillButton
+        label={t(
+          editing
+            ? 'settings.providers.button.cancel'
+            : 'settings.providers.builtinApiKey.replaceKey',
+        )}
+        onClick={() => {
+          setDraftKey('');
+          setEditing((v) => !v);
+        }}
+        disabled={busy}
+      />
+      {provider.connected && (
+        <PillButton
+          label={t('settings.providers.button.disconnect')}
+          onClick={() => void handleDisconnect()}
+          disabled={busy}
+        />
+      )}
+    </div>
+  );
+
+  const detail = editing ? (
+    <div className="flex items-center gap-2 pt-2">
+      <input
+        type="password"
+        value={draftKey}
+        onChange={(e) => setDraftKey(e.target.value)}
+        autoComplete="off"
+        placeholder={t('settings.providers.builtinApiKey.keyPlaceholder')}
+        className="h-8 min-w-0 flex-1 rounded-full border px-3 font-mono text-12 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
+        style={{
+          borderColor: 'var(--border-default)',
+          backgroundColor: 'var(--surface-elevated)',
+          color: 'var(--settings-section-title)',
+        }}
+      />
+      <PillButton
+        label={t('settings.providers.builtinApiKey.saveKey')}
+        onClick={() => void handleSave()}
+        disabled={busy || draftKey.trim().length === 0}
+      />
+    </div>
+  ) : undefined;
+
+  return (
+    <DetailHeader
+      icon={providerIcon(provider, 18)}
+      title={provider.name}
+      subtitle={t('settings.providers.builtinApiKey.subtitle')}
       trailing={trailing}
       provider={provider}
       detail={detail}
@@ -1033,21 +1331,31 @@ function ListRow({
       </div>
       <span
         className="min-w-0 flex-1 truncate text-13 font-medium"
-        style={{ color: 'var(--settings-section-title)' }}
+        style={{
+          color: provider.suspended ? 'var(--text-tertiary)' : 'var(--settings-section-title)',
+        }}
       >
         {title}
       </span>
-      {modelCount !== null && (
-        <span className="shrink-0 text-11 tabular-nums" style={{ color: 'var(--text-tertiary)' }}>
-          {t('settings.providers.models.modelCount', { count: modelCount })}
+      {provider.suspended ? (
+        // 已停用比模型数更要紧:窄栏(224px)只放得下一个注记,停用时以状态取代计数。
+        <span className="shrink-0 select-none text-11" style={{ color: 'var(--text-tertiary)' }}>
+          {t('settings.providers.pill.suspended')}
         </span>
+      ) : (
+        modelCount !== null && (
+          <span className="shrink-0 text-11 tabular-nums" style={{ color: 'var(--text-tertiary)' }}>
+            {t('settings.providers.models.modelCount', { count: modelCount })}
+          </span>
+        )
       )}
       <span
         className="h-1.5 w-1.5 shrink-0 rounded-full"
         style={{
-          backgroundColor: provider.connected
-            ? 'var(--remote-status-ready)'
-            : 'var(--border-default)',
+          backgroundColor:
+            provider.connected && !provider.suspended
+              ? 'var(--remote-status-ready)'
+              : 'var(--border-default)',
         }}
       />
     </button>
@@ -1127,8 +1435,30 @@ export function ProvidersSection() {
     null | { mode: 'create' } | { mode: 'edit'; config: CustomProviderConfig }
   >(null);
   const [detections, setDetections] = useState<LocalCliDetection[]>([]);
-  const [refreshingModels, setRefreshingModels] = useState(false);
   const [rediscovering, setRediscovering] = useState(false);
+  const [refreshingProviderId, setRefreshingProviderId] = useState<string | null>(null);
+  // React state 负责渲染反馈；ref 才是同一事件循环内立即生效的互斥锁，防止双击在
+  // disabled 状态提交到 DOM 前启动两条刷新。
+  const refreshingProviderIdRef = useRef<string | null>(null);
+  const beginProviderRefresh = useCallback((providerId: string): boolean => {
+    if (refreshingProviderIdRef.current !== null) return false;
+    refreshingProviderIdRef.current = providerId;
+    setRefreshingProviderId(providerId);
+    return true;
+  }, []);
+  const finishProviderRefresh = useCallback((providerId: string): void => {
+    if (refreshingProviderIdRef.current !== providerId) return;
+    refreshingProviderIdRef.current = null;
+    setRefreshingProviderId(null);
+  }, []);
+
+  // 进入「模型供应商」页时只上报一个静默刷新提示。是否真正访问上游由 Main
+  // 根据连接状态、30 分钟冷却和全局 in-flight 决定，失败不打扰用户。
+  useEffect(() => {
+    void window.electronAPI.maker
+      .requestProviderModelsAutoRefresh('providers-open')
+      .catch(() => undefined);
+  }, []);
 
   // 本机 CLI 扫描:挂载时一次(失败静默空数组;检测建议是增强,不是依赖)。
   useEffect(() => {
@@ -1152,6 +1482,8 @@ export function ProvidersSection() {
 
   // 左栏行集合:xd 置顶;内置/通用 OAuth 渠道只在已连接后占行(未连接的入口在向导
   // 目录 + 检测建议);自定义供应商保持既有过滤(有模型或 OAuth 形态)。
+  // 停用的供应商**沉底**(稳定分区,组内保持既有顺序)——「停用的东西往下沉、变灰、
+  // 离开活跃区」是本页的统一隐喻,与右栏模型列表的「已停用」分区同构。
   const listProviders = useMemo(() => {
     const rows: ProviderView[] = [];
     const xd = byId.get('xd');
@@ -1160,7 +1492,10 @@ export function ProvidersSection() {
       if (p.id === 'xd') continue;
       if (p.source === 'builtin') {
         // reconnect-required 视同占行:凭证失效 ≠ 用户断开,重连入口必须保留。
-        if (p.connected || (p.id === 'openai' && openaiReconnectRequired)) rows.push(p);
+        // OpenAI 图像 key 与 ChatGPT OAuth 两套凭证解耦:imageModels 已声明时,
+        // 即使未做 OAuth 登录也需占行以便配置 / 管理图像 key。
+        const openaiHasImageCap = p.id === 'openai' && (p.imageModels?.length ?? 0) > 0;
+        if (p.connected || (p.id === 'openai' && openaiReconnectRequired) || openaiHasImageCap) rows.push(p);
         continue;
       }
       if (
@@ -1170,7 +1505,7 @@ export function ProvidersSection() {
         rows.push(p);
       }
     }
-    return rows;
+    return [...rows.filter((p) => !p.suspended), ...rows.filter((p) => p.suspended)];
   }, [providers, byId, openaiReconnectRequired]);
 
   // 检测建议:CLI 已安装 + 对应渠道存在于目录 + 未连接,且**未以任何形态占行**
@@ -1264,7 +1599,7 @@ export function ProvidersSection() {
    */
   const handleRefreshModels = useCallback(
     async (p: ProviderView) => {
-      setRefreshingModels(true);
+      if (!beginProviderRefresh(p.id)) return;
       try {
         const config = providerViewToCustomProviderConfig(p);
         let added = 0;
@@ -1282,6 +1617,7 @@ export function ProvidersSection() {
             agent,
             baseUrl: rt.baseUrl,
             authMethod,
+            ...(rt.wireProtocol ? { wireProtocol: rt.wireProtocol } : {}),
             modelsUrl: rt.modelsUrl ?? null,
             apiKey,
             ...(rt.headers ? { headers: rt.headers } : {}),
@@ -1306,10 +1642,27 @@ export function ProvidersSection() {
       } catch {
         toast.error(t('settings.providers.models.refreshFailed'));
       } finally {
-        setRefreshingModels(false);
+        finishProviderRefresh(p.id);
       }
     },
-    [refetch, t],
+    [beginProviderRefresh, finishProviderRefresh, refetch, t],
+  );
+
+  /** 内置四家复用 main 已有的 provider-specific 真源刷新，不在 Renderer 复制网络逻辑。 */
+  const handleRefreshBuiltinModels = useCallback(
+    async (p: ProviderView) => {
+      if (!isBuiltinRefreshableProviderId(p.id) || !beginProviderRefresh(p.id)) return;
+      try {
+        await window.electronAPI.maker.refreshBuiltinProviderModels(p.id);
+        toast.success(t('settings.providers.models.refreshDone'));
+        refetch();
+      } catch {
+        toast.error(t('settings.providers.models.refreshFailed'));
+      } finally {
+        finishProviderRefresh(p.id);
+      }
+    },
+    [beginProviderRefresh, finishProviderRefresh, refetch, t],
   );
 
   /**
@@ -1347,6 +1700,9 @@ export function ProvidersSection() {
     if (p.id === 'anthropic') return <AnthropicHeader provider={p} onChanged={refetch} />;
     if (p.id === 'openai') return <OpenAiHeader provider={p} onChanged={refetch} />;
     if (p.id === 'xai') return <XaiHeader provider={p} onChanged={refetch} />;
+    if (p.source === 'builtin' && p.auth.method === 'apiKey' && (PROVIDER_SECRET_IDS as readonly string[]).includes(p.id)) {
+      return <BuiltinApiKeyHeader provider={p} onChanged={refetch} />;
+    }
     if (p.source === 'builtin') return <GenericOAuthHeader provider={p} onChanged={refetch} />;
     return (
       <CustomProviderHeader
@@ -1484,12 +1840,37 @@ export function ProvidersSection() {
             ) : effectiveSelected ? (
               <>
                 {renderDetailHeader(effectiveSelected)}
+                {/* 供应商已停用:条带讲清「发生了什么 + 下一步」并就地给恢复入口。整个
+                    模型区随之收起(2026-07-28 用户反馈:停用了就别再列模型)——停用是
+                    盖在上面的一层,凭证与逐模型配置不丢,启用即原样回来。 */}
+                {effectiveSelected.suspended && (
+                  <div
+                    className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-5 py-3 text-13"
+                    style={{ borderColor: 'var(--settings-theme-card-border)' }}
+                  >
+                    <span style={{ color: 'var(--text-tertiary)' }}>
+                      {t('settings.providers.detail.suspendedBanner')}
+                    </span>
+                    <PillButton
+                      label={t('settings.providers.button.enableProvider')}
+                      onClick={() =>
+                        writeProviderDisabled(
+                          effectiveSelected.id,
+                          false,
+                          t('settings.providers.models.accessWriteFailed'),
+                        )
+                      }
+                    />
+                  </div>
+                )}
                 {/* 发现失败与「有没有模型」是正交的:失败时刻意保留上次成功的清单(它是陈旧
                     但可溯源的真数据),于是老用户清单照常显示 —— 若把提示只放进空态分支,他
                     就完全看不到「这份清单已经不代表当前状态」,还以为供应商一切正常
                     (DESIGN.md「Errors = what happened + what to do」)。有清单时以条带形式
                     置于列表上方,无清单时走下面的空态居中版。 */}
-                {effectiveSelected.modelDiscoveryFailure && providerHasModels(effectiveSelected) && (
+                {!effectiveSelected.suspended &&
+                  effectiveSelected.modelDiscoveryFailure &&
+                  providerHasModels(effectiveSelected) && (
                   <div
                     className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-5 py-3 text-13"
                     style={{ borderColor: 'var(--settings-theme-card-border)' }}
@@ -1514,7 +1895,10 @@ export function ProvidersSection() {
                     />
                   </div>
                 )}
-                {providerHasModels(effectiveSelected) && (
+                {!effectiveSelected.suspended &&
+                  (providerHasModels(effectiveSelected) ||
+                    (isBuiltinRefreshableProviderId(effectiveSelected.id) &&
+                      !effectiveSelected.modelDiscoveryFailure)) && (
                   <>
                     <div
                       className="border-t"
@@ -1522,17 +1906,33 @@ export function ProvidersSection() {
                     />
                     <UnifiedModelList
                       provider={effectiveSelected}
-                      {...(effectiveSelected.source === 'user' &&
-                      effectiveSelected.auth.method !== 'oauth'
+                      emptyMessage={t(
+                        effectiveSelected.connected
+                          ? 'settings.providers.detail.emptyModelsConnected'
+                          : 'settings.providers.detail.emptyModels',
+                      )}
+                      {...(isBuiltinRefreshableProviderId(effectiveSelected.id)
                         ? {
-                            onRefresh: () => void handleRefreshModels(effectiveSelected),
-                            refreshing: refreshingModels,
+                            onRefresh: () => void handleRefreshBuiltinModels(effectiveSelected),
+                            refreshing: refreshingProviderId === effectiveSelected.id,
+                            refreshDisabled: refreshingProviderId !== null,
+                            refreshIdleLabel: t('settings.providers.models.refreshBuiltinAria'),
                           }
-                        : {})}
+                        : effectiveSelected.source === 'user' &&
+                            effectiveSelected.auth.method !== 'oauth'
+                          ? {
+                              onRefresh: () => void handleRefreshModels(effectiveSelected),
+                              refreshing: refreshingProviderId === effectiveSelected.id,
+                              refreshDisabled: refreshingProviderId !== null,
+                            }
+                          : {})}
                     />
                   </>
                 )}
-                {!providerHasModels(effectiveSelected) && (
+                {!effectiveSelected.suspended &&
+                  !providerHasModels(effectiveSelected) &&
+                  (Boolean(effectiveSelected.modelDiscoveryFailure) ||
+                    !isBuiltinRefreshableProviderId(effectiveSelected.id)) && (
                   <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center text-13">
                     {/* 已连接却无模型(如 Codex 刚登录、models_cache 未生成;或网关清单拉取失败)
                         不能沿用未连接的「授权后…」文案——那对已连接供应商自相矛盾。

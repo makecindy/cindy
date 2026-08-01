@@ -71,6 +71,14 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     }
   });
 
+  it('放行 workflow 逐 agent 进度树只读(记录文件真相在被控端 HOME,控制端本机读必落空)', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:get-workflow-progress')).toBe(true);
+  });
+
+  it('放行会话后台任务快照只读(任务真身在被控端,后台任务面板挂载水合用)', () => {
+    expect(REMOTE_INVOKE_ALLOWLIST.has('maker:session-background-tasks:list')).toBe(true);
+  });
+
   it('放行会话级完整对等补充(fork-strip / context-usage / 窄口径 patch-meta / Magic 重命名)', () => {
     for (const ch of [
       'maker:fork-strip-encrypted',
@@ -123,6 +131,9 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
   it('放行窄口径文本文件预览(只读 + 大小上限 + forbidden/oversize reason)', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('text-file:read-preview')).toBe(true);
     expect(REMOTE_INVOKE_ALLOWLIST.has('read-file-for-attachment')).toBe(false);
+    // 同理:read-file-bytes 回整个文件的原始字节(PDF 预览用),调用方永远是被控端
+    // 本机 renderer,远程控制端不需要、也不得拿到这条通道。
+    expect(REMOTE_INVOKE_ALLOWLIST.has('read-file-bytes')).toBe(false);
   });
 
   it('放行 /goal 远程(goal-host 在被控端,per-session 业务写)', () => {
@@ -155,21 +166,25 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('desktop-cmd:run')).toBe(true);
   });
 
-  it('放行远程 worktree(git 探测 / 分支 / 建议名 / 删除预检只读 + create)', () => {
+  it('放行远程 worktree(git 探测 / 分支 / 建议名 / 删除预检 + create / 窄补偿回收)', () => {
     for (const ch of [
       'worktree:detect-cwd',
       'worktree:list-branches',
       'worktree:suggest-name',
       'worktree:create',
+      'worktree:discard-precreated',
       'worktree:removal-preview',
     ]) {
       expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(true);
     }
-    // 实际删除与 reveal 不放行:删除只在被控端状态变更流程内部触发,
-    // reveal 是本机 shell 副作用(shell.showItemInFolder)。
+    // 通用删除与 reveal 不放行：discard-precreated 只接受 sessionId + 已登记的
+    // 精确 path，或 create 前已持久化且与被控端元数据匹配的 recoveryKey，并由
+    // 被控端复核 ownership/dirty/live refs；其余删除仍只在被控端状态变更流程
+    // 内部触发。reveal 是本机 shell 副作用(shell.showItemInFolder)。
     expect(REMOTE_INVOKE_ALLOWLIST.has('worktree:reveal')).toBe(false);
     expect(REMOTE_INVOKE_ALLOWLIST.has('worktree:get-for-session')).toBe(false);
     expect(REMOTE_INVOKE_ALLOWLIST.has('worktree:list-all')).toBe(false);
+    expect(REMOTE_INVOKE_ALLOWLIST.has('worktree:remove')).toBe(false);
   });
 
   it('放行订阅控制帧(push 驱动:subscribe / unsubscribe)', () => {
@@ -242,7 +257,7 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
       { re: /updater|release-notes|session-import|migration/, why: 'updater / 导入 / 迁移' },
     ];
     // 显式豁免:
-    //  - `maker:goal:set` 是 per-session 域动作(入参带 sessionId,只影响单个会话的
+    //  - `maker:goal:set` 是 per-session 域动作(入参带 sessionId,只影响单个任务的
     //    目标状态机),与 compat-mode:set / memory:set 这类全局设置写不同类,同类的
     //    maker:set-permission-mode 本就放行;仅命名撞上 `:set$` 模式。
     //  - `maker:api-key:present` 是 presence-only 探测:只回 { present: boolean },
@@ -312,6 +327,10 @@ describe('INVOKE_TIMEOUT_OVERRIDES_MS', () => {
 
   it('worktree:create 隧道超时必须大于默认 30s(git worktree add + 选择性 checkout 预算)', () => {
     expect(INVOKE_TIMEOUT_OVERRIDES_MS['worktree:create']).toBeGreaterThan(30_000);
+  });
+
+  it('worktree:discard-precreated 可等待同 session 创建锁且不沿用默认 30s', () => {
+    expect(INVOKE_TIMEOUT_OVERRIDES_MS['worktree:discard-precreated']).toBeGreaterThan(30_000);
   });
 });
 

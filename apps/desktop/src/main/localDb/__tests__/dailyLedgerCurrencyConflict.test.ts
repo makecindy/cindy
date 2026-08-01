@@ -16,6 +16,11 @@ import type { DbClient } from '../client/DbClient';
 import { clearCurrentDbClient, setCurrentDbClient } from '../client/current';
 import { incrementDailySpend, localDayKey } from '../dailySpend';
 import { incrementDailyModelUsage } from '../dailyModelUsage';
+import { DEFAULT_USAGE_CURRENCY } from '../../../shared/regionalMoney';
+import {
+  __resetActiveLedgerCurrencyForTesting,
+  setActiveLedgerCurrency,
+} from '../../usage/ledgerCurrency';
 
 const DDL = `
   CREATE TABLE daily_spend (
@@ -73,45 +78,50 @@ const cny = (amount: number) => ({
   kind: 'actual-cost' as const,
 });
 
-describe('daily ledgers degrade gracefully on currency conflict', () => {
-  it('daily spend keeps the existing currency and drops the conflicting amount without throwing', async () => {
+const currentMoney = DEFAULT_USAGE_CURRENCY === 'CNY' ? cny : usd;
+const conflictingMoney = DEFAULT_USAGE_CURRENCY === 'CNY' ? usd : cny;
+
+describe('daily ledger currency invariant', () => {
+  it('daily spend ignores a non-regional currency without replacing the total', async () => {
     const harness = createHarness();
     try {
-      await incrementDailySpend(usd(1.5));
-      const result = await incrementDailySpend(cny(10));
-      expect(result.money).toMatchObject({ amount: 1.5, currency: 'USD' });
+      await incrementDailySpend(currentMoney(1.5));
+      await expect(incrementDailySpend(conflictingMoney(10))).resolves.toMatchObject({
+        money: currentMoney(1.5),
+      });
       const row = harness.sqlite
         .prepare('SELECT cost_amount, cost_currency FROM daily_spend')
         .get() as { cost_amount: number; cost_currency: string };
-      expect(row).toEqual({ cost_amount: 1.5, cost_currency: 'USD' });
+      expect(row).toEqual({
+        cost_amount: 1.5,
+        cost_currency: DEFAULT_USAGE_CURRENCY,
+      });
     } finally {
       harness.close();
     }
   });
 
-  it('daily model usage still records token deltas when the money currency conflicts', async () => {
+  it('daily model usage ignores non-regional money but still records tokens', async () => {
     const harness = createHarness();
     try {
       await incrementDailyModelUsage({
         agentKind: 'claude-code',
         model: 'claude-opus-4-8',
-        money: usd(2),
+        money: currentMoney(2),
         inputTokensDelta: 100,
         outputTokensDelta: 10,
         cacheReadTokensDelta: 0,
         cacheCreateTokensDelta: 0,
       });
-      await expect(
-        incrementDailyModelUsage({
-          agentKind: 'claude-code',
-          model: 'claude-opus-4-8',
-          money: cny(13.4),
-          inputTokensDelta: 50,
-          outputTokensDelta: 5,
-          cacheReadTokensDelta: 7,
-          cacheCreateTokensDelta: 0,
-        }),
-      ).resolves.toBeUndefined();
+      await incrementDailyModelUsage({
+        agentKind: 'claude-code',
+        model: 'claude-opus-4-8',
+        money: conflictingMoney(13.4),
+        inputTokensDelta: 50,
+        outputTokensDelta: 5,
+        cacheReadTokensDelta: 7,
+        cacheCreateTokensDelta: 0,
+      });
 
       const row = harness.sqlite
         .prepare(
@@ -125,7 +135,7 @@ describe('daily ledgers degrade gracefully on currency conflict', () => {
         output_tokens: number;
         cache_read_tokens: number;
       };
-      expect(row.cost_currency).toBe('USD');
+      expect(row.cost_currency).toBe(DEFAULT_USAGE_CURRENCY);
       expect(row.cost_amount).toBe(2);
       expect(row.input_tokens).toBe(150);
       expect(row.output_tokens).toBe(15);
@@ -135,32 +145,100 @@ describe('daily ledgers degrade gracefully on currency conflict', () => {
     }
   });
 
-  it('daily model usage conflict with zero token deltas is a no-op', async () => {
+  it('rolls active old-currency rows forward on the first regional write', async () => {
     const harness = createHarness();
     try {
+      const day = localDayKey();
+      const oldCurrency = conflictingMoney(1).currency;
+      harness.sqlite
+        .prepare(
+          `INSERT INTO daily_spend
+             (day, cost_amount, cost_currency, cost_is_approximate, updated_at)
+           VALUES (?, 99, ?, 0, 1)`,
+        )
+        .run(day, oldCurrency);
+      harness.sqlite
+        .prepare(
+          `INSERT INTO daily_model_usage
+             (day, agent_kind, model, cost_amount, cost_currency, cost_is_approximate,
+              input_tokens, output_tokens, cache_read_tokens, cache_create_tokens, updated_at)
+           VALUES (?, 'claude-code', 'claude-opus-4-8', 88, ?, 0, 25, 3, 0, 0, 1)`,
+        )
+        .run(day, oldCurrency);
+
+      await incrementDailySpend(currentMoney(1.5));
       await incrementDailyModelUsage({
-        agentKind: 'codex',
-        model: 'gpt-5.5',
-        money: usd(1),
-        inputTokensDelta: 1,
-        outputTokensDelta: 0,
-        cacheReadTokensDelta: 0,
+        agentKind: 'claude-code',
+        model: 'claude-opus-4-8',
+        money: currentMoney(2),
+        inputTokensDelta: 50,
+        outputTokensDelta: 5,
+        cacheReadTokensDelta: 7,
         cacheCreateTokensDelta: 0,
       });
-      await incrementDailyModelUsage({
-        agentKind: 'codex',
-        model: 'gpt-5.5',
-        money: cny(6.7),
-        inputTokensDelta: 0,
-        outputTokensDelta: 0,
-        cacheReadTokensDelta: 0,
-        cacheCreateTokensDelta: 0,
+
+      expect(
+        harness.sqlite
+          .prepare('SELECT cost_amount, cost_currency FROM daily_spend WHERE day = ?')
+          .get(day),
+      ).toEqual({
+        cost_amount: 1.5,
+        cost_currency: DEFAULT_USAGE_CURRENCY,
       });
-      const row = harness.sqlite
-        .prepare('SELECT cost_amount, input_tokens FROM daily_model_usage')
-        .get() as { cost_amount: number; input_tokens: number };
-      expect(row).toEqual({ cost_amount: 1, input_tokens: 1 });
+      expect(
+        harness.sqlite
+          .prepare(
+            `SELECT cost_amount, cost_currency, input_tokens, output_tokens, cache_read_tokens
+             FROM daily_model_usage WHERE day = ?`,
+          )
+          .get(day),
+      ).toEqual({
+        cost_amount: 2,
+        cost_currency: DEFAULT_USAGE_CURRENCY,
+        input_tokens: 75,
+        output_tokens: 8,
+        cache_read_tokens: 7,
+      });
     } finally {
+      harness.close();
+    }
+  });
+
+  it('accepts the account settlement currency even when it differs from the build region', async () => {
+    // 结算币种由服务端按账号所属租户下发,不是构建区域:CN 构建 + USD 结算账号是正常
+    // 组合。基准若取构建区域,这些账号的每一笔都会被拒收 —— 等于完全不计费。
+    // setActiveLedgerCurrency 由模型目录同步时写入(见 usage/modelPricing)。
+    const harness = createHarness();
+    const settlement = conflictingMoney(1).currency;
+    setActiveLedgerCurrency(settlement);
+    try {
+      await incrementDailySpend(conflictingMoney(1.5));
+      await incrementDailyModelUsage({
+        agentKind: 'claude-code',
+        model: 'claude-opus-4-8',
+        money: conflictingMoney(2),
+        inputTokensDelta: 100,
+        outputTokensDelta: 10,
+        cacheReadTokensDelta: 0,
+        cacheCreateTokensDelta: 0,
+      });
+
+      expect(
+        harness.sqlite.prepare('SELECT cost_amount, cost_currency FROM daily_spend').get(),
+      ).toEqual({ cost_amount: 1.5, cost_currency: settlement });
+      expect(
+        harness.sqlite
+          .prepare('SELECT cost_amount, cost_currency FROM daily_model_usage WHERE day = ?')
+          .get(localDayKey()),
+      ).toMatchObject({ cost_amount: 2, cost_currency: settlement });
+
+      // 反向:此时构建默认币种才是异币种,仍应被拒收以保护已有账本。
+      await incrementDailySpend(currentMoney(10));
+      expect(
+        harness.sqlite.prepare('SELECT cost_amount, cost_currency FROM daily_spend').get(),
+      ).toEqual({ cost_amount: 1.5, cost_currency: settlement });
+    } finally {
+      __resetActiveLedgerCurrencyForTesting();
       harness.close();
     }
   });

@@ -8,7 +8,6 @@ import {
   Minus,
   Pencil,
   Plus,
-  Square,
 } from 'lucide-react-native';
 import {
   Image,
@@ -858,23 +857,25 @@ function AskUserQuestionCard({
                 ]}
                 testID={`interaction.ask.option.${index + 1}`}
               >
-                {isMulti ? (
-                  <View style={styles.optionCheckbox} testID={selected ? 'interaction.ask.checkbox.checked' : 'interaction.ask.checkbox'}>
-                    <Square
-                      color={selected ? colors.textPrimary : colors.borderStrong}
-                      size={iconSize.xl}
-                      strokeWidth={iconStroke.regular}
+                {/* 单选也要有指示器:选中反色实底 + 对勾(对齐桌面 ask-checkbox 与登录
+                    radio 的反色勾体系)。此前单选行只靠 surfaceChip 底色,dark 下与卡底
+                    几乎同色,选中态不可见。 */}
+                <View
+                  style={[
+                    styles.optionIndicator,
+                    isMulti ? styles.optionIndicatorSquare : styles.optionIndicatorRound,
+                    selected && styles.optionIndicatorSelected,
+                  ]}
+                  testID={`interaction.ask.${isMulti ? 'checkbox' : 'radio'}${selected ? '.checked' : ''}`}
+                >
+                  {selected ? (
+                    <Check
+                      color={colors.ctaText}
+                      size={iconSize.sm}
+                      strokeWidth={iconStroke.bold}
                     />
-                    {selected ? (
-                      <Check
-                        color={colors.textPrimary}
-                        size={iconSize.sm}
-                        strokeWidth={iconStroke.bold}
-                        style={styles.optionCheckboxMark}
-                      />
-                    ) : null}
-                  </View>
-                ) : null}
+                  ) : null}
+                </View>
                 <View style={styles.optionCopy}>
                   <Text style={styles.optionTitle}>{option.label}</Text>
                   {option.description ? <Text style={styles.optionDescription}>{option.description}</Text> : null}
@@ -1961,14 +1962,24 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   optionRowSelected: {
     backgroundColor: colors.surfaceChip,
   },
-  optionCheckbox: {
+  optionIndicator: {
     alignItems: 'center',
-    height: 24,
+    borderColor: colors.borderStrong,
+    borderWidth: 2,
+    height: iconSize.xl,
     justifyContent: 'center',
-    width: 24,
+    width: iconSize.xl,
   },
-  optionCheckboxMark: {
-    position: 'absolute',
+  // 单选圆形(radio 语义)、多选圆角方形(checkbox 语义),选中都用反色实底 + 勾。
+  optionIndicatorRound: {
+    borderRadius: radius.pill,
+  },
+  optionIndicatorSquare: {
+    borderRadius: radius.micro,
+  },
+  optionIndicatorSelected: {
+    backgroundColor: colors.cta,
+    borderColor: colors.cta,
   },
   optionCopy: { flex: 1, minWidth: 0 },
   optionTitle: {

@@ -333,6 +333,24 @@ describe('resolveModelInvocation — 六元组回落链', () => {
     expect(r.fallbacksApplied).toContain('provider:visible-fallback');
   });
 
+  it('providerId: 点名来源这份具体条目是非聊天 mode → 不算「真实提供」,收敛到聊天可用的替代源(issue #882 第 3 点,2026-07 review 第 18 轮)', () => {
+    // anthropic 的 claude-opus-5 被网关标成非聊天(如 embedding);xd 上同 id 仍是正常
+    // 聊天模型 —— 只看 id 存在(旧 providerOffersModel)会误留在 anthropic 上,必须
+    // 收敛到 xd。故意不传 ctx.isVisible,复现修复前「无可见性回调时直接放行」的路径。
+    const withNonChatCopy: ProviderView[] = providers().map((p) =>
+      p.id === 'anthropic'
+        ? { ...p, models: { 'claude-code': [model('claude-opus-5', { mode: 'embedding' })] } }
+        : p,
+    ) as ProviderView[];
+    const r = resolveModelInvocation(
+      { model: 'claude-opus-5', providerId: 'anthropic' },
+      SCENARIO,
+      ctx({ providers: withNonChatCopy }),
+    );
+    expect(r.providerId).toBe('xd');
+    expect(r.fallbacksApplied).toContain('provider:visible-fallback');
+  });
+
   it('providerId: 目录不可用 → 透传原值(路由层兜底,与 IM/hook 历史降级一致)', () => {
     const r = resolveModelInvocation(
       { providerId: 'anthropic' },
@@ -680,5 +698,64 @@ describe('resolveModelInvocation — codex review 五轮:native 兜底行级可�
     const r = resolveModelInvocation({}, SCENARIO, ctx());
     expect(r.permissionMode).toBe('bypassPermissions');
     expect(r.fallbacksApplied).not.toContain('permission:scenario-strictest-fallback');
+  });
+});
+
+describe('resolveModelInvocation — model 候选清单本身先过 chat 准入(issue #882 第 3 点,2026-07 review 第 20 轮)', () => {
+  it('native 源上首模型是非聊天类型 → 跳过它,兜底选该源下一个聊天模型,不是裸 available[0]', () => {
+    // xd(native)目录 [opus(非聊天), sonnet]:旧实现的 availableModelsFor 不过滤 mode,
+    // has()/fromNative/available[0] 都可能选中 opus;providerId 步骤只能校验"选中的
+    // 来源",无法撤销已经选错的模型。
+    const provs = providers().map((p) =>
+      p.id === 'xd'
+        ? {
+            ...p,
+            models: {
+              ...p.models,
+              'claude-code': [
+                model('claude-opus-5', { mode: 'embedding' }),
+                model('claude-sonnet-4-6'),
+              ],
+            },
+          }
+        : p,
+    ) as ProviderView[];
+    const r = resolveModelInvocation(
+      { model: 'gone' },
+      { ...SCENARIO, modelFor: () => 'also-gone' },
+      { providers: provs, getPermissionModes: PERM_MODES },
+    );
+    expect(r.model).toBe('claude-sonnet-4-6');
+    expect(r.fallbacksApplied).toContain('model:first-available');
+  });
+
+  it('显式偏好的模型 id 在所有来源都只以非聊天类型存在 → 不算「可用」,回落场景默认', () => {
+    // 两个来源的 claude-opus-5 都改成非聊天,确保没有任何一份聊天可用的同 id 条目
+    // 能让 has() 误放行。
+    const provs = providers().map((p) => {
+      if (p.id === 'anthropic') {
+        return { ...p, models: { 'claude-code': [model('claude-opus-5', { mode: 'embedding' })] } };
+      }
+      if (p.id === 'xd') {
+        return {
+          ...p,
+          models: {
+            ...p.models,
+            'claude-code': [
+              model('claude-opus-5', { mode: 'embedding' }),
+              model('claude-sonnet-4-6'),
+            ],
+          },
+        };
+      }
+      return p;
+    }) as ProviderView[];
+    const r = resolveModelInvocation(
+      { model: 'claude-opus-5' },
+      SCENARIO,
+      { providers: provs, getPermissionModes: PERM_MODES },
+    );
+    expect(r.model).toBe('claude-sonnet-4-6');
+    expect(r.fallbacksApplied).toContain('model:scenario-default');
   });
 });

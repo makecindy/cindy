@@ -22,6 +22,10 @@ import type { Maker } from '@cindy/maker-core';
 import type { FeishuIM } from '@cindy/im';
 
 import { dialogueWorkspaceRootDir } from '../localDb/dialogueWorkspace';
+import {
+  resolveRouteCopyCapabilities,
+  verdictForModelRoute,
+} from '../maker-host/model-route-guard-live.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { getDesktopNotificationsEnabled } from '../notificationService.js';
 import {
@@ -36,6 +40,7 @@ import {
 import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from './storage';
 import { ProjectAutomationLoader } from './project-automation-loader';
 import { MakerScheduleRunner } from './runner';
+import { buildForcedFailureRun } from './forcedFailureRun';
 import { ScriptScheduleRunner } from './script-runner';
 import { SchedulerScriptCapabilityBroker } from './script-capability-broker';
 import { DesktopNotifier } from './notifier';
@@ -76,6 +81,10 @@ export async function startScheduler(deps: StartSchedulerDeps): Promise<Schedule
     onUndispatchedUserTurn: deps.onUndispatchedUserTurn,
     acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
     onSessionCreated: broadcastSessionCreated,
+    // 停用轴裁决:每次 fire 前判保存路由是否已被用户停用(见 runner deps 注释)。
+    checkModelRoute: verdictForModelRoute,
+    // 隐式改道后按落地拷贝 reconcile effort/Fast(见 runner deps 注释,R27)。
+    resolveRouteCopyCapabilities,
     // 心跳撞忙排队桥:实现挂在 maker-ipc/register.ts 的 coordinator 装配处
     // (holder 未就绪时 isSessionBusy 返回 false → runner 走原直发路径)。
     schedulerQueue: {
@@ -125,6 +134,21 @@ export async function startScheduler(deps: StartSchedulerDeps): Promise<Schedule
     isManagedWorkspaceDir: (dir) => {
       const rel = path.relative(dialogueWorkspaceRootDir(), dir);
       return !rel.startsWith('..') && !path.isAbsolute(rel);
+    },
+    // 卡死收口的通知出口。通知投递平时住在两个 runner 里(它们各自持 notifier),而
+    // 卡死收口刻意绕过 runner —— 要么它压根不返回、要么它把守卫 abort 当普通中断处理。
+    // 没有这条线,用户配了桌面/飞书通知也只会看到一个未读红点(PR #944 review P1)。
+    // notify() 自身保证不 throw;这里再读回真实 run 行,让通知内容与历史一致。
+    notifyForcedFailure: async ({ scheduleId, runId, errorMsg }) => {
+      const schedule = await storage.get(scheduleId);
+      if (!schedule) return;
+      const run = (await storage.listRuns(scheduleId, 20)).find((r) => r.id === runId);
+      // 读回的行**不一定是终态**(落库失败时它还停在 'running'),判据与理由见
+      // buildForcedFailureRun。
+      await notifier.notify(
+        schedule,
+        buildForcedFailureRun({ scheduleId, runId, errorMsg, run, now: Date.now() }),
+      );
     },
   });
   const loader = new ProjectAutomationLoader({

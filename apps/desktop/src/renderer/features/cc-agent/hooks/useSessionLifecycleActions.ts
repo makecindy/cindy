@@ -14,7 +14,7 @@
  * activeSessionId 由调用方传入：sidebar 是当前路由解析出的活跃会话（可能
  * 操作非活跃行）；header 操作的恒为当前打开的会话（传 session.id 即可）。
  *
- * includeArchived 必须与调用方自己的 useCCSessions 桶一致：refreshSessions
+ * includeArchived 必须与调用方自己的 useCCSessions 桶一致：unarchive 的 refreshSessions
  * 只刷当前桶，sidebar 处于 archived / all 桶时删除行后若刷的是默认 active
  * 桶，已删行会在当前列表残留（Codex review P2）。header 始终展示 active
  * 会话语境，用默认值即可。
@@ -57,6 +57,10 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
   // includeArchived 跟随调用方的桶（见文件头注释）。
   const { refreshSessions, patchLocal } = useCCSessions(options);
   const refreshWorktrees = useRefreshWorktrees();
+  // 取成 string 再进 deps —— options 是调用方每次渲染新建的字面量对象,直接放进
+  // runSessionAction 的 deps 会让它每次重建,打穿 sidebar 的行 handler memo
+  // (行渲染隔离不变量,见 SessionItem.tsx)。
+  const listFilter: ListStatusFilter = options?.includeArchived ?? 'active';
 
   /**
    * archive / delete 实际执行序列。不关心确认弹窗的开合状态——由调用方负责。
@@ -71,21 +75,22 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
       // device-link 远程会话:status 写经隧道(setStatus 内部按来源路由 patch-meta),被控端写库后
       // 广播 sessions:patched{status} → 控制端 applyPatch 把它移出分片(纯镜像,无需乐观/重拉)。
 
-      // Close the SDK query subprocess before archiving/deleting
-      makerChatStore.closeSessionQuery(sessionId);
-
       if (action === 'archive') {
-        // 这里**顺序 + 两次 flushSync 都不能省**,任意一个错了都会有"100ms 延迟还
-        // 高亮被归档行"的视觉:
+        // 乐观更新的顺序取决于**被归档的行还会不会留在当前列表里**,两种情况相反:
         //
-        // patchLocal 触发 sessions list 重排(归档项移到下方);navigate 触发
-        // activeSessionId 失效。如果 patchLocal 先生效(或两个被同一 commit 渲染
-        // 到 paint),被归档的行已经移到新位置但还挂着 isActive bg → 用户看到的
-        // 就是"那行被归档后还在新位置短暂高亮"。
+        //   · 会留下(调用方在 'all' 桶):patchLocal 只是把它重排到归档段,行还在。
+        //     必须先让 navigate commit + paint 掉 isActive 高亮,再重排,否则会看到
+        //     "那行被归档后还在新位置短暂高亮"。两次独立 flushSync 就是为这个。
+        //   · 会消失(active 桶,最常见):store 已经把它从桶里就地移除,高亮随行一起
+        //     消失,不存在残留问题。这时**不能**让 navigate 先跑 —— flushSync 里的
+        //     navigate 要同步渲染整个主视图切换(卸下会话视图、挂上新建页),那一帧
+        //     几十毫秒全堵在"行消失"之前。改成先 flushSync 掉行(只重渲染 sidebar,
+        //     便宜),navigate 不加 flushSync 让它排到后面的帧。
         //
-        // 用两次独立的 flushSync 强制 navigate 先 commit + paint,让 isActive 高
-        // 亮在 list 重排之前就消失;再 patchLocal 让 list 重排。两帧渲染,但用户
-        // 视觉是干净的:第 1 帧高亮消失、行位置不变;第 2 帧行移到归档段。
+        // 乐观更新还**依赖 sessionsStore.patchLocal 就地移除、不 drop 桶**:早期 store
+        // 对跨桶迁移一律 drop + 重拉,桶变 null 会让 useCCSessions 跳过 setState,
+        // 本段全部白做,行要等 sessions:list 回来(数百毫秒)才消失。改 store 那段
+        // 逻辑前先看它的 patchLocal 注释。
         //
         // 借鉴 Codex 的 onArchivedCurrentThread 思路 navigate 到 /cc-agent/new
         // 空白态,而不是 /cc-agent 让 CCAgentIndexRedirect 挑下一条 —— 后者会按
@@ -93,16 +98,25 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         //
         // Delete 仍走原来的"先 DB 后清理"流程:delete 不可逆,乐观删除如果 DB 失
         // 败会让用户看到"行消失又出现"的诡异闪烁,代价比 archive 大。写库成功
-        // 后再用 patchLocal 从所有桶移除,并由 refreshSessions 刷新当前桶兜底。
-        if (sessionId === activeSessionId) {
-          flushSync(() => {
-            navigate('/cc-agent/new');
-          });
+        // 后再用 patchLocal 从所有桶移除,并由 emitRefresh 强制重拉所有桶兜底。
+        const archivedRowStaysInList = listFilter === 'all';
+        const leaveArchivedSession = () => {
+          if (sessionId === activeSessionId) navigate('/cc-agent/new');
+        };
+        if (archivedRowStaysInList) {
+          flushSync(leaveArchivedSession);
         }
         flushSync(() => {
           patchLocal(sessionId, { status: 'archived', pinnedAt: null });
         });
+        if (!archivedRowStaysInList) {
+          leaveArchivedSession();
+        }
       }
+
+      // 关子进程:排在乐观更新之后 —— 它只是 fire-and-forget 地通知 main 收掉 SDK
+      // query,不影响列表,没有理由挤在用户等着看到行消失的那一段前面。
+      makerChatStore.closeSessionQuery(sessionId);
 
       try {
         // setStatus 按来源路由(远程走隧道 set-status,本机走原 update);archive 时
@@ -148,12 +162,24 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         cleanupSessionLayoutPrefs(sessionId);
       }
 
-      await refreshSessions();
+      // 写库成功后强制重拉**所有已加载桶**。不 await —— 列表视觉已由上面的
+      // patchLocal 就地改好,这里只是让缓存跟 DB 对齐;sessions:list 是
+      // LEFT JOIN messages + GROUP BY + latest-message 子查询的重查询,await 它
+      // 只会把后面的 refreshWorktrees / delete 跳转推迟几百毫秒。
+      //
+      // 为什么必须全桶、不能只刷当前桶(codex review):归档时 patchLocal 会 drop
+      // 目标桶(archived,本地没有这条的完整 row)并立刻重拉,而那次重拉发生在
+      // setStatus 写库**之前**,拿回来的是「还没归档」的快照。本机
+      // local-db:sessions:update 又只在 title / settings / project 变化时才广播
+      // sessions:patched(status 不在其中),archived 桶再没有别的修正机会 —— 用户
+      // 切到「已归档」筛选会看不到刚归档的这条,直到某次无关刷新。
+      // 与 unarchiveSession 末尾的 emitRefresh 同口径。
+      emitRefresh();
       // 远程会话从侧边栏消失由被控端 sessions:patched{status} 回流(applyPatch 移出分片)驱动,
       // 控制端不再主动重拉 / 不再埋「主动移除」标记(掉线 vs 删除的区分见 CCAgentSessionView 优雅退出)。
-      // I-2: delete/archive 都要顺手刷一次 worktree map —— main 此时已自动收尾
-      // 对应 worktree 目录，但 WorktreeContext 不会因 refreshSessions() 自动更新
-      // (它只订阅 sessionsBus.onRefresh，而 refreshSessions 不发该事件)。
+      // I-2: delete/archive 都要顺手刷一次 worktree map。上面的 emitRefresh 已经会
+      // 触发 WorktreeContext(它订阅 sessionsBus.onRefresh),这里再显式刷一次是为了
+      // 不依赖那条链;worktree 回收真正跑完后 main 还会广播 worktree:changed。
       void refreshWorktrees();
 
       // Archive 已在前面乐观跳到 /cc-agent/new,这里只处理 delete。调用方有列表
@@ -163,7 +189,7 @@ export function useSessionLifecycleActions(options?: { includeArchived?: ListSta
         navigate(deleteRedirectRoute ?? '/cc-agent');
       }
     },
-    [navigate, refreshSessions, refreshWorktrees, patchLocal, t],
+    [navigate, refreshWorktrees, patchLocal, listFilter, t],
   );
 
   /**

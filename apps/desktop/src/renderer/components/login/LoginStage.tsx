@@ -14,7 +14,7 @@ import { LOGIN_GROUP, LOGIN_LOCAL_MODE } from './loginDesignTokens';
  * - 面板恒定 0.5 缩放(用户拍板 2026-07-23,design.md §11):文字/输入框在任何窗口
  *   保持设计标准大小;垂直锚点跟随品牌层 desktopScale 画布 + 品牌避让/视口 clamp
  *   (公式见 loginScale.panelPlacement),不再与品牌层共用整画布缩放;
- * - children 渲染在登录整体组坐标系内(680×560 设计px);
+ * - children 渲染在登录整体组坐标系内(680×620 设计px:面板 500 + gap 40 + 圆钮 80);
  * - 本层自身 z-auto:LoginPage 根建立 z-[9990] stacking context 整体压过品牌
  *   overlay(LoginBrandStage z-[9980]),内部与窗框描边(z-30)/拖拽条(z-40)
  *   沿 PR2a 相对层序。
@@ -56,7 +56,7 @@ export function LoginStage({
       className="fixed inset-0 overflow-hidden"
       data-testid="login-panel-stage-root"
     >
-      {/* 登录整体组(680×560 设计px):恒定 0.5 缩放,垂直锚点跟随品牌画布并
+      {/* 登录整体组(680×620 设计px):恒定 0.5 缩放,垂直锚点跟随品牌画布并
           做品牌避让/视口 clamp(用户拍板 2026-07-23,design.md §11) */}
       <div
         data-testid="login-stage"
