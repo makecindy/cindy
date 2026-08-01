@@ -7756,7 +7756,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const sess = getStableSessionForTurnBoundary(sessionId);
       return isSessionTurnDispatchBoundaryBusy(sessionTurnActivityTracker, sessionId, sess);
     },
-    getTurnGeneration: (sessionId) => maker.getSession(sessionId)?.getTurnGeneration() ?? null,
+    getTurnGeneration: (sessionId) =>
+      getStableSessionForTurnBoundary(sessionId)?.getTurnGeneration() ?? null,
     reconcileTurnIdle: (sessionId) => {
       // steer 拿到 maker-core 权威 NO_ACTIVE_TURN、或 abort 已让 vendor 停止
       // 但终态事件丢失时，都走同一条收口路径。
