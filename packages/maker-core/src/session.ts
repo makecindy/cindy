@@ -274,6 +274,9 @@ export class Session {
   private permissionModeStateValue: PermissionModeState;
   private permissionModeChangeChain: Promise<void> = Promise.resolve();
   private permissionModeChangesInFlight = 0;
+  /** User/API permission changes, serialized separately so host restores cannot deadlock. */
+  private externalPermissionModeChangeChain: Promise<void> = Promise.resolve();
+  private externalPermissionModeChangesInFlight = 0;
   /** Host-owned logical turn leases that outlive a vendor's transient idle edge. */
   private readonly hostTurnLeases = new Set<Promise<void>>();
   private readonly eventListeners = new Set<SessionEventListener>();
@@ -380,6 +383,13 @@ export class Session {
     // Wait instead of racing that continuation with a new Desktop turn.
     while (this.hostTurnLeases.size > 0) {
       if (await this.waitForGateOrAbort(Promise.all([...this.hostTurnLeases]), handleOpts.signal)) {
+        return { accepted: false, reason: 'cancelled-before-dispatch' };
+      }
+    }
+    // A user/API permission change may have been waiting for the lease above.
+    // Preserve its ordering before admitting the next turn.
+    while (this.externalPermissionModeChangesInFlight > 0) {
+      if (await this.waitForGateOrAbort(this.externalPermissionModeChangeChain, handleOpts.signal)) {
         return { accepted: false, reason: 'cancelled-before-dispatch' };
       }
     }
@@ -706,7 +716,29 @@ export class Session {
   }
 
   async setPermissionMode(mode: PermissionMode): Promise<void> {
-    await this.setPermissionModeTracked(mode);
+    this.assertPermissionModeSupported(mode);
+    this.externalPermissionModeChangesInFlight += 1;
+    const operation = this.externalPermissionModeChangeChain.catch(() => undefined).then(async () => {
+      if (this.isTurnPermissionPolicyUnsafe(mode)) {
+        // Official group turns hold a host lease until background continuations
+        // and the temporary safe-mode restore have both settled. Do not let an
+        // external Full access / accept-edits switch weaken that active turn.
+        // Host-owned temporary switches use setPermissionModeTracked and remain
+        // able to restore while this operation waits, avoiding a lease deadlock.
+        while (this.hostTurnLeases.size > 0) {
+          await Promise.all([...this.hostTurnLeases]);
+        }
+      }
+      await this.setPermissionModeTracked(mode);
+    });
+    const tracked = operation.finally(() => {
+      this.externalPermissionModeChangesInFlight -= 1;
+    });
+    this.externalPermissionModeChangeChain = tracked.then(
+      () => undefined,
+      () => undefined,
+    );
+    await tracked;
   }
 
   async setPermissionModeTracked(mode: PermissionMode): Promise<PermissionModeState> {
@@ -735,6 +767,10 @@ export class Session {
     mode: PermissionMode,
   ): Promise<boolean> {
     this.assertPermissionModeSupported(mode);
+    // An external request is newer user intent even when an unsafe target is
+    // still waiting for a host turn lease. Never restore over it, and never
+    // wait here: that request may need this restore path to release the lease.
+    if (this.externalPermissionModeChangesInFlight > 0) return false;
     this.permissionModeChangesInFlight += 1;
     const operation = this.permissionModeChangeChain.catch(() => undefined).then(async () => {
       const current = this.permissionModeStateValue;
@@ -772,6 +808,10 @@ export class Session {
     if (!this.handle.setPermissionMode) {
       throw new NotSupportedError('setPermissionMode', { supported: false, reason: 'not-implemented' });
     }
+  }
+
+  private isTurnPermissionPolicyUnsafe(mode: PermissionMode): boolean {
+    return this.capabilities.turnPermissionPolicy?.unsupportedPermissionModes.includes(mode) === true;
   }
 
   async setFastMode(enabled: boolean): Promise<void> {

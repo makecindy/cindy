@@ -1420,6 +1420,96 @@ describe('Session permission mode leases', () => {
     await expect(nextTurn).resolves.toEqual({ accepted: true });
     expect(handle.send).toHaveBeenCalledOnce();
   });
+
+  it('defers an unsafe external permission switch until a host turn lease is released', async () => {
+    const handle = createHandle({ id: 'permission-host-lease-thread' });
+    const applied: PermissionMode[] = [];
+    handle.setPermissionMode = vi.fn(async (mode: PermissionMode) => {
+      applied.push(mode);
+    });
+    handle.send = vi.fn(async () => undefined);
+    const baseCapabilities = createAgent(async () => handle).capabilities;
+    const session = new Session({
+      id: 'permission-host-lease-session',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {
+        ...baseCapabilities,
+        permissionModes: [
+          { id: 'ask', displayName: 'Ask' },
+          { id: 'auto', displayName: 'Auto' },
+          { id: 'bypassPermissions', displayName: 'Full access' },
+        ],
+        setPermissionModeMidSession: { supported: true },
+        turnPermissionPolicy: {
+          supported: { supported: true },
+          unsupportedPermissionModes: ['bypassPermissions'],
+        },
+      },
+      logger: createLogger(),
+      permissionMode: 'bypassPermissions',
+    });
+
+    const releaseLease = session.acquireTurnLease();
+    const temporary = await session.setPermissionModeTracked('ask');
+    const externalChange = session.setPermissionMode('bypassPermissions');
+    await Promise.resolve();
+
+    expect(applied).toEqual(['ask']);
+    await expect(
+      session.setPermissionModeIfUnchanged(temporary, 'bypassPermissions'),
+    ).resolves.toBe(false);
+    expect(applied).toEqual(['ask']);
+
+    const nextTurn = session.send('after leased permission change');
+    releaseLease();
+    await expect(externalChange).resolves.toBeUndefined();
+    await expect(nextTurn).resolves.toEqual({ accepted: true });
+    expect(applied).toEqual(['ask', 'bypassPermissions']);
+    expect(handle.send).toHaveBeenCalledOnce();
+  });
+
+  it('allows a safe external permission switch during a host turn lease', async () => {
+    const handle = createHandle({ id: 'permission-safe-host-lease-thread' });
+    const applied: PermissionMode[] = [];
+    handle.setPermissionMode = vi.fn(async (mode: PermissionMode) => {
+      applied.push(mode);
+    });
+    const baseCapabilities = createAgent(async () => handle).capabilities;
+    const session = new Session({
+      id: 'permission-safe-host-lease-session',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {
+        ...baseCapabilities,
+        permissionModes: [
+          { id: 'ask', displayName: 'Ask' },
+          { id: 'auto', displayName: 'Auto' },
+          { id: 'bypassPermissions', displayName: 'Full access' },
+        ],
+        setPermissionModeMidSession: { supported: true },
+        turnPermissionPolicy: {
+          supported: { supported: true },
+          unsupportedPermissionModes: ['bypassPermissions'],
+        },
+      },
+      logger: createLogger(),
+      permissionMode: 'bypassPermissions',
+    });
+
+    const releaseLease = session.acquireTurnLease();
+    const temporary = await session.setPermissionModeTracked('ask');
+    await expect(session.setPermissionMode('auto')).resolves.toBeUndefined();
+    await expect(
+      session.setPermissionModeIfUnchanged(temporary, 'bypassPermissions'),
+    ).resolves.toBe(false);
+    releaseLease();
+
+    expect(applied).toEqual(['ask', 'auto']);
+    expect(session.permissionModeState).toEqual({ mode: 'auto', generation: 2 });
+  });
 });
 
 describe('Maker invalid-resume persistence bridge', () => {
