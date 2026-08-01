@@ -39,6 +39,11 @@ type FullMaker = typeof window.electronAPI.maker;
 export interface RoutableMaker {
   send: FullMaker['send'];
   setModel: FullMaker['setModel'];
+  // session-agent-switch:跨引擎切换是**会话级**操作,数据真相(pending 意图注册表 +
+  // 引擎交接)都在会话所在端。远程会话必须隧道到被控端,否则打到控制端本机 maker 上
+  // 会因本机无此 session 直接失败。只读入口供重连 / 重开视图后恢复 main 权威意图。
+  switchSessionAgent: FullMaker['switchSessionAgent'];
+  getSessionAgentSwitchIntent: FullMaker['getSessionAgentSwitchIntent'];
   setEffort: FullMaker['setEffort'];
   setPermissionMode: FullMaker['setPermissionMode'];
   setFastMode: FullMaker['setFastMode'];
@@ -92,6 +97,10 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
   return {
     send: t('maker:send') as FullMaker['send'],
     setModel: t('maker:set-model') as FullMaker['setModel'],
+    switchSessionAgent: t('maker:switch-session-agent') as FullMaker['switchSessionAgent'],
+    getSessionAgentSwitchIntent: t(
+      'maker:get-session-agent-switch-intent',
+    ) as FullMaker['getSessionAgentSwitchIntent'],
     setEffort: t('maker:set-effort') as FullMaker['setEffort'],
     setPermissionMode: t('maker:set-permission-mode') as FullMaker['setPermissionMode'],
     setFastMode: t('maker:set-fast-mode') as FullMaker['setFastMode'],

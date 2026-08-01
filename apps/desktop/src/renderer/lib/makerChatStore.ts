@@ -8988,6 +8988,63 @@ function getAgentSwitchIntent(sessionId: string): AgentSwitchIntentRecord | null
   return sessions.get(sessionId)?.agentSwitchIntent ?? null;
 }
 
+/**
+ * main 的 pending 意图投影(PublicAgentSwitchIntent,字段名 targetAgentKind)收窄成
+ * store 记录(target)。形状不合法 / 非意图 → null,按「无意图」处理。
+ */
+function normalizeAgentSwitchIntent(value: unknown): AgentSwitchIntentRecord | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const item = value as Record<string, unknown>;
+  if (item.targetAgentKind !== 'claude-code' && item.targetAgentKind !== 'codex') return null;
+  if (typeof item.model !== 'string' || item.model.length === 0) return null;
+  // providerId 缺失按 null(与 main projectPendingAgentSwitchIntent 的 `?? null` 对齐);
+  // 只有出现非 string / 非空值的脏值才判非法,避免协议演进时静默丢掉合法意图。
+  if (item.providerId != null && typeof item.providerId !== 'string') return null;
+  if (item.effort !== undefined && typeof item.effort !== 'string') return null;
+  if (item.fastMode !== undefined && typeof item.fastMode !== 'boolean') return null;
+  return {
+    target: item.targetAgentKind,
+    model: item.model,
+    providerId: typeof item.providerId === 'string' ? item.providerId : null,
+    ...(typeof item.effort === 'string' && item.effort.length > 0 ? { effort: item.effort } : {}),
+    ...(typeof item.fastMode === 'boolean' ? { fastMode: item.fastMode } : {}),
+  };
+}
+
+function agentSwitchIntentEquals(
+  a: AgentSwitchIntentRecord | null,
+  b: AgentSwitchIntentRecord | null,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.target === b.target &&
+    a.model === b.model &&
+    a.providerId === b.providerId &&
+    a.effort === b.effort &&
+    a.fastMode === b.fastMode
+  );
+}
+
+/**
+ * 「意图的权威态在会话所在端」:被控端(或本机另一个窗口)登记 / 清除 pending 意图后,
+ * main 经 sessions:patched 广播 agentSwitchIntent 字段;device-link 远程会话打开时
+ * 控制端还会主动读回一次。两条 sink 都汇到这里。
+ *
+ * 幂等:值等价即 no-op —— 本端乐观登记后收到自己的回声不会重建对象、不触发多余重渲染,
+ * 也不会与用户正在进行的选择打架。null / 非法值 = 无意图 → 清除。
+ */
+function mirrorAgentSwitchIntent(sessionId: string, value: unknown): void {
+  if (!sessionId) return;
+  const next = normalizeAgentSwitchIntent(value);
+  if (agentSwitchIntentEquals(sessions.get(sessionId)?.agentSwitchIntent ?? null, next)) return;
+  if (!next) {
+    clearAgentSwitchIntent(sessionId);
+    return;
+  }
+  setState(sessionId, (s) => ({ ...s, agentSwitchIntent: next }));
+}
+
 function setSessionRuntime(
   sessionId: string,
   opts: { agentKind?: 'claude-code' | 'codex'; fastMode?: boolean; planModeEnabled?: boolean },
@@ -9050,6 +9107,7 @@ function mirrorSessionFields(
         fastMode?: unknown;
         planModeEnabled?: unknown;
         agentKind?: unknown;
+        agentSwitchIntent?: unknown;
         agentSwitchIntentCanceled?: unknown;
       }
     | null
@@ -9057,6 +9115,10 @@ function mirrorSessionFields(
 ): void {
   if (!sessionId || !patch) return;
   if (patch.agentSwitchIntentCanceled === true) clearAgentSwitchIntent(sessionId);
+  // 意图登记 / 覆盖 / 清除的回流(main onPendingSwitchChanged)。必须判字段存在性:
+  // 不带该字段的普通 patch(标题、preview、token 计数…)不能被当成「意图已清空」,
+  // 否则任何无关广播都会擦掉用户已登记的切换意图。
+  if ('agentSwitchIntent' in patch) mirrorAgentSwitchIntent(sessionId, patch.agentSwitchIntent);
   // session-agent-switch:引擎翻转必须镜像进 chat in-memory——maker:event 的
   // reducer 按 state.agentKind 分流(Claude / Codex 两套),非发起窗口若停在旧值,
   // 新引擎的事件会被旧引擎 reducer 错误处理(2026-07-20 审计实锤)。随引擎翻转
@@ -9172,6 +9234,8 @@ export const makerChatStore = {
   noteAgentSwitchIntent,
   clearAgentSwitchIntent,
   getAgentSwitchIntent,
+  /** 会话所在端(被控端 / 另一窗口)的权威 pending 意图回流镜像;幂等,值等价即 no-op。 */
+  mirrorAgentSwitchIntent,
   /** Update the displayed context window immediately after local model switches. */
   setContextWindow,
   /** MEM-OPT-2: Mark a session view mounted; returns a disposer for unmount. */

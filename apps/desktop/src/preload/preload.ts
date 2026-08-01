@@ -4563,6 +4563,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
       fastMode?: boolean,
     ): Promise<{ switched: boolean; agentKind: 'claude-code' | 'codex'; model: string; engineReady: boolean; deferred?: boolean }> =>
       ipcRenderer.invoke('maker:switch-session-agent', sessionId, targetAgentKind, model, providerId, effort, fastMode),
+    // 读 main 权威的 pending 切换意图(内存态,不落库)。重开视图 / 远程会话重连后
+    // 用它恢复乐观显示——否则用户登记的意图在 UI 上凭空消失,下一条消息却按意图切换。
+    getSessionAgentSwitchIntent: (
+      sessionId: string,
+    ): Promise<{
+      targetAgentKind: 'claude-code' | 'codex';
+      model: string;
+      providerId: string | null;
+      effort?: string;
+      fastMode?: boolean;
+    } | null> => ipcRenderer.invoke('maker:get-session-agent-switch-intent', sessionId),
     // effort/mode 透传 string —— 合法值由 maker capabilities 在运行时校验,
     // preload 不重复枚举 (避免 capabilities 加新值时这里也要改)。
     setEffort: (sessionId: string, effort: string): Promise<void> =>

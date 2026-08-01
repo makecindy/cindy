@@ -87,6 +87,12 @@ export interface AgentCapabilities {
   fork?: CapabilityStatus;
   /** Session rewind — UserMessage 下方 Rewind icon 据此显示 / 隐藏。 */
   rewind?: CapabilityStatus;
+  /**
+   * 同会话跨引擎切换(Claude Code ↔ Codex)。host 级能力,两个 agent 的 capabilities
+   * 都带回同一个值;device-link 老被控端无此字段 → undefined = 不支持,控制端隐藏
+   * 模型选择器顶部的 Agent 分段(它同时也没收录切换 channel,点了必失败)。
+   */
+  supportsSessionAgentSwitch?: boolean;
 }
 
 interface MakerApiShape {

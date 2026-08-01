@@ -1150,11 +1150,10 @@ export function ChatInput({
   // (model/effort/provider/fast),props(镜像 DB)仍是旧引擎值——真切换在下一条
   // 消息发送时刻 apply,patched 回流后意图清除、显示交回 props。意图存放在
   // SessionChatState 独立槽位,登记/撤销通过 setState 驱动重渲染,不会改真实
-  // agentKind reducer 路由。
+  // agentKind reducer 路由。device-link 远程会话同样适用:意图的权威态在被控端
+  // main,控制端 store 里这份是它的镜像(登记时乐观写、重连时读回、push 回流覆盖)。
   const agentSwitchIntent =
-    sessionId && !deviceLinkDeviceId && !remoteHostId
-      ? makerChatStore.getAgentSwitchIntent(sessionId)
-      : null;
+    sessionId && !remoteHostId ? makerChatStore.getAgentSwitchIntent(sessionId) : null;
   const activeModel =
     agentSwitchIntent?.model ??
     pendingRemoteSwitch?.model ??
@@ -1207,6 +1206,39 @@ export function ChatInput({
   // device-link 远程会话:能力(模型 / fast / effort)从被控端读;本地会话 deviceLinkDeviceId undefined → 本地。
   const ccCaps = useAgentCapabilities('claude-code', deviceLinkDeviceId);
   const codexCaps = useAgentCapabilities('codex', deviceLinkDeviceId);
+
+  // session-agent-switch 入口门控。supportsSessionAgentSwitch 是 host 级能力(两个
+  // agent 的 capabilities 都带回),device-link 远程会话读**被控端**的值:老被控端没有
+  // 该字段、也没收录切换 channel,入口必须隐藏(与手机端 supportsMobileSessionAgentSwitch
+  // 同口径)。本机会话恒可用——main 就是实现方,不能因 capabilities 还没加载完而闪掉入口。
+  // SSH 远程(remoteHostId)是另一套引擎生命周期,继续不支持,由调用点单独排除。
+  const sessionAgentSwitchSupported =
+    !deviceLinkDeviceId ||
+    ccCaps.capabilities?.supportsSessionAgentSwitch === true ||
+    codexCaps.capabilities?.supportsSessionAgentSwitch === true;
+
+  // 远程会话打开时读回被控端的权威 pending 意图。意图是 main 的内存态、不落库,
+  // 控制端换窗口 / 重开视图 / 重启后本地镜像为空,不读回就会出现「UI 显示旧引擎、
+  // 下一条消息却按意图切换」的错位(在被控端本机或另一台控制端登记时同理)。
+  useEffect(() => {
+    if (!sessionId || !deviceLinkDeviceId || remoteHostId) return;
+    let cancelled = false;
+    const before = makerChatStore.getAgentSwitchIntent(sessionId);
+    void makerApiForDevice(deviceLinkDeviceId)
+      .getSessionAgentSwitchIntent(sessionId)
+      .then((remoteIntent) => {
+        // 期间用户又改选或撤销过 → 本地更新更靠后,读回结果已过期,丢弃。
+        if (cancelled || makerChatStore.getAgentSwitchIntent(sessionId) !== before) return;
+        makerChatStore.mirrorAgentSwitchIntent(sessionId, remoteIntent);
+      })
+      .catch(() => {
+        // 老被控端未收录该 channel(CHANNEL_NOT_ALLOWED)或断链:保留本地镜像,
+        // 不擦用户已登记的选择(入口本身已按 capabilities 隐藏)。
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, deviceLinkDeviceId, remoteHostId]);
 
   // cycle-permission-mode 快捷键 (默认 Shift+Tab) 的轮切候选 —— 与
   // PermissionSelector 用同一份 capabilities.permissionModes 列表, 键盘轮切
@@ -3937,7 +3969,9 @@ export function ChatInput({
               }) &&
               (modelMemory.getFast(targetAgentKind, providerId, newModelId) ?? false);
 
-        const result = await window.electronAPI.maker.switchSessionAgent(
+        // 会话级操作按来源路由:device-link 远程会话隧道到被控端(意图注册表与引擎
+        // 交接都在那边),本机会话零变化直连本机 maker。
+        const result = await makerApiFor(sessionId).switchSessionAgent(
           sessionId,
           targetAgentKind,
           newModelId,
@@ -5335,11 +5369,12 @@ export function ChatInput({
                           )
                         : undefined
                     }
-                    // session-agent-switch:本机已建会话提供显式两步引擎切换(列表顶部
-                    // Claude/Codex 分段,先选 Agent 再选模型)。草稿(无 sessionId)与
-                    // device-link / SSH 远程会话不传(v1 不支持切换)。
+                    // session-agent-switch:已建会话提供显式两步引擎切换(列表顶部
+                    // Claude/Codex 分段,先选 Agent 再选模型)。device-link 远程会话同样
+                    // 支持(隧道到被控端执行,与手机端同一套 channel),入口按被控端能力位
+                    // 门控。草稿(无 sessionId)与 SSH 远程会话仍不传。
                     agentSwitch={
-                      sessionId && vendorKey && !deviceLinkDeviceId && !remoteHostId
+                      sessionId && vendorKey && !remoteHostId && sessionAgentSwitchSupported
                         ? {
                             currentVendor: vendorKey,
                             confirmBrowseSwitch: confirmAgentBrowseSwitch,
