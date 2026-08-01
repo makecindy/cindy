@@ -74,6 +74,35 @@ describe('interrupted continuation enqueue contract', () => {
     expect(dispatchedCheck).toBeGreaterThan(-1);
   });
 
+  it('keeps a scheduler auto-resume owned until dispatch and fails it when discarded', () => {
+    const scheduleStart = registerSource.indexOf('autoResumeBookkeeping.schedule(');
+    const scheduleEnd = registerSource.indexOf('steerToAgent:', scheduleStart);
+    expect(scheduleStart).toBeGreaterThan(-1);
+    expect(scheduleEnd).toBeGreaterThan(scheduleStart);
+    const scheduleHook = registerSource.slice(scheduleStart, scheduleEnd);
+    expect(scheduleHook).not.toMatch(/clearSchedulerAutoResumePending\s*\(/);
+
+    const dispatchedStart = registerSource.indexOf('onDispatchedUserTurn:');
+    const dispatchedEnd = registerSource.indexOf('noteSessionClearBoundary', dispatchedStart);
+    expect(dispatchedStart).toBeGreaterThan(-1);
+    expect(dispatchedEnd).toBeGreaterThan(dispatchedStart);
+    expect(registerSource.slice(dispatchedStart, dispatchedEnd)).toMatch(
+      /clearSchedulerAutoResumePending\(sessionId, item\.origin\.runId\)/,
+    );
+
+    const discardedStart = registerSource.indexOf('onDiscardedQueuedMessage:');
+    const discardedEnd = registerSource.indexOf('hasPendingCredentialSwitch:', discardedStart);
+    expect(discardedStart).toBeGreaterThan(-1);
+    expect(discardedEnd).toBeGreaterThan(discardedStart);
+    const discardedHook = registerSource.slice(discardedStart, discardedEnd);
+    expect(discardedHook).toMatch(
+      /interruptedTurnAutoResumeGuard\.noteResumeSendFailed\(sessionId\)/,
+    );
+    expect(discardedHook).toMatch(
+      /notifySchedulerAutoResumeFailed\(sessionId, item\.origin\.runId\)/,
+    );
+  });
+
   it('hands banner suppression to queued or in-flight continuation state so cancellation restores it', () => {
     expect(sessionViewSource).toMatch(
       /syntheticContinuationPending\s*=\s*\n?\s*syntheticContinuationQueued\s*\|\|\s*continuationInFlightClientId\s*!==\s*null/,

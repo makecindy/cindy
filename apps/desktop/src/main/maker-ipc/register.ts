@@ -7890,9 +7890,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               log.debug('interrupted-turn auto-resume not dispatched', { sessionId, outcome });
               return;
             }
-            // 自愈成功:压住的错误就此丢弃,用户看到的是「已自动继续」分隔条。
+            // 入队成功后沿用普通聊天语义丢弃被压住的错误；Schedule 的 run 接管标记
+            // 不能在这里清：resumed 只表示续跑项已经进队，真正交给模型要等
+            // onDispatchedUserTurn。派发前被 Stop / clear / ghost block 丢弃时则由
+            // onDiscardedQueuedMessage 立即失败同一个 run。
             autoResumeBookkeeping.discardSuppressedError(sessionId);
-            if (schedulerRunId) clearSchedulerAutoResumePending(sessionId, schedulerRunId);
             log.info('interrupted-turn auto-resume dispatched', { sessionId });
           } catch (err) {
             interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId);
@@ -7972,6 +7974,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return orcaInterAgentDispatcher.runQueuedOrcaInterAgentAcceptedCallback(sessionId, item);
     },
     onDispatchedUserTurn: async (sessionId, item, preVendorDispatchAt): Promise<void> => {
+      if (
+        item.autoResume &&
+        item.origin?.kind === 'scheduler' &&
+        typeof item.origin.runId === 'string'
+      ) {
+        clearSchedulerAutoResumePending(sessionId, item.origin.runId);
+      }
       // 「继续任务」只能在 vendor dispatch 不可逆后 durable ack：
       // - enqueue 时 ack：排队可取消，旧中断横幅回不来；
       // - onAccepted 时 ack：仍可能 cancelled-before-dispatch，且无新 started，
@@ -7997,7 +8006,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 而它走 unshift 不经这里, 于是不会把自己的回流作废掉。
     onUserEnqueue: publishUiSessionIntervention,
     // 队列项未派发即被丢弃(stop/remove/clearSession) → 释放暂存的 accepted 副作用, 防回调表泄漏。
-    onDiscardedQueuedMessage: (_sessionId, item) => {
+    onDiscardedQueuedMessage: (sessionId, item) => {
       orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);
       // 排队心跳被丢弃 → 通知 runner 按 aborted 收尾对应 run,不让 fire 永久挂起。
       const watcher = schedulerQueuedPromptDiscardWatchers.get(item.clientId);
@@ -8011,6 +8020,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             error: err instanceof Error ? err.message : String(err),
           });
         }
+      }
+      if (
+        item.autoResume &&
+        item.origin?.kind === 'scheduler' &&
+        typeof item.origin.runId === 'string'
+      ) {
+        // 续跑还没跨过持久化边界，不会进入 onUndispatchedUserTurn；把普通聊天守卫
+        // 的 pendingResume 一并回滚，避免本次 Stop / block 让后续中断永远失去自愈。
+        interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId);
+        notifySchedulerAutoResumeFailed(sessionId, item.origin.runId);
       }
     },
     hasPendingCredentialSwitch: (sessionId) => {
