@@ -514,6 +514,11 @@ function baseName(p: string): string {
   return idx >= 0 ? cleaned.slice(idx + 1) : cleaned;
 }
 
+/** Executable identity is case-insensitive on Windows; Git Bash commonly exposes `*.exe`. */
+function executableName(token: string): string {
+  return baseName(token).toLowerCase().replace(/\.exe$/, '');
+}
+
 type ShellSeparator = 'and' | 'or' | 'pipe' | 'sequence' | 'background' | 'end';
 type ExecutableSegment = { text: string; fromPipe: boolean; separatorAfter: ShellSeparator };
 
@@ -584,7 +589,7 @@ const PIPE_EXECUTORS: ReadonlySet<string> = new Set([
 ]);
 
 function isPipeExecutor(bin: string): boolean {
-  const normalized = bin.toLowerCase().replace(/\.exe$/, '');
+  const normalized = executableName(bin);
   return PIPE_EXECUTORS.has(normalized)
     || /^(?:python|pypy|ruby|perl|php|lua)\d*(?:\.\d+)*$/.test(normalized)
     || /^(?:(?:g|m|n|go)?awk)\d*(?:\.\d+)*$/.test(normalized)
@@ -593,7 +598,7 @@ function isPipeExecutor(bin: string): boolean {
 
 /** shell 的 `-c` 可与其它短选项组合（如 `-lc` / `-xec`）；返回其命令字符串。 */
 function shellCommandPayload(tokens: string[]): string | null {
-  if (!SHELL_EXECUTORS.has(baseName(tokens[0] ?? '').toLowerCase())) return null;
+  if (!SHELL_EXECUTORS.has(executableName(tokens[0] ?? ''))) return null;
   for (let i = 1; i < tokens.length; i++) {
     const token = tokens[i];
     if (token === '--') return null;
@@ -606,7 +611,7 @@ function shellCommandPayload(tokens: string[]): string | null {
 
 /** 常见解释器把下一参数当源码执行的 flag / 子命令。 */
 function interpreterInlineCodePayload(tokens: string[]): string | null {
-  const bin = baseName(tokens[0] ?? '').toLowerCase().replace(/\.exe$/, '');
+  const bin = executableName(tokens[0] ?? '');
   if (bin === 'deno' && tokens[1]?.toLowerCase() === 'eval') return tokens[2] ?? '';
   const flags = /^(?:python|pypy)\d*(?:\.\d+)*$/.test(bin) ? ['-c']
     : /^(?:node|nodejs|bun)$/.test(bin) ? ['-e', '--eval', '-p', '--print']
@@ -636,12 +641,58 @@ function interpreterInlineCodePayload(tokens: string[]): string | null {
 function commandRunsRemoteFetch(command: string, depth = 0): boolean {
   for (const { text } of splitExecutableSegments(command)) {
     const tokens = unwrapWrappers(tokenize(text));
-    const bin = baseName(tokens[0] ?? '').toLowerCase().replace(/\.exe$/, '');
+    const bin = executableName(tokens[0] ?? '');
     if (bin === 'curl' || bin === 'wget') return true;
     const shellPayload = shellCommandPayload(tokens);
     if (shellPayload && depth < 3 && commandRunsRemoteFetch(shellPayload, depth + 1)) return true;
   }
   return false;
+}
+
+/**
+ * Return the COMMAND argv executed by common GNU/BSD xargs forms. `null` means
+ * an option shape we cannot safely model; an empty array means xargs' benign
+ * default `echo` command. Keeping argv structured preserves a shell `-c`
+ * payload as one token for recursive review.
+ */
+function xargsCommandTokens(tokens: string[]): string[] | null {
+  if (executableName(tokens[0] ?? '') !== 'xargs') return null;
+  const longFlags = new Set([
+    '--null', '--no-run-if-empty', '--verbose', '--interactive', '--exit',
+    '--show-limits', '--open-tty', '--help', '--version',
+  ]);
+  const longWithValue = /^(?:--arg-file|--delimiter|--eof|--replace|--max-lines|--max-args|--max-procs|--max-chars|--process-slot-var)$/;
+  const longAttachedValue = /^(?:--arg-file|--delimiter|--eof|--replace|--max-lines|--max-args|--max-procs|--max-chars|--process-slot-var)=/;
+  let i = 1;
+  while (i < tokens.length) {
+    const token = tokens[i];
+    if (token === '--') return tokens.slice(i + 1);
+    if (longFlags.has(token)) { i++; continue; }
+    if (longWithValue.test(token)) {
+      if (i + 1 >= tokens.length) return [];
+      i += 2;
+      continue;
+    }
+    if (longAttachedValue.test(token)) { i++; continue; }
+    // GNU no-argument switches may be clustered (for example `-0rt`).
+    if (/^-[0rtpxo]+$/.test(token)) { i++; continue; }
+    // These short options consume either the rest of the same token or the next token.
+    if (/^-(?:a|d|E|I|L|n|P|s|J|R|S)$/.test(token)) {
+      if (i + 1 >= tokens.length) return [];
+      i += 2;
+      continue;
+    }
+    if (/^-(?:a|d|E|I|L|n|P|s|J|R|S).+/.test(token)) { i++; continue; }
+    // Deprecated GNU -e/-i/-l take only an optional attached value.
+    if (/^-(?:e|i|l).*$/.test(token)) { i++; continue; }
+    if (token.startsWith('-')) return null;
+    return tokens.slice(i);
+  }
+  return [];
+}
+
+function serializeArgvForReview(tokens: string[]): string {
+  return tokens.map((token) => JSON.stringify(token)).join(' ');
 }
 
 function substitutionRunsRemoteFetch(text: string, kind: 'command' | 'process'): boolean {
@@ -664,7 +715,7 @@ function highImpactExecutionNeedsConsent(command: string, depth = 0): boolean {
     const normalized = text.replace(/['"\\]/g, '');
     const unwrapped = unwrapCommand(tokenize(normalized));
     const tokens = unwrapped.tokens;
-    const bin = baseName(tokens[0] ?? '');
+    const bin = executableName(tokens[0] ?? '');
     if (fromPipe && !unwrapped.inspectionOnly) {
       if (isPipeExecutor(bin)) return true;
       // An incomplete interpreter enum must never turn remote "download and
@@ -680,6 +731,17 @@ function highImpactExecutionNeedsConsent(command: string, depth = 0): boolean {
       || highImpactExecutionNeedsConsent(payload, depth + 1))) return true;
     const inlineCode = interpreterInlineCodePayload(rawTokens);
     if (inlineCode !== null && substitutionRunsRemoteFetch(inlineCode, 'command')) return true;
+    if (executableName(rawTokens[0] ?? '') === 'xargs') {
+      const nested = xargsCommandTokens(rawTokens);
+      if (nested === null) {
+        // Unknown xargs options only cross the deterministic boundary when a
+        // visible shell executor is present; otherwise the gray reviewer remains usable.
+        if (rawTokens.slice(1).some((token) => SHELL_EXECUTORS.has(executableName(token)))) return true;
+      } else if (nested.length > 0 && (depth >= 3 || highImpactExecutionNeedsConsent(
+        serializeArgvForReview(nested), depth + 1))) {
+        return true;
+      }
+    }
     if ((bin === 'source' || bin === '.' || isPipeExecutor(bin))
       && substitutionRunsRemoteFetch(text, 'process')) return true;
     const segmentFetchesRemoteContent = commandRunsRemoteFetch(text);
@@ -729,10 +791,18 @@ function destructiveTargetNeedsConsent(
   const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
   const normalizedRoot = canonicalPath(writableRoot, aliasFirmlinks);
   if (normalizedRoot === '/' || /^[A-Za-z]:\/$/.test(normalizedRoot)) return true;
-  const normalizedTarget = normalizeTarget(staticTarget, [cwd]);
-  if (!isInsideWorkspace(normalizedTarget, [writableRoot], aliasFirmlinks)) return true;
-  return canonicalPath(normalizedTarget, aliasFirmlinks)
-    === normalizedRoot;
+  const candidates = [staticTarget];
+  if (globIndex >= 0) {
+    // A bracket expression may itself spell `..` (`[.].`). Check the same
+    // conservative de-glob form used by the credential classifier so a glob
+    // cannot make the runtime path escape farther than its literal prefix.
+    candidates.push(target.replace(/[[\]{}*?]/g, '') || '.');
+  }
+  return candidates.some((candidate) => {
+    const normalizedTarget = normalizeTarget(candidate, [cwd]);
+    if (!isInsideWorkspace(normalizedTarget, [writableRoot], aliasFirmlinks)) return true;
+    return canonicalPath(normalizedTarget, aliasFirmlinks) === normalizedRoot;
+  });
 }
 
 function findDeleteRoots(tokens: string[]): string[] {
@@ -849,6 +919,16 @@ function scopedDestructionNeedsConsent(
     const nestedRm = tokens.findIndex((token) => baseName(token) === 'rm');
     if (bin === 'xargs' && nestedRm >= 0
       && destructiveRmTargets(tokens.slice(nestedRm)) !== null) return true;
+    if (bin === 'xargs') {
+      const nested = xargsCommandTokens(tokens);
+      if (nested === null) {
+        // Unmodelled options plus an apparent shell command cannot be proven safe.
+        if (tokens.slice(1).some((token) => SHELL_EXECUTORS.has(executableName(token)))) return true;
+      } else if (nested.length > 0 && (depth >= 3 || scopedDestructionNeedsConsent(
+        serializeArgvForReview(nested), workspaceRoots, segmentOpts, depth + 1))) {
+        return true;
+      }
+    }
     if (forcePushNeedsConsent(tokens)) return true;
 
     const cwdChange = directoryChangeTarget(tokens);
@@ -1211,7 +1291,7 @@ export function classifyShellCommand(
   const deSubstituted = substituteDefaults(deEscaped);
   // 仅按引号外的真实执行结构识别 pipe→解释器 / eval / 下载即执行，避免把打印示例文本误升级。
   if ([command, stripExpansions(command), substituteDefaults(command)]
-    .some(highImpactExecutionNeedsConsent)) return 'prompt-each-time';
+    .some((variant) => highImpactExecutionNeedsConsent(variant))) return 'prompt-each-time';
   for (const re of ALWAYS_ASK_PATTERNS) {
     if (re.test(deEscaped) || re.test(quotesOnly) || re.test(deGlobbed) || re.test(deExpanded) || re.test(deExpandedGlob) || re.test(deSubstituted)) return 'prompt-each-time';
   }
