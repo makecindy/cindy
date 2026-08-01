@@ -83,7 +83,7 @@ import { registerSlackToolBridge, unregisterSlackToolBridge } from './slackToolB
 import { createHookBindingStore } from './bindings.js';
 import {
   buildGroupContextPrefix,
-  listTelegramKnownGroups,
+  listTelegramKnownGroupsForStableBinding,
   mergeTelegramGroupActivationViews,
   resetGroupContextCursors,
 } from './groupWindow.js';
@@ -899,7 +899,11 @@ export function registerHookControlIpc(): void {
       ) {
         throw new HookNotConnectedError('telegram');
       }
-      const knownGroups = await listTelegramKnownGroups(binding.principalId);
+      const knownGroups = await listTelegramKnownGroupsForStableBinding(
+        { bindingId: binding.bindingId, principalId: binding.principalId },
+        () => m.snapshot().telegram.binding,
+      );
+      if (knownGroups === null) throw new HookNotConnectedError('telegram');
       return {
         groups: mergeTelegramGroupActivationViews(knownGroups, behavior.groupActivation),
       };

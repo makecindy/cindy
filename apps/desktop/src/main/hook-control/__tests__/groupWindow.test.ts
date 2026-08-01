@@ -23,6 +23,7 @@ import {
   buildGroupContextPrefix,
   groupLaneOf,
   listTelegramKnownGroups,
+  listTelegramKnownGroupsForStableBinding,
   mergeTelegramGroupActivationViews,
   recordGroupMessage as recordScopedGroupMessage,
   resetGroupContextCursors,
@@ -199,6 +200,34 @@ describe('listTelegramKnownGroups', () => {
       { chatId: '-901', chatName: 'Renamed' },
       { chatId: '-902', chatName: 'Newer' },
     ]);
+  });
+
+  it('does not return a previous principal snapshot after the binding changes mid-query', async () => {
+    let releaseQuery!: (groups: Array<{ chatId: string; chatName: string | null }>) => void;
+    const pendingGroups = new Promise<Array<{ chatId: string; chatName: string | null }>>(
+      (resolve) => {
+        releaseQuery = resolve;
+      },
+    );
+    let current = {
+      state: 'confirmed',
+      bindingId: 'binding-old',
+      principalId: PRINCIPAL_ID,
+    };
+    const result = listTelegramKnownGroupsForStableBinding(
+      { bindingId: 'binding-old', principalId: PRINCIPAL_ID },
+      () => current,
+      () => pendingGroups,
+    );
+
+    current = {
+      state: 'confirmed',
+      bindingId: 'binding-new',
+      principalId: '10',
+    };
+    releaseQuery([{ chatId: '-901', chatName: 'Old account group' }]);
+
+    await expect(result).resolves.toBeNull();
   });
 });
 

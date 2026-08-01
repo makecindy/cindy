@@ -300,6 +300,33 @@ export async function listTelegramKnownGroups(
   return rows.map((row) => ({ chatId: row.chatId, chatName: row.chatName }));
 }
 
+/**
+ * Query a binding's local groups and reject the snapshot if that binding was
+ * replaced while SQLite was yielding. The final identity check is synchronous
+ * with returning the rows, so a Renderer never observes the previous owner's
+ * chat ids through the binding-change TOCTOU window.
+ */
+export async function listTelegramKnownGroupsForStableBinding(
+  binding: { bindingId: string; principalId: string },
+  currentBinding: () => {
+    state: string;
+    bindingId: string | null;
+    principalId: string | null;
+  } | null,
+  query: typeof listTelegramKnownGroups = listTelegramKnownGroups,
+): Promise<Array<{ chatId: string; chatName: string | null }> | null> {
+  const groups = await query(binding.principalId);
+  const current = currentBinding();
+  if (
+    current?.state !== 'confirmed' ||
+    current.bindingId !== binding.bindingId ||
+    current.principalId !== binding.principalId
+  ) {
+    return null;
+  }
+  return groups;
+}
+
 export interface TelegramGroupActivationView {
   chatId: string;
   chatName: string | null;

@@ -371,18 +371,23 @@ export class Session {
     let originInstalled = false;
     let turnDispatched = false;
     let previousTurnOrigin: SendOrigin | null = null;
+    const finishCancelledBeforeDispatch = (): SessionSendResult | null => {
+      if (!reservation.cancelled && this.sendReservation === reservation) return null;
+      if (this.sendReservation === reservation) this.sendReservation = null;
+      return { accepted: false, reason: 'cancelled-before-dispatch' };
+    };
     try {
       if (afterTurnReserved) await afterTurnReserved();
+      const cancelledAfterReservation = finishCancelledBeforeDispatch();
+      if (cancelledAfterReservation !== null) return cancelledAfterReservation;
       this.handle.validateSendOptions?.(handleOpts);
       if (beforeProviderStart) await beforeProviderStart();
+      const cancelledBeforeAcceptance = finishCancelledBeforeDispatch();
+      if (cancelledBeforeAcceptance !== null) return cancelledBeforeAcceptance;
       await onAccepted?.();
       this.ensureActive();
-      if (reservation.cancelled || this.sendReservation !== reservation) {
-        if (this.sendReservation === reservation) {
-          this.sendReservation = null;
-        }
-        return { accepted: false, reason: 'cancelled-before-dispatch' };
-      }
+      const cancelledAfterAcceptance = finishCancelledBeforeDispatch();
+      if (cancelledAfterAcceptance !== null) return cancelledAfterAcceptance;
       reservation.phase = 'dispatching';
       // 越过 dispatch 边界才记 origin — cancelled-before-dispatch 早返回不会到这,
       // 不会污染下一个无 origin 的 turn。先存下当前值,handle.send 失败时**还原**而非

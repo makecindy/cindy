@@ -839,6 +839,45 @@ describe('Session turn send guard', () => {
     expect(order).toEqual(['reserved', 'preflight', 'provider']);
   });
 
+  it('stops before validation or durable acceptance when cancelled during reservation preparation', async () => {
+    let releasePreparation!: () => void;
+    const preparation = new Promise<void>((resolve) => {
+      releasePreparation = resolve;
+    });
+    const handle = createHandle({ id: 'thread-reserved-cancelled' });
+    handle.validateSendOptions = vi.fn();
+    handle.send = vi.fn(async () => undefined);
+    handle.abort = vi.fn(async () => undefined);
+    const session = new Session({
+      id: 'reserved-cancelled',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+    const beforeProviderStart = vi.fn();
+    const onAccepted = vi.fn();
+    const sending = session.send('first', {
+      afterTurnReserved: () => preparation,
+      beforeProviderStart,
+      onAccepted,
+    });
+    await Promise.resolve();
+
+    await session.abort();
+    releasePreparation();
+
+    await expect(sending).resolves.toEqual({
+      accepted: false,
+      reason: 'cancelled-before-dispatch',
+    });
+    expect(handle.validateSendOptions).not.toHaveBeenCalled();
+    expect(beforeProviderStart).not.toHaveBeenCalled();
+    expect(onAccepted).not.toHaveBeenCalled();
+    expect(handle.send).not.toHaveBeenCalled();
+  });
+
   it('does not run reservation state preparation when another turn is active', async () => {
     let releaseSend!: () => void;
     const sendBarrier = new Promise<void>((resolve) => {
@@ -903,6 +942,40 @@ describe('Session turn send guard', () => {
     releaseBarrier();
     await expect(sending).resolves.toEqual({ accepted: true });
     expect(order).toEqual(['barrier-start', 'barrier-end', 'accepted', 'provider']);
+  });
+
+  it('does not persist acceptance when cancelled during the pre-provider barrier', async () => {
+    let releaseBarrier!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    const handle = createHandle({ id: 'thread-before-provider-cancelled' });
+    handle.send = vi.fn(async () => undefined);
+    handle.abort = vi.fn(async () => undefined);
+    const session = new Session({
+      id: 'before-provider-cancelled',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+    const onAccepted = vi.fn();
+    const sending = session.send('first', {
+      beforeProviderStart: () => barrier,
+      onAccepted,
+    });
+    await Promise.resolve();
+
+    await session.abort();
+    releaseBarrier();
+
+    await expect(sending).resolves.toEqual({
+      accepted: false,
+      reason: 'cancelled-before-dispatch',
+    });
+    expect(onAccepted).not.toHaveBeenCalled();
+    expect(handle.send).not.toHaveBeenCalled();
   });
 
   it('runs onDispatching after acceptance and immediately before vendor send', async () => {
