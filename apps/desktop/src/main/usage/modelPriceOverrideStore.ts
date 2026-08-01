@@ -288,20 +288,16 @@ function mergedQuote(
     values.cacheCreatePerMtok === null
       ? undefined
       : (values.cacheCreatePerMtok ?? mergeReference?.cacheCreatePerMtok);
-  const currencyChanged =
-    values.currency !== undefined &&
-    mergeReference !== undefined &&
-    values.currency !== mergeReference.currency;
   const projectBandValue = (
     bandValue: number | undefined,
     referenceValue: number | undefined,
     overrideValue: number,
   ): number | undefined => {
     if (bandValue === undefined) return undefined;
-    // A currency switch gives us a new base quote, not an exchange rate. Preserve each remote
-    // tier's relative multiplier instead of either relabelling old values or flattening every
-    // long-context tier to the new base price.
-    return currencyChanged && referenceValue !== undefined && referenceValue > 0
+    // A base-price edit does not erase the provider's long-context pricing curve. Preserve each
+    // inherited tier's relative multiplier for both same-currency edits and currency switches;
+    // otherwise editing the baseline would flatten every tier to the same price.
+    return referenceValue !== undefined && referenceValue > 0
       ? (bandValue / referenceValue) * overrideValue
       : overrideValue;
   };

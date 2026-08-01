@@ -85,7 +85,7 @@ describe('model price override sparse persistence', () => {
     ).toBe(false);
   });
 
-  it('keeps remote long-context bands when applying a sparse local override', () => {
+  it('preserves remote long-context multipliers when applying a sparse local override', () => {
     const inputTokenPriceBands = [
       {
         minInputTokens: 200_001,
@@ -115,7 +115,7 @@ describe('model price override sparse persistence', () => {
         {
           minInputTokens: 200_001,
           inputPerMtok: 4,
-          outputPerMtok: 8,
+          outputPerMtok: 16,
         },
       ],
     });
@@ -218,7 +218,13 @@ describe('model price override sparse persistence', () => {
       inputPerMtok: 4,
       outputPerMtok: 6,
       cacheReadPerMtok: 0.2,
-      inputTokenPriceBands: savedBase.inputTokenPriceBands,
+      inputTokenPriceBands: [
+        {
+          minInputTokens: 200_001,
+          inputPerMtok: 8,
+          outputPerMtok: 12,
+        },
+      ],
     });
   });
 
@@ -253,7 +259,7 @@ describe('model price override sparse persistence', () => {
       inputTokenPriceBands: [
         {
           minInputTokens: 200_001,
-          inputPerMtok: 4,
+          inputPerMtok: 8,
           outputPerMtok: 12,
         },
       ],
