@@ -22,11 +22,14 @@ function queuedWithReference() {
 }
 
 describe('device-link target session-reference capability gate', () => {
-  it('rewrites references before rejecting an old target', async () => {
-    const invoke = vi.fn<DeviceLinkIpcDeps['invoke']>().mockResolvedValue({
-      ok: false,
-      error: { code: 'CHANNEL_NOT_ALLOWED', message: 'unknown channel' },
-    });
+  it('sends raw link text when an old target cannot consume trusted reference fields', async () => {
+    const invoke = vi
+      .fn<DeviceLinkIpcDeps['invoke']>()
+      .mockResolvedValueOnce({
+        ok: false,
+        error: { code: 'CHANNEL_NOT_ALLOWED', message: 'unknown channel' },
+      })
+      .mockResolvedValueOnce({ ok: true, result: { accepted: true } });
     const rewrite = vi.fn(async (_channel: string, args: unknown[]) => args);
 
     await expect(
@@ -34,13 +37,23 @@ describe('device-link target session-reference capability gate', () => {
         'target-session',
         queuedWithReference(),
       ]),
-    ).rejects.toThrow('[SESSION_REFERENCE_UNSUPPORTED]');
+    ).resolves.toEqual({ accepted: true });
 
-    expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith(
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke).toHaveBeenNthCalledWith(
+      1,
       'target-device',
       DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
       [],
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      2,
+      'target-device',
+      'maker:input:enqueue',
+      [
+        'target-session',
+        { text: 'compare cindy://session/source' },
+      ],
     );
     expect(rewrite).toHaveBeenCalledTimes(1);
   });

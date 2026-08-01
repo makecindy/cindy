@@ -6,6 +6,7 @@ vi.mock('../../maker-ipc/sessionReferenceResolver.js', () => ({ resolveSessionRe
 import {
   outboundSessionReferencesRequested,
   rewriteOutboundSessionReferences,
+  stripOutboundSessionReferenceSideChannels,
 } from '../outboundSessionReferences.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 
@@ -140,6 +141,39 @@ describe('rewriteOutboundSessionReferences', () => {
     expect(rewritten).toBe(args);
     expect(JSON.stringify(rewritten)).toBe('["target-on-b","client-1","plain edit"]');
     expect(resolveSessionReferences).not.toHaveBeenCalled();
+  });
+
+  it('strips every queue-mutation side channel without changing user text', () => {
+    const enqueue = stripOutboundSessionReferenceSideChannels('maker:input:enqueue', [
+      'target-on-b',
+      queued([{ sessionId: 'source' }]),
+    ]);
+    const updateContent = stripOutboundSessionReferenceSideChannels('maker:input:update-content', [
+      'target-on-b',
+      'client-1',
+      queued([{ sessionId: 'source' }]),
+    ]);
+    const updateText = stripOutboundSessionReferenceSideChannels('maker:input:update-text', [
+      'target-on-b',
+      'client-1',
+      'keep cindy://session/source',
+      [{ sessionId: 'source' }],
+      [{ sessionId: 'source', messages: [] }],
+    ]);
+
+    for (const item of [enqueue[1], updateContent[2]] as AgentInputQueuedMessage[]) {
+      expect(item.text).toBe('compare linked session');
+      expect(item.sessionRefs).toBeUndefined();
+      expect(item.trustedSessionReferenceContexts).toBeUndefined();
+      expect(item.sessionReferencesRequireTrustedSnapshot).toBeUndefined();
+    }
+    expect(updateText).toEqual([
+      'target-on-b',
+      'client-1',
+      'keep cindy://session/source',
+      [],
+      [],
+    ]);
   });
 
   it('resolves references in a full queued-content replacement', async () => {

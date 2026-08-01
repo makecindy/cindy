@@ -43,6 +43,7 @@ import { rewriteOutboundMedia } from './outboundMedia';
 import {
   outboundSessionReferencesRequested,
   rewriteOutboundSessionReferences,
+  stripOutboundSessionReferenceSideChannels,
 } from './outboundSessionReferences';
 import {
   isPlaceholderDeviceName,
@@ -472,41 +473,42 @@ export async function handleInvoke(
     }
     if (!capability.ok) {
       if (capability.error.code === 'CHANNEL_NOT_ALLOWED') {
-        throwIpcError(
-          'SESSION_REFERENCE_UNSUPPORTED',
-          '目标设备版本不支持任务引用，请升级目标设备后重试',
-        );
-      }
-      if (capability.error.code === 'IPC_ERROR') {
+        log.warn('target does not support session references; sending raw link text', {
+          channel,
+        });
+        callArgs = stripOutboundSessionReferenceSideChannels(channel, callArgs);
+      } else if (capability.error.code === 'IPC_ERROR') {
         throwIpcError(
           'SESSION_REFERENCE_UNAVAILABLE',
           '目标设备仍在启动，任务引用暂不可用，请稍后重试',
         );
+      } else {
+        throwIpcError(
+          DEVICE_LINK_CODE_MAP[capability.error.code] ?? 'INTERNAL',
+          capability.error.message,
+        );
       }
-      throwIpcError(
-        DEVICE_LINK_CODE_MAP[capability.error.code] ?? 'INTERNAL',
-        capability.error.message,
-      );
-    }
-    const capabilityVersion =
-      capability.result &&
-      typeof capability.result === 'object' &&
-      !Array.isArray(capability.result)
-        ? (capability.result as { version?: unknown }).version
-        : undefined;
-    if (
-      !capability.result ||
-      typeof capability.result !== 'object' ||
-      Array.isArray(capability.result) ||
-      (capability.result as { supported?: unknown }).supported !== true ||
-      typeof capabilityVersion !== 'number' ||
-      !Number.isFinite(capabilityVersion) ||
-      capabilityVersion < 1
-    ) {
-      throwIpcError(
-        'SESSION_REFERENCE_UNSUPPORTED',
-        '目标设备版本不支持任务引用，请升级目标设备后重试',
-      );
+    } else {
+      const capabilityVersion =
+        capability.result &&
+        typeof capability.result === 'object' &&
+        !Array.isArray(capability.result)
+          ? (capability.result as { version?: unknown }).version
+          : undefined;
+      if (
+        !capability.result ||
+        typeof capability.result !== 'object' ||
+        Array.isArray(capability.result) ||
+        (capability.result as { supported?: unknown }).supported !== true ||
+        typeof capabilityVersion !== 'number' ||
+        !Number.isFinite(capabilityVersion) ||
+        capabilityVersion < 1
+      ) {
+        log.warn('target does not support session references; sending raw link text', {
+          channel,
+        });
+        callArgs = stripOutboundSessionReferenceSideChannels(channel, callArgs);
+      }
     }
   }
 
