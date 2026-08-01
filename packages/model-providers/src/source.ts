@@ -48,8 +48,11 @@ export interface CatalogIO {
   readFile?: (path: string) => Promise<string | null>;
   /** 读取某远端 scope 的上次有效完整快照；不存在返回 null。 */
   readCache?: (scope: string) => Promise<string | null>;
-  /** 原子保存某远端 scope 的完整有效快照。 */
-  writeCache?: (scope: string, text: string) => Promise<void>;
+  /**
+   * 原子保存某远端 scope 的完整有效快照。实现可在串行区内保留磁盘上的更新快照，
+   * 并返回最终胜出的文本，使调用方内存态与 LKG 使用同一版本。
+   */
+  writeCache?: (scope: string, text: string) => Promise<string | void>;
   /** 诊断日志（可选）。 */
   log?: (level: 'info' | 'warn' | 'error', msg: string, meta?: Record<string, unknown>) => void;
 }
@@ -387,7 +390,19 @@ export async function loadCatalogWithSource(
           }
           if (io.writeCache) {
             try {
-              await io.writeCache(remoteUrl, cacheText);
+              const committedText = await io.writeCache(remoteUrl, cacheText);
+              if (typeof committedText === 'string') {
+                const committed = parseRemoteCatalog(committedText, allowLegacyModelMeta);
+                const selected = preserveNewerCachedCatalog(parsed, committed);
+                if (selected !== parsed) {
+                  parsed = selected;
+                  log(io, 'warn', 'serialized LKG commit preserved a newer catalog snapshot', {
+                    url: logUrl,
+                    remoteUpdatedAt: remoteRegistryUpdatedAt,
+                    committedUpdatedAt: registryUpdatedAt(committed),
+                  });
+                }
+              }
             } catch (err) {
               log(io, 'warn', 'valid remote catalog loaded but LKG write failed', {
                 url: logUrl,

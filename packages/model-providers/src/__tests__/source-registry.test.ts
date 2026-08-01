@@ -410,6 +410,36 @@ describe('loadCatalog', () => {
       .toBe('NEWER-LKG-XAI');
   });
 
+  it('adopts the newer snapshot returned by a serialized LKG commit', async () => {
+    const url = 'https://catalog.example.test/providers.json';
+    const registry = JSON.parse(JSON.stringify(BUNDLED_CATALOG.modelRegistry));
+    const newer: Catalog = {
+      ...MINIMAL,
+      modelRegistry: {
+        ...registry,
+        updatedAt: '2026-08-01T00:00:00.000Z',
+      },
+    };
+    const older: Catalog = {
+      ...MINIMAL,
+      modelRegistry: {
+        ...registry,
+        updatedAt: '2026-07-30T00:00:00.000Z',
+      },
+    };
+
+    const loaded = await loadCatalogWithSource(
+      { url },
+      {
+        fetchText: vi.fn(async () => JSON.stringify(older)),
+        writeCache: vi.fn(async () => JSON.stringify(newer)),
+      },
+    );
+
+    expect(loaded.source).toBe('remote');
+    expect(loaded.catalog.modelRegistry?.updatedAt).toBe('2026-08-01T00:00:00.000Z');
+  });
+
   it('reads LKG even when the startup network budget is zero and rejects bad cache', async () => {
     const url = 'https://catalog.example.test/providers.json';
     const fetchText = vi.fn();

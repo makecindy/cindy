@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -184,6 +186,26 @@ describe('provider catalog realm reload', () => {
     finishFirst();
     await Promise.all([first, second]);
     expect(events).toEqual(['first:start', 'first:end', 'second:start', 'second:end']);
+  });
+
+  it('keeps a newer LKG when an older response queues behind it for the same scope', async () => {
+    const scope = `https://catalog.example.test/${randomUUID()}`;
+    const file = __testing.catalogLkgPath(scope);
+    const older = JSON.stringify(catalogNamed('OLDER', '2026-07-30T00:00:00.000Z'));
+    const newer = JSON.stringify(catalogNamed('NEWER', '2026-08-01T00:00:00.000Z'));
+
+    try {
+      await __testing.writeCatalogLkg(scope, older);
+      const newerCommit = __testing.writeCatalogLkg(scope, newer);
+      const staleCommit = __testing.writeCatalogLkg(scope, older);
+
+      await expect(newerCommit).resolves.toBe(newer);
+      await expect(staleCommit).resolves.toBe(newer);
+      await expect(__testing.readCatalogLkg(scope)).resolves.toBe(newer);
+    } finally {
+      await fsp.rm(file, { force: true });
+      await fsp.rm(`${file}.bak`, { force: true });
+    }
   });
 
   it('replaces an existing LKG through a Windows-safe backup path', async () => {

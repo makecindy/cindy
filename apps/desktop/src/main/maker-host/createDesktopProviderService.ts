@@ -27,6 +27,7 @@ import {
   DEFAULT_REMOTE_CATALOG_BUDGET_MS,
   loadCatalog,
   loadCatalogWithSource,
+  parseCatalog,
   type Catalog,
   type CatalogIO,
   type CatalogSourceConfig,
@@ -249,32 +250,58 @@ function catalogLkgTemporaryPath(file: string, nonce = randomUUID()): string {
 }
 
 /** Serialize the complete replace transaction per scope while leaving different scopes parallel. */
-async function serializeCatalogLkgWrite(
+async function serializeCatalogLkgWrite<T>(
   file: string,
-  write: () => Promise<void>,
-): Promise<void> {
+  write: () => Promise<T>,
+): Promise<T> {
   const previous = catalogLkgWriteTails.get(file) ?? Promise.resolve();
   const current = previous.catch(() => undefined).then(write);
-  catalogLkgWriteTails.set(file, current);
+  const tail = current.then(
+    () => undefined,
+    () => undefined,
+  );
+  catalogLkgWriteTails.set(file, tail);
   try {
-    await current;
+    return await current;
   } finally {
-    if (catalogLkgWriteTails.get(file) === current) catalogLkgWriteTails.delete(file);
+    if (catalogLkgWriteTails.get(file) === tail) catalogLkgWriteTails.delete(file);
   }
 }
 
-async function writeCatalogLkg(scope: string, catalog: string): Promise<void> {
+function selectCatalogLkgSnapshot(incoming: string, current: string | null): string {
+  if (current === null) return incoming;
+  try {
+    const incomingUpdatedAt = parseCatalog(incoming).modelRegistry?.updatedAt;
+    const currentUpdatedAt = parseCatalog(current).modelRegistry?.updatedAt;
+    const incomingRevision = incomingUpdatedAt ? Date.parse(incomingUpdatedAt) : Number.NaN;
+    const currentRevision = currentUpdatedAt ? Date.parse(currentUpdatedAt) : Number.NaN;
+    if (
+      Number.isFinite(currentRevision) &&
+      (!Number.isFinite(incomingRevision) || currentRevision > incomingRevision)
+    ) {
+      return current;
+    }
+  } catch {
+    // An invalid current envelope payload is not an LKG; replace it with the already-validated input.
+  }
+  return incoming;
+}
+
+async function writeCatalogLkg(scope: string, catalog: string): Promise<string> {
   const file = catalogLkgPath(scope);
-  await serializeCatalogLkgWrite(file, async () => {
+  return serializeCatalogLkgWrite(file, async () => {
+    const selected = selectCatalogLkgSnapshot(catalog, await readCatalogLkg(scope));
+    if (selected !== catalog) return selected;
     const temporary = catalogLkgTemporaryPath(file);
     await fsp.mkdir(path.dirname(file), { recursive: true });
-    const envelope = catalogLkgEnvelope(scope, catalog);
+    const envelope = catalogLkgEnvelope(scope, selected);
     await fsp.writeFile(temporary, JSON.stringify(envelope), 'utf8');
     try {
       await replaceCatalogLkgFile(temporary, file);
     } finally {
       await fsp.rm(temporary, { force: true }).catch(() => undefined);
     }
+    return selected;
   });
 }
 
@@ -732,7 +759,11 @@ export function getDesktopProviderService(): ProviderService {
 
 export const __testing = {
   catalogLkgEnvelope,
+  catalogLkgPath,
   catalogLkgTemporaryPath,
+  readCatalogLkg,
   replaceCatalogLkgFile,
+  selectCatalogLkgSnapshot,
   serializeCatalogLkgWrite,
+  writeCatalogLkg,
 };
