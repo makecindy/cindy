@@ -414,6 +414,38 @@ describe('makerChatStore active view tracking', () => {
     expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('task-create');
   });
 
+  it('caps initial plan resolution backfill when a latest TaskUpdate cannot be resolved', async () => {
+    const sessionId = sid('initial-plan-task-boundary-missing');
+    vi.mocked(messageService.list).mockClear();
+    const page = (prefix: string, startOffsetSeconds: number) =>
+      Array.from({ length: 50 }, (_, i) =>
+        dbMessage(
+          sessionId,
+          `${prefix}-${String(i).padStart(2, '0')}`,
+          `${prefix} message ${i}`,
+          new Date(BASE_TIME.getTime() + (startOffsetSeconds + i) * 1000).toISOString(),
+        ),
+      );
+    const latestPage = page('latest', 1000);
+    latestPage[49] = dbToolUseMessage(
+      sessionId,
+      'latest-task-update',
+      'TaskUpdate',
+      { taskId: 'missing', status: 'completed' },
+      new Date(BASE_TIME.getTime() + 2_000_000).toISOString(),
+    );
+    vi.mocked(messageService.list).mockResolvedValueOnce(latestPage);
+    for (let i = 0; i < 12; i += 1) {
+      vi.mocked(messageService.list).mockResolvedValueOnce(page(`older-${i}`, 900 - i * 100));
+    }
+
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises(20);
+
+    expect(messageService.list).toHaveBeenCalledTimes(11);
+    expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('older-9-00');
+  });
+
   it('enterView disposer leaves the session', () => {
     const sessionId = sid('disposer');
     const dispose = enter(sessionId);

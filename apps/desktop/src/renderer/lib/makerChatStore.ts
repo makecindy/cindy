@@ -25,7 +25,6 @@ import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import {
   applyCodexPlanSnapshotOnDone,
-  findLatestMessageTodoInsertion,
   getLatestMessageTodoState,
   isAgentPlanToolName,
 } from '@cindy/maker-shared/message-render';
@@ -5448,7 +5447,7 @@ function ensureInitialMessages(sessionId: string): void {
       //
       // 无锚点按 10 页(500 行)兜底。计划胶囊分两段:
       //   - 当前窗口没有任何计划事件时,最多探测 10 页,避免从未使用计划的长会话全量拉历史;
-      //   - 已看到计划事件但最新 TaskUpdate 还缺创建/列表边界时,继续回填直到该事件可解析或清空。
+      //   - 已看到计划事件但最新 TaskUpdate 还缺创建/列表边界时,最多再补 10 页。
       let merged: Message[] = existing;
       let oldestRow = oldestMessageRow(merged, 'newest-first');
       if (!oldestRow) {
@@ -5464,17 +5463,24 @@ function ensureInitialMessages(sessionId: string): void {
       let hasMore = serverMessagePageHasMore(existing);
       const MAX_NO_ANCHOR_BACKFILL_PAGES = 10;
       const MAX_PLAN_DISCOVERY_BACKFILL_PAGES = 10;
+      const MAX_PLAN_RESOLUTION_BACKFILL_PAGES = 10;
       let pagesFetched = 0;
+      let planResolutionPagesFetched = 0;
       while (hasMore) {
         const needsAnchorBackfill =
           merged.every(isNonAnchorHistoryRow) && pagesFetched < MAX_NO_ANCHOR_BACKFILL_PAGES;
         const planState = historyRowsPlanBackfillState(merged);
+        const needsPlanResolution =
+          planState.hasPlanEvent &&
+          !planState.isResolved &&
+          planResolutionPagesFetched < MAX_PLAN_RESOLUTION_BACKFILL_PAGES;
         const needsPlanBackfill = planState.hasPlanEvent
-          ? !planState.isResolved
+          ? needsPlanResolution
           : pagesFetched < MAX_PLAN_DISCOVERY_BACKFILL_PAGES;
         if (!needsAnchorBackfill && !needsPlanBackfill) break;
 
         pagesFetched += 1;
+        if (needsPlanResolution) planResolutionPagesFetched += 1;
         try {
           const older = await listMessagesFor(sessionId, {
             limit: 50,
