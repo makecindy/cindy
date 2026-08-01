@@ -51,6 +51,7 @@ import { downloadVerifiedPlugin } from './download.js';
 import { installCustomMarketPlugin } from './install.js';
 import {
   PluginMarketLedger,
+  ghostManifestDigest,
   type PluginMarketInstallationRecord,
 } from './ledger.js';
 import type { DiscoveredMarketPlugin } from './sources/discover.js';
@@ -640,15 +641,17 @@ export class PluginMarketService {
           .list()
           .find((ghost) => ghost.manifest.id === plugin.ghostId);
         const currentRecord = ledger.installationForGhost(plugin.ghostId);
-        // 所有权 = pluginId 与来源指纹**同时**对上。市场名是 marketplace.json
-        // 自报的、可复用:移除来源 A 后添加同名来源 B,pluginId 完全相同,只锚
-        // pluginId 会让无关甚至恶意仓库借同名市场"更新"A 装出来的插件。
+        // 所有权 = pluginId、来源指纹、安装时 manifest 摘要**同时**对上。市场名
+        // 可复用(同名异源重加得到相同 pluginId);运行时的包在降级窗口可被旧版
+        // 换成本地安装的任何东西(旧版不认识 custom 账本,不会更新它)——只凭
+        // 记录存在就认领,会把别人的包错误归属给本来源并放行其更新覆盖。
         const sourceKey = marketSourceKey(discovered.config.source);
         const ownsInstall = Boolean(
           existing &&
             currentRecord?.installed &&
             currentRecord.pluginId === pluginId &&
-            currentRecord.sourceKey === sourceKey,
+            currentRecord.sourceKey === sourceKey &&
+            currentRecord.manifestDigest === ghostManifestDigest(existing.manifest),
         );
         if (existing && !ownsInstall) {
           throwIpcError('ALREADY_EXISTS', 'A local Plugin already uses this Plugin ID');
@@ -705,6 +708,9 @@ export class PluginMarketService {
             updatedAt: new Date().toISOString(),
             // 来源指纹与 pluginId 一起构成所有权:同名异源的重加对不上它。
             sourceKey,
+            // 落位那一刻的 manifest 摘要:降级期间运行时被换成别的包后,认领
+            // 对不上摘要即失效,不会把别人的包归属给本来源。
+            manifestDigest: ghostManifestDigest(ghost.manifest),
           });
         });
         return { ghost };
@@ -780,13 +786,15 @@ export class PluginMarketService {
     const releaseId = customMarketReleaseId(config.name, plugin.ghostId, plugin.version);
     const ghost = local.ghostsById.get(plugin.ghostId);
     const record = local.installations[plugin.ghostId];
-    // 所有权 = pluginId + 来源指纹都对上,与 customInstall 同口径:同名异源的
-    // 重加不是所有者,列表如实标 conflict 而不是 update-available。
+    // 所有权 = pluginId + 来源指纹 + 安装时 manifest 摘要都对上,与 customInstall
+    // 同口径:同名异源的重加、降级期间被本地替换的包,都不是所有者,列表如实标
+    // conflict 而不是 update-available。
     const ownsInstall = Boolean(
       ghost &&
         record?.installed &&
         record.pluginId === pluginId &&
-        record.sourceKey === marketSourceKey(config.source),
+        record.sourceKey === marketSourceKey(config.source) &&
+        record.manifestDigest === ghostManifestDigest(ghost.manifest),
     );
     // 已拥有当前安装记录的来源保留所有权（installed / update-available）；
     // duplicate 只把未拥有安装的竞争来源标为冲突，避免“先装先得”被降格。
@@ -832,7 +840,16 @@ export class PluginMarketService {
     operation: (owner: ActiveAppSession) => Promise<T>,
   ): Promise<T> {
     const owner = captureMarketOwner();
-    const result = await operation(owner);
+    let result: T;
+    try {
+      result = await operation(owner);
+    } catch (error) {
+      // 异常出口同样要校验代际:git 类错误的 detail 刻意保留了仓库 URL 等
+      // 上一账号的私有信息,操作期间切了号就不能把它交给当前 Renderer——
+      // 统一替换成账号漂移错误,原始失败对当前会话本来就没有意义。
+      requireSameMarketOwner(owner);
+      throw error;
+    }
     requireSameMarketOwner(owner);
     return result;
   }

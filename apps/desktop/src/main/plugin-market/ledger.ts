@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import path from 'node:path';
 
 import type { PluginScope } from '@cindy/plugin-protocol';
@@ -31,6 +32,31 @@ export interface PluginMarketInstallationRecord {
    * 仅自定义安装记录携带;服务端记录没有此字段。
    */
   sourceKey?: string;
+  /**
+   * 安装落位那一刻的 manifest 规范化摘要（ghostManifestDigest）。账本记录只是
+   * "我装过"的声明,运行时的包在降级窗口可以被旧版换成任何东西(旧版不认识
+   * custom 账本,卸载/本地重装都不会更新它)——认领运行时安装必须同时对上这个
+   * 摘要,只凭 ghostId 存在就恢复所有权会把别人的包错误归属给本来源并放行其
+   * 更新覆盖。仅自定义安装记录携带。
+   */
+  manifestDigest?: string;
+}
+
+/** 递归按键排序的规范化 JSON(摘要必须与对象键序无关,两侧独立算也一致)。 */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+/** manifest 的稳定摘要:语义相同的 manifest 无论键序/来源如何,摘要一致。 */
+export function ghostManifestDigest(manifest: unknown): string {
+  return crypto.createHash('sha256').update(canonicalJson(manifest)).digest('hex');
 }
 
 interface PluginMarketLedgerData {
@@ -84,7 +110,8 @@ function validRecord(value: unknown): value is PluginMarketInstallationRecord {
       record.source === 'local-market') &&
     typeof record.installed === 'boolean' &&
     typeof record.updatedAt === 'string' &&
-    (record.sourceKey === undefined || typeof record.sourceKey === 'string')
+    (record.sourceKey === undefined || typeof record.sourceKey === 'string') &&
+    (record.manifestDigest === undefined || typeof record.manifestDigest === 'string')
   );
 }
 

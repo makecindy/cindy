@@ -6,11 +6,7 @@
  * 不复制发现到的插件数据——快照时重新发现，磁盘上的克隆目录才是事实。
  */
 import type { MarketSource, MarketSourceConfig } from '../../../shared/pluginMarket.js';
-import {
-  atomicWriteFileSync,
-  isAtomicBackupUnrecoverable,
-  readAtomicFileSync,
-} from '../../utils/atomicWriteFile.js';
+import { atomicWriteFileSync, readAtomicFileSync } from '../../utils/atomicWriteFile.js';
 
 const SOURCES_SCHEMA_VERSION = 1;
 

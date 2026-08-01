@@ -60,7 +60,7 @@ import type { VisiblePluginSummary } from '@cindy/plugin-protocol';
 
 import type { MarketSourceConfig } from '../../../shared/pluginMarket';
 import { customMarketPluginId, customMarketReleaseId, marketSourceKey } from '../../../shared/pluginMarket';
-import { PluginMarketLedger } from '../ledger';
+import { PluginMarketLedger, ghostManifestDigest } from '../ledger';
 import { PluginMarketService } from '../service';
 import { MarketSourceStore } from '../sources/store';
 import type { PluginMarketApi } from '../api';
@@ -270,8 +270,9 @@ describe('PluginMarketService 自定义市场聚合', () => {
       source: 'local-market',
       installed: true,
       updatedAt: '2026-07-30T02:00:00.000Z',
-      // 所有权 = pluginId + 来源指纹:缺指纹的记录不再被认作本来源的安装。
+      // 所有权 = pluginId + 来源指纹 + 安装时 manifest 摘要,三者齐全才认领。
       sourceKey: marketSourceKey({ type: 'local', path: dir }),
+      manifestDigest: ghostManifestDigest(ghostManifest('alpha', '1.0.0')),
     });
 
     const snapshot = await h.service.snapshot();
@@ -776,6 +777,82 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
       ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
       expect(runtime.install).not.toHaveBeenCalled();
       expect(gets).toBeGreaterThan(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('does not let a stale custom record claim a locally replaced package', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [
+      { rel: 'plugins/alpha', id: 'alpha', version: '2.0.0' },
+    ]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    // 降级窗口:旧版卸载了本来源装的 A,又从本地 .cindy 装了同 ghostId 的 B。
+    // 旧版不认识 custom 账本,记录原样留存(installed:true、指纹全对),唯一能
+    // 分辨的是"运行时的 manifest 已不是安装时那份"。
+    const replacedManifest = {
+      ...ghostManifest('alpha', '1.0.0'),
+      description: 'locally installed replacement',
+      slots: ['notify', 'network'],
+    };
+    runtime.ghosts = [{ manifest: replacedManifest, dir: '/ghosts/alpha', enabled: true }];
+    h.ledger.upsertInstallation({
+      pluginId: customMarketPluginId('team-lib', 'alpha'),
+      ghostId: 'alpha',
+      releaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
+      version: '1.0.0',
+      sha256: 'custom-unverified',
+      scope: 'public',
+      organizationId: null,
+      source: 'local-market',
+      installed: true,
+      updatedAt: '2026-07-30T02:00:00.000Z',
+      sourceKey: marketSourceKey({ type: 'local', path: dir }),
+      // 摘要是**安装时那份 A** 的,不是替换后的 B 的。
+      manifestDigest: ghostManifestDigest(ghostManifest('alpha', '1.0.0')),
+    });
+
+    // 列表:B 不归本来源所有,如实标 conflict,而不是把来源的 2.0.0 呈现成
+    // "B 的可用更新"。
+    const snapshot = await h.service.snapshot();
+    expect(snapshot.items[0]?.installState).toBe('conflict');
+
+    // 安装:同样被拒,来源的更新不能覆盖用户降级期间自己装的包。
+    const reviewed = await h.service.detail(customMarketPluginId('team-lib', 'alpha'));
+    await expect(
+      h.service.install(customMarketPluginId('team-lib', 'alpha'), {
+        expectedReleaseId: customMarketReleaseId('team-lib', 'alpha', '2.0.0'),
+        expectedManifest: reviewed.manifest,
+      }),
+    ).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it('masks failure details with a generation error when the account switches mid-operation', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    // 让操作在"开始之后"失败:来源目录消失 → refreshSource 在 operation 内抛
+    // MARKET_SOURCE_INVALID。切号发生在 operation 已启动、错误尚未抛出之间——
+    // 用 store.get 作时序钩子(refreshSource 第一步就是读配置)。
+    const realGet = MarketSourceStore.prototype.get;
+    const spy = vi
+      .spyOn(MarketSourceStore.prototype, 'get')
+      .mockImplementation(function (this: MarketSourceStore, name: string) {
+        const config = realGet.call(this, name);
+        fs.rmSync(dir, { recursive: true, force: true });
+        runtime.session = { ...runtime.session, generation: runtime.session.generation + 1 };
+        return config;
+      });
+    try {
+      // 失败出口若不校验代际,git/discover 类错误的 detail(刻意保留仓库地址等
+      // 上一账号私有信息)会被交给切号后的 Renderer。必须统一换成代际错误。
+      await expect(h.service.refreshSource('team-lib')).rejects.toMatchObject({
+        code: 'PRECONDITION_FAILED',
+      });
     } finally {
       spy.mockRestore();
     }
