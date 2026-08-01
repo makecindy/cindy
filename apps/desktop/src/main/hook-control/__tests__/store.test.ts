@@ -364,5 +364,24 @@ describe('provider 与 Cindy 账号隔离', () => {
       store.setWorkspaces({ other: '/tmp/other' });
       expect(store.get().xDefaultWorkspace).toBeNull();
     });
+
+    it('删掉的别名重新出现(指向另一个目录)时默认值不复活 —— 存档里已经删了, 不只是被遮住', () => {
+      const store = makeStore();
+      store.setWorkspaces({ cindy: '/Users/dash/Code/cindy', other: '/tmp/other' });
+      store.setXDefaultWorkspace('cindy');
+      store.setWorkspaces({ other: '/tmp/other' });
+
+      // 别名是用户自己起的名字, 删掉 cindy 之后再建一个同名的很常见, 但它现在
+      // 指向另一个目录。若旧值只在读侧被投影成 null、仍留在盘上, 这一步就会让
+      // 它无声复活, X 任务被派发到用户从未选过的目录。
+      store.setWorkspaces({ cindy: '/tmp/somewhere-else', other: '/tmp/other' });
+      expect(store.get().xDefaultWorkspace).toBeNull();
+
+      // 存档层面的反向锚点: 落盘的文档里也不该还留着这个别名。
+      const raw = JSON.parse(fs.readFileSync(filePath(), 'utf-8')) as {
+        accounts: Record<string, { x: { defaultWorkspace: string | null } }>;
+      };
+      expect(raw.accounts['account-test'].x.defaultWorkspace).toBeNull();
+    });
   });
 });
