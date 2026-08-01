@@ -233,6 +233,8 @@ interface GuardLogger {
 interface SessionGuardState {
   /** 本轮连续重连次数（模型有产出 / 人工介入即归零）。 */
   consecutiveAttempts: number;
+  /** 会话累计自动重连次数（只增，仅展示）。 */
+  sessionTotalResumes: number;
   lastTurnStartAt: number;
   lastUserSendAt: number;
   pendingResume: boolean;
@@ -274,8 +276,6 @@ export interface InterruptedTurnAutoResumeScope {
  */
 export class InterruptedTurnAutoResumeGuard {
   private readonly sessions = new Map<string, SessionGuardState>();
-  /** 展示用累计数仍按用户会话共享；失败额度则由 sessions 中的 owner key 隔离。 */
-  private readonly resumeTotals = new Map<string, number>();
 
   constructor(private readonly deps: InterruptedTurnAutoResumeGuardDeps) {}
 
@@ -288,6 +288,7 @@ export class InterruptedTurnAutoResumeGuard {
     if (!s) {
       s = {
         consecutiveAttempts: 0,
+        sessionTotalResumes: 0,
         lastTurnStartAt: 0,
         lastUserSendAt: 0,
         pendingResume: false,
@@ -431,8 +432,8 @@ export class InterruptedTurnAutoResumeGuard {
       return { action: 'exhausted', consecutiveAttempts: s.consecutiveAttempts };
     }
     s.consecutiveAttempts += 1;
-    const sessionTotalResumes = (this.resumeTotals.get(totalSessionId) ?? 0) + 1;
-    this.resumeTotals.set(totalSessionId, sessionTotalResumes);
+    const totalState = totalSessionId === sessionId ? s : this.state(totalSessionId);
+    totalState.sessionTotalResumes += 1;
     s.pendingResume = true;
     const attempt = s.consecutiveAttempts;
     const delayMs = interruptedTurnResumeDelayMs(attempt, this.deps.random);
@@ -440,14 +441,14 @@ export class InterruptedTurnAutoResumeGuard {
       sessionId,
       attempt,
       maxAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
-      sessionTotal: sessionTotalResumes,
+      sessionTotal: totalState.sessionTotalResumes,
       delayMs,
     });
     return {
       action: 'resume',
       attempt,
       maxAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
-      sessionTotal: sessionTotalResumes,
+      sessionTotal: totalState.sessionTotalResumes,
       delayMs,
     };
   }

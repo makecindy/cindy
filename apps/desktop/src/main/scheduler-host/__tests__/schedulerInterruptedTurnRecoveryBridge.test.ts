@@ -8,6 +8,7 @@ import {
   discardSchedulerInterruptedTurnSuppressedError,
   finalizeSchedulerInterruptedTurnSuppressedError,
   isSchedulerInterruptedTurnRecoverySessionReserved,
+  isSchedulerInterruptedTurnEventOwnedBy,
   registerSchedulerInterruptedTurnRecovery,
   registerSchedulerInterruptedTurnResumeOutcome,
   resetSchedulerInterruptedTurnRecovery,
@@ -84,8 +85,19 @@ describe('scheduler interrupted-turn recovery bridge', () => {
     expect(second).not.toHaveBeenCalled();
     expect(claimSchedulerInterruptedTurnRecovery('bridge-concurrent', unknownEvent)).toBeNull();
     expect(claimSchedulerInterruptedTurnRecovery('bridge-concurrent', errorEvent)).toBeNull();
+    expect(
+      isSchedulerInterruptedTurnEventOwnedBy('bridge-concurrent', 'run-first', undefined),
+    ).toBe(false);
+    expect(
+      isSchedulerInterruptedTurnEventOwnedBy(
+        'bridge-concurrent', 'run-first', 'run-first',
+      ),
+    ).toBe(true);
 
     disposeFirst();
+    expect(
+      isSchedulerInterruptedTurnEventOwnedBy('bridge-concurrent', 'run-second', undefined),
+    ).toBe(true);
     expect(claimSchedulerInterruptedTurnRecovery('bridge-concurrent', errorEvent)).toEqual({
       runId: 'run-second',
       disposition: 'duplicate',
@@ -126,8 +138,14 @@ describe('scheduler interrupted-turn recovery bridge', () => {
 
     expect(onReset).toHaveBeenCalledWith('user-intervention');
     expect(claimSchedulerInterruptedTurnRecovery('bridge-intervention', errorEvent)).toBeNull();
+    expect(
+      isSchedulerInterruptedTurnEventOwnedBy('bridge-intervention', 'run-1', undefined),
+    ).toBe(true);
     expect(handler).not.toHaveBeenCalled();
     dispose();
+    expect(
+      isSchedulerInterruptedTurnEventOwnedBy('bridge-intervention', 'run-1', undefined),
+    ).toBe(false);
   });
 
   it('reserves the session while any run is in recovery backoff or dispatch', () => {

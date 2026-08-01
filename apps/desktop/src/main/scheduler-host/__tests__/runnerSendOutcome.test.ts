@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => ({
   >(),
   registerSchedulerRecovery: vi.fn(),
   claimSchedulerRecovery: vi.fn(),
+  isSchedulerEventOwnedBy: vi.fn(),
   registerSchedulerResumeOutcome: vi.fn(),
   releaseSchedulerResumeOutcome: vi.fn(),
   settleSchedulerResumeOutcome: vi.fn(),
@@ -66,6 +67,7 @@ vi.mock('../../maker-ipc/register.js', () => ({
 vi.mock('../schedulerInterruptedTurnRecoveryBridge.js', () => ({
   registerSchedulerInterruptedTurnRecovery: mocks.registerSchedulerRecovery,
   claimSchedulerInterruptedTurnRecovery: mocks.claimSchedulerRecovery,
+  isSchedulerInterruptedTurnEventOwnedBy: mocks.isSchedulerEventOwnedBy,
   registerSchedulerInterruptedTurnResumeOutcome: mocks.registerSchedulerResumeOutcome,
   releaseSchedulerInterruptedTurnResumeOutcome: mocks.releaseSchedulerResumeOutcome,
   settleSchedulerInterruptedTurnResumeOutcome: mocks.settleSchedulerResumeOutcome,
@@ -315,6 +317,13 @@ describe('MakerScheduleRunner send outcome policy', () => {
       const disposition = registration?.handler(event) ?? null;
       return disposition && runId ? { runId, disposition } : null;
     });
+    mocks.isSchedulerEventOwnedBy.mockImplementation(
+      (sessionId: string, runId: string, eventRunId: string | undefined) => {
+        if (eventRunId) return eventRunId === runId;
+        const registrations = mocks.schedulerRecoveryHandlers.get(sessionId);
+        return registrations?.size === 1 && registrations.has(runId);
+      },
+    );
     mocks.createMessage.mockResolvedValue(undefined);
     mocks.backfillSessionMeta.mockResolvedValue(undefined);
     mocks.resolveWorkingDir.mockResolvedValue({ ok: true, path: 'F:\\XDMaker' });
@@ -913,6 +922,12 @@ describe('MakerScheduleRunner send outcome policy', () => {
     const secondFire = runner.fire(baseSchedule(), createFireContext('run-second'));
 
     await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(2));
+    h.emit({ type: 'text', data: { text: 'ambiguous', isFinal: false } });
+    h.emit({ type: 'done', data: {} });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(notifier.notify).not.toHaveBeenCalled();
+    expect(h.listenerCount()).toBe(2);
+
     const firstOrigin = {
       kind: 'scheduler',
       scheduleId: 'schedule-1',

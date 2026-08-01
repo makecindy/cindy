@@ -20,7 +20,9 @@ describe('SchedulerInterruptedTurnRecoveryState', () => {
     const state = new SchedulerInterruptedTurnRecoveryState(createResumeScope());
 
     expect(state.classifyTerminal()).toBe('ineligible');
+    expect(state.noteRunningStatus()).toBe(true);
     state.noteProgress();
+    expect(state.noteRunningStatus(), '重复 running 不覆盖已有进展').toBe(false);
     expect(state.classifyTerminal()).toBe('eligible');
 
     const generation = state.scheduleRecovery();

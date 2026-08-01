@@ -87,6 +87,7 @@ import { readInterruptedTurnAutoResumeSettings } from '../maker-host/interrupted
 import {
   discardSchedulerInterruptedTurnSuppressedError,
   finalizeSchedulerInterruptedTurnSuppressedError,
+  isSchedulerInterruptedTurnEventOwnedBy,
   registerSchedulerInterruptedTurnRecovery,
   registerSchedulerInterruptedTurnResumeOutcome,
   releaseSchedulerInterruptedTurnResumeOutcome,
@@ -2307,7 +2308,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
       };
       const off = session.onEvent((ev: AgentEvent) => {
         const eventRunId = ev.turnOrigin?.runId;
-        if (typeof eventRunId === 'string' && eventRunId && eventRunId !== options.origin.runId) {
+        if (!isSchedulerInterruptedTurnEventOwnedBy(
+          session.id,
+          options.origin.runId,
+          eventRunId,
+        )) {
           return;
         }
         // 任何事件都是"这一轮还在推进"的证据 —— 上报给引擎的卡死守卫(它判的是

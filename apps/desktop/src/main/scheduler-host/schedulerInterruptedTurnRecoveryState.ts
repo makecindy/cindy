@@ -12,6 +12,7 @@ import type {
  */
 export class SchedulerInterruptedTurnRecoveryState {
   private phase: 'idle' | 'backoff' | 'dispatching' | 'running' | 'settled' = 'idle';
+  private initialTurnStarted = false;
   private generation = 0;
   private recoveryChainEstablished = false;
   private currentTurnHasProgress = false;
@@ -29,8 +30,8 @@ export class SchedulerInterruptedTurnRecoveryState {
 
   /** 初始 turn 的 running 信号只负责开启一轮新的进展窗口。 */
   noteRunningStatus(): boolean {
-    if (this.phase !== 'idle') return false;
-    this.currentTurnHasProgress = false;
+    if (this.phase !== 'idle' || this.initialTurnStarted) return false;
+    this.initialTurnStarted = true;
     this.resumeScope.noteTurnStarted();
     return true;
   }
