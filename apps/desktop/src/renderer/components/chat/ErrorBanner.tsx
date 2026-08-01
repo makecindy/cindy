@@ -707,7 +707,7 @@ export function ErrorBanner({
           {t('chat.errorBanner.silentStopContinue')}
         </button>
       )}
-      {onContinueAfterUsageReset && (
+      {onContinueAfterUsageReset && !showGatewayQuotaRecovery && (
         <button
           type="button"
           onClick={onContinueAfterUsageReset}

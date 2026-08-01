@@ -127,6 +127,12 @@ describe('ErrorBanner billing CTA', () => {
     expect(screen.getByText('chat.errorBanner.retry')).toBeTruthy();
   });
 
+  it('suppresses continue-after-reset when the billing recovery action is shown', () => {
+    renderBanner({ onContinueAfterUsageReset: vi.fn() });
+    expect(screen.getByText('chat.errorBanner.openBilling')).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.continueAfterReset')).toBeNull();
+  });
+
   it('keeps raw error and hides CTA when the account has no billing page (org membership)', () => {
     mocks.auth.mockReturnValue({ mode: 'cloud', user: { membershipKind: 'org' } });
     renderBanner();
