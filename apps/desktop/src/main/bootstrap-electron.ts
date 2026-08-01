@@ -350,6 +350,7 @@ import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService
 import { initNotificationService } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
+import { workLouderCodexLightingController } from './worklouder-codex/index.js';
 import {
   isAppContentWindow,
   isFocusedAppContentWindow,
@@ -3285,6 +3286,9 @@ const registerIpcHandlers = () => {
   initAgentIslandService({
     getMainWindow: () => getWindow() ?? null,
     isPlannedRemoteDaemonClose: isCcMgrUpgradeInFlight,
+    onSessionActivityChange: (activity) => {
+      workLouderCodexLightingController.updateSessionActivity(activity);
+    },
   })?.setAppFocused(hasFocusedAppWindow());
   // 定向 replay:快照只补发给刚完成 sessions 订阅的那一台控制端。若沿默认广播
   // 通道扇出,每次 subscribe 都会把 O(会话数) 的帧重复灌给其它所有控制端,
@@ -7515,6 +7519,7 @@ onQuit('rsb-window', () => rsbWindowController.dispose(), 'sync');
 onQuit('ghost-panel-windows', () => ghostPanelWindowsController.dispose(), 'sync');
 onQuit('app-badge-clear', () => clearAllSessionAttention(), 'sync');
 onQuit('session-drag-preview', () => disposeSessionDragPreview(), 'sync');
+onQuit('worklouder-codex-lighting', () => workLouderCodexLightingController.dispose(), 'async');
 // 自带 adb 的常驻 server 守护进程随退出收掉(fire-and-forget detached spawn,
 // 不阻塞)。不收会一直锁安装目录里的 adb.exe,弄挂增量更新(os error 32)。
 onQuit('android-adb-kill-server', () => disposeAndroidAdb(), 'sync');
