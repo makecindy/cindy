@@ -156,11 +156,10 @@ function defaultRequestPath(agent: DialogAgentKind, wireProtocol: ProviderWirePr
 
 /** 用户可直接粘贴完整推理端点；仅在没有显式路径 override 时拆分已知协议后缀。 */
 function normalizeRuntimeEndpoint(agent: DialogAgentKind, fields: RuntimeFields): RuntimeFields {
-  if (fields.requestPath.trim()) return fields;
-  const split = splitProviderEndpointUrl(
-    fields.baseUrl,
-    defaultRequestPath(agent, fields.wireProtocol),
-  );
+  const defaultPath = defaultRequestPath(agent, fields.wireProtocol);
+  const requestPath = fields.requestPath.trim();
+  if (requestPath && requestPath !== defaultPath) return fields;
+  const split = splitProviderEndpointUrl(fields.baseUrl, defaultPath);
   return split ? { ...fields, ...split } : fields;
 }
 

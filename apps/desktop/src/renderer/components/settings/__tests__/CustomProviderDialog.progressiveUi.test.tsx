@@ -24,11 +24,12 @@ vi.mock('@/lib/customProviderId', () => ({
 }));
 
 import { CustomProviderDialog } from '../CustomProviderDialog';
-import { createCustomProvider } from '@/lib/customProviders';
+import { createCustomProvider, updateCustomProvider } from '@/lib/customProviders';
 
-function renderDialog() {
+function renderDialog(initial?: React.ComponentProps<typeof CustomProviderDialog>['initial']) {
   return render(
     React.createElement(CustomProviderDialog, {
+      initial,
       onClose: vi.fn(),
       onSaved: vi.fn(),
     }),
@@ -258,5 +259,39 @@ describe('CustomProviderDialog progressive connection settings', () => {
         },
       },
     });
+  });
+
+  it('normalizes a full endpoint when a saved request path equals the protocol default', async () => {
+    renderDialog({
+      id: 'saved-responses',
+      name: 'Saved Responses',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://responses.example/v1',
+          requestPath: '/responses',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'responses-model', name: 'Responses model' }],
+        },
+      },
+    });
+    fireEvent.click(screen.getByRole('tab', { name: 'settings.providers.custom.protocol.codex' }));
+    fireEvent.change(
+      screen.getByPlaceholderText('settings.providers.custom.fields.baseUrlPlaceholder'),
+      { target: { value: 'https://responses.example/v1/responses' } },
+    );
+
+    fireEvent.click(screen.getByText('settings.providers.custom.save'));
+
+    await waitFor(() => expect(updateCustomProvider).toHaveBeenCalledOnce());
+    expect(vi.mocked(updateCustomProvider).mock.calls[0][0]).toMatchObject({
+      runtimes: {
+        codex: {
+          baseUrl: 'https://responses.example/v1',
+          models: [{ id: 'responses-model', name: 'Responses model' }],
+        },
+      },
+    });
+    const savedCodex = vi.mocked(updateCustomProvider).mock.calls[0][0].runtimes.codex;
+    expect(savedCodex).not.toHaveProperty('requestPath');
   });
 });
