@@ -94,7 +94,9 @@ function formatPlanType(subscriptionType: string | null | undefined): string | n
     team: 'Team',
     enterprise: 'Enterprise',
   };
-  return knownPlans[trimmed.toLowerCase()] ?? `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}`;
+  return (
+    knownPlans[trimmed.toLowerCase()] ?? `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}`
+  );
 }
 
 /** reset 时间按本地时区展示：当天仅时分，跨天补月日。 */
@@ -109,9 +111,10 @@ function formatResetAt(
 
   const resetDate = new Date(resetsAt * 1000);
   const nowDate = new Date(nowMs);
-  const sameDay = resetDate.getFullYear() === nowDate.getFullYear()
-    && resetDate.getMonth() === nowDate.getMonth()
-    && resetDate.getDate() === nowDate.getDate();
+  const sameDay =
+    resetDate.getFullYear() === nowDate.getFullYear() &&
+    resetDate.getMonth() === nowDate.getMonth() &&
+    resetDate.getDate() === nowDate.getDate();
   const time = new Intl.DateTimeFormat(locale, {
     hour: '2-digit',
     minute: '2-digit',
@@ -165,11 +168,7 @@ function WindowBlock({
       >
         {title}
       </div>
-      <QuotaBar
-        usedPercent={window.utilization}
-        severity={severity}
-        ariaLabel={title}
-      />
+      <QuotaBar usedPercent={window.utilization} severity={severity} ariaLabel={title} />
       <div className="mt-[7px] flex items-baseline justify-between gap-3 tabular-nums">
         <span className="font-medium text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]">
           {t('quotaCard.usedPercent', { percent: Math.round(usedPercent) })}
@@ -184,10 +183,7 @@ function WindowBlock({
   );
 }
 
-function TurnUsageSection({ turnUsage, t }: {
-  turnUsage: QuotaHoverCardTurnUsage;
-  t: TFunction;
-}) {
+function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage; t: TFunction }) {
   const hasTokenBreakdown = turnUsage.inputTokens != null && turnUsage.outputTokens != null;
 
   const renderCostLine = (
@@ -278,10 +274,7 @@ function TurnUsageSection({ turnUsage, t }: {
           data-testid="quota-suggestion"
           className="mt-2.5 flex items-start gap-[7px] rounded-lg bg-[var(--quota-card-callout-bg,var(--warning-bg-soft,rgba(224,154,47,0.12)))] px-2.5 py-[7px] text-xs text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]"
         >
-          <span
-            aria-hidden="true"
-            className="shrink-0 text-[var(--quota-bar-warn)]"
-          >
+          <span aria-hidden="true" className="shrink-0 text-[var(--quota-bar-warn)]">
             ●
           </span>
           <span>{turnUsage.suggestionText}</span>
@@ -330,25 +323,28 @@ export function QuotaHoverCard({
   }
 
   const normalizedStatus = snapshot?.rateLimitStatus?.trim().toLowerCase();
-  const status = normalizedStatus === 'rejected'
-    ? { key: 'quotaCard.limitRejected', tone: 'crit' as const }
-    : normalizedStatus === 'allowed_warning'
-      ? { key: 'quotaCard.limitWarning', tone: 'warn' as const }
-      : null;
+  const status =
+    normalizedStatus === 'rejected'
+      ? { key: 'quotaCard.limitRejected', tone: 'crit' as const }
+      : normalizedStatus === 'allowed_warning'
+        ? { key: 'quotaCard.limitWarning', tone: 'warn' as const }
+        : null;
   const showExtraUsage = snapshot?.extraUsage?.isEnabled === true;
-  const staleMinutes = snapshot
-    && typeof snapshot.updatedAt === 'number'
-    && Number.isFinite(snapshot.updatedAt)
-    && nowMs - snapshot.updatedAt > STALE_AFTER_MS
-    ? Math.floor((nowMs - snapshot.updatedAt) / 60_000)
-    : null;
+  const staleMinutes =
+    snapshot &&
+    typeof snapshot.updatedAt === 'number' &&
+    Number.isFinite(snapshot.updatedAt) &&
+    nowMs - snapshot.updatedAt > STALE_AFTER_MS
+      ? Math.floor((nowMs - snapshot.updatedAt) / 60_000)
+      : null;
 
   return (
     <div
       data-testid="quota-hover-card"
       className="w-[340px] select-none overflow-hidden rounded-2xl border border-[var(--quota-card-border,var(--border-default,rgba(0,0,0,0.10)))] bg-[var(--quota-card-bg,var(--surface-elevated,#FFFFFF))] pb-2 pt-[6px] text-[13px] leading-5 text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]"
       style={{
-        boxShadow: 'var(--quota-card-shadow, var(--shadow-menu, 0 18px 40px rgba(30, 20, 12, 0.14), 0 2px 8px rgba(30, 20, 12, 0.08)))',
+        boxShadow:
+          'var(--quota-card-shadow, var(--shadow-menu, 0 18px 40px rgba(30, 20, 12, 0.14), 0 2px 8px rgba(30, 20, 12, 0.08)))',
       }}
     >
       {snapshot ? (
@@ -432,7 +428,7 @@ export function QuotaHoverCard({
             ref={dashboardButtonRef}
             type="button"
             onClick={onOpenDashboard}
-            className="mx-2 mt-0.5 flex w-[calc(100%_-_16px)] items-center gap-[9px] rounded-lg px-2 py-[7px] text-left font-medium transition-colors hover:bg-[var(--quota-card-hover-bg,var(--surface-hover,rgba(0,0,0,0.05)))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring,#417CDD)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--quota-card-bg,var(--surface-elevated,#FFFFFF))] active:scale-[0.98]"
+            className="mx-2 mt-0.5 flex w-[calc(100%_-_16px)] items-center gap-[9px] rounded-full px-2 py-[7px] text-left font-medium transition-colors hover:bg-[var(--quota-card-hover-bg,var(--surface-hover,rgba(0,0,0,0.05)))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring,#417CDD)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--quota-card-bg,var(--surface-elevated,#FFFFFF))] active:scale-[0.98]"
           >
             <svg
               aria-hidden="true"
