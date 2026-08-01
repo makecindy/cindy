@@ -214,6 +214,7 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain('autoResumeBookkeeping.teardown(sessionId);');
     expect(source).toContain('function noteAutoResumeUserIntervention(');
     expect(source).toContain('supersedeSchedulerInterruptedTurnRecovery(sessionId);');
+    expect(source).toContain('autoResumeBookkeeping.teardownOwner(sessionId);');
     expect(userEnqueueBoundary).toContain('noteAutoResumeUserIntervention(sessionId);');
     expectOrder(
       userEnqueueBoundary ?? '',

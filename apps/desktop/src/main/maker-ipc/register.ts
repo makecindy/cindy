@@ -648,7 +648,8 @@ const interruptedTurnAutoResumeGuard = new InterruptedTurnAutoResumeGuard({
 });
 
 /**
- * 中断自愈的每会话簿记(压住的错误详情 / 待确认的重连记录 / 退避排期)。
+ * 中断自愈的会话 + owner 簿记(压住的错误详情 / 待确认的重连记录 /
+ * 普通聊天退避排期)。Schedule 以 runId 隔离，不能让同 session 的并发 run 互相结算。
  *
  * 状态与生命周期不变量都在 `autoResumeBookkeeping.ts`(有单测);这里只注入副作用:
  * 落库、结果回填、守卫额度回滚、清 coordinator 接管态。
@@ -670,13 +671,20 @@ const autoResumeBookkeeping = new AutoResumeBookkeeping({
 });
 
 configureSchedulerInterruptedTurnRecoveryLifecycle({
-  registerOutcome: (sessionId, clientId) =>
-    autoResumeBookkeeping.registerPendingOutcome(sessionId, clientId),
-  releaseOutcome: (sessionId, clientId) =>
-    autoResumeBookkeeping.releasePendingOutcome(sessionId, clientId),
-  discardSuppressedError: (sessionId) => autoResumeBookkeeping.discardSuppressedError(sessionId),
-  finalizeSuppressedError: (sessionId) =>
-    autoResumeBookkeeping.finalizeSuppressedError(sessionId, { surfaceBanner: false }),
+  registerOutcome: (sessionId, runId, clientId) =>
+    autoResumeBookkeeping.registerPendingOutcome(sessionId, clientId, runId),
+  releaseOutcome: (sessionId, runId, clientId) =>
+    autoResumeBookkeeping.releasePendingOutcome(sessionId, clientId, runId),
+  settleOutcome: (sessionId, runId, outcome) =>
+    autoResumeBookkeeping.settleOutcome(sessionId, outcome, runId),
+  discardSuppressedError: (sessionId, runId) =>
+    autoResumeBookkeeping.discardSuppressedError(sessionId, runId),
+  finalizeSuppressedError: (sessionId, runId) =>
+    autoResumeBookkeeping.finalizeSuppressedError(
+      sessionId,
+      { surfaceBanner: false, abandonTakeover: false },
+      runId,
+    ),
 });
 
 /**
@@ -712,7 +720,9 @@ function noteAutoResumeUserIntervention(sessionId: string): void {
   silentStopAutoResumeGuard.noteSessionReset(sessionId);
   interruptedTurnAutoResumeGuard.noteSessionReset(sessionId);
   supersedeSchedulerInterruptedTurnRecovery(sessionId);
-  autoResumeBookkeeping.teardown(sessionId);
+  // 普通聊天 owner 仍按既有语义撤销；Schedule owner 由上面的 waiter fan-out 按自己的
+  // phase 处理。running attempt 必须保留 outcome，直到真实 progress / terminal / done。
+  autoResumeBookkeeping.teardownOwner(sessionId);
 }
 
 export function noteSilentStopSessionReset(sessionId: string): void {
@@ -2807,10 +2817,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       }
     }
     let broadcastEvent = redactEventForRenderer(attributedEvent);
-    let schedulerInterruptedTurnRecoveryClaimed = false;
+    let schedulerInterruptedTurnRecoveryClaim: ReturnType<
+      typeof claimSchedulerInterruptedTurnRecovery
+    > = null;
     if (isTerminalTurnErrorEvent(attributedEvent)) {
       try {
-        schedulerInterruptedTurnRecoveryClaimed = claimSchedulerInterruptedTurnRecovery(
+        schedulerInterruptedTurnRecoveryClaim = claimSchedulerInterruptedTurnRecovery(
           session.id,
           attributedEvent,
         );
@@ -2820,7 +2832,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           error: err instanceof Error ? err.message : String(err),
         });
       }
-      if (schedulerInterruptedTurnRecoveryClaimed && broadcastEvent.type === 'error') {
+      if (schedulerInterruptedTurnRecoveryClaim && broadcastEvent.type === 'error') {
         const data = broadcastEvent.data && typeof broadcastEvent.data === 'object'
           ? (broadcastEvent.data as Record<string, unknown>)
           : {};
@@ -2996,7 +3008,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // sdkError === 'authentication_failed' 以及 message 命中 authentication_error /
       // invalid api key / 401 的情形。本地会话（无 remoteHostId）无 auto-retry，不跳过。
       isRemoteAuthRetry = isRemoteAuthRetryErrorEvent(session, event);
-      if (!isPlannedUpgradeClose && !schedulerInterruptedTurnRecoveryClaimed) {
+      if (!isPlannedUpgradeClose && !schedulerInterruptedTurnRecoveryClaim) {
         agentInputCoordinatorHolder?.onTurnEvent(
           session.id,
           'error',
@@ -3169,7 +3181,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // 的出口回调 onResumableTurnErrorDiscarded 让它补落。
       const autoResumeSuppressesPersist =
         event.type === 'error' &&
-        (schedulerInterruptedTurnRecoveryClaimed ||
+        (schedulerInterruptedTurnRecoveryClaim !== null ||
           agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true ||
           agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true);
       if (
@@ -3191,7 +3203,15 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // 压住的错误详情必须在这里存一份:决策推迟场景下 onResumableTurnError 还没被调用过
       // (它自己那份 set 发生在接管成立时),不存就无从补落。同 clientId 内容,覆盖无害。
       if (autoResumeSuppressesPersist) {
-        autoResumeBookkeeping.stashSuppressedError(session.id, attributedEvent.data);
+        if (schedulerInterruptedTurnRecoveryClaim?.disposition === 'started') {
+          autoResumeBookkeeping.stashSuppressedError(
+            session.id,
+            attributedEvent.data,
+            schedulerInterruptedTurnRecoveryClaim.runId,
+          );
+        } else if (!schedulerInterruptedTurnRecoveryClaim) {
+          autoResumeBookkeeping.stashSuppressedError(session.id, attributedEvent.data);
+        }
       }
       // deferred 路径保存 turn 开始时刻:isRemoteAuthRetry 时 onTurnErrorEvent 被跳过，
       // renderer 会稍后调 persistTurnErrorDeferred IPC。在 resetTurnPersistState 清掉

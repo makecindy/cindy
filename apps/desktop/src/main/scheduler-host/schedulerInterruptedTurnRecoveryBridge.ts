@@ -1,6 +1,14 @@
 import type { AgentEvent } from '@cindy/maker-core';
 
-type RecoveryHandler = (event: AgentEvent) => boolean;
+export type SchedulerInterruptedTurnRecoveryDisposition = 'started' | 'duplicate';
+export interface SchedulerInterruptedTurnRecoveryClaim {
+  runId: string;
+  disposition: SchedulerInterruptedTurnRecoveryDisposition;
+}
+
+type RecoveryHandler = (
+  event: AgentEvent,
+) => SchedulerInterruptedTurnRecoveryDisposition | null;
 export type SchedulerInterruptedTurnRecoveryResetReason =
   | 'session-reset'
   | 'session-closed'
@@ -12,10 +20,11 @@ interface RecoveryRegistration {
 }
 
 interface RecoveryLifecycle {
-  registerOutcome(sessionId: string, clientId: string): void;
-  releaseOutcome(sessionId: string, clientId: string): void;
-  discardSuppressedError(sessionId: string): void;
-  finalizeSuppressedError(sessionId: string): void;
+  registerOutcome(sessionId: string, runId: string, clientId: string): void;
+  releaseOutcome(sessionId: string, runId: string, clientId: string): void;
+  settleOutcome(sessionId: string, runId: string, outcome: 'succeeded' | 'failed'): void;
+  discardSuppressedError(sessionId: string, runId: string): void;
+  finalizeSuppressedError(sessionId: string, runId: string): void;
 }
 
 const recoveryHandlers = new Map<string, Map<string, RecoveryRegistration>>();
@@ -56,17 +65,25 @@ export function registerSchedulerInterruptedTurnRecovery(
 export function claimSchedulerInterruptedTurnRecovery(
   sessionId: string,
   event: AgentEvent,
-): boolean {
+): SchedulerInterruptedTurnRecoveryClaim | null {
   const registrations = recoveryHandlers.get(sessionId);
-  if (!registrations) return false;
+  if (!registrations) return null;
+  const claim = (
+    runId: string,
+    registration: RecoveryRegistration | undefined,
+  ): SchedulerInterruptedTurnRecoveryClaim | null => {
+    const disposition = registration?.handler(event) ?? null;
+    return disposition ? { runId, disposition } : null;
+  };
   const eventRunId = event.turnOrigin?.runId;
   if (typeof eventRunId === 'string' && eventRunId) {
-    return registrations.get(eventRunId)?.handler(event) === true;
+    return claim(eventRunId, registrations.get(eventRunId));
   }
   // Older providers can omit turnOrigin. Only fall back when ownership is unambiguous;
   // otherwise a concurrent Schedule run could claim and persist another run's failure.
-  if (registrations.size !== 1) return false;
-  return registrations.values().next().value?.handler(event) === true;
+  if (registrations.size !== 1) return null;
+  const [runId, registration] = registrations.entries().next().value ?? [];
+  return typeof runId === 'string' ? claim(runId, registration) : null;
 }
 
 /** Stop every pending recovery lifecycle owned by this session before reset/close continues. */
@@ -98,22 +115,38 @@ export function supersedeSchedulerInterruptedTurnRecovery(sessionId: string): vo
 
 export function registerSchedulerInterruptedTurnResumeOutcome(
   sessionId: string,
+  runId: string,
   clientId: string,
 ): void {
-  lifecycle?.registerOutcome(sessionId, clientId);
+  lifecycle?.registerOutcome(sessionId, runId, clientId);
 }
 
 export function releaseSchedulerInterruptedTurnResumeOutcome(
   sessionId: string,
+  runId: string,
   clientId: string,
 ): void {
-  lifecycle?.releaseOutcome(sessionId, clientId);
+  lifecycle?.releaseOutcome(sessionId, runId, clientId);
 }
 
-export function discardSchedulerInterruptedTurnSuppressedError(sessionId: string): void {
-  lifecycle?.discardSuppressedError(sessionId);
+export function settleSchedulerInterruptedTurnResumeOutcome(
+  sessionId: string,
+  runId: string,
+  outcome: 'succeeded' | 'failed',
+): void {
+  lifecycle?.settleOutcome(sessionId, runId, outcome);
 }
 
-export function finalizeSchedulerInterruptedTurnSuppressedError(sessionId: string): void {
-  lifecycle?.finalizeSuppressedError(sessionId);
+export function discardSchedulerInterruptedTurnSuppressedError(
+  sessionId: string,
+  runId: string,
+): void {
+  lifecycle?.discardSuppressedError(sessionId, runId);
+}
+
+export function finalizeSchedulerInterruptedTurnSuppressedError(
+  sessionId: string,
+  runId: string,
+): void {
+  lifecycle?.finalizeSuppressedError(sessionId, runId);
 }
