@@ -2133,3 +2133,102 @@ describe('anthropic-compat-proxy 入站请求体 dump 开关(debugDumpRequestBod
     expect(inbound?.ctx).not.toHaveProperty('body');
   });
 });
+
+describe('tool_use id 响应流去重改写(kimi 撞车自愈)', () => {
+  const SSE_BODY =
+    'event: message_start\n' +
+    'data: {"type":"message_start","message":{"id":"chatcmpl-x","role":"assistant","content":[]}}\n\n' +
+    'event: content_block_start\n' +
+    'data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"想"}}\n\n' +
+    'event: content_block_start\n' +
+    'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"Bash_210","name":"Bash","input":{}}}\n\n' +
+    'event: content_block_start\n' +
+    'data: {"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"Bash_999","name":"Bash","input":{}}}\n\n' +
+    'event: message_stop\n' +
+    'data: {"type":"message_stop"}\n\n';
+
+  function sseUpstream() {
+    return startFakeUpstream((_i, _b, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end(SSE_BODY);
+    });
+  }
+
+  it('请求历史带铸造形态 id 时, 响应里撞车的 tool_use id 被改名, 新 id 不动', async () => {
+    const upstream = await sseUpstream();
+    upstreamClose = upstream.close;
+    const infos: Array<{ msg: string; ctx?: Record<string, unknown> }> = [];
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      logger: { info: (msg, ctx) => infos.push({ msg, ctx }) },
+    });
+
+    const res = await post(proxy.url, {
+      model: 'kimi-k3',
+      messages: [
+        { role: 'user', content: '分析' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Bash_210', name: 'Bash', input: {} }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'Bash_210', content: 'ok' }] },
+      ],
+    });
+    expect(res.status).toBe(200);
+    // 撞车 id 被改名; 新 id(Bash_999)与历史无关 → 不动
+    expect(res.text).toContain('"id":"Bash_210_dup2"');
+    expect(res.text).toContain('"id":"Bash_999"');
+    expect(res.text).not.toContain('"id":"Bash_210"');
+    // thinking / 事件框架行原样
+    expect(res.text).toContain('event: message_stop');
+    expect(
+      infos.some(
+        (l) => l.msg.includes('renamed duplicate tool_use id') && l.ctx?.from === 'Bash_210' && l.ctx?.to === 'Bash_210_dup2',
+      ),
+    ).toBe(true);
+  });
+
+  it('请求历史无铸造形态 id 时, 响应流字节透传(零干预)', async () => {
+    const upstream = await sseUpstream();
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+    });
+
+    const res = await post(proxy.url, {
+      model: 'claude-sonnet-4',
+      messages: [
+        { role: 'user', content: '分析' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_01Jx4AbC', name: 'Bash', input: {} }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_01Jx4AbC', content: 'ok' }] },
+      ],
+    });
+    expect(res.status).toBe(200);
+    expect(res.text).toBe(SSE_BODY);
+  });
+
+  it('非 SSE 响应不接管(字节透传)', async () => {
+    const upstream = await startFakeUpstream((_i, _b, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          id: 'chatcmpl-x',
+          content: [{ type: 'tool_use', id: 'Bash_210', name: 'Bash', input: {} }],
+        }),
+      );
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+    });
+
+    const res = await post(proxy.url, {
+      model: 'kimi-k3',
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Bash_210', name: 'Bash', input: {} }] },
+      ],
+    });
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('"id":"Bash_210"');
+  });
+});

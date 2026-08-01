@@ -34,6 +34,11 @@ import {
 } from './outbound-proxy.js';
 import { Socks5HttpAgent, Socks5HttpsAgent } from './socks5.js';
 import { stripNonAnthropicFields, stripToolUseProviderSpecificFields } from './transform.js';
+import {
+  collectMintedToolUseIds,
+  ToolUseIdDedupeRewriter,
+  ToolUseIdRewriteTransform,
+} from './tool-use-id-stream-rewrite.js';
 import type {
   LocalRequestHandler,
   ProxyHandle,
@@ -719,6 +724,11 @@ function forward(
   outboundProxy?: ResolvedOutboundProxy,
   // 精确推理路径覆盖；省略时沿用客户端原始 path。
   pathOverride?: string,
+  // 请求历史里「铸造形态」的 tool_use id 集合(moonshot/kimi 的 ${name}_${index}
+  // id);非空时响应 SSE 流经过撞车改名,防 CLI 把重复 id 写进转录后被
+  // ensureToolResultPairing 整段丢弃(运行中会话的空消息腐蚀,见
+  // tool-use-id-stream-rewrite.ts 头注)。null/undefined → 响应字节透传。
+  responseToolUseIds?: Set<string> | null,
 ): void {
   // 客户端已断开(典型:400 缓冲期间断开后走到透明重试)——'close' 已经发过,
   // 下面挂的中断传播 listener 永远不会触发,直接不发起上游请求。
@@ -967,6 +977,7 @@ function forward(
             clientModel,
             outboundProxy,
             pathOverride,
+            responseToolUseIds,
           );
           return;
         }
@@ -1103,6 +1114,25 @@ function forward(
 
     clientRes.writeHead(status, upstreamRes.statusMessage, respHeaders);
 
+    // kimi 撞车 id 的响应流改名(仅当请求历史带铸造形态 id 且响应是 SSE 才接管;
+    // 否则保持字节级 pipe,与扩展前一致)。observer 仍吃上游原始字节(计数/错误体
+    // 收集语义不变),CLI 客户端拿到的是改名后的流。
+    const isSse = String(upstreamRes.headers['content-type'] ?? '')
+      .toLowerCase()
+      .startsWith('text/event-stream');
+    let toolUseIdRewrite: ToolUseIdRewriteTransform | null = null;
+    if (responseToolUseIds && responseToolUseIds.size > 0 && isSse) {
+      const rewriter = new ToolUseIdDedupeRewriter(responseToolUseIds, (from, to) => {
+        logger.info?.('⇄ renamed duplicate tool_use id in response stream (kimi mint collision)', {
+          reqId,
+          from,
+          to,
+        });
+      });
+      toolUseIdRewrite = new ToolUseIdRewriteTransform(rewriter);
+      toolUseIdRewrite.on('error', (err) => failStreamingResponse('error', err));
+    }
+
     // 收 body: 总字节始终累加;status >= 400 时额外收集前 ERROR_RESPONSE_DUMP_MAX_BYTES
     // 字节做 dump 用。2xx 路径只做计数, 无内存压力。
     // 错误响应的 status 在 'response' 事件就拿到了,这里直接判断要不要开收集器。
@@ -1168,7 +1198,15 @@ function forward(
       failStreamingResponse('close');
     });
 
-    upstreamRes.pipe(clientRes);  // ← 字节级 pipe,SSE 零延迟的命脉('data' 只是计数+错误体收集, 不影响流)
+    if (toolUseIdRewrite) {
+      // 客户端断开 / 上游故障收口时把 transform 一并拆掉,避免上游继续灌进无消费者的流。
+      const rewriteStream = toolUseIdRewrite;
+      clientRes.on('close', () => rewriteStream.destroy());
+      upstreamRes.pipe(toolUseIdRewrite);
+      toolUseIdRewrite.pipe(clientRes);
+    } else {
+      upstreamRes.pipe(clientRes);  // ← 字节级 pipe,SSE 零延迟的命脉('data' 只是计数+错误体收集, 不影响流)
+    }
   });
 
   upstreamReq.on('error', (err) => {
@@ -1524,6 +1562,19 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
     const transformed = runTransforms(rawBody, contentType, transforms, transformCtx, logger);
     const outBody = transformed ?? rawBody;
 
+    // 响应流撞车改名的历史 id 集合: 只在请求历史带「铸造形态」tool_use id 时非空
+    // (moonshot/kimi 会话); rawParsed 缺失(无 routingTransform)时补一次解析,
+    // 解析失败按 undefined → null → 响应字节透传(fail-open)。
+    let parsedForRewrite: unknown = rawParsed;
+    if (parsedForRewrite === undefined && contentType.toLowerCase().startsWith('application/json')) {
+      try {
+        parsedForRewrite = JSON.parse(rawBody.toString('utf8'));
+      } catch {
+        parsedForRewrite = undefined;
+      }
+    }
+    const responseToolUseIds = collectMintedToolUseIds(parsedForRewrite);
+
     if (transformed) {
       logger.debug?.('⇄ transformed request body', {
         reqId,
@@ -1552,6 +1603,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
       extractBodyModel(rawBody),
       await resolveOutboundForTarget(route.target, reqId),
       route.pathOverride,
+      responseToolUseIds,
     );
   });
 
