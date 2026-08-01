@@ -8008,7 +8008,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 新消息进队 → 作废该会话的待续跑记账(渠道那条旧消息已被别的内容取代)。
     // 用 enqueue 入口而不是消息文本: 零产出重试重发的是原文, 文本上无从区分,
     // 而它走 unshift 不经这里, 于是不会把自己的回流作废掉。
-    onUserEnqueue: publishUiSessionIntervention,
+    onUserEnqueue: (sessionId) => {
+      // The user turn can dispatch before the backoff callback observes that its
+      // recovery was superseded. Fail the scheduler waiter synchronously so it
+      // cannot consume that unrelated turn's text/done as this run's result.
+      failPendingSchedulerAutoResume(sessionId);
+      publishUiSessionIntervention(sessionId);
+    },
     // 队列项未派发即被丢弃(stop/remove/clearSession) → 释放暂存的 accepted 副作用, 防回调表泄漏。
     onDiscardedQueuedMessage: (sessionId, item) => {
       orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);

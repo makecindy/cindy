@@ -107,6 +107,18 @@ describe('interrupted continuation enqueue contract', () => {
     );
   });
 
+  it('fails a pending scheduler auto-resume before dispatching unrelated user input', () => {
+    const userEnqueueStart = registerSource.indexOf('onUserEnqueue:');
+    const userEnqueueEnd = registerSource.indexOf('onDiscardedQueuedMessage:', userEnqueueStart);
+    expect(userEnqueueStart).toBeGreaterThan(-1);
+    expect(userEnqueueEnd).toBeGreaterThan(userEnqueueStart);
+    const userEnqueueHook = registerSource.slice(userEnqueueStart, userEnqueueEnd);
+    const failIndex = userEnqueueHook.indexOf('failPendingSchedulerAutoResume(sessionId)');
+    const publishIndex = userEnqueueHook.indexOf('publishUiSessionIntervention(sessionId)');
+    expect(failIndex).toBeGreaterThan(-1);
+    expect(publishIndex).toBeGreaterThan(failIndex);
+  });
+
   it('hands banner suppression to queued or in-flight continuation state so cancellation restores it', () => {
     expect(sessionViewSource).toMatch(
       /syntheticContinuationPending\s*=\s*\n?\s*syntheticContinuationQueued\s*\|\|\s*continuationInFlightClientId\s*!==\s*null/,
