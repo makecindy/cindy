@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   classifyShellCommand,
+  isProtectedSystemPath,
   reviewAction,
 } from './auto-review.js';
 
@@ -1243,5 +1244,35 @@ describe('classifyShellCommand — parallel 选项/深层嵌套/find -exec sh/Po
     ]) {
       expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
     }
+  });
+});
+
+describe('isProtectedSystemPath / find -exec 载荷目标作用域(第二十批评审)', () => {
+  it('Windows extended-length / device namespace 前缀不绕过系统目录判定', () => {
+    // toForwardSlashes 后 `\\?\C:\Windows` → `//?/C:/Windows`,不剥前缀会漏过盘符系统目录匹配。
+    for (const p of [
+      '\\\\?\\C:\\Windows\\System32\\drivers\\etc\\hosts',
+      '\\\\.\\C:\\Windows\\System32\\config',
+      '\\\\?\\C:\\Program Files\\x',
+    ]) {
+      expect(isProtectedSystemPath(p), p).toBe(true);
+    }
+    // 剥前缀后仍要真的落在系统目录才算:普通用户盘符路径不误判。
+    expect(isProtectedSystemPath('\\\\?\\C:\\Users\\me\\proj\\a.ts')).toBe(false);
+    // 常规(无 namespace 前缀)系统/非系统判定不变。
+    expect(isProtectedSystemPath('C:\\Windows\\x')).toBe(true);
+    expect(isProtectedSystemPath('/etc/passwd')).toBe(true);
+    expect(isProtectedSystemPath('/repo/src/a.ts')).toBe(false);
+  });
+
+  it('find -exec 载荷忽略 {} 删区外/系统字面目标 → 按载荷目标必问(即便遍历根在区内)', () => {
+    for (const c of [
+      "find build -maxdepth 0 -exec sh -c 'rm -rf /' {} \\;",
+      "find src -exec sh -c 'rm -rf /outside' {} \\;",
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 反例:载荷删的是被匹配路径占位符($0),遍历根在区内子目录 → 留灰区(scoped)。
+    expect(classifyShellCommand("find build -exec sh -c 'rm -rf \"$0\"' {} \\;", roots)).toBe('prompt');
   });
 });

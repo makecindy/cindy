@@ -187,7 +187,12 @@ const SYSTEM_WRITE_PATH_PATTERNS: readonly RegExp[] = [
 /** 路径是否落在系统/受保护目录(写入需确定性用户同意)。入参应为已归一的目标路径。 */
 export function isProtectedSystemPath(target: string): boolean {
   if (typeof target !== 'string' || target.length === 0) return false;
-  const fwd = toForwardSlashes(target);
+  // 先剥离 Windows extended-length / device namespace 前缀(`\\?\` `\\.\` `\\?\UNC\`):toForwardSlashes
+  // 后它们变成 `//?/C:/…` / `//./C:/…`,会绕过盘符系统目录匹配落入灰区(copilot 报;与 desktop
+  // filePathPolicy.stripWinNamespace 对齐)。UNC 前缀还原成 `//server/share`。
+  const fwd = toForwardSlashes(target)
+    .replace(/^\/\/[?.]\/UNC\//i, '//')
+    .replace(/^\/\/[?.]\//, '');
   return SYSTEM_WRITE_PATH_PATTERNS.some((re) => re.test(fwd));
 }
 
@@ -1022,16 +1027,29 @@ function findExecShellPayloads(tokens: string[]): string[] {
   return out;
 }
 
-/** 命令(含 shell -c 载荷,有限深递归)是否调用带 `-rf`/`--recursive` 等破坏性标志的 rm(不判目标范围)。 */
-function commandRunsDestructiveRm(command: string, depth = 0): boolean {
-  if (depth >= MAX_EXEC_REVIEW_DEPTH) return true; // 深到无法静态求证 → 保守当作破坏性
+/**
+ * 命令(含 shell -c 载荷,有限深递归)里破坏性 rm(`-rf`/`--recursive`)的目标操作数;`null` = 没有
+ * 破坏性 rm。深到无法静态求证时返回 `['/']` 哨兵(始终触发同意)。用于 find -exec 载荷的目标级作用域判定。
+ */
+function commandDestructiveRmTargets(command: string, depth = 0): string[] | null {
+  if (depth >= MAX_EXEC_REVIEW_DEPTH) return ['/']; // 不可静态求证 → 哨兵目标始终需同意
+  let acc: string[] | null = null;
   for (const { text } of splitExecutableSegments(command)) {
     const tokens = unwrapWrappers(tokenize(text));
-    if (destructiveRmTargets(tokens) !== null) return true;
+    const direct = destructiveRmTargets(tokens);
+    if (direct) acc = [...(acc ?? []), ...direct];
     const payload = shellCommandPayload(tokens);
-    if (payload && commandRunsDestructiveRm(payload, depth + 1)) return true;
+    if (payload) {
+      const inner = commandDestructiveRmTargets(payload, depth + 1);
+      if (inner) acc = [...(acc ?? []), ...inner];
+    }
   }
-  return false;
+  return acc;
+}
+
+/** find -exec 载荷里引用被匹配路径的占位目标(`{}`、`$0`..`$9`、`$@`、`$*`):其删除作用域由遍历根决定。 */
+function isMatchedPathPlaceholder(target: string): boolean {
+  return target === '{}' || /^\$(?:\d+|[@*])$/.test(target);
 }
 
 /** 系统/区外批量破坏与受保护分支强推不能只交给模型裁决。 */
@@ -1067,10 +1085,16 @@ function scopedDestructionNeedsConsent(
       const nestedRm = tokens.findIndex((token) => executableName(token) === 'rm');
       const directRm = nestedRm >= 0 && destructiveRmTargets(tokens.slice(nestedRm)) !== null;
       // -exec/-execdir 经 shell 间接删除:载荷里的 rm 藏在引号内的单 token,直接 findIndex('rm') 命不中
-      // (codex 报 `find / -exec sh -c 'rm -rf "$0"' {} \;`)→ 抽出 -exec 的 shell -c 载荷递归查破坏性 rm。
-      const execRm = findExecShellPayloads(tokens).some(
-        (payload) => commandRunsDestructiveRm(payload, depth + 1));
-      if ((deletes || directRm || execRm) && findRoots.some((target) =>
+      // (codex 报 `find / -exec sh -c 'rm -rf "$0"' {} \;`)→ 抽出 -exec 的 shell -c 载荷取其 rm 目标。
+      const execRmTargets = findExecShellPayloads(tokens)
+        .flatMap((payload) => commandDestructiveRmTargets(payload, depth + 1) ?? []);
+      // 载荷里忽略 {} 直接删的字面/独立目标(`rm -rf /`)按其自身作用域判定 —— 即使遍历根在区内也必问
+      // (codex 报 `find build -maxdepth 0 -exec sh -c 'rm -rf /' {} \;`)。
+      if (execRmTargets.some((target) => !isMatchedPathPlaceholder(target)
+        && destructiveTargetNeedsConsent(target, workspaceRoots, segmentOpts))) return true;
+      // 载荷删的是被匹配到的路径(占位符),或 -delete/直接 -exec rm → 删除作用域由遍历根决定。
+      const execMatchedRm = execRmTargets.some(isMatchedPathPlaceholder);
+      if ((deletes || directRm || execMatchedRm) && findRoots.some((target) =>
         destructiveTargetNeedsConsent(target, workspaceRoots, segmentOpts))) return true;
     }
     // xargs / parallel 动态补入的目标无法从 argv 证明在工作区内；递归/强制 rm 必须保留用户同意
