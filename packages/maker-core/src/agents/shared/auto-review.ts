@@ -542,7 +542,9 @@ function unwrapCommand(
         // timeout -s/--signal SIG、-k/--kill-after DUR:带独立值选项,须连值一起消费 —— 否则停在 SIG(如 KILL)
         // 把真正的内层命令(rm 等)当参数漏掉(codex 报 `timeout -s KILL 5 rm -rf /outside`)。
         if (head === 'timeout' && /^(?:-s|--signal|-k|--kill-after)$/.test(t)) { i += 2; continue; }
-        if (t.startsWith('-') || /^[0-9]+[smhd]?$/.test(t)) { i++; continue; }
+        // 时长可为浮点(timeout 文档:DURATION 是浮点数,`timeout 0.5 rm …`),整数正则会停在 0.5 漏掉内层
+        // 命令(codex 报)→ 接受 `0.5` / `1.5s` / `.5` 等小数时长。
+        if (t.startsWith('-') || /^\d*\.?\d+[smhd]?$/.test(t)) { i++; continue; }
         break;
       }
       toks = toks.slice(i);
@@ -1042,7 +1044,9 @@ function dumpsFullEnvironmentCommand(tokens: string[]): boolean {
   if (bin === 'set') return args.length === 0;
   if (bin === 'export') return operands.length === 0;          // 裸 export / export -p
   if (bin === 'declare' || bin === 'typeset') {
-    return operands.length === 0 && args.some((a) => /^-[A-Za-z]*[xp]/.test(a)); // -x/-p 且无具名
+    // 无具名操作数即列出全部变量+值:裸 `declare`/`typeset`(help declare:无 NAME 显示所有变量属性与值),
+    // 或带 -x/-p/-f 等列举选项(codex 报:此前漏了裸调用形态)。有 NAME 具名不算。
+    return operands.length === 0;
   }
   return false;
 }

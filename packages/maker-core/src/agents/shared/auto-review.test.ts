@@ -1467,3 +1467,24 @@ describe('自审补: su/runuser 提权 + 输出进程替换分段(第二十五�
     expect(classifyShellCommand('tee >(cat; wc -l) < in', roots)).toBe('prompt');
   });
 });
+
+describe('timeout 浮点时长 / 裸 declare·typeset 全环境导出(第二十六批评审)', () => {
+  it('timeout 浮点时长不遮蔽内层破坏命令', () => {
+    for (const c of [
+      'timeout 0.5 rm -rf /outside',
+      'timeout 1.5s rm -rf /outside',
+      'timeout .5 rm -rf /outside',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('裸 declare / typeset(无具名)= 全环境导出 exfil 红线', () => {
+    for (const c of ['declare', 'typeset', 'declare -p', 'typeset -x']) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 反例:具名 declare/typeset 不是全环境导出。
+    expect(classifyShellCommand('declare foo=bar', roots)).not.toBe('prompt-each-time');
+    expect(classifyShellCommand('typeset -i count', roots)).not.toBe('prompt-each-time');
+  });
+});
