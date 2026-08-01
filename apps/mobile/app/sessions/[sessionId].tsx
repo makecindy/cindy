@@ -2016,7 +2016,8 @@ export default function SessionScreen() {
   );
   // 模型 pill:展开态进 toolbar,收起态进 leading(见 renderComposerCollapsedLeading)。
   // 两处共用同一颗,避免收起时只能进选择器才知道当前模型(#900)。
-  const renderComposerModelPill = (testID: string) => (
+  // 收起态另传 maxWidth:长/自定义 label 不得把 inputFrame 挤没(toolbar 仍不设上限)。
+  const renderComposerModelPill = (testID: string, maxWidth?: number) => (
     composerRuntimeSummary ? (
       <ComposerRuntimePill
         fastOn={composerPillFastOn}
@@ -2041,6 +2042,7 @@ export default function SessionScreen() {
             logoKind={composerPillSourceProvider?.logoKind}
           />
         ) : null}
+        maxWidth={maxWidth}
         onPress={toggleComposerModelPicker}
         testID={testID}
       />
@@ -5468,9 +5470,10 @@ export default function SessionScreen() {
 
   // 收起态 leading:[模型 chip][附件徽标]。模型常驻可见、点开选择器(#900);
   // card 态 leading 被 MobileComposerInputRow 收掉,改由 toolbar 的同款 pill 承接。
+  // pill maxWidth 200:长 label 截断;与 inputFrameMinWidth 120 互为兜底。
   const renderComposerCollapsedLeading = () => (
     <>
-      {renderComposerModelPill('session.composerCollapsedModelButton')}
+      {renderComposerModelPill('session.composerCollapsedModelButton', 200)}
       {renderComposerCollapsedAttachmentBadge()}
     </>
   );
@@ -7891,6 +7894,8 @@ export default function SessionScreen() {
                     // 听写期间把输入区撑到 44pt 触控目标:命中层盖在 inputFrame 上,
                     // hitSlop 越不过父边界(见常量注释)。
                     inputFrameMinHeight={voiceIsListening ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}
+                    // 收起态 leading 有模型 pill:给输入区留可见/可点宽度;展开态无 leading,不必占位。
+                    inputFrameMinWidth={composerCardActive ? undefined : 120}
                     inputElement={(
                       <ComposerRichInput
                         ref={composerInputRef}
@@ -8517,6 +8522,7 @@ function ComposerRuntimePill({
   fastOn = false,
   label,
   leading,
+  maxWidth,
   onPress,
   testID,
   tone,
@@ -8527,6 +8533,8 @@ function ComposerRuntimePill({
   label: string;
   /** 前缀节点(模型药丸传来源官方 mark);与 icon 二选一。 */
   leading?: ReactNode;
+  /** 收起态 leading 用:限制长/自定义 label 宽度;工具排调用不传(故意不设上限)。 */
+  maxWidth?: number;
   onPress(): void;
   testID: string;
   tone?: 'bypassPermissions';
@@ -8539,7 +8547,7 @@ function ComposerRuntimePill({
       accessibilityLabel={label}
       hitSlop={COMPOSER_CONTROL_HIT_SLOP}
       onPress={onPress}
-      style={styles.composerRuntimePill}
+      style={[styles.composerRuntimePill, maxWidth != null && { maxWidth }]}
       testID={testID}
     >
       {leading ?? null}
@@ -9068,8 +9076,9 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontWeight: fontWeight.medium,
     lineHeight: lineHeight.caption,
   },
-  // 不设 maxWidth 硬上限:模型名尽量显示全,只在工具排空间不足时才收缩截断
+  // 工具排默认不设 maxWidth 硬上限:模型名尽量显示全,空间不足时再收缩截断
   // (flexShrink + 文本 numberOfLines,剩余空间归 toolbarSpacer)。
+  // 收起态 leading 经 ComposerRuntimePill.maxWidth 另行封顶,避免挤掉输入区。
   composerRuntimePill: {
     alignItems: 'center',
     backgroundColor: colors.sheetActionSurface,
