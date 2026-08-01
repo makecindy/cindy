@@ -345,8 +345,11 @@ describe('loadCatalog', () => {
   it('keeps a newer cached modelRegistry when a valid remote Catalog is stale', async () => {
     const url = 'https://catalog.example.test/providers.json';
     const registry = JSON.parse(JSON.stringify(BUNDLED_CATALOG.modelRegistry));
+    const xai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
+    if (!xai) throw new Error('missing bundled xAI provider');
     const older: Catalog = {
       ...MINIMAL,
+      providers: [...MINIMAL.providers, { ...xai, name: 'STALE-XAI' }],
       modelRegistry: {
         ...registry,
         updatedAt: '2026-07-30T00:00:00.000Z',
@@ -357,6 +360,7 @@ describe('loadCatalog', () => {
     };
     const newer: Catalog = {
       ...MINIMAL,
+      providers: [...MINIMAL.providers, { ...xai, name: 'NEWER-LKG-XAI' }],
       modelRegistry: {
         ...registry,
         updatedAt: '2026-08-01T00:00:00.000Z',
@@ -382,8 +386,12 @@ describe('loadCatalog', () => {
     expect(
       loaded.catalog.modelRegistry?.models.find((entry) => entry.id === 'openai/gpt-5.6-sol')?.name,
     ).toBe('NEWER-LKG');
-    expect(JSON.parse(writeCache.mock.calls[0]![1]).modelRegistry.updatedAt)
-      .toBe('2026-08-01T00:00:00.000Z');
+    expect(loaded.catalog.providers.find((provider) => provider.id === 'xai')?.name)
+      .toBe('NEWER-LKG-XAI');
+    const persisted = JSON.parse(writeCache.mock.calls[0]![1]);
+    expect(persisted.modelRegistry.updatedAt).toBe('2026-08-01T00:00:00.000Z');
+    expect(persisted.providers.find((provider: Provider) => provider.id === 'xai')?.name)
+      .toBe('NEWER-LKG-XAI');
   });
 
   it('reads LKG even when the startup network budget is zero and rejects bad cache', async () => {

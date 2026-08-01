@@ -280,12 +280,14 @@ function newerModelRegistry(primary: Catalog, fallback: Catalog): Catalog['model
 }
 
 /**
- * 远端完整 Catalog 可以继续前进，但 modelRegistry 不能被 CDN 旧副本或灰度回滚降级。
- * updatedAt 只排序 registry 段，不拿它否定同一响应里的 provider / preset 变化。
+ * modelRegistry is the only monotonic revision carried by the Catalog today. If it proves the
+ * LKG is newer, preserve that complete snapshot: combining its registry with older remote xAI
+ * providers/presets would create a catalog version that never existed and can reintroduce retired
+ * models. A future top-level Catalog revision may allow finer-grained arbitration.
  */
-function preserveNewerCachedRegistry(remote: Catalog, cached: Catalog): Catalog {
+function preserveNewerCachedCatalog(remote: Catalog, cached: Catalog): Catalog {
   const modelRegistry = newerModelRegistry(remote, cached);
-  return modelRegistry !== remote.modelRegistry ? { ...remote, modelRegistry } : remote;
+  return modelRegistry !== remote.modelRegistry ? cached : remote;
 }
 
 /**
@@ -347,11 +349,11 @@ export async function loadCatalogWithSource(
               const cachedText = await io.readCache(remoteUrl);
               if (cachedText !== null) {
                 const cached = parseRemoteCatalog(cachedText, allowLegacyModelMeta);
-                const merged = preserveNewerCachedRegistry(parsed, cached);
+                const merged = preserveNewerCachedCatalog(parsed, cached);
                 if (merged !== parsed) {
                   parsed = merged;
                   cacheText = JSON.stringify(merged);
-                  log(io, 'warn', 'remote model registry is older than LKG; preserving newer registry', {
+                  log(io, 'warn', 'remote catalog registry is older than LKG; preserving complete newer snapshot', {
                     url: logUrl,
                     remoteUpdatedAt: remoteRegistryUpdatedAt,
                     cachedUpdatedAt: registryUpdatedAt(cached),

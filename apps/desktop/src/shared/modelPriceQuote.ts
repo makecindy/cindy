@@ -294,14 +294,13 @@ export function getModelPriceQuote(
     // server registry order, so the first matching route is the server-curated current family.
     if (normalizedModel === 'opus' || normalizedModel === 'sonnet' || normalizedModel === 'haiku') {
       const familyPrefix = `claude-${normalizedModel}-`;
-      for (const [key, quote] of Object.entries(providerPricing)) {
+      for (const key of Object.keys(providerPricing)) {
         const routeModel = key.split('\u0000', 1)[0];
-        if (
-          routeModel.startsWith(familyPrefix) &&
-          (!agent || key === modelPricingKey(routeModel, agent) || key === routeModel)
-        ) {
-          return quote;
-        }
+        if (!routeModel.startsWith(familyPrefix)) continue;
+        // Select the server-curated canonical family route first, then resolve that route through
+        // exactQuote so an agent-specific user override wins over its generic reference quote.
+        const familyQuote = exactQuote(routeModel);
+        if (familyQuote) return familyQuote;
       }
     }
   }

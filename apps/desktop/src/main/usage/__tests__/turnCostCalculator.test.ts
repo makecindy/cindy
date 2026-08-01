@@ -754,6 +754,34 @@ describe('subscription value and usage details', () => {
     ).toMatchObject({ amount: 3, kind: 'value-estimate' });
   });
 
+  it('prefers an agent-specific user override for a bare Claude family alias', () => {
+    const canonical = 'claude-sonnet-4-6';
+    const reference = quote(canonical, 3, 15, {
+      providerId: 'anthropic',
+      source: 'provider-reference',
+      approximate: true,
+    });
+    const override = quote(canonical, 9, 45, {
+      providerId: 'anthropic',
+      source: 'user-override',
+      approximate: true,
+    });
+    const pricing = {
+      anthropic: {
+        [canonical]: reference,
+        [`${canonical}\u0000claude-code`]: override,
+      },
+    };
+
+    expect(
+      estimateClaudeSubscriptionTurnValue(
+        [resolvedModel('sonnet', { inputTokens: 1_000_000 })],
+        'USD',
+        pricing,
+      ),
+    ).toMatchObject({ amount: 9, kind: 'value-estimate' });
+  });
+
   it('does not estimate non-Anthropic, already-costed, unknown, or zero-token entries', () => {
     expect(
       estimateClaudeSubscriptionTurnValue(
