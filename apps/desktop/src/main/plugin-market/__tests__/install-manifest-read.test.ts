@@ -26,6 +26,8 @@ vi.mock('../../cindy-brain/index.js', () => ({
 vi.mock('../../cindy-brain/forge.js', () => ({
   packGhostDirToFile: brain.packGhostDirToFile,
 }));
+const logger = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
+vi.mock('../../logger.js', () => ({ createLogger: () => logger }));
 
 import type { GhostManifest } from '../../../shared/ghost.js';
 import { installCustomMarketPlugin } from '../install';
@@ -46,6 +48,7 @@ let workDir: string;
 beforeEach(async () => {
   workDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-market-install-'));
   brain.packGhostDirToFile.mockClear();
+  logger.warn.mockClear();
 });
 
 afterEach(async () => {
@@ -153,10 +156,37 @@ describe('installCustomMarketPlugin · 身份卡读取闸', () => {
           pluginDir: discovered, // 传发现时的规范路径
           expected: GOOD_MANIFEST as unknown as GhostManifest,
         }),
-      ).rejects.toMatchObject({ code: 'GHOST_FILE_INVALID' });
+      ).rejects.toMatchObject({
+        code: 'GHOST_FILE_INVALID',
+        // 专用原因不得被下面那个通用 catch 的 "manifest missing or unreadable"
+        // 覆盖:事后排查要能区分"有人中途替换了目录"与"文件确实损坏"。
+        message: expect.stringContaining('changed after discovery'),
+      });
       expect(brain.packGhostDirToFile).not.toHaveBeenCalled();
     },
   );
+
+  it('清单确实损坏 → 通用文案给 Renderer,原始原因留 main 日志', async () => {
+    // Renderer 只该拿到不泄露宿主细节的通用文案,但 main 日志必须留下原因,
+    // 否则"损坏"与"被替换"两种情况在日志里完全一样,排查无从下手。
+    const pluginDir = path.join(workDir, 'plugin-broken');
+    await fs.promises.mkdir(pluginDir, { recursive: true });
+    await fs.promises.writeFile(path.join(pluginDir, 'ghost.json'), '{not json');
+
+    await expect(
+      installCustomMarketPlugin({
+        pluginDir: await fs.promises.realpath(pluginDir),
+        expected: GOOD_MANIFEST as unknown as GhostManifest,
+      }),
+    ).rejects.toMatchObject({
+      code: 'GHOST_FILE_INVALID',
+      message: expect.stringContaining('missing or unreadable'),
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      'custom market plugin manifest unreadable',
+      expect.objectContaining({ detail: expect.stringMatching(/JSON|token|Unexpected/i) }),
+    );
+  });
 
   it('结构守卫:install.ts 不允许出现按路径的 readFile', async () => {
     // 发现/安装/打包三条链路都必须走 readBoundedFileNoFollow;任何一处退回

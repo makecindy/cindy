@@ -24,6 +24,8 @@ import {
   rejectReservedGhostIdForCustomMarket,
 } from '../cindy-brain/index.js';
 import { packGhostDirToFile } from '../cindy-brain/forge.js';
+import { createLogger } from '../logger.js';
+import { isIpcError } from '../../shared/ipc-errors.js';
 import { redactAbsolutePaths } from './sources/git.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
@@ -38,6 +40,8 @@ import {
  * 逐字比对，确认到打包之间目录被改动时拒绝滑入（与服务端市场的
  * expectedReleaseId 同一防线，但自定义市场必须核对权限与能力声明本身）。
  */
+const log = createLogger('plugin-market-install');
+
 /** 进 IPC 的打包/校验详情统一脱敏(宿主路径、控制符)并截断,原文留 main 日志。 */
 function sanitizeInstallDetail(message: string): string {
   return (
@@ -106,7 +110,14 @@ export async function installCustomMarketPlugin(input: {
     );
     if (bytes === null) throw new Error('not a bounded regular file');
     raw = JSON.parse(bytes.toString('utf8'));
-  } catch {
+  } catch (error) {
+    // 已经带 code 的 IPC 错误如实上抛,不被下面的通用文案覆盖。
+    if (isIpcError(error)) throw error;
+    // Renderer 只拿到通用文案(不泄露宿主细节),但 main 日志必须留下原始原因:
+    // 少了这一行,"清单确实损坏"与"有人中途替换了插件目录"在事后排查时无从区分。
+    log.warn('custom market plugin manifest unreadable', {
+      detail: sanitizeInstallDetail(error instanceof Error ? error.message : String(error)),
+    });
     throwIpcError('GHOST_FILE_INVALID', 'The Plugin manifest is missing or unreadable');
   }
   // 前置快速失败:清单非法或官方保留 id 直接拒,避免无谓打包。

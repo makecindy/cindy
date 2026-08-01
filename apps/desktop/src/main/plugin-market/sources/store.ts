@@ -6,6 +6,7 @@
  * 不复制发现到的插件数据——快照时重新发现，磁盘上的克隆目录才是事实。
  */
 import type { MarketSource, MarketSourceConfig } from '../../../shared/pluginMarket.js';
+import { marketSourceKey } from '../../../shared/pluginMarket.js';
 import { atomicWriteFileSync, readAtomicFileSync } from '../../utils/atomicWriteFile.js';
 
 const SOURCES_SCHEMA_VERSION = 1;
@@ -133,15 +134,16 @@ export class MarketSourceStore {
   }
 }
 
+/**
+ * 两个来源是否同一个。判据直接复用 `marketSourceKey` —— 它就是本仓库对"来源身份"
+ * 的唯一定义(账本所有权校验、缓存 slug 都用它),这里再写一套等价逻辑只会漂移。
+ *
+ * 尤其不能用 `sparsePaths.join('\n')` 比较列表:分隔符碰撞(`['a\nb']` 与
+ * `['a','b']` join 结果相同)会让两个不同的来源被判成同一个。`marketSourceKey`
+ * 用 JSON 序列化,数组边界不可伪造(它自己也有碰撞对抗测试)。当前 parse 层的
+ * FORBIDDEN_SOURCE_CHARS 已经拒掉换行、这条路走不通,但身份判据不该依赖"上游恰好
+ * 拦住了某个字符"这种远距离前提。
+ */
 export function sourcesEqual(a: MarketSource, b: MarketSource): boolean {
-  if (a.type !== b.type) return false;
-  if (a.type === 'local' && b.type === 'local') return a.path === b.path;
-  if (a.type === 'git' && b.type === 'git') {
-    return (
-      a.url === b.url &&
-      (a.ref ?? null) === (b.ref ?? null) &&
-      a.sparsePaths.join('\n') === b.sparsePaths.join('\n')
-    );
-  }
-  return false;
+  return marketSourceKey(a) === marketSourceKey(b);
 }

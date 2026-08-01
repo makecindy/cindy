@@ -143,4 +143,58 @@ describe('MarketSourceStore', () => {
       ),
     ).toBe(true);
   });
+
+  it('sourcesEqual 不被 sparsePaths 的分隔符碰撞骗过', () => {
+    // 旧写法 `sparsePaths.join('\n')` 会把这两个**不同**的来源判成同一个:
+    // ['a\nb'] 与 ['a','b'] 的 join 结果字面相同。身份判据必须让数组边界
+    // 不可伪造(与 marketSourceKey 同一实现)。
+    expect(
+      sourcesEqual(
+        { type: 'git', url: 'u', sparsePaths: ['a\nb'] },
+        { type: 'git', url: 'u', sparsePaths: ['a', 'b'] },
+      ),
+    ).toBe(false);
+    // 同样不能被顺序变化骗过(顺序不同 = 不同的稀疏检出集合声明)。
+    expect(
+      sourcesEqual(
+        { type: 'git', url: 'u', sparsePaths: ['a', 'b'] },
+        { type: 'git', url: 'u', sparsePaths: ['b', 'a'] },
+      ),
+    ).toBe(false);
+    // 真正相同的仍判相同。
+    expect(
+      sourcesEqual(
+        { type: 'git', url: 'u', sparsePaths: ['a', 'b'] },
+        { type: 'git', url: 'u', sparsePaths: ['a', 'b'] },
+      ),
+    ).toBe(true);
+  });
+
+  it('sourcesEqual 与 marketSourceKey 是同一判据(不允许两套逻辑漂移)', () => {
+    const samples: Array<[Parameters<typeof sourcesEqual>[0], Parameters<typeof sourcesEqual>[1]]> = [
+      [
+        { type: 'local', path: '/a' },
+        { type: 'local', path: '/a' },
+      ],
+      [
+        { type: 'local', path: '/a' },
+        { type: 'local', path: '/b' },
+      ],
+      [
+        { type: 'git', url: 'u', ref: 'v1', sparsePaths: ['x'] },
+        { type: 'git', url: 'u', ref: 'v1', sparsePaths: ['x'] },
+      ],
+      [
+        { type: 'git', url: 'u', ref: 'v1', sparsePaths: ['x'] },
+        { type: 'git', url: 'u', ref: 'v2', sparsePaths: ['x'] },
+      ],
+      [
+        { type: 'local', path: '/a' },
+        { type: 'git', url: 'u', sparsePaths: [] },
+      ],
+    ];
+    for (const [a, b] of samples) {
+      expect(sourcesEqual(a, b)).toBe(marketSourceKey(a) === marketSourceKey(b));
+    }
+  });
 });
