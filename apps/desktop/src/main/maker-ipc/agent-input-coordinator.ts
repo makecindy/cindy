@@ -1018,6 +1018,7 @@ export class AgentInputCoordinator {
     reason: string,
   ): Promise<AgentInputProjection> {
     const state = this.getState(sessionId);
+    this.invalidateAbortBoundaryForNewTurn(state);
     const active: ActiveTurn = {
       item: null,
       delivery: 'turn',
@@ -1336,6 +1337,7 @@ export class AgentInputCoordinator {
     accepted.error = null;
     accepted.stickyError = null;
     accepted.recovery = null;
+    this.invalidateAbortBoundaryForNewTurn(accepted);
     accepted.activeTurn = {
       item,
       delivery: 'steer',
@@ -1469,11 +1471,13 @@ export class AgentInputCoordinator {
           });
         }
         // Codex normally keeps this lock until its terminal event because the
-        // abort RPC may resolve before the turn really stops.  If the host
-        // reconciliation above has proved that the live session is idle,
-        // however, there is no terminal event left to wait for and retaining
-        // the lock would strand the preserved queue just like Claude's case.
-        if (this.deps.getAgentKind(sessionId) === 'codex' && !reconciledIdle) return;
+        // abort RPC may resolve before the turn really stops. If the owner
+        // boundary also makes the agent kind unavailable, fail closed for the
+        // same reason instead of treating an unknown session as Claude. Once
+        // the live session is confirmed idle there is no terminal event left
+        // to wait for, so the preserved queue can safely be released.
+        const agentKind = this.deps.getAgentKind(sessionId);
+        if (!reconciledIdle && agentKind !== 'claude-code') return;
         this.releaseAbortLockAndDrain(sessionId, 'abort-promise', { clearActiveTurn: true });
       });
 
@@ -2281,6 +2285,7 @@ export class AgentInputCoordinator {
       state.error = null;
     }
     state.recovery = null;
+    this.invalidateAbortBoundaryForNewTurn(state);
     const active: ActiveTurn = {
       item: head,
       delivery: 'turn',
@@ -2915,6 +2920,17 @@ export class AgentInputCoordinator {
     state.abortBoundaryToken = null;
     this.emit(sessionId);
     this.scheduleDrain(sessionId, reason);
+  }
+
+  /**
+   * A stop abort is scoped to the turn that existed when stop was requested.
+   * A non-preserving stop does not keep the abort lock, so a new enqueue may
+   * start another turn before the old vendor abort promise settles. Invalidate
+   * the old token at that new-turn boundary; otherwise the late abort callback
+   * would pass the state/generation check and clear the replacement turn.
+   */
+  private invalidateAbortBoundaryForNewTurn(state: SessionInputState): void {
+    state.abortBoundaryToken = null;
   }
 
   private registerSteerAbortController(sessionId: string, clientId: string, controller: AbortController): void {

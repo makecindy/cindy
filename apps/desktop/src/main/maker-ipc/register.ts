@@ -7361,26 +7361,75 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    * whether work is still running; the desktop tracker is only an event-driven
    * view and can remain stale across owner-boundary teardown.
    */
+  const getStableSessionForTurnBoundary = (sessionId: string): WiredSession | null => {
+    const wired = wiredSessionsById.get(sessionId)?.session;
+    if (wired) return wired;
+    try {
+      return maker.getSession(sessionId) ?? null;
+    } catch (err) {
+      // Dynamic Maker intentionally fails closed while an account owner is
+      // being replaced. A missing stable wiring snapshot means we cannot
+      // authoritatively reconcile this session yet; callers must retain their
+      // boundary and wait for the normal close/settle path.
+      log.warn('session lookup unavailable during turn-boundary reconciliation', {
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  };
+
   const reconcileSessionTurnIdle = (sessionId: string, source: string): boolean => {
-    const sess = maker.getSession(sessionId);
-    if (sess?.isTurnRunning()) return false;
+    const sess = getStableSessionForTurnBoundary(sessionId);
+    if (!sess) return false;
+    let liveSessionIdle = false;
+    try {
+      liveSessionIdle = !sess.isTurnRunning();
+    } catch (err) {
+      log.warn('live session turn-state lookup failed during reconciliation', {
+        sessionId,
+        source,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+    if (!liveSessionIdle) return false;
     const trackerStale = sessionTurnActivityTracker.isSessionInTurn(sessionId) ||
       sessionTurnActivityTracker.isSessionTurnDispatchBoundaryBusy(sessionId);
     const hadZombieInteraction = hasPendingAgentInteractionForSession(sessionId);
-    if (!trackerStale && !hadZombieInteraction) return false;
-    log.warn('reconciling stale session turn boundary', {
-      sessionId,
-      source,
-      trackerStale,
-      hadZombieInteraction,
-    });
+    if (trackerStale || hadZombieInteraction) {
+      log.warn('reconciling stale session turn boundary', {
+        sessionId,
+        source,
+        trackerStale,
+        hadZombieInteraction,
+        liveSessionIdle,
+      });
+    } else {
+      // The owner-boundary wiring guard can drop the isRunning=true event
+      // entirely. In that case the live Session being idle is still the
+      // authoritative proof that this abort boundary can be released.
+      log.info('confirmed live session idle during turn-boundary reconciliation', {
+        sessionId,
+        source,
+      });
+    }
     sessionTurnActivityTracker.setSessionInTurn(sessionId, false);
     try {
       // The marker write is best-effort and ordered behind pending message
       // persistence. It may retry/settle after an owner boundary is available.
       markTurnEndedAfterPersistDrain(sessionId);
       noteClaudeSessionTurnState(sessionId, false);
-      void pendingCredentialSwitchHolder?.onTurnSettled(sessionId);
+      const pendingCredentialSwitchSettled = pendingCredentialSwitchHolder?.onTurnSettled(sessionId);
+      if (pendingCredentialSwitchSettled) {
+        void pendingCredentialSwitchSettled.catch((err) => {
+          log.warn('pending credential switch settle failed during reconciliation', {
+            sessionId,
+            source,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }
       deferredCodexRestartHolder?.onSessionSettled();
       agentInputCoordinatorHolder?.onExternalTurnSettled(sessionId);
       refreshRemoteCodexMcpOnTurnSettledHolder?.(sessionId);
@@ -7509,7 +7558,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       steerToAgentAccepted(sessionId, message, sendOpts),
     abortSession: async (sessionId) => {
       markWorkerManualInterruptIfKnown(sessionId, 'input_stop');
-      const sess = maker.getSession(sessionId);
+      const sess = getStableSessionForTurnBoundary(sessionId);
       if (!sess) return;
       handleAgentIslandSessionStopped(sess);
       try {
@@ -7522,7 +7571,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     },
     isTurnRunning: (sessionId) => {
-      const sess = maker.getSession(sessionId);
+      const sess = getStableSessionForTurnBoundary(sessionId);
       return isSessionTurnDispatchBoundaryBusy(sessionTurnActivityTracker, sessionId, sess);
     },
     reconcileTurnIdle: (sessionId) => {
@@ -7531,7 +7580,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return reconcileSessionTurnIdle(sessionId, 'authoritative-idle');
     },
     hasPendingInteraction: hasPendingAgentInteractionForSession,
-    getAgentKind: (sessionId) => maker.getSession(sessionId)?.agentKind ?? null,
+    getAgentKind: (sessionId) => getStableSessionForTurnBoundary(sessionId)?.agentKind ?? null,
     getSdkSessionId: async (sessionId) => {
       const meta = await maker.getSessionMeta(sessionId).catch(() => null);
       return meta?.sdkSessionId;

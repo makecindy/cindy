@@ -3591,6 +3591,28 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
     expect(latestProjection(h.projections).queueAbortPending).toBe(false);
   });
 
+  it('retains an abort lock when owner switching hides the agent kind and live idle cannot be confirmed', async () => {
+    const h = createHarness();
+    const sid = 'stop-owner-boundary-agent-unknown';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', 'second');
+    h.setAgentKind(null);
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.enqueue(sid, second);
+    await flush();
+
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+    h.coordinator.resume(sid);
+    h.setRunning(false);
+    await flush();
+
+    expect(h.reconcileTurnIdle).toHaveBeenCalledWith(sid);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).queueAbortPending).toBe(true);
+  });
+
   it('ignores an old abort completion after clearSession starts a new turn', async () => {
     const h = createHarness();
     const sid = 'stop-abort-clear-new-turn';
@@ -3617,6 +3639,53 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
 
     h.reconcileTurnIdle.mockReturnValueOnce(true);
+    abort.resolve();
+    await flush();
+
+    const state = (
+      h.coordinator as unknown as {
+        getState: (id: string) => { activeTurn: { item: AgentInputQueuedMessage | null } | null };
+      }
+    ).getState(sid);
+    expect(state.activeTurn?.item?.clientId).toBe('q-new');
+    expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { agentKind: 'claude-code' as const, providerId: 'xd', model: 'claude-opus-5' },
+    { agentKind: 'codex' as const, providerId: 'xd', model: 'gpt-5.5' },
+  ])('invalidates an old abort token when $agentKind starts a new turn after a non-preserving stop', async ({
+    agentKind,
+    providerId,
+    model,
+  }) => {
+    const h = createHarness();
+    const sid = `stop-abort-new-turn-${agentKind}`;
+    const first = makeItem('q-1', 'first', {
+      createOpts: { ...makeItem('tmp', 'tmp').createOpts, agentKind, providerId, model },
+    });
+    const replacement = makeItem('q-new', 'replacement', {
+      createOpts: { ...makeItem('tmp-new', 'tmp-new').createOpts, agentKind, providerId, model },
+    });
+    const abort = deferred<void>();
+    const beforeDispatch = deferred<void>();
+    h.setAgentKind(agentKind);
+    h.abortSession.mockImplementationOnce(() => abort.promise);
+    h.beforeDispatchUserTurn.mockImplementationOnce(() => beforeDispatch.promise);
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.stop(sid, { keepQueue: false });
+    h.setRunning(false);
+    beforeDispatch.resolve();
+    await flush();
+
+    // A non-preserving stop does not hold queueAbortPending, so a replacement
+    // turn can start while the old vendor abort promise is still unresolved.
+    h.coordinator.enqueue(sid, replacement);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+
     abort.resolve();
     await flush();
 

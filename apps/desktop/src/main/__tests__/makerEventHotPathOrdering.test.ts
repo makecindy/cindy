@@ -221,7 +221,7 @@ describe('maker:event hot path ordering', () => {
     expect(coordinatorAbortEnd).toBeGreaterThan(coordinatorAbortStart);
     expectOrder(
       coordinatorAbortSource,
-      'const sess = maker.getSession(sessionId);',
+      'const sess = getStableSessionForTurnBoundary(sessionId);',
       'if (!sess) return;',
     );
     expectOrder(
@@ -271,6 +271,27 @@ describe('maker:event hot path ordering', () => {
       'getAgentIslandService()?.handleSessionStopped(',
       'await session.abort();',
     );
+  });
+
+  it('uses the wired Session snapshot while reconciling owner-boundary aborts', () => {
+    const stableLookupStart = source.indexOf('const getStableSessionForTurnBoundary =');
+    const stableLookupEnd = source.indexOf('\n  const reconcileSessionTurnIdle =', stableLookupStart);
+    const stableLookupSource = source.slice(stableLookupStart, stableLookupEnd);
+    const reconcileStart = stableLookupEnd;
+    const reconcileEnd = source.indexOf('\n\n  const inputCoordinator:', reconcileStart);
+    const reconcileSource = source.slice(reconcileStart, reconcileEnd);
+
+    expect(stableLookupStart).toBeGreaterThanOrEqual(0);
+    expect(stableLookupEnd).toBeGreaterThan(stableLookupStart);
+    expect(stableLookupSource).toContain('wiredSessionsById.get(sessionId)?.session');
+    expectOrder(stableLookupSource, 'if (wired) return wired;', 'return maker.getSession(sessionId) ?? null;');
+    expect(stableLookupSource).toContain('return null;');
+
+    expect(reconcileStart).toBeGreaterThanOrEqual(0);
+    expect(reconcileEnd).toBeGreaterThan(reconcileStart);
+    expect(reconcileSource).toContain('if (!liveSessionIdle) return false;');
+    expect(reconcileSource).not.toContain('if (!trackerStale && !hadZombieInteraction) return false;');
+    expect(reconcileSource).toContain('confirmed live session idle during turn-boundary reconciliation');
   });
 
   it('keeps Codex subscription value out of real session cost totals', () => {
