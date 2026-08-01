@@ -256,8 +256,20 @@ describe('PluginMarketService 自定义市场聚合', () => {
       { rel: 'plugins/alpha', id: 'alpha', version: '2.0.0' },
     ]);
     const h = harness([], [{ name: 'team-lib', dir }]);
+    // 已装插件目录里放**原始** ghost.json;运行时 manifest 用"本地化后"的变体
+    // (name 被翻译)——摘要比对必须 locale 无关,切语言不得把自装插件判成 conflict。
+    const installedDir = path.join(root, 'installed-alpha');
+    fs.mkdirSync(installedDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(installedDir, 'ghost.json'),
+      JSON.stringify(ghostManifest('alpha', '1.0.0')),
+    );
     runtime.ghosts = [
-      { manifest: ghostManifest('alpha', '1.0.0'), dir: '/ghosts/alpha', enabled: true },
+      {
+        manifest: { ...ghostManifest('alpha', '1.0.0'), name: 'アルファ(localized)' },
+        dir: installedDir,
+        enabled: true,
+      },
     ];
     h.ledger.upsertInstallation({
       pluginId: customMarketPluginId('team-lib', 'alpha'),
@@ -856,6 +868,36 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it('skips default installs while any custom source is unreadable', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/x', id: 'other-plugin' }]);
+    const h = harness([serverSummary({ defaultInstall: true })], [{ name: 'team-lib', dir }]);
+    h.api.detail.mockResolvedValue(serverDetail());
+    // 来源暂时不可读:合并冲突集合缺了它声明的 ghostId,此刻自动安装会在它恢复
+    // 前抢占所有权——目录不完整时必须整体跳过默认安装。
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    await h.service.snapshot();
+    expect(h.api.download).not.toHaveBeenCalled();
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on manual installs while any custom source is unreadable', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/x', id: 'other-plugin' }]);
+    const h = harness([serverSummary()], [{ name: 'team-lib', dir }]);
+    h.api.detail.mockResolvedValue(serverDetail());
+    fs.rmSync(dir, { recursive: true, force: true });
+
+    const item = serverSummary();
+    await expect(
+      h.service.install(item.id, { expectedReleaseId: item.currentRelease.id }),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(h.api.download).not.toHaveBeenCalled();
   });
 
   it('uninstalls a custom market plugin through the shared uninstall path', async () => {
