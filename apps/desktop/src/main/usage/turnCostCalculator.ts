@@ -163,7 +163,15 @@ export function resolveTurnCost(args: {
   const { rawModel, tokens, sdkCostDelta, pricing, context } = args;
   const model = normalizeModelIdForPricing(rawModel);
 
-  if (context.billingRoute === 'subscription' || isSubscriptionDirectModel(model)) {
+  // An explicit provider API route is authoritative. User-defined providers may legitimately
+  // expose namespaced model ids such as `xai/grok-4.5`; treating the prefix alone as proof of a
+  // subscription would discard both the provider's SDK cost and the user's price override.
+  // Prefix inference remains the compatibility fallback for routes whose upstream is not an
+  // explicitly selected provider API (for example a bridge sub-agent inside an XD session).
+  if (
+    context.billingRoute === 'subscription' ||
+    (context.billingRoute !== 'provider-api' && isSubscriptionDirectModel(model))
+  ) {
     return { model, money: null, source: 'subscription' };
   }
 

@@ -541,7 +541,7 @@ describe('resolveTurnCost', () => {
     }
   });
 
-  it('subscription routes and explicit subscription model prefixes never become actual cost', () => {
+  it('subscription routes and inferred subscription model prefixes never become actual cost', () => {
     const byRoute = resolveTurnCost({
       rawModel: 'claude-opus-4-8',
       tokens: {
@@ -564,10 +564,43 @@ describe('resolveTurnCost', () => {
       },
       sdkCostDelta: 5,
       pricing: null,
-      context: PROVIDER_API,
+      context: { providerId: null, billingRoute: 'unknown', region: 'global' },
     });
     expect(byRoute).toMatchObject({ source: 'subscription', money: null });
     expect(byPrefix).toMatchObject({ source: 'subscription', money: null });
+  });
+
+  it('lets an explicit provider API route price a custom xAI-prefixed model', () => {
+    const result = resolveTurnCost({
+      rawModel: 'xai/grok-4.5',
+      tokens: {
+        inputTokens: 1_000_000,
+        outputTokens: 100_000,
+        cacheReadTokens: 0,
+        cacheCreateTokens: 0,
+      },
+      sdkCostDelta: 0,
+      pricing: catalog(
+        quote('xai/grok-4.5', 2, 10, {
+          providerId: 'vercel-ai-gateway',
+          source: 'user-override',
+          approximate: true,
+        }),
+      ),
+      context: {
+        providerId: 'vercel-ai-gateway',
+        billingRoute: 'provider-api',
+        region: 'global',
+      },
+    });
+
+    expect(result.source).toBe('reference');
+    expect(result.money).toMatchObject({
+      amount: 3,
+      currency: 'USD',
+      approximate: true,
+      kind: 'value-estimate',
+    });
   });
 });
 
