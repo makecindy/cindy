@@ -40,6 +40,8 @@ export interface IMHost {
 
   /** IPC bridge (replaces electron.ipcMain + BrowserWindow). */
   ipc: {
+    /** Raise a host-standard, renderer-decodable IPC error. */
+    throwIpcError(code: 'INVALID_PARAMS', message: string): never;
     /** Register an `invoke` handler. @cindy/im owns channel names. */
     handle(
       channel: string,

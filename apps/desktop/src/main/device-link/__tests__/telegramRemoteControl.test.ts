@@ -5,9 +5,8 @@
  *   1. **状态投影不带凭证**:过网线的只有 kind / appId / reason。ownerUserId(Telegram
  *      用户 id)与 botUsername(bot 身份)绝不出现 —— 控制端只需要判断"远端占的是不是
  *      同一个 bot", appId 就够了。
- *   2. set-online 只切轮询, 语义正确地转发到 goOffline / goOnline。
- *   3. 参数解析防御:缺参 / 非法形状一律按"下线"处理, 不会因为控制端发了脏 payload
- *      就把一台本该下线的机器意外拉上线(误上线会去抢另一台的轮询)。
+ *   2. set-online 只允许下线，并在副作用前重新核对探测时的 bot appId。
+ *   3. 参数解析防御:缺参 / 非法形状一律报错且不执行副作用。
  * 只 mock im/host 与 logger:本模块的价值就在投影与转发, 不需要真 transport。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -66,27 +65,26 @@ describe('telegram 远程状态投影', () => {
     });
   });
 
-  it('未注入 source(IM 子系统没接线): 按未配置处理, 不抛错给控制端', async () => {
+  it('未注入 source: 状态按未配置；携带旧 expectedAppId 的下线被拒绝', async () => {
     setTelegramRemoteSource(null);
     expect(readTelegramRemoteStatus()).toEqual({ kind: 'idle', appId: null, reason: null, code: null });
-    await expect(setTelegramRemoteOnline({ online: false })).resolves.toEqual({
-      kind: 'idle',
-      appId: null,
-      reason: null,
-      code: null,
-    });
+    await expect(
+      setTelegramRemoteOnline({ online: false, expectedAppId: '999' }),
+    ).rejects.toThrow(/PRECONDITION_FAILED/);
   });
 
   it('拒绝上线优先于一切 —— 未注入 source 时也不能被当成"成功"', async () => {
     setTelegramRemoteSource(null);
-    await expect(setTelegramRemoteOnline({ online: true })).rejects.toThrow(/FORBIDDEN/);
+    await expect(
+      setTelegramRemoteOnline({ online: true, expectedAppId: '999' }),
+    ).rejects.toThrow(/PERMISSION_DENIED/);
   });
 });
 
 describe('telegram 远程上下线', () => {
   it('{online:false} → goOffline', async () => {
     getStatus.mockReturnValue({ kind: 'offline', appId: '999' });
-    const result = await setTelegramRemoteOnline({ online: false });
+    const result = await setTelegramRemoteOnline({ online: false, expectedAppId: '999' });
     expect(goOffline).toHaveBeenCalledTimes(1);
     expect(goOnline).not.toHaveBeenCalled();
     expect(result.kind).toBe('offline');
@@ -96,7 +94,9 @@ describe('telegram 远程上下线', () => {
     getStatus.mockReturnValue({ kind: 'offline', appId: '999' });
     // 控制端 UI 只发 false 是产品选择, 不是权限约束: deviceLink.invoke 通用入口
     // 允许任意参数, 放开上线等于让别的设备把这台拽回 409 争抢。
-    await expect(setTelegramRemoteOnline({ online: true })).rejects.toThrow(/FORBIDDEN/);
+    await expect(
+      setTelegramRemoteOnline({ online: true, expectedAppId: '999' }),
+    ).rejects.toThrow(/PERMISSION_DENIED/);
     expect(goOnline).not.toHaveBeenCalled();
     expect(goOffline).not.toHaveBeenCalled();
   });
@@ -116,6 +116,10 @@ describe('telegram 远程上下线', () => {
       { online: 'false' },
       { online: 0 },
       { offline: true },
+      { online: false },
+      { online: false, expectedAppId: '' },
+      { online: false, expectedAppId: null },
+      { online: false, expectedAppId: 999 },
     ]) {
       goOffline.mockClear();
       goOnline.mockClear();
@@ -130,9 +134,24 @@ describe('telegram 远程上下线', () => {
 
   it('合法的 { online: false } 正常执行下线', async () => {
     getStatus.mockReturnValue({ kind: 'offline', appId: '999' });
-    await expect(setTelegramRemoteOnline({ online: false })).resolves.toMatchObject({
+    await expect(
+      setTelegramRemoteOnline({ online: false, expectedAppId: '999' }),
+    ).resolves.toMatchObject({
       kind: 'offline',
     });
     expect(goOffline).toHaveBeenCalledTimes(1);
+  });
+
+  it('探测后目标端换绑 Bot: 旧 expectedAppId 被拒绝且不下线新 Bot', async () => {
+    getStatus.mockReturnValue({ kind: 'connected', appId: '999' });
+    const staleSnapshot = readTelegramRemoteStatus();
+    getStatus.mockReturnValue({ kind: 'connected', appId: '888' });
+
+    await expect(
+      setTelegramRemoteOnline({ online: false, expectedAppId: staleSnapshot.appId }),
+    ).rejects.toThrow(/PRECONDITION_FAILED/);
+
+    expect(goOffline).not.toHaveBeenCalled();
+    expect(getStatus()).toEqual({ kind: 'connected', appId: '888' });
   });
 });

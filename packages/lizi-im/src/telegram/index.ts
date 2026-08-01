@@ -486,7 +486,10 @@ export class TelegramIM extends BaseIM implements ChannelIM {
      */
     this.host.ipc.handle('telegramBot:set-online', async (payload) => {
       if (!isRecord(payload) || typeof payload.online !== 'boolean') {
-        throw new Error('[INVALID_PARAMS] expected an object payload { online: boolean }');
+        this.host.ipc.throwIpcError(
+          'INVALID_PARAMS',
+          'expected an object payload { online: boolean }',
+        );
       }
       const { online } = payload;
       if (!this.host.secrets.isAvailable()) {

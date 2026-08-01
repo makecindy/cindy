@@ -27,6 +27,7 @@
 import type { IMErrorCode, IMStatus } from '@cindy/im';
 
 import { createLogger } from '../logger.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 
 const log = createLogger('device-link:telegram');
 
@@ -88,8 +89,8 @@ export function readTelegramRemoteStatus(): TelegramRemoteStatus {
 }
 
 /**
- * device-link:telegram:set-online —— 让被控端下线。参数形状与本地
- * `telegramBot:set-online` 一致，便于两端共用理解，但**远程只接受 online:false**。
+ * device-link:telegram:set-online —— 让被控端下线。除本地开关的 `online:false`
+ * 外还必须带探测快照的 `expectedAppId`，供目标端在副作用前复核身份。
  *
  * 为什么在这里硬拒绝 `online:true`：`deviceLink.invoke` 是通用入口，控制端可以
  * 自行构造参数 —— 控制端 UI 只发 `false` 是产品选择，不是权限约束。放开上线等于
@@ -97,23 +98,39 @@ export function readTelegramRemoteStatus(): TelegramRemoteStatus {
  * 争抢。远程能做的只有「让它别收消息」，上线是目标机本人的决定，只能本地操作。
  */
 export async function setTelegramRemoteOnline(arg: unknown): Promise<TelegramRemoteStatus> {
-  // 形状先严格校验再谈语义: 缺字段 / null / 数组 / 字符串 / online 非 boolean
+  // 形状先严格校验再谈语义: 缺字段 / null / 数组 / 字符串 / 字段类型不符
   // 一律报错, 不做"猜意图"的宽松解析。这是跨设备入口, 把畸形 payload 默默当成
   // 下线会让控制端的字段名笔误变成一次静默的真实副作用 —— 用户莫名其妙被下线,
   // 而调用方永远发现不了自己发错了。
   if (!arg || typeof arg !== 'object' || Array.isArray(arg)) {
-    throw new Error('[INVALID_PARAMS] expected an object payload { online: boolean }');
+    throwIpcError(
+      'INVALID_PARAMS',
+      'expected an object payload { online: boolean, expectedAppId: string }',
+    );
   }
-  const online = (arg as Record<string, unknown>).online;
+  const record = arg as Record<string, unknown>;
+  const online = record.online;
   if (typeof online !== 'boolean') {
-    throw new Error('[INVALID_PARAMS] "online" must be a boolean');
+    throwIpcError('INVALID_PARAMS', '"online" must be a boolean');
+  }
+  const expectedAppId = record.expectedAppId;
+  if (typeof expectedAppId !== 'string' || !expectedAppId) {
+    throwIpcError('INVALID_PARAMS', '"expectedAppId" must be a non-empty string');
   }
   if (online) {
     log.warn('remote set-online(true) rejected: bringing a device online is local-only');
-    throw new Error('[FORBIDDEN] bringing a device online remotely is not allowed');
+    throwIpcError('PERMISSION_DENIED', 'bringing a device online remotely is not allowed');
   }
-  if (!source) return { ...NOT_CONFIGURED };
-  await source.goOffline();
+
+  // 探测快照只决定按钮是否展示，不能授权稍后的副作用。解绑/换绑可能发生在
+  // probe 与 click 之间；这里在调用 goOffline 前重新取当前身份并精确比对。
+  // 比对与 goOffline 调用之间没有 await，避免新开一个 TOCTOU 窗口。
+  const activeSource = source;
+  const current = projectStatus();
+  if (!activeSource || current.appId !== expectedAppId) {
+    throwIpcError('PRECONDITION_FAILED', 'Telegram bot changed since the status probe');
+  }
+  await activeSource.goOffline();
   const projected = projectStatus();
   log.info(`remote set-online(false) -> ${projected.kind}`);
   return projected;

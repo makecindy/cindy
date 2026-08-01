@@ -112,6 +112,10 @@ function createHost(tmpDir: string): { host: IMHost; broadcasts: unknown[]; secr
       isAvailable: () => true,
     },
     ipc: {
+      throwIpcError: (code, message) => {
+        const error = Object.assign(new Error(`[${code}] ${message}`), { code });
+        throw error;
+      },
       handle: (channel, handler) => void handlers.set(channel, handler),
       broadcast: (_channel, payload) => void broadcasts.push(payload),
     },
@@ -506,7 +510,10 @@ describe('TelegramIM', () => {
       await expect(
         handler(bad),
         `payload ${JSON.stringify(bad) ?? 'undefined'} 应被拒绝`,
-      ).rejects.toThrow(/INVALID_PARAMS/);
+      ).rejects.toMatchObject({
+        code: 'INVALID_PARAMS',
+        message: expect.stringMatching(/^\[INVALID_PARAMS\]/),
+      });
       expect(im.getStatus().kind).toBe('connected');
       expect(ctx.secrets.has('telegram-bot-offline')).toBe(false);
     }

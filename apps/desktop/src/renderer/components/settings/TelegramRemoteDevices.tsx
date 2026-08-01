@@ -100,12 +100,12 @@ export function TelegramRemoteDevices({ selfAppId }: { selfAppId: string | null 
   }, [loaded, probeAll]);
 
   const takeOffline = useCallback(
-    async (deviceId: string) => {
+    async (deviceId: string, expectedAppId: string) => {
       if (busyDeviceId) return;
       setBusyDeviceId(deviceId);
       try {
         const result = (await window.electronAPI.deviceLink.invoke(deviceId, SET_ONLINE_CHANNEL, [
-          { online: false },
+          { online: false, expectedAppId },
         ])) as RemoteStatus;
         setProbes((prev) => ({ ...prev, [deviceId]: { state: 'ok', status: result } }));
         // 远端执行失败也会作为成功的 device-link 响应回来(例如目标机写不进下线标志时
@@ -128,7 +128,12 @@ export function TelegramRemoteDevices({ selfAppId }: { selfAppId: string | null 
           setProbes((prev) => ({ ...prev, [deviceId]: { state: 'unsupported' } }));
           toast.error(t('logic.toasts.telegramRemoteUnsupported'));
         } else {
-          const msg = err instanceof Error ? err.message : String(err);
+          const ipcError = extractIpcError(err);
+          if (ipcError?.code === 'PRECONDITION_FAILED') await probeAll();
+          const msg =
+            ipcError?.code === 'PRECONDITION_FAILED'
+              ? t('settings.telegramBot.remoteDevices.state.otherBot')
+              : (ipcError?.message ?? (err instanceof Error ? err.message : String(err)));
           log.error('remote set-online failed:', msg);
           toast.error(t('logic.toasts.telegramRemoteFailed', { message: msg }));
         }
@@ -136,7 +141,7 @@ export function TelegramRemoteDevices({ selfAppId }: { selfAppId: string | null 
         setBusyDeviceId(null);
       }
     },
-    [busyDeviceId, t],
+    [busyDeviceId, probeAll, t],
   );
 
   // 一台其他设备都没有时整块不出现 —— 单机用户不该看到一个恒空的区块。
@@ -202,7 +207,7 @@ export function TelegramRemoteDevices({ selfAppId }: { selfAppId: string | null 
               {canTakeOffline ? (
                 <button
                   type="button"
-                  onClick={() => void takeOffline(d.deviceId)}
+                  onClick={() => void takeOffline(d.deviceId, status.appId!)}
                   disabled={busyDeviceId !== null}
                   className={cn(
                     'flex h-[28px] shrink-0 items-center justify-center gap-1.5 rounded-full px-3',
