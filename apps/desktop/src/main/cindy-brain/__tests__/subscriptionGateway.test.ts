@@ -14,6 +14,7 @@ import {
   GhostTurnOriginTracker,
   GhostTurnTranslator,
   createGhostSessionFocusTracker,
+  ghostActivityId,
   isGhostEligibleSessionRow,
   normalizeTurnUsage,
   readStatusIsRunning,
@@ -143,6 +144,9 @@ describe('did- 旁听扇出', () => {
 });
 
 describe('GhostActivityTracker', () => {
+  /** 出网关的标识都是投影值(见 ghostActivityId);断言用同一个投影算,不写死哈希。 */
+  const aid = (upstreamId: string) => ghostActivityId('s1', upstreamId);
+
   it('按 thinking blockId 边界只发元数据,不发正文', () => {
     const events: Array<{ name: string; data: unknown }> = [];
     const tracker = new GhostActivityTracker({
@@ -155,10 +159,12 @@ describe('GhostActivityTracker', () => {
     tracker.handleEvent({ type: 'thinking', data: { stage: 'final', blockId: 'b1', text: 'secret reasoning' } });
     tracker.handleEvent({ type: 'thinking', data: { stage: 'final', blockId: 'b1', text: 'duplicate' } });
     expect(events).toEqual([
-      { name: 'did-thinking-start', data: { sessionId: 's1', blockId: 'b1' } },
-      { name: 'did-thinking-end', data: { sessionId: 's1', blockId: 'b1' } },
+      { name: 'did-thinking-start', data: { sessionId: 's1', blockId: aid('b1') } },
+      { name: 'did-thinking-end', data: { sessionId: 's1', blockId: aid('b1') } },
     ]);
     expect(events.some((event) => JSON.stringify(event).includes('secret reasoning'))).toBe(false);
+    // 上游原值不外泄:投影后与 'b1' 不同(sessionId 保持明文,它是跨 topic 关联键)。
+    expect(events.some((event) => JSON.stringify(event).includes('"b1"'))).toBe(false);
   });
 
   it('approval 与 user-input 生命周期分别映射, finishAll 给所有在场请求兜底结束', () => {
@@ -203,14 +209,14 @@ describe('GhostActivityTracker', () => {
     tracker.finishTurn();
     tracker.startInteraction('plan_review', 'plan-1');
     // 回合已收口也必须发 start:否则插件根本不知道用户正在批计划。
-    expect(events).toEqual([{ name: 'did-approval-start', requestId: 'plan-1' }]);
+    expect(events).toEqual([{ name: 'did-approval-start', requestId: aid('plan-1') }]);
     // 期间新回合开始也不能把仍在等的审批抹掉(修订 turn 由审批结果触发)。
     tracker.beginTurn();
     expect(events).toHaveLength(1);
     tracker.endInteraction('plan_review', 'plan-1');
     expect(events).toEqual([
-      { name: 'did-approval-start', requestId: 'plan-1' },
-      { name: 'did-approval-end', requestId: 'plan-1' },
+      { name: 'did-approval-start', requestId: aid('plan-1') },
+      { name: 'did-approval-end', requestId: aid('plan-1') },
     ]);
   });
 
@@ -230,17 +236,17 @@ describe('GhostActivityTracker', () => {
     tracker.endInteraction('permission', 'b');
     // b 已收口而 a 仍在等:此刻绝不能出现 a 的 end。
     expect(events).toEqual([
-      { name: 'did-approval-start', requestId: 'a' },
-      { name: 'did-approval-start', requestId: 'b' },
-      { name: 'did-approval-end', requestId: 'b' },
+      { name: 'did-approval-start', requestId: aid('a') },
+      { name: 'did-approval-start', requestId: aid('b') },
+      { name: 'did-approval-end', requestId: aid('b') },
     ]);
     tracker.endInteraction('permission', 'b'); // 已收口不重发 end
     tracker.endInteraction('permission', 'a');
     expect(events).toEqual([
-      { name: 'did-approval-start', requestId: 'a' },
-      { name: 'did-approval-start', requestId: 'b' },
-      { name: 'did-approval-end', requestId: 'b' },
-      { name: 'did-approval-end', requestId: 'a' },
+      { name: 'did-approval-start', requestId: aid('a') },
+      { name: 'did-approval-start', requestId: aid('b') },
+      { name: 'did-approval-end', requestId: aid('b') },
+      { name: 'did-approval-end', requestId: aid('a') },
     ]);
     // 全部收口后 finishTurn 不再补发。
     tracker.finishTurn();
@@ -737,6 +743,37 @@ describe('readStatusIsRunning', () => {
     // null 表示"不是轮次起点判断的对象",与 false 语义不同
     expect(readStatusIsRunning({ type: 'done', data: {} })).toBeNull();
     expect(readStatusIsRunning({ type: 'thinking', data: {} })).toBeNull();
+  });
+});
+
+describe('ghostActivityId(标识对外投影)', () => {
+  it('确定性:同会话同上游 id 恒定同值 —— start / end 才能配上', () => {
+    expect(ghostActivityId('s1', 'req-1')).toBe(ghostActivityId('s1', 'req-1'));
+  });
+
+  it('不透传上游原值,也不含其中任何语义片段', () => {
+    // codex MCP elicitation 的真实形态(codex/index.ts:4699)——serverName 拼在里头
+    const upstream = 'mcp-elicitation:cindy-github:turn-7:3';
+    const projected = ghostActivityId('s1', upstream);
+    expect(projected).not.toBe(upstream);
+    expect(projected).not.toContain('cindy-github');
+    expect(projected).not.toContain('mcp-elicitation');
+    // codex 计划审批前缀同样不外泄("这是计划审批"本身也是信息)
+    expect(ghostActivityId('s1', 'codex-plan-review:turn-7:1')).not.toContain('plan-review');
+    expect(projected).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('掺 sessionId:同一个上游 id 在不同会话得到不同值,不给跨会话关联留口', () => {
+    expect(ghostActivityId('s1', 'req-1')).not.toBe(ghostActivityId('s2', 'req-1'));
+  });
+
+  it('不同上游 id 在同会话内不同值', () => {
+    expect(ghostActivityId('s1', 'req-1')).not.toBe(ghostActivityId('s1', 'req-2'));
+  });
+
+  it('带长度前缀拼接:边界组合不撞车', () => {
+    // 若直接用分隔符拼接,('s1:x','y') 与 ('s1','x:y') 之类可能拼出同一个串
+    expect(ghostActivityId('s1:x', 'y')).not.toBe(ghostActivityId('s1', 'x:y'));
   });
 });
 

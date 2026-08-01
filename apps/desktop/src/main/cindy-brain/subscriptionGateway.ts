@@ -18,7 +18,7 @@
  * 依赖注入(规则 14):意识清单/运行态/唤醒/投递全经 deps,单测直喂。
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import {
   GHOST_ASSISTANT_HOOK_TIMEOUT_MS,
@@ -578,6 +578,34 @@ export class GhostTapPendingQueue {
 }
 
 /**
+ * activity 标识的对外投影:把上游 id 换成**主机域内的不透明配对键**。
+ *
+ * 为什么必须投影 —— provider 侧的 id 不保证语义中立。codex 的 MCP elicitation 会把
+ * 服务名拼进 requestId(`mcp-elicitation:<serverName>:…`,`codex/index.ts:4699`),
+ * 计划审批带 `codex-plan-review:` 前缀(`:3838`);原样转发就等于告诉插件"正在请求
+ * 哪个 MCP 服务 / 这是计划审批",与权限确认框宣称的"只知道时机、看不到待批准的操作"
+ * 不符。thinking 的 blockId 今天是时间戳 / 随机 / provider item id,并不泄露,但一起
+ * 投影才能让这个协议**结构上**不透传任何 provider 值 —— 上游以后往 id 里塞东西也伤
+ * 不到我们,而不是依赖"我们审计过今天的形态"。
+ *
+ * 为什么是确定性哈希而不是分配式 ID —— 同一个上游 id 恒定映射到同一个 token,所以
+ * start/end 的配对契约逐字不变,不需要映射表、不需要清理、不新增任何状态。
+ * 掺 sessionId 是为了让同一个上游 id 在不同会话里得到不同 token(不给跨会话关联留口)。
+ * 截 16 位十六进制 = 64 bit:单会话内标识量级 ≤ 10³,碰撞概率约 10⁻¹⁴,可忽略。
+ *
+ * 注意 `sessionId` 本身不投影 —— 它是 turn / session / activity 三个 topic 共用的关联键,
+ * 换掉会断掉插件"把 activity 关联回哪个会话"的能力,而它本来就在 turn / session 里明文投。
+ */
+export function ghostActivityId(sessionId: string, upstreamId: string): string {
+  // 带长度前缀拼接:两段都可能含任意分隔符,前缀保证拼接无歧义
+  // (不同的 (sessionId, upstreamId) 组合不可能拼出同一个串)。
+  return createHash('sha256')
+    .update(`${sessionId.length}:${sessionId}:${upstreamId}`)
+    .digest('hex')
+    .slice(0, 16);
+}
+
+/**
  * 轮次来源跟踪:回答"这条 interaction 该不该投给插件"。
  *
  * 为什么需要它 —— interaction router 给 observer 的 `route.origin` 是另一套取值
@@ -738,14 +766,12 @@ export class GhostActivityTracker {
     if (this.thinkingBlockId) this.endThinking(this.thinkingBlockId);
     this.thinkingBlockId = blockId;
     this.lastEndedThinkingBlockId = null;
-    const data: GhostEventThinkingData = { sessionId: this.opts.sessionId, blockId };
-    this.opts.sink.activity('did-thinking-start', data);
+    this.opts.sink.activity('did-thinking-start', this.thinkingData(blockId));
   }
 
   private endThinking(blockId: string): void {
     if (this.thinkingBlockId !== blockId) return;
-    const data: GhostEventThinkingData = { sessionId: this.opts.sessionId, blockId };
-    this.opts.sink.activity('did-thinking-end', data);
+    this.opts.sink.activity('did-thinking-end', this.thinkingData(blockId));
     this.thinkingBlockId = null;
     this.lastEndedThinkingBlockId = blockId;
   }
@@ -760,12 +786,23 @@ export class GhostActivityTracker {
     for (const requestId of pending) this.emitInteraction(type, 'end', requestId);
   }
 
+  /** 内部状态一律用上游原值配对,只在**出网关那一刻**投影(见 ghostActivityId)。 */
+  private thinkingData(blockId: string): GhostEventThinkingData {
+    return {
+      sessionId: this.opts.sessionId,
+      blockId: ghostActivityId(this.opts.sessionId, blockId),
+    };
+  }
+
   private emitInteraction(
     type: 'approval' | 'user-input',
     edge: 'start' | 'end',
     requestId: string,
   ): void {
-    const data: GhostEventInteractionActivityData = { sessionId: this.opts.sessionId, requestId };
+    const data: GhostEventInteractionActivityData = {
+      sessionId: this.opts.sessionId,
+      requestId: ghostActivityId(this.opts.sessionId, requestId),
+    };
     if (type === 'approval') {
       this.opts.sink.activity(edge === 'start' ? 'did-approval-start' : 'did-approval-end', data);
     } else {

@@ -1575,6 +1575,11 @@ cindy.onHostMessage(function (msg) {
   // did-approval-{start,end}: { sessionId, requestId };
   // did-user-input-{start,end}: { sessionId, requestId }。
   // approval = permission / plan_review; user-input = ask_user_question。
+  // **blockId / requestId 都是主机生成的不透明配对键**,不是 agent 或 provider 侧的
+  // 原始 id:只保证同一段思考 / 同一个请求的 start 与 end 拿到同一个值,同一个上游
+  // 请求在不同会话里也是不同值。它们不承载任何语义(看不出是哪个工具、哪个 MCP
+  // 服务、是不是计划审批),也**关联不到**主机或 provider 的任何其他标识 —— 别拿它
+  // 去和你从别处拿到的 id 对齐,只用来配对。
   // **按 requestId 配对,不是全局开关**:一轮里并行工具调用可能同时挂着多个审批,
   // 每个 requestId 各发自己的 start / end。要判断"是否仍在等审批",用 requestId
   // 集合(收到 start 加入、end 移除),集合非空即仍在等;别用单个布尔位,否则先结束

@@ -5421,13 +5421,25 @@ export interface GhostEventSessionData {
   workdir?: string;
 }
 
-/** thinking 活动边界；只暴露稳定 blockId，不暴露 reasoning 正文。 */
+/**
+ * thinking 活动边界；只暴露 blockId，不暴露 reasoning 正文。
+ *
+ * `blockId` 是**主机生成的不透明配对键**（见 `ghostActivityId`），不是 provider 侧原值：
+ * 只保证同一段 thinking 的 start / end 拿到同一个值、不同会话不同值，不承载任何语义，
+ * 也不能用来关联主机或 provider 的任何其他标识。
+ */
 export interface GhostEventThinkingData {
   sessionId: string;
   blockId: string;
 }
 
-/** 审批/用户输入活动边界；只暴露 requestId，不暴露请求或回答内容。 */
+/**
+ * 审批/用户输入活动边界；只暴露 requestId，不暴露请求或回答内容。
+ *
+ * `requestId` 同样是**主机生成的不透明配对键**（见 `ghostActivityId`），不是 provider 侧
+ * 原值——provider 的 id 不保证语义中立（codex 的 MCP elicitation 会把服务名拼进去），
+ * 原样转发会越过"只知道时机"的隐私边界。只保证 start / end 配对。
+ */
 export interface GhostEventInteractionActivityData {
   sessionId: string;
   requestId: string;
