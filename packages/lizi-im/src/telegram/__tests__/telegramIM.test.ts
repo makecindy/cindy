@@ -104,6 +104,10 @@ function createHost(tmpDir: string): { host: IMHost; broadcasts: unknown[]; secr
     secrets: {
       write: (name, value) => (secrets.set(name, value), true),
       read: (name) => secrets.get(name) ?? null,
+      readResult: (name) =>
+        secrets.has(name)
+          ? { kind: 'value', value: secrets.get(name)! }
+          : { kind: 'missing' },
       remove: (name) => void secrets.delete(name),
       isAvailable: () => true,
     },
@@ -508,26 +512,59 @@ describe('TelegramIM', () => {
     ctx.host.secrets.write = originalWrite;
   });
 
-  it('存储在 remove→read 窗口失效: 读不出来不算删成功, 必须 fail closed', async () => {
+  it('存储在 remove→read 窗口读取失败: isAvailable 仍为 true 也必须 fail closed', async () => {
     await connect();
     await ctx.handlers.get('telegramBot:set-online')!({ online: false });
-    // remove 看似成功(不抛), 但紧接着存储不可用 —— read 一律返回 null。
+    // remove 看似成功(不抛), 但紧接着单文件读取失败；此时 isAvailable 仍为 true。
     // 若把"读不到"当成"已删除", 删除失败就被静默放过: 用户看到已上线,
     // 重启后存储恢复、标志还在, 又被打回 offline。
     const originalRemove = ctx.host.secrets.remove;
-    const originalAvailable = ctx.host.secrets.isAvailable;
+    const originalReadResult = ctx.host.secrets.readResult!;
     ctx.host.secrets.remove = (name) => {
       if (name !== 'telegram-bot-offline') originalRemove(name);
-      if (name === 'telegram-bot-offline') ctx.host.secrets.isAvailable = () => false;
+      if (name === 'telegram-bot-offline') {
+        ctx.host.secrets.readResult = (key) =>
+          key === 'telegram-bot-offline' ? { kind: 'error' } : originalReadResult(key);
+      }
     };
 
     await ctx.handlers.get('telegramBot:set-online')!({ online: true });
 
     expect(im.getStatus().kind).toBe('error');
     // 标志确实还在盘上 —— 证明"读不出来"时放行会是真的错。
-    ctx.host.secrets.isAvailable = originalAvailable;
+    ctx.host.secrets.readResult = originalReadResult;
     expect(ctx.secrets.get('telegram-bot-offline')).toBe('1');
     ctx.host.secrets.remove = originalRemove;
+  });
+
+  it('init 读取下线标志失败时不联网, 不把失败误判成标志缺失', async () => {
+    ctx.secrets.set('telegram-bot-token', '999:secret-token-abcdefghijk');
+    const originalReadResult = ctx.host.secrets.readResult!;
+    ctx.host.secrets.readResult = (name) =>
+      name === 'telegram-bot-offline' ? { kind: 'error' } : originalReadResult(name);
+
+    await im.init();
+
+    expect(im.getStatus().kind).toBe('error');
+    expect(api.calls).toHaveLength(0);
+  });
+
+  it('轮询中读取 token 失败时下线报错, 不误报 idle 且不停止轮询', async () => {
+    await connect();
+    await vi.waitFor(() => expect(api.calls.some((c) => c.method === 'getUpdates')).toBe(true));
+    const originalReadResult = ctx.host.secrets.readResult!;
+    ctx.host.secrets.readResult = (name) =>
+      name === 'telegram-bot-token' ? { kind: 'error' } : originalReadResult(name);
+
+    await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+
+    expect(im.getStatus().kind).toBe('error');
+    expect(ctx.secrets.has('telegram-bot-offline')).toBe(false);
+    const pollsBefore = api.calls.filter((c) => c.method === 'getUpdates').length;
+    api.pushUpdates([privateMessage('still polling', Number(OWNER_ID), 22)]);
+    await vi.waitFor(() => {
+      expect(api.calls.filter((c) => c.method === 'getUpdates').length).toBeGreaterThan(pollsBefore);
+    });
   });
 
   it('下线标志删不掉时上线要报错, 不能假装已上线(重启会打回 offline)', async () => {

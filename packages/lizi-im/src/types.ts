@@ -8,6 +8,12 @@
 
 import type { Logger } from './logger.js';
 
+/** Result of a secret read when callers must distinguish absence from failure. */
+export type IMSecretReadResult =
+  | { kind: 'value'; value: string }
+  | { kind: 'missing' }
+  | { kind: 'error' };
+
 /**
  * Host-injected capabilities. Hosts must provide encrypted KV storage, an IPC
  * bridge, and a couple of derived paths. Optionally a logger factory; otherwise
@@ -20,6 +26,12 @@ export interface IMHost {
     write(name: string, plaintext: string): boolean;
     /** Read; missing or unavailable returns null. */
     read(name: string): string | null;
+    /**
+     * Read without collapsing a missing key and a storage/decryption failure.
+     * Optional for backwards-compatible hosts; callers that require certainty
+     * must treat an absent implementation as `error`.
+     */
+    readResult?(name: string): IMSecretReadResult;
     /** Remove (no-op if missing). */
     remove(name: string): void;
     /** Whether encryption is currently usable (e.g. Linux without keychain). */

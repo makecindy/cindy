@@ -29,6 +29,7 @@ export type {
   IMCardActionEvent,
   IMStatus,
   IMErrorCode,
+  IMSecretReadResult,
   InteractiveCardButton,
   InteractiveCardSpec,
   StreamingTextHandle,

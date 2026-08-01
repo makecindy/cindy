@@ -28,6 +28,7 @@ import type {
   IMCardActionEvent,
   IMHost,
   IMMessageEvent,
+  IMSecretReadResult,
   IMStatus,
   InteractiveCardSpec,
   SendFileResult,
@@ -264,7 +265,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   async init(): Promise<void> {
     this.disposing = false;
-    const token = this.host.secrets.read(TOKEN_SECRET_KEY)?.trim() ?? '';
+    const tokenResult = this.secretReadResult(TOKEN_SECRET_KEY);
+    if (tokenResult.kind === 'error') {
+      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+      return;
+    }
+    const token = tokenResult.kind === 'value' ? tokenResult.value.trim() : '';
     this.ownerUserId = this.host.secrets.read(OWNER_USER_ID_SECRET_KEY)?.trim() ?? '';
     if (!token) {
       this.setStatus({ kind: 'idle' });
@@ -272,7 +278,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     }
     // 主动下线态必须跨重启保持: 这里一旦 connect 就会重新抢 getUpdates, 把
     // 用户特意让位给另一台设备的轮询又夺回来。零网络请求进 offline。
-    if (this.isOfflineFlagSet()) {
+    const offlineFlagState = this.offlineFlagState();
+    if (offlineFlagState === 'unknown') {
+      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+      return;
+    }
+    if (offlineFlagState === 'set') {
       // botId 能从 token 前缀解析, 但 username / 显示名只有 getMe 拿得到 —— 而
       // 下线态不发请求。同进程内换账号(A→B)时若不清, get-status 会把 A 的 bot
       // 身份和 B 的离线状态一起报给设置卡。宁可留空, 不可张冠李戴。
@@ -298,7 +309,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
       return;
     }
-    const token = this.host.secrets.read(TOKEN_SECRET_KEY)?.trim() ?? '';
+    const tokenResult = this.secretReadResult(TOKEN_SECRET_KEY);
+    if (tokenResult.kind === 'error') {
+      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+      return;
+    }
+    const token = tokenResult.kind === 'value' ? tokenResult.value.trim() : '';
     if (!token) {
       this.setStatus({ kind: 'idle' });
       return;
@@ -322,7 +338,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   /** 从下线态恢复: 清标志并按保留的 token 重新建连(offset 续上, 不重放)。 */
   async goOnline(): Promise<boolean> {
-    const token = this.host.secrets.read(TOKEN_SECRET_KEY)?.trim() ?? '';
+    const tokenResult = this.secretReadResult(TOKEN_SECRET_KEY);
+    if (tokenResult.kind === 'error') {
+      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+      return false;
+    }
+    const token = tokenResult.kind === 'value' ? tokenResult.value.trim() : '';
     this.host.secrets.remove(OFFLINE_SECRET_KEY);
     // remove 返回 void 且吞掉异常(文件锁/权限/磁盘错误), 只能回读确认。标志没删掉
     // 却照常连上, 会让用户看到"已上线"、重启后却又回到 offline —— 与写标志失败
@@ -342,19 +363,19 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     return this.connect(token);
   }
 
-  /**
-   * 下线标志的三态判定。`secrets.read` 对「文件不存在」与「读取失败」都返回 null,
-   * 包内无从区分 —— 只能先问 `isAvailable()`。存储不可用时返回 `unknown`,
-   * **调用方必须 fail closed**: 把"读不出来"当成"已删除"会让删除失败被静默放过,
-   * 用户看到已上线、重启后却又回到 offline。
-   */
-  private offlineFlagState(): 'set' | 'absent' | 'unknown' {
-    if (!this.host.secrets.isAvailable()) return 'unknown';
-    return this.host.secrets.read(OFFLINE_SECRET_KEY)?.trim() === '1' ? 'set' : 'absent';
+  /** Read with explicit missing/error semantics; legacy hosts fail closed. */
+  private secretReadResult(name: string): IMSecretReadResult {
+    return this.host.secrets.readResult?.(name) ?? { kind: 'error' };
   }
 
-  private isOfflineFlagSet(): boolean {
-    return this.offlineFlagState() === 'set';
+  /**
+   * 下线标志的三态判定。只有可靠读到 ENOENT 才是 absent；文件存在（无论内容）
+   * 都视为 set，I/O／解密失败或旧 host 没实现 readResult 都是 unknown。
+   */
+  private offlineFlagState(): 'set' | 'absent' | 'unknown' {
+    const result = this.secretReadResult(OFFLINE_SECRET_KEY);
+    if (result.kind === 'error') return 'unknown';
+    return result.kind === 'missing' ? 'absent' : 'set';
   }
 
   // 生命周期静默: dispose / 重连不向 owner 发任何播报(桌面端频繁重启会刷屏)。
@@ -782,8 +803,19 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     }
     // 世代变了(被下线/登出/换 token)或已 dispose → 本次连接结果作废。offline
     // 标志再查一次是防守: 远程下线写标志与递增世代之间也有窗口。
-    if (this.configVersion !== generation || this.disposing || this.isOfflineFlagSet()) {
+    if (this.configVersion !== generation || this.disposing) {
       this.log.info('connect result discarded: superseded by offline/dispose during getMe');
+      return false;
+    }
+    const offlineFlagState = this.offlineFlagState();
+    if (offlineFlagState !== 'absent') {
+      if (offlineFlagState === 'unknown') {
+        this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+      } else {
+        this.botId = me.id;
+        this.setStatus({ kind: 'offline', appId: String(me.id) });
+      }
+      this.log.info('connect result discarded: offline flag is set or unreadable after getMe');
       return false;
     }
     this.api = api;
