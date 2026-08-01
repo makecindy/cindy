@@ -139,6 +139,10 @@
 
 Anthropic Messages API / wire protocol 的用户可见名称。四语统一保留官方英文名称，避免与普通的“消息”概念混译；先登记为 proposed，待产品术语评审后固化。
 
+### API Price Estimate
+
+用户为自有 API、OAuth 或订阅通道维护的本地 token 单价估算；只影响 Cindy 的用量价值估算，不代表供应商实际账单，也不覆盖 Cindy AI Gateway 的服务端实售价。先登记为 proposed，待产品术语评审后固化。
+
 ### Global region
 
 企业认证与业务服务所在区域的用户可见名称，用于组织登录检测到 Global 服务区域时的确认文案；它描述连接的服务区域，不是对当前安装版本的标签，也不同于项目配置里的 generic global scope。先按现有四语文案登记为 proposed。
@@ -256,6 +260,18 @@ macOS TCC 的 kTCCServiceListenEvent(系统设置里叫「输入监控」)在 Ci
 ### WeChat
 
 个人微信连接的产品名称，沿用微信官方品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。
+
+### WeCom
+
+企业微信官方英文品牌名，用于智能机器人和群机器人能力；先登记为 proposed，待产品术语评审后再决定是否固化。
+
+### WeCom group bot
+
+企业微信群 Webhook 单向通知能力的名称；先登记为 proposed。
+
+### WeCom Intelligent Bot
+
+企业微信 WebSocket 长连接双向 IM 能力在设置页中的名称；先登记为 proposed。
 
 ## 怎么加一条术语
 

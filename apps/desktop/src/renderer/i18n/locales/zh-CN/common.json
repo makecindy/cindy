@@ -467,7 +467,23 @@
       "feishuLabel": "任务完成或需要回复时发送飞书 / Lark 消息",
       "feishuHint": "通过已绑定的飞书或 Lark 机器人，向你私聊发送一条消息；仅在窗口失焦时发送。",
       "feishuDisabledHint": "需要先在「飞书 / Lark 机器人」中配置 bot 并向它发送一条消息以完成绑定。",
-      "feishuAria": "切换任务完成的飞书通知"
+      "feishuAria": "切换任务完成的飞书通知",
+      "wecomGroupLabel": "企业微信群通知",
+      "wecomGroupHint": "用于自动操作的完成通知。粘贴企微群机器人的 Webhook URL，URL 会加密保存在本机。",
+      "wecomGroupConfiguredHint": "已配置（密钥 {{maskedKey}}）。开启总开关后，可在每个自动操作中按需发送。",
+      "wecomGroupAria": "切换企业微信群通知总开关",
+      "wecomGroupPlaceholder": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…",
+      "wecomGroupSaveAndTest": "保存并测试",
+      "wecomGroupSaveSuccess": "Webhook 已保存，测试消息已发送",
+      "wecomGroupSaveFailed": "Webhook 保存或测试失败",
+      "wecomGroupTest": "发送测试",
+      "wecomGroupTestMessage": "Cindy 企业微信群通知测试成功",
+      "wecomGroupTestSuccess": "测试消息已发送",
+      "wecomGroupTestFailed": "测试消息发送失败",
+      "wecomGroupToggleFailed": "企业微信群通知开关更新失败",
+      "wecomGroupClear": "移除",
+      "wecomGroupCleared": "Webhook 已移除",
+      "wecomGroupClearFailed": "Webhook 移除失败"
     },
     "windowBehavior": {
       "title": "应用行为",
@@ -1404,7 +1420,29 @@
         "capabilityGroupHint": "不会出现在对话模型选择中，仅供图像生成等功能使用",
         "accessWriteFailed": "停用设置未能保存，请重试",
         "disabledGroup": "已停用",
-        "enableAllModels": "全部启用"
+        "enableAllModels": "全部启用",
+        "priceOverride": {
+          "menu": "编辑 API 估价",
+          "title": "{{model}} API 估价",
+          "description": "仅用于估算你自己的 API 或订阅通道用量，不会改变供应商的实际账单。",
+          "currency": "币种",
+          "input": "输入",
+          "output": "输出",
+          "cacheRead": "缓存读取",
+          "cacheWrite": "缓存写入",
+          "unit": "每 100 万 token 的价格；缓存不单独计费时留空。",
+          "registryDate": "参考价更新于 {{date}}",
+          "conflict": "线上参考价已更新，你的本地估价仍会保留并优先生效。请检查或恢复为新的参考价。",
+          "reset": "恢复当前参考价",
+          "resetDone": "已恢复当前参考价",
+          "save": "保存",
+          "cancel": "取消",
+          "close": "关闭",
+          "saved": "API 估价已保存",
+          "invalid": "请输入有效且不小于 0 的输入、输出价格",
+          "loadFailed": "API 估价加载失败，请重试",
+          "saveFailed": "API 估价保存失败，请重试"
+        }
       },
       "genericOAuth": {
         "subtitle": "订阅授权登录（OAuth）",
@@ -1790,6 +1828,48 @@
         }
       }
     },
+    "wecomBot": {
+      "title": "企业微信智能机器人",
+      "description": "连接企业微信智能机器人，在单聊和群聊中使用 {{appName}}。",
+      "status": {
+        "needsConfig": "未配置",
+        "connecting": "连接中…",
+        "connected": "已连接",
+        "conflict": "连接被替换",
+        "error": "连接失败"
+      },
+      "fieldsRequired": "请输入 Bot ID 和 Secret",
+      "botIdLabel": "Bot ID",
+      "botIdPlaceholder": "企业微信后台中的机器人 ID",
+      "secretLabel": "Secret",
+      "secretPlaceholder": "企业微信后台中的机器人 Secret",
+      "showSecret": "显示 Secret",
+      "hideSecret": "隐藏 Secret",
+      "setupHint": "在企业微信管理后台创建智能机器人并启用长连接，然后填入 Bot ID 和 Secret。",
+      "ownerHint": "连接后，首个向机器人发送单聊消息的成员会绑定为本机 owner；仅该成员可触发 Agent。",
+      "connect": "保存并连接",
+      "reconnect": "重新连接",
+      "connectingAction": "正在连接…",
+      "disconnect": "解绑",
+      "configSaved": "企业微信机器人配置已保存",
+      "connectFailed": "企业微信机器人连接失败，请检查凭证与网络",
+      "reconnecting": "正在重新连接企业微信机器人",
+      "reconnectFailed": "重新连接失败：{{message}}",
+      "saveFailed": "保存失败：{{message}}",
+      "disconnected": "已解绑企业微信机器人",
+      "disconnectFailed": "解绑失败：{{message}}",
+      "connected": {
+        "heading": "企业微信机器人已连接",
+        "awaitingOwner": "请使用你的企业微信账号向机器人发送一条单聊消息，完成 owner 绑定。",
+        "ownerBound": "本机 owner：{{ownerUserId}}"
+      },
+      "disconnectConfirm": {
+        "title": "解绑企业微信机器人？",
+        "description": "本机保存的 Bot ID、Secret 和 owner 绑定会被清除。",
+        "confirm": "解绑",
+        "cancel": "取消"
+      }
+    },
     "telegramBot": {
       "title": "Telegram 机器人",
       "description": "绑定你自建的 Telegram Bot，桌面端直连 Telegram，私聊和群聊都能找 {{appName}}。",
@@ -1889,6 +1969,11 @@
         "dmQuoteHint": {
           "off": "私聊回答不引用你的消息（默认，更清爽）。",
           "first": "第一条回答引用你发的那条消息。"
+        },
+        "error": {
+          "load": "未能读取 Telegram 行为设置，请检查连接后重试。",
+          "save": "Telegram 行为设置未保存，已恢复上次确认的设置。",
+          "retry": "重新读取"
         }
       },
       "persona": {
@@ -1912,6 +1997,11 @@
         "contactsOn": "群里说话的人会自动记入智能通讯录（总开关已开启）。",
         "contactsOff": "智能通讯录未开启，群里说话的人不会被自动记住。",
         "contactsEnable": "开启",
+        "error": {
+          "load": "未能读取 Telegram 群列表，请检查连接后重试。",
+          "save": "群参与模式未保存，已恢复上次确认的模式。",
+          "retry": "重新读取"
+        },
         "mode": {
           "mention": "仅 @",
           "always": "全响应"
@@ -2498,7 +2588,9 @@
           "aliasPlaceholder": "别名，如 my-server",
           "addWorkspace": "添加工作目录",
           "removeWorkspace": "删除此工作目录",
-          "changeDir": "点击更换目录(别名与偏好保留)"
+          "changeDir": "点击更换目录(别名与偏好保留)",
+          "defaultWorkspaceChip": "默认：{{name}}",
+          "defaultWorkspaceAria": "选择 X 派发任务时使用的默认工作目录"
         },
         "binding": {
           "copyLink": "复制链接",
@@ -2577,6 +2669,47 @@
             "failed": "关联失败",
             "revoked": "已解除关联",
             "superseded": "已关联到另一台设备"
+          },
+          "behavior": {
+            "title": "回应与引用",
+            "emojiLabel": "表情回应",
+            "emojiOption": { "off": "关闭", "minimal": "基础", "expressive": "生动" },
+            "emojiHint": {
+              "off": "不放任何表情回应。",
+              "minimal": "收到消息 👀，完成 👍，失败 👎。",
+              "expressive": "完成与失败分别从正向、负向表情池随机选择。"
+            },
+            "groupQuoteLabel": "群里回复时引用提问",
+            "quoteOption": { "off": "不引用", "first": "首条引用", "all": "每条引用" },
+            "groupQuoteHint": {
+              "off": "群里的回答不挂回提问消息。",
+              "first": "每次触发的第一条回答挂回提问（推荐）。",
+              "all": "本次回答的每条消息都挂回提问。"
+            },
+            "dmQuoteLabel": "私聊回复时引用消息",
+            "dmQuoteHint": {
+              "off": "私聊回答不引用你的消息（默认）。",
+              "first": "第一条回答引用你发的那条消息。"
+            },
+            "error": {
+              "load": "未能读取 Telegram 行为设置，请检查连接后重试。",
+              "save": "Telegram 行为设置未保存，已恢复上次确认的设置。",
+              "retry": "重新读取"
+            }
+          },
+          "groups": {
+            "title": "群聊参与模式",
+            "hint": "官方 bot 见过的群会出现在这里。「全响应」仅对已绑定账号的每条发言生效；其他成员只进入本机群聊上下文，不会触发任务。",
+            "empty": "还没有群。把 bot 拉进群，并用已绑定账号发一条消息后就会出现在这里。",
+            "contactsOn": "群里其他发言人会自动记入智能通讯录。",
+            "contactsOff": "智能通讯录未开启，群里其他成员不会被自动记住。",
+            "contactsEnable": "开启",
+            "error": {
+              "load": "未能读取 Telegram 群列表，请检查连接后重试。",
+              "save": "群参与模式未保存，已恢复上次确认的模式。",
+              "retry": "重新读取"
+            },
+            "mode": { "mention": "仅 @", "always": "全响应" }
           }
         },
         "x": {
@@ -2709,9 +2842,8 @@
         "personal": "个人"
       },
       "tips": {
-        "cindy": "Cindy 是官方提供的共享机器人：无需申请任何凭证，连接 Slack 后 @Cindy 即可直接派活。",
-        "personal": "个人连接包括微信扫码，以及使用自有凭证接入飞书 / Discord / Telegram；各渠道独立保存新对话配置。",
-        "personalFeishuOnly": "个人连接包括微信扫码，以及使用自有凭证接入飞书和钉钉；各渠道独立保存新对话配置。"
+        "cindy": "由 Cindy 提供并维护。无需自行创建机器人或准备凭证，按引导连接后即可使用。",
+        "personal": "使用你自己的账号或机器人，由你提供并管理所需凭证；每个渠道的账号、权限和设置独立保存。"
       },
       "defaults": {
         "title": "新对话配置",
@@ -2721,7 +2853,8 @@
           "discord": "Discord 新对话会使用这组 Agent 和模型；已有私聊发送 /new 后应用。",
           "wechat": "微信新对话会使用这组 Agent、模型和权限模式；已有私聊发送 /new 后应用。",
           "telegram": "Telegram 新对话会使用这组 Agent 和模型；已有对话发送 /new 后应用。",
-          "dingtalk": "钉钉新对话会使用这组 Agent 和模型；已有对话发送 /new 后应用。"
+          "dingtalk": "钉钉新对话会使用这组 Agent 和模型；已有对话发送 /new 后应用。",
+          "wecom": "企业微信新对话会使用这组 Agent、模型和权限模式；已有对话发送 /new 后应用。"
         },
         "agentLabel": "Agent",
         "modelLabel": "模型配置",
@@ -2883,7 +3016,8 @@
         "origin": {
           "public": "公开",
           "organization": "团队共享",
-          "local": "本地"
+          "local": "本地",
+          "custom": "自定义"
         },
         "emptyFiltered": "没有找到匹配的插件",
         "useAction": "使用",
@@ -2896,7 +3030,8 @@
           "public": "公开",
           "organization": "组织",
           "personal": "个人",
-          "local": "本地"
+          "local": "本地",
+          "custom": "自定义"
         },
         "install": "安装",
         "details": "详情",
@@ -2922,10 +3057,69 @@
         },
         "securityTitle": "安装与权限",
         "securityDescription": "安装包会在主进程中校验大小与 SHA-256，再经 Cindy 插件清单校验后原子安装。首次安装完成后即自动开启，可随时在插件页停用；更新会保留当前生效状态。",
+        "customSecurityDescription": "该插件来自你添加的自定义市场，未经 Cindy 服务端完整性校验。安装前会在主进程校验插件清单；首次安装完成后即自动开启，可随时在插件页停用。",
         "noPermissions": "此插件未声明额外能力。",
         "installConfirmTitle": "安装「{{name}}」？",
         "installConfirmDescription": "安装包将经过完整性与清单校验。安装完成后插件将自动开启，你可以随时在插件页停用或调整配置。",
-        "updateConfirmDescription": "安装包将经过完整性与清单校验，并替换现有版本。当前生效状态保持不变。"
+        "customInstallConfirmDescription": "插件来自自定义市场，未经服务端完整性校验，安装前将校验插件清单。安装完成后插件将自动开启，你可以随时在插件页停用或调整配置。",
+        "updateConfirmDescription": "安装包将经过完整性与清单校验，并替换现有版本。当前生效状态保持不变。",
+        "sources": {
+          "addMarketplace": "添加插件市场…",
+          "dialogTitle": "添加插件市场",
+          "dialogDescription": "从 GitHub 仓库、Git URL 或本地文件夹添加插件市场。",
+          "learnMore": "了解更多",
+          "sourceLabel": "来源",
+          "sourcePlaceholder": "owner/repo 或 git@github.com:org/repo.git",
+          "refLabel": "Git 引用",
+          "refPlaceholder": "主分支",
+          "sparseLabel": "稀疏路径",
+          "sparsePlaceholder": "每行一个路径，如 team/tools",
+          "gitUnavailable": "未检测到 Git 或版本低于 2.25。Git 来源不可用，本地文件夹来源不受影响。",
+          "listTitle": "已添加的市场",
+          "pluginCount": "{{count}} 个插件",
+          "sourceError": "读取失败",
+          "localBadge": "本地",
+          "defaultRef": "默认分支",
+          "neverSynced": "尚未同步",
+          "refresh": "刷新",
+          "remove": "移除",
+          "removeConfirmTitle": "移除市场「{{name}}」？",
+          "removeConfirmDescription": "移除后，来自该市场的插件将不再显示；已安装的插件保留。",
+          "close": "关闭",
+          "add": "添加市场",
+          "errors": {
+            "invalidSource": "来源格式无效。支持 GitHub owner/repo、Git URL 或本地文件夹路径。",
+            "gitUnavailable": "未检测到 Git 或版本低于 2.25，无法添加 Git 来源。",
+            "cloneAuthFailed": "无法访问该仓库。私有仓库需要先在系统中配置 Git 认证（credential helper 或 SSH key）。",
+            "credentialsNotAllowed": "来源 URL 不能内嵌用户名或密码。请改用系统 Git 认证（credential helper 或 SSH key）。",
+            "cloneFailed": "克隆仓库失败，请检查网络连接后重试。",
+            "refNotFound": "找不到指定的 Git 引用，请检查分支或标签名是否正确。",
+            "manifestMissing": "该来源中找不到受支持的 marketplace.json 清单。",
+            "duplicate": "该市场已添加。",
+            "notFound": "该市场不存在或已被移除。"
+          },
+          "guide": {
+            "title": "自定义插件市场指南",
+            "intro": "插件市场是一个带有清单文件的 Git 仓库或本地文件夹，用来分发一组 Cindy 插件。",
+            "structureTitle": "目录结构",
+            "structureBody": "市场仓库需要一份清单文件，以及若干插件目录。每个插件目录必须包含合法的 ghost.json（插件身份卡）。",
+            "structureLabelManifest": "清单",
+            "structureLabelGhostCard": "插件身份卡",
+            "structureLabelEntry": "插件入口",
+            "structureNote": "清单可以放在以下位置之一：",
+            "manifestTitle": "清单格式",
+            "manifestBody": "name 是市场的唯一标识（添加后按它管理）。清单的插件数组里，每个条目的 source 指向仓库内的插件目录，使用相对路径；也支持 {\"source\": \"local\", \"path\": \"…\"} 的对象写法。",
+            "sourceTitle": "来源格式",
+            "sourceBody": "支持 GitHub 简写 owner/repo、完整 Git URL（https / ssh / git@）和本地文件夹路径（含 ~）。Git 引用可填分支、标签或 commit，不填则用默认分支。稀疏路径每行一个，只检出仓库的指定子目录，适合大型仓库。",
+            "authTitle": "私有仓库",
+            "authBody": "认证完全依赖系统的 Git 配置，Cindy 不保存任何 Git 凭证。SSH 方式：本机已配置可用的 key；若组织开启了 SAML SSO，还需在 GitHub 的 SSH key 设置里为该组织点 Configure SSO 授权。HTTPS 方式：使用 Personal Access Token，并由系统 credential helper 保存。",
+            "rulesTitle": "安装规则",
+            "rulesBody": "插件 id 全局唯一、先装先得——与已安装插件冲突时会明确提示。使用 cindy- 等官方保留前缀的插件不能从自定义市场安装。安装前会逐项展示插件声明的权限，确认后即完成安装并自动开启。",
+            "copy": "复制指南",
+            "copied": "指南已复制到剪贴板。",
+            "copyFailed": "复制失败，请重试。"
+          }
+        }
       },
       "install": "安装插件…",
       "empty": "还没有安装任何插件",
@@ -3052,6 +3246,8 @@
         "resident": "常驻运行(生效后即启动，不调用也保持后台进程)",
         "residentDetail": "空闲时也占用少量内存；停用或卸载后进程立即关闭。",
         "subscribeTopics": "旁听你的任务动态(每轮往来与任务事件，不含消息内容)",
+        "subscribeActivity": "旁听 AI 何时在思考、何时在等你",
+        "subscribeActivityDetail": "只知道时机：思考何时开始与结束，以及 AI 何时在等你批准或等你回答。看不到思考内容、待批准的操作、涉及的命令与文件、计划正文、问题与你的答案，也无法代你批准。",
         "subscribeHooks": "可读取、拦截或改写你发出的消息",
         "subscribeHooksDetail": "发送前先经它审阅：可拦下消息，也可能改写正文后再发出；被拦的消息可编辑后重发。",
         "subscribeAssistantReply": "可读取并重写 AI 的回复",
@@ -3453,6 +3649,12 @@
         "mailPrompt": "帮我从邮件建立智能通讯录：先看看我连接了哪些邮箱工具(没有的话告诉我该怎么连接)；扫描最近 6 个月的往来邮件，找出和我有双向往来的真实联系人建档——高频且信息明确的直接确认，拿不准的用 pending；营销邮件、通知机器人、一次性发件人跳过。最后汇报建了哪些档案。",
         "imPrompt": "帮我从 IM 工具建立智能通讯录：先看看我连接了哪些 IM(飞书 / Slack / 微信等，没有的话告诉我该怎么连接)；把近期经常和我对话的联系人整理进通讯录，拿不准的用 pending，群机器人和一次性对话跳过。最后汇报建了哪些档案。"
       }
+    },
+    "remotePermission": {
+      "label": "权限模式",
+      "hint": "远程 IM 会为需要审批的操作保留确认流程。",
+      "fullAccessDisabled": "远程 IM 不支持完全访问，避免无法安全确认的操作被直接执行。",
+      "permissionModeDisabled": "远程 IM 使用 Cindy 桌面端确认策略，因此该权限模式不可用。"
     }
   },
   "remoteDevice": {
@@ -3782,6 +3984,7 @@
     "costBreakdownHeader": "按模型拆分：",
     "modelCostLine": "· {{model}} {{cost}}",
     "suggestionLine": "建议：{{suggestion}}",
+    "noBilledCost": "本轮费用暂不可用，仅显示用量",
     "suggestion": {
       "lowCache": "缓存命中率偏低，本轮较多上下文重新计费"
     }
@@ -5073,6 +5276,9 @@
       "lastTool": "最近工具：{{tool}}",
       "outputFile": "输出：{{path}}"
     },
+    "planPill": {
+      "step": "步骤 {{current}} / {{total}}"
+    },
     "forkOrigin": {
       "label": "基于原任务创建"
     },
@@ -5083,6 +5289,14 @@
       "aria": "回到底部，查看 {{count}} 条新消息",
       "label_one": "{{count}} 条新消息",
       "label_other": "{{count}} 条新消息"
+    },
+    "messageNavRail": {
+      "aria": "提问导航",
+      "jumpAria": "跳转到第 {{index}} 条提问：{{preview}}",
+      "attachmentOnly_one": "附件 {{count}} 件",
+      "attachmentOnly_other": "附件 {{count}} 件",
+      "hiddenEarlier_one": "更早还有 {{count}} 条提问",
+      "hiddenEarlier_other": "更早还有 {{count}} 条提问"
     },
     "messageActionBar": {
       "copy": "复制消息",
@@ -5107,6 +5321,7 @@
       "turnCost": "本轮消耗",
       "turnCostEstimated": "本轮 token 价值(按 API 单价折算)",
       "turnCostEstimatedValue": "价值 {{cost}}",
+      "turnTokens": "{{tokens}} tokens",
       "userTurnCostTotalLine": "本轮累计：{{cost}}",
       "userTurnCostDetailsTitle": "最后一个 SDK 分段"
     },
@@ -6587,6 +6802,8 @@
         "silentRunTooltip": "开启后，任务成功完成时默认不提醒。若任务说明中要求在特定情况提醒，AI 会在满足条件时主动上报；失败和异常仍会提醒。",
         "silentRunInfoAria": "查看静默运行规则",
         "finishSendToFeishu": "完成时发送到飞书机器人",
+        "finishSendToWecomGroup": "完成时发送到企业微信群",
+        "configWecomGroup": "配置企微群通知",
         "configFeishu": "配置飞书机器人"
       },
       "runSession": {

@@ -4,7 +4,17 @@ import { fetchWithSsrFGuard } from '../shim/ssrf-runtime.js';
 import {
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
+  resolvePinnedHostnameWithPolicy,
+  type LookupFn,
 } from '../_generated/leaf/src/infra/net/ssrf.js';
+
+const FAKE_IP_POLICY = {
+  allowRfc2544BenchmarkRange: true,
+  allowIpv6UniqueLocalRange: true,
+};
+
+const lookupAddresses = (addresses: Array<{ address: string; family: 4 | 6 }>): LookupFn =>
+  (async () => addresses) as unknown as LookupFn;
 
 /**
  * These assert the REAL vendored SSRF decision logic (not our thin fetch shell)
@@ -26,6 +36,40 @@ describe('vendored SSRF decision primitives', () => {
   it('does not flag a public IP as private', () => {
     expect(isPrivateIpAddress('8.8.8.8')).toBe(false);
   });
+
+  it('allows an RFC 2544 proxy fake-IP DNS answer without enabling private networks', async () => {
+    const resolved = await resolvePinnedHostnameWithPolicy('example.com', {
+      policy: FAKE_IP_POLICY,
+      lookupFn: lookupAddresses([{ address: '198.18.0.1', family: 4 }]),
+    });
+
+    expect(resolved.addresses).toEqual(['198.18.0.1']);
+  });
+
+  it('allows an IPv6 ULA proxy fake-IP DNS answer without enabling private networks', async () => {
+    const resolved = await resolvePinnedHostnameWithPolicy('example.com', {
+      policy: FAKE_IP_POLICY,
+      lookupFn: lookupAddresses([{ address: 'fd00::1', family: 6 }]),
+    });
+
+    expect(resolved.addresses).toEqual(['fd00::1']);
+  });
+
+  it.each([
+    ['cloud metadata', '169.254.169.254', 4],
+    ['link-local', '169.254.1.1', 4],
+    ['RFC1918', '10.0.0.5', 4],
+  ] as const)(
+    'still blocks %s DNS answers under the narrow fake-IP policy',
+    async (_kind, address, family) => {
+      await expect(
+        resolvePinnedHostnameWithPolicy('example.com', {
+          policy: FAKE_IP_POLICY,
+          lookupFn: lookupAddresses([{ address, family }]),
+        }),
+      ).rejects.toThrow(/blocked/i);
+    },
+  );
 });
 
 describe('fetchWithSsrFGuard thin shell', () => {
@@ -54,7 +98,7 @@ describe('fetchWithSsrFGuard thin shell', () => {
     await expect(
       fetchWithSsrFGuard({
         url: 'http://127.0.0.1:59999/',
-        policy: { allowedHostnames: ['127.0.0.1'], dangerouslyAllowPrivateNetwork: true },
+        policy: { allowedHostnames: ['127.0.0.1'] },
         timeoutMs: 1500,
       }),
     ).rejects.not.toThrow(/blocked|not in allowlist/i);

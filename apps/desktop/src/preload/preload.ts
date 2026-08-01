@@ -394,6 +394,7 @@ const fanOutDiscordBotStatusChange = createIpcFanOut('discordBot:status-change')
 const fanOutTelegramBotStatusChange = createIpcFanOut('telegramBot:status-change');
 const fanOutDingTalkBotStatusChange = createIpcFanOut('dingtalkBot:status-change');
 const fanOutDingTalkBotOwnerChange = createIpcFanOut('dingtalkBot:owner-change');
+const fanOutWecomBotStatusChange = createIpcFanOut('wecomBot:status-changed');
 // Personal WeChat: main owns auth/polling and broadcasts a credential-free state snapshot.
 const fanOutWechatBotStateChange = createIpcFanOut('wechatBot:state-changed');
 const fanOutVoiceInputEvent = createIpcFanOut('voice-input:event');
@@ -462,6 +463,9 @@ const fanOutHookControlStatus = createIpcFanOut('maker:hook-control:status-chang
 const fanOutHookControlPrefs = createIpcFanOut('maker:hook-control:prefs-changed');
 const fanOutHookControlProviderPrefs = createIpcFanOut(
   'maker:hook-control:provider-prefs-changed',
+);
+const fanOutHookControlTelegramBehavior = createIpcFanOut(
+  'maker:hook-control:telegram-behavior-changed',
 );
 // 目录模型来源偏好全量推送(本地写入后广播, 多窗口设置页同步)。
 const fanOutHookControlWorkspaceProviderSource = createIpcFanOut(
@@ -1007,11 +1011,37 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('plugin-market:detail', pluginId),
     install: (
       pluginId: string,
-      options: { expectedReleaseId: string; allowPermissionExpansion?: boolean },
+      options: {
+        expectedReleaseId: string;
+        expectedManifest?: import('../shared/ghost').GhostManifest;
+        allowPermissionExpansion?: boolean;
+      },
     ): Promise<{ ghost: import('../shared/ghost').InstalledGhost }> =>
       ipcRenderer.invoke('plugin-market:install', pluginId, options),
     uninstall: (pluginId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('plugin-market:uninstall', pluginId),
+    listSources: (): Promise<import('../shared/pluginMarket').MarketSourceSummary[]> =>
+      ipcRenderer.invoke('plugin-market:list-sources'),
+    pickLocalSource: (
+      defaultPath?: string,
+    ): Promise<
+      | { canceled: true }
+      | { canceled: false; summary: import('../shared/pluginMarket').MarketSourceSummary }
+    > => ipcRenderer.invoke('plugin-market:pick-local-source', defaultPath),
+    addSource: (input: {
+      source: string;
+      ref?: string;
+      sparsePaths?: string[];
+    }): Promise<import('../shared/pluginMarket').MarketSourceSummary> =>
+      ipcRenderer.invoke('plugin-market:add-source', input),
+    removeSource: (name: string): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('plugin-market:remove-source', name),
+    refreshSource: (
+      name: string,
+    ): Promise<import('../shared/pluginMarket').MarketSourceSummary> =>
+      ipcRenderer.invoke('plugin-market:refresh-source', name),
+    gitPreflight: (): Promise<{ ok: boolean; version: string | null }> =>
+      ipcRenderer.invoke('plugin-market:git-preflight'),
   },
   voiceInput: {
     prewarm: (payload?: { sourceLanguage?: string; refinementEnabled?: boolean }): Promise<{ ok: true }> =>
@@ -1654,6 +1684,57 @@ contextBridge.exposeInMainWorld('electronAPI', {
     clear: (): Promise<{ ok: true }> => ipcRenderer.invoke('dingtalkBot:clear'),
     onStatusChange: fanOutDingTalkBotStatusChange,
     onOwnerChange: fanOutDingTalkBotOwnerChange,
+  },
+
+  // ── WeCom intelligent bot (Settings → IM Bot → Personal) ──
+  wecomBot: {
+    getStatus: (): Promise<{
+      status:
+        | { kind: 'idle' }
+        | { kind: 'connecting' }
+        | { kind: 'connected'; appId: string }
+        | { kind: 'conflict'; appId: string }
+        | { kind: 'error'; reason: string };
+      botId: string | null;
+      ownerUserId: string | null;
+    }> => ipcRenderer.invoke('wecomBot:get-status'),
+    setConfig: (payload: { botId: string; secret: string }): Promise<{
+      status:
+        | { kind: 'idle' }
+        | { kind: 'connecting' }
+        | { kind: 'connected'; appId: string }
+        | { kind: 'conflict'; appId: string }
+        | { kind: 'error'; reason: string };
+      saveErrorStatus?:
+        | { kind: 'idle' }
+        | { kind: 'connecting' }
+        | { kind: 'connected'; appId: string }
+        | { kind: 'conflict'; appId: string }
+        | { kind: 'error'; reason: string };
+      botId: string | null;
+      ownerUserId: string | null;
+    }> => ipcRenderer.invoke('wecomBot:set-config', payload),
+    reconnect: (): Promise<{
+      status:
+        | { kind: 'idle' }
+        | { kind: 'connecting' }
+        | { kind: 'connected'; appId: string }
+        | { kind: 'conflict'; appId: string }
+        | { kind: 'error'; reason: string };
+      botId: string | null;
+      ownerUserId: string | null;
+    }> => ipcRenderer.invoke('wecomBot:reconnect'),
+    disconnect: (): Promise<{
+      status:
+        | { kind: 'idle' }
+        | { kind: 'connecting' }
+        | { kind: 'connected'; appId: string }
+        | { kind: 'conflict'; appId: string }
+        | { kind: 'error'; reason: string };
+      botId: string | null;
+      ownerUserId: string | null;
+    }> => ipcRenderer.invoke('wecomBot:disconnect'),
+    onStatusChange: fanOutWecomBotStatusChange,
   },
 
   // ── Personal WeChat (Settings → IM Bot → Personal) ──
@@ -2569,6 +2650,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('notification:show-session-event', payload),
   notificationSetDesktopEnabled: (enabled: boolean): Promise<{ ok: true }> =>
     ipcRenderer.invoke('notification:set-desktop-enabled', enabled),
+  wecomGroupNotification: {
+    getState: (): Promise<{ configured: boolean; enabled: boolean; maskedKey?: string }> =>
+      ipcRenderer.invoke('wecomGroupNotification:get-state'),
+    saveAndTest: (
+      webhookUrl: string,
+      testMessage: string,
+    ): Promise<{ configured: boolean; enabled: boolean; maskedKey?: string }> =>
+      ipcRenderer.invoke('wecomGroupNotification:save-and-test', webhookUrl, testMessage),
+    test: (testMessage: string): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('wecomGroupNotification:test', testMessage),
+    setEnabled: (
+      enabled: boolean,
+    ): Promise<{ configured: boolean; enabled: boolean; maskedKey?: string }> =>
+      ipcRenderer.invoke('wecomGroupNotification:set-enabled', enabled),
+    clear: (): Promise<{ configured: boolean; enabled: boolean }> =>
+      ipcRenderer.invoke('wecomGroupNotification:clear'),
+  },
   notificationMarkSessionAttention: (sessionId: string): Promise<void> =>
     ipcRenderer.invoke('notification:mark-session-attention', sessionId),
   // intent:'explicit' = 用户真实看到了内容(报错 banner 聚焦驻留 / 全部标为已读等);
@@ -3512,6 +3610,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:hook-control:set-provider-enabled', { provider, enabled }),
     setWorkspaces: (workspaces: Record<string, string>): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:set-workspaces', { workspaces }),
+    setXDefaultWorkspace: (alias: string | null): Promise<{ hook: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:set-x-default-workspace', { alias }),
     // SIWS OIDC 绑定: 无参数; main 发 bind.start, server 回 pending + 授权链接
     bindStart: (): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:hook-control:bind-start', {}),
@@ -3560,6 +3660,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
       patch: Record<string, string | null>,
     ): Promise<{ prefs: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:provider-prefs-set', { provider, workspace, patch }),
+    getTelegramBehavior: (bindingId: string): Promise<{ behavior: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:telegram-behavior-get', { bindingId }),
+    setTelegramBehavior: (
+      bindingId: string,
+      patch: Record<string, string>,
+    ): Promise<{ behavior: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:telegram-behavior-set', { bindingId, patch }),
+    listTelegramGroups: (bindingId: string): Promise<{ groups: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:telegram-groups-list', { bindingId }),
+    setTelegramGroupActivation: (
+      bindingId: string,
+      chatId: string,
+      mode: 'mention' | 'always',
+    ): Promise<{ behavior: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:telegram-group-activation-set', {
+        bindingId,
+        chatId,
+        mode,
+      }),
     // 工作目录模型来源偏好(纯本地, 不经 WS; providerId=null 清除条目)
     getWorkspaceProviderSources: (): Promise<{ entries: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:workspace-provider-source-get'),
@@ -3572,6 +3691,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:hook-control:workspace-provider-source-set', payload),
     onPrefsChanged: fanOutHookControlPrefs,
     onProviderPrefsChanged: fanOutHookControlProviderPrefs,
+    onTelegramBehaviorChanged: fanOutHookControlTelegramBehavior,
     onWorkspaceProviderSourcesChanged: fanOutHookControlWorkspaceProviderSource,
     onStatusChanged: fanOutHookControlStatus,
   },
@@ -4209,6 +4329,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
         // configuration-and-overrides.md §4 的「删 override 跟随默认」语义。
         | { kind: 'reset'; providerId: string },
     ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:model-disable:set', input),
+    getModelPriceOverride: (
+      target: import('../shared/modelPriceOverride').ModelPriceOverrideTarget,
+    ): Promise<import('../shared/modelPriceOverride').ModelPriceOverrideView> =>
+      ipcRenderer.invoke('maker:model-price-override:get', target),
+    setModelPriceOverride: (
+      target: import('../shared/modelPriceOverride').ModelPriceOverrideTarget,
+      desired: import('../shared/modelPriceOverride').ModelPriceOverrideDesiredQuote,
+    ): Promise<import('../shared/modelPriceOverride').ModelPriceOverrideView> =>
+      ipcRenderer.invoke('maker:model-price-override:set', target, desired),
+    resetModelPriceOverride: (
+      target: import('../shared/modelPriceOverride').ModelPriceOverrideTarget,
+    ): Promise<import('../shared/modelPriceOverride').ModelPriceOverrideView> =>
+      ipcRenderer.invoke('maker:model-price-override:reset', target),
 
     // 「在新窗口打开」会话多开 —— 新建一个完整窗口定位到该 session。
     openSessionInNewWindow: (sessionId: string): Promise<void> =>

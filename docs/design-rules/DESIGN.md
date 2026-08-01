@@ -414,6 +414,7 @@ Theme switching: `useTheme.ts` provides `theme` (System / Light / Dark mode) plu
 | `--warning-bg-soft` | rgba(234,107,23,0.12) | rgba(234,107,23,0.18) | Warning alpha surface (alpha recomputed against `#EA6B17`, 2026-07-17) |
 | `--warning-fg` | `#F3A115` | `#F3A115` | Warning text/icons, including the update-restart busy-turn interruption hint |
 | `--focus-ring` / `--focus-ring-soft` | `#417CDD` / @50% | same | A11y focus ring, finalized 2026-07-17 (replaces #3b82f6), theme-invariant |
+| `--text-selection-bg` | `var(--focus-ring-soft)` | same | Selected text background; remains visible when focus moves into an embedded webview |
 | `--shadow-menu` / `--cmd-palette-shadow` / `--confirm-shadow` | rgba | rgba (deeper) | Shadows, theme-invariant |
 | `--overlay-modal` / `--overlay-lightbox` | rgba | rgba (deeper) | Modal / lightbox backdrop |
 | `--perm-auto-selected-text` | `#417CDD` | `#417CDD` | Auto Approval accent, finalized 2026-07-17 (same value both modes; replaces #000050/#00D9C5) |
@@ -526,6 +527,7 @@ Known but deliberately-deferred cleanups (e.g. hardcoded hex in `MakerExperiment
 ### 14.1 Text Selectability (user-select)
 
 - **Content is selectable**: message body text, code blocks, document previews — anything the user reads sentence-by-sentence or may want to copy. Selectable by default; leave it alone.
+- **Selections survive focus changes**: moving focus into an embedded webview (plugin panel, built-in browser, etc.) must not clear the host selection or let Chromium repaint it as an unreadable inactive color. Global and editor selections use `--text-selection-bg`, which remains visible in both Light and Dark modes.
 - **Chrome is not selectable**: buttons, menu items, labels/chips, status bars, badges, toolbars, sidebar rows — interface-skeleton text gets `select-none`. They are controls, not content; being selectable only gets in the way (typical offender: the goal-status chip label).
 - Litmus test: would the user ever think "let me copy this"? Yes → selectable; no (it's just a control) → `select-none`.
 

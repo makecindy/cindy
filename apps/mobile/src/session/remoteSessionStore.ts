@@ -22,6 +22,7 @@ import { cacheSessionMessages, getCachedSessionMessages } from '@/session/mobile
 import { contentToPreview } from '@/utils/contentPreview';
 import type { MobileSystemCardType } from '@/session/systemCard';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
+import { compareMessageOrder } from '@/session/messagePaging';
 import { normalizeRemoteMoney } from '@/session/remoteMoney';
 
 interface DeviceShard {
@@ -556,7 +557,7 @@ function preserveSessionRuntimeFields(fresh: RemoteSession, local: RemoteSession
 }
 
 function normalizeMessages(list: readonly RemoteMessage[]): RemoteMessage[] {
-  return [...list].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return [...list].sort(compareMessageOrder);
 }
 
 function messageKey(message: RemoteMessage): string {
@@ -1077,12 +1078,19 @@ function flushAndFinalizeRemoteStreamingMessages(
 }
 
 function hasLiveAssistantMessage(sessionId: string): boolean {
-  const pendingLiveIds = pendingLiveAssistantClientIds.get(sessionId);
-  if (!pendingLiveIds || pendingLiveIds.size === 0) return false;
   return (messages.get(sessionId) ?? []).some((message) => (
-    message.role === 'assistant'
-      && (pendingLiveIds.has(message.clientId) || pendingLiveIds.has(message.id))
+    isPendingLiveAssistantMessage(sessionId, message)
   ));
+}
+
+function isPendingLiveAssistantMessage(
+  sessionId: string,
+  message: RemoteMessage,
+): boolean {
+  const pendingLiveIds = pendingLiveAssistantClientIds.get(sessionId);
+  return message.role === 'assistant'
+    && pendingLiveIds !== undefined
+    && (pendingLiveIds.has(message.clientId) || pendingLiveIds.has(message.id));
 }
 
 function flushPendingTextDeltas(): void {
@@ -1466,7 +1474,13 @@ export const remoteSessionStore = {
       // 本地系统卡(/learn、/context 等)没有服务端对应行:不管时序落在窗口哪里都
       // 不会出现在 latestKeys 里,若不单独保留会被 window 刷新时静默丢弃。
       const isLocalSystemCard = messageKey(item).startsWith('mobile-system-');
-      if (isNewerThanLatestPage || isOlderLoadedPage || isLocalSystemCard) {
+      const isPendingLiveAssistant = isPendingLiveAssistantMessage(sessionId, item);
+      if (
+        isNewerThanLatestPage
+        || isOlderLoadedPage
+        || isLocalSystemCard
+        || isPendingLiveAssistant
+      ) {
         byKey.set(messageKey(item), item);
       }
     }
@@ -2052,17 +2066,47 @@ export const remoteSessionStore = {
       const clientId = readString(payload, 'clientId');
       const turnMoney = normalizeRemoteMoney(payload.turnMoney);
       const turnCostUsd = readNumber(payload, 'turnCostUsd');
+      // 用量明细与金额各自独立:桌面算不出报价时只推 turnUsageDetails,操作行据此
+      // 退回显示本轮 token(与 messageNormalize.readTurnCost 同口径)。
+      const turnUsageDetails = isRecord(payload.turnUsageDetails)
+        ? payload.turnUsageDetails
+        : undefined;
+      // 用户轮累计与当前 segment 金额是两个独立事实:自动续跑的收尾轮只带 userTurnMoney
+      // (前面的 segment 记了账、收尾这个缺报价)。所以独立投影,由
+      // messageNormalize.readTurnCost 单点决定操作行显示哪一个
+      // (不变量正本见 apps/desktop/src/shared/turnCostPayload.ts)。
+      const userTurnMoney = normalizeRemoteMoney(payload.userTurnMoney);
+      const userTurnCostUsd = readNumber(payload, 'userTurnCostUsd');
+      const userTurnCostIsEstimate = payload.userTurnCostIsEstimate === true;
+      const basePatch: Record<string, unknown> = {
+        ...(turnUsageDetails ? { turnUsageDetails } : {}),
+      };
+      if (userTurnMoney && userTurnMoney.amount > 0) {
+        basePatch.userTurnCost = userTurnMoney;
+        if (userTurnMoney.currency === 'USD') {
+          basePatch.userTurnCostUsd = userTurnMoney.amount;
+        }
+        basePatch.userTurnCostIsEstimate =
+          userTurnCostIsEstimate || userTurnMoney.kind === 'value-estimate';
+      } else if (userTurnCostUsd !== null && userTurnCostUsd > 0) {
+        basePatch.userTurnCostUsd = userTurnCostUsd;
+        basePatch.userTurnCostIsEstimate = userTurnCostIsEstimate;
+      }
       if (sessionId && clientId && turnMoney && turnMoney.amount > 0) {
         this.patchMessageAgentMeta(sessionId, clientId, {
+          ...basePatch,
           turnCost: turnMoney,
           ...(turnMoney.currency === 'USD' ? { turnCostUsd: turnMoney.amount } : {}),
           turnCostIsEstimate: turnMoney.kind === 'value-estimate',
         });
       } else if (sessionId && clientId && turnCostUsd !== null && turnCostUsd > 0) {
         this.patchMessageAgentMeta(sessionId, clientId, {
+          ...basePatch,
           turnCostUsd,
           turnCostIsEstimate: payload.turnCostIsEstimate === true,
         });
+      } else if (sessionId && clientId && Object.keys(basePatch).length > 0) {
+        this.patchMessageAgentMeta(sessionId, clientId, basePatch);
       }
       return;
     }
@@ -2418,6 +2462,34 @@ export const remoteSessionStore = {
       return;
     }
     if (textFlushed || reconnectCleared) emit();
+  },
+
+  /**
+   * 短暂离线只失效依赖实时连接的投影,保留 shard / session / messages / 路由索引。
+   * 恢复后会话页因此走 reopen(旧内容立即可见),而 marker 已删除会强制后台核对
+   * 最新消息窗口,不会把断线前缓存误判为 fresh。
+   */
+  markDeviceOffline(deviceId: string): void {
+    let changed = false;
+    for (const [sessionId, indexedDeviceId] of sessionDeviceIndex) {
+      if (indexedDeviceId !== deviceId) continue;
+      changed = sessionMessageSyncMarkers.delete(sessionId) || changed;
+      changed = livePlanSnapshots.delete(sessionId) || changed;
+      changed = pendingRefreshSessions.delete(sessionId) || changed;
+      changed = pendingInteractions.delete(sessionId) || changed;
+      changed = inputProjections.delete(sessionId) || changed;
+      changed = sessionLiveActivity.delete(sessionId) || changed;
+      changed = sessionGoalStatus.delete(sessionId) || changed;
+      changed = sessionTaskUpdates.delete(sessionId) || changed;
+      changed = sessionParkedTaskUpdates.delete(sessionId) || changed;
+      changed = sessionMakerActivityEpochs.delete(sessionId) || changed;
+      changed = flushAndFinalizeRemoteStreamingMessages(sessionId) || changed;
+      changed = streamingAssistantClientIds.delete(sessionId) || changed;
+      changed = pendingLiveAssistantClientIds.delete(sessionId) || changed;
+      changed = writeMakerTurnRunning(sessionId, false) || changed;
+      changed = writeSessionRunStatus(sessionId, EMPTY_SESSION_RUN_STATUS) || changed;
+    }
+    if (changed) emit();
   },
 
   removeDevice(deviceId: string): void {

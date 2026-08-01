@@ -60,6 +60,11 @@ import * as messageService from '@/lib/messageService';
 import type { Message } from '@/lib/ccAgent.types';
 import { CONTINUE_AFTER_ERROR_PROMPT } from '../../shared/interruptedTurn.js';
 
+const inputStop = vi.fn(async () => projection({ queuePaused: false }));
+const inputGetProjection = vi.fn<() => Promise<unknown>>(async () =>
+  Promise.reject(new Error('n/a in test')),
+);
+
 let inputProjectionCb: ((projection: unknown) => void) | null = null;
 
 function makeElectronApiStub() {
@@ -77,7 +82,8 @@ function makeElectronApiStub() {
       onInteractionRequest: fanOut(),
       onInteractionDismissed: fanOut(),
       input: {
-        getProjection: vi.fn(async () => Promise.reject(new Error('n/a in test'))),
+        getProjection: inputGetProjection,
+        stop: inputStop,
       },
     },
     localDb: { messages: { onCreated: fanOut() } },
@@ -101,6 +107,15 @@ function serverMessage(over: Partial<Message>): Message {
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 const SID = 'auto-resume-card-session';
 const PENDING_CARD_ID = '__auto_resume_pending__';
 const PENDING_INFO = {
@@ -121,12 +136,20 @@ function projection(over: Record<string, unknown> = {}) {
     queueInteractionLocks: [],
     queueEditLocks: [],
     queueAbortPending: false,
+    continuationInFlightClientId: null,
+    continuationTurnClientId: null,
     error: null,
     recovery: null,
     errorRetryText: null,
     credentialSwitchWait: null,
     ...over,
   };
+}
+
+/** 旧被控端 wire 形状：字段完全不存在；不能用显式 undefined 伪装（own property 仍存在）。 */
+function legacyProjection(over: Record<string, unknown> = {}) {
+  const { continuationTurnClientId: _unsupported, ...legacy } = projection(over);
+  return legacy;
 }
 
 describe('mapServerMessages auto-resume 分隔线', () => {
@@ -305,6 +328,98 @@ describe('applyInputProjection 自愈进行中提示', () => {
     const snapshot = makerChatStore.getSnapshot(SID);
     expect(snapshot.messages.some((m) => m.clientId === PENDING_CARD_ID)).toBe(false);
     expect(snapshot.error).toBe('API Error: Connection closed mid-response.');
+  });
+});
+
+// Main now owns the vendor-turn continuation identity; Renderer mirrors it without a sticky seen marker.
+describe('续跑边界投影能力与 vendor turn owner', () => {
+  beforeEach(() => {
+    (globalThis as { window?: unknown }).window = { electronAPI: makeElectronApiStub() };
+    makerChatStore.initGlobalListeners();
+  });
+
+  afterEach(() => {
+    makerChatStore.purgeSession(SID);
+  });
+
+  it('尚未收到投影时 capability=unknown，owner 为 null', () => {
+    const snap = makerChatStore.getSnapshot(SID);
+    expect(snap.continuationInFlightProjectionCapability).toBe('unknown');
+    expect(snap.continuationTurnClientId).toBeNull();
+  });
+
+  it('新版显式 null 与非空 owner 都标记 supported，并原样镜像', () => {
+    inputProjectionCb!(projection());
+    let snap = makerChatStore.getSnapshot(SID);
+    expect(snap.continuationInFlightProjectionCapability).toBe('supported');
+    expect(snap.continuationTurnClientId).toBeNull();
+
+    inputProjectionCb!(projection({ continuationTurnClientId: 'resume-1' }));
+    snap = makerChatStore.getSnapshot(SID);
+    expect(snap.continuationInFlightProjectionCapability).toBe('supported');
+    expect(snap.continuationTurnClientId).toBe('resume-1');
+  });
+
+  it('owner 变回 null 时同步清除，不保留跨 turn 记忆', () => {
+    inputProjectionCb!(projection({ continuationTurnClientId: 'resume-1' }));
+    inputProjectionCb!(projection({ continuationTurnClientId: null }));
+    const snap = makerChatStore.getSnapshot(SID);
+    expect(snap.continuationTurnClientId).toBeNull();
+  });
+
+  it('字段完全缺省(旧被控端)→ capability=legacy', () => {
+    inputProjectionCb!(legacyProjection());
+    const snap = makerChatStore.getSnapshot(SID);
+    expect(snap.continuationInFlightProjectionCapability).toBe('legacy');
+    expect(snap.continuationTurnClientId).toBeNull();
+  });
+
+  it('同一会话的被控端升级后，显式字段会从 legacy 前进到 supported', () => {
+    inputProjectionCb!(legacyProjection());
+    inputProjectionCb!(projection({ continuationTurnClientId: null }));
+    expect(makerChatStore.getSnapshot(SID).continuationInFlightProjectionCapability).toBe(
+      'supported',
+    );
+  });
+
+  it('done 终态清 owner后，迟到旧 projection 不能重新点亮转圈', async () => {
+    const staleQuery = deferred<unknown>();
+    inputGetProjection.mockImplementationOnce(() => staleQuery.promise);
+
+    inputProjectionCb!(projection({ continuationTurnClientId: 'resume-1' }));
+    makerChatStore.ensureInitialMessages(SID);
+    makerChatStore.__applyStreamEventForTest(SID, {
+      sessionId: SID,
+      type: 'done',
+      data: {},
+    } as CCAgentStreamEvent);
+    expect(makerChatStore.getSnapshot(SID).continuationTurnClientId).toBeNull();
+
+    staleQuery.resolve(projection({ continuationTurnClientId: 'resume-stale' }));
+    await flush();
+    expect(makerChatStore.getSnapshot(SID).continuationTurnClientId).toBeNull();
+  });
+
+  it('Stop 立即清除续跑 owner，迟到旧 projection 不能重新点亮转圈', async () => {
+    const staleQuery = deferred<unknown>();
+    inputGetProjection.mockImplementationOnce(() => staleQuery.promise);
+
+    // 先用普通 projection 建立 owner，再发起悬挂查询；这样测试不会依靠查询之后的
+    // push 顺带推进 epoch，必须由 Stop 自己同步作废该查询。
+    inputProjectionCb!(projection({ continuationTurnClientId: 'resume-1' }));
+    makerChatStore.ensureInitialMessages(SID);
+    expect(makerChatStore.getSnapshot(SID).continuationTurnClientId).toBe('resume-1');
+
+    inputStop.mockResolvedValueOnce(projection({ queueExpanded: true }));
+    makerChatStore.stopSession(SID);
+    expect(makerChatStore.getSnapshot(SID).continuationTurnClientId).toBeNull();
+
+    staleQuery.resolve(projection({ continuationTurnClientId: 'resume-stale' }));
+    await flush();
+    const snapshot = makerChatStore.getSnapshot(SID);
+    expect(snapshot.continuationTurnClientId).toBeNull();
+    // Stop 自己的响应属于推进后的新 authority 代际，不能被一并误杀。
+    expect(snapshot.queueExpanded).toBe(true);
   });
 });
 

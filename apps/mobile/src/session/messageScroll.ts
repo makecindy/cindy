@@ -112,11 +112,18 @@ export interface MobileNearBottomResolveInput {
   scrollDelta: number;
   /** 底部浮层高度(近底阈值随之放大,同 isNearMobileMessageListBottom)。 */
   bottomOverlayHeight?: number;
+  /**
+   * Whether the event was emitted while an imperative list scroll is settling.
+   * Native list implementations can report a transient offset before the
+   * commanded end position is applied; that event must not cancel auto-follow.
+   */
+  programmaticScrollInFlight?: boolean;
 }
 
 /**
  * scroll 事件驱动的近底/跟随态迁移(handleScroll 消费)。
  *
+ *  - 命令式滚动 settling → 保持原跟随态,不把瞬时 offset 当成用户上翻;
  *  - 内容未撑满一屏 → true(与 isNearMessageListBottom 同口径);
  *  - 距底超出阈值 → false(离底解除,原行为不变);
  *  - 阈值带内且原本在跟 → 保持 true(贴底期间程序化 scrollToEnd 产生的
@@ -126,6 +133,7 @@ export interface MobileNearBottomResolveInput {
  *    无方向守卫会立即翻回跟随,解除失效(修复核心)。
  */
 export function resolveMobileNearBottomOnScroll(input: MobileNearBottomResolveInput): boolean {
+  if (input.programmaticScrollInFlight) return input.wasNearBottom;
   const { contentHeight, viewportHeight } = input.metrics;
   if (contentHeight <= viewportHeight) return true;
   if (!isNearMobileMessageListBottom(input.metrics, input.bottomOverlayHeight)) return false;

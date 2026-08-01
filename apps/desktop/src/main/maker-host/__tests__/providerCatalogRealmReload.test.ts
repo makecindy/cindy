@@ -1,4 +1,7 @@
+import { randomUUID } from 'node:crypto';
+import { promises as fsp } from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -9,10 +12,15 @@ const h = vi.hoisted(() => ({
     source: Record<string, unknown>;
     resolve: (catalog: unknown) => void;
   }>,
+  refreshLoads: [] as Array<{
+    source: Record<string, unknown>;
+    resolve: (result: unknown) => void;
+  }>,
 }));
 
 vi.mock('electron', () => ({
   app: { getPath: () => os.tmpdir() },
+  BrowserWindow: { getAllWindows: () => [] },
   net: { request: vi.fn() },
 }));
 
@@ -24,6 +32,12 @@ vi.mock('@cindy/model-providers', async (importOriginal) => {
       (source: Record<string, unknown>) =>
         new Promise((resolve) => {
           h.loads.push({ source, resolve });
+        }),
+    ),
+    loadCatalogWithSource: vi.fn(
+      (source: Record<string, unknown>) =>
+        new Promise((resolve) => {
+          h.refreshLoads.push({ source, resolve });
         }),
     ),
   };
@@ -42,6 +56,7 @@ vi.mock('../../authManager.js', () => ({
 }));
 vi.mock('../../appSessionState.js', () => ({
   getActiveAppSession: () => ({ mode: 'signed-out', dataOwnerId: null }),
+  ownerScopedUserDataPath: (...segments: string[]) => path.join(os.tmpdir(), ...segments),
 }));
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: () => ({ canUseCindyGateway: false }),
@@ -102,13 +117,19 @@ vi.mock('../model-discovery/anthropic.js', () => ({
 import { BUNDLED_CATALOG, type Catalog } from '@cindy/model-providers';
 import { getActiveCatalog } from '../active-catalog.js';
 import {
+  __testing,
   ensureActiveCatalogLoaded,
+  refreshActiveCatalogFromSource,
   reloadActiveCatalogForEndpointChange,
+  shouldDisableCatalogFetch,
 } from '../createDesktopProviderService.js';
 
-function catalogNamed(name: string): Catalog {
+function catalogNamed(name: string, updatedAt?: string): Catalog {
   return {
     ...BUNDLED_CATALOG,
+    ...(updatedAt && BUNDLED_CATALOG.modelRegistry
+      ? { modelRegistry: { ...BUNDLED_CATALOG.modelRegistry, updatedAt } }
+      : {}),
     providers: BUNDLED_CATALOG.providers.map((provider, index) =>
       index === 0 ? { ...provider, name } : provider,
     ),
@@ -120,6 +141,136 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  it('persists only a digest of a catalog scope that may contain URL credentials', () => {
+    const scope = 'https://catalog.example/models?access_token=do-not-persist';
+    const envelope = __testing.catalogLkgEnvelope(scope, '{"schemaVersion":1}');
+
+    expect(envelope).toMatchObject({
+      version: 2,
+      scopeHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      catalog: '{"schemaVersion":1}',
+    });
+    expect(JSON.stringify(envelope)).not.toContain(scope);
+    expect(JSON.stringify(envelope)).not.toContain('do-not-persist');
+  });
+
+  it('uses a unique temporary path for every LKG write', () => {
+    const first = __testing.catalogLkgTemporaryPath('/catalog.json');
+    const second = __testing.catalogLkgTemporaryPath('/catalog.json');
+
+    expect(first).not.toBe(second);
+    expect(first).toMatch(/\/catalog\.json\.\d+\.[0-9a-f-]+\.tmp$/);
+    expect(second).toMatch(/\/catalog\.json\.\d+\.[0-9a-f-]+\.tmp$/);
+  });
+
+  it('serializes the complete LKG replacement transaction for the same scope', async () => {
+    const events: string[] = [];
+    let finishFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      finishFirst = resolve;
+    });
+    const first = __testing.serializeCatalogLkgWrite('/same-catalog.json', async () => {
+      events.push('first:start');
+      await firstGate;
+      events.push('first:end');
+    });
+    await vi.waitFor(() => expect(events).toEqual(['first:start']));
+
+    const second = __testing.serializeCatalogLkgWrite('/same-catalog.json', async () => {
+      events.push('second:start');
+      events.push('second:end');
+    });
+    await Promise.resolve();
+    expect(events).toEqual(['first:start']);
+
+    finishFirst();
+    await Promise.all([first, second]);
+    expect(events).toEqual(['first:start', 'first:end', 'second:start', 'second:end']);
+  });
+
+  it('keeps a newer LKG when an older response queues behind it for the same scope', async () => {
+    const scope = `https://catalog.example.test/${randomUUID()}`;
+    const file = __testing.catalogLkgPath(scope);
+    const older = JSON.stringify(catalogNamed('OLDER', '2026-07-30T00:00:00.000Z'));
+    const newer = JSON.stringify(catalogNamed('NEWER', '2026-08-01T00:00:00.000Z'));
+
+    try {
+      await __testing.writeCatalogLkg(scope, older);
+      const newerCommit = __testing.writeCatalogLkg(scope, newer);
+      const staleCommit = __testing.writeCatalogLkg(scope, older);
+
+      await expect(newerCommit).resolves.toBe(newer);
+      await expect(staleCommit).resolves.toBe(newer);
+      await expect(__testing.readCatalogLkg(scope)).resolves.toBe(newer);
+    } finally {
+      await fsp.rm(file, { force: true });
+      await fsp.rm(`${file}.bak`, { force: true });
+    }
+  });
+
+  it('replaces an existing LKG through a Windows-safe backup path', async () => {
+    const files = new Set(['/catalog.json', '/catalog.tmp']);
+    const calls: Array<[string, string]> = [];
+    let firstReplace = true;
+    const fileIo = {
+      async rename(from: string, to: string) {
+        calls.push([from, to]);
+        if (firstReplace && from === '/catalog.tmp' && to === '/catalog.json') {
+          firstReplace = false;
+          throw Object.assign(new Error('destination exists'), { code: 'EEXIST' });
+        }
+        if (!files.has(from)) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+        files.delete(from);
+        files.add(to);
+      },
+      async rm(target: string) {
+        files.delete(target);
+      },
+    };
+
+    await __testing.replaceCatalogLkgFile('/catalog.tmp', '/catalog.json', fileIo);
+
+    expect(calls).toEqual([
+      ['/catalog.tmp', '/catalog.json'],
+      ['/catalog.json', '/catalog.json.bak'],
+      ['/catalog.tmp', '/catalog.json'],
+    ]);
+    expect(files).toEqual(new Set(['/catalog.json']));
+  });
+
+  it('restores the previous LKG if the replacement still fails', async () => {
+    const files = new Set(['/catalog.json', '/catalog.tmp']);
+    let temporaryAttempts = 0;
+    const fileIo = {
+      async rename(from: string, to: string) {
+        if (from === '/catalog.tmp') {
+          temporaryAttempts += 1;
+          throw Object.assign(new Error('locked'), { code: temporaryAttempts === 1 ? 'EPERM' : 'EBUSY' });
+        }
+        if (!files.has(from)) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+        files.delete(from);
+        files.add(to);
+      },
+      async rm(target: string) {
+        files.delete(target);
+      },
+    };
+
+    await expect(
+      __testing.replaceCatalogLkgFile('/catalog.tmp', '/catalog.json', fileIo),
+    ).rejects.toMatchObject({ code: 'EBUSY' });
+    expect(files.has('/catalog.json')).toBe(true);
+    expect(files.has('/catalog.json.bak')).toBe(false);
+  });
+
+  it('keeps dev offline by default but permits an explicit catalog URL', () => {
+    expect(shouldDisableCatalogFetch(true, undefined, false)).toBe(true);
+    expect(shouldDisableCatalogFetch(true, '   ', false)).toBe(true);
+    expect(shouldDisableCatalogFetch(true, 'http://127.0.0.1/catalog', false)).toBe(false);
+    expect(shouldDisableCatalogFetch(false, undefined, false)).toBe(false);
+    expect(shouldDisableCatalogFetch(false, 'http://127.0.0.1/catalog', true)).toBe(true);
+  });
+
   it('invalidates the old realm immediately and ignores a stale cross-realm response', async () => {
     const initial = ensureActiveCatalogLoaded();
     expect(h.loads[0]?.source).toMatchObject({
@@ -149,5 +300,72 @@ describe('provider catalog realm reload', () => {
     h.loads[2]!.resolve(catalogNamed('catalog-cn-latest'));
     await cnReload;
     expect(activeMarker()).toBe('catalog-cn-latest');
+  });
+
+  it('ignores an automatic refresh response from a superseded realm', async () => {
+    const staleRefresh = refreshActiveCatalogFromSource();
+    await Promise.resolve();
+    expect(h.refreshLoads[0]?.source).toMatchObject({
+      baseUrl: 'https://model.cn.example',
+    });
+
+    h.endpoint = 'https://model.global.example';
+    const globalReloadIndex = h.loads.length;
+    const globalReload = reloadActiveCatalogForEndpointChange();
+    h.loads[globalReloadIndex]!.resolve(
+      catalogNamed('catalog-global-current', '2026-07-31T12:00:00.000Z'),
+    );
+    await globalReload;
+
+    const currentRefresh = refreshActiveCatalogFromSource();
+    await Promise.resolve();
+    expect(h.refreshLoads[1]?.source).toMatchObject({
+      baseUrl: 'https://model.global.example',
+    });
+    h.refreshLoads[1]!.resolve({
+      catalog: catalogNamed('catalog-global-refreshed', '2026-07-31T12:30:00.000Z'),
+      source: 'remote',
+    });
+    await currentRefresh;
+
+    h.refreshLoads[0]!.resolve({
+      catalog: catalogNamed('catalog-cn-stale', '2026-07-31T13:00:00.000Z'),
+      source: 'remote',
+    });
+    await staleRefresh;
+
+    expect(activeMarker()).toBe('catalog-global-current');
+    expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-07-31T12:30:00.000Z');
+  });
+
+  it('does not downgrade the active catalog when refresh falls back to an older cache', async () => {
+    const activeXaiModels = getActiveCatalog().providers
+      .find((provider) => provider.id === 'xai')
+      ?.models.codex;
+    const staleCatalog = structuredClone(
+      catalogNamed('catalog-global-cached', '2026-07-31T11:00:00.000Z'),
+    );
+    const staleXai = staleCatalog.providers.find((provider) => provider.id === 'xai');
+    if (!staleXai) throw new Error('expected bundled xai provider');
+    staleXai.models.codex = [{
+      id: 'xai/stale-cache-only',
+      name: 'Stale cache only',
+      contextWindow: 1,
+      efforts: [],
+      defaultEffort: null,
+    }];
+    const refresh = refreshActiveCatalogFromSource();
+    await Promise.resolve();
+    const load = h.refreshLoads.at(-1)!;
+    load.resolve({
+      catalog: staleCatalog,
+      source: 'cache',
+    });
+    await refresh;
+
+    expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-07-31T12:30:00.000Z');
+    expect(
+      getActiveCatalog().providers.find((provider) => provider.id === 'xai')?.models.codex,
+    ).toEqual(activeXaiModels);
   });
 });

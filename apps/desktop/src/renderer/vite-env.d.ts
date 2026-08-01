@@ -419,6 +419,12 @@ type TelegramBotTransportStatus =
   | { kind: 'error'; reason: string };
 
 type DingTalkBotTransportStatus = DiscordBotTransportStatus;
+type WecomBotTransportStatus =
+  | { kind: 'idle' }
+  | { kind: 'connecting' }
+  | { kind: 'connected'; appId: string }
+  | { kind: 'conflict'; appId: string }
+  | { kind: 'error'; reason: string };
 
 type WechatBotPhase =
   | 'disconnected'
@@ -1351,9 +1357,30 @@ interface ElectronAPI {
     ) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
     install: (
       pluginId: string,
-      options: { expectedReleaseId: string; allowPermissionExpansion?: boolean },
+      options: {
+        expectedReleaseId: string;
+        expectedManifest?: import('../shared/ghost').GhostManifest;
+        allowPermissionExpansion?: boolean;
+      },
     ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
     uninstall: (pluginId: string) => Promise<{ ok: true }>;
+    listSources: () => Promise<import('../shared/pluginMarket').MarketSourceSummary[]>;
+    pickLocalSource: (
+      defaultPath?: string,
+    ) => Promise<
+      | { canceled: true }
+      | { canceled: false; summary: import('../shared/pluginMarket').MarketSourceSummary }
+    >;
+    addSource: (input: {
+      source: string;
+      ref?: string;
+      sparsePaths?: string[];
+    }) => Promise<import('../shared/pluginMarket').MarketSourceSummary>;
+    removeSource: (name: string) => Promise<{ ok: true }>;
+    refreshSource: (
+      name: string,
+    ) => Promise<import('../shared/pluginMarket').MarketSourceSummary>;
+    gitPreflight: () => Promise<{ ok: boolean; version: string | null }>;
   };
   voiceInput: {
     prewarm: (payload?: { sourceLanguage?: string; refinementEnabled?: boolean }) => Promise<{ ok: true }>;
@@ -1828,6 +1855,37 @@ interface ElectronAPI {
     onOwnerChange: (callback: (update: { ownerUserId: string }) => void) => () => void;
   };
 
+  wecomBot: {
+    getStatus: () => Promise<{
+      status: WecomBotTransportStatus;
+      botId: string | null;
+      ownerUserId: string | null;
+    }>;
+    setConfig: (payload: { botId: string; secret: string }) => Promise<{
+      status: WecomBotTransportStatus;
+      saveErrorStatus?: WecomBotTransportStatus;
+      botId: string | null;
+      ownerUserId: string | null;
+    }>;
+    reconnect: () => Promise<{
+      status: WecomBotTransportStatus;
+      botId: string | null;
+      ownerUserId: string | null;
+    }>;
+    disconnect: () => Promise<{
+      status: WecomBotTransportStatus;
+      botId: string | null;
+      ownerUserId: string | null;
+    }>;
+    onStatusChange: (
+      callback: (update: {
+        status: WecomBotTransportStatus;
+        botId: string | null;
+        ownerUserId: string | null;
+      }) => void,
+    ) => () => void;
+  };
+
   // ── Personal WeChat (Settings → IM Bot → Personal) ──
   wechatBot: {
     getState: () => Promise<WechatBotState>;
@@ -2136,6 +2194,18 @@ interface ElectronAPI {
   }) => Promise<void>;
   /** Sync the renderer-owned global desktop-notification preference to main. */
   notificationSetDesktopEnabled?: (enabled: boolean) => Promise<{ ok: true }>;
+  wecomGroupNotification: {
+    getState: () => Promise<{ configured: boolean; enabled: boolean; maskedKey?: string }>;
+    saveAndTest: (
+      webhookUrl: string,
+      testMessage: string,
+    ) => Promise<{ configured: boolean; enabled: boolean; maskedKey?: string }>;
+    test: (testMessage: string) => Promise<{ ok: true }>;
+    setEnabled: (
+      enabled: boolean,
+    ) => Promise<{ configured: boolean; enabled: boolean; maskedKey?: string }>;
+    clear: () => Promise<{ configured: boolean; enabled: boolean }>;
+  };
   /** 将对应 session 标记为需要关注，显示 Dock/taskbar app badge。 */
   notificationMarkSessionAttention: (sessionId: string) => Promise<void>;
   /** 用户查看对应 session 后，清除系统级 Dock/taskbar attention badge。 */
@@ -3214,6 +3284,10 @@ interface ElectronAPI {
     setWorkspaces: (
       workspaces: Record<string, string>,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
+    /** X 派发任务的默认工作目录别名(null = 内置「对话」伪目录)。 */
+    setXDefaultWorkspace: (
+      alias: string | null,
+    ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     bindStart: () => Promise<{ ok: true }>;
     bindRevoke: () => Promise<{ ok: true }>;
     // (multi-team)多 workspace 绑定动作
@@ -3254,6 +3328,25 @@ interface ElectronAPI {
       workspace: string,
       patch: import('../shared/hookControlIpc').HookPrefsPatch,
     ) => Promise<{ prefs: import('../shared/hookControlIpc').ProviderPrefsView }>;
+    getTelegramBehavior: (bindingId: string) => Promise<{
+      behavior: import('../shared/hookControlIpc').TelegramHookBehaviorState;
+    }>;
+    setTelegramBehavior: (
+      bindingId: string,
+      patch: import('../shared/hookControlIpc').TelegramHookBehaviorPatch,
+    ) => Promise<{
+      behavior: import('../shared/hookControlIpc').TelegramHookBehaviorState;
+    }>;
+    listTelegramGroups: (bindingId: string) => Promise<{
+      groups: import('../shared/hookControlIpc').TelegramHookKnownGroup[];
+    }>;
+    setTelegramGroupActivation: (
+      bindingId: string,
+      chatId: string,
+      mode: import('../shared/hookControlIpc').TelegramHookGroupActivationMode,
+    ) => Promise<{
+      behavior: import('../shared/hookControlIpc').TelegramHookBehaviorState;
+    }>;
     getWorkspaceProviderSources: () => Promise<{
       entries: import('../shared/hookControlIpc').HookWorkspaceProviderSourceEntry[];
     }>;
@@ -3275,6 +3368,9 @@ interface ElectronAPI {
     ) => () => void;
     onProviderPrefsChanged: (
       cb: (view: import('../shared/hookControlIpc').ProviderPrefsView) => void,
+    ) => () => void;
+    onTelegramBehaviorChanged: (
+      cb: (view: import('../shared/hookControlIpc').TelegramHookBehaviorState) => void,
     ) => () => void;
     onStatusChanged: (
       cb: (view: import('../shared/hookControlIpc').SlackHookView) => void,
@@ -3359,18 +3455,13 @@ interface ElectronAPI {
   ) => () => void;
 
   // per-message 维度: turn 结束后 main 推该轮费用(挂在最后一条 assistant 上)。
+  // 直接复用 main 侧的 payload 正本 —— 金额字段整组可选(无报价轮只带
+  // turnUsageDetails),两侧各写一份必然漂移:曾出现 main 已放宽为可选、这里仍声明
+  // 必填,消费方在 typecheck 通过的情况下解引用 undefined。
   onUsageMessageTurnCost: (
-    cb: (data: {
-      sessionId: string;
-      clientId: string;
-      turnMoney: import('../shared/regionalMoney').RegionalMoney;
-      turnCostUsd?: number;
-      turnCostIsEstimate: boolean;
-      userTurnMoney: import('../shared/regionalMoney').RegionalMoney;
-      userTurnCostUsd?: number;
-      userTurnCostIsEstimate: boolean;
-      turnUsageDetails?: import('../shared/turnUsageDetails').TurnUsageDetails;
-    }) => void,
+    cb: (
+      data: import('../shared/turnCostPayload').MessageTurnCostPayload,
+    ) => void,
   ) => () => void;
 
   // per-message 维度: turn 结束检测到模型被上游降级 / 替换时 main 推标记
@@ -3991,6 +4082,16 @@ interface ElectronAPI {
         // reset = 恢复默认:删除该供应商整组停用 override(含指向已下架模型的陈旧条目)。
         | { kind: 'reset'; providerId: string },
     ) => Promise<{ ok: true }>;
+    getModelPriceOverride: (
+      target: import('../shared/modelPriceOverride').ModelPriceOverrideTarget,
+    ) => Promise<import('../shared/modelPriceOverride').ModelPriceOverrideView>;
+    setModelPriceOverride: (
+      target: import('../shared/modelPriceOverride').ModelPriceOverrideTarget,
+      desired: import('../shared/modelPriceOverride').ModelPriceOverrideDesiredQuote,
+    ) => Promise<import('../shared/modelPriceOverride').ModelPriceOverrideView>;
+    resetModelPriceOverride: (
+      target: import('../shared/modelPriceOverride').ModelPriceOverrideTarget,
+    ) => Promise<import('../shared/modelPriceOverride').ModelPriceOverrideView>;
 
     // 「在新窗口打开」会话多开
     openSessionInNewWindow: (sessionId: string) => Promise<void>;

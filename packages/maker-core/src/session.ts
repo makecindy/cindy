@@ -41,6 +41,11 @@ import type { Logger } from './interfaces/logger.js';
 
 export type SessionStatus = 'active' | 'aborting' | 'closed' | 'error';
 
+export interface PermissionModeState {
+  mode: PermissionMode | null;
+  generation: number;
+}
+
 export type SessionEventListener = (event: AgentEvent) => void;
 export type SessionStatusListener = (status: SessionStatus) => void;
 export type InteractionRequestListener = (req: InteractionRequest) => Promise<InteractionDecision>;
@@ -116,6 +121,8 @@ export interface SessionOptions {
   handle: AgentSessionHandle;
   capabilities: Capabilities;
   logger: Logger;
+  /** Runtime permission mode used to create/resume the underlying handle. */
+  permissionMode?: PermissionMode;
   /**
    * 远端 SSH 主机的 alias (来自 `@cindy/maker-remote-ssh` ConnectionPool)。
    * 非空 → 这个 session 实际跑在远端机器上, workDir 是远端机器上的路径。
@@ -210,6 +217,14 @@ function redactNestedStrings(value: unknown, onChange: () => void): unknown {
 
 export interface SessionSendOptions extends SendOptions {
   /**
+   * Turn reservation 建立后的原子准备钩子。
+   *
+   * Session 在 active/running 守卫通过并占住本轮之后、provider option preflight
+   * 之前调用。仅用于让 host 临时收紧 preflight 本身依赖的 live session 状态；
+   * 后续校验或派发仍可能失败，因此调用方必须在自己的终态路径恢复该状态。
+   */
+  afterTurnReserved?: () => void | Promise<void>;
+  /**
    * Provider 启动前的安全屏障。
    *
    * Session 在 active/running 守卫通过、turn reservation 建立后调用；只有该
@@ -256,6 +271,14 @@ export class Session {
 
   private readonly handle: AgentSessionHandle;
   private readonly logger: Logger;
+  private permissionModeStateValue: PermissionModeState;
+  private permissionModeChangeChain: Promise<void> = Promise.resolve();
+  private permissionModeChangesInFlight = 0;
+  /** User/API permission changes, serialized separately so host restores cannot deadlock. */
+  private externalPermissionModeChangeChain: Promise<void> = Promise.resolve();
+  private externalPermissionModeChangesInFlight = 0;
+  /** Host-owned logical turn leases that outlive a vendor's transient idle edge. */
+  private readonly hostTurnLeases = new Set<Promise<void>>();
   private readonly eventListeners = new Set<SessionEventListener>();
   private readonly statusListeners = new Set<SessionStatusListener>();
   private interactionListener: InteractionRequestListener | null = null;
@@ -307,6 +330,10 @@ export class Session {
     this.capabilities = opts.capabilities;
     this.remoteHostId = opts.remoteHostId ?? null;
     this.logger = opts.logger.child(`s:${this.id}`);
+    this.permissionModeStateValue = {
+      mode: opts.permissionMode ?? null,
+      generation: 0,
+    };
     this.turnStallMs =
       opts.turnStallMs ?? parseTurnStallMs(process.env.XDT_SESSION_TURN_STALL_MS);
 
@@ -338,11 +365,45 @@ export class Session {
 
   // ── 公开 API ─────────────────────────────────────────────────────────────
 
+  /** 当前/最近一次已建立 reservation 的 turn 代号；只用于跨 await 识别是否仍是同一轮。 */
+  getTurnGeneration(): number {
+    return this.turnGeneration;
+  }
+
   async send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult> {
+    const { afterTurnReserved, beforeProviderStart, onAccepted, onDispatching, ...handleOpts } = opts ?? {};
+    const cancelledBeforeReservation = (): SessionSendResult | null =>
+      handleOpts.signal?.aborted === true
+        ? { accepted: false, reason: 'cancelled-before-dispatch' }
+        : null;
+    const alreadyCancelled = cancelledBeforeReservation();
+    if (alreadyCancelled !== null) return alreadyCancelled;
+    // A host may need to keep a logical turn exclusive while the vendor briefly
+    // reports idle between a foreground result and background-task continuation.
+    // Wait instead of racing that continuation with a new Desktop turn.
+    while (this.hostTurnLeases.size > 0) {
+      if (await this.waitForGateOrAbort(Promise.all([...this.hostTurnLeases]), handleOpts.signal)) {
+        return { accepted: false, reason: 'cancelled-before-dispatch' };
+      }
+    }
+    // A user/API permission change may have been waiting for the lease above.
+    // Preserve its ordering before admitting the next turn.
+    while (this.externalPermissionModeChangesInFlight > 0) {
+      if (await this.waitForGateOrAbort(this.externalPermissionModeChangeChain, handleOpts.signal)) {
+        return { accepted: false, reason: 'cancelled-before-dispatch' };
+      }
+    }
+    // A temporary host permission lease may be restoring immediately after a
+    // terminal event. Do not let the next turn reserve the session until that
+    // live provider state is settled.
+    while (this.permissionModeChangesInFlight > 0) {
+      if (await this.waitForGateOrAbort(this.permissionModeChangeChain, handleOpts.signal)) {
+        return { accepted: false, reason: 'cancelled-before-dispatch' };
+      }
+    }
     const msg: UserMessage = typeof message === 'string'
       ? { type: 'user', content: message }
       : message;
-    const { beforeProviderStart, onAccepted, onDispatching, ...handleOpts } = opts ?? {};
     this.logger.debug('send', summarizeUserMessage(msg));
     this.ensureActive();
     if (this.isTurnRunning()) {
@@ -363,17 +424,25 @@ export class Session {
     let originInstalled = false;
     let turnDispatched = false;
     let previousTurnOrigin: SendOrigin | null = null;
+    const finishCancelledBeforeDispatch = (): SessionSendResult | null => {
+      if (!reservation.cancelled && this.sendReservation === reservation) return null;
+      if (this.sendReservation === reservation) this.sendReservation = null;
+      return { accepted: false, reason: 'cancelled-before-dispatch' };
+    };
     try {
+      const cancelledBeforePreparation = finishCancelledBeforeDispatch();
+      if (cancelledBeforePreparation !== null) return cancelledBeforePreparation;
+      if (afterTurnReserved) await afterTurnReserved();
+      const cancelledAfterReservation = finishCancelledBeforeDispatch();
+      if (cancelledAfterReservation !== null) return cancelledAfterReservation;
       this.handle.validateSendOptions?.(handleOpts);
       if (beforeProviderStart) await beforeProviderStart();
+      const cancelledBeforeAcceptance = finishCancelledBeforeDispatch();
+      if (cancelledBeforeAcceptance !== null) return cancelledBeforeAcceptance;
       await onAccepted?.();
       this.ensureActive();
-      if (reservation.cancelled || this.sendReservation !== reservation) {
-        if (this.sendReservation === reservation) {
-          this.sendReservation = null;
-        }
-        return { accepted: false, reason: 'cancelled-before-dispatch' };
-      }
+      const cancelledAfterAcceptance = finishCancelledBeforeDispatch();
+      if (cancelledAfterAcceptance !== null) return cancelledAfterAcceptance;
       reservation.phase = 'dispatching';
       // 越过 dispatch 边界才记 origin — cancelled-before-dispatch 早返回不会到这,
       // 不会污染下一个无 origin 的 turn。先存下当前值,handle.send 失败时**还原**而非
@@ -600,6 +669,30 @@ export class Session {
     return this.handle.codexProxyActive;
   }
 
+  /** Snapshot used by temporary host overrides to avoid undoing a newer user change. */
+  get permissionModeState(): PermissionModeState {
+    return { ...this.permissionModeStateValue };
+  }
+
+  /**
+   * Keep this Session logically occupied beyond the provider's own turn flag.
+   * The caller must release the returned lease on every terminal path.
+   */
+  acquireTurnLease(): () => void {
+    let resolveGate!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      resolveGate = resolve;
+    });
+    this.hostTurnLeases.add(gate);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.hostTurnLeases.delete(gate);
+      resolveGate();
+    };
+  }
+
   // ── 运行时切换 ─────────────────────────────────────────────────────────────
 
   async setModel(model: string, opts?: { providerId?: string | null }): Promise<void> {
@@ -623,6 +716,82 @@ export class Session {
   }
 
   async setPermissionMode(mode: PermissionMode): Promise<void> {
+    this.assertPermissionModeSupported(mode);
+    this.externalPermissionModeChangesInFlight += 1;
+    const operation = this.externalPermissionModeChangeChain.catch(() => undefined).then(async () => {
+      if (this.isTurnPermissionPolicyUnsafe(mode)) {
+        // Official group turns hold a host lease until background continuations
+        // and the temporary safe-mode restore have both settled. Do not let an
+        // external Full access / accept-edits switch weaken that active turn.
+        // Host-owned temporary switches use setPermissionModeTracked and remain
+        // able to restore while this operation waits, avoiding a lease deadlock.
+        while (this.hostTurnLeases.size > 0) {
+          await Promise.all([...this.hostTurnLeases]);
+        }
+      }
+      await this.setPermissionModeTracked(mode);
+    });
+    const tracked = operation.finally(() => {
+      this.externalPermissionModeChangesInFlight -= 1;
+    });
+    this.externalPermissionModeChangeChain = tracked.then(
+      () => undefined,
+      () => undefined,
+    );
+    await tracked;
+  }
+
+  async setPermissionModeTracked(mode: PermissionMode): Promise<PermissionModeState> {
+    this.assertPermissionModeSupported(mode);
+    this.permissionModeChangesInFlight += 1;
+    const operation = this.permissionModeChangeChain.catch(() => undefined).then(async () => {
+      await this.handle.setPermissionMode!(mode);
+      this.permissionModeStateValue = {
+        mode,
+        generation: this.permissionModeStateValue.generation + 1,
+      };
+      return this.permissionModeState;
+    });
+    const tracked = operation.finally(() => {
+      this.permissionModeChangesInFlight -= 1;
+    });
+    this.permissionModeChangeChain = tracked.then(
+      () => undefined,
+      () => undefined,
+    );
+    return tracked;
+  }
+
+  async setPermissionModeIfUnchanged(
+    expected: PermissionModeState,
+    mode: PermissionMode,
+  ): Promise<boolean> {
+    this.assertPermissionModeSupported(mode);
+    // An external request is newer user intent even when an unsafe target is
+    // still waiting for a host turn lease. Never restore over it, and never
+    // wait here: that request may need this restore path to release the lease.
+    if (this.externalPermissionModeChangesInFlight > 0) return false;
+    this.permissionModeChangesInFlight += 1;
+    const operation = this.permissionModeChangeChain.catch(() => undefined).then(async () => {
+      const current = this.permissionModeStateValue;
+      if (current.mode !== expected.mode || current.generation !== expected.generation) {
+        return false;
+      }
+      await this.handle.setPermissionMode!(mode);
+      this.permissionModeStateValue = { mode, generation: current.generation + 1 };
+      return true;
+    });
+    const tracked = operation.finally(() => {
+      this.permissionModeChangesInFlight -= 1;
+    });
+    this.permissionModeChangeChain = tracked.then(
+      () => undefined,
+      () => undefined,
+    );
+    return tracked;
+  }
+
+  private assertPermissionModeSupported(mode: PermissionMode): void {
     if (!this.capabilities.permissionModes.some((m) => m.id === mode)) {
       throw new NotSupportedError(
         `permissionMode='${mode}'`,
@@ -639,7 +808,10 @@ export class Session {
     if (!this.handle.setPermissionMode) {
       throw new NotSupportedError('setPermissionMode', { supported: false, reason: 'not-implemented' });
     }
-    await this.handle.setPermissionMode(mode);
+  }
+
+  private isTurnPermissionPolicyUnsafe(mode: PermissionMode): boolean {
+    return this.capabilities.turnPermissionPolicy?.unsupportedPermissionModes.includes(mode) === true;
   }
 
   async setFastMode(enabled: boolean): Promise<void> {
@@ -713,7 +885,12 @@ export class Session {
    * 默认 false (handle.isTurnRunning 不实现的 agent 永远算 idle)。
    */
   isTurnRunning(): boolean {
-    return this.sendReservation !== null || this.isHandleTurnRunning();
+    return (
+      this.sendReservation !== null ||
+      this.hostTurnLeases.size > 0 ||
+      this.permissionModeChangesInFlight > 0 ||
+      this.isHandleTurnRunning()
+    );
   }
 
   getCurrentTurnId(): string | null {
@@ -1137,6 +1314,25 @@ export class Session {
     }
     signal.addEventListener('abort', onAbort, { once: true });
     return () => signal.removeEventListener('abort', onAbort);
+  }
+
+  private async waitForGateOrAbort(gate: Promise<unknown>, signal?: AbortSignal): Promise<boolean> {
+    if (!signal) {
+      await gate;
+      return false;
+    }
+    if (signal.aborted) return true;
+    let onAbort!: () => void;
+    const aborted = new Promise<void>((resolve) => {
+      onAbort = resolve;
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+    try {
+      await Promise.race([gate, aborted]);
+      return signal.aborted;
+    } finally {
+      signal.removeEventListener('abort', onAbort);
+    }
   }
 
   private createSessionRunningError(): Error {

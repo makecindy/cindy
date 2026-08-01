@@ -2973,7 +2973,7 @@ export default function SessionScreen() {
         });
         // 廉价对账:updatedAt 主信号(任何消息变化都会 bump),_count 仅在两侧都有时作辅助;
         // 另外要求消息窗口已被详情页同步到当前 meta,避免首页先刷新 session preview 后,
-        // 详情页把旧消息缓存误判成最新。任一变化 → 只拉最新小窗对账(store 旧消息保留 + 按 key 合并);
+        // 详情页把旧消息缓存误判成最新。任一变化 → 拉取权威最新窗口并对账;
         // 都没变 → 跳过整窗重拉(内容已是最新,新消息由 live subscribe 推送)。
         const freshCount = sessionMeta._count?.messages;
         const metaChanged = shouldRefreshLatestMessageWindowOnReopen({
@@ -2982,7 +2982,6 @@ export default function SessionScreen() {
           storedSession: storedSessionAtStart,
         });
         if (syncRun.isStale()) return;
-        remoteSessionStore.upsertDeviceSession(deviceId, deviceName, sessionMeta);
         remoteSessionStore.setActiveSessionSnapshots(
           deviceId,
           Array.isArray(activeSessionSnapshot.activeSessions)
@@ -3010,6 +3009,7 @@ export default function SessionScreen() {
           // 真实消息数推断(getSession 没给总数时退化为窗口启发式)。
           setHasOlderMessages(hasOlderMessagesAfterReopen(freshCount, remoteSessionStore.getMessages(sessionId)));
         }
+        remoteSessionStore.upsertDeviceSession(deviceId, deviceName, sessionMeta);
         remoteSessionStore.setPendingInteractions(sessionId, Array.isArray(pendingInteractions) ? pendingInteractions : []);
         remoteSessionStore.setInputProjection(sessionId, projection);
       }

@@ -29,6 +29,7 @@ const SESSION_SOURCES = [
   'discord',
   'wechat',
   'dingtalk',
+  'wecom',
   'scheduler',
   'learn',
   'shared',
@@ -778,6 +779,7 @@ export const schedules = sqliteTable(
     }),
     notifyDesktop: integer('notify_desktop', { mode: 'boolean' }).notNull().default(true),
     notifyFeishu: integer('notify_feishu', { mode: 'boolean' }).notNull().default(false),
+    notifyWecomGroup: integer('notify_wecom_group', { mode: 'boolean' }).notNull().default(false),
     status: text('status', { enum: ['active', 'paused', 'expired'] })
       .notNull()
       .default('active'),
@@ -923,9 +925,7 @@ export const scheduleRuns = sqliteTable(
     costAmount: real('cost_amount').notNull().default(0),
     estimatedValueAmount: real('estimated_value_amount').notNull().default(0),
     costCurrency: text('cost_currency', { enum: ['CNY', 'USD'] }),
-    costIsApproximate: integer('cost_is_approximate', { mode: 'boolean' })
-      .notNull()
-      .default(false),
+    costIsApproximate: integer('cost_is_approximate', { mode: 'boolean' }).notNull().default(false),
     /**
      * zero 表示已确认零费用；unavailable 表示 agent run 尚无可靠计价；legacy
      * 表示迁移前数据缺少 runId，不能精确拆分。SQLite 无 CHECK，无需 migration。
@@ -1058,20 +1058,32 @@ export const embeddingMeta = sqliteTable('embedding_meta', {
  *   - 同账号用多设备时本表数字会不一致 — 设计取舍, chip 点击跳 web 看完整账。
  *
  * 历史数据: 不 backfill — 安装迁移后从 0 开始累计 (用户明确接受)。
+ *
+ * 主键含币种: 一天一行放不下两种币种。此前主键只有 day, 账本币种切换时写入侧只能
+ * 二选一 —— 实现选择了"用新币种的金额覆盖当天累计", 于是每翻转一次就静默丢掉当天
+ * 已记的全部花费。按 (day, currency) 分行后两种币种各自累加, 读侧再按当前账本币种
+ * 取用; 换号、跨租户、上游漏发币种都不再造成数据丢失。
  */
-export const dailySpend = sqliteTable('daily_spend', {
-  /** 本地时区 YYYY-MM-DD 字符串。 */
-  day: text('day').primaryKey(),
-  /** 当日累计 USD (real)。SDK 单 turn 的 cost 通常是小数 (如 0.0391)。 */
-  costUsd: real('cost_usd').notNull().default(0),
-  costAmount: real('cost_amount').notNull().default(0),
-  costCurrency: text('cost_currency', { enum: ['CNY', 'USD'] }),
-  costIsApproximate: integer('cost_is_approximate', { mode: 'boolean' })
-    .notNull()
-    .default(false),
-  /** 最后一次更新的 unix ms。 */
-  updatedAt: integer('updated_at').notNull(),
-});
+export const dailySpend = sqliteTable(
+  'daily_spend',
+  {
+    /** 本地时区 YYYY-MM-DD 字符串。 */
+    day: text('day').notNull(),
+    /** 当日累计 USD (real)。SDK 单 turn 的 cost 通常是小数 (如 0.0391)。 */
+    costUsd: real('cost_usd').notNull().default(0),
+    costAmount: real('cost_amount').notNull().default(0),
+    /** 该行金额的币种。历史 NULL 行在迁移时按其 USD 口径填为 'USD'。 */
+    costCurrency: text('cost_currency', { enum: ['CNY', 'USD'] }).notNull().default('USD'),
+    costIsApproximate: integer('cost_is_approximate', { mode: 'boolean' })
+      .notNull()
+      .default(false),
+    /** 最后一次更新的 unix ms。 */
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.day, t.costCurrency] }),
+  }),
+);
 
 /**
  * 每日按模型用量聚合表 (daily_model_usage) — 支撑首页用量仪表盘的"按模型拆分"。
@@ -1086,6 +1098,9 @@ export const dailySpend = sqliteTable('daily_spend', {
  * 本表只做按模型的拆分展示, 两边求和因舍入可能有微小差异 — 设计取舍。
  *
  * 历史数据: 不 backfill — 上线后从 0 开始积累。
+ *
+ * 主键含币种: 理由同 daily_spend —— 单行单币种会在账本币种切换时把当天该模型已累计
+ * 的金额覆盖掉。
  */
 export const dailyModelUsage = sqliteTable(
   'daily_model_usage',
@@ -1099,7 +1114,8 @@ export const dailyModelUsage = sqliteTable(
     /** 当日该模型累计 USD (仅 claude-code 实报; codex 恒 0)。 */
     costUsd: real('cost_usd').notNull().default(0),
     costAmount: real('cost_amount').notNull().default(0),
-    costCurrency: text('cost_currency', { enum: ['CNY', 'USD'] }),
+    /** 该行金额的币种。无金额的纯 token 行与历史 NULL 行迁移时填为 'USD'。 */
+    costCurrency: text('cost_currency', { enum: ['CNY', 'USD'] }).notNull().default('USD'),
     costIsApproximate: integer('cost_is_approximate', { mode: 'boolean' })
       .notNull()
       .default(false),
@@ -1112,7 +1128,7 @@ export const dailyModelUsage = sqliteTable(
   },
   (t) => ({
     // day 开头 → 近 N 天范围扫描直接走 PK 索引, 无需额外 index。
-    pk: primaryKey({ columns: [t.day, t.agentKind, t.model] }),
+    pk: primaryKey({ columns: [t.day, t.agentKind, t.model, t.costCurrency] }),
   }),
 );
 
@@ -1467,9 +1483,9 @@ export const ghostCards = sqliteTable(
  * 一行 = hook server 实时中继(group.message 帧)的一条群消息。这是
  * 「服务端零内容驻留」架构下群上下文的唯一存储方:窗口长在用户自己的
  * 设备上(与其 Telegram 客户端本地缓存同性质)。派发 hook 任务时按
- * (provider, chatId, threadId) 取最近条目拼进 agent 上下文,并按
+ * (provider principal namespace, chatId, threadId) 取最近条目拼进 agent 上下文,并按
  * source.triggerMessageId 剔除当前消息。行数由插入时的 GC 控制
- * (每个键保最新 N 行 + TTL),thread_id 用空串表示主群流(保证唯一
+ * (官方群每个键保最新 N 行、无 TTL；个人 bot 使用独立命名空间),thread_id 用空串表示主群流(保证唯一
  * 索引对"无 topic"生效,SQLite 的 NULL 互不相等)。
  */
 export const hookGroupMessages = sqliteTable(

@@ -86,6 +86,10 @@ function makeTurnRunner(overrides: Partial<ImTurnRunner> = {}): ImTurnRunner {
     disposeAllSessions: vi.fn(),
     disposeOneSession: vi.fn(),
     getMakerSessionById: vi.fn(() => null),
+    getPermissionModes: vi.fn(() => [
+      { id: 'auto', displayName: 'Auto', description: 'Safe default' },
+    ]),
+    changePermissionMode: vi.fn(),
     ...overrides,
   } as unknown as ImTurnRunner;
 }
@@ -146,7 +150,9 @@ describe('IM slash commands', () => {
     mocks.sendInteractiveCard.mockResolvedValue({ messageId: 'card-1' });
     mocks.listProviders.mockResolvedValue([]);
     mocks.getMaker.mockReturnValue({
-      getCapabilities: () => ({ permissionModes: ['auto'] }),
+      getCapabilities: () => ({
+        permissionModes: [{ id: 'auto', displayName: 'Auto', description: 'Safe default' }],
+      }),
     });
   });
 
@@ -274,6 +280,82 @@ describe('IM slash commands', () => {
     expect(mocks.sendMarkdownText).toHaveBeenCalledWith(
       'ou_user',
       ui.slash.unknownCommand('/start'),
+    );
+  });
+
+  it('keeps card-only commands unsupported but exposes /permission on a text channel', async () => {
+    const textIm = {
+      sendMarkdownText: mocks.sendMarkdownText,
+    } as unknown as TextChannelIM;
+    const turnRunner = makeTurnRunner();
+    const { handlers } = makeHarness({
+      turnRunner,
+      adapterOverrides: {
+        channel: 'wecom',
+        im: textIm,
+        output: {
+          kind: 'chunked-text',
+          im: textIm,
+          commitFinal: vi.fn(),
+        },
+      },
+    });
+
+    for (const command of ['/model', '/ctr', '/session', '/permission']) {
+      await handlers.handleSlashCommand(command, {
+        botContextId: 'bot',
+        userId: 'owner',
+      });
+    }
+
+    expect(mocks.sendInteractiveCard).not.toHaveBeenCalled();
+    expect(turnRunner.resolveRouteTarget).toHaveBeenCalledOnce();
+    expect(mocks.sendMarkdownText.mock.calls.slice(0, 3).map(([, text]) => text)).toEqual(
+      ['/model', '/ctr', '/session'].map((command) =>
+        ui.slash.unknownCommand(command),
+      ),
+    );
+    expect(mocks.sendMarkdownText.mock.calls[3]?.[1]).toContain('/permission auto');
+  });
+
+  it('requires text-channel Full Access to pass through the shared confirmation flow', async () => {
+    const textIm = { sendMarkdownText: mocks.sendMarkdownText } as unknown as TextChannelIM;
+    const changePermissionMode = vi.fn(async () => ({
+      kind: 'confirmation-required' as const,
+      mode: 'bypassPermissions' as const,
+      label: 'Full Access',
+    }));
+    const turnRunner = makeTurnRunner({
+      getPermissionModes: vi.fn(() => [
+        { id: 'auto' as const, displayName: 'Auto' },
+        { id: 'bypassPermissions' as const, displayName: 'Full Access' },
+      ]),
+      changePermissionMode,
+    });
+    const { handlers } = makeHarness({
+      turnRunner,
+      adapterOverrides: {
+        channel: 'wecom',
+        im: textIm,
+        output: { kind: 'chunked-text', im: textIm, commitFinal: vi.fn() },
+      },
+    });
+
+    await handlers.handleSlashCommand('/permission bypass', {
+      botContextId: 'bot',
+      userId: 'owner',
+    });
+
+    expect(changePermissionMode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 'feishu-session',
+        mode: 'bypassPermissions',
+        confirmedFullAccess: false,
+      }),
+    );
+    expect(mocks.sendMarkdownText).toHaveBeenCalledWith(
+      'owner',
+      expect.stringContaining('/permission bypassPermissions confirm'),
     );
   });
 

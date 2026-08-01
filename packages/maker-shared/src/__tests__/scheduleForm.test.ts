@@ -85,6 +85,19 @@ describe('mobile schedule form model', () => {
     });
   });
 
+  it('writes an explicit false when mobile disables WeCom group notifications', () => {
+    const draft = createMobileScheduleDraft(schedule({
+      notify: { desktop: true, feishu: false, wecomGroup: true },
+    }));
+    const input = buildMobileScheduleInput({ ...draft, notifyWecomGroup: false });
+
+    expect(input.notify).toEqual({
+      desktop: true,
+      feishu: false,
+      wecomGroup: false,
+    });
+  });
+
   it('matches desktop heartbeat update semantics for bound sessions', () => {
     const draft = createMobileScheduleDraft(schedule({
       agentKind: 'codex',

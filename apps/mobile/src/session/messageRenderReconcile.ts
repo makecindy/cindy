@@ -188,7 +188,6 @@ function normalizedMessageEqual(
     && previous.createdAt === next.createdAt
     && previous.isStreaming === next.isStreaming
     && previous.turnCostUsd === next.turnCostUsd
-    && previous.turnCostIsEstimate === next.turnCostIsEstimate
     && previous.toolSettled === next.toolSettled
     && previous.isTurnFinalAssistant === next.isTurnFinalAssistant
     && previous.isSyntheticTrigger === next.isSyntheticTrigger

@@ -420,17 +420,18 @@ describe('历史窗口空洞 — 正常 turn 不受影响', () => {
 
 // ── Scenario C:被卡片取代的调用也必须报出时间(review #676 copilot) ──────────
 //
-// ghost_card(意识供卡)与 agent_plan(TodoWrite / update_plan)是各自那次调用在流里的
-// **唯一**呈现——工具行被卡片取代、不再单独渲染。它们原先在 renderItemStartMs /
-// renderItemEndMs 里没有分支,一律报 null。
+// ghost_card(意识供卡)是那次调用在流里的**唯一**呈现——工具行被卡片取代、不再
+// 单独渲染。它原先在 renderItemStartMs / renderItemEndMs 里没有分支,一律报 null。
+// (agent_plan 卡曾同属此类;计划卡现已整体移出流内,唯一呈现改为 composer 上方的
+// PinnedPlanPanel,不再参与流内时间判定。)
 //
 // 实测过后果的具体形状(两侧都跑过,只留能真正区分的断言):
-//  - 工作组切分本身**不受影响**:两类卡都会被 groupAnsweredTurnItems 提到组外,而空洞后
+//  - 工作组切分本身**不受影响**:卡会被 groupAnsweredTurnItems 提到组外,而空洞后
 //    只要还有任何带时间戳的 item,切分照旧发生 —— 分组结果与时长两侧完全一致。
 //  - 真正会错的是另外两处:
 //    C1 长供卡调用(出图 / 出视频跑很久)的结束时间没算进 tool_result → 紧随其后的正文被
 //       误判成空洞,进度文字被当成最终答复留在工作组外(与 A4 同一退化)。
-//    C2 / C3 insertForkOriginItem 按"第一个时间 >= 分叉时刻的 item"插标记 → 报 null 的卡
+//    C2 insertForkOriginItem 按"第一个时间 >= 分叉时刻的 item"插标记 → 报 null 的卡
 //       被跳过,于是**分叉之后**生成的卡片渲染在「从这里分叉」标记之上,视觉上被算进父会话。
 
 const GHOST_TOOL = 'mcp__cindy__ghost_call';
@@ -467,16 +468,6 @@ const ghostSnapshot = (cardIds: string[]): GhostCardSnapshot => ({
     ]),
   ),
   liveCards: [],
-});
-
-const mkTodoWrite = (id: string, createdAt: string, content: string): ChatMessage => ({
-  clientId: id,
-  role: 'tool_use',
-  content: '',
-  toolUseId: `tu-${id}`,
-  toolName: 'TodoWrite',
-  toolInput: { todos: [{ content, status: 'pending', activeForm: content }] },
-  createdAt,
 });
 
 const forkOrigin = {
@@ -531,24 +522,6 @@ describe('历史窗口空洞 — 被卡片取代的调用', () => {
     expect(cardIdx).toBeGreaterThanOrEqual(0);
     // 卡片报不出时间时会被 findIndex 跳过,标记插到它**后面** → 卡片被算进父会话。
     expect(markerIdx).toBeLessThan(cardIdx);
-  });
-
-  it('C3. 分叉之后的 agent_plan 渲染在分叉标记之下', () => {
-    const messages: ChatMessage[] = [
-      mkUser('u1', '2026-07-25T10:00:00.000Z', '继续'),
-      mkTodoWrite('p1', '2026-07-25T10:06:00.000Z', '先跑门禁'),
-      mkResult('pr1', 'tu-p1', '2026-07-25T10:06:01.000Z'),
-      mkAssistant('a1', '2026-07-25T10:07:00.000Z', '计划已更新。'),
-    ];
-
-    const { items } = buildRenderItems(messages);
-    const withMarker = insertForkOriginItem(items, forkOrigin);
-
-    const markerIdx = withMarker.findIndex((it) => it.type === 'fork_origin');
-    const planIdx = withMarker.findIndex((it) => it.type === 'agent_plan');
-    expect(markerIdx).toBeGreaterThanOrEqual(0);
-    expect(planIdx).toBeGreaterThanOrEqual(0);
-    expect(markerIdx).toBeLessThan(planIdx);
   });
 });
 

@@ -110,6 +110,39 @@
       "note": "钉钉机器人连接的产品名称，沿用官方品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。"
     },
     {
+      "id": "wecom",
+      "status": "proposed",
+      "en": "WeCom",
+      "translations": {
+        "zh-CN": "企业微信",
+        "ja": "WeCom",
+        "ko": "WeCom"
+      },
+      "note": "企业微信官方英文品牌名，用于智能机器人和群机器人能力；先登记为 proposed，待产品术语评审后再决定是否固化。"
+    },
+    {
+      "id": "wecom-intelligent-bot",
+      "status": "proposed",
+      "en": "WeCom Intelligent Bot",
+      "translations": {
+        "zh-CN": "企业微信智能机器人",
+        "ja": "WeCom インテリジェントボット",
+        "ko": "WeCom 지능형 봇"
+      },
+      "note": "企业微信 WebSocket 长连接双向 IM 能力在设置页中的名称；先登记为 proposed。"
+    },
+    {
+      "id": "wecom-group-bot",
+      "status": "proposed",
+      "en": "WeCom group bot",
+      "translations": {
+        "zh-CN": "企微群机器人",
+        "ja": "WeCom グループボット",
+        "ko": "WeCom 그룹 봇"
+      },
+      "note": "企业微信群 Webhook 单向通知能力的名称；先登记为 proposed。"
+    },
+    {
       "id": "openclaw",
       "status": "proposed",
       "en": "OpenClaw",
@@ -1157,6 +1190,17 @@
         "ko": "압축"
       },
       "note": "issue #882：模型管理/新对话选择器的分类标签，对应网关的文档压缩类模型（如 ai-gateway-doc）。此前被硬编码为笼统的 other 分类。"
+    },
+    {
+      "id": "api-price-estimate",
+      "status": "proposed",
+      "en": "API Price Estimate",
+      "translations": {
+        "zh-CN": "API 估价",
+        "ja": "API 料金見積もり",
+        "ko": "API 가격 추정치"
+      },
+      "note": "用户为自有 API、OAuth 或订阅通道维护的本地 token 单价估算；只影响 Cindy 的用量价值估算，不代表供应商实际账单，也不覆盖 Cindy AI Gateway 的服务端实售价。先登记为 proposed，待产品术语评审后固化。"
     },
     {
       "id": "context-window",

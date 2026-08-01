@@ -27,12 +27,33 @@ import type { AgentKind, Catalog, CatalogModel } from '../types.js';
 const DYNAMIC_PROVIDER_IDS = ['anthropic', 'openai', 'xd'] as const;
 
 /** xai 静态清单(唯一活在目录文件里的模型清单)。 */
-const EXPECTED_XAI_IDS = ['xai/grok-4.5', 'xai/grok-4.3', 'xai/grok-4.20', 'xai/grok-code-fast'];
+const EXPECTED_XAI_IDS = [
+  'xai/grok-4.5',
+  'xai/grok-4.3',
+  'xai/grok-build-0.1',
+  'xai/grok-4.20-multi-agent-0309',
+  'xai/grok-4.20-0309-reasoning',
+  'xai/grok-4.20-0309-non-reasoning',
+  'xai/grok-4.20',
+  'xai/grok-code-fast',
+];
 
 function provider(id: string) {
   const p = BUNDLED_CATALOG.providers.find((x) => x.id === id);
   if (!p) throw new Error(`missing provider ${id}`);
   return p;
+}
+
+function registryEntryForRoute(providerId: string, modelId: string) {
+  const registry = BUNDLED_CATALOG.modelRegistry;
+  if (!registry) throw new Error('missing bundled modelRegistry');
+  const entry = registry.models.find((candidate) =>
+    candidate.routes.some(
+      (route) => route.providerId === providerId && route.modelId === modelId,
+    ),
+  );
+  if (!entry) throw new Error(`missing registry route ${providerId}/${modelId}`);
+  return entry;
 }
 
 /** 造一个最小 CatalogModel(注入 fixture 用)。 */
@@ -196,11 +217,6 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
   });
 
   it('ships Codex support metadata for the current XD gateway model set', () => {
-    const metadata = BUNDLED_CATALOG.cindyModelMeta as {
-      version?: unknown;
-      models?: Record<string, unknown>;
-    };
-    expect(metadata.version).toBe(1);
     const expected = {
       'qwen/qwen3.7-max': 'Qwen 3.7 Max',
       'moonshotai/kimi-k3': 'Kimi K3',
@@ -211,13 +227,15 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
       'qwen/qwen3.8-max-preview': 'Qwen 3.8 Max Preview',
     };
     for (const [id, name] of Object.entries(expected)) {
-      expect(metadata.models?.[id], id).toMatchObject({
-        agents: ['claude-code', 'codex'],
-        name,
-      });
+      const entry = registryEntryForRoute('xd', id);
+      const route = entry.routes.find(
+        (candidate) => candidate.providerId === 'xd' && candidate.modelId === id,
+      );
+      expect(entry, id).toMatchObject({ name });
+      expect(route?.agents, id).toEqual(['claude-code', 'codex']);
     }
 
-    expect(metadata.models?.['bytedance-seed/seed-2.1-pro']).toMatchObject({
+    expect(registryEntryForRoute('xd', 'bytedance-seed/seed-2.1-pro')).toMatchObject({
       efforts: ['minimal', 'low', 'medium', 'high'],
       defaultEffort: 'minimal',
       supportsFastMode: false,
@@ -228,17 +246,17 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
         },
       },
     });
-    expect(metadata.models?.['moonshotai/kimi-k3']).toMatchObject({
+    expect(registryEntryForRoute('xd', 'moonshotai/kimi-k3')).toMatchObject({
       efforts: ['low', 'high', 'max'],
       defaultEffort: 'max',
       supportsFastMode: false,
     });
-    expect(metadata.models?.['qwen/qwen3.8-max-preview']).toMatchObject({
+    expect(registryEntryForRoute('xd', 'qwen/qwen3.8-max-preview')).toMatchObject({
       efforts: ['low', 'high', 'xhigh'],
       defaultEffort: 'xhigh',
       supportsFastMode: false,
     });
-    expect(metadata.models?.['z-ai/glm-5.2']).toMatchObject({
+    expect(registryEntryForRoute('xd', 'z-ai/glm-5.2')).toMatchObject({
       efforts: ['minimal', 'high', 'max'],
       defaultEffort: 'max',
       supportsFastMode: false,
@@ -250,7 +268,7 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
       },
     });
     for (const id of ['deepseek/deepseek-v4-pro', 'deepseek/deepseek-v4-flash']) {
-      expect(metadata.models?.[id], id).toMatchObject({
+      expect(registryEntryForRoute('xd', id), id).toMatchObject({
         efforts: ['high', 'max'],
         defaultEffort: 'high',
         supportsFastMode: false,
@@ -261,15 +279,20 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
       'moonshotai/kimi-k3',
       'qwen/qwen3.8-max-preview',
     ]) {
-      expect(metadata.models?.[id], id).not.toHaveProperty('description');
+      expect(registryEntryForRoute('xd', id), id).not.toHaveProperty('description');
     }
   });
 
   it('enables DeepSeek V4 Flash by default', () => {
-    const metadata = BUNDLED_CATALOG.cindyModelMeta as {
-      models?: Record<string, { defaultEnabled?: boolean }>;
-    };
-    expect(metadata.models?.['deepseek/deepseek-v4-flash']?.defaultEnabled).toBeUndefined();
+    expect(
+      registryEntryForRoute('xd', 'deepseek/deepseek-v4-flash').defaultEnabled,
+    ).toBeUndefined();
+  });
+
+  it('rejects legacy or ad-hoc top-level metadata blocks', () => {
+    const bad = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Record<string, unknown>;
+    bad.cindyModelMeta = { version: 1, models: {} };
+    expect(() => parseCatalog(bad)).toThrow(/catalog\.cindyModelMeta is not allowed/);
   });
 
   it('models are grouped per-agent (no flat array, no rogue agent keys)', () => {

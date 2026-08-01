@@ -55,6 +55,7 @@ function dbMessage(sessionId: string, id: string, content: string): Message {
 
 /** 被控端经隧道返回的真历史(deviceLink.invoke 的 local-db:messages:list 应命中)。 */
 let remoteHistory: Message[] = [];
+let remoteProjectionOwner: string | null = null;
 const invoke = vi.fn(async (_deviceId: string, channel: string, _args: unknown[]) => {
   if (channel === 'local-db:messages:list') return remoteHistory;
   if (channel === 'local-db:sessions:get') {
@@ -64,6 +65,7 @@ const invoke = vi.fn(async (_deviceId: string, channel: string, _args: unknown[]
     return {
       sessionId: _args[0], pendingQueue: [], steeringQueueClientIds: [], queuePaused: false,
       queueExpanded: false, queueInteractionLocks: [], queueEditLocks: [], queueAbortPending: false,
+      ...(remoteProjectionOwner ? { continuationTurnClientId: remoteProjectionOwner } : {}),
       error: null, recovery: null, errorRetryText: null,
     };
   }
@@ -99,6 +101,7 @@ function seedRemote(sessionId: string): void {
 beforeEach(() => {
   stubElectronApi();
   remoteHistory = [];
+  remoteProjectionOwner = null;
   invoke.mockClear();
 });
 
@@ -172,5 +175,100 @@ describe('makerChatStore.reconcileOpenSessionOrigins (device-link 历史竞速)'
     makerChatStore.reconcileOpenSessionOrigins();
     await flush();
     expect(makerChatStore.getSnapshot(s).messages).toHaveLength(1);
+  });
+
+  it('purge 后丢弃此前发起的旧投影查询', async () => {
+    const s = sid();
+    let resolveLocalProjection!: (projection: unknown) => void;
+    const localProjection = new Promise((resolve) => {
+      resolveLocalProjection = resolve;
+    });
+    vi.stubGlobal('window', {
+      electronAPI: {
+        maker: {
+          input: {
+            getProjection: vi.fn().mockReturnValueOnce(localProjection),
+          },
+        },
+        deviceLink: { invoke },
+      },
+    });
+
+    makerChatStore.ensureInitialMessages(s);
+    makerChatStore.purgeSession(s);
+    resolveLocalProjection({
+      sessionId: s,
+      pendingQueue: [],
+      steeringQueueClientIds: [],
+      queuePaused: false,
+      queueExpanded: false,
+      queueInteractionLocks: [],
+      queueEditLocks: [],
+      queueAbortPending: false,
+      continuationTurnClientId: 'stale-owner',
+      error: null,
+      recovery: null,
+      errorRetryText: null,
+    });
+    await flush();
+
+    expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBeNull();
+  });
+
+  it('来源漂移时丢弃旧投影查询，避免旧本机 null 覆盖远程续跑 owner', async () => {
+    const s = sid();
+    let resolveLocalProjection!: (projection: unknown) => void;
+    const localProjection = new Promise((resolve) => {
+      resolveLocalProjection = resolve;
+    });
+    const localGetProjection = vi
+      .fn()
+      .mockReturnValueOnce(localProjection)
+      .mockResolvedValue({
+        sessionId: s,
+        pendingQueue: [],
+        steeringQueueClientIds: [],
+        queuePaused: false,
+        queueExpanded: false,
+        queueInteractionLocks: [],
+        queueEditLocks: [],
+        queueAbortPending: false,
+        continuationTurnClientId: null,
+        error: null,
+        recovery: null,
+        errorRetryText: null,
+      });
+    vi.stubGlobal('window', {
+      electronAPI: {
+        maker: { input: { getProjection: localGetProjection } },
+        deviceLink: { invoke },
+      },
+    });
+
+    makerChatStore.ensureInitialMessages(s);
+    seedRemote(s);
+    remoteProjectionOwner = 'continue-owner';
+    makerChatStore.reconcileOpenSessionOrigins();
+    await flush();
+
+    expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBe('continue-owner');
+
+    resolveLocalProjection({
+      sessionId: s,
+      pendingQueue: [],
+      steeringQueueClientIds: [],
+      queuePaused: false,
+      queueExpanded: false,
+      queueInteractionLocks: [],
+      queueEditLocks: [],
+      queueAbortPending: false,
+      continuationTurnClientId: null,
+      error: null,
+      recovery: null,
+      errorRetryText: null,
+    });
+    await flush();
+
+    expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBe('continue-owner');
   });
 });

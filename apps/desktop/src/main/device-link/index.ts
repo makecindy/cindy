@@ -56,6 +56,7 @@ import {
   dropAllControllers,
   forgetControllerInvokeState,
   handleControllerOffline,
+  purgeRevokedController,
 } from './dispatch';
 import { setBusyProbe, helloBusy, pollBusyChange, resetBusyDedupe } from './busyReporter';
 import {
@@ -739,6 +740,7 @@ export async function revokeController(deviceId: string): Promise<void> {
   forgetControllerInvokeState(deviceId);
   // 踢掉它的订阅 registry + 重算转发/横幅(复用对等下线的单设备清理路径)。
   handleControllerOffline(deviceId);
+  purgeRevokedController(deviceId);
   // 末尾再 poll 一次(而非仅刷新基线):写锁释放到这里之间,别的实例可能已插入
   // 新授权变更,仅刷新基线会把它静默记为已生效、永不 enforce;poll 是幂等的,
   // 本地刚做过的动作重复 enforce 无害,同时能捕获这条竞态窗口里的外部变更。
@@ -833,6 +835,7 @@ function pollExternalSettingsChange(): void {
     }
     forgetControllerInvokeState(deviceId);
     handleControllerOffline(deviceId);
+    purgeRevokedController(deviceId);
     log.info(`access revoked for controller ${deviceId.slice(0, 8)} (external settings change)`);
   }
 

@@ -12,6 +12,7 @@
     "sentTime": "Sent at {{time}}",
     "linkCopied": "Link copied",
     "turnCostEstimate": "This turn {{cost}}",
+    "turnTokens": "This turn used {{tokens}}",
     "turnCost": "This turn cost {{cost}}",
     "messageGenerating": "Message is generating",
     "generating": "Generating",
@@ -121,7 +122,8 @@
     "justNow": "Just now",
     "minutesAgo": "{{n}} min ago",
     "hoursAgo": "{{n}} h ago",
-    "turnCostValue": "Est. {{value}}"
+    "turnCostValue": "Est. {{value}}",
+    "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
     "cancelAnnotation": "Cancel annotation",

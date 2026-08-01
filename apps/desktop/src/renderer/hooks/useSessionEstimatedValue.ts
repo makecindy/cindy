@@ -38,7 +38,12 @@ interface EstimatedValueTurnCostPayload {
   clientId: string;
   turnMoney?: unknown;
   turnCostUsd?: number;
-  turnCostIsEstimate: boolean;
+  /**
+   * 无报价轮(main 的 recordTurnUsageOnMessage)只推 turnUsageDetails,整组金额字段
+   * 缺省 —— 与 MessageTurnCostPayload 保持一致的可选性。下面的
+   * `turnCostIsEstimate !== true` 早退本就把这类轮次挡在估值汇总之外。
+   */
+  turnCostIsEstimate?: boolean;
   turnUsageDetails?: unknown;
 }
 

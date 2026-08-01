@@ -81,6 +81,7 @@ interface ScheduleIndexThrottleEntry {
 }
 
 const scheduleIndexThrottleEntries = new Map<string, ScheduleIndexThrottleEntry>();
+const scheduleIndexInvalidationVersions = new Map<string, number>();
 
 /**
  * 错误标记匹配:优先结构化 code,兜底 message 文本(review:mobile 各处的
@@ -205,9 +206,29 @@ export function invalidateOfflineScheduleIndexFailureFor(deviceId: string): void
   }
 }
 
-/** 测试用:清空节流登记表。 */
+export function invalidateScheduleIndexForDevice(deviceId: string): void {
+  if (!deviceId) return;
+  scheduleIndexThrottleEntries.delete(deviceId);
+  scheduleIndexInvalidationVersions.set(
+    deviceId,
+    (scheduleIndexInvalidationVersions.get(deviceId) ?? 0) + 1,
+  );
+}
+
+/**
+ * Offline invalidation generation for consumers that need to reject a stale
+ * completion from a request which was already in flight when the device went
+ * offline. The generation is monotonic per device and intentionally separate
+ * from the TTL cache entry.
+ */
+export function getScheduleIndexInvalidationVersion(deviceId: string): number {
+  return scheduleIndexInvalidationVersions.get(deviceId) ?? 0;
+}
+
+/** Test-only: clear cache and invalidation generations. */
 export function resetScheduleIndexThrottleForTesting(): void {
   scheduleIndexThrottleEntries.clear();
+  scheduleIndexInvalidationVersions.clear();
 }
 
 export function loadDeviceSessionScheduleIndex(
@@ -217,6 +238,20 @@ export function loadDeviceSessionScheduleIndex(
   return loadSessionScheduleIndex(createMobileMakerTransport({ deviceId, invoke }), {
     isDeviceUnresponsive: () => unresponsiveDevicesStore.has(deviceId),
   });
+}
+
+export function invalidateRunningSessionScheduleEntries(
+  current: Map<string, RemoteSessionScheduleInfo>,
+  sessionIds: Iterable<string>,
+): Map<string, RemoteSessionScheduleInfo> {
+  let next: Map<string, RemoteSessionScheduleInfo> | null = null;
+  for (const sessionId of sessionIds) {
+    const info = current.get(sessionId);
+    if (!info?.running) continue;
+    next ??= new Map(current);
+    next.set(sessionId, { ...info, running: false });
+  }
+  return next ?? current;
 }
 
 export function replaceSessionScheduleIndexEntries(

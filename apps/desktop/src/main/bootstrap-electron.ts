@@ -268,6 +268,7 @@ import { reapClaudeOrphansSync } from './claude-orphan-reaper';
 import { startAgentProcessPriorityWatcher } from './agent-process-priority';
 import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService';
 import { initNotificationService } from './notificationService';
+import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
 import {
   isAppContentWindow,
@@ -420,6 +421,7 @@ import { refreshProviderModelsAfterAccountReady } from './maker-host/account-pro
 import {
   readImDefaultSettingsState,
   resetImDefaultSettings,
+  resetImDefaultSettingsGlobal,
   resetImDefaultSettingsChannel,
   writeImDefaultSettingsPatch,
 } from './im/defaultSettingsStore.js';
@@ -559,7 +561,6 @@ import {
   isImDefaultEffort,
   isImDefaultPermissionMode,
   isImDefaultSettingsChannel,
-  isWechatUnsupportedPermissionMode,
   type ImDefaultAgentKind,
   type ImDefaultAgentSettings,
   type ImDefaultSettingsChannel,
@@ -1272,6 +1273,7 @@ protocol.registerSchemesAsPrivileged([
 import started from 'electron-squirrel-startup';
 
 import { APPLICATION_MENU_LABELS, type ApplicationMenuLocale } from './applicationMenuLabels.js';
+import { installCindyCliCommand, CLI_COMMAND_NAME } from './installCliCommand.js';
 
 if (started) {
   app.quit();
@@ -1525,6 +1527,16 @@ function installApplicationMenu(
         {
           label: labels.issues,
           click: () => dispatchApplicationMenuCommand(mainWindow, 'open-issues'),
+        },
+        { type: 'separator' },
+        {
+          // 命令名随 edition 品牌(installCli 文案里的 {{cmd}} 占位符)。
+          label: labels.installCli.replaceAll('{{cmd}}', CLI_COMMAND_NAME),
+          // 特权动作(写 PATH 目录 / 可能弹管理员授权)整段在 main 执行,
+          // 不经 renderer,也不新增 IPC 面。见 installCliCommand.ts。
+          click: () => {
+            void installCindyCliCommand(mainWindow, locale);
+          },
         },
       ],
     },
@@ -2559,6 +2571,7 @@ const registerIpcHandlers = () => {
     getWindow: () => getWindow() ?? null,
     feishuIm,
   });
+  initWecomGroupNotificationIpc();
   initAgentIslandService({
     getMainWindow: () => getWindow() ?? null,
     isPlannedRemoteDaemonClose: isCcMgrUpgradeInFlight,
@@ -2676,9 +2689,6 @@ const registerIpcHandlers = () => {
     async (_e, patch: unknown, rawChannel: unknown) => {
       const channel = parseImDefaultSettingsChannel(rawChannel);
       const parsedPatch = parseImDefaultSettingsPatch(patch);
-      if (channel === 'wechat' && isWechatUnsupportedPermissionMode(parsedPatch.permissionMode)) {
-        throwIpcError('INVALID_PARAMS', 'personal WeChat does not support this permission mode');
-      }
       writeImDefaultSettingsPatch(parsedPatch, channel);
       return imDefaultSettingsWire(channel);
     },
@@ -2688,7 +2698,7 @@ const registerIpcHandlers = () => {
     if (channel) {
       resetImDefaultSettingsChannel(channel);
     } else {
-      resetImDefaultSettings();
+      resetImDefaultSettingsGlobal();
     }
     return imDefaultSettingsWire(channel);
   });

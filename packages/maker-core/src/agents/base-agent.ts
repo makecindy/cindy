@@ -836,7 +836,11 @@ export interface SendOptions {
 
 export type TurnPermissionOrigin =
   | { kind: 'desktop' }
-  | { kind: 'im'; channel: 'feishu' | 'discord' | 'slack' | 'wechat' | 'telegram' | 'dingtalk'; taskId?: string }
+  | {
+      kind: 'im';
+      channel: 'feishu' | 'discord' | 'slack' | 'wechat' | 'telegram' | 'dingtalk' | 'wecom';
+      taskId?: string;
+    }
   | { kind: 'scheduler' }
   | { kind: 'hook'; source: string };
 
@@ -903,7 +907,8 @@ export interface AgentSessionHandle {
 
   /**
    * Synchronous provider preflight called by Session after reserving the turn
-   * but before any product `beforeProviderStart` / `onAccepted` side effect.
+   * and the optional `afterTurnReserved` state-preparation hook, but before any
+   * durable `beforeProviderStart` / `onAccepted` side effect.
    * Direct handle callers are still validated again inside send().
    */
   validateSendOptions?(opts: SendOptions): void;

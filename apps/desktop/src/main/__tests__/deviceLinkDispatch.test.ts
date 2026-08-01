@@ -394,8 +394,9 @@ import { DEVICE_LINK_RECONCILIATION_PROBE_MARKER } from '@cindy/maker-shared/dev
 import { MAKER_PUSH } from '../maker-ipc/channels';
 
 /** 最小 fake client:捕获 onFrame handler,记录出站调用 */
-function makeFakeClient() {
+function makeFakeClient(initialStatus: 'stopped' | 'connecting' | 'online' = 'online') {
   let frameHandler: ((env: Envelope) => unknown | Promise<unknown>) | null = null;
+  let status = initialStatus;
   const calls = {
     linkAccept: [] as Array<{ dst: string; requestId: string }>,
     closed: [] as Array<{ dst: string; reason: string }>,
@@ -403,6 +404,7 @@ function makeFakeClient() {
     invokeResult: [] as Array<{ dst: string; requestId: string; payload: unknown }>,
   };
   const client = {
+    getStatus: () => status,
     onFrame: (cb: (env: Envelope) => unknown | Promise<unknown>) => {
       frameHandler = cb;
       return () => {};
@@ -417,6 +419,9 @@ function makeFakeClient() {
   return {
     client: client as never,
     calls,
+    setStatus: (nextStatus: 'stopped' | 'connecting' | 'online') => {
+      status = nextStatus;
+    },
     feed: (env: Envelope) => frameHandler?.(env),
   };
 }
@@ -510,6 +515,24 @@ describe('被控端控制链路生命周期', () => {
 
     expect(() => dropAllControllers(client, 'user')).not.toThrow();
     expect(getActiveControllers()).toEqual([]);
+    expect(hasBroadcastTapListener()).toBe(false);
+  });
+
+  it('显式 dropAll 清理断线期间已排队的 push', () => {
+    remoteControlEnabled = true;
+    const { client, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    feed(subFrame('ctrl-drop-queue', SUB, ['session:s1']));
+    handleControllerOffline('ctrl-drop-queue');
+    tapWindowBroadcast('local-db:messages:created', {
+      sessionId: 's1',
+      id: 'm-stale',
+    });
+    expect(dispatchTesting.queuedPushesFor('ctrl-drop-queue')).toHaveLength(1);
+
+    dropAllControllers(client, 'toggle-off');
+
+    expect(dispatchTesting.queuedPushesFor('ctrl-drop-queue')).toEqual([]);
     expect(hasBroadcastTapListener()).toBe(false);
   });
 
@@ -607,14 +630,26 @@ describe('被控端控制链路生命周期', () => {
     )).toBe(false);
   });
 
-  it('link-close → 移除控制端,最后一个关闭后停 broadcast-tap', () => {
+  it('link-close clears remembered routing and queued pushes', () => {
     remoteControlEnabled = true;
     const { client, feed } = makeFakeClient();
     wireInboundDispatch(client);
-    feed({ v: 1, kind: 'link-open', id: 'r3', src: 'ctrl-c', payload: { controllerName: 'C', protocolVersion: 1, appVersion: '1' } });
-    expect(getActiveControllers()).toHaveLength(1);
+    feed(subFrame('ctrl-c', SUB, ['session:s1'], 'C'));
+    handleControllerOffline('ctrl-c');
+    tapWindowBroadcast('local-db:messages:created', {
+      sessionId: 's1',
+      id: 'm-before-close',
+    });
+    expect(dispatchTesting.queuedPushesFor('ctrl-c')).toHaveLength(1);
+
     feed({ v: 1, kind: 'link-close', src: 'ctrl-c', payload: { reason: 'user' } });
+    tapWindowBroadcast('local-db:messages:created', {
+      sessionId: 's1',
+      id: 'm-after-close',
+    });
+
     expect(getActiveControllers()).toHaveLength(0);
+    expect(dispatchTesting.queuedPushesFor('ctrl-c')).toEqual([]);
     expect(hasBroadcastTapListener()).toBe(false);
   });
 
@@ -1725,9 +1760,76 @@ describe('被控端订阅 registry + topic 转发', () => {
         appVersion: '1.0.0',
       },
     });
+    expect(getUpdateRelaunchControllers()).toEqual([]);
+    feed(subFrame('ctrl-modern', SUB, ['session:s1'], 'Modern reconnect'));
     expect(getUpdateRelaunchControllers()).toEqual([
       { deviceId: 'ctrl-modern', name: 'Modern reconnect' },
     ]);
+  });
+
+  it('modern reconnect after releasing every topic waits for a fresh subscribe', () => {
+    remoteControlEnabled = true;
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+
+    feed({
+      v: 1,
+      kind: 'link-open',
+      id: 'open-modern',
+      src: 'ctrl-modern',
+      payload: {
+        controllerName: 'Modern',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+      },
+    });
+    feed(subFrame('ctrl-modern', SUB, ['sessions'], 'Modern'));
+    feed(subFrame('ctrl-modern', UNSUB, ['sessions']));
+    handleControllerOffline('ctrl-modern');
+
+    feed({
+      v: 1,
+      kind: 'link-open',
+      id: 'open-modern-again',
+      src: 'ctrl-modern',
+      payload: {
+        controllerName: 'Modern reconnect',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+      },
+    });
+
+    tapWindowBroadcast('local-db:sessions:created', { sessionId: 's1' });
+    tapWindowBroadcast('maker:event', { sessionId: 's1', event: {} });
+
+    expect(calls.push).toEqual([]);
+    expect(getUpdateRelaunchControllers()).toEqual([]);
+  });
+
+  it('dropAll closes an accepted modern reconnect before explicit subscribe', () => {
+    remoteControlEnabled = true;
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    feed(subFrame('ctrl-modern', SUB, ['sessions'], 'Modern'));
+    handleControllerOffline('ctrl-modern');
+
+    feed({
+      v: 1,
+      kind: 'link-open',
+      id: 'open-modern-again',
+      src: 'ctrl-modern',
+      payload: {
+        controllerName: 'Modern reconnect',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+      },
+    });
+    dropAllControllers(client, 'shutdown');
+
+    expect(calls.closed).toContainEqual({
+      dst: 'ctrl-modern',
+      reason: 'shutdown',
+    });
   });
 
   it('无人值守更新忽略纯 sessions viewer，但保护文件浏览和实际会话控制', () => {
@@ -1893,7 +1995,7 @@ describe('被控端订阅 registry + topic 转发', () => {
     expect(calls.push).toEqual([]);
   });
 
-  it('unsubscribe 移除 topic;registry 空后停 tap', () => {
+  it('explicit unsubscribe removes the final remembered topic and stops the tap', () => {
     remoteControlEnabled = true;
     const { client, feed } = makeFakeClient();
     wireInboundDispatch(client);
@@ -1903,15 +2005,49 @@ describe('被控端订阅 registry + topic 转发', () => {
     expect(hasBroadcastTapListener()).toBe(false);
   });
 
-  it('presence-offline 清掉该控制端订阅(僵尸兜底)', () => {
+  it('relay-offline queues broadcasts for active topic subscribers', () => {
+    remoteControlEnabled = true;
+    const { client, calls, feed, setStatus } = makeFakeClient();
+    wireInboundDispatch(client);
+    feed(subFrame('ctrl-a', SUB, ['session:s1']));
+    setStatus('connecting');
+
+    tapWindowBroadcast('local-db:messages:created', {
+      sessionId: 's1',
+      id: 'm1',
+    });
+
+    expect(calls.push).toEqual([]);
+    expect(dispatchTesting.queuedPushesFor('ctrl-a')).toEqual([
+      {
+        channel: 'local-db:messages:created',
+        payload: { sessionId: 's1', id: 'm1' },
+        topic: 'session:s1',
+      },
+    ]);
+  });
+
+  it('presence-offline keeps the tap alive and queues broadcasts for remembered topics', () => {
     remoteControlEnabled = true;
     const { client, calls, feed } = makeFakeClient();
     wireInboundDispatch(client);
-    feed(subFrame('ctrl-a', SUB, ['sessions']));
+    feed(subFrame('ctrl-a', SUB, ['session:s1']));
     handleControllerOffline('ctrl-a');
-    expect(hasBroadcastTapListener()).toBe(false);
-    tapWindowBroadcast('local-db:sessions:created', { sessionId: 's1' });
+
+    expect(hasBroadcastTapListener()).toBe(true);
+    tapWindowBroadcast('local-db:messages:created', {
+      sessionId: 's1',
+      id: 'm1',
+    });
+
     expect(calls.push).toEqual([]);
+    expect(dispatchTesting.queuedPushesFor('ctrl-a')).toEqual([
+      {
+        channel: 'local-db:messages:created',
+        payload: { sessionId: 's1', id: 'm1' },
+        topic: 'session:s1',
+      },
+    ]);
   });
 
   it('开关关闭 → subscribe 帧回 REMOTE_DISABLED,不记录', () => {

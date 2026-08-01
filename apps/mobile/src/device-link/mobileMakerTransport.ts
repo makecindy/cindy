@@ -151,6 +151,8 @@ export interface MessageListOptions {
   limit?: number;
   before?: string;
   beforeTs?: number;
+  /** 只拉该 host 行之后的新消息；旧被控端会忽略未知可选字段并退化为最新页。 */
+  after?: string;
 }
 
 export interface MessageAroundOptions {

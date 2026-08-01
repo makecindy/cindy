@@ -15,6 +15,7 @@ import { sessionModelSupportsFastMode } from '@cindy/model-providers';
 import type { UtilityTextAttemptReason, UtilityTextFailure } from '../../../../shared/utilityTextResult';
 import { useFeishuBot } from '@/hooks/useFeishuBot';
 import { useProjectPickerOptions } from '@/hooks/useProjectPickerOptions';
+import { useWecomGroupNotificationSettings } from '@/hooks/useWecomGroupNotificationSettings';
 import type { Schedule, CreateScheduleInput, ScheduleTemplate, UpdateScheduleInput } from '@cindy/maker-scheduler';
 import { applyTemplateParams } from '@cindy/maker-scheduler/template-engine';
 import { ScriptCapabilityMultiSelect } from './ScriptCapabilityMultiSelect';
@@ -350,6 +351,7 @@ export function ScheduleFormDialog({
     if (template.notify) {
       setField('notifyDesktop', template.notify.desktop);
       setField('notifyFeishu', template.notify.feishu);
+      setField('notifyWecomGroup', template.notify.wecomGroup === true);
     }
     const initParams: Record<string, string> = {};
     for (const parameter of template.parameters ?? []) {
@@ -379,6 +381,8 @@ export function ScheduleFormDialog({
   }, [selectedTemplate, paramValues, promptDirty, setField]);
 
   const feishuBotReady = useFeishuBot().status === 'connected';
+  const wecomGroupSettings = useWecomGroupNotificationSettings();
+  const wecomGroupReady = wecomGroupSettings.configured && wecomGroupSettings.enabled;
   const navigate = useNavigate();
   const openReferencedSession = useCallback(
     async (sessionId: string) => {
@@ -400,6 +404,10 @@ export function ScheduleFormDialog({
     onOpenChange(false);
     // 飞书机器人在「IM 机器人」页的「个人」分栏,缺省 imGroup 会落到默认的 Cindy 栏
     navigate('/settings?tab=im-bot&imGroup=personal');
+  };
+  const goConfigWecomGroup = () => {
+    onOpenChange(false);
+    navigate('/settings?tab=general&section=notifications');
   };
 
   const projectOptions = useProjectPickerOptions();
@@ -936,6 +944,45 @@ export function ScheduleFormDialog({
                   )}
                 >
                   {t('scheduler.editor.fields.configFeishu')}
+                </button>
+              )}
+              {wecomGroupReady ? (
+                <button
+                  type="button"
+                  role="checkbox"
+                  aria-checked={form.notifyWecomGroup === true}
+                  onClick={() => setField('notifyWecomGroup', form.notifyWecomGroup !== true)}
+                  className={cn(
+                    'inline-flex h-[34px] items-center gap-2 rounded-md px-1.5',
+                    'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
+                    'transition-colors hover:bg-[var(--surface-hover)] focus:outline-none',
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-[3px] border-[1.5px] transition-colors',
+                      form.notifyWecomGroup
+                        ? 'border-[var(--lightbox-cta-bg)] bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]'
+                        : 'border-[var(--cmd-palette-item-meta)] bg-transparent dark:border-[var(--settings-section-desc)]',
+                    )}
+                    aria-hidden
+                  >
+                    {form.notifyWecomGroup && <Check size={10} strokeWidth={3} aria-hidden />}
+                  </span>
+                  {t('scheduler.editor.fields.finishSendToWecomGroup')}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={goConfigWecomGroup}
+                  className={cn(
+                    'inline-flex h-[34px] items-center rounded-md px-2',
+                    'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
+                    'transition-colors hover:bg-[var(--surface-hover)]',
+                    'focus:outline-none underline-offset-2 hover:underline',
+                  )}
+                >
+                  {t('scheduler.editor.fields.configWecomGroup')}
                 </button>
               )}
             </div>

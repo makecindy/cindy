@@ -22,11 +22,14 @@ function queuedWithReference() {
 }
 
 describe('device-link target session-reference capability gate', () => {
-  it('rejects an old target before resolving or sending the referenced message', async () => {
-    const invoke = vi.fn<DeviceLinkIpcDeps['invoke']>().mockResolvedValue({
-      ok: false,
-      error: { code: 'CHANNEL_NOT_ALLOWED', message: 'unknown channel' },
-    });
+  it('sends raw link text when an old target cannot consume trusted reference fields', async () => {
+    const invoke = vi
+      .fn<DeviceLinkIpcDeps['invoke']>()
+      .mockResolvedValueOnce({
+        ok: false,
+        error: { code: 'CHANNEL_NOT_ALLOWED', message: 'unknown channel' },
+      })
+      .mockResolvedValueOnce({ ok: true, result: { accepted: true } });
     const rewrite = vi.fn(async (_channel: string, args: unknown[]) => args);
 
     await expect(
@@ -34,18 +37,28 @@ describe('device-link target session-reference capability gate', () => {
         'target-session',
         queuedWithReference(),
       ]),
-    ).rejects.toThrow('[SESSION_REFERENCE_UNSUPPORTED]');
+    ).resolves.toEqual({ accepted: true });
 
-    expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith(
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke).toHaveBeenNthCalledWith(
+      1,
       'target-device',
       DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
       [],
     );
-    expect(rewrite).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenNthCalledWith(
+      2,
+      'target-device',
+      'maker:input:enqueue',
+      [
+        'target-session',
+        { text: 'compare cindy://session/source' },
+      ],
+    );
+    expect(rewrite).toHaveBeenCalledTimes(1);
   });
 
-  it('probes a new target before rewriting and sending the message', async () => {
+  it('rewrites before probing a new target and sending the message', async () => {
     const invoke = vi
       .fn<DeviceLinkIpcDeps['invoke']>()
       .mockResolvedValueOnce({ ok: true, result: { supported: true, version: 1 } })
@@ -67,6 +80,33 @@ describe('device-link target session-reference capability gate', () => {
       'maker:input:enqueue',
     ]);
     expect(rewrite).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends a raw foreign link without probing reference support', async () => {
+    const invoke = vi
+      .fn<DeviceLinkIpcDeps['invoke']>()
+      .mockResolvedValueOnce({ ok: true, result: { accepted: true } });
+    const rewrite = vi.fn(async (_channel: string, args: unknown[]) => [
+      args[0],
+      { ...(args[1] as object), sessionRefs: undefined },
+    ]);
+
+    await expect(
+      handleInvoke(depsForInvoke(invoke, rewrite), 'target-device', 'maker:input:enqueue', [
+        'target-session',
+        queuedWithReference(),
+      ]),
+    ).resolves.toEqual({ accepted: true });
+
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith(
+      'target-device',
+      'maker:input:enqueue',
+      [
+        'target-session',
+        expect.objectContaining({ text: 'compare cindy://session/source' }),
+      ],
+    );
   });
 
   it('accepts newer compatible capability versions', async () => {

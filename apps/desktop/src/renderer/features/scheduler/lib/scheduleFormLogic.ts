@@ -120,6 +120,7 @@ export interface ScheduleFormState {
   preRunHookTimeoutSec: string;
   notifyDesktop: boolean;
   notifyFeishu: boolean;
+  notifyWecomGroup?: boolean;
 }
 
 /** bound 态"已选绑定但尚未挑会话"的占位 id;validate 用 selectThread 拦截。 */
@@ -432,7 +433,11 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
     silentWhenIdle: !isScript && form.silentWhenIdle,
     targetSessionId: !isScript ? (form.targetSessionId.trim() || undefined) : undefined,
     preRunHook: buildPreRunHook(form),
-    notify: { desktop: form.notifyDesktop, feishu: form.notifyFeishu },
+    notify: {
+      desktop: form.notifyDesktop,
+      feishu: form.notifyFeishu,
+      wecomGroup: form.notifyWecomGroup === true,
+    },
   };
 
   if (isScript) {

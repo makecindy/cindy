@@ -83,7 +83,11 @@ export interface NormalizedRemoteMessage {
   turnMoney?: RemoteMoney;
   /** 旧 Desktop 消息兼容字段。 */
   turnCostUsd?: number;
-  turnCostIsEstimate?: boolean;
+  /**
+   * 本轮 token 总量(agentMeta.turnUsageDetails.totalTokens)。桌面算不出模型报价时
+   * 只落这一份用量事实,操作行据此退回显示 token 而不是空着一格。
+   */
+  turnTotalTokens?: number;
   /** assistant 专用:本轮模型降级标记(agentMeta.modelMismatch,桌面 main 在 turn 结束检测命中时落库)。 */
   modelMismatch?: { selected: string; actual: string };
   /** Orca 协同卡片(Lead 派活 / worker 回报);存在时由 MessageRenderer 渲染成专属卡片而非普通气泡。 */
@@ -382,7 +386,9 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
       isStreaming: readMessageStreaming(message) || undefined,
       ...(message.role === 'assistant' && (
         message.agentMeta?.turnCompleted === true ||
-        (turnCost.turnMoney?.amount ?? 0) > 0
+        (turnCost.turnMoney?.amount ?? 0) > 0 ||
+        // 无报价轮只落 turnUsageDetails,它同样只在 turn 结束时写入,等价收尾信号。
+        turnCost.turnTotalTokens !== undefined
       )
         ? { turnCompleted: true }
         : {}),
@@ -697,31 +703,69 @@ function readTimestamp(value: unknown): number | null {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
-function readTurnCost(
-  message: RemoteMessage,
-): Pick<NormalizedRemoteMessage, 'turnMoney' | 'turnCostUsd' | 'turnCostIsEstimate'> {
-  if (message.role !== 'assistant') return {};
-  const money = normalizeRemoteMoney(message.agentMeta?.turnCost);
-  if (money && money.amount > 0) {
+/**
+ * agentMeta 里一对「金额 + 旧版 USD 数字 + 估算标记」→ 操作行可显示的金额投影。
+ * 用户轮累计与当前 segment 走同一个实现,免得两处各写一份判据后漂移。
+ */
+function projectTurnMoney(
+  money: unknown,
+  legacyUsd: unknown,
+  isEstimateFlag: boolean,
+): Pick<NormalizedRemoteMessage, 'turnMoney' | 'turnCostUsd'> | null {
+  const normalized = normalizeRemoteMoney(money);
+  if (normalized && normalized.amount > 0) {
+    const isEstimate = isEstimateFlag || normalized.kind === 'value-estimate';
+    // NormalizedRemoteMessage is a display projection, not the accounting record. Fold the
+    // separate wire flag into turnMoney so visible text and accessibility cannot choose
+    // different estimate semantics for mixed actual-cost + value-estimate user-turn totals.
+    const displayMoney: RemoteMoney = isEstimate
+      ? { ...normalized, approximate: true, kind: 'value-estimate' }
+      : normalized;
     return {
-      turnMoney: money,
-      ...(money.currency === 'USD' ? { turnCostUsd: money.amount } : {}),
-      turnCostIsEstimate: money.kind === 'value-estimate',
+      turnMoney: displayMoney,
+      ...(displayMoney.currency === 'USD' ? { turnCostUsd: displayMoney.amount } : {}),
     };
   }
-  const cost = readNumber(message.agentMeta?.turnCostUsd);
-  if (cost === null || cost <= 0) return {};
-  const isEstimate = message.agentMeta?.turnCostIsEstimate === true;
+  const cost = readNumber(legacyUsd);
+  if (cost === null || cost <= 0) return null;
   return {
     turnMoney: {
       amount: cost,
       currency: 'USD',
-      approximate: isEstimate,
-      kind: isEstimate ? 'value-estimate' : 'actual-cost',
+      approximate: isEstimateFlag,
+      kind: isEstimateFlag ? 'value-estimate' : 'actual-cost',
     },
     turnCostUsd: cost,
-    turnCostIsEstimate: isEstimate,
   };
+}
+
+function readTurnCost(
+  message: RemoteMessage,
+): Pick<
+  NormalizedRemoteMessage,
+  'turnMoney' | 'turnCostUsd' | 'turnTotalTokens'
+> {
+  if (message.role !== 'assistant') return {};
+  // 用量与金额分开读:桌面算不出报价的轮次只落 turnUsageDetails,操作行退回显示 token。
+  const totalTokens = readNumber(readRecord(message.agentMeta?.turnUsageDetails)?.totalTokens);
+  const usage: Pick<NormalizedRemoteMessage, 'turnTotalTokens'> =
+    totalTokens !== null && totalTokens > 0 ? { turnTotalTokens: totalTokens } : {};
+  // 整轮累计优先于当前 segment(与桌面 MessageActionBar 的 displayedMoney 同口径):
+  // 一次用户请求含多个自动续跑 segment 时,操作行只挂在收尾正文上,而它要承载整轮总额;
+  // 收尾 segment 缺报价的轮次更是只有 userTurnCost。两者独立判定,不互为前提
+  // (不变量正本见 apps/desktop/src/shared/turnCostPayload.ts)。
+  const projected =
+    projectTurnMoney(
+      message.agentMeta?.userTurnCost,
+      message.agentMeta?.userTurnCostUsd,
+      message.agentMeta?.userTurnCostIsEstimate === true,
+    ) ??
+    projectTurnMoney(
+      message.agentMeta?.turnCost,
+      message.agentMeta?.turnCostUsd,
+      message.agentMeta?.turnCostIsEstimate === true,
+    );
+  return projected ? { ...usage, ...projected } : usage;
 }
 
 // 桌面 main 在 turn 结束检测到模型被上游降级时写 agentMeta.modelMismatch =

@@ -443,8 +443,8 @@ function normalizeWorkspaceKind(raw: unknown): WorkspaceKind {
 // 与 IPC 边界由 mapper 转 ISO 的旧约定刻意不一致；scheduler 引擎内部就是 ms 算的）。
 //
 // 关键约束（Phase 2 plan 硬规则）：
-//   1. `Schedule.notify` 在内存里是嵌套对象 `{ desktop, feishu }`，DB 端拆成
-//      `notify_desktop` / `notify_feishu` 两列；mapper 出口合成回对象，入口拆成两列。
+//   1. `Schedule.notify` 在内存里是嵌套对象 `{ desktop, feishu, wecomGroup? }`，
+//      DB 端拆成三列；mapper 出口合成回对象，入口拆成对应列。
 //   2. patch mapper（`schedulePatchToRow`）必须区分：
 //        - key 不存在 → SQL 不更新该列
 //        - key 存在但值是 undefined → 显式写 NULL
@@ -555,6 +555,7 @@ export function scheduleToCamel(row: ScheduleRow): Schedule {
     notify: {
       desktop: !!row.notifyDesktop,
       feishu: !!row.notifyFeishu,
+      ...(row.notifyWecomGroup ? { wecomGroup: true } : {}),
     },
     status: row.status as ScheduleStatus,
     createdAt: row.createdAt,
@@ -599,6 +600,7 @@ export function scheduleCreateToRow(s: Schedule): ScheduleInsert {
     preRunHookTimeoutMs: s.preRunHook?.timeoutMs ?? null,
     notifyDesktop: s.notify.desktop,
     notifyFeishu: s.notify.feishu,
+    notifyWecomGroup: s.notify.wecomGroup === true,
     status: s.status,
     createdAt: s.createdAt,
     updatedAt: s.updatedAt,
@@ -654,10 +656,17 @@ export function schedulePatchToRow(patch: Partial<Schedule>): Partial<ScheduleIn
     out.preRunHookTimeoutMs = patch.preRunHook?.timeoutMs ?? null;
   }
   if (hasKey(patch, 'notify')) {
-    // 嵌套对象整体替换：必须两列同时写
-    const n = patch.notify ?? { desktop: false, feishu: false };
-    out.notifyDesktop = !!n.desktop;
-    out.notifyFeishu = !!n.feishu;
+    const n = patch.notify;
+    if (n == null) {
+      out.notifyDesktop = false;
+      out.notifyFeishu = false;
+      out.notifyWecomGroup = false;
+    } else {
+      // 兼容不知道新通知渠道的旧客户端：对象内只更新实际出现的 key。
+      if (hasKey(n, 'desktop')) out.notifyDesktop = !!n.desktop;
+      if (hasKey(n, 'feishu')) out.notifyFeishu = !!n.feishu;
+      if (hasKey(n, 'wecomGroup')) out.notifyWecomGroup = !!n.wecomGroup;
+    }
   }
   if (hasKey(patch, 'status')) out.status = patch.status as ScheduleStatus;
   if (hasKey(patch, 'createdAt')) out.createdAt = patch.createdAt as number;

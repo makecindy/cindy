@@ -371,202 +371,48 @@ describe('buildRenderItems — key stability', () => {
     expect(taskItem.update?.summary).toBe('Found the relevant renderer path');
   });
 
-  // ── case 3: TodoWrite session 多次 update 后 key 仍指向首条 ─────────────
+  // ── case 3: plan 工具调用被整体吞掉 —— 流内不再渲染计划卡 ────────────────
+  // 计划的唯一呈现是 composer 上方的 PinnedPlanPanel(Codex IDE 扩展式钉住面板)。
+  // session 分组 / 输入解析语义的覆盖在 @cindy/maker-shared 的 messageRender.test.ts;
+  // 这里只锁桌面流内行为:不产 item、不切段、结尾不留无效 tail。
 
-  it('TodoWrite session merging multiple updates keeps todo key pointing at the FIRST update', () => {
-    const t1 = mkTool('tw1', 'TodoWrite', todoInput([{ content: 'a', status: 'pending' }]));
-    const t2 = mkTool('tw2', 'TodoWrite', todoInput([{ content: 'a', status: 'in_progress' }]));
-    const t3 = mkTool('tw3', 'TodoWrite', todoInput([{ content: 'a', status: 'in_progress' }]));
+  it('plan tool calls are swallowed without splitting the surrounding tool segment', () => {
+    const seq: ChatMessage[] = [
+      mkUser('u1'),
+      mkTool('t1', 'Bash'),
+      mkTool('tw1', 'TodoWrite', todoInput([{ content: 'a', status: 'pending' }])),
+      mkResult('r-tw1', 'tu-tw1', 'ok'),
+      mkTool('t2', 'Read'),
+      mkAssistant('a1', 'done'),
+    ];
+    const { items } = buildRenderItems(seq);
 
-    const oneUpdate = buildRenderItems([t1]);
-    const threeUpdates = buildRenderItems([t1, t2, t3]);
-
-    const oneTodo = oneUpdate.items.find((it): it is Extract<RenderItem, { type: 'agent_plan' }> => it.type === 'agent_plan');
-    const threeTodo = threeUpdates.items.find((it): it is Extract<RenderItem, { type: 'agent_plan' }> => it.type === 'agent_plan');
-
-    expect(oneTodo?.key).toBe('plan-tw1');
-    expect(threeTodo?.key).toBe('plan-tw1'); // 即便 update 加到 tw3, key 仍锚在 tw1
+    // TodoWrite 及其 tool_result 如同不存在:t1 / t2 仍聚在同一段里。
+    expect(items.map((it) => it.type)).toEqual(['message', 'tool_segment', 'message']);
+    const seg = items[1] as Extract<RenderItem, { type: 'tool_segment' }>;
+    expect(seg.key).toBe('seg-t1');
+    expect(seg.toolCalls.map((tc) => tc.clientId)).toEqual(['t1', 't2']);
   });
 
-  it('Codex update_plan renders as the same visible agent plan card', () => {
-    const plan = mkTool('plan1', 'update_plan', { text: '1. Read code\n2. Patch renderer\n3. Run tests' });
-    const { items } = buildRenderItems([mkUser('u1'), plan, mkAssistant('a1', 'On it')]);
-    expect(items.map((it) => it.type)).toEqual(['message', 'agent_plan', 'message']);
-    const planItem = items[1] as Extract<RenderItem, { type: 'agent_plan' }>;
-    expect(planItem.key).toBe('plan-plan1');
-    expect(planItem.todos.map((todo) => todo.content)).toEqual(['Read code', 'Patch renderer', 'Run tests']);
-    expect(planItem.todos.map((todo) => todo.status)).toEqual(['in_progress', 'pending', 'pending']);
-  });
-
-  it('Codex structured update_plan preserves explicit step statuses', () => {
+  it('update_plan and Task* plan calls likewise produce no render items', () => {
     const plan = mkTool('plan1', 'update_plan', {
-      plan: [
-        { step: 'Read code', status: 'completed' },
-        { step: 'Patch renderer', status: 'in_progress' },
-        { step: 'Run tests', status: 'pending' },
-      ],
+      plan: [{ step: 'Read code', status: 'in_progress' }],
     });
-    const { items } = buildRenderItems([plan]);
-    const planItem = items[0] as Extract<RenderItem, { type: 'agent_plan' }>;
-    expect(planItem.todos).toEqual([
-      { content: 'Read code', status: 'completed' },
-      { content: 'Patch renderer', status: 'in_progress' },
-      { content: 'Run tests', status: 'pending' },
-    ]);
-  });
+    const taskCreate = mkTool('tc1', 'TaskCreate', { subject: 'Collect logs' });
 
-  it('Codex structured update_plan accepts app-server camelCase inProgress status', () => {
-    const plan = mkTool('plan1', 'update_plan', {
-      plan: [
-        { step: 'Read code', status: 'completed' },
-        { step: 'Patch renderer', status: 'inProgress' },
-      ],
-    });
-    const { items } = buildRenderItems([plan]);
-    const planItem = items[0] as Extract<RenderItem, { type: 'agent_plan' }>;
-    expect(planItem.todos).toEqual([
-      { content: 'Read code', status: 'completed' },
-      { content: 'Patch renderer', status: 'in_progress' },
-    ]);
-  });
-
-  it('Claude TaskCreate/TaskUpdate renders through the same visible agent plan card', () => {
-    const taskCreate = mkTool('tc1', 'TaskCreate', {
-      subject: 'Read code',
-      description: 'Read relevant files',
-    });
-    const taskUpdate = mkTool('tu1', 'TaskUpdate', {
-      task_id: 'task-1',
-      status: 'in_progress',
-    });
-    const result = mkResult('tr1', 'tu-tc1', JSON.stringify({
-      task: { task_id: 'task-1', status: 'pending', subject: 'Read code' },
-    }));
-
-    const { items } = buildRenderItems([mkUser('u1'), taskCreate, result, taskUpdate, mkAssistant('a1', 'Working')]);
-    expect(items.map((it) => it.type)).toEqual(['message', 'agent_plan', 'message']);
-    const planItem = items[1] as Extract<RenderItem, { type: 'agent_plan' }>;
-    expect(planItem.key).toBe('plan-tc1');
-    expect(planItem.todos).toEqual([{ content: 'Read code', status: 'in_progress' }]);
-  });
-
-  it('does not render id-only Claude TaskUpdate plan cards from partial history', () => {
-    const taskUpdate = mkTool('tu15', 'TaskUpdate', {
-      taskId: '15',
-      status: 'completed',
-    });
-    const result = mkResult('tr15', 'tu-tu15', 'Updated task #15 status');
-
-    const { items } = buildRenderItems([mkUser('u1'), taskUpdate, result, mkAssistant('a1', 'Done')]);
+    const { items } = buildRenderItems([mkUser('u1'), plan, taskCreate, mkAssistant('a1', 'On it')]);
 
     expect(items.map((it) => it.type)).toEqual(['message', 'message']);
   });
 
-  it('keeps Codex update_plan and Claude TaskCreate in separate plan cards', () => {
-    const plan = mkTool('plan1', 'update_plan', {
-      plan: [
-        { step: 'Read code', status: 'in_progress' },
-      ],
-    });
-    const taskCreate = mkTool('tc1', 'TaskCreate', { subject: 'Collect logs' });
-
-    const { items } = buildRenderItems([plan, taskCreate]);
-    const plans = items.filter((it): it is Extract<RenderItem, { type: 'agent_plan' }> => it.type === 'agent_plan');
-
-    expect(plans.length).toBe(2);
-    expect(plans[0].key).toBe('plan-plan1');
-    expect(plans[0].todos).toEqual([{ content: 'Read code', status: 'in_progress' }]);
-    expect(plans[1].key).toBe('plan-tc1');
-    expect(plans[1].todos).toEqual([{ content: 'Collect logs', status: 'pending' }]);
-  });
-
-  it('Claude text TaskCreate ids line up with later TaskUpdate and TaskList snapshots', () => {
-    const create1 = mkTool('tc1', 'TaskCreate', { subject: '收集环境信息' });
-    const create1Result = mkResult('tr1', 'tu-tc1', 'Task #1 created successfully: 收集环境信息');
-    const create2 = mkTool('tc2', 'TaskCreate', { subject: '演示任务状态流转' });
-    const create2Result = mkResult('tr2', 'tu-tc2', 'Task #2 created successfully: 演示任务状态流转');
-    const done1 = mkTool('tu1', 'TaskUpdate', { taskId: '1', status: 'completed' });
-    const done2 = mkTool('tu2', 'TaskUpdate', { taskId: '2', status: 'completed' });
-    const list = mkTool('tl1', 'TaskList', {});
-    const listResult = mkResult(
-      'tr-list',
-      'tu-tl1',
-      '#1 [completed] 收集环境信息\n#2 [completed] 演示任务状态流转',
-    );
-
+  it('a trailing plan call keeps the tail invariant on the previous valid item', () => {
     const { items } = buildRenderItems([
-      create1,
-      create1Result,
-      create2,
-      create2Result,
-      done1,
-      done2,
-      list,
-      listResult,
+      mkUser('u1'),
+      mkTool('tw1', 'TodoWrite', todoInput([{ content: 'a', status: 'pending' }])),
+      mkResult('r-tw1', 'tu-tw1', 'ok'),
     ]);
-    const planItem = items[0] as Extract<RenderItem, { type: 'agent_plan' }>;
-    expect(planItem.todos).toEqual([
-      { content: '收集环境信息', status: 'completed' },
-      { content: '演示任务状态流转', status: 'completed' },
-    ]);
-  });
 
-  it('Claude TaskList snapshots replace the current task plan state', () => {
-    const taskCreate = mkTool('tc1', 'TaskCreate', { subject: 'Old task' });
-    const createResult = mkResult('tr1', 'tu-tc1', JSON.stringify({
-      task: { task_id: 'old', status: 'pending', subject: 'Old task' },
-    }));
-    const taskList = mkTool('tl1', 'TaskList', {});
-    const listResult = mkResult('tr2', 'tu-tl1', JSON.stringify({
-      tasks: [
-        { task_id: 'a', status: 'completed', subject: 'Inspect code' },
-        { task_id: 'b', status: 'running', subject: 'Patch UI' },
-      ],
-    }));
-
-    const { items } = buildRenderItems([taskCreate, createResult, taskList, listResult]);
-    const plans = items.filter((it): it is Extract<RenderItem, { type: 'agent_plan' }> => it.type === 'agent_plan');
-    expect(plans.length).toBe(1);
-    expect(plans[0].key).toBe('plan-tc1');
-    expect(plans[0].todos).toEqual([
-      { content: 'Inspect code', status: 'completed' },
-      { content: 'Patch UI', status: 'in_progress' },
-    ]);
-  });
-
-  it('Claude TaskList status-only snapshots keep existing task titles', () => {
-    const taskCreate = mkTool('tc1', 'TaskCreate', { subject: 'Inspect code' });
-    const createResult = mkResult('tr1', 'tu-tc1', 'Task #a created successfully: Inspect code');
-    const taskList = mkTool('tl1', 'TaskList', {});
-    const listResult = mkResult('tr2', 'tu-tl1', JSON.stringify({
-      tasks: [
-        { id: 'a', status: 'completed' },
-      ],
-    }));
-
-    const { items } = buildRenderItems([taskCreate, createResult, taskList, listResult]);
-    const planItem = items[0] as Extract<RenderItem, { type: 'agent_plan' }>;
-    expect(planItem.todos).toEqual([
-      { content: 'Inspect code', status: 'completed' },
-    ]);
-  });
-
-  it('Claude TaskCreate starts a fresh task plan after the previous batch is completed without TaskList', () => {
-    const oldCreate = mkTool('tc1', 'TaskCreate', { subject: 'Old task' });
-    const oldDone = mkTool('tu1', 'TaskUpdate', {
-      taskId: 'task-create:tu-tc1',
-      status: 'completed',
-    });
-    const newCreate = mkTool('tc2', 'TaskCreate', { subject: 'New task' });
-
-    const { items } = buildRenderItems([oldCreate, oldDone, newCreate]);
-    const plans = items.filter((it): it is Extract<RenderItem, { type: 'agent_plan' }> => it.type === 'agent_plan');
-
-    expect(plans.length).toBe(2);
-    expect(plans[0].key).toBe('plan-tc1');
-    expect(plans[0].todos).toEqual([{ content: 'Old task', status: 'completed' }]);
-    expect(plans[1].key).toBe('plan-tc2');
-    expect(plans[1].todos).toEqual([{ content: 'New task', status: 'pending' }]);
+    expect(items.map((it) => it.type)).toEqual(['message']);
   });
 
   // ── case 4: orphan tool_result 补到末尾不产生新 item / 不重 key ─────────
@@ -600,26 +446,6 @@ describe('buildRenderItems — key stability', () => {
     expect(segs[0].key).toBe('seg-t1');
     expect(segs[1].key).toBe('seg-t2');
     expect(segs[0].key).not.toBe(segs[1].key);
-  });
-
-  // ── case 5b: TodoWrite session 在 prev allDone 翻转后开新 session,key 取新首条 ──
-  // 锁住 Pass 1 的 `prev && !prevAllDone` 判定 — 如果未来重构把这条改错(例如
-  // 漏判 prevAllDone),所有 TodoWrite 会合并到第一个 session 一直更新下去,新
-  // 任务的卡片永远不会出现。这条用例保证 allDone 翻转处新 session 必然开启,
-  // 且新 key 来自新 session 首条而不是旧 session 首条。
-
-  it('TodoWrite session opens fresh after prev allDone — new todo key points at NEW session first call', () => {
-    const old1 = mkTool('tw1', 'TodoWrite', todoInput([{ content: 'a', status: 'pending' }]));
-    const oldDone = mkTool('tw2', 'TodoWrite', todoInput([{ content: 'a', status: 'completed' }]));
-    // prev 全 done → 下一条必开新 session
-    const new1 = mkTool('tw3', 'TodoWrite', todoInput([{ content: 'b', status: 'pending' }]));
-    const new2 = mkTool('tw4', 'TodoWrite', todoInput([{ content: 'b', status: 'in_progress' }]));
-
-    const { items } = buildRenderItems([old1, oldDone, new1, new2]);
-    const todos = items.filter((it): it is Extract<RenderItem, { type: 'agent_plan' }> => it.type === 'agent_plan');
-    expect(todos.length).toBe(2);
-    expect(todos[0].key).toBe('plan-tw1'); // 旧 session 首条
-    expect(todos[1].key).toBe('plan-tw3'); // 新 session 首条 — 不是 tw4 也不是 tw1
   });
 
   // ── case 6: tool_media key 显式锁规则 (`media-${segment 首 toolCall id}`) ────
@@ -1148,18 +974,13 @@ describe('groupWorkRuns — work-group collapsing', () => {
     ]);
   });
 
-  it('keeps TodoWrite plan cards visible before the final answer', () => {
+  it('plan calls stay absent through work-group folding (sole presentation is the pinned panel)', () => {
     const todo = mkTool('tw1', 'TodoWrite', todoInput([{ content: 'inspect', status: 'completed' }]));
-    const items = build([mkUser('u1'), todo, mkAssistant('a-final', 'Done.')], false);
-    expect(items.map((it) => it.type)).toEqual(['message', 'agent_plan', 'message']);
-    expect(items[1].key).toBe('plan-tw1');
-  });
-
-  it('keeps TodoWrite plan cards visible after the final answer', () => {
-    const todo = mkTool('tw1', 'TodoWrite', todoInput([{ content: 'inspect', status: 'completed' }]));
-    const items = build([mkUser('u1'), mkAssistant('a-final', 'Done.'), todo], false);
-    expect(items.map((it) => it.type)).toEqual(['message', 'message', 'agent_plan']);
-    expect(items[2].key).toBe('plan-tw1');
+    // 正文前后各放一次:两个位置都不应折出 work_group,也不应出现任何计划 item。
+    const before = build([mkUser('u1'), todo, mkAssistant('a-final', 'Done.')], false);
+    const after = build([mkUser('u1'), mkAssistant('a-final', 'Done.'), todo], false);
+    expect(before.map((it) => it.type)).toEqual(['message', 'message']);
+    expect(after.map((it) => it.type)).toEqual(['message', 'message']);
   });
 
   it('computes durationMs from the previous boundary (user message) to the terminating text createdAt', () => {
