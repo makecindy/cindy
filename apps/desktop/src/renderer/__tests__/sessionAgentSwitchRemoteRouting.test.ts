@@ -147,6 +147,45 @@ describe('makerChatStore.mirrorAgentSwitchIntent', () => {
   });
 });
 
+describe('isRemoteIntentReadbackFresh（远程意图读回的新鲜度守卫）', () => {
+  const intentA = { target: 'codex', model: 'gpt-5.5', providerId: null } as const;
+  const base = {
+    cancelled: false,
+    writeSeqAtStart: 3,
+    writeSeqNow: 3,
+    intentAtStart: null,
+    intentNow: null,
+  };
+
+  it('在途期间无人改动 → 应用读回结果', async () => {
+    const { isRemoteIntentReadbackFresh } = await import('@/components/new-chat/agentSwitchConfirmation');
+    expect(isRemoteIntentReadbackFresh(base)).toBe(true);
+  });
+
+  it('effect 已清理(切走会话)→ 丢弃', async () => {
+    const { isRemoteIntentReadbackFresh } = await import('@/components/new-chat/agentSwitchConfirmation');
+    expect(isRemoteIntentReadbackFresh({ ...base, cancelled: true })).toBe(false);
+  });
+
+  it('ABA:本端登记后又撤销,意图引用回到 null 也必须丢弃(引用比较看不出来)', async () => {
+    const { isRemoteIntentReadbackFresh } = await import('@/components/new-chat/agentSwitchConfirmation');
+    expect(
+      isRemoteIntentReadbackFresh({
+        ...base,
+        // 登记 +1、撤销 +1 —— 两次写入后序号已变,而 intent 值回到了发起时的 null。
+        writeSeqNow: 5,
+        intentAtStart: null,
+        intentNow: null,
+      }),
+    ).toBe(false);
+  });
+
+  it('外部回流(被控端 push / 另一窗口)改过意图 → 丢弃', async () => {
+    const { isRemoteIntentReadbackFresh } = await import('@/components/new-chat/agentSwitchConfirmation');
+    expect(isRemoteIntentReadbackFresh({ ...base, intentNow: intentA })).toBe(false);
+  });
+});
+
 describe('ChatInput 的入口门控与调用路由', () => {
   const source = readFileSync(
     resolve(process.cwd(), 'src/renderer/components/new-chat/ChatInput.tsx'),
@@ -166,8 +205,21 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(source).toContain('codexCaps.capabilities?.supportsSessionAgentSwitch === true');
   });
 
-  it('远程会话打开时读回被控端权威意图', () => {
+  it('Orca 会话(lead / worker)排除:被控端 handler 对 orcaRole 一律拒,不能暴露必失败的入口', () => {
+    expect(source).toContain('!sessionOrcaRole &&');
+    // 会话视图必须把角色喂进来,否则门控恒为「非协同」。
+    const viewSource = readFileSync(
+      resolve(process.cwd(), 'src/renderer/features/cc-agent/CCAgentSessionView.tsx'),
+      'utf8',
+    );
+    expect(viewSource).toContain('sessionOrcaRole={session?.orcaRole ?? null}');
+  });
+
+  it('远程会话打开时读回被控端权威意图,并经新鲜度守卫过滤过期响应', () => {
     expect(source).toContain('.getSessionAgentSwitchIntent(sessionId)');
+    expect(source).toContain('isRemoteIntentReadbackFresh({');
     expect(source).toContain('makerChatStore.mirrorAgentSwitchIntent(sessionId, remoteIntent)');
+    // 每次点选都要推进写序号,否则 ABA 守卫失效。
+    expect(source).toContain('agentSwitchWriteSeqRef.current += 1;');
   });
 });

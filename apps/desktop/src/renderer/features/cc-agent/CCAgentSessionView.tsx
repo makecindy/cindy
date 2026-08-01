@@ -3546,6 +3546,8 @@ export function CCAgentSessionView({
                         : 'claude-code'
                       : null
                   }
+                  // 协同会话不参与跨引擎切换(被控端 handler 对 orcaRole 一律拒),入口据此隐藏。
+                  sessionOrcaRole={session?.orcaRole ?? null}
                   initialWorkingDir={session?.workingDir}
                   remoteHostId={session?.remoteHostId ?? null}
                   deviceLinkDeviceId={remoteDeviceId}

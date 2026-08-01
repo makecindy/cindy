@@ -97,7 +97,10 @@ import {
   enqueueEffortChange,
   isSessionScopeCurrent,
 } from './effortChangeQueue';
-import { confirmAgentSwitchRisk } from './agentSwitchConfirmation';
+import {
+  confirmAgentSwitchRisk,
+  isRemoteIntentReadbackFresh,
+} from './agentSwitchConfirmation';
 import {
   isSelectedSourceDisconnected,
   resolveEffort,
@@ -306,6 +309,13 @@ interface ChatInputProps {
    * 不能用 vendorKey 的 Claude Code 默认回退冒充真实身份。
    */
   runtimeAgentKind?: AgentKind | null;
+  /**
+   * 会话的 Orca 角色(lead / worker;null = 非协同会话)。协同运行时对 agent 形态有独立
+   * 契约(docs/dev-rules/orca-team-architecture.md),被控端的 session-agent-switch handler
+   * 对任何带 orcaRole 的会话一律拒 UNSUPPORTED_CAPABILITY —— 入口据此隐藏,不给用户
+   * 一个点了必失败的控件(与手机端 supportsMobileSessionAgentSwitch 同口径)。
+   */
+  sessionOrcaRole?: string | null;
   /** Initial workingDir from session data. */
   initialWorkingDir?: string | null;
   /**
@@ -806,6 +816,7 @@ export function ChatInput({
   onSend,
   sessionId,
   runtimeAgentKind,
+  sessionOrcaRole,
   initialWorkingDir,
   remoteHostId,
   deviceLinkDeviceId,
@@ -1212,23 +1223,37 @@ export function ChatInput({
   // 该字段、也没收录切换 channel,入口必须隐藏(与手机端 supportsMobileSessionAgentSwitch
   // 同口径)。本机会话恒可用——main 就是实现方,不能因 capabilities 还没加载完而闪掉入口。
   // SSH 远程(remoteHostId)是另一套引擎生命周期,继续不支持,由调用点单独排除。
+  // Orca 会话(lead / worker)同样排除:被控端 handler 对带 orcaRole 的会话一律拒
+  // UNSUPPORTED_CAPABILITY,暴露入口只会得到一个必然失败的控件。
   const sessionAgentSwitchSupported =
-    !deviceLinkDeviceId ||
-    ccCaps.capabilities?.supportsSessionAgentSwitch === true ||
-    codexCaps.capabilities?.supportsSessionAgentSwitch === true;
+    !sessionOrcaRole &&
+    (!deviceLinkDeviceId ||
+      ccCaps.capabilities?.supportsSessionAgentSwitch === true ||
+      codexCaps.capabilities?.supportsSessionAgentSwitch === true);
 
+  // 本端对该会话意图的写次数(登记 / 撤销 / 选回当前引擎都算一次)。读回请求用它判断
+  // 「在途期间用户是否动过意图」——单调递增,不受 ABA 影响:登记后又撤销时值虽然都回到
+  // null,序号已经 +2,过期响应不会被误判为「期间没变」而恢复已撤销的意图。
+  const agentSwitchWriteSeqRef = useRef(0);
   // 远程会话打开时读回被控端的权威 pending 意图。意图是 main 的内存态、不落库,
   // 控制端换窗口 / 重开视图 / 重启后本地镜像为空,不读回就会出现「UI 显示旧引擎、
   // 下一条消息却按意图切换」的错位(在被控端本机或另一台控制端登记时同理)。
   useEffect(() => {
     if (!sessionId || !deviceLinkDeviceId || remoteHostId) return;
     let cancelled = false;
+    const writeSeq = agentSwitchWriteSeqRef.current;
     const before = makerChatStore.getAgentSwitchIntent(sessionId);
     void makerApiForDevice(deviceLinkDeviceId)
       .getSessionAgentSwitchIntent(sessionId)
       .then((remoteIntent) => {
-        // 期间用户又改选或撤销过 → 本地更新更靠后,读回结果已过期,丢弃。
-        if (cancelled || makerChatStore.getAgentSwitchIntent(sessionId) !== before) return;
+        const fresh = isRemoteIntentReadbackFresh({
+          cancelled,
+          writeSeqAtStart: writeSeq,
+          writeSeqNow: agentSwitchWriteSeqRef.current,
+          intentAtStart: before,
+          intentNow: makerChatStore.getAgentSwitchIntent(sessionId),
+        });
+        if (!fresh) return;
         makerChatStore.mirrorAgentSwitchIntent(sessionId, remoteIntent);
       })
       .catch(() => {
@@ -3926,6 +3951,9 @@ export function ChatInput({
       },
     ) => {
       if (!sessionId) return;
+      // 本次点选无论落到哪个分支(登记意图 / 撤销意图 / 立即切换),都算一次本端写入:
+      // 在途的远程意图读回据此作废,不会用旧快照盖掉用户刚做的选择。
+      agentSwitchWriteSeqRef.current += 1;
       try {
         // effort 档按**目标引擎**目录解析(resolveModelEfforts 锚定当前引擎,
         // 同 id 模型两家档位可不同、目标独占模型在当前目录里查不到);浏览态
