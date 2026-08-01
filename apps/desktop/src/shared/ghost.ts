@@ -1705,8 +1705,15 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     if (slot === 'subscribe') {
       // 订阅两档分列:旁听(元数据)常规位;拦截是全部槽里权限最重的一档,
       // unshift 排到清单最顶(敏感项排最上)。
-      if (manifest.subscribe?.topics?.length) {
-        items.push({ key: 'subscribe:topics', kind: 'subscribe', labelKey: 'subscribeTopics' });
+      const topics = manifest.subscribe?.topics;
+      if (topics?.length) {
+        // 旧 key 只在真订了 turn / session 时产出:纯 activity 插件不该在确认框里
+        // 多出一行"旁听轮次与会话事件"——网关根本不给它投 turn / session,那行是凭空
+        // 多报的能力,用户可能据此误拒。存量已批准插件必然含 turn 或 session(activity
+        // 是本版新增),所以旧 key 对它们照旧产出,批准状态不 churn。
+        if (topics.includes('turn') || topics.includes('session')) {
+          items.push({ key: 'subscribe:topics', kind: 'subscribe', labelKey: 'subscribeTopics' });
+        }
         // activity 单列一项(不并进 subscribe:topics):它暴露的是"用户此刻正被要求
         // 批准某个操作 / 正被问问题"的行为时序,比 turn / session 的统计元数据敏感
         // 一档,文案也要另讲。更要紧的是权限扩张检测——diffGhostPermissionItems 按
@@ -1714,7 +1721,7 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
         // topics:["turn"] 更新到 ["turn","activity"] 时 added 为空,plugin-market
         // 的复核就不会拦,用户会在毫不知情的情况下多给出审批时序。旧 key 保持原样,
         // 只声明 turn / session 的存量插件权限清单逐字不变(批准状态不 churn)。
-        if (manifest.subscribe.topics.includes('activity')) {
+        if (topics.includes('activity')) {
           items.push({
             key: 'subscribe:topics:activity',
             kind: 'subscribe',

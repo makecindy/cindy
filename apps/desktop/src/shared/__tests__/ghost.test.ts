@@ -1420,6 +1420,26 @@ describe('ghost · subscribe 订阅详单校验(卡槽①,2026-07-12)', () => {
     ).toEqual(['subscribe:topics:activity']);
   });
 
+  it('纯 activity 订阅不显示 turn/session 那行:确认框不凭空多报能力', () => {
+    const activityOnly = validateGhostManifest(withSub({ topics: ['activity'] }));
+    expect(activityOnly.ok).toBe(true);
+    if (!activityOnly.ok) return;
+    const keys = ghostPermissionItems(activityOnly.manifest)
+      .filter((i) => i.kind === 'subscribe')
+      .map((i) => i.key);
+    // 网关不会给它投 turn / session,所以固定的 subscribe:topics 一行不该出现。
+    expect(keys).toEqual(['subscribe:topics:activity']);
+  });
+
+  it('订阅 session 或 turn 任一都产出旧 subscribe:topics(存量批准状态不 churn)', () => {
+    for (const topics of [['turn'], ['session'], ['turn', 'session'], ['session', 'activity']]) {
+      const v = validateGhostManifest(withSub({ topics }));
+      expect(v.ok).toBe(true);
+      if (!v.ok) return;
+      expect(ghostPermissionItems(v.manifest).map((i) => i.key)).toContain('subscribe:topics');
+    }
+  });
+
   it('will-assistant-message:出口钩子合法(继承 resident 要求),单列一档权限行', () => {
     const noResident = validateGhostManifest(withSub({ hooks: ['will-assistant-message'] }));
     expect(noResident.ok).toBe(false); // resident 要求 key 在 hooks 非空,自动覆盖新钩子

@@ -167,6 +167,7 @@ import {
   GhostActivityTracker,
   GhostTurnTranslator,
   createGhostSessionFocusTracker,
+  GhostTapPendingQueue,
   GhostTurnOriginTracker,
   isGhostEligibleSessionRow,
   type GhostInteractionActivityKind,
@@ -1228,34 +1229,20 @@ export function createGhostSessionTap(sessionId: string): {
   let attempts = 0;
   const MAX_ATTEMPTS = 5;
   const MAX_PENDING = 32;
-  type PendingTapItem =
-    | { type: 'event'; event: MinimalAgentEvent }
-    | { type: 'activity'; phase: 'start' | 'end'; request: PendingActivityRequest };
-  const pending: PendingTapItem[] = [];
-
-  let droppedPending = 0;
-  const enqueue = (item: PendingTapItem): void => {
-    if (pending.length >= MAX_PENDING) {
-      // 封顶丢最新(保住最早的连续前缀:end 之前一定有它的 start,配对性优于丢最旧)。
-      // 只在首次溢出告警,避免怪会话把日志刷爆。
-      droppedPending += 1;
-      if (droppedPending === 1) {
-        log.warn('ghost session tap pending overflow while resolving eligibility', {
-          sessionId,
-          cap: MAX_PENDING,
-        });
-      }
-      return;
-    }
-    pending.push(item);
-  };
+  // 有界缓冲 + 溢出配对保护(不留孤儿 start),语义见 GhostTapPendingQueue。
+  const pending = new GhostTapPendingQueue(MAX_PENDING, () => {
+    log.warn('ghost session tap pending overflow while resolving eligibility', {
+      sessionId,
+      cap: MAX_PENDING,
+    });
+  });
 
   const applyActivity = (
     phase: 'start' | 'end',
     request: PendingActivityRequest,
   ): void => {
     if (!activity) {
-      enqueue({ type: 'activity', phase, request });
+      pending.push({ type: 'activity', phase, request });
       return;
     }
     if (phase === 'start') activity.startInteraction(request.kind, request.requestId);
@@ -1266,7 +1253,7 @@ export function createGhostSessionTap(sessionId: string): {
     if (state !== 'unknown') return;
     if (attempts >= MAX_ATTEMPTS) {
       state = 'ineligible';
-      pending.length = 0;
+      pending.clear();
       return;
     }
     state = 'resolving';
@@ -1278,7 +1265,7 @@ export function createGhostSessionTap(sessionId: string): {
       }
       if (info.outcome === 'ineligible') {
         state = 'ineligible';
-        pending.length = 0;
+        pending.clear();
         return;
       }
       const gw = getGhostSubscriptionGateway();
@@ -1302,12 +1289,14 @@ export function createGhostSessionTap(sessionId: string): {
         },
       });
       state = 'eligible';
+      // 先取快照再回放:applyActivity 在 activity 已就绪后直投,不会再回队。
+      const replay = pending.drain();
       log.debug('ghost session tap eligible', {
         sessionId,
-        replay: pending.length,
-        ...(droppedPending > 0 ? { droppedPending } : {}),
+        replay: replay.length,
+        ...(pending.dropped > 0 ? { droppedPending: pending.dropped } : {}),
       });
-      for (const item of pending) {
+      for (const item of replay) {
         if (item.type === 'event') {
           activity.handleEvent(item.event);
           translator.handleEvent(item.event);
@@ -1315,7 +1304,6 @@ export function createGhostSessionTap(sessionId: string): {
           applyActivity(item.phase, item.request);
         }
       }
-      pending.length = 0;
     });
   };
 
@@ -1330,7 +1318,7 @@ export function createGhostSessionTap(sessionId: string): {
         return;
       }
       if (state === 'ineligible') return;
-      enqueue({
+      pending.push({
         type: 'event',
         event: { type: ev.type, data: ev.data, source: ev.source },
       });
@@ -1360,7 +1348,7 @@ export function createGhostSessionTap(sessionId: string): {
       activity?.reset();
       translator = null;
       activity = null;
-      pending.length = 0;
+      pending.clear();
       state = 'ineligible';
     },
   };

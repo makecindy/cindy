@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   GhostSubscriptionGateway,
   GhostActivityTracker,
+  GhostTapPendingQueue,
   GhostTurnOriginTracker,
   GhostTurnTranslator,
   createGhostSessionFocusTracker,
@@ -736,6 +737,75 @@ describe('readStatusIsRunning', () => {
     // null 表示"不是轮次起点判断的对象",与 false 语义不同
     expect(readStatusIsRunning({ type: 'done', data: {} })).toBeNull();
     expect(readStatusIsRunning({ type: 'thinking', data: {} })).toBeNull();
+  });
+});
+
+describe('GhostTapPendingQueue', () => {
+  const ev = (n: number) => ({ type: 'event' as const, event: { type: `e${n}` } });
+  const act = (phase: 'start' | 'end', requestId: string) => ({
+    type: 'activity' as const,
+    phase,
+    request: { kind: 'permission' as const, requestId },
+  });
+
+  it('封顶前照收,drain 取快照并清空', () => {
+    const q = new GhostTapPendingQueue(3);
+    q.push(ev(1));
+    q.push(ev(2));
+    expect(q.size).toBe(2);
+    expect(q.drain().map((i) => (i.type === 'event' ? i.event.type : ''))).toEqual(['e1', 'e2']);
+    expect(q.size).toBe(0);
+    expect(q.dropped).toBe(0);
+  });
+
+  it('溢出丢最新,首次溢出只回调一次', () => {
+    const onFirstOverflow = vi.fn();
+    const q = new GhostTapPendingQueue(2, onFirstOverflow);
+    q.push(ev(1));
+    q.push(ev(2));
+    q.push(ev(3));
+    q.push(ev(4));
+    expect(q.size).toBe(2);
+    expect(q.dropped).toBe(2);
+    expect(onFirstOverflow).toHaveBeenCalledOnce();
+    expect(q.drain().map((i) => (i.type === 'event' ? i.event.type : ''))).toEqual(['e1', 'e2']);
+  });
+
+  it('溢出时来的 end 连它排队中的 start 一起撤掉:绝不留孤儿 start', () => {
+    const q = new GhostTapPendingQueue(3);
+    q.push(act('start', 'p1'));
+    q.push(ev(1));
+    q.push(ev(2));
+    // 满了:p1 的 end 若只丢自己,回放后 p1 就永远没有结束边界。
+    q.push(act('end', 'p1'));
+    expect(q.dropped).toBe(2); // 撤掉的 start + 没进队的 end
+    const items = q.drain();
+    expect(items.some((i) => i.type === 'activity')).toBe(false);
+    expect(items.map((i) => (i.type === 'event' ? i.event.type : ''))).toEqual(['e1', 'e2']);
+  });
+
+  it('溢出丢 start 是安全的:后到的 end 对没登记过的 requestId 是 no-op', () => {
+    const q = new GhostTapPendingQueue(2);
+    q.push(ev(1));
+    q.push(ev(2));
+    q.push(act('start', 'p1')); // 丢掉
+    expect(q.dropped).toBe(1);
+    // start 没进队,end 找不到配对 → 只丢自己,不误撤别人
+    q.push(act('end', 'p1'));
+    expect(q.dropped).toBe(2);
+    expect(q.drain().map((i) => (i.type === 'event' ? i.event.type : ''))).toEqual(['e1', 'e2']);
+  });
+
+  it('配对撤销按 requestId 精确匹配,不误伤同时在场的其它请求', () => {
+    const q = new GhostTapPendingQueue(3);
+    q.push(act('start', 'p1'));
+    q.push(act('start', 'p2'));
+    q.push(ev(1));
+    q.push(act('end', 'p2'));
+    const items = q.drain();
+    const acts = items.filter((i) => i.type === 'activity');
+    expect(acts).toHaveLength(1);
+    expect(acts[0]).toMatchObject({ phase: 'start', request: { requestId: 'p1' } });
   });
 });
 

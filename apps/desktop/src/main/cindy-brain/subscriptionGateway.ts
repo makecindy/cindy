@@ -505,6 +505,78 @@ export function readStatusIsRunning(ev: MinimalAgentEvent): boolean | null {
   return (ev.data as { isRunning?: unknown }).isRunning === true;
 }
 
+export type GhostTapPendingItem =
+  | { type: 'event'; event: MinimalAgentEvent }
+  | {
+      type: 'activity';
+      phase: 'start' | 'end';
+      request: { kind: GhostInteractionActivityKind; requestId: string };
+    };
+
+/**
+ * 资格判定期的有界缓冲。DB 未就绪时判定要重试,这段时间的事件先攒着,判定通过后
+ * 按序回放;封顶防怪会话把内存吃干。
+ *
+ * 溢出策略:**丢最新**,但必须护住"不留孤儿 start"这个不变量 —— 回放后没有 end 的
+ * start 会让插件一直以为在等审批(要等到会话销毁才被 finishAll 兜底)。所以溢出时
+ * 来的是 interaction end,就连它尚未回放的 start 一起撤掉(配对取消);反过来丢 start
+ * 是安全的:end 对没登记过的 requestId 本就是 no-op。
+ */
+export class GhostTapPendingQueue {
+  private readonly items: GhostTapPendingItem[] = [];
+  private droppedCount = 0;
+
+  constructor(
+    private readonly cap: number,
+    /** 首次溢出回调(只回一次,避免怪会话刷爆日志)。 */
+    private readonly onFirstOverflow?: () => void,
+  ) {}
+
+  get size(): number {
+    return this.items.length;
+  }
+
+  get dropped(): number {
+    return this.droppedCount;
+  }
+
+  push(item: GhostTapPendingItem): void {
+    if (this.items.length < this.cap) {
+      this.items.push(item);
+      return;
+    }
+    if (item.type === 'activity' && item.phase === 'end') {
+      const startAt = this.items.findIndex(
+        (p) =>
+          p.type === 'activity' &&
+          p.phase === 'start' &&
+          p.request.requestId === item.request.requestId,
+      );
+      if (startAt >= 0) {
+        this.items.splice(startAt, 1);
+        this.noteDropped(2); // 撤掉的 start + 没进队的 end
+        return;
+      }
+    }
+    this.noteDropped(1);
+  }
+
+  /** 取快照并清空(回放用:先清再放,回放中新到的事件不会被本轮吞掉)。 */
+  drain(): GhostTapPendingItem[] {
+    return this.items.splice(0, this.items.length);
+  }
+
+  clear(): void {
+    this.items.length = 0;
+  }
+
+  private noteDropped(count: number): void {
+    const wasEmpty = this.droppedCount === 0;
+    this.droppedCount += count;
+    if (wasEmpty) this.onFirstOverflow?.();
+  }
+}
+
 /**
  * 轮次来源跟踪:回答"这条 interaction 该不该投给插件"。
  *
