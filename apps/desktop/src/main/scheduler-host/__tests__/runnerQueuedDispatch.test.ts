@@ -86,6 +86,12 @@ type SendImpl = (
 ) => Promise<SessionSendResult>;
 
 const SESSION_ID = 'bound-session';
+const SCHEDULER_TURN_ORIGIN = {
+  kind: 'scheduler',
+  scheduleId: 'schedule-hb',
+  scheduleName: 'PR #971 心跳',
+  runId: 'run-q1',
+} as const;
 
 interface FakeSessionHarness {
   session: Session;
@@ -127,7 +133,10 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
     setModel,
     setEffort,
     emit(event: AgentEvent) {
-      for (const listener of [...listeners]) listener(event);
+      // 生产 Session 会给当前 schedule turn 的每个事件补 turnOrigin；fake 默认
+      // 复刻该边界，个别归属测试可在 event 上显式覆盖为 user / 其它 run。
+      const emitted = { turnOrigin: SCHEDULER_TURN_ORIGIN, ...event };
+      for (const listener of [...listeners]) listener(emitted);
     },
     listenerCount() {
       return listeners.length;
@@ -363,6 +372,51 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(false);
     // 收尾通知照常(未静默场景)。
     expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'success' });
+  });
+
+  it('ignores events from a user turn or a different scheduler run', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true });
+    const { runner } = createRunnerHarness(harness.session, queue.deps);
+
+    const firePromise = runner.fire(heartbeatSchedule(), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    await queue.accept();
+
+    harness.emit({
+      type: 'text',
+      data: { text: 'manual compact output', isFinal: true },
+      source: 'claude-code',
+      turnOrigin: { kind: 'user' },
+    });
+    harness.emit({
+      type: 'done',
+      data: {},
+      source: 'claude-code',
+      turnOrigin: { kind: 'user' },
+    });
+    harness.emit({
+      type: 'done',
+      data: {},
+      source: 'claude-code',
+      turnOrigin: {
+        kind: 'scheduler',
+        scheduleId: 'schedule-hb',
+        scheduleName: 'PR #971 心跳',
+        runId: 'other-run',
+      },
+    });
+    await Promise.resolve();
+    expect(harness.listenerCount()).toBe(1);
+
+    harness.emit({
+      type: 'text',
+      data: { text: 'owned result', isFinal: true },
+      source: 'claude-code',
+    });
+    harness.emit({ type: 'done', data: {}, source: 'claude-code' });
+
+    await expect(firePromise).resolves.toMatchObject({ resultText: 'owned result' });
   });
 
   it('keeps the same run open when ordinary auto-resume claims a capacity interruption', async () => {

@@ -214,6 +214,9 @@ function createHarness() {
   >();
   const onUiRetry = vi.fn<NonNullable<AgentInputCoordinatorDeps['onUiRetry']>>(() => {});
   const onUserEnqueue = vi.fn<NonNullable<AgentInputCoordinatorDeps['onUserEnqueue']>>(() => {});
+  const onDiscardedQueuedMessage = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['onDiscardedQueuedMessage']>
+  >(() => {});
   const supersedeRetriedUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['supersedeRetriedUserTurn']>
   >(async () => []);
@@ -223,6 +226,7 @@ function createHarness() {
     abortSession,
     onUiRetry,
     onUserEnqueue,
+    onDiscardedQueuedMessage,
     supersedeRetriedUserTurn,
     isTurnRunning: () => running,
     getTurnGeneration: () => turnGeneration,
@@ -276,6 +280,7 @@ function createHarness() {
     projections,
     onUiRetry,
     onUserEnqueue,
+    onDiscardedQueuedMessage,
     supersedeRetriedUserTurn,
     setRunning(value: boolean) {
       running = value;
@@ -1601,6 +1606,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.sendToAgent.mock.calls[0]?.[3].persistUserMessage).toBeUndefined();
     expect(mocks.createMessage).not.toHaveBeenCalled();
     expect(latestProjection(h.projections).pendingQueue).toEqual([]);
+    expect(h.onUserEnqueue).toHaveBeenCalledWith(sid);
   });
 
   it('blocks queued turns while silent compact is active until Done', async () => {
@@ -6528,6 +6534,45 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe('resumed');
     await flush();
     expect(h.sendToAgent.mock.calls[1]?.[3]?.origin).toEqual(item.origin);
+  });
+
+  it('用户接管会撤销已经离队但尚未派发的 scheduler 自动续跑', async () => {
+    const h = createHarness();
+    const sid = 'cancel-pre-vendor-scheduler-auto-resume';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    h.setHasAssistantProgressAfter(async () => true);
+    const schedulerItem = makeItem('q-sched', 'heartbeat', {
+      origin: {
+        kind: 'scheduler',
+        scheduleId: 'sch-1',
+        scheduleName: '任务 1',
+        runId: 'run-1',
+      },
+    });
+    await failAfterDispatch(h, sid, schedulerItem);
+
+    // 自动 Continue 已离队成为 activeTurn，但仍卡在 user row 持久化；此时
+    // maker-core 已建立 reservation，vendor dispatch 仍未发生。
+    const persistGate = deferred<Record<string, never>>();
+    mocks.createMessage.mockImplementationOnce(() => persistGate.promise);
+    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe('resumed');
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalledTimes(2));
+
+    const userItem = makeItem('q-user', 'take over');
+    h.coordinator.enqueue(sid, userItem);
+
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({
+        autoResume: true,
+        origin: schedulerItem.origin,
+      }),
+    );
+    expect(h.onUserEnqueue).toHaveBeenCalledWith(sid);
+
+    persistGate.resolve({});
+    await vi.waitFor(() => expect(h.sendToAgent).toHaveBeenCalledTimes(3));
+    expect(h.sendToAgent.mock.calls[2]?.[1]).toEqual({ type: 'user', content: 'take over' });
   });
 
   it('外部发起的 turn(无 active turn)失败不通知', async () => {

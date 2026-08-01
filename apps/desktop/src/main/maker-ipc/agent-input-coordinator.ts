@@ -566,7 +566,11 @@ function isUiContinuationItem(item: AgentInputQueuedMessage): boolean {
 function isActiveTurnBeforeVendorDispatch(active: ActiveTurn): boolean {
   return (
     !isActiveTurnDispatched(active) &&
-    (!active.sendStarted || active.dispatchLifecycle === 'awaiting-dispatch-hooks')
+    (
+      !active.sendStarted ||
+      active.persisting ||
+      active.dispatchLifecycle === 'awaiting-dispatch-hooks'
+    )
   );
 }
 
@@ -926,6 +930,13 @@ export class AgentInputCoordinator {
     // 让消费方按 clientId 做权威归属(见 deps.onUiRetry 的说明)。
     // (错误横幅那条走 retryLastError, 压根不经本入口。)
     const schedulerOrigin = isSchedulerOriginItem(item);
+    if (!schedulerOrigin) {
+      // 自动续跑可能已经从 pendingQueue 进入 activeTurn、但仍卡在持久化或其它
+      // pre-vendor await。用户此时接管不能只作废 host waiter：那会让隐藏 Continue
+      // 继续派发、而新输入排在它后面。复用 Stop 的 generation 取消边界，先确认
+      // 旧续跑已被 coordinator 丢弃，再发布用户接管信号。
+      this.cancelPreparedSchedulerAutoResumeForUserAction(sessionId, state);
+    }
     if (isUiContinuationItem(item)) {
       this.deps.onUiRetry?.(sessionId, item.clientId, 'manual');
     } else if (!schedulerOrigin) {
@@ -998,6 +1009,11 @@ export class AgentInputCoordinator {
 
   async compact(sessionId: string, createOpts: AgentInputCreateOpts, opts?: { userName?: string }): Promise<AgentInputProjection> {
     const state = this.getState(sessionId);
+    // 手动 /compact 是用户接管，与 composer 新消息同语义。先撤掉尚未跨过
+    // vendor dispatch 的隐藏 scheduler 续跑，再让 host 终止对应 run waiter；
+    // 否则 compact 自己的 text/done 可能被旧 schedule run 误收。
+    this.cancelPreparedSchedulerAutoResumeForUserAction(sessionId, state);
+    this.deps.onUserEnqueue?.(sessionId);
     // 手动压缩与发送新消息一样,都是用户对失败 turn 的明确后续选择:
     // 放弃 active-turn retry,让 /compact 在真实 dispatch boundary 空闲时立即执行,
     // 仍忙时则进入 pendingCompacts。queue-head recovery 表示消息从未受理且仍在
@@ -1174,6 +1190,10 @@ export class AgentInputCoordinator {
         interactionLockIds: [...state.queueInteractionLocks],
       });
       return false;
+    }
+
+    if (!isSchedulerOriginItem(item)) {
+      this.cancelPreparedSchedulerAutoResumeForUserAction(sessionId, state);
     }
 
     if (!this.isTurnSteerable(sessionId, state)) {
@@ -1926,6 +1946,7 @@ export class AgentInputCoordinator {
     for (const item of prev.pendingQueue) {
       this.deps.onDiscardedQueuedMessage?.(sessionId, item);
     }
+    this.cancelPreSendActiveTurn(sessionId, prev, false);
     // 显式清上下文:强制开启持久化闸门,让 emit 写出空快照(删行),
     // 即使此前该会话从未触发恢复(否则旧快照残留,下次打开会诈尸)。
     this.restoredQueueSessions.add(sessionId);
@@ -2968,11 +2989,45 @@ export class AgentInputCoordinator {
       if (preserveQueue) this.setActiveTurnRecovery(state, item);
       return;
     }
-    if (!preserveQueue) return;
+    if (!preserveQueue) {
+      this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+      return;
+    }
     if (!state.pendingQueue.some((q) => q.clientId === item.clientId)) {
       state.pendingQueue = [item, ...state.pendingQueue];
       this.prependPendingCompactWaitClientId(state, item.clientId);
     }
+  }
+
+  /**
+   * 用户接管时撤销已经离队、但尚未交给 vendor 的隐藏 scheduler 自动续跑。
+   *
+   * 不扩成通用并发机制：普通 scheduler turn 仍按既有串行队列执行；只有 autoResume
+   * 是已被用户后续选择取代的合成 Continue。持久化前走 discard 回调，持久化后走
+   * undispatched 回调，两条既有 host 边界都会同步结清对应 schedule waiter。
+   */
+  private cancelPreparedSchedulerAutoResumeForUserAction(
+    sessionId: string,
+    state: SessionInputState,
+  ): void {
+    const active = state.activeTurn;
+    const item = active?.item;
+    if (
+      !active ||
+      !item?.autoResume ||
+      !isSchedulerOriginItem(item) ||
+      !isActiveTurnBeforeVendorDispatch(active)
+    ) {
+      return;
+    }
+    const persisted = active.persisted;
+    this.cancelPreSendActiveTurn(sessionId, state, false);
+    log.info('cancelled prepared scheduler auto-resume after user takeover', {
+      sessionId,
+      clientId: item.clientId,
+      runId: item.origin?.kind === 'scheduler' ? item.origin.runId : undefined,
+      persisted,
+    });
   }
 
   private fallbackPreparedAsTurn(sessionId: string, item: AgentInputQueuedMessage, removeFromQueue: boolean): void {
