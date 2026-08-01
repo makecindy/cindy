@@ -29,6 +29,7 @@ import { providerMonogram } from '@/lib/providerModels';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
+import { isCommittableWindowText, parseWindowText } from '@/lib/contextWindow';
 import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
 
 import {
@@ -328,6 +329,13 @@ export function AddProviderWizard({
   >({ status: 'idle' });
   const [manualModelIds, setManualModelIds] = useState<Partial<Record<AgentKind, string>>>({});
   /**
+   * 手动添加模型的上下文窗口输入（可空字符串 = 不指定）。纯文本输入，添加时解析：
+   * 空 = 不指定（落 DEFAULT_CUSTOM_CONTEXT_WINDOW 200K 兜底）；非空非法（如 `1e6`、
+   * `0`、超界值）拒绝添加并 toast 提示、保留输入让用户修正；合法正整数随模型入库，
+   * 与「发现」路径一致 —— 手动添加不再必然拿到 1/5 窗口。
+   */
+  const [manualModelWindows, setManualModelWindows] = useState<Partial<Record<AgentKind, string>>>({});
+  /**
    * 勾选清单:id → { name, checked, recommended, agents }。Map 保序(推荐在前,拉取新增在后)。
    * agents = 该模型归属的 runtime:预设推荐模型归属「预设里列出它的那些 runtime」;拉取新增
    * 归属「实际返回它的那个端点的 runtime」——完成创建时按归属分发,**不**把统一列表复制进
@@ -410,12 +418,14 @@ export function AddProviderWizard({
   const pickOauth = useCallback((provider: ProviderView) => {
     fetchSeqRef.current += 1;
     setManualModelIds({});
+    setManualModelWindows({});
     setSel({ kind: 'oauth', provider });
     setStep(2);
   }, []);
   const pickBuiltinApiKey = useCallback((provider: ProviderView) => {
     fetchSeqRef.current += 1;
     setManualModelIds({});
+    setManualModelWindows({});
     setSel({ kind: 'builtinApiKey', provider });
     setApiKey('');
     setStep(2);
@@ -424,6 +434,7 @@ export function AddProviderWizard({
     (preset: ProviderPreset) => {
       fetchSeqRef.current += 1;
       setManualModelIds({});
+      setManualModelWindows({});
       setSel({ kind: 'preset', preset });
       setName(presetDisplayName(preset, i18n.language));
       setApiKey('');
@@ -706,9 +717,24 @@ export function AddProviderWizard({
       if (!sel || sel.kind !== 'preset' || !sel.preset.runtimes[agent]) return;
       const id = manualModelIds[agent]?.trim() ?? '';
       if (!id) return;
+      // 可选窗口输入：空 = 不指定（落 200K 兜底）；非空须通过 isCommittableWindowText
+      // （lib/contextWindow 与 CustomProviderDialog 共用：允许 `,`/`_`/空格 分组，
+      // BigInt 精确解析并限 MAX_SAFE_INTEGER，拒绝 `1e6`、`0`、超界粘贴）。
+      // 非法文本不静默丢弃——拒绝添加并 toast 提示，保留输入让用户修正。
+      const rawWindow = manualModelWindows[agent]?.trim() ?? '';
+      if (rawWindow !== '' && !isCommittableWindowText(rawWindow)) {
+        toast.error(t('settings.providers.wizard.manualModelWindowInvalid'));
+        return;
+      }
+      const contextWindow = parseWindowText(rawWindow);
       setPicks((prev) => {
         const next = new Map(prev);
         const existing = next.get(id);
+        // 空窗口 = 显式「不指定」：删除该 agent 的旧槽位，避免同一模型 id 重新添加
+        // 且留空时残留上一次的自定义窗口值（留空应回落 200K 默认，Codex P2）。
+        const nextContextWindows = { ...(existing?.contextWindows ?? {}) };
+        if (contextWindow === undefined) delete nextContextWindows[agent];
+        else nextContextWindows[agent] = contextWindow;
         next.set(
           id,
           existing
@@ -718,19 +744,23 @@ export function AddProviderWizard({
                 agents: existing.agents.includes(agent)
                   ? existing.agents
                   : [...existing.agents, agent],
+                // 手动值优先于发现值：双端归属同一 id 时以本次手填为准，不互相覆盖。
+                contextWindows: nextContextWindows,
               }
             : {
                 name: id,
                 checked: true,
                 recommended: false,
                 agents: [agent],
+                ...(contextWindow !== undefined ? { contextWindows: nextContextWindows } : {}),
               },
         );
         return next;
       });
       setManualModelIds((prev) => ({ ...prev, [agent]: '' }));
+      setManualModelWindows((prev) => ({ ...prev, [agent]: '' }));
     },
-    [sel, manualModelIds],
+    [sel, manualModelIds, manualModelWindows, t],
   );
 
   // ── 完成创建(预设)────────────────────────────────────────────────────
@@ -1478,6 +1508,38 @@ export function AddProviderWizard({
                               }}
                               placeholder={t('settings.providers.wizard.manualModelPlaceholder')}
                               className="h-9 min-w-0 flex-1 rounded-full border px-4 font-mono text-12 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
+                              style={{
+                                borderColor: 'var(--border-default)',
+                                backgroundColor: 'var(--surface-elevated)',
+                                color: 'var(--settings-section-title)',
+                              }}
+                            />
+                            <span
+                              className="shrink-0 text-12 font-medium"
+                              style={{ color: 'var(--text-secondary)' }}
+                            >
+                              {t('settings.providers.wizard.manualModelWindowLabel')}
+                            </span>
+                            <input
+                              type="text"
+                              aria-label={t('settings.providers.wizard.manualModelWindowLabel')}
+                              value={manualModelWindows[agent] ?? ''}
+                              onChange={(event) =>
+                                setManualModelWindows((prev) => ({
+                                  ...prev,
+                                  [agent]: event.target.value,
+                                }))
+                              }
+                              onKeyDown={(event) => {
+                                if (event.key !== 'Enter') return;
+                                event.preventDefault();
+                                addManualModel(agent);
+                              }}
+                              placeholder={t(
+                                'settings.providers.wizard.manualModelWindowPlaceholder',
+                              )}
+                              title={t('settings.providers.wizard.manualModelWindowHint')}
+                              className="h-9 w-36 shrink-0 rounded-full border px-4 font-mono text-12 outline-none placeholder:text-[var(--text-placeholder)] focus:ring-2 focus:ring-[var(--focus-ring)]"
                               style={{
                                 borderColor: 'var(--border-default)',
                                 backgroundColor: 'var(--surface-elevated)',

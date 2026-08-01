@@ -27,6 +27,7 @@ import {
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
+import { isCommittableWindowText, parseWindowText } from '@/lib/contextWindow';
 import { Spinner } from '@/components/ui/spinner';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
@@ -158,15 +159,6 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
   return (
     <span className="text-13 font-medium text-[var(--settings-section-title)]">{children}</span>
   );
-}
-
-/** 上下文窗口文本是否可提交:空 = 清除窗口;非空须整体合法(分组分隔符 + BigInt 上界)。 */
-function isCommittableWindowText(text: string): boolean {
-  const trimmed = text.trim();
-  if (trimmed === '') return true;
-  if (!/^[0-9]+(?:[,_ ][0-9]+)*$/.test(trimmed)) return false;
-  const parsed = BigInt(trimmed.replace(/[,_ ]/g, ''));
-  return parsed > 0n && parsed <= BigInt(Number.MAX_SAFE_INTEGER);
 }
 
 function TextInput({
@@ -1359,7 +1351,7 @@ export function CustomProviderDialog({
                                 if (!isCommittableWindowText(trimmed)) return y;
                                 return {
                                   ...y,
-                                  contextWindow: Number(BigInt(trimmed.replace(/[,_ ]/g, ''))),
+                                  contextWindow: parseWindowText(trimmed),
                                 };
                               }),
                             }));
