@@ -4289,7 +4289,13 @@ export function ChatInput({
       // 切换意图期:此时列表展示的是目标引擎(乐观翻转),改选模型 = 更新意图,
       // 绝不能走普通 SET_MODEL 链路(main 会清意图、renderer 乐观态失配)。
       // flat 路径无来源信息,交默认路由(null)。
-      if (sessionId && makerChatStore.getAgentSwitchIntent(sessionId)) {
+      // 带 host CAS token = 同引擎 no-op 的第二段收尾。此时 clear push 可能尚未回流，
+      // store 里仍是发起前的旧跨引擎意图；不能把它误当成一次新的意图编辑重新登记。
+      if (
+        sessionId &&
+        expectedAgentSwitchRevision === undefined &&
+        makerChatStore.getAgentSwitchIntent(sessionId)
+      ) {
         const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
         void performAgentSwitch(intent.target, newModelId, null);
         return;
@@ -4691,7 +4697,13 @@ export function ChatInput({
       }
       // 切换意图期:列表展示的是目标引擎(乐观翻转),(来源,模型) 改选 = 更新意图,
       // 不走普通 set-model 链路(main 会清意图、renderer 乐观态失配)。
-      if (sessionId && makerChatStore.getAgentSwitchIntent(sessionId)) {
+      // 同 performModelChange：因果 token 存在时必须直达 SET_MODEL，绕过尚未回流
+      // 的旧 intent 镜像；最终是否仍新鲜由 host 在 session 锁内用 revision 裁决。
+      if (
+        sessionId &&
+        expectedAgentSwitchRevision === undefined &&
+        makerChatStore.getAgentSwitchIntent(sessionId)
+      ) {
         const intent = makerChatStore.getAgentSwitchIntent(sessionId)!;
         void performAgentSwitch(intent.target, reconciledModelId ?? intent.model, newProviderId);
         return;

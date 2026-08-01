@@ -262,6 +262,17 @@ async function persistRemoteSetting(channel: string, args: unknown[], result: un
   // (G2)。与被控端 handler 同语义:args[2]===undefined(老 2 参调用)不动 provider_id;string→写;
   // null/''→清除(回落默认路由)。写进 DB 后 mapper 自动带进 sessions:patched → 回流控制端镜像。
   if (channel === 'maker:set-model') {
+    // 同引擎重选的第二段带 host revision CAS。handler 返回 superseded 表示
+    // 另一控制端已在两段之间更新过意图：runtime 未应用，DB 也必须同样不落
+    // 这次请求参数，否则 sessions:patched 会把过期选择反向盖回控制端。
+    if (
+      result !== null &&
+      typeof result === 'object' &&
+      !Array.isArray(result) &&
+      (result as { superseded?: unknown }).superseded === true
+    ) {
+      return;
+    }
     const patch: Record<string, unknown> = { model: args[1] };
     if (args.length > 2) {
       patch.providerId = normalizeSessionProviderId(typeof args[2] === 'string' ? args[2] : null);

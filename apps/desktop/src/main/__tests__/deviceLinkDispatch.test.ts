@@ -2091,6 +2091,20 @@ describe('远程 set-* 持久化回流', () => {
     });
   });
 
+  it('set-model handler 返回 superseded 时不持久化过期 model/provider', async () => {
+    const persist = vi.fn();
+    setRemoteSettingsPersist(persist);
+    registry.register('maker:set-model', () => ({ deferred: false, superseded: true }));
+
+    const r = await runInvoke('ctrl-a', {
+      channel: 'maker:set-model',
+      args: ['sess-1', 'stale-model', 'stale-provider', 7],
+    });
+
+    expect(r).toEqual({ ok: true, result: { deferred: false, superseded: true } });
+    expect(persist).not.toHaveBeenCalled();
+  });
+
   it('set-fast-mode → {fastMode}', async () => {
     const persist = vi.fn();
     setRemoteSettingsPersist(persist);

@@ -690,6 +690,8 @@ describe('ChatInput 的入口门控与调用路由', () => {
 
   it('同引擎重选把 host 因果 token 带回 SET_MODEL，且遇到 superseded 不落后续状态', () => {
     expect(source).toContain('expectedAgentSwitchRevision?: number');
+    expect(source).toContain('expectedAgentSwitchRevision === undefined &&');
+    expect(source.split('expectedAgentSwitchRevision === undefined &&')).toHaveLength(3);
     expect(source).toContain('expectedAgentSwitchRevision,\n              );');
     expect(source).toContain('if (remoteSetModelResult?.superseded) {');
     expect(source).toContain('if (setModelResult?.superseded) return false;');
