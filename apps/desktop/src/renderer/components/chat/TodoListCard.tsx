@@ -48,8 +48,10 @@ export function TodoListCard({
 }) {
   const { t } = useTranslation();
   const flyoutId = useId();
-  const [revealed, setRevealed] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const [pinnedOpen, setPinnedOpen] = useState(false);
   const [renderFlyout, setRenderFlyout] = useState(false);
+  const revealed = hovered || pinnedOpen;
 
   useEffect(() => {
     if (revealed) setRenderFlyout(true);
@@ -75,18 +77,18 @@ export function TodoListCard({
     <div className="flex w-full justify-center">
       <div
         className="relative inline-flex items-center justify-center"
-        onMouseEnter={() => setRevealed(true)}
-        onMouseLeave={() => setRevealed(false)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
       >
         {/* Collapsed pill — `[icon] Step N / M`,点击/Enter 也可切换浮层(键盘可达)。 */}
         <button
           type="button"
           onClick={(event) => {
             if (event.detail === 0) {
-              setRevealed((prev) => !prev);
+              setPinnedOpen((prev) => !prev);
               return;
             }
-            setRevealed(true);
+            setPinnedOpen((prev) => !prev);
           }}
           aria-controls={flyoutId}
           aria-expanded={revealed}
