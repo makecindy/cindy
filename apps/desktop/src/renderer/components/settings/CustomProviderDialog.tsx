@@ -161,7 +161,7 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
 }
 
 /** 上下文窗口文本是否可提交:空 = 清除窗口;非空须整体合法(分组分隔符 + BigInt 上界)。 */
-function isCommittableWindowText(text: string): boolean {
+export function isCommittableWindowText(text: string): boolean {
   const trimmed = text.trim();
   if (trimmed === '') return true;
   if (!/^[0-9]+(?:[,_ ][0-9]+)*$/.test(trimmed)) return false;

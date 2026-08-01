@@ -30,6 +30,7 @@ import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
+import { isCommittableWindowText } from './CustomProviderDialog';
 
 import {
   isLoopbackProviderUrl,
@@ -715,10 +716,14 @@ export function AddProviderWizard({
       if (!sel || sel.kind !== 'preset' || !sel.preset.runtimes[agent]) return;
       const id = manualModelIds[agent]?.trim() ?? '';
       if (!id) return;
-      // 可选窗口输入：空 / 非正整数忽略（落 200K 兜底），合法正整数按 agent 分槽随模型入库。
+      // 可选窗口输入：空 / 非法忽略（落 200K 兜底），合法正整数按 agent 分槽随模型入库。
+      // 校验复用 CustomProviderDialog 的 isCommittableWindowText：允许 `,`/`_`/空格 分组
+      // 分隔，BigInt 精确解析并限 MAX_SAFE_INTEGER，拒绝 `1e6` 等科学计数法。
       const rawWindow = manualModelWindows[agent]?.trim() ?? '';
-      const parsed = rawWindow === '' ? NaN : Number(rawWindow);
-      const window = Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+      const window =
+        rawWindow !== '' && isCommittableWindowText(rawWindow)
+          ? Number(BigInt(rawWindow.replace(/[,_ ]/g, '')))
+          : undefined;
       setPicks((prev) => {
         const next = new Map(prev);
         const existing = next.get(id);
@@ -1529,7 +1534,7 @@ export function AddProviderWizard({
                                 'settings.providers.wizard.manualModelWindowPlaceholder',
                               )}
                               title={t('settings.providers.wizard.manualModelWindowHint')}
-                              className="h-9 w-36 shrink-0 rounded-full border px-4 font-mono text-12 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
+                              className="h-9 w-36 shrink-0 rounded-full border px-4 font-mono text-12 outline-none placeholder:text-[var(--text-placeholder)] focus:ring-2 focus:ring-[var(--focus-ring)]"
                               style={{
                                 borderColor: 'var(--border-default)',
                                 backgroundColor: 'var(--surface-elevated)',
