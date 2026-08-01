@@ -576,6 +576,10 @@ function classifyEnqueuedInputIntent(item: AgentInputQueuedMessage): EnqueuedInp
   return 'user-intervention';
 }
 
+function isUiContinuationItem(item: AgentInputQueuedMessage): boolean {
+  return classifyEnqueuedInputIntent(item) === 'ui-continuation';
+}
+
 function isActiveTurnBeforeVendorDispatch(active: ActiveTurn): boolean {
   return (
     !isActiveTurnDispatched(active) &&
@@ -975,7 +979,7 @@ export class AgentInputCoordinator {
     // 已排队的新任务执行；普通 composer / Orca / scheduler 输入仍保持 FIFO。
     // 复用 prepend helper 同时把本项加入 pending compact 的等待集合，避免
     // 已排队的 /compact 抢在续跑前执行，破坏原任务现场。
-    if (item.originalSyntheticTrigger === 'continue') {
+    if (intent === 'ui-continuation') {
       this.prependQueueHeadIfMissing(state, item);
       // 与 move() 对称：插队后原 credential-switch 等待目标不再是队首时，
       // 必须清掉 wait，否则横幅/取消仍绑定旧 clientId，会误删错误排队项。
@@ -1402,7 +1406,7 @@ export class AgentInputCoordinator {
       dispatchLifecycle: 'dispatched',
       pendingTerminalEvent: null,
       continuationOwnerClientId:
-        item.originalSyntheticTrigger === 'continue'
+        isUiContinuationItem(item)
           ? item.clientId
           : sameVendorTurn
             ? steerContinuationOwnerClientId
@@ -2246,7 +2250,7 @@ export class AgentInputCoordinator {
       sessionId,
       pendingQueue,
       continuationInFlightClientId:
-        state.activeTurn?.item?.originalSyntheticTrigger === 'continue'
+        state.activeTurn?.item && isUiContinuationItem(state.activeTurn.item)
           ? state.activeTurn.item.clientId
           : null,
       continuationTurnClientId: state.activeTurn?.continuationOwnerClientId ?? null,
@@ -2402,7 +2406,7 @@ export class AgentInputCoordinator {
       dispatchLifecycle: 'preparing',
       pendingTerminalEvent: null,
       continuationOwnerClientId:
-        head.originalSyntheticTrigger === 'continue' ? head.clientId : null,
+        isUiContinuationItem(head) ? head.clientId : null,
     };
     state.activeTurn = active;
     this.emit(sessionId);

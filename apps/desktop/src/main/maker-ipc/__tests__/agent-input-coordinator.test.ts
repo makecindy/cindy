@@ -6681,6 +6681,48 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(projection.pendingQueue.map((item) => item.clientId)).toContain('q-scheduler');
   });
 
+  it.each([
+    ['app-exit continuation text', CONTINUE_AFTER_APP_EXIT_PROMPT],
+    ['error continuation text', CONTINUE_AFTER_ERROR_PROMPT],
+  ])('scheduler prompt collision with %s stays FIFO and never projects continuation state', async (_label, prompt) => {
+    const h = createHarness();
+    const sid = `scheduler-prompt-collision-${_label}`;
+    h.setRunning(true);
+
+    h.coordinator.enqueue(sid, makeItem('q-user', 'queued first'));
+    h.onUserEnqueue.mockClear();
+    h.coordinator.enqueue(
+      sid,
+      makeItem('q-scheduler', prompt, {
+        origin: { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: '任务 1' },
+      }),
+    );
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(h.onUserEnqueue).not.toHaveBeenCalled();
+    expect(h.onUiRetry).not.toHaveBeenCalled();
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual([
+      'q-user',
+      'q-scheduler',
+    ]);
+    expect(projection.continuationInFlightClientId).toBeNull();
+    expect(projection.continuationTurnClientId).toBeNull();
+
+    const dispatched = createHarness();
+    dispatched.coordinator.enqueue(
+      `${sid}-dispatch`,
+      makeItem('q-scheduler-dispatched', prompt, {
+        origin: { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: '任务 1' },
+      }),
+    );
+    await flush();
+    expect(dispatched.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: prompt });
+    const dispatchedProjection = latestProjection(dispatched.projections);
+    expect(dispatchedProjection.continuationInFlightClientId).toBeNull();
+    expect(dispatchedProjection.continuationTurnClientId).toBeNull();
+  });
+
   it('host 不接管时照常呈现错误(默认行为不变)', async () => {
     const h = createHarness();
     const sid = 'no-takeover-keeps-banner';
