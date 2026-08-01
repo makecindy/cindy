@@ -190,7 +190,9 @@ function makePermissionModeFake() {
     mode: 'bypassPermissions',
     generation: 0,
   };
-  const setPermissionMode = vi.fn(async (_mode: PermissionMode) => undefined);
+  const setPermissionMode = vi.fn(async (mode: PermissionMode) => {
+    void mode;
+  });
   const setPermissionModeTracked = vi.fn(async (mode: PermissionMode) => {
     await setPermissionMode(mode);
     permissionModeState = { mode, generation: permissionModeState.generation + 1 };
@@ -770,10 +772,12 @@ describe('进度快照(turn.progress 链路)', () => {
         async (
           _msg: unknown,
           opts: {
+            afterTurnReserved?: () => Promise<void> | void;
             beforeProviderStart?: () => Promise<void> | void;
             onAccepted?: () => Promise<void>;
           },
         ) => {
+          await opts.afterTurnReserved?.();
           await opts.beforeProviderStart?.();
           await opts.onAccepted?.();
           return {};
@@ -1196,6 +1200,43 @@ describe('进度快照(turn.progress 链路)', () => {
     );
     const session = await fakeMaker.createSession.mock.results[0].value;
     expect(session.setPermissionMode.mock.calls).toEqual([['ask'], ['bypassPermissions']]);
+  });
+
+  it('Telegram 群轮次终态同步启动权限恢复并在收口前等完', async () => {
+    const session = makeManualSession('sess-old');
+    let releaseRestore!: () => void;
+    session.setPermissionMode.mockResolvedValueOnce(undefined).mockImplementationOnce(
+      () =>
+        new Promise<undefined>((resolve) => {
+          releaseRestore = () => resolve(undefined);
+        }),
+    );
+    fakeMaker.createSession.mockResolvedValueOnce(session);
+    const runner = createMakerHookSessionRunner({ log });
+    const pending = runner.run(
+      baseReq({
+        sessionId: 'sess-old',
+        isNew: false,
+        source: { im: 'telegram', userText: 'hi' },
+        laneKind: 'group',
+      }),
+    );
+    await flush();
+
+    h.eventCbs.get('sess-old')!({ type: 'done', data: null });
+    // The terminal listener starts restore in the same event stack, before
+    // observer.finished can open attachment collection or the next send.
+    expect(session.setPermissionMode.mock.calls).toEqual([['ask'], ['bypassPermissions']]);
+
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await flush();
+    expect(settled).toBe(false);
+
+    releaseRestore();
+    await expect(pending).resolves.toMatchObject({ status: 'ok' });
   });
 
   it('Telegram 群轮次结束时不覆盖用户并发选择的更严格权限档', async () => {

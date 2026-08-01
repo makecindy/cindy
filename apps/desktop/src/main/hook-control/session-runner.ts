@@ -585,6 +585,53 @@ export function createMakerHookSessionRunner(deps: {
       // mode in the outer finally below.
       let reusedPermissionModeApplied = false;
       let reusedPermissionModeLease: PermissionModeState | null = null;
+      let reusedPermissionRestore: Promise<void> | null = null;
+      const restoreReusedPermissionMode = (): Promise<void> => {
+        if (reusedPermissionRestore !== null) return reusedPermissionRestore;
+        if (
+          !reusedPermissionModeApplied ||
+          reusedPermissionModeToRestore === null ||
+          reusedPermissionModeLease === null
+        ) {
+          return Promise.resolve();
+        }
+        const lease = reusedPermissionModeLease;
+        const mode = reusedPermissionModeToRestore;
+        reusedPermissionRestore = (async (): Promise<void> => {
+          try {
+            const restored = await session.setPermissionModeIfUnchanged(lease, mode);
+            if (!restored) {
+              log.info('hook permission restore skipped because a newer live change won');
+            }
+          } catch (err) {
+            log.warn(
+              `hook permission restore failed; retrying: ${err instanceof Error ? err.message : String(err)}`,
+            );
+            try {
+              const restored = await session.setPermissionModeIfUnchanged(lease, mode);
+              if (!restored) {
+                log.info('hook permission restore retry skipped because a newer live change won');
+              }
+            } catch (retryErr) {
+              // Never leave a reused Desktop session live in the temporary
+              // Telegram group mode. Preserve its durable metadata and local
+              // resources while closing only the live handle; the next send
+              // lazily rebuilds it with the persisted permission mode.
+              log.warn(
+                `hook permission restore retry failed; invalidating live session: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`,
+              );
+              await withRehydrateCloseSuppressed(session.id, () =>
+                maker.closeSession(session.id),
+              ).catch((closeErr) =>
+                log.warn(
+                  `hook permission session invalidation failed: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}`,
+                ),
+              );
+            }
+          }
+        })();
+        return reusedPermissionRestore;
+      };
 
       try {
         /**
@@ -756,6 +803,9 @@ export function createMakerHookSessionRunner(deps: {
           answerOnlyProgress: req.source?.im === 'telegram' && req.laneKind !== 'group',
           ...(req.onProgress ? { onProgress: req.onProgress } : {}),
           onToolResult: (fullText) => collectOutboundImages(fullText, extraImageAbsPaths, log),
+          onTurnTerminal: () => {
+            void restoreReusedPermissionMode();
+          },
           onSilentStopSettled,
           log,
         });
@@ -1016,6 +1066,11 @@ export function createMakerHookSessionRunner(deps: {
           finalizeInteractions();
         }
 
+        // The terminal callback starts this synchronously before the observer
+        // settles. Await the same promise before attachment IO so the reused
+        // session is already back in its desktop permission mode.
+        await restoreReusedPermissionMode();
+
         // 已知 v1 取舍: 不做 scheduler 4.5.1 的完整 backfillSessionMeta。
         // provider_id 仍按建会话结果补写；Telegram 另补 source，让桌面/移动端
         // 能稳定展示渠道来源，既有 Slack source 兼容行为保持不变。
@@ -1043,49 +1098,7 @@ export function createMakerHookSessionRunner(deps: {
           ...(outAttachments !== undefined ? { attachments: outAttachments } : {}),
         };
       } finally {
-        if (
-          reusedPermissionModeApplied &&
-          reusedPermissionModeToRestore !== null &&
-          reusedPermissionModeLease !== null
-        ) {
-          try {
-            const restored = await session.setPermissionModeIfUnchanged(
-              reusedPermissionModeLease,
-              reusedPermissionModeToRestore,
-            );
-            if (!restored) {
-              log.info('hook permission restore skipped because a newer live change won');
-            }
-          } catch (err) {
-            log.warn(
-              `hook permission restore failed; retrying: ${err instanceof Error ? err.message : String(err)}`,
-            );
-            try {
-              const restored = await session.setPermissionModeIfUnchanged(
-                reusedPermissionModeLease,
-                reusedPermissionModeToRestore,
-              );
-              if (!restored) {
-                log.info('hook permission restore retry skipped because a newer live change won');
-              }
-            } catch (retryErr) {
-              // Never leave a reused Desktop session live in the temporary
-              // Telegram group mode. Preserve its durable metadata and local
-              // resources while closing only the live handle; the next send
-              // lazily rebuilds it with the persisted permission mode.
-              log.warn(
-                `hook permission restore retry failed; invalidating live session: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`,
-              );
-              await withRehydrateCloseSuppressed(session.id, () =>
-                maker.closeSession(session.id),
-              ).catch((closeErr) =>
-                log.warn(
-                  `hook permission session invalidation failed: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}`,
-                ),
-              );
-            }
-          }
-        }
+        await restoreReusedPermissionMode();
       }
     },
 

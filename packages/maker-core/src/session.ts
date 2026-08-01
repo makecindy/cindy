@@ -273,6 +273,7 @@ export class Session {
   private readonly logger: Logger;
   private permissionModeStateValue: PermissionModeState;
   private permissionModeChangeChain: Promise<void> = Promise.resolve();
+  private permissionModeChangesInFlight = 0;
   private readonly eventListeners = new Set<SessionEventListener>();
   private readonly statusListeners = new Set<SessionStatusListener>();
   private interactionListener: InteractionRequestListener | null = null;
@@ -360,6 +361,12 @@ export class Session {
   // ── 公开 API ─────────────────────────────────────────────────────────────
 
   async send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult> {
+    // A temporary host permission lease may be restoring immediately after a
+    // terminal event. Do not let the next turn reserve the session until that
+    // live provider state is settled.
+    while (this.permissionModeChangesInFlight > 0) {
+      await this.permissionModeChangeChain;
+    }
     const msg: UserMessage = typeof message === 'string'
       ? { type: 'user', content: message }
       : message;
@@ -660,6 +667,7 @@ export class Session {
 
   async setPermissionModeTracked(mode: PermissionMode): Promise<PermissionModeState> {
     this.assertPermissionModeSupported(mode);
+    this.permissionModeChangesInFlight += 1;
     const operation = this.permissionModeChangeChain.catch(() => undefined).then(async () => {
       await this.handle.setPermissionMode!(mode);
       this.permissionModeStateValue = {
@@ -668,11 +676,14 @@ export class Session {
       };
       return this.permissionModeState;
     });
-    this.permissionModeChangeChain = operation.then(
+    const tracked = operation.finally(() => {
+      this.permissionModeChangesInFlight -= 1;
+    });
+    this.permissionModeChangeChain = tracked.then(
       () => undefined,
       () => undefined,
     );
-    return operation;
+    return tracked;
   }
 
   async setPermissionModeIfUnchanged(
@@ -680,6 +691,7 @@ export class Session {
     mode: PermissionMode,
   ): Promise<boolean> {
     this.assertPermissionModeSupported(mode);
+    this.permissionModeChangesInFlight += 1;
     const operation = this.permissionModeChangeChain.catch(() => undefined).then(async () => {
       const current = this.permissionModeStateValue;
       if (current.mode !== expected.mode || current.generation !== expected.generation) {
@@ -689,11 +701,14 @@ export class Session {
       this.permissionModeStateValue = { mode, generation: current.generation + 1 };
       return true;
     });
-    this.permissionModeChangeChain = operation.then(
+    const tracked = operation.finally(() => {
+      this.permissionModeChangesInFlight -= 1;
+    });
+    this.permissionModeChangeChain = tracked.then(
       () => undefined,
       () => undefined,
     );
-    return operation;
+    return tracked;
   }
 
   private assertPermissionModeSupported(mode: PermissionMode): void {
@@ -786,7 +801,11 @@ export class Session {
    * 默认 false (handle.isTurnRunning 不实现的 agent 永远算 idle)。
    */
   isTurnRunning(): boolean {
-    return this.sendReservation !== null || this.isHandleTurnRunning();
+    return (
+      this.sendReservation !== null ||
+      this.permissionModeChangesInFlight > 0 ||
+      this.isHandleTurnRunning()
+    );
   }
 
   getCurrentTurnId(): string | null {

@@ -1359,6 +1359,45 @@ describe('Session permission mode leases', () => {
     expect(applied).toEqual(['ask', 'auto']);
     expect(session.permissionModeState).toEqual({ mode: 'auto', generation: 2 });
   });
+
+  it('waits for an in-flight permission transition before reserving the next turn', async () => {
+    const handle = createHandle({ id: 'permission-transition-thread' });
+    handle.send = vi.fn(async () => undefined);
+    let releasePermission!: () => void;
+    handle.setPermissionMode = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releasePermission = resolve;
+        }),
+    );
+    const baseCapabilities = createAgent(async () => handle).capabilities;
+    const session = new Session({
+      id: 'permission-transition-session',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {
+        ...baseCapabilities,
+        permissionModes: [
+          { id: 'ask', displayName: 'Ask' },
+          { id: 'bypassPermissions', displayName: 'Full access' },
+        ],
+        setPermissionModeMidSession: { supported: true },
+      },
+      logger: createLogger(),
+      permissionMode: 'bypassPermissions',
+    });
+
+    const permissionChange = session.setPermissionModeTracked('ask');
+    const nextTurn = session.send('after permission restore');
+    await vi.waitFor(() => expect(handle.setPermissionMode).toHaveBeenCalledOnce());
+
+    expect(handle.send).not.toHaveBeenCalled();
+    releasePermission();
+    await expect(permissionChange).resolves.toMatchObject({ mode: 'ask' });
+    await expect(nextTurn).resolves.toEqual({ accepted: true });
+    expect(handle.send).toHaveBeenCalledOnce();
+  });
 });
 
 describe('Maker invalid-resume persistence bridge', () => {

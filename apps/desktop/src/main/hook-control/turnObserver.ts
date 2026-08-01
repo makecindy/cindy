@@ -141,7 +141,9 @@ export interface ObservableSession {
    * 判据是**状态**不是时间, 所以不会误杀等用户回应交互 / 跑后台任务 / 合盖睡眠
    * 那些合法静默 —— 那正是本 PR 删掉裸 setTimeout 的理由, 两者不冲突。
    */
-  onStatusChange(listener: (status: 'active' | 'aborting' | 'closed' | 'error') => void): () => void;
+  onStatusChange(
+    listener: (status: 'active' | 'aborting' | 'closed' | 'error') => void,
+  ): () => void;
 }
 
 export interface HookTurnObserverDeps {
@@ -159,6 +161,8 @@ export interface HookTurnObserverDeps {
   onProgress?: (text: string) => void;
   /** tool_result 全文旁路(出站图片收集留在调用方, 观察器不碰 IO)。 */
   onToolResult?: (fullText: string) => void;
+  /** 真实 turn 终态到达时同步通知，早于 finished settle。 */
+  onTurnTerminal?: () => void;
   /** silent-stop 自动续跑守卫的 settle 订阅(生产为 maker-ipc 的同名函数)。 */
   onSilentStopSettled: (
     sessionId: string,
@@ -194,7 +198,8 @@ export function observeHookTurn(
   session: ObservableSession,
   deps: HookTurnObserverDeps,
 ): HookTurnObserver {
-  const { answerOnlyProgress, onProgress, onToolResult, onSilentStopSettled, log } = deps;
+  const { answerOnlyProgress, onProgress, onToolResult, onTurnTerminal, onSilentStopSettled, log } =
+    deps;
   // 文本累积语义(2026-07-28 修订): translator 的 isFinal 是**逐条**
   // agent_message 的完成信号(每条完成都携带该条全文), 不是整个 turn 的
   // 终稿 —— 用它整体替换累积文本, 会让"先回一句 → 思考 → 终答"的多消息
@@ -240,6 +245,7 @@ export function observeHookTurn(
   const finished = new Promise<void>((resolve, reject) => {
     const runningBgTasks = new Set<string>();
     let waitingForBgTasks = false;
+    let turnTerminalNotified = false;
     let bgFallbackTimer: NodeJS.Timeout | undefined;
     let pendingSettleUnsub: (() => void) | undefined;
     const clearBgTimer = (): void => {
@@ -247,6 +253,11 @@ export function observeHookTurn(
         clearTimeout(bgFallbackTimer);
         bgFallbackTimer = undefined;
       }
+    };
+    const notifyTurnTerminal = (): void => {
+      if (turnTerminalNotified) return;
+      turnTerminalNotified = true;
+      onTurnTerminal?.();
     };
     /**
      * 摘监听 + 停定时器。收口的三条出口(resolve / reject / 调用方 stop)必须
@@ -415,6 +426,7 @@ export function observeHookTurn(
           pendingSettleUnsub = onSilentStopSettled(session.id, (_sid, reason) => {
             pendingSettleUnsub?.();
             pendingSettleUnsub = undefined;
+            notifyTurnTerminal();
             if (reason === 'exhausted') {
               failTurn(new Error('silent-stop auto-resume exhausted'));
             } else {
@@ -423,6 +435,7 @@ export function observeHookTurn(
           });
           return;
         }
+        notifyTurnTerminal();
         if (runningBgTasks.size > 0) {
           waitingForBgTasks = true;
           armBgTimer();
@@ -430,9 +443,12 @@ export function observeHookTurn(
         }
         finish();
       } else if (isTerminalAgentErrorEvent(ev)) {
-        const data = ev.data as
-          | { message?: string; errorStatus?: number; codexErrorInfo?: string }
-          | null;
+        notifyTurnTerminal();
+        const data = ev.data as {
+          message?: string;
+          errorStatus?: number;
+          codexErrorInfo?: string;
+        } | null;
         const raw = data?.message ?? 'agent terminal error';
         // 过载重试耗尽: 渠道里发裸英文原文(server 侧再前缀成 "Task failed:")
         // 等于把内部串丢给用户, 且没说清"怎么才能真的重试"。换成可读说明,
